@@ -312,6 +312,55 @@ def test_restore_rejects_conflicting_legacy_snapshot_without_writing(
     assert "conflicting-restore" not in _operation_keys(seeded_scope["trip_id"])
 
 
+def test_meal_selection_is_inserted_between_morning_and_evening_items(trip_scope) -> None:
+    scope, _created = trip_scope
+    edit = TripEditService()
+    document = valid_document()
+    morning = document["days"][0]["items"][0]
+    morning["duration_min"] = 60
+    evening = {
+        "item_id": "evening-event", "kind": "activity", "activity_type": "custom",
+        "title": "晚间演出", "start_time": "18:00", "duration_min": 90,
+        "fixed_start": True, "place": None, "must_visit": False,
+        "locked": True, "note": "",
+    }
+    document["days"][0]["items"].append(evening)
+    edit.apply_document(
+        **scope, actor_id=scope["owner_id"], expected_revision=1,
+        idempotency_key="meal-sequence-base", command_type="replace_document",
+        change_summary="设置早晚安排",
+        document=TripDocumentV2.model_validate(document),
+    )
+
+    result = edit.add_meal(
+        **scope, actor_id=scope["owner_id"], idempotency_key="meal-sequence-lunch",
+        command={
+            "expected_revision": 2, "day_id": "day-1", "meal_period": "lunch",
+            "selection_id": stable_selection_id("food", "amap", "food-sequence"),
+            "merchant": {
+                "merchant_id": "food-sequence", "name": "湖畔餐厅", "source": "amap",
+                "observed_at": "2026-10-19T08:00:00+08:00",
+            },
+        },
+    )
+
+    items = result["document"]["days"][0]["items"]
+    assert result["revision"] == 3
+    assert [(item["title"], item["start_time"]) for item in items] == [
+        ("西湖", "09:00"), ("湖畔餐厅", "12:00"), ("晚间演出", "18:00"),
+    ]
+    assert items[2]["locked"] is True
+    assert items[2]["fixed_start"] is True
+    assert [(leg["from_item_id"], leg["to_item_id"]) for leg in result["document"]["days"][0]["legs"]] == [
+        (items[0]["item_id"], items[1]["item_id"]),
+        (items[1]["item_id"], items[2]["item_id"]),
+    ]
+    assert all(
+        leg["reliability"] == "unavailable" and leg["duration_min"] is None
+        for leg in result["document"]["days"][0]["legs"]
+    )
+
+
 def test_meal_lodging_and_train_selections_use_applicable_schedule_rules(trip_scope) -> None:
     scope, _created = trip_scope
     edit = TripEditService()

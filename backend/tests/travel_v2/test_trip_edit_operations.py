@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from backend.tests.travel_v2.test_trip_document import valid_document
+from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_edit_service import TripEditService
 
 
@@ -96,6 +97,130 @@ def test_schedule_overlap_is_rejected_before_a_write() -> None:
     document["days"][0]["items"][0]["duration_min"] = 210
 
     with pytest.raises(ValueError, match="时间或路程安排冲突"):
+        TripEditService._validate_edit_schedule(document)
+
+
+def test_meal_is_inserted_between_morning_and_evening_without_reordering_items() -> None:
+    document = _two_item_document()
+    day = document["days"][0]
+    day["items"][0]["duration_min"] = 60
+    day["items"][1].update({"start_time": "18:00", "fixed_start": True, "locked": True})
+    day["legs"][0].update({"duration_min": 30, "reliability": "verified"})
+    current = deepcopy(document)
+    meal = {
+        "item_id": "meal-lunch", "kind": "activity", "activity_type": "meal",
+        "title": "午餐", "start_time": "12:00", "duration_min": 60,
+        "fixed_start": False, "place": None, "must_visit": False,
+        "locked": False, "note": "午餐",
+    }
+
+    TripEditService._insert_meal_in_order(day, meal)
+    TripEditService._refresh_derived_totals_and_budget(document, "add_meal")
+    TripEditService._validate_edit_schedule(document)
+    TripEditService._validate_protected_items(current, document)
+
+    assert [item["item_id"] for item in day["items"]] == [
+        "item-1", "meal-lunch", "item-2",
+    ]
+    assert [item["item_id"] for item in day["items"] if item["item_id"] != "meal-lunch"] == [
+        "item-1", "item-2",
+    ]
+    assert [(leg["from_item_id"], leg["to_item_id"]) for leg in day["legs"]] == [
+        ("item-1", "meal-lunch"), ("meal-lunch", "item-2"),
+    ]
+    assert all(leg["reliability"] == "unavailable" for leg in day["legs"])
+    assert all(leg["duration_min"] is None for leg in day["legs"])
+    assert document["totals"]["transit_min"] == 0
+    assert document["totals"]["distance_m"] is None
+
+
+def test_add_meal_saves_a_lunch_between_morning_and_evening_items(monkeypatch) -> None:
+    document = valid_document()
+    day = document["days"][0]
+    day["items"][0]["duration_min"] = 60
+    day["items"].append({
+        "item_id": "evening-event", "kind": "activity", "activity_type": "custom",
+        "title": "晚间活动", "start_time": "18:00", "duration_min": 60,
+        "fixed_start": True, "place": None, "must_visit": False,
+        "locked": True, "note": "",
+    })
+    service = TripEditService()
+    monkeypatch.setattr(
+        service, "_get_trip_document", lambda *_args, **_kwargs: {"document": document},
+    )
+    calls = {}
+
+    def capture_commit(**kwargs):
+        calls.update(kwargs)
+        TripEditService._validate_edit_schedule(kwargs["document"].model_dump(mode="json"))
+        return {"saved": True, "revision": 2}
+
+    monkeypatch.setattr(service, "apply_document", capture_commit)
+    result = service.add_meal(
+        trip_id="trip-1", tenant_id="tenant-1", owner_id="owner-1",
+        actor_id="owner-1", idempotency_key="meal-lunch",
+        command={
+            "expected_revision": 1, "day_id": "day-1", "meal_period": "lunch",
+            "selection_id": stable_selection_id("food", "amap", "food-1"),
+            "merchant": {
+                "merchant_id": "food-1", "name": "午餐餐厅", "source": "amap",
+                "observed_at": "2026-10-19T08:00:00+08:00",
+            },
+        },
+    )
+
+    items = calls["document"].model_dump(mode="json")["days"][0]["items"]
+    assert result == {"saved": True, "revision": 2}
+    assert calls["command_type"] == "structured_edit"
+    assert [(item["title"], item["start_time"]) for item in items] == [
+        ("西湖", "09:00"), ("午餐餐厅", "12:00"), ("晚间活动", "18:00"),
+    ]
+    assert items[2]["locked"] is True
+    assert items[2]["fixed_start"] is True
+
+
+def test_meal_with_a_real_time_overlap_is_rejected() -> None:
+    document = _two_item_document()
+    day = document["days"][0]
+    day["items"][0]["duration_min"] = 181
+    day["items"][1]["start_time"] = "18:00"
+    meal = {
+        "item_id": "meal-lunch", "kind": "activity", "activity_type": "meal",
+        "title": "午餐", "start_time": "12:00", "duration_min": 60,
+        "fixed_start": False, "place": None, "must_visit": False,
+        "locked": False, "note": "午餐",
+    }
+
+    TripEditService._insert_meal_in_order(day, meal)
+
+    with pytest.raises(ValueError, match="时间或路程安排冲突"):
+        TripEditService._validate_edit_schedule(document)
+
+
+def test_schedule_comparison_preserves_seconds_precision() -> None:
+    document = _two_item_document()
+    day = document["days"][0]
+    day["items"][0].update({"start_time": "09:00:59", "duration_min": 60})
+    day["items"][1]["start_time"] = "10:00:00"
+    day["legs"][0].update({"duration_min": None, "reliability": "unavailable"})
+
+    with pytest.raises(ValueError, match="时间或路程安排冲突"):
+        TripEditService._validate_edit_schedule(document)
+
+
+def test_verified_opening_hours_comparison_preserves_seconds_precision() -> None:
+    document = valid_document()
+    item = document["days"][0]["items"][0]
+    item["start_time"] = "09:00:00"
+    item["duration_min"] = 30
+    facts = item["place"]["facts"]
+    facts["verification"] = "verified"
+    facts["opening_hours"] = {
+        "open_time": "09:00:01", "close_time": "10:00:00",
+        "closed_weekdays": [],
+    }
+
+    with pytest.raises(ValueError, match="超出已核实营业时间"):
         TripEditService._validate_edit_schedule(document)
 
 

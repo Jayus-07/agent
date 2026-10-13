@@ -27,9 +27,11 @@ def _validate_schedule(document: dict[str, Any]) -> None:
             if start_value is None:
                 continue
             start = time.fromisoformat(start_value)
-            start_minute = start.hour * 60 + start.minute
-            end_minute = start_minute + int(item.get("duration_min") or 0)
-            if end_minute > 24 * 60:
+            start_seconds = (
+                start.hour * 60 * 60 + start.minute * 60 + start.second
+            )
+            end_seconds = start_seconds + int(item.get("duration_min") or 0) * 60
+            if end_seconds > 24 * 60 * 60:
                 raise ValueError(f"行程项 {item['title']} 超出当天时间范围")
 
             if previous is not None:
@@ -43,14 +45,14 @@ def _validate_schedule(document: dict[str, Any]) -> None:
                 if leg and leg.get("reliability") in {"verified", "estimated"}:
                     known_travel_min = leg.get("duration_min")
                     if known_travel_min is not None:
-                        required_start += int(known_travel_min)
-                if start_minute < required_start:
+                        required_start += int(known_travel_min) * 60
+                if start_seconds < required_start:
                     raise ValueError(
                         f"{previous_item['title']} 与 {item['title']} 的时间或路程安排冲突"
                     )
 
-            _validate_opening_hours(day, item, start_minute, end_minute)
-            previous = (item, end_minute)
+            _validate_opening_hours(day, item, start_seconds, end_seconds)
+            previous = (item, end_seconds)
 
 
 def _validate_opening_hours(
@@ -80,9 +82,13 @@ def _validate_opening_hours(
         close_time = time.fromisoformat(str(close_value))
     except ValueError:
         return
-    open_minute = open_time.hour * 60 + open_time.minute
-    close_minute = close_time.hour * 60 + close_time.minute
-    if start < open_minute or end > close_minute:
+    open_seconds = (
+        open_time.hour * 60 * 60 + open_time.minute * 60 + open_time.second
+    )
+    close_seconds = (
+        close_time.hour * 60 * 60 + close_time.minute * 60 + close_time.second
+    )
+    if start < open_seconds or end > close_seconds:
         raise ValueError(f"{item['title']} 的安排超出已核实营业时间")
 
 

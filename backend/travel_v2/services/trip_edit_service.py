@@ -86,7 +86,7 @@ class TripEditService:
                 f"{payload.day_id}\0{payload.meal_period}\0{payload.selection_id}".encode("utf-8")
             ).hexdigest()[:32]
             merchant = payload.merchant
-            day["items"].append({
+            meal_item = {
                 "item_id": f"meal-{item_digest}",
                 "kind": "activity", "activity_type": "meal",
                 "title": merchant.name, "start_time": start_time,
@@ -104,7 +104,9 @@ class TripEditService:
                     },
                 },
                 "must_visit": False, "locked": False, "note": period_label,
-            })
+            }
+            self._insert_meal_in_order(day, meal_item)
+            self._refresh_derived_totals_and_budget(document, "add_meal")
         validated = TripDocumentV2.model_validate(document)
         return self.apply_document(
             trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
@@ -204,19 +206,44 @@ class TripEditService:
     @staticmethod
     def _schedule_meal_time(items: list[dict], *, preferred: str) -> str:
         preferred_time = time.fromisoformat(preferred)
-        start_min = preferred_time.hour * 60 + preferred_time.minute
+        start_seconds = (
+            preferred_time.hour * 60 * 60
+            + preferred_time.minute * 60
+            + preferred_time.second
+        )
         busy = []
         for item in items:
             if not item.get("start_time"):
                 continue
             item_time = time.fromisoformat(item["start_time"])
-            item_start = item_time.hour * 60 + item_time.minute
-            item_end = item_start + int(item.get("duration_min") or 0)
+            item_start = (
+                item_time.hour * 60 * 60
+                + item_time.minute * 60
+                + item_time.second
+            )
+            item_end = item_start + int(item.get("duration_min") or 0) * 60
             busy.append((item_start, item_end))
-        for candidate in range(start_min, 22 * 60, 15):
-            if all(candidate + 60 <= start or candidate >= end for start, end in busy):
-                return f"{candidate // 60:02d}:{candidate % 60:02d}"
+        for candidate in range(start_seconds, 22 * 60 * 60, 15 * 60):
+            if all(
+                candidate + 60 * 60 <= start or candidate >= end
+                for start, end in busy
+            ):
+                return f"{candidate // 3600:02d}:{candidate % 3600 // 60:02d}"
         raise ValueError("当天没有合适的餐饮时间，请先调整行程安排")
+
+    @staticmethod
+    def _insert_meal_in_order(day: dict, meal_item: dict) -> None:
+        """只插入餐饮项，保留原项目顺序并刷新受相邻关系影响的路线。"""
+        meal_start = time.fromisoformat(meal_item["start_time"])
+        insertion_index = len(day["items"])
+        for index, item in enumerate(day["items"]):
+            item_start = item.get("start_time")
+            if item_start and time.fromisoformat(item_start) > meal_start:
+                insertion_index = index
+                break
+        day["items"].insert(insertion_index, meal_item)
+        TripEditService._refresh_day_legs(day)
+
     def apply_document(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
         actor_id: str, expected_revision: int, idempotency_key: str,
