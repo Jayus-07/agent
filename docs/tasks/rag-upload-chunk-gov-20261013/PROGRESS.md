@@ -114,4 +114,8 @@
   history 三种模式均 0 命中；扫描器回归 `12 passed`。这三项均非“非 Git 仓库跳过”。
 - 保留此前可信 RAG Smoke `38480805885`（8/8 PASS）；未重新运行付费 Provider 评测。费用核算
   仍为 `UNVERIFIED`（106 次调用价格未登记）。
-- 合并后的 GitHub CI、PR Mergeable 状态和 Review Thread 终态待本轮推送后复核；未合并 PR。
+- 推送后 GitHub 在 `c40ed5bc8fd5a868cc2e6e1ac03c9f41d7f96c0c` 的检查：RAG Smoke preflight、
+  `RAG Smoke (8 cases)`、Detect RAG changes、Secret Scan 均 PASS；真实 API Evaluation 按 PR
+  策略 SKIPPED。PR 为 `OPEN`、`MERGEABLE / CLEAN`、未合并，Codex Review Thread 5/5 resolved。
+- 本条进度记录随后会以文档提交推送；该新 HEAD 的自动 CI 需再核对。本任务不触发付费评测，也
+  不合并 PR。
