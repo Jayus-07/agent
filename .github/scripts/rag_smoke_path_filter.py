@@ -27,6 +27,7 @@ EXACT_ENTRIES = frozenset({
     "requirements-lock.txt",
     "backend/app/api/routes/_rag_shared.py",
     "backend/core/tool_runtime/policy.py",
+    "backend/shared/crypto.py",
     "backend/services/rag_server.py",
     "backend/infra/mcp_client.py",
     "mcp_servers/servers/rag.py",

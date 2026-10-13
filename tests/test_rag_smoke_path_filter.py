@@ -80,6 +80,13 @@ def test_database_initializer_change_triggers_smoke():
     assert _filter_subprocess(paths) is True
 
 
+def test_credential_crypto_change_triggers_smoke():
+    """模型绑定 seed/verify 共用的凭据加密逻辑变化必须触发。"""
+    paths = ["backend/shared/crypto.py"]
+    assert _filter_import(paths) is True
+    assert _filter_subprocess(paths) is True
+
+
 def test_core_rag_paths_trigger_smoke():
     for paths in (
         ["backend/rag/pipeline.py"],
