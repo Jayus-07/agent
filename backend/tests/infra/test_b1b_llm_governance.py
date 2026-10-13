@@ -665,6 +665,69 @@ def test_async_provider_cancellation_marks_reservation_for_review(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_multi_query_cancellation_after_reserve_releases_before_provider(
+    monkeypatch, is_async,
+):
+    """配额预占慢于 deadline 时，返回后释放预占且不启动 Provider。"""
+    import asyncio
+    import threading
+
+    from backend.infra.llm.resolved_model import (
+        ResolvedModelContext,
+        reset_current_resolved_model,
+        set_current_resolved_model,
+    )
+
+    calls = []
+    cancel_event = threading.Event()
+
+    class _Breaker:
+        def call(self, function, *args, **kwargs):
+            calls.append("provider")
+            return function(*args, **kwargs)
+
+        async def acall(self, function, *args, **kwargs):
+            calls.append("provider")
+            result = function(*args, **kwargs)
+            return await result if hasattr(result, "__await__") else result
+
+    def _reserve(*_args, **_kwargs):
+        calls.append("reserve")
+        cancel_event.set()
+
+    monkeypatch.setattr(
+        proxy_mod, "_breaker_for_resolved_model", lambda *_args: _Breaker(),
+    )
+    monkeypatch.setattr(proxy_mod, "_role_max_retries", lambda _role: 0)
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.reserve_model_call", _reserve,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.release_model_reservation",
+        lambda: calls.append("release"),
+    )
+
+    set_current_resolved_model(ResolvedModelContext(
+        model_id="multi-query-test",
+        provider="test-provider",
+        role="multi_query",
+    ))
+    cancellation_token = proxy_mod._role_cancellation_event.set(cancel_event)
+    try:
+        if is_async:
+            with pytest.raises(proxy_mod._RoleCallCancelled):
+                asyncio.run(proxy_mod._acall_with_resilience(lambda: "never"))
+        else:
+            with pytest.raises(proxy_mod._RoleCallCancelled):
+                proxy_mod._call_with_resilience(lambda: "never")
+    finally:
+        proxy_mod._role_cancellation_event.reset(cancellation_token)
+        reset_current_resolved_model()
+
+    assert calls == ["reserve", "release"]
+
+
 @pytest.mark.parametrize(
     ("failure", "expected_action"),
     [(ValueError("bad request"), "release"),

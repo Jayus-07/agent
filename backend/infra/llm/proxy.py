@@ -827,6 +827,9 @@ def _call_with_resilience(attr, *args, **kwargs):
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
         )
+        if _role_call_cancelled(role):
+            release_model_reservation()
+            _raise_if_role_call_cancelled(role)
         try:
             return breaker.call(attr, *args, **kwargs)
         except CircuitBreakerOpenError as e:
@@ -888,6 +891,9 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
         )
+        if _role_call_cancelled(role):
+            release_model_reservation()
+            _raise_if_role_call_cancelled(role)
         try:
             return await breaker.acall(attr, *args, **kwargs)
         except asyncio.CancelledError:

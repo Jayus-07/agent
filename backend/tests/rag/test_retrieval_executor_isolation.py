@@ -5,10 +5,11 @@
 父占坑等子、子排在父后，2 个并发 MQ 请求 × 3 变体 = 6 父占满 inner，
 子任务永不调度 = 线程饥饿死锁。
 
-本文件锁死两条铁律：
+本文件锁死三条铁律：
 1. multi_query 专池与 inner/outer 物理隔离；
 2. 父任务等待提交到 inner 的子任务时，inner 被占满也不死锁
-   （旧共享池拓扑下本测试会以 TimeoutError 失败）。
+   （旧共享池拓扑下本测试会以 TimeoutError 失败）；
+3. 慢 Provider 改写任务不能占住 outer 检索线程。
 
 测试全部使用真实 ThreadPoolExecutor 与真实并发——禁止 mock 池后
 声称性能修好（spec §38）。
@@ -23,19 +24,44 @@ from langchain_core.documents import Document
 from backend.infra.thread_pools import (
     retrieval_pool_inner,
     retrieval_pool_multi_query,
+    retrieval_pool_multi_query_rewrite,
     retrieval_pool_outer,
     submit_rag_task,
 )
 
 
-def test_multi_query_pool_is_physically_distinct():
-    """三池必须是三个独立实例——父子不共池是硬约束。"""
+def test_multi_query_and_rewrite_pools_are_physically_distinct():
+    """检索池和可能阻塞的 Provider 改写池必须相互隔离。"""
     mq = retrieval_pool_multi_query()
+    rewrite = retrieval_pool_multi_query_rewrite()
     inner = retrieval_pool_inner()
     outer = retrieval_pool_outer()
     assert mq is not inner
     assert mq is not outer
+    assert rewrite is not mq
+    assert rewrite is not inner
+    assert rewrite is not outer
     assert inner is not outer
+
+
+def test_slow_rewrite_provider_cannot_starve_outer_retrieval():
+    """不可物理取消的改写调用不能占用检索 outer worker。"""
+    rewrite_pool = retrieval_pool_multi_query_rewrite()
+    started = threading.Event()
+    release = threading.Event()
+
+    def _slow_provider() -> None:
+        started.set()
+        release.wait(10)
+
+    rewrite = rewrite_pool.submit(_slow_provider)
+    try:
+        assert started.wait(5)
+        retrieval = submit_rag_task("outer", lambda: "retrieval-ready")
+        assert retrieval.result(timeout=2) == "retrieval-ready"
+    finally:
+        release.set()
+        rewrite.result(timeout=5)
 
 
 def test_parent_waiting_inner_child_no_deadlock_when_inner_saturated():
@@ -170,6 +196,7 @@ def test_multi_query_fanout_wired_to_dedicated_pool(monkeypatch):
     retriever = mq.MultiQueryRetriever(base_retriever=_FakeRetriever())
     docs = retriever.invoke("测试多查询问题")
 
-    assert captured, "fan-out 必须经 submit_rag_task 提交"
-    assert set(captured) == {"multi_query"}, f"父任务池错误: {captured}"
+    assert captured, "任务必须经 submit_rag_task 提交"
+    assert captured[0] == "multi_query_rewrite"
+    assert set(captured[1:]) == {"multi_query"}, f"父任务池错误: {captured}"
     assert len(docs) >= 1

@@ -185,7 +185,11 @@ def test_rewrite_worker_preserves_tenant_user_and_trace(monkeypatch):
         return [question]
 
     monkeypatch.setattr(mq, "_rewrite", inspect_request_context)
-    monkeypatch.setattr(thread_pools, "retrieval_pool_outer", lambda: executor)
+    monkeypatch.setattr(
+        thread_pools,
+        "submit_rag_task",
+        lambda _name, fn, *args, **kwargs: executor.submit(fn, *args, **kwargs),
+    )
     monkeypatch.setattr(retrieval_budget, "remaining_ms", lambda limit: limit)
     monkeypatch.setattr(rag_config, "RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", 1000)
     monkeypatch.setattr(budget_mod, "_config_mode", lambda: "observe")
@@ -237,7 +241,11 @@ def test_rewrite_timeout_obeys_multi_query_role_policy(monkeypatch):
     )
     monkeypatch.setattr(rag_config, "RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", 5000)
     monkeypatch.setattr(retrieval_budget, "remaining_ms", lambda limit: limit)
-    monkeypatch.setattr(thread_pools, "retrieval_pool_outer", _Pool)
+    monkeypatch.setattr(
+        thread_pools,
+        "submit_rag_task",
+        lambda _name, fn, *args, **kwargs: _Pool().submit(fn, *args, **kwargs),
+    )
 
     assert mq._rewrite_with_budget("复杂查询") == ["rewritten"]
     assert captured["timeout"] == 1.0
@@ -277,7 +285,11 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
     )
     monkeypatch.setattr(rag_config, "RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", 500)
     monkeypatch.setattr(retrieval_budget, "remaining_ms", lambda limit: limit)
-    monkeypatch.setattr(thread_pools, "retrieval_pool_outer", _Pool)
+    monkeypatch.setattr(
+        thread_pools,
+        "submit_rag_task",
+        lambda _name, fn, *args, **kwargs: _Pool().submit(fn, *args, **kwargs),
+    )
     monkeypatch.setattr(trace_collector, "end_open_span", lambda *_a, **_k: None)
 
     question = "复杂查询"

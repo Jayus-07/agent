@@ -202,14 +202,16 @@ def _rewrite_with_budget(question: str) -> list[str]:
     from concurrent.futures import TimeoutError as _FutureTimeout
 
     from backend.infra.llm import proxy as llm_proxy
-    from backend.infra.thread_pools import retrieval_pool_outer
+    from backend.infra.thread_pools import submit_rag_task
 
     # 预算、可信身份和 Trace 都是请求级 ContextVar。线程池不会自动继承，
     # 必须在提交方快照，确保 Proxy 预占与 llm_usage 使用同一租户/用户/Trace。
+    # Provider 调用可能无法物理取消，必须与检索 outer 池隔离。
 
     cancel_event = threading.Event()
     request_context = contextvars.copy_context()
-    future = retrieval_pool_outer().submit(
+    future = submit_rag_task(
+        "multi_query_rewrite",
         request_context.run,
         llm_proxy.run_with_role_cancellation,
         cancel_event,
