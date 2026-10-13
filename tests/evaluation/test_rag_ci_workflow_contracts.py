@@ -19,6 +19,10 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "RAG Smoke Evaluation (8 cases, real API)" in smoke
     assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in smoke
     assert "if: github.event_name == 'pull_request' && needs.detect-changes.outputs.relevant == 'true'" in smoke
+    assert "github.event.pull_request.base.sha || github.event.before" in smoke
+    assert "github.event.pull_request.head.sha || github.sha" in smoke
+    assert 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then' in smoke
+    assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke
     assert "BASE_SHA\" || -z \"$HEAD_SHA" in smoke
     assert "git diff --name-only \"$BASE_SHA\" \"$HEAD_SHA\" > \"$changed_paths\"" in smoke
     assert "python3 .github/scripts/rag_smoke_path_filter.py < \"$changed_paths\"" in smoke

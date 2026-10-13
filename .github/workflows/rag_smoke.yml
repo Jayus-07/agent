@@ -4,8 +4,8 @@ name: RAG PR Smoke
 # - pull_request：只跑免费可信预检（路径检测 + E0 preflight），**不引用付费
 #   Secrets、不跑真实 API 评测**——同仓库未审核 PR 不获得付费凭据
 #   （prompt-eval environment 当前无 protection_rules，该收敛由触发器保证）。
-# - push(main) / workflow_dispatch：受信任入口（合并后代码或有写权限者人工
-#   触发），执行 DB API 模型口径的真实检索评测。
+# - RAG 相关 push(main) / workflow_dispatch：受信任入口（合并后相关代码或有
+#   写权限者人工触发），执行 DB API 模型口径的真实检索评测。
 # - 完整回归由 rag_regression.yml 的 workflow_dispatch 承担（无 PR/定时触发）。
 #
 # 语义定位：固定 8 条用例（pr_smoke suite）的真实检索评测，全部层级阈值
@@ -42,15 +42,23 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           set -euo pipefail
           # 判定逻辑单一事实源在 .github/scripts/rag_smoke_path_filter.py，
           # 正反触发回归测试见 tests/test_rag_smoke_path_filter.py。
-          if [[ "$EVENT_NAME" == "workflow_dispatch" || "$EVENT_NAME" == "push" ]]; then
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
-            echo "RAG-related changes: true ($EVENT_NAME runs trusted path)"
+            echo "RAG-related changes: true (manual trusted run)"
+            exit 0
+          fi
+
+          # 首次创建 main 分支没有可比较的 before SHA；按相关改动处理，
+          # 其余 push 必须与 PR 一样通过共享路径过滤器。
+          if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "RAG-related changes: true (initial branch push)"
             exit 0
           fi
 
