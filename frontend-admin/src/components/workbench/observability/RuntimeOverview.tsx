@@ -117,6 +117,7 @@ export default function RuntimeOverview() {
     { label: '业务失败', value: String(summary.counts.failed), status: 'failed', tone: 'text-red-700' },
     { label: '执行错误', value: String(summary.counts.error), status: 'error', tone: 'text-red-700' },
     { label: '降级', value: String(summary.counts.degraded), status: 'degraded', tone: 'text-amber-700' },
+    { label: '部分成功', value: String(summary.counts.partial), status: 'partial', tone: 'text-amber-700' },
     { label: '超时', value: String(summary.counts.timeout), status: 'timeout', tone: 'text-amber-700' },
     { label: '已拒绝', value: String(summary.counts.rejected), status: 'rejected', tone: 'text-orange-700' },
     { label: '已取消', value: String(summary.counts.cancelled), status: 'cancelled', tone: 'text-slate-700' },
@@ -186,7 +187,7 @@ export default function RuntimeOverview() {
         </section>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             {cards.map((card) => (
               <Link key={card.label} href={statusFilterHref(range, card.status)} className="min-h-24 rounded-md border border-border-subtle bg-white px-4 py-3 hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                 <span className="block text-sm text-text-secondary">{card.label}</span>

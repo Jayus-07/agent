@@ -31,15 +31,15 @@ beforeAll(() => {
   ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 })
 
-afterEach(() => {
-  mounted?.root.unmount()
+afterEach(async () => {
+  if (mounted) await act(async () => { mounted?.root.unmount() })
   mounted?.container.remove()
   mounted = null
   mocks.listTraces.mockReset()
   mocks.navigation.params = new URLSearchParams('tab=overview')
 })
 
-function makeTrace(): TraceRecord {
+function makeTrace(status: TraceRecord['status'] = 'running', overrides: Partial<TraceRecord> = {}): TraceRecord {
   return {
     id: 'active-trace',
     request_id: 'request-1',
@@ -55,7 +55,8 @@ function makeTrace(): TraceRecord {
     error: {},
     metadata: {},
     spans: [],
-    status: 'running',
+    status,
+    ...overrides,
   }
 }
 
@@ -83,5 +84,16 @@ describe('RuntimeOverview', () => {
     expect(container.querySelector('a[href*="status=running"]')).toBeNull()
     expect(container.textContent).toContain('没有可确认的终态记录')
     expect(container.querySelector('tbody tr')).toBeNull()
+  })
+
+  it('为部分成功单独统计并提供对应筛选入口', async () => {
+    mocks.listTraces.mockResolvedValue([
+      makeTrace('partial', { id: 'partial-trace', metadata: { business_outcome: 'partial' } }),
+    ])
+    const container = await mountOverview()
+
+    const partialCard = container.querySelector<HTMLAnchorElement>('a[href*="status=partial"]')
+    expect(partialCard?.textContent).toContain('部分成功')
+    expect(partialCard?.textContent).toContain('1')
   })
 })

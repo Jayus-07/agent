@@ -84,6 +84,7 @@ export default function TracesPanel() {
   const [requestFailed, setRequestFailed] = useState(false)
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
   const loadedOnce = useRef(false)
+  const requestSequence = useRef(0)
   const [pageError, setPageError] = useState('')
   const [sortField, setSortField] = useState<'duration_ms' | 'timestamp' | 'cost_usd' | ''>('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -118,6 +119,7 @@ export default function TracesPanel() {
   useEffect(() => { localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns)) }, [columns])
 
   const loadTraces = useCallback(async (mode: 'query' | 'refresh' = 'query') => {
+    const requestId = ++requestSequence.current
     const preserveData = mode === 'refresh' && loadedOnce.current
     if (preserveData) setRefreshing(true)
     else {
@@ -130,20 +132,27 @@ export default function TracesPanel() {
     try {
       // 先取最近 200 条已授权候选记录，确保工作流筛选选项完整；Tool 下钻使用现有服务端过滤。
       const result = await listTraces(200, undefined, undefined, hasToolFilter || undefined)
+      if (requestId !== requestSequence.current) return
       setTraces(result)
       setLastFetchedAt(new Date().toISOString())
       setRequestFailed(false)
       loadedOnce.current = true
     } catch (error) {
+      if (requestId !== requestSequence.current) return
       setRequestFailed(true)
       setPageError(errorMessage(error))
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (requestId === requestSequence.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [hasToolFilter])
 
-  useEffect(() => { void loadTraces('query') }, [loadTraces])
+  useEffect(() => {
+    void loadTraces('query')
+    return () => { requestSequence.current += 1 }
+  }, [loadTraces])
 
   const updateFilter = (next: TraceFilter) => {
     const updated = { ...next, page: 1 }
@@ -165,7 +174,9 @@ export default function TracesPanel() {
   }, [filter, hasToolFilter, pathname, searchParams])
 
   const filteredBase = useMemo(() => {
+    // 历史列表中的 running 可能是旧 DTO 默认值；活跃查询缺少资源授权前不展示、不导出。
     let result = filterByTimeRange(traces, filter.timeRange)
+      .filter((trace) => getRunStatus(trace) !== 'running')
     if (filter.status !== 'all') {
       result = result.filter((trace) => getRunStatus(trace) === filter.status)
     }
@@ -181,6 +192,11 @@ export default function TracesPanel() {
     }
     return result
   }, [filter, traces])
+
+  const hasUnverifiedRunningRecords = useMemo(
+    () => traces.some((trace) => getRunStatus(trace) === 'running'),
+    [traces],
+  )
 
   const filtered = useMemo(() => {
     if (!sortField) return filteredBase
@@ -321,6 +337,12 @@ export default function TracesPanel() {
       {requestFailed && lastFetchedAt && (
         <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
           刷新失败，以下为上次成功读取于 {new Date(lastFetchedAt).toLocaleString('zh-CN')} 的记录，当前已标记为过期。{pageError && ` ${pageError}`}
+        </div>
+      )}
+
+      {hasUnverifiedRunningRecords && filter.status !== 'running' && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950" role="status">
+          历史列表中存在未确认的 <code>running</code> 状态记录，已从列表与导出中排除；它们不代表当前活跃执行。
         </div>
       )}
 

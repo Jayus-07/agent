@@ -2,6 +2,7 @@ import { act } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import type { TraceRecord } from '@/types/trace'
 
 const mocks = vi.hoisted(() => ({
   listTraces: vi.fn().mockResolvedValue([]),
@@ -22,7 +23,7 @@ vi.mock('@/components/observability/trace/TraceBreadcrumb', () => ({ default: ()
 vi.mock('@/components/observability/trace/TraceFilter', () => ({ default: () => <div /> }))
 vi.mock('@/components/observability/trace/TraceRow', () => ({
   VALID_COL_KEYS: ['status', 'question', 'duration', 'usage', 'time', 'actions'],
-  default: () => <tr />,
+  default: ({ t }: { t: TraceRecord }) => <tr data-trace-id={t.id}><td>{t.id}</td></tr>,
 }))
 vi.mock('next/navigation', () => ({
   usePathname: () => mocks.navigation.pathname,
@@ -38,8 +39,8 @@ beforeAll(() => {
   ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 })
 
-afterEach(() => {
-  mounted?.root.unmount()
+afterEach(async () => {
+  if (mounted) await act(async () => { mounted?.root.unmount() })
   mounted?.container.remove()
   mounted = null
   mocks.listTraces.mockReset().mockResolvedValue([])
@@ -47,6 +48,7 @@ afterEach(() => {
   mocks.navigation.params = new URLSearchParams()
   mocks.navigation.router.push.mockClear()
   mocks.navigation.router.replace.mockClear()
+  vi.restoreAllMocks()
 })
 
 async function mountPanel(): Promise<HTMLDivElement> {
@@ -59,6 +61,41 @@ async function mountPanel(): Promise<HTMLDivElement> {
     await new Promise((resolve) => setTimeout(resolve, 0))
   })
   return container
+}
+
+function makeTrace(status: TraceRecord['status'], id: string): TraceRecord {
+  return {
+    id,
+    request_id: `request-${id}`,
+    timestamp: new Date().toISOString(),
+    session_id: '',
+    question: '',
+    answer_preview: '',
+    answer_len: 0,
+    duration_ms: 100,
+    model: { name: 'model', provider: 'provider' },
+    usage: {},
+    cost: {},
+    error: {},
+    metadata: {},
+    spans: [],
+    status,
+    workflow_name: 'workflow',
+  }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((resolvePromise) => { resolve = resolvePromise })
+  return { promise, resolve }
+}
+
+async function setSearchParams(params: URLSearchParams) {
+  mocks.navigation.params = params
+  await act(async () => {
+    mounted?.root.render(<TracesPanel />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
 }
 
 describe('TracesPanel', () => {
@@ -103,5 +140,56 @@ describe('TracesPanel', () => {
       expect.stringContaining('status=all'),
       { scroll: false },
     )
+  })
+
+  it('默认列表与 CSV 导出排除历史 running 并解释其状态未确认', async () => {
+    mocks.listTraces.mockResolvedValue([
+      makeTrace('running', 'historical-running'),
+      makeTrace('success', 'confirmed-success'),
+    ])
+    const container = await mountPanel()
+
+    expect(container.querySelector('[data-trace-id="historical-running"]')).toBeNull()
+    expect(container.querySelector('[data-trace-id="confirmed-success"]')).toBeTruthy()
+    expect(container.textContent).toContain('已从列表与导出中排除')
+
+    const createObjectURL = vi.fn((_blob: Blob) => 'blob:test')
+    const originalCreateObjectURL = URL.createObjectURL
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: createObjectURL })
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    const exportButton = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('导出安全字段'))
+    await act(async () => exportButton?.click())
+    const exported = await (createObjectURL.mock.calls[0][0] as Blob).text()
+
+    expect(exported).toContain('confirmed-success')
+    expect(exported).not.toContain('historical-running')
+    if (originalCreateObjectURL) Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: originalCreateObjectURL })
+    else delete (URL as unknown as { createObjectURL?: unknown }).createObjectURL
+  })
+
+  it('Tool 筛选快速切换时忽略较早请求的迟到响应', async () => {
+    const toolA = deferred<TraceRecord[]>()
+    const toolB = deferred<TraceRecord[]>()
+    mocks.listTraces
+      .mockResolvedValueOnce([])
+      .mockImplementation((_limit, _status, _source, toolId) => {
+        if (toolId === 'tool-a') return toolA.promise
+        if (toolId === 'tool-b') return toolB.promise
+        return Promise.resolve([])
+      })
+    const container = await mountPanel()
+
+    await setSearchParams(new URLSearchParams('tab=traces&has_tool=tool-a'))
+    await setSearchParams(new URLSearchParams('tab=traces&has_tool=tool-b'))
+    expect(mocks.listTraces.mock.calls.some((call) => call[3] === 'tool-a')).toBe(true)
+    expect(mocks.listTraces.mock.calls.some((call) => call[3] === 'tool-b')).toBe(true)
+
+    await act(async () => { toolB.resolve([makeTrace('success', 'tool-b-result')]); await toolB.promise })
+    await act(async () => { toolA.resolve([makeTrace('success', 'tool-a-stale-result')]); await toolA.promise })
+
+    expect(container.querySelector('[data-trace-id="tool-b-result"]')).toBeTruthy()
+    expect(container.querySelector('[data-trace-id="tool-a-stale-result"]')).toBeNull()
   })
 })

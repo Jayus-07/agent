@@ -1,7 +1,59 @@
 "use client";
 
-import { TraceRecord } from "@/types/trace";
+import { CS_TARGET_TO_EXPERT, type TraceRecord } from "@/types/trace";
 import { getRunStatus, getRunStatusLabel, getRunStatusTone } from "@/lib/observability/runtimeStatus";
+
+const CS_HANDOFF_LABELS: Record<string, string> = {
+  ai_active: "AI 处理中",
+  handoff_requested: "请求人工",
+  waiting_human: "等待人工",
+  agent_offered: "已分配客服",
+  human_active: "人工处理中",
+  closed: "已关闭",
+};
+
+function CSRouteDiagnostics({ trace }: Props) {
+  const tags = trace.tags ?? {};
+  const variant = tags.cs_variant === "treatment" || tags.cs_variant === "control"
+    ? tags.cs_variant
+    : null;
+  const target = Object.prototype.hasOwnProperty.call(CS_TARGET_TO_EXPERT, tags.cs_target)
+    ? tags.cs_target
+    : null;
+  const expert = Object.values(CS_TARGET_TO_EXPERT).includes(tags.cs_expert_final || "")
+    ? tags.cs_expert_final
+    : null;
+  const handoff = CS_HANDOFF_LABELS[tags.cs_handoff_state] || null;
+  const expectedExpert = target ? CS_TARGET_TO_EXPERT[target] : null;
+  const routeMismatch = Boolean(expectedExpert && expert && expectedExpert !== expert);
+
+  if (!variant && !target && !expert && !handoff) return null;
+
+  return (
+    <div className="col-span-2 flex flex-wrap items-center gap-2 md:col-span-4 lg:col-span-6" aria-label="客服路由诊断">
+      {variant && (
+        <span className={`rounded px-2 py-0.5 text-[10px] font-semibold ${variant === "treatment" ? "bg-violet-600 text-white" : "bg-slate-200 text-slate-700"}`}>
+          CS {variant === "treatment" ? "Treatment" : "Control"}
+        </span>
+      )}
+      {target && (
+        <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[10px] text-slate-700">
+          路由 → {target}
+        </span>
+      )}
+      {expert && (
+        <span className={`rounded px-2 py-0.5 font-mono text-[10px] ${routeMismatch ? "bg-red-100 font-semibold text-red-800" : "bg-emerald-50 text-emerald-800"}`}>
+          {routeMismatch ? "⚠ 路由不一致 · " : expectedExpert ? "路由一致 · " : "实际 Expert · "}{expert}
+        </span>
+      )}
+      {handoff && (
+        <span className={`rounded px-2 py-0.5 text-[10px] ${tags.cs_handoff_state.includes("handoff") || tags.cs_handoff_state.includes("human") ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-600"}`}>
+          人工状态：{handoff}
+        </span>
+      )}
+    </div>
+  );
+}
 
 interface Props {
   trace: TraceRecord;
@@ -25,6 +77,7 @@ export default function TraceOverviewCard({ trace }: Props) {
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+      <CSRouteDiagnostics trace={trace} />
       {/* Duration */}
       <div className="bg-white border border-slate-200 rounded-xl p-4">
         <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-1">总耗时</p>
