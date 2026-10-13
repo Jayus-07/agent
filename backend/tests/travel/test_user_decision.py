@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 import backend.config.travel as T
+from backend.app.api.routes import travel as travel_api
 import backend.travel.graph_builder as gb
 from backend.travel.graph_state import new_travel_graph_input
 from backend.travel.validator import _normalize_decision
@@ -38,10 +39,11 @@ MONDAY_QUESTION = f"{_M.month}月{_M.day}日福州一日游，1个人，必去�
 
 @pytest.fixture
 def interrupt_graph(monkeypatch):
-    """带 memory checkpointer + interrupt 开关的域图（每例 fresh graph）。"""
+    """带测试 Checkpointer + interrupt 开关的域图（每例 fresh graph）。"""
     monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", True)
     monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
     monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "memory")
+    monkeypatch.setattr(gb, "get_persistence_status", lambda: gb.PERSISTENCE_HEALTHY)
     monkeypatch.setattr(gb, "_travel_graph", None)
     yield gb.get_travel_graph()
     monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", False)
@@ -87,6 +89,20 @@ class TestInterruptFlow:
         names = [i["poi_name"] for i in payload["items"]]
         assert "福建博物院" in names
         assert set(payload["options"]) == {"keep", "drop"}
+
+    def test_pending_checkpoint_has_stable_decision_token(self, interrupt_graph):
+        tid = _tid("token")
+        final = _invoke(interrupt_graph, MONDAY_QUESTION, tid)
+        payload = _interrupt_payload(final)
+        snapshot = interrupt_graph.get_state(
+            {"configurable": {"thread_id": tid}},
+        )
+
+        assert snapshot.config["configurable"]["checkpoint_id"]
+        first = travel_api._bind_travel_decision_token(payload, snapshot, tid)
+        second = travel_api._bind_travel_decision_token(payload, snapshot, tid)
+        assert first["decision_token"] == second["decision_token"]
+        assert len(first["decision_token"]) == 24
 
     def test_resume_keep_degrades_with_record(self, interrupt_graph):
         tid = _tid("keep")
@@ -161,11 +177,26 @@ class TestFallback:
             monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", False)
             monkeypatch.setattr(gb, "_travel_graph", None)
 
+    def test_degraded_memory_checkpointer_falls_back(self, monkeypatch):
+        """进程内降级 Checkpointer 不支持可恢复的人工暂停。"""
+        monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", True)
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "memory")
+        monkeypatch.setattr(gb, "_travel_graph", None)
+        graph = gb.get_travel_graph()
+        try:
+            assert gb.get_persistence_status() == gb.PERSISTENCE_DEGRADED
+            final = _invoke(graph, MONDAY_QUESTION, _tid("degraded"))
+            assert not final.get("__interrupt__")
+            assert final["itinerary"]["status"] == "needs_user_decision"
+        finally:
+            monkeypatch.setattr(gb, "_travel_graph", None)
+
 
 # =============================================
 # 三、决策归一化
 # =============================================
-def _mini_report(poi_names) -> "ValidationReport":
+def _mini_report(poi_names):
     """只含 decision_required 违反的最小 report（_normalize_decision 仅读 detail）。"""
     from backend.travel.models.validation import (
         LEVEL_DECISION_REQUIRED, ValidationReport, Violation,

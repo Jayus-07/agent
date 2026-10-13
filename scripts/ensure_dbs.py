@@ -11,7 +11,7 @@
 
 职责：
   1. 补齐数据库（agent_memory / agent_business）
-  2. 按库应用迁移（含 001/002/003/005/006/007 与只读角色 004）
+  2. 按库应用迁移（含 001/002/003/005/006/007、只读角色 004 与口令撤销 093）
   3. 用 PG_READONLY_PASSWORD 对齐 agent_readonly 密码（**不经 shell/sed
      插值** —— 那会把含特殊字符的密码写坏，实测踩过）
   4. 校验并打印状态（表数量 / 角色可登录性），失败非零退出
@@ -36,6 +36,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS_DIR = ROOT / "backend" / "sql" / "migrations"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 # 库 → 迁移顺序（与 docker/init-dbs.sh 对齐 + 补齐 006/007）
 BUSINESS_MIGRATIONS = [
@@ -43,7 +45,10 @@ BUSINESS_MIGRATIONS = [
     "003_agent_business_schema.sql",
     "005_schema_hardening.sql",
     "007_tool_approval.sql",
-    "004_readonly_role.sql",  # 只读角色与授权（放最后：依赖前面的 schema）
+    "004_readonly_role.sql",  # 只读角色与授权（依赖前面的 schema）
+    "043_readonly_public_revoke.sql",  # 收窄 public 后再启用只读口令
+    "083_readonly_ai_grant_scope.sql",  # 收窄 ai 后再启用只读口令
+    "093_revoke_readonly_default_password.sql",  # 清除历史默认口令
 ]
 MEMORY_MIGRATIONS = [
     "002_agent_memory_schema.sql",
@@ -63,8 +68,12 @@ MEMORY_MIGRATIONS = [
 _ALREADY_EXISTS_SQLSTATES = {
     "42P07", "42710", "42P06", "42P04", "42723", "42P16", "23505",
 }
-
-
+_READONLY_TRACKED_MIGRATIONS = frozenset({
+    "004_readonly_role.sql",
+    "043_readonly_public_revoke.sql",
+    "083_readonly_ai_grant_scope.sql",
+    "093_revoke_readonly_default_password.sql",
+})
 def _load_env_file(path: Path) -> None:
     """把 .env 读进环境（不覆盖已存在的变量，容器内以进程 env 为准）。"""
     if not path.exists():
@@ -102,16 +111,41 @@ def _db_exists(admin, name: str) -> bool:
         return cur.fetchone() is not None
 
 
-def _apply_migration(conn, filename: str, *, password: str) -> str:
+def _apply_migration(
+    conn,
+    filename: str,
+    *,
+    password: str,
+    user: str | None = None,
+) -> str:
     """在给定连接上应用单个迁移文件。返回 'applied' / 'skipped' / 'error:…'。"""
     path = MIGRATIONS_DIR / filename
     if not path.exists():
         return "error: 迁移文件不存在"
 
     sql = path.read_text(encoding="utf-8")
-    # 安全注入：Python 字符串替换（禁止 sed/shell 插值——特殊字符会被写坏）
+    # 旧迁移占位符只为既有 SQL 保留；凭据迁移走参数化 DDL。
     sql = sql.replace("${PG_READONLY_PASSWORD}", password)
     sql = sql.replace("${PG_READONLY_USER}", os.getenv("PG_READONLY_USER", "agent_readonly"))
+
+    if filename in _READONLY_TRACKED_MIGRATIONS:
+        try:
+            from scripts.init_db import apply_migration
+
+            status, _detail = apply_migration(
+                conn,
+                filename,
+                sql,
+                force=False,
+                readonly_password=password,
+                readonly_user=user or os.getenv("PG_READONLY_USER", "agent_readonly"),
+            )
+            if status == "error":
+                return f"error: {filename} failed"
+            return status
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            return f"error: {type(exc).__name__}: readonly migration failed"
 
     applied_any = False
     with conn.cursor() as cur:
@@ -124,29 +158,77 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
                 conn.rollback()
                 return "skipped"
             conn.rollback()
+            if filename == "093_revoke_readonly_default_password.sql":
+                return f"error: {type(e).__name__}: readonly credential migration failed"
             return f"error: {type(e).__name__}: {str(e)[:160]}"
     conn.commit()
     return "applied" if applied_any else "skipped"
 
 
-def _ensure_readonly_password(conn, *, user: str, password: str) -> str:
-    """对齐只读角色密码（参数化构造 DDL，避免任何字符串拼接风险）。"""
-    from psycopg2 import sql
+def _apply_business_migrations(
+    conn,
+    *,
+    password: str,
+    user: str,
+    check: bool,
+) -> int:
+    """先关闭只读登录，再应用权限链；任何迁移失败都保持 NOLOGIN。"""
+    if check:
+        for mig in BUSINESS_MIGRATIONS:
+            print(f"[ensure_dbs]   ({os.getenv('BUSINESS_PGDATABASE', 'agent_business')}) "
+                  f"{mig}: 跳过（--check）")
+        return 0
 
-    if not password:
-        return "skip: 未配置 PG_READONLY_PASSWORD"
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (user,))
-        exists = cur.fetchone() is not None
-        if not exists:
-            return f"skip: 角色 {user} 不存在（004 迁移应先创建）"
-        cur.execute(
-            sql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                sql.Identifier(user), sql.Literal(password)
+    from scripts.init_db import (
+        block_readonly_roles_for_migrations,
+        ensure_migration_tracking_table,
+        pending_readonly_authorization_migrations,
+    )
+
+    ensure_migration_tracking_table(conn)
+    if pending_readonly_authorization_migrations(conn):
+        block_readonly_roles_for_migrations(conn, readonly_user=user)
+
+    rc = 0
+    readonly_migrations_ready = True
+    db_label = os.getenv("BUSINESS_PGDATABASE", "agent_business")
+    for mig in BUSINESS_MIGRATIONS:
+        if (
+            mig == "093_revoke_readonly_default_password.sql"
+            and not readonly_migrations_ready
+        ):
+            print(
+                f"[ensure_dbs]   = ({db_label}) {mig}: "
+                "跳过（前置迁移失败，保持 NOLOGIN）"
             )
+            continue
+        result = _apply_migration(conn, mig, password=password, user=user)
+        mark = "✓" if result == "applied" else (
+            "=" if result == "skipped" else "✗"
         )
-    conn.commit()
-    return "ok"
+        print(f"[ensure_dbs]   {mark} ({db_label}) {mig}: {result}")
+        if result.startswith("error"):
+            rc = 1
+            readonly_migrations_ready = False
+
+    if readonly_migrations_ready:
+        print(
+            f"[ensure_dbs]   ({db_label}) 只读角色密码对齐: "
+            f"{_ensure_readonly_password(conn, user=user, password=password)}"
+        )
+    else:
+        print(
+            f"[ensure_dbs]   ({db_label}) 只读角色保持 NOLOGIN："
+            "前置迁移未全部成功"
+        )
+    return rc
+
+
+def _ensure_readonly_password(conn, *, user: str, password: str) -> str:
+    """复用主初始化入口的只读账号持续对齐逻辑。"""
+    from scripts.init_db import ensure_readonly_role
+
+    return ensure_readonly_role(conn, user=user, password=password)
 
 
 def _verify_readonly(host_db: str) -> str:
@@ -236,18 +318,27 @@ def main() -> int:
                     "WHERE table_schema NOT IN ('pg_catalog','information_schema')"
                 )
                 before = cur.fetchone()[0]
-            for mig in migrations:
-                if args.check:
-                    print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
-                    continue
-                result = _apply_migration(conn, mig, password=ro_pw)
-                mark = "✓" if result == "applied" else ("=" if result == "skipped" else "✗")
-                print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
-                if result.startswith("error"):
-                    rc = 1
-            if not args.check:
-                print(f"[ensure_dbs]   ({db}) 只读角色密码对齐: "
-                      f"{_ensure_readonly_password(conn, user=ro_user, password=ro_pw)}")
+            if db == business_db:
+                rc |= _apply_business_migrations(
+                    conn,
+                    password=ro_pw,
+                    user=ro_user,
+                    check=args.check,
+                )
+            else:
+                for mig in migrations:
+                    if args.check:
+                        print(f"[ensure_dbs]   ({db}) {mig}: 跳过（--check）")
+                        continue
+                    result = _apply_migration(
+                        conn, mig, password=ro_pw, user=ro_user
+                    )
+                    mark = "✓" if result == "applied" else (
+                        "=" if result == "skipped" else "✗"
+                    )
+                    print(f"[ensure_dbs]   {mark} ({db}) {mig}: {result}")
+                    if result.startswith("error"):
+                        rc = 1
             conn.commit()
             print(f"[ensure_dbs] {db} 表分布: {_count_tables(conn, db)}（迁移前 {before} 张）")
             conn.close()

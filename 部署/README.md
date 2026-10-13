@@ -20,6 +20,8 @@ sudo WITH_EMBEDDING=1 EMBED_ON_CPU=0 bash deploy.sh
 
 脚本做了什么：装 Docker → 拉起 vLLM 容器（OpenAI 兼容接口）→ 模型走 hf-mirror 国内加速 → **8000 端口只绑 127.0.0.1，不对公网开放** → 生成 API Key 存到 `/opt/vllm-cache/API_KEY.txt`。`WITH_EMBEDDING=1` 时额外起 TEI 容器跑 BGE-M3（`:8080/embed`，同样只绑 127.0.0.1）。
 
+密钥保存在服务端 `/opt/vllm-cache/API_KEY.txt`，文件权限为 600。由有权限的管理员通过受控渠道将其配置到本地 `VLLM_API_KEY`；不要把密钥写入命令历史或部署日志。
+
 ## 2. 本地开发机建 SSH 隧道
 
 ```bash
@@ -31,14 +33,20 @@ ssh -L 8000:localhost:8000 -L 8080:localhost:8080 user@服务器IP -N
 ## 3. 本地代码接入
 
 ```python
-client = OpenAI(base_url="http://localhost:8000/v1", api_key="<deploy.sh输出的Key>")
+import os
+from openai import OpenAI
+
+api_key = os.getenv("VLLM_API_KEY")
+if not api_key:
+    raise RuntimeError("请先从受限密钥文件配置 VLLM_API_KEY")
+client = OpenAI(base_url="http://localhost:8000/v1", api_key=api_key)
 ```
 
 或在 agent 项目里设环境变量：
 
 ```bash
 export OPENAI_API_BASE=http://localhost:8000/v1
-export OPENAI_API_KEY=<Key>
+export OPENAI_API_KEY="$VLLM_API_KEY"
 ```
 
 ## 常用改配

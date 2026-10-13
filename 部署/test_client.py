@@ -5,9 +5,13 @@
 import os
 from openai import OpenAI
 
+api_key = os.getenv("VLLM_API_KEY")
+if not api_key:
+    raise SystemExit("请从受限密钥文件配置 VLLM_API_KEY 后再运行")
+
 client = OpenAI(
     base_url="http://localhost:8000/v1",
-    api_key=os.getenv("VLLM_API_KEY", "把deploy.sh输出的Key填这里"),
+    api_key=api_key,
 )
 
 resp = client.chat.completions.create(

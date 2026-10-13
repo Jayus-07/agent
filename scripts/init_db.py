@@ -279,16 +279,19 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
 }
 
-# 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）
-# 083 与 043 同因：必须晚于 004 的 schema 级 GRANT，否则会被重新授予。
+# 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
+# 043/083 必须晚于 004 的 schema 级 GRANT；093 再晚于权限收口，
+# 确保只读角色获得可用口令前已完成最小权限约束。
 ORDER_LAST = [
     "004_readonly_role.sql",
     "043_readonly_public_revoke.sql",
     "083_readonly_ai_grant_scope.sql",
+    "093_revoke_readonly_default_password.sql",
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
+MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
 
 # 运行时管理的迁移（Platform Readiness STOP B）：对象由应用启动时的
 # ensure_schema() 幂等建立，而非迁移链。fresh 库上没有这些对象，直接执行
@@ -321,6 +324,13 @@ CREATE TABLE IF NOT EXISTS public.schema_migrations (
     applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 """
+
+
+def ensure_migration_tracking_table(conn) -> None:
+    """确保目标库存在迁移台账；供 init_db 与 ensure_dbs 共用。"""
+    with conn.cursor() as cur:
+        cur.execute(_TRACK_TABLE_SQL)
+    conn.commit()
 
 
 # ──────────────────────────────────────────────────────────── 环境 / 连接
@@ -470,8 +480,161 @@ def checksum_of(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+# 004 已发布版本曾包含默认口令。修改为无密码创建后，明确保留已应用旧版
+# 的校验和，避免 checksum 不同导致整份授权迁移被重放。
+_FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
+    # 历史校验和只在文件仍是已知的无密码版本时接受。
+    "004_readonly_role.sql": {
+        "b5c27b0ff9ff348c": "31b2b96b9b3a76ff",
+    },
+}
+_READONLY_PASSWORD_MIGRATION = "093_revoke_readonly_default_password.sql"
+_LEGACY_READONLY_USER = "agent_readonly"
+_READONLY_AUTHORIZATION_MIGRATIONS = (
+    "004_readonly_role.sql",
+    "043_readonly_public_revoke.sql",
+    "083_readonly_ai_grant_scope.sql",
+    _READONLY_PASSWORD_MIGRATION,
+)
+_READONLY_ROLE_MARKER_PREFIX = "agent-platform:readonly-managed:"
+_TERMINATE_READONLY_SESSIONS_SQL = (
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+    "WHERE usename = %s AND pid <> pg_backend_pid()"
+)
+
+
+def block_readonly_roles_for_migrations(
+    conn,
+    *,
+    readonly_user: str,
+) -> None:
+    """在授权迁移前提交 NOLOGIN，再终止旧会话，失败时保持只读账号关闭。"""
+    roles = list(dict.fromkeys((_LEGACY_READONLY_USER, readonly_user.strip())))
+    _block_and_terminate_readonly_roles(conn, roles)
+
+
+def _block_and_terminate_readonly_roles(conn, roles: list[str]) -> list[str]:
+    """先提交 NOLOGIN 再断开会话，返回实际存在且已处理的角色。"""
+    from psycopg2 import sql as pgsql
+
+    existing_roles: list[str] = []
+    for role in roles:
+        if not role:
+            continue
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+                (role,),
+            )
+            if cur.fetchone() is None:
+                continue
+            cur.execute(
+                pgsql.SQL("ALTER ROLE {} NOLOGIN").format(
+                    pgsql.Identifier(role),
+                )
+            )
+        conn.commit()
+        existing_roles.append(role)
+
+    for role in existing_roles:
+        with conn.cursor() as cur:
+            cur.execute(_TERMINATE_READONLY_SESSIONS_SQL, (role,))
+        conn.commit()
+    return existing_roles
+
+
+def _readonly_role_marker(conn) -> str:
+    """按当前业务数据库生成托管标记，避免共享集群中的实例互相操作。"""
+    with conn.cursor() as cur:
+        cur.execute("SELECT current_database()")
+        row = cur.fetchone()
+    if row is None or not row[0]:
+        raise RuntimeError("无法确定当前数据库，拒绝对齐只读角色")
+    return f"{_READONLY_ROLE_MARKER_PREFIX}{row[0]}"
+
+
+def _managed_readonly_role_names(conn) -> set[str]:
+    """只读取当前业务数据库托管标记所拥有的只读角色。"""
+    marker = _readonly_role_marker(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT rolname FROM pg_catalog.pg_authid "
+            "WHERE strpos(COALESCE("
+            "pg_catalog.shobj_description(oid, 'pg_authid'), ''), %s) > 0",
+            (marker,),
+        )
+        return {str(row[0]) for row in cur.fetchall()}
+
+
+def _mark_readonly_role_managed(conn, *, role: str) -> None:
+    """在角色注释中保留本数据库标记，不覆盖已有运维注释。"""
+    from psycopg2 import sql as pgsql
+
+    marker = _readonly_role_marker(conn)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT pg_catalog.shobj_description(oid, 'pg_authid') "
+            "FROM pg_catalog.pg_authid WHERE rolname = %s",
+            (role,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return
+        previous = str(row[0] or "")
+        if marker in previous:
+            return
+        comment = "\n".join(
+            part for part in (previous.rstrip(), marker) if part
+        )
+        cur.execute(
+            pgsql.SQL("COMMENT ON ROLE {} IS {}").format(
+                pgsql.Identifier(role), pgsql.Literal(comment),
+            )
+        )
+
+
+def pending_readonly_authorization_migrations(
+    conn,
+    *,
+    force: bool = False,
+) -> tuple[str, ...]:
+    """返回待执行的只读权限迁移；无法判断时让调用方按需安全阻断。"""
+    if force:
+        return _READONLY_AUTHORIZATION_MIGRATIONS
+
+    pending: list[str] = []
+    for filename in _READONLY_AUTHORIZATION_MIGRATIONS:
+        sql_text = (MIGRATIONS_DIR / filename).read_text(encoding="utf-8")
+        expected_checksum = checksum_of(sql_text)
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT checksum, status FROM public.schema_migrations "
+                "WHERE filename = %s",
+                (filename,),
+            )
+            row = cur.fetchone()
+
+        if row and row[1] == "applied":
+            frozen_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
+                filename, {},
+            ).get(row[0])
+            if row[0] == expected_checksum or frozen_current == expected_checksum:
+                continue
+        pending.append(filename)
+
+    return tuple(pending)
+
+
 # ──────────────────────────────────────────────────────────── 迁移执行
-def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str, str]:
+def apply_migration(
+    conn,
+    filename: str,
+    sql: str,
+    *,
+    force: bool,
+    readonly_password: str = "",
+    readonly_user: str = _LEGACY_READONLY_USER,
+) -> tuple[str, str]:
     """执行单个迁移文件，返回 (状态, 说明)。
 
     状态：applied（全量执行）/ applied-partial（降级逐语句补齐）/
@@ -485,6 +648,16 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
         )
         row = cur.fetchone()
     if row and not force:
+        frozen_current = _FROZEN_LEGACY_MIGRATION_CHECKSUMS.get(
+            filename, {},
+        ).get(row[0])
+        if (
+            row[1] == "applied"
+            and frozen_current is not None
+        ):
+            if checksum_of(sql) == frozen_current:
+                return "skipped", "已应用的历史迁移保持不变；由后续迁移完成升级"
+            return "error", "冻结的历史校验和与当前文件版本不匹配，拒绝重放"
         if row[0] != checksum_of(sql):
             # 文件内容变了 → 需要重新应用（并更新 checksum）
             pass
@@ -492,6 +665,97 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
             return "skipped", "已应用（记录一致）"
         elif row[1] == "error":
             pass  # 上次失败，重试
+
+    if filename == _READONLY_PASSWORD_MIGRATION:
+        from psycopg2 import sql as pgsql
+
+        try:
+            target_user = str(readonly_user or _LEGACY_READONLY_USER).strip()
+            if not target_user:
+                raise ValueError("PG_READONLY_USER 不能为空")
+
+            # 先提交 NOLOGIN，确保终止会话后旧口令不能在提交窗口内重连。
+            # 旧默认角色始终撤销；使用自定义用户名时只给目标角色设置新口令。
+            roles_to_block = list(dict.fromkeys(
+                (_LEGACY_READONLY_USER, target_user),
+            ))
+
+            existing_roles: set[str] = set()
+            with conn.cursor() as cur:
+                for role in roles_to_block:
+                    cur.execute(
+                        "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+                        (role,),
+                    )
+                    if cur.fetchone() is None:
+                        if role == target_user and readonly_password:
+                            raise RuntimeError("配置的只读角色不存在")
+                        continue
+                    existing_roles.add(role)
+                    cur.execute(
+                        pgsql.SQL("ALTER ROLE {} NOLOGIN").format(
+                            pgsql.Identifier(role),
+                        )
+                    )
+                    conn.commit()
+
+            # NOLOGIN 已提交后再清理旧会话，阻断旧凭据重新认证的竞态窗口。
+            for role in existing_roles:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        _TERMINATE_READONLY_SESSIONS_SQL,
+                        (role,),
+                    )
+                conn.commit()
+
+            with conn.cursor() as cur:
+                if _LEGACY_READONLY_USER in existing_roles:
+                    if target_user == _LEGACY_READONLY_USER and readonly_password:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                                pgsql.Identifier(target_user),
+                                pgsql.Literal(readonly_password),
+                            )
+                        )
+                    else:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(
+                                pgsql.Identifier(_LEGACY_READONLY_USER),
+                            )
+                        )
+
+                if target_user != _LEGACY_READONLY_USER:
+                    if readonly_password:
+                        cur.execute(
+                            pgsql.SQL(
+                                "ALTER ROLE {} WITH LOGIN PASSWORD {}"
+                            ).format(
+                                pgsql.Identifier(target_user),
+                                pgsql.Literal(readonly_password),
+                            )
+                        )
+                    elif target_user in existing_roles:
+                        cur.execute(
+                            pgsql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(
+                                pgsql.Identifier(target_user),
+                            )
+                        )
+            if target_user in existing_roles:
+                _mark_readonly_role_managed(conn, role=target_user)
+            _record(conn, filename, sql, "applied", commit=False)
+            conn.commit()
+            detail = (
+                "只读角色凭据与迁移台账在阻断旧登录后提交"
+                if readonly_password else "旧只读口令已撤销并阻断登录"
+            )
+            return "applied", detail
+        except Exception as exc:  # noqa: BLE001
+            conn.rollback()
+            try:
+                _record(conn, filename, sql, "error")
+            except Exception:  # noqa: BLE001
+                conn.rollback()
+            return "error", f"{type(exc).__name__}: 只读凭据迁移失败"
 
     # ① 整文件执行（快，且保留多语句事务语义）
     with conn.cursor() as cur:
@@ -531,7 +795,7 @@ def apply_migration(conn, filename: str, sql: str, *, force: bool) -> tuple[str,
     return "applied-partial", f"补齐 {applied_new} 条 / 跳过 {skipped} 条"
 
 
-def _record(conn, filename: str, sql: str, status: str) -> None:
+def _record(conn, filename: str, sql: str, status: str, *, commit: bool = True) -> None:
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -544,7 +808,8 @@ def _record(conn, filename: str, sql: str, status: str) -> None:
             """,
             (filename, checksum_of(sql), status),
         )
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 # ──────────────────────────────────────────────────────────── 库 / 角色
@@ -566,22 +831,52 @@ def ensure_database(admin, dbname: str, *, do_create: bool) -> str:
 
 
 def ensure_readonly_role(conn, *, user: str, password: str) -> str:
-    """对齐只读角色密码（DDL 用 psycopg2.sql 组合，不做字符串拼接）。"""
+    """持续对齐当前只读账号；取消密码或切换用户名时撤销旧登录。"""
     from psycopg2 import sql as pgsql
 
-    if not password:
-        return "跳过（未配置 PG_READONLY_PASSWORD）"
-    with conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (user,))
-        if cur.fetchone() is None:
-            return f"跳过（角色 {user} 不存在，004 迁移应先创建）"
-        cur.execute(
-            pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
-                pgsql.Identifier(user), pgsql.Literal(password)
+    target_user = str(user or _LEGACY_READONLY_USER).strip()
+    if not target_user:
+        raise ValueError("PG_READONLY_USER 不能为空")
+
+    managed_roles = _managed_readonly_role_names(conn)
+    roles = sorted(managed_roles | {_LEGACY_READONLY_USER, target_user})
+    existing_roles: set[str] = set()
+    for role in roles:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = %s",
+                (role,),
             )
-        )
+            if cur.fetchone() is not None:
+                existing_roles.add(role)
+
+    target_exists = target_user in existing_roles
+    enabled_role = target_user if password and target_exists else None
+    roles_to_disable = sorted(existing_roles - ({enabled_role} if enabled_role else set()))
+    _block_and_terminate_readonly_roles(conn, roles_to_disable)
+
+    for role in roles_to_disable:
+        with conn.cursor() as cur:
+            cur.execute(
+                pgsql.SQL("ALTER ROLE {} NOLOGIN PASSWORD NULL").format(
+                    pgsql.Identifier(role),
+                )
+            )
+        conn.commit()
+
+    if not target_exists:
+        return f"跳过（角色 {target_user} 不存在，004 迁移应先创建）"
+
+    if password:
+        with conn.cursor() as cur:
+            cur.execute(
+                pgsql.SQL("ALTER ROLE {} WITH LOGIN PASSWORD {}").format(
+                    pgsql.Identifier(target_user), pgsql.Literal(password),
+                )
+            )
+    _mark_readonly_role_managed(conn, role=target_user)
     conn.commit()
-    return "ok"
+    return "ok" if password else "已禁用只读登录（未配置 PG_READONLY_PASSWORD）"
 
 
 def verify_readonly(args: argparse.Namespace, dbname: str, *, user: str, password: str) -> str:
@@ -735,13 +1030,37 @@ def main() -> int:
         else:
             for db_key, dbname in (("business", business_db), ("memory", memory_db)):
                 conn = connect(dbname, args)
-                with conn.cursor() as cur:
-                    cur.execute(_TRACK_TABLE_SQL)
-                conn.commit()
+                ensure_migration_tracking_table(conn)
 
                 print(f"[init_db] ── {dbname} ──")
+                if db_key == "business":
+                    pending_readonly = pending_readonly_authorization_migrations(
+                        conn,
+                        force=args.force,
+                    )
+                    if pending_readonly:
+                        block_readonly_roles_for_migrations(
+                            conn,
+                            readonly_user=ro_user,
+                        )
+                    else:
+                        print(
+                            "[init_db]   只读权限迁移已全部应用，"
+                            "跳过只读会话屏障"
+                        )
+                readonly_migrations_ready = True
                 for name, target in plan:
                     if target != db_key:
+                        continue
+                    if (
+                        db_key == "business"
+                        and name == _READONLY_PASSWORD_MIGRATION
+                        and not readonly_migrations_ready
+                    ):
+                        print(
+                            f"[init_db]   = {name}: skipped — "
+                            "前置迁移失败，保持只读角色 NOLOGIN"
+                        )
                         continue
                     if name in RUNTIME_MANAGED_MIGRATIONS:
                         sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
@@ -752,17 +1071,34 @@ def main() -> int:
                         continue
                     sql = (MIGRATIONS_DIR / name).read_text(encoding="utf-8")
                     t0 = time.time()
-                    status, detail = apply_migration(conn, name, sql, force=args.force)
+                    status, detail = apply_migration(
+                        conn,
+                        name,
+                        sql,
+                        force=args.force,
+                        readonly_password=ro_pw,
+                        readonly_user=ro_user,
+                    )
                     mark = {"applied": "✓", "applied-partial": "~",
                             "skipped": "=", "error": "✗"}[status]
                     print(f"[init_db]   {mark} {name}: {status} — {detail} "
                           f"({time.time() - t0:.1f}s)")
                     if status == "error":
                         rc = 1
+                        if db_key == "business":
+                            readonly_migrations_ready = False
 
                 if db_key == "business":
-                    print(f"[init_db]   只读角色密码对齐: "
-                          f"{ensure_readonly_role(conn, user=ro_user, password=ro_pw)}")
+                    if readonly_migrations_ready:
+                        print(
+                            f"[init_db]   只读角色密码对齐: "
+                            f"{ensure_readonly_role(conn, user=ro_user, password=ro_pw)}"
+                        )
+                    else:
+                        print(
+                            "[init_db]   只读角色保持 NOLOGIN："
+                            "前置迁移未全部成功"
+                        )
 
                 if args.demo_sandbox and db_key == "business":
                     seed_path = SEEDS_DIR / DEMO_SANDBOX_SEED

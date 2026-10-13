@@ -3,11 +3,11 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.api.router import router
 from backend.travel_v2.db import TravelV2PersistenceError
 from backend.travel_v2.services.trip_edit_service import TripEditService, VersionConflict
 from backend.travel_v2.services.trip_service import TripService
-from backend.tests.travel_v2.test_trip_document import valid_document
 
 
 def _client() -> TestClient:
@@ -122,6 +122,38 @@ def test_structured_edit_route_uses_server_identity_and_returns_saved_revision(m
     assert calls[0]["owner_id"] == "user-a"
     assert calls[0]["actor_id"] == "user-a"
     assert calls[0]["idempotency_key"] == "structured-edit-1"
+
+
+def test_full_document_route_keeps_success_receipt_shape(monkeypatch):
+    receipt = {
+        "saved": True, "trip_id": "00000000-0000-0000-0000-000000000001",
+        "revision": 2, "document": valid_document(), "status": "active",
+        "replayed": False,
+    }
+    calls = []
+
+    def apply(self, **kwargs):
+        calls.append(kwargs)
+        return receipt
+
+    monkeypatch.setattr(TripEditService, "apply_document", apply)
+    response = _client().put(
+        "/travel/v2/trips/00000000-0000-0000-0000-000000000001/document",
+        headers={
+            "X-User-Id": "user-a", "X-Auth-Type": "jwt",
+            "X-Tenant-Id": "tenant-a", "Idempotency-Key": "document-edit-1",
+        },
+        json={
+            "expected_revision": 1, "command_type": "replace_document",
+            "change_summary": "保存文档", "document": valid_document(),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == receipt
+    assert calls[0]["tenant_id"] == "tenant-a"
+    assert calls[0]["owner_id"] == "user-a"
+    assert calls[0]["idempotency_key"] == "document-edit-1"
 
 
 def test_template_write_requires_admin_user():
