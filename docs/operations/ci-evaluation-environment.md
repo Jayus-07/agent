@@ -128,6 +128,8 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 | 每日定时回归 | **不在 GitHub 定时运行** | 固定 Golden，监测质量 | 🚧 `rag_regression.yml` 已移除 schedule（PR #30）；定时回归由管理端定时任务承担（配置入口：管理端） |
 | 重要版本发布前 | 需要 | 受影响领域真实 API 和 E2E | 审核后 workflow_dispatch 按域运行；E2E 属发布门禁 |
 
+RAG Smoke 的 `workflow_dispatch` 提供 `multiquery` 布尔参数，默认 `false`；设为 `true` 时，同一 `pr_smoke` 集会额外经过 MultiQuery 路径。PR 事件不会调用付费 API，普通 main push 仍使用默认关闭值。
+
 **验收矩阵 CI-01～CI-10（实现状态逐条标注）**：
 
 | ID | 要求（摘要） | 状态 |

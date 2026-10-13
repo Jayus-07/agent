@@ -17,6 +17,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      multiquery:
+        description: "在受信任的手动评测中启用 MultiQuery"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -182,6 +188,7 @@ jobs:
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
       PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
@@ -301,8 +308,13 @@ jobs:
         run: |
           # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
           set -o pipefail
+          MULTIQUERY_ARGS=()
+          if [[ "$EVAL_MULTIQUERY" == "true" ]]; then
+            MULTIQUERY_ARGS+=(--multiquery)
+          fi
           python -u -m backend.evaluation.cli rag \
             --selection pr_smoke \
+            "${MULTIQUERY_ARGS[@]}" \
             --no-ragas \
             --no-resume \
             --strict-gate \

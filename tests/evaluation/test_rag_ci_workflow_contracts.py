@@ -26,6 +26,11 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "github.event.pull_request.base.sha || github.event.before" in smoke
     assert "github.event.pull_request.head.sha || github.sha" in smoke
     assert 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then' in smoke
+    assert 'multiquery:\n        description: "在受信任的手动评测中启用 MultiQuery"' in smoke
+    assert "type: boolean\n        default: false" in smoke
+    assert "EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}" in smoke
+    assert 'if [[ "$EVAL_MULTIQUERY" == "true" ]]; then' in smoke
+    assert 'MULTIQUERY_ARGS+=(--multiquery)' in smoke
     assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke
     assert "BASE_SHA\" || -z \"$HEAD_SHA" in smoke
     assert "git diff --name-only \"$BASE_SHA\" \"$HEAD_SHA\" > \"$changed_paths\"" in smoke
