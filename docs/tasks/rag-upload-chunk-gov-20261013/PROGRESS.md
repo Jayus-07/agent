@@ -1,7 +1,7 @@
 # PROGRESS: 企业 RAG 上传、结构识别、Chunk 切分与元数据治理
 
 - 分支：`task/rag-upload-chunk-governance-20261013`（基线 origin/main @ 2d1d0b1）
-- 状态：IN_PROGRESS（PR #55 审查意见收口中，未合并 main）
+- 状态：DONE（PR #55 Codex Review 5/5 已修复、回复并解决；未合并 main）
 
 ## 批次对账（REUSE / FIX / BUILD / BLOCKED）
 
@@ -66,9 +66,29 @@
   `6 passed`；最终 `py_compile` 与 `git diff --check` 通过。
 - PR 免费 Smoke 门禁本机复现：`python -m backend.evaluation.preflight --module rag
   --selection pr_smoke` 输出 `EVAL_PREFLIGHT_PASS=true`，8 个用例；对应 4 个 CI 合约/门禁
-  测试 `28 passed`。文档中的离线评测命令另试一次失败：本机缺 `PGPASSWORD`，并且未显式
-  指定 fixture 导致 `fixture_set` 为空；不报告为 Smoke 通过。RAG Smoke workflow 设计为
-  PR 免费预检、人工可信 dispatch 才跑 8 条真实 API 评测，待提交后按用户要求触发该入口。
-- 仍待 Secret Scan、现有分支 push、5 条 Review Thread 回复/解决，以及可信 RAG Smoke 结果。
-- 不合并 main；若真实 API Smoke 或运行环境门禁未通过，最终状态标记 BLOCKED/UNVERIFIED，
-  不宣称具备合并条件。
+  测试 `28 passed`。文档中的离线评测命令因本机缺 `PGPASSWORD` 且未显式指定 fixture
+  失败；该次不是 Smoke，不报告为通过。
+
+## 最终收口结果（2026-10-14）
+
+- 修复提交：`5a61a097b31a6e85911f28bb8f7270be11ed8926`，已推送至现有 PR 分支；工作区干净。
+- 修复代码 HEAD 与可信 Smoke 验证 HEAD 均为 `5a61a09`；PR API 返回 `MERGEABLE / CLEAN`。
+  五条 Codex Review Thread
+  均已逐条回复并解决（5/5）。
+- 当前远端 `main` 为 `888738365666706488492c90ee8b97d87b173d02`；PR 记录的 base 为
+  `2d1d0b173f50128429d9c868301ee05b38bcd85b`。检查时 `main` 相对分支有 27 个独有提交，
+  PR 分支有 7 个独有提交。按任务指令没有同步、合并或改写 main。
+- 定向 RAG 回归：`125 passed, 1 skipped, 1 deselected`；独立质量门禁集 `6 passed`；
+  16 类文档矩阵、Leaf/Parent 关联与 Token 上限均包含在定向集内。失败前新增回归在干净基线
+  复现 10 项失败；修复后通过。`py_compile` 与 `git diff --check` 通过。
+- PR 免费 Smoke、`RAG Smoke (8 cases)` 总门禁、Secret Scan 均通过。Secret Scan 的
+  工作树、diff、提交区间本机扫描均为 0 命中；GitHub `secret-scan` run 通过。
+- 按用户要求人工触发可信真实 RAG Smoke：run `38480805885` 成功，报告 `8/8` 通过、
+  0 失败/错误、`EVAL_GATE_VERDICT=PASS`；`recall@5=0.9286`、`dept_leak=0`。
+  隔离账本有 106 次调用价格未登记（`cost_verification=UNVERIFIED`），不影响 Smoke 检索门禁，
+  但费用核对未验证。
+- 本机 PostgreSQL 用例在未修改基线复现 `fe_sendauth: no password supplied`，维持
+  `BLOCKED`，未计入 PASS。
+- 代码与现有 PR 检查状态为 PASS；GitHub 当前标记 `MERGEABLE / CLEAN`。任务按指令没有
+  合并 main。考虑当前 main 相对 PR base 的提交差距，合并前应确认仓库是否要求把这些 main
+  更新纳入 PR 后再跑组合基线；本任务未做该同步。

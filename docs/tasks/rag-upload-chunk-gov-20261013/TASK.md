@@ -3,7 +3,7 @@
 - 分支：`task/rag-upload-chunk-governance-20261013`
 - worktree：`D:/Program Files/workplace/agent-wt-rag-chunk-gov-20261013`
 - 基线：origin/main @ 2d1d0b1
-- 状态：IN_PROGRESS（原实现批次完成；PR #55 审查意见收口中）
+- 状态：DONE（PR #55 Codex Review 5/5 已修复并解决；未合并 main）
 
 ## 目标
 
@@ -22,6 +22,7 @@ UnifiedMetadata/DecisionEnvelope/Parent-Leaf/MetadataStage/QualityGate/候选发
 | B4 | P1 元数据治理（b46fd22） | 完成 |
 | B5 | 发布安全核查（机制全在，无改动） | 完成 |
 | B6 | 16 类文档矩阵 + rag.md 同步（2def153） | 完成 |
+| B7 | PR #55 Codex Review 5 条缺陷修复与验收（5a61a09） | 完成，见 PROGRESS.md 最终收口结果 |
 
 ## 验收门禁（P0）
 
