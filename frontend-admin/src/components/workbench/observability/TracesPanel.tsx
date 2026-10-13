@@ -1,514 +1,425 @@
-"use client";
+'use client'
 
-import { useState, useMemo, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import Link from "next/link";
-import { BellRing, Scale, Download, ShoppingBag, Wrench } from "lucide-react";
-import TraceFilterBar from "@/components/observability/trace/TraceFilter";
-import StatsBar from "@/components/observability/trace/StatsBar";
-import CSQualityCard from "@/components/observability/trace/CSQualityCard";
-import TraceInsightsPanel, { DURATION_BUCKETS, DurationBucket } from "@/components/observability/trace/TraceInsightsPanel";
-import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
-import TraceRow, { ColKey, VALID_COL_KEYS } from "@/components/observability/trace/TraceRow";
-import { useToast } from "@/components/shared/Toast";
-import {
-  TraceFilter,
-  TraceRecord,
-  filterByTimeRange,
-} from "@/types/trace";
-import { listAgentTraces, getAgentTraceStats, AgentTraceStats } from "@/lib/observability/source";
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
+import { Download, ShoppingBag, BellRing, Scale, Wrench } from 'lucide-react'
+import { listTraces } from '@/api/observability'
+import TraceFilterBar from '@/components/observability/trace/TraceFilter'
+import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
+import TraceRow, { ColKey, VALID_COL_KEYS } from '@/components/observability/trace/TraceRow'
+import { useToast } from '@/components/shared/Toast'
+import { filterByTimeRange, TraceFilter, TraceRecord, TraceStatus } from '@/types/trace'
+import { getRunStatus } from '@/lib/observability/runtimeStatus'
 
-// typedTraces 改为 client 端填充：模块顶层 import 22+ JSON 在 Next.js dev SSR 阶段
-// 会导致 typedTraces=[]（webpack transform 22 JSON 的时机问题）；改为 useState + useEffect 后，
-// SSR 输出 0 条、client hydrate 后真实数据进来再渲，避免整页空渲染。
-const PAGE_SIZES = [20, 50, 100];
-const BOOKMARK_KEY = "obs.bookmarks";
-const FILTER_KEY = "obs.traceFilter";
-const COLUMNS_KEY = "obs.traceColumns";
-
-// 前端时间窗 → 后端 stats 接口的 hours 参数（"custom" 按 24h 处理）
-const RANGE_HOURS: Record<string, number> = { "15m": 0.25, "1h": 1, "6h": 6, "24h": 24, custom: 24 };
-
-const DEFAULT_COLUMNS: ColKey[] = ["status", "question", "duration", "usage", "time", "actions"];
-
+const PAGE_SIZES = [20, 50, 100]
+const BOOKMARK_KEY = 'obs.bookmarks'
+const COLUMNS_KEY = 'obs.traceColumns'
+const DEFAULT_COLUMNS: ColKey[] = ['status', 'question', 'duration', 'usage', 'time', 'actions']
 const ALL_COLUMNS: { key: ColKey; label: string }[] = [
-  { key: "status", label: "状态" },
-  { key: "question", label: "用户问题" },
-  { key: "duration", label: "耗时" },
-  { key: "usage", label: "Token/成本" },
-  { key: "time", label: "时间" },
-  { key: "actions", label: "操作" },
-];
+  { key: 'status', label: '状态' },
+  { key: 'question', label: '运行对象 / Trace ID' },
+  { key: 'duration', label: '耗时' },
+  { key: 'usage', label: 'Token / 费用' },
+  { key: 'time', label: '时间' },
+  { key: 'actions', label: '操作' },
+]
+const VALID_STATUSES = new Set<TraceStatus>([
+  'all', 'success', 'failed', 'error', 'degraded', 'partial', 'timeout',
+  'cancelled', 'rejected', 'running', 'unknown',
+])
+const VALID_RANGES = new Set<TraceFilter['timeRange']>(['15m', '1h', '6h', '24h', 'custom'])
 
-// Live tail 轮询间隔（ms）
-const LIVE_INTERVAL = 10000;
+function readFilters(params: URLSearchParams): TraceFilter {
+  const rawStatus = params.get('status') as TraceStatus | null
+  const rawRange = params.get('range') as TraceFilter['timeRange'] | null
+  const rawPageSize = Number(params.get('pageSize'))
+  return {
+    timeRange: rawRange && VALID_RANGES.has(rawRange) ? rawRange : '1h',
+    status: rawStatus && VALID_STATUSES.has(rawStatus) ? rawStatus : 'all',
+    keyword: params.get('q') || '',
+    sortField: '',
+    sortDir: 'desc',
+    page: Math.max(1, Number(params.get('page')) || 1),
+    pageSize: PAGE_SIZES.includes(rawPageSize) ? rawPageSize : 20,
+    source: params.get('source') || undefined,
+    workflow_name: params.get('workflow') || undefined,
+    kb_id: params.get('kb') || undefined,
+    model: params.get('model') || undefined,
+  }
+}
+
+function writeFilters(params: URLSearchParams, filter: TraceFilter): URLSearchParams {
+  params.set('tab', 'traces')
+  params.set('range', filter.timeRange)
+  params.set('status', filter.status)
+  params.set('page', String(filter.page))
+  params.set('pageSize', String(filter.pageSize))
+  const optional: Array<[string, string | undefined]> = [
+    ['q', filter.keyword.trim() || undefined],
+    ['source', filter.source],
+    ['workflow', filter.workflow_name],
+    ['kb', filter.kb_id],
+    ['model', filter.model],
+  ]
+  optional.forEach(([key, value]) => value ? params.set(key, value) : params.delete(key))
+  return params
+}
+
+function csvCell(value: unknown): string {
+  const text = String(value ?? '')
+  return `"${text.replace(/"/g, '""')}"`
+}
 
 export default function TracesPanel() {
-  const router = useRouter();
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const toast = useToast()
+  const [filter, setFilter] = useState<TraceFilter>(() => readFilters(new URLSearchParams(searchParams.toString())))
+  const [hasToolFilter, setHasToolFilter] = useState(searchParams.get('has_tool') || '')
+  const [traces, setTraces] = useState<TraceRecord[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [requestFailed, setRequestFailed] = useState(false)
+  const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
+  const loadedOnce = useRef(false)
+  const [pageError, setPageError] = useState('')
+  const [sortField, setSortField] = useState<'duration_ms' | 'timestamp' | 'cost_usd' | ''>('')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [bookmarks, setBookmarks] = useState<Set<string>>(new Set())
+  const [columns, setColumns] = useState<ColKey[]>(DEFAULT_COLUMNS)
+  const [showColumns, setShowColumns] = useState(false)
+  const [compareIds, setCompareIds] = useState<Set<string>>(new Set())
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
-  const [sortField, setSortField] = useState<"duration_ms" | "timestamp" | "cost_usd" | "">("");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
-
-  // ⚠️ localStorage 不能在 useState 初始化里读（SSR/CSR mismatch 会摧毁整个 root 的 client render）。
-  // 统一改为：初始 useState 给 SSR-safe 默认值，client mount 后 useEffect 一次性读 localStorage 覆盖。
-  const [filter, setFilter] = useState<TraceFilter>({ timeRange: "1h", status: "all", keyword: "", sortField: "", sortDir: "desc", page: 1, pageSize: 20 });
-  const [bookmarks, setBookmarks] = useState<Set<string>>(new Set());
-  const [columns, setColumns] = useState<ColKey[]>(DEFAULT_COLUMNS);
-  const [typedTraces, setTypedTraces] = useState<TraceRecord[]>([]);
-  const [mounted, setMounted] = useState(false);
-  // Live tail：观察新流量时开启（10s 轮询列表）
-  const [live, setLive] = useState(false);
-  // 延迟桶过滤（洞察面板直方图点击触发）
-  const [durationBucket, setDurationBucket] = useState<DurationBucket>("");
-  // URL 下钻过滤：/tools 失败行「Trace 下钻」带 ?has_tool=<tool 函数名>。
-  // 服务端过滤（span input.tool），条形提示可关闭（关闭同时清 URL 参数）。
-  const [hasToolFilter, setHasToolFilter] = useState("");
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    setFilter(readFilters(params))
+    setHasToolFilter(params.get('has_tool') || '')
+  }, [searchParams])
 
   useEffect(() => {
     try {
-      const savedFilter = localStorage.getItem(FILTER_KEY);
-      if (savedFilter) setFilter(JSON.parse(savedFilter));
-      const savedBookmarks = localStorage.getItem(BOOKMARK_KEY);
-      if (savedBookmarks) setBookmarks(new Set(JSON.parse(savedBookmarks)));
-      const savedCols = localStorage.getItem(COLUMNS_KEY);
-      if (savedCols) {
-        // 过滤无效列（旧版列定义含已合并的 id/tokens/cost/session/kb/error）
-        const parsed: ColKey[] = JSON.parse(savedCols);
-        const valid = parsed.filter((k) => VALID_COL_KEYS.includes(k));
-        setColumns(valid.length > 0 ? valid : DEFAULT_COLUMNS);
+      const savedBookmarks = localStorage.getItem(BOOKMARK_KEY)
+      if (savedBookmarks) setBookmarks(new Set(JSON.parse(savedBookmarks)))
+      const savedColumns = localStorage.getItem(COLUMNS_KEY)
+      if (savedColumns) {
+        const valid = (JSON.parse(savedColumns) as ColKey[]).filter((key) => VALID_COL_KEYS.includes(key))
+        setColumns(valid.length > 0 ? valid : DEFAULT_COLUMNS)
       }
-    } catch {}
-    // URL ?has_tool= 下钻（SSR-safe：只在 client mount 后读 location）
-    const urlTool = new URLSearchParams(window.location.search).get("has_tool") || "";
-    setHasToolFilter(urlTool);
-    // 数据加载推迟到 mount 后：避免 SSR 阶段同步 IO（mock 时 import 22 JSON；
-    // API 时 fetch 也必须在 client 端）
-    listAgentTraces(urlTool || undefined).then((traces) => {
-      setTypedTraces(traces);
-      setMounted(true);
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    } catch {
+      setBookmarks(new Set())
+      setColumns(DEFAULT_COLUMNS)
+    }
+  }, [])
 
-  // 注意：不再有 [refreshTick, mounted] 的重复拉取 effect ——
-  // 初始挂载上方已拉一次，手动刷新由 handleRefresh 直接拉，避免双重请求。
+  useEffect(() => { localStorage.setItem(BOOKMARK_KEY, JSON.stringify([...bookmarks])) }, [bookmarks])
+  useEffect(() => { localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns)) }, [columns])
 
-  const [showColumns, setShowColumns] = useState(false);
-  const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
-  const toast = useToast();
-
-  useEffect(() => {
-    localStorage.setItem(FILTER_KEY, JSON.stringify(filter));
-  }, [filter]);
-  useEffect(() => {
-    localStorage.setItem(BOOKMARK_KEY, JSON.stringify(Array.from(bookmarks)));
-  }, [bookmarks]);
-  useEffect(() => {
-    localStorage.setItem(COLUMNS_KEY, JSON.stringify(columns));
-  }, [columns]);
-
-  // Live tail：开启后定时拉取新 trace + stats
-  useEffect(() => {
-    if (!live || !mounted) return;
-    const timer = setInterval(async () => {
-      const [traces] = await Promise.all([
-        listAgentTraces(hasToolFilter || undefined),
-        getAgentTraceStats(RANGE_HOURS[filter.timeRange] ?? 24).then((s) => setServerStats(s)),
-      ]);
-      setTypedTraces(traces);
-    }, LIVE_INTERVAL);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, mounted, filter.timeRange, hasToolFilter]);
-
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    // 触发真实数据拉取（mock 也走异步路径，保持一致 UX）
+  const loadTraces = useCallback(async (mode: 'query' | 'refresh' = 'query') => {
+    const preserveData = mode === 'refresh' && loadedOnce.current
+    if (preserveData) setRefreshing(true)
+    else {
+      setLoading(true)
+      setTraces([])
+      setLastFetchedAt(null)
+      setPageError('')
+    }
+    setRequestFailed(false)
     try {
-      const traces = await listAgentTraces(hasToolFilter || undefined);
-      setTypedTraces(traces);
+      // 先取最近 200 条已授权候选记录，确保工作流筛选选项完整；Tool 下钻使用现有服务端过滤。
+      const result = await listTraces(200, undefined, undefined, hasToolFilter || undefined)
+      setTraces(result)
+      setLastFetchedAt(new Date().toISOString())
+      setRequestFailed(false)
+      loadedOnce.current = true
+    } catch (error) {
+      setRequestFailed(true)
+      setPageError(errorMessage(error))
     } finally {
-      setIsRefreshing(false);
+      setLoading(false)
+      setRefreshing(false)
     }
-  };
+  }, [hasToolFilter])
 
-  // 关闭下钻过滤：清 URL 参数 + 重拉全量
-  const clearHasToolFilter = async () => {
-    setHasToolFilter("");
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      url.searchParams.delete("has_tool");
-      window.history.replaceState(null, "", url.toString());
-    }
-    const traces = await listAgentTraces();
-    setTypedTraces(traces);
-  };
+  useEffect(() => { void loadTraces('query') }, [loadTraces])
 
-  // 除延迟桶之外的筛选结果（直方图基于它计算，保证选桶后其他桶仍可见）
+  const updateFilter = (next: TraceFilter) => {
+    const updated = { ...next, page: 1 }
+    setFilter(updated)
+    const params = writeFilters(new URLSearchParams(searchParams.toString()), updated)
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+  }
+
+  const updatePage = (next: TraceFilter) => {
+    setFilter(next)
+    const params = writeFilters(new URLSearchParams(searchParams.toString()), next)
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+  }
+
+  const currentListUrl = useMemo(() => {
+    const params = writeFilters(new URLSearchParams(searchParams.toString()), filter)
+    if (hasToolFilter) params.set('has_tool', hasToolFilter)
+    return `${pathname}?${params.toString()}`
+  }, [filter, hasToolFilter, pathname, searchParams])
+
   const filteredBase = useMemo(() => {
-    let arr = filterByTimeRange(typedTraces, filter.timeRange);
-
-    if (filter.status !== "all") {
-      arr = arr.filter((t) => {
-        const hasError = t.error && Object.keys(t.error).length > 0;
-        if (filter.status === "error") return hasError || t.status === "error";
-        if (filter.status === "success") return !hasError && t.status !== "error";
-        // 超时判定用后端下发的 SLA breached（按链路类型 30-90s），
-        // 不再用 duration>5000ms 硬阈值（会把正常慢请求误标 TIMEOUT）
-        if (filter.status === "timeout") return t.sla?.breached || t.status === "timeout";
-        if (filter.status === "cancelled") return t.status === "cancelled";
-        return true;
-      });
+    let result = filterByTimeRange(traces, filter.timeRange)
+    if (filter.status !== 'all') {
+      result = result.filter((trace) => getRunStatus(trace) === filter.status)
     }
-
-    if (filter.kb_id) arr = arr.filter((t) => String(t.metadata?.kb_id) === filter.kb_id);
-    if (filter.model) arr = arr.filter((t) => t.model?.name === filter.model);
-    // 来源三分类（2026-10-08 #12）：DTO 直带 source（后端唯一分类出口）
-    if (filter.source) arr = arr.filter((t) => t.source === filter.source);
-
+    if (filter.kb_id) result = result.filter((trace) => String(trace.metadata?.kb_id ?? '') === filter.kb_id)
+    if (filter.model) result = result.filter((trace) => trace.model?.name === filter.model)
+    if (filter.workflow_name) result = result.filter((trace) => trace.workflow_name === filter.workflow_name)
+    if (filter.source) result = result.filter((trace) => trace.source === filter.source)
     if (filter.keyword.trim()) {
-      const kw = filter.keyword.toLowerCase();
-      // 前缀匹配支持（trace id 前 8 位 / session 前缀）
-      arr = arr.filter((t) =>
-        t.question.toLowerCase().includes(kw) ||
-        t.answer_preview.toLowerCase().includes(kw) ||
-        t.session_id.toLowerCase().includes(kw) ||
-        t.id.toLowerCase().startsWith(kw) ||
-        t.id.toLowerCase().includes(kw)
-      );
+      const keyword = filter.keyword.trim().toLowerCase()
+      // 搜索只匹配诊断标识和公开的运行元数据，不读取问题、回复或 Session 内容。
+      result = result.filter((trace) => [trace.id, trace.request_id, trace.workflow_name, trace.source]
+        .some((value) => String(value || '').toLowerCase().includes(keyword)))
     }
-    return arr;
-  }, [typedTraces, filter]);
+    return result
+  }, [filter, traces])
 
   const filtered = useMemo(() => {
-    let arr = filteredBase;
-    // 延迟桶过滤（点击洞察面板直方图触发）
-    if (durationBucket) {
-      const b = DURATION_BUCKETS.find((x) => x.key === durationBucket);
-      if (b) arr = arr.filter((t) => (t.duration_ms || 0) >= b.min && (t.duration_ms || 0) < b.max);
-    }
+    if (!sortField) return filteredBase
+    return [...filteredBase].sort((a, b) => {
+      const left = sortField === 'duration_ms' ? a.duration_ms
+        : sortField === 'timestamp' ? Date.parse(a.timestamp)
+          : (a.cost_cny ?? -1)
+      const right = sortField === 'duration_ms' ? b.duration_ms
+        : sortField === 'timestamp' ? Date.parse(b.timestamp)
+          : (b.cost_cny ?? -1)
+      return sortDir === 'desc' ? right - left : left - right
+    })
+  }, [filteredBase, sortDir, sortField])
 
-    if (sortField === "duration_ms") {
-      arr = [...arr].sort((a, b) => sortDir === "desc" ? b.duration_ms - a.duration_ms : a.duration_ms - b.duration_ms);
-    } else if (sortField === "timestamp") {
-      arr = [...arr].sort((a, b) => sortDir === "desc" ? b.timestamp.localeCompare(a.timestamp) : a.timestamp.localeCompare(b.timestamp));
-    } else if (sortField === "cost_usd") {
-      arr = [...arr].sort((a, b) => sortDir === "desc" ? (b.cost_usd ?? 0) - (a.cost_usd ?? 0) : (a.cost_usd ?? 0) - (b.cost_usd ?? 0));
-    }
+  const total = filtered.length
+  const totalPages = Math.max(1, Math.ceil(total / filter.pageSize))
+  const safePage = Math.min(filter.page, totalPages)
+  const pageTraces = filtered.slice((safePage - 1) * filter.pageSize, safePage * filter.pageSize)
+  const maxDuration = useMemo(() => filtered.reduce((max, trace) => Math.max(max, trace.duration_ms || 0), 0), [filtered])
 
-    return arr;
-  }, [typedTraces, filter, sortField, sortDir]);
+  const handleSort = (field: 'duration_ms' | 'timestamp' | 'cost_usd') => {
+    setSortDir(sortField === field && sortDir === 'desc' ? 'asc' : 'desc')
+    setSortField(field)
+  }
 
-  const total = filtered.length;
-  // 耗时相对比例条的归一化基准：当前筛选下最大耗时
-  const maxDuration = useMemo(() => filtered.reduce((m, t) => Math.max(m, t.duration_ms), 0), [filtered]);
-  const traces = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
-
-  // stats 下沉后端（/traces/stats）：不再客户端遍历 200 条；
-  // 接口失败（返回 null）时降级为本地计算，口径不变。
-  const [serverStats, setServerStats] = useState<AgentTraceStats | null>(null);
-  useEffect(() => {
-    if (!mounted) return;
-    getAgentTraceStats(RANGE_HOURS[filter.timeRange] ?? 24).then(setServerStats);
-  }, [mounted, filter.timeRange, typedTraces]);
-
-  const stats = useMemo(() => {
-    if (serverStats) return serverStats;
-    const inRange = filterByTimeRange(typedTraces, filter.timeRange);
-    return {
-      total_24h: inRange.length,
-      success_rate: inRange.filter(t => !(t.error && Object.keys(t.error).length > 0) && t.status !== "error").length / (inRange.length || 1),
-      avg_duration_ms: inRange.length ? Math.round(inRange.reduce((s, t) => s + t.duration_ms, 0) / inRange.length) : 0,
-      p95_duration_ms: inRange.length ? [...inRange].sort((a, b) => b.duration_ms - a.duration_ms)[Math.floor(inRange.length * 0.05)]?.duration_ms ?? 0 : 0,
-      error_count: inRange.filter(t => (t.error && Object.keys(t.error).length > 0) || t.status === "error").length,
-      total_cost_usd: inRange.reduce((s, t) => s + (t.cost_usd ?? 0), 0),
-    };
-    // 注意：本地降级口径只反映「时间窗内全部 trace」的聚合（不被 status/kb/model/keyword 影响），
-    // 与下方 header 的「共 N 条」(filtered) 是不同口径。
-  }, [serverStats, typedTraces, filter.timeRange]);
-
-  const totalPages = Math.ceil(total / pageSize);
-
-  const handleSort = (field: "duration_ms" | "timestamp" | "cost_usd") => {
-    if (sortField === field) {
-      setSortDir(sortDir === "desc" ? "asc" : "desc");
-    } else {
-      setSortField(field);
-      setSortDir("desc");
-    }
-  };
-
-  // 稳定回调（TraceRow memo 的前提）：引用稳定后，无关状态变化不再触发整表重渲。
-  // stopPropagation 已移入 TraceRow 内部。
   const handleNavigate = useCallback((target: string) => {
-    router.push(target.startsWith("/") ? target : `/observability/traces/${target}`);
-  }, [router]);
+    const detailId = target.startsWith('/') ? target.split('/').filter(Boolean).pop() || '' : target
+    const params = new URLSearchParams({ returnTo: currentListUrl })
+    router.push(`/observability/traces/${encodeURIComponent(detailId)}?${params.toString()}`)
+  }, [currentListUrl, router])
 
-  const handleCopy = useCallback((id: string) => {
-    navigator.clipboard.writeText(id);
-    setCopiedId(id);
-    setTimeout(() => setCopiedId(null), 1500);
-  }, []);
+  const handleCopy = useCallback(async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id)
+      setCopiedId(id)
+      window.setTimeout(() => setCopiedId((current) => current === id ? null : current), 1500)
+    } catch {
+      toast.warning('无法访问剪贴板，请从详情页复制 Trace ID')
+    }
+  }, [toast])
 
   const toggleBookmark = useCallback((id: string) => {
-    setBookmarks((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }, []);
+    setBookmarks((current) => {
+      const next = new Set(current)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+  }, [])
 
   const toggleCompare = useCallback((id: string) => {
-    setCompareIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-        return next;
+    setCompareIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else if (next.size < 4) next.add(id)
+      else {
+        toast.warning('最多对比 4 条 Trace')
+        return current
       }
-      if (next.size >= 4) {
-        toast.warning("最多对比 4 个 trace");
-        return prev;
-      }
-      next.add(id);
-      return next;
-    });
-  }, [toast]);
+      return next
+    })
+  }, [toast])
 
   const goCompare = () => {
-    if (compareIds.size < 2) return;
-    router.push(`/observability/traces/compare?ids=${Array.from(compareIds).join(",")}`);
-  };
+    const params = new URLSearchParams({ ids: [...compareIds].join(','), returnTo: currentListUrl })
+    router.push(`/observability/traces/compare?${params.toString()}`)
+  }
 
   const exportCsv = () => {
-    const headers = ["id", "timestamp", "session_id", "question", "duration_ms", "tokens", "cost_usd", "status", "kb_id"];
-    const rows = filtered.map((t) => [
-      t.id, t.timestamp, t.session_id, `"${t.question.replace(/"/g, '""')}"`,
-      t.duration_ms, t.usage?.total_tokens ?? 0, t.cost_usd ?? 0,
-      t.status ?? "success", String(t.metadata?.kb_id ?? ""),
-    ].join(","));
-    const csv = [headers.join(","), ...rows].join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `traces-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+    const headers = ['trace_id', 'workflow_name', 'source', 'status', 'duration_ms', 'timestamp', 'cost_cny']
+    const rows = filtered.map((trace) => [
+      trace.id,
+      trace.workflow_name || '',
+      trace.source || '',
+      getRunStatus(trace),
+      trace.duration_ms,
+      trace.timestamp,
+      typeof trace.cost_cny === 'number' ? trace.cost_cny : '',
+    ].map(csvCell).join(','))
+    const blob = new Blob([[headers.map(csvCell).join(','), ...rows].join('\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `runtime-runs-${new Date().toISOString().slice(0, 10)}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
 
-  const SortIcon = ({ field }: { field: string }) => (
-    <span className="text-slate-300 ml-1">
-      {sortField === field ? (sortDir === "desc" ? "↓" : "↑") : "↕"}
-    </span>
-  );
+  const clearToolFilter = () => {
+    const params = new URLSearchParams(searchParams.toString())
+    params.delete('has_tool')
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+    setHasToolFilter('')
+  }
 
-  const has = (k: ColKey) => columns.includes(k);
+  const sortButton = (label: string, field: 'duration_ms' | 'timestamp' | 'cost_usd') => (
+    <button type="button" onClick={() => handleSort(field)} className="min-h-10 rounded px-1 text-left hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+      {label}{sortField === field ? (sortDir === 'desc' ? ' ↓' : ' ↑') : ' ↕'}
+    </button>
+  )
+
+  if (loading && !lastFetchedAt) {
+    return <div className="p-6 text-sm text-text-secondary" role="status">正在读取执行记录…</div>
+  }
+
+  if (requestFailed && !lastFetchedAt) {
+    return (
+      <section className="m-4 rounded-lg border border-red-200 bg-red-50 p-4 sm:m-6" role="alert">
+        <h2 className="font-semibold text-red-800">执行记录暂不可用</h2>
+        <p className="mt-1 text-sm text-red-700">{pageError || 'Trace 服务读取失败。'} 没有用空列表或模拟数据替代。</p>
+        <button type="button" onClick={() => void loadTraces('query')} className="mt-3 min-h-10 rounded-md border border-red-300 bg-white px-3 text-sm font-medium text-red-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500">重试读取</button>
+      </section>
+    )
+  }
 
   return (
-    <div className="w-full">
-      <div className="max-w-[1440px] mx-auto px-6 py-6 space-y-5">
-        {/* Breadcrumb */}
-        <TraceBreadcrumb crumbs={[{ label: "运行监控工作台", href: "/observability/monitoring?tab=traces" }, { label: "链路追踪" }]} />
+    <div className="space-y-4 p-4 sm:p-6">
+      <TraceBreadcrumb crumbs={[{ label: '运行控制中心', href: '/observability/monitoring?tab=overview' }, { label: '执行记录' }]} />
 
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Link
-              href="/observability/selection-funnel"
-              className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
-              title="选品漏斗运行历史（终态四分 + 各层留存）"
-            >
-              <ShoppingBag size={13} />
-              选品漏斗
-            </Link>
-            <Link
-              href="/observability/alerts"
-              className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
-              title="降级/告警事件流 + 能力健康度"
-            >
-              <BellRing size={13} />
-              系统告警
-            </Link>
-            {compareIds.size >= 2 && (
-              <button
-                onClick={goCompare}
-                className="flex items-center gap-1.5 text-xs text-white bg-violet-600 hover:bg-violet-700 rounded-lg px-3 py-1.5 transition-colors"
-              >
-                <Scale size={13} />
-                对比 ({compareIds.size})
-              </button>
-            )}
-            <button
-              onClick={exportCsv}
-              className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-800 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors"
-            >
-              <Download size={13} />
-              导出 CSV
-            </button>
-            <button
-              onClick={() => setLive(!live)}
-              className={`flex items-center gap-1.5 text-xs rounded-lg px-3 py-1.5 border transition-colors ${
-                live
-                  ? "text-white bg-emerald-600 border-emerald-600 animate-pulse"
-                  : "text-slate-600 bg-white border-slate-200 hover:text-slate-800"
-              }`}
-              title={live ? "每 10s 自动拉取新 trace" : "开启后每 10s 自动刷新"}
-            >
-              <span className={`inline-block w-1.5 h-1.5 rounded-full ${live ? "bg-white" : "bg-emerald-500"}`} />
-              实时
-            </button>
-            <button
-              onClick={handleRefresh}
-              disabled={isRefreshing}
-              className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 bg-white border border-slate-200 rounded-lg px-3 py-1.5 transition-colors disabled:opacity-50"
-            >
-              <svg className={`w-3.5 h-3.5 ${isRefreshing ? "animate-spin" : ""}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 12a9 9 0 11-2.2-5.9M21 3v6h-6" /></svg>
-              {isRefreshing ? "刷新中..." : "刷新"}
-            </button>
-          </div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-text-primary">执行记录</h2>
+          <p className="mt-1 text-sm text-text-secondary">按时间和终态筛选最近授权记录；输入与响应内容、Session 标识不会出现在列表。</p>
         </div>
-
-        {/* URL 下钻过滤条（/tools 失败行跳入时显示）：服务端 has_tool 过滤 */}
-        {hasToolFilter && (
-          <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-[13px] text-blue-800">
-            <Wrench size={14} />
-            <span>
-              只看调用过工具 <span className="font-mono font-semibold">{hasToolFilter}</span> 的请求
-              <span className="ml-1 text-blue-600/70">（{typedTraces.length} 条）</span>
-            </span>
-            <button onClick={clearHasToolFilter} className="ml-auto text-[12px] text-blue-700 hover:underline">
-              清除过滤
-            </button>
-          </div>
-        )}
-
-        {/* Stats（KPI 卡可点击：错误卡 → 只看失败，总数卡 → 清除状态筛选） */}
-        <StatsBar
-          stats={stats}
-          traceCount={total}
-          breachedCount={filteredBase.filter((t) => t.sla?.breached).length}
-          onSelectStatus={(s) => { setFilter((f) => ({ ...f, status: s, page: 1 })); setPage(1); }}
-          activeStatus={filter.status}
-        />
-
-        {/* 洞察区：延迟分布（可点击过滤）+ 24h 请求趋势 */}
-        <TraceInsightsPanel
-          traces={filteredBase}
-          activeBucket={durationBucket}
-          onBucketClick={setDurationBucket}
-        />
-
-        {/* CS 灰度质量（treatment vs control），时间窗与列表过滤联动 */}
-        <CSQualityCard hours={RANGE_HOURS[filter.timeRange] ?? 24} />
-
-        {/* Filters */}
-        <div className="bg-white border border-slate-200 rounded-xl p-3 space-y-2">
-          <TraceFilterBar filter={filter} onChange={(f) => { setFilter(f); setPage(1); }} traces={typedTraces} />
-          {/* Column picker */}
-          <div className="relative border-t border-slate-100 pt-2 flex items-center gap-2">
-            <button
-              onClick={() => setShowColumns(!showColumns)}
-              className="text-[10px] text-slate-500 hover:text-slate-700 flex items-center gap-1"
-            >
-              ⚙️ 列设置 ({columns.length}/{ALL_COLUMNS.length})
-            </button>
-            {showColumns && (
-              <div className="absolute top-full left-0 mt-1 z-20 bg-white border border-slate-200 rounded-lg shadow-lg p-2 flex flex-wrap gap-1.5 max-w-[600px]">
-                {ALL_COLUMNS.map((c) => (
-                  <label key={c.key} className="flex items-center gap-1 text-xs text-slate-600 hover:bg-slate-50 px-2 py-1 rounded cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={columns.includes(c.key)}
-                      onChange={() => {
-                        const next = columns.includes(c.key)
-                          ? columns.filter((x) => x !== c.key)
-                          : [...columns, c.key];
-                        setColumns(next);
-                      }}
-                      className="rounded"
-                    />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            )}
-          </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/observability/selection-funnel" className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ShoppingBag size={14} />选品记录</Link>
+          <Link href="/observability/alerts" className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><BellRing size={14} />系统告警</Link>
+          {compareIds.size >= 2 && <button type="button" onClick={goCompare} className="min-h-10 rounded-md bg-accent px-3 text-sm font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">对比 {compareIds.size} 条</button>}
+          <button type="button" onClick={exportCsv} className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Download size={14} />导出安全字段</button>
+          <button type="button" onClick={() => void loadTraces('refresh')} disabled={refreshing} className="min-h-10 rounded-md border border-border-subtle bg-white px-3 text-sm font-medium text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60">{refreshing ? '刷新中…' : '刷新'}</button>
         </div>
+      </div>
 
-        {/* Table */}
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-xs font-medium text-slate-500">
-                  {has("status") && <th className="py-2.5 px-3 w-16">状态</th>}
-                  {has("question") && <th className="py-2.5 px-3">用户问题</th>}
-                  {has("duration") && (
-                    <th className="py-2.5 px-3 w-44 text-right cursor-pointer select-none" onClick={() => handleSort("duration_ms")}>
-                      耗时<SortIcon field="duration_ms" />
-                    </th>
-                  )}
-                  {has("usage") && (
-                    <th className="py-2.5 px-3 w-28 text-right cursor-pointer select-none" onClick={() => handleSort("cost_usd")}>
-                      Token / 成本<SortIcon field="cost_usd" />
-                    </th>
-                  )}
-                  {has("time") && (
-                    <th className="py-2.5 px-3 w-32 cursor-pointer select-none" onClick={() => handleSort("timestamp")}>
-                      时间<SortIcon field="timestamp" />
-                    </th>
-                  )}
-                  {has("actions") && <th className="py-2.5 px-3 w-20"></th>}
+      <div className="rounded-md border border-border-subtle bg-white px-4 py-3 text-xs leading-5 text-text-secondary">
+        <p>数据源：<code>GET /api/observability/traces?limit=200</code>；服务端执行身份及资源级授权。</p>
+        <p>后端仅返回最近 200 条候选记录，无游标、全量总数或 <code>observed_at</code>。时间、状态、来源、Agent/Workflow 在该样本内筛选；Tool 条件使用现有服务端参数。查询时间：{lastFetchedAt ? new Date(lastFetchedAt).toLocaleString('zh-CN') : '尚未成功'}。</p>
+      </div>
+
+      {requestFailed && lastFetchedAt && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">
+          刷新失败，以下为上次成功读取于 {new Date(lastFetchedAt).toLocaleString('zh-CN')} 的记录，当前已标记为过期。{pageError && ` ${pageError}`}
+        </div>
+      )}
+
+      {hasToolFilter && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
+          <Wrench size={15} aria-hidden="true" />
+          <span>仅显示匹配 Tool：<code className="font-mono">{hasToolFilter}</code>（最近 200 条候选记录内）</span>
+          <button type="button" onClick={clearToolFilter} className="min-h-10 rounded px-2 font-medium underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">清除过滤</button>
+        </div>
+      )}
+
+      <div className="rounded-md border border-border-subtle bg-white p-3">
+        <TraceFilterBar filter={filter} onChange={updateFilter} traces={traces} />
+        <div className="relative mt-3 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-2">
+          <button type="button" onClick={() => setShowColumns((value) => !value)} aria-expanded={showColumns} className="min-h-10 rounded px-2 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">列设置（{columns.length}/{ALL_COLUMNS.length}）</button>
+          {showColumns && (
+            <fieldset className="flex flex-wrap gap-2 rounded-md border border-border-subtle bg-white p-2">
+              <legend className="sr-only">显示列</legend>
+              {ALL_COLUMNS.map((column) => (
+                <label key={column.key} className="inline-flex min-h-10 items-center gap-2 px-2 text-sm text-text-secondary">
+                  <input type="checkbox" checked={columns.includes(column.key)} onChange={() => setColumns((current) => current.includes(column.key) ? current.filter((key) => key !== column.key) : [...current, column.key])} />
+                  {column.label}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {total} 条 / 已加载 {traces.length} 条</span>
+        </div>
+      </div>
+
+      {traces.length === 0 && !requestFailed ? (
+        <section className="rounded-md border border-border-subtle bg-white p-6" aria-live="polite">
+          <h3 className="font-medium text-text-primary">当前授权范围内没有运行记录</h3>
+          <p className="mt-1 text-sm text-text-secondary">Trace API 成功返回 0 条；这不是服务错误。</p>
+        </section>
+      ) : total === 0 ? (
+        <section className="rounded-md border border-border-subtle bg-white p-6" aria-live="polite">
+          <h3 className="font-medium text-text-primary">当前筛选条件下无匹配记录</h3>
+          <p className="mt-1 text-sm text-text-secondary">筛选仅覆盖最近 200 条已授权候选记录；可调整时间、状态或来源。</p>
+        </section>
+      ) : (
+        <>
+          <div className="overflow-x-auto rounded-md border border-border-subtle bg-white">
+            <table className="w-full min-w-[760px] border-collapse text-left">
+              <caption className="sr-only">执行记录列表，包含状态、工作流、耗时、Token 和时间</caption>
+              <thead className="bg-bg-elevated text-xs text-text-secondary">
+                <tr>
+                  {columns.includes('status') && <th scope="col" className="px-3 py-2.5 font-medium">状态</th>}
+                  {columns.includes('question') && <th scope="col" className="px-3 py-2.5 font-medium">运行对象 / Trace ID</th>}
+                  {columns.includes('duration') && <th scope="col" className="px-3 py-2.5 text-right font-medium">{sortButton('耗时', 'duration_ms')}</th>}
+                  {columns.includes('usage') && <th scope="col" className="px-3 py-2.5 text-right font-medium">Token / CNY</th>}
+                  {columns.includes('time') && <th scope="col" className="px-3 py-2.5 font-medium">{sortButton('开始时间', 'timestamp')}</th>}
+                  {columns.includes('actions') && <th scope="col" className="px-3 py-2.5 font-medium">操作</th>}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {traces.map((t) => (
+              <tbody className="divide-y divide-border-subtle">
+                {pageTraces.map((trace) => (
                   <TraceRow
-                    key={t.id}
-                    t={t}
+                    key={trace.id}
+                    t={trace}
                     columns={columns}
                     maxDuration={maxDuration}
-                    isBookmarked={bookmarks.has(t.id)}
-                    isCompared={compareIds.has(t.id)}
-                    isCopied={copiedId === t.id}
+                    isBookmarked={bookmarks.has(trace.id)}
+                    isCompared={compareIds.has(trace.id)}
+                    isCopied={copiedId === trace.id}
                     onNavigate={handleNavigate}
                     onCopy={handleCopy}
                     onToggleBookmark={toggleBookmark}
                     onToggleCompare={toggleCompare}
                   />
                 ))}
-                {traces.length === 0 && (
-                  <tr>
-                    <td colSpan={columns.length} className="py-12 text-center text-sm text-slate-400">
-                      当前筛选条件下无 trace
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-4 py-3 border-t border-slate-100">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">每页</span>
-              <select value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="text-xs border border-slate-200 rounded px-2 py-1">
-                {PAGE_SIZES.map(s => <option key={s} value={s}>{s}</option>)}
-              </select>
-              <span className="text-xs text-slate-400">条 · {total} 条共 {totalPages} 页</span>
-            </div>
-            <div className="flex items-center gap-1">
-              <button disabled={page <= 1} onClick={() => setPage(p => p - 1)} className="text-xs px-3 py-1 border border-slate-200 rounded disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50">上一页</button>
-              <span className="text-xs text-slate-500 px-2">{page}</span>
-              <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)} className="text-xs px-3 py-1 border border-slate-200 rounded disabled:opacity-30 disabled:cursor-not-allowed hover:bg-slate-50">下一页</button>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-white px-4 py-3">
+            <span className="text-sm text-text-secondary">第 {safePage} / {totalPages} 页 · {total} 条匹配记录</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex min-h-10 items-center gap-2 text-sm text-text-secondary">
+                每页
+                <select aria-label="每页条数" value={filter.pageSize} onChange={(event) => updatePage({ ...filter, page: 1, pageSize: Number(event.target.value) })} className="min-h-10 rounded border border-border-default bg-white px-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                  {PAGE_SIZES.map((size) => <option key={size} value={size}>{size}</option>)}
+                </select>
+              </label>
+              <button type="button" disabled={safePage <= 1} onClick={() => updatePage({ ...filter, page: safePage - 1 })} className="min-h-10 rounded border border-border-default px-3 text-sm disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">上一页</button>
+              <button type="button" disabled={safePage >= totalPages} onClick={() => updatePage({ ...filter, page: safePage + 1 })} className="min-h-10 rounded border border-border-default px-3 text-sm disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">下一页</button>
             </div>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
-  );
+  )
+}
+
+function errorMessage(error: unknown): string {
+  const status = (error as { status?: number } | null)?.status
+  if (status === 401) return '登录状态已失效，请重新登录后再试。'
+  if (status === 403) return '当前账号无权读取这些运行记录。'
+  if (status === 429) return '请求过于频繁，请稍后重试。'
+  if (status && status >= 500) return 'Trace 服务暂不可用，请稍后重试。'
+  return 'Trace 服务读取失败，请检查连接后重试。'
 }

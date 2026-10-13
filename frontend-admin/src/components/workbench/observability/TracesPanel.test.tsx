@@ -1,35 +1,33 @@
 import { act } from 'react'
+import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
-const listAgentTraces = vi.hoisted(() => vi.fn().mockResolvedValue([]))
-const getAgentTraceStats = vi.hoisted(() => vi.fn().mockResolvedValue({
-  total: 0,
-  error_count: 0,
-  timeout_count: 0,
-  avg_duration_ms: 0,
-  p95_duration_ms: 0,
+const mocks = vi.hoisted(() => ({
+  listTraces: vi.fn().mockResolvedValue([]),
+  toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), show: vi.fn() },
+  navigation: {
+    pathname: '/observability/monitoring',
+    params: new URLSearchParams(),
+    router: { push: vi.fn(), replace: vi.fn() },
+  },
 }))
-const toast = vi.hoisted(() => ({ error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), show: vi.fn() }))
 
-vi.mock('@/lib/observability/source', () => ({ listAgentTraces, getAgentTraceStats }))
-vi.mock('@/components/shared/Toast', () => ({ useToast: () => toast }))
+vi.mock('@/api/observability', () => ({ listTraces: mocks.listTraces }))
+vi.mock('@/components/shared/Toast', () => ({ useToast: () => mocks.toast }))
 vi.mock('next/link', () => ({
-  default: ({ href, children, ...props }: { href: string; children: React.ReactNode }) => <a href={href} {...props}>{children}</a>,
+  default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }))
 vi.mock('@/components/observability/trace/TraceBreadcrumb', () => ({ default: () => <div /> }))
-vi.mock('@/components/observability/trace/StatsBar', () => ({ default: () => <div /> }))
-vi.mock('@/components/observability/trace/CSQualityCard', () => ({ default: () => <div /> }))
-vi.mock('@/components/observability/trace/TraceInsightsPanel', () => ({
-  DURATION_BUCKETS: [],
-  default: () => <div />,
-}))
+vi.mock('@/components/observability/trace/TraceFilter', () => ({ default: () => <div /> }))
 vi.mock('@/components/observability/trace/TraceRow', () => ({
   VALID_COL_KEYS: ['status', 'question', 'duration', 'usage', 'time', 'actions'],
   default: () => <tr />,
 }))
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn() }),
+  usePathname: () => mocks.navigation.pathname,
+  useRouter: () => mocks.navigation.router,
+  useSearchParams: () => mocks.navigation.params,
 }))
 
 import TracesPanel from './TracesPanel'
@@ -44,25 +42,46 @@ afterEach(() => {
   mounted?.root.unmount()
   mounted?.container.remove()
   mounted = null
-  listAgentTraces.mockClear()
-  getAgentTraceStats.mockClear()
-  window.history.replaceState({}, '', '/')
+  mocks.listTraces.mockReset().mockResolvedValue([])
+  Object.values(mocks.toast).forEach((fn) => fn.mockClear())
+  mocks.navigation.params = new URLSearchParams()
+  mocks.navigation.router.push.mockClear()
+  mocks.navigation.router.replace.mockClear()
 })
 
+async function mountPanel(): Promise<HTMLDivElement> {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  mounted = { root, container }
+  await act(async () => {
+    root.render(<TracesPanel />)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+  return container
+}
+
 describe('TracesPanel', () => {
-  it('从 URL 读取 has_tool 下钻参数并透传给 Trace 查询', async () => {
-    window.history.replaceState({}, '', '/observability/monitoring?tab=traces&has_tool=sql.query')
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = createRoot(container)
-    mounted = { root, container }
+  it('从 URL 读取 Tool 下钻条件并调用现有授权 Trace 查询', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=traces&has_tool=sql.query&range=6h&status=error')
 
-    act(() => root.render(<TracesPanel />))
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    })
+    const container = await mountPanel()
 
-    expect(listAgentTraces).toHaveBeenCalledWith('sql.query')
-    expect(container.textContent).toContain('当前筛选条件下无 trace')
+    expect(mocks.listTraces).toHaveBeenCalledWith(200, undefined, undefined, 'sql.query')
+    expect(container.textContent).toContain('仅显示匹配 Tool')
+    expect(container.textContent).toContain('当前授权范围内没有运行记录')
+  })
+
+  it('将成功返回的空列表与请求失败分别呈现', async () => {
+    const empty = await mountPanel()
+    expect(empty.textContent).toContain('Trace API 成功返回 0 条')
+    act(() => mounted?.root.unmount())
+    mounted?.container.remove()
+    mounted = null
+
+    mocks.listTraces.mockRejectedValueOnce({ status: 403 })
+    const failed = await mountPanel()
+    expect(failed.textContent).toContain('执行记录暂不可用')
+    expect(failed.textContent).toContain('当前账号无权读取')
   })
 })

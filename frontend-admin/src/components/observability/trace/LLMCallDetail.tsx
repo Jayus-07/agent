@@ -2,18 +2,18 @@
 
 import { useState } from "react";
 import { Span, formatCost } from "@/types/trace";
-
-/**
- * LLM 调用明细：筛选 type=llm_call 或有 llm_call 数据的 span
- */
+import { safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
 
 interface Props {
-  steps: Span[];  // 兼容旧名
+  steps: Span[];
+}
+
+function metricNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export default function LLMCallDetail({ steps }: Props) {
-  // 按 type 过滤 + 兼容旧 llm_call 字段
-  const llmSteps = steps.filter((s) => s.type === "llm_call" || s.llm_call);
+  const llmSteps = steps.filter((span) => span.type === "llm_call" || span.llm_call);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const toggle = (id: string) => {
@@ -23,80 +23,44 @@ export default function LLMCallDetail({ steps }: Props) {
   };
 
   if (llmSteps.length === 0) {
-    return (
-      <div className="bg-white border border-slate-200 rounded-xl p-5 text-center text-xs text-slate-400">
-        本次 trace 不包含 LLM 调用（可能因错误短路）
-      </div>
-    );
+    return <p className="rounded-md border border-slate-200 bg-white p-4 text-sm text-slate-500">本次 Trace 未记录 LLM 调用。</p>;
   }
 
   return (
     <div className="space-y-2">
       {llmSteps.map((span) => {
-        // 优先用 mergeTrace 已经派生的 span.llm_call；缺失时从平铺字段再合一次（防御深度）
-        let call = span.llm_call;
-        if (!call) {
-          const attrs = (span.attributes || {}) as Record<string, unknown>;
-          const metrics = (span.metrics || {}) as Record<string, number | boolean | string>;
-          const hasData = attrs["llm.model"] !== undefined ||
-                          metrics.prompt_tokens !== undefined ||
-                          metrics.completion_tokens !== undefined;
-          if (hasData) {
-            call = {
-              model: String(attrs["llm.model"] ?? ""),
-              temperature: Number(metrics["llm.temperature"] ?? 0),
-              prompt_text: String((span.input as Record<string, unknown> | null)?.prompt ?? ""),
-              response_text: String((span.output as Record<string, unknown> | null)?.response ?? ""),
-              prompt_tokens: Number(metrics.prompt_tokens ?? 0),
-              completion_tokens: Number(metrics.completion_tokens ?? 0),
-              cost_usd: Number(metrics.cost_usd ?? 0),
-            };
-          } else {
-            return null;
-          }
-        }
+        const call = span.llm_call;
+        const model = call?.model || (typeof span.attributes?.["llm.model"] === "string" ? String(span.attributes["llm.model"]) : null);
+        const promptTokens = call ? call.prompt_tokens : metricNumber(span.metrics.prompt_tokens);
+        const completionTokens = call ? call.completion_tokens : metricNumber(span.metrics.completion_tokens);
+        const totalTokens = metricNumber(span.metrics.total_tokens)
+          ?? (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
+        const costCny = metricNumber(call?.cost_cny) ?? metricNumber(span.metrics.cost_cny);
         const isOpen = expanded.has(span.id);
-        // P0-2: token/模型都缺 → 采集链路失败，明示"未采集"而非显示 0
-        const callCollected = Boolean(call.model)
-          || call.prompt_tokens > 0 || call.completion_tokens > 0;
-        return (
-          <div key={span.id} className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            {/* Header */}
-            <button
-              onClick={() => toggle(span.id)}
-              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors text-left"
-            >
-              <span className={`text-[10px] font-mono transform transition-transform ${isOpen ? "rotate-90" : ""}`}>▶</span>
-              <span className="text-xs font-medium text-slate-700">{span.name}</span>
-              {callCollected ? (
-                <>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-violet-50 text-violet-700 font-mono">{call.model}</span>
-                  <span className="text-[10px] text-slate-400">T={call.temperature}</span>
-                  <div className="ml-auto flex items-center gap-3 text-[10px] text-slate-500 font-mono">
-                    <span>P:{call.prompt_tokens}</span>
-                    <span>C:{call.completion_tokens}</span>
-                    <span className="text-emerald-600 font-semibold">{formatCost(call.cost_usd)}</span>
-                  </div>
-                </>
-              ) : (
-                <span className="ml-auto text-[10px] text-amber-500" title="proxy 与 response_metadata 均未返回 token/模型信息">Token / 模型 未采集</span>
-              )}
-            </button>
 
-            {/* Body */}
+        return (
+          <section key={span.id} className="overflow-hidden rounded-md border border-slate-200 bg-white">
+            <button
+              type="button"
+              aria-expanded={isOpen}
+              onClick={() => toggle(span.id)}
+              className="flex min-h-11 w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-600"
+            >
+              <span className="min-w-0 flex-1 text-sm font-medium text-slate-800">{safeRuntimeLabel(span.name, "LLM 调用")}</span>
+              <span className="text-xs text-slate-600">{model || "模型未采集"}</span>
+              <span className="font-mono text-xs text-slate-600">Token {totalTokens === null ? "未采集" : totalTokens}</span>
+              <span className="font-mono text-xs text-slate-600">费用 {costCny === null ? "未采集" : formatCost(costCny)}</span>
+            </button>
             {isOpen && (
-              <div className="border-t border-slate-100 p-4 space-y-3 bg-slate-50/50">
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1.5">Prompt</p>
-                  <pre className="text-xs font-mono text-slate-700 bg-white border border-slate-200 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{call.prompt_text}</pre>
-                </div>
-                <div>
-                  <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-1.5">Response</p>
-                  <pre className="text-xs font-mono text-slate-700 bg-white border border-slate-200 rounded-lg p-3 overflow-x-auto whitespace-pre-wrap leading-relaxed">{call.response_text}</pre>
-                </div>
+              <div className="grid grid-cols-2 gap-3 border-t border-slate-100 bg-slate-50 p-4 text-xs sm:grid-cols-4">
+                <div><span className="block text-slate-500">模型</span><span className="font-mono text-slate-800">{model || "未采集"}</span></div>
+                <div><span className="block text-slate-500">Prompt Tokens</span><span className="font-mono text-slate-800">{promptTokens ?? "未采集"}</span></div>
+                <div><span className="block text-slate-500">Completion Tokens</span><span className="font-mono text-slate-800">{completionTokens ?? "未采集"}</span></div>
+                <div><span className="block text-slate-500">费用（CNY）</span><span className="font-mono text-slate-800">{costCny === null ? "未采集" : formatCost(costCny)}</span></div>
+                <p className="col-span-full text-slate-500">Prompt 与响应文本已隐藏；仅显示实际采集的运行元数据。</p>
               </div>
             )}
-          </div>
+          </section>
         );
       })}
     </div>

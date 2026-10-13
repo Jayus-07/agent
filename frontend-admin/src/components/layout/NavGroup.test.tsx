@@ -10,6 +10,7 @@ vi.mock('next/link', () => ({
 
 vi.mock('next/navigation', () => ({
   usePathname: () => '/selection-workbench',
+  useSearchParams: () => new URLSearchParams(''),
 }))
 
 import NavGroup from './NavGroup'
@@ -20,7 +21,7 @@ beforeAll(() => {
 
 const mounted: { container: HTMLDivElement; root: Root }[] = []
 
-function mount(showSections = false) {
+function mount(showSections = false, alwaysOpen = false) {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
@@ -30,6 +31,7 @@ function mount(showSections = false) {
     collapsed: false,
     open: true,
     showSections,
+    alwaysOpen,
     items: [
       { label: '数据查询', path: '/data-explorer', section: '业务洞察' },
       { label: '竞品监控', path: '/competitors', section: '业务洞察' },
@@ -77,5 +79,13 @@ describe('NavGroup', () => {
     expect(container.textContent).toContain('业务洞察')
     expect(container.textContent).toContain('选品运营')
     expect(container.querySelectorAll('a')).toHaveLength(3)
+  })
+
+  it('参考图模式常驻显示分类标题和全部页面入口，不显示折叠按钮', () => {
+    const container = mount(false, true)
+
+    expect(container.querySelector('[role="heading"]')?.textContent).toBe('业务运营')
+    expect(container.querySelectorAll('a')).toHaveLength(3)
+    expect(container.querySelector('button')).toBeNull()
   })
 })
