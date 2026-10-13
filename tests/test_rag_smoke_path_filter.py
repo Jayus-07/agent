@@ -66,6 +66,13 @@ def test_seed_eval_bindings_change_triggers_smoke():
     assert _filter_subprocess(paths) is True
 
 
+def test_eval_fixture_ingest_change_triggers_smoke():
+    """真实执行的 fixture 入库器变化必须触发 Smoke。"""
+    paths = ["backend/scripts/ingest_eval_fixtures.py"]
+    assert _filter_import(paths) is True
+    assert _filter_subprocess(paths) is True
+
+
 def test_core_rag_paths_trigger_smoke():
     for paths in (
         ["backend/rag/pipeline.py"],

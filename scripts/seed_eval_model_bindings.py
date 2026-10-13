@@ -108,6 +108,9 @@ def seed_from_source_db(source_db: str, target_db: str) -> int:
                 driver = EXCLUDED.driver,
                 base_url = EXCLUDED.base_url,
                 network_scope = EXCLUDED.network_scope,
+                extra_headers = EXCLUDED.extra_headers,
+                billing = EXCLUDED.billing,
+                is_builtin = EXCLUDED.is_builtin,
                 enabled = EXCLUDED.enabled,
                 updated_at = now()
             """,

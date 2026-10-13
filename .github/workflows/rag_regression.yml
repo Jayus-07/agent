@@ -72,7 +72,8 @@ jobs:
       EVAL_TRIGGER: ${{ github.event_name }}
       EVAL_TRIGGERED_BY: github-actions-rag-regression
       LANGFUSE_ENABLED: "false"
-      OBS_ANALYTICS_ENABLED: "false"
+      # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
+      OBS_ANALYTICS_ENABLED: "true"
       PYTHONUTF8: "1"
       PGHOST: localhost
       PGPORT: "5432"

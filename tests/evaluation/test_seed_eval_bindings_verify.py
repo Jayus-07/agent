@@ -182,3 +182,93 @@ def test_seed_from_env_updates_provider_id_on_binding_conflict(monkeypatch):
         assert "ON CONFLICT (role) DO UPDATE SET" in sql
         assert "provider_id = EXCLUDED.provider_id" in sql
         assert params[1] == seed_bindings.PROVIDER_ID
+
+
+def test_seed_from_source_db_updates_all_provider_metadata_on_conflict(monkeypatch):
+    """源库重放时不能把目标 Provider 的旧元数据留在冲突行。"""
+    provider_row = (
+        "specialized-api",
+        "Test Provider",
+        "specialized",
+        "https://provider.example.invalid/v1",
+        "public",
+        {"X-Test-Header": "masked-value"},
+        "metered",
+        False,
+        True,
+    )
+    credential_row = ("cipher-test", "fingerprint-test", "1234", 1)
+    binding_rows = [
+        (
+            "embedding",
+            "specialized-api",
+            "dashscope_embedding",
+            "embedding-model",
+            "https://provider.example.invalid/v1",
+            {"dimensions": 1024},
+            True,
+        )
+    ]
+
+    class _SourceCursor:
+        def __init__(self):
+            self.query_number = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, _sql, _params=None):
+            self.query_number += 1
+
+        def fetchone(self):
+            return provider_row if self.query_number == 1 else credential_row
+
+        def fetchall(self):
+            return binding_rows
+
+    class _SourceConnection:
+        def cursor(self):
+            return _SourceCursor()
+
+        def close(self):
+            return None
+
+    class _DestinationCursor:
+        def __init__(self):
+            self.calls = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+        def execute(self, sql, params=None):
+            self.calls.append((sql, params))
+
+    class _DestinationConnection:
+        def __init__(self):
+            self.cur = _DestinationCursor()
+            self.committed = False
+
+        def cursor(self):
+            return self.cur
+
+        def commit(self):
+            self.committed = True
+
+    dst = _DestinationConnection()
+    connections = iter((_SourceConnection(), dst))
+    monkeypatch.setattr(seed_bindings, "_connect", lambda _db: next(connections))
+
+    assert seed_bindings.seed_from_source_db("source-test", "target-test") == 0
+    assert dst.committed
+    provider_sql, provider_params = dst.cur.calls[0]
+    assert "extra_headers = EXCLUDED.extra_headers" in provider_sql
+    assert "billing = EXCLUDED.billing" in provider_sql
+    assert "is_builtin = EXCLUDED.is_builtin" in provider_sql
+    assert provider_params[5] == '{"X-Test-Header": "masked-value"}'
+    assert provider_params[6:9] == ("metered", False, True)

@@ -30,6 +30,7 @@ EXACT_ENTRIES = frozenset({
     "backend/infra/mcp_client.py",
     "mcp_servers/servers/rag.py",
     "backend/scripts/seed_prompt_eval_db.py",
+    "backend/scripts/ingest_eval_fixtures.py",
     "scripts/seed_eval_model_bindings.py",
     ".github/workflows/rag_smoke.yml",
     ".github/workflows/rag_regression.yml",
