@@ -4,8 +4,8 @@ from copy import deepcopy
 
 import pytest
 
-from backend.travel_v2.services.trip_edit_service import TripEditService
 from backend.tests.travel_v2.test_trip_document import valid_document
+from backend.travel_v2.services.trip_edit_service import TripEditService
 
 
 def _two_item_document() -> dict:
@@ -97,6 +97,61 @@ def test_schedule_overlap_is_rejected_before_a_write() -> None:
 
     with pytest.raises(ValueError, match="时间或路程安排冲突"):
         TripEditService._validate_edit_schedule(document)
+
+
+def test_shared_commit_gate_rejects_before_trip_revision_or_ledger_writes() -> None:
+    calls = []
+
+    class TrackingRepository:
+        def update_document_cas(self, *_args, **_kwargs):
+            calls.append("trip")
+
+        def insert(self, *_args, **_kwargs):
+            calls.append("revision_or_operation")
+
+    document = _two_item_document()
+    conflicting = deepcopy(document)
+    conflicting["days"][0]["items"][1]["start_time"] = "10:30"
+    repository = TrackingRepository()
+    service = TripEditService(
+        trip_repository=repository,
+        revision_repository=repository,
+        edit_operation_repository=repository,
+    )
+
+    with pytest.raises(ValueError, match="时间或路程安排冲突"):
+        service._commit_locked(
+            object(), trip_id="trip-1", tenant_id="tenant-1",
+            owner_id="owner-1", actor_id="owner-1", expected_revision=1,
+            idempotency_key="blocked", request_hash="hash",
+            command_type="structured_edit", change_summary="冲突行程",
+            current={"document": document, "title": "测试行程"},
+            snapshot=conflicting,
+        )
+
+    assert calls == []
+
+
+def test_known_route_buffer_blocks_but_unknown_duration_stays_unknown() -> None:
+    document = _two_item_document()
+    document["days"][0]["items"][0]["duration_min"] = 60
+    document["days"][0]["items"][1]["start_time"] = "10:15"
+
+    with pytest.raises(ValueError, match="时间或路程安排冲突"):
+        TripEditService._validate_edit_schedule(document)
+
+    leg = document["days"][0]["legs"][0]
+    leg.update({"duration_min": None, "reliability": "unavailable"})
+    TripEditService._validate_edit_schedule(document)
+    assert leg["duration_min"] is None
+    assert leg["reliability"] == "unavailable"
+
+
+def test_legacy_item_without_start_time_remains_compatible() -> None:
+    document = valid_document()
+    document["days"][0]["items"][0]["start_time"] = None
+
+    TripEditService._validate_edit_schedule(document)
 
 
 def test_verified_opening_hours_are_checked_but_unverified_hours_are_not() -> None:

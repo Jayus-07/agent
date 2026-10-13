@@ -8,6 +8,7 @@ from backend.travel_v2.db import memory_connection
 from backend.travel_v2.models.trip import TripDocumentV2
 from backend.travel_v2.repositories.revision_repository import RevisionRepository
 from backend.travel_v2.repositories.trip_repository import TripRepository
+from backend.travel_v2.services.trip_write_validator import validate_trip_write
 
 _TRIP_NAMESPACE = UUID("f5b971c4-aeb2-4ab2-a98c-7907e0a1ad81")
 
@@ -75,6 +76,7 @@ class TripService:
                     if not same_request:
                         raise IdempotencyConflict("Idempotency-Key 已用于不同的创建请求")
                     return {**existing, "replayed": True}
+                validate_trip_write(snapshot)
                 trip = self._trips.insert(
                     cursor, trip_id=trip_id, tenant_id=tenant_id,
                     owner_id=owner_id, title=title, document=snapshot,

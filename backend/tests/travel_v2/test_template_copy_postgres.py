@@ -13,11 +13,21 @@ from backend.travel_v2.services.template_service import TemplateService
 from backend.travel_v2.services.trip_edit_service import TripEditService
 from backend.travel_v2.services.trip_service import TripService
 
-
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
     reason="requires the explicitly selected local agent_memory PostgreSQL",
 )
+
+
+def _overlapping_document() -> dict:
+    document = valid_document()
+    document["days"][0]["items"].append({
+        "item_id": "item-2", "kind": "activity", "activity_type": "rest",
+        "title": "湖边休息", "start_time": "10:30", "duration_min": 30,
+        "fixed_start": False, "place": None, "must_visit": False,
+        "locked": False, "note": "",
+    })
+    return document
 
 
 def test_published_template_copy_is_independent_from_future_trip_edits() -> None:
@@ -85,6 +95,79 @@ def test_published_template_copy_is_independent_from_future_trip_edits() -> None
             with connection.cursor() as cursor:
                 cursor.execute(
                     "DELETE FROM travel_v2.templates WHERE template_id=%s::uuid",
+                    (created["template_id"],),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+
+
+def test_published_template_copy_rejects_schedule_conflict_before_trip_insert() -> None:
+    suffix = uuid.uuid4().hex[:12]
+    tenant_id = f"tenant-{suffix}"
+    owner_id = f"owner-{suffix}"
+    slug = f"conflicting-template-{suffix}"
+    template_service = TemplateService()
+    created = template_service.create_template(
+        TemplateCreateRequest(
+            slug=slug, title="冲突模板", destination="杭州",
+            summary="复制门禁测试", tags=[],
+            content=TripDocumentV2.model_validate(_overlapping_document()),
+        ),
+        actor_id="platform-admin-test",
+    )
+    template_service.publish(created["template_id"])
+    try:
+        with pytest.raises(ValueError, match="时间或路程安排冲突"):
+            template_service.copy_to_trip(
+                slug, tenant_id=tenant_id, owner_id=owner_id,
+                actor_id=owner_id, idempotency_key=f"copy-{suffix}",
+            )
+
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT count(*) FROM travel_v2.trips "
+                    "WHERE tenant_id = %s AND owner_id = %s",
+                    (tenant_id, owner_id),
+                )
+                assert cursor.fetchone()[0] == 0
+                cursor.execute(
+                    "SELECT count(*) FROM travel_v2.trip_revisions "
+                    "WHERE tenant_id = %s AND owner_id = %s",
+                    (tenant_id, owner_id),
+                )
+                assert cursor.fetchone()[0] == 0
+        finally:
+            connection.close()
+    finally:
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT trip_id FROM travel_v2.trips "
+                    "WHERE tenant_id = %s AND owner_id = %s",
+                    (tenant_id, owner_id),
+                )
+                trip_ids = [row[0] for row in cursor.fetchall()]
+                if trip_ids:
+                    cursor.execute(
+                        "DELETE FROM travel_v2.edit_operations "
+                        "WHERE trip_id = ANY(%s)",
+                        (trip_ids,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM travel_v2.trip_revisions "
+                        "WHERE trip_id = ANY(%s)",
+                        (trip_ids,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM travel_v2.trips WHERE trip_id = ANY(%s)",
+                        (trip_ids,),
+                    )
+                cursor.execute(
+                    "DELETE FROM travel_v2.templates WHERE template_id = %s::uuid",
                     (created["template_id"],),
                 )
             connection.commit()
