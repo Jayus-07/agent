@@ -15,6 +15,7 @@ from uuid import uuid4
 import pytest
 
 import backend.config.travel as T
+from backend.app.api.routes import travel as travel_api
 import backend.travel.graph_builder as gb
 from backend.travel.graph_state import new_travel_graph_input
 from backend.travel.validator import _normalize_decision
@@ -88,6 +89,20 @@ class TestInterruptFlow:
         names = [i["poi_name"] for i in payload["items"]]
         assert "福建博物院" in names
         assert set(payload["options"]) == {"keep", "drop"}
+
+    def test_pending_checkpoint_has_stable_decision_token(self, interrupt_graph):
+        tid = _tid("token")
+        final = _invoke(interrupt_graph, MONDAY_QUESTION, tid)
+        payload = _interrupt_payload(final)
+        snapshot = interrupt_graph.get_state(
+            {"configurable": {"thread_id": tid}},
+        )
+
+        assert snapshot.config["configurable"]["checkpoint_id"]
+        first = travel_api._bind_travel_decision_token(payload, snapshot, tid)
+        second = travel_api._bind_travel_decision_token(payload, snapshot, tid)
+        assert first["decision_token"] == second["decision_token"]
+        assert len(first["decision_token"]) == 24
 
     def test_resume_keep_degrades_with_record(self, interrupt_graph):
         tid = _tid("keep")

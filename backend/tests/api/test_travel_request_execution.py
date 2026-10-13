@@ -159,8 +159,26 @@ def _decision_payload():
     }
 
 
+def _decision_snapshot(payload=None, checkpoint_id="checkpoint-1"):
+    interrupts = (SimpleNamespace(value=payload),) if payload else ()
+    return SimpleNamespace(
+        tasks=[SimpleNamespace(interrupts=interrupts)] if payload else [],
+        values={},
+        config={"configurable": {"checkpoint_id": checkpoint_id}},
+    )
+
+
+def _decision_token(payload, *, thread_id="travel:t:u:travel-v2:execution",
+                    checkpoint_id="checkpoint-1"):
+    return travel._bind_travel_decision_token(
+        payload, _decision_snapshot(payload, checkpoint_id), thread_id,
+    )["decision_token"]
+
+
 def _frame_payload(frames, event_name):
-    frame = next(item for item in frames if item.startswith(f"event: {event_name}"))
+    matching = [item for item in frames if item.startswith(f"event: {event_name}")]
+    assert matching, f"missing {event_name!r} frame: {frames!r}"
+    frame = matching[0]
     return json.loads(frame.split("data: ", 1)[1])
 
 
@@ -168,17 +186,20 @@ def _frame_payload(frames, event_name):
 async def test_v2_interrupt_is_clarification_and_does_not_write_trip(
     setup_runtime, monkeypatch,
 ):
-    setup_runtime.timeout_s = 1.0
+    setup_runtime.timeout_s = 5.0
     payload = _decision_payload()
+    state = {"pending": False}
 
     class Graph:
         def get_state(self, _config):
-            return SimpleNamespace(tasks=[], values={})
+            return (_decision_snapshot(payload) if state["pending"]
+                    else _decision_snapshot())
 
         def invoke(self, _graph_input, config):
             assert config["configurable"]["thread_id"] == (
                 "travel:t:u:travel-v2:execution"
             )
+            state["pending"] = True
             return {"__interrupt__": [SimpleNamespace(value=payload)]}
 
     monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
@@ -198,7 +219,10 @@ async def test_v2_interrupt_is_clarification_and_does_not_write_trip(
     assert result["status"] == "needs_clarification"
     assert result["result_kind"] == "clarification"
     assert result["itinerary"] is None
-    assert result["travel_context"]["pending_decision"] == payload
+    pending = result["travel_context"]["pending_decision"]
+    assert {key: value for key, value in pending.items()
+            if key != "decision_token"} == payload
+    assert pending["decision_token"] == _decision_token(payload)
     assert "移除：地点名" in result["final_answer"]
 
 
@@ -209,16 +233,12 @@ async def test_v2_explicit_decision_resumes_same_scoped_checkpoint(
     setup_runtime.timeout_s = 1.0
     payload = _decision_payload()
     captured = {}
+    token = _decision_token(payload)
 
     class Graph:
         def get_state(self, config):
             captured["thread_id"] = config["configurable"]["thread_id"]
-            return SimpleNamespace(
-                tasks=[SimpleNamespace(
-                    interrupts=(SimpleNamespace(value=payload),),
-                )],
-                values={},
-            )
+            return _decision_snapshot(payload)
 
         def invoke(self, command, config):
             captured["command"] = command
@@ -241,7 +261,11 @@ async def test_v2_explicit_decision_resumes_same_scoped_checkpoint(
         travel, "_finish_travel_trace", lambda *args: trace_modes.append(args[-1]),
     )
     async def load(_request):
-        return travel.TravelPlanRequest(message="移除：福建博物院", conversation_id="execution")
+        return travel.TravelPlanRequest(
+            message="移除：福建博物院",
+            conversation_id="execution",
+            action_payload={"decision_token": token},
+        )
 
     monkeypatch.setattr(travel, "_load_travel_plan_request", load)
     response = await travel.travel_v2_plan_stream(request())
@@ -264,12 +288,7 @@ async def test_pending_interrupt_does_not_consume_ordinary_question(
 
     class Graph:
         def get_state(self, _config):
-            return SimpleNamespace(
-                tasks=[SimpleNamespace(
-                    interrupts=(SimpleNamespace(value=payload),),
-                )],
-                values={},
-            )
+            return _decision_snapshot(payload)
 
         def invoke(self, *_args, **_kwargs):
             pytest.fail("普通问答不得恢复中断或修改行程")
@@ -288,7 +307,9 @@ async def test_pending_interrupt_does_not_consume_ordinary_question(
 
     assert result["status"] == "needs_clarification"
     assert result["itinerary"] is None
-    assert result["travel_context"]["pending_decision"] == payload
+    assert result["travel_context"]["pending_decision"]["decision_token"] == (
+        _decision_token(payload)
+    )
     assert "没有被当作确认" in result["final_answer"]
 
 
@@ -353,6 +374,46 @@ async def test_decision_from_other_tenant_cannot_resume_checkpoint(
     assert captured["thread_id"] == "travel:other:bob:travel-v2:execution"
     assert result["status"] == "answered"
     assert "pending_decision" not in result["travel_context"]
+
+
+@pytest.mark.asyncio
+async def test_old_decision_token_cannot_apply_to_new_pending_interrupt(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    old_payload = _decision_payload()
+    current_payload = _decision_payload()
+    current_payload["items"][0]["poi_name"] = "鼓岭"
+    old_token = _decision_token(old_payload, checkpoint_id="old-checkpoint")
+
+    class Graph:
+        def get_state(self, _config):
+            return _decision_snapshot(current_payload, "new-checkpoint")
+
+        def invoke(self, *_args, **_kwargs):
+            pytest.fail("旧决策令牌不得恢复新的待决冲突")
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+
+    async def load(_request):
+        return travel.TravelPlanRequest(
+            message="保留",
+            conversation_id="execution",
+            action_payload={"decision_token": old_token},
+        )
+
+    monkeypatch.setattr(travel, "_load_travel_plan_request", load)
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+    pending = result["travel_context"]["pending_decision"]
+
+    assert result["status"] == "needs_clarification"
+    assert pending["decision_token"] == _decision_token(
+        current_payload, checkpoint_id="new-checkpoint",
+    )
+    assert "事项已更新" in result["final_answer"]
+    assert "没有修改正式行程" in result["final_answer"]
 
 
 def test_postgres_resume_lock_rejects_a_concurrent_resume(monkeypatch):

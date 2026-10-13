@@ -271,6 +271,31 @@ def _pending_travel_decision(graph, config: dict) -> tuple[dict | None, Any]:
     return payload, snapshot
 
 
+def _bind_travel_decision_token(
+    payload: dict, snapshot: Any, thread_id: str,
+) -> dict:
+    """把用户确认绑定到这个具体 checkpoint 与待决 payload。"""
+    snapshot_config = getattr(snapshot, "config", None)
+    configurable = (
+        snapshot_config.get("configurable")
+        if isinstance(snapshot_config, dict) else None
+    )
+    checkpoint_id = (
+        configurable.get("checkpoint_id")
+        if isinstance(configurable, dict) else None
+    )
+    if not isinstance(checkpoint_id, str) or not checkpoint_id:
+        raise _TravelCheckpointUnavailableError(
+            "行程确认版本暂不可用；本轮没有继续执行。"
+        )
+    canonical_payload = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+    )
+    material = f"{thread_id}\x00{checkpoint_id}\x00{canonical_payload}"
+    token = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+    return {**payload, "decision_token": token}
+
+
 _KEEP_TRAVEL_DECISIONS = frozenset({
     "保留", "保留此安排", "保留当前安排", "接受风险",
 })
@@ -290,13 +315,15 @@ def _has_explicit_travel_decision(req: TravelPlanRequest) -> bool:
 def _parse_travel_decision(
     req: TravelPlanRequest, payload: dict,
 ) -> dict | None:
+    action_payload = req.action_payload if isinstance(req.action_payload, dict) else {}
+    if action_payload.get("decision_token") != payload.get("decision_token"):
+        return None
     allowed = {
         str(item.get("poi_name") or "").strip()
         for item in payload.get("items", [])
         if isinstance(item, dict)
     }
     allowed.discard("")
-    action_payload = req.action_payload if isinstance(req.action_payload, dict) else {}
     decision = action_payload.get("decision", action_payload.get("user_decision"))
     if isinstance(decision, dict):
         if decision.get("action") == "keep":
@@ -324,6 +351,7 @@ def _parse_travel_decision(
 
 def _travel_decision_prompt(
     payload: dict, conversation_id: str, *, unrecognized_input: bool = False,
+    stale_decision: bool = False,
 ) -> dict:
     lines = ["行程已暂停，以下事项需要你明确决定："]
     for item in payload.get("items", []):
@@ -332,6 +360,8 @@ def _travel_decision_prompt(
     lines.append("请回复“保留”或“移除：地点名”。")
     if unrecognized_input:
         lines.append("本轮内容没有被当作确认，也没有修改正式行程。")
+    if stale_decision:
+        lines.append("这条确认对应的事项已更新；请核对当前事项后重新确认。")
     message = "\n".join(lines)
     return {
         "status": "needs_clarification",
@@ -1232,18 +1262,24 @@ async def _travel_plan_stream_impl(
                 final_state = None
                 early_result = None
                 if req.mode != "read_only":
-                    pending_decision, _snapshot = _pending_travel_decision(
+                    pending_decision, pending_snapshot = _pending_travel_decision(
                         graph, invoke_config)
                     if pending_decision:
+                        thread_id = invoke_config["configurable"]["thread_id"]
+                        pending_decision = _bind_travel_decision_token(
+                            pending_decision, pending_snapshot, thread_id,
+                        )
                         decision = _parse_travel_decision(req, pending_decision)
                         if decision is not None:
-                            thread_id = invoke_config["configurable"]["thread_id"]
                             with _travel_resume_lock(thread_id):
                                 # 锁内再次读取；前一请求若已恢复，重复提交只
                                 # 返回“无待确认”，绝不把决策当成新规划输入。
-                                pending_decision, _snapshot = _pending_travel_decision(
+                                pending_decision, pending_snapshot = _pending_travel_decision(
                                     graph, invoke_config)
                                 if pending_decision:
+                                    pending_decision = _bind_travel_decision_token(
+                                        pending_decision, pending_snapshot, thread_id,
+                                    )
                                     decision = _parse_travel_decision(
                                         req, pending_decision)
                                     if decision is not None:
@@ -1258,14 +1294,23 @@ async def _travel_plan_stream_impl(
                                         early_result = _travel_decision_prompt(
                                             pending_decision, conversation_id,
                                             unrecognized_input=True,
+                                            stale_decision=True,
                                         )
                                 else:
                                     early_result = _stale_travel_decision(
                                         conversation_id)
                         else:
+                            request_token = (
+                                req.action_payload.get("decision_token")
+                                if isinstance(req.action_payload, dict) else None
+                            )
                             early_result = _travel_decision_prompt(
                                 pending_decision, conversation_id,
                                 unrecognized_input=True,
+                                stale_decision=(
+                                    bool(request_token)
+                                    and request_token != pending_decision["decision_token"]
+                                ),
                             )
                         if early_result is not None:
                             resume_mode = (
@@ -1308,6 +1353,18 @@ async def _travel_plan_stream_impl(
                 )
                 trace_state = final_state if isinstance(final_state, dict) else {}
                 if pending_decision:
+                    checkpoint_payload, pending_snapshot = _pending_travel_decision(
+                        graph, invoke_config,
+                    )
+                    if not checkpoint_payload or pending_snapshot is None:
+                        raise _TravelCheckpointUnavailableError(
+                            "行程暂停版本暂不可用；本轮没有继续执行。"
+                        )
+                    pending_decision = _bind_travel_decision_token(
+                        checkpoint_payload,
+                        pending_snapshot,
+                        invoke_config["configurable"]["thread_id"],
+                    )
                     trace_state = {
                         key: value for key, value in trace_state.items()
                         if key != "__interrupt__"
