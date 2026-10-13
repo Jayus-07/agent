@@ -311,6 +311,9 @@ export interface PlanResponse {
   draft_plan_version?: number | null;
   base_plan_version?: number | null;
   task_results?: Array<Record<string, unknown>>;
+  travel_context?: {
+    pending_decision?: { decision_token?: string };
+  };
 }
 
 export interface CityGuide {

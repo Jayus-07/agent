@@ -659,11 +659,12 @@ def travel_validator_node(state: dict) -> dict:
 # 注意：interrupt resume 后本节点会从头重跑，interrupt() 之前的计算
 #（check_itinerary 等）必须确定性 —— 现状满足。
 def _interrupt_enabled() -> bool:
-    """开关开且持久化可用才允许 interrupt（暂停态靠 checkpointer 存活）。
+    """仅在共享持久化 Checkpointer 健康时允许 interrupt。
 
     延迟 import graph_builder：图装配时 import 本模块，顶层互相引用会循环
-    （slot_filler 同款处理）。无持久化（DISABLED）时回退软处理——中断无处
-    悬挂，等于把用户卡死在半路。
+    （slot_filler 同款处理）。disabled 无 checkpoint；degraded 仅为进程内
+    MemorySaver，后续请求可能落到其他 worker。两种状态都回退软处理，避免
+    把用户卡在其他 worker 无法恢复的暂停点。
     """
     from backend.config import travel as T
 
@@ -671,9 +672,11 @@ def _interrupt_enabled() -> bool:
         return False
     try:
         from backend.travel.graph_builder import (
-            PERSISTENCE_DISABLED, get_persistence_status,
+            PERSISTENCE_HEALTHY, get_persistence_status,
         )
-        return get_persistence_status() != PERSISTENCE_DISABLED
+        # 人工确认可能跨请求、跨 worker 恢复；仅进程内 MemorySaver 无法保证
+        # 后续请求读到同一暂停点，因此不在 degraded 状态挂起用户请求。
+        return get_persistence_status() == PERSISTENCE_HEALTHY
     except Exception:  # noqa: BLE001 — 探测失败按软处理走，绝不阻塞出单
         return False
 

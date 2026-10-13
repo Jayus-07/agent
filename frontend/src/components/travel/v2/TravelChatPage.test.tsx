@@ -1,33 +1,17 @@
 import { act, createElement } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   createTrip: vi.fn(),
   saveTrip: vi.fn(),
   setMessages: vi.fn(),
+  stream: vi.fn(),
+  messages: [] as Array<Record<string, unknown>>,
 }))
 
 vi.mock('@/api/travel', () => ({
-  streamTravelPlanV2: vi.fn(async function* () {
-    yield {
-      event: 'done',
-      data: {
-        status: 'success',
-        result: {
-          status: 'success',
-          plan_status: 'confirmed',
-          final_answer: '杭州行程已安排。',
-          itinerary: {
-            brief: { destination: '杭州', origin: '', start_date: '2026-12-01', days: 1, party_size: 1, budget_cny: null, pace: 'relaxed', preferences: [], must_go: [], avoid: [], diet: '', lodging: '', transport: '' },
-            days: [{ day_index: 1, day_date: '2026-12-01', active_minutes: 90, transit_minutes: 0, cost_cny: 0, items: [{ title: '西湖', kind: 'visit', start: '09:00', end: '10:30', minutes: 90, wait_minutes: 0, note: '', poi: { poi_id: 'poi-west-lake', name: '西湖', lat: 30.25, lng: 120.15, ticket_cny: 0, source: 'amap', location_status: 'verified', required: false } }], legs: [] }],
-            cost: { tickets: 0, meals: 0, lodging: 0, transit: 0, total: 0 },
-            warnings: [], intercity: [],
-          },
-        },
-      },
-    }
-  }),
+  streamTravelPlanV2: mocks.stream,
 }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
@@ -35,7 +19,7 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
   saveTravelTripDocumentV2: mocks.saveTrip,
 }))
 vi.mock('@/components/travel/useTravelConversation', () => ({
-  useTravelConversation: () => ({ messages: [], setMessages: mocks.setMessages, syncError: '' }),
+  useTravelConversation: () => ({ messages: mocks.messages, setMessages: mocks.setMessages, syncError: '' }),
 }))
 vi.mock('@/lib/auth', () => ({ getCachedUser: () => ({ tenantId: 'tenant-a', userId: 'user-a' }) }))
 
@@ -44,6 +28,30 @@ import TravelChatPage from './TravelChatPage'
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 describe('V2 旅游规划对话', () => {
+  beforeEach(() => {
+    mocks.stream.mockReset()
+    mocks.messages.splice(0)
+    mocks.stream.mockImplementation(async function* () {
+      yield {
+        event: 'done',
+        data: {
+          status: 'success',
+          result: {
+            status: 'success',
+            plan_status: 'confirmed',
+            final_answer: '杭州行程已安排。',
+            itinerary: {
+              brief: { destination: '杭州', origin: '', start_date: '2026-12-01', days: 1, party_size: 1, budget_cny: null, pace: 'relaxed', preferences: [], must_go: [], avoid: [], diet: '', lodging: '', transport: '' },
+              days: [{ day_index: 1, day_date: '2026-12-01', active_minutes: 90, transit_minutes: 0, cost_cny: 0, items: [{ title: '西湖', kind: 'visit', start: '09:00', end: '10:30', minutes: 90, wait_minutes: 0, note: '', poi: { poi_id: 'poi-west-lake', name: '西湖', lat: 30.25, lng: 120.15, ticket_cny: 0, source: 'amap', location_status: 'verified', required: false } }], legs: [] }],
+              cost: { tickets: 0, meals: 0, lodging: 0, transit: 0, total: 0 },
+              warnings: [], intercity: [],
+            },
+          },
+        },
+      }
+    })
+  })
+
   afterEach(() => {
     vi.clearAllMocks()
     window.localStorage.clear()
@@ -112,5 +120,70 @@ describe('V2 旅游规划对话', () => {
     expect(container.querySelector('a[href="/travel/itineraries/v2-trip-replayed"]')).not.toBeNull()
     expect(container.textContent).toContain('已保存')
     await act(async () => root.unmount())
+  })
+
+  it('持久化待决令牌但不显示给用户，刷新后随确认自动提交', async () => {
+    const token = 'a'.repeat(24)
+    mocks.stream.mockImplementationOnce(async function* () {
+      yield {
+        event: 'done',
+        data: {
+          status: 'needs_clarification',
+          result: {
+            status: 'needs_clarification',
+            result_kind: 'clarification',
+            final_answer: '请回复保留或移除指定地点。',
+            itinerary: null,
+            travel_context: { pending_decision: { decision_token: token } },
+          },
+        },
+      }
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialPrompt: '规划福州一日游' }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    const updates = mocks.setMessages.mock.calls.map(([update]) => update)
+    const storedMessages = updates.reduce<Array<{ role: string; text: string }>>(
+      (current, update) => typeof update === 'function' ? update(current) : update,
+      [],
+    )
+    const pendingMessage = storedMessages.find((message: { role: string; text: string }) =>
+      message.role === 'assistant')
+    expect(pendingMessage?.text).toContain(`[[travel-decision-token:${token}]]`)
+    expect(container.textContent).not.toContain('travel-decision-token')
+    await act(async () => root.unmount())
+
+    mocks.messages.splice(0, mocks.messages.length, {
+      id: 'server:pending', conversationId: 'travel-conversation', turnId: 'turn-1',
+      role: 'assistant', text: `请回复保留。\n[[travel-decision-token:${token}]]`,
+    })
+    mocks.stream.mockImplementationOnce(async function* () {
+      yield {
+        event: 'done',
+        data: { status: 'answered', result: { status: 'answered', final_answer: '已处理。', itinerary: null } },
+      }
+    })
+    const resumed = document.createElement('div')
+    const resumedRoot = createRoot(resumed)
+    await act(async () => {
+      resumedRoot.render(createElement(TravelChatPage, { initialPrompt: '保留' }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      resumed.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(mocks.stream.mock.calls.at(-1)?.[2].actionPayload).toEqual({ decision_token: token })
+    expect(resumed.textContent).not.toContain('travel-decision-token')
+    await act(async () => resumedRoot.unmount())
   })
 })
