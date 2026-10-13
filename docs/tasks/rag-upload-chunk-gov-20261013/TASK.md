@@ -3,7 +3,7 @@
 - 分支：`task/rag-upload-chunk-governance-20261013`
 - worktree：`D:/Program Files/workplace/agent-wt-rag-chunk-gov-20261013`
 - 基线：origin/main @ 2d1d0b1
-- 状态：IN_PROGRESS
+- 状态：DONE（全部批次完成，待 PR 审查）
 
 ## 目标
 
@@ -16,12 +16,12 @@ UnifiedMetadata/DecisionEnvelope/Parent-Leaf/MetadataStage/QualityGate/候选发
 
 | 批次 | 内容 | 状态 |
 | --- | --- | --- |
-| B1 | P0 正确性：P0-01 FAQ 丢失 / P0-02 AST 覆盖 / P0-03 Parent-Leaf ID 契约 / P0-04 表格位置 / P0-05 长度限制 | 进行中 |
-| B2 | P0 超长文档：分区批处理、Excel/CSV 前导零、OCR 覆盖展示、幂等重试 | 待开工 |
-| B3 | P1 Structure Profile + Router 审计记录（先验证调用方再收敛策略） | 待开工 |
-| B4 | P1 元数据治理：full_text 重复拼接、长文摘要覆盖、simulated_questions 预算 | 待开工 |
-| B5 | 索引与发布安全核查（CAS 续跑 / BM25 快照一致性 / 去重误判 / pending_review 绕过） | 待开工 |
-| B6 | 16 类真实文档测试集 + 定向验收 + rag.md 文档同步 | 待开工 |
+| B1 | P0 正确性（7cf9d82） | 完成 |
+| B2 | P0 超长文档（eeceb9f） | 完成 |
+| B3 | P1 Structure Profile + Router 审计（4254c17） | 完成 |
+| B4 | P1 元数据治理（b46fd22） | 完成 |
+| B5 | 发布安全核查（机制全在，无改动） | 完成 |
+| B6 | 16 类文档矩阵 + rag.md 同步（2def153） | 完成 |
 
 ## 验收门禁（P0）
 

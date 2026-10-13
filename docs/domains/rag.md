@@ -45,8 +45,14 @@ flowchart TD
 
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
+  - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
+  - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。
+  - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号；Router 强信号豁免：legal(≥3条款)/faq(qa节点)/sop(≥3标题) 与 doc_type 同时成立时不因整篇完整度 < 阈值降级 Recursive。`route_with_decision` 产出 `ChunkRouteDecision`（信号/策略版本/降级原因/处理范围）随质量记录与 Trace 落盘，策略版本表 `_STRATEGY_VERSIONS` 在 chunking.py 集中维护。
+  - 切分覆盖对账：`coverage_audit`（表格叶子按单元格内容判覆盖）在 pipeline 产出 qc["coverage"]，uncovered 进 quality_issues——策略静默丢内容必须可追溯（P0-02）。
+  - Token 上限统一走 `_split_to_budget`（语义切分 + `_hard_split_by_budget` 整串口径硬切收口），Leaf/Parent 全部路径（含 Step/Legal/QA/表格兜底/虚拟 parent）严格 ≤ 配置预算；chunk 级截断（超 MAX_CHUNKS_PER_DOC）是质量门禁**硬异常**——文档进 failed，不得以截断状态 active（P0-05/超长文档收口）。
+  - 大表解析资源上限：`RAG_TABLE_MAX_ROWS` / `RAG_TABLE_MAX_CELLS`（Excel/CSV 停止读取并留痕 `table_rows_truncated`）；CSV 以 `dtype=str` 读取（前导零 SKU/长订单号不被数值推断破坏）；OCR 页数上限/失败页留痕 `ocr_page_limit`/`ocr_failed_pages`（`ocr_coverage_partial` 展示覆盖情况）。
 - 元数据：`metadata_schema.py::UnifiedMetadata/DecisionEnvelope`、taxonomy 与当前源文档/chunk contract 为事实源。必要检索键至少保持可溯源 doc/chunk/source、KB/部门/权限、版本/代次等已有字段；具体必填性按 schema 检查，不从本段临时发明字段。
-- 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。
+- 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。Parent-Child 身份契约：索引期 `apply_index_chunk_identity` 覆盖 chunk_id 时同步改写 parent_chunk_id，检索端 `attach_parent_context` 的 `$in` 查询才能命中（P0-03）；Parent 扩展结果由 `apply_review_visibility` 在扩展后统一复核，pending_review 不得经 Parent 通道绕过。文档级元数据的全文输入为**纯 leaf 拼接**（parent 章节全量不重复计入）；超长文档摘要采样走 `summary_sampling`（头+章节目录+分层采样+尾，标注覆盖范围）；模拟问题 LLM 选块均匀分布且规则降级不产占位问句。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。
 
