@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -114,14 +115,15 @@ def submit_rag_task(pool_name: str, fn: Callable[..., Any], /, *args: Any, **kwa
     - exec_ms：任务自身执行时长
     - rag_pool_queued_tasks：提交时刻队列深度（gauge 采样）
 
-    注意：contextvars 快照语义由调用方负责（如 multi_query 在提交方线程
-    copy_context 后传 ctx.run 进来），本包装不碰 context。
+    在提交线程复制 ContextVar 上下文后执行任务，确保 tenant/user/trace 与预算
+    状态到达向量检索等同步子任务；每个任务使用独立快照，避免线程复用串账。
     """
     factory = _POOL_FACTORIES.get(pool_name)
     if factory is None:
         raise ValueError(f"未知检索池: {pool_name}（合法: {sorted(_POOL_FACTORIES)}）")
     pool = factory()
     submitted_at = time.perf_counter()
+    request_context = contextvars.copy_context()
 
     def _runner() -> Any:
         started_at = time.perf_counter()
@@ -140,4 +142,4 @@ def submit_rag_task(pool_name: str, fn: Callable[..., Any], /, *args: Any, **kwa
             except Exception:  # noqa: BLE001 — 观测旁路软失败
                 pass
 
-    return pool.submit(_runner)
+    return pool.submit(request_context.run, _runner)

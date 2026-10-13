@@ -157,6 +157,73 @@ def test_submit_rag_task_records_pool_metrics():
     assert _count("rag_pool_task_seconds_count") == task_before + 1
 
 
+def test_submit_rag_task_propagates_eval_identity_trace_and_budget(monkeypatch):
+    """内层向量任务保留评测身份、Trace 与预算上下文。"""
+    from backend.core.request_context import scoped_tool_identity
+    from backend.infra.llm import budget as budget_mod
+    from backend.infra.llm.proxy import (
+        _thread_local_user_id,
+        scoped_current_user_id,
+    )
+    from backend.observability.llm_usage_store import current_usage_attribution
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr(budget_mod, "_config_mode", lambda: "observe")
+    monkeypatch.setattr(
+        "backend.infra.llm.quota.PostgresQuotaStore", lambda: object(),
+    )
+    trace_collector.clear_for_test()
+
+    def read_context():
+        attribution = current_usage_attribution()
+        budget = budget_mod.current_request_budget()
+        trace = trace_collector.current()
+        return {
+            "tenant_id": attribution["tenant_id"],
+            "user_id": attribution["user_id"],
+            "trace_id": attribution["trace_id"],
+            "proxy_user_id": _thread_local_user_id(),
+            "budget_id": budget_mod._current_request_id.get(),
+            "budget_tenant_id": budget.tenant_id if budget else "",
+        }
+
+    try:
+        with scoped_current_user_id("eval-worker"):
+            with scoped_tool_identity(
+                user_id="eval-worker", tenant_id="eval",
+            ):
+                trace = trace_collector.start(
+                    question="context propagation", session_id="eval-session",
+                )
+                with budget_mod.scoped_request_budget(
+                    "eval:thread-pool-context",
+                    user_id="eval-worker",
+                    tenant_id="eval",
+                ):
+                    actual = submit_rag_task("inner", read_context).result(timeout=5)
+
+        assert actual == {
+            "tenant_id": "eval",
+            "user_id": "eval-worker",
+            "trace_id": trace.id,
+            "proxy_user_id": "eval-worker",
+            "budget_id": "eval:thread-pool-context",
+            "budget_tenant_id": "eval",
+        }
+    finally:
+        trace_collector.clear_for_test()
+
+    after_scope = submit_rag_task("inner", read_context).result(timeout=5)
+    assert after_scope == {
+        "tenant_id": "",
+        "user_id": "",
+        "trace_id": "",
+        "proxy_user_id": None,
+        "budget_id": "",
+        "budget_tenant_id": "",
+    }
+
+
 def test_submit_rag_task_rejects_unknown_pool():
     import pytest
 
