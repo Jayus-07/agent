@@ -642,7 +642,9 @@ class MultiQueryRetriever(BaseRetriever):
                     )
             logger.warning(
                 f"[MultiQuery] fan-out 超时({fanout_s:.1f}s)，部分成功: "
-                f"已完成 {len(docs)} docs / {len(queries)} 变体"
+                "已完成 "
+                f"{sum(len(group) for group in retrieved_groups.values())} docs / "
+                f"{len(queries)} 变体"
             )
         # 超时后未产出结果的变体补空组，保证 evidence_groups 键完整
         for q in queries:

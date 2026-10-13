@@ -95,8 +95,15 @@ def test_rewrite_skipped_when_budget_exhausted(monkeypatch):
 
 def test_fanout_partial_success_on_timeout(monkeypatch):
     """§25：Q1/Q2 完成、Q3 慢 → 用部分结果，不抛异常，留 _mq_partial。"""
+    from backend.rag.retrieval import multi_query as mq
     from backend.config import rag as rag_config
 
+    warning_messages = []
+    monkeypatch.setattr(
+        mq,
+        "logger",
+        SimpleNamespace(warning=warning_messages.append, info=lambda *_args: None),
+    )
     monkeypatch.setattr(rag_config, "RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS", 400)
     # 预算充足（fanout 取 min(配置, 剩余)）
     from backend.rag.retrieval_budget import start_retrieval_budget
@@ -122,6 +129,7 @@ def test_fanout_partial_success_on_timeout(monkeypatch):
     assert "c-原始问题" in sources and "c-变体乙" in sources
     assert "c-慢变体丙" not in sources
     assert any(d.metadata.get("_mq_partial") for d in docs)
+    assert any("已完成 2 docs / 3 变体" in message for message in warning_messages)
 
 
 # ── adaptive / synonym 预算守卫（§25：无预算 → 不扩/不重试）────────────
