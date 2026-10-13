@@ -32,10 +32,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import threading
 import time
+from contextlib import contextmanager
 from datetime import date, timedelta
-from typing import Any, Literal
+from typing import Any, Iterator, Literal
 from urllib.parse import quote
 from uuid import uuid4
 
@@ -207,6 +209,207 @@ def _build_travel_graph_input(
         "turn_id": turn_id,
     })
     return graph_input
+
+
+class _TravelResumeInProgressError(RuntimeError):
+    """同一 checkpoint 的人工恢复已经由另一个请求处理。"""
+
+
+class _TravelResumeLockUnavailableError(RuntimeError):
+    """无法确认共享 checkpoint 的恢复互斥状态。"""
+
+
+class _TravelCheckpointUnavailableError(RuntimeError):
+    """持久化状态读取失败时 fail-closed，避免把新输入写进暂停图。"""
+
+
+def _decision_payload_from_interrupts(interrupts: Any) -> dict | None:
+    for item in interrupts or ():
+        value = getattr(item, "value", None)
+        if isinstance(item, dict):
+            value = item.get("value", value)
+        if isinstance(value, dict) and isinstance(value.get("items"), list):
+            if value["items"]:
+                return value
+    return None
+
+
+def _pending_travel_decision(graph, config: dict) -> tuple[dict | None, Any]:
+    """读取当前身份对应的 checkpoint；数据库故障时不冒险启动新一轮。"""
+    get_state = getattr(graph, "get_state", None)
+    if not callable(get_state):
+        return None, None
+    try:
+        snapshot = get_state(config)
+    except Exception:
+        from backend.travel.graph_builder import (
+            PERSISTENCE_DISABLED,
+            get_persistence_status,
+        )
+
+        try:
+            if get_persistence_status() == PERSISTENCE_DISABLED:
+                return None, None
+        except Exception:
+            pass
+        raise _TravelCheckpointUnavailableError(
+            "无法读取行程暂停状态；本轮没有继续执行。"
+        ) from None
+
+    payload = _decision_payload_from_interrupts(
+        getattr(snapshot, "interrupts", None))
+    if payload:
+        return payload, snapshot
+    for task in getattr(snapshot, "tasks", ()) or ():
+        payload = _decision_payload_from_interrupts(
+            getattr(task, "interrupts", None))
+        if payload:
+            return payload, snapshot
+    values = getattr(snapshot, "values", None)
+    if isinstance(values, dict):
+        payload = _decision_payload_from_interrupts(values.get("__interrupt__"))
+    return payload, snapshot
+
+
+_KEEP_TRAVEL_DECISIONS = frozenset({
+    "保留", "保留此安排", "保留当前安排", "接受风险",
+})
+_REMOVE_TRAVEL_DECISION = re.compile(r"^(?:移除|删除)\s*[:：]\s*(.+)$")
+
+
+def _has_explicit_travel_decision(req: TravelPlanRequest) -> bool:
+    if isinstance(req.action_payload, dict) and any(
+        key in req.action_payload for key in ("decision", "user_decision")
+    ):
+        return True
+    message = (req.message or "").strip().rstrip("。.!！").strip()
+    return (message in _KEEP_TRAVEL_DECISIONS
+            or _REMOVE_TRAVEL_DECISION.fullmatch(message) is not None)
+
+
+def _parse_travel_decision(
+    req: TravelPlanRequest, payload: dict,
+) -> dict | None:
+    allowed = {
+        str(item.get("poi_name") or "").strip()
+        for item in payload.get("items", [])
+        if isinstance(item, dict)
+    }
+    allowed.discard("")
+    action_payload = req.action_payload if isinstance(req.action_payload, dict) else {}
+    decision = action_payload.get("decision", action_payload.get("user_decision"))
+    if isinstance(decision, dict):
+        if decision.get("action") == "keep":
+            return {"action": "keep"}
+        if decision.get("action") == "drop":
+            return {"action": "drop"}
+        drops = decision.get("drop")
+        if isinstance(drops, (list, tuple)) and drops:
+            names = [str(name).strip() for name in drops]
+            if all(name in allowed for name in names):
+                return {"drop": list(dict.fromkeys(names))}
+        return None
+
+    message = (req.message or "").strip().rstrip("。.!！").strip()
+    if message in _KEEP_TRAVEL_DECISIONS:
+        return {"action": "keep"}
+    match = _REMOVE_TRAVEL_DECISION.fullmatch(message)
+    if match is None:
+        return None
+    names = [name.strip() for name in re.split(r"[、，,]", match.group(1))]
+    if names and all(name in allowed for name in names):
+        return {"drop": list(dict.fromkeys(names))}
+    return None
+
+
+def _travel_decision_prompt(
+    payload: dict, conversation_id: str, *, unrecognized_input: bool = False,
+) -> dict:
+    lines = ["行程已暂停，以下事项需要你明确决定："]
+    for item in payload.get("items", []):
+        if isinstance(item, dict) and item.get("message"):
+            lines.append(f"- {item['message']}")
+    lines.append("请回复“保留”或“移除：地点名”。")
+    if unrecognized_input:
+        lines.append("本轮内容没有被当作确认，也没有修改正式行程。")
+    message = "\n".join(lines)
+    return {
+        "status": "needs_clarification",
+        "result_kind": "clarification",
+        "final_answer": message,
+        "clarification": message,
+        "itinerary": None,
+        "travel_context": {
+            "conversation_id": conversation_id,
+            "pending_decision": payload,
+        },
+    }
+
+
+def _stale_travel_decision(conversation_id: str) -> dict:
+    return {
+        "status": "answered",
+        "result_kind": "answer",
+        "final_answer": "当前没有待处理的行程确认；本条确认没有被重复应用。",
+        "itinerary": None,
+        "travel_context": {"conversation_id": conversation_id},
+    }
+
+
+@contextmanager
+def _travel_resume_lock(thread_id: str) -> Iterator[None]:
+    """用共享 Postgres advisory lock 防止多 worker 同时恢复同一暂停点。"""
+    from backend.travel.graph_builder import get_persistence_status
+
+    if get_persistence_status() != "healthy":
+        # MemorySaver 只在本进程可见；入口 RequestExecutor 已按会话串行化。
+        yield
+        return
+
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    try:
+        import psycopg
+
+        conn = psycopg.connect(**MEMORY_DB_CONFIG, autocommit=True)
+    except Exception:
+        raise _TravelResumeLockUnavailableError(
+            "无法锁定行程恢复状态；本轮没有继续执行。"
+        ) from None
+
+    lock_key = f"travel-interrupt-resume:{thread_id}"
+    acquired = False
+    try:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_try_advisory_lock(hashtextextended(%s, 0))",
+                    (lock_key,),
+                )
+                acquired = bool(cur.fetchone()[0])
+        except Exception:
+            raise _TravelResumeLockUnavailableError(
+                "无法锁定行程恢复状态；本轮没有继续执行。"
+            ) from None
+        if not acquired:
+            raise _TravelResumeInProgressError(
+                "该行程的确认正在处理中，请勿重复提交。"
+            )
+        yield
+    finally:
+        if acquired:
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                        (lock_key,),
+                    )
+            except Exception:
+                pass
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _seed_cross_turn_base(graph_input: dict, conversation_id: str,
@@ -530,7 +733,8 @@ def _record_travel_tool_trace_event(records: list[dict], event: dict) -> None:
 
 def _finish_travel_trace(trace, started_at: float, result: dict,
                          state: dict | None, run_id: str,
-                         tool_events: list[dict] | None = None) -> None:
+                         tool_events: list[dict] | None = None,
+                         resume_mode: str = "normal") -> None:
     """收口旅游入口 Trace；观测失败不能改变已生成的业务结果。"""
     try:
         trace.tags.update({
@@ -543,7 +747,21 @@ def _finish_travel_trace(trace, started_at: float, result: dict,
             "travel_status": result.get("status", "failed"),
             "travel_run_id": run_id,
             "travel_destination": _travel_destination(state, result),
+            "travel_resume_mode": resume_mode,
+            "travel_result_kind": result.get("result_kind", ""),
         })
+        for key in (
+            "active_plan_version", "draft_plan_version", "base_plan_version",
+        ):
+            value = result.get(key)
+            if value is not None:
+                trace.tags[f"travel_{key}"] = str(value)
+        itinerary = result.get("itinerary")
+        graph_version = (
+            itinerary.get("plan_version") if isinstance(itinerary, dict) else None
+        )
+        if graph_version is not None:
+            trace.tags["travel_graph_plan_version"] = str(graph_version)
         from backend.travel.trace_semantics import build_trace_semantics
 
         semantics_state = dict(state or {})
@@ -942,6 +1160,7 @@ async def _travel_plan_stream_impl(
         trace_result: dict = _plan_error("旅游规划执行失败，请稍后再试。")
         trace_state: dict = {}
         read_only_context: dict[str, Any] = {}
+        resume_mode = "normal"
         try:
             with travel_event_scope(queue_event):
                 control.check()
@@ -1008,12 +1227,96 @@ async def _travel_plan_stream_impl(
                     else:
                         graph = get_travel_graph()
                         invoke_conversation_id = execution_conversation_id
-                final_state = graph.invoke(
-                    graph_input, config=_build_invoke_config(
-                        invoke_conversation_id, tenant_id, user_id))
+                invoke_config = _build_invoke_config(
+                    invoke_conversation_id, tenant_id, user_id)
+                final_state = None
+                early_result = None
+                if req.mode != "read_only":
+                    pending_decision, _snapshot = _pending_travel_decision(
+                        graph, invoke_config)
+                    if pending_decision:
+                        decision = _parse_travel_decision(req, pending_decision)
+                        if decision is not None:
+                            thread_id = invoke_config["configurable"]["thread_id"]
+                            with _travel_resume_lock(thread_id):
+                                # 锁内再次读取；前一请求若已恢复，重复提交只
+                                # 返回“无待确认”，绝不把决策当成新规划输入。
+                                pending_decision, _snapshot = _pending_travel_decision(
+                                    graph, invoke_config)
+                                if pending_decision:
+                                    decision = _parse_travel_decision(
+                                        req, pending_decision)
+                                    if decision is not None:
+                                        from langgraph.types import Command
+
+                                        final_state = graph.invoke(
+                                            Command(resume=decision),
+                                            config=invoke_config,
+                                        )
+                                        resume_mode = "interrupt_resume"
+                                    else:
+                                        early_result = _travel_decision_prompt(
+                                            pending_decision, conversation_id,
+                                            unrecognized_input=True,
+                                        )
+                                else:
+                                    early_result = _stale_travel_decision(
+                                        conversation_id)
+                        else:
+                            early_result = _travel_decision_prompt(
+                                pending_decision, conversation_id,
+                                unrecognized_input=True,
+                            )
+                        if early_result is not None:
+                            resume_mode = (
+                                "interrupt_pending"
+                                if early_result.get("status") == "needs_clarification"
+                                else "stale_decision"
+                            )
+                    elif _has_explicit_travel_decision(req):
+                        early_result = _stale_travel_decision(conversation_id)
+                        resume_mode = "stale_decision"
+
+                if early_result is not None:
+                    trace_result = _attach_travel_response_metadata(
+                        early_result,
+                        conversation_id=conversation_id,
+                        turn_id=turn_id,
+                        base_plan_version=req.base_plan_version,
+                    )
+                    trace_state = {"conversation_id": execution_conversation_id}
+                    emit_travel_event(
+                        "run.finished", agent="supervisor",
+                        status=trace_result.get("status", "failed"),
+                        turn_id=turn_id,
+                        duration_ms=round((time.monotonic() - started_at) * 1000),
+                    )
+                    queue_event({
+                        "event": "done",
+                        "source": "travel",
+                        "status": trace_result.get("status", "failed"),
+                        "result": trace_result,
+                    })
+                    return
+
+                if final_state is None:
+                    final_state = graph.invoke(graph_input, config=invoke_config)
                 control.check()
-                result = dict(build_travel_graph_result(final_state))
+                pending_decision = _decision_payload_from_interrupts(
+                    final_state.get("__interrupt__")
+                    if isinstance(final_state, dict) else None
+                )
                 trace_state = final_state if isinstance(final_state, dict) else {}
+                if pending_decision:
+                    trace_state = {
+                        key: value for key, value in trace_state.items()
+                        if key != "__interrupt__"
+                    }
+                    result = _travel_decision_prompt(
+                        pending_decision, conversation_id)
+                    resume_mode = "interrupt_pending"
+                else:
+                    result = dict(build_travel_graph_result(final_state))
                 if req.mode == "read_only":
                     result.update({
                         "result_kind": "answer",
@@ -1022,7 +1325,7 @@ async def _travel_plan_stream_impl(
                         "draft_plan_version": read_only_context.get(
                             "draft_plan_version"),
                     })
-                elif persist_legacy_plan:
+                elif persist_legacy_plan and not pending_decision:
                     result = _record_plan_version(
                         result, conversation_id, user_id, tenant_id)
                 base_plan_version = req.base_plan_version
@@ -1037,7 +1340,7 @@ async def _travel_plan_stream_impl(
                     turn_id=turn_id,
                     base_plan_version=base_plan_version,
                 )
-                if persist_legacy_plan:
+                if persist_legacy_plan and not pending_decision:
                     _attach_trace_plan_projection(
                         trace_state, result, conversation_id, identity.user_id or "",
                         tenant_id=tenant_id)
@@ -1073,6 +1376,15 @@ async def _travel_plan_stream_impl(
             elif isinstance(exc, PlanVersionPersistenceError):
                 error_type = "plan_version_persistence_failed"
                 message = "行程已生成，但未能安全保存到版本账本；请稍后重试。"
+            elif isinstance(exc, _TravelResumeInProgressError):
+                error_type = "resume_in_progress"
+                message = "该行程的确认正在处理中，请勿重复提交。"
+            elif isinstance(exc, _TravelResumeLockUnavailableError):
+                error_type = "resume_lock_unavailable"
+                message = "行程确认状态暂不可用，本轮没有继续执行。"
+            elif isinstance(exc, _TravelCheckpointUnavailableError):
+                error_type = "checkpoint_unavailable"
+                message = "行程暂停状态暂不可用，本轮没有继续执行。"
             else:
                 error_type = type(exc).__name__
                 message = "旅游规划执行失败，请根据已显示的 Tool 失败信息重试。"
@@ -1093,7 +1405,7 @@ async def _travel_plan_stream_impl(
         finally:
             _finish_travel_trace(
                 trace, started_at, trace_result, trace_state, run_id,
-                tool_events,
+                tool_events, resume_mode,
             )
             queue_terminal(None)
 

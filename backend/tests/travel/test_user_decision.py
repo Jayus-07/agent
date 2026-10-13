@@ -38,10 +38,11 @@ MONDAY_QUESTION = f"{_M.month}月{_M.day}日福州一日游，1个人，必去�
 
 @pytest.fixture
 def interrupt_graph(monkeypatch):
-    """带 memory checkpointer + interrupt 开关的域图（每例 fresh graph）。"""
+    """带测试 Checkpointer + interrupt 开关的域图（每例 fresh graph）。"""
     monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", True)
     monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
     monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "memory")
+    monkeypatch.setattr(gb, "get_persistence_status", lambda: gb.PERSISTENCE_HEALTHY)
     monkeypatch.setattr(gb, "_travel_graph", None)
     yield gb.get_travel_graph()
     monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", False)
@@ -161,11 +162,26 @@ class TestFallback:
             monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", False)
             monkeypatch.setattr(gb, "_travel_graph", None)
 
+    def test_degraded_memory_checkpointer_falls_back(self, monkeypatch):
+        """进程内降级 Checkpointer 不支持可恢复的人工暂停。"""
+        monkeypatch.setattr(T, "TRAVEL_USER_DECISION_INTERRUPT", True)
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_ENABLED", True)
+        monkeypatch.setattr(T, "TRAVEL_CHECKPOINTER_BACKEND", "memory")
+        monkeypatch.setattr(gb, "_travel_graph", None)
+        graph = gb.get_travel_graph()
+        try:
+            assert gb.get_persistence_status() == gb.PERSISTENCE_DEGRADED
+            final = _invoke(graph, MONDAY_QUESTION, _tid("degraded"))
+            assert not final.get("__interrupt__")
+            assert final["itinerary"]["status"] == "needs_user_decision"
+        finally:
+            monkeypatch.setattr(gb, "_travel_graph", None)
+
 
 # =============================================
 # 三、决策归一化
 # =============================================
-def _mini_report(poi_names) -> "ValidationReport":
+def _mini_report(poi_names):
     """只含 decision_required 违反的最小 report（_normalize_decision 仅读 detail）。"""
     from backend.travel.models.validation import (
         LEVEL_DECISION_REQUIRED, ValidationReport, Violation,

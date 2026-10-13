@@ -1,8 +1,10 @@
 """旅游 API 异步响应与实际工作寿命分离的回归测试。"""
 import asyncio
 import importlib
+import json
 import threading
-from types import SimpleNamespace
+from contextlib import nullcontext
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -144,6 +146,294 @@ async def test_v2_stream_uses_isolated_session_without_v1_plan_ledger(
     assert captured["graph_input"]["conversation_id"] == "travel-v2:execution"
     assert captured["graph_input"]["session_id"] == "travel-v2:execution"
     assert "travel-v2:execution" in submitted["conversation_id"]
+
+
+def _decision_payload():
+    return {
+        "items": [{
+            "code": "TIME_CLOSED_WEEKDAY",
+            "message": "福建博物院当天闭馆，是否仍要保留？",
+            "poi_name": "福建博物院",
+        }],
+        "options": {"keep": "保留", "drop": "移除"},
+    }
+
+
+def _frame_payload(frames, event_name):
+    frame = next(item for item in frames if item.startswith(f"event: {event_name}"))
+    return json.loads(frame.split("data: ", 1)[1])
+
+
+@pytest.mark.asyncio
+async def test_v2_interrupt_is_clarification_and_does_not_write_trip(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    payload = _decision_payload()
+
+    class Graph:
+        def get_state(self, _config):
+            return SimpleNamespace(tasks=[], values={})
+
+        def invoke(self, _graph_input, config):
+            assert config["configurable"]["thread_id"] == (
+                "travel:t:u:travel-v2:execution"
+            )
+            return {"__interrupt__": [SimpleNamespace(value=payload)]}
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(
+        "backend.travel.models.graph_result.build_travel_graph_result",
+        lambda _state: pytest.fail("中断结果不能被当成成功行程"),
+    )
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+    monkeypatch.setattr(
+        travel, "_record_plan_version",
+        lambda *_args, **_kwargs: pytest.fail("中断不能写入正式行程版本"),
+    )
+
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+
+    assert result["status"] == "needs_clarification"
+    assert result["result_kind"] == "clarification"
+    assert result["itinerary"] is None
+    assert result["travel_context"]["pending_decision"] == payload
+    assert "移除：地点名" in result["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_v2_explicit_decision_resumes_same_scoped_checkpoint(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    payload = _decision_payload()
+    captured = {}
+
+    class Graph:
+        def get_state(self, config):
+            captured["thread_id"] = config["configurable"]["thread_id"]
+            return SimpleNamespace(
+                tasks=[SimpleNamespace(
+                    interrupts=(SimpleNamespace(value=payload),),
+                )],
+                values={},
+            )
+
+        def invoke(self, command, config):
+            captured["command"] = command
+            captured["invoke_thread_id"] = config["configurable"]["thread_id"]
+            return {"itinerary": {"plan_version": 4}}
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(travel, "_travel_resume_lock", lambda *_: nullcontext())
+    monkeypatch.setattr(
+        "backend.travel.models.graph_result.build_travel_graph_result",
+        lambda _state: {
+            "status": "success",
+            "result_kind": "plan",
+            "final_answer": "行程已生成",
+            "itinerary": {"plan_version": 4},
+        },
+    )
+    trace_modes = []
+    monkeypatch.setattr(
+        travel, "_finish_travel_trace", lambda *args: trace_modes.append(args[-1]),
+    )
+    async def load(_request):
+        return travel.TravelPlanRequest(message="移除：福建博物院", conversation_id="execution")
+
+    monkeypatch.setattr(travel, "_load_travel_plan_request", load)
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+
+    assert captured["thread_id"] == "travel:t:u:travel-v2:execution"
+    assert captured["invoke_thread_id"] == captured["thread_id"]
+    assert captured["command"].resume == {"drop": ["福建博物院"]}
+    assert result["status"] == "success"
+    assert result["itinerary"]["plan_version"] == 4
+    assert trace_modes == ["interrupt_resume"]
+
+
+@pytest.mark.asyncio
+async def test_pending_interrupt_does_not_consume_ordinary_question(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    payload = _decision_payload()
+
+    class Graph:
+        def get_state(self, _config):
+            return SimpleNamespace(
+                tasks=[SimpleNamespace(
+                    interrupts=(SimpleNamespace(value=payload),),
+                )],
+                values={},
+            )
+
+        def invoke(self, *_args, **_kwargs):
+            pytest.fail("普通问答不得恢复中断或修改行程")
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+
+    async def load(_request):
+        return travel.TravelPlanRequest(
+            message="附近有什么咖啡店？", conversation_id="execution",
+        )
+
+    monkeypatch.setattr(travel, "_load_travel_plan_request", load)
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+
+    assert result["status"] == "needs_clarification"
+    assert result["itinerary"] is None
+    assert result["travel_context"]["pending_decision"] == payload
+    assert "没有被当作确认" in result["final_answer"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_decision_without_pending_checkpoint_is_not_replayed(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    captured = []
+
+    class Graph:
+        def get_state(self, config):
+            captured.append(config["configurable"]["thread_id"])
+            return SimpleNamespace(tasks=[], values={})
+
+        def invoke(self, *_args, **_kwargs):
+            pytest.fail("已完成的确认不能作为新规划请求重放")
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+    async def load(_request):
+        return travel.TravelPlanRequest(message="保留", conversation_id="execution")
+
+    monkeypatch.setattr(travel, "_load_travel_plan_request", load)
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+
+    assert result["status"] == "answered"
+    assert result["itinerary"] is None
+    assert "没有待处理" in result["final_answer"]
+    assert captured == ["travel:t:u:travel-v2:execution"]
+
+
+@pytest.mark.asyncio
+async def test_decision_from_other_tenant_cannot_resume_checkpoint(
+    setup_runtime, monkeypatch,
+):
+    setup_runtime.timeout_s = 1.0
+    captured = {}
+
+    class Graph:
+        def get_state(self, config):
+            captured["thread_id"] = config["configurable"]["thread_id"]
+            return SimpleNamespace(tasks=[], values={})
+
+        def invoke(self, *_args, **_kwargs):
+            pytest.fail("另一租户的确认不能进入图")
+
+    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph", lambda: Graph())
+    monkeypatch.setattr(travel, "_finish_travel_trace", lambda *_: None)
+    monkeypatch.setattr(
+        travel, "require_identity",
+        lambda _request: SimpleNamespace(user_id="bob", tenant_id="other"),
+    )
+    async def load(_request):
+        return travel.TravelPlanRequest(message="保留", conversation_id="execution")
+
+    monkeypatch.setattr(travel, "_load_travel_plan_request", load)
+    response = await travel.travel_v2_plan_stream(request())
+    result = _frame_payload(await _frames(response), "done")["result"]
+
+    assert captured["thread_id"] == "travel:other:bob:travel-v2:execution"
+    assert result["status"] == "answered"
+    assert "pending_decision" not in result["travel_context"]
+
+
+def test_postgres_resume_lock_rejects_a_concurrent_resume(monkeypatch):
+    statements = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, params):
+            statements.append((statement, params))
+
+        def fetchone(self):
+            return (False,)
+
+    class Connection:
+        closed = False
+
+        def cursor(self):
+            return Cursor()
+
+        def close(self):
+            self.closed = True
+
+    connection = Connection()
+    psycopg = ModuleType("psycopg")
+    psycopg.connect = lambda **_kwargs: connection
+    monkeypatch.setitem(__import__("sys").modules, "psycopg", psycopg)
+    monkeypatch.setattr(
+        "backend.travel.graph_builder.get_persistence_status", lambda: "healthy",
+    )
+
+    with pytest.raises(travel._TravelResumeInProgressError):
+        with travel._travel_resume_lock("thread-1"):
+            pytest.fail("未获取共享恢复锁时不能执行 Command(resume)")
+
+    assert "pg_try_advisory_lock" in statements[0][0]
+    assert connection.closed
+
+
+def test_resume_trace_records_state_version_and_mode(monkeypatch):
+    from backend.observability import tracer
+
+    trace = SimpleNamespace(
+        tags={}, metadata={}, session_id="travel-v2:execution",
+    )
+    monkeypatch.setattr(
+        "backend.travel.trace_semantics.build_trace_semantics",
+        lambda *_args, **_kwargs: {"conversation_id": "travel-v2:execution"},
+    )
+    monkeypatch.setattr(tracer.trace_collector, "finish", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "backend.observability.question_ledger.record_question_from_trace",
+        lambda *_args, **_kwargs: None,
+    )
+
+    travel._finish_travel_trace(
+        trace,
+        0.0,
+        {
+            "status": "success",
+            "result_kind": "draft",
+            "active_plan_version": 2,
+            "draft_plan_version": 3,
+            "itinerary": {"plan_version": 3},
+        },
+        {"conversation_id": "travel-v2:execution"},
+        "run-3",
+        [],
+        "interrupt_resume",
+    )
+
+    assert trace.tags["travel_resume_mode"] == "interrupt_resume"
+    assert trace.tags["travel_status"] == "success"
+    assert trace.tags["travel_result_kind"] == "draft"
+    assert trace.tags["travel_active_plan_version"] == "2"
+    assert trace.tags["travel_draft_plan_version"] == "3"
+    assert trace.tags["travel_graph_plan_version"] == "3"
 
 
 async def _frames(response):
