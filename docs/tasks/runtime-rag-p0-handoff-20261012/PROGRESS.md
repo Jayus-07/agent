@@ -18,8 +18,8 @@
 | B1-B | #42 | 已合并，`0c471fb` | RAG Smoke/Evaluation/Detect SUCCESS；合并后 65 passed、9 xfailed | 3 条旧 thread 已解决 | 无 |
 | B1-F | #43 | 已合并，`b0f71bc` | run 138 全绿；合并后 39 passed | 2 条旧 thread 已解决 | 无 |
 | RAG R0/R1 | #41 | 已合并，`48f3d49` | run 166 RAG Smoke、run 17 Secret Scan SUCCESS；合并前本地 142 passed | 3 条旧 thread 已解决 | 无；既有性能/准确率证据保留 |
-| 凭据安全治理 | #51 | 已合并，merge `d3272c9` | PR run 38447092565 RAG PR Smoke、38447092851 Secret Scan SUCCESS；合并后相同 tree 定向集 `test_startup_validation.py` 55 passed；post-merge combined status 未返回 status checks | 合并前 GPT 复审无未解决 thread | 生产 `PG_READONLY_PASSWORD` 是否已受控配置尚未核实；Redis/API Key 与 PR #41 历史泄漏凭据按用户要求未轮换/撤销，安全 P0 未关闭 |
-| RAG MultiQuery P0 | #52 | OPEN；已同步 #56 main（`8887383`）；本地新增修复待提交/推送 | 旧 head `63d317b` 的 RAG Smoke `38449989265`、Secret Scan `38449989269` 成功；本地 `53 + 42 passed`，py_compile/YAML/模拟账本通过；新 head CI 待运行 | 10 条旧 thread 已解决；新增 diff 尚未复审 | 唯一授权的真实 Provider run `38445344364` 严格 RAG gate FAILED；Recall@5 `0.881`、Multi-hop `0.7222`，低于基线 `0.9286/0.8333`；费用/预算对账未验证，禁止再次真实调用直至取得新授权 |
+| 凭据安全治理 | #51 | 已合并，merge `d3272c9` | PR run 38447092565 RAG PR Smoke、38447092851 Secret Scan SUCCESS；合并后相同 tree 定向集 `test_startup_validation.py` 55 passed；post-merge combined status 未返回 status checks | 合并前 GPT 复审无未解决 thread | 本机开发 Redis 与 PostgreSQL 只读口令已按本轮授权轮换，新值认证通过，受影响容器 healthy；现存 `.env` 备份中的 PostgreSQL 候选旧口令认证拒绝。生产配置、API Key 与 PR #41 历史泄漏凭据仍未轮换/撤销，安全 P0 未关闭 |
+| RAG MultiQuery P0 | #52 | OPEN；基于最新 main `8887383`；head `c1bbbcb` | RAG PR Smoke run `38480551639`、Secret Scan run `38480551604` SUCCESS；定向测试 `53 + 42 + 5 passed`，py_compile/YAML/模拟账本/Secret Scan 通过；PR 的真实 Provider job 按配置跳过 | 10 条旧 thread 已解决；当前 head 未有新 GPT 复审 | 唯一授权的真实 Provider run `38445344364` 严格 RAG gate FAILED；Recall@5 `0.881`、Multi-hop `0.7222`，低于基线 `0.9286/0.8333`；当前 head 的真实预算账本和召回质量仍未验证，重跑须新授权 |
 | B1-C | #45 | 已合并，`8f65712` | run 163 SUCCESS；隔离 PostgreSQL 定向集 273 passed | 旧 thread 已解决 | 无；按用户要求以当前 4 类 Workflow 验收 |
 | B1-D | #47 | 已合并，`c2feb44` | run 165 SUCCESS；定向集 135 passed + 隔离 PostgreSQL 6 passed | 2 条旧 thread 已解决 | 无 |
 | B1-E | #56 | 已合并，merge commit `8887383` | Secret Scan run `38460502481`、RAG PR Smoke run `38460502482` 成功；合并后后端 `78 passed, 5 deselected`、前端 `3 passed`、TypeScript 通过 | GPT P2 1/1 已解决 | 本机 Docker app/worker PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置；生产 Checkpointer/interrupt 运行配置未核实，不宣称生产验收 |
@@ -54,20 +54,19 @@
 
 - baseline run `38397152826`（main `2d1d0b1`）与 #52 真实 Provider run `38445344364`（代码 head `7f1c454`）来自同一 `pr_smoke` 数据版本；前者 Recall@5/MRR/Top-1/Multi-hop 为 0.9286/0.8571/0.7143/0.8333，后者为 0.881/0.8571/0.7143/0.7222。main 后续只合并了 #51 凭据安全改动，没有新的 RAG 真实评测。
 - 两次 run 都是 8/8 case 级通过，但 #52 的严格 gate 失败。已确认唯一出现 Recall@5/Multi-hop 差异的 RC-024 在 #52 trace 中没有触发改写；因此当前 live 对比既不能证明是 MultiQuery 导致，也不能作为未退化的验收证据。实际改写目标 RC-031 等待超时后回退，迟到的 Provider 输出未被消费；指标与 baseline 相同。
-- 旧 head `63d317b` 的定向测试和 PR CI 通过，但真实费用核验为 `UNVERIFIED`，当时 workflow artifact 不含租户预算预占/结算账本核对。此次为用户授权的唯一真实调用，不再重复付费；本地新修复已增加待对账语义和运行级账本 artifact，尚待推送与 CI 验收。
+- 旧 head `63d317b` 的定向测试和 PR CI 通过，但真实费用核验为 `UNVERIFIED`，当时 workflow artifact 不含租户预算预占/结算账本核对。唯一已授权真实调用为 run `38445344364`，严格 RAG gate 失败；当前 head 尚未再调用 Provider。本地修复已增加待对账语义和运行级账本 artifact，当前 CI 已通过。
 - PR #56/B1-E 已按用户批准合并（merge `8887383`）。新 main 上复跑 Travel 后端定向集为 `78 passed, 5 deselected`，V2 前端为 `3 passed`，TypeScript 检查通过；无真实 Provider 调用。5 个 PostgreSQL 配置相关排除项此前已在干净基线复现。本机 Docker app/worker 的 PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置，不能证明生产配置。
 
 ## 凭据处置
 
-- 已按用户授权轮换本机 Docker PostgreSQL 的只读角色口令：新口令从主机及 `app` 容器认证成功；旧口令被 PostgreSQL 拒绝；角色无建库权限，业务库无 CREATE 权限。
-- 读取根目录 `.env` 的 9 个本地应用/Worker 容器已重建并全部 healthy；`.env` DACL 收紧到当前用户、SYSTEM 和 Administrators。口令值未写入日志、PR 或报告。
+- 本轮按用户授权重新轮换本机开发 Redis 与 PostgreSQL 只读凭据；`.env` 更新后，Redis、PostgreSQL 新认证通过，相关本机应用/Worker/Redis 容器全部 healthy，`.env` DACL 保持仅当前用户、SYSTEM 和 Administrators。当前 `.env` 备份中的 PostgreSQL 候选旧口令认证被拒绝；Redis 当前旧值未从环境备份恢复作直接回放，不能声称完成该项直接测试。
 - 安全 PR #51 移除只读数据库配置和迁移中的弱默认值，并修复迁移已记账后的凭据状态漂移及共享集群跨库角色误禁用风险。head `ddc1301` 的 Secret Scan 与 RAG PR Smoke 均 SUCCESS；`test_startup_validation.py` 合并前后均 55 passed；scratch PostgreSQL 18 双数据库/SCRAM 验证目标库角色处理及另一库角色隔离；tree/history/diff Secret Scan 退出码 0；GPT 复审无未解决意见。PR 已按用户批准合并为 `d3272c9`；合并后 GitHub combined status 未返回 status checks，定向回归通过且合并树与已验收 head 的 tree hash 一致。
 - Secret Scan 标准 `--tree`、`--history`、`--diff origin/main` 均为 0 命中。可选 `--with-runtime-secrets` 报 59 条命中，全部映射到非秘密配置 `JWT_ISSUER` 和 `TOKEN_USAGE_LOG_PATH`，不是凭据命中。
-- Redis/API 当前值本轮未修改，按用户要求维持开发阶段现状；本地生产/外部 Secret Manager 均未触碰。PR #41 既有历史泄露未做共享历史重写；历史处置需单独评估影响，不宣称凭据 P0 整体关闭。
+- API Key 和生产/外部 Secret Manager 未触碰，按用户要求维持开发阶段以外的配置。PR #41 既有历史泄露未做共享历史重写；历史处置需单独评估影响，不宣称凭据 P0 整体关闭。
 
 ## 下一步
 
-1. #52 保持不合并：提交/推送本地修复，复核新 head 的 Secret Scan、RAG CI 和 GPT review；之后评估是否需要新的真实 Provider 评测，必须先取得用户授权。保留 0.80 Top-1 门槛，不重复付费评测。
-2. 凭据安全代码已合入，但 Redis/API Key 和 #41 历史泄漏凭据未轮换/撤销；用户要求开发阶段先不处理，不宣称安全 P0 关闭。
+1. #52 暂不合并：最新 free CI 与 Secret Scan 已通过；等待用户决定是否授权一次当前 head 的真实 Provider 评测以验证账本与质量。保留 0.80 Top-1 门槛；先前单次真实评测已使用，未重复调用。
+2. 凭据安全代码已合入，本机开发 Redis/PostgreSQL 只读凭据已轮换；API Key、生产配置和 #41 历史泄漏凭据未轮换/撤销，不宣称安全 P0 关闭。
 3. B1-E 已合并；生产 Checkpointer/interrupt 运行配置仍未知，部署前需由脱敏生产配置或只读运行证据确认。
 4. RAG R2/R3 和 Runtime 资源生命周期治理按用户要求暂不启动。
