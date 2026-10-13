@@ -10,7 +10,9 @@ from backend.rag.preprocessing.cleaner import DocumentCleaner
 from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
-from backend.rag.preprocessing.chunking import ChunkStrategyRouter, stamp_chunk_pages
+from backend.rag.preprocessing.chunking import (
+    ChunkStrategyRouter, coverage_audit, stamp_chunk_pages,
+)
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
 
@@ -86,10 +88,13 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
 
     doc_type = doc_type_hint or classify_doc_type(raw_ast.raw_text, filename=file_path, file_path=file_path)
-    strategy = ChunkStrategyRouter().route(doc_type, report)
+    # P1（2026-10-13）：route_with_decision 产出可审计决策记录（结构信号/
+    # 策略版本/降级原因/处理范围），随 qc 进质量记录与 Trace
+    strategy, route_decision = ChunkStrategyRouter().route_with_decision(doc_type, report)
     logger.info(
         f"[ChunkPipeline] {file_path} doc_type={doc_type} "
         f"completeness={report.completeness} → {strategy.__class__.__name__}"
+        + (f" (degrade={route_decision.degrade_reason})" if route_decision.degrade_reason else "")
     )
     chunks = strategy.split(normalized_ast, file_path)
     # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
@@ -101,11 +106,21 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         for c in chunks:
             c.metadata["ocr_triggered"] = "true"
             c.metadata["ocr_pages"] = int(getattr(raw_ast, "ocr_pages", 0) or 0)
+    # P0-02 覆盖对账：源叶子 → 输出 chunk 的覆盖率（uncovered 进入
+    # quality_issues 可追溯，不让策略静默丢内容）
+    coverage = coverage_audit(normalized_ast, chunks)
+    if coverage.get("uncovered_count"):
+        logger.warning(
+            f"[ChunkPipeline] {file_path} 覆盖缺口: "
+            f"{coverage['uncovered_count']}/{coverage['leaf_total']} 叶子未入 chunk"
+        )
     qc = {
         "raw_ast": raw_ast,
         "normalized_ast": normalized_ast,
         "completeness": report,
         "doc_type": doc_type,
         "strategy_name": strategy.__class__.__name__,
+        "route_decision": route_decision.as_dict(),
+        "coverage": coverage,
     }
     return chunks, qc

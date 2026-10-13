@@ -506,6 +506,12 @@ KNOWLEDGE_GAP_WINDOW_HOURS = int(os.getenv("KNOWLEDGE_GAP_WINDOW_HOURS", "24"))
 # ====================================
 # 财务表格专用配置
 # ====================================
+# 表格解析资源保护（P0 超长文档收口 2026-10-13）：单文档行数/单元格数
+# 上限，超出后停止读取并留痕 table_rows_truncated（quality_issues 展示
+# 覆盖情况）。防止超大 workbook/CSV 撑爆解析内存。
+RAG_TABLE_MAX_ROWS = int(os.getenv("RAG_TABLE_MAX_ROWS", "100000"))
+RAG_TABLE_MAX_CELLS = int(os.getenv("RAG_TABLE_MAX_CELLS", "2000000"))
+
 # 财务表格行级切分：每批最多多少行 chunk（防止超大表撑爆 embedding）
 FINANCIAL_TABLE_ROWS_PER_CHUNK = int(os.getenv("FINANCIAL_TABLE_ROWS_PER_CHUNK", "20"))
 # 财务文档 chunk 数量上限（覆盖 MAX_CHUNKS_PER_DOC，因行级切分会产更多 chunk）
