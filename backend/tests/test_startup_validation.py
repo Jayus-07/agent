@@ -340,6 +340,8 @@ class TestReadonlyPassword:
             / name
         ).read_text(encoding="utf-8")
         assert "ALTER ROLE AGENT_READONLY PASSWORD NULL" in migration.upper()
+        assert "PG_TERMINATE_BACKEND" in migration.upper()
+        assert "USENAME = 'AGENT_READONLY'" in migration.upper()
 
     def test_004_creates_role_without_password(self):
         from pathlib import Path
@@ -500,6 +502,8 @@ class TestReadonlyPassword:
 
         assert status == "applied"
         assert "同一事务" in detail
+        assert events[-4][0] == "execute"
+        assert "PG_TERMINATE_BACKEND" in events[-3][1].upper()
         assert events[-2:] == [("record", False), ("commit", None)]
         assert not any(
             isinstance(query, str) and "test-only-placeholder" in query
@@ -522,6 +526,7 @@ class TestReadonlyPassword:
         from scripts.ensure_dbs import _apply_migration
 
         executed = []
+        executed_params = []
         events = []
 
         class _Cursor:
@@ -531,8 +536,9 @@ class TestReadonlyPassword:
             def __exit__(self, *_args):
                 return None
 
-            def execute(self, query):
+            def execute(self, query, params=None):
                 executed.append(query)
+                executed_params.append(params)
 
         class _Connection:
             def cursor(self):
@@ -551,8 +557,10 @@ class TestReadonlyPassword:
         )
 
         assert result == "applied"
-        assert len(executed) == 1
+        assert len(executed) == 2
         assert isinstance(executed[0], Composed)
+        assert "PG_TERMINATE_BACKEND" in executed[1].upper()
+        assert executed_params[1] == ("agent_readonly",)
         assert events == ["commit"]
 
     def test_missing_warns_in_dev(self, valid_env, monkeypatch):

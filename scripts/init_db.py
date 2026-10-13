@@ -481,6 +481,10 @@ _FROZEN_LEGACY_MIGRATION_CHECKSUMS = {
     },
 }
 _READONLY_PASSWORD_MIGRATION = "093_revoke_readonly_default_password.sql"
+_TERMINATE_READONLY_SESSIONS_SQL = (
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+    "WHERE usename = %s AND pid <> pg_backend_pid()"
+)
 
 
 # ──────────────────────────────────────────────────────────── 迁移执行
@@ -534,6 +538,10 @@ def apply_migration(
                             pgsql.Identifier("agent_readonly"),
                             pgsql.Literal(readonly_password),
                         )
+                    )
+                    cur.execute(
+                        _TERMINATE_READONLY_SESSIONS_SQL,
+                        ("agent_readonly",),
                     )
                 else:
                     cur.execute(sql)

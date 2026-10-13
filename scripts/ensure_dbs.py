@@ -64,6 +64,10 @@ MEMORY_MIGRATIONS = [
 _ALREADY_EXISTS_SQLSTATES = {
     "42P07", "42710", "42P06", "42P04", "42723", "42P16", "23505",
 }
+_TERMINATE_READONLY_SESSIONS_SQL = (
+    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+    "WHERE usename = %s AND pid <> pg_backend_pid()"
+)
 
 
 def _load_env_file(path: Path) -> None:
@@ -117,7 +121,10 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
     applied_any = False
     with conn.cursor() as cur:
         try:
-            if filename == "093_revoke_readonly_default_password.sql" and password:
+            if (
+                filename == "093_revoke_readonly_default_password.sql"
+                and password
+            ):
                 from psycopg2 import sql as pgsql
 
                 cur.execute(
@@ -125,6 +132,10 @@ def _apply_migration(conn, filename: str, *, password: str) -> str:
                         pgsql.Identifier("agent_readonly"),
                         pgsql.Literal(password),
                     )
+                )
+                cur.execute(
+                    _TERMINATE_READONLY_SESSIONS_SQL,
+                    ("agent_readonly",),
                 )
             else:
                 cur.execute(sql)
