@@ -97,6 +97,34 @@ export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
   }
 }
 
+export interface HealthProbe {
+  available?: boolean
+  latency_ms?: number
+}
+
+export interface SystemHealthSnapshot {
+  /** Unix 秒；后端以 15 秒进程内缓存复用同一快照。 */
+  collected_at?: number
+  db?: HealthProbe & { active_connections?: number; open_tasks?: number }
+  redis?: {
+    db0?: HealthProbe
+    broker?: HealthProbe & { queues?: Record<string, number> }
+    result?: HealthProbe
+    queues?: Record<string, number>
+  }
+  worker?: {
+    available?: boolean
+    online_count?: number
+    workers?: { active_tasks?: number }[]
+  }
+  tasks?: { available?: boolean }
+}
+
+/** GET /observability/system-health — 服务端管理员守卫下的 DB/Redis/Worker/任务只读快照。 */
+export function getSystemHealth(): Promise<SystemHealthSnapshot> {
+  return request<SystemHealthSnapshot>('/api/observability/system-health')
+}
+
 // ── Alerts（注意：后端 /alerts 字段不匹配前端 AlertItem，暂不直连） ──
 // 见 lib/observability/source.ts：alerts 由 client 端 buildAlerts() 聚合 traces 而来。
 // 此处保留接口签名以便将来切换到后端 AlertItem 序列化器。

@@ -11,6 +11,7 @@
  *     枚举」呈现，不伪造运行时探活。
  */
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { RefreshCw, Server } from 'lucide-react'
 import { clsx } from 'clsx'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
@@ -82,13 +83,15 @@ export default function SkillsPage() {
 
   return (
     <AssetPageShell
-        title="能力与技能"
-        desc="Capability 路由清单 × Skill 注册对账 × MCP 注册情况（只读）· 唯一事实源 capabilities.yaml，改动走代码与配置变更"
-        actions={
+        title="Skill 与 Capability"
+        desc="Capability 路由清单、Skill 注册对账与 MCP 注册情况；注册事实源沿用现有 manifest 和 registry。"
+        actions={<>
+          <Link href="/agents" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Agent 与工作流</Link>
+          <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>
           <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => load(true)}>
             刷新
           </AssetActionButton>
-        }
+        </>}
       >
 
       {loading ? (
@@ -106,9 +109,9 @@ export default function SkillsPage() {
             <AssetStatCard label="Capability 总数" value={caps.count} hint="含 routed:false 的内部能力" />
             <AssetStatCard label="参与用户问题路由" value={caps.routed_count} hint="规则关键词 + 向量样例双路召回" />
             <AssetStatCard
-              label="Skill / Workflow"
-              value={`${caps.skills.length} / ${caps.workflows.length}`}
-              hint="Skill 注册表现状 · manifest 声明的 workflow"
+              label="Skill 数"
+              value={caps.skills.length}
+              hint="运行时 Skill 注册表现状"
             />
           </div>
 
@@ -162,18 +165,13 @@ export default function SkillsPage() {
             </div>
           </AssetSection>
 
-          {/* Workflow */}
-          <AssetSection title="Workflow" meta={`${caps.workflows.length} 个`} bodyClassName="pt-3">
-            <div className="grid gap-2 md:grid-cols-2">
-              {caps.workflows.map((w) => (
-                <div key={w.name} className="rounded-lg border border-border-subtle bg-surface-base p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <code className="text-[12px] text-text-primary">{w.name}</code>
-                    <span className="text-[11px] text-text-muted">{w.examples.length} 条路由样例</span>
-                  </div>
-                </div>
-              ))}
-            </div>
+          <AssetSection title="Workflow 目录" meta="Agent 与工作流" bodyClassName="pt-3">
+            <p className="text-[12px] leading-relaxed text-text-secondary">
+              Workflow 注册描述和 Trace 下钻归入运行监控。运行历史继续通过受授权 Trace 查询，不读取没有资源授权保证的 Workflow run 输出。
+            </p>
+            <Link href="/agents" className="mt-3 inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] font-medium text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+              打开 Agent 与工作流
+            </Link>
           </AssetSection>
 
           {/* MCP Server / Tool 注册情况 */}

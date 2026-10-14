@@ -9,12 +9,13 @@
  * 事实源在代码，本页只读不写：域归属（谁是谁的子流）由接口的
  * domain/domain_label/subflow 字段下发，本页不复写归属关系。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Bot, Database, GitBranch, RefreshCw, Sparkles, Wrench } from 'lucide-react'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
-import { getAgents, type AgentKind, type AgentNode } from '@/api/registry'
+import { getAgents, getWorkflowCatalog, type AgentKind, type AgentNode, type WorkflowCatalogEntry } from '@/api/registry'
+import { atLeast } from '@/lib/auth'
 import { subflowAttribution, orderDomainGraphs } from '@/lib/domain-attribution'
 
 const KIND_META: Record<AgentKind, { label: string; icon: typeof Bot; desc: string }> = {
@@ -126,82 +127,140 @@ function AgentCard({ node }: { node: AgentNode }) {
   )
 }
 
+function WorkflowCard({ workflow }: { workflow: WorkflowCatalogEntry }) {
+  const runHref = `/observability/monitoring?tab=traces&workflow=${encodeURIComponent(workflow.name)}`
+  return (
+    <article className="border-t border-border-subtle px-4 py-3 first:border-t-0">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="font-mono text-[13px] font-medium text-text-primary">{workflow.name}</h3>
+          {workflow.description && <p className="mt-1 max-w-3xl text-[12px] leading-relaxed text-text-secondary">{workflow.description}</p>}
+        </div>
+        <Link href={runHref} className="inline-flex min-h-9 shrink-0 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+          查看授权 Trace
+        </Link>
+      </div>
+      {(workflow.objects.length > 0 || workflow.actions.length > 0) && (
+        <dl className="mt-2 grid gap-2 text-[11px] md:grid-cols-2">
+          {workflow.objects.length > 0 && (
+            <div><dt className="text-text-muted">业务对象</dt><dd className="mt-1 flex flex-wrap gap-1">{workflow.objects.map((item) => <span key={item} className="rounded bg-bg-elevated px-2 py-0.5 text-text-secondary">{item}</span>)}</dd></div>
+          )}
+          {workflow.actions.length > 0 && (
+            <div><dt className="text-text-muted">声明动作</dt><dd className="mt-1 flex flex-wrap gap-1">{workflow.actions.map((item) => <span key={item} className="rounded bg-bg-elevated px-2 py-0.5 text-text-secondary">{item}</span>)}</dd></div>
+          )}
+        </dl>
+      )}
+    </article>
+  )
+}
+
 export default function AgentsPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof getAgents>> | null>(null)
+  const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[] | null>(null)
+  const [agentError, setAgentError] = useState(false)
+  const [workflowError, setWorkflowError] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const requestSequence = useRef(0)
+  const canReadWorkflowCatalog = atLeast('editor')
+  const canOpenToolRegistry = atLeast('admin')
 
-  async function load(silent = false) {
-    if (!silent) setLoading(true)
-    setError('')
-    try {
-      setData(await getAgents())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '加载失败')
-    } finally {
-      setLoading(false)
+  const load = useCallback(async () => {
+    const sequence = ++requestSequence.current
+    setRefreshing(true)
+    const [agentsResult, workflowsResult] = await Promise.all([
+      Promise.allSettled([getAgents()]).then(([result]) => result),
+      canReadWorkflowCatalog
+        ? Promise.allSettled([getWorkflowCatalog()]).then(([result]) => result)
+        : Promise.resolve(null),
+    ])
+    if (sequence !== requestSequence.current) return
+
+    if (agentsResult.status === 'fulfilled') {
+      setData(agentsResult.value)
+      setAgentError(false)
+    } else {
+      setAgentError(true)
     }
-  }
+    if (workflowsResult?.status === 'fulfilled') {
+      setWorkflows(workflowsResult.value.workflows)
+      setWorkflowError(false)
+    } else if (canReadWorkflowCatalog) {
+      setWorkflowError(true)
+    } else {
+      setWorkflows(null)
+      setWorkflowError(false)
+    }
+    setLoading(false)
+    setRefreshing(false)
+  }, [canReadWorkflowCatalog])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    void load()
+    return () => { requestSequence.current += 1 }
+  }, [load])
 
   return (
     <AssetPageShell
-        title="Agent 节点"
-        desc="主图 Agent 层总览（只读）· 事实源在代码，节点由 builder / Skill 包 / 域图自动注册"
-        actions={
-          <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => load(true)}>
+      title="Agent 与工作流"
+      desc="只读展示运行时注册节点与 Workflow 元数据；执行历史通过受授权 Trace 查询。"
+      actions={
+        <>
+          {canReadWorkflowCatalog && <Link href="/skills" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Skill 与 Capability</Link>}
+          {canOpenToolRegistry && <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>}
+          <AssetActionButton icon={<RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />} disabled={refreshing} onClick={() => void load()}>
             刷新
           </AssetActionButton>
-        }
-      >
-
+        </>
+      }
+    >
       <AssetRelationGuide />
+      <div className="space-y-4">
+        <AssetSection title="Agent 节点" meta={data ? `${data.agents.length} 个` : undefined} bodyClassName="p-0">
+          {loading && !data ? <AssetState>正在读取 Agent 注册表…</AssetState>
+            : agentError && !data ? <ErrorState title="Agent 注册表暂不可用" message="读取失败，请检查服务后重试。" onRetry={() => void load()} />
+              : <>
+                {agentError && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">刷新失败，以下保留上次成功读取的数据。</p>}
+                {!data || data.agents.length === 0 ? <AssetState>注册表当前没有 Agent 节点。</AssetState>
+                  : <div className="p-4">
+                  <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    {KIND_ORDER.map((kind) => {
+                      const meta = KIND_META[kind]
+                      const Icon = meta.icon
+                      return <AssetStatCard key={kind} label={meta.label} value={data.summary[kind] ?? 0} hint={meta.desc} icon={<Icon size={14} />} />
+                    })}
+                  </div>
+                  <div className="space-y-4">
+                    {KIND_ORDER.map((kind) => {
+                      const inKind = data.agents.filter((a) => a.kind === kind)
+                      const nodes = kind === 'domain_graph' ? orderDomainGraphs(inKind) : inKind
+                      if (nodes.length === 0) return null
+                      const meta = KIND_META[kind]
+                      return <div key={kind}>
+                        <h3 className="mb-2 text-[12px] font-medium text-text-secondary">{meta.label}（{nodes.length}）</h3>
+                        <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">{nodes.map((node) => <AgentCard key={`${node.kind}-${node.name}`} node={node} />)}</div>
+                      </div>
+                    })}
+                  </div>
+                </div>}
+              </>}
+        </AssetSection>
 
-      {loading ? (
-        <AssetState>加载中…</AssetState>
-      ) : error ? (
-        <ErrorState title="Agent 注册表加载失败" message={error} onRetry={() => load()} />
-      ) : !data || data.agents.length === 0 ? (
-        <AssetState>
-          未发现任何 Agent 节点（后端注册表为空，接口未就绪只出骨架 + 空态）
-        </AssetState>
-      ) : (
-        <div className="space-y-4">
-          {/* 汇总卡 */}
-          <div className="grid grid-cols-3 gap-3">
-            {KIND_ORDER.map((kind) => {
-              const meta = KIND_META[kind]
-              const Icon = meta.icon
-              return (
-                <AssetStatCard
-                  key={kind}
-                  label={meta.label}
-                  value={data.summary[kind] ?? 0}
-                  hint={meta.desc}
-                  icon={<Icon size={14} />}
-                />
-              )
-            })}
-          </div>
-
-          {/* 分组列表 */}
-          {KIND_ORDER.map((kind) => {
-            const inKind = data.agents.filter((a) => a.kind === kind)
-            // 域图节点按归属排：父域在前、其子流紧随（顺序由后端 domain 字段派生）
-            const nodes = kind === 'domain_graph' ? orderDomainGraphs(inKind) : inKind
-            if (nodes.length === 0) return null
-            const meta = KIND_META[kind]
-            return (
-              <AssetSection key={kind} title={meta.label} meta={`${nodes.length} 个`} bodyClassName="pt-3">
-                <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-3">
-                  {nodes.map((n) => <AgentCard key={`${n.kind}-${n.name}`} node={n} />)}
-                </div>
-              </AssetSection>
-            )
-          })}
-        </div>
-      )}
+        {canReadWorkflowCatalog && <AssetSection title="Workflow 注册" meta={workflows ? `${workflows.length} 个` : undefined} bodyClassName="p-0">
+          {loading && !workflows ? <AssetState>正在读取 Workflow 注册表…</AssetState>
+            : workflowError && !workflows ? <ErrorState title="Workflow 注册表暂不可用" message="读取失败，请检查服务后重试。" onRetry={() => void load()} />
+              : <>
+                {workflowError && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">刷新失败，以下保留上次成功读取的数据。</p>}
+                {!workflows || workflows.length === 0 ? <AssetState>注册表当前没有 Workflow。</AssetState>
+                  : <div>
+                    {workflows.map((workflow) => <WorkflowCard key={workflow.name} workflow={workflow} />)}
+                    <p className="border-t border-border-subtle bg-bg-elevated/40 px-4 py-3 text-[11px] leading-relaxed text-text-muted">
+                      当前接口提供描述、业务对象、动作和路由样例；契约版本、实际步骤及运行历史没有由此目录接口返回。本页不补造这些字段。Trace 下钻会继续执行现有资源授权。
+                    </p>
+                  </div>}
+              </>}
+        </AssetSection>}
+      </div>
     </AssetPageShell>
   )
 }

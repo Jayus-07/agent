@@ -131,7 +131,7 @@ export const NAV: NavEntry[] = [
       { label: '访问控制', path: '/settings/access', icon: <KeyRound size={16} />, minRole: 'admin', section: '权限与租户' },
       { label: '审批与审计', path: '/approvals', icon: <CheckCheck size={16} />, minRole: 'admin' },
       { label: '安全运营', path: '/security', icon: <ShieldCheck size={16} />, section: '服务健康与告警' },
-      { label: '服务告警', path: '/observability/alerts', icon: <AlertTriangle size={16} />, section: '服务健康与告警' },
+      { label: '服务健康与告警', path: '/observability/alerts', icon: <AlertTriangle size={16} />, minRole: 'admin', section: '服务健康与告警' },
       { label: '库存告警工单', path: '/alerts', icon: <Package size={16} />, section: '服务健康与告警' },
     ],
   },
