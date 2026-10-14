@@ -31,10 +31,18 @@ export default function LLMCallDetail({ steps }: Props) {
       {llmSteps.map((span) => {
         const call = span.llm_call;
         const model = call?.model || (typeof span.attributes?.["llm.model"] === "string" ? String(span.attributes["llm.model"]) : null);
-        const promptTokens = call ? call.prompt_tokens : metricNumber(span.metrics.prompt_tokens);
-        const completionTokens = call ? call.completion_tokens : metricNumber(span.metrics.completion_tokens);
-        const totalTokens = metricNumber(span.metrics.total_tokens)
-          ?? (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
+        // DTO 为兼容旧数据会把缺失 Token 填成 0；来源明确不可用时不能把占位值当实测用量。
+        const tokenCollectionUnavailable = span.metrics.token_source === "unavailable";
+        const promptTokens = tokenCollectionUnavailable
+          ? null
+          : metricNumber(span.metrics.prompt_tokens);
+        const completionTokens = tokenCollectionUnavailable
+          ? null
+          : metricNumber(span.metrics.completion_tokens);
+        const totalTokens = tokenCollectionUnavailable
+          ? null
+          : metricNumber(span.metrics.total_tokens)
+            ?? (promptTokens !== null && completionTokens !== null ? promptTokens + completionTokens : null);
         const costCny = metricNumber(call?.cost_cny) ?? metricNumber(span.metrics.cost_cny);
         const isOpen = expanded.has(span.id);
 

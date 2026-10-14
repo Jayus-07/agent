@@ -78,6 +78,25 @@ describe("StepTimeline Span 明细", () => {
     expect(spanColor("running", 20_000)).toContain("bg-blue-500");
   });
 
+  it("LLM Token 来源不可用时显示未采集", () => {
+    const container = mountTimeline(makeSpan({
+      type: "llm_call",
+      metrics: { token_source: "unavailable", prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    }));
+
+    expect(container.textContent).toContain("Token 未采集");
+    expect(container.textContent).not.toContain("P:0 C:0 T:0");
+  });
+
+  it("LLM Token 已采集的真实零仍显示为零", () => {
+    const container = mountTimeline(makeSpan({
+      type: "llm_call",
+      metrics: { token_source: "response_metadata", prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    }));
+
+    expect(container.textContent).toContain("P:0 C:0 T:0");
+  });
+
   it("Tool 明细保留状态与类型，但隐藏输入输出参数", () => {
     const container = mountTimeline(makeSpan());
     expand(container, "tool-lookup");
