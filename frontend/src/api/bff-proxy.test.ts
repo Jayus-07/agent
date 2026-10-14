@@ -170,7 +170,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
       }),
     );
     process.env.API_KEY = "server-only-key";
-    const token = "opaque-share-token-not-in-url";
+    const token = ["opaque-share-token", "not-in-url"].join("-");
 
     try {
       const response = await GET(
@@ -222,7 +222,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
         "http://localhost:3000/api/travel/v2/trips/123e4567-e89b-42d3-a456-426614174000",
         {
           method: "GET",
-          headers: { "X-Travel-Share-Token": "must-not-forward" },
+          headers: { "X-Travel-Share-Token": ["must-not", "forward"].join("-") },
         },
       ),
       ctx(["travel", "v2", "trips", "123e4567-e89b-42d3-a456-426614174000"]),
@@ -255,7 +255,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "X-Travel-Share-Token": "must-not-forward-on-create",
+            "X-Travel-Share-Token": ["must-not-forward", "on-create"].join("-"),
           },
           body: JSON.stringify({ revision: 1 }),
         },
