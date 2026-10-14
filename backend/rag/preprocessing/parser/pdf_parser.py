@@ -152,7 +152,10 @@ class PdfParser(BaseDocumentParser):
                     try:
                         for t in page.find_tables().tables:
                             rows = t.extract()
-                            if rows and any(any(str(c).strip() for c in r) for r in rows):
+                            if rows and any(
+                                any(c is not None and str(c).strip() for c in row)
+                                for row in rows
+                            ):
                                 tables.append((t.bbox, rows))
                     except Exception as e:
                         logger.warning(
@@ -381,7 +384,7 @@ class PdfParser(BaseDocumentParser):
 
         for block in text_blocks:
             block_text = "\n".join(
-                span["text"]
+                str(span.get("text") or "")
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             ).strip()

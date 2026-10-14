@@ -130,6 +130,21 @@ def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
     return text, masked_types
 
 
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
+
+def _has_meaningful_latin_text(text: str) -> bool:
+    """识别长英文正文，避免中文比例规则误杀英文文档。"""
+    words = _LATIN_WORD_RE.findall(text)
+    latin_letters = sum(len(word) for word in words)
+    all_letters = sum(1 for char in text if char.isalpha())
+    return (
+        len(words) >= 3
+        and latin_letters >= 18
+        and latin_letters / max(all_letters, 1) >= 0.6
+    )
+
+
 class ChunkFilter:
     """Chunk 质量过滤器。
 
@@ -168,9 +183,11 @@ class ChunkFilter:
             metadata["filter_reason"] = "empty"
             return False, "empty"
 
-        # 2. 长度检查
+        # 2. 长度检查。表格 Leaf 的短行也是有效记录，不能套用正文长度阈值。
         stripped = text.strip()
-        if len(stripped) < self.min_length:
+        table_chunk = is_table_chunk(metadata.get("chunk_type"))
+        split_chunk = bool(metadata.get("split_group_id"))
+        if len(stripped) < self.min_length and not (table_chunk or split_chunk):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "too_short"
             return False, "too_short"
@@ -200,13 +217,20 @@ class ChunkFilter:
 
         chinese_count = sum(1 for c in stripped if _is_chinese_or_replacement(c))
         total_alpha = sum(1 for c in stripped if _is_meaningful_char(c))
-        if total_alpha > 0 and chinese_count / total_alpha < self.min_chinese_ratio:
+        low_chinese_ratio = (
+            total_alpha > 0
+            and chinese_count / total_alpha < self.min_chinese_ratio
+        )
+        meaningful_english = _has_meaningful_latin_text(stripped)
+        if low_chinese_ratio and not (
+            table_chunk or split_chunk or meaningful_english
+        ):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "low_chinese_ratio"
             return False, "low_chinese_ratio"
 
-        # 5. SimHash 去重
-        if self._dup_detector.is_duplicate(stripped):
+        # 表格行允许内容重复；重复行本身是源数据，不是冗余正文。
+        if not (table_chunk or split_chunk) and self._dup_detector.is_duplicate(stripped):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "duplicate"
             return False, "duplicate"

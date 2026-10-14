@@ -35,7 +35,6 @@ class DocumentCleaner:
     _RE_SURROGATE = re.compile(r'[\ud800-\udfff]')
     _RE_HTML_TAG = re.compile(r'<[^>]+>')
     _RE_MULTI_BLANK_LINE = re.compile(r'\n{3,}')
-    _RE_ISOLATED_PAGE_NUM = re.compile(r'^\d{1,4}$', re.MULTILINE)
     _RE_URL = re.compile(r'https?://[^\s一-鿿]+')
     _RE_EMAIL = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
     _RE_REPEATED_LINE = re.compile(r'^(.+)$', re.MULTILINE)
@@ -348,14 +347,25 @@ class DocumentCleaner:
         return r
 
     def _remove_page_numbers(self, r: CleanResult) -> CleanResult:
-        """去除独立页码行（行仅含 1-4 位数字）"""
+        """去除独立页码行，同时保留年份和文号中的数字。"""
         lines = r.text.split('\n')
         new_lines = []
         removed = 0
-        for line in lines:
+        for index, line in enumerate(lines):
             stripped = line.strip()
-            if self._RE_ISOLATED_PAGE_NUM.match(stripped):
-                # 验证前后行：真页码通常在"页"末或"段"末
+            if re.fullmatch(r"\d{1,3}", stripped):
+                previous = lines[index - 1].strip() if index else ""
+                following = (
+                    lines[index + 1].strip()
+                    if index + 1 < len(lines) else ""
+                )
+                is_citation_number = (
+                    previous.endswith(("〔", "[", "［", "（", "("))
+                    or following.startswith(("〕", "]", "］", "）", ")", "号"))
+                )
+                if is_citation_number:
+                    new_lines.append(line)
+                    continue
                 removed += 1
                 continue
             new_lines.append(line)
