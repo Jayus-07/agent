@@ -12,17 +12,15 @@ import SpanTypeSummary from "./SpanTypeSummary";
 import SpanTypeFilter from "./SpanTypeFilter";
 import GraphTopology from "./GraphTopology";
 import PromptVersionsBadge from "./PromptVersionsBadge";
-import AddToEvalModal from "./AddToEvalModal";
 import {
-  statusBadge,
   formatTime,
   formatRelative,
-  formatBoth,
   durationColor,
   TraceRecord,
   Span,
   safeNum,
 } from "@/types/trace";
+import { getRunStatus, getRunStatusLabel } from "@/lib/observability/runtimeStatus";
 
 interface Props {
   trace: TraceRecord;
@@ -30,10 +28,8 @@ interface Props {
 
 export default function TraceDetailPanels({ trace }: Props) {
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-  const [jsonExpanded, setJsonExpanded] = useState<Set<string>>(new Set());
   const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
   const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());
-  const [showEvalModal, setShowEvalModal] = useState(false);
 
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
   useEffect(() => {
@@ -47,8 +43,7 @@ export default function TraceDetailPanels({ trace }: Props) {
 
   const hasError = trace.error && Object.keys(trace.error).length > 0;
   const err = trace.error as Record<string, unknown>;
-  const stat = hasError || trace.status === "error" ? "error" : trace.status === "timeout" ? "timeout" : "success";
-  const badge = statusBadge(stat);
+  const runStatus = getRunStatus(trace);
 
   const rerankSpan = spans.find((s) => s.type === "rerank" || s.id === "rerank");
   const rerankZero = rerankSpan && Number(rerankSpan.metrics?.output_docs ?? -1) === 0;
@@ -126,12 +121,6 @@ export default function TraceDetailPanels({ trace }: Props) {
                 totalMs={trace.duration_ms}
                 onToggle={toggleStep}
                 expanded={expandedSteps}
-                jsonExpanded={jsonExpanded}
-                onJsonToggle={(id) => {
-                  const next = new Set(jsonExpanded);
-                  next.has(id) ? next.delete(id) : next.add(id);
-                  setJsonExpanded(next);
-                }}
                 highlightStepId={highlightStepId}
               />
             </div>
@@ -159,9 +148,9 @@ export default function TraceDetailPanels({ trace }: Props) {
               <div className="flex items-start justify-between">
                 <div>
                   <p className="font-semibold text-red-700">{String(err.code ?? "ERROR")}</p>
-                  <p className="text-sm text-red-600 mt-1">{String(err.message ?? "")}</p>
+                  <p className="text-sm text-red-600 mt-1">错误消息已隐藏。</p>
                 </div>
-                <span className="text-xs text-red-400 font-mono">{formatBoth(trace.timestamp)}</span>
+                <span className="text-xs text-red-400 font-mono">{formatTime(trace.timestamp)}</span>
               </div>
               <div className="grid grid-cols-3 gap-4 text-sm">
                 <div>
@@ -180,7 +169,7 @@ export default function TraceDetailPanels({ trace }: Props) {
                 </div>
                 <div>
                   <span className="text-red-400 text-xs">Status</span>
-                  <p className="text-red-700 font-semibold">{badge.label}</p>
+                  <p className="text-red-700 font-semibold">{getRunStatusLabel(runStatus)}</p>
                 </div>
               </div>
             </div>
@@ -193,7 +182,7 @@ export default function TraceDetailPanels({ trace }: Props) {
             <span className="text-amber-500 text-lg mt-0.5">&#x26A0;</span>
             <div className="flex-1">
               <p className="text-sm font-medium text-amber-800">Rerank 过滤掉全部文档</p>
-              <p className="text-xs text-amber-600 mt-1">阈值 {String(rerankSpan?.metrics?.threshold ?? "0.3")} 导致全部检索结果被过滤。</p>
+              <p className="text-xs text-amber-700 mt-1">本次执行记录显示重排后结果数为 0。</p>
             </div>
             <button onClick={() => scrollToStep("rerank")} className="text-xs text-amber-700 hover:text-amber-900 underline shrink-0">
               跳到 Span
@@ -228,12 +217,6 @@ export default function TraceDetailPanels({ trace }: Props) {
                 totalMs={trace.duration_ms}
                 onToggle={toggleStep}
                 expanded={expandedSteps}
-                jsonExpanded={jsonExpanded}
-                onJsonToggle={(id) => {
-                  const n = new Set(jsonExpanded);
-                  n.has(id) ? n.delete(id) : n.add(id);
-                  setJsonExpanded(n);
-                }}
                 highlightStepId={highlightStepId}
               />
             </div>
@@ -263,7 +246,6 @@ export default function TraceDetailPanels({ trace }: Props) {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
               <div><span className="text-slate-400 text-xs">Model</span><p className="text-slate-700 font-mono">{trace.model?.name ?? "--"}</p></div>
               <div><span className="text-slate-400 text-xs">Provider</span><p className="text-slate-700 font-mono">{trace.model?.provider ?? "--"}</p></div>
-              <div><span className="text-slate-400 text-xs">Session ID</span><p className="text-slate-700 font-mono text-xs">{trace.session_id ?? "--"}</p></div>
               <div><span className="text-slate-400 text-xs">Workflow</span><p className="text-slate-700 font-mono">{trace.workflow_name ?? "--"}</p></div>
               <div><span className="text-slate-400 text-xs">Spans</span><p className="text-slate-700 font-mono">{spans.length}</p></div>
               <div><span className="text-slate-400 text-xs">Duration</span><p className={`font-mono ${durationColor(trace.duration_ms)}`}>{trace.duration_ms}ms</p></div>
@@ -281,13 +263,6 @@ export default function TraceDetailPanels({ trace }: Props) {
       {/* Right sidebar */}
       <aside className="lg:col-span-1 space-y-5">
         <CostPanel trace={trace} />
-
-        <button
-          onClick={() => setShowEvalModal(true)}
-          className="w-full py-2.5 rounded-xl bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors"
-        >
-          加入评测集
-        </button>
 
         {trace.sla && (
           <div className="bg-white border border-slate-200 rounded-xl p-5">
@@ -313,13 +288,6 @@ export default function TraceDetailPanels({ trace }: Props) {
       </aside>
     </div>
 
-    {showEvalModal && (
-      <AddToEvalModal
-        traceId={trace.id}
-        question={trace.question}
-        onClose={() => setShowEvalModal(false)}
-      />
-    )}
   </>
   );
 }

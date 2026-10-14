@@ -3,19 +3,19 @@
 import { memo } from "react";
 import {
   TraceRecord,
-  statusBadge,
   durationColor,
   formatTime,
   formatRelative,
   formatCost,
   TRACE_SOURCE_LABELS,
 } from "@/types/trace";
+import { getRunStatus, getRunStatusLabel, getRunStatusTone, safeDiagnosticCode, safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
 
 /**
  * Trace 列表行 — Langfuse 风格高密度布局。
  *
  * 设计（企业做法参考）：
- *   [状态] [主体双行: 问题预览 + ID·Session·KB·工作流小字] [耗时+相对比例条] [Usage: token+成本] [时间] [操作]
+ *   列表只展示运行元数据；不输出用户请求、模型回复、Session ID 或原始错误信息。
  * 相对比例条相对全列表最大耗时归一化，扫一眼即可定位慢 trace；
  * hover 显示 top3 慢步骤（span 级拆解）。
  */
@@ -43,16 +43,13 @@ function TraceRowInner({
   onNavigate, onCopy, onToggleBookmark, onToggleCompare,
 }: Props) {
   const has = (k: ColKey) => columns.includes(k);
-  const hasError = (t.error && Object.keys(t.error).length > 0) || t.status === "error";
-  const stat = hasError ? "error"
-    : t.status === "rejected" ? "rejected"
-    : t.status === "timeout" || t.sla?.breached ? "timeout" : "success";
-  const badge = statusBadge(stat);
+  const status = getRunStatus(t);
+  const hasError = status === "error" || status === "failed";
   const slaBreached = t.sla?.breached;
 
   const spans = t.spans || [];
   const topSteps = [...spans].sort((a, b) => b.duration_ms - a.duration_ms).slice(0, 3);
-  const err = hasError ? (t.error as Record<string, unknown>) : null;
+  const errorCode = hasError ? safeDiagnosticCode(t.error?.code) : null;
 
   // 耗时相对比例条：相对全列表最大耗时（页面下传），线性宽度 + 状态色
   const ratio = maxDuration > 0
@@ -68,13 +65,12 @@ function TraceRowInner({
 
   return (
     <tr
-      onClick={() => onNavigate(t.id)}
-      className={`group cursor-pointer transition-colors hover:bg-slate-50 ${isCompared ? "ring-1 ring-violet-300 ring-inset" : ""}`}
+      className={`group transition-colors hover:bg-slate-50 ${isCompared ? "ring-1 ring-violet-300 ring-inset" : ""}`}
     >
       {has("status") && (
         <td className="py-2.5 px-3 align-top">
           <div className="flex flex-col items-start gap-1">
-            <span className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-semibold ${badge.bg}`}>{badge.label}</span>
+            <span className={`inline-flex rounded border px-2 py-0.5 text-xs ${getRunStatusTone(status)}`}>{getRunStatusLabel(status)}</span>
             {slaBreached && <span className="text-[9px] font-semibold text-red-500" title={`SLA ${t.sla?.threshold_ms}ms`}>SLA</span>}
           </div>
         </td>
@@ -82,7 +78,7 @@ function TraceRowInner({
 
       {has("question") && (
         <td className="py-2.5 px-3">
-          {/* 行 1：问题预览 + 父子标记 + 错误码 */}
+          {/* 行 1：Trace ID + 安全状态码 */}
           <div className="flex items-center gap-1.5 min-w-0">
             {t.parent_id && (
               <span className="text-[9px] text-violet-500 bg-violet-50 rounded px-1 shrink-0" title={`子任务 · 父 ${t.parent_id.slice(0, 8)}`}>↳</span>
@@ -90,55 +86,40 @@ function TraceRowInner({
             {t.children_ids && t.children_ids.length > 0 && (
               <span className="text-[9px] text-blue-500 bg-blue-50 rounded px-1 shrink-0" title={`${t.children_ids.length} 个子任务`}>↑</span>
             )}
-            <span className="text-[13px] font-medium text-slate-800 truncate" title={t.question}>
-              {t.question || "--"}
-            </span>
-            {err && (
-              <span className="text-[9px] font-mono text-red-600 bg-red-50 rounded px-1.5 py-0.5 shrink-0 cursor-help"
-                title={String(err.message ?? "")}>
-                {String(err.code ?? "ERROR")}
-              </span>
-            )}
+            <button
+              type="button"
+              onClick={() => onNavigate(t.id)}
+              aria-label={`打开 Trace ${t.id}`}
+              className="min-h-10 truncate text-left text-[13px] font-semibold text-slate-800 underline-offset-4 hover:text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+              title={t.id}
+            >
+              {t.id.slice(0, 12)}
+            </button>
+            {errorCode && <span className="shrink-0 rounded bg-red-50 px-1.5 py-0.5 font-mono text-xs text-red-700">{errorCode}</span>}
           </div>
-          {/* 行 2：ID · Session · KB · Workflow 元信息小字 */}
+          {/* 行 2：Agent / Workflow 来源与关联数量；不显示问题文本或用户标识。 */}
           <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-400 font-mono min-w-0">
             <button
-              onClick={(e) => { e.stopPropagation(); onCopy(t.id); }}
-              className={`hover:text-slate-600 transition-opacity ${isCopied ? "text-emerald-500" : ""}`}
+              type="button"
+              onClick={() => onCopy(t.id)}
+              aria-label={isCopied ? "Trace ID 已复制" : `复制 Trace ID ${t.id}`}
+              className={`min-h-10 rounded px-1 hover:text-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${isCopied ? "text-emerald-600" : ""}`}
               title={isCopied ? "已复制" : "复制 Trace ID"}
             >
-              {t.id.slice(0, 8)}
+              {isCopied ? "已复制" : "复制 ID"}
             </button>
             {isBookmarked && <span className="text-amber-400 not-italic">★</span>}
-            <span className="text-slate-200">|</span>
-            <button
-              onClick={(e) => { e.stopPropagation(); onNavigate(`/observability/sessions/${t.session_id}`); }}
-              className="hover:text-violet-600 truncate max-w-[140px]"
-              title={`Session ${t.session_id}`}
-            >
-              {t.session_id.slice(0, 16)}
-            </button>
-            {String(t.metadata?.kb_id ?? "") && (
-              <>
-                <span className="text-slate-200">|</span>
-                <span className="truncate max-w-[80px]">kb:{String(t.metadata?.kb_id)}</span>
-              </>
-            )}
             {/* 来源三分类（2026-10-08 #12）：后端 DTO source，显示名同口径映射 */}
             {t.source && (
               <>
                 <span className="text-slate-200">|</span>
                 <span className="font-medium text-violet-600">
-                  {TRACE_SOURCE_LABELS[t.source] ?? t.source}
+                  {TRACE_SOURCE_LABELS[t.source] ?? safeRuntimeLabel(t.source, "来源未记录")}
                 </span>
               </>
             )}
-            {t.workflow_name && (
-              <>
-                <span className="text-slate-200">|</span>
-                <span>{t.workflow_name}</span>
-              </>
-            )}
+            <span className="truncate" title={safeRuntimeLabel(t.workflow_name, "工作流未记录")}>{safeRuntimeLabel(t.workflow_name, "工作流未记录")}</span>
+            {(t.children_ids?.length || t.parent_id) && <span className="shrink-0">· 关联运行</span>}
           </div>
         </td>
       )}
@@ -147,7 +128,7 @@ function TraceRowInner({
         <td className="py-2.5 px-3 w-40">
           <div className="flex items-center justify-end gap-2">
             <span className={`font-mono tabular-nums text-xs font-semibold ${durationColor(t.duration_ms)}`}
-              title={topSteps.map(s => `${s.name}: ${s.duration_ms}ms`).join("\n") || undefined}>
+              title={topSteps.map(s => `${safeRuntimeLabel(s.name, "执行步骤")}: ${s.duration_ms}ms`).join("\n") || undefined}>
               {t.duration_ms >= 1000 ? `${(t.duration_ms / 1000).toFixed(1)}s` : `${t.duration_ms}ms`}
             </span>
             {/* 相对比例条 */}
@@ -165,7 +146,7 @@ function TraceRowInner({
             <span className="text-slate-300 text-[9px]"> tok</span>
           </div>
           <div className="font-mono tabular-nums text-[10px] text-emerald-600 mt-0.5">
-            {formatCost(t.cost_cny ?? t.cost_usd)}
+            {typeof t.cost_cny === "number" ? formatCost(t.cost_cny) : <span className="text-slate-400">未采集费用</span>}
           </div>
         </td>
       )}
@@ -181,17 +162,21 @@ function TraceRowInner({
 
       {has("actions") && (
         <td className="py-2.5 px-3 align-top">
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="flex items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 motion-reduce:transition-none">
             <button
-              onClick={(e) => { e.stopPropagation(); onToggleBookmark(t.id); }}
-              className={`text-sm ${isBookmarked ? "text-amber-400" : "text-slate-300 hover:text-amber-400"}`}
+              type="button"
+              onClick={() => onToggleBookmark(t.id)}
+              aria-label={isBookmarked ? "取消收藏" : "收藏 Trace"}
+              className={`min-h-10 min-w-10 rounded text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${isBookmarked ? "text-amber-500" : "text-slate-400 hover:text-amber-500"}`}
               title={isBookmarked ? "取消收藏" : "收藏"}
             >
               {isBookmarked ? "★" : "☆"}
             </button>
             <button
-              onClick={(e) => { e.stopPropagation(); onToggleCompare(t.id); }}
-              className={`text-xs px-1.5 py-0.5 rounded ${isCompared ? "bg-violet-100 text-violet-700" : "text-slate-400 hover:text-violet-600"}`}
+              type="button"
+              onClick={() => onToggleCompare(t.id)}
+              aria-label={isCompared ? "从对比中移除" : "加入 Trace 对比"}
+              className={`min-h-10 rounded px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${isCompared ? "bg-violet-100 text-violet-700" : "text-slate-400 hover:text-violet-600"}`}
               title="加入对比"
             >
               ⚖

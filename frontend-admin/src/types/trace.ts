@@ -157,7 +157,8 @@ export interface TraceRecord {
   workflow_version?: number;
   /** 根 span ID */
   root_span_id?: string;
-  status?: "success" | "error" | "timeout" | "cancelled" | "running" | "rejected";
+  /** TraceCollector 顶层聚合状态；failed/degraded 来自 metadata.business_outcome。 */
+  status?: "success" | "failed" | "error" | "degraded" | "partial" | "timeout" | "cancelled" | "running" | "rejected";
   parent_id?: string | null;
   children_ids?: string[];
   session?: {
@@ -259,7 +260,7 @@ export interface AlertItem {
 }
 
 // 筛选器
-export type TraceStatus = "all" | "success" | "error" | "timeout" | "cancelled";
+export type TraceStatus = "all" | "success" | "failed" | "error" | "degraded" | "partial" | "timeout" | "cancelled" | "rejected" | "running" | "unknown";
 export type SortField = "duration_ms" | "timestamp" | "usage.total_tokens" | "cost_usd" | "";
 export type SortDir = "asc" | "desc";
 
@@ -274,6 +275,7 @@ export interface TraceFilter {
   kb_id?: string;
   model?: string;
   source?: string;
+  workflow_name?: string;
 }
 
 /** 来源三分类显示名（2026-10-08 #12，与后端 trace_source.SOURCE_LABELS 同口径；
@@ -363,11 +365,12 @@ export function statusBadge(status: string): { bg: string; text: string; label: 
 /** Span 状态颜色（替代 stepColor，接受 Span 或兼容 status+ms） */
 export function spanColor(status: string, ms: number): string {
   if (status === "skipped" || status === "cancelled") return "bg-slate-200 border-dashed border-slate-300";
-  if (status === "timeout" || status === "partial") return "bg-amber-500";
-  if (status === "error") return "bg-red-400";
+  if (status === "timeout" || status === "partial" || status === "degraded") return "bg-amber-500";
+  if (status === "error" || status === "failed") return "bg-red-400";
   if (status === "rejected") return "bg-orange-500";
-  if (ms > 1000) return "bg-amber-500";
-  return "bg-violet-500";
+  if (status === "running") return "bg-blue-500";
+  if (status === "success") return ms > 1000 ? "bg-amber-500" : "bg-violet-500";
+  return "bg-slate-300";
 }
 
 /** @deprecated 使用 spanColor 替代 */

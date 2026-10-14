@@ -1,10 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { usePathname } from 'next/navigation'
 import { Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react'
 import NavGroup from './NavGroup'
-import { getActiveNavLabel, visibleNav } from './navConfig'
+import { visibleNav } from './navConfig'
 import SidebarUserMenu from './SidebarUserMenu'
 
 interface Props { collapsed: boolean; onToggle: () => void }
@@ -15,23 +14,13 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   // 首帧逐字节一致；mount 后再切真实角色（admin 多出的菜单延后一帧）。
   // 否则角色差异图标（如 Database 的 <ellipse>）触发整树 hydration 失败。
   const [mounted, setMounted] = useState(false)
-  const pathname = usePathname()
   useEffect(() => setMounted(true), [])
   const groups = mounted ? visibleNav() : visibleNav(true)
-  const [openGroup, setOpenGroup] = useState<string | null>(() => getActiveNavLabel(pathname) ?? null)
-
-  useEffect(() => {
-    setOpenGroup(getActiveNavLabel(pathname) ?? null)
-  }, [pathname])
-
-  const toggleGroup = (label: string) => {
-    setOpenGroup((current) => current === label ? null : label)
-  }
 
   if (collapsed) {
     return (
-      <aside className="w-0 shrink-0 overflow-hidden md:w-14 md:flex md:flex-col md:items-center md:py-3 md:overflow-visible glass border-r border-black/5 gap-1">
-        <button onClick={onToggle} className="p-2 rounded-lg hover:bg-black/5 transition-colors text-text-secondary" aria-label="展开">
+      <aside id="admin-navigation" className="w-0 shrink-0 overflow-hidden md:w-14 md:flex md:flex-col md:items-center md:py-3 md:overflow-visible glass border-r border-black/5 gap-1">
+        <button type="button" onClick={onToggle} className="min-h-10 min-w-10 p-2 rounded-lg hover:bg-black/5 transition-colors text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-label="展开导航" aria-expanded="false" aria-controls="admin-navigation">
           <PanelLeft size={18} />
         </button>
         {groups.map(g => (
@@ -43,7 +32,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   }
 
   return (
-    <aside className="w-64 shrink-0 flex flex-col glass border-r border-black/5">
+    <aside id="admin-navigation" className="w-64 shrink-0 flex flex-col glass border-r border-black/5">
       {/* 品牌 */}
       <div className="flex items-center justify-between px-4 py-3.5">
         <div className="flex items-center gap-2">
@@ -52,7 +41,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           </div>
           <span className="text-sm font-semibold text-text-primary tracking-tight">电商智能数据平台</span>
         </div>
-        <button onClick={onToggle} className="p-1.5 rounded-md hover:bg-black/5 transition-colors text-text-secondary" aria-label="收起">
+        <button type="button" onClick={onToggle} className="min-h-10 min-w-10 p-1.5 rounded-md hover:bg-black/5 transition-colors text-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-label="收起导航" aria-expanded="true" aria-controls="admin-navigation">
           <PanelLeftClose size={16} />
         </button>
       </div>
@@ -64,8 +53,6 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
             key={g.path || g.label}
             {...g}
             collapsed={false}
-            open={openGroup === g.label}
-            onToggle={() => toggleGroup(g.label)}
           />
         ))}
       </nav>

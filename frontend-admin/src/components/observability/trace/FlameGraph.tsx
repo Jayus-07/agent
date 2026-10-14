@@ -11,6 +11,7 @@
 
 import { useMemo } from "react";
 import { Span, spanColor } from "@/types/trace";
+import { safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
 
 interface Props {
   steps: Span[];  // 兼容旧名
@@ -76,14 +77,16 @@ export default function FlameGraph({ steps, totalMs, onStepClick, highlightStepI
             return (
               <button
                 key={s.id}
+                type="button"
                 onClick={() => onStepClick?.(s.id)}
-                title={`${s.name}: ${s.duration_ms}ms`}
-                className={`relative h-full ${spanColor(s.status, s.duration_ms)} ${isHL ? "ring-2 ring-violet-400 z-10" : "hover:opacity-80"} transition-all`}
+                aria-label={`${safeRuntimeLabel(s.name, "执行步骤")}，耗时 ${s.duration_ms} 毫秒`}
+                title={`${safeRuntimeLabel(s.name, "执行步骤")}: ${s.duration_ms}ms`}
+                className={`relative h-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${spanColor(s.status, s.duration_ms)} ${isHL ? "ring-2 ring-violet-400 z-10" : "hover:opacity-80"} transition-all`}
                 style={{ width: `${w}%`, minWidth: "8px" }}
               >
                 {w > 8 && (
                   <span className="absolute inset-0 flex items-center justify-center text-[10px] font-mono text-white drop-shadow-sm truncate px-1">
-                    {s.name}
+                    {safeRuntimeLabel(s.name, "执行步骤")}
                   </span>
                 )}
               </button>
@@ -105,15 +108,17 @@ export default function FlameGraph({ steps, totalMs, onStepClick, highlightStepI
         return (
           <button
             key={s.id}
+            type="button"
             onClick={() => onStepClick?.(s.id)}
-            title={`${s.name}: ${s.duration_ms}ms · 起点 +${((leftPct / 100) * totalMs).toFixed(0)}ms`}
-            className={`group flex items-center w-full h-5 rounded hover:bg-slate-50 ${isHL ? "bg-violet-50 ring-1 ring-violet-300" : ""}`}
+            aria-label={`${safeRuntimeLabel(s.name, "执行步骤")}，耗时 ${s.duration_ms} 毫秒`}
+            title={`${safeRuntimeLabel(s.name, "执行步骤")}: ${s.duration_ms}ms · 起点 +${((leftPct / 100) * totalMs).toFixed(0)}ms`}
+            className={`group flex items-center w-full min-h-8 rounded hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${isHL ? "bg-violet-50 ring-1 ring-violet-300" : ""}`}
           >
             <span
               className="w-36 shrink-0 truncate text-left text-[10px] text-slate-500"
               style={{ paddingLeft: `${Math.min(depth * 10, 80) + 4}px` }}
             >
-              {s.name}
+              {safeRuntimeLabel(s.name, "执行步骤")}
             </span>
             <span className="relative flex-1 h-full">
               <span

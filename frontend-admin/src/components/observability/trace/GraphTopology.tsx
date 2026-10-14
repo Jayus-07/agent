@@ -1,6 +1,7 @@
 "use client";
 
 import type { Span } from "@/types/trace";
+import { safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
 
 /**
  * LangGraph 图拓扑 DAG 渲染
@@ -29,18 +30,38 @@ interface Props {
   onNodeClick?: (spanId: string) => void;
 }
 
-/** 从 spans 中找到某个 graph node 的 status */
-function nodeStatus(nodeId: string, spans: Span[]): string {
-  const span = spans.find((s) => s.id === nodeId || (s as any).span_id === nodeId);
-  return span?.status || "success";
+/** 图节点只在存在实际 Span 证据时展示。 */
+export function findGraphNodeSpan(nodeId: string, spans: Span[]): Span | undefined {
+  const exact = spans.find((span) => span.id === nodeId || (span as any).span_id === nodeId);
+  if (exact) return exact;
+
+  if (nodeId === "supervisor") {
+    return spans.find((span) => span.id.startsWith("supervisor-round-"));
+  }
+  if (nodeId.startsWith("skill-")) {
+    const stepId = nodeId.slice("skill-".length);
+    return spans.find((span) => span.id === stepId || span.id === `skill-${stepId}` || span.id.endsWith(`:${stepId}`));
+  }
+  return spans.find((span) => span.id.startsWith(`${nodeId}:`));
+}
+
+export function hasGraphNodeExecution(nodeId: string, spans: Span[]): boolean {
+  return Boolean(findGraphNodeSpan(nodeId, spans));
 }
 
 function statusColor(status: string): string {
   switch (status) {
-    case "error":   return "border-red-400 bg-red-50 text-red-700";
+    case "success": return "border-emerald-400 bg-emerald-50 text-emerald-700";
+    case "error":
+    case "failed":
+    case "timeout": return "border-red-400 bg-red-50 text-red-700";
     case "running": return "border-blue-400 bg-blue-50 text-blue-700";
-    case "skipped": return "border-slate-300 bg-slate-50 text-slate-400";
-    default:        return "border-emerald-400 bg-emerald-50 text-emerald-700";
+    case "partial":
+    case "degraded": return "border-amber-300 bg-amber-50 text-amber-800";
+    case "rejected": return "border-orange-300 bg-orange-50 text-orange-800";
+    case "skipped":
+    case "cancelled": return "border-slate-300 bg-slate-50 text-slate-500";
+    default: return "border-slate-300 bg-white text-slate-600";
   }
 }
 
@@ -60,17 +81,23 @@ export default function GraphTopology({ nodes, edges, spans, loopCount, maxLoops
       {/* DAG */}
       <div className="space-y-2">
         {nodes.map((node) => {
-          const status = nodeStatus(node.id, spans);
+          const matchedSpan = findGraphNodeSpan(node.id, spans);
+          const status = matchedSpan?.status || "unknown";
           return (
             <button
               key={node.id}
-              onClick={() => onNodeClick?.(node.id)}
-              className={`w-full text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors hover:ring-2 hover:ring-violet-300 ${statusColor(status)}`}
+              disabled={!matchedSpan}
+              onClick={() => matchedSpan && onNodeClick?.(matchedSpan.id)}
+              aria-label={`执行节点 ${safeRuntimeLabel(node.label, "未命名节点")}，状态 ${safeRuntimeLabel(status, "状态未知")}`}
+              className={`w-full min-h-10 text-left px-3 py-2 rounded-lg border text-xs font-medium transition-colors hover:ring-2 hover:ring-violet-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 ${statusColor(status)}`}
             >
               <div className="flex items-center justify-between">
-                <span>{node.label}</span>
+                <span>{safeRuntimeLabel(node.label, "未命名节点")}</span>
                 <span className={`inline-block w-1.5 h-1.5 rounded-full ${
-                  status === "success" ? "bg-emerald-500" : status === "error" ? "bg-red-500" : "bg-slate-300"
+                  status === "success" ? "bg-emerald-500"
+                    : ["error", "failed", "timeout"].includes(status) ? "bg-red-500"
+                      : status === "running" ? "bg-blue-500"
+                        : ["partial", "degraded", "rejected"].includes(status) ? "bg-amber-500" : "bg-slate-300"
                 }`} />
               </div>
             </button>
@@ -81,15 +108,15 @@ export default function GraphTopology({ nodes, edges, spans, loopCount, maxLoops
       {/* Edges 简化为箭头列表 */}
       {edges.length > 0 && (
         <div className="mt-4 pt-3 border-t border-slate-100">
-          <p className="text-[9px] text-slate-400 mb-2 uppercase">路由决策</p>
+          <p className="text-[9px] text-slate-400 mb-2 uppercase">编排拓扑连接 · 未提供执行边状态</p>
           <div className="space-y-1">
             {edges.map((e, i) => (
               <div key={i} className="flex items-center gap-2 text-[10px]">
-                <span className="font-mono text-slate-500">{e.source}</span>
+                <span className="font-mono text-slate-500">{safeRuntimeLabel(e.source, "执行节点")}</span>
                 <span className="text-slate-300">→</span>
-                <span className="font-mono text-slate-500">{e.target}</span>
+                <span className="font-mono text-slate-500">{safeRuntimeLabel(e.target, "执行节点")}</span>
                 {e.label && (
-                  <span className="text-[9px] text-violet-600 bg-violet-50 rounded px-1.5 py-0.5 font-mono">{e.label}</span>
+                  <span className="text-[9px] text-violet-600 bg-violet-50 rounded px-1.5 py-0.5 font-mono">条件文本已隐藏</span>
                 )}
               </div>
             ))}

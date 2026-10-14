@@ -42,17 +42,21 @@ export async function getCsQualityReport(hours = 24): Promise<CSQualityReport | 
 
 // ── Traces ────────────────────────────────────────────
 
-/** GET /observability/traces?limit=N&workflow_name=X — 最近 N 条 trace（服务端过滤） */
-export async function listTraces(limit = 50, workflowName?: string, hasTag?: string, hasTool?: string): Promise<TraceRecord[]> {
-  try {
-    const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
-    const tag = hasTag ? `&has_tag=${encodeURIComponent(hasTag)}` : "";
-    const tool = hasTool ? `&has_tool=${encodeURIComponent(hasTool)}` : "";
-    const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?limit=${limit}${wf}${tag}${tool}`);
-    return data.traces || [];
-  } catch (e) {
-    throw new Error(`listTraces failed: ${(e as Error).message}`);
-  }
+/** GET /observability/traces — 最近 N 条经服务端资源授权的 trace 摘要。 */
+export async function listTraces(
+  limit = 50,
+  workflowName?: string,
+  hasTag?: string,
+  hasTool?: string,
+  source?: string,
+): Promise<TraceRecord[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (workflowName) params.set("workflow_name", workflowName);
+  if (hasTag) params.set("has_tag", hasTag);
+  if (hasTool) params.set("has_tool", hasTool);
+  if (source) params.set("source", source);
+  const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?${params.toString()}`);
+  return data.traces || [];
 }
 
 /** GET /observability/traces/stats — 时间窗聚合统计（StatsBar 下沉后端） */
@@ -89,7 +93,7 @@ export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
     // 404 → null（让页面走"不存在"分支）；其它错误抛出
     const status = (e as { status?: number }).status;
     if (status === 404) return null;
-    throw new Error(`getTraceDetail failed: ${(e as Error).message}`);
+    throw e;
   }
 }
 

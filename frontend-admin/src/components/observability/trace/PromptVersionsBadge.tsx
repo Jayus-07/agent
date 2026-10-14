@@ -1,5 +1,7 @@
 "use client";
 
+import { safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
+
 interface PromptVersionEntry {
   key: string;
   version: number | null;
@@ -11,7 +13,10 @@ interface Props {
 }
 
 export default function PromptVersionsBadge({ metadata }: Props) {
-  const versions = (metadata?.prompt_versions as PromptVersionEntry[] | undefined) ?? [];
+  const rawVersions = metadata?.prompt_versions;
+  const versions = Array.isArray(rawVersions)
+    ? rawVersions.filter((value): value is PromptVersionEntry => Boolean(value && typeof value === "object"))
+    : [];
 
   if (versions.length === 0) return null;
 
@@ -19,13 +24,13 @@ export default function PromptVersionsBadge({ metadata }: Props) {
     <div className="flex flex-wrap gap-1.5">
       {versions.map((v) => (
         <span
-          key={v.key}
+          key={safeRuntimeLabel(v.key, "prompt")}
           className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-50 text-indigo-700 border border-indigo-200"
-          title={`来源: ${v.source}`}
+          title={`来源: ${safeRuntimeLabel(v.source, "未记录")}`}
         >
-          {v.key}
+          {safeRuntimeLabel(v.key, "提示词")}
           <span className="text-indigo-400">@</span>
-          {v.version != null ? `v${v.version}` : "default"}
+          {typeof v.version === "number" && Number.isInteger(v.version) ? `v${v.version}` : "default"}
         </span>
       ))}
     </div>
