@@ -117,6 +117,22 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
     return header + "\n\n" + full_text[:body_budget]
 
 
+def _mask_index_text_for_pii(text: str, doc_type: str, chunk_filter) -> str:
+    """用现有 ChunkFilter 规则脱敏索引的文档级文本。"""
+    if not text:
+        return text
+    is_financial = doc_type == "financial"
+    if not chunk_filter.enable_pii and not (
+        is_financial and chunk_filter.financial_pii_force
+    ):
+        return text
+    from backend.rag.preprocessing.filter import ChunkFilter
+
+    if is_financial and chunk_filter.financial_pii_force:
+        return ChunkFilter.apply_financial_pii_mask(text)
+    return ChunkFilter.apply_pii_mask(text)
+
+
 def _filter_quality_summary(filtered_details: list[dict]) -> str:
     """R-P1-3: 被过滤 chunk 的 quality_issues 汇总串（无过滤返回空串）。
 
@@ -262,6 +278,10 @@ def _filter_index_chunks(
     filtered_details: list[dict] = []
     for chunk in chunks:
         metadata = chunk.metadata or {}
+        if doc_type:
+            # Indexer 路由判定是过滤时文档类型的事实源；解析出的 Chunk
+            # 尚未继承 doc_meta，因此必须在脱敏过滤前显式传播。
+            metadata["doc_type"] = doc_type
         ok, reason = chunk_filter.should_keep(chunk.page_content, metadata)
         chunk_id = str(metadata.get("chunk_id") or "").strip()
         keep_referenced_parent = bool(
@@ -293,7 +313,10 @@ def _filter_index_chunks(
             ok = True
 
         if ok:
-            if metadata.get("pii_masked"):
+            masked_text = metadata.pop("_masked_text", None)
+            if isinstance(masked_text, str):
+                chunk.page_content = masked_text
+            elif metadata.get("pii_masked"):
                 chunk.page_content = ChunkFilter.apply_pii_mask(
                     chunk.page_content
                 )
@@ -1604,6 +1627,16 @@ class IncrementalIndexer:
         from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
         from backend.rag.preprocessing.keyword import LLM_FORCED_TYPES as _CHUNK_LLM_TYPES
         doc_type_val = doc_meta.get("doc_type", "general")
+        pii_safe_summary = _mask_index_text_for_pii(
+            str(doc_meta.get("summary") or ""), doc_type_val, chunk_filter
+        )
+        if doc_meta.get("summary"):
+            doc_meta["summary"] = pii_safe_summary
+        if isinstance(doc_meta.get("sections"), list):
+            doc_meta["sections"] = [
+                _mask_index_text_for_pii(str(section), doc_type_val, chunk_filter)
+                for section in doc_meta["sections"]
+            ]
         person_val = doc_meta.get("person_names", "")
         use_chunk_llm = doc_type_val in _CHUNK_LLM_TYPES
         chunk_llm_model = ""
@@ -1854,7 +1887,11 @@ class IncrementalIndexer:
             # Stage1 doc 级检索只需头部语义即可定位文档，超长部分截断。
             # 截断打标进 metadata，doc 级检索对长文档天然残缺，需可观测。
             # 1.2 增强：summary/章节头部拼入 doc 级文本，LLM 元数据参与 doc 级向量
-            doc_level_text = _build_doc_level_text(full_text, doc_meta)
+            doc_level_text = _mask_index_text_for_pii(
+                _build_doc_level_text(full_text, doc_meta),
+                doc_type_val,
+                chunk_filter,
+            )
             if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
                 doc_db_meta["doc_level_truncated"] = "true"
                 doc_db_meta["doc_level_full_chars"] = len(full_text)
@@ -2257,18 +2294,28 @@ class IncrementalIndexer:
 
     # ---- 公开重索引 ----
 
-    def index_candidate(self, source_path: str, identity_path: str,
-                        file_hash: str) -> dict:
+    def index_candidate(
+        self,
+        source_path: str,
+        identity_path: str,
+        file_hash: str,
+        old_chunk_ids: list[str] | None = None,
+    ) -> dict:
         """候选模式单文件索引（B 阶段发布协议的配套入口）。
 
         source_path：不可变暂存文件（实际读取）；identity_path：正式路径
         （doc_id/归属/registry 行/metadata 落值）。返回含 chunk_ids 与
         registry_metadata 的完整发布清单；registry/正式向量/正式 BM25 均
-        不被触碰——落库由 publish_candidate 统一提交。
+        不被触碰——落库由 publish_candidate 统一提交。old_chunk_ids 是当前
+        Active registry 保存的物理向量 ID，用于候选 BM25 快照排除被替换内容。
         """
         if not self.candidate_mode:
             raise RuntimeError("index_candidate 只能在 candidate_mode=True 的实例上调用")
+        reindex_ctx = (
+            {"old_chunk_ids": list(old_chunk_ids)} if old_chunk_ids else None
+        )
         return self._index_file(source_path, file_hash=file_hash,
+                                reindex_ctx=reindex_ctx,
                                 identity_path=identity_path)
 
     def reindex_file(self, file_path: str, file_hash: str | None = None) -> dict:

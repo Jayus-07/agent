@@ -1575,6 +1575,17 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
 
     # ── duplicate 检测（与 active 版本同内容 → 无需发布）──
     existing = reg.get_by_path(filepath)
+    try:
+        _raw_existing_ids = (existing or {}).get("chunk_ids") or "[]"
+        _parsed_existing_ids = (
+            json.loads(_raw_existing_ids)
+            if isinstance(_raw_existing_ids, str) else _raw_existing_ids
+        )
+        old_chunk_ids_for_bm25 = [
+            str(item) for item in (_parsed_existing_ids or [])
+        ]
+    except (ValueError, TypeError):
+        old_chunk_ids_for_bm25 = []
     if existing and existing.get("status") == "active" \
             and existing.get("file_hash") == actual_hash:
         logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
@@ -1634,7 +1645,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     )
     try:
         index_result = indexer.index_candidate(
-            staging, filepath, file_hash=actual_hash)
+            staging, filepath, file_hash=actual_hash,
+            old_chunk_ids=old_chunk_ids_for_bm25)
     except SupersededCandidate:
         raise
     except Exception:

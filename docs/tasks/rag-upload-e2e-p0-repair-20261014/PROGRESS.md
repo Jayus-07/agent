@@ -32,4 +32,6 @@
 
 ## 停止边界
 
-Batch A 完成后停止；不进入 Batch B/C。修复后真实 API、Worker、数据库、向量索引与 Search E2E 尚未执行，`RAG_UPLOAD_E2E_VERIFIED` 保持 `false`。不合并 main；只将 Batch A 代码与证据提交到 PR #58。
+Batch A 真实 API、Worker、PostgreSQL/向量索引与 Search 验收已在隔离 Compose 和 KB 完成，细节见 `BATCH_A_REAL_E2E_REPORT.md`。发现并最小修复 PII 未进入索引脱敏及候选 BM25 保留旧代内容两个问题；新增候选旧 chunk 排除回归。FAQ、SKU 预期失败、PII 脱敏/覆盖、同名失败保留旧 Active 均通过。
+
+本次真实验收不覆盖 Batch B/C 的 PDF、Excel 与长 TXT 环境/资源问题，不将 `RAG_UPLOAD_E2E_VERIFIED` 置为 `true`。当前等待推送后的最终 PR CI 状态；不合并 main，不启动 Batch B/C。

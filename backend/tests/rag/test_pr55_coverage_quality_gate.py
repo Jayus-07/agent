@@ -213,6 +213,59 @@ def test_pii_normalization_does_not_hide_unmasked_leaf_content_loss():
     assert report["uncovered_samples"][0]["preview"] == "备用电话是13900139000。"
 
 
+def test_financial_index_filter_masks_pii_and_still_detects_missing_body():
+    from langchain_core.documents import Document
+
+    from backend.rag.indexing.indexer import (
+        _filter_index_chunks,
+        _mask_index_text_for_pii,
+    )
+    from backend.rag.preprocessing.chunking import coverage_audit
+    from backend.rag.preprocessing.filter import ChunkFilter
+
+    pii_text = "财务联系人电话是13800138000，请通过报销平台联系财务服务台。"
+    body_text = "未脱敏正文：审批完成后，财务人员应核对发票金额并保存原始凭证。"
+    source = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=pii_text),
+            DocumentNode(type="paragraph", text=body_text),
+        ]),
+        raw_text=pii_text + body_text,
+    )
+    chunks = [
+        Document(page_content=pii_text, metadata={"granularity": "leaf"}),
+        Document(page_content=body_text, metadata={"granularity": "leaf"}),
+    ]
+    chunk_filter = ChunkFilter()
+    kept, filtered = _filter_index_chunks(
+        chunks, chunk_filter, "financial.txt", "financial"
+    )
+
+    assert not filtered
+    assert len(kept) == 2
+    assert kept[0].page_content == "财务联系人电话是138****8000，请通过报销平台联系财务服务台。"
+    assert kept[0].metadata["pii_masked"] == ["phone"]
+    assert "13800138000" not in kept[0].page_content
+    assert _mask_index_text_for_pii(
+        pii_text, "financial", chunk_filter
+    ) == kept[0].page_content
+
+    complete_report = coverage_audit(
+        source, kept,
+        normalize_pii=any(chunk.metadata.get("pii_masked") for chunk in kept),
+    )
+    assert complete_report["uncovered_count"] == 0
+
+    missing_report = coverage_audit(source, [kept[0]], normalize_pii=True)
+    record = build_quality_record(
+        file_path="financial.txt", doc_id="d-financial", kb_id="kb-test",
+        raw_ast=source, chunks=[kept[0]], file_size=1,
+        file_hash="sha256", coverage=missing_report,
+    )
+    anomalies = run_typed_validation(record, source)
+    assert any(item["check"] == "coverage_gap" for item in hard_anomalies(anomalies))
+
+
 @pytest.mark.parametrize(
     ("initial_status", "expected_status"),
     [
