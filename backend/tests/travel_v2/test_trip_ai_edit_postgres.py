@@ -171,7 +171,9 @@ def _request_metadata(trip_id: str, key: str) -> dict:
     ("暂不应用。", "read_only"),
     ("把西湖开始时间改成10点，但是先不保存。", "clarify"),
     ("把西湖开始时间改成10点，不过先不用保存。", "clarify"),
+    ("把西湖开始时间改成10点，不过不保存。", "clarify"),
     ("把西湖开始时间改成10点，但暂不应用。", "clarify"),
+    ("把西湖开始时间改成10点，但不要应用。", "read_only"),
     ("把西湖开始时间改成10点，等我确认后再保存。", "clarify"),
 ])
 def test_non_authorized_language_never_calls_generator_or_changes_trip(
@@ -233,7 +235,9 @@ def test_explicit_execution_authorization_saves_one_revision(
     ("“把西湖开始时间改成10点。”", "clarify"),
     ("把西湖开始时间改成10点，但是先不保存。", "clarify"),
     ("把西湖开始时间改成10点，不过先不用保存。", "clarify"),
+    ("把西湖开始时间改成10点，不过不保存。", "clarify"),
     ("把西湖开始时间改成10点，但暂不应用。", "clarify"),
+    ("把西湖开始时间改成10点，但不要应用。", "read_only"),
     ("把西湖开始时间改成10点，等我确认后再保存。", "clarify"),
 ])
 def test_candidate_cannot_bypass_final_authorization_gate(
