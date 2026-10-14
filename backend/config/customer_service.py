@@ -29,6 +29,19 @@ CS_MAX_CONFIRMATION_RETRIES = int(os.getenv("CS_MAX_CONFIRMATION_RETRIES", "3"))
 CS_CRITICAL_REFUND_AMOUNT = float(os.getenv("CS_CRITICAL_REFUND_AMOUNT", "1000"))
 
 # =============================================
+# 退款政策（结构化、带版本；资格判断与候选列表的唯一事实源）
+# =============================================
+# 原始字符串形态保留：值非法时在使用点 fail-closed（拒绝写操作），
+# 而不是在 import 期崩溃或静默回退放行。解析与校验见
+# customer_service/policy/refund_policy.py。
+# 修改任一规则时同步 bump 版本号：版本会随资格结果写入审计。
+# 默认 30 天对齐演示知识库的美/加退货窗口；其他地区（英德 14 / 日 7）
+# 属于后续「按地区分策略」的扩展，本版不做。
+CS_REFUND_POLICY_VERSION = os.getenv("CS_REFUND_POLICY_VERSION", "2026-10-14.1")
+CS_REFUND_WINDOW_DAYS = os.getenv("CS_REFUND_WINDOW_DAYS", "30")
+CS_REFUNDABLE_STATUSES = os.getenv("CS_REFUNDABLE_STATUSES", "paid,shipped,completed")
+
+# =============================================
 # 人工转接
 # =============================================
 # 总等待上限（2026-10-08 拍板：120→30s + 超时降级建留言工单）。语义不变：

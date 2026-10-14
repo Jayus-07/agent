@@ -2,6 +2,9 @@
 
 Phase 4: eligibility check + proposal building + simulate_execute.
 不实际写 DB — Phase 6 替换 simulate 为真实 DB 写入。
+
+退款规则（窗口 / 可退状态 / 政策版本）统一来自
+customer_service/policy/refund_policy.py：候选列表与资格判断同源。
 """
 from __future__ import annotations
 
@@ -20,6 +23,10 @@ from backend.customer_service.errors import (
     OrderNotEligibleError,
     OrderNotFoundError,
 )
+from backend.customer_service.policy.refund_policy import (
+    get_refund_policy,
+    parse_order_created_at,
+)
 from backend.customer_service.risk import RiskLevel
 from backend.shared.logger import logger
 
@@ -32,24 +39,48 @@ class RefundEligibility:
     amount: float
     status: str
     reason: str = ""
+    policy_version: str = ""
 
 
 class RefundService:
-    REFUNDABLE_STATUSES = {"paid", "shipped", "completed"}
-    RETURN_WINDOW_DAYS = 7
-
     def check_refund_eligibility(
         self, user_id: str, order_id: str
     ) -> RefundEligibility:
-        """Check if an order is eligible for refund."""
+        """Check if an order is eligible for refund.
+
+        规则全部来自 get_refund_policy()（与候选列表同源）。政策不可用
+        直接抛 RefundPolicyUnavailableError，先于任何订单查询 fail-closed。
+        窗口按「下单时间」计，与候选 SQL 同口径；下单时间缺失/无法解析
+        同样拒绝，不默认放行。
+        """
+        policy = get_refund_policy()
         order = self._get_order(user_id, order_id)
 
         status = str(order.get("status", ""))
         amount = float(order.get("total_amount", 0))
 
-        if status not in self.REFUNDABLE_STATUSES:
+        if status not in policy.refundable_statuses:
             raise OrderNotEligibleError(
-                f"订单状态 '{status}' 不允许退款，仅支持: {', '.join(sorted(self.REFUNDABLE_STATUSES))}"
+                f"订单状态 '{status}' 不允许退款，仅支持: "
+                f"{', '.join(sorted(policy.refundable_statuses))}"
+            )
+
+        created_at = parse_order_created_at(order.get("created_at"))
+        if created_at is None:
+            logger.warning(
+                "[RefundService] order created_at missing/unparseable, "
+                "fail-closed: order=%s policy=%s",
+                order.get("order_no") or order.get("id"), policy.version,
+            )
+            raise OrderNotEligibleError(
+                "暂时无法核实该订单的下单时间，不能自动判断是否在退款期限内，"
+                "请回复「转人工」由人工客服协助。"
+            )
+        if not policy.is_within_window(created_at):
+            raise OrderNotEligibleError(
+                f"该订单下单已超过 {policy.window_days} 天，"
+                "不在退款政策期限内，无法在线提交退款申请；"
+                "如需协助可回复「转人工」。"
             )
 
         if self._has_existing_refund(order.get("id") or order.get("order_no", "")):
@@ -61,53 +92,29 @@ class RefundService:
             order_no=str(order.get("order_no", "")),
             amount=amount,
             status=status,
+            policy_version=policy.version,
         )
-
-    def fetch_policy_window_days(self) -> int:
-        """退款窗口天数（2026-10-08 拍板：政策驱动而非写死）。
-
-        RAG 检索知识库最新退款政策 → 从政策原文解析「N 天」→ 兜底
-        RETURN_WINDOW_DAYS 常量。检索/解析任何失败都退回兜底值，绝不
-        让政策查询阻塞退款主流程。
-        """
-        try:
-            import re
-
-            from backend.rag.pipeline import get_rag_pipeline
-
-            docs = get_rag_pipeline().retrieve_documents(
-                question="退款政策 下单后多少天内可以申请退款退货",
-                kb_id="cs_faq", top_k=3, subject_type="customer",
-            )
-            for doc in docs:
-                content = str(getattr(doc, "page_content", "") or "")
-                m = re.search(r"(?:下单[后起])?(\d+)\s*天[内之]", content)
-                if m:
-                    days = int(m.group(1))
-                    if 1 <= days <= 90:
-                        logger.info(
-                            "[RefundService] 退款政策窗口: %s天（RAG 政策解析）", days,
-                        )
-                        return days
-            logger.info("[RefundService] 政策未解析出窗口天数，退回默认 %s 天",
-                        self.RETURN_WINDOW_DAYS)
-        except Exception as e:
-            logger.warning("[RefundService] 退款政策检索失败，用默认窗口: %s", e)
-        return self.RETURN_WINDOW_DAYS
 
     def list_refund_candidates(self, user_id: str) -> dict:
         """退款候选列表（点选数据源）：政策窗口 → 可退订单（联商品名）。
 
+        窗口与可退状态取自 get_refund_policy()，与 check_refund_eligibility
+        同源；政策不可用时抛 RefundPolicyUnavailableError（调用方退回手输
+        订单号，随后资格判断同样 fail-closed）。
+
         Returns:
-            {"window_days": int, "candidates": [
+            {"window_days": int, "policy_version": str, "candidates": [
                 {"order_id", "order_no", "product_names", "amount", "status"},
             ]}
         """
-        window_days = self.fetch_policy_window_days()
+        policy = get_refund_policy()
+        window_days = policy.window_days
         from backend.customer_service.service.order_service import get_order_service
 
         rows = get_order_service().list_refundable_orders(
-            user_id, window_days=window_days,
+            user_id,
+            window_days=window_days,
+            statuses=sorted(policy.refundable_statuses),
         )
         candidates = [
             {
@@ -119,7 +126,11 @@ class RefundService:
             }
             for r in rows
         ]
-        return {"window_days": window_days, "candidates": candidates}
+        return {
+            "window_days": window_days,
+            "policy_version": policy.version,
+            "candidates": candidates,
+        }
 
     def build_refund_proposal(
         self, user_id: str, order_id: str, reason: str = ""
@@ -150,6 +161,7 @@ class RefundService:
                 "order_id": eligibility.order_id,
                 "status": eligibility.status,
                 "amount": eligibility.amount,
+                "policy_version": eligibility.policy_version,
             },
             after_state={
                 "order_id": eligibility.order_id,
