@@ -1,6 +1,6 @@
 # B1 施工进度
 
-- 状态：B1 代码与验收收口完成；PR #66 已创建为 Draft；等待必需 CI/Review；不启动 B2/B3/C。
+- 状态：B1 代码、报告与真实验收收口完成；PR #66 保持 Draft；CI 已通过，等待 Review；不启动 B2/B3/C。
 - Worktree：`C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`
 - 分支：`codex/rag-upload-b1-20261014`
 - 基线：PR #58 merge `1acf6a4b34fdae4ba257a2e9bfcb1a24ee621d01`；施工起点为最新 main `bf3cddf7ac7329f576f036cb1a9717a8f96dfd27`。
@@ -26,9 +26,10 @@
 - 精确 cl100k BPE Token 统计 UNVERIFIED，因当前网络无法取得 tiktoken 词表；当前运行时使用项目已有字符估算回退。
 - RAG 全局状态继续为 `RAG_UPLOAD_E2E_VERIFIED=false`。
 
-## PR / 下一步
+## PR / 最终门禁
 
-1. T0/T1/T2 已收口，真实 CSV/Excel 通过；PDF 端到端仍阻塞。PR 保持 Draft，不建议合并。
-2. 已推送独立 B1 分支并创建 PR #66，报告已纳入 PR。
-3. 核对必需 CI/Review；若出现 B1 范围问题，只处理对应增量。
-4. 本轮到此停止，不启动 B2/B3/C，不跑付费 Provider，不修改正式数据库或全局验收状态。
+- PR [#66 Draft](https://github.com/Jayus-07/agent/pull/66)；代码提交 `b9b93405465f9fb6566c25b06d9ef49ef53e0c48`，报告/进度记录另有文档提交。
+- 最新核验的 PR HEAD `ee26a386b4120331224c8d1ebafb5865582b704e`：RAG Smoke preflight、免费定向回归、Detect RAG changes、Secret Scan 均 PASS；RAG Smoke 的真实 API 评测 job 按 workflow 跳过。
+- PR Reviews：0；未解决 Review Threads：0。
+- PDF 上传仍无最终索引/检索证据，故保持 Draft，不建议合并。
+- 本轮到此停止，不启动 B2/B3/C，不跑付费 Provider，不修改正式数据库或全局验收状态。
