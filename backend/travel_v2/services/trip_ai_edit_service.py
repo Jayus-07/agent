@@ -19,6 +19,7 @@ from backend.travel_v2.repositories.edit_operation_repository import (
     EditOperationRepository,
 )
 from backend.travel_v2.repositories.trip_repository import TripRepository
+from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_edit_service import (
     IdempotencyConflict,
     TripEditService,
@@ -648,6 +649,10 @@ class TripAIEditService:
                 raise ValueError("AI may update only an item's time or duration")
             return normalized
         normalized = operation.model_dump(mode="json")
+        if operation.op == "replace_place":
+            normalized["selection_id"] = stable_selection_id(
+                "place", "tencent:lbs", normalized["place"]["place_id"],
+            )
         if operation.op == "add_activity":
             normalized["duration_min"] = operation.duration_min
         return normalized
@@ -728,11 +733,22 @@ class TripAIEditService:
             if item_id not in item_by_id:
                 raise ValueError("候选目标不属于当前 Trip")
             matches = TripAIEditService._mentioned_items(message, document)
+            if op == "replace_place":
+                replacement_name = operation["place"]["name"]
+                destination_ids = {
+                    item["item_id"]
+                    for day in days for item in day["items"]
+                    if item["title"] == replacement_name
+                    or (item.get("place") or {}).get("name") == replacement_name
+                }
+                matches = [item_id for item_id in matches if item_id not in destination_ids]
             if len(matches) != 1 or matches[0] != item_id:
                 raise ValueError("用户修改目标不唯一或与候选不符")
             _day, item = item_by_id[item_id]
             if item.get("locked"):
                 raise ValueError("locked 行程项不能通过 AI 修改")
+            if item.get("fixed_start"):
+                raise ValueError("fixed_start 行程项不能通过 AI 修改")
             must_visit_ids = {
                 selection["place_id"]
                 for selection in document.get("selections", [])
@@ -777,6 +793,8 @@ class TripAIEditService:
                     raise ValueError("移动目标日期不明确或与用户请求不符")
             elif op == "replace_place":
                 replacement = operation["place"]
+                if replacement == item.get("place"):
+                    raise ValueError("替换地点与当前地点相同")
                 known_places = [
                     current.get("place") for _, current in item_by_id.values()
                     if current.get("place")
@@ -851,24 +869,81 @@ class TripAIEditService:
         if value is None:
             return True
         target = dt_time.fromisoformat(value)
-        candidates = {value, f"{target.hour:02d}:{target.minute:02d}"}
-        for candidate in candidates:
-            if candidate in message:
-                return True
-        return bool(re.search(rf"(?<!\d){target.hour}(?:点|时)(?!\d)", message))
+        target_time = (target.hour, target.minute, target.second)
+        mentioned: list[tuple[int, tuple[int, int, int]]] = []
+        for match in re.finditer(
+            r"(?<!\d)(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)", message,
+        ):
+            clock = (
+                int(match.group(1)), int(match.group(2)),
+                int(match.group(3) or 0),
+            )
+            mentioned.append((match.start(), clock))
+        for match in re.finditer(
+            r"(?<!\d)(\d{1,2})\s*(?:点|时)(?:(\d{1,2})\s*分?|半|整)?",
+            message,
+        ):
+            hour = int(match.group(1))
+            minute_text = match.group(2)
+            minute = int(minute_text) if minute_text else (
+                30 if "半" in match.group(0) else 0
+            )
+            mentioned.append((match.start(), (hour, minute, 0)))
+        return bool(mentioned) and max(mentioned, key=lambda entry: entry[0])[1] == target_time
 
     @staticmethod
     def _mentions_duration(message: str, value: int) -> bool:
-        literals = {"半小时": 30, "一小时": 60, "两小时": 120, "三小时": 180}
-        if any(token in message and minutes == value for token, minutes in literals.items()):
-            return True
-        return any(
-            int(amount) == value and unit in {"分钟", "分"}
-            for amount, unit in re.findall(r"(\d{1,3})\s*(分钟|分)", message)
-        ) or any(
-            int(amount) * 60 == value and unit in {"小时", "时"}
-            for amount, unit in re.findall(r"(\d{1,2})\s*(小时|时)", message)
+        number = r"(?:\d{1,3}|[零一两二三四五六七八九十]+|半)"
+        pattern = re.compile(
+            rf"(?<![\d.])(?:(?P<hours>{number})(?:个)?(?P<half_before>半)?\s*"
+            rf"(?:小时|时)(?P<half_after>半)?\s*)?"
+            rf"(?:(?P<minutes>{number})\s*(?:分钟|分))?"
         )
+
+        def parse_number(text: str, *, half_allowed: bool) -> int | None:
+            if text.isdigit():
+                return int(text)
+            if text == "半":
+                return 30 if half_allowed else None
+            digits = {
+                "零": 0, "一": 1, "两": 2, "二": 2, "三": 3,
+                "四": 4, "五": 5, "六": 6, "七": 7, "八": 8,
+                "九": 9,
+            }
+            if text == "十":
+                return 10
+            if "十" in text:
+                tens, ones = text.split("十", 1)
+                if (tens and tens not in digits) or (ones and ones not in digits):
+                    return None
+                return (digits[tens] if tens else 1) * 10 + digits.get(ones, 0)
+            if len(text) == 1:
+                return digits.get(text)
+            return None
+
+        parsed: list[int] = []
+        for match in pattern.finditer(message):
+            hours_text = match.group("hours")
+            minutes_text = match.group("minutes")
+            if not hours_text and not minutes_text:
+                continue
+            total = 0
+            if hours_text:
+                hours = parse_number(hours_text, half_allowed=True)
+                if hours is None:
+                    continue
+                total += hours if hours_text == "半" else hours * 60
+                if match.group("half_before") or match.group("half_after"):
+                    if hours_text == "半":
+                        continue
+                    total += 30
+            if minutes_text:
+                minutes = parse_number(minutes_text, half_allowed=False)
+                if minutes is None:
+                    continue
+                total += minutes
+            parsed.append(total)
+        return bool(parsed) and parsed[-1] == value
 
     @staticmethod
     def _diff(operation: dict) -> dict:

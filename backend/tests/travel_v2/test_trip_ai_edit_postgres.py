@@ -510,6 +510,49 @@ def test_multi_operation_request_is_rejected_without_partial_success(
         _cleanup(trip_id)
 
 
+def test_replace_place_derives_selection_id_and_commits_current_snapshot(
+    trip_api, monkeypatch,
+) -> None:
+    document = valid_document()
+    document["days"][0]["items"][0]["must_visit"] = False
+    document["selections"][0]["preference"] = "interested"
+    destination = {
+        "place_id": "lingyin", "name": "灵隐寺", "lat": 30.24,
+        "lng": 120.15, "address": "杭州市西湖区",
+        "facts": {
+            "verification": "unknown", "source": "tencent:lbs",
+            "observed_at": "2026-10-09T08:00:00+08:00",
+        },
+    }
+    document["days"][0]["items"].append({
+        "item_id": "item-2", "kind": "place", "title": "灵隐寺",
+        "start_time": "14:00", "duration_min": 60,
+        "fixed_start": False, "place": destination,
+        "must_visit": False, "locked": False, "note": "",
+    })
+    trip_id, headers = _create_trip(trip_api, document)
+    key = f"replace-{uuid.uuid4().hex}"
+    _install_candidate(monkeypatch, {
+        "op": "replace_place", "item_id": "item-1", "place": destination,
+    })
+    try:
+        result = trip_api.post(
+            f"/travel/v2/trips/{trip_id}/ai-edits",
+            headers={**headers, "Idempotency-Key": key},
+            json={
+                "expected_revision": 1,
+                "user_message": "把西湖换成灵隐寺",
+            },
+        )
+        assert result.status_code == 200
+        assert result.json()["saved"] is True
+        assert result.json()["new_revision"] == 2
+        assert result.json()["document"]["days"][0]["items"][0]["place"]["place_id"] == "lingyin"
+        assert _database_state(trip_id, key)[:4] == (2, 2, 1, "succeeded")
+    finally:
+        _cleanup(trip_id)
+
+
 def test_trip_change_during_generation_fails_cas_without_ai_revision(
     trip_api, monkeypatch,
 ) -> None:

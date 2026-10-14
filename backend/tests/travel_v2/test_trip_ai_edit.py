@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.models.ai_edit import AITripEditCandidate
+from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_ai_edit_service import (
     AIEditModelOutputError,
     TripAIEditService,
@@ -49,6 +50,25 @@ def test_ai_edit_candidate_schema_requires_one_typed_operation() -> None:
             "operation": {"op": "remove_item", "item_id": "item-1"},
             "extra": "must be rejected",
         })
+
+    replace_candidate = AITripEditCandidate.model_validate({
+        "outcome": "candidate", "change_summary": "替换为当前行程地点",
+        "operation": {
+            "op": "replace_place", "item_id": "item-1",
+            "place": {
+                "place_id": "current-place", "name": "灵隐寺",
+                "lat": 30.24, "lng": 120.15, "address": "杭州市西湖区",
+                "facts": {
+                    "verification": "unknown", "source": "tencent:lbs",
+                    "observed_at": "2026-10-09T08:00:00+08:00",
+                },
+            },
+        },
+    })
+    normalized = TripAIEditService._normalized_operation(replace_candidate)
+    assert normalized["selection_id"] == stable_selection_id(
+        "place", "tencent:lbs", "current-place",
+    )
 
 
 def test_ai_edit_managed_prompt_renders_without_trip_data_variables() -> None:
@@ -125,6 +145,12 @@ def test_ai_edit_rejects_multi_operation_scope_and_protected_item_removal() -> N
             {"op": "remove_item", "item_id": "item-evening"},
         )
 
+    with pytest.raises(ValueError, match="fixed_start"):
+        TripAIEditService._validate_scope(
+            "把晚间活动停留时长改为120分钟", fixed_document,
+            {"op": "update_item", "item_id": "item-evening", "duration_min": 120},
+        )
+
     fixed_document = _evening_document()
     changed_fixed = TripEditService._apply_structured_operation(
         fixed_document,
@@ -158,6 +184,58 @@ def test_ai_add_activity_inserts_at_requested_time_without_reordering_neighbors(
         "西湖", "午餐", "晚间活动",
     ]
     assert changed["days"][0]["items"][-1]["fixed_start"] is True
+
+
+def test_ai_clock_and_duration_matching_preserve_the_requested_precision() -> None:
+    assert TripAIEditService._mentions_clock("改到10点", "10:00")
+    assert not TripAIEditService._mentions_clock("改到10点", "10:30")
+    assert TripAIEditService._mentions_clock("改到10点半", "10:30")
+    assert not TripAIEditService._mentions_clock("改到10:00", "10:00:30")
+    assert TripAIEditService._mentions_clock("改到10:00:30", "10:00:30")
+    assert TripAIEditService._mentions_clock("从10:00改到10:30", "10:30")
+    assert not TripAIEditService._mentions_clock("从10:00改到10:30", "10:00")
+
+    assert TripAIEditService._mentions_duration("改为一小时30分钟", 90)
+    assert not TripAIEditService._mentions_duration("改为一小时30分钟", 60)
+    assert TripAIEditService._mentions_duration("改为1小时30分", 90)
+    assert not TripAIEditService._mentions_duration("改为1小时30分", 60)
+    assert TripAIEditService._mentions_duration("从60分钟改为120分钟", 120)
+    assert not TripAIEditService._mentions_duration("从60分钟改为120分钟", 60)
+
+
+def test_replace_place_uses_only_current_snapshot_and_ignores_destination_as_target() -> None:
+    from backend.travel_v2.models.trip import TripDocumentV2
+
+    document = valid_document()
+    document["days"][0]["items"][0]["must_visit"] = False
+    document["selections"][0]["preference"] = "interested"
+    destination = {
+        "place_id": "lingyin", "name": "灵隐寺", "lat": 30.24,
+        "lng": 120.15, "address": "杭州市西湖区",
+        "facts": {
+            "verification": "unknown", "source": "tencent:lbs",
+            "observed_at": "2026-10-09T08:00:00+08:00",
+        },
+    }
+    document["days"][0]["items"].append({
+        "item_id": "item-2", "kind": "place", "title": "灵隐寺",
+        "start_time": "14:00", "duration_min": 60,
+        "fixed_start": False, "place": destination,
+        "must_visit": False, "locked": False, "note": "",
+    })
+    document = TripDocumentV2.model_validate(document).model_dump(mode="json")
+    candidate = AITripEditCandidate.model_validate({
+        "outcome": "candidate", "change_summary": "把西湖替换为灵隐寺",
+        "operation": {
+            "op": "replace_place", "item_id": "item-1",
+            "place": destination,
+        },
+    })
+    operation = TripAIEditService._normalized_operation(candidate)
+
+    TripAIEditService._validate_scope("把西湖换成灵隐寺", document, operation)
+    changed = TripEditService._apply_structured_operation(document, operation)
+    assert changed["days"][0]["items"][0]["place"]["place_id"] == "lingyin"
 
 
 def test_ai_candidate_call_keeps_request_data_in_untrusted_human_message(monkeypatch) -> None:

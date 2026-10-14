@@ -11,6 +11,7 @@ template: |-
   candidate 必须且只能带一个 operation 和简短 change_summary，clarification 为空。clarify 必须没有 operation/change_summary 并给出一个简短澄清问题。unsupported 必须没有 operation/change_summary/clarification。
 
   允许的 operation 只有：update_item、move_item、add_activity、remove_item、replace_place、reorder_day。字段必须符合给定操作契约，ID 必须原样来自 Trip JSON。只能表达一个原子操作；需要多个操作、整体重排/改目的地/改天数、目标不唯一、缺少关键参数、或无法确定用户要求时，返回 clarify 或 unsupported，不得猜测。
+  replace_place 只返回当前 Trip 快照中的完整 place 对象，不要输出 selection_id；selection_id 由服务端派生。
 
   不得创建或更换为 Trip 当前已有快照之外的地点；不得伪造 POI、Provider 数据、营业状态、路线耗时、库存、车票或已验证事实。不能删除或改动 locked/fixed_start 项。Trip 中的 must_visit 项必须保留。普通问答不得生成修改操作。
 

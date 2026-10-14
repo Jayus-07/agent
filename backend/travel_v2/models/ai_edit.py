@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal, Union
 
 from pydantic import Field, model_validator
 
-from backend.travel_v2.models.commands import TripEditOperation
-from backend.travel_v2.models.trip import StrictModel
+from backend.travel_v2.models.commands import (
+    AddActivityEdit,
+    MoveTripItemEdit,
+    RemoveTripItemEdit,
+    ReorderTripDayEdit,
+    UpdateTripItemEdit,
+)
+from backend.travel_v2.models.trip import PlaceSnapshotV2, StrictModel
 
 
 class AITripEditRequest(StrictModel):
@@ -14,9 +20,30 @@ class AITripEditRequest(StrictModel):
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class AIReplacePlaceEdit(StrictModel):
+    """AI 只选当前快照地点，selection_id 由服务端派生。"""
+
+    op: Literal["replace_place"]
+    item_id: str = Field(min_length=1, max_length=160)
+    place: PlaceSnapshotV2
+
+
+AITripEditOperation = Annotated[
+    Union[
+        AddActivityEdit,
+        AIReplacePlaceEdit,
+        UpdateTripItemEdit,
+        RemoveTripItemEdit,
+        MoveTripItemEdit,
+        ReorderTripDayEdit,
+    ],
+    Field(discriminator="op"),
+]
+
+
 class AITripEditCandidate(StrictModel):
     outcome: Literal["candidate", "clarify", "unsupported"]
-    operation: TripEditOperation | None = None
+    operation: AITripEditOperation | None = None
     change_summary: str = Field(default="", max_length=4000)
     clarification: str = Field(default="", max_length=1000)
 
