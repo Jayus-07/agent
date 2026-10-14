@@ -50,6 +50,8 @@ def get_context_from_state(state: dict | None) -> RequestContext | None:
             user_id=ctx.get("user_id", "default"),
             tenant_id=ctx.get("tenant_id", ""),
             domain_hint=ctx.get("domain_hint", ""),
+            product_id=ctx.get("product_id", "internal"),
+            product_source=ctx.get("product_source", "internal_call"),
             idempotency_key=ctx.get("idempotency_key", ""),
             kb_id=ctx.get("kb_id", "default"),
             department=ctx.get("department", ""),

@@ -41,12 +41,9 @@ export function useCSChat() {
           question,
           session_id: sessionId,
           request_id: requestId,
-          // 客服窗口锁域（2026-09-18）：用户已显式进入客服窗口，每条消息
-          // 直接进客服管线，不再重新判域（否则"下周去大阪怎么玩"会漏进
-          // 旅游域图硬答）也不受灰度分组影响。
-          domain_hint: "customer_service",
         },
         controller.signal,
+        "customer-service",
       )) {
         if (controller.signal.aborted) return
 
@@ -129,7 +126,7 @@ export function useCSChat() {
     const requestId = store.currentRequestId
     abortRef.current?.abort()
     if (requestId) {
-      await abortChat(sessionId, requestId)
+      await abortChat(sessionId, requestId, "customer-service")
     }
   }, [])
 

@@ -59,6 +59,7 @@ class _FakeService:
         self.seen_user_id: str | None = None
         self.seen_tenant_id: str | None = None
         self.seen_memory_id: str | None = None
+        self.seen_session_id: str | None = None
         self.seen_before: str | None = None
         self.seen_before_session_id: str | None = None
 
@@ -138,6 +139,7 @@ class _FakeService:
     ) -> dict:
         self.seen_user_id = user_id
         self.seen_tenant_id = tenant_id
+        self.seen_session_id = session_id
         return self._payload
 
     async def get_session_context(
@@ -146,6 +148,7 @@ class _FakeService:
     ) -> dict:
         self.seen_user_id = user_id
         self.seen_tenant_id = tenant_id
+        self.seen_session_id = session_id
         return self._payload
 
     async def rename_session(
@@ -154,6 +157,7 @@ class _FakeService:
     ) -> dict:
         self.seen_user_id = user_id
         self.seen_tenant_id = tenant_id
+        self.seen_session_id = session_id
         return self._payload
 
     async def delete_session(
@@ -162,6 +166,7 @@ class _FakeService:
     ) -> dict:
         self.seen_user_id = user_id
         self.seen_tenant_id = tenant_id
+        self.seen_session_id = session_id
         return self._payload
 
     async def list_extraction_jobs(
@@ -169,6 +174,7 @@ class _FakeService:
     ) -> dict:
         self.seen_user_id = user_id
         self.seen_tenant_id = tenant_id
+        self.seen_session_id = session_id
         return self._payload
 
 
@@ -191,7 +197,7 @@ def test_list_sessions_success_returns_200(client_factory):
     service = _FakeService({"sessions": [{"session_id": "s1", "title": "t"}], "total": 1})
     client = client_factory(service)
     res = client.get(
-        "/memory/sessions?tenant_id=attacker",
+        "/memory/agent/sessions?tenant_id=attacker",
         headers={
             "X-User-Id": "15", "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
         },
@@ -199,7 +205,7 @@ def test_list_sessions_success_returns_200(client_factory):
     assert res.status_code == 200
     assert res.json()["total"] == 1
     # 2026-09-16 按登录用户隔离：user_id 必须来自身份头，而非查询参数
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
 
 
@@ -213,50 +219,96 @@ def test_session_routes_pass_trusted_tenant_scope(client_factory):
     }
 
     for method, path, kwargs in (
-        ("get", "/memory/sessions/session-a", {}),
-        ("get", "/memory/sessions/session-a/context", {}),
-        ("delete", "/memory/sessions/session-a", {}),
-        ("patch", "/memory/sessions/session-a", {"json": {"title": "更新"}}),
+        ("get", "/memory/agent/sessions/session-a", {}),
+        ("get", "/memory/agent/sessions/session-a/context", {}),
+        ("delete", "/memory/agent/sessions/session-a", {}),
+        ("patch", "/memory/agent/sessions/session-a", {"json": {"title": "更新"}}),
     ):
         response = getattr(client, method)(path + "?tenant_id=attacker", headers=headers, **kwargs)
         assert response.status_code == 200
-        assert service.seen_user_id == "15"
+        assert service.seen_user_id == "agent::15"
         assert service.seen_tenant_id == "tenant-a"
+        assert service.seen_session_id == "agent::session-a"
 
 
 def test_list_sessions_guest_returns_401(client_factory):
     """未认证（无网关注入身份头）→ 401，不再落到 user_id="default" 共享桶"""
     client = client_factory(_FakeService({"sessions": [], "total": 0}))
-    res = client.get("/memory/sessions")
+    res = client.get("/memory/agent/sessions")
     assert res.status_code == 401
+
+
+def test_shared_memory_path_is_disabled(client_factory):
+    """共享旧路径无法确定产品身份，不能继续读写持久记忆。"""
+    client = client_factory(_FakeService({"sessions": [], "total": 0}))
+    res = client.get(
+        "/memory/sessions",
+        headers={
+            "X-User-Id": "15", "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+        },
+    )
+    assert res.status_code == 403
+
+
+def test_product_memory_requires_trusted_tenant(client_factory):
+    client = client_factory(_FakeService({"sessions": [], "total": 0}))
+    res = client.get("/memory/agent/sessions", headers={"X-User-Id": "15"})
+    assert res.status_code == 403
+
+
+def test_memory_user_and_session_namespaces_include_product(client_factory):
+    service = _FakeService({"messages": [], "session_id": "session-a"})
+    client = client_factory(service)
+    headers = {
+        "X-User-Id": "15",
+        "X-Tenant-Id": "tenant-a",
+        "X-Auth-Type": "jwt",
+    }
+
+    agent_response = client.get(
+        "/memory/agent/sessions/session-a", headers=headers,
+    )
+    assert agent_response.status_code == 200
+    assert service.seen_user_id == "agent::15"
+    assert service.seen_session_id == "agent::session-a"
+
+    cs_response = client.get(
+        "/memory/customer-service/sessions/session-a", headers=headers,
+    )
+    assert cs_response.status_code == 200
+    assert service.seen_user_id == "customer_service::15"
+    assert service.seen_session_id == "customer-service::session-a"
 
 
 def test_list_sessions_rejects_self_reported_user_id(client_factory):
     """回归防护：?user_id= 自报参数必须被无视（隔离前的旧调用方式）"""
     service = _FakeService({"sessions": [], "total": 0})
     client = client_factory(service)
-    res = client.get("/memory/sessions?user_id=999", headers={"X-User-Id": "15"})
+    res = client.get(
+        "/memory/agent/sessions?user_id=999",
+        headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
+    )
     assert res.status_code == 200
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
 
 
 def test_list_sessions_passes_stable_cursor_to_service(client_factory):
     service = _FakeService({"sessions": [], "total": 0})
     client = client_factory(service)
     res = client.get(
-        "/memory/sessions?before=2026-10-10T12%3A00%3A00%2B00%3A00&before_session_id=s-1",
-        headers={"X-User-Id": "15"},
+        "/memory/agent/sessions?before=2026-10-10T12%3A00%3A00%2B00%3A00&before_session_id=s-1",
+        headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
     )
     assert res.status_code == 200
     assert service.seen_before == "2026-10-10T12:00:00+00:00"
-    assert service.seen_before_session_id == "s-1"
+    assert service.seen_before_session_id == "agent::s-1"
 
 
 def test_profile_uses_authenticated_tenant_scope(client_factory):
     service = _FakeService({"records": [], "total": 0})
     client = client_factory(service)
     res = client.get(
-        "/memory/profile?tenant_id=attacker",
+        "/memory/agent/profile?tenant_id=attacker",
         headers={
             "X-User-Id": "15",
             "X-Tenant-Id": "tenant-a",
@@ -264,7 +316,7 @@ def test_profile_uses_authenticated_tenant_scope(client_factory):
         },
     )
     assert res.status_code == 200
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
 
 
@@ -272,7 +324,7 @@ def test_delete_profile_memory_uses_owner_and_tenant_scope(client_factory):
     service = _FakeService({"ok": True, "memory_id": "m-1"})
     client = client_factory(service)
     res = client.delete(
-        "/memory/profile/m-1?user_id=attacker&tenant_id=other",
+        "/memory/agent/profile/m-1?user_id=attacker&tenant_id=other",
         headers={
             "X-User-Id": "15",
             "X-Tenant-Id": "tenant-a",
@@ -280,14 +332,14 @@ def test_delete_profile_memory_uses_owner_and_tenant_scope(client_factory):
         },
     )
     assert res.status_code == 200
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
     assert service.seen_memory_id == "m-1"
 
 
 def test_delete_profile_memory_guest_returns_401(client_factory):
     client = client_factory(_FakeService({"ok": True}))
-    res = client.delete("/memory/profile/m-1")
+    res = client.delete("/memory/agent/profile/m-1")
     assert res.status_code == 401
 
 
@@ -301,17 +353,17 @@ def test_pending_profile_and_verify_use_authenticated_scope(client_factory):
     }
 
     pending = client.get(
-        "/memory/profile/pending?tenant_id=attacker", headers=headers,
+        "/memory/agent/profile/pending?tenant_id=attacker", headers=headers,
     )
     assert pending.status_code == 200
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
 
     verified = client.post(
-        "/memory/profile/m-1/verify?user_id=attacker", headers=headers,
+        "/memory/agent/profile/m-1/verify?user_id=attacker", headers=headers,
     )
     assert verified.status_code == 200
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
     assert service.seen_memory_id == "m-1"
 
@@ -320,7 +372,7 @@ def test_extraction_status_uses_authenticated_scope(client_factory):
     service = _FakeService({"jobs": [{"status": "pending"}], "total": 1})
     client = client_factory(service)
     res = client.get(
-        "/memory/sessions/session-a/extractions?tenant_id=attacker",
+        "/memory/agent/sessions/session-a/extractions?tenant_id=attacker",
         headers={
             "X-User-Id": "15",
             "X-Tenant-Id": "tenant-a",
@@ -329,7 +381,7 @@ def test_extraction_status_uses_authenticated_scope(client_factory):
     )
     assert res.status_code == 200
     assert res.json()["jobs"][0]["status"] == "pending"
-    assert service.seen_user_id == "15"
+    assert service.seen_user_id == "agent::15"
     assert service.seen_tenant_id == "tenant-a"
 
 
@@ -338,14 +390,20 @@ def test_list_sessions_db_failure_returns_503_not_empty_200(client_factory):
     client = client_factory(_FakeService(
         {"sessions": [], "total": 0, "error": "connection was closed in the middle of operation"}
     ))
-    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
+    res = client.get(
+        "/memory/agent/sessions",
+        headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
+    )
     assert res.status_code == 503
     assert "记忆库不可用" in res.json()["detail"]
 
 
 def test_delete_missing_session_returns_404(client_factory):
     client = client_factory(_FakeService({"ok": False, "error": "会话不存在"}))
-    res = client.delete("/memory/sessions/does-not-exist", headers={"X-User-Id": "15"})
+    res = client.delete(
+        "/memory/agent/sessions/does-not-exist",
+        headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
+    )
     assert res.status_code == 404
 
 
@@ -357,7 +415,10 @@ def test_memory_db_unavailable_is_handled_as_503(client_factory):
             raise MemoryDatabaseUnavailable("PostgreSQL 连接配置缺失: PGPASSWORD")
 
     client = client_factory(_BrokenService())
-    res = client.get("/memory/sessions", headers={"X-User-Id": "15"})
+    res = client.get(
+        "/memory/agent/sessions",
+        headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
+    )
     assert res.status_code == 503
     # HTTP 错误协议对依赖不可用统一使用 UPSTREAM_UNAVAILABLE；异常类名
     # 仅用于服务端日志，不作为外部契约泄露。

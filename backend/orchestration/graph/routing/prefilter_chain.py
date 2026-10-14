@@ -59,7 +59,7 @@ def _mark_route_from_update(state: dict, update: dict) -> dict:
 
             mark_domain_turn(
                 state.get("tenant_id") or "", state.get("user_id") or "",
-                state.get("session_id") or "",
+                state.get("product_session_id") or state.get("session_id") or "",
                 domain=domain or "customer_service",
                 intent=mode, action=domain or mode,
                 pending_question=pending,
@@ -207,27 +207,93 @@ def _with_router_decisions(
 
 
 def _try_general_chat(state: dict) -> dict | None:
-    """问候/能力咨询（Guard GREETING 判定）→ general_chat 直答分流。
+    """普通对话与显式一般概念问答走既有 general_chat 直答路径。
 
-    仅全局入口生效；客服窗口锁域语义不变（寒暄仍进 CS 管线）。
+    仅服务端注册的主助手入口扩展概念问答快路径；客服窗口锁域语义不变。
+    私有制度、数据、订单状态和有活跃域任务的追问仍交给原路由判断。
     """
     try:
         category = ((state.get("guard_result") or {}).get("category") or "")
         if category == "greeting":
             logger.info("[RouterNode] Guard GREETING → general_chat 直答")
-            return route_update_for_mode(
-                "general_chat",
-                extra={
-                    "route_decision": None,
-                    "query_understanding": {
-                        "intent": "greeting",
-                        "complexity": "chat",
-                    },
+            intent = "greeting"
+        else:
+            intent = "general_chat"
+
+        query = str(state.get("question") or state.get("query") or "").strip()
+        request_context = state.get("request_context")
+        if isinstance(request_context, dict):
+            product_id = request_context.get("product_id") or state.get("product_id")
+            product_source = request_context.get("product_source") or state.get("product_source")
+        else:
+            product_id = getattr(request_context, "product_id", None) or state.get("product_id")
+            product_source = getattr(request_context, "product_source", None) or state.get("product_source")
+
+        if category != "greeting" and not (
+            product_id == "agent" and product_source == "registered_route"
+        ):
+            return None
+
+        if category != "greeting" and _is_general_conversation_prompt(query, state):
+            logger.info("[RouterNode] 主助手一般问答 → general_chat 直答")
+            intent = "general_chat"
+        elif category != "greeting":
+            return None
+
+        return route_update_for_mode(
+            "general_chat",
+            extra={
+                "route_decision": None,
+                "query_understanding": {
+                    "intent": intent,
+                    "complexity": "chat",
                 },
-            )
+            },
+        )
     except Exception:
         logger.debug("[RouterNode] general_chat 判定失败，走正常路由", exc_info=True)
     return None
+
+
+_GENERAL_EXPLANATION_PROMPT = re.compile(
+    r"(?:什么是|是什么|是什么意思|怎么理解|如何理解|有何区别|有什么区别|"
+    r"解释(?:一下|下)?|说明(?:一下|下)?|介绍(?:一下|下)?|讲讲)"
+)
+_GENERAL_LOCATION_PROMPT = re.compile(
+    r"^[^，。！？?]{1,32}(?:在哪里|在哪儿|在哪个省|属于哪个国家)[？?。！!]*$"
+)
+_GENERAL_CONVERSATION_PROMPT = re.compile(
+    r"(?:随便聊聊|聊聊(?:吧|最近|一下)?|说说(?:看)?|今天天气(?:怎么样|如何|不错)?|"
+    r"最近.{1,8}(?:怎么样|如何)|给我讲个笑话)"
+)
+_FOLLOW_UP_PROMPT = re.compile(
+    r"^(?:继续|接着说|再解释(?:一下|下)?|重新解释|换一种说法|举个例子|"
+    r"上面第?[一二三四五六七八九十\d]+点|刚才第?[一二三四五六七八九十\d]+点)[。！？?！]*$"
+)
+_PRIVATE_FACT_PROMPT = re.compile(
+    r"(?:本公司|我们公司|公司的|公司内部|企业内部|内部知识库|知识库|"
+    r"制度|政策|规定|流程|SOP|员工手册|内部文档|业务文档|经营数据|"
+    r"销售额|销量|库存|报表|数据库|订单号|退款申请|申请状态|本人名下|"
+    r"我的订单|我的账户|查询|统计|近\s*\d+\s*(?:天|周|月))",
+    re.IGNORECASE,
+)
+
+
+def _is_general_conversation_prompt(query: str, state: dict) -> bool:
+    """只识别显式的一般对话表达；不代替域/能力分类。"""
+    if not query or len(query) > 160 or _PRIVATE_FACT_PROMPT.search(query):
+        return False
+
+    routing_context = state.get("routing_context") or {}
+    if isinstance(routing_context, dict) and routing_context.get("active_domain"):
+        return False
+
+    return bool(
+        _GENERAL_EXPLANATION_PROMPT.search(query)
+        or _GENERAL_LOCATION_PROMPT.fullmatch(query)
+        or _GENERAL_CONVERSATION_PROMPT.search(query)
+        or _FOLLOW_UP_PROMPT.fullmatch(query)
+    )
 
 
 def cs_rule_hits_of(query: str) -> int:

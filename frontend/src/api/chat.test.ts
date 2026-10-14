@@ -49,15 +49,15 @@ describe("streamChat SSE 恢复", () => {
       session_id: "synthetic-session",
       request_id: "req-1",
       idempotency_key: "idem-1",
-    })) {
+    }, undefined, "agent")) {
       received.push(event as unknown as { event: string; data: Record<string, unknown> });
     }
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const [initialUrl, initialInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [resumeUrl, resumeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
-    expect(initialUrl).toBe("/api/chat/stream");
-    expect(resumeUrl).toBe("/api/chat/stream/resume");
+    expect(initialUrl).toBe("/api/chat/agent/stream");
+    expect(resumeUrl).toBe("/api/chat/agent/stream/resume");
     expect(initialInit.body).toContain('"question":"合成续传验收"');
     expect(JSON.parse(String(resumeInit.body))).toEqual({ request_id: "req-1", after_seq: 2 });
     expect(new Headers(initialInit.headers).get("Idempotency-Key")).toBe("idem-1");

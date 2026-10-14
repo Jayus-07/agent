@@ -142,7 +142,12 @@ def test_engine_composes_domain_capability_and_execution_decisions():
     assert domain_router.calls == [("查库存", {"routing_context": {"active_domain": "data"}})]
     assert capability_router.calls == [(
         "data", "查库存",
-        {"active_domain": "data", "_verified_roles": (), "_verified_scopes": ()},
+        {
+            "active_domain": "data",
+            "product_id": "internal",
+            "_verified_roles": (),
+            "_verified_scopes": (),
+        },
     )]
     assert mode_resolver.calls[0][0] == _domain()
 

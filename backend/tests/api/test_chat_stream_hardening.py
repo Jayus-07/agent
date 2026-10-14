@@ -29,6 +29,16 @@ class _EchoAgent:
         yield {"event": "done", "data": {"elapsed": 0.0, "sources": []}}
 
 
+class _CapturingAgent:
+    def __init__(self):
+        self.calls = []
+
+    def stream_events(self, question, session_id, **kwargs):
+        self.calls.append((question, session_id, kwargs))
+        yield {"event": "delta", "data": {"content": "ok"}}
+        yield {"event": "done", "data": {"answer": "ok", "elapsed": 0.0}}
+
+
 @pytest.fixture()
 def client(monkeypatch):
     import backend.app.api.middleware.auth as auth_mw
@@ -179,30 +189,178 @@ class TestFinalFrameDelivery:
 class TestAbortSessionFallback:
     """#14 伴随：abort 精确 key 未命中时按 session 前缀兜底"""
 
+    @staticmethod
+    def _scope_key(session_id: str) -> tuple[str, tuple[str, str, str]]:
+        from backend.core.product_context import (
+            PUBLIC_PRODUCT,
+            identity_scope_key,
+            namespace_session_id,
+        )
+
+        user_id = "trusted-abort-user"
+        tenant_id = "tenant-abort"
+        session = namespace_session_id(PUBLIC_PRODUCT, session_id)
+        scoped = f"{identity_scope_key(PUBLIC_PRODUCT, user_id, tenant_id)}::{session}"
+        return scoped, (PUBLIC_PRODUCT.product_id, user_id, tenant_id)
+
+    @staticmethod
+    def _identity_headers() -> dict[str, str]:
+        return {
+            "X-API-Key": "test",
+            "X-Auth-Type": "jwt",
+            "X-User-Id": "trusted-abort-user",
+            "X-Tenant-Id": "tenant-abort",
+        }
+
     def test_abort_falls_back_to_session_prefix(self, client):
         import backend.app.api.routes.chat as chat_mod
 
+        scoped_session, owner = self._scope_key("fb-sess")
         evt = threading.Event()
-        chat_mod._active_stops["fb-sess:server-generated-uuid"] = evt
+        key = chat_mod._request_key(scoped_session, "server-generated-uuid")
+        chat_mod._active_stops[key] = evt
+        chat_mod._active_stop_owners[key] = owner
         try:
             # 旧客户端不回传服务端 id → 传 "default"，应命中前缀兜底
             resp = client.post(
                 "/chat/abort",
                 json={"session_id": "fb-sess", "request_id": "default"},
-                headers={"X-API-Key": "test"},
+                headers=self._identity_headers(),
             )
         finally:
-            chat_mod._active_stops.pop("fb-sess:server-generated-uuid", None)
+            chat_mod._active_stops.pop(key, None)
+            chat_mod._active_stop_owners.pop(key, None)
 
         assert resp.status_code == 200
         assert resp.json()["status"] == "aborted"
         assert evt.is_set(), "前缀兜底必须触发 stop_event"
 
+    @pytest.mark.parametrize(
+        "identity_override",
+        [
+            {"X-User-Id": "another-user", "X-Tenant-Id": "tenant-abort"},
+            {"X-User-Id": "trusted-abort-user", "X-Tenant-Id": "another-tenant"},
+        ],
+    )
+    def test_abort_cannot_stop_another_identity_stream(
+        self, client, identity_override,
+    ):
+        import backend.app.api.routes.chat as chat_mod
+
+        scoped_session, owner = self._scope_key("owned-sess")
+        evt = threading.Event()
+        key = chat_mod._request_key(scoped_session, "owned-request")
+        chat_mod._active_stops[key] = evt
+        chat_mod._active_stop_owners[key] = owner
+        try:
+            headers = {**self._identity_headers(), **identity_override}
+            response = client.post(
+                "/chat/abort",
+                json={"session_id": "owned-sess", "request_id": "owned-request"},
+                headers=headers,
+            )
+        finally:
+            chat_mod._active_stops.pop(key, None)
+            chat_mod._active_stop_owners.pop(key, None)
+
+        assert response.status_code == 200
+        assert response.json()["status"] == "not_found"
+        assert not evt.is_set()
+
     def test_abort_not_found_when_no_active_stream(self, client):
         resp = client.post(
             "/chat/abort",
             json={"session_id": "no-such-sess", "request_id": "default"},
-            headers={"X-API-Key": "test"},
+            headers=self._identity_headers(),
         )
         assert resp.status_code == 200
         assert resp.json()["status"] == "not_found"
+
+
+class TestProductChatEntrypoints:
+    def test_agent_route_rejects_body_identity_without_gateway_identity(self, client):
+        response = client.post(
+            "/chat/agent/stream",
+            json={
+                "question": "你好", "session_id": "forged-session",
+                "user_id": "attacker", "domain_hint": "customer_service",
+                "product_id": "customer_service",
+            },
+            headers={"X-API-Key": "test"},
+        )
+        assert response.status_code == 401
+
+    @pytest.mark.parametrize(
+        ("path", "expected_product", "expected_domain", "spoofed_domain"),
+        [
+            ("/chat/agent/stream", "agent", "main", "customer_service"),
+            (
+                "/chat/customer-service/stream",
+                "customer_service", "customer_service", "main",
+            ),
+        ],
+    )
+    def test_registered_route_overrides_body_product_hints(
+        self, client, monkeypatch, path, expected_product,
+        expected_domain, spoofed_domain,
+    ):
+        import backend.app.api.routes.chat as chat_mod
+
+        agent = _CapturingAgent()
+        monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+        response = client.post(
+            path,
+            json={
+                "question": "请解释一下流程", "session_id": "business-session",
+                "request_id": f"request-{expected_product}",
+                "user_id": "attacker", "domain_hint": spoofed_domain,
+                "product_id": "public",
+            },
+            headers={
+                "X-API-Key": "test", "X-User-Id": "trusted-user",
+                "X-Tenant-Id": "tenant-a", "X-Auth-Type": "jwt",
+            },
+        )
+
+        assert response.status_code == 200
+        assert agent.calls
+        _, session_id, kwargs = agent.calls[0]
+        assert session_id == "business-session"
+        assert kwargs["product_id"] == expected_product
+        assert kwargs["domain_hint"] == expected_domain
+        assert kwargs["product_source"] == "registered_route"
+        assert kwargs["user_id"] == "trusted-user"
+        assert kwargs["tenant_id"] == "tenant-a"
+        assert kwargs["persist_memory"] is True
+
+    def test_agent_route_rejects_missing_tenant(self, client):
+        response = client.post(
+            "/chat/agent/stream",
+            json={"question": "你好", "session_id": "no-tenant"},
+            headers={"X-API-Key": "test", "X-User-Id": "trusted-user"},
+        )
+        assert response.status_code == 403
+
+    def test_shared_route_ignores_client_product_hints_and_disables_memory(
+        self, client, monkeypatch,
+    ):
+        import backend.app.api.routes.chat as chat_mod
+
+        agent = _CapturingAgent()
+        monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
+        response = client.post(
+            "/chat/stream",
+            json={
+                "question": "你好", "session_id": "legacy-session",
+                "request_id": "legacy-request", "user_id": "attacker",
+                "domain_hint": "customer_service", "product_id": "agent",
+            },
+            headers={"X-API-Key": "test"},
+        )
+
+        assert response.status_code == 200
+        _, _, kwargs = agent.calls[0]
+        assert kwargs["product_id"] == "public"
+        assert kwargs["domain_hint"] == ""
+        assert kwargs["persist_memory"] is False
+        assert kwargs["user_id"] == "anonymous"

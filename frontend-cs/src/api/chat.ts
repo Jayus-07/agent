@@ -37,10 +37,10 @@ function seqOf(evt: SSEStreamEvent): number | null {
 }
 
 /**
- * POST /chat/stream — 流式对话（F2 可恢复）
+ * POST /chat/customer-service/stream — 客服产品流式对话（F2 可恢复）
  *
  * 传输 at-least-once：断流（非 done/error 的意外终止）自动调
- * /chat/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
+ * /chat/customer-service/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
  * 404 STREAM_NOT_RESUMABLE（进程重启/超出缓冲窗口）如实上抛，由用户重发。
  */
 export async function* streamChat(
@@ -73,7 +73,9 @@ export async function* streamChat(
   });
 
   while (true) {
-    const path = attempt === 0 ? "/api/chat/stream" : "/api/chat/stream/resume";
+    const path = attempt === 0
+      ? "/api/chat/customer-service/stream"
+      : "/api/chat/customer-service/stream/resume";
     const body = attempt === 0 ? askBody : resumeBodyFor();
     let res = await doFetch(path, body);
 
@@ -127,7 +129,7 @@ export async function* streamChat(
  * POST /chat/abort — 中止当前对话
  */
 export async function abortChat(sessionId: string, requestId: string): Promise<void> {
-  await requestSilent("/api/chat/abort", {
+  await requestSilent("/api/chat/customer-service/abort", {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, request_id: requestId }),
   });

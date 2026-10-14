@@ -385,6 +385,29 @@ class BaseSkill(ABC):
         capability = sr["capability"]
         params = self._normalize_invocation_params(state, capability, params)
 
+        # 产品范围在 Skill/兼容 Tool 共同执行点复核，不能只依赖候选过滤。
+        request_context = state.get("request_context")
+        product_id = (
+            request_context.get("product_id")
+            if isinstance(request_context, dict)
+            else getattr(request_context, "product_id", None)
+        ) or state.get("product_id") or "internal"
+        from backend.core.product_context import product_allows_capability
+        if not product_allows_capability(
+            product_id,
+            capability,
+            (str(state.get("domain") or ""),) if state.get("domain") else (),
+        ):
+            sr.update(
+                status="failed", output=None,
+                error="当前产品入口不可执行该能力",
+                error_type="product_capability_denied",
+                error_code="product_capability_denied",
+                started_at=time.time(), finished_at=time.time(),
+            )
+            step_results[step_id] = dict(sr)
+            return {"step_results": {step_id: step_results[step_id]}}
+
         # ── 四层前置校验：参数 + 权限失败不可进入 Tool ──
         try:
             validate_invocation(

@@ -16,7 +16,7 @@ export default function ContextPanel({ sessionId }: { sessionId: string }) {
     let cancelled = false
     // 辅助信息条：失败时不占用界面提示（对话本身不受影响），
     // 但要校验 res.ok，避免把 4xx/5xx 的错误响应体当成上下文数据
-    fetchRaw(`/api/memory/sessions/${encodeURIComponent(sessionId)}/context`)
+    fetchRaw(`/api/memory/agent/sessions/${encodeURIComponent(sessionId)}/context`)
       .then(async (r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.json()

@@ -123,6 +123,16 @@ def require_identity(request: Request) -> Identity:
     return ident
 
 
+def require_product_identity(request: Request) -> Identity:
+    """产品入口要求可信用户和租户，空租户不得回退到共享 default。"""
+    from fastapi import HTTPException
+
+    ident = require_identity(request)
+    if not ident.tenant_id:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    return ident
+
+
 def resolve_principal(request: Request) -> "Principal":
     """统一主体入口（P1 授权收口）：Identity → Principal，RAG 等业务模块
     只接 Principal，不再自行推导 subject_type（谁/哪租户/哪部门/什么角色

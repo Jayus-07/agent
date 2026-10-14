@@ -340,6 +340,9 @@ class GraphRunner:
         tenant_id: str = "",
         idempotency_key: str = "",
         roles: tuple[str, ...] = (),
+        product_id: str = "internal",
+        product_source: str = "internal_call",
+        persist_memory: bool = True,
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -353,6 +356,12 @@ class GraphRunner:
         if stop_event is None:
             stop_event = threading.Event()
 
+        from backend.core.product_context import product_by_id, memory_user_id, namespace_session_id
+        product_context = product_by_id(product_id)
+        product_session_id = namespace_session_id(product_context, session_id)
+        memory_owner_id = (
+            memory_user_id(product_context, user_id) if persist_memory else user_id
+        )
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
@@ -366,7 +375,7 @@ class GraphRunner:
                 consume_clarify_click,
             )
 
-            clarify_click = consume_clarify_click(session_id, question or "")
+            clarify_click = consume_clarify_click(product_session_id, question or "")
             if clarify_click is not None:
                 from backend.observability.clarify_funnel import (
                     record_funnel_event,
@@ -375,7 +384,7 @@ class GraphRunner:
                 # trace 尚未建立（点击检测在 Guard 之前），身份必须显式传
                 record_funnel_event(
                     "clicked", source=clarify_click.get("source", ""),
-                    session_id=session_id)
+                    session_id=product_session_id)
                 logger.info(
                     "[Runner] 追问卡选项点击: source=%s q=%.40s",
                     clarify_click.get("source", ""), question or "")
@@ -392,7 +401,9 @@ class GraphRunner:
             logger.debug("[Runner] Prompt Runtime freshness check skipped", exc_info=True)
 
         # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
-        guard_result = get_input_guard().guard(question or "", session_id=session_id)
+        guard_result = get_input_guard().guard(
+            question or "", session_id=product_session_id,
+        )
         if guard_result.action in (GuardAction.BLOCK, GuardAction.CLARIFY):
             # 显式转人工豁免（2026-09-17）：guard 的「模糊问题→clarify」规则
             # 会把「转人工/找真人客服」类硬意图短路在图外（13ms 内直接回澄清
@@ -422,7 +433,7 @@ class GraphRunner:
                     "reason": f"customer_service_relay_bypass: {guard_result.reason}",
                 })
             else:
-                finish_guard_trace(session_id, guard_result)
+                finish_guard_trace(product_session_id, guard_result)
                 yield {"event": "status", "data": {"node": "input_guard", "ts": time.time()}}
                 # ── L1 业务化追问接管（2026-09-19 拒答转追问）────────
                 # guard 的「模糊/看不懂→clarify」只会给数据查询示例的通用
@@ -437,11 +448,11 @@ class GraphRunner:
                         mark_clarified,
                     )
 
-                    if clarify_allowed(session_id, question or ""):
+                    if clarify_allowed(product_session_id, question or ""):
                         clarify = build_entry_clarify(question or "", domain_hint)
                         if clarify is not None:
                             mark_clarified(
-                                session_id, question or "",
+                                product_session_id, question or "",
                                 options=clarify.get("options"),
                                 source=clarify.get("source", ""),
                             )
@@ -459,7 +470,7 @@ class GraphRunner:
                         )
 
                         set_pending_question(
-                            tenant_id, user_id, session_id,
+                            tenant_id, user_id, product_session_id,
                             clarify.get("question") or "",
                         )
                     except Exception:
@@ -482,7 +493,7 @@ class GraphRunner:
 
                         record_funnel_event(
                             "shown", source=str(clarify.get("source", "")),
-                            session_id=session_id)
+                            session_id=product_session_id)
                     except Exception:  # noqa: BLE001 — 漏斗旁路
                         pass
                     message = CLARIFY_STANDALONE_TEXT
@@ -491,7 +502,9 @@ class GraphRunner:
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
-                _funnel_note_resolved(clarify_click, message, session_id=session_id)
+                _funnel_note_resolved(
+                    clarify_click, message, session_id=product_session_id,
+                )
                 # 拦截提示非模型回答，归因=系统提示（前端标「系统提示」徽章）
                 yield make_done_event(message, {}, start_time,
                                       reply_source="system_notice",
@@ -515,7 +528,9 @@ class GraphRunner:
                 CSGuardAction.BLOCK,
                 CSGuardAction.CLARIFY,
             ):
-                finish_customer_service_guard_trace(session_id, cs_guard_result)
+                finish_customer_service_guard_trace(
+                    product_session_id, cs_guard_result,
+                )
                 yield {
                     "event": "status",
                     "data": {"node": "cs_input_guard", "ts": time.time()},
@@ -524,14 +539,20 @@ class GraphRunner:
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
-                _funnel_note_resolved(clarify_click, message, session_id=session_id)
+                _funnel_note_resolved(
+                    clarify_click, message, session_id=product_session_id,
+                )
                 yield make_done_event(message, {}, start_time,
                                       reply_source="system_notice",
                                       answer_source="cs_input_guard")
                 return
 
         # ── Tracing（提前到会话加载之前，使 memory/kb 加载耗时可归因）──
-        trace = trace_collector.start(question, session_id, workflow_name="agent")
+        trace = trace_collector.start(
+            question, product_session_id, workflow_name="agent",
+        )
+        trace.tags["product_id"] = product_id
+        trace.tags["product_source"] = product_source
         # 请求级 Prompt 版本 pin（治理 #5）：本次执行所用版本在开始时定格，
         # 发布中途换版不影响已快照的值；trace 按此 tag 回答「当时用的哪版」。
         try:
@@ -559,14 +580,14 @@ class GraphRunner:
         load_span = trace_collector.start_span(
             "session_load", name="会话/记忆加载", type="workflow",
             kind=SpanKind.KB_ROUTING.value,
-            input={"session_id": session_id})
+            input={"session_id": product_session_id})
         # STOP G observability：memory.retrieve span 贯穿（§七）。span 须在
         # 本侧创建——start_session 协程跑在 memory 后台 loop，无 ambient
         # trace；阶段计数由 service 经 l1.retrieval_stats 带回（仅
         # count/threshold 枚举，无记忆原文/PII）。
         retrieve_span = trace_collector.start_span(
             "memory.retrieve", name="长期记忆检索", type="retrieval",
-            input={"session_id": session_id})
+            input={"session_id": product_session_id})
         try:
             # 记忆作用域（2026-10-10 整合）：租户 + 业务域。domain_hint 非空时
             # 一并下发，使长期记忆按业务域隔离；manager.start_session 的
@@ -574,8 +595,16 @@ class GraphRunner:
             memory_scope = {"tenant_id": tenant_id}
             if domain_hint:
                 memory_scope["domain"] = domain_hint
-            l1 = self._memory.start_session(session_id, question, user_id=user_id,
-                                            **memory_scope)
+            if persist_memory:
+                from backend.core.product_context import product_by_id, memory_user_id
+                memory_owner_id = memory_user_id(product_by_id(product_id), user_id)
+                l1 = self._memory.start_session(
+                    product_session_id, question, user_id=memory_owner_id,
+                    **memory_scope,
+                )
+            else:
+                from backend.memory.short_term import ShortTermBuffer
+                l1 = ShortTermBuffer()
             trace_collector.end_span(
                 retrieve_span, metrics=dict(getattr(l1, "retrieval_stats", {}) or {}))
             initial_state = make_initial_state(
@@ -584,6 +613,9 @@ class GraphRunner:
                 user_id=user_id, department=department,
                 domain_hint=domain_hint, tenant_id=tenant_id,
             )
+            initial_state["product_id"] = product_id
+            initial_state["product_source"] = product_source
+            initial_state["product_session_id"] = product_session_id
             # 请求级 Prompt 版本随 state 流动（AgentState.prompt_versions，
             # checkpointer 开启时持久化——Celery 断点续跑恢复原版本）
             initial_state["prompt_versions"] = _pv
@@ -610,8 +642,8 @@ class GraphRunner:
                 trace=trace,
                 raw_question=question,
                 tenant_id=tenant_id,
-                user_id=user_id,
-                session_id=session_id,
+                user_id=memory_owner_id,
+                session_id=product_session_id,
                 l1_messages=l1.messages,
             )
             if effective_question is None:
@@ -625,7 +657,9 @@ class GraphRunner:
                 if fallback_deltas:
                     yield from emit_delta_events(message, stop_event)
                 yield {"event": _ANSWER_EVENT, "data": {"answer": message}}
-                _funnel_note_resolved(clarify_click, message, session_id=session_id)
+                _funnel_note_resolved(
+                    clarify_click, message, session_id=product_session_id,
+                )
                 # 澄清追问是系统发起的引导语，非模型回答
                 yield make_done_event(message, {}, start_time,
                                       reply_source="system_notice",
@@ -653,7 +687,7 @@ class GraphRunner:
             )
 
             initial_state["routing_context"] = assemble_routing_context(
-                tenant_id, user_id, session_id)
+                tenant_id, user_id, product_session_id)
         except Exception as e:
             logger.warning(f"[Runner] routing_context 组装失败（软降级）: {e}")
             initial_state["routing_context"] = {}
@@ -665,7 +699,7 @@ class GraphRunner:
         # 无 sink → 会话分桶缓冲；此处只补发【本会话】的事件。2026-10-01
         # STOP C 请求隔离：任意 runner 不再整队取走他人晚到事件）
         from backend.context_budget.metrics import drain_pending_events
-        for _early in drain_pending_events(session_id=session_id):
+        for _early in drain_pending_events(session_id=product_session_id):
             merged_q.put(("evt", {"event": "context", "data": _early}))
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
@@ -675,14 +709,15 @@ class GraphRunner:
         # 序列化（SQL 等数据面消费）；未声明角色 → data_scope 为空（消费方 fail-closed）
         from backend.security.authorization import widest_data_scope
         request_ctx = RequestContext(
-            session_id=session_id, user_id=user_id, kb_id=kb_id,
+            session_id=product_session_id, user_id=user_id, kb_id=kb_id,
             tenant_id=tenant_id, domain_hint=domain_hint,
             idempotency_key=idempotency_key,
             department=department, permissions=permissions,
             roles=tuple(roles),
             data_scope=widest_data_scope(tuple(roles)) or "",
             trace=trace, model=model,
-            deadline=RequestDeadline.started_now())
+            deadline=RequestDeadline.started_now(),
+            product_id=product_id, product_source=product_source)
         ctx = {
             "final_answer": "",
             "answer_source": "",
@@ -1030,17 +1065,19 @@ class GraphRunner:
             # 只在成功路径持久化一次。断连续传由 chat.py 重放同一流，不会
             # 重跑 Runner；中止/超时/异常在到达此处前退出，因此不写错误答案。
             if (answer and not ctx["memory_persisted"]
-                    and not ctx["cs_context_snapshot"].get("conversation_id")):
+                    and not ctx["cs_context_snapshot"].get("conversation_id")
+                    and persist_memory):
                 ctx["memory_persisted"] = True
                 try:
+                    from backend.core.product_context import product_by_id, memory_user_id
                     memory_kwargs = {
-                        "user_id": user_id,
+                        "user_id": memory_user_id(product_by_id(product_id), user_id),
                         "tenant_id": tenant_id,
                     }
                     if idempotency_key:
                         memory_kwargs["idempotency_key"] = idempotency_key
                     self._memory.end_turn(
-                        session_id, question, answer,
+                        product_session_id, question, answer,
                         **memory_kwargs,
                     )
                 except Exception:
@@ -1048,8 +1085,10 @@ class GraphRunner:
 
             # 内部事件：ask() 从这里取最终回答（SSE 层过滤）
             yield {"event": _ANSWER_EVENT, "data": {"answer": answer}}
-            _funnel_note_resolved(clarify_click, answer,
-                          session_id=session_id, trace_id=str(getattr(trace, "id", "") or ""))
+            _funnel_note_resolved(
+                clarify_click, answer, session_id=product_session_id,
+                trace_id=str(getattr(trace, "id", "") or ""),
+            )
 
             # 上下文用量快照（2026-09-22）：done 携带 context_usage 供前端
             # 显示「上下文 xx%」。近似口径 = 本轮输入历史 + 步骤产出；

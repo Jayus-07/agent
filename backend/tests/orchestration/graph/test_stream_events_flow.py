@@ -490,7 +490,7 @@ def test_ask_error_maps_to_system_error_message():
     answer = sys_obj.ask("q", "s-1")
 
     assert answer.startswith("## 系统错误")
-    assert "执行失败" in answer
+    assert "请稍后重试" in answer
 
 
 def test_ask_guard_intercept_returns_message():
