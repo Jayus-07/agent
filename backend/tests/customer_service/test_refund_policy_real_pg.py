@@ -34,53 +34,68 @@ def test_refund_policy_and_candidates_against_isolated_postgres(monkeypatch):
 
     suffix = uuid.uuid4().hex[:12]
     prefix = f"REFUND-PG-{suffix}-"
-    user_id = f"refund-pg-user-{suffix}"
+    customer_id: int | None = None
+    product_id: int | None = None
+    user_id = ""
 
     def order_no(label: str) -> str:
         return f"{prefix}{label.replace('_', '-')}"
 
     rows: dict[str, int] = {}
+    fixture_schema_ready = False
     pool: ThreadedConnectionPool | None = None
     try:
         with admin:
             with admin.cursor() as setup:
-                setup.execute('CREATE SCHEMA IF NOT EXISTS "order"')
-                setup.execute("CREATE SCHEMA IF NOT EXISTS product")
                 setup.execute(
-                    '''CREATE TABLE IF NOT EXISTS "order".orders (
-                        id BIGSERIAL PRIMARY KEY,
-                        order_no TEXT NOT NULL UNIQUE,
-                        customer_id TEXT NOT NULL,
-                        total_amount NUMERIC NOT NULL,
-                        status TEXT NOT NULL,
-                        payment_status TEXT NOT NULL,
-                        created_at TIMESTAMPTZ
-                    )'''
+                    """SELECT
+                        EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'order' AND table_name = 'orders'
+                              AND column_name = 'customer_id' AND data_type = 'integer'
+                        ),
+                        EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'product' AND table_name = 'products'
+                              AND column_name = 'sku' AND is_nullable = 'NO'
+                        ),
+                        EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'product' AND table_name = 'products'
+                              AND column_name = 'product_name' AND is_nullable = 'NO'
+                        ),
+                        EXISTS (
+                            SELECT 1 FROM information_schema.columns
+                            WHERE table_schema = 'customer' AND table_name = 'customers'
+                              AND column_name = 'id' AND data_type = 'integer'
+                        ),
+                        to_regclass('"order".order_items') IS NOT NULL,
+                        to_regclass('"order".refunds') IS NOT NULL"""
                 )
-                setup.execute(
-                    '''CREATE TABLE IF NOT EXISTS product.products (
-                        id BIGSERIAL PRIMARY KEY,
-                        product_name TEXT NOT NULL
-                    )'''
-                )
-                setup.execute(
-                    '''CREATE TABLE IF NOT EXISTS "order".order_items (
-                        id BIGSERIAL PRIMARY KEY,
-                        order_id BIGINT NOT NULL,
-                        product_id BIGINT NOT NULL,
-                        quantity INTEGER NOT NULL,
-                        price NUMERIC NOT NULL,
-                        cost NUMERIC NOT NULL
-                    )'''
-                )
-                setup.execute(
-                    '''CREATE TABLE IF NOT EXISTS "order".refunds (
-                        id BIGSERIAL PRIMARY KEY,
-                        order_id BIGINT NOT NULL
-                    )'''
-                )
+                if not all(setup.fetchone()):
+                    pytest.fail(
+                        "退款 PG 验收要求先运行仓库业务迁移；未找到正式的 "
+                        "orders.customer_id INTEGER / products.sku NOT NULL / "
+                        "products.product_name NOT NULL 契约"
+                    )
+                fixture_schema_ready = True
 
-                now = datetime.now(timezone.utc)
+                setup.execute(
+                    "INSERT INTO customer.customers (name) VALUES (%s) RETURNING id",
+                    (f"退款 PG 测试客户 {suffix}",),
+                )
+                customer_id = int(setup.fetchone()[0])
+                user_id = str(customer_id)
+
+                setup.execute(
+                    "INSERT INTO product.products (sku, product_name) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"REFUND-PG-{suffix}", f"退款 PG 商品 {suffix}"),
+                )
+                product_id = int(setup.fetchone()[0])
+
+                setup.execute("SET LOCAL TIME ZONE 'UTC'")
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
                 cases = {
                     "inside": ("paid", now - timedelta(days=5)),
                     "boundary_inside": (
@@ -101,18 +116,12 @@ def test_refund_policy_and_candidates_against_isolated_postgres(monkeypatch):
                            VALUES (%s, %s, %s, %s, %s, %s)
                            RETURNING id''',
                         (
-                            order_no(label), user_id, 49.95, status,
+                            order_no(label), customer_id, 49.95, status,
                             "paid", created_at,
                         ),
                     )
                     rows[label] = int(setup.fetchone()[0])
 
-                setup.execute(
-                    "INSERT INTO product.products (product_name) VALUES (%s) "
-                    "RETURNING id",
-                    (f"退款 PG 商品 {suffix}",),
-                )
-                product_id = int(setup.fetchone()[0])
                 for order_id in rows.values():
                     setup.execute(
                         '''INSERT INTO "order".order_items
@@ -128,6 +137,7 @@ def test_refund_policy_and_candidates_against_isolated_postgres(monkeypatch):
         pool = ThreadedConnectionPool(
             minconn=1, maxconn=2, dsn=dsn,
             application_name="refund_policy_isolated_pg_test",
+            options="-c timezone=UTC",
         )
         from backend.sql import executor
 
@@ -180,23 +190,30 @@ def test_refund_policy_and_candidates_against_isolated_postgres(monkeypatch):
         if pool is not None:
             pool.closeall()
         try:
-            with admin:
-                with admin.cursor() as cleanup:
-                    cleanup.execute(
-                        'DELETE FROM "order".refunds WHERE order_id = ANY(%s)',
-                        (list(rows.values()),),
-                    )
-                    cleanup.execute(
-                        'DELETE FROM "order".order_items WHERE order_id = ANY(%s)',
-                        (list(rows.values()),),
-                    )
-                    cleanup.execute(
-                        'DELETE FROM "order".orders WHERE order_no LIKE %s',
-                        (f"{prefix}%",),
-                    )
-                    cleanup.execute(
-                        "DELETE FROM product.products WHERE product_name = %s",
-                        (f"退款 PG 商品 {suffix}",),
-                    )
+            if fixture_schema_ready:
+                with admin:
+                    with admin.cursor() as cleanup:
+                        cleanup.execute(
+                            'DELETE FROM "order".refunds WHERE order_id = ANY(%s)',
+                            (list(rows.values()),),
+                        )
+                        cleanup.execute(
+                            'DELETE FROM "order".order_items WHERE order_id = ANY(%s)',
+                            (list(rows.values()),),
+                        )
+                        cleanup.execute(
+                            'DELETE FROM "order".orders WHERE order_no LIKE %s',
+                            (f"{prefix}%",),
+                        )
+                        if product_id is not None:
+                            cleanup.execute(
+                                "DELETE FROM product.products WHERE id = %s",
+                                (product_id,),
+                            )
+                        if customer_id is not None:
+                            cleanup.execute(
+                                "DELETE FROM customer.customers WHERE id = %s",
+                                (customer_id,),
+                            )
         finally:
             admin.close()
