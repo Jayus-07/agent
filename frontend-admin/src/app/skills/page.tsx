@@ -15,6 +15,7 @@ import Link from 'next/link'
 import { RefreshCw, Server } from 'lucide-react'
 import { clsx } from 'clsx'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
+import { atLeast } from '@/lib/auth'
 import {
   getCapabilities,
   getMcpServers,
@@ -53,6 +54,7 @@ function KeywordChips({ words, empty }: { words: string[]; empty: string }) {
 }
 
 export default function SkillsPage() {
+  const canOpenToolRegistry = atLeast('admin')
   const [caps, setCaps] = useState<Awaited<ReturnType<typeof getCapabilities>> | null>(null)
   const [servers, setServers] = useState<McpServer[] | null>(null)
   const [tools, setTools] = useState<McpTool[] | null>(null)
@@ -87,7 +89,7 @@ export default function SkillsPage() {
         desc="Capability 路由清单、Skill 注册对账与 MCP 注册情况；注册事实源沿用现有 manifest 和 registry。"
         actions={<>
           <Link href="/agents" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Agent 与工作流</Link>
-          <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>
+          {canOpenToolRegistry && <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>}
           <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => load(true)}>
             刷新
           </AssetActionButton>

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SystemHealthSnapshot } from '@/api/observability'
 import type { TraceRecord } from '@/types/trace'
-import { buildRuntimeAlertSample, buildSystemHealthRows, getHealthProbeState, getHealthSnapshotFreshness } from './serviceHealth'
+import { buildDegradationAlertSample, buildRuntimeAlertSample, buildSkillHealthRows, buildSystemHealthRows, getHealthProbeState, getHealthSnapshotFreshness } from './serviceHealth'
 
 function trace(overrides: Partial<TraceRecord> = {}): TraceRecord {
   return {
@@ -24,6 +24,75 @@ function trace(overrides: Partial<TraceRecord> = {}): TraceRecord {
 }
 
 describe('服务健康与告警样本', () => {
+  it('接受仓库已有的小写和驼峰结构化诊断码', () => {
+    const alerts = buildRuntimeAlertSample([
+      trace({ status: 'degraded', error: { error_code: 'connect_error' } }),
+      trace({ id: 'permission', status: 'failed', error: { error_code: 'permission_denied' } }),
+      trace({ id: 'deadline', status: 'timeout', error: { error_code: 'workflow_deadline_exceeded' } }),
+      trace({ id: 'provider', status: 'error', error: { error_code: 'ProviderTimeout' } }),
+    ])
+
+    expect(alerts.map((alert) => alert.code)).toEqual([
+      'connect_error',
+      'permission_denied',
+      'workflow_deadline_exceeded',
+      'ProviderTimeout',
+    ])
+  })
+
+  it('保留结构化降级事件和 Skill 统计且不返回自由文本', () => {
+    const degradation = buildDegradationAlertSample([
+      {
+        timestamp: '2026-10-14T08:00:00Z',
+        level: 'warn',
+        code: 'workflow_deadline_exceeded',
+        message: 'private customer information',
+      },
+      {
+        timestamp: '2026-10-14T08:01:00Z',
+        level: 'error',
+        code: 'user@example.com',
+        detail: { private: 'must-not-render' },
+      },
+    ])
+    const skills = buildSkillHealthRows([{
+      name: 'rag.search',
+      type: 'tool_call',
+      total: 4,
+      success: 3,
+      error: 1,
+      skipped: 0,
+      neutral: 0,
+      real_errors: 1,
+      retries: 2,
+      avg_duration_ms: 25,
+      success_rate: 0.75,
+      last_error_kind: 'failure',
+      last_error: 'private customer information',
+    }])
+
+    expect(degradation).toEqual([
+      { timestamp: '2026-10-14T08:00:00Z', level: 'warn', code: 'workflow_deadline_exceeded' },
+      { timestamp: '2026-10-14T08:01:00Z', level: 'error', code: null },
+    ])
+    expect(skills[0]).toEqual({
+      name: 'rag.search',
+      type: 'tool_call',
+      total: 4,
+      success: 3,
+      error: 1,
+      skipped: 0,
+      neutral: 0,
+      realErrors: 1,
+      retries: 2,
+      averageDurationMs: 25,
+      successRate: 0.75,
+      lastErrorKind: 'failure',
+    })
+    expect(JSON.stringify([...degradation, ...skills])).not.toContain('private customer information')
+    expect(JSON.stringify(degradation)).not.toContain('must-not-render')
+  })
+
   it('只从获准 Trace 样本生成异常行，不返回用户内容或自由文本错误', () => {
     const alerts = buildRuntimeAlertSample([
       trace({

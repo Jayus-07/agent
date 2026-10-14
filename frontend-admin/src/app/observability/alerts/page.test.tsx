@@ -4,8 +4,10 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 const getSystemHealth = vi.hoisted(() => vi.fn())
 const listTraces = vi.hoisted(() => vi.fn())
+const getDegradationAlerts = vi.hoisted(() => vi.fn())
+const getSkillHealth = vi.hoisted(() => vi.fn())
 
-vi.mock('@/api/observability', () => ({ getSystemHealth, listTraces }))
+vi.mock('@/api/observability', () => ({ getSystemHealth, listTraces, getDegradationAlerts, getSkillHealth }))
 vi.mock('@/components/auth/RoleGate', () => ({
   default: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }))
@@ -38,6 +40,8 @@ beforeEach(() => {
     tasks: { available: true },
   })
   listTraces.mockResolvedValue([])
+  getDegradationAlerts.mockResolvedValue({ alerts: [], total: 0 })
+  getSkillHealth.mockResolvedValue({ skills: [], trace_window: 300 })
 })
 
 afterEach(() => {
@@ -49,7 +53,15 @@ afterEach(() => {
 })
 
 describe('服务健康与告警页面', () => {
-  it('展示真实健康快照、保留真实队列零值并隐藏 Trace 私密正文', async () => {
+  it('保留降级事件流、Skill 统计与健康快照，并隐藏自由文本', async () => {
+    getDegradationAlerts.mockResolvedValueOnce({
+      total: 3,
+      alerts: [{ timestamp: '2026-10-14T08:00:00Z', level: 'warn', code: 'workflow_deadline_exceeded', message: 'private event body' }],
+    })
+    getSkillHealth.mockResolvedValueOnce({
+      trace_window: 300,
+      skills: [{ name: 'rag.search', type: 'tool_call', total: 4, success: 3, error: 1, skipped: 0, neutral: 0, real_errors: 1, retries: 2, avg_duration_ms: 25, success_rate: 0.75, last_error_kind: 'failure', last_error: 'private skill error' }],
+    })
     listTraces.mockResolvedValueOnce([{
       id: 'trace-authorized-123456',
       timestamp: new Date().toISOString(),
@@ -73,15 +85,23 @@ describe('服务健康与告警页面', () => {
     expect(container.textContent).toContain('不可用')
     expect(container.textContent).toContain('业务失败')
     expect(container.textContent).toContain('DOMAIN_FAILED')
+    expect(container.textContent).toContain('历史共 3 条')
+    expect(container.textContent).toContain('workflow_deadline_exceeded')
+    expect(container.textContent).toContain('Skill 健康统计')
+    expect(container.textContent).toContain('rag.search')
+    expect(container.textContent).toContain('75%')
+    expect(container.textContent).toContain('故障')
     expect(container.querySelector('a[href="/observability/traces/trace-authorized-123456"]')).toBeTruthy()
-    for (const sensitive of ['private customer input', 'private answer', 'private error message', 'must-not-render']) {
+    for (const sensitive of ['private customer input', 'private answer', 'private error message', 'private event body', 'private skill error', 'must-not-render']) {
       expect(container.textContent).not.toContain(sensitive)
     }
   })
 
-  it('健康和 Trace API 都失败时分别显示不可用，不把失败解释为空告警', async () => {
+  it('各健康数据源失败时分别标记不可用', async () => {
     getSystemHealth.mockRejectedValueOnce(new Error('private backend detail'))
     listTraces.mockRejectedValueOnce(new Error('private trace detail'))
+    getDegradationAlerts.mockRejectedValueOnce(new Error('private alert detail'))
+    getSkillHealth.mockRejectedValueOnce(new Error('private skill detail'))
     const container = mountPage()
 
     await act(async () => {
@@ -92,6 +112,8 @@ describe('服务健康与告警页面', () => {
 
     expect(container.textContent).toContain('服务快照不可用')
     expect(container.textContent).toContain('异常样本不可用')
+    expect(container.textContent).toContain('降级事件不可用')
+    expect(container.textContent).toContain('Skill 健康统计不可用')
     expect(container.textContent).toContain('此状态不代表没有告警')
     expect(container.textContent).not.toContain('当前授权 Trace 样本中没有')
     expect(container.textContent).not.toContain('private backend detail')

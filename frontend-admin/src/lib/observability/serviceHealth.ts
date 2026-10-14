@@ -1,6 +1,6 @@
 import type { TraceRecord } from '@/types/trace'
 import type { SystemHealthSnapshot } from '@/api/observability'
-import { getRunStatus, type RunStatus } from './runtimeStatus'
+import { safeDiagnosticCode, safeRuntimeLabel, getRunStatus, type RunStatus } from './runtimeStatus'
 
 export type HealthSnapshotFreshness = 'fresh' | 'stale' | 'unknown'
 export type HealthProbeState = 'available' | 'unavailable' | 'degraded' | 'unknown'
@@ -19,8 +19,55 @@ export interface RuntimeAlertSample {
   code: string | null
 }
 
+export interface DegradationAlertInput {
+  timestamp?: unknown
+  level?: unknown
+  code?: unknown
+  message?: unknown
+  detail?: unknown
+}
+
+export interface DegradationAlertSample {
+  timestamp: string | null
+  level: 'info' | 'warn' | 'error' | 'unknown'
+  code: string | null
+}
+
+export interface SkillHealthInput {
+  name?: unknown
+  type?: unknown
+  total?: unknown
+  success?: unknown
+  error?: unknown
+  skipped?: unknown
+  neutral?: unknown
+  real_errors?: unknown
+  retries?: unknown
+  avg_duration_ms?: unknown
+  success_rate?: unknown
+  last_error_kind?: unknown
+  last_error?: unknown
+}
+
+export interface SkillHealthRow {
+  name: string
+  type: string
+  total: number
+  success: number
+  error: number
+  skipped: number
+  neutral: number
+  realErrors: number
+  retries: number
+  averageDurationMs: number
+  successRate: number | null
+  lastErrorKind: 'denied' | 'not_configured' | 'failure' | null
+}
+
 const ALERT_STATUSES = new Set<RunStatus>(['failed', 'error', 'degraded', 'partial', 'timeout'])
-const SAFE_OPERATIONAL_CODE = /^[A-Z][A-Z0-9_.:/-]{0,63}$/
+const DEGRADATION_LEVELS = new Set(['info', 'warn', 'error'])
+const SKILL_ERROR_KINDS = new Set(['denied', 'not_configured', 'failure'])
+const SAFE_OPERATIONAL_CODE = /^[A-Za-z][A-Za-z0-9_.:/-]{0,63}$/
 
 export function getHealthSnapshotFreshness(
   snapshot: SystemHealthSnapshot,
@@ -90,12 +137,79 @@ export function buildSystemHealthRows(snapshot: SystemHealthSnapshot): SystemHea
   ]
 }
 
+function safeOperationalIdentifier(value: unknown): string | null {
+  const code = safeDiagnosticCode(value)
+  return code && SAFE_OPERATIONAL_CODE.test(code) ? code : null
+}
+
+export function buildDegradationAlertSample(
+  events: DegradationAlertInput[],
+  limit = 300,
+): DegradationAlertSample[] {
+  return events.flatMap((event) => {
+    const timestamp = typeof event.timestamp === 'string'
+      && Number.isFinite(Date.parse(event.timestamp))
+      ? event.timestamp
+      : null
+    const level = typeof event.level === 'string' && DEGRADATION_LEVELS.has(event.level)
+      ? event.level as DegradationAlertSample['level']
+      : 'unknown'
+    const code = safeOperationalIdentifier(event.code)
+    return [{ timestamp, level, code }]
+  }).slice(0, limit)
+}
+
+function safeCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0
+}
+
+function safeDuration(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.round(value)
+    : 0
+}
+
+export function buildSkillHealthRows(skills: SkillHealthInput[]): SkillHealthRow[] {
+  return skills.flatMap((skill) => {
+    const name = safeRuntimeLabel(skill.name, '')
+    if (!name) return []
+
+    const rawRate = skill.success_rate
+    const successRate = typeof rawRate === 'number'
+      && Number.isFinite(rawRate)
+      && rawRate >= 0
+      && rawRate <= 1
+      ? rawRate
+      : null
+    const rawErrorKind = skill.last_error_kind
+    const lastErrorKind = typeof rawErrorKind === 'string'
+      && SKILL_ERROR_KINDS.has(rawErrorKind)
+      ? rawErrorKind as SkillHealthRow['lastErrorKind']
+      : null
+
+    return [{
+      name,
+      type: safeRuntimeLabel(skill.type, '未知'),
+      total: safeCount(skill.total),
+      success: safeCount(skill.success),
+      error: safeCount(skill.error),
+      skipped: safeCount(skill.skipped),
+      neutral: safeCount(skill.neutral),
+      realErrors: safeCount(skill.real_errors),
+      retries: safeCount(skill.retries),
+      averageDurationMs: safeDuration(skill.avg_duration_ms),
+      successRate,
+      lastErrorKind,
+    }]
+  })
+}
+
 function safeOperationalCode(trace: TraceRecord): string | null {
   const error = trace.error ?? {}
   const raw = error.error_code ?? error.code ?? trace.metadata?.error_code
-  if (typeof raw !== 'string') return null
-  const code = raw.trim()
-  return SAFE_OPERATIONAL_CODE.test(code) ? code : null
+  return safeOperationalIdentifier(raw)
 }
 
 /**
