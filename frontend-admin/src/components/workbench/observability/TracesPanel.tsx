@@ -4,15 +4,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Download, ShoppingBag, BellRing, Scale, Wrench } from 'lucide-react'
-import { listTraces } from '@/api/observability'
+import { listTracesPage } from '@/api/observability'
 import TraceFilterBar from '@/components/observability/trace/TraceFilter'
 import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import TraceRow, { ColKey, VALID_COL_KEYS } from '@/components/observability/trace/TraceRow'
 import { useToast } from '@/components/shared/Toast'
 import { TraceFilter, TraceRecord, TraceStatus } from '@/types/trace'
-import { filterRuntimeRecords, getRunStatus } from '@/lib/observability/runtimeStatus'
+import { getRunStatus } from '@/lib/observability/runtimeStatus'
 
 const PAGE_SIZES = [20, 50, 100]
+const TIME_RANGE_MS: Record<Exclude<TraceFilter['timeRange'], 'custom'>, number> = {
+  '15m': 15 * 60_000,
+  '1h': 60 * 60_000,
+  '6h': 6 * 60 * 60_000,
+  '24h': 24 * 60 * 60_000,
+}
 const BOOKMARK_KEY = 'obs.bookmarks'
 const COLUMNS_KEY = 'obs.traceColumns'
 const DEFAULT_COLUMNS: ColKey[] = ['status', 'question', 'duration', 'usage', 'time', 'actions']
@@ -79,12 +85,16 @@ export default function TracesPanel() {
   const [filter, setFilter] = useState<TraceFilter>(() => readFilters(new URLSearchParams(searchParams.toString())))
   const [hasToolFilter, setHasToolFilter] = useState(searchParams.get('has_tool') || '')
   const [traces, setTraces] = useState<TraceRecord[]>([])
+  const [totalTraces, setTotalTraces] = useState(0)
+  const [retentionLimit, setRetentionLimit] = useState(5000)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [requestFailed, setRequestFailed] = useState(false)
+  const [pageOutOfRange, setPageOutOfRange] = useState(false)
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
   const loadedOnce = useRef(false)
   const requestSequence = useRef(0)
+  const pageFallbackKey = useRef<string | null>(null)
   const [pageError, setPageError] = useState('')
   const [sortField, setSortField] = useState<'duration_ms' | 'timestamp' | 'cost_usd' | ''>('')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -96,8 +106,10 @@ export default function TracesPanel() {
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString())
-    setFilter(readFilters(params))
-    setHasToolFilter(params.get('has_tool') || '')
+    const nextFilter = readFilters(params)
+    setFilter((current) => JSON.stringify(current) === JSON.stringify(nextFilter) ? current : nextFilter)
+    const nextToolFilter = params.get('has_tool') || ''
+    setHasToolFilter((current) => current === nextToolFilter ? current : nextToolFilter)
   }, [searchParams])
 
   useEffect(() => {
@@ -120,6 +132,8 @@ export default function TracesPanel() {
 
   const loadTraces = useCallback(async (mode: 'query' | 'refresh' = 'query') => {
     const requestId = ++requestSequence.current
+    const queryKey = JSON.stringify({ ...filter, page: 1, hasToolFilter })
+    if (mode === 'refresh') pageFallbackKey.current = null
     const preserveData = mode === 'refresh' && loadedOnce.current
     if (preserveData) setRefreshing(true)
     else {
@@ -129,11 +143,54 @@ export default function TracesPanel() {
       setPageError('')
     }
     setRequestFailed(false)
+    setPageOutOfRange(false)
+    if (filter.status === 'running') {
+      setTraces([])
+      setTotalTraces(0)
+      setLastFetchedAt(null)
+      setLoading(false)
+      setRefreshing(false)
+      return
+    }
     try {
-      // 先取最近 200 条已授权候选记录，确保工作流筛选选项完整；Tool 下钻使用现有服务端过滤。
-      const result = await listTraces(200, undefined, undefined, hasToolFilter || undefined)
+      const until = new Date()
+      const timeRange = filter.timeRange === 'custom' ? '24h' : filter.timeRange
+      const since = new Date(until.getTime() - TIME_RANGE_MS[timeRange])
+      const result = await listTracesPage({
+        limit: filter.pageSize,
+        offset: (filter.page - 1) * filter.pageSize,
+        workflowName: filter.workflow_name,
+        hasTool: hasToolFilter || undefined,
+        source: filter.source,
+        status: filter.status,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        excludeRunning: true,
+        model: filter.model,
+        kbId: filter.kb_id,
+        query: filter.keyword,
+      })
       if (requestId !== requestSequence.current) return
-      setTraces(result)
+      const lastPage = Math.max(1, Math.ceil(result.total / filter.pageSize))
+      if (filter.page > lastPage) {
+        if (pageFallbackKey.current !== queryKey) {
+          pageFallbackKey.current = queryKey
+          const correctedFilter = { ...filter, page: lastPage }
+          setFilter(correctedFilter)
+          const params = writeFilters(new URLSearchParams(searchParams.toString()), correctedFilter)
+          router.replace(`${pathname}?${params.toString()}`, { scroll: false })
+        } else {
+          setTraces([])
+          setTotalTraces(result.total)
+          setRetentionLimit(result.retention_limit)
+          setLastFetchedAt(new Date().toISOString())
+          setPageOutOfRange(true)
+        }
+        return
+      }
+      setTraces(result.traces)
+      setTotalTraces(result.total)
+      setRetentionLimit(result.retention_limit)
       setLastFetchedAt(new Date().toISOString())
       setRequestFailed(false)
       loadedOnce.current = true
@@ -147,7 +204,7 @@ export default function TracesPanel() {
         setRefreshing(false)
       }
     }
-  }, [hasToolFilter])
+  }, [filter, hasToolFilter, pathname, router, searchParams])
 
   useEffect(() => {
     void loadTraces('query')
@@ -156,12 +213,14 @@ export default function TracesPanel() {
 
   const updateFilter = (next: TraceFilter) => {
     const updated = { ...next, page: 1 }
+    pageFallbackKey.current = null
     setFilter(updated)
     const params = writeFilters(new URLSearchParams(searchParams.toString()), updated)
     router.replace(`${pathname}?${params.toString()}`, { scroll: false })
   }
 
   const updatePage = (next: TraceFilter) => {
+    pageFallbackKey.current = null
     setFilter(next)
     const params = writeFilters(new URLSearchParams(searchParams.toString()), next)
     router.replace(`${pathname}?${params.toString()}`, { scroll: false })
@@ -173,24 +232,11 @@ export default function TracesPanel() {
     return `${pathname}?${params.toString()}`
   }, [filter, hasToolFilter, pathname, searchParams])
 
-  const filteredBase = useMemo(() => {
-    // 历史列表中的 running 可能是旧 DTO 默认值；活跃查询缺少资源授权前不展示、不导出。
-    let result = filterRuntimeRecords(traces, filter.timeRange)
-    if (filter.status !== 'all') {
-      result = result.filter((trace) => getRunStatus(trace) === filter.status)
-    }
-    if (filter.kb_id) result = result.filter((trace) => String(trace.metadata?.kb_id ?? '') === filter.kb_id)
-    if (filter.model) result = result.filter((trace) => trace.model?.name === filter.model)
-    if (filter.workflow_name) result = result.filter((trace) => trace.workflow_name === filter.workflow_name)
-    if (filter.source) result = result.filter((trace) => trace.source === filter.source)
-    if (filter.keyword.trim()) {
-      const keyword = filter.keyword.trim().toLowerCase()
-      // 搜索只匹配诊断标识和公开的运行元数据，不读取问题、回复或 Session 内容。
-      result = result.filter((trace) => [trace.id, trace.request_id, trace.workflow_name, trace.source]
-        .some((value) => String(value || '').toLowerCase().includes(keyword)))
-    }
-    return result
-  }, [filter, traces])
+  const filteredBase = useMemo(
+    // 时间、状态、来源、Agent/Workflow 和检索条件均已由服务端应用；排序仅作用于当前页。
+    () => traces.filter((trace) => getRunStatus(trace) !== 'running'),
+    [traces],
+  )
 
   const hasUnverifiedRunningRecords = useMemo(
     () => traces.some((trace) => getRunStatus(trace) === 'running'),
@@ -210,10 +256,10 @@ export default function TracesPanel() {
     })
   }, [filteredBase, sortDir, sortField])
 
-  const total = filtered.length
+  const total = totalTraces
   const totalPages = Math.max(1, Math.ceil(total / filter.pageSize))
   const safePage = Math.min(filter.page, totalPages)
-  const pageTraces = filtered.slice((safePage - 1) * filter.pageSize, safePage * filter.pageSize)
+  const pageTraces = filtered
   const maxDuration = useMemo(() => filtered.reduce((max, trace) => Math.max(max, trace.duration_ms || 0), 0), [filtered])
 
   const handleSort = (field: 'duration_ms' | 'timestamp' | 'cost_usd') => {
@@ -323,14 +369,14 @@ export default function TracesPanel() {
           <Link href="/observability/selection-funnel" className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><ShoppingBag size={14} />选品记录</Link>
           <Link href="/observability/alerts" className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><BellRing size={14} />系统告警</Link>
           {compareIds.size >= 2 && <button type="button" onClick={goCompare} className="min-h-10 rounded-md bg-accent px-3 text-sm font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">对比 {compareIds.size} 条</button>}
-          <button type="button" onClick={exportCsv} className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Download size={14} />导出安全字段</button>
+          <button type="button" onClick={exportCsv} className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border-subtle bg-white px-3 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"><Download size={14} />导出当前页安全字段</button>
           <button type="button" onClick={() => void loadTraces('refresh')} disabled={refreshing} className="min-h-10 rounded-md border border-border-subtle bg-white px-3 text-sm font-medium text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60">{refreshing ? '刷新中…' : '刷新'}</button>
         </div>
       </div>
 
       <div className="rounded-md border border-border-subtle bg-white px-4 py-3 text-xs leading-5 text-text-secondary">
-        <p>数据源：<code>GET /api/observability/traces?limit=200</code>；服务端执行身份及资源级授权。</p>
-        <p>后端仅返回最近 200 条候选记录，无游标、全量总数或 <code>observed_at</code>。时间、状态、来源、Agent/Workflow 在该样本内筛选；Tool 条件使用现有服务端参数。查询时间：{lastFetchedAt ? new Date(lastFetchedAt).toLocaleString('zh-CN') : '尚未成功'}。</p>
+        <p>数据源：<code>GET /api/observability/traces</code>；服务端先执行身份、资源和租户授权，再按时间、状态及其他条件筛选并分页。</p>
+        <p>总数来自 TraceStore 最近最多 {retentionLimit.toLocaleString()} 条留存记录；本页最多 {filter.pageSize} 条。运行总览仍最多展示 200 条样本。查询时间：{lastFetchedAt ? new Date(lastFetchedAt).toLocaleString('zh-CN') : '尚未成功'}。</p>
       </div>
 
       {requestFailed && lastFetchedAt && (
@@ -348,7 +394,7 @@ export default function TracesPanel() {
       {hasToolFilter && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900">
           <Wrench size={15} aria-hidden="true" />
-          <span>仅显示匹配 Tool：<code className="font-mono">{hasToolFilter}</code>（最近 200 条候选记录内）</span>
+          <span>仅显示匹配 Tool：<code className="font-mono">{hasToolFilter}</code>（服务端在已授权留存记录中筛选）</span>
           <button type="button" onClick={clearToolFilter} className="min-h-10 rounded px-2 font-medium underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">清除过滤</button>
         </div>
       )}
@@ -368,7 +414,7 @@ export default function TracesPanel() {
               ))}
             </fieldset>
           )}
-          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {filter.status === 'running' ? '暂不可统计' : `${total} 条`} / 已加载 {traces.length} 条</span>
+          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {filter.status === 'running' ? '暂不可统计' : `${total} 条`} / 当前页 {traces.length} 条</span>
         </div>
       </div>
 
@@ -378,15 +424,21 @@ export default function TracesPanel() {
           <p className="mt-1 text-sm text-amber-900">当前活跃 Trace 接口缺少资源级授权。为避免越权读取或把历史列表当作实时数据，此筛选标记为 BLOCKED，也不显示伪造的空结果。</p>
           <button type="button" onClick={() => updateFilter({ ...filter, status: 'all' })} className="mt-3 min-h-10 rounded-md border border-amber-400 bg-white px-3 text-sm font-medium text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">清除运行中筛选</button>
         </section>
-      ) : traces.length === 0 && !requestFailed ? (
+      ) : pageOutOfRange ? (
+        <section className="rounded-md border border-amber-300 bg-amber-50 p-6" aria-live="polite">
+          <h3 className="font-medium text-amber-950">当前页已无匹配记录</h3>
+          <p className="mt-1 text-sm text-amber-900">记录总数在查询期间发生变化，已尝试一次回退；请返回上一页或刷新。</p>
+          <button type="button" onClick={() => updatePage({ ...filter, page: Math.max(1, filter.page - 1) })} className="mt-3 min-h-10 rounded-md border border-amber-400 bg-white px-3 text-sm font-medium text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">返回上一页</button>
+        </section>
+      ) : traces.length === 0 && total === 0 && !requestFailed ? (
         <section className="rounded-md border border-border-subtle bg-white p-6" aria-live="polite">
-          <h3 className="font-medium text-text-primary">当前授权范围内没有运行记录</h3>
+          <h3 className="font-medium text-text-primary">当前筛选条件下无匹配记录</h3>
           <p className="mt-1 text-sm text-text-secondary">Trace API 成功返回 0 条；这不是服务错误。</p>
         </section>
       ) : total === 0 ? (
         <section className="rounded-md border border-border-subtle bg-white p-6" aria-live="polite">
           <h3 className="font-medium text-text-primary">当前筛选条件下无匹配记录</h3>
-          <p className="mt-1 text-sm text-text-secondary">筛选仅覆盖最近 200 条已授权候选记录；可调整时间、状态或来源。</p>
+          <p className="mt-1 text-sm text-text-secondary">筛选覆盖 TraceStore 最近最多 {retentionLimit.toLocaleString()} 条留存记录中的已授权范围；可调整时间、状态或来源。</p>
         </section>
       ) : (
         <>
@@ -424,7 +476,7 @@ export default function TracesPanel() {
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border-subtle bg-white px-4 py-3">
-            <span className="text-sm text-text-secondary">第 {safePage} / {totalPages} 页 · {total} 条匹配记录</span>
+            <span className="text-sm text-text-secondary">第 {safePage} / {totalPages} 页 · {total} 条匹配记录（当前页排序与导出）</span>
             <div className="flex flex-wrap items-center gap-2">
               <label className="flex min-h-10 items-center gap-2 text-sm text-text-secondary">
                 每页

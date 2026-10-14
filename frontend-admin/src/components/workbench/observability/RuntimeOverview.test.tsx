@@ -5,7 +5,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { TraceRecord } from '@/types/trace'
 
 const mocks = vi.hoisted(() => ({
-  listTraces: vi.fn(),
+  listTracesPage: vi.fn(),
+  getTraceStats: vi.fn(),
   navigation: {
     pathname: '/observability/monitoring',
     params: new URLSearchParams('tab=overview'),
@@ -13,7 +14,10 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('@/api/observability', () => ({ listTraces: mocks.listTraces }))
+vi.mock('@/api/observability', () => ({
+  listTracesPage: mocks.listTracesPage,
+  getTraceStats: mocks.getTraceStats,
+}))
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }))
@@ -35,7 +39,8 @@ afterEach(async () => {
   if (mounted) await act(async () => { mounted?.root.unmount() })
   mounted?.container.remove()
   mounted = null
-  mocks.listTraces.mockReset()
+  mocks.listTracesPage.mockReset().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 200, has_more: false, retention_limit: 5000 })
+  mocks.getTraceStats.mockReset().mockResolvedValue(makeStats())
   mocks.navigation.params = new URLSearchParams('tab=overview')
 })
 
@@ -60,6 +65,30 @@ function makeTrace(status: TraceRecord['status'] = 'running', overrides: Partial
   }
 }
 
+function makeStats(overrides: Record<string, unknown> = {}) {
+  return {
+    total: 0,
+    total_24h: 0,
+    counts: {
+      success: 0, failed: 0, error: 0, degraded: 0, partial: 0,
+      timeout: 0, cancelled: 0, rejected: 0, unknown: 0,
+    },
+    running_count: 0,
+    success_rate: 0,
+    avg_duration_ms: 0,
+    p50_duration_ms: 0,
+    p95_duration_ms: 0,
+    error_count: 0,
+    total_cost_usd: 0,
+    sources: {},
+    window_hours: 24,
+    records_considered: 0,
+    retention_limit: 5000,
+    observed_at: new Date().toISOString(),
+    ...overrides,
+  }
+}
+
 async function mountOverview(): Promise<HTMLDivElement> {
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -74,10 +103,11 @@ async function mountOverview(): Promise<HTMLDivElement> {
 
 describe('RuntimeOverview', () => {
   it('不从历史 Trace 样本推断活跃运行数量，也不生成运行中筛选链接', async () => {
-    mocks.listTraces.mockResolvedValue([makeTrace()])
+    mocks.listTracesPage.mockResolvedValue({ traces: [makeTrace()], total: 1, offset: 0, limit: 200, has_more: false, retention_limit: 5000 })
     const container = await mountOverview()
 
-    expect(mocks.listTraces).toHaveBeenCalledWith(200)
+    expect(mocks.listTracesPage).toHaveBeenCalledWith(expect.objectContaining({ limit: 200, offset: 0, excludeRunning: true }))
+    expect(mocks.getTraceStats).toHaveBeenCalledWith(24)
     expect(container.textContent).toContain('运行中')
     expect(container.textContent).toContain('暂不可统计')
     expect(container.textContent).toContain('BLOCKED')
@@ -87,9 +117,14 @@ describe('RuntimeOverview', () => {
   })
 
   it('为部分成功单独统计并提供对应筛选入口', async () => {
-    mocks.listTraces.mockResolvedValue([
-      makeTrace('partial', { id: 'partial-trace', metadata: { business_outcome: 'partial' } }),
-    ])
+    mocks.listTracesPage.mockResolvedValue({
+      traces: [makeTrace('partial', { id: 'partial-trace', metadata: { business_outcome: 'partial' } })],
+      total: 1, offset: 0, limit: 200, has_more: false, retention_limit: 5000,
+    })
+    mocks.getTraceStats.mockResolvedValue(makeStats({
+      total: 1,
+      counts: { ...makeStats().counts, partial: 1 },
+    }))
     const container = await mountOverview()
 
     const partialCard = container.querySelector<HTMLAnchorElement>('a[href*="status=partial"]')
@@ -102,12 +137,23 @@ describe('RuntimeOverview', () => {
     const statuses: TraceRecord['status'][] = [
       'success', 'failed', 'error', 'degraded', 'partial', 'timeout', 'cancelled', 'rejected', 'running',
     ]
-    mocks.listTraces.mockResolvedValue([
-      ...statuses.map((status) => makeTrace(status, { id: `trace-${status}` })),
-      makeTrace('success', { id: 'trace-unknown', status: undefined }),
-      makeTrace('success', { id: 'future', timestamp: new Date(Date.now() + 60_000).toISOString() }),
-      makeTrace('success', { id: 'outside-window', timestamp: new Date(Date.now() - 25 * 60 * 60_000).toISOString() }),
-    ])
+    mocks.listTracesPage.mockResolvedValue({
+      traces: [
+        ...statuses.map((status) => makeTrace(status, { id: `trace-${status}` })),
+        makeTrace('success', { id: 'trace-unknown', status: undefined }),
+        makeTrace('success', { id: 'future', timestamp: new Date(Date.now() + 60_000).toISOString() }),
+        makeTrace('success', { id: 'outside-window', timestamp: new Date(Date.now() - 25 * 60 * 60_000).toISOString() }),
+      ],
+      total: 9, offset: 0, limit: 200, has_more: false, retention_limit: 5000,
+    })
+    mocks.getTraceStats.mockResolvedValue(makeStats({
+      total: 9,
+      counts: {
+        ...makeStats().counts,
+        success: 1, failed: 1, error: 1, degraded: 1, partial: 1,
+        timeout: 1, cancelled: 1, rejected: 1, unknown: 1,
+      },
+    }))
 
     const container = await mountOverview()
     const recordCard = container.querySelector<HTMLAnchorElement>('a[href*="status=all"]')

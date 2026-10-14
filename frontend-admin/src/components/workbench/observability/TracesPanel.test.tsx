@@ -6,7 +6,7 @@ import type { TraceRecord } from '@/types/trace'
 import { filterRuntimeRecords, summarizeRuntimeSample } from '@/lib/observability/runtimeStatus'
 
 const mocks = vi.hoisted(() => ({
-  listTraces: vi.fn().mockResolvedValue([]),
+  listTracesPage: vi.fn().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 20, has_more: false, retention_limit: 5000 }),
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), show: vi.fn() },
   navigation: {
     pathname: '/observability/monitoring',
@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('@/api/observability', () => ({ listTraces: mocks.listTraces }))
+vi.mock('@/api/observability', () => ({ listTracesPage: mocks.listTracesPage }))
 vi.mock('@/components/shared/Toast', () => ({ useToast: () => mocks.toast }))
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
@@ -44,7 +44,7 @@ afterEach(async () => {
   if (mounted) await act(async () => { mounted?.root.unmount() })
   mounted?.container.remove()
   mounted = null
-  mocks.listTraces.mockReset().mockResolvedValue([])
+  mocks.listTracesPage.mockReset().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 20, has_more: false, retention_limit: 5000 })
   Object.values(mocks.toast).forEach((fn) => fn.mockClear())
   mocks.navigation.params = new URLSearchParams()
   mocks.navigation.router.push.mockClear()
@@ -105,9 +105,9 @@ describe('TracesPanel', () => {
 
     const container = await mountPanel()
 
-    expect(mocks.listTraces).toHaveBeenCalledWith(200, undefined, undefined, 'sql.query')
+    expect(mocks.listTracesPage).toHaveBeenCalledWith(expect.objectContaining({ hasTool: 'sql.query', status: 'error', limit: 20, offset: 0 }))
     expect(container.textContent).toContain('仅显示匹配 Tool')
-    expect(container.textContent).toContain('当前授权范围内没有运行记录')
+    expect(container.textContent).toContain('当前筛选条件下无匹配记录')
   })
 
   it('将成功返回的空列表与请求失败分别呈现', async () => {
@@ -117,10 +117,46 @@ describe('TracesPanel', () => {
     mounted?.container.remove()
     mounted = null
 
-    mocks.listTraces.mockRejectedValueOnce({ status: 403 })
+    mocks.listTracesPage.mockRejectedValueOnce({ status: 403 })
     const failed = await mountPanel()
     expect(failed.textContent).toContain('执行记录暂不可用')
     expect(failed.textContent).toContain('当前账号无权读取')
+  })
+
+  it('从 URL 把时间、状态和页码交给服务端筛选与分页', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=traces&range=6h&status=error&page=2&pageSize=50')
+    mocks.listTracesPage.mockResolvedValue({
+      traces: [makeTrace('error', 'page-two-error')],
+      total: 55,
+      offset: 50,
+      limit: 50,
+      has_more: false,
+      retention_limit: 5000,
+    })
+
+    const container = await mountPanel()
+    const query = mocks.listTracesPage.mock.calls.at(-1)?.[0]
+
+    expect(query).toEqual(expect.objectContaining({ limit: 50, offset: 50, status: 'error' }))
+    expect(query?.since).toEqual(expect.any(String))
+    expect(query?.until).toEqual(expect.any(String))
+    expect(container.querySelector('[data-trace-id="page-two-error"]')).toBeTruthy()
+    expect(container.textContent).toContain('第 2 / 2 页')
+  })
+
+  it('总数缩减后只回退一次到合法页并重新查询', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=traces&range=6h&status=error&page=3&pageSize=50')
+    mocks.listTracesPage
+      .mockResolvedValueOnce({ traces: [], total: 55, offset: 100, limit: 50, has_more: false, retention_limit: 5000 })
+      .mockResolvedValueOnce({ traces: [makeTrace('error', 'last-page')], total: 55, offset: 50, limit: 50, has_more: false, retention_limit: 5000 })
+
+    const container = await mountPanel()
+
+    expect(mocks.listTracesPage).toHaveBeenCalledTimes(2)
+    expect(mocks.listTracesPage.mock.calls.map(([query]) => query?.offset)).toEqual([100, 50])
+    expect(mocks.navigation.router.replace).toHaveBeenCalledWith(expect.stringContaining('page=2'), { scroll: false })
+    expect(container.querySelector('[data-trace-id="last-page"]')).toBeTruthy()
+    expect(container.textContent).toContain('第 2 / 2 页')
   })
 
   it('保留旧 URL 的运行中筛选，但明确标记 BLOCKED 而不报告空结果', async () => {
@@ -144,10 +180,13 @@ describe('TracesPanel', () => {
   })
 
   it('默认列表与 CSV 导出排除历史 running 并解释其状态未确认', async () => {
-    mocks.listTraces.mockResolvedValue([
+    mocks.listTracesPage.mockResolvedValue({
+      traces: [
       makeTrace('running', 'historical-running'),
       makeTrace('success', 'confirmed-success'),
-    ])
+      ],
+      total: 1, offset: 0, limit: 20, has_more: false, retention_limit: 5000,
+    })
     const container = await mountPanel()
 
     expect(container.querySelector('[data-trace-id="historical-running"]')).toBeNull()
@@ -160,7 +199,7 @@ describe('TracesPanel', () => {
     vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
     const exportButton = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.includes('导出安全字段'))
+      .find((button) => button.textContent?.includes('导出当前页安全字段'))
     await act(async () => exportButton?.click())
     const exported = await (createObjectURL.mock.calls[0][0] as Blob).text()
 
@@ -183,10 +222,18 @@ describe('TracesPanel', () => {
     // 用动态边界覆盖未来与过期样本，确保列表和总览不因边界定义不同而分叉。
     sample[sample.length - 1].timestamp = new Date(Date.now() + 60_000).toISOString()
     mocks.navigation.params = new URLSearchParams('tab=traces&range=24h&status=all')
-    mocks.listTraces.mockResolvedValue(sample)
+    const now = Date.now()
+    const serverPage = filterRuntimeRecords(sample, '24h', now)
+    mocks.listTracesPage.mockResolvedValue({
+      traces: serverPage,
+      total: serverPage.length,
+      offset: 0,
+      limit: 20,
+      has_more: false,
+      retention_limit: 5000,
+    })
 
     const container = await mountPanel()
-    const now = Date.now()
     const expectedCount = summarizeRuntimeSample(sample, '24h', now).total
     const listCount = filterRuntimeRecords(sample, '24h', now).length
 
@@ -198,24 +245,24 @@ describe('TracesPanel', () => {
   })
 
   it('Tool 筛选快速切换时忽略较早请求的迟到响应', async () => {
-    const toolA = deferred<TraceRecord[]>()
-    const toolB = deferred<TraceRecord[]>()
-    mocks.listTraces
-      .mockResolvedValueOnce([])
-      .mockImplementation((_limit, _status, _source, toolId) => {
-        if (toolId === 'tool-a') return toolA.promise
-        if (toolId === 'tool-b') return toolB.promise
-        return Promise.resolve([])
+    const toolA = deferred<{ traces: TraceRecord[]; total: number; offset: number; limit: number; has_more: boolean; retention_limit: number }>()
+    const toolB = deferred<{ traces: TraceRecord[]; total: number; offset: number; limit: number; has_more: boolean; retention_limit: number }>()
+    mocks.listTracesPage
+      .mockResolvedValueOnce({ traces: [], total: 0, offset: 0, limit: 20, has_more: false, retention_limit: 5000 })
+      .mockImplementation((query) => {
+        if (query?.hasTool === 'tool-a') return toolA.promise
+        if (query?.hasTool === 'tool-b') return toolB.promise
+        return Promise.resolve({ traces: [], total: 0, offset: query?.offset ?? 0, limit: query?.limit ?? 20, has_more: false, retention_limit: 5000 })
       })
     const container = await mountPanel()
 
     await setSearchParams(new URLSearchParams('tab=traces&has_tool=tool-a'))
     await setSearchParams(new URLSearchParams('tab=traces&has_tool=tool-b'))
-    expect(mocks.listTraces.mock.calls.some((call) => call[3] === 'tool-a')).toBe(true)
-    expect(mocks.listTraces.mock.calls.some((call) => call[3] === 'tool-b')).toBe(true)
+    expect(mocks.listTracesPage.mock.calls.some((call) => call[0]?.hasTool === 'tool-a')).toBe(true)
+    expect(mocks.listTracesPage.mock.calls.some((call) => call[0]?.hasTool === 'tool-b')).toBe(true)
 
-    await act(async () => { toolB.resolve([makeTrace('success', 'tool-b-result')]); await toolB.promise })
-    await act(async () => { toolA.resolve([makeTrace('success', 'tool-a-stale-result')]); await toolA.promise })
+    await act(async () => { toolB.resolve({ traces: [makeTrace('success', 'tool-b-result')], total: 1, offset: 0, limit: 20, has_more: false, retention_limit: 5000 }); await toolB.promise })
+    await act(async () => { toolA.resolve({ traces: [makeTrace('success', 'tool-a-stale-result')], total: 1, offset: 0, limit: 20, has_more: false, retention_limit: 5000 }); await toolA.promise })
 
     expect(container.querySelector('[data-trace-id="tool-b-result"]')).toBeTruthy()
     expect(container.querySelector('[data-trace-id="tool-a-stale-result"]')).toBeNull()
