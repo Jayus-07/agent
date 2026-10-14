@@ -549,6 +549,16 @@ _register(PromptSpec(
     agent="travel_requirement",
 ))
 
+_register(PromptSpec(
+    key="travel.v2.trip_ai_edit",
+    name="旅游 V2 Trip 单项修改候选生成 Prompt",
+    category="travel",
+    risk_level="high",
+    variables=(),
+    default_file="travel_v2_trip_ai_edit.yaml",
+    agent="travel_requirement",
+))
+
 # ── Travel LLM 理解层（2026-10-08 STOP 1/4：槽位富化 + 追问渲染）──
 
 _register(PromptSpec(

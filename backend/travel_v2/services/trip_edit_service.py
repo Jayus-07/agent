@@ -13,6 +13,7 @@ from backend.travel_v2.models.commands import (
     StructuredTripEditCommand,
 )
 from backend.travel_v2.models.trip import TripDocumentV2
+from backend.travel_v2.repositories.ai_edit_request_repository import AIEditRequestRepository
 from backend.travel_v2.repositories.edit_operation_repository import EditOperationRepository
 from backend.travel_v2.repositories.revision_repository import RevisionRepository
 from backend.travel_v2.repositories.trip_repository import TripRepository
@@ -27,15 +28,15 @@ from backend.travel_v2.services.trip_write_validator import (
 )
 
 
-class VersionConflict(RuntimeError):
+class VersionConflict(RuntimeError):  # noqa: N818 - 已有服务/API 异常契约
     """客户端基准版本不是当前正式版本。"""
 
 
-class IdempotencyConflict(ValueError):
+class IdempotencyConflict(ValueError):  # noqa: N818 - 已有服务/API 异常契约
     """同一幂等键对应不同的编辑内容。"""
 
 
-class RevisionNotFound(LookupError):
+class RevisionNotFound(LookupError):  # noqa: N818 - 已有服务/API 异常契约
     """当前行程范围内没有该历史版本。"""
 
 
@@ -45,11 +46,13 @@ class TripEditService:
         trip_repository: TripRepository | None = None,
         revision_repository: RevisionRepository | None = None,
         edit_operation_repository: EditOperationRepository | None = None,
+        ai_edit_request_repository: AIEditRequestRepository | None = None,
     ):
         self._connect = connect
         self._trips = trip_repository or TripRepository()
         self._revisions = revision_repository or RevisionRepository()
         self._operations = edit_operation_repository or EditOperationRepository()
+        self._ai_edit_requests = ai_edit_request_repository or AIEditRequestRepository()
 
     def add_meal(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
@@ -279,6 +282,10 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                self._assert_ai_key_available(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, idempotency_key=key,
+                )
 
                 current = self._trips.get(
                     cursor, trip_id, tenant_id=tenant_id,
@@ -294,6 +301,10 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                self._assert_ai_key_available(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, idempotency_key=key,
+                )
                 if int(current["revision"]) != expected_revision:
                     raise VersionConflict("行程版本已变化，请刷新后重试")
 
@@ -312,6 +323,11 @@ class TripEditService:
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
         actor_id: str, idempotency_key: str,
         command: StructuredTripEditCommand | dict,
+        _request_hash: str | None = None,
+        _command_type: str = "structured_edit",
+        _response_extra: dict | None = None,
+        _complete_ai_request: bool = False,
+        _ai_metadata: dict | None = None,
     ) -> dict:
         """在行锁内应用一次结构化编辑，再以现有 CAS 写入新 Revision。"""
         payload = (
@@ -324,14 +340,18 @@ class TripEditService:
         if len(tenant_id) > 128 or len(owner_id) > 128 or len(actor_id) > 128:
             raise ValueError("trip identity fields exceed 128 characters")
         operation = payload.operation.model_dump(mode="json", exclude_unset=True)
-        command_type = "structured_edit"
-        request_hash = canonical_request_hash({
+        command_type = _command_type
+        if not command_type or len(command_type) > 48:
+            raise ValueError("command_type must contain 1 to 48 characters")
+        request_hash = _request_hash or canonical_request_hash({
             "trip_id": str(trip_id),
             "expected_revision": payload.expected_revision,
             "command_type": command_type,
             "change_summary": payload.change_summary,
             "operation": operation,
         })
+        if len(request_hash) != 64 or any(char not in "0123456789abcdef" for char in request_hash):
+            raise ValueError("request hash must be a lowercase SHA-256 digest")
 
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -342,6 +362,11 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                if not _complete_ai_request:
+                    self._assert_ai_key_available(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                    )
                 current = self._trips.get(
                     cursor, trip_id, tenant_id=tenant_id,
                     owner_id=owner_id, for_update=True,
@@ -355,6 +380,11 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                if not _complete_ai_request:
+                    self._assert_ai_key_available(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                    )
                 if int(current["revision"]) != payload.expected_revision:
                     raise VersionConflict("行程版本已变化，请刷新后重试")
 
@@ -369,14 +399,44 @@ class TripEditService:
                     command_type=command_type,
                     change_summary=payload.change_summary,
                     current=current, snapshot=snapshot,
+                    response_extra=_response_extra,
                 )
+                if _complete_ai_request:
+                    ai_receipt_fields = (
+                        "status", "saved", "trip_id", "base_revision",
+                        "new_revision", "operation_key", "change_summary", "diff",
+                    )
+                    self._ai_edit_requests.finish(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                        status="succeeded",
+                        response={
+                            name: response[name] for name in ai_receipt_fields
+                            if name in response
+                        },
+                        metadata=_ai_metadata, allow_unknown=True,
+                    )
         return {**response, "replayed": False}
+
+    def _assert_ai_key_available(
+        self, cursor, *, trip_id: str | UUID, tenant_id: str,
+        owner_id: str, idempotency_key: str,
+    ) -> None:
+        ai_request = self._ai_edit_requests.get(
+            cursor, trip_id=trip_id, tenant_id=tenant_id,
+            owner_id=owner_id, idempotency_key=idempotency_key,
+        )
+        if ai_request:
+            raise IdempotencyConflict(
+                "Idempotency-Key 已用于 AI 行程修改请求",
+            )
 
     def _commit_locked(
         self, cursor, *, trip_id: str | UUID, tenant_id: str,
         owner_id: str, actor_id: str, expected_revision: int,
         idempotency_key: str, request_hash: str, command_type: str,
         change_summary: str, current: dict, snapshot: dict,
+        response_extra: dict | None = None,
     ) -> dict:
         validate_trip_write(snapshot, current_document=current["document"])
         next_revision = expected_revision + 1
@@ -401,6 +461,8 @@ class TripEditService:
             "revision": next_revision, "document": snapshot,
             "status": "active",
         }
+        if response_extra:
+            response.update(response_extra)
         self._operations.insert(
             cursor, operation_id=uuid4(), trip_id=trip_id,
             tenant_id=tenant_id, owner_id=owner_id,
