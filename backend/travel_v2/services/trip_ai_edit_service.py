@@ -41,6 +41,14 @@ _NO_EXECUTION_REQUEST = re.compile(
     r"不要修改|别修改|先别改|暂时别改|不要动行程|先别保存|不要保存|"
     r"(?:请)?不要执行|别执行|请勿执行|禁止执行"
 )
+_DEFERRED_WRITE_REQUEST = re.compile(
+    r"(?:先|暂时|暂|现在先|目前先)(?:不|不用|不要|别|不必|暂缓)(?:再)?"
+    r"(?:执行|修改|调整|改动|保存|应用|提交|写入)|"
+    r"(?:不用|无需|不需要|不必)(?:再)?(?:实际)?(?:保存|应用|提交|执行|写入)|"
+    r"(?:暂缓|推迟|稍后再)(?:保存|应用|提交|执行|写入)|"
+    r"等.{0,12}(?:确认|同意|回复).{0,8}(?:再|以后|之后)"
+    r"(?:保存|应用|提交|执行|写入)"
+)
 _CONSULTATIVE_REQUEST = re.compile(
     r"你觉得|你认为|会不会|会怎样|会怎么样|会如何|会有什么影响|"
     r"(?:哪个|比较|对比|相比).{0,20}(?:合适|适合|更好|更轻松)|"
@@ -560,6 +568,8 @@ class TripAIEditService:
         """仅在 V2 AI 写入口判断是否有立即执行授权。"""
         if _NO_EXECUTION_REQUEST.search(message):
             return "read_only"
+        if _DEFERRED_WRITE_REQUEST.search(message):
+            return "clarify" if _EDIT_VERBS.search(message) else "read_only"
         if _REFERENCE_OR_DEMO_REQUEST.search(message):
             return "read_only"
         if _QUOTED_EDIT_COMMAND.search(message):

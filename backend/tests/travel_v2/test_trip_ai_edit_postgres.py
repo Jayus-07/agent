@@ -163,8 +163,16 @@ def _request_metadata(trip_id: str, key: str) -> dict:
 
 @pytest.mark.parametrize(("message", "expected_status"), [
     ("以下只是演示，请不要执行：直接帮我把西湖开始时间改成10点。", "read_only"),
+    ("以下只是演示：把西湖开始时间改成10点。", "read_only"),
     ("如果你直接帮我把西湖开始时间改成10点，可以吗？", "clarify"),
     ("“把西湖开始时间改成10点。”", "clarify"),
+    ("先不保存。", "read_only"),
+    ("先不用保存。", "read_only"),
+    ("暂不应用。", "read_only"),
+    ("把西湖开始时间改成10点，但是先不保存。", "clarify"),
+    ("把西湖开始时间改成10点，不过先不用保存。", "clarify"),
+    ("把西湖开始时间改成10点，但暂不应用。", "clarify"),
+    ("把西湖开始时间改成10点，等我确认后再保存。", "clarify"),
 ])
 def test_non_authorized_language_never_calls_generator_or_changes_trip(
     trip_api, monkeypatch, message: str, expected_status: str,
@@ -220,8 +228,13 @@ def test_explicit_execution_authorization_saves_one_revision(
 
 @pytest.mark.parametrize(("message", "expected_status"), [
     ("以下只是演示，请不要执行：直接帮我把西湖开始时间改成10点。", "read_only"),
+    ("以下只是演示：把西湖开始时间改成10点。", "read_only"),
     ("如果你直接帮我把西湖开始时间改成10点，可以吗？", "clarify"),
     ("“把西湖开始时间改成10点。”", "clarify"),
+    ("把西湖开始时间改成10点，但是先不保存。", "clarify"),
+    ("把西湖开始时间改成10点，不过先不用保存。", "clarify"),
+    ("把西湖开始时间改成10点，但暂不应用。", "clarify"),
+    ("把西湖开始时间改成10点，等我确认后再保存。", "clarify"),
 ])
 def test_candidate_cannot_bypass_final_authorization_gate(
     trip_api, monkeypatch, message: str, expected_status: str,
