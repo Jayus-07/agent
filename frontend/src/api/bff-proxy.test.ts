@@ -156,4 +156,141 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     expect(target).toContain("/api/cs/conversations/conv-1/messages?since_id=3");
     expect(init.body).toBeUndefined();
   });
+
+  it("仅匿名分享读取和 ICS 导出转发令牌并透传安全响应头", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("shared", {
+        headers: {
+          "Content-Type": "text/calendar; charset=utf-8",
+          "Cache-Control": "no-store, private",
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex, nofollow",
+          Vary: "X-Travel-Share-Token",
+        },
+      }),
+    );
+    process.env.API_KEY = "server-only-key";
+    const token = "opaque-share-token-not-in-url";
+
+    try {
+      const response = await GET(
+        makeProxyRequest(
+          "http://localhost:3000/api/travel/v2/shares/123e4567-e89b-42d3-a456-426614174000/export.ics",
+          { method: "GET", headers: { "X-Travel-Share-Token": token } },
+        ),
+        ctx([
+          "travel",
+          "v2",
+          "shares",
+          "123e4567-e89b-42d3-a456-426614174000",
+          "export.ics",
+        ]),
+      );
+
+      const [target, init] = fetchSpy.mock.calls[0] as unknown as [
+        string,
+        RequestInit,
+      ];
+      const sent = new Headers(init.headers);
+      expect(target).not.toContain(token);
+      expect(sent.get("x-travel-share-token")).toBe(token);
+      expect(sent.get("authorization")).toBeNull();
+      expect(sent.get("x-api-key")).toBe("server-only-key");
+      expect(response.headers.get("cache-control")).toBe("no-store, private");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(response.headers.get("vary")).toBe("X-Travel-Share-Token");
+    } finally {
+      delete process.env.API_KEY;
+    }
+  });
+
+  it("私有 Trip 路由不转发分享令牌或公开分享响应头", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("private", {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex",
+          Vary: "X-Travel-Share-Token",
+        },
+      }),
+    );
+    const response = await GET(
+      makeProxyRequest(
+        "http://localhost:3000/api/travel/v2/trips/123e4567-e89b-42d3-a456-426614174000",
+        {
+          method: "GET",
+          headers: { "X-Travel-Share-Token": "must-not-forward" },
+        },
+      ),
+      ctx(["travel", "v2", "trips", "123e4567-e89b-42d3-a456-426614174000"]),
+    );
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    const sent = new Headers(init.headers);
+    expect(sent.get("x-travel-share-token")).toBeNull();
+    expect(response.headers.get("cache-control")).toBeNull();
+    expect(response.headers.get("referrer-policy")).toBeNull();
+    expect(response.headers.get("x-robots-tag")).toBeNull();
+    expect(response.headers.get("vary")).toBeNull();
+  });
+
+  it("创建分享响应保留 no-store 头但不转发匿名读取令牌头", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ share_url: "/travel/share/id#token=opaque" }), {
+        headers: {
+          "Content-Type": "application/json",
+          "Cache-Control": "no-store",
+          "Referrer-Policy": "no-referrer",
+          "X-Robots-Tag": "noindex, nofollow",
+        },
+      }),
+    );
+    const response = await POST(
+      makeProxyRequest(
+        "http://localhost:3000/api/travel/v2/trips/123e4567-e89b-42d3-a456-426614174000/shares",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Travel-Share-Token": "must-not-forward-on-create",
+          },
+          body: JSON.stringify({ revision: 1 }),
+        },
+      ),
+      ctx([
+        "travel",
+        "v2",
+        "trips",
+        "123e4567-e89b-42d3-a456-426614174000",
+        "shares",
+      ]),
+    );
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).get("x-travel-share-token")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  });
+
+  it("网关连接错误不回显异常内容", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new Error("token=secret database=postgres://private"),
+    );
+    const response = await GET(
+      makeProxyRequest("http://localhost:3000/api/travel/v2/shares/123e4567-e89b-42d3-a456-426614174000", {
+        method: "GET",
+        headers: { "X-Travel-Share-Token": "opaque" },
+      }),
+      ctx(["travel", "v2", "shares", "123e4567-e89b-42d3-a456-426614174000"]),
+    );
+
+    expect(response.status).toBe(502);
+    const body = await response.text();
+    expect(body).not.toContain("postgres://private");
+    expect(body).not.toContain("token=secret");
+  });
 });

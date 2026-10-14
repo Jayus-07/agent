@@ -7,6 +7,7 @@ from fastapi import APIRouter, Header, HTTPException, Path, Request, Response
 from backend.app.api.identity import require_identity
 from backend.app.api.routes.travel import ics_content_disposition
 from backend.travel_v2.adapters.ics_export import trip_document_to_ics
+from backend.travel_v2.db import TravelV2PersistenceError
 from backend.travel_v2.services.export_service import RevisionExportService
 from backend.travel_v2.services.share_service import ShareNotFoundError, ShareService
 from backend.travel_v2.services.trip_service import TripNotFound
@@ -29,7 +30,9 @@ def _owner_scope(request: Request) -> tuple[str, str]:
     return tenant_id, owner_id
 
 
-def _ics_response(snapshot: dict, *, filename: str) -> Response:
+def _ics_response(
+    snapshot: dict, *, filename: str, share_token_access: bool = False,
+) -> Response:
     try:
         content = trip_document_to_ics(snapshot)
     except ValueError as exc:
@@ -40,15 +43,18 @@ def _ics_response(snapshot: dict, *, filename: str) -> Response:
                 "message": str(exc),
             },
         ) from exc
+    headers = {
+        "Content-Disposition": ics_content_disposition(filename),
+        "Cache-Control": "no-store, private",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+    }
+    if share_token_access:
+        headers["Vary"] = "X-Travel-Share-Token"
     return Response(
         content=content,
         media_type="text/calendar; charset=utf-8",
-        headers={
-            "Content-Disposition": ics_content_disposition(filename),
-            "Cache-Control": "no-store, private",
-            "Referrer-Policy": "no-referrer",
-            "X-Robots-Tag": "noindex, nofollow",
-        },
+        headers=headers,
     )
 
 
@@ -76,6 +82,14 @@ def export_trip_revision_ics(
             detail={
                 "code": "NOT_FOUND",
                 "message": str(exc),
+            },
+        ) from exc
+    except TravelV2PersistenceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "TRAVEL_V2_PERSISTENCE_UNAVAILABLE",
+                "message": "旅游 V2 导出暂不可用，请稍后重试",
             },
         ) from exc
     document = snapshot
@@ -111,6 +125,14 @@ def export_shared_revision_ics(
                 "message": str(exc),
             },
         ) from exc
+    except TravelV2PersistenceError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "TRAVEL_V2_PERSISTENCE_UNAVAILABLE",
+                "message": "旅游 V2 导出暂不可用，请稍后重试",
+            },
+        ) from exc
     try:
         filename = share["snapshot"]["brief"]["destination"]
     except (KeyError, TypeError) as exc:
@@ -121,4 +143,6 @@ def export_shared_revision_ics(
                 "message": "Revision 缺少导出所需的目的地",
             },
         ) from exc
-    return _ics_response(share["snapshot"], filename=filename)
+    return _ics_response(
+        share["snapshot"], filename=filename, share_token_access=True,
+    )

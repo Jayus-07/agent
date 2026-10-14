@@ -164,6 +164,8 @@ services:
       - LOG_FORMAT=${LOG_FORMAT:-json}
       # 认证（fail-closed：未配置 API_KEY 时业务端点拒绝服务）
       - API_KEY=${API_KEY:-}
+      # 分享令牌只存摘要；该独立 HMAC 密钥用于相同幂等请求重放恢复原链接。
+      - TRAVEL_V2_SHARE_TOKEN_SECRET=${TRAVEL_V2_SHARE_TOKEN_SECRET:-}
       # 身份来源：只认网关验签后注入的身份头（默认 header；生产禁 legacy 由
       # backend/config/startup.py 启动校验强制）。9000 外任何直连 8000 的
       # 流量一律按 guest 处理

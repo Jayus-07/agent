@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import os
 import uuid
 from hashlib import sha256
@@ -22,8 +23,12 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _isolated_postgres_guard() -> None:
+def _isolated_postgres_guard(monkeypatch) -> None:
     assert_isolated_travel_postgres()
+    monkeypatch.setenv(
+        "TRAVEL_V2_SHARE_TOKEN_SECRET",
+        "isolated-test-share-secret-with-at-least-32-bytes",
+    )
 
 
 def _headers(user_id: str, tenant_id: str) -> dict[str, str]:
@@ -64,10 +69,14 @@ def _create_share(
     trip_id: str,
     headers: dict,
     revision: int = 1,
+    idempotency_key: str | None = None,
 ) -> tuple[dict, str]:
     response = client.post(
         f"/travel/v2/trips/{trip_id}/shares",
-        headers=headers,
+        headers={
+            **headers,
+            "Idempotency-Key": idempotency_key or f"share-{uuid.uuid4().hex}",
+        },
         json={"revision": revision, "expires_in_days": 30},
     )
     assert response.status_code == 201, response.text
@@ -79,7 +88,7 @@ def _create_share(
     return created, token
 
 
-def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
+def test_fixed_revision_share_export_and_owner_tenant_permissions(monkeypatch) -> None:
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -132,6 +141,7 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
         assert (
             client.post(
                 f"/travel/v2/trips/{trip_id}/shares",
+                headers={"Idempotency-Key": "unauthenticated-share-create"},
                 json={"revision": 1},
             ).status_code
             == 401
@@ -139,7 +149,10 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
         assert (
             client.post(
                 f"/travel/v2/trips/{trip_id}/shares",
-                headers=other_owner_headers,
+                headers={
+                    **other_owner_headers,
+                    "Idempotency-Key": "other-owner-share-create",
+                },
                 json={"revision": 1},
             ).status_code
             == 404
@@ -147,7 +160,10 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
         assert (
             client.post(
                 f"/travel/v2/trips/{trip_id}/shares",
-                headers=other_tenant_headers,
+                headers={
+                    **other_tenant_headers,
+                    "Idempotency-Key": "other-tenant-share-create",
+                },
                 json={"revision": 1},
             ).status_code
             == 404
@@ -155,14 +171,78 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
         assert (
             client.post(
                 f"/travel/v2/trips/{trip_id}/shares",
-                headers=owner_headers,
+                headers={
+                    **owner_headers,
+                    "Idempotency-Key": "missing-revision-share-create",
+                },
                 json={"revision": 99},
             ).status_code
             == 404
         )
 
-        share, token = _create_share(client, trip_id, owner_headers)
+        share_key = f"share-create-{uuid.uuid4().hex}"
+        share, token = _create_share(
+            client,
+            trip_id,
+            owner_headers,
+            idempotency_key=share_key,
+        )
         share_id = share["share_id"]
+        replay = client.post(
+            f"/travel/v2/trips/{trip_id}/shares",
+            headers={**owner_headers, "Idempotency-Key": share_key},
+            json={"revision": 1, "expires_in_days": 30},
+        )
+        assert replay.status_code == 200, replay.text
+        assert replay.json() == share
+        monkeypatch.setenv(
+            "TRAVEL_V2_SHARE_TOKEN_SECRET",
+            "rotated-test-share-secret-with-at-least-32-bytes",
+        )
+        rotated_replay = client.post(
+            f"/travel/v2/trips/{trip_id}/shares",
+            headers={**owner_headers, "Idempotency-Key": share_key},
+            json={"revision": 1, "expires_in_days": 30},
+        )
+        assert rotated_replay.status_code == 503
+        assert rotated_replay.json()["detail"]["code"] == "TRAVEL_V2_SHARE_UNAVAILABLE"
+        monkeypatch.setenv(
+            "TRAVEL_V2_SHARE_TOKEN_SECRET",
+            "isolated-test-share-secret-with-at-least-32-bytes",
+        )
+        conflict = client.post(
+            f"/travel/v2/trips/{trip_id}/shares",
+            headers={**owner_headers, "Idempotency-Key": share_key},
+            json={"revision": 1, "expires_in_days": 31},
+        )
+        assert conflict.status_code == 409
+        assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+        concurrent_key = f"share-race-{uuid.uuid4().hex}"
+
+        def create_racing_share(_index: int):
+            return client.post(
+                f"/travel/v2/trips/{trip_id}/shares",
+                headers={**owner_headers, "Idempotency-Key": concurrent_key},
+                json={"revision": 1, "expires_in_days": 30},
+            )
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            raced = list(pool.map(create_racing_share, range(2)))
+        assert {response.status_code for response in raced} == {200, 201}
+        assert raced[0].json() == raced[1].json()
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT count(*) FROM travel_v2.trip_shares
+                         WHERE trip_id=%s::uuid AND idempotency_key_sha256 IS NOT NULL""",
+                    (trip_id,),
+                )
+                assert cursor.fetchone()[0] == 2
+        finally:
+            connection.close()
+
         connection = get_memory_engine().raw_connection()
         try:
             with connection.cursor() as cursor:
@@ -194,9 +274,15 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
         assert shared.status_code == 200, shared.text
         shared_body = shared.json()
         assert shared.headers["cache-control"] == "no-store, private"
+        assert shared.headers["referrer-policy"] == "no-referrer"
+        assert shared.headers["x-robots-tag"] == "noindex, nofollow"
+        assert shared.headers["vary"] == "X-Travel-Share-Token"
         assert shared_body["revision"] == 1
         assert shared_body["title"] == "杭州"
         assert shared_body["days"][0]["items"][0]["title"] == "西湖"
+        # 分享令牌只授权公开分享路由，不能替代正式 Trip 的用户身份。
+        private_trip_without_identity = client.get(f"/travel/v2/trips/{trip_id}")
+        assert private_trip_without_identity.status_code == 401
         serialized_share = shared.text
         for forbidden in (
             "trip_id",
@@ -277,6 +363,8 @@ def test_fixed_revision_share_export_and_owner_tenant_permissions() -> None:
             headers={"X-Travel-Share-Token": token},
         )
         assert public_export.status_code == 200
+        assert public_export.headers["cache-control"] == "no-store, private"
+        assert public_export.headers["vary"] == "X-Travel-Share-Token"
         assert "DTSTART;TZID=Asia/Shanghai:20261020T233000" in public_export.text
         assert "DTEND;TZID=Asia/Shanghai:20261021T010000" in public_export.text
 

@@ -279,7 +279,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
     # Trip 绑定的 AI 修改原始请求指纹和操作状态，支持模型调用前幂等占位。
     "094_travel_v2_ai_edit_requests.sql": "memory",
-    "095_travel_v2_revision_shares.sql": "memory",
+    # BE-4C PR #62 的 095 创建 ai_edit_requests.pending_resolution 状态约束；
+    # 固定 Revision 分享迁移使用 096，避免与 #62 并行时撞名/覆盖。
+    "096_travel_v2_revision_shares.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -293,7 +295,9 @@ ORDER_LAST = [
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
     "094_travel_v2_ai_edit_requests.sql",
-    "095_travel_v2_revision_shares.sql",
+    # 095 属于 BE-4C PR #62；缺文件时跳过，占位保持合并后的序号依赖。
+    "095_travel_v2_ai_edit_pending_resolution.sql",
+    "096_travel_v2_revision_shares.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"

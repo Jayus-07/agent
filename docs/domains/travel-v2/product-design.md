@@ -361,18 +361,22 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | 铁路搜索 | `POST /api/travel/v2/search/trains` | 只读 |
 | V2 SSE 规划 | `POST /api/travel/v2/plan/stream`（仓库域文档） | 复用域图；需审计保存终态 |
 | 模板 | `/api/travel/v2/templates...`（详见当前路由） | 复用现有查询/复制 |
-| 创建固定 Revision 分享 | `POST /api/travel/v2/trips/{trip_id}/shares` | 登录身份 + tenant/owner 校验；请求指定 `revision`，`expires_in_days` 默认 30、范围 1–365；链接相对路径为 `/travel/share/{share_id}#token={token}`。令牌只在创建响应中返回，存储 SHA-256 哈希 |
+| 创建固定 Revision 分享 | `POST /api/travel/v2/trips/{trip_id}/shares` | 登录身份 + tenant/owner 校验；请求指定 `revision`，`expires_in_days` 默认 30、范围 1–365，并提供 `Idempotency-Key`；同键同请求恢复同一分享链接，同键不同请求返回 409。令牌由独立服务端 `TRAVEL_V2_SHARE_TOKEN_SECRET` HMAC 派生，数据库只存 SHA-256 摘要；链接相对路径为 `/travel/share/{share_id}#token={token}` |
 | 匿名读取分享 | `GET /api/travel/v2/shares/{share_id}`，请求头 `X-Travel-Share-Token` | 无需登录；仅 `active + 未撤销 + 未过期` 分享可读；无效状态统一 404；响应仅含明确白名单字段且 `Cache-Control: no-store` |
 | 撤销分享 | `DELETE /api/travel/v2/trips/{trip_id}/shares/{share_id}` | 登录身份 + Trip tenant/owner 校验；仅创建者可撤销 |
 | Trip ICS 导出 | `GET /api/travel/v2/trips/{trip_id}/revisions/{revision}/export.ics` | 登录身份 + Trip tenant/owner 校验；服务端读取指定不可变 Revision |
 | 分享 ICS 导出 | `GET /api/travel/v2/shares/{share_id}/export.ics`，请求头 `X-Travel-Share-Token` | 使用同一固定 Revision 与匿名令牌策略；日程项、住宿和城际动车来自该 Revision；所有本地时刻按 Trip IANA timezone 解释。跨午夜结束时间按持续分钟数换算；DST 不存在时刻返回 422，歧义时刻采用较早的 fold；缺少具体日历日期返回 422；中文文件名使用 RFC 6266 `filename*` |
 | PDF 导出 | 暂未实现 | ReportLab 当前仅是可选开发依赖；生产导出还需中文字体与版式验证，本批不增加运行依赖 |
-| 根据操作 ID 查终态 | **待核查/待设计** | 先复用运行账本，不预先假定新增 URL |
-| 业务冲突 `pending_resolution` | **待映射** | 先检查现有 Checkpointer/Context/审批状态 |
+| 查询 AI 操作终态 | `GET /api/travel/v2/trips/{trip_id}/ai-edits/{operation_key}` | 只读；身份、tenant、owner、Trip 和 key 联合限域；成功必须关联真实 `edit_operations`；UNKNOWN 不从 Revision 变化推断 |
+| 查询冲突待确认项 | `GET /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}` | 返回持久化冲突、允许选项和过期状态；pending 期间正式 Revision 不变 |
+| 确认冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/resolve` | Body 只接收服务端提供的 `resolution_id`；使用独立 `Idempotency-Key`，重新校验后复用 CAS/Revision/操作账本 |
+| 取消/拒绝冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/cancel` | 与确认共用 Trip 行锁；终态 pending 不可再次执行 |
 
 > FE-4 公开页从 `/travel/share/{share_id}#token=...` 的 fragment 读取一次性令牌，再经同源 BFF 调用公开 API；BFF 需转发 `X-Travel-Share-Token` 与响应 `Cache-Control` / `Referrer-Policy` / `X-Robots-Tag` / `Vary`。令牌不放 query/path，公开读取不需要用户 Bearer；BFF 继续使用现有服务端 `X-API-Key` 通道。
 
-> `ai-edits` 的 `processing/unknown` 可通过相同幂等键安全重放为当前状态，但本 API 不提供操作终态查询或多轮 `pending_resolution`；这两项仍属于 BE-4C。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
+> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
+
+> 幂等令牌恢复依赖服务端专用密钥。部署需配置至少 32 字节的 `TRAVEL_V2_SHARE_TOKEN_SECRET`；只要对应 `trip_shares` 幂等记录仍保留，就必须保留原密钥以恢复原链接。提前轮换时，已发链接仍按数据库摘要有效，但旧幂等请求将 fail closed 并返回 503，不会返回一个无法使用的新链接；密钥不参与令牌校验，轮换不会单独撤销已有链接。
 
 > 设计到实现的映射原则：`REUSE / FIX / BUILD / BLOCKED`；任何新增 URL、字段或表必须在 B0 差距报告中说明证据、调用方及迁移方案。
 

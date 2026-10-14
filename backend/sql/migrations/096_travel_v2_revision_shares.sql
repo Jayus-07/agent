@@ -6,6 +6,8 @@ CREATE TABLE travel_v2.trip_shares (
     owner_id VARCHAR(128) NOT NULL,
     revision BIGINT NOT NULL CHECK (revision >= 1),
     token_sha256 CHAR(64) NOT NULL UNIQUE,
+    idempotency_key_sha256 CHAR(64),
+    request_sha256 CHAR(64),
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -19,6 +21,12 @@ CREATE TABLE travel_v2.trip_shares (
         ON DELETE RESTRICT,
     CONSTRAINT chk_travel_v2_share_token_hash
         CHECK (token_sha256 ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT chk_travel_v2_share_idempotency_hash
+        CHECK (idempotency_key_sha256 IS NULL OR idempotency_key_sha256 ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT chk_travel_v2_share_request_hash
+        CHECK (request_sha256 IS NULL OR request_sha256 ~ '^[0-9a-f]{64}$'),
+    CONSTRAINT chk_travel_v2_share_idempotency_pair
+        CHECK ((idempotency_key_sha256 IS NULL) = (request_sha256 IS NULL)),
     CONSTRAINT chk_travel_v2_share_expiry
         CHECK (expires_at > created_at),
     CONSTRAINT chk_travel_v2_share_revocation
@@ -27,3 +35,8 @@ CREATE TABLE travel_v2.trip_shares (
 
 CREATE INDEX idx_travel_v2_shares_owner_recent
     ON travel_v2.trip_shares (tenant_id, owner_id, trip_id, created_at DESC);
+
+CREATE UNIQUE INDEX uq_travel_v2_shares_idempotency
+    ON travel_v2.trip_shares
+       (tenant_id, owner_id, trip_id, idempotency_key_sha256)
+    WHERE idempotency_key_sha256 IS NOT NULL;

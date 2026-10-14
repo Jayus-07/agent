@@ -5,6 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 
 from backend.app.api.identity import require_identity
+from backend.travel_v2.db import TravelV2PersistenceError
 from backend.travel_v2.models.share import (
     CreatedTripShare,
     CreateTripShareRequest,
@@ -13,8 +14,10 @@ from backend.travel_v2.models.share import (
 from backend.travel_v2.services.share_service import (
     ShareNotFoundError,
     ShareService,
+    ShareTokenRecoveryError,
     project_public_share,
 )
+from backend.travel_v2.services.trip_service import IdempotencyConflict
 
 router = APIRouter(tags=["旅游 V2 固定版本分享"])
 
@@ -41,6 +44,16 @@ def _not_found(exc: Exception) -> HTTPException:
     )
 
 
+def _persistence_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "code": "TRAVEL_V2_PERSISTENCE_UNAVAILABLE",
+            "message": "旅游 V2 分享暂不可用，请稍后重试",
+        },
+    )
+
+
 @router.post(
     "/travel/v2/trips/{trip_id}/shares",
     status_code=201,
@@ -53,6 +66,9 @@ def create_trip_share(
     payload: CreateTripShareRequest,
     request: Request,
     response: Response,
+    idempotency_key: str = Header(
+        ..., alias="Idempotency-Key", min_length=1, max_length=128,
+    ),
 ):
     tenant_id, owner_id = _owner_scope(request)
     try:
@@ -61,15 +77,45 @@ def create_trip_share(
             tenant_id=tenant_id,
             owner_id=owner_id,
             revision=payload.revision,
+            idempotency_key=idempotency_key,
             expires_in_days=payload.expires_in_days,
         )
     except ShareNotFoundError as exc:
         raise _not_found(exc) from exc
+    except IdempotencyConflict as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "IDEMPOTENCY_CONFLICT",
+                "message": "Idempotency-Key 已用于不同的分享请求",
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "INVALID_SHARE_REQUEST",
+                "message": "分享请求或 Idempotency-Key 格式无效",
+            },
+        ) from exc
+    except TravelV2PersistenceError as exc:
+        raise _persistence_unavailable() from exc
+    except ShareTokenRecoveryError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "TRAVEL_V2_SHARE_UNAVAILABLE",
+                "message": "分享暂不可用，请联系管理员检查服务配置",
+            },
+        ) from exc
 
     response.headers["Cache-Control"] = "no-store"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
     # 令牌放在前端 URL fragment；浏览器不会把 fragment 发给服务器或放入 Referer。
+    replayed = created.pop("replayed", False)
+    if replayed:
+        response.status_code = 200
     return {
         "share_id": created["share_id"],
         "trip_id": created["trip_id"],
@@ -95,6 +141,8 @@ def get_trip_share(
         share = ShareService().get_public_share(share_id=share_id, token=share_token)
     except ShareNotFoundError as exc:
         raise _not_found(exc) from exc
+    except TravelV2PersistenceError as exc:
+        raise _persistence_unavailable() from exc
     response.headers["Cache-Control"] = "no-store, private"
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Robots-Tag"] = "noindex, nofollow"
@@ -119,4 +167,6 @@ def revoke_trip_share(trip_id: UUID, share_id: UUID, request: Request):
         )
     except ShareNotFoundError as exc:
         raise _not_found(exc) from exc
+    except TravelV2PersistenceError as exc:
+        raise _persistence_unavailable() from exc
     return Response(status_code=204)

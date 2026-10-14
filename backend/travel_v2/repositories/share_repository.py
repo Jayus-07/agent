@@ -10,7 +10,7 @@ def _decode(raw: Any) -> dict:
 
 
 class ShareRepository:
-    """固定 Revision 分享记录；令牌只以 SHA-256 摘要形式入库。"""
+    """固定 Revision 分享记录；令牌仅存 SHA-256，幂等身份仅存摘要。"""
 
     def get_revision_for_owner(
         self,
@@ -46,13 +46,16 @@ class ShareRepository:
         owner_id: str,
         revision: int,
         token_sha256: str,
+        idempotency_key_sha256: str,
+        request_sha256: str,
         expires_in_days: int,
     ) -> dict:
         cursor.execute(
             """INSERT INTO travel_v2.trip_shares
                    (share_id, trip_id, tenant_id, owner_id, revision,
-                    token_sha256, expires_at)
-               VALUES (%s, %s::uuid, %s, %s, %s, %s,
+                    token_sha256, idempotency_key_sha256, request_sha256,
+                    expires_at)
+               VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, %s,
                        now() + (%s * interval '1 day'))
                RETURNING share_id, trip_id, revision, expires_at, created_at""",
             (
@@ -62,6 +65,8 @@ class ShareRepository:
                 owner_id,
                 revision,
                 token_sha256,
+                idempotency_key_sha256,
+                request_sha256,
                 expires_in_days,
             ),
         )
@@ -72,6 +77,39 @@ class ShareRepository:
             "revision": int(row[2]),
             "expires_at": row[3].isoformat(),
             "created_at": row[4].isoformat(),
+        }
+
+    def get_by_idempotency_key(
+        self,
+        cursor,
+        *,
+        trip_id: UUID | str,
+        tenant_id: str,
+        owner_id: str,
+        idempotency_key_sha256: str,
+    ) -> dict | None:
+        cursor.execute(
+            """SELECT share_id, trip_id, revision, expires_at, created_at,
+                      token_sha256, request_sha256
+                 FROM travel_v2.trip_shares
+                WHERE trip_id = %s::uuid AND tenant_id = %s AND owner_id = %s
+                  AND idempotency_key_sha256 = %s
+                FOR UPDATE""",
+            (str(trip_id), tenant_id, owner_id, idempotency_key_sha256),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "share": {
+                "share_id": str(row[0]),
+                "trip_id": str(row[1]),
+                "revision": int(row[2]),
+                "expires_at": row[3].isoformat(),
+                "created_at": row[4].isoformat(),
+            },
+            "token_sha256": row[5],
+            "request_sha256": row[6],
         }
 
     def get_public(
