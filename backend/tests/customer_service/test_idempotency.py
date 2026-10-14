@@ -52,7 +52,8 @@ class TestDuplicateConfirm:
         mock_store_fn.return_value = _make_store(claim_result=None)
 
         outcome = process_confirmation(
-            _pending_action(), "确认", "u1", "s1",
+            _pending_action(action_type="address_update", target_type="address"),
+            "确认", "u1", "s1",
         )
 
         assert outcome.kind == "duplicate"
@@ -74,7 +75,8 @@ class TestDuplicateConfirm:
         )
 
         outcome = process_confirmation(
-            _pending_action(), "确认", "u1", "s1",
+            _pending_action(action_type="address_update", target_type="address"),
+            "确认", "u1", "s1",
         )
 
         assert outcome.kind == "success"
@@ -140,6 +142,43 @@ class TestDuplicateConfirm:
             client_action_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
         )
         store.clear.assert_not_called()
+
+    @patch("backend.customer_service.confirmation_flow._execute_confirmed_action")
+    @patch("backend.customer_service.confirmation_store.get_confirmation_store")
+    def test_refund_request_confirmation_says_pending_review_not_refunded(
+        self, mock_store_fn, mock_execute,
+    ):
+        confirmation_id = "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11"
+        store = _make_store(claim_result=confirmation_id)
+        mock_store_fn.return_value = store
+        mock_execute.return_value = {
+            "action_id": confirmation_id,
+            "data": {
+                "request": {"request_id": confirmation_id},
+                "request_status": "pending_review",
+                "funds_refunded": False,
+            },
+        }
+
+        outcome = process_confirmation(
+            _pending_action(
+                action_id=confirmation_id,
+                action_type="refund_request",
+            ),
+            "确认",
+            "u1",
+            "s1",
+            tenant_id="tenant-1",
+        )
+
+        assert outcome.kind == "success"
+        assert "等待人工审核" in outcome.answer
+        assert confirmation_id in outcome.answer
+        assert "尚未退款" in outcome.answer
+        assert "模拟模式" not in outcome.answer
+        assert "funds_refunded" not in outcome.answer
+        mock_execute.assert_called_once()
+        assert mock_execute.call_args.kwargs["session_id"] == "s1"
 
     @patch("backend.customer_service.confirmation_store.get_confirmation_store")
     def test_stale_conditional_cancel_is_duplicate_and_preserves_pending(

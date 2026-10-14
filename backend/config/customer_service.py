@@ -241,6 +241,10 @@ CS_CONFIRM_LLM_CANDIDATE_ENABLED = os.getenv("CS_CONFIRM_LLM_CANDIDATE_ENABLED",
 # http：经 infra/http/business_client 调 business-service（Java/mock），
 #       仅收口的只读查询先切；失败返回友好话术，绝不降级回 sandbox 假数据
 CS_BUSINESS_GATEWAY_MODE = os.getenv("CS_BUSINESS_GATEWAY_MODE", "sandbox").strip().lower()
+# 默认关闭退款申请写入；本机隔离环境显式设为 sandbox 才可创建案件。
+CS_REFUND_REQUEST_MODE = os.getenv(
+    "CS_REFUND_REQUEST_MODE", "disabled",
+).strip().lower()
 
 # ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))

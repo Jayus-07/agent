@@ -16,9 +16,12 @@ import {
   listMyConversations,
   listMyTickets,
   getMyPendingAction,
+  listMyRefundRequests,
   type MyTicket,
   type PendingActionSnapshot,
   confirmAction,
+  updateMyRefundDraft,
+  type RefundRequestItem,
   notifyUserTyping,
   requestHandoff,
 } from '@/api/cs'
@@ -68,6 +71,9 @@ export default function CSDrawer({
   const [waitRemaining, setWaitRemaining] = useState<number | null>(null)
   const [tickets, setTickets] = useState<MyTicket[]>([])
   const [ticketsOpen, setTicketsOpen] = useState(false)
+  const [refundRequests, setRefundRequests] = useState<RefundRequestItem[]>([])
+  const [refundRequestsOpen, setRefundRequestsOpen] = useState(false)
+  const [refundRequestsError, setRefundRequestsError] = useState(false)
   useEffect(() => {
     if (handoffState !== 'waiting' || !handoffMeta?.total_deadline_at) {
       setWaitRemaining(null)
@@ -128,6 +134,15 @@ export default function CSDrawer({
         const resp = await confirmAction(currentId, pending, decision, crypto.randomUUID())
         addMessage('assistant', resp.answer, currentId)
         setPendingAction(currentId, null)
+        if (decision === 'confirm' && resp.status === 'success'
+          && pending.action_type === 'refund_request') {
+          try {
+            setRefundRequests(await listMyRefundRequests())
+            setRefundRequestsError(false)
+          } catch {
+            setRefundRequestsError(true)
+          }
+        }
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
           try {
@@ -158,6 +173,38 @@ export default function CSDrawer({
     [currentId, addMessage, handoffOwnsConversation, setError, setPendingAction],
   )
 
+  const handleUpdateRefundReason = useCallback(async (reason: string) => {
+    const pending = useCSChatStore.getState().pendingBySession[currentId]
+    if (!pending || pending.action_type !== 'refund_request' || handoffOwnsConversation) return
+    try {
+      await updateMyRefundDraft(currentId, pending, reason)
+      const latest = await getMyPendingAction(currentId)
+      setPendingAction(currentId, latest)
+      addMessage(
+        'assistant',
+        latest
+          ? '退款原因已更新。订单与金额已重新核验，请检查最新申请后再确认。'
+          : '原因修改已提交，但当前已没有待确认申请。请查询申请状态或联系人工客服。',
+        currentId,
+      )
+      setError(null)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        try {
+          const latest = await getMyPendingAction(currentId)
+          setPendingAction(currentId, latest)
+          addMessage('assistant', '退款申请状态已变化，请检查最新状态后再操作。', currentId)
+        } catch {
+          setPendingAction(currentId, null)
+          setError('申请状态已变化，最新信息暂不可用。请刷新会话后再试。')
+        }
+        return
+      }
+      setError(`修改退款原因失败：${err instanceof Error ? err.message : '请稍后重试'}`)
+      throw err
+    }
+  }, [currentId, handoffOwnsConversation, addMessage, setPendingAction, setError])
+
   // 人工介入同步：坐席消息轮询入列 + 转接状态卡片（抽屉打开期间生效）
   useCSHandoffSync(currentId, open)
 
@@ -173,6 +220,12 @@ export default function CSDrawer({
     })
     // 历史工单（2026-10-08 拍板：客服域要有工单真实记录展示）；失败静默为空
     listMyTickets(8).then(setTickets)
+    listMyRefundRequests()
+      .then((items) => {
+        setRefundRequests(items)
+        setRefundRequestsError(false)
+      })
+      .catch(() => setRefundRequestsError(true))
   }, [open])
 
   // 打开抽屉或切换会话时，从认证后的 PostgreSQL 接口恢复本会话待确认状态。
@@ -397,6 +450,7 @@ export default function CSDrawer({
                   disabled={handoffOwnsConversation}
                   onConfirm={() => handleConfirmAction('confirm')}
                   onCancel={() => handleConfirmAction('cancel')}
+                  onUpdateReason={handleUpdateRefundReason}
                 />
               )}
               {candidateOptions && candidateOptions.length > 0 && (
@@ -474,6 +528,47 @@ export default function CSDrawer({
                 </div>
               )}
             </>
+          )}
+          {refundRequestsError && (
+            <p role="status" className="mx-3 mt-2 text-xs text-text-muted">
+              退款申请状态暂不可用，请稍后重试。
+            </p>
+          )}
+          {refundRequests.length > 0 && (
+            <section className="mx-3 mt-2 mb-3 shrink-0 rounded-xl border border-border-subtle bg-white overflow-hidden">
+              <button
+                type="button"
+                aria-expanded={refundRequestsOpen}
+                onClick={() => setRefundRequestsOpen(!refundRequestsOpen)}
+                className="w-full flex items-center justify-between px-3 py-2 text-sm text-text-secondary hover:bg-black/[0.03]"
+              >
+                <span>我的退款申请（{refundRequests.length}）</span>
+                <span className="text-xs text-text-muted">{refundRequestsOpen ? '收起' : '查看状态'}</span>
+              </button>
+              {refundRequestsOpen && (
+                <ul className="divide-y divide-black/[0.04]">
+                  {refundRequests.map((item) => (
+                    <li key={item.request_id} className="px-3 py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 text-xs text-text-primary">
+                          {item.order_display} · ¥{item.amount}
+                        </span>
+                        <span className="shrink-0 rounded-full bg-amber-50 px-2 py-0.5 text-xs text-amber-800">
+                          {item.status === 'pending_review' ? '等待人工审核'
+                            : item.status === 'needs_user' ? '等待补充信息'
+                              : item.status === 'processing' ? '处理中'
+                                : item.status === 'resolved' ? '案件已解决'
+                                  : item.status === 'closed' ? '案件已关闭' : '状态核验中'}
+                        </span>
+                      </div>
+                      <p className="mt-1 break-all text-[11px] text-text-muted">
+                        申请编号：{item.request_id} · 尚不代表已退款
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </section>
           )}
         </div>
 

@@ -154,8 +154,20 @@ export interface PendingActionSnapshot {
   action_type: string
   masked_target: string
   summary: string
+  reason?: string
   expires_at: string | null
   state: 'pending' | 'paused_handoff' | 'expired'
+}
+
+export interface RefundRequestItem {
+  request_id: string
+  status: 'pending_review' | 'needs_user' | 'processing' | 'resolved' | 'closed' | 'unknown'
+  case_status: string
+  order_display: string
+  amount: string
+  policy_version: string
+  created_at: string | null
+  updated_at: string | null
 }
 
 /** 登录用户读取本人会话的 PostgreSQL 权威待确认快照。 */
@@ -189,6 +201,38 @@ export async function confirmAction(
       client_action_id: clientActionId,
     }),
   })
+}
+
+/** 修改本人 pending 退款申请的原因；订单与金额由服务端重新核验。 */
+export async function updateMyRefundDraft(
+  conversationId: string,
+  pending: PendingActionSnapshot,
+  reason: string,
+): Promise<{ updated: true; proposal_id: string; version: number }> {
+  return request(`/api/cs/conversations/my/${encodeURIComponent(conversationId)}/refund-draft`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      proposal_id: pending.proposal_id,
+      expected_version: pending.version,
+      reason,
+    }),
+  })
+}
+
+/** 查询当前登录用户本租户内的退款申请状态。 */
+export async function listMyRefundRequests(limit = 20): Promise<RefundRequestItem[]> {
+  const data = await request<{ items: RefundRequestItem[]; total: number }>(
+    `/api/cs/refund-requests?limit=${limit}`,
+  )
+  return data.items || []
+}
+
+/** 通过稳定申请编号查询本人申请详情。 */
+export async function getMyRefundRequest(requestId: string): Promise<RefundRequestItem> {
+  return request<RefundRequestItem>(
+    `/api/cs/refund-requests/${encodeURIComponent(requestId)}`,
+  )
 }
 
 /** 我的工单条目（customer_service.tickets 只读投影） */

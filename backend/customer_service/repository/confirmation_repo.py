@@ -111,6 +111,9 @@ class ConfirmationRepository:
         tenant_id: str = "",
         semantic_fingerprint: str | None = None,
         proposal_version: int | None = None,
+        expected_user_id: str | None = None,
+        expected_conversation_id: str | None = None,
+        expected_tenant_id: str | None = None,
     ) -> bool:
         """整行覆盖 pending 行的 proposal JSON 及其派生列（缺陷6.3）。
 
@@ -143,6 +146,14 @@ class ConfirmationRepository:
         if expires is not None:
             values["expires_at"] = expires
         filters = [CSConfirmation.confirmation_id == confirmation_id]
+        if expected_user_id is not None:
+            filters.append(CSConfirmation.user_id == expected_user_id)
+        if expected_conversation_id is not None:
+            filters.append(
+                CSConfirmation.conversation_id == expected_conversation_id,
+            )
+        if expected_tenant_id is not None:
+            filters.append(CSConfirmation.tenant_id == expected_tenant_id)
         if proposal_version is not None:
             # CAS 防止并发补槽/追问在另一请求认领后覆盖 Proposal。
             filters.extend((

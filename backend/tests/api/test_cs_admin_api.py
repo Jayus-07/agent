@@ -9,6 +9,7 @@ Covers:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
@@ -22,6 +23,13 @@ def client(monkeypatch):
     """Minimal FastAPI app with only the cs_admin router."""
     app = FastAPI()
     app.include_router(cs_admin.router)
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.fixture
+def confirm_client():
+    app = FastAPI()
+    app.include_router(cs_admin.confirm_router)
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -303,6 +311,202 @@ class TestGetConversationTraces:
         )
         resp = client.get("/cs/conversations/conv-001/traces")
         assert resp.status_code == 503
+
+
+class TestMyRefundRequests:
+    def test_default_tenant_is_rejected_without_reading_case_data(
+        self, confirm_client, monkeypatch,
+    ):
+        service = type("CaseService", (), {
+            "async_list_refund_requests": staticmethod(
+                lambda **_kwargs: pytest.fail("不可查询 default 租户申请"),
+            ),
+        })()
+        monkeypatch.setattr(
+            "backend.customer_service.case.service.get_case_service",
+            lambda: service,
+        )
+
+        response = confirm_client.get("/cs/refund-requests")
+
+        assert response.status_code == 403
+        assert "有效租户" in response.json()["detail"]
+
+    def test_list_uses_authenticated_user_and_tenant_scope(
+        self, confirm_client, monkeypatch,
+    ):
+        from backend.app.api.identity import Identity
+
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda _req: Identity(
+                user_id="customer-1", user_name="customer-1", auth_type="jwt",
+                source="header", roles=(), tenant_id="tenant-1",
+            ),
+        )
+        received = {}
+
+        class _CaseService:
+            async def async_list_refund_requests(self, **kwargs):
+                received.update(kwargs)
+                return [{
+                    "request_id": "request-1", "status": "pending_review",
+                    "order_display": "订单尾号 ****1234", "amount": "49.95",
+                }]
+
+        monkeypatch.setattr(
+            "backend.customer_service.case.service.get_case_service",
+            _CaseService,
+        )
+
+        response = confirm_client.get("/cs/refund-requests?limit=7")
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert received == {
+            "user_id": "customer-1", "tenant_id": "tenant-1", "limit": 7,
+        }
+
+
+class TestMyRefundDraftUpdate:
+    @staticmethod
+    def _prepare_route(monkeypatch, proposal_amount="49.95"):
+        from backend.app.api.identity import Identity
+
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda _req: Identity(
+                user_id="customer-1", user_name="customer-1", auth_type="jwt",
+                source="header", roles=(), tenant_id="tenant-1",
+            ),
+        )
+        async def ensure_my_conversation(*_args):
+            return None
+
+        monkeypatch.setattr(cs_admin, "_ensure_my_conversation", ensure_my_conversation)
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_REFUND_REQUEST_MODE", "sandbox",
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE", "sandbox",
+        )
+        monkeypatch.setattr(
+            "backend.customer_service.handoff.lifecycle.load_active_handoff_sync",
+            lambda *_a, **_kw: None,
+        )
+        pending = {
+            "action_id": "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+            "proposal_id": "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+            "version": 4,
+            "tenant_id": "tenant-1",
+            "action_type": "refund_request",
+            "target_type": "order",
+            "target_id": "trusted-order-42",
+            "before_state": {
+                "order_id": "trusted-order-42", "status": "paid",
+                "amount": "49.95", "policy_version": "refund-v1",
+            },
+            "after_state": {"status": "refund_requested", "reason": "旧原因"},
+            "created_at": "2026-10-15T00:00:00+00:00",
+            "expires_at": "2099-10-15T00:00:00+00:00",
+        }
+        store = type("ConfirmationStore", (), {
+            "load_authoritative": lambda _self, *_a: pending,
+            "update_pending_if_version": MagicMock(return_value=True),
+        })()
+        monkeypatch.setattr(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+            lambda: store,
+        )
+        captured = {}
+
+        def build(user_id, order_id, reason):
+            captured.update(user_id=user_id, order_id=order_id, reason=reason)
+            from backend.customer_service.action import ActionProposal
+            from backend.customer_service.risk import RiskLevel
+
+            return ActionProposal(
+                action_type="refund_request",
+                target_type="order",
+                target_id=order_id,
+                risk_level=RiskLevel.HIGH,
+                proposal_text=f"退款原因：{reason}",
+                before_state={
+                    "order_id": order_id, "status": "paid",
+                    "amount": proposal_amount, "policy_version": "refund-v1",
+                },
+                after_state={"status": "refund_requested", "reason": reason},
+            )
+
+        refund_service = type("RefundService", (), {
+            "build_refund_proposal": staticmethod(build),
+        })()
+        monkeypatch.setattr(
+            "backend.customer_service.service.refund_service.get_refund_service",
+            lambda: refund_service,
+        )
+        return pending, store, captured
+
+    def test_reason_only_edit_rebuilds_from_server_order_and_increments_cas(
+        self, confirm_client, monkeypatch,
+    ):
+        pending, store, captured = self._prepare_route(monkeypatch)
+
+        response = confirm_client.patch(
+            "/cs/conversations/my/conv-1/refund-draft",
+            json={
+                "proposal_id": pending["proposal_id"],
+                "expected_version": 4,
+                "reason": "包装破损",
+                "order_id": "attacker-chosen-order",
+                "amount": "0.01",
+            },
+        )
+
+        assert response.status_code == 200
+        assert captured == {
+            "user_id": "customer-1",
+            "order_id": "trusted-order-42",
+            "reason": "包装破损",
+        }
+        updated = store.update_pending_if_version.call_args.args[2]
+        assert updated["action_id"] == pending["action_id"]
+        assert updated["version"] == 5
+        assert updated["target_id"] == "trusted-order-42"
+        assert updated["before_state"]["amount"] == "49.95"
+        assert updated["expires_at"] == pending["expires_at"]
+
+    def test_reason_only_edit_rejects_changed_amount(self, confirm_client, monkeypatch):
+        pending, store, _captured = self._prepare_route(
+            monkeypatch, proposal_amount="59.95",
+        )
+
+        response = confirm_client.patch(
+            "/cs/conversations/my/conv-1/refund-draft",
+            json={
+                "proposal_id": pending["proposal_id"],
+                "expected_version": 4,
+                "reason": "包装破损",
+            },
+        )
+
+        assert response.status_code == 409
+        store.update_pending_if_version.assert_not_called()
+
+    def test_stale_confirmation_version_cannot_edit_reason(self, confirm_client, monkeypatch):
+        pending, store, _captured = self._prepare_route(monkeypatch)
+
+        response = confirm_client.patch(
+            "/cs/conversations/my/conv-1/refund-draft",
+            json={
+                "proposal_id": pending["proposal_id"],
+                "expected_version": 3,
+                "reason": "包装破损",
+            },
+        )
+
+        assert response.status_code == 409
+        store.update_pending_if_version.assert_not_called()
 
 
 class TestMyConversations:

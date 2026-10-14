@@ -259,6 +259,41 @@ class ConfirmationStore:
                 self._claimed_l1.discard((user_id, session_id))
                 self._data[(user_id, session_id)] = pending
 
+    def update_pending_if_version(
+        self,
+        user_id: str,
+        session_id: str,
+        pending_action: dict,
+        *,
+        tenant_id: str,
+        proposal_id: str,
+        expected_version: int,
+    ) -> bool:
+        """只允許以畫面版本更新 pending；PostgreSQL CAS 是最終裁決。"""
+        try:
+            from backend.customer_service._db_loop import run_sync
+
+            updated = run_sync(self._async_update_pending_if_version(
+                user_id,
+                session_id,
+                pending_action,
+                tenant_id=tenant_id,
+                proposal_id=proposal_id,
+                expected_version=expected_version,
+            ))
+        except BusinessOperationGuardError:
+            raise
+        except Exception as exc:
+            _db_write_failed("ConfirmationStore", "versioned_proposal_update", exc)
+            raise StoreWriteError(
+                "ConfirmationStore", "versioned_proposal_update",
+            ) from exc
+        if updated:
+            with self._lock:
+                self._claimed_l1.discard((user_id, session_id))
+                self._data[(user_id, session_id)] = dict(pending_action)
+        return updated
+
     def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
         """清除 pending 并把 DB 行置为终态。
 
@@ -648,6 +683,72 @@ class ConfirmationStore:
             except IntegrityError:
                 await db.rollback()
                 return False
+
+    @staticmethod
+    async def _async_update_pending_if_version(
+        user_id: str,
+        session_id: str,
+        pending_action: dict,
+        *,
+        tenant_id: str,
+        proposal_id: str,
+        expected_version: int,
+    ) -> bool:
+        """reason 编辑的 DB 端版本 CAS；目标、金额和身份不可由调用方改写。"""
+        from backend.customer_service.business_guard import (
+            BusinessOperationConflict,
+            compute_identity,
+        )
+        from backend.customer_service.repository import ConfirmationRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            repo = ConfirmationRepository(db)
+            row = await repo.load(user_id, session_id, tenant_id=tenant_id)
+            if (
+                row is None
+                or row.confirmation_id != proposal_id
+                or row.proposal_version != expected_version
+                or row.state != "pending"
+                or row.action_type != "refund_request"
+                or row.user_id != user_id
+                or row.conversation_id != session_id
+                or row.tenant_id != tenant_id
+            ):
+                await db.rollback()
+                return False
+
+            updated_action = dict(pending_action)
+            updated_action["action_id"] = row.confirmation_id
+            updated_action["proposal_id"] = row.confirmation_id
+            updated_action["version"] = expected_version + 1
+            identity = compute_identity(updated_action, tenant_id)
+            if identity is None:
+                raise StoreWriteError(
+                    "ConfirmationStore", "versioned_proposal_identity",
+                )
+            try:
+                updated = await repo.update_proposal(
+                    row.confirmation_id,
+                    updated_action,
+                    tenant_id=tenant_id,
+                    semantic_fingerprint=identity.semantic_fingerprint,
+                    proposal_version=expected_version + 1,
+                    expected_user_id=user_id,
+                    expected_conversation_id=session_id,
+                    expected_tenant_id=tenant_id,
+                )
+                if not updated:
+                    await db.rollback()
+                    return False
+                await db.commit()
+                return True
+            except IntegrityError as exc:
+                await db.rollback()
+                raise BusinessOperationConflict(
+                    "修改后的退款申请与另一处理中的操作冲突。",
+                    user_message="申请状态已变化，请刷新后重新检查。",
+                ) from exc
 
     @staticmethod
     async def _async_has_pending(user_id: str) -> bool:

@@ -1,7 +1,7 @@
 """customer_service/service/refund_service.py — 退款服务
 
-Phase 4: eligibility check + proposal building + simulate_execute.
-不实际写 DB — Phase 6 替换 simulate 为真实 DB 写入。
+资格核查和提案构建复用唯一退款政策。确认后仅在显式 sandbox 模式下
+登记待审核客服案件；不会调用支付系统或执行资金退款。
 
 退款规则（窗口 / 可退状态 / 政策版本）统一来自
 customer_service/policy/refund_policy.py：候选列表与资格判断同源。
@@ -12,6 +12,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 
 from backend.customer_service.action import (
     ActionProposal,
@@ -22,6 +23,7 @@ from backend.customer_service.errors import (
     DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
+    RefundRequestUnavailableError,
 )
 from backend.customer_service.policy.refund_policy import (
     get_refund_policy,
@@ -147,7 +149,7 @@ class RefundService:
         if reason:
             proposal_text += f"**退款原因:** {reason}\n"
         proposal_text += (
-            "\n退款将在 3-5 个工作日内退回原支付方式。\n\n"
+            "\n确认后只登记退款申请，进入人工审核；此操作不会即时退款。\n\n"
             "请确认是否提交退款申请？（回复「确认」提交 / 「取消」放弃）"
         )
 
@@ -166,7 +168,101 @@ class RefundService:
             after_state={
                 "order_id": eligibility.order_id,
                 "status": "refund_requested",
+                "reason": str(reason or "").strip()[:500],
             },
+        )
+
+    def execute_refund_request(
+        self,
+        pending_action: dict,
+        *,
+        confirmation_id: str,
+        user_id: str,
+        tenant_id: str,
+        conversation_id: str,
+    ) -> AgentActionRecord:
+        """在显式 sandbox 模式下登记待审核申请；不会执行退款或触碰资金。"""
+        from backend.config import customer_service as cfg
+
+        if (
+            str(getattr(cfg, "CS_REFUND_REQUEST_MODE", "disabled")).lower()
+            != "sandbox"
+            or str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
+            != "sandbox"
+        ):
+            raise RefundRequestUnavailableError()
+        if (
+            not user_id or user_id == "anonymous" or not tenant_id
+            or tenant_id == "default" or not conversation_id
+        ):
+            raise RefundRequestUnavailableError(
+                "退款申请缺少可信用户、租户或会话身份",
+            )
+        if pending_action.get("action_type") != ActionType.REFUND_REQUEST:
+            raise RefundRequestUnavailableError("退款确认动作类型无效")
+
+        before = pending_action.get("before_state")
+        after = pending_action.get("after_state")
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            raise OrderNotEligibleError("退款确认信息不完整，请重新发起申请")
+        order_id = str(pending_action.get("target_id") or "").strip()
+        if not order_id or str(before.get("order_id") or "") != order_id:
+            raise OrderNotEligibleError("退款确认订单与提案不一致，请重新发起申请")
+
+        # 确认时重查订单、退款记录和当前政策，任何事实变化都拒绝登记。
+        eligibility = self.check_refund_eligibility(user_id, order_id)
+        try:
+            proposed_amount = Decimal(str(before.get("amount"))).quantize(
+                Decimal("0.01"),
+            )
+            current_amount = Decimal(str(eligibility.amount)).quantize(
+                Decimal("0.01"),
+            )
+        except (InvalidOperation, ValueError, TypeError):
+            raise OrderNotEligibleError("退款金额无法核验，请重新发起申请") from None
+        if (
+            eligibility.order_id != order_id
+            or eligibility.status != str(before.get("status") or "")
+            or current_amount != proposed_amount
+            or eligibility.policy_version != str(before.get("policy_version") or "")
+        ):
+            raise OrderNotEligibleError(
+                "订单或退款政策已变化，申请未登记；请重新查询并发起。",
+            )
+
+        try:
+            stable_confirmation_id = str(uuid.UUID(str(confirmation_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise OrderNotEligibleError("确认标识无效，申请未登记") from None
+
+        reason = str(after.get("reason") or "").strip()[:500]
+        from backend.customer_service.case.service import get_case_service
+
+        request = get_case_service().create_refund_request_sync(
+            request_id=stable_confirmation_id,
+            conversation_id=conversation_id,
+            user_id=user_id,
+            tenant_id=tenant_id,
+            order_id=eligibility.order_id,
+            order_no=eligibility.order_no,
+            amount=format(current_amount, ".2f"),
+            reason=reason,
+            policy_version=eligibility.policy_version,
+        )
+        return AgentActionRecord(
+            action_id=stable_confirmation_id,
+            action_type=ActionType.REFUND_REQUEST,
+            agent_type="ai",
+            target_type="order",
+            target_id=eligibility.order_id,
+            data={
+                "request": request,
+                "request_status": "pending_review",
+                "funds_refunded": False,
+                "execution_mode": "sandbox",
+            },
+            status="executed",
+            executed_at=datetime.now(timezone.utc),
         )
 
     def simulate_execute(self, proposal: ActionProposal) -> AgentActionRecord:
@@ -221,8 +317,8 @@ class RefundService:
 
         http 网关模式跳过本地 refunds 查重（能力边界，非 fallback）：订单
         事实在 business service 侧，其退款记录本地库必然查不到；网关契约
-        暂无退款记录端点，重复退款由确认后的执行层把关（当前 simulate，
-        真实执行接入时网关侧必须校验）。
+        暂无退款端点，因此退款申请写入被关闭，不能回退到本地沙盒数据。
+        未来真实退款能力接入时必须由业务网关侧提供重复申请/退款校验。
         """
         from backend.customer_service.service.order_service import _use_http_gateway
 
