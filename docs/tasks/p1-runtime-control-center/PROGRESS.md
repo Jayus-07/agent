@@ -49,8 +49,10 @@
 ## CI 与安全门禁
 
 - `.github/workflows/frontend-admin.yml` 已随 `62a8fad` 推入 PR #63：仅 `frontend-admin/**` 或自身 workflow 变化触发；Node 20、npm lockfile 缓存、`npm ci`、官方 registry audit、Vitest、TypeScript、Next 构建。
+- `ca7ea48` 将触发范围扩展到观测管理员路由/权限测试及 Python 依赖，增加带 pip 缓存的定向后端权限 job；不执行无关 RAG/Travel 测试。
 - npm 镜像不支持 audit API，本机用官方 registry 才得到可用审计结果；workflow 明确指定官方 registry。
-- 门禁发现的既有依赖漏洞会让当前检查失败，这是有效的阻断信号。适用 high/critical 漏洞修复并验证前，不能标记“对外开放就绪”。权限、安全及必要后端路由测试也必须进入相应发布/保护门禁，单靠前端 CI 不足以覆盖。
+- GitHub `frontend-admin CI` run #1（`38550334257`）和 run #2（`38550889421`）的前端 job 均在依赖漏洞门禁失败，Vitest/TypeScript/构建步骤被跳过；run #2 的后端权限 job 正在安装锁定依赖。后端权限测试本机 12 passed，不能代替该 CI job 完成。
+- 门禁发现的既有依赖漏洞会让当前检查失败，这是有效的阻断信号。适用 high/critical 漏洞修复并验证前，不能标记“对外开放就绪”。本 job 覆盖观测只读端点管理员守卫；跨租户/资源级权限、其他敏感写路径和统一发布门禁仍须单独完成，不能由前端 CI 替代。
 - 只运行管理端和受影响的后端测试；RAG/Travel 无关套件不是施工阻断条件。
 
 ## PR 依赖、阻断项和下一步

@@ -81,7 +81,7 @@ PR #63 本轮不包含敏感写 API；因此不能报告 L3 写入 PASS。现有
 
 ### 管理端专属 CI
 
-新增 `.github/workflows/frontend-admin.yml`：仅 `frontend-admin/**` 或该 workflow 变化时对 PR 运行，且 main 上对应文件变化时运行；`setup-node` 使用 Node 20 和 `package-lock.json` npm 缓存，执行锁定依赖安装、依赖漏洞门禁、Vitest、TypeScript 和 Next 构建。CI 不依赖 RAG/Travel 全量测试。
+新增 `.github/workflows/frontend-admin.yml`：仅管理端前端、观测管理员权限路由/测试、相关 Python 依赖或该 workflow 变化时运行。前端 job 使用 Node 20 与 `package-lock.json` npm 缓存，执行锁定依赖安装、依赖漏洞门禁、Vitest、TypeScript 和 Next 构建；后端权限 job 使用 Python/pip 缓存并运行观测只读端点管理员守卫测试。CI 不依赖 RAG/Travel 全量测试。
 
 当前官方 npm audit 的基线结果为 **15 项（1 critical、9 high、5 moderate）**，其中包含现有 Next.js 14.2.29；因此 `--audit-level=high` 会让漏洞门禁失败。此门禁已建立但状态为 **BLOCKED**，不能将失败当作 PASS 或通过静默豁免绕过；修复/升级并完成兼容验证后才满足对外开放门槛。
 
