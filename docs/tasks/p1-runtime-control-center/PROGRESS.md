@@ -51,7 +51,7 @@
 - `.github/workflows/frontend-admin.yml` 已随 `62a8fad` 推入 PR #63：仅 `frontend-admin/**` 或自身 workflow 变化触发；Node 20、npm lockfile 缓存、`npm ci`、官方 registry audit、Vitest、TypeScript、Next 构建。
 - `ca7ea48` 将触发范围扩展到观测管理员路由/权限测试及 Python 依赖，增加带 pip 缓存的定向后端权限 job；不执行无关 RAG/Travel 测试。
 - npm 镜像不支持 audit API，本机用官方 registry 才得到可用审计结果；workflow 明确指定官方 registry。
-- GitHub `frontend-admin CI` run #1（`38550334257`）和 run #2（`38550889421`）的前端 job 均在依赖漏洞门禁失败，Vitest/TypeScript/构建步骤被跳过；run #2 的后端权限测试 step 已通过，job 正在完成缓存收尾。前端局部测试/TypeScript/构建在本机通过，不能把 CI 中被跳过的步骤记为通过。
+- GitHub `frontend-admin CI` run #1（`38550334257`）和 run #2（`38550889421`）的前端 job 均在依赖漏洞门禁失败，Vitest/TypeScript/构建步骤被跳过；run #2 的后端权限 job **PASS**（锁定依赖安装、管理员边界测试和 pip 缓存均成功）。前端局部测试/TypeScript/构建在本机通过，不能把 CI 中被跳过的步骤记为通过。
 - 门禁发现的既有依赖漏洞会让当前检查失败，这是有效的阻断信号。适用 high/critical 漏洞修复并验证前，不能标记“对外开放就绪”。本 job 覆盖观测只读端点管理员守卫；跨租户/资源级权限、其他敏感写路径和统一发布门禁仍须单独完成，不能由前端 CI 替代。
 - 只运行管理端和受影响的后端测试；RAG/Travel 无关套件不是施工阻断条件。
 
