@@ -14,6 +14,7 @@ from backend.travel_v2.services.trip_service import (
     _document_dict,
     _trip_id_for_key,
 )
+from backend.travel_v2.services.trip_write_validator import validate_trip_write
 
 
 class TemplateNotFound(LookupError):
@@ -164,6 +165,7 @@ class TemplateService:
                         )
                     return {**existing, "replayed": True}
 
+                validate_trip_write(snapshot)
                 trip = self._trips.insert(
                     cursor, trip_id=trip_id, tenant_id=tenant_id,
                     owner_id=owner_id,

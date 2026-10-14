@@ -25,18 +25,11 @@ from backend.shared.logger import logger
 from backend.rag.indexing.processing_lineage import ModelIdentity
 
 
-# 摘要采样：按文档长度自适应，保证头尾关键信息不丢
+# 摘要采样：委托共享实现（P1 元数据治理 2026-10-13——超长文档不再只取
+# 头尾 20k 声称代表全文，改为 头+章节目录+分层采样+尾 且标注覆盖范围）
 def _sample_for_summary(text: str) -> str:
-    n = len(text)
-    if n <= 2000:
-        return text           # 短文档全文
-    if n <= 8000:
-        cut = int(n * 0.6)
-        return text[:cut] + "\n...(中略)...\n" + text[-int(n * 0.4):]  # 头60%+尾40%
-    MAX_SAFE = 50000
-    if n > MAX_SAFE:
-        return text[:20000] + "\n...(中间大量细则略)...\n" + text[-20000:]  # 极端超长安全绳
-    return text               # 8KB~50KB 全文（DeepSeek 1M context 完全够）
+    from backend.rag.preprocessing.summary_sampling import sample_for_summary
+    return sample_for_summary(text)
 
 
 class MetadataStage:

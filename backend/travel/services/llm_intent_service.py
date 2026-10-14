@@ -116,18 +116,18 @@ def classify_intent_llm(
 
         payload = extract_json(raw, source="travel.llm_intent")
         if not isinstance(payload, dict):
-            logger.info("[TravelLLMIntent] 输出无 JSON，回落词表: %r", raw[:80])
+            logger.info("[TravelLLMIntent] 输出无 JSON，回落词表")
             return None
         family = str(payload.get("family") or "").strip().lower()
         # #103 守卫：只取 family 字段——LLM 输出里的任何其他键（行程/回复/
         # 参数）在结构上被丢弃，不存在被消费的通道。
         intent = _FAMILY_TO_INTENT.get(family)
         if intent is None:
-            logger.info("[TravelLLMIntent] family=%r 不在白名单，回落词表", family)
+            logger.info("[TravelLLMIntent] family 不在白名单，回落词表")
             return None
-        logger.info("[TravelLLMIntent] %r → %s", message[:40], intent)
+        logger.info("[TravelLLMIntent] LLM 意图已通过白名单")
         return intent
     except Exception as e:  # noqa: BLE001 — 理解层失败必须回落词表
-        logger.info("[TravelLLMIntent] LLM 判定失败（回落词表）: %s: %s",
-                    type(e).__name__, str(e)[:120])
+        logger.info("[TravelLLMIntent] LLM 判定失败（回落词表）: %s",
+                    type(e).__name__)
         return None

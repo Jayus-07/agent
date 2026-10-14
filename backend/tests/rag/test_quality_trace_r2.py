@@ -66,7 +66,18 @@ def test_parse_and_chunk_preserves_raw_text_and_operations(
     # 本环境部分清洗开关默认关闭，显式打开待测操作
     monkeypatch.setattr("backend.config.CLEAN_REMOVE_CONTROL_CHARS", True)
     captured = _CapturingStrategy()
-    monkeypatch.setattr(ChunkStrategyRouter, "route", lambda self, dt, rep: captured)
+    monkeypatch.setattr(
+        ChunkStrategyRouter, "route_with_decision",
+        lambda self, dt, rep: (
+            captured,
+            type(
+            "_D",
+            (),
+            {"as_dict": staticmethod(lambda: {}),
+             "degrade_reason": "", "strategy": "", "strategy_version": ""},
+        )(),
+        ),
+    )
 
     parse_and_chunk(str(md_file_with_dirty_text))
 
@@ -99,7 +110,18 @@ def test_parse_and_chunk_clean_text_differs_for_control_chars(
     """控制字符确实被清洗掉（text != raw_text 的节点，raw_text 含 \x08）。"""
     monkeypatch.setattr("backend.config.CLEAN_REMOVE_CONTROL_CHARS", True)
     captured = _CapturingStrategy()
-    monkeypatch.setattr(ChunkStrategyRouter, "route", lambda self, dt, rep: captured)
+    monkeypatch.setattr(
+        ChunkStrategyRouter, "route_with_decision",
+        lambda self, dt, rep: (
+            captured,
+            type(
+            "_D",
+            (),
+            {"as_dict": staticmethod(lambda: {}),
+             "degrade_reason": "", "strategy": "", "strategy_version": ""},
+        )(),
+        ),
+    )
 
     parse_and_chunk(str(md_file_with_dirty_text))
 

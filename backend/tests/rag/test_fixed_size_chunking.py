@@ -22,17 +22,19 @@ def test_fixed_size_splits_long_text():
 
 
 def test_fixed_size_short_text_single_chunk():
-    """短文本 → 单 chunk（不切）。"""
+    """短文本 → 单 leaf（不切）；另产 1 个文档级虚拟 parent（C1 同构）。"""
     chunks = FixedSizeChunkStrategy().split(_ast("短文本"), "x.txt")
-    assert len(chunks) == 1
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert len(leaves) == 1
 
 
 def test_fixed_size_metadata_complete():
-    """chunk metadata 含协议字段。"""
+    """chunk metadata 含协议字段（首个产出为虚拟 parent，leaf 协议单独验）。"""
     chunks = FixedSizeChunkStrategy().split(_ast("内容。"), "x.txt")
     for key in ("chunk_id", "granularity", "chunk_tokens", "file_path"):
         assert key in chunks[0].metadata
-    assert chunks[0].metadata["granularity"] == "leaf"
+    leaf = next(c for c in chunks if c.metadata["granularity"] == "leaf")
+    assert leaf.metadata["parent_chunk_id"]
 
 
 def test_ad_policy_routes_to_fixed_size():

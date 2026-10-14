@@ -69,3 +69,13 @@
 2. 凭据安全代码已合入，本机开发 Redis/PostgreSQL 只读凭据已轮换；API Key、生产配置和 #41 历史泄漏凭据未轮换/撤销，不宣称安全 P0 关闭。
 3. B1-E 已合并；生产 Checkpointer/interrupt 运行配置仍未知，部署前需由脱敏生产配置或只读运行证据确认。
 4. RAG R2/R3 和 Runtime 资源生命周期治理按用户要求暂不启动。
+
+## 2026-10-15 C2 续工
+
+- PR #52 当前分支：`codex/rag-multi-query-p0-20261013`，起始 HEAD `8eb3737e39b0e30eab3b6c104a7f5f53a3fa7aca`；从已核实当前 `origin/main` `bf3cddf7ac7329f576f036cb1a9717a8f96dfd27` 同步。PR #55 已合并，PR #52 原 base `888738365666706488492c90ee8b97d87b173d02` 已过期。
+- 同步时只有 `backend/infra/llm/proxy.py` 冲突。合并保留 C2 的 role 级 fallback、取消/deadline、重试策略，并合入 main 的预算/quota 预占错误分类与 `provider_attempted` 语义；冲突已按代码两侧核对后消解。没有主动改旅游或管理端功能。
+- 合并后免费定向回归 `141 passed`，覆盖 LLM budget/governance、MultiQuery、检索 deadline/thread pool、eval ContextVar/账本 artifact、token accounting 和 model-role API。
+- 首次运行有 140 passed、1 failed：该 API 测试在未设 `AI_INTERNAL_TOKEN` 的本机环境按 fail-closed 返回预期 503；用仅测试进程内的合成 token 重跑完整集合为 `141 passed`，未改断言或安全行为。
+- Python `py_compile` 与 `git diff --check` 通过。对包含历史代码的五个模块运行 Ruff 报 25 条既有风格问题（例如 import 排序/例外命名）；未用自动修复扩大范围。
+- 本轮未调用真实 Provider、未消耗付费额度、未连接生产或共享数据库。Clash 下真实 API 不通；历史严格 Top-1 `0.7143 < 0.80` 与费用/预算 `UNVERIFIED` 保持为阻断，不降低 Gate。
+- 下一步：提交并推送 main 同步及任务进度，更新现有 PR #52 base 到 main；检查免费 CI 和当前 head Review，处理新增的具体问题。真实 Provider 质量与账本复验仍须等待 Clash 可达及新的额度授权。

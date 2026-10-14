@@ -602,15 +602,25 @@ def _handle_terminal_failure(
     if not skip_fallback:
         _raise_if_role_call_cancelled(role)
     if fb is not None:
+        from backend.infra.circuit_breaker import CircuitBreakerOpenError
         from backend.infra.llm.budget import (
+            RequestBudgetExceeded,
             release_model_reservation,
             reserve_model_call,
             review_model_reservation,
         )
+        from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
         # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
-        reserve_model_call("fallback", model_name=fallback_model)
+        try:
+            reserve_model_call("fallback", model_name=fallback_model)
+        except (
+            RequestBudgetExceeded, QuotaConfigurationError, QuotaExceeded,
+        ) as exc:
+            if not isinstance(err, CircuitBreakerOpenError):
+                exc.provider_attempted = True
+            raise
         try:
             _raise_if_role_call_cancelled(role)
             # P1 模型归属：fallback 接管期间上下文改挂备用模型，
@@ -823,10 +833,12 @@ def _call_with_resilience(attr, *args, **kwargs):
     """同步韧性调用：按绑定模型预占/记录，重试与熔断按角色隔离。"""
     from backend.infra.circuit_breaker import CircuitBreakerOpenError
     from backend.infra.llm.budget import (
+        RequestBudgetExceeded,
         release_model_reservation,
         reserve_model_call,
         review_model_reservation,
     )
+    from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
@@ -834,10 +846,17 @@ def _call_with_resilience(attr, *args, **kwargs):
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
         _raise_if_role_call_cancelled(role)
-        reserve_model_call(
-            "primary" if attempt == 0 else "retry",
-            model_name=model_name,
-        )
+        try:
+            reserve_model_call(
+                "primary" if attempt == 0 else "retry",
+                model_name=model_name,
+            )
+        except (
+            RequestBudgetExceeded, QuotaConfigurationError, QuotaExceeded,
+        ) as exc:
+            if attempt > 0:
+                exc.provider_attempted = True
+            raise
         if _role_call_cancelled(role):
             release_model_reservation()
             _raise_if_role_call_cancelled(role)

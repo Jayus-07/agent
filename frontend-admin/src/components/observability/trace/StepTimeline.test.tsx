@@ -1,7 +1,7 @@
 import { act, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import type { Span } from "@/types/trace";
+import { spanColor, type Span } from "@/types/trace";
 import StepTimeline from "./StepTimeline";
 
 beforeAll(() => {
@@ -59,9 +59,9 @@ function mountTimeline(span: Span | Span[]): HTMLElement {
 }
 
 function expand(container: HTMLElement, spanId: string) {
-  const row = container.querySelector(`#step-${spanId} > div`);
-  if (!row) throw new Error(`找不到 Span 行 ${spanId}`);
-  act(() => row.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+  const toggle = container.querySelector(`#step-${spanId} button[aria-controls="span-details-${spanId}"]`);
+  if (!toggle) throw new Error(`找不到 Span 明细按钮 ${spanId}`);
+  act(() => toggle.dispatchEvent(new MouseEvent("click", { bubbles: true })));
 }
 
 afterEach(() => {
@@ -72,21 +72,43 @@ afterEach(() => {
 });
 
 describe("StepTimeline Span 明细", () => {
-  it("任意 Tool 都按通用结构展示名称、输入参数与结果", () => {
+  it("未知步骤状态使用中性色，不误画成成功", () => {
+    expect(spanColor("unknown", 20_000)).toContain("bg-slate-300");
+    expect(spanColor("failed", 20_000)).toContain("bg-red-400");
+    expect(spanColor("running", 20_000)).toContain("bg-blue-500");
+  });
+
+  it("LLM Token 来源不可用时显示未采集", () => {
+    const container = mountTimeline(makeSpan({
+      type: "llm_call",
+      metrics: { token_source: "unavailable", prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    }));
+
+    expect(container.textContent).toContain("Token 未采集");
+    expect(container.textContent).not.toContain("P:0 C:0 T:0");
+  });
+
+  it("LLM Token 已采集的真实零仍显示为零", () => {
+    const container = mountTimeline(makeSpan({
+      type: "llm_call",
+      metrics: { token_source: "response_metadata", prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+    }));
+
+    expect(container.textContent).toContain("P:0 C:0 T:0");
+  });
+
+  it("Tool 明细保留状态与类型，但隐藏输入输出参数", () => {
     const container = mountTimeline(makeSpan());
     expand(container, "tool-lookup");
 
     expect(container.textContent).toContain("inventory.lookup");
-    expect(container.textContent).toContain("调用能力");
-    expect(container.textContent).toContain("实际 Tool");
-    expect(container.textContent).toContain("catalog_search");
-    expect(container.textContent).toContain("输入参数");
-    expect(container.textContent).toContain("SKU-001");
-    expect(container.textContent).toContain("输出结果");
-    expect(container.textContent).toContain("quantity");
+    expect(container.textContent).toContain("Span 输入和输出参数已隐藏");
+    expect(container.textContent).not.toContain("SKU-001");
+    expect(container.textContent).not.toContain("catalog_search");
+    expect(container.textContent).not.toContain("quantity");
   });
 
-  it("多查询 Span 展示每条已记录的改写查询", () => {
+  it("多查询 Span 展示改写数量但不显示查询文本", () => {
     const container = mountTimeline(makeSpan({
       id: "query-rewrite",
       type: "llm_call",
@@ -99,11 +121,12 @@ describe("StepTimeline Span 明细", () => {
     expand(container, "query-rewrite");
 
     expect(container.textContent).toContain("多查询改写");
-    expect(container.textContent).toContain("退款申请流程");
-    expect(container.textContent).toContain("退款多久到账");
+    expect(container.textContent).toContain("查询文本已隐藏");
+    expect(container.textContent).not.toContain("退款申请流程");
+    expect(container.textContent).not.toContain("退款多久到账");
   });
 
-  it("多查询检索 Span 按查询显示命中数及失败/超时状态", () => {
+  it("多查询检索 Span 显示数量并隐藏每条查询的原始数据", () => {
     const container = mountTimeline(makeSpan({
       id: "multi-query-fanout",
       type: "retrieval",
@@ -123,13 +146,12 @@ describe("StepTimeline Span 明细", () => {
 
     expect(container.textContent).toContain("部分成功");
     expect(container.textContent).toContain("各查询检索结果");
-    expect(container.textContent).toContain("退款申请流程");
-    expect(container.textContent).toContain("召回 3");
-    expect(container.textContent).toContain("退款多久到账");
-    expect(container.textContent).toContain("超时");
+    expect(container.textContent).toContain("查询文本和逐项结果已隐藏");
+    expect(container.textContent).not.toContain("退款申请流程");
+    expect(container.textContent).not.toContain("退款多久到账");
   });
 
-  it("检索结果事件显示证据来源查询与片段摘要", () => {
+  it("检索结果事件只显示级别统计，隐藏事件标识、证据片段和查询文本", () => {
     const container = mountTimeline(makeSpan({
       id: "rag-retrieval",
       type: "retrieval",
@@ -138,7 +160,7 @@ describe("StepTimeline Span 明细", () => {
       input: { question: "退款怎么处理？" },
       output: { total_docs: 1 },
       events: [{
-        name: "final_context",
+        name: "final_context_private_marker",
         level: "info",
         message: "1 chunks → LLM",
         attributes: {
@@ -154,11 +176,42 @@ describe("StepTimeline Span 明细", () => {
     expand(container, "rag-retrieval");
 
     expect(container.textContent).toContain("执行事件");
-    expect(container.textContent).toContain("退款申请流程");
-    expect(container.textContent).toContain("退款需提交申请");
+    expect(container.textContent).toContain("事件标识与消息正文已隐藏");
+    expect(container.textContent).not.toContain("final_context_private_marker");
+    expect(container.textContent).not.toContain("退款申请流程");
+    expect(container.textContent).not.toContain("退款需提交申请");
   });
 
-  it("错误 Span 区分超时并显示已记录的原因", () => {
+  it("路由和降级属性只显示结构计数，不暴露自由文本", () => {
+    const route = makeSpan({
+      id: "route_decision",
+      name: "路由决策",
+      attributes: { condition: "PERSONAL_EMAIL@example.com", result: "PERSONAL_EMAIL@example.com" },
+    });
+    const round = makeSpan({
+      id: "graph_round",
+      name: "执行回合",
+      attributes: {
+        round: 2,
+        dispatched_skills: ["private-account-identifier"],
+        degraded_steps: ["private-query-value"],
+        degradation_reason: "PERSONAL_EMAIL@example.com",
+      },
+    });
+    (route as Span & { kind: string }).kind = "graph_route";
+    (round as Span & { kind: string }).kind = "graph_loop";
+    const container = mountTimeline([route, round]);
+
+    expect(container.textContent).toContain("已执行分支 · 条件值已隐藏");
+    expect(container.textContent).toContain("降级步骤 1 项");
+    expect(container.textContent).toContain("派发 1 项");
+    expect(container.textContent).toContain("降级原因文本已隐藏");
+    expect(container.textContent).not.toContain("PERSONAL_EMAIL@example.com");
+    expect(container.textContent).not.toContain("private-account-identifier");
+    expect(container.textContent).not.toContain("private-query-value");
+  });
+
+  it("Span 状态采用实际 status，不从原始错误文本推断状态或暴露错误原因", () => {
     const container = mountTimeline(makeSpan({
       id: "rag-fanout",
       name: "多查询并发检索",
@@ -166,15 +219,14 @@ describe("StepTimeline Span 明细", () => {
       attributes: { error_type: "timeout" },
       errors: ["检索 fan-out 超时，2 条查询未完成"],
     }));
-    expect(container.querySelector("#step-rag-fanout")?.textContent).toContain("超时");
-    expect(container.querySelector("#step-rag-fanout .h-full")?.className).toContain("bg-amber-500");
+    expect(container.querySelector("#step-rag-fanout")?.textContent).toContain("错误");
     expand(container, "rag-fanout");
 
-    expect(container.textContent).toContain("超时");
-    expect(container.textContent).toContain("检索 fan-out 超时，2 条查询未完成");
+    expect(container.textContent).toContain("错误文本已隐藏");
+    expect(container.textContent).not.toContain("检索 fan-out 超时");
   });
 
-  it("普通异常 Span 展示异常状态与错误详情", () => {
+  it("普通异常 Span 展示状态但隐藏原始错误消息", () => {
     const container = mountTimeline(makeSpan({
       id: "sql-query",
       name: "数据库查询",
@@ -184,8 +236,9 @@ describe("StepTimeline Span 明细", () => {
     }));
     expand(container, "sql-query");
 
-    expect(container.textContent).toContain("异常");
-    expect(container.textContent).toContain("PermissionDenied: 当前账号无权访问");
+    expect(container.textContent).toContain("错误");
+    expect(container.textContent).not.toContain("PermissionDenied");
+    expect(container.textContent).not.toContain("当前账号无权访问");
   });
 
 
@@ -250,12 +303,10 @@ describe("StepTimeline Span 明细", () => {
   it("大耗时步骤默认折叠，点击后展开明细", () => {
     const container = mountTimeline(makeSpan({ duration_ms: 1_250 }));
 
-    expect(container.textContent).not.toContain("输入参数");
-    expect(container.textContent).not.toContain("输出结果");
+    expect(container.textContent).not.toContain("输入输出参数已隐藏");
 
     expand(container, "tool-lookup");
 
-    expect(container.textContent).toContain("输入参数");
-    expect(container.textContent).toContain("输出结果");
+    expect(container.textContent).toContain("Span 输入和输出参数已隐藏");
   });
 });

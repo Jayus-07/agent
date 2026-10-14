@@ -1,15 +1,14 @@
 """TxtParser — 用空行 + 编号规则识别结构。
 
-Phase 2：先尝试 Q/A 识别，命中则走 FAQ 路径产 qa_question/qa_answer 节点。
+P0-01（2026-10-13）：不再整篇 FAQ 转换。一律走编号 heading/段落解析，
+再由 annotate_qa_nodes 做局部 Q/A 配对——混合文档（FAQ+正文）不再丢内容。
 """
 from __future__ import annotations
 
 import re
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
-from backend.rag.preprocessing.parser._qa_patterns import (
-    extract_qa_pairs, looks_like_qa_doc,
-)
+from backend.rag.preprocessing.parser._qa_patterns import annotate_qa_nodes
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
 from backend.shared.logger import logger
 
@@ -40,24 +39,6 @@ class TxtParser(BaseDocumentParser):
         raw = self._read_text(file_path)
 
         root = DocumentNode(type="section", text="", level=0)
-
-        # Phase 2：识别 FAQ 文档 → 整篇按 Q/A 切
-        if looks_like_qa_doc(raw):
-            pairs = extract_qa_pairs(raw)
-            for q, a, _ptype in pairs:
-                root.children.append(
-                    DocumentNode(type="qa_question", text=q)
-                )
-                root.children.append(
-                    DocumentNode(type="qa_answer", text=a)
-                )
-            logger.info(
-                f"[TxtParser] {file_path} 识别为 FAQ 文档，"
-                f"产出 {len(pairs)} 个 Q/A 对"
-            )
-            return DocumentAST(root=root, source_file=file_path, raw_text=raw)
-
-        # 普通文档：编号 heading 解析
         current: DocumentNode = root
         buf: list[str] = []
 
@@ -79,4 +60,10 @@ class TxtParser(BaseDocumentParser):
             buf.append(line.strip())
 
         _flush()
+        qa_pairs = annotate_qa_nodes(root)
+        if qa_pairs:
+            logger.info(
+                f"[TxtParser] {file_path} 局部识别 {qa_pairs} 个 Q/A 对"
+                f"（其余结构保留）"
+            )
         return DocumentAST(root=root, source_file=file_path, raw_text=raw)

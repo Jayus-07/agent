@@ -8,30 +8,35 @@ from uuid import UUID, uuid4
 from backend.travel_v2.db import memory_connection
 from backend.travel_v2.models.commands import (
     AddMealSelectionCommand,
-    StructuredTripEditCommand,
     SelectIntercityTrainCommand,
     SelectLodgingCommand,
+    StructuredTripEditCommand,
 )
 from backend.travel_v2.models.trip import TripDocumentV2
+from backend.travel_v2.repositories.ai_edit_request_repository import AIEditRequestRepository
 from backend.travel_v2.repositories.edit_operation_repository import EditOperationRepository
 from backend.travel_v2.repositories.revision_repository import RevisionRepository
 from backend.travel_v2.repositories.trip_repository import TripRepository
+from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_service import (
     TripNotFound,
     canonical_request_hash,
 )
-from backend.travel_v2.services.search_service import stable_selection_id
+from backend.travel_v2.services.trip_write_validator import (
+    validate_protected_items,
+    validate_trip_write,
+)
 
 
-class VersionConflict(RuntimeError):
+class VersionConflict(RuntimeError):  # noqa: N818 - 已有服务/API 异常契约
     """客户端基准版本不是当前正式版本。"""
 
 
-class IdempotencyConflict(ValueError):
+class IdempotencyConflict(ValueError):  # noqa: N818 - 已有服务/API 异常契约
     """同一幂等键对应不同的编辑内容。"""
 
 
-class RevisionNotFound(LookupError):
+class RevisionNotFound(LookupError):  # noqa: N818 - 已有服务/API 异常契约
     """当前行程范围内没有该历史版本。"""
 
 
@@ -41,11 +46,13 @@ class TripEditService:
         trip_repository: TripRepository | None = None,
         revision_repository: RevisionRepository | None = None,
         edit_operation_repository: EditOperationRepository | None = None,
+        ai_edit_request_repository: AIEditRequestRepository | None = None,
     ):
         self._connect = connect
         self._trips = trip_repository or TripRepository()
         self._revisions = revision_repository or RevisionRepository()
         self._operations = edit_operation_repository or EditOperationRepository()
+        self._ai_edit_requests = ai_edit_request_repository or AIEditRequestRepository()
 
     def add_meal(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
@@ -82,7 +89,7 @@ class TripEditService:
                 f"{payload.day_id}\0{payload.meal_period}\0{payload.selection_id}".encode("utf-8")
             ).hexdigest()[:32]
             merchant = payload.merchant
-            day["items"].append({
+            meal_item = {
                 "item_id": f"meal-{item_digest}",
                 "kind": "activity", "activity_type": "meal",
                 "title": merchant.name, "start_time": start_time,
@@ -100,7 +107,9 @@ class TripEditService:
                     },
                 },
                 "must_visit": False, "locked": False, "note": period_label,
-            })
+            }
+            self._insert_meal_in_order(day, meal_item)
+            self._refresh_derived_totals_and_budget(document, "add_meal")
         validated = TripDocumentV2.model_validate(document)
         return self.apply_document(
             trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
@@ -200,19 +209,44 @@ class TripEditService:
     @staticmethod
     def _schedule_meal_time(items: list[dict], *, preferred: str) -> str:
         preferred_time = time.fromisoformat(preferred)
-        start_min = preferred_time.hour * 60 + preferred_time.minute
+        start_seconds = (
+            preferred_time.hour * 60 * 60
+            + preferred_time.minute * 60
+            + preferred_time.second
+        )
         busy = []
         for item in items:
             if not item.get("start_time"):
                 continue
             item_time = time.fromisoformat(item["start_time"])
-            item_start = item_time.hour * 60 + item_time.minute
-            item_end = item_start + int(item.get("duration_min") or 0)
+            item_start = (
+                item_time.hour * 60 * 60
+                + item_time.minute * 60
+                + item_time.second
+            )
+            item_end = item_start + int(item.get("duration_min") or 0) * 60
             busy.append((item_start, item_end))
-        for candidate in range(start_min, 22 * 60, 15):
-            if all(candidate + 60 <= start or candidate >= end for start, end in busy):
-                return f"{candidate // 60:02d}:{candidate % 60:02d}"
+        for candidate in range(start_seconds, 22 * 60 * 60, 15 * 60):
+            if all(
+                candidate + 60 * 60 <= start or candidate >= end
+                for start, end in busy
+            ):
+                return f"{candidate // 3600:02d}:{candidate % 3600 // 60:02d}"
         raise ValueError("当天没有合适的餐饮时间，请先调整行程安排")
+
+    @staticmethod
+    def _insert_meal_in_order(day: dict, meal_item: dict) -> None:
+        """只插入餐饮项，保留原项目顺序并刷新受相邻关系影响的路线。"""
+        meal_start = time.fromisoformat(meal_item["start_time"])
+        insertion_index = len(day["items"])
+        for index, item in enumerate(day["items"]):
+            item_start = item.get("start_time")
+            if item_start and time.fromisoformat(item_start) > meal_start:
+                insertion_index = index
+                break
+        day["items"].insert(insertion_index, meal_item)
+        TripEditService._refresh_day_legs(day, deterministic_new_leg_ids=True)
+
     def apply_document(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
         actor_id: str, expected_revision: int, idempotency_key: str,
@@ -248,6 +282,10 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                self._assert_ai_key_available(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, idempotency_key=key,
+                )
 
                 current = self._trips.get(
                     cursor, trip_id, tenant_id=tenant_id,
@@ -263,6 +301,10 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                self._assert_ai_key_available(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, idempotency_key=key,
+                )
                 if int(current["revision"]) != expected_revision:
                     raise VersionConflict("行程版本已变化，请刷新后重试")
 
@@ -281,6 +323,11 @@ class TripEditService:
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
         actor_id: str, idempotency_key: str,
         command: StructuredTripEditCommand | dict,
+        _request_hash: str | None = None,
+        _command_type: str = "structured_edit",
+        _response_extra: dict | None = None,
+        _complete_ai_request: bool = False,
+        _ai_metadata: dict | None = None,
     ) -> dict:
         """在行锁内应用一次结构化编辑，再以现有 CAS 写入新 Revision。"""
         payload = (
@@ -293,14 +340,18 @@ class TripEditService:
         if len(tenant_id) > 128 or len(owner_id) > 128 or len(actor_id) > 128:
             raise ValueError("trip identity fields exceed 128 characters")
         operation = payload.operation.model_dump(mode="json", exclude_unset=True)
-        command_type = "structured_edit"
-        request_hash = canonical_request_hash({
+        command_type = _command_type
+        if not command_type or len(command_type) > 48:
+            raise ValueError("command_type must contain 1 to 48 characters")
+        request_hash = _request_hash or canonical_request_hash({
             "trip_id": str(trip_id),
             "expected_revision": payload.expected_revision,
             "command_type": command_type,
             "change_summary": payload.change_summary,
             "operation": operation,
         })
+        if len(request_hash) != 64 or any(char not in "0123456789abcdef" for char in request_hash):
+            raise ValueError("request hash must be a lowercase SHA-256 digest")
 
         with self._connect() as connection:
             with connection.cursor() as cursor:
@@ -311,6 +362,11 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                if not _complete_ai_request:
+                    self._assert_ai_key_available(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                    )
                 current = self._trips.get(
                     cursor, trip_id, tenant_id=tenant_id,
                     owner_id=owner_id, for_update=True,
@@ -324,13 +380,17 @@ class TripEditService:
                 )
                 if replay is not None:
                     return replay
+                if not _complete_ai_request:
+                    self._assert_ai_key_available(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                    )
                 if int(current["revision"]) != payload.expected_revision:
                     raise VersionConflict("行程版本已变化，请刷新后重试")
 
                 snapshot = self._apply_structured_operation(
                     current["document"], operation,
                 )
-                self._validate_edit_schedule(snapshot)
                 response = self._commit_locked(
                     cursor, trip_id=trip_id, tenant_id=tenant_id,
                     owner_id=owner_id, actor_id=actor_id,
@@ -339,16 +399,46 @@ class TripEditService:
                     command_type=command_type,
                     change_summary=payload.change_summary,
                     current=current, snapshot=snapshot,
+                    response_extra=_response_extra,
                 )
+                if _complete_ai_request:
+                    ai_receipt_fields = (
+                        "status", "saved", "trip_id", "base_revision",
+                        "new_revision", "operation_key", "change_summary", "diff",
+                    )
+                    self._ai_edit_requests.finish(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id, idempotency_key=key,
+                        status="succeeded",
+                        response={
+                            name: response[name] for name in ai_receipt_fields
+                            if name in response
+                        },
+                        metadata=_ai_metadata, allow_unknown=True,
+                    )
         return {**response, "replayed": False}
+
+    def _assert_ai_key_available(
+        self, cursor, *, trip_id: str | UUID, tenant_id: str,
+        owner_id: str, idempotency_key: str,
+    ) -> None:
+        ai_request = self._ai_edit_requests.get(
+            cursor, trip_id=trip_id, tenant_id=tenant_id,
+            owner_id=owner_id, idempotency_key=idempotency_key,
+        )
+        if ai_request:
+            raise IdempotencyConflict(
+                "Idempotency-Key 已用于 AI 行程修改请求",
+            )
 
     def _commit_locked(
         self, cursor, *, trip_id: str | UUID, tenant_id: str,
         owner_id: str, actor_id: str, expected_revision: int,
         idempotency_key: str, request_hash: str, command_type: str,
         change_summary: str, current: dict, snapshot: dict,
+        response_extra: dict | None = None,
     ) -> dict:
-        self._validate_protected_items(current["document"], snapshot)
+        validate_trip_write(snapshot, current_document=current["document"])
         next_revision = expected_revision + 1
         updated = self._trips.update_document_cas(
             cursor, trip_id=trip_id, tenant_id=tenant_id,
@@ -371,6 +461,8 @@ class TripEditService:
             "revision": next_revision, "document": snapshot,
             "status": "active",
         }
+        if response_extra:
+            response.update(response_extra)
         self._operations.insert(
             cursor, operation_id=uuid4(), trip_id=trip_id,
             tenant_id=tenant_id, owner_id=owner_id,
@@ -579,7 +671,9 @@ class TripEditService:
             day["date"] = (base_date + timedelta(days=index)).isoformat()
 
     @staticmethod
-    def _refresh_day_legs(day: dict) -> None:
+    def _refresh_day_legs(
+        day: dict, *, deterministic_new_leg_ids: bool = False,
+    ) -> None:
         existing = {
             (leg["from_item_id"], leg["to_item_id"]): leg
             for leg in day.get("legs", [])
@@ -589,8 +683,15 @@ class TripEditService:
             edge = (source["item_id"], target["item_id"])
             leg = existing.get(edge)
             if leg is None:
+                if deterministic_new_leg_ids:
+                    edge_hash = hashlib.sha256(
+                        f"{edge[0]}\0{edge[1]}".encode("utf-8")
+                    ).hexdigest()
+                    leg_id = f"leg-{edge_hash}"
+                else:
+                    leg_id = f"leg-{uuid4().hex}"
                 leg = {
-                    "leg_id": f"leg-{uuid4().hex}",
+                    "leg_id": leg_id,
                     "from_item_id": edge[0], "to_item_id": edge[1],
                     "selected_mode": "transit", "duration_min": None,
                     "distance_m": None, "cost_cny": None,
@@ -650,62 +751,7 @@ class TripEditService:
 
     @staticmethod
     def _validate_edit_schedule(document: dict) -> None:
-        for day in document["days"]:
-            previous: tuple[dict, int, int] | None = None
-            for item in day["items"]:
-                start_value = item.get("start_time")
-                if start_value is None:
-                    continue
-                start = time.fromisoformat(start_value)
-                start_minute = start.hour * 60 + start.minute
-                end_minute = start_minute + int(item.get("duration_min") or 0)
-                if end_minute > 24 * 60:
-                    raise ValueError(f"行程项 {item['title']} 超出当天时间范围")
-                if previous is not None:
-                    previous_item, _previous_start, previous_end = previous
-                    travel_min = 0
-                    leg = next((
-                        value for value in day["legs"]
-                        if value["from_item_id"] == previous_item["item_id"]
-                        and value["to_item_id"] == item["item_id"]
-                    ), None)
-                    if leg and leg.get("reliability") in {"verified", "estimated"}:
-                        travel_min = int(leg.get("duration_min") or 0)
-                    if start_minute < previous_end + travel_min:
-                        raise ValueError(
-                            f"{previous_item['title']} 与 {item['title']} 的时间或路程安排冲突"
-                        )
-                TripEditService._validate_opening_hours(day, item, start_minute, end_minute)
-                previous = (item, start_minute, end_minute)
-
-    @staticmethod
-    def _validate_opening_hours(day: dict, item: dict, start: int, end: int) -> None:
-        place = item.get("place") or {}
-        facts = place.get("facts") or {}
-        if facts.get("verification") != "verified":
-            return
-        hours = facts.get("opening_hours")
-        if not isinstance(hours, dict):
-            return
-        day_date = day.get("date")
-        if day_date:
-            weekday = (date.fromisoformat(day_date) if isinstance(day_date, str) else day_date).weekday()
-            closed = hours.get("closed_weekdays") or []
-            if weekday in closed or str(weekday) in closed:
-                raise ValueError(f"{item['title']} 在行程日期闭馆")
-        open_value = hours.get("open_time")
-        close_value = hours.get("close_time")
-        if not open_value or not close_value:
-            return
-        try:
-            open_time = time.fromisoformat(str(open_value))
-            close_time = time.fromisoformat(str(close_value))
-        except ValueError:
-            return
-        open_minute = open_time.hour * 60 + open_time.minute
-        close_minute = close_time.hour * 60 + close_time.minute
-        if start < open_minute or end > close_minute:
-            raise ValueError(f"{item['title']} 的安排超出已核实营业时间")
+        validate_trip_write(document)
 
     def restore(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
@@ -748,55 +794,4 @@ class TripEditService:
 
     @staticmethod
     def _validate_protected_items(current: dict, proposed: dict) -> None:
-        old_items = {
-            item["item_id"]: (day["day_id"], item)
-            for day in current["days"] for item in day["items"]
-        }
-        new_items = {
-            item["item_id"]: (day["day_id"], item)
-            for day in proposed["days"] for item in day["items"]
-        }
-        for item_id, (old_day_id, old_item) in old_items.items():
-            new = new_items.get(item_id)
-            if old_item.get("locked"):
-                if new is None:
-                    raise ValueError(f"locked item cannot be removed: {item_id}")
-                if new[0] != old_day_id:
-                    raise ValueError(f"locked item cannot be moved: {item_id}")
-                if not new[1].get("locked"):
-                    raise ValueError(f"locked item cannot be unlocked: {item_id}")
-            if old_item.get("fixed_start"):
-                if new is None or new[0] != old_day_id:
-                    raise ValueError(f"fixed item cannot be removed or moved: {item_id}")
-                if new[1].get("start_time") != old_item.get("start_time"):
-                    raise ValueError(f"fixed item start time cannot change: {item_id}")
-                if not new[1].get("fixed_start"):
-                    raise ValueError(f"fixed item cannot be unlocked: {item_id}")
-
-        # 已存在的锁定/固定项不能相对同日既有安排换位；新增项仍可插入其中。
-        old_positions = {
-            day["day_id"]: [item["item_id"] for item in day["items"]]
-            for day in current["days"]
-        }
-        new_positions = {
-            day["day_id"]: [item["item_id"] for item in day["items"]]
-            for day in proposed["days"]
-        }
-        protected = {
-            item_id
-            for item_id, (_day_id, item) in old_items.items()
-            if item.get("locked") or item.get("fixed_start")
-        }
-        for day_id, old_order in old_positions.items():
-            new_order = new_positions.get(day_id, [])
-            surviving = set(old_order).intersection(new_order)
-            surviving_old = [item_id for item_id in old_order if item_id in surviving]
-            surviving_new = [item_id for item_id in new_order if item_id in surviving]
-            old_rank = {item_id: index for index, item_id in enumerate(surviving_old)}
-            new_rank = {item_id: index for index, item_id in enumerate(surviving_new)}
-            for protected_id in protected.intersection(surviving_old):
-                old_before = [item_id for item_id in surviving_old if item_id != protected_id]
-                for other_id in old_before:
-                    if (old_rank[other_id] < old_rank[protected_id]) != (
-                            new_rank[other_id] < new_rank[protected_id]):
-                        raise ValueError(f"locked or fixed item cannot be reordered: {protected_id}")
+        validate_protected_items(current, proposed)

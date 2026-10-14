@@ -901,14 +901,15 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "",
 
 
 def _mark_registry_failed(filepath: str) -> None:
-    """索引失败后把 registry 占位行标为 failed（启动恢复的状态依据）。
+    """只把本次索引写入的 parsing/indexing 占位行标为 failed。
 
     _index_file 开始时写入的 parsing 占位行若不收口，会在每次启动时被
-    sync() 反复重试永久失败文档；active 行（覆盖上传前的旧版本）不降级。
+    sync() 反复重试永久失败文档；候选发布失败、审核态与既有 active 行
+    都不能被本次候选任务改写。
     """
     try:
         row = _get_registry().get_by_path(filepath)
-        if row and row.get("status") not in ("active", "deleted"):
+        if row and row.get("status") in ("parsing", "indexing"):
             _get_registry().update_status(filepath, "failed")
     except Exception as exc:
         logger.debug(f"[RAG] registry 失败状态标记异常（不影响主流程）: {exc}")
@@ -958,6 +959,13 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     # ---- 失败终态 ----
     if exc is not None:
         logger.error(f"[RAG] 后台索引失败: {exc}", exc_info=exc)
+        # _index_file 在普通模式下写入的 parsing 占位行必须收口为 failed；
+        # 锁冲突/幂等冲突/已被新候选取代不属于本次解析失败，不得改写并发任务状态。
+        if not isinstance(exc, (
+            FileLockedByOtherError, UploadIdempotencyConflict,
+            SupersededCandidate,
+        )):
+            _mark_registry_failed(filepath)
         # 运行记录终态（候选状态权威）。发布段失败（status=publishing，提交点
         # 已过）不标 failed——保持 publishing 等待重试续跑，不清理任何候选
         # 产物与暂存文件（续跑还要用）；仅候选期失败才走完整清理。
@@ -1567,6 +1575,17 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
 
     # ── duplicate 检测（与 active 版本同内容 → 无需发布）──
     existing = reg.get_by_path(filepath)
+    try:
+        _raw_existing_ids = (existing or {}).get("chunk_ids") or "[]"
+        _parsed_existing_ids = (
+            json.loads(_raw_existing_ids)
+            if isinstance(_raw_existing_ids, str) else _raw_existing_ids
+        )
+        old_chunk_ids_for_bm25 = [
+            str(item) for item in (_parsed_existing_ids or [])
+        ]
+    except (ValueError, TypeError):
+        old_chunk_ids_for_bm25 = []
     if existing and existing.get("status") == "active" \
             and existing.get("file_hash") == actual_hash:
         logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
@@ -1626,7 +1645,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     )
     try:
         index_result = indexer.index_candidate(
-            staging, filepath, file_hash=actual_hash)
+            staging, filepath, file_hash=actual_hash,
+            old_chunk_ids=old_chunk_ids_for_bm25)
     except SupersededCandidate:
         raise
     except Exception:

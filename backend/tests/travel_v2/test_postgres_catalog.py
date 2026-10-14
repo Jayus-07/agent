@@ -6,7 +6,7 @@ import pytest
 
 from backend.config.database import MEMORY_DB_CONFIG
 from backend.infra.db import get_memory_engine
-
+from backend.tests.travel_v2.postgres_test_support import assert_isolated_travel_postgres
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
@@ -14,9 +14,9 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_live_schema_contains_only_the_four_v2_core_tables_and_required_relations() -> None:
-    assert MEMORY_DB_CONFIG["dbname"] == "agent_memory"
-    assert MEMORY_DB_CONFIG["port"] == 5433
+def test_live_schema_contains_v2_tables_and_required_relations() -> None:
+    assert_isolated_travel_postgres()
+    assert MEMORY_DB_CONFIG["dbname"].startswith("travel_v2_test_")
     connection = get_memory_engine().raw_connection()
     try:
         with connection.cursor() as cursor:
@@ -26,7 +26,10 @@ def test_live_schema_contains_only_the_four_v2_core_tables_and_required_relation
                     ORDER BY table_name"""
             )
             tables = {row[0] for row in cursor.fetchall()}
-            assert tables == {"edit_operations", "templates", "trip_revisions", "trips"}
+            assert tables == {
+                "ai_edit_requests", "edit_operations", "templates",
+                "trip_revisions", "trips",
+            }
 
             cursor.execute(
                 """SELECT conname, contype FROM pg_constraint
@@ -37,7 +40,9 @@ def test_live_schema_contains_only_the_four_v2_core_tables_and_required_relation
             assert constraints["fk_travel_v2_revision_parent"] == "f"
             assert constraints["fk_travel_v2_edit_owner"] == "f"
             assert constraints["fk_travel_v2_edit_revision"] == "f"
+            assert constraints["fk_travel_v2_ai_edit_owner"] == "f"
             assert constraints["uq_travel_v2_edit_idempotency"] == "u"
+            assert constraints["uq_travel_v2_ai_edit_idempotency"] == "u"
             assert constraints["chk_travel_v2_edit_revision"] == "c"
 
             cursor.execute(

@@ -348,6 +348,7 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | Trip 列表 | `GET /api/travel/v2/trips` | 私有列表 |
 | 创建 Trip | `POST /api/travel/v2/trips` | 幂等写入，Revision 1 |
 | 结构化编辑 | `POST /api/travel/v2/trips/{trip_id}/edits` | 类型化操作、CAS、幂等 |
+| Trip 绑定 AI 修改 | `POST /api/travel/v2/trips/{trip_id}/ai-edits` | 请求含 `expected_revision/user_message`、可选 `conversation_id`；身份来自服务端；同键原始请求持久占位；只提交一个白名单结构化操作并复用统一 Validator/CAS/Revision。成功回执含 `base_revision/new_revision/operation_key/change_summary/document/diff`；只读、澄清、不支持和 UNKNOWN 不产生正式 Revision。 |
 | 整文档替换 | `PUT /api/travel/v2/trips/{trip_id}/document` | AI/整文档适配，须统一硬校验 |
 | Revision 历史 | `GET /api/travel/v2/trips/{trip_id}/revisions` | 含 `change_summary` |
 | Restore | `POST /api/travel/v2/trips/{trip_id}/restore` | 新 Revision |
@@ -363,6 +364,8 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | 分享/导出 | **未在本次上述 API 清单中确认** | 前端可先做界面，但真实服务动作待合同确认 |
 | 根据操作 ID 查终态 | **待核查/待设计** | 先复用运行账本，不预先假定新增 URL |
 | 业务冲突 `pending_resolution` | **待映射** | 先检查现有 Checkpointer/Context/审批状态 |
+
+> `ai-edits` 的 `processing/unknown` 可通过相同幂等键安全重放为当前状态，但本 API 不提供操作终态查询或多轮 `pending_resolution`；这两项仍属于 BE-4C。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
 
 > 设计到实现的映射原则：`REUSE / FIX / BUILD / BLOCKED`；任何新增 URL、字段或表必须在 B0 差距报告中说明证据、调用方及迁移方案。
 

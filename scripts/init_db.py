@@ -277,6 +277,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 该值此前只能来自 env/代码，管理端无法配置关闭思考
     # （实测主模型 reasoning/completion=0.73，73% 生成 token 花在思考上）。
     "087_llm_provider_extra_body.sql": "memory",
+    # Trip 绑定的 AI 修改原始请求指纹和操作状态，支持模型调用前幂等占位。
+    "094_travel_v2_ai_edit_requests.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -289,6 +291,7 @@ ORDER_LAST = [
     "093_revoke_readonly_default_password.sql",
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
+    "094_travel_v2_ai_edit_requests.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
