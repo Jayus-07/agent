@@ -98,6 +98,7 @@ class QuotaConfigurationError(RuntimeError):
 
     code = "BUDGET_EXCEEDED"
     retryable = False
+    provider_attempted = False
 
 
 class QuotaExceeded(RuntimeError):
@@ -105,6 +106,7 @@ class QuotaExceeded(RuntimeError):
 
     code = "BUDGET_EXCEEDED"
     retryable = False
+    provider_attempted = False
 
     def __init__(self, subject_id: str, period: str):
         self.subject_id = subject_id

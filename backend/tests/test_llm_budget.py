@@ -294,6 +294,87 @@ def test_proxy_reserves_retry_before_second_model_call(monkeypatch):
         with pytest.raises(RequestBudgetExceeded) as exc_info:
             proxy._call_with_resilience(always_timeout)
         assert exc_info.value.reason == "request_calls"
+        assert exc_info.value.provider_attempted is True
         assert calls == ["model"]
     finally:
         budget_module.clear_request_budget()
+
+
+def test_proxy_primary_budget_rejection_has_no_provider_attempt(monkeypatch):
+    from backend.infra import circuit_breaker
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    budget_module.clear_request_budget()
+    monkeypatch.setattr(
+        budget_module, "_config_limits", lambda: _limits(max_calls=1),
+    )
+    monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
+    budget_module.bind_request_budget("trace-budget-primary-reject-1")
+    budget_module.current_request_budget().reserve("primary")
+    calls = []
+
+    class _Breaker:
+        @staticmethod
+        def call(attr, *args, **kwargs):
+            return attr(*args, **kwargs)
+
+        @staticmethod
+        def reset():
+            return None
+
+    monkeypatch.setattr(circuit_breaker, "llm_circuit_breaker", _Breaker())
+    try:
+        with pytest.raises(RequestBudgetExceeded) as exc_info:
+            proxy._call_with_resilience(lambda: calls.append("provider"))
+        assert exc_info.value.provider_attempted is False
+        assert calls == []
+    finally:
+        budget_module.clear_request_budget()
+
+
+def test_fallback_budget_rejection_after_provider_error_is_marked_attempted(
+    monkeypatch,
+):
+    from backend.infra import circuit_breaker
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    budget_module.clear_request_budget()
+    monkeypatch.setattr(proxy, "LLM_MAX_RETRIES", 0)
+    monkeypatch.setattr(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False)
+
+    class _Breaker:
+        @staticmethod
+        def call(attr, *args, **kwargs):
+            return attr(*args, **kwargs)
+
+        @staticmethod
+        def reset():
+            return None
+
+    class _Fallback:
+        def invoke(self, *_args, **_kwargs):
+            return "unreachable"
+
+    monkeypatch.setattr(circuit_breaker, "llm_circuit_breaker", _Breaker())
+    monkeypatch.setattr(proxy, "_get_fallback_llm", lambda: _Fallback())
+    monkeypatch.setattr(proxy, "_configured_fallback_model", lambda: "fallback")
+    monkeypatch.setattr(proxy, "_get_provider_for", lambda _model: "fixture")
+    monkeypatch.setattr(proxy, "get_active_model_name", lambda: "fixture")
+    monkeypatch.setattr(proxy, "canonical_model_id", lambda model: model)
+
+    def reserve(kind, **_kwargs):
+        if kind == "fallback":
+            raise RequestBudgetExceeded("request_fallbacks")
+
+    monkeypatch.setattr(budget_module, "reserve_model_call", reserve)
+
+    def provider_timeout():
+        raise TimeoutError("fixture timeout")
+
+    with pytest.raises(RequestBudgetExceeded) as rejected:
+        proxy._call_with_resilience(provider_timeout)
+    assert rejected.value.provider_attempted is True

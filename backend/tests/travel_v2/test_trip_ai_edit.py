@@ -9,6 +9,8 @@ from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.models.ai_edit import AITripEditCandidate
 from backend.travel_v2.services.search_service import stable_selection_id
 from backend.travel_v2.services.trip_ai_edit_service import (
+    AIEditCallRejectedError,
+    AIEditCallUnknownError,
     AIEditModelOutputError,
     TripAIEditService,
 )
@@ -91,6 +93,26 @@ def test_trip_bound_intent_routes_query_modify_and_out_of_scope_safely() -> None
     assert TripAIEditService._classify("把西湖开始时间改到10:00", document) == "modify"
     assert TripAIEditService._classify("把西湖停留时长改为180分钟", document) == "modify"
     assert TripAIEditService._classify("帮我写代码", document) == "unsupported"
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("如果把西湖开始时间改成10:00，会不会太赶？", "read_only"),
+        ("把西湖改到10点会怎样", "read_only"),
+        ("如果把西湖改成10点，跟9点哪个更合适", "read_only"),
+        ("你觉得把西湖改到10点合适吗？", "read_only"),
+        ("先不要修改，告诉我改成10点会怎样。", "read_only"),
+        ("把西湖开始时间改成10:00。", "authorized"),
+        ("如果可以的话，请直接把西湖改成10:00。", "authorized"),
+        ("你觉得合适吗？请直接把西湖改成10:00。", "read_only"),
+        ("如果把西湖改成10:00", "clarify"),
+    ],
+)
+def test_ai_edit_requires_clear_immediate_execution_authorization(
+    message: str, expected: str,
+) -> None:
+    assert TripAIEditService._execution_authorization(message) == expected
 
 
 def test_ai_edit_scope_requires_unique_real_target_and_explicit_value() -> None:
@@ -309,3 +331,75 @@ def test_ai_model_output_parser_rejects_invalid_json_and_unlisted_operation(monk
             TripAIEditService._generate_candidate(
                 "修改西湖时间", {"days": []},
             )
+
+
+@pytest.mark.parametrize("provider_attempted", [False, True])
+def test_governed_budget_refusal_uses_provider_attempt_marker(
+    monkeypatch, provider_attempted: bool,
+) -> None:
+    from backend.config import model_roles
+    from backend.infra import async_utils
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import RequestBudgetExceeded
+    from backend.prompts.service import prompt_service
+
+    class BudgetFixture:
+        def invoke(self, _messages):
+            error = RequestBudgetExceeded("request_calls")
+            error.provider_attempted = provider_attempted
+            raise error
+
+    monkeypatch.setattr(
+        model_roles, "resolve_effective", lambda _role: {"value": "fixture-model"},
+    )
+    monkeypatch.setattr(
+        prompt_service, "render_sync",
+        lambda _key: SimpleNamespace(text="managed prompt", version=3),
+    )
+    monkeypatch.setattr(
+        proxy, "bind_llm_for_role", lambda *_args, **_kwargs: BudgetFixture(),
+    )
+    monkeypatch.setattr(
+        async_utils, "sync_call_with_timeout",
+        lambda function, _timeout: function(),
+    )
+
+    expected_error = (
+        AIEditCallUnknownError if provider_attempted else AIEditCallRejectedError
+    )
+    with pytest.raises(expected_error) as rejected:
+        TripAIEditService._generate_candidate(
+            "把西湖开始时间改到10:00", {"days": []},
+        )
+    assert rejected.value.metadata["rejection_type"] == "RequestBudgetExceeded"
+
+
+def test_governed_provider_exception_remains_unknown(monkeypatch) -> None:
+    from backend.config import model_roles
+    from backend.infra import async_utils
+    from backend.infra.llm import proxy
+    from backend.prompts.service import prompt_service
+
+    class ProviderFixture:
+        def invoke(self, _messages):
+            raise OSError("fixture transport failure")
+
+    monkeypatch.setattr(
+        model_roles, "resolve_effective", lambda _role: {"value": "fixture-model"},
+    )
+    monkeypatch.setattr(
+        prompt_service, "render_sync",
+        lambda _key: SimpleNamespace(text="managed prompt", version=3),
+    )
+    monkeypatch.setattr(
+        proxy, "bind_llm_for_role", lambda *_args, **_kwargs: ProviderFixture(),
+    )
+    monkeypatch.setattr(
+        async_utils, "sync_call_with_timeout",
+        lambda function, _timeout: function(),
+    )
+
+    with pytest.raises(AIEditCallUnknownError):
+        TripAIEditService._generate_candidate(
+            "把西湖开始时间改到10:00", {"days": []},
+        )

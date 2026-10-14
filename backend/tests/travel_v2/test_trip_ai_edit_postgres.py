@@ -15,7 +15,10 @@ from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.api.router import router
 from backend.travel_v2.models.ai_edit import AITripEditCandidate, AITripEditRequest
 from backend.travel_v2.repositories.trip_repository import TripRepository
-from backend.travel_v2.services.trip_ai_edit_service import TripAIEditService
+from backend.travel_v2.services.trip_ai_edit_service import (
+    AIEditModelOutputError,
+    TripAIEditService,
+)
 from backend.travel_v2.services.trip_edit_service import (
     IdempotencyConflict,
     TripEditService,
@@ -158,7 +161,14 @@ def _request_metadata(trip_id: str, key: str) -> dict:
         connection.close()
 
 
-def test_read_only_question_never_calls_generator_or_changes_trip(trip_api, monkeypatch) -> None:
+@pytest.mark.parametrize("message", [
+    "如果把西湖开始时间改成10:00，会不会太赶？",
+    "你觉得把西湖改到10点合适吗？",
+    "先不要修改，告诉我改成10点会怎样。",
+])
+def test_hypothetical_question_never_calls_generator_or_changes_trip(
+    trip_api, monkeypatch, message: str,
+) -> None:
     trip_id, headers = _create_trip(trip_api)
     key = f"read-{uuid.uuid4().hex}"
     monkeypatch.setattr(
@@ -169,12 +179,152 @@ def test_read_only_question_never_calls_generator_or_changes_trip(trip_api, monk
         result = trip_api.post(
             f"/travel/v2/trips/{trip_id}/ai-edits",
             headers={**headers, "Idempotency-Key": key},
-            json={"expected_revision": 1, "user_message": "西湖好玩吗？"},
+            json={"expected_revision": 1, "user_message": message},
         )
         assert result.status_code == 200
         assert result.json()["status"] == "read_only"
         assert result.json()["saved"] is False
-        assert _database_state(trip_id, key)[:3] == (1, 1, 0)
+        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "read_only")
+    finally:
+        _cleanup(trip_id)
+
+
+@pytest.mark.parametrize("message", [
+    "把西湖开始时间改成10:00。",
+    "如果可以的话，请直接把西湖改成10:00。",
+])
+def test_explicit_execution_authorization_saves_one_revision(
+    trip_api, monkeypatch, message: str,
+) -> None:
+    trip_id, headers = _create_trip(trip_api)
+    key = f"authorized-{uuid.uuid4().hex}"
+    _install_candidate(
+        monkeypatch,
+        {"op": "update_item", "item_id": "item-1", "start_time": "10:00"},
+    )
+    try:
+        result = trip_api.post(
+            f"/travel/v2/trips/{trip_id}/ai-edits",
+            headers={**headers, "Idempotency-Key": key},
+            json={"expected_revision": 1, "user_message": message},
+        )
+        assert result.status_code == 200
+        assert result.json()["status"] == "saved"
+        assert result.json()["new_revision"] == 2
+        assert _database_state(trip_id, key)[:4] == (2, 2, 1, "succeeded")
+    finally:
+        _cleanup(trip_id)
+
+
+def test_consultative_candidate_cannot_bypass_final_authorization_gate(
+    trip_api, monkeypatch,
+) -> None:
+    trip_id, headers = _create_trip(trip_api)
+    key = f"candidate-gate-{uuid.uuid4().hex}"
+    message = "如果把西湖开始时间改成10:00，会不会太赶？"
+    generated = []
+    calls = 0
+    original_authorization = TripAIEditService._execution_authorization
+
+    def force_first_gate(_message: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return "authorized"
+        return original_authorization(_message)
+
+    def generate(_message: str, _context: dict):
+        generated.append(True)
+        return _candidate(operation={
+            "op": "update_item", "item_id": "item-1", "start_time": "10:00",
+        }), _metadata()
+
+    monkeypatch.setattr(
+        TripAIEditService, "_execution_authorization", staticmethod(force_first_gate),
+    )
+    monkeypatch.setattr(TripAIEditService, "_generate_candidate", staticmethod(generate))
+    try:
+        result = trip_api.post(
+            f"/travel/v2/trips/{trip_id}/ai-edits",
+            headers={**headers, "Idempotency-Key": key},
+            json={"expected_revision": 1, "user_message": message},
+        )
+        assert result.status_code == 200
+        assert result.json()["status"] == "read_only"
+        assert generated == [True]
+        assert calls == 2
+        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "read_only")
+    finally:
+        _cleanup(trip_id)
+
+
+def test_pre_call_budget_rejection_is_failed_and_same_key_never_regenerates(
+    trip_api, monkeypatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from backend.config import model_roles
+    from backend.infra import async_utils
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import RequestBudgetExceeded
+    from backend.prompts.service import prompt_service
+
+    trip_id, headers = _create_trip(trip_api)
+    key = f"budget-{uuid.uuid4().hex}"
+    calls = []
+
+    class BudgetFixture:
+        def invoke(self, _messages):
+            calls.append(True)
+            raise RequestBudgetExceeded("request_calls")
+
+    monkeypatch.setattr(
+        model_roles, "resolve_effective", lambda _role: {"value": "fixture-model"},
+    )
+    monkeypatch.setattr(
+        prompt_service, "render_sync",
+        lambda _key: SimpleNamespace(text="managed prompt", version=3),
+    )
+    monkeypatch.setattr(
+        proxy, "bind_llm_for_role", lambda *_args, **_kwargs: BudgetFixture(),
+    )
+    monkeypatch.setattr(
+        async_utils, "sync_call_with_timeout",
+        lambda function, _timeout: function(),
+    )
+    url = f"/travel/v2/trips/{trip_id}/ai-edits"
+    body = {"expected_revision": 1, "user_message": "把西湖开始时间改到10:00"}
+    try:
+        first = trip_api.post(url, headers={**headers, "Idempotency-Key": key}, json=body)
+        replay = trip_api.post(url, headers={**headers, "Idempotency-Key": key}, json=body)
+        assert first.status_code == replay.status_code == 503
+        assert first.json()["status"] == replay.json()["status"] == "failed"
+        assert first.json()["code"] == "AI_EDIT_PRECALL_REJECTED"
+        assert len(calls) == 1
+        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "failed")
+        assert _request_metadata(trip_id, key)["result"] == "pre_call_rejected"
+    finally:
+        _cleanup(trip_id)
+
+
+def test_invalid_model_output_does_not_add_revision(trip_api, monkeypatch) -> None:
+    trip_id, headers = _create_trip(trip_api)
+    key = f"invalid-output-{uuid.uuid4().hex}"
+    monkeypatch.setattr(
+        TripAIEditService, "_generate_candidate",
+        staticmethod(lambda *_args: (_ for _ in ()).throw(
+            AIEditModelOutputError("invalid fixture", {"role": "main"}),
+        )),
+    )
+    try:
+        result = trip_api.post(
+            f"/travel/v2/trips/{trip_id}/ai-edits",
+            headers={**headers, "Idempotency-Key": key},
+            json={"expected_revision": 1, "user_message": "把西湖开始时间改到10:00"},
+        )
+        assert result.status_code == 502
+        assert result.json()["code"] == "AI_EDIT_INVALID_OUTPUT"
+        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "failed")
     finally:
         _cleanup(trip_id)
 

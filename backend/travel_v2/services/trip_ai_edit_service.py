@@ -36,6 +36,32 @@ _ALLOWED_OPS = frozenset({
 })
 _EDIT_VERBS = re.compile(r"修改|调整|改一下|改成|改到|改为|挪|移动|移到|加一个|加个|增加|添加|安排|插入|删除|移除|去掉|删掉|换成|替换|重排|调换")
 _MULTI_CHANGE_HINTS = re.compile(r"但|而且|并且|同时|顺便|另外")
+_NO_EXECUTION_REQUEST = re.compile(
+    r"先不要(?:修改|调整|改动|保存)|暂时不要(?:修改|调整|改动|保存)|"
+    r"不要修改|别修改|先别改|暂时别改|不要动行程|先别保存|不要保存"
+)
+_CONSULTATIVE_REQUEST = re.compile(
+    r"你觉得|你认为|会不会|会怎样|会怎么样|会如何|会有什么影响|"
+    r"(?:哪个|比较|对比|相比).{0,20}(?:合适|适合|更好|更轻松)|"
+    r"(?:合适|适合|太赶|太满|可行|妥当)(?:吗|不)|怎么样|如何|好不好|值不值得|"
+    r"是否|(?:可以吗|能不能|可不可以|行不行|对吗|妥吗)[？?]?$|(?:吗|么)[？?]?$|[？?]$"
+)
+_OPINION_REQUEST = re.compile(
+    r"你觉得|你认为|会不会|会怎样|会怎么样|会如何|会有什么影响|"
+    r"(?:哪个|比较|对比|相比)|(?:合适|适合|太赶|太满|可行|妥当)|"
+    r"怎么样|如何|好不好|值不值得|是否"
+)
+_HYPOTHETICAL_REQUEST = re.compile(r"如果|假如|要是|倘若|假设|比如(?:说)?")
+_EXPLICIT_EXECUTION_REQUEST = re.compile(
+    r"(?:请(?:您|你)?(?:直接)?|麻烦(?:您|你)?(?:直接)?|"
+    r"(?:直接)?帮我(?:直接)?|直接(?:帮我)?|替我|为我|"
+    r"能不能(?:请)?(?:直接)?帮我|可以(?:请)?(?:直接)?帮我)"
+    r"\s*(?:把|将|改|修改|调整|删除|移除|去掉|增加|添加|安排|移动|替换|重排)"
+)
+_DIRECT_EDIT_COMMAND = re.compile(
+    r"^\s*(?:把|将|改|修改|调整|挪|移动|换|替换|删除|移除|去掉|删掉|"
+    r"取消|加|增加|添加|安排|插入|重排|调换).{0,180}"
+)
 
 
 class AIEditModelOutputError(ValueError):
@@ -48,6 +74,14 @@ class AIEditModelOutputError(ValueError):
 
 class AIEditModelUnavailableError(RuntimeError):
     """模型角色或 Prompt 不可用，尚未开始 Provider 调用。"""
+
+    def __init__(self, message: str, metadata: dict | None = None):
+        super().__init__(message)
+        self.metadata = metadata or {}
+
+
+class AIEditCallRejectedError(RuntimeError):
+    """受治理的预算或限流门禁在 Provider 调用前拒绝本次请求。"""
 
     def __init__(self, message: str, metadata: dict | None = None):
         super().__init__(message)
@@ -117,19 +151,20 @@ class TripAIEditService:
                 ),
             )
 
-        intent = self._classify(payload.user_message, current["document"])
-        if intent == "read_only":
-            return self._finish_result(
+        authorization = self._execution_authorization(payload.user_message)
+        if authorization in {"read_only", "clarify"}:
+            return self._finish_no_write(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
-                key=key, status="read_only", request=payload,
-                result={
-                    "status": "read_only", "saved": False,
-                    "trip_id": str(trip_id),
-                    "base_revision": payload.expected_revision,
-                    "operation_key": key,
-                    "message": "这是普通问答请求，本接口未修改行程。",
-                    "replayed": False,
-                },
+                key=key, request=payload, status=authorization,
+            )
+
+        intent = self._classify(payload.user_message, current["document"])
+        if intent == "modify" and authorization != "authorized":
+            intent = "clarify"
+        if intent == "read_only":
+            return self._finish_no_write(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                key=key, request=payload, status="read_only",
             )
         if intent == "unsupported":
             return self._finish_result(
@@ -145,17 +180,9 @@ class TripAIEditService:
                 },
             )
         if intent == "clarify":
-            return self._finish_result(
+            return self._finish_no_write(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
-                key=key, status="clarify", request=payload,
-                result={
-                    "status": "clarify", "saved": False,
-                    "trip_id": str(trip_id),
-                    "base_revision": payload.expected_revision,
-                    "operation_key": key,
-                    "clarification": "请说明要修改的日期、行程项和具体改动。",
-                    "replayed": False,
-                },
+                key=key, request=payload, status="clarify",
             )
 
         trip_context = self._trip_context(current)
@@ -182,6 +209,17 @@ class TripAIEditService:
                 result=self._failure(
                     trip_id, payload.expected_revision, key,
                     "AI_EDIT_INVALID_OUTPUT", "模型没有返回可用的结构化修改候选。",
+                ), metadata=metadata,
+            )
+        except AIEditCallRejectedError as exc:
+            metadata = {**exc.metadata, "result": "pre_call_rejected"}
+            return self._finish_result(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                key=key, status="failed", request=payload,
+                result=self._failure(
+                    trip_id, payload.expected_revision, key,
+                    "AI_EDIT_PRECALL_REJECTED",
+                    "模型调用在 Provider 请求前被预算或限流门禁拒绝，行程没有修改。",
                 ), metadata=metadata,
             )
         except AIEditModelUnavailableError as exc:
@@ -214,6 +252,17 @@ class TripAIEditService:
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 key=key, status="unknown", request=payload,
                 result=result, metadata=metadata, allow_unknown=True,
+            )
+
+        # 写入前重复核对执行授权，避免任何候选绕过确定性门禁。
+        authorization = self._execution_authorization(payload.user_message)
+        if authorization != "authorized":
+            status = "read_only" if authorization == "read_only" else "clarify"
+            return self._finish_no_write(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                key=key, request=payload, status=status,
+                metadata={**metadata, "operation_type": "none",
+                          "result": "execution_not_authorized"},
             )
 
         if candidate.outcome == "clarify":
@@ -474,6 +523,46 @@ class TripAIEditService:
                 )
         return result
 
+    def _finish_no_write(
+        self, *, trip_id: str, tenant_id: str, owner_id: str, key: str,
+        request: AITripEditRequest, status: str, metadata: dict | None = None,
+    ) -> dict:
+        result = {
+            "status": status, "saved": False,
+            "trip_id": str(trip_id),
+            "base_revision": request.expected_revision,
+            "operation_key": key,
+            "replayed": False,
+        }
+        if status == "read_only":
+            result["message"] = "这是咨询请求，本接口未修改行程。"
+        else:
+            result["clarification"] = "请确认是否要立即修改行程，并说明具体改动。"
+        return self._finish_result(
+            trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+            key=key, status=status, request=request, result=result,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _execution_authorization(message: str) -> str:
+        """仅在 V2 AI 写入口判断是否有立即执行授权。"""
+        if _NO_EXECUTION_REQUEST.search(message):
+            return "read_only"
+        explicit = _EXPLICIT_EXECUTION_REQUEST.search(message)
+        consultative = _CONSULTATIVE_REQUEST.search(message)
+        if consultative and (
+            not explicit or _OPINION_REQUEST.search(message)
+        ):
+            return "read_only"
+        if explicit:
+            return "authorized"
+        if _HYPOTHETICAL_REQUEST.search(message) and _EDIT_VERBS.search(message):
+            return "clarify"
+        if _DIRECT_EDIT_COMMAND.search(message):
+            return "authorized"
+        return "unspecified"
+
     @staticmethod
     def _classify(message: str, document: dict) -> str:
         intent = classify_intent(
@@ -544,8 +633,11 @@ class TripAIEditService:
 
         from backend.config import model_roles
         from backend.config.travel import TRAVEL_TURN_DECISION_TIMEOUT_MS
+        from backend.context_budget.errors import ContextBudgetExceededError
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import bind_llm_for_role
+        from backend.infra.llm.budget import RequestBudgetExceeded
+        from backend.infra.llm.proxy import RateLimitError, bind_llm_for_role
+        from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
         from backend.observability.llm_context import llm_attribution_scope
         from backend.prompts.service import prompt_service
         from backend.shared.json_extractor import extract_json
@@ -594,6 +686,27 @@ class TripAIEditService:
                     ),
                     timeout,
                 )
+        except (
+            RequestBudgetExceeded, ContextBudgetExceededError, QuotaExceeded,
+            QuotaConfigurationError, RateLimitError,
+        ) as exc:
+            metadata = {
+                "role": "main", "model": model_name,
+                "prompt_version": prompt_version,
+                "latency_ms": int((time.monotonic() - started) * 1000),
+                "operation_type": "none",
+                "rejection_type": type(exc).__name__,
+            }
+            if getattr(exc, "provider_attempted", False):
+                metadata["operation_type"] = "unknown"
+                metadata["result"] = "provider_attempted_before_budget_rejection"
+                raise AIEditCallUnknownError(
+                    "provider attempt preceded governed budget rejection",
+                    metadata,
+                ) from exc
+            raise AIEditCallRejectedError(
+                "governed model pre-call rejection", metadata,
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — 请求可能已到达 Provider
             metadata = {
                 "role": "main", "model": model_name,
