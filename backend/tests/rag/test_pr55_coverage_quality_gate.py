@@ -158,6 +158,61 @@ def test_dangling_parent_reference_is_a_hard_integrity_failure(tmp_path):
     )
 
 
+def test_pii_masked_leaf_counts_as_covered_after_equivalent_masking():
+    from langchain_core.documents import Document
+
+    from backend.rag.preprocessing.chunking import coverage_audit
+
+    source_text = "联系人电话是13800138000，请联系服务台。"
+    source = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=source_text),
+        ]),
+        raw_text=source_text,
+    )
+    masked_leaf = Document(
+        page_content="联系人电话是138****8000，请联系服务台。",
+        metadata={
+            "granularity": "leaf", "chunk_id": "pii-doc_0",
+            "pii_masked": ["phone"],
+        },
+    )
+
+    assert coverage_audit(source, [masked_leaf])["uncovered_count"] == 1
+    report = coverage_audit(source, [masked_leaf], normalize_pii=True)
+
+    assert report["uncovered_count"] == 0
+
+
+def test_pii_normalization_does_not_hide_unmasked_leaf_content_loss():
+    from langchain_core.documents import Document
+
+    from backend.rag.preprocessing.chunking import coverage_audit
+
+    source = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text="联系人电话是13800138000。"),
+            DocumentNode(type="paragraph", text="备用电话是13900139000。"),
+        ]),
+        raw_text="联系人电话是13800138000。备用电话是13900139000。",
+    )
+    chunks = [
+        Document(
+            page_content="联系人电话是138****8000。",
+            metadata={"granularity": "leaf", "pii_masked": ["phone"]},
+        ),
+        Document(
+            page_content="备用电话是",
+            metadata={"granularity": "leaf"},
+        ),
+    ]
+
+    report = coverage_audit(source, chunks, normalize_pii=True)
+
+    assert report["uncovered_count"] == 1
+    assert report["uncovered_samples"][0]["preview"] == "备用电话是13900139000。"
+
+
 @pytest.mark.parametrize(
     ("initial_status", "expected_status"),
     [

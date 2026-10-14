@@ -211,3 +211,53 @@ def test_docx_faq_question_survives_cleaning_filter_and_index_identity(tmp_path)
     assert "年假申请流程是什么" in recalled[1].page_content
     final_coverage = coverage_audit(qc["normalized_ast"], final_chunks)
     assert final_coverage["uncovered_count"] == 0
+
+
+def test_short_faq_parent_referenced_by_leaf_is_not_dropped(tmp_path):
+    """短问题 Parent 虽短，仍需保留为被 Leaf 引用的检索上下文。"""
+    from docx import Document as DocxDocument
+
+    from backend.rag.indexing.indexer import (
+        _filter_index_chunks,
+        apply_index_chunk_identity,
+    )
+    from backend.rag.preprocessing.filter import ChunkFilter
+    from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+    from backend.rag.preprocessing.quality_gate import audit_chunk_integrity
+    from backend.rag.retrieval.retrievers import attach_parent_context
+
+    source = DocxDocument()
+    source.add_paragraph("Q:如何退款?")
+    source.add_paragraph(
+        "A:请登录账户提交退款申请，工作人员审核通过后会按原支付渠道退回，"
+        "通常在三个工作日内到账。"
+    )
+    path = tmp_path / "short-faq.docx"
+    source.save(path)
+
+    chunks, _qc = parse_and_chunk_full(str(path), doc_type_hint="faq")
+    filterer = ChunkFilter()
+    final_chunks, filtered_details = _filter_index_chunks(
+        chunks, filterer, str(path), "faq",
+    )
+    assert not filtered_details
+    apply_index_chunk_identity(final_chunks, "short-faq-doc")
+
+    integrity = audit_chunk_integrity(final_chunks)
+    assert integrity["parent_chunk_count"] == 1
+    assert integrity["invalid_parent_reference_count"] == 0
+    parent = next(
+        chunk for chunk in final_chunks
+        if chunk.metadata.get("granularity") == "parent"
+    )
+    assert parent.metadata["filter_status"] == "kept_referenced_parent"
+    assert parent.metadata["parent_filter_override_reason"] == "too_short"
+    leaf = next(
+        chunk for chunk in final_chunks
+        if chunk.metadata.get("granularity") == "leaf"
+    )
+    recalled = attach_parent_context(
+        [leaf], lambda ids: [parent] if parent.metadata["chunk_id"] in ids else [],
+    )
+    assert len(recalled) == 2
+    assert "如何退款" in recalled[1].page_content

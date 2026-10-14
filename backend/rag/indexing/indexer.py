@@ -240,6 +240,75 @@ def apply_index_chunk_identity(chunks: list, doc_id: str) -> None:
             ch.metadata["parent_chunk_id"] = id_map[pid]
 
 
+def _filter_index_chunks(
+    chunks: list, chunk_filter, file_path: str, doc_type: str,
+) -> tuple[list, list[dict]]:
+    """过滤索引 Chunk；保留非空且仍被 Leaf 引用的 Parent 上下文。"""
+    from backend.rag.preprocessing.chunking import is_table_chunk
+    from backend.rag.preprocessing.filter import (
+        ChunkFilter,
+        _mask_financial_pii,
+        _mask_pii,
+    )
+
+    referenced_parent_ids = {
+        str((chunk.metadata or {}).get("parent_chunk_id") or "").strip()
+        for chunk in chunks
+        if (chunk.metadata or {}).get("granularity") == "leaf"
+    }
+    referenced_parent_ids.discard("")
+
+    kept_chunks = []
+    filtered_details: list[dict] = []
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        ok, reason = chunk_filter.should_keep(chunk.page_content, metadata)
+        chunk_id = str(metadata.get("chunk_id") or "").strip()
+        keep_referenced_parent = bool(
+            not ok
+            and metadata.get("granularity") == "parent"
+            and chunk_id in referenced_parent_ids
+            and (chunk.page_content or "").strip()
+        )
+        if keep_referenced_parent:
+            # Parent 只供命中 Leaf 扩展上下文；不可因短文本过滤后留下悬空引用。
+            metadata["filter_status"] = "kept_referenced_parent"
+            metadata["filter_reason"] = ""
+            metadata["parent_filter_override_reason"] = reason
+            is_financial = doc_type == "financial" or is_table_chunk(
+                metadata.get("chunk_type")
+            )
+            if chunk_filter.enable_pii or (
+                is_financial and chunk_filter.financial_pii_force
+            ):
+                masked_text, masked_types = _mask_pii(chunk.page_content)
+                if is_financial and chunk_filter.financial_pii_force:
+                    masked_text, financial_types = _mask_financial_pii(
+                        masked_text
+                    )
+                    masked_types.extend(financial_types)
+                if masked_types:
+                    chunk.page_content = masked_text
+                    metadata["pii_masked"] = masked_types
+            ok = True
+
+        if ok:
+            if metadata.get("pii_masked"):
+                chunk.page_content = ChunkFilter.apply_pii_mask(
+                    chunk.page_content
+                )
+            kept_chunks.append(chunk)
+            continue
+
+        filtered_details.append({
+            "chunk_index": metadata.get("chunk_index", len(kept_chunks)),
+            "reason": reason,
+            "preview": chunk.page_content[:80],
+        })
+        logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
+    return kept_chunks, filtered_details
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -1112,21 +1181,10 @@ class IncrementalIndexer:
             from backend.rag.preprocessing.filter import ChunkFilter
             chunk_filter = ChunkFilter()
             total_before_filter = len(chunks)
-            filtered_chunks = []
-            filtered_details: list[dict] = []  # R-P1-3: 被过滤 chunk 明细（原因可追溯）
-            for chunk in chunks:
-                ok, reason = chunk_filter.should_keep(chunk.page_content, chunk.metadata)
-                if ok:
-                    if chunk.metadata.get("pii_masked"):
-                        chunk.page_content = ChunkFilter.apply_pii_mask(chunk.page_content)
-                    filtered_chunks.append(chunk)
-                else:
-                    filtered_details.append({
-                        "chunk_index": chunk.metadata.get("chunk_index", len(filtered_chunks)),
-                        "reason": reason,
-                        "preview": chunk.page_content[:80],
-                    })
-                    logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
+            filtered_chunks, filtered_details = _filter_index_chunks(
+                chunks, chunk_filter, file_path,
+                str(_qc.get("doc_type") or ""),
+            )
             filtered_count = len(filtered_details)
             if filtered_count > 0:
                 reason_breakdown: dict[str, int] = {}
@@ -1298,7 +1356,15 @@ class IncrementalIndexer:
             from backend.rag.preprocessing.chunking import coverage_audit
 
             _audit_ast = _qc.get("normalized_ast") or _raw_ast
-            _coverage = coverage_audit(_audit_ast, chunks)
+            _coverage_pii_normalized = any(
+                bool((chunk.metadata or {}).get("pii_masked"))
+                for chunk in chunks
+                if (chunk.metadata or {}).get("granularity") == "leaf"
+            )
+            _coverage = coverage_audit(
+                _audit_ast, chunks,
+                normalize_pii=_coverage_pii_normalized,
+            )
             _qc["coverage"] = _coverage
             _coverage_fields = {
                 "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",

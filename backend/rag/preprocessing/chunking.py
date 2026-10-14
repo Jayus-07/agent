@@ -1708,7 +1708,8 @@ class ChunkStrategyRouter:
 
 
 def coverage_audit(ast: DocumentAST, chunks: List[Document],
-                   max_audit_nodes: int = 2000) -> dict:
+                   max_audit_nodes: int = 2000,
+                   normalize_pii: bool = False) -> dict:
     """源节点 → 输出 Leaf Chunk 覆盖对账（P0-02，2026-10-13）。
 
     策略产出的 chunk 应覆盖 AST 全部可索引叶子；本审计用双向文本包含
@@ -1721,8 +1722,15 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
     防止 O(n²) 子串匹配拖垮索引主流程。审计失败不抛异常——返回
     {"error": ...}，安全网自身不能成为新的失败点。
     """
-    def _normalize(text: str) -> str:
-        return " ".join(str(text or "").split()).casefold()
+    def _normalize(text: str, mask_pii: bool = False) -> str:
+        value = str(text or "")
+        if mask_pii:
+            # 只为实际标记脱敏的 Leaf 生成对照文本；未脱敏 Leaf 必须与原文
+            # 对账，不能因其他 Leaf 脱敏而把它缺失的数字误当成已覆盖。
+            from backend.rag.preprocessing.filter import ChunkFilter
+
+            value = ChunkFilter.apply_pii_mask(value)
+        return " ".join(value.split()).casefold()
 
     def _windows(text: str) -> list[str]:
         if len(text) <= 120:
@@ -1746,7 +1754,17 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
         ]
         # Parent 只供上下文扩展，绝不能计入可索引内容覆盖。
         bodies = [
-            _normalize(c.page_content)
+            (
+                _normalize(
+                    c.page_content,
+                    mask_pii=bool(normalize_pii and (
+                        getattr(c, "metadata", {}) or {}
+                    ).get("pii_masked")),
+                ),
+                bool(normalize_pii and (
+                    getattr(c, "metadata", {}) or {}
+                ).get("pii_masked")),
+            )
             for c in chunks
             if (getattr(c, "page_content", None)
                 and getattr(c, "metadata", {}).get("granularity") == "leaf")
@@ -1760,12 +1778,22 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             leaves = source_leaves
 
         def _covered_text(text: str) -> bool:
-            normalized = _normalize(text)
-            probes = _windows(normalized)
-            return bool(probes) and all(
-                any(probe in body for body in bodies)
-                for probe in probes
+            raw_probes = _windows(_normalize(text))
+            masked_probes = (
+                _windows(_normalize(text, mask_pii=True))
+                if normalize_pii else []
             )
+            if not raw_probes:
+                return False
+            raw_covered = all(
+                any(probe in body for body, is_masked in bodies if not is_masked)
+                for probe in raw_probes
+            )
+            masked_covered = bool(masked_probes) and all(
+                any(probe in body for body, is_masked in bodies if is_masked)
+                for probe in masked_probes
+            )
+            return raw_covered or masked_covered
 
         covered = 0
         uncovered: list[dict] = []
@@ -1790,13 +1818,10 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             source_row_counts: dict[tuple[str, ...], int] = {}
             row_cells_by_signature: dict[tuple[str, ...], list[str]] = {}
             for row in rows:
-                cells = [
-                    _normalize(str(cell)) for cell in row
-                    if str(cell).strip()
-                ]
+                cells = [str(cell) for cell in row if str(cell).strip()]
                 if not cells:
                     continue
-                signature = tuple(cells)
+                signature = tuple(_normalize(cell) for cell in cells)
                 source_row_counts[signature] = source_row_counts.get(signature, 0) + 1
                 row_cells_by_signature[signature] = cells
                 table_rows_total += 1
@@ -1805,14 +1830,21 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             missing_rows = 0
             missing_cells = 0
             for signature, required_count in source_row_counts.items():
-                cells = row_cells_by_signature[signature]
+                raw_cells = row_cells_by_signature[signature]
                 matching_bodies = sum(
-                    1 for body in bodies if all(cell in body for cell in cells)
+                    1 for body, body_is_masked in bodies
+                    if all(
+                        _normalize(cell, mask_pii=body_is_masked) in body
+                        for cell in raw_cells
+                    )
                 )
                 if matching_bodies < required_count:
                     missing_rows += required_count - matching_bodies
-                for cell in cells:
-                    if not any(cell in body for body in bodies):
+                for cell in raw_cells:
+                    if not any(
+                        _normalize(cell, mask_pii=body_is_masked) in body
+                        for body, body_is_masked in bodies
+                    ):
                         missing_cells += 1
 
             table_rows_uncovered += missing_rows
@@ -1844,6 +1876,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             "table_cells_uncovered": table_cells_uncovered,
             "coverage_rate": coverage_rate,
             "sampled": sampled,
+            "pii_mask_normalized": normalize_pii,
         }
     except Exception as e:  # noqa: BLE001 — QualityGate 将错误按硬异常处理
         logger.warning(f"[CoverageAudit] 失败: {type(e).__name__}: {e}")
@@ -1856,4 +1889,5 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             "uncovered_samples": [],
             "coverage_rate": None,
             "sampled": False,
+            "pii_mask_normalized": normalize_pii,
         }

@@ -15,6 +15,8 @@
 | 40 个 FAQ Leaf 的 Parent 引用悬空 | 40 个空问句使虚拟 Parent 仅剩 `Q：` 行并被 `ChunkFilter` 过滤。索引 ID 映射只处理最终仍存在的 Chunk，未发现 Leaf 保留了旧 Parent ID。 | [indexer.py](../../../backend/rag/indexing/indexer.py) 在过滤后、质量门禁前统一索引 ID；[quality_gate.py](../../../backend/rag/preprocessing/quality_gate.py) 检查非空 Leaf、Chunk ID 唯一性和每条显式 Parent 引用是否指向唯一的 Parent Chunk。无效关系硬失败，不补造或静默清空 Parent。 |
 | CSV 零 Chunk 仍记录完整覆盖 | Indexer 把 Parser/Chunking 阶段、过滤前的 Coverage 用于最终质量记录；CSV 候选全部被 Filter 拒绝，旧 Coverage 仍报告全覆盖。 | [indexer.py](../../../backend/rag/indexing/indexer.py) 在 Filter 后用最终 Chunk 重算 Coverage；零 Leaf 和缺口由现有 QualityGate 硬失败。 |
 | 完整性门禁与 Trace/发布状态不一致 | 质量记录只保留 Coverage，不对最终 Chunk/Parent 关系对账；记录构建异常时只对 Coverage 做 fail-closed。 | 复用既有 QualityGate，在 Quality Record、`quality_issues`、`index_quality` Trace 中写入 Chunk 完整性摘要；Coverage 或 Chunk 完整性异常时阻断写向量/发布。candidate mode 不更新上一代 Active registry。 |
+| 自动 Review：PII 脱敏导致 Coverage 误报 | 索引输出 Leaf 经 PII 掩码后与未掩码 AST 逐字对账，真实覆盖会被判为缺口。 | `coverage_audit` 仅在最终 Leaf 标记 `pii_masked` 时额外建立掩码态对照；未脱敏 Leaf 始终按原文核验，避免全局归一化把未脱敏内容缺失掩盖。Index Quality Record 保留 `pii_mask_normalized` 审计标记。 |
+| 自动 Review：短 FAQ Parent 被过滤 | 非空问题 Parent 短于通用最小长度阈值，虽然仍被有效 Leaf 引用，却会被过滤，造成悬空 Parent 引用和候选失败。 | Indexer 在既有过滤点保留非空且仍被 Leaf 引用的 Parent，记录 `filter_status=kept_referenced_parent` 与原过滤原因；启用 PII 时仍执行掩码，不另建 FAQ 切分机制。 |
 
 `coverage_audit` 本身已有“只检查 Leaf、表格逐行及逐单元格核对”的实现，本轮没有重写它。修复将其调用时点改为最终 Filter 输出；抽样审计仍遵循既有 `sampled` 留痕口径。
 
@@ -38,6 +40,9 @@
 - `py_compile` 覆盖全部本轮修改的 Python 源码与测试文件：通过。`git diff --check`：通过。
 - Ruff 对 6 个修改 Python 文件报告 17 条 lint 项；把相同文件从基线 HEAD 逐个送入 Ruff 后也是相同的 17 条，修复未新增 lint 项。它们是基线既有 import/unused/重复键/变量名问题，本轮不顺手扩大清理范围。
 - 本机 PostgreSQL registry 专用用例**BLOCKED**：单独实际运行失败，错误为 `fe_sendauth: no password supplied`。总数中的 1 deselected 是为避免重跑该环境依赖测试；没有标记为 PASS。
+- 自动 Review 两条边界回归在修复前为 **2 failed**；修复后专项回归 **3 passed**，包括“脱敏 Leaf 可覆盖”和“未脱敏 Leaf 缺失仍被发现”。
+- 修复后的最终定向测试命令覆盖相同 9 个 RAG 测试模块，结果 **109 passed、1 skipped、1 deselected**。其中 16 类本地文档矩阵通过；1 skipped 为既有条件跳过，1 deselected 为 PostgreSQL 凭据阻塞用例。
+- `py_compile`（本轮修改的 indexer、coverage 审计与两组测试文件）及 `git diff --check` 均通过。修复 PR #58 首提交的 Secret Scan、RAG Smoke preflight 和 8-case RAG Smoke 通过；后续 review 修复提交尚需以最新 HEAD 重跑 CI。
 
 ## 需要重建/继续调查的隔离测试索引
 
@@ -55,6 +60,7 @@
 - **Batch B 未处理**：PDF `.strip()` 解析异常、Excel 遗漏、长 TXT Worker OOM/`RUNNING` 恢复、OCR 依赖、migration 092/093 漂移都保持原报告中的 FAIL/BLOCKED 状态。
 - **PostgreSQL 环境阻塞**：本机测试连接没有密码；未伪造 PASS，也未修改数据库认证配置。
 - **Clash/模型连接**：未调用管理端模型连接测试，未修改代理配置，未运行付费 Provider 评测；该猜测尚未验证，与本轮本地 FAQ/Chunk 门禁无关。
+- **真实服务链路**：当前证据限于源码、本地 Parser/Indexer 与检索函数单测；未连接隔离 KB 的真实 Upload API、Worker、向量库或 Search API。PR #58 自动 Review 已通过代码回归处理，但最新提交后的 GitHub Review/CI 需完成核验。
 - 需要在 Batch C 观察真实索引物理 ID 与 metadata canonical ID 的一致性、真实检索 Parent 扩展、旧 Active 保护及权限对照。当前本地测试不能替代这些证据。
 
 ## 结论
