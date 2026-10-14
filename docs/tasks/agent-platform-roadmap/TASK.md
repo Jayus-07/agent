@@ -1,6 +1,6 @@
 # Agent Platform 总改造计划（P0–P7）
 
-> 状态：**经用户确认的目标路线图 / 不代表功能已实现**。2026-10-13 将 Runtime Control Center 作为 **P1-G** 正式纳入。具体施工验收以源代码、已合并 PR、测试和真实运行证据为准。
+> 状态：**目标路线图 / 不代表功能已实现**。2026-10-14 对账最新 main、PR #54、#63 后，将 P1-G 的施工次序收敛为 A/B/C 三个交付包。具体施工验收以源代码、已合并 PR、测试和真实运行证据为准。
 >
 > 核心目标：一套 Agent Platform 底座，支持 **求职技术作品** 与 **跨境电商 AI 客服商业化验证** 两条交付路线。
 
@@ -29,9 +29,9 @@
 | B1-D | Prompt 发布、热更新、回滚 | 管理端按现有发布状态机接入版本治理 |
 | B1-E | 按当前 Runtime 台账收口剩余项 | 不能据此文档假定已完工；需最新证据 |
 | B1-F | 取消/超时/错误语义 | 管理端准确区分 HTTP、Tool、业务和 Run 状态 |
-| **P1-G（新增）** | **Runtime Control Center 管理端** | **先冻结 UI/交互与契约，再复用/适配后端，最后接真实写操作与 T3 验收** |
+| **P1-G** | **现有管理端九项能力** | **沿用六组导航和已合并/已有页面，按 A 运行监控、B 能力与成本、C 安全运维与统一验收交付** |
 
-P1-G 目标和批次详见 [Runtime Control Center 施工计划](../p1-runtime-control-center/TASK.md)。它是 P1 的**产品交付专项**，**不替代 B1-A～B1-F、不新增 Runtime 引擎、Router、账本或平行 Tool Governance**。已有 P1 在途 PR 优先完成安全交接，UI 可独立开发只读契约，但不能伪报真实后端接通。
+P1-G 的九模块、RC-01～RC-14、现状和交付边界详见[管理端总计划](../p1-runtime-control-center/TASK.md)及[进度表](../p1-runtime-control-center/PROGRESS.md)。PR #54 已合并，提供六组导航和运行总览/Trace 基线；Agent/Workflow、服务健康及恢复原告警/Skill 统计由 PR #63 收口。已合并或现有能力不得重复建设，页面与必要 API 适配同批交付。P1-G 不替代 B1-A～B1-F，不新增 Runtime、Router、第二套统计、费用账本、Registry 或发布状态机。
 
 ## P2 批次（维持已确认范围）
 
