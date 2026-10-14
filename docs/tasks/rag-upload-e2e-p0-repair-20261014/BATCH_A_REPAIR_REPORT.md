@@ -42,7 +42,7 @@
 - 本机 PostgreSQL registry 专用用例**BLOCKED**：单独实际运行失败，错误为 `fe_sendauth: no password supplied`。总数中的 1 deselected 是为避免重跑该环境依赖测试；没有标记为 PASS。
 - 自动 Review 两条边界回归在修复前为 **2 failed**；修复后专项回归 **3 passed**，包括“脱敏 Leaf 可覆盖”和“未脱敏 Leaf 缺失仍被发现”。
 - 修复后的最终定向测试命令覆盖相同 9 个 RAG 测试模块，结果 **109 passed、1 skipped、1 deselected**。其中 16 类本地文档矩阵通过；1 skipped 为既有条件跳过，1 deselected 为 PostgreSQL 凭据阻塞用例。
-- `py_compile`（本轮修改的 indexer、coverage 审计与两组测试文件）及 `git diff --check` 均通过。修复 PR #58 首提交的 Secret Scan、RAG Smoke preflight 和 8-case RAG Smoke 通过；后续 review 修复提交尚需以最新 HEAD 重跑 CI。
+- `py_compile`（本轮修改的 indexer、coverage 审计与两组测试文件）及 `git diff --check` 均通过。PR #58 代码修复 HEAD `b0a3771a431fb87e6387795a6956742b045c3c20` 的 Secret Scan、RAG Smoke preflight、8-case RAG Smoke 均通过；真实 API 评测 job 按边界为 skipped。两条自动 Review 线程已 resolved。
 
 ## 需要重建/继续调查的隔离测试索引
 
@@ -60,7 +60,7 @@
 - **Batch B 未处理**：PDF `.strip()` 解析异常、Excel 遗漏、长 TXT Worker OOM/`RUNNING` 恢复、OCR 依赖、migration 092/093 漂移都保持原报告中的 FAIL/BLOCKED 状态。
 - **PostgreSQL 环境阻塞**：本机测试连接没有密码；未伪造 PASS，也未修改数据库认证配置。
 - **Clash/模型连接**：未调用管理端模型连接测试，未修改代理配置，未运行付费 Provider 评测；该猜测尚未验证，与本轮本地 FAQ/Chunk 门禁无关。
-- **真实服务链路**：当前证据限于源码、本地 Parser/Indexer 与检索函数单测；未连接隔离 KB 的真实 Upload API、Worker、向量库或 Search API。PR #58 自动 Review 已通过代码回归处理，但最新提交后的 GitHub Review/CI 需完成核验。
+- **真实服务链路**：当前证据限于源码、本地 Parser/Indexer 与检索函数单测；未连接隔离 KB 的真实 Upload API、Worker、向量库或 Search API。PR #58 当前 Open / Mergeable；Review 线程已解决，CI 通过不构成真实 E2E 验收。
 - 需要在 Batch C 观察真实索引物理 ID 与 metadata canonical ID 的一致性、真实检索 Parent 扩展、旧 Active 保护及权限对照。当前本地测试不能替代这些证据。
 
 ## 结论

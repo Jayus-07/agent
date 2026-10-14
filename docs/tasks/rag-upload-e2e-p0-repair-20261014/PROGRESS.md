@@ -28,8 +28,8 @@
 - Ruff 对当前 4 个受影响 Python 文件检查为 17 条；相同文件在父提交也是 17 条，本轮未新增。`py_compile` 和 `git diff --check` 通过。
 - 本机 PostgreSQL registry 测试单独执行为 BLOCKED：`fe_sendauth: no password supplied`。未更改数据库配置，也未连接正式业务库。
 - 原始 E2E 报告原文副本 SHA256 与来源一致；FAQ 失败索引及需后续复核的混合 FAQ 索引写入 `BATCH_A_REPAIR_REPORT.md`。没有对测试库或正式索引执行重建。
-- 修复 PR：[#58](https://github.com/Jayus-07/agent/pull/58)，分支 `codex/rag-upload-e2e-p0-20261014`；首个提交 `80d9dac5426d76097ec3f426ad198b772fbee430` 上的 Secret Scan、RAG Smoke preflight 和 8-case RAG Smoke 均通过，真实 API 评测 job 按约定跳过。自动 Review 两条意见已在代码和回归中处理；最新补丁提交后的 CI/Review 线程状态待补录。
+- 修复 PR：[#58](https://github.com/Jayus-07/agent/pull/58)，分支 `codex/rag-upload-e2e-p0-20261014`。代码修复 HEAD `b0a3771a431fb87e6387795a6956742b045c3c20` 的 Secret Scan、RAG Smoke preflight 与 8-case RAG Smoke 均通过；真实 API 评测 job 为 skipped（未启动付费评测）。两条自动 Review 线程均已 resolved；PR 当前 Open / Mergeable。随后只补入本进度记录。
 
 ## 停止边界
 
-Batch A 完成后停止；不进入 Batch B/C。修复后真实 API、Worker、数据库、向量索引与 Search E2E 尚未执行，`RAG_UPLOAD_E2E_VERIFIED` 保持 `false`。不合并 main；最终 HEAD、补丁提交后的 CI 和 Review 状态补入本文件。
+Batch A 完成后停止；不进入 Batch B/C。修复后真实 API、Worker、数据库、向量索引与 Search E2E 尚未执行，`RAG_UPLOAD_E2E_VERIFIED` 保持 `false`。不合并 main；只将 Batch A 代码与证据提交到 PR #58。
