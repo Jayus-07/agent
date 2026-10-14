@@ -117,6 +117,7 @@ def need_multi_query(query: str) -> tuple[bool, str]:
 #    （本表曾有 流程/步骤 而 hybrid 表没有，反向亦然），导致分类行为分叉。
 # 导入方向安全：hybrid 模块级不依赖本模块（need_multi_query 对 hybrid 的
 # 引用在函数内惰性执行）。
+from backend.rag.retrieval import hybrid as hybrid_simple  # noqa: E402
 from backend.rag.retrieval.hybrid import (  # noqa: E402
     COMPLEX_PATTERNS,
     COMPLEX_STRONG_PATTERNS,
@@ -135,55 +136,35 @@ BUSINESS_KEYWORDS = [
     "SKU", "SPU",
 ]
 
-SIMPLE_PREFIXES = ("什么是", "多少", "几点", "几号", "谁", "哪个", "哪里")
-
-# 简单事实问句模式（2026-09-03 P1-7）：单一数值/时间点答案，改写只会放大重复检索。
-# 检查置于业务关键词之前："退款审核时间是多少？"不应因"退款"触发 3 变体改写。
-SIMPLE_FACT_PATTERNS = (
-    "是多少", "是多久", "多久", "几天", "多长时间", "什么时间", "什么时候", "多少钱", "多少个",
-)
+# R1-B（2026-10-12）：简单事实问句清单与判定已收归 hybrid.py 单一事实来源
+# （is_simple_fact_query / SIMPLE_FACT_PATTERNS / SIMPLE_PREFIXES）。此处
+# 仅做兼容再导出，禁止在本模块另维护分表——历史上兜底把强信号排在简单
+# 事实豁免之前，「退款审核时间是多少？」被"退款/审核"当业务关键词误判成
+# 复杂问句，白付 1 次 LLM 改写 + 3 路检索。
+SIMPLE_PREFIXES = hybrid_simple.SIMPLE_PREFIXES
+SIMPLE_FACT_PATTERNS = hybrid_simple.SIMPLE_FACT_PATTERNS
 
 
 def _is_complex(query: str) -> tuple[bool, str]:
-    """判断 query 是否需要 MultiQuery 改写（分类器不可用时的本地兜底）。
+    """兜底判定：复用唯一判定入口 _classify_query_tier 的规则。
 
-    Phase 4（2026-10-07）与 _classify_query_tier 同一 signal-score 语义：
-    强信号单一命中 / ≥2 个不同弱信号叠加 / 长问句+多意图连接词才触发改写；
-    单个「怎么/流程」类弱信号 → False（走 hybrid 双路，不上 3 变体改写）。
+    P1-D 修正（2026-10-12）：旧兜底自持一套"业务关键词"规则，与主分类器
+    真实分叉（「审核时间是多久」兜底判复杂、主分类器判 hybrid；
+    「差评怎么处理」兜底判复杂、主分类器判 hybrid）——同一问题结论取决于
+    分类器是否超时。现在只保留一份规则：主入口可用时用主入口，主入口抛错
+    （本函数被调用的前提）时**保守不改写**：
+      - vector_only/hybrid 双路检索仍由底层保底完成，不会丢召回；
+      - 只有 MQ 改写被跳过，属于既有 Phase 4 降级语义（宁少一次改写，
+        不多烧一次 LLM + 3 路检索）。
     """
-    q = query.strip()
-    strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
-    if strong_hits:
-        return True, f"强信号: {strong_hits[0]}"
-    weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
-    # 弱信号叠加需跨子句或足够长（与 _classify_query_tier 同口径）：
-    # 单子句短问里 流程+怎么 天然共现仍算单一意图
-    import re as _re
-
-    clause_count = len([x for x in _re.split(r"[。！？；，、!?;,]", q) if x.strip()])
-    if len(weak_hits) >= 2 and (clause_count >= 2 or len(q) > 16):
-        return True, f"弱信号叠加: {weak_hits[:2]}"
-    # 简单事实问句豁免（数值/时间点 + "什么是"等前缀）：即使命中业务关键词
-    # 也无需多路改写，"退款审核时间是多少？""什么是库存周转率"均应豁免
-    for pat in SIMPLE_FACT_PATTERNS:
-        if pat in q:
-            return False, f"简单事实问句({pat})"
-    if q.startswith(SIMPLE_PREFIXES):
-        return False, "简单事实问句"
-    # 业务关键词：差评/退款/合规等业务查询自动触发改写
-    for kw in BUSINESS_KEYWORDS:
-        if kw in q:
-            return True, f"业务关键词: {kw}"
-    if len(q) < 5:
-        return False, f"过短({len(q)}字)"
-    # 长度触发阈值 25→40（TTFT 收敛）：25~40 字的问题多数语义已完整，
-    # 为其多付一次改写 LLM 调用（~1-2s 串行）不划算
-    if len(q) > 40:
-        return True, f"较长({len(q)}字)"
-    if weak_hits:
-        # 单个弱信号：双路 hybrid 足够（Phase 4 语义，禁止回落 vector_only）
-        return False, f"单弱信号({weak_hits[0]})→hybrid"
-    return False, "默认简单"
+    try:
+        tier = hybrid_simple._classify_query_tier(query)
+    except Exception as exc:  # noqa: BLE001 — 分类器本身不可用
+        logger.warning(f"[MultiQuery] 分类器不可用，保守跳过改写: {exc}")
+        return False, "classifier_unavailable"
+    if tier == "hybrid_multi_query":
+        return True, f"三层路由: {tier}"
+    return False, f"三层路由: {tier}"
 
 
 # =====================================================

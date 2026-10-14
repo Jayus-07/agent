@@ -41,14 +41,22 @@ class WorkflowScheduler:
             f"[WorkflowScheduler] 初始化: {len(self.registry._workflows)} 个 workflow"
         )
 
-    async def run_now(self, workflow_name: str, inputs: dict | None = None):
+    async def run_now(
+        self,
+        workflow_name: str,
+        inputs: dict | None = None,
+        *,
+        request_context: Any = None,
+    ):
         """手动触发 workflow
 
         Returns:
             WorkflowContext: 运行结果
         """
         logger.info(f"[WorkflowScheduler] 手动触发: {workflow_name}")
-        return await self.executor.run(workflow_name, inputs or {})
+        return await self.executor.run(
+            workflow_name, inputs or {}, request_context=request_context,
+        )
 
     def register_daily(self, workflow_name: str, hour: int, minute: int = 0):
         """注册每天定时触发"""

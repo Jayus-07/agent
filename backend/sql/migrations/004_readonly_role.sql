@@ -13,11 +13,11 @@
 
 -- ═══ 1. 创建只读角色 ═══
 -- NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT
--- 密码由环境变量 PG_READONLY_PASSWORD 注入（不硬编码）
+-- 不在迁移中创建密码；仅由显式 PG_READONLY_PASSWORD 配置后单独启用认证。
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'agent_readonly') THEN
-        CREATE ROLE agent_readonly WITH LOGIN PASSWORD 'agent_readonly_dev' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+        CREATE ROLE agent_readonly WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
     END IF;
 END
 $$;

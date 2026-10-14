@@ -454,7 +454,8 @@ def emit_delta_events(final_answer: str, stop_event=None) -> Generator[dict, Non
     if not text:
         return
     if stop_event is not None and stop_event.is_set():
-        yield {"event": "error", "data": {"message": "用户中止", "ts": time.time()}}
+        from backend.shared.error_protocol import sse_cancelled_event
+        yield sse_cancelled_event()
         return
     yield {"event": "delta", "data": {"content": text, "ts": time.time()}}
 

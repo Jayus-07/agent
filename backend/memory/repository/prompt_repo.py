@@ -248,3 +248,16 @@ class PromptRepository:
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def has_publish_audit(self, prompt_key: str, version: int) -> bool:
+        """判断指定版本是否曾通过发布入口激活。"""
+        result = await self._s.execute(
+            select(PromptAuditLog.id)
+            .where(
+                PromptAuditLog.prompt_key == prompt_key,
+                PromptAuditLog.action == "publish",
+                PromptAuditLog.to_version == version,
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None

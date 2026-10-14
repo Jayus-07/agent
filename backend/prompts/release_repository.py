@@ -155,6 +155,25 @@ class PromptReleaseRepository:
             actor=actor,
         )
 
+    async def mark_published_in_session(
+        self, session: Any, release_id: str, actor: str,
+    ) -> dict[str, Any] | None:
+        """在 Prompt active 指针所在事务内 CAS 发布记录状态。"""
+        result = await session.execute(
+            text(
+                """
+                UPDATE ai.prompt_release_records
+                SET status = 'published', published_by = :actor,
+                    updated_at = now()
+                WHERE release_id = :release_id AND status = 'approved'
+                RETURNING *
+                """
+            ),
+            {"release_id": release_id, "actor": actor},
+        )
+        row = result.mappings().first()
+        return dict(row) if row is not None else None
+
     async def mark_rolled_back(self, release_id: str, actor: str) -> dict[str, Any]:
         return await self._transition(
             release_id,

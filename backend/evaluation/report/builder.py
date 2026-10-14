@@ -3,6 +3,7 @@ from collections import Counter
 from typing import Any
 
 from backend.evaluation.models import EvalReport
+from .timestamp import format_shanghai_timestamp
 
 # ============ V1.0 中文化映射 ============
 METRIC_LABELS: dict[str, str] = {
@@ -180,7 +181,7 @@ def print_summary(report: EvalReport) -> None:
         header += " · 冒烟测试"
     print(f"\n{'='*64}")
     print(f"  {header}")
-    print(f"  时间: {report.timestamp}")
+    print(f"  时间（上海）: {format_shanghai_timestamp(report.timestamp)}")
     print(f"{'='*64}")
 
     for s in report.summaries:

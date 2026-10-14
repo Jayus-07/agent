@@ -7,16 +7,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.config.database import MEMORY_DB_CONFIG
 from backend.infra.db import get_memory_engine
+from backend.tests.travel_v2.postgres_test_support import assert_isolated_travel_postgres
 from backend.tests.travel_v2.test_trip_document import valid_document
 from backend.travel_v2.api.router import router
 
-
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
-    reason="requires the explicitly selected local agent_memory PostgreSQL",
+    reason="requires an explicitly selected isolated travel V2 PostgreSQL",
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_postgres_guard() -> None:
+    assert_isolated_travel_postgres()
 
 
 def _headers(user_id: str, tenant_id: str) -> dict[str, str]:
@@ -40,8 +44,6 @@ def _cleanup(trip_id: str) -> None:
 
 
 def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
-    assert MEMORY_DB_CONFIG["dbname"] == "agent_memory"
-    assert MEMORY_DB_CONFIG["port"] == 5433
     app = FastAPI()
     app.include_router(router)
     client = TestClient(app)
@@ -67,6 +69,38 @@ def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
         assert replay.status_code == 200
         assert replay.json()["trip_id"] == trip_id
         assert replay.json()["revision"] == 1
+
+        edited_document = valid_document()
+        edited_document["days"][0]["title"] = "权威回执行程"
+        edit_headers = {
+            **_headers(owner, tenant), "Idempotency-Key": f"edit-{uuid.uuid4().hex}",
+        }
+        edited = client.put(
+            f"/travel/v2/trips/{trip_id}/document",
+            headers=edit_headers,
+            json={
+                "expected_revision": 1, "command_type": "replace_document",
+                "change_summary": "更新第一天标题", "document": edited_document,
+            },
+        )
+        assert edited.status_code == 200
+        assert edited.json()["saved"] is True
+        assert edited.json()["revision"] == 2
+        assert edited.json()["document"]["days"][0]["title"] == "权威回执行程"
+
+        edit_replay = client.put(
+            f"/travel/v2/trips/{trip_id}/document",
+            headers=edit_headers,
+            json={
+                "expected_revision": 1, "command_type": "replace_document",
+                "change_summary": "更新第一天标题", "document": edited_document,
+            },
+        )
+        assert edit_replay.status_code == 200
+        assert edit_replay.json()["saved"] is True
+        assert edit_replay.json()["revision"] == 2
+        assert edit_replay.json()["replayed"] is True
+
         assert client.get(
             f"/travel/v2/trips/{trip_id}", headers=_headers("someone-else", tenant),
         ).status_code == 404

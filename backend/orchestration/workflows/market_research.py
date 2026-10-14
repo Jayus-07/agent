@@ -68,8 +68,10 @@ GROUPS: dict[str, dict[str, Any]] = {
 }
 
 
-def _llm_json(messages) -> Any:
-    resp = llm.invoke(messages)
+async def _llm_json(messages) -> Any:
+    # Provider 的同步调用不能占住 Workflow 事件循环；wait_for 超时时，
+    # Python 无法强停已进入 Provider 的线程，Executor 会将物理完成状态记为未知。
+    resp = await asyncio.to_thread(llm.invoke, messages)
     return json.loads(resp.content.strip().strip("`").removeprefix("json").strip())
 
 
@@ -117,6 +119,7 @@ async def _invoke_governed_tool(tool_obj: Any, tool_name: str,
     actions=["调研", "分析", "报告"],
     examples=["调研一下蓝牙耳机市场", "帮我做宠物零食的品类市场调研报告", "分析这个品类的市场情况"],
     category="selection",
+    deadline_sec=1200,
 )
 class MarketResearch:
     """品类市场调研 Workflow — 7 个 step，5 层 DAG。"""
@@ -253,7 +256,7 @@ class MarketResearch:
             last_err: Exception | None = None
             for attempt in range(3):  # 重试 2 次（指数退避）
                 try:
-                    data = _llm_json([
+                    data = await _llm_json([
                         SystemMessage(content=system),
                         HumanMessage(content=material),
                     ])

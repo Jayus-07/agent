@@ -142,6 +142,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Semantic-only 模式（跳过 RAGAS 评测）",
     )
     parser.add_argument(
+        "--strict-gate", action="store_true",
+        help="CI 严格门禁：以完整 Release Gate（PASS/FAIL/INVALID）+ 分层阈值 "
+             "共同决定退出码（PASS=0 / FAIL=1 / INVALID=3）。默认关闭保持既有"
+             "行为（仅分层阈值）——避免无意改变其他模块现有 CLI 语义。",
+    )
+    parser.add_argument(
         "--ragas-level", type=str, default="standard",
         choices=["basic", "standard", "full"],
         help="RAGAS 指标档位: basic(2项) / standard(4项, 默认) / full(5项)",
@@ -322,6 +328,14 @@ def main():
 
     # V2: 分层退出码 — 任一层级未达阈值即退出 1
     tier_failed = [ts for ts in report.tier_summaries if not ts.passed_threshold]
+    if getattr(args, "strict_gate", False):
+        # CI 严格门禁：完整 Release Gate（compute_module_release_gate，唯一
+        # 裁决出口）+ 分层阈值共同决定退出码。REQUIRED 指标缺失/不达标、
+        # GATE-12 样本量不足、run 有效性 INVALID 都无法靠分层通过率达标
+        # 换取 exit 0。
+        exit_code = _strict_gate_exit_code(report, tier_failed)
+        sys.exit(exit_code)
+
     if tier_failed:
         for ts in tier_failed:
             print(
@@ -330,6 +344,37 @@ def main():
             )
         sys.exit(1)
     sys.exit(0)
+
+
+def _strict_gate_exit_code(report, tier_failed: list) -> int:
+    """strict-gate 退出决策（纯函数，可测）：复用唯一裁决出口。
+
+    Gate PASS  → 0（分层阈值也必须全过）；
+    Gate FAIL  → 1（质量失败：required 指标缺失/不达标、GATE-12 样本量不足、
+                  tier_gates 未过——含 passed_min_samples）；
+    Gate INVALID → 3（环境/有效性失败，与质量失败显式区分）。
+    """
+    from backend.evaluation.release_gate import compute_module_release_gate
+
+    gate = compute_module_release_gate(report)
+    verdict = gate["verdict"]
+    print(f"EVAL_GATE_VERDICT={verdict}")
+    if gate.get("invalid_reason"):
+        print(f"EVAL_GATE_INVALID_REASON={gate['invalid_reason']}")
+    for item in gate["items"]:
+        if item.get("requirement") == "required" and item.get("passed") is False:
+            print(f"❌ [gate] {item.get('label', item['metric'])}: {item.get('reason')}")
+    for ts in tier_failed:
+        print(
+            f"⚠️  [{ts.tier}] 通过率 {ts.pass_rate:.1%} "
+            f"< 阈值 {ts.threshold:.1%}"
+        )
+    if verdict == "INVALID":
+        print("❌ Release Gate INVALID：环境/有效性失败，本轮不可评价（区别于质量 FAIL）")
+        return 3
+    if verdict != "PASS" or tier_failed:
+        return 1
+    return 0
 
 
 def _run_judge_golden_flow(args) -> None:

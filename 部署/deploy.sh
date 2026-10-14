@@ -7,6 +7,8 @@
 #        可选 + TEI 嵌入容器（BGE-M3, :8080/embed）
 # ══════════════════════════════════════════════════════════════
 set -euo pipefail
+# 部署凭据只写入权限受限文件，终端与部署日志不回显。
+umask 077
 
 # ── 可按需修改的配置 ──────────────────────────────────────────
 MODEL="${MODEL:-Qwen/Qwen3-8B}"          # 模型名（HuggingFace 仓库）
@@ -29,7 +31,7 @@ fi
 
 echo "==> 模型: $MODEL"
 echo "==> 端口: $PORT (仅监听本机，配合 SSH 隧道使用)"
-echo "==> API Key: $API_KEY  (请保存好)"
+echo "==> API Key 已生成，部署后写入 /opt/vllm-cache/API_KEY.txt（权限 600）"
 
 # ── 1. 基础检查 ───────────────────────────────────────────────
 if ! command -v nvidia-smi &>/dev/null; then
@@ -131,6 +133,7 @@ EOF
   COMPOSE_FILES="$COMPOSE_FILES -f tei-compose.yml"
 fi
 
+chmod 600 /opt/vllm-cache/docker-compose.yml
 docker compose $COMPOSE_FILES up -d
 
 echo "==> 部署完成。首次启动需下载模型，观察日志:"
@@ -146,4 +149,6 @@ echo "    LLM   : http://localhost:${PORT}/v1"
 if [ "$WITH_EMBEDDING" = "1" ]; then
   echo "    Embed : http://localhost:${EMBED_PORT}/embed  (POST {\"inputs\":\"文本\"})"
 fi
-echo "    API Key: ${API_KEY}" | tee /opt/vllm-cache/API_KEY.txt
+printf '%s\n' "$API_KEY" > /opt/vllm-cache/API_KEY.txt
+chmod 600 /opt/vllm-cache/API_KEY.txt /opt/vllm-cache/docker-compose.yml
+echo "    API Key 已保存到 /opt/vllm-cache/API_KEY.txt（权限 600；值不写入日志）"

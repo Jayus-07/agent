@@ -1,8 +1,21 @@
 name: RAG PR Smoke
 
+# 触发与信任边界（2026-10-11 GPT 复核整改）：
+# - pull_request：只跑免费可信预检（路径检测 + E0 preflight），**不引用付费
+#   Secrets、不跑真实 API 评测**——同仓库未审核 PR 不获得付费凭据
+#   （prompt-eval environment 当前无 protection_rules，该收敛由触发器保证）。
+# - RAG 相关 push(main) / workflow_dispatch：受信任入口（合并后相关代码或有
+#   写权限者人工触发），执行 DB API 模型口径的真实检索评测。
+# - 完整回归由 rag_regression.yml 的 workflow_dispatch 承担（无 PR/定时触发）。
+#
+# 语义定位：固定 8 条用例（pr_smoke suite）的真实检索评测，全部层级阈值
+# 达标才 PASS；检索评测与生成/Judge 评测（--judge/--ragas 显式 opt-in）分开。
+
 on:
   pull_request:
     branches: [main, master]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -29,12 +42,23 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          # 手动触发没有 PR diff，按显式手动运行处理。
+          set -euo pipefail
+          # 判定逻辑单一事实源在 .github/scripts/rag_smoke_path_filter.py，
+          # 正反触发回归测试见 tests/test_rag_smoke_path_filter.py。
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "RAG-related changes: true (manual trusted run)"
+            exit 0
+          fi
+
+          # 首次创建 main 分支没有可比较的 before SHA；按相关改动处理，
+          # 其余 push 必须与 PR 一样通过共享路径过滤器。
+          if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "RAG-related changes: true (initial branch push)"
             exit 0
           fi
 
@@ -49,52 +73,73 @@ jobs:
             exit 1
           fi
 
-          relevant=false
-          while IFS= read -r path; do
-            case "$path" in
-              backend/rag/*|backend/evaluation/*|backend/infra/llm/*|backend/config/*|\
-              backend/orchestration/graph/*|backend/core/tool_runtime/policy.py|\
-              backend/services/rag_server.py|backend/prompts/*|\
-              backend/sql/migrations/*|data/docs/*|pyproject.toml|requirements-lock.txt|\
-              .github/workflows/rag_smoke.yml|.github/workflows/rag_regression.yml)
-                relevant=true
-                break
-                ;;
-            esac
-          done < "$changed_paths"
+          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py < "$changed_paths")"
+          if [[ "$relevant_output" != "relevant=true" && "$relevant_output" != "relevant=false" ]]; then
+            echo "::error::RAG path filter returned an invalid result: $relevant_output"
+            exit 1
+          fi
+          echo "$relevant_output"
+          echo "$relevant_output" >> "$GITHUB_OUTPUT"
 
-          echo "relevant=$relevant" >> "$GITHUB_OUTPUT"
-          echo "RAG-related changes: $relevant"
+  # ── PR：免费可信预检（无付费 Secrets、无真实 API 调用）──────────────
+  rag-smoke-pr-static:
+    needs: detect-changes
+    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.relevant == 'true'
+    name: RAG Smoke preflight (PR, no paid API)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-lock.txt
+
+      - name: Evaluation preflight (E0, free)
+        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+
+      - name: Targeted regression tests (free, no paid API)
+        run: |
+          # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
+          # API Secrets；不扩大为全量 pytest）。
+          python -m pytest tests/test_rag_smoke_path_filter.py \
+            tests/evaluation/test_seed_eval_bindings_verify.py \
+            tests/evaluation/test_release_gate_tier_samples.py \
+            tests/evaluation/test_rag_ci_workflow_contracts.py \
+            -q --no-cov
+
+      - name: Declare skipped real-API scope
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## RAG Smoke（真实 API 评测）= SKIPPED_UNTRUSTED_PR
+          同仓库 PR 不获得付费 API Secrets（prompt-eval environment 无
+          protection_rules，收敛由触发器保证）。真实 Smoke 在合并后由
+          push(main) / workflow_dispatch 执行；完整 Regression 仅由其
+          workflow_dispatch 按需运行。
+          本 Job 仅覆盖免费 E0 资产预检（suite/hash/case 完整性）。
+          EOF
+          echo "REAL_API_EVAL=SKIPPED_UNTRUSTED_PR"
+
+  # ── 受信任入口：main push / 手动 dispatch 才跑真实 API 评测 ─────────
   rag-smoke:
     needs: detect-changes
-    if: needs.detect-changes.outputs.relevant == 'true'
-    name: RAG Smoke Evaluation (8 cases)
+    if: >-
+      needs.detect-changes.outputs.relevant == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    name: RAG Smoke Evaluation (8 cases, real API)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
-    env:
-      # PR 门禁使用可复现的离线检索模式，不调用生成模型或 LLM Judge。
-      ENV_MODE: local
-      EVAL_GATE: legacy
-      EVAL_SEMANTIC_SCORER: lexical
-      EVAL_TRIGGER: github_pr
-      EVAL_TRIGGERED_BY: github-actions-rag-smoke
-      EMBEDDING_MODEL_PATH: BAAI/bge-small-zh-v1.5
-      RERANKER_MODEL_PATH: BAAI/bge-reranker-base
-      RERANKER_DEVICE: cpu
-      VECTOR_PG_DIM: "512"
-      LANGFUSE_ENABLED: "false"
-      OBS_ANALYTICS_ENABLED: "false"
-      PYTHONUTF8: "1"
-      PGHOST: localhost
-      PGPORT: "5432"
-      PGUSER: postgres
-      PGPASSWORD: postgres
-      MEMORY_PGDATABASE: agent_memory
-      BUSINESS_PGDATABASE: agent_business
-      VECTOR_PGDATABASE: agent_memory
-      RAG_STORES_PGDATABASE: agent_memory
-
+    # 受信任环境：与 prompt-eval 共用 environment secrets。
+    environment: prompt-eval
+    timeout-minutes: 40
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -109,6 +154,45 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=20
+    env:
+      # 真实 API 检索评测口径：DB API 模型（specialized binding），
+      # ENV_MODE=cloud；禁止本地 BGE / Ollama / 旧 env 凭据回退。
+      ENV_MODE: cloud
+      EVAL_GATE: legacy
+      EVAL_SEMANTIC_SCORER: lexical
+      EVAL_TRIGGER: ${{ github.event_name }}
+      EVAL_TRIGGERED_BY: github-actions-rag-smoke
+      LANGFUSE_ENABLED: "false"
+      # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
+      OBS_ANALYTICS_ENABLED: "true"
+      PYTHONUTF8: "1"
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
+      WORKFLOW_DB_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PGDATABASE: agent_memory_test
+      PROMPT_EVAL_TEST_PROVIDER_ID: rag-eval-chat
+      PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
+      PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
+      PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
+      PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
+      PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
+      PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
+      PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
+      VECTOR_PG_DIM: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS || '1024' }}
+      PROMPT_EVAL_TEST_RERANK_PROVIDER_ID: rag-eval-rerank
+      PROMPT_EVAL_TEST_RERANK_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_RERANK_API_KEY }}
+      PROMPT_EVAL_TEST_RERANK_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_RERANK_BASE_URL }}
+      PROMPT_EVAL_TEST_RERANK_MODEL: ${{ vars.PROMPT_EVAL_TEST_RERANK_MODEL }}
+      SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
 
     steps:
       - name: Checkout
@@ -121,54 +205,199 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
 
-      - name: Cache Hugging Face models
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/huggingface
-          key: hf-rag-smoke-bge-small-reranker-base-v1
-          restore-keys: hf-rag-smoke-
-
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
 
-      - name: Prepare offline retrieval models
-        run: |
-          python - <<'PY'
-          from sentence_transformers import CrossEncoder, SentenceTransformer
+      - name: Evaluation preflight
+        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
 
-          SentenceTransformer("BAAI/bge-small-zh-v1.5")
-          CrossEncoder("BAAI/bge-reranker-base", device="cpu")
-          print("RAG smoke models ready")
+      - name: Trim corpora to evaluation scope
+        run: |
+          # 与 rag_regression 同口径：业务知识库不进评测隔离库
+          #（pipeline 全量 sync 会混入业务文档并触发 near-dup 交叉 HOLD）。
+          rm -rf data/docs/policy_general
+          ls data/docs/
+
+      - name: Prepare migration compatibility database
+        run: |
+          # 对齐 prompt_eval 模式：004_readonly_role 等迁移要跨库操作
+          # agent_business；库不存在会让只读角色失败并连锁导致
+          # customer_service schema 缺失（006/082 连锁失败）。
+          python - <<'PY'
+          import psycopg2
+
+          conn = psycopg2.connect(
+              host="localhost",
+              port=5432,
+              user="postgres",
+              password="postgres",
+              dbname="postgres",
+          )
+          conn.autocommit = True
+          try:
+              with conn.cursor() as cur:
+                  cur.execute("SELECT 1 FROM pg_database WHERE datname = 'agent_business'")
+                  if cur.fetchone() is None:
+                      cur.execute('CREATE DATABASE agent_business')
+          finally:
+              conn.close()
           PY
 
-      - name: Initialize isolated evaluation databases
+      - name: Initialize isolated evaluation database
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
+
+      - name: Seed DB API model bindings
+        run: python -m backend.scripts.seed_prompt_eval_db
+
+      - name: Verify bindings and probe real API
+        env:
+          EVAL_MEMORY_PGDATABASE: agent_memory_test
+        run: |
+          python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
+          python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
 
       - name: Import baseline evaluation fixtures
         run: python -m backend.evaluation.import_fixture baseline
 
+      - name: Assert index completeness
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+
+          import psycopg
+
+          expected_dims = int(os.getenv("PROMPT_EVAL_TEST_EMBEDDING_DIMENSIONS", "1024"))
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute(
+                  "SELECT count(*), min(vector_dims(embedding)), "
+                  "max(vector_dims(embedding)) FROM rag_vectors "
+                  "WHERE collection = 'chroma' AND metadata->>'kb_id' = 'rag_eval_kb'"
+              )
+              n, dmin, dmax = cur.fetchone()
+          conn.close()
+          problems = []
+          if not n:
+              problems.append("kb=rag_eval_kb 向量数为 0（导入失败或空集合）")
+          if dmin != expected_dims or dmax != expected_dims:
+              problems.append(
+                  f"kb=rag_eval_kb 向量维度 {dmin}..{dmax} 与绑定声明 {expected_dims} 不一致"
+              )
+          for p in problems:
+              print(f"[assert] FAIL {p}")
+          if problems:
+              print("[assert] EVAL_INDEX_CHECK=failed —— 评测保持 BLOCKED")
+              sys.exit(1)
+          print(f"[assert] EVAL_INDEX_CHECK=passed vectors={n} dims={expected_dims}")
+          PY
+
       - name: Run RAG smoke evaluation
-        run: >-
-          python -m backend.evaluation.cli rag
-          --selection pr_smoke
-          --no-ragas
-          --no-resume
-          --triggered-by github-actions-rag-smoke
+        run: |
+          # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
+          set -o pipefail
+          python -u -m backend.evaluation.cli rag \
+            --selection pr_smoke \
+            --no-ragas \
+            --no-resume \
+            --strict-gate \
+            --triggered-by github-actions-rag-smoke 2>&1 | tee /tmp/eval-run.log
+          exit "$?"
+
+      - name: Collect API cost attribution
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          import psycopg
+
+          try:
+              conn = psycopg.connect(
+                  host="localhost", port=5432, user="postgres", password="postgres",
+                  dbname=os.environ["MEMORY_PGDATABASE"],
+              )
+              with conn.cursor() as cur:
+                  cur.execute(
+                      "SELECT model, provider, cost_status, pricing_source, count(*), "
+                      "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
+                      "FROM llm_usage "
+                      "GROUP BY model, provider, cost_status, pricing_source "
+                      "ORDER BY model, provider, cost_status, pricing_source"
+                  )
+                  rows = cur.fetchall()
+              conn.close()
+          except Exception:  # noqa: BLE001
+              print("[cost] llm_usage 查询失败；费用状态标记为 UNVERIFIED")
+              rows = []
+              query_failed = True
+          else:
+              query_failed = False
+          unverified_statuses = {"", "unpriced", "price_unknown"}
+          unverified_calls = sum(
+              int(r[4] or 0) for r in rows
+              if (r[2] or "").lower() in unverified_statuses
+          )
+          estimated_calls = sum(
+              int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
+          )
+          cost_verification = (
+              "UNVERIFIED" if query_failed or not rows or unverified_calls
+              else "ESTIMATED" if estimated_calls else "VERIFIED"
+          )
+          summary = []
+          for r in rows:
+              cost_status = (r[2] or "").lower()
+              summary.append({
+                  "model": r[0],
+                  "provider": r[1],
+                  "cost_status": cost_status or "unknown",
+                  "pricing_source": r[3] or "unknown",
+                  "calls": int(r[4] or 0),
+                  "total_tokens": int(r[5] or 0),
+                  "billed_cost_cny": (
+                      None if cost_status in unverified_statuses
+                      else round(float(r[6] or 0), 6)
+                  ),
+              })
+          Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
+          Path("data/eval_runs/llm_usage_summary.json").write_text(
+              json.dumps({
+                  "note": "隔离测试库账本，未同步生产计费",
+                  "cost_verification": cost_verification,
+                  "verification_error": "ledger_query_failed" if query_failed else None,
+                  "unverified_calls": unverified_calls,
+                  "usage": summary,
+              },
+                         ensure_ascii=False, indent=2),
+              encoding="utf-8",
+          )
+          print(json.dumps({"cost_verification": cost_verification,
+                            "unverified_calls": unverified_calls, "usage": summary},
+                           ensure_ascii=False, indent=2))
+          PY
 
       - name: Upload RAG smoke report
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rag-smoke-${{ github.run_id }}
-          path: data/eval_runs/
+          path: |
+            data/eval_runs/
+            /tmp/eval-run.log
           if-no-files-found: warn
           retention-days: 14
 
   rag-smoke-gate:
     name: RAG Smoke (8 cases)
-    needs: [detect-changes, rag-smoke]
+    needs: [detect-changes, rag-smoke-pr-static, rag-smoke]
     # 该 Job 必须在依赖失败或被跳过后运行；下面的步骤会严格校验结果，不会无条件放行。
     if: ${{ always() }}
     runs-on: ubuntu-latest
@@ -178,6 +407,8 @@ jobs:
         env:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
           RAG_RELEVANT: ${{ needs.detect-changes.outputs.relevant }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_PREFLIGHT_RESULT: ${{ needs.rag-smoke-pr-static.result }}
           SMOKE_RESULT: ${{ needs.rag-smoke.result }}
         run: |
           set -euo pipefail
@@ -188,8 +419,8 @@ jobs:
           fi
 
           if [[ "$RAG_RELEVANT" == "false" ]]; then
-            if [[ "$SMOKE_RESULT" != "skipped" ]]; then
-              echo "::error::Non-RAG changes expected the evaluation job to be skipped (result: $SMOKE_RESULT)."
+            if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::Non-RAG changes expected both smoke jobs to be skipped (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
               exit 1
             fi
             echo "NOT_APPLICABLE: no RAG-related changes; the required gate is satisfied without running the RAG evaluation."
@@ -201,9 +432,22 @@ jobs:
             exit 1
           fi
 
-          if [[ "$SMOKE_RESULT" != "success" ]]; then
-            echo "::error::RAG-related changes require a successful 8-case evaluation (result: $SMOKE_RESULT)."
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if [[ "$PR_PREFLIGHT_RESULT" != "success" || "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::RAG pull requests require successful free preflight and must not run real API evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "SUCCESS: RAG pull request passed free preflight; real API evaluation is limited to trusted events."
+            exit 0
+          fi
+
+          if [[ "$EVENT_NAME" != "push" && "$EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "::error::Unsupported event for the RAG Smoke required gate: $EVENT_NAME"
+            exit 1
+          fi
+          if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "success" ]]; then
+            echo "::error::Trusted RAG changes require a successful real 8-case evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
             exit 1
           fi
 
-          echo "SUCCESS: RAG-related changes passed the real 8-case evaluation."
+          echo "SUCCESS: trusted RAG changes passed the real 8-case evaluation."

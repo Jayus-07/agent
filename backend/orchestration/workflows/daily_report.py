@@ -51,6 +51,7 @@ def _report_email_recipients() -> str:
     ],
     default_kbs=["analytics"],
     category="report",
+    deadline_sec=600,
 )
 class DailyReport:
     """每日经营日报 — 6 个 Step，4 个并行层"""

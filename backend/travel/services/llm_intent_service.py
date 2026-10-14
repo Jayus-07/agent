@@ -12,8 +12,9 @@ slot_filler 词表分类器（classify_intent）不认识的消息，交 LLM 补
      （slot_filler 退让），不比现状差。
 
 模型角色 = main（DB 绑定 doubao-seed-2.0-mini，解析链实机活着）。
-选型记录：tool_selector/fallback 角色在本库当前解析为空（registry 注入
-状态问题，单独登记）——「解析链能出可用实例」是选型先决条件。
+调用通道：B1-B 起经 proxy ``bind_llm_for_role("main")`` 治理链（预算预占/
+限流/用量入账），域级超时仍由 sync_call_with_timeout 兜底——主链韧性重试
+被外层超时截断后按既有语义回落词表，不比现状差。
 灰度：TRAVEL_LLM_INTENT_ENABLED 默认关；开启后 golden 门禁
 （tests/travel/test_intent_llm_golden.py）双模式跑。
 """
@@ -76,30 +77,36 @@ def classify_intent_llm(
         return None
     timeout = (timeout_ms or TRAVEL_LLM_INTENT_TIMEOUT_MS) / 1000.0
     try:
+        import contextvars
+
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from backend.infra.async_utils import sync_call_with_timeout
 
-        # 构建路径选型（2026-10-04 实机甄别）：get_llm_for_role 与全局
-        # proxy 的 default 通道在本库均落到无凭据构造（x-api-key=None，
-        # 全角色复现，登记模型治理线）；_build_llm_for 是唯一带 DB 托管
-        # 凭据解析的构建出口（P1a-2 契约）——按 main 角色的 DB 绑定名直构。
-        from backend.config import model_roles
-        from backend.infra.llm.proxy import _build_llm_for
+        # B1-B（2026-10-12）治理化收口：此前为带 temperature/max_tokens 直构
+        # `_build_llm_for(...).bind(...)` 裸实例——绕过限流/预算预占/韧性链/
+        # token 记录（第四阶段审计 P0-2）。改走 proxy 公开出站
+        # bind_llm_for_role("main")：_BoundLLMProxy 治理链全生效（发起前
+        # 预算预占、调用后按真实用量结算并入 llm_usage，role=main 归属），
+        # DB 托管凭据解析不变（_get_override_llm 懒构建即 _build_llm_for；
+        # 2026-10-04「get_llm_for_role 无凭据」的直构理由已不复成立）。
+        from backend.infra.llm.proxy import bind_llm_for_role
 
-        model_name = str((model_roles.resolve_effective("main") or {})
-                         .get("value") or "")
-        if not model_name:
-            logger.info("[TravelLLMIntent] main 角色无模型绑定，回落词表")
-            return None
-        intent_llm = _build_llm_for(model_name).bind(temperature=0,
-                                                     max_tokens=1024)
+        intent_llm = bind_llm_for_role("main", temperature=0, max_tokens=1024)
         context_hint = (
             f"[当前有行程: {has_itinerary}; 已知目的地: {has_destination}]")
+        messages = [
+            SystemMessage(content=_intent_system_prompt()),
+            HumanMessage(content=f"{context_hint}\n用户消息：{message}"),
+        ]
+        # sync_call_with_timeout 走 concurrent.futures 线程——**不传播
+        # ContextVar**，proxy 的用量归属（current_usage_attribution 读
+        # user/tenant/trace ContextVar）在线程里会读到空串。此处显式
+        # copy_context 把请求身份带到执行线程，保证 llm_usage 行可归因。
+        call_ctx = contextvars.copy_context()
         response = sync_call_with_timeout(
-            intent_llm.invoke, timeout,
-            [SystemMessage(content=_intent_system_prompt()),
-             HumanMessage(content=f"{context_hint}\n用户消息：{message}")],
+            lambda *a: call_ctx.run(intent_llm.invoke, *a),
+            timeout, messages,
         )
         raw = str(getattr(response, "content", "") or "")
         # 统一策略链（2026-10-06 批次 C）：此前「整体解析 + 首个无嵌套平衡块」

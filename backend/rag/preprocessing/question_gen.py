@@ -57,16 +57,16 @@ def get_last_generation_meta() -> dict:
 
 
 def _fallback_questions(chunk_text: str) -> list[str]:
-    """规则降级：无害占位问句。
+    """规则降级：返回空（不产出模拟问题）。
 
-    设计原则与旧 _fallback_questions 一致：宁可该 chunk 召回率低，
-    也不让错误问题把不相关问句召回来。空 chunk 返回空列表
-    （调用方对空列表不写 metadata，避免 ChromaDB 非空列表校验报错）。
+    P1 LLM 增强审计（2026-10-13）：旧实现给降级 chunk 统一塞占位问句
+    「这段内容讲什么？」——它进 chunk metadata["simulated_questions"] 并被
+    EmbeddingStage.text_for 拼进【相关问题】embedding 前缀：全库大量 chunk
+    携带同一句与内容无关的问句，既稀释向量区分度，又会把「这段内容讲什么」
+    类模糊查询错误召回。无法证明检索收益的占位增强停用：空列表 → 调用方
+    不写 metadata（该字段的历史读取方对缺失值本就兼容）。
     """
-    first = re.split(r"[。！？；\n]", (chunk_text or "").strip(), maxsplit=1)[0].strip()
-    if not first:
-        return []
-    return ["这段内容讲什么？"]
+    return []
 
 
 def _extract_json_questions(content: str, expected_len: int,
@@ -244,9 +244,25 @@ def generate_chunk_questions(chunks_text: list[str],
         _set_generation_meta(status="cached", cache_status="hit")
         return cached, {}
 
-    # 成本护栏：超长文档只对前 N chunk 走 LLM，其余规则兜底
-    llm_scope = list(chunks_text[:QUESTION_GEN_MAX_CHUNKS])
-    tail_scope = chunks_text[len(llm_scope):]
+    # 成本护栏：超长文档只对 N 个 chunk 走 LLM，其余规则兜底（返回空）。
+    # P1（2026-10-13）：选块从「前 N 个」改为均匀分布——旧策略隐含
+    # 「文档开头有代表性」假设，超长文档尾部章节零覆盖；均匀采样在同等
+    # LLM 预算下让选块分布可审计（llm_scope_indexes 记录进阶段状态）。
+    n_total = len(chunks_text)
+    n_scope = min(QUESTION_GEN_MAX_CHUNKS, n_total)
+    if n_scope < n_total:
+        llm_scope_indexes = sorted(
+            {round(i * (n_total - 1) / max(n_scope - 1, 1)) for i in range(n_scope)}
+        )
+    else:
+        llm_scope_indexes = list(range(n_total))
+    llm_scope = [chunks_text[i] for i in llm_scope_indexes]
+    tail_scope = [
+        ct for i, ct in enumerate(chunks_text) if i not in set(llm_scope_indexes)
+    ]
+    _set_generation_meta(llm_scope_indexes=llm_scope_indexes,
+                         llm_scope_count=len(llm_scope),
+                         total_chunks=n_total)
 
     fallback_result = [_fallback_questions(ct) for ct in chunks_text]
     if not llm_scope:
@@ -273,7 +289,11 @@ def generate_chunk_questions(chunks_text: list[str],
                 model=actual_model,
             )
             return fallback_result, tokens
-        result_questions = parsed + [_fallback_questions(ct) for ct in tail_scope]
+        # 采样块结果按原索引回填（未采样 chunk 无问题=空列表，对齐契约）
+        result_questions: list[list[str]] = [[] for _ in range(n_total)]
+        for idx, qs in zip(llm_scope_indexes, parsed):
+            if 0 <= idx < n_total:
+                result_questions[idx] = qs
         _cache_put(ckey, result_questions)
         return result_questions, tokens
     except Exception as e:

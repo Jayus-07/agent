@@ -51,6 +51,10 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
         "PROMPT_EVAL_TEST_EMBEDDING_MODEL": "embedding-model",
         "PROMPT_EVAL_TEST_EMBEDDING_BASE_URL": "https://embedding.example/v1",
         "PROMPT_EVAL_TEST_EMBEDDING_API_KEY": "embedding-key",
+        "PROMPT_EVAL_TEST_RERANK_PROVIDER_ID": "eval-rerank",
+        "PROMPT_EVAL_TEST_RERANK_MODEL": "rerank-model",
+        "PROMPT_EVAL_TEST_RERANK_BASE_URL": "https://rerank.example/v1",
+        "PROMPT_EVAL_TEST_RERANK_API_KEY": "rerank-key",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -58,8 +62,10 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
     class Session:
         def __init__(self):
             self.commit_count = 0
+            self.statements = []
 
-        async def execute(self, _statement, _params=None):
+        async def execute(self, statement, params=None):
+            self.statements.append((str(statement), params or {}))
             return None
 
         async def commit(self):
@@ -80,3 +86,13 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
     await seed()
 
     assert session.commit_count == 1
+    role_bindings = [
+        params
+        for statement, params in session.statements
+        if "INSERT INTO llm_model_role_bindings" in statement
+    ]
+    assert role_bindings == [
+        {"role": "eval_gen", "model_name": "chat-model"},
+        {"role": "embedding", "model_name": "embedding-model"},
+        {"role": "rerank", "model_name": "rerank-model"},
+    ]

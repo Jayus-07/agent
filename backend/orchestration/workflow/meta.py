@@ -33,6 +33,9 @@ class WorkflowMeta:
     # 业务类别：用于前端自动分组
     # "report" → 报告中心 / "alert" → 告警中心 / "" → 通用（chat）
     category: str = ""
+    # Runtime：整个 Workflow 的总执行预算（秒），覆盖所有 DAG 层和重试。
+    # 在线请求还要服从 RequestContext.deadline，两者取更早者。
+    deadline_sec: float = 900
 
 
 @dataclass

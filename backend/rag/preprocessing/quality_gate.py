@@ -6,12 +6,11 @@
        重试失败记录 —— 全量落 data/quality_records/{kb}/{doc_id}.json。
   §5.2 原文可追溯：node_id/doc_id/source_range/page_number/bbox/content_hash
        进质量 JSON；URL/邮箱/编号/金额/日期无依据丢失 → 异常留痕。
-  §5.3 类型化校验：按格式校验字符量/关键节点/行列表头；截断/降级/大量过滤
-       标记质量异常（写 quality_issues，可审计）；硬异常（0 叶子/0 字符）
-       抛错 → 文档不得置 active。
+  §5.3 类型化校验：按格式校验字符量/关键节点/行列表头；截断、覆盖缺口、
+       覆盖审计失败/降级/大量过滤均写 quality_issues；数据完整性硬异常抛错。
 
-设计约束：记录 JSON 只存节点摘要（不存全文），体积有界；门禁故障不得阻断
-索引主流程（校验硬异常除外——那是业务语义本身）。
+设计约束：记录 JSON 只存节点摘要（不存全文），体积有界；非完整性类审计
+故障可留痕后继续索引，覆盖审计失败必须 fail closed，避免不完整内容 active。
 """
 from __future__ import annotations
 
@@ -117,6 +116,8 @@ def build_quality_record(
     ocr_triggered: bool = False,
     ocr_pages: int = 0,
     index_errors: list[str] | None = None,
+    route_decision: dict | None = None,
+    coverage: dict | None = None,
 ) -> dict:
     """组装 §5.1/§5.2 质量记录（纯函数，不做校验不落盘）。"""
     node_summaries = _node_summary(raw_ast)
@@ -145,6 +146,10 @@ def build_quality_record(
 
     # 降级标记：OCR 兜底（识别路径降级于原生文字层）。§5.1 要求降级可审计。
     degraded = ocr_triggered
+    coverage_record = dict(coverage) if isinstance(coverage, dict) else None
+    if coverage_record is not None and coverage_record.get("sampled"):
+        # 抽样审计没有全量覆盖率；不接受调用方传入的 100% 数值。
+        coverage_record["coverage_rate"] = None
 
     record: dict = {
         "schema_version": QUALITY_RECORD_SCHEMA_VERSION,
@@ -167,6 +172,15 @@ def build_quality_record(
             "table_count": len(table_nodes),
             "table_total_rows": table_rows,
             "table_max_cols": table_cols,
+            "table_resource_limit": {
+                "rows_scanned": int(getattr(raw_ast, "table_rows_total", 0) or 0),
+                "rows_truncated": int(getattr(raw_ast, "table_rows_truncated", 0) or 0),
+                "rows_total_known": bool(getattr(raw_ast, "table_rows_total_known", True)),
+                "cells_scanned": int(getattr(raw_ast, "table_cells_total", 0) or 0),
+                "cells_truncated": int(getattr(raw_ast, "table_cells_truncated", 0) or 0),
+                "cells_total_known": bool(getattr(raw_ast, "table_cells_total_known", True)),
+                "reason": str(getattr(raw_ast, "table_truncation_reason", "") or ""),
+            },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
             "degraded": degraded,
@@ -191,6 +205,9 @@ def build_quality_record(
         "index_errors": list(index_errors or []),
         # §5.2 节点级可追溯
         "traceability": {"nodes": node_summaries},
+        # P1 切分路由可审计决策（为什么用这个策略）
+        "route_decision": dict(route_decision or {}),
+        "coverage": coverage_record,
         # §5.3 校验结果（run_typed_validation 填充）
         "validation": {"checks": [], "anomalies": []},
     }
@@ -202,7 +219,7 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
 
     异常分两级：
       error → 硬异常，调用方必须让文档进 failed（不得伪装 active）；
-      warn  → 软异常，留痕 quality_issues 供人工复核。
+      warn  → 软异常，留痕 quality_issues 供人工复核；完整性异常为 hard error。
     """
     fmt = record.get("format", "")
     checks: list[dict] = []
@@ -249,11 +266,117 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
     _check("table_split_nonempty", not empty_tables,
            f"{len(empty_tables)} 个空表格节点", severity="warn")
 
-    # §5.3 截断 / 大量过滤 → 质量异常留痕（文档仍可 active，但必须可审计）
+    coverage = record.get("coverage")
+    if coverage is not None:
+        coverage_fields = {
+            "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
+        }
+        coverage_error = bool(
+            not isinstance(coverage, dict)
+            or coverage.get("error")
+            or not coverage_fields.issubset(coverage)
+        )
+        try:
+            leaf_total = int(coverage.get("leaf_total") or 0)
+            audited_count = int(coverage.get("audited_leaf_count") or 0)
+            uncovered = int(coverage.get("uncovered_count") or 0)
+            sampled = coverage.get("sampled")
+            if (
+                leaf_total < 0
+                or audited_count < 0
+                or uncovered < 0
+                or audited_count > leaf_total
+                or uncovered > audited_count
+                or (audited_count < leaf_total and sampled is not True)
+                or not isinstance(sampled, bool)
+            ):
+                coverage_error = True
+        except (TypeError, ValueError, AttributeError):
+            leaf_total = audited_count = uncovered = 0
+            sampled = False
+            coverage_error = True
+        if coverage_error:
+            error_detail = (
+                str(coverage.get("error") or "invalid coverage report")
+                if isinstance(coverage, dict) else "invalid coverage report"
+            )
+            _check(
+                "coverage_audit_failed", False,
+                "coverage_audit 异常或结果字段缺失: "
+                f"{error_detail}",
+            )
+        else:
+            _check(
+                "coverage_gap", uncovered == 0,
+                f"{uncovered}/{audited_count} "
+                "个已审 AST 叶节点未被实际输出 Leaf 覆盖",
+            )
+            if sampled:
+                detail = (
+                    f"抽样审计 {audited_count}/{leaf_total} 个源叶节点；"
+                    "不能据此宣称全量覆盖率 100%"
+                )
+                checks.append({
+                    "check": "coverage_audit_sampled",
+                    "pass": False,
+                    "detail": detail,
+                })
+                anomalies.append({
+                    "check": "coverage_audit_sampled",
+                    "severity": "warn",
+                    "detail": detail,
+                })
+
+    # §5.3 截断 → 硬异常（P0 超长文档收口 2026-10-13）：截断文档的检索
+    # 覆盖天然不完整，此前 warn 级留痕 + active 属「假成功」。任务口径：
+    # 超过单文档上限不得截断后标记成功——文档进 failed，用户拆分或调大
+    # MAX_CHUNKS_PER_DOC 后重传。（大量过滤仍为 warn 留痕。）
     if chunking["truncated"]:
         anomalies.append({
-            "check": "chunks_truncated", "severity": "warn",
-            "detail": "chunk 超上限被截断，检索覆盖不完整",
+            "check": "chunks_truncated", "severity": "error",
+            "detail": (
+                "chunk 超出单文档上限被截断，拒绝部分索引（不得以不完整"
+                "状态 active）；请拆分文档或调大 MAX_CHUNKS_PER_DOC 后重传"
+            ),
+        })
+    # 解析级资源保护截断不能以部分内容 active；Excel 触顶后停止扫描，
+    # 因此只报告已知下界，并明确后续总量是否未知。
+    table_trunc = int(getattr(raw_ast, "table_rows_truncated", 0) or 0)
+    cells_trunc = int(getattr(raw_ast, "table_cells_truncated", 0) or 0)
+    if table_trunc or cells_trunc:
+        rows_total = int(getattr(raw_ast, "table_rows_total", 0) or 0)
+        rows_known = bool(getattr(raw_ast, "table_rows_total_known", True))
+        cells_known = bool(getattr(raw_ast, "table_cells_total_known", True))
+        row_total_detail = (
+            f"总计扫描 {rows_total} 行"
+            if rows_known else f"至少扫描 {rows_total} 行，后续未读且总行数未知"
+        )
+        cell_detail = (
+            f"；已知跳过 {cells_trunc} 个单元格"
+            if cells_known else
+            f"；至少跳过 {cells_trunc} 个单元格，后续总量未知"
+        ) if cells_trunc else ""
+        row_trunc_detail = (
+            f"已截断 {table_trunc} 行"
+            if rows_known else f"至少有 {table_trunc} 行未纳入（下界）"
+        )
+        anomalies.append({
+            "check": "table_rows_truncated", "severity": "error",
+            "detail": (
+                f"表格解析触发资源上限，{row_trunc_detail}；"
+                f"{row_total_detail}{cell_detail}，不允许以部分内容 active"
+            ),
+        })
+    ocr_limit = getattr(raw_ast, "ocr_page_limit", 0) or 0
+    ocr_failed = getattr(raw_ast, "ocr_failed_pages", 0) or 0
+    if ocr_limit or ocr_failed:
+        anomalies.append({
+            "check": "ocr_coverage_partial", "severity": "error",
+            "detail": (
+                f"OCR 覆盖不完整：页数上限 {ocr_limit or '∞'}，"
+                f"失败页 {ocr_failed}，实际产出 {parsing['ocr_pages']} 页；"
+                "不允许以部分内容 active"
+            ),
         })
     total_pre_filter = chunking["chunk_count"] + chunking["filtered_count"]
     if total_pre_filter > 0 and chunking["filtered_count"] / total_pre_filter > HEAVY_FILTER_RATIO:
@@ -317,10 +440,14 @@ def hard_anomalies(anomalies: list[dict]) -> list[dict]:
     return [a for a in anomalies if a.get("severity") == "error"]
 
 
-def anomaly_summary(anomalies: list[dict]) -> str:
-    """异常列表 → quality_issues 追加串（warn 级留痕）。"""
-    warns = [a for a in anomalies if a.get("severity") == "warn"]
-    if not warns:
+def anomaly_summary(anomalies: list[dict], *, include_hard: bool = False) -> str:
+    """异常列表 → quality_issues 追加串；默认兼容旧行为，仅汇总 warn。"""
+    selected = [
+        a for a in anomalies
+        if a.get("severity") == "warn"
+        or (include_hard and a.get("severity") in {"error", "hard"})
+    ]
+    if not selected:
         return ""
-    parts = [f"quality_anomaly:{a['check']}" for a in warns]
-    return f"quality_anomalies({len(warns)}):" + ",".join(parts)
+    parts = [f"quality_anomaly:{a['check']}" for a in selected]
+    return f"quality_anomalies({len(selected)}):" + ",".join(parts)
