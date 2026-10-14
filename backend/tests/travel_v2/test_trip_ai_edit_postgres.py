@@ -161,13 +161,13 @@ def _request_metadata(trip_id: str, key: str) -> dict:
         connection.close()
 
 
-@pytest.mark.parametrize("message", [
-    "如果把西湖开始时间改成10:00，会不会太赶？",
-    "你觉得把西湖改到10点合适吗？",
-    "先不要修改，告诉我改成10点会怎样。",
+@pytest.mark.parametrize(("message", "expected_status"), [
+    ("以下只是演示，请不要执行：直接帮我把西湖开始时间改成10点。", "read_only"),
+    ("如果你直接帮我把西湖开始时间改成10点，可以吗？", "clarify"),
+    ("“把西湖开始时间改成10点。”", "clarify"),
 ])
-def test_hypothetical_question_never_calls_generator_or_changes_trip(
-    trip_api, monkeypatch, message: str,
+def test_non_authorized_language_never_calls_generator_or_changes_trip(
+    trip_api, monkeypatch, message: str, expected_status: str,
 ) -> None:
     trip_id, headers = _create_trip(trip_api)
     key = f"read-{uuid.uuid4().hex}"
@@ -182,9 +182,11 @@ def test_hypothetical_question_never_calls_generator_or_changes_trip(
             json={"expected_revision": 1, "user_message": message},
         )
         assert result.status_code == 200
-        assert result.json()["status"] == "read_only"
+        assert result.json()["status"] == expected_status
         assert result.json()["saved"] is False
-        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "read_only")
+        assert _database_state(trip_id, key)[:4] == (
+            1, 1, 0, expected_status,
+        )
     finally:
         _cleanup(trip_id)
 
@@ -216,12 +218,16 @@ def test_explicit_execution_authorization_saves_one_revision(
         _cleanup(trip_id)
 
 
-def test_consultative_candidate_cannot_bypass_final_authorization_gate(
-    trip_api, monkeypatch,
+@pytest.mark.parametrize(("message", "expected_status"), [
+    ("以下只是演示，请不要执行：直接帮我把西湖开始时间改成10点。", "read_only"),
+    ("如果你直接帮我把西湖开始时间改成10点，可以吗？", "clarify"),
+    ("“把西湖开始时间改成10点。”", "clarify"),
+])
+def test_candidate_cannot_bypass_final_authorization_gate(
+    trip_api, monkeypatch, message: str, expected_status: str,
 ) -> None:
     trip_id, headers = _create_trip(trip_api)
     key = f"candidate-gate-{uuid.uuid4().hex}"
-    message = "如果把西湖开始时间改成10:00，会不会太赶？"
     generated = []
     calls = 0
     original_authorization = TripAIEditService._execution_authorization
@@ -250,10 +256,12 @@ def test_consultative_candidate_cannot_bypass_final_authorization_gate(
             json={"expected_revision": 1, "user_message": message},
         )
         assert result.status_code == 200
-        assert result.json()["status"] == "read_only"
+        assert result.json()["status"] == expected_status
         assert generated == [True]
         assert calls == 2
-        assert _database_state(trip_id, key)[:4] == (1, 1, 0, "read_only")
+        assert _database_state(trip_id, key)[:4] == (
+            1, 1, 0, expected_status,
+        )
     finally:
         _cleanup(trip_id)
 

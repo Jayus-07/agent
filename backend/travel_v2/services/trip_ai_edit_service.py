@@ -38,7 +38,8 @@ _EDIT_VERBS = re.compile(r"修改|调整|改一下|改成|改到|改为|挪|移�
 _MULTI_CHANGE_HINTS = re.compile(r"但|而且|并且|同时|顺便|另外")
 _NO_EXECUTION_REQUEST = re.compile(
     r"先不要(?:修改|调整|改动|保存)|暂时不要(?:修改|调整|改动|保存)|"
-    r"不要修改|别修改|先别改|暂时别改|不要动行程|先别保存|不要保存"
+    r"不要修改|别修改|先别改|暂时别改|不要动行程|先别保存|不要保存|"
+    r"(?:请)?不要执行|别执行|请勿执行|禁止执行"
 )
 _CONSULTATIVE_REQUEST = re.compile(
     r"你觉得|你认为|会不会|会怎样|会怎么样|会如何|会有什么影响|"
@@ -46,17 +47,27 @@ _CONSULTATIVE_REQUEST = re.compile(
     r"(?:合适|适合|太赶|太满|可行|妥当)(?:吗|不)|怎么样|如何|好不好|值不值得|"
     r"是否|(?:可以吗|能不能|可不可以|行不行|对吗|妥吗)[？?]?$|(?:吗|么)[？?]?$|[？?]$"
 )
-_OPINION_REQUEST = re.compile(
-    r"你觉得|你认为|会不会|会怎样|会怎么样|会如何|会有什么影响|"
-    r"(?:哪个|比较|对比|相比)|(?:合适|适合|太赶|太满|可行|妥当)|"
-    r"怎么样|如何|好不好|值不值得|是否"
+_EXECUTION_WORDING = re.compile(
+    r"(?:请(?:您|你)?(?:直接)?|麻烦(?:您|你)?(?:直接)?|"
+    r"直接帮我|帮我(?:直接)?|替我|为我)\s*"
+    r"(?:把|将|改|修改|调整|删除|移除|去掉|增加|添加|安排|移动|替换|重排)"
 )
 _HYPOTHETICAL_REQUEST = re.compile(r"如果|假如|要是|倘若|假设|比如(?:说)?")
-_EXPLICIT_EXECUTION_REQUEST = re.compile(
-    r"(?:请(?:您|你)?(?:直接)?|麻烦(?:您|你)?(?:直接)?|"
-    r"(?:直接)?帮我(?:直接)?|直接(?:帮我)?|替我|为我|"
-    r"能不能(?:请)?(?:直接)?帮我|可以(?:请)?(?:直接)?帮我)"
-    r"\s*(?:把|将|改|修改|调整|删除|移除|去掉|增加|添加|安排|移动|替换|重排)"
+_REFERENCE_OR_DEMO_REQUEST = re.compile(
+    r"(?:以下|上文|以上|这(?:个|句|条|段))?.{0,8}(?:只是|仅是|仅供|作为)?"
+    r"(?:演示|示例|例子|引用|引文)"
+)
+_QUOTED_EDIT_COMMAND = re.compile(
+    r"[“\"'「『【][^”\"'」』】]{0,180}"
+    r"(?:把|将|改|修改|调整|挪|移动|换|替换|删除|移除|去掉|增加|添加|安排|插入|重排)"
+    r"[^”\"'」』】]{0,180}[”\"'」』】]"
+)
+_PERMISSION_CONDITION_PREFIX = re.compile(
+    r"^\s*如果(?:可以|方便)(?:的话)?[，,]?\s*"
+)
+_POLITE_EXECUTION_PREFIX = re.compile(
+    r"^\s*(?:(?:请(?:您|你)?|麻烦(?:您|你)?|"
+    r"(?:直接)?帮我(?:直接)?|直接(?:帮我)?|替我|为我)\s*)*"
 )
 _DIRECT_EDIT_COMMAND = re.compile(
     r"^\s*(?:把|将|改|修改|调整|挪|移动|换|替换|删除|移除|去掉|删掉|"
@@ -549,18 +560,27 @@ class TripAIEditService:
         """仅在 V2 AI 写入口判断是否有立即执行授权。"""
         if _NO_EXECUTION_REQUEST.search(message):
             return "read_only"
-        explicit = _EXPLICIT_EXECUTION_REQUEST.search(message)
-        consultative = _CONSULTATIVE_REQUEST.search(message)
-        if consultative and (
-            not explicit or _OPINION_REQUEST.search(message)
-        ):
+        if _REFERENCE_OR_DEMO_REQUEST.search(message):
             return "read_only"
-        if explicit:
-            return "authorized"
-        if _HYPOTHETICAL_REQUEST.search(message) and _EDIT_VERBS.search(message):
+        if _QUOTED_EDIT_COMMAND.search(message):
             return "clarify"
-        if _DIRECT_EDIT_COMMAND.search(message):
+        if _CONSULTATIVE_REQUEST.search(message):
+            return (
+                "clarify" if _EXECUTION_WORDING.search(message) else "read_only"
+            )
+
+        command = message
+        permission_prefix = _PERMISSION_CONDITION_PREFIX.match(command)
+        if permission_prefix:
+            command = command[permission_prefix.end():]
+        elif _HYPOTHETICAL_REQUEST.search(command) and _EDIT_VERBS.search(command):
+            return "clarify"
+
+        command = _POLITE_EXECUTION_PREFIX.sub("", command, count=1)
+        if _DIRECT_EDIT_COMMAND.search(command):
             return "authorized"
+        if _HYPOTHETICAL_REQUEST.search(command) and _EDIT_VERBS.search(command):
+            return "clarify"
         return "unspecified"
 
     @staticmethod
