@@ -4,6 +4,7 @@ import contextvars
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
 from uuid import uuid4
 
@@ -28,6 +29,11 @@ from backend.travel_v2.services.trip_edit_service import (
 from backend.travel_v2.services.trip_service import (
     TripNotFound,
     canonical_request_hash,
+)
+from backend.travel_v2.services.trip_write_validator import (
+    TripWriteConflictError,
+    trip_write_advisories,
+    validate_trip_write,
 )
 
 _ALLOWED_OPS = frozenset({
@@ -166,13 +172,21 @@ class TripAIEditService:
         assert current is not None
 
         if int(current["revision"]) != payload.expected_revision:
+            failure = self._failure(
+                trip_id, payload.expected_revision, key,
+                "VERSION_CONFLICT", "行程版本已变化，请刷新后重试",
+            )
+            failure["conflicts"] = [{
+                "conflict_code": "VERSION_CONFLICT",
+                "severity": "BLOCKED",
+                "message": "行程版本已变化，请刷新后重试。",
+                "affected_item_ids": [],
+                "allowed_resolutions": [],
+            }]
             return self._finish_result(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 key=key, status="failed", request=payload,
-                result=self._failure(
-                    trip_id, payload.expected_revision, key,
-                    "VERSION_CONFLICT", "行程版本已变化，请刷新后重试",
-                ),
+                result=failure,
             )
 
         authorization = self._execution_authorization(payload.user_message)
@@ -329,14 +343,25 @@ class TripAIEditService:
             )
             # 纯结构预演在无锁状态下尽早拒绝伪造 ID/受保护项；提交时仍会
             # 在行锁内重新应用并运行共享 TripWriteValidator 与 CAS。
-            TripEditService._apply_structured_operation(
+            proposed = TripEditService._apply_structured_operation(
                 current["document"], operation,
+            )
+            validate_trip_write(
+                proposed, current_document=current["document"],
             )
             command = StructuredTripEditCommand.model_validate({
                 "expected_revision": payload.expected_revision,
                 "change_summary": candidate.change_summary,
                 "operation": operation,
             })
+        except TripWriteConflictError as exc:
+            return self._blocked_or_pending(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                key=key, request=payload, operation=operation,
+                change_summary=candidate.change_summary,
+                metadata=metadata, current_document=current["document"],
+                conflict=exc.conflict,
+            )
         except Exception as exc:  # noqa: BLE001 — 非法候选一律不进入正式写路径
             metadata.update({
                 "operation_type": str(operation.get("op") or "invalid"),
@@ -365,6 +390,7 @@ class TripAIEditService:
             "operation_key": key,
             "change_summary": candidate.change_summary,
             "diff": self._diff(operation),
+            "conflicts": trip_write_advisories(proposed),
         }
         try:
             saved = self._edits.apply_operation(
@@ -385,13 +411,29 @@ class TripAIEditService:
                 ), metadata={**metadata, "result": "idempotency_conflict"},
             )
         except VersionConflict:
+            failure = self._failure(
+                trip_id, payload.expected_revision, key,
+                "VERSION_CONFLICT", "行程在修改生成期间已变化，请刷新后重试",
+            )
+            failure["conflicts"] = [{
+                "conflict_code": "VERSION_CONFLICT",
+                "severity": "BLOCKED",
+                "message": "行程在修改生成期间已变化，请刷新后重试。",
+                "affected_item_ids": [],
+                "allowed_resolutions": [],
+            }]
             return self._finish_result(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 key=key, status="failed", request=payload,
-                result=self._failure(
-                    trip_id, payload.expected_revision, key,
-                    "VERSION_CONFLICT", "行程在修改生成期间已变化，请刷新后重试",
-                ), metadata={**metadata, "result": "version_conflict"},
+                result=failure, metadata={**metadata, "result": "version_conflict"},
+            )
+        except TripWriteConflictError as exc:
+            return self._blocked_or_pending(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                key=key, request=payload, operation=operation,
+                change_summary=candidate.change_summary,
+                metadata=metadata, current_document=current["document"],
+                conflict=exc.conflict,
             )
         except ValueError as exc:  # noqa: BLE001 — 业务校验拒绝，写事务已回滚
             failure = self._failure(
@@ -425,6 +467,317 @@ class TripAIEditService:
                 pass
             return self._unknown(trip_id, payload.expected_revision, key)
         return {**saved, "replayed": False}
+
+    def _blocked_or_pending(
+        self, *, trip_id: str, tenant_id: str, owner_id: str, key: str,
+        request: AITripEditRequest, operation: dict, change_summary: str,
+        metadata: dict, current_document: dict, conflict: dict,
+    ) -> dict:
+        conflict = dict(conflict)
+        resolution = self._next_available_time_resolution(
+            current_document, operation, conflict,
+        )
+        if resolution:
+            conflict["allowed_resolutions"] = [{
+                "resolution_id": resolution["resolution_id"],
+                "label": resolution["label"],
+                "proposed_start_time": resolution["proposed_start_time"],
+            }]
+            pending_id = str(uuid4())
+            expires_at = (
+                datetime.now(timezone.utc) + timedelta(minutes=15)
+            ).isoformat()
+            pending = {
+                "pending_id": pending_id,
+                "trip_id": str(trip_id),
+                "tenant_id": tenant_id,
+                "owner_id": owner_id,
+                "base_revision": request.expected_revision,
+                "operation_key": key,
+                "conflict_codes": [conflict["conflict_code"]],
+                "affected_item_ids": conflict["affected_item_ids"],
+                "allowed_resolutions": conflict["allowed_resolutions"],
+                "expires_at": expires_at,
+                "status": "pending",
+            }
+            result = {
+                "status": "pending_resolution", "saved": False,
+                "trip_id": str(trip_id),
+                "base_revision": request.expected_revision,
+                "operation_key": key, "pending_id": pending_id,
+                "pending_resolution": pending,
+                "conflicts": [conflict],
+                "proposed_change": {
+                    "change_summary": change_summary,
+                    "diff": self._diff(operation),
+                },
+                "replayed": False,
+            }
+            plan = {
+                "operation": operation,
+                "mutable_fields": ["start_time"],
+                "authorized_scope": {
+                    "operation_type": operation.get("op"),
+                    "item_id": operation.get("item_id"),
+                    "mutable_fields": ["start_time"],
+                },
+                "change_summary": change_summary,
+                "resolution_operations": {
+                    resolution["resolution_id"]: {
+                        "operation": resolution["operation"],
+                        "diff": self._diff(resolution["operation"]),
+                        "label": resolution["label"],
+                    },
+                },
+            }
+            return self._edits.persist_ai_pending_resolution(
+                trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                expected_revision=request.expected_revision,
+                idempotency_key=key, response={
+                    name: value for name, value in result.items()
+                    if name != "replayed"
+                },
+                metadata={
+                    **metadata, "result": "pending_resolution",
+                    "pending_resolution": plan,
+                },
+            )
+
+        result = self._failure(
+            trip_id, request.expected_revision, key,
+            "AI_EDIT_CONFLICT_BLOCKED", "服务端校验发现硬冲突，行程没有保存。",
+        )
+        result["conflicts"] = [conflict]
+        return self._finish_result(
+            trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+            key=key, status="failed", request=request, result=result,
+            metadata={**metadata, "result": "blocked_conflict"},
+        )
+
+    @staticmethod
+    def _next_available_time_resolution(
+        document: dict, operation: dict, conflict: dict,
+    ) -> dict | None:
+        if (
+            conflict.get("conflict_code") not in {
+                "SCHEDULE_OVERLAP", "VERIFIED_OPENING_HOURS",
+            }
+            or operation.get("op") != "update_item"
+            or not isinstance(operation.get("start_time"), str)
+            or operation.get("item_id") not in conflict.get("affected_item_ids", [])
+        ):
+            return None
+        day = next((
+            day for day in document.get("days", [])
+            if any(item.get("item_id") == operation["item_id"]
+                   for item in day.get("items", []))
+        ), None)
+        if not day:
+            return None
+        item = next(item for item in day["items"]
+                    if item.get("item_id") == operation["item_id"])
+        if item.get("locked") or item.get("fixed_start"):
+            return None
+        try:
+            start = dt_time.fromisoformat(operation["start_time"])
+        except ValueError:
+            return None
+        start_minute = start.hour * 60 + start.minute
+        for minute in range(start_minute + 1, 24 * 60):
+            candidate_time = f"{minute // 60:02d}:{minute % 60:02d}"
+            candidate = {**operation, "start_time": candidate_time}
+            try:
+                proposed = TripEditService._apply_structured_operation(
+                    document, candidate,
+                )
+                validate_trip_write(proposed, current_document=document)
+            except TripWriteConflictError as exc:
+                if exc.conflict["conflict_code"] in {
+                    "SCHEDULE_OVERLAP", "VERIFIED_OPENING_HOURS",
+                }:
+                    continue
+                return None
+            except ValueError:
+                return None
+            return {
+                "resolution_id": "use_next_available_time",
+                "label": f"将开始时间调整到 {candidate_time}",
+                "proposed_start_time": candidate_time,
+                "operation": candidate,
+            }
+        return None
+
+    def operation_status(
+        self, *, trip_id: str, tenant_id: str, owner_id: str,
+        operation_key: str,
+    ) -> dict | None:
+        """只读查账；不会触发模型，也不把版本变化推断成该操作成功。"""
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                request = self._requests.get(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, idempotency_key=operation_key,
+                )
+                if request:
+                    return self._status_for_request(
+                        cursor, request, trip_id, tenant_id, owner_id,
+                        operation_key,
+                    )
+                operation = self._operations.get_by_key(
+                    cursor, trip_id, operation_key,
+                    tenant_id=tenant_id, owner_id=owner_id,
+                )
+                if not operation:
+                    return None
+                return {
+                    "status": "succeeded", "saved": True,
+                    "trip_id": str(trip_id), "operation_key": operation_key,
+                    "base_revision": operation["base_revision"],
+                    "new_revision": operation["result_revision"],
+                    "edit_operation": self._operation_identity(operation),
+                    "result": operation["response"],
+                }
+
+    def _status_for_request(
+        self, cursor, request: dict, trip_id: str, tenant_id: str,
+        owner_id: str, operation_key: str,
+    ) -> dict:
+        status = request["status"]
+        response = request["response"]
+        if status in {"succeeded", "unknown"}:
+            operation = self._authoritative_operation(
+                cursor, request, trip_id, tenant_id, owner_id, operation_key,
+            )
+            if operation:
+                result = operation["response"]
+                return {
+                    "status": "succeeded", "saved": True,
+                    "trip_id": str(trip_id), "operation_key": operation_key,
+                    "base_revision": operation["base_revision"],
+                    "new_revision": operation["result_revision"],
+                    "edit_operation": self._operation_identity(operation),
+                    "result": result,
+                }
+            if status == "succeeded":
+                return {
+                    "status": "unknown", "saved": False,
+                    "trip_id": str(trip_id), "operation_key": operation_key,
+                    "base_revision": request["expected_revision"],
+                    "code": "AI_EDIT_LEDGER_INCONSISTENT",
+                    "message": "成功请求暂时无法关联到正式操作账本。",
+                }
+        if status == "processing":
+            updated_at = request["updated_at"]
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) - updated_at > timedelta(seconds=90):
+                return {
+                    "status": "unknown", "saved": False,
+                    "trip_id": str(trip_id),
+                    "base_revision": request["expected_revision"],
+                    "operation_key": operation_key,
+                    "code": "AI_EDIT_OUTCOME_UNKNOWN",
+                    "possibly_still_running": True,
+                }
+            return {
+                "status": "processing", "saved": False,
+                "trip_id": str(trip_id),
+                "base_revision": request["expected_revision"],
+                "operation_key": operation_key,
+            }
+        if status == "pending_resolution":
+            pending = response.get("pending_resolution") or {}
+            expiry = datetime.fromisoformat(
+                str(pending.get("expires_at", "")).replace("Z", "+00:00"),
+            )
+            if expiry <= datetime.now(timezone.utc):
+                return {
+                    **response, "status": "expired", "saved": False,
+                    "pending_resolution": {**pending, "status": "expired"},
+                }
+        return {**response, "status": status, "operation_key": operation_key}
+
+    def _authoritative_operation(
+        self, cursor, request: dict, trip_id: str, tenant_id: str,
+        owner_id: str, operation_key: str,
+    ) -> dict | None:
+        response = request["response"]
+        linked_key = response.get("resolution_operation_key") or operation_key
+        operation = self._operations.get_by_key(
+            cursor, trip_id, linked_key, tenant_id=tenant_id, owner_id=owner_id,
+        )
+        if not operation:
+            return None
+        if linked_key == operation_key:
+            return operation if operation["request_sha256"] == request["request_sha256"] else None
+        confirmation = self._requests.get(
+            cursor, trip_id=trip_id, tenant_id=tenant_id,
+            owner_id=owner_id, idempotency_key=linked_key,
+        )
+        if (
+            not confirmation
+            or confirmation["status"] != "succeeded"
+            or confirmation["request_sha256"] != operation["request_sha256"]
+            or confirmation["metadata"].get("pending_id") != response.get("pending_id")
+            or confirmation["metadata"].get("original_operation_key") != operation_key
+        ):
+            return None
+        return operation
+
+    @staticmethod
+    def _operation_identity(operation: dict) -> dict:
+        return {
+            "operation_id": operation["operation_id"],
+            "operation_key": operation["idempotency_key"],
+            "command_type": operation["command_type"],
+            "base_revision": operation["base_revision"],
+            "result_revision": operation["result_revision"],
+        }
+
+    def get_pending_resolution(
+        self, *, trip_id: str, tenant_id: str, owner_id: str,
+        pending_id: str,
+    ) -> dict | None:
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                pending = self._requests.get_pending(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, pending_id=pending_id,
+                )
+        if not pending:
+            return None
+        result = pending["response"]
+        if pending["status"] == "pending_resolution":
+            contract = result.get("pending_resolution") or {}
+            expiry = datetime.fromisoformat(
+                str(contract.get("expires_at", "")).replace("Z", "+00:00"),
+            )
+            if expiry <= datetime.now(timezone.utc):
+                return {
+                    **result, "status": "expired", "saved": False,
+                    "pending_resolution": {**contract, "status": "expired"},
+                }
+        return {**result, "status": pending["status"]}
+
+    def resolve_pending_resolution(
+        self, *, trip_id: str, tenant_id: str, owner_id: str,
+        actor_id: str, pending_id: str, resolution_id: str,
+        idempotency_key: str,
+    ) -> dict:
+        return self._edits.resolve_ai_pending(
+            trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+            actor_id=actor_id, pending_id=pending_id,
+            resolution_id=resolution_id, idempotency_key=idempotency_key,
+        )
+
+    def cancel_pending_resolution(
+        self, *, trip_id: str, tenant_id: str, owner_id: str,
+        pending_id: str,
+    ) -> dict | None:
+        return self._edits.cancel_ai_pending_resolution(
+            trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
+            pending_id=pending_id,
+        )
 
     def _reserve(self, *, trip_id: str, tenant_id: str, owner_id: str,
                  idempotency_key: str, request_hash: str,
@@ -520,13 +873,20 @@ class TripAIEditService:
         if existing["status"] == "succeeded":
             with self._connect() as connection:
                 with connection.cursor() as cursor:
-                    operation = self._operations.get_by_key(
-                        cursor, trip_id, key, tenant_id=tenant_id,
-                        owner_id=owner_id,
+                    operation = self._authoritative_operation(
+                        cursor, existing, trip_id, tenant_id, owner_id, key,
                     )
-            if not operation or operation["request_sha256"] != request_hash:
+            if not operation:
                 raise RuntimeError("AI 编辑成功状态与操作账本不一致")
-            return {**operation["response"], "replayed": True}
+            response = {
+                **operation["response"], "operation_key": key,
+                "replayed": True,
+            }
+            if existing["response"].get("resolution_operation_key"):
+                response["resolution_operation_key"] = existing["response"][
+                    "resolution_operation_key"
+                ]
+            return response
         if existing["response"]:
             return {**existing["response"], "replayed": True}
         raise RuntimeError("AI 编辑请求已结束但缺少持久结果")
@@ -879,7 +1239,9 @@ class TripAIEditService:
         if op in {"update_item", "remove_item", "move_item", "replace_place"}:
             item_id = operation["item_id"]
             if item_id not in item_by_id:
-                raise ValueError("候选目标不属于当前 Trip")
+                raise TripWriteConflictError(
+                    "TARGET_NOT_FOUND", "候选目标不属于当前 Trip", (item_id,),
+                )
             matches = TripAIEditService._mentioned_items(message, document)
             if op == "replace_place":
                 replacement_name = operation["place"]["name"]
@@ -894,9 +1256,15 @@ class TripAIEditService:
                 raise ValueError("用户修改目标不唯一或与候选不符")
             _day, item = item_by_id[item_id]
             if item.get("locked"):
-                raise ValueError("locked 行程项不能通过 AI 修改")
+                raise TripWriteConflictError(
+                    "LOCKED_ITEM_CHANGED", "locked 行程项不能通过 AI 修改",
+                    (item_id,),
+                )
             if item.get("fixed_start"):
-                raise ValueError("fixed_start 行程项不能通过 AI 修改")
+                raise TripWriteConflictError(
+                    "FIXED_START_CHANGED", "fixed_start 行程项不能通过 AI 修改",
+                    (item_id,),
+                )
             must_visit_ids = {
                 selection["place_id"]
                 for selection in document.get("selections", [])
@@ -918,7 +1286,11 @@ class TripAIEditService:
                 or (item.get("place") or {}).get("place_id") in must_visit_ids
                 or protected_by_request
             ):
-                raise ValueError("用户指定的必去或明确保留项目不能删除或替换")
+                raise TripWriteConflictError(
+                    "MUST_VISIT_PROTECTED",
+                    "用户指定的必去或明确保留项目不能删除或替换",
+                    (item_id,),
+                )
             if op == "update_item":
                 if ("start_time" in operation and operation["start_time"] is None
                         and not re.search(r"取消时间|不设时间|移除时间", message)):

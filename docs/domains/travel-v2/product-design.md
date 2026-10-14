@@ -362,10 +362,12 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | V2 SSE 规划 | `POST /api/travel/v2/plan/stream`（仓库域文档） | 复用域图；需审计保存终态 |
 | 模板 | `/api/travel/v2/templates...`（详见当前路由） | 复用现有查询/复制 |
 | 分享/导出 | **未在本次上述 API 清单中确认** | 前端可先做界面，但真实服务动作待合同确认 |
-| 根据操作 ID 查终态 | **待核查/待设计** | 先复用运行账本，不预先假定新增 URL |
-| 业务冲突 `pending_resolution` | **待映射** | 先检查现有 Checkpointer/Context/审批状态 |
+| 查询 AI 操作终态 | `GET /api/travel/v2/trips/{trip_id}/ai-edits/{operation_key}` | 只读；身份、tenant、owner、Trip 和 key 联合限域；成功必须关联真实 `edit_operations`；UNKNOWN 不从 Revision 变化推断 |
+| 查询冲突待确认项 | `GET /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}` | 返回持久化冲突、允许选项和过期状态；pending 期间正式 Revision 不变 |
+| 确认冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/resolve` | Body 只接收服务端提供的 `resolution_id`；使用独立 `Idempotency-Key`，重新校验后复用 CAS/Revision/操作账本 |
+| 取消/拒绝冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/cancel` | 与确认共用 Trip 行锁；终态 pending 不可再次执行 |
 
-> `ai-edits` 的 `processing/unknown` 可通过相同幂等键安全重放为当前状态，但本 API 不提供操作终态查询或多轮 `pending_resolution`；这两项仍属于 BE-4C。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
+> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
 
 > 设计到实现的映射原则：`REUSE / FIX / BUILD / BLOCKED`；任何新增 URL、字段或表必须在 B0 差距报告中说明证据、调用方及迁移方案。
 
