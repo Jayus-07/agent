@@ -9,6 +9,7 @@ module.exports = {
           soft: 'rgba(77, 107, 254, 0.08)',
         },
         surface: {
+          DEFAULT: '#ffffff',
           root: '#fafbfc',
           base: '#ffffff',
           elevated: '#f8f9fb',
