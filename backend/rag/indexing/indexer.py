@@ -1138,6 +1138,10 @@ class IncrementalIndexer:
                 )
             chunks = filtered_chunks
 
+            # 后续审计与质量记录都以最终输出为准。先统一索引期 ID，
+            # 让 Parent/Leaf 关系校验对账实际入库身份；不补造被过滤的 Parent。
+            apply_index_chunk_identity(chunks, doc_id)
+
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": total_before_filter,
                          "kept_chunks": len(filtered_chunks),
@@ -1291,9 +1295,11 @@ class IncrementalIndexer:
         # 其他非完整性质量记录故障仍沿用既有 best-effort 行为。
         _raw_ast = _qc.get("raw_ast")
         if _raw_ast is not None:
-            _coverage = _qc.get("coverage")
-            if not isinstance(_coverage, dict):
-                _coverage = {"error": "coverage audit result missing"}
+            from backend.rag.preprocessing.chunking import coverage_audit
+
+            _audit_ast = _qc.get("normalized_ast") or _raw_ast
+            _coverage = coverage_audit(_audit_ast, chunks)
+            _qc["coverage"] = _coverage
             _coverage_fields = {
                 "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
             }
@@ -1344,6 +1350,32 @@ class IncrementalIndexer:
                 "coverage_audit_error": _coverage_error,
                 "coverage_issue": _coverage_issue,
             }
+            from backend.rag.preprocessing.quality_gate import audit_chunk_integrity
+
+            _chunk_integrity = audit_chunk_integrity(chunks)
+            _integrity_requires_failure = bool(
+                _chunk_integrity["valid_leaf_chunk_count"] < 1
+                or _chunk_integrity["empty_chunk_count"]
+                or _chunk_integrity["missing_chunk_id_count"]
+                or _chunk_integrity["duplicate_chunk_id_count"]
+                or _chunk_integrity["invalid_parent_reference_count"]
+            )
+            _integrity_issue = (
+                "chunks_present"
+                if _chunk_integrity["valid_leaf_chunk_count"] < 1
+                else "chunk_identifiers"
+                if (
+                    _chunk_integrity["empty_chunk_count"]
+                    or _chunk_integrity["missing_chunk_id_count"]
+                    or _chunk_integrity["duplicate_chunk_id_count"]
+                )
+                else "parent_references"
+                if _chunk_integrity["invalid_parent_reference_count"]
+                else ""
+            )
+            _quality_requires_failure = bool(
+                _coverage_requires_failure or _integrity_requires_failure
+            )
             q_span = trace_collector.start_span(
                 "index_quality",
                 parent_id="index_upload",
@@ -1354,6 +1386,7 @@ class IncrementalIndexer:
                     "file_path": file_path, "doc_id": doc_id,
                     # Trace 只记录覆盖审计摘要，避免将未覆盖正文样本写入 Trace。
                     "coverage": _coverage_metrics,
+                    "chunk_integrity": _chunk_integrity,
                 },
             )
             _hard = []
@@ -1419,7 +1452,8 @@ class IncrementalIndexer:
                              "anomalies_hard": len(_hard),
                              "anomalies_warn": len(_anomalies) - len(_hard),
                              "record_path": _qpath,
-                             **_coverage_metrics})
+                             **_coverage_metrics,
+                             **_chunk_integrity})
                 logger.info(
                     f"[Indexer] 质量记录 {_qpath} "
                     f"(nodes={_record['parsing']['node_count']}, "
@@ -1429,18 +1463,20 @@ class IncrementalIndexer:
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
                     metrics={"error": "quality_gate_hard_anomaly",
-                             **_coverage_metrics})
+                             **_coverage_metrics,
+                             **_chunk_integrity})
                 if (
-                    _coverage_requires_failure
+                    _quality_requires_failure
                     and not _quality_record_saved
                     and not self.candidate_mode
                 ):
-                    if _coverage_issue not in str(
+                    _failure_issue = _coverage_issue or _integrity_issue
+                    if _failure_issue not in str(
                         doc_meta.get("quality_issues", "")
                     ):
                         _append_quality_issue(
                             doc_meta,
-                            "quality_anomaly:" + _coverage_issue,
+                            "quality_anomaly:" + _failure_issue,
                         )
                     doc_meta["quality_status"] = "failed"
                     try:
@@ -1459,14 +1495,16 @@ class IncrementalIndexer:
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200], **_coverage_metrics})
-                if _coverage_requires_failure:
-                    if _coverage_issue not in str(
+                    metrics={"error": str(e)[:200], **_coverage_metrics,
+                             **_chunk_integrity})
+                if _quality_requires_failure:
+                    _failure_issue = _coverage_issue or _integrity_issue
+                    if _failure_issue not in str(
                         doc_meta.get("quality_issues", "")
                     ):
                         _append_quality_issue(
                             doc_meta,
-                            "quality_anomaly:" + _coverage_issue,
+                            "quality_anomaly:" + _failure_issue,
                         )
                     doc_meta["quality_status"] = "failed"
                     if not self.candidate_mode:
@@ -1480,11 +1518,12 @@ class IncrementalIndexer:
                             )
                         except Exception:
                             logger.warning(
-                                "[Indexer] 覆盖异常写入 registry 失败",
+                                "[Indexer] Chunk/Coverage 完整性异常写入 registry 失败",
                                 exc_info=True,
                             )
                     raise ValueError(
-                        "质量门禁无法完成覆盖审计，拒绝将文档置为 active"
+                        "质量记录无法完成，且最终 Chunk/Coverage 完整性失败，"
+                        "拒绝将文档置为 active"
                     ) from e
                 logger.warning(
                     f"[Indexer] 质量记录构建失败（不阻断索引）: "
@@ -1619,10 +1658,6 @@ class IncrementalIndexer:
                 entities_json = ""
         time_refs_val = doc_meta.get("time_refs") or []
         time_refs_str = ", ".join(str(t) for t in time_refs_val[:10]) if isinstance(time_refs_val, list) else str(time_refs_val)[:200]
-
-        # P0-03（2026-10-13）：chunk_id 覆盖为索引期协议 id 时同步改写
-        # parent_chunk_id（实现与契约见 apply_index_chunk_identity）。
-        apply_index_chunk_identity(chunks, doc_id)
 
         for i, ch in enumerate(chunks):
             ch.metadata["doc_type"] = doc_type_val

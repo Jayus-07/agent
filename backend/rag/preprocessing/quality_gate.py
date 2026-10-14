@@ -99,6 +99,61 @@ def compute_quality_score(anomalies: list[dict]) -> int:
     return max(0, 100 - 40 * hard - 10 * warn)
 
 
+def audit_chunk_integrity(chunks: list) -> dict[str, int]:
+    """汇总最终索引 Chunk 与 Parent 引用的完整性，供既有 QualityGate 使用。"""
+    ids: list[str] = []
+    granularity_by_id: dict[str, list[str]] = {}
+    leaf_count = 0
+    valid_leaf_count = 0
+    parent_count = 0
+    empty_count = 0
+    missing_id_count = 0
+    parent_reference_count = 0
+    referenced_parent_ids: list[str] = []
+
+    for chunk in chunks:
+        metadata = getattr(chunk, "metadata", None) or {}
+        chunk_id = str(metadata.get("chunk_id") or "").strip()
+        granularity = str(metadata.get("granularity") or "").strip()
+        content = str(getattr(chunk, "page_content", None) or "")
+        if not content.strip():
+            empty_count += 1
+        if not chunk_id:
+            missing_id_count += 1
+        else:
+            ids.append(chunk_id)
+            granularity_by_id.setdefault(chunk_id, []).append(granularity)
+
+        if granularity == "leaf":
+            leaf_count += 1
+            if content.strip() and chunk_id:
+                valid_leaf_count += 1
+            parent_id = str(metadata.get("parent_chunk_id") or "").strip()
+            if parent_id:
+                parent_reference_count += 1
+                referenced_parent_ids.append(parent_id)
+        elif granularity == "parent":
+            parent_count += 1
+
+    duplicate_id_count = len(ids) - len(set(ids))
+    invalid_parent_reference_count = sum(
+        1 for parent_id in referenced_parent_ids
+        if len(granularity_by_id.get(parent_id, [])) != 1
+        or granularity_by_id[parent_id][0] != "parent"
+    )
+    return {
+        "chunk_count": len(chunks),
+        "leaf_chunk_count": leaf_count,
+        "valid_leaf_chunk_count": valid_leaf_count,
+        "parent_chunk_count": parent_count,
+        "empty_chunk_count": empty_count,
+        "missing_chunk_id_count": missing_id_count,
+        "duplicate_chunk_id_count": duplicate_id_count,
+        "parent_reference_count": parent_reference_count,
+        "invalid_parent_reference_count": invalid_parent_reference_count,
+    }
+
+
 def build_quality_record(
     *,
     file_path: str,
@@ -201,6 +256,7 @@ def build_quality_record(
             "filtered_count": len(filtered),
             "filtered_reasons": reason_breakdown,
         },
+        "chunk_integrity": audit_chunk_integrity(chunks),
         # §5.1 重试失败记录（本轮 per-file 异常；历史失败见 registry status）
         "index_errors": list(index_errors or []),
         # §5.2 节点级可追溯
@@ -235,6 +291,7 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
     parsing = record["parsing"]
     cleaning = record["cleaning"]
     chunking = record["chunking"]
+    chunk_integrity = record.get("chunk_integrity")
     tabular = fmt in ("xlsx", "xls", "csv")
 
     if tabular:
@@ -265,6 +322,44 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
     ]
     _check("table_split_nonempty", not empty_tables,
            f"{len(empty_tables)} 个空表格节点", severity="warn")
+
+    if not isinstance(chunk_integrity, dict):
+        _check(
+            "chunk_integrity_audit_failed", False,
+            "Chunk 完整性审计结果缺失或格式错误",
+        )
+    else:
+        valid_leaf_count = int(chunk_integrity.get("valid_leaf_chunk_count") or 0)
+        empty_chunk_count = int(chunk_integrity.get("empty_chunk_count") or 0)
+        missing_id_count = int(
+            chunk_integrity.get("missing_chunk_id_count") or 0
+        )
+        duplicate_id_count = int(
+            chunk_integrity.get("duplicate_chunk_id_count") or 0
+        )
+        invalid_parent_count = int(
+            chunk_integrity.get("invalid_parent_reference_count") or 0
+        )
+        _check(
+            "chunks_present", valid_leaf_count > 0,
+            f"valid_leaf_chunk_count={valid_leaf_count}，至少需要一个非空 Leaf",
+        )
+        _check(
+            "chunk_identifiers",
+            empty_chunk_count == 0
+            and missing_id_count == 0
+            and duplicate_id_count == 0,
+            "空 Chunk={}; 缺失 ID={}; 重复 ID={}".format(
+                empty_chunk_count, missing_id_count, duplicate_id_count,
+            ),
+        )
+        _check(
+            "parent_references", invalid_parent_count == 0,
+            "无效 Parent 引用={}/{}".format(
+                invalid_parent_count,
+                int(chunk_integrity.get("parent_reference_count") or 0),
+            ),
+        )
 
     coverage = record.get("coverage")
     if coverage is not None:

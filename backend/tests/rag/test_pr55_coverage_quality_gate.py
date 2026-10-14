@@ -21,15 +21,15 @@ def _ast() -> DocumentAST:
     )
 
 
-def _record(tmp_path, coverage: dict) -> dict:
+def _record(tmp_path, coverage: dict, chunks=None) -> dict:
     from langchain_core.documents import Document
 
     return build_quality_record(
         file_path=str(tmp_path / "coverage.md"), doc_id="d-coverage",
         kb_id="kb-test", raw_ast=_ast(),
-        chunks=[Document(
+        chunks=chunks if chunks is not None else [Document(
             page_content="本段正文未进入实际输出的 Leaf。",
-            metadata={"granularity": "leaf"},
+            metadata={"granularity": "leaf", "chunk_id": "d-coverage_0"},
         )],
         file_size=32, file_hash="sha256", coverage=coverage,
     )
@@ -102,6 +102,62 @@ def test_malformed_coverage_report_is_a_hard_audit_failure(tmp_path):
     )
 
 
+def test_zero_leaf_output_is_a_hard_integrity_failure(tmp_path):
+    report = {
+        "leaf_total": 1,
+        "audited_leaf_count": 1,
+        "covered": 0,
+        "uncovered_count": 1,
+        "uncovered_samples": [{"type": "paragraph", "preview": "正文"}],
+        "sampled": False,
+        "coverage_rate": 0.0,
+    }
+    record = _record(tmp_path, report, chunks=[])
+
+    anomalies = run_typed_validation(record, _ast())
+
+    assert record["chunk_integrity"]["leaf_chunk_count"] == 0
+    assert any(
+        item["check"] == "chunks_present" and item["severity"] == "error"
+        for item in anomalies
+    )
+    assert any(
+        item["check"] == "coverage_gap"
+        for item in hard_anomalies(anomalies)
+    )
+
+
+def test_dangling_parent_reference_is_a_hard_integrity_failure(tmp_path):
+    from langchain_core.documents import Document
+
+    report = {
+        "leaf_total": 1,
+        "audited_leaf_count": 1,
+        "covered": 1,
+        "uncovered_count": 0,
+        "uncovered_samples": [],
+        "sampled": False,
+        "coverage_rate": 1.0,
+    }
+    chunks = [Document(
+        page_content="本段正文未进入实际输出的 Leaf。",
+        metadata={
+            "granularity": "leaf",
+            "chunk_id": "d-coverage_0",
+            "parent_chunk_id": "missing-parent",
+        },
+    )]
+    record = _record(tmp_path, report, chunks=chunks)
+
+    anomalies = run_typed_validation(record, _ast())
+
+    assert record["chunk_integrity"]["invalid_parent_reference_count"] == 1
+    assert any(
+        item["check"] == "parent_references" and item["severity"] == "error"
+        for item in anomalies
+    )
+
+
 @pytest.mark.parametrize(
     ("initial_status", "expected_status"),
     [
@@ -142,8 +198,12 @@ def test_index_failure_settles_only_current_placeholder(
 
 
 @pytest.mark.parametrize("candidate_mode", [False, True], ids=["normal", "candidate"])
-def test_indexer_records_coverage_gap_and_trace_then_rejects_active(
-    tmp_path, monkeypatch, candidate_mode,
+@pytest.mark.parametrize(
+    "scenario", ["coverage_gap", "filtered_csv_empty", "dangling_parent"],
+    ids=["coverage-gap", "filtered-csv-empty", "dangling-parent"],
+)
+def test_indexer_records_integrity_and_trace_then_rejects_active(
+    tmp_path, monkeypatch, candidate_mode, scenario,
 ):
     """真实索引质量段应持久化缺口、registry 质量字段与 Trace 后失败。"""
     from types import SimpleNamespace
@@ -154,23 +214,66 @@ def test_indexer_records_coverage_gap_and_trace_then_rejects_active(
     import backend.rag.preprocessing.pipeline as pipeline_module
     import backend.rag.preprocessing.quality_gate as quality_gate
     from backend.rag.indexing.indexer import IncrementalIndexer
-
-    covered_text = "已有检索 Leaf 中的正文内容。" * 8
-    missing_text = "质量门禁必须发现未覆盖的财务正文。" * 8
-    source = DocumentAST(
-        root=DocumentNode(type="section", text="", level=0, children=[
-            DocumentNode(type="paragraph", text=covered_text),
-            DocumentNode(type="paragraph", text=missing_text),
-        ]),
-        raw_text=covered_text + missing_text,
-    )
-    chunks = [Document(
-        page_content=covered_text,
-        metadata={"granularity": "leaf", "chunk_id": "leaf-0"},
-    )]
     from backend.rag.preprocessing.chunking import coverage_audit
 
+    if scenario == "coverage_gap":
+        covered_text = "已有检索 Leaf 中的正文内容。" * 8
+        missing_text = "质量门禁必须发现未覆盖的财务正文。" * 8
+        source = DocumentAST(
+            root=DocumentNode(type="section", text="", level=0, children=[
+                DocumentNode(type="paragraph", text=covered_text),
+                DocumentNode(type="paragraph", text=missing_text),
+            ]),
+            raw_text=covered_text + missing_text,
+        )
+        chunks = [Document(
+            page_content=covered_text,
+            metadata={"granularity": "leaf", "chunk_id": "leaf-0"},
+        )]
+    elif scenario == "filtered_csv_empty":
+        table_text = "SKU 商品 数量\n00123 茶叶 5"
+        source = DocumentAST(
+            root=DocumentNode(type="section", text="", level=0, children=[
+                DocumentNode(
+                    type="table", text=table_text,
+                    rows=[["SKU", "商品", "数量"], ["00123", "茶叶", "5"]],
+                ),
+            ]),
+            raw_text=table_text,
+        )
+        chunks = [Document(
+            page_content=table_text,
+            metadata={
+                "granularity": "leaf", "chunk_id": "leaf-0",
+                "chunk_type": "table_row",
+            },
+        )]
+    else:
+        source_text = "Parent 关系完整性必须在发布前检查。" * 8
+        source = DocumentAST(
+            root=DocumentNode(type="section", text="", level=0, children=[
+                DocumentNode(type="paragraph", text=source_text),
+            ]),
+            raw_text=source_text,
+        )
+        chunks = [Document(
+            page_content=source_text,
+            metadata={
+                "granularity": "leaf", "chunk_id": "leaf-0",
+                "parent_chunk_id": "missing-parent",
+            },
+        )]
+
     coverage = coverage_audit(source, chunks)
+    if scenario == "filtered_csv_empty":
+        assert coverage["uncovered_count"] == 0
+        import backend.rag.preprocessing.filter as filter_module
+
+        class RejectAllFilter:
+            def should_keep(self, _text, _metadata):
+                return False, "low_chinese_ratio"
+
+        monkeypatch.setattr(filter_module, "ChunkFilter", RejectAllFilter)
 
     def parse_with_gap(_path):
         return chunks, {"raw_ast": source, "coverage": coverage}
@@ -224,29 +327,62 @@ def test_indexer_records_coverage_gap_and_trace_then_rejects_active(
 
     registry = Registry("active" if candidate_mode else "parsing")
     collector = Collector()
+    vector_writes = []
     monkeypatch.setattr(indexer_module, "trace_collector", collector)
     monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", metadata_stub)
     indexer = IncrementalIndexer(
-        docs_dir=str(tmp_path), vectordb=SimpleNamespace(),
+        docs_dir=str(tmp_path),
+        vectordb=SimpleNamespace(
+            add_documents=lambda docs, **_kwargs: vector_writes.append(docs) or [],
+        ),
         doc_db=SimpleNamespace(), embedding=SimpleNamespace(), registry=registry,
         candidate_mode=candidate_mode,
     )
-    document = tmp_path / "coverage.txt"
+    document = tmp_path / (
+        "sku.csv" if scenario == "filtered_csv_empty" else "coverage.txt"
+    )
     document.write_text("测试覆盖缺口的索引内容。" * 5, encoding="utf-8")
 
-    import pytest
-
-    with pytest.raises(ValueError, match="coverage_gap"):
+    error = None
+    try:
         indexer._index_file(str(document))
+    except Exception as exc:
+        error = exc
+
+    assert error is not None
+    assert vector_writes == []
+    assert any(
+        code in str(error)
+        for code in (
+            "coverage_gap", "chunks_present", "parent_references",
+            "ChunkingEmptyError",
+        )
+    )
 
     assert persisted
-    assert persisted[0]["coverage"] == coverage
-    assert "coverage_gap" in persisted[0]["quality_issues"]
+    final_chunks = [] if scenario == "filtered_csv_empty" else chunks
+    final_coverage = coverage_audit(source, final_chunks)
+    assert persisted[0]["coverage"] == final_coverage
+    expected_issue = (
+        "parent_references" if scenario == "dangling_parent" else "coverage_gap"
+    )
+    assert expected_issue in persisted[0]["quality_issues"]
     assert any(
-        item.get("check") == "coverage_gap"
+        item.get("check") == expected_issue
         and item.get("severity") == "error"
         for item in persisted[0]["validation"]["anomalies"]
     )
+    if scenario == "filtered_csv_empty":
+        assert persisted[0]["chunking"]["chunk_count"] == 0
+        assert persisted[0]["coverage"]["table_rows_uncovered"] == 2
+        assert persisted[0]["coverage"]["table_cells_uncovered"] == 6
+        assert any(
+            item.get("check") == "chunks_present"
+            and item.get("severity") == "error"
+            for item in persisted[0]["validation"]["anomalies"]
+        )
+    if scenario == "dangling_parent":
+        assert persisted[0]["chunk_integrity"]["invalid_parent_reference_count"] == 1
     if candidate_mode:
         # 候选失败不得改写同路径仍 active 的旧 registry 行。
         assert registry.updates == []
@@ -254,12 +390,16 @@ def test_indexer_records_coverage_gap_and_trace_then_rejects_active(
     else:
         assert registry.updates
         quality_fields = registry.updates[-1]
-        assert "coverage_gap" in quality_fields["quality_issues"]
+        assert expected_issue in quality_fields["quality_issues"]
         assert quality_fields["quality_status"] == "failed"
 
     quality_span = collector.spans["index_quality"]
     assert quality_span.status == "error"
-    assert quality_span.metrics["coverage_uncovered_count"] == 1
-    assert quality_span.input["coverage"]["coverage_uncovered_count"] == 1
-    assert quality_span.input["coverage"]["coverage_issue"] == "coverage_gap"
+    expected_uncovered = 0 if scenario == "dangling_parent" else 1
+    assert quality_span.metrics["coverage_uncovered_count"] == expected_uncovered
+    assert quality_span.input["coverage"]["coverage_uncovered_count"] == expected_uncovered
+    if scenario == "dangling_parent":
+        assert quality_span.input["chunk_integrity"]["invalid_parent_reference_count"] == 1
+    else:
+        assert quality_span.input["coverage"]["coverage_issue"] == "coverage_gap"
     assert "uncovered_samples" not in quality_span.input["coverage"]

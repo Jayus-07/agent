@@ -145,3 +145,69 @@ def test_faq_without_qa_nodes_falls_back_to_recursive():
     _, report = StructureAnalyzer().analyze(ast)
     strategy = ChunkStrategyRouter().route("faq", report)
     assert isinstance(strategy, RecursiveChunkStrategy)
+
+
+def test_docx_faq_question_survives_cleaning_filter_and_index_identity(tmp_path):
+    """独立中文问题以 ASCII 问号结尾时仍须进入 Leaf 和有效 Parent。"""
+    from docx import Document as DocxDocument
+
+    from backend.rag.indexing.indexer import apply_index_chunk_identity
+    from backend.rag.preprocessing.ast import walk
+    from backend.rag.preprocessing.chunking import coverage_audit
+    from backend.rag.preprocessing.filter import ChunkFilter
+    from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+    from backend.rag.retrieval.retrievers import attach_parent_context
+
+    source = DocxDocument()
+    for i in range(3):
+        source.add_paragraph(f"Q:年假申请流程是什么{i}?")
+        source.add_paragraph(
+            "A:员工通过人力资源系统提交申请，经直属主管审批后安排休假。"
+        )
+    path = tmp_path / "faq.docx"
+    source.save(path)
+
+    chunks, qc = parse_and_chunk_full(str(path), doc_type_hint="faq")
+    questions = [
+        node for node in walk(qc["raw_ast"].root)
+        if node.type == "qa_question"
+    ]
+    assert len(questions) == 3
+    assert all(node.text.strip() for node in questions)
+
+    filterer = ChunkFilter()
+    final_chunks = [
+        chunk for chunk in chunks
+        if filterer.should_keep(chunk.page_content, chunk.metadata)[0]
+    ]
+    apply_index_chunk_identity(final_chunks, "faq-doc")
+
+    leaves = [
+        chunk for chunk in final_chunks
+        if chunk.metadata.get("granularity") == "leaf"
+    ]
+    parents = {
+        chunk.metadata["chunk_id"]: chunk
+        for chunk in final_chunks
+        if chunk.metadata.get("granularity") == "parent"
+    }
+    assert len(leaves) == 3
+    assert set(parents) == {"faq-doc_0"}
+    assert all("年假申请流程是什么" in chunk.page_content for chunk in leaves)
+    assert all(
+        chunk.metadata.get("parent_chunk_id") in parents
+        for chunk in leaves
+    )
+    assert {chunk.metadata["parent_chunk_id"] for chunk in leaves} == {
+        "faq-doc_0"
+    }
+    recalled = attach_parent_context(
+        [leaves[0]],
+        lambda ids: [
+            parents[parent_id] for parent_id in ids if parent_id in parents
+        ],
+    )
+    assert len(recalled) == 2
+    assert "年假申请流程是什么" in recalled[1].page_content
+    final_coverage = coverage_audit(qc["normalized_ast"], final_chunks)
+    assert final_coverage["uncovered_count"] == 0
