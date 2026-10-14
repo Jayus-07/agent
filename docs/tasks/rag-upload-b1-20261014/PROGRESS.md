@@ -1,10 +1,10 @@
 # B1 施工进度
 
-- 状态：B1 代码与验收收口完成；等待 PR/Review/CI；不启动 B2/B3/C。
+- 状态：B1 代码与验收收口完成；PR #66 已创建为 Draft；等待必需 CI/Review；不启动 B2/B3/C。
 - Worktree：`C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`
 - 分支：`codex/rag-upload-b1-20261014`
 - 基线：PR #58 merge `1acf6a4b34fdae4ba257a2e9bfcb1a24ee621d01`；施工起点为最新 main `bf3cddf7ac7329f576f036cb1a9717a8f96dfd27`。
-- 当前改动尚未提交；提交 SHA 与 PR/CI 状态将在推送后补记。
+- PR：[ #66 Draft](https://github.com/Jayus-07/agent/pull/66)。原始修复提交 `b9b93405465f9fb6566c25b06d9ef49ef53e0c48`；进度文档后续有独立记录提交，最终 HEAD 以分支最新提交为准。
 - “Not a git repo, skipping” 是测试语料目录的提示；已核实修复目录是有效 Worktree，分支和 Git 状态正常。
 
 ## 根因与改动
@@ -28,7 +28,7 @@
 
 ## PR / 下一步
 
-1. T0/T1/T2 已收口，真实 CSV/Excel 通过；PDF 端到端仍阻塞。报告已建议 Draft PR，当前不建议合并。
-2. 提交并推送独立 B1 分支，创建 Draft PR，附上报告；不自动合并 main。
-3. 核对必需 CI/Review；如果 PR 审查或 CI 引出 B1 范围问题，只处理对应增量。
+1. T0/T1/T2 已收口，真实 CSV/Excel 通过；PDF 端到端仍阻塞。PR 保持 Draft，不建议合并。
+2. 已推送独立 B1 分支并创建 PR #66，报告已纳入 PR。
+3. 核对必需 CI/Review；若出现 B1 范围问题，只处理对应增量。
 4. 本轮到此停止，不启动 B2/B3/C，不跑付费 Provider，不修改正式数据库或全局验收状态。
