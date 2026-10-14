@@ -361,9 +361,16 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | 铁路搜索 | `POST /api/travel/v2/search/trains` | 只读 |
 | V2 SSE 规划 | `POST /api/travel/v2/plan/stream`（仓库域文档） | 复用域图；需审计保存终态 |
 | 模板 | `/api/travel/v2/templates...`（详见当前路由） | 复用现有查询/复制 |
-| 分享/导出 | **未在本次上述 API 清单中确认** | 前端可先做界面，但真实服务动作待合同确认 |
+| 创建固定 Revision 分享 | `POST /api/travel/v2/trips/{trip_id}/shares` | 登录身份 + tenant/owner 校验；请求指定 `revision`，`expires_in_days` 默认 30、范围 1–365；链接相对路径为 `/travel/share/{share_id}#token={token}`。令牌只在创建响应中返回，存储 SHA-256 哈希 |
+| 匿名读取分享 | `GET /api/travel/v2/shares/{share_id}`，请求头 `X-Travel-Share-Token` | 无需登录；仅 `active + 未撤销 + 未过期` 分享可读；无效状态统一 404；响应仅含明确白名单字段且 `Cache-Control: no-store` |
+| 撤销分享 | `DELETE /api/travel/v2/trips/{trip_id}/shares/{share_id}` | 登录身份 + Trip tenant/owner 校验；仅创建者可撤销 |
+| Trip ICS 导出 | `GET /api/travel/v2/trips/{trip_id}/revisions/{revision}/export.ics` | 登录身份 + Trip tenant/owner 校验；服务端读取指定不可变 Revision |
+| 分享 ICS 导出 | `GET /api/travel/v2/shares/{share_id}/export.ics`，请求头 `X-Travel-Share-Token` | 使用同一固定 Revision 与匿名令牌策略；日程项、住宿和城际动车来自该 Revision；所有本地时刻按 Trip IANA timezone 解释。跨午夜结束时间按持续分钟数换算；DST 不存在时刻返回 422，歧义时刻采用较早的 fold；缺少具体日历日期返回 422；中文文件名使用 RFC 6266 `filename*` |
+| PDF 导出 | 暂未实现 | ReportLab 当前仅是可选开发依赖；生产导出还需中文字体与版式验证，本批不增加运行依赖 |
 | 根据操作 ID 查终态 | **待核查/待设计** | 先复用运行账本，不预先假定新增 URL |
 | 业务冲突 `pending_resolution` | **待映射** | 先检查现有 Checkpointer/Context/审批状态 |
+
+> FE-4 公开页从 `/travel/share/{share_id}#token=...` 的 fragment 读取一次性令牌，再经同源 BFF 调用公开 API；BFF 需转发 `X-Travel-Share-Token` 与响应 `Cache-Control` / `Referrer-Policy` / `X-Robots-Tag` / `Vary`。令牌不放 query/path，公开读取不需要用户 Bearer；BFF 继续使用现有服务端 `X-API-Key` 通道。
 
 > `ai-edits` 的 `processing/unknown` 可通过相同幂等键安全重放为当前状态，但本 API 不提供操作终态查询或多轮 `pending_resolution`；这两项仍属于 BE-4C。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
 
@@ -527,7 +534,7 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 2. AI 修改 `pending_resolution` 的实际持久/跨轮方案，以及前端响应 Schema。
 3. SSE 与写操作的跨断线操作状态查证方式；是否需要新增受控查询 API。
 4. 交通路线估算与时间缓冲、跨午夜/跨时区以及缓存事实状态的实现边界。
-5. 分享权限、匿名访问、撤销/过期与 PDF/图片导出后端能力是否存在。
+5. FE-4 按本节固定 Revision 分享/ICS 契约联调；PDF/图片导出仍未实现。
 6. 真实酒店/铁路 Provider 的数据来源、授权、可用时效以及实际可公开的产品字段。
 7. 旧 V2 前端并行改动/分支是否存在尚未合并的成果；不得直接覆盖。
 

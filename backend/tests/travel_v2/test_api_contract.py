@@ -29,6 +29,13 @@ def test_v2_router_openapi_contains_trip_and_template_routes():
     assert "/travel/v2/trips/{trip_id}/selections/meals" in schema["paths"]
     assert "/travel/v2/trips/{trip_id}/selections/lodgings" in schema["paths"]
     assert "/travel/v2/trips/{trip_id}/selections/intercity-trains" in schema["paths"]
+    assert "/travel/v2/trips/{trip_id}/shares" in schema["paths"]
+    assert "/travel/v2/trips/{trip_id}/shares/{share_id}" in schema["paths"]
+    assert "/travel/v2/shares/{share_id}" in schema["paths"]
+    assert "/travel/v2/shares/{share_id}/export.ics" in schema["paths"]
+    assert "/travel/v2/trips/{trip_id}/revisions/{revision}/export.ics" in schema[
+        "paths"
+    ]
 
 
 def test_trip_edit_service_initializes_idempotency_store():
