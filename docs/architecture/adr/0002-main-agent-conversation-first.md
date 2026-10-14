@@ -21,10 +21,19 @@
 2. **Conversation-first，而不是所有请求先调一次 LLM**：先结合用户输入、受信任的入口身份、会话与当前任务判断是否需要外部证据或副作用。CHAT 自然直答；企业私有知识走授权 RAG；结构化经营数据走授权 SQL/Data；报告/合法业务任务复用 Skill/Workflow；多步骤不确定任务才使用 Planner/Supervisor。复杂/复合请求可以组合路径。
 3. **意图、执行方式、能力选择、业务终态分离**：逻辑意图可标为 CHAT / KNOWLEDGE / DATA_QUERY / BUSINESS_OR_REPORT / ACTION / CLARIFY / UNSUPPORTED，但不要求新增对应 LangGraph execution_mode。沿用 `RouteDecision`、现有投影与能力事实源，禁止创建第二份权威 Router。
 4. **主助手的服务端能力范围**：Travel/客服专属 Graph、Tool、Workflow、私有 KB、用户会话及写操作不属于 `/agent` 的授权能力；主助手不宣传或自动 handoff 到这两个产品。对“杭州在哪里”“退款是什么意思”等一般概念可正常解释；正式行程创建/修改、客服退款/售后执行必须说明当前入口不能办理。经营分析/选品等是否允许由既有业务清单和服务端权限决定，不能连带屏蔽。
-5. **隔离是执行契约而非 Prompt**：请求携带的 `domain_hint`、`tool_name`、`capability` 与 LLM/Planner 输出均不得单独产生权限。应由服务端可信产品/主体上下文在候选发现、路由/规划、Tool/MCP 执行及数据访问边界执行范围限制；保留仍被独立入口使用的共享 Registry 声明，不能全局删除 Travel/CS 能力。
+5. **隔离是执行契约而非 Prompt**：请求携带的 `domain_hint`、`tool_name`、`capability` 与 LLM/Planner 输出均不得单独产生权限。可信产品身份按下文“服务端入口身份契约”派生，并在候选发现、路由/规划、Tool/MCP 执行及数据访问边界执行范围限制；保留仍被独立入口使用的共享 Registry 声明，不能全局删除 Travel/CS 能力。
 6. **一致的会话语义**：复用 L1/L2/L3、`ConversationContext`、`FollowUpResolver` 与 Context Budget。支持“继续”“刚才第二点”“换个说法”以及从聊天切换到数据查询；不新建第二套持久记忆，也不把历史模型回复当成权威企业数据。
 7. **真实结果优先于自然语言**：复用已有 Runtime/Tool/Error 契约与 Reporter。区分正常回答、无证据、空结果、拒绝、待确认、部分成功、超时、服务故障、取消；业务事实必须受证据/授权约束，写操作遵守确认、幂等、状态回查。SSE `delta`、`done.answer`、`answer_source`、History、Memory、Trace 的最终语义不得分叉。
 8. **成本与可靠性约束**：普通问题不默认触发 Embedding、SQL、Tool、Planner/Supervisor 或额外的回答评审 LLM；只有必要时使用受治理的模型仲裁。沿用 PromptService 版本、统一 LLMProxy 预算计费、执行治理、观测和失败降级机制。
+
+## 服务端入口身份契约（目标，待实施）
+
+- **唯一事实源**：产品身份由服务端从已注册的入口配置派生：使用服务端绑定的产品专属路由；确需按主机区分时，只接受可信反向代理校验并重写、且命中服务端 allowlist 的主机名。多个产品共用路由时，使用认证网关验签后的产品声明，并由服务端 allowlist 映射为产品 ID；网关须先清除同名客户端头，再写入已验证值。当前主助手与客服 UI 共用 `POST /chat/stream`，所以仅靠 URL 或请求体 `domain_hint` 不能区分产品；在可信声明接通前，不能把客户端 hint 升格为产品身份。
+- **失败关闭**：产品专属入口没有可信且唯一的产品身份时，拒绝该产品专属请求；通用 `/agent` 只能进入其服务端配置的通用能力范围。`product_id`、`domain_hint`、`session_id`、`tool_name`、`capability` 和 Planner 输出中的同名字段，无论来自 body 还是未验证 header，都不能声明产品身份或授权。`domain_hint` 只保留为兼容路由/体验提示。
+- **Runtime 传播**：入口解析一次，将已验证的 `product_id`、身份来源和主体上下文写入不可由模型覆盖的 Runtime `RequestContext`，显式传播至 Graph/Planner 状态、异步任务和 checkpoint-safe 上下文；缺少身份时不得在下游补默认的宽权限产品。Trace 记录解析后的产品 ID 与来源类别，供审计核对，不记录凭据。
+- **会话命名空间**：服务端以 `(product_id, tenant_id, user_id, client_conversation_id)` 派生内部会话/记忆/checkpoint 命名空间。客户端 conversation/session ID 只是命名空间内的不透明键，不能跨产品复用历史、记忆或恢复 checkpoint；用户和租户身份仍由既有可信身份解析及授权契约提供。
+- **强制校验点**：产品范围先参与能力候选发现，再由 Router/Planner 只在裁剪后的能力集合中选路；Tool 执行器及 MCP 入口必须在实际调用前再次按同一服务端上下文校验，不能依赖 UI 隐藏、Prompt 或 Router 结果。RAG、SQL、Workflow 和其他数据访问还须独立执行现有租户、资源、部门及操作权限校验；产品身份不能替代这些授权。
+- **当前实现边界**：当前 [identity.py](../../../backend/app/api/identity.py) 解析用户/租户身份，[request_context.py](../../../backend/core/request_context.py) 的 `RequestContext` 尚无可信产品身份字段；[chat.py](../../../backend/app/api/routes/chat.py) 将请求体 `domain_hint` 传入 Runtime。以上内容是未来入口隔离的实施契约，不表示源码已经具备产品身份派生或隔离能力。
 
 ## 边界和取舍
 
@@ -36,7 +45,7 @@
 
 ## 施工依赖与分批边界（均为待实施）
 
-此 ADR 仅冻结设计。**当前 B1-D Prompt 治理任务及其它在途 Runtime/RAG 任务不因本 ADR 被打断。** 待其达到安全交接点、核对最新 `main` 与开放 PR、取得施工任务授权后，由独立 worktree/PR 分批实施：
+此 ADR 仅冻结设计，不隐含任何在途任务依赖或施工授权。开始某个批次前，执行者须重新核对最新 `main`、相关开放 PR 与对应任务的 `TASK.md`/`PROGRESS.md`；过期的任务阶段名称不构成门禁。实施使用独立 worktree/PR 分批进行：
 
 | 批次 | 目标 | 退出证据 |
 | --- | --- | --- |
