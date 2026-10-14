@@ -8,15 +8,15 @@ Covers:
 """
 import pytest
 
-from backend.prompts.registry import PROMPT_REGISTRY, PromptSpec
-from backend.prompts.renderer import PromptRenderer
 from backend.prompts.loader import load_defaults
+from backend.prompts.registry import PROMPT_REGISTRY
+from backend.prompts.renderer import PromptRenderer
 
 
 class TestRegistryShape:
     def test_total_count(self):
-        # 2026-10-08 travel.reporter 收编后，注册表共 59 个 Prompt。
-        assert len(PROMPT_REGISTRY) == 59
+        # 2026-10-08 travel.reporter 收编后及 V2 AI 修改 Prompt，共 60 个。
+        assert len(PROMPT_REGISTRY) == 60
 
     def test_exactly_one_code_controlled(self):
         code_controlled = [s for s in PROMPT_REGISTRY.values() if s.code_controlled]

@@ -83,6 +83,7 @@ class RequestBudgetExceeded(RuntimeError):
 
     code = "BUDGET_EXCEEDED"
     retryable = False
+    provider_attempted = False
 
     def __init__(self, reason: str):
         self.reason = reason

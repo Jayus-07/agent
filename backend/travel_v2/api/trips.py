@@ -3,9 +3,11 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
 from backend.app.api.identity import require_identity
 from backend.travel_v2.db import TravelV2PersistenceError
+from backend.travel_v2.models.ai_edit import AITripEditRequest
 from backend.travel_v2.models.commands import (
     AddMealSelectionCommand,
     CreateTripRequest,
@@ -15,13 +17,14 @@ from backend.travel_v2.models.commands import (
     SelectLodgingCommand,
     StructuredTripEditCommand,
 )
+from backend.travel_v2.services.revision_service import RevisionService
+from backend.travel_v2.services.trip_ai_edit_service import TripAIEditService
 from backend.travel_v2.services.trip_edit_service import (
     IdempotencyConflict,
     RevisionNotFound,
     TripEditService,
     VersionConflict,
 )
-from backend.travel_v2.services.revision_service import RevisionService
 from backend.travel_v2.services.trip_service import TripNotFound, TripService
 
 router = APIRouter(tags=["旅游 V2 行程"])
@@ -161,6 +164,46 @@ def apply_trip_edit(
         )
     except Exception as exc:
         raise _error(exc) from exc
+
+
+@router.post("/travel/v2/trips/{trip_id}/ai-edits", summary="通过自然语言生成并校验一项 Trip 修改")
+def apply_trip_ai_edit(
+    trip_id: UUID,
+    payload: AITripEditRequest,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
+):
+    tenant_id, owner_id, actor_id = _scope(request)
+    try:
+        result = TripAIEditService().edit(
+            trip_id=str(trip_id), tenant_id=tenant_id, owner_id=owner_id,
+            actor_id=actor_id, idempotency_key=idempotency_key,
+            request=payload,
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+
+    status = result.get("status")
+    http_status = 200
+    if status in {"processing", "unknown"}:
+        http_status = 202
+    elif status == "failed":
+        code = result.get("code")
+        if code == "VERSION_CONFLICT":
+            http_status = 409
+        elif code == "IDEMPOTENCY_CONFLICT":
+            http_status = 409
+        elif code == "AI_EDIT_INVALID_OUTPUT":
+            http_status = 502
+        elif code == "AI_EDIT_OUTCOME_UNKNOWN":
+            http_status = 202
+        elif code == "AI_EDIT_CALL_UNKNOWN":
+            http_status = 202
+        elif code in {"AI_EDIT_CANDIDATE_REJECTED", "AI_EDIT_VALIDATION_REJECTED"}:
+            http_status = 422
+        else:
+            http_status = 503
+    return JSONResponse(status_code=http_status, content=result)
 
 
 @router.post("/travel/v2/trips/{trip_id}/selections/meals", summary="将已选美食加入指定日期")
