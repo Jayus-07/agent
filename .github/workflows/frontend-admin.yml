@@ -4,17 +4,41 @@ on:
   pull_request:
     paths:
       - "frontend-admin/**"
+      - "backend/app/api/routes/observability.py"
+      - "backend/tests/observability/test_admin_observability_reads.py"
+      - "requirements-lock.txt"
+      - "pyproject.toml"
       - ".github/workflows/frontend-admin.yml"
   push:
     branches: [main]
     paths:
       - "frontend-admin/**"
+      - "backend/app/api/routes/observability.py"
+      - "backend/tests/observability/test_admin_observability_reads.py"
+      - "requirements-lock.txt"
+      - "pyproject.toml"
       - ".github/workflows/frontend-admin.yml"
 
 permissions:
   contents: read
 
 jobs:
+  admin-observability-auth:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: 设置 Python 运行时与依赖缓存
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+      - name: 安装锁定的后端测试依赖
+        run: python -m pip install -r requirements-lock.txt
+      - name: 管理端全局观测 API 权限回归
+        run: python -m pytest backend/tests/observability/test_admin_observability_reads.py -q --no-cov
+
   frontend-admin:
     runs-on: ubuntu-latest
     timeout-minutes: 20
