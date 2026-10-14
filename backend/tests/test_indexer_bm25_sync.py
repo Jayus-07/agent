@@ -1,8 +1,7 @@
 """P1-5 测试：BM25 增量同步验证。
 
 之前 review 认为 BM25 没随上传同步更新是错的 —— 实际 indexer.py:_index_file_inner
-在 bm25_store 不为 None 且 chunks 非空时调用
-`bm25_store.replace_documents(chunks, k=..., doc_id=..., file_path=...)`。
+在 bm25_store 不为 None 且 chunks 非空时从当前向量集合重建快照。
 
 本测试真实调用 _index_file_inner 验证契约（只 mock 外部边界：
 解析入口 parse_and_chunk_full / LLM 元数据 / embedding / chunk_store / 各存储）：
@@ -43,9 +42,14 @@ def _run_inner(indexer: IncrementalIndexer, tmp_path, reindex_ctx=None) -> dict:
     target = tmp_path / "doc.md"
     target.write_text(f"# 标题\n{_BODY}", encoding="utf-8")
 
-    fake_chunk = Document(page_content=_BODY, metadata={"source": str(target)})
-    with patch("backend.rag.preprocessing.pipeline.parse_and_chunk",
-               return_value=[fake_chunk]), \
+    fake_chunk = Document(
+        page_content=_BODY,
+        metadata={"source": str(target), "granularity": "leaf"},
+    )
+    with patch(
+        "backend.rag.preprocessing.pipeline.parse_and_chunk_full",
+        return_value=([fake_chunk], {}),
+    ), \
          patch("backend.rag.indexing.chunk_store.get_chunk_store",
                return_value=MagicMock()), \
          patch.object(IncrementalIndexer, "_build_doc_metadata",
@@ -58,6 +62,29 @@ def _run_inner(indexer: IncrementalIndexer, tmp_path, reindex_ctx=None) -> dict:
 
 
 class TestBM25IncrementalSync:
+
+    def test_candidate_forwards_replaced_chunk_ids_to_bm25_rebuild(
+        self, tmp_path, monkeypatch
+    ):
+        """上传候选重建 BM25 时应排除主库中被替换的旧 chunk。"""
+        indexer = _make_indexer(tmp_path, MagicMock())
+        indexer.candidate_mode = True
+        captured = {}
+
+        def capture_index_file(*args, **kwargs):
+            captured.update(kwargs)
+            return {"chunk_count": 1}
+
+        monkeypatch.setattr(indexer, "_index_file", capture_index_file)
+
+        indexer.index_candidate(
+            "staging.md", "active.md", "new-hash",
+            old_chunk_ids=["old:leaf", "old:parent"],
+        )
+
+        assert captured["reindex_ctx"] == {
+            "old_chunk_ids": ["old:leaf", "old:parent"]
+        }
 
     def test_rebuild_from_vectorstore_called_when_store_present(self, tmp_path):
         """有 bm25_store + chunks 时，必须从向量库重建 BM25。"""

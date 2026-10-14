@@ -174,9 +174,14 @@ class TestTypedValidation:
         for n in (ast.root.children[0].children):
             if n.type == "paragraph":
                 n.raw_text = n.text
+        from langchain_core.documents import Document
+
         rec = build_quality_record(
             file_path="/tmp/demo.md", doc_id="demo", kb_id="kb1",
-            raw_ast=ast, chunks=[], file_size=1, file_hash="x",
+            raw_ast=ast, chunks=[Document(
+                page_content="原文内容",
+                metadata={"granularity": "leaf", "chunk_id": "demo_0"},
+            )], file_size=1, file_hash="x",
         )
         anomalies = run_typed_validation(rec, ast)
         hard = hard_anomalies(anomalies)

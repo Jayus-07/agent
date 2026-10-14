@@ -218,8 +218,9 @@ class DocumentCleaner:
         """图片 alt 残留/占位短行：前后皆空行的孤立段落，≤40 字、无句读。
 
         2026-10-04 保留语料全量扫描（55 处命中全部为图注/[添加列表项]/面包屑，
-        零正文命中）后定形：含 CJK、非标题/列表/表格/引用前缀、不含 '|'、
-        无句末与键值标点（。！？：；…）。有句读的孤立短行是正常陈述，必保留。
+        零正文命中）后定形：含 CJK、非标题/列表/表格/引用前缀、不含 '|'，
+        不含中英文句末与键值标点。有句读的短行是正常陈述，半角问号结尾的 FAQ
+        问题也必须保留。
         """
         lines = r.text.split('\n')
         kept, dropped = [], 0
@@ -231,7 +232,7 @@ class DocumentCleaner:
                 and (i == len(lines) - 1 or lines[i + 1].strip() == '')
                 and not re.match(r'^[#\-*|>]', s)
                 and '|' not in s
-                and not any(t in s for t in '。！？：；…')
+                and not any(t in s for t in '。！？：；…?!:;.')
                 and re.search(r'[一-鿿]', s)
             ):
                 dropped += 1
