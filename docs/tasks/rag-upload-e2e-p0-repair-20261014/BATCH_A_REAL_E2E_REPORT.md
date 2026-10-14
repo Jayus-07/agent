@@ -28,3 +28,9 @@ Worktree：`C:\Users\wh\.codex\worktrees\rag-upload-p0-batch-a\agent`
 - 本次没有调用付费 Provider。Metadata 模型本地连接失败后走规则回退，真实索引发布与 Search 仍成功。
 - `sku.csv` 的低中文比例过滤不在本次修复范围，留给 Batch B；PDF、Excel 与长 TXT 资源治理及完整 18 类 E2E 仍未完成。
 - `RAG_UPLOAD_E2E_VERIFIED` 保持 `false`；本报告仅验收 Batch A 场景。
+
+## GitHub PR 验证
+
+- 代码与本报告首个提交：`eda88fb15975f7755ecc6cc61c4fef75359356d0`。
+- 该提交的 `secret-scan` 与 `RAG PR Smoke` 均成功；免费 preflight、定向回归通过。8-case real-API/付费 Provider 评测按门禁跳过。
+- PR #58 保持 Open / Mergeable；已有 2 条 Codex Review Thread 均为 resolved。

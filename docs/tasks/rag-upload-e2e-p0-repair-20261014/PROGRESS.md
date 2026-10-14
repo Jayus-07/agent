@@ -34,4 +34,4 @@
 
 Batch A 真实 API、Worker、PostgreSQL/向量索引与 Search 验收已在隔离 Compose 和 KB 完成，细节见 `BATCH_A_REAL_E2E_REPORT.md`。发现并最小修复 PII 未进入索引脱敏及候选 BM25 保留旧代内容两个问题；新增候选旧 chunk 排除回归。FAQ、SKU 预期失败、PII 脱敏/覆盖、同名失败保留旧 Active 均通过。
 
-本次真实验收不覆盖 Batch B/C 的 PDF、Excel 与长 TXT 环境/资源问题，不将 `RAG_UPLOAD_E2E_VERIFIED` 置为 `true`。当前等待推送后的最终 PR CI 状态；不合并 main，不启动 Batch B/C。
+代码提交 `eda88fb15975f7755ecc6cc61c4fef75359356d0` 的 `secret-scan`、`RAG PR Smoke` 均通过，付费 8-case real-API job 按门禁 skipped；PR 保持 Open / Mergeable，两条 Review Thread 已解决。真实验收不覆盖 Batch B/C 的 PDF、Excel 与长 TXT 环境/资源问题，不将 `RAG_UPLOAD_E2E_VERIFIED` 置为 `true`。不合并 main，不启动 Batch B/C。
