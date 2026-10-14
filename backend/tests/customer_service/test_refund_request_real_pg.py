@@ -123,11 +123,54 @@ def test_refund_request_persists_idempotently_with_owner_scope(monkeypatch):
             user_id=user_id, tenant_id=tenant_id,
         )) == [own]
 
+        from backend.customer_service.business_guard import (
+            BusinessOperationAlreadyActive,
+            BusinessOperationIdentity,
+        )
+        from backend.customer_service.confirmation_store import (
+            _raise_on_active_conflict,
+        )
+
+        class EmptyConfirmationRepository:
+            async def find_by_identity(self, **_filters):
+                return None
+
+        identity = BusinessOperationIdentity(
+            tenant_id=tenant_id,
+            action_type="refund_request",
+            target_type="order",
+            target_id="order-42",
+            semantic_fingerprint="f" * 64,
+        )
+
+        async def guard_existing_active_case():
+            async with pooler() as db:
+                await _raise_on_active_conflict(
+                    db, EmptyConfirmationRepository(), identity,
+                    user_id=user_id,
+                    exclude_confirmation_id="",
+                    completed_message="不可重复申请",
+                )
+
+        with pytest.raises(BusinessOperationAlreadyActive):
+            run_sync(guard_existing_active_case())
+
         with pytest.raises(RefundRequestConflictError):
             service.execute_refund_request(
                 pending,
                 **{**fields, "confirmation_id": other_confirmation_id},
             )
+
+        with admin:
+            with admin.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE customer_service.cs_case SET status = 'closed' "
+                    "WHERE case_id = %s",
+                    (confirmation_id,),
+                )
+
+        # 待审核案件结案后，旧 confirmation success 不再把新申请永久锁死。
+        run_sync(guard_existing_active_case())
 
         with admin:
             with admin.cursor() as cursor:

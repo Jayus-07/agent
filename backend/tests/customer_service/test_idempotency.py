@@ -180,6 +180,79 @@ class TestDuplicateConfirm:
         mock_execute.assert_called_once()
         assert mock_execute.call_args.kwargs["session_id"] == "s1"
 
+    def test_refund_request_write_followed_by_ledger_failure_becomes_verifying(
+        self, monkeypatch,
+    ):
+        from backend.shared.idempotency import IdempotencyUnavailable
+
+        confirmation_id = "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11"
+        store = _make_store(claim_result=confirmation_id)
+        monkeypatch.setattr(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+            lambda: store,
+        )
+        service = MagicMock()
+        service.execute_refund_request.return_value.to_dict.return_value = {
+            "action_id": confirmation_id,
+            "data": {"request": {"request_id": confirmation_id}},
+        }
+        monkeypatch.setattr(
+            "backend.customer_service.service.refund_service.get_refund_service",
+            lambda: service,
+        )
+
+        def execute_then_fail(_operation, _payload, operation, **_kwargs):
+            operation()  # 案件已提交，只有幂等终态写回失败。
+            raise IdempotencyUnavailable("ledger complete failed")
+
+        monkeypatch.setattr(
+            "backend.shared.idempotency.run_idempotent_side_effect",
+            execute_then_fail,
+        )
+        outcome = process_confirmation(
+            _pending_action(action_id=confirmation_id),
+            "确认", "u1", "s1", tenant_id="tenant-1",
+        )
+
+        assert outcome.confirmation_state == "verifying"
+        assert "避免重复执行" in outcome.answer
+        store.clear.assert_called_once_with(
+            "u1", "s1", final_state="verifying",
+        )
+
+    def test_refund_request_ledger_failure_before_write_remains_retryable(
+        self, monkeypatch,
+    ):
+        from backend.shared.idempotency import IdempotencyUnavailable
+
+        confirmation_id = "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11"
+        store = _make_store(claim_result=confirmation_id)
+        monkeypatch.setattr(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+            lambda: store,
+        )
+        service = MagicMock()
+        monkeypatch.setattr(
+            "backend.customer_service.service.refund_service.get_refund_service",
+            lambda: service,
+        )
+
+        def fail_before_execute(_operation, _payload, _operation_fn, **_kwargs):
+            raise IdempotencyUnavailable("ledger claim failed")
+
+        monkeypatch.setattr(
+            "backend.shared.idempotency.run_idempotent_side_effect",
+            fail_before_execute,
+        )
+        outcome = process_confirmation(
+            _pending_action(action_id=confirmation_id),
+            "确认", "u1", "s1", tenant_id="tenant-1",
+        )
+
+        assert outcome.confirmation_state == "failed"
+        service.execute_refund_request.assert_not_called()
+        store.clear.assert_called_once_with("u1", "s1", final_state="failed")
+
     @patch("backend.customer_service.confirmation_store.get_confirmation_store")
     def test_stale_conditional_cancel_is_duplicate_and_preserves_pending(
         self, mock_store_fn,

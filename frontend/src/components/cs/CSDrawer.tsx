@@ -177,8 +177,22 @@ export default function CSDrawer({
     const pending = useCSChatStore.getState().pendingBySession[currentId]
     if (!pending || pending.action_type !== 'refund_request' || handoffOwnsConversation) return
     try {
-      await updateMyRefundDraft(currentId, pending, reason)
-      const latest = await getMyPendingAction(currentId)
+      const saved = await updateMyRefundDraft(currentId, pending, reason)
+      setPendingAction(currentId, { ...pending, reason, version: saved.version })
+      let latest: PendingActionSnapshot | null
+      try {
+        latest = await getMyPendingAction(currentId)
+      } catch {
+        // PATCH 已成功；旧卡片的订单/金额/摘要可能过期，先收起以免用旧快照确认。
+        setPendingAction(currentId, null)
+        addMessage(
+          'assistant',
+          '退款原因已保存，但最新确认信息暂不可用。请刷新会话并检查最新申请后再确认。',
+          currentId,
+        )
+        setError('退款原因已保存；最新确认信息暂不可用，请刷新会话。')
+        return
+      }
       setPendingAction(currentId, latest)
       addMessage(
         'assistant',

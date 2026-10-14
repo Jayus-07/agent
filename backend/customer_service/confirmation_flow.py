@@ -178,10 +178,15 @@ def _execute_confirmed_action(
     """
     from backend.core.request_context import get_tool_tenant_id
     from backend.customer_service.experts.action import _simulate_execute
-    from backend.shared.idempotency import run_idempotent_side_effect
+    from backend.shared.idempotency import (
+        IdempotencyUnavailable,
+        SideEffectOutcomeUnknown,
+        run_idempotent_side_effect,
+    )
 
     confirmation_id = str(pending_action.get("action_id", "") or "")
     action_type = str(pending_action.get("action_type", "") or "")
+    refund_request_written = False
     if action_type == "refund_request":
         if not confirmation_id or not user_id or not tenant_id or not session_id:
             from backend.customer_service.errors import RefundRequestUnavailableError
@@ -190,13 +195,16 @@ def _execute_confirmed_action(
         from backend.customer_service.service.refund_service import get_refund_service
 
         def execute() -> dict:
-            return get_refund_service().execute_refund_request(
+            nonlocal refund_request_written
+            action_record = get_refund_service().execute_refund_request(
                 pending_action,
                 confirmation_id=confirmation_id,
                 user_id=user_id,
                 tenant_id=tenant_id,
                 conversation_id=session_id,
-            ).to_dict()
+            )
+            refund_request_written = True
+            return action_record.to_dict()
     else:
         def execute() -> dict:
             return _simulate_execute(pending_action).to_dict()
@@ -212,14 +220,21 @@ def _execute_confirmed_action(
         "risk_level": pending_action.get("risk_level", ""),
     }
     resolved_tenant = tenant_id or get_tool_tenant_id() or "default"
-    return run_idempotent_side_effect(
-        "cs.action.execute",
-        payload,
-        execute,
-        tenant_id=resolved_tenant,
-        actor_id=user_id,
-        client_key=f"cs_action:{confirmation_id}",
-    )
+    try:
+        return run_idempotent_side_effect(
+            "cs.action.execute",
+            payload,
+            execute,
+            tenant_id=resolved_tenant,
+            actor_id=user_id,
+            client_key=f"cs_action:{confirmation_id}",
+        )
+    except IdempotencyUnavailable as exc:
+        if action_type == "refund_request" and refund_request_written:
+            raise SideEffectOutcomeUnknown(
+                "退款申请已写入，但幂等终态未能确认"
+            ) from exc
+        raise
 
 
 def _handle_confirm(

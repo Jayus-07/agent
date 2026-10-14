@@ -44,8 +44,10 @@ def _strict_writes() -> bool:
 
 # ── Phase3 STOP D：Business Guard 写入路径辅助 ─────────────────────
 
-async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: str,
-                                    completed_message: str) -> None:
+async def _raise_on_active_conflict(
+    db, repo, identity, *, user_id: str, exclude_confirmation_id: str,
+    completed_message: str,
+) -> None:
     """创建/升级前拦截：active 语义等价操作 + 终态不可重发动作。
 
     纯预检（确定性规则 §25），真正的并发决胜在 051 唯一索引 —— 预检
@@ -68,6 +70,18 @@ async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: 
             existing_confirmation_id=existing.confirmation_id,
             existing_state=existing.state,
         )
+    if identity.action_type == "refund_request":
+        active_case = await _find_active_refund_request_case(
+            db, identity, user_id=user_id,
+        )
+        if active_case is not None:
+            raise BusinessOperationAlreadyActive(
+                existing_confirmation_id=(
+                    active_case.related_confirmation_id or str(active_case.case_id)
+                ),
+                existing_state=f"case:{active_case.status}",
+                message="同一订单已有待处理的退款申请，请等待人工审核。",
+            )
     from backend.customer_service.business_guard import terminal_blocked
     if terminal_blocked(identity.action_type):
         done = await repo.find_by_identity(
@@ -84,6 +98,25 @@ async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: 
                 done.confirmation_id, identity.action_type,
             )
             raise BusinessOperationAlreadyCompleted(completed_message)
+
+
+async def _find_active_refund_request_case(db, identity, *, user_id: str):
+    """按租户、用户和订单读取活跃退款案件；结案后允许重新申请。"""
+    from sqlalchemy import select
+
+    from backend.customer_service.models.case import CASE_ACTIVE_STATUSES, CSCase
+
+    result = await db.execute(
+        select(CSCase).where(
+            CSCase.tenant_id == identity.tenant_id,
+            CSCase.user_id == user_id,
+            CSCase.case_type == "refund",
+            CSCase.status.in_(CASE_ACTIVE_STATUSES),
+            CSCase.context["refund_request"]["order_id"].as_string()
+            == identity.target_id,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def _raise_on_in_doubt_ledger(repo, identity) -> None:
@@ -579,7 +612,7 @@ class ConfirmationStore:
                         == existing.confirmation_id
                     )
                     await _raise_on_active_conflict(
-                        repo, identity,
+                        db, repo, identity, user_id=user_id,
                         exclude_confirmation_id=(
                             existing.confirmation_id if exclude_self else ""),
                         completed_message="该业务操作已提交成功，不允许重复发起。",
@@ -597,7 +630,8 @@ class ConfirmationStore:
                 if identity is not None:
                     # 终态策略（§38/D18）：SUCCESS 后不可重发的动作类型
                     await _raise_on_active_conflict(
-                        repo, identity, exclude_confirmation_id="",
+                        db, repo, identity, user_id=user_id,
+                        exclude_confirmation_id="",
                         completed_message="该业务操作已提交成功，不允许重复发起。",
                     )
                     # IN_DOUBT 防线（§15/§37/D13/R4）：legacy failed 行若在

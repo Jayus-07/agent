@@ -144,6 +144,44 @@ describe('CSDrawer pending confirmation', () => {
       .toContain('再确认')
   })
 
+  it('原因已保存但快照刷新失败时不报告写入失败或保留旧确认卡', async () => {
+    const refundPending = {
+      ...pending,
+      action_type: 'refund_request',
+      reason: '商品有问题',
+    }
+    resetStore()
+    useCSChatStore.setState({ pendingBySession: { cs1: refundPending } })
+    apiMocks.getMyPendingAction
+      .mockResolvedValueOnce(refundPending)
+      .mockRejectedValueOnce(new Error('503 unavailable'))
+    apiMocks.updateMyRefundDraft.mockResolvedValue({
+      updated: true, proposal_id: pending.proposal_id, version: 4,
+    })
+    mounted = mount()
+    await act(async () => { await Promise.resolve() })
+
+    const edit = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('修改原因'))
+    await act(async () => { edit?.click() })
+    const textarea = mounted.container.querySelector('textarea') as HTMLTextAreaElement
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype, 'value',
+    )?.set
+    setter?.call(textarea, '包装破损')
+    act(() => textarea.dispatchEvent(new Event('input', { bubbles: true })))
+    const save = Array.from(mounted.container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('保存原因'))
+    await act(async () => { save?.click(); await Promise.resolve(); await Promise.resolve() })
+
+    expect(useCSChatStore.getState().pendingBySession.cs1).toBeNull()
+    expect(useCSChatStore.getState().currentMessages().at(-1)?.content)
+      .toContain('原因已保存')
+    expect(useCSChatStore.getState().error).toContain('原因已保存')
+    expect(mounted.container.querySelector('[data-testid="cs-confirm-submit"]'))
+      .toBeNull()
+  })
+
   it('切换客服会话后展示并读取目标会话的 Pending', async () => {
     resetStore()
     useCSChatStore.setState({
