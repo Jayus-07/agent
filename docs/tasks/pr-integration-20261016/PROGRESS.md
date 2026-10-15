@@ -27,7 +27,7 @@
 | #76 | OPEN、Draft、CLEAN；当前 HEAD d47f43f10bd5914b0f13140d5daad18ae5b0e5b4；base main 04846a61f889fa561b9c2d2184cd196c93e75dd5 | 无 Review；当前 HEAD 的 RAG Smoke、preflight、Detect RAG changes、scan 均 PASS；真实 API Evaluation SKIPPED。共享历史重复组只读检查未完成 | BLOCKED（合并） |
 | #69 | OPEN、Draft、CLEAN；HEAD c7d8f4140e87eec420da5333f74cd81f7f217ab3；base main 04846a61 | 最新 HEAD contract-check、RAG Smoke、preflight、Detect RAG changes、scan 均 PASS；真实 API Evaluation SKIPPED。main 基线定向后端事件测试 106 passed；真实 T3 未完成 | BLOCKED（真实 T3） |
 | #66 | OPEN、Draft、CLEAN；HEAD 32f8406faf7c773f7d58e33a8eb90d69b00d8e49；base main 04846a61 | 最新 HEAD RAG Smoke、preflight、Detect RAG changes、scan 均 PASS；真实 API Evaluation SKIPPED。main 基线六个 RAG/PDF/Excel/coverage 定向文件 67 passed；真实 PDF IndexRun/Search 未完成 | BLOCKED（PDF E2E） |
-| #52 | OPEN、Draft、CLEAN；HEAD 48675a422d6fc589ac9b46d284a1f06d90e53916，已同步 main 04846a61；10/10 Review threads 已解决 | 免费本地测试 160 + 重叠模型配置/API 测试 58 passed；当前 SHA preflight 53、RAG Smoke、scan、Detect RAG changes PASS；真实 API Evaluation SKIPPED_UNTRUSTED_PR。真实质量/账本未验证，阻断于批准价格快照与只读访问 | BLOCKED（真实质量/计费） |
+| #52 | OPEN、Draft、CLEAN；HEAD 48675a422d6fc589ac9b46d284a1f06d90e53916，已同步 main 04846a61；14 条 Review threads 中 10 已解决、4 条 P1 未解决 | 原免费测试 160 + 重叠模型配置/API 测试 58 passed；当前 SHA preflight 53、RAG Smoke、scan、Detect RAG changes PASS；4 条 P1 Review 修复进行中，真实 API Evaluation SKIPPED_UNTRUSTED_PR | IN_PROGRESS（Review 修复；真实质量/账本仍待授权） |
 | #50 | CLOSED | FE-4 已被 PR #72 覆盖；当前 main 对应三组定向前端测试 40/40 通过 | 已关闭过期 Draft |
 | #60 | CLOSED | 文档中 T1 已由 PR #61 合入；独立作品集交接材料由 #75 交付 | 已关闭旧 Draft |
 | #75 | MERGED；PR HEAD dba170373c4663919ab9b0e2b87b5f800d479310；Merge SHA 04846a61f889fa561b9c2d2184cd196c93e75dd5 | scan、Detect RAG changes、RAG Smoke PASS；真实 API/preflight SKIPPED；无 Review | MERGED |
@@ -47,7 +47,7 @@
 | 线 | 当前状态 | 下一项实际动作 |
 | --- | --- | --- |
 | A Provider/旅游/客服 | #73/#74/#75 MERGED；#76 代码和非付费 CI 完成，合并被共享库诊断阻断 | 待取得授权只读连接后执行 count-only 重复组查询；或由有权限的数据负责人提供结果。迁移检查前不合并 #76。 |
-| B RAG | #66、#52 均 BLOCKED（各自外部真实验证） | #66 需恢复隔离 Docker Worker 并取得真实 PDF 终态；#52 需批准价格快照与只读访问才能进行真实计费/质量评测。免费代码、定向测试和 CI 已完成。 |
+| B RAG | #66 BLOCKED；#52 IN_PROGRESS | #52 正在修复 4 条新增 P1 Review，后续仍需批准价格快照与只读账本权限完成真实计费/质量评测；#66 需恢复隔离 Docker Worker 并取得真实 PDF 终态。 |
 | C 主助手 | #69 BLOCKED | 事件隔离已修复；等待安全可注入的隔离 Provider/BFF/APISIX/PG 与费用账本环境，仅此 PR 保持 Draft。 |
 | 过期 PR | #50/#60 已关闭；#75 已合并 | 无剩余动作。 |
 | main 集成 | IN_PROGRESS | MAIN-01～34 已逐项标注真实证据状态。其余 PR 当前均有独立外部门槛；恢复凭据、Docker/Worker 或数据库只读权限后继续对应施工与集成验收。 |
@@ -99,10 +99,10 @@
 
 ### #52 MultiQuery 与费用
 
-- 分支已从 origin/main 04846a61 普通合入并推送，当前 PR HEAD 48675a422d6fc589ac9b46d284a1f06d90e53916；PR Open/Draft/CLEAN，10/10 Review threads 已解决，保留原 36 个文件改动。
+- 分支已从 origin/main 04846a61 普通合入并推送，当前 PR HEAD 48675a422d6fc589ac9b46d284a1f06d90e53916；PR Open/Draft/CLEAN，保留原 36 个文件改动。Review 线程共 14 条：10 条已解决，最新线程检查发现 4 条 P1 尚未解决，已派回施工线修复：proxy fallback 初始化异常脱敏、pricing 拒绝 per_call token 维度、拒绝同快照混币、Embedding 按 Provider 子批次分别预算/结算。
 - 免费本地 MultiQuery/Proxy/预算/Embedding/Rerank/评测集 160 passed；main 同步后 #73 重叠模型配置/角色 API/健康 API 定向测试 58 passed；compileall 与 diff-check 通过。首次测试环境缺测试密钥导致 2 项 fail；使用子进程临时测试密钥/令牌重跑后通过，没有使用生产凭据。
 - 当前 SHA GitHub no-paid preflight 53 passed（1 条 collection warning）、RAG Smoke required-gate、Detect RAG changes、Secret Scan 均 PASS；真实 API Evaluation 为 SKIPPED_UNTRUSTED_PR。
-- 当前 SHA 真实检索质量与费用账本未验证。旧 SHA Top-1 0.7143 低于 0.80；批准价格快照及其只读访问仍不可用。本轮没有调用 Provider 或执行付费评测，PR 保持 Draft。
+- 当前 SHA 真实检索质量与费用账本未验证。旧 SHA Top-1 0.7143 低于 0.80；批准价格快照及其只读访问仍不可用。本轮没有调用 Provider 或执行付费评测。Review 修复完成后仍保持 Draft，直至真实质量/账本门禁满足。
 
 ## main 集成验收状态
 
