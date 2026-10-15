@@ -29,7 +29,10 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke
     assert "BASE_SHA\" || -z \"$HEAD_SHA" in smoke
     assert "git diff --name-only \"$BASE_SHA\" \"$HEAD_SHA\" > \"$changed_paths\"" in smoke
-    assert "python3 .github/scripts/rag_smoke_path_filter.py < \"$changed_paths\"" in smoke
+    assert (
+        "python3 .github/scripts/rag_smoke_path_filter.py --event \"$EVENT_NAME\" "
+        "< \"$changed_paths\""
+    ) in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in regression
     assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in smoke
