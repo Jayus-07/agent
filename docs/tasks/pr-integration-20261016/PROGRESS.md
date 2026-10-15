@@ -161,3 +161,11 @@
 - 后端命令：pytest backend/tests/infra/test_ocr_model_health.py backend/tests/api/test_sys_model_roles_api.py backend/tests/api/test_sys_model_health_api.py backend/tests/travel_v2/test_api_contract.py -q。
 - 初次无凭据执行出现 test_requires_admin 503（1 failed、36 passed）；根因是本地未设置 AI_INTERNAL_TOKEN，fail-closed 依赖按设计拒绝且返回 503。使用进程级临时测试令牌 integration-test-only 重跑后 37 passed，环境变量仅对子进程生效，不涉及真实凭据。
 - 前端在隔离主控树执行 npm test -- ...TravelChatPage.test.tsx ...TravelV2TripConversation.test.tsx 时，命令失败：vitest is not recognized；npx tsc --noEmit 无本地 TypeScript 安装。未安装依赖、未触碰原 main checkout 的 ignored node_modules，前端 post-merge 重跑保持 BLOCKED；合并前 PR #74 的 23 个前端测试证据仍可追溯。
+
+## 2026-10-16 续工核对
+
+- 重新执行 git fetch origin --prune。origin/main 仍为 04846a61f889fa561b9c2d2184cd196c93e75dd5；主控分支此前进度提交 96c4cb1 与远端一致且工作树干净。#52/#66/#69/#76 当前 HEAD 与上一轮记录一致，均 Open/Draft/CLEAN；全部非付费 Smoke、preflight、scan 和适用的 contract checks PASS，真实 API Evaluation 仍为 SKIPPED。
+- #76 诊断重试：当前进程无 PG、POSTGRES、DATABASE 或 AGENT_MEMORY 类凭据环境变量；退款施工树仅有 .env.example。通过只读 PostgreSQL MCP 执行迁移 098 注释中的 COUNT(*) duplicate-group query，仍失败：用户 postgres 密码认证失败。没有成功连接或写入共享库，阻断条件未解除。
+- #69 离线路由回归：在 HEAD c7d8f4140e87eec420da5333f74cd81f7f217ab3 运行 main_conversation_fast_path、hierarchical_router、llm_router、router_determinism、entry_mode_handoff、continuation_routing 六个测试文件，80 passed。覆盖一般问答快路径、续问、受限候选 RAG/SQL、复合意图及旅游/客服引导；不替代真实 LLM 与权限链路 T3。
+- 同批探索 clarify_flow 后结果 120 passed、3 failed；在当前 main 对 3 个失败单独重跑仍是 3 failed，确认不是 #69 差异。其中旅游预过滤用例依赖 TRAVEL_ENABLED，默认关闭时失败，测试进程显式设为 true 后 1 passed。另两项 SQL 空结果测试夹具未提供当前 SQL Skill 的 is_empty 字段，却断言旧式拒答文本/未答日志；当前 SQL Skill 会提供结构化空结果标记，Reporter 对成功的 no_data 走确定性查询结果路径。保留失败证据，未改断言或扩大到无关 Reporter 行为重构。
+- 当前可执行的代码、隔离测试和 GitHub 非付费门禁已完成。继续推进依赖外部状态的四项：#76 只读共享库诊断、#66 Docker Worker、#69 隔离 T3 凭据/服务、#52 批准价格快照/账本权限。外部状态改变前，不把任何一项提升为 MERGE_READY。
