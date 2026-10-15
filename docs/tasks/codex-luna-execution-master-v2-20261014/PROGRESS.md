@@ -6,7 +6,7 @@
 
 - 阶段：A 因隔离远程 Provider 凭据缺失而 BLOCKED；按总控已转入 C3 无模型费用的 SQL/Memory 集成验证。
 - PR：[ #69 ](https://github.com/Jayus-07/agent/pull/69) 保持 Draft / BLOCKED，不是 MERGE_READY。
-- 最新 main/base：`b823e93ccd121666e064a53959828acd980838fc`。
+- 最新 main：`a1f9d888382dc601fb31eb3083b9a800a13cbdd5`；本分支已合入该 main 的 #62 提交，PR 目标仍为 `main`。
 - 分支：`codex/main-assistant-conversation-first-20261014`。
 - 本轮补测依据代码提交：`247c387b1252d61352c9cbbed6ed709b50f7dae6`；补测启动时 PR HEAD `a046278ac4eead1b637cee0db94e7d461ef9b5c8` 仅额外包含先前进度文档更新。
 - 本轮代码修复提交：`247c387b1252d61352c9cbbed6ed709b50f7dae6`。
@@ -46,6 +46,10 @@
 - 内置浏览器真实点按停止：Next→APISIX→API 的 `POST /chat/agent/stream` 与 `/chat/agent/abort` 均 200；界面停止流并显示空助手轮次，无成功伪答。Trace `8e371d30518c` 状态 `cancelled`、时长 827 ms，隔离 DB 没有写入该测试问题的 `chat_messages`。服务端 stream HTTP 请求总时长 13.8 s（停止接口约 55 ms 后可用）；这验证取消终态/不污染记忆，不验证 SSE 断线续传，也不代表真实模型调用。
 - 当前 HEAD 定向离线回归：`D:/Python/python.exe -m pytest backend/tests/api/test_memory_routes.py backend/tests/rag/test_rag_authz.py backend/tests/orchestration/router/test_product_scope.py -q --no-cov`：51 passed。
 - 本机 Windows pytest 直接导入应用时读取默认 `localhost:5432/agent_memory` 配置且未提供密码，反馈 DB 初始化失败（19 个用例 setup error、1 passed）；未成功建立数据库连接或写入。随后改在隔离 API 容器用 TestClient + 隔离 PG 实测 SQL 路由，未把上述宿主测试错误计为功能通过。
+- 本轮复核逻辑取消尾延迟：`backend/core/request_context.py` 明确规定取消为逻辑取消，已开始的同步 Provider 调用允许自然结束、结果丢弃；LLMProxy 对取消中的用量 reservation 标记 `call_cancelled_possibly_billed`。没有改动取消/账本语义，也不把底层请求自然结束时间归咎于 Clash。
+- 最新 main 对齐提交：`20b0fef1fa43a7cd835a129773587c52deb77465`；上游仅增加 Travel #62 相关文件，本分支未编辑这些文件。`origin/main...HEAD` PR 差异仍为 49 个原有文件。
+- 在最新 main 对齐后的 HEAD 重跑：`D:/Python/python.exe -m pytest backend/tests/orchestration/context/test_continuation_routing.py backend/tests/test_error_protocol.py backend/tests/api/test_memory_routes.py backend/tests/rag/test_rag_authz.py backend/tests/orchestration/router/test_product_scope.py -q --no-cov`：106 passed。
+- 内置浏览器当前仍显示隔离 `/agent` 的模型上游错误态和先前取消留下的空助手轮次，没有静态假答案；未发起新的模型请求，也未触碰 `:3200` 标签。
 
 ## 未通过或未验证的 T3
 
