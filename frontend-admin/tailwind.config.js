@@ -1,6 +1,4 @@
-import type { Config } from 'tailwindcss'
-
-const config: Config = {
+module.exports = {
   content: ['./src/**/*.{js,ts,jsx,tsx,mdx}'],
   theme: {
     extend: {
@@ -11,6 +9,7 @@ const config: Config = {
           soft: 'rgba(77, 107, 254, 0.08)',
         },
         surface: {
+          DEFAULT: '#ffffff',
           root: '#fafbfc',
           base: '#ffffff',
           elevated: '#f8f9fb',
@@ -63,4 +62,3 @@ const config: Config = {
   },
   plugins: [],
 }
-export default config
