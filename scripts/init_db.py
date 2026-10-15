@@ -285,6 +285,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "096_travel_v2_revision_shares.sql": "memory",
     # 健康探测来源。
     "097_llm_model_health_probe_source.sql": "memory",
+    # 同一用户跨会话的活跃退款申请按订单唯一。
+    "098_cs_refund_order_unique.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
