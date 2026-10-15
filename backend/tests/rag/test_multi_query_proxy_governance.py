@@ -499,3 +499,32 @@ def test_other_role_is_not_routed_through_multi_query_policy(monkeypatch):
     )
 
     assert proxy._role_runtime_policy("ocr") is None
+
+
+def test_global_fallback_initialization_logs_only_exception_type(
+    monkeypatch, caplog,
+):
+    """全局备用模型构造异常不得把凭据、URL 或本机路径写入日志。"""
+    import logging
+
+    import backend.infra.llm.proxy as proxy
+
+    sentinel_error = (
+        "api_key=init-secret https://provider.invalid/private "
+        r"path=C:\private\model-cache"
+    )
+    monkeypatch.setattr(proxy, "_fallback_llm", None)
+    monkeypatch.setattr(
+        proxy, "_configured_fallback_model", lambda: "global-backup",
+    )
+    monkeypatch.setattr(
+        proxy,
+        "_build_llm_for",
+        lambda _model: (_ for _ in ()).throw(RuntimeError(sentinel_error)),
+    )
+    caplog.set_level(logging.WARNING)
+
+    assert proxy._get_fallback_llm() is None
+    assert "RuntimeError" in caplog.text
+    for secret in ("init-secret", "provider.invalid", "private\\model-cache"):
+        assert secret not in caplog.text

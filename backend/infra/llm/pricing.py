@@ -89,12 +89,26 @@ class PriceTable:
 
     def __init__(self, rows: list[PriceLine]):
         self._prices: dict[tuple[str, str, str], PriceLine] = {}
+        currencies: dict[tuple[str, str], str] = {}
         for row in rows:
-            # 同一版本在数据库中按生效时间倒序返回，首条是当前有效价；
-            # setdefault 同时避免历史行覆盖当前行。
-            self._prices.setdefault(
-                (row.model_name, row.component, row.dimension), row
-            )
+            price_key = (row.model_name, row.component, row.dimension)
+            # 仓库按生效时间倒序返回，同维度首行才是当前有效行；历史行不
+            # 应因已被新版本覆盖而影响本次 PriceTable 的有效配置校验。
+            if price_key in self._prices:
+                continue
+            if row.unit not in {"per_1m_tokens", "per_call"}:
+                raise ValueError(f"非法价格单位: {row.unit}")
+            if row.dimension == "tool_call" and row.unit != "per_call":
+                raise ValueError("tool_call 维度必须使用 per_call")
+            if row.dimension != "tool_call" and row.unit == "per_call":
+                raise ValueError("Token 维度必须使用 per_1m_tokens")
+            currency_key = (row.model_name, row.component)
+            existing_currency = currencies.setdefault(currency_key, row.currency)
+            if existing_currency != row.currency:
+                raise ValueError(
+                    "同一模型和组件的有效价格快照不能混用币种"
+                )
+            self._prices[price_key] = row
 
     @classmethod
     def from_rows(cls, rows: list[dict[str, Any]]) -> "PriceTable":

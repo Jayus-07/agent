@@ -45,6 +45,63 @@ def test_price_snapshot_preserves_approval_and_rejects_invalid_source(monkeypatc
             build_price_snapshot(configs)
 
 
+def _approved_price_row(dimension: str, *, unit="per_1m_tokens", currency="CNY"):
+    return dict(
+        model_name="embedding-test", component="embedding", dimension=dimension,
+        price_per_unit="1.000000", unit=unit, currency=currency,
+        price_table_version="source-v1", source="source-registry",
+        effective_from="2020-01-01T00:00:00+00:00", approval_status="approved",
+        reviewer_1="original-a", reviewer_2="original-b",
+    )
+
+
+def test_price_snapshot_rejects_per_call_for_token_dimension(monkeypatch):
+    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
+
+    rows = [_approved_price_row("input", unit="per_call")]
+    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps(rows))
+
+    with pytest.raises(ValueError, match="Token 维度"):
+        build_price_snapshot({"embedding": {"model_name": "embedding-test"}})
+
+
+def test_price_table_rejects_per_call_for_token_dimension():
+    with pytest.raises(ValueError, match="Token 维度"):
+        pricing.PriceTable([
+            pricing.PriceLine(
+                "embedding-test", "embedding", "input", Decimal("1"),
+                unit="per_call", currency="CNY",
+            ),
+        ])
+
+
+def test_price_snapshot_rejects_mixed_currencies_for_same_component(monkeypatch):
+    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
+
+    rows = [
+        _approved_price_row("input", currency="CNY"),
+        _approved_price_row("cache_read", currency="USD"),
+    ]
+    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps(rows))
+
+    with pytest.raises(ValueError, match="不能混用币种"):
+        build_price_snapshot({"embedding": {"model_name": "embedding-test"}})
+
+
+def test_price_table_rejects_mixed_currencies_at_runtime_boundary():
+    with pytest.raises(ValueError, match="不能混用币种"):
+        pricing.PriceTable([
+            pricing.PriceLine(
+                "embedding-test", "embedding", "input", Decimal("1"),
+                currency="CNY",
+            ),
+            pricing.PriceLine(
+                "embedding-test", "embedding", "cache_read", Decimal("1"),
+                currency="USD",
+            ),
+        ])
+
+
 @pytest.mark.parametrize("mode,blocked", [("enforce", True), ("observe", False)])
 def test_budget_binding_failure_obeys_enforcement(monkeypatch, mode, blocked):
     from backend.config import llm

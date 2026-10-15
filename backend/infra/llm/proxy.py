@@ -469,8 +469,11 @@ def _get_fallback_llm() -> BaseChatModel | None:
             try:
                 logger.info(f"[LLM:resilience] 初始化备用模型: {fallback_model}")
                 _fallback_llm = _build_llm_for(fallback_model)
-            except Exception as e:
-                logger.warning(f"[LLM:resilience] 备用模型初始化失败: {e}")
+            except Exception as exc:
+                logger.warning(
+                    "[LLM:resilience] 备用模型初始化失败: %s",
+                    type(exc).__name__,
+                )
                 return None
     return _fallback_llm
 

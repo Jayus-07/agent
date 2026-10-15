@@ -770,34 +770,48 @@ class _TrackedEmbedding(Embeddings):
         self._refresh_if_changed()
         if not texts:
             return []
-        with self._model_call_scope():
-            return self._embed_documents(texts)
+        return self._embed_documents(texts)
 
     def _embed_documents(self, texts: List[str]) -> List[List[float]]:
         """批量向量化（索引主路径）。
 
         R1-A 只对检索期的 query 向量做请求级复用：embed_documents 是离线/
-        索引路径，一次调用的入参天然去重（chunker 已按 chunk 聚合），且批量
-        语义由 inner 客户端按 provider 上限二次切分——在此改动批内去重会
-        改变批边界与索引吞吐。此处只做计数与出站观测，行为与改动前一致。
+        索引路径，一次调用的入参天然去重。云端按 inner 客户端真实 chunk_size
+        显式拆批，每个 Provider 子批次分别预占并结算，避免内层自动拆批少记调用。
         """
-        t0 = time.monotonic()
-        try:
-            result = self._inner.embed_documents(texts)
-            # DashScope Cloud 模式可能返回 usage；本地模型没有
-            total_tokens = self._estimate_tokens(texts)
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            self._record(total_tokens, len(texts), elapsed_ms)
-            self._emit_call("documents", elapsed_ms)
-            self._account_documents(len(texts), elapsed_ms)
-            return result
-        except Exception:
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            # P1-A：失败同样必须留用量行（token 记 0，不虚构消费）
-            self._record(None, len(texts), elapsed_ms, status="error")
-            self._emit_call("documents", elapsed_ms, status="error")
-            self._account_documents(len(texts), elapsed_ms)
-            raise
+        if self._provider == "cloud":
+            # 当前云端客户端是 OpenAIEmbeddings；chunk_size 是它实际使用的
+            # HTTP 请求批大小。未知客户端退化为单条，确保每次 scope 至多
+            # 包含一个输入，不把未声明的内部拆批算成一次预算调用。
+            try:
+                provider_batch_size = max(1, int(getattr(self._inner, "chunk_size", 1)))
+            except (TypeError, ValueError):
+                provider_batch_size = 1
+        else:
+            provider_batch_size = max(1, len(texts))
+
+        result: list[list[float]] = []
+        for start in range(0, len(texts), provider_batch_size):
+            batch = texts[start:start + provider_batch_size]
+            t0 = time.monotonic()
+            with self._model_call_scope():
+                try:
+                    batch_result = self._inner.embed_documents(batch)
+                except Exception:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    # 失败可能已由供应商处理；不虚构 token，转待对账。
+                    self._record(None, len(batch), elapsed_ms, status="error")
+                    self._emit_call("documents", elapsed_ms, status="error")
+                    self._account_documents(len(batch), elapsed_ms)
+                    raise
+
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                total_tokens = self._estimate_tokens(batch)
+                self._record(total_tokens, len(batch), elapsed_ms)
+                self._emit_call("documents", elapsed_ms)
+                self._account_documents(len(batch), elapsed_ms)
+                result.extend(batch_result)
+        return result
 
     def _account_documents(self, count: int, elapsed_ms: float) -> None:
         """把一次批量出站计入请求总账（成功/失败都计，出站次数口径）。"""

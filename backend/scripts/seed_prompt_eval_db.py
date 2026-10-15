@@ -107,6 +107,7 @@ def build_price_snapshot(configs: dict) -> list[dict]:
     }
     now = datetime.now(timezone.utc)
     seen = set()
+    currencies: dict[tuple[str, str], str] = {}
     for row in rows:
         if not isinstance(row, dict) or (row.get("model_name"), row.get("component")) not in required:
             raise ValueError("价格快照包含未绑定模型")
@@ -136,6 +137,16 @@ def build_price_snapshot(configs: dict) -> list[dict]:
         row["price_per_unit"] = Decimal(str(row.get("price_per_unit")))
         if row.get("unit") not in {"per_1m_tokens", "per_call"} or row.get("currency") not in {"CNY", "USD"}:
             raise ValueError("价格快照的单位或币种不受支持")
+        dimension = str(row.get("dimension") or "")
+        unit = row["unit"]
+        if dimension == "tool_call" and unit != "per_call":
+            raise ValueError("tool_call 维度必须使用 per_call")
+        if dimension != "tool_call" and unit == "per_call":
+            raise ValueError("Token 维度必须使用 per_1m_tokens")
+        currency_key = (str(row["model_name"]), str(row["component"]))
+        existing_currency = currencies.setdefault(currency_key, row["currency"])
+        if existing_currency != row["currency"]:
+            raise ValueError("同一模型和组件的价格快照不能混用币种")
     from backend.infra.llm.pricing import PriceTable
 
     table = PriceTable.from_rows(rows)
