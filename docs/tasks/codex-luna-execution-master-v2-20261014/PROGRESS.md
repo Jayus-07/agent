@@ -1,41 +1,52 @@
 # PROGRESS
 
-- 更新时间：2026-10-15。
-- 当前阶段：A / Conversation-first 主助手；按 EXECUTION MASTER V2 继续跟踪 C、D 阻断。
-- 最新基线：main `5df8b0603355566e7fa1eb87906129c11a8211ab`（已含 PR #61、#70）；分支：`codex/main-assistant-conversation-first-20261014`；HEAD：`f11c48a1451e723b69316be134f725760d6923bd`。
-- 状态：A 的 T1/T2 与必需 GitHub CI 已通过，PR #69 仍 Draft/BLOCKED。真实 Provider 生成、实际 APISIX/浏览器 T3 未验证；未使用额外付费额度。
+更新时间：2026-10-15（Asia/Shanghai）
 
-## A 实现
+## 当前状态
 
-- `/chat/agent*`、`/chat/customer-service*` 和对应 `/memory/*` 路由由服务端注册路径绑定产品身份；不信任 body 的用户、产品、域提示；产品入口要求可信用户与租户。
-- Session、stream、memory user、幂等键均按产品隔离；Resume 与 Abort 校验同一可信用户/租户；能力候选和执行点继续双重检查产品范围。
-- 主助手现有 general_chat 路径接管明确的一般概念、地点、日常对话与无活跃域的短追问；避免进入分类/embedding 路由；客服及内部业务语义仍保留原路由。
-- 普通 `/chat/*` 共享入口按公共产品处理并禁止持久记忆；主助手与客服前端改用产品专属 Chat/Memory API。
-- 未修改旅游实现、`frontend-admin/`、退款业务和生产/共享数据库。
+- 阶段：A / Conversation-first 主助手，正在执行 UNBLOCK-A-T3。
+- PR：[ #69 ](https://github.com/Jayus-07/agent/pull/69) 保持 Draft / BLOCKED，不是 MERGE_READY。
+- 最新 main/base：`b823e93ccd121666e064a53959828acd980838fc`。
+- 分支：`codex/main-assistant-conversation-first-20261014`。
+- 本轮代码修复提交：`247c387b1252d61352c9cbbed6ed709b50f7dae6`。
+- 当前没有共享/生产数据库访问；没有旅游或管理端源码修改；没有合并 main。
 
-## 最新 HEAD 验证
+## A 实现摘要
 
-- `git fetch origin main` 获取 `5df8b0603355566e7fa1eb87906129c11a8211ab`；`git rebase origin/main` 无冲突，PR #69 以精确 `--force-with-lease` 更新到 `f11c48a1451e723b69316be134f725760d6923bd`。与已合并 #70 的变更文件无重叠。
-- 后端八个定向测试文件命令：`D:/Python/python.exe -m pytest backend/tests/api/test_chat_memory_persistence.py backend/tests/api/test_chat_stream_hardening.py backend/tests/api/test_memory_routes.py backend/tests/orchestration/graph/test_main_conversation_fast_path.py backend/tests/orchestration/graph/test_stream_events_flow.py backend/tests/orchestration/router/test_product_scope.py backend/tests/orchestration/router/test_routing_engine.py backend/tests/orchestration/test_request_context.py -q --no-cov -m "not pg"`；第一次默认误连 `localhost:5432`（无密码）为 98 passed / 13 setup errors；随后改用一次性 PostgreSQL `agent_a_test` 隔离库复跑，111 passed，容器已自动清理。
-- 主前端 Chat/Memory/SSE：`npm run test -- --run src/api/chat.test.ts src/api/memory.test.ts src/hooks/useSSE.test.tsx`，6 passed；`npx tsc --noEmit` 通过。
-- 客服前端 Chat/Memory：`npm run test -- --run src/api/chat.test.ts src/api/memory.test.ts`，3 passed；`npx tsc --noEmit` 通过。
-- 修改后端模块 `compileall`、`git diff --check origin/main...HEAD` 通过。
-- GitHub CI：Secret Scan run `38687262256`、Contract Quality Check run `38687262252`、RAG PR Smoke run `38687262263` 均 success；真实 API job 按门禁 skipped。当前 Review thread 0，submitted review 0。
+- 主助手、客服和公共聊天入口身份由服务端注册路径固定，忽略 body 自报用户/产品/域提示。
+- Session、stream、memory user 与幂等范围按产品隔离；Resume/Abort 校验可信用户/租户；Tool 候选与执行点双重校验产品权限。
+- 主助手一般概念、地点、日常对话和无活跃域短追问使用 general_chat 快路径；客服及业务语义保留原有路由。
+- 普通 `/chat/*` 公共入口不写持久记忆；主助手与客服前端使用产品专属 Chat/Memory API。
 
-## C3 SQL / Memory 已有证据
+## 本轮发现并修复
 
-- PR #69 较早 HEAD 上完成了 235 个 SQL/Memory 定向测试；隔离 SQL PostgreSQL 16 passed，确认只读身份 SELECT=true / INSERT=false；L3 pgvector 检索与删除屏障 17 passed；SQL HTTP 授权隔离测试 10 passed。
-- 这些是 A worktree 的 T2 证据，未在本次 rebase 后重跑，也不代表最新 main 集成或真实 APISIX/浏览器 T3。
+- 内置浏览器 T3 发现 general_chat 在 LLM 连接失败时把固定静态话术写成 `final_answer`，导致 SSE `done`、错误 Trace 记为 success，并可能保存错误 Memory。
+- 修复提交 `247c387`：移除静态成功 fallback，让异常进入 GraphRunner 错误终态；HTTPX 网络错误映射为 `UPSTREAM_UNAVAILABLE`，错误日志仅记异常类型。
+- `D:/Python/python.exe -m py_compile` 检查本轮 4 个 Python 文件通过。
+- `D:/Python/python.exe -m pytest backend/tests/orchestration/context/test_continuation_routing.py backend/tests/test_error_protocol.py -q --no-cov`：55 passed。
+- `git diff --check`：通过。
 
-## Clash / 真实 Provider 阻断
+## 隔离环境与浏览器证据
 
-- Windows shell 未导出 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`；HTTPX 直连无认证 OpenAI `/v1/models` 为 `ConnectError`，临时指向 `http://127.0.0.1:7897` 得到 HTTP 401。401 只证明 API host/TLS 可达，不是模型请求成功。
-- 当前 Docker `agent-app-1` 未配置 proxy 环境变量；历史无认证探测在默认路径及 `host.docker.internal:7897` 路径均得到 HTTP 401。未触发模型生成或计费，也未持久修改代理配置。
-- A 的真实 Provider、APISIX/浏览器成功/失败路径尚未验证；真实 Provider 调用需先获测试额度授权。Admin 专属前端迁移由 Admin 会话处理，本任务未修改 `frontend-admin/`。
+- Compose namespace：`agent-pr69t3-42baf1bfbd`。独立 PG/Redis/Auth-Redis、API `127.0.0.1:18050`、APISIX `127.0.0.1:19050`、Next `127.0.0.1:13150`。PG 无宿主发布端口；独立测试卷、网络和容器。用户的 `:3200` 管理端标签未操作。
+- 新建的合成 viewer 经内置浏览器实际登录，路径为 Next BFF → APISIX → FastAPI；`/auth/login`、预算与记忆受保护请求成功。
+- 一般问答在无 Provider 凭据条件下返回 `UPSTREAM_UNAVAILABLE`；浏览器显示安全错误和 Trace ID，没有静态成功答案。Trace `303914f3bc13` 在隔离 PG 的 `trace_store` 状态为 `error`，耗时 14,007 ms。
+- 刷新后仍为已登录状态且回到新对话；这不等于 SSE 断点续传通过。
+- 隔离 Registry 显示 7 个 provider、8 个模型、0 份凭据；本轮无本地 Ollama 推理、无真实远程模型生成、无付费模型调用。provider 的真实 `done.answer` 仍未验证。
 
-## 队列与下一步
+## 未通过或未验证的 T3
 
-- B2 PR #70 已由用户授权合并，merge commit `5df8b0603355566e7fa1eb87906129c11a8211ab`；sandbox 退款申请及隔离 PG/UI 证据留在 PR #70。
-- C1 PR #66 由原 owner 继续，PDF Worker SIGKILL 仍阻断最终 IndexRun/Search；不接管。
-- C2 PR #52 的严格质量 Gate Top-1 为 0.7143（门槛 0.80），费用/预算归因未验证；现有付费额度耗尽，保持 BLOCKED，不降低门槛、不触发新调用。
-- A 真实 Provider T3、C1 PDF 终态、C2 质量及费用门禁解除后，再推进 D 的统一真实 API/SSE/PG/Trace/浏览器验收；没有凭据或授权额度时保持 BLOCKED。
+- 真实 Provider 推理、`done.answer` 及 usage/cost 归因：BLOCKED（隔离 Registry 无凭据）。
+- RAG 权限内引用 / 缺证据拒答、隔离业务库合法只读 SQL 与写拒绝、跨用户/租户越权、跨产品业务执行拒绝、取消与 SSE 中断恢复：本轮未完成 T3。
+- 旧提交上已有 A T1/T2 测试与 GitHub CI 证据（111 个后端定向测试、主前端 6 项、客服前端 3 项）；它们不替代本轮真实模型与上述 T3。
+
+## GitHub CI / Review
+
+- 当前代码 HEAD `247c387b1252d61352c9cbbed6ed709b50f7dae6`：Secret Scan run `38723338672` SUCCESS；Contract Quality Check run `38723338659` 和 RAG PR Smoke run `38723338617` 在本文件更新时仍运行中；真实 API 评测 job 按门禁 skipped。
+- Review threads 0、submitted reviews 0；需在 CI 完成后复核本次新增 Diff 和最新状态。
+
+## 阻断与队列
+
+- A 仍 BLOCKED：要在隔离 Next/API 栈验证真实模型，需要安全地向隔离 Provider Registry 注入仅供测试的远程凭据；不能读取/写入共享生产数据库或把密钥发到聊天。
+- B 的 PR #61/#70 已由用户授权合并。C1 PR #66 仍由原会话负责；C2 PR #52 的严格质量/付费额度门禁仍未解除。旅游、管理端维持其他会话所有权。
+- 继续完成不依赖远程模型凭据的 T3；外部阻断项解决后继续 A，再按协议推进 C/D 的无冲突任务。
