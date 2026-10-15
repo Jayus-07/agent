@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   createTrip: vi.fn(),
+  fetchTrip: vi.fn(),
   saveTrip: vi.fn(),
   setMessages: vi.fn(),
   stream: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('@/api/travel', () => ({
 vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
   createTravelTripV2: mocks.createTrip,
+  fetchTravelTripV2: mocks.fetchTrip,
   saveTravelTripDocumentV2: mocks.saveTrip,
 }))
 vi.mock('@/components/travel/useTravelConversation', () => ({
@@ -30,11 +32,13 @@ import TravelChatPage from './TravelChatPage'
 describe('V2 旅游规划对话', () => {
   beforeEach(() => {
     mocks.stream.mockReset()
+    mocks.fetchTrip.mockReset()
     mocks.setMessages.mockReset().mockImplementation((update) => {
       const next = typeof update === 'function' ? update(mocks.messages) : update
       mocks.messages.splice(0, mocks.messages.length, ...next)
     })
     mocks.messages.splice(0)
+    window.history.replaceState({}, '', '/travel/chat')
     mocks.stream.mockImplementation(async function* () {
       yield {
         event: 'done',
@@ -62,6 +66,7 @@ describe('V2 旅游规划对话', () => {
   })
 
   it('将真实规划 SSE 完成结果转换并创建 V2 正式行程', async () => {
+    window.history.replaceState({}, '', '/travel/chat?campaign=autumn&prompt=keep-me')
     mocks.createTrip.mockImplementation(async (input: { title: string; document: { schema_version: number } }) => ({
       trip_id: 'v2-trip-123', title: input.title, status: 'active', revision: 1,
       document: input.document, source_template_id: null, source_template_version: null,
@@ -73,13 +78,19 @@ describe('V2 旅游规划对话', () => {
       root.render(createElement(TravelChatPage, { initialPrompt: '帮我安排杭州一日游' }))
       await Promise.resolve()
     })
-    expect(new URL(window.location.href).searchParams.get('conversation_id')).toMatch(/^travel-/)
+    const initialUrl = new URL(window.location.href)
+    expect(initialUrl.searchParams.get('conversation_id')).toMatch(/^travel-/)
     await act(async () => {
       container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
     expect(mocks.createTrip).toHaveBeenCalledOnce()
+    const savedUrl = new URL(window.location.href)
+    expect(savedUrl.searchParams.get('trip_id')).toBe('v2-trip-123')
+    expect(savedUrl.searchParams.get('conversation_id')).toBe(initialUrl.searchParams.get('conversation_id'))
+    expect(savedUrl.searchParams.get('campaign')).toBe('autumn')
+    expect(savedUrl.searchParams.get('prompt')).toBe('keep-me')
     expect(mocks.createTrip.mock.calls[0][0].document.schema_version).toBe(2)
     const savedMessage = mocks.setMessages.mock.calls
       .map(([update]) => typeof update === 'function' ? update([]) : update)
@@ -122,8 +133,66 @@ describe('V2 旅游规划对话', () => {
 
     expect(mocks.createTrip).toHaveBeenCalledTimes(2)
     expect(mocks.createTrip.mock.calls[1]).toEqual(originalRequest)
+    expect(new URL(window.location.href).searchParams.get('trip_id')).toBe('v2-trip-replayed')
     expect(container.querySelector('a[href^="/travel/itineraries/v2-trip-replayed?conversation_id="]')).not.toBeNull()
     expect(container.textContent).toContain('行程已自动保存')
+    await act(async () => root.unmount())
+  })
+
+  it('清除本地缓存后仍通过 URL Trip ID 恢复正式行程', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000071'
+    const savedTrip = {
+      trip_id: tripId, title: '杭州正式行程', status: 'active', revision: 3,
+      source_template_id: null, source_template_version: null,
+      created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
+      document: {
+        schema_version: 2,
+        brief: { origin: '上海', destination: '杭州', timezone: 'Asia/Shanghai', start_date: '2026-12-01', day_count: 1, travelers: { adults: 1, children: 0 }, budget: { amount: 3000, currency: 'CNY' }, pace: 'relaxed', interests: [], requirements: [] },
+        selections: [], days: [], arrangements: { lodgings: [], intercity_trains: [] },
+        totals: { currency: 'CNY', estimated_cost: null, transit_min: 0, distance_m: null },
+        health: { status: 'ok', issues: [] },
+      },
+    }
+    window.localStorage.clear()
+    window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}&campaign=shared-link`)
+    mocks.fetchTrip.mockResolvedValue(savedTrip)
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialTripId: tripId }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(mocks.fetchTrip).toHaveBeenCalledWith(tripId)
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('正式行程对话 · Revision v3')
+    expect(new URL(window.location.href).searchParams.get('trip_id')).toBe(tripId)
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(`travel-v2-trip-${tripId}`)
+    expect(new URL(window.location.href).searchParams.get('campaign')).toBe('shared-link')
+    await act(async () => root.unmount())
+  })
+
+  it('URL 行程读取失败时只允许重试读取，不创建第二个 Trip', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000072'
+    window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}`)
+    mocks.fetchTrip.mockRejectedValue(new Error('network unavailable'))
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialTripId: tripId }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(container.textContent).toContain('当前不会创建或覆盖行程')
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    await act(async () => {
+      container.querySelector('button')?.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    expect(new URL(window.location.href).searchParams.get('trip_id')).toBe(tripId)
     await act(async () => root.unmount())
   })
 
