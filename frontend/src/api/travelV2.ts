@@ -1,4 +1,10 @@
-import { request, type RequestOptions } from '@/api/client'
+import {
+  apiErrorFromEnvelope,
+  fetchAnonymousRaw,
+  fetchRaw,
+  request,
+  type RequestOptions,
+} from '@/api/client'
 
 /** 旅游 V2 独立数据契约；与旧 Itinerary / PlanState 不互转。 */
 
@@ -269,7 +275,9 @@ export function fetchTravelTripsV2(): Promise<{ trips: TravelTripV2[] }> {
 
 export function fetchTravelTripV2(tripId: string, options: TravelV2ReadOptions = {}): Promise<TravelTripV2> {
   const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}`
-  return options.signal ? request(path, { signal: options.signal }) : request(path);
+  return options.signal
+    ? request<TravelTripV2>(path, { signal: options.signal })
+    : request<TravelTripV2>(path);
 }
 
 export function fetchTravelTripRevisionsV2(tripId: string, options: TravelV2ReadOptions = {}): Promise<{
@@ -277,7 +285,9 @@ export function fetchTravelTripRevisionsV2(tripId: string, options: TravelV2Read
   revisions: TravelTripRevisionV2[];
 }> {
   const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}/revisions`
-  return options.signal ? request(path, { signal: options.signal }) : request(path);
+  return options.signal
+    ? request<{ trip_id: string; revisions: TravelTripRevisionV2[] }>(path, { signal: options.signal })
+    : request<{ trip_id: string; revisions: TravelTripRevisionV2[] }>(path);
 }
 
 export function archiveTravelTripV2(tripId: string): Promise<{ trip_id: string; status: 'archived'; saved: true }> {
@@ -304,6 +314,98 @@ export function applyTravelTripEditV2(tripId: string, input: {
   operation: TripEditOperationV2;
 }, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2; status: "active" }> {
   return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/edits`, input, key);
+}
+
+export type TravelAIEditStatusV2 =
+  | 'read_only' | 'clarify' | 'unsupported' | 'processing' | 'unknown'
+  | 'pending_resolution' | 'saved' | 'succeeded' | 'failed' | 'cancelled' | 'expired'
+  | 'consumed';
+
+export interface TravelAIEditResolutionV2 {
+  resolution_id: string;
+  label: string;
+  proposed_start_time?: string;
+}
+
+export interface TravelAIPendingResolutionV2 {
+  pending_id: string;
+  trip_id: string;
+  base_revision: number;
+  affected_item_ids: string[];
+  conflict_codes: string[];
+  allowed_resolutions: TravelAIEditResolutionV2[];
+  expires_at: string;
+  status: string;
+}
+
+export interface TravelAIEditResponseV2 {
+  status: TravelAIEditStatusV2;
+  saved: boolean;
+  trip_id: string;
+  operation_key: string;
+  base_revision: number;
+  new_revision?: number;
+  revision?: number;
+  pending_id?: string;
+  pending_resolution?: TravelAIPendingResolutionV2;
+  conflicts?: Array<{
+    conflict_code: string;
+    message: string;
+    affected_item_ids: string[];
+    allowed_resolutions: TravelAIEditResolutionV2[];
+  }>;
+  clarification?: string;
+  message?: string;
+  code?: string;
+}
+
+export function applyTravelTripAIEditV2(
+  tripId: string,
+  input: { expected_revision: number; user_message: string; conversation_id: string },
+  key: string,
+  options: TravelV2ReadOptions = {},
+): Promise<TravelAIEditResponseV2> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/ai-edits`, input, key, options);
+}
+
+export function fetchTravelTripAIEditStatusV2(
+  tripId: string, operationKey: string, options: TravelV2ReadOptions = {},
+): Promise<TravelAIEditResponseV2> {
+  const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}/ai-edits/${encodeURIComponent(operationKey)}`;
+  return options.signal
+    ? request<TravelAIEditResponseV2>(path, { signal: options.signal })
+    : request<TravelAIEditResponseV2>(path);
+}
+
+export function fetchTravelTripAIPendingResolutionV2(
+  tripId: string, pendingId: string, options: TravelV2ReadOptions = {},
+): Promise<TravelAIEditResponseV2> {
+  const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}/ai-edits/pending/${encodeURIComponent(pendingId)}`;
+  return options.signal
+    ? request<TravelAIEditResponseV2>(path, { signal: options.signal })
+    : request<TravelAIEditResponseV2>(path);
+}
+
+export function resolveTravelTripAIPendingResolutionV2(
+  tripId: string,
+  pendingId: string,
+  resolutionId: string,
+  key: string,
+  options: TravelV2ReadOptions = {},
+): Promise<TravelAIEditResponseV2> {
+  return post(
+    `/api/travel/v2/trips/${encodeURIComponent(tripId)}/ai-edits/pending/${encodeURIComponent(pendingId)}/resolve`,
+    { resolution_id: resolutionId }, key, options,
+  );
+}
+
+export function cancelTravelTripAIPendingResolutionV2(
+  tripId: string, pendingId: string, options: TravelV2ReadOptions = {},
+): Promise<TravelAIEditResponseV2> {
+  return post(
+    `/api/travel/v2/trips/${encodeURIComponent(tripId)}/ai-edits/pending/${encodeURIComponent(pendingId)}/cancel`,
+    {}, undefined, options,
+  );
 }
 
 export function fetchTravelTemplatesV2(): Promise<{ templates: TravelTemplateV2[] }> {
@@ -370,6 +472,154 @@ export interface TravelTripRevisionV2 {
   change_summary: string;
   actor_id: string;
   created_at: string;
+}
+
+export interface CreatedTravelTripShareV2 {
+  share_id: string;
+  trip_id: string;
+  revision: number;
+  expires_at: string;
+  created_at: string;
+  share_url: string;
+}
+
+export interface PublicTravelTripShareV2 {
+  share_id: string;
+  revision: number;
+  expires_at: string;
+  title: string;
+  brief: {
+    destination: string;
+    timezone: string;
+    start_date: string | null;
+    day_count: number;
+  };
+  days: Array<{
+    date: string | null;
+    title: string;
+    items: Array<{
+      kind: 'place' | 'activity';
+      activity_type: 'meal' | 'rest' | 'shopping' | 'free_time' | 'custom' | null;
+      title: string;
+      start_time: string | null;
+      duration_min: number;
+      place: { name: string; address: string | null; lat: number | null; lng: number | null } | null;
+    }>;
+    legs: Array<{
+      from_title: string;
+      to_title: string;
+      selected_mode: 'walk' | 'drive' | 'transit' | 'taxi';
+      duration_min: number | null;
+      distance_m: number | null;
+    }>;
+  }>;
+  arrangements: {
+    lodgings: Array<{
+      name: string;
+      address: string | null;
+      check_in: string;
+      check_out: string;
+      booking_status: 'not_booked';
+    }>;
+    intercity_trains: Array<{
+      train_code: string;
+      travel_date: string;
+      departure_station: string;
+      arrival_station: string;
+      departure_time: string;
+      arrival_time: string;
+      duration_min: number;
+      booking_status: 'not_booked';
+    }>;
+  };
+}
+
+export function createTravelTripShareV2(
+  tripId: string,
+  input: { revision: number; expires_in_days: number },
+  key: string,
+): Promise<CreatedTravelTripShareV2> {
+  return request<CreatedTravelTripShareV2>(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/shares`, {
+    method: 'POST',
+    body: input,
+    headers: { 'Idempotency-Key': key },
+  });
+}
+
+export function revokeTravelTripShareV2(tripId: string, shareId: string): Promise<void> {
+  return request<void>(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/shares/${encodeURIComponent(shareId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function fetchPublicTravelTripShareV2(
+  shareId: string,
+  token: string,
+): Promise<PublicTravelTripShareV2> {
+  const response = await fetchAnonymousRaw(
+    `/api/travel/v2/shares/${encodeURIComponent(shareId)}`,
+    { method: 'GET', cache: 'no-store', headers: { 'X-Travel-Share-Token': token } },
+  );
+  if (!response.ok) {
+    throw apiErrorFromEnvelope(await response.json().catch(() => ({})), response.status);
+  }
+  return response.json() as Promise<PublicTravelTripShareV2>;
+}
+
+export interface TravelICSDownloadV2 {
+  blob: Blob;
+  filename: string;
+}
+
+export async function downloadTravelTripRevisionICSv2(
+  tripId: string,
+  revision: number,
+): Promise<TravelICSDownloadV2> {
+  const response = await fetchRaw(
+    `/api/travel/v2/trips/${encodeURIComponent(tripId)}/revisions/${revision}/export.ics`,
+    { method: 'GET', cache: 'no-store', headers: { Accept: 'text/calendar' } },
+  );
+  return readTravelICSDownload(response);
+}
+
+export async function downloadSharedTravelTripICSv2(
+  shareId: string,
+  token: string,
+): Promise<TravelICSDownloadV2> {
+  const response = await fetchAnonymousRaw(
+    `/api/travel/v2/shares/${encodeURIComponent(shareId)}/export.ics`,
+    {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { Accept: 'text/calendar', 'X-Travel-Share-Token': token },
+    },
+  );
+  return readTravelICSDownload(response);
+}
+
+async function readTravelICSDownload(response: Response): Promise<TravelICSDownloadV2> {
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw apiErrorFromEnvelope(payload, response.status);
+  }
+  return {
+    blob: await response.blob(),
+    filename: travelICSFilename(response.headers.get('content-disposition')),
+  };
+}
+
+function travelICSFilename(disposition: string | null): string {
+  const extended = disposition?.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1]
+  const simple = disposition?.match(/filename\s*=\s*"?([^";]+)"?/i)?.[1]
+  const encoded = (extended ?? simple ?? '').trim().replace(/^"|"$/g, '')
+  let filename = '旅行行程.ics'
+  try {
+    if (encoded) filename = decodeURIComponent(encoded)
+  } catch {
+    if (simple) filename = simple.trim()
+  }
+  if (!filename || /[\\/\u0000-\u001f\u007f]/.test(filename)) return '旅行行程.ics'
+  return filename.toLowerCase().endsWith('.ics') ? filename : `${filename}.ics`
 }
 
 export interface TravelTemplateV2 {
