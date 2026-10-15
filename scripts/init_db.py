@@ -279,6 +279,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
     # Trip 绑定的 AI 修改原始请求指纹和操作状态，支持模型调用前幂等占位。
     "094_travel_v2_ai_edit_requests.sql": "memory",
+    # 健康探测来源；保留 095/096 供 BE-4C / BE-4D 迁移使用。
+    "097_llm_model_health_probe_source.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -292,6 +294,7 @@ ORDER_LAST = [
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
     "094_travel_v2_ai_edit_requests.sql",
+    "097_llm_model_health_probe_source.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"

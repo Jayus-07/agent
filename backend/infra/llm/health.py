@@ -7,7 +7,8 @@
   chat     → 极短补全（"ping"，max_tokens=1）
   embedding→ 单条短文本 embed_query（一次性客户端，不动全局单例）
   rerank   → 两条短文本 rerank
-  vision/ocr → 只做 API 可用性探测（凭据 + 注册表），不真调 OCR
+  vision    → API 可用性探测（凭据 + 注册表）
+  ocr       → 仅管理员手动做最小上游调用；周期扫描不假报健康
 
 状态机（llm_model_health.status）：
   healthy / degraded / slow / rate_limited / auth_failed / timeout /
@@ -56,6 +57,7 @@ def _record(
     status: str,
     latency_ms: int,
     error: str,
+    probe_source: str = "scheduled",
 ) -> None:
     """写健康缓存（upsert；失败累加 consecutive_failures、成功清零）。
 
@@ -76,8 +78,8 @@ def _record(
                 INSERT INTO llm_model_health
                     (model_name, provider, model_kind, status,
                      last_checked_at, last_latency_ms, last_error,
-                     consecutive_failures)
-                VALUES (%s, %s, %s, %s, now(), %s, %s, %s)
+                     consecutive_failures, probe_source)
+                VALUES (%s, %s, %s, %s, now(), %s, %s, %s, %s)
                 ON CONFLICT (model_name) DO UPDATE SET
                     provider = EXCLUDED.provider,
                     model_kind = EXCLUDED.model_kind,
@@ -85,10 +87,12 @@ def _record(
                     last_checked_at = now(),
                     last_latency_ms = EXCLUDED.last_latency_ms,
                     last_error = EXCLUDED.last_error,
-                    consecutive_failures = EXCLUDED.consecutive_failures
+                    consecutive_failures = EXCLUDED.consecutive_failures,
+                    probe_source = EXCLUDED.probe_source
                 """,
                 (model_name, provider, model_kind, status,
-                 latency_ms, (error or "")[:500], 0 if not failed else -1),
+                 latency_ms, (error or "")[:500], 0 if not failed else -1,
+                 probe_source),
             )
             if failed:
                 # 失败：在上一轮计数基础上 +1（插入行则从 1 起）
@@ -106,8 +110,13 @@ def _record(
             "[ModelHealth] 健康缓存写入失败 model=%s", model_name, exc_info=True)
 
 
-def probe_model(model_name: str, model_kind: str | None = None) -> dict[str, Any]:
-    """探测单个模型，返回 {status, latencyMs, error}；结果落缓存。"""
+def probe_model(
+    model_name: str,
+    model_kind: str | None = None,
+    *,
+    probe_source: str = "scheduled",
+) -> dict[str, Any]:
+    """探测单个模型并落缓存；OCR 必须走真实上游手动探测。"""
     from backend.infra.llm import models as models_mod
 
     entry = models_mod.get_model_entry(model_name)
@@ -116,9 +125,19 @@ def probe_model(model_name: str, model_kind: str | None = None) -> dict[str, Any
 
     if entry is None:
         _record(model_name, provider, kind, "model_not_found", 0,
-                "模型未在注册表登记")
+                "模型未在注册表登记", probe_source)
         return {"status": "model_not_found", "latencyMs": 0,
-                "error": "模型未在注册表登记"}
+                "error": "模型未在注册表登记", "probeSource": probe_source}
+
+    if kind == "ocr":
+        message = "OCR 上游调用需由管理员手动验证；凭据已配置不代表模型可调用"
+        _record(model_name, provider, kind, "unknown", 0, message, probe_source)
+        return {
+            "status": "unknown",
+            "latencyMs": 0,
+            "error": message,
+            "probeSource": probe_source,
+        }
 
     t0 = time.monotonic()
     error = ""
@@ -136,13 +155,150 @@ def probe_model(model_name: str, model_kind: str | None = None) -> dict[str, Any
         error = f"{type(exc).__name__}: {exc}"
     latency_ms = int((time.monotonic() - t0) * 1000)
     status = classify_status(latency_ms, error)
-    _record(model_name, provider, kind, status, latency_ms, error)
+    _record(model_name, provider, kind, status, latency_ms, error, probe_source)
     logger.info(
         "[ModelHealth] probe model=%s kind=%s status=%s latency=%sms%s",
         model_name, kind, status, latency_ms,
         f" error={error[:120]}" if error else "",
     )
-    return {"status": status, "latencyMs": latency_ms, "error": error}
+    return {
+        "status": status,
+        "latencyMs": latency_ms,
+        "error": error,
+        "probeSource": probe_source,
+    }
+
+
+async def probe_ocr_model(model_name: str) -> dict[str, Any]:
+    """管理员手动做一次低成本上游 OCR 模型访问验证。
+
+    最小文本请求只验证模型名和凭据可调用，不代表图片识别质量已验证。
+    只持久化安全的中文结论，不保存厂商原始报文或凭据。
+    """
+    import asyncio
+
+    from backend.infra.llm import credentials as credentials_mod
+    from backend.infra.llm import models as models_mod
+    from backend.services import provider_probe
+
+    entry = models_mod.get_model_entry(model_name)
+    provider = str((entry or {}).get("provider") or "")
+    if entry is None:
+        message = "模型未在注册表登记"
+        await asyncio.to_thread(
+            _record, model_name, provider, "ocr", "model_not_found", 0,
+            message, "manual",
+        )
+        return {
+            "status": "model_not_found", "latencyMs": 0,
+            "error": message, "probeSource": "manual",
+        }
+
+    kind = models_mod.model_kind_of(entry)
+    if kind != "ocr":
+        return await asyncio.to_thread(
+            probe_model, model_name, kind, probe_source="manual",
+        )
+
+    t0 = time.monotonic()
+    try:
+        provider_entry = models_mod.get_provider_entry(provider) or {}
+        credentials = credentials_mod.resolve_credentials(
+            provider, model_name=model_name,
+        )
+        base_url = credentials.base_url or provider_entry.get("base_url") or ""
+        driver = str(
+            provider_entry.get("driver")
+            or models_mod.get_provider_driver(provider)
+            or "openai"
+        )
+        network_scope = str(provider_entry.get("network_scope") or "public")
+        extra_headers = credentials.resolved_headers(
+            provider_entry.get("extra_headers") or {},
+        )
+
+        if not base_url:
+            status = "provider_unreachable"
+            message = "供应商未配置服务地址，请先完善供应商配置"
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+        elif driver != "ollama" and not credentials.api_key:
+            status = "auth_failed"
+            message = "供应商未配置 API Key"
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+        else:
+            result = await provider_probe.probe_provider(
+                driver=driver,
+                base_url=base_url,
+                api_key=credentials.api_key or "",
+                model_name=model_name,
+                upstream_model_name=(
+                    str(entry.get("upstream_name") or "").strip() or model_name
+                ),
+                network_scope=network_scope,
+                extra_headers=extra_headers,
+                model_kind="ocr",
+            )
+            elapsed_ms = sum(step.elapsed_ms for step in result.steps)
+            if result.ok:
+                status = "healthy"
+                message = "上游已成功调用该模型；图片识别效果尚未验证"
+            else:
+                failed_step = next(
+                    (step for step in reversed(result.steps)
+                     if step.status == provider_probe.STATUS_FAIL),
+                    None,
+                )
+                status = _ocr_probe_failure_status(
+                    failed_step.reason if failed_step else None,
+                )
+                message = (
+                    failed_step.summary if failed_step
+                    else "上游模型调用失败，请检查供应商配置"
+                )
+    except credentials_mod.UnknownProviderError:
+        status = "degraded"
+        message = "模型关联的供应商未登记，请检查供应商配置"
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+    except Exception as exc:
+        # 不把异常原文（可能含 URL 或上游响应）存进健康表、返回浏览器或日志。
+        logger.warning(
+            "[ModelHealth] OCR 手动探测失败 model=%s error_type=%s",
+            model_name, type(exc).__name__,
+        )
+        status = "degraded"
+        message = "上游模型调用未完成，请检查服务地址、协议和模型权限"
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+
+    await asyncio.to_thread(
+        _record,
+        model_name,
+        provider,
+        kind,
+        status,
+        elapsed_ms,
+        "" if status == "healthy" else message,
+        "manual",
+    )
+    return {
+        "status": status,
+        "latencyMs": elapsed_ms,
+        "error": "" if status == "healthy" else message,
+        "probeSource": "manual",
+    }
+
+
+def _ocr_probe_failure_status(reason: str | None) -> str:
+    """将供应商探测原因映射到健康表既有枚举。"""
+    return {
+        "api_key": "auth_failed",
+        "model_name": "model_not_found",
+        "timeout": "timeout",
+        "rate_limited": "rate_limited",
+        "unreachable": "provider_unreachable",
+        "blocked": "provider_unreachable",
+        "invalid_url": "provider_unreachable",
+        "base_url": "provider_unreachable",
+    }.get(reason or "", "degraded")
 
 
 def _probe_chat(model_name: str) -> None:
@@ -232,6 +388,9 @@ def scan_all_models() -> dict[str, Any]:
     for entry in models_mod.get_available_models():
         name = str(entry.get("name") or "")
         if not name:
+            continue
+        if models_mod.model_kind_of(entry) == "ocr":
+            results[name] = "skip(manual-only)"
             continue
         provider = str(entry.get("provider") or "")
         if provider and provider != "ollama":

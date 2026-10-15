@@ -693,7 +693,7 @@ class ModelConfigService:
             result = await session.execute(text(
                 "SELECT model_name, provider, model_kind, status, "
                 "last_checked_at, last_latency_ms, last_error, "
-                "consecutive_failures FROM llm_model_health"
+                "consecutive_failures, probe_source FROM llm_model_health"
             ))
             rows = list(result.mappings())
             break
@@ -710,6 +710,7 @@ class ModelConfigService:
                 ),
                 "lastError": str(r["last_error"] or ""),
                 "consecutiveFailures": int(r["consecutive_failures"] or 0),
+                "probeSource": str(r["probe_source"] or "scheduled"),
             }
             for r in rows
         ]
@@ -1333,6 +1334,17 @@ class ModelConfigService:
                     allow_legacy_specialized_migration=True,
                     migration_base_url=base_url,
                 )
+            # 上游凭据、地址、协议或请求头变更后，之前的人工探测不再代表当前配置。
+            await session.execute(
+                text(
+                    "UPDATE llm_model_health SET status = 'unknown', "
+                    "last_checked_at = NULL, last_latency_ms = NULL, "
+                    "last_error = '供应商配置已变更，请重新执行手动验证', "
+                    "consecutive_failures = 0, probe_source = 'scheduled' "
+                    "WHERE provider = :provider_id AND probe_source = 'manual'"
+                ),
+                {"provider_id": provider_id},
+            )
             await session.commit()
             break
 

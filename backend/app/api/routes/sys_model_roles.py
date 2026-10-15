@@ -4,7 +4,7 @@
 |---|---|
 | `GET /sys/model-roles` | 全部模型角色的生效值、来源、可用性、健康与策略（只读） |
 | `GET /sys/model-health` | 全部模型的健康探测缓存（只读，探测在 Celery beat） |
-| `POST /sys/model-health/check` | 管理员手动触发单模型探测 |
+| `POST /sys/model-health/check` | 管理员手动触发单模型探测；OCR 使用低成本上游调用 |
 
 字段对齐 UI 设计 §5.4 `RoleBinding`（**该文档即契约**）。端点层做三件事：
 
@@ -186,6 +186,7 @@ async def _governance_context() -> tuple[dict, dict, list | None]:
                 "lastLatencyMs": r["lastLatencyMs"],
                 "lastError": r["lastError"] or None,
                 "consecutiveFailures": r["consecutiveFailures"],
+                "probeSource": r.get("probeSource"),
             }
             for r in health_rows
         }
@@ -239,11 +240,16 @@ async def check_model_health(
     body: ModelHealthCheckRequest,
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict:
-    """管理员手动触发单模型探测（同步执行一次极低成本探测）。"""
+    """管理员手动触发单模型探测；OCR 走真实上游最小文本调用。"""
     del operator
-    from backend.infra.llm.health import probe_model
+    from backend.infra.llm import models as models_mod
+    from backend.infra.llm.health import probe_model, probe_ocr_model
 
-    result = probe_model(body.model_name)
+    entry = models_mod.get_model_entry(body.model_name)
+    if entry is not None and models_mod.model_kind_of(entry) == "ocr":
+        result = await probe_ocr_model(body.model_name)
+    else:
+        result = probe_model(body.model_name, probe_source="manual")
     if result["status"] == "model_not_found":
         raise HTTPException(status_code=404, detail=result["error"])
     return result

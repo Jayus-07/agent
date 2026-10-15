@@ -113,7 +113,7 @@ describe('RoleBindingsTab 模型目录选择', () => {
 
     const select = container.querySelector<HTMLSelectElement>('[data-testid="role-model-select-rerank"]')
     expect(select).toBeTruthy()
-    // 表格内不出现任何自由文本输入（「只看不可用」开关在表格外，不在此断言范围）
+    // 表格内不出现任何自由文本输入（筛选开关在表格外，不在此断言范围）
     expect(container.querySelector('table')?.querySelector('input')).toBeNull()
     expect(Array.from(select?.options ?? []).map((option) => option.value)).toContain('qwen3.7-text-rerank')
     expect(Array.from(select?.options ?? []).map((option) => option.value)).not.toContain('qwen3.7-text-embedding')
@@ -161,7 +161,7 @@ describe('RoleBindingsTab 模型目录选择', () => {
     expect(availabilityText(container, 'rerank')).toContain('未注册')
 
     choose(container, 'role-model-select-rerank', 'qwen3.7-text-rerank')
-    expect(availabilityText(container, 'rerank')).toContain('可用')
+    expect(availabilityText(container, 'rerank')).toContain('配置齐全')
     expect(availabilityText(container, 'rerank')).not.toContain('未注册')
 
     choose(container, 'role-model-select-rerank', 'qwen3.7-text-reran')
@@ -215,10 +215,22 @@ describe('RoleBindingsTab 版式', () => {
     expect(fallbackCell?.textContent).toContain('dashscope-rag')
   })
 
-  it('「只看不可用」只留下判定不可用的角色', async () => {
+  it('「只看需处理」包含配置异常角色并排除配置和上游均正常的角色', async () => {
     const container = mount({
       roles: [
-        roleRow({ role: 'main', effectiveModel: 'qwen3.7-plus', literalValue: 'qwen3.7-plus', provider: 'qwen' }),
+        roleRow({
+          role: 'main',
+          effectiveModel: 'qwen3.7-plus',
+          literalValue: 'qwen3.7-plus',
+          provider: 'qwen',
+          health: {
+            status: 'healthy',
+            lastCheckedAt: new Date().toISOString(),
+            lastLatencyMs: 100,
+            lastError: null,
+            consecutiveFailures: 0,
+          },
+        }),
         roleRow({
           effectiveModel: 'qwen3.7-text-reran',
           literalValue: 'qwen3.7-text-reran',
@@ -288,14 +300,14 @@ describe('RoleBindingsTab 运行时治理（2026-09-22 改造）', () => {
         roleRow({ health: { status: 'rate_limited', lastCheckedAt: null, lastLatencyMs: null, lastError: '429', consecutiveFailures: 2 } }),
       ],
     })
-    expect(container.querySelector('[data-testid="role-health-main"]')?.textContent).toContain('正常')
+    expect(container.querySelector('[data-testid="role-health-main"]')?.textContent).toContain('调用通过')
     expect(container.querySelector('[data-testid="role-health-main"]')?.textContent).toContain('820ms')
     expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('限流')
     expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('连续失败 2')
 
-    // 无探测数据 → 「未探测」，不冒充正常
+    // 无探测数据 → 「未验证」，不冒充通过
     const noHealth = mount()
-    expect(noHealth.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('未探测')
+    expect(noHealth.querySelector('[data-testid="role-health-rerank"]')?.textContent).toContain('未验证上游调用')
   })
 
   it('embedding 索引不一致时显示全局重建告警', () => {
@@ -410,5 +422,65 @@ describe('手动健康测试按钮', () => {
     })
 
     expect(container.querySelector('[data-testid="role-health-check-eval_gen"]')).toBeNull()
+  })
+
+  it('OCR 旧周期缓存不再显示正常，提示管理员手动验证上游', async () => {
+    const container = mount({
+      roles: [roleRow({
+        role: 'ocr',
+        effectiveModel: 'vendor-ocr',
+        literalValue: 'vendor-ocr',
+        provider: 'vendor',
+        health: {
+          status: 'healthy',
+          lastCheckedAt: new Date().toISOString(),
+          lastLatencyMs: 50,
+          lastError: null,
+          consecutiveFailures: 0,
+          probeSource: 'scheduled',
+        },
+      })],
+      catalog: [...CATALOG, { name: 'vendor-ocr', provider: 'vendor', modelKind: 'ocr' }],
+    })
+
+    const healthCell = container.querySelector('[data-testid="role-health-ocr"]')
+    expect(healthCell?.textContent).toContain('未验证上游调用')
+    expect(healthCell?.textContent).not.toContain('调用通过')
+    expect(healthCell?.textContent).toContain('图片识别效果尚未验证')
+    expect(container.querySelector('[data-testid="role-availability-ocr"]')?.textContent)
+      .toContain('配置齐全')
+    expect(container.querySelector('[data-testid="role-health-check-ocr"]')?.textContent)
+      .toContain('验证上游')
+
+    const toggle = container.querySelector<HTMLInputElement>('[data-testid="only-problem-toggle"]')
+    await act(async () => {
+      toggle?.click()
+      await Promise.resolve()
+    })
+    expect(container.querySelector('[data-role-row="ocr"]')).toBeTruthy()
+  })
+
+  it('OCR 上游鉴权失败时展示可执行提示且不显示供应商原始报文', () => {
+    const container = mount({
+      roles: [roleRow({
+        role: 'ocr',
+        effectiveModel: 'vendor-ocr',
+        literalValue: 'vendor-ocr',
+        provider: 'vendor',
+        health: {
+          status: 'auth_failed',
+          lastCheckedAt: new Date().toISOString(),
+          lastLatencyMs: 50,
+          lastError: 'raw provider error with secret',
+          consecutiveFailures: 1,
+          probeSource: 'manual',
+        },
+      })],
+    })
+
+    const healthCell = container.querySelector('[data-testid="role-health-ocr"]')
+    expect(healthCell?.textContent).toContain('鉴权失败')
+    expect(healthCell?.textContent).toContain('Key 状态、账户额度和模型权限')
+    expect(healthCell?.textContent).not.toContain('raw provider error')
   })
 })
