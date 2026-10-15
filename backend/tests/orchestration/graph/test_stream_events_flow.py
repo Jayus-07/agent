@@ -115,6 +115,65 @@ def test_runner_scopes_memory_events_to_trusted_request_identity(monkeypatch):
     assert scope.request_id
 
 
+def test_runner_does_not_deliver_late_memory_event_to_next_request(monkeypatch):
+    """同一用户的同一会话发起新请求时，旧请求晚到事件不得串入新 SSE。"""
+    from backend.context_budget import metrics as context_metrics
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr(trace_collector, "finish", lambda *_args: None)
+
+    class LateEventMemory(_FakeMemory):
+        def start_session(self, session_id, question, user_id="default",
+                          tenant_id="", event_scope=None):
+            from backend.context_budget.metrics import emit_context_event
+
+            if self.start_session_calls:
+                previous_scope = self.start_session_calls[0][4]
+                emit_context_event(
+                    level="L2", action="history_trim", before_tokens=100,
+                    after_tokens=40, event_scope=previous_scope,
+                    folded_messages=99,
+                )
+            emit_context_event(
+                level="L2", action="history_trim", before_tokens=100,
+                after_tokens=50, event_scope=event_scope,
+                folded_messages=len(self.start_session_calls) + 1,
+            )
+            return super().start_session(
+                session_id, question, user_id=user_id,
+                tenant_id=tenant_id, event_scope=event_scope,
+            )
+
+    sys_obj = _make_system(_FakeGraph([
+        {"general_chat": {"final_answer": "完成"}},
+    ]))
+    sys_obj._memory = LateEventMemory()
+    sys_obj._runner._memory = sys_obj._memory
+
+    def run_request():
+        return list(sys_obj.stream_events(
+            "你好", "same-session", user_id="user-A", tenant_id="tenant-A",
+            product_id="agent", product_source="api_route",
+        ))
+
+    first_events = run_request()
+    second_events = run_request()
+    first_scope = sys_obj._memory.start_session_calls[0][4]
+    second_scope = sys_obj._memory.start_session_calls[1][4]
+    first_context = [event["data"] for event in first_events
+                     if event["event"] == "context"]
+    second_context = [event["data"] for event in second_events
+                      if event["event"] == "context"]
+
+    assert first_scope.session_id == second_scope.session_id
+    assert first_scope.request_id != second_scope.request_id
+    assert [event["folded_messages"] for event in first_context] == [1]
+    assert [event["folded_messages"] for event in second_context] == [2]
+    with context_metrics._pending_lock:
+        assert context_metrics._pending_events[first_scope][0][
+            "folded_messages"] == 99
+
+
 def test_stream_events_true_streaming_order(monkeypatch):
     """真流式：delta 在 status 之后、done 之前按序产出，且不再有假打字机重复。"""
     from backend.observability.tracer import trace_collector
