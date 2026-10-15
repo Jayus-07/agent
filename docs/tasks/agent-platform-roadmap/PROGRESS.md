@@ -17,7 +17,7 @@
 
 - **#54 已合并**：六组侧栏导航、运行总览与执行记录/Trace 基线已进入 main。
 - **#53 Ready for Review**：四份计划文档已对账 main `5df8b060` 和 #54/#63/#65/#68；当前仍为候选计划，待文档门禁后按顺序处理。
-- **#68 开放**：frontend-admin 依赖升级到 Next.js 15.5.28；原 run #5 的 audit PASS，但 `npm ci` 因锁文件版本边不一致失败。修复 head `85edd1b` 已推送，run #6 进行中；安装/Vitest/tsc/build 尚未 PASS。
+- **#68 开放**：frontend-admin 依赖升级到 Next.js 15.5.28；锁文件修复 head `85edd1b` 的 `npm ci`、Vitest、tsc、build、High/Critical audit、secret-scan、RAG PR Smoke 均 PASS，尚待合并。
 - **#63 开放**：Agent/Workflow 与服务健康页 PR；Review 修复已推送，两条线程已解决，定向验证已完成。真实 Admin/Viewer/Editor、跨租户和资源权限 E2E BLOCKED；待安全 PR 合并后重跑门禁。
 - **#65 开放**：交付 A 的 Trace 服务端分页、时间/状态筛选、授权统计和现有 UI 接线；统计受授权范围及 TraceStore 留存窗口约束，继续兼容最多 200 条样本展示；定向 API/UI 测试、tsc、build PASS，真实端到端 BLOCKED。
 - 现有 Tool/Capability、模型/成本、Prompt、权限/租户、审批/审计页面或 API 在 main 中已存在；后续按差距整合，不重复建设。

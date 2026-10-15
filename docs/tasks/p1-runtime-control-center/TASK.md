@@ -1,7 +1,7 @@
 # P1-G 管理端总计划：三组交付闭环
 
 > 状态：**实施中；本计划更新随 PR #53 提交，合并前仍是候选版本。**
-> 事实基线：最新 main `5df8b0603355566e7fa1eb87906129c11a8211ab`（含无关的 PR #70）；PR #54 已合并（`c40685d`）；PR #63 的 Review 修复已推送并解决两条线程，真实授权 E2E 仍 BLOCKED。安全 PR #68 已升至 Next.js 15.5.28；锁文件修复 `85edd1b` 已推送，CI run #6 尚在运行。
+> 事实基线：最新 main `5df8b0603355566e7fa1eb87906129c11a8211ab`（含无关的 PR #70）；PR #54 已合并（`c40685d`）；PR #63 的 Review 修复已推送并解决两条线程，真实授权 E2E 仍 BLOCKED。安全 PR #68 已升至 Next.js 15.5.28；锁文件修复 `85edd1b` 后，frontend-admin CI、secret-scan、RAG PR Smoke 均 PASS，PR 尚未合并。
 > 本文件保留 P1-G 九个产品能力模块、六组侧栏导航和 RC-01～RC-14 编号。它把原六阶段串行方案收敛为 A/B/C 三个交付包，不代表未验证功能已完成。
 
 ## 1. 目标与固定边界
@@ -85,7 +85,7 @@ PR #63 本轮不包含敏感写 API；因此不能报告 L3 写入 PASS。现有
 
 新增 `.github/workflows/frontend-admin.yml`：仅管理端前端、观测管理员权限路由/测试、相关 Python 依赖或该 workflow 变化时运行。前端 job 使用 Node 20 与 `package-lock.json` npm 缓存，执行锁定依赖安装、依赖漏洞门禁、Vitest、TypeScript 和 Next 构建；后端权限 job 使用 Python/pip 缓存并运行观测只读端点管理员守卫测试。CI 不依赖 RAG/Travel 全量测试。
 
-main 的历史官方 npm audit 基线为 **15 项（1 critical、9 high、5 moderate）**，包含 Next.js 14.2.29。安全 PR #68 升至 Next.js 15.5.28 后，CI run #5 的 High/Critical audit job PASS，但功能 job 因 `next` 锁文件仍引用 15.5.27 而在 `npm ci` 失败；修复已提交 `85edd1b`，run #6 尚未完成。合并 #68 前仍须等锁定安装、Vitest、TypeScript、Build 和 High/Critical audit 全部 PASS；不得豁免。
+main 的历史官方 npm audit 基线为 **15 项（1 critical、9 high、5 moderate）**，包含 Next.js 14.2.29。安全 PR #68 已升至受支持的 Next.js 15.5.28。锁文件修复 `85edd1b` 后，CI run #6 的 `npm ci`、Vitest、TypeScript、Build、High/Critical audit 均 PASS，secret-scan 与 RAG PR Smoke 也 PASS。修复在合并进入 main 前仍属候选；未豁免安全门禁。
 
 ## 6. RC-01～RC-14 验收矩阵
 
