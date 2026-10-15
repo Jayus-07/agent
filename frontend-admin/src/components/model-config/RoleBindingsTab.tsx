@@ -112,6 +112,37 @@ function incompatibleIndexes(row: RoleRow) {
   )
 }
 
+/** 根据健康状态给出可执行方向，不把供应商原始错误报文展示给操作员。 */
+function healthActionHint(status: ModelHealthStatus | undefined): string | null {
+  switch (status) {
+    case 'auth_failed':
+      return '上游拒绝了凭据；请核对 Key 状态、账户额度和模型权限。'
+    case 'model_not_found':
+      return '上游未识别该模型名，或当前 Key 无权访问它；请核对模型目录和权限。'
+    case 'rate_limited':
+      return '上游正在限流，请稍后重试。'
+    case 'timeout':
+      return '上游未在时限内响应，请检查服务状态或稍后重试。'
+    case 'provider_unreachable':
+      return '无法连接供应商，请核对服务地址、协议和网络范围。'
+    case 'degraded':
+      return '上游拒绝或未完成调用，请核对 Key、账户余额/额度和模型权限。'
+    case 'slow':
+      return '上游响应较慢，请确认服务延迟符合业务需要。'
+    case 'unknown':
+      return '当前配置尚未验证；请点手动测试确认上游调用。'
+    default:
+      return null
+  }
+}
+
+function needsAttention(row: RoleRow, verdict: SelectableVerdict): boolean {
+  if (!verdict.selectable) return true
+  const health = row.health
+  if (row.role === 'ocr' && health?.probeSource !== 'manual') return true
+  return !health || health.status !== 'healthy'
+}
+
 export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, highlightRole }: Props) {
   const toast = useToast()
   const [editing, setEditing] = useState<string | null>(null)
@@ -139,8 +170,11 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
     node?.scrollIntoView({ block: 'center', behavior: 'smooth' })
   }, [highlightRole, roles])
 
-  const unavailableCount = useMemo(
-    () => roles.filter((row) => !roleVerdict(row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role)).selectable).length,
+  const attentionCount = useMemo(
+    () => roles.filter((row) => needsAttention(
+      row,
+      roleVerdict(row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role)),
+    )).length,
     [roles, byName],
   )
 
@@ -166,7 +200,14 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
     try {
       const result = await checkModelHealth(model)
       const ms = result.latencyMs != null ? ` · ${result.latencyMs}ms` : ''
-      toast.success(`手动探测完成：${healthStatusLabel(result.status as ModelHealthStatus)}${ms}`)
+      if (result.status === 'healthy') {
+        toast.success(row.role === 'ocr'
+          ? `上游调用通过${ms}；OCR 图片识别效果仍需单独验证`
+          : `模型调用通过${ms}`)
+      } else {
+        const hint = healthActionHint(result.status as ModelHealthStatus)
+        toast.error(`上游验证未通过：${hint || healthStatusLabel(result.status as ModelHealthStatus)}`)
+      }
       await onSaved()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '手动探测失败')
@@ -247,9 +288,10 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
 
   const groups = useMemo(() => {
     const visible = (list: RoleRow[]) =>
-      list.filter((row) => !onlyProblem || !roleVerdict(
-        row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role),
-      ).selectable)
+      list.filter((row) => !onlyProblem || needsAttention(
+        row,
+        roleVerdict(row, row.effectiveModel, byName.get(row.effectiveModel), roleModelKind(row.role)),
+      ))
     const built = ROLE_GROUPS.map((group) => ({
       id: group.id,
       label: group.label,
@@ -301,8 +343,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
         <div>
           <h2 className="text-xs font-medium text-text-primary">角色绑定</h2>
           <p className="mt-1 text-[11px] text-text-muted">
-            共 {roles.length} 个角色，按业务链路分组。角色决定业务链路使用哪个模型；非索引链路会在刷新周期内读取新值，
-            向量化与重排模型必须先重建索引。健康状态来自后台周期探测（默认 5 分钟），页面不做在线探测。
+            角色绑定决定业务链路使用哪个已登记模型。配置状态只检查登记、用途和本地凭据；上游调用状态单独显示。
+            OCR 需管理员手动验证：测试只确认模型可调用，不验证图片识别效果，且可能产生少量供应商费用。
           </p>
         </div>
         <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-text-secondary">
@@ -313,7 +355,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
             data-testid="only-problem-toggle"
             className="accent-accent"
           />
-          只看不可用{unavailableCount ? `（${unavailableCount}）` : ''}
+          只看需处理{attentionCount ? `（${attentionCount}）` : ''}
         </label>
       </div>
 
@@ -332,8 +374,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
               <th scope="col" className="px-4 py-3 font-normal">业务角色</th>
               <th scope="col" className="px-4 py-3 font-normal">当前生效模型</th>
               <th scope="col" className="px-4 py-3 font-normal">来源</th>
-              <th scope="col" className="px-4 py-3 font-normal">健康状态</th>
-              <th scope="col" className="px-4 py-3 font-normal">可用性 / 风险</th>
+              <th scope="col" className="px-4 py-3 font-normal">上游调用</th>
+              <th scope="col" className="px-4 py-3 font-normal">配置状态 / 风险</th>
               <th scope="col" className="px-4 py-3 text-right font-normal">操作</th>
             </tr>
           </thead>
@@ -359,6 +401,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                   const isInherit = row.source === 'inherit'
                   const policy = row.policy
                   const health = row.health
+                  const ocrNeedsManualProbe = row.role === 'ocr' && health?.probeSource !== 'manual'
+                  const visibleHealth = ocrNeedsManualProbe ? null : health
                   return (
                     <tr
                       key={row.role}
@@ -464,32 +508,44 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                       </td>
 
                       <td className="px-4 py-3" data-testid={`role-health-${row.role}`}>
-                        {!health ? (
-                          <span className="text-[10px] text-text-muted">未探测</span>
+                        {!visibleHealth ? (
+                          <span className="text-[10px] text-text-muted">未验证上游调用</span>
                         ) : (
                           <div>
-                            <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${healthStatusTone(health.status)}`}>
-                              {healthStatusLabel(health.status)}
+                            <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${healthStatusTone(visibleHealth.status)}`}>
+                              {healthStatusLabel(visibleHealth.status)}
                             </span>
                             <div className="mt-1 text-[10px] text-text-muted">
-                              {health.lastLatencyMs != null ? `${health.lastLatencyMs}ms` : ''}
-                              {health.lastCheckedAt ? ` · ${formatRelative(health.lastCheckedAt)}` : ''}
-                              {health.consecutiveFailures > 0 ? ` · 连续失败 ${health.consecutiveFailures}` : ''}
+                              {visibleHealth.lastLatencyMs != null ? `${visibleHealth.lastLatencyMs}ms` : ''}
+                              {visibleHealth.lastCheckedAt ? ` · ${formatRelative(visibleHealth.lastCheckedAt)}` : ''}
+                              {visibleHealth.consecutiveFailures > 0 ? ` · 连续失败 ${visibleHealth.consecutiveFailures}` : ''}
                             </div>
+                            {healthActionHint(visibleHealth.status) && (
+                              <div className="mt-1 max-w-[220px] text-[10px] leading-4 text-red-700" data-testid={`role-health-hint-${row.role}`}>
+                                {healthActionHint(visibleHealth.status)}
+                              </div>
+                            )}
                           </div>
                         )}
-                        {/* 手动测试：beat 300s 自动扫描之外的手动兜底，点一次真探一次 */}
+                        {ocrNeedsManualProbe && (
+                          <div className="mt-1 max-w-[220px] text-[10px] leading-4 text-text-muted">
+                            只确认上游接受模型调用；图片识别效果尚未验证。
+                          </div>
+                        )}
+                        {/* OCR 手动验证使用最小文本调用，不随页面加载或周期扫描触发。 */}
                         {canAdmin && row.effectiveModel && (
                           <button
                             type="button"
                             data-testid={`role-health-check-${row.role}`}
                             disabled={checkingHealthRole === row.role}
                             onClick={() => { void manualHealthCheck(row) }}
-                            aria-label={`手动测试 ${roleLabel(row.role)} 的健康`}
+                            aria-label={row.role === 'ocr' ? '验证 OCR 上游调用' : `手动测试 ${roleLabel(row.role)} 的健康`}
                             className="mt-1.5 flex items-center gap-1 rounded-lg border border-black/10 px-2 py-1 text-[10px] text-text-secondary hover:bg-slate-50 disabled:opacity-40"
                           >
                             <FlaskConical size={10} />
-                            {checkingHealthRole === row.role ? '探测中…' : '手动测试'}
+                            {checkingHealthRole === row.role
+                              ? '验证中…'
+                              : row.role === 'ocr' ? '验证上游' : '手动测试'}
                           </button>
                         )}
                       </td>
@@ -501,7 +557,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                             : <CircleAlert size={13} className="mt-0.5 shrink-0 text-red-600" />}
                           <div className="min-w-0">
                             <div className={usable ? 'text-emerald-700' : 'text-red-700'}>
-                              {usable ? '可用' : verdict.reason || '不可用'}
+                              {usable ? '配置齐全' : verdict.reason || '配置不可用'}
                             </div>
                             {isEditing && <div className="mt-0.5 text-[10px] text-text-muted">按所选模型实时判定</div>}
                             {row.requiresReindex && <div className="mt-0.5 text-[10px] text-amber-700">变更需重建索引</div>}
@@ -580,8 +636,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
             {onlyProblem ? (
               <EmptyState
                 kind="no_data"
-                title="所有角色当前都可用"
-                description="「只看不可用」没有筛出任何角色，关闭筛选可查看全部角色绑定。"
+                title="当前没有待处理角色"
+                description="配置异常、上游调用失败或尚未验证的角色会显示在这里。"
                 onAction={() => setOnlyProblem(false)}
                 actionLabel="查看全部角色"
               />

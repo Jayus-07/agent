@@ -152,6 +152,126 @@ async def test_create_provider_registers_model_and_encrypts_key(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_update_provider_invalidates_manual_health_after_credential_rotation(
+    monkeypatch,
+):
+    provider_row = {
+        "id": "custom-provider",
+        "display_name": "Custom",
+        "driver": "openai",
+        "base_url": "https://provider.example/v1",
+        "network_scope": "public",
+        "extra_headers": {},
+        "extra_body": {},
+        "billing": "metered",
+        "enabled": True,
+        "is_builtin": False,
+    }
+    credential_row = {
+        "key_fingerprint": "old-fingerprint",
+        "key_last4": "1234",
+        "key_version": 1,
+        "updated_at": None,
+        "updated_by": "user:old-admin",
+    }
+
+    class _UpdateResult:
+        def __init__(self, row):
+            self.row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.row
+
+    class _UpdateSession:
+        def __init__(self):
+            self.statements = []
+            self.commit_count = 0
+
+        async def execute(self, statement, _params=None):
+            sql = str(statement)
+            self.statements.append(sql)
+            if "SELECT * FROM llm_providers WHERE id" in sql:
+                return _UpdateResult(provider_row)
+            if "SELECT key_fingerprint, key_last4, key_version" in sql:
+                return _UpdateResult(credential_row)
+            return _UpdateResult(None)
+
+        async def commit(self):
+            self.commit_count += 1
+
+    session = _UpdateSession()
+    refresh = AsyncMock(return_value=True)
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+    monkeypatch.setattr(model_config, "encrypt_secret", lambda _value: "enc:new")
+    monkeypatch.setattr(model_config, "fingerprint", lambda _value: "new-fingerprint")
+    monkeypatch.setattr(model_config, "last4", lambda _value: "new1")
+    monkeypatch.setattr(model_config.registry_store, "refresh_registry", refresh)
+
+    await model_config.ModelConfigService().update_provider(
+        "custom-provider",
+        {
+            "displayName": "Custom",
+            "driver": "openai",
+            "baseUrl": "https://provider.example/v1",
+            "networkScope": "public",
+            "billing": "metered",
+            "apiKey": "sk-new-secret",
+            "enabled": True,
+            "extraHeaders": {},
+        },
+        "user:test-admin",
+    )
+
+    assert any(
+        "UPDATE llm_model_health SET status = 'unknown'" in sql
+        and "probe_source = 'scheduled'" in sql
+        for sql in session.statements
+    )
+    assert session.commit_count == 1
+    refresh.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_model_health_sanitizes_legacy_provider_errors(monkeypatch):
+    row = {
+        "model_name": "custom-model",
+        "provider": "custom-provider",
+        "model_kind": "ocr",
+        "status": "auth_failed",
+        "last_checked_at": None,
+        "last_latency_ms": 12,
+        "last_error": "raw response contains bearer test-secret",
+        "consecutive_failures": 1,
+        "probe_source": "manual",
+    }
+
+    class _Mappings:
+        def __iter__(self):
+            return iter([row])
+
+    class _HealthResult:
+        def mappings(self):
+            return _Mappings()
+
+    class _HealthSession:
+        async def execute(self, _statement):
+            return _HealthResult()
+
+    # 用专用 async session stream，确保旧缓存的原始异常不会到达 API 响应。
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(_HealthSession()),
+    )
+    result = await model_config.ModelConfigService().list_model_health()
+
+    assert result[0]["status"] == "auth_failed"
+    assert "鉴权失败" in result[0]["lastError"]
+    assert "test-secret" not in repr(result)
+
+
+@pytest.mark.asyncio
 async def test_create_provider_does_not_persist_when_probe_fails(monkeypatch):
     """payload.probe=true 时探测失败不得落库（强校验路径保留）。"""
     async def _probe(**_kwargs):
@@ -257,7 +377,7 @@ class _LegacyMigrationSession:
         self.parameters.append(dict(params or {}))
         if "SELECT 1 FROM llm_providers" in sql:
             return _LegacyMigrationResult(None)
-        if "SELECT provider_id, model_kind, enabled FROM llm_models" in sql:
+        if "SELECT provider_id, model_kind, enabled" in sql and "FROM llm_models" in sql:
             return _LegacyMigrationResult({
                 "provider_id": "specialized-api",
                 "model_kind": "embedding",
