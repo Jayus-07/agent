@@ -306,6 +306,25 @@ export async function fetchRaw(
   return res;
 }
 
+/**
+ * 同源匿名请求：用于持有一次性能力令牌的公开资源。
+ * 固定走 Next BFF，省略 Cookie、Bearer 和自动刷新；调用方只传明确的公开请求头。
+ */
+export async function fetchAnonymousRaw(
+  path: string,
+  init: RequestInit = {},
+): Promise<Response> {
+  const sameOriginPath = path.startsWith("/") ? path : `/${path}`;
+  const headers = new Headers(init.headers);
+  headers.delete("authorization");
+  headers.delete("cookie");
+  return fetch(sameOriginPath, {
+    ...init,
+    credentials: "omit",
+    headers,
+  });
+}
+
 // ── JSON 层 ───────────────────────────────────────────────────
 
 export interface RequestOptions extends Omit<RequestInit, "signal" | "body"> {

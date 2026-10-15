@@ -4,6 +4,23 @@ from datetime import date, time
 from typing import Any
 
 
+class TripWriteConflictError(ValueError):
+    """结构化的 Trip 领域硬冲突；保持 ValueError 兼容现有调用方。"""
+
+    def __init__(
+        self, conflict_code: str, message: str,
+        affected_item_ids: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.conflict = {
+            "conflict_code": conflict_code,
+            "severity": "BLOCKED",
+            "message": message,
+            "affected_item_ids": list(dict.fromkeys(affected_item_ids)),
+            "allowed_resolutions": [],
+        }
+
+
 def validate_trip_write(
     document: dict[str, Any],
     *,
@@ -32,7 +49,10 @@ def _validate_schedule(document: dict[str, Any]) -> None:
             )
             end_seconds = start_seconds + int(item.get("duration_min") or 0) * 60
             if end_seconds > 24 * 60 * 60:
-                raise ValueError(f"行程项 {item['title']} 超出当天时间范围")
+                raise TripWriteConflictError(
+                    "SCHEDULE_OUT_OF_DAY", f"行程项 {item['title']} 超出当天时间范围",
+                    (item["item_id"],),
+                )
 
             if previous is not None:
                 previous_item, previous_end = previous
@@ -47,8 +67,10 @@ def _validate_schedule(document: dict[str, Any]) -> None:
                     if known_travel_min is not None:
                         required_start += int(known_travel_min) * 60
                 if start_seconds < required_start:
-                    raise ValueError(
-                        f"{previous_item['title']} 与 {item['title']} 的时间或路程安排冲突"
+                    raise TripWriteConflictError(
+                        "SCHEDULE_OVERLAP",
+                        f"{previous_item['title']} 与 {item['title']} 的时间或路程安排冲突",
+                        (previous_item["item_id"], item["item_id"]),
                     )
 
             _validate_opening_hours(day, item, start_seconds, end_seconds)
@@ -72,7 +94,10 @@ def _validate_opening_hours(
         ).weekday()
         closed = hours.get("closed_weekdays") or []
         if weekday in closed or str(weekday) in closed:
-            raise ValueError(f"{item['title']} 在行程日期闭馆")
+            raise TripWriteConflictError(
+                "VERIFIED_CLOSED", f"{item['title']} 在行程日期闭馆",
+                (item["item_id"],),
+            )
     open_value = hours.get("open_time")
     close_value = hours.get("close_time")
     if not open_value or not close_value:
@@ -89,7 +114,10 @@ def _validate_opening_hours(
         close_time.hour * 60 * 60 + close_time.minute * 60 + close_time.second
     )
     if start < open_seconds or end > close_seconds:
-        raise ValueError(f"{item['title']} 的安排超出已核实营业时间")
+        raise TripWriteConflictError(
+            "VERIFIED_OPENING_HOURS", f"{item['title']} 的安排超出已核实营业时间",
+            (item["item_id"],),
+        )
 
 
 def _validate_protected_items(
@@ -107,18 +135,36 @@ def _validate_protected_items(
         new = new_items.get(item_id)
         if old_item.get("locked"):
             if new is None:
-                raise ValueError(f"locked item cannot be removed: {item_id}")
+                raise TripWriteConflictError(
+                    "LOCKED_ITEM_REMOVED", f"locked item cannot be removed: {item_id}",
+                    (item_id,),
+                )
             if new[0] != old_day_id:
-                raise ValueError(f"locked item cannot be moved: {item_id}")
+                raise TripWriteConflictError(
+                    "LOCKED_ITEM_MOVED", f"locked item cannot be moved: {item_id}",
+                    (item_id,),
+                )
             if not new[1].get("locked"):
-                raise ValueError(f"locked item cannot be unlocked: {item_id}")
+                raise TripWriteConflictError(
+                    "LOCKED_ITEM_UNLOCKED", f"locked item cannot be unlocked: {item_id}",
+                    (item_id,),
+                )
         if old_item.get("fixed_start"):
             if new is None or new[0] != old_day_id:
-                raise ValueError(f"fixed item cannot be removed or moved: {item_id}")
+                raise TripWriteConflictError(
+                    "FIXED_ITEM_MOVED_OR_REMOVED",
+                    f"fixed item cannot be removed or moved: {item_id}", (item_id,),
+                )
             if new[1].get("start_time") != old_item.get("start_time"):
-                raise ValueError(f"fixed item start time cannot change: {item_id}")
+                raise TripWriteConflictError(
+                    "FIXED_START_CHANGED",
+                    f"fixed item start time cannot change: {item_id}", (item_id,),
+                )
             if not new[1].get("fixed_start"):
-                raise ValueError(f"fixed item cannot be unlocked: {item_id}")
+                raise TripWriteConflictError(
+                    "FIXED_ITEM_UNLOCKED", f"fixed item cannot be unlocked: {item_id}",
+                    (item_id,),
+                )
 
     old_positions = {
         day["day_id"]: [item["item_id"] for item in day["items"]]
@@ -146,8 +192,10 @@ def _validate_protected_items(
                 if (old_rank[other_id] < old_rank[protected_id]) != (
                     new_rank[other_id] < new_rank[protected_id]
                 ):
-                    raise ValueError(
-                        f"locked or fixed item cannot be reordered: {protected_id}"
+                    raise TripWriteConflictError(
+                        "PROTECTED_ITEM_REORDERED",
+                        f"locked or fixed item cannot be reordered: {protected_id}",
+                        (protected_id, other_id),
                     )
 
 
@@ -156,3 +204,44 @@ def validate_protected_items(
 ) -> None:
     """验证当前版本的锁定和固定项目约束。"""
     _validate_protected_items(current, proposed)
+
+
+def trip_write_advisories(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """返回不阻止保存的信息与不确定性提示。"""
+    advisories: list[dict[str, Any]] = []
+    for day in document.get("days", []):
+        items = day.get("items", [])
+        legs = day.get("legs", [])
+        for previous, current in zip(items, items[1:]):
+            if previous.get("start_time") is None or current.get("start_time") is None:
+                continue
+            leg = next((value for value in legs if (
+                value.get("from_item_id") == previous.get("item_id")
+                and value.get("to_item_id") == current.get("item_id")
+            )), None)
+            if not leg or leg.get("reliability") not in {"verified", "estimated"} \
+                    or leg.get("duration_min") is None:
+                advisories.append({
+                    "conflict_code": "ROUTE_TIME_UNKNOWN",
+                    "severity": "INFO",
+                    "message": "相邻行程项的路线耗时未知，未按零分钟计入。",
+                    "affected_item_ids": [
+                        previous["item_id"], current["item_id"],
+                    ],
+                    "allowed_resolutions": [],
+                })
+        for item in items:
+            place = item.get("place") or {}
+            facts = place.get("facts") or {}
+            if place and (
+                facts.get("verification") != "verified"
+                or not isinstance(facts.get("opening_hours"), dict)
+            ):
+                advisories.append({
+                    "conflict_code": "OPENING_HOURS_UNVERIFIED",
+                    "severity": "WARNING",
+                    "message": "地点营业信息未核实，无法确认安排时段是否营业。",
+                    "affected_item_ids": [item["item_id"]],
+                    "allowed_resolutions": [],
+                })
+    return advisories

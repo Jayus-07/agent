@@ -56,7 +56,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [aggregatedExpanded, setAggregatedExpanded] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const [ragReady, setRagReady] = useState<boolean | null>(null)
-  const healthTimerRef = useRef<ReturnType<typeof setInterval>>()
+  const healthTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const [selectedKbId, setSelectedKbId] = useState('policy_general')
   const [selectedDept, setSelectedDept] = useState('general')
   const [kbList, setKbList] = useState<{ id: string; name: string; depts: { id: string; label: string }[] }[]>([])

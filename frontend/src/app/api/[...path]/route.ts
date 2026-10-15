@@ -48,6 +48,41 @@ const FORWARD_RES_HEADERS = [
   "content-disposition",
   "x-trace-id",
 ] as const;
+const SHARE_RES_HEADERS = [
+  "cache-control",
+  "referrer-policy",
+  "x-robots-tag",
+  "vary",
+] as const;
+
+const SHARE_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isAnonymousShareApi(path: string[], method: string): boolean {
+  if (
+    method !== "GET" ||
+    path[0] !== "travel" ||
+    path[1] !== "v2" ||
+    path[2] !== "shares" ||
+    !SHARE_UUID.test(path[3] || "")
+  ) {
+    return false;
+  }
+  // 仅允许两个匿名 GET 路由接收分享令牌，避免扩展到私有 Trip API。
+  return path.length === 4 || (path.length === 5 && path[4] === "export.ics");
+}
+
+function isShareCreateApi(path: string[], method: string): boolean {
+  return (
+    method === "POST" &&
+    path.length === 5 &&
+    path[0] === "travel" &&
+    path[1] === "v2" &&
+    path[2] === "trips" &&
+    SHARE_UUID.test(path[3] || "") &&
+    path[4] === "shares"
+  );
+}
 
 async function proxy(
   req: NextRequest,
@@ -56,11 +91,19 @@ async function proxy(
   const target = `${GATEWAY}/api/${ctx.params.path
     .map(encodeURIComponent)
     .join("/")}${req.nextUrl.search}`;
+  const isAnonymousShareRead = isAnonymousShareApi(ctx.params.path, req.method);
+  const forwardShareSecurityHeaders =
+    isAnonymousShareRead || isShareCreateApi(ctx.params.path, req.method);
 
   const headers = new Headers();
   for (const h of FORWARD_REQ_HEADERS) {
     const v = req.headers.get(h);
     if (v) headers.set(h, v);
+  }
+  if (isAnonymousShareRead) {
+    // 分享令牌只通过请求头发送；不要拼入上游 URL、日志或代理错误响应。
+    const shareToken = req.headers.get("x-travel-share-token");
+    if (shareToken) headers.set("X-Travel-Share-Token", shareToken);
   }
   headers.set("X-Client-App", CLIENT_APP);
   const apiKey = process.env.API_KEY;
@@ -84,15 +127,18 @@ async function proxy(
   let upstream: Response;
   try {
     upstream = await fetch(target, { method, headers, body, redirect: "manual" });
-  } catch (e) {
+  } catch {
     return Response.json(
-      { error: "Bad Gateway", message: `网关不可达: ${String(e)}` },
+      { error: "Bad Gateway", message: "网关暂不可达" },
       { status: 502 },
     );
   }
 
   const resHeaders = new Headers();
-  for (const h of FORWARD_RES_HEADERS) {
+  const responseHeaderAllowlist = forwardShareSecurityHeaders
+    ? [...FORWARD_RES_HEADERS, ...SHARE_RES_HEADERS]
+    : FORWARD_RES_HEADERS;
+  for (const h of responseHeaderAllowlist) {
     const v = upstream.headers.get(h);
     if (v) resHeaders.set(h, v);
   }

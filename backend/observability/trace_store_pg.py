@@ -289,6 +289,30 @@ class PostgresTraceStore(TraceStore):
             logger.warning(f"[TraceStore-PG] list 失败: {e}")
             return []
 
+    def list_with_spans(self, limit: int = 20) -> list[dict]:
+        """最近 N 条完整 Trace，一次查询返回 spans，避免逐条 get 的 N+1 查询。"""
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"SELECT data FROM {self._table} "
+                    f"WHERE created_at <= %s ORDER BY created_at DESC LIMIT %s",
+                    (_utc_ceiling_text(), limit),
+                ).fetchall()
+            result = []
+            for row in rows:
+                try:
+                    data = json.loads(row["data"])
+                except Exception:
+                    logger.debug("[TraceStore-PG] 完整 Trace JSON 解析失败（跳过脏数据）")
+                    continue
+                if isinstance(data, dict):
+                    result.append(data)
+            return result
+        except Exception as e:
+            logger.warning(f"[TraceStore-PG] list_with_spans 失败: {e}")
+            return []
+
     def list_since(self, cutoff_iso: str, *, only_rejected: bool = False,
                    limit: int = 1000) -> list[dict]:
         """列出 created_at >= cutoff 的 trace（Evidence Gate 反向驱动用）。

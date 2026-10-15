@@ -11,10 +11,12 @@ import {
   travelWriteStatusTone,
   type TravelWriteStatus,
 } from './travelV2WriteState'
+import TravelTripRevisionActions from './TravelTripRevisionActions'
 
 interface TravelTripHistoryPanelProps {
   tripId: string
   currentRevision: number
+  restoreRequest?: { revision: number } | null
   restoreStatus: TravelWriteStatus | null
   restoreMessage: string
   writeBlockedMessage?: string
@@ -28,6 +30,7 @@ interface TravelTripHistoryPanelProps {
 export default function TravelTripHistoryPanel({
   tripId,
   currentRevision,
+  restoreRequest = null,
   restoreStatus,
   restoreMessage,
   writeBlockedMessage = '',
@@ -80,6 +83,12 @@ export default function TravelTripHistoryPanel({
     if (restoreStatus === 'SAVED') setRestoreTarget(null)
   }, [restoreStatus, currentRevision])
 
+  useEffect(() => {
+    if (!restoreRequest || loading || loadError) return
+    const target = revisions.find((entry) => entry.revision === restoreRequest.revision)
+    setRestoreTarget(target && target.revision !== currentRevision ? target.revision : null)
+  }, [currentRevision, loadError, loading, restoreRequest, revisions])
+
   return <div
     className="fixed inset-0 z-[1000] bg-[#17283f]/35 lg:flex lg:justify-end"
     role="presentation"
@@ -124,6 +133,9 @@ export default function TravelTripHistoryPanel({
         </div>
       </div>}
 
+      {restoreRequest && !loading && !loadError && restoreRequest.revision === currentRevision && <p role="status" className="mx-5 mt-4 rounded-xl border border-[#cfe0f5] bg-[#eff6ff] px-3.5 py-3 text-sm leading-5 text-[#315f91] lg:mx-6">v{restoreRequest.revision} 已是当前正式版本，无需恢复。</p>}
+      {restoreRequest && !loading && !loadError && !revisions.some((entry) => entry.revision === restoreRequest.revision) && <p role="alert" className="mx-5 mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm leading-5 text-amber-950 lg:mx-6">找不到正式版本 v{restoreRequest.revision}。请从下方选择已有版本。</p>}
+
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4 lg:px-6">
         {writeBlockedMessage && <p role="alert" className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm leading-5 text-amber-950">{writeBlockedMessage}</p>}
         {loading && <p role="status" className="py-8 text-center text-sm text-[#71839b]">正在读取版本历史…</p>}
@@ -160,6 +172,11 @@ export default function TravelTripHistoryPanel({
                     <button type="button" disabled={restoreStatus === 'UNKNOWN'} onClick={() => setRestoreTarget(null)} className="min-h-10 rounded-lg px-3 text-sm font-medium text-[#637891] hover:bg-white disabled:cursor-not-allowed disabled:opacity-50">取消</button>
                   </div>
                 </div>}
+                <TravelTripRevisionActions
+                  tripId={tripId}
+                  revision={entry.revision}
+                  writeBlockedMessage={writeBlockedMessage}
+                />
               </article>
             </li>
           })}
