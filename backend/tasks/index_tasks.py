@@ -126,7 +126,8 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                             staging_path: str = "",
                             generation: str = "",
                             file_hash: str = "",
-                            retries: int = 0) -> dict:
+                            retries: int = 0,
+                            worker: str | None = None) -> dict:
     """索引执行主体（Celery task 与 eager 测试共用的纯函数）。
 
     成功返回 {"status": terminal, ...}；可重试失败抛 TaskRetryScheduled
@@ -177,7 +178,7 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     # Phase2 Step2 起异常在此层按分类落 error_type）。
     try:
         result = run_with_task_state(db_task_id, upload_id, run_index,
-                                     retries=retries)
+                                     retries=retries, worker=worker)
     except AdmissionDeferred:
         # admission defer 非业务失败（Phase2 Step4）：不进失败出口，
         # 由壳层按 delay countdown 重投（保持 rag_index 队列亲和）
@@ -241,7 +242,8 @@ def _register_task():
                 db_task_id=db_task_id,
                 staging_path=staging_path, generation=generation,
                 file_hash=file_hash,
-                retries=self.request.retries)
+                retries=self.request.retries,
+                worker=getattr(self.request, "hostname", None))
         except AdmissionDeferred as deferred:
             # Phase2 Step4：admission 满载延迟准入——apply_async 新消息
             # countdown 重投（不走 self.retry：defer 不消耗业务 retry
@@ -379,7 +381,8 @@ def _reindex_failure_exit(exc: BaseException, *, emit_fn, doc_id: str,
 def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
                                source: str = "",
                                db_task_id: str | None = None,
-                               retries: int = 0) -> dict:
+                               retries: int = 0,
+                               worker: str | None = None) -> dict:
     """重索引执行主体（Celery task 与 eager 测试共用的纯函数）。"""
     import time as _time
 
@@ -420,7 +423,7 @@ def reindex_document_task_impl(doc_id: str, *, batch_id: str | None = None,
     try:
         result = run_with_task_state(
             db_task_id, reindex_service.progress_key(doc_id), run_node,
-            retries=retries)
+            retries=retries, worker=worker)
     except AdmissionDeferred:
         # admission defer 非业务失败：不进失败出口，壳层按 delay 重投
         raise
@@ -460,7 +463,8 @@ def _register_reindex_task():
         try:
             return reindex_document_task_impl(
                 doc_id, batch_id=batch_id, source=source,
-                db_task_id=db_task_id, retries=self.request.retries)
+                db_task_id=db_task_id, retries=self.request.retries,
+                worker=getattr(self.request, "hostname", None))
         except AdmissionDeferred as deferred:
             from backend.shared.logger import logger
             from backend.tasks.queue_router import resolve_for_workflow

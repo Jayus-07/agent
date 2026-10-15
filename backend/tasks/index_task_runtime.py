@@ -164,7 +164,8 @@ def _record_queue_wait(record) -> None:
 
 
 def run_with_task_state(db_task_id: str | None, upload_id: str,
-                        run_index, *, retries: int = 0) -> dict:
+                        run_index, *, retries: int = 0,
+                        worker: str | None = None) -> dict:
     """索引原子节点的 TaskState 包装（execute_index_task_impl 专用）。
 
     run_index: 无参 callable，执行单文档索引（含 settle），返回
@@ -212,7 +213,7 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
         logger.info("[IndexTaskRuntime] %s paused, skip execution", db_task_id)
         return {"status": "error", "error": "paused", "skipped": True}
 
-    lease_id = task_service.try_acquire_lease(db_task_id, worker=None)
+    lease_id = task_service.try_acquire_lease(db_task_id, worker=worker)
     if not lease_id:
         logger.warning("[IndexTaskRuntime] %s lease held elsewhere, skip", db_task_id)
         return {"status": "error", "error": "running_elsewhere", "skipped": True}
