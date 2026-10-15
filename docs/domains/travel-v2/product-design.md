@@ -374,7 +374,7 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 
 > FE-4 公开页从 `/travel/share/{share_id}#token=...` 的 fragment 读取一次性令牌，再经同源 BFF 调用公开 API；BFF 需转发 `X-Travel-Share-Token` 与响应 `Cache-Control` / `Referrer-Policy` / `X-Robots-Tag` / `Vary`。令牌不放 query/path，公开读取不需要用户 Bearer；BFF 继续使用现有服务端 `X-API-Key` 通道。
 
-> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
+> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚；原调用迟到时只允许同一请求账本身份、作用域和幂等键安全保存 Pending，不重新调用模型，也不覆盖其他终态。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
 
 > 幂等令牌恢复依赖服务端专用密钥。部署需配置至少 32 字节的 `TRAVEL_V2_SHARE_TOKEN_SECRET`；只要对应 `trip_shares` 幂等记录仍保留，就必须保留原密钥以恢复原链接。提前轮换时，已发链接仍按数据库摘要有效，但旧幂等请求将 fail closed 并返回 503，不会返回一个无法使用的新链接；密钥不参与令牌校验，轮换不会单独撤销已有链接。
 

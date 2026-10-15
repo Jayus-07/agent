@@ -279,8 +279,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
     # Trip 绑定的 AI 修改原始请求指纹和操作状态，支持模型调用前幂等占位。
     "094_travel_v2_ai_edit_requests.sql": "memory",
-    # BE-4C PR #62 的 095 创建 ai_edit_requests.pending_resolution 状态约束；
-    # 固定 Revision 分享迁移使用 096，避免与 #62 并行时撞名/覆盖。
+    # AI 请求账本支持持久化冲突待确认及其终态。
+    "095_travel_v2_ai_edit_pending_resolution.sql": "memory",
+    # 固定 Revision 分享与 ICS 导出迁移排在 BE-4C 的 095 之后。
     "096_travel_v2_revision_shares.sql": "memory",
 }
 
@@ -295,7 +296,6 @@ ORDER_LAST = [
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
     "094_travel_v2_ai_edit_requests.sql",
-    # 095 属于 BE-4C PR #62；缺文件时跳过，占位保持合并后的序号依赖。
     "095_travel_v2_ai_edit_pending_resolution.sql",
     "096_travel_v2_revision_shares.sql",
 ]

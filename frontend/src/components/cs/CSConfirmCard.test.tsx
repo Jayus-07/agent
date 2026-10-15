@@ -64,4 +64,38 @@ describe('CSConfirmCard', () => {
     expect((container.querySelector('[data-testid="cs-confirm-cancel"]') as HTMLButtonElement).disabled)
       .toBe(true)
   })
+
+  it('退款申请可单独修改原因，不直接改订单或金额', async () => {
+    const onUpdateReason = vi.fn(async () => undefined)
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+
+    act(() => root.render(
+      <CSConfirmCard
+        pending={{ ...snapshot, action_type: 'refund_request', reason: '商品有问题' }}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+        onUpdateReason={onUpdateReason}
+      />,
+    ))
+
+    const edit = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('修改原因'))
+    expect(edit).toBeDefined()
+    await act(async () => { edit?.click() })
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement
+    expect(textarea.value).toBe('商品有问题')
+    expect(container.textContent).toContain('订单与金额不会改变')
+
+    const setter = Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype, 'value',
+    )?.set
+    setter?.call(textarea, '包装破损')
+    act(() => textarea.dispatchEvent(new Event('input', { bubbles: true })))
+    const save = Array.from(container.querySelectorAll('button'))
+      .find((button) => button.textContent?.includes('保存原因'))
+    await act(async () => { save?.click(); await Promise.resolve() })
+    expect(onUpdateReason).toHaveBeenCalledWith('包装破损')
+  })
 })

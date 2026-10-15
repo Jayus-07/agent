@@ -89,7 +89,7 @@ describe('NAV — 管理端导航分类', () => {
   it('能力治理、发布、审批及访问控制入口保留既有角色声明', () => {
     expect(groupByItemLabel('知识库工作台')?.minRole).toBe('editor')
     expect(NAV.find((entry) => entry.label === '能力治理')?.minRole).toBe('editor')
-    for (const label of ['Tool 治理', '模型与供应商', '资产一致性检查', '发布记录', '访问控制', '审批与审计']) {
+    for (const label of ['Tool 治理', '模型与供应商', '资产一致性检查', '发布记录', '访问控制', '审批与审计', '服务健康与告警']) {
       expect(itemByLabel(label)?.minRole, `${label} 应保留 admin 声明`).toBe('admin')
     }
   })
@@ -129,9 +129,17 @@ describe('visibleNav — 按角色过滤分组', () => {
     const paths = visible.flatMap((entry) => entry.items ?? []).map((item) => item.path)
     expect(paths).not.toContain('/settings/access')
     expect(paths).not.toContain('/approvals')
+    expect(paths).not.toContain('/observability/alerts')
     expect(paths).not.toContain('/tools')
     expect(paths).toContain('/observability/monitoring')
     expect(paths).toContain('/security')
+  })
+
+  it('admin 可见服务健康与告警入口，viewer 不会收到管理员快照的导航入口', () => {
+    loginAs('admin')
+    expect(visibleNav().flatMap((entry) => entry.items ?? []).some((item) => item.path === '/observability/alerts')).toBe(true)
+    loginAs('viewer')
+    expect(visibleNav().flatMap((entry) => entry.items ?? []).some((item) => item.path === '/observability/alerts')).toBe(false)
   })
 
   it('editor 只看到能力治理中允许其访问的子菜单，且 baseline 不带角色限制项', () => {

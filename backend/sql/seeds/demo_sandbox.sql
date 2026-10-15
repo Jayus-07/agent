@@ -55,7 +55,7 @@ DELETE FROM "order".order_items WHERE order_id BETWEEN 99001 AND 99015;
 DELETE FROM "order".orders WHERE order_no LIKE 'DEMO-%';
 INSERT INTO "order".orders (id, order_no, customer_id, total_amount, status, payment_status, created_at) VALUES
   (99001, 'DEMO-1001', 99001, 598.00, 'completed', 'paid',     now() - INTERVAL '6 days'),
-  (99002, 'DEMO-1002', 99001, 129.00, 'completed', 'paid',     now() - INTERVAL '8 days'),
+  (99002, 'DEMO-1002', 99001, 129.00, 'completed', 'paid',     now() - INTERVAL '3 days'),
   (99003, 'DEMO-1003', 99001, 897.00, 'shipped',   'paid',     now() - INTERVAL '7 days'),
   (99004, 'DEMO-1004', 99001, 259.00, 'completed', 'paid',     now() - INTERVAL '10 days'),
   (99005, 'DEMO-1005', 99001, 199.50, 'completed', 'paid',     now() - INTERVAL '12 days'),
