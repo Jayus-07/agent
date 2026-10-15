@@ -20,6 +20,12 @@ class AITripEditRequest(StrictModel):
     conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
+class AITripEditResolutionRequest(StrictModel):
+    """只允许提交服务端签发的解决选项编号。"""
+
+    resolution_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+
+
 class AIReplacePlaceEdit(StrictModel):
     """AI 只选当前快照地点，selection_id 由服务端派生。"""
 
