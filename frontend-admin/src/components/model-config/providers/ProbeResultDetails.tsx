@@ -49,12 +49,17 @@ export default function ProbeResultDetails({
                 </div>
                 <div className="mt-0.5 break-words" data-testid={`probe-step-summary-${step.grade}`}>{probeStepSummary(step)}</div>
                 {hints.length > 0 && onFix && (
-                  <div data-testid={`probe-fix-${step.grade}`} className="mt-1 flex flex-wrap items-center gap-1.5">
+                  <div data-testid={`probe-fix-${step.grade}`} className="mt-1 space-y-1.5">
                     <span className="flex items-center gap-1 opacity-80"><Wrench size={10} />可以直接修：</span>
                     {hints.map((hint) => (
-                      <AdvisorButton key={`${hint.kind}:${hint.label}`} disabled={false} onClick={() => onFix(hint)}>
-                        {hint.label}
-                      </AdvisorButton>
+                      <div key={`${hint.kind}:${hint.label}`} className="space-y-1">
+                        {'description' in hint && (
+                          <p data-testid={`probe-fix-description-${step.grade}`} className="break-words opacity-80">{hint.description}</p>
+                        )}
+                        <AdvisorButton disabled={false} onClick={() => onFix(hint)}>
+                          {hint.label}
+                        </AdvisorButton>
+                      </div>
                     ))}
                   </div>
                 )}

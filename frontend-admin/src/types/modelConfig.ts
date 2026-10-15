@@ -38,6 +38,8 @@ export interface ModelHealth {
   lastLatencyMs: number | null
   lastError: string | null
   consecutiveFailures: number
+  /** 探测来源；OCR 只有 manual 代表真实调用过上游。 */
+  probeSource?: 'scheduled' | 'manual' | null
 }
 
 /** 角色运行策略（后端 llm_model_role_policy 镜像；source=default 时为代码默认值） */
@@ -99,7 +101,7 @@ export interface RoleBinding {
 export function healthStatusLabel(status: ModelHealthStatus | undefined | null): string {
   switch (status) {
     case 'healthy':
-      return '正常'
+      return '调用通过'
     case 'slow':
       return '响应慢'
     case 'rate_limited':
@@ -115,7 +117,7 @@ export function healthStatusLabel(status: ModelHealthStatus | undefined | null):
     case 'degraded':
       return '异常'
     default:
-      return '未知'
+      return '未验证'
   }
 }
 
