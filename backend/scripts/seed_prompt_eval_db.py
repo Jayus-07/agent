@@ -8,7 +8,13 @@ import argparse
 import asyncio
 import json
 import os
+import re
+from datetime import datetime, timezone
+from decimal import Decimal
 
+import psycopg2
+from psycopg2 import sql
+from psycopg2.extras import RealDictCursor
 from sqlalchemy import text
 
 
@@ -91,9 +97,169 @@ def build_seed_configs() -> dict[str, dict[str, object]]:
     return configs
 
 
-async def seed(*, dry_run: bool = False) -> None:
+def _required_price_components(configs: dict) -> list[tuple[str, str]]:
+    return sorted(
+        {
+            (str(config["model_name"]), "llm" if role == "eval_gen" else role)
+            for role, config in configs.items()
+        }
+    )
+
+
+def load_registry_price_rows(configs: dict) -> list[dict]:
+    """从现有价格 Registry 的只读连接读取当前生效价格。"""
+    dsn = os.getenv("PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", "").strip()
+    if not dsn:
+        raise RuntimeError("未配置只读价格 Registry 连接；真实评测保持阻断")
+
+    table_prefix = os.getenv("PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX", "").strip()
+    if table_prefix and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_prefix):
+        raise ValueError("价格 Registry 表前缀格式无效")
+
+    required = _required_price_components(configs)
+    predicates = sql.SQL(" OR ").join(
+        sql.SQL("(model_name = %s AND component = %s)") for _ in required
+    )
+    statement = sql.SQL(
+        """
+        SELECT model_name, component, dimension, price_per_unit, unit, currency,
+               price_table_version, source, effective_from, effective_to,
+               approval_status, reviewer_1, reviewer_2
+        FROM {table}
+        WHERE approval_status = 'approved'
+          AND effective_from <= now()
+          AND (effective_to IS NULL OR effective_to > now())
+          AND ({predicates})
+        ORDER BY model_name, component, dimension, effective_from DESC, id DESC
+        """
+    ).format(
+        table=sql.Identifier(f"{table_prefix}model_price"),
+        predicates=predicates,
+    )
+
+    connection = None
+    try:
+        connection = psycopg2.connect(dsn, connect_timeout=5)
+        connection.set_session(readonly=True, autocommit=False)
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT pg_is_in_recovery() AS is_read_replica")
+            replica = cursor.fetchone()
+            if not replica or not replica["is_read_replica"]:
+                raise RuntimeError("价格 Registry 必须使用只读副本")
+            cursor.execute(statement, [value for pair in required for value in pair])
+            rows = [dict(row) for row in cursor.fetchall()]
+    except psycopg2.Error:
+        raise RuntimeError(
+            "无法读取只读价格 Registry；真实评测保持阻断"
+        ) from None
+    finally:
+        if connection is not None:
+            connection.rollback()
+            connection.close()
+    return rows
+
+
+def build_price_snapshot(configs: dict, rows: list[dict]) -> list[dict]:
+    """验证 Registry 返回的当前生效行及其版本完整性。"""
+    if not rows:
+        raise ValueError("价格 Registry 未返回已绑定模型的生效价格")
+    required = set(_required_price_components(configs))
+    now = datetime.now(timezone.utc)
+    seen = set()
+    currencies: dict[tuple[str, str], str] = {}
+    versions: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    normalized_rows = []
+
+    for source_row in rows:
+        if not isinstance(source_row, dict):
+            raise ValueError("价格 Registry 返回了无效价格行")
+        row = dict(source_row)
+        currency_key = (str(row.get("model_name")), str(row.get("component")))
+        if currency_key not in required:
+            raise ValueError("价格快照包含未绑定模型")
+        key = (*currency_key, row.get("dimension"))
+        if key in seen:
+            raise ValueError("价格 Registry 存在重复的当前计价维度")
+        seen.add(key)
+
+        reviewer_1 = str(row.get("reviewer_1") or "").strip()
+        reviewer_2 = str(row.get("reviewer_2") or "").strip()
+        version = str(row.get("price_table_version") or "").strip()
+        source = str(row.get("source") or "").strip()
+        if (
+            row.get("approval_status") != "approved"
+            or not reviewer_1
+            or not reviewer_2
+            or reviewer_1 == reviewer_2
+            or not source
+            or not version
+        ):
+            raise ValueError("Registry 价格缺少有效批准者、来源或版本")
+
+        effective_value = row.get("effective_from")
+        effective = (
+            effective_value
+            if isinstance(effective_value, datetime)
+            else datetime.fromisoformat(
+                str(effective_value or "").replace("Z", "+00:00")
+            )
+        )
+        expires = row.get("effective_to")
+        end = None
+        if effective.tzinfo is None or effective > now:
+            raise ValueError("Registry 价格尚未生效或缺少时区")
+        if expires:
+            end = (
+                expires
+                if isinstance(expires, datetime)
+                else datetime.fromisoformat(str(expires).replace("Z", "+00:00"))
+            )
+            if end.tzinfo is None or end <= now:
+                raise ValueError("Registry 价格已失效或缺少时区")
+        row["effective_from"] = effective
+        row["effective_to"] = end
+        price = Decimal(str(row.get("price_per_unit")))
+        if not price.is_finite() or price < 0:
+            raise ValueError("Registry 价格必须是有限的非负数字")
+        row["price_per_unit"] = price
+
+        unit = row.get("unit")
+        currency = row.get("currency")
+        dimension = str(row.get("dimension") or "")
+        if unit not in {"per_1m_tokens", "per_call"} or currency not in {"CNY", "USD"}:
+            raise ValueError("Registry 价格的单位或币种不受支持")
+        if dimension == "tool_call" and unit != "per_call":
+            raise ValueError("tool_call 维度必须使用 per_call")
+        if dimension != "tool_call" and unit == "per_call":
+            raise ValueError("Token 维度必须使用 per_1m_tokens")
+
+        existing_currency = currencies.setdefault(currency_key, currency)
+        if existing_currency != currency:
+            raise ValueError("同一模型和组件的价格快照不能混用币种")
+        versions.setdefault(currency_key, set()).add((version, source))
+        normalized_rows.append(row)
+
+    if any(len(values) != 1 for values in versions.values()):
+        raise ValueError("同一模型和组件不能混用价格版本或来源")
+
+    from backend.infra.llm.pricing import PriceTable
+
+    table = PriceTable.from_rows(normalized_rows)
+    for model, component in required:
+        table.require(model, component, enforce=True)
+    return normalized_rows
+
+
+async def seed(
+    *, dry_run: bool = False, require_approved_prices: bool = False
+) -> None:
     host, database = _require_test_database()
     configs = build_seed_configs()
+    price_snapshot = []
+    if require_approved_prices:
+        price_snapshot = build_price_snapshot(
+            configs, load_registry_price_rows(configs)
+        )
     chat = configs["eval_gen"]
     embedding = configs["embedding"]
 
@@ -251,6 +417,41 @@ async def seed(*, dry_run: bool = False) -> None:
                     ),
                 },
             )
+        # 只向已校验的隔离库复制已批准快照，不创建新审批或回写源价格。
+        if price_snapshot:
+            # 快照导入串行化；相同版本不同价格必须报错，不能静默覆盖或跳过。
+            await session.execute(text("LOCK TABLE model_price IN SHARE ROW EXCLUSIVE MODE"))
+        for row in price_snapshot:
+            result = await session.execute(text("""
+                SELECT price_per_unit, unit, currency, source, approval_status,
+                    reviewer_1, reviewer_2, effective_to
+                FROM model_price WHERE model_name=:model_name
+                AND component=:component AND dimension=:dimension
+                AND price_table_version=:price_table_version
+                AND effective_from=CAST(:effective_from AS timestamptz)
+            """), row)
+            existing = result.mappings().first()
+            if existing is not None:
+                if any(existing[key] != row.get(key) for key in existing):
+                    raise ValueError("价格快照与目标库同版本记录冲突，拒绝写入")
+                continue
+            await session.execute(text("""
+                INSERT INTO model_price (
+                    model_name, component, dimension, price_per_unit, unit, currency,
+                    price_table_version, source, effective_from, effective_to,
+                    approval_status, reviewer_1, reviewer_2
+                )
+                SELECT :model_name, :component, :dimension, :price_per_unit, :unit,
+                    :currency, :price_table_version, :source,
+                    CAST(:effective_from AS timestamptz), CAST(:effective_to AS timestamptz),
+                    'approved', :reviewer_1, :reviewer_2
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM model_price WHERE model_name=:model_name
+                    AND component=:component AND dimension=:dimension
+                    AND price_table_version=:price_table_version
+                    AND effective_from=CAST(:effective_from AS timestamptz)
+                )
+            """), {**row, "effective_to": row.get("effective_to")})
         # get_session 是 async generator；break 不会执行 yield 后的自动提交，
         # 必须在关闭会话前显式提交，确保 CI 后续评测进程能读到绑定。
         await session.commit()
@@ -260,11 +461,51 @@ async def seed(*, dry_run: bool = False) -> None:
     print("测试评测模型绑定已写入（Key 仅保存加密值）")
 
 
+def verify_pricing() -> None:
+    """在任何付费 Probe/索引前检查权威价格，禁止缺价跑完后再报未知。"""
+    _host, database = _require_test_database()
+    os.environ["MEMORY_PGDATABASE"] = database
+    from backend.infra.llm.pricing import (
+        NormalizedUsage,
+        get_current_price_table,
+        price_usage,
+    )
+
+    for role, config in build_seed_configs().items():
+        component = "llm" if role == "eval_gen" else role
+        model = str(config["model_name"])
+        get_current_price_table(model, component).require(
+            model, component, enforce=True,
+        )
+        result = price_usage(
+            model, component,
+            NormalizedUsage(input_tokens=1, output_tokens=int(component == "llm")),
+            enforce=True,
+        )
+        if result.pricing_source != "approved_price_table" or result.cost_status != "exact":
+            raise RuntimeError(f"评测价格或汇率未就绪: {model}/{component}")
+    print("EVAL_PRICING_CHECK=passed（仅检查价格，不调用 Provider）")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="写入 Prompt 评测测试模型绑定")
     parser.add_argument("--dry-run", action="store_true", help="只校验配置，不写数据库")
+    parser.add_argument("--verify-pricing", action="store_true", help="只验证权威价格和汇率")
+    parser.add_argument(
+        "--require-approved-prices",
+        action="store_true",
+        help="从只读价格 Registry 导入当前已批准价格，否则拒绝真实评测",
+    )
     args = parser.parse_args()
-    asyncio.run(seed(dry_run=args.dry_run))
+    if args.verify_pricing:
+        verify_pricing()
+    else:
+        asyncio.run(
+            seed(
+                dry_run=args.dry_run,
+                require_approved_prices=args.require_approved_prices,
+            )
+        )
 
 
 if __name__ == "__main__":

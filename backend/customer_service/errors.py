@@ -114,8 +114,18 @@ class DatabaseError(CustomerServiceError):
 
     retryable = True
 
-    def __init__(self, message: str = "数据库异常", **kw):
-        super().__init__(message, "DATABASE_ERROR", "系统繁忙，请稍后重试", **kw)
+    def __init__(
+        self,
+        message: str = "数据库异常",
+        user_message: str | None = None,
+        **kw,
+    ):
+        super().__init__(
+            message,
+            "DATABASE_ERROR",
+            user_message or "系统繁忙，请稍后重试",
+            **kw,
+        )
 
 
 # ── 操作执行 / 人工转接 ──────────────────────────────────
@@ -156,10 +166,15 @@ class RefundRequestUnavailableError(BusinessRuleError):
 class RefundRequestConflictError(BusinessRuleError):
     """退款案件已存在且与当前确认请求不一致。"""
 
-    def __init__(self, message: str = "退款申请与已有案件冲突", **kw):
+    def __init__(
+        self,
+        message: str = "退款申请与已有案件冲突",
+        user_message: str | None = None,
+        **kw,
+    ):
         super().__init__(
             message,
-            user_message=(
+            user_message=user_message or (
                 "该会话已有待处理的退款案件，系统没有重复创建申请；"
                 "请查询申请状态或联系人工客服。"
             ),
