@@ -609,6 +609,35 @@ describe('ProvidersTab 模型目录与「去修」动作（B2）', () => {
     expect(container.querySelector('[data-testid="model-catalog-panel"]')).toBeTruthy()
   })
 
+  it('L2 归因为 API Key 时说明 Key、额度与模型权限等可能原因', async () => {
+    apiMock.verifyDraftProvider.mockResolvedValueOnce({
+      ok: false,
+      provider: null,
+      target: 'https://api.example.com/v1',
+      network_scope: 'public',
+      draft: true,
+      summary: '未通过（卡在 L2）：这个 Key 被上游拒绝',
+      steps: [
+        { grade: 'L0', status: 'pass', summary: 'URL 可达' },
+        { grade: 'L2', status: 'fail', summary: 'Key 被上游拒绝', reason: 'api_key' },
+      ],
+    })
+    const container = mount()
+    await openNewProvider(container)
+    typeInto(container, 'provider-base-url', 'https://api.example.com/v1')
+    typeInto(container, 'provider-model-name', 'some-model')
+    typeInto(container, 'provider-api-key', 'sk-test')
+    await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
+
+    const fixArea = container.querySelector('[data-testid="probe-fix-L2"]') as HTMLElement
+    expect(fixArea.textContent).toContain('账户余额/额度不足')
+    expect(fixArea.textContent).toContain('模型权限未开通')
+    expect(fixArea.textContent).toContain('模型名与上游不一致')
+    expect(fixArea.textContent).toContain('确认 Key 有误时再更新')
+    await click(Array.from(fixArea.querySelectorAll('button')).find((button) => button.textContent?.includes('定位 API Key 输入框')) as HTMLButtonElement)
+    expect(document.activeElement).toBe(container.querySelector('[data-testid="provider-api-key"]'))
+  })
+
   it('L2 归因为地址时一键改成兼容模式地址（替换而非追加）', async () => {
     apiMock.verifyDraftProvider.mockResolvedValueOnce({
       ok: false,

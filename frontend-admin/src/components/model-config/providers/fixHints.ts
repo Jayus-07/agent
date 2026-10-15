@@ -15,7 +15,7 @@ import { baseUrlHost, baseUrlPath } from './urlUtils'
 export type FixHint =
   | { kind: 'use-url'; baseUrl: string; label: string }
   | { kind: 'open-catalog'; label: string }
-  | { kind: 'focus-api-key'; label: string }
+  | { kind: 'focus-api-key'; label: string; description: string }
 
 function baseUrlOrigin(raw: string): string {
   try {
@@ -55,7 +55,11 @@ export function fixHintsFor(
     return [{ kind: 'open-catalog', label: '从模型清单里选一个' }]
   }
   if (reason === 'api_key') {
-    return [{ kind: 'focus-api-key', label: '重新填写 API Key' }]
+    return [{
+      kind: 'focus-api-key',
+      label: '定位 API Key 输入框',
+      description: '上游拒绝不一定是 Key 错：也可能是账户余额/额度不足、模型权限未开通，或模型名与上游不一致。请先核对厂商控制台中的 Key 状态、额度和模型权限；确认 Key 有误时再更新。',
+    }]
   }
   // unreachable / blocked / timeout / invalid_url / client_build / unknown：
   // 能给的只有「检查地址与网络」这类说明，给不出可执行的一步 —— 不造按钮。

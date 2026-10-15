@@ -155,14 +155,21 @@ export async function saveModelRole(role: string, modelName: string): Promise<Re
   })
 }
 
-/** 管理员手动触发单模型健康探测（同步执行一次极低成本探测，结果写缓存）。
+type ModelHealthProbeResult = {
+  status: ModelHealth['status']
+  latencyMs?: number
+  error?: string
+  probeSource?: ModelHealth['probeSource']
+}
+
+/** 管理员手动触发单模型健康探测（OCR 会执行一次最小上游文本调用，可能产生少量费用）。
  *
  *  后端 `POST /sys/model-health/check`：模型未在注册表登记时返回 404。
  */
 export async function checkModelHealth(
   modelName: string,
-): Promise<{ status: string; latencyMs?: number; error?: string }> {
-  return mutationRequest<{ status: string; latencyMs?: number; error?: string }>(
+): Promise<ModelHealthProbeResult> {
+  return mutationRequest<ModelHealthProbeResult>(
     '/api/sys/model-health/check',
     {
       operation: `model-health-check:${modelName}`,

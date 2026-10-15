@@ -52,7 +52,7 @@ class _UpsertSession:
                     return _M()
 
             return _Dup()
-        if "SELECT provider_id, model_kind, enabled FROM llm_models" in sql:
+        if "SELECT provider_id, model_kind, enabled" in sql:
             rows = [self.existing_row] if self.existing_row else []
 
             class _R:
@@ -147,6 +147,11 @@ async def test_add_model_revives_soft_deleted_row_into_new_provider(monkeypatch)
         if "UPDATE llm_models SET provider_id" in s and "enabled = true" in s
     ]
     assert takeover_sql, "应执行复活过户 UPDATE（provider_id + enabled=true）"
+    assert any(
+        "UPDATE llm_model_health SET status = 'unknown'" in sql
+        and "model_name = :model_name" in sql
+        for sql in session.statements
+    ), "软删模型重新启用和过户后，旧人工探测状态必须失效"
 
 
 @pytest.mark.asyncio
@@ -165,6 +170,32 @@ async def test_add_model_still_rejects_live_duplicate_on_other_provider(monkeypa
             {"modelName": "qwen3.7-plus", "modelKind": "chat"},
             "user:1",
         )
+
+
+@pytest.mark.asyncio
+async def test_upstream_model_name_change_invalidates_manual_health(monkeypatch):
+    session = _UpsertSession({
+        "provider_id": "new-relay",
+        "model_kind": "chat",
+        "enabled": True,
+        "upstream_model_name": "old-upstream-name",
+    })
+    monkeypatch.setattr(model_config.models_mod, "get_model_entry", lambda _name: None)
+
+    await ModelConfigService()._upsert_model(
+        session,
+        provider_id="new-relay",
+        model_name="custom-model",
+        model_kind="chat",
+        operator="user:test-admin",
+        upstream_model_name="new-upstream-name",
+    )
+
+    assert any(
+        "UPDATE llm_model_health SET status = 'unknown'" in sql
+        and "model_name = :model_name" in sql
+        for sql in session.statements
+    )
 
 
 class _Cred:

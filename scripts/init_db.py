@@ -281,8 +281,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     "094_travel_v2_ai_edit_requests.sql": "memory",
     # AI 请求账本支持持久化冲突待确认及其终态。
     "095_travel_v2_ai_edit_pending_resolution.sql": "memory",
-    # 固定 Revision 分享与 ICS 导出迁移排在 BE-4C 的 095 之后。
+    # 固定 Revision 分享与 ICS 导出。
     "096_travel_v2_revision_shares.sql": "memory",
+    # 健康探测来源。
+    "097_llm_model_health_probe_source.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -296,8 +298,12 @@ ORDER_LAST = [
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
     "094_travel_v2_ai_edit_requests.sql",
+    # AI 请求账本支持持久化冲突待确认及其终态。
     "095_travel_v2_ai_edit_pending_resolution.sql",
+    # 固定 Revision 分享与 ICS 导出。
     "096_travel_v2_revision_shares.sql",
+    # 健康探测来源。
+    "097_llm_model_health_probe_source.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
