@@ -49,6 +49,8 @@ RAG_MIGRATION_MARKERS = (
     "rag",
     "model",
     "llm",
+    "budget",
+    "billing",
     "memory",
     "prompt",
     "eval",

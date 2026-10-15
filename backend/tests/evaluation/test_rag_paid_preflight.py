@@ -1,11 +1,13 @@
 """RAG 真实评测在任何 Provider 外呼前验证批准价格。"""
-import json
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 
+import psycopg2
 import pytest
 
 from backend.infra.llm import pricing
+from backend.scripts import seed_prompt_eval_db as seed
 
 
 def _approved_price_row(dimension: str, *, unit="per_1m_tokens", currency="CNY"):
@@ -18,80 +20,210 @@ def _approved_price_row(dimension: str, *, unit="per_1m_tokens", currency="CNY")
         currency=currency,
         price_table_version="source-v1",
         source="source-registry",
-        effective_from="2020-01-01T00:00:00+00:00",
+        effective_from=datetime.now(timezone.utc) - timedelta(days=1),
+        effective_to=None,
         approval_status="approved",
-        reviewer_1="original-a",
-        reviewer_2="original-b",
+        reviewer_1="reviewer-a",
+        reviewer_2="reviewer-b",
     )
+
+
+def _embedding_configs():
+    return {"embedding": {"model_name": "embedding-test"}}
 
 
 @pytest.mark.parametrize(
     "invalid",
     ["reviewer", "source", "expired", "duplicate", "model", "missing"],
 )
-def test_price_snapshot_rejects_unapproved_or_incomplete_rows(monkeypatch, invalid):
-    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
-
+def test_price_snapshot_rejects_unapproved_or_incomplete_rows(invalid):
     rows = [_approved_price_row("input")]
     if invalid == "reviewer":
-        rows[0]["reviewer_2"] = "original-a"
+        rows[0]["reviewer_2"] = "reviewer-a"
     elif invalid == "source":
         rows[0]["source"] = ""
     elif invalid == "expired":
-        rows[0]["effective_to"] = "2021-01-01T00:00:00+00:00"
+        rows[0]["effective_to"] = datetime.now(timezone.utc) - timedelta(days=1)
     elif invalid == "duplicate":
         rows.append(dict(rows[0]))
     elif invalid == "model":
         rows[0]["model_name"] = "unbound-model"
     elif invalid == "missing":
         rows[0]["dimension"] = "output"
-    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps(rows))
-    configs = {"embedding": {"model_name": "embedding-test"}}
 
     with pytest.raises((ValueError, pricing.MissingModelPrice)):
-        build_price_snapshot(configs)
+        seed.build_price_snapshot(_embedding_configs(), rows)
 
 
-def test_price_snapshot_preserves_approval_source_and_version(monkeypatch):
-    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
+def test_price_snapshot_preserves_registry_approval_and_version():
+    result = seed.build_price_snapshot(
+        _embedding_configs(), [_approved_price_row("input")]
+    )
 
-    row = _approved_price_row("input")
-    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps([row]))
-    result = build_price_snapshot({"embedding": {"model_name": "embedding-test"}})
-
-    assert result[0]["reviewer_1"] == "original-a"
-    assert result[0]["reviewer_2"] == "original-b"
+    assert result[0]["reviewer_1"] == "reviewer-a"
+    assert result[0]["reviewer_2"] == "reviewer-b"
     assert result[0]["source"] == "source-registry"
     assert result[0]["price_table_version"] == "source-v1"
     assert result[0]["price_per_unit"] == Decimal("1")
 
 
-def test_price_snapshot_rejects_per_call_token_price(monkeypatch):
-    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
+@pytest.mark.parametrize(
+    ("changed", "value", "message"),
+    [
+        ("price_table_version", "source-v2", "版本或来源"),
+        ("source", "different-registry", "版本或来源"),
+        ("currency", "USD", "不能混用币种"),
+    ],
+)
+def test_price_snapshot_rejects_mixed_registry_dimensions(changed, value, message):
+    rows = [
+        _approved_price_row("input"),
+        _approved_price_row("cache_read"),
+    ]
+    rows[1][changed] = value
 
+    with pytest.raises(ValueError, match=message):
+        seed.build_price_snapshot(_embedding_configs(), rows)
+
+
+def test_price_snapshot_rejects_per_call_token_price():
     row = _approved_price_row("input", unit="per_call")
-    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps([row]))
 
     with pytest.raises(ValueError, match="Token 维度"):
-        build_price_snapshot({"embedding": {"model_name": "embedding-test"}})
+        seed.build_price_snapshot(_embedding_configs(), [row])
 
 
-def test_price_snapshot_rejects_mixed_currency_within_model_component(monkeypatch):
-    from backend.scripts.seed_prompt_eval_db import build_price_snapshot
+def test_registry_read_requires_configured_dsn(monkeypatch):
+    monkeypatch.delenv("PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", raising=False)
 
-    rows = [
-        _approved_price_row("input", currency="CNY"),
-        _approved_price_row("cache_read", currency="USD"),
-    ]
-    monkeypatch.setenv("PROMPT_EVAL_APPROVED_PRICES_JSON", json.dumps(rows))
-
-    with pytest.raises(ValueError, match="不能混用币种"):
-        build_price_snapshot({"embedding": {"model_name": "embedding-test"}})
+    with pytest.raises(RuntimeError, match="只读价格 Registry"):
+        seed.load_registry_price_rows(_embedding_configs())
 
 
-def test_price_verification_fails_before_usage_pricing_when_snapshot_is_missing(monkeypatch):
-    from backend.scripts import seed_prompt_eval_db as seed
+def test_registry_read_uses_readonly_replica_and_bound_models(monkeypatch):
+    calls = []
+    rows = [_approved_price_row("input")]
 
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, query, params=None):
+            calls.append((query, params))
+
+        def fetchone(self):
+            return {"is_read_replica": True}
+
+        def fetchall(self):
+            return rows
+
+    class _Connection:
+        def cursor(self, **_kwargs):
+            return _Cursor()
+
+        def set_session(self, **kwargs):
+            calls.append(("session", kwargs))
+
+        def rollback(self):
+            calls.append(("rollback", None))
+
+        def close(self):
+            calls.append(("close", None))
+
+    monkeypatch.setenv(
+        "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", "postgresql://readonly/registry"
+    )
+    monkeypatch.setattr(
+        seed.psycopg2,
+        "connect",
+        lambda dsn, **kwargs: calls.append((dsn, kwargs)) or _Connection(),
+    )
+
+    result = seed.load_registry_price_rows(_embedding_configs())
+
+    assert result == rows
+    assert ("session", {"readonly": True, "autocommit": False}) in calls
+    assert calls[3][1] == ["embedding-test", "embedding"]
+    assert calls[-2:] == [("rollback", None), ("close", None)]
+
+
+def test_registry_read_rejects_primary_database(monkeypatch):
+    class _Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, *_args):
+            return None
+
+        def fetchone(self):
+            return {"is_read_replica": False}
+
+    class _Connection:
+        def cursor(self, **_kwargs):
+            return _Cursor()
+
+        def set_session(self, **_kwargs):
+            return None
+
+        def rollback(self):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setenv(
+        "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", "postgresql://readonly/registry"
+    )
+    monkeypatch.setattr(seed.psycopg2, "connect", lambda *_args, **_kwargs: _Connection())
+
+    with pytest.raises(RuntimeError, match="只读副本"):
+        seed.load_registry_price_rows(_embedding_configs())
+
+
+def test_registry_prefix_is_validated_before_connect(monkeypatch):
+    monkeypatch.setenv(
+        "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", "postgresql://readonly/registry"
+    )
+    monkeypatch.setenv("PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX", "bad-prefix;")
+    connect_called = False
+
+    def _connect(*_args, **_kwargs):
+        nonlocal connect_called
+        connect_called = True
+        raise AssertionError("不应连接 Registry")
+
+    monkeypatch.setattr(seed.psycopg2, "connect", _connect)
+    with pytest.raises(ValueError, match="表前缀"):
+        seed.load_registry_price_rows(_embedding_configs())
+    assert connect_called is False
+
+
+def test_registry_database_errors_are_sanitized(monkeypatch, capsys):
+    monkeypatch.setenv(
+        "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL", "postgresql://secret@registry/db"
+    )
+    monkeypatch.setattr(
+        seed.psycopg2,
+        "connect",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            psycopg2.OperationalError("credential-sentinel")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="保持阻断"):
+        seed.load_registry_price_rows(_embedding_configs())
+    assert "credential-sentinel" not in capsys.readouterr().out
+
+
+def test_price_verification_fails_before_usage_pricing_when_snapshot_is_missing(
+    monkeypatch,
+):
     monkeypatch.setattr(
         seed, "_require_test_database", lambda: ("localhost", "agent_memory_test")
     )

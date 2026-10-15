@@ -5,7 +5,6 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -37,6 +36,11 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in regression
     assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in smoke
     assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in regression
+    for workflow in (smoke, regression):
+        assert "PROMPT_EVAL_APPROVED_PRICES_JSON" not in workflow
+        assert "--require-approved-prices" in workflow
+        assert "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL" in workflow
+        assert "--verify-pricing" in workflow
     # 真实评测账本写入依赖此开关；两个 workflow 使用独立临时数据库。
     assert 'OBS_ANALYTICS_ENABLED: "true"' in smoke
     assert 'OBS_ANALYTICS_ENABLED: "true"' in regression

@@ -162,7 +162,13 @@ jobs:
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Seed DB API model bindings
-        run: python -m backend.scripts.seed_prompt_eval_db
+        env:
+          PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL: ${{ secrets.PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL }}
+          PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX: ${{ vars.PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX }}
+        run: python -m backend.scripts.seed_prompt_eval_db --require-approved-prices
+
+      - name: Verify approved prices before any paid API call
+        run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
 
       - name: Verify bindings and probe real API
         env:

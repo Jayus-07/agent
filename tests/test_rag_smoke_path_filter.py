@@ -42,6 +42,7 @@ def test_rag_and_billing_migrations_trigger_smoke():
         "backend/sql/migrations/053_model_price_immutable_trigger.sql",
         "backend/sql/migrations/079_llm_usage_billing_v2.sql",
         "backend/sql/migrations/097_llm_model_health_probe_source.sql",
+        "backend/sql/migrations/066_budget_cny_identity_needs_review.sql",
     ]
     assert _filter_import(paths) is True
     assert _filter_subprocess(paths) is True
@@ -107,24 +108,35 @@ def test_empty_diff_skips_smoke():
 
 def test_approved_price_check_precedes_provider_probe():
     root = Path(__file__).resolve().parents[1]
-    workflow = yaml.safe_load(
+    smoke = yaml.safe_load(
         (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
     )
-    detect_steps = workflow["jobs"]["detect-changes"]["steps"]
+    detect_steps = smoke["jobs"]["detect-changes"]["steps"]
     filter_step = next(step for step in detect_steps if step.get("id") == "filter")
     assert '--event "$EVENT_NAME"' in filter_step["run"]
-    job = workflow["jobs"]["rag-smoke"]
-    env = job["env"]
-    assert env["PROMPT_EVAL_APPROVED_PRICES_JSON"] == (
-        "$" + "{{ vars.PROMPT_EVAL_APPROVED_PRICES_JSON }}"
-    )
-    steps = job["steps"]
-    price_check = next(
-        i for i, step in enumerate(steps)
-        if step.get("name") == "Verify approved prices before any paid API call"
-    )
-    provider_probe = next(
-        i for i, step in enumerate(steps)
-        if step.get("name") == "Verify bindings and probe real API"
-    )
-    assert price_check < provider_probe
+
+    for workflow_name in ("rag_smoke.yml", "rag_regression.yml"):
+        workflow = yaml.safe_load(
+            (root / ".github/workflows" / workflow_name).read_text(
+                encoding="utf-8"
+            )
+        )
+        job_name = "rag-smoke" if workflow_name == "rag_smoke.yml" else "rag-regression"
+        job = workflow["jobs"][job_name]
+        assert "PROMPT_EVAL_APPROVED_PRICES_JSON" not in job["env"]
+        steps = job["steps"]
+        seed = next(step for step in steps if step.get("name") == "Seed DB API model bindings")
+        assert seed["run"].endswith("--require-approved-prices")
+        assert seed["env"]["PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL"] == (
+            "$" + "{{ secrets.PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL }}"
+        )
+        assert "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL" not in job["env"]
+        price_check = next(
+            i for i, step in enumerate(steps)
+            if step.get("name") == "Verify approved prices before any paid API call"
+        )
+        provider_probe = next(
+            i for i, step in enumerate(steps)
+            if step.get("name") == "Verify bindings and probe real API"
+        )
+        assert price_check < provider_probe
