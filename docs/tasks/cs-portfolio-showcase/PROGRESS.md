@@ -25,7 +25,7 @@
 
 ## 本次 Review Follow-up
 
-PR #75 的三条 Review 要求：链接既有受控裁决入口；稳定计划使用可移植测试命令并把机器环境/实际结果移入本文件；持续任务状态由本标准任务目录承载。修复提交、Follow-up PR 和三条回复的 URL 在本节后续追加；线程在总控协调后解决。
+PR #75 的三条 Review 要求：链接既有受控裁决入口；稳定计划使用可移植测试命令并把机器环境/实际结果移入本文件；持续任务状态由本标准任务目录承载。修复提交 `43c209b526c1b13c2731c064591932093c90a573` 已推送至 [Follow-up PR #78](https://github.com/Jayus-07/agent/pull/78)。对应三条 PR #75 Review 回复：[幂等入口](https://github.com/Jayus-07/agent/pull/75#discussion_r4287263030)、[可移植测试命令](https://github.com/Jayus-07/agent/pull/75#discussion_r4287263399)、[标准任务文件](https://github.com/Jayus-07/agent/pull/75#discussion_r4287263780)。线程保持未解决，待总控复核后收口。
 
 ## 下一步
 
