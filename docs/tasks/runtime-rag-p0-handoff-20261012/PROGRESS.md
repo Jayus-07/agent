@@ -97,5 +97,6 @@
 - CI 最终门禁要求费用可核算且身份/预占/结算完成对账；`UNVERIFIED` 不再只是 artifact 提示。一次 eval 请求显式设置调用数 64、token 32000、成本配置 CNY 0.50；64 次覆盖原先漏计的专项组件，不构成整项 CI/供应商账单绝对封顶承诺，Probe/索引仍须独立核对。
 - **T0：PASS**，修改 Python 文件 `py_compile`、`git diff --check` 通过；新增测试文件 Ruff 通过。现有大文件的历史 Ruff 问题未扩大修复。
 - **T1/T2：PASS**，定向集合 `182 passed in 79.58s`，覆盖预算/配额/计费、MultiQuery、retrieval deadline、embedding 缓存、rerank、ContextVar、seed 和 CI 门禁；全部为合成 Provider/内存账本，无真实模型调用。
+- 新增专项预算、价格预检和 seed 回归已加入 PR 免费 CI；按工作流完整命令本机执行为 `50 passed in 6.40s`，只有既有 `TestCase` 模型名称产生的 collection warning。免费 CI 不读取付费 Secrets。
 - **隔离 PG T2：PASS**，使用本机 PostgreSQL 18 二进制独立启动 `127.0.0.1:15452/pr52_isolated_test`，SCRAM 合成凭据；执行现行 031/066 迁移，实际导入合成价格快照两次仍 4 行，同版本改价被拒绝，价格预检通过；既有 PG 原子配额集 `1 passed in 3.76s`。集群已停止、临时密码文件已删除，数据证据在 `D:/tmp/pr52-pg-w_2zfufw`。进程退出时既有 Memory async engine 有 event-loop-closed 清理告警，测试及数据库检查退出码为 0；不宣称已解决该独立生命周期问题。
 - **真实 T3：BLOCKED / UNVERIFIED**。用户已经授权使用 PR 所需真实模型，不再等待重复授权。`prompt-eval` 环境未提供 `PROMPT_EVAL_APPROVED_PRICES_JSON`；授权源库只读查询返回 `ConnectionTimeout`，未取得权威价格。未启动新付费 run、未写共享/生产库。源价格与凭据可读后，先导出原始批准快照，再对当前 PR HEAD 执行一次固定 8-case 严格 Smoke（MultiQuery 开启），核对完整归属和费用；Top-1 0.80 门槛保持。
