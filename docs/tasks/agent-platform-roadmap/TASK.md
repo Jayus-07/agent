@@ -1,6 +1,6 @@
 # Agent Platform 总改造计划（P0–P7）
 
-> 状态：**目标路线图 / 不代表功能已实现**。2026-10-15 对账最新 main `5df8b060`、PR #53/#63/#65/#68 后，P1-G 按 A/B/C 三个交付包推进；#68 的 Next.js 15.5.28 锁文件修复 `85edd1b` 已推送，frontend-admin CI、secret-scan、RAG PR Smoke 均 PASS，尚待合并。具体施工验收以源代码、已合并 PR、测试和真实运行证据为准。
+> 状态：**目标路线图 / 不代表功能已实现**。2026-10-15 对账 main `24a0182e`、PR #53/#63/#65/#68 后，P1-G 按 A/B/C 三个交付包推进；#53 计划和 #68 Next.js 15.5.28 安全修复均已合入。#63 自动化门禁 PASS、真实授权 E2E BLOCKED；#65 head `5d9ef18` 修复 Review 后，定向测试、安全 audit、CI build 均 PASS，真实 API E2E BLOCKED。具体施工验收以源代码、已合并 PR、测试和真实运行证据为准。
 >
 > 核心目标：一套 Agent Platform 底座，支持 **求职技术作品** 与 **跨境电商 AI 客服商业化验证** 两条交付路线。
 
