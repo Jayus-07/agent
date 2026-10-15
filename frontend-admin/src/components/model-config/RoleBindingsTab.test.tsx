@@ -401,6 +401,27 @@ describe('手动健康测试按钮', () => {
     expect(btn?.getAttribute('disabled')).toBeNull()
   })
 
+  it('上游业务失败作为正常探测结果时也刷新健康缓存', async () => {
+    apiMock.checkModelHealth.mockResolvedValueOnce({
+      status: 'model_not_found',
+      latencyMs: 614,
+      error: '上游未找到该模型，请检查上游模型名和模型权限',
+    })
+    const onSaved = vi.fn(async () => undefined)
+    const container = mount({ onSaved })
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="role-health-check-rerank"]',
+      )?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(apiMock.checkModelHealth).toHaveBeenCalledWith('qwen3.7-text-rerank')
+    expect(onSaved).toHaveBeenCalled()
+  })
+
   it('探测接口报错时展示错误且不崩', async () => {
     apiMock.checkModelHealth.mockRejectedValueOnce(new Error('模型未在注册表登记'))
     const container = mount()

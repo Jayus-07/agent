@@ -37,10 +37,11 @@ from backend.app.api.deps import (
     require_admin_user,
     require_user_actor,
 )
-from backend.config import model_roles
 from backend.config import llm as config_llm
+from backend.config import model_roles
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import models as models_mod
+from backend.infra.llm.distributed_rate_limiter import get_distributed_rate_limiter
 
 router = APIRouter(prefix="/sys/model-roles", tags=["sys-model-roles"])
 
@@ -223,6 +224,32 @@ class ModelHealthCheckRequest(BaseModel):
     model_name: str = Field(..., alias="modelName", min_length=1, max_length=256)
 
 
+def _enforce_manual_health_rate_limit(actor: str) -> None:
+    """按可信操作者限流；Redis 可用时多实例共享，回退时保留进程内限制。"""
+    from backend.app.api.routes.sys_providers import (
+        _VERIFY_PER_MIN,
+        _enforce_rate_limit,
+    )
+
+    # 复用供应商探测端点已有的 actor 滑动窗口，保持单进程下 10 次/分钟的契约。
+    _enforce_rate_limit(actor, "model-health-check", _VERIFY_PER_MIN)
+
+    # 在现有 Redis Token Bucket 上增加共享 actor 配额。该组件在 Redis 不可用时
+    # 会退回本进程 LLM 限流器；上面的滑动窗口仍会限制当前进程内的请求。
+    allowed = get_distributed_rate_limiter().acquire(
+        scope="user",
+        identity=f"model-health-check:{actor}",
+        capacity=float(_VERIFY_PER_MIN),
+        refill_rate=_VERIFY_PER_MIN / 60.0,
+    )
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=f"探测过于频繁（每分钟上限 {_VERIFY_PER_MIN} 次），请稍后再试",
+            headers={"Retry-After": "6"},
+        )
+
+
 @_health_router.get("")
 async def list_model_health(
     operator: OperatorIdentity = Depends(require_user_actor),
@@ -241,15 +268,17 @@ async def check_model_health(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict:
     """管理员手动触发单模型探测；OCR 走真实上游最小文本调用。"""
-    del operator
     from backend.infra.llm import models as models_mod
     from backend.infra.llm.health import probe_model, probe_ocr_model
 
+    _enforce_manual_health_rate_limit(operator.actor)
     entry = models_mod.get_model_entry(body.model_name)
-    if entry is not None and models_mod.model_kind_of(entry) == "ocr":
+    if entry is None:
+        raise HTTPException(status_code=404, detail="模型未在注册表登记")
+    if models_mod.model_kind_of(entry) == "ocr":
         result = await probe_ocr_model(body.model_name)
     else:
         result = probe_model(body.model_name, probe_source="manual")
-    if result["status"] == "model_not_found":
-        raise HTTPException(status_code=404, detail=result["error"])
+    # 模型已登记但上游探测失败（包括上游 model_not_found）是探测结果，
+    # 必须正常返回，以便管理端刷新并显示安全的业务状态。
     return result

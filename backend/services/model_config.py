@@ -10,11 +10,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from datetime import datetime, timezone
-import os
 from decimal import Decimal, InvalidOperation
-from typing import Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 from urllib.parse import urlparse
 
 from sqlalchemy import text
@@ -25,12 +26,9 @@ from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import models as models_mod
 from backend.infra.llm import registry_store
 from backend.memory.database import get_session
-from backend.services import specialized_model_adapters
-from backend.services import specialized_model_probe
-from backend.services import provider_probe
+from backend.services import provider_probe, specialized_model_adapters, specialized_model_probe
 from backend.shared.crypto import decrypt_secret, encrypt_secret, fingerprint, last4
 from backend.shared.logger import logger
-
 
 HISTORY_OBJECTS = {
     "role",
@@ -57,6 +55,36 @@ _SPECIALIZED_ROLES = {"embedding", "rerank"}
 _PROBE_SAVE_RETRY_BACKOFF = float(
     os.getenv("PROBE_SAVE_RETRY_BACKOFF_SECONDS", "35") or "35"
 )
+
+
+async def _invalidate_manual_health(
+    session: Any,
+    *,
+    reason: str,
+    model_name: str | None = None,
+    provider_id: str | None = None,
+) -> None:
+    """使受配置变化影响的人工探测结果失效，写入和配置更新共用同一事务。"""
+    filters: list[str] = ["probe_source = 'manual'"]
+    params: dict[str, str] = {"reason": reason}
+    if model_name is not None:
+        filters.append("model_name = :model_name")
+        params["model_name"] = model_name
+    if provider_id is not None:
+        filters.append("provider = :provider_id")
+        params["provider_id"] = provider_id
+    if model_name is None and provider_id is None:
+        raise ValueError("失效人工健康结果时必须指定模型或供应商")
+
+    await session.execute(
+        text(
+            "UPDATE llm_model_health SET status = 'unknown', "
+            "last_checked_at = NULL, last_latency_ms = NULL, "
+            "last_error = :reason, consecutive_failures = 0, "
+            "probe_source = 'scheduled' WHERE " + " AND ".join(filters)
+        ),
+        params,
+    )
 
 
 _COMPONENT_BY_MODEL_KIND = {
@@ -688,6 +716,8 @@ class ModelConfigService:
 
     async def list_model_health(self) -> list[dict]:
         """全部已探测模型 health 快照（只读缓存，不在线探测）。"""
+        from backend.infra.llm.health import safe_error_for_status
+
         rows: list[Mapping[str, Any]] = []
         async for session in get_session():
             result = await session.execute(text(
@@ -697,23 +727,25 @@ class ModelConfigService:
             ))
             rows = list(result.mappings())
             break
-        return [
-            {
+        out: list[dict] = []
+        for r in rows:
+            status = str(r["status"] or "unknown")
+            out.append({
                 "modelName": str(r["model_name"]),
                 "provider": str(r["provider"] or ""),
                 "modelKind": str(r["model_kind"] or "chat"),
-                "status": str(r["status"] or "unknown"),
+                "status": status,
                 "lastCheckedAt": _iso(r["last_checked_at"]),
                 "lastLatencyMs": (
                     int(r["last_latency_ms"])
                     if r["last_latency_ms"] is not None else None
                 ),
-                "lastError": str(r["last_error"] or ""),
+                # 旧行可能保存过上游原始异常，出 API 前统一转成状态文案。
+                "lastError": safe_error_for_status(status),
                 "consecutiveFailures": int(r["consecutive_failures"] or 0),
                 "probeSource": str(r["probe_source"] or "scheduled"),
-            }
-            for r in rows
-        ]
+            })
+        return out
 
     async def get_index_compat(self) -> list[dict]:
         """全部向量索引的 embedding 元数据（与运行时角色对比供前端展示）。"""
@@ -1147,6 +1179,12 @@ class ModelConfigService:
             model_name = str(model_name_value).strip()
             if not model_name:
                 raise ValueError("modelName 不能为空")
+        upstream_value = payload.get("upstreamModelName")
+        upstream_model_name = (
+            (str(upstream_value).strip() if upstream_value is not None else "")
+            or model_name
+            or ""
+        )
 
         api_key = payload.get("apiKey")
         clear_api_key = bool(payload.get("clearApiKey"))
@@ -1333,17 +1371,13 @@ class ModelConfigService:
                     operator=operator,
                     allow_legacy_specialized_migration=True,
                     migration_base_url=base_url,
+                    upstream_model_name=upstream_model_name,
                 )
-            # 上游凭据、地址、协议或请求头变更后，之前的人工探测不再代表当前配置。
-            await session.execute(
-                text(
-                    "UPDATE llm_model_health SET status = 'unknown', "
-                    "last_checked_at = NULL, last_latency_ms = NULL, "
-                    "last_error = '供应商配置已变更，请重新执行手动验证', "
-                    "consecutive_failures = 0, probe_source = 'scheduled' "
-                    "WHERE provider = :provider_id AND probe_source = 'manual'"
-                ),
-                {"provider_id": provider_id},
+            # 上游凭据、地址、协议、启停或请求头变化后，旧人工结果失效。
+            await _invalidate_manual_health(
+                session,
+                provider_id=provider_id,
+                reason="供应商配置已变更，请重新执行手动验证",
             )
             await session.commit()
             break
@@ -1392,7 +1426,8 @@ class ModelConfigService:
         existing = (
             await session.execute(
                 text(
-                    "SELECT provider_id, model_kind, enabled FROM llm_models "
+                    "SELECT provider_id, model_kind, enabled, upstream_model_name "
+                    "FROM llm_models "
                     "WHERE name = :model_name"
                 ),
                 {"model_name": model_name},
@@ -1412,6 +1447,9 @@ class ModelConfigService:
         )
 
         existing_provider_id = str(existing.get("provider_id")) if existing else ""
+        existing_enabled = bool(existing.get("enabled")) if existing else False
+        existing_upstream = str(existing.get("upstream_model_name") or "") if existing else ""
+        requested_upstream = str(upstream_model_name or "")
         # 复活过户：占用行已软删（enabled=false）→ 允许迁移到新供应商。
         # 场景：删除供应商后其模型名成为幽灵占用，用户在新供应商下重加同名模型。
         takeover_soft_deleted = bool(
@@ -1523,6 +1561,19 @@ class ModelConfigService:
                     f"模型 {model_name} 已登记为{models_mod.MODEL_KIND_LABELS[models_mod.model_kind_of(code_entry)]}，"
                     f"不能改为{models_mod.MODEL_KIND_LABELS[effective_kind]}"
                 )
+            if (
+                existing_provider_id != provider_id
+                or existing_upstream != requested_upstream
+                or not existing_enabled
+            ):
+                reason = (
+                    "模型已重新启用，请重新执行手动验证"
+                    if not existing_enabled
+                    else "模型所属供应商或上游模型名已变更，请重新执行手动验证"
+                )
+                await _invalidate_manual_health(
+                    session, model_name=model_name, reason=reason,
+                )
             return effective_kind
 
         await session.execute(
@@ -1539,6 +1590,11 @@ class ModelConfigService:
                 "upstream_name": upstream_model_name,
                 "operator": operator,
             },
+        )
+        await _invalidate_manual_health(
+            session,
+            model_name=model_name,
+            reason="模型已重新登记，请重新执行手动验证",
         )
         return effective_kind
 
@@ -1846,6 +1902,11 @@ class ModelConfigService:
                     "WHERE name = :model_name"
                 ),
                 {"model_name": model_name},
+            )
+            await _invalidate_manual_health(
+                session,
+                model_name=model_name,
+                reason="模型已停用，请重新启用并执行手动验证后再使用",
             )
             await session.execute(
                 text(
@@ -2176,6 +2237,11 @@ class ModelConfigService:
                     "WHERE id = :provider_id"
                 ),
                 {"provider_id": provider_id},
+            )
+            await _invalidate_manual_health(
+                session,
+                provider_id=provider_id,
+                reason="供应商已停用，请重新启用并执行手动验证后再使用",
             )
             await session.execute(
                 text(

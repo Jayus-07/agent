@@ -235,6 +235,43 @@ async def test_update_provider_invalidates_manual_health_after_credential_rotati
 
 
 @pytest.mark.asyncio
+async def test_list_model_health_sanitizes_legacy_provider_errors(monkeypatch):
+    row = {
+        "model_name": "custom-model",
+        "provider": "custom-provider",
+        "model_kind": "ocr",
+        "status": "auth_failed",
+        "last_checked_at": None,
+        "last_latency_ms": 12,
+        "last_error": "raw response contains bearer test-secret",
+        "consecutive_failures": 1,
+        "probe_source": "manual",
+    }
+
+    class _Mappings:
+        def __iter__(self):
+            return iter([row])
+
+    class _HealthResult:
+        def mappings(self):
+            return _Mappings()
+
+    class _HealthSession:
+        async def execute(self, _statement):
+            return _HealthResult()
+
+    # 用专用 async session stream，确保旧缓存的原始异常不会到达 API 响应。
+    monkeypatch.setattr(
+        model_config, "get_session", lambda: _session_stream(_HealthSession()),
+    )
+    result = await model_config.ModelConfigService().list_model_health()
+
+    assert result[0]["status"] == "auth_failed"
+    assert "鉴权失败" in result[0]["lastError"]
+    assert "test-secret" not in repr(result)
+
+
+@pytest.mark.asyncio
 async def test_create_provider_does_not_persist_when_probe_fails(monkeypatch):
     """payload.probe=true 时探测失败不得落库（强校验路径保留）。"""
     async def _probe(**_kwargs):
@@ -340,7 +377,7 @@ class _LegacyMigrationSession:
         self.parameters.append(dict(params or {}))
         if "SELECT 1 FROM llm_providers" in sql:
             return _LegacyMigrationResult(None)
-        if "SELECT provider_id, model_kind, enabled FROM llm_models" in sql:
+        if "SELECT provider_id, model_kind, enabled" in sql and "FROM llm_models" in sql:
             return _LegacyMigrationResult({
                 "provider_id": "specialized-api",
                 "model_kind": "embedding",

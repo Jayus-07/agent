@@ -149,6 +149,34 @@ def test_scheduled_probe_does_not_report_ocr_credentials_as_healthy(monkeypatch)
     assert recorded[0][3] == "unknown"
 
 
+def test_non_ocr_probe_returns_and_persists_safe_status_message(monkeypatch):
+    recorded = []
+
+    def raise_probe_error(_name):
+        raise RuntimeError("404 upstream body includes bearer test-secret")
+
+    monkeypatch.setattr(
+        models,
+        "get_model_entry",
+        lambda _name: {
+            "name": "chat-model",
+            "provider": "provider-a",
+            "model_kind": "chat",
+        },
+    )
+    monkeypatch.setattr(models, "model_kind_of", lambda _entry: "chat")
+    monkeypatch.setattr(health, "_probe_chat", raise_probe_error)
+    monkeypatch.setattr(health, "_record", lambda *args: recorded.append(args))
+
+    result = health.probe_model("chat-model", probe_source="manual")
+
+    assert result["status"] == "model_not_found"
+    assert "上游未找到" in result["error"]
+    assert "test-secret" not in repr(result)
+    assert recorded[0][5] == result["error"]
+    assert "test-secret" not in repr(recorded)
+
+
 def test_periodic_scan_skips_ocr_models(monkeypatch):
     async def refresh_registry():
         return None

@@ -50,6 +50,25 @@ def classify_status(latency_ms: int, error: str) -> str:
     return "degraded"
 
 
+_SAFE_STATUS_ERRORS = {
+    "degraded": "模型探测未能完成，请检查模型与供应商配置",
+    "slow": "模型响应较慢，请检查供应商状态",
+    "rate_limited": "上游请求过于频繁，请稍后重试",
+    "auth_failed": "上游鉴权失败，请检查 API Key、账户额度和模型权限",
+    "timeout": "上游探测超时，请稍后重试",
+    "provider_unreachable": "无法连接供应商，请检查服务地址和网络",
+    "model_not_found": "上游未找到该模型，请检查上游模型名和模型权限",
+    "unknown": "模型健康状态暂时无法确认，请重新执行手动验证",
+}
+
+
+def safe_error_for_status(status: str) -> str:
+    """返回可展示的固定文案，不把 Provider 异常或响应原文带到浏览器。"""
+    if status == "healthy":
+        return ""
+    return _SAFE_STATUS_ERRORS.get(status, _SAFE_STATUS_ERRORS["degraded"])
+
+
 def _record(
     model_name: str,
     provider: str,
@@ -141,6 +160,7 @@ def probe_model(
 
     t0 = time.monotonic()
     error = ""
+    error_type = ""
     try:
         if kind == "chat":
             _probe_chat(model_name)
@@ -153,18 +173,21 @@ def probe_model(
             _probe_availability_only(provider)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
+        error_type = type(exc).__name__
     latency_ms = int((time.monotonic() - t0) * 1000)
     status = classify_status(latency_ms, error)
-    _record(model_name, provider, kind, status, latency_ms, error, probe_source)
+    safe_error = safe_error_for_status(status)
+    # 保留既有语义：slow 是成功但变慢，不递增连续失败次数。
+    recorded_error = "" if status == "slow" else safe_error
+    _record(model_name, provider, kind, status, latency_ms, recorded_error, probe_source)
     logger.info(
-        "[ModelHealth] probe model=%s kind=%s status=%s latency=%sms%s",
-        model_name, kind, status, latency_ms,
-        f" error={error[:120]}" if error else "",
+        "[ModelHealth] probe model=%s kind=%s status=%s latency=%sms error_type=%s",
+        model_name, kind, status, latency_ms, error_type,
     )
     return {
         "status": status,
         "latencyMs": latency_ms,
-        "error": error,
+        "error": safe_error,
         "probeSource": probe_source,
     }
 
