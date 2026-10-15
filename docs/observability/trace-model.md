@@ -68,6 +68,15 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 同租户内 Trace 声明了 `user_id`：本人或平台管理员可读。
 - 越权统一返回 **404**（而非 403），避免以状态码差异泄露「该 Trace 存在」。
 
+### 管理端列表与统计
+
+- `GET /api/observability/traces` 在服务端逐条执行同一资源/租户授权，再应用 `since`、`until`、`status` 等筛选和 `limit`/`offset` 分页；响应 `total` 只计授权且匹配的 Trace。
+- 列表响应中的 Workflow、模型和 KB 筛选维度从已授权的留存 Trace 集合独立生成，不随当前页或所选筛选条件变化；不得先从未授权数据生成筛选项。
+- `has_tool` 下钻在留存上限内批量读取完整 Trace 和 Span，避免逐条查询造成 N+1 数据库访问。
+- 列表和统计均复用唯一 TraceStore。当前 TraceStore 最多保留 5,000 条；统计响应返回 `records_considered`、`retention_limit` 与 `observed_at`，仅代表该留存范围内的授权结果，不代表全量历史。
+- 管理端运行总览最近记录表兼容最多展示 200 条样本；统计由 `GET /api/observability/traces/stats` 在服务端按当前身份和租户范围聚合。样本行数不能作为全量统计口径。
+- CSV 导出只覆盖当前服务端分页返回的安全字段，不包含 Trace 输入/响应正文或 Session 标识。
+
 ### 子 Trace（children_ids）
 
 - 详情接口按既有 `parent_id` 关系补齐 `children_ids`，用于发现父请求超时/断连后
@@ -113,7 +122,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 | TR-02 | timeout/abort/fallback 与 Tool 业务失败不被记为同一种 success |
 | TR-03 | Prompt 发布/回滚期间同 key 多次调用可归因实际版本 |
 | TR-04 | model/provider/token/价格版本/估算状态与账单事实一致 |
-| TR-05 | Trace 列表、详情、children 下钻越权及跨租户不可见 |
+| TR-05 | Trace 列表、分页总数、统计、详情、children 下钻越权及跨租户不可见 |
 | TR-06 | PII 脱敏开关、异常分支、日志与管理端不泄露敏感字段 |
 | TR-07 | 断流或异步跨进程能根据父子/请求标识找回执行证据 |
 

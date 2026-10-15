@@ -162,6 +162,7 @@ def _handle_expired(
 
 def _execute_confirmed_action(
     pending_action: dict, *, user_id: str, tenant_id: str = "",
+    session_id: str = "",
 ) -> dict:
     """执行已确认的业务动作——Step6 副作用幂等边界。
 
@@ -172,17 +173,43 @@ def _execute_confirmed_action(
     生效一次并复用同一 action_record（含同一 action_id，下游审计落库
     以此去重）。
 
-    缺 confirmation_id / user_id 时退化为直调（无身份可用；与 tools 层
-    既有语义一致）。当前执行为模拟模式（无真实外部副作用）；Phase 6
-    接真实执行器时本边界的 fail-closed 语义即成为硬门禁。
+    退款申请必须具备确认、用户、租户和会话身份，sandbox 中登记为客服案件；
+    其他动作保留既有模拟执行行为。退款登记不表示资金已退回。
     """
     from backend.core.request_context import get_tool_tenant_id
     from backend.customer_service.experts.action import _simulate_execute
-    from backend.shared.idempotency import run_idempotent_side_effect
+    from backend.shared.idempotency import (
+        IdempotencyUnavailable,
+        SideEffectOutcomeUnknown,
+        run_idempotent_side_effect,
+    )
 
     confirmation_id = str(pending_action.get("action_id", "") or "")
+    action_type = str(pending_action.get("action_type", "") or "")
+    refund_request_written = False
+    if action_type == "refund_request":
+        if not confirmation_id or not user_id or not tenant_id or not session_id:
+            from backend.customer_service.errors import RefundRequestUnavailableError
+
+            raise RefundRequestUnavailableError("退款申请缺少可信确认上下文")
+        from backend.customer_service.service.refund_service import get_refund_service
+
+        def execute() -> dict:
+            nonlocal refund_request_written
+            action_record = get_refund_service().execute_refund_request(
+                pending_action,
+                confirmation_id=confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                conversation_id=session_id,
+            )
+            refund_request_written = True
+            return action_record.to_dict()
+    else:
+        def execute() -> dict:
+            return _simulate_execute(pending_action).to_dict()
     if not confirmation_id or not user_id:
-        return _simulate_execute(pending_action).to_dict()
+        return execute()
 
     payload = {
         "action_type": pending_action.get("action_type", ""),
@@ -193,14 +220,21 @@ def _execute_confirmed_action(
         "risk_level": pending_action.get("risk_level", ""),
     }
     resolved_tenant = tenant_id or get_tool_tenant_id() or "default"
-    return run_idempotent_side_effect(
-        "cs.action.execute",
-        payload,
-        lambda: _simulate_execute(pending_action).to_dict(),
-        tenant_id=resolved_tenant,
-        actor_id=user_id,
-        client_key=f"cs_action:{confirmation_id}",
-    )
+    try:
+        return run_idempotent_side_effect(
+            "cs.action.execute",
+            payload,
+            execute,
+            tenant_id=resolved_tenant,
+            actor_id=user_id,
+            client_key=f"cs_action:{confirmation_id}",
+        )
+    except IdempotencyUnavailable as exc:
+        if action_type == "refund_request" and refund_request_written:
+            raise SideEffectOutcomeUnknown(
+                "退款申请已写入，但幂等终态未能确认"
+            ) from exc
+        raise
 
 
 def _handle_confirm(
@@ -259,7 +293,9 @@ def _handle_confirm(
 
     try:
         record = _execute_confirmed_action(
-            pending_action, user_id=user_id, tenant_id=tenant_id)
+            pending_action, user_id=user_id, tenant_id=tenant_id,
+            session_id=session_id,
+        )
         confirmation_sm.transition(CS.EXECUTING, CS.SUCCESS)
         store.clear(user_id, session_id, final_state=CS.SUCCESS.value)
         record_cs_action(action_type, "success")
@@ -275,7 +311,12 @@ def _handle_confirm(
             result="success",
             target_type=pending_action.get("target_type", ""),
             target_id=pending_action.get("target_id", ""),
-            detail=f"simulated execution, action_id={record.get('action_id', '')}",
+            detail=(
+                f"refund request registered; funds not refunded; "
+                f"request_id={((record.get('data') or {}).get('request') or {}).get('request_id', '')}"
+                if action_type == "refund_request"
+                else f"simulated execution, action_id={record.get('action_id', '')}"
+            ),
             # agent_actions.conversation_id NOT NULL + FK（006）：审计落库
             # 必须带会话归属——session_id 即 conversations.conversation_id
             # （confirmation 落库时已幂等 get_or_create，2026-09-24 实测：
@@ -284,11 +325,20 @@ def _handle_confirm(
         )
 
         label = _ACTION_TYPE_LABELS.get(action_type, action_type)
-        answer = (
-            f"✅ 操作已提交成功！\n\n"
-            f"**操作类型:** {label}\n"
-            f"*（当前为模拟模式，实际写操作将在 Phase 6 启用）*"
-        )
+        if action_type == "refund_request":
+            request = (record.get("data") or {}).get("request") or {}
+            request_id = str(request.get("request_id") or "")
+            answer = (
+                f"✅ 退款申请已登记，正在等待人工审核。\n\n"
+                f"**申请编号:** `{request_id}`\n"
+                "当前仅登记了申请，尚未退款；审核结果会通过客服会话通知。"
+            )
+        else:
+            answer = (
+                f"✅ 操作已提交成功！\n\n"
+                f"**操作类型:** {label}\n"
+                f"*（当前为模拟模式，实际写操作将在 Phase 6 启用）*"
+            )
         logger.info("[CSConfirmationFlow] confirmed+success: type=%s", action_type)
 
         return ConfirmationOutcome(
@@ -348,7 +398,10 @@ def _handle_confirm(
 
         return ConfirmationOutcome(
             kind="failed",
-            answer="操作执行失败，请稍后重试或联系人工客服。",
+            answer=(
+                str(getattr(e, "user_message", "") or "").strip()
+                or "操作执行失败，请稍后重试或联系人工客服。"
+            ),
             action_type=action_type,
             confirmation_state=CS.FAILED.value,
             audit_entry=audit_entry,

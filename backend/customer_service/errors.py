@@ -127,6 +127,46 @@ class ActionExecutionError(CustomerServiceError):
         super().__init__(message, "ACTION_FAILED", user_message or "操作执行失败，请稍后重试", **kw)
 
 
+class RefundPolicyUnavailableError(DatabaseError):
+    """退款政策配置缺失或非法 —— 写路径 fail-closed。
+
+    继承 DatabaseError 是有意的：动作专家对「事实源不可用」已有统一的
+    降级话术（不发起申请 + 引导转人工），政策不可用与之同类，不另造分支。
+    """
+
+    def __init__(self, message: str = "退款政策不可用", **kw):
+        super().__init__(message, **kw)
+        self.code = "REFUND_POLICY_UNAVAILABLE"
+
+
+class RefundRequestUnavailableError(BusinessRuleError):
+    """退款申请后端未启用或没有真实业务网关能力。"""
+
+    def __init__(self, message: str = "退款申请服务暂不可用", **kw):
+        super().__init__(
+            message,
+            user_message=(
+                "当前业务通道暂不支持提交退款申请，未创建申请记录；"
+                "请联系人工客服协助。"
+            ),
+            **kw,
+        )
+
+
+class RefundRequestConflictError(BusinessRuleError):
+    """退款案件已存在且与当前确认请求不一致。"""
+
+    def __init__(self, message: str = "退款申请与已有案件冲突", **kw):
+        super().__init__(
+            message,
+            user_message=(
+                "该会话已有待处理的退款案件，系统没有重复创建申请；"
+                "请查询申请状态或联系人工客服。"
+            ),
+            **kw,
+        )
+
+
 class HumanHandoffError(CustomerServiceError):
     """人工转接异常"""
 

@@ -15,7 +15,11 @@ from backend.travel_v2.services.trip_ai_edit_service import (
     TripAIEditService,
 )
 from backend.travel_v2.services.trip_edit_service import TripEditService
-from backend.travel_v2.services.trip_write_validator import validate_trip_write
+from backend.travel_v2.services.trip_write_validator import (
+    TripWriteConflictError,
+    trip_write_advisories,
+    validate_trip_write,
+)
 
 
 def _evening_document() -> dict:
@@ -418,3 +422,80 @@ def test_governed_provider_exception_remains_unknown(monkeypatch) -> None:
         TripAIEditService._generate_candidate(
             "把西湖开始时间改到10:00", {"days": []},
         )
+
+
+def _two_item_schedule() -> dict:
+    document = valid_document()
+    next_item = dict(document["days"][0]["items"][0])
+    next_item.update({
+        "item_id": "item-2", "title": "下午活动", "start_time": "12:00",
+        "duration_min": 60, "fixed_start": False, "must_visit": False,
+        "locked": False, "place": None, "kind": "activity",
+        "activity_type": "custom",
+    })
+    document["days"][0]["items"].append(next_item)
+    return document
+
+
+def test_trip_write_conflict_has_stable_code_and_affected_items() -> None:
+    document = _two_item_schedule()
+    proposed = TripEditService._apply_structured_operation(
+        document,
+        {"op": "update_item", "item_id": "item-2", "start_time": "09:30"},
+    )
+
+    with pytest.raises(TripWriteConflictError) as blocked:
+        validate_trip_write(proposed, current_document=document)
+
+    assert blocked.value.conflict == {
+        "conflict_code": "SCHEDULE_OVERLAP",
+        "severity": "BLOCKED",
+        "message": "西湖 与 下午活动 的时间或路程安排冲突",
+        "affected_item_ids": ["item-1", "item-2"],
+        "allowed_resolutions": [],
+    }
+
+
+def test_schedule_conflict_offers_only_a_valid_scoped_time_resolution() -> None:
+    document = _two_item_schedule()
+    operation = {
+        "op": "update_item", "item_id": "item-2", "start_time": "09:30",
+    }
+    proposed = TripEditService._apply_structured_operation(document, operation)
+    with pytest.raises(TripWriteConflictError) as blocked:
+        validate_trip_write(proposed, current_document=document)
+
+    resolution = TripAIEditService._next_available_time_resolution(
+        document, operation, blocked.value.conflict,
+    )
+    assert resolution is not None
+    assert resolution["resolution_id"] == "use_next_available_time"
+    assert resolution["proposed_start_time"] == "11:00"
+    resolved = TripEditService._apply_structured_operation(
+        document, resolution["operation"],
+    )
+    validate_trip_write(resolved, current_document=document)
+
+
+def test_no_resolution_can_move_locked_or_fixed_items() -> None:
+    document = _two_item_schedule()
+    operation = {
+        "op": "update_item", "item_id": "item-2", "start_time": "09:30",
+    }
+    proposed = TripEditService._apply_structured_operation(document, operation)
+    with pytest.raises(TripWriteConflictError) as blocked:
+        validate_trip_write(proposed, current_document=document)
+    for flag in ("locked", "fixed_start"):
+        protected = _two_item_schedule()
+        protected["days"][0]["items"][1][flag] = True
+        assert TripAIEditService._next_available_time_resolution(
+            protected, operation, blocked.value.conflict,
+        ) is None
+
+
+def test_unknown_route_and_unverified_hours_are_nonblocking_advisories() -> None:
+    conflicts = trip_write_advisories(_two_item_schedule())
+    assert {conflict["severity"] for conflict in conflicts} == {"INFO", "WARNING"}
+    assert "ROUTE_TIME_UNKNOWN" in {
+        conflict["conflict_code"] for conflict in conflicts
+    }
