@@ -44,8 +44,10 @@ def _strict_writes() -> bool:
 
 # ── Phase3 STOP D：Business Guard 写入路径辅助 ─────────────────────
 
-async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: str,
-                                    completed_message: str) -> None:
+async def _raise_on_active_conflict(
+    db, repo, identity, *, user_id: str, exclude_confirmation_id: str,
+    completed_message: str,
+) -> None:
     """创建/升级前拦截：active 语义等价操作 + 终态不可重发动作。
 
     纯预检（确定性规则 §25），真正的并发决胜在 051 唯一索引 —— 预检
@@ -68,6 +70,18 @@ async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: 
             existing_confirmation_id=existing.confirmation_id,
             existing_state=existing.state,
         )
+    if identity.action_type == "refund_request":
+        active_case = await _find_active_refund_request_case(
+            db, identity, user_id=user_id,
+        )
+        if active_case is not None:
+            raise BusinessOperationAlreadyActive(
+                existing_confirmation_id=(
+                    active_case.related_confirmation_id or str(active_case.case_id)
+                ),
+                existing_state=f"case:{active_case.status}",
+                message="同一订单已有待处理的退款申请，请等待人工审核。",
+            )
     from backend.customer_service.business_guard import terminal_blocked
     if terminal_blocked(identity.action_type):
         done = await repo.find_by_identity(
@@ -84,6 +98,25 @@ async def _raise_on_active_conflict(repo, identity, *, exclude_confirmation_id: 
                 done.confirmation_id, identity.action_type,
             )
             raise BusinessOperationAlreadyCompleted(completed_message)
+
+
+async def _find_active_refund_request_case(db, identity, *, user_id: str):
+    """按租户、用户和订单读取活跃退款案件；结案后允许重新申请。"""
+    from sqlalchemy import select
+
+    from backend.customer_service.models.case import CASE_ACTIVE_STATUSES, CSCase
+
+    result = await db.execute(
+        select(CSCase).where(
+            CSCase.tenant_id == identity.tenant_id,
+            CSCase.user_id == user_id,
+            CSCase.case_type == "refund",
+            CSCase.status.in_(CASE_ACTIVE_STATUSES),
+            CSCase.context["refund_request"]["order_id"].as_string()
+            == identity.target_id,
+        ).limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def _raise_on_in_doubt_ledger(repo, identity) -> None:
@@ -258,6 +291,41 @@ class ConfirmationStore:
             with self._lock:
                 self._claimed_l1.discard((user_id, session_id))
                 self._data[(user_id, session_id)] = pending
+
+    def update_pending_if_version(
+        self,
+        user_id: str,
+        session_id: str,
+        pending_action: dict,
+        *,
+        tenant_id: str,
+        proposal_id: str,
+        expected_version: int,
+    ) -> bool:
+        """只允許以畫面版本更新 pending；PostgreSQL CAS 是最終裁決。"""
+        try:
+            from backend.customer_service._db_loop import run_sync
+
+            updated = run_sync(self._async_update_pending_if_version(
+                user_id,
+                session_id,
+                pending_action,
+                tenant_id=tenant_id,
+                proposal_id=proposal_id,
+                expected_version=expected_version,
+            ))
+        except BusinessOperationGuardError:
+            raise
+        except Exception as exc:
+            _db_write_failed("ConfirmationStore", "versioned_proposal_update", exc)
+            raise StoreWriteError(
+                "ConfirmationStore", "versioned_proposal_update",
+            ) from exc
+        if updated:
+            with self._lock:
+                self._claimed_l1.discard((user_id, session_id))
+                self._data[(user_id, session_id)] = dict(pending_action)
+        return updated
 
     def clear(self, user_id: str, session_id: str, *, final_state: str = "cancelled") -> None:
         """清除 pending 并把 DB 行置为终态。
@@ -544,7 +612,7 @@ class ConfirmationStore:
                         == existing.confirmation_id
                     )
                     await _raise_on_active_conflict(
-                        repo, identity,
+                        db, repo, identity, user_id=user_id,
                         exclude_confirmation_id=(
                             existing.confirmation_id if exclude_self else ""),
                         completed_message="该业务操作已提交成功，不允许重复发起。",
@@ -562,7 +630,8 @@ class ConfirmationStore:
                 if identity is not None:
                     # 终态策略（§38/D18）：SUCCESS 后不可重发的动作类型
                     await _raise_on_active_conflict(
-                        repo, identity, exclude_confirmation_id="",
+                        db, repo, identity, user_id=user_id,
+                        exclude_confirmation_id="",
                         completed_message="该业务操作已提交成功，不允许重复发起。",
                     )
                     # IN_DOUBT 防线（§15/§37/D13/R4）：legacy failed 行若在
@@ -648,6 +717,72 @@ class ConfirmationStore:
             except IntegrityError:
                 await db.rollback()
                 return False
+
+    @staticmethod
+    async def _async_update_pending_if_version(
+        user_id: str,
+        session_id: str,
+        pending_action: dict,
+        *,
+        tenant_id: str,
+        proposal_id: str,
+        expected_version: int,
+    ) -> bool:
+        """reason 编辑的 DB 端版本 CAS；目标、金额和身份不可由调用方改写。"""
+        from backend.customer_service.business_guard import (
+            BusinessOperationConflict,
+            compute_identity,
+        )
+        from backend.customer_service.repository import ConfirmationRepository
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            repo = ConfirmationRepository(db)
+            row = await repo.load(user_id, session_id, tenant_id=tenant_id)
+            if (
+                row is None
+                or row.confirmation_id != proposal_id
+                or row.proposal_version != expected_version
+                or row.state != "pending"
+                or row.action_type != "refund_request"
+                or row.user_id != user_id
+                or row.conversation_id != session_id
+                or row.tenant_id != tenant_id
+            ):
+                await db.rollback()
+                return False
+
+            updated_action = dict(pending_action)
+            updated_action["action_id"] = row.confirmation_id
+            updated_action["proposal_id"] = row.confirmation_id
+            updated_action["version"] = expected_version + 1
+            identity = compute_identity(updated_action, tenant_id)
+            if identity is None:
+                raise StoreWriteError(
+                    "ConfirmationStore", "versioned_proposal_identity",
+                )
+            try:
+                updated = await repo.update_proposal(
+                    row.confirmation_id,
+                    updated_action,
+                    tenant_id=tenant_id,
+                    semantic_fingerprint=identity.semantic_fingerprint,
+                    proposal_version=expected_version + 1,
+                    expected_user_id=user_id,
+                    expected_conversation_id=session_id,
+                    expected_tenant_id=tenant_id,
+                )
+                if not updated:
+                    await db.rollback()
+                    return False
+                await db.commit()
+                return True
+            except IntegrityError as exc:
+                await db.rollback()
+                raise BusinessOperationConflict(
+                    "修改后的退款申请与另一处理中的操作冲突。",
+                    user_message="申请状态已变化，请刷新后重新检查。",
+                ) from exc
 
     @staticmethod
     async def _async_has_pending(user_id: str) -> bool:

@@ -364,15 +364,21 @@ async def test_d17_expired_allows_reissue():
     assert len(_db_rows(user)) == 2
 
 
-async def test_d18_success_terminal_policy():
-    """D18/Gate D11：refund_request success 后同语义拒绝；非终态锁定动作可重发。"""
+async def test_d18_refund_request_reissue_follows_case_state(monkeypatch):
+    """申请登记成功不永久阻断；活跃案件由客服事实源单独拦截。"""
+    async def no_active_case(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "backend.customer_service.confirmation_store._find_active_refund_request_case",
+        no_active_case,
+    )
     user = _PREFIX + "d18"
     session = user + "-conv"
     _save_threaded(user, session, _pending(action_id="conf-A"))
     _set_state("conf-A", "success")
-    with pytest.raises(BusinessOperationAlreadyCompleted):
-        _save_threaded(user, session, _pending(action_id="conf-B"))
-    # 非终态锁定动作（return_request）：success 后允许再次发起
+    _save_threaded(user, session, _pending(action_id="conf-B"))
+    # return_request success 后依旧允许再次发起。
     _save_threaded(user, session, _pending(action_id="conf-C",
                                            action_type="return_request"))
     _set_state("conf-C", "success")

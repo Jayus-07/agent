@@ -13,7 +13,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -97,7 +97,10 @@ def _http_order(order_no="MO-ABC123", status="paid") -> dict:
         "total_amount": 88.5,
         "item_count": 1,
         "item_summary": "演示商品-A",
-        "created_at": "2026-09-01T00:00:00+00:00",
+        # 相对时间：退款窗口按下单时间判定，写死日期的夹具会随时间失效
+        "created_at": (
+            datetime.now(timezone.utc) - timedelta(days=1)
+        ).isoformat(),
     }
 
 
