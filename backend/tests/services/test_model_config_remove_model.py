@@ -105,6 +105,10 @@ async def test_soft_deletes_user_model_and_records_non_rollbackable_history(monk
     assert "UPDATE llm_models SET enabled = false" in joined
     assert not any("DELETE FROM llm_models" in s for s in session.executed)
     assert "INSERT INTO llm_config_history" in joined
+    assert (
+        "UPDATE llm_model_health SET status = 'unknown'" in joined
+        and "model_name = :model_name" in joined
+    )
     # 复用 object_type='provider'，但必须显式不可回滚 —— 否则回滚会拿模型信息去覆盖 provider
     history_sql = next(s for s in session.executed if "llm_config_history" in s)
     assert "'provider'" in history_sql

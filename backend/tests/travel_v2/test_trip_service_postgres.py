@@ -162,6 +162,10 @@ def test_trip_creation_writes_initial_revision_and_is_tenant_scoped(trip_scope) 
         service.get_trip(
             scope["trip_id"], tenant_id="another-tenant", owner_id=scope["owner_id"]
         )
+    with pytest.raises(TripNotFound):
+        service.get_trip(
+            scope["trip_id"], tenant_id=scope["tenant_id"], owner_id="another-user"
+        )
 
 
 def test_trip_creation_rejects_schedule_conflicts_before_any_insert() -> None:

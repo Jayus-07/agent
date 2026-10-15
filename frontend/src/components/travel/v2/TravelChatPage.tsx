@@ -77,10 +77,17 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   useEffect(() => {
     if (typeof window === 'undefined') return
     const url = new URL(window.location.href)
-    if (url.searchParams.get('conversation_id') === conversationId) return
-    url.searchParams.set('conversation_id', conversationId)
-    window.history.replaceState(window.history.state, '', url.toString())
-  }, [conversationId])
+    let changed = false
+    if (url.searchParams.get('conversation_id') !== conversationId) {
+      url.searchParams.set('conversation_id', conversationId)
+      changed = true
+    }
+    if (associatedTripId && url.searchParams.get('trip_id') !== associatedTripId) {
+      url.searchParams.set('trip_id', associatedTripId)
+      changed = true
+    }
+    if (changed) window.history.replaceState(window.history.state, '', url.toString())
+  }, [associatedTripId, conversationId])
 
   const persistPlanWrite = useCallback(async (intent: PendingTravelPlanWrite): Promise<boolean> => {
     if (planWriteLockRef.current) return false
@@ -235,7 +242,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       if (cancelled) return
       setTrip(savedTrip)
     }).catch(() => {
-      if (!cancelled) setTripLoadNotice('关联的 V2 行程暂时无法读取；本轮保存仍会按服务端版本校验。')
+      if (!cancelled) setTripLoadNotice('关联的正式行程暂时无法读取；当前不会创建或覆盖行程，请确认登录账号后重试。')
     }).finally(() => { if (!cancelled) setTripAssociationReady(true) })
     return () => { cancelled = true }
   }, [conversationId, initialConversationId, initialTripId])
