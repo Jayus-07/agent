@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, Clock3, History, MapPin, MoreHorizontal, RotateCcw, Search, Sparkles, Users, Wallet } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, Clock3, History, MapPin, MessageCircle, MoreHorizontal, RotateCcw, Sparkles, Users, Wallet } from 'lucide-react'
 import {
   applyTravelTripEditV2,
   createTravelV2IdempotencyKey,
@@ -19,6 +19,9 @@ import TravelV2Map from './TravelV2Map'
 import type { TemporaryTravelMapLocation } from './travelV2MapData'
 import TravelV2EditDialog, { type TravelV2EditPanel } from './TravelV2EditDialog'
 import TravelTripHistoryPanel from './TravelTripHistoryPanel'
+import TravelV2TripConversation from './TravelV2TripConversation'
+import { useTravelConversation } from '@/components/travel/useTravelConversation'
+import { defaultTravelV2ConversationId, setTravelV2TripAssociation, travelV2ConversationIdForTrip, travelV2ChatHref } from './travelV2Conversation'
 import { TravelBottomNav } from './TravelV2Frame'
 import {
   classifyTravelWriteError,
@@ -71,6 +74,8 @@ export default function TravelV2TripWorkspace(props: { tripId: string; editMode?
 
 function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: string; editMode?: boolean }) {
   const [trip, setTrip] = useState<TravelTripV2 | null>(null)
+  const [conversationId, setConversationId] = useState(() => defaultTravelV2ConversationId(tripId))
+  const conversation = useTravelConversation(conversationId)
   const tripRef = useRef<TravelTripV2 | null>(null)
   tripRef.current = trip
   const [loading, setLoading] = useState(true)
@@ -84,6 +89,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const [savingMessage, setSavingMessage] = useState('')
   const [editPanel, setEditPanel] = useState<TravelV2EditPanel>(null)
   const [historyOpen, setHistoryOpen] = useState(false)
+  const [restoreRequest, setRestoreRequest] = useState<{ revision: number } | null>(null)
   const [writeFeedback, setWriteFeedback] = useState<WriteFeedback | null>(null)
   const [restoreFeedback, setRestoreFeedback] = useState<WriteFeedback | null>(null)
   const [refreshNotice, setRefreshNotice] = useState('')
@@ -94,9 +100,45 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const editingRef = useRef(false)
   const editIntentRef = useRef<EditIntent | null>(null)
   const restoreIntentRef = useRef<RestoreIntent | null>(null)
-  const [leftPrompt, setLeftPrompt] = useState('')
   const [searchEvents, setSearchEvents] = useState<TravelSearchEvent[]>([])
-  const closeHistory = useCallback(() => setHistoryOpen(false), [])
+  const closeHistory = useCallback(() => {
+    setHistoryOpen(false)
+    setRestoreRequest(null)
+  }, [])
+
+  useEffect(() => {
+    const candidate = new URLSearchParams(window.location.search).get('conversation_id') || undefined
+    const resolved = travelV2ConversationIdForTrip(tripId, candidate)
+    setConversationId(resolved)
+    setTravelV2TripAssociation(resolved, tripId)
+    const targetRevision = Number(new URLSearchParams(window.location.search).get('restore_revision'))
+    if (Number.isSafeInteger(targetRevision) && targetRevision > 0) {
+      setRestoreRequest({ revision: targetRevision })
+      setHistoryOpen(true)
+    }
+  }, [tripId])
+
+  const refreshAfterAIEdit = useCallback(async (savedRevision: number) => {
+    const [latest, history] = await Promise.all([
+      fetchTravelTripV2(tripId), fetchTravelTripRevisionsV2(tripId),
+    ])
+    if (latest.trip_id !== tripId || latest.revision < savedRevision
+      || !history.revisions.some((item) => item.revision === savedRevision)) {
+      throw new Error('服务器尚未返回 AI 编辑对应的正式 Revision。')
+    }
+    setTrip((current) => current?.trip_id === tripId && current.revision > latest.revision ? current : latest)
+    const currentRevision = history.revisions.find((item) => item.revision === latest.revision)
+    setUndoRevision(currentRevision?.change_type === 'restore_revision' ? null : currentRevision?.parent_revision ?? null)
+    setWriteFeedback({ status: 'SAVED', message: `AI 对话修改已保存，当前正式 Revision 为 v${latest.revision}。` })
+    setRefreshNotice('')
+  }, [tripId])
+
+  const refreshAfterAIConflict = useCallback(async () => {
+    const latest = await fetchTravelTripV2(tripId)
+    if (latest.trip_id !== tripId) throw new Error('服务器返回了不匹配的行程。')
+    setTrip((current) => current?.trip_id === tripId && current.revision > latest.revision ? current : latest)
+    setUndoRevision(null)
+  }, [tripId])
 
   function transitionTripWrite(event: TravelTripWriteTransition): boolean {
     if (event.status === 'VALIDATING') setRefreshNotice('')
@@ -111,7 +153,6 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     if (pendingTripWriteRef.current) return
     if (nextTab !== activeTab) setSelectedLocation(null)
     setActiveTab(nextTab)
-    setSavingMessage('')
   }
 
   const recordSearchEvent = useCallback((event: TravelSearchEvent) => {
@@ -353,6 +394,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
         : `已恢复到 v${intent.targetRevision} 的内容，并新增 v${result.revision}。`
       setRestoreFeedback({ status: 'SAVED', message })
       setWriteFeedback({ status: 'SAVED', message })
+      setRestoreRequest(null)
       setSavingMessage('')
       setError('')
       return true
@@ -424,7 +466,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       <div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#f1f6fc] px-3 py-1.5 text-[9px] font-medium text-[#6380a0]">V2 正式行程 · v{trip.revision}</span>{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#dce6f1] bg-white px-3 text-[10px] font-medium text-[#5b718d] disabled:opacity-50"><RotateCcw size={13} aria-hidden />{undoing ? '恢复中…' : '撤销'}</button>}<button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#dce6f1] bg-white px-3 text-[10px] font-medium text-[#5b718d]"><History size={14} aria-hidden />历史</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2878f5] px-3.5 text-[10px] font-semibold text-white"><MoreHorizontal size={14} aria-hidden />{editMode ? '编辑模式' : '编辑行程'}</button></div>
     </header>
 
-    <header className="sticky top-0 z-20 flex h-[56px] shrink-0 items-center justify-between border-b border-[#e5ecf4] bg-white px-3 lg:hidden"><a href="/travel/itineraries" aria-label="返回行程列表" className="flex h-9 w-9 items-center justify-center rounded-full text-[#536984]"><ArrowLeft size={18} aria-hidden /></a><div className="min-w-0 px-2 text-center"><h1 className="truncate text-sm font-semibold text-[#263b55]">{trip.title || brief.destination}</h1><p className="mt-0.5 text-[9px] text-[#92a0b1]">{brief.day_count} 天 · {brief.start_date || '日期待定'} · v{trip.revision}</p></div><div className="flex shrink-0 items-center gap-1.5"><button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="min-h-10 rounded-full border border-[#dce6f1] px-3 text-[10px] font-medium text-[#526b86]">历史</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="min-h-10 rounded-full bg-[#2878f5] px-3 text-[10px] font-semibold text-white">编辑</button></div></header>
+    <header className="sticky top-0 z-20 flex h-[56px] shrink-0 items-center justify-between border-b border-[#e5ecf4] bg-white px-3 lg:hidden"><a href="/travel/itineraries" aria-label="返回行程列表" className="flex h-9 w-9 items-center justify-center rounded-full text-[#536984]"><ArrowLeft size={18} aria-hidden /></a><div className="min-w-0 px-2 text-center"><h1 className="truncate text-sm font-semibold text-[#263b55]">{trip.title || brief.destination}</h1><p className="mt-0.5 text-[9px] text-[#92a0b1]">{brief.day_count} 天 · {brief.start_date || '日期待定'} · v{trip.revision}</p></div><div className="flex shrink-0 items-center gap-1.5"><a href={travelV2ChatHref(tripId, conversationId)} className="inline-flex min-h-10 items-center gap-1 rounded-full border border-[#dce6f1] px-2.5 text-[10px] font-medium text-[#526b86]"><MessageCircle size={13} aria-hidden />对话</a><button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="min-h-10 rounded-full border border-[#dce6f1] px-3 text-[10px] font-medium text-[#526b86]">历史</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="min-h-10 rounded-full bg-[#2878f5] px-3 text-[10px] font-semibold text-white">编辑</button></div></header>
 
     {writeFeedback && !editPanel && !historyOpen && <section
       role={travelWriteStatusRole(writeFeedback.status)}
@@ -455,7 +497,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     </section>}
 
     <div className="hidden min-h-0 flex-1 gap-3 p-3 lg:grid lg:grid-cols-[280px_minmax(430px,.95fr)_minmax(390px,1.05fr)] xl:grid-cols-[300px_minmax(470px,.98fr)_minmax(420px,1.02fr)]">
-      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><header className="border-b border-[#edf1f6] px-4 py-3"><div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={15} aria-hidden /></span><div><h2 className="text-sm font-bold text-[#263b55]">AI 旅行助手</h2><p className="mt-0.5 text-[9px] text-[#8a98aa]">酒店、美食和车次信息查询</p></div></div></header><div className="min-h-0 flex-1 overflow-y-auto p-3"><div className="rounded-xl bg-[#f2f7fd] px-3 py-3 text-[10px] leading-5 text-[#49617e]">行程：{brief.origin ? `${brief.origin} 出发，` : ''}{brief.destination}，{brief.day_count} 天。你可以查看真实商户与车次结果，再明确选择加入正式行程。</div><p className="mb-2 mt-4 text-[10px] font-bold text-[#405874]">快捷查询</p><div className="grid grid-cols-3 gap-1.5">{([['hotel','酒店'],['food','美食'],['train','动车']] as const).map(([tab,label]) => <button key={tab} type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectSearch(tab)} className="rounded-lg border border-[#e4ebf3] bg-white px-1 py-2.5 text-[9px] font-medium text-[#5e748f] hover:border-[#b9d3fa] hover:text-[#2878f5]">{label}</button>)}</div><div className="mt-4"><p className="mb-2 text-[9px] font-semibold text-[#536b86]">查询过程 · Tool 状态</p><TravelSearchActivity events={searchEvents}/></div><div className="mt-4 rounded-xl border border-[#e8eef5] p-3"><p className="text-[9px] font-semibold text-[#536b86]">已选参考</p><p className="mt-2 text-[9px] text-[#8292a6]">住宿 {trip.document.arrangements.lodgings.length} 家 · 城际车次 {trip.document.arrangements.intercity_trains.length} 条 · 餐饮 {trip.document.days.flatMap((item) => item.items).filter((item) => item.activity_type === 'meal').length} 次</p><p className="mt-2 text-[8px] leading-4 text-[#a0aaba]">住宿和车次仅为计划参考，尚未完成预订或购票。</p></div><form onSubmit={(event) => { event.preventDefault(); if (leftPrompt.trim()) { setSavingMessage('V2 行程对话修改接口尚未接入；此输入不会修改行程。'); setLeftPrompt('') } }} className="mt-4"><label htmlFor="v2-trip-assistant" className="sr-only">向 AI 提问</label><div className="flex items-end gap-1 rounded-xl border border-[#dfe8f3] bg-[#fbfdff] p-1.5"><textarea id="v2-trip-assistant" rows={2} value={leftPrompt} onChange={(event) => setLeftPrompt(event.target.value)} placeholder="问景点、天气或行程…" className="min-h-10 flex-1 resize-none bg-transparent px-1.5 py-1 text-[9px] leading-4 text-[#344b67] outline-none placeholder:text-[#9aa8b8]" /><button type="submit" aria-label="发送问题" className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#2878f5] text-white"><Search size={13} aria-hidden /></button></div><p className="mt-1.5 px-1 text-[8px] text-[#9aa8b8]">行程对话修改尚未接入 V2；输入不会保存或修改行程。</p></form>{savingMessage && <p role="status" className="mt-3 rounded-lg bg-amber-50 px-2.5 py-2 text-[9px] leading-4 text-amber-800">{savingMessage}</p>}</div></aside>
+      <aside className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><header className="shrink-0 border-b border-[#edf1f6] px-4 py-3"><div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={15} aria-hidden /></span><div><h2 className="text-sm font-bold text-[#263b55]">AI 旅行助手</h2><p className="mt-0.5 text-[9px] text-[#8a98aa]">讨论或修改当前正式行程</p></div></div></header><div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3"><div className="mb-2 shrink-0 rounded-xl bg-[#f2f7fd] px-3 py-2 text-[9px] leading-4 text-[#49617e]">{brief.origin ? `${brief.origin} 出发，` : ''}{brief.destination} · {brief.day_count} 天。地图、酒店、美食和车次查询结果不会自动加入正式行程。</div><div className="mb-2 grid shrink-0 grid-cols-3 gap-1.5">{([['hotel','酒店'],['food','美食'],['train','动车']] as const).map(([tab,label]) => <button key={tab} type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectSearch(tab)} className="rounded-lg border border-[#e4ebf3] bg-white px-1 py-2 text-[9px] font-medium text-[#5e748f] hover:border-[#b9d3fa] hover:text-[#2878f5]">{label}</button>)}</div><details className="mb-2 shrink-0 rounded-lg border border-[#e8eef5] px-2.5 py-2"><summary className="cursor-pointer text-[9px] font-semibold text-[#536b86]">查询过程 · Tool 状态</summary><div className="mt-2"><TravelSearchActivity events={searchEvents}/></div></details><div className="min-h-0 flex-1"><TravelV2TripConversation key={conversationId} trip={trip} conversationId={conversationId} conversation={conversation} onTripSaved={refreshAfterAIEdit} onRefreshTrip={refreshAfterAIConflict} onRestoreRequest={(revision) => { setRestoreRequest({ revision }); setHistoryOpen(true) }} embedded /></div></div></aside>
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><nav aria-label="行程与查询" className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{TABS.map((tab) => <button key={tab.id} type="button" aria-pressed={activeTab === tab.id} disabled={Boolean(pendingTripWrite)} onClick={() => selectWorkspaceTab(tab.id)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${activeTab === tab.id ? 'border-[#2878f5] text-[#2878f5]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{tab.label}</button>)}</nav>{activeTab === 'trip' ? <div className="flex min-h-0 flex-1 flex-col"><header className="shrink-0 border-b border-[#edf1f6] px-4 pb-3 pt-3.5"><div className="mb-3 flex items-center justify-between"><div><h2 className="text-sm font-bold text-[#263b55]">{brief.destination} 行程时间轴</h2><p className="mt-1 text-[9px] text-[#8a98aa]">按天安排 · 与地图地点双向联动</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] font-medium bg-[#f4f7fb] text-[#73849a]`}>调整顺序</button></div><div className="flex gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[88px] rounded-xl border px-3 py-2 text-left ${dayIndex === index ? 'border-[#76aaf4] bg-[#f2f7ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#6e8097]'}`}><span className="block text-[10px] font-semibold">第 {index + 1} 天</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div></header><div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{savingMessage && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[9px] text-emerald-800"><span className="flex items-center gap-1"><Check size={12} aria-hidden />{savingMessage}</span>{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex shrink-0 items-center gap-1 font-medium"><RotateCcw size={11} aria-hidden />撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}<div className="mb-3 flex items-center justify-between"><div><p className="text-[11px] font-semibold text-[#344b67]">第 {dayIndex + 1} 天 · {day?.date || '日期待定'}</p><p className="mt-1 text-[9px] text-[#93a0b1]">{day?.items.length ?? 0} 个安排</p></div></div>{day?.items.length ? <div className="space-y-1.5">{day.items.map((item, index) => <div key={item.item_id}><button type="button" onClick={() => { setSelectedItemId(item.item_id); setSelectedLocation(null) }} className={`flex w-full items-center gap-2.5 rounded-[15px] border p-2.5 text-left ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white ${selectedItem?.item_id === item.item_id ? 'bg-[#175fc5]' : 'bg-[#2878f5]'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-semibold text-[#2b405b]">{item.title}</span><span className="shrink-0 text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 flex items-center gap-2 text-[9px] text-[#8190a3]"><span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden />停留 {item.duration_min} 分钟</span>{item.activity_type === 'meal' && <span className="rounded bg-[#fff5e9] px-1.5 py-0.5 text-[#b57835]">餐饮</span>}</span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || item.place?.facts.source || '地点详情'}</span></span><MoreHorizontal size={15} className="shrink-0 text-[#8798ad]" aria-hidden /></button>{index < day.items.length - 1 && <div className="ml-10 flex h-8 items-center gap-2"><span className="h-px w-4 border-t border-dashed border-[#bdd2ec]"/><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden /></button></div>}</div>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}</div></div> : <div className="min-h-0 flex-1 overflow-y-auto p-3"><TravelSearchPanel key={`${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}</section>
 
@@ -485,6 +527,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       key={`${trip.trip_id}-history`}
       tripId={trip.trip_id}
       currentRevision={trip.revision}
+      restoreRequest={restoreRequest}
       restoreStatus={restoreFeedback?.status ?? null}
       restoreMessage={restoreFeedback?.message ?? ''}
       writeBlockedMessage={pendingTripWrite && pendingTripWrite.kind !== 'restore' ? pendingWriteMessage : ''}
