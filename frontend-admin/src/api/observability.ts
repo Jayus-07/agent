@@ -7,7 +7,7 @@
  *   前端直接使用 TraceRecord/Span 类型即可。
  */
 import { request } from "@/lib/fetcher";
-import type { TraceRecord, AlertItem } from "@/types/trace";
+import type { TraceFilterOptions, TraceRecord } from "@/types/trace";
 
 // ── CS 灰度质量报告 ───────────────────────────────────
 
@@ -42,7 +42,57 @@ export async function getCsQualityReport(hours = 24): Promise<CSQualityReport | 
 
 // ── Traces ────────────────────────────────────────────
 
-/** GET /observability/traces — 最近 N 条经服务端资源授权的 trace 摘要。 */
+export interface TraceListQuery {
+  limit?: number;
+  offset?: number;
+  workflowName?: string;
+  hasTag?: string;
+  hasTool?: string;
+  source?: string;
+  status?: string;
+  since?: string;
+  until?: string;
+  excludeRunning?: boolean;
+  model?: string;
+  kbId?: string;
+  query?: string;
+}
+
+export interface TraceListPage {
+  traces: TraceRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  retention_limit: number;
+  facets?: TraceFilterOptions;
+}
+
+/** GET /observability/traces — 服务端授权、筛选、分页后的 Trace 列表。 */
+export async function listTracesPage(options: TraceListQuery = {}): Promise<TraceListPage> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 50),
+    offset: String(options.offset ?? 0),
+  });
+  const values: Array<[string, string | undefined]> = [
+    ["workflow_name", options.workflowName],
+    ["has_tag", options.hasTag],
+    ["has_tool", options.hasTool],
+    ["source", options.source],
+    ["status", options.status],
+    ["since", options.since],
+    ["until", options.until],
+    ["model", options.model],
+    ["kb_id", options.kbId],
+    ["query", options.query],
+  ];
+  values.forEach(([key, value]) => { if (value) params.set(key, value) });
+  if (options.excludeRunning) params.set("exclude_running", "true");
+  const data = await request<TraceListPage>(`/api/observability/traces?${params.toString()}`);
+  return { ...data, traces: data.traces || [] };
+}
+
+/** 兼容旧消费者的最近 N 条列表包装，保留原签名和最多 200 条约束。 */
 export async function listTraces(
   limit = 50,
   workflowName?: string,
@@ -50,29 +100,36 @@ export async function listTraces(
   hasTool?: string,
   source?: string,
 ): Promise<TraceRecord[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (workflowName) params.set("workflow_name", workflowName);
-  if (hasTag) params.set("has_tag", hasTag);
-  if (hasTool) params.set("has_tool", hasTool);
-  if (source) params.set("source", source);
-  const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?${params.toString()}`);
-  return data.traces || [];
+  const page = await listTracesPage({ limit, workflowName, hasTag, hasTool, source });
+  return page.traces;
+}
+
+export interface AuthorizedTraceStats {
+  total: number;
+  total_24h: number;
+  counts: Record<"success" | "failed" | "error" | "degraded" | "partial" | "timeout" | "cancelled" | "rejected" | "unknown", number>;
+  running_count: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  error_count: number;
+  total_cost_usd: number;
+  sources: { travel: number; cs: number; ai_assistant: number };
+  window_hours: number;
+  records_considered: number;
+  retention_limit: number;
+  observed_at: string;
 }
 
 /** GET /observability/traces/stats — 时间窗聚合统计（StatsBar 下沉后端） */
 export async function getTraceStats(
   hours = 24,
   workflowName?: string,
-): Promise<{
-  total_24h: number;
-  success_rate: number;
-  avg_duration_ms: number;
-  p95_duration_ms: number;
-  error_count: number;
-  total_cost_usd: number;
-}> {
-  const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
-  return await request(`/api/observability/traces/stats?hours=${hours}${wf}`);
+): Promise<AuthorizedTraceStats> {
+  const params = new URLSearchParams({ hours: String(hours) });
+  if (workflowName) params.set("workflow_name", workflowName);
+  return await request(`/api/observability/traces/stats?${params.toString()}`);
 }
 
 /** GET /observability/traces/active — 当前活跃 trace（answer_preview 为空 = 未完成） */
@@ -97,12 +154,85 @@ export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
   }
 }
 
-// ── Alerts（注意：后端 /alerts 字段不匹配前端 AlertItem，暂不直连） ──
-// 见 lib/observability/source.ts：alerts 由 client 端 buildAlerts() 聚合 traces 而来。
-// 此处保留接口签名以便将来切换到后端 AlertItem 序列化器。
-export interface AlertsResponse {
-  alerts: AlertItem[];
-  total: number;
+export interface HealthProbe {
+  available?: boolean
+  latency_ms?: number
+}
+
+export interface SystemHealthSnapshot {
+  /** Unix 秒；后端以 15 秒进程内缓存复用同一快照。 */
+  collected_at?: number
+  db?: HealthProbe & { active_connections?: number; open_tasks?: number }
+  redis?: {
+    db0?: HealthProbe
+    broker?: HealthProbe & { queues?: Record<string, number> }
+    result?: HealthProbe
+    queues?: Record<string, number>
+  }
+  worker?: {
+    available?: boolean
+    online_count?: number
+    workers?: { active_tasks?: number }[]
+  }
+  tasks?: { available?: boolean }
+}
+
+export interface DegradationAlertEvent {
+  timestamp?: unknown
+  level?: unknown
+  code?: unknown
+}
+
+export interface DegradationAlertsResponse {
+  alerts: DegradationAlertEvent[]
+  total: number
+}
+
+/** GET /observability/alerts — 管理员可见的降级事件日志尾部。 */
+export async function getDegradationAlerts(limit = 300): Promise<DegradationAlertsResponse> {
+  const data = await request<DegradationAlertsResponse>(
+    '/api/observability/alerts?limit=' + String(limit),
+  )
+  return {
+    alerts: Array.isArray(data.alerts) ? data.alerts : [],
+    total: Number.isFinite(data.total) ? data.total : 0,
+  }
+}
+
+export interface SkillHealthEntry {
+  name: unknown
+  type: unknown
+  total: unknown
+  success: unknown
+  error: unknown
+  skipped: unknown
+  neutral: unknown
+  real_errors: unknown
+  retries: unknown
+  avg_duration_ms: unknown
+  success_rate: unknown
+  last_error_kind: unknown
+  last_error?: unknown
+}
+
+export interface SkillHealthResponse {
+  skills: SkillHealthEntry[]
+  trace_window: number
+}
+
+/** GET /observability/skill-health — 复用既有 Skill/节点聚合统计。 */
+export async function getSkillHealth(limit = 300): Promise<SkillHealthResponse> {
+  const data = await request<SkillHealthResponse>(
+    '/api/observability/skill-health?limit=' + String(limit),
+  )
+  return {
+    skills: Array.isArray(data.skills) ? data.skills : [],
+    trace_window: Number.isFinite(data.trace_window) ? data.trace_window : limit,
+  }
+}
+/** GET /observability/system-health — 服务端管理员守卫下的 DB/Redis/Worker/任务只读快照。 */
+export function getSystemHealth(): Promise<SystemHealthSnapshot> {
+  return request<SystemHealthSnapshot>('/api/observability/system-health')
 }
 
 // ── Token 用量看板 ──────────────────────────────────────

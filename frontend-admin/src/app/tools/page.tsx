@@ -9,6 +9,7 @@
  * 失败 Tool 行点击跳转运行监控工作台的 Trace Tab（预置过滤）。
  */
 import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, ShieldCheck } from 'lucide-react'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
@@ -411,9 +412,12 @@ export default function ToolsPage() {
           title="Tool 治理中心"
           desc={`契约快照 tool_contracts.lock.json（${inventory?.lock_git_sha ?? '…'}）× 运行统计（进程内 Prometheus 直读）`}
           actions={
+            <>
+            <Link href="/skills" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Skill 与 Capability</Link>
             <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={load}>
               刷新
             </AssetActionButton>
+            </>
           }
     >
 
