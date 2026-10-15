@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   searchPanelProps: [] as Array<Record<string, any>>,
   tripRequests: [] as Array<Record<string, any>>,
   revisionRequests: [] as Array<Record<string, any>>,
+  conversationMessages: [] as Array<Record<string, any>>,
+  setConversationMessages: vi.fn(),
 }))
 
 vi.mock('@/api/travelV2', async (importOriginal) => ({
@@ -56,6 +58,14 @@ vi.mock('./TravelSearchPanel', () => ({
       unknown && createElement('button', { key: 'retry', type: 'button', onClick: () => void sendSelection() }, '使用同一请求安全重试'),
     ])
   },
+}))
+
+vi.mock('@/components/travel/useTravelConversation', () => ({
+  useTravelConversation: () => ({
+    messages: mocks.conversationMessages,
+    setMessages: mocks.setConversationMessages,
+    syncError: '',
+  }),
 }))
 
 vi.mock('./TravelV2Map', () => ({
@@ -575,6 +585,33 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(mocks.restoreTrip.mock.calls[0][2]).toMatch(/^[0-9a-f-]{36}$/i)
     expect(page.container.textContent).toContain('v3')
     expect(page.container.textContent).toContain('新增 v3')
+  })
+
+  it('恢复请求链接自动定位指定历史，但仍须确认后调用 Restore API', async () => {
+    const originalUrl = window.location.href
+    window.history.replaceState({}, '', '/travel/itineraries/trip-a?restore_revision=1')
+    const page = mount('trip-a')
+    const tripA = makeTrip('trip-a', '行程 A', 2)
+    mocks.fetchRevisions.mockImplementation(async (tripId: string) => ({
+      trip_id: tripId,
+      revisions: [
+        { trip_id: tripId, revision: 2, parent_revision: 1, snapshot: tripA.document, change_type: 'manual_edit', change_summary: '当前版本', actor_id: 'user-a', created_at: '2026-10-10T10:00:00Z' },
+        { trip_id: tripId, revision: 1, parent_revision: null, snapshot: tripA.document, change_type: 'create', change_summary: '目标版本', actor_id: 'user-a', created_at: '2026-10-09T10:00:00Z' },
+      ],
+    }))
+    mocks.restoreTrip.mockResolvedValue({ saved: true, trip_id: 'trip-a', revision: 3, document: tripA.document })
+
+    await load(tripRequest(0), tripA)
+    await settle()
+
+    expect(page.container.querySelector('[role="dialog"]')?.textContent).toContain('确认将内容恢复到 v1')
+    expect(mocks.restoreTrip).not.toHaveBeenCalled()
+    await click(page.container, (button) => button.textContent === '确认恢复 v1')
+    await settle()
+
+    expect(mocks.restoreTrip).toHaveBeenCalledOnce()
+    expect(mocks.restoreTrip.mock.calls[0][1]).toEqual({ expected_revision: 2, target_revision: 1 })
+    window.history.replaceState({}, '', new URL(originalUrl).pathname + new URL(originalUrl).search)
   })
 
   it('A 的查询、地图选择和工具进度迟到时，不污染 B', async () => {

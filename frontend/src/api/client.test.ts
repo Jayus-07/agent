@@ -20,6 +20,7 @@ vi.mock("@/lib/auth", () => authMock);
 import {
   ApiError,
   backendBaseUrl,
+  fetchAnonymousRaw,
   fetchRaw,
   mutationFetchRaw,
   request,
@@ -554,5 +555,31 @@ describe("P0-1b 错误码提取与翻译", () => {
     const err = await request("/slow", { timeout: 10 }).catch((e: unknown) => e);
     expect(describeApiError(err).kind).toBe("timeout");
     expect(describeApiError(err).code).toBe(CLIENT_ERROR_CODES.TIMEOUT);
+  });
+});
+
+describe("同源匿名能力令牌请求", () => {
+  it("固定走 BFF 并省略 Bearer、Cookie 与浏览器凭据", async () => {
+    authMock.bearerHeaders.mockReturnValue({ Authorization: "Bearer user-token" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({ ok: true }));
+
+    await fetchAnonymousRaw("/api/travel/v2/shares/share-id", {
+      method: "GET",
+      headers: {
+        "X-Travel-Share-Token": "opaque-share-token",
+        Authorization: "Bearer caller-token",
+        Cookie: "session=private",
+      },
+    });
+
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(fetchSpy.mock.calls[0][0]).toBe("/api/travel/v2/shares/share-id");
+    const init = fetchSpy.mock.calls[0][1] as RequestInit;
+    const sent = new Headers(init.headers);
+    expect(init.credentials).toBe("omit");
+    expect(sent.get("X-Travel-Share-Token")).toBe("opaque-share-token");
+    expect(sent.get("Authorization")).toBeNull();
+    expect(sent.get("Cookie")).toBeNull();
+    expect(authMock.tryRefreshOnce).not.toHaveBeenCalled();
   });
 });
