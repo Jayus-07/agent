@@ -73,7 +73,7 @@ jobs:
             exit 1
           fi
 
-          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py < "$changed_paths")"
+          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py --event "$EVENT_NAME" < "$changed_paths")"
           if [[ "$relevant_output" != "relevant=true" && "$relevant_output" != "relevant=false" ]]; then
             echo "::error::RAG path filter returned an invalid result: $relevant_output"
             exit 1
@@ -115,6 +115,7 @@ jobs:
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
+            backend/tests/evaluation/test_rag_paid_preflight.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope
@@ -249,7 +250,13 @@ jobs:
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Seed DB API model bindings
-        run: python -m backend.scripts.seed_prompt_eval_db
+        env:
+          PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL: ${{ secrets.PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL }}
+          PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX: ${{ vars.PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX }}
+        run: python -m backend.scripts.seed_prompt_eval_db --require-approved-prices
+
+      - name: Verify approved prices before any paid API call
+        run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
 
       - name: Verify bindings and probe real API
         env:
