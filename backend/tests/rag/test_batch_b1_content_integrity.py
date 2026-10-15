@@ -19,7 +19,43 @@ def test_pdf_cleaner_preserves_numeric_citation_lines():
     assert "2024" in cleaned
     assert "25" in cleaned
     assert cleaner.clean("2024", source_type="pdf").text == "2024"
-    assert cleaner.clean("123", source_type="pdf").text == ""
+    assert cleaner.clean("123", source_type="pdf").text == "123"
+
+
+def test_pdf_cleaner_preserves_ambiguous_numeric_content():
+    """缺少页内坐标和跨页上下文时，保留可能属于正文的短数字。"""
+    from backend.rag.preprocessing.cleaner import DocumentCleaner
+
+    cleaner = DocumentCleaner()
+    samples = (
+        "依据华师〔\n2024\n〕25号执行。",
+        "财务表格\n净利率\n2/5\n期末库存\n128",
+        "产品手册\n额定电流\n16\n建议温度\n25",
+        "123",
+    )
+
+    for sample in samples:
+        assert cleaner.clean(sample, source_type="pdf").text == sample
+
+
+def test_pdf_cleaner_removes_only_explicit_page_footer_lines(monkeypatch):
+    """清理有明确标签的独立页脚，不误删相邻正文。"""
+    from backend import config
+    from backend.rag.preprocessing.cleaner import DocumentCleaner
+
+    monkeypatch.setattr(config, "CLEAN_REMOVE_PDF_FOOTERS", True)
+    cleaner = DocumentCleaner()
+    result = cleaner.clean(
+        "制度正文\nPage 2 of 10\n财务比率\n2/5\n第 3 页 共 10 页",
+        source_type="pdf",
+    )
+
+    assert "Page 2 of 10" not in result.text
+    assert "第 3 页 共 10 页" not in result.text
+    assert "制度正文" in result.text
+    assert "财务比率" in result.text
+    assert "2/5" in result.text
+    assert "removed_page_number_footer" in result.changes
 
 
 def test_csv_table_routes_to_structured_chunks_and_preserves_identifiers(tmp_path):

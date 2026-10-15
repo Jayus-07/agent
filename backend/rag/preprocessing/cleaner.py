@@ -121,7 +121,6 @@ class DocumentCleaner:
                 result = self._remove_pdf_headers(result)
             if config.CLEAN_REMOVE_PDF_FOOTERS:
                 result = self._remove_pdf_footers(result)
-            result = self._remove_page_numbers(result)
 
         # ── OCR 专用（P1）──
         if source_type == "ocr":
@@ -330,13 +329,16 @@ class DocumentCleaner:
         """检测并去除 PDF 页脚。
 
         与页眉类似，但检查的是"页"末尾（\\n\\n 之前）的重复行。
-        同时检测常见页脚模式（如 "第X页 共X页"）。
+        仅删除带明确页码标签的独立行；无标签数字可能是正文、比例或金额。
         """
-        # 常见页脚模式
+        # 清洗器收到的是单个 AST 文本块，没有可靠的页内坐标或跨页上下文。
+        # 因此只移除带明确标签的独立页脚行，不把裸数字/分数猜成页码。
         footer_patterns = [
-            re.compile(r'第\s*\d+\s*页\s*共\s*\d+\s*页'),
-            re.compile(r'Page\s+\d+\s+of\s+\d+', re.IGNORECASE),
-            re.compile(r'^\d+\s*/\s*\d+$'),
+            re.compile(r'^\s*第\s*\d+\s*页\s*共\s*\d+\s*页\s*$', re.MULTILINE),
+            re.compile(
+                r'^\s*Page\s+\d+\s+of\s+\d+\s*$',
+                re.MULTILINE | re.IGNORECASE,
+            ),
         ]
 
         for pattern in footer_patterns:
@@ -344,34 +346,6 @@ class DocumentCleaner:
             if new_text != r.text:
                 r.text = new_text
                 r.changes.append("removed_page_number_footer")
-        return r
-
-    def _remove_page_numbers(self, r: CleanResult) -> CleanResult:
-        """去除独立页码行，同时保留年份和文号中的数字。"""
-        lines = r.text.split('\n')
-        new_lines = []
-        removed = 0
-        for index, line in enumerate(lines):
-            stripped = line.strip()
-            if re.fullmatch(r"\d{1,3}", stripped):
-                previous = lines[index - 1].strip() if index else ""
-                following = (
-                    lines[index + 1].strip()
-                    if index + 1 < len(lines) else ""
-                )
-                is_citation_number = (
-                    previous.endswith(("〔", "[", "［", "（", "("))
-                    or following.startswith(("〕", "]", "］", "）", ")", "号"))
-                )
-                if is_citation_number:
-                    new_lines.append(line)
-                    continue
-                removed += 1
-                continue
-            new_lines.append(line)
-        if removed > 0:
-            r.text = '\n'.join(new_lines)
-            r.changes.append(f"removed_{removed}_page_numbers")
         return r
 
     def _clean_ocr(self, r: CleanResult) -> CleanResult:
