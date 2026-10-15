@@ -1,7 +1,7 @@
 # P1-G 管理端总计划：三组交付闭环
 
 > 状态：**实施中；本计划更新随 PR #53 提交，合并前仍是候选版本。**
-> 事实基线：最新 main `bf3cddf7ac7329f576f036cb1a9717a8f96dfd27`；PR #54 已合并（`c40685d`）；PR #63 的 Review 修复已推送（`62a8fad`）并解决两条线程，真实 API/依赖门禁仍阻断合并建议。
+> 事实基线：最新 main `5df8b0603355566e7fa1eb87906129c11a8211ab`（含无关的 PR #70）；PR #54 已合并（`c40685d`）；PR #63 的 Review 修复已推送并解决两条线程，真实授权 E2E 仍 BLOCKED。安全 PR #68 已升至 Next.js 15.5.28；锁文件修复 `85edd1b` 已推送，CI run #6 尚在运行。
 > 本文件保留 P1-G 九个产品能力模块、六组侧栏导航和 RC-01～RC-14 编号。它把原六阶段串行方案收敛为 A/B/C 三个交付包，不代表未验证功能已完成。
 
 ## 1. 目标与固定边界
@@ -22,7 +22,7 @@
 | # | 能力模块（保持原范围） | 最新 main / PR 状态 | 本轮处理方式 |
 |---|---|---|---|
 | 1 | 运行总览 | 已合并 PR #54 | 修复和补齐现有工作台；继续标注样本量、来源、时间窗及权限范围，不重建统计后端。 |
-| 2 | 执行记录与 Trace | 已合并 PR #54 | 复用 Trace API 和现有详情页；资源授权、时间/状态筛选、分页及部分诊断字段仍按缺口验收。 |
+| 2 | 执行记录与 Trace | #54 已合并；服务端分页/筛选/统计在 PR #65 | 复用 Trace API 和现有详情页；#65 未合并前不计入 main。统计仍限于授权范围与 TraceStore 留存窗口，前端保留最多 200 条样本兼容展示。 |
 | 3 | Agent 与工作流 | PR #63 | 接入现有 Agent registry 和 Workflow 元数据；无已验证的 Workflow Run 历史时明确标为未覆盖。 |
 | 4 | Tool 与 Capability | 页面、API 和 manifest/registry 已存在于 main | 修复入口权限并对账现有事实源；不复制 Registry，不新增 Tool 写操作。 |
 | 5 | 模型与成本 | 预算、价格、模型角色及 Trace Token 页面/API 已存在 | 整合既有 API、费用账本和价格版本；核验权限及币种口径，不新建统计或账本。 |
@@ -35,7 +35,7 @@
 
 ### 2.1 现有页面与数据事实源
 
-- PR #54 已交付运行总览、执行记录/Trace 工作台和六组导航。Trace 统计目前受列表样本上限和后端分页/资源授权缺口约束。
+- PR #54 已交付运行总览、执行记录/Trace 工作台和六组导航。PR #65 提交了服务端分页、筛选和授权统计；尚未合并，统计只覆盖授权范围与 TraceStore 留存窗口，前端继续兼容最多 200 条样本展示。
 - `frontend-admin/src/app/skills`、`/tools`、`/cost-governance/budgets`、`/prompts`、`/security`、`/approvals` 等页面与对应 API 已在最新 main 存在；施工先修复、整合、接入，再根据验证证据决定最小适配。
 - `frontend-admin/src/app/observability/alerts` 与 Agent/Workflow 改动由 PR #63 承载。旧 `/api/observability/alerts` 降级日志和 `/api/observability/skill-health` Skill 聚合能力不得因服务健康页替换而丢失。
 - 服务健康当前只覆盖后端返回的 PostgreSQL、Redis、Celery/任务观测项。APISIX、Prometheus/Grafana、LLM Provider 或 Workflow Run history 没有已验证契约时，标注缺失，不造数。
@@ -62,11 +62,13 @@
 
 1. **PR #54（已合并）**：导航和运行总览/Trace 基线。
 2. **PR #53（本计划更新）**：更新权威边界和三包顺序；同一 PR 分支可安全重放至最新 main，无需新开替代 PR。它在合并前仍是候选计划。
-3. **PR #63（A 包）**：完成已有 Review 修复、局部验证及适用 CI；真实 API 登录验收按环境补验。当前 CI 漏洞门禁发现的既有依赖漏洞须在对外开放前清除。
-4. **B 包**：依赖最新计划及 A 的导航/读数规范；按已有页面和 API 的实际差距分组交付，减少重复 PR 与重复验收。
-5. **C 包及对外开放**：依赖 A/B 页面稳定；权限、安全、适用依赖漏洞门禁和 L3 证据全部通过后才可开放。
+3. **PR #68（安全专项）**：将 frontend-admin 依赖升至 Next.js 15.5.28 等安全版本；须通过 `npm ci`、Vitest、TypeScript、Build 与 High/Critical audit 后才解除门禁。
+4. **PR #63（A 包）**：安全 PR 进入 main 后更新基线并重跑受影响门禁；完成真实 Admin/Viewer/Editor、租户和资源只读验收后再考虑合并。当前真实授权 E2E BLOCKED。
+5. **PR #65（A 包）**：在 #63 之后复核共享观测路由和 API client 的合并结果；交付 Trace 分页/筛选/授权统计，保留 200 条样本兼容及留存窗口限制。
+6. **B 包**：依赖最新计划及 A 的导航/读数规范；按已有页面和 API 的实际差距分组交付，减少重复 PR 与重复验收。
+7. **C 包及对外开放**：依赖 A/B 页面稳定；权限、安全、适用依赖漏洞门禁和 L3 证据全部通过后才可开放。
 
-按变更边界合并相关前端与必要 API 适配，避免页面和适配接口拆成相互阻塞的重复 PR。PR #53/#63 均不得由本计划自动合并。
+建议顺序：#53（文档门禁通过后）→ #68（安全与功能门禁全绿）→ #63（真实权限验收完成并重跑门禁）→ #65（复核共享文件后）。按变更边界合并前端与必要 API 适配；任何 PR 未满足门禁或权限证据仍阻断时暂停该项，不影响无冲突工作继续。
 
 ## 5. 本机真实 API 验收入口与等级
 
@@ -83,7 +85,7 @@ PR #63 本轮不包含敏感写 API；因此不能报告 L3 写入 PASS。现有
 
 新增 `.github/workflows/frontend-admin.yml`：仅管理端前端、观测管理员权限路由/测试、相关 Python 依赖或该 workflow 变化时运行。前端 job 使用 Node 20 与 `package-lock.json` npm 缓存，执行锁定依赖安装、依赖漏洞门禁、Vitest、TypeScript 和 Next 构建；后端权限 job 使用 Python/pip 缓存并运行观测只读端点管理员守卫测试。CI 不依赖 RAG/Travel 全量测试。
 
-当前官方 npm audit 的基线结果为 **15 项（1 critical、9 high、5 moderate）**，其中包含现有 Next.js 14.2.29；因此 `--audit-level=high` 会让漏洞门禁失败。此门禁已建立但状态为 **BLOCKED**，不能将失败当作 PASS 或通过静默豁免绕过；修复/升级并完成兼容验证后才满足对外开放门槛。
+main 的历史官方 npm audit 基线为 **15 项（1 critical、9 high、5 moderate）**，包含 Next.js 14.2.29。安全 PR #68 升至 Next.js 15.5.28 后，CI run #5 的 High/Critical audit job PASS，但功能 job 因 `next` 锁文件仍引用 15.5.27 而在 `npm ci` 失败；修复已提交 `85edd1b`，run #6 尚未完成。合并 #68 前仍须等锁定安装、Vitest、TypeScript、Build 和 High/Critical audit 全部 PASS；不得豁免。
 
 ## 6. RC-01～RC-14 验收矩阵
 
