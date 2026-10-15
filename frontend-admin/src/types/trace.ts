@@ -239,6 +239,13 @@ export interface TraceListResponse {
   stats?: TraceStats;
 }
 
+/** Trace 页筛选下拉选项，来自服务端已授权的留存候选集。 */
+export interface TraceFilterOptions {
+  workflow_names: string[];
+  models: string[];
+  kb_ids: string[];
+}
+
 export interface TraceStats {
   total_24h: number;
   success_rate: number;

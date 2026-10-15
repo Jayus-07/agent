@@ -1,12 +1,12 @@
 "use client";
 
-import { TraceFilter as FilterType, TraceRecord, TRACE_SOURCE_LABELS } from "@/types/trace";
-import { useMemo } from "react";
+import { TRACE_SOURCE_LABELS } from "@/types/trace";
+import type { TraceFilter as FilterType, TraceFilterOptions } from "@/types/trace";
 
 interface Props {
   filter: FilterType;
   onChange: (f: FilterType) => void;
-  traces: TraceRecord[];
+  options: TraceFilterOptions;
 }
 
 const TIME_OPTIONS: { value: FilterType["timeRange"]; label: string }[] = [
@@ -30,30 +30,7 @@ const STATUS_OPTIONS: { value: FilterType["status"]; label: string; disabled?: b
   { value: "unknown", label: "状态未知" },
 ];
 
-export default function TraceFilterBar({ filter, onChange, traces }: Props) {
-  const kbOptions = useMemo(() => {
-    const set = new Set<string>();
-    traces.forEach((t) => {
-      const kb = String(t.metadata?.kb_id ?? "");
-      if (kb) set.add(kb);
-    });
-    return Array.from(set);
-  }, [traces]);
-
-  const modelOptions = useMemo(() => {
-    const set = new Set<string>();
-    traces.forEach((t) => t.model?.name && set.add(t.model.name));
-    return Array.from(set);
-  }, [traces]);
-
-  const workflowOptions = useMemo(() => {
-    const names = new Set<string>();
-    traces.forEach((trace) => {
-      if (trace.workflow_name) names.add(trace.workflow_name);
-    });
-    return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [traces]);
-
+export default function TraceFilterBar({ filter, onChange, options }: Props) {
   return (
     <div className="flex flex-wrap items-center gap-3 px-1">
       {/* Time range */}
@@ -96,7 +73,7 @@ export default function TraceFilterBar({ filter, onChange, traces }: Props) {
         className="min-h-10 rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <option value="">全部 Agent / Workflow</option>
-        {workflowOptions.map((workflow) => (
+        {options.workflow_names.map((workflow) => (
           <option key={workflow} value={workflow}>{workflow === "agent" ? "Agent" : workflow}</option>
         ))}
       </select>
@@ -114,7 +91,7 @@ export default function TraceFilterBar({ filter, onChange, traces }: Props) {
         className="min-h-10 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <option value="">全部 KB</option>
-        {kbOptions.map((kb) => (
+        {options.kb_ids.map((kb) => (
           <option key={kb} value={kb}>{kb}</option>
         ))}
       </select>
@@ -127,7 +104,7 @@ export default function TraceFilterBar({ filter, onChange, traces }: Props) {
         className="min-h-10 rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       >
         <option value="">全部模型</option>
-        {modelOptions.map((m) => (
+        {options.models.map((m) => (
           <option key={m} value={m}>{m}</option>
         ))}
       </select>

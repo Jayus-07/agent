@@ -641,11 +641,11 @@ class TraceCollector:
         clear_log_context()
 
     # =====================================================
-    # 查询 API（直读 SQLite trace_store）
+    # 查询 API（直读 TraceStore）
     # =====================================================
 
     def list(self, limit: int = 50, include_spans: bool = False) -> list[TraceRecord | dict]:
-        """最近 N 条 trace（SQLite trace_store 直读）。
+        """最近 N 条 trace（TraceStore 直读）。
 
         Args:
             limit: 最多返回条数
@@ -660,17 +660,18 @@ class TraceCollector:
             store = None
 
         try:
-            rows = store.list(limit) if store else []
+            if not store:
+                return []
             if not include_spans:
-                return rows
-            # include_spans=True：重建 TraceRecord 对象，spans 转回 Span
+                return store.list(limit)
+            # 完整 Trace 由存储层一次批量读取，不能循环 get（最多 5,000 次）。
+            full_rows = store.list_with_spans(limit)
             records = []
-            for r in rows:
+            for r in full_rows:
                 rid = r.get("id") or r.get("trace_id")
                 if not rid:
                     continue
-                full = store.get(rid) or r
-                records.append(self._dict_to_record(full))
+                records.append(self._dict_to_record(r))
             return records
         except Exception:
             logger.warning("trace 列表查询失败", exc_info=True)

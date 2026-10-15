@@ -7,7 +7,7 @@
  *   前端直接使用 TraceRecord/Span 类型即可。
  */
 import { request } from "@/lib/fetcher";
-import type { TraceRecord } from "@/types/trace";
+import type { TraceFilterOptions, TraceRecord } from "@/types/trace";
 
 // ── CS 灰度质量报告 ───────────────────────────────────
 
@@ -42,7 +42,57 @@ export async function getCsQualityReport(hours = 24): Promise<CSQualityReport | 
 
 // ── Traces ────────────────────────────────────────────
 
-/** GET /observability/traces — 最近 N 条经服务端资源授权的 trace 摘要。 */
+export interface TraceListQuery {
+  limit?: number;
+  offset?: number;
+  workflowName?: string;
+  hasTag?: string;
+  hasTool?: string;
+  source?: string;
+  status?: string;
+  since?: string;
+  until?: string;
+  excludeRunning?: boolean;
+  model?: string;
+  kbId?: string;
+  query?: string;
+}
+
+export interface TraceListPage {
+  traces: TraceRecord[];
+  total: number;
+  offset: number;
+  limit: number;
+  has_more: boolean;
+  retention_limit: number;
+  facets?: TraceFilterOptions;
+}
+
+/** GET /observability/traces — 服务端授权、筛选、分页后的 Trace 列表。 */
+export async function listTracesPage(options: TraceListQuery = {}): Promise<TraceListPage> {
+  const params = new URLSearchParams({
+    limit: String(options.limit ?? 50),
+    offset: String(options.offset ?? 0),
+  });
+  const values: Array<[string, string | undefined]> = [
+    ["workflow_name", options.workflowName],
+    ["has_tag", options.hasTag],
+    ["has_tool", options.hasTool],
+    ["source", options.source],
+    ["status", options.status],
+    ["since", options.since],
+    ["until", options.until],
+    ["model", options.model],
+    ["kb_id", options.kbId],
+    ["query", options.query],
+  ];
+  values.forEach(([key, value]) => { if (value) params.set(key, value) });
+  if (options.excludeRunning) params.set("exclude_running", "true");
+  const data = await request<TraceListPage>(`/api/observability/traces?${params.toString()}`);
+  return { ...data, traces: data.traces || [] };
+}
+
+/** 兼容旧消费者的最近 N 条列表包装，保留原签名和最多 200 条约束。 */
 export async function listTraces(
   limit = 50,
   workflowName?: string,
@@ -50,29 +100,36 @@ export async function listTraces(
   hasTool?: string,
   source?: string,
 ): Promise<TraceRecord[]> {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (workflowName) params.set("workflow_name", workflowName);
-  if (hasTag) params.set("has_tag", hasTag);
-  if (hasTool) params.set("has_tool", hasTool);
-  if (source) params.set("source", source);
-  const data = await request<{ traces: TraceRecord[] }>(`/api/observability/traces?${params.toString()}`);
-  return data.traces || [];
+  const page = await listTracesPage({ limit, workflowName, hasTag, hasTool, source });
+  return page.traces;
+}
+
+export interface AuthorizedTraceStats {
+  total: number;
+  total_24h: number;
+  counts: Record<"success" | "failed" | "error" | "degraded" | "partial" | "timeout" | "cancelled" | "rejected" | "unknown", number>;
+  running_count: number;
+  success_rate: number;
+  avg_duration_ms: number;
+  p50_duration_ms: number;
+  p95_duration_ms: number;
+  error_count: number;
+  total_cost_usd: number;
+  sources: { travel: number; cs: number; ai_assistant: number };
+  window_hours: number;
+  records_considered: number;
+  retention_limit: number;
+  observed_at: string;
 }
 
 /** GET /observability/traces/stats — 时间窗聚合统计（StatsBar 下沉后端） */
 export async function getTraceStats(
   hours = 24,
   workflowName?: string,
-): Promise<{
-  total_24h: number;
-  success_rate: number;
-  avg_duration_ms: number;
-  p95_duration_ms: number;
-  error_count: number;
-  total_cost_usd: number;
-}> {
-  const wf = workflowName ? `&workflow_name=${encodeURIComponent(workflowName)}` : "";
-  return await request(`/api/observability/traces/stats?hours=${hours}${wf}`);
+): Promise<AuthorizedTraceStats> {
+  const params = new URLSearchParams({ hours: String(hours) });
+  if (workflowName) params.set("workflow_name", workflowName);
+  return await request(`/api/observability/traces/stats?${params.toString()}`);
 }
 
 /** GET /observability/traces/active — 当前活跃 trace（answer_preview 为空 = 未完成） */

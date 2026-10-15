@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { TraceFilter as FilterType } from '@/types/trace'
+import type { TraceFilter as FilterType, TraceFilterOptions } from '@/types/trace'
 import TraceFilterBar from './TraceFilter'
 
 let mounted: { root: Root; container: HTMLDivElement } | null = null
@@ -31,13 +31,21 @@ describe('TraceFilterBar', () => {
       sortField: '',
       sortDir: 'desc',
     }
+    const options: TraceFilterOptions = {
+      workflow_names: ['workflow-page-one', 'workflow-page-two'],
+      models: ['model-page-one', 'model-page-two'],
+      kb_ids: ['kb-page-one', 'kb-page-two'],
+    }
 
     await act(async () => {
-      root.render(<TraceFilterBar filter={filter} onChange={vi.fn()} traces={[]} />)
+      root.render(<TraceFilterBar filter={filter} onChange={vi.fn()} options={options} />)
     })
 
     const runningOption = container.querySelector<HTMLOptionElement>('option[value="running"]')
     expect(runningOption?.disabled).toBe(true)
     expect(runningOption?.textContent).toContain('BLOCKED')
+    expect(container.querySelector('select[aria-label="Agent 或 Workflow"] option[value="workflow-page-two"]')).toBeTruthy()
+    expect(container.querySelector('select[aria-label="模型"] option[value="model-page-two"]')).toBeTruthy()
+    expect(container.querySelector('select[aria-label="知识库"] option[value="kb-page-two"]')).toBeTruthy()
   })
 })

@@ -11,6 +11,7 @@ import json
 import time
 import hashlib
 import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query, HTTPException, Request
 from pydantic import BaseModel
@@ -22,7 +23,10 @@ from backend.observability.topology import NODE_LABELS, graph_topology
 from backend.observability.resource import resource_monitor
 from backend.rag.metrics import metrics_collector
 from backend.observability.tracer import trace_collector, TraceRecord, Span
-from backend.observability.trace_store import get_trace_store
+from backend.observability.trace_store import (
+    _MAX_ROWS as TRACE_RETENTION_LIMIT,
+    get_trace_store,
+)
 from backend.memory.database import AsyncSessionLocal
 
 router = APIRouter(prefix="/observability", tags=["可观测性"])
@@ -125,17 +129,191 @@ from backend.observability.trace_source import (  # noqa: E402
 # Traces
 # ═══════════════════════════════════════════════════
 
+def _trace_value(record, key: str, default=None):
+    return record.get(key, default) if isinstance(record, dict) else getattr(record, key, default)
+
+
+def _trace_tags(record) -> dict:
+    tags = _trace_value(record, "tags", {})
+    return tags if isinstance(tags, dict) else {}
+
+
+def _trace_run_status(record) -> str:
+    """与运行监控 DTO 一致的安全终态分类，不读取或解析自由文本。"""
+    status = str(_trace_value(record, "status", "") or "").strip().lower()
+    metadata = _trace_value(record, "metadata", {}) or {}
+    outcome = metadata.get("business_outcome") if isinstance(metadata, dict) else None
+    if status == "success" and outcome in {"failed", "degraded", "partial"}:
+        return outcome
+    error = _trace_value(record, "error", {}) or {}
+    if status == "success" and isinstance(error, dict) and error:
+        return "error"
+    known = {
+        "success", "failed", "error", "degraded", "partial", "timeout",
+        "cancelled", "rejected", "running",
+    }
+    if status in known:
+        return status
+    if status:
+        return "unknown"
+    if isinstance(error, dict) and error:
+        return "error"
+    return "unknown"
+
+
+def _as_utc_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _filter_authorized_traces(
+    records: list,
+    *,
+    request: Request | None,
+    reader,
+    workflow_name: str | None = None,
+    session_id: str | None = None,
+    has_tag: str | None = None,
+    has_tool: str | None = None,
+    source: str | None = None,
+    status: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    exclude_running: bool = False,
+    model: str | None = None,
+    kb_id: str | None = None,
+    query: str | None = None,
+) -> list:
+    if request is not None:
+        from backend.app.api.routes._trace_authz import trace_visible_to
+
+        role = getattr(reader, "role", "") or ""
+        records = [r for r in records if trace_visible_to(request, r, role=role)]
+
+    since_utc = _as_utc_datetime(since)
+    until_utc = _as_utc_datetime(until)
+    normalized_status = (status or "").strip().lower()
+    normalized_query = (query or "").strip().lower()
+    result = []
+    for record in records:
+        if workflow_name and _trace_value(record, "workflow_name", "") != workflow_name:
+            continue
+        if session_id and _trace_value(record, "session_id", "") != session_id:
+            continue
+        tags = _trace_tags(record)
+        if has_tag and has_tag not in tags:
+            continue
+        if source and classify_trace_source(
+            _trace_value(record, "workflow_name", ""), tags,
+        ) != source:
+            continue
+        if has_tool:
+            spans = _trace_value(record, "spans", []) or []
+            if not any(
+                _trace_value(span, "type", "") == "tool_call"
+                and (
+                    (
+                        (_trace_value(span, "input", {}) or {}).get("tool")
+                        if isinstance(_trace_value(span, "input", {}), dict)
+                        else None
+                    ) == has_tool
+                    or str(_trace_value(span, "name", "")).endswith(has_tool)
+                )
+                for span in spans
+            ):
+                continue
+        run_status = _trace_run_status(record)
+        if normalized_status and normalized_status != "all" and run_status != normalized_status:
+            continue
+        if exclude_running and run_status == "running":
+            continue
+        if since_utc is not None or until_utc is not None:
+            timestamp = _as_utc_datetime(_trace_value(record, "timestamp", ""))
+            if timestamp is None:
+                continue
+            if since_utc is not None and timestamp < since_utc:
+                continue
+            if until_utc is not None and timestamp > until_utc:
+                continue
+        if model:
+            record_model = _trace_value(record, "model", "")
+            model_name = record_model.get("name", "") if isinstance(record_model, dict) else record_model
+            if model_name != model:
+                continue
+        if kb_id:
+            metadata = _trace_value(record, "metadata", {}) or {}
+            if tags.get("kb_id") != kb_id and metadata.get("kb_id") != kb_id:
+                continue
+        if normalized_query:
+            searchable = (
+                _trace_value(record, "id", ""),
+                _trace_value(record, "request_id", ""),
+                _trace_value(record, "workflow_name", ""),
+                classify_trace_source(_trace_value(record, "workflow_name", ""), tags),
+            )
+            if not any(normalized_query in str(value or "").lower() for value in searchable):
+                continue
+        result.append(record)
+    return result
+
+
+def _trace_filter_facets(records: list) -> dict[str, list[str]]:
+    """从已授权留存 Trace 中提取筛选维度，不依赖当前页或选中筛选项。"""
+    workflow_names: set[str] = set()
+    models: set[str] = set()
+    kb_ids: set[str] = set()
+    for record in records:
+        workflow_name = _trace_value(record, "workflow_name", "")
+        if isinstance(workflow_name, str) and workflow_name.strip():
+            workflow_names.add(workflow_name.strip())
+
+        model = _trace_value(record, "model", "")
+        model_name = model.get("name", "") if isinstance(model, dict) else model
+        if isinstance(model_name, str) and model_name.strip():
+            models.add(model_name.strip())
+
+        tags = _trace_tags(record)
+        metadata = _trace_value(record, "metadata", {}) or {}
+        kb_id = tags.get("kb_id") or (
+            metadata.get("kb_id") if isinstance(metadata, dict) else None
+        )
+        if isinstance(kb_id, str) and kb_id.strip():
+            kb_ids.add(kb_id.strip())
+    return {
+        "workflow_names": sorted(workflow_names),
+        "models": sorted(models),
+        "kb_ids": sorted(kb_ids),
+    }
+
 @router.get("/traces")
 async def list_traces(
         request: Request = None,  # type: ignore[assignment]
         limit: int = Query(20, ge=1, le=200),
+        offset: int = Query(0, ge=0, le=TRACE_RETENTION_LIMIT),
         workflow_name: str | None = Query(None),
         session_id: str | None = Query(None),
         has_tag: str | None = Query(None),
         has_tool: str | None = Query(None),
         source: str | None = Query(None),
+        status: str | None = Query(None),
+        since: datetime | None = Query(None),
+        until: datetime | None = Query(None),
+        exclude_running: bool = Query(False),
+        model: str | None = Query(None),
+        kb_id: str | None = Query(None),
+        query: str | None = Query(None),
         _reader=Depends(_require_trace_reader)):
-    """最近 N 条 trace 摘要（SQLite TraceStore）。
+    """在当前 TraceStore 留存范围内筛选并分页返回已授权 Trace。
 
     workflow_name / session_id 服务端过滤：前端不再拉 200 条本地 filter。
     has_tag：按 tags 键存在性过滤（如 has_tag=funnel_run_id → 选品漏斗运行历史，
@@ -146,135 +324,126 @@ async def list_traces(
     source：来源三分类过滤（travel|cs|ai_assistant，2026-10-08 #12），分类
     唯一出口 observability.trace_source；未知值忽略（不 422，前端下拉不产生）。
     """
-    # 直调守卫（2026-10-08 #12 顺手修先在失败）：单测直调本端点时，未传的
-    # 参数缺省是 FastAPI Query 对象（真值），会把 has_tool/has_tag 等过滤
-    # 条件全部误触发（test_list_traces_has_tag_filter 先在失败正是此因）。
-    # 统一归一成普通值：只有真实字符串才参与过滤。
+    # 单测直调 handler 时，FastAPI 的 Query 默认对象不是普通值；归一后继续
+    # 沿用同一过滤逻辑。HTTP 请求始终由依赖注入身份并执行资源级授权。
     workflow_name = workflow_name if isinstance(workflow_name, str) else None
     session_id = session_id if isinstance(session_id, str) else None
     has_tag = has_tag if isinstance(has_tag, str) else None
     has_tool = has_tool if isinstance(has_tool, str) else None
     source = source if isinstance(source, str) else None
-    if has_tool:
-        stored = trace_collector.list(limit, include_spans=True)
-        matched = []
-        for d in stored:
-            spans = getattr(d, "spans", None) or []
-            hit = any(
-                s.type == "tool_call" and (
-                    (s.input or {}).get("tool") == has_tool
-                    or s.name.endswith(has_tool)
-                )
-                for s in spans
-            )
-            if hit:
-                matched.append(d)
-        stored = matched
-    else:
-        stored = trace_collector.list(limit)
-    if workflow_name:
-        stored = [d for d in stored
-                  if (d.get("workflow_name") if isinstance(d, dict)
-                      else getattr(d, "workflow_name", "")) == workflow_name]
-    if session_id:
-        stored = [d for d in stored
-                  if (d.get("session_id") if isinstance(d, dict)
-                      else getattr(d, "session_id", "")) == session_id]
-    if has_tag:
-        stored = [d for d in stored
-                  if has_tag in ((d.get("tags") if isinstance(d, dict)
-                                  else getattr(d, "tags", None)) or {})]
-    # 来源三分类（2026-10-08 #12）：DTO 直带 source（后端唯一分类出口）
-    if source:
-        stored = [d for d in stored
-                  if classify_trace_source(
-                      (d.get("workflow_name") if isinstance(d, dict)
-                       else getattr(d, "workflow_name", "")),
-                      (d.get("tags") if isinstance(d, dict)
-                       else getattr(d, "tags", None))) == source]
-    # 资源级 / 租户隔离（2026-10-10）：列表同样是敏感面——只返回调用者
-    # 有权读取的 Trace，不把越权条目连同 session/user 标识一起下发。
-    #
-    # 说明：HTTP 链路上 FastAPI 恒注入 request，守卫与过滤必然执行（见文件
-    # 顶部 _require_trace_reader 依赖）。request 为 None 仅出现在单测直调
-    # handler 的场景（不经 FastAPI），此时不注入身份、也不做归属过滤，
-    # 以免把既有的「过滤语义」单元测试变成身份测试；真正的访问控制在
-    # 依赖层，直调不可能出现在生产路径。
-    # 身份来自 FastAPI 依赖（_require_trace_reader），不接受客户端自报。
-    # request 为 None 仅见于单测直调 handler（不经 FastAPI），此时不注入
-    # 身份、也不做归属过滤；真正的访问控制在依赖层，直调不存在于生产路径。
-    if request is not None:
-        from backend.app.api.routes._trace_authz import trace_visible_to
+    status = status if isinstance(status, str) else None
+    since = since if isinstance(since, datetime) else None
+    until = until if isinstance(until, datetime) else None
+    model = model if isinstance(model, str) else None
+    kb_id = kb_id if isinstance(kb_id, str) else None
+    query = query if isinstance(query, str) else None
+    exclude_running = exclude_running if isinstance(exclude_running, bool) else False
+    limit = limit if isinstance(limit, int) else 20
+    offset = offset if isinstance(offset, int) else 0
 
-        stored = [
-            d for d in stored
-            if trace_visible_to(request, d if isinstance(d, dict) else None,
-                                role=getattr(_reader, "role", "") or "")
-        ]
+    # TraceStore 的持久留存上限为 5,000 条。先对这一留存集执行授权和筛选，
+    # 再切页，确保总数与页面数据采用相同的租户/资源范围。
+    stored = trace_collector.list(
+        TRACE_RETENTION_LIMIT, include_spans=bool(has_tool),
+    ) if has_tool else trace_collector.list(TRACE_RETENTION_LIMIT)
+    authorized = _filter_authorized_traces(
+        stored, request=request, reader=_reader,
+    )
+    facets = _trace_filter_facets(authorized)
+    filtered = _filter_authorized_traces(
+        authorized, request=None, reader=_reader,
+        workflow_name=workflow_name, session_id=session_id,
+        has_tag=has_tag, has_tool=has_tool, source=source,
+        status=status, since=since, until=until,
+        exclude_running=exclude_running, model=model, kb_id=kb_id,
+        query=query,
+    )
+    page = filtered[offset:offset + limit]
     traces = [_stored_dict_to_dto(d) if isinstance(d, dict) else _to_trace_dto(d)
-              for d in stored]
-    return {"traces": traces}
+              for d in page]
+    return {
+        "traces": traces,
+        "total": len(filtered),
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(page) < len(filtered),
+        "retention_limit": TRACE_RETENTION_LIMIT,
+        "facets": facets,
+    }
 
 
 @router.get("/traces/stats")
-async def trace_stats(hours: float = Query(24, gt=0, le=24 * 30),
-                      workflow_name: str | None = Query(None)):
-    """时间窗内聚合统计（前端 StatsBar 下沉，不再客户端遍历 200 条）。
+async def trace_stats(
+        request: Request = None,  # type: ignore[assignment]
+        hours: float = Query(24, gt=0, le=24 * 30),
+        workflow_name: str | None = Query(None),
+        _reader=Depends(_require_trace_reader)):
+    """在已授权范围内统计 TraceStore 最近 5,000 条留存记录。"""
+    from datetime import timedelta
 
-    数据源：P0 analytics 结构化层优先（含新写入数据），否则 SQLite 详情库摘要。
-    口径与前端原实现一致：成功率/均值/P95 只统计已完成（duration>0）的 trace。
-    """
-    from datetime import datetime, timedelta, timezone
-
+    hours = hours if isinstance(hours, (int, float)) else 24
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    rows = trace_collector.list(TRACE_RETENTION_LIMIT)
+    rows = _filter_authorized_traces(
+        rows, request=request, reader=_reader,
+        workflow_name=workflow_name if isinstance(workflow_name, str) else None,
+        since=cutoff, until=datetime.now(timezone.utc),
+    )
+    statuses = [(_trace_run_status(row), row) for row in rows]
+    running_count = sum(1 for status, _row in statuses if status == "running")
+    listable = [(status, row) for status, row in statuses if status != "running"]
+    counts = {
+        "success": 0, "failed": 0, "error": 0, "degraded": 0,
+        "partial": 0, "timeout": 0, "cancelled": 0, "rejected": 0,
+        "unknown": 0,
+    }
+    for status, _row in listable:
+        if status in counts:
+            counts[status] += 1
+        else:
+            counts["unknown"] += 1
 
-    def _ts_ok(ts: str) -> bool:
-        try:
-            dt = datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt >= cutoff
-        except Exception:
-            return False
-
-    rows: list[dict] = []
-    try:
-        from backend.observability.analytics_store import get_analytics_store
-        store = get_analytics_store()
-        if store.enabled and store.count() > 0:
-            rows = store.list(500, workflow_name=workflow_name)
-    except Exception:
-        logger.debug("stats: analytics 层不可用，降级 SQLite", exc_info=True)
-    if not rows:
-        rows = [r for r in trace_collector.list(200) if isinstance(r, dict)]
-        if workflow_name:
-            rows = [r for r in rows if r.get("workflow_name") == workflow_name]
-
-    rows = [r for r in rows if _ts_ok(r.get("timestamp", ""))]
-    completed = [r for r in rows if (r.get("duration_ms", 0) or 0) > 0]
-    n = len(completed)
-
-    def _is_err(r: dict) -> bool:
-        return r.get("status") == "error" or bool(r.get("error"))
-
-    durations = sorted((r.get("duration_ms", 0) for r in completed), reverse=True)
-    p95 = durations[int(n * 0.05)] if n else 0
-    err_count = sum(1 for r in rows if _is_err(r))
-    # 来源三分类计数（2026-10-08 #12）：analytics 行的 tags 是 JSON 文本、
-    # collector 行是 dict，分类器内统一兼容；只统计三分类命中的流量。
+    terminal = [
+        row for status, row in listable
+        if status not in {"unknown", "running"}
+    ]
+    durations = sorted(
+        int(_trace_value(row, "duration_ms", 0) or 0)
+        for row in terminal
+        if int(_trace_value(row, "duration_ms", 0) or 0) > 0
+    )
+    duration_count = len(durations)
+    p95 = durations[max(0, int((duration_count - 1) * 0.95))] if duration_count else 0
+    error_count = counts["error"]
+    success_rate = counts["success"] / len(terminal) if terminal else 0
+    total_cost_usd = sum(
+        float(_trace_value(row, "cost_usd", 0) or 0)
+        for _status, row in listable
+    )
     sources = {SOURCE_TRAVEL: 0, SOURCE_CS: 0, SOURCE_AI_ASSISTANT: 0}
-    for r in rows:
-        src = classify_trace_source(r.get("workflow_name", ""), r.get("tags"))
-        if src in sources:
-            sources[src] += 1
+    for _status, row in listable:
+        source = classify_trace_source(
+            _trace_value(row, "workflow_name", ""), _trace_tags(row),
+        )
+        if source in sources:
+            sources[source] += 1
     return {
-        "total_24h": len(rows),
-        "success_rate": round((n - sum(1 for r in completed if _is_err(r))) / n, 3) if n else 0,
-        "avg_duration_ms": round(sum(r.get("duration_ms", 0) for r in completed) / n) if n else 0,
+        # 保留旧字段以兼容旧面板消费者；total_24h 名称在 hours != 24 时仅作兼容字段。
+        "total_24h": len(listable),
+        "total": len(listable),
+        "counts": counts,
+        "running_count": running_count,
+        "success_rate": round(success_rate, 3),
+        "avg_duration_ms": round(sum(durations) / duration_count) if duration_count else 0,
+        "p50_duration_ms": durations[max(0, int((duration_count - 1) * 0.50))] if duration_count else 0,
         "p95_duration_ms": p95,
-        "error_count": err_count,
-        "total_cost_usd": round(sum(r.get("cost_usd", 0) or 0 for r in rows), 6),
+        "error_count": error_count,
+        "total_cost_usd": round(total_cost_usd, 6),
         "sources": sources,
+        "window_hours": hours,
+        "records_considered": len(rows),
+        "retention_limit": TRACE_RETENTION_LIMIT,
+        "observed_at": datetime.now(timezone.utc).isoformat(),
     }
 
 

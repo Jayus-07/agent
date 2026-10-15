@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { listTraces } from '@/api/observability'
+import { getTraceStats, listTracesPage, type AuthorizedTraceStats } from '@/api/observability'
 import type { TraceRecord } from '@/types/trace'
 import {
   getRunStatus,
@@ -18,6 +18,7 @@ import { formatCost, formatRelative } from '@/types/trace'
 
 const WINDOWS: RuntimeWindow[] = ['15m', '1h', '6h', '24h']
 const WINDOW_VALUES = new Set<string>(WINDOWS)
+const WINDOW_HOURS: Record<RuntimeWindow, number> = { '15m': 0.25, '1h': 1, '6h': 6, '24h': 24 }
 
 function windowFromUrl(value: string | null): RuntimeWindow {
   return value && WINDOW_VALUES.has(value) ? value as RuntimeWindow : '24h'
@@ -44,32 +45,50 @@ export default function RuntimeOverview() {
   const searchParams = useSearchParams()
   const range = windowFromUrl(searchParams.get('range'))
   const [traces, setTraces] = useState<TraceRecord[]>([])
+  const [stats, setStats] = useState<AuthorizedTraceStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
   const hasFetched = useRef(false)
+  const requestSequence = useRef(0)
 
   const loadTraces = useCallback(async () => {
+    const requestId = ++requestSequence.current
     if (hasFetched.current) setRefreshing(true)
     else setLoading(true)
     try {
-      // 只使用已由 Trace API 做资源授权的真实记录；不调用未带读取授权的聚合 stats 接口。
-      const result = await listTraces(200)
-      setTraces(result)
+      const until = new Date()
+      const since = new Date(until.getTime() - WINDOW_HOURS[range] * 60 * 60_000)
+      const [result, authorizedStats] = await Promise.all([
+        listTracesPage({
+          limit: 200,
+          offset: 0,
+          since: since.toISOString(),
+          until: until.toISOString(),
+          excludeRunning: true,
+        }),
+        getTraceStats(WINDOW_HOURS[range]),
+      ])
+      if (requestId !== requestSequence.current) return
+      setTraces(result.traces)
+      setStats(authorizedStats)
       hasFetched.current = true
       setLastFetchedAt(new Date().toISOString())
       setLoadFailed(false)
     } catch {
-      setLoadFailed(true)
+      if (requestId === requestSequence.current) setLoadFailed(true)
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (requestId === requestSequence.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
-  }, [])
+  }, [range])
 
   useEffect(() => {
     void loadTraces()
+    return () => { requestSequence.current += 1 }
   }, [loadTraces])
 
   const sampleNowMs = Date.now()
@@ -77,7 +96,7 @@ export default function RuntimeOverview() {
     () => filterRuntimeRecords(traces, range, sampleNowMs),
     [range, traces],
   )
-  const summary = useMemo(
+  const sampleSummary = useMemo(
     () => summarizeRuntimeSample(traces, range, sampleNowMs),
     [range, traces],
   )
@@ -112,16 +131,16 @@ export default function RuntimeOverview() {
   )
 
   const cards = [
-    { label: '记录数', value: String(summary.total), status: 'all', tone: 'text-slate-900' },
-    { label: '成功', value: String(summary.counts.success), status: 'success', tone: 'text-emerald-700' },
-    { label: '业务失败', value: String(summary.counts.failed), status: 'failed', tone: 'text-red-700' },
-    { label: '执行错误', value: String(summary.counts.error), status: 'error', tone: 'text-red-700' },
-    { label: '降级', value: String(summary.counts.degraded), status: 'degraded', tone: 'text-amber-700' },
-    { label: '部分成功', value: String(summary.counts.partial), status: 'partial', tone: 'text-amber-700' },
-    { label: '超时', value: String(summary.counts.timeout), status: 'timeout', tone: 'text-amber-700' },
-    { label: '已拒绝', value: String(summary.counts.rejected), status: 'rejected', tone: 'text-orange-700' },
-    { label: '已取消', value: String(summary.counts.cancelled), status: 'cancelled', tone: 'text-slate-700' },
-    { label: '状态未知', value: String(summary.counts.unknown), status: 'unknown', tone: 'text-slate-600' },
+    { label: '记录数', value: String(stats?.total ?? 0), status: 'all', tone: 'text-slate-900' },
+    { label: '成功', value: String(stats?.counts.success ?? 0), status: 'success', tone: 'text-emerald-700' },
+    { label: '业务失败', value: String(stats?.counts.failed ?? 0), status: 'failed', tone: 'text-red-700' },
+    { label: '执行错误', value: String(stats?.counts.error ?? 0), status: 'error', tone: 'text-red-700' },
+    { label: '降级', value: String(stats?.counts.degraded ?? 0), status: 'degraded', tone: 'text-amber-700' },
+    { label: '部分成功', value: String(stats?.counts.partial ?? 0), status: 'partial', tone: 'text-amber-700' },
+    { label: '超时', value: String(stats?.counts.timeout ?? 0), status: 'timeout', tone: 'text-amber-700' },
+    { label: '已拒绝', value: String(stats?.counts.rejected ?? 0), status: 'rejected', tone: 'text-orange-700' },
+    { label: '已取消', value: String(stats?.counts.cancelled ?? 0), status: 'cancelled', tone: 'text-slate-700' },
+    { label: '状态未知', value: String(stats?.counts.unknown ?? 0), status: 'unknown', tone: 'text-slate-600' },
   ]
 
   if (loading && !lastFetchedAt) {
@@ -145,8 +164,8 @@ export default function RuntimeOverview() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-semibold text-text-primary">运行总览</h2>
-          <p className="mt-1 max-w-3xl text-sm text-text-secondary">
-            指标仅统计当前授权范围内最近返回的记录样本；成功率 = 成功终态数 ÷ 已知终态数。
+        <p className="mt-1 max-w-3xl text-sm text-text-secondary">
+            统计由服务端在当前授权范围内聚合 TraceStore 留存记录；最近运行表仍最多展示 200 条样本。
           </p>
         </div>
         <button type="button" onClick={() => void loadTraces()} disabled={refreshing} className="min-h-10 rounded-md border border-border-default bg-white px-3 text-sm font-medium text-text-primary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-60">
@@ -175,8 +194,8 @@ export default function RuntimeOverview() {
       )}
 
       <div className="rounded-md border border-border-subtle bg-white px-4 py-3 text-xs leading-5 text-text-secondary">
-        <p>数据源：<code>GET /api/observability/traces?limit=200</code> · 服务端执行身份与资源级授权 · 当前时间范围：{RUNTIME_WINDOW_LABELS[range]}</p>
-        <p>本次查询于 {lastFetchedAt ? new Date(lastFetchedAt).toLocaleString('zh-CN') : '尚未成功'}；接口未返回 <code>observed_at</code>，源数据新鲜度无法核验。统计上限为最近 200 条，未声称覆盖全量运行。</p>
+        <p>数据源：已授权分页 Trace API 与 <code>GET /api/observability/traces/stats</code> · 当前时间范围：{RUNTIME_WINDOW_LABELS[range]}</p>
+        <p>统计范围为 TraceStore 最近最多 {stats?.retention_limit ?? 5000} 条留存记录中的授权记录，不代表全量历史。最近运行样本上限为 200 条；页面查询于 {lastFetchedAt ? new Date(lastFetchedAt).toLocaleString('zh-CN') : '尚未成功'}；服务端统计时间 {stats?.observed_at ? new Date(stats.observed_at).toLocaleString('zh-CN') : '尚不可用'}。</p>
       </div>
 
       {!loadFailed && lastFetchedAt && traces.length === 0 ? (
@@ -192,7 +211,7 @@ export default function RuntimeOverview() {
               <Link key={card.label} href={statusFilterHref(range, card.status)} className="min-h-24 rounded-md border border-border-subtle bg-white px-4 py-3 hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
                 <span className="block text-sm text-text-secondary">{card.label}</span>
                 <strong className={`mt-2 block font-mono text-2xl tabular-nums ${card.tone}`}>{card.value}</strong>
-                <span className="mt-1 block text-xs text-text-muted">样本 · {RUNTIME_WINDOW_LABELS[range]}</span>
+                <span className="mt-1 block text-xs text-text-muted">授权留存记录 · {RUNTIME_WINDOW_LABELS[range]}</span>
               </Link>
             ))}
             <div className="min-h-24 rounded-md border border-amber-200 bg-amber-50 px-4 py-3" aria-label="运行中状态暂不可统计">
@@ -204,19 +223,19 @@ export default function RuntimeOverview() {
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             <Link href={statusFilterHref(range, 'success')} className="rounded-md border border-border-subtle bg-white px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-              <span className="block text-xs text-text-secondary">样本成功率</span>
-              <strong className="mt-1 block font-mono text-xl tabular-nums text-text-primary">{summary.successRate === null ? '未采集' : `${(summary.successRate * 100).toFixed(1)}%`}</strong>
-              <span className="text-xs text-text-muted">{summary.counts.success} 成功 / {summary.terminalCount} 个已知终态</span>
+              <span className="block text-xs text-text-secondary">授权记录成功率</span>
+              <strong className="mt-1 block font-mono text-xl tabular-nums text-text-primary">{stats ? `${(stats.success_rate * 100).toFixed(1)}%` : '未采集'}</strong>
+              <span className="text-xs text-text-muted">{stats?.counts.success ?? 0} 成功 / {stats?.total ?? 0} 条非运行记录</span>
             </Link>
             <div className="rounded-md border border-border-subtle bg-white px-4 py-3">
               <span className="block text-xs text-text-secondary">P50 / P95 耗时</span>
-              <strong className="mt-1 block font-mono text-base tabular-nums text-text-primary">{durationLabel(summary.p50DurationMs)} / {durationLabel(summary.p95DurationMs)}</strong>
-              <span className="text-xs text-text-muted">仅计时长大于 0 的已终态样本</span>
+              <strong className="mt-1 block font-mono text-base tabular-nums text-text-primary">{durationLabel(stats?.p50_duration_ms ?? null)} / {durationLabel(stats?.p95_duration_ms ?? null)}</strong>
+              <span className="text-xs text-text-muted">授权留存记录中的已知终态，时长大于 0</span>
             </div>
             <div className="rounded-md border border-border-subtle bg-white px-4 py-3">
-              <span className="block text-xs text-text-secondary">已采集费用（CNY）</span>
-              <strong className="mt-1 block font-mono text-base tabular-nums text-text-primary">{summary.costCny === null ? '未采集' : formatCost(summary.costCny)}</strong>
-              <span className="text-xs text-text-muted">{summary.costRecordCount}/{summary.total} 条有 CNY 费用；不换算旧 USD 字段</span>
+              <span className="block text-xs text-text-secondary">最近 200 条样本费用（CNY）</span>
+              <strong className="mt-1 block font-mono text-base tabular-nums text-text-primary">{sampleSummary.costCny === null ? '未采集' : formatCost(sampleSummary.costCny)}</strong>
+              <span className="text-xs text-text-muted">{sampleSummary.costRecordCount}/{sampleSummary.total} 条有 CNY 费用；不换算旧 USD 字段</span>
             </div>
           </div>
 
@@ -224,12 +243,12 @@ export default function RuntimeOverview() {
             <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-border-subtle px-4 py-3">
               <div>
                 <h3 className="font-semibold text-text-primary">最近运行</h3>
-                <p className="mt-0.5 text-xs text-text-secondary">当前时间范围内最多显示 8 条；请求与响应内容不在列表展示。</p>
+              <p className="mt-0.5 text-xs text-text-secondary">从最多 200 条授权样本中显示当前时间范围的 8 条；请求与响应内容不在列表展示。</p>
               </div>
               <Link href={runListUrl} className="min-h-10 inline-flex items-center text-sm font-medium text-accent underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">查看执行记录</Link>
             </div>
             {recent.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-text-secondary">最近 200 条授权记录中，所选时间范围没有可确认的终态记录；历史列表的 running 状态不会当作实时运行。</p>
+              <p className="px-4 py-6 text-sm text-text-secondary">最近 200 条授权样本中，所选时间范围没有可确认的终态记录；历史列表的 running 状态不会当作实时运行。</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full min-w-[620px] border-collapse text-left text-sm">
@@ -264,7 +283,7 @@ export default function RuntimeOverview() {
           <li>活跃 Trace 查询接口缺少资源级授权；运行中数量及列表为 BLOCKED，不以历史记录推断。</li>
           <li>Run 级待审批状态未随 Trace 返回；不会把运行中当作待审批。</li>
           <li>降级计数只认明确的 <code>metadata.business_outcome=degraded</code>；当前成功记录没有覆盖完整的降级观测率。</li>
-          <li>列表没有 <code>observed_at</code>、总数或游标，当前指标是最多 200 条授权记录的样本。</li>
+          <li>TraceStore 留存上限为 {stats?.retention_limit ?? 5000} 条；统计仅覆盖这批留存记录中的授权数据，最近运行表仍限 200 条样本。</li>
         </ul>
       </section>
     </div>
