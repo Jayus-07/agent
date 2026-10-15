@@ -63,12 +63,13 @@
 1. **PR #54（已合并）**：导航和运行总览/Trace 基线。
 2. **PR #53（已合并）**：权威边界和三包计划已生效。
 3. **PR #68（已合并）**：frontend-admin 安全依赖修复进入 main，High/Critical 门禁通过。
-4. **PR #65（A 包，开放）**：head `5d9ef18`；两条 Review 已修复并解决，本地定向测试、Vitest、TypeScript、High/Critical audit、frontend-admin CI build、结构检查、secret-scan 和 RAG PR Smoke 均通过；隔离真实 API E2E 尚待完成。共享文件为 `backend/app/api/routes/observability.py`、`frontend-admin/src/api/observability.ts`。
-5. **PR #63（A 包，开放）**：head `3ca4906`；管理端 CI、管理员权限回归与结构检查通过。真实 Admin/Viewer/Editor、跨租户和资源只读 E2E BLOCKED。若 #65 先合并，须把 #65 新 main 合入 #63 并重跑受影响检查。
-6. **B 包**：依赖最新计划及 A 的导航/读数规范；按已有页面和 API 的实际差距分组交付，减少重复 PR 与重复验收。
-7. **C 包及对外开放**：依赖 A/B 页面稳定；权限、安全、适用依赖漏洞门禁和 L3 证据全部通过后才可开放。
+4. **PR #71（文档状态同步，开放）**：head `e34ac5c`，只更新四份任务计划/进度文档；`git diff --check`、secret-scan、RAG PR Smoke 通过。建议先合入以同步 main 状态。
+5. **PR #65（A 包，开放）**：head `5d9ef18`；两条 Review 已修复并解决，本地定向测试、Vitest、TypeScript、High/Critical audit、frontend-admin CI build、结构检查、secret-scan 和 RAG PR Smoke 均通过；隔离真实 API E2E 尚待完成。共享文件为 `backend/app/api/routes/observability.py`、`frontend-admin/src/api/observability.ts`。
+6. **PR #63（A 包，开放）**：head `3ca4906`；管理端 CI、管理员权限回归与结构检查通过。真实 Admin/Viewer/Editor、跨租户和资源只读 E2E BLOCKED。若 #65 先合并，须把 #65 新 main 合入 #63 并重跑受影响检查。
+7. **B 包**：依赖最新计划及 A 的导航/读数规范；按已有页面和 API 的实际差距分组交付，减少重复 PR 与重复验收。
+8. **C 包及对外开放**：依赖 A/B 页面稳定；权限、安全、适用依赖漏洞门禁和 L3 证据全部通过后才可开放。
 
-建议合并顺序：#53 → #68（均已合并）→ #65 → #63。#65 需先完成当前 CI 与隔离环境真实只读 API 验收；之后 #63 更新到最新 main，再完成 Admin/Viewer/Editor 及租户/资源授权验收。当前 #63、#65 都不建议合并；不因阻断而停止 A 的不冲突施工。前端与必要 API 适配同批交付，不能以 `401` 代替授权验收。
+建议合并顺序：#53 → #68 → #71（计划与状态同步；前三项中 #53/#68 已合并）→ #65 → #63。#65 需先完成隔离环境真实只读 API 验收；之后 #63 更新到最新 main，再完成 Admin/Viewer/Editor 及租户/资源授权验收。当前 #65、#63 都不建议合并；不因阻断而停止 A 的不冲突施工。前端与必要 API 适配同批交付，不能以 `401` 代替授权验收。
 
 ## 5. 本机真实 API 验收入口与等级
 
