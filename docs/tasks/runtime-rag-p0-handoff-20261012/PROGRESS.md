@@ -87,3 +87,15 @@
 - 最新代码树 C2 免费定向回归 `141 passed`，命令覆盖 model-role API/config、budget/governance、MultiQuery、retrieval deadline/thread pool、eval context/账本 artifact 和 token accounting；仅测试进程使用合成 `AI_INTERNAL_TOKEN`。未发起真实 Provider 调用。
 - Secret Scan run `38689068480` 已 success；RAG PR Smoke run `38689068456` 尚在运行。10 个历史 review thread 均已 resolved；本次只合入 main 新提交，没有修改 C2 源码。
 - **状态仍 BLOCKED，不建议合并：** 最近严格评测 Top-1 `0.7143 < 0.80`；31 次 Provider 调用均未定价，其中 22 次 tenant/user 归属异常，费用/预算账本保持 `UNVERIFIED`。真实复验需要用户授权新增评测额度，并在实际 Provider runtime 验证 Clash 代理和账本对账；不降低 Gate。
+
+## 2026-10-15 PR #52 遗留问题修复
+
+- 在原 `codex/rag-multi-query-p0-20261013` 工作树续工，无未提交前置修改；合入最新 main `45b0a7b`。本轮源码改动限定 RAG、统一预算、评测 seed/门禁及对应测试，未自行修改旅游或管理端实现。
+- 复查旧 run `38481681899`：Top-1 失败来自 RC-005（售后 FAQ 排在退货政策之前）及 RC-024（库存入库流程排在采购协作材料之前）；这两例均未触发 MultiQuery。当前为云端 rerank 补充候选标题/文件名上下文，不改排序分数、Golden、阈值或原文；质量改善仍需真实复验，不能据 payload 测试宣称 Top-1 已通过。
+- embedding 缓存未命中和每次 rerank HTTP 尝试进入既有 `reserve_model_call/record_model_usage`；缓存命中不预占、预算拒绝不记虚假出站。超时/缺价保留 `needs_review`，预占作用域退出恢复外层 ContextVar。embedding 字符 token 估算改为 `usage_source=estimated`，不再冒充 provider exact。
+- enforce 下评测预算绑定失败改为拒绝启动；CI 在任何付费 Probe/索引前检查权威价格与汇率，只有已批准价格快照才能导入隔离库。快照保留原始双人审查、来源、版本与有效期，重复导入不新增，同版本冲突拒绝并回滚；无新审批、无自拟单价。启用 MultiQuery 时显式绑定本次测试的聊天模型。
+- CI 最终门禁要求费用可核算且身份/预占/结算完成对账；`UNVERIFIED` 不再只是 artifact 提示。一次 eval 请求显式设置调用数 64、token 32000、成本配置 CNY 0.50；64 次覆盖原先漏计的专项组件，不构成整项 CI/供应商账单绝对封顶承诺，Probe/索引仍须独立核对。
+- **T0：PASS**，修改 Python 文件 `py_compile`、`git diff --check` 通过；新增测试文件 Ruff 通过。现有大文件的历史 Ruff 问题未扩大修复。
+- **T1/T2：PASS**，定向集合 `182 passed in 79.58s`，覆盖预算/配额/计费、MultiQuery、retrieval deadline、embedding 缓存、rerank、ContextVar、seed 和 CI 门禁；全部为合成 Provider/内存账本，无真实模型调用。
+- **隔离 PG T2：PASS**，使用本机 PostgreSQL 18 二进制独立启动 `127.0.0.1:15452/pr52_isolated_test`，SCRAM 合成凭据；执行现行 031/066 迁移，实际导入合成价格快照两次仍 4 行，同版本改价被拒绝，价格预检通过；既有 PG 原子配额集 `1 passed in 3.76s`。集群已停止、临时密码文件已删除，数据证据在 `D:/tmp/pr52-pg-w_2zfufw`。进程退出时既有 Memory async engine 有 event-loop-closed 清理告警，测试及数据库检查退出码为 0；不宣称已解决该独立生命周期问题。
+- **真实 T3：BLOCKED / UNVERIFIED**。用户已经授权使用 PR 所需真实模型，不再等待重复授权。`prompt-eval` 环境未提供 `PROMPT_EVAL_APPROVED_PRICES_JSON`；授权源库只读查询返回 `ConnectionTimeout`，未取得权威价格。未启动新付费 run、未写共享/生产库。源价格与凭据可读后，先导出原始批准快照，再对当前 PR HEAD 执行一次固定 8-case 严格 Smoke（MultiQuery 开启），核对完整归属和费用；Top-1 0.80 门槛保持。

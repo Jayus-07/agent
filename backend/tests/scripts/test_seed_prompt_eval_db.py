@@ -39,7 +39,8 @@ def test_build_seed_configs_requires_and_returns_chat_and_embedding_bindings(mon
 
 
 @pytest.mark.asyncio
-async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
+@pytest.mark.parametrize("multiquery", [False, True])
+async def test_seed_commits_model_bindings_before_closing_session(monkeypatch, multiquery):
     values = {
         "PGHOST": "localhost",
         "PROMPT_EVAL_TEST_PGDATABASE": "agent_memory_test",
@@ -58,6 +59,7 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("EVAL_MULTIQUERY", str(multiquery).lower())
 
     class Session:
         def __init__(self):
@@ -91,8 +93,11 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
         for statement, params in session.statements
         if "INSERT INTO llm_model_role_bindings" in statement
     ]
-    assert role_bindings == [
+    expected_bindings = [
         {"role": "eval_gen", "model_name": "chat-model"},
         {"role": "embedding", "model_name": "embedding-model"},
-        {"role": "rerank", "model_name": "rerank-model"},
     ]
+    if multiquery:
+        expected_bindings.append({"role": "multi_query", "model_name": "chat-model"})
+    expected_bindings.append({"role": "rerank", "model_name": "rerank-model"})
+    assert role_bindings == expected_bindings

@@ -170,6 +170,10 @@ jobs:
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
       EVAL_RUN_ID: rag-smoke-${{ github.run_id }}-${{ github.run_attempt }}
       LLM_BUDGET_MODE: enforce
+      # 全部组件共用一次 run 的请求预算，历史 8 次只计算生成，遗漏专项调用。
+      LLM_REQUEST_MAX_CALLS: "64"
+      LLM_REQUEST_MAX_TOKENS: "32000"
+      LLM_REQUEST_MAX_COST: "0.50"
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
@@ -190,6 +194,8 @@ jobs:
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      # 仅复制权威源已批准的快照，禁止用估算单价或伪造审批填平账本。
+      PROMPT_EVAL_APPROVED_PRICES_JSON: ${{ vars.PROMPT_EVAL_APPROVED_PRICES_JSON }}
       EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
@@ -259,6 +265,9 @@ jobs:
 
       - name: Seed DB API model bindings
         run: python -m backend.scripts.seed_prompt_eval_db
+
+      - name: Verify approved prices before any paid API call
+        run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
 
       - name: Verify bindings and probe real API
         env:
@@ -498,6 +507,20 @@ jobs:
                             "ledger_difference_cny": round(float(ledger_difference), 6),
                             "unverified_calls": unverified_calls, "usage": summary},
                            ensure_ascii=False, indent=2))
+          PY
+
+      - name: Require reconciled cost ledger
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("data/eval_runs/llm_usage_summary.json").read_text())
+          if summary.get("cost_verification") not in {"VERIFIED", "ESTIMATED"}:
+              raise SystemExit("费用未定价或无法验证，禁止通过真实评测")
+          if summary.get("budget_ledger_verification") != "VERIFIED":
+              raise SystemExit("身份或预占/结算账本未完成对账，禁止通过真实评测")
           PY
 
       - name: Upload RAG smoke report

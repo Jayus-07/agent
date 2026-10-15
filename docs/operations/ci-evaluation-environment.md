@@ -130,6 +130,19 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 
 RAG Smoke 的 `workflow_dispatch` 提供 `multiquery` 布尔参数，默认 `false`；设为 `true` 时，同一 `pr_smoke` 集会额外经过 MultiQuery 路径。PR 事件不会调用付费 API，普通 main push 仍使用默认关闭值。
 
+真实 Smoke 在 Probe、索引和评测调用之前执行 `seed_prompt_eval_db --verify-pricing`。
+`prompt-eval` 环境变量 `PROMPT_EVAL_APPROVED_PRICES_JSON` 只接收源 Registry
+已批准的价格行快照，字段为 `model_name/component/dimension/price_per_unit/unit/currency`、
+`price_table_version/source/effective_from/effective_to/approval_status/reviewer_1/reviewer_2`。
+快照必须覆盖本次绑定模型的必需计价维度，保留原始来源、版本和两位不同审查人；
+缺价、失效、未批准或同版本内容冲突均阻止付费调用。导入只写隔离测试库，不能生成审批、
+修改源价格或用自拟单价补齐账本。启用 MultiQuery 时，seed 同时将改写角色绑定到本次显式测试的聊天模型。
+
+embedding 与 rerank 复用统一请求预算和预占账本；缓存命中不计出站，rerank 每次 HTTP
+重试分别预占。embedding 的字符 token 估算必须标记 `estimated`；未知价格、缺少用量和
+结果不明保留 `needs_review`。质量结果通过后，费用状态仍须为 `VERIFIED/ESTIMATED`、
+预算账本须为 `VERIFIED`；任何身份缺失、未决预占或结算差额都阻止真实 Smoke 通过。
+
 **验收矩阵 CI-01～CI-10（实现状态逐条标注）**：
 
 | ID | 要求（摘要） | 状态 |

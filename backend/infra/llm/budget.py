@@ -393,6 +393,25 @@ def current_call_decision() -> str:
     return _current_call_decision.get()
 
 
+@contextmanager
+def scoped_model_call(
+    model_name: str, component: str, *, kind: str = "primary",
+) -> Iterator[None]:
+    """专项模型复用统一预占；恢复外层预占，未知结果保留待对账。"""
+    token = _current_quota_reservation.set(None)
+    decision_token = _current_call_decision.set(_current_call_decision.get())
+    try:
+        reserve_model_call(kind, model_name=model_name, component=component)
+        try:
+            yield
+        finally:
+            # 成功结算会清空当前预占；异常/未记账不能按零释放。
+            review_model_reservation("provider_usage_unavailable")
+    finally:
+        _current_quota_reservation.reset(token)
+        _current_call_decision.reset(decision_token)
+
+
 def release_model_reservation() -> None:
     """释放本次模型调用失败/重试路径的额度预占。
 
@@ -489,4 +508,5 @@ __all__ = [
     "reserve_model_call",
     "review_model_reservation",
     "scoped_request_budget",
+    "scoped_model_call",
 ]
