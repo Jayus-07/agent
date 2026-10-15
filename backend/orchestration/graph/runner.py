@@ -551,6 +551,18 @@ class GraphRunner:
         trace = trace_collector.start(
             question, product_session_id, workflow_name="agent",
         )
+        from backend.context_budget.metrics import ContextEventScope
+        context_event_scope = ContextEventScope(
+            product_id=str(product_id or ""),
+            tenant_id=str(tenant_id or ""),
+            user_id=str(user_id or ""),
+            session_id=product_session_id,
+            request_id=str(
+                getattr(trace, "request_id", "") or getattr(trace, "id", "")
+            ),
+        )
+        if not context_event_scope.complete:
+            context_event_scope = None
         trace.tags["product_id"] = product_id
         trace.tags["product_source"] = product_source
         # 请求级 Prompt 版本 pin（治理 #5）：本次执行所用版本在开始时定格，
@@ -600,7 +612,7 @@ class GraphRunner:
                 memory_owner_id = memory_user_id(product_by_id(product_id), user_id)
                 l1 = self._memory.start_session(
                     product_session_id, question, user_id=memory_owner_id,
-                    **memory_scope,
+                    event_scope=context_event_scope, **memory_scope,
                 )
             else:
                 from backend.memory.short_term import ShortTermBuffer
@@ -695,11 +707,10 @@ class GraphRunner:
         # ── worker 线程执行图 + 事件合并队列 ──
         # merged_q 元素: ("evt", event_dict) 或 ("done", None) 哨兵
         merged_q: queue.Queue = queue.Queue()
-        # flush 早期 context 事件（L2 历史裁剪在 MemoryManager 后台线程发生，
-        # 无 sink → 会话分桶缓冲；此处只补发【本会话】的事件。2026-10-01
-        # STOP C 请求隔离：任意 runner 不再整队取走他人晚到事件）
+        # 只 flush 当前完整 Product/Tenant/User/Session/Request 作用域的早期
+        # L2 事件；request_id 不匹配的旧请求晚到事件不会进入本次 SSE。
         from backend.context_budget.metrics import drain_pending_events
-        for _early in drain_pending_events(session_id=product_session_id):
+        for _early in drain_pending_events(scope=context_event_scope):
             merged_q.put(("evt", {"event": "context", "data": _early}))
         # 请求上下文：trace/sink 显式持有并随状态流动，Send 分支经
         # trace_middleware 从 state 重新绑定（ContextVar 不跨线程继承）
@@ -774,7 +785,9 @@ class GraphRunner:
             # worker 线程内挂载（ContextVar 不跨线程继承），退出时还原
             from backend.context_budget.metrics import (
                 reset_context_sink,
+                reset_context_event_scope,
                 set_context_sink,
+                set_context_event_scope,
             )
             from backend.orchestration.graph.sse_event_sink import (
                 bind_sse_event_sink,
@@ -782,6 +795,10 @@ class GraphRunner:
             )
 
             def _context_sink(evt: dict) -> None:
+                if ctx.get("sse_events_closed"):
+                    return
+                if stop_event is not None and stop_event.is_set():
+                    return
                 merged_q.put(("evt", {"event": "context", "data": evt}))
 
             def _sse_event_sink(evt: dict) -> None:
@@ -791,7 +808,10 @@ class GraphRunner:
                     return
                 merged_q.put(("evt", evt))
 
-            _sink_token = set_context_sink(_context_sink)
+            _scope_token = set_context_event_scope(context_event_scope)
+            _sink_token = set_context_sink(
+                _context_sink, scope=context_event_scope,
+            )
             _sse_sink_token = bind_sse_event_sink(_sse_event_sink)
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
@@ -932,6 +952,7 @@ class GraphRunner:
                 ctx["sse_events_closed"] = True
                 reset_sse_event_sink(_sse_sink_token)
                 reset_context_sink(_sink_token)
+                reset_context_event_scope(_scope_token)
                 reset_stream_sink()
                 merged_q.put(("done", None))
 

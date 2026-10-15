@@ -45,9 +45,13 @@ def _allow_guard(monkeypatch):
 class _FakeMemory:
     def __init__(self):
         self.end_turn_calls = []
+        self.start_session_calls = []
 
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id=""):
+                      tenant_id="", event_scope=None):
+        self.start_session_calls.append((
+            session_id, question, user_id, tenant_id, event_scope,
+        ))
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
@@ -89,6 +93,26 @@ def _collect_events(sys_obj, stop_event=None):
     return list(sys_obj.stream_events(
         "测试问题", "s-1", kb_id="default", stop_event=stop_event, user_id="u-1",
     ))
+
+
+def test_runner_scopes_memory_events_to_trusted_request_identity(monkeypatch):
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr(trace_collector, "finish", lambda *_args: None)
+    sys_obj = _make_system(_FakeGraph([
+        {"general_chat": {"final_answer": "完成"}},
+    ]))
+    list(sys_obj.stream_events(
+        "你好", "same-session", user_id="user-A", tenant_id="tenant-A",
+        product_id="agent", product_source="api_route",
+    ))
+
+    scope = sys_obj._memory.start_session_calls[0][4]
+    assert scope.product_id == "agent"
+    assert scope.tenant_id == "tenant-A"
+    assert scope.user_id == "user-A"
+    assert scope.session_id == "agent::same-session"
+    assert scope.request_id
 
 
 def test_stream_events_true_streaming_order(monkeypatch):
