@@ -63,9 +63,9 @@
 
 ### #66：PDF Worker 真实终态
 
-- 当前 PR HEAD 32f8406faf7c773f7d58e33a8eb90d69b00d8e49，已同步 main 04846a61；本地六个定向 RAG/PDF/Excel/coverage 测试 67 passed。目标上传 b96f4d86ebe3、IndexRun f7a06549-ba71-4abf-a134-3a7b3d35deb1 仍为 running，停在 table_describe；Celery active/reserved/scheduled 为空。Docker OOMKilled=false、restartCount=0，但原 Worker/Celery/Docker SIGKILL 事件日志已不可用，不能断言 OOM。
+- 当前 PR HEAD 32f8406faf7c773f7d58e33a8eb90d69b00d8e49（包含修复提交 96407e7d1fb8a7a9ebf4ef6da27eb5bc7ec3dfcb，已由 `git merge-base --is-ancestor` 确认）；该提交修复 PDF 页码清洗在不确定时误删独立数字行。PR Worktree 定向回归 77 passed；当前 HEAD GitHub 的 RAG Smoke、no-paid preflight、Detect RAG changes、scan 均 success，真实 API Evaluation 为 skipped。另在 main 基线上，六个 RAG/PDF/Excel/coverage 文件 67 passed。目标上传 b96f4d86ebe3、IndexRun f7a06549-ba71-4abf-a134-3a7b3d35deb1 仍为 running，停在 table_describe；Celery active/reserved/scheduled 为空。Docker OOMKilled=false、restartCount=0，但原 Worker/Celery/Docker SIGKILL 事件日志已不可用，不能断言 OOM。
 - Docker Engine named pipe 不可用；曾尝试单文件可逆改名以恢复 Model Runner，但权限拒绝，设置已恢复 SHA 77792FC4…CEE8139，未碰共享库或数据卷。
-- RAG-03 PDF 最终 IndexRun、RAG-08 Search 未完成；RAG-04/09 部分或未验证；RAG-12 未验证。需恢复隔离 Docker Worker 并取得任务/Worker 事件后再施工。
+- RAG-03 PDF 最终 IndexRun、RAG-08 Search 未完成；RAG-04/09 部分或未验证；RAG-12 未验证。需恢复隔离 Docker Worker 并取得任务/Worker 事件后再施工。此前“修复已推送 HEAD 96407e7”的记录不准确：远端分支 HEAD 是 32f8406，修复提交是其祖先，故修复确实包含在 PR 当前 HEAD。
 
 ### #69：主助手真实 T3
 
