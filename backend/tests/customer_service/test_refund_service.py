@@ -1,5 +1,6 @@
 """test_refund_service.py — 退款服务测试"""
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -34,7 +35,8 @@ def _order_row(
         "total_amount": total_amount,
         "status": status,
         "payment_status": "paid",
-        "created_at": "2026-09-01",
+        # 相对时间：退款窗口按下单时间判定，写死日期的夹具会随时间失效
+        "created_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
     }
 
 

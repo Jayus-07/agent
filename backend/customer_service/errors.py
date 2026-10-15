@@ -127,6 +127,18 @@ class ActionExecutionError(CustomerServiceError):
         super().__init__(message, "ACTION_FAILED", user_message or "操作执行失败，请稍后重试", **kw)
 
 
+class RefundPolicyUnavailableError(DatabaseError):
+    """退款政策配置缺失或非法 —— 写路径 fail-closed。
+
+    继承 DatabaseError 是有意的：动作专家对「事实源不可用」已有统一的
+    降级话术（不发起申请 + 引导转人工），政策不可用与之同类，不另造分支。
+    """
+
+    def __init__(self, message: str = "退款政策不可用", **kw):
+        super().__init__(message, **kw)
+        self.code = "REFUND_POLICY_UNAVAILABLE"
+
+
 class HumanHandoffError(CustomerServiceError):
     """人工转接异常"""
 
