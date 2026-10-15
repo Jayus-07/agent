@@ -50,6 +50,13 @@ async def _require_trace_reader(request: Request):
     return await require_user_actor(request)
 
 
+async def _require_observability_admin(request: Request):
+    """只允许管理员查看全局告警日志和 Skill 健康聚合。"""
+    from backend.app.api.deps import require_admin_user
+
+    return await require_admin_user(request)
+
+
 # ═══════════════════════════════════════════════════
 # 敏感接口收口 —— 网关审计类端点（汇总文档 A3，2026-09-16）
 # ═══════════════════════════════════════════════════
@@ -670,7 +677,10 @@ async def get_breakers():
 # ═══════════════════════════════════════════════════
 
 @router.get("/alerts")
-async def get_alerts(limit: int = Query(50, ge=1, le=500)):
+async def get_alerts(
+    limit: int = Query(50, ge=1, le=500),
+    _admin=Depends(_require_observability_admin),
+):
     """读取降级/告警日志（degradation.jsonl 尾部 N 行）"""
     from backend.observability.alerts import DEGRADATION_LOG_FILE
 
@@ -703,7 +713,10 @@ async def get_alerts(limit: int = Query(50, ge=1, le=500)):
 # ═══════════════════════════════════════════════════
 
 @router.get("/skill-health")
-async def skill_health(limit: int = Query(200, ge=1, le=1000)):
+async def skill_health(
+    limit: int = Query(200, ge=1, le=1000),
+    _admin=Depends(_require_observability_admin),
+):
     """按节点/Skill 聚合最近 trace 的健康度：调用量/成功率/平均耗时/重试次数。
 
     数据源为最近 N 条 trace 的 span 明细，按 span.name 分组（排除 route/round

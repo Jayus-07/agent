@@ -7,7 +7,7 @@
  *   前端直接使用 TraceRecord/Span 类型即可。
  */
 import { request } from "@/lib/fetcher";
-import type { TraceFilterOptions, TraceRecord, AlertItem } from "@/types/trace";
+import type { TraceFilterOptions, TraceRecord } from "@/types/trace";
 
 // ── CS 灰度质量报告 ───────────────────────────────────
 
@@ -154,12 +154,85 @@ export async function getTraceDetail(id: string): Promise<TraceRecord | null> {
   }
 }
 
-// ── Alerts（注意：后端 /alerts 字段不匹配前端 AlertItem，暂不直连） ──
-// 见 lib/observability/source.ts：alerts 由 client 端 buildAlerts() 聚合 traces 而来。
-// 此处保留接口签名以便将来切换到后端 AlertItem 序列化器。
-export interface AlertsResponse {
-  alerts: AlertItem[];
-  total: number;
+export interface HealthProbe {
+  available?: boolean
+  latency_ms?: number
+}
+
+export interface SystemHealthSnapshot {
+  /** Unix 秒；后端以 15 秒进程内缓存复用同一快照。 */
+  collected_at?: number
+  db?: HealthProbe & { active_connections?: number; open_tasks?: number }
+  redis?: {
+    db0?: HealthProbe
+    broker?: HealthProbe & { queues?: Record<string, number> }
+    result?: HealthProbe
+    queues?: Record<string, number>
+  }
+  worker?: {
+    available?: boolean
+    online_count?: number
+    workers?: { active_tasks?: number }[]
+  }
+  tasks?: { available?: boolean }
+}
+
+export interface DegradationAlertEvent {
+  timestamp?: unknown
+  level?: unknown
+  code?: unknown
+}
+
+export interface DegradationAlertsResponse {
+  alerts: DegradationAlertEvent[]
+  total: number
+}
+
+/** GET /observability/alerts — 管理员可见的降级事件日志尾部。 */
+export async function getDegradationAlerts(limit = 300): Promise<DegradationAlertsResponse> {
+  const data = await request<DegradationAlertsResponse>(
+    '/api/observability/alerts?limit=' + String(limit),
+  )
+  return {
+    alerts: Array.isArray(data.alerts) ? data.alerts : [],
+    total: Number.isFinite(data.total) ? data.total : 0,
+  }
+}
+
+export interface SkillHealthEntry {
+  name: unknown
+  type: unknown
+  total: unknown
+  success: unknown
+  error: unknown
+  skipped: unknown
+  neutral: unknown
+  real_errors: unknown
+  retries: unknown
+  avg_duration_ms: unknown
+  success_rate: unknown
+  last_error_kind: unknown
+  last_error?: unknown
+}
+
+export interface SkillHealthResponse {
+  skills: SkillHealthEntry[]
+  trace_window: number
+}
+
+/** GET /observability/skill-health — 复用既有 Skill/节点聚合统计。 */
+export async function getSkillHealth(limit = 300): Promise<SkillHealthResponse> {
+  const data = await request<SkillHealthResponse>(
+    '/api/observability/skill-health?limit=' + String(limit),
+  )
+  return {
+    skills: Array.isArray(data.skills) ? data.skills : [],
+    trace_window: Number.isFinite(data.trace_window) ? data.trace_window : limit,
+  }
+}
+/** GET /observability/system-health — 服务端管理员守卫下的 DB/Redis/Worker/任务只读快照。 */
+export function getSystemHealth(): Promise<SystemHealthSnapshot> {
+  return request<SystemHealthSnapshot>('/api/observability/system-health')
 }
 
 // ── Token 用量看板 ──────────────────────────────────────

@@ -62,6 +62,21 @@ export interface WorkflowRow {
   examples: string[]
 }
 
+/** GET /workflows 返回的运行时注册元数据；不包含运行输出或输入。 */
+export interface WorkflowCatalogEntry {
+  name: string
+  description: string
+  objects: string[]
+  actions: string[]
+  examples: string[]
+  default_kbs: string[]
+}
+
+export interface WorkflowCatalogResponse {
+  workflows: WorkflowCatalogEntry[]
+  total: number
+}
+
 export interface SkillRow {
   name: string
   description: string
@@ -78,6 +93,11 @@ export interface CapabilitiesOverview {
 
 export function getCapabilities(): Promise<CapabilitiesOverview> {
   return request<CapabilitiesOverview>('/api/capabilities')
+}
+
+/** GET /workflows — Workflow 注册元数据，只读；不请求无资源授权保证的 runs 端点。 */
+export function getWorkflowCatalog(): Promise<WorkflowCatalogResponse> {
+  return request<WorkflowCatalogResponse>('/api/workflows')
 }
 
 // ── MCP Server / Tool（复用既有只读接口） ────────────────
