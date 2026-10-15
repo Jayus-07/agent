@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime, timedelta, timezone
 from datetime import time as dt_time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from backend.travel.core.intent import QUERY_INTENTS, TravelIntent, classify_intent
 from backend.travel.services.llm_intent_service import classify_intent_llm
@@ -160,7 +160,7 @@ class TripAIEditService:
             "conversation_id": payload.conversation_id,
             "command_type": "ai_edit",
         })
-        existing, current = self._reserve(
+        existing, current, request_id = self._reserve(
             trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
             idempotency_key=key, request_hash=request_hash,
             expected_revision=payload.expected_revision,
@@ -170,6 +170,7 @@ class TripAIEditService:
                 existing, request_hash, trip_id, tenant_id, owner_id, key,
             )
         assert current is not None
+        assert request_id is not None
 
         if int(current["revision"]) != payload.expected_revision:
             failure = self._failure(
@@ -358,6 +359,7 @@ class TripAIEditService:
             return self._blocked_or_pending(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 key=key, request=payload, operation=operation,
+                request_id=request_id, request_sha256=request_hash,
                 change_summary=candidate.change_summary,
                 metadata=metadata, current_document=current["document"],
                 conflict=exc.conflict,
@@ -431,6 +433,7 @@ class TripAIEditService:
             return self._blocked_or_pending(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 key=key, request=payload, operation=operation,
+                request_id=request_id, request_sha256=request_hash,
                 change_summary=candidate.change_summary,
                 metadata=metadata, current_document=current["document"],
                 conflict=exc.conflict,
@@ -470,7 +473,8 @@ class TripAIEditService:
 
     def _blocked_or_pending(
         self, *, trip_id: str, tenant_id: str, owner_id: str, key: str,
-        request: AITripEditRequest, operation: dict, change_summary: str,
+        request: AITripEditRequest, operation: dict,
+        request_id: UUID, request_sha256: str, change_summary: str,
         metadata: dict, current_document: dict, conflict: dict,
     ) -> dict:
         conflict = dict(conflict)
@@ -533,7 +537,8 @@ class TripAIEditService:
             return self._edits.persist_ai_pending_resolution(
                 trip_id=trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 expected_revision=request.expected_revision,
-                idempotency_key=key, response={
+                idempotency_key=key, request_id=request_id,
+                request_sha256=request_sha256, response={
                     name: value for name, value in result.items()
                     if name != "replayed"
                 },
@@ -779,9 +784,10 @@ class TripAIEditService:
             pending_id=pending_id,
         )
 
-    def _reserve(self, *, trip_id: str, tenant_id: str, owner_id: str,
-                 idempotency_key: str, request_hash: str,
-                 expected_revision: int) -> tuple[dict | None, dict | None]:
+    def _reserve(
+        self, *, trip_id: str, tenant_id: str, owner_id: str,
+        idempotency_key: str, request_hash: str, expected_revision: int,
+    ) -> tuple[dict | None, dict | None, UUID | None]:
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 existing = self._requests.get(
@@ -789,7 +795,7 @@ class TripAIEditService:
                     owner_id=owner_id, idempotency_key=idempotency_key,
                 )
                 if existing:
-                    return existing, None
+                    return existing, None, None
                 prior_operation = self._operations.get_by_key(
                     cursor, trip_id, idempotency_key,
                     tenant_id=tenant_id, owner_id=owner_id,
@@ -811,7 +817,7 @@ class TripAIEditService:
                     owner_id=owner_id, idempotency_key=idempotency_key,
                 )
                 if existing:
-                    return existing, None
+                    return existing, None, None
                 prior_operation = self._operations.get_by_key(
                     cursor, trip_id, idempotency_key,
                     tenant_id=tenant_id, owner_id=owner_id,
@@ -820,22 +826,23 @@ class TripAIEditService:
                     raise IdempotencyConflict(
                         "Idempotency-Key 已用于其他行程编辑操作",
                     )
+                request_id = uuid4()
                 inserted = self._requests.reserve(
-                    cursor, request_id=uuid4(), trip_id=trip_id,
+                    cursor, request_id=request_id, trip_id=trip_id,
                     tenant_id=tenant_id, owner_id=owner_id,
                     idempotency_key=idempotency_key,
                     request_sha256=request_hash,
                     expected_revision=expected_revision,
                 )
                 if inserted:
-                    return None, current
+                    return None, current, request_id
                 existing = self._requests.get(
                     cursor, trip_id=trip_id, tenant_id=tenant_id,
                     owner_id=owner_id, idempotency_key=idempotency_key,
                 )
                 if not existing:
                     raise RuntimeError("AI 编辑请求预留状态不可读取")
-                return existing, None
+                return existing, None, None
 
     def _replay(self, existing: dict, request_hash: str,
                 trip_id: str, tenant_id: str, owner_id: str,

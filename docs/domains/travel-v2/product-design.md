@@ -367,7 +367,7 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 | 确认冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/resolve` | Body 只接收服务端提供的 `resolution_id`；使用独立 `Idempotency-Key`，重新校验后复用 CAS/Revision/操作账本 |
 | 取消/拒绝冲突解决 | `POST /api/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/cancel` | 与确认共用 Trip 行锁；终态 pending 不可再次执行 |
 
-> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
+> BE-4C 的 `ai_edit_requests` 账本同时持久化原始 AI 请求和 pending 生命周期，没有新增 Trip 版本系统或 pending 表。可安全给出下一可用时刻的单项时间冲突才提供受限解决选项；锁定、固定、必去、闭馆等无法安全自动修复的冲突保持 BLOCKED。确认使用独立幂等键，并在同一事务内写正式 Trip、Revision、`edit_operations` 与 AI 回执；失败、取消和过期不写正式 Trip。90 秒陈旧 `processing` 查询返回 UNKNOWN，仍可能在原工作运行中，不代表取消或回滚；原调用迟到时只允许同一请求账本身份、作用域和幂等键安全保存 Pending，不重新调用模型，也不覆盖其他终态。复杂多操作、整体重规划和无法从当前 Trip 快照确认的地点修改会澄清或拒绝。
 
 > 设计到实现的映射原则：`REUSE / FIX / BUILD / BLOCKED`；任何新增 URL、字段或表必须在 B0 差距报告中说明证据、调用方及迁移方案。
 

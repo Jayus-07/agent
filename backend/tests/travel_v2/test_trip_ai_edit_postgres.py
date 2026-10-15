@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import os
 import threading
 import uuid
@@ -469,6 +470,162 @@ def test_same_key_concurrent_request_only_generates_one_candidate(trip_api, monk
         assert _database_state(trip_id, key)[:4] == (2, 2, 1, "succeeded")
     finally:
         release.set()
+        _cleanup(trip_id)
+
+
+def test_late_pending_recovers_after_same_key_marks_request_unknown(
+    trip_api, monkeypatch,
+) -> None:
+    trip_id, headers = _create_trip(trip_api, _two_item_document())
+    key = f"late-pending-{uuid.uuid4().hex}"
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    url = f"/travel/v2/trips/{trip_id}/ai-edits"
+    body = {
+        "expected_revision": 1,
+        "user_message": "把灵隐寺开始时间改到10:00",
+    }
+
+    def generate(_message, _context):
+        calls.append(1)
+        entered.set()
+        assert release.wait(timeout=10)
+        return _candidate(operation={
+            "op": "update_item", "item_id": "item-2", "start_time": "10:00",
+        }), _metadata()
+
+    monkeypatch.setattr(TripAIEditService, "_generate_candidate", staticmethod(generate))
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(
+                trip_api.post, url,
+                headers={**headers, "Idempotency-Key": key}, json=body,
+            )
+            assert entered.wait(timeout=10)
+
+            # 模拟原请求运行超过 90 秒，避免在回归测试中真实等待。
+            connection = get_memory_engine().raw_connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """UPDATE travel_v2.ai_edit_requests
+                              SET updated_at=now()-interval '91 seconds'
+                            WHERE trip_id=%s::uuid AND idempotency_key=%s""",
+                        (trip_id, key),
+                    )
+                    assert cursor.rowcount == 1
+                connection.commit()
+            finally:
+                connection.close()
+
+            retry = trip_api.post(
+                url, headers={**headers, "Idempotency-Key": key}, json=body,
+            )
+            assert retry.status_code == 202
+            assert retry.json()["status"] == "unknown"
+            assert len(calls) == 1
+            operation_status = trip_api.get(f"{url}/{key}", headers=headers)
+            assert operation_status.json()["status"] == "unknown"
+
+            connection = get_memory_engine().raw_connection()
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(
+                        """SELECT status, metadata->>'unknown_reason'
+                             FROM travel_v2.ai_edit_requests
+                            WHERE trip_id=%s::uuid AND idempotency_key=%s""",
+                        (trip_id, key),
+                    )
+                    assert tuple(cursor.fetchone()) == (
+                        "unknown", "stale_processing",
+                    )
+            finally:
+                connection.close()
+
+            release.set()
+            recovered = first.result(timeout=15)
+
+        assert recovered.status_code == 200
+        assert recovered.json()["status"] == "pending_resolution"
+        pending_id = recovered.json()["pending_id"]
+        assert _database_state(trip_id, key)[:4] == (
+            1, 1, 0, "pending_resolution",
+        )
+
+        # 同一原请求重放返回已恢复的 Pending，不会再次调用模型或写正式 Revision。
+        replay = trip_api.post(
+            url, headers={**headers, "Idempotency-Key": key}, json=body,
+        )
+        assert replay.status_code == 200
+        assert replay.json()["pending_id"] == pending_id
+        assert len(calls) == 1
+        assert _database_state(trip_id, key)[:4] == (
+            1, 1, 0, "pending_resolution",
+        )
+    finally:
+        release.set()
+        _cleanup(trip_id)
+
+
+@pytest.mark.parametrize(("status", "pending_status"), [
+    ("succeeded", "consumed"),
+    ("cancelled", "cancelled"),
+    ("expired", "expired"),
+])
+def test_late_pending_does_not_replace_terminal_request(
+    trip_api, status: str, pending_status: str,
+) -> None:
+    trip_id, headers = _create_trip(trip_api)
+    key = f"terminal-pending-{uuid.uuid4().hex}"
+    request_id = uuid.uuid4()
+    request_sha256 = "f" * 64
+    terminal_response = {
+        "status": status, "saved": status == "succeeded",
+        "trip_id": trip_id, "base_revision": 1, "operation_key": key,
+        "pending_resolution": {"status": pending_status},
+    }
+    terminal_metadata = {"terminal_marker": status}
+    connection = get_memory_engine().raw_connection()
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO travel_v2.ai_edit_requests
+                    (request_id, trip_id, tenant_id, owner_id, idempotency_key,
+                     request_sha256, expected_revision, status, response, metadata)
+                   VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s, 1, %s,
+                           %s::jsonb, %s::jsonb)""",
+                (
+                    str(request_id), trip_id, headers["X-Tenant-Id"],
+                    headers["X-User-Id"], key, request_sha256, status,
+                    json.dumps(terminal_response),
+                    json.dumps(terminal_metadata),
+                ),
+            )
+        connection.commit()
+    finally:
+        connection.close()
+
+    try:
+        result = TripEditService().persist_ai_pending_resolution(
+            trip_id=trip_id, tenant_id=headers["X-Tenant-Id"],
+            owner_id=headers["X-User-Id"], expected_revision=1,
+            idempotency_key=key, request_id=request_id,
+            request_sha256=request_sha256,
+            response={
+                "status": "pending_resolution", "saved": False,
+                "trip_id": trip_id, "base_revision": 1,
+                "operation_key": key, "pending_id": str(uuid.uuid4()),
+            },
+            metadata={"result": "late_pending"},
+        )
+        assert result["status"] == status
+        assert result["pending_resolution"]["status"] == pending_status
+        assert result["replayed"] is True
+        assert _database_state(trip_id, key)[:4] == (
+            1, 1, 0, status,
+        )
+        assert _request_metadata(trip_id, key) == terminal_metadata
+    finally:
         _cleanup(trip_id)
 
 

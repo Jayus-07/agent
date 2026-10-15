@@ -422,9 +422,9 @@ class TripEditService:
     def persist_ai_pending_resolution(
         self, *, trip_id: str | UUID, tenant_id: str, owner_id: str,
         expected_revision: int, idempotency_key: str, response: dict,
-        metadata: dict,
+        metadata: dict, request_id: UUID | str, request_sha256: str,
     ) -> dict:
-        """锁定并核对基线后，只保存 AI 请求账本中的 pending，不改正式 Trip。"""
+        """只为仍在运行或被超时回收的原始请求保存 Pending，不改正式 Trip。"""
         with self._connect() as connection:
             with connection.cursor() as cursor:
                 current = self._trips.get(
@@ -440,7 +440,18 @@ class TripEditService:
                 )
                 if not request:
                     raise RuntimeError("AI 编辑请求账本不存在")
-                if request["status"] != "processing":
+                if (
+                    request["request_id"] != str(request_id)
+                    or request["request_sha256"] != request_sha256
+                    or request["expected_revision"] != expected_revision
+                ):
+                    raise RuntimeError("AI 编辑请求身份不匹配")
+                stale_unknown = (
+                    request["status"] == "unknown"
+                    and request["metadata"].get("unknown_reason")
+                    == "stale_processing"
+                )
+                if request["status"] != "processing" and not stale_unknown:
                     return {**request["response"], "replayed": True}
                 if int(current["revision"]) != expected_revision:
                     result = {
@@ -462,13 +473,16 @@ class TripEditService:
                         owner_id=owner_id, idempotency_key=idempotency_key,
                         status="failed", response=result,
                         metadata={**metadata, "result": "version_conflict"},
+                        allow_unknown=True,
                     )
                     return {**result, "replayed": False}
-                self._ai_edit_requests.finish(
-                    cursor, trip_id=trip_id, tenant_id=tenant_id,
-                    owner_id=owner_id, idempotency_key=idempotency_key,
-                    status="pending_resolution", response=response,
-                    metadata=metadata,
+                self._ai_edit_requests.finish_pending_resolution(
+                    cursor, request_id=request_id, trip_id=trip_id,
+                    tenant_id=tenant_id, owner_id=owner_id,
+                    idempotency_key=idempotency_key,
+                    request_sha256=request_sha256,
+                    expected_revision=expected_revision,
+                    response=response, metadata=metadata,
                 )
         return {**response, "replayed": False}
 

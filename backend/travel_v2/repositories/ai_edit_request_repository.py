@@ -83,10 +83,38 @@ class AIEditRequestRepository:
                        metadata = %s::jsonb, updated_at = now()
                  WHERE trip_id = %s::uuid AND tenant_id = %s AND owner_id = %s
                    AND idempotency_key = %s
-                   AND (status = 'processing' OR (%s AND status = 'unknown'))""",
+                   AND (status = 'processing' OR
+                        (%s AND status = 'unknown'
+                         AND metadata->>'unknown_reason' = 'stale_processing'))""",
             (status, json.dumps(response, ensure_ascii=False),
              json.dumps(metadata or {}, ensure_ascii=False), str(trip_id),
              tenant_id, owner_id, idempotency_key, allow_unknown),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("AI 编辑请求状态无法完成")
+
+    def finish_pending_resolution(
+        self, cursor, *, request_id: UUID | str,
+        trip_id: UUID | str, tenant_id: str, owner_id: str,
+        idempotency_key: str, request_sha256: str,
+        expected_revision: int, response: dict, metadata: dict,
+    ) -> None:
+        """只接收同一原始请求仍在运行或超时回收后的迟到 Pending。"""
+        cursor.execute(
+            """UPDATE travel_v2.ai_edit_requests
+                  SET status = 'pending_resolution', response = %s::jsonb,
+                      metadata = %s::jsonb, updated_at = now()
+                WHERE request_id = %s::uuid AND trip_id = %s::uuid
+                  AND tenant_id = %s AND owner_id = %s
+                  AND idempotency_key = %s AND request_sha256 = %s
+                  AND expected_revision = %s
+                  AND (status = 'processing' OR
+                       (status = 'unknown' AND
+                        metadata->>'unknown_reason' = 'stale_processing'))""",
+            (json.dumps(response, ensure_ascii=False),
+             json.dumps(metadata, ensure_ascii=False), str(request_id),
+             str(trip_id), tenant_id, owner_id, idempotency_key,
+             request_sha256, expected_revision),
         )
         if cursor.rowcount != 1:
             raise RuntimeError("AI 编辑请求状态无法完成")
@@ -114,6 +142,8 @@ class AIEditRequestRepository:
         cursor.execute(
             """UPDATE travel_v2.ai_edit_requests
                   SET status = 'unknown',
+                      metadata = metadata ||
+                          jsonb_build_object('unknown_reason', 'stale_processing'),
                       response = jsonb_build_object(
                           'status', 'unknown', 'saved', false,
                           'trip_id', trip_id::text,
