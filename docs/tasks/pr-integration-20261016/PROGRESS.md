@@ -32,7 +32,7 @@
 | #60 | CLOSED | 文档中 T1 已由 PR #61 合入；独立作品集交接材料由 #75 交付 | 已关闭旧 Draft |
 | #75 | MERGED；PR HEAD dba170373c4663919ab9b0e2b87b5f800d479310；Merge SHA 04846a61f889fa561b9c2d2184cd196c93e75dd5 | 合并后 3 条 Review 由 #78 修复；Follow-up 合并后已追加 Merge SHA 与验证证据并全部解决原线程 | MERGED（Review 收口完成） |
 | #77 | MERGED；head `1093c39beb23b00d4210660eb877d062d49230e5`；Merge SHA `b3e2fb85937d011179ed046b6d264a7a0f3454d4` | 本地 42 passed，四条 Review 已修复/解决。当前 SHA Detect、Secret Scan、PR 免费 preflight 与 8-case Smoke 均 PASS；真实 API Evaluation skipped。main push 的 8-case Smoke 和 Secret Scan PASS，未运行付费 Probe | MERGED |
-| #78 | MERGED；PR HEAD `4e1216884333917e392b3442c826500ce86981cd`；base `e4881940`；Merge SHA `e4881940f1d39f82d1f7a938562e0e611f6677bb` | 文档相对链接、源码路径和 diff-check 通过；Smoke、Detect、Secret Scan PASS；文档对应的 paid/preflight job 按工作流跳过；当前 Review threads 为空 | MERGED |
+| #78 | MERGED；PR HEAD `4e1216884333917e392b3442c826500ce86981cd`；merge 前 base `b3e2fb8`；Merge SHA `e4881940f1d39f82d1f7a938562e0e611f6677bb` | 文档相对链接、源码路径和 diff-check 通过；PR Smoke/Detect/Secret Scan 与 main push 的 RAG PR Smoke/Secret Scan PASS；paid/preflight job 按文档工作流跳过；当前 Review threads 为空 | MERGED |
 
 原 PR branch protection 核实为 Required Checks 为空、required approvals 为 0；此次未绕过保护。Skipped job 不计为通过。
 
