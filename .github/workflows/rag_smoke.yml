@@ -122,6 +122,7 @@ jobs:
             tests/evaluation/test_release_gate_tier_samples.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             backend/tests/rag/test_specialized_budget.py \
+            backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
             backend/tests/scripts/test_seed_prompt_eval_db.py \
             -q --no-cov
