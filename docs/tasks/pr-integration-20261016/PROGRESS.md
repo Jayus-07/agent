@@ -59,3 +59,33 @@
 - Codex 内置 Worktree 创建成功，基线 HEAD 与 origin/main 相同，主控分支 codex/pr-integration-20261016。
 - 远端工作树列表中保留多个既有任务 worktree；不执行全局 cleanup。
 - 修改前执行 git status/diff 检查；主控文件只有本任务的 TASK.md/PROGRESS.md。
+
+## 施工进度更新
+
+### #73 Provider/OCR 健康探测
+
+- 状态：IN_PROGRESS（等待本次 HEAD 的 GitHub 检查完成）。
+- 已基于 `668898766241f5676df4801d39cd598881cd8fc2` 合入 `origin/main=45b0a7be54eaf0a3b7df4676f9978b095236932f`，冲突处理后 merge commit：`997ec86`；修复 commit / 最新已推送 HEAD：`d9c4d7886bd2b63685721375b2b798137df61804`。
+- 三条 Review 均已回复并解决：本地模型缺失与上游失败分离；按可信操作者复用服务端限流并叠加现有 Redis Token Bucket；配置、上游名、软删除/重启用变化使旧人工健康结果失效并脱敏读取。
+- 本地定向后端/迁移测试 37 passed；py_compile、定向 Ruff、暂存/未暂存 diff-check 通过；前端 `RoleBindingsTab.test.tsx` 19 passed，TypeScript 检查通过；本地敏感模式扫描未命中。当前 HEAD 的 GitHub `scan`、`admin-observability-auth`、`frontend-admin-functional`、`frontend-admin-security`、`Detect RAG changes` 均处于 pending，尚未合并。
+- 手动真实 Provider 调用没有执行：不在本任务未批准的付费范围内；GitHub 上真实 API RAG Evaluation 为 skipped，不作为通过。
+
+### #69 主助手 Conversation-first
+
+- 状态：BLOCKED（所需真实 T3 外部凭据及隔离服务不可用；PR 保持 Draft）。
+- 已推送 HEAD：`30fbeca8150732528e88fab0fabd390197cd7588`。事件缓存/SSE 已按 Product/Tenant/User/Session/Request 隔离，缺作用域和晚到事件 fail-closed，敏感正文不进入事件；更新运行时文档。
+- 验证：定向后端 123 passed；py_compile、diff-check 通过；前端 BFF/chat/memory 12 passed；独立 loopback PostgreSQL SSE API 契约 1 passed，集群已停止。GitHub scan、contract-check、RAG Smoke preflight、RAG Smoke 通过；真实 API Evaluation skipped。
+- T3 环境诊断：隔离工作树无 `.env` 或可用 Key/数据库注入，Docker API named pipe 不存在；未使用共享数据库或真实付费 Provider。AG-09、AG-14/15 完整链路、AG-18/19 真实 Trace/费用和 AG-20 真实 Provider 失败分支仍未验证。
+
+### #66 RAG PDF 内容完整性
+
+- 状态：IN_PROGRESS（PDF Worker 根因尚未确证）。
+- PDF 清洗修复已提交并快进推送到 PR 分支，HEAD `96407e7d1fb8a7a9ebf4ef6da27eb5bc7ec3dfcb`；改动只涉及 cleaner 与内容完整性测试。当前 HEAD 的 py_compile、RAG/PDF/CSV/Excel/coverage 定向套件 77 passed，secret-scan 在 `90bf8a..HEAD` diff 和工作树均无命中，diff-check 通过。
+- 历史 postmerge 报告记录 `no_title.txt` 在 3 GiB Worker 上 3 次 SIGKILL、recovery_count=2 后仍 RUNNING；`staff_regulation_scnu.pdf` 另有 coverage_gap (13/47) 与 6 个 value_loss。它们不是当前 PR HEAD 的真实 IndexRun 证据，SIGKILL 根因仍未确证。Docker Desktop 4.64.0 后端 pipe `\\.\pipe\dockerBackendApiServer` 不存在，无法读取容器/任务运行证据。尝试关闭 model runner 后状态已恢复；停止 Docker 后对 `%LOCALAPPDATA%\Docker\run\dockerInference` 单个 runtime 条目执行可逆改名被 Windows 拒绝访问，原文件未动、备份未生成；未递归删除、未碰镜像/卷/数据库。设置已精确恢复原 SHA256 `77792FC4…CEE8139`。继续完成不依赖 Docker 的修复和测试，并保留 RAG PR 为 Draft。
+
+### 并行任务和下一动作
+
+- 施工线 A：#73 等待最新 SHA 检查后再决定正常合并；随后继续 #72 Trip 恢复/安全事实投影 Follow-up，再做 #70 退款跨会话唯一性 Follow-up。
+- 施工线 B：#66 收尾 cleaner 测试与 Worker 可读证据；在其代码基线收敛后再继续 #52，不执行未授权付费评测。
+- 施工线 C：#69 只保留真实 T3 阻断，不合并；其余小修和环境诊断已完成。
+- 当前确切下一步：在最新 origin/main 隔离树施工 #72 Follow-up；PR 合并仍统一串行协调。
