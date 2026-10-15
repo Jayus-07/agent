@@ -291,6 +291,34 @@ class TestConfirmationRepositoryProposalVersion:
         assert 4 in compiled.params.values()
         assert "pending" in compiled.params.values()
 
+    @pytest.mark.asyncio
+    async def test_scoped_proposal_update_checks_owner_tenant_and_conversation(self):
+        repo, session = _make_repo()
+        result = MagicMock()
+        result.rowcount = 1
+        session.execute = AsyncMock(return_value=result)
+        session.flush = AsyncMock()
+
+        await repo.update_proposal(
+            "act-1",
+            {"action_id": "act-1", "target_id": "order-1"},
+            tenant_id="tenant-1",
+            proposal_version=5,
+            expected_user_id="user-1",
+            expected_conversation_id="conversation-1",
+            expected_tenant_id="tenant-1",
+        )
+
+        statement = session.execute.await_args.args[0]
+        compiled = statement.compile(dialect=postgresql.dialect())
+        assert "user_id" in str(compiled)
+        assert "conversation_id" in str(compiled)
+        assert "tenant_id" in str(compiled)
+        values = list(compiled.params.values())
+        assert "user-1" in values
+        assert "conversation-1" in values
+        assert "tenant-1" in values
+
 
 class TestConfirmationRepositoryHasPending:
     @pytest.mark.asyncio

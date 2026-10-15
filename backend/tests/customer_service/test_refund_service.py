@@ -1,5 +1,6 @@
 """test_refund_service.py — 退款服务测试"""
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
 import pytest
@@ -8,6 +9,7 @@ from backend.customer_service.action import ActionProposal, ActionType
 from backend.customer_service.errors import (
     OrderNotEligibleError,
     OrderNotFoundError,
+    RefundRequestUnavailableError,
 )
 from backend.customer_service.risk import RiskLevel
 from backend.customer_service.service.refund_service import (
@@ -34,7 +36,8 @@ def _order_row(
         "total_amount": total_amount,
         "status": status,
         "payment_status": "paid",
-        "created_at": "2026-09-01",
+        # 相对时间：退款窗口按下单时间判定，写死日期的夹具会随时间失效
+        "created_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
     }
 
 
@@ -99,8 +102,11 @@ class TestBuildRefundProposal:
         assert "ORD-042" in proposal.proposal_text
         assert "599.00" in proposal.proposal_text
         assert "质量问题" in proposal.proposal_text
+        assert "不会即时退款" in proposal.proposal_text
+        assert "3-5 个工作日" not in proposal.proposal_text
         assert proposal.before_state["status"] == "shipped"
         assert proposal.after_state["status"] == "refund_requested"
+        assert proposal.after_state["reason"] == "质量问题"
 
 
 class TestSimulateExecute:
@@ -121,3 +127,108 @@ class TestSimulateExecute:
         assert record.target_id == "42"
         assert record.data["simulated"] is True
         assert record.executed_at is not None
+
+
+def _refund_pending(amount="299.00", status="paid", policy_version="v1"):
+    return {
+        "action_type": "refund_request",
+        "target_type": "order",
+        "target_id": "42",
+        "before_state": {
+            "order_id": "42", "status": status, "amount": amount,
+            "policy_version": policy_version,
+        },
+        "after_state": {"status": "refund_requested", "reason": "质量问题"},
+    }
+
+
+class TestExecuteRefundRequest:
+    def test_only_explicit_sandbox_registers_a_pending_case(
+        self, monkeypatch,
+    ):
+        from backend.config import customer_service as cfg
+        from backend.customer_service.service.refund_service import RefundEligibility
+
+        monkeypatch.setattr(cfg, "CS_REFUND_REQUEST_MODE", "sandbox")
+        monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "sandbox")
+        service = RefundService()
+        monkeypatch.setattr(
+            service,
+            "check_refund_eligibility",
+            lambda *_: RefundEligibility(
+                True, "42", "ORD-042", 299.0, "paid", policy_version="v1",
+            ),
+        )
+        case_service = type("CaseService", (), {
+            "create_refund_request_sync": lambda _self, **fields: {
+                "request_id": fields["request_id"],
+                "status": "pending_review",
+            },
+        })()
+        monkeypatch.setattr(
+            "backend.customer_service.case.service.get_case_service",
+            lambda: case_service,
+        )
+
+        record = service.execute_refund_request(
+            _refund_pending(),
+            confirmation_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+            user_id="user-1",
+            tenant_id="tenant-1",
+            conversation_id="conversation-1",
+        )
+
+        assert record.status == "executed"
+        assert record.action_id == "d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11"
+        assert record.data["request_status"] == "pending_review"
+        assert record.data["funds_refunded"] is False
+
+    @pytest.mark.parametrize(
+        ("request_mode", "gateway_mode"),
+        [("disabled", "sandbox"), ("sandbox", "http")],
+    )
+    def test_unavailable_mode_fails_before_any_order_or_case_write(
+        self, monkeypatch, request_mode, gateway_mode,
+    ):
+        from backend.config import customer_service as cfg
+
+        monkeypatch.setattr(cfg, "CS_REFUND_REQUEST_MODE", request_mode)
+        monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", gateway_mode)
+        service = RefundService()
+        monkeypatch.setattr(service, "check_refund_eligibility", lambda *_: pytest.fail())
+
+        with pytest.raises(RefundRequestUnavailableError):
+            service.execute_refund_request(
+                _refund_pending(),
+                confirmation_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+                user_id="user-1",
+                tenant_id="tenant-1",
+                conversation_id="conversation-1",
+            )
+
+    def test_changed_proposal_facts_are_rejected_before_case_write(self, monkeypatch):
+        from backend.config import customer_service as cfg
+        from backend.customer_service.service.refund_service import RefundEligibility
+
+        monkeypatch.setattr(cfg, "CS_REFUND_REQUEST_MODE", "sandbox")
+        monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "sandbox")
+        service = RefundService()
+        monkeypatch.setattr(
+            service,
+            "check_refund_eligibility",
+            lambda *_: RefundEligibility(
+                True, "42", "ORD-042", 300.0, "paid", policy_version="v1",
+            ),
+        )
+        with patch(
+            "backend.customer_service.case.service.get_case_service",
+        ) as get_case_service:
+            with pytest.raises(OrderNotEligibleError, match="已变化"):
+                service.execute_refund_request(
+                    _refund_pending(),
+                    confirmation_id="d2c8f8bb-5a87-4e3c-98c4-2dcb3a8f2a11",
+                    user_id="user-1",
+                    tenant_id="tenant-1",
+                    conversation_id="conversation-1",
+                )
+            get_case_service.assert_not_called()

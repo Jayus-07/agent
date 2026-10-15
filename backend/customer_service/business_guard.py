@@ -190,11 +190,11 @@ def compute_identity(pending_action: dict, tenant_id: str) -> BusinessOperationI
 
 
 # ── 终态重发策略（§38/§24：规则驱动，禁止 LLM 判冲突）──────────────
-# SUCCESS 后绝对不允许同语义再次发起的动作（业务效果不可重复）：
-#   refund_request —— 全额退款已成功，同单同语义退款不允许再发；
-# 其余动作（return/exchange/address/password/order_cancel）在 simulated
-# 业务下无实体状态变化，重复发起合法或由业务 eligibility 把关，不列入。
-TERMINAL_BLOCKED_ACTIONS = frozenset({"refund_request"})
+# 退款申请登记成功只表示案件已进入人工审核，不表示退款成功。重复申请由
+# confirmation active 唯一守卫和 cs_case 的真实活跃状态共同拦截；案件结案后
+# 允许重试，实际已退款仍由订单状态资格校验阻止。
+# 其他模拟动作没有不可逆业务状态，不列入永久终态阻断。
+TERMINAL_BLOCKED_ACTIONS = frozenset()
 
 
 def terminal_blocked(action_type: str) -> bool:

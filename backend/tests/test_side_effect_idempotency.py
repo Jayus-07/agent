@@ -566,9 +566,9 @@ class TestTaskSideEffectWrapper:
 def _pending_action(action_id: str) -> dict:
     return {
         "action_id": action_id,
-        "action_type": "refund_request",
-        "target_type": "order",
-        "target_id": "order-9",
+        "action_type": "address_update",
+        "target_type": "address",
+        "target_id": "address-9",
         "risk_level": "high",
         "proposal_text": "退款 proposal",
         "confirmation_state": "pending",

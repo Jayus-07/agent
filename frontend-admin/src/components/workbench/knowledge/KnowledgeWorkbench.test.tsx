@@ -23,6 +23,7 @@ vi.mock('./PendingReviewPanel', () => ({ default: () => <div data-panel="pending
 vi.mock('./UploadFailuresPanel', () => ({ default: () => <div data-panel="failures">入库失败面板</div> }))
 vi.mock('./KeywordsPanel', () => ({ default: () => <div data-panel="keywords">词库面板</div> }))
 vi.mock('./OperationsPanel', () => ({ default: () => <div data-panel="operations">操作日志面板</div> }))
+vi.mock('./KbAuthorityPanel', () => ({ default: () => <div data-panel="authority">授权盘点面板</div> }))
 
 import KnowledgeWorkbench from './KnowledgeWorkbench'
 
@@ -51,7 +52,7 @@ describe('KnowledgeWorkbench', () => {
     expect(container.textContent).toContain('知识库工作台')
     expect(container.textContent).toContain('文档面板')
     expect(container.querySelectorAll('[data-panel]')).toHaveLength(1)
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(5)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(6)
 
     act(() => root.unmount())
   })

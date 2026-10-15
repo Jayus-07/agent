@@ -10,10 +10,10 @@ function toSearchParams(searchParams: Record<string, string | string[] | undefin
   return params
 }
 
-export default function LegacySelectionFunnelPage({
+export default async function LegacySelectionFunnelPage({
   searchParams,
 }: {
-  searchParams: Record<string, string | string[] | undefined>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  redirect(legacyRouteToWorkbench('/selection-funnel', toSearchParams(searchParams)) ?? '/selection-workbench?tab=funnel')
+  redirect(legacyRouteToWorkbench('/selection-funnel', toSearchParams(await searchParams)) ?? '/selection-workbench?tab=funnel')
 }

@@ -10,12 +10,17 @@
 """
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from backend.customer_service.errors import BusinessRuleError
+from backend.customer_service.errors import (
+    BusinessRuleError,
+    DatabaseError,
+    RefundRequestConflictError,
+)
 from backend.shared.logger import logger
 
 # 流转白名单（状态机：open → waiting_user/processing → resolved/closed）
@@ -44,6 +49,45 @@ def _to_dict(case: Any) -> dict:
         "resolution": case.resolution,
         "sla_deadline_at": case.sla_deadline_at.isoformat() if case.sla_deadline_at else None,
         "first_responded_at": case.first_responded_at.isoformat() if case.first_responded_at else None,
+        "created_at": case.created_at.isoformat() if case.created_at else None,
+        "updated_at": case.updated_at.isoformat() if case.updated_at else None,
+    }
+
+
+def _refund_request_matches(case: Any, expected: dict) -> bool:
+    """同一确认重放只复用相同的不可变申请内容。"""
+    context = case.context if isinstance(case.context, dict) else {}
+    stored = context.get("refund_request")
+    if not isinstance(stored, dict):
+        return False
+    keys = (
+        "confirmation_id", "conversation_id", "order_id", "order_no",
+        "amount", "currency", "reason", "policy_version", "execution_mode",
+    )
+    return all(stored.get(key) == expected.get(key) for key in keys)
+
+
+def _refund_request_view(case: Any) -> dict | None:
+    """把客服案件投影为退款申请；案件状态不表示资金已退回。"""
+    context = case.context if isinstance(case.context, dict) else {}
+    request = context.get("refund_request")
+    if not isinstance(request, dict):
+        return None
+    state_to_status = {
+        "open": "pending_review",
+        "waiting_user": "needs_user",
+        "processing": "processing",
+        "resolved": "resolved",
+        "closed": "closed",
+    }
+    order_no = str(request.get("order_no") or "")
+    return {
+        "request_id": str(case.case_id),
+        "status": state_to_status.get(case.status, "unknown"),
+        "case_status": str(case.status),
+        "order_display": f"订单尾号 ****{order_no[-4:]}" if order_no else "订单",
+        "amount": str(request.get("amount") or ""),
+        "policy_version": str(request.get("policy_version") or ""),
         "created_at": case.created_at.isoformat() if case.created_at else None,
         "updated_at": case.updated_at.isoformat() if case.updated_at else None,
     }
@@ -240,6 +284,275 @@ class CSCaseService:
             stmt = stmt.order_by(CSCase.created_at.desc()).limit(limit)
             rows = (await db.execute(stmt)).scalars().all()
             return [_to_dict(c) for c in rows]
+
+    async def async_create_refund_request(
+        self,
+        *,
+        request_id: str,
+        conversation_id: str,
+        user_id: str,
+        tenant_id: str,
+        order_id: str,
+        order_no: str,
+        amount: str,
+        reason: str,
+        policy_version: str,
+    ) -> dict:
+        """把已确认的本机退款申请写入唯一客服案件事实源。
+
+        request_id 使用稳定 confirmation_id。唯一键竞争时只复用内容完全
+        一致的同一请求；不同申请不会被悄悄折叠到同一案件。
+        """
+        from datetime import datetime, timezone
+
+        from backend.customer_service.models.case import CSCase, compute_sla_deadline
+        from backend.memory.database import AsyncSessionLocal
+
+        if not user_id or not tenant_id or tenant_id == "default" or not conversation_id:
+            raise BusinessRuleError(
+                "退款申请缺少可信用户、租户或会话身份",
+                user_message="身份信息暂不可核验，未创建退款申请；请联系人工客服。",
+            )
+        try:
+            stable_id = str(uuid.UUID(str(request_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise BusinessRuleError(
+                "退款申请缺少有效确认标识",
+                user_message="确认信息无效，未创建退款申请；请重新发起。",
+            ) from None
+
+        request_data = {
+            "confirmation_id": stable_id,
+            "conversation_id": conversation_id,
+            "order_id": str(order_id),
+            "order_no": str(order_no),
+            "amount": str(amount),
+            "currency": "CNY",
+            "reason": str(reason or "").strip()[:500],
+            "policy_version": str(policy_version),
+            "execution_mode": "sandbox",
+        }
+
+        async with AsyncSessionLocal() as db:
+            existing = await self._load_refund_case(
+                db, stable_id, user_id=user_id, tenant_id=tenant_id,
+            )
+            if existing is not None:
+                if not _refund_request_matches(existing, request_data):
+                    raise RefundRequestConflictError(
+                        "同一确认标识已关联不同的退款申请内容",
+                    )
+                view = _refund_request_view(existing)
+                if view is None:
+                    raise RefundRequestConflictError()
+                return view
+
+            from backend.customer_service.models.case import CASE_ACTIVE_STATUSES
+
+            case = CSCase(
+                case_id=stable_id,
+                tenant_id=tenant_id,
+                conversation_id=conversation_id,
+                user_id=user_id,
+                case_type="refund",
+                priority="P2",
+                status="open",
+                title=f"退款申请：{order_no}"[:200],
+                context={"refund_request": request_data},
+                related_confirmation_id=stable_id,
+                sla_deadline_at=compute_sla_deadline("P2"),
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(case)
+            try:
+                await db.flush()
+            except IntegrityError as exc:
+                await db.rollback()
+                existing = await self._find_refund_case_after_conflict(
+                    stable_id,
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    active_statuses=CASE_ACTIVE_STATUSES,
+                )
+                if existing is not None and _refund_request_matches(
+                    existing, request_data,
+                ):
+                    view = _refund_request_view(existing)
+                    if view is None:
+                        raise DatabaseError("退款申请案件缺少有效申请上下文")
+                    return view
+                if existing is not None:
+                    raise RefundRequestConflictError(
+                        "会话内已有不同的待处理退款案件",
+                    ) from exc
+                raise
+
+            try:
+                await db.commit()
+            except Exception as exc:
+                try:
+                    await db.rollback()
+                except Exception:
+                    logger.warning("[CSCase] refund commit rollback failed")
+                try:
+                    persisted = await self._find_refund_case_after_conflict(
+                        stable_id,
+                        conversation_id=conversation_id,
+                        user_id=user_id,
+                        tenant_id=tenant_id,
+                        active_statuses=CASE_ACTIVE_STATUSES,
+                    )
+                except Exception as verify_exc:
+                    from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+                    raise SideEffectOutcomeUnknown(
+                        "退款申请提交结果未知，须按稳定申请 ID 核对"
+                    ) from verify_exc
+                if persisted is not None and _refund_request_matches(
+                    persisted, request_data,
+                ):
+                    view = _refund_request_view(persisted)
+                    if view is None:
+                        raise DatabaseError("退款申请案件缺少有效申请上下文")
+                    return view
+                if persisted is not None:
+                    raise RefundRequestConflictError(
+                        "申请提交后发现确认标识内容不一致",
+                    ) from exc
+                raise DatabaseError(
+                    "退款申请未能确认写入，未返回成功结果",
+                    user_message="暂时无法确认申请是否登记，请查看退款申请列表或联系人工客服；请勿重复提交。",
+                ) from exc
+
+            view = _refund_request_view(case)
+            if view is None:
+                raise DatabaseError("退款申请案件缺少有效申请上下文")
+            logger.info(
+                "[CSCase] refund request persisted: request=%s tenant=%s",
+                stable_id, tenant_id,
+            )
+            return view
+
+    async def async_get_refund_request(
+        self, request_id: str, *, user_id: str, tenant_id: str,
+    ) -> dict | None:
+        from backend.customer_service.models.case import CSCase
+        from backend.memory.database import AsyncSessionLocal
+
+        try:
+            stable_id = str(uuid.UUID(str(request_id)))
+        except (ValueError, TypeError, AttributeError):
+            return None
+        async with AsyncSessionLocal() as db:
+            case = await self._load_refund_case(
+                db, stable_id, user_id=user_id, tenant_id=tenant_id,
+            )
+            return _refund_request_view(case) if case is not None else None
+
+    async def async_list_refund_requests(
+        self, *, user_id: str, tenant_id: str, limit: int = 20,
+    ) -> list[dict]:
+        from backend.customer_service.models.case import CSCase
+        from backend.memory.database import AsyncSessionLocal
+
+        if not user_id or not tenant_id or tenant_id == "default":
+            raise BusinessRuleError(
+                "退款申请查询缺少可信用户或租户身份",
+                user_message="身份信息暂不可核验，无法查询退款申请。",
+            )
+        async with AsyncSessionLocal() as db:
+            stmt = (
+                select(CSCase)
+                .where(
+                    CSCase.tenant_id == tenant_id,
+                    CSCase.user_id == user_id,
+                    CSCase.case_type == "refund",
+                    CSCase.related_confirmation_id.is_not(None),
+                )
+                .order_by(CSCase.created_at.desc())
+                .limit(max(1, min(int(limit), 100)))
+            )
+            rows = (await db.execute(stmt)).scalars().all()
+            result = []
+            for case in rows:
+                request = (case.context or {}).get("refund_request")
+                if (
+                    not isinstance(request, dict)
+                    or request.get("confirmation_id") != str(case.case_id)
+                    or case.related_confirmation_id != str(case.case_id)
+                ):
+                    continue
+                view = _refund_request_view(case)
+                if view is not None:
+                    result.append(view)
+            return result
+
+    @staticmethod
+    async def _load_refund_case(
+        db: Any,
+        request_id: str,
+        *,
+        user_id: str,
+        tenant_id: str,
+    ) -> Any | None:
+        from backend.customer_service.models.case import CSCase
+
+        result = await db.execute(
+            select(CSCase).where(
+                CSCase.case_id == request_id,
+                CSCase.tenant_id == tenant_id,
+                CSCase.user_id == user_id,
+                CSCase.case_type == "refund",
+                CSCase.related_confirmation_id == request_id,
+            ).limit(1)
+        )
+        case = result.scalar_one_or_none()
+        if case is None:
+            return None
+        request = (case.context or {}).get("refund_request")
+        if (
+            not isinstance(request, dict)
+            or request.get("confirmation_id") != request_id
+        ):
+            return None
+        return case
+
+    async def _find_refund_case_after_conflict(
+        self,
+        request_id: str,
+        *,
+        conversation_id: str,
+        user_id: str,
+        tenant_id: str,
+        active_statuses: tuple[str, ...],
+    ) -> Any | None:
+        from backend.customer_service.models.case import CSCase
+        from backend.memory.database import AsyncSessionLocal
+
+        async with AsyncSessionLocal() as db:
+            exact = await self._load_refund_case(
+                db, request_id, user_id=user_id, tenant_id=tenant_id,
+            )
+            if exact is not None:
+                return exact
+            result = await db.execute(
+                select(CSCase).where(
+                    CSCase.conversation_id == conversation_id,
+                    CSCase.tenant_id == tenant_id,
+                    CSCase.user_id == user_id,
+                    CSCase.case_type == "refund",
+                    CSCase.status.in_(active_statuses),
+                ).limit(1)
+            )
+            return result.scalar_one_or_none()
+
+    def create_refund_request_sync(self, **fields: Any) -> dict:
+        """图执行边界调用；申请写入失败必须抛出，不得 fire-and-forget。"""
+        from backend.customer_service._db_loop import run_sync
+
+        return run_sync(self.async_create_refund_request(**fields))
 
     # ── 内部 ──
 
