@@ -79,3 +79,11 @@
 - Python `py_compile` 与 `git diff --check` 通过。对包含历史代码的五个模块运行 Ruff 报 25 条既有风格问题（例如 import 排序/例外命名）；未用自动修复扩大范围。
 - 本轮未调用真实 Provider、未消耗付费额度、未连接生产或共享数据库。Clash 下真实 API 不通；历史严格 Top-1 `0.7143 < 0.80` 与费用/预算 `UNVERIFIED` 保持为阻断，不降低 Gate。
 - 下一步：提交并推送 main 同步及任务进度，更新现有 PR #52 base 到 main；检查免费 CI 和当前 head Review，处理新增的具体问题。真实 Provider 质量与账本复验仍须等待 Clash 可达及新的额度授权。
+
+## 2026-10-15 合并后 main 对账
+
+- 最新 main 为 `5df8b0603355566e7fa1eb87906129c11a8211ab`，已包含 PR #61 与 #70。C2 分支将该 main 以 merge commit `f2e47db7dd22a97015e1e782b29c3c425846858a` 合入，保留既有 C2 提交和 27 文件差异；PR #52 已恢复为 Open，base main、mergeable。
+- 初次错误尝试 rebase 旧合并历史时在 `backend/infra/llm/proxy.py` 与本进度文件冲突；已中止 rebase、恢复原 HEAD `506cfacbd4739029a9a74f6b7eb6836d2f350673`，没有保留冲突文件修改。之后按原有 merge 策略无冲突合入 main。分支短暂被推到 main SHA 并导致 PR 自动关闭，随后用 expected-SHA 恢复原 C2 HEAD、合入 main 并重新打开 PR；当前远端头 `f2e47db7dd22a97015e1e782b29c3c425846858a`。
+- 最新代码树 C2 免费定向回归 `141 passed`，命令覆盖 model-role API/config、budget/governance、MultiQuery、retrieval deadline/thread pool、eval context/账本 artifact 和 token accounting；仅测试进程使用合成 `AI_INTERNAL_TOKEN`。未发起真实 Provider 调用。
+- Secret Scan run `38689068480` 已 success；RAG PR Smoke run `38689068456` 尚在运行。10 个历史 review thread 均已 resolved；本次只合入 main 新提交，没有修改 C2 源码。
+- **状态仍 BLOCKED，不建议合并：** 最近严格评测 Top-1 `0.7143 < 0.80`；31 次 Provider 调用均未定价，其中 22 次 tenant/user 归属异常，费用/预算账本保持 `UNVERIFIED`。真实复验需要用户授权新增评测额度，并在实际 Provider runtime 验证 Clash 代理和账本对账；不降低 Gate。
