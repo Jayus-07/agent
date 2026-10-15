@@ -1,20 +1,35 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { request } = vi.hoisted(() => ({ request: vi.fn() }))
-vi.mock('@/api/client', () => ({ request }))
+const { request, fetchRaw, fetchAnonymousRaw, apiErrorFromEnvelope } = vi.hoisted(() => ({
+  request: vi.fn(),
+  fetchRaw: vi.fn(),
+  fetchAnonymousRaw: vi.fn(),
+  apiErrorFromEnvelope: vi.fn(),
+}))
+vi.mock('@/api/client', () => ({ request, fetchRaw, fetchAnonymousRaw, apiErrorFromEnvelope }))
 
 import {
   archiveTravelTripV2,
   applyTravelTripEditV2,
+  applyTravelTripAIEditV2,
+  cancelTravelTripAIPendingResolutionV2,
   createTravelTripV2,
   copyTravelTemplateV2,
   fetchTravelTemplateV2,
   fetchTravelTemplatesV2,
   fetchTravelTripRevisionsV2,
+  fetchTravelTripAIEditStatusV2,
+  fetchTravelTripAIPendingResolutionV2,
   fetchTravelTripsV2,
   fetchTravelTripV2,
   addTravelMealV2,
+  createTravelTripShareV2,
+  downloadSharedTravelTripICSv2,
+  downloadTravelTripRevisionICSv2,
+  fetchPublicTravelTripShareV2,
   restoreTravelTripV2,
+  revokeTravelTripShareV2,
+  resolveTravelTripAIPendingResolutionV2,
   selectTravelLodgingV2,
   selectTravelTrainV2,
   searchTravelFoodV2,
@@ -25,7 +40,12 @@ import {
 } from './travelV2'
 
 describe('旅游 V2 BFF API', () => {
-  beforeEach(() => request.mockReset())
+  beforeEach(() => {
+    request.mockReset()
+    fetchRaw.mockReset()
+    fetchAnonymousRaw.mockReset()
+    apiErrorFromEnvelope.mockReset()
+  })
 
   it('首页与历史规划只请求 V2 路由', async () => {
     request.mockResolvedValue({ trips: [], templates: [] })
@@ -139,6 +159,39 @@ describe('旅游 V2 BFF API', () => {
     })
   })
 
+  it('AI Edit、状态查询和 Pending API 使用真实 V2 路由与幂等契约', async () => {
+    request.mockResolvedValue({ status: 'processing' })
+    const controller = new AbortController()
+    const input = {
+      expected_revision: 4,
+      user_message: '把西湖改到上午十点',
+      conversation_id: 'travel-conversation-1',
+    }
+
+    await applyTravelTripAIEditV2('trip/123', input, 'edit-key-1')
+    await fetchTravelTripAIEditStatusV2('trip/123', 'op/key')
+    await fetchTravelTripAIEditStatusV2('trip/123', 'op/key', { signal: controller.signal })
+    await fetchTravelTripAIPendingResolutionV2('trip/123', 'pending/1')
+    await resolveTravelTripAIPendingResolutionV2('trip/123', 'pending/1', 'use_next_time', 'resolution-key', { signal: controller.signal })
+    await cancelTravelTripAIPendingResolutionV2('trip/123', 'pending/1', { signal: controller.signal })
+
+    expect(request.mock.calls).toEqual([
+      ['/api/travel/v2/trips/trip%2F123/ai-edits', {
+        method: 'POST', body: input, headers: { 'Idempotency-Key': 'edit-key-1' },
+      }],
+      ['/api/travel/v2/trips/trip%2F123/ai-edits/op%2Fkey'],
+      ['/api/travel/v2/trips/trip%2F123/ai-edits/op%2Fkey', { signal: controller.signal }],
+      ['/api/travel/v2/trips/trip%2F123/ai-edits/pending/pending%2F1'],
+      ['/api/travel/v2/trips/trip%2F123/ai-edits/pending/pending%2F1/resolve', {
+        method: 'POST', body: { resolution_id: 'use_next_time' },
+        headers: { 'Idempotency-Key': 'resolution-key' }, signal: controller.signal,
+      }],
+      ['/api/travel/v2/trips/trip%2F123/ai-edits/pending/pending%2F1/cancel', {
+        method: 'POST', body: {}, signal: controller.signal,
+      }],
+    ])
+  })
+
   it('模板复制可显式复用同一幂等键', async () => {
     request.mockResolvedValue({ trip_id: 'trip-created-once' })
 
@@ -187,5 +240,60 @@ describe('旅游 V2 BFF API', () => {
       'same-lodging-key', 'same-lodging-key', 'same-train-key', 'same-train-key',
       'same-restore-key', 'same-restore-key',
     ])
+  })
+
+  it('固定版本分享创建与撤销使用明确 Trip、Revision 和服务端权限路由', async () => {
+    request.mockResolvedValueOnce({ share_id: 'share-1' }).mockResolvedValueOnce(undefined)
+
+    await createTravelTripShareV2('trip/123', { revision: 4, expires_in_days: 30 }, 'share-key')
+    await revokeTravelTripShareV2('trip/123', 'share/1')
+
+    expect(request.mock.calls).toEqual([
+      ['/api/travel/v2/trips/trip%2F123/shares', {
+        method: 'POST',
+        body: { revision: 4, expires_in_days: 30 },
+        headers: { 'Idempotency-Key': 'share-key' },
+      }],
+      ['/api/travel/v2/trips/trip%2F123/shares/share%2F1', { method: 'DELETE' }],
+    ])
+  })
+
+  it('匿名分享只将令牌放在同源 BFF 请求头，分享 ID 不带查询参数', async () => {
+    const publicShare = { share_id: 'share-uuid', revision: 3 }
+    fetchAnonymousRaw.mockResolvedValueOnce(new Response(JSON.stringify(publicShare), { status: 200 }))
+    fetchAnonymousRaw.mockResolvedValueOnce(new Response('BEGIN:VCALENDAR\r\nEND:VCALENDAR', {
+      status: 200,
+      headers: { 'Content-Disposition': "attachment; filename*=UTF-8''%E6%9D%AD%E5%B7%9E.ics" },
+    }))
+
+    await fetchPublicTravelTripShareV2('share-uuid', 'opaque-token')
+    const download = await downloadSharedTravelTripICSv2('share-uuid', 'opaque-token')
+
+    expect(fetchAnonymousRaw.mock.calls).toEqual([
+      ['/api/travel/v2/shares/share-uuid', {
+        method: 'GET', cache: 'no-store', headers: { 'X-Travel-Share-Token': 'opaque-token' },
+      }],
+      ['/api/travel/v2/shares/share-uuid/export.ics', {
+        method: 'GET', cache: 'no-store',
+        headers: { Accept: 'text/calendar', 'X-Travel-Share-Token': 'opaque-token' },
+      }],
+    ])
+    expect(download.filename).toBe('杭州.ics')
+    expect(await download.blob.text()).toContain('BEGIN:VCALENDAR')
+  })
+
+  it('创建者下载时指定 Trip 与 Revision，并保留服务器中文文件名', async () => {
+    fetchRaw.mockResolvedValueOnce(new Response('BEGIN:VCALENDAR\r\nEND:VCALENDAR', {
+      status: 200,
+      headers: { 'Content-Disposition': "attachment; filename*=UTF-8''%E4%B8%8A%E6%B5%B7.ics" },
+    }))
+
+    const download = await downloadTravelTripRevisionICSv2('trip/123', 7)
+
+    expect(fetchRaw).toHaveBeenCalledWith(
+      '/api/travel/v2/trips/trip%2F123/revisions/7/export.ics',
+      { method: 'GET', cache: 'no-store', headers: { Accept: 'text/calendar' } },
+    )
+    expect(download.filename).toBe('上海.ics')
   })
 })

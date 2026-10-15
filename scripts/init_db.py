@@ -279,7 +279,11 @@ MIGRATION_TARGETS: dict[str, str] = {
     "087_llm_provider_extra_body.sql": "memory",
     # Trip 绑定的 AI 修改原始请求指纹和操作状态，支持模型调用前幂等占位。
     "094_travel_v2_ai_edit_requests.sql": "memory",
-    # 健康探测来源；保留 095/096 供 BE-4C / BE-4D 迁移使用。
+    # AI 请求账本支持持久化冲突待确认及其终态。
+    "095_travel_v2_ai_edit_pending_resolution.sql": "memory",
+    # 固定 Revision 分享与 ICS 导出。
+    "096_travel_v2_revision_shares.sql": "memory",
+    # 健康探测来源。
     "097_llm_model_health_probe_source.sql": "memory",
 }
 
@@ -294,6 +298,11 @@ ORDER_LAST = [
     "085_drop_legacy_travel_planning.sql",
     "086_travel_v2_arrangements.sql",
     "094_travel_v2_ai_edit_requests.sql",
+    # AI 请求账本支持持久化冲突待确认及其终态。
+    "095_travel_v2_ai_edit_pending_resolution.sql",
+    # 固定 Revision 分享与 ICS 导出。
+    "096_travel_v2_revision_shares.sql",
+    # 健康探测来源。
     "097_llm_model_health_probe_source.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"

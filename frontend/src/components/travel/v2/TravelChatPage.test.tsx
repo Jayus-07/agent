@@ -30,6 +30,10 @@ import TravelChatPage from './TravelChatPage'
 describe('V2 旅游规划对话', () => {
   beforeEach(() => {
     mocks.stream.mockReset()
+    mocks.setMessages.mockReset().mockImplementation((update) => {
+      const next = typeof update === 'function' ? update(mocks.messages) : update
+      mocks.messages.splice(0, mocks.messages.length, ...next)
+    })
     mocks.messages.splice(0)
     mocks.stream.mockImplementation(async function* () {
       yield {
@@ -69,6 +73,7 @@ describe('V2 旅游规划对话', () => {
       root.render(createElement(TravelChatPage, { initialPrompt: '帮我安排杭州一日游' }))
       await Promise.resolve()
     })
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toMatch(/^travel-/)
     await act(async () => {
       container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       await new Promise((resolve) => setTimeout(resolve, 0))
@@ -81,7 +86,7 @@ describe('V2 旅游规划对话', () => {
       .flat()
       .find((message: { text?: string }) => message.text?.includes('行程已自动保存'))
     expect(savedMessage).toBeTruthy()
-    expect(container.querySelector('a[href="/travel/itineraries/v2-trip-123"]')).not.toBeNull()
+    expect(container.querySelector('a[href^="/travel/itineraries/v2-trip-123?conversation_id="]')).not.toBeNull()
     expect(mocks.saveTrip).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
@@ -117,8 +122,8 @@ describe('V2 旅游规划对话', () => {
 
     expect(mocks.createTrip).toHaveBeenCalledTimes(2)
     expect(mocks.createTrip.mock.calls[1]).toEqual(originalRequest)
-    expect(container.querySelector('a[href="/travel/itineraries/v2-trip-replayed"]')).not.toBeNull()
-    expect(container.textContent).toContain('已保存')
+    expect(container.querySelector('a[href^="/travel/itineraries/v2-trip-replayed?conversation_id="]')).not.toBeNull()
+    expect(container.textContent).toContain('行程已自动保存')
     await act(async () => root.unmount())
   })
 
