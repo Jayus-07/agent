@@ -48,9 +48,10 @@ const FORWARD_RES_HEADERS = [
 
 async function proxy(
   req: NextRequest,
-  ctx: { params: { path: string[] } },
+  ctx: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
-  const target = `${GATEWAY}/api/${ctx.params.path
+  const { path } = await ctx.params;
+  const target = `${GATEWAY}/api/${path
     .map(encodeURIComponent)
     .join("/")}${req.nextUrl.search}`;
 
@@ -63,12 +64,11 @@ async function proxy(
   const apiKey = process.env.API_KEY;
   if (apiKey) headers.set("X-API-Key", apiKey);
 
-  // 客户端真实 IP 透传（2026-09-19 会话台账）：不透传时后端只能看到本服务
-  // 的出口连接（APISIX 侧 X-Real-IP = 容器网桥地址）。优先 Next 按连接算出
-  // 的 req.ip，回退 XFF 首段（上游代理链场景）。仅作台账展示，不参与鉴权。
+  // 客户端 IP 仅用于会话台账展示，不参与鉴权；Next 15 已移除 req.ip，
+  // 优先使用受信代理链传入的 XFF 首段，缺失时回退 X-Real-IP。
   const clientIp =
-    req.ip ||
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip")?.trim() ||
     "";
   if (clientIp) headers.set("X-Client-IP", clientIp);
 

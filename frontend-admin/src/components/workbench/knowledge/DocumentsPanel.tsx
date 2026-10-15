@@ -80,7 +80,7 @@ export default function DocumentsPanel() {
   const [kbOptions, setKbOptions] = useState<Array<{ id: string; name: string; doc_count?: number }>>([])
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
   const [inputValue, setInputValue] = useState(keyword)
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>()
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   // 轮询循环的卸载守卫（重索引任务化后页面离开即停止跟踪）
   const mountedRef = useRef(true)
 

@@ -46,8 +46,8 @@ describe("BFF 代理转发契约", () => {
       cookie: "refresh_token=old; Path=/api/auth",
       "x-forwarded-for": "203.0.113.9, 10.0.0.2",
     });
-    const ctx = { params: { path: ["auth", "login"] } };
-    const res = await GET(req as never, ctx as never);
+    const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
+    const res = await GET(req, ctx);
 
     expect(res.status).toBe(200);
     const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
@@ -63,18 +63,20 @@ describe("BFF 代理转发契约", () => {
       "idempotency-key": "fallback-change-1",
       authorization: "Bearer test-token",
     });
-    const ctx = { params: { path: ["sys", "model-roles", "fallback"] } };
-    await GET(req as never, ctx as never);
+    const ctx = { params: Promise.resolve({ path: ["sys", "model-roles", "fallback"] }) };
+    await GET(req, ctx);
 
     const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
     expect(upstreamHeaders.get("idempotency-key")).toBe("fallback-change-1");
   });
 
-  it("无 XFF 时回退 req.ip 作为 X-Client-IP", async () => {
-    const req = makeReq("/api/auth/login", { "content-type": "application/json" });
-    Object.defineProperty(req, "ip", { value: "127.0.0.1" });
-    const ctx = { params: { path: ["auth", "login"] } };
-    await GET(req as never, ctx as never);
+  it("无 XFF 时回退 X-Real-IP 作为 X-Client-IP", async () => {
+    const req = makeReq("/api/auth/login", {
+      "content-type": "application/json",
+      "x-real-ip": "127.0.0.1",
+    });
+    const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
+    await GET(req, ctx);
 
     const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
     expect(upstreamHeaders.get("x-client-ip")).toBe("127.0.0.1");
@@ -82,8 +84,8 @@ describe("BFF 代理转发契约", () => {
 
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {
     const req = makeReq("/api/auth/login", { "content-type": "application/json" });
-    const ctx = { params: { path: ["auth", "login"] } };
-    const res = await GET(req as never, ctx as never);
+    const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
+    const res = await GET(req, ctx);
 
     const cookies = res.headers.getSetCookie();
     expect(cookies.length).toBeGreaterThanOrEqual(1);

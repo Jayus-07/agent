@@ -36,7 +36,7 @@ export default function NavGroup({
 }: Props) {
   const [internalOpen, setInternalOpen] = useState(false)
   const pathname = usePathname()
-  const search = useSearchParams().toString()
+  const search = useSearchParams()?.toString() ?? ''
   const hasItems = items && items.length > 0
   const isItemActive = (item: NavItem) => isNavItemActive(pathname, item, search)
   const isActive = path ? isNavPathActive(pathname, path) : items?.some(isItemActive)

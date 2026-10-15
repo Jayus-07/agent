@@ -8,7 +8,13 @@ const authMock = vi.hoisted(() => ({
 
 vi.mock('@/lib/auth', () => authMock)
 
-import { confirmAction, getMyPendingAction, requestHandoff } from './cs'
+import {
+  confirmAction,
+  getMyPendingAction,
+  listMyRefundRequests,
+  requestHandoff,
+  updateMyRefundDraft,
+} from './cs'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -92,5 +98,37 @@ describe('待确认操作 API', () => {
     expect(fetchSpy.mock.calls[0][0]).toBe(
       '/api/cs/conversations/my/session%2F1/pending',
     )
+  })
+
+  it('原因编辑使用权威 proposal 版本，状态列表走本人接口', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({
+        updated: true, proposal_id: 'proposal-1', version: 5,
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        items: [{
+          request_id: 'request-1', status: 'pending_review',
+          case_status: 'open', order_display: '订单尾号 ****1234', amount: '49.95',
+          policy_version: 'refund-v1', created_at: null, updated_at: null,
+        }], total: 1,
+      }))
+    const pending = {
+      proposal_id: 'proposal-1', version: 4, action_type: 'refund_request',
+      masked_target: '订单尾号 ****1234', summary: '申请退款',
+      expires_at: null, state: 'pending' as const,
+    }
+
+    await expect(updateMyRefundDraft('session/1', pending, '包装破损')).resolves.toEqual({
+      updated: true, proposal_id: 'proposal-1', version: 5,
+    })
+    const body = JSON.parse(String(fetchSpy.mock.calls[0][1]?.body))
+    expect(body).toEqual({
+      proposal_id: 'proposal-1', expected_version: 4, reason: '包装破损',
+    })
+    expect(fetchSpy.mock.calls[0][0]).toBe(
+      '/api/cs/conversations/my/session%2F1/refund-draft',
+    )
+    await expect(listMyRefundRequests()).resolves.toHaveLength(1)
+    expect(fetchSpy.mock.calls[1][0]).toBe('/api/cs/refund-requests?limit=20')
   })
 })

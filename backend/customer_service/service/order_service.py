@@ -265,10 +265,14 @@ class OrderService:
 
     def list_refundable_orders(
         self, user_id: str, window_days: int = 7, limit: int = 5,
+        statuses: "list[str] | None" = None,
     ) -> list[dict]:
         """政策窗口内的可退订单候选（退款点选数据源，2026-10-08 拍板）。
 
-        条件：状态可退（paid/shipped/completed）+ 下单时间在政策窗口内 +
+        window_days / statuses 由调用方传入政策值（RefundService 取自
+        get_refund_policy()）；statuses 缺省保持历史口径 paid/shipped/completed。
+
+        条件：状态可退 + 下单时间在政策窗口内 +
         尚无退款记录（防重复）；联 order_items→products 取商品名（缺商品
         名时返回空串，由上层结合政策话术说明）。sandbox 直查；http 网关
         模式暂不支持候选查询（返回空，上层退回手输订单号路径）。
@@ -291,7 +295,7 @@ class OrderService:
                    ), '') AS product_names
             FROM "order".orders o
             WHERE o.customer_id::text = %(user_id)s
-              AND o.status IN ('paid', 'shipped', 'completed')
+              AND o.status = ANY(%(statuses)s)
               AND o.created_at >= NOW() - (%(days)s * INTERVAL '1 day')
               AND NOT EXISTS (
                   SELECT 1 FROM "order".refunds r WHERE r.order_id = o.id
@@ -300,7 +304,13 @@ class OrderService:
             LIMIT %(limit)s
         """
         result = execute_sql_struct(
-            sql, params={"user_id": str(user_id), "days": int(window_days), "limit": int(limit)},
+            sql,
+            params={
+                "user_id": str(user_id),
+                "days": int(window_days),
+                "limit": int(limit),
+                "statuses": list(statuses or ("paid", "shipped", "completed")),
+            },
         )
         if result.status not in ("success", "no_data"):
             raise DatabaseError(f"查询退款候选订单失败: {result.error}")

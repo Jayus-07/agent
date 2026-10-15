@@ -10,10 +10,10 @@ function toSearchParams(searchParams: Record<string, string | string[] | undefin
   return params
 }
 
-export default function LegacySelectionDecisionPage({
+export default async function LegacySelectionDecisionPage({
   searchParams,
 }: {
-  searchParams: Record<string, string | string[] | undefined>
+  searchParams: Promise<Record<string, string | string[] | undefined>>
 }) {
-  redirect(legacyRouteToWorkbench('/selection-decision', toSearchParams(searchParams)) ?? '/selection-workbench?tab=decision')
+  redirect(legacyRouteToWorkbench('/selection-decision', toSearchParams(await searchParams)) ?? '/selection-workbench?tab=decision')
 }
