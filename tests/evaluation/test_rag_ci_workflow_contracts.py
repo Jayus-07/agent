@@ -5,7 +5,6 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
-
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -37,8 +36,23 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "python3 .github/scripts/rag_smoke_path_filter.py < \"$changed_paths\"" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in regression
-    assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in smoke
+    assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" not in smoke
     assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" in regression
+    assert smoke.index("Snapshot usage ledger before paid provider calls") < smoke.index(
+        "Import baseline evaluation fixtures"
+    ) < smoke.index("Run RAG smoke evaluation")
+    assert 'LLM_REQUEST_MAX_CALLS: "48"' in smoke
+    assert 'LLM_REQUEST_MAX_TOKENS: "24000"' in smoke
+    assert 'LLM_REQUEST_MAX_COST: "0.40"' in smoke
+    assert 'LLM_REQUEST_MAX_CALLS: "16"' in smoke
+    assert 'LLM_REQUEST_MAX_TOKENS: "8000"' in smoke
+    assert 'LLM_REQUEST_MAX_COST: "0.10"' in smoke
+    assert 'usage_calls <= 64' in smoke
+    assert 'usage_tokens <= 32000' in smoke
+    assert 'usage_cost <= Decimal("0.50")' in smoke
+    assert 'budget_envelope_verification' in smoke
+    assert 'tenant_id IS DISTINCT FROM %s' in smoke
+    assert 'user_id IS DISTINCT FROM %s' in smoke
     # 真实评测账本写入依赖此开关；两个 workflow 使用独立临时数据库。
     assert 'OBS_ANALYTICS_ENABLED: "true"' in smoke
     assert 'OBS_ANALYTICS_ENABLED: "true"' in regression

@@ -100,3 +100,14 @@
 - 新增专项预算、价格预检和 seed 回归已加入 PR 免费 CI；按工作流完整命令本机执行为 `50 passed in 6.40s`，只有既有 `TestCase` 模型名称产生的 collection warning。免费 CI 不读取付费 Secrets。
 - **隔离 PG T2：PASS**，使用本机 PostgreSQL 18 二进制独立启动 `127.0.0.1:15452/pr52_isolated_test`，SCRAM 合成凭据；执行现行 031/066 迁移，实际导入合成价格快照两次仍 4 行，同版本改价被拒绝，价格预检通过；既有 PG 原子配额集 `1 passed in 3.76s`。集群已停止、临时密码文件已删除，数据证据在 `D:/tmp/pr52-pg-w_2zfufw`。进程退出时既有 Memory async engine 有 event-loop-closed 清理告警，测试及数据库检查退出码为 0；不宣称已解决该独立生命周期问题。
 - **真实 T3：BLOCKED / UNVERIFIED**。用户已经授权使用 PR 所需真实模型，不再等待重复授权。`prompt-eval` 环境未提供 `PROMPT_EVAL_APPROVED_PRICES_JSON`；授权源库只读查询返回 `ConnectionTimeout`，未取得权威价格。未启动新付费 run、未写共享/生产库。源价格与凭据可读后，先导出原始批准快照，再对当前 PR HEAD 执行一次固定 8-case 严格 Smoke（MultiQuery 开启），核对完整归属和费用；Top-1 0.80 门槛保持。
+
+## 2026-10-16 C2 付费调用账本收口
+
+- 以 PR #52 原工作树继续，当前核实远端 `main` 仍为 `45b0a7be54eaf0a3b7df4676f9978b095236932f`；本轮仅改评测入口、Smoke 门禁与对应测试。
+- 删除 Smoke 中未入 usage 账本的重复 embedding/rerank Probe。首个真实 Provider 请求现在是 fixture embedding 导入；实际 rerank 与聊天调用由后续严格 Smoke 覆盖。
+- 费用快照移到首个付费请求之前；fixture 导入绑定同一 `eval:<run_id>`、actor 和 tenant，并执行独立阶段预算（16 calls / 8k tokens / CNY 0.10）；Smoke 阶段（48 calls / 24k tokens / CNY 0.40）。最终账本校验整次 run 的 64 calls / 32k tokens / CNY 0.50 envelope，超限或无法核实即失败。身份对账改用 `IS DISTINCT FROM`，NULL 身份现在也会阻断。
+- fixture 阶段结束立即检查已计用量是否超过本阶段预算，避免超额导入后继续启动评测。request/usage/reservation 共用 run ID，最终账本覆盖导入与评测。
+- T0 PASS：改动 Python `py_compile`、Ruff、`git diff --check` 均通过。
+- 定向 CI 选择 **53 passed / 7.24s**；覆盖评测 fixture 入口、预算预检、CI workflow 合约和旧有 binding Probe 测试（Probe 仍可由独立调用，但不再被 Smoke 工作流额外调用）。仅有既有 `TestCase` collection warning。
+- 隔离 PG T2 PASS：重新执行 031/066 迁移、批准价格快照两次导入仍 4 行、同版本冲突拒绝、价格 preflight 通过；PG 配额测试 **1 passed / 3.65s**。隔离集群已关闭；证据目录 `D:/tmp/pr52-pg-lbq_fncj`。退出仍有既有 async event-loop 清理告警。
+- T3 仍 BLOCKED：`PROMPT_EVAL_APPROVED_PRICES_JSON` 未配置；只读价格 SQL 再次因 PostgreSQL 凭据认证失败，无法取得源批准价。整次 run envelope 是账本门禁与各阶段请求预算，不是供应商侧账单硬封顶的实证，因此未启动真实付费调用、未写共享库。

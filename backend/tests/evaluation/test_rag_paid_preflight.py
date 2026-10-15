@@ -101,13 +101,16 @@ def test_price_preflight_requires_complete_approved_prices(monkeypatch, missing)
         seed.verify_pricing()
 
 
-@pytest.mark.parametrize("cost,ledger,passes", [
-    ("VERIFIED", "VERIFIED", True),
-    ("ESTIMATED", "VERIFIED", True),
-    ("UNVERIFIED", "VERIFIED", False),
-    ("VERIFIED", "UNVERIFIED", False),
+@pytest.mark.parametrize("cost,ledger,envelope,passes", [
+    ("VERIFIED", "VERIFIED", "WITHIN_LIMITS", True),
+    ("ESTIMATED", "VERIFIED", "WITHIN_LIMITS", True),
+    ("UNVERIFIED", "VERIFIED", "WITHIN_LIMITS", False),
+    ("VERIFIED", "UNVERIFIED", "WITHIN_LIMITS", False),
+    ("VERIFIED", "VERIFIED", "OVER_LIMIT", False),
 ])
-def test_real_workflow_rejects_unverified_cost_or_ledger(monkeypatch, tmp_path, cost, ledger, passes):
+def test_real_workflow_rejects_unverified_cost_or_ledger_or_budget(
+    monkeypatch, tmp_path, cost, ledger, envelope, passes,
+):
     root = Path(__file__).resolve().parents[3]
     definition = yaml.safe_load((root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8"))
     steps = definition["jobs"]["rag-smoke"]["steps"]
@@ -116,7 +119,11 @@ def test_real_workflow_rejects_unverified_cost_or_ledger(monkeypatch, tmp_path, 
     monkeypatch.chdir(tmp_path)
     target = tmp_path / "data/eval_runs/llm_usage_summary.json"
     target.parent.mkdir(parents=True)
-    target.write_text(json.dumps({"cost_verification": cost, "budget_ledger_verification": ledger}))
+    target.write_text(json.dumps({
+        "cost_verification": cost,
+        "budget_ledger_verification": ledger,
+        "budget_envelope_verification": envelope,
+    }))
     if passes:
         exec(compile(script, "cost-ledger-gate", "exec"), {})
     else:

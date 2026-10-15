@@ -173,10 +173,11 @@ jobs:
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
       EVAL_RUN_ID: rag-smoke-${{ github.run_id }}-${{ github.run_attempt }}
       LLM_BUDGET_MODE: enforce
-      # 全部组件共用一次 run 的请求预算，历史 8 次只计算生成，遗漏专项调用。
-      LLM_REQUEST_MAX_CALLS: "64"
-      LLM_REQUEST_MAX_TOKENS: "32000"
-      LLM_REQUEST_MAX_COST: "0.50"
+      # 评测阶段请求额度；fixture 索引阶段另设阶段额度，最终账本覆盖两阶段。
+      # 工作流结束时按账本检查整次 run 的 64 calls / 32k tokens / CNY 0.50 envelope。
+      LLM_REQUEST_MAX_CALLS: "48"
+      LLM_REQUEST_MAX_TOKENS: "24000"
+      LLM_REQUEST_MAX_COST: "0.40"
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
@@ -272,14 +273,35 @@ jobs:
       - name: Verify approved prices before any paid API call
         run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
 
-      - name: Verify bindings and probe real API
+      - name: Verify model bindings
         env:
           EVAL_MEMORY_PGDATABASE: agent_memory_test
         run: |
           python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
-          python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
+
+      - name: Snapshot usage ledger before paid provider calls
+        id: usage-ledger-baseline
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import psycopg
+
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute("SELECT COALESCE(MAX(id), 0) FROM llm_usage")
+              start_id = int(cur.fetchone()[0] or 0)
+          conn.close()
+          print(f"usage_start_id={start_id}")
+          PY
 
       - name: Import baseline evaluation fixtures
+        env:
+          LLM_REQUEST_MAX_CALLS: "16"
+          LLM_REQUEST_MAX_TOKENS: "8000"
+          LLM_REQUEST_MAX_COST: "0.10"
         run: python -m backend.evaluation.import_fixture baseline
 
       - name: Assert index completeness
@@ -316,24 +338,6 @@ jobs:
               print("[assert] EVAL_INDEX_CHECK=failed —— 评测保持 BLOCKED")
               sys.exit(1)
           print(f"[assert] EVAL_INDEX_CHECK=passed vectors={n} dims={expected_dims}")
-          PY
-
-      - name: Snapshot usage ledger before evaluation
-        id: usage-ledger-baseline
-        run: |
-          python - <<'PY' >> "$GITHUB_OUTPUT"
-          import os
-          import psycopg
-
-          conn = psycopg.connect(
-              host="localhost", port=5432, user="postgres", password="postgres",
-              dbname=os.environ["MEMORY_PGDATABASE"],
-          )
-          with conn.cursor() as cur:
-              cur.execute("SELECT COALESCE(MAX(id), 0) FROM llm_usage")
-              start_id = int(cur.fetchone()[0] or 0)
-          conn.close()
-          print(f"usage_start_id={start_id}")
           PY
 
       - name: Run RAG smoke evaluation
@@ -385,7 +389,8 @@ jobs:
                   rows = cur.fetchall()
                   cur.execute(
                       "SELECT count(*), "
-                      "count(*) FILTER (WHERE tenant_id <> %s OR user_id <> %s), "
+                      "count(*) FILTER (WHERE tenant_id IS DISTINCT FROM %s "
+                      "OR user_id IS DISTINCT FROM %s), "
                       "sum(coalesce(total_tokens, 0)), "
                       "sum(coalesce(billed_cost_cny, 0)) "
                       "FROM llm_usage WHERE id > %s "
@@ -446,8 +451,17 @@ jobs:
           ) if not query_failed else Decimal("0")
           usage_calls = int(usage_totals[0] or 0) if not query_failed else 0
           unattributed_calls = int(usage_totals[1] or 0) if not query_failed else 0
+          usage_tokens = int(usage_totals[2] or 0) if not query_failed else 0
           usage_cost = Decimal(str(usage_totals[3] or 0)) if not query_failed else Decimal("0")
           ledger_difference = abs(usage_cost - settled_cost)
+          budget_envelope_verification = (
+              "WITHIN_LIMITS"
+              if not query_failed
+              and usage_calls <= 64
+              and usage_tokens <= 32000
+              and usage_cost <= Decimal("0.50")
+              else "OVER_LIMIT"
+          )
           budget_ledger_verification = (
               "VERIFIED"
               if not query_failed
@@ -488,7 +502,9 @@ jobs:
                   "verification_error": "ledger_query_failed" if query_failed else None,
                   "unverified_calls": unverified_calls,
                   "usage_calls": usage_calls,
+                  "usage_tokens": usage_tokens,
                   "unattributed_calls": unattributed_calls,
+                  "budget_envelope_verification": budget_envelope_verification,
                   "budget_reservations": reservation_counts,
                   "reservation_amounts_cny": reservation_amounts_cny,
                   "usage_cost_cny": round(float(usage_cost), 6),
@@ -502,7 +518,9 @@ jobs:
           print(json.dumps({"cost_verification": cost_verification,
                             "budget_ledger_verification": budget_ledger_verification,
                             "usage_calls": usage_calls,
+                            "usage_tokens": usage_tokens,
                             "unattributed_calls": unattributed_calls,
+                            "budget_envelope_verification": budget_envelope_verification,
                             "budget_reservations": reservation_counts,
                             "reservation_amounts_cny": reservation_amounts_cny,
                             "usage_cost_cny": round(float(usage_cost), 6),
@@ -524,6 +542,8 @@ jobs:
               raise SystemExit("费用未定价或无法验证，禁止通过真实评测")
           if summary.get("budget_ledger_verification") != "VERIFIED":
               raise SystemExit("身份或预占/结算账本未完成对账，禁止通过真实评测")
+          if summary.get("budget_envelope_verification") != "WITHIN_LIMITS":
+              raise SystemExit("整次评测费用预算超限或无法核实，禁止通过")
           PY
 
       - name: Upload RAG smoke report
