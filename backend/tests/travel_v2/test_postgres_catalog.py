@@ -28,7 +28,7 @@ def test_live_schema_contains_v2_tables_and_required_relations() -> None:
             tables = {row[0] for row in cursor.fetchall()}
             assert tables == {
                 "ai_edit_requests", "edit_operations", "templates",
-                "trip_revisions", "trips",
+                "trip_revisions", "trip_shares", "trips",
             }
 
             cursor.execute(
@@ -43,6 +43,12 @@ def test_live_schema_contains_v2_tables_and_required_relations() -> None:
             assert constraints["fk_travel_v2_ai_edit_owner"] == "f"
             assert constraints["uq_travel_v2_edit_idempotency"] == "u"
             assert constraints["uq_travel_v2_ai_edit_idempotency"] == "u"
+            assert constraints["fk_travel_v2_share_owner"] == "f"
+            assert constraints["fk_travel_v2_share_revision"] == "f"
+            assert constraints["chk_travel_v2_share_token_hash"] == "c"
+            assert constraints["chk_travel_v2_share_idempotency_hash"] == "c"
+            assert constraints["chk_travel_v2_share_request_hash"] == "c"
+            assert constraints["chk_travel_v2_share_idempotency_pair"] == "c"
             assert constraints["chk_travel_v2_edit_revision"] == "c"
 
             cursor.execute(
@@ -56,6 +62,8 @@ def test_live_schema_contains_v2_tables_and_required_relations() -> None:
                 "idx_travel_v2_trips_destination",
                 "idx_travel_v2_revisions_owner_recent",
                 "idx_travel_v2_edit_operations_recent",
+                "idx_travel_v2_shares_owner_recent",
+                "uq_travel_v2_shares_idempotency",
             } <= indexes
     finally:
         connection.close()
