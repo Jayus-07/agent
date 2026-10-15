@@ -50,6 +50,7 @@
 - 最新 main 对齐提交：`20b0fef1fa43a7cd835a129773587c52deb77465`；上游仅增加 Travel #62 相关文件，本分支未编辑这些文件。`origin/main...HEAD` PR 差异仍为 49 个原有文件。
 - 在最新 main 对齐后的 HEAD 重跑：`D:/Python/python.exe -m pytest backend/tests/orchestration/context/test_continuation_routing.py backend/tests/test_error_protocol.py backend/tests/api/test_memory_routes.py backend/tests/rag/test_rag_authz.py backend/tests/orchestration/router/test_product_scope.py -q --no-cov`：106 passed。
 - 内置浏览器当前仍显示隔离 `/agent` 的模型上游错误态和先前取消留下的空助手轮次，没有静态假答案；未发起新的模型请求，也未触碰 `:3200` 标签。
+- 管理端 Provider 页只读显示 4 个已配置 Provider、4/4 最近探测通过；未点“测试模型”。源码核实 `POST /sys/providers/{id}/verify` 会调用 `record_probe` 并提交更新 `llm_providers.last_probe_at/last_probe_ok/last_probe_worst_grade`，故此入口不符合“只读生产探测”，没有以此替代隔离模型测试。
 
 ## 未通过或未验证的 T3
 
