@@ -7,7 +7,10 @@ from fastapi.responses import JSONResponse
 
 from backend.app.api.identity import require_identity
 from backend.travel_v2.db import TravelV2PersistenceError
-from backend.travel_v2.models.ai_edit import AITripEditRequest
+from backend.travel_v2.models.ai_edit import (
+    AITripEditRequest,
+    AITripEditResolutionRequest,
+)
 from backend.travel_v2.models.commands import (
     AddMealSelectionCommand,
     CreateTripRequest,
@@ -26,6 +29,7 @@ from backend.travel_v2.services.trip_edit_service import (
     VersionConflict,
 )
 from backend.travel_v2.services.trip_service import TripNotFound, TripService
+from backend.travel_v2.services.trip_write_validator import TripWriteConflictError
 
 router = APIRouter(tags=["旅游 V2 行程"])
 
@@ -52,6 +56,11 @@ def _error(exc: Exception) -> HTTPException:
         return HTTPException(status_code=503, detail={
             "code": "TRAVEL_V2_PERSISTENCE_UNAVAILABLE",
             "message": "行程没有保存，请稍后重试",
+        })
+    if isinstance(exc, TripWriteConflictError):
+        return HTTPException(status_code=422, detail={
+            "code": "TRIP_WRITE_CONFLICT",
+            "conflicts": [exc.conflict],
         })
     if isinstance(exc, ValueError):
         return HTTPException(status_code=422, detail={"code": "INVALID_TRIP_COMMAND", "message": str(exc)})
@@ -187,6 +196,8 @@ def apply_trip_ai_edit(
     http_status = 200
     if status in {"processing", "unknown"}:
         http_status = 202
+    elif status == "pending_resolution":
+        http_status = 200
     elif status == "failed":
         code = result.get("code")
         if code == "VERSION_CONFLICT":
@@ -199,11 +210,117 @@ def apply_trip_ai_edit(
             http_status = 202
         elif code == "AI_EDIT_CALL_UNKNOWN":
             http_status = 202
-        elif code in {"AI_EDIT_CANDIDATE_REJECTED", "AI_EDIT_VALIDATION_REJECTED"}:
+        elif code in {
+            "AI_EDIT_CANDIDATE_REJECTED", "AI_EDIT_VALIDATION_REJECTED",
+            "AI_EDIT_CONFLICT_BLOCKED",
+        }:
             http_status = 422
         else:
             http_status = 503
     return JSONResponse(status_code=http_status, content=result)
+
+
+@router.get(
+    "/travel/v2/trips/{trip_id}/ai-edits/{operation_key}",
+    summary="只读查询旅游 V2 AI 编辑操作终态",
+)
+def get_trip_ai_edit_status(
+    trip_id: UUID, operation_key: str, request: Request,
+):
+    tenant_id, owner_id, _actor_id = _scope(request)
+    try:
+        result = TripAIEditService().operation_status(
+            trip_id=str(trip_id), tenant_id=tenant_id, owner_id=owner_id,
+            operation_key=operation_key,
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail={
+            "code": "AI_EDIT_OPERATION_NOT_FOUND",
+            "message": "当前用户范围内没有该编辑操作。",
+        })
+    return result
+
+
+@router.get(
+    "/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}",
+    summary="查询旅游 V2 AI 编辑待解决冲突",
+)
+def get_trip_ai_pending_resolution(
+    trip_id: UUID, pending_id: UUID, request: Request,
+):
+    tenant_id, owner_id, _actor_id = _scope(request)
+    try:
+        result = TripAIEditService().get_pending_resolution(
+            trip_id=str(trip_id), tenant_id=tenant_id, owner_id=owner_id,
+            pending_id=str(pending_id),
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail={
+            "code": "AI_EDIT_PENDING_NOT_FOUND",
+            "message": "当前用户范围内没有该待解决操作。",
+        })
+    return result
+
+
+@router.post(
+    "/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/resolve",
+    summary="确认一项服务端提供的 AI 冲突解决选项",
+)
+def resolve_trip_ai_pending(
+    trip_id: UUID, pending_id: UUID, payload: AITripEditResolutionRequest,
+    request: Request,
+    idempotency_key: str = Header(..., alias="Idempotency-Key", min_length=1, max_length=128),
+):
+    tenant_id, owner_id, actor_id = _scope(request)
+    try:
+        result = TripAIEditService().resolve_pending_resolution(
+            trip_id=str(trip_id), tenant_id=tenant_id, owner_id=owner_id,
+            actor_id=actor_id, pending_id=str(pending_id),
+            resolution_id=payload.resolution_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+    code = result.get("code")
+    if result.get("status") == "processing":
+        status_code = 202
+    elif result.get("status") == "failed":
+        status_code = 410 if code == "PENDING_EXPIRED" else 409
+        if code in {"INVALID_RESOLUTION", "AI_EDIT_VALIDATION_REJECTED"}:
+            status_code = 422
+    else:
+        status_code = 200
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@router.post(
+    "/travel/v2/trips/{trip_id}/ai-edits/pending/{pending_id}/cancel",
+    summary="取消或拒绝旅游 V2 AI 冲突待确认操作",
+)
+def cancel_trip_ai_pending(
+    trip_id: UUID, pending_id: UUID, request: Request,
+):
+    tenant_id, owner_id, _actor_id = _scope(request)
+    try:
+        result = TripAIEditService().cancel_pending_resolution(
+            trip_id=str(trip_id), tenant_id=tenant_id, owner_id=owner_id,
+            pending_id=str(pending_id),
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail={
+            "code": "AI_EDIT_PENDING_NOT_FOUND",
+            "message": "当前用户范围内没有该待解决操作。",
+        })
+    status_code = 409 if result.get("status") == "failed" else (
+        410 if result.get("status") == "expired" else 200
+    )
+    return JSONResponse(status_code=status_code, content=result)
 
 
 @router.post("/travel/v2/trips/{trip_id}/selections/meals", summary="将已选美食加入指定日期")
