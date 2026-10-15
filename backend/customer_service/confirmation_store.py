@@ -102,18 +102,26 @@ async def _raise_on_active_conflict(
 
 async def _find_active_refund_request_case(db, identity, *, user_id: str):
     """按租户、用户和订单读取活跃退款案件；结案后允许重新申请。"""
-    from sqlalchemy import select
+    from sqlalchemy import func, select
 
     from backend.customer_service.models.case import CASE_ACTIVE_STATUSES, CSCase
 
+    stored_order_id = func.coalesce(
+        func.nullif(
+            func.btrim(
+                CSCase.context["refund_request"]["order_id"].as_string()
+            ),
+            "",
+        ),
+        "",
+    )
     result = await db.execute(
         select(CSCase).where(
             CSCase.tenant_id == identity.tenant_id,
             CSCase.user_id == user_id,
             CSCase.case_type == "refund",
             CSCase.status.in_(CASE_ACTIVE_STATUSES),
-            CSCase.context["refund_request"]["order_id"].as_string()
-            == identity.target_id,
+            stored_order_id == str(identity.target_id or "").strip(),
         ).limit(1)
     )
     return result.scalar_one_or_none()

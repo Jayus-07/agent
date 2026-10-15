@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from backend.customer_service.errors import (
@@ -321,10 +321,19 @@ class CSCaseService:
                 user_message="确认信息无效，未创建退款申请；请重新发起。",
             ) from None
 
+        normalized_order_id = (
+            "" if order_id is None else str(order_id).strip()
+        )
+        if not normalized_order_id:
+            raise BusinessRuleError(
+                "退款申请缺少有效订单标识",
+                user_message="订单信息暂不可核验，未创建退款申请；请重新查询订单。",
+            )
+
         request_data = {
             "confirmation_id": stable_id,
             "conversation_id": conversation_id,
-            "order_id": str(order_id),
+            "order_id": normalized_order_id,
             "order_no": str(order_no),
             "amount": str(amount),
             "currency": "CNY",
@@ -374,6 +383,7 @@ class CSCaseService:
                     conversation_id=conversation_id,
                     user_id=user_id,
                     tenant_id=tenant_id,
+                    order_id=normalized_order_id,
                     active_statuses=CASE_ACTIVE_STATUSES,
                 )
                 if existing is not None and _refund_request_matches(
@@ -384,8 +394,23 @@ class CSCaseService:
                         raise DatabaseError("退款申请案件缺少有效申请上下文")
                     return view
                 if existing is not None:
+                    existing_request = (existing.context or {}).get(
+                        "refund_request",
+                    )
+                    same_order = (
+                        isinstance(existing_request, dict)
+                        and str(existing_request.get("order_id") or "").strip()
+                        == normalized_order_id
+                    )
                     raise RefundRequestConflictError(
-                        "会话内已有不同的待处理退款案件",
+                        "用户已有同订单或同会话的活跃退款案件",
+                        user_message=(
+                            "该订单已有待处理的退款申请，系统没有重复创建；"
+                            "请查询现有申请状态或联系人工客服。"
+                            if same_order else
+                            "该会话已有待处理的退款案件，系统没有重复创建；"
+                            "请查询申请状态或联系人工客服。"
+                        ),
                     ) from exc
                 raise
 
@@ -402,6 +427,7 @@ class CSCaseService:
                         conversation_id=conversation_id,
                         user_id=user_id,
                         tenant_id=tenant_id,
+                        order_id=normalized_order_id,
                         active_statuses=CASE_ACTIVE_STATUSES,
                     )
                 except Exception as verify_exc:
@@ -526,6 +552,7 @@ class CSCaseService:
         conversation_id: str,
         user_id: str,
         tenant_id: str,
+        order_id: str,
         active_statuses: tuple[str, ...],
     ) -> Any | None:
         from backend.customer_service.models.case import CSCase
@@ -537,6 +564,27 @@ class CSCaseService:
             )
             if exact is not None:
                 return exact
+            stored_order_id = func.coalesce(
+                func.nullif(
+                    func.btrim(
+                        CSCase.context["refund_request"]["order_id"].as_string()
+                    ),
+                    "",
+                ),
+                "",
+            )
+            order_match = await db.execute(
+                select(CSCase).where(
+                    CSCase.tenant_id == tenant_id,
+                    CSCase.user_id == user_id,
+                    CSCase.case_type == "refund",
+                    CSCase.status.in_(active_statuses),
+                    stored_order_id == order_id,
+                ).limit(1)
+            )
+            same_order = order_match.scalar_one_or_none()
+            if same_order is not None:
+                return same_order
             result = await db.execute(
                 select(CSCase).where(
                     CSCase.conversation_id == conversation_id,

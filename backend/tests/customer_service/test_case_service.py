@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -17,7 +17,6 @@ from backend.customer_service.models.case import (
     CASE_SLA_MINUTES,
     compute_sla_deadline,
 )
-
 
 # ── 纯逻辑：状态机与 SLA ─────────────────────────────────
 
@@ -52,9 +51,10 @@ class _FakeResult:
 class _FakeDB:
     """支持 `async with AsyncSessionLocal() as db`；记录 commit/rollback。"""
 
-    def __init__(self, obj=None, flush_error=None):
+    def __init__(self, obj=None, flush_error=None, commit_error=None):
         self.obj = obj
         self.flush_error = flush_error
+        self.commit_error = commit_error
         self.commits = 0
         self.rollbacks = 0
         self.added = []
@@ -74,6 +74,8 @@ class _FakeDB:
 
     async def commit(self):
         self.commits += 1
+        if self.commit_error is not None:
+            raise self.commit_error
 
     async def rollback(self):
         self.rollbacks += 1
@@ -115,7 +117,6 @@ def _patch_session(db):
 async def test_full_lifecycle_create_assign_process_close():
     """核心闭环：创建 → 分配 → 处理 → 关闭（resolution 必填）。"""
     svc = CSCaseService()
-    created = _Case()
     db = _FakeDB()
     with _patch_session(db):
         result = await svc.async_create(
@@ -195,3 +196,62 @@ def test_active_statuses_match_migration_predicate():
     for s in CASE_ACTIVE_STATUSES:
         assert f"'{s}'" in sql
     assert "uq_cs_case_active" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("verification_error", "expected_error"),
+    [
+        (None, "database"),
+        (RuntimeError("verification unavailable"), "unknown"),
+    ],
+)
+async def test_refund_commit_uncertainty_never_reports_success_or_retries(
+    monkeypatch, verification_error, expected_error,
+):
+    """提交结果不可确认时只返回待核实错误，不自动登记第二个申请。"""
+    import uuid
+
+    from backend.customer_service.errors import DatabaseError
+    from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+    service = CSCaseService()
+    db = _FakeDB(commit_error=RuntimeError("commit outcome unknown"))
+
+    async def verify_result(*_args, **_kwargs):
+        if verification_error is not None:
+            raise verification_error
+        return None
+
+    monkeypatch.setattr(service, "_find_refund_case_after_conflict", verify_result)
+    with _patch_session(db):
+        if expected_error == "database":
+            with pytest.raises(DatabaseError) as exc_info:
+                await service.async_create_refund_request(
+                    request_id=str(uuid.uuid4()),
+                    conversation_id="conv-refund-unknown",
+                    user_id="user-refund-unknown",
+                    tenant_id="tenant-refund-unknown",
+                    order_id="order-refund-unknown",
+                    order_no="ORD-UNKNOWN",
+                    amount="12.00",
+                    reason="verification",
+                    policy_version="policy-v1",
+                )
+            assert "请勿重复提交" in exc_info.value.user_message
+        else:
+            with pytest.raises(SideEffectOutcomeUnknown):
+                await service.async_create_refund_request(
+                    request_id=str(uuid.uuid4()),
+                    conversation_id="conv-refund-unknown",
+                    user_id="user-refund-unknown",
+                    tenant_id="tenant-refund-unknown",
+                    order_id="order-refund-unknown",
+                    order_no="ORD-UNKNOWN",
+                    amount="12.00",
+                    reason="verification",
+                    policy_version="policy-v1",
+                )
+
+    assert db.commits == 1
+    assert len(db.added) == 1
