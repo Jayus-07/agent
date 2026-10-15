@@ -94,6 +94,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 - **Fork/不可信 PR 隔离（✅ 已实现）**：仓库 workflow 无 `pull_request_target`（2026-10-11 全量核对）；付费 Job 使用 `environment: prompt-eval` 受保护环境；fork PR 按平台规则拿不到 Environment Secrets。
 - **Secrets 不落库/不落日志（✅ 机制已有，持续执行）**：Secrets 只经 GitHub Actions 注入 seed 脚本加密入库；GitHub 自动 mask 注入值（run 38142127992 日志中 `PROMPT_EVAL_TEST_RERANK_BASE_URL: ***` 实证）。数据库导出/Artifact/快照不得含明文或可复用密文。
 - **预算闸（❌ 尚未实现）**：真实 API CI 的调用次数/并发/单次费用/总预算上限未实现；当前仅 `timeout-minutes` 墙钟上限。**超时不能替代调用前预算闸**（[llm-budget-billing](../governance/llm-budget-billing.md) BG 系列口径）。
+- **RAG 真实评测价格来源（PR #77）**：`rag_smoke` 和 `rag_regression` 在任何 Provider Probe 前，必须从受保护 Environment Secret `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 指向的**经批准、隔离的 PostgreSQL 只读副本**读取现行 `model_price` 记录，再写入本次临时评测库并运行 `--verify-pricing`。副本连接必须处于 PostgreSQL recovery 状态；事务设为只读。Secret 仅注入 Seed 步骤，不能指向生产主库、共享业务库或包含生产凭据的连接。可选变量 `PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX` 用于既有表前缀。价格必须有两个不同审核人、来源、版本、有效期和完整必需维度；同一模型/组件混用版本、来源、币种或出现重复当前维度时，Seed 在 Provider 调用前失败关闭。GitHub Variables 中自报审批状态的 JSON 不具权威性，不能用于批准价格；副本 Secret 未配置、只读副本不可用或价格不完整时，付费评测保持 BLOCKED，不得以零成本或未定价结果代替。该连接仅用于只读价格快照，不将评测数据、模型凭据或费用写回 Registry。
 - **`ci_evaluation` 费用归因（❌ 尚未实现）**：Billing V2（迁移 `079`、[`llm_usage_store_pg.py`](../../backend/observability/llm_usage_store_pg.py)）**无 `call_origin` 字段**；Embedding/Rerank 直调（langchain `OpenAIEmbeddings` / reranker 客户端）不经 LLM proxy 记账出口，实测 `llm_usage` 0 记录（PR #30 审查包已披露）。费用归因按 **UNVERIFIED** 挂账，不得报 0 元或宣称已验收；是否升 P0 由批准范围决定。
 - **CI 账本与生产看板（✅ 天然隔离）**：CI 隔离库账本不会自动写入本机/生产看板；跨环境聚合需受控对账机制（❌ 未实现）。
 

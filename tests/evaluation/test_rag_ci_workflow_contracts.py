@@ -33,7 +33,10 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke
     assert "BASE_SHA\" || -z \"$HEAD_SHA" in smoke
     assert "git diff --name-only \"$BASE_SHA\" \"$HEAD_SHA\" > \"$changed_paths\"" in smoke
-    assert "python3 .github/scripts/rag_smoke_path_filter.py < \"$changed_paths\"" in smoke
+    assert (
+        "python3 .github/scripts/rag_smoke_path_filter.py --event \"$EVENT_NAME\" "
+        "< \"$changed_paths\""
+    ) in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in smoke
     assert "EVAL_TRIGGER: ${{ github.event_name }}" in regression
     assert "python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test" not in smoke
@@ -53,6 +56,11 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert 'budget_envelope_verification' in smoke
     assert 'tenant_id IS DISTINCT FROM %s' in smoke
     assert 'user_id IS DISTINCT FROM %s' in smoke
+    for workflow in (smoke, regression):
+        assert "PROMPT_EVAL_APPROVED_PRICES_JSON" not in workflow
+        assert "--require-approved-prices" in workflow
+        assert "PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL" in workflow
+        assert "--verify-pricing" in workflow
     # 真实评测账本写入依赖此开关；两个 workflow 使用独立临时数据库。
     assert 'OBS_ANALYTICS_ENABLED: "true"' in smoke
     assert 'OBS_ANALYTICS_ENABLED: "true"' in regression

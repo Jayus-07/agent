@@ -79,7 +79,7 @@ jobs:
             exit 1
           fi
 
-          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py < "$changed_paths")"
+          relevant_output="$(python3 .github/scripts/rag_smoke_path_filter.py --event "$EVENT_NAME" < "$changed_paths")"
           if [[ "$relevant_output" != "relevant=true" && "$relevant_output" != "relevant=false" ]]; then
             echo "::error::RAG path filter returned an invalid result: $relevant_output"
             exit 1
@@ -199,8 +199,7 @@ jobs:
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
-      # 仅复制权威源已批准的快照，禁止用估算单价或伪造审批填平账本。
-      PROMPT_EVAL_APPROVED_PRICES_JSON: ${{ vars.PROMPT_EVAL_APPROVED_PRICES_JSON }}
+      # 价格快照仅通过只读 Registry 连接导入，禁止 CI 变量自报价格。
       EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
@@ -269,7 +268,10 @@ jobs:
         run: python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Seed DB API model bindings
-        run: python -m backend.scripts.seed_prompt_eval_db
+        env:
+          PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL: ${{ secrets.PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL }}
+          PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX: ${{ vars.PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX }}
+        run: python -m backend.scripts.seed_prompt_eval_db --require-approved-prices
 
       - name: Verify approved prices before any paid API call
         run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
