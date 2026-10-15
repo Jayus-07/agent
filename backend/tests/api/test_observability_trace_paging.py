@@ -107,6 +107,37 @@ def test_list_paginates_all_authorized_matches_across_retained_rows(client, trac
     assert body["retention_limit"] == observability.TRACE_RETENTION_LIMIT
 
 
+def test_filter_facets_cover_authorized_retention_across_pages(client, monkeypatch):
+    now = datetime.now(timezone.utc).isoformat()
+    first = _trace("first", tenant="tenant-a", user="u1", status="success", timestamp=now)
+    first.update(workflow_name="workflow-a", model={"name": "model-a"})
+    first["tags"]["kb_id"] = "kb-a"
+    later = _trace("later", tenant="tenant-a", user="u1", status="success", timestamp=now)
+    later.update(workflow_name="workflow-b", model={"name": "model-b"})
+    later["metadata"]["kb_id"] = "kb-b"
+    foreign = _trace("foreign", tenant="tenant-b", user="u2", status="success", timestamp=now)
+    foreign.update(workflow_name="secret-workflow", model={"name": "secret-model"})
+    foreign["tags"]["kb_id"] = "secret-kb"
+    monkeypatch.setattr(observability.trace_collector, "list", lambda *_a, **_kw: [first, later, foreign])
+    monkeypatch.setattr(observability, "_stored_dict_to_dto", lambda row: row)
+
+    page_one = client.get("/observability/traces?limit=1&offset=0", headers=_headers())
+    page_two = client.get("/observability/traces?limit=1&offset=1", headers=_headers())
+
+    expected = {
+        "workflow_names": ["workflow-a", "workflow-b"],
+        "models": ["model-a", "model-b"],
+        "kb_ids": ["kb-a", "kb-b"],
+    }
+    assert page_one.status_code == 200
+    assert page_two.status_code == 200
+    assert page_one.json()["facets"] == expected
+    assert page_two.json()["facets"] == expected
+    assert "secret-workflow" not in page_one.text + page_two.text
+    assert "secret-model" not in page_one.text + page_two.text
+    assert "secret-kb" not in page_one.text + page_two.text
+
+
 def test_status_filter_matches_unknown_without_inferring_from_duration(client, monkeypatch):
     now = datetime.now(timezone.utc).isoformat()
     rows = [

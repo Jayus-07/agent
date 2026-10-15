@@ -7,7 +7,7 @@
  *   前端直接使用 TraceRecord/Span 类型即可。
  */
 import { request } from "@/lib/fetcher";
-import type { TraceRecord, AlertItem } from "@/types/trace";
+import type { TraceFilterOptions, TraceRecord, AlertItem } from "@/types/trace";
 
 // ── CS 灰度质量报告 ───────────────────────────────────
 
@@ -65,6 +65,7 @@ export interface TraceListPage {
   limit: number;
   has_more: boolean;
   retention_limit: number;
+  facets?: TraceFilterOptions;
 }
 
 /** GET /observability/traces — 服务端授权、筛选、分页后的 Trace 列表。 */

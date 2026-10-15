@@ -259,6 +259,35 @@ def _filter_authorized_traces(
         result.append(record)
     return result
 
+
+def _trace_filter_facets(records: list) -> dict[str, list[str]]:
+    """从已授权留存 Trace 中提取筛选维度，不依赖当前页或选中筛选项。"""
+    workflow_names: set[str] = set()
+    models: set[str] = set()
+    kb_ids: set[str] = set()
+    for record in records:
+        workflow_name = _trace_value(record, "workflow_name", "")
+        if isinstance(workflow_name, str) and workflow_name.strip():
+            workflow_names.add(workflow_name.strip())
+
+        model = _trace_value(record, "model", "")
+        model_name = model.get("name", "") if isinstance(model, dict) else model
+        if isinstance(model_name, str) and model_name.strip():
+            models.add(model_name.strip())
+
+        tags = _trace_tags(record)
+        metadata = _trace_value(record, "metadata", {}) or {}
+        kb_id = tags.get("kb_id") or (
+            metadata.get("kb_id") if isinstance(metadata, dict) else None
+        )
+        if isinstance(kb_id, str) and kb_id.strip():
+            kb_ids.add(kb_id.strip())
+    return {
+        "workflow_names": sorted(workflow_names),
+        "models": sorted(models),
+        "kb_ids": sorted(kb_ids),
+    }
+
 @router.get("/traces")
 async def list_traces(
         request: Request = None,  # type: ignore[assignment]
@@ -310,8 +339,12 @@ async def list_traces(
     stored = trace_collector.list(
         TRACE_RETENTION_LIMIT, include_spans=bool(has_tool),
     ) if has_tool else trace_collector.list(TRACE_RETENTION_LIMIT)
-    filtered = _filter_authorized_traces(
+    authorized = _filter_authorized_traces(
         stored, request=request, reader=_reader,
+    )
+    facets = _trace_filter_facets(authorized)
+    filtered = _filter_authorized_traces(
+        authorized, request=None, reader=_reader,
         workflow_name=workflow_name, session_id=session_id,
         has_tag=has_tag, has_tool=has_tool, source=source,
         status=status, since=since, until=until,
@@ -328,6 +361,7 @@ async def list_traces(
         "limit": limit,
         "has_more": offset + len(page) < len(filtered),
         "retention_limit": TRACE_RETENTION_LIMIT,
+        "facets": facets,
     }
 
 

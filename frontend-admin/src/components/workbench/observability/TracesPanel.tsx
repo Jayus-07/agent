@@ -9,7 +9,7 @@ import TraceFilterBar from '@/components/observability/trace/TraceFilter'
 import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import TraceRow, { ColKey, VALID_COL_KEYS } from '@/components/observability/trace/TraceRow'
 import { useToast } from '@/components/shared/Toast'
-import { TraceFilter, TraceRecord, TraceStatus } from '@/types/trace'
+import { TraceFilter, TraceFilterOptions, TraceRecord, TraceStatus } from '@/types/trace'
 import { getRunStatus } from '@/lib/observability/runtimeStatus'
 
 const PAGE_SIZES = [20, 50, 100]
@@ -21,6 +21,7 @@ const TIME_RANGE_MS: Record<Exclude<TraceFilter['timeRange'], 'custom'>, number>
 }
 const BOOKMARK_KEY = 'obs.bookmarks'
 const COLUMNS_KEY = 'obs.traceColumns'
+const EMPTY_FILTER_OPTIONS: TraceFilterOptions = { workflow_names: [], models: [], kb_ids: [] }
 const DEFAULT_COLUMNS: ColKey[] = ['status', 'question', 'duration', 'usage', 'time', 'actions']
 const ALL_COLUMNS: { key: ColKey; label: string }[] = [
   { key: 'status', label: '状态' },
@@ -85,6 +86,7 @@ export default function TracesPanel() {
   const [filter, setFilter] = useState<TraceFilter>(() => readFilters(new URLSearchParams(searchParams.toString())))
   const [hasToolFilter, setHasToolFilter] = useState(searchParams.get('has_tool') || '')
   const [traces, setTraces] = useState<TraceRecord[]>([])
+  const [filterOptions, setFilterOptions] = useState<TraceFilterOptions>(EMPTY_FILTER_OPTIONS)
   const [totalTraces, setTotalTraces] = useState(0)
   const [retentionLimit, setRetentionLimit] = useState(5000)
   const [loading, setLoading] = useState(true)
@@ -139,6 +141,7 @@ export default function TracesPanel() {
     else {
       setLoading(true)
       setTraces([])
+      setFilterOptions(EMPTY_FILTER_OPTIONS)
       setLastFetchedAt(null)
       setPageError('')
     }
@@ -146,6 +149,7 @@ export default function TracesPanel() {
     setPageOutOfRange(false)
     if (filter.status === 'running') {
       setTraces([])
+      setFilterOptions(EMPTY_FILTER_OPTIONS)
       setTotalTraces(0)
       setLastFetchedAt(null)
       setLoading(false)
@@ -171,6 +175,7 @@ export default function TracesPanel() {
         query: filter.keyword,
       })
       if (requestId !== requestSequence.current) return
+      setFilterOptions(result.facets ?? EMPTY_FILTER_OPTIONS)
       const lastPage = Math.max(1, Math.ceil(result.total / filter.pageSize))
       if (filter.page > lastPage) {
         if (pageFallbackKey.current !== queryKey) {
@@ -400,7 +405,7 @@ export default function TracesPanel() {
       )}
 
       <div className="rounded-md border border-border-subtle bg-white p-3">
-        <TraceFilterBar filter={filter} onChange={updateFilter} traces={traces} />
+        <TraceFilterBar filter={filter} onChange={updateFilter} options={filterOptions} />
         <div className="relative mt-3 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-2">
           <button type="button" onClick={() => setShowColumns((value) => !value)} aria-expanded={showColumns} className="min-h-10 rounded px-2 text-sm text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">列设置（{columns.length}/{ALL_COLUMNS.length}）</button>
           {showColumns && (

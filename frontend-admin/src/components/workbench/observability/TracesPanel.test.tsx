@@ -2,7 +2,7 @@ import { act } from 'react'
 import type { ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import type { TraceRecord } from '@/types/trace'
+import type { TraceFilterOptions, TraceRecord } from '@/types/trace'
 import { filterRuntimeRecords, summarizeRuntimeSample } from '@/lib/observability/runtimeStatus'
 
 const mocks = vi.hoisted(() => ({
@@ -21,7 +21,9 @@ vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
 }))
 vi.mock('@/components/observability/trace/TraceBreadcrumb', () => ({ default: () => <div /> }))
-vi.mock('@/components/observability/trace/TraceFilter', () => ({ default: () => <div /> }))
+vi.mock('@/components/observability/trace/TraceFilter', () => ({
+  default: ({ options }: { options: TraceFilterOptions }) => <div data-filter-options={JSON.stringify(options)} />,
+}))
 vi.mock('@/components/observability/trace/TraceRow', () => ({
   VALID_COL_KEYS: ['status', 'question', 'duration', 'usage', 'time', 'actions'],
   default: ({ t }: { t: TraceRecord }) => <tr data-trace-id={t.id}><td>{t.id}</td></tr>,
@@ -142,6 +144,29 @@ describe('TracesPanel', () => {
     expect(query?.until).toEqual(expect.any(String))
     expect(container.querySelector('[data-trace-id="page-two-error"]')).toBeTruthy()
     expect(container.textContent).toContain('第 2 / 2 页')
+  })
+
+  it('筛选选项使用服务端授权候选集，不随当前页变化', async () => {
+    const options: TraceFilterOptions = {
+      workflow_names: ['workflow-page-one', 'workflow-page-two'],
+      models: ['model-page-one', 'model-page-two'],
+      kb_ids: ['kb-page-one', 'kb-page-two'],
+    }
+    mocks.listTracesPage.mockResolvedValue({
+      traces: [makeTrace('success', 'page-one-only')],
+      total: 21,
+      offset: 0,
+      limit: 20,
+      has_more: true,
+      retention_limit: 5000,
+      facets: options,
+    })
+
+    const container = await mountPanel()
+    const filterBar = container.querySelector('[data-filter-options]')
+
+    expect(filterBar?.getAttribute('data-filter-options')).toBe(JSON.stringify(options))
+    expect(container.querySelector('[data-trace-id="page-one-only"]')).toBeTruthy()
   })
 
   it('总数缩减后只回退一次到合法页并重新查询', async () => {
