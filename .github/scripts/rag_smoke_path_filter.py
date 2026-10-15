@@ -1,27 +1,14 @@
 #!/usr/bin/env python3
-"""rag_smoke_path_filter.py — RAG PR Smoke 路径相关性判定（单一事实源）。
+"""RAG Smoke 路径相关性判定；Workflow 与回归测试共用本模块。
 
-用法：路径列表（每行一个，如 `git diff --name-only` 输出）从 stdin 输入；
-输出 `relevant=true|false` 到 stdout 并以 0 退出。workflow（detect-changes）
-与回归测试（tests/test_rag_smoke_path_filter.py）共用本模块，禁止复制
-第二份模式列表。
-
-覆盖范围（2026-10-11 GPT 复核补齐）：
-  - RAG 检索与评测代码（backend/rag、backend/evaluation、检索编排）
-  - MCP RAG 实现（mcp_servers/servers/rag.py）
-  - RAG Tool 超时策略（backend/core/tool_runtime/policy.py）
-  - 模型绑定面（backend/infra/llm/）与评测/数据库初始化脚本（真实路径：
-    backend/scripts/seed_prompt_eval_db.py、scripts/seed_eval_model_bindings.py、
-    scripts/init_db.py）
-
-匹配语义：git diff 输出为仓库根相对路径；精确文件名完全匹配，
-目录/前缀条目按前缀匹配。反斜杠统一为正斜杠。
+路径列表（每行一个仓库根相对路径）从 stdin 输入；输出 relevant=true|false。
+SQL migration 只在涉及 RAG、模型计费或其文档/记忆契约时触发真实评测。
 """
 from __future__ import annotations
 
+import argparse
 import sys
 
-# 精确文件/目录条目：完全匹配
 EXACT_ENTRIES = frozenset({
     "pyproject.toml",
     "requirements-lock.txt",
@@ -31,16 +18,18 @@ EXACT_ENTRIES = frozenset({
     "backend/services/rag_server.py",
     "backend/infra/mcp_client.py",
     "mcp_servers/servers/rag.py",
-    "backend/scripts/seed_prompt_eval_db.py",
     "backend/scripts/ingest_eval_fixtures.py",
-    "scripts/seed_eval_model_bindings.py",
+})
+
+# 评测准备文件和 Workflow 的 PR 变化运行免费预检，main 更新不触发真实 Provider。
+PR_STATIC_ONLY_ENTRIES = frozenset({
     "scripts/init_db.py",
     ".github/workflows/rag_smoke.yml",
     ".github/workflows/rag_regression.yml",
     ".github/scripts/rag_smoke_path_filter.py",
+    "backend/scripts/seed_prompt_eval_db.py",
+    "scripts/seed_eval_model_bindings.py",
 })
-
-# 目录前缀条目：startswith 匹配（含尾部 /）
 PREFIX_ENTRIES = (
     "backend/rag/",
     "backend/evaluation/",
@@ -48,24 +37,64 @@ PREFIX_ENTRIES = (
     "backend/config/",
     "backend/orchestration/graph/",
     "backend/prompts/",
-    "backend/sql/migrations/",
     "data/docs/",
     "backend/app/api/routes/rag",
 )
 
+# 文件名先移除迁移编号，再按所属领域判断，避免退款、旅游等迁移误触发
+# 带真实 Provider 调用的 RAG 评测。
+RAG_MIGRATION_MARKERS = (
+    "agent_memory",
+    "doc_registry",
+    "rag",
+    "model",
+    "llm",
+    "memory",
+    "prompt",
+    "eval",
+    "metadata",
+)
+
+
+def _normalize(path: str) -> str:
+    return path.strip().replace("\\", "/")
+
+
+def _is_relevant_migration(path: str) -> bool:
+    prefix = "backend/sql/migrations/"
+    if not path.startswith(prefix):
+        return False
+    name = path.rsplit("/", 1)[-1].lower()
+    parts = name.split("_", 1)
+    stem = parts[1] if len(parts) == 2 and parts[0].isdigit() else name
+    return any(marker in stem for marker in RAG_MIGRATION_MARKERS)
+
 
 def is_relevant(path: str) -> bool:
-    path = path.strip().replace("\\", "/")
+    path = _normalize(path)
     if not path:
         return False
     if path in EXACT_ENTRIES:
         return True
+    if _is_relevant_migration(path):
+        return True
     return any(path.startswith(prefix) for prefix in PREFIX_ENTRIES)
 
 
+def is_pr_static_only(path: str) -> bool:
+    return _normalize(path) in PR_STATIC_ONLY_ENTRIES
+
+
 def main(argv: list[str] | None = None) -> int:
-    relevant = any(is_relevant(line) for line in sys.stdin)
-    print(f"relevant={str(relevant).lower()}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--event", choices=("push", "pull_request"), default="push")
+    args = parser.parse_args(argv)
+    relevant = any(
+        is_relevant(line)
+        or (args.event == "pull_request" and is_pr_static_only(line))
+        for line in sys.stdin
+    )
+    print("relevant=" + str(relevant).lower())
     return 0
 
 
