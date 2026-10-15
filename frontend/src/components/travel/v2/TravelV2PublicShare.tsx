@@ -26,22 +26,22 @@ export default function TravelV2PublicShare({ shareId }: TravelV2PublicShareProp
     let cancelled = false
     const tokenFromFragment = new URLSearchParams(window.location.hash.slice(1)).get('token') || ''
     // Strict Mode 开发态会立即重放 effect；fragment 已清理后，同一路由可用内存副本恢复。
-    const token = tokenFromFragment || (tokenRef.current?.shareId === shareId ? tokenRef.current.token : '')
-    tokenRef.current = token ? { shareId, token } : null
+    const shareCredential = tokenFromFragment || (tokenRef.current?.shareId === shareId ? tokenRef.current.token : '')
+    tokenRef.current = shareCredential ? { shareId, token: shareCredential } : null
     // 令牌仅从 fragment 读取一次；移除地址栏副本，后续请求只通过指定请求头发送。
     window.history.replaceState(window.history.state, '', window.location.pathname)
     setShare(null)
-    setLoading(Boolean(token))
+    setLoading(Boolean(shareCredential))
     setError('')
     setDownloadError('')
 
-    if (!token || !isShareId(shareId)) {
+    if (!shareCredential || !isShareId(shareId)) {
       setLoading(false)
       setError('此分享链接无效、已撤销或已过期。请向分享者索取新链接。')
       return () => { cancelled = true }
     }
 
-    void fetchPublicTravelTripShareV2(shareId, token).then((result) => {
+    void fetchPublicTravelTripShareV2(shareId, shareCredential).then((result) => {
       if (!cancelled) {
         if (result.share_id !== shareId || !Number.isSafeInteger(result.revision)) {
           throw new Error('分享内容与链接不匹配。')
@@ -62,12 +62,12 @@ export default function TravelV2PublicShare({ shareId }: TravelV2PublicShareProp
   }, [shareId])
 
   async function downloadICS() {
-    const token = tokenRef.current?.shareId === shareId ? tokenRef.current.token : ''
-    if (!share || !token || downloadBusy) return
+    const shareCredential = tokenRef.current?.shareId === shareId ? tokenRef.current.token : ''
+    if (!share || !shareCredential || downloadBusy) return
     setDownloadBusy(true)
     setDownloadError('')
     try {
-      saveTravelICSDownload(await downloadSharedTravelTripICSv2(share.share_id, token))
+      saveTravelICSDownload(await downloadSharedTravelTripICSv2(share.share_id, shareCredential))
     } catch (cause) {
       setDownloadError(cause instanceof ApiError && cause.status === 404
         ? '此分享链接已撤销或已过期。'

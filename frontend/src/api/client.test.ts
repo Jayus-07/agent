@@ -566,7 +566,7 @@ describe("同源匿名能力令牌请求", () => {
     await fetchAnonymousRaw("/api/travel/v2/shares/share-id", {
       method: "GET",
       headers: {
-        "X-Travel-Share-Token": "opaque-share-token",
+        "X-Travel-Share-Token": "share-demo",
         Authorization: "Bearer caller-token",
         Cookie: "session=private",
       },
@@ -577,7 +577,7 @@ describe("同源匿名能力令牌请求", () => {
     const init = fetchSpy.mock.calls[0][1] as RequestInit;
     const sent = new Headers(init.headers);
     expect(init.credentials).toBe("omit");
-    expect(sent.get("X-Travel-Share-Token")).toBe("opaque-share-token");
+    expect(sent.get("X-Travel-Share-Token")).toBe("share-demo");
     expect(sent.get("Authorization")).toBeNull();
     expect(sent.get("Cookie")).toBeNull();
     expect(authMock.tryRefreshOnce).not.toHaveBeenCalled();

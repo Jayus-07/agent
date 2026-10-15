@@ -70,7 +70,7 @@ describe('TravelTripRevisionActions', () => {
       revision: 4,
       expires_at: new Date(Date.now() + 86_400_000).toISOString(),
       created_at: new Date().toISOString(),
-      share_url: `/travel/share/${SHARE_ID}#token=opaque-token-value`,
+      share_url: `/travel/share/${SHARE_ID}#token=demo-share`,
     })
     const clipboardWrite = vi.fn().mockResolvedValue(undefined)
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: clipboardWrite } })
@@ -81,12 +81,12 @@ describe('TravelTripRevisionActions', () => {
       'trip-1', { revision: 4, expires_in_days: 30 }, 'stable-share-intent-key',
     )
     const urlInput = container.querySelector('input[readonly]') as HTMLInputElement
-    expect(urlInput.value).toContain(`/travel/share/${SHARE_ID}#token=opaque-token-value`)
+    expect(urlInput.value).toContain(`/travel/share/${SHARE_ID}#token=demo-share`)
     expect(urlInput.value).not.toContain('?token=')
     const savedIntent = window.sessionStorage.getItem('travel-v2-share-intent:trip-1:4') || ''
     expect(savedIntent).toContain('stable-share-intent-key')
     expect(savedIntent).toContain(SHARE_ID)
-    expect(savedIntent).not.toContain('opaque-token-value')
+    expect(savedIntent).not.toContain('demo-share')
 
     await click(container, '复制链接')
     expect(clipboardWrite).toHaveBeenCalledWith(urlInput.value)
@@ -106,7 +106,7 @@ describe('TravelTripRevisionActions', () => {
         revision: 4,
         expires_at: new Date(Date.now() + 86_400_000).toISOString(),
         created_at: new Date().toISOString(),
-        share_url: `/travel/share/${SHARE_ID}#token=recovered-token`,
+        share_url: `/travel/share/${SHARE_ID}#token=recovered-share`,
       })
     const container = mount()
 
