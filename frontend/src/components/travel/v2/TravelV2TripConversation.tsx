@@ -21,7 +21,10 @@ import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
 import type { TravelConversationMessage } from '@/components/travel/useTravelConversation'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
-import { parseTravelV2RestoreRevisionRequest } from './travelV2Conversation'
+import {
+  buildTravelV2TripQuestionPrompt,
+  parseTravelV2RestoreRevisionRequest,
+} from './travelV2Conversation'
 
 const OPERATION_MARKER = /\n\[\[travel-v2-ai-edit:([^:\]]+):(\d+)\]\]$/
 const RESULT_MARKER = /\n\[\[travel-v2-ai-result:([^:\]]+):(read_only|clarify|unsupported|processing|unknown|pending_resolution|succeeded|failed|cancelled|expired|consumed)\]\]$/
@@ -137,7 +140,7 @@ export default function TravelV2TripConversation({
     const events: TravelStreamEvent[] = []
     try {
       for await (const event of streamTravelPlanV2(
-        tripQuestionPrompt(intent.userText, tripRef.current), conversationId,
+        buildTravelV2TripQuestionPrompt(intent.userText, tripRef.current), conversationId,
         { signal: controller.signal, clientRunId: intent.turnId, mode: 'chat', source: 'manual' },
       )) {
         events.push(event)
@@ -558,20 +561,6 @@ export default function TravelV2TripConversation({
       <div className="mt-1.5 flex items-center justify-between px-1 text-[8px] text-[#9aa8b8]"><span className="inline-flex items-center gap-1"><MessageCircle size={10} aria-hidden />只修改服务端允许的单项内容</span><span>Trip v{trip.revision}</span></div>
     </form>
   </section>
-}
-
-function tripQuestionPrompt(question: string, trip: TravelTripV2): string {
-  const brief = trip.document.brief
-  const days = trip.document.days.map((day, index) => {
-    const stops = day.items.map((item) => `${item.start_time || '时间待定'} ${item.title}（${item.duration_min}分钟）`).join('；')
-    return `第${index + 1}天 ${day.date || ''}：${stops || '暂无安排'}`
-  }).join('\n')
-  return [
-    '请回答用户对当前正式行程的只读问题。下面的行程事实只能用于回答，不要修改、重排或创建行程。',
-    `Trip：${trip.title || brief.destination}；目的地：${brief.destination}；日期：${brief.start_date || '待定'}；时区：${brief.timezone}；Revision：v${trip.revision}。`,
-    days,
-    `用户问题：${question}`,
-  ].join('\n')
 }
 
 function affectedItemNames(ids: string[], trip: TravelTripV2): string {

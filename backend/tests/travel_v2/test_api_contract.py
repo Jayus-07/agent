@@ -82,6 +82,51 @@ def test_create_persistence_failure_is_503_without_saved_success(monkeypatch):
     assert "saved" not in response.json()
 
 
+def test_trip_read_uses_authenticated_owner_and_returns_arrangements(monkeypatch):
+    trip_id = "00000000-0000-4000-8000-000000000073"
+    document = valid_document()
+    document["arrangements"] = {
+        "lodgings": [{
+            "merchant": {"name": "西湖酒店", "address": "杭州市西湖区"},
+            "check_in": "2026-10-20", "check_out": "2026-10-21",
+            "booking_status": "not_booked",
+        }],
+        "intercity_trains": [{
+            "train_code": "G1234", "travel_date": "2026-10-20",
+            "departure_station": "上海虹桥", "arrival_station": "杭州东",
+            "departure_time": "08:00", "arrival_time": "08:45",
+            "booking_status": "not_booked",
+        }],
+    }
+    expected_scope = {"tenant_id": "tenant-a", "owner_id": "user-a"}
+
+    def get_trip(self, requested_trip_id, *, tenant_id, owner_id):
+        assert str(requested_trip_id) == trip_id
+        if {"tenant_id": tenant_id, "owner_id": owner_id} != expected_scope:
+            raise TripNotFound("行程不存在")
+        return {
+            "trip_id": trip_id, "title": "杭州正式行程", "status": "active",
+            "revision": 4, "document": document,
+        }
+
+    monkeypatch.setattr(TripService, "get_trip", get_trip)
+    client = _client()
+    owner_headers = {
+        "X-User-Id": "user-a", "X-Auth-Type": "jwt", "X-Tenant-Id": "tenant-a",
+    }
+
+    owner_response = client.get(f"/travel/v2/trips/{trip_id}", headers=owner_headers)
+    other_user_response = client.get(
+        f"/travel/v2/trips/{trip_id}", headers={**owner_headers, "X-User-Id": "user-b"},
+    )
+
+    assert owner_response.status_code == 200
+    assert owner_response.json()["revision"] == 4
+    assert owner_response.json()["document"]["arrangements"]["lodgings"][0]["merchant"]["name"] == "西湖酒店"
+    assert owner_response.json()["document"]["arrangements"]["intercity_trains"][0]["train_code"] == "G1234"
+    assert other_user_response.status_code == 404
+
+
 def test_share_and_export_persistence_errors_are_safe_503(monkeypatch):
     database_failure = "postgresql://private-user:secret@db.internal/private"
 
