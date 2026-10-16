@@ -7,6 +7,10 @@ from uuid import UUID, uuid5
 from backend.travel_v2.db import memory_connection
 from backend.travel_v2.models.trip import TripDocumentV2
 from backend.travel_v2.repositories.revision_repository import RevisionRepository
+from backend.travel_v2.repositories.trip_conversation_repository import (
+    TripConversationConflictError,
+    TripConversationRepository,
+)
 from backend.travel_v2.repositories.trip_repository import TripRepository
 from backend.travel_v2.services.trip_write_validator import validate_trip_write
 
@@ -33,16 +37,19 @@ def _trip_id_for_key(tenant_id: str, owner_id: str, key: str) -> UUID:
 class TripService:
     def __init__(self, *, connect=memory_connection,
                  trip_repository: TripRepository | None = None,
-                 revision_repository: RevisionRepository | None = None):
+                 revision_repository: RevisionRepository | None = None,
+                 conversation_repository: TripConversationRepository | None = None):
         self._connect = connect
         self._trips = trip_repository or TripRepository()
         self._revisions = revision_repository or RevisionRepository()
+        self._conversations = conversation_repository or TripConversationRepository()
 
     def create_trip(
         self, *, tenant_id: str, owner_id: str, title: str,
         document: TripDocumentV2 | dict, actor_id: str,
         idempotency_key: str, source_template_id: str | UUID | None = None,
         source_template_version: int | None = None,
+        conversation_id: str | None = None,
     ) -> dict:
         self._validate_scope(tenant_id, owner_id, actor_id)
         key = str(idempotency_key or "").strip()
@@ -53,6 +60,12 @@ class TripService:
             raise ValueError("title must contain 1 to 200 characters")
         snapshot = _document_dict(document)
         trip_id = _trip_id_for_key(tenant_id, owner_id, key)
+        requested_conversation_id = str(conversation_id or "").strip() or None
+        if requested_conversation_id and len(requested_conversation_id) > 128:
+            raise ValueError("conversation_id must contain at most 128 characters")
+        canonical_conversation_id = requested_conversation_id or (
+            f"travel-v2-trip-{trip_id}"
+        )
         template_uuid = UUID(str(source_template_id)) if source_template_id else None
 
         with self._connect() as connection:
@@ -65,6 +78,10 @@ class TripService:
                     cursor, trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 )
                 if existing:
+                    existing_conversation_id = self._conversations.get(
+                        cursor, trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id,
+                    )
                     same_request = (
                         existing["title"] == title
                         and existing["document"] == snapshot
@@ -75,6 +92,29 @@ class TripService:
                     )
                     if not same_request:
                         raise IdempotencyConflict("Idempotency-Key 已用于不同的创建请求")
+                    if existing_conversation_id is None:
+                        if requested_conversation_id is not None:
+                            raise IdempotencyConflict(
+                                "已有行程没有可验证的原始会话关联，拒绝绑定 URL 会话",
+                            )
+                        try:
+                            self._conversations.insert(
+                                cursor, trip_id=trip_id, tenant_id=tenant_id,
+                                owner_id=owner_id,
+                                conversation_id=canonical_conversation_id,
+                            )
+                        except TripConversationConflictError as exc:
+                            raise IdempotencyConflict(str(exc)) from exc
+                    elif (
+                        requested_conversation_id is not None
+                        and existing_conversation_id != requested_conversation_id
+                    ):
+                        raise IdempotencyConflict(
+                            "Idempotency-Key 已绑定到其他会话，不能覆盖原始关联",
+                        )
+                    existing["conversation_id"] = (
+                        existing_conversation_id or canonical_conversation_id
+                    )
                     return {**existing, "replayed": True}
                 validate_trip_write(snapshot)
                 trip = self._trips.insert(
@@ -92,7 +132,18 @@ class TripService:
                     change_summary=("复制平台模板" if template_uuid else "创建行程"),
                     actor_id=actor_id,
                 )
-        return {**trip, "replayed": False}
+                try:
+                    self._conversations.insert(
+                        cursor, trip_id=trip_id, tenant_id=tenant_id,
+                        owner_id=owner_id,
+                        conversation_id=canonical_conversation_id,
+                    )
+                except TripConversationConflictError as exc:
+                    raise IdempotencyConflict(str(exc)) from exc
+        return {
+            **trip, "conversation_id": canonical_conversation_id,
+            "replayed": False,
+        }
 
     def get_trip(self, trip_id: str | UUID, *, tenant_id: str,
                  owner_id: str) -> dict:
@@ -104,6 +155,26 @@ class TripService:
         if not trip:
             raise TripNotFound("行程不存在")
         return trip
+
+    def get_trip_conversation(
+        self, trip_id: str | UUID, *, tenant_id: str, owner_id: str,
+    ) -> dict:
+        """先验证 Trip 属主，再返回服务端保存的会话 ID。"""
+        with self._connect() as connection:
+            with connection.cursor() as cursor:
+                trip = self._trips.get(
+                    cursor, trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                )
+                if not trip:
+                    raise TripNotFound("行程不存在")
+                conversation_id = self._conversations.get(
+                    cursor, trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                )
+        return {
+            "trip_id": str(trip_id),
+            "conversation_id": conversation_id,
+            "linked": conversation_id is not None,
+        }
 
     def list_trips(self, *, tenant_id: str, owner_id: str,
                    limit: int = 50) -> list[dict]:

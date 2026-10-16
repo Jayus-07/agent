@@ -14,6 +14,7 @@ def test_travel_v2_and_model_health_migrations_run_in_safe_order() -> None:
         "095_travel_v2_ai_edit_pending_resolution.sql",
         "096_travel_v2_revision_shares.sql",
         "097_llm_model_health_probe_source.sql",
+        "100_travel_v2_trip_conversations.sql",
     ]
     for migration in sequence:
         assert MIGRATION_TARGETS[migration] == "memory"

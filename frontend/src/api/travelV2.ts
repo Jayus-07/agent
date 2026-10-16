@@ -240,6 +240,7 @@ export interface TripDocumentV2 {
 
 export interface TravelTripV2 {
   trip_id: string;
+  conversation_id?: string;
   title: string;
   status: "active" | "archived";
   revision: number;
@@ -278,6 +279,21 @@ export function fetchTravelTripV2(tripId: string, options: TravelV2ReadOptions =
   return options.signal
     ? request<TravelTripV2>(path, { signal: options.signal })
     : request<TravelTripV2>(path);
+}
+
+export interface TravelTripConversationV2 {
+  trip_id: string;
+  conversation_id: string | null;
+  linked: boolean;
+}
+
+export function fetchTravelTripConversationV2(
+  tripId: string, options: TravelV2ReadOptions = {},
+): Promise<TravelTripConversationV2> {
+  const path = `/api/travel/v2/trips/${encodeURIComponent(tripId)}/conversation`
+  return options.signal
+    ? request<TravelTripConversationV2>(path, { signal: options.signal })
+    : request<TravelTripConversationV2>(path)
 }
 
 export function fetchTravelTripRevisionsV2(tripId: string, options: TravelV2ReadOptions = {}): Promise<{
@@ -643,6 +659,7 @@ export interface TravelTemplateV2 {
 export interface CreateTravelTripV2 {
   title: string;
   document: TripDocumentV2;
+  conversation_id?: string;
 }
 
 export interface EditTravelTripV2 {

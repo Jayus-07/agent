@@ -203,7 +203,7 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     expect(page.onTripSaved).not.toHaveBeenCalled()
   })
 
-  it('空酒店和车次安排明确表示尚未安排，且投影受长度预算限制', async () => {
+  it('投影截断后不把空酒店和车次安排说成尚未安排', async () => {
     mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
     mocks.stream.mockImplementation(async function* () {
       yield { event: 'done', data: { status: 'success', result: { status: 'success', final_answer: '行程里还没有酒店或车次。', itinerary: null } } }
@@ -223,10 +223,11 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     const factsJson = prompt.match(/正式行程事实 JSON：([\s\S]*)\n用户问题：/)?.[1]
     expect(factsJson).toBeTruthy()
     expect(factsJson!.length).toBeLessThanOrEqual(6500)
-    expect(factsJson).toContain('"lodging_unarranged":true')
-    expect(factsJson).toContain('"intercity_train_unarranged":true')
+    expect(factsJson).toContain('"lodging_unarranged":false')
+    expect(factsJson).toContain('"intercity_train_unarranged":false')
     expect(factsJson).toContain('"applied":true')
-    expect(prompt).toContain('空值和空数组表示尚未安排，禁止推测酒店、车次、费用或预订状态')
+    expect(prompt).toContain('只有原始安排数组为空且 truncation.applied 为 false 时，才可说尚未安排')
+    expect(prompt).toContain('price_evidence.freshness=current 且 verification=verified')
     expect(page.onTripSaved).not.toHaveBeenCalled()
   })
 
