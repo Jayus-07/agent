@@ -76,7 +76,6 @@ def monitor_model_price_pages() -> dict[str, object]:
     started_at = datetime.now(ZoneInfo("Asia/Shanghai"))
     observed_on = started_at.date()
     run_id = str(uuid4())
-    repo = PostgresPricePageMonitorRepository()
     alert_events: list[dict[str, object]] = []
     quotes: list[PriceQuote] = []
     failures: list[dict[str, str]] = []
@@ -90,6 +89,7 @@ def monitor_model_price_pages() -> dict[str, object]:
         alert_events.append({"code": code, "recorded": True, "delivery": "unknown"})
 
     try:
+        repo = PostgresPricePageMonitorRepository()
         repo.start_run(
             run_id,
             observed_on=observed_on,
