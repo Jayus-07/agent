@@ -61,6 +61,22 @@ def test_published_template_copy_is_independent_from_future_trip_edits() -> None
         assert copied["revision"] == 1
         assert copied["source_template_id"] == created["template_id"]
         assert copied["source_template_version"] == 1
+        expected_conversation_id = f"travel-v2-trip-{trip_id}"
+        assert copied["conversation_id"] == expected_conversation_id
+        association = TripService().get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+        assert association == {
+            "trip_id": trip_id,
+            "conversation_id": expected_conversation_id,
+            "linked": True,
+        }
+        replay = template_service.copy_to_trip(
+            slug, tenant_id=tenant_id, owner_id=owner_id,
+            actor_id=owner_id, idempotency_key=f"copy-{suffix}",
+        )
+        assert replay["replayed"] is True
+        assert replay["conversation_id"] == expected_conversation_id
 
         edited_document = valid_document()
         edited_document["days"][0]["title"] = "个人改动"

@@ -7,6 +7,7 @@ from backend.travel_v2.models.template import TemplateCreateRequest, TemplateUpd
 from backend.travel_v2.models.trip import TripDocumentV2
 from backend.travel_v2.repositories.revision_repository import RevisionRepository
 from backend.travel_v2.repositories.template_repository import TemplateRepository
+from backend.travel_v2.repositories.trip_conversation_repository import TripConversationRepository
 from backend.travel_v2.repositories.trip_repository import TripRepository
 from backend.travel_v2.services.trip_service import (
     IdempotencyConflict,
@@ -35,11 +36,13 @@ class TemplateService:
         template_repository: TemplateRepository | None = None,
         trip_repository: TripRepository | None = None,
         revision_repository: RevisionRepository | None = None,
+        conversation_repository: TripConversationRepository | None = None,
     ):
         self._connect = connect
         self._templates = template_repository or TemplateRepository()
         self._trips = trip_repository or TripRepository()
         self._revisions = revision_repository or RevisionRepository()
+        self._conversations = conversation_repository or TripConversationRepository()
 
     def list_published(self, *, destination: str | None = None,
                        limit: int = 50) -> list[dict]:
@@ -163,7 +166,13 @@ class TemplateService:
                         raise IdempotencyConflict(
                             "Idempotency-Key 已用于不同的模板副本"
                         )
-                    return {**existing, "replayed": True}
+                    conversation_id = self._conversations.get(
+                        cursor, trip_id, tenant_id=tenant_id, owner_id=owner_id,
+                    )
+                    return {
+                        **existing, "conversation_id": conversation_id,
+                        "replayed": True,
+                    }
 
                 validate_trip_write(snapshot)
                 trip = self._trips.insert(
@@ -180,4 +189,11 @@ class TemplateService:
                     change_summary=f"复制平台模板：{template['title']}",
                     actor_id=actor_id,
                 )
-        return {**trip, "replayed": False}
+                conversation_id = f"travel-v2-trip-{trip_id}"
+                self._conversations.insert(
+                    cursor, trip_id=trip_id, tenant_id=tenant_id,
+                    owner_id=owner_id, conversation_id=conversation_id,
+                )
+        return {
+            **trip, "conversation_id": conversation_id, "replayed": False,
+        }

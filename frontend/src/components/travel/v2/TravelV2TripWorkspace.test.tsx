@@ -273,6 +273,18 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).toContain('服务端关联不一致')
   })
 
+  it('会话关联读取失败时仍可查看和编辑正式行程，但停用对话', async () => {
+    mocks.fetchTripConversation.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const page = mount('trip-association-unavailable')
+    await load(tripRequest(0), makeTrip('trip-association-unavailable', '关联服务暂不可用'))
+
+    expect(page.container.textContent).toContain('关联服务暂不可用')
+    expect(page.container.textContent).toContain('行程仍可查看和编辑')
+    expect([...page.container.querySelectorAll('button')].some((button) =>
+      button.textContent?.includes('编辑行程'))).toBe(true)
+    expect(mocks.conversationRequests.every((entry) => !entry.enabled)).toBe(true)
+  })
+
   it('A → B 时立即隐藏 A，B 的 GET 完成后只展示 B', async () => {
     const page = mount('trip-a')
     await load(tripRequest(0), makeTrip('trip-a', '行程 A'))

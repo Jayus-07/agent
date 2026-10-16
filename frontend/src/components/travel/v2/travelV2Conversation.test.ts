@@ -77,10 +77,14 @@ describe('V2 Trip 会话关联', () => {
         booking_status: 'not_booked',
       })),
     }
-    const facts = projectTravelV2TripFacts(projectionTrip(manyDays, arrangements))
+    const largeTrip = projectionTrip(manyDays, arrangements)
+    largeTrip.trip_id = '123e4567-e89b-12d3-a456-426614174000'
+    const facts = projectTravelV2TripFacts(largeTrip)
     const truncation = facts.truncation as Record<string, unknown>
 
     expect(JSON.stringify(facts).length).toBeLessThanOrEqual(6500)
+    expect((facts.trip as Record<string, unknown>).trip_id).toBe(largeTrip.trip_id)
+    expect((facts.trip as Record<string, unknown>).active_trip_id).toBe(largeTrip.trip_id)
     expect(truncation.applied).toBe(true)
     expect(Number(truncation.omitted_days) + Number(truncation.omitted_items)
       + Number(truncation.omitted_legs) + Number(truncation.omitted_lodgings)
@@ -143,9 +147,10 @@ describe('V2 Trip 会话关联', () => {
   it('英文名称不会因 token 前缀被误删，已知密钥格式仍会脱敏', () => {
     const openAiKey = ['sk', 'proj', '12345678901234567890'].join('-')
     const labelledToken = ['token', 'abc12345678901234567890'].join('=')
+    const spaceSeparatedToken = ['token', 'xyz12345678901234567890'].join(' ')
     const trip = projectionTrip([{
       date: '2026-10-20', title: '第一天', legs: [],
-      items: [item(1, { title: `SkylineObservationDeck TokenizationArchitecture ${openAiKey} ${labelledToken}` })],
+      items: [item(1, { title: `SkylineObservationDeck TokenizationArchitecture ${openAiKey} ${labelledToken} ${spaceSeparatedToken}` })],
     }])
     const serialized = JSON.stringify(projectTravelV2TripFacts(trip))
 
@@ -153,6 +158,7 @@ describe('V2 Trip 会话关联', () => {
     expect(serialized).toContain('TokenizationArchitecture')
     expect(serialized).not.toContain(openAiKey)
     expect(serialized).not.toContain(labelledToken)
+    expect(serialized).not.toContain(spaceSeparatedToken)
     expect(serialized).toContain('[已过滤凭据]')
   })
 

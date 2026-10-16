@@ -63,9 +63,6 @@ class TripService:
         requested_conversation_id = str(conversation_id or "").strip() or None
         if requested_conversation_id and len(requested_conversation_id) > 128:
             raise ValueError("conversation_id must contain at most 128 characters")
-        canonical_conversation_id = requested_conversation_id or (
-            f"travel-v2-trip-{trip_id}"
-        )
         template_uuid = UUID(str(source_template_id)) if source_template_id else None
 
         with self._connect() as connection:
@@ -97,14 +94,6 @@ class TripService:
                             raise IdempotencyConflict(
                                 "已有行程没有可验证的原始会话关联，拒绝绑定 URL 会话",
                             )
-                        try:
-                            self._conversations.insert(
-                                cursor, trip_id=trip_id, tenant_id=tenant_id,
-                                owner_id=owner_id,
-                                conversation_id=canonical_conversation_id,
-                            )
-                        except TripConversationConflictError as exc:
-                            raise IdempotencyConflict(str(exc)) from exc
                     elif (
                         requested_conversation_id is not None
                         and existing_conversation_id != requested_conversation_id
@@ -112,9 +101,7 @@ class TripService:
                         raise IdempotencyConflict(
                             "Idempotency-Key 已绑定到其他会话，不能覆盖原始关联",
                         )
-                    existing["conversation_id"] = (
-                        existing_conversation_id or canonical_conversation_id
-                    )
+                    existing["conversation_id"] = existing_conversation_id
                     return {**existing, "replayed": True}
                 validate_trip_write(snapshot)
                 trip = self._trips.insert(
@@ -132,16 +119,17 @@ class TripService:
                     change_summary=("复制平台模板" if template_uuid else "创建行程"),
                     actor_id=actor_id,
                 )
-                try:
-                    self._conversations.insert(
-                        cursor, trip_id=trip_id, tenant_id=tenant_id,
-                        owner_id=owner_id,
-                        conversation_id=canonical_conversation_id,
-                    )
-                except TripConversationConflictError as exc:
-                    raise IdempotencyConflict(str(exc)) from exc
+                if requested_conversation_id is not None:
+                    try:
+                        self._conversations.insert(
+                            cursor, trip_id=trip_id, tenant_id=tenant_id,
+                            owner_id=owner_id,
+                            conversation_id=requested_conversation_id,
+                        )
+                    except TripConversationConflictError as exc:
+                        raise IdempotencyConflict(str(exc)) from exc
         return {
-            **trip, "conversation_id": canonical_conversation_id,
+            **trip, "conversation_id": requested_conversation_id,
             "replayed": False,
         }
 

@@ -180,31 +180,36 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       } catch {
         // 历史读取失败不影响正式行程加载，只隐藏撤销入口。
       }
-      const association = await fetchTravelTripConversationV2(tripId, { signal: controller.signal })
-      if (cancelled) return
-      if (association.trip_id !== tripId) {
-        throw new Error('服务端返回的行程会话关联与当前行程不匹配。')
-      }
-      if (!association.linked || !association.conversation_id?.trim()) {
-        setConversationNotice('该行程没有可验证的服务端原始会话关联；未读取 URL 会话或任何对话历史。')
-      } else {
-        const candidate = new URLSearchParams(window.location.search).get('conversation_id') || ''
-        const resolved = travelV2ConversationIdForTrip(tripId, association.conversation_id)
-        if (candidate && candidate !== resolved) {
-          setConversationNotice('链接中的会话与该行程的服务端关联不一致，已恢复行程原始会话。')
+      setTrip(result)
+      setUndoRevision(previousRevision)
+      try {
+        const association = await fetchTravelTripConversationV2(tripId, { signal: controller.signal })
+        if (cancelled) return
+        if (association.trip_id !== tripId) {
+          throw new Error('服务端返回的行程会话关联与当前行程不匹配。')
         }
-        setConversationId(resolved)
-        setTravelV2TripAssociation(resolved, tripId)
-        const url = new URL(window.location.href)
-        if (url.searchParams.get('conversation_id') !== resolved) {
-          url.searchParams.set('conversation_id', resolved)
-          window.history.replaceState(window.history.state, '', url.toString())
+        if (!association.linked || !association.conversation_id?.trim()) {
+          setConversationNotice('该行程没有可验证的服务端原始会话关联；未读取 URL 会话或任何对话历史。')
+        } else {
+          const candidate = new URLSearchParams(window.location.search).get('conversation_id') || ''
+          const resolved = travelV2ConversationIdForTrip(tripId, association.conversation_id)
+          if (candidate && candidate !== resolved) {
+            setConversationNotice('链接中的会话与该行程的服务端关联不一致，已恢复行程原始会话。')
+          }
+          setConversationId(resolved)
+          setTravelV2TripAssociation(resolved, tripId)
+          const url = new URL(window.location.href)
+          if (url.searchParams.get('conversation_id') !== resolved) {
+            url.searchParams.set('conversation_id', resolved)
+            window.history.replaceState(window.history.state, '', url.toString())
+          }
+          setConversationReady(true)
         }
-        setConversationReady(true)
-      }
-      if (!cancelled) {
-        setTrip(result)
-        setUndoRevision(previousRevision)
+      } catch {
+        if (!cancelled) {
+          setConversationReady(false)
+          setConversationNotice('行程已加载，但原始会话关联暂时无法验证；对话已停用，行程仍可查看和编辑。')
+        }
       }
     }).catch((cause) => {
       if (!cancelled) setError(cause instanceof Error ? cause.message : '行程暂时无法加载。')

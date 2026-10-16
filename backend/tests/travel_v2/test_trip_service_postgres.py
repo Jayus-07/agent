@@ -233,6 +233,37 @@ def test_trip_conversation_is_write_once_and_owner_scoped() -> None:
         _cleanup_trip(trip_id)
 
 
+def test_unlinked_trip_replay_does_not_invent_a_conversation() -> None:
+    tenant_id = f"test-{uuid.uuid4().hex[:12]}"
+    owner_id = f"user-{uuid.uuid4().hex[:12]}"
+    idempotency_key = f"legacy-create-{uuid.uuid4().hex}"
+    service = TripService()
+    created = service.create_trip(
+        tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+        idempotency_key=idempotency_key, title="旧版行程回放",
+        document=TripDocumentV2.model_validate(valid_document()),
+    )
+    trip_id = created["trip_id"]
+    try:
+        replay = service.create_trip(
+            tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+            idempotency_key=idempotency_key, title="旧版行程回放",
+            document=TripDocumentV2.model_validate(valid_document()),
+        )
+        association = service.get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+
+        assert created["conversation_id"] is None
+        assert replay["conversation_id"] is None
+        assert replay["replayed"] is True
+        assert association == {
+            "trip_id": trip_id, "conversation_id": None, "linked": False,
+        }
+    finally:
+        _cleanup_trip(trip_id)
+
+
 def test_conversation_cannot_be_reused_by_another_trip() -> None:
     tenant_id = f"test-{uuid.uuid4().hex[:12]}"
     owner_id = f"user-{uuid.uuid4().hex[:12]}"

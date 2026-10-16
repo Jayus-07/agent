@@ -70,7 +70,7 @@ function safeTripFactText(value: unknown, maxLength = 180): string {
     .trim()
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[已过滤邮箱]')
     .replace(/(?:\+?86[- ]?)?1[3-9]\d{9}/g, '[已过滤电话]')
-    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)\b\s*[-:=]\s*["']?[A-Za-z0-9._~+/=-]{16,}["']?/gi, '[已过滤凭据]')
+    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)\b(?:\s*[-:=]\s*|\s+)["']?[A-Za-z0-9._~+/=-]{16,}["']?/gi, '[已过滤凭据]')
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/gi, '[已过滤凭据]')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[已过滤凭据]')
     .replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, '[已过滤凭据]')
@@ -233,14 +233,16 @@ export function projectTravelV2TripFacts(trip: TravelTripV2): Record<string, unk
 
   const trimLongestText = (): boolean => {
     const candidates: Array<{ object: Record<string, unknown>; key: string; value: string }> = []
-    const visit = (value: unknown) => {
+    const nonTruncatableKeys = new Set(['trip_id', 'active_trip_id'])
+    const visit = (value: unknown, parentKey = '') => {
       if (Array.isArray(value)) {
-        value.forEach(visit)
+        value.forEach((item) => visit(item, parentKey))
       } else if (value && typeof value === 'object') {
         for (const [key, child] of Object.entries(value)) {
-          if (typeof child === 'string' && child.length > 24) {
+          if (typeof child === 'string' && child.length > 24
+            && !nonTruncatableKeys.has(key) && parentKey !== 'price_evidence') {
             candidates.push({ object: value as Record<string, unknown>, key, value: child })
-          } else visit(child)
+          } else visit(child, key)
         }
       }
     }
