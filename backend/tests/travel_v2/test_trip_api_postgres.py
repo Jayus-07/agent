@@ -56,6 +56,13 @@ def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
         "conversation_id": f"travel-{uuid.uuid4().hex}",
     }
 
+    blank_conversation = client.post(
+        "/travel/v2/trips",
+        headers={**_headers(owner, tenant), "Idempotency-Key": f"blank-{uuid.uuid4().hex}"},
+        json={**body, "conversation_id": "   "},
+    )
+    assert blank_conversation.status_code == 422
+
     denied = client.get("/travel/v2/trips")
     assert denied.status_code == 401
 

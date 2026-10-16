@@ -268,6 +268,18 @@ def test_unlinked_trip_replay_does_not_invent_a_conversation() -> None:
         _cleanup_trip(trip_id)
 
 
+def test_create_trip_rejects_explicit_blank_conversation_before_connecting() -> None:
+    service = TripService(connect=lambda: pytest.fail("blank conversation must fail before database access"))
+
+    with pytest.raises(ValueError, match="conversation_id must not be blank"):
+        service.create_trip(
+            tenant_id="tenant-test", owner_id="owner-test", actor_id="owner-test",
+            idempotency_key=f"blank-{uuid.uuid4().hex}", title="空会话测试",
+            document=TripDocumentV2.model_validate(valid_document()),
+            conversation_id="   ",
+        )
+
+
 def test_conversation_cannot_be_reused_by_another_trip() -> None:
     tenant_id = f"test-{uuid.uuid4().hex[:12]}"
     owner_id = f"user-{uuid.uuid4().hex[:12]}"

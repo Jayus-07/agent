@@ -60,7 +60,12 @@ class TripService:
             raise ValueError("title must contain 1 to 200 characters")
         snapshot = _document_dict(document)
         trip_id = _trip_id_for_key(tenant_id, owner_id, key)
-        requested_conversation_id = str(conversation_id or "").strip() or None
+        if conversation_id is None:
+            requested_conversation_id = None
+        else:
+            requested_conversation_id = str(conversation_id).strip()
+            if not requested_conversation_id:
+                raise ValueError("conversation_id must not be blank")
         if requested_conversation_id and len(requested_conversation_id) > 128:
             raise ValueError("conversation_id must contain at most 128 characters")
         template_uuid = UUID(str(source_template_id)) if source_template_id else None
