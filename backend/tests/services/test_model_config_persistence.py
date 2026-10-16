@@ -234,6 +234,99 @@ async def test_update_provider_invalidates_manual_health_after_credential_rotati
     refresh.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ("changes", "should_invalidate"),
+    [
+        ({}, False),
+        ({"displayName": "Renamed"}, False),
+        ({"billing": "subscription"}, False),
+        ({"baseUrl": "https://provider.example/new"}, True),
+        ({"extraHeaders": {"x-route": "other"}}, True),
+        ({"networkScope": "private"}, True),
+        ({"enabled": False}, True),
+        ({"driver": "anthropic"}, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_update_provider_invalidates_only_on_effective_call_config_change(
+    monkeypatch, changes, should_invalidate,
+):
+    provider_row = {
+        "id": "custom-provider",
+        "display_name": "Custom",
+        "driver": "openai",
+        "base_url": "https://provider.example/v1",
+        "network_scope": "public",
+        "extra_headers": {},
+        "extra_body": {},
+        "billing": "metered",
+        "enabled": True,
+        "is_builtin": False,
+    }
+    credential_row = {
+        "key_fingerprint": "same-fingerprint",
+        "key_last4": "1234",
+        "key_version": 1,
+        "updated_at": None,
+        "updated_by": "user:admin",
+    }
+
+    class _UpdateResult:
+        def __init__(self, row):
+            self.row = row
+
+        def mappings(self):
+            return self
+
+        def first(self):
+            return self.row
+
+    class _UpdateSession:
+        def __init__(self):
+            self.statements = []
+
+        async def execute(self, statement, _params=None):
+            sql = str(statement)
+            self.statements.append(sql)
+            if "SELECT * FROM llm_providers WHERE id" in sql:
+                return _UpdateResult(provider_row)
+            if "SELECT key_fingerprint, key_last4, key_version" in sql:
+                return _UpdateResult(credential_row)
+            return _UpdateResult(None)
+
+        async def commit(self):
+            return None
+
+    session = _UpdateSession()
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+    monkeypatch.setattr(model_config, "fingerprint", lambda _value: "same-fingerprint")
+    monkeypatch.setattr(model_config, "encrypt_secret", lambda _value: "enc:test")
+    monkeypatch.setattr(model_config, "last4", lambda _value: "cret")
+    monkeypatch.setattr(model_config.registry_store, "refresh_registry", AsyncMock())
+
+    payload = {
+        "displayName": "Custom",
+        "driver": "openai",
+        "baseUrl": "https://provider.example/v1",
+        "networkScope": "public",
+        "billing": "metered",
+        "enabled": True,
+        "extraHeaders": {},
+        "apiKey": "same-secret",
+    }
+    payload.update(changes)
+
+    await model_config.ModelConfigService().update_provider(
+        "custom-provider", payload, "user:test-admin",
+    )
+
+    invalidations = [
+        sql for sql in session.statements
+        if "UPDATE llm_model_health SET status = 'unknown'" in sql
+    ]
+    assert bool(invalidations) is should_invalidate
+
+
 @pytest.mark.asyncio
 async def test_list_model_health_sanitizes_legacy_provider_errors(monkeypatch):
     row = {
@@ -267,6 +360,7 @@ async def test_list_model_health_sanitizes_legacy_provider_errors(monkeypatch):
     result = await model_config.ModelConfigService().list_model_health()
 
     assert result[0]["status"] == "auth_failed"
+    assert result[0]["probeMode"] == "live_call"
     assert "鉴权失败" in result[0]["lastError"]
     assert "test-secret" not in repr(result)
 

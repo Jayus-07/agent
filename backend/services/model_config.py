@@ -344,6 +344,16 @@ def _valid_base_url(value: str) -> str:
     return base_url.rstrip("/")
 
 
+def _decode_json_object(value: Any) -> Any:
+    """把 JSONB/JSON 字段统一成可比较对象，保留无法解析的旧值以触发失效。"""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return value
+    return value if value is not None else {}
+
+
 def _normalize_extra_headers(value: Any) -> dict[str, str]:
     """只允许普通扩展请求头，认证信息必须走 API Key 字段。"""
     extra_headers = value or {}
@@ -734,6 +744,14 @@ class ModelConfigService:
                 "modelName": str(r["model_name"]),
                 "provider": str(r["provider"] or ""),
                 "modelKind": str(r["model_kind"] or "chat"),
+                "probeMode": (
+                    "availability_only"
+                    if str(r["model_kind"] or "chat") in {"vision", "speech"}
+                    else "manual_only"
+                    if str(r["model_kind"] or "chat") == "ocr"
+                    and str(r["probe_source"] or "scheduled") != "manual"
+                    else "live_call"
+                ),
                 "status": status,
                 "lastCheckedAt": _iso(r["last_checked_at"]),
                 "lastLatencyMs": (
@@ -1373,12 +1391,29 @@ class ModelConfigService:
                     migration_base_url=base_url,
                     upstream_model_name=upstream_model_name,
                 )
-            # 上游凭据、地址、协议、启停或请求头变化后，旧人工结果失效。
-            await _invalidate_manual_health(
-                session,
-                provider_id=provider_id,
-                reason="供应商配置已变更，请重新执行手动验证",
-            )
+            old_headers = _decode_json_object(old_row.get("extra_headers"))
+            old_body = _decode_json_object(old_row.get("extra_body"))
+            call_config_changed = any((
+                str(old_row.get("driver") or "").strip().lower() != driver,
+                str(old_row.get("base_url") or "").strip().rstrip("/") != base_url,
+                str(old_row.get("network_scope") or "public").strip().lower()
+                != network_scope,
+                bool(old_row.get("enabled", True)) != bool(payload.get("enabled", True)),
+                old_headers != extra_headers,
+                extra_body is not None and old_body != extra_body,
+                clear_api_key and old_credential is not None,
+                api_key is not None
+                and fingerprint(str(api_key).strip())
+                != str((old_credential or {}).get("key_fingerprint") or ""),
+            ))
+            if call_config_changed:
+                # 仅上游实际调用配置变化后使旧人工结果失效；展示名、计费模式
+                # 和重复保存不会改变 Provider 探测结论。
+                await _invalidate_manual_health(
+                    session,
+                    provider_id=provider_id,
+                    reason="供应商配置已变更，请重新执行手动验证",
+                )
             await session.commit()
             break
 

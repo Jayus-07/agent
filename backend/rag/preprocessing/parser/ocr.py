@@ -71,9 +71,13 @@ def _resolve_ocr_runtime_config() -> dict[str, str]:
                         or ""
                     ).strip().rstrip("/")
                     if provider_id and base_url:
+                        upstream_model = str(
+                            entry.get("upstream_name") or ""
+                        ).strip() or model
                         return {
                             "provider": provider_id,
                             "model": model,
+                            "upstream_model": upstream_model,
                             "api_key": credentials.api_key or "",
                             "base_url": base_url,
                         }
@@ -82,6 +86,7 @@ def _resolve_ocr_runtime_config() -> dict[str, str]:
         return {
             "provider": provider_id or "db",
             "model": model,
+            "upstream_model": model,
             "api_key": "",
             "base_url": base_url,
         }
@@ -92,6 +97,7 @@ def _resolve_ocr_runtime_config() -> dict[str, str]:
     return {
         "provider": "dashscope",
         "model": model,
+        "upstream_model": model,
         "api_key": "",
         "base_url": "",
     }
@@ -273,6 +279,7 @@ def _ocr_image_dashscope(png_bytes: bytes) -> str:
     from openai import OpenAI
     runtime = _resolve_ocr_runtime_config()
     model = runtime["model"]
+    upstream_model = runtime.get("upstream_model") or model
     client = OpenAI(
         api_key=runtime["api_key"],
         base_url=runtime["base_url"],
@@ -282,7 +289,7 @@ def _ocr_image_dashscope(png_bytes: bytes) -> str:
     t0 = time.monotonic()
     try:
         resp = client.chat.completions.create(
-            model=model,
+            model=upstream_model,
             messages=[{
                 "role": "user",
                 "content": [
