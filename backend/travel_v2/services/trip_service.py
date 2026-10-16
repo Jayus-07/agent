@@ -158,10 +158,13 @@ class TripService:
                 conversation_id = self._conversations.get(
                     cursor, trip_id, tenant_id=tenant_id, owner_id=owner_id,
                 )
+                cursor.execute("SELECT CURRENT_TIMESTAMP")
+                server_now = cursor.fetchone()[0].isoformat()
         return {
-            "trip_id": str(trip_id),
+            "trip_id": str(trip["trip_id"]),
             "conversation_id": conversation_id,
             "linked": conversation_id is not None,
+            "server_now": server_now,
         }
 
     def list_trips(self, *, tenant_id: str, owner_id: str,

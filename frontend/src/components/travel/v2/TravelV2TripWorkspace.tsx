@@ -22,7 +22,7 @@ import TravelV2EditDialog, { type TravelV2EditPanel } from './TravelV2EditDialog
 import TravelTripHistoryPanel from './TravelTripHistoryPanel'
 import TravelV2TripConversation from './TravelV2TripConversation'
 import { useTravelConversation } from '@/components/travel/useTravelConversation'
-import { defaultTravelV2ConversationId, setTravelV2TripAssociation, travelV2ConversationIdForTrip, travelV2ChatHref } from './travelV2Conversation'
+import { defaultTravelV2ConversationId, setTravelV2TripAssociation, travelV2TripIdsMatch, travelV2ChatHref } from './travelV2Conversation'
 import { TravelBottomNav } from './TravelV2Frame'
 import {
   classifyTravelWriteError,
@@ -185,19 +185,19 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       try {
         const association = await fetchTravelTripConversationV2(tripId, { signal: controller.signal })
         if (cancelled) return
-        if (association.trip_id !== tripId) {
+        if (!travelV2TripIdsMatch(association.trip_id, result.trip_id)) {
           throw new Error('服务端返回的行程会话关联与当前行程不匹配。')
         }
         if (!association.linked || !association.conversation_id?.trim()) {
           setConversationNotice('该行程没有可验证的服务端原始会话关联；未读取 URL 会话或任何对话历史。')
         } else {
           const candidate = new URLSearchParams(window.location.search).get('conversation_id') || ''
-          const resolved = travelV2ConversationIdForTrip(tripId, association.conversation_id)
+          const resolved = association.conversation_id
           if (candidate && candidate !== resolved) {
             setConversationNotice('链接中的会话与该行程的服务端关联不一致，已恢复行程原始会话。')
           }
           setConversationId(resolved)
-          setTravelV2TripAssociation(resolved, tripId)
+          setTravelV2TripAssociation(resolved, result.trip_id)
           const url = new URL(window.location.href)
           if (url.searchParams.get('conversation_id') !== resolved) {
             url.searchParams.set('conversation_id', resolved)

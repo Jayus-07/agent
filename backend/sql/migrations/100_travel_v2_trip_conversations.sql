@@ -14,3 +14,24 @@ CREATE TABLE travel_v2.trip_conversations (
     CONSTRAINT chk_travel_v2_trip_conversation_nonempty
         CHECK (length(btrim(conversation_id)) BETWEEN 1 AND 128)
 );
+
+-- 回填历史模板副本的默认会话关联；同一迁移重复执行也保持幂等。
+INSERT INTO travel_v2.trip_conversations (
+    trip_id, tenant_id, owner_id, conversation_id
+)
+SELECT
+    trip.trip_id,
+    trip.tenant_id,
+    trip.owner_id,
+    'travel-v2-trip-' || trip.trip_id::text
+FROM travel_v2.trips AS trip
+WHERE trip.source_template_id IS NOT NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM travel_v2.trip_conversations AS existing
+      WHERE existing.tenant_id = trip.tenant_id
+        AND existing.owner_id = trip.owner_id
+        AND existing.conversation_id = 'travel-v2-trip-' || trip.trip_id::text
+        AND existing.trip_id <> trip.trip_id
+  )
+ON CONFLICT DO NOTHING;

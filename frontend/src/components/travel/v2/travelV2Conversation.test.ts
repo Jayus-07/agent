@@ -6,6 +6,7 @@ import {
   setTravelV2TripAssociation,
   travelV2ConversationIdForTrip,
   travelV2ChatHref,
+  travelV2TripIdsMatch,
   travelV2WorkspaceHref,
   travelV2WorkspaceRestoreHref,
 } from './travelV2Conversation'
@@ -50,6 +51,14 @@ describe('V2 Trip 会话关联', () => {
 
     expect(() => travelV2ConversationIdForTrip('trip-a')).toThrow(/server-verified conversation association/)
     expect(travelV2ConversationIdForTrip('trip-a', 'planning-conversation')).toBe('planning-conversation')
+  })
+
+  it('只对 UUID 进行大小写规范化比较', () => {
+    expect(travelV2TripIdsMatch(
+      '00000000-0000-4000-8000-000000000073',
+      '00000000-0000-4000-8000-000000000073'.toUpperCase(),
+    )).toBe(true)
+    expect(travelV2TripIdsMatch('Trip-A', 'trip-a')).toBe(false)
   })
 
   it('大量天数、安排、车次和长文本始终严格受事实投影预算约束', () => {
@@ -111,29 +120,30 @@ describe('V2 Trip 会话关联', () => {
   })
 
   it('保留酒店正式报价证据并区分过期或未经核验的价格', () => {
+    const serverNow = '2026-10-17T12:00:00.000Z'
     const arrangements = {
       lodgings: [
         {
           merchant: { name: '西湖酒店', address: '杭州' }, check_in: '2026-10-20',
           check_out: '2026-10-21', nightly_price_cny: 520, verification: 'verified',
-          source: 'hotel-provider', queried_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+          source: 'hotel-provider', queried_at: '2026-10-17T11:00:00.000Z',
           booking_status: 'not_booked',
         },
         {
           merchant: { name: '未核验酒店', address: '杭州' }, check_in: '2026-10-20',
           check_out: '2026-10-21', nightly_price_cny: 300, verification: 'estimated',
-          source: 'hotel-provider', queried_at: new Date().toISOString(),
+          source: 'hotel-provider', queried_at: serverNow,
           booking_status: 'not_booked',
         },
         {
           merchant: { name: '过期酒店', address: '杭州' }, check_in: '2026-10-20',
           check_out: '2026-10-21', nightly_price_cny: 400, verification: 'verified',
-          source: 'hotel-provider', queried_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+          source: 'hotel-provider', queried_at: '2026-10-15T12:00:00.000Z',
           booking_status: 'not_booked',
         },
       ],
     }
-    const facts = projectTravelV2TripFacts(projectionTrip([], arrangements))
+    const facts = projectTravelV2TripFacts(projectionTrip([], arrangements), serverNow)
     const lodging = (facts.arrangements as { lodgings: Array<{ price_evidence: Record<string, unknown> }> }).lodgings
 
     expect((facts.trip as Record<string, unknown>).title).toBe('杭州慢游')
@@ -142,6 +152,28 @@ describe('V2 Trip 会话关联', () => {
       nightly_price_cny: 520, verification: 'verified', source: 'hotel-provider',
     })
     expect(lodging[0].price_evidence.queried_at).toEqual(expect.any(String))
+  })
+
+  it('酒店价格新鲜度使用服务端时间，缺失或未来时间不会标成当前', () => {
+    const arrangements = { lodgings: [
+      {
+        merchant: { name: '当前酒店' }, nightly_price_cny: 520, verification: 'verified',
+        source: 'official', queried_at: '2026-10-17T11:00:00.000Z',
+      },
+      {
+        merchant: { name: '未来酒店' }, nightly_price_cny: 530, verification: 'verified',
+        source: 'official', queried_at: '2026-10-17T13:00:00.000Z',
+      },
+    ] }
+    const trip = projectionTrip([], arrangements)
+    const trusted = projectTravelV2TripFacts(trip, '2026-10-17T12:00:00.000Z')
+    const untrusted = projectTravelV2TripFacts(trip)
+    const freshness = (facts: Record<string, unknown>) =>
+      (facts.arrangements as { lodgings: Array<{ price_evidence: { freshness: string } }> })
+        .lodgings.map((item) => item.price_evidence.freshness)
+
+    expect(freshness(trusted)).toEqual(['current', 'unknown'])
+    expect(freshness(untrusted)).toEqual(['unknown', 'unknown'])
   })
 
   it('英文名称不会因 token 前缀被误删，已知密钥格式仍会脱敏', () => {

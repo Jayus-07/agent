@@ -18,7 +18,7 @@ import { useTravelConversation, type TravelConversationMessage } from '@/compone
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
 import TravelV2TripConversation from './TravelV2TripConversation'
-import { defaultTravelV2ConversationId, getTravelV2TripAssociation, setTravelV2TripAssociation, travelV2ConversationIdForTrip, travelV2WorkspaceHref, travelV2WorkspaceRestoreHref } from './travelV2Conversation'
+import { defaultTravelV2ConversationId, getTravelV2TripAssociation, setTravelV2TripAssociation, travelV2TripIdsMatch, travelV2WorkspaceHref, travelV2WorkspaceRestoreHref } from './travelV2Conversation'
 import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
 import {
   classifyTravelWriteError,
@@ -254,7 +254,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       setConversationReady(true)
       return
     }
-    if (tripRef.current && tripRef.current.trip_id !== tripId) {
+    if (tripRef.current && !travelV2TripIdsMatch(tripRef.current.trip_id, tripId)) {
       setTrip(null)
       tripRef.current = null
     }
@@ -262,23 +262,22 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       if (cancelled) return
       const association = await fetchTravelTripConversationV2(tripId)
       if (cancelled) return
-      setTrip(savedTrip)
-      tripRef.current = savedTrip
-      if (association.trip_id !== tripId) {
+      if (!travelV2TripIdsMatch(association.trip_id, savedTrip.trip_id)) {
         throw new Error('服务端返回的行程会话关联与当前行程不匹配。')
       }
+      setTrip(savedTrip)
+      tripRef.current = savedTrip
+      setAssociatedTripId(savedTrip.trip_id)
       if (!association.linked || !association.conversation_id?.trim()) {
         setConversationNotice('该行程没有可验证的服务端原始会话关联；未读取链接中的会话或任何对话历史。')
         return
       }
-      const resolvedConversationId = travelV2ConversationIdForTrip(
-        tripId, association.conversation_id,
-      )
+      const resolvedConversationId = association.conversation_id
       if (candidateConversationId && candidateConversationId !== resolvedConversationId) {
         setConversationNotice('链接中的会话与该行程的服务端关联不一致，已恢复行程原始会话。')
       }
       setConversationId(resolvedConversationId)
-      setTravelV2TripAssociation(resolvedConversationId, tripId)
+      setTravelV2TripAssociation(resolvedConversationId, savedTrip.trip_id)
       setConversationReady(true)
     }).catch(() => {
       if (!cancelled) {

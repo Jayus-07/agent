@@ -285,6 +285,7 @@ export interface TravelTripConversationV2 {
   trip_id: string;
   conversation_id: string | null;
   linked: boolean;
+  server_now: string;
 }
 
 export function fetchTravelTripConversationV2(

@@ -222,7 +222,7 @@ beforeEach(() => {
     return pending.promise
   })
   mocks.fetchTripConversation.mockReset().mockImplementation(async (tripId: string) => ({
-    trip_id: tripId, conversation_id: null, linked: false,
+    trip_id: tripId, conversation_id: null, linked: false, server_now: '2026-10-17T12:00:00.000Z',
   }))
   mocks.fetchRevisions.mockReset().mockImplementation(async (tripId: string, options?: { signal?: AbortSignal }) => {
     mocks.revisionRequests.push({ tripId, signal: options?.signal })
@@ -271,6 +271,23 @@ describe('V2 工作台 Trip 状态隔离', () => {
       conversationId: originalConversation, enabled: true,
     })
     expect(page.container.textContent).toContain('服务端关联不一致')
+  })
+
+  it('大写 UUID 工作台路由按服务端规范 Trip ID 校验关联', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000073'
+    const routeTripId = tripId.toUpperCase()
+    const originalConversation = 'travel-workspace-case-normalized'
+    window.history.replaceState({}, '', `/travel/itineraries/${routeTripId}`)
+    mocks.fetchTripConversation.mockResolvedValueOnce({
+      trip_id: tripId, conversation_id: originalConversation, linked: true,
+      server_now: '2026-10-17T12:00:00.000Z',
+    })
+    const page = mount(routeTripId)
+    await load(tripRequest(0), makeTrip(tripId, '大小写行程'))
+
+    expect(page.container.textContent).toContain('大小写行程')
+    expect(mocks.conversationRequests).toContainEqual({ conversationId: originalConversation, enabled: true })
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(originalConversation)
   })
 
   it('会话关联读取失败时仍可查看和编辑正式行程，但停用对话', async () => {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from datetime import datetime
 
 import pytest
 from fastapi import FastAPI
@@ -78,11 +79,11 @@ def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
             headers=_headers(owner, tenant),
         )
         assert association.status_code == 200
-        assert association.json() == {
-            "trip_id": trip_id,
-            "conversation_id": body["conversation_id"],
-            "linked": True,
-        }
+        association_body = association.json()
+        assert association_body["trip_id"] == trip_id
+        assert association_body["conversation_id"] == body["conversation_id"]
+        assert association_body["linked"] is True
+        assert datetime.fromisoformat(association_body["server_now"]).tzinfo is not None
         assert client.get(
             f"/travel/v2/trips/{trip_id}/conversation",
             headers=_headers("someone-else", tenant),
@@ -112,9 +113,10 @@ def test_api_creates_reads_and_archives_only_within_identity_scope() -> None:
             headers=_headers(owner, tenant),
         )
         assert unlinked.status_code == 200
-        assert unlinked.json() == {
-            "trip_id": trip_id, "conversation_id": None, "linked": False,
-        }
+        assert unlinked.json()["trip_id"] == trip_id
+        assert unlinked.json()["conversation_id"] is None
+        assert unlinked.json()["linked"] is False
+        assert datetime.fromisoformat(unlinked.json()["server_now"]).tzinfo is not None
 
         edited_document = valid_document()
         edited_document["days"][0]["title"] = "权威回执行程"
