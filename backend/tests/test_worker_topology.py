@@ -121,6 +121,9 @@ def test_case_g_qa_daily_report_maps_to_report():
     route = queue_router.resolve_for_celery_task("cs.qa_daily_report")
     assert route.workload_class == "report"
     assert route.physical_queue == tasks_config.CELERY_REPORT_QUEUE
+    price_monitor = queue_router.resolve_for_celery_task("model.price_page_monitor")
+    assert price_monitor.workload_class == "report"
+    assert price_monitor.physical_queue == tasks_config.CELERY_REPORT_QUEUE
 
 
 def test_beat_schedule_queues_derived_from_registry():

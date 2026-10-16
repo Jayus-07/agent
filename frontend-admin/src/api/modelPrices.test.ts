@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { request } from "@/api/client";
-import { validatePriceImport, validatePriceRows } from "./modelPrices";
+import { listModelPriceMonitorRuns, validatePriceImport, validatePriceRows } from "./modelPrices";
 
 vi.mock("@/api/client", () => ({
   request: vi.fn(),
@@ -56,5 +56,20 @@ describe("价格导入校验", () => {
       "/api/admin/model-prices/imports/validate",
       { method: "POST", body: JSON.stringify(body), headers: { "Content-Type": "application/json" } },
     );
+  });
+});
+
+describe("模型价格巡检记录", () => {
+  it("读取近期运行结果及定时计划", async () => {
+    vi.mocked(request).mockResolvedValueOnce({
+      items: [{ run_id: "run-1", status: "partial", system_mismatches: 1 }],
+      schedule: { timezone: "Asia/Shanghai", hour: 8, minute: 0 },
+    });
+
+    await expect(listModelPriceMonitorRuns()).resolves.toMatchObject({
+      items: [{ run_id: "run-1", status: "partial", system_mismatches: 1 }],
+      schedule: { timezone: "Asia/Shanghai", hour: 8, minute: 0 },
+    });
+    expect(request).toHaveBeenCalledWith("/api/admin/model-prices/monitor/runs?limit=30");
   });
 });

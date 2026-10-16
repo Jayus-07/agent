@@ -1,3 +1,5 @@
+import pytest
+
 from backend.app.api.routes.price_dto import coverage_report, validate_price_rows
 from backend.app.api.routes.model_prices import router as model_price_router
 
@@ -57,6 +59,38 @@ def test_price_governance_routes_use_plural_import_and_review_contract() -> None
     assert "/admin/model-prices/imports/validate" in paths
     assert "/admin/model-prices/imports" in paths
     assert "/admin/model-prices/versions/{version}/reviews" in paths
+    assert "/admin/model-prices/monitor/runs" in paths
+
+
+def test_price_monitor_history_is_read_only_and_requires_platform_role(
+    monkeypatch,
+) -> None:
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from backend.app.api.deps import OperatorIdentity
+    from backend.app.api.routes import model_prices
+
+    class _MonitorRepository:
+        def list_runs(self, limit: int):
+            assert limit == 30
+            return [{"run_id": "run-1", "status": "partial"}]
+
+    monkeypatch.setattr(model_prices, "_monitor_repo", lambda: _MonitorRepository())
+    result = asyncio.run(model_prices.list_model_price_monitor_runs(
+        30, OperatorIdentity(role="viewer", actor="user:15")
+    ))
+    assert result["items"] == [{"run_id": "run-1", "status": "partial"}]
+    assert result["schedule"] == {
+        "timezone": "Asia/Shanghai", "hour": 8, "minute": 0,
+    }
+
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(model_prices.list_model_price_monitor_runs(
+            30, OperatorIdentity(role="user", actor="user:15")
+        ))
+    assert error.value.status_code == 403
 
 
 def test_price_import_validation_is_server_side_and_does_not_persist() -> None:

@@ -14,6 +14,64 @@ export interface PriceVersion {
   created_at: string;
 }
 export interface PriceValidation { valid: boolean; errors: string[]; rows: PriceRow[] }
+export interface ModelPriceMonitorQuote {
+  model_name: string;
+  component: string;
+  dimension: string;
+  price_per_unit: string;
+  unit: string;
+  currency: string;
+  source_updated_at?: string;
+  content_sha256?: string;
+}
+export interface ModelPriceMonitorSource {
+  source_id: string;
+  name: string;
+  url: string;
+  status: "succeeded" | "failed";
+  error_type?: string | null;
+  quote_count: number;
+  quotes: ModelPriceMonitorQuote[];
+}
+export interface ModelPriceMonitorPriceResult {
+  model_name: string;
+  component: string;
+  dimension: string;
+  source_id: string;
+  source_url: string;
+  source_updated_at: string;
+  content_sha256: string;
+  official: { price_per_unit: string; unit: string; currency: string };
+  system: { price_per_unit: string; unit: string; currency: string; price_table_version?: string } | null;
+  comparison_currency?: string;
+  official_price_cny?: string | null;
+  system_price_cny?: string | null;
+  official_fx_to_cny?: string | null;
+  system_fx_to_cny?: string | null;
+  comparison_tolerance_cny?: string | null;
+  comparison_error?: string;
+  matches_system: boolean;
+}
+export interface ModelPriceMonitorRun {
+  run_id: string;
+  observed_on: string;
+  status: "running" | "succeeded" | "partial" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  sources_total: number;
+  sources_failed: number;
+  quotes_recorded: number;
+  source_changes: number;
+  system_mismatches: number;
+  source_results: ModelPriceMonitorSource[];
+  comparison_results: {
+    prices?: ModelPriceMonitorPriceResult[];
+    source_changes?: Array<Record<string, unknown>>;
+    system_mismatches?: Array<Record<string, unknown>>;
+  };
+  alert_events: Array<{ code: string; recorded: boolean; delivery: "unknown" }>;
+  error_type?: string | null;
+}
 
 const dimensions = new Set<PriceDimension>(["input", "output", "cache_read", "cache_write", "reasoning", "tool_call"]);
 const units = new Set<PriceUnit>(["per_1m_tokens", "per_call"]);
@@ -43,6 +101,12 @@ export function formatPrice(value: string | number): string {
 
 export async function listPriceVersions(): Promise<{ items: PriceVersion[] }> {
   return request<{ items: PriceVersion[] }>("/api/admin/model-prices/versions");
+}
+export async function listModelPriceMonitorRuns(limit = 30): Promise<{
+  items: ModelPriceMonitorRun[];
+  schedule: { timezone: string; hour: number; minute: number };
+}> {
+  return request(`/api/admin/model-prices/monitor/runs?limit=${limit}`);
 }
 export async function validatePriceImport(body: { version: string; source: string; rows: PriceRow[] }): Promise<PriceValidation> {
   const result = await request<{
