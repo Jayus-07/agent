@@ -71,6 +71,9 @@ def _split_to_budget(text: str, budget: int,
         chunk_overlap=CHUNK_OVERLAP if overlap is None else overlap,
         length_function=count_tokens,
         separators=separators if separators is not None else _SEPARATORS,
+        # 分块边界空格/换行属于源文本；移除它会让 Coverage Audit 将有效文档
+        # 判成缺口，也会改变英文词间隔。保留分隔符，由后续索引过滤处理空白。
+        strip_whitespace=False,
     )
     subs = splitter.split_text(text)
     if all(count_tokens(s) <= budget for s in subs):

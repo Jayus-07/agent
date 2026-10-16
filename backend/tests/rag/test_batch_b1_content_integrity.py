@@ -58,6 +58,28 @@ def test_pdf_cleaner_removes_only_explicit_page_footer_lines(monkeypatch):
     assert "removed_page_number_footer" in result.changes
 
 
+def test_recursive_split_preserves_source_whitespace_and_coverage(monkeypatch):
+    """递归切分不能删除边界空格或触发有效正文的 Coverage 硬失败。"""
+    from backend.rag.preprocessing import chunking
+
+    monkeypatch.setattr(chunking, "LEAF_CHUNK_TOKENS", 100)
+    monkeypatch.setattr(chunking, "CHUNK_OVERLAP", 0)
+    source = "甲" * 90 + " " + "乙" * 90
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=source),
+        ]),
+        raw_text=source,
+    )
+
+    chunks = chunking.RecursiveChunkStrategy().split(ast, "whitespace.txt")
+    leaves = [c for c in chunks if c.metadata.get("granularity") == "leaf"]
+
+    assert len(leaves) > 1
+    assert "".join(c.page_content for c in leaves) == source
+    assert chunking.coverage_audit(ast, chunks)["uncovered_count"] == 0
+
+
 def test_csv_table_routes_to_structured_chunks_and_preserves_identifiers(tmp_path):
     """CSV 表格的短数字行不可按普通中文正文规则过滤。"""
     from backend.rag.preprocessing.pipeline import parse_and_chunk_full
