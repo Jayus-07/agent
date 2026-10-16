@@ -51,6 +51,10 @@ ALERT_CODES: dict[str, tuple[str, str]] = {
     "LLM_DEGRADED_ANSWER":    ("error", "LLM 主/备均失败，返回降级拒答话术"),
     # 预算对账日报（2026-10-02 企业口径：监控比率不监控单笔）
     "BUDGET_NEEDS_REVIEW_RATIO_HIGH": ("warn", "预算未决率超阈值：结算链路或供应商链路疑似系统性异常"),
+    "MODEL_PRICE_SOURCE_CHANGED": ("warn", "供应商公开模型价格与前次巡检相比发生变化"),
+    "MODEL_PRICE_SYSTEM_MISMATCH": ("error", "供应商公开模型价格与系统当前计费价格不一致"),
+    "MODEL_PRICE_SOURCE_UNAVAILABLE": ("error", "供应商模型价格页读取或解析失败"),
+    "MODEL_PRICE_MONITOR_FAILED": ("error", "模型价格巡检无法读取或保存价格数据"),
 }
 
 _LEVEL_ORDER = {"info": 0, "warn": 1, "error": 2}
