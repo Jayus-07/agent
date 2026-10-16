@@ -37,15 +37,20 @@ def test_get_llm_for_role_uses_effective_role_model(monkeypatch):
     assert seen == ["question-model"]
 
 
-def test_invoke_metadata_llm_passes_explicit_role(monkeypatch):
+def test_invoke_metadata_llm_uses_governed_role_proxy(monkeypatch):
     fake = MagicMock()
     fake.model = "metadata-role-model"
     fake.invoke.return_value = "ok"
     seen = []
     monkeypatch.setattr(
         proxy,
-        "get_llm_for_role",
+        "bind_llm_for_role",
         lambda role: seen.append(role) or fake,
+    )
+    monkeypatch.setattr(
+        proxy,
+        "get_llm_for_role",
+        lambda _role: pytest.fail("裸模型入口不得用于元数据角色调用"),
     )
 
     invoke_metadata_llm("prompt", role="table_describe")
@@ -54,8 +59,25 @@ def test_invoke_metadata_llm_passes_explicit_role(monkeypatch):
     fake.invoke.assert_called_once()
 
 
-def test_invoke_metadata_llm_records_direct_role_result(monkeypatch):
-    """专用角色拿到底层实例时仍必须进入统一用量记录器。"""
+def test_invoke_metadata_llm_disables_thinking_through_role_proxy(monkeypatch):
+    fake = MagicMock()
+    fake.model = "qwen3.7-plus"
+    fake.invoke.return_value = "ok"
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role: fake)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.supports_thinking_flag",
+        lambda model_name: model_name == "qwen3.7-plus",
+    )
+
+    invoke_metadata_llm("prompt")
+
+    fake.invoke.assert_called_once_with(
+        "prompt", extra_body={"enable_thinking": False},
+    )
+
+
+def test_invoke_metadata_llm_keeps_telemetry_for_explicit_raw_client(monkeypatch):
+    """兼容显式注入的原始客户端，同时记录用量遥测。"""
     fake = MagicMock()
     fake.model = "metadata-role-model"
     fake.invoke.return_value = MagicMock(
@@ -69,15 +91,13 @@ def test_invoke_metadata_llm_records_direct_role_result(monkeypatch):
         }
     )
     recorded = []
-    monkeypatch.setattr(proxy, "get_llm_for_role", lambda role: fake)
     monkeypatch.setattr(
         proxy,
         "record_llm_result",
         lambda result, **kwargs: recorded.append((result, kwargs)),
     )
 
-    invoke_metadata_llm("prompt")
+    invoke_metadata_llm("prompt", llm_obj=fake)
 
     assert len(recorded) == 1
-    assert recorded[0][1]["model_name"] == model_roles.resolve_effective(
-        "metadata_extract")["value"]
+    assert recorded[0][1]["model_name"] == "metadata-role-model"

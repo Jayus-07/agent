@@ -28,30 +28,18 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
     Returns: LLM 消息对象（与 llm.invoke 一致）
     Raises: 与 llm.invoke 一致（调用方自行 try/except 降级）
     """
-    from backend.infra.llm.proxy import _get_provider_for
-
     if llm_obj is None:
-        from backend.infra.llm.proxy import get_llm_for_role
-        llm_obj = get_llm_for_role(role)
-        # 观测口径（路由专项 Step 1）：按角色解析时记住登记名（canonical），
-        # 计量用它而不是实例底层的 upstream 真名——否则 usage 按上游别名
-        # 分裂成独立行、且 alias 无价目导致 cost_status=unpriced。
-        try:
-            from backend.config import model_roles as _mr
-
-            _resolved_role_model = str(
-                _mr.resolve_effective(role).get("value") or "")
-        except Exception:
-            _resolved_role_model = ""
-    else:
-        _resolved_role_model = ""
+        # 元数据角色也必须走统一代理，确保预算预占、韧性处理和用量结算
+        # 与普通对话一致。get_llm_for_role 返回裸 LangChain 实例，会绕过这些门禁。
+        from backend.infra.llm.proxy import bind_llm_for_role
+        llm_obj = bind_llm_for_role(role)
 
     started = time.monotonic()
 
     def _invoke_and_record(*args, **kwargs):
         response = llm_obj.invoke(*args, **kwargs)
-        # get_llm_for_role 返回的是底层 LangChain 实例，不经过 _LLMProxy；
-        # 这里补一次统一计量。显式传入的 proxy 自己已记录，避免重复落库。
+        # 默认角色代理及显式传入的治理代理已自行预占和记账；兼容旧调用方
+        # 显式传入的原始 LangChain 对象时，保留原有用量遥测。
         if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
             try:
                 from backend.infra.llm.proxy import record_llm_result
@@ -59,8 +47,7 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
                 record_llm_result(
                     response,
                     duration_ms=(time.monotonic() - started) * 1000,
-                    model_name=_resolved_role_model
-                    or str(getattr(llm_obj, "model", "") or ""),
+                    model_name=str(getattr(llm_obj, "model", "") or ""),
                 )
             except Exception as exc:
                 logger.debug(f"[MetadataLLM] 直接调用计量失败: {exc}")
