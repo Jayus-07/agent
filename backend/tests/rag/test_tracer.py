@@ -364,10 +364,14 @@ class TestBoundaries:
         tc.start_span("root")
 
         def worker(i):
-            s = tc.start_span(f"span_{i}")
-            time.sleep(0.001)
-            tc.end_span(s, metrics={"i": i})
-            return i
+            tc.bind(t)
+            try:
+                s = tc.start_span(f"span_{i}")
+                time.sleep(0.001)
+                tc.end_span(s, metrics={"i": i})
+                return i
+            finally:
+                tc.bind(None)
 
         with ThreadPoolExecutor(max_workers=20) as pool:
             list(pool.map(worker, range(100)))

@@ -7,10 +7,11 @@
 """
 from __future__ import annotations
 
+import asyncio
+import re
 import threading
 import time
 import uuid
-import re
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
@@ -268,16 +269,15 @@ class TraceRecord:
 class TraceCollector:
     """线程/异步安全的 Tracing 收集器 — 统一 Span API。
 
-    双轨 _current_trace：
-      - 实例字段 _thread_current：用于 sync threadpool（如 FastAPI sync handler），
-        ThreadPoolExecutor worker 内多线程共享同一 trace
-      - contextvar _current_trace_var：用于 asyncio，每个 task 独立持有自己的 trace
-    start_span 优先读 contextvar（async 更安全），fallback 到实例字段（threadpool 兼容）。
+    当前 Trace 由 ContextVar 和线程局部值组成：ContextVar 隔离 asyncio task，
+    线程局部值为未显式传播 ContextVar 的同步代码提供兼容回退。并行线程必须
+    显式 bind(trace)，不能继承另一个线程最近设置的 Trace。
     """
 
     def __init__(self, max_size: int = MAX_TRACES):
         self._lock = threading.Lock()
-        self._thread_current: TraceRecord | None = None  # sync path
+        self._thread_current = threading.local()
+        self._active_records: dict[int, TraceRecord] = {}
         self._span_seq: int = 0
         self._listeners: list = []  # span lifecycle subscribers (Phase 1.5)
         # 嵌套 trace 恢复栈：子 trace id → 父 trace。
@@ -285,6 +285,24 @@ class TraceCollector:
         # finish() 后必须把外层 agent trace 恢复为 current，
         # 否则后续 span 全部落入 noop（浏览器实测发现）。
         self._parents: dict[str, TraceRecord] = {}
+
+    @staticmethod
+    def _in_async_context() -> bool:
+        """判断当前代码是否运行在 asyncio 事件循环中。"""
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+
+    def _current_trace(self) -> TraceRecord | None:
+        """读取当前任务 Trace；同步线程才回退到线程局部绑定。"""
+        trace = _current_trace_var.get()
+        if trace is not None:
+            return trace
+        if self._in_async_context():
+            return None
+        return getattr(self._thread_current, "record", None)
 
     # =====================================================
     # 统一 API
@@ -310,7 +328,7 @@ class TraceCollector:
         rid = requested_id or uuid.uuid4().hex[:12]
         # 嵌套检测：已有 active trace 时建立父子链（而非覆盖后丢失外层上下文）。
         # 典型场景：MultiAgent 图内执行 rag_skill → RAGChain.ask() 自带 trace。
-        prev = _current_trace_var.get() or self._thread_current
+        prev = self._current_trace()
         actual_parent_id = (
             parent_trace_id if requested_id else
             (prev.id if prev else parent_trace_id)
@@ -351,7 +369,9 @@ class TraceCollector:
                     logger.debug("[Tracer] child_trace_ids 写入失败", exc_info=True)
         with self._lock:
             self._span_seq = 0
-            self._thread_current = trace
+            if not self._in_async_context():
+                self._thread_current.record = trace
+            self._active_records[id(trace)] = trace
             if prev is not None and actual_parent_id == prev.id:
                 self._parents[rid] = prev
         _current_trace_var.set(trace)
@@ -361,13 +381,14 @@ class TraceCollector:
         return trace
 
     def bind(self, trace: TraceRecord | None) -> None:
-        """显式把 trace 绑定到当前执行上下文（ContextVar）。
+        """显式把 trace 绑定到当前异步任务或同步线程。
 
-        场景：P1 流式改造后 graph.stream 在独立 worker 线程执行，
-        新线程不继承 producer 线程的 ContextVar，须在 worker 内重新绑定，
-        否则该线程内的 start_span 全部落 noop（软失败，静默丢 trace）。
+        graph.stream 在独立 worker 线程执行时不会自动继承 producer 的
+        ContextVar；调用方确认事件归属后，须在 worker 内显式绑定 Trace。
         """
         _current_trace_var.set(trace)
+        if not self._in_async_context():
+            self._thread_current.record = trace
 
     def start_span(self, span_id: str, parent_id: str | None = None,
                    name: str = "", type: str = "",
@@ -384,12 +405,12 @@ class TraceCollector:
           input:      输入快照（可选）
 
         Returns:
-            Span 对象。如果当前没有 active trace（contextvar + thread field 都为空），
+            Span 对象。如果当前上下文没有 active trace，
             返回一个 noop Span（不抛 RuntimeError），让业务代码继续运行。
             这样 LangGraph 在不同 thread 调用时即使 trace 未传播也不会崩溃。
         """
-        # 优先 contextvar（async 隔离），fallback 实例字段（threadpool 共享）
-        trace = _current_trace_var.get() or self._thread_current
+        # 优先 ContextVar（async 隔离），同步线程才读取线程局部绑定。
+        trace = self._current_trace()
         if trace is None:
             # 软失败：返回 noop Span，避免业务阻塞
             # Why: LangGraph Send + RAG chain 在不同 thread 调用时，
@@ -488,6 +509,7 @@ class TraceCollector:
         if base_span_id is not None:
             span.metrics["base_span_id"] = base_span_id
         trace.spans.append(span)
+        span._trace_ref = trace
         # P1-4: 维护开放 span 栈（后续无 parent 的 span 按时间嵌套挂到栈顶）
         open_stack = getattr(trace, "_open_spans", None)
         if open_stack is None:
@@ -528,7 +550,7 @@ class TraceCollector:
             span._stack_ref = None
 
         # Phase 1.5: 通知 listener（用于 SSE 实时进度推送）
-        trace = _current_trace_var.get() or self._thread_current
+        trace = getattr(span, "_trace_ref", None) or self._current_trace()
         if trace is not None and self._listeners:
             for cb in list(self._listeners):
                 try:
@@ -544,7 +566,7 @@ class TraceCollector:
         检索耗时虚增 10 倍以上。内部埋点在真实边界（context 就绪）调用本方法
         提前收口；外层原有的 end_span 调用因幂等守卫自动变为 no-op。
         """
-        trace = _current_trace_var.get() or self._thread_current
+        trace = self._current_trace()
         if trace is None:
             return None
         for span in reversed(trace.spans):
@@ -625,8 +647,9 @@ class TraceCollector:
         # 外层流程后续 span 才不会落入 noop。
         with self._lock:
             parent = self._parents.pop(record.id, None)
-            if self._thread_current is record:
-                self._thread_current = parent
+            self._active_records.pop(id(record), None)
+            if getattr(self._thread_current, "record", None) is record:
+                self._thread_current.record = parent
         if _current_trace_var.get() is record:
             _current_trace_var.set(parent)
 
@@ -687,11 +710,12 @@ class TraceCollector:
         return rec
 
     def list_active(self) -> list[dict]:
-        """正在进行中的 trace：检查 contextvar + thread_local。
+        """返回所有尚未 finish 的 Trace。
         返回简易 dict 列表（不包含 spans）。"""
         active = []
-        trace = _current_trace_var.get() or self._thread_current
-        if trace is not None:
+        with self._lock:
+            traces = list(self._active_records.values())
+        for trace in traces:
             active.append({
                 "id": trace.id,
                 "question": trace.question,
@@ -706,9 +730,9 @@ class TraceCollector:
 
         业务代码无需调用；用于测试断言 in-flight trace 的 spans 状态。
         区别于 list()：list() 只从 SQLite 读已 finish() 的（不返回 spans），
-        current() 读 contextvar 里的 in-flight trace（含 spans）。
+        current() 读当前上下文里的 in-flight trace（含 spans）。
         """
-        return _current_trace_var.get() or self._thread_current
+        return self._current_trace()
 
     def compute_metrics(self) -> dict:
         """聚合统计（SQLite trace_store 直读；含真实延迟分位数）。"""
@@ -762,13 +786,15 @@ class TraceCollector:
     def clear_for_test(self):
         """测试辅助：重置全部内部状态。
 
-        2d627d7 重构后 trace 持久化在 SQLite，内存中只剩 _thread_current /
-        _span_seq / _listeners / _parents / contextvar。测试前后调用此方法确保隔离。
+        2d627d7 重构后 trace 持久化在存储层；内存中保留线程局部 current、
+        活跃 Trace 注册表、_span_seq、_listeners、_parents 和 ContextVar。
+        测试前后调用此方法确保隔离。
 
         注意：不会清空 SQLite 数据（如果用了临时 DB，tmp_path 会自动清理）。
         """
         with self._lock:
-            self._thread_current = None
+            self._thread_current.record = None
+            self._active_records.clear()
             self._span_seq = 0
             self._listeners.clear()
             self._parents.clear()
@@ -1081,7 +1107,7 @@ def current_trace_context() -> tuple[str, str]:
     避免模块级循环依赖（proxy 在函数内导入本函数）。
     """
     try:
-        trace = _current_trace_var.get() or trace_collector._thread_current
+        trace = trace_collector.current()
         if trace is not None:
             return trace.id, trace.session_id
     except Exception:

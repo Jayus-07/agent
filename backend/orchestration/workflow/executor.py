@@ -164,10 +164,10 @@ class WorkflowExecutor:
         trace_record = None  # 保存引用，用于 finish() 持久化
         owns_trace_record = False
         try:
-            from backend.observability.tracer import trace_collector, _current_trace_var
+            from backend.observability.tracer import trace_collector
 
             # 检查是否已有活跃 trace（如 RAG 调用链中的 workflow step）
-            trace_record = _current_trace_var.get() or trace_collector._thread_current
+            trace_record = trace_collector.current()
             if trace_record is None:
                 # 启动一个新的 workflow trace
                 trace_record = trace_collector.start(
