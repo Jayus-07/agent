@@ -6,7 +6,6 @@
 """
 from __future__ import annotations
 
-import re
 import time
 
 from backend.shared.logger import logger

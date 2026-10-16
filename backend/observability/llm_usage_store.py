@@ -74,6 +74,15 @@ def current_usage_attribution() -> dict[str, str]:
             stage = binding.stage
     except Exception:
         pass
+    if not request_id:
+        # 后台 Worker 没有 HTTP Trace，但会以可信预算 ID 或处理运行 ID 归属。
+        # 保持 request_id 非空，避免后台 Provider 调用脱离请求/任务账本。
+        try:
+            from backend.infra.llm.budget import current_request_id
+
+            request_id = current_request_id() or run_id
+        except Exception:
+            request_id = run_id
     skill_id = ""
     tool_id = ""
     agent_domain = ""

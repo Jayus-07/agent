@@ -351,6 +351,11 @@ def current_request_budget() -> RequestBudget | None:
         return _states.get(request_id)
 
 
+def current_request_id() -> str:
+    """返回已由可信入口绑定的请求 ID，供用量账本补齐归因。"""
+    return _current_request_id.get()
+
+
 def reserve_model_call(
     kind: str,
     *,
@@ -502,6 +507,7 @@ __all__ = [
     "bind_request_budget",
     "clear_request_budget",
     "current_call_decision",
+    "current_request_id",
     "current_request_budget",
     "record_model_usage",
     "release_model_reservation",
