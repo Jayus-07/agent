@@ -145,13 +145,13 @@
 
 | ID | 检查项 | 状态 | 当前证据 / 缺口 |
 | --- | --- | --- | --- |
-| MAIN-01 | APISIX 正常 | BLOCKED | Docker Desktop 已运行；默认 `agent` Compose 是共享的 16 服务栈，未启动隔离 APISIX 验收链，避免资源争用。 |
-| MAIN-02 | FastAPI 正常 | BLOCKED | 通过定向 TestClient 合同测试；真实 APISIX→FastAPI 服务链未启动。 |
+| MAIN-01 | APISIX 正常 | BLOCKED | 共享 Compose `127.0.0.1:9080/health` 返回 200 并到达 FastAPI；运行镜像 build commit 为 unknown，不能算当前 `origin/main` 验收。 |
+| MAIN-02 | FastAPI 正常 | BLOCKED | 共享 Compose `127.0.0.1:8000/health` 返回 200；镜像无可核对 commit，真实服务不对应当前 main SHA。 |
 | MAIN-03 | Next.js 用户端正常 | BLOCKED | 主控隔离树无 frontend/node_modules；不重复安装，未启动页面。 |
 | MAIN-04 | 管理端正常 | BLOCKED | 未启动管理端；当前任务树无已装前端依赖。 |
-| MAIN-05 | PostgreSQL 与 Redis 正常 | NOT VERIFIED | 独立 PostgreSQL 用于退款并发回归；共享 Compose 内 PG/Redis 正在运行，但本轮未对其做全链健康验收或写入。 |
-| MAIN-06 | Celery Worker、Beat 和消费 | BLOCKED | 共享 Compose 服务存在；目标 PDF Worker 容器和任务事件不可恢复，未启动额外 Worker 以免挤占 8GiB Docker 资源。 |
-| MAIN-07 | 健康及就绪接口 | NOT VERIFIED | 未在集成服务上请求健康/ready 接口。 |
+| MAIN-05 | PostgreSQL 与 Redis 正常 | NOT VERIFIED | `agent-postgres-1` 的 `pg_isready` 成功；`agent-redis-1` 容器 healthy，但未认证的 `redis-cli ping` 返回 `NOAUTH Authentication required`，未把它当作 Redis 故障。未做当前 main 服务链验收。 |
+| MAIN-06 | Celery Worker、Beat 和消费 | BLOCKED | agent/rag-index/metadata/report/maintenance Worker、Beat 与客服 dispatcher 容器显示 healthy；未对隔离当前 HEAD 的真实任务投递与消费做验收。 |
+| MAIN-07 | 健康及就绪接口 | BLOCKED | 共享服务 `/health`、RAG `/healthz` 返回 200；RAG `/readyz` 返回 503 `SERVICE_NOT_READY`（提示 embedding Provider API Key 不可用）。RAG 镜像创建于 2026-10-13、build revision unknown，容器内 `embedding_singleton.py` 与当前源码 SHA256 不同，因此不将其作为当前 main 的代码失败或 PASS。 |
 | MAIN-08 | Prometheus / Trace 核心观测 | NOT VERIFIED | 未启动观测栈或采集真实请求 Trace。 |
 | MAIN-09 | 用户正常聊天 | BLOCKED | 无安全注入的隔离 BFF、Provider 与服务链。 |
 | MAIN-10 | 一般概念问答 | BLOCKED | 真实 LLM 未调用；未用假响应作质量结论。 |
