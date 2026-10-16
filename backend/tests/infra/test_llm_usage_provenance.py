@@ -54,3 +54,27 @@ def test_usage_attribution_falls_back_to_bound_background_request_id(monkeypatch
         assert attribution["request_id"] == "index-run-request-1"
     finally:
         trace_collector.clear_for_test()
+
+
+def test_usage_attribution_prefers_budget_id_for_settlement_correlation(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.infra.llm import budget
+    from backend.observability.tracer import trace_collector
+
+    trace_collector.clear_for_test()
+    trace = SimpleNamespace(
+        id="trace-id-1",
+        request_id="trace-request-1",
+        session_id="trace-session-1",
+    )
+    monkeypatch.setattr(trace_collector, "current", lambda: trace)
+    request_token = budget._current_request_id.set("budget-request-1")
+    try:
+        attribution = current_usage_attribution()
+    finally:
+        budget._current_request_id.reset(request_token)
+        trace_collector.clear_for_test()
+
+    assert attribution["request_id"] == "budget-request-1"
+    assert attribution["trace_id"] == "trace-id-1"
