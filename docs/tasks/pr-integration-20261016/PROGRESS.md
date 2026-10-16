@@ -17,7 +17,8 @@
 - 修复 Review 后最新定向结果：价格巡检 + 隔离 PostgreSQL outbox + Context Budget + 流式 usage `75 passed`；包含报价提交后 Worker 失败、同日重跑恢复、Celery 生命周期终态和 32K 边界拒绝。单独的管理端价格巡检、模型健康 UI 与类型测试 `60 passed`。隔离 PostgreSQL 仍仅使用本机 `127.0.0.1:55462/agent_memory_test`。没有 Provider 调用。
 - 静态结果：修改源码 `py_compile`、`git diff --check` 通过；排除仓库现存 Ruff 规则诊断后，对本批改动文件的剩余检查通过。完整 Ruff 输出中的既有异常命名、历史导入顺序和未用变量不属于本批修改范围。
 - PR #82 已创建：[fix(model-prices): recover alerts and enforce pricing boundaries](https://github.com/Jayus-07/agent/pull/82)。其首个自动 Review 针对 `908acbc` 提出上述 3 项，当前均已修复；新提交推送后需等待最新 HEAD 的自动 Review 和必需 CI。首轮免费检查通过；`RAG Smoke Evaluation (8 cases, real API)` 因未启用合法 Provider 凭据而 skipped，故不能记为 `MODEL_QUALITY_PASS`。未发生真实模型调用。
-- PR #73 Follow-up 已在独立 Worktree `C:\Users\wh\.codex\worktrees\model-health-followup\agent` 完成本地代码与测试：后端定向 `43 passed`，与价格巡检管理端一并运行的前端定向 `60 passed`；尚未提交或创建 PR。下一步先收口 #82 最新 HEAD Review / CI，然后提交该分支并创建 #73 Follow-up。
+- PR #73 Follow-up 已提交并创建：[fix(model-health): align probe results with runtime semantics](https://github.com/Jayus-07/agent/pull/83)，HEAD `64a22abf25c94acd09338fde7c09612ee6e3638e`。后端定向 `43 passed`，前端定向 `60 passed`，`py_compile`、定向 Ruff、`git diff --check` 通过；PR checks 与最新 HEAD Review 尚待完成。
+- PR #82 首轮 CI 发现 settings/models 页面摘要漏掉 `cancelled` 状态映射，导致 TypeScript 检查与 Next.js build 失败。已补为“已取消”；本地 `npx tsc --noEmit` 通过，价格巡检详情组件测试 `2 passed`。待提交推送后重新等待最新 HEAD Review 与 CI。真实 API 评测仍为 skipped，不能记为 `MODEL_QUALITY_PASS`。
 
 ## 后续门禁
 

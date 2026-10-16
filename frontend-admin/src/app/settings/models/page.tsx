@@ -127,7 +127,7 @@ export default function ModelConfigPage() {
       const failedSources = latest?.sources_failed ?? 0
       const mismatches = latest?.system_mismatches ?? 0
       return [
-        { icon: <Activity size={15} />, label: '最近运行', value: latest ? ({ running: '运行中', succeeded: '完成', partial: '部分完成', failed: '失败' }[latest.status]) : '尚未运行', note: latest ? latest.started_at : '等待定时任务首次执行' },
+        { icon: <Activity size={15} />, label: '最近运行', value: latest ? ({ running: '运行中', succeeded: '完成', partial: '部分完成', failed: '失败', cancelled: '已取消' }[latest.status]) : '尚未运行', note: latest ? latest.started_at : '等待定时任务首次执行' },
         { icon: <AlertTriangle size={15} />, label: '价格差异', value: String(mismatches), note: mismatches ? '官方价格与系统价格不一致' : '最近运行未发现差异', tone: (mismatches ? 'bad' : 'good') as 'bad' | 'good' },
         { icon: <CheckCircle2 size={15} />, label: '来源状态', value: latest ? `${latest.sources_total - failedSources}/${latest.sources_total}` : '—', note: failedSources ? `${failedSources} 个来源读取失败` : '最近运行读取成功', tone: (failedSources ? 'bad' : 'good') as 'bad' | 'good' },
         { icon: <Database size={15} />, label: '运行记录', value: String(monitor.data?.items.length ?? 0), note: '最近 30 次巡检' },
