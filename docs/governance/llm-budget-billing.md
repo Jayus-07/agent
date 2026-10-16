@@ -55,6 +55,6 @@
 
 `model.price_page_monitor` 由 Celery Beat 每日 08:00（Asia/Shanghai）读取固定的官方价格页面，记录 Doubao Seed 2.0 mini、Qwen3.7 Text Embedding 和 Qwen3.7 Text Rerank 的北京地域刊例价。它对比前次有效观测和当前 `model_price` 已审核生效行，分别报告供应商价格变化、系统价格不一致以及页面读取/解析失败。
 
-巡检告警复用 `backend/observability/alerts.py` 的 JSONL、Prometheus 和可选 `ALERT_WEBHOOK_URL` 通道。管理端“模型与供应商 → 价格巡检”展示运行状态、计划时间、各价格来源结果、系统与官方价格对照、官方价格变化和已触发的告警事件；告警投递是异步 best-effort，因此页面只展示触发记录，不宣称 webhook 已送达。`model_price_monitor_runs` 保留每次运行的状态与结构化结果，Worker 异常退出时未完成记录会维持 `running`，便于识别未收敛任务。
+巡检告警复用 `backend/observability/alerts.py` 的 JSONL、Prometheus 和可选 `ALERT_WEBHOOK_URL` 通道。管理端“模型与供应商 → 价格巡检”展示运行状态、计划时间、各价格来源结果、系统与官方价格对照、官方价格变化和已触发的告警事件；告警投递是异步 best-effort，因此页面只展示触发记录，不宣称 webhook 已送达。迁移 `100_model_price_change_alert_outbox.sql` 将价格变化事件与当日观测一并持久化；Worker 在告警触发前退出时，重跑会恢复 pending 事件。告警调用返回后事件标记为 `triggered`，通知送达状态仍为 `unknown`，同日重跑不会重复处理已触发事件。可捕获的 Worker 异常记为 `failed`，Celery 撤销记为 `cancelled`；进程被强制终止时，巡检运行记录可能仍为 `running`，需与 Celery 任务终态对账。
 
-每日观测只写入 `model_price_source_observations` 和巡检运行历史；巡检不调用 LLM、不产生 Provider 费用，也不导入、审批或覆盖 `model_price`。发现差异后仍须按价格治理的双人审核和 24 小时 canary 流程处理。供应商页面无法访问或格式变化时必须告警，不能把缺失报价记为零。默认直连官方站点；必须通过环境代理出网时设置 `MODEL_PRICE_MONITOR_USE_ENV_PROXY=true`。
+每日观测只写入 `model_price_source_observations`、变化告警 outbox 和巡检运行历史；巡检不调用 LLM、不产生 Provider 费用，也不导入、审批或覆盖 `model_price`。Doubao Seed 2.0 mini 官方常规在线价格按输入长度分段，而当前计费表只表示 `[0, 32]` 档；在统一价格模型覆盖其他档位前，LLM Proxy 对该模型限制输入不超过 32,000 token，并在预算预占前拒绝超限请求。该限制依据[火山方舟模型价格页](https://console.volcengine.com/ark/region:cn-beijing/docs/model-pricing)的常规在线档位。发现系统价格差异后仍须按价格治理的双人审核和 24 小时 canary 流程处理。供应商页面无法访问或格式变化时必须告警，不能把缺失报价记为零。默认直连官方站点；必须通过环境代理出网时设置 `MODEL_PRICE_MONITOR_USE_ENV_PROXY=true`。
