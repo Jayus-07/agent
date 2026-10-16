@@ -1,4 +1,6 @@
 """公开模型价格页解析、变化比较和 Celery 调度契约。"""
+from contextlib import contextmanager
+from datetime import date
 from decimal import Decimal
 
 import pytest
@@ -74,6 +76,54 @@ def test_rerank_parser_uses_beijing_per_million_price() -> None:
     assert quote.price_per_unit == Decimal("0.5")
     assert quote.currency == "CNY"
     assert quote.dimension == "input"
+
+
+def test_price_monitor_compares_only_an_active_approved_version() -> None:
+    from backend.infra.llm.price_page_monitor import (
+        PostgresPricePageMonitorRepository,
+    )
+
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def execute(self, statement, _params=None):
+            queries.append(statement)
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    class Connection:
+        def cursor(self, **_kwargs):
+            return Cursor()
+
+    @contextmanager
+    def connect():
+        yield Connection()
+
+    quote = parse_ark_prices(
+        """<h3>在线推理（常规）</h3><table>
+           <tr><td>doubao-seed-2.0-mini</td><td>输入长度 [0, 32]</td>
+           <td>0.2</td><td>-</td><td>0.017</td><td>0.04</td><td>-</td>
+           <td>2.0</td></tr></table>""",
+        content_sha256="a" * 64,
+    )[0]
+    repository = PostgresPricePageMonitorRepository(connection_factory=connect)
+
+    repository.record_and_compare([quote], observed_on=date(2026, 10, 16))
+
+    statement = str(queries[0])
+    assert "JOIN model_price_versions" in statement
+    assert "v.status = 'active'" in statement
+    assert "v.source = p.source" in statement
 
 
 def test_page_parser_fails_closed_when_expected_price_is_missing() -> None:
