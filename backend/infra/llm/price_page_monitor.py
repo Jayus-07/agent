@@ -401,6 +401,7 @@ class PostgresPricePageMonitorRepository:
         self._observation_table = f"{prefix}model_price_source_observations"
         self._run_table = f"{prefix}model_price_monitor_runs"
         self._price_table = f"{prefix}model_price"
+        self._versions_table = f"{prefix}model_price_versions"
 
     @staticmethod
     @contextmanager
@@ -439,16 +440,21 @@ class PostgresPricePageMonitorRepository:
         with self._connection_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    f"""SELECT DISTINCT ON (model_name, component, dimension)
-                                model_name, component, dimension, price_per_unit,
-                                unit, currency, price_table_version
-                         FROM {self._price_table}
-                         WHERE approval_status = 'approved'
-                           AND effective_from <= %s
-                           AND (effective_to IS NULL OR effective_to > %s)
+                    f"""SELECT DISTINCT ON (p.model_name, p.component, p.dimension)
+                                p.model_name, p.component, p.dimension,
+                                p.price_per_unit, p.unit, p.currency,
+                                p.price_table_version
+                         FROM {self._price_table} AS p
+                         JOIN {self._versions_table} AS v
+                           ON v.version = p.price_table_version
+                          AND v.status = 'active'
+                          AND v.source = p.source
+                         WHERE p.approval_status = 'approved'
+                           AND p.effective_from <= %s
+                           AND (p.effective_to IS NULL OR p.effective_to > %s)
                            AND ({filters})
-                         ORDER BY model_name, component, dimension,
-                                  effective_from DESC, id DESC""",
+                         ORDER BY p.model_name, p.component, p.dimension,
+                                  p.effective_from DESC, p.id DESC""",
                     [current_time, current_time, *filter_params],
                 )
                 current_prices = {
