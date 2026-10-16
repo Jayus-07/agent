@@ -36,13 +36,16 @@ def _redis_emit_fn(upload_id: str):
     return emit
 
 
-def _get_index_actor_id(upload_id: str) -> str:
-    """从持久化运行记录取回上传者身份，供 Worker 审计收口使用。"""
+def _get_index_identity(upload_id: str) -> tuple[str, str]:
+    """从持久化运行记录取回上传者和租户身份，供 Worker 可信绑定使用。"""
     try:
         from backend.rag.indexing.index_run_store_pg import get_index_run_store
 
         run = get_index_run_store().get_run(upload_id) or {}
-        return str(run.get("actor_id") or "")
+        return (
+            str(run.get("actor_id") or ""),
+            str(run.get("tenant_id") or ""),
+        )
     except Exception as exc:  # noqa: BLE001 — 审计身份缺失不应阻断索引终态
         from backend.shared.logger import logger
 
@@ -51,7 +54,12 @@ def _get_index_actor_id(upload_id: str) -> str:
             upload_id,
             exc,
         )
-        return ""
+        return "", ""
+
+
+def _get_index_actor_id(upload_id: str) -> str:
+    """兼容读取上传者身份的调用点。"""
+    return _get_index_identity(upload_id)[0]
 
 
 def _index_failure_exit(exc: BaseException, *, emit_fn, upload_id: str,
@@ -153,7 +161,7 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     )
 
     emit_fn = _redis_emit_fn(upload_id)
-    actor_id = _get_index_actor_id(upload_id)
+    actor_id, tenant_id = _get_index_identity(upload_id)
     t0 = _time.time()
     if retries:
         emit_fn("uploading", f"索引重试（第 {retries}/{CELERY_MAX_RETRIES} 次）...")
@@ -177,8 +185,33 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
     # Phase1 Step8：TaskState 包装（租约/状态落库/节点边界 pause-cancel，
     # Phase2 Step2 起异常在此层按分类落 error_type）。
     try:
-        result = run_with_task_state(db_task_id, upload_id, run_index,
-                                     retries=retries, worker=worker)
+        def run_with_identity() -> dict:
+            """绑定运行记录中的可信身份、租户和请求级模型预算。"""
+            from backend.core.request_context import RequestContext
+            from backend.infra.llm.budget import bind_request_budget
+
+            RequestContext(
+                session_id=upload_id,
+                user_id=actor_id,
+                tenant_id=tenant_id,
+                kb_id=kb_id,
+                department=department,
+            ).bind()
+            if actor_id and tenant_id:
+                # 后台索引没有 HTTP trace 入口；upload_id 作为稳定请求键，
+                # 让重试沿用同一请求预算，并把预占归属到上传者与租户。
+                bind_request_budget(
+                    upload_id, user_id=actor_id, tenant_id=tenant_id,
+                )
+            return run_with_task_state(
+                db_task_id, upload_id, run_index,
+                retries=retries, worker=worker,
+            )
+
+        # solo Worker 会复用线程；新 Context 防止身份和预算泄漏到下一条任务。
+        from contextvars import Context
+
+        result = Context().run(run_with_identity)
     except AdmissionDeferred:
         # admission defer 非业务失败（Phase2 Step4）：不进失败出口，
         # 由壳层按 delay countdown 重投（保持 rag_index 队列亲和）

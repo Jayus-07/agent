@@ -1,6 +1,7 @@
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.chunking import (
     FinancialTableChunkStrategy,
+    RecursiveChunkStrategy,
     StructureChunkStrategy,
     coverage_audit,
 )
@@ -329,6 +330,37 @@ def test_meaningful_english_pdf_text_is_not_rejected_by_chinese_ratio():
         text, {"doc_type": "general", "chunk_type": "paragraph"},
     )
     assert kept, reason
+
+
+def test_pdf_source_identifier_survives_filter_and_coverage_audit():
+    """PDF 页内有效编号不能因中文比例过滤而造成源叶覆盖缺口。"""
+    from backend.rag.indexing.indexer import _filter_index_chunks
+
+    source_text = "第1页 SENTINEL-OCR-P01"
+    ast = DocumentAST(
+        root=DocumentNode(
+            type="section",
+            text="",
+            level=0,
+            children=[DocumentNode(type="paragraph", text=source_text)],
+        ),
+        raw_text=source_text,
+    )
+    chunks = RecursiveChunkStrategy().split(ast, "source_text.pdf")
+    filtered, filtered_details = _filter_index_chunks(
+        chunks, ChunkFilter(), "source_text.pdf", "policy",
+    )
+
+    leaves = [
+        chunk for chunk in filtered
+        if chunk.metadata.get("granularity") == "leaf"
+    ]
+    assert any(source_text in chunk.page_content for chunk in leaves)
+    assert not any(
+        detail.get("reason") == "low_chinese_ratio"
+        for detail in filtered_details
+    )
+    assert coverage_audit(ast, filtered)["uncovered_count"] == 0
 
 
 

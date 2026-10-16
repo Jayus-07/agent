@@ -201,8 +201,8 @@ class TestExecuteIndexTaskImpl:
                             lambda *a, **kw: {"terminal": "done",
                                               "trace_id": "t-actor",
                                               "doc": {"doc_id": "d-actor"}})
-        monkeypatch.setattr(it, "_get_index_actor_id",
-                            lambda upload_id: "actor-42")
+        monkeypatch.setattr(it, "_get_index_identity",
+                            lambda upload_id: ("actor-42", "tenant-9"))
         settle = MagicMock()
         monkeypatch.setattr(ru, "_settle_index_result", settle)
 
@@ -210,6 +210,38 @@ class TestExecuteIndexTaskImpl:
 
         assert out["status"] == "done"
         assert settle.call_args.kwargs["actor_id"] == "actor-42"
+
+    def test_worker_binds_identity_and_budget_from_run_record(self, monkeypatch):
+        """Worker 模型用量和预占必须归属任务记录中的用户与租户。"""
+        from backend.infra.llm import budget
+
+        captured = {}
+        monkeypatch.setattr(ru, "_write_progress_redis", lambda *a, **kw: None)
+        monkeypatch.setattr(it, "_get_index_identity",
+                            lambda upload_id: ("actor-42", "tenant-9"))
+        monkeypatch.setattr(budget, "_config_mode", lambda: "enforce")
+
+        def index_with_usage_context(*args, **kwargs):
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+            )
+
+            captured["attribution"] = current_usage_attribution()
+            captured["budget"] = budget.current_request_budget()
+            return {"terminal": "done", "trace_id": "t-identity",
+                    "doc": {"doc_id": "d-identity"}}
+
+        monkeypatch.setattr(ru, "_do_index_sync", index_with_usage_context)
+        monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
+
+        out = it.execute_index_task_impl("upload-identity", "/docs/a.pdf", "a.pdf")
+
+        assert out["status"] == "done"
+        assert captured["attribution"]["user_id"] == "actor-42"
+        assert captured["attribution"]["tenant_id"] == "tenant-9"
+        assert captured["budget"].user_id == "actor-42"
+        assert captured["budget"].tenant_id == "tenant-9"
+        assert budget.current_request_budget() is None
 
     def test_success_returns_terminal(self, monkeypatch):
         redis_writes = []

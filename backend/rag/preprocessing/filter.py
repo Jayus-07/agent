@@ -131,10 +131,21 @@ def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
 
 
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+_LATIN_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]*(?:[-_/][A-Z0-9]+)+(?![A-Za-z0-9])"
+)
 
 
 def _has_meaningful_latin_text(text: str) -> bool:
-    """识别长英文正文，避免中文比例规则误杀英文文档。"""
+    """识别英文正文和代码标识，避免中文比例规则误杀有效内容。"""
+    identifiers = _LATIN_IDENTIFIER_RE.findall(text)
+    if any(
+        len(identifier) >= 6
+        or (len(identifier) >= 4 and any(char.isdigit() for char in identifier))
+        for identifier in identifiers
+    ):
+        return True
+
     words = _LATIN_WORD_RE.findall(text)
     latin_letters = sum(len(word) for word in words)
     all_letters = sum(1 for char in text if char.isalpha())
