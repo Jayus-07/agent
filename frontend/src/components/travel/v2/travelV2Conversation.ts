@@ -203,13 +203,13 @@ export function projectTravelV2TripFacts(
       drafts_included: false,
     },
     brief: {
-      origin: safeTripFactText(document.brief.origin, 100),
-      destination: safeTripFactText(document.brief.destination, 100),
-      start_date: safeTripFactText(document.brief.start_date, 32) || '待定',
+      origin: factText(document.brief.origin, 100),
+      destination: factText(document.brief.destination, 100),
+      start_date: factText(document.brief.start_date, 32) || '待定',
       day_count: finiteNumber(document.brief.day_count),
-      timezone: safeTripFactText(document.brief.timezone, 48),
+      timezone: factText(document.brief.timezone, 48),
       budget_amount: finiteNumber(document.brief.budget?.amount),
-      budget_currency: safeTripFactText(document.brief.budget?.currency, 8),
+      budget_currency: factText(document.brief.budget?.currency, 8),
     },
     days,
     arrangements: {

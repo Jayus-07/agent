@@ -119,6 +119,21 @@ describe('V2 Trip 会话关联', () => {
     expect((facts.arrangements as Record<string, unknown>).lodging_unarranged).toBe(false)
   })
 
+  it('长出发地和目的地被裁剪时明确标记事实截断', () => {
+    const trip = projectionTrip([])
+    trip.document.brief.origin = '出发地'.repeat(60)
+    trip.document.brief.destination = '目的地'.repeat(60)
+
+    const facts = projectTravelV2TripFacts(trip)
+    const brief = facts.brief as Record<string, unknown>
+    const truncation = facts.truncation as Record<string, unknown>
+
+    expect(String(brief.origin).length).toBeLessThanOrEqual(100)
+    expect(String(brief.destination).length).toBeLessThanOrEqual(100)
+    expect(truncation.applied).toBe(true)
+    expect(JSON.stringify(facts).length).toBeLessThanOrEqual(6500)
+  })
+
   it('保留酒店正式报价证据并区分过期或未经核验的价格', () => {
     const serverNow = '2026-10-17T12:00:00.000Z'
     const arrangements = {
