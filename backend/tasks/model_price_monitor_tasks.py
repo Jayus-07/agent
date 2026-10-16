@@ -32,6 +32,10 @@ _SOURCES = {
 }
 
 
+class ModelPriceMonitorExecutionFailed(RuntimeError):
+    """让 Celery 的任务终态与巡检失败记录保持一致。"""
+
+
 def _source_results(
     quotes: list[PriceQuote], failures: list[dict[str, str]]
 ) -> list[dict[str, object]]:
@@ -105,12 +109,9 @@ def monitor_model_price_pages() -> dict[str, object]:
             "[ModelPriceMonitor] 无法创建运行记录 error_type=%s",
             type(exc).__name__,
         )
-        return {
-            "ok": False,
-            "run_id": run_id,
-            "observed_on": observed_on.isoformat(),
-            "error_type": type(exc).__name__,
-        }
+        raise ModelPriceMonitorExecutionFailed(
+            f"无法创建运行记录: {type(exc).__name__}"
+        ) from exc
 
     try:
         quotes, failures = fetch_official_prices()
@@ -182,6 +183,10 @@ def monitor_model_price_pages() -> dict[str, object]:
             len(comparison.source_changes), len(comparison.system_mismatches),
             failed_source_count, status,
         )
+        if status == "failed":
+            raise ModelPriceMonitorExecutionFailed(
+                "所有官方价格来源均不可用或未解析到价格"
+            )
         return {
             "ok": status == "succeeded",
             "run_id": run_id,
@@ -192,6 +197,8 @@ def monitor_model_price_pages() -> dict[str, object]:
             "system_mismatches": len(comparison.system_mismatches),
             "sources_failed": failed_source_count,
         }
+    except ModelPriceMonitorExecutionFailed:
+        raise
     except Exception as exc:
         emit_alert(
             "MODEL_PRICE_MONITOR_FAILED",
@@ -224,10 +231,6 @@ def monitor_model_price_pages() -> dict[str, object]:
                 "[ModelPriceMonitor] 无法收敛运行状态 run_id=%s error_type=%s",
                 run_id, type(finish_exc).__name__,
             )
-        return {
-            "ok": False,
-            "run_id": run_id,
-            "observed_on": observed_on.isoformat(),
-            "status": "failed",
-            "error_type": type(exc).__name__,
-        }
+        raise ModelPriceMonitorExecutionFailed(
+            f"巡检保存或价格读取失败: {type(exc).__name__}"
+        ) from exc

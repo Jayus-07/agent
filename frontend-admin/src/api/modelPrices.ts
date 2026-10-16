@@ -43,6 +43,13 @@ export interface ModelPriceMonitorPriceResult {
   content_sha256: string;
   official: { price_per_unit: string; unit: string; currency: string };
   system: { price_per_unit: string; unit: string; currency: string; price_table_version?: string } | null;
+  comparison_currency?: string;
+  official_price_cny?: string | null;
+  system_price_cny?: string | null;
+  official_fx_to_cny?: string | null;
+  system_fx_to_cny?: string | null;
+  comparison_tolerance_cny?: string | null;
+  comparison_error?: string;
   matches_system: boolean;
 }
 export interface ModelPriceMonitorRun {

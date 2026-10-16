@@ -14,14 +14,22 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from html.parser import HTMLParser
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import psycopg2.extras
 import requests
 
+from backend.config.budget import (
+    BUDGET_BASE_CURRENCY,
+    BUDGET_FX_USD_CNY,
+    to_base_currency,
+)
 from backend.config.database import MEMORY_DB_CONFIG
 
 MAX_PAGE_BYTES = 2 * 1024 * 1024
+MAX_REDIRECTS = 5
+_MODEL_PRICE_STORAGE_QUANTUM = Decimal("0.000001")
+_MODEL_PRICE_STORAGE_HALF_QUANTUM = _MODEL_PRICE_STORAGE_QUANTUM / 2
 _ALLOWED_HOSTS = {
     "volcengine_ark_doubao_seed_2_0_mini": {
         "console.volcengine.com", "ark.volcengine.com",
@@ -291,15 +299,9 @@ def fetch_official_prices(
     try:
         for source_id, url, parser in _SOURCE_PARSERS:
             try:
-                response = client.get(url, timeout=(5, 20), headers=headers)
-                response.raise_for_status()
-                final_host = (urlparse(response.url).hostname or "").lower()
-                if final_host not in _ALLOWED_HOSTS[source_id]:
-                    raise ValueError("供应商页面重定向到非白名单主机")
-                content = response.content
-                if len(content) > MAX_PAGE_BYTES:
-                    raise ValueError("供应商价目页超过大小上限")
-                text = response.text
+                content, text = _fetch_official_page(
+                    client, source_id=source_id, url=url, headers=headers
+                )
                 page_hash = _content_hash(content)
                 quotes.extend(parser(text, content_sha256=page_hash))
             except Exception as exc:
@@ -311,6 +313,81 @@ def fetch_official_prices(
         if close_client:
             client.close()
     return quotes, failures
+
+
+def _validate_source_url(source_id: str, url: str) -> None:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("供应商页面 URL 端口无效") from exc
+    if (
+        parsed.scheme != "https"
+        or host not in _ALLOWED_HOSTS[source_id]
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+    ):
+        raise ValueError("供应商页面 URL 不在 HTTPS 主机白名单内")
+
+
+def _fetch_official_page(
+    client: Any,
+    *,
+    source_id: str,
+    url: str,
+    headers: dict[str, str],
+) -> tuple[bytes, str]:
+    """逐跳校验 HTTPS 白名单重定向，并在流式读取时限制页面大小。"""
+    current_url = url
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        _validate_source_url(source_id, current_url)
+        response = client.get(
+            current_url,
+            timeout=(5, 20),
+            headers=headers,
+            allow_redirects=False,
+            stream=True,
+        )
+        try:
+            final_url = getattr(response, "url", current_url) or current_url
+            _validate_source_url(source_id, final_url)
+            status_code = response.status_code
+            if 300 <= status_code < 400:
+                location = response.headers.get("Location")
+                if not location:
+                    raise ValueError("供应商页面重定向缺少目标地址")
+                if redirect_count >= MAX_REDIRECTS:
+                    raise ValueError("供应商页面重定向次数超过上限")
+                next_url = urljoin(current_url, location)
+                _validate_source_url(source_id, next_url)
+                current_url = next_url
+                continue
+
+            response.raise_for_status()
+            content_length = response.headers.get("Content-Length")
+            if content_length and content_length.isdigit():
+                if int(content_length) > MAX_PAGE_BYTES:
+                    raise ValueError("供应商价目页超过大小上限")
+
+            content = bytearray()
+            for chunk in response.iter_content(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                content.extend(chunk)
+                if len(content) > MAX_PAGE_BYTES:
+                    raise ValueError("供应商价目页超过大小上限")
+            raw_content = bytes(content)
+            encoding = (
+                getattr(response, "encoding", None)
+                or getattr(response, "apparent_encoding", None)
+                or "utf-8"
+            )
+            return raw_content, raw_content.decode(encoding, errors="replace")
+        finally:
+            response.close()
+    raise ValueError("供应商页面重定向次数超过上限")
 
 
 class PostgresPricePageMonitorRepository:
@@ -421,7 +498,8 @@ class PostgresPricePageMonitorRepository:
                             "source_url": quote.source_url,
                         })
                     system_price = current_prices.get(key)
-                    matches_system = _same_price(system_price, quote)
+                    price_comparison = _price_comparison(system_price, quote)
+                    matches_system = price_comparison["matches_system"]
                     prices.append({
                         **_quote_key(quote),
                         "source_id": quote.source_id,
@@ -433,6 +511,7 @@ class PostgresPricePageMonitorRepository:
                             _price_value(system_price)
                             if system_price is not None else None
                         ),
+                        **price_comparison,
                         "matches_system": matches_system,
                     })
                     if not matches_system:
@@ -443,6 +522,7 @@ class PostgresPricePageMonitorRepository:
                                 _price_value(system_price)
                                 if system_price is not None else None
                             ),
+                            **price_comparison,
                             "source_url": quote.source_url,
                         })
         return PriceComparison(recorded_count, source_changes, mismatches, prices)
@@ -568,13 +648,61 @@ def _price_value(value: Any) -> dict[str, str]:
 
 
 def _same_price(system_price: Any, quote: PriceQuote) -> bool:
-    if system_price is None:
-        return False
-    return (
-        Decimal(str(system_price["price_per_unit"])) == quote.price_per_unit
-        and system_price["unit"] == quote.unit
-        and system_price["currency"] == quote.currency
+    return bool(_price_comparison(system_price, quote)["matches_system"])
+
+
+def _price_comparison(system_price: Any, quote: PriceQuote) -> dict[str, Any]:
+    """按计费共用的 CNY 汇率折算，并尊重系统价格列的精度。"""
+    official_cny = to_base_currency(quote.price_per_unit, quote.currency)
+    official_fx = (
+        Decimal("1") if quote.currency.upper() == BUDGET_BASE_CURRENCY
+        else BUDGET_FX_USD_CNY
     )
+    if system_price is None:
+        return {
+            "comparison_currency": BUDGET_BASE_CURRENCY,
+            "official_price_cny": str(official_cny),
+            "system_price_cny": None,
+            "official_fx_to_cny": str(official_fx),
+            "system_fx_to_cny": None,
+            "comparison_tolerance_cny": None,
+            "matches_system": False,
+        }
+
+    system_currency = str(system_price["currency"]).strip().upper()
+    try:
+        system_cny = to_base_currency(
+            Decimal(str(system_price["price_per_unit"])), system_currency
+        )
+    except ValueError:
+        return {
+            "comparison_currency": BUDGET_BASE_CURRENCY,
+            "official_price_cny": str(official_cny),
+            "system_price_cny": None,
+            "official_fx_to_cny": str(official_fx),
+            "system_fx_to_cny": None,
+            "comparison_tolerance_cny": None,
+            "comparison_error": "unsupported_currency",
+            "matches_system": False,
+        }
+    system_fx = (
+        Decimal("1") if system_currency == BUDGET_BASE_CURRENCY
+        else BUDGET_FX_USD_CNY
+    )
+    tolerance_cny = _MODEL_PRICE_STORAGE_HALF_QUANTUM * system_fx
+    matches = (
+        system_price["unit"] == quote.unit
+        and abs(system_cny - official_cny) <= tolerance_cny
+    )
+    return {
+        "comparison_currency": BUDGET_BASE_CURRENCY,
+        "official_price_cny": str(official_cny),
+        "system_price_cny": str(system_cny),
+        "official_fx_to_cny": str(official_fx),
+        "system_fx_to_cny": str(system_fx),
+        "comparison_tolerance_cny": str(tolerance_cny),
+        "matches_system": matches,
+    }
 
 
 def _price_changed(previous: Any, quote: PriceQuote) -> bool:

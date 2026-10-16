@@ -172,7 +172,14 @@ function RunDetails({ run }: { run: ModelPriceMonitorRun }) {
         <tbody className="divide-y divide-slate-100">{prices.map((item) => <tr key={`${item.source_id}:${item.model_name}:${item.dimension}`}>
           <td className="px-3 py-2"><span className="font-medium text-slate-800">{item.model_name}</span><span className="ml-2 text-slate-500">{item.dimension}</span></td>
           <td className="px-3 py-2 font-mono text-slate-700">{price(item.official)}</td>
-          <td className="px-3 py-2 font-mono text-slate-700">{price(item.system)}{item.system?.price_table_version && <span className="ml-2 font-sans text-[10px] text-slate-400">版本 {item.system.price_table_version}</span>}</td>
+          <td className="px-3 py-2 font-mono text-slate-700">
+            {price(item.system)}{item.system?.price_table_version && <span className="ml-2 font-sans text-[10px] text-slate-400">版本 {item.system.price_table_version}</span>}
+            {item.official_price_cny && <span className="mt-1 block font-sans text-[10px] text-slate-500">
+              折算核对：官方 CNY {item.official_price_cny} · 系统 {item.comparison_error ? '币种无已登记汇率' : item.system_price_cny ? `CNY ${item.system_price_cny}` : '未配置'}
+              {item.system?.currency === 'USD' && item.system_fx_to_cny && ` · 汇率 1 USD = ${item.system_fx_to_cny} CNY`}
+              {item.comparison_tolerance_cny && ` · 精度容差 ${item.comparison_tolerance_cny} CNY`}
+            </span>}
+          </td>
           <td className="px-3 py-2">{item.matches_system ? <span className="text-emerald-700">一致</span> : <span className="font-medium text-red-700">需核对</span>}</td>
         </tr>)}</tbody>
       </table>

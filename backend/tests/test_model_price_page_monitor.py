@@ -101,6 +101,92 @@ def test_page_fetch_failures_use_the_same_ids_as_persisted_sources() -> None:
     }
 
 
+def test_page_fetch_rejects_untrusted_redirect_before_following_it() -> None:
+    from backend.infra.llm.price_page_monitor import fetch_official_prices
+
+    class _RedirectResponse:
+        status_code = 302
+        headers = {"Location": "http://127.0.0.1/internal"}
+
+        def __init__(self, url):
+            self.url = url
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class _Client:
+        def __init__(self):
+            self.calls = []
+            self.responses = []
+
+        def get(self, url, **kwargs):
+            self.calls.append((url, kwargs))
+            response = _RedirectResponse(url)
+            self.responses.append(response)
+            return response
+
+    client = _Client()
+    quotes, failures = fetch_official_prices(client)
+
+    assert quotes == []
+    assert len(client.calls) == 3
+    assert all(call[1]["allow_redirects"] is False for call in client.calls)
+    assert all(call[1]["stream"] is True for call in client.calls)
+    assert all(response.closed for response in client.responses)
+    assert {item["error_type"] for item in failures} == {"ValueError"}
+
+
+def test_page_fetch_stops_streaming_as_soon_as_size_limit_is_exceeded() -> None:
+    from backend.infra.llm.price_page_monitor import (
+        MAX_PAGE_BYTES,
+        _fetch_official_page,
+    )
+
+    class _OversizedResponse:
+        status_code = 200
+        headers = {}
+        encoding = "utf-8"
+
+        def __init__(self, url):
+            self.url = url
+            self.chunks_seen = 0
+            self.closed = False
+
+        def raise_for_status(self):
+            pass
+
+        def iter_content(self, chunk_size):
+            assert chunk_size == 64 * 1024
+            while True:
+                self.chunks_seen += 1
+                yield b"x" * chunk_size
+
+        def close(self):
+            self.closed = True
+
+    class _Client:
+        response = None
+
+        def get(self, url, **kwargs):
+            self.response = _OversizedResponse(url)
+            return self.response
+
+    from backend.infra.llm.price_page_monitor import ARK_URL
+
+    client = _Client()
+    with pytest.raises(ValueError, match="大小上限"):
+        _fetch_official_page(
+            client,
+            source_id="volcengine_ark_doubao_seed_2_0_mini",
+            url=ARK_URL,
+            headers={},
+        )
+
+    assert client.response.chunks_seen == MAX_PAGE_BYTES // (64 * 1024) + 1
+    assert client.response.closed
+
+
 def test_comparison_detects_currency_and_amount_mismatches() -> None:
     quote = parse_rerank_price(
         "<h2>Pricing</h2><h3>China (Beijing)</h3><table>"
@@ -120,11 +206,19 @@ def test_comparison_detects_currency_and_amount_mismatches() -> None:
     assert _same_price(exact_system_price, quote)
     assert not _same_price(wrong_currency, quote)
     assert not _same_price(wrong_amount, quote)
+    usd_system_price = {
+        "price_per_unit": Decimal("0.069444"),
+        "unit": "per_1m_tokens",
+        "currency": "USD",
+    }
+    assert _same_price(usd_system_price, quote)
+    usd_wrong_amount = {**usd_system_price, "price_per_unit": Decimal("0.069440")}
+    assert not _same_price(usd_wrong_amount, quote)
     assert _price_changed(exact_system_price, quote) is False
     assert _price_changed(wrong_currency, quote) is True
 
 
-def test_monitor_task_is_daily_and_registered_to_maintenance_queue() -> None:
+def test_monitor_task_is_daily_and_registered_to_report_queue() -> None:
     import backend.tasks.model_price_monitor_tasks  # noqa: F401
     from backend.tasks.celery_app import celery_app
     from backend.tasks.queue_router import resolve_for_celery_task
@@ -139,7 +233,7 @@ def test_monitor_task_is_daily_and_registered_to_maintenance_queue() -> None:
     assert entry["schedule"].minute == {0}
     assert celery_app.conf.timezone == "Asia/Shanghai"
     assert entry["options"]["queue"] == route.physical_queue
-    assert route.workload_class == "maintenance"
+    assert route.workload_class == "report"
 
 
 def test_monitor_migration_is_registered_for_memory_database() -> None:
@@ -213,3 +307,41 @@ def test_monitor_task_persists_partial_source_results_and_alert_events(
     assert set(alerts) == {
         "MODEL_PRICE_SOURCE_UNAVAILABLE", "MODEL_PRICE_SYSTEM_MISMATCH",
     }
+
+
+def test_all_sources_failed_persists_failure_and_fails_celery_task(monkeypatch):
+    from backend.infra.llm.price_page_monitor import PriceComparison
+    from backend.tasks import model_price_monitor_tasks as task_module
+
+    class _Repository:
+        def __init__(self):
+            self.finished = None
+
+        def start_run(self, *_args, **_kwargs):
+            pass
+
+        def record_and_compare(self, quotes, **_kwargs):
+            assert quotes == []
+            return PriceComparison(0, [], [], [])
+
+        def finish_run(self, run_id, **kwargs):
+            self.finished = (run_id, kwargs)
+
+    repo = _Repository()
+    alerts = []
+    monkeypatch.setattr(task_module, "PostgresPricePageMonitorRepository", lambda: repo)
+    monkeypatch.setattr(task_module, "fetch_official_prices", lambda: ([], [
+        {"source_id": source_id, "error_type": "Timeout"}
+        for source_id in task_module._SOURCES
+    ]))
+    monkeypatch.setattr(
+        "backend.observability.alerts.log_degradation",
+        lambda alert: alerts.append(alert.code),
+    )
+
+    with pytest.raises(task_module.ModelPriceMonitorExecutionFailed):
+        task_module.monitor_model_price_pages()
+
+    assert repo.finished[1]["status"] == "failed"
+    assert repo.finished[1]["error_type"] == "NoPriceQuotes"
+    assert "MODEL_PRICE_SOURCE_UNAVAILABLE" in alerts

@@ -62,7 +62,13 @@ describe('模型价格巡检管理视图', () => {
           source_updated_at: '',
           content_sha256: 'a'.repeat(64),
           official: { price_per_unit: '0.5', unit: 'per_1m_tokens', currency: 'CNY' },
-          system: { price_per_unit: '0.4', unit: 'per_1m_tokens', currency: 'USD' },
+          system: { price_per_unit: '0.069440', unit: 'per_1m_tokens', currency: 'USD' },
+          comparison_currency: 'CNY',
+          official_price_cny: '0.5',
+          system_price_cny: '0.49996800',
+          official_fx_to_cny: '1',
+          system_fx_to_cny: '7.20',
+          comparison_tolerance_cny: '0.00000360',
           matches_system: false,
         }],
         source_changes: [],
@@ -82,7 +88,9 @@ describe('模型价格巡检管理视图', () => {
 
     expect(container.textContent).toContain('官方价格')
     expect(container.textContent).toContain('CNY 0.5 / 1M tokens')
-    expect(container.textContent).toContain('USD 0.4 / 1M tokens')
+    expect(container.textContent).toContain('USD 0.069440 / 1M tokens')
+    expect(container.textContent).toContain('折算核对：官方 CNY 0.5 · 系统 CNY 0.49996800')
+    expect(container.textContent).toContain('汇率 1 USD = 7.20 CNY')
     expect(container.textContent).toContain('官方价与系统价格不一致')
     expect(container.textContent).toContain('Webhook 实际送达状态不在此处确认')
   })
