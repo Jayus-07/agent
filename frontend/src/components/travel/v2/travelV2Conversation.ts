@@ -239,10 +239,15 @@ export function projectTravelV2TripFacts(trip: TravelTripV2): Record<string, unk
         value.forEach((item) => visit(item, parentKey))
       } else if (value && typeof value === 'object') {
         for (const [key, child] of Object.entries(value)) {
-          if (typeof child === 'string' && child.length > 24
-            && !nonTruncatableKeys.has(key) && parentKey !== 'price_evidence') {
-            candidates.push({ object: value as Record<string, unknown>, key, value: child })
-          } else visit(child, key)
+          if (typeof child === 'string') {
+            // Trip 身份和价格核验证据必须保持完整，不能作为文本裁剪候选。
+            if (nonTruncatableKeys.has(key) || parentKey === 'price_evidence') continue
+            if (child.length > 24) {
+              candidates.push({ object: value as Record<string, unknown>, key, value: child })
+            }
+            continue
+          }
+          visit(child, key)
         }
       }
     }
