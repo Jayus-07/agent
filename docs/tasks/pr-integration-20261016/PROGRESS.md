@@ -199,3 +199,16 @@
 - #69：当前 SHA 的离线合同和安全回归通过；下一步需可安全注入凭据的隔离 Next BFF→APISIX→FastAPI、隔离 PostgreSQL/Redis、模型角色 Registry 与可核验账本，才能完成真实 T3。当前不具备该隔离服务链，保持 Draft。
 - #52：价格 Registry 冲突已解决并推送；当前 SHA 免费 CI 全部通过。GitHub `prompt-eval` 环境无 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`，也未发现批准预算快照；需授权方配置只读 Registry 连接、已批准价格和调用预算后，才能执行真实质量评测；未完成前保持 Draft/BLOCKED。
 - #76：代码已合并；098 在目标共享数据库的应用状态交给获授权部署/迁移流程确认，本任务不写共享或生产库。
+- #50 已 CLOSED（未合并）；GitHub 关闭评论记录它的不可用动作门禁已由 #72 合并实现覆盖，并给出当前 main 上 40 项前端定向测试证据。#60 已 CLOSED（未合并）；交接材料移至 #75，后由 #78 合并至 `e488194`，未重复合入旧 Draft。
+
+## 用户追加授权与本轮 #66 真实 PDF 验收（2026-10-16）
+
+- 用户授权使用 `C:\Users\wh\Desktop\不同文件测试文档\testset`，使用隔离数据库，并将真实模型 API 总支出控制在人民币 20 元以内；缺少模型价格时可自行从供应商官方价目页查价并补入隔离评测价格快照。
+- 对 testset 执行 `D:\Python\python.exe verify_testset.py`：75 PASS、0 FAIL；其中 `14_long_300_500p/progit_en_501p.pdf` 虽通过 manifest 检查，MuPDF 实际报告 XRef 损坏和结构修复，不能据此将其当成完整解析通过样本。
+- #66 工作树 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`，分支 `codex/rag-upload-b1-20261014`；提交 `e2575eb` 修复长文档 chunk 上限与损坏 PDF 页覆盖；随后提交 `560f1eb06cae4ac7695991fdbf2048c861aefdf3` 修复递归分块剥掉边界空格造成的真实文档 coverage 硬失败。两个提交均已推送，PR 仍为 Draft。新 HEAD CI 的 Detect/Secret Scan PASS；RAG Smoke preflight 尚 pending，真实 API Evaluation SKIPPED。
+- 实测 `progit_zh.pdf`：501 页、500 页有正文、`is_repaired=false`、5,395 chunks、未截断。抽样门禁后又以完整上限复核 AST 的 4,730 个 leaf：4,730/4,730、coverage 1.0、0 uncovered、QualityGate 无硬异常。峰值进程内存约 1.06 GiB。实测 `progit_en_501p.pdf`：`is_repaired=true`、仅 132/501 页有正文、909 chunks，QualityGate 返回硬异常 `pdf_page_coverage`，不会假报 Active；损坏源文件未修改。
+- 用户 testset 共 30 个支持格式文件完成一次无付费本地解析矩阵；其中发现并修复 `source_text.pdf` 的 chunk 边界空格丢失，当前 #66 HEAD 复测该 PDF 为 10/10 页、32 chunks、0 coverage 缺口、0 硬异常。testset 的损坏英文 PDF 被 `pdf_page_coverage` 拦截。扫描件 `scanned_partial_fail.pdf` 的离线 RapidOCR 返回 9/10 页并记录 1 页失败；现行 QualityGate 按项目既有规则以 `ocr_coverage_partial` 阻止不完整文档 Active，不能把 manifest 中“其余页正常索引”解释成允许部分正文冒充完整 Active。
+- 现有 cleaner 已只移除带明确标签的页码页脚；短裸数字、法规文号年份、表格比例/库存、产品参数均有回归断言，保持不确定时保留正文。
+- 定向验证：隔离 Docker PostgreSQL `agent_pr66_unit_20261016` 上 `test_batch_b1_content_integrity.py`、`test_pdf_parser.py`、`test_quality_gate.py`、`test_chunking_truncation_and_batch.py` 共 51 passed；source_text 与 501 页中文 PDF 实际门禁复测通过。py_compile、diff-check、secret scan 通过。全规则 Ruff 命中同文件存量 E402/I001/F401/E741/F841；忽略这些与本次改动无关项后对改动文件定向 lint 通过。
+- 官方价格源已核实：[阿里云 Qwen3.7 embedding](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api) 为 CNY 0.0005/1K input tokens，[Qwen3.7 rerank](https://help.aliyun.com/en/model-studio/qwen3-7-text-rerank) 为 CNY 0.5/1M tokens；[火山引擎 Doubao Seed 2.0 mini](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh&redirect=1) 标准在线档为 CNY 0.2/1M input、CNY 3/1M output。注意现有本地 Registry 的 Doubao 价格行记录为 USD 0.2/2.0 per 1M，币种/口径与官方页面不一致；不可复用为精确结算价或直接改共享主库。
+- 本地 Docker `agent_memory` 的只读调查确认它是 primary，不是评测门禁要求的价格 Registry 只读副本；GitHub `prompt-eval` environment 没有 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`。未发起模型 API 请求，预算支出 0 元；不把 skipped job 当通过，也不绕过价格账本门禁。下一步检查 #66 新 HEAD 必需 CI 终态，并继续施工 #69/#52 可离线完成的部分；真实 Worker/IndexRun/Search 与付费质量评测仍各自保持 Draft/未验收，先完成安全隔离和权威计费路径诊断。
