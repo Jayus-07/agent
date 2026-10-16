@@ -25,9 +25,9 @@
 | #74 | MERGED；PR HEAD 179d90ecf1adf87540707e5f4832a542df02d1f8；Merge SHA 5b372540800f1b6689d371e08e79fff009200425 | Trip URL/正式行程投影；本地与 GitHub 相关检查通过；真实 Provider/RAG Evaluation 未执行且不计通过 | MERGED |
 | #70 | 原 PR 已 MERGED，Merge SHA 5df8b0603355566e7fa1eb87906129c11a8211ab | 原 PR Review 0；跨会话唯一性走新 Follow-up #76 | MERGED（原 PR） |
 | #76 | MERGED；PR HEAD d47f43f10bd5914b0f13140d5daad18ae5b0e5b4；Merge SHA `7350cfe8dfb50bb6617bccb386603a5428e7747e`；后续 #77 将 main 推进到 `b3e2fb8` | 合并前共享项目库 duplicate-group 只读统计为 0；隔离真实 PostgreSQL 迁移/并发回归 1 passed；合并后在精确 Merge SHA 复跑隔离真实 PostgreSQL 1 passed。真实 API Evaluation skipped。098 尚未应用到共享数据库 | MERGED（共享库迁移状态仍待核实） |
-| #69 | OPEN、Draft、CLEAN；HEAD `a06ebe1815d7f4a97b6c5eff27029c20bfddebc9`；base `e4881940` | 已同步 #78 后 main；free preflight、contract-check、required gate、Detect、Secret Scan PASS；真实 API Evaluation SKIPPED。旧定向事件回归 106 passed；晚到事件隔离测试在 b3e2fb8 与 e488194 基线各 1 passed。真实 T3 未完成 | BLOCKED（隔离运行链和安全凭据注入缺失） |
-| #66 | OPEN、Draft；HEAD `d0d2d70164c73e801fd4084153738a1f5540648c`；base `e4881940`；mergeable | Worker 追踪修复本地 44 passed；页码歧义/正文保留回归 3 passed；py_compile/diff-check 通过。当前 SHA 的 RAG Smoke、free preflight、Detect、Secret Scan 全部 PASS；真实 API Evaluation skipped。目标旧任务仍无真实 IndexRun/Search 终态，旧 Worker/SIGKILL 日志已丢失 | BLOCKED（真实 PDF 终态未验证） |
-| #52 | OPEN、Draft、CLEAN；HEAD `c37b0ede41ca9b5667e9188eb0db0722ff10d073`；base `e4881940`；14 条 Review threads 全部已解决 | Registry/预算门禁冲突已整合；本地合并相关定向集 45 passed，编译、YAML 解析和 diff-check 通过。当前 SHA 的 preflight、Detect、Secret Scan、required `RAG Smoke (8 cases)` PASS；真实 API Evaluation 为 SKIPPED。缺只读价格 Registry 连接与获批预算 | BLOCKED（付费 T3 需获批价格、预算与账本证据） |
+| #69 | OPEN、Draft；HEAD `bf857fe8cb972f6d3cb83ff63f01734833dcdee3`；base `e4881940`；当前 mergeState `UNSTABLE`（新 HEAD 检查 pending） | 119 项 Trace/工作流/上下文定向回归通过；本轮隔离服务链使用 DB Registry 主模型 Doubao Seed 2.0 mini，真实 chat 成功并产生可信 actor/tenant usage 记录。真实 API Evaluation CI 仍 SKIPPED；全量 AG-08～20 未完成 | IN_PROGRESS（修复已推送；等待新 HEAD CI，剩余真实权限/RAG/SQL/Resume/费用验收） |
+| #66 | OPEN、Draft；HEAD `3a2ddf91d64cdd148379e1e07abe9d75d8e90091`；base `e4881940`；GitHub mergeState `CLEAN` | 当前 SHA 的 Detect/Secret Scan、RAG Smoke preflight 与 smoke wrapper PASS；真实 API Evaluation SKIPPED。testset PDF 在隔离环境完成真实 Upload→Celery Worker→IndexRun published→Registry active（42 chunks）→授权 Search，命中当前文档正文。单独分支调用尚未通过 #52 预算代理结算 | IN_PROGRESS（数据链验收通过；需与 #52 预算链安全集成后再合并） |
+| #52 | OPEN、Draft、CLEAN；HEAD `91db7640cd83828af93aeeccdda65fa3b960a85c`；base `e4881940`；旧 14 条 Review threads 已解决，最新自动 Review 早于当前 HEAD | 当前 SHA 的 preflight、Detect、Secret Scan、`RAG Smoke (8 cases)` PASS；真实 8-case API Evaluation SKIPPED。新修复使 usage.request_id 与预算 reservation 使用同一可信预算 ID；定向测试 34 passed。与 #66 临时组合的 Worker/预算/Search 集成验证通过；当前缺有效价格快照与只读 Registry 副本 | BLOCKED（正式价格审批/只读副本与 8-case 质量评测未完成） |
 | #50 | CLOSED | FE-4 已被 PR #72 覆盖；当前 main 对应三组定向前端测试 40/40 通过 | 已关闭过期 Draft |
 | #60 | CLOSED | 文档中 T1 已由 PR #61 合入；独立作品集交接材料由 #75 交付 | 已关闭旧 Draft |
 | #75 | MERGED；PR HEAD dba170373c4663919ab9b0e2b87b5f800d479310；Merge SHA 04846a61f889fa561b9c2d2184cd196c93e75dd5 | 合并后 3 条 Review 由 #78 修复；Follow-up 合并后已追加 Merge SHA 与验证证据并全部解决原线程 | MERGED（Review 收口完成） |
@@ -52,8 +52,8 @@
 | 线 | 当前状态 | 下一项实际动作 |
 | --- | --- | --- |
 | A Provider/旅游/客服 | #73/#74/#76 MERGED；#75 Follow-up #78 文档修复完成 | #78 的旧自动 Review summary 没有公开具体意见，暂不合并或关闭原 Review；继续处理其他线。098 已进 main，仍需在获授权发布环境执行迁移。 |
-| B RAG | #66 BLOCKED；#52 BLOCKED；#77 MERGED | #66 的 PDF upload/IndexRun 仍无可核验终态；#52 等批准价格/预算与账本门禁；#77 已合入 `b3e2fb8`，PR 与 main push 的免费检查通过。 |
-| C 主助手 | #69 IN_PROGRESS | 完成离线检查和可安全执行的合同验证；真实 Provider/权限/Trace/费用 T3 只能在凭据和隔离链可用时执行。 |
+| B RAG | #66 数据终态已验收；#52 价格门禁 BLOCKED；#77 MERGED | #66 Worker E2E 已通过，但其分支独立合并会使 Worker 调用缺少 #52 的有效预占/结算，暂不单独合并。#52 当前 HEAD 已修正 usage 与预算请求关联；8-case 真实评测仍受价格治理和只读 Registry 外部条件阻断。 |
+| C 主助手 | #69 IN_PROGRESS | Trace 跨线程/事件循环串线修复已推送并由新 HEAD CI 验证；继续完成真实 Memory、授权 RAG/SQL、SSE Resume、Trace/账本和失败终态验收。 |
 | 过期 PR | #50/#60 已关闭；#75 已合并 | #75 三条新增 Review 由 #78 修复；合并前暂不解决原线程。 |
 | main 集成 | IN_PROGRESS | MAIN-01～34 已逐项标注真实证据状态。其余 PR 当前均有独立外部门槛；恢复凭据、Docker/Worker 或数据库只读权限后继续对应施工与集成验收。 |
 
@@ -68,7 +68,7 @@
 
 ### #66：PDF Worker 真实终态
 
-- 当前 PR HEAD `d0d2d70164c73e801fd4084153738a1f5540648c`，包含 PDF 页码清洗修复 `96407e7` 和 Worker 追踪修复 `f3573f0`，并已同步 main `e488194`。页面数字保留定向回归 3 passed；Worker/运行时/存储集 44 passed；此前 PR 分支文档解析/coverage 集 77 passed。当前 SHA 的 RAG Smoke、free preflight、Detect、Secret Scan 均通过；真实 API Evaluation skipped。目标上传 `b96f4d86ebe3`、IndexRun `f7a06549-ba71-4abf-a134-3a7b3d35deb1` 在只读隔离库中未终结，两个快照的 stage 不一致，不能推断实际终态。Celery active/reserved/scheduled 为空。原 Worker/Celery/Docker SIGKILL 事件日志不可用，不能断言 OOM。
+- 当前 PR HEAD `ea6eab9ebe5e18237cbaa1a0a57eacf8a89f115b`，包含 PDF 页码清洗、Worker 追踪、递归分块边界空格和本轮内容覆盖修复；已同步 main `e488194`。页面数字保留回归 3 passed；Worker/运行时/存储集 44 passed；上传/索引/Celery 定向集 36 passed；覆盖路由/质量门禁集 27 passed；改动文件 py_compile、diff-check 和定向 Ruff 通过。该 SHA 的 Detect/Secret Scan PASS，RAG Smoke preflight 仍在运行；真实 API Evaluation skipped。目标上传 `b96f4d86ebe3`、IndexRun `f7a06549-ba71-4abf-a134-3a7b3d35deb1` 在只读隔离库中未终结，两个快照的 stage 不一致，不能推断实际终态。Celery active/reserved/scheduled 为空。原 Worker/Celery/Docker SIGKILL 事件日志不可用，不能断言 OOM。
 - 当前 Docker Desktop 可用；主 `agent` Compose 有 16 个共享服务运行，容器总内存约 3.1GiB/8GiB，RAG worker 上限 3GiB。启动完整隔离解析链可能使内存接近上限，未启动以免影响共享任务。
 - 只读启动并停止旧 `rag-pr55-e2e-evidence-db`：容器无网络/端口/bind mount，独占独立 evidence-copy 卷；该库只有 22 个其他 IndexRun，不含目标 upload；日志只有 PG 启动与诊断 SQL。另一个旧隔离源卷 `rag-pr55-e2e_pg_data` 的只读副本包含目标 upload/IndexRun。原 worker 容器已不存在，故无法恢复 SIGKILL 信号、memory event 或进程日志。
 - RAG-03 PDF 最终 IndexRun、RAG-08 Search 未完成；RAG-04/09 部分或未验证；RAG-12 未验证。PDF 清洗修复提交 `96407e7` 是早期分支提交而非当前 HEAD；该改动仍在当前 PR HEAD 的提交祖先中。
@@ -76,11 +76,21 @@
 - 本轮确认的代码缺口：上传路由在 Celery `apply_async` 成功后只回填 generic `tasks`，没有回填 `rag_index_runs.celery_task_id`；Worker 租约认领固定传 `worker=None`。已在 #66 修复并推送 `f3573f0c68f41a28a076b36d5bc0be1bbdbd4236`：运行记录回填 Celery ID，普通索引和重索引都把 Celery hostname 传到既有租约字段；回填失败记日志且不重复投递。
 - PR #66 HEAD 定向运行 `test_rag_upload_celery_mode.py`、`test_index_task_runtime.py`、`test_upload_failures_store.py` 共 44 passed，使用隔离 PostgreSQL 副本；py_compile、diff-check 通过。Windows Proactor teardown 有 2 条 warning。恢复并发单测 `test_case_d_concurrent_sweep_single_recovery` 单独重跑 1 passed；两文件恢复套件的一次整组执行未得到 pytest 汇总，不计为通过。临时副本容器/卷已清理，源卷仍保留。
 
+#### 2026-10-16 最新 HEAD 验收更新
+
+- 当前 #66 HEAD 为 `3a2ddf91d64cdd148379e1e07abe9d75d8e90091`，GitHub 该 SHA 的 Detect、Secret Scan、RAG Smoke preflight 与 smoke wrapper 均 PASS；真实 8-case API Evaluation 为 SKIPPED（不计通过）。隔离任务数据库 `agent_rag_e2e_memory`、Redis `pr66-worker-e2e-20261016-*`，测试文件基于授权 `source_text.pdf` 的临时副本；原件未修改。
+- #66 当前 SHA 单独真实 E2E：upload `ec61279f894a`，Celery task `743cbf6f-22ec-4f7f-90dd-d79b0d265173`，IndexRun `published / publish`，Registry `active`、42 chunks；授权 Search HTTP 200、10 条结果并命中当前文档唯一标记。模型角色 Registry 从 DB 加载（4 providers / 9 models / 10 credentials / 7 role overrides），实际调用付费 Qwen/Doubao Provider；该 #66 独立运行没有通过 #52 预算代理结算，不能据此证明费用闭环。
+- 将 #66 HEAD 与 #52 当前 HEAD `91db7640` 在临时 detached Worktree 组合，未改动任一 PR 分支。集成 E2E upload `1027ab7c148e`，IndexRun `published / publish`、Registry active、42 chunks；Search HTTP 200 并命中当前 PDF 的 `SENTINEL-OCR-P01`，doc_id 与本次文档一致。Worker 的 3 次 Qwen embedding 调用共 3,949 tokens，预算以 upload request_id 预占并结算 CNY 0.007836（12 个 user/tenant×day/month scope rows）；Search 的 1 次 5-token 调用亦有请求级预算，usage 与 reservation request_id 一致。该次文档 `llm_used=0`，没有 Doubao metadata 调用。
+- 隔离账本中该合成 user 的历史验证合计 33 次 Provider 调用、57,692 tokens、`billed_cost_cny` 合计 0.182506、无 `unknown` 行；这是现有 Registry 快照计价，不是供应商账单。按官方刊例价重算约 CNY 0.0383713，仍为列表价估算。现有 Registry 的 Doubao 行以 USD 0.2/2.0 per 1M 记录；火山引擎官方 Ark 在线推理对 `doubao-seed-2-0-mini-260428` 输入≤32K 为 CNY 0.2/M 输入、CNY 2/M 输出；Qwen3.7 embedding 官方价为 CNY 0.0005/1K。来源：[火山引擎模型计费](https://docs.volcengine.com/docs/LakeAIService/Largemodelbilling?lang=en)、[阿里云 Qwen Embedding 计费](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api)。
+- 直接 UPDATE 隔离 `model_price` 被 append-only trigger 拒绝并回滚。价格治理要求不同审核人双审、24 小时 canary，不能把旧错误币种行当精确价格，也不能伪造 reviewer。GitHub `prompt-eval` 当前 run 的免费 preflight PASS，付费 8-case job SKIPPED；没有使用假价格或绕过 CI 门禁。
+- PR #52 新发现并修复 usage.request_id 与预算 reservation request_id 不一致：Worker 局部 Trace ID 曾覆盖稳定 upload_id。提交 `91db7640cd83828af93aeeccdda65fa3b960a85c` 优先使用可信预算 request_id，trace_id 保持独立；新增两者不同的回归测试。定向集 34 passed，py_compile/diff-check 通过。提交已推送，当前 SHA Detect/Secret Scan/preflight/smoke PASS，真实 8-case Evaluation SKIPPED；Codex 自动 Review 仍针对旧 SHA `48675a4`。
+
 ### #69：主助手真实 T3
 
-- 当前 PR HEAD `a06ebe1815d7f4a97b6c5eff27029c20bfddebc9`，已包含 main `e488194`。已完成 Product/Tenant/User/Session/Request 事件作用域、晚到事件 fail-closed、安全元数据；定向事件作用域回归 106 passed，晚到事件测试在两个 main 基线各 1 passed。新 SHA 的 contract-check、free preflight、Detect、Secret Scan 均通过；真实 API Evaluation SKIPPED。
-- 隔离树缺少安全注入的 BFF API_KEY、Provider 凭据/Registry 角色和隔离 APISIX/账本链。Docker 可用，但默认 Compose 是共享栈且资源余量有限，未启动隔离全链。未复制生产密钥、未触碰共享数据库、未付费调用。
-- AG-09、AG-14/15 完整权限链路、AG-18/19 真实 Trace/费用、AG-20 真实 Provider 错误终态仍未验证。
+- PR HEAD `bf857fe8cb972f6d3cb83ff63f01734833dcdee3`，基于 main `e488194`。在隔离 Next BFF→APISIX→FastAPI 链路上确认 Runtime Registry 来自 DB：`main` 角色绑定 `doubao-seed-2.0-mini`，Provider 为付费 Doubao；“缺少本地 Doubao”不是根因。一次真实中文 chat 成功，usage 记录身份为测试 user/tenant，325 tokens、估算账本成本 CNY 0.003110（供应商实际账单未核对）。未触碰共享数据库。
+- 实际请求 Trace 中发现并行 `inventory_alert` workflow 曾借用请求线程上的全局 `_thread_current`，将不相关 SQL/Reporter spans 附加到 chat Trace。修复已提交并推送 `bf857fe`：ContextVar 优先，线程局部仅供同步代码回退；asyncio task/事件循环回调无 ContextVar 时 fail-closed；后台并行线程须显式 `bind(trace)`；Span 完成按创建时所属 Trace 通知 listener。同步更新 workflow/capability 调用点和夹具。
+- 当前 HEAD 定向测试合计 119 passed；包含 TraceCollector 57、Trace 修复 16、workflow executor 24、隔离线程/任务/事件循环回调回归 4，以及 token/version provenance、RAG claim rejection 和 capability 定向测试。临时隔离 PostgreSQL 测试容器已停止。py_compile、diff-check、tracer 与新回归测试 Ruff 通过。
+- 当前 GitHub HEAD 免费 preflight、contract-check 为 pending，Detect 与 Secret Scan PASS；真实 API Evaluation SKIPPED。此前真实单次 chat 不验证完整 Memory、多租户隔离、授权 RAG/SQL、SSE resume、副作用取消、Trace/费用闭环或安全失败终态；AG-08 部分通过，AG-09 有一次实际模型回答，AG-10～20 仍需按链路补验。PR 保持 Draft，不能据单次 chat 宣称 T3 完成。
 
 ## 施工证据
 
@@ -126,7 +136,7 @@
 
 - 原 main checkout 的用户变更和未跟踪目录保持原样。
 - 控制工作树每次先核对 diff/status；不做全局 cleanup。
-- 最近定向验证：#66 代码 HEAD 的 Worker/运行时/存储集 44 passed，PDF 页码歧义保留 3 passed；#69 晚到事件隔离测试在 b3e2fb8 与 e488194 基线分别 1 passed，此前事件作用域回归 106 passed；#76 精确 Merge SHA 的隔离 PostgreSQL 回归 1 passed；#73/#74 后端 API/健康契约 37 passed（仅测试令牌）。#52 代码 HEAD 的付费预检、模型绑定、预算、工作流和路径过滤测试 45 passed；#52/#66/#69 最新 SHA 的免费 CI 全部 PASS，真实 API Evaluation 均 skipped；#66 真实 PDF E2E/Search、#69 真实隔离 T3、#52 真实检索与账本尚未完成；#76 迁移尚未应用于共享数据库。
+- 最近定向验证：#66 当前 HEAD 的上传/索引/Celery 集 36 passed、覆盖路由/质量门禁 27 passed、Worker/运行时/存储集 44 passed、页码保留 3 passed；#69 晚到事件隔离测试在 b3e2fb8 与 e488194 基线分别 1 passed，此前事件作用域回归 106 passed；#76 精确 Merge SHA 的隔离 PostgreSQL 回归 1 passed；#73/#74 后端 API/健康契约 37 passed（仅测试令牌）。#52 代码 HEAD 的付费预检、模型绑定、预算、工作流和路径过滤测试 45 passed。#66 新 SHA 的 Detect/Secret Scan PASS，RAG Smoke preflight 仍运行；#52/#69 以此前已核验 SHA 的免费 CI PASS，真实 API Evaluation 均 skipped。#66 真实 PDF E2E/Search、#69 真实隔离 T3、#52 真实检索与账本尚未完成；#76 迁移尚未应用于共享数据库。
 
 
 ## main 集成验收逐项矩阵（当前证据）
@@ -181,7 +191,7 @@
 - 在控制 Worktree 执行 `git fetch origin --prune` 后，origin/main 为 `e4881940f1d39f82d1f7a938562e0e611f6677bb`；控制树已合入该基线。原 main checkout `D:\Program Files\workplace\agent` 仍有用户修改，保持未触碰。
 - PR #77 已正常合入，Merge SHA `b3e2fb85937d011179ed046b6d264a7a0f3454d4`。PR SHA `1093c39` 的 free preflight、RAG Smoke、Detect、Secret Scan 全部通过，真实 API Evaluation skipped；main push 的 8-case Smoke 和 Secret Scan 也通过，未运行付费 Probe。未配置 Registry Secret，因此没有真实价格/Provider 验收。
 - PR #69 当前 HEAD `a06ebe1815d7f4a97b6c5eff27029c20bfddebc9`，已包含 main `e488194`。晚到 memory event 隔离测试在同步前后均 1 passed，旧事件作用域集 106 passed；新 SHA 的 contract-check/preflight 仍运行。真实 Provider、隔离服务与权限/Trace/费用 T3 仍未验证。
-- PR #66 当前 HEAD `d0d2d70164c73e801fd4084153738a1f5540648c`，已包含 main `e488194`。Worker 追踪修复后 44 个相关测试通过，页码保留 3 项通过；新文档基线 SHA 的 CI 仍待更新。目标旧 Worker 日志和 memory events 不存在，不能还原 SIGKILL 原因；真实 PDF E2E 仍未执行。
+- PR #66 当前 HEAD `ea6eab9ebe5e18237cbaa1a0a57eacf8a89f115b`，已包含 main `e488194`。新修复将 Parent/Leaf 分开 SimHash 去重，并保留有源身份的短 Leaf，防止质量门禁之前丢失有效正文。上传/索引/Celery 36 passed、覆盖路由/质量门禁 27 passed；Detect/Secret Scan PASS，preflight 仍运行；真实 API Evaluation skipped。目标旧 Worker 日志和 memory events 不存在，不能还原 SIGKILL 原因；真实 PDF E2E 仍未执行。
 - PR #52 当前 HEAD `c37b0ede41ca9b5667e9188eb0db0722ff10d073`，已同步 main `e488194`；14 条 Review 全部已解决，代码集成定向测试 45 passed。前一 SHA 的免费 checks 全部 PASS；新文档基线 SHA 的 CI 仍待更新。真实质量评测和账本仍需获批价格/预算快照；不发起付费调用。
 - PR #78 已合并为 main `e488194`；Follow-up 修复的三条 #75 原始 Review 已附合并 SHA/验证证据并全部解决。
 
@@ -195,9 +205,9 @@
 
 - #75/#78：Follow-up #78 已合入 main `e488194`；三条旧 Review 均已追加证据并解决，收口完成。
 - #77：已于 `b3e2fb8` 合并；当前 main 为 `e488194`，main push 的免费 smoke/scan 已验证，无付费 Probe。
-- #66：当前 SHA 免费检查通过、无 Review；真实 PDF 上传到 Worker/IndexRun/Active/Search 仍未执行。目标旧 Worker/Beat 日志和容器事件已丢失，不能判断历史 SIGKILL 原因。下一步需提供隔离 Worker/存储环境、可复现目标 PDF 和批准的价格/预算（若表格描述会调用 Provider），再走完整 E2E；此前保持 Draft/BLOCKED，不在共享栈重放。
-- #69：当前 SHA 的离线合同和安全回归通过；下一步需可安全注入凭据的隔离 Next BFF→APISIX→FastAPI、隔离 PostgreSQL/Redis、模型角色 Registry 与可核验账本，才能完成真实 T3。当前不具备该隔离服务链，保持 Draft。
-- #52：价格 Registry 冲突已解决并推送；当前 SHA 免费 CI 全部通过。GitHub `prompt-eval` 环境无 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`，也未发现批准预算快照；需授权方配置只读 Registry 连接、已批准价格和调用预算后，才能执行真实质量评测；未完成前保持 Draft/BLOCKED。
+- #66：当前 SHA 的 PDF→Worker→IndexRun→Active→Search 已真实通过；旧 SIGKILL 的原始 Worker/Beat 日志和内存事件已丢失，历史退出根因仍未验证。#66 单独 Worker 调用缺少 #52 预算代理，因此不得单独合并；已在 #66+#52 临时组合树证明 Qwen Worker 调用和 Search 使用者/租户预算结算。下一步完成 #52 价格快照治理/质量评测，再更新两 PR 基线并做最终合并验收。
+- #69：真实 DB Registry→付费 Doubao→隔离 Next BFF/APISIX/FastAPI chat 已成功；新 HEAD `bf857fe` 修复观测到的跨线程/async Trace 串线，119 项定向回归通过。等待当前 HEAD CI；下一步补验 Memory、RAG/SQL 授权、SSE resume/取消、费用归因和模型失败终态，未完前保持 Draft。
+- #52：最新 HEAD `91db7640` 的 Detect/Secret Scan、preflight 与 smoke wrapper PASS，真实 8-case API Evaluation SKIPPED。与 #66 集成的真实 Worker/Search 预算结算通过，但不能替代检索质量评测。DB 模型角色和付费 Provider 配置可用；阻断来自价格 Registry：本地仅有 primary，GitHub 没有 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`，Doubao approved 行币种与官方 CNY 刊例价不符。需完成正式价格治理并配置只读副本后，才能安全运行 8-case；保持 Draft/BLOCKED，不伪造审批。
 - #76：代码已合并；098 在目标共享数据库的应用状态交给获授权部署/迁移流程确认，本任务不写共享或生产库。
 - #50 已 CLOSED（未合并）；GitHub 关闭评论记录它的不可用动作门禁已由 #72 合并实现覆盖，并给出当前 main 上 40 项前端定向测试证据。#60 已 CLOSED（未合并）；交接材料移至 #75，后由 #78 合并至 `e488194`，未重复合入旧 Draft。
 
@@ -205,10 +215,11 @@
 
 - 用户授权使用 `C:\Users\wh\Desktop\不同文件测试文档\testset`，使用隔离数据库，并将真实模型 API 总支出控制在人民币 20 元以内；缺少模型价格时可自行从供应商官方价目页查价并补入隔离评测价格快照。
 - 对 testset 执行 `D:\Python\python.exe verify_testset.py`：75 PASS、0 FAIL；其中 `14_long_300_500p/progit_en_501p.pdf` 虽通过 manifest 检查，MuPDF 实际报告 XRef 损坏和结构修复，不能据此将其当成完整解析通过样本。
-- #66 工作树 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`，分支 `codex/rag-upload-b1-20261014`；提交 `e2575eb` 修复长文档 chunk 上限与损坏 PDF 页覆盖；随后提交 `560f1eb06cae4ac7695991fdbf2048c861aefdf3` 修复递归分块剥掉边界空格造成的真实文档 coverage 硬失败。两个提交均已推送，PR 仍为 Draft。新 HEAD CI 的 Detect/Secret Scan PASS；RAG Smoke preflight 尚 pending，真实 API Evaluation SKIPPED。
+- #66 工作树 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`，分支 `codex/rag-upload-b1-20261014`；提交 `e2575eb` 修复长文档 chunk 上限与损坏 PDF 页覆盖；`560f1eb` 修复递归分块剥掉边界空格；本轮提交 `ea6eab9` 修复 Parent/Leaf 误去重和有效短 Leaf 被过滤。均已推送，PR 仍为 Draft。新 HEAD Detect/Secret Scan PASS，RAG Smoke preflight 尚 pending，真实 API Evaluation SKIPPED。
 - 实测 `progit_zh.pdf`：501 页、500 页有正文、`is_repaired=false`、5,395 chunks、未截断。抽样门禁后又以完整上限复核 AST 的 4,730 个 leaf：4,730/4,730、coverage 1.0、0 uncovered、QualityGate 无硬异常。峰值进程内存约 1.06 GiB。实测 `progit_en_501p.pdf`：`is_repaired=true`、仅 132/501 页有正文、909 chunks，QualityGate 返回硬异常 `pdf_page_coverage`，不会假报 Active；损坏源文件未修改。
 - 用户 testset 共 30 个支持格式文件完成一次无付费本地解析矩阵；其中发现并修复 `source_text.pdf` 的 chunk 边界空格丢失，当前 #66 HEAD 复测该 PDF 为 10/10 页、32 chunks、0 coverage 缺口、0 硬异常。testset 的损坏英文 PDF 被 `pdf_page_coverage` 拦截。扫描件 `scanned_partial_fail.pdf` 的离线 RapidOCR 返回 9/10 页并记录 1 页失败；现行 QualityGate 按项目既有规则以 `ocr_coverage_partial` 阻止不完整文档 Active，不能把 manifest 中“其余页正常索引”解释成允许部分正文冒充完整 Active。
 - 现有 cleaner 已只移除带明确标签的页码页脚；短裸数字、法规文号年份、表格比例/库存、产品参数均有回归断言，保持不确定时保留正文。
-- 定向验证：隔离 Docker PostgreSQL `agent_pr66_unit_20261016` 上 `test_batch_b1_content_integrity.py`、`test_pdf_parser.py`、`test_quality_gate.py`、`test_chunking_truncation_and_batch.py` 共 51 passed；source_text 与 501 页中文 PDF 实际门禁复测通过。py_compile、diff-check、secret scan 通过。全规则 Ruff 命中同文件存量 E402/I001/F401/E741/F841；忽略这些与本次改动无关项后对改动文件定向 lint 通过。
-- 官方价格源已核实：[阿里云 Qwen3.7 embedding](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api) 为 CNY 0.0005/1K input tokens，[Qwen3.7 rerank](https://help.aliyun.com/en/model-studio/qwen3-7-text-rerank) 为 CNY 0.5/1M tokens；[火山引擎 Doubao Seed 2.0 mini](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh&redirect=1) 标准在线档为 CNY 0.2/1M input、CNY 3/1M output。注意现有本地 Registry 的 Doubao 价格行记录为 USD 0.2/2.0 per 1M，币种/口径与官方页面不一致；不可复用为精确结算价或直接改共享主库。
-- 本地 Docker `agent_memory` 的只读调查确认它是 primary，不是评测门禁要求的价格 Registry 只读副本；GitHub `prompt-eval` environment 没有 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`。未发起模型 API 请求，预算支出 0 元；不把 skipped job 当通过，也不绕过价格账本门禁。下一步检查 #66 新 HEAD 必需 CI 终态，并继续施工 #69/#52 可离线完成的部分；真实 Worker/IndexRun/Search 与付费质量评测仍各自保持 Draft/未验收，先完成安全隔离和权威计费路径诊断。
+- 定向验证：隔离 Docker PostgreSQL `agent_pr66_unit_20261016` 上 PDF/chunk/quality-gate 套件 51 passed；本轮 `test_rag_upload_to_index_e2e.py` + `test_rag_upload_celery_mode.py` 36 passed，`test_faq_routing.py` + `test_pr55_coverage_quality_gate.py` 27 passed；source_text 与 501 页中文 PDF 实际门禁复测通过。改动文件 py_compile、diff-check 和定向 Ruff 通过（跳过仓库存量 F811 重定义）；secret scan 由新 SHA CI 验证。
+- 官方价格源已核实：[阿里云 Qwen3.7 embedding](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api) 为 CNY 0.0005/1K input tokens；[火山引擎 Doubao Seed 2.0 mini](https://docs.volcengine.com/docs/LakeAIService/Largemodelbilling?lang=en) 对 `doubao-seed-2-0-mini-260428` 输入≤32K 档为 CNY 0.2/1M input、CNY 2/1M output。现有 approved Doubao 行记 USD 0.2/2.0 per 1M，不能当作官方 CNY 价格的精确结算快照；Qwen Registry 行为 USD，换汇后与官方价近似但不完全相等。
+- 用户追加 CNY 20 预算已用于隔离真实 API 验证；不使用生产数据库、不打印或持久化凭据。隔离账本累计记录 33 个成功 Provider calls / 57,692 tokens，无 unknown 价格行；现有快照合计 CNY 0.182506，按官方刊例价重算约 CNY 0.0383713（都不是供应商发票）。其中 #66 单独 E2E 确认 DB 配置的付费模型 Provider 调用，但未走预算预占；#66+#52 临时集成后 Qwen Worker 调用与 Search 均按可信 user/tenant/request 预占并结算。完整 8-case 真实检索质量评测仍 SKIPPED，不计通过。
+- 运行期间临时 harness 的路径字面量、空隔离向量/BM25 前缀、幂等键复用和搜索标记不匹配均已定位并修复；最终集成 E2E 上传/索引/Search PASS。下一步在价格治理外部条件解决前，继续 #69 可离线验收与 #66/#52 基线施工；价格审批门禁不绕过。
