@@ -110,6 +110,7 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "model.health_scan": ("maintenance", "beat_binding"),
     "model.health_check_one": ("maintenance", "beat_binding"),
     "budget.reconciliation_check": ("maintenance", "beat_binding"),
+    "model.price_page_monitor": ("report", "beat_binding"),
     "prompts.poll_github_eval": ("maintenance", "prompt_eval_polling"),
 }
 
