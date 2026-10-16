@@ -94,4 +94,25 @@ describe('模型价格巡检管理视图', () => {
     expect(container.textContent).toContain('官方价与系统价格不一致')
     expect(container.textContent).toContain('Webhook 实际送达状态不在此处确认')
   })
+
+  it('显示 Celery revoke 收敛后的取消状态', () => {
+    const run: ModelPriceMonitorRun = {
+      run_id: 'run-cancelled',
+      observed_on: '2026-10-16',
+      status: 'cancelled',
+      started_at: '2026-10-16T08:00:00+08:00',
+      finished_at: '2026-10-16T08:00:01+08:00',
+      sources_total: 3,
+      sources_failed: 0,
+      quotes_recorded: 0,
+      source_changes: 0,
+      system_mismatches: 0,
+      source_results: [],
+      comparison_results: {},
+      alert_events: [],
+      error_type: 'TaskRevokedError',
+    }
+
+    expect(mount(run).textContent).toContain('已取消')
+  })
 })

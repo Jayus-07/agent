@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import psycopg2
 import pytest
-from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
+from celery.exceptions import SoftTimeLimitExceeded
 
 from backend.infra.llm.price_page_monitor import (
     PostgresPricePageMonitorRepository,
@@ -27,6 +27,7 @@ def _replace_identifiers(sql: str, prefix: str) -> str:
         "model_price_change_alert_events",
         "idx_model_price_source_observations_latest",
         "idx_model_price_monitor_runs_started",
+        "idx_model_price_monitor_runs_celery_task",
         "idx_model_price_change_alert_events_pending",
         "model_price_monitor_runs_status_check",
     )
@@ -245,10 +246,7 @@ def test_price_change_outbox_recovers_after_worker_failure(
 
 @pytest.mark.parametrize(
     ("exception", "expected_status"),
-    [
-        (SoftTimeLimitExceeded, "failed"),
-        (TaskRevokedError, "cancelled"),
-    ],
+    [(SoftTimeLimitExceeded, "failed")],
 )
 def test_interrupted_celery_task_matches_database_terminal_state(
     isolated_price_monitor_db, monkeypatch, exception, expected_status,
@@ -276,3 +274,65 @@ def test_interrupted_celery_task_matches_database_terminal_state(
                 "ORDER BY started_at DESC LIMIT 1"
             )
             assert cur.fetchone() == (expected_status, exception.__name__)
+
+
+@pytest.mark.parametrize(
+    ("has_running_row", "terminated", "expected_status"),
+    [
+        (True, True, "cancelled"),
+        (False, False, "cancelled"),
+        (True, False, "running"),
+    ],
+)
+def test_celery_revoke_signal_reconciles_monitor_runs(
+    isolated_price_monitor_db, monkeypatch, has_running_row, terminated,
+    expected_status,
+):
+    from types import SimpleNamespace
+
+    from celery.signals import task_revoked
+
+    from backend.tasks import model_price_monitor_tasks as task_module
+
+    connect, prefix = isolated_price_monitor_db
+    repository = PostgresPricePageMonitorRepository(connection_factory=connect)
+    monkeypatch.setattr(
+        task_module,
+        "PostgresPricePageMonitorRepository",
+        lambda: repository,
+    )
+    task_id = str(uuid4())
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    if has_running_row:
+        repository.start_run(
+            str(uuid4()),
+            observed_on=now.date(),
+            started_at=now,
+            sources_total=3,
+            celery_task_id=task_id,
+        )
+
+    task_revoked.send(
+        sender=task_module.monitor_model_price_pages,
+        request=SimpleNamespace(id=task_id),
+        terminated=terminated,
+        expired=False,
+    )
+    task_revoked.send(
+        sender=task_module.monitor_model_price_pages,
+        request=SimpleNamespace(id=task_id),
+        terminated=terminated,
+        expired=False,
+    )
+
+    with connect() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT status, error_type FROM {prefix}model_price_monitor_runs "
+                "WHERE celery_task_id = %s",
+                (task_id,),
+            )
+            assert cur.fetchone() == (
+                expected_status,
+                "TaskRevokedError" if expected_status == "cancelled" else None,
+            )

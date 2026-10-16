@@ -6,6 +6,7 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from celery.signals import task_revoked
 from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
 
 from backend.infra.llm.price_page_monitor import (
@@ -36,6 +37,39 @@ _SOURCES = {
 
 class ModelPriceMonitorExecutionFailed(RuntimeError):
     """让 Celery 的任务终态与巡检失败记录保持一致。"""
+
+
+def _current_celery_task_id() -> str | None:
+    """读取当前任务 ID，用于将运行记录关联到 Celery 生命周期事件。"""
+    try:
+        from celery import current_task
+
+        task_id = current_task.request.id
+    except Exception:
+        return None
+    return str(task_id) if task_id else None
+
+
+@task_revoked.connect
+def _record_price_monitor_revocation(
+    sender=None, request=None, terminated=False, **kwargs,
+):
+    """消费 Celery revoke 信号；任务体不会收到预执行 revoke 异常。"""
+    del kwargs
+    if getattr(sender, "name", None) != "model.price_page_monitor":
+        return
+    task_id = str(getattr(request, "id", "") or "")
+    if not task_id:
+        return
+    try:
+        PostgresPricePageMonitorRepository().record_revoked_task(
+            task_id, terminated=bool(terminated),
+        )
+    except Exception as exc:
+        logger.error(
+            "[ModelPriceMonitor] 无法记录 Celery revoke task_id=%s error_type=%s",
+            task_id, type(exc).__name__,
+        )
 
 
 def _finish_interrupted_run(
@@ -160,6 +194,7 @@ def monitor_model_price_pages() -> dict[str, object]:
             observed_on=observed_on,
             started_at=started_at,
             sources_total=len(_SOURCES),
+            celery_task_id=_current_celery_task_id(),
         )
     except (SoftTimeLimitExceeded, TaskRevokedError) as exc:
         _finish_interrupted_run(

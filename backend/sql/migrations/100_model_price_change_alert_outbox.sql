@@ -47,3 +47,11 @@ ALTER TABLE model_price_monitor_runs
 ALTER TABLE model_price_monitor_runs
     ADD CONSTRAINT model_price_monitor_runs_status_check
     CHECK (status IN ('running', 'succeeded', 'partial', 'failed', 'cancelled'));
+
+-- 将 Worker 发出的 revoke 生命周期事件与巡检运行记录关联，含未启动任务。
+ALTER TABLE model_price_monitor_runs
+    ADD COLUMN IF NOT EXISTS celery_task_id TEXT;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_price_monitor_runs_celery_task
+    ON model_price_monitor_runs (celery_task_id)
+    WHERE celery_task_id IS NOT NULL;

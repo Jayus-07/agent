@@ -55,7 +55,7 @@ export interface ModelPriceMonitorPriceResult {
 export interface ModelPriceMonitorRun {
   run_id: string;
   observed_on: string;
-  status: "running" | "succeeded" | "partial" | "failed";
+  status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
   sources_total: number;

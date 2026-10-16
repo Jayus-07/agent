@@ -654,6 +654,7 @@ class PostgresPricePageMonitorRepository:
         observed_on: date,
         started_at: datetime,
         sources_total: int,
+        celery_task_id: str | None = None,
     ) -> None:
         """在抓取前写入运行中记录，Worker 异常退出后仍可被管理端发现。"""
         try:
@@ -661,12 +662,67 @@ class PostgresPricePageMonitorRepository:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""INSERT INTO {self._run_table}
-                             (run_id, observed_on, status, started_at, sources_total)
-                             VALUES (%s::uuid, %s, 'running', %s, %s)""",
-                        (run_id, observed_on, started_at, sources_total),
+                             (run_id, observed_on, status, started_at, sources_total,
+                              celery_task_id)
+                             VALUES (%s::uuid, %s, 'running', %s, %s, %s)""",
+                        (run_id, observed_on, started_at, sources_total, celery_task_id),
                     )
         except Exception as exc:
             raise PriceMonitorStorageUnavailable("无法创建巡检运行记录") from exc
+
+    def record_revoked_task(
+        self,
+        celery_task_id: str,
+        *,
+        terminated: bool,
+        now: datetime | None = None,
+    ) -> bool:
+        """按 Celery revoke 信号收敛巡检状态；未启动任务也留取消记录。"""
+        if not celery_task_id:
+            return False
+        from uuid import uuid4
+        from zoneinfo import ZoneInfo
+
+        cancelled_at = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    if terminated:
+                        cur.execute(
+                            f"""UPDATE {self._run_table}
+                                 SET status = 'cancelled', finished_at = %s,
+                                     error_type = 'TaskRevokedError'
+                                 WHERE celery_task_id = %s AND status = 'running'""",
+                            (cancelled_at, celery_task_id),
+                        )
+                        if cur.rowcount == 1:
+                            return True
+                    cur.execute(
+                        f"SELECT status FROM {self._run_table} "
+                        "WHERE celery_task_id = %s",
+                        (celery_task_id,),
+                    )
+                    if cur.fetchone() is not None:
+                        # terminate=False 不会停止已在运行的任务。
+                        return False
+                    cur.execute(
+                        f"""INSERT INTO {self._run_table}
+                             (run_id, observed_on, status, started_at, finished_at,
+                              sources_total, error_type, celery_task_id)
+                             VALUES (%s::uuid, %s, 'cancelled', %s, %s,
+                                     3, 'TaskRevokedError', %s)
+                             ON CONFLICT (celery_task_id)
+                                 WHERE celery_task_id IS NOT NULL DO NOTHING""",
+                        (
+                            str(uuid4()), cancelled_at.date(), cancelled_at,
+                            cancelled_at, celery_task_id,
+                        ),
+                    )
+                    return cur.rowcount == 1
+        except Exception as exc:
+            raise PriceMonitorStorageUnavailable(
+                "无法记录价格巡检任务取消状态"
+            ) from exc
 
     def finish_run(
         self,
@@ -697,7 +753,7 @@ class PostgresPricePageMonitorRepository:
                                  source_results = %s::jsonb,
                                  comparison_results = %s::jsonb,
                                  alert_events = %s::jsonb, error_type = %s
-                             WHERE run_id = %s::uuid""",
+                             WHERE run_id = %s::uuid AND status = 'running'""",
                         (
                             status, finished_at, sources_failed, quotes_recorded,
                             source_changes, system_mismatches,
@@ -708,7 +764,16 @@ class PostgresPricePageMonitorRepository:
                         ),
                     )
                     if cur.rowcount != 1:
-                        raise RuntimeError("巡检运行记录不存在")
+                        cur.execute(
+                            f"SELECT status FROM {self._run_table} "
+                            "WHERE run_id = %s::uuid",
+                            (run_id,),
+                        )
+                        existing = cur.fetchone()
+                        if existing is None:
+                            raise RuntimeError("巡检运行记录不存在")
+                        # Worker 完成与 revoke 信号竞争时保留已提交的终态。
+                        return
         except Exception as exc:
             raise PriceMonitorStorageUnavailable("无法更新巡检运行记录") from exc
 

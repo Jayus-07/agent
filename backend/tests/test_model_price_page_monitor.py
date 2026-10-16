@@ -427,21 +427,16 @@ def test_page_fetch_propagates_task_control_exceptions(monkeypatch, interrupt):
 
 @pytest.mark.parametrize(
     ("exc_type", "expected_status"),
-    [
-        ("soft-time-limit", "failed"),
-        ("task-revoked", "cancelled"),
-    ],
+    [("soft-time-limit", "failed")],
 )
 def test_task_control_exceptions_keep_celery_terminal_semantics(
     monkeypatch, exc_type, expected_status,
 ):
-    from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
+    from celery.exceptions import SoftTimeLimitExceeded
 
     from backend.tasks import model_price_monitor_tasks as task_module
 
-    error_type = (
-        SoftTimeLimitExceeded if exc_type == "soft-time-limit" else TaskRevokedError
-    )
+    error_type = SoftTimeLimitExceeded
 
     class _Repository:
         finished = None
@@ -510,6 +505,41 @@ def test_doubao_price_tier_limit_is_enforced_without_context_budget(monkeypatch)
     assert caught.value.stage == "price_tier_input_limit"
     with pytest.raises(ContextBudgetExceededError):
         proxy._preflight_context(([('human', 'x' * 31_997)],))
+
+    prompts = ["a" * 20_000, "b" * 20_000]
+    assert proxy._gate_fixed_shape(
+        prompts, 32_000, call_method="batch",
+    )
+    with pytest.raises(ContextBudgetExceededError):
+        proxy._gate_fixed_shape(prompts, 32_000, call_method="invoke")
+    with pytest.raises(ContextBudgetExceededError):
+        proxy._preflight_context((prompts,), call_method="invoke")
+    assert proxy._preflight_context(
+        (prompts,), call_method="batch",
+    ) == (prompts,)
+
+    modes = []
+
+    class _BatchLLM:
+        def batch(self, values, **_kwargs):
+            return values
+
+    real_preflight_context = proxy._preflight_context
+    monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _BatchLLM())
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user_id: None)
+    monkeypatch.setattr(proxy, "_resolve_call_context", lambda: None)
+    monkeypatch.setattr(
+        proxy,
+        "_preflight_context",
+        lambda args, kwargs=None, **options: (
+            modes.append(options["call_method"]) or args
+        ),
+    )
+    monkeypatch.setattr(proxy, "_call_with_resilience", lambda attr, *a, **k: attr(*a, **k))
+    monkeypatch.setattr(proxy, "_record_tokens", lambda *_a, **_k: None)
+    assert proxy.llm.batch(["one", "two"]) == ["one", "two"]
+    assert modes == ["batch"]
+    monkeypatch.setattr(proxy, "_preflight_context", real_preflight_context)
 
     provider_calls = []
 

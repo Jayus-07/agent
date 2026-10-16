@@ -18,6 +18,7 @@ const STATUS: Record<ModelPriceMonitorRun['status'], { label: string; className:
   succeeded: { label: '完成', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
   partial: { label: '部分完成', className: 'bg-amber-50 text-amber-800 ring-amber-200' },
   failed: { label: '失败', className: 'bg-red-50 text-red-700 ring-red-200' },
+  cancelled: { label: '已取消', className: 'bg-slate-100 text-slate-700 ring-slate-300' },
 }
 
 const ALERT_LABELS: Record<string, string> = {

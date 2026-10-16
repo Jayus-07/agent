@@ -129,7 +129,7 @@ def test_astream_without_usage_chunk_settles_estimated(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -172,7 +172,7 @@ def test_astream_without_usage_falls_back_when_estimation_disabled(monkeypatch):
     _enable_estimation(monkeypatch, False)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -199,7 +199,7 @@ def test_astream_zero_output_falls_back_to_needs_review(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -226,7 +226,7 @@ def test_astream_with_usage_chunk_records(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -254,7 +254,7 @@ def test_sync_stream_without_usage_chunk_settles_estimated(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
