@@ -16,13 +16,13 @@
 - 自动 Review 发现 3 项后已修复：价格巡检管理端补 `cancelled` 状态；新增 Celery revoke 信号对账并在隔离 PostgreSQL 验证活动终止、未启动取消和 `terminate=False`；价格档位预检区分 `invoke` 和 `batch` 字符串语义。
 - 修复 Review 后最新定向结果：价格巡检 + 隔离 PostgreSQL outbox + Context Budget + 流式 usage `75 passed`；包含报价提交后 Worker 失败、同日重跑恢复、Celery 生命周期终态和 32K 边界拒绝。单独的管理端价格巡检、模型健康 UI 与类型测试 `60 passed`。隔离 PostgreSQL 仍仅使用本机 `127.0.0.1:55462/agent_memory_test`。没有 Provider 调用。
 - 静态结果：修改源码 `py_compile`、`git diff --check` 通过；排除仓库现存 Ruff 规则诊断后，对本批改动文件的剩余检查通过。完整 Ruff 输出中的既有异常命名、历史导入顺序和未用变量不属于本批修改范围。
-- PR #82 已创建：[fix(model-prices): recover alerts and enforce pricing boundaries](https://github.com/Jayus-07/agent/pull/82)。首轮 Review/CI 提出的取消状态映射、Celery revoke 生命周期对账、`invoke`/`batch` 计数和状态页构建问题已修复。`fb7d403` Review 又提出工具调用参数计数、取消巡检结果误报、RAGAS 裸调用绕过价格门禁三项；已在 `ebda1b1` 修复并推送。最新 HEAD 的 CI/Review 待收口。免费 CI 先前通过；`RAG Smoke Evaluation (8 cases, real API)` 因未提供合法 Provider 凭据而 skipped，不能记为 `MODEL_QUALITY_PASS`。未发生真实模型调用。
+- PR #82 已创建：[fix(model-prices): recover alerts and enforce pricing boundaries](https://github.com/Jayus-07/agent/pull/82)。首轮 Review/CI 提出的取消状态映射、Celery revoke 生命周期对账、`invoke`/`batch` 计数和状态页构建问题已修复。`fb7d403` Review 的工具参数计数、取消状态展示和 RAGAS 门禁已在 `ebda1b1` 修复；`34d99e1` Review 指出的初始 `llm.bind()` 门禁旁路与任务级中断来源统计已在 `1d548bd` 修复。隔离 PostgreSQL 告警恢复/revoke 测试 4 passed；价格档位/任务中断 6 passed；管理端组件 3 passed；TypeScript、Python 语法和 diff 检查通过。Ruff 在未改动的历史导入位置仍有诊断。`1d548bd` 当前 CI 与新 HEAD Review 待收口。真实 API 评测 skipped 仅表示未运行，不能记为 `MODEL_QUALITY_PASS`；未发生 Provider 调用。
 - PR #83（#73 模型健康 Follow-up）已合并，Merge SHA：`e354f3b3a6517f70c70856627661118f4da6c933`；后端 43 项、前端 60 项定向测试及静态检查通过。
 - PR #82 首轮 CI 曾因 settings/models 页面摘要漏掉 `cancelled` 状态映射而失败，已补为“已取消”；`fb7d403` 的后续免费 CI 全部通过。真实 API 评测仍为 skipped，不能记为 `MODEL_QUALITY_PASS`。
 
 ## 后续门禁
 
-- P1-C #74：已在 PR #84 施工并完成本地验证；自动 Review 的 5 项意见已修复，最新 HEAD 的 Review 与 CI 尚待收口。
+- P1-C #74：PR #84 当前 HEAD 为 `912a004`。模板副本历史会话回填、服务端时间价格新鲜度、UUID 大小写归一和 Brief 截断标记已补齐；隔离 PostgreSQL 4 passed、前端定向 61 passed、TypeScript 通过。该 HEAD 的免费必需 CI 通过，真实 API 评测 skipped；`912a004` 的自动 Review 尚待返回。
 - P2：待核实正式价格治理与隔离评测权限、evaluation-only 价格快照和累计预算硬边界；在能证明剩余授权上限前不发起真实 Provider 调用。
 - P3：#52、#66、#69 当前 HEAD、依赖、CI、真实端到端门禁待核对。
 - P4：097/098/099 只允许在隔离库验证；目标部署数据库状态及授权尚未核实。
@@ -31,7 +31,6 @@
 ## 最新进度（2026-10-17）
 
 - 最新 main：`e354f3b3a6517f70c70856627661118f4da6c933`（PR #83 合并）。
-- PR #82（#79 价格巡检 Follow-up）最新远端 HEAD `ebda1b1`；此前免费 CI 通过，真实 RAG 评测因未提供 Provider 凭据而 skipped，不能记为 `MODEL_QUALITY_PASS`。针对 `fb7d403` Review 的工具调用参数计数、取消巡检结果误报、RAGAS 调用治理绕过已修复。定向 Python `11 passed`、前端组件 `2 passed`、`npx tsc --noEmit`、`py_compile` 和 `git diff --check` 通过；Ruff 仅报告仓库原有诊断。`ebda1b1` 的 CI/Review 待核实；本批无 Provider 调用。
-- PR #84（#74 旅游 Follow-up）当前 HEAD `d53d55d12dc449a305c9b311a80c491e3d395d82`，起始基线为最新 main。自动 Review 提出的 5 项意见均已落实：模板复制原子建立默认会话关联并回放返回关联；未关联旧 Trip 回放不合成会话；关联读取失败保留 Trip 并停用对话；预算裁剪保护 Trip ID 与价格证据；凭据脱敏接受空格分隔。免费 CI 已通过；最新 Review 对 Trip ID 裁剪提出的评论与当前排除规则及 UUID 回归断言不符，需复核/收口该线程。
-- PR #84 本地证据：隔离 PostgreSQL 的 trip service/API/template copy/migration 定向测试 `21 passed`；前端定向测试 `55 passed`；`npx tsc --noEmit`、`npm run build`、Ruff import-order 检查、`py_compile`、`git diff --check` 与密钥树扫描（0 命中）通过。只在 loopback 临时隔离库写入，无真实 Provider 调用。
+- PR #82（#79 价格巡检 Follow-up）最新远端 HEAD `1d548bd336e8687cc6bf8e2a6ef468a50a3973ab`；隔离 PostgreSQL 告警恢复/revoke `4 passed`，价格档位/任务中断 `6 passed`，管理端组件 `3 passed`，前端类型、Python 语法与 diff 检查通过。初始 `llm.bind()` 价格门禁与任务级中断的来源结果未知语义已补齐。`1d548bd` 必需 CI 仍运行，最新 Review 尚未返回；RAG 真实 API 评测 skipped，不是质量通过，也未调用 Provider。
+- PR #84（#74 旅游 Follow-up）最新远端 HEAD `912a0049130338962bb25f0333e365b06822689b`，基于最新 main。历史模板副本关联回填为幂等 SQL；Trip 会话响应提供数据库服务端时间，问答发送前重新验证服务端关联；UUID 仅按 UUID 规则忽略大小写；长 Brief 字段纳入截断标记。隔离 PostgreSQL `4 passed`、前端定向 `61 passed`、`npx tsc --noEmit` 通过；最新 HEAD 必需免费 CI 通过，真实模型评测 skipped；`912a004` 自动 Review 尚未返回。测试写入只使用 loopback 隔离库，未调用 Provider。
 - 后续仍须完成：#82 与 #84 最新 Review/CI 收口；P2 价格/隔离评测权限和累计 20 元预算硬边界；#52/#66/#69；隔离迁移与最终 main 验收。
