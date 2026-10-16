@@ -238,6 +238,14 @@ def build_quality_record(
             },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
+            "pdf_page_count": int(getattr(raw_ast, "pdf_page_count", 0) or 0),
+            "pdf_pages_with_content": int(
+                getattr(raw_ast, "pdf_pages_with_content", 0) or 0
+            ),
+            "pdf_skipped_pages": int(
+                getattr(raw_ast, "pdf_skipped_pages", 0) or 0
+            ),
+            "pdf_repaired": bool(getattr(raw_ast, "pdf_repaired", False)),
             "degraded": degraded,
             "degrade_reason": "ocr_fallback" if degraded else "",
         },
@@ -473,6 +481,24 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 "不允许以部分内容 active"
             ),
         })
+    pdf_page_count = int(getattr(raw_ast, "pdf_page_count", 0) or 0)
+    pdf_pages_with_content = int(
+        getattr(raw_ast, "pdf_pages_with_content", 0) or 0
+    )
+    pdf_skipped_pages = int(getattr(raw_ast, "pdf_skipped_pages", 0) or 0)
+    pdf_repaired = bool(getattr(raw_ast, "pdf_repaired", False))
+    if pdf_page_count and (pdf_skipped_pages or pdf_repaired):
+        missing_pages = max(0, pdf_page_count - pdf_pages_with_content)
+        allowed_missing = int(pdf_page_count * 0.01) if pdf_repaired else 0
+        if pdf_skipped_pages or missing_pages > allowed_missing:
+            anomalies.append({
+                "check": "pdf_page_coverage", "severity": "error",
+                "detail": (
+                    f"PDF 结构修复/解析跳页后仅 {pdf_pages_with_content}/"
+                    f"{pdf_page_count} 页有正文或表格，跳过 {pdf_skipped_pages} 页；"
+                    "拒绝将不完整 PDF 标记为 active"
+                ),
+            })
     total_pre_filter = chunking["chunk_count"] + chunking["filtered_count"]
     if total_pre_filter > 0 and chunking["filtered_count"] / total_pre_filter > HEAVY_FILTER_RATIO:
         anomalies.append({

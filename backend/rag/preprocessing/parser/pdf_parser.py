@@ -130,6 +130,7 @@ class PdfParser(BaseDocumentParser):
             )
             raise
 
+        pdf_repaired = bool(getattr(doc, "is_repaired", False))
         raw_items: list[tuple[str, float, int, tuple]] = []  # (文本, 字号, 页码, bbox) — 仅非表格文本
         # P0-04（2026-10-13）：段落与表格按 (页序, 页内 y) 统一成事件流，
         # 建 AST 时按阅读顺序交错挂 section——旧实现先处理全部文本、再把
@@ -307,6 +308,10 @@ class PdfParser(BaseDocumentParser):
         ast.ocr_pages = ocr_pages
         ast.ocr_page_limit = ocr_page_limit
         ast.ocr_failed_pages = ocr_failed_pages
+        ast.pdf_page_count = page_count
+        ast.pdf_pages_with_content = len({event[3] for event in ordered_events})
+        ast.pdf_skipped_pages = len(skipped_pages)
+        ast.pdf_repaired = pdf_repaired
         return ast
 
     def _ocr_fallback(
