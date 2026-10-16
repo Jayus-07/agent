@@ -25,9 +25,9 @@
 | #74 | MERGED；PR HEAD 179d90ecf1adf87540707e5f4832a542df02d1f8；Merge SHA 5b372540800f1b6689d371e08e79fff009200425 | Trip URL/正式行程投影；本地与 GitHub 相关检查通过；真实 Provider/RAG Evaluation 未执行且不计通过 | MERGED |
 | #70 | 原 PR 已 MERGED，Merge SHA 5df8b0603355566e7fa1eb87906129c11a8211ab | 原 PR Review 0；跨会话唯一性走新 Follow-up #76 | MERGED（原 PR） |
 | #76 | MERGED；PR HEAD d47f43f10bd5914b0f13140d5daad18ae5b0e5b4；Merge SHA `7350cfe8dfb50bb6617bccb386603a5428e7747e`；后续 #77 将 main 推进到 `b3e2fb8` | 合并前共享项目库 duplicate-group 只读统计为 0；隔离真实 PostgreSQL 迁移/并发回归 1 passed；合并后在精确 Merge SHA 复跑隔离真实 PostgreSQL 1 passed。真实 API Evaluation skipped。098 尚未应用到共享数据库 | MERGED（共享库迁移状态仍待核实） |
-| #69 | OPEN、Draft；HEAD `bf857fe8cb972f6d3cb83ff63f01734833dcdee3`；base `e4881940`；当前 mergeState `UNSTABLE`（新 HEAD 检查 pending） | 119 项 Trace/工作流/上下文定向回归通过；本轮隔离服务链使用 DB Registry 主模型 Doubao Seed 2.0 mini，真实 chat 成功并产生可信 actor/tenant usage 记录。真实 API Evaluation CI 仍 SKIPPED；全量 AG-08～20 未完成 | IN_PROGRESS（修复已推送；等待新 HEAD CI，剩余真实权限/RAG/SQL/Resume/费用验收） |
+| #69 | OPEN、Draft；HEAD bf857fe8cb972f6d3cb83ff63f01734833dcdee3；base e4881940；mergeState CLEAN | 当前 HEAD GitHub 免费 checks PASS；T2 新增 SSE 69 passed、Conversation-first/产品边界 65 passed、Memory/身份/请求事件 57 passed；真实隔离 PostgreSQL 用户记忆物理隔离 1 passed。既有 DB Registry→Doubao 真实 chat 成功。AG-08 部分、AG-09 PASS；完整 RAG/SQL/取消/Trace/费用 T3 未完成 | IN_PROGRESS（继续授权 RAG/SQL 和流式端到端验收） |
 | #66 | OPEN、Draft；HEAD `3a2ddf91d64cdd148379e1e07abe9d75d8e90091`；base `e4881940`；GitHub mergeState `CLEAN` | 当前 SHA 的 Detect/Secret Scan、RAG Smoke preflight 与 smoke wrapper PASS；真实 API Evaluation SKIPPED。testset PDF 在隔离环境完成真实 Upload→Celery Worker→IndexRun published→Registry active（42 chunks）→授权 Search，命中当前文档正文。单独分支调用尚未通过 #52 预算代理结算 | IN_PROGRESS（数据链验收通过；需与 #52 预算链安全集成后再合并） |
-| #52 | OPEN、Draft、CLEAN；HEAD `91db7640cd83828af93aeeccdda65fa3b960a85c`；base `e4881940`；旧 14 条 Review threads 已解决，最新自动 Review 早于当前 HEAD | 当前 SHA 的 preflight、Detect、Secret Scan、`RAG Smoke (8 cases)` PASS；真实 8-case API Evaluation SKIPPED。新修复使 usage.request_id 与预算 reservation 使用同一可信预算 ID；定向测试 34 passed。与 #66 临时组合的 Worker/预算/Search 集成验证通过；当前缺有效价格快照与只读 Registry 副本 | BLOCKED（正式价格审批/只读副本与 8-case 质量评测未完成） |
+| #52 | OPEN、Draft、CLEAN；HEAD 91db7640cd83828af93aeeccdda65fa3b960a85c；base e4881940；14 条 Review 已解决 | 免费检查、preflight 与 smoke wrapper PASS；真实 8-case Evaluation SKIPPED。官方现行价已核实：Doubao mini 常规在线推理≤32K 输入/输出/缓存命中为 CNY 0.2/2/0.04 每百万 tokens；Qwen 3.7 embedding 与 rerank 均为 CNY 0.5/百万输入 tokens。隔离库旧行币种错误；无已配置只读 Registry 副本及新价双审/24h canary | BLOCKED（价格治理外部门禁未完成；未运行付费评测） |
 | #50 | CLOSED | FE-4 已被 PR #72 覆盖；当前 main 对应三组定向前端测试 40/40 通过 | 已关闭过期 Draft |
 | #60 | CLOSED | 文档中 T1 已由 PR #61 合入；独立作品集交接材料由 #75 交付 | 已关闭旧 Draft |
 | #75 | MERGED；PR HEAD dba170373c4663919ab9b0e2b87b5f800d479310；Merge SHA 04846a61f889fa561b9c2d2184cd196c93e75dd5 | 合并后 3 条 Review 由 #78 修复；Follow-up 合并后已追加 Merge SHA 与验证证据并全部解决原线程 | MERGED（Review 收口完成） |
@@ -90,7 +90,7 @@
 - PR HEAD `bf857fe8cb972f6d3cb83ff63f01734833dcdee3`，基于 main `e488194`。在隔离 Next BFF→APISIX→FastAPI 链路上确认 Runtime Registry 来自 DB：`main` 角色绑定 `doubao-seed-2.0-mini`，Provider 为付费 Doubao；“缺少本地 Doubao”不是根因。一次真实中文 chat 成功，usage 记录身份为测试 user/tenant，325 tokens、估算账本成本 CNY 0.003110（供应商实际账单未核对）。未触碰共享数据库。
 - 实际请求 Trace 中发现并行 `inventory_alert` workflow 曾借用请求线程上的全局 `_thread_current`，将不相关 SQL/Reporter spans 附加到 chat Trace。修复已提交并推送 `bf857fe`：ContextVar 优先，线程局部仅供同步代码回退；asyncio task/事件循环回调无 ContextVar 时 fail-closed；后台并行线程须显式 `bind(trace)`；Span 完成按创建时所属 Trace 通知 listener。同步更新 workflow/capability 调用点和夹具。
 - 当前 HEAD 定向测试合计 119 passed；包含 TraceCollector 57、Trace 修复 16、workflow executor 24、隔离线程/任务/事件循环回调回归 4，以及 token/version provenance、RAG claim rejection 和 capability 定向测试。临时隔离 PostgreSQL 测试容器已停止。py_compile、diff-check、tracer 与新回归测试 Ruff 通过。
-- 当前 GitHub HEAD 免费 preflight、contract-check 为 pending，Detect 与 Secret Scan PASS；真实 API Evaluation SKIPPED。此前真实单次 chat 不验证完整 Memory、多租户隔离、授权 RAG/SQL、SSE resume、副作用取消、Trace/费用闭环或安全失败终态；AG-08 部分通过，AG-09 有一次实际模型回答，AG-10～20 仍需按链路补验。PR 保持 Draft，不能据单次 chat 宣称 T3 完成。
+- 当前 GitHub HEAD `bf857fe` 的 RAG Smoke、free preflight、contract-check、Detect 与 Secret Scan 全部 PASS；真实 API Evaluation SKIPPED。此前真实单次 chat 不验证完整 Memory、多租户隔离、授权 RAG/SQL、SSE resume、副作用取消、Trace/费用闭环或安全失败终态；AG-08 部分通过，AG-09 有一次实际模型回答，AG-10～20 仍需按链路补验。PR 保持 Draft，不能据单次 chat 宣称 T3 完成。
 
 ## 施工证据
 
@@ -206,7 +206,7 @@
 - #75/#78：Follow-up #78 已合入 main `e488194`；三条旧 Review 均已追加证据并解决，收口完成。
 - #77：已于 `b3e2fb8` 合并；当前 main 为 `e488194`，main push 的免费 smoke/scan 已验证，无付费 Probe。
 - #66：当前 SHA 的 PDF→Worker→IndexRun→Active→Search 已真实通过；旧 SIGKILL 的原始 Worker/Beat 日志和内存事件已丢失，历史退出根因仍未验证。#66 单独 Worker 调用缺少 #52 预算代理，因此不得单独合并；已在 #66+#52 临时组合树证明 Qwen Worker 调用和 Search 使用者/租户预算结算。下一步完成 #52 价格快照治理/质量评测，再更新两 PR 基线并做最终合并验收。
-- #69：真实 DB Registry→付费 Doubao→隔离 Next BFF/APISIX/FastAPI chat 已成功；新 HEAD `bf857fe` 修复观测到的跨线程/async Trace 串线，119 项定向回归通过。等待当前 HEAD CI；下一步补验 Memory、RAG/SQL 授权、SSE resume/取消、费用归因和模型失败终态，未完前保持 Draft。
+- #69：真实 DB Registry→付费 Doubao→隔离 Next BFF/APISIX/FastAPI chat 已成功；新 HEAD `bf857fe` 的免费 CI 全部 PASS，Trace 串线修复及 119 项定向回归通过。下一步补验 Memory、RAG/SQL 授权、SSE resume/取消、费用归因和模型失败终态，未完前保持 Draft。
 - #52：最新 HEAD `91db7640` 的 Detect/Secret Scan、preflight 与 smoke wrapper PASS，真实 8-case API Evaluation SKIPPED。与 #66 集成的真实 Worker/Search 预算结算通过，但不能替代检索质量评测。DB 模型角色和付费 Provider 配置可用；阻断来自价格 Registry：本地仅有 primary，GitHub 没有 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`，Doubao approved 行币种与官方 CNY 刊例价不符。需完成正式价格治理并配置只读副本后，才能安全运行 8-case；保持 Draft/BLOCKED，不伪造审批。
 - #76：代码已合并；098 在目标共享数据库的应用状态交给获授权部署/迁移流程确认，本任务不写共享或生产库。
 - #50 已 CLOSED（未合并）；GitHub 关闭评论记录它的不可用动作门禁已由 #72 合并实现覆盖，并给出当前 main 上 40 项前端定向测试证据。#60 已 CLOSED（未合并）；交接材料移至 #75，后由 #78 合并至 `e488194`，未重复合入旧 Draft。
@@ -223,3 +223,14 @@
 - 官方价格源已核实：[阿里云 Qwen3.7 embedding](https://help.aliyun.com/en/model-studio/text-embedding-synchronous-api) 为 CNY 0.0005/1K input tokens；[火山引擎 Doubao Seed 2.0 mini](https://docs.volcengine.com/docs/LakeAIService/Largemodelbilling?lang=en) 对 `doubao-seed-2-0-mini-260428` 输入≤32K 档为 CNY 0.2/1M input、CNY 2/1M output。现有 approved Doubao 行记 USD 0.2/2.0 per 1M，不能当作官方 CNY 价格的精确结算快照；Qwen Registry 行为 USD，换汇后与官方价近似但不完全相等。
 - 用户追加 CNY 20 预算已用于隔离真实 API 验证；不使用生产数据库、不打印或持久化凭据。隔离账本累计记录 33 个成功 Provider calls / 57,692 tokens，无 unknown 价格行；现有快照合计 CNY 0.182506，按官方刊例价重算约 CNY 0.0383713（都不是供应商发票）。其中 #66 单独 E2E 确认 DB 配置的付费模型 Provider 调用，但未走预算预占；#66+#52 临时集成后 Qwen Worker 调用与 Search 均按可信 user/tenant/request 预占并结算。完整 8-case 真实检索质量评测仍 SKIPPED，不计通过。
 - 运行期间临时 harness 的路径字面量、空隔离向量/BM25 前缀、幂等键复用和搜索标记不匹配均已定位并修复；最终集成 E2E 上传/索引/Search PASS。下一步在价格治理外部条件解决前，继续 #69 可离线验收与 #66/#52 基线施工；价格审批门禁不绕过。
+
+## 2026-10-16 续工：#69 T2 与价格来源核验
+
+- 用户确认 Runtime 模型应从 DB Registry 解析并调用付费 Provider；本任务此前真实请求已证实 main 角色绑定 doubao-seed-2.0-mini。本地 Not a git repo, skipping 只针对测试素材目录；Git 操作始终在登记的任务 Worktree 内完成。
+- #69 首次运行 SSE 定向集误用 localhost:5432 的本机 PostgreSQL 18，原始错误为 psycopg2.OperationalError: fe_sendauth: no password supplied；FastAPI 导入阶段 feedback.init_db() 触发。判定为测试环境路由配置，不是产品缺陷。固定到隔离 Docker PostgreSQL 127.0.0.1:5434，数据库 pr69_t3_memory / pr69_t3_business 后，同一 SSE/终态/Resume 集通过：69 passed。
+- 当前 #69 HEAD 上定向 Conversation-first、续接、产品范围、Router Engine 集：65 passed。Memory 路由、服务端可信身份、Request Context 与跨请求事件隔离集：57 passed。独立真实 PostgreSQL 测试 test_repo_user_isolation_physical 首次因项目配置校验要求 PGPASSWORD 而失败；隔离 PG 容器使用 trust host auth 且只绑定本机，测试进程设置测试专用占位值后，测试实际写入 A 的记忆、验证 B 物理不可见并清理：1 passed。上述均未调用付费 Provider。
+- 官方价格候选（仅拟用于隔离评测快照，不改写历史价格或共享 Registry）：
+  - Doubao doubao-seed-2.0-mini，火山方舟常规在线推理、≤32K：input CNY 0.2/M、output CNY 2/M、cached input CNY 0.04/M；[火山方舟官方模型价格](https://console.volcengine.com/ark/region:cn-beijing/docs/model-pricing)，页面更新时间 2026-10-15。
+  - Qwen qwen3.7-text-embedding：CNY 0.0005/1K input tokens，即 CNY 0.5/M；[阿里云官方 Embedding 价格](https://help.aliyun.com/en/model-studio/embedding)。
+  - Qwen qwen3.7-text-rerank：CNY 0.5/M input tokens；[阿里云官方 rerank 价格](https://help.aliyun.com/en/model-studio/qwen3-7-text-rerank)。
+- 当前隔离库已有价格行把 Doubao 人民币单价标为 USD，Qwen 行的币种/金额也不能替代官方 CNY 价格。没有修改这些 append-only 历史行。GitHub prompt-eval 环境未配置 PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL；#52 当前 8-case 真实 API job 是 SKIPPED。项目价格治理还要求真实独立双审与 24 小时 canary；官方报价核验和用户的 API 预算授权不等同于伪造这两项状态。因此尚未写入已批准快照，未进行新的付费调用；待提供/配置经治理的只读 Registry 副本和双审 canary 后再运行当前 HEAD 的 8-case 评测。
