@@ -14,7 +14,7 @@
 - 隔离库：Docker PostgreSQL `codex-pr77-price-isolation-20261016`，只绑定 `127.0.0.1:55462`，数据库 `agent_memory_test`；未连接生产或共享业务库。
 - 最近定向结果：价格巡检单测与隔离 PostgreSQL outbox 集成、Context Budget、价格快照、流式 usage、旅游/RAG 调用路径、评测模型路由共 `161 passed`；包含报价提交后 Worker 失败、同日重跑恢复、超时/撤销终态及 32K 边界拒绝。第一次合并验证发现流式测试替身使用零参数调用，按真实接口补空输入后重跑通过。没有 Provider 调用。
 - 静态结果：修改源码 `py_compile`、`git diff --check` 通过；排除仓库现存 Ruff 规则诊断后，对本批改动文件的剩余检查通过。完整 Ruff 输出中的既有异常命名、历史导入顺序和未用变量不属于本批修改范围。
-- 尚未提交、推送或创建 PR；本地 diff 最终复核完成后提交并发起 Follow-up PR。
+- 本地 diff 复核后已提交：`79b4bbc` (`fix(model-prices): recover alerts and enforce pricing boundaries`)。当前尚未推送或创建 PR；下一步发布该分支并在最新 PR HEAD 收口 CI / Review。
 
 ## 后续门禁
 
