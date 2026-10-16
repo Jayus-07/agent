@@ -165,6 +165,11 @@ class ChunkFilter:
         self.enable_pii = config.FILTER_ENABLE_PII_MASK
         self.financial_pii_force = getattr(config, 'FINANCIAL_PII_MASK_FORCE', True)
         self._dup_detector = DuplicateDetector(threshold=self.simhash_threshold)
+        # Parent 有意包含对应 Leaf 的正文，不能让 Parent 的 SimHash 把可检索
+        # Leaf 判成重复并触发覆盖门禁。Parent 之间仍使用独立检测器去重。
+        self._parent_dup_detector = DuplicateDetector(
+            threshold=self.simhash_threshold
+        )
 
     def should_keep(self, text: str, metadata: dict) -> tuple[bool, str]:
         """检查 Chunk 是否应保留。
@@ -230,7 +235,12 @@ class ChunkFilter:
             return False, "low_chinese_ratio"
 
         # 表格行允许内容重复；重复行本身是源数据，不是冗余正文。
-        if not (table_chunk or split_chunk) and self._dup_detector.is_duplicate(stripped):
+        duplicate_detector = (
+            self._parent_dup_detector
+            if metadata.get("granularity") == "parent"
+            else self._dup_detector
+        )
+        if not (table_chunk or split_chunk) and duplicate_detector.is_duplicate(stripped):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "duplicate"
             return False, "duplicate"

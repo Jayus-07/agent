@@ -319,7 +319,10 @@ def index_env(tmp_path, monkeypatch):
 
     # _build_doc_metadata 即时替身：真实实现走 LLM 摘要/分类链，每次 sync()
     # 打真实 API 拖 2~5s；本文件只验证上传→索引→注册表的链路语义。
-    async def _stub_doc_metadata(full_text, base_meta, parent_span_id="", chunks_text=None):
+    async def _stub_doc_metadata(
+        self, full_text, base_meta, parent_span_id="", chunks_text=None,
+        processing_recorder=None,
+    ):
         return dict(base_meta)
 
     monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", _stub_doc_metadata)
@@ -430,6 +433,59 @@ def _upload_and_index(route_env, filename: str, data: bytes) -> tuple[dict, list
 
 class TestIndexerIngestion:
     """reindex_file → registry/chunk_store/向量库/doc_db/BM25 全链路落库。"""
+
+    def test_parent_context_does_not_filter_its_source_leaf(self, index_env):
+        """Parent 与 Leaf 文本相似时，仍保留 Leaf 满足源文覆盖。"""
+        from backend.rag.indexing.indexer import _filter_index_chunks
+        from backend.rag.preprocessing.chunking import coverage_audit
+        from backend.rag.preprocessing.filter import ChunkFilter
+        from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+
+        fp = index_env.docs_dir / "parent-leaf.md"
+        fp.write_text(MD_CONTENT, encoding="utf-8")
+        chunks, qc = parse_and_chunk_full(str(fp))
+        source_leaf_count = sum(
+            chunk.metadata.get("granularity") == "leaf" for chunk in chunks
+        )
+
+        kept, filtered = _filter_index_chunks(
+            chunks, ChunkFilter(), str(fp), str(qc.get("doc_type") or "")
+        )
+
+        kept_leaf_count = sum(
+            chunk.metadata.get("granularity") == "leaf" for chunk in kept
+        )
+        coverage = coverage_audit(qc["normalized_ast"], kept)
+        assert source_leaf_count > 0
+        assert kept_leaf_count == source_leaf_count
+        assert not any(item["reason"] == "duplicate" for item in filtered)
+        assert coverage["uncovered_count"] == 0
+
+    def test_short_source_leaf_is_kept_for_coverage(self, index_env):
+        """短但有效的正文 Leaf 不得因通用长度阈值而丢失。"""
+        from backend.rag.indexing.indexer import _filter_index_chunks
+        from backend.rag.preprocessing.chunking import coverage_audit
+        from backend.rag.preprocessing.filter import ChunkFilter
+        from backend.rag.preprocessing.pipeline import parse_and_chunk_full
+
+        fp = index_env.docs_dir / "short-leaf.md"
+        fp.write_text("# 修订\n\n时限调整。\n", encoding="utf-8")
+        chunks, qc = parse_and_chunk_full(str(fp))
+
+        kept, filtered = _filter_index_chunks(
+            chunks, ChunkFilter(), str(fp), str(qc.get("doc_type") or "")
+        )
+
+        leaves = [
+            chunk for chunk in kept
+            if chunk.metadata.get("granularity") == "leaf"
+        ]
+        coverage = coverage_audit(qc["normalized_ast"], kept)
+        assert len(leaves) == 1
+        assert leaves[0].metadata["filter_status"] == "kept_source_leaf"
+        assert leaves[0].metadata["source_leaf_filter_override_reason"] == "too_short"
+        assert not any(item["reason"] == "too_short" for item in filtered)
+        assert coverage["uncovered_count"] == 0
 
     def test_md_file_lands_in_registry_and_stores(self, index_env):
         fp = index_env.docs_dir / "退货制度.md"

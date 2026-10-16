@@ -290,11 +290,23 @@ def _filter_index_chunks(
             and chunk_id in referenced_parent_ids
             and (chunk.page_content or "").strip()
         )
-        if keep_referenced_parent:
-            # Parent 只供命中 Leaf 扩展上下文；不可因短文本过滤后留下悬空引用。
-            metadata["filter_status"] = "kept_referenced_parent"
+        keep_short_source_leaf = bool(
+            not ok
+            and reason == "too_short"
+            and metadata.get("granularity") == "leaf"
+            and (chunk.page_content or "").strip()
+        )
+        if keep_referenced_parent or keep_short_source_leaf:
+            # 保留有引用关系的 Parent 与有源文身份的短 Leaf，并继续执行脱敏。
+            if keep_referenced_parent:
+                metadata["filter_status"] = "kept_referenced_parent"
+                metadata["parent_filter_override_reason"] = reason
+            else:
+                # 短 Leaf 可能是有效法规编号、条款或状态值；源文完整性优先于
+                # 通用长度阈值，质量记录保留此次覆盖原因以便追踪。
+                metadata["filter_status"] = "kept_source_leaf"
+                metadata["source_leaf_filter_override_reason"] = reason
             metadata["filter_reason"] = ""
-            metadata["parent_filter_override_reason"] = reason
             is_financial = doc_type == "financial" or is_table_chunk(
                 metadata.get("chunk_type")
             )
