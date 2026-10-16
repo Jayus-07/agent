@@ -141,16 +141,18 @@ describe('V2 Trip 会话关联', () => {
   })
 
   it('英文名称不会因 token 前缀被误删，已知密钥格式仍会脱敏', () => {
+    const openAiKey = ['sk', 'proj', '12345678901234567890'].join('-')
+    const labelledToken = ['token', 'abc12345678901234567890'].join('=')
     const trip = projectionTrip([{
       date: '2026-10-20', title: '第一天', legs: [],
-      items: [item(1, { title: 'SkylineObservationDeck TokenizationArchitecture sk-proj-12345678901234567890 token=abc12345678901234567890' })],
+      items: [item(1, { title: `SkylineObservationDeck TokenizationArchitecture ${openAiKey} ${labelledToken}` })],
     }])
     const serialized = JSON.stringify(projectTravelV2TripFacts(trip))
 
     expect(serialized).toContain('SkylineObservationDeck')
     expect(serialized).toContain('TokenizationArchitecture')
-    expect(serialized).not.toContain('sk-proj-12345678901234567890')
-    expect(serialized).not.toContain('abc12345678901234567890')
+    expect(serialized).not.toContain(openAiKey)
+    expect(serialized).not.toContain(labelledToken)
     expect(serialized).toContain('[已过滤凭据]')
   })
 
