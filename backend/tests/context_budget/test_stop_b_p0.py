@@ -130,6 +130,52 @@ class TestTokenCounter:
         msg = HumanMessage(content="你好")
         assert count_message_tokens(msg) == count_tokens("你好") + 4
 
+    def test_tool_call_arguments_are_counted(self, monkeypatch):
+        """空正文的大型工具参数仍占 Provider 输入 token。"""
+        from types import SimpleNamespace
+
+        from backend.context_budget import token_counter as tc
+
+        tc._counter_cache.clear()
+        monkeypatch.setattr(
+            tc, "get_counter",
+            lambda _model=None: SimpleNamespace(count=lambda text: len(text)),
+        )
+        message = AIMessage(
+            content="",
+            tool_calls=[{
+                "name": "search_private_docs",
+                "args": {"query": "sensitive input " * 3_000},
+                "id": "call-large",
+            }],
+        )
+
+        assert tc.count_message_tokens(message) > 32_000
+
+    def test_raw_tool_calls_and_extra_provider_fields_are_counted(self, monkeypatch):
+        from types import SimpleNamespace
+
+        from backend.context_budget import token_counter as tc
+
+        tc._counter_cache.clear()
+        monkeypatch.setattr(
+            tc, "get_counter",
+            lambda _model=None: SimpleNamespace(count=lambda text: len(text)),
+        )
+        message = AIMessage(
+            content="",
+            additional_kwargs={
+                "tool_calls": [{
+                    "id": "call-raw",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": "x" * 500},
+                }],
+                "provider_metadata": "y" * 500,
+            },
+        )
+
+        assert tc.count_message_tokens(message) > 1_000
+
     def test_tool_schema_counted(self):
         from backend.context_budget.token_counter import (
             count_tool_schema_tokens,

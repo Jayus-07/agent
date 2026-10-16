@@ -113,6 +113,11 @@ describe('模型价格巡检管理视图', () => {
       error_type: 'TaskRevokedError',
     }
 
-    expect(mount(run).textContent).toContain('已取消')
+    const text = mount(run).textContent ?? ''
+    expect(text).toContain('已取消')
+    expect(text).toContain('未知')
+    expect(text).toContain('来源结果未知')
+    expect(text).toContain('价格差异未知')
+    expect(text).not.toContain('3/3')
   })
 })

@@ -559,3 +559,46 @@ def test_doubao_price_tier_limit_is_enforced_without_context_budget(monkeypatch)
     with pytest.raises(ContextBudgetExceededError):
         bound.invoke(input="x" * 32_001)
     assert provider_calls == []
+
+
+def test_doubao_price_tier_counts_tool_arguments_before_provider(monkeypatch):
+    """RAGAS generate_prompt 形态中的大型 tool_calls 必须在 Provider 前拒绝。"""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.prompt_values import ChatPromptValue
+
+    import backend.config as app_config
+    from backend.context_budget import token_counter
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.infra.llm import pricing, proxy
+
+    monkeypatch.setattr(app_config, "CONTEXT_BUDGET_ENABLED", False)
+    monkeypatch.setattr(
+        pricing, "model_input_price_tier_limit", lambda _model: 100,
+    )
+    monkeypatch.setattr(
+        token_counter, "get_counter",
+        lambda _model=None: SimpleNamespace(count=lambda text: len(text)),
+    )
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user: None)
+    provider_calls = []
+    bound = proxy._BoundLLMProxy(
+        SimpleNamespace(invoke=lambda *_args, **_kwargs: provider_calls.append(True)),
+        model_name="doubao-seed-2.0-mini",
+        role="eval_gen",
+    )
+    prompt = ChatPromptValue(messages=[AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "search_private_docs",
+            "args": {"query": "private context " * 100},
+            "id": "call-large",
+        }],
+    )])
+
+    with pytest.raises(ContextBudgetExceededError) as caught:
+        bound.generate_prompt([prompt])
+
+    assert caught.value.stage == "price_tier_input_limit"
+    assert provider_calls == []

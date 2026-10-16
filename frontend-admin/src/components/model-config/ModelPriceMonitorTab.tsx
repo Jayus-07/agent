@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { Activity, AlertTriangle, CheckCircle2, Clock3, ExternalLink, RefreshCw, XCircle } from 'lucide-react'
-import type { ModelPriceMonitorRun } from '@/api/modelPrices'
+import { priceMonitorSourcesSummary, type ModelPriceMonitorRun } from '@/api/modelPrices'
 
 interface Props {
   runs: ModelPriceMonitorRun[]
@@ -84,7 +84,8 @@ function trustedSourceUrl(value: string): boolean {
 export default function ModelPriceMonitorTab({ runs, schedule, isLoading, isError, isFetching, onRefresh }: Props) {
   const [expandedRun, setExpandedRun] = useState<string | null>(null)
   const latest = runs[0]
-  const sourcesOk = latest ? latest.sources_total - latest.sources_failed : 0
+  const latestCancelled = latest?.status === 'cancelled'
+  const sourcesSummary = priceMonitorSourcesSummary(latest)
   const scheduleText = `每日 ${String(schedule.hour).padStart(2, '0')}:${String(schedule.minute).padStart(2, '0')}（北京时间）`
 
   if (isLoading) return <div className="h-36 animate-pulse rounded-xl border border-slate-100 bg-slate-50" />
@@ -97,8 +98,8 @@ export default function ModelPriceMonitorTab({ runs, schedule, isLoading, isErro
     {isError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">巡检记录暂时无法读取，请检查记忆库连接和 API 状态。</div>}
     <div className="grid gap-3 md:grid-cols-3">
       <Summary icon={<Activity size={16} />} label="最近一次运行" value={latest ? STATUS[latest.status].label : '尚未运行'} note={latest ? dateTime(latest.started_at) : '等待每日首次执行'} />
-      <Summary icon={<CheckCircle2 size={16} />} label="来源读取" value={latest ? `${sourcesOk}/${latest.sources_total}` : '—'} note={latest ? `新增快照 ${latest.quotes_recorded} 条` : '火山方舟与阿里云官方页面'} />
-      <Summary icon={<AlertTriangle size={16} />} label="价格差异" value={latest ? String(latest.system_mismatches) : '—'} note={latest ? `官方变化 ${latest.source_changes} 项 · 来源失败 ${latest.sources_failed} 项` : '对比官方价与当前生效计费价'} />
+      <Summary icon={<CheckCircle2 size={16} />} label="来源读取" value={sourcesSummary.value} note={latestCancelled ? sourcesSummary.note : latest ? `新增快照 ${latest.quotes_recorded} 条` : '火山方舟与阿里云官方页面'} />
+      <Summary icon={<AlertTriangle size={16} />} label="价格差异" value={latestCancelled ? '未知' : latest ? String(latest.system_mismatches) : '—'} note={latestCancelled ? '任务已取消，价格差异未知' : latest ? `官方变化 ${latest.source_changes} 项 · 来源失败 ${latest.sources_failed} 项` : '对比官方价与当前生效计费价'} />
     </div>
 
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3">
@@ -124,8 +125,8 @@ export default function ModelPriceMonitorTab({ runs, schedule, isLoading, isErro
             <button type="button" aria-expanded={expanded} onClick={() => setExpandedRun(expanded ? null : run.run_id)} className="grid w-full gap-2 px-4 py-3 text-left hover:bg-slate-50 md:grid-cols-[minmax(210px,1.4fr)_100px_100px_100px_100px] md:items-center">
               <span><span className="block text-xs font-medium text-slate-900">{dateTime(run.started_at)}</span><span className="mt-1 block font-mono text-[10px] text-slate-400">{run.run_id}</span></span>
               <span><span className={`inline-flex rounded-full px-2 py-1 text-[11px] ring-1 ${status.className}`}>{status.label}</span></span>
-              <span className="text-xs text-slate-600">来源失败 {run.sources_failed}/{run.sources_total}</span>
-              <span className="text-xs text-slate-600">差异 {run.system_mismatches}</span>
+              <span className="text-xs text-slate-600">{run.status === 'cancelled' ? '来源结果未知' : `来源失败 ${run.sources_failed}/${run.sources_total}`}</span>
+              <span className="text-xs text-slate-600">差异 {run.status === 'cancelled' ? '未知' : run.system_mismatches}</span>
               <span className="text-xs text-slate-500">{expanded ? '收起详情' : '查看详情'}</span>
             </button>
             {expanded && <RunDetails run={run} />}

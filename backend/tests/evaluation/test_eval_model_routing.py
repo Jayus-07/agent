@@ -72,7 +72,7 @@ def test_cloud_eval_generation_uses_the_bound_provider(monkeypatch):
     monkeypatch.setattr(generation, "OLLAMA_ENABLED", False)
     monkeypatch.setattr(generation, "_build_prompt", lambda *_args: "prompt")
 
-    seen_roles: list[str] = []
+    seen_bindings: list[tuple[str, float | None]] = []
 
     class _FakeChat:
         def invoke(self, _messages):
@@ -80,14 +80,15 @@ def test_cloud_eval_generation_uses_the_bound_provider(monkeypatch):
 
     monkeypatch.setattr(
         proxy,
-        "get_llm_for_role",
-        lambda role: seen_roles.append(role) or _FakeChat(),
+        "bind_llm_for_role",
+        lambda role, **kwargs: seen_bindings.append(
+            (role, kwargs.get("temperature"))) or _FakeChat(),
     )
 
     result = generation.generate_answer("问题", ["上下文"], allow_cloud=True)
 
     assert result == "来自角色绑定的云端模型"
-    assert seen_roles == ["eval_gen"]
+    assert seen_bindings == [("eval_gen", 0.1)]
 
 
 def test_cloud_eval_generation_checks_input_price_tier_before_provider(monkeypatch):
@@ -110,7 +111,9 @@ def test_cloud_eval_generation_checks_input_price_tier_before_provider(monkeypat
         guarded.append((args, model_name, kwargs))
         raise RuntimeError("超过已登记价格档位")
 
-    monkeypatch.setattr(proxy, "get_llm_for_role", lambda _role: _FakeChat())
+    monkeypatch.setattr(
+        proxy, "bind_llm_for_role", lambda _role, **_kwargs: _FakeChat(),
+    )
     monkeypatch.setattr(proxy, "enforce_model_input_price_tier", reject_over_limit)
 
     with pytest.raises(RuntimeError, match="超过已登记价格档位"):

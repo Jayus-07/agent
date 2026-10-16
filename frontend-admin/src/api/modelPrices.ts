@@ -73,6 +73,25 @@ export interface ModelPriceMonitorRun {
   error_type?: string | null;
 }
 
+export function priceMonitorSourcesSummary(
+  run: Pick<ModelPriceMonitorRun, "status" | "sources_total" | "sources_failed">
+    | null
+    | undefined,
+): { value: string; note: string; tone: "neutral" | "good" | "bad" } {
+  if (!run) {
+    return { value: "—", note: "等待首次巡检", tone: "neutral" };
+  }
+  if (run.status === "cancelled") {
+    return { value: "未知", note: "任务已取消，来源结果未知", tone: "neutral" };
+  }
+  const failed = Math.max(0, run.sources_failed);
+  return {
+    value: `${Math.max(0, run.sources_total - failed)}/${run.sources_total}`,
+    note: failed ? `${failed} 个来源读取失败` : "最近运行读取成功",
+    tone: failed ? "bad" : "good",
+  };
+}
+
 const dimensions = new Set<PriceDimension>(["input", "output", "cache_read", "cache_write", "reasoning", "tool_call"]);
 const units = new Set<PriceUnit>(["per_1m_tokens", "per_call"]);
 

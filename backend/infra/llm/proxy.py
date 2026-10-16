@@ -1813,13 +1813,13 @@ class RateLimitError(RuntimeError):
 
 
 class _BoundLLMProxy:
-    """bind_tools 返回的 RunnableBinding 包装。
+    """绑定模型参数后的治理包装，保持调用和 LangChain 组合路径受控。
 
     _LLMProxy.__getattr__ 只包装 _WRAP_METHODS 里的方法名，bind_tools
     若原样透传，拿到的是真实实例上的 RunnableBinding——其后续
     invoke/ainvoke 会绕过限流、韧性链（重试/熔断/fallback）与 token
     记录。本类把绑定后的调用重新纳入与 _LLMProxy 相同的包装路径；
-    其余属性（如 bind / with_config）原样透传。
+    bind/with_config 和 RAGAS 使用的 generate_prompt 也保留治理包装。
 
     P1 模型归属：绑定专用模型时（如 tool_selector）携带 model_name/role，
     调用前登记 ResolvedModelContext，用量按真实模型结算、不串角色。
@@ -1885,6 +1885,66 @@ class _BoundLLMProxy:
             model_name=self._model_name or None,
         )
         return _wrap_result(result)
+
+    def bind(self, **kwargs):
+        """绑定额外模型参数时继续保留预算与价格门禁。"""
+        return _BoundLLMProxy(
+            self._bound.bind(**kwargs),
+            model_name=self._model_name or None,
+            role=self._role,
+            tools=self._tools,
+        )
+
+    def with_config(self, config=None, **kwargs):
+        """绑定 callbacks/config 时继续经本代理执行。"""
+        return _BoundLLMProxy(
+            self._bound.with_config(config, **kwargs),
+            model_name=self._model_name or None,
+            role=self._role,
+            tools=self._tools,
+        )
+
+    def generate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        """实现 RAGAS 的 BaseLanguageModel 入口并逐条经过 invoke 门禁。"""
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        config = {"callbacks": callbacks} if callbacks is not None else None
+        generations = []
+        for prompt in prompts:
+            result = self.invoke(
+                prompt,
+                config=config,
+                stop=stop,
+                **kwargs,
+            )
+            generations.append([
+                ChatGeneration(
+                    message=result,
+                    generation_info=getattr(result, "response_metadata", None),
+                ),
+            ])
+        return LLMResult(generations=generations)
+
+    async def agenerate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        """RAGAS 异步生成入口也逐条经过 ainvoke 预算与价格门禁。"""
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        config = {"callbacks": callbacks} if callbacks is not None else None
+        generations = []
+        for prompt in prompts:
+            result = await self.ainvoke(
+                prompt,
+                config=config,
+                stop=stop,
+                **kwargs,
+            )
+            generations.append([
+                ChatGeneration(
+                    message=result,
+                    generation_info=getattr(result, "response_metadata", None),
+                ),
+            ])
+        return LLMResult(generations=generations)
 
     def bind_tools(self, *args, **kwargs):
         # 链式绑定（罕见）：继续走包装，不裸透传
