@@ -1,6 +1,6 @@
 # CI 与评测环境运行规范
 
-> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-10-11，基线 commit `69ccde5`（main）+ PR #30 施工分支。**
+> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-10-16（§8 路径触发契约复核，main 基线 `333efc6`）；其它状态保留各自标注的核对日期。**
 > **职责**：规定 CI 如何准备隔离数据库、DB API 模型绑定、评测语料和向量索引，以及 Secrets、费用与证据闭环。**不**复制测试分层（[testing-guide](../development/testing-guide.md)）、质量阈值与 Golden 规则（[evaluation-governance](../evaluation/evaluation-governance.md)）、计费公式（[llm-budget-billing](../governance/llm-budget-billing.md)）、RBAC 规则（[authorization-standard](../auth/authorization-standard.md)）或数据库 Schema（[DATABASE](../DATABASE.md)）。
 >
 > **实现状态图例**（本文所有条款按下表标注，状态不得凭文档存在认定）：
@@ -113,16 +113,17 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 ## 8. 变更触发、核对与验收
 
 - 低风险文档/纯静态：T0，默认不触发付费评测（✅ 现有路径过滤已实现）。
-- RAG 上传/切分/检索/Embedding/Rerank/MCP 入口/模型/Fixture/Suite 变更：触发对应静态契约 + 受信任 RAG E2 检索评测（🚧 PR #30 的路径检测已补 RAG HTTP 面、`rag_server.py`/`mcp_client.py`、模型绑定面、评测初始化脚本）。
+- RAG 上传/切分/检索/Embedding/Rerank/MCP 入口/模型/Fixture/Suite 变更：触发对应静态契约 + 受信任 RAG E2 检索评测（🚧 PR #30 的路径检测已补 RAG HTTP 面、`rag_server.py`/`mcp_client.py`、模型绑定面、评测初始化脚本）。`backend/infra/llm/price_page_monitor.py` 与 `backend/sql/migrations/099_model_price_source_monitor.sql` 是模型价格巡检专用路径，PR/main-push 均按不相关路径 skip RAG E2；若同一变更还修改了 RAG 相关路径，仍会触发评测。
 - SQL/Planner/E2E/鉴权/RBAC/租户变更：按对应 Runner 与数据集选择；不机械全域重建向量（❌ CI 集成未实现，见 §5）。
 - 改模型/维度/索引 Schema/阈值：版本相容性验证、失配反例、真实 API 探针、必要重索引及可比性说明（🚧 探针已实现；版本化快照与失配反例 ❌ 未实现）。
 
-**真实评测触发矩阵（2026-10-11 用户拍板）**：
+**真实评测触发矩阵（用户基准：2026-10-11；路径过滤核验：2026-10-16）**：
 
 | 触发场景 | 真实 API | 测试范围 | 落地方式 |
 | --- | --- | --- | --- |
-| 普通代码 PR | 不需要 | T0/T1、定向单元测试 | ✅ PR 免费预检（真实评测 job 对 PR 事件 skipped） |
+| 与 RAG 无关的普通代码 PR | 不需要 | T0/T1、受影响范围定向测试 | ✅ 路径过滤 skip RAG jobs；相关路径 PR 才运行免费预检（真实评测 job 对 PR 事件 skipped） |
 | 纯文档、页面样式 PR | 不需要 | 静态检查 | ✅ 路径过滤 skip |
+| 模型价格页巡检解析器及其专用迁移（`price_page_monitor.py` / `099_model_price_source_monitor.sql`） | 不需要 | 价格解析、巡检 API/Worker 与迁移定向测试 | ✅ PR/main-push skip RAG E2；同一变更中的真实 RAG 路径仍触发 |
 | RAG 检索算法、切分策略修改 | 需要 | RAG Smoke + 必要的 Regression | 合并 main 后自动 Smoke；Regression 审核后 workflow_dispatch |
 | Embedding、Rerank 模型切换 | 必须 | 索引重建 + Golden 回归 | 每次运行强制索引重建；probe 维度三方校验失配即 BLOCKED；Golden 回归 dispatch selection=regression |
 | SQL Agent、Planner 修改 | 按风险运行 | 对应领域真实模型评测 | Runner 已有，CI workflow 未建（❌ 见 §5） |
