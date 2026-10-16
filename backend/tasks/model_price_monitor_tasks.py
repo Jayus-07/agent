@@ -6,6 +6,8 @@ from datetime import datetime
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
+
 from backend.infra.llm.price_page_monitor import (
     PostgresPricePageMonitorRepository,
     PriceQuote,
@@ -34,6 +36,56 @@ _SOURCES = {
 
 class ModelPriceMonitorExecutionFailed(RuntimeError):
     """让 Celery 的任务终态与巡检失败记录保持一致。"""
+
+
+def _finish_interrupted_run(
+    repo,
+    *,
+    run_id: str,
+    status: str,
+    error: BaseException,
+    source_results: list[dict[str, object]],
+    comparison,
+    comparison_results: dict[str, object],
+    alert_events: list[dict[str, object]],
+) -> None:
+    """尽力保存任务中断状态，同时由 Celery 保留原始终态异常。"""
+    if repo is not None and comparison and comparison.source_changes:
+        try:
+            repo.release_source_change_alerts([
+                str(change["event_id"])
+                for change in comparison.source_changes
+            ])
+        except Exception as release_exc:
+            logger.error(
+                "[ModelPriceMonitor] 无法归还待处理告警 run_id=%s error_type=%s",
+                run_id, type(release_exc).__name__,
+            )
+    try:
+        repo.finish_run(
+            run_id,
+            status=status,
+            finished_at=datetime.now(ZoneInfo("Asia/Shanghai")),
+            sources_failed=sum(
+                1 for source in source_results if source["status"] == "failed"
+            ) if source_results else len(_SOURCES),
+            quotes_recorded=comparison.recorded_count if comparison else 0,
+            source_changes=(
+                len(comparison.source_changes) if comparison else 0
+            ),
+            system_mismatches=(
+                len(comparison.system_mismatches) if comparison else 0
+            ),
+            source_results=source_results,
+            comparison_results=comparison_results,
+            alert_events=alert_events,
+            error_type=type(error).__name__,
+        )
+    except Exception as finish_exc:
+        logger.error(
+            "[ModelPriceMonitor] 无法收敛中断运行状态 run_id=%s error_type=%s",
+            run_id, type(finish_exc).__name__,
+        )
 
 
 def _source_results(
@@ -87,11 +139,20 @@ def monitor_model_price_pages() -> dict[str, object]:
     comparison = None
     comparison_results: dict[str, object] = {}
 
-    def emit_alert(code: str, detail: dict[str, object]) -> None:
-        log_degradation(make_alert(code, detail))
+    def emit_alert(code: str, detail: dict[str, object]) -> bool:
+        try:
+            log_degradation(make_alert(code, detail))
+        except Exception as exc:
+            logger.warning(
+                "[ModelPriceMonitor] 告警触发失败 code=%s error_type=%s",
+                code, type(exc).__name__,
+            )
+            return False
         # log_degradation 是异步 best-effort 通道；这里只记录触发，不声称 webhook 已送达。
         alert_events.append({"code": code, "recorded": True, "delivery": "unknown"})
+        return True
 
+    repo = None
     try:
         repo = PostgresPricePageMonitorRepository()
         repo.start_run(
@@ -100,6 +161,18 @@ def monitor_model_price_pages() -> dict[str, object]:
             started_at=started_at,
             sources_total=len(_SOURCES),
         )
+    except (SoftTimeLimitExceeded, TaskRevokedError) as exc:
+        _finish_interrupted_run(
+            repo,
+            run_id=run_id,
+            status=("cancelled" if isinstance(exc, TaskRevokedError) else "failed"),
+            error=exc,
+            source_results=source_results,
+            comparison=comparison,
+            comparison_results=comparison_results,
+            alert_events=alert_events,
+        )
+        raise
     except Exception as exc:
         emit_alert(
             "MODEL_PRICE_MONITOR_FAILED",
@@ -136,13 +209,25 @@ def monitor_model_price_pages() -> dict[str, object]:
 
         comparison = repo.record_and_compare(quotes, observed_on=observed_on)
         if comparison.source_changes:
-            emit_alert(
+            alert_triggered = emit_alert(
                 "MODEL_PRICE_SOURCE_CHANGED",
                 {
                     "observed_on": observed_on.isoformat(),
+                    "event_ids": [
+                        change["event_id"]
+                        for change in comparison.source_changes
+                    ],
                     "changes": comparison.source_changes,
                 },
             )
+            if not alert_triggered:
+                raise RuntimeError("价格变化告警未成功触发")
+            else:
+                triggered_at = datetime.now(ZoneInfo("UTC"))
+                for change in comparison.source_changes:
+                    repo.mark_source_change_alert_triggered(
+                        str(change["event_id"]), triggered_at=triggered_at,
+                    )
         if comparison.system_mismatches:
             emit_alert(
                 "MODEL_PRICE_SYSTEM_MISMATCH",
@@ -199,6 +284,18 @@ def monitor_model_price_pages() -> dict[str, object]:
         }
     except ModelPriceMonitorExecutionFailed:
         raise
+    except (SoftTimeLimitExceeded, TaskRevokedError) as exc:
+        _finish_interrupted_run(
+            repo,
+            run_id=run_id,
+            status=("cancelled" if isinstance(exc, TaskRevokedError) else "failed"),
+            error=exc,
+            source_results=source_results,
+            comparison=comparison,
+            comparison_results=comparison_results,
+            alert_events=alert_events,
+        )
+        raise
     except Exception as exc:
         emit_alert(
             "MODEL_PRICE_MONITOR_FAILED",
@@ -208,29 +305,16 @@ def monitor_model_price_pages() -> dict[str, object]:
             "[ModelPriceMonitor] 巡检保存或价格读取失败 run_id=%s error_type=%s",
             run_id, type(exc).__name__,
         )
-        try:
-            repo.finish_run(
-                run_id,
-                status="failed",
-                finished_at=datetime.now(ZoneInfo("Asia/Shanghai")),
-                sources_failed=sum(
-                    1 for source in source_results if source["status"] == "failed"
-                ) if source_results else len(_SOURCES),
-                quotes_recorded=comparison.recorded_count if comparison else 0,
-                source_changes=len(comparison.source_changes) if comparison else 0,
-                system_mismatches=(
-                    len(comparison.system_mismatches) if comparison else 0
-                ),
-                source_results=source_results,
-                comparison_results=comparison_results,
-                alert_events=alert_events,
-                error_type=type(exc).__name__,
-            )
-        except Exception as finish_exc:
-            logger.error(
-                "[ModelPriceMonitor] 无法收敛运行状态 run_id=%s error_type=%s",
-                run_id, type(finish_exc).__name__,
-            )
+        _finish_interrupted_run(
+            repo,
+            run_id=run_id,
+            status="failed",
+            error=exc,
+            source_results=source_results,
+            comparison=comparison,
+            comparison_results=comparison_results,
+            alert_events=alert_events,
+        )
         raise ModelPriceMonitorExecutionFailed(
             f"巡检保存或价格读取失败: {type(exc).__name__}"
         ) from exc

@@ -146,9 +146,9 @@ def _validate_destination(value) -> str:
     name = value.strip()
     if not 2 <= len(name) <= 12:
         return ""
-    from backend.travel.services.requirement_service import KNOWN_MAJOR_CITIES
     from backend.tools.travel import poi_seed
     from backend.travel.data import cities as city_directory
+    from backend.travel.services.requirement_service import KNOWN_MAJOR_CITIES
 
     if name in city_directory.all_directory_cities() or name in poi_seed.all_cities() or name in KNOWN_MAJOR_CITIES:
         return name
@@ -317,13 +317,17 @@ def enrich_slots(
 
         from langchain_core.messages import HumanMessage, SystemMessage
 
+        from backend.config import model_roles
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import _build_llm_for, record_llm_result
+        from backend.infra.llm.proxy import (
+            _build_llm_for,
+            enforce_model_input_price_tier,
+            record_llm_result,
+        )
         from backend.observability.llm_context import llm_attribution_scope
 
         # 构建出口与 llm_intent_service 同款：main 角色 DB 绑定名直构
         # （_build_llm_for 是唯一带 DB 托管凭据解析的构建出口，P1a-2）。
-        from backend.config import model_roles
 
         model_name = str((model_roles.resolve_effective("main") or {})
                          .get("value") or "")
@@ -334,11 +338,14 @@ def enrich_slots(
             _metric(status="error", reason="no_model")
             return outcome
         slot_llm = _build_llm_for(model_name).bind(temperature=0, max_tokens=384)
+        messages = [
+            SystemMessage(content=prompt_text),
+            HumanMessage(content=f"用户消息：{message}"),
+        ]
+        enforce_model_input_price_tier((messages,), model_name=model_name)
         with llm_attribution_scope(agent_domain="travel"):
             response = sync_call_with_timeout(
-                slot_llm.invoke, timeout,
-                [SystemMessage(content=prompt_text),
-                 HumanMessage(content=f"用户消息：{message}")],
+                slot_llm.invoke, timeout, messages,
             )
             # 直构实例不经 _LLMProxy —— 补一次统一计量（llm_usage/计费唯一口径）
             record_llm_result(

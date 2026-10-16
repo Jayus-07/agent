@@ -10,14 +10,16 @@ import os
 import re
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from html.parser import HTMLParser
 from typing import Any, Callable
 from urllib.parse import urljoin, urlparse
+from uuid import uuid4
 
 import psycopg2.extras
 import requests
+from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
 
 from backend.config.budget import (
     BUDGET_BASE_CURRENCY,
@@ -304,6 +306,8 @@ def fetch_official_prices(
                 )
                 page_hash = _content_hash(content)
                 quotes.extend(parser(text, content_sha256=page_hash))
+            except (SoftTimeLimitExceeded, TaskRevokedError):
+                raise
             except Exception as exc:
                 failures.append({
                     "source_id": source_id,
@@ -399,6 +403,7 @@ class PostgresPricePageMonitorRepository:
         if prefix and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", prefix):
             raise ValueError("BUDGET_PG_TABLE_PREFIX 格式无效")
         self._observation_table = f"{prefix}model_price_source_observations"
+        self._change_alert_table = f"{prefix}model_price_change_alert_events"
         self._run_table = f"{prefix}model_price_monitor_runs"
         self._price_table = f"{prefix}model_price"
         self._versions_table = f"{prefix}model_price_versions"
@@ -425,22 +430,24 @@ class PostgresPricePageMonitorRepository:
         observed_on: date,
         now: datetime | None = None,
     ) -> PriceComparison:
-        if not quotes:
-            return PriceComparison(0, [], [], [])
         current_time = now or datetime.now(timezone.utc)
-        filters = " OR ".join(
-            "(model_name = %s AND component = %s AND dimension = %s)"
-            for _ in quotes
-        )
-        filter_params = [
-            value
-            for quote in quotes
-            for value in (quote.model_name, quote.component, quote.dimension)
-        ]
         with self._connection_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(
-                    f"""SELECT DISTINCT ON (p.model_name, p.component, p.dimension)
+                current_prices: dict[tuple[str, str, str], dict[str, Any]] = {}
+                if quotes:
+                    filters = " OR ".join(
+                        "(model_name = %s AND component = %s AND dimension = %s)"
+                        for _ in quotes
+                    )
+                    filter_params = [
+                        value
+                        for quote in quotes
+                        for value in (
+                            quote.model_name, quote.component, quote.dimension
+                        )
+                    ]
+                    cur.execute(
+                        f"""SELECT DISTINCT ON (p.model_name, p.component, p.dimension)
                                 p.model_name, p.component, p.dimension,
                                 p.price_per_unit, p.unit, p.currency,
                                 p.price_table_version
@@ -455,14 +462,13 @@ class PostgresPricePageMonitorRepository:
                            AND ({filters})
                          ORDER BY p.model_name, p.component, p.dimension,
                                   p.effective_from DESC, p.id DESC""",
-                    [current_time, current_time, *filter_params],
-                )
-                current_prices = {
-                    (row["model_name"], row["component"], row["dimension"]): row
-                    for row in cur.fetchall()
-                }
+                        [current_time, current_time, *filter_params],
+                    )
+                    current_prices = {
+                        (row["model_name"], row["component"], row["dimension"]): row
+                        for row in cur.fetchall()
+                    }
                 recorded_count = 0
-                source_changes: list[dict[str, Any]] = []
                 mismatches: list[dict[str, Any]] = []
                 prices: list[dict[str, Any]] = []
                 for quote in quotes:
@@ -497,12 +503,22 @@ class PostgresPricePageMonitorRepository:
                     if inserted:
                         recorded_count += 1
                     if inserted and _price_changed(previous, quote):
-                        source_changes.append({
-                            **_quote_key(quote),
-                            "previous": _price_value(previous),
-                            "official": _price_value(quote),
-                            "source_url": quote.source_url,
-                        })
+                        cur.execute(
+                            f"""INSERT INTO {self._change_alert_table}
+                                 (event_id, source_id, model_name, component,
+                                  dimension, observed_on, previous_price,
+                                  official_price, source_url)
+                                 VALUES (%s::uuid, %s, %s, %s, %s, %s,
+                                         %s::jsonb, %s::jsonb, %s)
+                                 ON CONFLICT (source_id, model_name, component,
+                                              dimension, observed_on) DO NOTHING""",
+                            (
+                                str(uuid4()), quote.source_id, quote.model_name,
+                                quote.component, quote.dimension, observed_on,
+                                json.dumps(_price_value(previous)),
+                                json.dumps(_price_value(quote)), quote.source_url,
+                            ),
+                        )
                     system_price = current_prices.get(key)
                     price_comparison = _price_comparison(system_price, quote)
                     matches_system = price_comparison["matches_system"]
@@ -531,7 +547,105 @@ class PostgresPricePageMonitorRepository:
                             **price_comparison,
                             "source_url": quote.source_url,
                         })
-        return PriceComparison(recorded_count, source_changes, mismatches, prices)
+                cur.execute(
+                    f"""UPDATE {self._change_alert_table}
+                        SET alert_status = 'pending', lease_expires_at = NULL
+                        WHERE alert_status = 'triggering'
+                          AND lease_expires_at <= %s""",
+                    (current_time,),
+                )
+                cur.execute(
+                    f"""SELECT event_id, source_id, model_name, component,
+                               dimension, observed_on, previous_price,
+                               official_price, source_url, delivery_status
+                        FROM {self._change_alert_table}
+                        WHERE alert_status = 'pending'
+                        ORDER BY created_at, event_id
+                        LIMIT 100
+                        FOR UPDATE SKIP LOCKED"""
+                )
+                pending_rows = cur.fetchall()
+                for row in pending_rows:
+                    cur.execute(
+                        f"""UPDATE {self._change_alert_table}
+                            SET alert_status = 'triggering',
+                                lease_expires_at = %s,
+                                attempt_count = attempt_count + 1
+                            WHERE event_id = %s::uuid
+                              AND alert_status = 'pending'""",
+                        (current_time + timedelta(seconds=60), row["event_id"]),
+                    )
+                pending_changes = [
+                    {
+                        "event_id": str(row["event_id"]),
+                        "source_id": row["source_id"],
+                        "model_name": row["model_name"],
+                        "component": row["component"],
+                        "dimension": row["dimension"],
+                        "observed_on": row["observed_on"].isoformat(),
+                        "previous": row["previous_price"],
+                        "official": row["official_price"],
+                        "source_url": row["source_url"],
+                        "delivery_status": row["delivery_status"],
+                    }
+                    for row in pending_rows
+                ]
+        return PriceComparison(recorded_count, pending_changes, mismatches, prices)
+
+    def mark_source_change_alert_triggered(
+        self, event_id: str, *, triggered_at: datetime | None = None
+    ) -> bool:
+        """记录告警调用已触发；不表示异步通知已送达。"""
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""UPDATE {self._change_alert_table}
+                             SET alert_status = 'triggered',
+                                 alert_triggered_at = %s,
+                                 lease_expires_at = NULL
+                             WHERE event_id = %s::uuid
+                               AND alert_status = 'triggering'""",
+                        (triggered_at or datetime.now(timezone.utc), event_id),
+                    )
+                    if cur.rowcount == 1:
+                        return True
+                    cur.execute(
+                        f"""SELECT alert_status FROM {self._change_alert_table}
+                             WHERE event_id = %s::uuid""",
+                        (event_id,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0] == "triggered":
+                        return False
+                    raise RuntimeError("待处理价格变化事件不存在")
+        except Exception as exc:
+            raise PriceMonitorStorageUnavailable(
+                "无法更新价格变化告警状态"
+            ) from exc
+
+    def release_source_change_alerts(self, event_ids: list[str]) -> int:
+        """告警触发失败或任务可捕获中断时，立即归还事件以便重跑。"""
+        if not event_ids:
+            return 0
+        try:
+            released = 0
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    for event_id in event_ids:
+                        cur.execute(
+                            f"""UPDATE {self._change_alert_table}
+                                SET alert_status = 'pending', lease_expires_at = NULL
+                                WHERE event_id = %s::uuid
+                                  AND alert_status = 'triggering'""",
+                            (event_id,),
+                        )
+                        released += cur.rowcount
+            return released
+        except Exception as exc:
+            raise PriceMonitorStorageUnavailable(
+                "无法归还未完成的价格变化告警"
+            ) from exc
 
     def start_run(
         self,
@@ -570,7 +684,7 @@ class PostgresPricePageMonitorRepository:
         error_type: str | None = None,
     ) -> None:
         """保存本次运行的最终状态、来源结果、差异与告警记录。"""
-        if status not in {"succeeded", "partial", "failed"}:
+        if status not in {"succeeded", "partial", "failed", "cancelled"}:
             raise ValueError("巡检最终状态无效")
         try:
             with self._connection_factory() as conn:

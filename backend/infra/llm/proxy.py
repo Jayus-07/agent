@@ -524,6 +524,9 @@ def _handle_terminal_failure(
         )
         from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
+        _enforce_model_input_price_tier(
+            args, kwargs, model_name=fallback_model,
+        )
         # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
         try:
@@ -609,6 +612,9 @@ async def _ahandle_terminal_failure(
             review_model_reservation,
         )
 
+        _enforce_model_input_price_tier(
+            args, kwargs, model_name=fallback_model,
+        )
         reserve_model_call("fallback", model_name=fallback_model)
         try:
             # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
@@ -1970,8 +1976,136 @@ def bind_llm_for_role(
 # 代理对象
 # =====================================================
 
-def _preflight_context(args: tuple, kwargs: dict | None = None,
-                       extra_reserved_tokens: int = 0) -> tuple:
+def _enforce_model_input_price_tier(
+    args: tuple,
+    kwargs: dict | None = None,
+    extra_reserved_tokens: int = 0,
+    *,
+    model_name: str | None = None,
+) -> None:
+    """在所有代理调用与预算预占之前限制到已登记的输入价格档位。"""
+    from backend.context_budget.token_counter import (
+        count_message_tokens,
+        count_response_format_tokens,
+        count_tokens,
+        count_tool_schema_tokens,
+    )
+    from backend.infra.llm.pricing import model_input_price_tier_limit
+
+    if not model_name:
+        resolved_model = get_current_resolved_model()
+        model_name = (
+            resolved_model.model_id if resolved_model else get_active_model_name()
+        )
+    limit = model_input_price_tier_limit(model_name)
+    if limit is None:
+        return
+
+    if args:
+        payload = args[0]
+    else:
+        payload = next(
+            (kwargs[key] for key in ("input", "messages", "prompt")
+             if kwargs and key in kwargs),
+            None,
+        )
+        if payload is None:
+            from backend.context_budget.errors import ContextBudgetExceededError
+
+            raise ContextBudgetExceededError(
+                used_tokens=limit + 1,
+                input_budget=limit,
+                stage="price_tier_unrecognized_input",
+            )
+
+    from langchain_core.messages import BaseMessage
+
+    used_tokens: int
+    from langchain_core.messages.utils import convert_to_messages
+
+    def _count_message_sequence(values) -> int:
+        messages = convert_to_messages(values)
+        return sum(
+            count_message_tokens(message, model=model_name)
+            for message in messages
+        )
+
+    def _count_payload(value) -> int:
+        if isinstance(value, BaseMessage):
+            return count_message_tokens(value, model=model_name)
+        if isinstance(value, str):
+            return count_tokens(value, model=model_name)
+        if isinstance(value, dict) and isinstance(value.get("messages"), list):
+            return _count_message_sequence(value["messages"])
+        if isinstance(value, list):
+            if not value:
+                return 0
+            if all(isinstance(item, str) for item in value):
+                return max(
+                    (count_tokens(item, model=model_name) for item in value),
+                    default=0,
+                )
+            if all(isinstance(item, list) for item in value):
+                return max(
+                    (_count_message_sequence(batch) for batch in value),
+                    default=0,
+                )
+            if all(
+                isinstance(item, dict) and isinstance(item.get("messages"), list)
+                for item in value
+            ):
+                return max(
+                    (_count_payload(item) for item in value),
+                    default=0,
+                )
+            return _count_message_sequence(value)
+        if isinstance(value, tuple):
+            if len(value) == 2 and isinstance(value[0], str):
+                return _count_message_sequence([value])
+            return _count_message_sequence(list(value))
+        to_messages = getattr(value, "to_messages", None)
+        if callable(to_messages):
+            return _count_message_sequence(to_messages())
+        to_string = getattr(value, "to_string", None)
+        if callable(to_string):
+            return count_tokens(str(to_string()), model=model_name)
+        from backend.context_budget.errors import ContextBudgetExceededError
+
+        raise ContextBudgetExceededError(
+            used_tokens=limit + 1,
+            input_budget=limit,
+            stage="price_tier_unrecognized_input",
+        )
+
+    used_tokens = _count_payload(payload)
+
+    reserved = max(0, int(extra_reserved_tokens or 0))
+    if kwargs:
+        reserved += count_tool_schema_tokens(kwargs.get("tools"))
+        reserved += count_response_format_tokens(kwargs.get("response_format"))
+    total_tokens = used_tokens + reserved
+    if total_tokens > limit:
+        from backend.context_budget.errors import ContextBudgetExceededError
+
+        raise ContextBudgetExceededError(
+            used_tokens=total_tokens,
+            input_budget=limit,
+            stage="price_tier_input_limit",
+        )
+
+
+def enforce_model_input_price_tier(
+    args: tuple,
+    *,
+    model_name: str,
+    kwargs: dict | None = None,
+) -> None:
+    """为尚未迁入统一代理的兼容调用提供相同的价格档位硬门禁。"""
+    _enforce_model_input_price_tier(args, kwargs, model_name=model_name)
+
+
+def _prepare_context_budget(args: tuple, kwargs: dict | None = None,
+                            extra_reserved_tokens: int = 0) -> tuple:
     """统一 Prompt Preflight（2026-09-22，ContextBudgetManager）：LLM 调用前
     对 messages 形态的输入走 ContextBudgetManager.prepare_llm_context
     （L2 历史裁剪 → L4 折叠 → 确定性 hard trim → L5 AutoCompact 触发）。
@@ -2089,6 +2223,19 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
     return args  # 不可达（消息形态在上面两分支已返回）
 
 
+def _preflight_context(args: tuple, kwargs: dict | None = None,
+                       extra_reserved_tokens: int = 0) -> tuple:
+    """先按上下文预算裁剪，再执行统一价格档位的硬输入上限。"""
+    from backend.config import CONTEXT_BUDGET_ENABLED
+
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        _enforce_model_input_price_tier(args, kwargs, extra_reserved_tokens)
+        return args
+    prepared = _prepare_context_budget(args, kwargs, extra_reserved_tokens)
+    _enforce_model_input_price_tier(prepared, kwargs, extra_reserved_tokens)
+    return prepared
+
+
 def _soft_overflow_enabled() -> bool:
     """D-9：压缩后仍超预算时是否优雅降级（默认 true；false=旧硬拒）。"""
     import os
@@ -2203,8 +2350,9 @@ def _gate_fixed_shape(payload: Any, budget: int) -> bool:
     return True
 
 
-async def _apreflight_context(args: tuple, kwargs: dict | None = None,
-                              extra_reserved_tokens: int = 0) -> tuple:
+async def _prepare_context_budget_async(
+    args: tuple, kwargs: dict | None = None, extra_reserved_tokens: int = 0,
+) -> tuple:
     """_preflight_context 的异步在线版（STOP B 2026-10-01）。
 
     与同步版共享同一预算口径与最终硬门禁；差异仅在消息形态走
@@ -2297,6 +2445,21 @@ async def _apreflight_context(args: tuple, kwargs: dict | None = None,
     if _gate_fixed_shape(payload, budget):
         return args
     return args
+
+
+async def _apreflight_context(args: tuple, kwargs: dict | None = None,
+                              extra_reserved_tokens: int = 0) -> tuple:
+    """异步先裁剪上下文，再拒绝超出当前价格档位的输入。"""
+    from backend.config import CONTEXT_BUDGET_ENABLED
+
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        _enforce_model_input_price_tier(args, kwargs, extra_reserved_tokens)
+        return args
+    prepared = await _prepare_context_budget_async(
+        args, kwargs, extra_reserved_tokens,
+    )
+    _enforce_model_input_price_tier(prepared, kwargs, extra_reserved_tokens)
+    return prepared
 
 
 class _LLMProxy:
@@ -2520,7 +2683,7 @@ class _LLMProxy:
         ctx = _resolve_call_context()
         if ctx is not None:
             set_current_resolved_model(ctx)
-        args = _preflight_context(args)
+        args = _preflight_context(args, kwargs)
         _t0 = time.monotonic()
         result = _call_with_resilience(_resolve_active_llm().invoke, *args, **kwargs)
         _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)

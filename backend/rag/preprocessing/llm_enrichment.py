@@ -49,6 +49,13 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
     started = time.monotonic()
 
     def _invoke_and_record(*args, **kwargs):
+        if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
+            from backend.infra.llm.proxy import enforce_model_input_price_tier
+
+            model_name = _resolved_role_model or str(
+                getattr(llm_obj, "model", "") or ""
+            )
+            enforce_model_input_price_tier(args, model_name=model_name)
         response = llm_obj.invoke(*args, **kwargs)
         # get_llm_for_role 返回的是底层 LangChain 实例，不经过 _LLMProxy；
         # 这里补一次统一计量。显式传入的 proxy 自己已记录，避免重复落库。

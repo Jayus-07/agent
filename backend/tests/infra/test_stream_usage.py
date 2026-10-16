@@ -139,11 +139,11 @@ def test_astream_without_usage_chunk_settles_estimated(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
         # 断言须在同一 asyncio context 内：ContextVar 在 task 子上下文 set，
         # 主 context 读不到（与 with-usage 对照测试同款约束）
@@ -182,7 +182,7 @@ def test_astream_without_usage_falls_back_when_estimation_disabled(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     asyncio.run(_consume())
@@ -211,7 +211,7 @@ def test_astream_zero_output_falls_back_to_needs_review(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     asyncio.run(_consume())
@@ -238,7 +238,7 @@ def test_astream_with_usage_chunk_records(monkeypatch):
     async def _consume():
         # 断言须在同一 asyncio context 内：ContextVar 在 task 子上下文 set，
         # 主 context 读不到（行为正确，隔离是特性）
-        async for _ in bound():
+        async for _ in bound(""):
             pass
         assert proxy_mod._last_tokens_var.get()["total_tokens"] == 10
 
