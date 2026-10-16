@@ -120,4 +120,30 @@ describe('模型价格巡检管理视图', () => {
     expect(text).toContain('价格差异未知')
     expect(text).not.toContain('3/3')
   })
+
+  it('任务级中断且没有来源结果时不显示来源全部失败或读取成功', () => {
+    const run: ModelPriceMonitorRun = {
+      run_id: 'run-interrupted',
+      observed_on: '2026-10-16',
+      status: 'failed',
+      started_at: '2026-10-16T08:00:00+08:00',
+      finished_at: '2026-10-16T08:00:01+08:00',
+      sources_total: 3,
+      sources_failed: 0,
+      quotes_recorded: 0,
+      source_changes: 0,
+      system_mismatches: 0,
+      source_results: [],
+      comparison_results: {},
+      alert_events: [],
+      error_type: 'SoftTimeLimitExceeded',
+    }
+
+    const text = mount(run).textContent ?? ''
+    expect(text).toContain('失败')
+    expect(text).toContain('来源结果未知')
+    expect(text).toContain('价格差异未知')
+    expect(text).not.toContain('来源失败 3/3')
+    expect(text).not.toContain('最近运行读取成功')
+  })
 })

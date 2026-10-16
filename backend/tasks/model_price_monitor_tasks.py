@@ -102,7 +102,7 @@ def _finish_interrupted_run(
             finished_at=datetime.now(ZoneInfo("Asia/Shanghai")),
             sources_failed=sum(
                 1 for source in source_results if source["status"] == "failed"
-            ) if source_results else len(_SOURCES),
+            ) if source_results else 0,
             quotes_recorded=comparison.recorded_count if comparison else 0,
             source_changes=(
                 len(comparison.source_changes) if comparison else 0

@@ -2571,6 +2571,10 @@ class _LLMProxy:
     def __getattr__(self, name: str):
         target = _resolve_active_llm()
         attr = getattr(target, name)
+        if name == "bind" and callable(attr):
+            def bind_wrapper(*args, **kwargs):
+                return _BoundLLMProxy(attr(*args, **kwargs), role="main")
+            return bind_wrapper
         # bind_tools 返回 RunnableBinding，其 invoke/ainvoke 不在
         # _WRAP_METHODS 内，裸透传会绕过限流/韧性链/token 记录——
         # 用 _BoundLLMProxy 重新纳入包装（function calling 路径）

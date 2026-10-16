@@ -74,15 +74,15 @@ export interface ModelPriceMonitorRun {
 }
 
 export function priceMonitorSourcesSummary(
-  run: Pick<ModelPriceMonitorRun, "status" | "sources_total" | "sources_failed">
+  run: Pick<ModelPriceMonitorRun, "status" | "sources_total" | "sources_failed" | "source_results">
     | null
     | undefined,
 ): { value: string; note: string; tone: "neutral" | "good" | "bad" } {
   if (!run) {
     return { value: "—", note: "等待首次巡检", tone: "neutral" };
   }
-  if (run.status === "cancelled") {
-    return { value: "未知", note: "任务已取消，来源结果未知", tone: "neutral" };
+  if (run.status === "cancelled" || (run.status === "failed" && run.source_results.length === 0)) {
+    return { value: "未知", note: "任务中断，来源结果未知", tone: "neutral" };
   }
   const failed = Math.max(0, run.sources_failed);
   return {

@@ -602,3 +602,39 @@ def test_doubao_price_tier_counts_tool_arguments_before_provider(monkeypatch):
 
     assert caught.value.stage == "price_tier_input_limit"
     assert provider_calls == []
+
+
+def test_initial_llm_bind_keeps_price_tier_gate_before_provider(monkeypatch):
+    import backend.config as app_config
+    from backend.context_budget import token_counter
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.infra.llm import pricing, proxy
+
+    monkeypatch.setattr(app_config, "CONTEXT_BUDGET_ENABLED", False)
+    monkeypatch.setattr(proxy, "get_active_model_name", lambda: "doubao-seed-2.0-mini")
+    monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
+    monkeypatch.setattr(proxy, "_resolve_call_context", lambda **_kwargs: None)
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user: None)
+    monkeypatch.setattr(pricing, "model_input_price_tier_limit", lambda _model: 100)
+    monkeypatch.setattr(
+        token_counter, "count_tokens", lambda text, model=None: len(text),
+    )
+    monkeypatch.setattr(token_counter, "count_tool_schema_tokens", lambda *_a, **_k: 0)
+    monkeypatch.setattr(token_counter, "count_response_format_tokens", lambda *_a, **_k: 0)
+    provider_calls = []
+
+    class _Bound:
+        def invoke(self, *_args, **_kwargs):
+            provider_calls.append(True)
+
+    class _Model:
+        def bind(self, **_kwargs):
+            return _Bound()
+
+    monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _Model())
+
+    with pytest.raises(ContextBudgetExceededError) as caught:
+        proxy.llm.bind(max_tokens=64).invoke("x" * 101)
+
+    assert caught.value.stage == "price_tier_input_limit"
+    assert provider_calls == []
