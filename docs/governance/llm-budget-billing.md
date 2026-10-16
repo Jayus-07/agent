@@ -50,3 +50,11 @@
 | BG-10 | 每日对账任务 | 未决率、滞留预占、估算占比能被定位和告警 |
 
 执行成本/配额整改先做调用链审计和账本基线，不要因“统一”新增第二套 LLM SDK 调用出口、预算表或费用聚合器。用对应 `backend/tests/infra/`、预算 API、迁移及定向测试验证，未接真实 Provider 只标隔离测试通过。
+
+### 4.1 供应商公开价格页巡检
+
+`model.price_page_monitor` 由 Celery Beat 每日 08:00（Asia/Shanghai）读取固定的官方价格页面，记录 Doubao Seed 2.0 mini、Qwen3.7 Text Embedding 和 Qwen3.7 Text Rerank 的北京地域刊例价。它对比前次有效观测和当前 `model_price` 已审核生效行，分别报告供应商价格变化、系统价格不一致以及页面读取/解析失败。
+
+巡检告警复用 `backend/observability/alerts.py` 的 JSONL、Prometheus 和可选 `ALERT_WEBHOOK_URL` 通道。管理端“模型与供应商 → 价格巡检”展示运行状态、计划时间、各价格来源结果、系统与官方价格对照、官方价格变化和已触发的告警事件；告警投递是异步 best-effort，因此页面只展示触发记录，不宣称 webhook 已送达。`model_price_monitor_runs` 保留每次运行的状态与结构化结果，Worker 异常退出时未完成记录会维持 `running`，便于识别未收敛任务。
+
+每日观测只写入 `model_price_source_observations` 和巡检运行历史；巡检不调用 LLM、不产生 Provider 费用，也不导入、审批或覆盖 `model_price`。发现差异后仍须按价格治理的双人审核和 24 小时 canary 流程处理。供应商页面无法访问或格式变化时必须告警，不能把缺失报价记为零。默认直连官方站点；必须通过环境代理出网时设置 `MODEL_PRICE_MONITOR_USE_ENV_PROXY=true`。

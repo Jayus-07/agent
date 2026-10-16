@@ -17,6 +17,10 @@ from backend.infra.llm.price_governance import (
     PostgresPriceGovernanceRepository,
     PriceGovernanceUnavailable,
 )
+from backend.infra.llm.price_page_monitor import (
+    PostgresPricePageMonitorRepository,
+    PriceMonitorStorageUnavailable,
+)
 from backend.app.api.routes.price_dto import validate_price_rows
 
 
@@ -58,6 +62,10 @@ def _repo() -> PostgresPriceGovernanceRepository:
     return PostgresPriceGovernanceRepository()
 
 
+def _monitor_repo() -> PostgresPricePageMonitorRepository:
+    return PostgresPricePageMonitorRepository()
+
+
 def _handle_storage(exc: PriceGovernanceUnavailable) -> HTTPException:
     return HTTPException(503, "价格治理暂不可用")
 
@@ -73,6 +81,23 @@ async def list_model_price_versions(
         return {"items": _repo().list_versions(limit)}
     except PriceGovernanceUnavailable as exc:
         raise _handle_storage(exc) from exc
+
+
+@router.get("/admin/model-prices/monitor/runs")
+async def list_model_price_monitor_runs(
+    limit: int = Query(30, ge=1, le=100),
+    operator: OperatorIdentity = Depends(resolve_operator_role),
+) -> dict[str, Any]:
+    """返回供应商价格巡检状态与最近操作结果，仅限管理端读取。"""
+    if operator.role not in {"viewer", "editor", "admin", "super_admin"}:
+        raise HTTPException(403, "无权查看价格巡检记录")
+    try:
+        return {
+            "items": _monitor_repo().list_runs(limit),
+            "schedule": {"timezone": "Asia/Shanghai", "hour": 8, "minute": 0},
+        }
+    except PriceMonitorStorageUnavailable as exc:
+        raise HTTPException(503, "价格巡检记录暂不可用") from exc
 
 
 @router.post("/admin/model-prices/imports")

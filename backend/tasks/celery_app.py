@@ -44,6 +44,7 @@ celery_app = Celery(
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
              "backend.tasks.side_effect_probe_tasks",  # Step6：副作用幂等实机探针（env 门禁）
              "backend.tasks.model_health_tasks",  # 治理：模型健康周期探测（beat）
+             "backend.tasks.model_price_monitor_tasks",  # 公开模型价格页每日巡检
              "backend.tasks.budget_reconciliation_tasks",  # 治理：预算对账日报（beat）
              "backend.tasks.memory_maintenance_tasks",  # STOP C：Memory 衰减生命周期（beat）
              "backend.tasks.memory_extraction_tasks",  # L3 durable outbox + 提取 worker
@@ -212,6 +213,12 @@ celery_app.conf.update(
             "task": "budget.reconciliation_check",
             "schedule": crontab(hour=21, minute=15),
             "options": {"queue": beat_queue("budget.reconciliation_check")},
+        },
+        # 每日 08:00 北京时间读取公开价格页；只记录和告警，不更新计费价。
+        "model-price-page-monitor": {
+            "task": "model.price_page_monitor",
+            "schedule": crontab(hour=8, minute=0),
+            "options": {"queue": beat_queue("model.price_page_monitor")},
         },
     },
 )

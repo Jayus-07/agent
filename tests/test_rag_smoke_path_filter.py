@@ -74,6 +74,41 @@ def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     assert _filter_subprocess(paths) is False
 
 
+def test_model_price_monitor_changes_do_not_trigger_main_paid_smoke():
+    # 复现 PR #79 的完整变更路径：通用 LLM 前缀和 model 迁移标记不能
+    # 把只读价格巡检误判为需要付费 Provider 评测的 RAG 变更。
+    paths = [
+        "backend/app/api/routes/model_prices.py",
+        "backend/infra/llm/price_page_monitor.py",
+        "backend/observability/alerts.py",
+        "backend/sql/migrations/099_model_price_source_monitor.sql",
+        "backend/tasks/celery_app.py",
+        "backend/tasks/model_price_monitor_tasks.py",
+        "backend/tasks/queue_router.py",
+        "backend/tests/test_model_price_page_monitor.py",
+        "backend/tests/test_price_api_contract.py",
+        "backend/tests/test_worker_topology.py",
+        "docs/governance/llm-budget-billing.md",
+        "frontend-admin/src/api/modelPrices.test.ts",
+        "frontend-admin/src/api/modelPrices.ts",
+        "frontend-admin/src/app/settings/models/page.tsx",
+        "frontend-admin/src/components/model-config/ModelPriceMonitorTab.test.tsx",
+        "frontend-admin/src/components/model-config/ModelPriceMonitorTab.tsx",
+        "scripts/init_db.py",
+    ]
+    assert _filter_import(paths) is False
+    assert _filter_subprocess(paths) is False
+
+
+def test_real_rag_change_still_triggers_with_price_monitor_change():
+    paths = [
+        "backend/infra/llm/price_page_monitor.py",
+        "backend/rag/pipeline.py",
+    ]
+    assert _filter_import(paths) is True
+    assert _filter_subprocess(paths) is True
+
+
 def test_setup_and_workflow_only_changes_run_pr_static_but_not_main_paid_smoke():
     paths = [
         "scripts/init_db.py",

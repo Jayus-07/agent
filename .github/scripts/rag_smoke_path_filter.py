@@ -21,6 +21,13 @@ EXACT_ENTRIES = frozenset({
     "backend/scripts/ingest_eval_fixtures.py",
 })
 
+# 非 RAG 的模型价格巡检路径。它们分别命中通用 LLM 前缀和迁移中的
+# `model` 标记，但不改变检索或模型调用计费行为。
+NON_RAG_EXACT_ENTRIES = frozenset({
+    "backend/infra/llm/price_page_monitor.py",
+    "backend/sql/migrations/099_model_price_source_monitor.sql",
+})
+
 # 评测准备文件和 Workflow 的 PR 变化运行免费预检，main 更新不触发真实 Provider。
 PR_STATIC_ONLY_ENTRIES = frozenset({
     "scripts/init_db.py",
@@ -75,6 +82,8 @@ def _is_relevant_migration(path: str) -> bool:
 def is_relevant(path: str) -> bool:
     path = _normalize(path)
     if not path:
+        return False
+    if path in NON_RAG_EXACT_ENTRIES:
         return False
     if path in EXACT_ENTRIES:
         return True

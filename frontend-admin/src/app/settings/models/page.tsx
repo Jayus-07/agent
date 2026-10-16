@@ -1,25 +1,28 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2, Database, KeyRound, RefreshCw, Settings2, ShieldCheck, SlidersHorizontal } from 'lucide-react'
+import { Activity, AlertTriangle, CheckCircle2, Database, KeyRound, RefreshCw, Settings2, ShieldCheck, SlidersHorizontal } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { atLeast } from '@/lib/auth'
 import { getConfigDrift, listConfigHistory, listModelCatalog, listModelRoles, listProviders } from '@/api/modelConfig'
+import { listModelPriceMonitorRuns } from '@/api/modelPrices'
 import RoleBindingsTab from '@/components/model-config/RoleBindingsTab'
 import RuntimeChainCard from '@/components/model-config/RuntimeChainCard'
 import ProvidersTab from '@/components/model-config/ProvidersTab'
 import ConfigHistoryTab from '@/components/model-config/ConfigHistoryTab'
 import DriftTab from '@/components/model-config/DriftTab'
+import ModelPriceMonitorTab from '@/components/model-config/ModelPriceMonitorTab'
 
-type Tab = 'roles' | 'providers' | 'history' | 'drift'
+type Tab = 'roles' | 'providers' | 'history' | 'drift' | 'monitor'
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof Settings2 }> = [
   { id: 'roles', label: '角色绑定', icon: SlidersHorizontal },
   { id: 'providers', label: '供应商与密钥', icon: KeyRound },
   { id: 'history', label: '变更历史', icon: RefreshCw },
   { id: 'drift', label: '体检与漂移', icon: ShieldCheck },
+  { id: 'monitor', label: '价格巡检', icon: Activity },
 ]
 
 function readTab(value: string | null): Tab {
@@ -69,6 +72,7 @@ export default function ModelConfigPage() {
   const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor })
   const history = useQuery({ queryKey: ['model-config-history'], queryFn: () => listConfigHistory(), enabled: canEditor && tab === 'history' })
   const drift = useQuery({ queryKey: ['model-config-drift'], queryFn: getConfigDrift, enabled: canEditor, refetchInterval: 60_000 })
+  const monitor = useQuery({ queryKey: ['model-price-monitor-runs'], queryFn: () => listModelPriceMonitorRuns(), enabled: canEditor && tab === 'monitor', refetchInterval: tab === 'monitor' ? 30_000 : false })
 
   const driftItems = drift.data?.items ?? []
   const critical = driftItems.filter((item) => item.severity === 'critical').length
@@ -118,6 +122,17 @@ export default function ModelConfigPage() {
         driftCard,
       ]
     }
+    if (current === 'monitor') {
+      const latest = monitor.data?.items[0]
+      const failedSources = latest?.sources_failed ?? 0
+      const mismatches = latest?.system_mismatches ?? 0
+      return [
+        { icon: <Activity size={15} />, label: '最近运行', value: latest ? ({ running: '运行中', succeeded: '完成', partial: '部分完成', failed: '失败' }[latest.status]) : '尚未运行', note: latest ? latest.started_at : '等待定时任务首次执行' },
+        { icon: <AlertTriangle size={15} />, label: '价格差异', value: String(mismatches), note: mismatches ? '官方价格与系统价格不一致' : '最近运行未发现差异', tone: (mismatches ? 'bad' : 'good') as 'bad' | 'good' },
+        { icon: <CheckCircle2 size={15} />, label: '来源状态', value: latest ? `${latest.sources_total - failedSources}/${latest.sources_total}` : '—', note: failedSources ? `${failedSources} 个来源读取失败` : '最近运行读取成功', tone: (failedSources ? 'bad' : 'good') as 'bad' | 'good' },
+        { icon: <Database size={15} />, label: '运行记录', value: String(monitor.data?.items.length ?? 0), note: '最近 30 次巡检' },
+      ]
+    }
     // drift 兜底分支
     return [roleCard, modelCard, driftCard, { icon: <SlidersHorizontal size={15} />, label: '不可用角色', value: String(unavailableRoles), note: unavailableRoles ? '需处理绑定' : '全部可用', tone: (unavailableRoles ? 'bad' : 'good') as 'bad' | 'good' }]
   }
@@ -131,6 +146,7 @@ export default function ModelConfigPage() {
       queryClient.invalidateQueries({ queryKey: ['model-config-providers'] }),
       queryClient.invalidateQueries({ queryKey: ['model-config-history'] }),
       queryClient.invalidateQueries({ queryKey: ['model-config-drift'] }),
+      queryClient.invalidateQueries({ queryKey: ['model-price-monitor-runs'] }),
     ])
   }
 
@@ -146,6 +162,7 @@ export default function ModelConfigPage() {
     }
     if (tab === 'providers') return <ProvidersTab providers={providers.data?.items ?? []} defaultModels={defaultModels} source={providers.data?.source ?? 'builtin'} canAdmin={canAdmin} onChanged={refreshAll} onGoToRoles={(role) => changeTab('roles', role)} />
     if (tab === 'history') return <ConfigHistoryTab items={history.data?.items ?? []} canAdmin={canAdmin} onChanged={refreshAll} />
+    if (tab === 'monitor') return <ModelPriceMonitorTab runs={monitor.data?.items ?? []} schedule={monitor.data?.schedule ?? { timezone: 'Asia/Shanghai', hour: 8, minute: 0 }} isLoading={monitor.isLoading} isError={monitor.isError} isFetching={monitor.isFetching} onRefresh={() => { void monitor.refetch() }} />
     return <DriftTab items={driftItems} />
   }
 
