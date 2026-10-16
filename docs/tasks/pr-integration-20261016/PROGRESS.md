@@ -53,9 +53,9 @@
 | --- | --- | --- |
 | A Provider/旅游/客服 | #73/#74/#76 MERGED；#75 Follow-up #78 文档修复完成 | #78 的旧自动 Review summary 没有公开具体意见，暂不合并或关闭原 Review；继续处理其他线。098 已进 main，仍需在获授权发布环境执行迁移。 |
 | B RAG | #66 数据终态已验收；#52 价格门禁 BLOCKED；#77 MERGED | #66 Worker E2E 已通过，但其分支独立合并会使 Worker 调用缺少 #52 的有效预占/结算，暂不单独合并。#52 当前 HEAD 已修正 usage 与预算请求关联；8-case 真实评测仍受价格治理和只读 Registry 外部条件阻断。 |
-| C 主助手 | #69 IN_PROGRESS | Trace 跨线程/事件循环串线修复已推送并由新 HEAD CI 验证；继续完成真实 Memory、授权 RAG/SQL、SSE Resume、Trace/账本和失败终态验收。 |
+| C 主助手 | #69 IN_PROGRESS | 当前 SHA 免费 CI 全 PASS；会话/事件与用户/租户隔离定向集已有 69+65+57+2 passed。下一步仍是隔离当前 HEAD 的真实 SSE、授权 RAG/SQL、Trace/账本和失败终态；真实检索/费用依赖 #52 权威价格快照，不能用共享旧容器替代。 |
 | 过期 PR | #50/#60 已关闭；#75 已合并 | #75 三条新增 Review 由 #78 修复；合并前暂不解决原线程。 |
-| main 集成 | IN_PROGRESS | MAIN-01～34 已逐项标注真实证据状态。其余 PR 当前均有独立外部门槛；恢复凭据、Docker/Worker 或数据库只读权限后继续对应施工与集成验收。 |
+| main 集成 | IN_PROGRESS | MAIN-01～34 已逐项标注真实证据状态。当前共享容器 build SHA unknown，RAG `/readyz` 503，不能当作当前 main 验收；#52 GitHub 保护环境已具备 Provider API secret，但需配置经治理的只读价格 Registry 才能进行付费质量门禁。 |
 
 ## 外部阻断与诊断
 
