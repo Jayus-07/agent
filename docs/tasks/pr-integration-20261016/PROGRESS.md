@@ -373,6 +373,7 @@
 
 - #66 `codex/rag-upload-b1-20261014`：与 `origin/main=ad553d0` 干净合并（无冲突），新 HEAD `c8663b12771b91b34299f7541cbd48d95f72bd1e` 已推送。定向回归（`test_rag_upload_celery_mode`、`test_rag_upload_to_index_e2e`、`test_index_task_runtime`、`test_upload_failures_store`、`test_faq_routing`、`test_pr55_coverage_quality_gate`）在隔离 PostgreSQL `agent_memory`：**83 passed, 3 warnings**（Windows Proactor teardown 既有告警）。PR 仍为 Draft：Worker 预算仍需 #52，不能单独合并。
 - #69 `codex/main-assistant-conversation-first-20261014`：与 `origin/main=ad553d0` 干净合并，新 HEAD `f80d082ceb94ef622eb7ba56047f43febeea9f49` 已推送；工作树 `C:\Users\wh\.codex\worktrees\pr69-main-sync\agent`（原分支此前无工作树）。事件作用域/SSE 契约定向回归（`test_stop_c_event_isolation`、`test_sse_event_schema`、`test_stream_events_flow`、`test_runner_terminal_semantics`）：**88 passed**。`test_runner_trace_finalize.py::test_generator_close_finishes_once_as_client_disconnect` 是 main 基线既有失败，本轮未纳入该集合。PR 仍为 Draft：真实授权 RAG/SQL、取消/resume、Trace 与费用 T3 未完成。
+- 两个新 HEAD 的免费 CI（run `39017731249` / `39017670067`）：Detect、Secret Scan、免费 preflight、RAG Smoke gate 全部 success；8-case 真实 API 评测仍 SKIPPED（不计通过，无 Provider 调用）。PR 均仍为 Draft，等真实 T3 与 #52 依赖解决后再按门禁合并。
 - #52 `4665d445`：与 `ad553d0` 仍冲突，冲突文件为 `backend/infra/llm/pricing.py`、`backend/rag/retrieval/multi_query.py`、`backend/tests/evaluation/test_rag_paid_preflight.py`、`backend/tests/scripts/test_seed_prompt_eval_db.py`。冲突集中在价格治理实现与对应测试，需在 P2 缺陷 1/2 的处理口径确定后再解，避免用合并手法掩盖价格口径分歧；本轮未强行解决。
 
 ## 下一步（按依赖顺序，2026-10-17 更新）
