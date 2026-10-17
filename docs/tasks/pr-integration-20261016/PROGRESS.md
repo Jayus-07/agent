@@ -522,3 +522,11 @@ PR：
 - `origin/main = 50a4a16ad0470e17e0a60cf8aee99f090039a4c7`（未变）。
 - #52 `7aa361d`（免费 CI 待核）、#66 `c8663b1`（Draft）、#69 `f80d082`（Draft）。
 - main-push 红灯根因仍是 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 未配置（价格门禁按设计 fail-closed，0 费用）；不得用空串/synthetic 价格绕过。
+
+## 2026-10-17 事故定位：管理端「DB 未就绪」实为 PostgreSQL 连接耗尽
+
+- 现象：管理端「模型与供应商」显示 DB 未就绪 / 供应商 0 / 登记模型 9 / 暂无供应商配置，但库内有 4 厂商 / 9 模型 / 10 凭据（同进程日志可证）。
+- 根因链：共享 PG `max_connections=100`，实测 `pg_stat_activity` 103 条（其中 `agent-maintenance-worker-1` 占 59，Celery 默认并发=容器 CPU 数 × 每进程多套 SQLAlchemy 池 `2..10`）→ 容器内 `psql` 亦报 `FATAL: sorry, too many clients already` → `registry_store.load_registry()` 抛错返回 `loaded=False` → `GET /sys/providers` 旧实现映射为 `items=[] + source='builtin'` → 前端渲染「DB 未就绪 + 空清单」，15s 后刷新又正常（间歇性）。
+- 代码修复：PR [#87](https://github.com/Jayus-07/agent/pull/87)，HEAD `47b89824f4a0f5cafdc634891d60781bd0e8adf0`。`refresh_registry` 保存 last-known-good 快照；`/sys/providers` 在读取失败时回退该快照并返回 `source='db_stale'/degraded=true/message`；管理端新增「数据库暂不可用 · 展示上次配置」徽标并禁用写操作，`builtin` 仍表示从未读取成功。
+- 验证：`test_sys_providers_list_api.py` 12 passed（带 `AI_INTERNAL_TOKEN`；缺省 503 为既有 fail-closed 行为）；`ProvidersTab.test.tsx` 39 passed；`tsc --noEmit` PASS。
+- 未做（需运维决策）：未调 `max_connections`、未重启共享 PG、未改其他容器并发/池。建议：`agent-maintenance-worker-1` 显式 `--concurrency=2` 且 `DB_POOL_MAX_CONN=5`，或将 `max_connections` 提升到 300（需重启 PG）。
