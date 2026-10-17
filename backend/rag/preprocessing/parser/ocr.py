@@ -280,6 +280,7 @@ def _ocr_image_dashscope(png_bytes: bytes) -> str:
     runtime = _resolve_ocr_runtime_config()
     model = runtime["model"]
     upstream_model = runtime.get("upstream_model") or model
+    _ocr_actual_upstream_model.set(str(upstream_model))
     client = OpenAI(
         api_key=runtime["api_key"],
         base_url=runtime["base_url"],
@@ -360,6 +361,9 @@ _ocr_result_meta: ContextVar[dict] = ContextVar("ocr_result_meta", default={})
 _ocr_actual_model: ContextVar[str | None] = ContextVar(
     "ocr_actual_model", default=None
 )
+_ocr_actual_upstream_model: ContextVar[str | None] = ContextVar(
+    "ocr_actual_upstream_model", default=None
+)
 
 
 def reset_ocr_tracking() -> None:
@@ -372,10 +376,12 @@ def reset_ocr_tracking() -> None:
         "status": "",
         "cache_status": "miss",
         "model_name": None,
+        "upstream_model": None,
         "model_revision": None,
         "provider": None,
     })
     _ocr_actual_model.set(None)
+    _ocr_actual_upstream_model.set(None)
 
 
 def get_ocr_result_meta() -> dict:
@@ -402,18 +408,25 @@ def _record_ocr_result(
         or _ocr_actual_model.get()
         or identity.model_name
     )
+    current["upstream_model"] = _ocr_actual_upstream_model.get()
     current["model_revision"] = identity.model_revision
     current["provider"] = identity.provider
     _ocr_result_meta.set(current)
 
 
 def _cache_path(png_bytes: bytes) -> Path:
-    """缓存键包含供应商、模型、配置和指令版本，避免跨版本脏命中。"""
+    """缓存键包含供应商、真实出站模型、配置和指令版本，避免跨版本脏命中。
+
+    2026-10-17（#83 遗留）：键里必须用 upstream_model（实际发给供应商的模型），
+    不能用注册显示名。否则把 upstream A 换成 B 后仍命中 A 的识别结果；反之
+    只改显示名会触发不必要的重识别。不写入任何凭据字段。
+    """
     role_info = model_roles.resolve_effective("ocr")
     runtime = _resolve_ocr_runtime_config()
+    upstream_model = str(runtime.get('upstream_model') or runtime['model'])
     h = hashlib.sha256(
         (
-            f"{runtime['provider']}|{runtime['model']}|{runtime['base_url']}|"
+            f"{runtime['provider']}|{upstream_model}|{runtime['base_url']}|"
             f"{role_info.get('source', '')}|{role_info.get('updated_at', '')}|"
             f"{getattr(rag_cfg, 'OCR_PROMPT_VERSION', 'v1')}|"
         ).encode()
@@ -442,22 +455,31 @@ def _ocr_image_cloud_cached(png_bytes: bytes) -> str:
         result = _ocr_image_dashscope(png_bytes)
         _record_ocr_result(status="success", cache_status="miss")
         return result
+    runtime = _resolve_ocr_runtime_config()
+    upstream_model = str(runtime.get("upstream_model") or runtime["model"])
     path = _cache_path(png_bytes)
     try:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data.get("text"), str):
+                # 全文档命中缓存时不会走 _ocr_image_dashscope，必须在命中分支
+                # 恢复真实出站模型归因；旧缓存没有该字段，回退当前 runtime。
+                cached_upstream = str(data.get("upstream_model") or "").strip()
+                _ocr_actual_upstream_model.set(cached_upstream or upstream_model)
                 _record_ocr_result(status="cached", cache_status="hit")
                 return data["text"]
     except Exception as e:
         logger.debug(f"[OCR] 缓存读取失败（走直连）: {e}")
     text = _throttled_call(png_bytes)
+    # 归因以本次真实出站模型为准（含桩替换与直连路径）；不得留 None。
+    _ocr_actual_upstream_model.set(upstream_model)
     _record_ocr_result(status="success", cache_status="miss")
     try:
         _ocr_cache_dir.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(
             {"text": text, "model": _configured_ocr_model(),
+             "upstream_model": upstream_model,
              "ts": int(time.time())}, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)  # 原子落盘，多 worker 同页竞争无半写文件
     except Exception as e:
