@@ -33,3 +33,10 @@
 - PR Reviews：0；未解决 Review Threads：0。
 - PDF 上传仍无最终索引/检索证据，故保持 Draft，不建议合并。
 - 本轮到此停止，不启动 B2/B3/C，不跑付费 Provider，不修改正式数据库或全局验收状态。
+## 2026-10-18 合并 main（含 #90）与 B1 PDF SIGKILL 根因证据
+
+- 合并最新 main `fd1722c`（#90）。冲突仅 `cleaner.py` / `filter.py`：按「#90 实现为唯一来源、删除 #66 重复实现」处理——cleaner 保留 #90 的节点级清洗/删除证据/清洗对账，采纳 #66「不猜裸数字为页码」与只删带标签页脚；filter 以 #90 版为基线，补回 #66 的 `split_group_id` 豁免分支。
+- 同步过期断言：短源 Leaf 现在由过滤器直接判 `clean`（不再走过滤后回捞并改写 `filter_status`）；裸数字行不再被清洗删除（审计仍可按形态归类）。合并后定向集合 **211 passed / 1 skipped**，16/16 fixture 离线完整性 **TOTAL 16 FAIL 0**。
+- **PDF Worker SIGKILL 根因（实测）**：运行中的 `agent-rag-index-worker-1` 容器 `HostConfig.Memory=805306368`（768 MiB，compose 声明 3g、concurrency 默认 2）。本地对 500 页文本 PDF 执行 `parse_and_chunk_full` 峰值 RSS **836.2 MB**（75.7s，9,501 AST 节点，9,500 chunk → 超过 `MAX_CHUNKS_PER_DOC=6000` 被截断）。单文档解析峰值已高于运行容器上限 → cgroup OOM 以 SIGKILL 终止 Celery 子进程（父进程存活、容器 `OOMKilled=false`），与现场「子进程 SIGKILL、无最终 IndexRun/终态/Search」一致；并发 2 时对 3g 上限也接近临界。
+- 解除 B1 阻断所需（本轮未执行，避免在未验证情况下改部署资源）：① 将 rag-index-worker 限额提升到 ≥ 单文档峰值的 2 倍（或把 concurrency 降到 1）；② 用 #66 HEAD 重建并启动 stack；③ 上传真实 501 页 PDF，取回 IndexRun/Registry/终态/Search 证据。当前 #66 仍保持 Draft，不宣称 PDF E2E 通过。
+- 说明：超大 PDF 产出 chunk 超过上限属既有 fail-closed（文档 failed），与本次 OOM 是两类问题。
