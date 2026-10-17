@@ -344,6 +344,261 @@ def _filter_index_chunks(
     return kept_chunks, filtered_details
 
 
+PREPAID_INTEGRITY_ISSUE_PREFIX = "quality_anomaly:prepaid_integrity"
+
+_COVERAGE_AUDIT_FIELDS = {
+    "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
+}
+
+
+def _coverage_quality_metrics(coverage: dict) -> dict:
+    """覆盖审计 → 质量门禁指标（付费前预检与付费后门禁同口径）。
+
+    只输出结构化指标，不带 uncovered 正文样本（Trace 不落未覆盖正文）。
+    """
+    coverage_error = bool(
+        coverage.get("error") or not _COVERAGE_AUDIT_FIELDS.issubset(coverage)
+    )
+    try:
+        leaf_total = int(coverage.get("leaf_total") or 0)
+        audited_count = int(coverage.get("audited_leaf_count") or 0)
+        uncovered_count = int(coverage.get("uncovered_count") or 0)
+        if (
+            leaf_total < 0
+            or audited_count < 0
+            or uncovered_count < 0
+            or audited_count > leaf_total
+            or uncovered_count > audited_count
+            or (audited_count < leaf_total and coverage.get("sampled") is not True)
+            or not isinstance(coverage.get("sampled"), bool)
+        ):
+            coverage_error = True
+    except (TypeError, ValueError):
+        leaf_total = audited_count = uncovered_count = 0
+        coverage_error = True
+    return {
+        "coverage_sampled": bool(coverage.get("sampled")),
+        "coverage_leaf_total": leaf_total,
+        "coverage_audited_leaf_count": audited_count,
+        "coverage_uncovered_count": uncovered_count,
+        "coverage_audit_error": coverage_error,
+        "coverage_issue": (
+            "coverage_audit_failed" if coverage_error
+            else "coverage_gap" if uncovered_count > 0
+            else ""
+        ),
+    }
+
+
+def _enforce_prepaid_content_integrity(
+    indexer,
+    qc: dict,
+    chunks: list,
+    path_id: str,
+    doc_meta: dict,
+    *,
+    doc_id: str,
+    kb_id: str,
+    file_path: str,
+    file_size: int,
+    file_hash: str,
+    filtered_details: list[dict] | None = None,
+    truncated: bool = False,
+) -> dict | None:
+    """付费前免费完整性预检（P0-E，2026-10-18）。
+
+    解析 / 清洗 / 切分 / 过滤环节若已确定内容缺失，必须在任何付费调用
+    （元数据 LLM、embedding）之前失败。三者全部离线可算：
+      - coverage_audit：归一化 AST → 过滤后最终 Leaf（覆盖缺口）；
+      - audit_chunk_integrity：Leaf/Parent 身份与引用契约；
+      - cleaning_coverage_audit：Raw AST → 清洗输出（正文是否被清空）。
+    失败语义与既有质量门禁一致（ValueError + quality_issues 留痕），
+    不新增价格/预算/账本体系；付费后与写库前的门禁原样保留。
+    """
+    from backend.rag.preprocessing.chunking import coverage_audit
+    from backend.rag.preprocessing.quality_gate import (
+        audit_chunk_integrity,
+        cleaning_coverage_audit,
+    )
+
+    raw_ast = qc.get("raw_ast")
+    if raw_ast is None:
+        return None
+    audit_ast = qc.get("normalized_ast") or raw_ast
+    pii_normalized = any(
+        bool((chunk.metadata or {}).get("pii_masked"))
+        for chunk in chunks
+        if (chunk.metadata or {}).get("granularity") == "leaf"
+    )
+    coverage = coverage_audit(
+        audit_ast, chunks, normalize_pii=pii_normalized,
+    )
+    qc["coverage"] = coverage
+    chunk_integrity = audit_chunk_integrity(chunks)
+    cleaning = qc.get("cleaning_coverage")
+    if not isinstance(cleaning, dict):
+        cleaning = cleaning_coverage_audit(raw_ast)
+        qc["cleaning_coverage"] = cleaning
+
+    coverage_metrics = _coverage_quality_metrics(coverage)
+    failures: list[str] = []
+    if coverage_metrics["coverage_audit_error"]:
+        failures.append("coverage_audit_failed")
+    elif coverage_metrics["coverage_uncovered_count"] > 0:
+        failures.append("coverage_gap")
+    if int(chunk_integrity.get("valid_leaf_chunk_count") or 0) < 1:
+        failures.append("chunks_present")
+    elif (
+        int(chunk_integrity.get("empty_chunk_count") or 0)
+        or int(chunk_integrity.get("missing_chunk_id_count") or 0)
+        or int(chunk_integrity.get("duplicate_chunk_id_count") or 0)
+    ):
+        failures.append("chunk_identifiers")
+    elif int(chunk_integrity.get("invalid_parent_reference_count") or 0):
+        failures.append("parent_references")
+    if cleaning.get("error"):
+        failures.append("cleaning_audit_failed")
+    elif int(cleaning.get("uncovered_count") or 0) > 0:
+        failures.append("cleaner_content_loss")
+
+    # 复用同一套类型化校验补齐"付费前即可判定"的硬异常（截断 / 表格与 OCR
+    # 资源上限等），避免在预检里再抄一份判据。build_quality_record +
+    # run_typed_validation 都是纯函数、不产生任何外呼。
+    record = None
+    anomalies: list[dict] = []
+    try:
+        from backend.rag.preprocessing.quality_gate import (
+            build_quality_record,
+            hard_anomalies,
+            run_typed_validation,
+        )
+
+        record = build_quality_record(
+            file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+            raw_ast=raw_ast, chunks=chunks,
+            file_size=file_size, file_hash=file_hash or "",
+            doc_type=qc.get("doc_type", ""),
+            strategy_name=qc.get("strategy_name", ""),
+            completeness=qc.get("completeness"),
+            filtered_details=filtered_details,
+            truncated=truncated,
+            ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
+            ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
+            route_decision=qc.get("route_decision"),
+            coverage=coverage,
+            cleaning_coverage=cleaning,
+        )
+        anomalies = run_typed_validation(record, raw_ast)
+        for item in hard_anomalies(anomalies):
+            code = str(item.get("check") or "")
+            if code and code not in failures:
+                failures.append(code)
+    except Exception:  # noqa: BLE001 — 预检校验失败不改变覆盖/身份/清洗判据
+        logger.warning(
+            "[Indexer] 付费前类型化校验构建失败（退化为基础判据）",
+            exc_info=True,
+        )
+    if not failures:
+        return {
+            "coverage": coverage,
+            "chunk_integrity": chunk_integrity,
+            "cleaning_coverage": cleaning,
+        }
+
+    # 失败也要留证：质量记录在付费前就落盘（不产生任何外呼），
+    # 后续付费后门禁不再重复构建记录（本次已抛出）。
+    detail = ",".join(failures)
+    doc_meta["quality_status"] = "failed"
+    _append_quality_issue(
+        doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
+    )
+    quality_score = None
+    try:
+        from backend.rag.preprocessing.quality_gate import (
+            build_quality_record,
+            compute_quality_score,
+            persist_quality_record,
+            run_typed_validation,
+        )
+
+        if record is None:
+            record = build_quality_record(
+                file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+                raw_ast=raw_ast, chunks=chunks,
+                file_size=file_size, file_hash=file_hash or "",
+                doc_type=qc.get("doc_type", ""),
+                strategy_name=qc.get("strategy_name", ""),
+                completeness=qc.get("completeness"),
+                filtered_details=filtered_details,
+                truncated=truncated,
+                ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
+                ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
+                route_decision=qc.get("route_decision"),
+                coverage=coverage,
+                cleaning_coverage=cleaning,
+            )
+        if not anomalies:
+            anomalies = run_typed_validation(record, raw_ast)
+        quality_score = compute_quality_score(anomalies)
+        doc_meta["quality_score"] = quality_score
+        record["quality_issues"] = doc_meta.get("quality_issues", "")
+        record.setdefault("validation", {})["score"] = quality_score
+        doc_meta["quality_record_path"] = persist_quality_record(record)
+    except Exception:  # noqa: BLE001 — 留证失败不改变失败结论
+        logger.warning(
+            "[Indexer] 付费前完整性预检质量记录落盘失败（不改变失败结论）",
+            exc_info=True,
+        )
+    # Trace 留痕：付费前拦截同样是"质量门禁失败"，必须可在 Trace 详情页看到
+    # （与付费后门禁的 index_quality span 同口径，去掉了未覆盖正文样本）。
+    try:
+        q_span = trace_collector.start_span(
+            "index_quality",
+            parent_id="index_upload",
+            name="Quality record (prepaid)",
+            type="audit",
+            kind=SpanKind.INDEX_PARSE.value,
+            input={
+                "file_path": file_path,
+                "doc_id": doc_id,
+                "coverage": coverage_metrics,
+                "chunk_integrity": chunk_integrity,
+            },
+        )
+        _hard_prepaid = [a for a in anomalies if a.get("severity") == "error"]
+        trace_collector.end_span(
+            q_span, status="error",
+            metrics={
+                "anomalies_total": len(anomalies),
+                "anomalies_hard": len(_hard_prepaid),
+                "anomalies_warn": len(anomalies) - len(_hard_prepaid),
+                "record_path": doc_meta.get("quality_record_path", ""),
+                **coverage_metrics,
+                **chunk_integrity,
+            },
+        )
+    except Exception:  # noqa: BLE001 — Trace 失败不改变失败结论
+        logger.warning("[Indexer] 付费前预检 Trace 留痕失败", exc_info=True)
+
+    if not getattr(indexer, "candidate_mode", False):
+        registry_fields = {
+            "quality_issues": doc_meta.get("quality_issues", ""),
+            "quality_status": "failed",
+        }
+        if quality_score is not None:
+            registry_fields["quality_score"] = quality_score
+        try:
+            indexer.registry.update_fields(path_id, registry_fields)
+        except Exception:  # noqa: BLE001 — 留痕失败不改变失败结论
+            logger.warning(
+                "[Indexer] 付费前完整性预检留痕写入 registry 失败",
+                exc_info=True,
+            )
+    raise ValueError(
+        f"质量门禁硬异常(付费前预检): {detail}"
+    )
+
+
 class ChunkingEmptyError(Exception):
     """文档解析/切片成功但最终未产出任何有效 chunk（chunk_count=0）。
 
@@ -1304,6 +1559,22 @@ class IncrementalIndexer:
             "doc_type": "general",
             "person_names": [],
         }
+        # 截断标记先算出来：付费前预检与质量记录都要用（定义在使用点之前）。
+        chunks_truncated = any(
+            ch.metadata.get("chunks_truncated") for ch in chunks
+        )
+
+        # ── ⑤-1 付费前免费完整性预检（P0-E）──
+        # 元数据 LLM / embedding 都在后面，此处失败不产生任何外呼费用；
+        # 付费后与写库前的质量门禁（⑥之后）原样保留。
+        _enforce_prepaid_content_integrity(
+            self, _qc, chunks, path_id, doc_meta,
+            doc_id=doc_id, kb_id=kb_id, file_path=file_path,
+            file_size=file_size, file_hash=file_hash,
+            filtered_details=filtered_details,
+            truncated=chunks_truncated,
+        )
+
         metadata_lineage = None
         if lineage_recorder is not None:
             metadata_lineage = lineage_recorder.begin_stage(
@@ -1360,7 +1631,6 @@ class IncrementalIndexer:
 
         # 截断留痕：分块超上限被 _enrich 截断时，检索覆盖天然不完整，
         # 必须写进 registry quality_issues 可追溯，而不是只有日志
-        chunks_truncated = any(ch.metadata.get("chunks_truncated") for ch in chunks)
         if chunks_truncated:
             _append_quality_issue(
                 doc_meta, "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)")
@@ -1396,61 +1666,24 @@ class IncrementalIndexer:
                 for chunk in chunks
                 if (chunk.metadata or {}).get("granularity") == "leaf"
             )
-            _coverage = coverage_audit(
-                _audit_ast, chunks,
-                normalize_pii=_coverage_pii_normalized,
-            )
-            _qc["coverage"] = _coverage
-            _coverage_fields = {
-                "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
-            }
-            _coverage_error = (
-                bool(_coverage.get("error"))
-                or not _coverage_fields.issubset(_coverage)
-            )
-            try:
-                _coverage_leaf_total = int(_coverage.get("leaf_total") or 0)
-                _coverage_audited_count = int(
-                    _coverage.get("audited_leaf_count") or 0
+            _coverage = _qc.get("coverage")
+            if not isinstance(_coverage, dict):
+                _coverage = coverage_audit(
+                    _audit_ast, chunks,
+                    normalize_pii=_coverage_pii_normalized,
                 )
-                _coverage_uncovered_count = int(
-                    _coverage.get("uncovered_count") or 0
-                )
-                if (
-                    _coverage_leaf_total < 0
-                    or _coverage_audited_count < 0
-                    or _coverage_uncovered_count < 0
-                    or _coverage_audited_count > _coverage_leaf_total
-                    or _coverage_uncovered_count > _coverage_audited_count
-                    or (
-                        _coverage_audited_count < _coverage_leaf_total
-                        and _coverage.get("sampled") is not True
-                    )
-                    or not isinstance(_coverage.get("sampled"), bool)
-                ):
-                    _coverage_error = True
-            except (TypeError, ValueError):
-                _coverage_leaf_total = 0
-                _coverage_audited_count = 0
-                _coverage_uncovered_count = 0
-                _coverage_error = True
+                _qc["coverage"] = _coverage
+            # 与付费前预检同一口径（单一实现，避免两条路径判据漂移）
+            _coverage_metrics = _coverage_quality_metrics(_coverage)
+            _coverage_error = _coverage_metrics["coverage_audit_error"]
+            _coverage_uncovered_count = _coverage_metrics[
+                "coverage_uncovered_count"
+            ]
+            _coverage_issue = _coverage_metrics["coverage_issue"]
             _coverage_requires_failure = bool(
                 _coverage_error
                 or _coverage_uncovered_count > 0
             )
-            _coverage_issue = (
-                "coverage_audit_failed" if _coverage_error
-                else "coverage_gap" if _coverage_uncovered_count > 0
-                else ""
-            )
-            _coverage_metrics = {
-                "coverage_sampled": bool(_coverage.get("sampled")),
-                "coverage_leaf_total": _coverage_leaf_total,
-                "coverage_audited_leaf_count": _coverage_audited_count,
-                "coverage_uncovered_count": _coverage_uncovered_count,
-                "coverage_audit_error": _coverage_error,
-                "coverage_issue": _coverage_issue,
-            }
             from backend.rag.preprocessing.quality_gate import audit_chunk_integrity
 
             _chunk_integrity = audit_chunk_integrity(chunks)
@@ -1514,6 +1747,7 @@ class IncrementalIndexer:
                     ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
                     route_decision=_qc.get("route_decision"),
                     coverage=_coverage,
+                    cleaning_coverage=_qc.get("cleaning_coverage"),
                 )
                 _anomalies = run_typed_validation(_record, _raw_ast)
                 _hard = hard_anomalies(_anomalies)
@@ -2403,8 +2637,31 @@ class IncrementalIndexer:
                 "old_chunk_ids": old_chunk_ids,
                 "old_doc_db_id": old_doc_db_id,
             }
-        index_result = self._index_file(
-            file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        previous_status = str((row or {}).get("status") or "")
+        previous_file_hash = str((row or {}).get("file_hash") or "")
+        try:
+            index_result = self._index_file(
+                file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        except Exception:
+            # 真实路径里 _index_file → register_in_progress 会先把行改成
+            # parsing + 新 file_hash。失败时旧向量仍按"先写后删"保留，但
+            # status=parsing 会让检索可见性（status=active 正向校验）把旧
+            # 版本整体隐藏，file_hash 也会指向未成功索引的内容。这里恢复
+            # 更新前快照，兑现"失败的索引不能动旧 active 记录"契约
+            # （test_indexer_recovery_and_reindex::test_failure_preserves_old_data）。
+            if old_doc_id and previous_status == "active" and old_chunk_ids:
+                try:
+                    self.registry.update_status(file_path, "active")
+                    if previous_file_hash:
+                        self.registry.update_fields(
+                            file_path, {"file_hash": previous_file_hash},
+                        )
+                except Exception as restore_error:  # noqa: BLE001
+                    logger.warning(
+                        "[REINDEX] 失败后恢复旧 active 快照失败 "
+                        f"(doc_id={old_doc_id}): {restore_error}"
+                    )
+            raise
         # dedup 命中（内容未变，如占位行写入失败的极端场景）→ 没有新数据，
         # 清理旧向量会造成数据丢失，直接原样返回
         skipped = bool(index_result.get("skipped"))

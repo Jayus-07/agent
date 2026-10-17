@@ -416,6 +416,154 @@ class TestCloudCacheAndThrottle:
         assert len(files) == 1
         assert _json.loads(files[0].read_text(encoding="utf-8"))["text"] == "识别文本-1"
 
+    def test_upstream_model_switch_invalidates_cache(self, tmp_path, monkeypatch):
+        """OCR-03/04：upstream A→B 后必须 MISS，且不读取 A 的结果。"""
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        runtime = {
+            "provider": "dashscope",
+            "model": "ocr-registered",
+            "upstream_model": "ocr-upstream-a",
+            "api_key": "sk-test",
+            "base_url": "https://db.example/v1",
+        }
+        monkeypatch.setattr(ocr_mod, "_resolve_ocr_runtime_config", lambda: dict(runtime))
+        calls = {"n": 0}
+
+        def fake_call(png):
+            calls["n"] += 1
+            return f"文本-{runtime['upstream_model']}"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", fake_call)
+        png = b"\x89PNG-same-page"
+
+        assert ocr_mod.ocr_image(png) == "文本-ocr-upstream-a"  # OCR-01 MISS
+        assert ocr_mod.ocr_image(png) == "文本-ocr-upstream-a"  # OCR-02 HIT
+        assert calls["n"] == 1
+
+        runtime["upstream_model"] = "ocr-upstream-b"
+        assert ocr_mod.ocr_image(png) == "文本-ocr-upstream-b"  # OCR-03 MISS
+        assert calls["n"] == 2
+        assert ocr_mod.ocr_image(png) == "文本-ocr-upstream-b"  # OCR-04 不再读到 A
+        assert calls["n"] == 2
+
+    def test_display_name_change_keeps_cache(self, tmp_path, monkeypatch):
+        """OCR-05：只改注册显示名（upstream 不变）不得触发重识别。"""
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        runtime = {
+            "provider": "dashscope",
+            "model": "display-name-1",
+            "upstream_model": "same-upstream",
+            "api_key": "sk-test",
+            "base_url": "https://db.example/v1",
+        }
+        monkeypatch.setattr(ocr_mod, "_resolve_ocr_runtime_config", lambda: dict(runtime))
+        calls = {"n": 0}
+
+        def fake_call(png):
+            calls["n"] += 1
+            return "识别文本"
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", fake_call)
+        png = b"\x89PNG-display"
+        ocr_mod.ocr_image(png)
+        runtime["model"] = "display-name-2"
+        ocr_mod.ocr_image(png)
+        assert calls["n"] == 1, "显示名变化不应导致重新识别"
+
+    def test_cache_hit_restores_upstream_model_attribution(self, tmp_path, monkeypatch):
+        """全文档命中缓存时也必须能报出真实出站模型。"""
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        runtime = {
+            "provider": "dashscope",
+            "model": "ocr-registered",
+            "upstream_model": "ocr-upstream-x",
+            "api_key": "sk-test",
+            "base_url": "https://db.example/v1",
+        }
+        monkeypatch.setattr(ocr_mod, "_resolve_ocr_runtime_config", lambda: dict(runtime))
+        monkeypatch.setattr(
+            ocr_mod, "_ocr_image_dashscope", lambda png: "识别文本",
+        )
+        png = b"\x89PNG-cache-attribution"
+
+        ocr_mod.reset_ocr_tracking()
+        ocr_mod.ocr_image(png)          # MISS 落盘
+        assert ocr_mod.get_ocr_result_meta()["upstream_model"] == "ocr-upstream-x"
+
+        ocr_mod.reset_ocr_tracking()
+        ocr_mod.ocr_image(png)          # HIT，不进入 Provider 分支
+        meta = ocr_mod.get_ocr_result_meta()
+        assert meta["cache_status"] == "hit"
+        assert meta["upstream_model"] == "ocr-upstream-x"
+
+    def test_legacy_cache_without_upstream_falls_back_to_runtime(self, tmp_path, monkeypatch):
+        """旧缓存没有 upstream_model 字段时回退当前 runtime，不返回 None。"""
+        import json as _json
+
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        cache_dir = tmp_path / "ocr_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", cache_dir)
+        ocr_mod._last_call_mono = 0.0
+        monkeypatch.setattr(
+            ocr_mod, "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": "ocr-registered",
+                "upstream_model": "ocr-upstream-current",
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
+        png = b"\x89PNG-legacy-cache"
+        path = ocr_mod._cache_path(png)
+        path.write_text(_json.dumps({"text": "旧文本", "model": "old"}), encoding="utf-8")
+
+        ocr_mod.reset_ocr_tracking()
+        assert ocr_mod.ocr_image(png) == "旧文本"
+        assert ocr_mod.get_ocr_result_meta()["upstream_model"] == "ocr-upstream-current"
+
+    def test_failed_ocr_is_not_cached(self, tmp_path, monkeypatch):
+        """OCR-07：失败结果不得写缓存冒充成功内容。"""
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_CACHE_ENABLED", True)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MIN_INTERVAL_MS", 0)
+        monkeypatch.setattr(ocr_mod, "_ocr_cache_dir", tmp_path / "ocr_cache")
+        ocr_mod._last_call_mono = 0.0
+        monkeypatch.setattr(
+            ocr_mod, "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": "ocr-registered",
+                "upstream_model": "ocr-upstream",
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
+
+        def fake_call(png):
+            raise RuntimeError("upstream 500")
+
+        monkeypatch.setattr(ocr_mod, "_ocr_image_dashscope", fake_call)
+        with pytest.raises(RuntimeError):
+            ocr_mod.ocr_image(b"\x89PNG-fail")
+        cache_dir = tmp_path / "ocr_cache"
+        assert not cache_dir.exists() or list(cache_dir.glob("*.json")) == []
+
     def test_tracking_counts_partial_page_failure(self, monkeypatch):
         """一份扫描件中成功页和失败页都必须进入同一 OCR 阶段统计。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "rapidocr")

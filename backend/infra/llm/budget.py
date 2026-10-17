@@ -124,24 +124,57 @@ class RequestBudget:
                 _record_budget_request(self.mode, "rejected")
                 raise RequestBudgetExceeded(reason)
             if self.mode == "enforce" and model_name and self.quota_store is not None:
-                from backend.infra.llm.pricing import get_current_price_table
+                from backend.infra.llm.pricing import (
+                    PriceConflict,
+                    get_current_price_table,
+                    has_registry_unit_price,
+                )
 
-                # P0 治理修正（2026-09-22）：价格未知（缺价/价格库不可用）
-                # 不再阻断调用 —— 模型推理可用性优先于结算精度。此前
-                # 「拒绝首调」曾让 general_chat 等主链路直接降级静态话术。
-                # 放行后由 proxy._record_tokens 结算侧以 price_unknown
-                # 状态标记，按注册表估价记账（不静默算 0），token 上限
-                # 保护照常生效。
+                # 2026-10-17（#81 遗留收口）价格预检契约，取代 2026-09-22
+                # 「缺价一律放行」：
+                # 1) 生效价格互相冲突（跨版本/混币种）→ 拒绝。取任何一条都会
+                #    算错账，放行后用估价掩盖冲突等于伪造计价依据；
+                # 2) 拿不到可用价格行（缺行 / 价格表不可用），但注册表仍有正
+                #    单价 → 放行并记 price_unknown，由结算侧按注册表估价，
+                #    不再是精确成本；
+                # 3) 拿不到价格行且注册表也没有任何正单价 → 拒绝。此时费用
+                #    无法证明，放行等于给未定价调用开口子（用户 20 元硬上限
+                #    无法兜底）。
+                table_error: Exception | None = None
                 try:
                     get_current_price_table(model_name, component).require(
                         model_name, component, enforce=True
                     )
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 — 分类在下方处理
+                    table_error = exc
+
+                if isinstance(table_error, PriceConflict):
+                    _record_budget_request(self.mode, "rejected")
+                    logger.warning(
+                        "[Budget][price_conflict] model=%s component=%s "
+                        "生效价格冲突，拒绝调用: %s",
+                        model_name, component, table_error,
+                    )
+                    raise RequestBudgetExceeded(
+                        f"price_conflict:{model_name}/{component}"
+                    ) from table_error
+
+                if table_error is not None:
+                    if not has_registry_unit_price(model_name):
+                        _record_budget_request(self.mode, "rejected")
+                        logger.warning(
+                            "[Budget][price_unavailable] model=%s component=%s "
+                            "无生效价格且注册表无单价，拒绝调用: %s",
+                            model_name, component, table_error,
+                        )
+                        raise RequestBudgetExceeded(
+                            f"price_unavailable:{model_name}/{component}"
+                        ) from table_error
                     _record_budget_request(self.mode, "price_unknown")
                     logger.warning(
                         "[Budget][price_unknown] model=%s component=%s "
-                        "价格未知，放行调用（结算侧将标记 price_unknown）: %s",
-                        model_name, component, exc,
+                        "无可信价格行，按注册表估价放行（结算侧标记 price_unknown）: %s",
+                        model_name, component, table_error,
                     )
             reservation = None
             if (

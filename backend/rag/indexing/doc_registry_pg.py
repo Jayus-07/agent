@@ -433,6 +433,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
     def update_fields(self, file_path: str, fields: dict):
         """白名单字段部分更新（全量重建后回填快照字段用，防注入只放行元数据列）。"""
         allowed = {
+            # file_hash：失败更新回滚时恢复"上一次成功索引"的指纹，避免
+            # registry 指向尚未索引成功的内容（见 reindex_file 失败恢复）。
+            "file_hash",
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "complexity", "quality_score",
             "quality_issues", "confidence", "permission_scope",

@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from typing import Any
 
 from backend.rag.preprocessing.ast import LEAF_TYPES, DocumentAST, walk
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
 QUALITY_RECORD_SCHEMA_VERSION = "1.0"
@@ -75,7 +77,7 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
     for name, pat in _VALUE_PATTERNS.items():
         lost = set(pat.findall(raw_text or "")) - set(pat.findall(cleaned_text or ""))
         if lost:
-            samples = sorted(lost)[:3]
+            samples = [mask_sensitive_text(item, limit=80) for item in sorted(lost)[:3]]
             anomalies.append({
                 "check": "value_loss",
                 "value_type": name,
@@ -154,6 +156,124 @@ def audit_chunk_integrity(chunks: list) -> dict[str, int]:
     }
 
 
+def _audit_normalize(text: str) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def cleaning_coverage_audit(
+    ast: DocumentAST, max_audit_nodes: int | None = None,
+) -> dict:
+    """Raw AST → 清洗输出 的合法清洗对账（P0-D 边界一，2026-10-18）。
+
+    coverage_audit 只审「归一化 AST → 最终 Leaf」，看不到 Cleaner 把节点
+    清空：被清空的叶子会从覆盖审计的分母里消失，形成"分母缩水式假通过"。
+
+    对账口径（逐节点、用节点自身的 raw_text → text 配对）：
+      - 规范化差异（控制字符/全半角/空白/中文标点/HTML 剥离）不算丢失；
+      - 行形态即可判定的确定性噪音（页码/页脚/模板行/维基噪音/URL 邮箱/
+        纯符号）算合法删除并计数；
+      - 其余在**该节点自身**清洗结果中消失的行计入 uncovered，由质量门禁
+        fail-closed。
+
+    不使用全文拼接的公共文本对账：两个节点文本相同时，"全文里还出现过"
+    不能抵消被清空的另一个节点（2026-10-18 边界修复）。
+    默认**全量**审计：逐节点线性核对，不做全文 O(n²) 扫描；只有调用方显式
+    传入 max_audit_nodes 才抽样，此时 sampled=True，发布门禁按"审计不完整"
+    硬失败——抽样无缺口不得被表述成全量完整。
+    审计自身异常返回 {"error": ...}，调用方必须按硬异常处理。
+    """
+    from backend.rag.preprocessing.cleaner import DocumentCleaner
+
+    cleaner = DocumentCleaner()
+    try:
+        nodes = [n for n in walk(ast.root) if n.type != "table"]
+        audited_all = [
+            n for n in nodes if (getattr(n, "raw_text", "") or "").strip()
+        ]
+        sampled = False
+        if max_audit_nodes is None:
+            audited = audited_all
+        else:
+            cap = max(1, int(max_audit_nodes))
+            if len(audited_all) > cap:
+                stride = max(1, math.ceil(len(audited_all) / cap))
+                audited = audited_all[::stride][:cap]
+                sampled = True
+            else:
+                audited = audited_all
+
+        covered = 0
+        uncovered: list[dict] = []
+        legal_noise_line_count = 0
+        lost_line_count = 0
+
+        for node in audited:
+            raw_text = node.raw_text or ""
+            raw_normalized = _audit_normalize(
+                cleaner.normalize_for_compare(raw_text)
+            )
+            if not raw_normalized:
+                covered += 1
+                continue
+            node_cleaned = _audit_normalize(
+                cleaner.normalize_for_compare(node.text)
+            )
+            if raw_normalized in node_cleaned:
+                covered += 1
+                continue
+
+            lost: list[str] = []
+            for line in raw_text.splitlines():
+                if not line.strip():
+                    continue
+                line_normalized = _audit_normalize(
+                    cleaner.normalize_for_compare(line)
+                )
+                if not line_normalized:
+                    continue
+                if line_normalized in node_cleaned:
+                    continue
+                if cleaner.classify_noise_line(line):
+                    legal_noise_line_count += 1
+                    continue
+                lost.append(mask_sensitive_text(line.strip(), limit=80))
+
+            if lost:
+                lost_line_count += len(lost)
+                uncovered.append({
+                    "type": node.type,
+                    "preview": mask_sensitive_text(raw_text.strip(), limit=80),
+                    "lost_lines": len(lost),
+                    "lost_samples": lost[:3],
+                })
+            else:
+                covered += 1
+
+        return {
+            "raw_leaf_total": len(audited_all),
+            "audited_node_count": len(audited),
+            "covered": covered,
+            "uncovered_count": len(uncovered),
+            "uncovered_samples": uncovered[:10],
+            "legal_noise_line_count": legal_noise_line_count,
+            "lost_line_count": lost_line_count,
+            "sampled": sampled,
+        }
+    except Exception as e:  # noqa: BLE001 — 门禁按硬异常处理
+        logger.warning(f"[CleaningAudit] 失败: {type(e).__name__}: {e}")
+        return {
+            "error": f"{type(e).__name__}: {e}",
+            "raw_leaf_total": 0,
+            "audited_node_count": 0,
+            "covered": 0,
+            "uncovered_count": 0,
+            "uncovered_samples": [],
+            "legal_noise_line_count": 0,
+            "lost_line_count": 0,
+            "sampled": False,
+        }
+
+
 def build_quality_record(
     *,
     file_path: str,
@@ -173,6 +293,7 @@ def build_quality_record(
     index_errors: list[str] | None = None,
     route_decision: dict | None = None,
     coverage: dict | None = None,
+    cleaning_coverage: dict | None = None,
 ) -> dict:
     """组装 §5.1/§5.2 质量记录（纯函数，不做校验不落盘）。"""
     node_summaries = _node_summary(raw_ast)
@@ -188,6 +309,15 @@ def build_quality_record(
         (max((len(r) for r in (n.rows or [])), default=0) for n in table_nodes),
         default=0,
     )
+
+    # 清洗删除证据汇总（P0-A.4 可审计）：操作名/分类/样本，只留摘要不落全文
+    dropped_evidence: list[dict] = []
+    for node in walk(raw_ast.root):
+        dropped_evidence.extend(getattr(node, "cleaning_dropped", []) or [])
+    dropped_by_operation: dict[str, int] = {}
+    for item in dropped_evidence:
+        op = str(item.get("operation") or "unknown")
+        dropped_by_operation[op] = dropped_by_operation.get(op, 0) + 1
 
     chunk_meta = [ch.metadata or {} for ch in chunks]
     parent_count = sum(1 for m in chunk_meta if m.get("granularity") == "parent")
@@ -254,6 +384,11 @@ def build_quality_record(
             "raw_chars": raw_chars,
             "cleaned_chars": cleaned_chars,
             "nodes_cleaned": sum(1 for n in node_summaries if n["cleaned"]),
+            # 删除原因与证据（合法噪音 vs 内容丢失由 cleaning_coverage 裁决）
+            "dropped_total": len(dropped_evidence),
+            "dropped_by_operation": dropped_by_operation,
+            "dropped_samples": dropped_evidence[:10],
+            "coverage": cleaning_coverage,
         },
         # §5.1 chunk 统计（leaf+parent 双粒度）
         "chunking": {
@@ -272,6 +407,11 @@ def build_quality_record(
         # P1 切分路由可审计决策（为什么用这个策略）
         "route_decision": dict(route_decision or {}),
         "coverage": coverage_record,
+        # P0-D 边界一：Raw AST → 清洗输出（独立于覆盖审计，杜绝分母缩水）
+        "cleaning_coverage": (
+            dict(cleaning_coverage)
+            if isinstance(cleaning_coverage, dict) else None
+        ),
         # §5.3 校验结果（run_typed_validation 填充）
         "validation": {"checks": [], "anomalies": []},
     }
@@ -368,6 +508,69 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 int(chunk_integrity.get("parent_reference_count") or 0),
             ),
         )
+
+    cleaning_coverage = record.get("cleaning_coverage")
+    if cleaning_coverage is not None:
+        cleaning_fields = {
+            "raw_leaf_total", "audited_node_count", "uncovered_count", "sampled",
+        }
+        cleaning_error = bool(
+            not isinstance(cleaning_coverage, dict)
+            or cleaning_coverage.get("error")
+            or not cleaning_fields.issubset(cleaning_coverage)
+        )
+        if not cleaning_error:
+            try:
+                cleaning_total = int(cleaning_coverage.get("raw_leaf_total") or 0)
+                cleaning_audited = int(
+                    cleaning_coverage.get("audited_node_count") or 0
+                )
+                cleaning_uncovered = int(
+                    cleaning_coverage.get("uncovered_count") or 0
+                )
+                cleaning_sampled = cleaning_coverage.get("sampled")
+                if (
+                    cleaning_total < 0
+                    or cleaning_audited < 0
+                    or cleaning_uncovered < 0
+                    or cleaning_audited > cleaning_total
+                    or cleaning_uncovered > cleaning_audited
+                    or (
+                        cleaning_audited < cleaning_total
+                        and cleaning_sampled is not True
+                    )
+                    or not isinstance(cleaning_sampled, bool)
+                ):
+                    cleaning_error = True
+            except (TypeError, ValueError):
+                cleaning_total = cleaning_audited = cleaning_uncovered = 0
+                cleaning_sampled = False
+                cleaning_error = True
+        if cleaning_error:
+            error_detail = (
+                str(cleaning_coverage.get("error") or "invalid cleaning audit")
+                if isinstance(cleaning_coverage, dict)
+                else "invalid cleaning audit"
+            )
+            _check(
+                "cleaning_audit_failed", False,
+                f"清洗完整性审计异常或结果字段缺失: {error_detail}",
+            )
+        else:
+            samples = cleaning_coverage.get("uncovered_samples") or []
+            _check(
+                "cleaner_content_loss", cleaning_uncovered == 0,
+                f"{cleaning_uncovered}/{cleaning_audited} 个已清洗节点存在正文丢失"
+                + (f"，样例: {samples[:3]}" if samples else ""),
+            )
+            if cleaning_sampled:
+                # 清洗边界是内容完整性的硬边界：未审计的节点可能已经丢失，
+                # 不能被当作"抽样无缺口 = 全量通过"。这里按硬异常阻断发布。
+                _check(
+                    "cleaning_audit_incomplete", False,
+                    f"清洗审计仅抽样 {cleaning_audited}/{cleaning_total} 个节点，"
+                    "未审计节点不允许静默丢失；请使用全量审计",
+                )
 
     coverage = record.get("coverage")
     if coverage is not None:

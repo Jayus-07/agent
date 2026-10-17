@@ -102,12 +102,12 @@ class PostgresPriceGovernanceRepository:
                                 (model_name, component, dimension, price_per_unit,
                                  unit, currency, price_table_version, source,
                                  effective_from, approval_status)
-                                VALUES (%s, %s, %s, %s, %s, 'USD', %s, %s, %s,
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
                                         'pending')""",
                             (
                                 row["model_name"], row["component"], row["dimension"],
-                                row["price_per_unit"], row["unit"], version,
-                                source, effective,
+                                row["price_per_unit"], row["unit"],
+                                row.get("currency", "CNY"), version, source, effective,
                             ),
                         )
             return {
@@ -273,6 +273,117 @@ class PostgresPriceGovernanceRepository:
             raise
         except Exception as exc:
             raise PriceGovernanceUnavailable("价格灰度生效失败") from exc
+
+
+
+    def publish_super_admin(
+        self,
+        rows: list[dict[str, Any]],
+        *,
+        version: str,
+        source: str,
+        actor: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """超级管理员一步直发价格（无需双审与 24h canary）。
+
+        2026-10-17 决策：价格治理对内部团队过重，改为「仅 super_admin 可改 + 单人直发」。
+        仍然保留的硬约束（不可绕过）：
+        - 只有 super_admin 能调用（路由层校验）；
+        - model_price 依旧 append-only：旧行只关不删，新行新版本，历史可追溯；
+        - 覆盖率必须 100%，缺价/价格计算错误必须为 0；
+        - 审计写入 model_price_reviews（reviewer=操作人，reason 必填）；
+        - 发布后立即失效价格缓存，后续模型登记/调用按新价计费。
+
+        审批证据形状：reviewer_1=操作人、reviewer_2=system、imported_by=super-admin，
+        与既有 provider-page 直登价语义一致，CI 侧价格快照校验无需区别对待。
+        """
+        actor = str(actor or "").strip()
+        if not actor:
+            raise ValueError("发布人不能为空")
+        if not version.strip() or not source.strip():
+            raise ValueError("价格版本和来源不能为空")
+        normalized = parse_price_rows(rows)
+        coverage = coverage_report(normalized)
+        if (
+            float(coverage.get("coverage_ratio") or 0) < 1.0
+            or int(coverage.get("missing_price_count") or 0) != 0
+            or int(coverage.get("price_calculation_error_count") or 0) != 0
+        ):
+            raise ValueError("覆盖率必须 100%，缺价和价格计算错误必须为 0")
+        effective = datetime.now(timezone.utc)
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    # 1) 关闭同维度仍生效的旧行（append-only：仅允许置 effective_to）
+                    for row in normalized:
+                        cur.execute(
+                            f"""UPDATE {self._price_table} SET effective_to=%s
+                                WHERE model_name=%s AND component=%s AND dimension=%s
+                                  AND effective_to IS NULL""",
+                            (effective, row["model_name"], row["component"], row["dimension"]),
+                        )
+                    # 2) 旧 active 版本置 expired
+                    cur.execute(
+                        f"""UPDATE {self._version_table} SET status='expired', updated_at=now()
+                            WHERE status='active' AND version <> %s""",
+                        (version,),
+                    )
+                    # 3) 新版本直接 active（canary 记为已完成：单人直发路径不做灰度）
+                    cur.execute(
+                        f"""INSERT INTO {self._version_table}
+                            (version, source, imported_by, status, effective_from,
+                             reviewer_1, reviewer_2, canary_started_at,
+                             canary_completed_at, coverage_ratio,
+                             missing_price_count, price_calculation_error_count)
+                            VALUES (%s, %s, %s, 'active', %s, %s, 'system', %s, %s,
+                                    %s, %s, %s)""",
+                        (version, source, "super-admin", effective, actor, effective,
+                         effective, coverage["coverage_ratio"],
+                         coverage["missing_price_count"],
+                         coverage["price_calculation_error_count"]),
+                    )
+                    # 4) 写入 approved 行（currency 用行内真实币种）
+                    for row in normalized:
+                        cur.execute(
+                            f"""INSERT INTO {self._price_table}
+                                (model_name, component, dimension, price_per_unit,
+                                 unit, currency, price_table_version, source,
+                                 effective_from, approval_status,
+                                 reviewer_1, reviewer_2)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                        'approved', %s, 'system')""",
+                            (row["model_name"], row["component"], row["dimension"],
+                             row["price_per_unit"], row["unit"],
+                             row.get("currency", "CNY"), version, source, effective,
+                             actor),
+                        )
+                    # 5) 审计（决策 + 理由，可追溯）
+                    cur.execute(
+                        f"""INSERT INTO {self._review_table}
+                            (version, reviewer, decision, reason)
+                            VALUES (%s, %s, 'approve', %s)
+                            ON CONFLICT (version, reviewer) DO NOTHING""",
+                        (version, actor, ("super-admin 直发: " + reason)[:1000]),
+                    )
+            # 热更新：让后续模型登记/调用立刻按新价计费
+            try:
+                from backend.infra.llm.pricing import clear_price_cache
+
+                clear_price_cache()
+            except Exception:  # noqa: BLE001 — 缓存清理失败不影响已落库的价格
+                pass
+            return {
+                "version": version,
+                "status": "active",
+                "row_count": len(normalized),
+                "mode": "super-admin-direct",
+                **coverage,
+            }
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise PriceGovernanceUnavailable("价格直发失败") from exc
 
 
 __all__ = ["PostgresPriceGovernanceRepository", "PriceGovernanceUnavailable"]
