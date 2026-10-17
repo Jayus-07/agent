@@ -530,3 +530,31 @@ PR：
 - 代码修复：PR [#87](https://github.com/Jayus-07/agent/pull/87)，HEAD `47b89824f4a0f5cafdc634891d60781bd0e8adf0`。`refresh_registry` 保存 last-known-good 快照；`/sys/providers` 在读取失败时回退该快照并返回 `source='db_stale'/degraded=true/message`；管理端新增「数据库暂不可用 · 展示上次配置」徽标并禁用写操作，`builtin` 仍表示从未读取成功。
 - 验证：`test_sys_providers_list_api.py` 12 passed（带 `AI_INTERNAL_TOKEN`；缺省 503 为既有 fail-closed 行为）；`ProvidersTab.test.tsx` 39 passed；`tsc --noEmit` PASS。
 - 未做（需运维决策）：未调 `max_connections`、未重启共享 PG、未改其他容器并发/池。建议：`agent-maintenance-worker-1` 显式 `--concurrency=2` 且 `DB_POOL_MAX_CONN=5`，或将 `max_connections` 提升到 300（需重启 PG）。
+
+## 2026-10-17 价格治理简化与开发库落地
+
+### 决策变更（用户 2026-10-17）
+
+价格治理取消「双人审核 + 24h canary」，改为：**仅 super_admin 可改价、单人一步直发、发布后热更新**。
+
+- 代码：PR [#89](https://github.com/Jayus-07/agent/pull/89)，HEAD `17c7b56c52cc67836af73785ef518dbf5b52f4f8`。
+  - `price_dto` 允许 CNY/USD 并拒绝混币种；`import_version` 不再写死 `'USD'`（原 P2 缺陷）。
+  - 新增 `publish_super_admin()` 与 `POST /admin/model-prices/versions/{version}/publish`；`imports`/`reviews`/`canary`/`publish` 全部收紧为 `require_super_admin_user`。
+  - 保留：append-only、覆盖率 100%、审计理由必填、`model_price_reviews` 追溯。
+  - 发布后 `clear_price_cache()` 热更新。
+- 验证：隔离 PostgreSQL 55511 上新增 5 项真实库测试（CNY 直发/二次直发关旧行/USD/混币种拒绝/覆盖率不足拒绝/CI 快照形状）＋回归 7 套件 = **77 passed**。
+
+### 开发库执行结果（真实写入，可回滚）
+
+- 创建/重置本地 `superadmin`（role=`super_admin`，tenant=`default`，user_id=1014）；登录 API 实测 `code=200`，token 声明 `roles:["super_admin"]`。凭据文件只放在用户桌面，未写入仓库。
+- 用新代码对开发库直发版本 `2026-10-cny-1`（actor `user:1014`，source `official-cny-2026-10-17`）：5 行、覆盖率 1.0、缺价 0。
+  - 豆包：input ¥0.2/M、output ¥2/M、cache_read ¥0.04/M（**修正原先把人民币数值记成 USD 导致的 7.2 倍高估**）
+  - Qwen embedding / rerank：各 ¥0.5/M
+  - 旧 active 版本 `test-governance-…` 已 `expired`；同维度旧行 `effective_to` 已关闭（append-only）
+- 计费实测（无 Provider 调用）：`price_usage(doubao, 1000 in/500 out)` → `pricing_source=approved_price_table`、`cost_status=exact`、`native_cost=0.0012 CNY`、`fx=None`（同币种不折算）、`price_version=2026-10-cny-1`。
+- CI 侧校验实测：用与 `load_registry_price_rows` 相同的 JOIN 条件从开发库取行，喂给 `build_price_snapshot` → **通过**（5 行，三模型全部 CNY）。说明「单人直发」审批形状（`reviewer_1=操作人 / reviewer_2=system / imported_by=super-admin`）被 CI 校验接受，不再需要伪造第二审核人。
+
+### 剩余阻断（仅剩基础设施）
+
+- 只读副本 + `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`：仍需用户提供具备 `pg_is_in_recovery()=true` 的只读连接（数据侧已就绪，配好即可跑真实 8-case）。
+- `#66` PDF E2E：隔离库仍缺 embedding 绑定，需走本地模式或复用云端配置。
