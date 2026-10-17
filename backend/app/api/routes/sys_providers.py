@@ -371,16 +371,42 @@ async def list_providers(ident=Depends(require_user_actor)) -> dict:
 
     `source` 表明清单来自 `db` 还是代码层 `builtin` 兜底 —— 前端据此在库未就绪时
     提示「配置暂不可用」，而不是让管理员以为自己把供应商删光了。
-    2026-09-22 拍板：内置供应商特殊类退役，`_builtin_rows` 兜底清空 ——
-    DB 未就绪时列表就是空的（`source='builtin'` 仍告知前端亮「DB 未就绪」横幅），
-    不再把代码层厂商伪装成清单数据。
+    2026-09-22 拍板：内置供应商特殊类退役，`_builtin_rows` 兜底清空。
+    2026-10-17 修正：DB 抖动时**优先回退最近一次成功读取的快照**（`source='db_stale'`、
+    `degraded=true`），不再把「连接失败」渲染成「一个供应商都没配」；只有从未成功
+    读取过才返回 `source='builtin'` 空清单。真·没配仍由 `loaded=True + items=[]` 表达。
 
     `lastProbe` 来自 provider 表中的最近一次探测结果；尚未探测的 provider
     仍返回 `null`，前端按「未验证」灰显（tab⑤ 漂移会点名）。
     """
     snap = await registry_store.load_registry()
-    rows, source = (_db_rows(snap), "db") if snap.loaded else ([], "builtin")
-    return {"items": rows, "source": source, "actor": ident.actor}
+    if snap.loaded:
+        return {
+            "items": _db_rows(snap),
+            "source": "db",
+            "degraded": False,
+            "actor": ident.actor,
+        }
+    # DB 读取失败：优先回退「最近一次成功读取」的配置。
+    # 直接返回空列表会让管理员以为配置被清空（真实故障：PostgreSQL 连接耗尽），
+    # 因此这里显式区分 degraded 与「真·没配」（loaded=True 且 items=[]）。
+    fallback = registry_store.last_loaded_snapshot()
+    if fallback is not None:
+        return {
+            "items": _db_rows(fallback),
+            "source": "db_stale",
+            "degraded": True,
+            "staleSince": None,
+            "message": "数据库暂时不可用，展示上次成功读取的配置；请检查 PostgreSQL 连接数",
+            "actor": ident.actor,
+        }
+    return {
+        "items": [],
+        "source": "builtin",
+        "degraded": True,
+        "message": "数据库不可用且尚无可用缓存；请检查 PostgreSQL 连接",
+        "actor": ident.actor,
+    }
 
 
 @router.post("/{provider_id}/verify")

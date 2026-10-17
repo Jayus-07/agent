@@ -107,6 +107,15 @@ _SELECT_ROLE_POLICY = """
 
 _last_runtime_signature: tuple | None = None
 
+# 最近一次成功从 DB 读取的快照。DB 抖动时供只读端点回退展示「上次已知配置」，
+# 避免把连接失败渲染成「管理员把供应商删光了」。
+_last_loaded_snapshot: "RegistrySnapshot | None" = None
+
+
+def last_loaded_snapshot() -> "RegistrySnapshot | None":
+    """返回最近一次成功读取的快照；从未成功过则 None。"""
+    return _last_loaded_snapshot
+
 
 def _stable_value(value) -> str:
     """将快照字段转成稳定字符串，兼容 datetime / JSONB 等值。"""
@@ -427,7 +436,7 @@ async def refresh_registry() -> bool:
 
     失败时**不清空**已有动态层（保留上次已知 DB 值），与 sys_config 一致。
     """
-    global _last_runtime_signature
+    global _last_runtime_signature, _last_loaded_snapshot
 
     snap = await load_registry()
     if not snap.loaded:
@@ -440,6 +449,7 @@ async def refresh_registry() -> bool:
     _model_roles.inject_overrides(snap.roles, snap.role_meta)
     _model_roles.inject_policies(snap.policies)
     _specialized.set_bindings(_derive_specialized_bindings(snap))
+    _last_loaded_snapshot = snap
     if changed:
         # DB 配置变化后必须丢弃已构建的客户端，否则旧 API Key/base_url 会继续被复用。
         # 延迟导入避免 registry_store 与 proxy 的模块级循环依赖。
@@ -480,9 +490,10 @@ async def refresh_loop(interval: float = _REFRESH_INTERVAL_S) -> None:
 
 def reset_for_tests() -> None:
     """测试态注入点：清空动态层与 DB 凭据覆盖。"""
-    global _last_runtime_signature
+    global _last_runtime_signature, _last_loaded_snapshot
     _models.reset_dynamic_models_for_tests()
     _model_roles.reset_overrides()
     _credentials.reset_credentials_for_tests()
     _specialized.reset_for_tests()
     _last_runtime_signature = None
+    _last_loaded_snapshot = None
