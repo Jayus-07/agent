@@ -482,8 +482,10 @@ class TestIndexerIngestion:
         ]
         coverage = coverage_audit(qc["normalized_ast"], kept)
         assert len(leaves) == 1
-        assert leaves[0].metadata["filter_status"] == "kept_source_leaf"
-        assert leaves[0].metadata["source_leaf_filter_override_reason"] == "too_short"
+        # 合并 #90 后，短但承载事实的源 Leaf 直接按 clean 保留（规则内建在
+        # ChunkFilter，不再需要过滤后回捞并改写 filter_status 的二次覆盖）。
+        # 断言这次合并真正在意的契约：不被 too_short 过滤、且覆盖完整。
+        assert leaves[0].metadata["filter_status"] == "clean"
         assert not any(item["reason"] == "too_short" for item in filtered)
         assert coverage["uncovered_count"] == 0
 
