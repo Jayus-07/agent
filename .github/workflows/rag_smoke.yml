@@ -137,7 +137,7 @@ jobs:
       needs.detect-changes.outputs.relevant == 'true' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     name: RAG Smoke Evaluation (8 cases, real API)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets。
     environment: prompt-eval
     timeout-minutes: 40

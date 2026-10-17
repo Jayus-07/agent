@@ -335,6 +335,36 @@ async def require_user_actor(request: Request):
     )
 
 
+async def require_super_admin_user(request: Request):
+    """最高权限依赖：只有 super_admin 能改计费价格。
+
+    2026-10-17 决策：价格治理改为「超管单人直发」，因此改价入口必须是
+    最高权限角色，而不是 admin（admin 仍可读、可登记模型，但不能改价）。
+    """
+    ident = await require_user_actor(request)
+    role = str(getattr(ident, "role", "") or "").strip().lower()
+    if role == "super_admin":
+        return ident
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event(
+            "AUTHZ_DENIED", category="PRICE_SUPER_ADMIN_REQUIRED",
+            detail={"actor": getattr(ident, "actor", ""), "role": role},
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不得改变拒绝语义
+        pass
+    from fastapi import HTTPException
+
+    raise HTTPException(
+        403,
+        detail={
+            "error": "Forbidden",
+            "message": "计费价格变更仅限 super_admin",
+        },
+    )
+
+
 async def require_admin_user(request: Request):
     """敏感端点统一依赖（管理员档）：kind == "user" 且 role == admin。
 
