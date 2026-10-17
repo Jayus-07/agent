@@ -1,0 +1,164 @@
+# ============================================================================
+# 生产覆盖层：4 vCPU / 8 GB RAM / 40 GB SSD
+# 用法（仓库根目录）：
+#   docker compose --env-file .env.production \
+#     -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.prod.yml up -d <services>
+# 只启动 README §3 列出的服务；kafka/ollama/rag-service/observability 不启动。
+# ============================================================================
+
+x-logging: &prod-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    # 1.2G：shared_buffers 384MB + 连接/排序开销；PG 是唯一状态权威，优先保
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/prod.conf
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./部署/prod-4c8g/postgresql.conf:/etc/postgresql/prod.conf:ro
+    deploy:
+      resources:
+        limits:
+          memory: 1200m
+          cpus: "1.5"
+    logging: *prod-logging
+
+  redis:
+    command:
+      - redis-server
+      - --maxmemory
+      - 320mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+    logging: *prod-logging
+
+  redis-broker:
+    command:
+      - redis-server
+      - --maxmemory
+      - 320mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  auth-redis:
+    command:
+      - redis-server
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.2"
+    logging: *prod-logging
+
+  apisix:
+    deploy:
+      resources:
+        limits:
+          memory: 224m
+          cpus: "0.5"
+    logging: *prod-logging
+
+  app:
+    # 单 uvicorn 进程（4C 用 uvicorn 单 worker + 异步 IO 足够；多 worker 会成倍放大连接池）
+    deploy:
+      resources:
+        limits:
+          memory: 1100m
+          cpus: "1.5"
+    logging: *prod-logging
+
+  agent-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+    logging: *prod-logging
+
+  rag-index-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 800m
+          cpus: "1.0"
+    logging: *prod-logging
+
+  maintenance-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  report-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  beat:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.2"
+    logging: *prod-logging
+
+  cs-dispatcher:
+    # 客服坐席分发：未上线客服域时可整体不启动（README §3 的启动清单已排除）
+    deploy:
+      resources:
+        limits:
+          memory: 224m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  pg-backup:
+    deploy:
+      resources:
+        limits:
+          memory: 96m
+          cpus: "0.2"
+    logging: *prod-logging
