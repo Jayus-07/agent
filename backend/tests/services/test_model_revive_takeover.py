@@ -198,6 +198,31 @@ async def test_upstream_model_name_change_invalidates_manual_health(monkeypatch)
     )
 
 
+@pytest.mark.asyncio
+async def test_unchanged_upstream_model_name_keeps_manual_health(monkeypatch):
+    session = _UpsertSession({
+        "provider_id": "new-relay",
+        "model_kind": "chat",
+        "enabled": True,
+        "upstream_model_name": "upstream-name",
+    })
+    monkeypatch.setattr(model_config.models_mod, "get_model_entry", lambda _name: None)
+
+    await ModelConfigService()._upsert_model(
+        session,
+        provider_id="new-relay",
+        model_name="custom-model",
+        model_kind="chat",
+        operator="user:test-admin",
+        upstream_model_name="upstream-name",
+    )
+
+    assert not any(
+        "UPDATE llm_model_health SET status = 'unknown'" in sql
+        for sql in session.statements
+    )
+
+
 class _Cred:
     api_key = "sk-test"
     base_url = "https://relay.example/v1"

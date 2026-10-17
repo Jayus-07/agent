@@ -55,7 +55,7 @@ export interface ModelPriceMonitorPriceResult {
 export interface ModelPriceMonitorRun {
   run_id: string;
   observed_on: string;
-  status: "running" | "succeeded" | "partial" | "failed";
+  status: "running" | "succeeded" | "partial" | "failed" | "cancelled";
   started_at: string;
   finished_at: string | null;
   sources_total: number;
@@ -71,6 +71,25 @@ export interface ModelPriceMonitorRun {
   };
   alert_events: Array<{ code: string; recorded: boolean; delivery: "unknown" }>;
   error_type?: string | null;
+}
+
+export function priceMonitorSourcesSummary(
+  run: Pick<ModelPriceMonitorRun, "status" | "sources_total" | "sources_failed" | "source_results">
+    | null
+    | undefined,
+): { value: string; note: string; tone: "neutral" | "good" | "bad" } {
+  if (!run) {
+    return { value: "—", note: "等待首次巡检", tone: "neutral" };
+  }
+  if (run.status === "cancelled" || (run.status === "failed" && run.source_results.length === 0)) {
+    return { value: "未知", note: "任务中断，来源结果未知", tone: "neutral" };
+  }
+  const failed = Math.max(0, run.sources_failed);
+  return {
+    value: `${Math.max(0, run.sources_total - failed)}/${run.sources_total}`,
+    note: failed ? `${failed} 个来源读取失败` : "最近运行读取成功",
+    tone: failed ? "bad" : "good",
+  };
 }
 
 const dimensions = new Set<PriceDimension>(["input", "output", "cache_read", "cache_write", "reasoning", "tool_call"]);

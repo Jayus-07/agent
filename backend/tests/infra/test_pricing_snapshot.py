@@ -9,6 +9,7 @@ C14（Context Budget 集成）：只验证 Registry → Budget 的窗口接口
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -86,7 +87,6 @@ def test_price_unknown_leaves_unit_prices_null(monkeypatch):
     def _unavailable(model, component):
         raise pricing.PriceTableUnavailable("db down")
 
-    from backend.infra.llm.budget import RequestBudget
     # 预算 enforce 态由 current_request_budget 决定；注入一个 enforce 预算
     # 复杂度高 —— 直接单测 proxy 对异常分支的常量与空 breakdown 行为：
     with patch.object(pricing, "get_current_price_table",
@@ -98,6 +98,38 @@ def test_price_unknown_leaves_unit_prices_null(monkeypatch):
     #（proxy 分支，见 test_usage_identity / 实机验收）。此处锁软路径语义。
     assert status in ("estimated", "unpriced")
     assert breakdown["input_unit_price"] == 0.0
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("currency", "CNY", "不能混用价格币种"),
+        ("price_table_version", "version-v2", "不能混用价格版本"),
+    ],
+)
+def test_price_table_rejects_mixed_currency_or_version(field, value, message):
+    rows = [
+        PriceLine(
+            model_name="billing-model",
+            component="llm",
+            dimension="input",
+            price_per_unit=Decimal("1"),
+            price_table_version="version-v1",
+            currency="USD",
+        ),
+        PriceLine(
+            model_name="billing-model",
+            component="llm",
+            dimension="output",
+            price_per_unit=Decimal("2"),
+            price_table_version="version-v1",
+            currency="USD",
+        ),
+    ]
+    rows[1] = replace(rows[1], **{field: value})
+
+    with pytest.raises(ValueError, match=message):
+        PriceTable(rows)
 
 
 # ── C14：Registry → Context Budget 窗口接口（只读验证）───────────────

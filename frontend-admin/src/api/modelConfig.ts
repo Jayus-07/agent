@@ -160,6 +160,7 @@ type ModelHealthProbeResult = {
   latencyMs?: number
   error?: string
   probeSource?: ModelHealth['probeSource']
+  probeMode?: ModelHealth['probeMode']
 }
 
 /** 管理员手动触发单模型健康探测（OCR 会执行一次最小上游文本调用，可能产生少量费用）。

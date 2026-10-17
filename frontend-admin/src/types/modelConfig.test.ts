@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   gradeLabel,
+  healthStatusLabel,
   isModelSelectable,
   isSpecializedModelRole,
   maskSecret,
@@ -27,6 +28,15 @@ describe('gradeLabel', () => {
     const labels = (['L0', 'L1', 'L2', 'L3'] as const).map(gradeLabel)
     expect(labels).toEqual(['URL 可达', '端点清单', '模型调用', '流式 usage'])
     expect(new Set(labels).size).toBe(4)
+  })
+})
+
+describe('healthStatusLabel', () => {
+  it('区分可用性检查、慢成功和真实调用成功', () => {
+    expect(healthStatusLabel('healthy', 'availability_only'))
+      .toBe('凭据/配置可用，未验证真实调用')
+    expect(healthStatusLabel('healthy', 'live_call')).toBe('调用通过')
+    expect(healthStatusLabel('slow', 'live_call')).toBe('调用通过，但响应较慢')
   })
 })
 

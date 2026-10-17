@@ -524,6 +524,9 @@ def _handle_terminal_failure(
         )
         from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
+        _enforce_model_input_price_tier(
+            args, kwargs, model_name=fallback_model,
+        )
         # 预算预占必须发生在 fallback 真正执行前；超限不能被下面的
         # “备用模型失败”兜底逻辑吞掉，否则会绕过硬阻断。
         try:
@@ -609,6 +612,9 @@ async def _ahandle_terminal_failure(
             review_model_reservation,
         )
 
+        _enforce_model_input_price_tier(
+            args, kwargs, model_name=fallback_model,
+        )
         reserve_model_call("fallback", model_name=fallback_model)
         try:
             # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
@@ -1807,13 +1813,13 @@ class RateLimitError(RuntimeError):
 
 
 class _BoundLLMProxy:
-    """bind_tools 返回的 RunnableBinding 包装。
+    """绑定模型参数后的治理包装，保持调用和 LangChain 组合路径受控。
 
     _LLMProxy.__getattr__ 只包装 _WRAP_METHODS 里的方法名，bind_tools
     若原样透传，拿到的是真实实例上的 RunnableBinding——其后续
     invoke/ainvoke 会绕过限流、韧性链（重试/熔断/fallback）与 token
     记录。本类把绑定后的调用重新纳入与 _LLMProxy 相同的包装路径；
-    其余属性（如 bind / with_config）原样透传。
+    bind/with_config 和 RAGAS 使用的 generate_prompt 也保留治理包装。
 
     P1 模型归属：绑定专用模型时（如 tool_selector）携带 model_name/role，
     调用前登记 ResolvedModelContext，用量按真实模型结算、不串角色。
@@ -1853,7 +1859,9 @@ class _BoundLLMProxy:
         _enforce_rate_limit(user_id)
         self._bind_context()
         args = _preflight_context(args, kwargs,
-                                  extra_reserved_tokens=self._schema_reserved())
+            extra_reserved_tokens=self._schema_reserved(),
+            call_method="invoke",
+        )
         _t0 = time.monotonic()
         result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
         _record_tokens(
@@ -1867,7 +1875,9 @@ class _BoundLLMProxy:
         _enforce_rate_limit(user_id)
         self._bind_context()
         args = await _apreflight_context(args, kwargs,
-                                         extra_reserved_tokens=self._schema_reserved())
+            extra_reserved_tokens=self._schema_reserved(),
+            call_method="ainvoke",
+        )
         _t0 = time.monotonic()
         result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
         _record_tokens(
@@ -1875,6 +1885,66 @@ class _BoundLLMProxy:
             model_name=self._model_name or None,
         )
         return _wrap_result(result)
+
+    def bind(self, **kwargs):
+        """绑定额外模型参数时继续保留预算与价格门禁。"""
+        return _BoundLLMProxy(
+            self._bound.bind(**kwargs),
+            model_name=self._model_name or None,
+            role=self._role,
+            tools=self._tools,
+        )
+
+    def with_config(self, config=None, **kwargs):
+        """绑定 callbacks/config 时继续经本代理执行。"""
+        return _BoundLLMProxy(
+            self._bound.with_config(config, **kwargs),
+            model_name=self._model_name or None,
+            role=self._role,
+            tools=self._tools,
+        )
+
+    def generate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        """实现 RAGAS 的 BaseLanguageModel 入口并逐条经过 invoke 门禁。"""
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        config = {"callbacks": callbacks} if callbacks is not None else None
+        generations = []
+        for prompt in prompts:
+            result = self.invoke(
+                prompt,
+                config=config,
+                stop=stop,
+                **kwargs,
+            )
+            generations.append([
+                ChatGeneration(
+                    message=result,
+                    generation_info=getattr(result, "response_metadata", None),
+                ),
+            ])
+        return LLMResult(generations=generations)
+
+    async def agenerate_prompt(self, prompts, stop=None, callbacks=None, **kwargs):
+        """RAGAS 异步生成入口也逐条经过 ainvoke 预算与价格门禁。"""
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        config = {"callbacks": callbacks} if callbacks is not None else None
+        generations = []
+        for prompt in prompts:
+            result = await self.ainvoke(
+                prompt,
+                config=config,
+                stop=stop,
+                **kwargs,
+            )
+            generations.append([
+                ChatGeneration(
+                    message=result,
+                    generation_info=getattr(result, "response_metadata", None),
+                ),
+            ])
+        return LLMResult(generations=generations)
 
     def bind_tools(self, *args, **kwargs):
         # 链式绑定（罕见）：继续走包装，不裸透传
@@ -1970,8 +2040,140 @@ def bind_llm_for_role(
 # 代理对象
 # =====================================================
 
-def _preflight_context(args: tuple, kwargs: dict | None = None,
-                       extra_reserved_tokens: int = 0) -> tuple:
+def _enforce_model_input_price_tier(
+    args: tuple,
+    kwargs: dict | None = None,
+    extra_reserved_tokens: int = 0,
+    *,
+    model_name: str | None = None,
+    call_method: str = "invoke",
+) -> None:
+    """在所有代理调用与预算预占之前限制到已登记的输入价格档位。"""
+    from backend.context_budget.token_counter import (
+        count_message_tokens,
+        count_response_format_tokens,
+        count_tokens,
+        count_tool_schema_tokens,
+    )
+    from backend.infra.llm.pricing import model_input_price_tier_limit
+
+    if not model_name:
+        resolved_model = get_current_resolved_model()
+        model_name = (
+            resolved_model.model_id if resolved_model else get_active_model_name()
+        )
+    limit = model_input_price_tier_limit(model_name)
+    if limit is None:
+        return
+
+    if args:
+        payload = args[0]
+    else:
+        payload = next(
+            (kwargs[key] for key in ("input", "messages", "prompt")
+             if kwargs and key in kwargs),
+            None,
+        )
+        if payload is None:
+            from backend.context_budget.errors import ContextBudgetExceededError
+
+            raise ContextBudgetExceededError(
+                used_tokens=limit + 1,
+                input_budget=limit,
+                stage="price_tier_unrecognized_input",
+            )
+
+    from langchain_core.messages import BaseMessage
+
+    used_tokens: int
+    from langchain_core.messages.utils import convert_to_messages
+
+    def _count_message_sequence(values) -> int:
+        messages = convert_to_messages(values)
+        return sum(
+            count_message_tokens(message, model=model_name)
+            for message in messages
+        )
+
+    def _count_payload(value) -> int:
+        if isinstance(value, BaseMessage):
+            return count_message_tokens(value, model=model_name)
+        if isinstance(value, str):
+            return count_tokens(value, model=model_name)
+        if isinstance(value, dict) and isinstance(value.get("messages"), list):
+            return _count_message_sequence(value["messages"])
+        if isinstance(value, list):
+            if not value:
+                return 0
+            if all(isinstance(item, str) for item in value):
+                counts = [count_tokens(item, model=model_name) for item in value]
+                return (
+                    max(counts, default=0)
+                    if call_method in {"batch", "generate", "agenerate"}
+                    else sum(counts)
+                )
+            if all(isinstance(item, list) for item in value):
+                return max(
+                    (_count_message_sequence(batch) for batch in value),
+                    default=0,
+                )
+            if all(
+                isinstance(item, dict) and isinstance(item.get("messages"), list)
+                for item in value
+            ):
+                return max(
+                    (_count_payload(item) for item in value),
+                    default=0,
+                )
+            return _count_message_sequence(value)
+        if isinstance(value, tuple):
+            if len(value) == 2 and isinstance(value[0], str):
+                return _count_message_sequence([value])
+            return _count_message_sequence(list(value))
+        to_messages = getattr(value, "to_messages", None)
+        if callable(to_messages):
+            return _count_message_sequence(to_messages())
+        to_string = getattr(value, "to_string", None)
+        if callable(to_string):
+            return count_tokens(str(to_string()), model=model_name)
+        from backend.context_budget.errors import ContextBudgetExceededError
+
+        raise ContextBudgetExceededError(
+            used_tokens=limit + 1,
+            input_budget=limit,
+            stage="price_tier_unrecognized_input",
+        )
+
+    used_tokens = _count_payload(payload)
+
+    reserved = max(0, int(extra_reserved_tokens or 0))
+    if kwargs:
+        reserved += count_tool_schema_tokens(kwargs.get("tools"))
+        reserved += count_response_format_tokens(kwargs.get("response_format"))
+    total_tokens = used_tokens + reserved
+    if total_tokens > limit:
+        from backend.context_budget.errors import ContextBudgetExceededError
+
+        raise ContextBudgetExceededError(
+            used_tokens=total_tokens,
+            input_budget=limit,
+            stage="price_tier_input_limit",
+        )
+
+
+def enforce_model_input_price_tier(
+    args: tuple,
+    *,
+    model_name: str,
+    kwargs: dict | None = None,
+) -> None:
+    """为尚未迁入统一代理的兼容调用提供相同的价格档位硬门禁。"""
+    _enforce_model_input_price_tier(args, kwargs, model_name=model_name)
+
+
+def _prepare_context_budget(args: tuple, kwargs: dict | None = None,
+                            extra_reserved_tokens: int = 0,
+                            *, call_method: str = "invoke") -> tuple:
     """统一 Prompt Preflight（2026-09-22，ContextBudgetManager）：LLM 调用前
     对 messages 形态的输入走 ContextBudgetManager.prepare_llm_context
     （L2 历史裁剪 → L4 折叠 → 确定性 hard trim → L5 AutoCompact 触发）。
@@ -2084,9 +2286,29 @@ def _preflight_context(args: tuple, kwargs: dict | None = None,
         return (gated, *args[1:])
 
     # ── 形态 3~5：不可安全改写的输入 → 只做用量门禁（同步/异步共用）──
-    if _gate_fixed_shape(payload, budget):
+    if _gate_fixed_shape(payload, budget, call_method=call_method):
         return args
     return args  # 不可达（消息形态在上面两分支已返回）
+
+
+def _preflight_context(args: tuple, kwargs: dict | None = None,
+                       extra_reserved_tokens: int = 0,
+                       *, call_method: str = "invoke") -> tuple:
+    """先按上下文预算裁剪，再执行统一价格档位的硬输入上限。"""
+    from backend.config import CONTEXT_BUDGET_ENABLED
+
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        _enforce_model_input_price_tier(
+            args, kwargs, extra_reserved_tokens, call_method=call_method,
+        )
+        return args
+    prepared = _prepare_context_budget(
+        args, kwargs, extra_reserved_tokens, call_method=call_method,
+    )
+    _enforce_model_input_price_tier(
+        prepared, kwargs, extra_reserved_tokens, call_method=call_method,
+    )
+    return prepared
 
 
 def _soft_overflow_enabled() -> bool:
@@ -2156,7 +2378,9 @@ def _record_preflight_failure() -> None:
         pass
 
 
-def _gate_fixed_shape(payload: Any, budget: int) -> bool:
+def _gate_fixed_shape(
+    payload: Any, budget: int, *, call_method: str = "invoke",
+) -> bool:
     """不可安全改写形态的用量门禁（同步/异步入口共用，STOP B）。
 
     返回 True = 该形态已处理（门禁通过放行 / 未知形态 debug 留痕放行）；
@@ -2176,7 +2400,12 @@ def _gate_fixed_shape(payload: Any, budget: int) -> bool:
         return True
     if isinstance(payload, list) and payload \
             and all(isinstance(s, str) for s in payload):
-        used = sum(_count_text(s) for s in payload)
+        counts = [_count_text(s) for s in payload]
+        used = (
+            max(counts, default=0)
+            if call_method in {"batch", "generate", "agenerate"}
+            else sum(counts)
+        )
         if used > budget:
             _reject_overbudget(used, budget, "batch_str")
         return True
@@ -2203,8 +2432,10 @@ def _gate_fixed_shape(payload: Any, budget: int) -> bool:
     return True
 
 
-async def _apreflight_context(args: tuple, kwargs: dict | None = None,
-                              extra_reserved_tokens: int = 0) -> tuple:
+async def _prepare_context_budget_async(
+    args: tuple, kwargs: dict | None = None, extra_reserved_tokens: int = 0,
+    *, call_method: str = "invoke",
+) -> tuple:
     """_preflight_context 的异步在线版（STOP B 2026-10-01）。
 
     与同步版共享同一预算口径与最终硬门禁；差异仅在消息形态走
@@ -2294,9 +2525,29 @@ async def _apreflight_context(args: tuple, kwargs: dict | None = None,
         return (gated, *args[1:])
 
     # ── 形态 3~5：与同步版共用同一门禁 ─────────────────────────────
-    if _gate_fixed_shape(payload, budget):
+    if _gate_fixed_shape(payload, budget, call_method=call_method):
         return args
     return args
+
+
+async def _apreflight_context(args: tuple, kwargs: dict | None = None,
+                              extra_reserved_tokens: int = 0,
+                              *, call_method: str = "invoke") -> tuple:
+    """异步先裁剪上下文，再拒绝超出当前价格档位的输入。"""
+    from backend.config import CONTEXT_BUDGET_ENABLED
+
+    if not CONTEXT_BUDGET_ENABLED or not args:
+        _enforce_model_input_price_tier(
+            args, kwargs, extra_reserved_tokens, call_method=call_method,
+        )
+        return args
+    prepared = await _prepare_context_budget_async(
+        args, kwargs, extra_reserved_tokens, call_method=call_method,
+    )
+    _enforce_model_input_price_tier(
+        prepared, kwargs, extra_reserved_tokens, call_method=call_method,
+    )
+    return prepared
 
 
 class _LLMProxy:
@@ -2320,6 +2571,10 @@ class _LLMProxy:
     def __getattr__(self, name: str):
         target = _resolve_active_llm()
         attr = getattr(target, name)
+        if name == "bind" and callable(attr):
+            def bind_wrapper(*args, **kwargs):
+                return _BoundLLMProxy(attr(*args, **kwargs), role="main")
+            return bind_wrapper
         # bind_tools 返回 RunnableBinding，其 invoke/ainvoke 不在
         # _WRAP_METHODS 内，裸透传会绕过限流/韧性链/token 记录——
         # 用 _BoundLLMProxy 重新纳入包装（function calling 路径）
@@ -2350,7 +2605,9 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
-                    args = await _apreflight_context(args, kwargs)
+                    args = await _apreflight_context(
+                        args, kwargs, call_method=name,
+                    )
                     reserve_model_call(
                         "primary", model_name=get_active_model_name(),
                     )
@@ -2416,7 +2673,7 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
-                    args = _preflight_context(args, kwargs)
+                    args = _preflight_context(args, kwargs, call_method=name)
                     _t0 = time.monotonic()
                     usage_chunk = None
                     yielded_content = False
@@ -2491,7 +2748,9 @@ class _LLMProxy:
                     ctx = _resolve_call_context()
                     if ctx is not None:
                         set_current_resolved_model(ctx)
-                    args = await _apreflight_context(args, kwargs)
+                    args = await _apreflight_context(
+                        args, kwargs, call_method=name,
+                    )
                     _t0 = time.monotonic()
                     result = await _acall_with_resilience(attr, *args, **kwargs)
                     _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
@@ -2505,7 +2764,7 @@ class _LLMProxy:
                 ctx = _resolve_call_context()
                 if ctx is not None:
                     set_current_resolved_model(ctx)
-                args = _preflight_context(args, kwargs)
+                args = _preflight_context(args, kwargs, call_method=name)
                 _t0 = time.monotonic()
                 result = _call_with_resilience(attr, *args, **kwargs)
                 _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)
@@ -2520,7 +2779,7 @@ class _LLMProxy:
         ctx = _resolve_call_context()
         if ctx is not None:
             set_current_resolved_model(ctx)
-        args = _preflight_context(args)
+        args = _preflight_context(args, kwargs)
         _t0 = time.monotonic()
         result = _call_with_resilience(_resolve_active_llm().invoke, *args, **kwargs)
         _record_tokens(result, duration_ms=(time.monotonic() - _t0) * 1000)

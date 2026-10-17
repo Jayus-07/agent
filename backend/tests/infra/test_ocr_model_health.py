@@ -74,6 +74,7 @@ async def test_ocr_manual_probe_uses_registered_provider_and_safe_summary(
         "latencyMs": 21,
         "error": "",
         "probeSource": "manual",
+        "probeMode": "live_call",
     }
     assert calls == [{
         "driver": "openai",
@@ -175,6 +176,29 @@ def test_non_ocr_probe_returns_and_persists_safe_status_message(monkeypatch):
     assert "test-secret" not in repr(result)
     assert recorded[0][5] == result["error"]
     assert "test-secret" not in repr(recorded)
+
+
+@pytest.mark.parametrize("model_kind", ["vision", "speech"])
+def test_vision_speech_probe_is_labeled_availability_only(monkeypatch, model_kind):
+    recorded = []
+    monkeypatch.setattr(
+        models,
+        "get_model_entry",
+        lambda _name: {"provider": "provider-a", "model_kind": model_kind},
+    )
+    monkeypatch.setattr(models, "model_kind_of", lambda _entry: model_kind)
+    monkeypatch.setattr(
+        health,
+        "_probe_availability_only",
+        lambda _provider: None,
+    )
+    monkeypatch.setattr(health, "_record", lambda *args: recorded.append(args))
+
+    result = health.probe_model("availability-model", probe_source="manual")
+
+    assert result["status"] == "healthy"
+    assert result["probeMode"] == "availability_only"
+    assert recorded[0][3] == "healthy"
 
 
 def test_periodic_scan_skips_ocr_models(monkeypatch):
