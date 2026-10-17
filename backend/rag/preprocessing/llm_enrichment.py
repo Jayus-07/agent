@@ -36,6 +36,13 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
     started = time.monotonic()
 
     def _invoke_and_record(*args, **kwargs):
+        if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
+            from backend.infra.llm.proxy import enforce_model_input_price_tier
+
+            model_name = _resolved_role_model or str(
+                getattr(llm_obj, "model", "") or ""
+            )
+            enforce_model_input_price_tier(args, model_name=model_name)
         response = llm_obj.invoke(*args, **kwargs)
         # 默认角色代理及显式传入的治理代理已自行预占和记账；兼容旧调用方
         # 显式传入的原始 LangChain 对象时，保留原有用量遥测。

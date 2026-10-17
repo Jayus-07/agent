@@ -243,7 +243,7 @@ def count_tokens(text: str, model: str | None = None) -> int:
 
 
 def count_message_tokens(msg: Any, model: str | None = None) -> int:
-    """单条消息 token 数：文本内容 + 每条固定模板开销 + 多模态图片估算。"""
+    """单条消息 token 数：内容、工具调用、多模态数据和模板开销。"""
     counter = get_counter(model)
     content = getattr(msg, "content", "")
     if isinstance(content, str):
@@ -263,6 +263,44 @@ def count_message_tokens(msg: Any, model: str | None = None) -> int:
                                                  default=str))
     else:
         body = counter.count(str(content))
+
+    # 工具调用参数会随 assistant 消息发送给 Provider，不能只统计可见文本。
+    # LangChain 同时保留规范化 tool_calls 和原始 additional_kwargs 形态；
+    # 有原始 wire payload 时按它计数，避免同一调用被重复累加。
+    additional_kwargs = getattr(msg, "additional_kwargs", None)
+    raw_tool_calls = (
+        additional_kwargs.get("tool_calls")
+        if isinstance(additional_kwargs, dict)
+        else None
+    )
+    tool_calls = getattr(msg, "tool_calls", None)
+    serialized_tool_calls = raw_tool_calls or tool_calls
+    if serialized_tool_calls:
+        body += counter.count(json.dumps(
+            serialized_tool_calls, ensure_ascii=False, default=str,
+        ))
+
+    invalid_tool_calls = getattr(msg, "invalid_tool_calls", None)
+    if invalid_tool_calls:
+        body += counter.count(json.dumps(
+            invalid_tool_calls, ensure_ascii=False, default=str,
+        ))
+
+    if isinstance(additional_kwargs, dict):
+        extra_fields = {
+            key: value
+            for key, value in additional_kwargs.items()
+            if key != "tool_calls"
+        }
+        if extra_fields:
+            body += counter.count(json.dumps(
+                extra_fields, ensure_ascii=False, default=str,
+            ))
+    elif additional_kwargs:
+        body += counter.count(json.dumps(
+            additional_kwargs, ensure_ascii=False, default=str,
+        ))
+
     overhead = int(_cfg("CONTEXT_MESSAGE_OVERHEAD_TOKENS", 4))
     return body + (overhead if (body or content) else 0)
 

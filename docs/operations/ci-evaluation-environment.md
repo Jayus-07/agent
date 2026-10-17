@@ -1,6 +1,6 @@
 # CI 与评测环境运行规范
 
-> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-10-16（§8 路径触发契约复核，main 基线 `333efc6`）；其它状态保留各自标注的核对日期。**
+> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-10-16（§8 路径触发契约复核，main 基线 `e42975d`）；其它状态保留各自标注的核对日期。**
 > **职责**：规定 CI 如何准备隔离数据库、DB API 模型绑定、评测语料和向量索引，以及 Secrets、费用与证据闭环。**不**复制测试分层（[testing-guide](../development/testing-guide.md)）、质量阈值与 Golden 规则（[evaluation-governance](../evaluation/evaluation-governance.md)）、计费公式（[llm-budget-billing](../governance/llm-budget-billing.md)）、RBAC 规则（[authorization-standard](../auth/authorization-standard.md)）或数据库 Schema（[DATABASE](../DATABASE.md)）。
 >
 > **实现状态图例**（本文所有条款按下表标注，状态不得凭文档存在认定）：
@@ -94,7 +94,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 - **Fork/不可信 PR 隔离（✅ 已实现）**：仓库 workflow 无 `pull_request_target`（2026-10-11 全量核对）；付费 Job 使用 `environment: prompt-eval` 受保护环境；fork PR 按平台规则拿不到 Environment Secrets。
 - **Secrets 不落库/不落日志（✅ 机制已有，持续执行）**：Secrets 只经 GitHub Actions 注入 seed 脚本加密入库；GitHub 自动 mask 注入值（run 38142127992 日志中 `PROMPT_EVAL_TEST_RERANK_BASE_URL: ***` 实证）。数据库导出/Artifact/快照不得含明文或可复用密文。
 - **预算闸（❌ 尚未实现）**：真实 API CI 的调用次数/并发/单次费用/总预算上限未实现；当前仅 `timeout-minutes` 墙钟上限。**超时不能替代调用前预算闸**（[llm-budget-billing](../governance/llm-budget-billing.md) BG 系列口径）。
-- **RAG 真实评测价格来源（PR #77）**：`rag_smoke` 和 `rag_regression` 在任何 Provider Probe 前，必须从受保护 Environment Secret `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 指向的**经批准、隔离的 PostgreSQL 只读副本**读取现行 `model_price` 记录，再写入本次临时评测库并运行 `--verify-pricing`。副本连接必须处于 PostgreSQL recovery 状态；事务设为只读。Secret 仅注入 Seed 步骤，不能指向生产主库、共享业务库或包含生产凭据的连接。可选变量 `PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX` 用于既有表前缀。价格必须有两个不同审核人、来源、版本、有效期和完整必需维度；同一模型/组件混用版本、来源、币种或出现重复当前维度时，Seed 在 Provider 调用前失败关闭。GitHub Variables 中自报审批状态的 JSON 不具权威性，不能用于批准价格；副本 Secret 未配置、只读副本不可用或价格不完整时，付费评测保持 BLOCKED，不得以零成本或未定价结果代替。该连接仅用于只读价格快照，不将评测数据、模型凭据或费用写回 Registry。
+- **RAG 真实评测价格来源（PR #77）**：`rag_smoke` 和 `rag_regression` 在任何 Provider Probe 前，必须从受保护 Environment Secret `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 指向的**经批准、隔离的 PostgreSQL 只读副本**读取现行价格。Seed 必须关联 `model_price_versions` 且仅接受 `status='active'`、来源与版本一致的记录；待审、canary、expired、rejected 和未关联版本的价格都不能进入付费评测。价格行和原版本发布/审核证据复制到本次临时评测库，保持版本、来源、币种、有效期、双人审核和维度不变。只读副本必须处于 PostgreSQL recovery 状态并使用只读事务；Secret 仅注入 Seed 步骤。测试库写入以 `PROMPT_EVAL_TEST_PGDATABASE` 锁定目标，并优先使用对应的 `PROMPT_EVAL_TEST_PGHOST/PORT/USER/PASSWORD`；未单独提供的连接字段可使用 workflow 专门配置的 `PGHOST/PORT/USER/PASSWORD`。Seed 在同一连接首个写入前校验目标库、连接角色、主机、端口和可写主库身份；`MEMORY_PGDATABASE` 与测试库不一致时失败关闭，不修改环境变量切换目标。可选变量 `PROMPT_EVAL_PRICE_REGISTRY_TABLE_PREFIX` 用于既有表前缀。缺少有效 active 版本、必需维度、来源或审批证据时，付费评测保持 BLOCKED，不得以零成本或未定价结果代替。Registry 连接只读，不接收评测数据、模型凭据或账本写入。
 - **`ci_evaluation` 费用归因（❌ 尚未实现）**：Billing V2（迁移 `079`、[`llm_usage_store_pg.py`](../../backend/observability/llm_usage_store_pg.py)）**无 `call_origin` 字段**；Embedding/Rerank 直调（langchain `OpenAIEmbeddings` / reranker 客户端）不经 LLM proxy 记账出口，实测 `llm_usage` 0 记录（PR #30 审查包已披露）。费用归因按 **UNVERIFIED** 挂账，不得报 0 元或宣称已验收；是否升 P0 由批准范围决定。
 - **CI 账本与生产看板（✅ 天然隔离）**：CI 隔离库账本不会自动写入本机/生产看板；跨环境聚合需受控对账机制（❌ 未实现）。
 
@@ -113,7 +113,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 ## 8. 变更触发、核对与验收
 
 - 低风险文档/纯静态：T0，默认不触发付费评测（✅ 现有路径过滤已实现）。
-- RAG 上传/切分/检索/Embedding/Rerank/MCP 入口/模型/Fixture/Suite 变更：触发对应静态契约 + 受信任 RAG E2 检索评测（🚧 PR #30 的路径检测已补 RAG HTTP 面、`rag_server.py`/`mcp_client.py`、模型绑定面、评测初始化脚本）。`backend/infra/llm/price_page_monitor.py` 与 `backend/sql/migrations/099_model_price_source_monitor.sql` 是模型价格巡检专用路径，PR/main-push 均按不相关路径 skip RAG E2；若同一变更还修改了 RAG 相关路径，仍会触发评测。
+- RAG 上传/切分/检索/Embedding/Rerank/MCP 入口/模型/Fixture/Suite，以及 LLM 预算、用量账本、价格算法变更：触发对应静态契约 + 受信任 RAG E2 检索评测。SQL migration 使用精确清单；费用账本基础迁移 `013_obs_analytics_pg.sql` 与模型价格、LLM usage、预算及 RAG 迁移均在清单内。客服、旅游和价格巡检专用迁移不触发付费 RAG 评测；任何 migration PR 仍运行免费路径/工作流契约检查。`backend/infra/llm/price_page_monitor.py` 与 `backend/sql/migrations/099_model_price_source_monitor.sql` 是只读巡检路径，PR/main-push 均按不相关路径 skip RAG E2；若同一变更还修改了 RAG 相关路径，仍会触发评测。
 - SQL/Planner/E2E/鉴权/RBAC/租户变更：按对应 Runner 与数据集选择；不机械全域重建向量（❌ CI 集成未实现，见 §5）。
 - 改模型/维度/索引 Schema/阈值：版本相容性验证、失配反例、真实 API 探针、必要重索引及可比性说明（🚧 探针已实现；版本化快照与失配反例 ❌ 未实现）。
 
@@ -124,6 +124,8 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 | 与 RAG 无关的普通代码 PR | 不需要 | T0/T1、受影响范围定向测试 | ✅ 路径过滤 skip RAG jobs；相关路径 PR 才运行免费预检（真实评测 job 对 PR 事件 skipped） |
 | 纯文档、页面样式 PR | 不需要 | 静态检查 | ✅ 路径过滤 skip |
 | 模型价格页巡检解析器及其专用迁移（`price_page_monitor.py` / `099_model_price_source_monitor.sql`） | 不需要 | 价格解析、巡检 API/Worker 与迁移定向测试 | ✅ PR/main-push skip RAG E2；同一变更中的真实 RAG 路径仍触发 |
+| 客服或旅游独立 SQL migration | 不需要 | 对应领域迁移契约 | ✅ 不触发付费 RAG E2；PR 运行免费门禁契约检查 |
+| LLM usage、预算、计价或 `013_obs_analytics_pg.sql` | 需要 | 费用路径定向测试 + RAG Smoke | ✅ 精确分类后触发；客服/旅游/巡检路径排除 |
 | RAG 检索算法、切分策略修改 | 需要 | RAG Smoke + 必要的 Regression | 合并 main 后自动 Smoke；Regression 审核后 workflow_dispatch |
 | Embedding、Rerank 模型切换 | 必须 | 索引重建 + Golden 回归 | 每次运行强制索引重建；probe 维度三方校验失配即 BLOCKED；Golden 回归 dispatch selection=regression |
 | SQL Agent、Planner 修改 | 按风险运行 | 对应领域真实模型评测 | Runner 已有，CI workflow 未建（❌ 见 §5） |

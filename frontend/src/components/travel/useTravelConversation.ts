@@ -156,11 +156,15 @@ function writeMessages(
 }
 
 /** 按租户、用户和会话隔离消息；桌面/抽屉重挂时从同一快照恢复。 */
-export function useTravelConversation(conversationId: string): {
+export function useTravelConversation(
+  conversationId: string,
+  options: { enabled?: boolean } = {},
+): {
   messages: TravelConversationMessage[]
   setMessages: Dispatch<SetStateAction<TravelConversationMessage[]>>
   syncError: string
 } {
+  const enabled = options.enabled ?? true
   const { conversationKey, indexKey, conversationPrefix } = storageKeys(conversationId)
   const [snapshot, setSnapshot] = useState<ConversationSnapshot>(() => ({
     // 等 hydration 完成后再读取 sessionStorage，避免服务端与客户端首屏不一致。
@@ -172,12 +176,15 @@ export function useTravelConversation(conversationId: string): {
   const lastSavedRef = useRef('')
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve())
 
-  const messages = snapshot.storageKey === conversationKey
-    ? snapshot.messages
-    : readMessages(conversationKey, conversationId)
+  const messages = !enabled
+    ? []
+    : snapshot.storageKey === conversationKey
+      ? snapshot.messages
+      : readMessages(conversationKey, conversationId)
 
   const setMessages = useCallback<Dispatch<SetStateAction<TravelConversationMessage[]>>>(
     (update) => {
+      if (!enabled) return
       setSnapshot((current) => {
         const previous = current.storageKey === conversationKey
           ? current.messages
@@ -186,18 +193,20 @@ export function useTravelConversation(conversationId: string): {
         return { storageKey: conversationKey, messages: next.slice(-MAX_MESSAGES) }
       })
     },
-    [conversationId, conversationKey],
+    [conversationId, conversationKey, enabled],
   )
 
   useEffect(() => {
+    if (!enabled) return
     if (snapshot.storageKey === conversationKey) return
     setSnapshot({
       storageKey: conversationKey,
       messages: readMessages(conversationKey, conversationId),
     })
-  }, [conversationId, conversationKey, snapshot.storageKey])
+  }, [conversationId, conversationKey, enabled, snapshot.storageKey])
 
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     const local = readMessages(conversationKey, conversationId)
     setHydratedKey('')
@@ -237,15 +246,16 @@ export function useTravelConversation(conversationId: string): {
     })
 
     return () => { cancelled = true }
-  }, [conversationId, conversationKey])
+  }, [conversationId, conversationKey, enabled])
 
   useEffect(() => {
+    if (!enabled) return
     if (snapshot.storageKey !== conversationKey) return
     writeMessages(conversationKey, indexKey, conversationPrefix, snapshot.messages)
-  }, [conversationKey, conversationPrefix, indexKey, snapshot])
+  }, [conversationKey, conversationPrefix, enabled, indexKey, snapshot])
 
   useEffect(() => {
-    if (snapshot.storageKey !== conversationKey || hydratedKey !== conversationKey
+    if (!enabled || snapshot.storageKey !== conversationKey || hydratedKey !== conversationKey
       || snapshot.messages.length === 0) return
     const persisted = snapshot.messages.map(({ role, text }) => ({ role, content: text }))
     const signature = `${conversationKey}:${JSON.stringify(persisted)}`
@@ -270,7 +280,7 @@ export function useTravelConversation(conversationId: string): {
       cancelled = true
       window.clearTimeout(timer)
     }
-  }, [conversationId, conversationKey, hydratedKey, snapshot])
+  }, [conversationId, conversationKey, enabled, hydratedKey, snapshot])
 
-  return { messages, setMessages, syncError }
+  return { messages, setMessages, syncError: enabled ? syncError : '' }
 }

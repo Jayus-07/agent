@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   resolvePending: vi.fn(),
   cancelPending: vi.fn(),
   fetchTrip: vi.fn(),
+  fetchTripConversation: vi.fn(),
   stream: vi.fn(),
 }))
 
@@ -23,6 +24,7 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
   resolveTravelTripAIPendingResolutionV2: mocks.resolvePending,
   cancelTravelTripAIPendingResolutionV2: mocks.cancelPending,
   fetchTravelTripV2: mocks.fetchTrip,
+  fetchTravelTripConversationV2: mocks.fetchTripConversation,
   createTravelV2IdempotencyKey: () => 'op-key-0001',
 }))
 
@@ -123,6 +125,10 @@ async function settle() {
 describe('Trip 绑定的 V2 旅游会话', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockReset()
+    mocks.fetchTripConversation.mockResolvedValue({
+      trip_id: tripId, conversation_id: conversationId, linked: true,
+      server_now: '2026-10-17T12:00:00.000Z',
+    })
   })
 
   afterEach(() => {
@@ -203,7 +209,45 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     expect(page.onTripSaved).not.toHaveBeenCalled()
   })
 
-  it('空酒店和车次安排明确表示尚未安排，且投影受长度预算限制', async () => {
+  it('只读酒店价格使用服务端时间戳生成新鲜度证据', async () => {
+    mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
+    mocks.stream.mockImplementation(async function* () {
+      yield { event: 'done', data: { status: 'success', result: { status: 'success', final_answer: '价格仅供参考。', itinerary: null } } }
+    })
+    const trip = makeTrip()
+    trip.document.arrangements.lodgings = [{
+      selection_id: 'lodging-1', merchant: {
+        merchant_id: 'hotel-1', name: '西湖酒店', address: '杭州', lat: null, lng: null,
+        rating: null, open_status: null, open_time_today: null, avg_cost_cny: null,
+        source: 'official', observed_at: '2026-10-17T11:00:00.000Z',
+      },
+      check_in: '2026-10-20', check_out: '2026-10-21', source: 'official',
+      queried_at: '2026-10-17T11:00:00.000Z', verification: 'verified',
+      booking_status: 'not_booked', nightly_price_cny: 500,
+    }]
+    const page = mount([], vi.fn(), undefined, trip)
+
+    await submit(page.container, '酒店价格是多少？')
+
+    expect(mocks.fetchTripConversation).toHaveBeenCalledWith(tripId, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mocks.stream.mock.calls[0][0]).toContain('"freshness":"current"')
+  })
+
+  it('服务端关联变化时不向模型发送只读问题', async () => {
+    mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
+    mocks.fetchTripConversation.mockResolvedValue({
+      trip_id: tripId, conversation_id: 'different-conversation', linked: true,
+      server_now: '2026-10-17T12:00:00.000Z',
+    })
+    const page = mount()
+
+    await submit(page.container, '询问行程')
+
+    expect(mocks.stream).not.toHaveBeenCalled()
+    expect(page.container.textContent).toContain('旅游问答暂时不可用')
+  })
+
+  it('投影截断后不把空酒店和车次安排说成尚未安排', async () => {
     mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
     mocks.stream.mockImplementation(async function* () {
       yield { event: 'done', data: { status: 'success', result: { status: 'success', final_answer: '行程里还没有酒店或车次。', itinerary: null } } }
@@ -223,10 +267,11 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     const factsJson = prompt.match(/正式行程事实 JSON：([\s\S]*)\n用户问题：/)?.[1]
     expect(factsJson).toBeTruthy()
     expect(factsJson!.length).toBeLessThanOrEqual(6500)
-    expect(factsJson).toContain('"lodging_unarranged":true')
-    expect(factsJson).toContain('"intercity_train_unarranged":true')
+    expect(factsJson).toContain('"lodging_unarranged":false')
+    expect(factsJson).toContain('"intercity_train_unarranged":false')
     expect(factsJson).toContain('"applied":true')
-    expect(prompt).toContain('空值和空数组表示尚未安排，禁止推测酒店、车次、费用或预订状态')
+    expect(prompt).toContain('只有原始安排数组为空且 truncation.applied 为 false 时，才可说尚未安排')
+    expect(prompt).toContain('price_evidence.freshness=current 且 verification=verified')
     expect(page.onTripSaved).not.toHaveBeenCalled()
   })
 

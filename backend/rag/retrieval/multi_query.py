@@ -252,8 +252,21 @@ def _rewrite(question: str) -> list[str]:
         # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
         if isinstance(span.input, dict):
             span.input["prompt"] = r.text[:1000]
-        result = _resolve_rewrite_llm().invoke([HumanMessage(content=r.text)])
+        messages = [HumanMessage(content=r.text)]
+        from backend.config import model_roles
+        from backend.infra.llm.proxy import (
+            enforce_model_input_price_tier,
+            get_active_model_name,
+        )
 
+        model_name = str(
+            model_roles.resolve_runtime_name("multi_query") or ""
+        ).strip() or get_active_model_name()
+        enforce_model_input_price_tier((messages,), model_name=model_name)
+        result = _resolve_rewrite_llm().invoke(
+            messages,
+            max_tokens=_rewrite_max_tokens(),
+        )
         # 正确提取 content（可能是 AIMessage 或其他类型）
         if hasattr(result, 'content'):
             raw = str(result.content)

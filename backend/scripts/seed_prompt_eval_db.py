@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import ipaddress
 import json
 import os
 import re
+import socket
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -16,18 +19,169 @@ import psycopg2
 from psycopg2 import sql
 from psycopg2.extras import RealDictCursor
 from sqlalchemy import text
+from sqlalchemy.engine import URL
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 
-def _require_test_database() -> tuple[str, str]:
-    host = os.getenv("PGHOST", "localhost").strip().lower()
+def _environment_value(primary: str, fallback: str, default: str = "") -> str:
+    return os.getenv(primary, "").strip() or os.getenv(fallback, default).strip()
+
+
+def _require_test_database() -> dict[str, str | int]:
+    """解析专用测试连接，绝不依赖模块级 MEMORY_DB_CONFIG。"""
+    host = _environment_value("PROMPT_EVAL_TEST_PGHOST", "PGHOST", "localhost")
+    host = host.strip().lower()
     database = os.getenv("PROMPT_EVAL_TEST_PGDATABASE", "").strip()
+    username = _environment_value("PROMPT_EVAL_TEST_PGUSER", "PGUSER")
+    password = _environment_value("PROMPT_EVAL_TEST_PGPASSWORD", "PGPASSWORD")
+    raw_port = _environment_value("PROMPT_EVAL_TEST_PGPORT", "PGPORT", "5432")
     if not database:
         raise RuntimeError("必须设置 PROMPT_EVAL_TEST_PGDATABASE，禁止使用默认生产库")
-    if host not in {"localhost", "127.0.0.1", "::1"} and "test" not in host:
-        raise RuntimeError(f"拒绝非测试数据库主机: {host}")
-    if "test" not in database.lower() and os.getenv("PROMPT_EVAL_ALLOW_NON_TEST_DB") != "1":
+    host_addresses = _target_host_addresses(host)
+    if not host_addresses or not all(
+        ipaddress.ip_address(address).is_loopback for address in host_addresses
+    ):
+        raise RuntimeError("评测数据库只允许连接本机隔离 PostgreSQL")
+    if not database.lower().endswith(("_test", "_testing", "_eval", "_evaluation")):
         raise RuntimeError(f"数据库名看起来不是测试库: {database}")
-    return host, database
+    if not username or not password:
+        raise RuntimeError("必须显式设置测试 PostgreSQL 连接角色和密码")
+    try:
+        port = int(raw_port)
+    except ValueError as exc:
+        raise RuntimeError("测试 PostgreSQL 端口无效") from exc
+    if not 1 <= port <= 65535:
+        raise RuntimeError("测试 PostgreSQL 端口超出有效范围")
+
+    configured_memory_database = os.getenv("MEMORY_PGDATABASE", "").strip()
+    if configured_memory_database and configured_memory_database != database:
+        raise RuntimeError(
+            "MEMORY_PGDATABASE 与 PROMPT_EVAL_TEST_PGDATABASE 冲突；拒绝写入"
+        )
+    return {
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+        "password": password,
+    }
+
+
+def _target_host_addresses(host: str) -> set[str]:
+    try:
+        return {ipaddress.ip_address(host).compressed}
+    except ValueError:
+        try:
+            return {
+                ipaddress.ip_address(item[4][0]).compressed
+                for item in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+            }
+        except OSError as exc:
+            raise RuntimeError("无法验证测试 PostgreSQL 主机身份") from exc
+
+
+def _server_address_matches_target(host: str, server_address: str) -> bool:
+    normalized_server = ipaddress.ip_interface(server_address).ip
+    expected_addresses = _target_host_addresses(host)
+    if normalized_server.compressed in expected_addresses:
+        return True
+    # Docker Desktop 通过 loopback 端口映射连接容器时，PostgreSQL 返回容器
+    # 私网地址；此时外部目的主机仍是明确配置的本机 loopback 地址。
+    host_addresses = {ipaddress.ip_address(value) for value in expected_addresses}
+    return (
+        all(address.is_loopback for address in host_addresses)
+        and normalized_server.is_private
+    )
+
+
+async def _verify_database_identity(
+    session: AsyncSession, target: dict[str, str | int]
+) -> None:
+    """用将要写入的同一连接核验库、角色、主机和可写主库身份。"""
+    result = await session.execute(text(
+        """SELECT current_database() AS database, current_user AS username,
+                  inet_server_addr()::text AS server_address,
+                  inet_server_port() AS server_port,
+                  current_setting('transaction_read_only') AS read_only,
+                  pg_is_in_recovery() AS in_recovery"""
+    ))
+    _assert_database_identity(result.mappings().one(), target)
+
+
+def _assert_database_identity(
+    identity: dict,
+    target: dict[str, str | int],
+    *,
+    read_only: bool = False,
+) -> None:
+    server_address = identity["server_address"]
+    # 端口只作诊断：Docker Desktop 通过 loopback 端口映射连接容器时，
+    # 宿主目标端口（如 5433）与容器内 inet_server_port()（5432）天然不同。
+    # 身份可信度来自库名、角色、read-only/主库状态与真实服务地址，不来自
+    # 「容器内监听端口 == 宿主目标端口」这一不可满足的等式。
+    if (
+        identity["database"] != target["database"]
+        or identity["username"] != target["username"]
+        or not server_address
+        or not _server_address_matches_target(
+            str(target["host"]), str(server_address)
+        )
+        or identity["read_only"] != ("on" if read_only else "off")
+        or identity["in_recovery"]
+    ):
+        raise RuntimeError(
+            "测试数据库连接身份与显式目标不一致；拒绝写入"
+            f"（目标 {target['host']}:{target['port']}/{target['database']}，"
+            f"实际 {server_address}:{identity['server_port']}/"
+            f"{identity['database']}@{identity['username']}）"
+        )
+
+
+@contextmanager
+def _test_price_connection(target: dict[str, str | int]):
+    """只读读取隔离测试库价格，并先验证真实连接身份。"""
+    connection = psycopg2.connect(
+        host=target["host"], port=target["port"], dbname=target["database"],
+        user=target["username"], password=target["password"], connect_timeout=5,
+    )
+    try:
+        connection.set_session(readonly=True, autocommit=False)
+        with connection.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute(
+                """SELECT current_database() AS database, current_user AS username,
+                          inet_server_addr()::text AS server_address,
+                          inet_server_port() AS server_port,
+                          current_setting('transaction_read_only') AS read_only,
+                          pg_is_in_recovery() AS in_recovery"""
+            )
+            _assert_database_identity(cursor.fetchone(), target, read_only=True)
+        yield connection
+    finally:
+        connection.rollback()
+        connection.close()
+
+
+def _test_database_url(target: dict[str, str | int]) -> URL:
+    return URL.create(
+        "postgresql+asyncpg",
+        username=str(target["username"]),
+        password=str(target["password"]),
+        host=str(target["host"]),
+        port=int(target["port"]),
+        database=str(target["database"]),
+    )
+
+
+@asynccontextmanager
+async def _open_test_session(target: dict[str, str | int]):
+    """打开显式隔离库会话，并在交给调用方前完成身份校验。"""
+    engine = create_async_engine(_test_database_url(target), pool_pre_ping=True)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await _verify_database_identity(session, target)
+            yield session
+    finally:
+        await engine.dispose()
 
 
 def build_seed_configs() -> dict[str, dict[str, object]]:
@@ -122,18 +276,31 @@ def load_registry_price_rows(configs: dict) -> list[dict]:
     )
     statement = sql.SQL(
         """
-        SELECT model_name, component, dimension, price_per_unit, unit, currency,
-               price_table_version, source, effective_from, effective_to,
-               approval_status, reviewer_1, reviewer_2
-        FROM {table}
-        WHERE approval_status = 'approved'
-          AND effective_from <= now()
-          AND (effective_to IS NULL OR effective_to > now())
+        SELECT p.model_name, p.component, p.dimension, p.price_per_unit,
+               p.unit, p.currency, p.price_table_version, p.source,
+               p.effective_from, p.effective_to, p.approval_status,
+               p.reviewer_1, p.reviewer_2, v.status AS version_status,
+               v.source AS version_source, v.imported_by AS version_imported_by,
+               v.effective_from AS version_effective_from,
+               v.reviewer_1 AS version_reviewer_1,
+               v.reviewer_2 AS version_reviewer_2,
+               v.canary_started_at, v.canary_completed_at, v.coverage_ratio,
+               v.missing_price_count, v.price_calculation_error_count
+        FROM {table} AS p
+        JOIN {versions} AS v
+          ON v.version = p.price_table_version
+         AND v.status = 'active'
+         AND v.source = p.source
+        WHERE p.approval_status = 'approved'
+          AND p.effective_from <= now()
+          AND (p.effective_to IS NULL OR p.effective_to > now())
           AND ({predicates})
-        ORDER BY model_name, component, dimension, effective_from DESC, id DESC
+        ORDER BY p.model_name, p.component, p.dimension,
+                 p.effective_from DESC, p.id DESC
         """
     ).format(
         table=sql.Identifier(f"{table_prefix}model_price"),
+        versions=sql.Identifier(f"{table_prefix}model_price_versions"),
         predicates=predicates,
     )
 
@@ -186,15 +353,45 @@ def build_price_snapshot(configs: dict, rows: list[dict]) -> list[dict]:
         reviewer_2 = str(row.get("reviewer_2") or "").strip()
         version = str(row.get("price_table_version") or "").strip()
         source = str(row.get("source") or "").strip()
+        version_status = row.get("version_status")
+        version_source = str(row.get("version_source") or "").strip()
+        version_imported_by = str(row.get("version_imported_by") or "").strip()
+        version_reviewers = (
+            str(row.get("version_reviewer_1") or "").strip(),
+            str(row.get("version_reviewer_2") or "").strip(),
+        )
         if (
             row.get("approval_status") != "approved"
+            or version_status != "active"
             or not reviewer_1
             or not reviewer_2
             or reviewer_1 == reviewer_2
             or not source
             or not version
+            or not version_imported_by
+            or version_reviewers != (reviewer_1, reviewer_2)
+            or version_imported_by in version_reviewers
         ):
-            raise ValueError("Registry 价格缺少有效批准者、来源或版本")
+            raise ValueError("Registry 价格缺少一致的 active 版本或审批证据")
+        if source != version_source:
+            raise ValueError("Registry 价格版本或来源不一致")
+
+        version_effective_value = row.get("version_effective_from")
+        version_effective = (
+            version_effective_value
+            if isinstance(version_effective_value, datetime)
+            else datetime.fromisoformat(
+                str(version_effective_value or "").replace("Z", "+00:00")
+            )
+        )
+        if version_effective.tzinfo is None or version_effective > now:
+            raise ValueError("Registry 价格版本尚未生效或缺少时区")
+        if (
+            Decimal(str(row.get("coverage_ratio") or 0)) < Decimal("1")
+            or int(row.get("missing_price_count") or 0) != 0
+            or int(row.get("price_calculation_error_count") or 0) != 0
+        ):
+            raise ValueError("Registry active 版本覆盖率或价格计算校验未通过")
 
         effective_value = row.get("effective_from")
         effective = (
@@ -218,6 +415,7 @@ def build_price_snapshot(configs: dict, rows: list[dict]) -> list[dict]:
                 raise ValueError("Registry 价格已失效或缺少时区")
         row["effective_from"] = effective
         row["effective_to"] = end
+        row["version_effective_from"] = version_effective
         price = Decimal(str(row.get("price_per_unit")))
         if not price.is_finite() or price < 0:
             raise ValueError("Registry 价格必须是有限的非负数字")
@@ -241,6 +439,8 @@ def build_price_snapshot(configs: dict, rows: list[dict]) -> list[dict]:
 
     if any(len(values) != 1 for values in versions.values()):
         raise ValueError("同一模型和组件不能混用价格版本或来源")
+    if len({row["price_table_version"] for row in normalized_rows}) != 1:
+        raise ValueError("一次评测价格快照不能混用不同 active 版本")
 
     from backend.infra.llm.pricing import PriceTable
 
@@ -250,16 +450,48 @@ def build_price_snapshot(configs: dict, rows: list[dict]) -> list[dict]:
     return normalized_rows
 
 
+def _active_version_rows(price_rows: list[dict]) -> list[dict]:
+    """提取并校验可追溯复制到隔离库的原始版本发布证据。"""
+    versions: dict[str, dict] = {}
+    fields = (
+        "version_source", "version_imported_by", "version_status",
+        "version_effective_from", "version_reviewer_1", "version_reviewer_2",
+        "canary_started_at", "canary_completed_at", "coverage_ratio",
+        "missing_price_count", "price_calculation_error_count",
+    )
+    target_fields = (
+        "source", "imported_by", "status", "effective_from", "reviewer_1",
+        "reviewer_2", "canary_started_at", "canary_completed_at",
+        "coverage_ratio", "missing_price_count", "price_calculation_error_count",
+    )
+    for row in price_rows:
+        version = str(row["price_table_version"])
+        snapshot = {
+            "version": version,
+            **{
+                target: row[source]
+                for source, target in zip(fields, target_fields, strict=True)
+            },
+        }
+        if version in versions and versions[version] != snapshot:
+            raise ValueError("Registry 同一价格版本的发布证据不一致")
+        versions[version] = snapshot
+    return list(versions.values())
+
+
 async def seed(
     *, dry_run: bool = False, require_approved_prices: bool = False
 ) -> None:
-    host, database = _require_test_database()
+    target = _require_test_database()
+    host = str(target["host"])
+    database = str(target["database"])
     configs = build_seed_configs()
     price_snapshot = []
     if require_approved_prices:
         price_snapshot = build_price_snapshot(
             configs, load_registry_price_rows(configs)
         )
+    active_versions = _active_version_rows(price_snapshot)
     chat = configs["eval_gen"]
     embedding = configs["embedding"]
 
@@ -277,18 +509,16 @@ async def seed(
     if dry_run:
         return
 
-    # 仅在安全检查完成后设置 DB 配置，再惰性导入会话模块。
-    os.environ["MEMORY_PGDATABASE"] = database
-    from backend.memory.database import get_session
-    from backend.shared.crypto import encrypt_secret, fingerprint, last4
+    # 使用显式隔离库会话，首次写入前在同一连接核验身份。
+    async with _open_test_session(target) as session:
+        from backend.shared.crypto import encrypt_secret, fingerprint, last4
 
-    cred_roles: list[tuple[str, dict[str, object]]] = [
-        ("eval_gen", chat), ("embedding", embedding)
-    ]
-    if "rerank" in configs:
-        cred_roles.append(("rerank", configs["rerank"]))
+        cred_roles: list[tuple[str, dict[str, object]]] = [
+            ("eval_gen", chat), ("embedding", embedding)
+        ]
+        if "rerank" in configs:
+            cred_roles.append(("rerank", configs["rerank"]))
 
-    async for session in get_session():
         for role, config in cred_roles:
             provider_id = str(config["provider_id"])
             model_name = str(config["model_name"])
@@ -422,20 +652,58 @@ async def seed(
             )
         # 只向已校验的隔离库复制已批准快照，不创建新审批或回写源价格。
         if price_snapshot:
-            # 快照导入串行化；相同版本不同价格必须报错，不能静默覆盖或跳过。
+            # 发布版本先落库以满足 model_price 的版本外键，历史内容只校验不覆盖。
+            await session.execute(text(
+                "LOCK TABLE model_price_versions IN SHARE ROW EXCLUSIVE MODE"
+            ))
             await session.execute(text("LOCK TABLE model_price IN SHARE ROW EXCLUSIVE MODE"))
-        for row in price_snapshot:
+        for version_row in active_versions:
             result = await session.execute(text("""
-                SELECT price_per_unit, unit, currency, source, approval_status,
-                    reviewer_1, reviewer_2, effective_to
-                FROM model_price WHERE model_name=:model_name
-                AND component=:component AND dimension=:dimension
-                AND price_table_version=:price_table_version
-                AND effective_from=CAST(:effective_from AS timestamptz)
-            """), row)
+                SELECT source, imported_by, status, effective_from,
+                       reviewer_1, reviewer_2, canary_started_at,
+                       canary_completed_at, coverage_ratio,
+                       missing_price_count, price_calculation_error_count
+                FROM model_price_versions WHERE version=:version
+            """), version_row)
             existing = result.mappings().first()
             if existing is not None:
-                if any(existing[key] != row.get(key) for key in existing):
+                if any(existing[key] != version_row[key] for key in existing):
+                    raise ValueError("目标库同版本发布证据不一致，拒绝覆盖")
+                continue
+            await session.execute(text("""
+                INSERT INTO model_price_versions (
+                    version, source, imported_by, status, effective_from,
+                    reviewer_1, reviewer_2, canary_started_at,
+                    canary_completed_at, coverage_ratio, missing_price_count,
+                    price_calculation_error_count
+                ) VALUES (
+                    :version, :source, :imported_by, :status, :effective_from,
+                    :reviewer_1, :reviewer_2, :canary_started_at,
+                    :canary_completed_at, :coverage_ratio, :missing_price_count,
+                    :price_calculation_error_count
+                )
+            """), version_row)
+        for row in price_snapshot:
+            price_row = {
+                key: row[key]
+                for key in (
+                    "model_name", "component", "dimension", "price_per_unit",
+                    "unit", "currency", "price_table_version", "source",
+                    "effective_from", "effective_to", "approval_status",
+                    "reviewer_1", "reviewer_2",
+                )
+            }
+            result = await session.execute(text("""
+                SELECT price_per_unit, unit, currency, source, approval_status,
+                       reviewer_1, reviewer_2, effective_from, effective_to
+                FROM model_price WHERE model_name=:model_name
+                  AND component=:component AND dimension=:dimension
+                  AND price_table_version=:price_table_version
+                  AND effective_from=CAST(:effective_from AS timestamptz)
+            """), price_row)
+            existing = result.mappings().first()
+            if existing is not None:
+                if any(existing[key] != price_row.get(key) for key in existing):
                     raise ValueError("价格快照与目标库同版本记录冲突，拒绝写入")
                 continue
             await session.execute(text("""
@@ -444,49 +712,52 @@ async def seed(
                     price_table_version, source, effective_from, effective_to,
                     approval_status, reviewer_1, reviewer_2
                 )
-                SELECT :model_name, :component, :dimension, :price_per_unit, :unit,
+                VALUES (:model_name, :component, :dimension, :price_per_unit, :unit,
                     :currency, :price_table_version, :source,
                     CAST(:effective_from AS timestamptz), CAST(:effective_to AS timestamptz),
-                    'approved', :reviewer_1, :reviewer_2
-                WHERE NOT EXISTS (
-                    SELECT 1 FROM model_price WHERE model_name=:model_name
-                    AND component=:component AND dimension=:dimension
-                    AND price_table_version=:price_table_version
-                    AND effective_from=CAST(:effective_from AS timestamptz)
-                )
-            """), {**row, "effective_to": row.get("effective_to")})
-        # get_session 是 async generator；break 不会执行 yield 后的自动提交，
-        # 必须在关闭会话前显式提交，确保 CI 后续评测进程能读到绑定。
+                    :approval_status, :reviewer_1, :reviewer_2)
+            """), price_row)
         await session.commit()
-        break
-    else:
-        raise RuntimeError("未能建立测试数据库会话")
+
+
     print("测试评测模型绑定已写入（Key 仅保存加密值）")
 
 
 def verify_pricing() -> None:
     """在任何付费 Probe/索引前检查权威价格，禁止缺价跑完后再报未知。"""
-    _host, database = _require_test_database()
-    os.environ["MEMORY_PGDATABASE"] = database
-    from backend.infra.llm.pricing import (
-        NormalizedUsage,
-        get_current_price_table,
-        price_usage,
-    )
+    target = _require_test_database()
+    from unittest.mock import patch
 
-    for role, config in build_seed_configs().items():
-        component = "llm" if role == "eval_gen" else role
-        model = str(config["model_name"])
-        get_current_price_table(model, component).require(
-            model, component, enforce=True,
-        )
-        result = price_usage(
-            model, component,
-            NormalizedUsage(input_tokens=1, output_tokens=int(component == "llm")),
-            enforce=True,
-        )
-        if result.pricing_source != "approved_price_table" or result.cost_status != "exact":
-            raise RuntimeError(f"评测价格或汇率未就绪: {model}/{component}")
+    from backend.infra.llm import pricing
+
+    repository = pricing.PostgresPriceRepository(
+        connection_factory=lambda: _test_price_connection(target)
+    )
+    pricing.clear_price_cache()
+    try:
+        # 让统一 BillingResult 算法读取显式隔离库，完整验证价格、币种和汇率。
+        with patch.object(pricing, "PostgresPriceRepository", return_value=repository):
+            for role, config in build_seed_configs().items():
+                component = "llm" if role == "eval_gen" else role
+                model = str(config["model_name"])
+                pricing.get_current_price_table(model, component).require(
+                    model, component, enforce=True,
+                )
+                result = pricing.price_usage(
+                    model,
+                    component,
+                    pricing.NormalizedUsage(
+                        input_tokens=1, output_tokens=int(component == "llm")
+                    ),
+                    enforce=True,
+                )
+                if (
+                    result.pricing_source != "approved_price_table"
+                    or result.cost_status != "exact"
+                ):
+                    raise RuntimeError(f"评测价格或汇率未就绪: {model}/{component}")
+    finally:
+        pricing.clear_price_cache()
     print("EVAL_PRICING_CHECK=passed（仅检查价格，不调用 Provider）")
 
 

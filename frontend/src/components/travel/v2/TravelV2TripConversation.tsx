@@ -10,6 +10,7 @@ import {
   createTravelV2IdempotencyKey,
   fetchTravelTripAIPendingResolutionV2,
   fetchTravelTripAIEditStatusV2,
+  fetchTravelTripConversationV2,
   fetchTravelTripV2,
   resolveTravelTripAIPendingResolutionV2,
   type TravelAIEditResponseV2,
@@ -139,8 +140,16 @@ export default function TravelV2TripConversation({
     setProcess(initialTravelProcess(intent.turnId))
     const events: TravelStreamEvent[] = []
     try {
+      const trip = tripRef.current
+      const association = await fetchTravelTripConversationV2(trip.trip_id, { signal: controller.signal })
+      if (controller.signal.aborted) return
+      if (association.trip_id !== trip.trip_id
+        || !association.linked
+        || association.conversation_id !== conversationId) {
+        throw new Error('行程与对话关联无法验证。')
+      }
       for await (const event of streamTravelPlanV2(
-        buildTravelV2TripQuestionPrompt(intent.userText, tripRef.current), conversationId,
+        buildTravelV2TripQuestionPrompt(intent.userText, trip, association.server_now), conversationId,
         { signal: controller.signal, clientRunId: intent.turnId, mode: 'chat', source: 'manual' },
       )) {
         events.push(event)

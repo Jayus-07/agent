@@ -121,35 +121,102 @@ class _NoPriceStore:
         return {"id": "r1"}
 
 
-def test_missing_price_allows_call_and_marks_price_unknown(caplog):
-    """缺价模型：reserve 不抛异常、调用计数照常、日志含 price_unknown。"""
+def test_missing_price_rejects_call_when_registry_has_no_price(monkeypatch):
+    """2026-10-17 契约：表与注册表都没有正单价 → 硬预算拒绝调用。
+
+    取代 2026-09-22 的「缺价一律放行」：费用无法证明时放行等于给未定价调用
+    开口子，用户 20 元硬上限无法兜底。
+    """
+    from backend.infra.llm import pricing as pricing_module
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    def _unavailable(model_name, component):
+        raise pricing_module.PriceTableUnavailable("price table down")
+
+    monkeypatch.setattr(pricing_module, "get_current_price_table", _unavailable)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (0.0, 0.0),
+    )
+
+    budget = RequestBudget(
+        _limits(), mode="enforce", user_id="user-a", tenant_id="tenant-a",
+        quota_store=_NoPriceStore(),
+    )
+    with pytest.raises(RequestBudgetExceeded) as exc_info:
+        budget.reserve("primary", model_name="__no_such_model__")
+    assert "price_unavailable" in exc_info.value.reason
+    assert budget.snapshot().calls == 0
+
+
+def test_missing_price_allows_call_when_registry_has_unit_price(monkeypatch, caplog):
+    """注册表仍有正单价时保留放行语义：只是成本不再精确（price_unknown）。"""
     import logging
 
+    from backend.infra.llm import pricing as pricing_module
     from backend.infra.llm.budget import RequestBudget
+
+    def _unavailable(model_name, component):
+        raise pricing_module.PriceTableUnavailable("price table down")
+
+    monkeypatch.setattr(pricing_module, "get_current_price_table", _unavailable)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (1.0, 2.0),
+    )
 
     budget = RequestBudget(
         _limits(), mode="enforce", user_id="user-a", tenant_id="tenant-a",
         quota_store=_NoPriceStore(),
     )
     with caplog.at_level(logging.WARNING):
-        # 不应抛 MissingModelPrice / 任何异常
-        budget.reserve("primary", model_name="__no_such_model__")
+        budget.reserve("primary", model_name="__registry_priced_model__")
     assert budget.snapshot().calls == 1
     assert any("price_unknown" in (r.getMessage() or "") for r in caplog.records)
 
 
-def test_missing_price_still_respects_call_limits():
-    """放行 ≠ 无限调用：缺价模型的调用次数仍受 max_calls 约束。"""
+def test_price_conflict_rejects_call(monkeypatch):
+    """跨版本 / 混币种冲突 → 硬预算拒绝（不能靠估价掩盖）。"""
+    from backend.infra.llm import pricing as pricing_module
     from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    class _ConflictTable:
+        def require(self, model_name, component, *, enforce):
+            raise pricing_module.PriceConflict("mixed currency")
+
+    monkeypatch.setattr(
+        pricing_module, "get_current_price_table",
+        lambda model_name, component: _ConflictTable(),
+    )
+
+    budget = RequestBudget(
+        _limits(), mode="enforce", user_id="user-a", tenant_id="tenant-a",
+        quota_store=_NoPriceStore(),
+    )
+    with pytest.raises(RequestBudgetExceeded) as exc_info:
+        budget.reserve("primary", model_name="m")
+    assert "price_conflict" in exc_info.value.reason
+
+
+def test_priced_model_still_respects_call_limits(monkeypatch):
+    """放行 ≠ 无限调用：注册表估价的模型调用次数仍受 max_calls 约束。"""
+    from backend.infra.llm import pricing as pricing_module
+    from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
+
+    def _unavailable(model_name, component):
+        raise pricing_module.PriceTableUnavailable("price table down")
+
+    monkeypatch.setattr(pricing_module, "get_current_price_table", _unavailable)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (1.0, 2.0),
+    )
 
     budget = RequestBudget(
         _limits(max_calls=1), mode="enforce",
         user_id="user-a", tenant_id="tenant-a",
         quota_store=_NoPriceStore(),
     )
-    budget.reserve("primary", model_name="__no_such_model__")
+    budget.reserve("primary", model_name="__registry_priced_model__")
     with pytest.raises(RequestBudgetExceeded):
-        budget.reserve("primary", model_name="__no_such_model__")
+        budget.reserve("primary", model_name="__registry_priced_model__")
 
 
 def test_record_tokens_marks_price_unknown(monkeypatch):

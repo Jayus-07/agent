@@ -28,7 +28,13 @@ from backend.travel_v2.services.trip_edit_service import (
     TripEditService,
     VersionConflict,
 )
-from backend.travel_v2.services.trip_service import TripNotFound, TripService
+from backend.travel_v2.services.trip_service import (
+    IdempotencyConflict as TripCreateIdempotencyConflict,
+)
+from backend.travel_v2.services.trip_service import (
+    TripNotFound,
+    TripService,
+)
 from backend.travel_v2.services.trip_write_validator import TripWriteConflictError
 
 router = APIRouter(tags=["旅游 V2 行程"])
@@ -49,7 +55,7 @@ def _scope(request: Request) -> tuple[str, str, str]:
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, (TripNotFound, RevisionNotFound)):
         return HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": str(exc)})
-    if isinstance(exc, (VersionConflict, IdempotencyConflict)):
+    if isinstance(exc, (VersionConflict, IdempotencyConflict, TripCreateIdempotencyConflict)):
         code = "VERSION_CONFLICT" if isinstance(exc, VersionConflict) else "IDEMPOTENCY_CONFLICT"
         return HTTPException(status_code=409, detail={"code": code, "message": str(exc)})
     if isinstance(exc, TravelV2PersistenceError):
@@ -94,6 +100,7 @@ def create_trip(
             tenant_id=tenant_id, owner_id=owner_id,
             title=payload.title, document=payload.document,
             actor_id=actor_id, idempotency_key=idempotency_key,
+            conversation_id=payload.conversation_id,
         )
         if result.pop("replayed", False):
             response.status_code = 200
@@ -107,6 +114,20 @@ def get_trip(trip_id: UUID, request: Request):
     tenant_id, owner_id, _actor_id = _scope(request)
     try:
         return TripService().get_trip(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.get(
+    "/travel/v2/trips/{trip_id}/conversation",
+    summary="按 Trip 属主权限恢复其原始规划会话",
+)
+def get_trip_conversation(trip_id: UUID, request: Request):
+    tenant_id, owner_id, _actor_id = _scope(request)
+    try:
+        return TripService().get_trip_conversation(
             trip_id, tenant_id=tenant_id, owner_id=owner_id,
         )
     except Exception as exc:

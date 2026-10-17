@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +39,7 @@ def _filter_subprocess(paths: list[str], event: str = "push") -> bool:
 
 def test_rag_and_billing_migrations_trigger_smoke():
     paths = [
+        "backend/sql/migrations/013_obs_analytics_pg.sql",
         "backend/sql/migrations/014_rag_stores_pg.sql",
         "backend/sql/migrations/053_model_price_immutable_trigger.sql",
         "backend/sql/migrations/079_llm_usage_billing_v2.sql",
@@ -57,6 +59,11 @@ def test_rag_runtime_paths_trigger_smoke():
         "backend/infra/llm/credentials.py",
         "mcp_servers/servers/rag.py",
         "backend/scripts/ingest_eval_fixtures.py",
+        "backend/observability/llm_usage_store.py",
+        "backend/observability/llm_usage_store_pg.py",
+        "backend/observability/usage_parse.py",
+        "backend/tasks/budget_reconciliation_tasks.py",
+        "backend/services/model_config.py",
     ]
     for path in paths:
         assert _filter_import([path]) is True, path
@@ -72,6 +79,66 @@ def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False
+
+
+def _run_filter(paths: list[str], event: str):
+    # 子进程中文报错在 Windows 默认 GBK 控制台下会破坏 UTF-8 解码，显式固定。
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), "--event", event],
+        input="\n".join(paths) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+
+
+def test_unclassified_migration_blocks_pr_free_preflight_and_gates_main():
+    """未分类迁移：PR 免费预检失败（可操作报错），main push 不被静默跳过。"""
+    path = "backend/sql/migrations/102_new_unknown_table.sql"
+    assert _mod.classify_migration(path) == "unknown"
+
+    pull = _run_filter([path], "pull_request")
+    assert pull.returncode == 2
+    assert "未分类迁移" in pull.stderr
+    assert path in pull.stderr
+
+    push = _run_filter([path], "push")
+    assert push.returncode == 0
+    assert push.stdout.strip().endswith("relevant=true")
+
+
+def test_every_repository_migration_is_explicitly_classified():
+    """完整性检查：仓库内每个迁移都必须显式归类，禁止隐式漏检。"""
+    root = Path(__file__).resolve().parents[1]
+    migrations = sorted(
+        p.name for p in (root / "backend" / "sql" / "migrations").glob("*.sql")
+    )
+    assert migrations
+    unknown = [
+        name for name in migrations
+        if _mod.classify_migration(f"backend/sql/migrations/{name}") == "unknown"
+    ]
+    assert unknown == [], unknown
+
+
+def test_migration_classification_categories():
+    assert _mod.classify_migration(
+        "backend/sql/migrations/079_llm_usage_billing_v2.sql"
+    ) == "paid"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/024_rag_eval_fixture_set.sql"
+    ) == "paid"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/098_cs_refund_order_unique.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/101_travel_v2_trip_conversations.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/099_model_price_source_monitor.sql"
+    ) == "non_ai"
 
 
 def test_model_price_monitor_changes_do_not_trigger_main_paid_smoke():
@@ -117,6 +184,8 @@ def test_setup_and_workflow_only_changes_run_pr_static_but_not_main_paid_smoke()
         ".github/scripts/rag_smoke_path_filter.py",
         "backend/scripts/seed_prompt_eval_db.py",
         "scripts/seed_eval_model_bindings.py",
+        "tests/evaluation/test_rag_ci_workflow_contracts.py",
+        "tests/test_rag_smoke_path_filter.py",
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False

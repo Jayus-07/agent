@@ -188,6 +188,7 @@ async def _governance_context() -> tuple[dict, dict, list | None]:
                 "lastError": r["lastError"] or None,
                 "consecutiveFailures": r["consecutiveFailures"],
                 "probeSource": r.get("probeSource"),
+                "probeMode": r.get("probeMode"),
             }
             for r in health_rows
         }
