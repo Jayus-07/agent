@@ -1,4 +1,4 @@
-"""共享线程池 — 检索路径三级分离，杜绝嵌套提交死锁（Phase 3 / P0）。
+"""共享线程池 — 检索路径三级分离，改写 Provider 独立隔离。
 
 为什么三级（2026-10-07 施工前审计实锤）：
 
@@ -11,12 +11,15 @@
   两池独立保证不互相占坑。
 - **inner**：hybrid 内部 vector + BM25 并行（被 outer/MQ/请求线程调用时，
   同池自嵌套会死锁）。
+- **multi_query_rewrite**：改写 Provider 专池。同步 Provider 无法被 Future
+  物理取消，不能让超时请求占用 outer / inner 检索 worker。
 
 所有提交统一走 :func:`submit_rag_task`——自动埋 wait/exec 时长与队列深度
-（spec §20：rag.pool.{multi_query|outer|inner}.wait_ms）。
+（spec §20：rag.pool.{multi_query|multi_query_rewrite|outer|inner}.wait_ms）。
 """
 from __future__ import annotations
 
+import contextvars
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -24,11 +27,13 @@ from typing import Any, Callable
 
 from backend.config.rag import (
     RAG_POOL_INNER_WORKERS,
+    RAG_POOL_MULTI_QUERY_REWRITE_WORKERS,
     RAG_POOL_MULTI_QUERY_WORKERS,
     RAG_POOL_OUTER_WORKERS,
 )
 
 _multi_query: ThreadPoolExecutor | None = None
+_multi_query_rewrite: ThreadPoolExecutor | None = None
 _outer: ThreadPoolExecutor | None = None
 _inner: ThreadPoolExecutor | None = None
 
@@ -46,6 +51,19 @@ def retrieval_pool_multi_query() -> ThreadPoolExecutor:
                     thread_name_prefix="retr-mq",
                 )
     return _multi_query
+
+
+def retrieval_pool_multi_query_rewrite() -> ThreadPoolExecutor:
+    """MultiQuery Provider 改写专池，避免不可终止请求占住检索 worker。"""
+    global _multi_query_rewrite
+    if _multi_query_rewrite is None:
+        with _lock:
+            if _multi_query_rewrite is None:
+                _multi_query_rewrite = ThreadPoolExecutor(
+                    max_workers=RAG_POOL_MULTI_QUERY_REWRITE_WORKERS,
+                    thread_name_prefix="retr-mq-rewrite",
+                )
+    return _multi_query_rewrite
 
 
 def retrieval_pool_outer() -> ThreadPoolExecutor:
@@ -76,6 +94,7 @@ def retrieval_pool_inner() -> ThreadPoolExecutor:
 
 _POOL_FACTORIES: dict[str, Callable[[], ThreadPoolExecutor]] = {
     "multi_query": retrieval_pool_multi_query,
+    "multi_query_rewrite": retrieval_pool_multi_query_rewrite,
     "outer": retrieval_pool_outer,
     "inner": retrieval_pool_inner,
 }
@@ -96,14 +115,15 @@ def submit_rag_task(pool_name: str, fn: Callable[..., Any], /, *args: Any, **kwa
     - exec_ms：任务自身执行时长
     - rag_pool_queued_tasks：提交时刻队列深度（gauge 采样）
 
-    注意：contextvars 快照语义由调用方负责（如 multi_query 在提交方线程
-    copy_context 后传 ctx.run 进来），本包装不碰 context。
+    在提交线程复制 ContextVar 上下文后执行任务，确保 tenant/user/trace 与预算
+    状态到达向量检索等同步子任务；每个任务使用独立快照，避免线程复用串账。
     """
     factory = _POOL_FACTORIES.get(pool_name)
     if factory is None:
         raise ValueError(f"未知检索池: {pool_name}（合法: {sorted(_POOL_FACTORIES)}）")
     pool = factory()
     submitted_at = time.perf_counter()
+    request_context = contextvars.copy_context()
 
     def _runner() -> Any:
         started_at = time.perf_counter()
@@ -122,4 +142,4 @@ def submit_rag_task(pool_name: str, fn: Callable[..., Any], /, *args: Any, **kwa
             except Exception:  # noqa: BLE001 — 观测旁路软失败
                 pass
 
-    return pool.submit(_runner)
+    return pool.submit(request_context.run, _runner)

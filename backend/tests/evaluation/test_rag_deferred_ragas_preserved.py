@@ -33,7 +33,7 @@ def test_run_rag_unpacks_guarded_case_as_tuple():
     src = _run_rag_source()
 
     # 并发路径：提交 _guarded_case 后取完整元组
-    assert "_futures[_pool.submit(_guarded_case, c)] = c" in src
+    assert "_futures[_submit_with_context(_pool, _guarded_case, c)] = c" in src
     assert "_fut.result()" in src
     # 串行路径：直接接收元组
     assert "evaluated[c.id] = _guarded_case(c)" in src

@@ -239,8 +239,16 @@ def test_approved_price_check_precedes_provider_probe():
             i for i, step in enumerate(steps)
             if step.get("name") == "Verify approved prices before any paid API call"
         )
-        provider_probe = next(
-            i for i, step in enumerate(steps)
-            if step.get("name") == "Verify bindings and probe real API"
-        )
-        assert price_check < provider_probe
+        if workflow_name == "rag_smoke.yml":
+            # Smoke 的真实评测本身受账本和预算门禁约束，不额外发起未计入
+            # 评测账本的独立 Provider Probe。
+            assert not any(
+                step.get("name") == "Verify bindings and probe real API"
+                for step in steps
+            )
+        else:
+            provider_probe = next(
+                i for i, step in enumerate(steps)
+                if step.get("name") == "Verify bindings and probe real API"
+            )
+            assert price_check < provider_probe

@@ -384,6 +384,11 @@ def current_request_budget() -> RequestBudget | None:
         return _states.get(request_id)
 
 
+def current_request_id() -> str:
+    """返回已由可信入口绑定的请求 ID，供用量账本补齐归因。"""
+    return _current_request_id.get()
+
+
 def reserve_model_call(
     kind: str,
     *,
@@ -424,6 +429,25 @@ def reserve_model_call(
 def current_call_decision() -> str:
     """读取当前执行上下文最近一次成功预占的调用类型。"""
     return _current_call_decision.get()
+
+
+@contextmanager
+def scoped_model_call(
+    model_name: str, component: str, *, kind: str = "primary",
+) -> Iterator[None]:
+    """专项模型复用统一预占；恢复外层预占，未知结果保留待对账。"""
+    token = _current_quota_reservation.set(None)
+    decision_token = _current_call_decision.set(_current_call_decision.get())
+    try:
+        reserve_model_call(kind, model_name=model_name, component=component)
+        try:
+            yield
+        finally:
+            # 成功结算会清空当前预占；异常/未记账不能按零释放。
+            review_model_reservation("provider_usage_unavailable")
+    finally:
+        _current_quota_reservation.reset(token)
+        _current_call_decision.reset(decision_token)
 
 
 def release_model_reservation() -> None:
@@ -471,6 +495,7 @@ def record_model_usage(
     completion_tokens: int | None = None,
     total_tokens: int | None = None,
     cost: Decimal | float | str | None = None,
+    review_reason: str = "",
 ) -> None:
     state = current_request_budget()
     if state is not None:
@@ -482,6 +507,9 @@ def record_model_usage(
         )
         reservation = _current_quota_reservation.get()
         if reservation is not None and state.quota_store is not None:
+            if review_reason:
+                review_model_reservation(review_reason)
+                return
             try:
                 state.quota_store.settle(reservation, Decimal(str(cost or 0)))
             except Exception as exc:
@@ -512,10 +540,12 @@ __all__ = [
     "bind_request_budget",
     "clear_request_budget",
     "current_call_decision",
+    "current_request_id",
     "current_request_budget",
     "record_model_usage",
     "release_model_reservation",
     "reserve_model_call",
     "review_model_reservation",
     "scoped_request_budget",
+    "scoped_model_call",
 ]

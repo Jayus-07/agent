@@ -591,6 +591,9 @@ async def seed(
                 },
             )
         role_bindings = [("eval_gen", chat), ("embedding", embedding)]
+        if os.getenv("EVAL_MULTIQUERY", "").lower() == "true":
+            # 改写使用本次评测显式登记的聊天模型，不继承未知环境绑定。
+            role_bindings.append(("multi_query", chat))
         if "rerank" in configs:
             role_bindings.append(("rerank", configs["rerank"]))
         for role, config in role_bindings:

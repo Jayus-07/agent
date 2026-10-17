@@ -311,6 +311,9 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # 同池自嵌套在 2 个并发 MQ 请求下即线程饥饿死锁。默认值维持审计基线
 # （outer=4 / inner=6，MQ 取 4），先治理拓扑后调参数，不无脑扩容。
 RAG_POOL_MULTI_QUERY_WORKERS = max(1, int(os.getenv("RAG_POOL_MULTI_QUERY_WORKERS", "4")))
+RAG_POOL_MULTI_QUERY_REWRITE_WORKERS = max(
+    1, int(os.getenv("RAG_POOL_MULTI_QUERY_REWRITE_WORKERS", "4")),
+)
 RAG_POOL_OUTER_WORKERS = max(1, int(os.getenv("RAG_POOL_OUTER_WORKERS", "4")))
 RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
 

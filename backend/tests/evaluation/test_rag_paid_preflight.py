@@ -1,11 +1,15 @@
 """RAG 真实评测在任何 Provider 外呼前验证批准价格。"""
+import json
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from pathlib import Path
+from types import SimpleNamespace
 
 import psycopg2
 import pytest
+import yaml
 
-from backend.infra.llm import pricing
+from backend.infra.llm import budget, pricing
 from backend.scripts import seed_prompt_eval_db as seed
 
 
@@ -262,5 +266,118 @@ def test_price_verification_fails_before_usage_pricing_when_snapshot_is_missing(
             return pricing.PriceTable([])
 
     monkeypatch.setattr(pricing, "PostgresPriceRepository", Repository)
+
+    # #52：价格核验必须先于任何 usage 计价，失败时不得悄悄回落到估价。
+    usage_pricing_called = False
+
+    def price_usage(*_args, **_kwargs):
+        nonlocal usage_pricing_called
+        usage_pricing_called = True
+        return SimpleNamespace(
+            pricing_source="approved_price_table",
+            cost_status=pricing.COST_STATUS_EXACT,
+        )
+
+    monkeypatch.setattr(pricing, "price_usage", price_usage)
     with pytest.raises(pricing.MissingModelPrice):
         seed.verify_pricing()
+
+    assert usage_pricing_called is False
+
+
+def test_price_table_rejects_per_call_for_token_dimension():
+    with pytest.raises(ValueError, match="Token 维度"):
+        pricing.PriceTable(
+            [
+                pricing.PriceLine(
+                    "embedding-test",
+                    "embedding",
+                    "input",
+                    Decimal("1"),
+                    unit="per_call",
+                    currency="CNY",
+                )
+            ]
+        )
+
+
+def test_price_table_rejects_mixed_currencies_at_runtime_boundary():
+    with pytest.raises(ValueError, match="不能混用价格币种"):
+        pricing.PriceTable(
+            [
+                pricing.PriceLine(
+                    "embedding-test", "embedding", "input", Decimal("1"), currency="CNY"
+                ),
+                pricing.PriceLine(
+                    "embedding-test", "embedding", "cache_read", Decimal("1"), currency="USD"
+                ),
+            ]
+        )
+
+
+@pytest.mark.parametrize("mode,blocked", [("enforce", True), ("observe", False)])
+def test_budget_binding_failure_obeys_enforcement(monkeypatch, mode, blocked):
+    from backend.config import llm
+    from backend.evaluation.service import BudgetBlockedError, _handle_budget_binding_error
+
+    monkeypatch.setattr(llm, "LLM_BUDGET_MODE", mode)
+
+    def fail(*_args, **_kwargs):
+        raise RuntimeError("预算存储不可用")
+
+    monkeypatch.setattr(budget, "bind_request_budget", fail)
+    outer_token = budget._current_request_id.set("outer-request")
+    called = []
+    try:
+        if blocked:
+            with pytest.raises(BudgetBlockedError):
+                with budget.scoped_request_budget("eval", on_error=_handle_budget_binding_error):
+                    called.append(True)
+            assert called == []
+        else:
+            with budget.scoped_request_budget("eval", on_error=_handle_budget_binding_error):
+                called.append(True)
+            assert called == [True]
+        assert budget._current_request_id.get() == "outer-request"
+    finally:
+        budget._current_request_id.reset(outer_token)
+
+
+@pytest.mark.parametrize(
+    "cost,ledger,envelope,passes",
+    [
+        ("VERIFIED", "VERIFIED", "WITHIN_LIMITS", True),
+        ("ESTIMATED", "VERIFIED", "WITHIN_LIMITS", True),
+        ("UNVERIFIED", "VERIFIED", "WITHIN_LIMITS", False),
+        ("VERIFIED", "UNVERIFIED", "WITHIN_LIMITS", False),
+        ("VERIFIED", "VERIFIED", "OVER_LIMIT", False),
+    ],
+)
+def test_real_workflow_rejects_unverified_cost_or_ledger_or_budget(
+    monkeypatch, tmp_path, cost, ledger, envelope, passes
+):
+    root = Path(__file__).resolve().parents[3]
+    definition = yaml.safe_load(
+        (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
+    )
+    steps = definition["jobs"]["rag-smoke"]["steps"]
+    step = next(row for row in steps if row.get("name") == "Require reconciled cost ledger")
+    script = step["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "data/eval_runs/llm_usage_summary.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(
+        json.dumps(
+            {
+                "cost_verification": cost,
+                "budget_ledger_verification": ledger,
+                "budget_envelope_verification": envelope,
+            }
+        ),
+        encoding="utf-8",
+    )
+    if passes:
+        exec(compile(script, "cost-ledger-gate", "exec"), {})
+    else:
+        with pytest.raises(SystemExit):
+            exec(compile(script, "cost-ledger-gate", "exec"), {})

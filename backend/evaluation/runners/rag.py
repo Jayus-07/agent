@@ -14,6 +14,7 @@ import math
 import os
 import time
 from collections import Counter
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,12 @@ _ANSWERS_FILE: Path | None = None
 
 # Stage1 doc 级探针默认 k；运行时可通过 stage1_probe_k 覆盖，避免固定值掩盖 scope 配置。
 _DEFAULT_STAGE1_PROBE_K = 5
+
+
+def _submit_with_context(executor, fn, /, *args, **kwargs):
+    """在线程池提交任务时复制当前请求上下文。"""
+    context = copy_context()
+    return executor.submit(context.run, fn, *args, **kwargs)
 
 
 def _collect_ragas_backfill(run_dir: Path, done_results: dict[str, "EvalResult"]) -> dict[str, dict]:
@@ -1225,7 +1232,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             return _eval_case(case)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(lambda: _eval_case(case)).result(
+            return _submit_with_context(executor, lambda: _eval_case(case)).result(
                 timeout=case_timeout_s
             )
         except concurrent.futures.TimeoutError:
@@ -1268,7 +1275,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             for c in pending:
                 if stop_reason:
                     break
-                _futures[_pool.submit(_guarded_case, c)] = c
+                _futures[_submit_with_context(_pool, _guarded_case, c)] = c
             remaining = [c for c in pending if c.id not in _futures and c.id not in evaluated]
             for _fut in concurrent.futures.as_completed(_futures):
                 _c = _futures[_fut]
@@ -1391,7 +1398,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
                     try:
                         _ragas_futures = [
-                            _ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas
+                            _submit_with_context(_ragas_pool, _run_ragas, j)
+                            for j in _deferred_ragas
                         ]
                         for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
                             try:

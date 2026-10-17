@@ -74,6 +74,20 @@ def current_usage_attribution() -> dict[str, str]:
             stage = binding.stage
     except Exception:
         pass
+    # 预算 request_id 是预占/结算的权威关联键。后台 Worker 可能为每次
+    # Provider 调用生成局部 Trace ID；保留该 Trace ID 会使 usage 与预算账本
+    # 无法按 request_id 对账，因此只把 Trace ID 留在 trace_id 字段。
+    try:
+        from backend.infra.llm.budget import current_request_id
+
+        budget_request_id = current_request_id()
+    except Exception:
+        budget_request_id = ""
+    if budget_request_id:
+        request_id = budget_request_id
+    elif not request_id:
+        # 未绑定预算的处理事件仍以可信处理运行 ID 归属。
+        request_id = run_id
     skill_id = ""
     tool_id = ""
     agent_domain = ""

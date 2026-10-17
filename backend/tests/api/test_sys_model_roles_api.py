@@ -236,6 +236,7 @@ def test_policy_enforced_flag_matches_registry(client):
         assert row["policyEnforced"] is model_roles.policy_enforced(role)
     # tool_selector 已接线；main 尚未接线（防止"假开关"回归）
     assert rows["tool_selector"]["policyEnforced"] is True
+    assert rows["multi_query"]["policyEnforced"] is True
     assert rows["main"]["policyEnforced"] is False
 
 

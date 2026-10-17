@@ -267,51 +267,55 @@ class DashScopeReranker(BaseDocumentCompressor):
             }
 
         last_err: Exception | None = None
-        for attempt in range(2):  # 一次网络抖动不该直接损失整轮排序质量，最多重试 1 次
+        for attempt in range(2):
+            try:
+                return self._rank_once(
+                    payload, len(documents), "retry" if attempt else "primary",
+                )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_err = exc
+            except Exception:
+                # 鉴权、预算拒绝及非法响应不重复投递。
+                raise
+        raise last_err or RuntimeError("云端 rerank 未返回结果")
+
+    def _rank_once(self, payload, doc_count: int, kind: str):
+        """每次 HTTP 尝试独立预占和记账，重试不绕过预算。"""
+        from backend.infra.llm.budget import scoped_model_call
+
+        with scoped_model_call(self._billing_model, "rerank", kind=kind):
+            started = time.monotonic()
             try:
                 resp = requests.post(
-                    self._endpoint,
-                    json=payload,
-                    headers=self._headers,
+                    self._endpoint, json=payload, headers=self._headers,
                     timeout=self.timeout,
                 )
-
                 if resp.status_code != 200:
-                    raise Exception(
-                        f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
+                    raise RuntimeError(
+                        f"DashScope API error [status={resp.status_code}]"
                     )
-
                 data = resp.json()
-                # dashscope: output.results / jina: results（字段名 index、relevance_score 一致）
-                results = (data.get("output", {}).get("results")
-                           if self._api_format == "dashscope"
-                           else data.get("results")) or []
-                scored = [(r["index"], r["relevance_score"]) for r in results]
-
+                results = (
+                    data.get("output", {}).get("results")
+                    if self._api_format == "dashscope" else data.get("results")
+                ) or []
+                scored = [(row["index"], row["relevance_score"]) for row in results]
                 raw_tokens = data.get("usage", {}).get("total_tokens", 0)
                 try:
-                    self.__dict__['_last_total_tokens'] = int(raw_tokens)
+                    tokens = max(0, int(raw_tokens))
                 except (ValueError, TypeError):
-                    self.__dict__['_last_total_tokens'] = 0
-                logger.debug(
-                    f"DashScope Rerank OK: query_len={len(query)}, "
-                    f"doc_count={len(documents)}, top_k={top_k}, tokens={self._last_total_tokens}"
+                    tokens = 0
+                self.__dict__["_last_total_tokens"] = tokens
+                self._record_tokens(
+                    doc_count, (time.monotonic() - started) * 1000,
+                    total_tokens=tokens,
                 )
                 return scored
-            except requests.exceptions.Timeout as e:
-                last_err = e
-            except requests.exceptions.ConnectionError as e:
-                last_err = e
-            except Exception as e:
-                if "DashScope" in str(e):
-                    raise
-                last_err = Exception(f"DashScope rerank failed: {e}")
-
-        if isinstance(last_err, requests.exceptions.Timeout):
-            raise Exception(f"DashScope rerank 超时 ({self.timeout}s)")
-        if isinstance(last_err, requests.exceptions.ConnectionError):
-            raise Exception(f"DashScope 网络连接失败: {last_err}")
-        raise last_err or Exception("DashScope rerank failed: unknown")
+            except Exception:
+                self._record_tokens(
+                    doc_count, (time.monotonic() - started) * 1000, status="error",
+                )
+                raise
 
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现
@@ -319,13 +323,18 @@ class DashScopeReranker(BaseDocumentCompressor):
         span 埋点在外层 RerankCompressor.compress_documents（同名 "rerank"），
         此处不再重复创建 —— 旧双层埋点导致 trace 树出现两条几乎等时的 rerank 行。
         """
-        t0 = time.monotonic()
-
         if not documents:
             return []
 
         try:
-            texts = [doc.page_content[:2000] for doc in documents]
+            # 重排需要文档来源语义，不能把政策正文与 FAQ 摘要当成无标题片段。
+            # 仅使用已授权候选的标题/文件名，不向 Provider 发送本机目录。
+            texts = []
+            for doc in documents:
+                source = str(doc.metadata.get("title") or doc.metadata.get("source") or "")
+                title = source.replace("\\", "/").rsplit("/", 1)[-1][:160]
+                text = f"文档：{title}\n{doc.page_content}" if title else doc.page_content
+                texts.append(text[:2000])
             ranked_results = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
 
             # 应用阈值过滤并限制数量
@@ -342,33 +351,30 @@ class DashScopeReranker(BaseDocumentCompressor):
             for doc, score in result:
                 doc.metadata["rerank_score"] = round(float(score), 4)
 
-            duration_ms = (time.monotonic() - t0) * 1000
-
-            # 记录 token 用量到 SQLite（使用 rank() 从 API 响应中提取的实际值）
-            self._record_tokens(len(texts), duration_ms, total_tokens=self._last_total_tokens)
-
             return [doc for doc, _ in result]
 
         except Exception as e:
-            duration_ms = (time.monotonic() - t0) * 1000
             logger.error(f"DashScope API rerank 失败：{e}")
-            self._record_tokens(len(documents), duration_ms, status="error")
             raise
 
     def _record_tokens(self, doc_count, duration_ms, total_tokens=0, status="success"):
-        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。
+        """写入统一用量账本，并使用同一计费结果结算预算。
 
         2026-09-22 起成本与 token 计量连通：按 `model_price` 实价计费
         （供应商页登记即生效），enforce=False 时缺价回落旧估算，不丢用量行。
         """
+        billing = None
         try:
-            from backend.observability.llm_usage_store import get_llm_usage_store
+            from backend.infra.llm.budget import current_call_decision
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+                get_llm_usage_store,
+            )
             from backend.observability.tracer import current_trace_context
             trace_id, session_id = current_trace_context()
             # Billing V2（2026-10-07 收口）：唯一计费入口，行金额恒 CNY 记账，
             # 原生成本/币种随行走 V2 列（此前 CNY 值写 cost_usd 且 currency 空，
             # 会被按 USD 二次换汇）。
-            billing = None
             if (total_tokens or 0) > 0:
                 try:
                     from backend.infra.llm.pricing import (
@@ -398,6 +404,8 @@ class DashScopeReranker(BaseDocumentCompressor):
                 "session_id": session_id or "",
                 "finish_reason": status,
             }
+            event.update(current_usage_attribution())
+            event["decision"] = current_call_decision()
             if billing is not None:
                 event.update({
                     "billing_schema_version": 2,
@@ -425,6 +433,22 @@ class DashScopeReranker(BaseDocumentCompressor):
             get_llm_usage_store().record(event)
         except Exception:
             pass  # 软失败
+
+        finally:
+            from backend.infra.llm.budget import record_model_usage
+
+            priced = billing is not None and billing.cost_status in {
+                "exact", "estimated",
+            }
+            record_model_usage(
+                prompt_tokens=total_tokens,
+                total_tokens=total_tokens,
+                cost=billing.billed_cost_cny if priced else None,
+                review_reason=(
+                    "" if status == "success" and total_tokens > 0 and priced
+                    else "rerank_usage_or_price_unavailable"
+                ),
+            )
 
 
 # ═══════════════════════════════════════════════════════════

@@ -4,65 +4,119 @@
 
 ## 当前基线与工作树
 
-- 最新 `origin/main`：`d3272c96d252871a0b5de7e1537c85f3a4f278aa`（已包含 PR #40–#45、#47、#51；PR #41/#44 也已合并）。PR #52 基于该 main 打开，仍未合并。
-- 安全治理工作树：`C:/Users/wh/.codex/worktrees/credential-security-p0-20261012/agent`，分支 `codex/credential-security-p0-20261012`。
-- #41 在 2026-10-12 已合并，merge commit `48f3d498`。#45/#47 分别以 `8f65712`、`c2feb44` 合并；#51 以当前 main `d3272c9` 合并。真实服务凭据轮换与旧值失效情况仍须单独确认。
-- B1-E 工作树：`C:/Users/wh/.codex/worktrees/b1e-runtime-interrupt-resume-20261013/agent`，分支 `codex/b1e-travel-interrupt-resume-20261014`，基于 `d3272c9`。本机 Docker Compose 的 app/agent-worker Checkpointer 为 PostgreSQL 且运行态 healthy；本地 `TRAVEL_USER_DECISION_INTERRUPT` 未设置（默认关闭），`ENVIRONMENT` 未设置，故该证据不是生产配置证明。
+- 最新 origin/main：`76334163a82f2fa9a969155da2800f7918476e5b`（PR #57 合并提交；已包含 #30、#40–#45、#47、#51、#56、#57）。PR #52 仍基于 `8887383`；PR #55 `c40ed5b` 当前 OPEN，等待其会话处理。最近一次 main 真实 RAG Smoke baseline run 38397152826 在前一 main `2d1d0b1` 执行，Top-1 0.7143，低于 0.80 门槛；其后无新的 main 真实 RAG 评测。
+- MultiQuery P0：`C:/Users/wh/.codex/worktrees/rag-multi-query-p0-20261013/agent`，分支 `codex/rag-multi-query-p0-20261013`。
+- 凭据安全：`C:/Users/wh/.codex/worktrees/credential-security-p0-20261012/agent`，分支 `codex/credential-security-p0-20261012`。
+- B1-E PR #56 已以 merge commit `8887383` 合入；合并后后端定向集 `78 passed, 5 deselected`、前端 `3 passed`、TypeScript 通过。生产 Checkpointer 配置仍未核实，本机 Docker 证据仅属开发环境。
+- 用户主工作树原有改动未触碰；没有改写共享 Git 历史；不自动合并 PR。
 
 ## 统一看板
 
-| 项目 | PR | 状态 | CI | GPT 审查 | 阻断原因 |
+| 项目 | PR | 状态 | CI / 定向验证 | GPT 审查 | 阻断原因 |
 | --- | --- | --- | --- | --- | --- |
-| B1-A | #40 | 已合并至 main，merge commit `ed28db1` | PR head `9cca719` / RAG PR Smoke run 111 SUCCESS，评测 job 按路径 SKIP；合并后隔离 Worktree 定向集 11 passed，merge SHA 无 main workflow/check run | 0 条未解决 review thread；无 GPT review submission | 排队上限/等待超时继续挂账，不扩本 PR |
-| B1-B | #42 | 已按用户批准合并至 main，merge commit `0c471fb` | 合并前 head `d0223b9` 的 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS；合并后隔离 worktree 定向集 65 passed、9 xfailed；merge SHA 无 main workflow/check run | 3 条旧 review thread 已解决 | 已完成；Usage Attribution 与预算账本按 `tenant=eval` 对齐 |
-| B1-F | #43 | 已按用户批准合并至 main，merge commit `b0f71bc` | 合并前 run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS；合并后隔离 worktree 定向集 39 passed；merge SHA 无 main workflow/check run | 2 条旧 review thread 已解决 | 已完成；逻辑取消与物理 Provider 停止边界保持明确 |
-| RAG R0/R1 | #41 | 已合并，merge commit `48f3d49` | 合并前 RAG 定向集 `134 passed`，Secret Scan 与 RAG Smoke 均通过 | 3 条旧 review thread 已解决 | 凭据历史命中不等于仍有效；Redis/API Key 轮换和旧值失效未完成，安全 P0 仍 BLOCKED |
-| 凭据安全治理 | #44、#51 | 均已合并；#44 `73c37d7`，#51 `d3272c9` | #44 Secret Scan、RAG Smoke 通过；#51 PR 检查通过 | 已解决已知 review thread | 代码侧整改已合入；生产 Redis/API Key 轮换与旧值失效未知，安全 P0 仍 BLOCKED |
-| RAG MultiQuery P0 | #52 | OPEN；head `63d317b`，base `d3272c9`，mergeable | 当前 run `38449989265`：RAG Smoke、preflight、Detect PASS；真实 API evaluation 按 PR 策略 SKIP；Secret Scan run `38449989269` PASS。此前唯一获授权真实评测的质量门失败，真实预算/用量对账仍未证实 | 当前 head 无已核实的新 GPT 审查结论 | Recall/多跳质量门与计费证据未达标；不得合并或重复付费重跑，等待修复/新授权后的证据 |
-| B1-C | #45 | 已合并，merge commit `8f65712` | 合并前定向集 `140 passed`，RAG PR Smoke PASS；无真实 Provider 调用 | 3/3 旧 GPT review thread 已解决 | 已完成；验收按用户确认的 4 个注册 Workflow |
-| B1-D | #47 | 已合并，merge commit `c2feb44` | 合并前定向集 `135 passed`，RAG PR Smoke、py_compile、Ruff、diff-check PASS | 2/2 旧 GPT review thread 已解决 | 已完成；未接生产 Redis/Provider |
-| B1-E | #56 | OPEN；head `6488d7e`，base `d3272c9`，GitHub mergeable | Secret Scan run `38460267796` PASS；RAG PR Smoke run `38460267954` SUCCESS，Detect SUCCESS，Evaluation/preflight 按路径 SKIP。后端定向集 `78 passed, 5 deselected`（5 个 PostgreSQL 认证失败在干净基线复现）；前端 `3 passed`，TypeScript、工作树 Secret Scan 及 `git diff --check` 通过 | GPT P2 1/1 已解决 | 本机 Docker app/worker 的 PostgreSQL Checkpointer healthy；`ENVIRONMENT` 未设置，仅是开发环境证据。生产 Checkpointer/interrupt 未核实，不能宣称生产运行验收；等待用户批准合并 |
+| B1-A | #40 | 已合并，`ed28db1` | run 111 SUCCESS；合并后 11 passed | 无未解决 thread | 排队上限/等待超时继续挂账 |
+| B1-B | #42 | 已合并，`0c471fb` | RAG Smoke/Evaluation/Detect SUCCESS；合并后 65 passed、9 xfailed | 3 条旧 thread 已解决 | 无 |
+| B1-F | #43 | 已合并，`b0f71bc` | run 138 全绿；合并后 39 passed | 2 条旧 thread 已解决 | 无 |
+| RAG R0/R1 | #41 | 已合并，`48f3d49` | run 166 RAG Smoke、run 17 Secret Scan SUCCESS；合并前本地 142 passed | 3 条旧 thread 已解决 | 无；既有性能/准确率证据保留 |
+| 凭据安全治理 | #51 | 已合并，merge `d3272c9` | PR run 38447092565 RAG PR Smoke、38447092851 Secret Scan SUCCESS；合并后相同 tree 定向集 `test_startup_validation.py` 55 passed；post-merge combined status 未返回 status checks | 合并前 GPT 复审无未解决 thread | 本机开发 Redis 与 PostgreSQL 只读口令已按本轮授权轮换，新值认证通过，受影响容器 healthy；现存 `.env` 备份中的 PostgreSQL 候选旧口令认证拒绝。生产配置、API Key 与 PR #41 历史泄漏凭据仍未轮换/撤销，安全 P0 未关闭 |
+| RAG MultiQuery P0 | #52 | OPEN；代码 head `9f2574f`，PR base 仍为 `8887383` | 新 head run `38484509377` 免费 RAG Smoke SUCCESS、Secret Scan `38484509166` SUCCESS；定向测试 `10 + 59 passed`，py_compile 与 diff-check 通过；真实调用 job 在 PR CI 跳过 | 10 条旧 thread 已解决；`9f2574f` 新增 diff 尚无 GPT 复审 | 经授权的 run `38481681899`（评测 SHA `d7496f5`，`multiquery=true`）严格 gate FAILED：Top-1 `0.7143`；31 次调用有 22 次身份未归属，所有价格未知，费用/预算账本 `UNVERIFIED`。修复后的 head 未重新做真实评测；等待 PR #55 会话处理及合入后同步当前 main，并需新的付费评测授权 |
+| B1-C | #45 | 已合并，`8f65712` | run 163 SUCCESS；隔离 PostgreSQL 定向集 273 passed | 旧 thread 已解决 | 无；按用户要求以当前 4 类 Workflow 验收 |
+| B1-D | #47 | 已合并，`c2feb44` | run 165 SUCCESS；定向集 135 passed + 隔离 PostgreSQL 6 passed | 2 条旧 thread 已解决 | 无 |
+| B1-E | #56 | 已合并，merge commit `8887383` | Secret Scan run `38460502481`、RAG PR Smoke run `38460502482` 成功；合并后后端 `78 passed, 5 deselected`、前端 `3 passed`、TypeScript 通过 | GPT P2 1/1 已解决 | 本机 Docker app/worker PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置；生产 Checkpointer/interrupt 运行配置未核实，不宣称生产验收 |
 
-## 已取得证据
+## MultiQuery P0 本批实施
 
-> 本节记录各阶段当时的证据；若其状态与上方 2026-10-14 看板不一致，以看板的最新 GitHub 查询为准。
+- `multi_query` 改写通过 `bind_llm_for_role` 进入 LLMProxy；空角色依注册表继承 main，并使用原温度/token 上限。
+- 改写线程提交时复制 ContextVar，确保 tenant/user/trace、限流身份和请求预算一致传播。
+- Proxy 消费角色 timeout、重试和 skip 策略；默认失败不调用裸全局 LLM 或备用模型，按规则回退原始 query。
+- 等待超时会取消尚未启动的线程池任务；已运行的 Provider 请求无法被线程取消，会按 Proxy 的用量/预算语义留痕。
+- 同步/异步 primary 与 retry 都在预算预占返回后复查取消信号；若请求已超时，释放未执行预占并阻止 Provider 调用。
+- 改写 Provider 调用改用 thread_pools 中独立、可观测的 multi_query_rewrite 池，慢请求不再占用 outer/inner 检索 worker。
+- 失败日志只记录异常类型；R0/R1 Embedding 去重和缓存实现未改动。
+- Eval case timeout/concurrency/RAGAS 线程池此前未复制 ContextVar；新增提交辅助函数后，tenant、user、Trace、budget request id 和 LLMProxy per-user rate-limit user 都进入工作线程。
+- 评测作用域现在临时绑定 LLMProxy 限流 user，并在正常、异常和取消后恢复。Provider 用量缺失或价格标为 `unpriced` 时，Proxy 与 cloud TokenTracker 不再按 ¥0 结清预占，而转入 `needs_review` 保留占额。
+- 可信 RAG Smoke job 设置 `LLM_BUDGET_MODE=enforce` 和独立 run id；artifact 以运行前 usage id 为边界，报告租户归属、预占/结算/释放/待对账金额及差额。无调用、错租户、遗漏 reservation、未终态 reservation 或金额不匹配均为 `UNVERIFIED`。
 
-- PR #40 head `9cca719`：按用户批准通过 GitHub 正常 merge 流程合入 main，merge commit `ed28db1`（父提交为 `5e48246` 与 PR head `9cca719`），未改写历史。合并前 run 111 的 RAG Smoke SUCCESS、评测 job 按路径 SKIP、Detect SUCCESS；0 条未解决 inline review thread。合并后在独立干净 Worktree、隔离本地 PostgreSQL 集群运行 `backend/tests/orchestration/workflow/test_selection_decision_event_loop.py` 与 `test_selection_decision_smoke.py`，`11 passed in 24.66s`；merge SHA 没有触发 main workflow/check run。主工作树原有用户修改未动。排队上限/等待超时不在本 PR 中扩展。
-- PR #42 原 head `fb57241` 曾为 `58 passed, 2 skipped, 9 xfailed`；同步 #40/main 后 head `d0223b9` 的组合集为 `65 passed, 9 xfailed`，run 134 的 RAG Smoke、Evaluation、Detect 全部 SUCCESS。
-- PR #43 最终 head `6b1c32a` 按用户批准合入，merge commit `b0f71bc`；run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS；合并后隔离 PostgreSQL 定向集 `39 passed`。
-- PR #41 head `fc27dec`（基于当时最新 `a67449b`）：RAG 定向回归 `81 passed in 14.05s`；PR 的 `secret-scan` run 8 SUCCESS，RAG Smoke run 112 SUCCESS。前轮真实 Provider/性能/准确率证据未重跑、原样保留。
-- 以 PR #41 新规则扫描最新 main `b0f71bc`，当前树共 6 处：根 `.env.example`、三个 Travel 验收脚本及两个手工验证脚本。安全 PR #44 已改为环境配置读取，当前 head tree 为 0；PR #41 仍需等 #44 合并后同步并重扫。其分支可达提交区间扫描为 0；本任务未重写 main 或其他共享历史。
-- 安全 PR #44 head `077b12c` 完成 5 个脚本凭据读取整改：Travel 三个验收脚本及两个手工验证脚本，从根 `.env`/进程环境读取 `API_KEY`、`TEST_USERNAME`、`TEST_PASSWORD`，进程环境优先，缺配置在网络前退出。临时全假配置、mock `urlopen` 与内存文件验证配置读取/登录字段 5/5；缺 API_KEY 与缺测试登录配置均 5/5 fail closed；无真实 Provider/服务调用。`py_compile` 与 `git diff --check` 通过。Secret Scan 对 #44 head `077b12c` 的 tree/diff/base-range history 为 0；最新文档 head `b98cc4e` 再跑 tree/diff/history-range 均 0，RAG PR Smoke run 146 SUCCESS。
-- 全 refs 历史扫描采用 PR #41 现有规则；官方扫描器与批量 `git cat-file --batch` 读取方式在 `origin/main..HEAD` 的对照结果均为 0。完整范围覆盖本地与 remote-tracking 分支以及 GitHub PR 1–47 的 head refs、存在的 merge refs，共 39,004 个对象：83 个对象/路径/规则命中，跨 27 路径（`assigned_secret` 62、`hardcoded_password` 16、`url_with_credentials` 5）。命中清单只保留 SHA、路径、规则类型，不含内容；同一个旧占位配置的多版会重复计数，不能据此认定 83 个真实凭据。
-- 安全扫描范围补查：以 PR #41 新增规则扫描最新 `origin/main=b0f71bc`，工作树命中 6 处：根 `.env.example`、三个 Travel 验收脚本，以及 `context_budget_verify.py`、`dgroup_sse_test.py` 两个验证脚本；PR #44 当前 tree/diff/history-range 均 0。全 refs 83 个模式命中是历史风险信号，不是 83 个已确认有效凭据。根 `.env` 和 235 个可读归档文件中的一个 `.env` 各有 12 条命中；值未输出、活动状态未验证。根 `.env` 与归档均为用户工作树数据，未修改。未改写 main 历史；P0 不得关闭。
-- PR #42 已同步 main（含 #40）至 head `d0223b9` 并按用户批准通过 GitHub 正常 merge 流程，merge commit `0c471fb`（父提交 `ed28db1` 与 `d0223b9`）。合并前 RAG PR Smoke、Evaluation、Detect 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr42-postmerge-20261012`、隔离本地 PostgreSQL 集群，重跑 Eval、LLM governance、Travel intent 与 B1-A 回归集，`65 passed, 9 xfailed in 31.17s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。
-- PR #43 已同步 main `0c471fb` 至 head `6b1c32a`，并经单独批准通过 GitHub 正常 merge 流程合入 main，merge commit `b0f71bc`。run 138 的 Detect、RAG Smoke Evaluation、RAG Smoke 全部 SUCCESS。合并后在 detached worktree `D:/tmp/agent-pr43-postmerge-20261012`、隔离本地 PostgreSQL 集群重跑终态取消、错误协议与 B1-A 选择工作流定向集，`39 passed in 35.46s`；无真实 Provider 调用。merge SHA 没有 GitHub Actions run/commit status；未把 PR head CI 冒作 merge SHA CI。原 2 条 GPT review thread 已解决。
-- PR #44 head `b43f52a` 经用户单独批准，通过 GitHub 正常 merge 流程合入 main，merge commit `73c37d73c3b7c62711db276458912eed481ace7d`；合并前 main/base 为 `b0f71bc`、PR mergeable=true、旧 review thread 已解决，RAG PR Smoke run 147 SUCCESS。合并后 PR 状态 closed/merged；merge SHA 未触发 workflow run/commit status，故未报告 merge-SHA CI 通过。Travel 五个脚本的环境读取与 fail-closed 验证、Secret Scan 零命中证据均来自 PR head；无真实服务调用或凭据轮换。
-- PR #41 在 #44 合并后的 base `73c37d7` 上已完成同步；RAG 定向集 `134 passed in 15.24s`，tree/diff/history Secret Scan 均 0。代码验证后只更新任务看板；产品代码 head `40c33e1` 未变化，后续验证 head `256d64f` 的 Secret Scan run 15、RAG PR Smoke run 154 均 SUCCESS；run 152 因新提交取消。未重跑真实 Provider；既有性能/召回证据保留。旧 review threads 3/3 已解决，无新 GPT review submission。实际 Redis/API Key 轮换和旧值失效验证尚未完成，安全 P0 继续 BLOCKED。
-- B1-C/#45 同步 head `cdb1ebc` 与 base `73c37d7`：用户已确认按 4 个实际注册 Workflow 验收；定向集 140 passed in 52.23s，使用独立临时 PostgreSQL，未调用真实 Provider；RAG PR Smoke run 149 SUCCESS，mergeable=true。首轮因默认本机 PG 未提供测试库凭据而出现 34 个 setup error 和 1 个同因 E2E failure；同一测试集改用独立临时 PG 后通过，未把首轮失败冒充通过。
-- B1-D/#47 同步 head `3e912d7` 与 base `73c37d7`：Prompt service/release/hot reload/API/trace 与 PostgreSQL CAS 定向集 135 passed in 14.10s，CAS 连接独立临时 PostgreSQL 并真实执行；未连接共享/生产 PostgreSQL、真实 Redis 或 Provider。RAG PR Smoke run 150 SUCCESS，py_compile/Ruff/diff-check 均通过，mergeable=true。
-- B1-E 本轮在独立 Worktree `codex/b1e-travel-interrupt-resume-20261014` 实施了 V2 interrupt/resume、同身份 checkpoint 恢复、Postgres advisory lock、重复确认保护、Trace 版本/状态记录，并限制 degraded MemorySaver 不挂起用户请求。相关定向集 `76 passed, 5 deselected`；排除项在干净 `d3272c9` 基线同样因本机 PostgreSQL 认证配置失败。`py_compile`、`git diff --check` 与聚焦 Ruff 规则通过；无真实 Provider 调用。Compose 运行证据仅属本地开发环境：app/agent-worker 的 PostgreSQL Checkpointer healthy，人工中断开关未设置（默认关闭），`ENVIRONMENT` 未设置。生产运行配置未确认，不据此宣称生产可用。
-- 风险复核发现 Travel 脚本中的登录字段符合扫描器的测试占位符启发式；不记录字段值，也未证明对应账号在生产不可用。三个 Travel 脚本现也改为从环境读取登录字段。PR #41 已增加短密码规则与回归测试，旧 CI 门禁待新 head 执行。
-- 安全分支另将根 `.env.example` 的 JWT 项改为明显占位符，避免把可复制的静态签名值当成配置；安全代码 head `9e92dd6` 的 run 131 SUCCESS，后续任务板提交 `bf30cff` 的 run 136 SUCCESS。
+### MultiQuery 验证证据
 
-## 凭据轮换与失效验证（BLOCKED）
+- 代码 commit `9f2574f` 修复真实评测发现的检索线程池身份丢失：`submit_rag_task` 在提交线程复制独立 ContextVar 快照，向量任务保留 tenant/user/trace 与请求预算；新增同线程池复用后的身份恢复断言。定向线程池/评测上下文 `10 passed`，MultiQuery Proxy/预算/Trace/LLM 治理 `59 passed`；py_compile 与 git diff --check 通过。
+- 新增并发上下文用例验证两个 eval tenant/user 的 trace、预算 request id 和 LLMProxy 限流身份不串账；评测治理回归覆盖异常、取消、连续评测后普通请求恢复。
+- 内存 quota-store 回归验证缺用量和 `unpriced` 不会零元结算，改为 `needs_review`；cloud TokenTracker 缺用量走相同待对账路径。
+- 工作流 artifact 用模拟账本执行实际内嵌 Python 代码，检查 reservation 状态、预占/结算金额与差额；未调用 Provider 或 PostgreSQL。`rag_smoke.yml` YAML 解析通过。
+- 本地取消与预算测试覆盖预占期间取消、同步/异步 Provider 阻断、未执行预占释放；真实 ThreadPoolExecutor 测试验证慢改写不能阻塞 outer 检索。
+- 用户另行授权后，仅执行一次新增真实 Provider run `38481681899`（https://github.com/Jayus-07/agent/actions/runs/38481681899），事件 `workflow_dispatch`、评测 SHA `d7496f5`、`multiquery=true`。隔离库导入 100 份基准后索引完整；8/8 case 检查通过，但严格 gate 因 Top-1 低于 0.80 而失败。
+- 该 run 的 Recall@5/MRR/Top-1/Multi-hop 为 `0.881/0.8571/0.7143/0.7222`；main 基线 run `38397152826` 为 `0.9286/0.8571/0.7143/0.8333`。两边 Top-1 均低于门槛，没有改阈值或删案例。Recall/Multi-hop 差异集中在 RC-024；其 trace 为 `rewrite skipped`、0 variants，因此差异不能归因于 MultiQuery。复杂查询 RC-031 在 1.8 秒等待预算后 timeout 并回退原始 query。
+- 实际账目 31 次 Provider 调用：embedding 22、LLM 1、rerank 8；其中 22 次身份归属不匹配 `tenant=eval/user=github-actions-rag-smoke`。31 次均为 `unpriced/price_unknown`，`cost_verification` 与 `budget_ledger_verification` 都是 `UNVERIFIED`；唯一预算预占为 `needs_review`，预占 ¥0.5、未结算。账本保留待核查状态，没有把未知成本按 ¥0 结清。
+- 针对 22 次 embedding 未归属，`9f2574f` 已让所有 RAG 检索线程池自动复制提交方 ContextVar；本地真实线程测试通过，但本修复后的 head 尚未真实 Provider 验证。Provider 的实际价格仍需由可信配置提供，不能据此宣称费用对账完成。
+- R0/R1 Embedding 去重、缓存实现未改；现有 R0/R1 性能/准确率证据保留。
 
-本任务未访问真实 Redis/API 服务，未撤销、创建、修改或轮换真实凭据。轮换需要凭据持有人授权并在实际 Secret Manager/服务端操作：
+### 主线 RAG Smoke 门禁诊断
 
-1. **Redis**：授权运维创建/轮换 Redis ACL 凭据；把新值写入 Secret Manager 并更新所有消费者部署；使用新凭据验证连接和应用读写；撤销旧凭据；用受控验证确认旧凭据收到认证拒绝。
-2. **内部 API Key**：授权服务负责人在 API Gateway/密钥管理端签发新 Key；更新运行脚本的 `API_KEY` 环境配置；确认新 Key 的受控请求成功；撤销旧 Key；确认旧 Key 请求返回认证/授权拒绝。
-3. 验证日志、命令行历史、测试和 PR 正文只记录凭据 ID、时间与成功/拒绝状态，不记录密钥值。
+- baseline run `38397152826`（main `2d1d0b1`）与第二次 #52 真实 Provider run `38481681899`（评测 SHA `d7496f5`）来自相同 `pr_smoke` 数据版本。两次均 8/8 case 通过而严格 gate 失败；RC-024 没有触发 MultiQuery 改写，不能把该差异归咎于改写。RC-031 timeout 后回退原 query。当前 head `9f2574f` 修复了检索线程身份传递，但没有新的付费验证。
+- PR #52 免费 PR CI run `38484509377` 与 Secret Scan `38484509166` 在 head `9f2574f` 均 SUCCESS；本地两组合计 `69 passed`。PR #52 仍以旧 main `8887383` 为 base；PR #57 已把 main 推进到 `7633416`，PR #55 当前 OPEN 并基于该 main，按用户要求等待 #55 会话处理后再同步 P52。
+- PR #56/B1-E 已按用户批准合并（merge `8887383`）。新 main 上复跑 Travel 后端定向集为 `78 passed, 5 deselected`，V2 前端为 `3 passed`，TypeScript 检查通过；无真实 Provider 调用。5 个 PostgreSQL 配置相关排除项此前已在干净基线复现。本机 Docker app/worker 的 PostgreSQL Checkpointer healthy，但 `ENVIRONMENT` 未设置，不能证明生产配置。
 
-在旧 Redis 密码和 API Key 均已撤销并验证失效前，不能宣称 P0 安全风险关闭。
+## 凭据处置
 
-## 历史清理风险与操作方案
-
-- 当前 PR #41 可达历史扫描为 0；GitHub 既有审查记录显示此前清理的是 PR 分支历史。此次接管没有修改 main 或其他共享分支历史。
-- 不再单方面重写公开共享历史。若凭据持有人确认仍需历史清理：先列出受影响 refs、fork、镜像和长期克隆；确认旧凭据已失效；约定维护窗口并通知消费者；保留不含凭据值的 commit/ref 证据；再由仓库管理员评估对受影响 refs 做协调式清理，并要求参与者重新克隆/同步；清理后复扫当前树和可达历史。
+- 本轮按用户授权重新轮换本机开发 Redis 与 PostgreSQL 只读凭据；`.env` 更新后，Redis、PostgreSQL 新认证通过，相关本机应用/Worker/Redis 容器全部 healthy，`.env` DACL 保持仅当前用户、SYSTEM 和 Administrators。当前 `.env` 备份中的 PostgreSQL 候选旧口令认证被拒绝；Redis 当前旧值未从环境备份恢复作直接回放，不能声称完成该项直接测试。
+- 安全 PR #51 移除只读数据库配置和迁移中的弱默认值，并修复迁移已记账后的凭据状态漂移及共享集群跨库角色误禁用风险。head `ddc1301` 的 Secret Scan 与 RAG PR Smoke 均 SUCCESS；`test_startup_validation.py` 合并前后均 55 passed；scratch PostgreSQL 18 双数据库/SCRAM 验证目标库角色处理及另一库角色隔离；tree/history/diff Secret Scan 退出码 0；GPT 复审无未解决意见。PR 已按用户批准合并为 `d3272c9`；合并后 GitHub combined status 未返回 status checks，定向回归通过且合并树与已验收 head 的 tree hash 一致。
+- Secret Scan 标准 `--tree`、`--history`、`--diff origin/main` 均为 0 命中。可选 `--with-runtime-secrets` 报 59 条命中，全部映射到非秘密配置 `JWT_ISSUER` 和 `TOKEN_USAGE_LOG_PATH`，不是凭据命中。
+- API Key 和生产/外部 Secret Manager 未触碰，按用户要求维持开发阶段以外的配置。PR #41 既有历史泄露未做共享历史重写；历史处置需单独评估影响，不宣称凭据 P0 整体关闭。
 
 ## 下一步
 
-1. B1-E PR #56 当前 head `6488d7e`：Secret Scan、RAG Smoke、Detect 通过，GPT P2 review 已解决；后端 `78 passed, 5 deselected`、前端 `3 passed` 和 TypeScript 检查通过。Docker 发现仅能证明开发容器启用 PostgreSQL Checkpointer；生产配置仍未核实。等待用户批准合并，不据此宣称生产启用。
-2. PR #52 的真实评测质量门与预算/用量对账证据未满足；既有一次真实评测已用完用户授权，不重跑、不合并，等待修复及新的明确授权。
-3. Redis/API Key 真实凭据轮换和旧值失效验证仍未完成；代码 PR 已合并不等于安全 P0 关闭。用户指示开发阶段先不处理，等用户后续授权凭据操作。
-4. RAG R2/R3 与 Runtime 资源生命周期治理不在本轮启动，等待上述 P0 门禁通过后再开独立任务。
+1. #52 暂不合并：head `9f2574f` 已提交推送、免费 CI 与 Secret Scan 通过。等待 PR #55 会话处理合并；之后将 P52 同步到最新 main 并重跑免费 CI。当前付费评测授权已用完，若要在同步后的新 head 验证质量与 ContextVar 账本，需要再次授权；保留 0.80 Top-1 门槛。
+2. 凭据安全代码已合入，本机开发 Redis/PostgreSQL 只读凭据已轮换；API Key、生产配置和 #41 历史泄漏凭据未轮换/撤销，不宣称安全 P0 关闭。
+3. B1-E 已合并；生产 Checkpointer/interrupt 运行配置仍未知，部署前需由脱敏生产配置或只读运行证据确认。
+4. RAG R2/R3 和 Runtime 资源生命周期治理按用户要求暂不启动。
+
+## 2026-10-15 C2 续工
+
+- PR #52 当前分支：`codex/rag-multi-query-p0-20261013`，起始 HEAD `8eb3737e39b0e30eab3b6c104a7f5f53a3fa7aca`；从已核实当前 `origin/main` `bf3cddf7ac7329f576f036cb1a9717a8f96dfd27` 同步。PR #55 已合并，PR #52 原 base `888738365666706488492c90ee8b97d87b173d02` 已过期。
+- 同步时只有 `backend/infra/llm/proxy.py` 冲突。合并保留 C2 的 role 级 fallback、取消/deadline、重试策略，并合入 main 的预算/quota 预占错误分类与 `provider_attempted` 语义；冲突已按代码两侧核对后消解。没有主动改旅游或管理端功能。
+- 合并后免费定向回归 `141 passed`，覆盖 LLM budget/governance、MultiQuery、检索 deadline/thread pool、eval ContextVar/账本 artifact、token accounting 和 model-role API。
+- 首次运行有 140 passed、1 failed：该 API 测试在未设 `AI_INTERNAL_TOKEN` 的本机环境按 fail-closed 返回预期 503；用仅测试进程内的合成 token 重跑完整集合为 `141 passed`，未改断言或安全行为。
+- Python `py_compile` 与 `git diff --check` 通过。对包含历史代码的五个模块运行 Ruff 报 25 条既有风格问题（例如 import 排序/例外命名）；未用自动修复扩大范围。
+- 本轮未调用真实 Provider、未消耗付费额度、未连接生产或共享数据库。Clash 下真实 API 不通；历史严格 Top-1 `0.7143 < 0.80` 与费用/预算 `UNVERIFIED` 保持为阻断，不降低 Gate。
+- 下一步：提交并推送 main 同步及任务进度，更新现有 PR #52 base 到 main；检查免费 CI 和当前 head Review，处理新增的具体问题。真实 Provider 质量与账本复验仍须等待 Clash 可达及新的额度授权。
+
+## 2026-10-15 合并后 main 对账
+
+- 最新 main 为 `5df8b0603355566e7fa1eb87906129c11a8211ab`，已包含 PR #61 与 #70。C2 分支将该 main 以 merge commit `f2e47db7dd22a97015e1e782b29c3c425846858a` 合入，保留既有 C2 提交和 27 文件差异；PR #52 已恢复为 Open，base main、mergeable。
+- 初次错误尝试 rebase 旧合并历史时在 `backend/infra/llm/proxy.py` 与本进度文件冲突；已中止 rebase、恢复原 HEAD `506cfacbd4739029a9a74f6b7eb6836d2f350673`，没有保留冲突文件修改。之后按原有 merge 策略无冲突合入 main。分支短暂被推到 main SHA 并导致 PR 自动关闭，随后用 expected-SHA 恢复原 C2 HEAD、合入 main 并重新打开 PR；当前远端头 `f2e47db7dd22a97015e1e782b29c3c425846858a`。
+- 最新代码树 C2 免费定向回归 `141 passed`，命令覆盖 model-role API/config、budget/governance、MultiQuery、retrieval deadline/thread pool、eval context/账本 artifact 和 token accounting；仅测试进程使用合成 `AI_INTERNAL_TOKEN`。未发起真实 Provider 调用。
+- Secret Scan run `38689068480` 已 success；RAG PR Smoke run `38689068456` 尚在运行。10 个历史 review thread 均已 resolved；本次只合入 main 新提交，没有修改 C2 源码。
+- **状态仍 BLOCKED，不建议合并：** 最近严格评测 Top-1 `0.7143 < 0.80`；31 次 Provider 调用均未定价，其中 22 次 tenant/user 归属异常，费用/预算账本保持 `UNVERIFIED`。真实复验需要用户授权新增评测额度，并在实际 Provider runtime 验证 Clash 代理和账本对账；不降低 Gate。
+
+## 2026-10-15 PR #52 遗留问题修复
+
+- 在原 `codex/rag-multi-query-p0-20261013` 工作树续工，无未提交前置修改；合入最新 main `45b0a7b`。本轮源码改动限定 RAG、统一预算、评测 seed/门禁及对应测试，未自行修改旅游或管理端实现。
+- 复查旧 run `38481681899`：Top-1 失败来自 RC-005（售后 FAQ 排在退货政策之前）及 RC-024（库存入库流程排在采购协作材料之前）；这两例均未触发 MultiQuery。当前为云端 rerank 补充候选标题/文件名上下文，不改排序分数、Golden、阈值或原文；质量改善仍需真实复验，不能据 payload 测试宣称 Top-1 已通过。
+- embedding 缓存未命中和每次 rerank HTTP 尝试进入既有 `reserve_model_call/record_model_usage`；缓存命中不预占、预算拒绝不记虚假出站。超时/缺价保留 `needs_review`，预占作用域退出恢复外层 ContextVar。embedding 字符 token 估算改为 `usage_source=estimated`，不再冒充 provider exact。
+- enforce 下评测预算绑定失败改为拒绝启动；CI 在任何付费 Probe/索引前检查权威价格与汇率，只有已批准价格快照才能导入隔离库。快照保留原始双人审查、来源、版本与有效期，重复导入不新增，同版本冲突拒绝并回滚；无新审批、无自拟单价。启用 MultiQuery 时显式绑定本次测试的聊天模型。
+- CI 最终门禁要求费用可核算且身份/预占/结算完成对账；`UNVERIFIED` 不再只是 artifact 提示。一次 eval 请求显式设置调用数 64、token 32000、成本配置 CNY 0.50；64 次覆盖原先漏计的专项组件，不构成整项 CI/供应商账单绝对封顶承诺，Probe/索引仍须独立核对。
+- **T0：PASS**，修改 Python 文件 `py_compile`、`git diff --check` 通过；新增测试文件 Ruff 通过。现有大文件的历史 Ruff 问题未扩大修复。
+- **T1/T2：PASS**，定向集合 `182 passed in 79.58s`，覆盖预算/配额/计费、MultiQuery、retrieval deadline、embedding 缓存、rerank、ContextVar、seed 和 CI 门禁；全部为合成 Provider/内存账本，无真实模型调用。
+- 新增专项预算、价格预检和 seed 回归已加入 PR 免费 CI；按工作流完整命令本机执行为 `50 passed in 6.40s`，只有既有 `TestCase` 模型名称产生的 collection warning。免费 CI 不读取付费 Secrets。
+- **隔离 PG T2：PASS**，使用本机 PostgreSQL 18 二进制独立启动 `127.0.0.1:15452/pr52_isolated_test`，SCRAM 合成凭据；执行现行 031/066 迁移，实际导入合成价格快照两次仍 4 行，同版本改价被拒绝，价格预检通过；既有 PG 原子配额集 `1 passed in 3.76s`。集群已停止、临时密码文件已删除，数据证据在 `D:/tmp/pr52-pg-w_2zfufw`。进程退出时既有 Memory async engine 有 event-loop-closed 清理告警，测试及数据库检查退出码为 0；不宣称已解决该独立生命周期问题。
+- **真实 T3：BLOCKED / UNVERIFIED**。用户已经授权使用 PR 所需真实模型，不再等待重复授权。`prompt-eval` 环境未提供 `PROMPT_EVAL_APPROVED_PRICES_JSON`；授权源库只读查询返回 `ConnectionTimeout`，未取得权威价格。未启动新付费 run、未写共享/生产库。源价格与凭据可读后，先导出原始批准快照，再对当前 PR HEAD 执行一次固定 8-case 严格 Smoke（MultiQuery 开启），核对完整归属和费用；Top-1 0.80 门槛保持。
+
+## 2026-10-16 C2 付费调用账本收口
+
+- 以 PR #52 原工作树继续，当前核实远端 `main` 仍为 `45b0a7be54eaf0a3b7df4676f9978b095236932f`；本轮仅改评测入口、Smoke 门禁与对应测试。
+- 删除 Smoke 中未入 usage 账本的重复 embedding/rerank Probe。首个真实 Provider 请求现在是 fixture embedding 导入；实际 rerank 与聊天调用由后续严格 Smoke 覆盖。
+- 费用快照移到首个付费请求之前；fixture 导入绑定同一 `eval:<run_id>`、actor 和 tenant，并执行独立阶段预算（16 calls / 8k tokens / CNY 0.10）；Smoke 阶段（48 calls / 24k tokens / CNY 0.40）。最终账本校验整次 run 的 64 calls / 32k tokens / CNY 0.50 envelope，超限或无法核实即失败。身份对账改用 `IS DISTINCT FROM`，NULL 身份现在也会阻断。
+- fixture 阶段结束立即检查已计用量是否超过本阶段预算，避免超额导入后继续启动评测。request/usage/reservation 共用 run ID，最终账本覆盖导入与评测。
+- T0 PASS：改动 Python `py_compile`、Ruff、`git diff --check` 均通过。
+- 定向 CI 选择 **53 passed / 7.24s**；覆盖评测 fixture 入口、预算预检、CI workflow 合约和旧有 binding Probe 测试（Probe 仍可由独立调用，但不再被 Smoke 工作流额外调用）。仅有既有 `TestCase` collection warning。
+- 隔离 PG T2 PASS：重新执行 031/066 迁移、批准价格快照两次导入仍 4 行、同版本冲突拒绝、价格 preflight 通过；PG 配额测试 **1 passed / 3.65s**。隔离集群已关闭；证据目录 `D:/tmp/pr52-pg-lbq_fncj`。退出仍有既有 async event-loop 清理告警。
+- T3 仍 BLOCKED：`PROMPT_EVAL_APPROVED_PRICES_JSON` 未配置；只读价格 SQL 再次因 PostgreSQL 凭据认证失败，无法取得源批准价。整次 run envelope 是账本门禁与各阶段请求预算，不是供应商侧账单硬封顶的实证，因此未启动真实付费调用、未写共享库。
+
+## 2026-10-18 同步 main（含 #90）与真实 Smoke 前置修复
+
+- 以 PR #52 工作树合并最新 main \`fd1722c\`（#90 内容完整性修复）；冲突仅 \`.github/workflows/rag_smoke.yml\` 的免费预检 pytest 列表，按双方并集保留（新增 3 个 #90 边界/快照用例，MultiQuery/预算/seed 用例全部保留）。
+- 合并后发现 #52 自带缺陷：\`llm_enrichment.invoke_metadata_llm\` 在"显式传入原始客户端"分支引用未定义的 \`_resolved_role_model\`（NameError）。已改为按实例 \`model\` 做价格档位校验；角色代理分支仍由代理自行预占/结算。\`test_llm_role_resolution\` 5 passed。
+- **envelope 重新标定（依据实测，不是放宽质量门）**：2026-10-18 main push 真实 run \`39053291736\`（#90 合并后）完成 baseline 16 份 fixture 冷索引 + 8-case 评测，账本实测 108 calls / 106,330 tokens / CNY 0.116012（chat 34 calls ¥0.099765、embedding 65 calls ¥0.009238、rerank 9 calls ¥0.007009，全部 exact/approved_price_table、0 unverified）。原"整次 run 64 calls / 32k tokens"低于该实测下界，任何真实 run 都会判 OVER_LIMIT → 无法通过；现改为 200 calls / 200,000 tokens（≈1.8× 实测），**费用上限 CNY 0.50 不变**，阶段请求预算（fixture 16/8k/0.10、smoke 48/24k/0.40）不变，失败仍 fail-closed。
+- **MultiQuery 默认口径**：生产检索链默认启用 MultiQuery，受信任评测（push/dispatch）默认按生产口径执行（dispatch 传 \`multiquery=false\` 仅作对照）。否则 main push 门禁评的是未上线路径。
+- 免费验证：CI 预检并集 119 passed；核心受影响集合 251 passed（唯一失败 \`test_sys_model_roles_api::test_requires_admin\` 在 main 同样失败，属本机环境）；隔离 PG T2（容器 \`agent-t2-rag-pg\` 5437）上真实 Registry/PGVector/ChunkStore 全链路 244 passed + 16/16 fixture 完整性 PASS。
+- main #90 合并后真实 run 的 fixture 导入与 index completeness 断言已 PASS；该 run 的 8-case 评测因 main 未含 MultiQuery 而 Top-1=0.7143（RC-005/RC-024 未进 Top-1）判 FAIL —— 正是 #52 需要验证的差距。下一步：受信任 dispatch 开启 MultiQuery 跑一次严格 Smoke，核对 Top-1 ≥0.80、召回/MRR/NDCG、账本对账与 ¥0.50 envelope。

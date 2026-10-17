@@ -62,11 +62,67 @@ def test_fanout_trace_maps_each_rewrite_to_retrieval_counts(monkeypatch):
     assert [item["query"] for item in results] == ["退款申请流程", "退款多久到账"]
     assert [item["status"] for item in results] == ["success", "success"]
     assert [item["retrieved_docs"] for item in results] == [1, 2]
-    # 哪个查询先返回，重复 chunk 会归属哪个查询，因此各查询的去重数可变；
-    # 总保留数必须与去重后的结果集合一致。
+    # 合并按原查询顺序执行，因此相同 chunk 的归属稳定，不受完成顺序影响。
     assert sum(item["retained_docs"] for item in results) == 2
+    assert results[0]["retained_docs"] == 1
+    assert results[1]["retained_docs"] == 1
     assert span.metrics["query_count"] == 2
     assert span.metrics["unique_docs"] == 2
+
+
+def test_fanout_merge_order_does_not_depend_on_completion_order(monkeypatch):
+    """改写检索先完成时，原始 query 仍先拥有重复 chunk 并优先进入 rerank。"""
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+
+    import backend.rag.retrieval.multi_query as multi_query
+
+    _start_trace()
+    monkeypatch.setattr(multi_query, "need_multi_query", lambda _query: (True, "test"))
+    monkeypatch.setattr(
+        multi_query,
+        "_rewrite_with_budget",
+        lambda _query: ["原始 query", "改写 query"],
+    )
+    monkeypatch.setattr(
+        "backend.rag.retrieval_budget.remaining_ms", lambda budget_ms: budget_ms
+    )
+
+    variant_finished = threading.Event()
+
+    def invoke(query):
+        if query == "原始 query":
+            assert variant_finished.wait(timeout=1)
+            time.sleep(0.03)
+            return [
+                Document(page_content="原始共享证据", metadata={"chunk_id": "shared"}),
+                Document(page_content="原始独有证据", metadata={"chunk_id": "original-only"}),
+            ]
+        variant_finished.set()
+        return [
+            Document(page_content="改写共享证据", metadata={"chunk_id": "shared"}),
+            Document(page_content="改写独有证据", metadata={"chunk_id": "variant-only"}),
+        ]
+
+    executor = ThreadPoolExecutor(max_workers=2)
+    monkeypatch.setattr(
+        "backend.infra.thread_pools.submit_rag_task",
+        lambda _pool, run_in_context, _base, query: executor.submit(
+            run_in_context, invoke, query
+        ),
+    )
+    retriever = multi_query.MultiQueryRetriever(base_retriever=SimpleNamespace(invoke=invoke))
+    try:
+        docs = retriever._get_relevant_documents("原始 query")
+    finally:
+        executor.shutdown(wait=True)
+
+    assert [doc.metadata["chunk_id"] for doc in docs] == [
+        "shared", "original-only", "variant-only",
+    ]
+    assert docs[0].page_content == "原始共享证据"
+    assert docs[0].metadata["source_query"] == "原始 query"
 
 
 def test_fanout_trace_marks_unfinished_variant_as_timeout(monkeypatch):
