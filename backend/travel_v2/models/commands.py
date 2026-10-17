@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 
 from backend.travel_v2.models.trip import (
     IntercityTrainArrangementV2,
@@ -17,6 +17,17 @@ from backend.travel_v2.models.trip import (
 class CreateTripRequest(StrictModel):
     title: str = Field(min_length=1, max_length=200)
     document: TripDocumentV2
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @field_validator("conversation_id")
+    @classmethod
+    def conversation_id_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("conversation_id must not be blank")
+        return normalized
 
 
 class ReplaceTripDocumentCommand(StrictModel):

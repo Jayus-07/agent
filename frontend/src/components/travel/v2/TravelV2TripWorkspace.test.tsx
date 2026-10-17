@@ -6,6 +6,7 @@ import type { TravelTripV2 } from '@/api/travelV2'
 
 const mocks = vi.hoisted(() => ({
   fetchTrip: vi.fn(),
+  fetchTripConversation: vi.fn(),
   fetchRevisions: vi.fn(),
   applyEdit: vi.fn(),
   restoreTrip: vi.fn(),
@@ -14,12 +15,14 @@ const mocks = vi.hoisted(() => ({
   tripRequests: [] as Array<Record<string, any>>,
   revisionRequests: [] as Array<Record<string, any>>,
   conversationMessages: [] as Array<Record<string, any>>,
+  conversationRequests: [] as Array<{ conversationId: string; enabled: boolean }>,
   setConversationMessages: vi.fn(),
 }))
 
 vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
   fetchTravelTripV2: mocks.fetchTrip,
+  fetchTravelTripConversationV2: mocks.fetchTripConversation,
   fetchTravelTripRevisionsV2: mocks.fetchRevisions,
   applyTravelTripEditV2: mocks.applyEdit,
   restoreTravelTripV2: mocks.restoreTrip,
@@ -61,11 +64,15 @@ vi.mock('./TravelSearchPanel', () => ({
 }))
 
 vi.mock('@/components/travel/useTravelConversation', () => ({
-  useTravelConversation: () => ({
-    messages: mocks.conversationMessages,
-    setMessages: mocks.setConversationMessages,
-    syncError: '',
-  }),
+  useTravelConversation: (conversationId: string, options?: { enabled?: boolean }) => {
+    const enabled = options?.enabled !== false
+    mocks.conversationRequests.push({ conversationId, enabled })
+    return {
+      messages: enabled ? mocks.conversationMessages : [],
+      setMessages: mocks.setConversationMessages,
+      syncError: '',
+    }
+  },
 }))
 
 vi.mock('./TravelV2Map', () => ({
@@ -208,11 +215,15 @@ beforeEach(() => {
   mocks.searchPanelProps.length = 0
   mocks.tripRequests.length = 0
   mocks.revisionRequests.length = 0
+  mocks.conversationRequests.length = 0
   mocks.fetchTrip.mockReset().mockImplementation((tripId: string, options?: { signal?: AbortSignal }) => {
     const pending = deferred<TravelTripV2>()
     mocks.tripRequests.push({ tripId, signal: options?.signal, deferred: pending })
     return pending.promise
   })
+  mocks.fetchTripConversation.mockReset().mockImplementation(async (tripId: string) => ({
+    trip_id: tripId, conversation_id: null, linked: false, server_now: '2026-10-17T12:00:00.000Z',
+  }))
   mocks.fetchRevisions.mockReset().mockImplementation(async (tripId: string, options?: { signal?: AbortSignal }) => {
     mocks.revisionRequests.push({ tripId, signal: options?.signal })
     return { trip_id: tripId, revisions: [] }
@@ -231,6 +242,66 @@ afterEach(() => {
 })
 
 describe('V2 工作台 Trip 状态隔离', () => {
+  it('服务端没有 Trip 会话关联时保留行程查看但不加载 URL 对话', async () => {
+    const candidate = 'travel-workspace-unlinked-candidate'
+    window.history.replaceState({}, '', `/travel/itineraries/trip-unlinked?conversation_id=${candidate}`)
+    const page = mount('trip-unlinked')
+    await load(tripRequest(0), makeTrip('trip-unlinked', '未绑定行程'))
+
+    expect(page.container.textContent).toContain('未绑定行程')
+    expect(page.container.textContent).toContain('没有可验证的服务端原始会话关联')
+    expect(mocks.conversationRequests.every((entry) => !entry.enabled)).toBe(true)
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(candidate)
+  })
+
+  it('工作台只在 Trip 权限确认后使用服务端原始会话，不接受 URL 会话覆盖', async () => {
+    const candidate = 'travel-workspace-url-candidate'
+    const originalConversation = 'travel-workspace-original'
+    window.history.replaceState({}, '', `/travel/itineraries/trip-linked?conversation_id=${candidate}`)
+    mocks.fetchTripConversation.mockResolvedValueOnce({
+      trip_id: 'trip-linked', conversation_id: originalConversation, linked: true,
+    })
+    const page = mount('trip-linked')
+    await load(tripRequest(0), makeTrip('trip-linked', '关联行程'))
+
+    expect(mocks.fetchTripConversation).toHaveBeenCalledWith('trip-linked', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(mocks.conversationRequests.some((entry) =>
+      entry.conversationId === candidate && entry.enabled)).toBe(false)
+    expect(mocks.conversationRequests).toContainEqual({
+      conversationId: originalConversation, enabled: true,
+    })
+    expect(page.container.textContent).toContain('服务端关联不一致')
+  })
+
+  it('大写 UUID 工作台路由按服务端规范 Trip ID 校验关联', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000073'
+    const routeTripId = tripId.toUpperCase()
+    const originalConversation = 'travel-workspace-case-normalized'
+    window.history.replaceState({}, '', `/travel/itineraries/${routeTripId}`)
+    mocks.fetchTripConversation.mockResolvedValueOnce({
+      trip_id: tripId, conversation_id: originalConversation, linked: true,
+      server_now: '2026-10-17T12:00:00.000Z',
+    })
+    const page = mount(routeTripId)
+    await load(tripRequest(0), makeTrip(tripId, '大小写行程'))
+
+    expect(page.container.textContent).toContain('大小写行程')
+    expect(mocks.conversationRequests).toContainEqual({ conversationId: originalConversation, enabled: true })
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(originalConversation)
+  })
+
+  it('会话关联读取失败时仍可查看和编辑正式行程，但停用对话', async () => {
+    mocks.fetchTripConversation.mockRejectedValueOnce(new TypeError('Failed to fetch'))
+    const page = mount('trip-association-unavailable')
+    await load(tripRequest(0), makeTrip('trip-association-unavailable', '关联服务暂不可用'))
+
+    expect(page.container.textContent).toContain('关联服务暂不可用')
+    expect(page.container.textContent).toContain('行程仍可查看和编辑')
+    expect([...page.container.querySelectorAll('button')].some((button) =>
+      button.textContent?.includes('编辑行程'))).toBe(true)
+    expect(mocks.conversationRequests.every((entry) => !entry.enabled)).toBe(true)
+  })
+
   it('A → B 时立即隐藏 A，B 的 GET 完成后只展示 B', async () => {
     const page = mount('trip-a')
     await load(tripRequest(0), makeTrip('trip-a', '行程 A'))
@@ -383,7 +454,8 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).toContain('已载入服务器最新 Revision v2；原修改未自动重放，请重新编辑。')
     expect(page.container.textContent).not.toContain('版本冲突')
     expect([...page.container.querySelectorAll('button')].some((button) => button.textContent === '刷新最新版本并重新编辑')).toBe(false)
-    expect(page.container.querySelector('[role="status"]')?.textContent).toContain('原修改未自动重放')
+    expect([...page.container.querySelectorAll('[role="status"]')]
+      .some((status) => status.textContent?.includes('原修改未自动重放'))).toBe(true)
   })
 
   it('选入结果 UNKNOWN 时锁定工作台 Tab，并只允许同一选入请求重试', async () => {

@@ -21,6 +21,7 @@ class _RecordingBound:
         self.sync_calls = []
         self.async_calls = []
         self._result = result
+        self.configs = []
 
     def invoke(self, *args, **kwargs):
         self.sync_calls.append((args, kwargs))
@@ -29,6 +30,10 @@ class _RecordingBound:
     async def ainvoke(self, *args, **kwargs):
         self.async_calls.append((args, kwargs))
         return self._result
+
+    def with_config(self, config=None, **kwargs):
+        self.configs.append((config, kwargs))
+        return self
 
 
 def _patch_chain(monkeypatch, recorded):
@@ -99,6 +104,55 @@ class TestProxyBindTools:
         proxy = _BoundLLMProxy(base)
         chained = proxy.bind_tools([])
         assert isinstance(chained, _BoundLLMProxy)
+
+    def test_ragas_generate_prompt_stays_inside_governed_proxy(self, monkeypatch):
+        """RAGAS 的 with_config/generate_prompt 不能取出裸 RunnableBinding。"""
+        from langchain_core.messages import AIMessage
+        from langchain_core.prompt_values import StringPromptValue
+
+        recorded = []
+        _patch_chain(monkeypatch, recorded)
+        monkeypatch.setattr(
+            proxy_mod, "_preflight_context", lambda args, *_a, **_k: args,
+        )
+        bound = _RecordingBound(result=AIMessage(content="answer"))
+        proxy = _BoundLLMProxy(bound, model_name="eval-gen-model", role="eval_gen")
+
+        configured = proxy.with_config({"callbacks": []})
+        result = configured.generate_prompt(
+            [StringPromptValue(text="question")],
+        )
+
+        assert isinstance(configured, _BoundLLMProxy)
+        assert len(bound.sync_calls) == 1
+        assert result.generations[0][0].message.content == "answer"
+        assert [entry[0] for entry in recorded] == [
+            "rate_limit", "resilience", "tokens", "wrap",
+        ]
+
+    def test_ragas_agenerate_prompt_stays_inside_governed_proxy(self, monkeypatch):
+        from langchain_core.messages import AIMessage
+        from langchain_core.prompt_values import StringPromptValue
+
+        recorded = []
+        _patch_chain(monkeypatch, recorded)
+        monkeypatch.setattr(
+            proxy_mod, "_preflight_context", lambda args, *_a, **_k: args,
+        )
+        bound = _RecordingBound(result=AIMessage(content="answer"))
+        configured = _BoundLLMProxy(
+            bound, model_name="eval-gen-model", role="eval_gen",
+        ).with_config({"callbacks": []})
+
+        result = asyncio.run(configured.agenerate_prompt(
+            [StringPromptValue(text="question")],
+        ))
+
+        assert len(bound.async_calls) == 1
+        assert result.generations[0][0].message.content == "answer"
+        assert [entry[0] for entry in recorded] == [
+            "rate_limit", "aresilience", "tokens", "wrap",
+        ]
 
 
 class TestWrapResultPreservesToolCalls:

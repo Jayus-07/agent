@@ -72,7 +72,7 @@ def test_cloud_eval_generation_uses_the_bound_provider(monkeypatch):
     monkeypatch.setattr(generation, "OLLAMA_ENABLED", False)
     monkeypatch.setattr(generation, "_build_prompt", lambda *_args: "prompt")
 
-    seen_roles: list[str] = []
+    seen_bindings: list[tuple[str, float | None]] = []
 
     class _FakeChat:
         def invoke(self, _messages):
@@ -80,11 +80,44 @@ def test_cloud_eval_generation_uses_the_bound_provider(monkeypatch):
 
     monkeypatch.setattr(
         proxy,
-        "get_llm_for_role",
-        lambda role: seen_roles.append(role) or _FakeChat(),
+        "bind_llm_for_role",
+        lambda role, **kwargs: seen_bindings.append(
+            (role, kwargs.get("temperature"))) or _FakeChat(),
     )
 
     result = generation.generate_answer("问题", ["上下文"], allow_cloud=True)
 
     assert result == "来自角色绑定的云端模型"
-    assert seen_roles == ["eval_gen"]
+    assert seen_bindings == [("eval_gen", 0.1)]
+
+
+def test_cloud_eval_generation_checks_input_price_tier_before_provider(monkeypatch):
+    """云端评测生成必须在发请求前执行当前模型的价格档位门禁。"""
+    monkeypatch.setattr(generation, "OLLAMA_ENABLED", False)
+    monkeypatch.setattr(
+        generation, "resolve_eval_model",
+        lambda: ("doubao-seed-2.0-mini", "volcengine"),
+    )
+    monkeypatch.setattr(generation, "_build_prompt", lambda *_args: "x" * 32_001)
+    provider_calls = []
+    guarded = []
+
+    class _FakeChat:
+        def invoke(self, _messages):
+            provider_calls.append(True)
+            return SimpleNamespace(content="不应调用")
+
+    def reject_over_limit(args, *, model_name, kwargs=None):
+        guarded.append((args, model_name, kwargs))
+        raise RuntimeError("超过已登记价格档位")
+
+    monkeypatch.setattr(
+        proxy, "bind_llm_for_role", lambda _role, **_kwargs: _FakeChat(),
+    )
+    monkeypatch.setattr(proxy, "enforce_model_input_price_tier", reject_over_limit)
+
+    with pytest.raises(RuntimeError, match="超过已登记价格档位"):
+        generation.generate_answer("问题", ["上下文"], allow_cloud=True)
+
+    assert guarded and guarded[0][1] == "doubao-seed-2.0-mini"
+    assert provider_calls == []

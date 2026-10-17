@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -61,6 +62,48 @@ def test_published_template_copy_is_independent_from_future_trip_edits() -> None
         assert copied["revision"] == 1
         assert copied["source_template_id"] == created["template_id"]
         assert copied["source_template_version"] == 1
+        expected_conversation_id = f"travel-v2-trip-{trip_id}"
+        assert copied["conversation_id"] == expected_conversation_id
+        association = TripService().get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+        assert association["trip_id"] == trip_id
+        assert association["conversation_id"] == expected_conversation_id
+        assert association["linked"] is True
+
+        # 模拟迁移前已存在的模板副本，验证迁移 SQL 可恢复且可重复执行。
+        migration = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "101_travel_v2_trip_conversations.sql"
+        backfill_sql = migration.read_text(encoding="utf-8").split(
+            "-- 回填历史模板副本的默认会话关联；同一迁移重复执行也保持幂等。", 1,
+        )[1]
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM travel_v2.trip_conversations WHERE trip_id=%s::uuid",
+                    (trip_id,),
+                )
+                cursor.execute(backfill_sql)
+                cursor.execute(backfill_sql)
+                cursor.execute(
+                    "SELECT conversation_id FROM travel_v2.trip_conversations WHERE trip_id=%s::uuid",
+                    (trip_id,),
+                )
+                assert cursor.fetchone()[0] == expected_conversation_id
+                cursor.execute(
+                    "SELECT count(*) FROM travel_v2.trip_conversations WHERE trip_id=%s::uuid",
+                    (trip_id,),
+                )
+                assert cursor.fetchone()[0] == 1
+            connection.commit()
+        finally:
+            connection.close()
+        replay = template_service.copy_to_trip(
+            slug, tenant_id=tenant_id, owner_id=owner_id,
+            actor_id=owner_id, idempotency_key=f"copy-{suffix}",
+        )
+        assert replay["replayed"] is True
+        assert replay["conversation_id"] == expected_conversation_id
 
         edited_document = valid_document()
         edited_document["days"][0]["title"] = "个人改动"

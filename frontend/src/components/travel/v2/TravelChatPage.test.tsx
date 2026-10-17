@@ -5,10 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   createTrip: vi.fn(),
   fetchTrip: vi.fn(),
+  fetchTripConversation: vi.fn(),
   saveTrip: vi.fn(),
   setMessages: vi.fn(),
   stream: vi.fn(),
   messages: [] as Array<Record<string, unknown>>,
+  conversationRequests: [] as Array<{ conversationId: string; enabled: boolean }>,
 }))
 
 vi.mock('@/api/travel', () => ({
@@ -18,10 +20,15 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
   createTravelTripV2: mocks.createTrip,
   fetchTravelTripV2: mocks.fetchTrip,
+  fetchTravelTripConversationV2: mocks.fetchTripConversation,
   saveTravelTripDocumentV2: mocks.saveTrip,
 }))
 vi.mock('@/components/travel/useTravelConversation', () => ({
-  useTravelConversation: () => ({ messages: mocks.messages, setMessages: mocks.setMessages, syncError: '' }),
+  useTravelConversation: (conversationId: string, options?: { enabled?: boolean }) => {
+    const enabled = options?.enabled !== false
+    mocks.conversationRequests.push({ conversationId, enabled })
+    return { messages: enabled ? mocks.messages : [], setMessages: mocks.setMessages, syncError: '' }
+  },
 }))
 vi.mock('@/lib/auth', () => ({ getCachedUser: () => ({ tenantId: 'tenant-a', userId: 'user-a' }) }))
 
@@ -33,11 +40,15 @@ describe('V2 旅游规划对话', () => {
   beforeEach(() => {
     mocks.stream.mockReset()
     mocks.fetchTrip.mockReset()
+    mocks.fetchTripConversation.mockReset().mockImplementation(async (tripId: string) => ({
+      trip_id: tripId, conversation_id: null, linked: false, server_now: '2026-10-17T12:00:00.000Z',
+    }))
     mocks.setMessages.mockReset().mockImplementation((update) => {
       const next = typeof update === 'function' ? update(mocks.messages) : update
       mocks.messages.splice(0, mocks.messages.length, ...next)
     })
     mocks.messages.splice(0)
+    mocks.conversationRequests.splice(0)
     window.history.replaceState({}, '', '/travel/chat')
     mocks.stream.mockImplementation(async function* () {
       yield {
@@ -156,6 +167,9 @@ describe('V2 旅游规划对话', () => {
     window.localStorage.clear()
     window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}&campaign=shared-link`)
     mocks.fetchTrip.mockResolvedValue(savedTrip)
+    mocks.fetchTripConversation.mockResolvedValue({
+      trip_id: tripId, conversation_id: `travel-v2-trip-${tripId}`, linked: true,
+    })
     const container = document.createElement('div')
     const root = createRoot(container)
 
@@ -173,6 +187,116 @@ describe('V2 旅游规划对话', () => {
     await act(async () => root.unmount())
   })
 
+  it('Trip URL 中的会话候选只能在服务端确认原始关联后被替换并加载', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000073'
+    const candidate = 'travel-url-candidate-from-another-device'
+    const originalConversation = 'travel-original-server-linked'
+    const savedTrip = {
+      trip_id: tripId, title: '杭州正式行程', status: 'active', revision: 3,
+      source_template_id: null, source_template_version: null,
+      created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
+      document: {
+        schema_version: 2,
+        brief: { origin: '上海', destination: '杭州', timezone: 'Asia/Shanghai', start_date: '2026-12-01', day_count: 1, travelers: { adults: 1, children: 0 }, budget: { amount: 3000, currency: 'CNY' }, pace: 'relaxed', interests: [], requirements: [] },
+        selections: [], days: [], arrangements: { lodgings: [], intercity_trains: [] },
+        totals: { currency: 'CNY', estimated_cost: null, transit_min: 0, distance_m: null },
+        health: { status: 'ok', issues: [] },
+      },
+    }
+    window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}&conversation_id=${candidate}`)
+    mocks.fetchTrip.mockResolvedValue(savedTrip)
+    mocks.fetchTripConversation.mockResolvedValue({
+      trip_id: tripId, conversation_id: originalConversation, linked: true,
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(createElement(TravelChatPage, {
+        initialTripId: tripId, initialConversationId: candidate,
+      }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(mocks.fetchTripConversation).toHaveBeenCalledWith(tripId)
+    expect(mocks.conversationRequests.some((entry) =>
+      entry.conversationId === candidate && entry.enabled)).toBe(false)
+    expect(mocks.conversationRequests).toContainEqual({
+      conversationId: originalConversation, enabled: true,
+    })
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(originalConversation)
+    expect(container.textContent).toContain('服务端关联不一致')
+    await act(async () => root.unmount())
+  })
+
+  it('大写 UUID URL 使用服务端规范 Trip ID 恢复原会话', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000073'
+    const routeTripId = tripId.toUpperCase()
+    const originalConversation = 'travel-original-case-normalized'
+    const savedTrip = {
+      trip_id: tripId, title: '大小写恢复行程', status: 'active', revision: 3,
+      source_template_id: null, source_template_version: null,
+      created_at: '2026-10-09T00:00:00Z', updated_at: '2026-10-09T00:00:00Z',
+      document: {
+        schema_version: 2,
+        brief: { origin: '上海', destination: '杭州', timezone: 'Asia/Shanghai', start_date: '2026-12-01', day_count: 1, travelers: { adults: 1, children: 0 }, budget: { amount: 3000, currency: 'CNY' }, pace: 'relaxed', interests: [], requirements: [] },
+        selections: [], days: [], arrangements: { lodgings: [], intercity_trains: [] },
+        totals: { currency: 'CNY', estimated_cost: null, transit_min: 0, distance_m: null },
+        health: { status: 'ok', issues: [] },
+      },
+    }
+    window.history.replaceState({}, '', `/travel/chat?trip_id=${routeTripId}`)
+    mocks.fetchTrip.mockResolvedValue(savedTrip)
+    mocks.fetchTripConversation.mockResolvedValue({
+      trip_id: tripId, conversation_id: originalConversation, linked: true,
+      server_now: '2026-10-17T12:00:00.000Z',
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialTripId: routeTripId }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(container.textContent).toContain('正式行程对话 · Revision v3')
+    expect(mocks.conversationRequests).toContainEqual({ conversationId: originalConversation, enabled: true })
+    expect(mocks.fetchTripConversation).toHaveBeenCalledWith(routeTripId)
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
+  it('没有服务端会话关联时不读取 URL 候选或任何对话历史', async () => {
+    const tripId = '00000000-0000-4000-8000-000000000074'
+    const candidate = 'travel-unlinked-url-candidate'
+    window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}&conversation_id=${candidate}`)
+    mocks.fetchTrip.mockResolvedValue({
+      trip_id: tripId, title: '旧行程', status: 'active', revision: 1,
+      document: {
+        schema_version: 2,
+        brief: { destination: '杭州', day_count: 1, travelers: { adults: 1, children: 0 }, budget: { amount: null, currency: 'CNY' }, timezone: 'Asia/Shanghai' },
+        selections: [], days: [], arrangements: { lodgings: [], intercity_trains: [] },
+        totals: { currency: 'CNY', estimated_cost: null }, health: { status: 'ok', issues: [] },
+      },
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(createElement(TravelChatPage, {
+        initialTripId: tripId, initialConversationId: candidate,
+      }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(mocks.fetchTripConversation).toHaveBeenCalledWith(tripId)
+    expect(mocks.conversationRequests.every((entry) => !entry.enabled)).toBe(true)
+    expect(container.textContent).toContain('没有可验证的服务端原始会话关联')
+    expect(new URL(window.location.href).searchParams.get('conversation_id')).toBe(candidate)
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    await act(async () => root.unmount())
+  })
+
   it('URL 行程读取失败时只允许重试读取，不创建第二个 Trip', async () => {
     const tripId = '00000000-0000-4000-8000-000000000072'
     window.history.replaceState({}, '', `/travel/chat?trip_id=${tripId}`)
@@ -185,7 +309,7 @@ describe('V2 旅游规划对话', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
-    expect(container.textContent).toContain('当前不会创建或覆盖行程')
+    expect(container.textContent).toContain('不会创建或覆盖行程')
     expect(mocks.createTrip).not.toHaveBeenCalled()
     await act(async () => {
       container.querySelector('button')?.click()

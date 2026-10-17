@@ -40,6 +40,8 @@ export interface ModelHealth {
   consecutiveFailures: number
   /** 探测来源；OCR 只有 manual 代表真实调用过上游。 */
   probeSource?: 'scheduled' | 'manual' | null
+  /** 探测深度：真实模型调用、仅凭据可用性或仅允许手动探测。 */
+  probeMode?: 'live_call' | 'availability_only' | 'manual_only'
 }
 
 /** 角色运行策略（后端 llm_model_role_policy 镜像；source=default 时为代码默认值） */
@@ -98,12 +100,16 @@ export interface RoleBinding {
 }
 
 /** 健康状态 → 中文徽标文案（§6 收敛点，组件不许再写第二遍） */
-export function healthStatusLabel(status: ModelHealthStatus | undefined | null): string {
+export function healthStatusLabel(
+  status: ModelHealthStatus | undefined | null,
+  probeMode?: ModelHealth['probeMode'],
+): string {
   switch (status) {
     case 'healthy':
+      if (probeMode === 'availability_only') return '凭据/配置可用，未验证真实调用'
       return '调用通过'
     case 'slow':
-      return '响应慢'
+      return '调用通过，但响应较慢'
     case 'rate_limited':
       return '限流'
     case 'auth_failed':

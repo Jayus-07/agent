@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from threading import Barrier
 
 import pytest
@@ -21,7 +22,13 @@ from backend.travel_v2.services.trip_edit_service import (
     TripEditService,
     VersionConflict,
 )
-from backend.travel_v2.services.trip_service import TripNotFound, TripService
+from backend.travel_v2.services.trip_service import (
+    IdempotencyConflict as TripCreateIdempotencyConflict,
+)
+from backend.travel_v2.services.trip_service import (
+    TripNotFound,
+    TripService,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1",
@@ -132,12 +139,13 @@ def trip_scope():
         "owner_id": f"user-{uuid.uuid4().hex[:12]}",
         "title": "杭州周末",
     }
+    create_key = f"create-{uuid.uuid4().hex}"
     trip = TripService().create_trip(
         tenant_id=scope["tenant_id"], owner_id=scope["owner_id"],
         title=scope["title"],
         actor_id=scope["owner_id"],
         document=TripDocumentV2.model_validate(valid_document()),
-        idempotency_key=f"create-{uuid.uuid4().hex}",
+        idempotency_key=create_key,
     )
     scope.pop("title")
     scope["trip_id"] = trip["trip_id"]
@@ -166,6 +174,144 @@ def test_trip_creation_writes_initial_revision_and_is_tenant_scoped(trip_scope) 
         service.get_trip(
             scope["trip_id"], tenant_id=scope["tenant_id"], owner_id="another-user"
         )
+
+
+def test_trip_conversation_is_write_once_and_owner_scoped() -> None:
+    tenant_id = f"test-{uuid.uuid4().hex[:12]}"
+    owner_id = f"user-{uuid.uuid4().hex[:12]}"
+    create_key = f"create-{uuid.uuid4().hex}"
+    conversation_id = f"travel-{uuid.uuid4().hex}"
+    service = TripService()
+    created = service.create_trip(
+        tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+        idempotency_key=create_key, title="杭州周末",
+        document=TripDocumentV2.model_validate(valid_document()),
+        conversation_id=conversation_id,
+    )
+    trip_id = created["trip_id"]
+    try:
+        conversation = service.get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+
+        assert created["conversation_id"] == conversation["conversation_id"]
+        assert conversation["linked"] is True
+        assert datetime.fromisoformat(conversation["server_now"]).tzinfo is not None
+        replay = service.create_trip(
+            tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+            idempotency_key=create_key, title="杭州周末",
+            document=TripDocumentV2.model_validate(valid_document()),
+        )
+        assert replay["replayed"] is True
+        assert replay["conversation_id"] == created["conversation_id"]
+        with pytest.raises(TripNotFound):
+            service.get_trip_conversation(
+                trip_id, tenant_id=tenant_id, owner_id="another-user",
+            )
+        with pytest.raises(TripCreateIdempotencyConflict):
+            service.create_trip(
+                tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+                idempotency_key=create_key, title="杭州周末",
+                document=TripDocumentV2.model_validate(valid_document()),
+                conversation_id="another-conversation",
+            )
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM travel_v2.trip_conversations WHERE trip_id = %s::uuid",
+                    (trip_id,),
+                )
+            connection.commit()
+        finally:
+            connection.close()
+        unlinked = service.get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+        assert unlinked["trip_id"] == trip_id
+        assert unlinked["conversation_id"] is None
+        assert unlinked["linked"] is False
+        assert datetime.fromisoformat(unlinked["server_now"]).tzinfo is not None
+    finally:
+        _cleanup_trip(trip_id)
+
+
+def test_unlinked_trip_replay_does_not_invent_a_conversation() -> None:
+    tenant_id = f"test-{uuid.uuid4().hex[:12]}"
+    owner_id = f"user-{uuid.uuid4().hex[:12]}"
+    idempotency_key = f"legacy-create-{uuid.uuid4().hex}"
+    service = TripService()
+    created = service.create_trip(
+        tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+        idempotency_key=idempotency_key, title="旧版行程回放",
+        document=TripDocumentV2.model_validate(valid_document()),
+    )
+    trip_id = created["trip_id"]
+    try:
+        replay = service.create_trip(
+            tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+            idempotency_key=idempotency_key, title="旧版行程回放",
+            document=TripDocumentV2.model_validate(valid_document()),
+        )
+        association = service.get_trip_conversation(
+            trip_id, tenant_id=tenant_id, owner_id=owner_id,
+        )
+
+        assert created["conversation_id"] is None
+        assert replay["conversation_id"] is None
+        assert replay["replayed"] is True
+        assert association["trip_id"] == trip_id
+        assert association["conversation_id"] is None
+        assert association["linked"] is False
+        assert datetime.fromisoformat(association["server_now"]).tzinfo is not None
+    finally:
+        _cleanup_trip(trip_id)
+
+
+def test_create_trip_rejects_explicit_blank_conversation_before_connecting() -> None:
+    service = TripService(connect=lambda: pytest.fail("blank conversation must fail before database access"))
+
+    with pytest.raises(ValueError, match="conversation_id must not be blank"):
+        service.create_trip(
+            tenant_id="tenant-test", owner_id="owner-test", actor_id="owner-test",
+            idempotency_key=f"blank-{uuid.uuid4().hex}", title="空会话测试",
+            document=TripDocumentV2.model_validate(valid_document()),
+            conversation_id="   ",
+        )
+
+
+def test_conversation_cannot_be_reused_by_another_trip() -> None:
+    tenant_id = f"test-{uuid.uuid4().hex[:12]}"
+    owner_id = f"user-{uuid.uuid4().hex[:12]}"
+    conversation_id = f"travel-{uuid.uuid4().hex}"
+    service = TripService()
+    created = service.create_trip(
+        tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+        idempotency_key=f"create-{uuid.uuid4().hex}", title="杭州周末",
+        document=TripDocumentV2.model_validate(valid_document()),
+        conversation_id=conversation_id,
+    )
+    try:
+        with pytest.raises(TripCreateIdempotencyConflict, match="绑定到其他行程"):
+            service.create_trip(
+                tenant_id=tenant_id, owner_id=owner_id, actor_id=owner_id,
+                idempotency_key=f"create-{uuid.uuid4().hex}", title="苏州周末",
+                document=TripDocumentV2.model_validate(valid_document()),
+                conversation_id=conversation_id,
+            )
+
+        connection = get_memory_engine().raw_connection()
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    "SELECT trip_id FROM travel_v2.trips WHERE tenant_id = %s AND owner_id = %s",
+                    (tenant_id, owner_id),
+                )
+                assert [str(row[0]) for row in cursor.fetchall()] == [created["trip_id"]]
+        finally:
+            connection.close()
+    finally:
+        _cleanup_trip(created["trip_id"])
 
 
 def test_trip_creation_rejects_schedule_conflicts_before_any_insert() -> None:

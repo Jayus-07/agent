@@ -87,7 +87,11 @@ def interpret_turn_with_llm(
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import _build_llm_for, record_llm_result
+        from backend.infra.llm.proxy import (
+            _build_llm_for,
+            enforce_model_input_price_tier,
+            record_llm_result,
+        )
         from backend.observability.llm_context import llm_attribution_scope
 
         outcome.prompt_version = ""
@@ -106,13 +110,17 @@ def interpret_turn_with_llm(
             ensure_ascii=False,
             default=str,
         )
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_payload),
+        ]
+        enforce_model_input_price_tier((messages,), model_name=model_name)
         timeout = (timeout_ms or TRAVEL_TURN_DECISION_TIMEOUT_MS) / 1000.0
         with llm_attribution_scope(agent_domain="travel"):
             response = sync_call_with_timeout(
                 llm.invoke,
                 timeout,
-                [SystemMessage(content=system_prompt),
-                 HumanMessage(content=human_payload)],
+                messages,
             )
             try:
                 record_llm_result(

@@ -17,16 +17,15 @@ wrapper（历史签名不变），内部全部走 ``price_usage``。
 """
 from __future__ import annotations
 
+import logging
 import os
-from contextlib import contextmanager
 import threading
 import time
-import logging
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
-
 
 PRICE_DIMENSIONS = frozenset({
     "input", "output", "cache_read", "cache_write", "reasoning", "tool_call",
@@ -41,6 +40,20 @@ _REQUIRED_DIMENSIONS = {
     "embedding": frozenset({"input"}),
     "rerank": frozenset({"input"}),
 }
+
+# 火山方舟常规在线价目对该模型按输入长度分档，当前价格表仅能表示 [0, 32] 档。
+MODEL_INPUT_PRICE_TIER_LIMITS = {"doubao-seed-2.0-mini": 32_000}
+
+
+def model_input_price_tier_limit(model_name: str | None) -> int | None:
+    """返回当前统一价格快照能准确计费的最大模型输入长度。"""
+    if not model_name:
+        return None
+    from backend.infra.llm.models import lookup_model_entry
+
+    entry = lookup_model_entry(model_name)
+    canonical_name = str((entry or {}).get("name") or model_name).strip()
+    return MODEL_INPUT_PRICE_TIER_LIMITS.get(canonical_name)
 
 
 def _record_price_metric(component: str, result: str) -> None:
@@ -89,12 +102,21 @@ class PriceTable:
 
     def __init__(self, rows: list[PriceLine]):
         self._prices: dict[tuple[str, str, str], PriceLine] = {}
+        currencies: dict[tuple[str, str], set[str]] = {}
+        versions: dict[tuple[str, str], set[str]] = {}
         for row in rows:
+            key = (row.model_name, row.component)
+            currencies.setdefault(key, set()).add(row.currency)
+            versions.setdefault(key, set()).add(row.price_table_version)
             # 同一版本在数据库中按生效时间倒序返回，首条是当前有效价；
             # setdefault 同时避免历史行覆盖当前行。
             self._prices.setdefault(
                 (row.model_name, row.component, row.dimension), row
             )
+        if any(len(values) > 1 for values in currencies.values()):
+            raise ValueError("同一模型和组件不能混用价格币种")
+        if any(len(values) > 1 for values in versions.values()):
+            raise ValueError("同一模型和组件不能混用价格版本")
 
     @classmethod
     def from_rows(cls, rows: list[dict[str, Any]]) -> "PriceTable":
@@ -172,7 +194,9 @@ class PostgresPriceRepository:
 
     def __init__(self, connection_factory=None):
         self._connection_factory = connection_factory or self._connect
-        self._table = os.getenv("BUDGET_PG_TABLE_PREFIX", "") + "model_price"
+        prefix = os.getenv("BUDGET_PG_TABLE_PREFIX", "")
+        self._table = prefix + "model_price"
+        self._versions_table = prefix + "model_price_versions"
 
     @staticmethod
     @contextmanager
@@ -183,7 +207,6 @@ class PostgresPriceRepository:
         但连接归还池，不再每次新建。
         """
         from backend.config.database import MEMORY_DB_CONFIG  # noqa: F401  (engine_for 归一)
-
         from backend.infra.db import engine_for
 
         conn = engine_for(MEMORY_DB_CONFIG).raw_connection()
@@ -202,15 +225,19 @@ class PostgresPriceRepository:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""
-                        SELECT model_name, component, dimension,
-                               price_per_unit, unit, price_table_version,
-                               currency
-                        FROM {self._table}
-                        WHERE model_name = %s AND component = %s
-                          AND approval_status = 'approved'
-                          AND effective_from <= %s
-                          AND (effective_to IS NULL OR effective_to > %s)
-                        ORDER BY dimension, effective_from DESC, id DESC
+                        SELECT p.model_name, p.component, p.dimension,
+                               p.price_per_unit, p.unit, p.price_table_version,
+                               p.currency
+                        FROM {self._table} AS p
+                        JOIN {self._versions_table} AS v
+                          ON v.version = p.price_table_version
+                         AND v.status = 'active'
+                         AND v.source = p.source
+                        WHERE p.model_name = %s AND p.component = %s
+                          AND p.approval_status = 'approved'
+                          AND p.effective_from <= %s
+                          AND (p.effective_to IS NULL OR p.effective_to > %s)
+                        ORDER BY p.dimension, p.effective_from DESC, p.id DESC
                         """,
                         (model_name, component, datetime.now(timezone.utc),
                          datetime.now(timezone.utc)),
