@@ -81,3 +81,16 @@
 - 取不到有效价格行、但注册表仍有正单价 → 放行并按注册表估价结算，`cost_status=price_unknown`，不得展示为精确成本或零成本。
 
 价格巡检读取「当前系统价」与在线计费使用同一谓词，因此直登价不再在巡检中显示为缺价，治理版本切换后也不会拿旧版本比对。
+
+### 4.3 价格变更权限与生效方式（2026-10-17 决策）
+
+价格治理不再要求「双人审核 + 24 小时 canary」。改为：
+
+- **只有 `super_admin` 能改价**：`/admin/model-prices/imports`、`.../reviews`、`.../versions/{version}/publish`、`.../canary` 全部要求最高权限角色；`admin` 仍可读版本历史、登记模型，但不能改计费价。
+- **一步直发**：`POST /admin/model-prices/versions/{version}/publish`（`source`、`reason` 必填）直接写入
+  `model_price_versions(status='active')` 与 `approval_status='approved'` 价格行，旧 active 版本置 `expired`，
+  同维度旧行置 `effective_to`（append-only，只关不删）。审批证据形状为
+  `reviewer_1=操作人 / reviewer_2=system / imported_by=super-admin`，并在 `model_price_reviews` 落审计理由。
+- **仍然保留的硬约束**：覆盖率必须 100%、缺价/价格计算错误必须为 0、币种必须为 `CNY` 或 `USD` 且同一模型组件不得混用、历史行不可改写。
+- **热更新**：发布成功后立即失效进程内价格缓存（`pricing.clear_price_cache()`），后续模型登记与调用按新价计费、账本记为 `approved_price_table`。
+- **CI 真实评测**：`seed_prompt_eval_db` 的只读 Registry 校验接受上述审批形状（`version_imported_by='super-admin'`），因此不需要伪造第二个审核人。
