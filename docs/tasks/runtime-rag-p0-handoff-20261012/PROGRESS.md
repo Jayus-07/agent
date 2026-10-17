@@ -135,3 +135,8 @@
 - 改写超时：真实日志显示 1.8s 内思考型 chat 模型必然超时降级；评测工作流把 RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS 提到 6000ms（仍 < 8000ms 检索 deadline，取消/预算语义不变）。
 - 预算：MultiQuery 生效后单 case 多 1 次改写 + N 路检索（含 rerank），eval 阶段额度按实测预估提到 128 calls / 96,000 tokens / CNY 0.40；整次 run 总 envelope 仍为 200 / 200,000 / CNY 0.50，fixture 阶段 160 / 120,000 / 0.15 不变。
 - 免费验证：路由/多查询/覆盖/质量/上传链路 276 passed + 隔离 PG 9 项 91 passed；16/16 fixture 完整性 PASS。下一步：受信任 dispatch 复跑真实 Smoke，重点看 RC-024 是否进入 Top-1（Top-1 只需 6/7 即达标，RC-005 仍可能排 FAQ 第一）。
+### 2026-10-18 真实 A/B：MultiQuery 合并按 rerank_score 重排（已回滚）
+
+- 假设：合并结果按查询提交顺序拼接，原始 query 恒第一组 → 变体高相关证据无法进 Top-1。实现 `_order_merged_by_score`（稳定降序，仅重排既有候选）并加 4 条契约测试，免费 106 passed。
+- 真实 Run 39071917440（HEAD 9a15a76，multiquery=true）：fixture/索引 PASS；账本 110 calls / 106,009 tokens / **CNY 0.115943** / WITHIN_LIMITS / VERIFIED(ledger)；但 **Top-1 仍 0.7143**（RC-005=0、RC-024=0，MRR 未变），且 **recall@5 0.9286→0.881、multi_hop 0.8333→0.7222、nDCG 0.8351→0.8063**。
+- 结论：重排假设不成立且带来退化 → 已 `git revert`（回到 5423467 的等价实现）。这证明 RC-005/RC-024 的 Top-1 差异来自 rerank 模型对“部分相关但非完整答案”的评分本身（FAQ 1.0 / 库存 0.6747 高于政策/采购），不是排序拼接、候选缺失或 MultiQuery。
