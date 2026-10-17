@@ -198,6 +198,40 @@ class TestTypedValidation:
         hard = hard_anomalies(anomalies)
         assert any(a["check"] in ("cleaned_chars", "leaf_nodes") for a in hard)
 
+    def test_repaired_pdf_with_missing_pages_is_hard_anomaly(self):
+        root = DocumentNode(type="section", text="", level=0)
+        root.children.append(DocumentNode(type="paragraph", text="正文" * 100))
+        ast = DocumentAST(
+            root=root, source_file="damaged.pdf", raw_text="正文" * 100,
+            pdf_page_count=501, pdf_pages_with_content=134, pdf_repaired=True,
+        )
+        from langchain_core.documents import Document
+
+        rec = build_quality_record(
+            file_path="damaged.pdf", doc_id="damaged", kb_id="kb1",
+            raw_ast=ast, chunks=[Document(page_content="正文" * 100, metadata={
+                "granularity": "leaf", "chunk_id": "damaged_0",
+            })], file_size=1, file_hash="x",
+        )
+        anomalies = run_typed_validation(rec, ast)
+        assert any(
+            item["check"] == "pdf_page_coverage" and item["severity"] == "error"
+            for item in anomalies
+        )
+        assert rec["parsing"]["pdf_pages_with_content"] == 134
+
+    def test_repaired_pdf_with_complete_pages_passes_page_coverage(self):
+        ast = _make_ast()
+        ast.pdf_page_count = 501
+        ast.pdf_pages_with_content = 500
+        ast.pdf_repaired = True
+        rec = build_quality_record(
+            file_path="repaired.pdf", doc_id="repaired", kb_id="kb1",
+            raw_ast=ast, chunks=[], file_size=1, file_hash="x",
+        )
+        anomalies = run_typed_validation(rec, ast)
+        assert not any(item["check"] == "pdf_page_coverage" for item in anomalies)
+
     def test_tabular_requires_table(self):
         root = DocumentNode(type="section", text="", level=0)
         ast = DocumentAST(root=root, source_file="t.csv", raw_text="")

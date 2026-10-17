@@ -274,8 +274,8 @@ EMBED_RETRY_MAX = int(os.getenv("EMBED_RETRY_MAX", "5"))
 EMBED_RETRY_BACKOFF_BASE = float(os.getenv("EMBED_RETRY_BACKOFF_BASE", "1.5"))
 EMBED_RETRY_BACKOFF_MAX = float(os.getenv("EMBED_RETRY_BACKOFF_MAX", "30"))
 # 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
-# 防止无界产出撑爆 embedding/向量库
-MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "5000"))
+# 防止无界产出撑爆 embedding/向量库；501 页有效文本 PDF 实测需约 5,395 个 chunk。
+MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "6000"))
 
 # ====================================
 # Knowledge Base 隔离配置
