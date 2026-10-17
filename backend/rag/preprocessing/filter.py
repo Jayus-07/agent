@@ -4,6 +4,7 @@ import re
 
 from backend import config
 from backend.rag.preprocessing.chunking import is_table_chunk
+from backend.rag.preprocessing.redaction import mask_pii_text
 from backend.shared.logger import logger
 
 
@@ -77,13 +78,9 @@ class DuplicateDetector:
         return (a ^ b).bit_count()
 
 
-# ── PII 脱敏正则 ──────────────────────────────────
-
-_PII_PATTERNS = [
-    (re.compile(r'(?<!\d)(1[3-9]\d{9})(?!\d)'), 'phone'),
-    (re.compile(r'(?<!\d)(\d{17}[\dXx])(?!\d)'), 'id_card'),
-    (re.compile(r'(?<!\d)(\d{16,19})(?!\d)'), 'bank_card'),
-]
+# ── PII 脱敏 ──────────────────────────────────────
+# 规则与掩码形态统一在 redaction.mask_pii_text（证据脱敏复用同一口径）；
+# 这里保留 _mask_pii 名称以兼容既有调用方（indexer / 覆盖对账）。
 
 # 财务专用 PII 脱敏正则（从 domain_data 导入，兑底本地定义）
 try:
@@ -93,19 +90,8 @@ except ImportError:
 
 
 def _mask_pii(text: str) -> tuple[str, list[str]]:
-    """PII 脱敏。返回 (脱敏后文本, 操作列表)"""
-    masked_types = []
-    for pattern, pii_type in _PII_PATTERNS:
-        matches = pattern.findall(text)
-        if matches:
-            if pii_type == 'phone':
-                text = pattern.sub(lambda m: m.group(1)[:3] + '****' + m.group(1)[-4:], text)
-            elif pii_type == 'id_card':
-                text = pattern.sub(lambda m: m.group(1)[:6] + '********' + m.group(1)[-4:], text)
-            elif pii_type == 'bank_card':
-                text = pattern.sub(lambda m: m.group(1)[:4] + '********' + m.group(1)[-4:], text)
-            masked_types.append(pii_type)
-    return text, masked_types
+    """PII 脱敏。返回 (脱敏后文本, 操作列表)。规则见 redaction.mask_pii_text。"""
+    return mask_pii_text(text)
 
 
 def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
@@ -130,15 +116,71 @@ def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
     return text, masked_types
 
 
+# ── 有效内容识别（P0-C，2026-10-18）──────────────────
+# 移植自 PR #66（codex/rag-upload-b1-20261014）的 filter.py：英文正文/技术
+# 标识符不应被中文占比规则误杀，表格行不套用正文阈值与判重。
+# 本任务只取最小必要部分（不含 #66 依赖新 chunk metadata 的
+# split_group_id 分支），不搬 #66 的 chunking/coverage 改造。
+_LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+_LATIN_IDENTIFIER_RE = re.compile(
+    r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]*(?:[-_/][A-Z0-9]+)+(?![A-Za-z0-9])"
+)
+# CJK 词（≥2 个连续汉字）、拉丁词、字母数字混排或 ≥4 位数字（编号/SKU/状态值）
+_CJK_WORD_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+_CJK_CHAR_RE = re.compile(r"[\u4e00-\u9fff]")
+_MIXED_IDENTIFIER_RE = re.compile(r"[A-Za-z]+\d|\d+[A-Za-z]")
+_LONG_DIGITS_RE = re.compile(r"\d{4,}")
+
+
+def _has_meaningful_latin_text(text: str) -> bool:
+    """识别英文正文和代码标识，避免中文比例规则误杀有效内容（源自 #66）。"""
+    identifiers = _LATIN_IDENTIFIER_RE.findall(text)
+    if any(
+        len(identifier) >= 6
+        or (len(identifier) >= 4 and any(char.isdigit() for char in identifier))
+        for identifier in identifiers
+    ):
+        return True
+
+    words = _LATIN_WORD_RE.findall(text)
+    latin_letters = sum(len(word) for word in words)
+    all_letters = sum(1 for char in text if char.isalpha())
+    if not _CJK_CHAR_RE.search(text):
+        # 纯英文/技术字段：没有中文本身不是缺陷（中文占比规则用于识别
+        # 中英混杂的低信息碎片，不用于拒绝英文正文与配置/代码）。
+        return len(words) >= 2 and latin_letters >= 6
+    return (
+        len(words) >= 3
+        and latin_letters >= 18
+        and latin_letters / max(all_letters, 1) >= 0.6
+    )
+
+
+def _short_text_carries_content(text: str) -> bool:
+    """短文本是否承载可检索事实（短段落/SKU/订单号/状态值/英文技术字段）。
+
+    短 ≠ 噪音：PDF 的「附录 A：常用单据」、状态值「已发货」、订单号
+    「SO-2026-0001」都是唯一来源内容。长度阈值只能拦"无内容"碎片
+    （裸页码、单符号、编号孤字），不能拦有效短内容。
+    """
+    if _CJK_WORD_RE.search(text):
+        return True
+    if _LATIN_WORD_RE.search(text):
+        return True
+    if _MIXED_IDENTIFIER_RE.search(text):
+        return True
+    return bool(_LONG_DIGITS_RE.search(text))
+
+
 class ChunkFilter:
     """Chunk 质量过滤器。
 
     检查项（按顺序）：
     1. 空白内容
-    2. 超短文本（< min_length）
+    2. 超短文本（< min_length；表格行与承载事实的 Leaf 短文本豁免）
     3. 纯符号比率过高
-    4. 中文占比过低
-    5. SimHash 去重
+    4. 中文占比过低（表格行与英文/技术字段豁免）
+    5. SimHash 去重（Parent / Leaf 已见集合隔离；表格行不判重）
     6. PII 脱敏（不拒绝，仅修改文本）
     """
 
@@ -150,6 +192,12 @@ class ChunkFilter:
         self.enable_pii = config.FILTER_ENABLE_PII_MASK
         self.financial_pii_force = getattr(config, 'FINANCIAL_PII_MASK_FORCE', True)
         self._dup_detector = DuplicateDetector(threshold=self.simhash_threshold)
+        # Parent 有意包含对应 Leaf 的正文，不能让 Parent 的 SimHash 把可检索
+        # Leaf 判成重复（否则覆盖门禁必然缺口）。Parent 之间仍独立去重。
+        # 移植自 PR #66 的同名隔离实现。
+        self._parent_dup_detector = DuplicateDetector(
+            threshold=self.simhash_threshold
+        )
 
     def should_keep(self, text: str, metadata: dict) -> tuple[bool, str]:
         """检查 Chunk 是否应保留。
@@ -168,9 +216,20 @@ class ChunkFilter:
             metadata["filter_reason"] = "empty"
             return False, "empty"
 
-        # 2. 长度检查
+        # 2. 长度检查：表格行与"承载事实的短文本"不套用正文长度阈值。
+        #    表格 Leaf 的短行是有效记录；PDF 短段落/状态值/编号同样是唯一
+        #    来源内容，删掉就会在覆盖审计里变成真实缺口。
         stripped = text.strip()
-        if len(stripped) < self.min_length:
+        table_chunk = is_table_chunk(metadata.get("chunk_type"))
+        # 短内容豁免只给 Leaf：Leaf 是唯一可检索来源内容，Parent 只是上下文
+        # 容器，沿用原阈值 + 「被引用 Parent 保留」既有覆盖路径，避免把
+        # Parent 的过滤/保留语义改掉。
+        is_parent = metadata.get("granularity") == "parent"
+        if (
+            len(stripped) < self.min_length
+            and not table_chunk
+            and (is_parent or not _short_text_carries_content(stripped))
+        ):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "too_short"
             return False, "too_short"
@@ -200,13 +259,26 @@ class ChunkFilter:
 
         chinese_count = sum(1 for c in stripped if _is_chinese_or_replacement(c))
         total_alpha = sum(1 for c in stripped if _is_meaningful_char(c))
-        if total_alpha > 0 and chinese_count / total_alpha < self.min_chinese_ratio:
+        low_chinese_ratio = (
+            total_alpha > 0
+            and chinese_count / total_alpha < self.min_chinese_ratio
+        )
+        meaningful_english = (
+            False if is_parent else _has_meaningful_latin_text(stripped)
+        )
+        if low_chinese_ratio and not (table_chunk or meaningful_english):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "low_chinese_ratio"
             return False, "low_chinese_ratio"
 
-        # 5. SimHash 去重
-        if self._dup_detector.is_duplicate(stripped):
+        # 5. SimHash 去重：Parent 与 Leaf 使用彼此隔离的已见集合；
+        #    表格行本身是源数据，重复行不构成冗余正文。
+        duplicate_detector = (
+            self._parent_dup_detector
+            if metadata.get("granularity") == "parent"
+            else self._dup_detector
+        )
+        if not table_chunk and duplicate_detector.is_duplicate(stripped):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "duplicate"
             return False, "duplicate"
@@ -239,6 +311,7 @@ class ChunkFilter:
     def reset(self):
         """重置去重检测器（知识库重建时调用）"""
         self._dup_detector.reset()
+        self._parent_dup_detector.reset()
 
     @staticmethod
     def apply_pii_mask(text: str) -> str:
