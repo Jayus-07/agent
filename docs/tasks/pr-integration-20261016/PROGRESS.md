@@ -383,3 +383,59 @@
 3. P3：#52/#66/#69 仍是 Draft 且与 `ad553d0` 冲突（#52 `CONFLICTING`、#66/#69 待重算）；先各自合入最新 main 并复跑定向集，再按 #66 → #52 顺序集成，#69 补真实授权 RAG/SQL/取消/Trace/费用 T3。
 4. P4：097/098/099 仅在隔离库验证；目标库应用状态由授权发布流程确认（本轮隔离库已验证 097/098/099/100/101 全链 rc=0）。
 5. P5：最终以实际最新 main SHA 与真实验证证据收口 MAIN-01～MAIN-34。
+
+## 2026-10-17 Phase3（PR-INTEGRATION-PHASE3）执行记录
+
+基线核对：`origin/main=ad553d00cd63d18bbf9bef20506989c89fd8dff5`；#52 CONFLICTING(Draft)、#66 `c8663b1`(MERGEABLE/Draft)、#69 `f80d082`(MERGEABLE/Draft)、#81/#83/#82/#84 已合并。未改写任何已合并提交。
+
+### Phase A｜#81/#83 遗留补修（已提交 PR，待 Review/CI 收口）
+
+**A1 在线计费价格不可见（已复现并修复）**
+
+- 复现：`PostgresPriceRepository.get_current()` 用 INNER JOIN 要求 `model_price_versions.status='active'`，而 `services/model_config._apply_model_pricing` 写入的 `source='provider-page'` 行**不写版本行** → 直登价在在线计费与价格巡检中完全不可见（退化成 registry_fallback）。除价格数据外无其他解释路径。
+- 修复：新增共享谓词 `pricing.current_price_eligibility_sql()`（`pricing.py` 与 `price_page_monitor.py` 共用）：治理 `active` 版本入选；无版本行的 `provider-page` 直登价在**不存在 active 治理版本**时入选（治理版本优先）；`expired`/`rejected` 永不入选。
+- 冲突失败关闭：新增 `PriceConflict`；跨版本/混币种时 `get_current` 报冲突，`price_usage` 记 `price_unknown`/`unpriced` 且**不**退注册表估价。
+- 硬预算缺价处置（`budget.py`，取代 2026-09-22「缺价一律放行」）：冲突→拒绝；无有效价格行且注册表无正单价→拒绝（`price_unavailable`）；注册表仍有正单价→放行 + `price_unknown`。
+- 文档：`docs/governance/llm-budget-billing.md` 新增 §4.2（两条写入路径信任级别、有效价格判定、缺价处置）。
+
+**A2 评测库 Docker 端口误判**：`seed_prompt_eval_db._assert_database_identity` 不再比较容器内监听端口与宿主目标端口；身份仍由库名/角色/read-only/主库状态/真实服务地址判定（`_server_address_matches_target` 保留 Docker 私网地址兼容）。宿主 5433→容器 5432 通过，非测试目标继续拒绝。
+
+**A3 未分类迁移漏检**：`rag_smoke_path_filter` 新增 `NON_AI_MIGRATION_ENTRIES`（63 条显式清单）、`classify_migration()`、`unknown_migrations()`。未分类迁移：PR 免费预检**退出码 2 + 可操作报错**（不再静默通过），main push 判为 relevant（交给受信任门禁，付费步骤自身价格门禁仍失败关闭）。
+
+**A4 OCR 缓存版本错用**：`_cache_path()` 改用 `upstream_model`（实际出站模型）而非注册显示名；缓存记 `model`+`upstream_model`；结果元数据新增 `upstream_model`。API Key 不进入键/文件/日志。
+
+实际验证（隔离 PostgreSQL `price-a1-isolated-pg` 127.0.0.1:55511，仅 loopback；PG16/pgvector）：
+
+- 新增 `backend/tests/test_llm_pricing_provider_page_pg.py`（真实 PG，7 项）：修复前 4 项 RED（直登价不可见、跨版本冲突、混币种冲突、硬门缺价放行），修复后 **7 passed**。
+- 价格/计费回归：`test_llm_pricing_pg`、`test_pricing_snapshot`、`test_llm_budget`、`test_model_price_page_monitor`、`test_billing_contract`、`test_usage_billing`、`test_model_config_pricing` **86 passed**。
+- 相邻门禁：`test_llm_bind_tools`、`test_stream_usage`、`test_eval_model_routing`、`test_rag_paid_preflight` **40 passed**。
+- 种子脚本 `test_seed_prompt_eval_db` **15 passed**；路径过滤 `tests/test_rag_smoke_path_filter.py` **12 passed**；OCR `backend/tests/rag/test_pdf_ocr.py` **27 passed, 1 skipped**。
+- 本轮 **0 次模型调用 / 0 费用**；未写共享或生产数据库；未执行真实 8-case。
+
+PR：
+- [#85](https://github.com/Jayus-07/agent/pull/85) `codex/price-legacy-visibility-20261017`，HEAD `838a3e26d4daa02e591d0e3c1bd28b1bead9decb`，worktree `C:\Users\wh\.codex\worktrees\price-legacy-visibility-20261017\agent`（A1+A2+A3）。
+- [#86](https://github.com/Jayus-07/agent/pull/86) `codex/ocr-upstream-cache-20261017`，HEAD `ddd5b63d3285d76059d6b3b584ead2ffb2e139f3`，worktree `C:\Users\wh\.codex\worktrees\ocr-cache-upstream-20261017\agent`（A4）。
+- 两者当前 `MERGEABLE`，Detect/Secret Scan SUCCESS，免费 preflight 进行中，8-case SKIPPED（不计通过）。自动 Review 尚未返回。
+
+行为变化需评审确认：硬预算下「无价格行且注册表无正单价」由放行改为拒绝。
+
+### Phase B｜#66 PDF 真实链路（本轮未完成）
+
+- #66 已同步 `ad553d0`，HEAD `c8663b12771b91b34299f7541cbd48d95f72bd1e`；定向回归 83 passed，免费 CI 全 SUCCESS。
+- 隔离环境仍可用：`pr66-worker-e2e-20261016-pg`（127.0.0.1:5434，库 `agent_rag_e2e_memory`/`agent_rag_e2e_business`）、`pr66-worker-e2e-20261016-redis`（127.0.0.1:6382）。
+- 已确认当前 HEAD 的 Celery app 可加载，`tasks.execute_index`/`tasks.reindex_document` 路由到 `rag_index` 队列；broker 通过 `CELERY_BROKER_URL` 配置（默认 `redis://localhost:6379/1`，本轮未改默认值）。
+- 未完成：真实 Worker 启动 + PDF upload → IndexRun 终态 → Active → Search 未执行；SIGKILL 退出码/信号、cgroup 峰值、concurrency/prefetch、table_describe 内存仍未取证。**PDF 链路保持 NOT VERIFIED / BLOCKED**，不得据「代码已同步、解析测试通过」宣称 E2E 通过。
+- 续工入口：在 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent` 以 `CELERY_BROKER_URL=redis://127.0.0.1:6382/0`、`PGPORT=5434`、`MEMORY_PGDATABASE=agent_rag_e2e_memory`、`BUSINESS_PGDATABASE=agent_rag_e2e_business` 启动 `celery -A backend.tasks.celery_app worker -Q rag_index -c 1 --prefetch-multiplier 1`，用 testset PDF 走上传 API，记录 task_id/run_id 与终态并采样 RSS。
+
+### Phase C/D 状态
+
+- #52：仍 `CONFLICTING`，冲突文件 `backend/infra/llm/pricing.py`、`backend/rag/retrieval/multi_query.py`、`backend/tests/evaluation/test_rag_paid_preflight.py`、`backend/tests/scripts/test_seed_prompt_eval_db.py`。**本轮 A1/A2 恰好改动了其中三个**，合并 #85 后冲突面会显著缩小；建议 #85 合并后再同步 #52。
+- #69：`MERGEABLE`，事件作用域 88 passed；真实 T3 未执行。
+- 真实 8-case / #52 质量评测：仍缺已批准 CNY 价格版本与 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`；未发起付费调用。
+
+### 下一项施工动作（按序）
+
+1. 收口 #85/#86 的 CI 与自动 Review，按门禁合并并记录 Merge SHA（注意：#86 改动 `backend/rag/**`，合并到 main 会触发 RAG Smoke；无已批准价格时会失败关闭，不产生 Provider 费用）。
+2. #85 合并后同步 #52，按新价格可见性契约重解冲突，再跑其费用/绑定定向集。
+3. Phase B：按上面的续工入口完成 PDF 真实链路与退出证据。
+4. P2 剩余：`import_version` 写死 USD、`evaluator_cost` 用静态价格（本轮未改，需独立 PR）。
