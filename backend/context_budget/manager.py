@@ -44,11 +44,23 @@ class ContextBudgetManager:
         配置窗口（行为兼容旧版）。
         """
         from backend.context_budget.token_counter import (
+            _resolve_model,
             resolve_model_context_window,
         )
+        from backend.infra.llm.pricing import model_input_price_tier_limit
+        from backend.infra.llm.resolved_model import get_current_resolved_model
+
+        context_window = int(resolve_model_context_window())
+        resolved_model = get_current_resolved_model()
+        model_name = (
+            resolved_model.model_id if resolved_model else _resolve_model(None)
+        )
+        price_tier_limit = model_input_price_tier_limit(model_name)
+        if price_tier_limit is not None:
+            context_window = min(context_window, price_tier_limit)
         return max(
             0,
-            int(resolve_model_context_window())
+            context_window
             - int(_cfg("CONTEXT_OUTPUT_RESERVE_TOKENS", 768))
             - int(_cfg("CONTEXT_SAFETY_RESERVE_TOKENS", 256))
             - max(0, int(extra_reserved_tokens)),

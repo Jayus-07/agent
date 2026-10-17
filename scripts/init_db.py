@@ -288,6 +288,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 同一用户跨会话的活跃退款申请按订单唯一。
     "098_cs_refund_order_unique.sql": "memory",
     "099_model_price_source_monitor.sql": "memory",
+    "100_model_price_change_alert_outbox.sql": "memory",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
     "100_travel_v2_trip_conversations.sql": "memory",
 }

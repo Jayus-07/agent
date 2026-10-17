@@ -108,9 +108,9 @@ def _llm_question(
     plan, user_message: str,
 ) -> tuple[str, str, int, str]:
     """调一次 LLM 渲染。返回 (question, prompt_version, latency_ms, fallback_reason)。"""
-    from backend.config.travel import TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS
-
     import time
+
+    from backend.config.travel import TRAVEL_LLM_CLARIFICATION_TIMEOUT_MS
 
     started = time.monotonic()
 
@@ -122,9 +122,13 @@ def _llm_question(
 
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import _build_llm_for, record_llm_result
         from backend.config import model_roles
+        from backend.infra.async_utils import sync_call_with_timeout
+        from backend.infra.llm.proxy import (
+            _build_llm_for,
+            enforce_model_input_price_tier,
+            record_llm_result,
+        )
         from backend.observability.llm_context import llm_attribution_scope
 
         model_name = str((model_roles.resolve_effective("main") or {})
@@ -140,11 +144,14 @@ def _llm_question(
         system_text, prompt_version = _prompt(
             known, ask_slot, slot_question(ask_slot))
         user_text = f"用户上一句话：{(user_message or '')[:120]}\n生成追问。"
+        messages = [
+            SystemMessage(content=system_text),
+            HumanMessage(content=user_text),
+        ]
+        enforce_model_input_price_tier((messages,), model_name=model_name)
         with llm_attribution_scope(agent_domain="travel"):
             response = sync_call_with_timeout(
-                clarify_llm.invoke, timeout,
-                [SystemMessage(content=system_text),
-                 HumanMessage(content=user_text)],
+                clarify_llm.invoke, timeout, messages,
             )
             # 直构实例不经 _LLMProxy —— 补一次统一计量
             record_llm_result(

@@ -290,6 +290,7 @@ def test_monitor_migration_is_registered_for_memory_database() -> None:
     from scripts.init_db import MIGRATION_TARGETS
 
     assert MIGRATION_TARGETS["099_model_price_source_monitor.sql"] == "memory"
+    assert MIGRATION_TARGETS["100_model_price_change_alert_outbox.sql"] == "memory"
 
 
 def test_monitor_task_persists_partial_source_results_and_alert_events(
@@ -395,3 +396,245 @@ def test_all_sources_failed_persists_failure_and_fails_celery_task(monkeypatch):
     assert repo.finished[1]["status"] == "failed"
     assert repo.finished[1]["error_type"] == "NoPriceQuotes"
     assert "MODEL_PRICE_SOURCE_UNAVAILABLE" in alerts
+
+
+@pytest.mark.parametrize(
+    "interrupt", ["soft-time-limit", "task-revoked"],
+)
+def test_page_fetch_propagates_task_control_exceptions(monkeypatch, interrupt):
+    from celery.exceptions import SoftTimeLimitExceeded, TaskRevokedError
+
+    from backend.infra.llm import price_page_monitor as monitor
+
+    exc_type = (
+        SoftTimeLimitExceeded if interrupt == "soft-time-limit" else TaskRevokedError
+    )
+    monkeypatch.setattr(
+        monitor,
+        "_SOURCE_PARSERS",
+        (("volcengine_ark_doubao_seed_2_0_mini", monitor.ARK_URL,
+          monitor.parse_ark_prices),),
+    )
+
+    def interrupt_fetch(*_args, **_kwargs):
+        raise exc_type("task control signal")
+
+    monkeypatch.setattr(monitor, "_fetch_official_page", interrupt_fetch)
+
+    with pytest.raises(exc_type):
+        monitor.fetch_official_prices(client=object())
+
+
+@pytest.mark.parametrize(
+    ("exc_type", "expected_status"),
+    [("soft-time-limit", "failed")],
+)
+def test_task_control_exceptions_keep_celery_terminal_semantics(
+    monkeypatch, exc_type, expected_status,
+):
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    from backend.tasks import model_price_monitor_tasks as task_module
+
+    error_type = SoftTimeLimitExceeded
+
+    class _Repository:
+        finished = None
+
+        def start_run(self, *_args, **_kwargs):
+            pass
+
+        def finish_run(self, run_id, **kwargs):
+            self.finished = (run_id, kwargs)
+
+    repo = _Repository()
+    monkeypatch.setattr(task_module, "PostgresPricePageMonitorRepository", lambda: repo)
+
+    def interrupt_fetch():
+        raise error_type("task control signal")
+
+    monkeypatch.setattr(task_module, "fetch_official_prices", interrupt_fetch)
+    monkeypatch.setattr(
+        "backend.observability.alerts.log_degradation", lambda _alert: None,
+    )
+
+    with pytest.raises(error_type):
+        task_module.monitor_model_price_pages()
+
+    assert repo.finished[1]["status"] == expected_status
+    assert repo.finished[1]["error_type"] == error_type.__name__
+
+
+def test_doubao_price_tier_limit_is_enforced_without_context_budget(monkeypatch):
+    from backend.config import __dict__ as config_values
+    from backend.context_budget import token_counter
+    from backend.infra.llm import models, pricing, proxy
+
+    monkeypatch.setattr(models, "_dynamic_models", [{
+        "name": "doubao-seed-2.0-mini",
+        "upstream_name": "doubao-seed-2-0-mini-260428",
+    }])
+    upstream_name = "doubao-seed-2-0-mini-260428"
+    monkeypatch.setattr(proxy, "get_active_model_name", lambda: upstream_name)
+    monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
+    assert pricing.model_input_price_tier_limit(upstream_name) == 32_000
+    monkeypatch.setattr(
+        token_counter, "count_tokens", lambda text, model=None: len(text),
+    )
+    monkeypatch.setattr(
+        token_counter, "count_message_tokens",
+        lambda message, model=None: len(message.content) + 4,
+    )
+    monkeypatch.setattr(token_counter, "count_tool_schema_tokens", lambda *_a, **_k: 0)
+    monkeypatch.setattr(
+        token_counter, "count_response_format_tokens", lambda *_a, **_k: 0,
+    )
+    monkeypatch.setitem(config_values, "CONTEXT_BUDGET_ENABLED", False)
+
+    args = ("x" * 32_000,)
+    assert proxy._preflight_context(args) is args
+    tuple_message = [("human", "x" * 31_996)]
+    assert proxy._preflight_context((tuple_message,)) == (tuple_message,)
+
+    from backend.context_budget.errors import ContextBudgetExceededError
+
+    with pytest.raises(ContextBudgetExceededError) as caught:
+        proxy._preflight_context(("x" * 32_001,))
+    assert caught.value.used_tokens == 32_001
+    assert caught.value.input_budget == 32_000
+    assert caught.value.stage == "price_tier_input_limit"
+    with pytest.raises(ContextBudgetExceededError):
+        proxy._preflight_context(([('human', 'x' * 31_997)],))
+
+    prompts = ["a" * 20_000, "b" * 20_000]
+    assert proxy._gate_fixed_shape(
+        prompts, 32_000, call_method="batch",
+    )
+    with pytest.raises(ContextBudgetExceededError):
+        proxy._gate_fixed_shape(prompts, 32_000, call_method="invoke")
+    with pytest.raises(ContextBudgetExceededError):
+        proxy._preflight_context((prompts,), call_method="invoke")
+    assert proxy._preflight_context(
+        (prompts,), call_method="batch",
+    ) == (prompts,)
+
+    modes = []
+
+    class _BatchLLM:
+        def batch(self, values, **_kwargs):
+            return values
+
+    real_preflight_context = proxy._preflight_context
+    monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _BatchLLM())
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user_id: None)
+    monkeypatch.setattr(proxy, "_resolve_call_context", lambda: None)
+    monkeypatch.setattr(
+        proxy,
+        "_preflight_context",
+        lambda args, kwargs=None, **options: (
+            modes.append(options["call_method"]) or args
+        ),
+    )
+    monkeypatch.setattr(proxy, "_call_with_resilience", lambda attr, *a, **k: attr(*a, **k))
+    monkeypatch.setattr(proxy, "_record_tokens", lambda *_a, **_k: None)
+    assert proxy.llm.batch(["one", "two"]) == ["one", "two"]
+    assert modes == ["batch"]
+    monkeypatch.setattr(proxy, "_preflight_context", real_preflight_context)
+
+    provider_calls = []
+
+    class _Bound:
+        def invoke(self, *_args, **_kwargs):
+            provider_calls.append("called")
+
+    bound = proxy._BoundLLMProxy(_Bound(), model_name=upstream_name)
+    monkeypatch.setattr(bound, "_bind_context", lambda: None)
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user_id: None)
+    monkeypatch.setattr(
+        proxy, "_call_with_resilience",
+        lambda *_args, **_kwargs: provider_calls.append("reserved"),
+    )
+    with pytest.raises(ContextBudgetExceededError):
+        bound.invoke("x" * 32_001)
+    with pytest.raises(ContextBudgetExceededError):
+        bound.invoke(input="x" * 32_001)
+    assert provider_calls == []
+
+
+def test_doubao_price_tier_counts_tool_arguments_before_provider(monkeypatch):
+    """RAGAS generate_prompt 形态中的大型 tool_calls 必须在 Provider 前拒绝。"""
+    from types import SimpleNamespace
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.prompt_values import ChatPromptValue
+
+    import backend.config as app_config
+    from backend.context_budget import token_counter
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.infra.llm import pricing, proxy
+
+    monkeypatch.setattr(app_config, "CONTEXT_BUDGET_ENABLED", False)
+    monkeypatch.setattr(
+        pricing, "model_input_price_tier_limit", lambda _model: 100,
+    )
+    monkeypatch.setattr(
+        token_counter, "get_counter",
+        lambda _model=None: SimpleNamespace(count=lambda text: len(text)),
+    )
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user: None)
+    provider_calls = []
+    bound = proxy._BoundLLMProxy(
+        SimpleNamespace(invoke=lambda *_args, **_kwargs: provider_calls.append(True)),
+        model_name="doubao-seed-2.0-mini",
+        role="eval_gen",
+    )
+    prompt = ChatPromptValue(messages=[AIMessage(
+        content="",
+        tool_calls=[{
+            "name": "search_private_docs",
+            "args": {"query": "private context " * 100},
+            "id": "call-large",
+        }],
+    )])
+
+    with pytest.raises(ContextBudgetExceededError) as caught:
+        bound.generate_prompt([prompt])
+
+    assert caught.value.stage == "price_tier_input_limit"
+    assert provider_calls == []
+
+
+def test_initial_llm_bind_keeps_price_tier_gate_before_provider(monkeypatch):
+    import backend.config as app_config
+    from backend.context_budget import token_counter
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.infra.llm import pricing, proxy
+
+    monkeypatch.setattr(app_config, "CONTEXT_BUDGET_ENABLED", False)
+    monkeypatch.setattr(proxy, "get_active_model_name", lambda: "doubao-seed-2.0-mini")
+    monkeypatch.setattr(proxy, "get_current_resolved_model", lambda: None)
+    monkeypatch.setattr(proxy, "_resolve_call_context", lambda **_kwargs: None)
+    monkeypatch.setattr(proxy, "_enforce_rate_limit", lambda _user: None)
+    monkeypatch.setattr(pricing, "model_input_price_tier_limit", lambda _model: 100)
+    monkeypatch.setattr(
+        token_counter, "count_tokens", lambda text, model=None: len(text),
+    )
+    monkeypatch.setattr(token_counter, "count_tool_schema_tokens", lambda *_a, **_k: 0)
+    monkeypatch.setattr(token_counter, "count_response_format_tokens", lambda *_a, **_k: 0)
+    provider_calls = []
+
+    class _Bound:
+        def invoke(self, *_args, **_kwargs):
+            provider_calls.append(True)
+
+    class _Model:
+        def bind(self, **_kwargs):
+            return _Bound()
+
+    monkeypatch.setattr(proxy, "_resolve_active_llm", lambda: _Model())
+
+    with pytest.raises(ContextBudgetExceededError) as caught:
+        proxy.llm.bind(max_tokens=64).invoke("x" * 101)
+
+    assert caught.value.stage == "price_tier_input_limit"
+    assert provider_calls == []

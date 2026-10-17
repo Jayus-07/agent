@@ -41,6 +41,20 @@ _REQUIRED_DIMENSIONS = {
     "rerank": frozenset({"input"}),
 }
 
+# 火山方舟常规在线价目对该模型按输入长度分档，当前价格表仅能表示 [0, 32] 档。
+MODEL_INPUT_PRICE_TIER_LIMITS = {"doubao-seed-2.0-mini": 32_000}
+
+
+def model_input_price_tier_limit(model_name: str | None) -> int | None:
+    """返回当前统一价格快照能准确计费的最大模型输入长度。"""
+    if not model_name:
+        return None
+    from backend.infra.llm.models import lookup_model_entry
+
+    entry = lookup_model_entry(model_name)
+    canonical_name = str((entry or {}).get("name") or model_name).strip()
+    return MODEL_INPUT_PRICE_TIER_LIMITS.get(canonical_name)
+
 
 def _record_price_metric(component: str, result: str) -> None:
     try:
