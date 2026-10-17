@@ -105,6 +105,96 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/097_llm_model_health_probe_source.sql",
 })
 
+# 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
+# 新增迁移必须加入本清单或 PAID_RELEVANT_MIGRATION_ENTRIES；两者都不在时
+# 归类为 unknown —— PR 免费预检直接失败，main push 按受信任门禁处理（不静默跳过）。
+NON_AI_MIGRATION_ENTRIES = frozenset({
+    "backend/sql/migrations/001_business_warehouse.sql",
+    "backend/sql/migrations/002_agent_memory_schema.sql",
+    "backend/sql/migrations/003_agent_business_schema.sql",
+    "backend/sql/migrations/003_agent_memory_seed.sql",
+    "backend/sql/migrations/004_readonly_role.sql",
+    "backend/sql/migrations/005_schema_hardening.sql",
+    "backend/sql/migrations/006_customer_service.sql",
+    "backend/sql/migrations/007_tool_approval.sql",
+    "backend/sql/migrations/008_local_auth.sql",
+    "backend/sql/migrations/009_auth_roles.sql",
+    "backend/sql/migrations/012_obs_trace_store_pg.sql",
+    "backend/sql/migrations/014_cs_rating.sql",
+    "backend/sql/migrations/015_workflow_runs_pg.sql",
+    "backend/sql/migrations/016_inventory_alerts_pg.sql",
+    "backend/sql/migrations/017_business_stores_pg.sql",
+    "backend/sql/migrations/019_gateway_access_logs_pg.sql",
+    "backend/sql/migrations/021_selection_funnel_pg.sql",
+    "backend/sql/migrations/022_feedback_review_candidates.sql",
+    "backend/sql/migrations/023_auth_sessions.sql",
+    "backend/sql/migrations/026_metadata_shadow_jobs.sql",
+    "backend/sql/migrations/028_cs_dispatch.sql",
+    "backend/sql/migrations/029_rbac_audit.sql",
+    "backend/sql/migrations/030_cs_dispatch_hardening.sql",
+    "backend/sql/migrations/033_auth_user_lifecycle.sql",
+    "backend/sql/migrations/036_cs_tickets.sql",
+    "backend/sql/migrations/037_cs_qa_reports.sql",
+    "backend/sql/migrations/040_chat_sessions_summary_frontier.sql",
+    "backend/sql/migrations/041_auth_departments.sql",
+    "backend/sql/migrations/042_sql_query_audits.sql",
+    "backend/sql/migrations/043_readonly_public_revoke.sql",
+    "backend/sql/migrations/044_chat_sessions_summary_version.sql",
+    "backend/sql/migrations/047_side_effect_idempotency.sql",
+    "backend/sql/migrations/049_task_pending_recovery.sql",
+    "backend/sql/migrations/050_agent_actions_status_enum.sql",
+    "backend/sql/migrations/051_cs_business_operation_guard.sql",
+    "backend/sql/migrations/052_travel_booking.sql",
+    "backend/sql/migrations/054_auth_super_admin.sql",
+    "backend/sql/migrations/058_cs_case.sql",
+    "backend/sql/migrations/059_security_events.sql",
+    "backend/sql/migrations/060_task_operation_audits.sql",
+    "backend/sql/migrations/062_tool_contract_changes.sql",
+    "backend/sql/migrations/068_auth_session_client_app.sql",
+    "backend/sql/migrations/070_unanswered_questions.sql",
+    "backend/sql/migrations/071_clarify_funnel_events.sql",
+    "backend/sql/migrations/072_travel_decision_audit.sql",
+    "backend/sql/migrations/073_travel_decision_idempotency.sql",
+    "backend/sql/migrations/076_cs_faq_tables.sql",
+    "backend/sql/migrations/077_sql_query_audits_sql_text.sql",
+    "backend/sql/migrations/078_cs_handoff_state_alignment.sql",
+    "backend/sql/migrations/080_question_ledger.sql",
+    "backend/sql/migrations/081_auth_user_phone.sql",
+    "backend/sql/migrations/082_cs_confirmation_versioned_claim.sql",
+    "backend/sql/migrations/082_travel_plan_tenant_scope.sql",
+    "backend/sql/migrations/083_readonly_ai_grant_scope.sql",
+    "backend/sql/migrations/084_travel_v2_schema.sql",
+    "backend/sql/migrations/085_drop_legacy_travel_planning.sql",
+    "backend/sql/migrations/086_travel_v2_arrangements.sql",
+    "backend/sql/migrations/094_travel_v2_ai_edit_requests.sql",
+    "backend/sql/migrations/095_travel_v2_ai_edit_pending_resolution.sql",
+    "backend/sql/migrations/096_travel_v2_revision_shares.sql",
+    "backend/sql/migrations/098_cs_refund_order_unique.sql",
+    "backend/sql/migrations/100_model_price_change_alert_outbox.sql",
+    "backend/sql/migrations/101_travel_v2_trip_conversations.sql",
+})
+
+
+def classify_migration(path: str) -> str:
+    """把一条迁移路径分类为 paid / non_ai / unknown（只认显式清单）。"""
+    normalized = _normalize(path)
+    if normalized in PAID_RELEVANT_MIGRATION_ENTRIES:
+        return "paid"
+    if normalized in NON_AI_MIGRATION_ENTRIES or normalized in NON_RAG_EXACT_ENTRIES:
+        return "non_ai"
+    return "unknown"
+
+
+def unknown_migrations(paths: list[str]) -> list[str]:
+    """返回未分类的迁移文件（按输入顺序去重）。"""
+    unknown: list[str] = []
+    for path in paths:
+        normalized = _normalize(path)
+        if normalized.startswith("backend/sql/migrations/") and classify_migration(normalized) == "unknown":
+            if normalized not in unknown:
+                unknown.append(normalized)
+    return unknown
+
 
 def _normalize(path: str) -> str:
     return path.strip().replace("\\", "/")
@@ -138,11 +228,29 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--event", choices=("push", "pull_request"), default="push")
     args = parser.parse_args(argv)
+    paths = list(sys.stdin)
+    unknown = unknown_migrations(paths)
     relevant = any(
         is_relevant(line)
         or (args.event == "pull_request" and is_pr_static_only(line))
-        for line in sys.stdin
+        for line in paths
     )
+    if unknown and args.event == "pull_request":
+        # 完整性检查：新迁移必须显式分类，未分类时 PR 免费预检失败（可操作报错），
+        # 避免「改个迁移名就绕过付费/免费门禁」。
+        print(
+            "未分类迁移：请在 .github/scripts/rag_smoke_path_filter.py 中把下列迁移加入",
+            "PAID_RELEVANT_MIGRATION_ENTRIES（影响 RAG/模型/费用/预算）或",
+            "NON_AI_MIGRATION_ENTRIES（与模型调用无关）：",
+            file=sys.stderr,
+        )
+        for item in unknown:
+            print("  - " + item, file=sys.stderr)
+        return 2
+    if unknown:
+        # main push：未分类迁移不得被静默跳过，按受信任门禁处理；
+        # 付费步骤自身的批准价格门禁仍然失败关闭。
+        relevant = True
     print("relevant=" + str(relevant).lower())
     return 0
 

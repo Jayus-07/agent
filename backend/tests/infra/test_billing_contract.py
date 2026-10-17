@@ -127,6 +127,11 @@ def test_price_unknown_usd_converts_before_budget_settlement(monkeypatch):
         pricing, "calculate_fallback_cost",
         lambda *a, **kw: Decimal("0.002"),
     )
+    # 2026-10-17 价格预检契约：注册表仍有单价时才按 price_unknown 放行，
+    # 否则硬预算直接拒绝（无可信单价失败关闭）。
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (1.0, 2.0),
+    )
     # 模拟 proxy enforce 结算路径：price_usage → record_model_usage → settle
     from backend.infra.llm.budget import _states, _current_request_id
 
@@ -181,15 +186,16 @@ def test_cache_read_not_double_billed():
 
 def test_budget_settlement_equals_usage_cost():
     """同一 BillingResult 喂预算结算与用量行：两处金额恒等（≤1e-6）。"""
+    store = _CaptureQuotaStore()
+    budget = _enforce_budget(store)
     with patch.object(pricing, "get_current_price_table", return_value=_usd_table()):
         result = price_usage(
             "m", "llm",
             NormalizedUsage(input_tokens=500_000, output_tokens=250_000),
             enforce=True,
         )
-    store = _CaptureQuotaStore()
-    budget = _enforce_budget(store)
-    budget.reserve("primary", model_name="m")
+        # 硬预算预检同样读价格表；同一快照下才可比。
+        budget.reserve("primary", model_name="m")
     from backend.infra.llm.budget import record_model_usage as _rmu
 
     # 直接以 RequestBudget.record_usage 消费同一 BillingResult
