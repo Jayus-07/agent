@@ -130,6 +130,7 @@ class PdfParser(BaseDocumentParser):
             )
             raise
 
+        pdf_repaired = bool(getattr(doc, "is_repaired", False))
         raw_items: list[tuple[str, float, int, tuple]] = []  # (文本, 字号, 页码, bbox) — 仅非表格文本
         # P0-04（2026-10-13）：段落与表格按 (页序, 页内 y) 统一成事件流，
         # 建 AST 时按阅读顺序交错挂 section——旧实现先处理全部文本、再把
@@ -152,7 +153,10 @@ class PdfParser(BaseDocumentParser):
                     try:
                         for t in page.find_tables().tables:
                             rows = t.extract()
-                            if rows and any(any(str(c).strip() for c in r) for r in rows):
+                            if rows and any(
+                                any(c is not None and str(c).strip() for c in row)
+                                for row in rows
+                            ):
                                 tables.append((t.bbox, rows))
                     except Exception as e:
                         logger.warning(
@@ -304,6 +308,10 @@ class PdfParser(BaseDocumentParser):
         ast.ocr_pages = ocr_pages
         ast.ocr_page_limit = ocr_page_limit
         ast.ocr_failed_pages = ocr_failed_pages
+        ast.pdf_page_count = page_count
+        ast.pdf_pages_with_content = len({event[3] for event in ordered_events})
+        ast.pdf_skipped_pages = len(skipped_pages)
+        ast.pdf_repaired = pdf_repaired
         return ast
 
     def _ocr_fallback(
@@ -381,7 +389,7 @@ class PdfParser(BaseDocumentParser):
 
         for block in text_blocks:
             block_text = "\n".join(
-                span["text"]
+                str(span.get("text") or "")
                 for line in block.get("lines", [])
                 for span in line.get("spans", [])
             ).strip()

@@ -157,6 +157,23 @@ class IndexRunStore:
             row = cur.fetchone()
         return dict(row) if row else None
 
+    def set_celery_task_id(self, upload_id: str,
+                           celery_task_id: str) -> dict | None:
+        """回填成功入队的 Celery ID，不改变运行状态。"""
+        if not celery_task_id:
+            return self.get_run(upload_id)
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f"""UPDATE {self._table}
+                    SET celery_task_id = %s, updated_at = {_NOW_SQL}
+                    WHERE upload_id = %s
+                    RETURNING *""",
+                (celery_task_id, upload_id),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+
     def mark_status(self, upload_id: str, status: str,
                     stage: str = "", error: str = "") -> dict:
         """状态推进（终态一次写：终态→任何状态都拒绝并抛 RunStateConflict）。"""

@@ -72,6 +72,9 @@ def _split_to_budget(text: str, budget: int,
         chunk_overlap=CHUNK_OVERLAP if overlap is None else overlap,
         length_function=count_tokens,
         separators=separators if separators is not None else _SEPARATORS,
+        # 分块边界空格/换行属于源文本；移除它会让 Coverage Audit 将有效文档
+        # 判成缺口，也会改变英文词间隔。保留分隔符，由后续索引过滤处理空白。
+        strip_whitespace=False,
     )
     subs = splitter.split_text(text)
     if all(count_tokens(s) <= budget for s in subs):
@@ -233,6 +236,14 @@ def _has_legal_clauses(ast: DocumentAST) -> bool:
     )
 
 
+def _has_table_nodes(ast: DocumentAST) -> bool:
+    """AST 中是否存在有内容的表格节点。"""
+    return any(
+        node.type == "table" and bool(node.rows)
+        for node in walk(ast.root)
+    )
+
+
 def _has_qa_nodes(ast: DocumentAST) -> bool:
     """AST 中是否存在 qa_question / qa_answer 节点。"""
     return any(
@@ -273,7 +284,8 @@ def _make_leaf_chunk(texts: list[str], file_path: str,
 def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
                               section_title: str = "", section_level: int = 0,
                               section_path: list | None = None,
-                              budget: int | None = None) -> List[Document]:
+                              budget: int | None = None,
+                              preserve_source: bool = False) -> List[Document]:
     """合并文本为 leaf，超 token 预算时继续切分，每个子块保留节点身份（P0-05）。
 
     背景：Step/Legal/QA 策略此前把「一个章节/条款/问答」直接合并成单一
@@ -288,10 +300,19 @@ def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
     if count_tokens(text) <= budget:
         return [_make_leaf_chunk(texts, file_path, section_title,
                                  section_level, section_path)]
-    subs = _split_to_budget(text, budget)
+    # Legal 长条款的 Coverage 需要能从实际 Leaf 无损重建源文；递归切分
+    # 会产生重叠片段，直接重组会重复边界。复用结构策略已有硬切，保持连续。
+    subs = (
+        _hard_split_by_budget(text, budget)
+        if preserve_source else _split_to_budget(text, budget)
+    )
     path = list(section_path or [])
-    return [
-        _make_doc(sub, {
+    split_group_id = _chunk_id(
+        file_path, f"split:{section_title}", text,
+    )
+    chunks = []
+    for index, sub in enumerate(subs):
+        metadata = {
             "granularity": "leaf",
             "chunk_id": _chunk_id(file_path, "leaf", sub),
             "parent_chunk_id": "",
@@ -299,9 +320,12 @@ def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
             "section_title": section_title,
             "section_level": section_level,
             "chunk_tokens": count_tokens(sub),
-        })
-        for sub in subs
-    ]
+            "split_group_id": split_group_id,
+            "split_part": index,
+            "split_total": len(subs),
+        }
+        chunks.append(_make_doc(sub, metadata))
+    return chunks
 
 
 def _merge_small_texts(texts: list[str], budget: int) -> list[str]:
@@ -435,8 +459,10 @@ def _merge_small_with_section(leaf_items: list, budget: int) -> list:
 CHUNK_TYPE_TABLE_ROW = "table_row"
 CHUNK_TYPE_TABLE_SUMMARY = "table_summary"
 CHUNK_TYPE_TABLE_FALLBACK = "table_fallback"
+CHUNK_TYPE_TABLE_HEADER = "table_header"
 TABLE_CHUNK_TYPES: tuple[str, ...] = (
     CHUNK_TYPE_TABLE_ROW, CHUNK_TYPE_TABLE_SUMMARY, CHUNK_TYPE_TABLE_FALLBACK,
+    CHUNK_TYPE_TABLE_HEADER,
 )
 TABLE_CHUNK_PREFIX = "table_"
 
@@ -472,11 +498,13 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
     """
     from backend.rag.preprocessing.financial_normalizer import extract_numeric_cells
     from backend.rag.preprocessing.parser._table_nl import (
-        build_table_summary, normalize_table_rows, row_to_kv,
+        build_table_summary, detect_multi_level_header, normalize_table_rows,
+        row_to_kv, table_to_csv,
     )
 
     section_anchor = ".".join(path)
     chunks: List[Document] = []
+    _, source_header_rows, _ = detect_multi_level_header(node.rows)
     flat_header, data_rows = normalize_table_rows(node.rows)
     if not flat_header or not data_rows:
         # 表头规范化失败 → 整表作 chunk 兜底（不丢内容）。
@@ -498,7 +526,9 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "chunk_tokens": count_tokens(node.text),
                 **fallback_meta,
             }))
-            return chunks
+            return _attach_virtual_parents(
+                chunks, file_path, f"tblfb:{section_anchor}",
+            )
         for si, sub in enumerate(_split_to_budget(
                 node.text, LEAF_CHUNK_TOKENS, separators=["\n", " ", ""],
                 overlap=0)):
@@ -530,29 +560,67 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         "chunk_tokens": count_tokens(summary),
     }))
 
-    # Layer 2: 行级 kv chunks(leaf) — 按行自然边界，不硬切
+    # Layer 2: 原始表头 Leaf 保留多级表头的每个来源行。
+    for hi, header_row in enumerate(source_header_rows):
+        header_text = table_to_csv([header_row])
+        for si, header_part in enumerate(_hard_split_by_budget(
+                header_text, LEAF_CHUNK_TOKENS)):
+            if not header_part.strip():
+                continue
+            header_id = _chunk_id(
+                file_path, f"table_header:{section_anchor}:{hi}:{si}",
+                header_part,
+            )
+            chunks.append(_make_doc(header_part, {
+                "granularity": "leaf",
+                "chunk_id": header_id,
+                "parent_chunk_id": parent_id,
+                "table_id": parent_id,
+                "section_path": list(path),
+                "section_title": sec.text,
+                "section_level": sec.level,
+                "chunk_type": CHUNK_TYPE_TABLE_HEADER,
+                "row_index": hi,
+                "chunk_tokens": count_tokens(header_part),
+            }))
+
+    # Layer 3: 行级 kv + 原始行，保留自然语言召回及所有源单元格。
     for ri, row in enumerate(data_rows):
         kv_text = row_to_kv(flat_header, row, sec.text)
-        if not kv_text.strip():
+        raw_row_text = table_to_csv([row])
+        row_text = "\n【原始行】\n".join(
+            part for part in (kv_text, raw_row_text) if part
+        )
+        if not row_text.strip():
             continue
-        leaf_id = _chunk_id(file_path, f"table_row:{section_anchor}:{ri}", kv_text)
-        # 提取数值单元格到 metadata，支持按数值范围检索
-        meta = {
-            "granularity": "leaf",
-            "chunk_id": leaf_id,
-            "parent_chunk_id": parent_id,
-            "table_id": parent_id,
-            "section_path": list(path),
-            "section_title": sec.text,
-            "section_level": sec.level,
-            "chunk_type": CHUNK_TYPE_TABLE_ROW,
-            "row_index": ri,
-            "chunk_tokens": count_tokens(kv_text),
-        }
+        row_parts = (
+            _hard_split_by_budget(row_text, LEAF_CHUNK_TOKENS)
+            if count_tokens(row_text) > LEAF_CHUNK_TOKENS
+            else [row_text]
+        )
         numeric_vals = extract_numeric_cells(flat_header, row)
-        if numeric_vals:
-            meta["numeric_values"] = numeric_vals
-        chunks.append(_make_doc(kv_text, meta))
+        for part_index, row_part in enumerate(row_parts):
+            leaf_id = _chunk_id(
+                file_path,
+                f"table_row:{section_anchor}:{ri}:{part_index}",
+                row_part,
+            )
+            meta = {
+                "granularity": "leaf",
+                "chunk_id": leaf_id,
+                "parent_chunk_id": parent_id,
+                "table_id": parent_id,
+                "section_path": list(path),
+                "section_title": sec.text,
+                "section_level": sec.level,
+                "chunk_type": CHUNK_TYPE_TABLE_ROW,
+                "row_index": ri,
+                "row_part_index": part_index,
+                "chunk_tokens": count_tokens(row_part),
+            }
+            if numeric_vals:
+                meta["numeric_values"] = numeric_vals
+            chunks.append(_make_doc(row_part, meta))
     return chunks
 
 
@@ -679,6 +747,26 @@ class StructureChunkStrategy:
         parent 文本 = 标题 + 直接子叶：不再 walk 拼接嵌套 section 全文
         （旧实现与子 section parent 重复入索引，嵌套层级越深重复越多）。
         """
+        table_leaves = [
+            leaf for leaf in leaves
+            if leaf.type == "table" and getattr(leaf, "rows", None)
+        ]
+        if table_leaves:
+            plain_leaves = [leaf for leaf in leaves if leaf not in table_leaves]
+            if plain_leaves:
+                self._emit_section_chunks(
+                    chunks, file_path, sec, path, plain_leaves, anchor,
+                )
+            for leaf in table_leaves:
+                self._emit_leaf(
+                    chunks, file_path, sec, path, leaf,
+                    _chunk_id(
+                        file_path, f"leaf:{anchor}", leaf.text,
+                    ),
+                    "",
+                )
+            return
+
         parts = ([sec.text] if sec.text else []) + [l.text for l in leaves]
         sec_text = "\n".join(parts)
         if count_tokens(sec_text) <= PARENT_CHUNK_TOKENS:
@@ -743,14 +831,15 @@ class StructureChunkStrategy:
             return
         leaf_text = leaf.text
         if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
-            subs = _split_to_budget(leaf_text, LEAF_CHUNK_TOKENS)
+            # 超长源叶按原串连续切片，保留标点和数字边界，覆盖审计可逐字对账。
+            subs = _hard_split_by_budget(leaf_text, LEAF_CHUNK_TOKENS)
         else:
             subs = [leaf_text]
         for si, sub in enumerate(subs):
             sub_id = _chunk_id(
                 file_path, f"leaf:{'.'.join(path)}:{leaf_id}", sub,
             ) if len(subs) > 1 else leaf_id
-            chunks.append(_make_doc(sub, {
+            metadata = {
                 "granularity": "leaf",
                 "chunk_id": sub_id,
                 "parent_chunk_id": parent_id,
@@ -758,7 +847,12 @@ class StructureChunkStrategy:
                 "section_title": sec.text,
                 "section_level": sec.level,
                 "chunk_tokens": count_tokens(sub),
-            }))
+            }
+            if len(subs) > 1:
+                metadata["split_group_id"] = leaf_id
+                metadata["split_part"] = si
+                metadata["split_total"] = len(subs)
+            chunks.append(_make_doc(sub, metadata))
 
     @staticmethod
     def _group_leaves_by_tokens(leaves, budget: int) -> list[list]:
@@ -847,7 +941,11 @@ def _split_unstructured(ast: DocumentAST, file_path: str,
                                   separators=separators or _SEPARATORS,
                                   overlap=overlap)
                  if count_tokens(text) > LEAF_CHUNK_TOKENS else [text])
-        for sub in texts:
+        split_group_id = (
+            _chunk_id(file_path, "split:unstructured", text)
+            if len(texts) > 1 else ""
+        )
+        for part_index, sub in enumerate(texts):
             meta = {
                 "granularity": "leaf",
                 "chunk_id": _chunk_id(file_path, "leaf", sub),
@@ -857,6 +955,10 @@ def _split_unstructured(ast: DocumentAST, file_path: str,
                 "section_level": 1 if titles else 0,
                 "chunk_tokens": count_tokens(sub),
             }
+            if split_group_id:
+                meta["split_group_id"] = split_group_id
+                meta["split_part"] = part_index
+                meta["split_total"] = len(texts)
             if len(titles) > 1:
                 meta["section_mixed"] = "true"
             chunks.append(_make_doc(sub, meta))
@@ -1023,6 +1125,7 @@ class LegalChunkStrategy:
                     current, file_path,
                     section_title=current_clause or fallback_title, section_level=1,
                     section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+                    preserve_source=True,
                 ))
                 current = []
             if _is_legal_clause(n.text):
@@ -1034,6 +1137,7 @@ class LegalChunkStrategy:
                 current, file_path,
                 section_title=current_clause or fallback_title, section_level=1,
                 section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+                preserve_source=True,
             ))
 
         # C1: 每连续 N 条款挂一个虚拟 parent（默认 5，LEGAL_CLAUSES_PER_PARENT），
@@ -1123,6 +1227,7 @@ class QAChunkStrategy:
             )
         subs = _split_to_budget(a_text, budget)
         chunks: List[Document] = []
+        split_group_id = _chunk_id(file_path, f"split:qa:{q_text}", a_text)
         for si, sub in enumerate(subs):
             text = prefix + sub
             chunks.append(_make_doc(text, {
@@ -1133,6 +1238,8 @@ class QAChunkStrategy:
                 "section_title": q_text[:40],
                 "section_level": 0,
                 "chunk_tokens": count_tokens(text),
+                "split_group_id": split_group_id,
+                "split_part": si,
             }))
         return chunks
 
@@ -1398,17 +1505,26 @@ class FinancialTableChunkStrategy:
                     chunks, file_path, sec, path, leaf,
                     _chunk_id(file_path, f"leaf:{anchor}", leaf.text), parent_id)
         else:
-            for gi, sub in enumerate(_split_to_budget(
-                    sec_text, PARENT_CHUNK_TOKENS, overlap=0)):
+            split_group_id = _chunk_id(
+                file_path, f"split:financial:{anchor}", sec_text,
+            )
+            parent_groups = []
+            for gi, sub in enumerate(_hard_split_by_budget(
+                    sec_text, PARENT_CHUNK_TOKENS)):
                 parent_id = _chunk_id(
                     file_path, f"parent:{anchor}:{gi}", sub)
+                leaf_texts = _hard_split_by_budget(sub, LEAF_CHUNK_TOKENS)
+                parent_groups.append((gi, sub, parent_id, leaf_texts))
+
+            split_total = sum(len(group[3]) for group in parent_groups)
+            split_part = 0
+            for gi, sub, parent_id, leaf_texts in parent_groups:
                 StructureChunkStrategy._emit_parent(
                     chunks, file_path, sec, path, sub, parent_id)
                 # 根正文超 Parent 预算时也必须保留可检索 Leaf；每个 Leaf
                 # 归属当前 Parent，并再次按 Leaf 预算切分，避免 Parent 被
                 # 写入全文但实际索引侧无内容。
-                for li, leaf_text in enumerate(_split_to_budget(
-                        sub, LEAF_CHUNK_TOKENS, overlap=0)):
+                for li, leaf_text in enumerate(leaf_texts):
                     chunks.append(_make_doc(leaf_text, {
                         "granularity": "leaf",
                         "chunk_id": _chunk_id(
@@ -1419,7 +1535,11 @@ class FinancialTableChunkStrategy:
                         "section_title": sec.text,
                         "section_level": sec.level,
                         "chunk_tokens": count_tokens(leaf_text),
+                        "split_group_id": split_group_id,
+                        "split_part": split_part,
+                        "split_total": split_total,
                     }))
+                    split_part += 1
 
     def _split_with_tables(
         self, sec, path: list, file_path: str, rows_per_chunk: int,
@@ -1454,32 +1574,10 @@ class FinancialTableChunkStrategy:
                             c.metadata["is_latest"] = True
                 chunks.extend(table_chunks)
             else:
-                # ── 非表格 leaf：走原 StructureChunkStrategy 逻辑 ──
-                leaf_text = leaf.text
-                if count_tokens(leaf_text) > LEAF_CHUNK_TOKENS:
-                    # 行级表格文档的非表格段落同样不设 overlap：相邻段落
-                    # 语义独立，overlap 只会制造重复向量污染数值检索
-                    splitter = RecursiveCharacterTextSplitter(
-                        chunk_size=LEAF_CHUNK_TOKENS, chunk_overlap=0,
-                        length_function=count_tokens, separators=_SEPARATORS,
-                    )
-                    subs = splitter.split_text(leaf_text)
-                else:
-                    subs = [leaf_text]
-                parent_id = _chunk_id(file_path, f"parent:{section_anchor}", sec.text)
-                for si, sub in enumerate(subs):
-                    sub_id = (_chunk_id(file_path, f"leaf:{section_anchor}:{si}", sub)
-                              if len(subs) > 1
-                              else _chunk_id(file_path, f"leaf:{section_anchor}", sub))
-                    chunks.append(_make_doc(sub, {
-                        "granularity": "leaf",
-                        "chunk_id": sub_id,
-                        "parent_chunk_id": parent_id,
-                        "section_path": path,
-                        "section_title": sec.text,
-                        "section_level": sec.level,
-                        "chunk_tokens": count_tokens(sub),
-                    }))
+                # ── 混合 section 中的正文继续使用结构策略的有界 Parent/Leaf。 ──
+                self._emit_plain_group(
+                    chunks, file_path, sec, path, [leaf],
+                )
         return chunks
 
     @staticmethod
@@ -1653,6 +1751,15 @@ class ChunkStrategyRouter:
                     scope=f"强信号豁免（{field_name}={signals.get(field_name)}）",
                 )
 
+            # 无专用类型策略的表格文档仍走既有 Structure 策略，
+            # 以表格行而非整段 CSV 文本作为可索引 Leaf。
+            if _has_table_nodes(report.ast):
+                return _decision(
+                    StructureChunkStrategy,
+                    degrade_reason="table_structure_fallback",
+                    scope="表格行级切分",
+                )
+
             # Phase 3：Semantic 语义切分（无结构长文档，基于 embedding 主题边界）
             if ENABLE_SEMANTIC_CHUNKING and count_tokens(report.ast.raw_text) >= SEMANTIC_CHUNK_MIN_TOKENS:
                 logger.info("[Router] 无结构长文档 → Semantic 语义切分")
@@ -1699,6 +1806,12 @@ class ChunkStrategyRouter:
             )
 
         cls = STRUCTURE_STRATEGIES.get(doc_type, RecursiveChunkStrategy)
+        if cls is RecursiveChunkStrategy and _has_table_nodes(report.ast):
+            return _decision(
+                StructureChunkStrategy,
+                degrade_reason="table_structure_fallback",
+                scope="表格行级切分",
+            )
         if cls is RecursiveChunkStrategy:
             return _decision(
                 cls,
@@ -1750,6 +1863,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                 or (n.type == "table" and any(
                     str(cell).strip()
                     for row in (n.rows or []) for cell in row
+                    if cell is not None
                 ))
             )
         ]
@@ -1770,6 +1884,74 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             if (getattr(c, "page_content", None)
                 and getattr(c, "metadata", {}).get("granularity") == "leaf")
         ]
+        split_entries: dict[
+            tuple[bool, str], list[tuple[int, int, str]]
+        ] = {}
+        for chunk in chunks:
+            metadata = getattr(chunk, "metadata", {}) or {}
+            group_id = metadata.get("split_group_id")
+            part_index = metadata.get("split_part")
+            part_total = metadata.get("split_total")
+            if (
+                metadata.get("granularity") != "leaf"
+                or not group_id
+                or not isinstance(part_index, int)
+                or not isinstance(part_total, int)
+                or part_total <= 1
+                or not getattr(chunk, "page_content", None)
+            ):
+                continue
+            is_masked = bool(normalize_pii and metadata.get("pii_masked"))
+            split_entries.setdefault((is_masked, str(group_id)), []).append(
+                (part_index, part_total, chunk.page_content)
+            )
+        split_bodies: dict[bool, list[str]] = {False: [], True: []}
+        for (is_masked, _), entries in split_entries.items():
+            totals = {part_total for _, part_total, _ in entries}
+            if len(totals) != 1:
+                continue
+            part_total = next(iter(totals))
+            if (
+                len(entries) != part_total
+                or sorted(index for index, _, _ in entries)
+                != list(range(part_total))
+            ):
+                continue
+            combined = "".join(
+                content for _, _, content in sorted(entries)
+            )
+            split_bodies[is_masked].append(
+                _normalize(combined, mask_pii=is_masked)
+            )
+        row_leaf_bodies: dict[tuple[str, int, str, bool], list[str]] = {}
+        for chunk in chunks:
+            metadata = getattr(chunk, "metadata", {}) or {}
+            if (
+                metadata.get("granularity") != "leaf"
+                or metadata.get("chunk_type") not in (
+                    CHUNK_TYPE_TABLE_ROW, CHUNK_TYPE_TABLE_HEADER,
+                )
+                or metadata.get("table_id") is None
+                or metadata.get("row_index") is None
+                or not getattr(chunk, "page_content", None)
+            ):
+                continue
+            row_key = (
+                str(metadata["table_id"]), int(metadata["row_index"]),
+                str(metadata.get("chunk_type")),
+                bool(normalize_pii and metadata.get("pii_masked")),
+            )
+            row_leaf_bodies.setdefault(row_key, []).append(
+                _normalize(
+                    chunk.page_content,
+                    mask_pii=row_key[3],
+                )
+            )
+        row_bodies = [
+            ("".join(parts), key[3])
+            for key, parts in row_leaf_bodies.items()
+        ]
+
         max_audit_nodes = max(1, int(max_audit_nodes))
         sampled = len(source_leaves) > max_audit_nodes or len(bodies) > max_audit_nodes
         if len(source_leaves) > max_audit_nodes:
@@ -1777,6 +1959,40 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             leaves = source_leaves[::stride][:max_audit_nodes]
         else:
             leaves = source_leaves
+
+        def _suffix_prefix_overlap(left: str, right: str) -> int:
+            """返回左串后缀与右串前缀的最长重合长度。"""
+            limit = min(len(left), len(right))
+            if not limit:
+                return 0
+            pattern = right[:limit]
+            sequence = pattern + "\0" + left[-limit:]
+            prefix = [0] * len(sequence)
+            for index in range(1, len(sequence)):
+                matched = prefix[index - 1]
+                while matched and sequence[index] != sequence[matched]:
+                    matched = prefix[matched - 1]
+                if sequence[index] == sequence[matched]:
+                    matched += 1
+                prefix[index] = matched
+            return min(prefix[-1], limit)
+
+        boundary_bodies: dict[bool, list[str]] = {False: [], True: []}
+        max_body_length = max((len(body) for body, _ in bodies), default=120)
+        previous_masked: bool | None = None
+        stitched_tail = ""
+        for body, is_masked in bodies:
+            if is_masked != previous_masked:
+                stitched_tail = body
+                previous_masked = is_masked
+                continue
+            overlap = _suffix_prefix_overlap(stitched_tail, body)
+            boundary_bodies[is_masked].append(
+                stitched_tail[-120:] + body[overlap:overlap + 120]
+            )
+            stitched_tail = (
+                stitched_tail + body[overlap:]
+            )[-max_body_length:]
 
         def _covered_text(text: str) -> bool:
             raw_probes = _windows(_normalize(text))
@@ -1786,13 +2002,21 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             )
             if not raw_probes:
                 return False
-            raw_covered = all(
-                any(probe in body for body, is_masked in bodies if not is_masked)
-                for probe in raw_probes
-            )
-            masked_covered = bool(masked_probes) and all(
-                any(probe in body for body, is_masked in bodies if is_masked)
-                for probe in masked_probes
+
+            def _all_probes_covered(probes: list[str], masked: bool) -> bool:
+                candidates = [
+                    body for body, is_masked in bodies if is_masked == masked
+                ]
+                candidates.extend(boundary_bodies[masked])
+                candidates.extend(split_bodies[masked])
+                return all(
+                    any(probe in body for body in candidates)
+                    for probe in probes
+                )
+
+            raw_covered = _all_probes_covered(raw_probes, masked=False)
+            masked_covered = bool(masked_probes) and _all_probes_covered(
+                masked_probes, masked=True,
             )
             return raw_covered or masked_covered
 
@@ -1822,7 +2046,10 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             source_row_counts: dict[tuple[str, ...], int] = {}
             row_cells_by_signature: dict[tuple[str, ...], list[str]] = {}
             for row in rows:
-                cells = [str(cell) for cell in row if str(cell).strip()]
+                cells = [
+                    str(cell) for cell in row
+                    if cell is not None and str(cell).strip()
+                ]
                 if not cells:
                     continue
                 signature = tuple(_normalize(cell) for cell in cells)
@@ -1835,19 +2062,40 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             missing_cells = 0
             for signature, required_count in source_row_counts.items():
                 raw_cells = row_cells_by_signature[signature]
-                matching_bodies = sum(
-                    1 for body, body_is_masked in bodies
+                # 每个带源行身份的 Leaf 只计一次；不能把同一个 Leaf 同时
+                # 从原始 bodies 与拼接行 bodies 加入两次，掩盖重复源行缺失。
+                matching_rows = [
+                    (body, body_is_masked)
+                    for body, body_is_masked in row_bodies
                     if all(
                         _normalize(cell, mask_pii=body_is_masked) in body
                         for cell in raw_cells
                     )
-                )
+                ]
+                if matching_rows:
+                    matching_bodies = len(matching_rows)
+                else:
+                    # 无源行身份的 fallback 表格（例如仅有一条数据的 Sheet）
+                    # 仍按实际输出 Leaf 检查，不能被其他表格的行块遮蔽。
+                    table_bodies = [
+                        body for body, body_is_masked in bodies
+                        if not body_is_masked
+                    ]
+                    matching_bodies = sum(
+                        1 for body in table_bodies
+                        if all(
+                            _normalize(cell) in body for cell in raw_cells
+                        )
+                    )
                 if matching_bodies < required_count:
                     missing_rows += required_count - matching_bodies
                 for cell in raw_cells:
                     if not any(
                         _normalize(cell, mask_pii=body_is_masked) in body
                         for body, body_is_masked in bodies
+                    ) and not any(
+                        _normalize(cell, mask_pii=body_is_masked) in body
+                        for body, body_is_masked in row_bodies
                     ):
                         missing_cells += 1
 

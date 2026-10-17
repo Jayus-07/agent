@@ -12,6 +12,14 @@ from __future__ import annotations
 from typing import List, Tuple
 
 
+def _cell_text(value, *, strip: bool = False) -> str:
+    """将解析器空单元格映射为空串；保留非空单元格原始字符串。"""
+    if value is None:
+        return ""
+    text = str(value)
+    return text.strip() if strip else text
+
+
 def table_to_natural_language(
     rows: List[List[str]],
     *,
@@ -38,7 +46,10 @@ def table_to_natural_language(
         return ""
 
     # 过滤空行
-    rows = [r for r in rows if r and any(cell.strip() for cell in r)]
+    rows = [
+        row for row in rows
+        if row and any(_cell_text(cell, strip=True) for cell in row)
+    ]
     if not rows:
         return ""
 
@@ -51,7 +62,10 @@ def table_to_natural_language(
     else:
         header = rows[0]
         data_rows = rows[1:]
-        col_names = [str(c).strip() or f"列{i+1}" for i, c in enumerate(header)]
+        col_names = [
+            _cell_text(cell, strip=True) or f"列{i + 1}"
+            for i, cell in enumerate(header)
+        ]
 
     # 构建 NL 描述
     parts: list[str] = []
@@ -81,7 +95,7 @@ def table_to_natural_language(
         # 把行数据拼成 "列1=值1，列2=值2"
         kv_parts: list[str] = []
         for col_name, cell in zip(col_names, row):
-            cell_str = str(cell).strip()
+            cell_str = _cell_text(cell, strip=True)
             if not cell_str:
                 continue
             # 跳过"序号"列
@@ -102,7 +116,7 @@ def table_to_csv(rows: List[List[str]]) -> str:
 
     不变，保留向后兼容。
     """
-    return "\n".join(", ".join(str(c) for c in r) for r in rows)
+    return "\n".join(", ".join(_cell_text(c) for c in r) for r in rows)
 
 
 def make_table_chunk_text(
@@ -156,7 +170,10 @@ def detect_multi_level_header(
     header_rows: List[List[str]] = []
     for i, row in enumerate(rows[:max_header_rows + 1]):
         # 空行跳过
-        meaningful_cells = [str(c).strip() for c in row if str(c).strip()]
+        meaningful_cells = [
+            _cell_text(cell, strip=True)
+            for cell in row if _cell_text(cell, strip=True)
+        ]
         if not meaningful_cells:
             continue
         numeric_count = sum(1 for c in meaningful_cells if _is_numeric_cell(c))
@@ -198,7 +215,7 @@ def flatten_multi_level_header(
     for col_idx in range(ncols):
         parts: List[str] = []
         for row_idx in range(len(padded)):
-            val = str(padded[row_idx][col_idx]).strip()
+            val = _cell_text(padded[row_idx][col_idx], strip=True)
             if not val:
                 continue
             if parts and parts[-1] == val:
@@ -217,7 +234,10 @@ def normalize_table_rows(rows: List[List[str]]) -> Tuple[List[str], List[List[st
         return [], []
     header_count, header_rows, data_rows = detect_multi_level_header(rows)
     if header_count <= 1:
-        header = [str(c).strip() or f"列{i + 1}" for i, c in enumerate(rows[0])]
+        header = [
+            _cell_text(cell, strip=True) or f"列{i + 1}"
+            for i, cell in enumerate(rows[0])
+        ]
         return header, rows[1:]
     flat_header = flatten_multi_level_header(header_rows)
     return flat_header, data_rows

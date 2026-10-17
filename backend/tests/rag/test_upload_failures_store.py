@@ -69,6 +69,23 @@ def test_failed_counts_and_lists(store):
     assert items[0]["department"] == "finance"
 
 
+def test_celery_task_id_update_preserves_run_status(store):
+    store.create_run(upload_id="u-task-id", generation="g-task-id",
+                     file_path="/d/task-id.pdf")
+
+    queued = store.set_celery_task_id("u-task-id", "celery-task-1")
+
+    assert queued["celery_task_id"] == "celery-task-1"
+    assert queued["status"] == "claimed"
+
+    store.mark_status("u-task-id", "failed", error="parse failed")
+    updated = store.set_celery_task_id("u-task-id", "celery-task-2")
+
+    assert updated["celery_task_id"] == "celery-task-2"
+    assert updated["status"] == "failed"
+    assert store.set_celery_task_id("missing-upload", "celery-task-3") is None
+
+
 def test_republish_supersedes_failure(store):
     """同文件重传成功（更新的 published）→ 失败自动消数。"""
     _add(store, "u1", "/d/a.pdf", "failed", created_at="2026-10-01 10:00:00", error="x")

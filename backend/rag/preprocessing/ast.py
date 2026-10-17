@@ -60,6 +60,11 @@ class DocumentAST:
     table_cells_total: int = 0
     table_cells_total_known: bool = True
     table_truncation_reason: str = ""
+    # PDF 解析完整性：修复过结构的 PDF 若大量页无可检索内容，质量门禁拒绝部分入库。
+    pdf_page_count: int = 0
+    pdf_pages_with_content: int = 0
+    pdf_skipped_pages: int = 0
+    pdf_repaired: bool = False
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:
