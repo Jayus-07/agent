@@ -4,7 +4,7 @@
 任务状态：IN_PROGRESS（#84 收口待合并；P2 价格治理/评测隔离/累计费用上界仍受外部条件阻断；#52/#66/#69 未合并）
 主控分支：codex/pr-integration-20261016
 主控 Worktree：C:\Users\wh\.codex\worktrees\pr-integration-20261016\agent
-当前基线：origin/main = 0bc9038673632f46b7c2fdb10e714259e9e836b6（#82 Merge SHA）；主控任务树已合入该基线
+当前基线：origin/main = ad553d00cd63d18bbf9bef20506989c89fd8dff5（#84 Merge SHA）；主控任务树已合入 #82 基线
 
 ## G0 统一基线
 
@@ -38,7 +38,7 @@
 | #81 | MERGED；PR HEAD `f1ca05cb95d13aec9bd837fab3bffb703bc81a6f`；Merge SHA `89315c9d32b383d31dd390d7a90dbe6b9c4eb75b` | #77 价格治理、评测隔离与 CI 路径过滤的 Follow-up；定向 84 passed、隔离 PostgreSQL 验证、无 Provider 调用 | MERGED |
 | #83 | MERGED；PR HEAD `64a22ab`；Merge SHA `e354f3b3a6517f70c70856627661118f4da6c933` | #73 模型健康 Follow-up（探测结果与运行时语义对齐）；后端 43、前端 60 定向通过 | MERGED |
 | #82 | MERGED；PR HEAD `53edac1`；Merge SHA `0bc9038673632f46b7c2fdb10e714259e9e836b6` | #79 价格巡检 Follow-up：告警恢复、任务取消/超时状态、高档价格门禁；隔离 PG 4 passed、价格档位/任务中断 6 passed、管理端 3 passed；真实 8-case SKIPPED | MERGED |
-| #84 | OPEN；HEAD `29ae19ddcecc5c148002cde954f3cd4b0046eb09`；base `0bc9038`；mergeState CLEAN | 合入最新 main、迁移重号修复、`sk` 标签式脱敏、catalog 断言修复；隔离 PG travel_v2 176 passed、前端 travel 62 passed、tsc PASS；真实 8-case SKIPPED | 收口（待合并） |
+| #84 | MERGED；PR HEAD `29ae19ddcecc5c148002cde954f3cd4b0046eb09`；Merge SHA `ad553d00cd63d18bbf9bef20506989c89fd8dff5` | 合入最新 main、迁移重号修复（100→101）、`sk` 标签式脱敏、catalog 断言修复；PR 与 main-push 的 Detect/Secret Scan/preflight/RAG gate 均 PASS；隔离 PG travel_v2 176 passed、前端 travel 62 passed、tsc PASS；真实 8-case SKIPPED | MERGED |
 
 原 PR branch protection 核实为 Required Checks 为空、required approvals 为 0；此次未绕过保护。Skipped job 不计为通过。
 
@@ -54,7 +54,8 @@
 - #80 普通 merge：e42975d6a2992f22bb4a95b9daf806dc3e67d2bf。
 - #81 普通 merge：89315c9d32b383d31dd390d7a90dbe6b9c4eb75b。
 - #83 普通 merge：e354f3b3a6517f70c70856627661118f4da6c933。
-- #82 普通 merge：0bc9038673632f46b7c2fdb10e714259e9e836b6（当前 origin/main）。
+- #82 普通 merge：0bc9038673632f46b7c2fdb10e714259e9e836b6。
+- #84 普通 merge：ad553d00cd63d18bbf9bef20506989c89fd8dff5（当前 origin/main）；main tree `c894bac` 与 PR HEAD tree 完全相同。
 - #72 与 #70 原始合并历史保留；后续修复均使用 Follow-up，没有改写旧历史。
 - #50/#60 已关闭，未将过期 Draft 合入 main。
 
@@ -356,6 +357,9 @@
 - 真实回归发现并修复（提交 `29ae19d`）：在隔离库跑全 `backend/tests/travel_v2` 时 `test_postgres_catalog` 仍按旧表集合断言，未包含本 PR 新增的 `trip_conversations`；CI 因 PostgreSQL 依赖 skip，此前未暴露。已补表名与 `uq/fk/chk_travel_v2_trip_conversation*` 三个约束断言。
 - 实际验证（隔离容器 `travel84-isolated-pg`，仅 `127.0.0.1` 动态端口，未连共享库）：`init_db.py` 全链 rc=0 且 `101_travel_v2_trip_conversations.sql` 正常应用；`backend/tests/travel_v2` **176 passed**；前端 5 个 travel 测试文件 **62 passed**；`npx tsc --noEmit` PASS；Python AST 解析与 `git diff --check` PASS。
 - 未执行：真实 Provider/8-case 评测仍 SKIPPED；本轮 0 次模型调用、0 费用。
+- 合并门禁：`29ae19d` 的 Detect、Secret Scan、免费 preflight、RAG Smoke gate 全部 SUCCESS，8-case 真实评测 SKIPPED（不计通过）；Review 线程 0 未解决（`add3fad` 的 P1 已回复证据并 resolve）。自动 Review 对 `29ae19d` 在等待约 25 分钟并显式 `@codex review` 后仍未返回，按“必需检查全绿 + 0 未解决线程 + CLEAN”合并，未假设其结论为通过。
+- 合并结果：PR #84 普通 merge，Merge SHA `ad553d00cd63d18bbf9bef20506989c89fd8dff5`（2026-10-17T08:27:10Z）；`origin/main` 现为该 SHA，main tree `c894bac02923bbcfe4854e971507b75d058c77a9` 与 PR HEAD tree 完全相同。
+- 合并后验收：main-push run `39017414538` 的 Detect 判定 `relevant=false`，付费 preflight 与 8-case 均 skipped，gate PASS（无 Provider 调用、无费用）；`39017414552` secret-scan PASS。在精确 Merge SHA `ad553d0` 的独立 detached 工作树重跑 `backend/tests/travel_v2`：**176 passed**。
 
 ## 2026-10-17 P2 只读核查：正式价格审批、evaluation-only 与累计预算
 
@@ -365,10 +369,10 @@
 4. 累计预算：`backend/infra/llm/budget.py` 只有请求级上限（calls/tokens/cost/retries/fallbacks）；`backend/infra/llm/quota.py` 有租户/用户日/月配额（隔离库策略行：platform default 144/2160 CNY、tenant test 72/720 CNY）；`backend/evaluation/run_guards.py` 每 10 个 case 查一次预算并熔断，但**查询失败放行**。三者都不是「本轮授权 ¥20」的运行级金额硬上限，默认配额远高于 ¥20，因此无法用现有机制证明 8-case 评测的费用上界 ≤ ¥20。
 5. 结论：在 2/3/4 解决且存在已批准 CNY 价格版本之前，真实 8-case、#52 质量评测与 #69 付费 T3 仍为 BLOCKED；官方页面价格不能替代审批行，也不得据此宣称 MODEL_QUALITY_PASS。
 
-## 下一步（按依赖顺序）
+## 下一步（按依赖顺序，2026-10-17 更新）
 
-1. #84 当前 HEAD `29ae19d` 的免费 preflight 完成后，回复并解决 `add3fad` 的 P1 线程，按门禁普通合并并记录 Merge SHA。
-2. P2：先修 `import_version` 币种写死与评测成本口径（独立 Follow-up PR，含迁移/兼容/测试），再谈运行级 ¥20 硬上限与 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 只读副本。
-3. P3：#66/#52 按顺序集成（#66 的 Worker 预算仍依赖 #52），#69 真实授权 RAG/SQL/取消/Trace/费用 T3。
-4. P4：097/098/099 仅在隔离库验证；目标库应用状态由授权发布流程确认。
+1. 已完成：#84 合并 `ad553d0`，main 定向复跑 176 passed。
+2. P2：`import_version` 币种写死（缺陷 1）与评测成本口径（缺陷 2）需独立 Follow-up PR 修复并配测试；运行级 ¥20 硬上限与 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 只读副本仍待外部条件。
+3. P3：#52/#66/#69 仍是 Draft 且与 `ad553d0` 冲突（#52 `CONFLICTING`、#66/#69 待重算）；先各自合入最新 main 并复跑定向集，再按 #66 → #52 顺序集成，#69 补真实授权 RAG/SQL/取消/Trace/费用 T3。
+4. P4：097/098/099 仅在隔离库验证；目标库应用状态由授权发布流程确认（本轮隔离库已验证 097/098/099/100/101 全链 rc=0）。
 5. P5：最终以实际最新 main SHA 与真实验证证据收口 MAIN-01～MAIN-34。
