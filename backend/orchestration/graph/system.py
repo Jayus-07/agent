@@ -89,13 +89,18 @@ class MultiAgentSystem:
         tenant_id: str = "",
         idempotency_key: str = "",
         roles: tuple[str, ...] = (),
+        product_id: str = "internal",
+        product_source: str = "internal_call",
+        persist_memory: bool = True,
     ) -> str:
         """兼容出口：只取回答文本。需要 sources 的调用方请用 ask_result。"""
         return self.ask_result(
             question, session_id, kb_id=kb_id, user_id=user_id,
             department=department, permissions=permissions, model=model,
             domain_hint=domain_hint, tenant_id=tenant_id,
-            idempotency_key=idempotency_key, roles=roles).answer
+            idempotency_key=idempotency_key, roles=roles,
+            product_id=product_id, product_source=product_source,
+            persist_memory=persist_memory).answer
 
     def ask_result(
         self,
@@ -110,6 +115,9 @@ class MultiAgentSystem:
         tenant_id: str = "",
         idempotency_key: str = "",
         roles: tuple[str, ...] = (),
+        product_id: str = "internal",
+        product_source: str = "internal_call",
+        persist_memory: bool = True,
     ) -> AgentOutcome:
         """处理用户问题，返回请求级结果（E3）：answer + sources 随返回值带回。
 
@@ -133,6 +141,9 @@ class MultiAgentSystem:
             tenant_id=tenant_id,
             idempotency_key=idempotency_key,
             roles=roles,
+            product_id=product_id,
+            product_source=product_source,
+            persist_memory=persist_memory,
         ))
 
         answer = ""
@@ -155,7 +166,7 @@ class MultiAgentSystem:
         if error_message:
             if "用户中止" in error_message:
                 return AgentOutcome(answer=answer, sources=sources)
-            # 对齐旧同步实现的错误话术（error message 形如 "执行失败: ..."）
+            # 公开终态只返回通用错误说明，不把内部异常文本泄露给用户。
             return AgentOutcome(
                 answer=f"## 系统错误\n\n{error_message}\n\n请稍后重试。",
                 sources=sources)
@@ -179,6 +190,9 @@ class MultiAgentSystem:
         tenant_id: str = "",
         idempotency_key: str = "",
         roles: tuple[str, ...] = (),
+        product_id: str = "internal",
+        product_source: str = "internal_call",
+        persist_memory: bool = True,
     ) -> Generator[dict, None, None]:
         """SSE 流式处理。委托 GraphRunner 统一执行核心，过滤内部事件。
 
@@ -198,7 +212,10 @@ class MultiAgentSystem:
                 domain_hint=domain_hint,
                 tenant_id=tenant_id,
                 idempotency_key=idempotency_key,
-                roles=roles):
+                roles=roles,
+                product_id=product_id,
+                product_source=product_source,
+                persist_memory=persist_memory):
             if evt.get("event") == _ANSWER_EVENT:
                 continue  # 内部事件（ask 用），不属于 SSE 协议
             yield evt

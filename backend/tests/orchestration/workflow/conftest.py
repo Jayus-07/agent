@@ -106,12 +106,17 @@ def fresh_tracer():
 
     saved = {
         k: getattr(t.trace_collector, k)
-        for k in ("_thread_current", "_span_seq", "_listeners", "_parents")
+        for k in ("_span_seq", "_listeners", "_parents")
     }
+    saved_thread_current = getattr(
+        t.trace_collector._thread_current, "record", None
+    )
+    saved_active_records = dict(t.trace_collector._active_records)
     saved_var = _current_trace_var.get()
     t.trace_collector.clear()
     t.trace_collector._listeners = []
-    _current_trace_var.set(None)
+    t.trace_collector.bind(None)
+    t.trace_collector._active_records.clear()
 
     try:
         yield t.trace_collector
@@ -119,6 +124,8 @@ def fresh_tracer():
         # 恢复
         for k, v in saved.items():
             setattr(t.trace_collector, k, v)
+        t.trace_collector._active_records = saved_active_records
+        t.trace_collector.bind(saved_thread_current)
         _current_trace_var.set(saved_var)
 
 
@@ -143,9 +150,9 @@ def patched_trace_collector(monkeypatch, fresh_tracer):
     fake_record.id = "fake_trace_001"
     collector.start = MagicMock(return_value=fake_record)
     collector.finish = MagicMock()
-    # executor 先查 _current_trace_var 再查 _thread_current；裸 MagicMock 属性为 truthy
-    # 会绕过 start()，须置 None 让其走新建 trace 分支
-    collector._thread_current = None
+    # Executor 读取当前上下文；普通用例返回 None，显式绑定测试保留父 Trace。
+    from backend.observability.tracer import _current_trace_var
+    collector.current = MagicMock(side_effect=_current_trace_var.get)
 
     # executor 内部用 from backend.observability.tracer import trace_collector
     # patch source 模块路径

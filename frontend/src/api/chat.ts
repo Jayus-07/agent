@@ -7,6 +7,8 @@ import { bearerHeaders, handleAuthFailure, tryRefreshOnce } from "@/lib/auth";
 import { parseSSEStream } from "@/lib/sse-parser";
 import type { SSEStreamEvent as TypedSSEStreamEvent } from "@/lib/types";
 
+export type ChatProductRoute = "agent" | "customer-service";
+
 export interface ChatRequest {
   question: string;
   session_id: string;
@@ -14,8 +16,7 @@ export interface ChatRequest {
   /** @deprecated 授权收口（2026-09-23）：部门是账号组织属性，授权只认
    *  JWT dept claim（网关注入），body 部门后端不消费——仅保留字段兼容旧客户端 */
   department?: string;
-  /** 入口域提示：customer_service = 客服窗口锁域（每条消息直接进客服管线，
-   *  不重新判域/不受灰度影响）；不带 = 全局入口按需路由 */
+  /** @deprecated 产品身份由服务端注册路由决定；此字段不授予任何能力。 */
   domain_hint?: string;
   /** 当前逻辑发送操作的幂等键；重试时保持不变。 */
   idempotency_key?: string;
@@ -40,15 +41,16 @@ function seqOf(evt: SSEStreamEvent): number | null {
 }
 
 /**
- * POST /chat/stream — 流式对话（F2 可恢复）
+ * POST /chat/{product}/stream — 产品专属流式对话（F2 可恢复）
  *
  * 传输 at-least-once：断流（非 done/error 的意外终止）自动调
- * /chat/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
+ * /chat/{product}/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
  * 404 STREAM_NOT_RESUMABLE（进程重启/超出缓冲窗口）如实上抛，由用户重发。
  */
 export async function* streamChat(
   req: ChatRequest,
   signal?: AbortSignal,
+  product?: ChatProductRoute,
 ): AsyncGenerator<SSEStreamEvent> {
   const doFetch = (path: string, body: string) =>
     fetch(`${process.env.NEXT_PUBLIC_API_URL || ""}${path}`, {
@@ -69,6 +71,7 @@ export async function* streamChat(
   let afterSeq = 0;
   let sawTerminal = false;
   // 流式内容本体只发一次：重试仅走 resume（重放+续播），绝不重发提问
+  const routePrefix = product ? `/api/chat/${product}` : "/api/chat";
   const askBody = JSON.stringify(req);
   const resumeBodyFor = () => JSON.stringify({
     request_id: req.request_id,
@@ -76,7 +79,9 @@ export async function* streamChat(
   });
 
   while (true) {
-    const path = attempt === 0 ? "/api/chat/stream" : "/api/chat/stream/resume";
+    const path = attempt === 0
+      ? `${routePrefix}/stream`
+      : `${routePrefix}/stream/resume`;
     const body = attempt === 0 ? askBody : resumeBodyFor();
     let res = await doFetch(path, body);
 
@@ -129,8 +134,12 @@ export async function* streamChat(
 /**
  * POST /chat/abort — 中止当前对话
  */
-export async function abortChat(sessionId: string, requestId: string): Promise<void> {
-  await requestSilent("/api/chat/abort", {
+export async function abortChat(
+  sessionId: string,
+  requestId: string,
+  product: ChatProductRoute = "agent",
+): Promise<void> {
+  await requestSilent(`/api/chat/${product}/abort`, {
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, request_id: requestId }),
   });

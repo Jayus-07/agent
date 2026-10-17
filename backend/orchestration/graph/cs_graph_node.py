@@ -201,11 +201,14 @@ def _refusal_clarify(final_state: dict, main_state: dict) -> dict | None:
             return None
         session_id = main_state.get("session_id", "")
         question = main_state.get("question", "")
-        if not clarify_allowed(session_id, question):
+        clarify_session_id = (
+            main_state.get("product_session_id") or session_id
+        )
+        if not clarify_allowed(clarify_session_id, question):
             return None
         marker = build_refusal_clarify(question, "customer_service")
         mark_clarified(
-            session_id, question,
+            clarify_session_id, question,
             options=marker.get("options"),
             source=marker.get("source", ""),
         )

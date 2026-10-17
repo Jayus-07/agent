@@ -11,13 +11,15 @@ from backend.app.api.routes import chat as chat_route
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.add_api_route("/chat/messages", chat_route.save_messages, methods=["POST"])
+    app.add_api_route(
+        "/chat/agent/messages", chat_route.save_messages, methods=["POST"],
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 
 def test_chat_message_persistence_rejects_guest():
     response = _client().post(
-        "/chat/messages",
+        "/chat/agent/messages",
         json={"session_id": "s1", "messages": [{"role": "user", "content": "hi"}]},
     )
     assert response.status_code == 401
@@ -42,7 +44,7 @@ def test_chat_message_persistence_uses_trusted_tenant_and_user(monkeypatch):
     )
 
     response = _client().post(
-        "/chat/messages",
+        "/chat/agent/messages",
         headers={
             "X-User-Id": "trusted-user",
             "X-Tenant-Id": "tenant-a",
@@ -58,8 +60,8 @@ def test_chat_message_persistence_uses_trusted_tenant_and_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"saved": 1}
     assert calls == [{
-        "session_id": "s1",
+        "session_id": "agent::s1",
         "messages": [{"role": "user", "content": "hi"}],
-        "user_id": "trusted-user",
+        "user_id": "agent::trusted-user",
         "tenant_id": "tenant-a",
     }]

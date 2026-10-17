@@ -130,21 +130,24 @@ def _routing_scope(state: Mapping[str, Any] | None,
     if isinstance(request_context, Mapping):
         auth = {
             key: request_context.get(key)
-            for key in ("roles", "scopes", "permissions", "data_scope", "department")
+            for key in ("roles", "scopes", "permissions", "data_scope", "department", "product_id")
         }
     else:
         auth = {
             key: getattr(request_context, key, None)
-            for key in ("roles", "scopes", "permissions", "data_scope", "department")
+            for key in ("roles", "scopes", "permissions", "data_scope", "department", "product_id")
         }
     guard = state.get("guard_result")
     if not isinstance(guard, Mapping):
         guard = {}
     return {
+        "product_id": str(state.get("product_id") or auth.get("product_id") or "internal"),
         "tenant_id": str(state.get("tenant_id") or ""),
         "user_id": str(state.get("user_id") or ""),
         "department": str(state.get("department") or auth.get("department") or ""),
-        "session_id": str(state.get("session_id") or ""),
+        "session_id": str(
+            state.get("product_session_id") or state.get("session_id") or ""
+        ),
         "routing_context": {
             **(dict(state.get("routing_context")) if isinstance(state.get("routing_context"), Mapping) else {}),
             **{
@@ -796,6 +799,12 @@ class RoutingEngine:
                 roles = get_tool_roles()
             except Exception:
                 roles = ()
+        product_id = (
+            request_context.get("product_id")
+            if isinstance(request_context, Mapping)
+            else getattr(request_context, "product_id", None)
+        ) or state.get("product_id") or "internal"
+        result["product_id"] = str(product_id)
         result["_verified_roles"] = tuple(str(value) for value in roles)
         result["_verified_scopes"] = tuple(str(value) for value in scopes)
         return result

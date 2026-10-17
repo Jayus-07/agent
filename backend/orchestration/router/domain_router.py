@@ -74,6 +74,12 @@ class DomainRouter:
         """
 
         state = state or {}
+        request_context = state.get("request_context")
+        product_id = (
+            request_context.get("product_id")
+            if isinstance(request_context, Mapping)
+            else getattr(request_context, "product_id", None)
+        ) or state.get("product_id") or "internal"
         update = prefilter_update
         if update is None:
             candidate = state.get("_domain_prefilter_update")
@@ -83,10 +89,20 @@ class DomainRouter:
         if isinstance(update, Mapping):
             decision = self._from_prefilter(update)
             if decision is not None:
+                if product_id == "public":
+                    return self._public_decision()
+                if product_id == "agent" and self._main_exclusive_domain(
+                    decision.get("domain"),
+                ):
+                    return self._main_decision()
                 return decision
 
         domain_hint = str(state.get("domain_hint") or "").strip().lower()
-        if domain_hint in {"customer_service", "cs"}:
+        if product_id == "public":
+            return self._public_decision()
+        if product_id == "customer_service" or (
+            product_id == "internal" and domain_hint in {"customer_service", "cs"}
+        ):
             return {
                 "domain": "customer_service",
                 "subflow": None,
@@ -101,7 +117,33 @@ class DomainRouter:
             query,
             context if isinstance(context, Mapping) else None,
         )
+        if product_id == "agent" and self._main_exclusive_domain(
+            prediction.domain,
+        ):
+            return self._main_decision()
         return self.from_prediction(prediction)
+
+    @staticmethod
+    def _main_exclusive_domain(domain: Any) -> bool:
+        return str(domain or "").strip().lower() in {
+            "travel", "customer_service", "selection_funnel", "booking", "commerce",
+        }
+
+    @staticmethod
+    def _main_decision() -> DomainDecision:
+        return {
+            "domain": "general", "subflow": None, "confidence": 1.0,
+            "source": "product_scope", "score_type": "trusted_product_route",
+            "reasoning": "主助手不执行专属旅游、客服或选品域图",
+        }
+
+    @staticmethod
+    def _public_decision() -> DomainDecision:
+        return {
+            "domain": "general", "subflow": None, "confidence": 1.0,
+            "source": "product_scope", "score_type": "public_only",
+            "reasoning": "公共入口仅支持一般对话",
+        }
 
     @staticmethod
     def from_prediction(prediction: Any) -> DomainDecision:

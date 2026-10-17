@@ -40,12 +40,18 @@ def client(monkeypatch):
     import backend.app.api.middleware.auth as auth_mw
     import backend.app.api.routes.chat as chat_mod
     from backend.app.api import stream_resume as sr_mod
+    from backend.infra.llm.rate_limiter import require_rate_limit
+    from fastapi import FastAPI
 
     sr_mod.reset_stream_registry()
     agent = _SlowFakeAgent()
     monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: agent)
     monkeypatch.setattr(auth_mw, "API_KEY", "test")
-    from backend.app.server import app
+    # 该契约只测试聊天路由；避免全局 app 导入反馈路由并触碰默认 PostgreSQL。
+    app = FastAPI()
+    app.middleware("http")(auth_mw.api_key_middleware)
+    app.include_router(chat_mod.router)
+    app.dependency_overrides[require_rate_limit] = lambda: None
     with TestClient(app) as c:
         c.fake_agent = agent
         yield c
@@ -69,7 +75,11 @@ def _parse_frames(body: str) -> list[dict]:
     return frames
 
 
-HDR = {"X-API-Key": "test"}
+HDR = {
+    "X-API-Key": "test",
+    "X-User-Id": "test-user",
+    "X-Auth-Type": "jwt",
+}
 REQ = {"question": "断线恢复", "session_id": "sse-resume", "request_id": "sr-1"}
 
 
@@ -112,6 +122,7 @@ def test_duplicate_initial_request_does_not_replace_or_rerun_stream(monkeypatch)
 
     from backend.app.api import stream_resume as sr_mod
     import backend.app.api.routes.chat as chat_mod
+    from backend.core.product_context import PUBLIC_PRODUCT, namespaced_stream_id
     from backend.infra.llm.rate_limiter import require_rate_limit
 
     class CountingAgent:
@@ -123,9 +134,12 @@ def test_duplicate_initial_request_does_not_replace_or_rerun_stream(monkeypatch)
 
     sr_mod.reset_stream_registry()
     registry = sr_mod.get_stream_registry()
+    scoped_stream_id = namespaced_stream_id(
+        PUBLIC_PRODUCT, "duplicate-route-test", user_id="anonymous", tenant_id="",
+    )
     original = registry.create(
-        stream_id="duplicate-route-test", session_id="session",
-        user_id="default", tenant_id="",
+        stream_id=scoped_stream_id, session_id="session",
+        user_id="anonymous", tenant_id="",
     )
     original.append({"event": "meta", "data": {"request_id": "duplicate-route-test"}})
     original.append({"event": "done", "data": {}})
@@ -150,7 +164,7 @@ def test_duplicate_initial_request_does_not_replace_or_rerun_stream(monkeypatch)
     payload = response.json()
     assert payload["code"] == "IDEMPOTENCY_CONFLICT"
     assert payload["details"]["reason"] == "STREAM_ALREADY_EXISTS"
-    assert registry.get("duplicate-route-test") is original
+    assert registry.get(scoped_stream_id) is original
     assert agent.stream_calls == 0
 
 
@@ -209,8 +223,12 @@ def test_resume_invalid_cursor_422(client):
 def test_resume_forbidden_for_other_identity(client, monkeypatch):
     """跨用户游标 403：注册表记录归属另一身份。"""
     from backend.app.api.stream_resume import get_stream_registry
+    from backend.core.product_context import PUBLIC_PRODUCT, namespaced_stream_id
 
-    get_stream_registry().create(stream_id="sr-other", session_id="s",
+    stream_id = namespaced_stream_id(
+        PUBLIC_PRODUCT, "sr-other", user_id="test-user", tenant_id="",
+    )
+    get_stream_registry().create(stream_id=stream_id, session_id="s",
                                  user_id="someone-else", tenant_id="other")
     resp = client.post("/chat/stream/resume",
                        json={"request_id": "sr-other", "after_seq": 0},
@@ -254,9 +272,13 @@ def test_registry_allows_only_one_concurrent_owner_of_stream_id():
 
 def test_resume_gap_returns_not_resumable(client, monkeypatch):
     from backend.app.api.stream_resume import get_stream_registry
+    from backend.core.product_context import PUBLIC_PRODUCT, namespaced_stream_id
 
-    rec = get_stream_registry().create(stream_id="sr-gap", session_id="s",
-                                       user_id="default", tenant_id="")
+    stream_id = namespaced_stream_id(
+        PUBLIC_PRODUCT, "sr-gap", user_id="test-user", tenant_id="",
+    )
+    rec = get_stream_registry().create(stream_id=stream_id, session_id="s",
+                                       user_id="test-user", tenant_id="")
     # 模拟缓冲溢出：大量事件把头部挤出（4096 上限）
     for i in range(5000):
         rec.append({"event": "delta", "data": {"content": str(i)}})
@@ -312,7 +334,7 @@ def test_registry_subscribe_after_no_hole_under_concurrent_append():
     assert got == list(range(3, 101)), f"并集必须连续无洞无重复: {got[:5]}..{got[-5:]}"
 
 
-def test_slow_consumer_union_complete_via_registry(client):
+def test_slow_consumer_union_complete_via_registry():
     """断线续播并集：中途脱离 → resume 续播 → 并集连续无洞、终端恰一次。
 
     注：TestClient 的 ASGI 传输整体缓冲响应体，无法在端点级模拟真·中途断流

@@ -61,6 +61,22 @@ def router_node(state: dict) -> dict:
         message="正在识别问题并选择处理路径",
     )
     query = state.get("question") or state.get("query") or ""
+    request_context = state.get("request_context")
+    product_id = (
+        request_context.get("product_id")
+        if isinstance(request_context, dict)
+        else getattr(request_context, "product_id", None)
+    ) or state.get("product_id") or "internal"
+    if product_id == "public" and query:
+        update = route_update_for_mode(
+            "general_chat",
+            extra={
+                "route_decision": None,
+                "query_understanding": {"intent": "general_chat", "complexity": "chat"},
+                "product_scope": "public_only",
+            },
+        )
+        return _with_router_decisions(state, update, query, existing_override=update)
     if not query:
         update = route_update_for_mode(
             "plan",
@@ -96,11 +112,17 @@ def router_node(state: dict) -> dict:
     # domain_hint 规范化值保留在主函数：L1 追问判定（build_entry_clarify）
     # 也消费它，与拆分前同源。
     domain_hint = (state.get("domain_hint") or "").strip().lower()
-    cs_forced = is_cs_forced(state)
+    cs_forced = (
+        product_id == "customer_service"
+        or (product_id == "internal" and is_cs_forced(state))
+    )
     # AI 助手页锁域（2026-10-08）：/agent 页每条消息带 domain_hint=main，
     # 域请求不在该页执行（隔离），强信号改产 handoff 引导卡。与 cs_forced
     # 互斥（hint 取值不同源）。判定与引导卡构造见 routing/lock_domain.py。
-    main_forced = is_main_forced(state)
+    main_forced = (
+        product_id == "agent"
+        or (product_id == "internal" and is_main_forced(state))
+    )
 
     # ── 路由入口重构（2026-09-22）：Guard → Context Assembler →
     # ContinuationResolver → Coarse Domain Router ──────────────────
@@ -162,7 +184,7 @@ def router_node(state: dict) -> dict:
             return _with_router_decisions(
                 state, update, query, existing_override=update,
             )
-    elif not cs_forced and cs_rule_hits:
+    elif not cs_forced and not main_forced and cs_rule_hits:
         # 全局入口 CS 命中（多域隔离 M2）：guide 模式下产 handoff 引导去
         # 客服抽屉，不再主图执行域图；域锁分支（下方 cs_forced）不受影响。
         cs_update = _try_cs_prefilter(query, state)
@@ -197,7 +219,7 @@ def router_node(state: dict) -> dict:
     # ── CS 兜底（全局入口）：无 CS 规则命中时再走一次完整 CS 预过滤 ──
     # 检测器已无向量通道（3f88b4f 删除），与上面的规则预判同源；保留是为
     # 走通 detect_cached + 灰度判定路径，行为与旧版一致。
-    if not cs_rule_hits and not cs_forced:
+    if not cs_rule_hits and not cs_forced and not main_forced:
         cs_update = _try_cs_prefilter(query, state)
         if cs_update is not None:
             if entry_mode_verdict(query, cs_update) == "guide":
@@ -229,12 +251,15 @@ def router_node(state: dict) -> dict:
         # main 锁域跳过 L1 追问：现有入口追问只有选品类目暗示分支，
         # 引导语义与锁域页冲突（域请求不在该页执行）。
         clarify = None if main_forced else build_entry_clarify(query, domain_hint)
+        clarify_session_id = (
+            state.get("product_session_id") or state.get("session_id", "")
+        )
         if clarify is not None and not clarify_allowed(
-                state.get("session_id", ""), query):
+                clarify_session_id, query):
             clarify = None
         elif clarify is not None:
             mark_clarified(
-                state.get("session_id", ""), query,
+                clarify_session_id, query,
                 options=clarify.get("options"),
                 source=clarify.get("source", ""),
             )
@@ -250,7 +275,7 @@ def router_node(state: dict) -> dict:
 
             set_pending_question(
                 state.get("tenant_id") or "", state.get("user_id") or "",
-                state.get("session_id") or "",
+                clarify_session_id,
                 clarify.get("question") or "",
             )
         except Exception:

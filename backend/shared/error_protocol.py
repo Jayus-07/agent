@@ -180,13 +180,15 @@ def _exception_code(exc: BaseException) -> ErrorCode:
             return ErrorCode.REQUEST_CANCELLED
     except ImportError:
         pass
-    # Provider 传输层超时（httpx.TimeoutException 不是内置 TimeoutError
-    # 子类，不识别会被兜进 INTERNAL_ERROR/500）：连接/读超时统一 TIMEOUT
+    # Provider 传输异常：超时和网络连通性失败分别使用稳定错误码，不能
+    # 被误归类成内部代码错误。
     try:
         import httpx
 
         if isinstance(exc, httpx.TimeoutException):
             return ErrorCode.TIMEOUT
+        if isinstance(exc, httpx.NetworkError):
+            return ErrorCode.UPSTREAM_UNAVAILABLE
     except ImportError:
         pass
     if isinstance(exc, LookupError):

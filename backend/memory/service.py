@@ -82,6 +82,7 @@ class MemoryService:
     async def start_session(
         self, session_id: str, user_id: str = "default", query: str = "",
         tenant_id: str = "", domain: str | None = None,
+        event_scope=None,
     ) -> ShortTermBuffer:
         from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
         tenant_id = normalize_tenant_id(tenant_id)
@@ -359,7 +360,8 @@ class MemoryService:
                         emit_context_event(level="L2", action="history_trim",
                                            before_tokens=_before,
                                            after_tokens=_after,
-                                           session_id=session_id)
+                                           session_id=session_id,
+                                           event_scope=event_scope)
                     except Exception:
                         logger.debug("L2 观测留痕失败", exc_info=True)
 

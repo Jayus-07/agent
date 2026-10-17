@@ -24,7 +24,7 @@ describe('记忆会话分页 API', () => {
       sessions: [{ session_id: 'session-1' }],
     })
     expect(String(fetchSpy.mock.calls[0][0])).toBe(
-      '/api/memory/sessions?limit=7&before=cursor+%2F%3F&before_session_id=session%2F1',
+      '/api/memory/agent/sessions?limit=7&before=cursor+%2F%3F&before_session_id=session%2F1',
     )
   })
 
@@ -36,7 +36,7 @@ describe('记忆会话分页 API', () => {
     await listSessionsPage()
 
     expect(String(fetchSpy.mock.calls[0][0])).toBe(
-      `/api/memory/sessions?limit=${SESSION_PAGE_SIZE}`,
+      `/api/memory/agent/sessions?limit=${SESSION_PAGE_SIZE}`,
     )
   })
 })

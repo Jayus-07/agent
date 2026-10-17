@@ -240,6 +240,28 @@ def skill_executor_node(state: dict) -> dict:
     top = candidates[0]
     cap_name = top.get("name", "")
     score = top.get("score", 0.0)
+    from backend.core.product_context import product_allows_capability
+    request_context = state.get("request_context")
+    product_id = (
+        request_context.get("product_id")
+        if isinstance(request_context, dict)
+        else getattr(request_context, "product_id", None)
+    ) or state.get("product_id") or "internal"
+    effective_domain = str(state.get("domain") or "")
+    if not product_allows_capability(
+        product_id,
+        cap_name,
+        (effective_domain,) if effective_domain else (),
+    ):
+        logger.warning("[SkillExecutor] 产品范围拒绝能力: %s", cap_name)
+        return {
+            **state,
+            "executor_error": "product_capability_denied",
+            "step_results": _failed_step(
+                "direct_1", "当前产品入口不可执行该能力",
+            ),
+            "executor_mode": "direct",
+        }
     node_name = _extract_capability_name(cap_name)
 
     logger.info(
@@ -411,6 +433,22 @@ def workflow_executor_node(state: dict) -> dict:
             **state,
             "executor_error": "no_workflow_name",
             "step_results": _failed_step("workflow_unknown", "未指定要运行的工作流"),
+        }
+
+    request_context = state.get("request_context")
+    product_id = (
+        request_context.get("product_id")
+        if isinstance(request_context, dict)
+        else getattr(request_context, "product_id", None)
+    ) or state.get("product_id") or "internal"
+    from backend.core.product_context import product_allows_workflow
+    if not product_allows_workflow(product_id, str(wf_name)):
+        return {
+            **state,
+            "executor_error": "product_workflow_denied",
+            "step_results": _failed_step(
+                "workflow_1", "当前产品入口不可执行该工作流",
+            ),
         }
 
     logger.info(f"[WorkflowExecutor] 运行 workflow: {wf_name}")

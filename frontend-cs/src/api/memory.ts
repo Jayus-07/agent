@@ -17,33 +17,33 @@ export interface SessionMeta {
   context_summary?: string | null;
 }
 
-/** GET /memory/sessions — 列出所有会话 */
+/** GET /memory/customer-service/sessions — 列出客服会话 */
 export async function listSessions(): Promise<SessionMeta[]> {
-  const data = await request<{ sessions: SessionMeta[] }>("/api/memory/sessions");
+  const data = await request<{ sessions: SessionMeta[] }>("/api/memory/customer-service/sessions");
   return data.sessions || [];
 }
 
-/** GET /memory/sessions/{id} — 获取会话消息 */
+/** GET /memory/customer-service/sessions/{id} — 获取会话消息 */
 export async function getSessionMessages(
   sessionId: string,
 ): Promise<{ role: string; content: string; created_at?: string | null }[]> {
   const data = await request<{ messages: { role: string; content: string }[] }>(
-    `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
+    `/api/memory/customer-service/sessions/${encodeURIComponent(sessionId)}`,
   );
   return data.messages || [];
 }
 
-/** DELETE /memory/sessions/{id} — 删除会话；会话不存在时后端返回 404（抛 ApiError） */
+/** DELETE /memory/customer-service/sessions/{id} — 删除会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function deleteMemorySession(sessionId: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`/api/memory/customer-service/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
   return data.ok === true;
 }
 
-/** PATCH /memory/sessions/{id} — 重命名会话；会话不存在时后端返回 404（抛 ApiError） */
+/** PATCH /memory/customer-service/sessions/{id} — 重命名会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function renameMemorySession(sessionId: string, title: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`/api/memory/customer-service/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });

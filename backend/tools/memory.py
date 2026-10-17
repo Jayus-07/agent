@@ -26,6 +26,9 @@ def _context_ids() -> tuple[str, str, str]:
     session_id = _get_session_id() or ""
     user_id = get_tool_user_id() or "default"
     tenant_id = get_tool_tenant_id() or ""
+    from backend.core.product_context import memory_user_id, product_by_id
+    from backend.core.request_context import get_current_product_id
+    user_id = memory_user_id(product_by_id(get_current_product_id()), user_id)
     if not session_id:
         raise RuntimeError("无会话上下文（session_id 为空），记忆工具需要在 Agent 请求内调用")
     return session_id, user_id, tenant_id

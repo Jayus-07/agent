@@ -77,6 +77,18 @@ def test_timeout_exception_family_maps_to_timeout_code():
     assert envelope.retryable is True
 
 
+def test_httpx_connection_error_maps_to_upstream_unavailable():
+    """Provider 网络连通失败用上游不可用语义，且不泄露异常文本。"""
+    httpx = pytest.importorskip("httpx")
+    envelope = error_envelope_from_exception(
+        httpx.ConnectError("private endpoint refused connection"), trace_id="t"
+    )
+
+    assert envelope.code == ErrorCode.UPSTREAM_UNAVAILABLE
+    assert envelope.retryable is True
+    assert "private endpoint" not in envelope.message
+
+
 def test_sse_cancelled_event_carries_stable_code():
     from backend.shared.error_protocol import sse_cancelled_event
 
