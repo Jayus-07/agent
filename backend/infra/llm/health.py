@@ -156,6 +156,7 @@ def probe_model(
             "latencyMs": 0,
             "error": message,
             "probeSource": probe_source,
+            "probeMode": "manual_only",
         }
 
     t0 = time.monotonic()
@@ -189,6 +190,9 @@ def probe_model(
         "latencyMs": latency_ms,
         "error": safe_error,
         "probeSource": probe_source,
+        "probeMode": (
+            "availability_only" if kind in {"vision", "speech"} else "live_call"
+        ),
     }
 
 
@@ -215,6 +219,7 @@ async def probe_ocr_model(model_name: str) -> dict[str, Any]:
         return {
             "status": "model_not_found", "latencyMs": 0,
             "error": message, "probeSource": "manual",
+            "probeMode": "live_call",
         }
 
     kind = models_mod.model_kind_of(entry)
@@ -307,6 +312,7 @@ async def probe_ocr_model(model_name: str) -> dict[str, Any]:
         "latencyMs": elapsed_ms,
         "error": "" if status == "healthy" else message,
         "probeSource": "manual",
+        "probeMode": "live_call",
     }
 
 

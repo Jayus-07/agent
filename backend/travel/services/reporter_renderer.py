@@ -430,7 +430,11 @@ def render_travel_reply(
 
         from backend.config import model_roles
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import _build_llm_for, record_llm_result
+        from backend.infra.llm.proxy import (
+            _build_llm_for,
+            enforce_model_input_price_tier,
+            record_llm_result,
+        )
         from backend.observability.llm_context import llm_attribution_scope
         from backend.shared.json_extractor import extract_json
 
@@ -456,12 +460,16 @@ def render_travel_reply(
             return template_answer, meta
 
         llm = _build_llm_for(model_name).bind(temperature=0, max_tokens=220)
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=human_payload),
+        ]
+        enforce_model_input_price_tier((messages,), model_name=model_name)
         with llm_attribution_scope(agent_domain="travel"):
             response = sync_call_with_timeout(
                 llm.invoke,
                 TRAVEL_LLM_REPORTER_TIMEOUT_MS / 1000.0,
-                [SystemMessage(content=system_prompt),
-                 HumanMessage(content=human_payload)],
+                messages,
             )
             try:
                 record_llm_result(

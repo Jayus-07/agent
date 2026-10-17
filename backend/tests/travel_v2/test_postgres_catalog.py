@@ -28,7 +28,7 @@ def test_live_schema_contains_v2_tables_and_required_relations() -> None:
             tables = {row[0] for row in cursor.fetchall()}
             assert tables == {
                 "ai_edit_requests", "edit_operations", "templates",
-                "trip_revisions", "trip_shares", "trips",
+                "trip_conversations", "trip_revisions", "trip_shares", "trips",
             }
 
             cursor.execute(
@@ -50,6 +50,9 @@ def test_live_schema_contains_v2_tables_and_required_relations() -> None:
             assert constraints["chk_travel_v2_share_request_hash"] == "c"
             assert constraints["chk_travel_v2_share_idempotency_pair"] == "c"
             assert constraints["chk_travel_v2_edit_revision"] == "c"
+            assert constraints["uq_travel_v2_trip_conversation_owner"] == "u"
+            assert constraints["fk_travel_v2_trip_conversation_owner"] == "f"
+            assert constraints["chk_travel_v2_trip_conversation_nonempty"] == "c"
 
             cursor.execute(
                 """SELECT indexname FROM pg_indexes

@@ -9,8 +9,8 @@ allow_cloud=True 且本地 Ollama 不可用时走云后端；否则回落 Ollama
 """
 from __future__ import annotations
 
-from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED
 from backend.config import model_roles
+from backend.config.llm import OLLAMA_BASE_URL, OLLAMA_ENABLED
 from backend.shared.logger import logger
 
 _ollama_skip_logged = False
@@ -145,12 +145,12 @@ def _make_chat(model: str | None = None, base_url: str | None = None, temperatur
     _model_name, provider = resolve_eval_model()
     from backend.infra.llm import proxy as llm_proxy
 
-    chat = llm_proxy.get_llm_for_role("eval_gen")
-    # 评测问题生成使用略高温度；bind 不改变供应商实例缓存，凭据轮换仍由
-    # registry_store 统一清理缓存。
-    if temperature != 0.1 and hasattr(chat, "bind"):
-        return chat.bind(temperature=temperature)
-    return chat
+    # RAGAS 也必须沿预算、价格档位、重试和用量记账代理调用；
+    # get_llm_for_role 返回裸模型，其 generate_prompt 路径会绕过这些治理。
+    return llm_proxy.bind_llm_for_role(
+        "eval_gen",
+        temperature=temperature,
+    )
 
 
 def _invoke_chat(
@@ -162,9 +162,10 @@ def _invoke_chat(
 ) -> str:
     """调用评测角色客户端，累计 token 用量，返回文本。"""
     global _ollama_skip_logged
+    eval_model_name = None
     if model is None and base_url is None:
         try:
-            _model_name, provider = resolve_eval_model()
+            eval_model_name, provider = resolve_eval_model()
         except EvalModelConfigurationError as exc:
             logger.warning("[EvalGen] %s", exc)
             return ""
@@ -181,8 +182,15 @@ def _invoke_chat(
     from langchain_core.messages import HumanMessage
 
     chat = _make_chat(model, base_url, temperature)
+    messages = [HumanMessage(content=prompt)]
+    if eval_model_name:
+        from backend.infra.llm.proxy import enforce_model_input_price_tier
+
+        enforce_model_input_price_tier(
+            (messages,), model_name=eval_model_name,
+        )
     try:
-        response = chat.invoke([HumanMessage(content=prompt)])
+        response = chat.invoke(messages)
         usage = getattr(response, "usage_metadata", None) or {}
         _token_usage["prompt_tokens"] += usage.get("input_tokens", 0)
         _token_usage["completion_tokens"] += usage.get("output_tokens", 0)

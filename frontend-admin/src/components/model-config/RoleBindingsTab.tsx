@@ -200,10 +200,14 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
     try {
       const result = await checkModelHealth(model)
       const ms = result.latencyMs != null ? ` · ${result.latencyMs}ms` : ''
-      if (result.status === 'healthy') {
+      if (result.status === 'healthy' && result.probeMode === 'availability_only') {
+        toast.success('凭据/配置可用，未验证真实调用')
+      } else if (result.status === 'healthy') {
         toast.success(row.role === 'ocr'
           ? `上游调用通过${ms}；OCR 图片识别效果仍需单独验证`
           : `模型调用通过${ms}`)
+      } else if (result.status === 'slow') {
+        toast.success(`调用通过，但响应较慢${ms}`)
       } else {
         const hint = healthActionHint(result.status as ModelHealthStatus)
         toast.error(`上游验证未通过：${hint || healthStatusLabel(result.status as ModelHealthStatus)}`)
@@ -513,7 +517,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                         ) : (
                           <div>
                             <span className={`inline-block rounded-full border px-2 py-0.5 text-[10px] ${healthStatusTone(visibleHealth.status)}`}>
-                              {healthStatusLabel(visibleHealth.status)}
+                              {healthStatusLabel(visibleHealth.status, visibleHealth.probeMode)}
                             </span>
                             <div className="mt-1 text-[10px] text-text-muted">
                               {visibleHealth.lastLatencyMs != null ? `${visibleHealth.lastLatencyMs}ms` : ''}
@@ -521,7 +525,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                               {visibleHealth.consecutiveFailures > 0 ? ` · 连续失败 ${visibleHealth.consecutiveFailures}` : ''}
                             </div>
                             {healthActionHint(visibleHealth.status) && (
-                              <div className="mt-1 max-w-[220px] text-[10px] leading-4 text-red-700" data-testid={`role-health-hint-${row.role}`}>
+                              <div className={`mt-1 max-w-[220px] text-[10px] leading-4 ${visibleHealth.status === 'slow' ? 'text-amber-700' : 'text-red-700'}`} data-testid={`role-health-hint-${row.role}`}>
                                 {healthActionHint(visibleHealth.status)}
                               </div>
                             )}

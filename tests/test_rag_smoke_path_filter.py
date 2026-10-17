@@ -38,6 +38,7 @@ def _filter_subprocess(paths: list[str], event: str = "push") -> bool:
 
 def test_rag_and_billing_migrations_trigger_smoke():
     paths = [
+        "backend/sql/migrations/013_obs_analytics_pg.sql",
         "backend/sql/migrations/014_rag_stores_pg.sql",
         "backend/sql/migrations/053_model_price_immutable_trigger.sql",
         "backend/sql/migrations/079_llm_usage_billing_v2.sql",
@@ -57,6 +58,11 @@ def test_rag_runtime_paths_trigger_smoke():
         "backend/infra/llm/credentials.py",
         "mcp_servers/servers/rag.py",
         "backend/scripts/ingest_eval_fixtures.py",
+        "backend/observability/llm_usage_store.py",
+        "backend/observability/llm_usage_store_pg.py",
+        "backend/observability/usage_parse.py",
+        "backend/tasks/budget_reconciliation_tasks.py",
+        "backend/services/model_config.py",
     ]
     for path in paths:
         assert _filter_import([path]) is True, path
@@ -72,6 +78,22 @@ def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False
+
+
+def test_unclassified_migration_does_not_match_fuzzy_keywords():
+    assert _filter_import(
+        ["backend/sql/migrations/100_new_unknown_table.sql"]
+    ) is False
+    assert _filter_subprocess(
+        ["backend/sql/migrations/100_new_unknown_table.sql"]
+    ) is False
+    # 新迁移至少执行 PR 免费契约门禁；是否需要真实评测由显式分类决定。
+    assert _filter_import(
+        ["backend/sql/migrations/100_new_unknown_table.sql"], event="pull_request"
+    ) is True
+    assert _filter_subprocess(
+        ["backend/sql/migrations/100_new_unknown_table.sql"], event="pull_request"
+    ) is True
 
 
 def test_model_price_monitor_changes_do_not_trigger_main_paid_smoke():
@@ -117,6 +139,8 @@ def test_setup_and_workflow_only_changes_run_pr_static_but_not_main_paid_smoke()
         ".github/scripts/rag_smoke_path_filter.py",
         "backend/scripts/seed_prompt_eval_db.py",
         "scripts/seed_eval_model_bindings.py",
+        "tests/evaluation/test_rag_ci_workflow_contracts.py",
+        "tests/test_rag_smoke_path_filter.py",
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False

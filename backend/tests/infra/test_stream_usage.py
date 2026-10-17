@@ -129,7 +129,7 @@ def test_astream_without_usage_chunk_settles_estimated(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -139,11 +139,11 @@ def test_astream_without_usage_chunk_settles_estimated(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
         # 断言须在同一 asyncio context 内：ContextVar 在 task 子上下文 set，
         # 主 context 读不到（与 with-usage 对照测试同款约束）
@@ -172,7 +172,7 @@ def test_astream_without_usage_falls_back_when_estimation_disabled(monkeypatch):
     _enable_estimation(monkeypatch, False)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -182,7 +182,7 @@ def test_astream_without_usage_falls_back_when_estimation_disabled(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     asyncio.run(_consume())
@@ -199,7 +199,7 @@ def test_astream_zero_output_falls_back_to_needs_review(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -211,7 +211,7 @@ def test_astream_zero_output_falls_back_to_needs_review(monkeypatch):
     bound = proxy_inst.astream
 
     async def _consume():
-        async for _ in bound():
+        async for _ in bound(""):
             pass
 
     asyncio.run(_consume())
@@ -226,7 +226,7 @@ def test_astream_with_usage_chunk_records(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 
@@ -238,7 +238,7 @@ def test_astream_with_usage_chunk_records(monkeypatch):
     async def _consume():
         # 断言须在同一 asyncio context 内：ContextVar 在 task 子上下文 set，
         # 主 context 读不到（行为正确，隔离是特性）
-        async for _ in bound():
+        async for _ in bound(""):
             pass
         assert proxy_mod._last_tokens_var.get()["total_tokens"] == 10
 
@@ -254,7 +254,7 @@ def test_sync_stream_without_usage_chunk_settles_estimated(monkeypatch):
     _enable_estimation(monkeypatch, True)
     monkeypatch.setattr(proxy_mod, "_enforce_rate_limit", lambda uid: None)
     monkeypatch.setattr(proxy_mod, "_preflight_context",
-                        lambda args, kwargs: args)
+                        lambda args, kwargs, **_options: args)
     monkeypatch.setattr(proxy_mod, "get_active_model_name",
                         lambda: "doubao-seed-2.0-mini")
 

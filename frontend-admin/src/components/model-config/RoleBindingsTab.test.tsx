@@ -7,10 +7,11 @@ const apiMock = vi.hoisted(() => ({
   saveModelRolePolicy: vi.fn(),
   checkModelHealth: vi.fn(),
 }))
+const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 
 vi.mock('@/api/modelConfig', () => apiMock)
 vi.mock('@/components/shared/Toast', () => ({
-  useToast: () => ({ success: vi.fn(), error: vi.fn() }),
+  useToast: () => toastMock,
 }))
 
 import RoleBindingsTab from './RoleBindingsTab'
@@ -104,6 +105,8 @@ afterEach(() => {
   apiMock.saveModelRole.mockReset()
   apiMock.saveModelRolePolicy.mockReset()
   apiMock.checkModelHealth.mockReset()
+  toastMock.success.mockReset()
+  toastMock.error.mockReset()
 })
 
 describe('RoleBindingsTab 模型目录选择', () => {
@@ -420,6 +423,64 @@ describe('手动健康测试按钮', () => {
 
     expect(apiMock.checkModelHealth).toHaveBeenCalledWith('qwen3.7-text-rerank')
     expect(onSaved).toHaveBeenCalled()
+  })
+
+  it('Vision/Speech 凭据检查只提示配置可用，不声称上游调用通过', async () => {
+    apiMock.checkModelHealth.mockResolvedValueOnce({
+      status: 'healthy', latencyMs: 3, probeMode: 'availability_only',
+    })
+    const container = mount()
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="role-health-check-rerank"]',
+      )?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(toastMock.success).toHaveBeenCalledWith('凭据/配置可用，未验证真实调用')
+    expect(toastMock.success.mock.calls.flat().join(' ')).not.toContain('上游调用通过')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('slow 探测作为成功的慢响应提示，不显示错误 toast', async () => {
+    apiMock.checkModelHealth.mockResolvedValueOnce({
+      status: 'slow', latencyMs: 6140, probeMode: 'live_call',
+    })
+    const container = mount()
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>(
+        '[data-testid="role-health-check-rerank"]',
+      )?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(toastMock.success).toHaveBeenCalledWith('调用通过，但响应较慢 · 6140ms')
+    expect(toastMock.error).not.toHaveBeenCalled()
+  })
+
+  it('availability-only 健康缓存展示未验证真实调用', () => {
+    const container = mount({
+      roles: [roleRow({
+        health: {
+          status: 'healthy',
+          lastCheckedAt: new Date().toISOString(),
+          lastLatencyMs: 3,
+          lastError: null,
+          consecutiveFailures: 0,
+          probeSource: 'manual',
+          probeMode: 'availability_only',
+        },
+      })],
+    })
+
+    expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent)
+      .toContain('凭据/配置可用，未验证真实调用')
+    expect(container.querySelector('[data-testid="role-health-rerank"]')?.textContent)
+      .not.toContain('调用通过')
   })
 
   it('探测接口报错时展示错误且不崩', async () => {

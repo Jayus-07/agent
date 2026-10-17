@@ -1,7 +1,6 @@
 """RAG 真实评测在任何 Provider 外呼前验证批准价格。"""
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from types import SimpleNamespace
 
 import psycopg2
 import pytest
@@ -25,6 +24,17 @@ def _approved_price_row(dimension: str, *, unit="per_1m_tokens", currency="CNY")
         approval_status="approved",
         reviewer_1="reviewer-a",
         reviewer_2="reviewer-b",
+        version_status="active",
+        version_source="source-registry",
+        version_imported_by="price-importer",
+        version_effective_from=datetime.now(timezone.utc) - timedelta(days=2),
+        version_reviewer_1="reviewer-a",
+        version_reviewer_2="reviewer-b",
+        canary_started_at=datetime.now(timezone.utc) - timedelta(days=2),
+        canary_completed_at=datetime.now(timezone.utc) - timedelta(days=1),
+        coverage_ratio=Decimal("1.00000"),
+        missing_price_count=0,
+        price_calculation_error_count=0,
     )
 
 
@@ -34,7 +44,7 @@ def _embedding_configs():
 
 @pytest.mark.parametrize(
     "invalid",
-    ["reviewer", "source", "expired", "duplicate", "model", "missing"],
+    ["reviewer", "source", "inactive", "expired", "duplicate", "model", "missing"],
 )
 def test_price_snapshot_rejects_unapproved_or_incomplete_rows(invalid):
     rows = [_approved_price_row("input")]
@@ -42,6 +52,8 @@ def test_price_snapshot_rejects_unapproved_or_incomplete_rows(invalid):
         rows[0]["reviewer_2"] = "reviewer-a"
     elif invalid == "source":
         rows[0]["source"] = ""
+    elif invalid == "inactive":
+        rows[0]["version_status"] = "expired"
     elif invalid == "expired":
         rows[0]["effective_to"] = datetime.now(timezone.utc) - timedelta(days=1)
     elif invalid == "duplicate":
@@ -64,6 +76,7 @@ def test_price_snapshot_preserves_registry_approval_and_version():
     assert result[0]["reviewer_2"] == "reviewer-b"
     assert result[0]["source"] == "source-registry"
     assert result[0]["price_table_version"] == "source-v1"
+    assert seed._active_version_rows(result)[0]["status"] == "active"
     assert result[0]["price_per_unit"] == Decimal("1")
 
 
@@ -146,7 +159,10 @@ def test_registry_read_uses_readonly_replica_and_bound_models(monkeypatch):
 
     assert result == rows
     assert ("session", {"readonly": True, "autocommit": False}) in calls
-    assert calls[3][1] == ["embedding-test", "embedding"]
+    price_query = next(call for call in calls if isinstance(call[1], list))
+    assert price_query[1] == ["embedding-test", "embedding"]
+    assert "model_price_versions" in str(price_query[0])
+    assert "status = 'active'" in str(price_query[0])
     assert calls[-2:] == [("rollback", None), ("close", None)]
 
 
@@ -225,30 +241,26 @@ def test_price_verification_fails_before_usage_pricing_when_snapshot_is_missing(
     monkeypatch,
 ):
     monkeypatch.setattr(
-        seed, "_require_test_database", lambda: ("localhost", "agent_memory_test")
+        seed,
+        "_require_test_database",
+        lambda: {
+            "host": "localhost", "port": 5432,
+            "database": "agent_memory_test", "username": "postgres",
+            "password": "test-password",
+        },
     )
     monkeypatch.setattr(
         seed,
         "build_seed_configs",
         lambda: {"eval_gen": {"model_name": "chat-test"}},
     )
-    monkeypatch.setattr(
-        pricing,
-        "get_current_price_table",
-        lambda *_args: pricing.PriceTable([]),
-    )
-    usage_pricing_called = False
+    class Repository:
+        def __init__(self, connection_factory):
+            assert callable(connection_factory)
 
-    def price_usage(*_args, **_kwargs):
-        nonlocal usage_pricing_called
-        usage_pricing_called = True
-        return SimpleNamespace(
-            pricing_source="approved_price_table",
-            cost_status=pricing.COST_STATUS_EXACT,
-        )
+        def get_current(self, *_args):
+            return pricing.PriceTable([])
 
-    monkeypatch.setattr(pricing, "price_usage", price_usage)
+    monkeypatch.setattr(pricing, "PostgresPriceRepository", Repository)
     with pytest.raises(pricing.MissingModelPrice):
         seed.verify_pricing()
-
-    assert usage_pricing_called is False
