@@ -44,7 +44,7 @@ concurrency:
 jobs:
   rag-regression:
     name: RAG Regression (${{ inputs.selection || 'regression' }})
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets；
     # 外部 Fork PR 触发的 run 拿不到 secrets，seed 步骤会显式失败（BLOCKED）。
     environment: prompt-eval
