@@ -455,24 +455,31 @@ def _ocr_image_cloud_cached(png_bytes: bytes) -> str:
         result = _ocr_image_dashscope(png_bytes)
         _record_ocr_result(status="success", cache_status="miss")
         return result
+    runtime = _resolve_ocr_runtime_config()
+    upstream_model = str(runtime.get("upstream_model") or runtime["model"])
     path = _cache_path(png_bytes)
     try:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data.get("text"), str):
+                # 全文档命中缓存时不会走 _ocr_image_dashscope，必须在命中分支
+                # 恢复真实出站模型归因；旧缓存没有该字段，回退当前 runtime。
+                cached_upstream = str(data.get("upstream_model") or "").strip()
+                _ocr_actual_upstream_model.set(cached_upstream or upstream_model)
                 _record_ocr_result(status="cached", cache_status="hit")
                 return data["text"]
     except Exception as e:
         logger.debug(f"[OCR] 缓存读取失败（走直连）: {e}")
     text = _throttled_call(png_bytes)
+    # 归因以本次真实出站模型为准（含桩替换与直连路径）；不得留 None。
+    _ocr_actual_upstream_model.set(upstream_model)
     _record_ocr_result(status="success", cache_status="miss")
     try:
         _ocr_cache_dir.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
-        runtime = _resolve_ocr_runtime_config()
         tmp.write_text(json.dumps(
             {"text": text, "model": _configured_ocr_model(),
-             "upstream_model": str(runtime.get("upstream_model") or runtime["model"]),
+             "upstream_model": upstream_model,
              "ts": int(time.time())}, ensure_ascii=False), encoding="utf-8")
         os.replace(tmp, path)  # 原子落盘，多 worker 同页竞争无半写文件
     except Exception as e:
