@@ -369,6 +369,12 @@
 4. 累计预算：`backend/infra/llm/budget.py` 只有请求级上限（calls/tokens/cost/retries/fallbacks）；`backend/infra/llm/quota.py` 有租户/用户日/月配额（隔离库策略行：platform default 144/2160 CNY、tenant test 72/720 CNY）；`backend/evaluation/run_guards.py` 每 10 个 case 查一次预算并熔断，但**查询失败放行**。三者都不是「本轮授权 ¥20」的运行级金额硬上限，默认配额远高于 ¥20，因此无法用现有机制证明 8-case 评测的费用上界 ≤ ¥20。
 5. 结论：在 2/3/4 解决且存在已批准 CNY 价格版本之前，真实 8-case、#52 质量评测与 #69 付费 T3 仍为 BLOCKED；官方页面价格不能替代审批行，也不得据此宣称 MODEL_QUALITY_PASS。
 
+## 2026-10-17 P3 基线同步（#66 / #69）
+
+- #66 `codex/rag-upload-b1-20261014`：与 `origin/main=ad553d0` 干净合并（无冲突），新 HEAD `c8663b12771b91b34299f7541cbd48d95f72bd1e` 已推送。定向回归（`test_rag_upload_celery_mode`、`test_rag_upload_to_index_e2e`、`test_index_task_runtime`、`test_upload_failures_store`、`test_faq_routing`、`test_pr55_coverage_quality_gate`）在隔离 PostgreSQL `agent_memory`：**83 passed, 3 warnings**（Windows Proactor teardown 既有告警）。PR 仍为 Draft：Worker 预算仍需 #52，不能单独合并。
+- #69 `codex/main-assistant-conversation-first-20261014`：与 `origin/main=ad553d0` 干净合并，新 HEAD `f80d082ceb94ef622eb7ba56047f43febeea9f49` 已推送；工作树 `C:\Users\wh\.codex\worktrees\pr69-main-sync\agent`（原分支此前无工作树）。事件作用域/SSE 契约定向回归（`test_stop_c_event_isolation`、`test_sse_event_schema`、`test_stream_events_flow`、`test_runner_terminal_semantics`）：**88 passed**。`test_runner_trace_finalize.py::test_generator_close_finishes_once_as_client_disconnect` 是 main 基线既有失败，本轮未纳入该集合。PR 仍为 Draft：真实授权 RAG/SQL、取消/resume、Trace 与费用 T3 未完成。
+- #52 `4665d445`：与 `ad553d0` 仍冲突，冲突文件为 `backend/infra/llm/pricing.py`、`backend/rag/retrieval/multi_query.py`、`backend/tests/evaluation/test_rag_paid_preflight.py`、`backend/tests/scripts/test_seed_prompt_eval_db.py`。冲突集中在价格治理实现与对应测试，需在 P2 缺陷 1/2 的处理口径确定后再解，避免用合并手法掩盖价格口径分歧；本轮未强行解决。
+
 ## 下一步（按依赖顺序，2026-10-17 更新）
 
 1. 已完成：#84 合并 `ad553d0`，main 定向复跑 176 passed。
