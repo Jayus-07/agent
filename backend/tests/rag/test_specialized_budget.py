@@ -125,23 +125,66 @@ def test_rerank_retry_has_separate_unknown_and_settled_entries(monkeypatch, mete
     assert budget._current_quota_reservation.get() is outer
 
 
-def test_rerank_unknown_price_keeps_reserved_quota(monkeypatch, metering):
-    from backend.rag.reranker import DashScopeReranker
-
-    monkeypatch.setattr(pricing, "get_current_price_table", lambda *_: pricing.PriceTable([]))
-    monkeypatch.setattr("backend.rag.reranker.requests.post", lambda *_a, **_k: SimpleNamespace(
+def _rerank_success_response():
+    return SimpleNamespace(
         status_code=200, json=lambda: {
             "output": {"results": [{"index": 0, "relevance_score": 0.9}]},
             "usage": {"total_tokens": 12},
         },
-    ))
+    )
+
+
+def test_rerank_unknown_price_rejects_before_outbound_in_enforce(monkeypatch, metering):
+    """enforce + 无任何可信单价：Provider 出站前拒绝，不产生预占与假 usage。
+
+    2026-10-17 价格预检契约（#85）取代旧的「缺价放行后再对账」行为：
+    费用无法证明时不得发出真实请求。
+    """
+    from backend.rag.reranker import DashScopeReranker
+
+    outbound = []
+    monkeypatch.setattr(pricing, "get_current_price_table", lambda *_: pricing.PriceTable([]))
+    monkeypatch.setattr(
+        "backend.rag.reranker.requests.post",
+        lambda *_a, **_k: outbound.append(1) or _rerank_success_response(),
+    )
     model = DashScopeReranker("synthetic", model="unpriced-test-model", api_format="dashscope")
+    _state, entries, events, _outer = metering
+
+    with pytest.raises(budget.RequestBudgetExceeded):
+        model.rank("查询", ["正文"])
+
+    assert outbound == [], "缺价不得产生 Provider 出站请求"
+    assert entries == [], "拒绝前不得创建预占"
+    assert events == [], "拒绝后不得写入成功 usage 行"
+
+
+def test_rerank_price_unknown_keeps_reserved_quota_without_zero_settlement(monkeypatch, metering):
+    """可出站但拿不到有效价格：预占保留并进入待对账，不按 0 元精确结算。"""
+    from backend.rag.reranker import DashScopeReranker
+
+    outbound = []
+    monkeypatch.setattr(pricing, "get_current_price_table", lambda *_: pricing.PriceTable([]))
+    # 注册表仍有单价 → 硬预算门禁允许出站；但计费侧拿不到价格 → unpriced。
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda model: (1.0, 2.0),
+    )
+    monkeypatch.setattr(pricing, "calculate_fallback_cost", lambda *_a, **_k: Decimal("0"))
+    monkeypatch.setattr(
+        "backend.rag.reranker.requests.post",
+        lambda *_a, **_k: outbound.append(1) or _rerank_success_response(),
+    )
+    model = DashScopeReranker("synthetic", model="unpriced-test-model", api_format="dashscope")
+
     assert model.rank("查询", ["正文"]) == [(0, 0.9)]
     _state, entries, events, _outer = metering
+    assert len(outbound) == 1
     assert entries[0]["status"] == "needs_review"
     assert entries[0]["amount_cny"] == Decimal("0.50")
-    assert "amount" not in entries[0]
+    assert "amount" not in entries[0], "未知价格不得按确定金额结算"
     assert events[0]["cost_status"] in {"unpriced", "price_unknown"}
+    assert events[0]["user_id"] == "eval-user"
+    assert events[0]["tenant_id"] == "eval"
 
 
 def test_rerank_uses_source_name_without_directory_or_mutating_content(monkeypatch, metering):
