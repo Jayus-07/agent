@@ -439,3 +439,57 @@ PR：
 2. #85 合并后同步 #52，按新价格可见性契约重解冲突，再跑其费用/绑定定向集。
 3. Phase B：按上面的续工入口完成 PDF 真实链路与退出证据。
 4. P2 剩余：`import_version` 写死 USD、`evaluator_cost` 用静态价格（本轮未改，需独立 PR）。
+
+## 2026-10-17 Phase3 续工：#85/#86 合并、#52 同步
+
+### 合并结果
+
+| PR | HEAD | Merge SHA | 说明 |
+| --- | --- | --- | --- |
+| #85 价格治理遗留 | `838a3e26` | `6c7208e233b385674db51d41c181236d8d9f7d54` | A1 有效价格可见性 + 冲突失败关闭 + 硬预算缺价拒绝；A2 端口映射；A3 迁移分类完整性 |
+| #86 OCR 缓存 | `d49b099a90b0c0e3b982c5feda6beea3632ba8e3` | `50a4a16ad0470e17e0a60cf8aee99f090039a4c7` | A4 缓存键用 upstream_model；含评审 P2 修复（缓存命中恢复归因） |
+
+- #86 的自动 Review 给出 1 条 P2（全文档命中缓存时 `upstream_model` 归因为 None）。已修复：命中分支从缓存字段恢复、旧缓存回退 runtime；MISS 路径也显式归因。回复并 resolve 线程，复核 `test_pdf_ocr.py` **29 passed, 1 skipped** 后合并。
+- 合并前 #85/#86 均 `MERGEABLE/CLEAN`，Detect、Secret Scan、免费 preflight、RAG Smoke gate SUCCESS，8-case 为 SKIPPED。
+
+### main push 的费用证据（新增硬事实）
+
+- `6c7208e` 的 main-push `RAG PR Smoke`（run `39020408434`）判定 `relevant=true`，付费 job 进入 "Seed DB API model bindings" 后**失败关闭**：`RuntimeError: 未配置只读价格 Registry 连接；真实评测保持阻断`（`PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 为空）。**未执行任何 Provider Probe，0 费用**。
+- 副作用（需外部动作）：由于 #85 改动了 `backend/infra/llm/pricing.py`，#86 改动 `backend/rag/**`，此后相关 main push 会走受信任门禁并因缺少只读 Registry secret 而**红**。这是价格门禁按设计失败关闭，不是代码回归；恢复绿灯只能通过配置 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`（已批准价格只读副本）完成，不能用跳过门禁的方式变绿。
+
+### #52 同步与冲突重解
+
+- 新 HEAD `4938e68f1841d88052e0276c836f2a58780531ab`（合入 `6c7208e`），GitHub 已从 CONFLICTING 变为 **MERGEABLE**（仍 Draft）。
+- 冲突 4 个文件，全部按语义合并，未整文件 ours/theirs 覆盖：
+  - `backend/infra/llm/pricing.py`（`PriceTable.__init__`）：保留 #52 的 per_call/per_1m_tokens 单位校验与"同维度首行有效"，同时保留 #81/#85 的币种**与版本**一致性校验。
+  - `backend/rag/retrieval/multi_query.py`：采用 main 版本（价格档位门禁 `enforce_model_input_price_tier` + `max_tokens=_rewrite_max_tokens()`），保留 #52 的 `_resolve_rewrite_llm` 入口。
+  - `backend/tests/evaluation/test_rag_paid_preflight.py`：保留 #52 的 4 条额外用例与 `Path/SimpleNamespace` 导入，并补回 `usage_pricing_called` 断言（价格核验先于 usage 计价）。
+  - `backend/tests/scripts/test_seed_prompt_eval_db.py`：保留 #52 的 `multiquery` 参数化绑定断言 + main 的配置缓存/身份校验用例。
+- 合并树定向回归（隔离 PostgreSQL 55511 `agent_memory`）：`test_rag_paid_preflight`、`test_seed_prompt_eval_db`、`test_multi_query_token_budget/trace/context/rhetorical`、`test_llm_pricing_pg`、`test_pricing_snapshot`、`test_llm_budget`、`test_billing_contract`、`test_llm_bind_tools`、`test_rag_smoke_path_filter` 共 **150 passed**；`git diff --check` 干净。
+- 合并后按新契约修正了 3 处测试期望（unpriced 结算需注册表单价放行、混币种报错文案、价格核验早于计价的断言），均为契约对齐而非放宽断言。
+- 仍未完成：#52 仍 Draft；真实 8-case 质量评测（Top-1 ≥ 0.80）与费用账本对账需已批准 CNY 价格版本与只读 Registry，未执行。
+
+### Phase B（#66 PDF 真实链路）：本轮未完成
+
+- 前置已完成：#66 分支已同步 `ad553d0`（HEAD `c8663b1`），定向 83 passed，免费 CI 全绿。
+- 已确认：当前 HEAD 的 Celery app 可加载，`tasks.execute_index`/`tasks.reindex_document` 路由到 `rag_index`；隔离栈 `pr66-worker-e2e-20261016-pg`(5434)/`-redis`(6382) 仍在运行，库 `agent_rag_e2e_memory`、`agent_rag_e2e_business` 可用。
+- 未完成原因（具体）：真实 PDF 链需要同时满足「Worker 进程 + 解析/分块 + 向量化（本地 BGE 模型加载，内存/耗时峰值）+ IndexRun 终态 + 授权 Search」；本轮剩余执行窗口不足以完成一次可取证的真实运行，且不能把解析单测或 mock Celery 当成 E2E。PDF 链路保持 **NOT VERIFIED / BLOCKED**。
+- 续工入口（不变）：在 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent` 设置 `PGHOST=127.0.0.1 PGPORT=5434 PGUSER=postgres MEMORY_PGDATABASE=agent_rag_e2e_memory BUSINESS_PGDATABASE=agent_rag_e2e_business CELERY_BROKER_URL=redis://127.0.0.1:6382/0 RAG_DATA_DIR=<隔离目录>`，启动 `celery -A backend.tasks.celery_app worker -Q rag_index -c 1 --prefetch-multiplier 1`，用 testset PDF 走上传路径，采样 Worker RSS 并记录退出码/信号与 IndexRun 终态。
+
+### 下一步（按序）
+
+1. #52：等 `4938e68` 的新 HEAD CI 与自动 Review 收口；真实 8-case 仍需外部价格治理条件。
+2. Phase B：按上方入口完成 PDF 真实链路（这是 #66 转 Ready 的唯一前提）。
+3. #69 真实 T3（授权 RAG/SQL/取消/Trace/费用）。
+4. P2 剩余：`import_version` 写死 USD、`evaluator_cost` 用静态价格（独立 PR）。
+
+### Phase B 追加实测（2026-10-17，未通过）
+
+在 `C:\Users\wh\.codex\worktrees\rag-upload-b1-20261014\agent`（HEAD `c8663b1`）用隔离栈做了真实 Worker 探测：
+
+- 环境：`PGPORT=5434 MEMORY_PGDATABASE=agent_rag_e2e_memory BUSINESS_PGDATABASE=agent_rag_e2e_business CELERY_BROKER_URL=redis://127.0.0.1:6382/0 RAG_DATA_DIR=<隔离目录>`，`celery -A backend.tasks.celery_app worker -Q rag_index -c 1 --prefetch-multiplier 1`。
+- 首次启动失败：`MemoryDatabaseUnavailable: PostgreSQL 连接配置缺失: PGPASSWORD`（隔离库是 trust 认证，但 `memory.database._validate_config` 要求非空口令）。补 `PGPASSWORD=trustauth` 后 **Worker 正常就绪**，`[LLMRegistry] DB 覆盖层已注入: 7 个厂商实例 / 8 个自建模型 / 0 份凭据 / 2 个角色覆盖`，`rag_index` 队列被消费。
+- 通过 `sync_upload_impl`（与真实上传同一函数）上传 `staff_regulation_scnu.pdf`（542,265 B，ASCII 副本）：返回 `ok=true, upload_id=e5d448d96340`，但 **未产生 `rag_index_runs` 行、`tasks` 行或 `doc_registry` 行**；查询确认 `rag_index_runs` 最近两行仍是此前历史失败（`coverage_gap`、`runtime 模式只读索引不可用`）。
+- 直接证据：该 `upload_id` 无 `generation`，`_dispatch_index` 因此不建 run 行；任务即使入队也未形成可追踪终态。这不是「PDF 链路通过」，而是新发现的可追踪性缺口（与历史 `table_describe` 悬挂是同一类问题：任务无 run 行 → 无法证明终态）。
+- 结论：PDF 真实链路仍 **NOT VERIFIED**；下一步应先修「上传未带 generation 时不建 IndexRun」的可追踪性（或确保上传路径始终生成 generation），再复跑本探测。Worker/DB/Redis 隔离栈状态正常，无共享库写入，无 Provider 调用。
+- 已清理：临时 driver 脚本已删除，Worker 进程已停止；#66 工作树干净（HEAD `c8663b1`）。
