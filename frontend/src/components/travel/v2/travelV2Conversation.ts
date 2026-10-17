@@ -77,7 +77,7 @@ function safeTripFactText(value: unknown, maxLength = 180): string {
     .trim()
     .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[已过滤邮箱]')
     .replace(/(?:\+?86[- ]?)?1[3-9]\d{9}/g, '[已过滤电话]')
-    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret)\b(?:\s*[-:=]\s*|\s+)["']?[A-Za-z0-9._~+/=-]{16,}["']?/gi, '[已过滤凭据]')
+    .replace(/\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|secret|sk)\b(?:\s*[-:=_]\s*|\s+)["']?[A-Za-z0-9._~+/=-]{16,}["']?/gi, '[已过滤凭据]')
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/gi, '[已过滤凭据]')
     .replace(/\bAKIA[0-9A-Z]{16}\b/g, '[已过滤凭据]')
     .replace(/\bgh[pousr]_[A-Za-z0-9_]{30,}\b/g, '[已过滤凭据]')

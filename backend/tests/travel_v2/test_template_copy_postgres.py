@@ -72,7 +72,7 @@ def test_published_template_copy_is_independent_from_future_trip_edits() -> None
         assert association["linked"] is True
 
         # 模拟迁移前已存在的模板副本，验证迁移 SQL 可恢复且可重复执行。
-        migration = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "100_travel_v2_trip_conversations.sql"
+        migration = Path(__file__).resolve().parents[2] / "sql" / "migrations" / "101_travel_v2_trip_conversations.sql"
         backfill_sql = migration.read_text(encoding="utf-8").split(
             "-- 回填历史模板副本的默认会话关联；同一迁移重复执行也保持幂等。", 1,
         )[1]

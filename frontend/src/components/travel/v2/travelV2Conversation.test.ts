@@ -195,9 +195,13 @@ describe('V2 Trip 会话关联', () => {
     const openAiKey = ['sk', 'proj', '12345678901234567890'].join('-')
     const labelledToken = ['token', 'abc12345678901234567890'].join('=')
     const spaceSeparatedToken = ['token', 'xyz12345678901234567890'].join(' ')
+    const spacedSkKey = ['sk', 'abc12345678901234567890'].join(' ')
+    const colonSkKey = ['sk', 'def12345678901234567890'].join(':')
+    const equalsSkKey = ['sk', 'ghi12345678901234567890'].join('=')
+    const underscoreSkKey = ['sk', 'jkl12345678901234567890'].join('_')
     const trip = projectionTrip([{
       date: '2026-10-20', title: '第一天', legs: [],
-      items: [item(1, { title: `SkylineObservationDeck TokenizationArchitecture ${openAiKey} ${labelledToken} ${spaceSeparatedToken}` })],
+      items: [item(1, { title: `SkylineObservationDeck TokenizationArchitecture ${openAiKey} ${labelledToken} ${spaceSeparatedToken} ${spacedSkKey} ${colonSkKey} ${equalsSkKey} ${underscoreSkKey}` })],
     }])
     const serialized = JSON.stringify(projectTravelV2TripFacts(trip))
 
@@ -206,6 +210,10 @@ describe('V2 Trip 会话关联', () => {
     expect(serialized).not.toContain(openAiKey)
     expect(serialized).not.toContain(labelledToken)
     expect(serialized).not.toContain(spaceSeparatedToken)
+    expect(serialized).not.toContain(spacedSkKey)
+    expect(serialized).not.toContain(colonSkKey)
+    expect(serialized).not.toContain(equalsSkKey)
+    expect(serialized).not.toContain(underscoreSkKey)
     expect(serialized).toContain('[已过滤凭据]')
   })
 

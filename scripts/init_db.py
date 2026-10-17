@@ -290,7 +290,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "099_model_price_source_monitor.sql": "memory",
     "100_model_price_change_alert_outbox.sql": "memory",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
-    "100_travel_v2_trip_conversations.sql": "memory",
+    "101_travel_v2_trip_conversations.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -311,7 +311,7 @@ ORDER_LAST = [
     # 健康探测来源。
     "097_llm_model_health_probe_source.sql",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
-    "100_travel_v2_trip_conversations.sql",
+    "101_travel_v2_trip_conversations.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
