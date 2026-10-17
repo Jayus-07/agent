@@ -450,24 +450,6 @@ def _limit(lines: list[str]) -> list[str]:
 # LangChain Retriever
 # =====================================================
 
-def _order_merged_by_score(docs: list) -> list:
-    """合并后按 rerank_score 稳定降序；缺少分数的候选保持原相对顺序。
-
-    只重排既有候选，不新增/删除文档，也不改变 rerank 输入与调用次数。
-    """
-    if not any(
-        isinstance(getattr(d, "metadata", {}).get("rerank_score"), (int, float))
-        for d in docs
-    ):
-        return docs
-    return sorted(
-        docs,
-        key=lambda d: -float(
-            getattr(d, "metadata", {}).get("rerank_score") or 0.0
-        ),
-    )
-
-
 class MultiQueryRetriever(BaseRetriever):
     """根据 need_multi_query() 判断是否启用多查询。"""
 
@@ -738,14 +720,6 @@ class MultiQueryRetriever(BaseRetriever):
             },
             status=fanout_status,
         )
-
-        # 2026-10-18 排名契约修复：各变体候选用各自 query 重排后已带
-        # rerank_score，但合并曾按"查询提交顺序"拼接（原始 query 恒第一组），
-        # 变体召回到的高相关证据永远排在原始 query 结果之后，Top-1 实际上
-        # 只由原始 query 决定，MultiQuery 收益无法进入最终排序。
-        # 这里按 rerank_score 稳定降序（无分数/同分保持原顺序），让任一
-        # query 下的最强证据都能进入最终 Top-K；不改变候选集合本身。
-        docs = _order_merged_by_score(docs)
 
         # 注入 evidence_groups 到首个 doc，供 prompt 模板使用
         if docs:
