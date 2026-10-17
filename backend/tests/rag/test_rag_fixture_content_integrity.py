@@ -309,18 +309,36 @@ def test_structured_node_scope_keeps_short_metric_line():
 
 def test_cleaner_records_drop_evidence_for_deterministic_noise():
     """合法噪音删除必须留下操作名/分类/原行证据，供审计区分正文丢失。"""
-    text = "第一段正文内容保留。\n\n3\n\n第二段正文内容保留。"
+    template = "本页有Unihan新版汉字：“𥻵”，这些字符可能会错误显示。"
+    text = f"第一段正文内容保留。\n\n{template}\n\n第二段正文内容保留。"
     result = DocumentCleaner().clean(text, source_type="pdf", structured=True)
 
     assert "第一段正文内容保留" in result.text
     assert "第二段正文内容保留" in result.text
     assert any(
-        item["operation"] == "page_number_line"
+        item["operation"] == "template_line"
         and item["category"] == "deterministic_noise"
-        and item["line"] == "3"
         for item in result.dropped
     )
-    assert any(change.startswith("removed_1_page_numbers") for change in result.changes)
+    assert any(change.startswith("dropped_template_lines") for change in result.changes)
+
+
+def test_bare_numeric_line_is_preserved_but_audit_classifies_it():
+    """合并 #66 后不再猜测裸数字行是页码：内容保留，审计仍可判为噪音形态。
+
+    金额/比率/编号与页码在单行文本上不可区分，删除不可逆；因此清洗不再
+    删除裸数字行，清洗审计只在“该行确实消失”时才把它归为合法噪音。
+    """
+    result = DocumentCleaner().clean(
+        "第一段正文内容保留。\n\n3\n\n第二段正文内容保留。",
+        source_type="pdf", structured=True,
+    )
+
+    assert "\n3\n" in result.text
+    assert not any(
+        item["operation"] == "page_number_line" for item in result.dropped
+    )
+    assert DocumentCleaner.classify_noise_line("3") == "page_number"
 
 
 def test_caption_heuristic_never_deletes_the_only_line_of_a_block():

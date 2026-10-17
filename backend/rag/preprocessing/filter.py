@@ -119,8 +119,8 @@ def _mask_financial_pii(text: str) -> tuple[str, list[str]]:
 # ── 有效内容识别（P0-C，2026-10-18）──────────────────
 # 移植自 PR #66（codex/rag-upload-b1-20261014）的 filter.py：英文正文/技术
 # 标识符不应被中文占比规则误杀，表格行不套用正文阈值与判重。
-# 本任务只取最小必要部分（不含 #66 依赖新 chunk metadata 的
-# split_group_id 分支），不搬 #66 的 chunking/coverage 改造。
+# 2026-10-18 合并 #66 时补齐 split_group_id 分支（#66 的 chunking 会产出
+# 该 metadata），其余规则以 #90 实现为唯一来源，避免两套并行实现。
 _LATIN_WORD_RE = re.compile(r"[A-Za-z]{2,}")
 _LATIN_IDENTIFIER_RE = re.compile(
     r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]*(?:[-_/][A-Z0-9]+)+(?![A-Za-z0-9])"
@@ -221,13 +221,16 @@ class ChunkFilter:
         #    来源内容，删掉就会在覆盖审计里变成真实缺口。
         stripped = text.strip()
         table_chunk = is_table_chunk(metadata.get("chunk_type"))
+        # 同一来源 Leaf 被按预算二次切分时，片段共享 split_group_id（#66）：
+        # 片段本身可能很短或高度相似，删掉就丢失该来源的可检索内容。
+        split_chunk = bool(metadata.get("split_group_id"))
         # 短内容豁免只给 Leaf：Leaf 是唯一可检索来源内容，Parent 只是上下文
         # 容器，沿用原阈值 + 「被引用 Parent 保留」既有覆盖路径，避免把
         # Parent 的过滤/保留语义改掉。
         is_parent = metadata.get("granularity") == "parent"
         if (
             len(stripped) < self.min_length
-            and not table_chunk
+            and not (table_chunk or split_chunk)
             and (is_parent or not _short_text_carries_content(stripped))
         ):
             metadata["filter_status"] = "filtered"
@@ -266,7 +269,9 @@ class ChunkFilter:
         meaningful_english = (
             False if is_parent else _has_meaningful_latin_text(stripped)
         )
-        if low_chinese_ratio and not (table_chunk or meaningful_english):
+        if low_chinese_ratio and not (
+            table_chunk or split_chunk or meaningful_english
+        ):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "low_chinese_ratio"
             return False, "low_chinese_ratio"
@@ -278,7 +283,7 @@ class ChunkFilter:
             if metadata.get("granularity") == "parent"
             else self._dup_detector
         )
-        if not table_chunk and duplicate_detector.is_duplicate(stripped):
+        if not (table_chunk or split_chunk) and duplicate_detector.is_duplicate(stripped):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "duplicate"
             return False, "duplicate"

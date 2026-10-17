@@ -49,6 +49,10 @@ def test_pdf_parser_basic_load(sample_pdf):
     ast = PdfParser().parse(sample_pdf)
     assert ast.source_file == sample_pdf
     assert ast.raw_text != ""
+    assert ast.pdf_page_count == 2
+    assert ast.pdf_pages_with_content == 2
+    assert ast.pdf_skipped_pages == 0
+    assert ast.pdf_repaired is False
     leaves = [n for n in walk(ast.root) if n.type in ("paragraph", "list", "table")]
     assert len(leaves) >= 2
 
@@ -104,6 +108,7 @@ def test_pdf_parser_reports_skipped_pages(tmp_path, caplog):
         ast = PdfParser().parse(str(p))
         leaves = [n for n in walk(ast.root) if n.type == "paragraph"]
         assert leaves == []  # 所有页都失败 → 0 个 leaf
+        assert ast.pdf_skipped_pages == 1
 
     # 验证日志包含「跳过 N 页」汇总
     summary_logs = [

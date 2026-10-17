@@ -1190,14 +1190,17 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
     actor_id = str(kwargs.pop("actor_id", "") or "")
     tenant_id = str(kwargs.pop("tenant_id", "") or "")
     generation = str(kwargs.get("generation", "") or "")
+    upload_id = str(kwargs.get("upload_id", "") or "")
     staging_path = str(kwargs.get("staging_path", "") or "")
     file_hash = str(kwargs.get("file_hash", "") or "")
     logical_path = str(kwargs.get("filepath", "") or "")
+    index_run_store = None
     if generation:
         from backend.rag.indexing.index_run_store_pg import get_index_run_store
         existing_row = _get_registry().get_by_path(logical_path)
-        get_index_run_store().create_run(
-            upload_id=str(kwargs.get("upload_id", "")),
+        index_run_store = get_index_run_store()
+        index_run_store.create_run(
+            upload_id=upload_id,
             generation=generation,
             file_path=logical_path,
             kb_id=str(kwargs.get("kb_id", "") or ""),
@@ -1223,15 +1226,28 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
     async_result = execute_index_task.apply_async(
         kwargs=kwargs, queue=route.physical_queue
     )
+    celery_task_id = str(getattr(async_result, "id", "") or "")
+    if index_run_store is not None and celery_task_id:
+        try:
+            recorded_run = index_run_store.set_celery_task_id(
+                upload_id, celery_task_id)
+            if recorded_run is None:
+                logger.error(
+                    "[RAG] 入队成功但索引运行记录不存在，upload_id=%s",
+                    upload_id)
+        except Exception:  # noqa: BLE001 — 入队成功后追踪写失败不得重投
+            logger.warning(
+                "[RAG] 入队成功但索引 Celery ID 回填失败，upload_id=%s",
+                upload_id, exc_info=True)
     if db_task_id:
         task_service.mark_queued(db_task_id,
-                                 getattr(async_result, "id", ""),
+                                 celery_task_id,
                                  queue=route.physical_queue)
         log_route(route, dispatch_type="initial", task_id=db_task_id,
                   celery_task_name="tasks.execute_index")
-    return {"queued": True, "celery_task_id": getattr(async_result, "id", ""),
+    return {"queued": True, "celery_task_id": celery_task_id,
             "db_task_id": db_task_id,
-            "upload_id": str(kwargs.get("upload_id", ""))}
+            "upload_id": upload_id}
 
 
 def _dispatch_index_with_idempotency(

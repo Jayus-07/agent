@@ -33,9 +33,20 @@ class ExcelParser(BaseDocumentParser):
 
         max_rows = max(1, int(RAG_TABLE_MAX_ROWS))
         max_cells = max(1, int(RAG_TABLE_MAX_CELLS))
+        wb = None
+        formula_wb = None
         try:
             wb = openpyxl.load_workbook(file_path, read_only=True, data_only=True)
+            # data_only 工作簿优先保留 Excel 计算缓存；空缓存的公式单元格会
+            # 显示为 None，因此并行读取公式视图作为缺省值，避免静默漏格。
+            formula_wb = openpyxl.load_workbook(
+                file_path, read_only=True, data_only=False,
+            )
         except Exception as e:
+            if wb is not None:
+                wb.close()
+            if formula_wb is not None:
+                formula_wb.close()
             logger.error(
                 f"[ExcelParser] 打开失败 {file_path}: {type(e).__name__}: {e}"
             )
@@ -85,6 +96,11 @@ class ExcelParser(BaseDocumentParser):
                 width_limited = max_col < sheet_max_col
 
                 row_iter = iter(ws.iter_rows(values_only=True, max_col=max_col))
+                formula_row_iter = iter(
+                    formula_wb[sheet_name].iter_rows(
+                        values_only=False, max_col=max_col,
+                    )
+                )
                 row_number = 0
                 while row_number < sheet_max_row:
                     # 在请求下一行前检查全局资源预算，避免 iter_rows 额外
@@ -107,10 +123,15 @@ class ExcelParser(BaseDocumentParser):
 
                     try:
                         row = next(row_iter)
+                        formula_row = next(formula_row_iter)
                     except StopIteration:
                         break
                     row_number += 1
-                    cells = [_cell_to_str(c) for c in row]
+                    cells = []
+                    for value, formula_cell in zip(row, formula_row):
+                        if value is None and formula_cell.data_type == "f":
+                            value = formula_cell.value
+                        cells.append(_cell_to_str(value))
                     cells_scanned += len(cells)
 
                     if width_limited:
@@ -150,6 +171,7 @@ class ExcelParser(BaseDocumentParser):
                     break
         finally:
             wb.close()
+            formula_wb.close()
 
         reason = ",".join(sorted(truncation_reasons))
         if reason:
