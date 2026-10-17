@@ -52,9 +52,11 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     # 阶段请求预算按真实链路实测标定（2026-10-18 main run）：fixture 冷索引
     # ~80 calls / 45k tokens / CNY 0.10；eval 阶段含 rerank ~25k tokens，
     # MultiQuery 再增 ~8 次 chat。整次 run 仍由总 envelope 校验。
-    assert 'LLM_REQUEST_MAX_CALLS: "48"' in smoke
-    assert 'LLM_REQUEST_MAX_TOKENS: "48000"' in smoke
-    assert 'LLM_REQUEST_MAX_COST: "0.35"' in smoke
+    assert 'LLM_REQUEST_MAX_CALLS: "128"' in smoke
+    assert 'LLM_REQUEST_MAX_TOKENS: "96000"' in smoke
+    assert 'LLM_REQUEST_MAX_COST: "0.40"' in smoke
+    # MultiQuery 改写必须留够思考型模型的完成时间，同时小于检索 deadline。
+    assert 'RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS: "6000"' in smoke
     assert 'LLM_REQUEST_MAX_CALLS: "160"' in smoke
     assert 'LLM_REQUEST_MAX_TOKENS: "120000"' in smoke
     assert 'LLM_REQUEST_MAX_COST: "0.15"' in smoke

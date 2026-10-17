@@ -128,3 +128,10 @@
 - 根因：#52 新增的 fixture 阶段请求预算（16 calls / 8,000 tokens / CNY 0.10）远低于真实冷索引需求（每份文档 1 次元数据 LLM ≈1.8k tokens + 多次 embedding；按 main 实测整段约 80 calls / 45k tokens / CNY 0.10）。预算状态是进程内计数，import 与 eval 各自独立计数，因此只需按阶段真实量级标定。
 - 修复：fixture 阶段改为 160 calls / 120,000 tokens / CNY 0.15；eval 阶段改为 48 calls / 48,000 tokens / CNY 0.35（含 MultiQuery 约 +8 次 chat 与 rerank ~14k tokens 余量）。整次 run 总账本仍为 200 calls / 200,000 tokens / CNY 0.50；失败仍 fail-closed，未放宽 Top-1/Golden/门禁阈值。
 - 免费复验：tests/evaluation/test_rag_ci_workflow_contracts.py 与 backend/tests/evaluation/test_rag_paid_preflight.py 共 30 passed。
+### 2026-10-18 RC-005/RC-024 证据核查与检索修复（无标注改动）
+
+- 源文对照：RC-005 的 required_facts（商家承担运费 + 全额退款）只在 returns_退货政策.pdf 的 3.1 同时出现（2.3 是无理由退货的另一条）；FAQ 只回答运费且未提全额退款 → **不是标注缺失**，是 rerank 把部分相关的 FAQ 排到了权威政策之前（RETRIEVAL_ERROR）。RC-024 的 required_facts（供应商准入 / AQL / CE-FCC）分别落在 purchase（3.2/6.2）、qc（AQL=2.5、CE/FCC 标签）、supplier（资质初审）；排第一的 ops_库存管理制度 只写了「采购到货→验收→质检→上架」流程，不覆盖任何 required_fact → 同为 RETRIEVAL_ERROR；该题还是 multi_doc 但只走 hybrid，属 ROUTER_ERROR。两例均**不是** LABEL_ERROR / QUESTION_MISMATCH，因此不改 Golden、不新建数据集版本（A3 候选仅在两例确属标注错误时才需要）。
+- 检索修复（最小）：hybrid 分类器新增**结构性**多来源信号（哪些部门/哪些环节/哪些岗位/哪些角色/涉及哪些/由哪些/分别由/跨部门/部门协作/多方协作），命中即跑 MultiQuery；不使用 case_id 或问题原文特判。正例（含 RC-024 及 5 条相近问法）判 hybrid_multi_query，负例（发货时间/退货政策/报销流程/订单号/库存周转率/七天无理由条件）保持非 MQ，83 条路由测试通过。
+- 改写超时：真实日志显示 1.8s 内思考型 chat 模型必然超时降级；评测工作流把 RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS 提到 6000ms（仍 < 8000ms 检索 deadline，取消/预算语义不变）。
+- 预算：MultiQuery 生效后单 case 多 1 次改写 + N 路检索（含 rerank），eval 阶段额度按实测预估提到 128 calls / 96,000 tokens / CNY 0.40；整次 run 总 envelope 仍为 200 / 200,000 / CNY 0.50，fixture 阶段 160 / 120,000 / 0.15 不变。
+- 免费验证：路由/多查询/覆盖/质量/上传链路 276 passed + 隔离 PG 9 项 91 passed；16/16 fixture 完整性 PASS。下一步：受信任 dispatch 复跑真实 Smoke，重点看 RC-024 是否进入 Top-1（Top-1 只需 6/7 即达标，RC-005 仍可能排 FAQ 第一）。

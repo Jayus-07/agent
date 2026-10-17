@@ -181,9 +181,14 @@ jobs:
       # （基线 2026-10-18 main run 实测：108 calls / 106,330 tokens / CNY 0.116，
       # 含 baseline 16 份 fixture 冷索引 + 8-case 评测；费用上限仍为 CNY 0.50，
       # calls/tokens 用约 1.8 倍实测值做失控保护，不构成成本放宽）。
-      LLM_REQUEST_MAX_CALLS: "48"
-      LLM_REQUEST_MAX_TOKENS: "48000"
-      LLM_REQUEST_MAX_COST: "0.35"
+      # MultiQuery 生效后单 case 会多 1 次改写 + N 路检索（含 rerank），
+      # 8-case 实测预估 ~85 calls / ~50k tokens；额度按此留余量。
+      LLM_REQUEST_MAX_CALLS: "128"
+      LLM_REQUEST_MAX_TOKENS: "96000"
+      LLM_REQUEST_MAX_COST: "0.40"
+      # 思考型 chat 模型改写实测 ~2.3s，1.8s 必然超时降级；放宽到 6s
+      # （仍小于 RAG_RETRIEVAL_DEADLINE_MS=8000，取消/预算语义不变）。
+      RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS: "6000"
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
