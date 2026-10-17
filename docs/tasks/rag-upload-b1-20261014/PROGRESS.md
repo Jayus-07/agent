@@ -40,3 +40,10 @@
 - **PDF Worker SIGKILL 根因（实测）**：运行中的 `agent-rag-index-worker-1` 容器 `HostConfig.Memory=805306368`（768 MiB，compose 声明 3g、concurrency 默认 2）。本地对 500 页文本 PDF 执行 `parse_and_chunk_full` 峰值 RSS **836.2 MB**（75.7s，9,501 AST 节点，9,500 chunk → 超过 `MAX_CHUNKS_PER_DOC=6000` 被截断）。单文档解析峰值已高于运行容器上限 → cgroup OOM 以 SIGKILL 终止 Celery 子进程（父进程存活、容器 `OOMKilled=false`），与现场「子进程 SIGKILL、无最终 IndexRun/终态/Search」一致；并发 2 时对 3g 上限也接近临界。
 - 解除 B1 阻断所需（本轮未执行，避免在未验证情况下改部署资源）：① 将 rag-index-worker 限额提升到 ≥ 单文档峰值的 2 倍（或把 concurrency 降到 1）；② 用 #66 HEAD 重建并启动 stack；③ 上传真实 501 页 PDF，取回 IndexRun/Registry/终态/Search 证据。当前 #66 仍保持 Draft，不宣称 PDF E2E 通过。
 - 说明：超大 PDF 产出 chunk 超过上限属既有 fail-closed（文档 failed），与本次 OOM 是两类问题。
+## 2026-10-18 更正：Worker SIGKILL 的 OOM 归因未被复现
+
+- 复核运行配置：实际生效内存上限 768MiB（`memory.max=805306368`，来自本机 4C8G 覆盖层，非 compose 声明的 3g），`RAG_INDEX_WORKER_CONCURRENCY=1`；cgroup `memory.events` 当前 `oom_kill=0`。
+- **反证**：在容器内（同一镜像 + 挂载 #66 代码）以 `--memory=768m` 解析同一份 500 页 PDF，峰值 RSS 仅 **280.5MB**，解析成功（124.8s，9500 chunk → 超过 `MAX_CHUNKS_PER_DOC=6000` 截断）。此前 Windows 宿主测得 836.2MB，不能与容器 cgroup 峰值直接比较。
+- 结论修正：**768MiB 上限导致 OOM SIGKILL 的假设不被现有证据支持**，Worker SIGKILL 根因仍为 UNVERIFIED。可能的下一层原因：Docker Desktop VM 级内存压力、任务执行到 embedding/元数据阶段的内存峰值（本实验只覆盖 parse+chunk）、或容器被 `docker stop`/重建时的 SIGKILL；需要原始 worker 日志或完整 stack 复现才能定论。
+- 保留 `部署/prod-4c8g/docker-compose.rag-t2.yml`（并发 1 + 2g）作为隔离测试余量与可复现配置，但在根因确认前**不宣称已修复**；#66 继续保持 Draft。
+- 另记录：当前 `backend/config/rag.py` 的 `MAX_CHUNKS_PER_DOC` 默认值为 **6000**（非 5000），超限文档仍按既有 fail-closed 拒绝；B1 的“超限 PDF 受控失败”用例需按 6000 门槛构造。
