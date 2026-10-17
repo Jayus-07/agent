@@ -210,7 +210,12 @@ def test_pii_normalization_does_not_hide_unmasked_leaf_content_loss():
     report = coverage_audit(source, chunks, normalize_pii=True)
 
     assert report["uncovered_count"] == 1
-    assert report["uncovered_samples"][0]["preview"] == "备用电话是13900139000。"
+    # 2026-10-18：未覆盖样本属于证据，只保留掩码形态（不再落明文手机号），
+    # 但仍必须能定位到具体是哪一段正文缺失。
+    preview = report["uncovered_samples"][0]["preview"]
+    assert preview.startswith("备用电话是")
+    assert "139****9000" in preview
+    assert "13900139000" not in preview
 
 
 def test_financial_index_filter_masks_pii_and_still_detects_missing_body():

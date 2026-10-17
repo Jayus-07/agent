@@ -448,27 +448,16 @@ def _enforce_prepaid_content_integrity(
         failures.append("cleaning_audit_failed")
     elif int(cleaning.get("uncovered_count") or 0) > 0:
         failures.append("cleaner_content_loss")
-    if not failures:
-        return {
-            "coverage": coverage,
-            "chunk_integrity": chunk_integrity,
-            "cleaning_coverage": cleaning,
-        }
 
-    # 失败也要留证：质量记录在付费前就落盘（不产生任何外呼），
-    # 后续付费后门禁不再重复构建记录（本次已抛出）。
-    detail = ",".join(failures)
-    doc_meta["quality_status"] = "failed"
-    _append_quality_issue(
-        doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
-    )
-    quality_score = None
+    # 复用同一套类型化校验补齐"付费前即可判定"的硬异常（截断 / 表格与 OCR
+    # 资源上限等），避免在预检里再抄一份判据。build_quality_record +
+    # run_typed_validation 都是纯函数、不产生任何外呼。
+    record = None
     anomalies: list[dict] = []
     try:
         from backend.rag.preprocessing.quality_gate import (
             build_quality_record,
-            compute_quality_score,
-            persist_quality_record,
+            hard_anomalies,
             run_typed_validation,
         )
 
@@ -488,6 +477,56 @@ def _enforce_prepaid_content_integrity(
             cleaning_coverage=cleaning,
         )
         anomalies = run_typed_validation(record, raw_ast)
+        for item in hard_anomalies(anomalies):
+            code = str(item.get("check") or "")
+            if code and code not in failures:
+                failures.append(code)
+    except Exception:  # noqa: BLE001 — 预检校验失败不改变覆盖/身份/清洗判据
+        logger.warning(
+            "[Indexer] 付费前类型化校验构建失败（退化为基础判据）",
+            exc_info=True,
+        )
+    if not failures:
+        return {
+            "coverage": coverage,
+            "chunk_integrity": chunk_integrity,
+            "cleaning_coverage": cleaning,
+        }
+
+    # 失败也要留证：质量记录在付费前就落盘（不产生任何外呼），
+    # 后续付费后门禁不再重复构建记录（本次已抛出）。
+    detail = ",".join(failures)
+    doc_meta["quality_status"] = "failed"
+    _append_quality_issue(
+        doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
+    )
+    quality_score = None
+    try:
+        from backend.rag.preprocessing.quality_gate import (
+            build_quality_record,
+            compute_quality_score,
+            persist_quality_record,
+            run_typed_validation,
+        )
+
+        if record is None:
+            record = build_quality_record(
+                file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+                raw_ast=raw_ast, chunks=chunks,
+                file_size=file_size, file_hash=file_hash or "",
+                doc_type=qc.get("doc_type", ""),
+                strategy_name=qc.get("strategy_name", ""),
+                completeness=qc.get("completeness"),
+                filtered_details=filtered_details,
+                truncated=truncated,
+                ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
+                ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
+                route_decision=qc.get("route_decision"),
+                coverage=coverage,
+                cleaning_coverage=cleaning,
+            )
+        if not anomalies:
+            anomalies = run_typed_validation(record, raw_ast)
         quality_score = compute_quality_score(anomalies)
         doc_meta["quality_score"] = quality_score
         record["quality_issues"] = doc_meta.get("quality_issues", "")
@@ -2586,8 +2625,31 @@ class IncrementalIndexer:
                 "old_chunk_ids": old_chunk_ids,
                 "old_doc_db_id": old_doc_db_id,
             }
-        index_result = self._index_file(
-            file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        previous_status = str((row or {}).get("status") or "")
+        previous_file_hash = str((row or {}).get("file_hash") or "")
+        try:
+            index_result = self._index_file(
+                file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        except Exception:
+            # 真实路径里 _index_file → register_in_progress 会先把行改成
+            # parsing + 新 file_hash。失败时旧向量仍按"先写后删"保留，但
+            # status=parsing 会让检索可见性（status=active 正向校验）把旧
+            # 版本整体隐藏，file_hash 也会指向未成功索引的内容。这里恢复
+            # 更新前快照，兑现"失败的索引不能动旧 active 记录"契约
+            # （test_indexer_recovery_and_reindex::test_failure_preserves_old_data）。
+            if old_doc_id and previous_status == "active" and old_chunk_ids:
+                try:
+                    self.registry.update_status(file_path, "active")
+                    if previous_file_hash:
+                        self.registry.update_fields(
+                            file_path, {"file_hash": previous_file_hash},
+                        )
+                except Exception as restore_error:  # noqa: BLE001
+                    logger.warning(
+                        "[REINDEX] 失败后恢复旧 active 快照失败 "
+                        f"(doc_id={old_doc_id}): {restore_error}"
+                    )
+            raise
         # dedup 命中（内容未变，如占位行写入失败的极端场景）→ 没有新数据，
         # 清理旧向量会造成数据丢失，直接原样返回
         skipped = bool(index_result.get("skipped"))

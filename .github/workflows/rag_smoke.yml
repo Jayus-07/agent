@@ -117,6 +117,8 @@ jobs:
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
             backend/tests/rag/test_rag_fixture_content_integrity.py \
+            backend/tests/rag/test_rag_cleaning_audit_boundaries.py \
+            backend/tests/rag/test_reindex_failure_snapshot.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

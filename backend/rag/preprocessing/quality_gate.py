@@ -22,6 +22,7 @@ import re
 from typing import Any
 
 from backend.rag.preprocessing.ast import LEAF_TYPES, DocumentAST, walk
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
 QUALITY_RECORD_SCHEMA_VERSION = "1.0"
@@ -76,7 +77,7 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
     for name, pat in _VALUE_PATTERNS.items():
         lost = set(pat.findall(raw_text or "")) - set(pat.findall(cleaned_text or ""))
         if lost:
-            samples = sorted(lost)[:3]
+            samples = [mask_sensitive_text(item, limit=80) for item in sorted(lost)[:3]]
             anomalies.append({
                 "check": "value_loss",
                 "value_type": name,
@@ -155,38 +156,30 @@ def audit_chunk_integrity(chunks: list) -> dict[str, int]:
     }
 
 
-CLEANING_AUDIT_SAMPLE_LIMIT = 2000
-
-
 def _audit_normalize(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
 
 
-def _audit_windows(text: str) -> list[str]:
-    """长文本按滑动窗口切探针，避免全文字符串包含的 O(n²) 与截断漏判。"""
-    if not text:
-        return []
-    if len(text) <= 120:
-        return [text]
-    stride = 80
-    windows = [text[i:i + 120] for i in range(0, len(text), stride)]
-    if windows and len(windows[-1]) < 40:
-        windows[-1] = text[-120:]
-    return windows
-
-
 def cleaning_coverage_audit(
-    ast: DocumentAST, max_audit_nodes: int = CLEANING_AUDIT_SAMPLE_LIMIT,
+    ast: DocumentAST, max_audit_nodes: int | None = None,
 ) -> dict:
     """Raw AST → 清洗输出 的合法清洗对账（P0-D 边界一，2026-10-18）。
 
     coverage_audit 只审「归一化 AST → 最终 Leaf」，看不到 Cleaner 把节点
     清空：被清空的叶子会从覆盖审计的分母里消失，形成"分母缩水式假通过"。
-    本审计独立核对清洗前 raw_text 与清洗后节点文本：
+
+    对账口径（逐节点、用节点自身的 raw_text → text 配对）：
       - 规范化差异（控制字符/全半角/空白/中文标点/HTML 剥离）不算丢失；
       - 行形态即可判定的确定性噪音（页码/页脚/模板行/维基噪音/URL 邮箱/
         纯符号）算合法删除并计数；
-      - 其余消失的行一律计入 uncovered，由质量门禁 fail-closed。
+      - 其余在**该节点自身**清洗结果中消失的行计入 uncovered，由质量门禁
+        fail-closed。
+
+    不使用全文拼接的公共文本对账：两个节点文本相同时，"全文里还出现过"
+    不能抵消被清空的另一个节点（2026-10-18 边界修复）。
+    默认**全量**审计：逐节点线性核对，不做全文 O(n²) 扫描；只有调用方显式
+    传入 max_audit_nodes 才抽样，此时 sampled=True，发布门禁按"审计不完整"
+    硬失败——抽样无缺口不得被表述成全量完整。
     审计自身异常返回 {"error": ...}，调用方必须按硬异常处理。
     """
     from backend.rag.preprocessing.cleaner import DocumentCleaner
@@ -194,19 +187,20 @@ def cleaning_coverage_audit(
     cleaner = DocumentCleaner()
     try:
         nodes = [n for n in walk(ast.root) if n.type != "table"]
-        cleaned_blob = _audit_normalize(
-            "\n".join(n.text for n in nodes if (n.text or "").strip())
-        )
         audited_all = [
             n for n in nodes if (getattr(n, "raw_text", "") or "").strip()
         ]
-        max_audit_nodes = max(1, int(max_audit_nodes))
-        sampled = len(audited_all) > max_audit_nodes
-        if sampled:
-            stride = max(1, math.ceil(len(audited_all) / max_audit_nodes))
-            audited = audited_all[::stride][:max_audit_nodes]
-        else:
+        sampled = False
+        if max_audit_nodes is None:
             audited = audited_all
+        else:
+            cap = max(1, int(max_audit_nodes))
+            if len(audited_all) > cap:
+                stride = max(1, math.ceil(len(audited_all) / cap))
+                audited = audited_all[::stride][:cap]
+                sampled = True
+            else:
+                audited = audited_all
 
         covered = 0
         uncovered: list[dict] = []
@@ -221,17 +215,13 @@ def cleaning_coverage_audit(
             if not raw_normalized:
                 covered += 1
                 continue
-            if raw_normalized in cleaned_blob:
-                covered += 1
-                continue
-            probes = _audit_windows(raw_normalized)
-            if probes and all(probe in cleaned_blob for probe in probes):
-                covered += 1
-                continue
-
             node_cleaned = _audit_normalize(
                 cleaner.normalize_for_compare(node.text)
             )
+            if raw_normalized in node_cleaned:
+                covered += 1
+                continue
+
             lost: list[str] = []
             for line in raw_text.splitlines():
                 if not line.strip():
@@ -241,23 +231,18 @@ def cleaning_coverage_audit(
                 )
                 if not line_normalized:
                     continue
-                if line_normalized in cleaned_blob:
-                    continue
-                if node_cleaned and line_normalized in node_cleaned:
-                    continue
-                line_probes = _audit_windows(line_normalized)
-                if line_probes and all(probe in cleaned_blob for probe in line_probes):
+                if line_normalized in node_cleaned:
                     continue
                 if cleaner.classify_noise_line(line):
                     legal_noise_line_count += 1
                     continue
-                lost.append(line.strip()[:80])
+                lost.append(mask_sensitive_text(line.strip(), limit=80))
 
             if lost:
                 lost_line_count += len(lost)
                 uncovered.append({
                     "type": node.type,
-                    "preview": raw_text.strip()[:80],
+                    "preview": mask_sensitive_text(raw_text.strip(), limit=80),
                     "lost_lines": len(lost),
                     "lost_samples": lost[:3],
                 })
@@ -571,20 +556,13 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 + (f"，样例: {samples[:3]}" if samples else ""),
             )
             if cleaning_sampled:
-                detail = (
-                    f"清洗审计抽样 {cleaning_audited}/{cleaning_total} 个节点；"
-                    "不能据此宣称全量 100% 保留"
+                # 清洗边界是内容完整性的硬边界：未审计的节点可能已经丢失，
+                # 不能被当作"抽样无缺口 = 全量通过"。这里按硬异常阻断发布。
+                _check(
+                    "cleaning_audit_incomplete", False,
+                    f"清洗审计仅抽样 {cleaning_audited}/{cleaning_total} 个节点，"
+                    "未审计节点不允许静默丢失；请使用全量审计",
                 )
-                checks.append({
-                    "check": "cleaning_audit_sampled",
-                    "pass": False,
-                    "detail": detail,
-                })
-                anomalies.append({
-                    "check": "cleaning_audit_sampled",
-                    "severity": "warn",
-                    "detail": detail,
-                })
 
     coverage = record.get("coverage")
     if coverage is not None:

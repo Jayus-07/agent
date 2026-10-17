@@ -4,6 +4,7 @@ import re
 
 from backend import config
 from backend.rag.preprocessing.chunking import is_table_chunk
+from backend.rag.preprocessing.redaction import mask_pii_text
 from backend.shared.logger import logger
 
 
@@ -77,13 +78,9 @@ class DuplicateDetector:
         return (a ^ b).bit_count()
 
 
-# ── PII 脱敏正则 ──────────────────────────────────
-
-_PII_PATTERNS = [
-    (re.compile(r'(?<!\d)(1[3-9]\d{9})(?!\d)'), 'phone'),
-    (re.compile(r'(?<!\d)(\d{17}[\dXx])(?!\d)'), 'id_card'),
-    (re.compile(r'(?<!\d)(\d{16,19})(?!\d)'), 'bank_card'),
-]
+# ── PII 脱敏 ──────────────────────────────────────
+# 规则与掩码形态统一在 redaction.mask_pii_text（证据脱敏复用同一口径）；
+# 这里保留 _mask_pii 名称以兼容既有调用方（indexer / 覆盖对账）。
 
 # 财务专用 PII 脱敏正则（从 domain_data 导入，兑底本地定义）
 try:
@@ -93,19 +90,8 @@ except ImportError:
 
 
 def _mask_pii(text: str) -> tuple[str, list[str]]:
-    """PII 脱敏。返回 (脱敏后文本, 操作列表)"""
-    masked_types = []
-    for pattern, pii_type in _PII_PATTERNS:
-        matches = pattern.findall(text)
-        if matches:
-            if pii_type == 'phone':
-                text = pattern.sub(lambda m: m.group(1)[:3] + '****' + m.group(1)[-4:], text)
-            elif pii_type == 'id_card':
-                text = pattern.sub(lambda m: m.group(1)[:6] + '********' + m.group(1)[-4:], text)
-            elif pii_type == 'bank_card':
-                text = pattern.sub(lambda m: m.group(1)[:4] + '********' + m.group(1)[-4:], text)
-            masked_types.append(pii_type)
-    return text, masked_types
+    """PII 脱敏。返回 (脱敏后文本, 操作列表)。规则见 redaction.mask_pii_text。"""
+    return mask_pii_text(text)
 
 
 def _mask_financial_pii(text: str) -> tuple[str, list[str]]:

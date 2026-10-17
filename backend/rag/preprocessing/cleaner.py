@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from backend import config
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
 
@@ -158,10 +159,12 @@ class DocumentCleaner:
         """记录一条删除证据（操作名/噪音分类/原行样本），供清洗对账审计。"""
         if len(r.dropped) >= _MAX_DROP_EVIDENCE:
             return
+        # 证据可能来自正文：只保留脱敏后的掩码形态（手机号/邮箱/凭据），
+        # 既能定位被删内容，又不把明文秘密写进质量记录与 Trace 摘要。
         r.dropped.append({
             "operation": operation,
             "category": category,
-            "line": str(line).strip()[:120],
+            "line": mask_sensitive_text(str(line).strip(), limit=120),
         })
 
     def _remove_control_chars(self, r: CleanResult) -> CleanResult:
