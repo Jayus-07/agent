@@ -493,3 +493,32 @@ PR：
 - 直接证据：该 `upload_id` 无 `generation`，`_dispatch_index` 因此不建 run 行；任务即使入队也未形成可追踪终态。这不是「PDF 链路通过」，而是新发现的可追踪性缺口（与历史 `table_describe` 悬挂是同一类问题：任务无 run 行 → 无法证明终态）。
 - 结论：PDF 真实链路仍 **NOT VERIFIED**；下一步应先修「上传未带 generation 时不建 IndexRun」的可追踪性（或确保上传路径始终生成 generation），再复跑本探测。Worker/DB/Redis 隔离栈状态正常，无共享库写入，无 Provider 调用。
 - 已清理：临时 driver 脚本已删除，Worker 进程已停止；#66 工作树干净（HEAD `c8663b1`）。
+
+## 2026-10-17 Phase4：根因更正与进度
+
+### 更正：上一轮 #66 的「缺少 generation」结论错误
+
+- 上一轮通过直接调用 `sync_upload_impl()` 后查询 `rag_index_runs` 为空，被记为「上传缺 generation 的可追踪性缺口」。**该结论错误**：`sync_upload_impl` 在 `rag_upload.py:682` 自己生成 `generation = uuid4().hex[:16]`，并在成功返回体（794-810）中返回 `upload_id/filepath/staging_path/generation/filename/size/file_hash`；IndexRun/Task/派发由 HTTP 路由 `upload_document` 之后的 `_dispatch_index_to_celery()` 负责。
+- 上一轮的驱动脚本把返回值过滤成固定键集合（不含 `generation`）并用 `doc_id` 判断，属于**测试方法错误**，不是产品缺陷。已按此结论停止「在上传内部再派发一次」的错误方向。
+
+### #52 免费 CI 修复（已推送）
+
+- 失败用例 `backend/tests/rag/test_specialized_budget.py::test_rerank_unknown_price_keeps_reserved_quota` 的旧断言（enforce 缺价仍放行并保留预占）与 #85 的强制价格门禁契约冲突。
+- 重写为两条契约测试，不删除、不放宽：
+  1. `test_rerank_unknown_price_rejects_before_outbound_in_enforce`：enforce + 无任何可信单价 → `RequestBudgetExceeded`，断言 **HTTP 出站为 0、预占为 0、usage 行为 0**；
+  2. `test_rerank_price_unknown_keeps_reserved_quota_without_zero_settlement`：注册表有单价但计费拿不到价格 → 允许出站，预占保留 `needs_review`、`amount_cny=0.50`、无 `amount` 字段（不按 0 元精确结算）、事件 `cost_status∈{unpriced,price_unknown}`、归因到 `eval-user/eval`。
+- 本地跑 CI 的完整免费集（`tests/test_rag_smoke_path_filter.py`、`tests/evaluation/test_seed_eval_bindings_verify.py`、`test_release_gate_tier_samples.py`、`test_rag_ci_workflow_contracts.py`、`backend/tests/rag/test_specialized_budget.py`、`backend/tests/evaluation/test_import_fixture_entrypoint.py`、`backend/tests/evaluation/test_rag_paid_preflight.py`、`backend/tests/scripts/test_seed_prompt_eval_db.py`）：**80 passed**（CI 原为 1 failed/78 passed）。
+- 新 HEAD `7aa361ddd62b7ef4d4698380f0c98bd2ee14fea7` 已推送，GitHub CI 待收口。
+
+### #66 真实 HTTP 探测（本轮推进到确切阻断点）
+
+- 已在隔离栈启动真实 FastAPI（`uvicorn backend.app.server:app`，127.0.0.1:8001，`API_KEY`/网关身份头/隔离 PG 5434/Redis 6382/隔离 `RAG_DATA_DIR`）并确认路由 `/rag/upload` 可达、鉴权链（X-API-Key + X-User-Id/X-Auth-Type/X-Tenant-Id/X-User-Roles）通过。
+- 真实 POST `/rag/upload` 返回 `UPSTREAM_UNAVAILABLE`。进程内取证到确切原因：`RAG pipeline 初始化失败: 数据库未配置可用的 embedding 供应商 API Key，请先在管理端测试并保存向量模型；如需本地模型，请显式使用本地模式`（`backend/rag/embedding_singleton.py:144`），`get_rag_status() = {ready:false, status:error}`，因此 `require_rag_ready()` 在进入上传前返回 503。
+- 该隔离库（`agent_rag_e2e_memory`）的 Registry 加载结果为「7 厂商/8 模型/**0 凭据**」；`rag_index_meta` 虽记录 local BGE，但运行时 `_should_use_cloud_embedding()` 仍走云端分支。设置 `EMBEDDING_PROVIDER=local` 未改变该判定，需按代码真实开关（DB embedding 绑定或显式本地模式配置）修正环境，不是上传链路代码缺陷。
+- 结论：HTTP 上传的真实阻断是**隔离环境缺少 embedding 供应配置**；PDF E2E 仍 NOT VERIFIED。修复方式（二选一）：在隔离库写入合法 embedding 绑定（本地模型或测试 Key），或按代码支持的显式本地模式开关启动；不得伪造 Provider 凭据。
+
+### main 与开放 PR 状态
+
+- `origin/main = 50a4a16ad0470e17e0a60cf8aee99f090039a4c7`（未变）。
+- #52 `7aa361d`（免费 CI 待核）、#66 `c8663b1`（Draft）、#69 `f80d082`（Draft）。
+- main-push 红灯根因仍是 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 未配置（价格门禁按设计 fail-closed，0 费用）；不得用空串/synthetic 价格绕过。
