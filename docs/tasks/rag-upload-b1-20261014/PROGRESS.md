@@ -47,3 +47,11 @@
 - 结论修正：**768MiB 上限导致 OOM SIGKILL 的假设不被现有证据支持**，Worker SIGKILL 根因仍为 UNVERIFIED。可能的下一层原因：Docker Desktop VM 级内存压力、任务执行到 embedding/元数据阶段的内存峰值（本实验只覆盖 parse+chunk）、或容器被 `docker stop`/重建时的 SIGKILL；需要原始 worker 日志或完整 stack 复现才能定论。
 - 保留 `部署/prod-4c8g/docker-compose.rag-t2.yml`（并发 1 + 2g）作为隔离测试余量与可复现配置，但在根因确认前**不宣称已修复**；#66 继续保持 Draft。
 - 另记录：当前 `backend/config/rag.py` 的 `MAX_CHUNKS_PER_DOC` 默认值为 **6000**（非 5000），超限文档仍按既有 fail-closed 拒绝；B1 的“超限 PDF 受控失败”用例需按 6000 门槛构造。
+## 2026-10-18 隔离 Worker PDF E2E PASS（B1 收口）
+
+- 隔离环境：自建 PG（172.17.0.2，默认库 agent_memory/agent_business 由测试库克隆）+ Redis（172.17.0.3），worker 容器 2GiB cgroup、concurrency=1、挂载 #66 后端代码；不读写正式库/卷。
+- canonical BM25 初始化：先 `refresh_registry()` 加载 DB 凭据 → 用 `PgVectorKnowledgeStore`（1024 维真实 embedding）写入 seed chunk → `RAGPipeline(mode='index', auto_sync=False)` 由 canonical 向量集合生成 `bm25/{corpus,docs,index}.pkl + meta.json + PUBLISHED.json`；worker 以 runtime 只读模式成功加载并通过快照校验（未关校验、未复制正式 BM25）。
+- **有效 PDF（tech_技术手册.pdf，真实 Celery 任务）**：`upload_id=e2e-pdf-valid-7`，task `528a258b`，43.7s 成功；Indexer 质量记录 nodes=39/chunks=38/anomalies=0；BM25 快照发布 38 chunks；Publish `gen=7f69439fd1af`；Registry `f5a912bf87 / active / 38 chunks`；PGVector 20 parent + 20 leaf；Search「Git Flow 分支规范」命中该文档 leaf+parent。
+- **超限 PDF（large_500p.pdf）**：真实切分 9500 chunks > `MAX_CHUNKS_PER_DOC=6000` → 截断 → 付费前预检 `chunks_truncated` 硬异常；终态 `validation_error`、`retry_count=0/3`（无无界重试）；Registry 保持原 2 个 Active 文档不变；cgroup `oom_kill=0`、峰值 544MB < 2GiB；无 SIGKILL。
+- **失败后恢复**：超限失败后立即索引 returns_退货政策.pdf，task `de70b7ef` 16.7s 成功、Publish `gen=fa678034f84d`、Registry 新增 active `af22a9bf1c`；Celery `inspect active` 为空（无僵尸任务）。
+- 结论：#66 Batch B1 的「Worker 正常执行 + 有效 PDF 终态 + 超限受控失败 + 失败后恢复 + 旧 Active 保护」验收通过；未复现 SIGKILL，未改 Parser/上限/门禁；BM25 一致性校验保持开启。
