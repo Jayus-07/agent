@@ -39,9 +39,10 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
             from backend.infra.llm.proxy import enforce_model_input_price_tier
 
-            model_name = _resolved_role_model or str(
-                getattr(llm_obj, "model", "") or ""
-            )
+            # 只有"显式传入原始客户端"（测试/兼容）才会走到这里：没有
+            # canonical 角色名，按实例 model 做价格档位校验；角色代理路径
+            # 由代理内部完成预占与结算，不进这个分支。
+            model_name = str(getattr(llm_obj, "model", "") or "")
             enforce_model_input_price_tier(args, model_name=model_name)
         response = llm_obj.invoke(*args, **kwargs)
         # 默认角色代理及显式传入的治理代理已自行预占和记账；兼容旧调用方
