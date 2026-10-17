@@ -558,3 +558,11 @@ PR：
 
 - 只读副本 + `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`：仍需用户提供具备 `pg_is_in_recovery()=true` 的只读连接（数据侧已就绪，配好即可跑真实 8-case）。
 - `#66` PDF E2E：隔离库仍缺 embedding 绑定，需走本地模式或复用云端配置。
+
+### 2026-10-17 只读副本与默认币种
+
+- 本地建了真实物理备库 `agent-postgres-replica`（`pgvector/pgvector:pg16`，卷 `agent_pg_replica_data`，宿主 `127.0.0.1:5435`），`pg_basebackup -R` + 流复制；实测 `pg_is_in_recovery()=true`，主库 `pg_stat_replication` 显示 `streaming/async`。
+- 只读账号 `price_registry_ro`：仅 CONNECT + USAGE + SELECT(model_price / model_price_versions / model_price_reviews)。凭据写入用户桌面文件，不写仓库。
+- **CI 加载器实测通过**：用 `seed_prompt_eval_db.load_registry_price_rows()` + `build_price_snapshot()` 对该副本执行 → 5 行、版本 `2026-10-cny-1`、三模型全 CNY。即数据与校验链路已就绪。
+- 未配置 GitHub Secret：托管 runner 在公网，访问不到 `127.0.0.1:5435`；填一个不可达 DSN 只会把「未配置」变成「无法读取」，属误导。可选两条路：self-hosted runner（本机）或公网可达的云只读实例。
+- 默认币种：账本本位币本来就是 CNY（`BUDGET_BASE_CURRENCY=CNY`，FX 仅用于 USD 行）；但写入侧多处缺省仍是 USD，已改为 CNY：`model_config._parse_model_price`/`_apply_model_pricing`、`price_dto.validate_price_rows`、`price_governance` 两处。前端登记表单本来就默认 CNY。回归 9 套件 **85 passed**。
