@@ -111,3 +111,12 @@
 - 定向 CI 选择 **53 passed / 7.24s**；覆盖评测 fixture 入口、预算预检、CI workflow 合约和旧有 binding Probe 测试（Probe 仍可由独立调用，但不再被 Smoke 工作流额外调用）。仅有既有 `TestCase` collection warning。
 - 隔离 PG T2 PASS：重新执行 031/066 迁移、批准价格快照两次导入仍 4 行、同版本冲突拒绝、价格 preflight 通过；PG 配额测试 **1 passed / 3.65s**。隔离集群已关闭；证据目录 `D:/tmp/pr52-pg-lbq_fncj`。退出仍有既有 async event-loop 清理告警。
 - T3 仍 BLOCKED：`PROMPT_EVAL_APPROVED_PRICES_JSON` 未配置；只读价格 SQL 再次因 PostgreSQL 凭据认证失败，无法取得源批准价。整次 run envelope 是账本门禁与各阶段请求预算，不是供应商侧账单硬封顶的实证，因此未启动真实付费调用、未写共享库。
+
+## 2026-10-18 同步 main（含 #90）与真实 Smoke 前置修复
+
+- 以 PR #52 工作树合并最新 main \`fd1722c\`（#90 内容完整性修复）；冲突仅 \`.github/workflows/rag_smoke.yml\` 的免费预检 pytest 列表，按双方并集保留（新增 3 个 #90 边界/快照用例，MultiQuery/预算/seed 用例全部保留）。
+- 合并后发现 #52 自带缺陷：\`llm_enrichment.invoke_metadata_llm\` 在"显式传入原始客户端"分支引用未定义的 \`_resolved_role_model\`（NameError）。已改为按实例 \`model\` 做价格档位校验；角色代理分支仍由代理自行预占/结算。\`test_llm_role_resolution\` 5 passed。
+- **envelope 重新标定（依据实测，不是放宽质量门）**：2026-10-18 main push 真实 run \`39053291736\`（#90 合并后）完成 baseline 16 份 fixture 冷索引 + 8-case 评测，账本实测 108 calls / 106,330 tokens / CNY 0.116012（chat 34 calls ¥0.099765、embedding 65 calls ¥0.009238、rerank 9 calls ¥0.007009，全部 exact/approved_price_table、0 unverified）。原"整次 run 64 calls / 32k tokens"低于该实测下界，任何真实 run 都会判 OVER_LIMIT → 无法通过；现改为 200 calls / 200,000 tokens（≈1.8× 实测），**费用上限 CNY 0.50 不变**，阶段请求预算（fixture 16/8k/0.10、smoke 48/24k/0.40）不变，失败仍 fail-closed。
+- **MultiQuery 默认口径**：生产检索链默认启用 MultiQuery，受信任评测（push/dispatch）默认按生产口径执行（dispatch 传 \`multiquery=false\` 仅作对照）。否则 main push 门禁评的是未上线路径。
+- 免费验证：CI 预检并集 119 passed；核心受影响集合 251 passed（唯一失败 \`test_sys_model_roles_api::test_requires_admin\` 在 main 同样失败，属本机环境）；隔离 PG T2（容器 \`agent-t2-rag-pg\` 5437）上真实 Registry/PGVector/ChunkStore 全链路 244 passed + 16/16 fixture 完整性 PASS。
+- main #90 合并后真实 run 的 fixture 导入与 index completeness 断言已 PASS；该 run 的 8-case 评测因 main 未含 MultiQuery 而 Top-1=0.7143（RC-005/RC-024 未进 Top-1）判 FAIL —— 正是 #52 需要验证的差距。下一步：受信任 dispatch 开启 MultiQuery 跑一次严格 Smoke，核对 Top-1 ≥0.80、召回/MRR/NDCG、账本对账与 ¥0.50 envelope。

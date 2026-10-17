@@ -25,9 +25,14 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert "github.event.pull_request.base.sha || github.event.before" in smoke
     assert "github.event.pull_request.head.sha || github.sha" in smoke
     assert 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then' in smoke
-    assert 'multiquery:\n        description: "在受信任的手动评测中启用 MultiQuery"' in smoke
-    assert "type: boolean\n        default: false" in smoke
-    assert "EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}" in smoke
+    assert "multiquery:" in smoke
+    # 生产检索链默认启用 MultiQuery：受信任评测默认按生产口径执行，
+    # 关闭仅作为对照（dispatch 显式传 false）。
+    assert "type: boolean\n        default: true" in smoke
+    assert (
+        "EVAL_MULTIQUERY: ${{ github.event_name == 'push' && 'true' || inputs.multiquery }}"
+        in smoke
+    )
     assert 'if [[ "$EVAL_MULTIQUERY" == "true" ]]; then' in smoke
     assert 'MULTIQUERY_ARGS+=(--multiquery)' in smoke
     assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke
@@ -50,8 +55,10 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert 'LLM_REQUEST_MAX_CALLS: "16"' in smoke
     assert 'LLM_REQUEST_MAX_TOKENS: "8000"' in smoke
     assert 'LLM_REQUEST_MAX_COST: "0.10"' in smoke
-    assert 'usage_calls <= 64' in smoke
-    assert 'usage_tokens <= 32000' in smoke
+    # 整次 run envelope（含 fixture 冷索引）：2026-10-18 实测 108 calls /
+    # 106,330 tokens / CNY 0.116，上限取约 1.8 倍实测值；费用上限不变。
+    assert 'usage_calls <= 200' in smoke
+    assert 'usage_tokens <= 200000' in smoke
     assert 'usage_cost <= Decimal("0.50")' in smoke
     assert 'budget_envelope_verification' in smoke
     assert 'tenant_id IS DISTINCT FROM %s' in smoke

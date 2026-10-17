@@ -19,10 +19,10 @@ on:
   workflow_dispatch:
     inputs:
       multiquery:
-        description: "在受信任的手动评测中启用 MultiQuery"
+        description: "受信任评测启用 MultiQuery（生产检索链默认启用；false 仅用于对照）"
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -177,8 +177,10 @@ jobs:
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
       EVAL_RUN_ID: rag-smoke-${{ github.run_id }}-${{ github.run_attempt }}
       LLM_BUDGET_MODE: enforce
-      # 评测阶段请求额度；fixture 索引阶段另设阶段额度，最终账本覆盖两阶段。
-      # 工作流结束时按账本检查整次 run 的 64 calls / 32k tokens / CNY 0.50 envelope。
+      # 评测阶段请求额度；fixture 索引阶段另设阶段额度，最终账本覆盖两阶段
+      # （基线 2026-10-18 main run 实测：108 calls / 106,330 tokens / CNY 0.116，
+      # 含 baseline 16 份 fixture 冷索引 + 8-case 评测；费用上限仍为 CNY 0.50，
+      # calls/tokens 用约 1.8 倍实测值做失控保护，不构成成本放宽）。
       LLM_REQUEST_MAX_CALLS: "48"
       LLM_REQUEST_MAX_TOKENS: "24000"
       LLM_REQUEST_MAX_COST: "0.40"
@@ -203,7 +205,9 @@ jobs:
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
       # 价格快照仅通过只读 Registry 连接导入，禁止 CI 变量自报价格。
-      EVAL_MULTIQUERY: ${{ inputs.multiquery || false }}
+      # 生产检索链默认启用 MultiQuery；main push 必须按生产口径评测，
+      # 否则门禁评的是"未上线路径"，与 main 真实检索能力脱节。
+      EVAL_MULTIQUERY: ${{ github.event_name == 'push' && 'true' || inputs.multiquery }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
       PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
@@ -463,8 +467,8 @@ jobs:
           budget_envelope_verification = (
               "WITHIN_LIMITS"
               if not query_failed
-              and usage_calls <= 64
-              and usage_tokens <= 32000
+              and usage_calls <= 200
+              and usage_tokens <= 200000
               and usage_cost <= Decimal("0.50")
               else "OVER_LIMIT"
           )
