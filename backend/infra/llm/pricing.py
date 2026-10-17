@@ -86,6 +86,48 @@ class PriceTableUnavailable(RuntimeError):
     retryable = False
 
 
+class PriceConflict(PriceTableUnavailable):
+    """同一模型组件的生效价格互相冲突（跨版本 / 混币种）。
+
+    冲突不是「缺价」：两种来源都声称自己是当前价，取任何一条都会算错账。
+    契约：失败关闭——计费降级为 price_unknown / unpriced，硬预算拒绝调用。
+    """
+
+
+def current_price_eligibility_sql(price_table: str, versions_table: str) -> str:
+    """当前有效价格的可见性谓词（在线计费与价格巡检共用同一语义）。
+
+    使用前提：外层查询把价格表别名固定为 p、版本表 LEFT JOIN 为 v，
+    连接条件为 v.version = p.price_table_version AND v.source = p.source。
+
+    规则：
+    - 有版本行的价格：仅 status=active 入选（expired/rejected 永不入选）；
+    - 无版本行的价格：仅 source=provider-page 的直登价入选，且该模型组件
+      不存在任何 active 治理版本——治理版本优先，避免直登价与正式价混价。
+    """
+
+    return f"""
+      (
+        v.status = 'active'
+        OR (
+          v.version IS NULL
+          AND p.source = 'provider-page'
+          AND NOT EXISTS (
+            SELECT 1
+            FROM {price_table} AS governed
+            JOIN {versions_table} AS governed_version
+              ON governed_version.version = governed.price_table_version
+             AND governed_version.source = governed.source
+            WHERE governed.model_name = p.model_name
+              AND governed.component = p.component
+              AND governed.approval_status = 'approved'
+              AND governed_version.status = 'active'
+          )
+        )
+      )
+    """
+
+
 @dataclass(frozen=True)
 class PriceLine:
     model_name: str
@@ -229,14 +271,14 @@ class PostgresPriceRepository:
                                p.price_per_unit, p.unit, p.price_table_version,
                                p.currency
                         FROM {self._table} AS p
-                        JOIN {self._versions_table} AS v
+                        LEFT JOIN {self._versions_table} AS v
                           ON v.version = p.price_table_version
-                         AND v.status = 'active'
                          AND v.source = p.source
                         WHERE p.model_name = %s AND p.component = %s
                           AND p.approval_status = 'approved'
                           AND p.effective_from <= %s
                           AND (p.effective_to IS NULL OR p.effective_to > %s)
+                          AND {current_price_eligibility_sql(self._table, self._versions_table)}
                         ORDER BY p.dimension, p.effective_from DESC, p.id DESC
                         """,
                         (model_name, component, datetime.now(timezone.utc),
@@ -244,8 +286,12 @@ class PostgresPriceRepository:
                     )
                     columns = [item[0] for item in cur.description]
                     rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-            return PriceTable.from_rows(rows)
-        except (MissingModelPrice,):
+            try:
+                return PriceTable.from_rows(rows)
+            except ValueError as exc:
+                # 跨版本 / 混币种冲突：不能静默取一条，交调用方失败关闭。
+                raise PriceConflict(str(exc)) from exc
+        except (MissingModelPrice, PriceTableUnavailable):
             raise
         except Exception as exc:
             raise PriceTableUnavailable("模型价格表不可用") from exc
@@ -336,6 +382,22 @@ def get_current_price_table(model_name: str, component: str) -> PriceTable:
     with _price_cache_lock:
         _price_cache[key] = (now + _PRICE_CACHE_TTL_SECONDS, table)
     return table
+
+
+def has_registry_unit_price(model_name: str) -> bool:
+    """注册表（llm_models.pricing）是否至少有一个正的单价。
+
+    用途：区分「价格表没有生效行，但注册表仍有单价可估价」与「任何来源都没有
+    单价」。后者在硬预算模式下必须拒绝调用（无可信单价时失败关闭）。
+    查询异常一律视为没有单价：宁可在硬模式下拒绝，也不静默放行未知费用。
+    """
+    try:
+        from backend.infra.llm.models import get_model_pricing
+
+        input_price, output_price = get_model_pricing(model_name)
+    except Exception:
+        return False
+    return float(input_price or 0) > 0 or float(output_price or 0) > 0
 
 
 def clear_price_cache() -> None:
@@ -560,10 +622,20 @@ def price_usage(
 
     rows: dict[str, PriceLine] | None
     currency = "USD"
+    price_conflict = False
     try:
         table = get_current_price_table(model_name, component)
         rows = table.require(model_name, component, enforce=False)
         currency = table.currency_for(model_name, component)
+    except PriceConflict as exc:
+        # 冲突不能靠「再挑一条」或注册表估价掩盖：记 unknown/unpriced，硬门拒绝。
+        rows = None
+        price_conflict = True
+        _record_price_metric(component, "conflict")
+        logger.warning(
+            "[Pricing] 当前生效价格互相冲突，拒绝参与计费 model=%s/%s: %s",
+            model_name, component, exc,
+        )
     except PriceTableUnavailable:
         rows = None
     except Exception:
@@ -616,6 +688,13 @@ def price_usage(
             _SIX_PLACES, rounding=ROUND_HALF_UP,
         )
         native_currency = currency
+    elif price_conflict:
+        # 冲突：不估价、不冒充精确。硬门 price_unknown（预算门禁拒绝调用），
+        # 软门 unpriced + 0 成本，绝不退化成 exact。
+        status = COST_STATUS_PRICE_UNKNOWN if enforce else COST_STATUS_UNPRICED
+        pricing_source = PRICING_SOURCE_UNPRICED
+        native_cost = Decimal("0")
+        native_currency = "USD"
     else:
         # PG 无完整必选维度：注册表内置估价（input+output 两维口径）。
         if component == "llm":
@@ -753,6 +832,7 @@ __all__ = [
     "PRICING_SOURCE_APPROVED_TABLE",
     "PRICING_SOURCE_REGISTRY_FALLBACK",
     "PRICING_SOURCE_UNPRICED",
+    "PriceConflict",
     "PriceLine",
     "PriceTable",
     "PriceTableUnavailable",

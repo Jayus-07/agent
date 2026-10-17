@@ -430,6 +430,10 @@ class PostgresPricePageMonitorRepository:
         observed_on: date,
         now: datetime | None = None,
     ) -> PriceComparison:
+        # 与在线计费共用同一套「当前有效价格」语义：
+        # 治理 active 版本 + 无版本行的 provider-page 直登价（治理版本优先）。
+        from backend.infra.llm.pricing import current_price_eligibility_sql
+
         current_time = now or datetime.now(timezone.utc)
         with self._connection_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -452,14 +456,14 @@ class PostgresPricePageMonitorRepository:
                                 p.price_per_unit, p.unit, p.currency,
                                 p.price_table_version
                          FROM {self._price_table} AS p
-                         JOIN {self._versions_table} AS v
+                         LEFT JOIN {self._versions_table} AS v
                            ON v.version = p.price_table_version
-                          AND v.status = 'active'
                           AND v.source = p.source
                          WHERE p.approval_status = 'approved'
                            AND p.effective_from <= %s
                            AND (p.effective_to IS NULL OR p.effective_to > %s)
                            AND ({filters})
+                           AND {current_price_eligibility_sql(self._price_table, self._versions_table)}
                          ORDER BY p.model_name, p.component, p.dimension,
                                   p.effective_from DESC, p.id DESC""",
                         [current_time, current_time, *filter_params],
