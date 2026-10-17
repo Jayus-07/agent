@@ -182,8 +182,8 @@ jobs:
       # 含 baseline 16 份 fixture 冷索引 + 8-case 评测；费用上限仍为 CNY 0.50，
       # calls/tokens 用约 1.8 倍实测值做失控保护，不构成成本放宽）。
       LLM_REQUEST_MAX_CALLS: "48"
-      LLM_REQUEST_MAX_TOKENS: "24000"
-      LLM_REQUEST_MAX_COST: "0.40"
+      LLM_REQUEST_MAX_TOKENS: "48000"
+      LLM_REQUEST_MAX_COST: "0.35"
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
@@ -309,9 +309,12 @@ jobs:
 
       - name: Import baseline evaluation fixtures
         env:
-          LLM_REQUEST_MAX_CALLS: "16"
-          LLM_REQUEST_MAX_TOKENS: "8000"
-          LLM_REQUEST_MAX_COST: "0.10"
+          # fixture 冷索引实测（2026-10-18 main run）：约 80 calls / 45k tokens /
+          # CNY 0.10（16 份 baseline，每份 1 次元数据 LLM + 多次 embedding）。
+          # 原 16 calls / 8k tokens 会在第 5 份文档即 RequestBudgetExceeded。
+          LLM_REQUEST_MAX_CALLS: "160"
+          LLM_REQUEST_MAX_TOKENS: "120000"
+          LLM_REQUEST_MAX_COST: "0.15"
         run: python -m backend.evaluation.import_fixture baseline
 
       - name: Assert index completeness

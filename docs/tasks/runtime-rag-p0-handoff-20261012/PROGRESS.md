@@ -120,3 +120,11 @@
 - **MultiQuery 默认口径**：生产检索链默认启用 MultiQuery，受信任评测（push/dispatch）默认按生产口径执行（dispatch 传 \`multiquery=false\` 仅作对照）。否则 main push 门禁评的是未上线路径。
 - 免费验证：CI 预检并集 119 passed；核心受影响集合 251 passed（唯一失败 \`test_sys_model_roles_api::test_requires_admin\` 在 main 同样失败，属本机环境）；隔离 PG T2（容器 \`agent-t2-rag-pg\` 5437）上真实 Registry/PGVector/ChunkStore 全链路 244 passed + 16/16 fixture 完整性 PASS。
 - main #90 合并后真实 run 的 fixture 导入与 index completeness 断言已 PASS；该 run 的 8-case 评测因 main 未含 MultiQuery 而 Top-1=0.7143（RC-005/RC-024 未进 Top-1）判 FAIL —— 正是 #52 需要验证的差距。下一步：受信任 dispatch 开启 MultiQuery 跑一次严格 Smoke，核对 Top-1 ≥0.80、召回/MRR/NDCG、账本对账与 ¥0.50 envelope。
+### 2026-10-18 真实 Smoke 第 1 次（dispatch 39055244786）：fixture 阶段预算过小
+
+- 触发：gh workflow run rag_smoke.yml --ref codex/rag-multi-query-p0-20261013 -f multiquery=true。
+- 结果：**FAIL**，失败步骤 Import baseline evaluation fixtures（第 14 步）；前 13 步（价格校验、真实 Provider 绑定、额度快照）全 PASS。
+- 日志证据：RequestBudgetExceeded: 请求预算已超限: request_tokens，11 份文档 FAIL，前 4 份已用 7,168 chat tokens；该 run 已计费 6 calls / 8,264 tokens / CNY 0.010482（cost_verification=ESTIMATED，账本与预占结算一致，envelope WITHIN_LIMITS）。
+- 根因：#52 新增的 fixture 阶段请求预算（16 calls / 8,000 tokens / CNY 0.10）远低于真实冷索引需求（每份文档 1 次元数据 LLM ≈1.8k tokens + 多次 embedding；按 main 实测整段约 80 calls / 45k tokens / CNY 0.10）。预算状态是进程内计数，import 与 eval 各自独立计数，因此只需按阶段真实量级标定。
+- 修复：fixture 阶段改为 160 calls / 120,000 tokens / CNY 0.15；eval 阶段改为 48 calls / 48,000 tokens / CNY 0.35（含 MultiQuery 约 +8 次 chat 与 rerank ~14k tokens 余量）。整次 run 总账本仍为 200 calls / 200,000 tokens / CNY 0.50；失败仍 fail-closed，未放宽 Top-1/Golden/门禁阈值。
+- 免费复验：tests/evaluation/test_rag_ci_workflow_contracts.py 与 backend/tests/evaluation/test_rag_paid_preflight.py 共 30 passed。
