@@ -37,6 +37,14 @@ _mq_mode: str = _DEFAULT_MODE
 # 只调角色时若管理员仍绑定思考型模型，512 仍会被思考吃光。
 _REWRITE_MAX_TOKENS_FLOOR = 512
 
+# 请求级有效查询列表的私有元数据键（Phase B，PR #52）。
+# 只挂在本次请求首个候选 Document 的 metadata 上，随 ContextualCompressionRetriever
+# 的同一次 invoke 传给 RerankCompressor；Rerank 在本层外层（装配顺序不变），
+# 因此压缩器拿到的正是 MultiQuery 合并后的同一批候选。前缀 "_runtime_" 表示
+# 非持久化字段：候选来自检索缓存副本（retrievers.py 返回 copy），不会写回
+# Chroma/PG 元数据；Trace/引用导出均按显式键读取，不含该字段。
+RUNTIME_MQ_QUERIES_KEY = "_runtime_mq_queries"
+
 
 def _resolve_rewrite_llm():
     """返回改写专用的治理化 LLM。
@@ -303,7 +311,16 @@ def _rewrite(question: str) -> list[str]:
         lines = _limit(lines)
 
         # LLM 原始返回 + 解析后的变体落地（前端 LLM 明细 / MultiQuery 区块展示）
-        metrics = {**tokens, "variants": len(lines)}
+        # D3（PR #52）：改写 span 必须能回答"本次用的哪一版 Prompt"，否则
+        # 发布新版本后无法从 Trace 区分 YAML 回退与 DB active 版本。
+        metrics = {
+            **tokens,
+            "variants": len(lines),
+            "prompt_key": r.key,
+            "prompt_version": r.version,
+            "prompt_source": r.source,
+            "query_count": len(lines),
+        }
         if raw:
             metrics["completion_text"] = raw[:1000]
         trace_collector.end_span(span, metrics=metrics,
@@ -371,9 +388,22 @@ def _normalize(lines: list[str]) -> list[str]:
         line = re.sub(r"\s+", " ", line)
         # 去首尾空格
         line = line.strip()
+        if _is_label_only(line):
+            # 模板要求"每行一条纯文本查询，不要编号"，模型仍可能回显
+            # "改写结果："/"以下是查询：" 这类标签行；它不是查询，若参与
+            # 计数会挤占 _limit 名额并污染检索，统一在此丢弃。
+            continue
         if line:
             result.append(line)
     return result
+
+
+_LABEL_ONLY_MAX_LEN = 12
+
+
+def _is_label_only(line: str) -> bool:
+    """标签行（如 "改写结果："）判定：短且以冒号结尾。"""
+    return len(line) <= _LABEL_ONLY_MAX_LEN and line.endswith(("：", ":"))
 
 
 # ── Deduplicate ────────────────────────────────────
@@ -726,6 +756,14 @@ class MultiQueryRetriever(BaseRetriever):
             docs[0].metadata["_evidence_groups"] = evidence_groups
             if fanout_timed_out:
                 docs[0].metadata["_mq_partial"] = True  # Phase 5：部分成功留痕
+            # Phase B（PR #52）：把本次实际提交且合法的查询列表交给最终
+            # Rerank。只在真有改写（>1 条）时挂载——未触发、改写失败或只剩
+            # 原始 query 时，Rerank 必须保持单查询行为，不得凭空放大评分。
+            valid_queries = [
+                q for q in queries if isinstance(q, str) and q.strip()
+            ]
+            if len(valid_queries) > 1:
+                docs[0].metadata[RUNTIME_MQ_QUERIES_KEY] = valid_queries
 
         logger.info(
             f"[MultiQuery] {reason}: {query[:30]} → "
