@@ -13,6 +13,9 @@ from backend.travel_v2.services.template_service import (
     TemplateVersionConflict,
 )
 from backend.travel_v2.services.trip_edit_service import IdempotencyConflict
+from backend.travel_v2.services.trip_service import (
+    IdempotencyConflict as TripCreateIdempotencyConflict,
+)
 
 router = APIRouter(tags=["旅游 V2 模板"])
 
@@ -20,7 +23,10 @@ router = APIRouter(tags=["旅游 V2 模板"])
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, TemplateNotFound):
         return HTTPException(status_code=404, detail={"code": "TEMPLATE_NOT_FOUND", "message": str(exc)})
-    if isinstance(exc, (TemplateConflict, TemplateVersionConflict, IdempotencyConflict)):
+    if isinstance(exc, (
+        TemplateConflict, TemplateVersionConflict, IdempotencyConflict,
+        TripCreateIdempotencyConflict,
+    )):
         return HTTPException(status_code=409, detail={"code": "TEMPLATE_CONFLICT", "message": str(exc)})
     if isinstance(exc, TravelV2PersistenceError):
         return HTTPException(status_code=503, detail={

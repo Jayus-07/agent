@@ -177,6 +177,7 @@ Validator / Repair / Reporter 属于门禁及渲染节点，**不另算 Agent**�
 
 - 搜索只读，未选不保存。选为住宿仅代表计划参考，`not_booked`；不能冒充成交或可订房态。
 - 保存酒店 ID/供应商、来源、查询时刻、入住日期范围、被验证的参考字段。
+- 展示当前确定价格前必须保留验证状态、来源和查询时间；只有已核验且在 24 小时有效窗口内的报价可作为当前报价，其余只能标为过期、未核验或不可用。
 - 酒店 POI 信息存在但没有真实库存源时允许作为“住宿地点参考”，不得显示已核实可订房型或房态。
 - 动态价格后续变化仅更新 LiveObservation，不改变用户 SelectionSnapshot 与 Revision。
 
@@ -346,7 +347,8 @@ SSE 是真实过程和运行结果事件通道，REST 正式 Trip 是最终行�
 |---|---|---|
 | 查询 Trip | `GET /api/travel/v2/trips/{trip_id}` | 正式版本事实源；按身份/租户授权 |
 | Trip 列表 | `GET /api/travel/v2/trips` | 私有列表 |
-| 创建 Trip | `POST /api/travel/v2/trips` | 幂等写入，Revision 1 |
+| 创建 Trip | `POST /api/travel/v2/trips` | 幂等写入，Revision 1；可传 `conversation_id`，服务端与 Trip 在同一事务内建立不可变关联 |
+| 恢复 Trip 原会话 | `GET /api/travel/v2/trips/{trip_id}/conversation` | 先按当前身份验证 Trip 属主，再返回服务端持久关联；无关联时返回空且客户端不得读取 URL 会话或其他历史 |
 | 结构化编辑 | `POST /api/travel/v2/trips/{trip_id}/edits` | 类型化操作、CAS、幂等 |
 | Trip 绑定 AI 修改 | `POST /api/travel/v2/trips/{trip_id}/ai-edits` | 请求含 `expected_revision/user_message`、可选 `conversation_id`；身份来自服务端；同键原始请求持久占位；只提交一个白名单结构化操作并复用统一 Validator/CAS/Revision。成功回执含 `base_revision/new_revision/operation_key/change_summary/document/diff`；只读、澄清、不支持和 UNKNOWN 不产生正式 Revision。 |
 | 整文档替换 | `PUT /api/travel/v2/trips/{trip_id}/document` | AI/整文档适配，须统一硬校验 |
