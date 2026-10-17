@@ -1,20 +1,20 @@
 # PR-INTEGRATION-20261016 进度
 
 更新时间：2026-10-16（Asia/Shanghai）
-任务状态：IN_PROGRESS
+任务状态：BLOCKED（可执行代码修复/定向验证已完成；剩余真实评测依赖外部价格治理，main 部署验收依赖授权部署环境）
 主控分支：codex/pr-integration-20261016
 主控 Worktree：C:\Users\wh\.codex\worktrees\pr-integration-20261016\agent
-当前基线：origin/main = e4881940f1d39f82d1f7a938562e0e611f6677bb；主控任务树已合入该基线
+当前基线：origin/main = e42975d6a2992f22bb4a95b9daf806dc3e67d2bf；主控任务树已合入该基线（仅控制工作树本地 merge）
 
 ## G0 统一基线
 
 | 门禁 | 状态 | 证据 |
 | --- | --- | --- |
-| G0-01 main/远端 | PASS（隔离任务树） | 原 main checkout HEAD c5a2703 落后远端且仍有用户修改；隔离控制树已 fetch 并合入 origin/main `e488194`。该 SHA 是 #78 Merge SHA。未在原 main checkout 上 checkout、pull 或写入。 |
-| G0-02 PR 状态 | PASS | 已核对 #73/#74/#75/#76/#77/#78 合并状态及 #52/#66/#69 当前 HEAD、Review、checks 和 skipped jobs；#50/#60 已关闭。#77 四条 Review 已解决；#78 合并后 #75 三条旧 Review 均已追加证据并解决。 |
+| G0-01 main/远端 | PASS（隔离任务树） | 最新 `git fetch origin --prune` 确认 `origin/main=e42975d6a2992f22bb4a95b9daf806dc3e67d2bf`（#80 Merge SHA）；原 main checkout `c5a2703` 与用户修改保持未触碰。 |
+| G0-02 PR 状态 | PASS | 已核对 #73/#74/#75/#76/#77/#78/#79/#80 合并状态及 #52/#66/#69 当前 HEAD、Review、checks 和 skipped jobs；#50/#60 已关闭。#77 四条 Review 已解决；#78 合并后 #75 三条旧 Review 均已追加证据并解决；#79 五条 Review 已解决；#80 P1 文档 Review 已修复并解决。 |
 | G0-03 Worktree 归属 | PASS | 控制树、#66、#69、#52 和历史 Follow-up 均为独立 worktree；本轮确认相关 PR worktree 干净后再施工，没有覆盖其他任务修改。其他无关 worktree 均未触碰。 |
 | G0-04 避免覆盖 | PASS | 根目录 main checkout 中 frontend-admin/tsconfig.json、frontend-cs/tsconfig.json、frontend/tsconfig.json 的用户修改及未跟踪 .worktree-cleanup-archive-20261010/ 均保持不动。 |
-| G0-05 依赖顺序 | PASS | 快速线 #73 → #74 → #76 → #77 → #78 已合并。RAG 线按 #66 → #52 顺序集成；真实质量评测仍需批准价格/预算和账本证据。#69 独立施工。 |
+| G0-05 依赖顺序 | PASS | 快速线 #73 → #74 → #76 → #77 → #78 已合并；价格巡检线 #79 → #80 已合并。RAG 线按 #66 → #52 顺序集成；真实质量评测仍需批准价格/预算和账本证据。#69 独立施工。 |
 
 ## GitHub 状态快照
 
@@ -25,14 +25,16 @@
 | #74 | MERGED；PR HEAD 179d90ecf1adf87540707e5f4832a542df02d1f8；Merge SHA 5b372540800f1b6689d371e08e79fff009200425 | Trip URL/正式行程投影；本地与 GitHub 相关检查通过；真实 Provider/RAG Evaluation 未执行且不计通过 | MERGED |
 | #70 | 原 PR 已 MERGED，Merge SHA 5df8b0603355566e7fa1eb87906129c11a8211ab | 原 PR Review 0；跨会话唯一性走新 Follow-up #76 | MERGED（原 PR） |
 | #76 | MERGED；PR HEAD d47f43f10bd5914b0f13140d5daad18ae5b0e5b4；Merge SHA `7350cfe8dfb50bb6617bccb386603a5428e7747e`；后续 #77 将 main 推进到 `b3e2fb8` | 合并前共享项目库 duplicate-group 只读统计为 0；隔离真实 PostgreSQL 迁移/并发回归 1 passed；合并后在精确 Merge SHA 复跑隔离真实 PostgreSQL 1 passed。真实 API Evaluation skipped。098 尚未应用到共享数据库 | MERGED（共享库迁移状态仍待核实） |
-| #69 | OPEN、Draft；HEAD 8111c4574f1f696dadde03ad442bbd03f078c756；base e4881940；mergeState CLEAN | 当前 SHA 的 RAG Smoke、免费 preflight、contract-check、Detect、Secret Scan 全部 PASS；真实 API Evaluation SKIPPED。新增真实 PG 同用户跨租户物理隔离测试；用户/租户隔离 2 passed。T2 已有 SSE 69 passed、Conversation-first/产品边界 65 passed、Memory/身份/请求事件 57 passed；既有 DB Registry→Doubao 真实 chat 成功。AG-08 部分、AG-09 PASS；完整 RAG/SQL/取消/Trace/费用 T3 未完成 | IN_PROGRESS（继续授权 RAG/SQL 和流式端到端验收） |
-| #66 | OPEN、Draft；HEAD `3a2ddf91d64cdd148379e1e07abe9d75d8e90091`；base `e4881940`；GitHub mergeState `CLEAN` | 当前 SHA 的 Detect/Secret Scan、RAG Smoke preflight 与 smoke wrapper PASS；真实 API Evaluation SKIPPED。testset PDF 在隔离环境完成真实 Upload→Celery Worker→IndexRun published→Registry active（42 chunks）→授权 Search，命中当前文档正文。单独分支调用尚未通过 #52 预算代理结算 | IN_PROGRESS（数据链验收通过；需与 #52 预算链安全集成后再合并） |
-| #52 | OPEN、Draft、CLEAN；HEAD 91db7640cd83828af93aeeccdda65fa3b960a85c；base e4881940；14 条 Review 已解决 | GitHub 保护环境已配置 Doubao/Embedding/Rerank API secret 与对应模型变量；免费检查及本地定向回归 PASS，追加 113 passed。真实 8-case Evaluation SKIPPED。缺 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`；历史隔离价格行币种错误，无当前价双审/24h canary | BLOCKED（价格治理/只读 Registry 外部门禁未完成；Provider 凭据不是阻断） |
+| #69 | OPEN、Draft；HEAD `89d0e16ed643d88d6e9dc226c093d2e320eb81af`；base `e42975d6`；mergeState CLEAN | 当前 SHA 后端会话/身份/SSE/路由集 175 passed、授权 SQL/RAG/错误/SSE/Trace 集 216 passed；主前端 50 passed + 客服前端 30 passed，双方 `npx tsc --noEmit` PASS。最新 Detect、Secret Scan、免费 preflight、contract-check 均 PASS；真实 API Evaluation SKIPPED。已有旧 SHA 隔离付费 Doubao chat 成功，但完整授权 RAG/SQL/取消/Trace/费用 T3 未完成。额外断连测试在当前分支和 main 基线都以首帧 `log` 失败，属 main 基线测试预期问题 | BLOCKED（完成本地门禁；全链路真实模型/RAG/费用验收依赖只读价格 Registry 与双审/canary） |
+| #66 | OPEN、Draft；HEAD `c4faac5ae073c5ff1616ccef31e7b82f22f4bf2f`；base `e42975d6`；mergeState CLEAN | 当前分支定向回归 126 passed、3 warnings；Detect、Secret Scan、免费 preflight、RAG Smoke gate PASS，真实 API Evaluation SKIPPED。早前隔离 testset PDF→Celery→IndexRun published→Active→授权 Search 已通过；与 #52 预算代理组合的 Worker/Search 结算证据仍有效但未在新合并基线上重跑 | BLOCKED（单独合并会绕过 #52 的预算结算保护；恢复与当前评测配置相容的 Registry 后再集成验收） |
+| #52 | OPEN、Draft；HEAD `4665d4455b63e426fd6c6168712b1c99d4a62362`；base `e42975d6`；mergeState CLEAN；14 条 Review 已解决 | main 基线更新后路径过滤/费用/绑定定向集 128 passed；Detect、Secret Scan、免费 preflight、RAG Smoke gate PASS，真实 API Evaluation SKIPPED。外部只读价格 Registry secret 缺失；官方价格可查，但不能代替双人审核、24h canary 与权威 Registry | BLOCKED（需安全配置 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL` 只读副本并完成双审/24h canary；Provider Secret 名称存在于 `prompt-eval` 环境，未读取其值） |
 | #50 | CLOSED | FE-4 已被 PR #72 覆盖；当前 main 对应三组定向前端测试 40/40 通过 | 已关闭过期 Draft |
 | #60 | CLOSED | 文档中 T1 已由 PR #61 合入；独立作品集交接材料由 #75 交付 | 已关闭旧 Draft |
 | #75 | MERGED；PR HEAD dba170373c4663919ab9b0e2b87b5f800d479310；Merge SHA 04846a61f889fa561b9c2d2184cd196c93e75dd5 | 合并后 3 条 Review 由 #78 修复；Follow-up 合并后已追加 Merge SHA 与验证证据并全部解决原线程 | MERGED（Review 收口完成） |
 | #77 | MERGED；head `1093c39beb23b00d4210660eb877d062d49230e5`；Merge SHA `b3e2fb85937d011179ed046b6d264a7a0f3454d4` | 本地 42 passed，四条 Review 已修复/解决。当前 SHA Detect、Secret Scan、PR 免费 preflight 与 8-case Smoke 均 PASS；真实 API Evaluation skipped。main push 的 8-case Smoke 和 Secret Scan PASS，未运行付费 Probe | MERGED |
 | #78 | MERGED；PR HEAD `4e1216884333917e392b3442c826500ce86981cd`；merge 前 base `b3e2fb8`；Merge SHA `e4881940f1d39f82d1f7a938562e0e611f6677bb` | 文档相对链接、源码路径和 diff-check 通过；PR Smoke/Detect/Secret Scan 与 main push 的 RAG PR Smoke/Secret Scan PASS；paid/preflight job 按文档工作流跳过；当前 Review threads 为空 | MERGED |
+| #79 | MERGED；PR HEAD `648c78c209ea1a369497972ea3158620caebe882`；Merge SHA `333efc650deed0d67868b5f8b2833063b5960daa` | 管理端价格巡检页面、只读 API、Celery 每日官方价抓取与运行历史；48 backend passed、1 frontend passed、TypeScript/官方页解析通过；五条 Review 已解决 | MERGED |
+| #80 | MERGED；PR HEAD `4bf75571b3fc7ed53f1eca290dcf9e9fcd17765d`；Merge SHA `e42975d6a2992f22bb4a95b9daf806dc3e67d2bf` | RAG Smoke 路径过滤回归 12 passed；main push 最终 gate PASS，价格巡检变更判为 irrelevant，付费 RAG job 按路径安全跳过 | MERGED |
 
 原 PR branch protection 核实为 Required Checks 为空、required approvals 为 0；此次未绕过保护。Skipped job 不计为通过。
 
@@ -43,7 +45,9 @@
 - #75 普通 merge：04846a61f889fa561b9c2d2184cd196c93e75dd5。
 - #76 普通 merge：7350cfe8dfb50bb6617bccb386603a5428e7747e。
 - #77 普通 merge：b3e2fb85937d011179ed046b6d264a7a0f3454d4；后续 #78 将 main 推进至 e488194。
-- #78 普通 merge：e4881940f1d39f82d1f7a938562e0e611f6677bb（当前 origin/main）。
+- #78 普通 merge：e4881940f1d39f82d1f7a938562e0e611f6677bb。
+- #79 普通 merge：333efc650deed0d67868b5f8b2833063b5960daa。
+- #80 普通 merge：e42975d6a2992f22bb4a95b9daf806dc3e67d2bf（当前 origin/main）。
 - #72 与 #70 原始合并历史保留；后续修复均使用 Follow-up，没有改写旧历史。
 - #50/#60 已关闭，未将过期 Draft 合入 main。
 
@@ -51,11 +55,11 @@
 
 | 线 | 当前状态 | 下一项实际动作 |
 | --- | --- | --- |
-| A Provider/旅游/客服 | #73/#74/#76 MERGED；#75 Follow-up #78 文档修复完成 | #78 的旧自动 Review summary 没有公开具体意见，暂不合并或关闭原 Review；继续处理其他线。098 已进 main，仍需在获授权发布环境执行迁移。 |
+| A Provider/旅游/客服 | #73/#74/#76 MERGED；#75 Follow-up #78 文档修复完成 | #78 的自动 Review summary 没有公开具体意见，未据此猜测修改；该 PR 已按已确认门禁合并。098 已进 main，仍需在获授权发布环境执行迁移。 |
 | B RAG | #66 数据终态已验收；#52 价格门禁 BLOCKED；#77 MERGED | #66 Worker E2E 已通过，但其分支独立合并会使 Worker 调用缺少 #52 的有效预占/结算，暂不单独合并。#52 当前 HEAD 已修正 usage 与预算请求关联；8-case 真实评测仍受价格治理和只读 Registry 外部条件阻断。 |
-| C 主助手 | #69 IN_PROGRESS | 当前 SHA 免费 CI 全 PASS；会话/事件与用户/租户隔离定向集已有 69+65+57+2 passed。下一步仍是隔离当前 HEAD 的真实 SSE、授权 RAG/SQL、Trace/账本和失败终态；真实检索/费用依赖 #52 权威价格快照，不能用共享旧容器替代。 |
+| C 主助手 | #69 BLOCKED | 当前 SHA 后端/前端定向回归和免费 CI 全 PASS；还缺真实授权 RAG/SQL、全链路 SSE/Trace/费用验收。必须通过 #52 权威价格 Registry 和治理门禁后再运行付费链路。 |
 | 过期 PR | #50/#60 已关闭；#75 已合并 | #75 三条新增 Review 由 #78 修复；合并前暂不解决原线程。 |
-| main 集成 | IN_PROGRESS | MAIN-01～34 已逐项标注真实证据状态。当前共享容器 build SHA unknown，RAG `/readyz` 503，不能当作当前 main 验收；#52 GitHub 保护环境已具备 Provider API secret，但需配置经治理的只读价格 Registry 才能进行付费质量门禁。 |
+| main 集成 | BLOCKED | main `e42975d` 的局部 CI 有证据，但未部署/启动精确 SHA 完整栈，MAIN-01～34 不作整体 PASS；#52 Provider API Secret 名称存在，权威只读价格 Registry 与双审/24h canary 缺失。 |
 
 ## 外部阻断与诊断
 
@@ -130,7 +134,7 @@
 
 ## main 集成验收状态
 
-当前 main：e4881940f1d39f82d1f7a938562e0e611f6677bb。已合并 #73、#74、#75、#76、#77、#78。MAIN-01～MAIN-34 总体尚未进行整体验收；已验证的局部链路仅按以上各 PR 记录。基础设施、全链路业务、共享数据库迁移、主助手真实 T3 和 RAG 真实质量未验证，不作上线就绪结论。
+当前 main：e42975d6a2992f22bb4a95b9daf806dc3e67d2bf。已合并 #73、#74、#75、#76、#77、#78、#79、#80。MAIN-01～MAIN-34 总体尚未进行整体验收；已验证的局部链路仅按各 PR 精确 HEAD/merge run 记录。完整基础设施、业务链路、共享数据库迁移、主助手真实 T3 与 RAG 真实质量仍未验证，不作上线就绪结论。
 
 ## 最近检查
 
@@ -141,7 +145,7 @@
 
 ## main 集成验收逐项矩阵（当前证据）
 
-状态按当前 main e488194 及本轮实际证据记录；PR 分支上的通过不替代 main 或真实 E2E 结果。
+状态按当前 main e42975d 及本轮实际证据记录；PR 分支上的通过不替代 main 部署或真实 E2E 结果。
 
 | ID | 检查项 | 状态 | 当前证据 / 缺口 |
 | --- | --- | --- | --- |
@@ -242,3 +246,84 @@
 - 另一个当前隔离库 `agent_rag_e2e_memory` 的角色表此刻仍指向 `qwen2.5:3b`/Ollama 且 Provider credential 行缺失，不能拿它冒充真实付费 Registry 配置。账本复核更正了较早快照：历史上有 7 次 Doubao、29 次 Qwen embedding 调用（含 1 条零 token 的 unpriced 记录）；付费调用合计 57,720 tokens。按已经核实的官方现行 CNY 刊例价、未计缓存折扣重算约 ¥0.0384；旧账本登记约 ¥0.1825，与官方 CNY 刊例价口径不一致，且不是供应商发票。以上为既有隔离记录，本轮没有新付费调用，累计仍远低于用户 ¥20 上限。
 - #52 当前 HEAD 免费/本地定向验证：MultiQuery Proxy/Token Budget/Trace、Specialized Budget、Embedding singleton、LLM governance、Billing、Usage provenance、paid preflight 与 eval identity 契约，共 113 passed。GitHub PR 检查中 Detect/Secret Scan 通过，preflight 与 contract-check 当时 pending；8-case 真实评测按 PR 信任边界 skipping，不计通过。
 - #69 在原分支新增 `test_repo_tenant_isolation_physical`，隔离 PostgreSQL 同用户跨 Tenant 的查询 A 可见、B 不可见并清理成功；用户隔离与租户隔离合计 2 passed。提交 `8111c4574f1f696dadde03ad442bbd03f078c756` 已推送；该 SHA 的 PR Smoke、preflight、contract-check、Detect、Secret Scan 全部 PASS，真实 API Evaluation 按 PR 信任边界 SKIPPED。测试产生一条 Windows Proactor teardown warning，断言与数据库清理成功。该 warning 不作为通过门禁的替代，也没有改动事件生产代码。
+
+## 2026-10-16 续工：官方价格页复核
+
+- 复核用户提供的三份官方价目页（页面于本轮在线读取）。与上方已记录的现价基准相比，未发现标准调用刊例价变化：火山方舟 Doubao Seed 2.0 mini 常规在线、输入≤32K 仍为输入 ¥0.2/M、输出 ¥2/M、缓存命中输入 ¥0.04/M（页面更新时间 2026-10-15）；阿里云 Qwen3.7-text-embedding 仍为 ¥0.0005/千输入 token（批量 API 另列 ¥0.00025/千）；Qwen3.7-text-rerank 仍为 ¥0.5/M 输入 token。
+- 依据：[火山方舟模型价格](https://console.volcengine.com/ark/region:cn-beijing/docs/model-pricing)、[阿里云 Embedding](https://help.aliyun.com/en/model-studio/embedding)、[阿里云 Qwen3.7 Text Rerank](https://help.aliyun.com/en/model-studio/qwen3-7-text-rerank)。这仅确认公开页面与已记录基准一致，不代表隔离/共享数据库内价格快照已治理通过，也不核实账单实扣金额；本轮没有新模型调用。
+
+## 2026-10-16 追加施工：模型价格巡检 Agent 与管理端记录
+
+- 用户要求每天访问三份官方价格页，对比价格变化及系统现行价格；并明确管理端需展示 Agent 状态、操作记录和结果。实现放在独立 Worktree `C:\Users\wh\.codex\worktrees\model-price-monitor\agent`、分支 `codex/model-price-monitor`，基线 `e4881940f1d39f82d1f7a938562e0e611f6677bb`。PR #79 初始提交 `3467621ce8d5319c7d167faffd4669589b331f0c`；增加初始化错误告警收敛后，当前 PR HEAD 为 `1e3f64530dc836acf3534107ca1cee34d4532fff`，base `main`，PR 当前 `OPEN / UNSTABLE`，状态 `IN_PROGRESS`。
+- 实现内容：Celery Beat 每日 08:00（Asia/Shanghai）只读抓取火山方舟 Doubao、阿里云 Embedding/Rerank；限制官方 HTTPS 主机与页面体积，解析失败不记零价；比较前次每日快照和当前已审核生效 `model_price`，按状态复用现有告警流程，不调用 LLM、不自动写/审批计费价。迁移 `099_model_price_source_monitor.sql` 在确认 #70 工作树最高迁移为 098 后新增，并登记目标库 memory。
+- 运行记录表在任务开始时先插入 `running`，完成后存最终状态、逐来源结果、价格对比和已触发告警事件。管理端模型与供应商页新增“价格巡检”标签；只读端点走可信运营角色校验；页面展示计划时间、来源状态、运行历史、官方/系统价格及差异、价格变更、告警触发状态。因为 webhook 是异步 best-effort，UI 明确不把触发告警等同于送达。
+- 在线直连三份官方页面实测取得 5 项价格（Doubao 3 项、Embedding 1 项、Rerank 1 项），最终复验 3/3 来源成功。代码映射曾将短来源别名与持久化 source_id 不一致，现已统一并补回归测试；失败事件现按相同稳定 source_id 写入。
+- 隔离 PostgreSQL 18 本机端口 55435，数据目录 `D:\tmp\agent-price-monitor-pg-20261016`，仅应用迁移 099 并使用隔离 fixture `model_price` 行验证运行记录、每日观测幂等、前次官方变化、币种差异和 API 返回序列化。端到端任务记录 5 个来源报价，测试 fixture 产生 1 个 mismatch 告警；该 fixture 仅证明差异识别，不代表共享/生产系统价格结果。PG 集群已停止，未触碰 Docker/shared/production 数据库。
+- 最终定向验证：后端 `test_model_price_page_monitor.py` 与 `test_price_api_contract.py` 14 passed；管理端 `modelPrices.test.ts` 与 `ModelPriceMonitorTab.test.tsx` 5 passed；`npx tsc --noEmit`、Python `py_compile` 和 `git diff --check` 均通过。`npm ci --ignore-scripts --no-audit --no-fund` 在隔离 Worktree 成功完成；依赖目录不在 Git 跟踪差异中。没有真实模型 API 调用，无模型费用。
+- PR #79 HEAD `1e3f64530dc836acf3534107ca1cee34d4532fff` 的 Secret Scan、frontend-admin-security、frontend-admin-functional、admin-observability-auth、Detect RAG changes、RAG Smoke preflight 和 wrapper 全部 PASS；PR state `OPEN / CLEAN`。RAG Smoke Evaluation（真实 API）为 SKIPPED，不能计为通过或真实模型质量证据。GitHub 自动 Code Review 仍显示运行中，目标 SHA 是初始提交 `3467621`，尚无 Review 结论或 inline comment。
+- 下一步：继续等自动 Review 的完成状态，核对是否覆盖初始实现；最终 HEAD 与初始 HEAD 的唯一差异是把 Repository 构造移入既有任务失败捕获范围，并已在新 HEAD 通过后端 14 项定向测试。没有待修复 CI。价格巡检代码尚未合入 main，也没有在部署数据库应用迁移；部署后须运行迁移并确认 Celery Beat/maintenance Worker 已加载此任务，再从管理端观察首条线上运行记录。
+
+## 2026-10-16 续工：PR #79 五条 Review 修复
+
+- 当前功能分支为 `codex/model-price-monitor`，Worktree `C:\Users\wh\.codex\worktrees\model-price-monitor\agent`；已 fetch，`origin/main=e4881940f1d39f82d1f7a938562e0e611f6677bb` 与 PR base 一致。最新提交 `648c78c209ea1a369497972ea3158620caebe882` 已推送到 PR #79；提交仅包含巡检实现、队列映射和对应 API/UI 测试。
+- 五条 Review 全部已回复并解决：币种用统一计费 `to_base_currency` 折算到 CNY，按 `model_price` 六位存储精度计算容差并在管理端显示折算值/汇率；禁用自动重定向、下一跳前逐一校验 HTTPS/主机/端口；流式读取且超过 2 MiB 立即中止；所有来源均失败时先保存失败状态和告警再抛出 Celery 异常；改投现有 `report` 队列避开高频 `maintenance` Worker。
+- 当前代码定向后端验证：`test_model_price_page_monitor.py`、`test_price_api_contract.py`、`test_task_queue_router.py`、`test_worker_topology.py` 共 48 passed、6 skipped。Python `py_compile`、`git diff --check`、Secret Scan tree（0 命中）通过；管理端 `ModelPriceMonitorTab.test.tsx` 1 passed，`npx tsc --noEmit` 通过。改后抓取器直接访问官方三页实际解析 5 条价格（Doubao 3、Embedding 1、Rerank 1），无抓取失败；没有模型 API 调用。
+- PR #79 最新 HEAD 的 PR 检查已完成：Secret Scan、Detect RAG changes、frontend-admin-security、frontend-admin-functional、admin-observability-auth、RAG Smoke preflight、免费 RAG Smoke wrapper 均 PASS；真实 API Evaluation 在不可信 PR 事件下为 SKIPPED。五条 Review Thread 均已回复并确认 `isResolved=true`。PR #79 已正常合并，Merge SHA `333efc650deed0d67868b5f8b2833063b5960daa`，当前 `origin/main` 为该 SHA；main tree 与已验证 PR HEAD tree 一致。
+- main push 的 Secret Scan 和 frontend-admin CI PASS；RAG PR Smoke 失败，Run `38894091981`。根因已确定：`.github/scripts/rag_smoke_path_filter.py` 将 `backend/infra/llm/price_page_monitor.py`（命中整个 `backend/infra/llm/` 前缀）和新迁移 `099_model_price_source_monitor.sql`（文件名命中通用 `model` 标记）误判为真实 RAG 变更。Workflow 随后启动隔离评测，但在 `Seed DB API model bindings --require-approved-prices` 因缺少只读 Registry 连接而失败；价格核验、Provider Probe 和 8-case Smoke 均 skipped，没有发起模型调用/产生费用。脚本在本地以 PR #79 完整变更文件列表复现输出 `relevant=true`。
+- 下一步在独立 follow-up Worktree 修正 RAG 路径分类：排除价格巡检实现与迁移的精确路径，同时保留真实 LLM/RAG 路径和模型计费迁移触发；新增完整 PR #79 文件集“不相关”和真实 RAG/计费改动“相关”的回归测试。follow-up 通过当前 HEAD CI 后合并，避免之后无关模型价格巡检改动触发付费 RAG 评测。线上价格巡检迁移、Celery 首次运行与 webhook 实际送达仍未验证。
+
+## 2026-10-16 Follow-up #80：RAG Smoke 路径误报
+
+- 在当前 main `333efc650deed0d67868b5f8b2833063b5960daa` 建立独立 Worktree `C:\Users\wh\.codex\worktrees\rag-path-filter-price-monitor\agent`，分支 `codex/rag-smoke-path-filter-price-monitor`；提交 `26af8b6638cfc5ce6e0ff94fb9776d4a32b02102`，PR [#80](https://github.com/Jayus-07/agent/pull/80) 已创建并附加。
+- 变更仅涉及 `.github/scripts/rag_smoke_path_filter.py` 与 `tests/test_rag_smoke_path_filter.py`。只排除价格巡检模块与迁移两个精确路径；PR #79 完整变更路径的 push 判定为 `relevant=false`，价格巡检变更与真实 `backend/rag/pipeline.py` 同时出现仍为 `relevant=true`，保留 RAG 评测门禁。
+- 本地 `tests/test_rag_smoke_path_filter.py` 与 `tests/evaluation/test_rag_ci_workflow_contracts.py`：12 passed；Python 编译、Secret Scan tree/diff、diff-check 通过。后续最新 SHA 的 Detect、Secret Scan、免费 preflight 和 main-push RAG Smoke Gate 均 PASS；真实 API Evaluation 为 SKIPPED；PR #80 已普通合并为 `e42975d6`，main-push 路径过滤验证价格巡检为 irrelevant。
+- 自动 Review 对首版增加的 P1 文档同步意见已修复：更新 `docs/operations/ci-evaluation-environment.md` 触发规则、矩阵和 §8 日期，回复并解决线程。Review 修复提交 `4bf75571b3fc7ed53f1eca290dcf9e9fcd17765d` 已通过最新 HEAD 检查并随 PR 合并。
+
+
+## 2026-10-16 续工：主助手与 RAG 分支同步 #80 基线
+
+- 本轮用户报出的 `Not a git repo, skipping` 来自测试文件目录检查；测试集目录不是 Git 仓库，这条提示不是 Agent Platform 仓库施工阻断。主仓库根目录仍有用户未提交的三份前端 tsconfig 和未跟踪归档目录，均未改动。
+- #69 `codex/main-assistant-conversation-first-20261014` 合入 `origin/main=e42975d` 后 HEAD `89d0e16ed643d88d6e9dc226c093d2e320eb81af`，已推送。指定 14 个会话/事件/身份/API 文件集在隔离 pgvector PostgreSQL（端口 55440，临时测试口令仅进程内）下 `175 passed, 4 warnings`；包括两个物理 PG 用户/租户隔离断言。初次新空库缺表导致 2 个预期集成用例失败，随后只在隔离库用当前 ORM 建表并复跑成功；没有使用共享数据库。最新 PR checks：Detect、Secret Scan PASS；免费 preflight 与 contract-check 排队中；真实 API Evaluation SKIPPED。此前 SHA 的隔离 Next BFF→APISIX→FastAPI 付费 Doubao chat 成功仅覆盖基本 chat，完整 RAG/SQL、取消/resume、Trace/费用 T3 仍未验收，PR 保持 Draft。
+- #66 `codex/rag-upload-b1-20261014` 合入同一 main 基线，HEAD `c4faac5ae073c5ff1616ccef31e7b82f22f4bf2f`，已推送。上传/Celery/索引运行时/PDF/coverage/quality gate/失败存储定向集在隔离 PostgreSQL 下 `126 passed, 3 warnings`；首次运行默认连 localhost:5432 导致 1 项失败，改用隔离 DB 后全过。最新 Detect/Secret Scan PASS，preflight pending，真实 API Evaluation SKIPPED。用户 testset 的 PDF 完整链路、主动文档保留与 Search 命中、以及 #66+#52 组合的请求级预算预占/结算均有此前隔离环境证据；该合并基线未改动预算相关实现。#66 仍依赖 #52 的预算门禁，暂不单独合并。
+- #52 `codex/rag-multi-query-p0-20261013` 与 `origin/main=e42975d` 合并无冲突，HEAD `4665d4455b63e426fd6c6168712b1c99d4a62362`，已推送。并入 #80 后 `tests/test_rag_smoke_path_filter.py` 仍覆盖价格巡检路径误报和真实 RAG 路径触发；费用、模型绑定、付费前价格校验和工作流定向套件 `128 passed`。首次模型角色 API 子集因未设 AI_INTERNAL_TOKEN 返回 503；进程内临时测试令牌重跑后通过。最新 Detect/Secret Scan PASS，preflight pending，真实 Evaluation SKIPPED。
+- 复核 `gh secret list --env prompt-eval` 仅确认测试 Provider API Secret/Base URL 名称存在，不读取 Secret 值；环境缺少 `PROMPT_EVAL_PRICE_REGISTRY_DATABASE_URL`。代码要求从现有授权 PostgreSQL recovery 只读副本读取有官方来源、版本、有效期和两位不同审核人的价格行。用户允许使用 ≤¥20 Provider 预算、也允许按官方价格补缺，但这不构成伪造双审、canary 或共用库连接的授权；当前不能安全运行真实 8-case 质量/费用评测。需要外部配置合法只读 Registry 副本，并完成双人审查及 24h canary 后才可继续。
+- 最新 main `e42975d6a2992f22bb4a95b9daf806dc3e67d2bf` 已含 #79/#80。#79 main-push 最初误触发 RAG Smoke 的路径分类错误已由 #80 修复；main push run `38896792159` Gate PASS，RAG 不相关路径下真实 API job skipped，无 Provider 调用。
+- 下一步：三个 PR 新 HEAD 免费 preflight/contract/Detect/Secret Scan 已完成且通过。恢复授权 PostgreSQL recovery 只读 Registry 连接，在未改写历史价格行的前提下完成可追溯官方价格的双人审批及 24h canary；随后以 ≤¥20 授权预算运行当前 #52 8-case 和 #69 所需真实端到端评测，核实费用账本与原 Top-1 ≥0.80 门槛。之后重跑 #66+#52 当前 HEAD 预算 Worker/Search 集成回归，收口并合并。另由授权发布环境应用 097/098/099 后验证 main 精确 SHA 栈、Celery Beat 首跑和管理端运行历史。
+
+
+## 2026-10-16 续工：最新 HEAD 回归与 GitHub 门禁
+
+- #69 当前 PR HEAD `89d0e16ed643d88d6e9dc226c093d2e320eb81af`（main `e42975d` 已合入）。后端首轮会话/身份/SSE/路由集 `175 passed`；追加授权 SQL、RAG 链、身份与错误协议集 `216 passed`；主前端 `50 passed`、客服前端 `30 passed`，两端 `npx tsc --noEmit` 均 PASS。GitHub runs `38899600495` 与 `38899600500` 的 Detect、Secret Scan、免费 RAG preflight、contract-check 和 Smoke wrapper 均 PASS；付费 8-case Evaluation 为 SKIPPED，不能算真实质量通过。PR 无未解决 Review thread，仍 Draft。
+- #66 当前 PR HEAD `c4faac5ae073c5ff1616ccef31e7b82f22f4bf2f`。定向上传/Worker/PDF/coverage/quality-gate/storage 回归 `126 passed, 3 warnings`；GitHub run `38899683164` Detect、Secret Scan、免费 preflight、RAG Smoke gate 均 PASS；付费 Evaluation SKIPPED。PR 无未解决 Review thread，仍 Draft。首次执行中默认 localhost PG 导致 `DocumentRegistry` 一个集成用例失败；指向隔离 PostgreSQL 后重跑全过。
+- #52 当前 PR HEAD `4665d4455b63e426fd6c6168712b1c99d4a62362`。费用/模型绑定/Embedding/MultiQuery/路径过滤集 `128 passed`；首次 API 子集没提供 AI_INTERNAL_TOKEN 返回设计要求的 503，进程内测试值重跑全过。GitHub runs `38899713137`、`38899713909` 的 Detect、Secret Scan、免费 preflight、RAG Smoke gate 均 PASS；真实 Evaluation SKIPPED。14 条原 Review thread 全解决，PR 仍 Draft。
+- 加跑 `test_runner_trace_finalize.py` 时 `test_generator_close_finishes_once_as_client_disconnect` 首帧为 `log`，不符合该断连用例对首帧 `status/delta` 的附加断言；单测在 #69 HEAD 与独立干净 main `e42975d` 上均复现同样失败。生产 runner 与该断言在 main 已有，#69 只为 FakeMemory 新增 `event_scope` 参数适配；因此记录为历史基线测试预期错误，不将其归因于 PR，也不为获得全绿而放宽断言。
+- `gh secret list --env prompt-eval` 只列出了测试 Provider Secret/Base URL 的名称，未读取任何值；仓库及该 Environment 均无只读价格 Registry Secret。真实评测程序要求 PostgreSQL recovery 只读副本，并验证官方来源、价格版本/有效期及两位不同 reviewer；`llm-budget-billing.md` 另要求 24 小时 canary。用户允许补充官方价格和总额 ≤¥20 的 Provider 调用，但不授权伪造双审/Canary 或绕过共享 Registry 边界。当前没有新的付费调用。
+- 本轮临时建的 `D:\tmp\agent-pr69-final-baseline-20261016` 已核对干净后移除；本轮创建的 `pr69-isolated-pg-20261016` 与 `pr69-isolated-pgvector-20261016` 已连同匿名卷移除。#66 的 `pr66-worker-e2e-20261016-pg` 等现有容器未触碰。
+- 当前 `origin/main` 仍为 `e42975d6a2992f22bb4a95b9daf806dc3e67d2bf`。已合并功能的 #79/#80 局部门禁通过；其余可继续施工项为 #69 尚未完成的真实授权 RAG/SQL/取消与全链路 Trace/费用，以及 #66+#52 当前 HEAD 组合 Worker 预算回归。真实 8-case 质量门禁具体阻断是缺少只读价格 Registry 与双审/24h canary；不把 skipped 评测记为 PASS。
+
+
+## 当前 main 的巡检功能集成状态
+
+| 项目 | 状态 | 证据 / 缺口 |
+| --- | --- | --- |
+| main SHA 与合并 | PASS | `origin/main=e42975d6a2992f22bb4a95b9daf806dc3e67d2bf`，含 #79（`333efc6`）与 #80（当前 Merge SHA）。 |
+| 价格巡检管理端界面与 API | PASS（代码/CI） | #79 管理端组件、API、后端权限与监控运行记录测试通过；#79 PR 前端功能与安全检查 PASS；#80 修复价格巡检路径被误触发付费 RAG 测试的问题。 |
+| Celery 每日采集与数据库迁移 | NOT VERIFIED（部署） | PR 内官方三页抓取 3/3 成功、共解析 5 项；迁移 `099_model_price_source_monitor.sql` 已随 #79 合入，但未在部署数据库应用，未观察线上 Beat 首跑或 Alert Webhook 实际送达。 |
+| 发布回滚 | READY | 若回滚巡检功能，按主线正常 revert #80 后 revert #79 两个 Merge SHA；部署回滚前同时按发布流程回滚 migration 099/应用版本。不得直接删除已应用迁移。 |
+| 上线就绪 | BLOCKED | 管理端只在代码部署且 migration 099 已由授权发布流程应用后可查看运行记录；整体 MAIN-01～34、#69 主助手真实 T3、#52 真实质量/账本未完成。 |
+
+## 2026-10-16 Phase2 续工：#77 P0-A 本地修复
+
+- 修复分支 `codex/pr77-price-isolation-20261016` 从最新 `origin/main=e42975d6a2992f22bb4a95b9daf806dc3e67d2bf` 创建，工作树 `C:\Users\wh\.codex\worktrees\pr77-price-isolation-20261016\agent`。未修改主工作区或其他 PR 工作树。
+- A1：seed 使用显式测试库 URL/会话；仅允许本机 loopback 主机和 `_test`/`_eval` 后缀库名；校验库名、角色、host、port、read-only 与 recovery 身份后才执行首个写入；`MEMORY_PGDATABASE` 冲突、远端 host、非测试库或缺少连接角色均在建写连接前拒绝。`verify_pricing` 通过只读测试库连接工厂检查统一 BillingResult。
+- A2：Registry、在线价格仓储和官方价格巡检均关联 `model_price_versions`，限定 active 且来源一致；快照保留原版本发布证据，拒绝缺失维度、混版本/来源/币种；在线 `PriceTable` 也拒绝同一模型组件混版本或币种。
+- A3：路径过滤改用精确相关迁移清单并加入 `013_obs_analytics_pg.sql`；未知 migration PR 运行免费契约检查但不自动触发付费评测；客服、旅游、只读价格巡检路径不触发付费 RAG 评测。
+- 验证：定向价格/seed/计费/路径套件 `84 passed`；PostgreSQL active 价格选择集 `2 passed`；py_compile、Ruff（忽略仓库既有 N818）和 `git diff --check` 通过。隔离容器 `codex-pr77-price-isolation-20261016` 上真实 seed 写入目标 `agent_memory_test`、角色 `postgres`，3 条凭据均为密文；无 Provider 调用。此前目标身份校验失败在任何写入前退出，冲突/远端/非测试目标的单测确认不会创建写连接。
+- 当前 P0-A 代码尚未提交、尚未创建 PR，GitHub Review/CI 未开始。下一步：完成本地 Diff 最终检查后提交、推送并创建 Follow-up PR；收口最新 HEAD Review/CI 后再进入 #79。
+
+## 2026-10-16 Phase2 P0-A 收口：#81
+
+- 提交 `f1ca05cb95d13aec9bd837fab3bffb703bc81a6f` 推送并创建 Follow-up PR [#81](https://github.com/Jayus-07/agent/pull/81)。自查 Review 覆盖 seed/Registry 写入边界、active 价格读取、费用币种/版本一致性与 CI 分类；PR Review Threads 为空。
+- GitHub `secret-scan` PASS，PR RAG Smoke 免费 preflight/契约测试 PASS；真实 8-case API 评测按不可信 PR 事件 SKIPPED，不计质量通过。PR #81 已按授权普通合并，Merge SHA `89315c9d32b383d31dd390d7a90dbe6b9c4eb75b`。
+- 合并后 `origin/main` 为该 Merge SHA，main tree `bd4c13738868e3d45e393fcca1a242e7e06efcac` 与已验证 PR tree 完全相同；同一隔离 PostgreSQL 环境重跑受影响定向集 `84 passed`。
+- P0-A1～A3 代码修复与验证收口。下一步按阶段顺序新建独立 #79 Follow-up 工作树处理 B1～B3；P2 真实价格 Registry/隔离评测边界留到 P1 后继续。
