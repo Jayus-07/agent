@@ -107,7 +107,7 @@ class PostgresPriceGovernanceRepository:
                             (
                                 row["model_name"], row["component"], row["dimension"],
                                 row["price_per_unit"], row["unit"],
-                                row.get("currency", "USD"), version, source, effective,
+                                row.get("currency", "CNY"), version, source, effective,
                             ),
                         )
             return {
@@ -355,7 +355,7 @@ class PostgresPriceGovernanceRepository:
                                         'approved', %s, 'system')""",
                             (row["model_name"], row["component"], row["dimension"],
                              row["price_per_unit"], row["unit"],
-                             row.get("currency", "USD"), version, source, effective,
+                             row.get("currency", "CNY"), version, source, effective,
                              actor),
                         )
                     # 5) 审计（决策 + 理由，可追溯）

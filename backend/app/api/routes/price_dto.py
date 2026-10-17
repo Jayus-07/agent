@@ -33,7 +33,7 @@ def validate_price_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         component = str(row.get("component") or "").strip()
         dimension = str(row.get("dimension") or "").strip()
         unit = str(row.get("unit") or "per_1m_tokens").strip()
-        currency = str(row.get("currency") or "USD").strip().upper()
+        currency = str(row.get("currency") or "CNY").strip().upper()
         key = (model_name, component, dimension)
 
         def add_error(code: str, message: str) -> None:
