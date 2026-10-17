@@ -1,0 +1,117 @@
+# ============================================================================
+# 本机覆盖层：让开发机按 4C8G 生产档运行（本机 Docker 只有 8 GiB / 12 CPU）
+# 与生产不同的是：这里包含本机在跑的 rag-service / mcp-service /
+# metadata-shadow-worker / 双 cs-dispatcher，并保留开发鉴权（ALLOW_UNAUTHENTICATED）。
+# 用法（仓库根目录）：
+#   docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml up -d <services>
+# PostgreSQL 的 max_connections/shared_buffers 用 ALTER SYSTEM 落库，不在此挂载。
+# ============================================================================
+
+x-logging: &prod-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
+services:
+  postgres:
+    deploy: { resources: { limits: { memory: 1100m, cpus: "1.5" } } }
+    logging: *prod-logging
+
+  redis:
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy: { resources: { limits: { memory: 448m, cpus: "0.5" } } }
+    logging: *prod-logging
+
+  redis-broker:
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy: { resources: { limits: { memory: 320m, cpus: "0.3" } } }
+    logging: *prod-logging
+
+  auth-redis:
+    command:
+      - redis-server
+      - --maxmemory
+      - 96mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    deploy: { resources: { limits: { memory: 128m, cpus: "0.2" } } }
+    logging: *prod-logging
+
+  apisix:
+    deploy: { resources: { limits: { memory: 320m, cpus: "0.5" } } }
+    logging: *prod-logging
+
+  app:
+    deploy: { resources: { limits: { memory: 1000m, cpus: "1.5" } } }
+    logging: *prod-logging
+
+  agent-worker:
+    deploy: { resources: { limits: { memory: 768m, cpus: "1.0" } } }
+    logging: *prod-logging
+
+  rag-index-worker:
+    deploy: { resources: { limits: { memory: 768m, cpus: "1.0" } } }
+    logging: *prod-logging
+
+  rag-service:
+    # 本机保留：RAG_MODE=local 时它不参与请求，模型模式切 remote 才用到
+    deploy: { resources: { limits: { memory: 512m, cpus: "0.5" } } }
+    logging: *prod-logging
+
+  mcp-service:
+    deploy: { resources: { limits: { memory: 256m, cpus: "0.4" } } }
+    logging: *prod-logging
+
+  metadata-shadow-worker:
+    deploy: { resources: { limits: { memory: 256m, cpus: "0.3" } } }
+    logging: *prod-logging
+
+  maintenance-worker:
+    deploy: { resources: { limits: { memory: 224m, cpus: "0.3" } } }
+    logging: *prod-logging
+
+  report-worker:
+    deploy: { resources: { limits: { memory: 224m, cpus: "0.3" } } }
+    logging: *prod-logging
+
+  beat:
+    deploy: { resources: { limits: { memory: 128m, cpus: "0.2" } } }
+    logging: *prod-logging
+
+  cs-dispatcher:
+    # 本机跑了 2 个副本，单副本 192m
+    deploy: { resources: { limits: { memory: 192m, cpus: "0.3" } } }
+    logging: *prod-logging
+
+  pg-backup:
+    deploy: { resources: { limits: { memory: 96m, cpus: "0.2" } } }
+    logging: *prod-logging
