@@ -81,9 +81,27 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     for node in walk(raw_ast.root):
         if node.type not in ("table",):  # table 的 rows 不在 text 清洗范围
             node.raw_text = node.text
-            clean_result = cleaner.clean(node.text, source_type=source_type)
+            # structured=True：节点文本已是解析器切好的语义单元，没有版面
+            # 上下文，禁用依赖"前后空行"的图注启发式（2026-10-18：该启发式
+            # 曾把供应商规范 5 个内容叶节点 / 员工手册章节标题清空）。
+            clean_result = cleaner.clean(
+                node.text, source_type=source_type, structured=True,
+            )
             node.text = clean_result.text
             node.cleaning_operations = list(clean_result.changes)
+            node.cleaning_dropped = list(clean_result.dropped)
+
+    # §P0-D 边界一：Raw AST → 清洗输出 的完整性对账。清洗把节点清空会让
+    # coverage_audit 的分母一起缩水（假通过），这里独立核对清洗前后内容。
+    from backend.rag.preprocessing.quality_gate import cleaning_coverage_audit
+
+    cleaning_coverage = cleaning_coverage_audit(raw_ast)
+    if cleaning_coverage.get("uncovered_count"):
+        logger.warning(
+            f"[ChunkPipeline] {file_path} 清洗内容丢失: "
+            f"{cleaning_coverage['uncovered_count']}/"
+            f"{cleaning_coverage['audited_node_count']} 个节点有内容未保留"
+        )
 
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
 
@@ -122,5 +140,6 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         "strategy_name": strategy.__class__.__name__,
         "route_decision": route_decision.as_dict(),
         "coverage": coverage,
+        "cleaning_coverage": cleaning_coverage,
     }
     return chunks, qc

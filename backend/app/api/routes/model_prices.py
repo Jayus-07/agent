@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from backend.app.api.deps import (
     OperatorIdentity,
     require_admin_user,
+    require_super_admin_user,
     resolve_operator_role,
     run_governance_mutation,
 )
@@ -31,6 +32,14 @@ class PriceImportRequest(BaseModel):
     version: str = Field(..., min_length=1, max_length=128)
     source: str = Field(..., min_length=1, max_length=500)
     effective_from: datetime | None = None
+    rows: list[dict[str, Any]] = Field(..., min_length=1, max_length=5000)
+
+
+class PriceDirectPublishRequest(BaseModel):
+    """超管直发请求：一步生效，不需要二审与 canary。"""
+
+    source: str = Field(..., min_length=1, max_length=500)
+    reason: str = Field(..., min_length=1, max_length=1000)
     rows: list[dict[str, Any]] = Field(..., min_length=1, max_length=5000)
 
 
@@ -105,7 +114,7 @@ async def list_model_price_monitor_runs(
 async def import_model_price_version(
     body: PriceImportRequest,
     request: Request,
-    operator: OperatorIdentity = Depends(require_admin_user),
+    operator: OperatorIdentity = Depends(require_super_admin_user),
 ) -> dict[str, Any]:
     def persist() -> dict[str, Any]:
         return _repo().import_version(
@@ -136,7 +145,7 @@ async def review_model_price_version(
     version: str,
     body: PriceReviewRequest,
     request: Request,
-    operator: OperatorIdentity = Depends(require_admin_user),
+    operator: OperatorIdentity = Depends(require_super_admin_user),
 ) -> dict[str, Any]:
     def persist() -> dict[str, Any]:
         return _repo().review_version(
@@ -162,12 +171,50 @@ async def review_model_price_version(
         raise _handle_storage(exc) from exc
 
 
+@router.post("/admin/model-prices/versions/{version}/publish")
+async def publish_model_price_version(
+    version: str,
+    body: PriceDirectPublishRequest,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_super_admin_user),
+) -> dict[str, Any]:
+    """超级管理员一步直发价格（无二审、无 24h canary，2026-10-17 决策）。
+
+    仍保留 append-only 历史、覆盖率 100% 校验与审计记录；发布后立即失效
+    价格缓存，后续模型登记与调用按新价计费。
+    """
+
+    def persist() -> dict[str, Any]:
+        return _repo().publish_super_admin(
+            body.rows,
+            version=version,
+            source=body.source,
+            actor=operator.actor,
+            reason=body.reason,
+        )
+
+    try:
+        return run_governance_mutation(
+            request,
+            operator,
+            "model_price.publish_super_admin",
+            {"version": version, **body.model_dump(mode="json")},
+            persist,
+        )
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except PriceGovernanceUnavailable as exc:
+        raise _handle_storage(exc) from exc
+
+
 @router.post("/admin/model-prices/versions/{version}/canary")
 async def canary_model_price_version(
     version: str,
     body: PriceCanaryRequest,
     request: Request,
-    operator: OperatorIdentity = Depends(require_admin_user),
+    operator: OperatorIdentity = Depends(require_super_admin_user),
 ) -> dict[str, Any]:
     def persist() -> dict[str, Any]:
         return _repo().canary_version(version, action=body.action)

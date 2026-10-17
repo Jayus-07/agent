@@ -125,6 +125,9 @@ jobs:
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
             backend/tests/scripts/test_seed_prompt_eval_db.py \
+            backend/tests/rag/test_rag_fixture_content_integrity.py \
+            backend/tests/rag/test_rag_cleaning_audit_boundaries.py \
+            backend/tests/rag/test_reindex_failure_snapshot.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope
@@ -146,7 +149,7 @@ jobs:
       needs.detect-changes.outputs.relevant == 'true' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     name: RAG Smoke Evaluation (8 cases, real API)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets。
     environment: prompt-eval
     timeout-minutes: 40

@@ -19,6 +19,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from backend.config import LEAF_CHUNK_TOKENS, PARENT_CHUNK_TOKENS, CHUNK_OVERLAP
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode, LEAF_TYPES, walk
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.rag.preprocessing.token_counter import count_tokens
 from backend.shared.logger import logger
 
@@ -1810,7 +1811,10 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                 if hit:
                     covered += 1
                 else:
-                    uncovered.append({"type": node.type, "preview": text[:80]})
+                    uncovered.append({
+                        "type": node.type,
+                        "preview": mask_sensitive_text(text[:80]),
+                    })
                 continue
 
             # 行级和单元格级核对；双层财务切分会改写表格文本为 kv，
@@ -1854,7 +1858,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             else:
                 uncovered.append({
                     "type": node.type,
-                    "preview": text[:80],
+                    "preview": mask_sensitive_text(text[:80]),
                     "missing_rows": missing_rows,
                     "missing_cells": missing_cells,
                 })
