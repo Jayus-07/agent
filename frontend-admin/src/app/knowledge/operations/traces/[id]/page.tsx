@@ -73,7 +73,7 @@ export default function DocTracePage() {
   const typeGroups = useMemo(() => { const m=new Map<string,Span[]>(); for(const s of childSpans){if(!m.has(s.type))m.set(s.type,[]); m.get(s.type)!.push(s);} return Array.from(m.entries()).sort((a,b)=>spanOrder(a[1][0])-spanOrder(b[1][0])); }, [childSpans]);
 
   const overview = useMemo(() => {
-    if(!trace) return {fileSize:0,chunkCount:0,totalTokens:0,costCny:0,costUsd:0,llmCalls:0,docType:'',businessDomain:'',model:'',confidence:0,qualityScore:0};
+    if(!trace) return {fileSize:0,chunkCount:0,totalTokens:0,costCny:0,costUsd:0,llmCalls:0,models:[] as Array<{component:string;model:string;calls:number;total_tokens:number;cost_cny:number}>,docType:'',businessDomain:'',model:'',confidence:0,qualityScore:0};
     const ls=childSpans.find(s=>s.type==='load'); const cs=childSpans.find(s=>s.type==='chunk');
     const llmS=childSpans.find(s=>s.type==='llm'); const es=childSpans.find(s=>s.type==='embedding');
     const out=(llmS?.output||{}) as Record<string,unknown>;
@@ -83,20 +83,22 @@ export default function DocTracePage() {
     const pt=(lt.prompt_tokens as number)||0; const ct=(lt.completion_tokens as number)||0;
     const qs=childSpans.find(s=>s.id==='quality');
     // llm_usage 台账读时回填（后端 _backfill_usage）：usage.by_component 按
-    // 组件聚合 tokens（索引 trace 常为 embedding-only），cost_cny 为本位币
-    // 精确值；span 内嵌 llm_tokens 仅作旧数据回退
+    // 组件聚合 tokens（索引 trace 常为 embedding-only），usage.models 为
+    // 组件×模型清单（一次索引可能 embedding+LLM+OCR 多模型并发），cost_cny
+    // 为本位币精确值；span 内嵌 llm_tokens 仅作旧数据回退
     const u=(trace.usage||{}) as Record<string,any>;
     const byComp=(u.by_component||{}) as Record<string,Record<string,number>>;
     const compTokens=Object.values(byComp).reduce((s,c)=>s+(c.total_tokens||0),0);
     const compCalls=Object.values(byComp).reduce((s,c)=>s+(c.calls||0),0);
-    const modelName=typeof trace?.model==='string'? trace.model : ((trace?.model as any)?.name||'');
+    const models=(u.models||[]) as Array<{component:string;model:string;calls:number;total_tokens:number;cost_cny:number}>;
+    const modelName=models.map(m=>m.model).join(' / ');
     return {fileSize:(ls?.metrics?.file_size as number)||0, chunkCount:(cs?.metrics?.kept_chunks as number)||(cs?.output as any)?.total||0,
       totalTokens:compTokens>0? compTokens : pt+ct,
       costCny:(u.cost_cny as number)||0, costUsd:(u.cost_usd as number)||((lt.cost_usd as number)||0),
-      llmCalls:compCalls,
+      llmCalls:compCalls, models,
       docType:(rm.doc_type as string)||(out.doc_type as string)||'',
       businessDomain:(rm.business_domain as string)||(out.business_domain as string)||'',
-      model:modelName||(lt.model as string)||(es?.metrics?.model_name as string)||'',
+      model:modelName||(typeof trace?.model==='string'? trace.model as string :'')||(lt.model as string)||(es?.metrics?.model_name as string)||'',
       confidence:(rm.confidence as number)??0, qualityScore:(qs?.metrics?.score as number)??0};
   }, [childSpans, trace]);
 
@@ -133,7 +135,7 @@ export default function DocTracePage() {
           {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:overview.costCny>0?`¥${overview.costCny.toFixed(4)}`:(overview.costUsd>0?`$${overview.costUsd.toFixed(4)}`:'-'),sub:`llm_usage 台账 ${overview.llmCalls} 次调用`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
         <div className="grid grid-cols-4 gap-2">
-          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'-'},{label:'业务领域',value:overview.businessDomain||'-'},{label:'模型',value:overview.model||trace.model?.name||'-'},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}</div>))}
+          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'-'},{label:'业务领域',value:overview.businessDomain||'-'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
         </div>
       </div>
 
@@ -230,7 +232,7 @@ export default function DocTracePage() {
             }
 
             // embedding
-            if(type==="embedding"){const s=spans[0];const attempted=s.metrics?.attempted as number||0;const succeeded=s.metrics?.succeeded as number||0;const failed=s.metrics?.failed as number||0;const embModel=(typeof trace?.model==='string'?trace.model:((trace?.model as any)?.name||''))||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">成功 <span className="font-mono text-green-600">{succeeded}</span>{failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span></span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
+            if(type==="embedding"){const s=spans[0];const attempted=s.metrics?.attempted as number||0;const succeeded=s.metrics?.succeeded as number||0;const failed=s.metrics?.failed as number||0;const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">成功 <span className="font-mono text-green-600">{succeeded}</span>{failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span></span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
 
             // dedup
             if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}

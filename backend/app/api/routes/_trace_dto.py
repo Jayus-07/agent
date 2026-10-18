@@ -33,6 +33,9 @@ def backfill_usage_from_llm_store(data) -> None:
         if not rows:
             return
         by_comp: dict[str, dict] = {}
+        # 按「组件×模型」聚合（2026-10-19）：一次索引会同时用到多个模型
+        # （embedding/LLM 元数据/OCR/rerank），概览需完整模型清单而非单模型
+        by_comp_model: dict[tuple, dict] = {}
         total_cost = 0.0
         # Billing V2（2026-10-07 收口）：V2 行直接取 billed_cost_cny（写入时
         # 已固化汇率，读层禁止二次换汇）；legacy 行（版本 1）按旧 currency
@@ -50,15 +53,21 @@ def backfill_usage_from_llm_store(data) -> None:
             agg["calls"] += 1
             _is_v2 = int(r.get("billing_schema_version") or 1) >= 2
             if _is_v2 and r.get("billed_cost_cny") is not None:
-                total_cost_cny += float(r["billed_cost_cny"])
+                _row_cny = float(r["billed_cost_cny"])
             else:
                 _row_cost = r.get("cost_usd") or 0.0
                 if (r.get("currency") or "USD").strip().upper() == "CNY":
-                    total_cost_cny += _row_cost
+                    _row_cny = _row_cost
                 else:
                     from backend.config.budget import BUDGET_FX_USD_CNY
 
-                    total_cost_cny += _row_cost * float(BUDGET_FX_USD_CNY)
+                    _row_cny = _row_cost * float(BUDGET_FX_USD_CNY)
+            total_cost_cny += _row_cny
+            m = by_comp_model.setdefault((comp, r.get("model") or ""), {
+                "calls": 0, "total_tokens": 0, "cost_cny": 0.0})
+            m["calls"] += 1
+            m["total_tokens"] += r.get("total_tokens") or 0
+            m["cost_cny"] += _row_cny
             if _is_v2:
                 if (r.get("native_currency") or "").strip().upper() == "USD":
                     total_cost += float(r.get("native_cost") or 0.0)
@@ -70,6 +79,20 @@ def backfill_usage_from_llm_store(data) -> None:
         usage["cost_usd"] = round(total_cost, 6)
         usage["cost_cny"] = round(total_cost_cny, 6)
         usage["by_component"] = by_comp
+        # 模型清单：每组件 token 最大的模型记为该组件代表模型；
+        # usage.models 为扁平明细（多模型概览展示用）
+        for (comp, _m), stats in by_comp_model.items():
+            stats["cost_cny"] = round(stats["cost_cny"], 6)
+        comp_model_map: dict[str, list[dict]] = {}
+        for (comp, model), stats in by_comp_model.items():
+            comp_model_map.setdefault(comp, []).append(
+                {"model": model or "(unknown)", **stats})
+        usage["models"] = [
+            {"component": comp, **max(lst, key=lambda x: x["total_tokens"])}
+            for comp, lst in comp_model_map.items()]
+        usage["models_detail"] = [
+            {"component": comp, **item}
+            for comp, lst in comp_model_map.items() for item in lst]
         setv("usage", usage)
         setv("cost_usd", round(total_cost, 6))
         setv("cost_cny", round(total_cost_cny, 6))
