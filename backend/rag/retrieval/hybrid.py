@@ -339,18 +339,22 @@ def _evaluate_retrieval_gate(merged: list, query: str):
             # 查询分析失败 → Gate 走无 query_analysis 兜底（软降级），留痕
             logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
 
-    from backend.config import DOC_TYPE_COVERAGE_REQUIRED, VEC_MIN_SCORE
+    from backend.config import VEC_MIN_SCORE
 
     has_semantic_score = any(
         d.metadata.get("rerank_score") is not None
         or d.metadata.get("similarity") is not None
         for d in merged
     )
+    # P0-2（2026-10-19 治理改造）：DOC_TYPE_COVERAGE_REQUIRED 硬门退役——
+    # 其输入 query_analysis.doc_types 100% 来自查询文本猜测，猜测即拒答
+    # （TD-13「发票认证」被猜 security 假拒答同源）。相关性归检索+Rerank，
+    # 不再按「猜测类型 vs 召回类型不匹配」二次拒答。
     return evidence_gate_retrieval(
         merged,
         query_analysis=qa_result,
         vec_min_score=VEC_MIN_SCORE if has_semantic_score else 0.0,
-        require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
+        require_doc_type_coverage=False,
     )
 
 

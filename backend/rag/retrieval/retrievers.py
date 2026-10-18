@@ -614,88 +614,39 @@ class ChunkLevelRetriever(BaseRetriever):
                 )
 
     def _stage1_relax_on_zero_match(self, st: "_Staging") -> None:
-        """Stage 1 0 匹配兜底：顺序放宽 business_domain → kb_id。
+        """Stage 1 0 匹配兜底：放宽 KBRouter 猜测的 kb_id（P0-2 简化版）。
 
-        输入: st.metadata_filter / st.doc_ids（0 匹配时触发）
-        输出: 改写 st.metadata_filter / st.doc_ids=None / st.stage1_path /
-              st.stage1_fallback_count / st.cross_kb_fallback
+        P0-2（2026-10-19 治理改造）：QueryAnalyzer 不再向 metadata_filter
+        注入 doc_type/business_domain 猜测（见 query_analyzer.to_metadata_filter），
+        v2 的两级放宽（domain_fallback → kb_fallback）中 domain 级已无输入、
+        doc_type 剥离恒空转，全部删除。保留唯一放宽维度：KBRouter 关键词
+        规则猜测的 kb_id/$or 失配（如「报销」被路由到无文档的 KB）时，
+        主体授权范围内跨 KB 全量检索——宁跨 KB 召回，不全量拒答。排序交回
+        混合检索与 Rerank；keep-set 主体授权在 Stage 2 后强制收口，安全
+        边界不变（跨 KB 不越权，权限/租户/审核可见性过滤全部保留）。
         """
         if not (st.metadata_filter and not st.doc_ids):
             return
-        # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
-        # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
-        # （如问"差评怎么处理" → customer，但售后流程文档标 order）
-        # 2026-09-10 fix：旧实现 domain/kb 两级放宽是 if/else 二选一 —— 只要
-        # business_domain 在 filter 中就只放宽它，剩余 kb_id（可能指向空 KB，
-        # 如「退款」→ biz_order 但文档实际在 rag_test_kb）永远不会被放宽，
-        # 兜底形同虚设 → 0 召回 → Evidence Gate 假拒答。
-        # 改为顺序放宽：先放宽 business_domain，再探测 KB 是否有文档，
-        # 空则连 kb_id 一起放宽（宁跨 KB 召回，不全量拒答）。
         from backend.observability.tracer import trace_collector
-        fallback_filter = {k: v for k, v in st.metadata_filter.items() if k != "business_domain"}
+        fallback_filter = {
+            k: v for k, v in st.metadata_filter.items()
+            if k not in ("kb_id", "$or")
+        }
         if fallback_filter != st.metadata_filter:
             logger.info(
                 f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
-                f"回退到放宽 business_domain 的检索"
+                f"放宽 KBRouter 猜测的 kb 维度 → {fallback_filter}"
             )
             st.metadata_filter = fallback_filter
             st.doc_ids = None  # 让 Stage 2 走完整向量检索
-            st.stage1_path = "domain_fallback"
+            st.stage1_path = "kb_fallback"
             st.stage1_fallback_count += 1
-            # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
-            if not self._filter_has_docs(fallback_filter):
-                # TD-13（2026-10-03）：kb_fallback 级同时丢弃 doc_type——
-                # 实测"发票认证时限"被 QueryAnalyzer 按"认证"词表误抽
-                # doc_type=security，policy 文档 0 命中后放宽到全库仍带着
-                # 这个错误猜测，召回空间恰只剩 security 文档 → Rerank
-                # 8/8 淘汰 → 假拒答。跨库放宽 = QueryAnalyzer 全部猜测
-                # 作废，授权范围内全量检索，排序交回 BM25/向量/Rerank
-                # （keep-set 主体授权在 Stage 2 后强制收口，安全边界不变）。
-                kb_relaxed = {
-                    k: v for k, v in fallback_filter.items()
-                    if k not in ("kb_id", "$or", "doc_type")
-                }
-                if kb_relaxed != fallback_filter:
-                    logger.info(
-                        f"ChunkLevelRetriever: 放宽 business_domain 后仍无文档 "
-                        f"(filter={fallback_filter})，继续放宽 kb_id → {kb_relaxed}"
-                    )
-                    st.metadata_filter = kb_relaxed
-                    st.stage1_path = "kb_fallback"
-                    st.stage1_fallback_count += 1
-                    st.cross_kb_fallback = True
+            st.cross_kb_fallback = True
             trace_collector.add_event(st.span, "stage1_fallback", "info",
-                f"Stage1 0 匹配 → 放宽后 filter={st.metadata_filter}, path={st.stage1_path}",
+                f"Stage1 0 匹配 → 放宽 kb 维度后 filter={st.metadata_filter}",
                 data={"relaxed_filter": st.metadata_filter,
                       "stage1_path": st.stage1_path,
                       "stage1_fallback_count": st.stage1_fallback_count})
-        else:
-            # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
-            # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
-            # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
-            # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答。
-            # TD-13：doc_type 是问题字面的猜测值（词表歧义，如"发票认证"
-            # →security），0 匹配即证明猜测错误——跨库放宽时一并丢弃，
-            # 不保留任何 QueryAnalyzer 维度（排序交回混合检索与 Rerank）。
-            fallback_filter = {
-                k: v for k, v in st.metadata_filter.items()
-                if k not in ("kb_id", "$or", "doc_type")
-            }
-            if fallback_filter != st.metadata_filter:
-                logger.info(
-                    f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
-                    f"回退到放宽 kb_id 的检索"
-                )
-                st.metadata_filter = fallback_filter
-                st.doc_ids = None
-                st.stage1_path = "kb_fallback"
-                st.stage1_fallback_count += 1
-                st.cross_kb_fallback = True
-                trace_collector.add_event(st.span, "stage1_fallback", "info",
-                    f"Stage1 0 匹配 → 放宽 kb_id 后 filter={st.metadata_filter}",
-                    data={"relaxed_filter": st.metadata_filter,
-                          "stage1_path": st.stage1_path,
-                          "stage1_fallback_count": st.stage1_fallback_count})
 
     def _stage2_hybrid_retrieve(self, st: "_Staging") -> None:
         """Stage 2：Chunk 级混合检索（向量+BM25+同义词扩展）+ 空召回重试。
