@@ -70,6 +70,13 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - 费用：累计 10 次 embedding（4 索引批+6 查询向量化）共 0.001195 CNY，role/stage/model/trace 归因齐全；无 LLM 生成调用（短文档降级）。
 - 测试集数据问题（非平台）：cases.jsonl 中 faq_only 题目 required_docs 写 `faq_only.md`，实际 fixture 为 `.docx`，评测按文件名匹配会失配，下批修测试集。
 
+## 2026-10-19 Trace 详情模型/Token/成本展示修复（0400aa0）
+
+- 用户指出 RAG Trace 详情页 Tokens/成本/模型恒「-」。排查：数据层无缺失——llm_usage 台账按 trace_id 归因完整，且通用 trace 端点已有 `_backfill_usage` 读时回填机制；断层在 ①回填模型名只认 `component=llm` 的行，纯 embedding 的索引 trace 模型名留空；②管理端 RAG Trace 详情概览读的是聊天链路的 span 内嵌 llm_tokens 字段，未读已回填的 `trace.usage`。
+- 修复：backfill 无 llm 行时回退按 total_tokens 最大行取模型/provider；rag-traces 端点对齐通用端点补 usage 回填；前端概览改读 trace.usage（by_component 合计 tokens、cost_cny 本位币优先），模型字符串形态兼容。中途曾另写 `_llm_usage_attach` 聚合注入，识别为与既有 backfill 平行的重复实现后撤回，最终改动收敛在既有机制上。
+- ragu1 实测（faq_only.docx trace bb9de1034b2b）：Tokens 2,374 / 成本 ¥0.0012（台账 6 次调用）/ 模型 qwen3.7-text-embedding 全部呈现；文档类型「常见问题」/业务域 hr 原本就有。
+- 遗留待拍板：页面「质量评分偏低 (0/100)」为误报——quality span 无 score 字段时前端按 0 计并触发 <60 警告，而实际质量审计 anomalies=0；需决定「无评分不警告」还是「索引链路补写 score」。
+
 ## 当前等待与下一步
 
 - 用户在3201完成首次改密后再继续浏览器；新密码不必提供给助手。旧3200尚未部署修复。
