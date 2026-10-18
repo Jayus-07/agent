@@ -1,6 +1,24 @@
 # 施工进度
 
-状态：IN_PROGRESS；MERGE_READY=false。最终组合免费命令 **509 passed / 51.81s**，含追加审查与完整 Prompt/16-fixture；待 GitHub 对最终提交执行免费门禁。
+状态：**BLOCKED（真实质量与账本门禁失败，按用户停止条件结束本轮）**；MERGE_READY=false。实现HEAD=`a87df8316f820fa5cd008ec24fcab2d568022a88`。
+
+## 最终结果
+
+- 免费本地组合509 passed/51.81s，BM25补充36 passed/23.14s；GitHub最终实现免费门禁545 passed/35.92s，Contract Check/Secret Scan PASS。
+- 唯一真实run [39108656690](https://github.com/Jayus-07/agent/actions/runs/39108656690)：fixture16/16与索引完整性PASS，严格质量FAIL、费用对账FAIL。
+- Top-1=0.6667（4/6；RC-031重排不可靠缺指标，基线5/7），Recall@5=0.9286、MRR=0.8333、Multi-hop=0.8333、Precision@5=0.3541、Noise@10=0.5953。
+- RC-024/031均6000ms rewrite timeout，回退原问题；RC-024 single_query，库存仍第一；RC-031仅剩约1.9秒重排窗口并ReadTimeout，原候选无分数透传。本轮三查询及max评分未真实验收。
+- 113 calls/104861已记录tokens，108 settled=CNY0.117488；另5 needs_review（3 chat+2 rerank unpriced），最终费用UNVERIFIED，不能宣称费用硬门禁通过。
+- [逐例指标、查询、排序、引用、Trace与账本原始汇总](SMOKE.md)。当前Artifact未提供异常逐调用账本，第三条chat异常的精确case归属仍未核实；timeout路径Prompt Hash/版本字段未完整留存，列为下一轮最小诊断修复项。
+- 未再次付费、未改动功能代码以追分、未发布/回滚Prompt、未解除Draft或合并。Active v1与Lock一致，候选新Hash只代表文件，不代表已发布版本。
+
+## 唯一真实 Smoke 已启动
+
+- 实现 HEAD：`a87df8316f820fa5cd008ec24fcab2d568022a88`；GitHub [免费 CI 39108008370](https://github.com/Jayus-07/agent/actions/runs/39108008370) **545 passed / 35.92s**，Contract Check/Secret Scan 全PASS。
+- [受信任 workflow_dispatch 39108656690](https://github.com/Jayus-07/agent/actions/runs/39108656690)：`multiquery=true`，HEAD同上；本轮唯一已创建的真实run。CLI第一次在dispatch前GET workflow处TLS超时，查询确认仍仅旧run后才用一次REST POST创建此run，未重复付费。
+- 当前Active只读核验（docker内本机治理库）：v1/published/`d3ea6cc684a20879`，旧v2/draft/`898e7970527161cf`；新YAML候选Hash=`a9e9f66220217388`。读取57项Active状态与仓库Lock比较，0差异；未发布或回滚。
+- PostgreSQL MCP凭据认证失败；上述治理状态通过既有本机PG容器的只读SQL核实，不操作共享业务数据。
+- 该run安装阶段较慢：runner已安装`zh_core_web_sm 3.8.0`，但requirements的带SHA256 GitHub直接URL仍触发wheel下载（观测45MB且持续写入）；未中断、未重投。下载完成后正常进入fixture阶段。后续可评估把可信wheel按固定hash预缓存；本轮不另改安装或触发第二个run。
 
 BM25重建/对账补充集合 **36 passed / 23.14s**；已并入免费CI。静态未定义名/重复定义定向检查PASS，最终Diff检查PASS。
 
@@ -33,6 +51,7 @@ BM25重建/对账补充集合 **36 passed / 23.14s**；已并入免费CI。静�
 - contextual prefix已实现：`indexing/indexer.py::_embed_text_for/_build_doc_level_text`与既有测试验证文档/章节/模拟问题前缀；不重复实现。
 - AnswerCache已有scope/version结构，但`_ANSWER_CACHE_HARD_DISABLED=True`仍硬关闭。后续需权限重校验与失效实证后再评估启用。
 - 已有stream分支与thinking事件，正文仍受Evidence Gate控制；候选答案外发需独立安全/终态契约验收。模型分级/更换embedding、扩充Golden、阈值校准/消融不纳入本轮付费实验。
+- 报告的“回归集29题”已过时：当前统一manifest为`5.0.0-unified`、269条；`ci_golden`实际99条（RC-080移出），本轮固定`pr_smoke`仍8条。不因已有较大数据集就宣称全部269条已验证；后续消融需另选suite、预算和质量门禁。
 
 ## 付费前预算计划（待免费CI通过）
 
@@ -40,4 +59,4 @@ BM25重建/对账补充集合 **36 passed / 23.14s**；已并入免费CI。静�
 - 当前改写仍2题，每题最多+512 completion；RC-024成功扩面预计多2次rerank及最多若干embedding，按140 calls/150000 tokens/CNY0.20规划，低于200/200000/0.50总门禁。
 - 评测阶段128 calls/96000 tokens/CNY0.40；fixture阶段160/120000/CNY0.15保持，最终总门禁另统一对账，阶段预算不相加放大整轮额度。规划不是实际账单，以唯一Smoke完整账本为准。
 - 预计评测本身不超过40 calls/60000 tokens/CNY0.10（旧整轮36次LLM中仅两次rewrite，fixture元数据调用占主要tokens；新增最多1024 completion与两次全候选rerank），留足评测128/96000/0.40及整轮余量。免费验证阶段未调用付费模型。
-- 下一步：最终组合免费测试、PR免费CI；通过后只dispatch一次。尚未执行本轮真实Provider、发布、解除Draft或合并。
+- 停止后下一条最小建议：补改写子任务分段耗时、渲染即写入Hash/版本，以及取消后的迟到用量回收/逐调用导出；先免费重放6s/8s窗口定位耗时，再确定同模型最小调整。本轮不实施、不再付费。

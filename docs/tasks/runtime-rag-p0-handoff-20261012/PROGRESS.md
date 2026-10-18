@@ -152,3 +152,10 @@
 - RC-005 保持真实失败：FAQ 仍以 1.0 排第一、政策排第三（Top-1=0、MRR=0.3333），未改 Golden、未改 required_facts；该题在 hybrid 层不触发 MultiQuery，本 PR 不改变其形态。
 - 下一条最小修复建议（未实施，避免未验证改动进 PR）：把 `_REWRITE_MAX_TOKENS_FLOOR` 由 512 提到 1024（或等量精简模板正文），使思考型模型在 512 截断下不再丢变体；改完先跑免费测试，再申请下一次受信任 dispatch 复跑 8-case，并复核 RC-024 是否出现 3 条证据面变体与 `rerank_mode=multi_query`。阈值、Golden、预算与装配顺序均不动。
 - 决策：**MERGE_READY=false**，PR #52 保持 Draft；不再自动发起第二轮付费实验。
+
+### 2026-10-18 第三轮：截断、共享deadline与追加审查修复（已停止）
+
+- 用户另行授权本轮施工与唯一一次真实Smoke；实现HEAD `a87df8316f820fa5cd008ec24fcab2d568022a88`。输出下限1024，生产改写默认6000ms，评测绑定生产8000ms共享deadline；自适应证据面、评分诊断及SQL/Prompt/缓存/耗时审查修复一并完成免费门禁，GitHub545 passed。
+- 唯一run [39108656690](https://github.com/Jayus-07/agent/actions/runs/39108656690)仍FAIL：Top-1=0.6667；RC-024/031改写均超时，RC-031重排也ReadTimeout；113 calls/104861已记录tokens/已结算CNY0.117488，另5 needs_review，账本UNVERIFIED。保留Draft，未发布或合并，未再次付费。
+- 修正上一节Precision归因：supplier_7属于标注supplier来源，不能单独解释文档级Precision下降；RC-031上一轮qc与一句话FAQ来源进入结果才使1/1变成1/3。本轮该题无有效rerank评分，不据P/N改善宣称新Prompt提升。
+- [本轮任务与状态](../pr52-multiquery-truncation-20261018/PROGRESS.md)、[完整逐例证据及下一条最小建议](../pr52-multiquery-truncation-20261018/SMOKE.md)。`MERGE_READY=false`。
