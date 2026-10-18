@@ -184,12 +184,20 @@ class RequestBudget:
                 and self.tenant_id
             ):
                 try:
+                    # 已结算费用已经计入 PG 的 used_cny，不得在下一次调用时
+                    # 再预占这部分金额。仍保守预占请求的全部剩余额度；在途或
+                    # needs_review 的预占由 PG 保留，不能借此放开并发硬限。
+                    reservation_cost = self.limits.max_cost
+                    if reservation_cost > 0:
+                        reservation_cost = max(
+                            reservation_cost - self.cost, Decimal("0"),
+                        )
                     reservation = self.quota_store.reserve(
                         user_id=self.user_id,
                         tenant_id=self.tenant_id,
-                        # 预占本次请求级成本上限；成功后按真实价格结算并
+                        # 预占本次请求级剩余成本上限；成功后按真实价格结算并
                         # 释放差额，避免并发请求在未知 completion token 时超卖。
-                        amount_cny=self.limits.max_cost,
+                        amount_cny=reservation_cost,
                         request_id=_current_request_id.get(),
                     )
                 except Exception:

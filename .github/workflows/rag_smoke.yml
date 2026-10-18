@@ -166,6 +166,7 @@ jobs:
             backend/tests/rag/test_multi_query_runtime_queries.py \
             backend/tests/rag/test_multi_query_timeout_lifecycle.py \
             backend/tests/test_llm_budget.py \
+            backend/tests/infra/test_request_budget_remaining.py \
             backend/tests/test_llm_quota.py \
             backend/tests/infra/test_b1b_llm_governance.py \
             backend/tests/infra/test_usage_identity.py \
