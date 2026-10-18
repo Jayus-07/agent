@@ -1882,8 +1882,10 @@ class IncrementalIndexer:
         #   - chunk_keywords → 该 chunk 自己的规则关键词（不污染其他 chunk）
         #   - chunk_llm_keywords → Qwen 提取（仅 LLM_FORCED_TYPES 文档）
         #   - section_title → chunk 所属章节（从前面的 section 标题推导）
-        from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
-        from backend.rag.preprocessing.keyword import LLM_FORCED_TYPES as _CHUNK_LLM_TYPES
+        # P0-2（2026-10-19 去词表化）：chunk 级不再提取普通关键词——
+        # BM25 语料 = chunk 原文（_build_bm25_corpus_from_vectorstore），
+        # chunk_keywords 从不参与 BM25/向量召回，仅为展示字段；停发后
+        # 字段置空串保持 chunk_store 列与前端兼容。Qwen 残链一并移除。
         doc_type_val = doc_meta.get("doc_type", "general")
         pii_safe_summary = _mask_index_text_for_pii(
             str(doc_meta.get("summary") or ""), doc_type_val, chunk_filter
@@ -1896,7 +1898,7 @@ class IncrementalIndexer:
                 for section in doc_meta["sections"]
             ]
         person_val = doc_meta.get("person_names", "")
-        use_chunk_llm = doc_type_val in _CHUNK_LLM_TYPES
+        use_chunk_llm = False
         chunk_llm_model = ""
         chunk_llm_count = 0
 
@@ -1908,18 +1910,6 @@ class IncrementalIndexer:
             if idx >= 0:
                 section_positions.append((idx, sec_title))
         section_positions.sort(key=lambda x: x[0])
-
-        # Qwen chunk 批量调用 — 已关闭（文档级 DeepSeek 关键词已覆盖，省去本地推理耗时）
-        qwen_kws_per_chunk: list[list[str]] = [[] for _ in chunks]
-        use_chunk_llm = False  # 关闭 Qwen chunk 级关键词，统一用文档级关键词
-        if use_chunk_llm:  # 保留代码，后续按需开启
-            from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen_batch
-            logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 批量提取（{len(chunks)} chunks）")
-            qwen_kws_per_chunk, chunk_llm_model = extract_chunk_keywords_qwen_batch(
-                [ch.page_content for ch in chunks]
-            )
-            chunk_llm_count = sum(1 for kws in qwen_kws_per_chunk if kws)
-            chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
 
         kb_id_val = doc_meta.get("kb_id", self.kb_id)
         fixture_set_val = doc_meta.get("fixture_set") or None
@@ -2057,8 +2047,7 @@ class IncrementalIndexer:
             # 故重索引旧文档不会让现有评测集 relevant_docs 失效。
             ch.metadata["doc_id"] = doc_id
             # chunk_id 已在上方统一覆盖并同步 parent_chunk_id（P0-03），此处不再重复
-            chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
-            ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
+            ch.metadata["chunk_keywords"] = ""  # P0-2 去词表化：停发（原规则提取已删）
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
             _sq = questions_by_chunk[i] if i < len(questions_by_chunk) else []
             if _sq:

@@ -131,3 +131,14 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - P0-3 最小上线步：METADATA_CASCADE_ENABLED 部署默认 false（docker-compose.yml×3 + isolated compose）。级联代码退役与组包收敛挂 P1（需引用搜索+消费者迁移证据，单独施工）。
 - P0-4 消费者回归：chunk_type_contract/doc_type_label/candidate_publish（财务版本）/trace_retention 共 42 passed；1 失败为存量环境项（基线对照 stash 确认与本轮无关）。
 - 未完成（下一轮）：级联代码删除、metadata_taxonomy 仅分类规则清理、question_gen 解耦验证、管理端旧分类入口清理、PR CI 门禁结果。
+
+## 2026-10-19 关键词去词表化改造完成（本地提交，待用户确认后推送）
+
+- P0-3 检索门控移除：`_filter_docs_by_keywords` 改直通（候选全保留），`_score_by_keyword_overlap` 删除，查询侧 extract_chunk_keywords 调用移除；gate_info 契约与函数名保留供 Trace 兼容。
+- P0-2 生成停发：chunk 级规则提取与 Qwen 残链删除（chunk_keywords 置空串兼容）；doc 级 task_keywords 停发（KeywordResult 空产出，字段兼容）；零新增 LLM 调用。
+- P0-1 keyword.py 重写：词库热加载/DOMAIN_RULES 词臂/信号词/Jieba/LLM 全链删除；保留通用标识符识别（字母前缀+数字主体，零宽断言防 AB123 误命中 AB1234-X；显式「编号/单号/错误码」标注模式）；KeywordResult/dedupe_keywords_normalized 契约保留；extract_rule_keywords 供复杂度特征（len()）继续可用。
+- P0-4 确认：BM25 语料 = chunk 原文（page_content），与关键词字段无关，未改。
+- P0-5 消费者兼容：前端/Trace/GET chunks detail 读空值展示；domain_data 的财务 PII/人名/时间/分类导出全部未动；词库管理 API（keyword_routes）保留未删（独立功能，挂 P1 评估）。
+- 测试：新增 test_keyword_devocabbing 10 用例全过；受影响定向（去词表 10+FAQ 证据 10+路由 11+治理 45+检索放宽 4+白名单/query_analyzer+chunking_router 2+广覆盖批 91）全绿；rag 目录广覆盖 1262 passed，39 failed+55 errors 经 stash 基线对照确认全部为存量（55 errors=本地 PG 无密码环境项，28 failed 与基线逐一对应）。
+- BLOCKED：Golden Recall@5/MRR/NDCG 对比需评测 runner 真实运行（涉及付费 LLM 或长时检索），未执行；替代证据=隔离栈 faq_only 6/6 检索命中 + 定向契约。
+- 按用户要求：本地提交不推送，待确认后统一 push。

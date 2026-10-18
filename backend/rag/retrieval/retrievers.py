@@ -16,7 +16,6 @@ from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 
 from backend.rag.retrieval.hybrid import hybrid_retrieve
 from backend.rag.preprocessing.entity import extract_person_names
-from backend.rag.preprocessing.keyword import extract_chunk_keywords
 from backend.config import (
     HYBRID_SEARCH_K,
     RAG_DOC_CANDIDATE_K,
@@ -25,52 +24,6 @@ from backend.config import (
 )
 from backend.shared.logger import logger
 from backend.rag.permissions import filter_documents_by_permission
-
-
-# =====================================================
-# 关键词重叠评分
-# =====================================================
-
-def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3, query_kw: set | None = None) -> list:
-    """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
-
-    不再硬过滤（丢弃 overlap=0 的文档），避免回归。
-    增加子串模糊匹配：query kw 与 doc kw 存在包含关系时计 0.5 分。
-    """
-    if query_kw is None:
-        query_kw = set(extract_chunk_keywords(question, top_k=10))
-    if not query_kw:
-        return docs
-
-    scored = []
-    for doc in docs:
-        raw = doc.metadata.get("doc_keywords", "")
-        if isinstance(raw, list):
-            doc_kw = set(raw)
-        elif raw:
-            try:
-                doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
-            except (json.JSONDecodeError, TypeError):
-                doc_kw = set()
-        else:
-            doc_kw = set()
-        exact = len(query_kw & doc_kw)
-        fuzzy = 0.0
-        if not exact:
-            for qk in query_kw:
-                for dk in doc_kw:
-                    if len(qk) >= 2 and len(dk) >= 2 and (qk in dk or dk in qk):
-                        fuzzy += 0.5
-                        break
-        score = exact + fuzzy
-        scored.append((doc, score))
-
-    matched = [(doc, s) for doc, s in scored if s > 0]
-    unmatched = [doc for doc, s in scored if s == 0]
-    matched.sort(key=lambda x: x[1], reverse=True)
-
-    logger.info(f"关键词重排: query_kw={query_kw}, 命中 {len(matched)}/{len(docs)}")
-    return [doc for doc, _ in matched] + unmatched
 
 
 def _dedup_by_doc_id(docs: list) -> list:
@@ -305,81 +258,29 @@ class ChunkLevelRetriever(BaseRetriever):
 
     @staticmethod
     def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> tuple:
-        """Stage1 文档门控，返回 (doc_ids, gate_info)。
+        """Stage1 文档候选直通（P0-3，2026-10-19 治理改造）。
 
-        gate_info 是阶段契约数据（2026-09-13 治理 A）：记录候选/关键词命中/
-        相似度兜底/最终保留/被排除项及理由，经 trace event 暴露 —— 此前本阶段
-        静默丢弃文档（相似度 Top-1 因 keywords 为空被踢）导致排查耗时数小时。
+        旧实现用「查询关键词 ∩ doc_keywords」筛文档（零交集且不在相似度
+        Top3 即被排除），是「关键词没命中就丢语义相关文档」的硬门控根源。
+        治理后候选全保留（按 doc 级向量相似度序去重），召回质量交由
+        Stage2 混合检索（原文 BM25+向量+RRF）与 Rerank。函数名与
+        gate_info 契约保留，供既有调用方与 Trace 事件兼容。
         """
         deduped = _dedup_by_doc_id(doc_results)
-        query_kw = set(extract_chunk_keywords(question, top_k=10))
-        reranked = _score_by_keyword_overlap(question, deduped, fallback_k, query_kw=query_kw)
         all_ids = [
             doc.metadata.get("doc_id")
-            for doc in reranked
+            for doc in deduped
             if doc.metadata.get("doc_id")
         ]
-        id2name = {
-            d.metadata.get("doc_id"): ChunkLevelRetriever._doc_name(d.metadata)
-            for d in deduped
-            if d.metadata.get("doc_id")
-        }
-        if not query_kw:
-            ids = list(dict.fromkeys(all_ids))
-            return ids, {
-                "reason": "no_query_keywords",
-                "candidates": [id2name[i] for i in ids],
-                "keyword_matched": [],
-                "similarity_top": [],
-                "kept": [id2name[i] for i in ids],
-                "excluded": [],
-            }
-        similarity_top = [
-            d.metadata.get("doc_id")
-            for d in deduped[:fallback_k]
-            if d.metadata.get("doc_id")
-        ]
-        matched_ids = []
-        for doc in reranked:
-            did = doc.metadata.get("doc_id")
-            if not did:
-                continue
-            raw = doc.metadata.get("doc_keywords", "")
-            if isinstance(raw, list):
-                doc_kw = set(raw)
-            elif raw:
-                try:
-                    doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
-                except (json.JSONDecodeError, TypeError):
-                    doc_kw = set()
-            else:
-                doc_kw = set()
-            if query_kw & doc_kw:
-                matched_ids.append(did)
-        unique_matched = list(dict.fromkeys(matched_ids))
-        if unique_matched:
-            # 相似度兜底并集：doc_keywords 缺失/为空的文档（关键词提取失败的
-            # 历史文档、测试夹具）不应仅因 metadata 没有关键词而被 Stage1
-            # 整体排除 —— 即使它是 doc 级相似度 Top-1（2026-09-13 golden
-            # RC-080/086/095 回归）。并入 doc 相似度前 fallback_k 名保底；
-            # 注意必须取 deduped（相似度序）而非 reranked（关键词重排序），
-            # 否则兜底名额会被关键词命中文档占满，等于没兜底。
-            ids = list(dict.fromkeys(unique_matched + similarity_top))
-        else:
-            ids = list(dict.fromkeys(all_ids))
-        kept_set = set(ids)
         info = {
-            "reason": "keyword_match_plus_similarity_top" if unique_matched else "keyword_fallback_all",
-            "candidates": [id2name[i] for i in all_ids],
-            "keyword_matched": [id2name[i] for i in unique_matched],
-            "similarity_top": [id2name[i] for i in similarity_top],
-            "kept": [id2name[i] for i in ids],
-            "excluded": [
-                {"doc": id2name[i], "reason": "no_keyword_match_and_below_similarity_top"}
-                for i in all_ids if i not in kept_set
-            ],
+            "candidates": len(deduped),
+            "keyword_matched": None,   # 已移除：不再按关键词筛
+            "similarity_fallback": 0,  # 已移除：候选全保留，无 Top3 兜底
+            "kept": all_ids,
+            "excluded": [],
+            "reason": "keyword_gate_removed_p0_2",
         }
-        return ids, info
+        return all_ids, info
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         """带请求内缓存的检索入口（P1-5）。

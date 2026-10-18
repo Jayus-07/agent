@@ -249,13 +249,13 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             )}
             <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${ragReady === false ? 'border-amber-200 bg-amber-50/30 cursor-not-allowed' : 'border-border-subtle cursor-pointer'}`}>
               <input type="file" ref={fileRef} multiple
-                accept=".pdf,.md,.txt,.docx,.xlsx,.markdown" className="hidden"
+                accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.markdown" className="hidden"
                 disabled={ragReady === false}
                 onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) setFiles(fs) }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />
                 <p className={`text-xs ${ragReady === false ? 'text-amber-400' : 'text-text-muted'}`}>
-                  {ragReady === false ? '请等待服务就绪…' : '点击选择 PDF / MD / TXT / DOCX（可多选）'}
+                  {ragReady === false ? '请等待服务就绪…' : '点击选择 PDF / MD / TXT / DOCX / XLSX / CSV（可多选）'}
                 </p>
               </div>
             </div>

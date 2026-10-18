@@ -211,7 +211,6 @@ class MetadataStage:
                 extract_time_refs, detect_business_domain,
             )
             from backend.config.rag import METADATA_SCHEMA_FINGERPRINT as _metadata_fp
-            from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
             from backend.rag.preprocessing.entity import extract_entities, extract_person_names
         except ImportError:
             return {}
@@ -600,12 +599,16 @@ class MetadataStage:
                 raise
 
         async def task_keywords():
-            """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
-            return await asyncio.to_thread(
-                extract_doc_keywords_typed, full_text,
-                doc_type=doc_type, confidence=confidence, complexity=complexity,
-                allow_llm=False,
-            )
+            """P0-2（2026-10-19 去词表化）：doc 级普通关键词停发。
+
+            词表/领域词/Jieba 排名提取已删（keyword.py），检索不再消费
+            doc_keywords（Stage1 门控已移除）；空产出保持 KeywordResult
+            契约与下游字段兼容（doc_keywords=[] / keywords_rule=[]）。
+            复杂度特征改由 extract_rule_keywords 的标识符计数承担。
+            不新增任何 LLM 关键词调用。
+            """
+            from backend.rag.preprocessing.keyword import KeywordResult as _KR
+            return _KR(rule_keywords=[], llm_keywords=[])
 
         async def task_questions():
             """模拟问题生成（Document Expansion，S0 恢复）。
