@@ -19,6 +19,10 @@ WORKDIR /app
 COPY backend/ ./backend/
 COPY mcp_servers/ ./mcp_servers/
 RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
+# 卷挂载点预建为 appuser 属主：named volume 首挂时挂载点不存在会被 docker 以
+# root 创建，appuser 写入即 PermissionError（2026-10-19 ragu1 首传实测）。
+# 与共享栈 agent_app_data 卷实际属主 10001:10001 一致。
+RUN mkdir -p /app/data /app/.cache && chown appuser:appuser /app/data /app/.cache
 COPY scripts/ ./scripts/
 
 USER appuser

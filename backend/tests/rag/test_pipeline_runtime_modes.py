@@ -209,3 +209,81 @@ class TestReadOnlySnapshotSelfHeal:
 
         with pytest.raises(RuntimeError, match="reconcile"):
             pipeline._init_retrievers()
+
+
+class TestColdStartEmptyKB:
+    """空库冷启动放行（2026-10-19 ragu1 隔离栈首传实证）。
+
+    全新部署向量库无 chunk 且无已发布 BM25 快照是合法状态：首批文档发布前
+    检索返回空，发布时由 indexer 建立 BM25。此前 runtime 初始化无条件拒绝
+    「向量库没有可用于 BM25 校验的 chunk」，新库首个上传任务重试 3 次终败
+    （service_unavailable）——鸡生蛋死锁。防混代语义保留：向量库空但磁盘
+    BM25 快照非空仍视为向量数据丢失并拒绝。"""
+
+    def _mk_pipeline(self, module, monkeypatch, store):
+        pipeline = module.RAGPipeline.__new__(module.RAGPipeline)
+        pipeline.mode = "runtime"
+        pipeline.embedding = object()
+        pipeline.doc_db = object()
+        pipeline._person_to_doc_cache = {}  # __new__ 跳过 __init__，补 person index 桩
+        pipeline.vectordb = type(
+            "Vector", (),
+            {"get": lambda self: {"ids": [], "documents": [], "metadatas": []}},
+        )()
+        monkeypatch.setattr(module, "BM25Store", lambda: store)
+        return pipeline
+
+    def test_empty_vectors_and_empty_snapshot_boots_with_empty_index(
+            self, monkeypatch):
+        from backend.rag import pipeline as module
+
+        built = {"n": 0}
+
+        class ColdStore:
+            def load(self, k):
+                return None
+
+            def doc_count(self):
+                return 0
+
+            def get_content_hash(self):
+                return ""
+
+            def get_metadata(self):
+                return {}
+
+            def build(self, *args, **kwargs):
+                built["n"] += 1
+                return _FakeRetriever([])
+
+        pipeline = self._mk_pipeline(module, monkeypatch, ColdStore())
+
+        pipeline._init_retrievers()  # 不抛 = 冷启动放行
+
+        assert pipeline.bm25 is None
+        assert built["n"] == 0, "只读模式冷启动不得构建 BM25"
+
+    def test_vectors_lost_but_snapshot_present_still_rejected(self, monkeypatch):
+        from backend.rag import pipeline as module
+
+        class OrphanSnapshotStore:
+            def load(self, k):
+                return _FakeRetriever([Document(page_content="orphan")])
+
+            @property
+            def is_stale(self):
+                return False
+
+            def doc_count(self):
+                return 1
+
+            def get_content_hash(self):
+                return "h-orphan"
+
+            def get_metadata(self):
+                return {}
+
+        pipeline = self._mk_pipeline(module, monkeypatch, OrphanSnapshotStore())
+
+        with pytest.raises(RuntimeError, match="向量库没有可用于 BM25 校验"):
+            pipeline._init_retrievers()
