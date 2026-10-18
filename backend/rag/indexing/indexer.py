@@ -1361,9 +1361,21 @@ class IncrementalIndexer:
                     parser_lineage[0], status="success",
                     started_at=parser_lineage[1], output_count=len(chunks),
                 )
+            # P1（2026-10-19）：doc_count 是产出 chunk 数；page_count 不再由
+            # chunk 数冒充——仅 PDF 有真实物理页数（pipeline 元数据提供），
+            # 其余格式无可靠分页语义，记 0 并显式标记 page_count_applicable=false，
+            # 前端据此区分「不适用」与「0 页」。
+            _parse_pages = 0
+            for _ch in chunks:
+                _p = _ch.metadata.get("page_count")
+                if isinstance(_p, int) and _p > 0:
+                    _parse_pages = max(_parse_pages, _p)
+            _pages_applicable = ext.lower() == ".pdf"
             trace_collector.end_span(parse_span,
                 metrics={"doc_count": len(chunks),
-                         "page_count": len(chunks),
+                         "page_count": _parse_pages if _pages_applicable else 0,
+                         "page_count_applicable": _pages_applicable,
+                         "chunk_count": len(chunks),
                          "loader": "pipeline", "ext": ext})
         except Exception as e:
             # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
@@ -2161,6 +2173,13 @@ class IncrementalIndexer:
                             else (len(str(doc_meta.get("person_names")).split(",")) if doc_meta.get("person_names") else 0),
             "doc_db_id": doc_db_id,
         }
+        # P1（2026-10-19）：元数据阶段子耗时（决策/增强并发段/收尾），供
+        # Trace 拆解 10s 级不可解释总时长；缺失（历史/异常路径）时不伪造
+        _stage_ms = doc_meta.get("stage_ms")
+        if isinstance(_stage_ms, dict) and _stage_ms:
+            for _k, _v in _stage_ms.items():
+                if isinstance(_v, (int, float)):
+                    metrics[f"meta_{_k}"] = _v
         if chunks_truncated:
             metrics["chunks_truncated"] = "true"
         if llm_used:

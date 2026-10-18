@@ -473,6 +473,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             # 向量空召回/失败 → BM25 兜底召回
             try:
                 bm25_docs = bm25_retriever.invoke(query)
+                # P0：同主融合路，BM25 兜底也过滤独立 parent 命中
+                from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                if RAG_FILTER_PARENT_RECALL:
+                    bm25_docs = [d for d in bm25_docs
+                                 if d.metadata.get("granularity") != "parent"]
                 bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
                 if doc_ids:
                     bm25_docs = [d for d in bm25_docs
@@ -593,6 +598,15 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]
+
+    # P0（2026-10-19 faq_only.docx 实证）：BM25 路同样过滤独立 parent 命中
+    # （BM25 语料含虚拟 parent，问题列表与查询词面高度重合会挤占召回名额）；
+    # parent 仅经 attach_parent_context 扩展通道提供上下文。与 CustomRetriever
+    # 向量出口的过滤同源同开关。
+    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+    if RAG_FILTER_PARENT_RECALL:
+        bm25_docs = [d for d in bm25_docs
+                     if d.metadata.get("granularity") != "parent"]
 
     # BM25 检索不接受 filter 参数，结果返回后手动按 metadata_filter 过滤，
     # 否则不同知识库的残留文档会混入、挤占 RRF 位置

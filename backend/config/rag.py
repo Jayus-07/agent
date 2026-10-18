@@ -62,6 +62,12 @@ RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", os.path.join(RAG_DATA_DIR, "rag", "tmp"))
 RAG_UPLOAD_PATH_GUARD = os.getenv("RAG_UPLOAD_PATH_GUARD", "true").strip().lower() in (
     "1", "true", "yes"
 )
+# P0（2026-10-19 faq_only.docx 实证）：parent 块不作为独立召回证据——虚拟
+# parent 内容为问题/标题列表（无答案），与查询高相似却无证据资格。默认开启
+# 过滤（parent 仅经 attach_parent_context 扩展通道出现）；置 false 回滚。
+RAG_FILTER_PARENT_RECALL = os.getenv("RAG_FILTER_PARENT_RECALL", "true").strip().lower() in (
+    "1", "true", "yes"
+)
 # 流式读块大小 (1MB 平衡内存和 syscall 次数)
 RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次

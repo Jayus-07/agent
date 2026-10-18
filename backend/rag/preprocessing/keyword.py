@@ -495,3 +495,26 @@ def extract_doc_keywords_typed(text: str, doc_type: str = "general",
 def extract_doc_keywords(text: str, top_k: int = 10) -> KeywordResult:
     """向后兼容别名 — 默认 general 类型，规则 + LLM 双线"""
     return extract_doc_keywords_typed(text, doc_type="general", top_k=top_k)
+
+
+def dedupe_keywords_normalized(words: list[str], limit: int | None = None) -> list[str]:
+    """关键词大小写归一去重（2026-10-19 faq_only.docx 实证）。
+
+    旧合并 ``kws_all_words = rule + llm`` 无归一：同一词的大小写变体
+    （FAQ/faq）作为两条关键词入库，污染关键词过滤与展示。现按
+    ``casefold`` 归一去重，保留首个出现形式（保序），可选截断数量。
+    仅做合并，不改变单个关键词本身的抽取口径，消费者格式不变。
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for w in words or []:
+        if not w:
+            continue
+        key = w.strip().casefold()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(w.strip())
+        if limit is not None and len(out) >= limit:
+            break
+    return out

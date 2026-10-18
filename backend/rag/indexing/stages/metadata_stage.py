@@ -217,6 +217,13 @@ class MetadataStage:
             return {}
 
         try:
+            import time as _time
+            _t_build0 = _time.monotonic()
+            _stage_ms: dict = {}
+            # 统一（cascade）路径不经过规则 gather/near_dup 锚点，先置 None
+            # 防御未定义（enrich/finalize 仅在对应锚点被执行时记录）
+            _t_enrich0 = None
+            _t_final0 = None
             fname = base_meta.get("source_file", "")
             fpath = base_meta.get("file_path", "")
             cls_detail: dict | None = None
@@ -641,12 +648,16 @@ class MetadataStage:
             person_names = persons
         kw_result = kw_res
         entities_nested = entities_res
+        _stage_ms["decision_ms"] = round((_time.monotonic() - _t_build0) * 1000)
+        _t_enrich0 = _time.monotonic()
         questions_by_chunk, question_gen_tokens = questions_res
 
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
         kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+        from backend.rag.preprocessing.keyword import dedupe_keywords_normalized
+        kws_all_words = dedupe_keywords_normalized(
+            [k["word"] for k in kws_rule_objs + kws_llm_objs])
 
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
@@ -697,7 +708,11 @@ class MetadataStage:
             # 章节提取失败 → 跳过 sections 元数据（软降级），留痕
             logger.debug(f"[Indexer] 章节提取失败，跳过: {e}", exc_info=True)
 
+        if _t_final0 is not None:
+            _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
+        _stage_ms["total_ms"] = round((_time.monotonic() - _t_build0) * 1000)
         return {
+            "stage_ms": dict(_stage_ms),
             "doc_type": doc_type,
             "confidence": confidence,
             "business_domain": domain,
@@ -966,6 +981,9 @@ class MetadataStage:
 
         # MinHash 近重复（规则产物，决定 pending_review，两条路径都必须算）
         minhash_sig = compute_minhash(full_text)
+        if _t_enrich0 is not None:
+            _stage_ms["enrich_ms"] = round((_time.monotonic() - _t_enrich0) * 1000)
+        _t_final0 = _time.monotonic()
         near_dup_id = self.detect_near_dup(
             self._registry, minhash_sig, unified["doc_type"], exclude_doc_id=doc_id)
 
@@ -1029,7 +1047,9 @@ class MetadataStage:
         # 关键词对象化（对齐 KeywordResult 输出口径：source=llm）
         kws_llm_objs = [{"word": w, "source": "llm"} for w in unified.get("keywords", [])]
         kws_rule_objs = [{"word": w, "source": "rule"} for w in rule_kws_preview]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+        from backend.rag.preprocessing.keyword import dedupe_keywords_normalized
+        kws_all_words = dedupe_keywords_normalized(
+            [k["word"] for k in kws_rule_objs + kws_llm_objs])
 
         llm_tokens = dict(unified.get("llm_tokens") or {})
         if question_gen_tokens:
@@ -1040,7 +1060,11 @@ class MetadataStage:
                 float(llm_tokens.get("cost_usd", 0) or 0)
                 + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
 
+        if _t_final0 is not None:
+            _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
+        _stage_ms["total_ms"] = round((_time.monotonic() - _t_build0) * 1000)
         return {
+            "stage_ms": dict(_stage_ms),
             "doc_type": unified["doc_type"],
             "confidence": unified["confidence"],
             "business_domain": unified["business_domain"],
