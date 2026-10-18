@@ -95,3 +95,31 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - 不直接向这套旧后端付费上传来冒充当前main验收。后续需在隔离栈运行最新代码、关联同版本Worker，再通过浏览器上传。
 - 用户反馈管理端没有改密提示后，已实际复现并修复上述前端闭环；修复页截图已提供，等待用户亲自设置新密码。
 - 上传CSV选择改动尚未在实际文件选择器中验收；不能把这两行源码修改报告为浏览器上传通过。
+
+## 2026-10-19 治理改造并入：基线核查结论（三路并行探查，行号以当前工作树为准）
+
+### P0-1 切分路由现状（Explore A）
+- 现状是 doc_type 主轴+结构信号豁免：pipeline.py:108 词袋分类 → pipeline.py:111 路由 → chunking.py:1808 `STRUCTURE_STRATEGIES.get(doc_type)` 主路由（v2, chunking.py:1687/1703-1821）。
+- 必改点：①主路由键反转（1808）改 StructureProfile 直判（qa_pair_count≥1→QA、legal_clause_count≥3→Legal、step_heading_count≥3→Step、table→表格行级）；②豁免表 _STRONG_SIGNAL_FIELD（1671-1684）删 doc_type 查表；③结构只当否决者（1787-1806）无正向启用路径；④未映射 doc_type 即使强结构信号也递归（1815-1820，偏离最大）；⑤financial 特例需「表格+数值列」结构条件替代（1605）；⑥QA completeness 直通车（structure_analyzer.py:122-123）是 faq 偏置。
+- 可复用事实源齐全：StructureProfile（structure_analyzer.py:24-44,61-81）、表格/qa/条款判定（chunking.py:231-252）、ChunkRouteDecision 审计（chunking.py:1621-1652）。生产调用 indexer.py:1269 不传 hint。
+- QA 虚拟 parent：QAChunkStrategy.split 末尾无条件触发（chunking.py:1174），group_size=None 全文档一个 parent（anchor=faq）。
+
+### P0-2 检索过滤现状（Explore B）
+- 检索路径 doc_type/business_domain 过滤 **100% 来自 QueryAnalyzer 对查询文本的猜测**（query_analyzer.py:61-108 to_metadata_filter；DOMAIN_RULES 262-282、DOC_TYPE_RULES 285-294），无用户显式入口（/rag/search 只收 kb_id）。
+- 流向：①pipeline.py:1060-1065 合入 metadata_filter（硬过滤下推 pgvector）；②Evidence Gate 二次硬门 DOC_TYPE_MISMATCH（hybrid.py:328-354、operations.py:257-272、开关 DOC_TYPE_COVERAGE_REQUIRED 默认 true config/rag.py:483）；③软打分 enhanced_hybrid_retrieval.py:372-381。
+- 历史漏召回事故：TD-13「发票认证」被猜 security→假拒答（test_stage1_relax_doc_type.py）；「广告法」business_domain=advertising 漂移→全库空命中（selection_funnel/knowledge.py:88-99）；幽灵键白名单（test_metadata_filter_whitelist.py）。
+- 改动点：to_metadata_filter 停发 doc_type/business_domain（query_analyzer.py:73-88）；放宽链简化（retrievers.py:616-698 的 domain_fallback 级失效、kb 级保留）；pipeline 四处 kb_scope 放宽语义简化；Evidence Gate 的 doc_type 覆盖门退役。**必须保留**：显式 kb_id、租户/授权 keep-set、permission_scope（permissions.py 全链）、审核可见性、KBRouter kb 维度（可保留为软信号或同退役——doc_type 停发后其影响需评估）。
+
+### P0-3/P0-4 分类链路与消费者（Explore C）
+- 级联三模块 metadata_decision/metadata_runtime/metadata_evidence **100% 只服务 doc_type/business_domain 分类**（DecisionEnvelope R0/R1/R2/fallback+缓存+证据），无权限/安全职责。metadata_classifier/shadow、tasks/metadata_shadow_tasks.py、eval/metadata_baseline/* 同属退役面。
+- **doc_type 字段本身不可删**，真实消费者：财务 PII 强制脱敏（filter.py:292-335）、旅游（city_guide_service.py:69-87 travel_guide+destination）、Trace 保留 180 天（observability.py:29-36、trace_retention.py:39-90）、财务版本快照（indexer.py:2624,2784-2796、publish.py:437-449）、引用/前端展示（citation.py:259-309、SourceCard.tsx:39）。供给改由规则分类器 classify_doc_type（metadata.py:227，taxonomy.yaml+domain_data.py 链，**不可删**）。
+- METADATA_CLASSIFIER_ENABLED 唯一生产消费点 metadata_decision.py:185（当前默认 false 即 R1 已关）。METADATA_CASCADE_ENABLED 部署默认 true（compose），代码默认 false。ENABLE_LLM_METADATA_EXTRACT 兼管摘要（metadata_stage.py:574-575）——保留开关但语义收窄为「摘要等增强」。
+- question_gen.py 与 doc_type 仅 prompt 文案/缓存键弱耦合（:105-122,173-182）；「simulated_questions 恒空」根因=级联下只有 envelope.source==llm 才生成（metadata_stage.py:933,1012-1028 route_no_llm）+P1 后占位问题被禁（question_gen.py:59-69）——是设计行为非 bug。
+- permission_scope 全链与分类零耦合，原样保留。
+- domain_classify.source="metadata_llm" 语义矛盾已定位方向：rule_metadata 组包处（metadata_stage 2150+ indexer 2196 domain_detail）与实际执行路径（R0）不符，待改造收敛组包路径时一并修正。
+
+### 施工序决定
+1. P0-1 路由反转（改动最集中：chunking.py Router 一个函数+表）
+2. P0-2 检索去猜测过滤（query_analyzer+放宽链+Gate 门退役+测试改）
+3. P0-3 分类级联退役+组包路径收敛（rule_metadata/llm_metadata 归一，domain_classify 语义修复顺带）
+4. P0-4 消费者验证（财务/旅游/Trace 保留回归）+ P1 设施清理（引用搜索后删）
