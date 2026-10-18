@@ -151,3 +151,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - **domain_classify 语义**：级联删除后 rule_metadata 的 domain_detail 来自规则路径、llm_metadata 的 metadata_llm 标注仅出现在真实 LLM 增强时——矛盾消除。
 - **测试**：rag 目录 1217 passed / 22 failed（全部为存量，数量严格对账：去词表化基线 39 − 删级联测试 12 − 本轮修复 5 = 22）；worker_topology 19 passed（删影子队列用例+compose 五 worker 断言改四 worker）；metadata_llm 11、simulated_questions 11、faq_routing 9、retrievers 全过。
 - **修复的引入项**：metadata_llm 限流内联时误删 metrics 导入（UnboundLocalError）；finalize_unified 计时锚点误引 build 局部变量（统一路径必炸隐患，改方法自治计时）。
+
+## 2026-10-19 治理 P1 收尾：taxonomy 仅级联字段清理 + 管理端入口核查
+
+- taxonomy.yaml 的 `r0_allowlist`（级联 R0 短路规则清单，唯一业务消费者 metadata_evidence 已随级联删除）字段与 taxonomy_spec 加载/校验代码删除；get_taxonomy 加载验证通过。
+- 删除 `scripts/run_metadata_rollback_v1.py`（级联回滚脚本，级联退役后无意义）。
+- **词库管理链路保留（引用搜索推翻删除判断）**：keyword_store 有活消费者——classify_with_confidence（doc_type 唯一供给源）的动态规则分支与 metadata_rule_service；定位从「检索关键词词表」变为「分类动态规则库」，管理端词库 tab/keyword_routes API 保留。
+- 管理端旧分类入口核查：前端无级联/影子专属入口（grep 命中均为 CSS shadow 样式）；delete_document_cascade 为文档删除功能（无关，保留）。
+- 回归：rag 目录 1217 passed / 22 failed / 55 errors 与 P1 后基线完全一致（全部存量），零新增。
