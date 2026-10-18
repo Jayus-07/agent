@@ -400,7 +400,7 @@ def _resolve_summary_model() -> str:
 
 
 def _provider_supports_thinking_flag(model_name: str) -> bool:
-    """该模型是否支持 enable_thinking 开关。
+    """该模型是否支持显式关闭思考。
 
     STOP D（D4）口径收敛：实现委托 `models.supports_thinking_flag`
     （Registry capabilities 显式声明优先 + legacy 兼容口径），本模块
@@ -415,15 +415,19 @@ def _summary_invoke_kwargs(model_name: str) -> dict:
     """摘要调用的确定性收口参数（Phase 5 P1）：短输出 + 低温 + 显式关 thinking。
 
     Phase 4/5 实测根因：qwen 系混合思考模型在通用 openai driver 下不传
-    enable_thinking 时思考链默认开启，摘要一次 2.7k thinking tokens / 25~41s。
-    摘要任务不需要 reasoning：只要短、准、结构化、稳定。
+    关闭参数时思考链默认开启，摘要一次 2.7k thinking tokens / 25~41s。
+    摘要任务不需要 reasoning：按供应商协议关闭思考，并限制输出长度。
     """
     kwargs: dict = {
         "max_tokens": int(_cfg("CONTEXT_L5_SUMMARY_MAX_TOKENS", 512)),
         "temperature": float(_cfg("CONTEXT_L5_SUMMARY_TEMPERATURE", 0.2)),
     }
     if _provider_supports_thinking_flag(model_name):
-        kwargs["extra_body"] = {"enable_thinking": False}
+        from backend.infra.llm.models import thinking_disabled_extra_body
+
+        extra_body = thinking_disabled_extra_body(model_name)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
     return kwargs
 
 

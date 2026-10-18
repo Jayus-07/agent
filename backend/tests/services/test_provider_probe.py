@@ -451,6 +451,31 @@ def test_fast_siliconflow_qwen3_probe_disables_thinking(monkeypatch):
     assert captured["max_tokens"] == 1
 
 
+def test_ark_probe_uses_ark_thinking_parameter(monkeypatch):
+    import langchain_openai
+
+    from backend.infra.llm import models
+
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    monkeypatch.setattr(langchain_openai, "ChatOpenAI", _capture)
+    monkeypatch.setattr(models, "supports_thinking_flag", lambda _: True)
+
+    P.build_probe_client(
+        "openai",
+        model_name="doubao-seed-2.0-mini",
+        api_key="sk-test",
+        base_url="https://ark.cn-beijing.volces.com/api/plan/v3",
+        fast=True,
+    )
+
+    assert captured["extra_body"] == {"thinking": {"type": "disabled"}}
+
+
 def test_embedding_probe_uses_specialized_request_and_returns_uniform_result(monkeypatch):
     captured: dict = {}
 

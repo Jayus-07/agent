@@ -583,17 +583,11 @@ def build_probe_client(
             "temperature": 0.0,
             "request_timeout": client_timeout,
         }
-        parsed_host = (urlparse(base_url).hostname or "").lower()
-        if (
-            fast
-            and parsed_host.endswith("siliconflow.cn")
-            and "qwen3" in model_name.lower()
-            and "thinking" not in model_name.lower()
-        ):
-            # SiliconFlow 的 Qwen3 默认可能进入思考模式；快速探测只验证
-            # 鉴权与模型可调用，不应等待完整思考链。该参数仅发给明确匹配的
-            # SiliconFlow Qwen3，避免污染其他 OpenAI 兼容供应商的请求。
-            kwargs["extra_body"] = {"enable_thinking": False}
+        from backend.infra.llm.models import thinking_disabled_extra_body
+
+        extra_body = thinking_disabled_extra_body(model_name, base_url=base_url)
+        if extra_body is not None:
+            kwargs["extra_body"] = extra_body
         return ChatOpenAI(**kwargs)
 
     raise ValueError(f"不支持的驱动: {driver or '(空)'}（可选 openai / anthropic / ollama）")
