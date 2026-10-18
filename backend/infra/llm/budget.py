@@ -389,6 +389,13 @@ def current_request_id() -> str:
     return _current_request_id.get()
 
 
+def current_reservation_id() -> str:
+    """返回当前 Provider 尝试的预算预占 ID，仅用于调用诊断关联。"""
+    reservation = _current_quota_reservation.get()
+    value = getattr(reservation, "reservation_id", "") if reservation else ""
+    return str(value or "")
+
+
 def reserve_model_call(
     kind: str,
     *,
@@ -463,7 +470,7 @@ def release_model_reservation() -> None:
     _current_quota_reservation.set(None)
 
 
-def review_model_reservation(reason: str) -> None:
+def review_model_reservation(reason: str) -> bool:
     """把当前预占转入待对账（needs_review），占额保守保留到周期结束。
 
     用于"调用可能已对供应商计费但用量未知"的场景：流式缺 usage 尾帧、
@@ -474,7 +481,7 @@ def review_model_reservation(reason: str) -> None:
     reservation = _current_quota_reservation.get()
     state = current_request_budget()
     if reservation is None or state is None or state.quota_store is None:
-        return
+        return False
     try:
         marked = state.quota_store.mark_needs_review(reservation, reason)
     except Exception as exc:  # noqa: BLE001 — 观测/对账链路不得反噬主链路
@@ -483,10 +490,12 @@ def review_model_reservation(reason: str) -> None:
             "由滞留回收兜底）: %s",
             getattr(reservation, "reservation_id", "?"), reason, exc,
         )
+        return False
     else:
         if marked:
             _record_budget_request(state.mode, "needs_review")
         _current_quota_reservation.set(None)
+        return bool(marked)
 
 
 def record_model_usage(
@@ -496,40 +505,52 @@ def record_model_usage(
     total_tokens: int | None = None,
     cost: Decimal | float | str | None = None,
     review_reason: str = "",
-) -> None:
+) -> str:
+    """记录用量并返回预算结算的实际收敛状态，供 Trace 与账本对账。"""
     state = current_request_budget()
-    if state is not None:
-        state.record_usage(
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-            total_tokens=total_tokens,
-            cost=cost,
+    if state is None:
+        return "no_request_budget"
+    state.record_usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        cost=cost,
+    )
+    reservation = _current_quota_reservation.get()
+    if reservation is None:
+        return "not_reserved"
+    if state.quota_store is None:
+        return "quota_store_unavailable"
+    if review_reason:
+        return (
+            "needs_review"
+            if review_model_reservation(review_reason)
+            else "needs_review_mark_failed"
         )
-        reservation = _current_quota_reservation.get()
-        if reservation is not None and state.quota_store is not None:
-            if review_reason:
-                review_model_reservation(review_reason)
-                return
-            try:
-                state.quota_store.settle(reservation, Decimal(str(cost or 0)))
-            except Exception as exc:
-                # 2026-10-01 P0 修复：结算失败不再吞掉——原实现静默吞异常会让
-                # 预占永久滞留。转为待对账（占额保留到周期结束）并告警；
-                # 仍不向调用方抛错（成本统计失败不能破坏模型主链路）。
-                logger.warning(
-                    "[Budget] 预算结算失败，转入待对账 reservation=%s: %s",
-                    getattr(reservation, "reservation_id", "?"), exc,
-                )
-                try:
-                    state.quota_store.mark_needs_review(reservation, "settle_failed")
-                except Exception:
-                    logger.warning(
-                        "[Budget] 结算失败且待对账标记也失败 reservation=%s"
-                        "（由滞留回收兜底）",
-                        getattr(reservation, "reservation_id", "?"),
-                    )
-            finally:
-                _current_quota_reservation.set(None)
+    try:
+        state.quota_store.settle(reservation, Decimal(str(cost or 0)))
+        return "settled"
+    except Exception as exc:
+        # 2026-10-01 P0 修复：结算失败转入待对账；把结果返回给调用方 Trace，
+        # 不能将“结算尝试”误记成“已结算”。
+        logger.warning(
+            "[Budget] 预算结算失败，转入待对账 reservation=%s: %s",
+            getattr(reservation, "reservation_id", "?"), exc,
+        )
+        try:
+            marked = state.quota_store.mark_needs_review(
+                reservation, "settle_failed",
+            )
+        except Exception:
+            logger.warning(
+                "[Budget] 结算失败且待对账标记也失败 reservation=%s"
+                "（由滞留回收兜底）",
+                getattr(reservation, "reservation_id", "?"),
+            )
+            return "needs_review_mark_failed"
+        return "needs_review" if marked else "needs_review_mark_failed"
+    finally:
+        _current_quota_reservation.set(None)
 
 
 __all__ = [
@@ -541,6 +562,7 @@ __all__ = [
     "clear_request_budget",
     "current_call_decision",
     "current_request_id",
+    "current_reservation_id",
     "current_request_budget",
     "record_model_usage",
     "release_model_reservation",

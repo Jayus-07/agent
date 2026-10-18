@@ -251,7 +251,7 @@ def test_rewrite_timeout_obeys_multi_query_role_policy(monkeypatch):
     assert captured["timeout"] == 1.0
 
 
-def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
+def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch, request):
     """等待超时会取消尚未启动的线程池任务，避免过期查询再触发 LLM。"""
     from concurrent.futures import TimeoutError
 
@@ -260,6 +260,10 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
     from backend.infra import thread_pools
     from backend.rag import retrieval_budget
     from backend.observability.tracer import trace_collector
+
+    trace_collector.clear_for_test()
+    trace = trace_collector.start("queued rewrite timeout")
+    request.addfinalizer(trace_collector.clear_for_test)
 
     state = {"cancelled": False}
 
@@ -272,8 +276,8 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
             return True
 
     class _Pool:
-        def submit(self, _function, *args, **_kwargs):
-            state["cancel_event"] = args[1]
+        def submit(self, _function, *_args, **_kwargs):
+            state["submitted"] = True
             return _Future()
 
     monkeypatch.setattr(
@@ -290,12 +294,14 @@ def test_rewrite_timeout_cancels_queued_work_and_returns_original(monkeypatch):
         "submit_rag_task",
         lambda _name, fn, *args, **kwargs: _Pool().submit(fn, *args, **kwargs),
     )
-    monkeypatch.setattr(trace_collector, "end_open_span", lambda *_a, **_k: None)
-
     question = "复杂查询"
     assert mq._rewrite_with_budget(question) == [question]
+    assert state["submitted"] is True
     assert state["cancelled"] is True
-    assert state["cancel_event"].is_set()
+    span = next(item for item in trace.spans if item.span_id == "query_rewrite")
+    assert span.metrics["caller_cancel_requested"] is True
+    assert span.metrics["future_cancel_accepted"] is True
+    assert span.metrics["worker_state"] == "cancelled_before_start"
 
 
 def test_multi_query_role_registered_and_inherits_main():

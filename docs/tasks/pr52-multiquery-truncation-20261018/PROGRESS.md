@@ -53,6 +53,18 @@ BM25重建/对账补充集合 **36 passed / 23.14s**；已并入免费CI。静�
 - 已有stream分支与thinking事件，正文仍受Evidence Gate控制；候选答案外发需独立安全/终态契约验收。模型分级/更换embedding、扩充Golden、阈值校准/消融不纳入本轮付费实验。
 - 报告的“回归集29题”已过时：当前统一manifest为`5.0.0-unified`、269条；`ci_golden`实际99条（RC-080移出），本轮固定`pr_smoke`仍8条。不因已有较大数据集就宣称全部269条已验证；后续消融需另选suite、预算和质量门禁。
 
+## Round 4：超时诊断与迟到账本（本轮不付费）
+
+本轮继续在原 PR worktree `C:/Users/wh/.codex/worktrees/pr52-main-sync-20261017/agent`、分支 `codex/rag-multi-query-p0-20261013`，起点 `1a21649f2c7904a201fc5340852bbbcd5ad1b30b`。共享 `main` 和独立的 `codex/llm-thinking-unify` / `04d72f18ad8476aab51c1612060461f529d415eb` 未修改。PR #52 继续保持 Open/Draft。
+
+- 对历史5条异常账目复核后，Artifact 只有3 Chat、2 Rerank的聚合行，没有 row/reservation/call/provider request ID，不能与 RC Trace 唯一连接。RC-024/031 rewrite timeout 与 RC-031 Rerank ReadTimeout 保留为孤立调用证据，不假称对应某条账目；5条继续 `needs_review`、整轮费用 `UNVERIFIED`。详见 [逐条字段与证据](VALIDATION.md)。
+- 当前有效配置路径是代码默认6000ms、`multi_query` 角色默认10s、总 deadline 8000ms；历史 runner env 与 DB 角色行未导出，历史源不可证明。本轮没增加 timeout/token/deadline。
+- 新增安全改写阶段耗时、有效 timeout 来源、Prompt 实例Hash早写、单次收尾和迟到独立span；LLM预算路径回报真实 `settled` / `needs_review` 状态；Rerank 在共享 deadline 后丢弃分数但仍完成用量结算；请求身份/Trace上下文隔离由Fake Provider并发验证。
+- 隔离 `pr52-rag-review-pg` 实际跑完整免费 PR 集合：624 passed / 56.28s / 0 skipped。E0 8 cases PASS；py_compile、定向 Ruff、diff-check、Contract Lock check、Prompt Lock check、本地 Secret Scan PASS。pytest 汇总2个既有 `TestCase` collection warning，并观察到Windows Proactor收尾 warning。GitHub PR CI、Contract Check、Secret Scan待提交推送后记录。
+- 本轮未触发任何真实 Provider 请求或 Smoke；没有发布、回滚、解除 Draft、合并或把独立的 thinking-off commit 合入 PR。本轮优化判断不能由 Fake Provider推导模型性能，需未来受控真实验证。
+
+停止条件仍有阻断：历史5条费用用量无法逐调用恢复，历史6000ms timeout来源未经runner/DB快照证实，真实三查询质量和新代码下真实账单未验证；**MERGE_READY=false**。本轮明确禁止真实付费 Smoke，下一步只做提交/推送与免费 GitHub 门禁。
+
 ## 付费前预算计划（待免费CI通过）
 
 - 原真实账本118 calls/115574 tokens/CNY0.124661，0 unverified，settled118，差额0，approved_price_table。

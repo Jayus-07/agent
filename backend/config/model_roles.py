@@ -287,6 +287,15 @@ def has_db_policy(role: str) -> bool:
     return str(role or "") in _policy_overrides
 
 
+def has_db_policy_value(role: str, field: str) -> bool:
+    """指定运行策略字段是否由 DB 行实际提供，而非逐字段回落代码默认。"""
+    row = _policy_overrides.get(str(role or ""))
+    if not isinstance(row, dict):
+        return False
+    # resolve_runtime_policy 对空值和整数 0 使用代码默认值。
+    return bool(row.get(str(field or "")))
+
+
 def resolve_runtime_policy(role: str) -> RoleRuntimeDefaults:
     """角色运行策略：DB 显式行 → 代码默认（runtime_defaults）。
 

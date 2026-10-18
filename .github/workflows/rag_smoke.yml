@@ -164,6 +164,13 @@ jobs:
             backend/tests/rag/test_multi_query_rewrite_completion.py \
             backend/tests/rag/test_multi_query_rerank.py \
             backend/tests/rag/test_multi_query_runtime_queries.py \
+            backend/tests/rag/test_multi_query_timeout_lifecycle.py \
+            backend/tests/test_llm_budget.py \
+            backend/tests/test_llm_quota.py \
+            backend/tests/infra/test_b1b_llm_governance.py \
+            backend/tests/infra/test_usage_identity.py \
+            backend/tests/infra/test_usage_billing.py \
+            backend/tests/infra/test_stream_usage.py \
             backend/tests/rag/test_review_hardening.py \
             backend/tests/rag/test_pgvector_store.py \
             backend/tests/rag/test_bm25_identity_and_refresh.py \

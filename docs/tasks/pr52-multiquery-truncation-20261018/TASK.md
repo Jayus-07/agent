@@ -19,3 +19,7 @@
 ## 验证
 
 T0：语法、Diff、定向静态检查。T1/T2：Fake Provider、预算/隔离/装配、全部 backend/tests/prompts、16-fixture、隔离 PG SQL、远端 HTTP/服务接收埋点；免费 CI。T3：唯一一次真实 Smoke 和账本；发布只在通过后执行。
+
+## Round 4 覆盖约束
+
+本轮按最新用户指令冻结为：不运行任何真实付费 Smoke，不发布或回滚 Prompt，不解除 Draft，不合并。必须先核查原5条 `needs_review` 是否能由现存 artifact/Trace逐调用连接；不能恢复的字段继续标为 `UNVERIFIED`。Fake Provider只验证线程、Trace、身份与计费生命周期，不能充当模型性能证据。独立分支 `codex/llm-thinking-unify` / commit `04d72f18ad8476aab51c1612060461f529d415eb` 保持独立，不并入 PR #52。

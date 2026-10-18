@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import os
 import math
+import re
 import threading
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -195,6 +197,10 @@ _RERANK_MIN_ATTEMPT_S = 0.2
 _RERANK_MIN_RETRY_BUDGET_S = 0.3
 # 分数合法区间 0-1 的浮点噪声容忍度（只夹紧，不放宽语义）。
 _RERANK_SCORE_EPS = 1e-6
+
+
+class RerankLateResultDiscarded(RuntimeError):
+    """Provider 已返回但共享检索 deadline 已过；只结算用量，不采用分数。"""
 
 
 def _budget_deadline_at() -> float | None:
@@ -386,7 +392,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             try:
                 return self._rank_once(
                     payload, len(documents), "retry" if attempt else "primary",
-                    timeout=attempt_timeout,
+                    timeout=attempt_timeout, deadline_at=deadline_at,
                 )
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                 last_err = exc
@@ -427,20 +433,77 @@ class DashScopeReranker(BaseDocumentCompressor):
                 scored.append((start + local_idx, score))
         return scored
 
-    def _rank_once(self, payload, doc_count: int, kind: str, timeout: float | None = None):
-        """每次 HTTP 尝试独立预占和记账，重试不绕过预算。"""
-        from backend.infra.llm.budget import scoped_model_call
+    def _rank_once(
+        self, payload, doc_count: int, kind: str,
+        timeout: float | None = None, deadline_at: float | None = None,
+    ):
+        """每次 HTTP 尝试独立预占、Trace 与记账；迟到分数不得回流业务。"""
+        from backend.infra.llm.budget import (
+            current_request_id,
+            current_reservation_id,
+            scoped_model_call,
+        )
+        from backend.observability.tracer import (
+            current_trace_context,
+            trace_collector,
+        )
 
+        attempt_id = uuid.uuid4().hex
+        trace_id, _ = current_trace_context()
+        started = time.monotonic()
+        metrics = {
+            "internal_call_id": attempt_id,
+            "provider_attempt_id": attempt_id,
+            "role": "rerank",
+            "model": self._billing_model,
+            "provider": self._provider_id,
+            "request_id": current_request_id() or "",
+            "trace_id": trace_id or "",
+            "provider_ttfb_ms": "unavailable",
+            "provider_call_started": False,
+            "provider_completed": False,
+            "provider_cancel_acknowledged": False,
+            "usage_status": "pending",
+            "settlement_status": "pending",
+            "timeout_kind": "none",
+        }
+        response_received = False
+        usage_recorded = False
         with scoped_model_call(self._billing_model, "rerank", kind=kind):
-            started = time.monotonic()
+            metrics["reservation_id"] = current_reservation_id() or ""
+            metrics["reservation_kind"] = kind
+            span = trace_collector.start_span(
+                "rerank_provider_attempt",
+                name="Rerank Provider 尝试",
+                type="llm_call",
+            )
             try:
+                metrics["provider_call_started"] = True
+                provider_started = time.monotonic()
                 resp = requests.post(
                     self._endpoint, json=payload, headers=self._headers,
                     timeout=self.timeout if timeout is None else timeout,
                 )
+                provider_elapsed = (time.monotonic() - provider_started) * 1000
+                metrics["provider_call_ms"] = round(provider_elapsed, 1)
+                metrics["provider_response_ms"] = round(provider_elapsed, 1)
+                metrics["provider_completed"] = True
+                response_received = True
+                try:
+                    elapsed = resp.elapsed.total_seconds() * 1000
+                    if elapsed >= 0:
+                        metrics["provider_ttfb_ms"] = round(elapsed, 1)
+                except (AttributeError, TypeError, ValueError):
+                    metrics["provider_ttfb_ms"] = "unavailable"
+                headers = getattr(resp, "headers", {}) or {}
+                for header in ("x-request-id", "request-id", "x-dashscope-request-id"):
+                    candidate = str(headers.get(header, "") or "")[:128]
+                    if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate):
+                        metrics["provider_request_id"] = candidate
+                        break
                 if resp.status_code != 200:
                     raise RuntimeError(
-                        f"DashScope API error [status={resp.status_code}]"
+                        f"Rerank provider returned HTTP {resp.status_code}"
                     )
                 data = resp.json()
                 results = (
@@ -454,15 +517,88 @@ class DashScopeReranker(BaseDocumentCompressor):
                 except (ValueError, TypeError):
                     tokens = 0
                 self.__dict__["_last_total_tokens"] = tokens
-                self._record_tokens(
+                parse_ms = (time.monotonic() - provider_started) * 1000
+                metrics["response_parse_ms"] = round(
+                    max(parse_ms - provider_elapsed, 0), 1,
+                )
+                accounting = self._record_tokens(
                     doc_count, (time.monotonic() - started) * 1000,
                     total_tokens=tokens,
                 )
-                return scored
-            except Exception:
-                self._record_tokens(
-                    doc_count, (time.monotonic() - started) * 1000, status="error",
+                usage_recorded = True
+                if isinstance(accounting, dict):
+                    metrics.update(accounting)
+                else:
+                    metrics.update(
+                        usage_status="received" if tokens > 0 else "unavailable",
+                        settlement_status=(
+                            "settlement_attempted" if tokens > 0 else "needs_review"
+                        ),
+                        usage_ledger_status="unavailable",
+                    )
+                if deadline_at is not None and time.monotonic() >= deadline_at:
+                    metrics.update(
+                        timeout_kind="total_deadline_expired",
+                        provider_completed_late=True,
+                        caller_outcome="timeout_or_degraded",
+                        late_result_discarded=True,
+                    )
+                    metrics["attempt_total_ms"] = round(
+                        (time.monotonic() - started) * 1000, 1,
+                    )
+                    trace_collector.end_span(
+                        span, metrics=metrics, status="completed_late",
+                    )
+                    raise RerankLateResultDiscarded(
+                        "Rerank response arrived after shared retrieval deadline"
+                    )
+                metrics["attempt_total_ms"] = round(
+                    (time.monotonic() - started) * 1000, 1,
                 )
+                trace_collector.end_span(span, metrics=metrics, status="success")
+                return scored
+            except RerankLateResultDiscarded:
+                raise
+            except Exception as exc:
+                if not usage_recorded:
+                    accounting = self._record_tokens(
+                        doc_count, (time.monotonic() - started) * 1000,
+                        status="error",
+                    )
+                    if isinstance(accounting, dict):
+                        metrics.update(accounting)
+                    else:
+                        metrics.update(
+                            usage_status="unavailable",
+                            settlement_status="needs_review",
+                            usage_ledger_status="unavailable",
+                        )
+                timeout_error = (
+                    isinstance(exc, requests.exceptions.Timeout)
+                    or "timeout" in type(exc).__name__.lower()
+                )
+                if "provider_started" in locals() and not response_received:
+                    metrics["provider_call_ms"] = round(
+                        (time.monotonic() - provider_started) * 1000, 1,
+                    )
+                    metrics["provider_response_ms"] = "unavailable"
+                metrics.update(
+                    usage_status="unavailable",
+                    settlement_status="needs_review",
+                    provider_completion=(
+                        "unknown" if not response_received else "response_received"
+                    ),
+                    provider_error_type=type(exc).__name__,
+                    timeout_kind=(
+                        "total_deadline_expired"
+                        if deadline_at is not None and time.monotonic() >= deadline_at
+                        else "provider_io_timeout" if timeout_error else "none"
+                    ),
+                    attempt_total_ms=round(
+                        (time.monotonic() - started) * 1000, 1,
+                    ),
+                )
+                trace_collector.end_span(span, metrics=metrics, status="error")
                 raise
 
     def rerank_text(self, doc, limit: int = 2000) -> str:
@@ -511,6 +647,8 @@ class DashScopeReranker(BaseDocumentCompressor):
         （供应商页登记即生效），enforce=False 时缺价回落旧估算，不丢用量行。
         """
         billing = None
+        ledger_written = False
+        settlement_status = "unknown"
         try:
             from backend.infra.llm.budget import current_call_decision
             from backend.observability.llm_usage_store import (
@@ -537,7 +675,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                     )
                 except Exception as e:
                     logger.debug(
-                        "[Reranker] 用量计费失败（用量行照常记录，成本记 0）: %s", e,
+                        "[Reranker] 用量计费失败（保留 unpriced 状态）: %s", e,
                     )
             event = {
                 "component": "rerank",
@@ -573,11 +711,13 @@ class DashScopeReranker(BaseDocumentCompressor):
                 })
             else:
                 event.update({
-                    "cost_usd": 0.0,
-                    "total_cost": 0.0,
+                    "billed_cost_cny": None,
+                    "total_cost": None,
                     "cost_status": "unpriced",
+                    "pricing_source": "unpriced",
+                    "usage_source": "unavailable",
                 })
-            get_llm_usage_store().record(event)
+            ledger_written = bool(get_llm_usage_store().record(event))
         except Exception:
             pass  # 软失败
 
@@ -587,15 +727,31 @@ class DashScopeReranker(BaseDocumentCompressor):
             priced = billing is not None and billing.cost_status in {
                 "exact", "estimated",
             }
-            record_model_usage(
-                prompt_tokens=total_tokens,
-                total_tokens=total_tokens,
-                cost=billing.billed_cost_cny if priced else None,
-                review_reason=(
-                    "" if status == "success" and total_tokens > 0 and priced
-                    else "rerank_usage_or_price_unavailable"
-                ),
-            )
+            try:
+                settlement_status = record_model_usage(
+                    prompt_tokens=total_tokens,
+                    total_tokens=total_tokens,
+                    cost=billing.billed_cost_cny if priced else None,
+                    review_reason=(
+                        "" if status == "success" and total_tokens > 0 and priced
+                        else "rerank_usage_or_price_unavailable"
+                    ),
+                )
+            except Exception:
+                settlement_status = "accounting_error"
+                logger.warning(
+                    "[Reranker] 预算结算状态记录失败", exc_info=True,
+                )
+        return {
+            "usage_status": "received" if total_tokens > 0 else "unavailable",
+            "settlement_status": settlement_status,
+            "usage_ledger_status": "written" if ledger_written else "write_failed",
+            "price_version": billing.price_version if billing is not None else "",
+            "pricing_source": (
+                billing.pricing_source if billing is not None else "unpriced"
+            ),
+            "cost_status": billing.cost_status if billing is not None else "unpriced",
+        }
 
 
 # ═══════════════════════════════════════════════════════════

@@ -17,6 +17,7 @@ import contextvars as _contextvars
 import inspect
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Callable, Iterator
 
@@ -92,6 +93,9 @@ def _thread_local_user_id() -> str | None:
 _role_cancellation_event: _contextvars.ContextVar[Any] = _contextvars.ContextVar(
     "llm_role_cancellation_event", default=None,
 )
+_call_diagnostic_observer: _contextvars.ContextVar[Callable | None] = (
+    _contextvars.ContextVar("llm_call_diagnostic_observer", default=None)
+)
 _role_fallback_generation_kwargs: _contextvars.ContextVar[dict[str, Any] | None] = (
     _contextvars.ContextVar("llm_role_fallback_generation_kwargs", default=None)
 )
@@ -109,6 +113,26 @@ def run_with_role_cancellation(
         return function(*args, **kwargs)
     finally:
         _role_cancellation_event.reset(token)
+
+
+@contextmanager
+def scoped_call_diagnostics(observer: Callable[[str, dict[str, Any]], None]):
+    """为单次调用绑定轻量诊断回调，不改变 Proxy 的治理与结算路径。"""
+    token = _call_diagnostic_observer.set(observer)
+    try:
+        yield
+    finally:
+        _call_diagnostic_observer.reset(token)
+
+
+def _notify_call_diagnostic(stage: str, **values: Any) -> None:
+    observer = _call_diagnostic_observer.get()
+    if observer is None:
+        return
+    try:
+        observer(stage, values)
+    except Exception:  # noqa: BLE001 — 诊断回调不得影响模型调用
+        logger.debug("[LLM:proxy] 调用诊断回调失败", exc_info=True)
 
 
 def _role_call_cancelled(role: str) -> bool:
@@ -851,10 +875,15 @@ def _call_with_resilience(attr, *args, **kwargs):
 
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
+    _notify_call_diagnostic(
+        "call_identity", model=model_name, role=role, provider=provider,
+    )
     breaker = _breaker_for_resolved_model(model_name, role, provider)
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
         _raise_if_role_call_cancelled(role)
+        call_id = uuid.uuid4().hex
+        reserve_started = time.monotonic()
         try:
             reserve_model_call(
                 "primary" if attempt == 0 else "retry",
@@ -866,12 +895,45 @@ def _call_with_resilience(attr, *args, **kwargs):
             if attempt > 0:
                 exc.provider_attempted = True
             raise
+        finally:
+            from backend.infra.llm.budget import current_reservation_id
+
+            _notify_call_diagnostic(
+                "budget_reserve_ms",
+                duration_ms=(time.monotonic() - reserve_started) * 1000,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
         if _role_call_cancelled(role):
             release_model_reservation()
             _raise_if_role_call_cancelled(role)
+        provider_started = time.monotonic()
+        from backend.infra.llm.budget import current_reservation_id
+
+        _notify_call_diagnostic(
+            "provider_call_started",
+            call_id=call_id,
+            reservation_id=current_reservation_id(),
+            attempt=attempt,
+        )
         try:
-            return breaker.call(attr, *args, **kwargs)
+            result = breaker.call(attr, *args, **kwargs)
+            _notify_call_diagnostic(
+                "provider_completed",
+                duration_ms=(time.monotonic() - provider_started) * 1000,
+                call_id=call_id,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
+            return result
         except CircuitBreakerOpenError as e:
+            _notify_call_diagnostic(
+                "provider_not_sent",
+                call_id=call_id,
+                error_type=type(e).__name__,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
             if _role_call_cancelled(role):
@@ -881,14 +943,34 @@ def _call_with_resilience(attr, *args, **kwargs):
                 e, args, kwargs, model_name=model_name, role=role,
             )
         except Exception as e:
+            from backend.infra.llm.budget import current_reservation_id
+
+            reservation_id = current_reservation_id()
+            _notify_call_diagnostic(
+                "provider_error",
+                duration_ms=(time.monotonic() - provider_started) * 1000,
+                call_id=call_id,
+                error_type=type(e).__name__,
+                timeout=isinstance(e, TimeoutError)
+                or "timeout" in type(e).__name__.lower(),
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
             # 瞬时类失败可能已计费，进入待对账；确定未计费的失败释放预占。
             if _is_transient(e):
                 review_model_reservation("call_failed_possibly_billed")
+                settlement_status = "needs_review"
             else:
                 release_model_reservation()
+                settlement_status = "released"
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
+            )
+            _notify_call_diagnostic(
+                "usage_unavailable",
+                reservation_id=reservation_id,
+                settlement_status=settlement_status,
             )
             last_err = e
             if _is_context_length_provider_error(e):
@@ -1312,6 +1394,7 @@ def _record_failed_attempt(
     decision 由韧性链标注（primary/retry/fallback）。
     绝不抛错（usage 软失败原则，与 _record_tokens 一致）。
     """
+    ledger_written = False
     try:
         canonical = canonical_model_id(model_name) or model_name
         provider = _get_provider_for(canonical)
@@ -1325,7 +1408,7 @@ def _record_failed_attempt(
                 get_llm_usage_store,
             )
             attribution = current_usage_attribution()
-            get_llm_usage_store().record({
+            ledger_written = bool(get_llm_usage_store().record({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                              + f".{int(time.time() % 1 * 1000):03d}Z",
                 "trace_id": attribution["trace_id"],
@@ -1361,9 +1444,12 @@ def _record_failed_attempt(
                 "step_id": attribution["step_id"],
                 "role": attribution["role"],
                 "stage": attribution["stage"],
-            })
+            }))
         except Exception:
             pass
+        _notify_call_diagnostic(
+            "usage_ledger_write_finished", written=ledger_written,
+        )
         try:
             from backend.observability.metrics import (
                 llm_failures_total,
@@ -1423,15 +1509,23 @@ def _record_tokens(
         if not t:
             _last_tokens_var.set({})
             _last_call_meta_var.set({})
+            from backend.infra.llm.budget import current_reservation_id
+
+            reservation_id = current_reservation_id()
             try:
                 from backend.infra.llm.budget import record_model_usage
 
-                record_model_usage(
+                settlement_status = record_model_usage(
                     total_tokens=0,
                     review_reason="provider_usage_missing",
                 )
             except Exception:
-                pass
+                settlement_status = "accounting_error"
+            _notify_call_diagnostic(
+                "usage_unavailable",
+                reservation_id=reservation_id,
+                settlement_status=settlement_status,
+            )
             return
 
         # 细粒度用量：缓存命中 / 推理 token。
@@ -1563,7 +1657,7 @@ def _record_tokens(
         try:
             from backend.infra.llm.budget import record_model_usage
 
-            record_model_usage(
+            settlement_status = record_model_usage(
                 prompt_tokens=p,
                 completion_tokens=c,
                 total_tokens=t,
@@ -1579,7 +1673,7 @@ def _record_tokens(
             )
         except Exception:
             # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
-            pass
+            settlement_status = "accounting_error"
         _last_call_meta_var.set({
             "prompt_tokens": p,
             "completion_tokens": c,
@@ -1605,6 +1699,7 @@ def _record_tokens(
             "output_unit_price": cost_breakdown["output_unit_price"],
             "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
             "cost_status": cost_status,
+            "settlement_status": settlement_status,
             "currency": currency,
             "model": model,
             "canonical_model_id": model,
@@ -1620,6 +1715,7 @@ def _record_tokens(
                                provider=provider_resolved)
 
         # Token 看板明细落库（每调用一行，软失败不影响主链路）
+        usage_ledger_written = False
         try:
             from backend.observability.llm_usage_store import (
                 current_usage_attribution,
@@ -1627,7 +1723,7 @@ def _record_tokens(
             )
             from backend.infra.llm.budget import current_call_decision
             attribution = current_usage_attribution()
-            get_llm_usage_store().record({
+            usage_ledger_written = bool(get_llm_usage_store().record({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                              + f".{int(time.time() % 1 * 1000):03d}Z",
                 "trace_id": attribution["trace_id"],
@@ -1697,7 +1793,7 @@ def _record_tokens(
                 "step_id": attribution["step_id"],
                 "role": attribution["role"],
                 "stage": attribution["stage"],
-            })
+            }))
             # C15：调用计数（低基数 label：model/provider/status）
             try:
                 from backend.observability.metrics import llm_requests_total
@@ -1708,6 +1804,10 @@ def _record_tokens(
                 pass
         except Exception:
             pass
+        _notify_call_diagnostic(
+            "usage_ledger_write_finished",
+            written=usage_ledger_written,
+        )
     except Exception:
         _last_tokens_var.set({})
         _last_call_meta_var.set({})
@@ -2063,10 +2163,20 @@ class _BoundLLMProxy:
     def invoke(self, *args, **kwargs):
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        _stage_started = time.monotonic()
         self._bind_context()
+        _notify_call_diagnostic(
+            "proxy_model_bind_ms",
+            duration_ms=(time.monotonic() - _stage_started) * 1000,
+        )
+        _stage_started = time.monotonic()
         args = _preflight_context(args, kwargs,
             extra_reserved_tokens=self._schema_reserved(),
             call_method="invoke",
+        )
+        _notify_call_diagnostic(
+            "price_preflight_ms",
+            duration_ms=(time.monotonic() - _stage_started) * 1000,
         )
         _t0 = time.monotonic()
         token = _role_fallback_generation_kwargs.set(
@@ -2076,9 +2186,22 @@ class _BoundLLMProxy:
                 self._bound.invoke, *args, **kwargs)
         finally:
             _role_fallback_generation_kwargs.reset(token)
+        from backend.infra.llm.budget import current_reservation_id
+
+        reservation_id = current_reservation_id()
         _record_tokens(
             result, duration_ms=(time.monotonic() - _t0) * 1000,
             model_name=self._model_name or None,
+        )
+        metadata = _last_call_meta_var.get() or {}
+        _notify_call_diagnostic(
+            "usage_accounting_finished",
+            reservation_id=reservation_id,
+            usage_received=bool(_last_tokens_var.get()),
+            cost_status=metadata.get("cost_status", "unknown"),
+            pricing_source=metadata.get("pricing_source", "unknown"),
+            price_version=metadata.get("price_version", ""),
+            settlement_status=metadata.get("settlement_status", "unknown"),
         )
         return _wrap_result(result)
 
