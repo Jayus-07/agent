@@ -85,7 +85,9 @@ python -m pytest tests/test_rag_smoke_path_filter.py \
 - 完整 RAG PR 免费 pytest 集合（包括 `backend/tests/prompts/`、16-fixture 完整性、PostgreSQL/pgvector SQL 集成、预算/usage identity 与新 Fake Provider 测试）：624 passed，56.28s，0 skipped。pytest 汇总2个 evaluation `TestCase` collection warning；另在 Windows asyncio Proactor 清理时观察到既有 `Event loop is closed` unraisable warning；pytest exit code 0。
 - 最终直接竞态/账本子集：14 passed / 7.58s；另验证结算失败会保留 `needs_review` 而不是记成已结算。全量第一次执行的两个新测试失败分别是旧断言未随状态名更新和队列 Timer 留给 worker 的时间不足；断言及测试同步时序修正后完整集合重跑通过。
 - `py_compile`：通过；Ruff `--select E4,E7,E9,F63,F7,F82`：通过；`git diff --check`：通过。没有发出 Provider 调用，没有触发真实 Smoke。
-- 真实 PR CI、Contract Check 和 Secret Scan 在提交推送后记录其实际 GitHub 结果；本地结果不冒充云端门禁。
+- GitHub [RAG PR Smoke 39127335803](https://github.com/Jayus-07/agent/actions/runs/39127335803)：PASS，E0 8 cases，免费回归 624 passed / 35.31s，真实 API evaluation job `SKIPPED_UNTRUSTED_PR`。workflow event 是 `pull_request`，没有创建付费调用。
+- GitHub [Contract Quality Check 39127335772](https://github.com/Jayus-07/agent/actions/runs/39127335772)：PASS，Tool contract `IN_SYNC`、资产一致性 56 passed、Tool duplicate check PASS、Prompt Lock 57 prompts。另手动触发的同 HEAD [39127349870](https://github.com/Jayus-07/agent/actions/runs/39127349870) 也 PASS。
+- GitHub [Secret Scan 39127335795](https://github.com/Jayus-07/agent/actions/runs/39127335795)：工作树、新增行和提交区间历史扫描均 PASS。
 
 ### 同模型优化判断与未决事项
 
