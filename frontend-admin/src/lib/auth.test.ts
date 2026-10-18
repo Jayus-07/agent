@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  changePassword,
   getCachedUser,
   getAccessToken,
   login,
@@ -66,6 +67,42 @@ describe("auth RBAC session contract", () => {
 
     const request = vi.mocked(globalThis.fetch).mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(request.body))).toMatchObject({ clientId: "admin" });
+  });
+
+  it("改密换发令牌并保留角色租户，不保存密码", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(result({ token: "temporary-token", userInfo: {
+        userId: 7, roles: ["super_admin"], tenantId: "test-tenant", mustChangePassword: true,
+      } }))
+      .mockResolvedValueOnce(result({ token: "normal-token", userInfo: {
+        userId: 7, mustChangePassword: false,
+      } }));
+    await login("test-admin", "old-secret");
+    await changePassword("old-secret", "new-secret");
+    expect(getAccessToken()).toBe("normal-token");
+    expect(getCachedUser()).toMatchObject({
+      roles: ["super_admin"], tenantId: "test-tenant", mustChangePassword: false,
+    });
+    const request = vi.mocked(globalThis.fetch).mock.calls[1]?.[1] as RequestInit;
+    expect(new Headers(request.headers).get("X-Client-App")).toBe("admin");
+    expect(new Headers(request.headers).get("Authorization")).toBe("Bearer temporary-token");
+    expect(request.credentials).toBe("include");
+    expect(JSON.parse(String(request.body))).toEqual({ oldPassword: "old-secret", newPassword: "new-secret" });
+    const stored = sessionStorage.getItem("agent.user_info");
+    expect(stored).not.toContain("old-secret");
+    expect(stored).not.toContain("new-secret");
+  });
+
+  it("改密失败不得清除待改密标记或替换令牌", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(result({ token: "temporary-token", userInfo: {
+        userId: 7, roles: ["super_admin"], mustChangePassword: true,
+      } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 400, message: "旧密码错误" }), { status: 400 }));
+    await login("test-admin", "old-secret");
+    await expect(changePassword("wrong-secret", "new-secret")).rejects.toThrow("旧密码错误");
+    expect(getAccessToken()).toBe("temporary-token");
+    expect(getCachedUser()?.mustChangePassword).toBe(true);
   });
 
   it("logout 无论请求失败都清 access token、user、过期标记并广播 WS 关闭", async () => {

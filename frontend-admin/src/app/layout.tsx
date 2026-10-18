@@ -31,7 +31,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   // 用精确匹配而非 startsWith —— /agent/tasks 仍走原控制台导航，避免扩大影响面。
   const isTaskMode = pathname === '/agent'
   // 登录页独立呈现：不渲染全局侧边栏（AuthGate 同样对其放行）
-  const isLoginPage = pathname.startsWith('/login')
+  const isLoginPage = pathname.startsWith('/login') || pathname === '/change-password'
 
   return (
     <html lang="zh-CN">
