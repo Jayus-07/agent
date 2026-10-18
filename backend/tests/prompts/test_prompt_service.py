@@ -35,12 +35,16 @@ class TestRenderSync:
         assert result.text == "Hi Alice!"
         assert result.version == 3
         assert result.source == "snapshot"
+        from backend.prompts.service import template_hash
+        assert result.template_hash == template_hash("Hi {name}!")
 
     def test_from_defaults_fallback(self, service):
         result = service.render_sync("test.low", name="Bob")
         assert result.text == "Hello Bob!"
         assert result.version is None
         assert result.source == "default"
+        from backend.prompts.service import template_hash
+        assert result.template_hash == template_hash("Hello {name}!")
 
     def test_missing_key_raises(self, service):
         with pytest.raises(KeyError, match="not found"):

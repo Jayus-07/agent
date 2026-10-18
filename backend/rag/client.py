@@ -11,6 +11,8 @@ customer_service/knowledge、mcp_servers/servers/rag.py 等消费方零改动。
 """
 import re
 import threading
+import time
+import math
 import uuid
 from collections.abc import Iterable
 from typing import Any
@@ -131,6 +133,7 @@ class RAGServiceProxy:
                     )
             except Exception:  # noqa: BLE001 — Trace 关联不得阻断 RAG 调用
                 parent_trace = None
+            http_started = time.perf_counter()
             resp = self._client.post(
                 "/ask",
                 headers=headers,
@@ -150,6 +153,23 @@ class RAGServiceProxy:
                 timeout=_ASK_TIMEOUT_S,
             )
             resp.raise_for_status()
+            timing = {"roundtrip_ms": round((time.perf_counter() - http_started) * 1000, 1)}
+            for header, key in (("X-RAG-Service-Ms", "service_ms"),
+                                ("X-RAG-Prehandler-Ms", "prehandler_ms"),
+                                ("X-RAG-Pipeline-Init-Ms", "pipeline_init_ms")):
+                try:
+                    value = float(resp.headers.get(header, ""))
+                    if math.isfinite(value) and value >= 0:
+                        timing[key] = value
+                except (ValueError, TypeError):
+                    pass
+            if "service_ms" in timing:
+                timing["outside_service_ms"] = round(max(
+                    0, timing["roundtrip_ms"] - timing["service_ms"],
+                ), 1)
+            if parent_span is not None:
+                parent_span.metrics["rag_remote_timing"] = timing
+            logger.info("[RAG client timing] trace_id=%s timing=%s", reserved_child_trace_id or "", timing)
         except httpx.HTTPError as e:
             # 连接建立前失败时服务端不会创建子 Trace；清理预留关系。
             if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):

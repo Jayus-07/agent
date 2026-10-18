@@ -55,14 +55,18 @@ class TestPromptContract:
         assert "原问题必须是第一条" in text
         assert "第1条：完整保留原始问题。" in text
 
-    def test_evidence_faces_are_orthogonal_not_paraphrase(self):
-        """两条改写分别覆盖"部门/职责/流程"与"资质/质检/合规"证据面。"""
+    def test_evidence_faces_are_adaptive_not_paraphrase(self):
+        """维度供选择，禁止固定给复杂问题追加部门或认证。"""
         text = _render(3, PURCHASE_Q)
         for word in ("参与部门", "岗位角色", "职责分工", "业务流程", "审批环节"):
             assert word in text
-        for word in ("资质", "证明材料", "质检标准", "合规认证", "业务条件"):
+        for word in ("资质", "证明材料", "质检标准", "评分阈值", "触发条件", "处置动作"):
             assert word in text
         assert "禁止仅仅变换语序" in text
+        assert "不固定分配方向" in text
+        assert "不得机械追加资质认证或部门" in text
+        assert "保留所有条件" in text
+        assert "退出条件与处理动作" in text
 
     def test_no_fabrication_guardrails(self):
         text = _render(3, PURCHASE_Q)
@@ -122,6 +126,20 @@ def rewrite_env(monkeypatch):
 
 
 class TestRewritePipeline:
+    @pytest.mark.parametrize("question,variants", [
+        (PURCHASE_Q, ["新品上架的部门协作职责与审批", "新品准入的质检与合规条件"]),
+        ("供应商连续两季度评分低于60分，同时出现了安全事故，应如何处理？",
+         ["供应商连续低评分及安全事故的退出触发条件", "供应商低分并发生安全事故时的处置流程与责任"]),
+    ])
+    def test_different_question_types_keep_relevant_faces(self, rewrite_env, question, variants):
+        import backend.rag.retrieval.multi_query as mq
+
+        llm = rewrite_env("\n".join([question, *variants]))
+        assert mq._rewrite(question) == [question, *variants]
+        prompt = llm.calls[0]["messages"][0].content
+        assert question in prompt
+        assert "不固定分配方向" in prompt
+
     def test_evidence_face_variants_survive_filters(self, rewrite_env):
         import backend.rag.retrieval.multi_query as mq
 

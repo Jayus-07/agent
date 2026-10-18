@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -199,8 +200,11 @@ def _cond_sql(key: str, value: Any, params: list) -> str:
     """单条件 → SQL 片段。key 为 metadata 字段名或 $contains。"""
     if key == "$contains":
         # Chroma $contains 是文档内容子串匹配
-        params.append(f"%{value}%")
-        return "content ILIKE %s"
+        literal = str(value).replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        params.append(f"%{literal}%")
+        return "content ILIKE %s ESCAPE '!'"
+    if not isinstance(key, str) or re.fullmatch(r"[A-Za-z0-9_]+", key) is None:
+        raise ValueError("非法 metadata 字段名")
     if isinstance(value, dict):
         op, v = next(iter(value.items()))
         if op == "$eq":

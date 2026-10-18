@@ -19,8 +19,8 @@ from langchain_core.documents import Document
 
 @pytest.fixture(autouse=True)
 def _clean_env():
-    from backend.rag.retrieval_budget import clear_retrieval_budget
     from backend.observability.tracer import trace_collector
+    from backend.rag.retrieval_budget import clear_retrieval_budget
 
     clear_retrieval_budget()
     trace_collector.clear_for_test()
@@ -316,14 +316,21 @@ class TestSingleQueryPath:
     @pytest.mark.parametrize("count", [0, 1, 2])
     def test_small_candidate_sets_skip_scoring(self, count):
         docs = _docs("甲", "乙", "丙")[:count]
-        if docs:
-            _with_queries(docs, [ORIGINAL, DEPT_QUERY])
         backend = _FakeBackend({ORIGINAL: [0.9] * count})
 
         out = _compressor(backend).compress_documents(docs, ORIGINAL)
 
         assert backend.calls == []
         assert len(out) == count
+
+    def test_small_multi_query_set_never_uses_default_one_scores(self):
+        docs = _docs("甲", "乙")
+        _with_queries(docs, [ORIGINAL, DEPT_QUERY])
+        backend = _FakeBackend({ORIGINAL: [0.4], DEPT_QUERY: [0.5]})
+        out = _compressor(backend).compress_documents(docs, ORIGINAL)
+        assert len(backend.calls) == 2
+        assert [doc.metadata["chunk_id"] for doc in out] == ["甲"]
+        assert out[0].metadata["rerank_score"] == 0.5
 
     def test_backend_without_full_scoring_falls_back(self):
         docs = _docs("甲", "乙", "丙")
@@ -398,6 +405,14 @@ class TestProviderBudgetContract:
                    deadline_at=time.monotonic() + 0.05)
         assert rec["timeouts"] == []
 
+    def test_single_query_fallback_also_consumes_shared_deadline(self, monkeypatch):
+        from backend.rag.retrieval_budget import start_retrieval_budget
+
+        r, rec = self._reranker(monkeypatch)
+        start_retrieval_budget(1500)
+        r.rank("原问题", ["a", "b"], top_k=2)
+        assert 0 < rec["timeouts"][0] <= 1.5
+
     def test_rank_all_requests_every_candidate(self, monkeypatch):
         from backend.rag import reranker as mod
 
@@ -433,3 +448,26 @@ def test_aggregate_is_order_independent_of_query_completion():
     )
     assert forward == backward
     assert forward[0][:2] == (0, 0.8)
+
+
+def test_missing_scores_are_partial_and_diagnostics_are_whitelisted():
+    """缺分不得伪装成功，逐查询榜单不泄露正文、路径或私有元数据。"""
+    docs = _docs("a", "b", "c")
+    docs[0].metadata.update(source="D:/private/a.pdf", api_key="secret-marker")
+    docs[0].page_content = "sensitive-body-marker"
+    _with_queries(docs, [ORIGINAL, DEPT_QUERY])
+    backend = _FakeBackend({ORIGINAL: [0.5, 0.5, 0.4], DEPT_QUERY: [0.8]})
+    trace = _rerank_span()
+    out = _compressor(backend).compress_documents(docs, ORIGINAL)
+    metrics = _span_of(trace).metrics
+    assert metrics["rerank_status"] == "partial"
+    assert metrics["degrade"] == "query_scoring_incomplete"
+    rows = metrics["query_status"]
+    assert rows[1]["status"] == "partial" and rows[1]["missing"] == 2
+    assert [x["index"] for x in rows[0]["top_candidates"]] == [0, 1, 2]
+    assert rows[0]["top_candidates"][0] == {
+        "index": 0, "chunk_id": "a", "doc_id": "", "source": "a.pdf", "score": 0.5,
+    }
+    assert out[0].metadata["rerank_score"] == 0.8
+    for forbidden in ("secret-marker", "sensitive-body-marker", "_runtime_mq_queries", "private"):
+        assert forbidden not in str(metrics)

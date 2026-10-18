@@ -64,7 +64,7 @@ from backend.config import (
 from backend.config import model_roles
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import specialized as specialized_mod
-from backend.infra.token_tracker import create_tracker_for_rerank
+from backend.infra.token_tracker import TokenTracker, create_tracker_for_rerank
 from pathlib import Path
 from backend.shared.logger import logger
 
@@ -347,6 +347,8 @@ class DashScopeReranker(BaseDocumentCompressor):
             return []
         if top_k <= 0:
             return []
+        if deadline_at is None:
+            deadline_at = _budget_deadline_at()
         if self._api_format == "jina":
             # Jina 兼容格式（SiliconFlow / TEI / jina rerank）
             payload = {
@@ -1086,14 +1088,38 @@ class RerankCompressor(BaseDocumentCompressor):
                 continue
 
             per_query[q] = valid
+            # 仅白名单标识与数值；不复制正文、私有 runtime 元数据或凭据。
+            top_candidates = []
+            for idx, score in sorted(valid, key=lambda row: (-row[1], row[0]))[:10]:
+                meta = documents[idx].metadata or {}
+                source = str(meta.get("source") or meta.get("source_file") or "")
+                if "://" in source:
+                    from urllib.parse import urlsplit
+
+                    source = urlsplit(source).path
+                source = source.replace("\\", "/").rsplit("/", 1)[-1]
+                top_candidates.append({
+                    "index": idx,
+                    "chunk_id": str(meta.get("chunk_id") or "")[:160],
+                    "doc_id": str(meta.get("doc_id") or "")[:160],
+                    "source": source[:160],
+                    "score": round(score, 6),
+                })
             query_rows.append({
                 "query": q[:80],
-                "status": "success" if not invalid and not duplicate else "partial",
+                "status": (
+                    "success" if not invalid and not duplicate
+                    and len(valid) == candidate_count else "partial"
+                ),
                 "scored": len(valid), "invalid": invalid, "duplicate": duplicate,
                 "missing": candidate_count - len(valid),
+                "candidate_count": candidate_count,
+                "top_candidates": top_candidates,
             })
 
         ranked = aggregate_multi_query_scores(queries, per_query)
+        for row in query_rows:
+            row.setdefault("candidate_count", candidate_count)
         selected = [row for row in ranked if row[1] > self.threshold][: self.top_k]
         for idx, score, winner in selected:
             doc = documents[idx]
@@ -1105,7 +1131,7 @@ class RerankCompressor(BaseDocumentCompressor):
         ]
         skipped = [row for row in query_rows if row["status"] == "skipped_budget"]
         overall = (
-            "success" if len(scored_queries) == len(queries)
+            "success" if all(row["status"] == "success" for row in query_rows)
             else "partial" if scored_queries else "degraded"
         )
         for idx, _score, _winner in selected:
@@ -1131,6 +1157,8 @@ class RerankCompressor(BaseDocumentCompressor):
         }
         if skipped:
             metrics["degrade"] = "budget_insufficient"
+        elif overall != "success":
+            metrics["degrade"] = "query_scoring_incomplete"
 
         result_docs = [documents[idx] for idx, _score, _winner in selected]
         trace_collector.add_event(
@@ -1184,8 +1212,9 @@ class RerankCompressor(BaseDocumentCompressor):
             _record_stage()
             return []
 
-        # 小文档集合跳过 rerank API 调用（≤2 篇排序无意义）
-        if len(documents) <= 2:
+        queries = _read_runtime_queries(documents, query)
+        # 单查询保留历史 small_n 行为；多查询不得用默认 1 分冒充有效评分。
+        if len(documents) <= 2 and not queries:
             for doc in documents:
                 doc.metadata.setdefault("rerank_score", 1.0)
             trace_collector.end_span(span,
@@ -1195,7 +1224,6 @@ class RerankCompressor(BaseDocumentCompressor):
             return list(documents)
 
         in_count = len(documents)
-        queries = _read_runtime_queries(documents, query)
 
         try:
             self._ensure_backend()
@@ -1232,10 +1260,11 @@ class RerankCompressor(BaseDocumentCompressor):
                                            "threshold": self.threshold,
                                            "backend_type": self._backend_type,
                                            "fallback": "passthrough",
-                                           "error": str(e)[:100]},
+                                           "degrade": "rerank_error",
+                                           "error": type(e).__name__},
                                    status="error")
             _record_stage()
-            logger.error(f"RerankCompressor 重排失败，降级透传原文档：{e}")
+            logger.error("RerankCompressor 重排失败（%s），降级透传原文档", type(e).__name__)
             # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
             # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答
             return list(documents)[: self.top_k]

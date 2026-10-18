@@ -56,7 +56,7 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     assert 'LLM_REQUEST_MAX_TOKENS: "96000"' in smoke
     assert 'LLM_REQUEST_MAX_COST: "0.40"' in smoke
     # MultiQuery 改写必须留够思考型模型的完成时间，同时小于检索 deadline。
-    assert 'RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS: "6000"' in smoke
+    assert 'RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS:' not in smoke
     assert 'LLM_REQUEST_MAX_CALLS: "160"' in smoke
     assert 'LLM_REQUEST_MAX_TOKENS: "120000"' in smoke
     assert 'LLM_REQUEST_MAX_COST: "0.15"' in smoke

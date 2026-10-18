@@ -8,6 +8,26 @@
 
 ## 约束与错误边界
 
+MultiQuery 改写使用 `multi_query` 角色、temperature=0、3 条查询和至少 1024
+输出 tokens；默认子预算 6000ms，取角色策略与共享 8000ms 检索 deadline
+剩余量的最小值。生产与评测使用同一口径，评测直接调用 retriever 时也绑定
+该 deadline。达到输出上限回退原问题，查询不足标记 `rewrite_truncated`，
+不计为完整改写成功。Trace 记录终止原因、用量、有效上限、耗时、查询数与
+Prompt 模板 Hash/版本/来源；多查询重排诊断只复制候选 ID、文件名和分数，
+不复制候选完整正文或私有 runtime 元数据。缺失或非法分数使评分状态降级。
+
+向量过滤的 metadata 字段名仅接受 ASCII 字母/数字/下划线；`$contains`
+按字面子串匹配，转义 SQL LIKE 通配符。多轮 contextualize 的 system/human
+均来自当前治理模板，保留 history 占位符，无效模板回退内置默认。
+
+解析分块缓存使用 v3 JSON，旧 pickle 不加载，失效后按正常流水线重新构建。
+BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒绝加载并走
+既有重建/旧快照降级；SHA256 是损坏检测，不是来源认证。
+
+远端 `/ask` 记录服务接收至 handler 等待、pipeline 获取、服务总耗时；客户端
+按既有子 Trace 关联记录 HTTP 往返与服务外差值。该差值不能单独归因于网络、
+连接池或上游排队；先按实际 Trace 定位，不预设历史 4 秒缺口的根因。
+
 检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。
 
 Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。

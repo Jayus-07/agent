@@ -481,7 +481,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     input={"question": question, "kb_id": kb_id},
                 )
                 try:
-                    retrieved_docs = retriever.invoke(question)
+                    # 直接调用 retriever 也必须消费生产的共享检索 deadline，
+                    # 否则离线 Smoke 会验证一个生产无法完成的超时窗口。
+                    from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+                    from backend.rag.retrieval_budget import scoped_retrieval_budget
+
+                    with scoped_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS) as budget:
+                        retrieved_docs = retriever.invoke(question)
+                        root_span.metrics["retrieval_budget"] = budget.as_dict()
                 finally:
                     try:
                         trace_collector.end_span(root_span)

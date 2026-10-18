@@ -24,7 +24,7 @@ def test_rewrite_max_tokens_never_below_floor(monkeypatch):
 
     monkeypatch.setattr(mq, "MULTI_QUERY_MAX_TOKENS", 200)
     assert mq._rewrite_max_tokens() == mq._REWRITE_MAX_TOKENS_FLOOR
-    assert mq._REWRITE_MAX_TOKENS_FLOOR >= 512
+    assert mq._REWRITE_MAX_TOKENS_FLOOR == 1024
 
 
 def test_rewrite_max_tokens_respects_larger_config(monkeypatch):

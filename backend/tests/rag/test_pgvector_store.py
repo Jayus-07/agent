@@ -110,8 +110,34 @@ class TestWhereToSql:
     def test_contains(self):
         params: list = []
         sql = where_to_sql({"$contains": "退款"}, params)
-        assert sql == "content ILIKE %s"
+        assert sql == "content ILIKE %s ESCAPE '!'"
         assert params == ["%退款%"]
+
+    @pytest.mark.parametrize("key", ["x' OR 1=1 --", "x.y", "x-y", "", "中文", 1])
+    @pytest.mark.parametrize("value", ["x", {"$eq": "x"}, {"$gt": 1}, {"$in": ["x"]}])
+    def test_unsafe_metadata_keys_rejected_before_sql(self, key, value):
+        params = []
+        with pytest.raises(ValueError, match="metadata"):
+            where_to_sql({key: value}, params)
+        assert params == []
+
+    def test_contains_wildcards_are_literal(self):
+        params = []
+        sql = where_to_sql({"$contains": "50%_!折扣"}, params)
+        assert sql == "content ILIKE %s ESCAPE '!'"
+        assert params == ["%50!%!_!!折扣%"]
+
+    def test_literal_contains_executes_in_postgres(self, store):
+        import psycopg2
+        from backend.config.database import VECTOR_PG_CONFIG
+
+        params = []
+        sql = where_to_sql({"$contains": "50%_!折扣"}, params)
+        with psycopg2.connect(**VECTOR_PG_CONFIG) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT content FROM (VALUES (%s), (%s)) AS t(content) WHERE " + sql,
+                            ["活动50%_!折扣", "活动50abc折扣", *params])
+                assert cur.fetchall() == [("活动50%_!折扣",)]
 
     def test_nested_and_or(self):
         params: list = []

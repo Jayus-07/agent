@@ -382,14 +382,6 @@ def _extract_doc_keywords_proxy(text: str, top_k: int) -> tuple:
         return [], {}
 
 
-def extract_doc_keywords(text: str, top_k: int = 10) -> KeywordResult:
-    """文档级关键词提取 — 按 doc_type 自动分流（兼容旧调用方）。
-
-    需调用方自行传入 doc_type → 使用 extract_doc_keywords_typed()
-    """
-    return extract_doc_keywords_typed(text, doc_type="general", top_k=top_k)
-
-
 def _compute_llm_score(doc_type: str, confidence: float, complexity: dict) -> tuple[int, list[str]]:
     """LLM Decision Router V2 — 企业级评分模型。
 

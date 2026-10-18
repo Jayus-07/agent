@@ -35,7 +35,8 @@ _mq_mode: str = _DEFAULT_MODE
 # 静默退化为单查询，还白付 ~2.3s 串行等待。
 # 修复=角色化（改走 non-thinking 轻模型）+ 上限兜底到 512，两者缺一不可：
 # 只调角色时若管理员仍绑定思考型模型，512 仍会被思考吃光。
-_REWRITE_MAX_TOKENS_FLOOR = 512
+# RC-024 在 512 completion tokens 再次截断，保留角色/温度，仅提高输出下限。
+_REWRITE_MAX_TOKENS_FLOOR = 1024
 
 # 请求级有效查询列表的私有元数据键（Phase B，PR #52）。
 # 只挂在本次请求首个候选 Document 的 metadata 上，随 ContextualCompressionRetriever
@@ -202,6 +203,15 @@ def _rewrite_with_budget(question: str) -> list[str]:
         remaining_ms(configured_timeout_ms),
     )
     if rewrite_ms < 300:
+        from backend.observability.tracer import trace_collector
+
+        span = trace_collector.start_span("query_rewrite", name="LLM 改写")
+        trace_collector.end_span(span, status="skipped", metrics={
+            "rewrite_status": "degraded", "degrade": "budget_insufficient",
+            "fallback": "original_query", "query_count": 1, "variants": 1,
+            "max_tokens": _rewrite_max_tokens(), "finish_reason": "not_called",
+            "budget_ms": round(rewrite_ms, 1),
+        })
         logger.info(
             f"[MultiQuery] 剩余预算不足({rewrite_ms:.0f}ms)，跳过改写用原始 query"
         )
@@ -237,7 +247,10 @@ def _rewrite_with_budget(question: str) -> list[str]:
             trace_collector.end_open_span(
                 "query_rewrite",
                 metrics={"degrade": "rewrite_timeout",
-                         "budget_ms": round(rewrite_ms, 1)},
+                         "budget_ms": round(rewrite_ms, 1),
+                         "rewrite_status": "degraded", "query_count": 1,
+                         "max_tokens": _rewrite_max_tokens(),
+                         "fallback": "original_query"},
                 status="timeout",
             )
         except Exception:  # noqa: BLE001 — 观测旁路
@@ -250,6 +263,8 @@ def _rewrite_with_budget(question: str) -> list[str]:
 
 def _rewrite(question: str) -> list[str]:
     """LLM 改写 → Parse → Normalize → Dedup → Limit"""
+    started = time.monotonic()
+    metrics = {"max_tokens": _rewrite_max_tokens(), "finish_reason": "unknown"}
     try:
         from backend.observability.tracer import trace_collector
         span = trace_collector.start_span("query_rewrite", name="LLM 改写",
@@ -257,6 +272,12 @@ def _rewrite(question: str) -> list[str]:
         from langchain_core.messages import HumanMessage
 
         r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
+        metrics.update(
+            prompt_key=getattr(r, "key", "rag.multi_query"),
+            prompt_version=getattr(r, "version", None),
+            prompt_source=getattr(r, "source", "unknown"),
+            prompt_hash=getattr(r, "template_hash", ""),
+        )
         # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
         if isinstance(span.input, dict):
             span.input["prompt"] = r.text[:1000]
@@ -283,9 +304,19 @@ def _rewrite(question: str) -> list[str]:
         else:
             # 其他类型（如 list/dict）→ 降级为原始 query
             logger.warning(f"[MultiQuery] LLM 返回非预期类型 {type(result)}，降级为原始 query")
-            return [question]
+            raise TypeError("rewrite_response_type")
         
         tokens = trace_collector.parse_tokens(result)
+        metadata = getattr(result, "response_metadata", None) or {}
+        finish_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
+        # 仅接受 Provider 的终止枚举，不透传任意元数据或异常文本。
+        if finish_reason in ("stop", "length", "max_tokens", "end_turn", "stop_sequence"):
+            metrics["finish_reason"] = finish_reason
+        metrics.update(tokens)
+        hit_limit = (
+            finish_reason in ("length", "max_tokens")
+            or tokens.get("completion_tokens", 0) >= metrics["max_tokens"]
+        )
 
         # Step 1: Parse
         lines = _parse(raw)
@@ -304,27 +335,34 @@ def _rewrite(question: str) -> list[str]:
                 f"[MultiQuery] 合法性过滤剔除 {before - len(lines)} 个异常变体"
                 f"（chunk 原文/超长句）")
         if not lines:
-            logger.warning("[MultiQuery] 改写变体全部不合法，回退原始 query")
-            return [question]
+            lines = [question]
 
         # Step 4: Limit
         lines = _limit(lines)
+        # 达到上限时无法证明最后一条完整，整次保守回退，不评分半句话。
+        if hit_limit:
+            lines = [question]
+        truncated = hit_limit or len(lines) < MULTI_QUERY_COUNT
+        status = "degraded" if len(lines) <= 1 else "partial" if truncated else "success"
 
         # LLM 原始返回 + 解析后的变体落地（前端 LLM 明细 / MultiQuery 区块展示）
         # D3（PR #52）：改写 span 必须能回答"本次用的哪一版 Prompt"，否则
         # 发布新版本后无法从 Trace 区分 YAML 回退与 DB active 版本。
-        metrics = {
-            **tokens,
+        metrics.update({
             "variants": len(lines),
-            "prompt_key": r.key,
-            "prompt_version": r.version,
-            "prompt_source": r.source,
             "query_count": len(lines),
-        }
+            "rewrite_status": status,
+            "rewrite_truncated": truncated,
+            "rewrite_ms": round((time.monotonic() - started) * 1000, 1),
+        })
+        if truncated:
+            metrics["degrade"] = "rewrite_truncated"
+        if len(lines) <= 1:
+            metrics["fallback"] = "original_query"
         if raw:
             metrics["completion_text"] = raw[:1000]
         trace_collector.end_span(span, metrics=metrics,
-                                 output={"variants": lines[:10]})
+                                 output={"variants": lines[:10]}, status=status)
         logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
         return lines
     except Exception as e:
@@ -332,7 +370,11 @@ def _rewrite(question: str) -> list[str]:
         if 'span' not in locals():
             from backend.observability.tracer import trace_collector
             span = trace_collector.start_span("query_rewrite", name="LLM 改写")
-        trace_collector.end_span(span, metrics={"variants": 0}, status="error")
+        metrics.update(variants=1, query_count=1, rewrite_status="degraded",
+                       degrade="rewrite_error", fallback="original_query",
+                       error=type(e).__name__,
+                       rewrite_ms=round((time.monotonic() - started) * 1000, 1))
+        trace_collector.end_span(span, metrics=metrics, status="error")
         # Provider 异常文本可能包含密钥、请求 URL 或本机路径，只记录类型。
         logger.warning(
             "[MultiQuery] Rewrite 失败（%s），回退到原始 query",

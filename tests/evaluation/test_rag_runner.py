@@ -4,10 +4,11 @@ Why:
   防止 KB 软 fallback 和 trace 包裹代码回归，
   这两个是评测链路打通的关键。
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
-from backend.evaluation.models import TestCase, EvalResult
+import pytest
+
+from backend.evaluation.models import TestCase
 from backend.evaluation.runners.builtin import _run_rag
 
 
@@ -42,6 +43,35 @@ def test_missing_eval_kb_is_reported_without_default_fallback():
     assert len(results) == 1
     assert results[0].status == "error"
     assert "拒绝回退" in (results[0].error_msg or "")
+
+
+def test_direct_eval_retrieval_uses_production_deadline_and_clears_context(tmp_path, monkeypatch):
+    """Fake 检索实际经过评测入口，确认未旁路共享 deadline。"""
+    from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+    from backend.rag.retrieval_budget import clear_retrieval_budget, current_budget
+
+    clear_retrieval_budget()
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    seen = []
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    retriever = MagicMock()
+
+    def invoke(question):
+        budget = current_budget()
+        seen.append((budget.total_ms, budget.remaining_ms()))
+        return []
+
+    retriever.invoke.side_effect = invoke
+    case = TestCase(id="deadline-fake", question="查询", module="rag", expected={},
+                    metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"})
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        _run_rag([case])
+    assert len(seen) == 1
+    assert seen[0][0] == RAG_RETRIEVAL_DEADLINE_MS == 8000
+    assert 0 < seen[0][1] <= 8000
+    assert current_budget() is None
 
 
 def test_default_kb_requires_explicit_eval_scope():

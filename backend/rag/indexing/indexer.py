@@ -616,11 +616,6 @@ class ChunkingEmptyError(Exception):
 
 # 摘要采样：委托共享实现（P1 元数据治理 2026-10-13——超长文档不再只取
 # 头尾 20k 声称代表全文，改为 头+章节目录+分层采样+尾 且标注覆盖范围）
-def _sample_for_summary(text: str) -> str:
-    from backend.rag.preprocessing.summary_sampling import sample_for_summary
-    return sample_for_summary(text)
-
-
 class IncrementalIndexer:
     """增量索引器。
 

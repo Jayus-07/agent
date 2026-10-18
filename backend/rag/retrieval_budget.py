@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextvars
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -77,6 +78,20 @@ def clear_retrieval_budget() -> None:
 def current_budget() -> Optional[RetrievalBudget]:
     """当前请求的检索预算；无（旁路调用/离线评测）返回 None。"""
     return _budget_var.get()
+
+
+@contextmanager
+def scoped_retrieval_budget(total_ms: float):
+    """旁路检索入口沿用生产 deadline；已有外层预算时禁止重新开窗。"""
+    if current_budget() is not None:
+        yield current_budget()
+        return
+    budget = RetrievalBudget(total_ms=total_ms)
+    token = _budget_var.set(budget)
+    try:
+        yield budget
+    finally:
+        _budget_var.reset(token)
 
 
 def remaining_ms(default_ms: float) -> float:

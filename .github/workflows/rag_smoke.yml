@@ -94,6 +94,31 @@ jobs:
     name: RAG Smoke preflight (PR, no paid API)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,6 +138,12 @@ jobs:
       - name: Evaluation preflight (E0, free)
         run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
 
+      - name: Initialize isolated database for free Prompt contracts
+        run: |
+          # 004 只读角色迁移的兼容库；所有操作均在本 job 的临时 PG 中。
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business'
+          python scripts/init_db.py --host localhost --port 5432 --user postgres
+
       - name: Targeted regression tests (free, no paid API)
         run: |
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
@@ -121,6 +152,7 @@ jobs:
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
+            tests/evaluation/test_rag_runner.py \
             backend/tests/rag/test_specialized_budget.py \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
@@ -128,6 +160,22 @@ jobs:
             backend/tests/rag/test_rag_fixture_content_integrity.py \
             backend/tests/rag/test_rag_cleaning_audit_boundaries.py \
             backend/tests/rag/test_reindex_failure_snapshot.py \
+            backend/tests/rag/test_multi_query_token_budget.py \
+            backend/tests/rag/test_multi_query_rewrite_completion.py \
+            backend/tests/rag/test_multi_query_rerank.py \
+            backend/tests/rag/test_multi_query_runtime_queries.py \
+            backend/tests/rag/test_review_hardening.py \
+            backend/tests/rag/test_pgvector_store.py \
+            backend/tests/rag/test_bm25_identity_and_refresh.py \
+            backend/tests/rag/test_bm25_sync.py \
+            backend/tests/rag/test_bm25_stale_fix.py \
+            backend/tests/rag/test_bm25_vector_rebuild.py \
+            backend/tests/rag/test_rag_index_reconcile.py \
+            backend/tests/test_indexer_bm25_sync.py \
+            backend/tests/rag/test_contextual_prefix.py \
+            backend/tests/api/test_rag_server_internal_token.py \
+            backend/tests/test_rag_remote_mode.py \
+            backend/tests/prompts/ \
             -q --no-cov
 
       - name: Declare skipped real-API scope
@@ -186,9 +234,7 @@ jobs:
       LLM_REQUEST_MAX_CALLS: "128"
       LLM_REQUEST_MAX_TOKENS: "96000"
       LLM_REQUEST_MAX_COST: "0.40"
-      # 思考型 chat 模型改写实测 ~2.3s，1.8s 必然超时降级；放宽到 6s
-      # （仍小于 RAG_RETRIEVAL_DEADLINE_MS=8000，取消/预算语义不变）。
-      RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS: "6000"
+      # 改写与生产共用默认子预算，不设置评测专用 timeout 覆盖值。
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
