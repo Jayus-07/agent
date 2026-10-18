@@ -75,8 +75,12 @@ def backfill_usage_from_llm_store(data) -> None:
         setv("cost_cny", round(total_cost_cny, 6))
         if not (get("model", "") or "").strip():
             llm_rows = [r for r in rows if (r.get("component") or "llm") == "llm"]
-            if llm_rows:
-                best = max(llm_rows, key=lambda r: r.get("total_tokens") or 0)
+            best_rows = llm_rows or rows
+            # 无 llm 行时回退全部行（如纯 embedding 的 RAG 索引 trace）——
+            # 模型名缺口（2026-10-19）：此前只认 llm 组件，embedding-only
+            # trace 的模型卡恒为空
+            if best_rows:
+                best = max(best_rows, key=lambda r: r.get("total_tokens") or 0)
                 setv("model", best.get("model") or "")
                 setv("provider", best.get("provider") or "")
         # llm_call span 指标补齐（时间最近邻配对，同 tracer.finish 逻辑）
