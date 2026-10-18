@@ -52,6 +52,24 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - 管理端 3201 已重启（`D:\tmp\rag-phase1-admin-isolated.py`），BFF 指向 19080 隔离网关；HTTP 200。旧 3201（指向共享 9080）进程已停。
 - 等待：用户在 127.0.0.1:3201 登录（账号 local_super_admin，密码=自己改密后的新密码；隔离库哈希与共享库同源）。登录后进知识库工作台上传首批 5 份（faq_only.docx/preamble.docx/contract_table.docx/sku.csv/multi_sheet.xlsx，选「统一 RAG 评测知识库」）。
 
+## 2026-10-19 浏览器真实上传两次失败与修复（82580ed）
+
+- 用户已在 3201 登录（隔离库账号，哈希同源），首次上传 hit 数据卷属主问题：named volume 首挂挂载点由 docker 以 root 创建，appuser 写入 `PermissionError: Errno 1`（共享卷是历史期以正确属主创建故无此问题）。已 `docker exec -u root chown 10001:10001 /app/data /app/.cache` 修复并在 Dockerfile.overlay 预建挂载点固化。上传 HTTP 层此前已 200（auth=jwt user=279、KB 可见集正确），无脏数据残留。
+- 权限修复后第二次上传：POST /rag/upload 200、tasks 表由 TaskService 幂等自建、Celery 入队成功（upload_id=dd13239a8dfe, task=1ef9a1b1），但 Worker 初始化 `RAGPipeline(mode="runtime")` 抛 `向量库没有可用于 BM25 校验的 chunk`，重试 3/3 终态 service_unavailable——**空库冷启动鸡生蛋缺陷**（main b434138 既有）：全新库被防混代校验拒绝，首个上传永远失败。
+- 根因修复 `82580ed fix(rag)`：`_init_retrievers` 区分「空向量+空快照=冷启动放行（空索引，检索空结果；hybrid 对 bm25 兜底召回已有异常软降级）」与「空向量+磁盘快照非空=向量数据丢失维持拒绝」；非空库 N-1 快照校验/自愈/版本检查语义不变；只读冷启动不再回退 loader 语料（避免混代）。回归：test_pipeline_runtime_modes 新增冷启动放行+孤儿快照拒绝 2 例，定向 10 passed（原 8 例全过）。
+- 修复已重建 overlay 镜像部署进 ragu1（`/health` 报 `ragu1-0423d69-fix1`），app/rag-service/worker 三服务 healthy，doc_registry=0 干净起点保留。
+- 等待用户第三次重传（faq_only.docx 等 5 份）。
+
+## 2026-10-19 faq_only.docx 真实入库质量对账 PASS（6/6 检索命中）
+
+- 用户重传 faq_only.docx：终态 `published`（upload_id=6aae4bfec52c, trace=bb9de1034b2b, gen=2f2889790dd3），质量记录 nodes=81/chunks=41/anomalies=0。
+- 结构对账与免费检查基线精确一致：40 leaf + 1 parent（rag_vectors.granularity）+ 1 文档级向量 = 42 条，vector(1024) HNSW 与专项绑定 dimensions=1024 一致；parent_doc_id 表达父子；chunk_id 41/41。
+- BM25 快照发布 41 chunks 同代发布（publish 三段日志）；注册表 1 行 active；失败任务（dd13239a8dfe）无任何业务残留（doc_registry/chunk_store/rag_vectors/llm_usage 均 0），仅 rag_index_runs failed + tasks FAILED 审计行与预算科目行（used=0）。
+- 元数据：section_title/keywords/doc_type/department 41/41 规则全覆盖；**llm_keywords 全空**——FAQ 全文采样 <2000 字符走首句降级（ENABLE_LLM_METADATA_EXTRACT 采样门，设计内省钱路径），FAQ 类短文档永不触发 LLM 元数据增强，是否需按 doc_type 豁免阈值待拍板。
+- 检索证据：UFQ-001~006 六题经 rag-service /retrieve（system_subject 内部主体，未伪造用户身份）实测 6/6 PASS，required_fact 全命中，index_status=ok；脚本 D:\tmp\rag-universal-phase1-20261019\verify_faq_retrieval.py（坑：docker exec 需 -i 才透传 stdin 给 curl）。
+- 费用：累计 10 次 embedding（4 索引批+6 查询向量化）共 0.001195 CNY，role/stage/model/trace 归因齐全；无 LLM 生成调用（短文档降级）。
+- 测试集数据问题（非平台）：cases.jsonl 中 faq_only 题目 required_docs 写 `faq_only.md`，实际 fixture 为 `.docx`，评测按文件名匹配会失配，下批修测试集。
+
 ## 当前等待与下一步
 
 - 用户在3201完成首次改密后再继续浏览器；新密码不必提供给助手。旧3200尚未部署修复。
