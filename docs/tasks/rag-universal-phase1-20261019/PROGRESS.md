@@ -77,6 +77,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - ragu1 实测（faq_only.docx trace bb9de1034b2b）：Tokens 2,374 / 成本 ¥0.0012（台账 6 次调用）/ 模型 qwen3.7-text-embedding 全部呈现；文档类型「常见问题」/业务域 hr 原本就有。
 - 遗留待拍板：页面「质量评分偏低 (0/100)」为误报——quality span 无 score 字段时前端按 0 计并触发 <60 警告，而实际质量审计 anomalies=0；需决定「无评分不警告」还是「索引链路补写 score」。
 
+## 2026-10-19 多模型用量聚合（c0ae665）
+
+- 用户指出概览只显示一个模型、而一次上传会用到多个模型。回填机制此前仅按组件聚合、代表模型只取 token 最大单行。现 usage.models=每组件代表模型清单、usage.models_detail=组件×模型全量明细（calls/tokens/cost_cny），前端模型卡显示全部模型+「N 个模型 · M 次调用」，多模型时卡片内展开逐模型分布；向量嵌入 span 模型名取 embedding 组件。
+- faq_only.docx 单模型（embedding）显示准确：短文档未触发 LLM 元数据（2000 字符采样门）。多模型形态待剩余文件（合同/扫描件）上传后自然验证。
+
 ## 当前等待与下一步
 
 - 用户在3201完成首次改密后再继续浏览器；新密码不必提供给助手。旧3200尚未部署修复。
