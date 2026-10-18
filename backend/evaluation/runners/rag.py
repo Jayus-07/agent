@@ -382,6 +382,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         deferred_holder: list = []
         for case in (case,):
             t0 = time.time()
+            trace = None
             try:
                 kb_id = case.metadata.get("kb_id", "default")
                 department = case.metadata.get("department") or ""
@@ -424,6 +425,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         f"(available={sorted(available_kbs)})，拒绝回退 default"
                     )
                 question = case.question
+                # Doc探针也会调用真实Embedding，必须先绑定本例Trace，避免
+                # 失败用量沿用上一例的session_id/trace_id。
+                from backend.observability.tracer import SpanKind, trace_collector
+                trace = trace_collector.start(
+                    question=question,
+                    session_id=f"eval-{case.id}",
+                    workflow_name="rag_eval",
+                )
 
                 if kb_id and kb_id != "*" and kb_id != "default":
                     from backend.rag.context import RagRequestState, set_context
@@ -468,12 +477,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 )
 
                 # === 完整检索链路 ===
-                from backend.observability.tracer import SpanKind, trace_collector
-                trace = trace_collector.start(
-                    question=question,
-                    session_id=f"eval-{case.id}",
-                    workflow_name="rag_eval",
-                )
                 root_span = trace_collector.start_span(
                     "rag_eval_root", parent_id=None,
                     name=f"RAG eval {case.id}",
@@ -1209,6 +1212,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "kb_id": case.metadata.get("kb_id", "default"),
                         "fixture_set": scope.fixture_set,
                         "evaluation_scope": scope.as_dict(),
+                        **({"trace": {"trace_id": trace.id}} if trace is not None else {}),
                     },
                     error_msg=_err_text, error_stage=_stage,
                     duration_ms=int((time.time() - t0) * 1000),

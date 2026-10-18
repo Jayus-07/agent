@@ -130,3 +130,42 @@ def test_pipeline_unavailable_returns_error_results():
     assert len(results) == 2
     assert all(r.status == "error" for r in results)
     assert all("RAG pipeline not available" in (r.error_msg or "") for r in results)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_doc_probe_usage_belongs_to_current_case_even_on_timeout(
+    tmp_path, monkeypatch, workers,
+):
+    """复现真实Smoke：失败的Doc探针不能把用量挂到上一例Trace。"""
+    from backend.observability.tracer import current_trace_context
+
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    seen = {}
+
+    def probe(question, **_kwargs):
+        seen[question] = current_trace_context()
+        if question == "probe-timeout":
+            raise TimeoutError("fake Provider timeout")
+        return []
+
+    pipeline.doc_db.similarity_search.side_effect = probe
+    retriever = MagicMock()
+    retriever.invoke.return_value = []
+    cases = [TestCase(
+        id=name, question=name, module="rag", expected={},
+        metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"},
+    ) for name in ("probe-success", "probe-timeout")]
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        results = _run_rag(cases, workers=workers, resume=False)
+
+    by_id = {result.case_id: result for result in results}
+    for name, (trace_id, session_id) in seen.items():
+        assert trace_id
+        assert session_id == f"eval-{name}"
+        assert by_id[name].actual["trace"]["trace_id"] == trace_id
+    assert seen["probe-success"][0] != seen["probe-timeout"][0]
+    assert by_id["probe-timeout"].status == "error"
+    assert by_id["probe-timeout"].error_stage == "retrieval"

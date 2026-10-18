@@ -98,3 +98,37 @@
 - 不再付费。RC-024/031逐查询诊断、多查询质量、Provider实际迟到结算路径仍未通过本轮真实验收。
 - 下一次真实评测需用户另行授权；应先用Fake Provider+真实PG按完整阶段额度模拟冷索引后连续/并发调用，证明在0.50元总硬限下可执行。不能靠抬高硬限、减样本、换模型或改分母追分。
 - PR维持Draft；不合并、不发布Prompt。预算修复的真实Provider验收未执行，MERGE_READY=false。
+
+## 用户再次授权后的单次真实验收（2026-10-18/19）
+
+- 用户在了解需要新一轮付费验收后回复“授权”。仅增加一次新的真实Smoke，未授权自动合并。原run和一次性锁保留，不重开旧run。
+- main仍为`b4341381a022839108029f862805b02e1a980fb6`，执行代码为PR HEAD `94dd82fef4ac853ef6c8abe36adff802bfcbe150`。新run：`rag-local-pr52-20261018-94dd82f-02`。
+- 唯一活动隔离project：`rag-eval-20261018-pr52-acceptance`；旧栈已销毁。本轮仍使用原资源限制和独立新卷，不能宣称独占4C8G生产等价。Artifact根`D:/tmp/rag-eval-20261018-pr52-acceptance/artifacts/`。
+- 免费真实PG模拟覆盖8例、每例4笔并发预占、连续64次模拟调用和重复结算；Provider调用0。隔离Smoke阶段成本子限从整段剩余额度收紧为0.04元，索引仍0.15元，总硬限0.50元不变。仅控制脚本配置调整，不改生产策略。
+- 定向预算/上下文/Provider测试34 passed；fixture完整性23 passed；main与PR E0通过，suite hash仍`8edad96827b879c3`。新卷初次启动因写权限在任何Provider调用前失败（usage=0），保留启动记录、修正权限并实测可写后继续同一run；没有第二次Smoke。
+- 16份fixture全部成功，213向量；冷索引78 calls / 96858账本tokens / CNY0.116789，全部settled。没有复用旧索引。
+- 三模型、Provider、批准价格版本仍与前轮相同；候选仍隔离Draft v3/hash`a9e9f66220217388`，source=pinned；Active v1未修改。RC-024/031本轮实际渲染并执行此候选，查询总数均3。
+
+### 官方结果与覆盖率
+
+- 官方门禁FAIL：8例保留，7 pass / 1 error（RC-061前置Embedding超时）/ 0 skipped；不将pass状态当作有效重排完成。
+- 官方Top-1=0.6667，仅3/8例有该项有效指标；Recall@5=0.881、MRR=0.9048、Multi-hop=0.7222、Precision@5=0.469、ContextNoise@10=0.531。总体检索指标覆盖7/8，官方分母未修改。
+- 有效业务重排分数覆盖3/8（RC-005、056、031）；RC-031仅原问题评分成功，两个变体预算不足被跳过。多查询完整评分0/2，整体真实链路仍有5例无有效评分或错误、另1例多查询不完整。
+- RC-024：改写2280.9ms，排队1.1ms、角色/模型解析约0ms、渲染0.2ms、价格75.1ms、预占13.7ms、Provider1922.6ms；finish_reason=stop，completion29。三查询并发召回2386ms、28候选；原问题Rerank Provider3408.8ms后ReadTimeout，整段共享8000ms耗尽，退化透传8条，无有效逐查询分数。采购证据召回，但质检证据是否参与有效排序无法证明。
+- RC-031：改写1644.4ms，排队0.3ms、渲染0.3ms、价格1.8ms、预占33.8ms、Provider1550ms；finish_reason=stop，completion41。三查询召回3228ms、28候选；原问题Provider1924ms成功全候选评分，另2条因剩余时间不足跳过，阈值0.3后5条。
+- RC-031有效排序：supplier_17=0.976849、supplier_16=0.971917（退出、冻结新单、清算在途/库存、追溯索赔）；supplier_10=0.750696、supplier_9=0.747067（<60分对应D级）；supplier_4=0.309313。证据正文支持主要处置事实，但不能称三查询算法完整验收。
+- 原问题Rerank失败时仍走既有透传契约；迟到响应未回写业务结果，已有usage照常结算。原始逐查询状态和头部候选矩阵保存在per_case，现有Trace只记录各查询前10候选，不能伪称完整28×3评分矩阵。
+
+### 费用与未决账目
+
+- 115次已记录尝试、104494个已知账本tokens、CNY0.120495已知成本；109 settled，6 needs_review，后6笔usage/费用未知，整个账本UNVERIFIED，不能把未知费用当0元或报告最终实际总费用已核实。
+- 已知部分：Chat36次/79165 tokens/CNY0.107812 exact；Embedding69次/18646 tokens/CNY0.009340 estimated；Rerank4次/6683 tokens/CNY0.003343 exact。另5次Rerank、1次Embedding为unpriced。
+- 待核实保留预占合计0.231201元；已知费用+未决预占=0.351696元，仍在0.50硬限内。原始各scope/period账本另导出scope-ledger.json，未执行人工结算或释放。
+- needs_review ID（完整记录见final-ledger.json）：49c1efc6-da78-47c2-9111-722f8b76ec67、aa9f596a-64b2-4a1f-b363-fa8c8a53e5a9（RC-012 Rerank）；7e930059-6687-481b-b22c-4ba726e7518c（RC-061 Doc探针Embedding，旧代码错误沿用RC-012 Trace）；cadd534a-6d8f-41f0-8c12-dd35e627be6d、d888f06b-e1ff-4ad5-8f88-4b245cc9c46a（RC-021 Rerank）；bf91b445-cf8b-4ad1-b01b-8800fd625543（RC-024 Rerank）。不修改这些历史事实，不与旧run混账。
+
+### 证据支持的最小修正与停止条件
+
+- 前轮预算重复预占修复已实际进入完整Smoke，没有再发生QuotaExceeded；不等于真实质量通过。
+- 本轮只修评测归属：将case Trace创建提前到Doc探针之前，并为错误结果保留trace_id；Fake Provider实际走runner，验证成功/超时及串行/并发场景用量上下文属于本例。修改后定向20 passed（1既有collection warning），py_compile、定向Ruff、diff检查通过。
+- 不做未经证明的并发重排改造。RC-031串行完整评分与共享deadline冲突已证实，有界并发可能改善，但RC-024原问题本身超时，单纯并发不能解决；减少额外评分调用则违背本轮三查询有效排序的验收目标。当前不改变deadline、模型、Prompt或质量门槛。
+- 后续需要针对Provider延迟和共享deadline做单独、可审查的修复，先免费验证独立预占/上下文/迟到usage；不能凭本轮结果合并。新Trace修复没有再次真实Provider验收，不再付费。PR保持Draft，MERGE_READY=false。
