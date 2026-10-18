@@ -41,6 +41,17 @@
 
 Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-postfilter.json`及对应chunk明细。这里只验证免费切分/过滤，不能当作真实上传、模型元数据和向量发布通过。
 
+## 2026-10-19 隔离上传栈建成（ragu1）
+
+- 新增 `部署/rag-universal-phase1-20261019/docker-compose.isolated.yml`（compose 项目 `ragu1`）：独立网络/卷/容器（ragu1-*），服务=postgres(pgvector)+redis×3(缓存/认证/broker)+db-migrate+app+rag-service+rag-index-worker+apisix；网关 127.0.0.1:19080、PG 对账通道 127.0.0.1:15433；worker 并发 1+2GiB（同 rag-t2 档）。不写 container_name、不与共享栈/PR#52 栈冲突。
+- 镜像 `agent-platform:ragu1-0423d69`：完整构建被 Clash fake-ip 截断（198.18.0.13/2001:2::e 对 mirrors.aliyun.com apt 大文件 500/502，宿主 curl 小响应 200 但 build 容器断），改用 `Dockerfile.overlay` 在 agent-app:latest（2026-10-13 构建，依赖声明 2026-10-10 后未变）上叠加最新代码层，GIT_COMMIT=ragu1-0423d69 注入。
+- 运行代码版本证据：`GET :19080/health` → `{"status":"ok","build":{"commit":"ragu1-0423d69"}}`，迁移 applied=101；pipeline.py/filter.py/indexer.py 三文件 host=app=worker SHA256 一致。
+- 隔离库初始化：init_db 全量迁移 rc=0；`init_clone_config.py`（D:\tmp\rag-universal-phase1-20261019\）复制配置面：账号 local_super_admin（哈希=用户改密后，role=super_admin/tenant=default/must_change_password=false）、llm_providers 12、凭据密文 10、llm_models 20、角色绑定 7、专项绑定 2、model_price 239（approved 123）、预算 8、prompts 74+aliases 41+runtime_state 1、keyword_rules 133、metadata 规则 133。**不复制任何业务/运行数据**：doc_registry/chunk_store/rag_vectors/rag_index_runs 全 0。
+- 已知差异（记录不修复）：共享库 prompt_release_records 有 b434138 迁移没有的 model_snapshot 列（结构漂移，审计表非运行必需）未复制；sys_config 由服务自建幂等表（JWT_SESSION_GUARD_MODE 回退 env=enforce 等价）；schema_consistency 报 tasks/checkpoints 缺失属惰性建表。
+- 付费前预检七项全绿：①manifest SHA256 五份源文件一致（UF-03-01/05-01/08-01/11-01/12-01）；②rag_eval_kb audience=test 仅 super_admin；③角色=embedding qwen3.7-text-embedding / rerank qwen3.7-text-rerank / chat doubao-seed-2.0-mini，approved 价格齐（embedding/rerank 0.5 CNY/1M tokens）；④预算 tenant_default|default 432 CNY/日 hard，worker bind_request_budget(upload_id) 归因；⑤隔离库 RAG 四表全 0；⑥PARSABLE_EXTS 含 docx/csv/xlsx；⑦API/Worker 代码指纹一致。网关无凭据 401（fail-closed），LLMRegistry 在 app+worker 均注入 10 份凭据（Fernet 解密成功）。
+- 管理端 3201 已重启（`D:\tmp\rag-phase1-admin-isolated.py`），BFF 指向 19080 隔离网关；HTTP 200。旧 3201（指向共享 9080）进程已停。
+- 等待：用户在 127.0.0.1:3201 登录（账号 local_super_admin，密码=自己改密后的新密码；隔离库哈希与共享库同源）。登录后进知识库工作台上传首批 5 份（faq_only.docx/preamble.docx/contract_table.docx/sku.csv/multi_sheet.xlsx，选「统一 RAG 评测知识库」）。
+
 ## 当前等待与下一步
 
 - 用户在3201完成首次改密后再继续浏览器；新密码不必提供给助手。旧3200尚未部署修复。

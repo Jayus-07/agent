@@ -1,0 +1,24 @@
+# RAG 通用测试集第一阶段隔离栈镜像 — 代码叠加层（2026-10-19）
+#
+# 背景：完整 Dockerfile 构建在 builder 的 apt 层被 Clash fake-ip 截断
+# （198.18.0.13 / 2001:2:: 对 mirrors.aliyun.com 大文件 500/502），本机
+# 无法完成全量构建。依赖声明（pyproject/constraints）自 2026-10-10 后
+# 未变更，agent-app:latest（2026-10-13 构建）的 venv 与当前代码依赖
+# 一致，故在其上仅叠加最新代码层（与主 Dockerfile 的代码 COPY 完全同序）。
+#
+# GIT_COMMIT 注入 ragu1-0423d69：容器 /health 可直接回读，用于证明
+# 「运行代码版本」；不伪装成正式发布镜像。
+#
+# 仅限本任务隔离栈使用，不推送、不用于共享栈。
+FROM agent-app:latest
+
+ARG GIT_COMMIT=ragu1-0423d69-overlay
+ENV GIT_COMMIT=${GIT_COMMIT}
+
+WORKDIR /app
+COPY backend/ ./backend/
+COPY mcp_servers/ ./mcp_servers/
+RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
+COPY scripts/ ./scripts/
+
+USER appuser
