@@ -221,14 +221,10 @@ class TestMetadataWiring:
         )
 
     def test_metadata_sums_llm_tokens_from_all_sources(self, monkeypatch):
-        """1.3b：summary/question 路径 tokens 与 keywords 路径一起进 llm_tokens 口径。"""
-        from backend.rag.preprocessing.keyword import KeywordResult
-        import backend.rag.preprocessing.keyword as kw_mod
+        """tokens 汇总契约（P0-2 去词表化后更新，2026-10-19）：keywords 路径
+        已退役不再产 tokens；汇总口径保留 question_gen 路径用量。"""
         import backend.rag.preprocessing.entity as entity_mod
 
-        kw = KeywordResult()
-        kw.llm_tokens = {"prompt_tokens": 100, "completion_tokens": 20, "cost_usd": 0.1}
-        monkeypatch.setattr(kw_mod, "extract_doc_keywords_typed", lambda *a, **k: kw)
         monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         import backend.rag.preprocessing.question_gen as qg_mod
@@ -248,8 +244,8 @@ class TestMetadataWiring:
                                     chunks_text=chunks_text)
         )
         tokens = result.get("llm_tokens") or {}
-        assert tokens.get("prompt_tokens", 0) >= 100, (
-            "llm_tokens 汇总必须包含 keywords 路径用量"
+        assert tokens.get("prompt_tokens", 0) >= 50, (
+            "llm_tokens 汇总必须包含 question_gen 路径用量（keywords 路径已退役）"
         )
 
 

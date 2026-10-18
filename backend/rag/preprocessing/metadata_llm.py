@@ -223,20 +223,26 @@ async def extract_metadata_llm_async(
     try:
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
-        # 二者均为模块级导入，测试可直接 monkeypatch
+        # 二者均为模块级导入，测试可直接 monkeypatch。
+        # P0-3（2026-10-19）：原 metadata_runtime.run_limited 随级联退役，
+        # 此处内联等价的 LLM 并发背压信号量（宽度=METADATA_LLM_CONCURRENCY）。
+        nonlocal_lookup = globals()
+        sem = nonlocal_lookup.setdefault(
+            "_metadata_llm_semaphore",
+            __import__("asyncio").Semaphore(
+                max(int(__import__("os").getenv("METADATA_LLM_CONCURRENCY", "8")), 1)
+            ),
+        )
+        import asyncio as _asyncio
         from backend.observability.metrics import metadata_llm_calls_total
-        from backend.rag.preprocessing.metadata_runtime import run_limited
-
-        response = await run_limited(
-            "llm",
-            lambda: async_safe_call_with_timeout(
+        async with sem:
+            response = await async_safe_call_with_timeout(
                 invoke_metadata_llm,
                 LLM_REQUEST_TIMEOUT,
                 None,
                 f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
                 prompt,
-            ),
-        )
+            )
         if response is None:
             raise MetadataExtractError("llm timeout")
 

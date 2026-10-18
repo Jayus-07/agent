@@ -173,10 +173,6 @@ def _processing_config_snapshot() -> dict[str, Any]:
     ocr_identity = get_ocr_model_identity()
     return {
         "model_roles": role_snapshot,
-        "metadata_cascade_enabled": bool(rag_cfg.METADATA_CASCADE_ENABLED),
-        "metadata_classifier_model_path": str(
-            rag_cfg.METADATA_CLASSIFIER_MODEL_PATH or ""
-        ),
         # OCR 可能来自数据库专项/角色配置；快照必须使用实际运行时身份，
         # 不能再把旧 env 默认值写成“本轮使用的模型”。
         "ocr_provider": str(ocr_identity.provider or ""),

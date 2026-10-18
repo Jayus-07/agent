@@ -42,14 +42,37 @@ def test_faq_routes_to_qa_strategy():
 
 
 def test_other_types_unchanged():
-    """回归验证：其他 doc_type 路由不变。
+    """回归验证（v3 结构驱动更新，2026-10-19）：
 
-    - policy → StructureChunkStrategy
-    - sop → StepChunkStrategy（Phase 1 占位，与 Structure 同 split 行为）
+    - 有章节结构的文档 → StructureChunkStrategy（doc_type 无关）
+    - ≥3 个中文序号标题 → StepChunkStrategy（结构信号直判）
     """
+    from backend.rag.preprocessing.ast import DocumentAST as _AST
+    from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer as _SA
+
+    def _structured_report():
+        ast = _AST(root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="section", text="第一章 总则", level=1,
+                         children=[DocumentNode(type="paragraph", text="正文")]),
+        ]))
+        _, rep = _SA().analyze(ast)
+        return rep
+
+    def _step_report():
+        children = [
+            DocumentNode(type="section", text=f"{cn}、步骤{i}", level=1,
+                         children=[DocumentNode(type="paragraph", text=f"内容{i}")])
+            for i, cn in enumerate(["一", "二", "三"], start=1)
+        ]
+        ast = _AST(root=DocumentNode(type="section", text="", level=0, children=children))
+        _, rep = _SA().analyze(ast)
+        return rep
+
     r = ChunkStrategyRouter()
-    assert isinstance(r.route("policy", _report(0.9)), StructureChunkStrategy)
-    assert isinstance(r.route("sop", _report(0.9)), StepChunkStrategy)
+    assert isinstance(r.route("policy", _structured_report()), StructureChunkStrategy)
+    assert isinstance(r.route("sop", _step_report()), StepChunkStrategy)
+    # 无结构文档递归兜底（doc_type 不再救援）
+    assert isinstance(r.route("policy", _report(0.9)), RecursiveChunkStrategy)
 
 
 def test_qa_strategy_handles_qa_nodes():
@@ -144,7 +167,12 @@ def test_faq_without_qa_nodes_falls_back_to_recursive():
     )
     _, report = StructureAnalyzer().analyze(ast)
     strategy = ChunkStrategyRouter().route("faq", report)
-    assert isinstance(strategy, RecursiveChunkStrategy)
+    # v3 结构驱动（2026-10-19）：无 qa 节点但有章节 → 章节切分（比递归更
+    # 保结构，同样满足「不产 0 chunk、内容不丢」的原始意图）；完全无结构
+    # 才递归（见 test_chunking_router.py 的空结构契约）。
+    assert isinstance(strategy, StructureChunkStrategy)
+    leaves = strategy.split(ast, "faq_no_qa.docx")
+    assert leaves, "章节切分必须产出 chunk（缺陷 D 的内容不丢断言）"
 
 
 def test_docx_faq_question_survives_cleaning_filter_and_index_identity(tmp_path):

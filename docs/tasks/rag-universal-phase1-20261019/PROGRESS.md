@@ -142,3 +142,12 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - 测试：新增 test_keyword_devocabbing 10 用例全过；受影响定向（去词表 10+FAQ 证据 10+路由 11+治理 45+检索放宽 4+白名单/query_analyzer+chunking_router 2+广覆盖批 91）全绿；rag 目录广覆盖 1262 passed，39 failed+55 errors 经 stash 基线对照确认全部为存量（55 errors=本地 PG 无密码环境项，28 failed 与基线逐一对应）。
 - BLOCKED：Golden Recall@5/MRR/NDCG 对比需评测 runner 真实运行（涉及付费 LLM 或长时检索），未执行；替代证据=隔离栈 faq_only 6/6 检索命中 + 定向契约。
 - 按用户要求：本地提交不推送，待确认后统一 push。
+
+## 2026-10-19 治理改造第二批（P1）：级联+影子链物理删除完成（本地提交，待确认推送）
+
+- **组包路径收敛**：metadata_stage 1147→约 810 行。删除 rollout 级联分支（decide_metadata/DecisionEnvelope 四路 lineage/影子派发/finalize_decision/finalize_cascade 死代码）；规则六步异常兜底改「合成最小 unified → finalize_unified 同一收口」；ENABLE_LLM_METADATA_EXTRACT 成为唯一增强路径（摘要/实体，doc_type 恒由规则分类器供给）。
+- **物理删除**：metadata_decision/metadata_runtime/metadata_evidence/metadata_classifier/metadata_router/metadata_shadow 六模块、tasks/metadata_shadow_tasks、eval/metadata_baseline 目录；compose 的 metadata-shadow-worker 服务；config 开关（METADATA_CASCADE_*/METADATA_CLASSIFIER_*/METADATA_SHADOW_*）与指纹清单 metadata_router 行；Celery 队列注册/任务路由/admin 端点队列映射/metrics 影子计数器；测试删除 9 个文件（cascade/shadow/rollout/classifier/decision/evidence/router/runtime/deployment）。
+- **保留**：metadata_llm（LLM 增强抽取，限流内联为模块级 LLM 信号量——修复了替换时误删 metadata_llm_calls_total 导入的 UnboundLocalError）；classify_with_confidence 规则分类器（doc_type 唯一供给源）；METADATA_CACHE_TTL_SECONDS（table_describe 通用缓存消费）；permission_scope/财务 PII/旅游/Trace 保留全链未动。
+- **domain_classify 语义**：级联删除后 rule_metadata 的 domain_detail 来自规则路径、llm_metadata 的 metadata_llm 标注仅出现在真实 LLM 增强时——矛盾消除。
+- **测试**：rag 目录 1217 passed / 22 failed（全部为存量，数量严格对账：去词表化基线 39 − 删级联测试 12 − 本轮修复 5 = 22）；worker_topology 19 passed（删影子队列用例+compose 五 worker 断言改四 worker）；metadata_llm 11、simulated_questions 11、faq_routing 9、retrievers 全过。
+- **修复的引入项**：metadata_llm 限流内联时误删 metrics 导入（UnboundLocalError）；finalize_unified 计时锚点误引 build 局部变量（统一路径必炸隐患，改方法自治计时）。

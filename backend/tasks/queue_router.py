@@ -28,7 +28,6 @@ from dataclasses import dataclass
 from backend.config.tasks import (
     CELERY_AGENT_QUEUE,
     CELERY_MAINTENANCE_QUEUE,
-    CELERY_METADATA_SHADOW_QUEUE,
     CELERY_RAG_INDEX_QUEUE,
     CELERY_REPORT_QUEUE,
     QUEUE_ROUTING_UNKNOWN_FALLBACK,
@@ -68,7 +67,6 @@ class QueueRoute:
 _LOGICAL_QUEUES: dict[str, str] = {
     "interactive_agent": CELERY_AGENT_QUEUE,
     "rag_index": CELERY_RAG_INDEX_QUEUE,
-    "metadata_shadow": CELERY_METADATA_SHADOW_QUEUE,
     "report": CELERY_REPORT_QUEUE,
     "maintenance": CELERY_MAINTENANCE_QUEUE,
 }
@@ -86,7 +84,6 @@ _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.execute_agent": ("interactive_agent", "workflow_binding"),
     "tasks.execute_index": ("rag_index", "workflow_binding"),
     "tasks.reindex_document": ("rag_index", "workflow_binding"),
-    "tasks.execute_metadata_shadow": ("metadata_shadow", "workflow_binding"),
     "memory.extract": ("maintenance", "workflow_binding"),
 }
 
