@@ -132,3 +132,17 @@
 - 本轮只修评测归属：将case Trace创建提前到Doc探针之前，并为错误结果保留trace_id；Fake Provider实际走runner，验证成功/超时及串行/并发场景用量上下文属于本例。修改后定向20 passed（1既有collection warning），py_compile、定向Ruff、diff检查通过。
 - 不做未经证明的并发重排改造。RC-031串行完整评分与共享deadline冲突已证实，有界并发可能改善，但RC-024原问题本身超时，单纯并发不能解决；减少额外评分调用则违背本轮三查询有效排序的验收目标。当前不改变deadline、模型、Prompt或质量门槛。
 - 后续需要针对Provider延迟和共享deadline做单独、可审查的修复，先免费验证独立预占/上下文/迟到usage；不能凭本轮结果合并。新Trace修复没有再次真实Provider验收，不再付费。PR保持Draft，MERGE_READY=false。
+
+## 重排最小修复（2026-10-19，用户指令“你来解决”）
+
+- 从本任务原worktree/PR HEAD fb80dd3继续，未改共享main或其他任务工作树。继续遵守不再付费、不合并、不发布Prompt。
+- 选择有界并发：云端总数不超过3条的查询使用独立3线程评分池，按原查询顺序消费结果，继续全候选max聚合。减少评分调用无法满足现有三查询证据契约，因此未采用；本地模型与无deadline旁路仍串行。
+- 原问题完成价格/预算预占、准备外呼后才放行变体，防止紧额度时变体抢占基线。每个HTTP尝试仍独立经过scoped_model_call及真实结算；没有改预占算法、价格来源或金额上限。
+- Worker提交使用既有submit_rag_task复制可信上下文；Provider span固定挂到本次rerank父节点，新增query_index关联查询列表与独立reservation。移除未被其他代码读取的实例级_last_total_tokens，usage始终使用调用局部变量。
+- 排队任务执行前检查同一个deadline，预占完成后再次计算真实HTTP剩余时间；确定尚未外呼的预占才释放。调用方最多等到原deadline，取消未启动任务；已在途调用继续以原身份/预占结算usage，迟到分数不回写业务结果。
+- 原问题评分失败仍透传；变体失败不替代原问题、不伪造分数。模型、Prompt/Active、总查询数3、Golden、阈值、8000ms总deadline与6000ms改写子预算不变。
+- T1/T2：定向组合97 passed（1既有TestCase collection warning）。新增用例覆盖三路同时发起、原问题失败保留needs_review、迟到usage不改输出、队列过期不外呼、预占后过期释放、跨租户上下文隔离、全局3路上限及紧额度原问题优先。RC-031实测耗时按比例缩放的Fake重放可在原共享窗口内完成3条评分，不能代替真实Provider验收。
+- 独立一次性PG仅装预算表结构，无业务/凭据/旧索引：同一Fake HTTP调用链接真实PostgresQuotaStore，5 passed / 8.09s（2既有弃用warning），覆盖并发独立结算、身份隔离、未知收费保留占额、迟到结算和预占后过期；Provider调用0。初期免费测试曾混入冷模块初始化、错误修改已捕获deadline及毫秒窗口假设，保留失败记录后修正测试控制；未放宽生产参数或删去原有边界断言。
+- T0：py_compile、预算相关定向Ruff、测试文件及线程池完整Ruff、diff检查通过。完整reranker历史风格项不作为本轮新增改动处理。运行代码新增主要为评分调度及截止保护，测试增长用于并发/计费边界；未重构整个Runtime。
+- Artifact：D:/tmp/pr52-rerank-fix-20261019/artifacts/，含真实PG免费验证及清理日志。一次性PG已停止销毁；没有新付费评测run，旧run的6笔needs_review未重新结算或清除。
+- 风险与停止：修复能消除三次评分串行叠加，不能保证Provider的单次慢响应消失；RC-024原问题超时及修复后真实质量仍UNVERIFIED。没有再次真实Smoke，因此PR继续Draft、MERGE_READY=false。最终免费CI与提交见交付记录。

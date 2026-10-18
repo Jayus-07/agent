@@ -27,6 +27,8 @@ RERANK_PROVIDER 留空时跟随 ENV_MODE（向后兼容）。
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import math
 import re
@@ -197,6 +199,13 @@ _RERANK_MIN_ATTEMPT_S = 0.2
 _RERANK_MIN_RETRY_BUDGET_S = 0.3
 # 分数合法区间 0-1 的浮点噪声容忍度（只夹紧，不放宽语义）。
 _RERANK_SCORE_EPS = 1e-6
+# 仅原问题Worker绑定；成功预占并准备发出HTTP后才放行变体预占。
+_primary_rerank_dispatch: ContextVar[Any] = ContextVar(
+    "primary_rerank_dispatch", default=None,
+)
+_rerank_query_index: ContextVar[int | None] = ContextVar(
+    "rerank_query_index", default=None,
+)
 
 
 class RerankLateResultDiscarded(RuntimeError):
@@ -321,7 +330,6 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['_provider_id'] = provider_id or "unknown"
         self.__dict__['_billing_model'] = billing_model or resolved_model
         self.__dict__['_api_format'] = resolved_format
-        self.__dict__['_last_total_tokens'] = 0
 
         logger.info(
             f"初始化 Cloud Reranker HTTP "
@@ -455,6 +463,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             "internal_call_id": attempt_id,
             "provider_attempt_id": attempt_id,
             "role": "rerank",
+            "query_index": _rerank_query_index.get(),
             "model": self._billing_model,
             "provider": self._provider_id,
             "request_id": current_request_id() or "",
@@ -470,6 +479,14 @@ class DashScopeReranker(BaseDocumentCompressor):
         response_received = False
         usage_recorded = False
         with scoped_model_call(self._billing_model, "rerank", kind=kind):
+            # 价格校验和预占也会耗时，HTTP必须使用此刻的真实剩余预算。
+            timeout = _bounded_attempt_timeout(self.timeout, timeout, deadline_at)
+            if timeout < _RERANK_MIN_ATTEMPT_S:
+                from backend.infra.llm.budget import release_model_reservation
+
+                # 可以证明尚未发给Provider，才能释放；不写伪造的零usage。
+                release_model_reservation()
+                raise requests.exceptions.Timeout("rerank 预占后预算不足，未发起HTTP")
             metrics["reservation_id"] = current_reservation_id() or ""
             metrics["reservation_kind"] = kind
             span = trace_collector.start_span(
@@ -478,6 +495,9 @@ class DashScopeReranker(BaseDocumentCompressor):
                 type="llm_call",
             )
             try:
+                on_dispatch = _primary_rerank_dispatch.get()
+                if on_dispatch is not None:
+                    on_dispatch()
                 metrics["provider_call_started"] = True
                 provider_started = time.monotonic()
                 resp = requests.post(
@@ -516,7 +536,6 @@ class DashScopeReranker(BaseDocumentCompressor):
                     tokens = max(0, int(raw_tokens))
                 except (ValueError, TypeError):
                     tokens = 0
-                self.__dict__["_last_total_tokens"] = tokens
                 parse_ms = (time.monotonic() - provider_started) * 1000
                 metrics["response_parse_ms"] = round(
                     max(parse_ms - provider_elapsed, 0), 1,
@@ -1019,6 +1038,69 @@ def _read_runtime_queries(documents, query: str) -> list[str]:
     return queries
 
 
+@contextmanager
+def _query_scorer(backend, queries, texts, deadline_at, parent_id):
+    """云端三查询共享截止时间并发评分；仅调用方可把分数写回业务结果。"""
+    parallel = isinstance(backend, DashScopeReranker) and len(queries) <= 3
+    if not parallel or deadline_at is None:
+        yield lambda position, query: full_candidate_scores(
+            backend, query, texts, deadline_at=deadline_at,
+        ), False
+        return
+
+    from backend.infra.thread_pools import submit_rag_task
+    from backend.observability.tracer import bind_graph_node, reset_graph_node
+
+    primary_ready = threading.Event()
+    primary_dispatched = threading.Event()
+
+    def on_primary_dispatch():
+        primary_dispatched.set()
+        primary_ready.set()
+
+    def invoke(position, query):
+        if position > 0:
+            primary_ready.wait(timeout=max(0.0, deadline_at - time.monotonic()))
+            if not primary_dispatched.is_set():
+                return None
+        # 排队时间也消耗同一deadline；过期任务不得再触发付费调用。
+        if position > 0 and not _budget_allows_extra_query(deadline_at):
+            return None
+        if time.monotonic() >= deadline_at:
+            raise requests.exceptions.Timeout("rerank 排队后共享deadline已过期")
+        token = bind_graph_node(parent_id)
+        dispatch_token = _primary_rerank_dispatch.set(
+            on_primary_dispatch if position == 0 else None,
+        )
+        index_token = _rerank_query_index.set(position)
+        try:
+            return full_candidate_scores(backend, query, texts, deadline_at)
+        finally:
+            if position == 0:
+                primary_ready.set()
+            _primary_rerank_dispatch.reset(dispatch_token)
+            _rerank_query_index.reset(index_token)
+            reset_graph_node(token)
+
+    futures = {}
+    try:
+        for position, query in enumerate(queries):
+            if position == 0 or _budget_allows_extra_query(deadline_at):
+                futures[position] = submit_rag_task("rerank", invoke, position, query)
+
+        def result(position, query):
+            future = futures.get(position)
+            if future is None:
+                return None
+            return future.result(timeout=max(0.0, deadline_at - time.monotonic()))
+
+        yield result, True
+    finally:
+        # 不等待不能物理取消的Provider；其原调用上下文负责迟到usage结算。
+        for future in futures.values():
+            future.cancel()
+
+
 def _supports_full_scoring(backend) -> bool:
     """后端是否具备全候选评分能力（否则退回单查询契约）。"""
     return (
@@ -1178,7 +1260,7 @@ class RerankCompressor(BaseDocumentCompressor):
 
         契约：
         - 每条查询都请求全量候选（top_n = 候选数），不按查询各自 Top-K 裁剪；
-        - 原始 query 必须先评分成功，否则整体降级到既有单查询/透传契约；
+        - 原始 query 必须评分成功，否则整体降级到既有单查询/透传契约；
         - 额外查询共享检索 deadline，预算不足即跳过，不重开超时窗口；
         - 阈值与 top_k 只在 max 聚合后统一执行一次；
         - 同分优先原始问题，其次原始候选顺序（不依赖并发完成顺序）。
@@ -1187,6 +1269,8 @@ class RerankCompressor(BaseDocumentCompressor):
 
         candidate_count = len(documents)
         texts = [_backend_rerank_text(self.backend, doc) for doc in documents]
+        # 并发完成顺序不可用于关联费用；原问题失败出口也保留查询索引映射。
+        span.input = {"queries": [q[:80] for q in queries], "candidate_count": candidate_count}
         deadline_at = _budget_deadline_at()
         started = time.monotonic()
 
@@ -1194,84 +1278,92 @@ class RerankCompressor(BaseDocumentCompressor):
         query_rows: list[dict] = []
         calls = 0
 
-        for position, q in enumerate(queries):
-            if position > 0 and not _budget_allows_extra_query(deadline_at):
+        with _query_scorer(
+            self.backend, queries, texts, deadline_at, span.span_id,
+        ) as (score_query, parallel):
+            for position, q in enumerate(queries):
+                if not parallel and position > 0 and not _budget_allows_extra_query(deadline_at):
+                    query_rows.append({
+                        "query": q[:80], "status": "skipped_budget",
+                        "scored": 0, "invalid": 0, "duplicate": 0, "missing": candidate_count,
+                    })
+                    trace_collector.add_event(
+                        span, "rerank_query_skipped", "info",
+                        f"剩余检索预算不足，跳过第 {position + 1} 条查询的评分",
+                        data={"query": q[:80]},
+                    )
+                    logger.info(
+                        f"[Rerank] 剩余预算不足，跳过第 {position + 1} 条查询评分"
+                    )
+                    continue
+
+                try:
+                    raw = score_query(position, q)
+                    if raw is None:
+                        query_rows.append({
+                            "query": q[:80], "status": "skipped_budget",
+                            "scored": 0, "invalid": 0, "duplicate": 0,
+                            "missing": candidate_count,
+                        })
+                        continue
+                    calls += 1
+                    valid, invalid, duplicate = validate_rerank_scores(raw, candidate_count)
+                except Exception as exc:  # noqa: BLE001 — 单条查询失败不拖垮整链
+                    query_rows.append({
+                        "query": q[:80], "status": "error",
+                        "scored": 0, "invalid": 0, "duplicate": 0,
+                        "missing": candidate_count, "error": type(exc).__name__,
+                    })
+                    trace_collector.add_event(
+                        span, "rerank_query_failed", "error",
+                        f"查询「{q[:80]}」评分失败：{type(exc).__name__}",
+                        data={"query": q[:80], "error": type(exc).__name__},
+                    )
+                    if position == 0:
+                        # 原问题是唯一可靠的基线评分：它失败时不做多查询排序，
+                        # 交给既有单查询降级契约（透传 + 不可靠标记）。
+                        raise
+                    continue
+
+                if not valid:
+                    query_rows.append({
+                        "query": q[:80], "status": "error",
+                        "scored": 0, "invalid": invalid, "duplicate": duplicate,
+                        "missing": candidate_count, "error": "no_valid_score",
+                    })
+                    if position == 0:
+                        raise RuntimeError("原问题评分没有有效分数")
+                    continue
+
+                per_query[q] = valid
+                # 仅白名单标识与数值；不复制正文、私有 runtime 元数据或凭据。
+                top_candidates = []
+                for idx, score in sorted(valid, key=lambda row: (-row[1], row[0]))[:10]:
+                    meta = documents[idx].metadata or {}
+                    source = str(meta.get("source") or meta.get("source_file") or "")
+                    if "://" in source:
+                        from urllib.parse import urlsplit
+
+                        source = urlsplit(source).path
+                    source = source.replace("\\", "/").rsplit("/", 1)[-1]
+                    top_candidates.append({
+                        "index": idx,
+                        "chunk_id": str(meta.get("chunk_id") or "")[:160],
+                        "doc_id": str(meta.get("doc_id") or "")[:160],
+                        "source": source[:160],
+                        "score": round(score, 6),
+                    })
                 query_rows.append({
-                    "query": q[:80], "status": "skipped_budget",
-                    "scored": 0, "invalid": 0, "duplicate": 0, "missing": candidate_count,
+                    "query": q[:80],
+                    "status": (
+                        "success" if not invalid and not duplicate
+                        and len(valid) == candidate_count else "partial"
+                    ),
+                    "scored": len(valid), "invalid": invalid, "duplicate": duplicate,
+                    "missing": candidate_count - len(valid),
+                    "candidate_count": candidate_count,
+                    "top_candidates": top_candidates,
                 })
-                trace_collector.add_event(
-                    span, "rerank_query_skipped", "info",
-                    f"剩余检索预算不足，跳过第 {position + 1} 条查询的评分",
-                    data={"query": q[:80]},
-                )
-                logger.info(
-                    f"[Rerank] 剩余预算不足，跳过第 {position + 1} 条查询评分"
-                )
-                continue
-
-            try:
-                raw = full_candidate_scores(
-                    self.backend, q, texts, deadline_at=deadline_at,
-                )
-                calls += 1
-                valid, invalid, duplicate = validate_rerank_scores(raw, candidate_count)
-            except Exception as exc:  # noqa: BLE001 — 单条查询失败不拖垮整链
-                query_rows.append({
-                    "query": q[:80], "status": "error",
-                    "scored": 0, "invalid": 0, "duplicate": 0,
-                    "missing": candidate_count, "error": type(exc).__name__,
-                })
-                trace_collector.add_event(
-                    span, "rerank_query_failed", "error",
-                    f"查询「{q[:80]}」评分失败：{type(exc).__name__}",
-                    data={"query": q[:80], "error": type(exc).__name__},
-                )
-                if position == 0:
-                    # 原问题是唯一可靠的基线评分：它失败时不做多查询排序，
-                    # 交给既有单查询降级契约（透传 + 不可靠标记）。
-                    raise
-                continue
-
-            if not valid:
-                query_rows.append({
-                    "query": q[:80], "status": "error",
-                    "scored": 0, "invalid": invalid, "duplicate": duplicate,
-                    "missing": candidate_count, "error": "no_valid_score",
-                })
-                if position == 0:
-                    raise RuntimeError("原问题评分没有有效分数")
-                continue
-
-            per_query[q] = valid
-            # 仅白名单标识与数值；不复制正文、私有 runtime 元数据或凭据。
-            top_candidates = []
-            for idx, score in sorted(valid, key=lambda row: (-row[1], row[0]))[:10]:
-                meta = documents[idx].metadata or {}
-                source = str(meta.get("source") or meta.get("source_file") or "")
-                if "://" in source:
-                    from urllib.parse import urlsplit
-
-                    source = urlsplit(source).path
-                source = source.replace("\\", "/").rsplit("/", 1)[-1]
-                top_candidates.append({
-                    "index": idx,
-                    "chunk_id": str(meta.get("chunk_id") or "")[:160],
-                    "doc_id": str(meta.get("doc_id") or "")[:160],
-                    "source": source[:160],
-                    "score": round(score, 6),
-                })
-            query_rows.append({
-                "query": q[:80],
-                "status": (
-                    "success" if not invalid and not duplicate
-                    and len(valid) == candidate_count else "partial"
-                ),
-                "scored": len(valid), "invalid": invalid, "duplicate": duplicate,
-                "missing": candidate_count - len(valid),
-                "candidate_count": candidate_count,
-                "top_candidates": top_candidates,
-            })
 
         ranked = aggregate_multi_query_scores(queries, per_query)
         for row in query_rows:
@@ -1299,6 +1391,7 @@ class RerankCompressor(BaseDocumentCompressor):
             "threshold": self.threshold,
             "backend_type": self._backend_type,
             "rerank_mode": "multi_query",
+            "scoring_strategy": "bounded_parallel" if parallel else "serial",
             "rerank_status": overall,
             "query_count": len(queries),
             "scored_query_count": len(scored_queries),

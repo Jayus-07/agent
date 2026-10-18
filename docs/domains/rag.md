@@ -16,6 +16,12 @@ MultiQuery 改写使用 `multi_query` 角色、temperature=0、3 条查询和至
 Prompt 模板 Hash/版本/来源；多查询重排诊断只复制候选 ID、文件名和分数，
 不复制候选完整正文或私有 runtime 元数据。缺失或非法分数使评分状态降级。
 
+云端三查询全候选评分使用独立线程池，进程内最多3路并发，共享原检索
+deadline；按原问题优先消费结果，max聚合和阈值保持不变。原问题评分失败
+仍降级透传，不能用变体评分冒充基线成功。每次Provider尝试独立预占和
+结算；排队或预占后时间不足则不外呼，已发出的迟到调用仅结算usage，
+不得修改已返回的文档。此并发策略不用于本地模型及无deadline的旁路调用。
+
 向量过滤的 metadata 字段名仅接受 ASCII 字母/数字/下划线；`$contains`
 按字面子串匹配，转义 SQL LIKE 通配符。多轮 contextualize 的 system/human
 均来自当前治理模板，保留 history 占位符，无效模板回退内置默认。

@@ -11,7 +11,10 @@
 from __future__ import annotations
 
 import math
+import threading
 import time
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.documents import Document
@@ -471,3 +474,359 @@ def test_missing_scores_are_partial_and_diagnostics_are_whitelisted():
     assert out[0].metadata["rerank_score"] == 0.8
     for forbidden in ("secret-marker", "sensitive-body-marker", "_runtime_mq_queries", "private"):
         assert forbidden not in str(metrics)
+
+
+@pytest.fixture
+def cloud_meter(monkeypatch):
+    """真实评分/预算/用量调用链，只替换HTTP、价格源和持久化介质。"""
+    from backend.core.request_context import scoped_tool_identity
+    from backend.infra.llm import budget, pricing
+    from backend.observability import llm_usage_store
+    from backend.rag.reranker import DashScopeReranker
+
+    class Quota:
+        def __init__(self):
+            self.entries = {}
+            self.lock = threading.Lock()
+            self.limit = Decimal(".50")
+            self.used = Decimal(0)
+
+        def reserve(self, **kwargs):
+            from backend.infra.llm.quota import QuotaExceeded
+
+            with self.lock:
+                held = sum(row["amount_cny"] for row in self.entries.values()
+                           if row["status"] in ("reserved", "needs_review"))
+                if self.used + held + kwargs["amount_cny"] > self.limit:
+                    raise QuotaExceeded("free", "day")
+                key = str(len(self.entries) + 1)
+                self.entries[key] = {**kwargs, "status": "reserved"}
+                return SimpleNamespace(reservation_id=key)
+
+        def settle(self, reservation, cost):
+            with self.lock:
+                row = self.entries[reservation.reservation_id]
+                if row["status"] != "settled":
+                    self.used += cost
+                    row.update(status="settled", cost=cost)
+
+        def release(self, reservation):
+            self.entries[reservation.reservation_id]["status"] = "released"
+
+        def mark_needs_review(self, reservation, reason):
+            self.entries[reservation.reservation_id].update(
+                status="needs_review", reason=reason,
+            )
+            return True
+
+    quota = Quota()
+    events = []
+    state = budget.RequestBudget(
+        budget.RequestBudgetLimits(max_cost=".04", max_calls=12), mode="enforce",
+        user_id="free-user", tenant_id="free-tenant", quota_store=quota,
+    )
+    monkeypatch.setitem(budget._states, "concurrent-free", state)
+    token = budget._current_request_id.set("concurrent-free")
+    monkeypatch.setattr(pricing, "get_current_price_table", lambda *_a: SimpleNamespace(
+        require=lambda *_a, **_k: None,
+    ))
+    monkeypatch.setattr(pricing, "price_usage", lambda *_a, **_k: SimpleNamespace(
+        native_cost=Decimal(".001"), native_currency="CNY",
+        billed_cost_cny=Decimal(".001"), fx_rate=Decimal(1),
+        price_version="free-price", pricing_source="approved_price_table",
+        usage_source="provider", input_cost_cny=Decimal(".001"), cost_status="exact",
+    ))
+    monkeypatch.setattr(llm_usage_store, "get_llm_usage_store", lambda: SimpleNamespace(
+        record=lambda event: events.append(event) or True,
+    ))
+    backend = DashScopeReranker(
+        api_key="fake-not-a-secret", timeout=4, model="fake-rerank",
+        api_format="dashscope", base_url="https://example.invalid/api/v1",
+    )
+    with scoped_tool_identity(user_id="free-user", tenant_id="free-tenant"):
+        try:
+            yield backend, quota, events, state
+        finally:
+            # 失败断言也必须等Fake迟到调用收口，防止下一例替身接收旧usage。
+            from backend.infra import thread_pools
+
+            pool = thread_pools._rerank
+            if pool is not None and not pool._shutdown:
+                drained = threading.Barrier(3)
+                futures = [pool.submit(drained.wait, 5) for _ in range(3)]
+                for future in futures:
+                    future.result(timeout=6)
+            budget._current_request_id.reset(token)
+
+
+def _response(scores):
+    return SimpleNamespace(status_code=200, headers={}, json=lambda: {
+        "output": {"results": [{"index": i, "relevance_score": score}
+                               for i, score in enumerate(scores)]},
+        "usage": {"total_tokens": 12},
+    })
+
+
+def test_cloud_queries_start_together_and_settle_independently(monkeypatch, cloud_meter):
+    """串行实现无法越过三方屏障；完成顺序不能改变max聚合及Trace归属。"""
+    from backend.infra.llm.budget import current_reservation_id
+    from backend.observability.llm_usage_store import current_usage_attribution
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, quota, events, state = cloud_meter
+    barrier = threading.Barrier(3)
+    seen = []
+
+    def post(_url, *, json, headers, timeout):
+        seen.append((current_reservation_id(), current_usage_attribution(), timeout))
+        barrier.wait(timeout=2)
+        query = json["input"]["query"]
+        scores = [0.4, 0.8, 0.3] if query == CERT_QUERY else [0.7, 0.4, 0.3]
+        return _response(scores)
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    trace = _rerank_span()
+    budget = start_retrieval_budget(2500)
+    docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+    out = _compressor(backend).compress_documents(docs, ORIGINAL)
+
+    assert out[0].metadata["chunk_id"] == "乙"
+    assert state.calls == 3 and state.total_tokens == 36
+    assert quota.used == Decimal(".003") and len(events) == 3
+    assert len({row[0] for row in seen}) == 3
+    assert all(row[1]["tenant_id"] == "free-tenant" for row in seen)
+    assert all(row[1]["user_id"] == "free-user" for row in seen)
+    assert all(row[1]["request_id"] == "concurrent-free" for row in seen)
+    assert all(0 < row[2] <= 2.5 for row in seen)
+    assert current_reservation_id() == ""
+    assert all(row["status"] == "settled" for row in quota.entries.values())
+    metrics = _span_of(trace).metrics
+    assert metrics["scoring_strategy"] == "bounded_parallel"
+    assert metrics["scored_query_count"] == 3 and metrics["query_count"] == 3
+    assert [row["query"] for row in metrics["query_status"]] == [ORIGINAL, DEPT_QUERY, CERT_QUERY]
+    attempts = [s for s in trace.spans if s.span_id.startswith("rerank_provider_attempt")]
+    assert len({s.span_id for s in attempts}) == 3
+    assert all(s.parent_id == "rerank" for s in attempts)
+    assert len({s.metrics["reservation_id"] for s in attempts}) == 3
+    assert {s.metrics["query_index"] for s in attempts} == {0, 1, 2}
+    assert all(event["trace_id"] == trace.id for event in events)
+    assert budget.remaining_ms() > 0
+
+
+def test_cloud_late_usage_settles_without_changing_returned_docs(monkeypatch, cloud_meter):
+    """故意忽略HTTP超时的Fake：业务先结束，迟到usage仍结算到原调用。"""
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, quota, events, state = cloud_meter
+    release = threading.Event()
+    barrier = threading.Barrier(3)
+
+    def post(*_a, **_k):
+        barrier.wait(timeout=2)
+        assert release.wait(3)
+        return _response([0.4, 0.9, 0.5])
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    monkeypatch.setattr(mod, "_RERANK_MQ_MIN_BUDGET_MS", 1)
+    _rerank_span()
+    start_retrieval_budget(350)
+    docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+    try:
+        out = _compressor(backend).compress_documents(docs, ORIGINAL)
+        assert [d.metadata["chunk_id"] for d in out] == ["甲", "乙", "丙"]
+        assert not any("rerank_score" in d.metadata for d in out)
+    finally:
+        release.set()
+    deadline = time.monotonic() + 3
+    while any(row["status"] == "reserved" for row in quota.entries.values()):
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+    assert state.calls == 3 and state.total_tokens == 36
+    assert len(events) == 3 and quota.used == Decimal(".003")
+    assert not any("rerank_score" in d.metadata for d in out)
+
+
+def test_no_outbound_when_reservation_consumes_deadline(monkeypatch, cloud_meter):
+    """预占前足够、预占后不足时，不发HTTP、不制造未知usage。"""
+    from backend.rag import reranker as mod
+
+    backend, quota, events, _state = cloud_meter
+    reserve = quota.reserve
+
+    def slow_reserve(**kwargs):
+        result = reserve(**kwargs)
+        time.sleep(.08)
+        return result
+
+    monkeypatch.setattr(quota, "reserve", slow_reserve)
+    monkeypatch.setattr(mod.requests, "post", lambda *_a, **_k: pytest.fail("不应外呼"))
+    with pytest.raises(mod.requests.exceptions.Timeout):
+        backend.rank("q", ["a", "b"], deadline_at=time.monotonic() + .25)
+    assert len(events) == 0
+    assert all(row["status"] == "released" for row in quota.entries.values())
+
+
+def test_rc031_timing_replay_scores_all_three_within_shared_budget(monkeypatch, cloud_meter):
+    """按实测剩余3.128s/单次1.924s同比缩放，串行三次无法完成。"""
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, _quota, _events, _state = cloud_meter
+    monkeypatch.setattr(mod, "_RERANK_MQ_MIN_BUDGET_MS", 240)
+
+    def post(*_a, **_k):
+        time.sleep(.3848)
+        return _response([.6, .5, .4])
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    trace = _rerank_span()
+    start_retrieval_budget(625.6)
+    docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+    _compressor(backend).compress_documents(docs, ORIGINAL)
+    assert _span_of(trace).metrics["scored_query_count"] == 3
+    assert _span_of(trace).status == "success"
+
+
+def test_original_failure_preserves_unknown_charge_and_passthrough(monkeypatch, cloud_meter):
+    """并发变体成功也不得代替失败的原问题；未知费用继续占额。"""
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, quota, events, _state = cloud_meter
+    barrier = threading.Barrier(3)
+
+    def post(_url, *, json, **_kwargs):
+        barrier.wait(timeout=2)
+        if json["input"]["query"] == ORIGINAL:
+            raise RuntimeError("fake Provider failure after submission")
+        return _response([.1, .99, .9])
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    trace = _rerank_span()
+    start_retrieval_budget(2500)
+    docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+    out = _compressor(backend).compress_documents(docs, ORIGINAL)
+    deadline = time.monotonic() + 3
+    while any(row["status"] == "reserved" for row in quota.entries.values()):
+        assert time.monotonic() < deadline
+        time.sleep(.01)
+    assert [doc.metadata["chunk_id"] for doc in out] == ["甲", "乙", "丙"]
+    assert not any("rerank_score" in doc.metadata for doc in out)
+    assert _span_of(trace).metrics["fallback"] == "passthrough"
+    assert len(events) == 3
+    statuses = [row["status"] for row in quota.entries.values()]
+    assert statuses.count("settled") == 2 and statuses.count("needs_review") == 1
+    assert quota.used == Decimal(".002")
+
+
+def test_rerank_pool_is_bounded_and_separates_request_identity(monkeypatch, cloud_meter):
+    """两个租户同时评分，最多3个HTTP在途；身份和账本不能串用。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.core.request_context import scoped_tool_identity
+    from backend.infra.llm import budget
+    from backend.observability.tracer import trace_collector
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import scoped_retrieval_budget
+
+    backend, quota, events, _state = cloud_meter
+    counter = {"active": 0, "peak": 0}
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def post(*_args, **_kwargs):
+        with lock:
+            counter["active"] += 1
+            counter["peak"] = max(counter["peak"], counter["active"])
+        try:
+            barrier.wait(timeout=2)
+            time.sleep(.03)
+            return _response([.6, .5, .4])
+        finally:
+            with lock:
+                counter["active"] -= 1
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    for name in ("one", "two"):
+        monkeypatch.setitem(budget._states, name, budget.RequestBudget(
+            budget.RequestBudgetLimits(max_cost=".04"), mode="enforce",
+            user_id=f"user-{name}", tenant_id=f"tenant-{name}", quota_store=quota,
+        ))
+
+    def run(name):
+        token = budget._current_request_id.set(name)
+        try:
+            with scoped_tool_identity(user_id=f"user-{name}", tenant_id=f"tenant-{name}"), \
+                 scoped_retrieval_budget(2500):
+                trace = trace_collector.start("q", session_id=name)
+                docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+                _compressor(backend).compress_documents(docs, ORIGINAL)
+                assert _span_of(trace).metrics["scored_query_count"] == 3
+                return trace.id
+        finally:
+            budget._current_request_id.reset(token)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        trace_ids = dict(zip(("one", "two"), pool.map(run, ("one", "two"))))
+    assert counter["peak"] == 3
+    assert len(events) == 6 and len(quota.entries) == 6
+    for event in events:
+        name = event["request_id"]
+        assert event["user_id"] == f"user-{name}"
+        assert event["tenant_id"] == f"tenant-{name}"
+        assert event["trace_id"] == trace_ids[name]
+        assert event["session_id"] == name
+
+
+def test_tight_quota_preserves_original_admission(monkeypatch, cloud_meter):
+    """仅够一笔预占时，变体不能抢走原问题额度或绕过PG式硬限。"""
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, quota, events, state = cloud_meter
+    quota.limit = Decimal(".04")
+    seen = []
+
+    def post(_url, *, json, **_kwargs):
+        seen.append(json["input"]["query"])
+        time.sleep(.05)
+        return _response([.8, .5, .4])
+
+    monkeypatch.setattr(mod.requests, "post", post)
+    trace = _rerank_span()
+    start_retrieval_budget(2500)
+    docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+    out = _compressor(backend).compress_documents(docs, ORIGINAL)
+    assert seen == [ORIGINAL]
+    assert state.calls == 1 and len(events) == 1
+    assert out[0].metadata["rerank_score"] == .8
+    assert _span_of(trace).metrics["scored_query_count"] == 1
+    assert quota.used == Decimal(".001")
+
+
+def test_queued_queries_cancel_without_paid_dispatch(monkeypatch, cloud_meter):
+    """专池被占满时截止即返回，排队任务取消后不得再发HTTP。"""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.infra import thread_pools
+    from backend.rag import reranker as mod
+    from backend.rag.retrieval_budget import start_retrieval_budget
+
+    backend, quota, events, _state = cloud_meter
+    release = threading.Event()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        blocker = pool.submit(release.wait, 3)
+        monkeypatch.setattr(thread_pools, "_rerank", pool)
+        monkeypatch.setattr(mod.requests, "post", lambda *_a, **_k: pytest.fail("排队后不应外呼"))
+        _rerank_span()
+        start_retrieval_budget(80)
+        docs = _with_queries(_docs("甲", "乙", "丙"), [ORIGINAL, DEPT_QUERY, CERT_QUERY])
+        try:
+            out = _compressor(backend).compress_documents(docs, ORIGINAL)
+            assert len(out) == 3
+        finally:
+            release.set()
+        blocker.result(timeout=1)
+    assert events == [] and quota.entries == {}

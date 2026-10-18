@@ -13,6 +13,7 @@
   同池自嵌套会死锁）。
 - **multi_query_rewrite**：改写 Provider 专池。同步 Provider 无法被 Future
   物理取消，不能让超时请求占用 outer / inner 检索 worker。
+- **rerank**：云端多查询评分专池，进程内最多3个Worker；不与召回父子任务共池。
 
 所有提交统一走 :func:`submit_rag_task`——自动埋 wait/exec 时长与队列深度
 （spec §20：rag.pool.{multi_query|multi_query_rewrite|outer|inner}.wait_ms）。
@@ -36,6 +37,7 @@ _multi_query: ThreadPoolExecutor | None = None
 _multi_query_rewrite: ThreadPoolExecutor | None = None
 _outer: ThreadPoolExecutor | None = None
 _inner: ThreadPoolExecutor | None = None
+_rerank: ThreadPoolExecutor | None = None
 
 _lock = threading.Lock()
 
@@ -92,7 +94,20 @@ def retrieval_pool_inner() -> ThreadPoolExecutor:
     return _inner
 
 
+def retrieval_pool_rerank() -> ThreadPoolExecutor:
+    """云端评分最多3路并发；排队任务在执行前重新检查共享deadline。"""
+    global _rerank
+    if _rerank is None:
+        with _lock:
+            if _rerank is None:
+                _rerank = ThreadPoolExecutor(
+                    max_workers=3, thread_name_prefix="retr-rerank",
+                )
+    return _rerank
+
+
 _POOL_FACTORIES: dict[str, Callable[[], ThreadPoolExecutor]] = {
+    "rerank": retrieval_pool_rerank,
     "multi_query": retrieval_pool_multi_query,
     "multi_query_rewrite": retrieval_pool_multi_query_rewrite,
     "outer": retrieval_pool_outer,
