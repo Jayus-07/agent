@@ -123,3 +123,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 2. P0-2 检索去猜测过滤（query_analyzer+放宽链+Gate 门退役+测试改）
 3. P0-3 分类级联退役+组包路径收敛（rule_metadata/llm_metadata 归一，domain_classify 语义修复顺带）
 4. P0-4 消费者验证（财务/旅游/Trace 保留回归）+ P1 设施清理（引用搜索后删）
+
+## 2026-10-19 治理改造首批施工完成（P0-1/P0-2/P0-3最小步/P0-4回归）
+
+- P0-1 路由 v3（commit「refactor(rag): 切分路由 v3 结构驱动」）：AST 信号直判（问答对>表格>条款>步骤>章节>递归），doc_type 退出切分前置，仅保留 ad_policy/financial 业务例外；误分类免疫有测试钉死。测试 11+45 passed。
+- P0-2 检索停发猜测过滤（commit「refactor(rag): 检索停发…」）：QueryAnalyzer 停发 doc_type/business_domain；Evidence Gate 覆盖门输入退役；放宽链简化为唯一 kb 维度（授权收口不变）；顺手修 persons 多值裸 list 存量缺陷。测试 66 passed。
+- P0-3 最小上线步：METADATA_CASCADE_ENABLED 部署默认 false（docker-compose.yml×3 + isolated compose）。级联代码退役与组包收敛挂 P1（需引用搜索+消费者迁移证据，单独施工）。
+- P0-4 消费者回归：chunk_type_contract/doc_type_label/candidate_publish（财务版本）/trace_retention 共 42 passed；1 失败为存量环境项（基线对照 stash 确认与本轮无关）。
+- 未完成（下一轮）：级联代码删除、metadata_taxonomy 仅分类规则清理、question_gen 解耦验证、管理端旧分类入口清理、PR CI 门禁结果。
