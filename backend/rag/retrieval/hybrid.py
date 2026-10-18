@@ -475,24 +475,28 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         bm25_docs: list = []
         if not vector_docs:
             # 向量空召回/失败 → BM25 兜底召回
-            try:
-                bm25_docs = bm25_retriever.invoke(query)
-                # P0：同主融合路，BM25 兜底也过滤独立 parent 命中
-                from backend.config.rag import RAG_FILTER_PARENT_RECALL
-                if RAG_FILTER_PARENT_RECALL:
-                    bm25_docs = [d for d in bm25_docs
-                                 if d.metadata.get("granularity") != "parent"]
-                bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
-                if doc_ids:
-                    bm25_docs = [d for d in bm25_docs
-                                 if d.metadata.get("doc_id") in doc_ids]
-            except Exception as e:
-                logger.warning(
-                    f"[hybrid_retrieve] Vector-only 降级后 BM25 也失败: {e}",
-                    exc_info=True,
-                )
-                failures["bm25"] = e
+            if bm25_retriever is None:
+                # P2-3：冷启动空索引，BM25 路无候选
                 bm25_docs = []
+            else:
+                try:
+                    bm25_docs = bm25_retriever.invoke(query)
+                    # P0：同主融合路，BM25 兜底也过滤独立 parent 命中
+                    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                    if RAG_FILTER_PARENT_RECALL:
+                        bm25_docs = [d for d in bm25_docs
+                                     if d.metadata.get("granularity") != "parent"]
+                    bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
+                    if doc_ids:
+                        bm25_docs = [d for d in bm25_docs
+                                     if d.metadata.get("doc_id") in doc_ids]
+                except Exception as e:
+                    logger.warning(
+                        f"[hybrid_retrieve] Vector-only 降级后 BM25 也失败: {e}",
+                        exc_info=True,
+                    )
+                    failures["bm25"] = e
+                    bm25_docs = []
 
         if len(failures) == 2:
             # 向量 + BM25 都失败 = 真系统失败，向上抛（与 hybrid 路径口径一致）
@@ -565,7 +569,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     failures: dict[str, BaseException] = {}
     vf = submit_rag_task("inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
                          metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-    bf = submit_rag_task("inner", bm25_retriever.invoke, query)
+    # P2-3（审查 2026-10-19）：空库冷启动 pipeline 允许 bm25=None（首批
+    # 文档发布前为合法状态）。属性访问 None.invoke 会在 submit 行同步抛
+    # AttributeError（不在任何异常处理内），故先判空——BM25 路无候选，
+    # 向量路独立承接；首批发布后 BM25 自动可用。
+    if bm25_retriever is None:
+        failures_zero_bm25 = True
+        bf = None
+    else:
+        failures_zero_bm25 = False
+        bf = submit_rag_task("inner", bm25_retriever.invoke, query)
     try:
         vector_docs = vf.result()
     except Exception as e:
@@ -584,7 +597,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["vector"] = e
         vector_docs = []
     try:
-        bm25_docs = bf.result()
+        bm25_docs = bf.result() if bf is not None else []
     except Exception as e:
         logger.warning(
             f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",
@@ -593,12 +606,15 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["bm25"] = e
         bm25_docs = []
 
-    if len(failures) == 2:
-        # 两侧都失败 = 真系统失败，向上抛（不伪装成『没有资料』的空召回）
+    if len(failures) == 2 or (
+        failures_zero_bm25 and "vector" in failures
+    ):
+        # 两侧都失败（或 BM25 检索器缺位+向量失败）= 真系统失败，向上抛
+        # （不伪装成『没有资料』的空召回）
         raise RuntimeError(
             f"Vector 与 BM25 检索均失败: "
-            f"vector={failures['vector']}, bm25={failures['bm25']}"
-        ) from failures["vector"]
+            f"vector={failures.get('vector')}, bm25={failures.get('bm25', 'retriever=None(冷启动)')}"
+        ) from failures.get("vector")
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]

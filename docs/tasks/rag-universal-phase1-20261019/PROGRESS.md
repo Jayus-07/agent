@@ -159,3 +159,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - **词库管理链路保留（引用搜索推翻删除判断）**：keyword_store 有活消费者——classify_with_confidence（doc_type 唯一供给源）的动态规则分支与 metadata_rule_service；定位从「检索关键词词表」变为「分类动态规则库」，管理端词库 tab/keyword_routes API 保留。
 - 管理端旧分类入口核查：前端无级联/影子专属入口（grep 命中均为 CSS shadow 样式）；delete_document_cascade 为文档删除功能（无关，保留）。
 - 回归：rag 目录 1217 passed / 22 failed / 55 errors 与 P1 后基线完全一致（全部存量），零新增。
+
+## 2026-10-19 审查 4 项 P2 修复完成（本地提交，待确认推送）
+
+- P2-1 信号量跨事件循环：metadata_llm 背压恢复按事件循环管理（weakref 注册表+宽度变更重建+wait_for 获取超时），宿主机 Python 3.10 无 asyncio.timeout 改用 wait_for。验证：三轮跨 asyncio.run 各 2/2 success（审查复现场景消除）。
+- P2-2 扩展查询丢 leaf：CustomRetriever 扩展多路每路 over-fetch k*2（原 k 条全 parent 时后续 leaf 进不了 RRF 候选池）。验证：ParentFirst 替身（前 5 全 parent+leaf 在第 6）下每路请求 k=10、leaf-late 进结果且 parent 被滤除。
+- P2-3 冷启动混合检索抛异常：hybrid 主融合路 submit 前判 bm25_retriever=None（属性访问 None.invoke 在 submit 行同步抛、不在任何 try 内）；vector_only 兜底分支同判空；"两侧失败"判定把检索器缺位与检索失败区分。验证：bm25=None 混合检索无异常（0 docs 为审核过滤对假 doc_id 的正确行为）；enhanced 路径原有判空守卫确认无此问题。
+- P2-4 模型清单：回填提前返回前独立补 usage.models（已有真值的 Trace 不再缺失清单）；usage.models 改全量「组件×模型」明细（删除每组件代表压缩，同组件多模型全呈现）。验证：替身 store 双场景（新 trace/提前返回）models 均含 embedding+llm 两模型。
+- 存量失败甄别收口（22 项）：环境阻塞转绿 3（quality_gate/reindex/indexer_processing_lineage，连隔离栈 PG 即过）；过期断言挂下轮契约同步（lineage_e2e 8/keywords·级联 metrics、query_router 3/hybrid 权重、table_split 2、long_doc 2/Excel 保真、vector_degraded 2/fail-closed 交互、scorer 3/NLI 降级 UnboundLocalError 属产品健壮性问题单独记录）；其余为本地 PG 无密码环境项。git diff --check 复验无告警。

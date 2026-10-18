@@ -99,14 +99,19 @@ class CustomRetriever:
             all_docs: dict[str, tuple] = {}  # chunk_id -> (doc, score, query)
             succeeded = 0  # 成功执行的 query 数（embedding 故障时为 0 → 向量路降级）
             for qi, q in enumerate(queries_to_search):
+                from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                # P2-2（审查 2026-10-19）：parent 过滤开启时每路 over-fetch
+                # k*2——RRF 入池前剔除 parent，若只取 k 条且前 k 全为 parent，
+                # 排在后面的答案 leaf 会完全进不了候选池。
+                fetch_k = (k * 2) if RAG_FILTER_PARENT_RECALL else k
                 try:
                     if filter_dict:
                         batch = self.vectordb.similarity_search_with_score(
-                            q, k=k, filter=filter_dict,
+                            q, k=fetch_k, filter=filter_dict,
                         )
                     else:
                         batch = self.vectordb.similarity_search_with_score(
-                            q, k=k,
+                            q, k=fetch_k,
                         )
                     succeeded += 1
                 except Exception as e:
