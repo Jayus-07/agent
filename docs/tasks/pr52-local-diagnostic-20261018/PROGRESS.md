@@ -146,3 +146,15 @@
 - T0：py_compile、预算相关定向Ruff、测试文件及线程池完整Ruff、diff检查通过。完整reranker历史风格项不作为本轮新增改动处理。运行代码新增主要为评分调度及截止保护，测试增长用于并发/计费边界；未重构整个Runtime。
 - Artifact：D:/tmp/pr52-rerank-fix-20261019/artifacts/，含真实PG免费验证及清理日志。一次性PG已停止销毁；没有新付费评测run，旧run的6笔needs_review未重新结算或清除。
 - 风险与停止：修复能消除三次评分串行叠加，不能保证Provider的单次慢响应消失；RC-024原问题超时及修复后真实质量仍UNVERIFIED。没有再次真实Smoke，因此PR继续Draft、MERGE_READY=false。最终免费CI与提交见交付记录。
+
+
+## 唯一真实诊断与后续免费修复（2026-10-19）
+
+- 用户授权一次新真实验收后，冻结代码 dc85b4b85406b0987793616c7ff954d9f67015d2；main仍为b4341381a022839108029f862805b02e1a980fb6。唯一run：rag-local-pr52-20261019-dc85b4b-03。
+- 唯一Compose project rag-eval-20261019-pr52-final：独立Postgres/价格只读副本/Redis/evaluator，4CPU容器上限合计约5.8GiB；Docker宿主12CPU/约7.68GiB且有共享服务，不宣称独占4C8G生产等价。16fixture全新索引213向量，无旧业务/账本；模型未变，Draft v3/pinned/a9e9f66220217388，总查询数3含原问题，Active v1未改。
+- 官方8/8 pass、strict gate PASS，但RC001/005/021/024重排失败被legacy chunk_hit判通过。Top1=1仅覆盖3/7个适用非拒答案例；另有1个正常拒答。RC024只有变体2完成23分，原问题与变体1超时，不能验收；RC031三路各29候选、87分完成，安全事故变体将QC/员工手册噪声抬入Top8，P@5=.3333、Noise=.6667。
+- 共117条已记录尝试，104552已知账本tokens，已知CNY.112194；115settled、2needs_review，未决预占.074702。UUID 014d5fa5-9e3d-46ed-9b48-85700589af93、c362e107-a835-4bee-a296-2e1767ee3531（RC024 Rerank）；费用/token最终UNVERIFIED。Embedding SDK内部重试没有逐HTTP计数证据，不将117宣称物理请求精确值。历史run账目未混入。
+- 用户“继续”后仅实施两个证据支持的修复：普通增强/原始混合召回Future等待受同一deadline约束，保留就绪分支、取消排队任务、禁止预算耗尽后重新fallback；全路径超时无证据明确失败。完整full评测遇rerank error时case fail并记录execution_complete=false，保留原质量指标与全部case，不改变Golden/阈值/指标定义。显式消融不套用此阻断。
+- T1：61 passed（2既有collection warning），覆盖实际迟到线程不延长调用方等待、部分结果、全路径超时不fallback、Provider原异常、无预算旁路、重排失败阻断以及既有三查询并发测试。另40 passed覆盖原deadline、计费、fixture完整性与Prompt Lock。
+- T2：同一隔离PG的独立免费数据库agent_budget_regression_test连接真实PostgresQuotaStore+Fake HTTP，5 passed /12.33s（2既有弃用warning），验证独立结算、跨身份、未知收费占额、迟到结算、预占后过期，真实Provider调用0；未改付费run账本。T0 py_compile、定向Ruff和diff检查通过。
+- Artifact根 D:/tmp/rag-eval-20261019-pr52-final/artifacts/：FINAL_REVIEW.md、diagnostic-summary.json、per-query-scores.jsonl、官方eval_runs目录、完整scope-ledger及脱敏资源/日志。免费修复后无真实Provider验收；变体噪声与2笔账目仍阻塞，不再付费、不合并、不发布Prompt。PR保持Draft，MERGE_READY=false。

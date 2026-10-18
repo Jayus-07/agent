@@ -1096,6 +1096,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     else:
                         passed = chunk_hit and not dept_leak
 
+                # 完整链路重排失败时保留原指标，但不得按召回命中判通过。
+                incomplete_rerank = ablation_mode == "full" and any(
+                    sp["type"] == "rerank" and sp["status"] == "error"
+                    for sp in trace_spans
+                )
+                if incomplete_rerank:
+                    passed = False
+
                 _tok_after = _get_token_usage()
                 _case_prompt_tokens = _tok_after["prompt_tokens"] - _tok_before["prompt_tokens"]
                 _case_completion_tokens = _tok_after["completion_tokens"] - _tok_before["completion_tokens"]
@@ -1132,6 +1140,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "details": details,
                         "pipeline": {**pipeline_info, "gate_mode": gate, "query_type": case.metadata.get("query_type", "")},
                         "stage_metrics": stage_metrics,
+                        "execution_complete": not incomplete_rerank,
+                        "incomplete_reason": "rerank_failed" if incomplete_rerank else None,
                         "generated_answer": _generated_answer or None,
                         "rejection": {
                             "confidence": confidence,

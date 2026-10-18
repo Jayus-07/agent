@@ -1,6 +1,10 @@
 import json
 import threading
 
+from backend.rag.retrieval_budget import (
+    RetrievalDeadlineExceeded, await_retrieval, current_budget,
+)
+
 from backend.shared.logger import logger
 
 def _record_request_retrieval_counts(
@@ -432,11 +436,17 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             
             return docs
             
+        except RetrievalDeadlineExceeded:
+            raise
         except ImportError as e:
             logger.warning(f"[hybrid_retrieve] Enhanced retrieval import failed ({e}), fallback to original")
         except Exception as e:
             logger.warning(f"[hybrid_retrieve] Enhanced retrieval error ({e}), falling back to original")
     
+    budget = current_budget()
+    if budget is not None and budget.expired():
+        raise RetrievalDeadlineExceeded("原始召回启动前共享预算耗尽")
+
     # Fallback: 原始 hybrid 逻辑
     from backend.observability.tracer import SpanName, trace_collector
     span = trace_collector.start_span("hybrid_retrieval", name=SpanName.HYBRID_RETRIEVAL, parent_id=None)
@@ -456,10 +466,10 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         from backend.infra.thread_pools import submit_rag_task
         failures: dict[str, BaseException] = {}
         try:
-            vector_docs = submit_rag_task(
+            vector_docs = await_retrieval(submit_rag_task(
                 "inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
                 metadata_filter=metadata_filter, expanded_queries=expanded_queries,
-            ).result()
+            ))
         except Exception as e:
             # embedding 模型与索引不一致 → 禁止降级 BM25（新向量查旧索引是噪声）
             from backend.rag.vectorstore.pgvector_store import (
@@ -482,8 +492,13 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         bm25_docs: list = []
         if not vector_docs:
             # 向量空召回/失败 → BM25 兜底召回
+            budget = current_budget()
+            if budget is not None and budget.expired():
+                raise RetrievalDeadlineExceeded("向量召回后共享预算耗尽")
             try:
-                bm25_docs = bm25_retriever.invoke(query)
+                bm25_docs = await_retrieval(submit_rag_task(
+                    "inner", bm25_retriever.invoke, query,
+                ))
                 bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
                 if doc_ids:
                     bm25_docs = [d for d in bm25_docs
@@ -569,7 +584,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
                          metadata_filter=metadata_filter, expanded_queries=expanded_queries)
     bf = submit_rag_task("inner", bm25_retriever.invoke, query)
     try:
-        vector_docs = vf.result()
+        vector_docs = await_retrieval(vf)
     except Exception as e:
         # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛。
         # 例外：索引/运行时 embedding 不一致是门禁信号，必须上抛（2026-09-22）。
@@ -586,7 +601,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["vector"] = e
         vector_docs = []
     try:
-        bm25_docs = bf.result()
+        bm25_docs = await_retrieval(bf)
     except Exception as e:
         logger.warning(
             f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",

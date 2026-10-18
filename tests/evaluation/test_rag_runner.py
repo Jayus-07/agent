@@ -169,3 +169,36 @@ def test_doc_probe_usage_belongs_to_current_case_even_on_timeout(
     assert seen["probe-success"][0] != seen["probe-timeout"][0]
     assert by_id["probe-timeout"].status == "error"
     assert by_id["probe-timeout"].error_stage == "retrieval"
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_full_runner_cannot_pass_when_rerank_failed(tmp_path, monkeypatch, failed):
+    """同样命中的候选，重排失败必须阻止完整链路验收。"""
+    from langchain_core.documents import Document
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    retriever = MagicMock()
+
+    def invoke(question):
+        span = trace_collector.start_span("rerank", name="Fake")
+        trace_collector.end_span(span, status="error" if failed else "success")
+        return [Document(page_content="采购证据", metadata={
+            "doc_id": "supplier", "chunk_id": "supplier_1",
+            "rerank_score": 0.9, "kb_id": "rag_eval_kb",
+        })]
+
+    retriever.invoke.side_effect = invoke
+    case = TestCase(id="rerank-contract", question="采购证据", module="rag",
+                    expected={"relevant_docs": ["supplier"]},
+                    metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"})
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        results = _run_rag([case], resume=False)
+    assert len(results) == 1
+    result = results[0]
+    assert result.status == ("fail" if failed else "pass")
+    assert result.actual["execution_complete"] is not failed
+    assert result.metrics["recall@5"] == 1.0
