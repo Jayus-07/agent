@@ -313,6 +313,10 @@ def test_eval_context_restores_after_exception_or_cancellation(
 
     from backend.core.request_context import scoped_tool_identity
     from backend.infra.llm import budget as budget_mod
+    from backend.infra.llm.proxy import (
+        _thread_local_user_id,
+        scoped_current_user_id,
+    )
     from backend.observability.llm_usage_store import current_usage_attribution
 
     error = asyncio.CancelledError() if cancelled else RuntimeError("eval failed")
@@ -320,21 +324,24 @@ def test_eval_context_restores_after_exception_or_cancellation(
     def evaluate_cases(_config, _run_id, _started_at):
         assert current_usage_attribution()["tenant_id"] == "eval"
         assert budget_mod.current_request_budget().tenant_id == "eval"
+        assert _thread_local_user_id() == "eval-user"
         raise error
 
     service, config, _ = _prepare_stubbed_evaluation(
         monkeypatch, f"eval-{cancelled}", evaluate_cases,
     )
-    with scoped_tool_identity(user_id="caller", tenant_id="tenant-prod"):
-        with budget_mod.scoped_request_budget(
-            "caller:request", user_id="caller", tenant_id="tenant-prod",
-        ):
-            expected = asyncio.CancelledError if cancelled else RuntimeError
-            with pytest.raises(expected):
-                service._evaluate(config)
-            assert current_usage_attribution()["tenant_id"] == "tenant-prod"
-            assert current_usage_attribution()["user_id"] == "caller"
-            assert budget_mod.current_request_budget().tenant_id == "tenant-prod"
+    with scoped_current_user_id("caller"):
+        with scoped_tool_identity(user_id="caller", tenant_id="tenant-prod"):
+            with budget_mod.scoped_request_budget(
+                "caller:request", user_id="caller", tenant_id="tenant-prod",
+            ):
+                expected = asyncio.CancelledError if cancelled else RuntimeError
+                with pytest.raises(expected):
+                    service._evaluate(config)
+                assert _thread_local_user_id() == "caller"
+                assert current_usage_attribution()["tenant_id"] == "tenant-prod"
+                assert current_usage_attribution()["user_id"] == "caller"
+                assert budget_mod.current_request_budget().tenant_id == "tenant-prod"
 
 
 def test_consecutive_evaluations_and_following_request_do_not_leak(monkeypatch):
@@ -344,6 +351,10 @@ def test_consecutive_evaluations_and_following_request_do_not_leak(monkeypatch):
     from backend.core.request_context import scoped_tool_identity
     from backend.evaluation.run_guards import run_judge
     from backend.infra.llm import budget as budget_mod
+    from backend.infra.llm.proxy import (
+        _thread_local_user_id,
+        scoped_current_user_id,
+    )
     from backend.observability.llm_usage_store import current_usage_attribution
 
     monkeypatch.setattr(budget_mod, "_config_mode", lambda: "observe")
@@ -355,6 +366,7 @@ def test_consecutive_evaluations_and_following_request_do_not_leak(monkeypatch):
             state = budget_mod.current_request_budget()
             return (
                 attr["tenant_id"], attr["user_id"],
+                _thread_local_user_id(),
                 state.request_id if hasattr(state, "request_id") else
                 budget_mod._current_request_id.get(),
                 threading.get_ident(),
@@ -363,23 +375,27 @@ def test_consecutive_evaluations_and_following_request_do_not_leak(monkeypatch):
         observations.append(run_judge(inspect_worker))
         return SimpleNamespace(metadata={})
 
-    with scoped_tool_identity(user_id="caller", tenant_id="tenant-prod"):
-        with budget_mod.scoped_request_budget(
-            "caller:request", user_id="caller", tenant_id="tenant-prod",
-        ):
-            for run_id in ("eval-consecutive-1", "eval-consecutive-2"):
-                service, config, _ = _prepare_stubbed_evaluation(
-                    monkeypatch, run_id, evaluate_cases,
-                )
-                service._evaluate(config)
-                assert current_usage_attribution()["tenant_id"] == "tenant-prod"
-                assert current_usage_attribution()["user_id"] == "caller"
-                assert budget_mod.current_request_budget().tenant_id == "tenant-prod"
+    with scoped_current_user_id("caller"):
+        with scoped_tool_identity(user_id="caller", tenant_id="tenant-prod"):
+            with budget_mod.scoped_request_budget(
+                "caller:request", user_id="caller", tenant_id="tenant-prod",
+            ):
+                for run_id in ("eval-consecutive-1", "eval-consecutive-2"):
+                    service, config, _ = _prepare_stubbed_evaluation(
+                        monkeypatch, run_id, evaluate_cases,
+                    )
+                    service._evaluate(config)
+                    assert _thread_local_user_id() == "caller"
+                    assert current_usage_attribution()["tenant_id"] == "tenant-prod"
+                    assert current_usage_attribution()["user_id"] == "caller"
+                    assert budget_mod.current_request_budget().tenant_id == "tenant-prod"
 
-    assert observations[0][:2] == observations[1][:2] == ("eval", "eval-user")
-    assert observations[0][2] == "eval:eval-consecutive-1"
-    assert observations[1][2] == "eval:eval-consecutive-2"
-    assert observations[0][3] == observations[1][3]
+    assert observations[0][:3] == observations[1][:3] == (
+        "eval", "eval-user", "eval-user",
+    )
+    assert observations[0][3] == "eval:eval-consecutive-1"
+    assert observations[1][3] == "eval:eval-consecutive-2"
+    assert observations[0][4] == observations[1][4]
 
 
 def test_budget_settlement_and_release_match_usage_attribution(monkeypatch):
@@ -663,6 +679,69 @@ def test_async_provider_cancellation_marks_reservation_for_review(monkeypatch):
     assert calls == [
         "reserve", ("review", "call_cancelled_possibly_billed"),
     ]
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+def test_multi_query_cancellation_after_reserve_releases_before_provider(
+    monkeypatch, is_async,
+):
+    """配额预占慢于 deadline 时，返回后释放预占且不启动 Provider。"""
+    import asyncio
+    import threading
+
+    from backend.infra.llm.resolved_model import (
+        ResolvedModelContext,
+        reset_current_resolved_model,
+        set_current_resolved_model,
+    )
+
+    calls = []
+    cancel_event = threading.Event()
+
+    class _Breaker:
+        def call(self, function, *args, **kwargs):
+            calls.append("provider")
+            return function(*args, **kwargs)
+
+        async def acall(self, function, *args, **kwargs):
+            calls.append("provider")
+            result = function(*args, **kwargs)
+            return await result if hasattr(result, "__await__") else result
+
+    def _reserve(*_args, **_kwargs):
+        calls.append("reserve")
+        cancel_event.set()
+
+    monkeypatch.setattr(
+        proxy_mod, "_breaker_for_resolved_model", lambda *_args: _Breaker(),
+    )
+    monkeypatch.setattr(proxy_mod, "_role_max_retries", lambda _role: 0)
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.reserve_model_call", _reserve,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.release_model_reservation",
+        lambda: calls.append("release"),
+    )
+
+    set_current_resolved_model(ResolvedModelContext(
+        model_id="multi-query-test",
+        provider="test-provider",
+        role="multi_query",
+    ))
+    cancellation_token = proxy_mod._role_cancellation_event.set(cancel_event)
+    try:
+        if is_async:
+            with pytest.raises(proxy_mod._RoleCallCancelled):
+                asyncio.run(proxy_mod._acall_with_resilience(lambda: "never"))
+        else:
+            with pytest.raises(proxy_mod._RoleCallCancelled):
+                proxy_mod._call_with_resilience(lambda: "never")
+    finally:
+        proxy_mod._role_cancellation_event.reset(cancellation_token)
+        reset_current_resolved_model()
+
+    assert calls == ["reserve", "release"]
 
 
 @pytest.mark.parametrize(

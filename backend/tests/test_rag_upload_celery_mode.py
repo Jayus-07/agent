@@ -6,6 +6,7 @@
 - _run_index_background 的 Celery 分流与 broker 失败回退
 """
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -200,8 +201,8 @@ class TestExecuteIndexTaskImpl:
                             lambda *a, **kw: {"terminal": "done",
                                               "trace_id": "t-actor",
                                               "doc": {"doc_id": "d-actor"}})
-        monkeypatch.setattr(it, "_get_index_actor_id",
-                            lambda upload_id: "actor-42")
+        monkeypatch.setattr(it, "_get_index_identity",
+                            lambda upload_id: ("actor-42", "tenant-9"))
         settle = MagicMock()
         monkeypatch.setattr(ru, "_settle_index_result", settle)
 
@@ -209,6 +210,38 @@ class TestExecuteIndexTaskImpl:
 
         assert out["status"] == "done"
         assert settle.call_args.kwargs["actor_id"] == "actor-42"
+
+    def test_worker_binds_identity_and_budget_from_run_record(self, monkeypatch):
+        """Worker 模型用量和预占必须归属任务记录中的用户与租户。"""
+        from backend.infra.llm import budget
+
+        captured = {}
+        monkeypatch.setattr(ru, "_write_progress_redis", lambda *a, **kw: None)
+        monkeypatch.setattr(it, "_get_index_identity",
+                            lambda upload_id: ("actor-42", "tenant-9"))
+        monkeypatch.setattr(budget, "_config_mode", lambda: "enforce")
+
+        def index_with_usage_context(*args, **kwargs):
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+            )
+
+            captured["attribution"] = current_usage_attribution()
+            captured["budget"] = budget.current_request_budget()
+            return {"terminal": "done", "trace_id": "t-identity",
+                    "doc": {"doc_id": "d-identity"}}
+
+        monkeypatch.setattr(ru, "_do_index_sync", index_with_usage_context)
+        monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
+
+        out = it.execute_index_task_impl("upload-identity", "/docs/a.pdf", "a.pdf")
+
+        assert out["status"] == "done"
+        assert captured["attribution"]["user_id"] == "actor-42"
+        assert captured["attribution"]["tenant_id"] == "tenant-9"
+        assert captured["budget"].user_id == "actor-42"
+        assert captured["budget"].tenant_id == "tenant-9"
+        assert budget.current_request_budget() is None
 
     def test_success_returns_terminal(self, monkeypatch):
         redis_writes = []
@@ -320,6 +353,153 @@ class TestExecuteIndexTaskImpl:
 # ═══════════════════════════════════════════════════
 
 class TestRunIndexBackgroundDispatch:
+
+    def test_dispatch_records_celery_id_for_index_run(self, monkeypatch):
+        from backend.rag.indexing import index_run_store_pg
+        from backend.services import task_service
+        from backend.tasks import index_task_runtime, queue_router
+
+        calls = []
+
+        class _FakeIndexRunStore:
+            def create_run(self, **kwargs):
+                calls.append(("create", kwargs))
+
+            def set_celery_task_id(self, upload_id, celery_task_id):
+                calls.append(("record", upload_id, celery_task_id))
+                return {"upload_id": upload_id,
+                        "celery_task_id": celery_task_id}
+
+        monkeypatch.setattr(
+            ru, "_get_registry",
+            lambda: SimpleNamespace(get_by_path=lambda _path: None))
+        monkeypatch.setattr(index_run_store_pg, "get_index_run_store",
+                            lambda: _FakeIndexRunStore())
+        monkeypatch.setattr(index_task_runtime, "create_index_task_record",
+                            lambda *_args, **_kwargs: "db-task-1")
+        monkeypatch.setattr(task_service, "mark_queued", MagicMock())
+        monkeypatch.setattr(
+            queue_router, "resolve_for_workflow",
+            lambda _workflow: SimpleNamespace(physical_queue="rag_index"))
+        monkeypatch.setattr(queue_router, "log_route", MagicMock())
+
+        def _apply_async(**kwargs):
+            calls.append(("enqueue", kwargs))
+            return SimpleNamespace(id="celery-task-1")
+
+        monkeypatch.setattr(it.execute_index_task, "apply_async", _apply_async)
+        result = ru._dispatch_index_to_celery(
+            upload_id="upload-1", filepath="/docs/a.pdf", filename="a.pdf",
+            generation="generation-1", staging_path="/staging/a.pdf",
+            actor_id="user-1", tenant_id="tenant-1")
+
+        assert result["celery_task_id"] == "celery-task-1"
+        assert [call[0] for call in calls] == ["create", "enqueue", "record"]
+        assert calls[2] == ("record", "upload-1", "celery-task-1")
+
+    def test_dispatch_does_not_redeliver_when_tracking_write_fails(
+            self, monkeypatch):
+        from backend.rag.indexing import index_run_store_pg
+        from backend.services import task_service
+        from backend.tasks import index_task_runtime, queue_router
+
+        enqueued = []
+
+        class _FailingIndexRunStore:
+            def create_run(self, **_kwargs):
+                pass
+
+            def set_celery_task_id(self, _upload_id, _celery_task_id):
+                raise RuntimeError("isolated tracking write failure")
+
+        monkeypatch.setattr(
+            ru, "_get_registry",
+            lambda: SimpleNamespace(get_by_path=lambda _path: None))
+        monkeypatch.setattr(index_run_store_pg, "get_index_run_store",
+                            lambda: _FailingIndexRunStore())
+        monkeypatch.setattr(index_task_runtime, "create_index_task_record",
+                            lambda *_args, **_kwargs: "db-task-1")
+        monkeypatch.setattr(task_service, "mark_queued", MagicMock())
+        monkeypatch.setattr(
+            queue_router, "resolve_for_workflow",
+            lambda _workflow: SimpleNamespace(physical_queue="rag_index"))
+        monkeypatch.setattr(queue_router, "log_route", MagicMock())
+
+        def _apply_async(**_kwargs):
+            enqueued.append("celery-task-1")
+            return SimpleNamespace(id="celery-task-1")
+
+        monkeypatch.setattr(it.execute_index_task, "apply_async", _apply_async)
+        result = ru._dispatch_index_to_celery(
+            upload_id="upload-1", filepath="/docs/a.pdf", filename="a.pdf",
+            generation="generation-1", staging_path="/staging/a.pdf",
+            actor_id="user-1", tenant_id="tenant-1")
+
+        assert result["queued"] is True
+        assert result["celery_task_id"] == "celery-task-1"
+        assert enqueued == ["celery-task-1"]
+
+    def test_execute_index_task_passes_worker_hostname(self, monkeypatch):
+        captured = {}
+
+        def _fake_impl(*_args, **kwargs):
+            captured.update(kwargs)
+            return {"status": "done"}
+
+        monkeypatch.setattr(it, "execute_index_task_impl", _fake_impl)
+        task = it.execute_index_task
+        task.push_request(hostname="rag-index-worker@node-1", retries=0)
+        try:
+            result = task.run("upload-1", "/docs/a.pdf", "a.pdf")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "done"
+        assert captured["worker"] == "rag-index-worker@node-1"
+
+    def test_reindex_task_passes_worker_hostname(self, monkeypatch):
+        captured = {}
+
+        def _fake_impl(*_args, **kwargs):
+            captured.update(kwargs)
+            return {"status": "done"}
+
+        monkeypatch.setattr(it, "reindex_document_task_impl", _fake_impl)
+        task = it.reindex_document_task
+        task.push_request(hostname="rag-index-worker@node-2", retries=0)
+        try:
+            result = task.run("doc-1")
+        finally:
+            task.pop_request()
+
+        assert result["status"] == "done"
+        assert captured["worker"] == "rag-index-worker@node-2"
+
+    def test_runtime_passes_worker_hostname_to_lease(self, monkeypatch):
+        from backend.models.task import TaskStatus
+        from backend.services import task_service, task_state
+        from backend.tasks import index_task_runtime
+
+        class _FakeTaskManager:
+            @staticmethod
+            def requeue_failed(_task_id):
+                return SimpleNamespace(status=TaskStatus.PENDING)
+
+        captured = {}
+
+        def _acquire(task_id, *, worker):
+            captured.update(task_id=task_id, worker=worker)
+            return None
+
+        monkeypatch.setattr(task_state, "TaskManager", _FakeTaskManager)
+        monkeypatch.setattr(task_service, "try_acquire_lease", _acquire)
+        result = index_task_runtime.run_with_task_state(
+            "db-task-1", "upload-1", lambda: {"status": "done"},
+            worker="rag-index-worker@node-1")
+
+        assert result["error"] == "running_elsewhere"
+        assert captured == {"task_id": "db-task-1",
+                            "worker": "rag-index-worker@node-1"}
 
     @pytest.mark.asyncio
     async def test_celery_dispatch_enqueues_and_returns(self, monkeypatch):

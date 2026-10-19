@@ -160,6 +160,9 @@ def test_strict_bm25_snapshot_distinguishes_missing_corrupt_and_empty(tmp_path):
     with pytest.raises(RuntimeError):
         store.load_docs_strict()
     (tmp_path / "index.pkl").write_bytes(pickle.dumps({"docs": []}))
+    with pytest.raises(RuntimeError):
+        store.load_docs_strict()
+    store._write_checksum(tmp_path / "index.pkl", (tmp_path / "index.pkl").read_bytes())
     assert store.load_docs_strict() == []
     (tmp_path / "index.pkl.sha256").write_text("bad-checksum")
     with pytest.raises(RuntimeError):

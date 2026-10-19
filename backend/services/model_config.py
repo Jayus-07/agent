@@ -123,7 +123,7 @@ def _parse_model_price(
         return None
 
     currency = str(
-        payload.get("priceCurrency") or payload.get("price_currency") or "USD"
+        payload.get("priceCurrency") or payload.get("price_currency") or "CNY"
     ).strip().upper()
     if currency not in {"CNY", "USD"}:
         raise ValueError(f"不支持的货币单位：{currency}（仅支持 CNY / USD）")
@@ -145,7 +145,7 @@ async def _apply_model_pricing(
     output_price: Decimal | None,
     operator: str,
     cached_input_price: Decimal | None = None,
-    price_currency: str = "USD",
+    price_currency: str = "CNY",
 ) -> None:
     """把供应商页录入的单价落库（2026-09-22 拍板：登记即生效）。
 
@@ -611,6 +611,10 @@ class ModelConfigService:
         if failure_policy not in model_roles.FAILURE_POLICIES:
             raise ValueError(
                 f"failurePolicy 必须是 {model_roles.FAILURE_POLICIES} 之一"
+            )
+        if role == "multi_query" and failure_policy not in {"skip", "fallback"}:
+            raise ValueError(
+                "multi_query 角色仅支持 skip 或 fallback 策略"
             )
         # embedding 禁止 fallback：静默换语义空间会让新向量查旧索引
         if role == "embedding" and failure_policy == "fallback":

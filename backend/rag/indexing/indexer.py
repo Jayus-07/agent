@@ -61,6 +61,37 @@ _DOC_LEVEL_BODY_MIN_CHARS = 2000
 _EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
 
 
+def _select_vector_chunks(chunks: list[Document]) -> list[Document]:
+    """过滤只用于上下文恢复、不应独立向量化的 Parent。"""
+    return [chunk for chunk in chunks if chunk.metadata.get("vectorize") is not False]
+
+
+def _question_candidate_indexes(chunks: list[Document]) -> list[int]:
+    """合同模拟问题只选择较长 Leaf；Parent 与短条款不产生重复问题。"""
+    is_contract = any(
+        (chunk.metadata or {}).get("chunk_type") == "contract_context"
+        for chunk in chunks
+    )
+    if not is_contract:
+        return list(range(len(chunks)))
+
+    minimum_tokens = 80
+    candidates = []
+    for index, chunk in enumerate(chunks):
+        metadata = chunk.metadata or {}
+        try:
+            token_count = int(metadata.get("chunk_tokens") or 0)
+        except (TypeError, ValueError):
+            token_count = 0
+        if (
+            metadata.get("granularity") == "leaf"
+            and metadata.get("vectorize") is not False
+            and token_count >= minimum_tokens
+        ):
+            candidates.append(index)
+    return candidates
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -115,6 +146,14 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
         return full_text[:DOC_LEVEL_TEXT_MAX_CHARS]
     body_budget = max(DOC_LEVEL_TEXT_MAX_CHARS - len(header), _DOC_LEVEL_BODY_MIN_CHARS)
     return header + "\n\n" + full_text[:body_budget]
+
+
+def _serialize_registry_keywords(doc_meta: dict) -> str:
+    """把统一元数据关键词写回历史 registry 字段，优先新字段并兼容旧名。"""
+    values = doc_meta.get("doc_keywords")
+    if values is None:
+        values = doc_meta.get("keywords") or []
+    return json.dumps(values, ensure_ascii=False)
 
 
 def _mask_index_text_for_pii(text: str, doc_type: str, chunk_filter) -> str:
@@ -173,10 +212,6 @@ def _processing_config_snapshot() -> dict[str, Any]:
     ocr_identity = get_ocr_model_identity()
     return {
         "model_roles": role_snapshot,
-        "metadata_cascade_enabled": bool(rag_cfg.METADATA_CASCADE_ENABLED),
-        "metadata_classifier_model_path": str(
-            rag_cfg.METADATA_CLASSIFIER_MODEL_PATH or ""
-        ),
         # OCR 可能来自数据库专项/角色配置；快照必须使用实际运行时身份，
         # 不能再把旧 env 默认值写成“本轮使用的模型”。
         "ocr_provider": str(ocr_identity.provider or ""),
@@ -276,6 +311,48 @@ def _filter_index_chunks(
 
     kept_chunks = []
     filtered_details: list[dict] = []
+
+    def _mask_structured_table_metadata(chunk, metadata: dict) -> None:
+        """Parent/Leaf 的表格结构与正文一起脱敏，保留 JSON 矩阵形状。"""
+        fields = ("table_rows_json", "table_structures_json")
+        if not any(metadata.get(key) for key in fields):
+            return
+
+        should_mask = (
+            chunk_filter.enable_pii or chunk_filter.financial_pii_force
+        )
+        if not should_mask:
+            return
+
+        masked_types: list[str] = []
+        masked_content, content_types = _mask_pii(chunk.page_content)
+        if chunk_filter.financial_pii_force:
+            masked_content, financial_types = _mask_financial_pii(masked_content)
+            content_types.extend(financial_types)
+        if content_types:
+            chunk.page_content = masked_content
+            masked_types.extend(content_types)
+
+        for key in fields:
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            masked_value, found_types = _mask_pii(value)
+            if chunk_filter.financial_pii_force:
+                masked_value, financial_types = _mask_financial_pii(masked_value)
+                found_types.extend(financial_types)
+            if found_types:
+                metadata[key] = masked_value
+                masked_types.extend(found_types)
+
+        if masked_types:
+            existing = metadata.get("pii_masked") or []
+            if isinstance(existing, str):
+                existing = [existing]
+            metadata["pii_masked"] = list(dict.fromkeys(
+                [*existing, *masked_types],
+            ))
+
     for chunk in chunks:
         metadata = chunk.metadata or {}
         if doc_type:
@@ -290,11 +367,23 @@ def _filter_index_chunks(
             and chunk_id in referenced_parent_ids
             and (chunk.page_content or "").strip()
         )
-        if keep_referenced_parent:
-            # Parent 只供命中 Leaf 扩展上下文；不可因短文本过滤后留下悬空引用。
-            metadata["filter_status"] = "kept_referenced_parent"
+        keep_short_source_leaf = bool(
+            not ok
+            and reason == "too_short"
+            and metadata.get("granularity") == "leaf"
+            and (chunk.page_content or "").strip()
+        )
+        if keep_referenced_parent or keep_short_source_leaf:
+            # 保留有引用关系的 Parent 与有源文身份的短 Leaf，并继续执行脱敏。
+            if keep_referenced_parent:
+                metadata["filter_status"] = "kept_referenced_parent"
+                metadata["parent_filter_override_reason"] = reason
+            else:
+                # 短 Leaf 可能是有效法规编号、条款或状态值；源文完整性优先于
+                # 通用长度阈值，质量记录保留此次覆盖原因以便追踪。
+                metadata["filter_status"] = "kept_source_leaf"
+                metadata["source_leaf_filter_override_reason"] = reason
             metadata["filter_reason"] = ""
-            metadata["parent_filter_override_reason"] = reason
             is_financial = doc_type == "financial" or is_table_chunk(
                 metadata.get("chunk_type")
             )
@@ -320,6 +409,7 @@ def _filter_index_chunks(
                 chunk.page_content = ChunkFilter.apply_pii_mask(
                     chunk.page_content
                 )
+            _mask_structured_table_metadata(chunk, metadata)
             kept_chunks.append(chunk)
             continue
 
@@ -327,9 +417,270 @@ def _filter_index_chunks(
             "chunk_index": metadata.get("chunk_index", len(kept_chunks)),
             "reason": reason,
             "preview": chunk.page_content[:80],
+            # P2 收口（2026-10-19）：原文全文供 coverage_audit 豁免对照——
+            # 被显式规则过滤的叶子是合法排除而非静默丢失（Structure 粒度下
+            # low_chinese_ratio 叶子独立成 chunk，v3 路由变更后暴露假 gap）
+            "content": chunk.page_content,
         })
         logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
     return kept_chunks, filtered_details
+
+
+PREPAID_INTEGRITY_ISSUE_PREFIX = "quality_anomaly:prepaid_integrity"
+
+_COVERAGE_AUDIT_FIELDS = {
+    "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
+}
+
+
+def _coverage_quality_metrics(coverage: dict) -> dict:
+    """覆盖审计 → 质量门禁指标（付费前预检与付费后门禁同口径）。
+
+    只输出结构化指标，不带 uncovered 正文样本（Trace 不落未覆盖正文）。
+    """
+    coverage_error = bool(
+        coverage.get("error") or not _COVERAGE_AUDIT_FIELDS.issubset(coverage)
+    )
+    try:
+        leaf_total = int(coverage.get("leaf_total") or 0)
+        audited_count = int(coverage.get("audited_leaf_count") or 0)
+        uncovered_count = int(coverage.get("uncovered_count") or 0)
+        if (
+            leaf_total < 0
+            or audited_count < 0
+            or uncovered_count < 0
+            or audited_count > leaf_total
+            or uncovered_count > audited_count
+            or (audited_count < leaf_total and coverage.get("sampled") is not True)
+            or not isinstance(coverage.get("sampled"), bool)
+        ):
+            coverage_error = True
+    except (TypeError, ValueError):
+        leaf_total = audited_count = uncovered_count = 0
+        coverage_error = True
+    return {
+        "coverage_sampled": bool(coverage.get("sampled")),
+        "coverage_leaf_total": leaf_total,
+        "coverage_audited_leaf_count": audited_count,
+        "coverage_uncovered_count": uncovered_count,
+        "coverage_audit_error": coverage_error,
+        "coverage_issue": (
+            "coverage_audit_failed" if coverage_error
+            else "coverage_gap" if uncovered_count > 0
+            else ""
+        ),
+    }
+
+
+def _enforce_prepaid_content_integrity(
+    indexer,
+    qc: dict,
+    chunks: list,
+    path_id: str,
+    doc_meta: dict,
+    *,
+    doc_id: str,
+    kb_id: str,
+    file_path: str,
+    file_size: int,
+    file_hash: str,
+    filtered_details: list[dict] | None = None,
+    truncated: bool = False,
+) -> dict | None:
+    """付费前免费完整性预检（P0-E，2026-10-18）。
+
+    解析 / 清洗 / 切分 / 过滤环节若已确定内容缺失，必须在任何付费调用
+    （元数据 LLM、embedding）之前失败。三者全部离线可算：
+      - coverage_audit：归一化 AST → 过滤后最终 Leaf（覆盖缺口）；
+      - audit_chunk_integrity：Leaf/Parent 身份与引用契约；
+      - cleaning_coverage_audit：Raw AST → 清洗输出（正文是否被清空）。
+    失败语义与既有质量门禁一致（ValueError + quality_issues 留痕），
+    不新增价格/预算/账本体系；付费后与写库前的门禁原样保留。
+    """
+    from backend.rag.preprocessing.chunking import coverage_audit
+    from backend.rag.preprocessing.quality_gate import (
+        audit_chunk_integrity,
+        cleaning_coverage_audit,
+    )
+
+    raw_ast = qc.get("raw_ast")
+    if raw_ast is None:
+        return None
+    audit_ast = qc.get("normalized_ast") or raw_ast
+    pii_normalized = any(
+        bool((chunk.metadata or {}).get("pii_masked"))
+        for chunk in chunks
+        if (chunk.metadata or {}).get("granularity") == "leaf"
+    )
+    coverage = coverage_audit(
+        audit_ast, chunks, normalize_pii=pii_normalized,
+        excluded_texts=[
+            d["content"] for d in (filtered_details or []) if d.get("content")
+        ],
+    )
+    qc["coverage"] = coverage
+    chunk_integrity = audit_chunk_integrity(chunks)
+    cleaning = qc.get("cleaning_coverage")
+    if not isinstance(cleaning, dict):
+        cleaning = cleaning_coverage_audit(raw_ast)
+        qc["cleaning_coverage"] = cleaning
+
+    coverage_metrics = _coverage_quality_metrics(coverage)
+    failures: list[str] = []
+    if coverage_metrics["coverage_audit_error"]:
+        failures.append("coverage_audit_failed")
+    elif coverage_metrics["coverage_uncovered_count"] > 0:
+        failures.append("coverage_gap")
+    if int(chunk_integrity.get("valid_leaf_chunk_count") or 0) < 1:
+        failures.append("chunks_present")
+    elif (
+        int(chunk_integrity.get("empty_chunk_count") or 0)
+        or int(chunk_integrity.get("missing_chunk_id_count") or 0)
+        or int(chunk_integrity.get("duplicate_chunk_id_count") or 0)
+    ):
+        failures.append("chunk_identifiers")
+    elif int(chunk_integrity.get("invalid_parent_reference_count") or 0):
+        failures.append("parent_references")
+    if cleaning.get("error"):
+        failures.append("cleaning_audit_failed")
+    elif int(cleaning.get("uncovered_count") or 0) > 0:
+        failures.append("cleaner_content_loss")
+
+    # 复用同一套类型化校验补齐"付费前即可判定"的硬异常（截断 / 表格与 OCR
+    # 资源上限等），避免在预检里再抄一份判据。build_quality_record +
+    # run_typed_validation 都是纯函数、不产生任何外呼。
+    record = None
+    anomalies: list[dict] = []
+    try:
+        from backend.rag.preprocessing.quality_gate import (
+            build_quality_record,
+            hard_anomalies,
+            run_typed_validation,
+        )
+
+        record = build_quality_record(
+            file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+            raw_ast=raw_ast, chunks=chunks,
+            file_size=file_size, file_hash=file_hash or "",
+            doc_type=qc.get("doc_type", ""),
+            strategy_name=qc.get("strategy_name", ""),
+            completeness=qc.get("completeness"),
+            filtered_details=filtered_details,
+            truncated=truncated,
+            ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
+            ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
+            route_decision=qc.get("route_decision"),
+            coverage=coverage,
+            cleaning_coverage=cleaning,
+        )
+        anomalies = run_typed_validation(record, raw_ast)
+        for item in hard_anomalies(anomalies):
+            code = str(item.get("check") or "")
+            if code and code not in failures:
+                failures.append(code)
+    except Exception:  # noqa: BLE001 — 预检校验失败不改变覆盖/身份/清洗判据
+        logger.warning(
+            "[Indexer] 付费前类型化校验构建失败（退化为基础判据）",
+            exc_info=True,
+        )
+    if not failures:
+        return {
+            "coverage": coverage,
+            "chunk_integrity": chunk_integrity,
+            "cleaning_coverage": cleaning,
+        }
+
+    # 失败也要留证：质量记录在付费前就落盘（不产生任何外呼），
+    # 后续付费后门禁不再重复构建记录（本次已抛出）。
+    detail = ",".join(failures)
+    doc_meta["quality_status"] = "failed"
+    _append_quality_issue(
+        doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
+    )
+    quality_score = None
+    quality_metrics = {}
+    try:
+        from backend.rag.preprocessing.quality_gate import (
+            build_quality_record,
+            persist_quality_record,
+            quality_score_metrics,
+            run_typed_validation,
+        )
+
+        if record is None:
+            record = build_quality_record(
+                file_path=file_path, doc_id=doc_id, kb_id=kb_id,
+                raw_ast=raw_ast, chunks=chunks,
+                file_size=file_size, file_hash=file_hash or "",
+                doc_type=qc.get("doc_type", ""),
+                strategy_name=qc.get("strategy_name", ""),
+                completeness=qc.get("completeness"),
+                filtered_details=filtered_details,
+                truncated=truncated,
+                ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
+                ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
+                route_decision=qc.get("route_decision"),
+                coverage=coverage,
+                cleaning_coverage=cleaning,
+            )
+        if not anomalies:
+            anomalies = run_typed_validation(record, raw_ast)
+        quality_metrics = quality_score_metrics(anomalies)
+        quality_score = quality_metrics["quality_score"]
+        doc_meta["quality_score"] = quality_score
+        record["quality_issues"] = doc_meta.get("quality_issues", "")
+        record.setdefault("validation", {})["score"] = quality_score
+        doc_meta["quality_record_path"] = persist_quality_record(record)
+    except Exception:  # noqa: BLE001 — 留证失败不改变失败结论
+        logger.warning(
+            "[Indexer] 付费前完整性预检质量记录落盘失败（不改变失败结论）",
+            exc_info=True,
+        )
+    # Trace 留痕：付费前拦截同样是"质量门禁失败"，必须可在 Trace 详情页看到
+    # （与付费后门禁的 index_quality span 同口径，去掉了未覆盖正文样本）。
+    try:
+        q_span = trace_collector.start_span(
+            "index_quality",
+            parent_id="index_upload",
+            name="Quality record (prepaid)",
+            type="audit",
+            kind=SpanKind.INDEX_PARSE.value,
+            input={
+                "file_path": file_path,
+                "doc_id": doc_id,
+                "coverage": coverage_metrics,
+                "chunk_integrity": chunk_integrity,
+            },
+        )
+        trace_collector.end_span(
+            q_span, status="error",
+            metrics={
+                **quality_metrics,
+                "record_path": doc_meta.get("quality_record_path", ""),
+                **coverage_metrics,
+                **chunk_integrity,
+            },
+        )
+    except Exception:  # noqa: BLE001 — Trace 失败不改变失败结论
+        logger.warning("[Indexer] 付费前预检 Trace 留痕失败", exc_info=True)
+
+    if not getattr(indexer, "candidate_mode", False):
+        registry_fields = {
+            "quality_issues": doc_meta.get("quality_issues", ""),
+            "quality_status": "failed",
+        }
+        if quality_score is not None:
+            registry_fields["quality_score"] = quality_score
+        try:
+            indexer.registry.update_fields(path_id, registry_fields)
+        except Exception:  # noqa: BLE001 — 留痕失败不改变失败结论
+            logger.warning(
+                "[Indexer] 付费前完整性预检留痕写入 registry 失败",
+                exc_info=True,
+            )
+    raise ValueError(
+        f"质量门禁硬异常(付费前预检): {detail}"
+    )
 
 
 class ChunkingEmptyError(Exception):
@@ -349,11 +700,6 @@ class ChunkingEmptyError(Exception):
 
 # 摘要采样：委托共享实现（P1 元数据治理 2026-10-13——超长文档不再只取
 # 头尾 20k 声称代表全文，改为 头+章节目录+分层采样+尾 且标注覆盖范围）
-def _sample_for_summary(text: str) -> str:
-    from backend.rag.preprocessing.summary_sampling import sample_for_summary
-    return sample_for_summary(text)
-
-
 class IncrementalIndexer:
     """增量索引器。
 
@@ -1094,10 +1440,27 @@ class IncrementalIndexer:
                     parser_lineage[0], status="success",
                     started_at=parser_lineage[1], output_count=len(chunks),
                 )
-            trace_collector.end_span(parse_span,
-                metrics={"doc_count": len(chunks),
-                         "page_count": len(chunks),
-                         "loader": "pipeline", "ext": ext})
+            # P1（2026-10-19）：doc_count 是产出 chunk 数；page_count 不再由
+            # chunk 数冒充——仅 PDF 有真实物理页数（pipeline 元数据提供），
+            # 其余格式无可靠分页语义，记 0 并显式标记 page_count_applicable=false，
+            # 前端据此区分「不适用」与「0 页」。
+            _parse_pages = 0
+            for _ch in chunks:
+                _p = _ch.metadata.get("page_count")
+                if isinstance(_p, int) and _p > 0:
+                    _parse_pages = max(_parse_pages, _p)
+            _pages_applicable = ext.lower() == ".pdf"
+            parse_metrics = {
+                "doc_count": len(chunks),
+                "page_count": _parse_pages if _pages_applicable else 0,
+                "page_count_applicable": _pages_applicable,
+                "chunk_count": len(chunks),
+                "loader": "pipeline", "ext": ext,
+            }
+            for stage_name, duration_ms in (_qc.get("stage_ms") or {}).items():
+                if isinstance(duration_ms, (int, float)):
+                    parse_metrics[f"internal_{stage_name}"] = duration_ms
+            trace_collector.end_span(parse_span, metrics=parse_metrics)
         except Exception as e:
             # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
             # 不被包装成 RuntimeError(避免 observability 误捕 + 丢失语义)
@@ -1292,6 +1655,22 @@ class IncrementalIndexer:
             "doc_type": "general",
             "person_names": [],
         }
+        # 截断标记先算出来：付费前预检与质量记录都要用（定义在使用点之前）。
+        chunks_truncated = any(
+            ch.metadata.get("chunks_truncated") for ch in chunks
+        )
+
+        # ── ⑤-1 付费前免费完整性预检（P0-E）──
+        # 元数据 LLM / embedding 都在后面，此处失败不产生任何外呼费用；
+        # 付费后与写库前的质量门禁（⑥之后）原样保留。
+        _enforce_prepaid_content_integrity(
+            self, _qc, chunks, path_id, doc_meta,
+            doc_id=doc_id, kb_id=kb_id, file_path=file_path,
+            file_size=file_size, file_hash=file_hash,
+            filtered_details=filtered_details,
+            truncated=chunks_truncated,
+        )
+
         metadata_lineage = None
         if lineage_recorder is not None:
             metadata_lineage = lineage_recorder.begin_stage(
@@ -1299,9 +1678,13 @@ class IncrementalIndexer:
                 metadata={"chunk_count": len(chunks)},
             )
         try:
+            question_chunk_indexes = _question_candidate_indexes(chunks)
             metadata_kwargs = {
                 "parent_span_id": meta_span.span_id,
-                "chunks_text": [ch.page_content for ch in chunks],
+                "chunks_text": [
+                    chunks[index].page_content
+                    for index in question_chunk_indexes
+                ],
             }
             if lineage_recorder is not None:
                 # 允许存量插件/测试替身继续使用旧签名；仓库内实现支持该参数
@@ -1348,7 +1731,6 @@ class IncrementalIndexer:
 
         # 截断留痕：分块超上限被 _enrich 截断时，检索覆盖天然不完整，
         # 必须写进 registry quality_issues 可追溯，而不是只有日志
-        chunks_truncated = any(ch.metadata.get("chunks_truncated") for ch in chunks)
         if chunks_truncated:
             _append_quality_issue(
                 doc_meta, "chunks_truncated(超出单文档上限被截断,检索覆盖不完整)")
@@ -1384,61 +1766,24 @@ class IncrementalIndexer:
                 for chunk in chunks
                 if (chunk.metadata or {}).get("granularity") == "leaf"
             )
-            _coverage = coverage_audit(
-                _audit_ast, chunks,
-                normalize_pii=_coverage_pii_normalized,
-            )
-            _qc["coverage"] = _coverage
-            _coverage_fields = {
-                "leaf_total", "audited_leaf_count", "uncovered_count", "sampled",
-            }
-            _coverage_error = (
-                bool(_coverage.get("error"))
-                or not _coverage_fields.issubset(_coverage)
-            )
-            try:
-                _coverage_leaf_total = int(_coverage.get("leaf_total") or 0)
-                _coverage_audited_count = int(
-                    _coverage.get("audited_leaf_count") or 0
+            _coverage = _qc.get("coverage")
+            if not isinstance(_coverage, dict):
+                _coverage = coverage_audit(
+                    _audit_ast, chunks,
+                    normalize_pii=_coverage_pii_normalized,
                 )
-                _coverage_uncovered_count = int(
-                    _coverage.get("uncovered_count") or 0
-                )
-                if (
-                    _coverage_leaf_total < 0
-                    or _coverage_audited_count < 0
-                    or _coverage_uncovered_count < 0
-                    or _coverage_audited_count > _coverage_leaf_total
-                    or _coverage_uncovered_count > _coverage_audited_count
-                    or (
-                        _coverage_audited_count < _coverage_leaf_total
-                        and _coverage.get("sampled") is not True
-                    )
-                    or not isinstance(_coverage.get("sampled"), bool)
-                ):
-                    _coverage_error = True
-            except (TypeError, ValueError):
-                _coverage_leaf_total = 0
-                _coverage_audited_count = 0
-                _coverage_uncovered_count = 0
-                _coverage_error = True
+                _qc["coverage"] = _coverage
+            # 与付费前预检同一口径（单一实现，避免两条路径判据漂移）
+            _coverage_metrics = _coverage_quality_metrics(_coverage)
+            _coverage_error = _coverage_metrics["coverage_audit_error"]
+            _coverage_uncovered_count = _coverage_metrics[
+                "coverage_uncovered_count"
+            ]
+            _coverage_issue = _coverage_metrics["coverage_issue"]
             _coverage_requires_failure = bool(
                 _coverage_error
                 or _coverage_uncovered_count > 0
             )
-            _coverage_issue = (
-                "coverage_audit_failed" if _coverage_error
-                else "coverage_gap" if _coverage_uncovered_count > 0
-                else ""
-            )
-            _coverage_metrics = {
-                "coverage_sampled": bool(_coverage.get("sampled")),
-                "coverage_leaf_total": _coverage_leaf_total,
-                "coverage_audited_leaf_count": _coverage_audited_count,
-                "coverage_uncovered_count": _coverage_uncovered_count,
-                "coverage_audit_error": _coverage_error,
-                "coverage_issue": _coverage_issue,
-            }
             from backend.rag.preprocessing.quality_gate import audit_chunk_integrity
 
             _chunk_integrity = audit_chunk_integrity(chunks)
@@ -1479,14 +1824,15 @@ class IncrementalIndexer:
                 },
             )
             _hard = []
+            _quality_metrics = {}
             _quality_record_saved = False
             try:
                 from backend.rag.preprocessing.quality_gate import (
                     anomaly_summary,
                     build_quality_record,
-                    compute_quality_score,
                     hard_anomalies,
                     persist_quality_record,
+                    quality_score_metrics,
                     run_typed_validation,
                 )
                 _record = build_quality_record(
@@ -1502,6 +1848,7 @@ class IncrementalIndexer:
                     ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
                     route_decision=_qc.get("route_decision"),
                     coverage=_coverage,
+                    cleaning_coverage=_qc.get("cleaning_coverage"),
                 )
                 _anomalies = run_typed_validation(_record, _raw_ast)
                 _hard = hard_anomalies(_anomalies)
@@ -1511,7 +1858,8 @@ class IncrementalIndexer:
                 _record["quality_issues"] = doc_meta.get("quality_issues", "")
                 # TD-09：质量分落 doc_meta（→ registry quality_score 列），
                 # 替代此前恒 0 的默认值；评分同步写进质量记录便于审计
-                doc_meta["quality_score"] = compute_quality_score(_anomalies)
+                _quality_metrics = quality_score_metrics(_anomalies)
+                doc_meta["quality_score"] = _quality_metrics["quality_score"]
                 _record.setdefault("validation", {})["score"] = doc_meta["quality_score"]
                 _qpath = persist_quality_record(_record)
                 _quality_record_saved = True
@@ -1537,9 +1885,7 @@ class IncrementalIndexer:
                     "soft_warning" if _anomalies else "pass"
                 )
                 trace_collector.end_span(q_span,
-                    metrics={"anomalies_total": len(_anomalies),
-                             "anomalies_hard": len(_hard),
-                             "anomalies_warn": len(_anomalies) - len(_hard),
+                    metrics={**_quality_metrics,
                              "record_path": _qpath,
                              **_coverage_metrics,
                              **_chunk_integrity})
@@ -1552,6 +1898,7 @@ class IncrementalIndexer:
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
                     metrics={"error": "quality_gate_hard_anomaly",
+                             **_quality_metrics,
                              **_coverage_metrics,
                              **_chunk_integrity})
                 if (
@@ -1584,7 +1931,8 @@ class IncrementalIndexer:
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200], **_coverage_metrics,
+                    metrics={"error": str(e)[:200], **_quality_metrics,
+                             **_coverage_metrics,
                              **_chunk_integrity})
                 if _quality_requires_failure:
                     _failure_issue = _coverage_issue or _integrity_issue
@@ -1624,8 +1972,10 @@ class IncrementalIndexer:
         #   - chunk_keywords → 该 chunk 自己的规则关键词（不污染其他 chunk）
         #   - chunk_llm_keywords → Qwen 提取（仅 LLM_FORCED_TYPES 文档）
         #   - section_title → chunk 所属章节（从前面的 section 标题推导）
-        from backend.rag.preprocessing.keyword import extract_rule_keywords as _chunk_kw
-        from backend.rag.preprocessing.keyword import LLM_FORCED_TYPES as _CHUNK_LLM_TYPES
+        # P0-2（2026-10-19 去词表化）：chunk 级不再提取普通关键词——
+        # BM25 语料 = chunk 原文（_build_bm25_corpus_from_vectorstore），
+        # chunk_keywords 从不参与 BM25/向量召回，仅为展示字段；停发后
+        # 字段置空串保持 chunk_store 列与前端兼容。Qwen 残链一并移除。
         doc_type_val = doc_meta.get("doc_type", "general")
         pii_safe_summary = _mask_index_text_for_pii(
             str(doc_meta.get("summary") or ""), doc_type_val, chunk_filter
@@ -1638,7 +1988,7 @@ class IncrementalIndexer:
                 for section in doc_meta["sections"]
             ]
         person_val = doc_meta.get("person_names", "")
-        use_chunk_llm = doc_type_val in _CHUNK_LLM_TYPES
+        use_chunk_llm = False
         chunk_llm_model = ""
         chunk_llm_count = 0
 
@@ -1651,24 +2001,17 @@ class IncrementalIndexer:
                 section_positions.append((idx, sec_title))
         section_positions.sort(key=lambda x: x[0])
 
-        # Qwen chunk 批量调用 — 已关闭（文档级 DeepSeek 关键词已覆盖，省去本地推理耗时）
-        qwen_kws_per_chunk: list[list[str]] = [[] for _ in chunks]
-        use_chunk_llm = False  # 关闭 Qwen chunk 级关键词，统一用文档级关键词
-        if use_chunk_llm:  # 保留代码，后续按需开启
-            from backend.rag.preprocessing.keyword import extract_chunk_keywords_qwen_batch
-            logger.info(f"[Chunk] 高价值文档({doc_type_val})，启用 Qwen chunk 批量提取（{len(chunks)} chunks）")
-            qwen_kws_per_chunk, chunk_llm_model = extract_chunk_keywords_qwen_batch(
-                [ch.page_content for ch in chunks]
-            )
-            chunk_llm_count = sum(1 for kws in qwen_kws_per_chunk if kws)
-            chunk_llm_model = chunk_llm_model or "qwen2.5:3b"
-
         kb_id_val = doc_meta.get("kb_id", self.kb_id)
         fixture_set_val = doc_meta.get("fixture_set") or None
         domain_val = doc_meta.get("business_domain", "") or "general"
 
         # 模拟问题（从 doc_meta 拿；metadata 构建阶段已写入 questions_by_chunk）
-        questions_by_chunk = doc_meta.get("questions_by_chunk", []) or []
+        generated_questions = doc_meta.get("questions_by_chunk", []) or []
+        questions_by_chunk_index = {
+            chunk_index: generated_questions[position]
+            for position, chunk_index in enumerate(question_chunk_indexes)
+            if position < len(generated_questions)
+        }
 
         # ── 4.3c: 表格行描述（kv 数据行 → 一句话语义，供 embedding 前缀）──
         table_row_indexes = [
@@ -1799,10 +2142,9 @@ class IncrementalIndexer:
             # 故重索引旧文档不会让现有评测集 relevant_docs 失效。
             ch.metadata["doc_id"] = doc_id
             # chunk_id 已在上方统一覆盖并同步 parent_chunk_id（P0-03），此处不再重复
-            chunk_kws = _chunk_kw(ch.page_content, doc_type=doc_type_val)
-            ch.metadata["chunk_keywords"] = ", ".join(chunk_kws) if chunk_kws else ""
+            ch.metadata["chunk_keywords"] = ""  # P0-2 去词表化：停发（原规则提取已删）
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
-            _sq = questions_by_chunk[i] if i < len(questions_by_chunk) else []
+            _sq = questions_by_chunk_index.get(i, [])
             if _sq:
                 ch.metadata["simulated_questions"] = _sq
 
@@ -1847,7 +2189,11 @@ class IncrementalIndexer:
             cs = self._cs()
             cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
             cs.insert_batch(doc_id, [
-                {"chunk_index": i, "content": ch.page_content,
+                {"chunk_index": i, "chunk_id": ch.metadata.get("chunk_id", ""),
+                 "granularity": ch.metadata.get("granularity", ""),
+                 "parent_chunk_id": ch.metadata.get("parent_chunk_id", ""),
+                 "chunk_metadata": dict(ch.metadata),
+                 "content": ch.page_content,
                  "keywords": ch.metadata.get("chunk_keywords", ""),
                  "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
                  "llm_model": ch.metadata.get("chunk_llm_model", ""),
@@ -1870,8 +2216,6 @@ class IncrementalIndexer:
         kws_llm = doc_meta.get("keywords_llm", [])
         llm_tokens = doc_meta.get("llm_tokens", {})
         llm_used = doc_meta.get("llm_used", False)
-        # 展平复杂对象（ChromaDB 不支持嵌套 dict）
-        complexity_val = doc_meta.get("complexity", {})
         time_refs_val = doc_meta.get("time_refs", [])
         # 写入 doc_db 前做深拷贝并展平嵌套字段（ChromaDB 不支持 dict/list metadata）
         doc_db_meta = {}
@@ -1915,6 +2259,13 @@ class IncrementalIndexer:
                             else (len(str(doc_meta.get("person_names")).split(",")) if doc_meta.get("person_names") else 0),
             "doc_db_id": doc_db_id,
         }
+        # P1（2026-10-19）：元数据阶段子耗时（决策/增强并发段/收尾），供
+        # Trace 拆解 10s 级不可解释总时长；缺失（历史/异常路径）时不伪造
+        _stage_ms = doc_meta.get("stage_ms")
+        if isinstance(_stage_ms, dict) and _stage_ms:
+            for _k, _v in _stage_ms.items():
+                if isinstance(_v, (int, float)):
+                    metrics[f"meta_{_k}"] = _v
         if chunks_truncated:
             metrics["chunks_truncated"] = "true"
         if llm_used:
@@ -1937,7 +2288,6 @@ class IncrementalIndexer:
                     "business_domain": doc_meta.get("business_domain", ""),
                     "domain_classify": doc_meta.get("domain_detail", {}),
                     "person_names": doc_meta.get("person_names", ""),
-                    "complexity": complexity_val,
                     "time_refs": time_refs_val,
                     "keywords_rule": kws_rule if isinstance(kws_rule, list) else [],
                     "summary": doc_meta.get("summary", ""),
@@ -1957,36 +2307,42 @@ class IncrementalIndexer:
             })
 
         # ── ⑦ embed（聚合；chunks 已带完整 metadata）──
+        vector_chunks = _select_vector_chunks(chunks)
+        non_vector_chunk_count = len(chunks) - len(vector_chunks)
         embed_span = trace_collector.start_span(
             "index_embed",
             parent_id="index_upload",
-            name=f"Embed {len(chunks)} chunks",
+            name=f"Embed {len(vector_chunks)} chunks",
             type="embedding",
             kind=SpanKind.INDEX_EMBED.value,
         )
-        embed_span.metrics["chunk_count"] = len(chunks)
+        embed_span.metrics.update({
+            "chunk_count": len(vector_chunks),
+            "context_only_chunk_count": non_vector_chunk_count,
+        })
         embedding_lineage = None
         if lineage_recorder is not None:
             embedding_lineage = lineage_recorder.begin_stage(
                 "embedding", role="embedding", engine_type="embedding",
                 model=_embedding_model_identity(self.embedding),
-                metadata={"chunk_count": len(chunks)},
+                metadata={"chunk_count": len(vector_chunks)},
             )
         # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
         # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
         with lineage_recorder.bind_stage(embedding_lineage[0]) if lineage_recorder and embedding_lineage else nullcontext():
             precomputed_vectors = self._embed_with_retry(
-                chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
+                vector_chunks, embed_span,
+                doc_summary=doc_meta.get("summary", "") or "")
         if embedding_lineage is not None:
             embedding_status = (
-                "success" if len(precomputed_vectors) == len(chunks) else "fallback"
+                "success" if len(precomputed_vectors) == len(vector_chunks) else "fallback"
             )
             lineage_recorder.finish_stage(
                 embedding_lineage[0], status=embedding_status,
-                started_at=embedding_lineage[1], input_count=len(chunks),
+                started_at=embedding_lineage[1], input_count=len(vector_chunks),
                 output_count=len(precomputed_vectors),
                 cache_status=(
-                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(chunks)
+                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(vector_chunks)
                     else "partial" if embed_span.metrics.get("embedding_cache_hit", 0)
                     else "miss"
                 ),
@@ -1996,9 +2352,10 @@ class IncrementalIndexer:
                 ),
             )
         trace_collector.end_span(embed_span,
-            metrics={"attempted": len(chunks),
+            metrics={"attempted": len(vector_chunks),
                      "succeeded": len(precomputed_vectors),
-                     "failed": len(chunks) - len(precomputed_vectors)})
+                     "failed": len(vector_chunks) - len(precomputed_vectors),
+                     "context_only_chunks": non_vector_chunk_count})
 
         # ── ⑤ vector_db ──
         vdb_span = trace_collector.start_span(
@@ -2016,28 +2373,29 @@ class IncrementalIndexer:
             )
         try:
             with lineage_recorder.bind_stage(vector_lineage[0]) if lineage_recorder and vector_lineage else nullcontext():
-                if chunks:
-                    if len(precomputed_vectors) == len(chunks):
+                if vector_chunks:
+                    if len(precomputed_vectors) == len(vector_chunks):
                         # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
                         chunk_ids = self.vectordb.add_documents(
-                            chunks, embeddings=precomputed_vectors) or []
+                            vector_chunks, embeddings=precomputed_vectors) or []
                     else:
                         # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
                         # 保证不产生向量空洞；此时预嵌入仅充当失败预检
                         logger.warning(
-                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
+                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(vector_chunks)})，"
                             f"回退由向量库嵌入: {os.path.basename(file_path)}"
                         )
-                        chunk_ids = self.vectordb.add_documents(chunks) or []
+                        chunk_ids = self.vectordb.add_documents(vector_chunks) or []
                 else:
                     chunk_ids = []
             trace_collector.end_span(vdb_span,
-                metrics={"written": len(chunk_ids),
+                    metrics={"written": len(chunk_ids),
+                         "context_only_chunks": non_vector_chunk_count,
                          "table": getattr(self.vectordb, "_collection_name", "")})
             if vector_lineage is not None:
                 lineage_recorder.finish_stage(
                     vector_lineage[0], status="success",
-                    started_at=vector_lineage[1], input_count=len(chunks),
+                    started_at=vector_lineage[1], input_count=len(vector_chunks),
                     output_count=len(chunk_ids),
                 )
         except Exception as e:
@@ -2055,7 +2413,7 @@ class IncrementalIndexer:
         # 不能再用「旧 BM25 + 当前文件」增量拼接：旧 BM25 可能已经属于另一批
         # 文档，必须从当前向量集合一次性重建。重索引的旧 chunk 仍在向量库中，
         # 由 exclude_ids 排除，待 _cleanup_superseded 删除后集合仍保持一致。
-        if self.bm25_store is not None and chunks:
+        if self.bm25_store is not None and vector_chunks:
             bm25_lineage = None
             if lineage_recorder is not None:
                 bm25_lineage = lineage_recorder.begin_stage(
@@ -2092,17 +2450,17 @@ class IncrementalIndexer:
                     # 兼容外部测试桩和旧实现；生产 BM25Store 一定走上面的
                     # 向量集合全量重建路径。
                     self.bm25_store.replace_documents(
-                        chunks, k=BM25_CANDIDATE_K,
+                        vector_chunks, k=BM25_CANDIDATE_K,
                         doc_id=doc_id, file_path=file_path,
                     )
                 if bm25_lineage is not None:
                     lineage_recorder.finish_stage(
                         bm25_lineage[0], status="success",
-                        started_at=bm25_lineage[1], input_count=len(chunks),
-                        output_count=len(chunks),
+                        started_at=bm25_lineage[1], input_count=len(vector_chunks),
+                        output_count=len(vector_chunks),
                     )
                 logger.info(
-                    f"[BM25] 已从向量集合发布快照: {len(chunks)} 新 chunks, "
+                    f"[BM25] 已从向量集合发布快照: {len(vector_chunks)} 新 chunks, "
                     f"{os.path.basename(file_path)}"
                 )
             except Exception as e:
@@ -2165,10 +2523,9 @@ class IncrementalIndexer:
             "minhash_sig": doc_meta.get("minhash_sig", ""),
             "near_dup_id": doc_meta.get("near_dup_id", ""),
             "summary": doc_meta.get("summary", ""),
-            "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+            "keywords": _serialize_registry_keywords(doc_meta),
             "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
             "business_domain": doc_meta.get("business_domain", ""),
-            "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
             "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
             "doc_version": doc_meta.get("doc_version", 1),
             "kb_version": doc_meta.get("kb_version", "v1"),
@@ -2391,8 +2748,31 @@ class IncrementalIndexer:
                 "old_chunk_ids": old_chunk_ids,
                 "old_doc_db_id": old_doc_db_id,
             }
-        index_result = self._index_file(
-            file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        previous_status = str((row or {}).get("status") or "")
+        previous_file_hash = str((row or {}).get("file_hash") or "")
+        try:
+            index_result = self._index_file(
+                file_path, file_hash=file_hash, reindex_ctx=reindex_ctx)
+        except Exception:
+            # 真实路径里 _index_file → register_in_progress 会先把行改成
+            # parsing + 新 file_hash。失败时旧向量仍按"先写后删"保留，但
+            # status=parsing 会让检索可见性（status=active 正向校验）把旧
+            # 版本整体隐藏，file_hash 也会指向未成功索引的内容。这里恢复
+            # 更新前快照，兑现"失败的索引不能动旧 active 记录"契约
+            # （test_indexer_recovery_and_reindex::test_failure_preserves_old_data）。
+            if old_doc_id and previous_status == "active" and old_chunk_ids:
+                try:
+                    self.registry.update_status(file_path, "active")
+                    if previous_file_hash:
+                        self.registry.update_fields(
+                            file_path, {"file_hash": previous_file_hash},
+                        )
+                except Exception as restore_error:  # noqa: BLE001
+                    logger.warning(
+                        "[REINDEX] 失败后恢复旧 active 快照失败 "
+                        f"(doc_id={old_doc_id}): {restore_error}"
+                    )
+            raise
         # dedup 命中（内容未变，如占位行写入失败的极端场景）→ 没有新数据，
         # 清理旧向量会造成数据丢失，直接原样返回
         skipped = bool(index_result.get("skipped"))

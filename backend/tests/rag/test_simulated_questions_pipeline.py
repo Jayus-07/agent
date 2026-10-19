@@ -138,6 +138,26 @@ class TestQuestionGenModule:
         assert result == []
         assert tokens == {}
 
+    def test_cache_hit_is_marked_without_provider_call(self, monkeypatch):
+        from backend.rag.preprocessing import question_gen
+
+        monkeypatch.setattr(question_gen, "ENABLE_SIMULATED_QUESTIONS", True)
+        monkeypatch.setattr(question_gen, "_cache_get", lambda key: [["已有问题？"]])
+        monkeypatch.setattr(
+            question_gen, "_invoke_llm",
+            lambda *args, **kwargs: pytest.fail("缓存命中不应调用 Provider"),
+        )
+
+        result, tokens = question_gen.generate_chunk_questions(["正文"], doc_type="policy")
+        meta = question_gen.get_last_generation_meta()
+
+        assert result == [["已有问题？"]]
+        assert tokens == {}
+        assert meta["status"] == "cached"
+        assert meta["cache_status"] == "hit"
+        assert meta["provider_call"] is False
+        assert meta["provider_duration_ms"] == 0
+
     def test_llm_call_uses_question_gen_role(self, monkeypatch):
         from backend.rag.preprocessing import question_gen
         from backend.rag.preprocessing import llm_enrichment
@@ -159,6 +179,7 @@ class TestQuestionGenModule:
         question_gen.generate_chunk_questions(["第一条流程内容。"], doc_type="policy")
 
         assert captured["role"] == "question_gen"
+        assert captured["max_tokens"] == question_gen.QUESTION_GEN_MAX_OUTPUT_TOKENS
 
     def test_question_cache_key_contains_model_prompt_version(self, monkeypatch):
         import backend.rag.preprocessing.question_gen as question_gen
@@ -221,14 +242,10 @@ class TestMetadataWiring:
         )
 
     def test_metadata_sums_llm_tokens_from_all_sources(self, monkeypatch):
-        """1.3b：summary/question 路径 tokens 与 keywords 路径一起进 llm_tokens 口径。"""
-        from backend.rag.preprocessing.keyword import KeywordResult
-        import backend.rag.preprocessing.keyword as kw_mod
+        """tokens 汇总契约（P0-2 去词表化后更新，2026-10-19）：keywords 路径
+        已退役不再产 tokens；汇总口径保留 question_gen 路径用量。"""
         import backend.rag.preprocessing.entity as entity_mod
 
-        kw = KeywordResult()
-        kw.llm_tokens = {"prompt_tokens": 100, "completion_tokens": 20, "cost_usd": 0.1}
-        monkeypatch.setattr(kw_mod, "extract_doc_keywords_typed", lambda *a, **k: kw)
         monkeypatch.setattr(entity_mod, "extract_entities", lambda *a, **k: {})
 
         import backend.rag.preprocessing.question_gen as qg_mod
@@ -248,8 +265,8 @@ class TestMetadataWiring:
                                     chunks_text=chunks_text)
         )
         tokens = result.get("llm_tokens") or {}
-        assert tokens.get("prompt_tokens", 0) >= 100, (
-            "llm_tokens 汇总必须包含 keywords 路径用量"
+        assert tokens.get("prompt_tokens", 0) >= 50, (
+            "llm_tokens 汇总必须包含 question_gen 路径用量（keywords 路径已退役）"
         )
 
 

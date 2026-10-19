@@ -16,7 +16,6 @@ from langchain_core.callbacks.manager import CallbackManagerForRetrieverRun
 
 from backend.rag.retrieval.hybrid import hybrid_retrieve
 from backend.rag.preprocessing.entity import extract_person_names
-from backend.rag.preprocessing.keyword import extract_chunk_keywords
 from backend.config import (
     HYBRID_SEARCH_K,
     RAG_DOC_CANDIDATE_K,
@@ -25,52 +24,6 @@ from backend.config import (
 )
 from backend.shared.logger import logger
 from backend.rag.permissions import filter_documents_by_permission
-
-
-# =====================================================
-# 关键词重叠评分
-# =====================================================
-
-def _score_by_keyword_overlap(question: str, docs: list, fallback_k: int = 3, query_kw: set | None = None) -> list:
-    """关键词软重排：命中文档按 overlap 降序排前面，未命中文档保留原始 embedding 顺序。
-
-    不再硬过滤（丢弃 overlap=0 的文档），避免回归。
-    增加子串模糊匹配：query kw 与 doc kw 存在包含关系时计 0.5 分。
-    """
-    if query_kw is None:
-        query_kw = set(extract_chunk_keywords(question, top_k=10))
-    if not query_kw:
-        return docs
-
-    scored = []
-    for doc in docs:
-        raw = doc.metadata.get("doc_keywords", "")
-        if isinstance(raw, list):
-            doc_kw = set(raw)
-        elif raw:
-            try:
-                doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
-            except (json.JSONDecodeError, TypeError):
-                doc_kw = set()
-        else:
-            doc_kw = set()
-        exact = len(query_kw & doc_kw)
-        fuzzy = 0.0
-        if not exact:
-            for qk in query_kw:
-                for dk in doc_kw:
-                    if len(qk) >= 2 and len(dk) >= 2 and (qk in dk or dk in qk):
-                        fuzzy += 0.5
-                        break
-        score = exact + fuzzy
-        scored.append((doc, score))
-
-    matched = [(doc, s) for doc, s in scored if s > 0]
-    unmatched = [doc for doc, s in scored if s == 0]
-    matched.sort(key=lambda x: x[1], reverse=True)
-
-    logger.info(f"关键词重排: query_kw={query_kw}, 命中 {len(matched)}/{len(docs)}")
-    return [doc for doc, _ in matched] + unmatched
 
 
 def _dedup_by_doc_id(docs: list) -> list:
@@ -128,6 +81,62 @@ def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]
     added = [p for p in parents if p.metadata.get("chunk_id") not in seen]
     if added:
         logger.info(f"[Parent-Child] 拉取 {len(added)} 个 parent 上下文")
+    return list(docs) + added
+
+
+def attach_referenced_context(docs: List[Document], related_lookup) -> List[Document]:
+    """将 Leaf 明确引用的同文档表格 Leaf 加入上下文。"""
+    if not docs:
+        return list(docs)
+
+    requests: dict[str, set[str]] = {}
+    for doc in docs:
+        metadata = doc.metadata or {}
+        if metadata.get("granularity") != "leaf":
+            continue
+        doc_id = str(metadata.get("doc_id") or "").strip()
+        references = metadata.get("references") or []
+        if isinstance(references, str):
+            try:
+                references = json.loads(references)
+            except (TypeError, ValueError):
+                references = [references]
+        if not isinstance(references, (list, tuple, set)):
+            continue
+        table_ids: set[str] = set()
+        for reference in references:
+            if isinstance(reference, dict):
+                relation = str(reference.get("relation") or "").strip()
+                if relation and relation != "refers_to":
+                    continue
+                table_id = str(reference.get("table_id") or "").strip()
+            else:
+                # 兼容已入库的旧版 references=["table_1"] 元数据。
+                table_id = str(reference or "").strip()
+            if table_id:
+                table_ids.add(table_id)
+        if doc_id and table_ids:
+            requests.setdefault(doc_id, set()).update(table_ids)
+
+    if not requests:
+        return list(docs)
+
+    seen = {doc.metadata.get("chunk_id") for doc in docs}
+    related: list[Document] = []
+    try:
+        for doc_id, table_ids in requests.items():
+            related.extend(related_lookup(doc_id, sorted(table_ids)))
+    except Exception as e:
+        logger.warning(
+            f"[ChunkReference] 关联表格读取失败({type(e).__name__})，"
+            f"降级返回原结果: {e}"
+        )
+        return list(docs)
+
+    added = [doc for doc in related
+             if doc.metadata.get("chunk_id") not in seen]
+    if added:
+        logger.info(f"[ChunkReference] 加载 {len(added)} 个关联表格 Leaf")
     return list(docs) + added
 
 
@@ -305,81 +314,29 @@ class ChunkLevelRetriever(BaseRetriever):
 
     @staticmethod
     def _filter_docs_by_keywords(question: str, doc_results: list, fallback_k: int = 3) -> tuple:
-        """Stage1 文档门控，返回 (doc_ids, gate_info)。
+        """Stage1 文档候选直通（P0-3，2026-10-19 治理改造）。
 
-        gate_info 是阶段契约数据（2026-09-13 治理 A）：记录候选/关键词命中/
-        相似度兜底/最终保留/被排除项及理由，经 trace event 暴露 —— 此前本阶段
-        静默丢弃文档（相似度 Top-1 因 keywords 为空被踢）导致排查耗时数小时。
+        旧实现用「查询关键词 ∩ doc_keywords」筛文档（零交集且不在相似度
+        Top3 即被排除），是「关键词没命中就丢语义相关文档」的硬门控根源。
+        治理后候选全保留（按 doc 级向量相似度序去重），召回质量交由
+        Stage2 混合检索（原文 BM25+向量+RRF）与 Rerank。函数名与
+        gate_info 契约保留，供既有调用方与 Trace 事件兼容。
         """
         deduped = _dedup_by_doc_id(doc_results)
-        query_kw = set(extract_chunk_keywords(question, top_k=10))
-        reranked = _score_by_keyword_overlap(question, deduped, fallback_k, query_kw=query_kw)
         all_ids = [
             doc.metadata.get("doc_id")
-            for doc in reranked
+            for doc in deduped
             if doc.metadata.get("doc_id")
         ]
-        id2name = {
-            d.metadata.get("doc_id"): ChunkLevelRetriever._doc_name(d.metadata)
-            for d in deduped
-            if d.metadata.get("doc_id")
-        }
-        if not query_kw:
-            ids = list(dict.fromkeys(all_ids))
-            return ids, {
-                "reason": "no_query_keywords",
-                "candidates": [id2name[i] for i in ids],
-                "keyword_matched": [],
-                "similarity_top": [],
-                "kept": [id2name[i] for i in ids],
-                "excluded": [],
-            }
-        similarity_top = [
-            d.metadata.get("doc_id")
-            for d in deduped[:fallback_k]
-            if d.metadata.get("doc_id")
-        ]
-        matched_ids = []
-        for doc in reranked:
-            did = doc.metadata.get("doc_id")
-            if not did:
-                continue
-            raw = doc.metadata.get("doc_keywords", "")
-            if isinstance(raw, list):
-                doc_kw = set(raw)
-            elif raw:
-                try:
-                    doc_kw = set(json.loads(raw) if raw.startswith("[") else raw.split(", "))
-                except (json.JSONDecodeError, TypeError):
-                    doc_kw = set()
-            else:
-                doc_kw = set()
-            if query_kw & doc_kw:
-                matched_ids.append(did)
-        unique_matched = list(dict.fromkeys(matched_ids))
-        if unique_matched:
-            # 相似度兜底并集：doc_keywords 缺失/为空的文档（关键词提取失败的
-            # 历史文档、测试夹具）不应仅因 metadata 没有关键词而被 Stage1
-            # 整体排除 —— 即使它是 doc 级相似度 Top-1（2026-09-13 golden
-            # RC-080/086/095 回归）。并入 doc 相似度前 fallback_k 名保底；
-            # 注意必须取 deduped（相似度序）而非 reranked（关键词重排序），
-            # 否则兜底名额会被关键词命中文档占满，等于没兜底。
-            ids = list(dict.fromkeys(unique_matched + similarity_top))
-        else:
-            ids = list(dict.fromkeys(all_ids))
-        kept_set = set(ids)
         info = {
-            "reason": "keyword_match_plus_similarity_top" if unique_matched else "keyword_fallback_all",
-            "candidates": [id2name[i] for i in all_ids],
-            "keyword_matched": [id2name[i] for i in unique_matched],
-            "similarity_top": [id2name[i] for i in similarity_top],
-            "kept": [id2name[i] for i in ids],
-            "excluded": [
-                {"doc": id2name[i], "reason": "no_keyword_match_and_below_similarity_top"}
-                for i in all_ids if i not in kept_set
-            ],
+            "candidates": len(deduped),
+            "keyword_matched": None,   # 已移除：不再按关键词筛
+            "similarity_fallback": 0,  # 已移除：候选全保留，无 Top3 兜底
+            "kept": all_ids,
+            "excluded": [],
+            "reason": "keyword_gate_removed_p0_2",
         }
-        return ids, info
+        return all_ids, info
 
     def _get_relevant_documents(self, query: str, *, run_manager=None) -> List[Document]:
         """带请求内缓存的检索入口（P1-5）。
@@ -614,88 +571,39 @@ class ChunkLevelRetriever(BaseRetriever):
                 )
 
     def _stage1_relax_on_zero_match(self, st: "_Staging") -> None:
-        """Stage 1 0 匹配兜底：顺序放宽 business_domain → kb_id。
+        """Stage 1 0 匹配兜底：放宽 KBRouter 猜测的 kb_id（P0-2 简化版）。
 
-        输入: st.metadata_filter / st.doc_ids（0 匹配时触发）
-        输出: 改写 st.metadata_filter / st.doc_ids=None / st.stage1_path /
-              st.stage1_fallback_count / st.cross_kb_fallback
+        P0-2（2026-10-19 治理改造）：QueryAnalyzer 不再向 metadata_filter
+        注入 doc_type/business_domain 猜测（见 query_analyzer.to_metadata_filter），
+        v2 的两级放宽（domain_fallback → kb_fallback）中 domain 级已无输入、
+        doc_type 剥离恒空转，全部删除。保留唯一放宽维度：KBRouter 关键词
+        规则猜测的 kb_id/$or 失配（如「报销」被路由到无文档的 KB）时，
+        主体授权范围内跨 KB 全量检索——宁跨 KB 召回，不全量拒答。排序交回
+        混合检索与 Rerank；keep-set 主体授权在 Stage 2 后强制收口，安全
+        边界不变（跨 KB 不越权，权限/租户/审核可见性过滤全部保留）。
         """
         if not (st.metadata_filter and not st.doc_ids):
             return
-        # 🟢 2026-08-10 新增：Stage 1 0 匹配 fallback
-        # 解决 metadata_filter 推 business_domain 不准时丢文档的问题
-        # （如问"差评怎么处理" → customer，但售后流程文档标 order）
-        # 2026-09-10 fix：旧实现 domain/kb 两级放宽是 if/else 二选一 —— 只要
-        # business_domain 在 filter 中就只放宽它，剩余 kb_id（可能指向空 KB，
-        # 如「退款」→ biz_order 但文档实际在 rag_test_kb）永远不会被放宽，
-        # 兜底形同虚设 → 0 召回 → Evidence Gate 假拒答。
-        # 改为顺序放宽：先放宽 business_domain，再探测 KB 是否有文档，
-        # 空则连 kb_id 一起放宽（宁跨 KB 召回，不全量拒答）。
         from backend.observability.tracer import trace_collector
-        fallback_filter = {k: v for k, v in st.metadata_filter.items() if k != "business_domain"}
+        fallback_filter = {
+            k: v for k, v in st.metadata_filter.items()
+            if k not in ("kb_id", "$or")
+        }
         if fallback_filter != st.metadata_filter:
             logger.info(
                 f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
-                f"回退到放宽 business_domain 的检索"
+                f"放宽 KBRouter 猜测的 kb 维度 → {fallback_filter}"
             )
             st.metadata_filter = fallback_filter
             st.doc_ids = None  # 让 Stage 2 走完整向量检索
-            st.stage1_path = "domain_fallback"
+            st.stage1_path = "kb_fallback"
             st.stage1_fallback_count += 1
-            # 探测放宽 domain 后 KB 是否仍有文档；空 KB → 继续放宽 kb_id
-            if not self._filter_has_docs(fallback_filter):
-                # TD-13（2026-10-03）：kb_fallback 级同时丢弃 doc_type——
-                # 实测"发票认证时限"被 QueryAnalyzer 按"认证"词表误抽
-                # doc_type=security，policy 文档 0 命中后放宽到全库仍带着
-                # 这个错误猜测，召回空间恰只剩 security 文档 → Rerank
-                # 8/8 淘汰 → 假拒答。跨库放宽 = QueryAnalyzer 全部猜测
-                # 作废，授权范围内全量检索，排序交回 BM25/向量/Rerank
-                # （keep-set 主体授权在 Stage 2 后强制收口，安全边界不变）。
-                kb_relaxed = {
-                    k: v for k, v in fallback_filter.items()
-                    if k not in ("kb_id", "$or", "doc_type")
-                }
-                if kb_relaxed != fallback_filter:
-                    logger.info(
-                        f"ChunkLevelRetriever: 放宽 business_domain 后仍无文档 "
-                        f"(filter={fallback_filter})，继续放宽 kb_id → {kb_relaxed}"
-                    )
-                    st.metadata_filter = kb_relaxed
-                    st.stage1_path = "kb_fallback"
-                    st.stage1_fallback_count += 1
-                    st.cross_kb_fallback = True
+            st.cross_kb_fallback = True
             trace_collector.add_event(st.span, "stage1_fallback", "info",
-                f"Stage1 0 匹配 → 放宽后 filter={st.metadata_filter}, path={st.stage1_path}",
+                f"Stage1 0 匹配 → 放宽 kb 维度后 filter={st.metadata_filter}",
                 data={"relaxed_filter": st.metadata_filter,
                       "stage1_path": st.stage1_path,
                       "stage1_fallback_count": st.stage1_fallback_count})
-        else:
-            # fix f17：business_domain 不在 filter 中仍 0 命中 —— 元凶多半是
-            # kb_id 推断失配（KBRouter 关键词规则把问题路由到无文档的 KB，
-            # 如"报销"→policy_finance，但文档实际在 rag_test_kb）。
-            # 与 business_domain 放宽同理：宁跨 KB 召回，不全量拒答。
-            # TD-13：doc_type 是问题字面的猜测值（词表歧义，如"发票认证"
-            # →security），0 匹配即证明猜测错误——跨库放宽时一并丢弃，
-            # 不保留任何 QueryAnalyzer 维度（排序交回混合检索与 Rerank）。
-            fallback_filter = {
-                k: v for k, v in st.metadata_filter.items()
-                if k not in ("kb_id", "$or", "doc_type")
-            }
-            if fallback_filter != st.metadata_filter:
-                logger.info(
-                    f"ChunkLevelRetriever: metadata_filter {st.metadata_filter} 0 匹配, "
-                    f"回退到放宽 kb_id 的检索"
-                )
-                st.metadata_filter = fallback_filter
-                st.doc_ids = None
-                st.stage1_path = "kb_fallback"
-                st.stage1_fallback_count += 1
-                st.cross_kb_fallback = True
-                trace_collector.add_event(st.span, "stage1_fallback", "info",
-                    f"Stage1 0 匹配 → 放宽 kb_id 后 filter={st.metadata_filter}",
-                    data={"relaxed_filter": st.metadata_filter,
-                          "stage1_path": st.stage1_path,
-                          "stage1_fallback_count": st.stage1_fallback_count})
 
     def _stage2_hybrid_retrieve(self, st: "_Staging") -> None:
         """Stage 2：Chunk 级混合检索（向量+BM25+同义词扩展）+ 空召回重试。
@@ -820,6 +728,8 @@ class ChunkLevelRetriever(BaseRetriever):
 
         # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
         st.docs = attach_parent_context(st.docs, self._lookup_parents)
+        # 条款通过 references 指向同文档的表格时，附加该表格 Leaf。
+        st.docs = attach_referenced_context(st.docs, self._lookup_referenced_tables)
 
         # ── 收口过滤：adaptive 扩展可能再拉入文档，统一在此执行 ──
         # 已声明主体 → 白名单强制（无条件）；未声明 → 仅跨库兜底剔除 test 库
@@ -864,16 +774,66 @@ class ChunkLevelRetriever(BaseRetriever):
             return True
 
     def _lookup_parents(self, chunk_ids: List[str]) -> List[Document]:
-        """按 chunk_id 列表从向量库查 parent chunk（Parent-Child 上下文）。"""
-        data = self.vectordb.get(where={"chunk_id": {"$in": chunk_ids}})
+        """先从全文 ChunkStore 取上下文 Parent，兼容旧向量 Parent。"""
+        result: list[Document] = []
+        found: set[str] = set()
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+
+            rows = get_chunk_store().get_by_chunk_ids(chunk_ids)
+            for row in rows:
+                metadata = dict(row.get("chunk_metadata") or {})
+                metadata.setdefault("chunk_id", row.get("chunk_id", ""))
+                metadata.setdefault("doc_id", row.get("doc_id", ""))
+                metadata.setdefault("granularity", row.get("granularity", ""))
+                metadata.setdefault("parent_chunk_id", row.get("parent_chunk_id", ""))
+                if metadata.get("granularity") != "parent":
+                    continue
+                chunk_id = str(metadata.get("chunk_id") or "")
+                if chunk_id:
+                    found.add(chunk_id)
+                result.append(Document(
+                    page_content=str(row.get("content") or ""),
+                    metadata=metadata,
+                ))
+        except Exception as e:
+            logger.debug(
+                f"[Parent-Child] ChunkStore 查询失败，尝试旧向量 Parent: {e}"
+            )
+
+        missing_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in found]
+        if not missing_ids:
+            return result
+        data = self.vectordb.get(where={"chunk_id": {"$in": missing_ids}})
         ids = data.get("ids") or []
         documents = data.get("documents") or []
         metadatas = data.get("metadatas") or []
-        result: List[Document] = []
-        for i in range(len(ids)):
+        for i, chunk_id in enumerate(ids):
+            if chunk_id in found:
+                continue
             result.append(Document(
                 page_content=documents[i] if i < len(documents) else "",
                 metadata=metadatas[i] if i < len(metadatas) else {},
+            ))
+        return result
+
+    def _lookup_referenced_tables(
+        self, doc_id: str, table_ids: list[str],
+    ) -> List[Document]:
+        """按文档和 table_id 从 ChunkStore 恢复完整表格 Leaf。"""
+        from backend.rag.indexing.chunk_store import get_chunk_store
+
+        rows = get_chunk_store().get_by_table_ids(doc_id, table_ids)
+        result: list[Document] = []
+        for row in rows:
+            metadata = dict(row.get("chunk_metadata") or {})
+            metadata.setdefault("chunk_id", row.get("chunk_id", ""))
+            metadata.setdefault("doc_id", row.get("doc_id", doc_id))
+            metadata.setdefault("granularity", row.get("granularity", "leaf"))
+            metadata.setdefault("parent_chunk_id", row.get("parent_chunk_id", ""))
+            result.append(Document(
+                page_content=str(row.get("content") or ""),
+                metadata=metadata,
             ))
         return result
 

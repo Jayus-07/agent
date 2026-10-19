@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -80,20 +81,64 @@ def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     assert _filter_subprocess(paths) is False
 
 
-def test_unclassified_migration_does_not_match_fuzzy_keywords():
-    assert _filter_import(
-        ["backend/sql/migrations/100_new_unknown_table.sql"]
-    ) is False
-    assert _filter_subprocess(
-        ["backend/sql/migrations/100_new_unknown_table.sql"]
-    ) is False
-    # 新迁移至少执行 PR 免费契约门禁；是否需要真实评测由显式分类决定。
-    assert _filter_import(
-        ["backend/sql/migrations/100_new_unknown_table.sql"], event="pull_request"
-    ) is True
-    assert _filter_subprocess(
-        ["backend/sql/migrations/100_new_unknown_table.sql"], event="pull_request"
-    ) is True
+def _run_filter(paths: list[str], event: str):
+    # 子进程中文报错在 Windows 默认 GBK 控制台下会破坏 UTF-8 解码，显式固定。
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), "--event", event],
+        input="\n".join(paths) + "\n",
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env=env,
+    )
+
+
+def test_unclassified_migration_blocks_pr_free_preflight_and_gates_main():
+    """未分类迁移：PR 免费预检失败（可操作报错），main push 不被静默跳过。"""
+    path = "backend/sql/migrations/102_new_unknown_table.sql"
+    assert _mod.classify_migration(path) == "unknown"
+
+    pull = _run_filter([path], "pull_request")
+    assert pull.returncode == 2
+    assert "未分类迁移" in pull.stderr
+    assert path in pull.stderr
+
+    push = _run_filter([path], "push")
+    assert push.returncode == 0
+    assert push.stdout.strip().endswith("relevant=true")
+
+
+def test_every_repository_migration_is_explicitly_classified():
+    """完整性检查：仓库内每个迁移都必须显式归类，禁止隐式漏检。"""
+    root = Path(__file__).resolve().parents[1]
+    migrations = sorted(
+        p.name for p in (root / "backend" / "sql" / "migrations").glob("*.sql")
+    )
+    assert migrations
+    unknown = [
+        name for name in migrations
+        if _mod.classify_migration(f"backend/sql/migrations/{name}") == "unknown"
+    ]
+    assert unknown == [], unknown
+
+
+def test_migration_classification_categories():
+    assert _mod.classify_migration(
+        "backend/sql/migrations/079_llm_usage_billing_v2.sql"
+    ) == "paid"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/024_rag_eval_fixture_set.sql"
+    ) == "paid"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/098_cs_refund_order_unique.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/101_travel_v2_trip_conversations.sql"
+    ) == "non_ai"
+    assert _mod.classify_migration(
+        "backend/sql/migrations/099_model_price_source_monitor.sql"
+    ) == "non_ai"
 
 
 def test_model_price_monitor_changes_do_not_trigger_main_paid_smoke():
@@ -194,8 +239,16 @@ def test_approved_price_check_precedes_provider_probe():
             i for i, step in enumerate(steps)
             if step.get("name") == "Verify approved prices before any paid API call"
         )
-        provider_probe = next(
-            i for i, step in enumerate(steps)
-            if step.get("name") == "Verify bindings and probe real API"
-        )
-        assert price_check < provider_probe
+        if workflow_name == "rag_smoke.yml":
+            # Smoke 的真实评测本身受账本和预算门禁约束，不额外发起未计入
+            # 评测账本的独立 Provider Probe。
+            assert not any(
+                step.get("name") == "Verify bindings and probe real API"
+                for step in steps
+            )
+        else:
+            provider_probe = next(
+                i for i, step in enumerate(steps)
+                if step.get("name") == "Verify bindings and probe real API"
+            )
+            assert price_check < provider_probe

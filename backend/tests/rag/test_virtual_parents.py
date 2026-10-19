@@ -1,9 +1,9 @@
-"""2.2 C1 三策略虚拟 parent 补齐 — Step/Legal/QA 的 parent-child 检索修复。
+"""Parent-Child 上下文策略回归。
 
 契约：
 - Legal：每 LEGAL_CLAUSES_PER_PARENT(默认 5) 条款挂一个虚拟 parent
-- Step / QA：文档级单 parent
-- leaf.parent_chunk_id 非空且指向真实存在的 parent chunk_id
+- Step：文档级 parent；FAQ 完整问答叶子不再挂无答案的问题目录 parent
+- Parent-backed 策略的 leaf.parent_chunk_id 非空且指向真实存在的 parent chunk_id
 - chunk_id 与既有 leaf id 无撞车（anchor 隔离）
 """
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
@@ -76,15 +76,13 @@ class TestStepParents:
         assert "一、准备阶段" in parents[0].page_content
 
 
-class TestQAParents:
+class TestQAWithoutParents:
 
-    def test_single_doc_level_parent(self):
+    def test_question_answer_leaves_need_no_document_parent(self):
         chunks = QAChunkStrategy().split(_qa_ast(), "/tmp/faq.md")
         parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
-        assert len(parents) == 1
+        assert not parents
         leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
         assert len(leaves) == 2
-        for c in leaves:
-            assert c.metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
-        # parent 文本 = 问题列表
-        assert "报销流程" in parents[0].page_content
+        assert all("\nA：" in c.page_content for c in leaves)
+        assert all(not c.metadata.get("parent_chunk_id") for c in leaves)

@@ -139,6 +139,13 @@ class PostgresDocumentRegistry(DocumentRegistry):
         cur.execute(sql, params)
         return cur
 
+    @staticmethod
+    def _row_dict(row: Any) -> dict:
+        """转为公共行结构，并隐藏已停用的历史复杂度字段。"""
+        result = dict(row)
+        result.pop("complexity", None)
+        return result
+
     def _init_db(self):
         """建表（幂等），与 backend/sql/migrations/010_doc_registry_pg.sql 保持一致。"""
         with self._lock, self._conn() as conn:
@@ -211,7 +218,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "ORDER BY updated_at DESC, file_path LIMIT 1",
                 (file_path, normalized),
             ).fetchone()
-        return dict(row) if row else None
+        return self._row_dict(row) if row else None
 
     def get_by_doc_id(self, doc_id: str) -> dict | None:
         with self._lock, self._conn() as conn:
@@ -222,7 +229,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "updated_at DESC, file_path LIMIT 1",
                 (doc_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._row_dict(row) if row else None
 
     def count_active_by_doc_id(self, doc_id: str) -> int:
         with self._lock, self._conn() as conn:
@@ -236,14 +243,14 @@ class PostgresDocumentRegistry(DocumentRegistry):
     def list_all(self) -> dict[str, dict]:
         with self._lock, self._conn() as conn:
             rows = self._exec(conn, f"SELECT * FROM {self._table}").fetchall()
-        return {r["file_path"]: dict(r) for r in rows}
+        return {r["file_path"]: self._row_dict(r) for r in rows}
 
     def list_active(self) -> list[dict]:
         with self._lock, self._conn() as conn:
             rows = self._exec(
                 conn, f"SELECT * FROM {self._table} WHERE status = 'active'"
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
 
     def list_by_statuses(self, statuses: tuple[str, ...] | list[str]) -> list[dict]:
         if not statuses:
@@ -255,7 +262,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 f"SELECT * FROM {self._table} WHERE status IN ({placeholders})",
                 tuple(statuses),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
 
     def register_in_progress(
         self,
@@ -302,7 +309,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "WHERE doc_type = %s AND status = 'active' LIMIT %s",
                 (doc_type, limit),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
 
     def list_by_kb(self, kb_id: str) -> list[dict]:
         with self._lock, self._conn() as conn:
@@ -311,7 +318,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 f"SELECT * FROM {self._table} WHERE kb_id = %s AND status = 'active'",
                 (kb_id,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
 
     def search(
         self,
@@ -408,7 +415,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             ).fetchall()
 
         return {
-            "items": [dict(r) for r in rows],
+            "items": [self._row_dict(r) for r in rows],
             "total": total,
             "page": page,
             "page_size": page_size,
@@ -433,8 +440,11 @@ class PostgresDocumentRegistry(DocumentRegistry):
     def update_fields(self, file_path: str, fields: dict):
         """白名单字段部分更新（全量重建后回填快照字段用，防注入只放行元数据列）。"""
         allowed = {
+            # file_hash：失败更新回滚时恢复"上一次成功索引"的指纹，避免
+            # registry 指向尚未索引成功的内容（见 reindex_file 失败恢复）。
+            "file_hash",
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
-            "time_refs", "business_domain", "complexity", "quality_score",
+            "time_refs", "business_domain", "quality_score",
             "quality_issues", "confidence", "permission_scope",
             "fixture_set",
             # §6 治理 11 字段（R4）：版本治理元数据可回填
@@ -493,7 +503,6 @@ class PostgresDocumentRegistry(DocumentRegistry):
         keywords = meta.get("keywords", "")
         time_refs = meta.get("time_refs", "")
         business_domain = meta.get("business_domain", "")
-        complexity = meta.get("complexity", "")
         metadata_fingerprint = meta.get("metadata_fingerprint", "")
         doc_version = meta.get("doc_version", 1)
         kb_version = meta.get("kb_version", "v1")
@@ -528,7 +537,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "embedding_model": embedding_model, "minhash_sig": minhash_sig,
             "near_dup_id": near_dup_id, "summary": summary, "keywords": keywords,
             "time_refs": time_refs, "business_domain": business_domain,
-            "complexity": complexity, "metadata_fingerprint": metadata_fingerprint,
+            "metadata_fingerprint": metadata_fingerprint,
             "doc_version": doc_version, "kb_version": kb_version,
             "department": department, "permission_scope": permission_scope,
             "fixture_set": fixture_set, "version_id": version_id,
@@ -734,7 +743,12 @@ class PostgresDocumentRegistry(DocumentRegistry):
                    LIMIT %s OFFSET %s""",
                 tuple(params) + (page_size, offset),
             ).fetchall()
-        return {"items": [dict(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+        return {
+            "items": [self._row_dict(r) for r in rows],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+        }
 
     def distinct_permission_scopes(self) -> list[str]:
         """registry 中实际存在的 permission_scope 值（空串归一为 general）。
@@ -811,7 +825,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
                    WHERE status = 'active' AND expire_at IS NOT NULL AND expire_at <= %s""",
                 (now,),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._row_dict(r) for r in rows]
 
     def list_visible_doc_ids(self, doc_ids, now: str | None = None) -> set[str]:
         """批量正向可见性校验（Batch 1A 返修 + 终轮加固）：仅返回当前可见的 doc_id。

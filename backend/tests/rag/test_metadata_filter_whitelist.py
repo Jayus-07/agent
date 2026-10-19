@@ -15,9 +15,9 @@ from backend.rag.retrieval.query_analyzer import (
 
 def test_whitelist_matches_actually_indexed_fields():
     """白名单必须与入库元数据真实写入字段一致（metadata.py/chunking.py/indexer.py）。"""
+    # P0-2（2026-10-19）：doc_type/business_domain 退出硬过滤白名单
     assert RETRIEVAL_FILTERABLE_METADATA_FIELDS == frozenset({
-        "person_names", "doc_type", "business_domain",
-        "reporting_period", "is_latest",
+        "person_names", "reporting_period", "is_latest",
     })
 
 
@@ -41,8 +41,9 @@ def test_whitelisted_fields_still_filter():
                      domains=["order"], reporting_period="2026-Q3")
     f = pq.to_metadata_filter()
     assert f["person_names"] == "Anker"
-    assert f["doc_type"] == "policy"
-    assert f["business_domain"] == "order"
+    # P0-2：猜测的 doc_type/business_domain 停发，不得再出现在 filter
+    assert "doc_type" not in f
+    assert "business_domain" not in f
     assert f["reporting_period"] == "2026-Q3"
 
 

@@ -23,6 +23,9 @@ def validate_price_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     errors: list[dict[str, Any]] = []
     normalized: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
+    # 币种按 (model, component) 归组校验：同一模型的成本必须能用单一币种表达，
+    # 否则读取侧 PriceTable 会拒绝整份快照。
+    currencies_by_component: dict[tuple[str, str], str] = {}
 
     for index, raw in enumerate(rows):
         row = dict(raw)
@@ -30,7 +33,7 @@ def validate_price_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         component = str(row.get("component") or "").strip()
         dimension = str(row.get("dimension") or "").strip()
         unit = str(row.get("unit") or "per_1m_tokens").strip()
-        currency = str(row.get("currency") or "USD").strip().upper()
+        currency = str(row.get("currency") or "CNY").strip().upper()
         key = (model_name, component, dimension)
 
         def add_error(code: str, message: str) -> None:
@@ -42,8 +45,12 @@ def validate_price_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             add_error("COMPONENT_INVALID", "组件必须是 llm、embedding 或 rerank")
         if dimension not in PRICE_DIMENSIONS:
             add_error("DIMENSION_INVALID", "价格维度不合法")
-        if currency != "USD":
-            add_error("CURRENCY_UNSUPPORTED", "价格治理仅接受 USD")
+        if currency not in {"CNY", "USD"}:
+            add_error("CURRENCY_UNSUPPORTED", "价格币种仅接受 CNY 或 USD")
+        else:
+            existing = currencies_by_component.setdefault((model_name, component), currency)
+            if existing != currency:
+                add_error("CURRENCY_MIXED", "同一模型和组件不能混用币种")
         if unit not in PRICE_UNITS:
             add_error("UNIT_INVALID", "单位必须是 per_1m_tokens 或 per_call")
         if dimension == "tool_call" and unit != "per_call":
@@ -70,7 +77,7 @@ def validate_price_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 "dimension": dimension,
                 "price_per_unit": format(price, "f"),
                 "unit": unit,
-                "currency": "USD",
+                "currency": currency,
             })
 
     return {"valid": not errors and bool(rows), "errors": errors, "rows": normalized}

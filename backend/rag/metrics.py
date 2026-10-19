@@ -7,7 +7,7 @@ Designed for: Prometheus scraping, CLI inspection, evaluation feedback.
 import time
 import math
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from contextlib import contextmanager
 
 

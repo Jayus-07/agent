@@ -27,10 +27,14 @@ RERANK_PROVIDER 留空时跟随 ENV_MODE（向后兼容）。
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 import os
 import math
+import re
 import threading
 import time
+import uuid
 from typing import TYPE_CHECKING, Any
 
 import requests
@@ -64,7 +68,7 @@ from backend.config import (
 from backend.config import model_roles
 from backend.infra.llm import credentials as credentials_mod
 from backend.infra.llm import specialized as specialized_mod
-from backend.infra.token_tracker import create_tracker_for_rerank
+from backend.infra.token_tracker import TokenTracker, create_tracker_for_rerank
 from pathlib import Path
 from backend.shared.logger import logger
 
@@ -182,6 +186,101 @@ _DEFAULT_RERANK_BASE = {
 _DASHSCOPE_RERANK_PATH = "/services/rerank/text-rerank/text-rerank"
 _JINA_RERANK_PATH = "/rerank"
 
+# ── 多查询全候选评分（PR #52，Phase C/D）─────────────────────────────
+# Provider 的 top_n 会裁剪返回结果：若每条查询只取 Top-8，未进入前 8 的候选
+# 就没有分数，max 聚合会被"缺失即 0"污染。因此多查询路径按候选全量请求
+# （top_n = 本批候选数），单次请求覆盖不了时按批切分，每批仍全量评分。
+_RERANK_BATCH_SIZE = max(1, int(os.getenv("RERANK_MAX_CANDIDATES", "100")))
+# 剩余检索预算低于该阈值时不再发起后续查询的评分（原问题评分不受此限）。
+_RERANK_MQ_MIN_BUDGET_MS = max(0.0, float(os.getenv("RERANK_MQ_MIN_BUDGET_MS", "1200")))
+# 单次 HTTP 尝试的最短可用预算；不足即视为"不得提交的调用"。
+_RERANK_MIN_ATTEMPT_S = 0.2
+# 重试同样消耗共享预算：剩余不足时不再重试。
+_RERANK_MIN_RETRY_BUDGET_S = 0.3
+# 分数合法区间 0-1 的浮点噪声容忍度（只夹紧，不放宽语义）。
+_RERANK_SCORE_EPS = 1e-6
+# 仅原问题Worker绑定；成功预占并准备发出HTTP后才放行变体预占。
+_primary_rerank_dispatch: ContextVar[Any] = ContextVar(
+    "primary_rerank_dispatch", default=None,
+)
+_rerank_query_index: ContextVar[int | None] = ContextVar(
+    "rerank_query_index", default=None,
+)
+
+
+class RerankLateResultDiscarded(RuntimeError):
+    """Provider 已返回但共享检索 deadline 已过；只结算用量，不采用分数。"""
+
+
+def _budget_deadline_at() -> float | None:
+    """当前请求的检索 deadline（monotonic）；旁路调用/离线评测返回 None。
+
+    多查询评分必须与检索链共享同一份 deadline，不允许每条查询各自重新
+    获得完整超时。
+    """
+    from backend.rag.retrieval_budget import current_budget
+
+    budget = current_budget()
+    return None if budget is None else budget.deadline_at
+
+
+def _bounded_attempt_timeout(
+    provider_timeout: float,
+    requested_s: float | None,
+    deadline_at: float | None,
+) -> float:
+    """单次 HTTP 尝试可用超时 = min(Provider 超时, 指定超时, 真实剩余预算)。"""
+    limit = float(provider_timeout)
+    if requested_s is not None:
+        limit = min(limit, float(requested_s))
+    if deadline_at is not None:
+        limit = min(limit, deadline_at - time.monotonic())
+    return limit
+
+
+def _budget_allows_extra_query(
+    deadline_at: float | None, min_ms: float | None = None,
+) -> bool:
+    """剩余预算是否还够发起"额外"查询评分（原问题评分不走此守卫）。"""
+    if deadline_at is None:
+        return True
+    need_s = (min_ms if min_ms is not None else _RERANK_MQ_MIN_BUDGET_MS) / 1000
+    return (deadline_at - time.monotonic()) >= need_s
+
+
+def _rerank_document_text(doc, limit: int = 2000) -> str:
+    """Provider 侧授权文本表达：文件名标题 + 正文（截断），不含本机路径。"""
+    source = str(doc.metadata.get("title") or doc.metadata.get("source") or "")
+    title = source.replace("\\", "/").rsplit("/", 1)[-1][:160]
+    text = f"文档：{title}\n{doc.page_content}" if title else doc.page_content
+    return text[:limit]
+
+
+def full_candidate_scores(
+    backend, query: str, documents: list[str], deadline_at: float | None = None,
+) -> list[tuple[int, float]]:
+    """对同一批候选取得全部（不裁剪）评分；后端不支持时抛 TypeError。
+
+    不把缺失项伪造成 0/1 分：批内请求失败直接抛出，由调用方把该查询标记为
+    失败；成功的批次也会完整返回本批全部候选的分数。
+    """
+    rank_all = getattr(backend, "rank_all", None)
+    if callable(rank_all):
+        return list(rank_all(query, documents, deadline_at=deadline_at))
+    rank = getattr(backend, "rank", None)
+    if callable(rank):
+        return list(rank(query, documents, top_k=len(documents)))
+    raise TypeError("rerank 后端不支持全候选评分")
+
+
+def _backend_rerank_text(backend, doc) -> str:
+    """按后端既有授权文本表达构造评分文本（多查询路径与单查询保持一致）。"""
+    builder = getattr(backend, "rerank_text", None)
+    if callable(builder):
+        return builder(doc)
+    return (doc.page_content or "")[:2000]
+
+
 def _resolve_rerank_base() -> str:
     """兼容入口：运行时地址必须来自数据库专项绑定。"""
     return ""
@@ -231,19 +330,39 @@ class DashScopeReranker(BaseDocumentCompressor):
         self.__dict__['_provider_id'] = provider_id or "unknown"
         self.__dict__['_billing_model'] = billing_model or resolved_model
         self.__dict__['_api_format'] = resolved_format
-        self.__dict__['_last_total_tokens'] = 0
 
         logger.info(
             f"初始化 Cloud Reranker HTTP "
             f"(format={resolved_format}, model={resolved_model}, endpoint={resolved_base_url}, timeout={timeout}s)"
         )
 
-    def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
+    def rank(
+        self,
+        query: str,
+        documents: list[str],
+        top_k: int = 8,
+        *,
+        timeout_s: float | None = None,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
         """调用 DashScope Rerank REST API。
+
+        Args:
+            top_k: 返回条数（Provider 的 top_n）。全候选评分由 rank_all 传
+                len(documents)，避免裁剪造成分数缺失。
+            timeout_s: 调用方指定的单次尝试超时（秒）。
+            deadline_at: 共享检索 deadline（monotonic 秒）；每次尝试与重试
+                都不得超过真实剩余时间。
 
         Returns:
             list[tuple[int, float]]: (index, relevance_score) 列表，score 已在 0-1 区间
         """
+        if not documents:
+            return []
+        if top_k <= 0:
+            return []
+        if deadline_at is None:
+            deadline_at = _budget_deadline_at()
         if self._api_format == "jina":
             # Jina 兼容格式（SiliconFlow / TEI / jina rerank）
             payload = {
@@ -267,51 +386,243 @@ class DashScopeReranker(BaseDocumentCompressor):
             }
 
         last_err: Exception | None = None
-        for attempt in range(2):  # 一次网络抖动不该直接损失整轮排序质量，最多重试 1 次
-            try:
-                resp = requests.post(
-                    self._endpoint,
-                    json=payload,
-                    headers=self._headers,
-                    timeout=self.timeout,
+        for attempt in range(2):
+            attempt_timeout = _bounded_attempt_timeout(
+                self.timeout, timeout_s, deadline_at,
+            )
+            if attempt_timeout < _RERANK_MIN_ATTEMPT_S:
+                # 预算不足以完成哪怕一次最短尝试：不提交这次 HTTP 调用。
+                if last_err is not None:
+                    raise last_err
+                raise requests.exceptions.Timeout(
+                    "rerank 剩余检索预算不足，未发起 HTTP 尝试"
                 )
-
-                if resp.status_code != 200:
-                    raise Exception(
-                        f"DashScope API error [status={resp.status_code}]: {resp.text[:500]}"
+            try:
+                return self._rank_once(
+                    payload, len(documents), "retry" if attempt else "primary",
+                    timeout=attempt_timeout, deadline_at=deadline_at,
+                )
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
+                last_err = exc
+                # 重试也消耗共享预算：剩余不够再试一次就停，避免迟到调用
+                # 在用户响应结束后继续产生付费请求。
+                if (
+                    deadline_at is not None
+                    and not _budget_allows_extra_query(
+                        deadline_at, _RERANK_MIN_RETRY_BUDGET_S * 1000,
                     )
+                ):
+                    raise
+            except Exception:
+                # 鉴权、预算拒绝及非法响应不重复投递。
+                raise
+        raise last_err or RuntimeError("云端 rerank 未返回结果")
 
+    def rank_all(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
+        """对全部候选评分（不裁剪），必要时按批切分。
+
+        批内 top_n = 本批候选数，保证每个候选都拿到自己的真实分数；批间
+        索引回填为全局索引，绝不静默丢候选。
+        """
+        scored: list[tuple[int, float]] = []
+        total = len(documents)
+        for start in range(0, total, _RERANK_BATCH_SIZE):
+            batch = documents[start:start + _RERANK_BATCH_SIZE]
+            rows = self.rank(
+                query, batch, top_k=len(batch), deadline_at=deadline_at,
+            )
+            for local_idx, score in rows:
+                scored.append((start + local_idx, score))
+        return scored
+
+    def _rank_once(
+        self, payload, doc_count: int, kind: str,
+        timeout: float | None = None, deadline_at: float | None = None,
+    ):
+        """每次 HTTP 尝试独立预占、Trace 与记账；迟到分数不得回流业务。"""
+        from backend.infra.llm.budget import (
+            current_request_id,
+            current_reservation_id,
+            scoped_model_call,
+        )
+        from backend.observability.tracer import (
+            current_trace_context,
+            trace_collector,
+        )
+
+        attempt_id = uuid.uuid4().hex
+        trace_id, _ = current_trace_context()
+        started = time.monotonic()
+        metrics = {
+            "internal_call_id": attempt_id,
+            "provider_attempt_id": attempt_id,
+            "role": "rerank",
+            "query_index": _rerank_query_index.get(),
+            "model": self._billing_model,
+            "provider": self._provider_id,
+            "request_id": current_request_id() or "",
+            "trace_id": trace_id or "",
+            "provider_ttfb_ms": "unavailable",
+            "provider_call_started": False,
+            "provider_completed": False,
+            "provider_cancel_acknowledged": False,
+            "usage_status": "pending",
+            "settlement_status": "pending",
+            "timeout_kind": "none",
+        }
+        response_received = False
+        usage_recorded = False
+        with scoped_model_call(self._billing_model, "rerank", kind=kind):
+            # 价格校验和预占也会耗时，HTTP必须使用此刻的真实剩余预算。
+            timeout = _bounded_attempt_timeout(self.timeout, timeout, deadline_at)
+            if timeout < _RERANK_MIN_ATTEMPT_S:
+                from backend.infra.llm.budget import release_model_reservation
+
+                # 可以证明尚未发给Provider，才能释放；不写伪造的零usage。
+                release_model_reservation()
+                raise requests.exceptions.Timeout("rerank 预占后预算不足，未发起HTTP")
+            metrics["reservation_id"] = current_reservation_id() or ""
+            metrics["reservation_kind"] = kind
+            span = trace_collector.start_span(
+                "rerank_provider_attempt",
+                name="Rerank Provider 尝试",
+                type="llm_call",
+            )
+            try:
+                on_dispatch = _primary_rerank_dispatch.get()
+                if on_dispatch is not None:
+                    on_dispatch()
+                metrics["provider_call_started"] = True
+                provider_started = time.monotonic()
+                resp = requests.post(
+                    self._endpoint, json=payload, headers=self._headers,
+                    timeout=self.timeout if timeout is None else timeout,
+                )
+                provider_elapsed = (time.monotonic() - provider_started) * 1000
+                metrics["provider_call_ms"] = round(provider_elapsed, 1)
+                metrics["provider_response_ms"] = round(provider_elapsed, 1)
+                metrics["provider_completed"] = True
+                response_received = True
+                try:
+                    elapsed = resp.elapsed.total_seconds() * 1000
+                    if elapsed >= 0:
+                        metrics["provider_ttfb_ms"] = round(elapsed, 1)
+                except (AttributeError, TypeError, ValueError):
+                    metrics["provider_ttfb_ms"] = "unavailable"
+                headers = getattr(resp, "headers", {}) or {}
+                for header in ("x-request-id", "request-id", "x-dashscope-request-id"):
+                    candidate = str(headers.get(header, "") or "")[:128]
+                    if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate):
+                        metrics["provider_request_id"] = candidate
+                        break
+                if resp.status_code != 200:
+                    raise RuntimeError(
+                        f"Rerank provider returned HTTP {resp.status_code}"
+                    )
                 data = resp.json()
-                # dashscope: output.results / jina: results（字段名 index、relevance_score 一致）
-                results = (data.get("output", {}).get("results")
-                           if self._api_format == "dashscope"
-                           else data.get("results")) or []
-                scored = [(r["index"], r["relevance_score"]) for r in results]
-
+                results = (
+                    data.get("output", {}).get("results")
+                    if self._api_format == "dashscope" else data.get("results")
+                ) or []
+                scored = [(row["index"], row["relevance_score"]) for row in results]
                 raw_tokens = data.get("usage", {}).get("total_tokens", 0)
                 try:
-                    self.__dict__['_last_total_tokens'] = int(raw_tokens)
+                    tokens = max(0, int(raw_tokens))
                 except (ValueError, TypeError):
-                    self.__dict__['_last_total_tokens'] = 0
-                logger.debug(
-                    f"DashScope Rerank OK: query_len={len(query)}, "
-                    f"doc_count={len(documents)}, top_k={top_k}, tokens={self._last_total_tokens}"
+                    tokens = 0
+                parse_ms = (time.monotonic() - provider_started) * 1000
+                metrics["response_parse_ms"] = round(
+                    max(parse_ms - provider_elapsed, 0), 1,
                 )
+                accounting = self._record_tokens(
+                    doc_count, (time.monotonic() - started) * 1000,
+                    total_tokens=tokens,
+                )
+                usage_recorded = True
+                if isinstance(accounting, dict):
+                    metrics.update(accounting)
+                else:
+                    metrics.update(
+                        usage_status="received" if tokens > 0 else "unavailable",
+                        settlement_status=(
+                            "settlement_attempted" if tokens > 0 else "needs_review"
+                        ),
+                        usage_ledger_status="unavailable",
+                    )
+                if deadline_at is not None and time.monotonic() >= deadline_at:
+                    metrics.update(
+                        timeout_kind="total_deadline_expired",
+                        provider_completed_late=True,
+                        caller_outcome="timeout_or_degraded",
+                        late_result_discarded=True,
+                    )
+                    metrics["attempt_total_ms"] = round(
+                        (time.monotonic() - started) * 1000, 1,
+                    )
+                    trace_collector.end_span(
+                        span, metrics=metrics, status="completed_late",
+                    )
+                    raise RerankLateResultDiscarded(
+                        "Rerank response arrived after shared retrieval deadline"
+                    )
+                metrics["attempt_total_ms"] = round(
+                    (time.monotonic() - started) * 1000, 1,
+                )
+                trace_collector.end_span(span, metrics=metrics, status="success")
                 return scored
-            except requests.exceptions.Timeout as e:
-                last_err = e
-            except requests.exceptions.ConnectionError as e:
-                last_err = e
-            except Exception as e:
-                if "DashScope" in str(e):
-                    raise
-                last_err = Exception(f"DashScope rerank failed: {e}")
+            except RerankLateResultDiscarded:
+                raise
+            except Exception as exc:
+                if not usage_recorded:
+                    accounting = self._record_tokens(
+                        doc_count, (time.monotonic() - started) * 1000,
+                        status="error",
+                    )
+                    if isinstance(accounting, dict):
+                        metrics.update(accounting)
+                    else:
+                        metrics.update(
+                            usage_status="unavailable",
+                            settlement_status="needs_review",
+                            usage_ledger_status="unavailable",
+                        )
+                timeout_error = (
+                    isinstance(exc, requests.exceptions.Timeout)
+                    or "timeout" in type(exc).__name__.lower()
+                )
+                if "provider_started" in locals() and not response_received:
+                    metrics["provider_call_ms"] = round(
+                        (time.monotonic() - provider_started) * 1000, 1,
+                    )
+                    metrics["provider_response_ms"] = "unavailable"
+                metrics.update(
+                    usage_status="unavailable",
+                    settlement_status="needs_review",
+                    provider_completion=(
+                        "unknown" if not response_received else "response_received"
+                    ),
+                    provider_error_type=type(exc).__name__,
+                    timeout_kind=(
+                        "total_deadline_expired"
+                        if deadline_at is not None and time.monotonic() >= deadline_at
+                        else "provider_io_timeout" if timeout_error else "none"
+                    ),
+                    attempt_total_ms=round(
+                        (time.monotonic() - started) * 1000, 1,
+                    ),
+                )
+                trace_collector.end_span(span, metrics=metrics, status="error")
+                raise
 
-        if isinstance(last_err, requests.exceptions.Timeout):
-            raise Exception(f"DashScope rerank 超时 ({self.timeout}s)")
-        if isinstance(last_err, requests.exceptions.ConnectionError):
-            raise Exception(f"DashScope 网络连接失败: {last_err}")
-        raise last_err or Exception("DashScope rerank failed: unknown")
+    def rerank_text(self, doc, limit: int = 2000) -> str:
+        """单条候选的授权评分文本（文件名标题 + 正文），不含本机目录。"""
+        return _rerank_document_text(doc, limit=limit)
 
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现
@@ -319,13 +630,13 @@ class DashScopeReranker(BaseDocumentCompressor):
         span 埋点在外层 RerankCompressor.compress_documents（同名 "rerank"），
         此处不再重复创建 —— 旧双层埋点导致 trace 树出现两条几乎等时的 rerank 行。
         """
-        t0 = time.monotonic()
-
         if not documents:
             return []
 
         try:
-            texts = [doc.page_content[:2000] for doc in documents]
+            # 重排需要文档来源语义，不能把政策正文与 FAQ 摘要当成无标题片段。
+            # 仅使用已授权候选的标题/文件名，不向 Provider 发送本机目录。
+            texts = [self.rerank_text(doc) for doc in documents]
             ranked_results = self.rank(query, texts, top_k=kwargs.get("top_k", RERANK_TOP_K))
 
             # 应用阈值过滤并限制数量
@@ -342,33 +653,32 @@ class DashScopeReranker(BaseDocumentCompressor):
             for doc, score in result:
                 doc.metadata["rerank_score"] = round(float(score), 4)
 
-            duration_ms = (time.monotonic() - t0) * 1000
-
-            # 记录 token 用量到 SQLite（使用 rank() 从 API 响应中提取的实际值）
-            self._record_tokens(len(texts), duration_ms, total_tokens=self._last_total_tokens)
-
             return [doc for doc, _ in result]
 
         except Exception as e:
-            duration_ms = (time.monotonic() - t0) * 1000
             logger.error(f"DashScope API rerank 失败：{e}")
-            self._record_tokens(len(documents), duration_ms, status="error")
             raise
 
     def _record_tokens(self, doc_count, duration_ms, total_tokens=0, status="success"):
-        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。
+        """写入统一用量账本，并使用同一计费结果结算预算。
 
         2026-09-22 起成本与 token 计量连通：按 `model_price` 实价计费
         （供应商页登记即生效），enforce=False 时缺价回落旧估算，不丢用量行。
         """
+        billing = None
+        ledger_written = False
+        settlement_status = "unknown"
         try:
-            from backend.observability.llm_usage_store import get_llm_usage_store
+            from backend.infra.llm.budget import current_call_decision
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+                get_llm_usage_store,
+            )
             from backend.observability.tracer import current_trace_context
             trace_id, session_id = current_trace_context()
             # Billing V2（2026-10-07 收口）：唯一计费入口，行金额恒 CNY 记账，
             # 原生成本/币种随行走 V2 列（此前 CNY 值写 cost_usd 且 currency 空，
             # 会被按 USD 二次换汇）。
-            billing = None
             if (total_tokens or 0) > 0:
                 try:
                     from backend.infra.llm.pricing import (
@@ -384,7 +694,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                     )
                 except Exception as e:
                     logger.debug(
-                        "[Reranker] 用量计费失败（用量行照常记录，成本记 0）: %s", e,
+                        "[Reranker] 用量计费失败（保留 unpriced 状态）: %s", e,
                     )
             event = {
                 "component": "rerank",
@@ -398,6 +708,8 @@ class DashScopeReranker(BaseDocumentCompressor):
                 "session_id": session_id or "",
                 "finish_reason": status,
             }
+            event.update(current_usage_attribution())
+            event["decision"] = current_call_decision()
             if billing is not None:
                 event.update({
                     "billing_schema_version": 2,
@@ -418,13 +730,47 @@ class DashScopeReranker(BaseDocumentCompressor):
                 })
             else:
                 event.update({
-                    "cost_usd": 0.0,
-                    "total_cost": 0.0,
+                    "billed_cost_cny": None,
+                    "total_cost": None,
                     "cost_status": "unpriced",
+                    "pricing_source": "unpriced",
+                    "usage_source": "unavailable",
                 })
-            get_llm_usage_store().record(event)
+            ledger_written = bool(get_llm_usage_store().record(event))
         except Exception:
             pass  # 软失败
+
+        finally:
+            from backend.infra.llm.budget import record_model_usage
+
+            priced = billing is not None and billing.cost_status in {
+                "exact", "estimated",
+            }
+            try:
+                settlement_status = record_model_usage(
+                    prompt_tokens=total_tokens,
+                    total_tokens=total_tokens,
+                    cost=billing.billed_cost_cny if priced else None,
+                    review_reason=(
+                        "" if status == "success" and total_tokens > 0 and priced
+                        else "rerank_usage_or_price_unavailable"
+                    ),
+                )
+            except Exception:
+                settlement_status = "accounting_error"
+                logger.warning(
+                    "[Reranker] 预算结算状态记录失败", exc_info=True,
+                )
+        return {
+            "usage_status": "received" if total_tokens > 0 else "unavailable",
+            "settlement_status": settlement_status,
+            "usage_ledger_status": "written" if ledger_written else "write_failed",
+            "price_version": billing.price_version if billing is not None else "",
+            "pricing_source": (
+                billing.pricing_source if billing is not None else "unpriced"
+            ),
+            "cost_status": billing.cost_status if billing is not None else "unpriced",
+        }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -452,13 +798,26 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         self.__dict__['model'] = LocalModelLoader.get_instance()
         self.__dict__['_backend_name'] = "local"
 
-    def rank(self, query: str, documents: list[str], top_k: int = 8) -> list[tuple[int, float]]:
+    def rank(
+        self,
+        query: str,
+        documents: list[str],
+        top_k: int = 8,
+        *,
+        timeout_s: float | None = None,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
         """
         使用本地 CrossEncoder 进行重排序
+
+        本地推理无 HTTP 超时/计费语义，timeout_s 与 deadline_at 仅为与云端
+        后端保持同一调用签名（预算守卫由 RerankCompressor 统一负责）。
 
         Returns:
             list[tuple[int, float]]: (index, normalized_score) 列表
         """
+        if not documents:
+            return []
         pairs = [(query, doc) for doc in documents]
 
         try:
@@ -478,6 +837,27 @@ class LocalCrossEncoderBackend(BaseDocumentCompressor):
         ]
 
         return scored[:top_k]
+
+    def rank_all(
+        self,
+        query: str,
+        documents: list[str],
+        *,
+        deadline_at: float | None = None,
+    ) -> list[tuple[int, float]]:
+        """对全部候选评分（本地推理无需裁剪，按批控制单次输入规模）。"""
+        scored: list[tuple[int, float]] = []
+        total = len(documents)
+        for start in range(0, total, _RERANK_BATCH_SIZE):
+            batch = documents[start:start + _RERANK_BATCH_SIZE]
+            rows = self.rank(query, batch, top_k=len(batch))
+            for local_idx, score in rows:
+                scored.append((start + local_idx, score))
+        return scored
+
+    def rerank_text(self, doc, limit: int = 2000) -> str:
+        """本地后端沿用正文截断表达（与既有单查询路径一致）。"""
+        return (doc.page_content or "")[:limit]
 
     def compress_documents(self, documents, query, **kwargs):
         """BaseDocumentCompressor 接口实现（span 埋点在外层 RerankCompressor，见 DashScope 同名说明）"""
@@ -609,6 +989,197 @@ def get_reranker_backend() -> BaseDocumentCompressor:
         return LocalCrossEncoderBackend()
 
 
+
+# ═══════════════════════════════════════════════════════════
+# 多查询评分：校验 → max 聚合 → 稳定排序（PR #52）
+# ═══════════════════════════════════════════════════════════
+
+def _is_real_score(value) -> bool:
+    """真实数值分数：排除 bool / str / NaN / Inf。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(float(value))
+
+
+def _is_valid_index(value, candidate_count: int) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 0 <= value < candidate_count
+    )
+
+
+def _read_runtime_queries(documents, query: str) -> list[str]:
+    """读取 MultiQuery 交接的请求级查询列表；不满足契约时返回空列表。
+
+    契约：首个候选的私有元数据里存放 list[str]，且第一条必须与原问题一致
+    （保持"原始 query 恒第一位"）；缺失、类型错误、只有一条或首位不匹配
+    一律返回空，调用方回落到既有单查询行为——不启用新的评分语义。
+    """
+    if not documents:
+        return []
+    from backend.rag.retrieval.multi_query import RUNTIME_MQ_QUERIES_KEY
+
+    metadata = getattr(documents[0], "metadata", None) or {}
+    raw = metadata.get(RUNTIME_MQ_QUERIES_KEY)
+    if not isinstance(raw, (list, tuple)):
+        return []
+    original = (query or "").strip()
+    queries: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        text = item.strip()
+        if not text or text in queries:
+            continue
+        queries.append(text)
+    if len(queries) < 2 or not original or queries[0] != original:
+        return []
+    return queries
+
+
+@contextmanager
+def _query_scorer(backend, queries, texts, deadline_at, parent_id):
+    """云端三查询共享截止时间并发评分；仅调用方可把分数写回业务结果。"""
+    parallel = isinstance(backend, DashScopeReranker) and len(queries) <= 3
+    if not parallel or deadline_at is None:
+        yield lambda position, query: full_candidate_scores(
+            backend, query, texts, deadline_at=deadline_at,
+        ), False
+        return
+
+    from backend.infra.thread_pools import submit_rag_task
+    from backend.observability.tracer import bind_graph_node, reset_graph_node
+
+    primary_ready = threading.Event()
+    primary_dispatched = threading.Event()
+
+    def on_primary_dispatch():
+        primary_dispatched.set()
+        primary_ready.set()
+
+    def invoke(position, query):
+        if position > 0:
+            primary_ready.wait(timeout=max(0.0, deadline_at - time.monotonic()))
+            if not primary_dispatched.is_set():
+                return None
+        # 排队时间也消耗同一deadline；过期任务不得再触发付费调用。
+        if position > 0 and not _budget_allows_extra_query(deadline_at):
+            return None
+        if time.monotonic() >= deadline_at:
+            raise requests.exceptions.Timeout("rerank 排队后共享deadline已过期")
+        token = bind_graph_node(parent_id)
+        dispatch_token = _primary_rerank_dispatch.set(
+            on_primary_dispatch if position == 0 else None,
+        )
+        index_token = _rerank_query_index.set(position)
+        try:
+            return full_candidate_scores(backend, query, texts, deadline_at)
+        finally:
+            if position == 0:
+                primary_ready.set()
+            _primary_rerank_dispatch.reset(dispatch_token)
+            _rerank_query_index.reset(index_token)
+            reset_graph_node(token)
+
+    futures = {}
+    try:
+        for position, query in enumerate(queries):
+            if position == 0 or _budget_allows_extra_query(deadline_at):
+                futures[position] = submit_rag_task("rerank", invoke, position, query)
+
+        def result(position, query):
+            future = futures.get(position)
+            if future is None:
+                return None
+            return future.result(timeout=max(0.0, deadline_at - time.monotonic()))
+
+        yield result, True
+    finally:
+        # 不等待不能物理取消的Provider；其原调用上下文负责迟到usage结算。
+        for future in futures.values():
+            future.cancel()
+
+
+def _supports_full_scoring(backend) -> bool:
+    """后端是否具备全候选评分能力（否则退回单查询契约）。"""
+    return (
+        callable(getattr(backend, "rank_all", None))
+        or callable(getattr(backend, "rank", None))
+    )
+
+
+def validate_rerank_scores(
+    raw, candidate_count: int,
+) -> tuple[list[tuple[int, float]], int, int]:
+    """校验 Provider 返回的 (index, score)；返回 (有效项, 非法项数, 重复项数)。
+
+    非法索引、越界索引、重复索引、布尔/字符串/NaN/Inf 分数一律不参与 max；
+    缺失评分保持缺失（不默认 0/1），由调用方按查询显式记账。
+    """
+    if raw is None or isinstance(raw, (str, bytes, dict)):
+        raise ValueError(f"rerank 返回类型非法：{type(raw).__name__}")
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError(f"rerank 返回类型非法：{type(raw).__name__}")
+
+    valid: list[tuple[int, float]] = []
+    seen: set[int] = set()
+    invalid = duplicate = 0
+    for row in raw:
+        if isinstance(row, (str, bytes, dict)) or not isinstance(row, (list, tuple)):
+            invalid += 1
+            continue
+        if len(row) != 2:
+            invalid += 1
+            continue
+        idx, score = row
+        if not _is_valid_index(idx, candidate_count):
+            invalid += 1
+            continue
+        if idx in seen:
+            duplicate += 1
+            continue
+        if not _is_real_score(score):
+            invalid += 1
+            continue
+        value = float(score)
+        # 合法区间沿用现有 0-1（DashScope / Jina 协议均如此）；只容忍浮点
+        # 表示噪声并夹紧，避免 1.0000000002 之类的噪声把整条查询判废。
+        if value < -_RERANK_SCORE_EPS or value > 1.0 + _RERANK_SCORE_EPS:
+            invalid += 1
+            continue
+        value = min(1.0, max(0.0, value))
+        seen.add(idx)
+        valid.append((idx, value))
+    return valid, invalid, duplicate
+
+
+def aggregate_multi_query_scores(
+    queries: list[str],
+    per_query_scores: dict[str, list[tuple[int, float]]],
+) -> list[tuple[int, float, str]]:
+    """同一候选跨查询取最大有效分。
+
+    - 同分不换冠军：先出现的查询获胜，而 queries[0] 恒为原始问题，
+      等价于"同分优先原始问题的有效分数"；
+    - 排序按分数降序、同分按原候选顺序（稳定），不依赖并发完成顺序；
+    - 没有任何有效分数的候选不进入结果（缺失 ≠ 0 分）。
+    """
+    best: dict[int, tuple[float, int]] = {}
+    for query_index, query in enumerate(queries):
+        for idx, score in per_query_scores.get(query) or []:
+            previous = best.get(idx)
+            if previous is None or score > previous[0]:
+                best[idx] = (score, query_index)
+
+    ranked = [
+        (idx, score, queries[query_index])
+        for idx, (score, query_index) in best.items()
+    ]
+    ranked.sort(key=lambda row: (-row[1], row[0]))
+    return ranked
+
+
 # ═══════════════════════════════════════════════════════════
 # Legacy Interface - Backward Compatibility
 # ═══════════════════════════════════════════════════════════
@@ -650,8 +1221,220 @@ class RerankCompressor(BaseDocumentCompressor):
                     else:
                         self.__dict__['_backend_type'] = "local"
 
+    # ── 多查询评分（PR #52）────────────────────────────────────────
+
+    def _log_evictions(self, documents, result_docs, span) -> None:
+        """驱逐明细（治理 A）：记录哪些文档被 rerank 淘汰及原因。
+
+        2026-09-13 golden RC-013/080 排查事故：中间阶段静默驱逐文档，
+        无任何"谁被淘汰、为什么"的留痕。签名 = (source, 内容前40字)，
+        兼容 backend 返回新对象的情况。
+        """
+        from backend.observability.tracer import trace_collector
+
+        def _sig(d):
+            m = d.metadata or {}
+            name = m.get("source") or m.get("source_file") or m.get("doc_id") or "?"
+            return (name, (d.page_content or "")[:40])
+
+        try:
+            survived = {_sig(d) for d in result_docs}
+            evicted = [
+                {"doc": _sig(d)[0], "content_head": _sig(d)[1][:30]}
+                for d in documents if _sig(d) not in survived
+            ]
+            if evicted:
+                trace_collector.add_event(span, "rerank_eviction", "info",
+                    f"Rerank 淘汰 {len(evicted)}/{len(documents)} 篇 "
+                    f"(低于阈值 {self.threshold} 或超出 top_k={self.top_k})",
+                    data={"evicted": evicted[:10], "evicted_count": len(evicted)})
+                logger.info(
+                    f"[Rerank] 淘汰 {len(evicted)}/{len(documents)} 篇: "
+                    f"{[e['doc'] for e in evicted[:5]]}{'...' if len(evicted) > 5 else ''}"
+                )
+        except Exception:
+            pass  # 契约留痕失败不影响主流程
+
+    def _compress_multi_query(self, documents, queries, span, record_stage):
+        """对同一批候选按"原问题 + 有效改写"分别全候选评分，取最大值。
+
+        契约：
+        - 每条查询都请求全量候选（top_n = 候选数），不按查询各自 Top-K 裁剪；
+        - 原始 query 必须评分成功，否则整体降级到既有单查询/透传契约；
+        - 额外查询共享检索 deadline，预算不足即跳过，不重开超时窗口；
+        - 阈值与 top_k 只在 max 聚合后统一执行一次；
+        - 同分优先原始问题，其次原始候选顺序（不依赖并发完成顺序）。
+        """
+        from backend.observability.tracer import trace_collector
+
+        candidate_count = len(documents)
+        texts = [_backend_rerank_text(self.backend, doc) for doc in documents]
+        # 并发完成顺序不可用于关联费用；原问题失败出口也保留查询索引映射。
+        span.input = {"queries": [q[:80] for q in queries], "candidate_count": candidate_count}
+        deadline_at = _budget_deadline_at()
+        started = time.monotonic()
+
+        per_query: dict[str, list[tuple[int, float]]] = {}
+        query_rows: list[dict] = []
+        calls = 0
+
+        with _query_scorer(
+            self.backend, queries, texts, deadline_at, span.span_id,
+        ) as (score_query, parallel):
+            for position, q in enumerate(queries):
+                if not parallel and position > 0 and not _budget_allows_extra_query(deadline_at):
+                    query_rows.append({
+                        "query": q[:80], "status": "skipped_budget",
+                        "scored": 0, "invalid": 0, "duplicate": 0, "missing": candidate_count,
+                    })
+                    trace_collector.add_event(
+                        span, "rerank_query_skipped", "info",
+                        f"剩余检索预算不足，跳过第 {position + 1} 条查询的评分",
+                        data={"query": q[:80]},
+                    )
+                    logger.info(
+                        f"[Rerank] 剩余预算不足，跳过第 {position + 1} 条查询评分"
+                    )
+                    continue
+
+                try:
+                    raw = score_query(position, q)
+                    if raw is None:
+                        query_rows.append({
+                            "query": q[:80], "status": "skipped_budget",
+                            "scored": 0, "invalid": 0, "duplicate": 0,
+                            "missing": candidate_count,
+                        })
+                        continue
+                    calls += 1
+                    valid, invalid, duplicate = validate_rerank_scores(raw, candidate_count)
+                except Exception as exc:  # noqa: BLE001 — 单条查询失败不拖垮整链
+                    query_rows.append({
+                        "query": q[:80], "status": "error",
+                        "scored": 0, "invalid": 0, "duplicate": 0,
+                        "missing": candidate_count, "error": type(exc).__name__,
+                    })
+                    trace_collector.add_event(
+                        span, "rerank_query_failed", "error",
+                        f"查询「{q[:80]}」评分失败：{type(exc).__name__}",
+                        data={"query": q[:80], "error": type(exc).__name__},
+                    )
+                    if position == 0:
+                        # 原问题是唯一可靠的基线评分：它失败时不做多查询排序，
+                        # 交给既有单查询降级契约（透传 + 不可靠标记）。
+                        raise
+                    continue
+
+                if not valid:
+                    query_rows.append({
+                        "query": q[:80], "status": "error",
+                        "scored": 0, "invalid": invalid, "duplicate": duplicate,
+                        "missing": candidate_count, "error": "no_valid_score",
+                    })
+                    if position == 0:
+                        raise RuntimeError("原问题评分没有有效分数")
+                    continue
+
+                per_query[q] = valid
+                # 仅白名单标识与数值；不复制正文、私有 runtime 元数据或凭据。
+                top_candidates = []
+                for idx, score in sorted(valid, key=lambda row: (-row[1], row[0]))[:10]:
+                    meta = documents[idx].metadata or {}
+                    source = str(meta.get("source") or meta.get("source_file") or "")
+                    if "://" in source:
+                        from urllib.parse import urlsplit
+
+                        source = urlsplit(source).path
+                    source = source.replace("\\", "/").rsplit("/", 1)[-1]
+                    top_candidates.append({
+                        "index": idx,
+                        "chunk_id": str(meta.get("chunk_id") or "")[:160],
+                        "doc_id": str(meta.get("doc_id") or "")[:160],
+                        "source": source[:160],
+                        "score": round(score, 6),
+                    })
+                query_rows.append({
+                    "query": q[:80],
+                    "status": (
+                        "success" if not invalid and not duplicate
+                        and len(valid) == candidate_count else "partial"
+                    ),
+                    "scored": len(valid), "invalid": invalid, "duplicate": duplicate,
+                    "missing": candidate_count - len(valid),
+                    "candidate_count": candidate_count,
+                    "top_candidates": top_candidates,
+                })
+
+        ranked = aggregate_multi_query_scores(queries, per_query)
+        for row in query_rows:
+            row.setdefault("candidate_count", candidate_count)
+        selected = [row for row in ranked if row[1] > self.threshold][: self.top_k]
+        for idx, score, winner in selected:
+            doc = documents[idx]
+            doc.metadata["rerank_score"] = round(float(score), 4)
+            doc.metadata["rerank_winner_query"] = winner
+
+        scored_queries = [
+            row for row in query_rows if row["status"] in ("success", "partial")
+        ]
+        skipped = [row for row in query_rows if row["status"] == "skipped_budget"]
+        overall = (
+            "success" if all(row["status"] == "success" for row in query_rows)
+            else "partial" if scored_queries else "degraded"
+        )
+        for idx, _score, _winner in selected:
+            documents[idx].metadata["rerank_status"] = overall
+
+        metrics = {
+            "input_docs": candidate_count,
+            "output_docs": len(selected),
+            "threshold": self.threshold,
+            "backend_type": self._backend_type,
+            "rerank_mode": "multi_query",
+            "scoring_strategy": "bounded_parallel" if parallel else "serial",
+            "rerank_status": overall,
+            "query_count": len(queries),
+            "scored_query_count": len(scored_queries),
+            "candidate_count": candidate_count,
+            "scored_candidates": len(ranked),
+            "missing_candidates": candidate_count - len(ranked),
+            "rerank_calls": calls,
+            "rerank_ms": round((time.monotonic() - started) * 1000, 1),
+            "winning_query": selected[0][2] if selected else "",
+            "top_k_scores": [round(float(row[1]), 4) for row in selected],
+            "query_status": query_rows,
+        }
+        if skipped:
+            metrics["degrade"] = "budget_insufficient"
+        elif overall != "success":
+            metrics["degrade"] = "query_scoring_incomplete"
+
+        result_docs = [documents[idx] for idx, _score, _winner in selected]
+        trace_collector.add_event(
+            span, "multi_query_rerank", "info" if overall == "success" else "warn",
+            f"多查询评分 {len(scored_queries)}/{len(queries)} 条查询，"
+            f"{candidate_count} 候选 → {len(selected)} 入选",
+            data={
+                "query_status": query_rows,
+                "top_k_scores": metrics["top_k_scores"],
+                "winning_query": metrics["winning_query"],
+                "degrade": metrics.get("degrade", ""),
+            },
+        )
+        self._log_evictions(documents, result_docs, span)
+        trace_collector.end_span(
+            span, metrics=metrics,
+            status="success" if overall == "success" else "partial",
+        )
+        record_stage()
+        logger.info(
+            f"[Rerank] 多查询评分 {len(scored_queries)}/{len(queries)} 条查询 / "
+            f"{candidate_count} 候选 → {len(selected)} 入选"
+            + (f"（{metrics['degrade']}）" if skipped else "")
+        )
+        return result_docs
+
     def compress_documents(self, documents, query, **kwargs):
-        from backend.observability.metrics import record_rag_stage
         from backend.observability.tracer import trace_collector
 
         # 后端懒加载提前到 span 之前，确保 span name 正确
@@ -678,8 +1461,9 @@ class RerankCompressor(BaseDocumentCompressor):
             _record_stage()
             return []
 
-        # 小文档集合跳过 rerank API 调用（≤2 篇排序无意义）
-        if len(documents) <= 2:
+        queries = _read_runtime_queries(documents, query)
+        # 单查询保留历史 small_n 行为；多查询不得用默认 1 分冒充有效评分。
+        if len(documents) <= 2 and not queries:
             for doc in documents:
                 doc.metadata.setdefault("rerank_score", 1.0)
             trace_collector.end_span(span,
@@ -693,6 +1477,13 @@ class RerankCompressor(BaseDocumentCompressor):
         try:
             self._ensure_backend()
 
+            # Phase C（PR #52）：MultiQuery 交接了有效改写列表时，按多查询
+            # 全候选评分；未交接 / 后端不支持全候选评分时保持单查询契约。
+            if len(queries) > 1 and _supports_full_scoring(self.backend):
+                return self._compress_multi_query(
+                    documents, queries, span, _record_stage,
+                )
+
             # 委托给后端实现 - 使用实例的 threshold 属性而非从 config 导入
             result_docs = self.backend.compress_documents(
                 list(documents),
@@ -700,39 +1491,14 @@ class RerankCompressor(BaseDocumentCompressor):
                 top_k=self.top_k,
                 threshold=self.threshold
             )
-
-            # ── 驱逐明细（治理 A）：记录哪些文档被 rerank 淘汰及原因 ──
-            # 2026-09-13 golden RC-013/080 排查事故：中间阶段静默驱逐文档，
-            # 无任何"谁被淘汰、为什么"的留痕。签名 = (source, 内容前40字)，
-            # 兼容 backend 返回新对象的情况。
-            def _sig(d):
-                m = d.metadata or {}
-                name = m.get("source") or m.get("source_file") or m.get("doc_id") or "?"
-                return (name, (d.page_content or "")[:40])
-
-            try:
-                survived = {_sig(d) for d in result_docs}
-                evicted = [
-                    {"doc": _sig(d)[0], "content_head": _sig(d)[1][:30]}
-                    for d in documents if _sig(d) not in survived
-                ]
-                if evicted:
-                    trace_collector.add_event(span, "rerank_eviction", "info",
-                        f"Rerank 淘汰 {len(evicted)}/{in_count} 篇 "
-                        f"(低于阈值 {RERANK_SCORE_THRESHOLD} 或超出 top_k={self.top_k})",
-                        data={"evicted": evicted[:10], "evicted_count": len(evicted)})
-                    logger.info(
-                        f"[Rerank] 淘汰 {len(evicted)}/{in_count} 篇: "
-                        f"{[e['doc'] for e in evicted[:5]]}{'...' if len(evicted) > 5 else ''}"
-                    )
-            except Exception:
-                pass  # 契约留痕失败不影响主流程
+            self._log_evictions(documents, result_docs, span)
 
             trace_collector.end_span(span,
                                  metrics={"input_docs": in_count,
                                          "output_docs": len(result_docs),
-                                         "threshold": RERANK_SCORE_THRESHOLD,
-                                         "backend_type": self._backend_type})
+                                         "threshold": self.threshold,
+                                         "backend_type": self._backend_type,
+                                         "rerank_mode": "single_query"})
             _record_stage()
             return result_docs
 
@@ -740,13 +1506,14 @@ class RerankCompressor(BaseDocumentCompressor):
             trace_collector.end_span(span,
                                    metrics={"input_docs": in_count,
                                            "output_docs": min(in_count, self.top_k),
-                                           "threshold": RERANK_SCORE_THRESHOLD,
+                                           "threshold": self.threshold,
                                            "backend_type": self._backend_type,
                                            "fallback": "passthrough",
-                                           "error": str(e)[:100]},
+                                           "degrade": "rerank_error",
+                                           "error": type(e).__name__},
                                    status="error")
             _record_stage()
-            logger.error(f"RerankCompressor 重排失败，降级透传原文档：{e}")
+            logger.error("RerankCompressor 重排失败（%s），降级透传原文档", type(e).__name__)
             # 降级契约：重排是增强组件，失败不得减少召回数量 —— 透传原文档，
             # 由下游 Evidence Gate 基于其他信号判定，而非静默清空触发误拒答
             return list(documents)[: self.top_k]

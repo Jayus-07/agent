@@ -16,14 +16,20 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from typing import Any
 
 from backend.rag.preprocessing.ast import LEAF_TYPES, DocumentAST, walk
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
 QUALITY_RECORD_SCHEMA_VERSION = "1.0"
+QUALITY_SCORE_BASE = 100
+QUALITY_SCORE_HARD_DEDUCTION = 40
+QUALITY_SCORE_WARN_DEDUCTION = 10
+HARD_QUALITY_SEVERITIES = frozenset({"error", "hard"})
 
 # §5.3 文本类格式字符量下限：低于此值视为解析异常（与 RAG_OCR_MIN_TEXT_CHARS
 # 无关——那是 OCR 触发阈值，这是"解析产出是否为空壳"的门禁）
@@ -75,7 +81,7 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
     for name, pat in _VALUE_PATTERNS.items():
         lost = set(pat.findall(raw_text or "")) - set(pat.findall(cleaned_text or ""))
         if lost:
-            samples = sorted(lost)[:3]
+            samples = [mask_sensitive_text(item, limit=80) for item in sorted(lost)[:3]]
             anomalies.append({
                 "check": "value_loss",
                 "value_type": name,
@@ -88,15 +94,37 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
 def compute_quality_score(anomalies: list[dict]) -> int:
     """§5.1 质量评分（TD-09，2026-10-02）：确定性公式，供 registry/前端展示。
 
-    score = 100 - 40×硬异常数 - 10×警告数，下限 0。
+    score = max(0, 100 - 40×硬异常数 - 10×警告数)。
     此前 quality_score 列恒为默认 0（从未计算）→ 每份文档都触发前端
     「质量评分偏低 (0/100)」告警，纯噪音且掩盖真实质量差异。
     口径：硬异常在本层已被门禁拦截（文档不会 active），评分主要刻画
     警告密度——≤4 条警告仍 ≥60（前端阈值），持续劣化才跌破。
     """
-    hard = sum(1 for a in anomalies if a.get("severity") == "hard")
-    warn = sum(1 for a in anomalies if a.get("severity") != "hard")
-    return max(0, 100 - 40 * hard - 10 * warn)
+    return quality_score_metrics(anomalies)["quality_score"]
+
+
+def quality_score_metrics(anomalies: list[dict]) -> dict[str, int]:
+    """返回与评分同口径的规则、得分和异常计数，供 Trace 前端解释分数。"""
+    hard = sum(
+        1 for anomaly in anomalies
+        if anomaly.get("severity") in HARD_QUALITY_SEVERITIES
+    )
+    warn = len(anomalies) - hard
+    score = max(
+        0,
+        QUALITY_SCORE_BASE
+        - QUALITY_SCORE_HARD_DEDUCTION * hard
+        - QUALITY_SCORE_WARN_DEDUCTION * warn,
+    )
+    return {
+        "quality_score": score,
+        "quality_score_base": QUALITY_SCORE_BASE,
+        "quality_score_hard_deduction": QUALITY_SCORE_HARD_DEDUCTION,
+        "quality_score_warn_deduction": QUALITY_SCORE_WARN_DEDUCTION,
+        "anomalies_total": len(anomalies),
+        "anomalies_hard": hard,
+        "anomalies_warn": warn,
+    }
 
 
 def audit_chunk_integrity(chunks: list) -> dict[str, int]:
@@ -154,6 +182,155 @@ def audit_chunk_integrity(chunks: list) -> dict[str, int]:
     }
 
 
+def audit_answer_evidence(chunks: list) -> dict:
+    """答案证据资格审计（P0，2026-10-19 faq_only.docx 实证）。
+
+    检测「问题清单冒充答案证据」风险：虚拟 parent 块的内容为多行纯问题
+    （行尾问号且无 A:/答： 答案标记）时，该块不具备回答业务问题的证据
+    资格。检索侧默认已过滤独立 parent 召回（RAG_FILTER_PARENT_RECALL），
+    此处记 warn 级异常供质量面观测；不确定结构不误报。
+
+    Returns:
+        {"suspect_no_answer_chunks": [chunk_id...], "count": N}
+    """
+    suspects: list[str] = []
+    for chunk in chunks or []:
+        metadata = getattr(chunk, "metadata", None) or {}
+        if str(metadata.get("granularity") or "") != "parent":
+            continue
+        lines = [ln.strip() for ln in
+                 str(getattr(chunk, "page_content", "") or "").splitlines()
+                 if ln.strip()]
+        if len(lines) < 2:
+            continue  # 单行/空内容不判定
+        question_lines = 0
+        for ln in lines:
+            if ln.endswith(("？", "?")) and not ln.startswith(("A：", "A:", "答：", "答:")):
+                question_lines += 1
+        # 全部行都是问句 → 纯问题清单（无答案内容）
+        if question_lines == len(lines):
+            suspects.append(str(metadata.get("chunk_id") or ""))
+    return {"suspect_no_answer_chunks": suspects, "count": len(suspects)}
+
+
+def _audit_normalize(text: str) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def cleaning_coverage_audit(
+    ast: DocumentAST, max_audit_nodes: int | None = None,
+) -> dict:
+    """Raw AST → 清洗输出 的合法清洗对账（P0-D 边界一，2026-10-18）。
+
+    coverage_audit 只审「归一化 AST → 最终 Leaf」，看不到 Cleaner 把节点
+    清空：被清空的叶子会从覆盖审计的分母里消失，形成"分母缩水式假通过"。
+
+    对账口径（逐节点、用节点自身的 raw_text → text 配对）：
+      - 规范化差异（控制字符/全半角/空白/中文标点/HTML 剥离）不算丢失；
+      - 行形态即可判定的确定性噪音（页码/页脚/模板行/维基噪音/URL 邮箱/
+        纯符号）算合法删除并计数；
+      - 其余在**该节点自身**清洗结果中消失的行计入 uncovered，由质量门禁
+        fail-closed。
+
+    不使用全文拼接的公共文本对账：两个节点文本相同时，"全文里还出现过"
+    不能抵消被清空的另一个节点（2026-10-18 边界修复）。
+    默认**全量**审计：逐节点线性核对，不做全文 O(n²) 扫描；只有调用方显式
+    传入 max_audit_nodes 才抽样，此时 sampled=True，发布门禁按"审计不完整"
+    硬失败——抽样无缺口不得被表述成全量完整。
+    审计自身异常返回 {"error": ...}，调用方必须按硬异常处理。
+    """
+    from backend.rag.preprocessing.cleaner import DocumentCleaner
+
+    cleaner = DocumentCleaner()
+    try:
+        nodes = [n for n in walk(ast.root) if n.type != "table"]
+        audited_all = [
+            n for n in nodes if (getattr(n, "raw_text", "") or "").strip()
+        ]
+        sampled = False
+        if max_audit_nodes is None:
+            audited = audited_all
+        else:
+            cap = max(1, int(max_audit_nodes))
+            if len(audited_all) > cap:
+                stride = max(1, math.ceil(len(audited_all) / cap))
+                audited = audited_all[::stride][:cap]
+                sampled = True
+            else:
+                audited = audited_all
+
+        covered = 0
+        uncovered: list[dict] = []
+        legal_noise_line_count = 0
+        lost_line_count = 0
+
+        for node in audited:
+            raw_text = node.raw_text or ""
+            raw_normalized = _audit_normalize(
+                cleaner.normalize_for_compare(raw_text)
+            )
+            if not raw_normalized:
+                covered += 1
+                continue
+            node_cleaned = _audit_normalize(
+                cleaner.normalize_for_compare(node.text)
+            )
+            if raw_normalized in node_cleaned:
+                covered += 1
+                continue
+
+            lost: list[str] = []
+            for line in raw_text.splitlines():
+                if not line.strip():
+                    continue
+                line_normalized = _audit_normalize(
+                    cleaner.normalize_for_compare(line)
+                )
+                if not line_normalized:
+                    continue
+                if line_normalized in node_cleaned:
+                    continue
+                if cleaner.classify_noise_line(line):
+                    legal_noise_line_count += 1
+                    continue
+                lost.append(mask_sensitive_text(line.strip(), limit=80))
+
+            if lost:
+                lost_line_count += len(lost)
+                uncovered.append({
+                    "type": node.type,
+                    "preview": mask_sensitive_text(raw_text.strip(), limit=80),
+                    "lost_lines": len(lost),
+                    "lost_samples": lost[:3],
+                })
+            else:
+                covered += 1
+
+        return {
+            "raw_leaf_total": len(audited_all),
+            "audited_node_count": len(audited),
+            "covered": covered,
+            "uncovered_count": len(uncovered),
+            "uncovered_samples": uncovered[:10],
+            "legal_noise_line_count": legal_noise_line_count,
+            "lost_line_count": lost_line_count,
+            "sampled": sampled,
+        }
+    except Exception as e:  # noqa: BLE001 — 门禁按硬异常处理
+        logger.warning(f"[CleaningAudit] 失败: {type(e).__name__}: {e}")
+        return {
+            "error": f"{type(e).__name__}: {e}",
+            "raw_leaf_total": 0,
+            "audited_node_count": 0,
+            "covered": 0,
+            "uncovered_count": 0,
+            "uncovered_samples": [],
+            "legal_noise_line_count": 0,
+            "lost_line_count": 0,
+            "sampled": False,
+        }
+
+
 def build_quality_record(
     *,
     file_path: str,
@@ -173,6 +350,7 @@ def build_quality_record(
     index_errors: list[str] | None = None,
     route_decision: dict | None = None,
     coverage: dict | None = None,
+    cleaning_coverage: dict | None = None,
 ) -> dict:
     """组装 §5.1/§5.2 质量记录（纯函数，不做校验不落盘）。"""
     node_summaries = _node_summary(raw_ast)
@@ -188,6 +366,15 @@ def build_quality_record(
         (max((len(r) for r in (n.rows or [])), default=0) for n in table_nodes),
         default=0,
     )
+
+    # 清洗删除证据汇总（P0-A.4 可审计）：操作名/分类/样本，只留摘要不落全文
+    dropped_evidence: list[dict] = []
+    for node in walk(raw_ast.root):
+        dropped_evidence.extend(getattr(node, "cleaning_dropped", []) or [])
+    dropped_by_operation: dict[str, int] = {}
+    for item in dropped_evidence:
+        op = str(item.get("operation") or "unknown")
+        dropped_by_operation[op] = dropped_by_operation.get(op, 0) + 1
 
     chunk_meta = [ch.metadata or {} for ch in chunks]
     parent_count = sum(1 for m in chunk_meta if m.get("granularity") == "parent")
@@ -238,6 +425,14 @@ def build_quality_record(
             },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
+            "pdf_page_count": int(getattr(raw_ast, "pdf_page_count", 0) or 0),
+            "pdf_pages_with_content": int(
+                getattr(raw_ast, "pdf_pages_with_content", 0) or 0
+            ),
+            "pdf_skipped_pages": int(
+                getattr(raw_ast, "pdf_skipped_pages", 0) or 0
+            ),
+            "pdf_repaired": bool(getattr(raw_ast, "pdf_repaired", False)),
             "degraded": degraded,
             "degrade_reason": "ocr_fallback" if degraded else "",
         },
@@ -246,6 +441,11 @@ def build_quality_record(
             "raw_chars": raw_chars,
             "cleaned_chars": cleaned_chars,
             "nodes_cleaned": sum(1 for n in node_summaries if n["cleaned"]),
+            # 删除原因与证据（合法噪音 vs 内容丢失由 cleaning_coverage 裁决）
+            "dropped_total": len(dropped_evidence),
+            "dropped_by_operation": dropped_by_operation,
+            "dropped_samples": dropped_evidence[:10],
+            "coverage": cleaning_coverage,
         },
         # §5.1 chunk 统计（leaf+parent 双粒度）
         "chunking": {
@@ -257,6 +457,10 @@ def build_quality_record(
             "filtered_reasons": reason_breakdown,
         },
         "chunk_integrity": audit_chunk_integrity(chunks),
+        # P0（2026-10-19 faq_only.docx 实证）：答案证据资格审计——虚拟 parent
+        # 内容为纯问题列表（无答案）时记 warn（检索侧已默认过滤独立 parent
+        # 召回，此记录用于质量面可观测），不阻断入库
+        "answer_evidence": audit_answer_evidence(chunks),
         # §5.1 重试失败记录（本轮 per-file 异常；历史失败见 registry status）
         "index_errors": list(index_errors or []),
         # §5.2 节点级可追溯
@@ -264,6 +468,11 @@ def build_quality_record(
         # P1 切分路由可审计决策（为什么用这个策略）
         "route_decision": dict(route_decision or {}),
         "coverage": coverage_record,
+        # P0-D 边界一：Raw AST → 清洗输出（独立于覆盖审计，杜绝分母缩水）
+        "cleaning_coverage": (
+            dict(cleaning_coverage)
+            if isinstance(cleaning_coverage, dict) else None
+        ),
         # §5.3 校验结果（run_typed_validation 填充）
         "validation": {"checks": [], "anomalies": []},
     }
@@ -360,6 +569,69 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 int(chunk_integrity.get("parent_reference_count") or 0),
             ),
         )
+
+    cleaning_coverage = record.get("cleaning_coverage")
+    if cleaning_coverage is not None:
+        cleaning_fields = {
+            "raw_leaf_total", "audited_node_count", "uncovered_count", "sampled",
+        }
+        cleaning_error = bool(
+            not isinstance(cleaning_coverage, dict)
+            or cleaning_coverage.get("error")
+            or not cleaning_fields.issubset(cleaning_coverage)
+        )
+        if not cleaning_error:
+            try:
+                cleaning_total = int(cleaning_coverage.get("raw_leaf_total") or 0)
+                cleaning_audited = int(
+                    cleaning_coverage.get("audited_node_count") or 0
+                )
+                cleaning_uncovered = int(
+                    cleaning_coverage.get("uncovered_count") or 0
+                )
+                cleaning_sampled = cleaning_coverage.get("sampled")
+                if (
+                    cleaning_total < 0
+                    or cleaning_audited < 0
+                    or cleaning_uncovered < 0
+                    or cleaning_audited > cleaning_total
+                    or cleaning_uncovered > cleaning_audited
+                    or (
+                        cleaning_audited < cleaning_total
+                        and cleaning_sampled is not True
+                    )
+                    or not isinstance(cleaning_sampled, bool)
+                ):
+                    cleaning_error = True
+            except (TypeError, ValueError):
+                cleaning_total = cleaning_audited = cleaning_uncovered = 0
+                cleaning_sampled = False
+                cleaning_error = True
+        if cleaning_error:
+            error_detail = (
+                str(cleaning_coverage.get("error") or "invalid cleaning audit")
+                if isinstance(cleaning_coverage, dict)
+                else "invalid cleaning audit"
+            )
+            _check(
+                "cleaning_audit_failed", False,
+                f"清洗完整性审计异常或结果字段缺失: {error_detail}",
+            )
+        else:
+            samples = cleaning_coverage.get("uncovered_samples") or []
+            _check(
+                "cleaner_content_loss", cleaning_uncovered == 0,
+                f"{cleaning_uncovered}/{cleaning_audited} 个已清洗节点存在正文丢失"
+                + (f"，样例: {samples[:3]}" if samples else ""),
+            )
+            if cleaning_sampled:
+                # 清洗边界是内容完整性的硬边界：未审计的节点可能已经丢失，
+                # 不能被当作"抽样无缺口 = 全量通过"。这里按硬异常阻断发布。
+                _check(
+                    "cleaning_audit_incomplete", False,
+                    f"清洗审计仅抽样 {cleaning_audited}/{cleaning_total} 个节点，"
+                    "未审计节点不允许静默丢失；请使用全量审计",
+                )
 
     coverage = record.get("coverage")
     if coverage is not None:
@@ -473,6 +745,24 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 "不允许以部分内容 active"
             ),
         })
+    pdf_page_count = int(getattr(raw_ast, "pdf_page_count", 0) or 0)
+    pdf_pages_with_content = int(
+        getattr(raw_ast, "pdf_pages_with_content", 0) or 0
+    )
+    pdf_skipped_pages = int(getattr(raw_ast, "pdf_skipped_pages", 0) or 0)
+    pdf_repaired = bool(getattr(raw_ast, "pdf_repaired", False))
+    if pdf_page_count and (pdf_skipped_pages or pdf_repaired):
+        missing_pages = max(0, pdf_page_count - pdf_pages_with_content)
+        allowed_missing = int(pdf_page_count * 0.01) if pdf_repaired else 0
+        if pdf_skipped_pages or missing_pages > allowed_missing:
+            anomalies.append({
+                "check": "pdf_page_coverage", "severity": "error",
+                "detail": (
+                    f"PDF 结构修复/解析跳页后仅 {pdf_pages_with_content}/"
+                    f"{pdf_page_count} 页有正文或表格，跳过 {pdf_skipped_pages} 页；"
+                    "拒绝将不完整 PDF 标记为 active"
+                ),
+            })
     total_pre_filter = chunking["chunk_count"] + chunking["filtered_count"]
     if total_pre_filter > 0 and chunking["filtered_count"] / total_pre_filter > HEAVY_FILTER_RATIO:
         anomalies.append({
@@ -532,7 +822,10 @@ def _sanitize_path_segment(value: str) -> str:
 
 def hard_anomalies(anomalies: list[dict]) -> list[dict]:
     """§5.3 硬异常（error 级）：存在即不得置 active。"""
-    return [a for a in anomalies if a.get("severity") == "error"]
+    return [
+        anomaly for anomaly in anomalies
+        if anomaly.get("severity") in HARD_QUALITY_SEVERITIES
+    ]
 
 
 def anomaly_summary(anomalies: list[dict], *, include_hard: bool = False) -> str:

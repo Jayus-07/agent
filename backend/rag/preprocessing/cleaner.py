@@ -4,7 +4,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from backend import config
+from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
+
+
+# 单节点删除证据上限：质量记录只留可审计摘要，不允许无界膨胀
+_MAX_DROP_EVIDENCE = 200
 
 
 @dataclass
@@ -13,6 +18,9 @@ class CleanResult:
     text: str
     changes: list[str] = field(default_factory=list)   # 执行了哪些清洗操作
     warnings: list[str] = field(default_factory=list)   # 清洗警告（如检测到异常但未处理）
+    # 删除/改写证据（2026-10-18 内容完整性修复）：每条记录操作名、噪音分类与被删行样本。
+    # 只记录"删掉了什么"，供 Raw AST → 清洗输出 的审计对账，不作为放行依据。
+    dropped: list[dict] = field(default_factory=list)
 
 
 class DocumentCleaner:
@@ -35,7 +43,6 @@ class DocumentCleaner:
     _RE_SURROGATE = re.compile(r'[\ud800-\udfff]')
     _RE_HTML_TAG = re.compile(r'<[^>]+>')
     _RE_MULTI_BLANK_LINE = re.compile(r'\n{3,}')
-    _RE_ISOLATED_PAGE_NUM = re.compile(r'^\d{1,4}$', re.MULTILINE)
     _RE_URL = re.compile(r'https?://[^\s一-鿿]+')
     _RE_EMAIL = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
     _RE_REPEATED_LINE = re.compile(r'^(.+)$', re.MULTILINE)
@@ -63,18 +70,29 @@ class DocumentCleaner:
     _CN_PUNCT_MAP = {
         ',': '，', '.': '。', '!': '！', '?': '？',
         ':': '：', ';': '；', '(': '（', ')': '）',
-        '"': '“', '"': '”', "'": '‘', "'": '’',
+        '\u201c': '\u201c', '\u201d': '\u201d', '\u2018': '\u2018', '\u2019': '\u2019',
     }
 
-    def clean(self, text: str, source_type: str = "text") -> CleanResult:
+    def clean(
+        self,
+        text: str,
+        source_type: str = "text",
+        *,
+        structured: bool = False,
+    ) -> CleanResult:
         """统一文档清洗入口。
 
         Args:
             text: 原始文本
             source_type: 来源类型 ("text" | "pdf" | "ocr")
+            structured: 传入文本是否已是解析器切好的结构化节点（AST 节点文本）。
+                节点文本自带语义边界，**没有**原始版面上下文；依赖"前后空行"
+                这类版面证据的启发式（图注残行）在节点级不成立，必须停用，
+                否则每个独立节点都会被当成孤立段落删除（2026-10-18 供应商
+                规范 fixture：5 个内容叶节点被清空）。
 
         Returns:
-            CleanResult: 包含清洗后文本 + 变更记录
+            CleanResult: 包含清洗后文本 + 变更记录 + 删除证据
         """
         if not text or not text.strip():
             return CleanResult(text=text, warnings=["empty_input"])
@@ -104,9 +122,11 @@ class DocumentCleaner:
         if config.CLEAN_DROP_TEMPLATE_LINES:
             result = self._remove_template_lines(result)
             result = self._remove_wiki_noise_lines(result)
-            if source_type == "text":
-                # 图注残留整段孤立，仅在 text（Markdown 抓取稿）上启用；
-                # PDF 抽取文本的孤立短行多为真实标题/小节名，不适用
+            if source_type == "text" and not structured:
+                # 图注残留整段孤立，仅在 text（Markdown 抓取稿）全篇文本上启用；
+                # PDF 抽取文本的孤立短行多为真实标题/小节名，不适用。
+                # 结构化节点（structured=True）没有版面上下文，规则停用——
+                # 见 clean() docstring。
                 result = self._remove_isolated_caption_lines(result)
 
         # ── URL/邮箱处理 ──
@@ -122,7 +142,6 @@ class DocumentCleaner:
                 result = self._remove_pdf_headers(result)
             if config.CLEAN_REMOVE_PDF_FOOTERS:
                 result = self._remove_pdf_footers(result)
-            result = self._remove_page_numbers(result)
 
         # ── OCR 专用（P1）──
         if source_type == "ocr":
@@ -131,6 +150,20 @@ class DocumentCleaner:
         return result
 
     # ── 各清洗步骤 ──────────────────────────────────
+
+    @staticmethod
+    def _note_drop(r: CleanResult, operation: str, line: str,
+                   category: str = "deterministic_noise") -> None:
+        """记录一条删除证据（操作名/噪音分类/原行样本），供清洗对账审计。"""
+        if len(r.dropped) >= _MAX_DROP_EVIDENCE:
+            return
+        # 证据可能来自正文：只保留脱敏后的掩码形态（手机号/邮箱/凭据），
+        # 既能定位被删内容，又不把明文秘密写进质量记录与 Trace 摘要。
+        r.dropped.append({
+            "operation": operation,
+            "category": category,
+            "line": mask_sensitive_text(str(line).strip(), limit=120),
+        })
 
     def _remove_control_chars(self, r: CleanResult) -> CleanResult:
         new_text = self._RE_CONTROL.sub('', r.text)
@@ -184,6 +217,7 @@ class DocumentCleaner:
         for line in r.text.split('\n'):
             if self._RE_TEMPLATE_LINE.search(line):
                 dropped += 1
+                self._note_drop(r, "template_line", line)
                 continue
             kept.append(line)
         if dropped:
@@ -204,6 +238,7 @@ class DocumentCleaner:
             hit = next((name for name, pat in patterns.items() if pat.search(line)), None)
             if hit:
                 dropped.append(hit)
+                self._note_drop(r, f"wiki_{hit}", line)
                 continue
             kept.append(line)
         if dropped:
@@ -223,6 +258,10 @@ class DocumentCleaner:
         问题也必须保留。
         """
         lines = r.text.split('\n')
+        # 保护：整块只有一行时，该行是块的唯一内容，不构成"孤立图注"证据。
+        # 版面启发式必须至少有两个非空行才可能判定"孤立"。
+        if sum(1 for line in lines if line.strip()) < 2:
+            return r
         kept, dropped = [], 0
         for i, line in enumerate(lines):
             s = line.strip()
@@ -236,6 +275,7 @@ class DocumentCleaner:
                 and re.search(r'[一-鿿]', s)
             ):
                 dropped += 1
+                self._note_drop(r, "isolated_caption", line, category="layout_heuristic")
                 continue
             kept.append(line)
         if dropped:
@@ -320,6 +360,7 @@ class DocumentCleaner:
                 r.text = '\n'.join(
                     l for l in lines if l.strip() != stripped
                 )
+                self._note_drop(r, "pdf_header_line", stripped)
                 removed_count += 1
                 lines = r.text.split('\n')  # 更新 lines 用于后续检查
 
@@ -331,38 +372,79 @@ class DocumentCleaner:
         """检测并去除 PDF 页脚。
 
         与页眉类似，但检查的是"页"末尾（\\n\\n 之前）的重复行。
-        同时检测常见页脚模式（如 "第X页 共X页"）。
+        仅删除带明确页码标签的独立行；无标签数字可能是正文、比例或金额。
         """
-        # 常见页脚模式
+        # 清洗器收到的是单个 AST 文本块，没有可靠的页内坐标或跨页上下文。
+        # 因此只移除带明确标签的独立页脚行，不把裸数字/分数猜成页码。
         footer_patterns = [
-            re.compile(r'第\s*\d+\s*页\s*共\s*\d+\s*页'),
-            re.compile(r'Page\s+\d+\s+of\s+\d+', re.IGNORECASE),
-            re.compile(r'^\d+\s*/\s*\d+$'),
+            re.compile(r'^\s*第\s*\d+\s*页\s*共\s*\d+\s*页\s*$', re.MULTILINE),
+            re.compile(
+                r'^\s*Page\s+\d+\s+of\s+\d+\s*$',
+                re.MULTILINE | re.IGNORECASE,
+            ),
         ]
 
         for pattern in footer_patterns:
+            for match in pattern.findall(r.text):
+                self._note_drop(r, "page_footer", match)
             new_text = pattern.sub('', r.text)
             if new_text != r.text:
                 r.text = new_text
                 r.changes.append("removed_page_number_footer")
         return r
 
-    def _remove_page_numbers(self, r: CleanResult) -> CleanResult:
-        """去除独立页码行（行仅含 1-4 位数字）"""
-        lines = r.text.split('\n')
-        new_lines = []
-        removed = 0
-        for line in lines:
-            stripped = line.strip()
-            if self._RE_ISOLATED_PAGE_NUM.match(stripped):
-                # 验证前后行：真页码通常在"页"末或"段"末
-                removed += 1
-                continue
-            new_lines.append(line)
-        if removed > 0:
-            r.text = '\n'.join(new_lines)
-            r.changes.append(f"removed_{removed}_page_numbers")
-        return r
+    # 审计侧噪音形态：只收"行形态即可判定"的确定性噪音（页码/页脚/
+    # 模板行/维基噪音/URL 邮箱/纯符号）。故意**不含**孤立图注这类版面
+    # 启发式——它必须依靠版面证据，不能自己免除自己的嫌疑。
+    _AUDIT_NOISE_PATTERNS = {
+        "page_number": re.compile(r'^\d{1,4}$'),
+        "page_footer": re.compile(r'^第\s*\d+\s*页\s*共\s*\d+\s*页$'),
+        "page_footer_en": re.compile(r'^Page\s+\d+\s+of\s+\d+$', re.IGNORECASE),
+        "template_line": _RE_TEMPLATE_LINE,
+        "wiki_legend": _RE_WIKI_LEGEND_LINE,
+        "wiki_banner": _RE_WIKI_BANNER_LINE,
+        "wiki_rosetta": _RE_POJ_ROSETTA_LINE,
+        "wiki_coord": _RE_MERGED_COORD_LINE,
+    }
+
+    @classmethod
+    def classify_noise_line(cls, line: str) -> str:
+        """判定一行是否属于可独立论证的确定性噪音；返回类别，非噪音返回空串。
+
+        审计用它区分"合法噪音删除"与"异常正文丢失"：只有形态上就是页码/
+        模板行/纯符号的行才允许在清洗后消失。
+        """
+        s = (line or "").strip()
+        if not s:
+            return "blank"
+        for name, pattern in cls._AUDIT_NOISE_PATTERNS.items():
+            if pattern.search(s):
+                return name
+        if cls._RE_URL.fullmatch(s) or cls._RE_EMAIL.fullmatch(s):
+            return "url_or_email"
+        if re.fullmatch(r'[\W_]+', s, re.UNICODE) and not re.search(r'[一-鿿]', s):
+            return "symbol_only"
+        return ""
+
+    def normalize_for_compare(self, text: str) -> str:
+        """只做规范化、不删任何内容，用于清洗前后对账。
+
+        原文与清洗文本允许合法规范化差异（控制字符/全半角/空白/中文标点/
+        HTML 标签），但删除一行正文不属于规范化，审计必须能分辨两者。
+        """
+        r = CleanResult(text=str(text or ""))
+        if config.CLEAN_REMOVE_CONTROL_CHARS:
+            r = self._remove_control_chars(r)
+        r = self._remove_surrogates(r)
+        if config.CLEAN_NORMALIZE_FULLWIDTH:
+            r = self._normalize_fullwidth(r)
+        r = self._normalize_whitespace(r)
+        if config.CLEAN_MERGE_BLANK_LINES:
+            r = self._merge_blank_lines(r)
+        r = self._unify_cn_punctuation(r)
+        if config.CLEAN_STRIP_HTML:
+            r = self._strip_html(r)
+        return r.text
 
     def _clean_ocr(self, r: CleanResult) -> CleanResult:
         """OCR 结果专用清洗（P1 阶段实现，目前为占位）"""

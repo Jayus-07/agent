@@ -14,6 +14,7 @@ import math
 import os
 import time
 from collections import Counter
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +51,12 @@ _ANSWERS_FILE: Path | None = None
 
 # Stage1 doc 级探针默认 k；运行时可通过 stage1_probe_k 覆盖，避免固定值掩盖 scope 配置。
 _DEFAULT_STAGE1_PROBE_K = 5
+
+
+def _submit_with_context(executor, fn, /, *args, **kwargs):
+    """在线程池提交任务时复制当前请求上下文。"""
+    context = copy_context()
+    return executor.submit(context.run, fn, *args, **kwargs)
 
 
 def _collect_ragas_backfill(run_dir: Path, done_results: dict[str, "EvalResult"]) -> dict[str, dict]:
@@ -375,6 +382,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         deferred_holder: list = []
         for case in (case,):
             t0 = time.time()
+            trace = None
             try:
                 kb_id = case.metadata.get("kb_id", "default")
                 department = case.metadata.get("department") or ""
@@ -417,6 +425,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         f"(available={sorted(available_kbs)})，拒绝回退 default"
                     )
                 question = case.question
+                # Doc探针也会调用真实Embedding，必须先绑定本例Trace，避免
+                # 失败用量沿用上一例的session_id/trace_id。
+                from backend.observability.tracer import SpanKind, trace_collector
+                trace = trace_collector.start(
+                    question=question,
+                    session_id=f"eval-{case.id}",
+                    workflow_name="rag_eval",
+                )
 
                 if kb_id and kb_id != "*" and kb_id != "default":
                     from backend.rag.context import RagRequestState, set_context
@@ -461,12 +477,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 )
 
                 # === 完整检索链路 ===
-                from backend.observability.tracer import SpanKind, trace_collector
-                trace = trace_collector.start(
-                    question=question,
-                    session_id=f"eval-{case.id}",
-                    workflow_name="rag_eval",
-                )
                 root_span = trace_collector.start_span(
                     "rag_eval_root", parent_id=None,
                     name=f"RAG eval {case.id}",
@@ -474,7 +484,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     input={"question": question, "kb_id": kb_id},
                 )
                 try:
-                    retrieved_docs = retriever.invoke(question)
+                    # 直接调用 retriever 也必须消费生产的共享检索 deadline，
+                    # 否则离线 Smoke 会验证一个生产无法完成的超时窗口。
+                    from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+                    from backend.rag.retrieval_budget import scoped_retrieval_budget
+
+                    with scoped_retrieval_budget(RAG_RETRIEVAL_DEADLINE_MS) as budget:
+                        retrieved_docs = retriever.invoke(question)
+                        root_span.metrics["retrieval_budget"] = budget.as_dict()
                 finally:
                     try:
                         trace_collector.end_span(root_span)
@@ -1079,6 +1096,21 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     else:
                         passed = chunk_hit and not dept_leak
 
+                # 保留原质量指标；完整链路不能把失败降级当作完整验收。
+                incomplete_reason = None
+                if ablation_mode == "full":
+                    if any(sp["type"] == "rerank" and sp["status"] == "error"
+                           for sp in trace_spans):
+                        incomplete_reason = "rerank_failed"
+                    elif scope.multiquery and any(
+                        sp["span_id"] == "query_rewrite"
+                        and sp["status"] in {"timeout", "error"}
+                        for sp in trace_spans
+                    ):
+                        incomplete_reason = "multi_query_rewrite_incomplete"
+                if incomplete_reason:
+                    passed = False
+
                 _tok_after = _get_token_usage()
                 _case_prompt_tokens = _tok_after["prompt_tokens"] - _tok_before["prompt_tokens"]
                 _case_completion_tokens = _tok_after["completion_tokens"] - _tok_before["completion_tokens"]
@@ -1115,6 +1147,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "details": details,
                         "pipeline": {**pipeline_info, "gate_mode": gate, "query_type": case.metadata.get("query_type", "")},
                         "stage_metrics": stage_metrics,
+                        "execution_complete": incomplete_reason is None,
+                        "incomplete_reason": incomplete_reason,
                         "generated_answer": _generated_answer or None,
                         "rejection": {
                             "confidence": confidence,
@@ -1195,6 +1229,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "kb_id": case.metadata.get("kb_id", "default"),
                         "fixture_set": scope.fixture_set,
                         "evaluation_scope": scope.as_dict(),
+                        **({"trace": {"trace_id": trace.id}} if trace is not None else {}),
                     },
                     error_msg=_err_text, error_stage=_stage,
                     duration_ms=int((time.time() - t0) * 1000),
@@ -1225,7 +1260,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             return _eval_case(case)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            return executor.submit(lambda: _eval_case(case)).result(
+            return _submit_with_context(executor, lambda: _eval_case(case)).result(
                 timeout=case_timeout_s
             )
         except concurrent.futures.TimeoutError:
@@ -1268,7 +1303,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             for c in pending:
                 if stop_reason:
                     break
-                _futures[_pool.submit(_guarded_case, c)] = c
+                _futures[_submit_with_context(_pool, _guarded_case, c)] = c
             remaining = [c for c in pending if c.id not in _futures and c.id not in evaluated]
             for _fut in concurrent.futures.as_completed(_futures):
                 _c = _futures[_fut]
@@ -1391,7 +1426,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     _ragas_pool = concurrent.futures.ThreadPoolExecutor(max_workers=_ragas_workers)
                     try:
                         _ragas_futures = [
-                            _ragas_pool.submit(_run_ragas, j) for j in _deferred_ragas
+                            _submit_with_context(_ragas_pool, _run_ragas, j)
+                            for j in _deferred_ragas
                         ]
                         for i, fut in enumerate(concurrent.futures.as_completed(_ragas_futures)):
                             try:

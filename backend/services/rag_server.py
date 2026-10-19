@@ -17,9 +17,10 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
 """
 import threading
 import re
+import time
 from typing import Any, Literal
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -110,6 +111,29 @@ async def _check_internal_token(request, call_next):
 
 
 # ==================== 请求/响应模型 ====================
+
+@app.middleware("http")
+async def _record_request_timing(request, call_next):
+    """接收点至响应的单调时钟计时；与客户端往返耗时拆分前置缺口。"""
+    if request.url.path not in ("/ask", "/retrieve"):
+        return await call_next(request)
+    started = time.perf_counter()
+    request.state.rag_received_at = started
+    response = await call_next(request)
+    elapsed = (time.perf_counter() - started) * 1000
+    response.headers["X-RAG-Service-Ms"] = f"{elapsed:.1f}"
+    for name, attr in (("X-RAG-Prehandler-Ms", "rag_prehandler_ms"),
+                       ("X-RAG-Pipeline-Init-Ms", "rag_pipeline_init_ms")):
+        value = getattr(request.state, attr, None)
+        if value is not None:
+            response.headers[name] = f"{value:.1f}"
+    child_id = request.headers.get("X-Agent-Child-Trace-Id", "")
+    child_id = child_id if re.fullmatch(r"[0-9a-fA-F]{12}", child_id) else ""
+    logger.info("[RAG timing] operation=%s trace_id=%s service_ms=%.1f prehandler_ms=%.1f",
+                request.url.path, child_id, elapsed,
+                getattr(request.state, "rag_prehandler_ms", 0))
+    return response
+
 
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, description="用户问题")
@@ -305,15 +329,23 @@ def _start_index_published_listener() -> None:
 @app.post("/ask")
 def ask(
     req: AskRequest,
+    request: Request = None,
     parent_trace_id: str | None = Header(default=None, alias="X-Agent-Parent-Trace-Id"),
     child_trace_id: str | None = Header(default=None, alias="X-Agent-Child-Trace-Id"),
 ) -> dict[str, Any]:
     """完整问答。返回 {answer, meta}，meta 对齐 RAGPipeline.last_answer_meta。"""
+    started = time.perf_counter()
+    if request is not None:
+        request.state.rag_prehandler_ms = max(
+            0, (started - getattr(request.state, "rag_received_at", started)) * 1000,
+        )
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
         # 初始化失败（重试中）：503 让调用方走兜底/重试
         raise HTTPException(status_code=503, detail=str(e)) from e
+    if request is not None:
+        request.state.rag_pipeline_init_ms = (time.perf_counter() - started) * 1000
     # TD-14：带身份的请求绑定请求级预算（reserve/settle 在本进程落库，
     # 归属 user/tenant；此前旁路告警 [Budget] reserve 旁路 即缺此绑定）。
     _budget_bound = False

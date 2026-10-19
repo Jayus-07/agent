@@ -27,8 +27,11 @@ DOC_TYPES: tuple[str, ...] = tuple(get_taxonomy().doc_types)
 DOMAINS: tuple[str, ...] = tuple(get_taxonomy().domains)
 
 # 上下限口径（对齐 metadata_llm.parse_extract_response 既有行为）
-KEYWORDS_MAX = 10
-TIME_REFS_MAX = 20
+KEYWORDS_MAX = 6
+ENTITY_VALUES_MAX = 5
+TIME_REFS_MAX = 10
+SUMMARY_MAX_CHARS = 240
+ENTITY_VALUE_MAX_CHARS = 80
 DEFAULT_CONFIDENCE = 0.7
 
 
@@ -48,13 +51,12 @@ class RiskInfo(BaseModel):
     def _norm_signals(cls, v: Any) -> list[str]:
         if not isinstance(v, list):
             return []
-        return [str(x).strip() for x in v
-                if x is not None and str(x).strip()][:20]
+        return [str(x).strip()[:120] for x in v
+                if x is not None and str(x).strip()][:5]
 
 
 class UnifiedMetadata(BaseModel):
-    """统一抽取结果模型：doc_type / confidence / business_domain / summary /
-    keywords / entities / time_refs / risk。
+    """统一抽取结果模型：兼容分类字段、摘要、精确实体、时间和风险信息。
 
     校验策略与 parse_extract_response 既有行为逐条对齐：脏值宽容回落
     （confidence 坏值 → 0.7），结构性错误严格拒绝（doc_type 越界 → ValueError）。
@@ -63,7 +65,10 @@ class UnifiedMetadata(BaseModel):
     confidence: float = DEFAULT_CONFIDENCE
     business_domain: str = "general"
     summary: str = ""
-    keywords: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="仅收录原文中可精确匹配的专有名词或格式化实体；没有则为空",
+    )
     entities: dict[str, list[str]] = Field(default_factory=dict)
     time_refs: list[str] = Field(default_factory=list)
     risk: RiskInfo = Field(default_factory=RiskInfo)
@@ -95,7 +100,13 @@ class UnifiedMetadata(BaseModel):
     def _norm_keywords(cls, v: Any) -> list[str]:
         if not isinstance(v, list):
             return []
-        return [str(k).strip() for k in v if str(k).strip()][:KEYWORDS_MAX]
+        return [str(k).strip()[:ENTITY_VALUE_MAX_CHARS] for k in v
+                if str(k).strip()][:KEYWORDS_MAX]
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def _bound_summary(cls, v: Any) -> str:
+        return str(v or "").strip()[:SUMMARY_MAX_CHARS]
 
     @field_validator("entities", mode="before")
     @classmethod
@@ -106,7 +117,8 @@ class UnifiedMetadata(BaseModel):
         for k, val in v.items():
             if not isinstance(val, list):
                 continue
-            items = [str(x) for x in val if str(x).strip()]
+            items = [str(x).strip()[:ENTITY_VALUE_MAX_CHARS]
+                     for x in val if str(x).strip()][:ENTITY_VALUES_MAX]
             if items:
                 out[str(k)] = items
         return out
@@ -116,7 +128,8 @@ class UnifiedMetadata(BaseModel):
     def _norm_time_refs(cls, v: Any) -> list[str]:
         if not isinstance(v, list):
             return []
-        return [str(t).strip() for t in v if str(t).strip()][:TIME_REFS_MAX]
+        return [str(t).strip()[:80] for t in v
+                if str(t).strip()][:TIME_REFS_MAX]
 
     @model_validator(mode="after")
     def _round_confidence(self) -> "UnifiedMetadata":

@@ -47,7 +47,7 @@ function currencySymbol(currency?: string): string {
 interface Props {
   providers: ProviderRow[]
   defaultModels: Record<string, string>
-  source: 'db' | 'builtin'
+  source: 'db' | 'db_stale' | 'builtin'
   canAdmin: boolean
   onChanged: () => Promise<unknown>
   /** B3：点角色占用徽标 → 跳「模型角色」页并高亮该角色。缺省则徽标只展示不可点。 */
@@ -528,7 +528,8 @@ export default function ProvidersTab({
           <p className="mt-1 text-[11px] text-text-muted">只列出已配置的供应商；每个供应商下平铺它已登记的模型。模型清单统一存于数据库；被角色占用的模型会就地标明原因，需先改绑才能移除。</p>
         </div>
         <div className="flex items-center gap-2">
-          {source !== 'db' && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">DB 未就绪</span>}
+          {source === 'db_stale' && <span title="数据库暂时不可用，当前展示上次成功读取的配置" className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">数据库暂不可用 · 展示上次配置</span>}
+          {source === 'builtin' && <span className="rounded-full bg-amber-50 px-2 py-1 text-[10px] text-amber-700">DB 未就绪</span>}
           {canAdmin && source === 'db' && <button onClick={beginNew} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-[11px] text-white hover:bg-accent/90"><Plus size={13} />新增供应商</button>}
         </div>
       </div>

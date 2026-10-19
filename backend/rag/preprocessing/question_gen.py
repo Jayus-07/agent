@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from contextvars import ContextVar
 from typing import Callable, Optional
 
@@ -37,6 +38,7 @@ from backend.shared.logger import logger
 # ---- 模块级开关（测试 monkeypatch 点） ----
 from backend.config.rag import (
     ENABLE_SIMULATED_QUESTIONS,
+    QUESTION_GEN_MAX_OUTPUT_TOKENS,
     QUESTION_GEN_MAX_CHUNKS,
     QUESTION_GEN_PROMPT_VERSION,
 )
@@ -45,15 +47,29 @@ _LAST_META_CLEANUP_RE = re.compile(r"\{.*\}", re.DOTALL)
 _last_generation_meta: ContextVar[dict] = ContextVar(
     "question_generation_last_meta", default={}
 )
+_trace_parent_span_id: ContextVar[str] = ContextVar(
+    "question_generation_trace_parent", default=""
+)
 
 
 def _set_generation_meta(**values) -> None:
-    _last_generation_meta.set(dict(values))
+    current = dict(_last_generation_meta.get() or {})
+    current.update(values)
+    _last_generation_meta.set(current)
 
 
 def get_last_generation_meta() -> dict:
     """返回本次问题生成的阶段状态，不改变历史 tokens 返回契约。"""
     return dict(_last_generation_meta.get() or {})
+
+
+def set_trace_parent_span_id(value: str):
+    """设置当前 question_gen Provider 调用的 Trace 父 Span。"""
+    return _trace_parent_span_id.set(str(value or ""))
+
+
+def reset_trace_parent_span_id(token) -> None:
+    _trace_parent_span_id.reset(token)
 
 
 def _fallback_questions(chunk_text: str) -> list[str]:
@@ -129,7 +145,52 @@ def _invoke_llm(prompt: str, llm_obj=None):
     qwen 云模型自动关思考模式，且 proxy 层自动计量落 llm_usage_store。
     """
     from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-    return invoke_metadata_llm(prompt, llm_obj=llm_obj, role="question_gen")
+    parent_span_id = _trace_parent_span_id.get()
+    span_id = None
+    if parent_span_id:
+        from backend.observability.tracer import SpanKind, trace_collector
+        span_id = trace_collector.start_span(
+            "question_gen_provider", parent_id=parent_span_id,
+            name="Question generation Provider call", type="llm_call",
+            kind=SpanKind.INDEX_LLM_GENERATE.value,
+        )
+    started = time.monotonic()
+    try:
+        response = invoke_metadata_llm(
+            prompt,
+            llm_obj=llm_obj,
+            role="question_gen",
+            max_tokens=QUESTION_GEN_MAX_OUTPUT_TOKENS,
+        )
+        provider_duration_ms = round((time.monotonic() - started) * 1000)
+        call_meta = {}
+        try:
+            from backend.infra.llm.proxy import _last_call_meta_var
+
+            call_meta = dict(_last_call_meta_var.get() or {})
+        except Exception:
+            pass
+        if span_id:
+            from backend.observability.tracer import trace_collector
+            trace_collector.end_span(span_id, status="success", metrics={
+                "provider_call": True,
+                "provider_duration_ms": provider_duration_ms,
+                "model": str(call_meta.get("model") or ""),
+                "prompt_tokens": int(call_meta.get("prompt_tokens") or 0),
+                "completion_tokens": int(call_meta.get("completion_tokens") or 0),
+                "reasoning_tokens": int(call_meta.get("reasoning_tokens") or 0),
+                "total_tokens": int(call_meta.get("total_tokens") or 0),
+            })
+        return response
+    except Exception as exc:
+        if span_id:
+            from backend.observability.tracer import trace_collector
+            trace_collector.end_span(span_id, status="error", metrics={
+                "provider_call": False,
+                "provider_duration_ms": round((time.monotonic() - started) * 1000),
+                "error": type(exc).__name__,
+            })
+        raise
 
 
 def _read_last_tokens() -> dict:
@@ -140,6 +201,7 @@ def _read_last_tokens() -> dict:
         return {
             "prompt_tokens": int(meta.get("prompt_tokens", 0) or 0),
             "completion_tokens": int(meta.get("completion_tokens", 0) or 0),
+            "reasoning_tokens": int(meta.get("reasoning_tokens", 0) or 0),
             "cost_usd": float(meta.get("cost_usd", 0) or 0),
         }
     except Exception as e:  # pragma: no cover - 计量读取失败仅降级
@@ -229,11 +291,23 @@ def generate_chunk_questions(chunks_text: list[str],
         - tokens: 本次 LLM 调用用量（prompt_tokens/completion_tokens/cost_usd），
           LLM 未调用或缓存命中时为 {}。
     """
+    # 每次调用先清理 ContextVar，避免同步调用方复用线程时沿用上次状态。
+    _last_generation_meta.set({
+        "status": "running", "provider_call": False,
+        "provider_duration_ms": 0, "cache_status": "miss",
+    })
     if not chunks_text:
-        _set_generation_meta(status="skipped", skip_reason="no_chunks")
+        _set_generation_meta(
+            status="skipped", cache_status="miss", provider_call=False,
+            provider_duration_ms=0,
+        )
+        _set_generation_meta(skip_reason="no_chunks")
         return [], {}
     if not ENABLE_SIMULATED_QUESTIONS:
-        _set_generation_meta(status="skipped", skip_reason="feature_disabled")
+        _set_generation_meta(
+            status="skipped", skip_reason="feature_disabled", cache_status="miss",
+            provider_call=False, provider_duration_ms=0,
+        )
         return [], {}
 
     # 内容寻址缓存：同内容重索引/副本 → 相同问题（前缀稳定 → 嵌入缓存可命中）
@@ -241,7 +315,10 @@ def generate_chunk_questions(chunks_text: list[str],
     cached = _cache_get(ckey)
     if cached is not None and len(cached) == len(chunks_text):
         logger.info(f"[QuestionGen] 缓存命中 {len(cached)} chunks")
-        _set_generation_meta(status="cached", cache_status="hit")
+        _set_generation_meta(
+            status="cached", cache_status="hit", provider_call=False,
+            provider_duration_ms=0,
+        )
         return cached, {}
 
     # 成本护栏：超长文档只对 N 个 chunk 走 LLM，其余规则兜底（返回空）。
@@ -270,8 +347,10 @@ def generate_chunk_questions(chunks_text: list[str],
         return fallback_result, {}
 
     prompt = _build_prompt(llm_scope, doc_type)
+    provider_started = time.monotonic()
     try:
         result = _invoke_llm(prompt)
+        provider_duration_ms = round((time.monotonic() - provider_started) * 1000)
         content = result.content.strip() if hasattr(result, "content") else str(result)
         tokens = _read_last_tokens()
         actual_model = ""
@@ -281,12 +360,24 @@ def generate_chunk_questions(chunks_text: list[str],
             actual_model = str((_last_call_meta_var.get() or {}).get("model") or "")
         except Exception:
             pass
-        _set_generation_meta(status="success", cache_status="miss", model=actual_model)
+        call_meta = {}
+        try:
+            from backend.infra.llm.proxy import _last_call_meta_var
+
+            call_meta = dict(_last_call_meta_var.get() or {})
+        except Exception:
+            pass
+        _set_generation_meta(
+            status="success", cache_status="miss", model=actual_model,
+            provider_call=True, provider_duration_ms=provider_duration_ms,
+            reasoning_tokens=int(call_meta.get("reasoning_tokens") or 0),
+        )
         parsed = _extract_json_questions(content, len(llm_scope), llm_scope)
         if parsed is None:
             _set_generation_meta(
                 status="fallback", fallback_reason="invalid_response",
-                model=actual_model,
+                model=actual_model, provider_call=True,
+                provider_duration_ms=provider_duration_ms,
             )
             return fallback_result, tokens
         # 采样块结果按原索引回填（未采样 chunk 无问题=空列表，对齐契约）
@@ -298,5 +389,9 @@ def generate_chunk_questions(chunks_text: list[str],
         return result_questions, tokens
     except Exception as e:
         logger.warning(f"[QuestionGen] LLM 调用失败，规则降级: {type(e).__name__}: {e}")
-        _set_generation_meta(status="fallback", fallback_reason="llm_error")
+        _set_generation_meta(
+            status="fallback", fallback_reason="llm_error",
+            provider_call=False,
+            provider_duration_ms=round((time.monotonic() - provider_started) * 1000),
+        )
         return fallback_result, {}

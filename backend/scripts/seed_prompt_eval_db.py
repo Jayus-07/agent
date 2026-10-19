@@ -115,18 +115,26 @@ def _assert_database_identity(
     read_only: bool = False,
 ) -> None:
     server_address = identity["server_address"]
+    # 端口只作诊断：Docker Desktop 通过 loopback 端口映射连接容器时，
+    # 宿主目标端口（如 5433）与容器内 inet_server_port()（5432）天然不同。
+    # 身份可信度来自库名、角色、read-only/主库状态与真实服务地址，不来自
+    # 「容器内监听端口 == 宿主目标端口」这一不可满足的等式。
     if (
         identity["database"] != target["database"]
         or identity["username"] != target["username"]
         or not server_address
-        or int(identity["server_port"]) != target["port"]
         or not _server_address_matches_target(
             str(target["host"]), str(server_address)
         )
         or identity["read_only"] != ("on" if read_only else "off")
         or identity["in_recovery"]
     ):
-        raise RuntimeError("测试数据库连接身份与显式目标不一致；拒绝写入")
+        raise RuntimeError(
+            "测试数据库连接身份与显式目标不一致；拒绝写入"
+            f"（目标 {target['host']}:{target['port']}/{target['database']}，"
+            f"实际 {server_address}:{identity['server_port']}/"
+            f"{identity['database']}@{identity['username']}）"
+        )
 
 
 @contextmanager
@@ -583,6 +591,9 @@ async def seed(
                 },
             )
         role_bindings = [("eval_gen", chat), ("embedding", embedding)]
+        if os.getenv("EVAL_MULTIQUERY", "").lower() == "true":
+            # 改写使用本次评测显式登记的聊天模型，不继承未知环境绑定。
+            role_bindings.append(("multi_query", chat))
         if "rerank" in configs:
             role_bindings.append(("rerank", configs["rerank"]))
         for role, config in role_bindings:

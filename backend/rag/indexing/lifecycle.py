@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
-from typing import Callable
+from typing import Any, Callable
 
 import psycopg2
 import psycopg2.extras

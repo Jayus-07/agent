@@ -60,7 +60,7 @@ def compose_worker_queues() -> dict[str, list[str]]:
 
 # ── Case A-E：logical→physical mapping（G1）──────────────────
 # 入口口径：interactive_agent/rag_index 有用户 workflow（graph_name=
-# main/rag_index）；metadata_shadow/maintenance/report 只经 celery task
+# main/rag_index）；maintenance/report 只经 celery task
 # name 入口——各 workload_class 取其真实代表入口断言物理队列。
 def test_case_a_interactive_agent_to_agent():
     route = resolve_for_workflow("main")
@@ -74,10 +74,7 @@ def test_case_b_rag_index_to_rag_index():
     assert route.physical_queue == tasks_config.CELERY_RAG_INDEX_QUEUE
 
 
-def test_case_c_metadata_shadow_to_shadow_queue():
-    route = queue_router.resolve_for_celery_task("tasks.execute_metadata_shadow")
-    assert route.workload_class == "metadata_shadow"
-    assert route.physical_queue == tasks_config.CELERY_METADATA_SHADOW_QUEUE
+# P0-3（2026-10-19）：metadata_shadow 队列随级联/影子链退役删除。
 
 
 def test_case_d_maintenance_to_maintenance():
@@ -96,7 +93,6 @@ def test_physical_names_come_from_config():
     """物理队列名必须来自 config/tasks.py 常量，禁止散落硬编码（§七）。"""
     assert _LOGICAL_QUEUES["interactive_agent"] == tasks_config.CELERY_AGENT_QUEUE
     assert _LOGICAL_QUEUES["rag_index"] == tasks_config.CELERY_RAG_INDEX_QUEUE
-    assert _LOGICAL_QUEUES["metadata_shadow"] == tasks_config.CELERY_METADATA_SHADOW_QUEUE
     assert _LOGICAL_QUEUES["maintenance"] == tasks_config.CELERY_MAINTENANCE_QUEUE
     assert _LOGICAL_QUEUES["report"] == tasks_config.CELERY_REPORT_QUEUE
 
@@ -145,7 +141,7 @@ def test_case_h_task_routes_fully_derived():
     assert routes == expected
     assert set(routes) >= {
         "tasks.execute_agent", "tasks.execute_index",
-        "tasks.execute_metadata_shadow", "cs.qa_daily_report",
+        "cs.qa_daily_report",
         "tasks.stale_execution_recovery", "tasks.zombie_reconcile",
         "cs.handoff_timeout_scan", "model.health_scan",
     }
@@ -239,7 +235,7 @@ def test_case_q_no_cross_workload_consumption(compose_worker_queues):
     assert "maintenance" not in agent_queues and "report" not in agent_queues
     # 五 worker 与五 workload 一一对应
     assert set(compose_worker_queues) == {
-        "agent-worker", "rag-index-worker", "metadata-shadow-worker",
+        "agent-worker", "rag-index-worker",
         "maintenance-worker", "report-worker"}
 
 

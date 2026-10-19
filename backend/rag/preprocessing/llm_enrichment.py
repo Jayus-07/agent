@@ -6,13 +6,18 @@
 """
 from __future__ import annotations
 
-import re
 import time
 
 from backend.shared.logger import logger
 
 
-def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extract"):
+def invoke_metadata_llm(
+    prompt: str,
+    llm_obj=None,
+    *,
+    role: str = "metadata_extract",
+    max_tokens: int | None = None,
+):
     """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
 
     qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
@@ -24,27 +29,22 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         llm_obj: 可选 LLM 对象。调用方传入后保持测试和本地模型兼容；
             None 时按 role 解析专用模型角色。
         role: 模型角色，入库阶段默认 ``metadata_extract``。
+        max_tokens: Provider 支持的生成上限；默认角色通过统一代理绑定，
+            显式传入的模型对象则使用其标准 ``bind`` 接口。
 
     Returns: LLM 消息对象（与 llm.invoke 一致）
     Raises: 与 llm.invoke 一致（调用方自行 try/except 降级）
     """
-    from backend.infra.llm.proxy import _get_provider_for
-
     if llm_obj is None:
-        from backend.infra.llm.proxy import get_llm_for_role
-        llm_obj = get_llm_for_role(role)
-        # 观测口径（路由专项 Step 1）：按角色解析时记住登记名（canonical），
-        # 计量用它而不是实例底层的 upstream 真名——否则 usage 按上游别名
-        # 分裂成独立行、且 alias 无价目导致 cost_status=unpriced。
-        try:
-            from backend.config import model_roles as _mr
-
-            _resolved_role_model = str(
-                _mr.resolve_effective(role).get("value") or "")
-        except Exception:
-            _resolved_role_model = ""
-    else:
-        _resolved_role_model = ""
+        # 元数据角色也必须走统一代理，确保预算预占、韧性处理和用量结算
+        # 与普通对话一致。get_llm_for_role 返回裸 LangChain 实例，会绕过这些门禁。
+        from backend.infra.llm.proxy import bind_llm_for_role
+        llm_obj = bind_llm_for_role(role, max_tokens=max_tokens)
+    elif max_tokens is not None:
+        binder = getattr(llm_obj, "bind", None)
+        if not callable(binder):
+            raise TypeError("显式 LLM 对象不支持 max_tokens 参数绑定")
+        llm_obj = binder(max_tokens=max_tokens)
 
     started = time.monotonic()
 
@@ -52,13 +52,14 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
             from backend.infra.llm.proxy import enforce_model_input_price_tier
 
-            model_name = _resolved_role_model or str(
-                getattr(llm_obj, "model", "") or ""
-            )
+            # 只有"显式传入原始客户端"（测试/兼容）才会走到这里：没有
+            # canonical 角色名，按实例 model 做价格档位校验；角色代理路径
+            # 由代理内部完成预占与结算，不进这个分支。
+            model_name = str(getattr(llm_obj, "model", "") or "")
             enforce_model_input_price_tier(args, model_name=model_name)
         response = llm_obj.invoke(*args, **kwargs)
-        # get_llm_for_role 返回的是底层 LangChain 实例，不经过 _LLMProxy；
-        # 这里补一次统一计量。显式传入的 proxy 自己已记录，避免重复落库。
+        # 默认角色代理及显式传入的治理代理已自行预占和记账；兼容旧调用方
+        # 显式传入的原始 LangChain 对象时，保留原有用量遥测。
         if type(llm_obj).__name__ not in {"_LLMProxy", "_BoundLLMProxy"}:
             try:
                 from backend.infra.llm.proxy import record_llm_result
@@ -66,8 +67,7 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
                 record_llm_result(
                     response,
                     duration_ms=(time.monotonic() - started) * 1000,
-                    model_name=_resolved_role_model
-                    or str(getattr(llm_obj, "model", "") or ""),
+                    model_name=str(getattr(llm_obj, "model", "") or ""),
                 )
             except Exception as exc:
                 logger.debug(f"[MetadataLLM] 直接调用计量失败: {exc}")
@@ -90,7 +90,16 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
 
 
 def _extract_first_sentences(text: str, n: int = 2) -> str:
-    """抽取式摘要: 优先剥 markdown 标记再按句切分, 取前 n 句."""
+    """抽取式摘要: 优先剥 markdown 标记再按句切分, 取前 n 句.
+
+    2026-10-19 修复（faq_only.docx 实证）：旧实现按
+    ``[。！？!?.\\s]+`` 切分——空格与半角句号被当句界，"A：请在 OA 系统
+    提交年假申请"被切成碎片，>4 字过滤后再把不相邻碎片拼成残缺摘要
+    （"Q：年假怎么申请。系统提交年假申请，经直属上级审批、HR。备案后
+    效。"）。现改为：① QA 结构文本优先取第一个完整问答对（不拆问、
+    不截答案）；② 通用路径仅按真正句终符零宽切句（句内空格与半角点
+    不再被误切）。
+    """
     if not text:
         return ""
     import re as _re
@@ -109,12 +118,20 @@ def _extract_first_sentences(text: str, n: int = 2) -> str:
     text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)
     text = _re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = _re.sub(r"^\s*[-*+]\s+", "", text, flags=_re.MULTILINE)
-    parts = _re.split(r"[。！？!?.\s]+", text)
-    parts = [p.strip() for p in parts if p and len(p.strip()) > 4][:n]
+    # QA 结构优先：完整问答对是天然的摘要单元
+    qa = _re.match(r"\s*Q\s*[：:]\s*(.+?)\s*\n+\s*A\s*[：:]\s*(.+)", text)
+    if qa:
+        q = qa.group(1).strip().rstrip("？?。")
+        a = qa.group(2).strip().splitlines()[0].strip()
+        if q and a:
+            return f"Q：{q}？ A：{a}"[:200]
+    # 零宽断言按句终符切句：句内空格、缩写半角点不再被误切
+    parts = [p.strip() for p in _re.split(r"(?<=[。！？!?；;])\s*", text)
+             if p and len(p.strip()) > 4][:n]
     if not parts:
         return text[:150].strip()
-    summary = "。".join(parts)
-    if not summary.endswith("。"):
+    summary = "".join(parts)
+    if not summary.endswith(("。", "！", "？", "；", ";", "!", "?")):
         summary += "。"
     return summary[:200]
 

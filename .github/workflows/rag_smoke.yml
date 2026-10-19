@@ -17,6 +17,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      multiquery:
+        description: "受信任评测启用 MultiQuery（生产检索链默认启用；false 仅用于对照）"
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -88,6 +94,31 @@ jobs:
     name: RAG Smoke preflight (PR, no paid API)
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,6 +138,12 @@ jobs:
       - name: Evaluation preflight (E0, free)
         run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
 
+      - name: Initialize isolated database for free Prompt contracts
+        run: |
+          # 004 只读角色迁移的兼容库；所有操作均在本 job 的临时 PG 中。
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business'
+          python scripts/init_db.py --host localhost --port 5432 --user postgres
+
       - name: Targeted regression tests (free, no paid API)
         run: |
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
@@ -115,7 +152,38 @@ jobs:
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
+            tests/evaluation/test_rag_runner.py \
+            backend/tests/rag/test_specialized_budget.py \
+            backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
+            backend/tests/scripts/test_seed_prompt_eval_db.py \
+            backend/tests/rag/test_rag_fixture_content_integrity.py \
+            backend/tests/rag/test_rag_cleaning_audit_boundaries.py \
+            backend/tests/rag/test_reindex_failure_snapshot.py \
+            backend/tests/rag/test_multi_query_token_budget.py \
+            backend/tests/rag/test_multi_query_rewrite_completion.py \
+            backend/tests/rag/test_multi_query_rerank.py \
+            backend/tests/rag/test_multi_query_runtime_queries.py \
+            backend/tests/rag/test_multi_query_timeout_lifecycle.py \
+            backend/tests/test_llm_budget.py \
+            backend/tests/infra/test_request_budget_remaining.py \
+            backend/tests/test_llm_quota.py \
+            backend/tests/infra/test_b1b_llm_governance.py \
+            backend/tests/infra/test_usage_identity.py \
+            backend/tests/infra/test_usage_billing.py \
+            backend/tests/infra/test_stream_usage.py \
+            backend/tests/rag/test_review_hardening.py \
+            backend/tests/rag/test_pgvector_store.py \
+            backend/tests/rag/test_bm25_identity_and_refresh.py \
+            backend/tests/rag/test_bm25_sync.py \
+            backend/tests/rag/test_bm25_stale_fix.py \
+            backend/tests/rag/test_bm25_vector_rebuild.py \
+            backend/tests/rag/test_rag_index_reconcile.py \
+            backend/tests/test_indexer_bm25_sync.py \
+            backend/tests/rag/test_contextual_prefix.py \
+            backend/tests/api/test_rag_server_internal_token.py \
+            backend/tests/test_rag_remote_mode.py \
+            backend/tests/prompts/ \
             -q --no-cov
 
       - name: Declare skipped real-API scope
@@ -137,7 +205,7 @@ jobs:
       needs.detect-changes.outputs.relevant == 'true' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     name: RAG Smoke Evaluation (8 cases, real API)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets。
     environment: prompt-eval
     timeout-minutes: 40
@@ -163,6 +231,18 @@ jobs:
       EVAL_SEMANTIC_SCORER: lexical
       EVAL_TRIGGER: ${{ github.event_name }}
       EVAL_TRIGGERED_BY: github-actions-rag-smoke
+      EVAL_RUN_ID: rag-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+      LLM_BUDGET_MODE: enforce
+      # 评测阶段请求额度；fixture 索引阶段另设阶段额度，最终账本覆盖两阶段
+      # （基线 2026-10-18 main run 实测：108 calls / 106,330 tokens / CNY 0.116，
+      # 含 baseline 16 份 fixture 冷索引 + 8-case 评测；费用上限仍为 CNY 0.50，
+      # calls/tokens 用约 1.8 倍实测值做失控保护，不构成成本放宽）。
+      # MultiQuery 生效后单 case 会多 1 次改写 + N 路检索（含 rerank），
+      # 8-case 实测预估 ~85 calls / ~50k tokens；额度按此留余量。
+      LLM_REQUEST_MAX_CALLS: "128"
+      LLM_REQUEST_MAX_TOKENS: "96000"
+      LLM_REQUEST_MAX_COST: "0.40"
+      # 改写与生产共用默认子预算，不设置评测专用 timeout 覆盖值。
       LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
@@ -183,6 +263,10 @@ jobs:
       PROMPT_EVAL_TEST_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_API_KEY }}
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
+      # 价格快照仅通过只读 Registry 连接导入，禁止 CI 变量自报价格。
+      # 生产检索链默认启用 MultiQuery；main push 必须按生产口径评测，
+      # 否则门禁评的是"未上线路径"，与 main 真实检索能力脱节。
+      EVAL_MULTIQUERY: ${{ github.event_name == 'push' && 'true' || inputs.multiquery }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
       PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
@@ -258,14 +342,38 @@ jobs:
       - name: Verify approved prices before any paid API call
         run: python -m backend.scripts.seed_prompt_eval_db --verify-pricing
 
-      - name: Verify bindings and probe real API
+      - name: Verify model bindings
         env:
           EVAL_MEMORY_PGDATABASE: agent_memory_test
         run: |
           python scripts/seed_eval_model_bindings.py --verify --target-db agent_memory_test
-          python scripts/seed_eval_model_bindings.py --probe --target-db agent_memory_test
+
+      - name: Snapshot usage ledger before paid provider calls
+        id: usage-ledger-baseline
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          import psycopg
+
+          conn = psycopg.connect(
+              host="localhost", port=5432, user="postgres", password="postgres",
+              dbname=os.environ["MEMORY_PGDATABASE"],
+          )
+          with conn.cursor() as cur:
+              cur.execute("SELECT COALESCE(MAX(id), 0) FROM llm_usage")
+              start_id = int(cur.fetchone()[0] or 0)
+          conn.close()
+          print(f"usage_start_id={start_id}")
+          PY
 
       - name: Import baseline evaluation fixtures
+        env:
+          # fixture 冷索引实测（2026-10-18 main run）：约 80 calls / 45k tokens /
+          # CNY 0.10（16 份 baseline，每份 1 次元数据 LLM + 多次 embedding）。
+          # 原 16 calls / 8k tokens 会在第 5 份文档即 RequestBudgetExceeded。
+          LLM_REQUEST_MAX_CALLS: "160"
+          LLM_REQUEST_MAX_TOKENS: "120000"
+          LLM_REQUEST_MAX_COST: "0.15"
         run: python -m backend.evaluation.import_fixture baseline
 
       - name: Assert index completeness
@@ -308,8 +416,14 @@ jobs:
         run: |
           # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
           set -o pipefail
+          MULTIQUERY_ARGS=()
+          if [[ "$EVAL_MULTIQUERY" == "true" ]]; then
+            MULTIQUERY_ARGS+=(--multiquery)
+          fi
           python -u -m backend.evaluation.cli rag \
             --selection pr_smoke \
+            --run-id "$EVAL_RUN_ID" \
+            "${MULTIQUERY_ARGS[@]}" \
             --no-ragas \
             --no-resume \
             --strict-gate \
@@ -318,11 +432,14 @@ jobs:
 
       - name: Collect API cost attribution
         if: always()
+        env:
+          LLM_USAGE_START_ID: ${{ steps.usage-ledger-baseline.outputs.usage_start_id }}
         run: |
           python - <<'PY'
           import json
           import os
           from pathlib import Path
+          from decimal import Decimal
 
           import psycopg
 
@@ -333,62 +450,172 @@ jobs:
               )
               with conn.cursor() as cur:
                   cur.execute(
-                      "SELECT model, provider, cost_status, pricing_source, count(*), "
+                      "SELECT component, model, provider, cost_status, pricing_source, count(*), "
                       "sum(coalesce(total_tokens, 0)), sum(coalesce(billed_cost_cny, 0)) "
                       "FROM llm_usage "
-                      "GROUP BY model, provider, cost_status, pricing_source "
-                      "ORDER BY model, provider, cost_status, pricing_source"
+                      "WHERE id > %s AND component IN ('llm', 'embedding', 'rerank') "
+                      "GROUP BY component, model, provider, cost_status, pricing_source "
+                      "ORDER BY component, model, provider, cost_status, pricing_source",
+                      (int(os.getenv("LLM_USAGE_START_ID") or 0),),
                   )
                   rows = cur.fetchall()
+                  cur.execute(
+                      "SELECT count(*), "
+                      "count(*) FILTER (WHERE tenant_id IS DISTINCT FROM %s "
+                      "OR user_id IS DISTINCT FROM %s), "
+                      "sum(coalesce(total_tokens, 0)), "
+                      "sum(coalesce(billed_cost_cny, 0)) "
+                      "FROM llm_usage WHERE id > %s "
+                      "AND component IN ('llm', 'embedding', 'rerank')",
+                      (
+                          "eval", os.environ["EVAL_TRIGGERED_BY"],
+                          int(os.getenv("LLM_USAGE_START_ID") or 0),
+                      ),
+                  )
+                  usage_totals = cur.fetchone()
+                  cur.execute(
+                      "WITH reservation_per_call AS ("
+                      "SELECT DISTINCT ON (id) id, status, reserved_cny, settled_cny "
+                      "FROM budget_reservations WHERE request_id = %s "
+                      "ORDER BY id, created_at) "
+                      "SELECT status, count(*), sum(reserved_cny), sum(settled_cny) "
+                      "FROM reservation_per_call GROUP BY status ORDER BY status",
+                      (f"eval:{os.environ['EVAL_RUN_ID']}",),
+                  )
+                  reservation_rows = cur.fetchall()
               conn.close()
           except Exception:  # noqa: BLE001
-              print("[cost] llm_usage 查询失败；费用状态标记为 UNVERIFIED")
+              print("[cost] usage/quota ledger 查询失败；对账标记为 UNVERIFIED")
               rows = []
               query_failed = True
           else:
               query_failed = False
           unverified_statuses = {"", "unpriced", "price_unknown"}
           unverified_calls = sum(
-              int(r[4] or 0) for r in rows
-              if (r[2] or "").lower() in unverified_statuses
+              int(r[5] or 0) for r in rows
+              if (r[3] or "").lower() in unverified_statuses
           )
           estimated_calls = sum(
-              int(r[4] or 0) for r in rows if (r[2] or "").lower() == "estimated"
+              int(r[5] or 0) for r in rows if (r[3] or "").lower() == "estimated"
           )
           cost_verification = (
               "UNVERIFIED" if query_failed or not rows or unverified_calls
               else "ESTIMATED" if estimated_calls else "VERIFIED"
           )
+          reservation_counts = {
+              str(r[0]): int(r[1] or 0) for r in reservation_rows
+          } if not query_failed else {}
+          reservation_amounts_cny = {
+              str(status): {
+                  "reserved_cny": round(sum(
+                      float(r[2] or 0) for r in reservation_rows if r[0] == status
+                  ), 6),
+                  "settled_cny": round(sum(
+                      float(r[3] or 0) for r in reservation_rows if r[0] == status
+                  ), 6),
+              }
+              for status in reservation_counts
+          } if not query_failed else {}
+          reservation_total = sum(reservation_counts.values())
+          settled_cost = sum(
+              (Decimal(str(r[3] or 0)) for r in reservation_rows if r[0] == "settled"),
+              Decimal("0"),
+          ) if not query_failed else Decimal("0")
+          usage_calls = int(usage_totals[0] or 0) if not query_failed else 0
+          unattributed_calls = int(usage_totals[1] or 0) if not query_failed else 0
+          usage_tokens = int(usage_totals[2] or 0) if not query_failed else 0
+          usage_cost = Decimal(str(usage_totals[3] or 0)) if not query_failed else Decimal("0")
+          ledger_difference = abs(usage_cost - settled_cost)
+          budget_envelope_verification = (
+              "WITHIN_LIMITS"
+              if not query_failed
+              and usage_calls <= 200
+              and usage_tokens <= 200000
+              and usage_cost <= Decimal("0.50")
+              else "OVER_LIMIT"
+          )
+          budget_ledger_verification = (
+              "VERIFIED"
+              if not query_failed
+              and os.environ.get("LLM_BUDGET_MODE") == "enforce"
+              and usage_calls > 0
+              and reservation_total == usage_calls
+              and reservation_counts.get("reserved", 0) == 0
+              and reservation_counts.get("needs_review", 0) == 0
+              and unattributed_calls == 0
+              and ledger_difference <= Decimal("0.000001")
+              else "UNVERIFIED"
+          )
           summary = []
           for r in rows:
-              cost_status = (r[2] or "").lower()
+              cost_status = (r[3] or "").lower()
               summary.append({
-                  "model": r[0],
-                  "provider": r[1],
+                  "component": r[0],
+                  "model": r[1],
+                  "provider": r[2],
                   "cost_status": cost_status or "unknown",
-                  "pricing_source": r[3] or "unknown",
-                  "calls": int(r[4] or 0),
-                  "total_tokens": int(r[5] or 0),
+                  "pricing_source": r[4] or "unknown",
+                  "calls": int(r[5] or 0),
+                  "total_tokens": int(r[6] or 0),
                   "billed_cost_cny": (
                       None if cost_status in unverified_statuses
-                      else round(float(r[6] or 0), 6)
+                      else round(float(r[7] or 0), 6)
                   ),
               })
           Path("data/eval_runs").mkdir(parents=True, exist_ok=True)
           Path("data/eval_runs/llm_usage_summary.json").write_text(
               json.dumps({
                   "note": "隔离测试库账本，未同步生产计费",
+                  "eval_run_id": os.environ.get("EVAL_RUN_ID", ""),
+                  "budget_request_id": f"eval:{os.environ.get('EVAL_RUN_ID', '')}",
+                  "budget_mode": os.environ.get("LLM_BUDGET_MODE", ""),
                   "cost_verification": cost_verification,
+                  "budget_ledger_verification": budget_ledger_verification,
                   "verification_error": "ledger_query_failed" if query_failed else None,
                   "unverified_calls": unverified_calls,
+                  "usage_calls": usage_calls,
+                  "usage_tokens": usage_tokens,
+                  "unattributed_calls": unattributed_calls,
+                  "budget_envelope_verification": budget_envelope_verification,
+                  "budget_reservations": reservation_counts,
+                  "reservation_amounts_cny": reservation_amounts_cny,
+                  "usage_cost_cny": round(float(usage_cost), 6),
+                  "settled_cost_cny": round(float(settled_cost), 6),
+                  "ledger_difference_cny": round(float(ledger_difference), 6),
                   "usage": summary,
               },
                          ensure_ascii=False, indent=2),
               encoding="utf-8",
           )
           print(json.dumps({"cost_verification": cost_verification,
+                            "budget_ledger_verification": budget_ledger_verification,
+                            "usage_calls": usage_calls,
+                            "usage_tokens": usage_tokens,
+                            "unattributed_calls": unattributed_calls,
+                            "budget_envelope_verification": budget_envelope_verification,
+                            "budget_reservations": reservation_counts,
+                            "reservation_amounts_cny": reservation_amounts_cny,
+                            "usage_cost_cny": round(float(usage_cost), 6),
+                            "settled_cost_cny": round(float(settled_cost), 6),
+                            "ledger_difference_cny": round(float(ledger_difference), 6),
                             "unverified_calls": unverified_calls, "usage": summary},
                            ensure_ascii=False, indent=2))
+          PY
+
+      - name: Require reconciled cost ledger
+        if: always()
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("data/eval_runs/llm_usage_summary.json").read_text())
+          if summary.get("cost_verification") not in {"VERIFIED", "ESTIMATED"}:
+              raise SystemExit("费用未定价或无法验证，禁止通过真实评测")
+          if summary.get("budget_ledger_verification") != "VERIFIED":
+              raise SystemExit("身份或预占/结算账本未完成对账，禁止通过真实评测")
+          if summary.get("budget_envelope_verification") != "WITHIN_LIMITS":
+              raise SystemExit("整次评测费用预算超限或无法核实，禁止通过")
           PY
 
       - name: Upload RAG smoke report

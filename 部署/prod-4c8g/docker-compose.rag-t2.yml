@@ -1,0 +1,25 @@
+# RAG PDF Worker 隔离测试覆盖（2026-10-18）
+#
+# 背景：生产 4C8G 覆盖层把 rag-index-worker 压到 768m；500 页 PDF 实测
+# parse_and_chunk_full 峰值 836.2MB，超出后被 cgroup OOM SIGKILL（Celery
+# 子进程消失、父进程存活、容器 OOMKilled=false），上传没有最终 IndexRun/
+# 终态/Search。
+#
+# 本覆盖层只用于隔离测试/本机验证：并发 1 + 2g 上限（覆盖 836MB 峰值与
+# 父进程开销，并留安全余量），不改生产全局档，也不把其他服务的内存预算
+# 挪给 RAG。
+#
+# 用法（仓库根目录，按 4C8G 本地档叠加）：
+#   docker compose -f docker-compose.yml \
+#     -f 部署/prod-4c8g/docker-compose.local.yml \
+#     -f 部署/prod-4c8g/docker-compose.rag-t2.yml \
+#     up -d --no-deps rag-index-worker rag-service
+services:
+  rag-index-worker:
+    environment:
+      RAG_INDEX_WORKER_CONCURRENCY: "1"
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "2.0"

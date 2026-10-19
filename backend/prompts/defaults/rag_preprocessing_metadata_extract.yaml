@@ -4,30 +4,26 @@ category: rag_preprocessing
 risk_level: low
 template_engine: str_format
 variables:
-  - {name: doc_types, required: true, description: 允许的文档类型枚举}
-  - {name: domains, required: true, description: 允许的业务领域枚举}
   - {name: filename, required: true, description: 文件名}
   - {name: text, required: true, description: 文档内容采样}
 template: |
-  你是电商知识库的文档元数据抽取引擎。请通读文档，一次性输出以下元数据。
-
-  允许的 doc_type 枚举（必须从中选一个，无法判断时选 general）:
-  {doc_types}
-
-  允许的 business_domain 枚举（必须从中选一个，无法判断时选 general）:
-  {domains}
+  你是知识库的文档元数据增强器。分类和业务领域由系统规则确定，不要尝试分类。
+  你只负责基于原文生成简短摘要、精确专名实体、风险信号和时间信息。
 
   文件名: {filename}
   文档内容:
   {text}
 
-  请严格输出如下 JSON（不要 markdown 代码块，不要任何解释文字）:
-  {{"doc_type": "枚举之一",
-    "confidence": 0.0到1.0的小数，表示你对 doc_type 判断的把握,
-    "business_domain": "必须是上方枚举之一，无法判断时使用 general",
-    "summary": "不超过120字的文档一句话摘要",
-    "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
-    "entities": {{"person": ["人名"], "org": ["组织/公司"], "product": ["产品/SKU"], "regulation": ["法规/制度名"]}},
-    "risk": {{"level": "none/high/medium/low，文档是否涉及合规、法律、资金、数据安全等风险议题",
-      "signals": ["命中风险议题的具体依据词句，无则空数组"]}},
-    "time_refs": ["文档中提到的具体时间，如 2026年Q3、2026-09-01；没有则为空数组"]}}
+  仅输出 JSON，不要 markdown 或解释文字。doc_type、confidence、business_domain 是兼容字段，必须分别填写 "general"、0 和 "general"；服务端会用规则结果替换它们。
+  keywords 只能填写原文中可精确匹配的产品/品牌/型号/SKU/编号/错误码/制度/标准等专名，不能填写主题词、普通名词或推测内容。
+  每个实体和关键词都必须逐字出现在上面的原文中；没有可靠依据时返回空数组。摘要不超过120字；每个数组最多5项，time_refs 最多10项。
+
+  请严格输出如下 JSON:
+  {{"doc_type": "general",
+    "confidence": 0,
+    "business_domain": "general",
+    "summary": "不超过120字的摘要",
+    "keywords": ["原文中有明确格式或专名依据的实体"],
+    "entities": {{"person": [], "org": [], "product": [], "regulation": []}},
+    "risk": {{"level": "none/high/medium/low", "signals": ["原文中逐字出现的依据，无则空数组"]}},
+    "time_refs": ["原文中逐字出现的时间，无则空数组"]}}

@@ -157,6 +157,23 @@ class IndexRunStore:
             row = cur.fetchone()
         return dict(row) if row else None
 
+    def set_celery_task_id(self, upload_id: str,
+                           celery_task_id: str) -> dict | None:
+        """回填成功入队的 Celery ID，不改变运行状态。"""
+        if not celery_task_id:
+            return self.get_run(upload_id)
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f"""UPDATE {self._table}
+                    SET celery_task_id = %s, updated_at = {_NOW_SQL}
+                    WHERE upload_id = %s
+                    RETURNING *""",
+                (celery_task_id, upload_id),
+            )
+            row = cur.fetchone()
+        return dict(row) if row else None
+
     def mark_status(self, upload_id: str, status: str,
                     stage: str = "", error: str = "") -> dict:
         """状态推进（终态一次写：终态→任何状态都拒绝并抛 RunStateConflict）。"""
@@ -203,6 +220,44 @@ class IndexRunStore:
                 (file_path,))
             rows = cur.fetchall()
         return [dict(r) for r in rows]
+
+    def list_active_runs(
+        self,
+        *,
+        limit: int = 100,
+        tenant_id: str | None = None,
+        kb_ids: list[str] | None = None,
+        department: str | None = None,
+    ) -> list[dict]:
+        """列出排队或索引中的运行，供管理端即时显示后台任务状态。"""
+        limit = max(1, min(int(limit), 500))
+        if kb_ids is not None and not kb_ids:
+            return []
+        conditions = [f"status IN {ACTIVE_STATUSES!r}"]
+        params: list[Any] = []
+        if tenant_id is not None:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
+        if kb_ids is not None:
+            conditions.append("kb_id = ANY(%s)")
+            params.append(kb_ids)
+        if department is not None:
+            conditions.append("department = %s")
+            params.append(department)
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f"""SELECT upload_id, celery_task_id, file_path, doc_id,
+                           kb_id, department, status, stage, error,
+                           created_at, updated_at
+                    FROM {self._table}
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY created_at DESC, upload_id DESC
+                    LIMIT %s""",
+                (*params, limit),
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
 
     # ---- 待处理入库失败（管理端「入库失败」信号唯一出口，2026-10-02）----
     #

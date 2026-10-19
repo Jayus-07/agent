@@ -7,11 +7,18 @@ from typing import List, Tuple, Optional
 import logging
 import time
 
+from backend.rag.retrieval_budget import (
+    RetrievalDeadlineExceeded, await_retrieval, current_budget,
+)
+
 logger = logging.getLogger(__name__)
 
 
 def _timed_retrieval(path_timings: dict, path: str, fn, *args, **kwargs):
     """记录并行召回分支自身耗时，不改变候选集或 Evidence Gate 输入。"""
+    budget = current_budget()
+    if budget is not None and budget.expired():
+        raise RetrievalDeadlineExceeded("召回任务启动前预算耗尽")
     started = time.perf_counter()
     try:
         return fn(*args, **kwargs)
@@ -127,26 +134,28 @@ def _enhanced_hybrid_retrieve_impl(
     # Step 3: 收集结果（按路径分开，带权重；dense 权重最高因为 embedding 语义匹配更可靠）
     try:
         if rule_future:
-            rule_docs = rule_future.result() or []
+            rule_docs = await_retrieval(rule_future) or []
             metrics["rule_hits"] = len(rule_docs)
             if rule_docs:
                 path_results.append((rule_docs, 2.0))
     except Exception as e:
+        metrics["rule_status"] = "timeout" if isinstance(e, RetrievalDeadlineExceeded) else "error"
         logger.warning(f"[EnhancedRetrieve] Rule retrieval failed: {e}", exc_info=True)
 
     try:
-        dense_docs = dense_future.result()
+        dense_docs = await_retrieval(dense_future)
         metrics["dense_hits"] = len(dense_docs)
         if dense_docs:
             # §7 路由加权：dense 基础权重 3.0 × 策略 vector_weight
             path_results.append((dense_docs, 3.0 * vw))
     except Exception as e:
+        metrics["dense_status"] = "timeout" if isinstance(e, RetrievalDeadlineExceeded) else "error"
         logger.warning(f"[EnhancedRetrieve] Dense retrieval failed: {e}", exc_info=True)
         dense_docs = []
 
     try:
         if sparse_future:
-            sparse_docs = sparse_future.result() or []
+            sparse_docs = await_retrieval(sparse_future) or []
             metrics["sparse_hits"] = len(sparse_docs)
             if doc_ids:
                 sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
@@ -159,11 +168,15 @@ def _enhanced_hybrid_retrieve_impl(
                 # §7 路由加权：sparse 基础权重 1.0 × 策略 bm25_weight
                 path_results.append((sparse_docs, 1.0 * bw))
     except Exception as e:
+        metrics["sparse_status"] = "timeout" if isinstance(e, RetrievalDeadlineExceeded) else "error"
         logger.warning(f"[EnhancedRetrieve] Sparse retrieval failed: {e}", exc_info=True)
 
     # Step 4: Evidence Gate - 检查召回质量
     all_docs_flat = [d for path, _ in path_results for d in path]
     if not all_docs_flat:
+        budget = current_budget()
+        if budget is not None and budget.expired():
+            raise RetrievalDeadlineExceeded("所有召回路径未在共享 deadline 内返回证据")
         logger.error("[EnhancedRetrieve] No results from any path - triggering fallback")
         # 降级策略：回到原始 hybrid_retrieve
         from backend.rag.retrieval.hybrid import hybrid_retrieve

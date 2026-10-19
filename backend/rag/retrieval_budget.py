@@ -11,13 +11,15 @@ deadline），下游所有阶段用 ``remaining_ms()`` 消费**同一份剩余�
 
 设计约束：
 - 预算耗尽 ≠ 异常：各阶段按 spec §25 阶梯降级（rewrite 超时→原始 query、
-  fanout 部分完成→用部分、adaptive/synonym 无预算→跳过），绝不整链失败。
+  fanout 部分完成→用部分、adaptive/synonym 无预算→跳过）；普通召回
+  全部超时且无证据时明确报告超时，不得伪装成正常空召回。
 - 无预算（直接调用 retriever 的旁路）→ 各阶段回退各自默认行为。
 """
 from __future__ import annotations
 
 import contextvars
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Optional
 
@@ -79,6 +81,20 @@ def current_budget() -> Optional[RetrievalBudget]:
     return _budget_var.get()
 
 
+@contextmanager
+def scoped_retrieval_budget(total_ms: float):
+    """旁路检索入口沿用生产 deadline；已有外层预算时禁止重新开窗。"""
+    if current_budget() is not None:
+        yield current_budget()
+        return
+    budget = RetrievalBudget(total_ms=total_ms)
+    token = _budget_var.set(budget)
+    try:
+        yield budget
+    finally:
+        _budget_var.reset(token)
+
+
 def remaining_ms(default_ms: float) -> float:
     """剩余预算的统一读取口；无预算时返回调用方默认值（行为不变）。
 
@@ -88,6 +104,26 @@ def remaining_ms(default_ms: float) -> float:
     if budget is None:
         return default_ms
     return max(budget.remaining_ms(), 0.0)
+
+
+class RetrievalDeadlineExceeded(TimeoutError):
+    """共享检索截止时间耗尽，禁止重新发起降级请求。"""
+
+
+def await_retrieval(future):
+    """只等待共享预算剩余时间；在途任务自行收尾和结算。"""
+    from concurrent.futures import TimeoutError as FutureTimeoutError
+
+    budget = current_budget()
+    if budget is None:
+        return future.result()
+    try:
+        return future.result(timeout=max(budget.remaining_ms(), 0) / 1000)
+    except FutureTimeoutError as exc:
+        if future.done():
+            raise
+        future.cancel()
+        raise RetrievalDeadlineExceeded("共享检索 deadline 已耗尽") from exc
 
 
 def log_degrade(stage: str, reason: str, **detail) -> None:

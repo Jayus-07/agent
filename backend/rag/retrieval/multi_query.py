@@ -3,8 +3,13 @@
 need_multi_query() 是唯一入口，所有 MultiQuery 判断必须经过此函数。
 """
 
+import contextvars
+import os
 import re
+import threading
 import time
+import uuid
+from dataclasses import dataclass, field
 from typing import Any, List
 
 from langchain_core.documents import Document
@@ -33,31 +38,238 @@ _mq_mode: str = _DEFAULT_MODE
 # 静默退化为单查询，还白付 ~2.3s 串行等待。
 # 修复=角色化（改走 non-thinking 轻模型）+ 上限兜底到 512，两者缺一不可：
 # 只调角色时若管理员仍绑定思考型模型，512 仍会被思考吃光。
-_REWRITE_MAX_TOKENS_FLOOR = 512
+# RC-024 在 512 completion tokens 再次截断，保留角色/温度，仅提高输出下限。
+_REWRITE_MAX_TOKENS_FLOOR = 1024
+
+# 请求级有效查询列表的私有元数据键（Phase B，PR #52）。
+# 只挂在本次请求首个候选 Document 的 metadata 上，随 ContextualCompressionRetriever
+# 的同一次 invoke 传给 RerankCompressor；Rerank 在本层外层（装配顺序不变），
+# 因此压缩器拿到的正是 MultiQuery 合并后的同一批候选。前缀 "_runtime_" 表示
+# 非持久化字段：候选来自检索缓存副本（retrievers.py 返回 copy），不会写回
+# Chroma/PG 元数据；Trace/引用导出均按显式键读取，不含该字段。
+RUNTIME_MQ_QUERIES_KEY = "_runtime_mq_queries"
+
+
+@dataclass
+class _RewriteAttempt:
+    """跨调用方与工作线程共享的改写诊断状态。"""
+
+    attempt_id: str
+    started_at: float
+    span: Any
+    metrics: dict[str, Any] = field(default_factory=dict)
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
+    caller_timed_out: bool = False
+    worker_finished: bool = False
+    late_span_recorded: bool = False
+
+    def update(self, **values: Any) -> None:
+        with self.lock:
+            self.metrics.update(values)
+
+    def add_duration(self, name: str, duration_ms: float) -> None:
+        with self.lock:
+            previous = self.metrics.get(name, 0.0)
+            if not isinstance(previous, (int, float)):
+                previous = 0.0
+            self.metrics[name] = round(
+                float(previous) + max(duration_ms, 0.0), 1,
+            )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "rewrite_attempt_id": self.attempt_id,
+                "rewrite_total_ms": round(
+                    (time.monotonic() - self.started_at) * 1000, 1,
+                ),
+                "provider_ttfb_ms": "unavailable",
+                **self.metrics,
+            }
+
+    def mark_caller_timeout(self) -> bool:
+        """标记业务等待超时；返回是否需要由调用方补记迟到 span。"""
+        with self.lock:
+            self.caller_timed_out = True
+            if self.worker_finished and not self.late_span_recorded:
+                self.late_span_recorded = True
+                return True
+            return False
+
+    def caller_timeout_snapshot(self, **values: Any) -> tuple[dict[str, Any], bool]:
+        """原子冻结调用方 timeout 结论，避免工作线程迟到写入覆盖主 span。"""
+        with self.lock:
+            self.caller_timed_out = True
+            self.metrics.update(values)
+            if self.worker_finished:
+                self.metrics["worker_state"] = "finished"
+            write_late_span = False
+            if self.worker_finished and not self.late_span_recorded:
+                self.late_span_recorded = True
+                write_late_span = True
+            return self.snapshot(), write_late_span
+
+    def mark_worker_finished(self) -> bool:
+        """标记线程任务结束；返回是否需要由工作线程补记迟到 span。"""
+        with self.lock:
+            self.worker_finished = True
+            if self.caller_timed_out and not self.late_span_recorded:
+                self.late_span_recorded = True
+                return True
+            return False
+
+
+_rewrite_attempt_var: contextvars.ContextVar[_RewriteAttempt | None] = (
+    contextvars.ContextVar("rag_multi_query_rewrite_attempt", default=None)
+)
+
+
+def _current_rewrite_attempt() -> _RewriteAttempt | None:
+    return _rewrite_attempt_var.get()
+
+
+def _record_proxy_diagnostic(stage: str, values: dict[str, Any]) -> None:
+    attempt = _current_rewrite_attempt()
+    if attempt is None:
+        return
+    if stage.endswith("_ms"):
+        attempt.add_duration(stage, float(values.get("duration_ms", 0.0)))
+        if stage == "budget_reserve_ms":
+            attempt.update(
+                reservation_id=values.get("reservation_id") or "",
+            )
+        return
+    if stage == "provider_call_started":
+        attempt.update(
+            provider_call_started=True,
+            internal_call_id=values.get("call_id") or "",
+            reservation_id=values.get("reservation_id") or "",
+        )
+        with attempt.lock:
+            attempt.metrics["provider_attempt_count"] = (
+                int(attempt.metrics.get("provider_attempt_count", 0)) + 1
+            )
+            ids = list(attempt.metrics.get("provider_call_ids", []))
+            ids.append(str(values.get("call_id") or ""))
+            attempt.metrics["provider_call_ids"] = ids
+    elif stage == "provider_completed":
+        attempt.add_duration("provider_call_ms", values.get("duration_ms", 0))
+        attempt.add_duration("provider_response_ms", values.get("duration_ms", 0))
+        attempt.update(
+            provider_completed=True,
+            provider_outcome="completed",
+            internal_call_id=values.get("call_id") or "",
+            reservation_id=values.get("reservation_id") or "",
+        )
+    elif stage == "provider_error":
+        attempt.add_duration("provider_call_ms", values.get("duration_ms", 0))
+        attempt.update(
+            provider_client_wait_ended=True,
+            provider_completion="unknown",
+            provider_outcome="error",
+            internal_call_id=values.get("call_id") or "",
+            provider_error_type=values.get("error_type", "unknown"),
+            reservation_id=values.get("reservation_id") or "",
+        )
+        if values.get("timeout"):
+            attempt.update(timeout_kind="provider_io_timeout")
+    elif stage == "provider_not_sent":
+        with attempt.lock:
+            not_sent = list(attempt.metrics.get("provider_call_not_sent_ids", []))
+            not_sent.append(str(values.get("call_id") or ""))
+            attempt.metrics["provider_call_not_sent_ids"] = not_sent
+            sent_ids = set(attempt.metrics.get("provider_call_ids", []))
+            attempt.metrics["provider_call_started"] = bool(sent_ids - set(not_sent))
+            attempt.metrics["provider_error_type"] = values.get(
+                "error_type", "unknown",
+            )
+    elif stage == "call_identity":
+        attempt.update(
+            model=values.get("model") or "",
+            role=values.get("role") or "",
+            provider=values.get("provider") or "",
+        )
+    elif stage == "usage_unavailable":
+        attempt.update(
+            usage_status="unavailable",
+            reservation_id=values.get("reservation_id") or "",
+            settlement_status=values.get("settlement_status", "needs_review"),
+        )
+    elif stage == "usage_accounting_finished":
+        previous_status = attempt.snapshot().get("settlement_status", "pending")
+        reported_status = values.get("settlement_status")
+        status = (
+            reported_status
+            if reported_status and reported_status != "unknown"
+            else previous_status
+            if previous_status != "pending"
+            else "settlement_attempted"
+            if values.get("usage_received")
+            else "needs_review"
+        )
+        if values.get("cost_status") == "unpriced" and status in {
+            "settled", "settlement_attempted",
+        }:
+            status = "needs_review"
+        reservation_id = (
+            values.get("reservation_id")
+            or attempt.snapshot().get("reservation_id")
+            or ""
+        )
+        attempt.update(
+            usage_status=("received" if values.get("usage_received") else "unavailable"),
+            settlement_status=status,
+            reservation_id=reservation_id,
+            pricing_source=values.get("pricing_source", "unknown"),
+            price_version=values.get("price_version", ""),
+            cost_status=values.get("cost_status", "unknown"),
+        )
+    elif stage == "usage_ledger_write_finished":
+        attempt.update(
+            usage_ledger_status=(
+                "written" if values.get("written") else "write_failed"
+            ),
+        )
+
+
+def _record_late_rewrite_span(attempt: _RewriteAttempt) -> None:
+    """迟到工作线程只追加关联 span，不改写调用方的 timeout span。"""
+    try:
+        from backend.observability.tracer import trace_collector
+
+        late = trace_collector.start_span(
+            "query_rewrite_late",
+            parent_id=getattr(attempt.span, "span_id", None),
+            name="改写迟到结果",
+            type="llm_call",
+        )
+        metrics = attempt.snapshot()
+        metrics["caller_outcome"] = "timeout"
+        metrics["worker_outcome"] = "finished"
+        metrics["provider_completed_late"] = bool(
+            metrics.get("provider_completed")
+        )
+        trace_collector.end_span(
+            late, metrics=metrics, status="completed_late",
+        )
+    except Exception:  # noqa: BLE001 — Trace 旁路不得反噬工作线程
+        logger.debug("[MultiQuery] 迟到结果 Trace 记录失败", exc_info=True)
 
 
 def _resolve_rewrite_llm():
-    """改写专用 LLM：multi_query 角色（空 = 继承 main，行为兼容旧版）。
+    """返回改写专用的治理化 LLM。
 
-    改写是「3 行查询文本」的简单转换，不需要推理能力。走独立角色后可绑定
-    non-thinking 轻模型，既避免思考型模型吃光 token 预算，又显著降低延迟。
-    解析失败回落主链 llm，保证可用性优先（与既有 fail-open 口径一致）。
+    空角色按注册表规则继承 main。必须使用公共 Proxy 入口，使请求经过限流、
+    预算预占/结算、韧性处理和用量审计。没有可用模型时由改写调用方降级为
+    原始 query，不能再绕回裸全局 ``llm``。
     """
-    try:
-        from backend.config import model_roles
+    from backend.infra.llm.proxy import bind_llm_for_role
 
-        name = str(model_roles.resolve_runtime_name("multi_query") or "").strip()
-        if name:
-            # 与既有角色消费点（llm_enrichment / verify_model_governance）同路径：
-            # get_llm_for_role 只在 proxy 模块导出，不在包 __init__ 面
-            from backend.infra.llm.proxy import get_llm_for_role
-
-            return get_llm_for_role("multi_query")
-    except Exception as e:  # noqa: BLE001 — 角色不可用不阻塞检索
-        logger.warning(f"[MultiQuery] multi_query 角色解析失败，回落主链 LLM: {e}")
-    from backend.infra.llm import llm
-
-    return llm
+    return bind_llm_for_role(
+        "multi_query",
+        temperature=0,
+        max_tokens=_rewrite_max_tokens(),
+    )
 
 
 def _rewrite_max_tokens() -> int:
@@ -171,132 +383,496 @@ def _is_complex(query: str) -> tuple[bool, str]:
 # Query Rewrite: Parse → Normalize → Deduplicate → Limit
 # =====================================================
 
-def _rewrite_with_budget(question: str) -> list[str]:
-    """带预算的改写入口（Phase 5 §25：改写超时/预算不足 → 原始 query）。
+def _finish_rewrite_attempt(
+    attempt: _RewriteAttempt,
+    status: str,
+    metrics: dict[str, Any] | None = None,
+) -> None:
+    """由调用方单次收口主改写 span，迟到工作线程另建关联 span。"""
+    from backend.observability.tracer import trace_collector
 
-    改写是检索前的**串行** LLM 调用（~1-2s），绝不允许它拖死整链：
-    - 剩余预算不足（<300ms）：直接跳过改写；
-    - LLM 调用超时（借 outer 池限时等待）：取消等待，降级原始 query。
-    _rewrite 内部失败本就回退 [question]，本包装补齐「时间维度」的降级。
-    """
-    from backend.config.rag import RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS
-    from backend.rag.retrieval_budget import remaining_ms
-
-    rewrite_ms = min(
-        RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS,
-        remaining_ms(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS),
+    metrics = metrics or attempt.snapshot()
+    query_count = int(metrics.get("query_count", 1))
+    started = time.monotonic()
+    trace_collector.end_span(
+        attempt.span,
+        metrics=metrics,
+        output={"query_count": query_count},
+        status=status,
     )
-    if rewrite_ms < 300:
-        logger.info(
-            f"[MultiQuery] 剩余预算不足({rewrite_ms:.0f}ms)，跳过改写用原始 query"
-        )
-        return [question]
+    # end_span 同步通知监听器；把测量结果写回最终 TraceRecord 供落库查询。
+    attempt.span.metrics["trace_finalize_ms"] = round(
+        (time.monotonic() - started) * 1000, 1,
+    )
 
+
+def _rewrite_with_budget(question: str) -> list[str]:
+    """在共享 deadline 内改写；超时保留原问题并显式区分调用方与 Provider。"""
     from concurrent.futures import TimeoutError as _FutureTimeout
 
-    from backend.infra.thread_pools import retrieval_pool_outer
+    from backend.config import model_roles
+    from backend.config.rag import (
+        RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS,
+        RAG_RETRIEVAL_DEADLINE_MS,
+    )
+    from backend.infra.llm import proxy as llm_proxy
+    from backend.infra.thread_pools import submit_rag_task
+    from backend.observability.tracer import trace_collector
+    from backend.rag.retrieval_budget import (
+        current_budget,
+        remaining_ms as retrieval_remaining_ms,
+    )
 
-    future = retrieval_pool_outer().submit(_rewrite, question)
+    started = time.monotonic()
+    attempt_id = uuid.uuid4().hex
+    span = trace_collector.start_span(
+        "query_rewrite", name="LLM 改写", type="llm_call",
+    )
+    attempt = _RewriteAttempt(attempt_id, started, span)
+    budget = current_budget()
+    deadline_before = retrieval_remaining_ms(RAG_RETRIEVAL_DEADLINE_MS)
     try:
-        return future.result(timeout=rewrite_ms / 1000)
-    except _FutureTimeout:
-        future.cancel()
-        try:
-            from backend.observability.tracer import trace_collector
+        from backend.infra.llm.budget import current_request_id
+        from backend.observability.tracer import current_trace_context
 
-            trace_collector.end_open_span(
-                "query_rewrite",
-                metrics={"degrade": "rewrite_timeout",
-                         "budget_ms": round(rewrite_ms, 1)},
-                status="timeout",
-            )
-        except Exception:  # noqa: BLE001 — 观测旁路
-            pass
-        logger.warning(
-            f"[MultiQuery] 改写超时({rewrite_ms:.0f}ms)，降级原始 query 走 hybrid"
+        trace_id, _session_id = current_trace_context()
+        request_id = current_request_id()
+    except Exception:
+        trace_id, request_id = "", ""
+    attempt.update(
+        prompt_key="rag.multi_query",
+        prompt_status="not_rendered",
+        queue_wait_ms="unavailable",
+        worker_start_ms="unavailable",
+        model_resolve_ms="unavailable",
+        prompt_render_ms="unavailable",
+        price_preflight_ms="unavailable",
+        budget_reserve_ms="unavailable",
+        provider_call_ms="unavailable",
+        provider_response_ms="unavailable",
+        response_parse_ms="unavailable",
+        trace_finalize_ms="pending",
+        retrieval_deadline_ms=round(float(RAG_RETRIEVAL_DEADLINE_MS), 1),
+        shared_deadline_active=budget is not None,
+        deadline_remaining_before_ms=(
+            round(max(deadline_before, 0.0), 1)
+            if deadline_before is not None else "unavailable"
+        ),
+        rewrite_timeout_configured_ms=round(
+            float(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS), 1,
+        ),
+        rewrite_timeout_source=(
+            "environment:RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS"
+            if "RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS" in os.environ
+            else "code_default"
+        ),
+        role="multi_query",
+        request_id=request_id or "",
+        trace_id=trace_id or "",
+        provider_ttfb_ms="unavailable",
+        provider_completion="not_started",
+        internal_call_id="",
+        provider_call_ids=[],
+        provider_request_id="",
+        usage_ledger_status="unavailable",
+        finish_reason="unknown",
+        provider_call_started=False,
+        provider_completed=False,
+        provider_cancel_acknowledged=False,
+        usage_status="pending",
+        settlement_status="pending",
+        timeout_kind="none",
+        query_count=1,
+        fallback="original_query",
+    )
+
+    role_started = time.monotonic()
+    try:
+        policy = model_roles.resolve_runtime_policy("multi_query")
+        role_timeout_ms = max(200.0, float(policy.timeout_seconds) * 1000)
+        role_timeout_source = (
+            "database_role_policy"
+            if model_roles.has_db_policy_value("multi_query", "timeout_seconds")
+            else "code_default_role_policy"
+        )
+    except Exception:
+        role_timeout_ms = float(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS)
+        role_timeout_source = "role_policy_resolution_failed"
+    attempt.add_duration("role_resolve_ms", (time.monotonic() - role_started) * 1000)
+    attempt.update(
+        role_timeout_ms=round(role_timeout_ms, 1),
+        role_timeout_source=role_timeout_source,
+    )
+
+    deadline_after_role = retrieval_remaining_ms(RAG_RETRIEVAL_DEADLINE_MS)
+    configured_ms = max(200.0, float(RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS))
+    role_capped_ms = min(configured_ms, role_timeout_ms)
+    effective_ms = min(
+        role_capped_ms,
+        max(deadline_after_role, 0.0)
+        if deadline_after_role is not None else role_capped_ms,
+    )
+    if deadline_after_role is not None and deadline_after_role < role_capped_ms:
+        timeout_source = "shared_retrieval_deadline"
+    elif configured_ms <= role_timeout_ms:
+        timeout_source = attempt.metrics["rewrite_timeout_source"]
+    else:
+        timeout_source = role_timeout_source
+    attempt.update(
+        rewrite_timeout_effective_ms=round(effective_ms, 1),
+        rewrite_timeout_source=timeout_source,
+        deadline_remaining_after_ms=(
+            round(max(deadline_after_role, 0.0), 1)
+            if deadline_after_role is not None else "unavailable"
+        ),
+    )
+
+    if effective_ms < 300:
+        attempt.update(
+            rewrite_status="degraded",
+            degrade="budget_insufficient",
+            finish_reason="not_called",
+            provider_outcome="not_sent",
+            provider_completion="not_started",
+            usage_status="not_requested",
+            settlement_status="not_reserved",
+            timeout_kind=(
+                "total_deadline_expired"
+                if deadline_after_role is not None and deadline_after_role <= 0
+                else "shared_deadline_insufficient"
+            ),
+        )
+        _finish_rewrite_attempt(attempt, "skipped")
+        logger.info(
+            "[MultiQuery] 剩余共享预算不足(%.0fms)，跳过改写用原始 query",
+            effective_ms,
         )
         return [question]
+
+    cancel_event = threading.Event()
+    request_context = contextvars.copy_context()
+    submitted_at = time.monotonic()
+
+    def _rewrite_worker() -> list[str]:
+        worker_started = time.monotonic()
+        attempt.add_duration("queue_wait_ms", (worker_started - submitted_at) * 1000)
+        attempt.update(
+            worker_start_ms=round(
+                (worker_started - attempt.started_at) * 1000, 1,
+            ),
+        )
+        token = _rewrite_attempt_var.set(attempt)
+        try:
+            return llm_proxy.run_with_role_cancellation(
+                cancel_event, _rewrite, question,
+            )
+        finally:
+            _rewrite_attempt_var.reset(token)
+            if attempt.mark_worker_finished():
+                _record_late_rewrite_span(attempt)
+
+    try:
+        future = submit_rag_task(
+            "multi_query_rewrite",
+            request_context.run,
+            _rewrite_worker,
+        )
+    except Exception as exc:
+        attempt.update(
+            rewrite_status="degraded",
+            degrade="worker_submit_failed",
+            error_type=type(exc).__name__,
+            timeout_kind="worker_start_failed",
+        )
+        _finish_rewrite_attempt(attempt, "error")
+        return [question]
+
+    try:
+        queries = future.result(timeout=effective_ms / 1000)
+        deadline_after = retrieval_remaining_ms(RAG_RETRIEVAL_DEADLINE_MS)
+        if deadline_after is not None and deadline_after <= 0:
+            attempt.update(
+                rewrite_status="degraded",
+                degrade="shared_deadline_expired",
+                timeout_kind="total_deadline_expired",
+                deadline_remaining_after_ms=0.0,
+                query_count=1,
+            )
+            _finish_rewrite_attempt(attempt, "timeout")
+            return [question]
+        attempt.update(
+            deadline_remaining_after_ms=(
+                round(max(deadline_after, 0.0), 1)
+                if deadline_after is not None else "unavailable"
+            ),
+        )
+        status = str(attempt.snapshot().get("rewrite_status", "success"))
+        _finish_rewrite_attempt(attempt, status)
+        return queries
+    except _FutureTimeout:
+        deadline_after = retrieval_remaining_ms(RAG_RETRIEVAL_DEADLINE_MS)
+        timeout_kind = (
+            "total_deadline_expired"
+            if timeout_source == "shared_retrieval_deadline"
+            or (deadline_after is not None and deadline_after <= 0)
+            else "caller_subbudget_timeout"
+        )
+        cancel_event.set()
+        cancel_accepted = future.cancel()
+        if cancel_accepted:
+            attempt.update(
+                queue_wait_ms="unavailable",
+                worker_start_ms="unavailable",
+            )
+        timeout_metrics, write_late_span = attempt.caller_timeout_snapshot(
+            rewrite_status="degraded",
+            degrade="rewrite_timeout",
+            timeout_kind=timeout_kind,
+            caller_timeout=True,
+            caller_cancel_requested=True,
+            future_cancel_accepted=bool(cancel_accepted),
+            provider_cancel_acknowledged=False,
+            worker_state=(
+                "cancelled_before_start" if cancel_accepted
+                else "running"
+            ),
+            fallback="original_query",
+            query_count=1,
+            deadline_remaining_after_ms=(
+                round(max(deadline_after, 0.0), 1)
+                if deadline_after is not None else "unavailable"
+            ),
+        )
+        _finish_rewrite_attempt(attempt, "timeout", metrics=timeout_metrics)
+        if write_late_span:
+            _record_late_rewrite_span(attempt)
+        logger.warning(
+            "[MultiQuery] 改写等待超时(%.0fms，%s)，回退原始 query",
+            effective_ms, timeout_kind,
+        )
+        return [question]
+    except Exception as exc:
+        attempt.update(
+            rewrite_status="degraded",
+            degrade="rewrite_worker_error",
+            error_type=type(exc).__name__,
+            fallback="original_query",
+            query_count=1,
+        )
+        _finish_rewrite_attempt(attempt, "error")
+        return [question]
+
+
+def _safe_provider_request_id(result: Any) -> str:
+    """只保留响应中的短 request ID，不记录任意 Header 或响应正文。"""
+    metadata = getattr(result, "response_metadata", None)
+    metadata = metadata if isinstance(metadata, dict) else {}
+    value = (
+        metadata.get("provider_request_id")
+        or metadata.get("request_id")
+        or metadata.get("x_request_id")
+        or getattr(result, "id", "")
+    )
+    candidate = str(value or "")[:128]
+    return candidate if re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate) else ""
 
 
 def _rewrite(question: str) -> list[str]:
-    """LLM 改写 → Parse → Normalize → Dedup → Limit"""
-    try:
-        from backend.observability.tracer import trace_collector
-        span = trace_collector.start_span("query_rewrite", name="LLM 改写",
-                                          input={"question": question[:500]})
-        from langchain_core.messages import HumanMessage
+    """调用治理 Proxy 改写查询；Trace 仅记录归因和数量，不写 Prompt 正文。"""
+    from backend.observability.tracer import trace_collector
 
-        r = prompt_service.render_sync("rag.multi_query", count=MULTI_QUERY_COUNT, question=question)
-        # 渲染后的完整 prompt 落入 span.input（前端 LLM 调用明细展示原文）
-        if isinstance(span.input, dict):
-            span.input["prompt"] = r.text[:1000]
-        messages = [HumanMessage(content=r.text)]
-        from backend.config import model_roles
-        from backend.infra.llm.proxy import (
-            enforce_model_input_price_tier,
-            get_active_model_name,
+    attempt = _current_rewrite_attempt()
+    owns_attempt = attempt is None
+    token = None
+    if attempt is None:
+        span = trace_collector.start_span(
+            "query_rewrite", name="LLM 改写", type="llm_call",
         )
+        attempt = _RewriteAttempt(
+            uuid.uuid4().hex, time.monotonic(), span,
+            metrics={
+                "prompt_key": "rag.multi_query",
+                "prompt_status": "not_rendered",
+                "prompt_render_ms": "unavailable",
+                "model_resolve_ms": "unavailable",
+                "price_preflight_ms": "unavailable",
+                "provider_call_ms": "unavailable",
+                "provider_response_ms": "unavailable",
+                "response_parse_ms": "unavailable",
+                "trace_finalize_ms": "pending",
+                "role": "multi_query",
+                "provider_ttfb_ms": "unavailable",
+                "provider_completion": "not_started",
+                "usage_ledger_status": "unavailable",
+                "finish_reason": "unknown",
+                "query_count": 1,
+            },
+        )
+        token = _rewrite_attempt_var.set(attempt)
 
+    attempt.update(max_tokens=_rewrite_max_tokens())
+    try:
+        from langchain_core.messages import HumanMessage
+        from backend.config import model_roles
+        from backend.infra.llm import proxy as llm_proxy
+
+        prompt_started = time.monotonic()
+        rendered = prompt_service.render_sync(
+            "rag.multi_query",
+            count=MULTI_QUERY_COUNT,
+            question=question,
+        )
+        attempt.add_duration(
+            "prompt_render_ms", (time.monotonic() - prompt_started) * 1000,
+        )
+        # 共享状态在 Provider 调用前即写入，等待超时的调用方可读取真实归因。
+        attempt.update(
+            prompt_key=getattr(rendered, "key", "rag.multi_query"),
+            prompt_version=getattr(rendered, "version", None),
+            prompt_source=getattr(rendered, "source", "unknown"),
+            prompt_hash=getattr(rendered, "template_hash", "") or "",
+            prompt_status="rendered",
+        )
+        messages = [HumanMessage(content=rendered.text)]
+
+        model_started = time.monotonic()
         model_name = str(
             model_roles.resolve_runtime_name("multi_query") or ""
-        ).strip() or get_active_model_name()
-        enforce_model_input_price_tier((messages,), model_name=model_name)
-        result = _resolve_rewrite_llm().invoke(
-            messages,
-            max_tokens=_rewrite_max_tokens(),
+        ).strip()
+        if not model_name:
+            model_name = llm_proxy.get_active_model_name()
+        model_source = model_roles.resolve_effective("multi_query").get("source", "unknown")
+        provider = llm_proxy._get_provider_for(model_name)
+        attempt.add_duration(
+            "model_resolve_ms", (time.monotonic() - model_started) * 1000,
         )
-        
-        # 正确提取 content（可能是 AIMessage 或其他类型）
-        if hasattr(result, 'content'):
+        attempt.update(
+            model=model_name,
+            model_source=str(model_source),
+            provider=provider,
+            role="multi_query",
+        )
+
+        preflight_started = time.monotonic()
+        llm_proxy.enforce_model_input_price_tier(
+            (messages,), model_name=model_name,
+        )
+        attempt.add_duration(
+            "price_preflight_ms", (time.monotonic() - preflight_started) * 1000,
+        )
+
+        llm = _resolve_rewrite_llm()
+        with llm_proxy.scoped_call_diagnostics(_record_proxy_diagnostic):
+            result = llm.invoke(
+                messages,
+                max_tokens=_rewrite_max_tokens(),
+            )
+
+        parse_started = time.monotonic()
+        if hasattr(result, "content"):
             raw = str(result.content)
         elif isinstance(result, str):
             raw = result
         else:
-            # 其他类型（如 list/dict）→ 降级为原始 query
-            logger.warning(f"[MultiQuery] LLM 返回非预期类型 {type(result)}，降级为原始 query")
-            return [question]
-        
+            raise TypeError("rewrite_response_type")
+
+        metadata = getattr(result, "response_metadata", None)
+        metadata = metadata if isinstance(metadata, dict) else {}
+        finish_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
+        if finish_reason in (
+            "stop", "length", "max_tokens", "end_turn", "stop_sequence",
+        ):
+            attempt.update(finish_reason=finish_reason)
+        else:
+            attempt.update(finish_reason="unknown")
         tokens = trace_collector.parse_tokens(result)
+        if isinstance(tokens, dict):
+            safe_tokens = {
+                key: value for key, value in tokens.items()
+                if key in {"prompt_tokens", "completion_tokens", "total_tokens"}
+                and isinstance(value, (int, float)) and value > 0
+            }
+            attempt.update(**safe_tokens)
+        if not attempt.snapshot().get("usage_status") == "received":
+            attempt.update(usage_status="unavailable")
+        provider_request_id = _safe_provider_request_id(result)
+        if provider_request_id:
+            attempt.update(provider_request_id=provider_request_id)
 
-        # Step 1: Parse
-        lines = _parse(raw)
-
-        # Step 2: Normalize
-        lines = _normalize(lines)
-
-        # Step 3: Deduplicate (含完全重复 + Jaccard)
-        lines = _dedup(lines, question)
-
-        # Step 3.5: 合法性过滤（D-11 修复 2026-10-05）
+        hit_limit = (
+            finish_reason in ("length", "max_tokens")
+            or int((tokens or {}).get("completion_tokens", 0) or 0)
+            >= _rewrite_max_tokens()
+        )
+        lines = _dedup(_normalize(_parse(raw)), question)
         before = len(lines)
-        lines = [l for l in lines if _plausible_variant(l, question)]
+        lines = [line for line in lines if _plausible_variant(line, question)]
         if before and len(lines) < before:
             logger.info(
-                f"[MultiQuery] 合法性过滤剔除 {before - len(lines)} 个异常变体"
-                f"（chunk 原文/超长句）")
+                "[MultiQuery] 合法性过滤剔除 %d 个异常变体",
+                before - len(lines),
+            )
         if not lines:
-            logger.warning("[MultiQuery] 改写变体全部不合法，回退原始 query")
-            return [question]
-
-        # Step 4: Limit
+            lines = [question]
         lines = _limit(lines)
-
-        # LLM 原始返回 + 解析后的变体落地（前端 LLM 明细 / MultiQuery 区块展示）
-        metrics = {**tokens, "variants": len(lines)}
-        if raw:
-            metrics["completion_text"] = raw[:1000]
-        trace_collector.end_span(span, metrics=metrics,
-                                 output={"variants": lines[:10]})
-        logger.info(f"[MultiQuery] Rewrite: {question[:40]} → {len(lines)} 变体")
+        if hit_limit:
+            lines = [question]
+        truncated = hit_limit or len(lines) < MULTI_QUERY_COUNT
+        status = (
+            "degraded" if len(lines) <= 1
+            else "partial" if truncated else "success"
+        )
+        attempt.update(
+            query_count=len(lines),
+            rewrite_status=status,
+            rewrite_truncated=truncated,
+            rewrite_ms=round((time.monotonic() - attempt.started_at) * 1000, 1),
+            fallback="original_query" if len(lines) <= 1 else "",
+        )
+        if truncated:
+            attempt.update(degrade="rewrite_truncated")
+        if not hit_limit and len(lines) < MULTI_QUERY_COUNT:
+            attempt.update(
+                degrade="rewrite_truncated",
+                truncation_reason="incomplete_query_set",
+            )
+        attempt.add_duration(
+            "response_parse_ms", (time.monotonic() - parse_started) * 1000,
+        )
+        logger.info("[MultiQuery] 改写返回 %d 条有效查询", len(lines))
         return lines
-    except Exception as e:
-        # 确保 span 在使用前初始化
-        if 'span' not in locals():
-            from backend.observability.tracer import trace_collector
-            span = trace_collector.start_span("query_rewrite", name="LLM 改写")
-        trace_collector.end_span(span, metrics={"variants": 0}, status="error")
-        logger.warning(f"[MultiQuery] Rewrite 失败：{e}，回退到原始 query")
+    except Exception as exc:
+        timeout_error = (
+            isinstance(exc, TimeoutError)
+            or "timeout" in type(exc).__name__.lower()
+        )
+        attempt.update(
+            rewrite_status="degraded",
+            degrade="provider_io_timeout" if timeout_error else "rewrite_error",
+            timeout_kind="provider_io_timeout" if timeout_error else "none",
+            error_type=type(exc).__name__,
+            fallback="original_query",
+            query_count=1,
+            rewrite_truncated=False,
+            rewrite_ms=round((time.monotonic() - attempt.started_at) * 1000, 1),
+        )
+        logger.warning(
+            "[MultiQuery] Rewrite 失败（%s），回退到原始 query",
+            type(exc).__name__,
+        )
         return [question]
+    finally:
+        if owns_attempt:
+            attempt.update(
+                rewrite_total_ms=round(
+                    (time.monotonic() - attempt.started_at) * 1000, 1,
+                ),
+            )
+            _finish_rewrite_attempt(
+                attempt,
+                str(attempt.snapshot().get("rewrite_status", "error")),
+            )
+            _rewrite_attempt_var.reset(token)
 
 
 # ── 变体合法性（D-11）────────────────────────────────
@@ -346,9 +922,22 @@ def _normalize(lines: list[str]) -> list[str]:
         line = re.sub(r"\s+", " ", line)
         # 去首尾空格
         line = line.strip()
+        if _is_label_only(line):
+            # 模板要求"每行一条纯文本查询，不要编号"，模型仍可能回显
+            # "改写结果："/"以下是查询：" 这类标签行；它不是查询，若参与
+            # 计数会挤占 _limit 名额并污染检索，统一在此丢弃。
+            continue
         if line:
             result.append(line)
     return result
+
+
+_LABEL_ONLY_MAX_LEN = 12
+
+
+def _is_label_only(line: str) -> bool:
+    """标签行（如 "改写结果："）判定：短且以冒号结尾。"""
+    return len(line) <= _LABEL_ONLY_MAX_LEN and line.endswith(("：", ":"))
 
 
 # ── Deduplicate ────────────────────────────────────
@@ -481,9 +1070,11 @@ class MultiQueryRetriever(BaseRetriever):
         import contextvars
         from backend.observability.tracer import trace_collector
 
-        docs, seen = [], set()
+        docs = []
+        seen = set()
         # 按 query 分组检索，每个 doc 标记来源查询
         evidence_groups: dict[str, list] = {}
+        retrieved_groups: dict[str, list] = {}
         query_results: dict[str, dict] = {}
         base_invoke = self.base_retriever.invoke
         fanout_span = trace_collector.start_span(
@@ -570,26 +1161,20 @@ class MultiQueryRetriever(BaseRetriever):
                 q = future_to_q[future]
                 try:
                     retrieved_docs = list(future.result() or [])
-                    q_docs = []
-                    for d in retrieved_docs:
-                        cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
-                        if cid not in seen:
-                            seen.add(cid)
-                            d.metadata["source_query"] = q  # 标记来源查询
-                            q_docs.append(d)
-                            docs.append(d)
-                    evidence_groups[q] = q_docs
+                    retrieved_groups[q] = retrieved_docs
+                    evidence_groups[q] = []
                     query_results[q] = {
                         "query": q,
                         "status": "success",
                         "retrieved_docs": len(retrieved_docs),
-                        "retained_docs": len(q_docs),
+                        "retained_docs": 0,
                         "duration_ms": max(
                             0, round((time.perf_counter() - submitted_at[q]) * 1000)
                         ),
                     }
                 except Exception as e:
                     logger.warning(f"[MultiQuery] 检索失败: {e}")
+                    retrieved_groups[q] = []
                     evidence_groups[q] = []
                     message = str(e)[:300]
                     query_results[q] = {
@@ -634,10 +1219,13 @@ class MultiQueryRetriever(BaseRetriever):
                     )
             logger.warning(
                 f"[MultiQuery] fan-out 超时({fanout_s:.1f}s)，部分成功: "
-                f"已完成 {len(docs)} docs / {len(queries)} 变体"
+                "已完成 "
+                f"{sum(len(group) for group in retrieved_groups.values())} docs / "
+                f"{len(queries)} 变体"
             )
         # 超时后未产出结果的变体补空组，保证 evidence_groups 键完整
         for q in queries:
+            retrieved_groups.setdefault(q, [])
             evidence_groups.setdefault(q, [])
             query_results.setdefault(q, {
                 "query": q,
@@ -649,6 +1237,22 @@ class MultiQueryRetriever(BaseRetriever):
                 ),
                 "error": "查询未返回可记录的结果",
             })
+
+        # 按查询提交顺序稳定合并，原始 query 总是第一组。并发完成顺序不能
+        # 决定重复 chunk 的归属或 rerank 输入顺序，否则相同请求会得到不同的
+        # 候选顺序，且改写先完成时可能覆盖原始 query 的来源标记。
+        for q in queries:
+            q_docs = []
+            for d in retrieved_groups[q]:
+                cid = d.metadata.get("chunk_id", d.metadata.get("doc_id", "?"))
+                if cid in seen:
+                    continue
+                seen.add(cid)
+                d.metadata["source_query"] = q
+                q_docs.append(d)
+                docs.append(d)
+            evidence_groups[q] = q_docs
+            query_results[q]["retained_docs"] = len(q_docs)
 
         query_result_rows = [query_results[q] for q in queries]
         statuses = [item["status"] for item in query_result_rows]
@@ -686,6 +1290,14 @@ class MultiQueryRetriever(BaseRetriever):
             docs[0].metadata["_evidence_groups"] = evidence_groups
             if fanout_timed_out:
                 docs[0].metadata["_mq_partial"] = True  # Phase 5：部分成功留痕
+            # Phase B（PR #52）：把本次实际提交且合法的查询列表交给最终
+            # Rerank。只在真有改写（>1 条）时挂载——未触发、改写失败或只剩
+            # 原始 query 时，Rerank 必须保持单查询行为，不得凭空放大评分。
+            valid_queries = [
+                q for q in queries if isinstance(q, str) and q.strip()
+            ]
+            if len(valid_queries) > 1:
+                docs[0].metadata[RUNTIME_MQ_QUERIES_KEY] = valid_queries
 
         logger.info(
             f"[MultiQuery] {reason}: {query[:30]} → "

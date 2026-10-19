@@ -92,6 +92,7 @@ class _CaptureQuotaStore:
 
     def __init__(self):
         self.settled: list[Decimal] = []
+        self.reviewed: list[str] = []
 
     def reserve(self, **kwargs):
         return object()
@@ -103,6 +104,7 @@ class _CaptureQuotaStore:
         pass
 
     def mark_needs_review(self, reservation, reason):
+        self.reviewed.append(reason)
         return True
 
 
@@ -126,6 +128,11 @@ def test_price_unknown_usd_converts_before_budget_settlement(monkeypatch):
     monkeypatch.setattr(
         pricing, "calculate_fallback_cost",
         lambda *a, **kw: Decimal("0.002"),
+    )
+    # 2026-10-17 价格预检契约：注册表仍有单价时才按 price_unknown 放行，
+    # 否则硬预算直接拒绝（无可信单价失败关闭）。
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (1.0, 2.0),
     )
     # 模拟 proxy enforce 结算路径：price_usage → record_model_usage → settle
     from backend.infra.llm.budget import _states, _current_request_id
@@ -152,6 +159,99 @@ def test_price_unknown_usd_converts_before_budget_settlement(monkeypatch):
     assert result.native_currency == "USD"
     assert result.billed_cost_cny == Decimal("0.014400")
     assert store.settled == [Decimal("0.014400")]
+
+
+def test_provider_usage_missing_marks_reservation_for_review(monkeypatch):
+    """成功响应缺用量时不按 ¥0 结算可能已计费的 Provider 请求。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import (
+        _current_quota_reservation,
+        _current_request_id,
+        _states,
+        reserve_model_call,
+    )
+
+    request_id = "billing-review-usage-missing"
+    store = _CaptureQuotaStore()
+    _states[request_id] = _enforce_budget(store)
+    request_token = _current_request_id.set(request_id)
+    monkeypatch.setattr(
+        pricing, "get_current_price_table", lambda *_a, **_k: _usd_table(),
+    )
+    try:
+        reserve_model_call("primary", model_name="m")
+        proxy._record_tokens(
+            SimpleNamespace(response_metadata={}), model_name="m",
+        )
+    finally:
+        _current_request_id.reset(request_token)
+        _current_quota_reservation.set(None)
+        _states.pop(request_id, None)
+
+    assert store.settled == []
+    assert store.reviewed == ["provider_usage_missing"]
+
+
+def test_unpriced_provider_usage_marks_reservation_for_review(monkeypatch):
+    """没有价格的 Provider 用量不能让预算预占以 ¥0 结清。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import proxy
+    from backend.infra.llm.budget import (
+        _current_quota_reservation,
+        _current_request_id,
+        _states,
+        reserve_model_call,
+    )
+    from backend.observability import llm_usage_store
+
+    class _UsageStore:
+        def record(self, _row):
+            return None
+
+    request_id = "billing-review-unpriced"
+    store = _CaptureQuotaStore()
+    _states[request_id] = _enforce_budget(store)
+    request_token = _current_request_id.set(request_id)
+    monkeypatch.setattr(
+        pricing, "get_current_price_table",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            pricing.PriceTableUnavailable("no test price")
+        ),
+    )
+    monkeypatch.setattr(
+        pricing, "calculate_fallback_cost", lambda *_a, **_k: Decimal("0"),
+    )
+    # 2026-10-17 价格预检契约：注册表仍须有单价，缺价模型会被硬预算拒绝。
+    monkeypatch.setattr(
+        "backend.infra.llm.models.get_model_pricing", lambda name: (1.0, 2.0),
+    )
+    monkeypatch.setattr(proxy, "_get_provider_for", lambda _model: "test")
+    monkeypatch.setattr(
+        llm_usage_store, "get_llm_usage_store", lambda: _UsageStore(),
+    )
+    try:
+        reserve_model_call("primary", model_name="m")
+        proxy._record_tokens(
+            SimpleNamespace(
+                usage_metadata={
+                    "input_tokens": 10,
+                    "output_tokens": 2,
+                    "total_tokens": 12,
+                },
+                response_metadata={"model_name": "m"},
+            ),
+            model_name="m",
+        )
+    finally:
+        _current_request_id.reset(request_token)
+        _current_quota_reservation.set(None)
+        _states.pop(request_id, None)
+
+    assert store.settled == []
+    assert store.reviewed == ["billing_price_unavailable"]
 
 
 # ── P0-04 缓存不双算 ────────────────────────────────────────────────────
@@ -181,15 +281,16 @@ def test_cache_read_not_double_billed():
 
 def test_budget_settlement_equals_usage_cost():
     """同一 BillingResult 喂预算结算与用量行：两处金额恒等（≤1e-6）。"""
+    store = _CaptureQuotaStore()
+    budget = _enforce_budget(store)
     with patch.object(pricing, "get_current_price_table", return_value=_usd_table()):
         result = price_usage(
             "m", "llm",
             NormalizedUsage(input_tokens=500_000, output_tokens=250_000),
             enforce=True,
         )
-    store = _CaptureQuotaStore()
-    budget = _enforce_budget(store)
-    budget.reserve("primary", model_name="m")
+        # 硬预算预检同样读价格表；同一快照下才可比。
+        budget.reserve("primary", model_name="m")
     from backend.infra.llm.budget import record_model_usage as _rmu
 
     # 直接以 RequestBudget.record_usage 消费同一 BillingResult

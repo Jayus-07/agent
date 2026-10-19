@@ -18,7 +18,7 @@
  */
 import { useEffect, useState, type ReactNode } from "react";
 import { usePathname } from "next/navigation";
-import { atLeast, getAccessToken, tryRefreshOnce } from "@/lib/auth";
+import { atLeast, getAccessToken, getCachedUser, tryRefreshOnce } from "@/lib/auth";
 import AuthForbiddenScreen from "./AuthForbiddenScreen";
 
 export default function AuthGate({
@@ -34,6 +34,12 @@ export default function AuthGate({
   const [state, setState] = useState<"checking" | "ok" | "forbidden">("checking");
 
   const setAccessState = () => {
+    if (atLeast("admin") && getCachedUser()?.mustChangePassword && pathname !== "/change-password") {
+      setState("checking");
+      if (onNavigate) onNavigate("/change-password");
+      else window.location.assign("/change-password");
+      return;
+    }
     setState(atLeast("admin") ? "ok" : "forbidden");
   };
 
@@ -63,6 +69,7 @@ export default function AuthGate({
   }, [pathname, isPublic]);
 
   if (isPublic) return <>{children}</>;
+  if (pathname !== "/change-password" && atLeast("admin") && getCachedUser()?.mustChangePassword) return null;
   if (state === "checking") return null;
   if (state === "forbidden") {
     return <AuthForbiddenScreen pathname={pathname} onNavigate={onNavigate} />;

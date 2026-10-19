@@ -18,8 +18,6 @@ from backend.config.tasks import (
     CELERY_BROKER_URL,
     CELERY_BROKER_VISIBILITY_TIMEOUT,
     CELERY_HARD_TASK_TIMEOUT,
-    CELERY_METADATA_SHADOW_MAX_RETRIES,
-    CELERY_METADATA_SHADOW_TASK_TIMEOUT,
     CELERY_RESULT_BACKEND,
     CELERY_RETRY_BACKOFF,
     CELERY_RETRY_BACKOFF_MAX,
@@ -38,7 +36,6 @@ celery_app = Celery(
     include=["backend.tasks.agent_tasks",     # Worker 启动自动注册任务模块
              "backend.tasks.index_tasks",     # 阶段4：RAG 上传索引队列化任务
              "backend.tasks.rag_maintenance_tasks",  # 索引只读对账
-             "backend.tasks.metadata_shadow_tasks",  # 元数据影子隔离队列
              "backend.tasks.cs_maintenance_tasks",  # P2.4：客服全局维护（beat）
              "backend.tasks.cs_qa_tasks",  # 批次D：客服质检每日报表（beat）
              "backend.tasks.task_maintenance_tasks",  # B5：僵尸任务 reconcile（beat）
@@ -92,17 +89,6 @@ celery_app.conf.update(
     # default queue 仅兜底未登记 task name——正常路径全部显式路由。
     task_default_queue=CELERY_AGENT_QUEUE,
     task_routes=celery_task_routes(),
-
-    # 影子任务有更短的独立超时；任务自身装饰器会使用同一重试退避策略。
-    task_annotations={
-        "tasks.execute_metadata_shadow": {
-            "soft_time_limit": CELERY_METADATA_SHADOW_TASK_TIMEOUT,
-            "time_limit": CELERY_METADATA_SHADOW_TASK_TIMEOUT + 30,
-            "max_retries": CELERY_METADATA_SHADOW_MAX_RETRIES,
-            "retry_backoff": CELERY_RETRY_BACKOFF,
-            "retry_backoff_max": CELERY_RETRY_BACKOFF_MAX,
-        },
-    },
 
     # ── Beat 周期任务（P2.4：客服全局维护，60s 兜底扫描）──
     # 幂等（原子条件 UPDATE）：重复调度/多实例并发安全，无需去重键

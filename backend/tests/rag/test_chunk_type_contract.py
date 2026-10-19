@@ -16,6 +16,7 @@ import pytest
 
 from backend.rag.preprocessing.chunking import (
     CHUNK_TYPE_TABLE_FALLBACK,
+    CHUNK_TYPE_TABLE_HEADER,
     CHUNK_TYPE_TABLE_ROW,
     CHUNK_TYPE_TABLE_SUMMARY,
     TABLE_CHUNK_TYPES,
@@ -28,14 +29,19 @@ _FILTER_PY = _PREPROCESSING / "filter.py"
 
 
 class TestTypeTokens:
-    def test_tokens_are_the_known_three(self):
-        """锁字面量：当前表格 chunk 类型就是这三种（改名会让本用例变红）。"""
+    def test_tokens_are_single_source_constants(self):
+        """锁定表格 chunk 类型字面量，避免生产端分叉定义。"""
         assert CHUNK_TYPE_TABLE_ROW == "table_row"
         assert CHUNK_TYPE_TABLE_SUMMARY == "table_summary"
         assert CHUNK_TYPE_TABLE_FALLBACK == "table_fallback"
-        assert TABLE_CHUNK_TYPES == ("table_row", "table_summary", "table_fallback")
+        assert CHUNK_TYPE_TABLE_HEADER == "table_header"
+        assert TABLE_CHUNK_TYPES == (
+            "table_row", "table_summary", "table_fallback", "table_header",
+        )
 
-    @pytest.mark.parametrize("ct", ["table_row", "table_summary", "table_fallback"])
+    @pytest.mark.parametrize(
+        "ct", ["table_row", "table_summary", "table_fallback", "table_header"],
+    )
     def test_known_types_are_table(self, ct):
         assert is_table_chunk(ct) is True
 

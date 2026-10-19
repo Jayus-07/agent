@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import List
 
 from langchain_core.documents import Document
@@ -11,7 +12,7 @@ from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
 from backend.rag.preprocessing.chunking import (
-    ChunkStrategyRouter, coverage_audit, stamp_chunk_pages,
+    ChunkStrategyRouter, _doc_title, coverage_audit, stamp_chunk_pages,
 )
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
@@ -37,11 +38,15 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     报告/doc_type/strategy 名，供 quality_gate.build_quality_record 消费；
     普通调用方忽略之即可，行为与旧 parse_and_chunk 完全一致。
     """
+    pipeline_started = time.monotonic()
+    stage_ms: dict[str, int] = {}
     ext = os.path.splitext(file_path)[1].lower()
     if ext not in _SUPPORTED_EXTS:
         logger.warning(f"[ChunkPipeline] 暂不支持 {ext}（Phase 2），跳过: {file_path}")
         return [], {}
+    stage_started = time.monotonic()
     raw_ast = parse_file(file_path)
+    stage_ms["parse_file_ms"] = round((time.monotonic() - stage_started) * 1000)
 
     # P0-3: 无文字层 PDF（扫描件/纯图片）友好报错，避免 0-chunk 假成功。
     # 图片内容当前被完全忽略（无 OCR/Vision），若 PDF 有页面但提取不到任何文字，
@@ -76,17 +81,40 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
 
     # 结构安全清洗：清洗每个节点文本，保留结构
     # R-P0-3 原文可追溯：清洗前留存 raw_text + 清洗操作留痕（不改清洗行为本身）
+    stage_started = time.monotonic()
     cleaner = DocumentCleaner()
     source_type = "pdf" if file_path.lower().endswith(".pdf") else "text"
     for node in walk(raw_ast.root):
         if node.type not in ("table",):  # table 的 rows 不在 text 清洗范围
             node.raw_text = node.text
-            clean_result = cleaner.clean(node.text, source_type=source_type)
+            # structured=True：节点文本已是解析器切好的语义单元，没有版面
+            # 上下文，禁用依赖"前后空行"的图注启发式（2026-10-18：该启发式
+            # 曾把供应商规范 5 个内容叶节点 / 员工手册章节标题清空）。
+            clean_result = cleaner.clean(
+                node.text, source_type=source_type, structured=True,
+            )
             node.text = clean_result.text
             node.cleaning_operations = list(clean_result.changes)
+            node.cleaning_dropped = list(clean_result.dropped)
 
+    # §P0-D 边界一：Raw AST → 清洗输出 的完整性对账。清洗把节点清空会让
+    # coverage_audit 的分母一起缩水（假通过），这里独立核对清洗前后内容。
+    from backend.rag.preprocessing.quality_gate import cleaning_coverage_audit
+
+    cleaning_coverage = cleaning_coverage_audit(raw_ast)
+    if cleaning_coverage.get("uncovered_count"):
+        logger.warning(
+            f"[ChunkPipeline] {file_path} 清洗内容丢失: "
+            f"{cleaning_coverage['uncovered_count']}/"
+            f"{cleaning_coverage['audited_node_count']} 个节点有内容未保留"
+        )
+    stage_ms["clean_ms"] = round((time.monotonic() - stage_started) * 1000)
+
+    stage_started = time.monotonic()
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
+    stage_ms["structure_analysis_ms"] = round((time.monotonic() - stage_started) * 1000)
 
+    stage_started = time.monotonic()
     doc_type = doc_type_hint or classify_doc_type(raw_ast.raw_text, filename=file_path, file_path=file_path)
     # P1（2026-10-13）：route_with_decision 产出可审计决策记录（结构信号/
     # 策略版本/降级原因/处理范围），随 qc 进质量记录与 Trace
@@ -96,7 +124,16 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         f"completeness={report.completeness} → {strategy.__class__.__name__}"
         + (f" (degrade={route_decision.degrade_reason})" if route_decision.degrade_reason else "")
     )
+    stage_ms["classification_routing_ms"] = round((time.monotonic() - stage_started) * 1000)
+
+    stage_started = time.monotonic()
     chunks = strategy.split(normalized_ast, file_path)
+    document_title = _doc_title(normalized_ast)
+    for chunk in chunks:
+        chunk.metadata.setdefault("document_title", document_title)
+    stage_ms["split_ms"] = round((time.monotonic() - stage_started) * 1000)
+
+    stage_started = time.monotonic()
     # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
     # 供来源卡「第 X 页」展示与后续原文预览定位；单点收口，策略零改动
     stamp_chunk_pages(chunks, normalized_ast)
@@ -114,6 +151,8 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
             f"[ChunkPipeline] {file_path} 覆盖缺口: "
             f"{coverage['uncovered_count']}/{coverage['leaf_total']} 叶子未入 chunk"
         )
+    stage_ms["chunk_postprocess_ms"] = round((time.monotonic() - stage_started) * 1000)
+    stage_ms["total_ms"] = round((time.monotonic() - pipeline_started) * 1000)
     qc = {
         "raw_ast": raw_ast,
         "normalized_ast": normalized_ast,
@@ -122,5 +161,7 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         "strategy_name": strategy.__class__.__name__,
         "route_decision": route_decision.as_dict(),
         "coverage": coverage,
+        "cleaning_coverage": cleaning_coverage,
+        "stage_ms": stage_ms,
     }
     return chunks, qc

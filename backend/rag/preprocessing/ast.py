@@ -23,6 +23,9 @@ class DocumentNode:
     # R-P0-3 原文可追溯：清洗前原文 + 清洗操作留痕（字段追加在尾部，位置构造兼容）
     raw_text: str = ""                        # 清洗前原始文本；未清洗时为空串（等价 text）
     cleaning_operations: list[str] = field(default_factory=list)  # DocumentCleaner 执行的操作清单
+    # 2026-10-18 内容完整性修复：清洗删除证据（操作名/噪音分类/原行样本）。
+    # 供 Raw AST → 清洗输出 的审计对账；字段追加在尾部，位置构造兼容。
+    cleaning_dropped: list[dict] = field(default_factory=list)
     # §5.2 原文可追溯（2026-09-17 追加，位置构造兼容）：页码与版面坐标
     # page_number：1-based 页码，非分页格式（MD/TXT 等）恒 0；bbox：PDF 版面
     # (x0, y0, x1, y1)，仅 PdfParser 填写，其他解析器为空元组
@@ -57,6 +60,14 @@ class DocumentAST:
     table_cells_total: int = 0
     table_cells_total_known: bool = True
     table_truncation_reason: str = ""
+    # PDF 解析完整性：修复过结构的 PDF 若大量页无可检索内容，质量门禁拒绝部分入库。
+    pdf_page_count: int = 0
+    pdf_pages_with_content: int = 0
+    pdf_skipped_pages: int = 0
+    pdf_repaired: bool = False
+    # 解析器明确识别出的文档标题；不从普通章节标题兜底推断。
+    document_title: str = ""
+    document_title_node: DocumentNode | None = None
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:

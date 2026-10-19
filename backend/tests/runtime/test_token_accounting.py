@@ -138,6 +138,38 @@ def test_rerank_tracker_records_local_missing_usage(monkeypatch, tmp_path):
     assert row["token_usage_available"] is False
 
 
+def test_cloud_tracker_missing_usage_marks_reservation_for_review(
+    monkeypatch, tmp_path,
+):
+    """云端模型成功但未返回用量时保留预算预占待对账。"""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.reserve_model_call",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.record_model_usage",
+        lambda **kwargs: calls.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.pricing.price_usage",
+        lambda *_a, **_k: SimpleNamespace(
+            billed_cost_cny=Decimal("0"), pricing_source="unpriced",
+        ),
+    )
+    tracker = _tracker(tmp_path, "embedding")
+    tracker._extract_usage = lambda _result: None
+    tracker._write_jsonl = lambda _event: None
+    tracker.track(lambda: ["vector"])()
+
+    assert len(calls) == 1
+    assert calls[0]["cost"] is None
+    assert calls[0]["review_reason"] == "provider_usage_unavailable"
+
+
 def test_tracker_error_is_recorded_and_exception_propagates(monkeypatch, tmp_path):
     monkeypatch.setattr("backend.infra.llm.budget.reserve_model_call", lambda *a, **k: None)
     monkeypatch.setattr("backend.infra.llm.budget.record_model_usage", lambda *a, **k: None)

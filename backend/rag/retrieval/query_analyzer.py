@@ -20,10 +20,14 @@ from backend.shared.logger import logger
 # 真实写入字段一一对应（preprocessing/metadata.py / chunking.py /
 # indexer.py），语义稳定且被两侧共同理解。任何新过滤键必须先在入库侧
 # 落字段、再进此表——杜绝「查询侧构造、库内不存在」的幽灵键恒假过滤。
+# P0-2（2026-10-19 治理改造）：doc_type / business_domain 从硬过滤白名单
+# 移除——二者此前 100% 来自查询文本猜测（词表/正则），历史多次把查询误
+# 猜成错误类型/域造成 0 召回假拒答（TD-13「发票认证时限」被猜 security、
+# 「广告法」advertising 域标注漂移全库空命中）。相关性交由混合检索+Rerank
+# 判断；解析出的 doc_types/domains 仍保留在 ParsedQuery 供软信号与 Trace。
+# 用户显式指定的 kb_id、租户边界、permission_scope、部门授权不受影响。
 RETRIEVAL_FILTERABLE_METADATA_FIELDS = frozenset({
     "person_names",     # 品牌/关键实体（metadata.py）
-    "doc_type",         # 文档类型（metadata.py）
-    "business_domain",  # 业务域（metadata.py）
     "reporting_period", # 财务报告期（chunking.py 表格版本快照）
     "is_latest",        # 财务版本快照最新标记（chunking/indexer）
 })
@@ -69,23 +73,16 @@ class ParsedQuery:
         """
         f: dict = {}
         if self.persons:
-            f["person_names"] = self.persons[0] if len(self.persons) == 1 else self.persons
-        if self.doc_types:
-            # 多 doc_type 与 business_domain 同法：$in 而非裸 list——Chroma where
-            # 只接受标量或操作符表达式，裸 list 直接抛
-            # "Expected where value to be a str, int, float, or operator expression"，
-            # doc 搜索/Stage1 门控整轮失败（2026-09-14 冒烟实测）。
-            if len(self.doc_types) == 1:
-                f["doc_type"] = self.doc_types[0]
-            else:
-                f["doc_type"] = {"$in": self.doc_types}
-        if self.domains:
-            # 多 domain 兼容（2026-08-10）：用 $in 而非取第一个，避免误判
-            # 例："差评怎么处理" → customer + order（兼容售后流程的 order 标注）
-            if len(self.domains) == 1:
-                f["business_domain"] = self.domains[0]
-            else:
-                f["business_domain"] = {"$in": self.domains}
+            # 多实体 $in 包装（P0-2 顺手修复的存量缺陷：2026-09-14 修
+            # doc_type 裸 list 时漏了 persons——裸 list 同样被 Chroma 拒收）
+            f["person_names"] = (self.persons[0] if len(self.persons) == 1
+                                 else {"$in": self.persons})
+        # P0-2：doc_types/domains 不再进 hard filter（猜测即过滤 =
+        # 漏召回根源）；仅软信号（enhanced_hybrid 重叠加分）与 Trace 留痕。
+        if self.doc_types or self.domains:
+            logger.debug(
+                "[QueryAnalyzer] doc_types=%s domains=%s 仅作软信号，不进 hard filter",
+                self.doc_types, self.domains)
         # 时间表达不进 hard filter（D1-4）：入库侧只有 time_refs 非规范
         # 字段、从无 time_start/time_end 写入点，构造即恒假。"2025年的库存
         # 政策"类查询改由语义检索承接 + 证据层时间校验，不再必然 0 召回。

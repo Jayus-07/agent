@@ -39,7 +39,8 @@ def test_build_seed_configs_requires_and_returns_chat_and_embedding_bindings(mon
 
 
 @pytest.mark.asyncio
-async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
+@pytest.mark.parametrize("multiquery", [False, True])
+async def test_seed_commits_model_bindings_before_closing_session(monkeypatch, multiquery):
     # 模拟 pricing 在 seed 前导入并缓存了另一份 MEMORY_DB_CONFIG。
     monkeypatch.setenv("MEMORY_PGDATABASE", "agent_memory")
     import backend.infra.llm.pricing  # noqa: F401
@@ -66,6 +67,7 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
+    monkeypatch.setenv("EVAL_MULTIQUERY", str(multiquery).lower())
 
     class Result:
         def mappings(self):
@@ -130,11 +132,14 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch):
         for statement, params in session.statements
         if "INSERT INTO llm_model_role_bindings" in statement
     ]
-    assert role_bindings == [
+    expected_bindings = [
         {"role": "eval_gen", "model_name": "chat-model"},
         {"role": "embedding", "model_name": "embedding-model"},
-        {"role": "rerank", "model_name": "rerank-model"},
     ]
+    if multiquery:
+        expected_bindings.append({"role": "multi_query", "model_name": "chat-model"})
+    expected_bindings.append({"role": "rerank", "model_name": "rerank-model"})
+    assert role_bindings == expected_bindings
 
 
 @pytest.mark.asyncio
@@ -208,3 +213,64 @@ def test_database_identity_accepts_explicit_readonly_verification_session():
     seed_script._assert_database_identity(identity, target, read_only=True)
     with pytest.raises(RuntimeError, match="身份与显式目标不一致"):
         seed_script._assert_database_identity(identity, target)
+
+
+def test_database_identity_accepts_docker_host_port_mapping():
+    """宿主映射 5433 → 容器 5432：端口不同不得误判为身份不符。
+
+    Docker Desktop 的 loopback 端口映射下，inet_server_port() 返回容器内部
+    监听端口，与客户端目标端口必然不同；身份可信度由库名/角色/read-only/
+    主库状态与真实服务地址决定。
+    """
+    target = {
+        "host": "127.0.0.1", "port": 5433,
+        "database": "agent_memory_eval", "username": "eval-role",
+        "password": "test-password",
+    }
+    identity = {
+        "database": "agent_memory_eval",
+        "username": "eval-role",
+        "server_address": "172.18.0.2/32",
+        "server_port": 5432,
+        "read_only": "off",
+        "in_recovery": False,
+    }
+
+    seed_script._assert_database_identity(identity, target)
+    seed_script._assert_database_identity(
+        {**identity, "read_only": "on"}, target, read_only=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("overrides", "read_only"),
+    [
+        ({"database": "agent_memory"}, False),
+        ({"username": "postgres"}, False),
+        ({"read_only": "on"}, False),
+        ({"in_recovery": True}, False),
+        # Docker Desktop 场景下服务器可能返回容器私网地址，故用公网地址验证拒绝；
+        # 私网地址与 loopback 目标的组合是既定兼容规则（见 _server_address_matches_target）。
+        ({"server_address": "8.8.8.8/32"}, False),
+        ({"server_address": None}, False),
+    ],
+)
+def test_database_identity_rejects_non_test_targets(overrides, read_only):
+    """库名/角色/只读/主库/真实地址任一不符必须拒绝，端口一致也不行。"""
+    target = {
+        "host": "127.0.0.1", "port": 5432,
+        "database": "agent_memory_eval", "username": "eval-role",
+        "password": "test-password",
+    }
+    identity = {
+        "database": "agent_memory_eval",
+        "username": "eval-role",
+        "server_address": "127.0.0.1/32",
+        "server_port": 5432,
+        "read_only": "off",
+        "in_recovery": False,
+        **overrides,
+    }
+
+    with pytest.raises(RuntimeError, match="身份与显式目标不一致"):
+        seed_script._assert_database_identity(identity, target, read_only=read_only)
