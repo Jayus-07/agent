@@ -336,8 +336,19 @@ export const knowledgeService: any = {
     return { ok, failed }
   },
 
-  getOperations: (params: any = {}) =>
-    request(`${BASE}/operations?${qs(params)}`),
+  getOperations: async (params: any = {}) => {
+    const result = await request<any>(`${BASE}/operations?${qs(params)}`)
+    if (result?.error) throw new Error(String(result.error))
+    if (
+      !result ||
+      !Array.isArray(result.items) ||
+      !Array.isArray(result.active_uploads) ||
+      typeof result.total !== 'number'
+    ) {
+      throw new Error('操作日志响应格式无效')
+    }
+    return result
+  },
 
   getChunkDetail: (chunkId: string) =>
     fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),

@@ -71,4 +71,13 @@ describe("knowledgeService 上传幂等接线", () => {
     await expect(knowledgeService.getOperations({ page: 2 })).rejects.toThrow("HTTP 503");
     expect(apiMock.request).toHaveBeenCalledWith("/api/rag/operations?page=2");
   });
+
+  it("拒绝把错误或格式不完整的操作日志响应当作空列表", async () => {
+    apiMock.request.mockResolvedValueOnce({
+      items: [], total: 0, active_uploads: [], error: "数据库暂不可用",
+    }).mockResolvedValueOnce({});
+
+    await expect(knowledgeService.getOperations()).rejects.toThrow("数据库暂不可用");
+    await expect(knowledgeService.getOperations()).rejects.toThrow("操作日志响应格式无效");
+  });
 });
