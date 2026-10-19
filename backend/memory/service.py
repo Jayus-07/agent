@@ -56,9 +56,14 @@ class MemoryTurnIdempotencyConflict(ValueError):
     """幂等键已绑定到不同问题；拒绝把冲突请求写入 L2。"""
 
 
-async def _embed_query_off_loop(embedding, query: str):
-    """将同步 Provider embedding 调用移出 MemoryManager 事件循环。"""
-    return await asyncio.to_thread(embedding.embed_query, query)
+async def _embed_query_off_loop(
+    embedding, query: str, *, user_id: str, tenant_id: str,
+):
+    """在线程池中执行同步 embedding，并绑定可信用量归属。"""
+    from backend.core.request_context import scoped_tool_identity
+
+    with scoped_tool_identity(user_id=user_id, tenant_id=tenant_id):
+        return await asyncio.to_thread(embedding.embed_query, query)
 
 
 class MemoryService:
@@ -181,7 +186,10 @@ class MemoryService:
                             "memory.embedding_query", name="记忆检索向量化", type="embedding")
                         embedding_started = time.perf_counter()
                         try:
-                            emb = await _embed_query_off_loop(l3.embedding, l3_query)
+                            emb = await _embed_query_off_loop(
+                                l3.embedding, l3_query,
+                                user_id=user_id, tenant_id=tenant_id,
+                            )
                         except BaseException as exc:
                             trace_collector.end_span(
                                 embedding_span,
@@ -610,7 +618,10 @@ class MemoryService:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
                 retriever = HybridRetriever(mrepo)
-                emb = await _embed_query_off_loop(l3.embedding, query)
+                emb = await _embed_query_off_loop(
+                    l3.embedding, query,
+                    user_id=user_id, tenant_id=tenant_id,
+                )
                 # 工具显式搜索（§70/§71）：宽松 gate（enforce_gate=False），
                 # 但 SQL eligibility（scope/active/not expired）同样生效；
                 # 仅真正返回给 Agent 的记忆 mark_accessed（§31，带 scope）
