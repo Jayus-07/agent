@@ -156,10 +156,10 @@ class MetadataStage:
     async def _generate_questions_with_lineage(
         self, chunks_text: list[str], doc_type: str, recorder=None,
         parent_span_id: str = "",
-    ) -> tuple[list[list[str]], dict]:
+    ) -> tuple[list[list[str]], dict, dict]:
         """生成模拟问题，并把 question_gen 独立记录为一个阶段。"""
         if not chunks_text:
-            return [], {}
+            return [], {}, {"provider_call": False, "status": "skipped"}
         from backend.rag.preprocessing import question_gen as _qg
 
         token = self._begin_lineage_stage(
@@ -243,7 +243,7 @@ class MetadataStage:
                         "output_questions": sum(len(item or []) for item in questions or []),
                     },
                 )
-            return questions, usage
+            return questions, usage, generation_meta
         except Exception as exc:
             self._finish_lineage_stage(
                 recorder, token, status="failed",
@@ -353,27 +353,43 @@ class MetadataStage:
                     metadata={"route": "single_enrichment", "classification_source": "rules"},
                 )
                 try:
-                    from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
+                    from backend.rag.preprocessing.metadata_llm import (
+                        extract_metadata_llm_async,
+                        get_last_metadata_call_meta,
+                    )
                     with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
                         unified = await extract_metadata_llm_async(
                             full_text, fname, parent_span_id=parent_span_id,
                             include_summary=not _skip_document_summary(doc_type))
+                    call_meta = get_last_metadata_call_meta()
+                    lineage_result = unified or call_meta
                     self._finish_lineage_stage(
                         processing_recorder, decision_lineage,
                         status="success" if unified else "fallback",
                         model=self._role_model_identity(
                             "metadata_extract",
-                            str((unified or {}).get("actual_model") or ""),
-                        ),
+                            str(lineage_result.get("actual_model") or ""),
+                        ) if lineage_result.get("provider_call_attempted")
+                        or lineage_result.get("provider_called") else None,
                         input_count=1, output_count=1 if unified else 0,
-                        usage=dict((unified or {}).get("llm_tokens") or {}) or None,
-                        fallback_reason=None if unified else "llm_unavailable",
+                        usage=dict(lineage_result.get("llm_tokens") or {}) or None,
+                        fallback_reason=(
+                            None if unified else
+                            str(call_meta.get("fallback_reason") or "llm_unavailable")
+                        ),
                         prompt_key="rag.preprocessing.metadata_extract",
-                        prompt_version=str((unified or {}).get("prompt_version", "") or "") or None,
-                        prompt_hash=str((unified or {}).get("prompt_hash") or "") or None,
+                        prompt_version=str(lineage_result.get("prompt_version", "") or "") or None,
+                        prompt_hash=str(lineage_result.get("prompt_hash") or "") or None,
                         schema_fingerprint=_metadata_fp,
                         metadata={
                             "classification_source": "rules",
+                            "provider_call": bool(lineage_result.get("provider_called")),
+                            "provider_call_attempted": bool(
+                                lineage_result.get("provider_call_attempted")
+                            ),
+                            "provider_duration_ms": int(
+                                lineage_result.get("provider_duration_ms") or 0
+                            ),
                             "classification_candidate_ignored": bool(
                                 unified
                                 and (
@@ -382,17 +398,17 @@ class MetadataStage:
                                 )
                             ),
                             "llm_usage_status": str(
-                                (unified or {}).get("llm_usage_status")
+                                lineage_result.get("llm_usage_status")
                                 or (
                                     "reported"
-                                    if (unified or {}).get("llm_tokens")
+                                    if lineage_result.get("llm_tokens")
                                     else "unavailable"
                                 )
                             ),
-                            "prompt_source": str((unified or {}).get("prompt_source") or ""),
+                            "prompt_source": str(lineage_result.get("prompt_source") or ""),
                             # STOP B4：非 DB 来源显式打标，不允许静默 fallback
                             "prompt_fallback": str(
-                                (unified or {}).get("prompt_source") or ""
+                                lineage_result.get("prompt_source") or ""
                             )
                             not in ("db", ""),
                         },
@@ -626,9 +642,9 @@ class MetadataStage:
                         metrics={"generation_status": "skipped", "skip_reason": "structured_faq",
                                  "provider_call": False, "provider_duration_ms": 0},
                     )
-                return [], {}
+                return [], {}, {"provider_call": False, "status": "skipped"}
             if not chunks_text:
-                return [], {}
+                return [], {}, {"provider_call": False, "status": "skipped"}
             return await self._generate_questions_with_lineage(
                 chunks_text, doc_type, processing_recorder, parent_span_id,
             )
@@ -653,7 +669,7 @@ class MetadataStage:
             entities_res = {}
         if isinstance(questions_res, Exception):
             logger.warning(f"[Metadata] 并发任务失败 (task=questions): {questions_res}")
-            questions_res = ([], {})
+            questions_res = ([], {}, {"provider_call": False, "status": "failed"})
 
         summary, persons = summary_res
         if summary and not person_names:
@@ -662,7 +678,7 @@ class MetadataStage:
         entities_nested = entities_res
         _stage_ms["decision_ms"] = round((_time.monotonic() - _t_build0) * 1000)
         _t_enrich0 = _time.monotonic()
-        questions_by_chunk, question_gen_tokens = questions_res
+        questions_by_chunk, question_gen_tokens, question_gen_meta = questions_res
 
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
@@ -733,8 +749,13 @@ class MetadataStage:
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
             "llm_tokens": kw_result.llm_tokens,
-            "llm_used": bool(kws_llm_objs),
-            "llm_strategy": kw_result.llm_strategy,
+            "llm_used": bool(kws_llm_objs) or bool(question_gen_meta.get("provider_call")),
+            "llm_strategy": (
+                kw_result.llm_strategy
+                if kws_llm_objs
+                else "question_gen" if question_gen_meta.get("provider_call")
+                else kw_result.llm_strategy
+            ),
             "llm_decision": llm_decision,
             # 存 list（落库经 _sanitize_metadata 成 JSON 数组串）：标量实体过滤靠
             # where→SQL 的数组包含臂命中。此前是 ", ".join 逗号串，多人文档
@@ -876,6 +897,7 @@ class MetadataStage:
         # 模拟问题（Document Expansion）——与规则路径共用同一开关与实现
         questions_by_chunk: list[list[str]] = []
         question_gen_tokens: dict = {}
+        question_gen_meta: dict = {"provider_call": False, "status": "skipped"}
         try:
             from backend.config.rag import ENABLE_SIMULATED_QUESTIONS
             if doc_type == "faq" and _has_structured_qa(full_text):
@@ -902,7 +924,11 @@ class MetadataStage:
                                  "provider_call": False, "provider_duration_ms": 0},
                     )
             elif allow_llm_enrichment and ENABLE_SIMULATED_QUESTIONS and chunks_text:
-                questions_by_chunk, question_gen_tokens = await self._generate_questions_with_lineage(
+                (
+                    questions_by_chunk,
+                    question_gen_tokens,
+                    question_gen_meta,
+                ) = await self._generate_questions_with_lineage(
                     chunks_text,
                     doc_type,
                     processing_recorder,
@@ -996,6 +1022,7 @@ class MetadataStage:
             "signals": risk_signals,
         }
         provider_called = bool(unified.get("provider_called"))
+        question_gen_provider_called = bool(question_gen_meta.get("provider_call"))
 
         _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
         _stage_ms["total_ms"] = round((_time.monotonic() - _t_final0) * 1000)
@@ -1010,10 +1037,13 @@ class MetadataStage:
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
             "llm_tokens": llm_tokens,
-            "llm_used": provider_called and not bool(route_level),
+            "llm_used": (
+                provider_called and not bool(route_level)
+            ) or question_gen_provider_called,
             "llm_strategy": (
                 f"cascade_{route_level}" if route_level
                 else "unified_extract" if provider_called
+                else "question_gen" if question_gen_provider_called
                 else "rule_fallback"
             ),
             "llm_decision": {

@@ -14,6 +14,7 @@ import pytest
 from backend.rag.preprocessing.metadata_llm import (
     MetadataExtractError,
     extract_metadata_llm_async,
+    get_last_metadata_call_meta,
     parse_extract_response,
 )
 
@@ -212,6 +213,10 @@ async def test_extract_timeout_and_empty_output_return_none(_patch_prompt, monke
 
     monkeypatch.setattr(m, "async_safe_call_with_timeout", _timeout, raising=False)
     assert await extract_metadata_llm_async("文档内容", "timeout.md") is None
+    timeout_meta = get_last_metadata_call_meta()
+    assert timeout_meta["provider_call_attempted"] is True
+    assert timeout_meta["provider_called"] is False
+    assert timeout_meta["fallback_reason"] == "provider_timeout"
 
     async def _empty(fn, *args, **kwargs):
         class EmptyResponse:
@@ -221,6 +226,37 @@ async def test_extract_timeout_and_empty_output_return_none(_patch_prompt, monke
 
     monkeypatch.setattr(m, "async_safe_call_with_timeout", _empty, raising=False)
     assert await extract_metadata_llm_async("文档内容", "empty.md") is None
+    invalid_meta = get_last_metadata_call_meta()
+    assert invalid_meta["provider_call_attempted"] is True
+    assert invalid_meta["provider_called"] is True
+    assert invalid_meta["fallback_reason"] == "invalid_output"
+
+
+@pytest.mark.asyncio
+async def test_invalid_json_preserves_provider_usage(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    response = _FakeResp(
+        "这不是 JSON",
+        {"prompt_tokens": 21, "completion_tokens": 7, "total_tokens": 28},
+    )
+    monkeypatch.setattr(m, "invoke_metadata_llm", lambda prompt, **kwargs: response)
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough, raising=False)
+
+    assert await extract_metadata_llm_async("文档内容", "invalid.json") is None
+    call_meta = get_last_metadata_call_meta()
+    assert call_meta["provider_call_attempted"] is True
+    assert call_meta["provider_called"] is True
+    assert call_meta["llm_tokens"] == {
+        "prompt_tokens": 21,
+        "completion_tokens": 7,
+        "total_tokens": 28,
+    }
+    assert call_meta["fallback_reason"] == "invalid_output"
 
 
 @pytest.mark.asyncio

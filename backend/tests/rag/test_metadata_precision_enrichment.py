@@ -261,3 +261,35 @@ async def test_structured_faq_skips_metadata_and_question_generation_calls(monke
     )
     assert question_step.status == "skipped"
     assert question_step.skip_reason == "structured_faq"
+
+
+@pytest.mark.asyncio
+async def test_person_names_are_taken_from_merged_llm_entities(monkeypatch):
+    import backend.config.rag as rag_config
+
+    _patch_rule_fallback(monkeypatch, doc_type="policy")
+    monkeypatch.setattr(rag_config, "ENABLE_SIMULATED_QUESTIONS", False)
+    stage = MetadataStage(registry=SimpleNamespace(list_all=lambda: {}), embedding=None)
+    monkeypatch.setattr(stage, "detect_near_dup", lambda *args, **kwargs: None)
+    unified = {
+        "entities": {"person": ["张三"], "org": ["示例科技有限公司"]},
+        "keywords": [],
+        "time_refs": [],
+        "risk": {"level": "none", "signals": []},
+        "llm_tokens": {},
+        "provider_called": True,
+    }
+
+    result = await stage.finalize_unified(
+        "张三在示例科技有限公司负责制度维护。",
+        {"doc_id": "doc-person"},
+        unified,
+        rule_classification={
+            "doc_type": "policy",
+            "confidence": 0.91,
+            "business_domain": "hr",
+        },
+    )
+
+    assert result["entities"]["org"] == ["示例科技有限公司"]
+    assert result["person_names"] == ["张三"]

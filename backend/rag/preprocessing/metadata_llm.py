@@ -16,6 +16,7 @@ import threading
 import weakref
 import os
 import time
+from contextvars import ContextVar
 from functools import partial
 
 # LLM 背压槽位等待超时（秒）：等待超过此值计一次可观测降级并直接执行，
@@ -28,6 +29,20 @@ METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT = float(
 # "bound to a different event loop"；weakref 键在 loop 销毁后自动回收。
 _llm_semaphores_by_loop: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _llm_semaphores_lock = threading.Lock()
+_last_metadata_call_meta: ContextVar[dict] = ContextVar(
+    "metadata_extract_last_call_meta", default={}
+)
+
+
+def get_last_metadata_call_meta() -> dict:
+    """读取本次元数据抽取调用证据，包含失败时已消耗的 Provider 用量。"""
+    return dict(_last_metadata_call_meta.get() or {})
+
+
+def _set_last_metadata_call_meta(**values) -> None:
+    current = dict(_last_metadata_call_meta.get() or {})
+    current.update(values)
+    _last_metadata_call_meta.set(current)
 
 
 def _get_loop_llm_semaphore() -> "asyncio.Semaphore":
@@ -188,7 +203,15 @@ async def extract_metadata_llm_async(
     走 invoke_metadata_llm（云端 proxy，qwen 关思考模式，自动计量落库）。
     成功返回字段子集（不含 minhash 等规则产物），失败返回 None。
     """
+    _last_metadata_call_meta.set({})
     if not full_text or not full_text.strip():
+        _set_last_metadata_call_meta(
+            provider_call_attempted=False,
+            provider_called=False,
+            llm_tokens={},
+            llm_usage_status="unavailable",
+            fallback_reason="empty_input",
+        )
         return None
 
     from backend.config.rag import (
@@ -237,6 +260,14 @@ async def extract_metadata_llm_async(
             )
     except Exception as e:
         logger.warning(f"[MetaLLM] 渲染抽取提示词失败（降级规则路径）: {e}")
+        _set_last_metadata_call_meta(
+            provider_call_attempted=False,
+            provider_called=False,
+            llm_tokens={},
+            llm_usage_status="unavailable",
+            fallback_reason="prompt_render_error",
+            error_message=str(e)[:200],
+        )
         return None
 
     from backend.observability.tracer import trace_collector
@@ -252,6 +283,7 @@ async def extract_metadata_llm_async(
     provider_call_attempted = False
     provider_called = False
     provider_duration_ms = 0
+    response = None
     try:
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
@@ -293,8 +325,43 @@ async def extract_metadata_llm_async(
                 sem.release()
         provider_called = response is not None
         if response is None:
+            _set_last_metadata_call_meta(
+                provider_call_attempted=provider_call_attempted,
+                provider_called=False,
+                provider_duration_ms=provider_duration_ms,
+                llm_tokens={},
+                llm_usage_status="unavailable",
+                prompt_version=(
+                    f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
+                ),
+                prompt_source=prompt_source,
+                prompt_hash=prompt_hash,
+                fallback_reason="provider_timeout",
+            )
             raise MetadataExtractError("llm timeout")
 
+        call_tokens = _normalize_usage_metadata(
+            getattr(response, "usage_metadata", {}) or {}
+        )
+        response_metadata = getattr(response, "response_metadata", {}) or {}
+        actual_model = (
+            response_metadata.get("model_name")
+            or response_metadata.get("model")
+            or ""
+        )
+        _set_last_metadata_call_meta(
+            provider_call_attempted=provider_call_attempted,
+            provider_called=provider_called,
+            provider_duration_ms=provider_duration_ms,
+            llm_tokens=call_tokens,
+            llm_usage_status="reported" if call_tokens else "unavailable",
+            actual_model=str(actual_model),
+            prompt_version=(
+                f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
+            ),
+            prompt_source=prompt_source,
+            prompt_hash=prompt_hash,
+        )
         content = response.content if hasattr(response, "content") else str(response)
         result = parse_extract_response(content, valid_types)
         if not include_summary:
@@ -304,20 +371,13 @@ async def extract_metadata_llm_async(
         )
         result["prompt_source"] = prompt_source
         result["prompt_hash"] = prompt_hash
-        result["llm_tokens"] = _normalize_usage_metadata(
-            getattr(response, "usage_metadata", {}) or {}
-        )
+        result["llm_tokens"] = call_tokens
         result["llm_usage_status"] = (
             "reported" if result["llm_tokens"] else "unavailable"
         )
         result["provider_called"] = provider_called
+        result["provider_call_attempted"] = provider_call_attempted
         result["provider_duration_ms"] = provider_duration_ms
-        response_metadata = getattr(response, "response_metadata", {}) or {}
-        actual_model = (
-            response_metadata.get("model_name")
-            or response_metadata.get("model")
-            or ""
-        )
         if actual_model:
             # 仅保存模型标识，不保存完整响应；由决策信封带到处理血缘。
             result["actual_model"] = str(actual_model)
@@ -344,6 +404,16 @@ async def extract_metadata_llm_async(
         metadata_route_total.labels(level="L3", outcome="error").inc()
         from backend.observability.metrics import metadata_llm_calls_total
         metadata_llm_calls_total.labels(result="invalid").inc()
+        fallback_reason = (
+            "provider_timeout" if response is None else "invalid_output"
+        )
+        _set_last_metadata_call_meta(
+            provider_call_attempted=provider_call_attempted,
+            provider_called=provider_called,
+            provider_duration_ms=provider_duration_ms,
+            fallback_reason=fallback_reason,
+            error_message=str(e)[:200],
+        )
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"provider_call": provider_called,
@@ -356,6 +426,29 @@ async def extract_metadata_llm_async(
         metadata_route_total.labels(level="L3", outcome="error").inc()
         from backend.observability.metrics import metadata_llm_calls_total
         metadata_llm_calls_total.labels(result="error").inc()
+        call_tokens = _normalize_usage_metadata(
+            getattr(response, "usage_metadata", {}) or {}
+        ) if response is not None else {}
+        response_metadata = getattr(response, "response_metadata", {}) or {}
+        _set_last_metadata_call_meta(
+            provider_call_attempted=provider_call_attempted,
+            provider_called=provider_called,
+            provider_duration_ms=provider_duration_ms,
+            llm_tokens=call_tokens,
+            llm_usage_status="reported" if call_tokens else "unavailable",
+            actual_model=str(
+                response_metadata.get("model_name")
+                or response_metadata.get("model")
+                or ""
+            ),
+            prompt_version=(
+                f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
+            ),
+            prompt_source=prompt_source,
+            prompt_hash=prompt_hash,
+            fallback_reason="provider_error",
+            error_message=str(e)[:200],
+        )
         if span_id:
             trace_collector.end_span(span_id, status="error",
                                      metrics={"provider_call": provider_called,

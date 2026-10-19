@@ -56,8 +56,7 @@ class RiskInfo(BaseModel):
 
 
 class UnifiedMetadata(BaseModel):
-    """统一抽取结果模型：doc_type / confidence / business_domain / summary /
-    keywords / entities / time_refs / risk。
+    """统一抽取结果模型：兼容分类字段、摘要、精确实体、时间和风险信息。
 
     校验策略与 parse_extract_response 既有行为逐条对齐：脏值宽容回落
     （confidence 坏值 → 0.7），结构性错误严格拒绝（doc_type 越界 → ValueError）。
@@ -66,7 +65,10 @@ class UnifiedMetadata(BaseModel):
     confidence: float = DEFAULT_CONFIDENCE
     business_domain: str = "general"
     summary: str = ""
-    keywords: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(
+        default_factory=list,
+        description="仅收录原文中可精确匹配的专有名词或格式化实体；没有则为空",
+    )
     entities: dict[str, list[str]] = Field(default_factory=dict)
     time_refs: list[str] = Field(default_factory=list)
     risk: RiskInfo = Field(default_factory=RiskInfo)

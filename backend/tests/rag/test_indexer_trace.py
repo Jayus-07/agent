@@ -159,6 +159,10 @@ class TestSpanMetrics:
         trace = fresh_collector.list(1, include_spans=True)[0]
         parse = _find_span(trace, "index_parse")
         assert parse.metrics["doc_count"] >= 1
+        internal = parse.metrics["internal_timings_ms"]
+        assert {"parser_ms", "structure_analysis_ms", "routing_ms",
+                "chunk_execution_ms"}.issubset(internal)
+        assert parse.metrics["timing_boundary"].startswith("parse_and_chunk_full")
 
     def test_chunk_metrics_records_kept_and_filtered(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
@@ -187,6 +191,13 @@ class TestSpanMetrics:
         trace = fresh_collector.list(1, include_spans=True)[0]
         meta = _find_span(trace, "index_metadata")
         assert "doc_type" in meta.metrics
+
+    def test_quality_record_span_has_real_score(self, indexer, tmp_text_file, fresh_collector):
+        indexer._index_file(tmp_text_file)
+        trace = fresh_collector.list(1, include_spans=True)[0]
+        quality = _find_span(trace, "index_quality")
+        assert isinstance(quality.metrics.get("quality_score"), int)
+        assert quality.metrics["score"] == quality.metrics["quality_score"]
 
 
 # ==========================================================
