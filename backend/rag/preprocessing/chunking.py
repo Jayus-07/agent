@@ -626,14 +626,12 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
 
 def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
                             anchor: str, group_size: int | None = None) -> List[Document]:
-    """为无结构产出的 leaf 挂虚拟 parent（C1 修复：Step/Legal/QA 的
-    parent_chunk_id 此前恒空，「命中 leaf → 取 parent 扩上下文」对这三类
-    文档静默退化）。
+    """为需要跨块上下文的无结构 Leaf 挂虚拟 Parent。
 
     Args:
         leaf_chunks: 策略产出的 leaf 列表（保持顺序）。
         anchor: chunk_id anchor 前缀（区分策略，避免与既有 id 撞车）。
-        group_size: None = 全部 leaf 挂一个文档级 parent（Step/QA）；
+        group_size: None = 全部 leaf 挂一个文档级 parent（Step 等策略）；
             N = 每 N 个 leaf 一组各挂一个 parent（Legal 条款区间）。
 
     Returns:
@@ -681,12 +679,7 @@ def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
             "chunk_id": parent_id,
             "parent_chunk_id": "",
             "section_path": [],
-            # FAQ Parent 汇总多个独立问题，不继承首条 FAQ 的标题。
-            "section_title": (
-                ""
-                if anchor == "faq"
-                else (group[0].metadata.get("section_title") or "").strip()
-            ),
+            "section_title": (group[0].metadata.get("section_title") or "").strip(),
             "section_level": 1,
             "chunk_tokens": count_tokens(ptext),
         }
@@ -969,7 +962,7 @@ def _split_unstructured(ast: DocumentAST, file_path: str,
             chunks.append(_make_doc(sub, meta))
     # C1 同构修复（2026-10-13）：无结构文档的 leaf 此前 parent_chunk_id
     # 恒空——「命中 leaf → 取 parent 扩上下文」对 Fixed/Recursive 路径
-    # 静默退化。挂文档级虚拟 parent，与 Step/Legal/QA 策略同构。
+    # 静默退化。挂文档级虚拟 parent，与 Step 等策略同构。
     return _enrich(
         _attach_virtual_parents(chunks, file_path, "plain"), file_path)
 
@@ -1167,6 +1160,9 @@ class QAChunkStrategy:
     Structure 语义切分（section → parent + leaf），QA 对照常成 chunk。
     P0-05：长答案不再产单一巨型 chunk——A 部分超预算时继续切分，
     每个子块保留 Q 前缀（FAQ 条目语义完整）。
+
+    FAQ 叶子本身包含完整问答，不生成只列问题、不含答案的文档级 parent；
+    这类 parent 会在命中任一 FAQ 后被附加进上下文，带入大量无关问题。
     """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
@@ -1175,8 +1171,7 @@ class QAChunkStrategy:
         # 纯 FAQ 文档（全树只有 qa 节点）无普通叶子，跳过。
         if any(n.type not in ("qa_question", "qa_answer") for n in walk(ast.root)):
             chunks.extend(self._non_qa_chunks(ast, file_path))
-        # C1: 文档级虚拟 parent（parent 文本=全部问题列表，便于 parent 级语义匹配）
-        return _enrich(_attach_virtual_parents(chunks, file_path, "faq"), file_path)
+        return _enrich(chunks, file_path)
 
     def _qa_chunks(self, ast: DocumentAST, file_path: str) -> List[Document]:
         nodes = [

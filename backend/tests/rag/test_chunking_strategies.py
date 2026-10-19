@@ -93,8 +93,8 @@ def test_sibling_sections_with_same_title_have_unique_chunk_ids():
     assert len(ids) == len(set(ids))
 
 
-def test_faq_parent_does_not_inherit_first_question_as_section_title():
-    """FAQ Parent 汇总多条 FAQ 时，不得误标为首条问题。"""
+def test_faq_does_not_create_question_directory_parent():
+    """完整问答叶子不应再附加只列问题、不含答案的文档级 Parent。"""
     ast = DocumentAST(
         root=DocumentNode(type="section", text="", level=0, children=[
             DocumentNode(type="qa_question", text="怎么退货？"),
@@ -108,18 +108,13 @@ def test_faq_parent_does_not_inherit_first_question_as_section_title():
     parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
     leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
 
-    assert len(parents) == 1
+    assert not parents
     assert len(leaves) == 2
-    assert parents[0].metadata["section_title"] == ""
     assert [c.metadata["section_title"] for c in leaves] == [
         "怎么退货？", "多久可以退款？",
     ]
-    assert "怎么退货？" in parents[0].page_content
-    assert "多久可以退款？" in parents[0].page_content
-    assert all(
-        c.metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
-        for c in leaves
-    )
+    assert all("\nA：" in c.page_content for c in leaves)
+    assert all(not c.metadata.get("parent_chunk_id") for c in leaves)
 
 
 def test_parent_chunk_includes_section_title():
