@@ -93,6 +93,35 @@ def test_sibling_sections_with_same_title_have_unique_chunk_ids():
     assert len(ids) == len(set(ids))
 
 
+def test_faq_parent_does_not_inherit_first_question_as_section_title():
+    """FAQ Parent 汇总多条 FAQ 时，不得误标为首条问题。"""
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_question", text="怎么退货？"),
+            DocumentNode(type="qa_answer", text="提交申请后客服审核。"),
+            DocumentNode(type="qa_question", text="多久可以退款？"),
+            DocumentNode(type="qa_answer", text="审核通过后五个工作日内到账。"),
+        ]),
+        raw_text="",
+    )
+    chunks = QAChunkStrategy().split(ast, "faq.md")
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+
+    assert len(parents) == 1
+    assert len(leaves) == 2
+    assert parents[0].metadata["section_title"] == ""
+    assert [c.metadata["section_title"] for c in leaves] == [
+        "怎么退货？", "多久可以退款？",
+    ]
+    assert "怎么退货？" in parents[0].page_content
+    assert "多久可以退款？" in parents[0].page_content
+    assert all(
+        c.metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
+        for c in leaves
+    )
+
+
 def test_parent_chunk_includes_section_title():
     """parent chunk 的 page_content 必须包含 section 自身标题（如「退货流程」）。"""
     chunks = StructureChunkStrategy().split(AST, "a.md")

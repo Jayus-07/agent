@@ -681,7 +681,12 @@ def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
             "chunk_id": parent_id,
             "parent_chunk_id": "",
             "section_path": [],
-            "section_title": (group[0].metadata.get("section_title") or "").strip(),
+            # FAQ Parent 汇总多个独立问题，不继承首条 FAQ 的标题。
+            "section_title": (
+                ""
+                if anchor == "faq"
+                else (group[0].metadata.get("section_title") or "").strip()
+            ),
             "section_level": 1,
             "chunk_tokens": count_tokens(ptext),
         }

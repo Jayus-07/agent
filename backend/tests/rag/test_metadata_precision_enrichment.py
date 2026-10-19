@@ -1,8 +1,10 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
+from backend.rag.indexing.processing_lineage import ProcessingRunContext
+from backend.rag.indexing.processing_lineage_recorder import ProcessingRunRecorder
 from backend.rag.indexing.stages.metadata_stage import MetadataStage
 from backend.rag.preprocessing.keyword import extract_precise_keywords
 
@@ -226,16 +228,33 @@ async def test_structured_faq_skips_metadata_and_question_generation_calls(monke
     _patch_rule_fallback(monkeypatch, doc_type="faq")
     extract = AsyncMock(return_value={"doc_type": "general"})
     monkeypatch.setattr(metadata_llm, "extract_metadata_llm_async", extract)
+    from backend.rag.preprocessing import question_gen
+    generate_questions = Mock(
+        side_effect=AssertionError("结构化 FAQ 不应调用模拟问题生成")
+    )
+    monkeypatch.setattr(
+        question_gen, "generate_chunk_questions", generate_questions,
+    )
     registry = SimpleNamespace(list_all=lambda: {})
     stage = MetadataStage(registry=registry, embedding=None)
+    context = ProcessingRunContext.create("doc-3", "hash-3", "upload")
+    recorder = ProcessingRunRecorder(context)
     body = "**Q:** 年假如何申请？\n**A:** 通过 OA 系统提交申请。\n" + "制度说明。" * 300
 
     result = await stage.build(
         body,
         {"doc_id": "doc-3", "source_file": "faq.docx", "file_path": "faq.docx"},
         chunks_text=["**Q:** 年假如何申请？\n**A:** 通过 OA 系统提交申请。"],
+        processing_recorder=recorder,
     )
 
     extract.assert_not_awaited()
+    generate_questions.assert_not_called()
     assert result["doc_type"] == "faq"
     assert result["questions_by_chunk"] == []
+    question_step = next(
+        step for step in context.snapshot().steps
+        if step.stage == "question_gen"
+    )
+    assert question_step.status == "skipped"
+    assert question_step.skip_reason == "structured_faq"
