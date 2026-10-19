@@ -4,10 +4,11 @@ Why:
   防止 KB 软 fallback 和 trace 包裹代码回归，
   这两个是评测链路打通的关键。
 """
-import pytest
 from unittest.mock import MagicMock, patch
 
-from backend.evaluation.models import TestCase, EvalResult
+import pytest
+
+from backend.evaluation.models import TestCase
 from backend.evaluation.runners.builtin import _run_rag
 
 
@@ -42,6 +43,35 @@ def test_missing_eval_kb_is_reported_without_default_fallback():
     assert len(results) == 1
     assert results[0].status == "error"
     assert "拒绝回退" in (results[0].error_msg or "")
+
+
+def test_direct_eval_retrieval_uses_production_deadline_and_clears_context(tmp_path, monkeypatch):
+    """Fake 检索实际经过评测入口，确认未旁路共享 deadline。"""
+    from backend.config.rag import RAG_RETRIEVAL_DEADLINE_MS
+    from backend.rag.retrieval_budget import clear_retrieval_budget, current_budget
+
+    clear_retrieval_budget()
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    seen = []
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    retriever = MagicMock()
+
+    def invoke(question):
+        budget = current_budget()
+        seen.append((budget.total_ms, budget.remaining_ms()))
+        return []
+
+    retriever.invoke.side_effect = invoke
+    case = TestCase(id="deadline-fake", question="查询", module="rag", expected={},
+                    metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"})
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        _run_rag([case])
+    assert len(seen) == 1
+    assert seen[0][0] == RAG_RETRIEVAL_DEADLINE_MS == 8000
+    assert 0 < seen[0][1] <= 8000
+    assert current_budget() is None
 
 
 def test_default_kb_requires_explicit_eval_scope():
@@ -100,3 +130,86 @@ def test_pipeline_unavailable_returns_error_results():
     assert len(results) == 2
     assert all(r.status == "error" for r in results)
     assert all("RAG pipeline not available" in (r.error_msg or "") for r in results)
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_doc_probe_usage_belongs_to_current_case_even_on_timeout(
+    tmp_path, monkeypatch, workers,
+):
+    """复现真实Smoke：失败的Doc探针不能把用量挂到上一例Trace。"""
+    from backend.observability.tracer import current_trace_context
+
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    seen = {}
+
+    def probe(question, **_kwargs):
+        seen[question] = current_trace_context()
+        if question == "probe-timeout":
+            raise TimeoutError("fake Provider timeout")
+        return []
+
+    pipeline.doc_db.similarity_search.side_effect = probe
+    retriever = MagicMock()
+    retriever.invoke.return_value = []
+    cases = [TestCase(
+        id=name, question=name, module="rag", expected={},
+        metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"},
+    ) for name in ("probe-success", "probe-timeout")]
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        results = _run_rag(cases, workers=workers, resume=False)
+
+    by_id = {result.case_id: result for result in results}
+    for name, (trace_id, session_id) in seen.items():
+        assert trace_id
+        assert session_id == f"eval-{name}"
+        assert by_id[name].actual["trace"]["trace_id"] == trace_id
+    assert seen["probe-success"][0] != seen["probe-timeout"][0]
+    assert by_id["probe-timeout"].status == "error"
+    assert by_id["probe-timeout"].error_stage == "retrieval"
+
+
+@pytest.mark.parametrize("failed,rewrite_timeout,multiquery", [
+    (False, False, False), (True, False, True),
+    (False, True, True), (False, True, False),
+])
+def test_full_runner_cannot_pass_when_rerank_failed(
+    tmp_path, monkeypatch, failed, rewrite_timeout, multiquery,
+):
+    """同样命中的候选，重排失败必须阻止完整链路验收。"""
+    from langchain_core.documents import Document
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr("backend.evaluation.runners.rag._get_answers_path",
+                        lambda run_id=None: tmp_path / "answers.jsonl")
+    pipeline = _make_pipeline_with_doc_db([{"kb_id": "rag_eval_kb"}])
+    retriever = MagicMock()
+
+    def invoke(question):
+        if rewrite_timeout:
+            rewrite = trace_collector.start_span("query_rewrite", name="Fake")
+            trace_collector.end_span(rewrite, status="timeout")
+        span = trace_collector.start_span("rerank", name="Fake")
+        trace_collector.end_span(span, status="error" if failed else "success")
+        return [Document(page_content="采购证据", metadata={
+            "doc_id": "supplier", "chunk_id": "supplier_1",
+            "rerank_score": 0.9, "kb_id": "rag_eval_kb",
+        })]
+
+    retriever.invoke.side_effect = invoke
+    case = TestCase(id="rerank-contract", question="采购证据", module="rag",
+                    expected={"relevant_docs": ["supplier"]},
+                    metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"})
+    with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
+         patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
+        results = _run_rag([case], resume=False, multiquery=multiquery)
+    assert len(results) == 1
+    result = results[0]
+    incomplete = failed or (rewrite_timeout and multiquery)
+    assert result.status == ("fail" if incomplete else "pass")
+    assert result.actual["execution_complete"] is not incomplete
+    if rewrite_timeout and multiquery:
+        assert result.actual["incomplete_reason"] == "multi_query_rewrite_incomplete"
+    assert result.metrics["recall@5"] == 1.0

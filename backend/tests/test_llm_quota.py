@@ -99,6 +99,75 @@ def test_missing_price_is_hard_failure_but_observe_only_alerts():
     assert table.require("missing", "llm", enforce=False) is None
 
 
+def test_postgres_quota_settlement_is_idempotent_for_same_reservation():
+    """迟到处理重放时，同一 reservation 只能把 used_cny 增加一次。"""
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from backend.infra.llm.quota import PostgresQuotaStore
+
+    state = {
+        "status": "reserved", "ledger_updates": 0, "settled_amount": None,
+        "sql": [],
+    }
+
+    class _Cursor:
+        def __init__(self):
+            self._rows = []
+            self._one = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, params=()):
+            normalized = " ".join(sql.lower().split())
+            state["sql"].append(normalized)
+            self._rows = []
+            self._one = None
+            if normalized.startswith("select scope_type"):
+                assert "where id = %s and status = 'reserved'" in normalized
+                assert "for update" in normalized
+                if state["status"] == "reserved":
+                    self._rows = [(
+                        "user", "fake-user", "day", "2026-10-18",
+                        Decimal("0.500000"),
+                    )]
+            elif normalized.startswith("update budget_ledger"):
+                state["ledger_updates"] += 1
+            elif normalized.startswith("update budget_reservations"):
+                assert "where id = %s and status = 'reserved'" in normalized
+                if state["status"] == "reserved":
+                    state["status"] = "settled"
+                    state["settled_amount"] = params[0]
+
+        def fetchall(self):
+            return list(self._rows)
+
+        def fetchone(self):
+            return self._one
+
+    class _Connection:
+        def cursor(self):
+            return _Cursor()
+
+    @contextmanager
+    def connection_factory():
+        yield _Connection()
+
+    store = PostgresQuotaStore(connection_factory=connection_factory)
+    reservation = SimpleNamespace(reservation_id="stable-reservation-id")
+    store.settle(reservation, Decimal("0.123456"))
+    store.settle(reservation, Decimal("0.123456"))
+
+    assert state["status"] == "settled"
+    assert state["ledger_updates"] == 1
+    assert state["settled_amount"] == Decimal("0.123456")
+    assert sum(sql.startswith("update budget_ledger") for sql in state["sql"]) == 1
+
+
 def test_quota_manager_hard_soft_and_audit_modes():
     from backend.infra.llm.quota import QuotaExceeded, QuotaManager
 

@@ -210,7 +210,8 @@ class PromptService:
         text = self._renderer.render(template, variables, spec=spec)
         self._record_usage(key, version, source)
         record_prompt_version(key, version, source)
-        return RenderResult(text=text, key=key, version=version, source=source)
+        return RenderResult(text=text, key=key, version=version, source=source,
+                            template_hash=template_hash(template))
 
     def render_sync(self, key: str, **variables: str) -> RenderResult:
         entry = self._pinned_entry(key)
@@ -224,7 +225,8 @@ class PromptService:
             source = "pinned" if self._pinned_entry(key) is not None else "snapshot"
             self._record_usage(key, entry.version, source)
             record_prompt_version(key, entry.version, source)
-            return RenderResult(text=text, key=key, version=entry.version, source=source)
+            return RenderResult(text=text, key=key, version=entry.version, source=source,
+                                template_hash=template_hash(entry.template))
 
         default = self._defaults.get(key)
         if default is not None:
@@ -232,7 +234,8 @@ class PromptService:
             text = self._renderer.render(default, variables, spec=spec)
             self._record_usage(key, None, "default")
             record_prompt_version(key, None, "default")
-            return RenderResult(text=text, key=key, version=None, source="default")
+            return RenderResult(text=text, key=key, version=None, source="default",
+                                template_hash=template_hash(default))
 
         raise KeyError(f"Prompt not found in snapshot or defaults: {key}")
 

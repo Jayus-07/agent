@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from collections import OrderedDict
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, List
@@ -582,6 +583,14 @@ class _TrackedEmbedding(Embeddings):
     def _identity(self) -> str:
         return _embedding_identity(self)
 
+    def _model_call_scope(self):
+        """缓存命中不预占；真正云端调用才进入统一模型预算。"""
+        from backend.infra.llm.budget import scoped_model_call
+
+        if self._provider == "cloud":
+            return scoped_model_call(self._model_name, "embedding")
+        return nullcontext()
+
     def _process_cached(self, key: str) -> list | None:
         if not (_EMBED_PROCESS_CACHE_ENABLED and _EMBED_PROCESS_CACHE_MAX > 0):
             return None
@@ -713,28 +722,35 @@ class _TrackedEmbedding(Embeddings):
             with _EMBED_LOCKS_GUARD:
                 _EMBED_INFLIGHT.setdefault(key, stats)
             t0 = time.monotonic()
+            provider_attempted = False
             try:
-                raw = compute()          # 真正出站（仅发请求，不落账）
-                # 先做向量转换/校验：provider 返回畸形（None/字节串/长度不符）
-                # 时在这里抛错 → 走下面的失败路径，**不会**出现"成功行+失败行"
-                # 双记录的负面回归（P1 审查）。
-                vector = to_vector(raw)
+                with self._model_call_scope():
+                    provider_attempted = True
+                    try:
+                        raw = compute()
+                        vector = to_vector(raw)
+                    except Exception:
+                        if record_error is not None:
+                            record_error((time.monotonic() - t0) * 1000)
+                        raise
+                    if record_success is not None:
+                        record_success((time.monotonic() - t0) * 1000)
             except Exception as exc:
                 # 失败：不入缓存、记录错误出站（P1-A），并解除在途让等待者重试。
                 # computed 也计失败——它表示"真实出站次数"，与 provider 对账用；
                 # 只在 computed 里数成功会让"调用数"与真实 RTT 数对不上。
                 elapsed_ms = (time.monotonic() - t0) * 1000
                 stats.duration_ms += elapsed_ms
-                self._bump_field(stats, "computed")
+                if provider_attempted:
+                    self._bump_field(stats, "computed")
                 try:
-                    self._emit_call(kind, elapsed_ms, status="error")
+                    if provider_attempted:
+                        self._emit_call(kind, elapsed_ms, status="error")
                 finally:
                     with _EMBED_LOCKS_GUARD:
                         if _EMBED_INFLIGHT.get(key) is stats:
                             _EMBED_INFLIGHT.pop(key, None)
                     _flush_owned_scope()
-                if record_error is not None:
-                    record_error(elapsed_ms)
                 raise exc
             elapsed_ms = (time.monotonic() - t0) * 1000
             with _EMBED_LOCKS_GUARD:
@@ -746,38 +762,56 @@ class _TrackedEmbedding(Embeddings):
             self._bump_field(stats, "computed")
             self._emit_call(kind, elapsed_ms)
             self._store_process_cache(key, vector)
-            # 成功用量行只在"请求成功 + 向量有效"后落一次
-            if record_success is not None:
-                record_success(elapsed_ms)
             _flush_owned_scope()
             return raw, False
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """批量向量化，真实云端调用经过统一预占与结算。"""
+        self._refresh_if_changed()
+        if not texts:
+            return []
+        return self._embed_documents(texts)
+
+    def _embed_documents(self, texts: List[str]) -> List[List[float]]:
         """批量向量化（索引主路径）。
 
         R1-A 只对检索期的 query 向量做请求级复用：embed_documents 是离线/
-        索引路径，一次调用的入参天然去重（chunker 已按 chunk 聚合），且批量
-        语义由 inner 客户端按 provider 上限二次切分——在此改动批内去重会
-        改变批边界与索引吞吐。此处只做计数与出站观测，行为与改动前一致。
+        索引路径，一次调用的入参天然去重。云端按 inner 客户端真实 chunk_size
+        显式拆批，每个 Provider 子批次分别预占并结算，避免内层自动拆批少记调用。
         """
-        t0 = time.monotonic()
-        try:
-            self._refresh_if_changed()
-            result = self._inner.embed_documents(texts)
-            # DashScope Cloud 模式可能返回 usage；本地模型没有
-            total_tokens = self._estimate_tokens(texts)
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            self._record(total_tokens, len(texts), elapsed_ms)
-            self._emit_call("documents", elapsed_ms)
-            self._account_documents(len(texts), elapsed_ms)
-            return result
-        except Exception:
-            elapsed_ms = (time.monotonic() - t0) * 1000
-            # P1-A：失败同样必须留用量行（token 记 0，不虚构消费）
-            self._record(None, len(texts), elapsed_ms, status="error")
-            self._emit_call("documents", elapsed_ms, status="error")
-            self._account_documents(len(texts), elapsed_ms)
-            raise
+        if self._provider == "cloud":
+            # 当前云端客户端是 OpenAIEmbeddings；chunk_size 是它实际使用的
+            # HTTP 请求批大小。未知客户端退化为单条，确保每次 scope 至多
+            # 包含一个输入，不把未声明的内部拆批算成一次预算调用。
+            try:
+                provider_batch_size = max(1, int(getattr(self._inner, "chunk_size", 1)))
+            except (TypeError, ValueError):
+                provider_batch_size = 1
+        else:
+            provider_batch_size = max(1, len(texts))
+
+        result: list[list[float]] = []
+        for start in range(0, len(texts), provider_batch_size):
+            batch = texts[start:start + provider_batch_size]
+            t0 = time.monotonic()
+            with self._model_call_scope():
+                try:
+                    batch_result = self._inner.embed_documents(batch)
+                except Exception:
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    # 失败可能已由供应商处理；不虚构 token，转待对账。
+                    self._record(None, len(batch), elapsed_ms, status="error")
+                    self._emit_call("documents", elapsed_ms, status="error")
+                    self._account_documents(len(batch), elapsed_ms)
+                    raise
+
+                elapsed_ms = (time.monotonic() - t0) * 1000
+                total_tokens = self._estimate_tokens(batch)
+                self._record(total_tokens, len(batch), elapsed_ms)
+                self._emit_call("documents", elapsed_ms)
+                self._account_documents(len(batch), elapsed_ms)
+                result.extend(batch_result)
+        return result
 
     def _account_documents(self, count: int, elapsed_ms: float) -> None:
         """把一次批量出站计入请求总账（成功/失败都计，出站次数口径）。"""
@@ -792,7 +826,6 @@ class _TrackedEmbedding(Embeddings):
         """单条查询向量化（检索主路径；R1-A 去重 + 单飞 + 双层缓存）。"""
         self._refresh_if_changed()
         key = _request_cache_key(text, self._identity())
-        t0 = time.monotonic()
 
         def _compute() -> Any:
             return self._inner.embed_query(text)
@@ -840,19 +873,21 @@ class _TrackedEmbedding(Embeddings):
         return max(1, total_chars // 3)
 
     def _record(self, total_tokens, doc_count, duration_ms, status="success"):
-        """写入 SQLite（LLMUsageStore）。软失败不影响主流程。
+        """写入统一用量账本，并使用同一计费结果结算预算。
 
         2026-09-22 起成本与 token 计量连通：云端调用按 `model_price` 实价
         计费（供应商页登记即生效），enforce=False 时缺价自动回落旧估算，
         绝不因计费故障丢用量行。
         """
+        billing = None
         try:
-            from backend.observability.llm_usage_store import get_llm_usage_store
-            from backend.observability.llm_usage_store import current_usage_attribution
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+                get_llm_usage_store,
+            )
             # Billing V2（2026-10-07 收口）：唯一计费入口，行金额恒 CNY 记账；
             # 原生成本/币种/汇率/价格版本随行走 V2 列（cost_usd 只在原生 USD
             # 时有值，杜绝 CNY 值写进 USD 列再被看板二次换汇）。
-            billing = None
             if self._provider == "cloud" and (total_tokens or 0) > 0:
                 try:
                     from backend.infra.llm.pricing import (
@@ -865,6 +900,7 @@ class _TrackedEmbedding(Embeddings):
                         "embedding",
                         NormalizedUsage(input_tokens=total_tokens or 0),
                         enforce=False,
+                        usage_source="estimated",
                     )
                 except Exception as e:
                     from backend.shared.logger import logger as _logger
@@ -918,6 +954,22 @@ class _TrackedEmbedding(Embeddings):
             get_llm_usage_store().record(event)
         except Exception:
             pass  # 软失败
+        finally:
+            if self._provider == "cloud":
+                from backend.infra.llm.budget import record_model_usage
+
+                priced = billing is not None and billing.cost_status in {
+                    "exact", "estimated",
+                }
+                record_model_usage(
+                    prompt_tokens=total_tokens,
+                    total_tokens=total_tokens,
+                    cost=billing.billed_cost_cny if priced else None,
+                    review_reason=(
+                        "" if status == "success" and priced
+                        else "embedding_usage_or_price_unavailable"
+                    ),
+                )
 
 
 # =====================================================

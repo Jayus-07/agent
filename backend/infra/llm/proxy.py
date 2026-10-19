@@ -17,8 +17,9 @@ import contextvars as _contextvars
 import inspect
 import threading
 import time
-
-from typing import TYPE_CHECKING, Any
+import uuid
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, Callable, Iterator
 
 # BaseChatModel 仅作类型标注（TYPE_CHECKING 化）—— langchain_core 1.4.x 的
 # chat_models 在装了 transformers 的环境下连带导入 torch（实测 ~8s）。
@@ -74,9 +75,111 @@ def set_current_user_id(user_id: str | None) -> None:
     _user_id_var.set(user_id)
 
 
+@contextmanager
+def scoped_current_user_id(user_id: str | None) -> Iterator[None]:
+    """在短期后台作用域绑定限流用户，并在退出时恢复原值。"""
+    token = _user_id_var.set(user_id or None)
+    try:
+        yield
+    finally:
+        _user_id_var.reset(token)
+
+
 def _thread_local_user_id() -> str | None:
     """读取当前请求的 user_id（限流用）。"""
     return _user_id_var.get()
+
+
+_role_cancellation_event: _contextvars.ContextVar[Any] = _contextvars.ContextVar(
+    "llm_role_cancellation_event", default=None,
+)
+_call_diagnostic_observer: _contextvars.ContextVar[Callable | None] = (
+    _contextvars.ContextVar("llm_call_diagnostic_observer", default=None)
+)
+_role_fallback_generation_kwargs: _contextvars.ContextVar[dict[str, Any] | None] = (
+    _contextvars.ContextVar("llm_role_fallback_generation_kwargs", default=None)
+)
+
+
+def run_with_role_cancellation(
+    event: Any,
+    function: Callable[..., Any],
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """在调用上下文中绑定可由等待方触发的角色取消信号。"""
+    token = _role_cancellation_event.set(event)
+    try:
+        return function(*args, **kwargs)
+    finally:
+        _role_cancellation_event.reset(token)
+
+
+@contextmanager
+def scoped_call_diagnostics(observer: Callable[[str, dict[str, Any]], None]):
+    """为单次调用绑定轻量诊断回调，不改变 Proxy 的治理与结算路径。"""
+    token = _call_diagnostic_observer.set(observer)
+    try:
+        yield
+    finally:
+        _call_diagnostic_observer.reset(token)
+
+
+def _notify_call_diagnostic(stage: str, **values: Any) -> None:
+    observer = _call_diagnostic_observer.get()
+    if observer is None:
+        return
+    try:
+        observer(stage, values)
+    except Exception:  # noqa: BLE001 — 诊断回调不得影响模型调用
+        logger.debug("[LLM:proxy] 调用诊断回调失败", exc_info=True)
+
+
+def _role_call_cancelled(role: str) -> bool:
+    if role != "multi_query":
+        return False
+    event = _role_cancellation_event.get()
+    return bool(event is not None and event.is_set())
+
+
+class _RoleCallCancelled(TimeoutError):
+    """区分 Provider 超时和 Provider 尚未启动前的逻辑取消。"""
+
+
+def _raise_if_role_call_cancelled(role: str) -> None:
+    if _role_call_cancelled(role):
+        raise _RoleCallCancelled("multi_query role deadline expired")
+
+
+def _bind_role_fallback_generation_kwargs(fallback):
+    """让 fallback 继承角色入口设置的生成约束。"""
+    generation_kwargs = _role_fallback_generation_kwargs.get()
+    if generation_kwargs:
+        return fallback.bind(**generation_kwargs)
+    return fallback
+
+
+def _wait_for_role_retry(role: str, delay: float) -> None:
+    event = _role_cancellation_event.get() if role == "multi_query" else None
+    if event is not None:
+        if event.wait(delay):
+            _raise_if_role_call_cancelled(role)
+        return
+    time.sleep(delay)
+
+
+async def _await_role_retry(role: str, delay: float) -> None:
+    event = _role_cancellation_event.get() if role == "multi_query" else None
+    if event is None:
+        await asyncio.sleep(delay)
+        return
+    deadline = time.monotonic() + delay
+    while not event.is_set():
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(remaining, 0.05))
+    _raise_if_role_call_cancelled(role)
 
 
 # 按请求模型覆盖：RequestContext.model → bind() 时设置（空 = 用全局模型）。
@@ -390,8 +493,11 @@ def _get_fallback_llm() -> BaseChatModel | None:
             try:
                 logger.info(f"[LLM:resilience] 初始化备用模型: {fallback_model}")
                 _fallback_llm = _build_llm_for(fallback_model)
-            except Exception as e:
-                logger.warning(f"[LLM:resilience] 备用模型初始化失败: {e}")
+            except Exception as exc:
+                logger.warning(
+                    "[LLM:resilience] 备用模型初始化失败: %s",
+                    type(exc).__name__,
+                )
                 return None
     return _fallback_llm
 
@@ -499,7 +605,10 @@ def _handle_terminal_failure(
     rate_limited/timeout/provider_error），随告警/降级话术/异常透传——
     模型错误不得被下游包装成 RAG / SQL / Travel 等业务失败。
     """
-    reason = f"{type(err).__name__}: {str(err)[:120]}"
+    reason = (
+        type(err).__name__ if role == "multi_query"
+        else f"{type(err).__name__}: {str(err)[:120]}"
+    )
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
@@ -511,10 +620,15 @@ def _handle_terminal_failure(
         "reason": reason, "error_type": error_type,
         "provider": provider, "model": active_model,
     }
+    # MultiQuery 默认 failure_policy=skip：检索调用方会退回原始 query，不能
+    # 再发起备用模型请求或把拒答话术误当成改写结果。
+    skip_fallback = _role_skips_fallback(role)
+
     # 1) 备用模型
-    fb = _get_fallback_llm()
+    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
+    if not skip_fallback:
+        _raise_if_role_call_cancelled(role)
     if fb is not None:
-        fallback_model = _configured_fallback_model()
         from backend.infra.circuit_breaker import CircuitBreakerOpenError
         from backend.infra.llm.budget import (
             RequestBudgetExceeded,
@@ -538,6 +652,7 @@ def _handle_terminal_failure(
                 exc.provider_attempted = True
             raise
         try:
+            _raise_if_role_call_cancelled(role)
             # P1 模型归属：fallback 接管期间上下文改挂备用模型，
             # 其产出的用量按真实接管者结算（外层 _record_tokens 消费）
             _prev_ctx = get_current_resolved_model()
@@ -548,7 +663,9 @@ def _handle_terminal_failure(
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
             ))
-            result = fb.invoke(*args, **kwargs)
+            _raise_if_role_call_cancelled(role)
+            result = _bind_role_fallback_generation_kwargs(fb).invoke(
+                *args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
                 from backend.observability.metrics import llm_fallback_total
@@ -560,15 +677,23 @@ def _handle_terminal_failure(
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
+        except _RoleCallCancelled:
+            release_model_reservation()
+            raise
         except Exception as e:
             if _is_transient(e):
                 review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
-            logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            fallback_error = type(e).__name__ if role == "multi_query" else e
+            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
             _record_failed_attempt(fallback_model, e, decision="fallback")
     # 2) 降级话术（可关 — 某些调用方需要真实异常驱动自己的降级逻辑）
-    if LLM_ALLOW_DEGRADED_ANSWER:
+    if (
+        LLM_ALLOW_DEGRADED_ANSWER
+        and not skip_fallback
+        and role != "multi_query"
+    ):
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -591,7 +716,10 @@ async def _ahandle_terminal_failure(
     role: str = "main",
 ):
     """async 版兜底：备用模型 → 降级话术 → 模型错误（分类同同步版）。"""
-    reason = f"{type(err).__name__}: {str(err)[:120]}"
+    reason = (
+        type(err).__name__ if role == "multi_query"
+        else f"{type(err).__name__}: {str(err)[:120]}"
+    )
     from backend.infra.llm.error_taxonomy import ModelProviderError, classify_model_error
 
     error_type = classify_model_error(err)
@@ -603,9 +731,11 @@ async def _ahandle_terminal_failure(
         "reason": reason, "error_type": error_type,
         "provider": provider, "model": active_model,
     }
-    fb = _get_fallback_llm()
+    skip_fallback = _role_skips_fallback(role)
+    fallback_model, fb = ("", None) if skip_fallback else _get_role_fallback_llm(role)
+    if not skip_fallback:
+        _raise_if_role_call_cancelled(role)
     if fb is not None:
-        fallback_model = _configured_fallback_model()
         from backend.infra.llm.budget import (
             release_model_reservation,
             reserve_model_call,
@@ -617,6 +747,7 @@ async def _ahandle_terminal_failure(
         )
         reserve_model_call("fallback", model_name=fallback_model)
         try:
+            _raise_if_role_call_cancelled(role)
             # P1 模型归属：fallback 接管期间上下文改挂备用模型（async 对称）
             _prev_ctx = get_current_resolved_model()
             set_current_resolved_model(ResolvedModelContext(
@@ -626,7 +757,9 @@ async def _ahandle_terminal_failure(
                 trace_id=(_prev_ctx.trace_id if _prev_ctx else ""),
                 **model_identity_extras(fallback_model),
             ))
-            result = await fb.ainvoke(*args, **kwargs)
+            fallback = _bind_role_fallback_generation_kwargs(fb)
+            _raise_if_role_call_cancelled(role)
+            result = await fallback.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
                 from backend.observability.metrics import llm_fallback_total
@@ -638,6 +771,9 @@ async def _ahandle_terminal_failure(
             _notify_degradation("LLM_FALLBACK_USED",
                                 {**error_detail, "fallback_model": fallback_model})
             return result
+        except _RoleCallCancelled:
+            release_model_reservation()
+            raise
         except asyncio.CancelledError:
             review_model_reservation("fallback_cancelled_possibly_billed")
             raise
@@ -646,9 +782,14 @@ async def _ahandle_terminal_failure(
                 review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
-            logger.warning(f"[LLM:resilience] 备用模型也失败: {e}")
+            fallback_error = type(e).__name__ if role == "multi_query" else e
+            logger.warning("[LLM:resilience] 备用模型也失败: %s", fallback_error)
             _record_failed_attempt(fallback_model, e, decision="fallback")
-    if LLM_ALLOW_DEGRADED_ANSWER:
+    if (
+        LLM_ALLOW_DEGRADED_ANSWER
+        and not skip_fallback
+        and role != "multi_query"
+    ):
         logger.warning(f"[LLM:resilience] 最终降级为拒答话术 ({reason})")
         _notify_degradation("LLM_DEGRADED_ANSWER", error_detail)
         return _degraded_answer(reason, error_type=error_type,
@@ -669,6 +810,44 @@ def _resilience_call_identity() -> tuple[str, str, str]:
         return model_name, context.role or "main", provider
     model_name = get_active_model_name()
     return model_name, "main", _get_provider_for(model_name)
+
+
+def _role_runtime_policy(role: str):
+    """读取由 Proxy 消费的角色运行策略。当前仅接通 MultiQuery P0。"""
+    if role != "multi_query":
+        return None
+    from backend.config import model_roles
+
+    try:
+        policy = model_roles.resolve_runtime_policy(role)
+    except Exception:
+        # 策略解析不可用时使用代码默认，确保 MultiQuery 仍是零重试、skip。
+        return model_roles.runtime_defaults(role)
+    if role == "multi_query" and policy.failure_policy not in {"skip", "fallback"}:
+        logger.warning(
+            "[LLM:proxy] 忽略存量 MultiQuery 非支持 failure_policy，"
+            "回落到代码默认策略"
+        )
+        defaults = model_roles.runtime_defaults(role)
+        return model_roles.RoleRuntimeDefaults(
+            fallback_model=policy.fallback_model,
+            timeout_seconds=policy.timeout_seconds,
+            max_retries=policy.max_retries,
+            failure_policy=defaults.failure_policy,
+        )
+    return policy
+
+
+def _role_max_retries(role: str) -> int:
+    policy = _role_runtime_policy(role)
+    if policy is None:
+        return LLM_MAX_RETRIES
+    return max(0, int(policy.max_retries))
+
+
+def _role_skips_fallback(role: str) -> bool:
+    policy = _role_runtime_policy(role)
+    return bool(policy and policy.failure_policy != "fallback")
 
 
 def _breaker_for_resolved_model(model_name: str, role: str, provider: str):
@@ -696,8 +875,15 @@ def _call_with_resilience(attr, *args, **kwargs):
 
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
+    _notify_call_diagnostic(
+        "call_identity", model=model_name, role=role, provider=provider,
+    )
     breaker = _breaker_for_resolved_model(model_name, role, provider)
-    for attempt in range(LLM_MAX_RETRIES + 1):
+    max_retries = _role_max_retries(role)
+    for attempt in range(max_retries + 1):
+        _raise_if_role_call_cancelled(role)
+        call_id = uuid.uuid4().hex
+        reserve_started = time.monotonic()
         try:
             reserve_model_call(
                 "primary" if attempt == 0 else "retry",
@@ -709,38 +895,99 @@ def _call_with_resilience(attr, *args, **kwargs):
             if attempt > 0:
                 exc.provider_attempted = True
             raise
+        finally:
+            from backend.infra.llm.budget import current_reservation_id
+
+            _notify_call_diagnostic(
+                "budget_reserve_ms",
+                duration_ms=(time.monotonic() - reserve_started) * 1000,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
+        if _role_call_cancelled(role):
+            release_model_reservation()
+            _raise_if_role_call_cancelled(role)
+        provider_started = time.monotonic()
+        from backend.infra.llm.budget import current_reservation_id
+
+        _notify_call_diagnostic(
+            "provider_call_started",
+            call_id=call_id,
+            reservation_id=current_reservation_id(),
+            attempt=attempt,
+        )
         try:
-            return breaker.call(attr, *args, **kwargs)
+            result = breaker.call(attr, *args, **kwargs)
+            _notify_call_diagnostic(
+                "provider_completed",
+                duration_ms=(time.monotonic() - provider_started) * 1000,
+                call_id=call_id,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
+            return result
         except CircuitBreakerOpenError as e:
+            _notify_call_diagnostic(
+                "provider_not_sent",
+                call_id=call_id,
+                error_type=type(e).__name__,
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return _handle_terminal_failure(
                 e, args, kwargs, model_name=model_name, role=role,
             )
         except Exception as e:
+            from backend.infra.llm.budget import current_reservation_id
+
+            reservation_id = current_reservation_id()
+            _notify_call_diagnostic(
+                "provider_error",
+                duration_ms=(time.monotonic() - provider_started) * 1000,
+                call_id=call_id,
+                error_type=type(e).__name__,
+                timeout=isinstance(e, TimeoutError)
+                or "timeout" in type(e).__name__.lower(),
+                reservation_id=current_reservation_id(),
+                attempt=attempt,
+            )
             # 瞬时类失败可能已计费，进入待对账；确定未计费的失败释放预占。
             if _is_transient(e):
                 review_model_reservation("call_failed_possibly_billed")
+                settlement_status = "needs_review"
             else:
                 release_model_reservation()
+                settlement_status = "released"
             _record_failed_attempt(
                 model_name, e,
                 decision="primary" if attempt == 0 else "retry",
             )
+            _notify_call_diagnostic(
+                "usage_unavailable",
+                reservation_id=reservation_id,
+                settlement_status=settlement_status,
+            )
             last_err = e
             if _is_context_length_provider_error(e):
                 raise _context_length_error() from e
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             if not _is_transient(e):
                 break
-            if attempt >= LLM_MAX_RETRIES:
+            if attempt >= max_retries:
                 break
             delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
             logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{LLM_MAX_RETRIES} "
+                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
-            time.sleep(delay)
+            _wait_for_role_retry(role, delay)
+    _raise_if_role_call_cancelled(role)
     return _handle_terminal_failure(
         last_err, args, kwargs, model_name=model_name, role=role,
     )
@@ -758,11 +1005,16 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     last_err: BaseException | None = None
     model_name, role, provider = _resilience_call_identity()
     breaker = _breaker_for_resolved_model(model_name, role, provider)
-    for attempt in range(LLM_MAX_RETRIES + 1):
+    max_retries = _role_max_retries(role)
+    for attempt in range(max_retries + 1):
+        _raise_if_role_call_cancelled(role)
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
         )
+        if _role_call_cancelled(role):
+            release_model_reservation()
+            _raise_if_role_call_cancelled(role)
         try:
             return await breaker.acall(attr, *args, **kwargs)
         except asyncio.CancelledError:
@@ -771,6 +1023,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
         except CircuitBreakerOpenError as e:
             release_model_reservation()
             logger.warning(f"[LLM:resilience] 熔断开路: {e}")
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             _notify_degradation("LLM_CIRCUIT_OPEN", {"retry_in": round(e.retry_in, 1)})
             return await _ahandle_terminal_failure(
                 e, args, kwargs, model_name=model_name, role=role,
@@ -787,16 +1041,19 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             last_err = e
             if _is_context_length_provider_error(e):
                 raise _context_length_error() from e
+            if _role_call_cancelled(role):
+                _raise_if_role_call_cancelled(role)
             if not _is_transient(e):
                 break
-            if attempt >= LLM_MAX_RETRIES:
+            if attempt >= max_retries:
                 break
             delay = LLM_RETRY_BACKOFF_BASE ** (attempt + 1)
             logger.warning(
-                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{LLM_MAX_RETRIES} "
+                f"[LLM:resilience] 瞬时错误重试 {attempt + 1}/{max_retries} "
                 f"({type(e).__name__}, {delay:.1f}s 后重试)"
             )
-            await asyncio.sleep(delay)
+            await _await_role_retry(role, delay)
+    _raise_if_role_call_cancelled(role)
     return await _ahandle_terminal_failure(
         last_err, args, kwargs, model_name=model_name, role=role,
     )
@@ -875,6 +1132,23 @@ def _configured_fallback_model() -> str:
             "[LLM:proxy] 读取 fallback 模型角色失败，回落旧常量", exc_info=True
         )
     return LLM_FALLBACK_MODEL
+
+
+def _get_role_fallback_llm(role: str) -> tuple[str, Any | None]:
+    """优先使用角色策略指定的备用模型，否则继承全局 fallback 角色。"""
+    policy = _role_runtime_policy(role)
+    role_model = str(getattr(policy, "fallback_model", "") or "").strip()
+    if role_model:
+        try:
+            return role_model, _get_override_llm(role_model)
+        except Exception as exc:
+            logger.warning(
+                "[LLM:resilience] 角色备用模型初始化失败 (%s)",
+                type(exc).__name__,
+            )
+            return role_model, None
+    model_name = _configured_fallback_model()
+    return model_name, _get_fallback_llm()
 
 
 def _resolve_active_llm() -> BaseChatModel:
@@ -1120,6 +1394,7 @@ def _record_failed_attempt(
     decision 由韧性链标注（primary/retry/fallback）。
     绝不抛错（usage 软失败原则，与 _record_tokens 一致）。
     """
+    ledger_written = False
     try:
         canonical = canonical_model_id(model_name) or model_name
         provider = _get_provider_for(canonical)
@@ -1133,7 +1408,7 @@ def _record_failed_attempt(
                 get_llm_usage_store,
             )
             attribution = current_usage_attribution()
-            get_llm_usage_store().record({
+            ledger_written = bool(get_llm_usage_store().record({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                              + f".{int(time.time() % 1 * 1000):03d}Z",
                 "trace_id": attribution["trace_id"],
@@ -1169,9 +1444,12 @@ def _record_failed_attempt(
                 "step_id": attribution["step_id"],
                 "role": attribution["role"],
                 "stage": attribution["stage"],
-            })
+            }))
         except Exception:
             pass
+        _notify_call_diagnostic(
+            "usage_ledger_write_finished", written=ledger_written,
+        )
         try:
             from backend.observability.metrics import (
                 llm_failures_total,
@@ -1231,12 +1509,23 @@ def _record_tokens(
         if not t:
             _last_tokens_var.set({})
             _last_call_meta_var.set({})
+            from backend.infra.llm.budget import current_reservation_id
+
+            reservation_id = current_reservation_id()
             try:
                 from backend.infra.llm.budget import record_model_usage
 
-                record_model_usage(total_tokens=0, cost=0)
+                settlement_status = record_model_usage(
+                    total_tokens=0,
+                    review_reason="provider_usage_missing",
+                )
             except Exception:
-                pass
+                settlement_status = "accounting_error"
+            _notify_call_diagnostic(
+                "usage_unavailable",
+                reservation_id=reservation_id,
+                settlement_status=settlement_status,
+            )
             return
 
         # 细粒度用量：缓存命中 / 推理 token。
@@ -1312,6 +1601,7 @@ def _record_tokens(
             )
         from backend.infra.llm.budget import current_request_budget
         from backend.infra.llm.pricing import (
+            PRICING_SOURCE_UNPRICED,
             USAGE_SOURCE_PROVIDER,
             NormalizedUsage,
             price_usage,
@@ -1367,15 +1657,23 @@ def _record_tokens(
         try:
             from backend.infra.llm.budget import record_model_usage
 
-            record_model_usage(
+            settlement_status = record_model_usage(
                 prompt_tokens=p,
                 completion_tokens=c,
                 total_tokens=t,
-                cost=cost_decimal,
+                cost=(
+                    None if billing.pricing_source == PRICING_SOURCE_UNPRICED
+                    else cost_decimal
+                ),
+                review_reason=(
+                    "billing_price_unavailable"
+                    if billing.pricing_source == PRICING_SOURCE_UNPRICED
+                    else ""
+                ),
             )
         except Exception:
             # 预算记录是观测/门禁辅助，不能反向破坏模型主链路。
-            pass
+            settlement_status = "accounting_error"
         _last_call_meta_var.set({
             "prompt_tokens": p,
             "completion_tokens": c,
@@ -1401,6 +1699,7 @@ def _record_tokens(
             "output_unit_price": cost_breakdown["output_unit_price"],
             "cache_input_unit_price": cost_breakdown["cache_input_unit_price"],
             "cost_status": cost_status,
+            "settlement_status": settlement_status,
             "currency": currency,
             "model": model,
             "canonical_model_id": model,
@@ -1416,6 +1715,7 @@ def _record_tokens(
                                provider=provider_resolved)
 
         # Token 看板明细落库（每调用一行，软失败不影响主链路）
+        usage_ledger_written = False
         try:
             from backend.observability.llm_usage_store import (
                 current_usage_attribution,
@@ -1423,7 +1723,7 @@ def _record_tokens(
             )
             from backend.infra.llm.budget import current_call_decision
             attribution = current_usage_attribution()
-            get_llm_usage_store().record({
+            usage_ledger_written = bool(get_llm_usage_store().record({
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
                              + f".{int(time.time() % 1 * 1000):03d}Z",
                 "trace_id": attribution["trace_id"],
@@ -1493,7 +1793,7 @@ def _record_tokens(
                 "step_id": attribution["step_id"],
                 "role": attribution["role"],
                 "stage": attribution["stage"],
-            })
+            }))
             # C15：调用计数（低基数 label：model/provider/status）
             try:
                 from backend.observability.metrics import llm_requests_total
@@ -1504,6 +1804,10 @@ def _record_tokens(
                 pass
         except Exception:
             pass
+        _notify_call_diagnostic(
+            "usage_ledger_write_finished",
+            written=usage_ledger_written,
+        )
     except Exception:
         _last_tokens_var.set({})
         _last_call_meta_var.set({})
@@ -1826,11 +2130,13 @@ class _BoundLLMProxy:
     """
 
     def __init__(self, bound, model_name: str | None = None, role: str = "main",
-                 tools: Any = None):
+                 tools: Any = None,
+                 generation_kwargs: dict[str, Any] | None = None):
         self._bound = bound
         self._model_name = model_name or ""
         self._role = role
         self._tools = tools
+        self._generation_kwargs = dict(generation_kwargs or {})
         self._schema_tokens: int | None = None  # 懒算并缓存（schema 静态）
 
     def _schema_reserved(self) -> int:
@@ -1857,16 +2163,45 @@ class _BoundLLMProxy:
     def invoke(self, *args, **kwargs):
         user_id = kwargs.get("user_id") or _thread_local_user_id()
         _enforce_rate_limit(user_id)
+        _stage_started = time.monotonic()
         self._bind_context()
+        _notify_call_diagnostic(
+            "proxy_model_bind_ms",
+            duration_ms=(time.monotonic() - _stage_started) * 1000,
+        )
+        _stage_started = time.monotonic()
         args = _preflight_context(args, kwargs,
             extra_reserved_tokens=self._schema_reserved(),
             call_method="invoke",
         )
+        _notify_call_diagnostic(
+            "price_preflight_ms",
+            duration_ms=(time.monotonic() - _stage_started) * 1000,
+        )
         _t0 = time.monotonic()
-        result = _call_with_resilience(self._bound.invoke, *args, **kwargs)
+        token = _role_fallback_generation_kwargs.set(
+            self._generation_kwargs or None)
+        try:
+            result = _call_with_resilience(
+                self._bound.invoke, *args, **kwargs)
+        finally:
+            _role_fallback_generation_kwargs.reset(token)
+        from backend.infra.llm.budget import current_reservation_id
+
+        reservation_id = current_reservation_id()
         _record_tokens(
             result, duration_ms=(time.monotonic() - _t0) * 1000,
             model_name=self._model_name or None,
+        )
+        metadata = _last_call_meta_var.get() or {}
+        _notify_call_diagnostic(
+            "usage_accounting_finished",
+            reservation_id=reservation_id,
+            usage_received=bool(_last_tokens_var.get()),
+            cost_status=metadata.get("cost_status", "unknown"),
+            pricing_source=metadata.get("pricing_source", "unknown"),
+            price_version=metadata.get("price_version", ""),
+            settlement_status=metadata.get("settlement_status", "unknown"),
         )
         return _wrap_result(result)
 
@@ -1879,7 +2214,13 @@ class _BoundLLMProxy:
             call_method="ainvoke",
         )
         _t0 = time.monotonic()
-        result = await _acall_with_resilience(self._bound.ainvoke, *args, **kwargs)
+        token = _role_fallback_generation_kwargs.set(
+            self._generation_kwargs or None)
+        try:
+            result = await _acall_with_resilience(
+                self._bound.ainvoke, *args, **kwargs)
+        finally:
+            _role_fallback_generation_kwargs.reset(token)
         _record_tokens(
             result, duration_ms=(time.monotonic() - _t0) * 1000,
             model_name=self._model_name or None,
@@ -1952,6 +2293,7 @@ class _BoundLLMProxy:
             self._bound.bind_tools(*args, **kwargs),
             model_name=self._model_name or None, role=self._role,
             tools=args[0] if args else kwargs.get("tools"),
+            generation_kwargs=self._generation_kwargs,
         )
 
     def __getattr__(self, name: str):
@@ -2033,7 +2375,10 @@ def bind_llm_for_role(
         bind_kwargs["max_tokens"] = max_tokens
     if bind_kwargs:
         bound = bound.bind(**bind_kwargs)
-    return _BoundLLMProxy(bound, model_name=model_name, role=role)
+    return _BoundLLMProxy(
+        bound, model_name=model_name, role=role,
+        generation_kwargs=bind_kwargs,
+    )
 
 
 # =====================================================

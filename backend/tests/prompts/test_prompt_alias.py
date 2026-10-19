@@ -147,9 +147,14 @@ class TestPublishSyncsProductionAlias:
              patch("backend.prompts.service.PROMPT_REGISTRY", {}), \
              patch.object(svc, "_renderer", renderer), \
              patch.object(svc, "_fire_hooks"), \
-             patch("backend.prompts.hot_reload.bump_prompt_epoch", new=AsyncMock()):
+             patch("backend.prompts.hot_reload.stage_prompt_epoch",
+                   new=AsyncMock(return_value=2)) as stage, \
+             patch("backend.prompts.hot_reload.dispatch_prompt_epoch",
+                   new=AsyncMock()) as dispatch:
             result = await svc.publish("test.key", 7, actor="op")
         assert result["active_version"] == 7
         # CON-09：发布走 CAS——期望值=同事务内读到的旧 active_version（mock 里是 6）
         repo.set_active_version.assert_awaited_once_with(1, 7, expected_current_version=6)
         repo.upsert_alias.assert_awaited_once_with(1, "production", 7, updated_by="op")
+        stage.assert_awaited_once_with(ctx.__aenter__.return_value, key="test.key", actor="op")
+        dispatch.assert_awaited_once_with("test.key", "op", 2)

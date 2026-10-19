@@ -8,6 +8,38 @@
 
 ## 约束与错误边界
 
+MultiQuery 改写使用 `multi_query` 角色、temperature=0、3 条查询和至少 1024
+输出 tokens；默认子预算 6000ms，取角色策略与共享 8000ms 检索 deadline
+剩余量的最小值。生产与评测使用同一口径，评测直接调用 retriever 时也绑定
+该 deadline。达到输出上限回退原问题，查询不足标记 `rewrite_truncated`，
+不计为完整改写成功。Trace 记录终止原因、用量、有效上限、耗时、查询数与
+Prompt 模板 Hash/版本/来源；多查询重排诊断只复制候选 ID、文件名和分数，
+不复制候选完整正文或私有 runtime 元数据。缺失或非法分数使评分状态降级。
+
+云端三查询全候选评分使用独立线程池，进程内最多3路并发，共享原检索
+deadline；按原问题优先消费结果，max聚合和阈值保持不变。原问题评分失败
+仍降级透传，不能用变体评分冒充基线成功。每次Provider尝试独立预占和
+结算；排队或预占后时间不足则不外呼，已发出的迟到调用仅结算usage，
+不得修改已返回的文档。此并发策略不用于本地模型及无deadline的旁路调用。
+
+普通混合召回等待沿用同一个共享 deadline；保留已完成路径，取消尚未启动
+任务，全部超时且无证据时明确失败，不再启动降级召回。完整链路评测中
+重排错误会阻断 case 通过，保留原质量指标并记录 `execution_complete=false`；
+启用多查询的完整评测中，改写超时或错误退回原问题也记录未完成并阻断通过；
+正常拒答、未触发改写的简单查询和显式消融实验按原契约处理。
+
+向量过滤的 metadata 字段名仅接受 ASCII 字母/数字/下划线；`$contains`
+按字面子串匹配，转义 SQL LIKE 通配符。多轮 contextualize 的 system/human
+均来自当前治理模板，保留 history 占位符，无效模板回退内置默认。
+
+解析分块缓存使用 v3 JSON，旧 pickle 不加载，失效后按正常流水线重新构建。
+BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒绝加载并走
+既有重建/旧快照降级；SHA256 是损坏检测，不是来源认证。
+
+远端 `/ask` 记录服务接收至 handler 等待、pipeline 获取、服务总耗时；客户端
+按既有子 Trace 关联记录 HTTP 往返与服务外差值。该差值不能单独归因于网络、
+连接池或上游排队；先按实际 Trace 定位，不预设历史 4 秒缺口的根因。
+
 检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。
 
 Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。
@@ -71,6 +103,7 @@ flowchart LR
 ```
 
 - 实现见 `backend/rag/chain.py`、`backend/rag/retrieval/query_router.py`、`hybrid.py`、`enhanced_hybrid_retrieval.py`、`backend/rag/evidence_gate/`；查询分类、RRF、rerank、top_k、阈值必须走已有配置/单一事实源，不在不同端点手写一套。
+- 云端 rerank 的输入保留已授权候选的标题或来源文件名，并在现有 2000 字符上限内附带正文；不发送来源目录，不修改原始文档内容。embedding 与 rerank 的实际云端调用复用统一预算及预占账本，缓存命中不重复预占；估算 embedding token 明确标为 `estimated`。
 - 向量/BM25/文档检索前后的 **tenant、kb_id、department、permission_scope** 过滤都要可证实；缓存键不能缺少授权范围、模型/索引版本而引发跨用户泄漏。检索 trace 应展示 route、候选数、证据 chunk、引用来源、索引代次和耗时。
 - 结果包括成功、empty、evidence insufficient、Provider failed、degraded 等不同语义；没有可信证据时拒答或标明不确定，不让 LLM 根据用户问题捏造引用。不能把跨文档、表格和精确标识检索都当普通 FAQ。
 

@@ -5,7 +5,7 @@
 索引最终常判定 skipped —— 解析全部白做还烧 token。
 
 本模块以 (mtime_ns, size, sha256, PIPELINE_VERSION) 为指纹把 chunks
-缓存到磁盘（pickle，langchain Document 可序列化），指纹命中直接复用，
+缓存到磁盘（JSON，仅存文本与 metadata），指纹命中直接复用，
 含 doc_type 在内的 chunk metadata 一并保留，LLM 仲裁结果随之复用。
 
 注意：仅 (mtime_ns, size) 不够 —— cp -p / git checkout / rsync -a 会
@@ -13,8 +13,8 @@
 """
 from __future__ import annotations
 
+import json
 import os
-import pickle
 import tempfile
 from pathlib import Path
 from typing import List, Optional
@@ -25,7 +25,7 @@ from backend.config.database import RAG_DATA_DIR
 from backend.shared.logger import logger
 
 # 流水线行为版本：解析器/清洗/分类/分块策略有语义变化时 +1，旧缓存整体失效
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 3
 
 _CACHE_DIR = Path(RAG_DATA_DIR) / "chunk_cache"
 
@@ -67,7 +67,7 @@ def _cache_path(file_path: str) -> Path:
     """缓存文件路径：绝对路径 sha1 + PIPELINE_VERSION 命名，避开路径非法字符。"""
     import hashlib
     digest = hashlib.sha1(os.path.abspath(file_path).encode("utf-8")).hexdigest()
-    return _CACHE_DIR / f"v{PIPELINE_VERSION}_{digest}.pkl"
+    return _CACHE_DIR / f"v{PIPELINE_VERSION}_{digest}.json"
 
 
 def load_cached_chunks(file_path: str) -> Optional[List[Document]]:
@@ -79,14 +79,18 @@ def load_cached_chunks(file_path: str) -> Optional[List[Document]]:
     if not path.exists():
         return None
     try:
-        with open(path, "rb") as f:
-            payload = pickle.load(f)
-        if payload.get("fingerprint") != fp or payload.get("version") != PIPELINE_VERSION:
+        with open(path, encoding="utf-8") as f:
+            payload = json.load(f)
+        if payload.get("fingerprint") != list(fp) or payload.get("version") != PIPELINE_VERSION:
             return None
         chunks = payload.get("chunks")
         if not isinstance(chunks, list):
             return None
-        return chunks
+        if any(not isinstance(row, dict) or not isinstance(row.get("page_content"), str)
+               or not isinstance(row.get("metadata"), dict) for row in chunks):
+            return None
+        return [Document(page_content=row["page_content"], metadata=row["metadata"],
+                         id=row.get("id")) for row in chunks]
     except Exception:
         # 损坏/不兼容的缓存：删除后按 miss 处理
         try:
@@ -105,12 +109,11 @@ def save_cached_chunks(file_path: str, chunks: List[Document]) -> None:
         _CACHE_DIR.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(dir=_CACHE_DIR, suffix=".tmp")
         try:
-            with os.fdopen(fd, "wb") as f:
-                pickle.dump(
-                    {"version": PIPELINE_VERSION, "fingerprint": fp, "chunks": chunks},
-                    f,
-                    protocol=pickle.HIGHEST_PROTOCOL,
-                )
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump({"version": PIPELINE_VERSION, "fingerprint": fp,
+                           "chunks": [{"page_content": d.page_content,
+                                       "metadata": d.metadata, "id": d.id}
+                                      for d in chunks]}, f, ensure_ascii=False)
             os.replace(tmp_name, _cache_path(file_path))
         finally:
             if os.path.exists(tmp_name):
@@ -125,7 +128,7 @@ def clear_cache() -> int:
     if not _CACHE_DIR.exists():
         return 0
     n = 0
-    for p in _CACHE_DIR.glob("*.pkl"):
+    for p in list(_CACHE_DIR.glob("*.json")) + list(_CACHE_DIR.glob("*.pkl")):
         try:
             p.unlink()
             n += 1

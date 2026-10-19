@@ -696,10 +696,10 @@ class BM25Store:
             f.write(digest)
 
     def _safe_load_pickle(self, data_path: Path) -> Any | None:
-        """安全反序列化 pickle 文件：先校验 SHA256 签名再 unpickle。
+        """读取受信任本地索引；缺少或不匹配的 SHA256 均按损坏处理。
 
-        防止缓存目录被篡改时的任意代码执行。
-        校验失败返回 None，调用方需处理重建逻辑。
+        SHA256 仅检测文件损坏，不是来源认证；pickle 缓存目录必须仅允许
+        服务账号写入，不能加载不可信上传或宣称可以防御目录任意写攻击。
         """
         import hashlib
         chk_path = self._checksum_path(data_path)
@@ -708,7 +708,10 @@ class BM25Store:
         with open(data_path, "rb") as f:
             data = f.read()
 
-        # 校验 SHA256（校验文件不存在时容忍，兼容旧索引）
+        if not chk_path.is_file():
+            logger.warning("[BM25Store] 缺少 SHA256 校验，拒绝加载: %s", data_path.name)
+            return None
+        # 先校验损坏，再反序列化；旧索引缺校验时沿用重建路径。
         if chk_path.exists():
             with open(chk_path, "r", encoding="utf-8") as f:
                 expected = f.read().strip()

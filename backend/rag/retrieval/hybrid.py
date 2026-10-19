@@ -1,6 +1,10 @@
 import json
 import threading
 
+from backend.rag.retrieval_budget import (
+    RetrievalDeadlineExceeded, await_retrieval, current_budget,
+)
+
 from backend.shared.logger import logger
 
 def _record_request_retrieval_counts(
@@ -119,8 +123,18 @@ COMPLEX_WEAK_PATTERNS = [
     "以及", "同时", "另外", "还有", "并且",
     "怎么", "如何", "流程", "步骤", "方法", "原因", "为什么",
 ]
-# 兼容别名（旧消费方 = multi_query 兜底检测）：强 ∪ 弱
-COMPLEX_PATTERNS = COMPLEX_STRONG_PATTERNS + COMPLEX_WEAK_PATTERNS
+# 多来源/多部门协作（2026-10-18）：这类问题的证据天然分散在多份文档，
+# 单文档检索即使相关也只能覆盖部分事实（如"供应商准入"在供应商规范、
+# "AQL/CE/FCC"在质检 SOP）。属于**结构性**多跳信号，命中即升 MQ。
+# 只收明确的"跨来源"问法，不收"需要哪些材料"这类单文档事实问句。
+MULTI_SOURCE_STRONG_PATTERNS = (
+    "哪些部门", "哪些环节", "哪些岗位", "哪些角色",
+    "涉及哪些", "由哪些", "分别由", "跨部门", "部门协作", "多方协作",
+)
+# 兼容别名（旧消费方 = multi_query 兜底检测）：强 ∪ 弱 ∪ 多来源
+COMPLEX_PATTERNS = (
+    COMPLEX_STRONG_PATTERNS + COMPLEX_WEAK_PATTERNS + list(MULTI_SOURCE_STRONG_PATTERNS)
+)
 
 # 多意图连接词（长 query + 连接词 = §21 强信号「长 query + 多意图」）
 _MULTI_INTENT_CONNECTIVES = ("以及", "同时", "另外", "还有", "并且", "分别")
@@ -267,12 +281,13 @@ def _classify_query_tier(query: str) -> str:
     #   弱信号叠加的判别：必须跨子句或问句足够长——「报销流程怎么走？」
     #   这类单子句短问里 流程+怎么 天然共现，仍算单一意图（任务书 §21 原例）。
     strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
+    multi_source_hits = [p for p in MULTI_SOURCE_STRONG_PATTERNS if p in q]
     weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
     # R1-B（P1-D 修正后）：简单事实豁免只作用于**弱信号叠加**分支，与基线
     # d1b9668 的 tier 语义保持一致（短问/Tier-2 标识符/弱信号单命中的既有
     # 行为不变）。强信号恒为 MQ：is_simple_fact_query 在强信号命中时必然
     # 返回空串，因此不会降级真正的多意图问句。
-    if strong_hits:
+    if strong_hits or multi_source_hits:
         return "hybrid_multi_query"
     if len(weak_hits) >= 2 and (len(sentence_parts) >= 2 or len(q) > 16):
         if is_simple_fact_query(q, sentence_parts=sentence_parts):
@@ -425,11 +440,17 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             
             return docs
             
+        except RetrievalDeadlineExceeded:
+            raise
         except ImportError as e:
             logger.warning(f"[hybrid_retrieve] Enhanced retrieval import failed ({e}), fallback to original")
         except Exception as e:
             logger.warning(f"[hybrid_retrieve] Enhanced retrieval error ({e}), falling back to original")
     
+    budget = current_budget()
+    if budget is not None and budget.expired():
+        raise RetrievalDeadlineExceeded("原始召回启动前共享预算耗尽")
+
     # Fallback: 原始 hybrid 逻辑
     from backend.observability.tracer import SpanName, trace_collector
     span = trace_collector.start_span("hybrid_retrieval", name=SpanName.HYBRID_RETRIEVAL, parent_id=None)
@@ -449,10 +470,10 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         from backend.infra.thread_pools import submit_rag_task
         failures: dict[str, BaseException] = {}
         try:
-            vector_docs = submit_rag_task(
+            vector_docs = await_retrieval(submit_rag_task(
                 "inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
                 metadata_filter=metadata_filter, expanded_queries=expanded_queries,
-            ).result()
+            ))
         except Exception as e:
             # embedding 模型与索引不一致 → 禁止降级 BM25（新向量查旧索引是噪声）
             from backend.rag.vectorstore.pgvector_store import (
@@ -480,7 +501,12 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
                 bm25_docs = []
             else:
                 try:
-                    bm25_docs = bm25_retriever.invoke(query)
+                    budget = current_budget()
+                    if budget is not None and budget.expired():
+                        raise RetrievalDeadlineExceeded("向量召回后共享预算耗尽")
+                    bm25_docs = await_retrieval(submit_rag_task(
+                        "inner", bm25_retriever.invoke, query,
+                    ))
                     # P0：同主融合路，BM25 兜底也过滤独立 parent 命中
                     from backend.config.rag import RAG_FILTER_PARENT_RECALL
                     if RAG_FILTER_PARENT_RECALL:
@@ -580,7 +606,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures_zero_bm25 = False
         bf = submit_rag_task("inner", bm25_retriever.invoke, query)
     try:
-        vector_docs = vf.result()
+        vector_docs = await_retrieval(vf)
     except Exception as e:
         # 单侧失败 → 降级仅用另一侧（软降级），留痕；两侧都失败才上抛。
         # 例外：索引/运行时 embedding 不一致是门禁信号，必须上抛（2026-09-22）。
@@ -597,7 +623,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["vector"] = e
         vector_docs = []
     try:
-        bm25_docs = bf.result() if bf is not None else []
+        bm25_docs = await_retrieval(bf) if bf is not None else []
     except Exception as e:
         logger.warning(
             f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",

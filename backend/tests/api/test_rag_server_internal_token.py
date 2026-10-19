@@ -63,6 +63,22 @@ def test_correct_token_passes_guard(client):
 
 def test_health_paths_exempt(client):
     assert client.get("/healthz").status_code == 200
+
+
+def test_ask_reports_service_admission_and_pipeline_timing(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setattr("backend.prompts.hot_reload.ensure_prompt_snapshot_fresh_async", AsyncMock())
+    monkeypatch.setattr(m, "_get_pipeline", lambda: SimpleNamespace(
+        ask=lambda *a, **k: "测试答案", last_answer_meta={},
+    ))
+    response = client.post("/ask", json={"question": "测试问题"},
+                           headers={"X-Internal-Token": "sekrit"})
+    assert response.status_code == 200
+    assert response.json()["answer"] == "测试答案"
+    for header in ("X-RAG-Service-Ms", "X-RAG-Prehandler-Ms", "X-RAG-Pipeline-Init-Ms"):
+        assert float(response.headers[header]) >= 0
     assert client.get("/readyz").status_code != 401
 
 

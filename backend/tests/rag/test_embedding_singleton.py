@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -133,3 +134,66 @@ def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     assert priced == [("registered-embedding", "embedding")]
     assert recorded[0]["provider"] == "embedding-provider"
     assert recorded[0]["model"] == "registered-embedding"
+
+
+def test_cloud_documents_reserve_and_record_each_provider_subbatch(monkeypatch):
+    """按 inner.chunk_size 的真实出站批次分别预占和结算，并保持输入顺序。"""
+    from backend.rag import embedding_singleton
+
+    events = []
+
+    class FakeEmbedding:
+        chunk_size = 2
+
+        def embed_documents(self, texts):
+            events.append(("call", list(texts)))
+            return [[float(len(text))] for text in texts]
+
+    tracked = embedding_singleton._TrackedEmbedding.__new__(
+        embedding_singleton._TrackedEmbedding,
+    )
+    tracked._inner = FakeEmbedding()
+    tracked._provider = "cloud"
+    tracked._model_name = "registered-embedding"
+    tracked.embed_batch_size = 10
+    monkeypatch.setattr(tracked, "_refresh_if_changed", lambda: None)
+
+    @contextmanager
+    def model_call_scope():
+        events.append(("reserve", tracked._model_name))
+        yield
+        events.append(("scope-exit", tracked._model_name))
+
+    monkeypatch.setattr(tracked, "_model_call_scope", model_call_scope)
+    monkeypatch.setattr(
+        tracked,
+        "_record",
+        lambda tokens, count, _duration, status="success": events.append(
+            ("settle", tokens, count, status)
+        ),
+    )
+    monkeypatch.setattr(
+        tracked,
+        "_emit_call",
+        lambda kind, _duration, status="success": events.append(
+            ("emit", kind, status)
+        ),
+    )
+    monkeypatch.setattr(
+        tracked,
+        "_account_documents",
+        lambda count, _duration: events.append(("account", count)),
+    )
+
+    result = tracked.embed_documents(["a", "bb", "ccc", "dddd", "eeeee"])
+
+    assert result == [[1.0], [2.0], [3.0], [4.0], [5.0]]
+    assert [event[1] for event in events if event[0] == "call"] == [
+        ["a", "bb"], ["ccc", "dddd"], ["eeeee"],
+    ]
+    assert sum(event[0] == "reserve" for event in events) == 3
+    assert [event[1:] for event in events if event[0] == "settle"] == [
+        (1, 2, "success"), (2, 2, "success"), (1, 1, "success"),
+    ]
+    assert sum(event[0] == "scope-exit" for event in events) == 3
+    assert [event[1] for event in events if event[0] == "account"] == [2, 2, 1]

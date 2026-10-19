@@ -19,6 +19,7 @@ class RenderResult:
     key: str
     version: int | None
     source: str  # "db" | "snapshot" | "default"
+    template_hash: str = ""
 
 
 class PromptRenderer:

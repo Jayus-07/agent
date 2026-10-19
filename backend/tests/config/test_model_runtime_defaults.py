@@ -61,6 +61,20 @@ class TestPolicyValidation:
             self._svc()._validate_policy_payload(
                 "embedding", {"failurePolicy": "fallback"})
 
+    @pytest.mark.parametrize("failure_policy", [
+        "fail_fast", "template_response", "mark_failed",
+    ])
+    def test_multi_query_unsupported_failure_policy_rejected(self, failure_policy):
+        with pytest.raises(ValueError, match="multi_query.*仅支持 skip 或 fallback"):
+            self._svc()._validate_policy_payload(
+                "multi_query", {"failurePolicy": failure_policy})
+
+    @pytest.mark.parametrize("failure_policy", ["skip", "fallback"])
+    def test_multi_query_supported_failure_policies(self, failure_policy):
+        normalized = self._svc()._validate_policy_payload(
+            "multi_query", {"failurePolicy": failure_policy})
+        assert normalized["failure_policy"] == failure_policy
+
     def test_retry_cap(self):
         with pytest.raises(ValueError):
             self._svc()._validate_policy_payload("main", {"maxRetries": 5})

@@ -35,6 +35,15 @@ class BudgetBlockedError(RuntimeError):
     """C5-6/COST-10：租户预算超限，评测 run 拒绝启动。"""
 
 
+def _handle_budget_binding_error(exc: Exception) -> None:
+    """硬预算无法建立时禁止评测继续出站。"""
+    from backend.config.llm import LLM_BUDGET_MODE
+
+    if LLM_BUDGET_MODE == "enforce":
+        raise BudgetBlockedError("评测预算绑定失败，拒绝调用模型") from exc
+    logger.warning("[Eval] 预算绑定失败（放行）: %s", exc)
+
+
 def _current_actor() -> str:
     import os as _os
 
@@ -538,20 +547,19 @@ class EvaluationService:
         try:
             from backend.core.request_context import scoped_tool_identity
             from backend.infra.llm.budget import scoped_request_budget
+            from backend.infra.llm.proxy import scoped_current_user_id
 
-            def _warn_budget_binding(exc: Exception) -> None:
-                logger.warning("[Eval] 预算绑定失败（放行）: %s", exc)
-
-            with scoped_tool_identity(
-                user_id=eval_user, tenant_id=EVAL_TENANT_ID,
-            ):
-                with scoped_request_budget(
-                    f"eval:{run_id}",
-                    user_id=eval_user,
-                    tenant_id=EVAL_TENANT_ID,
-                    on_error=_warn_budget_binding,
+            with scoped_current_user_id(eval_user):
+                with scoped_tool_identity(
+                    user_id=eval_user, tenant_id=EVAL_TENANT_ID,
                 ):
-                    report = self._evaluate_cases(config, run_id, run_started_ts)
+                    with scoped_request_budget(
+                        f"eval:{run_id}",
+                        user_id=eval_user,
+                        tenant_id=EVAL_TENANT_ID,
+                        on_error=_handle_budget_binding_error,
+                    ):
+                        report = self._evaluate_cases(config, run_id, run_started_ts)
             # C2-3：attempt 计数随报告落盘（跨次续跑可审计「跑了几次」）
             status = read_run_status(run_id) or {}
             report.metadata["attempt_no"] = int(status.get("attempt_no", 1) or 1)

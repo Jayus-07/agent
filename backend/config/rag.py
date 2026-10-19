@@ -233,6 +233,9 @@ RERANK_TOP_K = int(os.getenv("RERANK_TOP_K", "8"))
 # 同池自嵌套在 2 个并发 MQ 请求下即线程饥饿死锁。默认值维持审计基线
 # （outer=4 / inner=6，MQ 取 4），先治理拓扑后调参数，不无脑扩容。
 RAG_POOL_MULTI_QUERY_WORKERS = max(1, int(os.getenv("RAG_POOL_MULTI_QUERY_WORKERS", "4")))
+RAG_POOL_MULTI_QUERY_REWRITE_WORKERS = max(
+    1, int(os.getenv("RAG_POOL_MULTI_QUERY_REWRITE_WORKERS", "4")),
+)
 RAG_POOL_OUTER_WORKERS = max(1, int(os.getenv("RAG_POOL_OUTER_WORKERS", "4")))
 RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
 
@@ -241,8 +244,8 @@ RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
 # 默认值来自 2026-10-07 审计基线（rag 检索 p50 5.5s / p95 28.8s）——
 # 预算不是新的失败点：超预算一律走 §25 阶梯降级，不整链失败。
 RAG_RETRIEVAL_DEADLINE_MS = max(1000, float(os.getenv("RAG_RETRIEVAL_DEADLINE_MS", "8000")))
-# MQ 改写（LLM）子预算：超时 → 放弃改写用原始 query 走 hybrid
-RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS = max(200, float(os.getenv("RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", "1800")))
+# MQ 改写子预算：真实 Trace 为 3656/4973ms；默认 6000ms，仍取共享 deadline 剩余值。
+RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS = max(200, float(os.getenv("RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", "6000")))
 # MQ fan-out 子预算：超时 → 用已完成变体的部分结果（部分成功语义）
 RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS = max(500, float(os.getenv("RAG_MULTI_QUERY_FANOUT_TIMEOUT_MS", "4500")))
 # adaptive 扩展需要的最低剩余预算：不足 → 用当前 evidence，不再扩

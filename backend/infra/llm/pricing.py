@@ -147,14 +147,21 @@ class PriceTable:
         currencies: dict[tuple[str, str], set[str]] = {}
         versions: dict[tuple[str, str], set[str]] = {}
         for row in rows:
-            key = (row.model_name, row.component)
-            currencies.setdefault(key, set()).add(row.currency)
-            versions.setdefault(key, set()).add(row.price_table_version)
-            # 同一版本在数据库中按生效时间倒序返回，首条是当前有效价；
-            # setdefault 同时避免历史行覆盖当前行。
-            self._prices.setdefault(
-                (row.model_name, row.component, row.dimension), row
-            )
+            price_key = (row.model_name, row.component, row.dimension)
+            # 仓库按生效时间倒序返回，同维度首行才是当前有效行；历史行不
+            # 应因已被新版本覆盖而影响本次 PriceTable 的有效配置校验。
+            if price_key in self._prices:
+                continue
+            if row.unit not in {"per_1m_tokens", "per_call"}:
+                raise ValueError(f"非法价格单位: {row.unit}")
+            if row.dimension == "tool_call" and row.unit != "per_call":
+                raise ValueError("tool_call 维度必须使用 per_call")
+            if row.dimension != "tool_call" and row.unit == "per_call":
+                raise ValueError("Token 维度必须使用 per_1m_tokens")
+            self._prices[price_key] = row
+            component_key = (row.model_name, row.component)
+            currencies.setdefault(component_key, set()).add(row.currency)
+            versions.setdefault(component_key, set()).add(row.price_table_version)
         if any(len(values) > 1 for values in currencies.values()):
             raise ValueError("同一模型和组件不能混用价格币种")
         if any(len(values) > 1 for values in versions.values()):

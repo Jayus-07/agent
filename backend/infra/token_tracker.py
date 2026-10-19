@@ -207,6 +207,7 @@ class TokenTracker:
                     from backend.infra.llm.budget import current_request_budget
                     from backend.infra.llm.pricing import (
                         NormalizedUsage,
+                        PRICING_SOURCE_UNPRICED,
                         price_usage,
                     )
 
@@ -226,11 +227,19 @@ class TokenTracker:
                         enforce=_enforce,
                     )
 
+                    review_reason = ""
+                    if self.backend == "cloud":
+                        if status != "success" or not token_usage_available:
+                            review_reason = "provider_usage_unavailable"
+                        elif billing.pricing_source == PRICING_SOURCE_UNPRICED:
+                            review_reason = "billing_price_unavailable"
+
                     record_model_usage(
                         prompt_tokens=prompt_tokens,
                         completion_tokens=completion_tokens,
                         total_tokens=total_tokens,
-                        cost=billing.billed_cost_cny,
+                        cost=(None if review_reason else billing.billed_cost_cny),
+                        review_reason=review_reason,
                     )
                 except Exception as e:
                     # 预算统计失败不得覆盖原始模型结果/异常，但留痕便于排查。

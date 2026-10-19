@@ -120,6 +120,39 @@ class TestComplexQueriesStillRewrite:
         assert _classify_query_tier(query) == "hybrid"
 
 
+class TestMultiSourceRouting:
+    """多来源/多部门协作问题（2026-10-18）：证据天然分散在多份文档。
+
+    真实失败 case：RC-024「采购新品上架需要哪些部门协作？」只走 hybrid，
+    MultiQuery 未触发 → 只召回库存"入库→上架"单文档证据，缺供应商准入/
+    AQL/CE-FCC。修复是**结构性**多来源信号，不是 case_id 特判。
+    """
+
+    @pytest.mark.parametrize("query", [
+        "采购新品上架需要哪些部门协作？",
+        "新品上架涉及哪些岗位配合？",
+        "退款流程分别由哪些角色审批？",
+        "供应商准入由哪些部门负责？",
+        "跨境合规需要哪些部门协作完成？",
+        "订单履约涉及哪些环节？",
+    ])
+    def test_multi_source_questions_use_multi_query(self, query):
+        assert _classify_query_tier(query) == "hybrid_multi_query"
+        assert mq_mod.need_multi_query(query)[0] is True
+
+    @pytest.mark.parametrize("query", [
+        "现货商品的发货时间是多久？",
+        "退货政策是什么？",
+        "报销流程怎么走？",
+        "订单号 A123456789 的状态",
+        "库存周转率怎么算",
+        "七天无理由退货需要满足什么条件？",
+    ])
+    def test_single_source_questions_not_upgraded(self, query):
+        assert _classify_query_tier(query) != "hybrid_multi_query"
+        assert mq_mod.need_multi_query(query)[0] is False
+
+
 class TestSingleRulesetConsistency:
     """P1-D 核心护栏：主分类器与兜底结论必须逐条一致（只有一份规则）。"""
 

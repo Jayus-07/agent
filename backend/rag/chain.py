@@ -21,6 +21,10 @@ LangChain LCEL 主 Chain
 # 的导入链上，模块级导入会让所有进程陪跑；仅真正构建 RAG 链时才需要。
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.prompts import ChatPromptTemplate, PromptTemplate
 
 # (MultiQuery 已迁移至 retrieval/multi_query.py)
 # 注：langchain_core.prompts 也延迟 —— `from langchain_core.prompts import
@@ -188,15 +192,21 @@ def _build_contextualize_prompt() -> ChatPromptTemplate:
     """从 prompt_service 构建查询重写 ChatPromptTemplate。"""
     # 延迟导入（见文件顶部注释）
     from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+    system_text = DEFAULT_CONTEXTUALIZE_SYSTEM
+    human_text = "{input}"
     try:
         from backend.prompts.service import prompt_service
-        prompt_service.get_template_sync("rag.contextualize")
+        full = prompt_service.get_template_sync("rag.contextualize")
+        parts = full.split("---", 1)
+        if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
+            raise ValueError("rag.contextualize 缺少 system/human 分隔")
+        system_text, human_text = (part.strip() for part in parts)
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"[RAGChain] prompt_service 不可用，rag.contextualize 回退内置默认: {e}")
+        logger.warning("[RAGChain] rag.contextualize 回退内置默认（%s）", type(e).__name__)
     return ChatPromptTemplate.from_messages([
-        ("system", DEFAULT_CONTEXTUALIZE_SYSTEM),
+        ("system", system_text),
         MessagesPlaceholder("chat_history"),
-        ("human", "{input}"),
+        ("human", human_text),
     ])
 
 

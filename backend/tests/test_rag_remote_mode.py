@@ -81,6 +81,28 @@ def _make_proxy(handler) -> "RAGServiceProxy":
 
 
 class TestProxyHTTP:
+    def test_remote_timing_correlates_server_and_roundtrip(self):
+        from backend.observability.tracer import trace_collector
+
+        trace_collector.clear_for_test()
+        trace_collector.start("测试问题", session_id="timing-fake")
+        span = trace_collector.start_span("rag_tool", name="RAG")
+
+        def handler(request):
+            return httpx.Response(200, json={"answer": "答案", "meta": {}}, headers={
+                "X-RAG-Service-Ms": "2.5", "X-RAG-Prehandler-Ms": "1.0",
+                "X-RAG-Pipeline-Init-Ms": "nan",
+            })
+
+        try:
+            assert _make_proxy(handler).ask("测试问题") == "答案"
+            timing = span.metrics["rag_remote_timing"]
+            assert timing["service_ms"] == 2.5 and timing["prehandler_ms"] == 1.0
+            assert "pipeline_init_ms" not in timing
+            assert timing["roundtrip_ms"] >= 0 and timing["outside_service_ms"] >= 0
+        finally:
+            trace_collector.clear_for_test()
+
     def test_ask_returns_answer_and_meta(self):
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/ask"
