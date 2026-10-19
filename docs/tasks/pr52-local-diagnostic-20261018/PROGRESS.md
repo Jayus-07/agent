@@ -158,3 +158,11 @@
 - T1：61 passed（2既有collection warning），覆盖实际迟到线程不延长调用方等待、部分结果、全路径超时不fallback、Provider原异常、无预算旁路、重排失败阻断以及既有三查询并发测试。另40 passed覆盖原deadline、计费、fixture完整性与Prompt Lock。
 - T2：同一隔离PG的独立免费数据库agent_budget_regression_test连接真实PostgresQuotaStore+Fake HTTP，5 passed /12.33s（2既有弃用warning），验证独立结算、跨身份、未知收费占额、迟到结算、预占后过期，真实Provider调用0；未改付费run账本。T0 py_compile、定向Ruff和diff检查通过。
 - Artifact根 D:/tmp/rag-eval-20261019-pr52-final/artifacts/：FINAL_REVIEW.md、diagnostic-summary.json、per-query-scores.jsonl、官方eval_runs目录、完整scope-ledger及脱敏资源/日志。免费修复后无真实Provider验收；变体噪声与2笔账目仍阻塞，不再付费、不合并、不发布Prompt。PR保持Draft，MERGE_READY=false。
+
+
+## 新授权：合并前收尾验收（2026-10-19）
+
+- 用户在“三项收尾：变体噪声、旧账核查、再一次真实验收”之后回复“可以”，授权新增且仅一次8-case真实验收，沿用200次/200000tokens/CNY.50上限；失败不重跑，不自动合并或发布Prompt。
+- RC031逐查询证据显示模型把组合条件拆成两个单条件问题，导致事故变体泛化。仅收紧待审Prompt候选：每条变体保留业务主体、场景及全部组合条件，只改变证据侧重点；仍共3条、原问题第一。不改评分算法、模型、Golden、质量门槛或生产Active v1。
+- 两笔旧run待核实账目无供应商成功响应/请求ID，本机记录不能证明收费；未取得供应商账单/API访问，不宣称供应商侧对账完成。保留UNVERIFIED，不伪造结算；新run不导入旧账目。证据见historical-reconciliation.json。
+- 新建唯一隔离project rag-eval-20261019-pr52-acceptance、全新数据卷/库/网络；上一project已销毁。宿主资源与共享服务限制仍存在，不声称独占4C8G等价。新run rag-local-pr52-20261019-acceptance-04；付费开始前冻结提交并完成免费门禁。
