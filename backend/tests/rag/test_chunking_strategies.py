@@ -93,6 +93,30 @@ def test_sibling_sections_with_same_title_have_unique_chunk_ids():
     assert len(ids) == len(set(ids))
 
 
+def test_faq_does_not_create_question_directory_parent():
+    """完整问答叶子不应再附加只列问题、不含答案的文档级 Parent。"""
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="qa_question", text="怎么退货？"),
+            DocumentNode(type="qa_answer", text="提交申请后客服审核。"),
+            DocumentNode(type="qa_question", text="多久可以退款？"),
+            DocumentNode(type="qa_answer", text="审核通过后五个工作日内到账。"),
+        ]),
+        raw_text="",
+    )
+    chunks = QAChunkStrategy().split(ast, "faq.md")
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+
+    assert not parents
+    assert len(leaves) == 2
+    assert [c.metadata["section_title"] for c in leaves] == [
+        "怎么退货？", "多久可以退款？",
+    ]
+    assert all("\nA：" in c.page_content for c in leaves)
+    assert all(not c.metadata.get("parent_chunk_id") for c in leaves)
+
+
 def test_parent_chunk_includes_section_title():
     """parent chunk 的 page_content 必须包含 section 自身标题（如「退货流程」）。"""
     chunks = StructureChunkStrategy().split(AST, "a.md")

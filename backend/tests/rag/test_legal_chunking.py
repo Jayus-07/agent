@@ -37,6 +37,53 @@ def test_legal_strategy_splits_by_clause():
                for c in leaves)
 
 
+def test_legal_large_table_splits_by_row_groups(monkeypatch):
+    """长表按行组切分，重复表头并完整保留结构化行。"""
+    import json
+
+    import backend.rag.preprocessing.chunking as chunking
+    from backend.rag.preprocessing.chunking import coverage_audit
+
+    monkeypatch.setattr(chunking, "LEAF_CHUNK_TOKENS", 180)
+    rows = [["项目", "单价", "数量", "小计"]] + [
+        [f"项目{index:02d}", str(index * 10), "1", str(index * 10)]
+        for index in range(1, 31)
+    ]
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="section", text="技术服务合同", level=1, children=[
+                DocumentNode(type="section", text="第一条 服务费用", level=2, children=[
+                    DocumentNode(type="paragraph", text="费用见下表。"),
+                    DocumentNode(type="table", text="", rows=rows),
+                ]),
+            ]),
+        ]),
+        raw_text="",
+    )
+
+    chunks = LegalChunkStrategy().split(ast, "long-contract.docx")
+    leaves = [
+        chunk for chunk in chunks
+        if chunk.metadata.get("granularity") == "leaf"
+        and chunk.metadata.get("table_id") == "table_1"
+    ]
+    assert 1 < len(leaves) < len(rows) - 1
+    assert all(chunk.metadata["chunk_type"] == "table_row_group" for chunk in leaves)
+    assert all(chunk.metadata["chunk_tokens"] <= 180 for chunk in leaves)
+    assert all("项目" in chunk.page_content for chunk in leaves)
+    assert all(chunk.metadata["row_start"] <= chunk.metadata["row_end"] for chunk in leaves)
+    coverage = coverage_audit(ast, chunks)
+    assert coverage["uncovered_count"] == 0, coverage
+
+    recovered_rows = [
+        row
+        for chunk in leaves
+        for row in json.loads(chunk.metadata["table_rows_json"])
+        if row != rows[0]
+    ]
+    assert recovered_rows == rows[1:]
+
+
 def test_legal_strategy_no_clause_single_chunk():
     """无条款编号 → 合并成一个 chunk（不丢内容）。"""
     ast = DocumentAST(

@@ -24,6 +24,30 @@ from backend.rag.indexing.stages.contracts import stage_span
 from backend.shared.logger import logger
 from backend.rag.indexing.processing_lineage import ModelIdentity
 
+_DOC_TYPES_WITHOUT_SUMMARY = frozenset({"faq", "legal", "contract_template"})
+
+
+def _skip_document_summary(doc_type: str) -> bool:
+    """FAQ 与条款型合同保留结构正文，文档层仅用章节概览导航。"""
+    return str(doc_type or "").casefold() in _DOC_TYPES_WITHOUT_SUMMARY
+
+
+def _has_structured_qa(text: str) -> bool:
+    """识别已有 Q/A 结构，避免对天然问答块重复生成模拟问题。"""
+    import re
+
+    has_question = re.search(
+        r"(?im)^\s*(?:\*{1,2}\s*)?(?:Q|问(?:题)?)\s*[:：]\s*(?:\*{1,2})?"
+        r"|^\s*【问】",
+        text or "",
+    )
+    has_answer = re.search(
+        r"(?im)^\s*(?:\*{1,2}\s*)?(?:A|答(?:案)?)\s*[:：]\s*(?:\*{1,2})?"
+        r"|^\s*【答】",
+        text or "",
+    )
+    return bool(has_question and has_answer)
+
 
 # 摘要采样：委托共享实现（P1 元数据治理 2026-10-13——超长文档不再只取
 # 头尾 20k 声称代表全文，改为 头+章节目录+分层采样+尾 且标注覆盖范围）
@@ -131,6 +155,7 @@ class MetadataStage:
 
     async def _generate_questions_with_lineage(
         self, chunks_text: list[str], doc_type: str, recorder=None,
+        parent_span_id: str = "",
     ) -> tuple[list[list[str]], dict]:
         """生成模拟问题，并把 question_gen 独立记录为一个阶段。"""
         if not chunks_text:
@@ -140,15 +165,25 @@ class MetadataStage:
         token = self._begin_lineage_stage(
             recorder, "question_gen", "question_gen", metadata={"chunk_count": len(chunks_text)}
         )
+        question_span = trace_collector.start_span(
+            "question_gen", parent_id=parent_span_id,
+            name="Question generation", type="stage",
+            kind=SpanKind.INDEX_LLM_GENERATE.value,
+            input={"chunk_count": len(chunks_text)},
+        ) if parent_span_id else None
         try:
             def _generate_in_worker():
                 generated = _qg.generate_chunk_questions(chunks_text, doc_type)
                 return generated[0], generated[1], _qg.get_last_generation_meta()
 
-            with recorder.bind_stage(token[0]) if recorder and token else nullcontext():
-                questions, usage, generation_meta = await asyncio.to_thread(
-                    _generate_in_worker,
-                )
+            trace_token = _qg.set_trace_parent_span_id(parent_span_id)
+            try:
+                with recorder.bind_stage(token[0]) if recorder and token else nullcontext():
+                    questions, usage, generation_meta = await asyncio.to_thread(
+                        _generate_in_worker,
+                    )
+            finally:
+                _qg.reset_trace_parent_span_id(trace_token)
             from backend.config.rag import (
                 METADATA_SCHEMA_FINGERPRINT,
                 QUESTION_GEN_PROMPT_VERSION,
@@ -189,29 +224,51 @@ class MetadataStage:
                 prompt_version=QUESTION_GEN_PROMPT_VERSION,
                 schema_fingerprint=METADATA_SCHEMA_FINGERPRINT,
             )
+            if question_span:
+                trace_collector.end_span(
+                    question_span,
+                    status=("success" if stage_status in {"success", "cached", "skipped"}
+                            else "partial"),
+                    metrics={
+                        "generation_status": stage_status,
+                        "provider_call": bool(generation_meta.get("provider_call")),
+                        "provider_duration_ms": int(
+                            generation_meta.get("provider_duration_ms") or 0
+                        ),
+                        "cache_status": str(generation_meta.get("cache_status") or "miss"),
+                        "model": actual_model,
+                        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+                        "completion_tokens": int(usage.get("completion_tokens") or 0),
+                        "reasoning_tokens": int(usage.get("reasoning_tokens") or 0),
+                        "output_questions": sum(len(item or []) for item in questions or []),
+                    },
+                )
             return questions, usage
         except Exception as exc:
             self._finish_lineage_stage(
                 recorder, token, status="failed",
                 input_count=len(chunks_text), error_message=str(exc),
             )
+            if question_span:
+                trace_collector.end_span(
+                    question_span, status="error",
+                    metrics={"provider_call": False, "error": type(exc).__name__},
+                )
             raise
 
     async def build(self, full_text: str, base_meta: dict,
                     parent_span_id: str = "",
                     chunks_text: list[str] | None = None,
                     processing_recorder=None) -> dict:
-        """异步构建文档级元数据 — LLM Decision Router 评分决策。
-
-        P2-2: LLM 计算异步批处理 —— 摘要、关键词、实体抽取并发执行
-        """
+        """异步构建文档级元数据；分类由规则权威决定，增强失败可确定性降级。"""
         try:
             from backend.rag.preprocessing.metadata import (
-                classify_with_confidence, analyze_complexity,
-                extract_time_refs, detect_business_domain,
+                classify_with_confidence, extract_time_refs,
+                detect_business_domain,
             )
             from backend.config.rag import (
                 ENABLE_LLM_METADATA_EXTRACT,
+                METADATA_LLM_EXTRACT_MIN_CHARS,
                 METADATA_SCHEMA_FINGERPRINT as _metadata_fp,
             )
             from backend.rag.preprocessing.entity import extract_entities, extract_person_names
@@ -231,25 +288,76 @@ class MetadataStage:
             cls_detail: dict | None = None
             domain_detail: dict | None = None
 
+            # 分类和业务域先由规则链计算一次，后续所有收口路径复用这组事实。
+            classify_span = trace_collector.start_span(
+                "classify", parent_id=parent_span_id, name="Rule classify",
+                type="rule", kind=SpanKind.INDEX_CLASSIFY.value,
+            ) if parent_span_id else None
+            try:
+                doc_type, confidence, cls_detail = classify_with_confidence(
+                    full_text, filename=fname, file_path=fpath, return_detail=True,
+                )
+                if classify_span:
+                    trace_collector.end_span(
+                        classify_span,
+                        metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
+                        output=cls_detail or {},
+                    )
+            except Exception as exc:
+                if classify_span:
+                    trace_collector.end_span(
+                        classify_span, metrics={"error": "classify_failed"}, status="error",
+                    )
+                logger.warning(f"[Metadata] 规则分类失败，使用 general 降级: {exc}")
+                doc_type, confidence, cls_detail = "general", 0.0, {}
+
+            domain_span = trace_collector.start_span(
+                "domain_classify", parent_id=parent_span_id,
+                name="Rule domain classify", type="rule",
+                kind=SpanKind.INDEX_DOMAIN_CLASSIFY.value,
+            ) if parent_span_id else None
+            try:
+                domain, _alternatives, domain_detail = detect_business_domain(
+                    full_text, return_detail=True,
+                )
+                domain_detail = domain_detail or {}
+                if domain_span:
+                    trace_collector.end_span(
+                        domain_span, metrics={"domain": domain}, output=domain_detail,
+                    )
+            except Exception as exc:
+                if domain_span:
+                    trace_collector.end_span(
+                        domain_span, metrics={"error": "domain_classify_failed"}, status="error",
+                    )
+                logger.warning(f"[Metadata] 规则业务域识别失败，使用 general 降级: {exc}")
+                domain, domain_detail = "general", {}
+
             # P0-3（2026-10-19 治理）：级联自动分类（R0/R1/R2 DecisionEnvelope
             # + 影子对比）已退役——分类恒由规则分类器供给（classify_with_confidence），
             # doc_type/business_domain 不再有任何 LLM 前置；LLM 仅承担可选增强
             # （摘要/实体，ENABLE_LLM_METADATA_EXTRACT），见下方统一抽取路径。
-            # 级联关闭时保留旧的统一 LLM 开关；失败后进入兼容规则路径。
-            # 该路径已移除低置信复验、关键词 LLM，避免重复的 metadata 决策调用。
+            # LLM 只做一次可选增强；分类永远复用上面的规则结果。
             unified: dict | None = None
-            if ENABLE_LLM_METADATA_EXTRACT:
+            structured_faq = doc_type == "faq" and _has_structured_qa(full_text)
+            enrichment_enabled = (
+                ENABLE_LLM_METADATA_EXTRACT
+                and len(full_text.strip()) >= METADATA_LLM_EXTRACT_MIN_CHARS
+                and not structured_faq
+            )
+            if enrichment_enabled:
                 decision_lineage = self._begin_lineage_stage(
                     processing_recorder,
                     "metadata_extract",
                     "metadata_extract",
-                    metadata={"route": "legacy"},
+                    metadata={"route": "single_enrichment", "classification_source": "rules"},
                 )
                 try:
                     from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
                     with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
                         unified = await extract_metadata_llm_async(
-                            full_text, fname, parent_span_id=parent_span_id)
+                            full_text, fname, parent_span_id=parent_span_id,
+                            include_summary=not _skip_document_summary(doc_type))
                     self._finish_lineage_stage(
                         processing_recorder, decision_lineage,
                         status="success" if unified else "fallback",
@@ -265,6 +373,14 @@ class MetadataStage:
                         prompt_hash=str((unified or {}).get("prompt_hash") or "") or None,
                         schema_fingerprint=_metadata_fp,
                         metadata={
+                            "classification_source": "rules",
+                            "classification_candidate_ignored": bool(
+                                unified
+                                and (
+                                    unified.get("doc_type") != doc_type
+                                    or unified.get("business_domain") != domain
+                                )
+                            ),
                             "llm_usage_status": str(
                                 (unified or {}).get("llm_usage_status")
                                 or (
@@ -289,12 +405,65 @@ class MetadataStage:
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
                 if unified:
+                    unified["doc_type"] = doc_type
+                    unified["confidence"] = confidence
+                    unified["business_domain"] = domain
+                    if _skip_document_summary(doc_type):
+                        unified["summary"] = ""
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text,
+                        rule_classification={
+                            "doc_type": doc_type, "confidence": confidence,
+                            "business_domain": domain, "domain_detail": domain_detail,
+                        },
                         processing_recorder=processing_recorder)
+                if parent_span_id:
+                    fallback_span = trace_collector.start_span(
+                        "metadata_fallback", parent_id=parent_span_id,
+                        name="Metadata enrichment fallback to rules",
+                        type="stage", kind=SpanKind.INDEX_METADATA.value,
+                    )
+                    trace_collector.end_span(
+                        fallback_span, status="partial",
+                        metrics={"fallback_path": "rules_and_extractive_summary",
+                                 "enrichment_attempted": True,
+                                 "provider_response": False},
+                    )
                 from backend.observability.metrics import metadata_route_total
                 metadata_route_total.labels(level="legacy_rule", outcome="fallback").inc()
+            elif processing_recorder is not None:
+                skip_reason = (
+                    "structured_faq" if structured_faq
+                    else "disabled" if not ENABLE_LLM_METADATA_EXTRACT
+                    else "below_min_chars"
+                )
+                skipped_lineage = self._begin_lineage_stage(
+                    processing_recorder, "metadata_extract", "metadata_extract",
+                    metadata={"route": "single_enrichment", "classification_source": "rules"},
+                )
+                self._finish_lineage_stage(
+                    processing_recorder, skipped_lineage, status="skipped",
+                    skip_reason=skip_reason, prompt_key="rag.preprocessing.metadata_extract",
+                    schema_fingerprint=_metadata_fp,
+                    metadata={"classification_source": "rules", "provider_call": False},
+                )
+            if not enrichment_enabled and parent_span_id:
+                skip_reason = (
+                    "structured_faq" if structured_faq
+                    else "disabled" if not ENABLE_LLM_METADATA_EXTRACT
+                    else "below_min_chars"
+                )
+                skipped_span = trace_collector.start_span(
+                    "metadata_enrichment", parent_id=parent_span_id,
+                    name="Metadata enrichment skipped", type="stage",
+                    kind=SpanKind.INDEX_METADATA.value,
+                )
+                trace_collector.end_span(
+                    skipped_span, status="skipped",
+                    metrics={"skip_reason": skip_reason, "provider_call": False,
+                             "classification_source": "rules"},
+                )
 
             # 质量门禁（P1）— span 收口到 stage_span（异常自动关闭）
             from backend.rag.preprocessing.metadata import assess_quality
@@ -310,24 +479,6 @@ class MetadataStage:
             if not quality["passed"]:
                 logger.warning(f"[Quality] 文档未通过质量门禁: {quality['issues']}")
 
-            if parent_span_id:
-                classify_span = trace_collector.start_span(
-                    'classify', parent_id=parent_span_id, name="Classify",
-                    type="llm", kind=SpanKind.INDEX_CLASSIFY.value,
-                )
-            try:
-                doc_type, confidence, cls_detail = classify_with_confidence(full_text, filename=fname, file_path=fpath, return_detail=True)
-            except Exception:
-                # 异常时也要关闭 span，避免 classify 泄漏（P0-2）
-                if parent_span_id:
-                    trace_collector.end_span(classify_span,
-                        metrics={"error": "classify_failed"}, status="error")
-                raise
-            if parent_span_id:
-                trace_collector.end_span(classify_span, metrics={"doc_type": doc_type, "confidence": round(confidence, 3)},
-                    output=locals().get("cls_detail", {}))
-
-
             # P2-1: MinHash 语义去重 — 检查同类型文档的近似内容（阈值热加载）
             from backend.config.indexing_rules import get_rules as _get_indexing_rules
             _idx_rules = _get_indexing_rules()
@@ -335,7 +486,7 @@ class MetadataStage:
             if parent_span_id:
                 dedup_minhash_span = trace_collector.start_span(
                     'dedup_minhash', parent_id=parent_span_id, name="MinHash dedup",
-                    type="llm", kind=SpanKind.INDEX_DEDUP_MINHASH.value,
+                    type="rule", kind=SpanKind.INDEX_DEDUP_MINHASH.value,
                 )
             minhash_sig = compute_minhash(full_text)
             if parent_span_id:
@@ -364,35 +515,19 @@ class MetadataStage:
             if parent_span_id:
                 rule_extract_span = trace_collector.start_span(
                     'rule_extract', parent_id=parent_span_id, name="Rule extract",
-                    type="llm", kind=SpanKind.INDEX_KEYWORD_RULE.value,
+                    type="rule", kind=SpanKind.INDEX_KEYWORD_RULE.value,
                 )
             time_refs = extract_time_refs(full_text)
             if parent_span_id:
                 trace_collector.end_span(rule_extract_span, metrics={"time_refs_count": len(time_refs or []), "domain": "(computed below)"})
 
-            if parent_span_id:
-                domain_span = trace_collector.start_span(
-                    'domain_classify', parent_id=parent_span_id, name="Domain classify",
-                    type="llm", kind=SpanKind.INDEX_DOMAIN_CLASSIFY.value,
-                )
-            domain_result = detect_business_domain(full_text, return_detail=True)
-            # P1: domain_result 返回 3 元组 (primary, alternatives, detail) 当 return_detail=True
-            domain, _alternatives, domain_detail = domain_result
-            domain_detail = domain_detail or {}
-            if parent_span_id:
-                trace_collector.end_span(domain_span, metrics={"domain": domain},
-                    output=domain_detail or {})
             # 低置信样本不再在规则链内暗中追加 LLM 复验。
             # 需要升级时必须回到上方的统一 DecisionEnvelope 路径，保证
             # 每个文档决策最多一次 metadata LLM 调用且可被计量。
 
-            # 规则关键词 + 复杂度（在最终 doc_type 确定之后）
             # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
             # 已移入下方 gather 并发执行——原先在主线程串行阻塞，P2-2 的
             # "并行"名不副实（关键词 LLM 调用先于 gather 发生）。
-            from backend.rag.preprocessing.keyword import extract_rule_keywords
-            rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
-            complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
             person_names = extract_person_names(full_text)
         except Exception as e:
             # 规则六步失败 → 确定性兜底（合成最小 unified，走同一组包收口；
@@ -419,62 +554,37 @@ class MetadataStage:
                 fallback_unified,
                 parent_span_id=parent_span_id,
                 chunks_text=chunks_text,
+                rule_classification={
+                    "doc_type": doc_type, "confidence": confidence,
+                    "business_domain": domain, "domain_detail": domain_detail,
+                },
                 processing_recorder=processing_recorder,
             )
 
-        # ⑧ 文档摘要 + 关键词 + 实体 — 三路并发（关键词 LLM 调用放线程池，
-        # 与摘要 LLM 调用/实体抽取真正并行；总耗时 = max 而非 sum）
+        # ⑧ 规则降级时用抽取式摘要；全文 LLM 增强已在上方最多尝试一次。
         summary = ""
-        need_llm_summary = len(full_text) >= 1000  # <1KB 全文当摘要，不调 LLM
+        skip_summary = _skip_document_summary(doc_type)
 
         llm_generate_span = None
         if parent_span_id:
             llm_generate_span = trace_collector.start_span(
-                "llm_generate", parent_id=parent_span_id, name="LLM generate (keywords+summary+entities)",
-                type="llm", kind=SpanKind.INDEX_LLM_GENERATE.value,
+                "rule_metadata_assembly", parent_id=parent_span_id,
+                name="Rule metadata assembly", type="stage",
+                kind=SpanKind.INDEX_METADATA.value,
             )
 
         # LLM 未调用时为空列表（向后兼容；非 LLM 路径不生成问题）
         questions_by_chunk: list[list[str]] = []
 
-        # P2-2: 并发执行四个重型任务（S0 修复：恢复 F1 重构漏迁的第四任务
-        # 「模拟问题生成」——旧合并路径 enrich_metadata_llm 自失去调用方后，
-        # questions_by_chunk 恒空，Document Expansion 前缀静默失效）
-        from backend.rag.preprocessing.metadata import (
-            _extract_first_sentences, build_llm_summary,
-        )
+        # 摘要与实体增强已合并为上方单次调用，失败后只走确定性摘要。
+        from backend.rag.preprocessing.metadata import _extract_first_sentences
         from backend.rag.preprocessing.keyword import KeywordResult as _KwResult
-        sample = _sample_for_summary(full_text)
+        sample = _sample_for_summary(full_text) if not skip_summary else ""
 
         async def task_summary():
-            """LLM 摘要生成（<2KB 采样走抽取式，不调 LLM）"""
-            from backend.config.rag import ENABLE_LLM_METADATA_EXTRACT
-            if not ENABLE_LLM_METADATA_EXTRACT or len(sample) < 2000:
-                return _extract_first_sentences(sample, 2), []
-            summary_lineage = self._begin_lineage_stage(
-                processing_recorder,
-                "metadata_summary",
-                "metadata_extract",
-                metadata={"sample_chars": len(sample)},
-            )
-            try:
-                with processing_recorder.bind_stage(summary_lineage[0]) if processing_recorder and summary_lineage else nullcontext():
-                    result = await build_llm_summary(sample)
-                self._finish_lineage_stage(
-                    processing_recorder, summary_lineage, status="success",
-                    model=self._role_model_identity("metadata_extract"),
-                    input_count=1, output_count=1 if result and result[0] else 0,
-                    prompt_key="rag.preprocessing.summary",
-                    prompt_version="default",
-                    schema_fingerprint=_metadata_fp,
-                )
-                return result
-            except Exception as exc:
-                self._finish_lineage_stage(
-                    processing_recorder, summary_lineage, status="failed",
-                    input_count=1, error_message=str(exc),
-                )
-                raise
+            if skip_summary:
+                return "", []
+            return _extract_first_sentences(sample, 2), []
 
         async def task_keywords():
             """P0-2（2026-10-19 去词表化）：doc 级普通关键词停发。
@@ -482,7 +592,6 @@ class MetadataStage:
             词表/领域词/Jieba 排名提取已删（keyword.py），检索不再消费
             doc_keywords（Stage1 门控已移除）；空产出保持 KeywordResult
             契约与下游字段兼容（doc_keywords=[] / keywords_rule=[]）。
-            复杂度特征改由 extract_rule_keywords 的标识符计数承担。
             不新增任何 LLM 关键词调用。
             """
             from backend.rag.preprocessing.keyword import KeywordResult as _KR
@@ -495,14 +604,36 @@ class MetadataStage:
             （2026-09-16 起不再走模块级全局，避免并发上传互相覆盖），
             在下方与关键词路径 tokens 汇总。
             """
+            if structured_faq:
+                if processing_recorder is not None:
+                    question_lineage = self._begin_lineage_stage(
+                        processing_recorder, "question_gen", "question_gen",
+                        metadata={"chunk_count": len(chunks_text or [])},
+                    )
+                    self._finish_lineage_stage(
+                        processing_recorder, question_lineage, status="skipped",
+                        skip_reason="structured_faq",
+                        prompt_key="rag.preprocessing.question_gen",
+                    )
+                if parent_span_id:
+                    faq_span = trace_collector.start_span(
+                        "question_gen", parent_id=parent_span_id,
+                        name="Question generation skipped (structured FAQ)",
+                        type="stage", kind=SpanKind.INDEX_LLM_GENERATE.value,
+                    )
+                    trace_collector.end_span(
+                        faq_span, status="skipped",
+                        metrics={"generation_status": "skipped", "skip_reason": "structured_faq",
+                                 "provider_call": False, "provider_duration_ms": 0},
+                    )
+                return [], {}
             if not chunks_text:
                 return [], {}
             return await self._generate_questions_with_lineage(
-                chunks_text, doc_type, processing_recorder,
+                chunks_text, doc_type, processing_recorder, parent_span_id,
             )
 
-        # 并行执行：总耗时 = max(各任务耗时) 而非 sum；
-        # 解包顺序与 gather 参数顺序一一对应
+        # 规则实体、抽取式摘要和结构化问答可并发；摘要不再发起第二次 LLM 调用。
         summary_res, kw_res, entities_res, questions_res = await asyncio.gather(
             task_summary(),
             task_keywords(),
@@ -544,9 +675,7 @@ class MetadataStage:
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
         need_llm_keywords = bool(kws_llm_objs)
 
-        # 1.3b: tokens 汇总口径补全——keywords + questions 两路合并
-        #（summary 抽取式路径无 tokens；build_llm_summary 的 LLM 用量
-        #  已由 proxy 自动落 Store，此处只合并可回传的内存 tokens）
+        # 摘要走抽取式路径无 tokens；问题生成用量通过返回值回传并由 proxy 记账。
         merged_tokens = dict(kw_result.llm_tokens or {})
         if question_gen_tokens:
             for key in ("prompt_tokens", "completion_tokens"):
@@ -555,21 +684,22 @@ class MetadataStage:
             merged_tokens["cost_usd"] = round(
                 float(merged_tokens.get("cost_usd", 0) or 0)
                 + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
-            kw_result.llm_tokens = merged_tokens
+
+        kw_result.llm_tokens = merged_tokens
 
         if llm_generate_span:
             trace_collector.end_span(llm_generate_span, status="success",
                 metrics={
-                    "strategy": "parallel", "doc_size": len(full_text),
-                    "need_llm_summary": need_llm_summary,
-                    "need_llm_keywords": need_llm_keywords,
+                    "strategy": "deterministic_fallback", "doc_size": len(full_text),
+                    "need_llm_keywords": False,
                     "parallel_execution": True,
                     "simulated_questions_chunks": len(questions_by_chunk),
-                    "estimated_speedup": "4x (summary+keywords+entities+questions concurrent)",
                 })
 
         # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
-        if not summary and len(full_text) <= 1000:
+        if skip_summary:
+            summary = ""
+        elif not summary and len(full_text) <= 1000:
             summary = full_text.strip()
         elif not summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
@@ -599,7 +729,6 @@ class MetadataStage:
             "business_domain": domain,
             "domain_detail": domain_detail,
             "time_refs": time_refs,
-            "complexity": complexity,
             "doc_keywords": kws_all_words,
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
@@ -663,19 +792,18 @@ class MetadataStage:
         self, full_text: str, base_meta: dict, unified: dict,
         parent_span_id: str = "", chunks_text: list[str] | None = None,
         route_level: str = "", allow_llm_enrichment: bool = True,
-        processing_recorder=None,
+        processing_recorder=None, rule_classification: dict | None = None,
     ) -> dict:
-        """统一 LLM 抽取成功后的收口：补齐纯规则产物并返回完整 metadata dict。
+        """统一元数据输出收口：补齐规则产物并返回完整 metadata dict。
 
         与 build() 返回契约完全一致，保证下游（chunk 注入、
         doc_db 落库、registry.register）零感知路径差异。
 
-        route_level 非空 = 级联路由 L0-L2 命中（分类零 LLM 成本，结构字段为
-        规则产物）：llm_used=False、llm_strategy 标 cascade_L{N}。
+        route_level 为兼容旧调用保留；新链路分类结果始终来自规则分类器。
         """
         import hashlib as _hashlib
         from backend.rag.preprocessing.metadata import (
-            assess_quality, analyze_complexity, compute_minhash,
+            assess_quality, compute_minhash,
             extract_sections, extract_person_names, extract_time_refs,
         )
         from backend.config.rag import (
@@ -685,6 +813,28 @@ class MetadataStage:
 
         fname = base_meta.get("source_file", "")
         doc_id = base_meta.get("doc_id", "")
+
+        if rule_classification is None:
+            from backend.rag.preprocessing.metadata import (
+                classify_with_confidence, detect_business_domain,
+            )
+            rule_doc_type, rule_confidence, _ = classify_with_confidence(
+                full_text, filename=fname,
+                file_path=base_meta.get("file_path", ""), return_detail=True,
+            )
+            rule_domain, _alternatives, rule_domain_detail = detect_business_domain(
+                full_text, return_detail=True,
+            )
+            rule_classification = {
+                "doc_type": rule_doc_type,
+                "confidence": rule_confidence,
+                "business_domain": rule_domain,
+                "domain_detail": rule_domain_detail or {},
+            }
+        doc_type = str(rule_classification.get("doc_type") or "general")
+        confidence = float(rule_classification.get("confidence") or 0.0)
+        domain = str(rule_classification.get("business_domain") or "general")
+        domain_detail = rule_classification.get("domain_detail") or {}
 
         # 质量门禁（与规则路径同源）
         quality = assess_quality(full_text)
@@ -696,16 +846,30 @@ class MetadataStage:
         _stage_ms: dict = {}
         _t_final0 = _time.monotonic()
         near_dup_id = self.detect_near_dup(
-            self._registry, minhash_sig, unified["doc_type"], exclude_doc_id=doc_id)
+            self._registry, minhash_sig, doc_type, exclude_doc_id=doc_id)
 
-        # 规则关键词预览（复杂度入参；rule/llm 关键词合并对齐旧字段口径）
+        # 规则关键词预览，用于过滤重复的 LLM 候选。
         from backend.rag.preprocessing.keyword import extract_rule_keywords
-        rule_kws_preview = extract_rule_keywords(full_text, doc_type=unified["doc_type"])
-        complexity = analyze_complexity(
-            full_text, len(rule_kws_preview), unified["confidence"])
+        rule_kws_preview = extract_rule_keywords(
+            full_text, doc_type=doc_type, top_k=12,
+        )
 
-        # 人名：优先 LLM 实体，空则正则兜底（与规则路径行为一致）
-        person_names = list((unified.get("entities") or {}).get("person") or [])
+        from backend.rag.preprocessing.keyword import (
+            contains_exact_source_match,
+        )
+        llm_entities = unified.get("entities") or {}
+        exact_entities = {
+            str(entity_type): [
+                str(value).strip() for value in values or []
+                if str(value).strip()
+                and contains_exact_source_match(full_text, str(value).strip())
+            ]
+            for entity_type, values in llm_entities.items()
+            if isinstance(values, list)
+        }
+
+        # 人名：优先原文可匹配的 LLM 实体，空则规则正则兜底。
+        person_names = list(exact_entities.get("person") or [])
         if not person_names:
             person_names = extract_person_names(full_text) or []
 
@@ -714,11 +878,35 @@ class MetadataStage:
         question_gen_tokens: dict = {}
         try:
             from backend.config.rag import ENABLE_SIMULATED_QUESTIONS
-            if allow_llm_enrichment and ENABLE_SIMULATED_QUESTIONS and chunks_text:
+            if doc_type == "faq" and _has_structured_qa(full_text):
+                question_lineage = self._begin_lineage_stage(
+                    processing_recorder, "question_gen", "question_gen",
+                    metadata={"chunk_count": len(chunks_text or [])},
+                )
+                self._finish_lineage_stage(
+                    processing_recorder, question_lineage, status="skipped",
+                    skip_reason="structured_faq",
+                    prompt_key="rag.preprocessing.question_gen",
+                    prompt_version=QUESTION_GEN_PROMPT_VERSION,
+                    schema_fingerprint=_metadata_fp,
+                )
+                if parent_span_id:
+                    faq_span = trace_collector.start_span(
+                        "question_gen", parent_id=parent_span_id,
+                        name="Question generation skipped (structured FAQ)",
+                        type="stage", kind=SpanKind.INDEX_LLM_GENERATE.value,
+                    )
+                    trace_collector.end_span(
+                        faq_span, status="skipped",
+                        metrics={"generation_status": "skipped", "skip_reason": "structured_faq",
+                                 "provider_call": False, "provider_duration_ms": 0},
+                    )
+            elif allow_llm_enrichment and ENABLE_SIMULATED_QUESTIONS and chunks_text:
                 questions_by_chunk, question_gen_tokens = await self._generate_questions_with_lineage(
                     chunks_text,
-                    unified["doc_type"],
+                    doc_type,
                     processing_recorder,
+                    parent_span_id,
                 )
             elif processing_recorder is not None:
                 question_lineage = self._begin_lineage_stage(
@@ -740,12 +928,17 @@ class MetadataStage:
         except Exception as e:
             logger.warning(f"[MetaLLM] 模拟问题生成失败（不影响元数据）: {e}")
 
-        # 时间引用：LLM 结果优先，空则正则兜底
-        time_refs = unified.get("time_refs") or extract_time_refs(full_text)
+        # 只保留原文中可精确匹配的 LLM 时间信号，空值由规则抽取兜底。
+        time_refs = [
+            str(value).strip() for value in unified.get("time_refs", []) or []
+            if contains_exact_source_match(full_text, str(value).strip())
+        ] or extract_time_refs(full_text)
 
-        # 摘要兜底：LLM 给了就用，异常空时取前几句
-        summary = unified.get("summary") or ""
-        if not summary:
+        # FAQ/合同的结构单元直接作为检索证据；文档层用章节概览导航，
+        # 不再生成会重复或改写原文的摘要。
+        skip_summary = _skip_document_summary(doc_type)
+        summary = "" if skip_summary else (unified.get("summary") or "")
+        if not summary and not skip_summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
             summary = _extract_first_sentences(full_text, 3) or ""
 
@@ -755,10 +948,31 @@ class MetadataStage:
         except Exception as e:
             logger.debug(f"[Indexer] 章节提取失败，跳过: {e}", exc_info=True)
 
-        # 关键词对象化（对齐 KeywordResult 输出口径：source=llm）
-        kws_llm_objs = [{"word": w, "source": "llm"} for w in unified.get("keywords", [])]
+        # 只接收逐字有据且满足通用实体格式信号的候选；主题词不进关键词字段。
+        from backend.rag.preprocessing.keyword import (
+            dedupe_keywords_normalized, extract_precise_keywords,
+        )
+        precise_candidates = list(unified.get("keywords") or [])
+        exact_named_entities = [
+            value
+            for entity_type, values in exact_entities.items()
+            if entity_type.casefold() in {"org", "product", "regulation"}
+            for value in values
+        ]
+        for entity_type, values in exact_entities.items():
+            if entity_type.casefold() != "person":
+                precise_candidates.extend(values)
+        precise_values = extract_precise_keywords(
+            full_text,
+            precise_candidates,
+            exact_named_entities=exact_named_entities,
+        )
+        rule_keys = {word.casefold() for word in rule_kws_preview}
+        kws_llm_objs = [
+            {"word": word, "source": "llm"} for word in precise_values
+            if word.casefold() not in rule_keys
+        ]
         kws_rule_objs = [{"word": w, "source": "rule"} for w in rule_kws_preview]
-        from backend.rag.preprocessing.keyword import dedupe_keywords_normalized
         kws_all_words = dedupe_keywords_normalized(
             [k["word"] for k in kws_rule_objs + kws_llm_objs])
 
@@ -771,33 +985,48 @@ class MetadataStage:
                 float(llm_tokens.get("cost_usd", 0) or 0)
                 + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
 
+        raw_risk = unified.get("risk") or {}
+        risk_signals = [
+            str(signal).strip() for signal in raw_risk.get("signals", []) or []
+            if str(signal).strip()
+            and contains_exact_source_match(full_text, str(signal).strip())
+        ]
+        risk_result = {
+            "level": str(raw_risk.get("level") or "none") if risk_signals else "none",
+            "signals": risk_signals,
+        }
+        provider_called = bool(unified.get("provider_called"))
+
         _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
         _stage_ms["total_ms"] = round((_time.monotonic() - _t_final0) * 1000)
         return {
             "stage_ms": dict(_stage_ms),
-            "doc_type": unified["doc_type"],
-            "confidence": unified["confidence"],
-            "business_domain": unified["business_domain"],
-            "domain_detail": {"source": "metadata_llm"},
+            "doc_type": doc_type,
+            "confidence": confidence,
+            "business_domain": domain,
+            "domain_detail": domain_detail,
             "time_refs": time_refs,
-            "complexity": complexity,
             "doc_keywords": kws_all_words,
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
             "llm_tokens": llm_tokens,
-            "llm_used": not bool(route_level),
-            "llm_strategy": f"cascade_{route_level}" if route_level else "unified_extract",
+            "llm_used": provider_called and not bool(route_level),
+            "llm_strategy": (
+                f"cascade_{route_level}" if route_level
+                else "unified_extract" if provider_called
+                else "rule_fallback"
+            ),
             "llm_decision": {
-                "source": "cascade_router" if route_level else "metadata_llm",
-                "fallback": False,
+                "source": "cascade_router" if route_level else
+                          "metadata_llm" if provider_called else "rules",
+                "fallback": not provider_called and not bool(route_level),
                 "route_level": route_level,
-                # Schema v1 新增 risk 字段：LLM 未输出时缺省 none（级联路径无）
-                **({"risk": unified["risk"]} if unified.get("risk") else {}),
+                "risk": risk_result,
             },
             # 同规则路径：存 list，过滤语义见上
             "person_names": list(person_names) if isinstance(person_names, (list, tuple))
                            else ([] if not person_names else [str(person_names)]),
-            "entities": unified.get("entities") or {},
+            "entities": exact_entities,
             "summary": summary,
             "sections": list(sections),
             "quality_score": quality.get("score", 0),
@@ -810,6 +1039,6 @@ class MetadataStage:
             "kb_version": "v1",
             "department": base_meta.get("department") or self._department,
             "questions_by_chunk": questions_by_chunk,
-            "risk": unified.get("risk") or {"level": "none", "signals": []},
+            "risk": risk_result,
         }
 

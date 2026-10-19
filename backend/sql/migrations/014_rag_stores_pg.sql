@@ -2,7 +2,8 @@
 -- 目标库：agent_memory（与 doc_registry/010 同层）
 -- 执行方式：init-dbs.sh 空卷首启 / 存量库手工 psql 同 012
 -- 说明：
---   - chunk_store：Chunk 文本持久化（Trace 详情页展示用，不参与检索链路）
+--   - chunk_store：Chunk 文本持久化；Parent 用于命中 Leaf 后恢复合同上下文，
+--     引用表格按文档内 table_id 恢复；Parent 不独立参与向量检索
 --   - keyword_rules：关键词规则动态管理（首启为空表时由应用侧导入种子数据）
 --   - doc_operation_log：文档管理操作审计日志
 --   - 应用侧各 PG 实现 _init_db 幂等建表，语句与本文件一致
@@ -13,6 +14,9 @@ CREATE TABLE IF NOT EXISTS chunk_store (
     id                   BIGSERIAL PRIMARY KEY,
     doc_id               TEXT NOT NULL,
     chunk_index          INTEGER NOT NULL DEFAULT 0,
+    chunk_id             TEXT NOT NULL DEFAULT '',
+    granularity          TEXT NOT NULL DEFAULT '',
+    parent_chunk_id      TEXT NOT NULL DEFAULT '',
     content              TEXT NOT NULL DEFAULT '',
     char_count           INTEGER NOT NULL DEFAULT 0,
     keywords             TEXT NOT NULL DEFAULT '',
@@ -24,9 +28,15 @@ CREATE TABLE IF NOT EXISTS chunk_store (
     fixture_set          TEXT NOT NULL DEFAULT '',
     department           TEXT NOT NULL DEFAULT '',
     simulated_questions  TEXT NOT NULL DEFAULT '[]',
+    chunk_metadata       JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at           TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE chunk_store ADD COLUMN IF NOT EXISTS chunk_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunk_store ADD COLUMN IF NOT EXISTS granularity TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunk_store ADD COLUMN IF NOT EXISTS parent_chunk_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE chunk_store ADD COLUMN IF NOT EXISTS chunk_metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_chunk_store_doc_id ON chunk_store(doc_id);
+CREATE INDEX IF NOT EXISTS idx_chunk_store_chunk_id ON chunk_store(chunk_id);
 
 -- ── 2/3 keyword_rules ──
 CREATE TABLE IF NOT EXISTS keyword_rules (

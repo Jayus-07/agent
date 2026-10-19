@@ -65,6 +65,9 @@ class DocumentAST:
     pdf_pages_with_content: int = 0
     pdf_skipped_pages: int = 0
     pdf_repaired: bool = False
+    # 解析器明确识别出的文档标题；不从普通章节标题兜底推断。
+    document_title: str = ""
+    document_title_node: DocumentNode | None = None
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:

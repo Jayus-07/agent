@@ -113,11 +113,17 @@ RAG_CONSISTENCY_SWEEP_INTERVAL_HOURS = int(os.getenv("RAG_CONSISTENCY_SWEEP_INTE
 DOC_LLM_MODEL = _literal_model("doc")
 
 # ====================================
-# 阶段2：元数据统一 LLM 抽取（metadata_llm.py）
+# 阶段2：可选元数据增强（metadata_llm.py）
 # ====================================
-# true = 上传时优先走单次 LLM JSON 抽取（doc_type/domain/summary/keywords/
-# entities/time_refs 一次抽齐），失败自动降级原规则路径；false = 维持纯规则链路
+# 该开关只控制一次可选增强调用（摘要、精确实体、风险和时间信号）。
+# 文档分类与业务域始终由规则结果决定；结构化 FAQ 和短文本走确定性路径。
 ENABLE_LLM_METADATA_EXTRACT = os.getenv("ENABLE_LLM_METADATA_EXTRACT", "true").lower() == "true"
+# 短文本优先使用结构化内容和抽取式摘要，避免调用 LLM 生成低价值摘要。
+METADATA_LLM_EXTRACT_MIN_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MIN_CHARS", "2000"))
+# UnifiedMetadata 的有界 JSON 输出使用 Provider 代理支持的 max_tokens 绑定。
+METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS = int(
+    os.getenv("METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS", "1024")
+)
 # 参与抽取的文本采样上限（超长文档按 60/20/20 头中尾采样，控制 token 成本）
 METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
 
@@ -163,6 +169,9 @@ SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
 ENABLE_SIMULATED_QUESTIONS = os.getenv("ENABLE_SIMULATED_QUESTIONS", "true").lower() == "true"
 # 成本护栏：超长文档只对前 N chunk 走 LLM 生成问题，其余规则兜底
 QUESTION_GEN_MAX_CHUNKS = int(os.getenv("QUESTION_GEN_MAX_CHUNKS", "24"))
+QUESTION_GEN_MAX_OUTPUT_TOKENS = int(
+    os.getenv("QUESTION_GEN_MAX_OUTPUT_TOKENS", "3072")
+)
 # 问题生成提示词/输出契约变更时递增，避免旧问题缓存污染新索引。
 QUESTION_GEN_PROMPT_VERSION = os.getenv("QUESTION_GEN_PROMPT_VERSION", "v1")
 # 表格行语义描述提示词版本：变更提示词或输出契约时自然失效旧缓存。

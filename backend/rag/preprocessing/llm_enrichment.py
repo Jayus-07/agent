@@ -11,7 +11,13 @@ import time
 from backend.shared.logger import logger
 
 
-def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extract"):
+def invoke_metadata_llm(
+    prompt: str,
+    llm_obj=None,
+    *,
+    role: str = "metadata_extract",
+    max_tokens: int | None = None,
+):
     """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
 
     qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
@@ -23,6 +29,8 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         llm_obj: 可选 LLM 对象。调用方传入后保持测试和本地模型兼容；
             None 时按 role 解析专用模型角色。
         role: 模型角色，入库阶段默认 ``metadata_extract``。
+        max_tokens: Provider 支持的生成上限；默认角色通过统一代理绑定，
+            显式传入的模型对象则使用其标准 ``bind`` 接口。
 
     Returns: LLM 消息对象（与 llm.invoke 一致）
     Raises: 与 llm.invoke 一致（调用方自行 try/except 降级）
@@ -31,7 +39,12 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         # 元数据角色也必须走统一代理，确保预算预占、韧性处理和用量结算
         # 与普通对话一致。get_llm_for_role 返回裸 LangChain 实例，会绕过这些门禁。
         from backend.infra.llm.proxy import bind_llm_for_role
-        llm_obj = bind_llm_for_role(role)
+        llm_obj = bind_llm_for_role(role, max_tokens=max_tokens)
+    elif max_tokens is not None:
+        binder = getattr(llm_obj, "bind", None)
+        if not callable(binder):
+            raise TypeError("显式 LLM 对象不支持 max_tokens 参数绑定")
+        llm_obj = binder(max_tokens=max_tokens)
 
     started = time.monotonic()
 

@@ -88,13 +88,12 @@ def test_qa_strategy_handles_qa_nodes():
         ]),
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
-    # C1 起：1 leaf + 1 文档级虚拟 parent
-    assert len(chunks) == 2
+    assert len(chunks) == 1
     leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
     assert leaves[0].page_content == "Q：怎么退货？\nA：提交申请。"
     parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
-    assert len(parents) == 1
-    assert leaves[0].metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
+    assert not parents
+    assert not leaves[0].metadata["parent_chunk_id"]
 
 
 def test_qa_strategy_handles_orphan_answer():
@@ -105,10 +104,10 @@ def test_qa_strategy_handles_orphan_answer():
         ]),
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
-    # C1 起：1 leaf + 1 文档级虚拟 parent
-    assert len(chunks) == 2
+    assert len(chunks) == 1
     leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
     assert "只有答案" in leaves[0].page_content
+    assert not leaves[0].metadata["parent_chunk_id"]
 
 
 def test_qa_strategy_chunks_have_required_metadata():
@@ -175,8 +174,8 @@ def test_faq_without_qa_nodes_falls_back_to_recursive():
     assert leaves, "章节切分必须产出 chunk（缺陷 D 的内容不丢断言）"
 
 
-def test_docx_faq_question_survives_cleaning_filter_and_index_identity(tmp_path):
-    """独立中文问题以 ASCII 问号结尾时仍须进入 Leaf 和有效 Parent。"""
+def test_docx_faq_questions_survive_without_question_directory_parent(tmp_path):
+    """FAQ 问答经清洗和索引身份覆盖后仍完整，且不生成问题目录 Parent。"""
     from docx import Document as DocxDocument
 
     from backend.rag.indexing.indexer import apply_index_chunk_identity
@@ -220,29 +219,27 @@ def test_docx_faq_question_survives_cleaning_filter_and_index_identity(tmp_path)
         if chunk.metadata.get("granularity") == "parent"
     }
     assert len(leaves) == 3
-    assert set(parents) == {"faq-doc_0"}
+    assert not parents
     assert all("年假申请流程是什么" in chunk.page_content for chunk in leaves)
-    assert all(
-        chunk.metadata.get("parent_chunk_id") in parents
-        for chunk in leaves
-    )
-    assert {chunk.metadata["parent_chunk_id"] for chunk in leaves} == {
-        "faq-doc_0"
-    }
+    assert all(not chunk.metadata.get("parent_chunk_id") for chunk in leaves)
+    assert all("\nA：" in chunk.page_content for chunk in leaves)
+    lookup_calls = []
+
+    def parent_lookup(ids):
+        lookup_calls.append(ids)
+        return []
+
     recalled = attach_parent_context(
-        [leaves[0]],
-        lambda ids: [
-            parents[parent_id] for parent_id in ids if parent_id in parents
-        ],
+        [leaves[0]], parent_lookup,
     )
-    assert len(recalled) == 2
-    assert "年假申请流程是什么" in recalled[1].page_content
+    assert recalled == [leaves[0]]
+    assert not lookup_calls
     final_coverage = coverage_audit(qc["normalized_ast"], final_chunks)
     assert final_coverage["uncovered_count"] == 0
 
 
-def test_short_faq_parent_referenced_by_leaf_is_not_dropped(tmp_path):
-    """短问题 Parent 虽短，仍需保留为被 Leaf 引用的检索上下文。"""
+def test_short_faq_is_indexed_without_question_directory_parent(tmp_path):
+    """短 FAQ 仍保留完整叶子，不生成问题目录 Parent 或父引用。"""
     from docx import Document as DocxDocument
 
     from backend.rag.indexing.indexer import (
@@ -272,20 +269,23 @@ def test_short_faq_parent_referenced_by_leaf_is_not_dropped(tmp_path):
     apply_index_chunk_identity(final_chunks, "short-faq-doc")
 
     integrity = audit_chunk_integrity(final_chunks)
-    assert integrity["parent_chunk_count"] == 1
+    assert integrity["parent_chunk_count"] == 0
+    assert integrity["parent_reference_count"] == 0
     assert integrity["invalid_parent_reference_count"] == 0
-    parent = next(
-        chunk for chunk in final_chunks
-        if chunk.metadata.get("granularity") == "parent"
-    )
-    assert parent.metadata["filter_status"] == "kept_referenced_parent"
-    assert parent.metadata["parent_filter_override_reason"] == "too_short"
     leaf = next(
         chunk for chunk in final_chunks
         if chunk.metadata.get("granularity") == "leaf"
     )
+    assert "\nA：" in leaf.page_content
+    assert not leaf.metadata.get("parent_chunk_id")
+    lookup_calls = []
+
+    def parent_lookup(ids):
+        lookup_calls.append(ids)
+        return []
+
     recalled = attach_parent_context(
-        [leaf], lambda ids: [parent] if parent.metadata["chunk_id"] in ids else [],
+        [leaf], parent_lookup,
     )
-    assert len(recalled) == 2
-    assert "如何退款" in recalled[1].page_content
+    assert recalled == [leaf]
+    assert not lookup_calls
