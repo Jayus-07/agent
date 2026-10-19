@@ -10,6 +10,7 @@
 """
 import csv
 import io
+import json
 
 import docx
 import pymupdf as fitz
@@ -30,9 +31,17 @@ def _assert_p0_invariants(chunks, ast):
     # 2) 全部 leaf 的 parent 关联可解析
     by_id = {c.metadata.get("chunk_id") for c in chunks}
     leaves = [c for c in chunks if c.metadata.get("granularity") == "leaf"]
+    has_qa_nodes = any(
+        node.type in ("qa_question", "qa_answer") for node in walk(ast.root)
+    )
     assert leaves, "应产出 leaf"
     for c in leaves:
         pid = c.metadata.get("parent_chunk_id")
+        # 完整 Q+A 已是检索单元，依照 FAQ 契约不挂全局 Parent，
+        # 避免命中单个问题后扩展出其他无关问答。
+        if not pid and has_qa_nodes and not c.metadata.get("section_path"):
+            assert c.metadata.get("section_title")
+            continue
         assert pid, f"leaf 缺 parent_chunk_id: {c.page_content[:40]}"
         # 索引期覆盖前（切分期）parent id 即在 chunk 集合中
         assert pid in by_id, f"parent 不可解析: {pid}"
@@ -159,17 +168,52 @@ def test_08_contract_with_table(tmp_path):
     p = tmp_path / "contract_tbl.docx"
     d = docx.Document()
     d.add_heading("服务合同", level=1)
-    d.add_paragraph("第一条 服务内容\n乙方提供运维服务。")
-    t = d.add_table(rows=2, cols=2)
-    t.cell(0, 0).text = "服务项"
-    t.cell(0, 1).text = "SLA"
-    t.cell(1, 0).text = "系统可用率"
-    t.cell(1, 1).text = "99.9%"
+    d.add_paragraph("第一条 服务内容\n乙方向甲方提供平台运维服务。")
+    d.add_paragraph("第二条 服务费用\n各项费用见下表。SENTINEL-TABLE-REF")
+    rows = [
+        ["项目", "单价(元)", "数量", "小计(元)"],
+        ["基础运维", "6294", "1", "6294"],
+        ["应急响应", "3530", "8", "28240"],
+        ["容量评估", "1273", "10", "12730"],
+        ["安全巡检", "3988", "12", "47856"],
+        ["培训", "2076", "2", "4152"],
+    ]
+    t = d.add_table(rows=len(rows), cols=len(rows[0]))
+    for row_index, row in enumerate(rows):
+        for column_index, value in enumerate(row):
+            t.cell(row_index, column_index).text = value
+    d.add_paragraph(
+        "第三条 付款方式\n上表所列费用按季度结算，甲方在收到发票后十五日内付款。"
+    )
+    d.add_paragraph("第四条 违约责任\n逾期付款按日万分之五计收违约金。")
     d.save(str(p))
     chunks, qc = parse_and_chunk_full(str(p))
-    body = "\n".join(c.page_content for c in chunks)
-    assert "99.9%" in body
-    assert "运维服务" in body
+    parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert len(chunks) == 5
+    assert len(parents) == 1
+    assert len(leaves) == 4
+    assert parents[0].metadata["vectorize"] is False
+    assert len(json.loads(parents[0].metadata["table_structures_json"])) == 1
+    assert all(value in parents[0].page_content for value in (
+        "6294", "28240", "12730", "47856", "4152",
+    ))
+
+    fee_leaf = next(c for c in leaves if c.metadata.get("table_id"))
+    assert fee_leaf.metadata["chunk_type"] == "table_inline"
+    assert json.loads(fee_leaf.metadata["table_rows_json"]) == rows
+    assert all(value in fee_leaf.page_content for value in (
+        "6294", "28240", "12730", "47856", "4152",
+    ))
+    assert "SENTINEL-TABLE-REF" in fee_leaf.page_content
+    assert not any(c.metadata.get("chunk_type") in {
+        "table_header", "table_summary", "table_row",
+    } for c in leaves)
+
+    payment_leaf = next(
+        c for c in leaves if c.metadata.get("section_id") == "clause_3"
+    )
+    assert payment_leaf.metadata["references"] == ["table_1"]
     _assert_p0_invariants(chunks, qc["raw_ast"])
 
 

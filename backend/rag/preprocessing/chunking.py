@@ -6,6 +6,7 @@ Strategy 只负责「既然知道结构，怎么切」，不再重新检测标�
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -231,7 +232,8 @@ def _is_legal_clause(text: str) -> bool:
 def _has_legal_clauses(ast: DocumentAST) -> bool:
     """AST 中是否存在「第 N 条」法律条款编号。"""
     return any(
-        n.type in LEAF_TYPES and _is_legal_clause(n.text)
+        (n.type in LEAF_TYPES or n.type == "section")
+        and _is_legal_clause(n.text)
         for n in walk(ast.root)
     )
 
@@ -1088,6 +1090,12 @@ class LegalChunkStrategy:
     """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        clause_sections = self._clause_sections(ast)
+        if clause_sections:
+            return self._split_contract_with_tables(
+                ast, file_path, clause_sections,
+            )
+
         # 无条款降级：内容找不到「第 N 条」边界时，旧实现会把全文合成
         # 单一巨型 chunk（误分类为 legal 的流程/制度文档尤其受害）。
         # 有章节结构 → Structure 切分；否则 Recursive 兜底，不静默堆大 chunk。
@@ -1146,6 +1154,370 @@ class LegalChunkStrategy:
                                     group_size=max(LEGAL_CLAUSES_PER_PARENT, 1)),
             file_path,
         )
+
+    @staticmethod
+    def _clause_sections(ast: DocumentAST) -> list[DocumentNode]:
+        """按文档顺序找到条款 section，不进入已识别条款内部重复扫描。"""
+        sections: list[DocumentNode] = []
+
+        def visit(node: DocumentNode) -> None:
+            for child in node.children:
+                if child.type == "section" and _is_legal_clause(child.text):
+                    sections.append(child)
+                else:
+                    visit(child)
+
+        visit(ast.root)
+        return sections
+
+    def _split_contract_with_tables(
+        self, ast: DocumentAST, file_path: str,
+        clause_sections: list[DocumentNode],
+    ) -> List[Document]:
+        """合同表格随条款成 Leaf；短表完整保留，长表按行组重复表头。"""
+        import json
+
+        from backend.rag.preprocessing.parser._table_nl import (
+            detect_multi_level_header, make_table_chunk_text,
+        )
+
+        doc_title = _doc_title(ast)
+        records: list[dict] = []
+        previous_table_id = ""
+        next_table_number = 1
+
+        for clause_index, section in enumerate(clause_sections, start=1):
+            section_id = f"clause_{clause_index}"
+            clause_title = section.text.strip()
+            items: list[dict] = []
+            tables: list[dict] = []
+            for node in walk(section):
+                if node is section:
+                    continue
+                if node.type == "table" and node.rows:
+                    table_id = f"table_{next_table_number}"
+                    next_table_number += 1
+                    table = {
+                        "table_id": table_id,
+                        "rows": [list(row) for row in node.rows],
+                        "section_id": section_id,
+                    }
+                    table["text"] = make_table_chunk_text(
+                        table["rows"],
+                        section_title=f"{doc_title} / {clause_title}".strip(" /"),
+                    )
+                    tables.append(table)
+                    items.append({"kind": "table", "value": table})
+                elif node.type in LEAF_TYPES and node.text.strip():
+                    items.append({"kind": "text", "value": node.text.strip()})
+
+            prefix_parts = [part for part in (doc_title, clause_title) if part]
+            prefix = "\n".join(prefix_parts)
+            text_parts = [prefix] if prefix else []
+            full_items: list[str] = []
+            body_texts: list[str] = []
+            for item in items:
+                if item["kind"] == "table":
+                    item_text = item["value"]["text"]
+                else:
+                    item_text = item["value"]
+                    body_texts.append(item_text)
+                full_items.append(item_text)
+            text_parts.extend(full_items)
+            clause_text = "\n".join(part for part in text_parts if part)
+
+            references: list[str] = []
+            combined_body = "\n".join(body_texts)
+            if re.search(r"上表|上述表格|前表|前述表格", combined_body):
+                if previous_table_id:
+                    references.append(previous_table_id)
+            if tables:
+                previous_table_id = tables[-1]["table_id"]
+
+            records.append({
+                "section_id": section_id,
+                "section_title": clause_title,
+                "section_path": [part for part in (doc_title, clause_title) if part],
+                "prefix": prefix,
+                "body_text": "\n".join(body_texts),
+                "items": items,
+                "text": clause_text,
+                "tables": tables,
+                "references": list(dict.fromkeys(references)),
+            })
+
+        leaves: list[Document] = []
+        for record in records:
+            leaf_base = {
+                "granularity": "leaf",
+                "parent_chunk_id": "",
+                "section_id": record["section_id"],
+                "section_path": record["section_path"],
+                "section_title": record["section_title"],
+                "section_level": 1,
+            }
+            tables = record["tables"]
+            table_ids = [table["table_id"] for table in tables]
+            references = record["references"]
+            if count_tokens(record["text"]) <= LEAF_CHUNK_TOKENS:
+                metadata = {
+                    **leaf_base,
+                    "chunk_id": _chunk_id(
+                        file_path, f"legal:{record['section_id']}", record["text"],
+                    ),
+                    "chunk_type": "table_inline" if tables else "legal_clause",
+                    "chunk_tokens": count_tokens(record["text"]),
+                }
+                if len(table_ids) == 1:
+                    metadata["table_id"] = table_ids[0]
+                    metadata["table_rows_json"] = json.dumps(
+                        tables[0]["rows"], ensure_ascii=False,
+                    )
+                elif tables:
+                    metadata["table_ids"] = table_ids
+                    metadata["table_structures_json"] = json.dumps(
+                        tables, ensure_ascii=False,
+                    )
+                if references:
+                    metadata["references"] = references
+                leaves.append(_make_doc(record["text"], metadata))
+                continue
+
+            body_emitted = False
+            for item in record["items"]:
+                if item["kind"] == "text":
+                    text = "\n".join(
+                        part for part in (record["prefix"], item["value"]) if part
+                    )
+                    for part_index, part in enumerate(_hard_split_by_budget(
+                        text, LEAF_CHUNK_TOKENS,
+                    )):
+                        metadata = {
+                            **leaf_base,
+                            "chunk_id": _chunk_id(
+                                file_path,
+                                f"legal:{record['section_id']}:text:{part_index}",
+                                part,
+                            ),
+                            "chunk_type": "legal_clause",
+                            "chunk_tokens": count_tokens(part),
+                        }
+                        if references:
+                            metadata["references"] = references
+                        leaves.append(_make_doc(part, metadata))
+                    body_emitted = True
+                    continue
+
+                table = item["value"]
+                header_count, header_rows, data_rows = detect_multi_level_header(
+                    table["rows"],
+                )
+                if not header_rows:
+                    header_rows = table["rows"][:1]
+                    data_rows = table["rows"][1:]
+                    header_count = len(header_rows)
+                row_groups: list[tuple[int, int, list[list[str]]]] = []
+                current_rows: list[list[str]] = []
+                current_start = 0
+                for data_index, row in enumerate(data_rows, start=1):
+                    candidate = current_rows + [row]
+                    candidate_rows = header_rows + candidate
+                    section_context = (
+                        record["prefix"]
+                        if not body_emitted and not row_groups
+                        else "\n".join(
+                            part for part in (doc_title, record["section_title"])
+                            if part
+                        )
+                    )
+                    candidate_text = "\n".join(part for part in (
+                        section_context,
+                        record["body_text"] if not body_emitted and not row_groups else "",
+                        make_table_chunk_text(
+                            candidate_rows,
+                            section_title=(
+                                f"{doc_title} / {record['section_title']}".strip(" /")
+                            ),
+                        ),
+                    ) if part)
+                    if current_rows and count_tokens(candidate_text) > LEAF_CHUNK_TOKENS:
+                        row_groups.append((
+                            current_start + 1,
+                            data_index - 1,
+                            current_rows,
+                        ))
+                        current_rows = [row]
+                        current_start = data_index - 1
+                    else:
+                        if not current_rows:
+                            current_start = data_index - 1
+                        current_rows = candidate
+                if current_rows:
+                    row_groups.append((
+                        current_start + 1,
+                        len(data_rows),
+                        current_rows,
+                    ))
+                if not data_rows:
+                    row_groups.append((0, 0, []))
+
+                for group_index, (row_start, row_end, rows_group) in enumerate(row_groups):
+                    section_context = (
+                        record["prefix"]
+                        if not body_emitted and group_index == 0
+                        else "\n".join(
+                            part for part in (doc_title, record["section_title"])
+                            if part
+                        )
+                    )
+                    text_parts = [section_context]
+                    if not body_emitted and group_index == 0 and record["body_text"]:
+                        text_parts.append(record["body_text"])
+                    text_parts.append(make_table_chunk_text(
+                        header_rows + rows_group,
+                        section_title=(
+                            f"{doc_title} / {record['section_title']}".strip(" /")
+                        ),
+                    ))
+                    chunk_text = "\n".join(part for part in text_parts if part)
+                    if count_tokens(chunk_text) > LEAF_CHUNK_TOKENS:
+                        # 单行本身超过预算时，把该行按“列名：值”文本切开，
+                        # 每片重复合同上下文与表头；完整单元格仍保存在 JSON。
+                        headers = [
+                            " / ".join(
+                                str(header_row[col]).strip()
+                                for header_row in header_rows
+                                if col < len(header_row)
+                                and str(header_row[col]).strip()
+                            )
+                            for col in range(max(
+                                (len(row) for row in rows_group), default=0,
+                            ))
+                        ]
+                        header_text = "表头：" + " | ".join(headers)
+                        prefix = "\n".join(
+                            part for part in (section_context, header_text)
+                            if part
+                        )
+                        row_facts = [
+                            f"{headers[col] if col < len(headers) else f'列{col + 1}'}：{value}"
+                            for row in rows_group
+                            for col, value in enumerate(row)
+                            if str(value).strip()
+                        ]
+                        row_text = "；".join(row_facts)
+                        available_tokens = max(
+                            1,
+                            LEAF_CHUNK_TOKENS - count_tokens(prefix) - 5,
+                        )
+                        row_parts = _hard_split_by_budget(
+                            row_text, available_tokens,
+                        )
+                        while (
+                            available_tokens > 1
+                            and any(
+                                count_tokens(f"{prefix}\n{part}")
+                                > LEAF_CHUNK_TOKENS
+                                for part in row_parts
+                            )
+                        ):
+                            available_tokens -= 1
+                            row_parts = _hard_split_by_budget(
+                                row_text, available_tokens,
+                            )
+                        part_texts = [
+                            f"{prefix}\n{part}" for part in row_parts
+                        ]
+                    else:
+                        part_texts = [chunk_text]
+
+                    for part_index, part_text in enumerate(part_texts):
+                        metadata = {
+                            **leaf_base,
+                            "chunk_id": _chunk_id(
+                                file_path,
+                                f"legal:{record['section_id']}:{table['table_id']}:{row_start}:{row_end}:{part_index}",
+                                part_text,
+                            ),
+                            "chunk_type": "table_row_group",
+                            "table_id": table["table_id"],
+                            "row_start": row_start,
+                            "row_end": row_end,
+                            "table_rows_json": json.dumps(
+                                header_rows + rows_group, ensure_ascii=False,
+                            ),
+                            "chunk_tokens": count_tokens(part_text),
+                        }
+                        if len(part_texts) > 1:
+                            metadata["row_part_index"] = part_index
+                            metadata["row_part_count"] = len(part_texts)
+                        if references:
+                            metadata["references"] = references
+                        leaves.append(_make_doc(part_text, metadata))
+                body_emitted = True
+
+        if not leaves:
+            return []
+
+        # Parent 只保存完整合同上下文，标记为不参与 Chunk 向量检索。
+        # 长合同按 Parent 预算分组，Leaf 仍只绑定其对应上下文组。
+        parent_groups: list[list[Document]] = []
+        current_group: list[Document] = []
+        for leaf in leaves:
+            candidate = current_group + [leaf]
+            candidate_text = "\n\n".join(
+                part for part in ([doc_title] + [c.page_content for c in candidate])
+                if part
+            )
+            if current_group and count_tokens(candidate_text) > PARENT_CHUNK_TOKENS:
+                parent_groups.append(current_group)
+                current_group = [leaf]
+            else:
+                current_group = candidate
+        if current_group:
+            parent_groups.append(current_group)
+
+        output: list[Document] = []
+        table_structures = [
+            table
+            for record in records
+            for table in record["tables"]
+        ]
+        for group_index, group in enumerate(parent_groups):
+            parent_text = "\n\n".join(
+                part for part in ([doc_title] + [c.page_content for c in group])
+                if part
+            )
+            parent_id = _chunk_id(
+                file_path, f"legal_contract_parent:{group_index}", parent_text,
+            )
+            output.append(_make_doc(parent_text, {
+                "granularity": "parent",
+                "chunk_id": parent_id,
+                "parent_chunk_id": "",
+                "chunk_type": "contract_context",
+                "vectorize": False,
+                "section_path": [doc_title] if doc_title else [],
+                "section_title": doc_title,
+                "section_level": 1 if doc_title else 0,
+                "chunk_tokens": count_tokens(parent_text),
+                "table_structures_json": json.dumps(
+                    table_structures, ensure_ascii=False,
+                ),
+                "sections_json": json.dumps([
+                    {
+                        "section_id": record["section_id"],
+                        "section_title": record["section_title"],
+                        "references": record["references"],
+                    }
+                    for record in records
+                ], ensure_ascii=False),
+            }))
+            for leaf in group:
+                leaf.metadata["parent_chunk_id"] = parent_id
+            output.extend(group)
+
+        return _enrich(output, file_path)
 
 
 class QAChunkStrategy:
@@ -1659,7 +2031,7 @@ _STRATEGY_VERSIONS = {
     "FixedSizeChunkStrategy": "v2",
     "RecursiveChunkStrategy": "v2",
     "StepChunkStrategy": "v2",
-    "LegalChunkStrategy": "v2",
+    "LegalChunkStrategy": "v3",
     "QAChunkStrategy": "v2",
     "FinancialTableChunkStrategy": "v2",
     "SemanticChunkStrategy": "v1",
@@ -1688,7 +2060,7 @@ class ChunkStrategyRouter:
     """结构驱动路由（P0-1 治理改造，2026-10-19，v3）。
 
     策略选择主键 = AST 结构信号（StructureProfile + AST 实时判定），按
-    「问答对 > 表格 > 法律条款 > 步骤 > 章节 > 递归」优先级直判；doc_type
+    「问答对 > 强法律条款 > 表格 > 法律条款 > 步骤 > 章节 > 递归」优先级直判；doc_type
     不再是切分前置条件，仅保留两处已论证的业务最小例外（ad_policy 固定
     大小、financial 数值表格过滤），并继续作为审计字段进入
     ChunkRouteDecision。v2 的 completeness 门槛/强信号豁免/资格否决分支
@@ -1704,7 +2076,7 @@ class ChunkStrategyRouter:
         return self.route_with_decision(doc_type, report)[0]
 
     def route_with_decision(self, doc_type: str, report: StructureReport):
-        """结构信号直判（v3）：优先级 问答对>表格>条款>步骤>章节>递归。
+        """结构信号直判（v3）：优先级 问答对>强法律条款>表格>条款>步骤>章节>递归。
 
         doc_type 仅用于 ad_policy/financial 两个业务最小例外与决策审计；
         route() 旧签名兼容不变。
@@ -1740,6 +2112,12 @@ class ChunkStrategyRouter:
             logger.info("[Router] 结构信号 qa_pair → QA 切分")
             return _decision(QAChunkStrategy, scope="按问答对",
                              signal="signal_qa_pairs")
+
+        # 多条款合同内的表格属于条款内容，必须先按合同结构规划。
+        if profile is not None and profile.legal_clause_count >= 3:
+            logger.info("[Router] 强结构信号 legal_clauses → Legal 切分")
+            return _decision(LegalChunkStrategy, scope="按条款及条款内表格",
+                             signal="signal_legal_clauses")
 
         # 2) 表格：表头/行列关系与章节上下文由 Structure 表格行级保留；
         #    financial 数值列过滤为业务最小例外
@@ -1902,27 +2280,52 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
         row_leaf_bodies: dict[tuple[str, int, str, bool], list[str]] = {}
         for chunk in chunks:
             metadata = getattr(chunk, "metadata", {}) or {}
+            if (metadata.get("granularity") != "leaf"
+                    or metadata.get("table_id") is None
+                    or not getattr(chunk, "page_content", None)):
+                continue
+            is_masked = bool(normalize_pii and metadata.get("pii_masked"))
+            table_id = str(metadata["table_id"])
+            row_index = metadata.get("row_index")
             if (
-                metadata.get("granularity") != "leaf"
-                or metadata.get("chunk_type") not in (
+                metadata.get("chunk_type") in (
                     CHUNK_TYPE_TABLE_ROW, CHUNK_TYPE_TABLE_HEADER,
                 )
-                or metadata.get("table_id") is None
-                or metadata.get("row_index") is None
-                or not getattr(chunk, "page_content", None)
+                and row_index is not None
             ):
+                row_leaf_bodies.setdefault(
+                    (table_id, int(row_index),
+                     str(metadata.get("chunk_type")), is_masked),
+                    [],
+                ).append(_normalize(chunk.page_content, mask_pii=is_masked))
                 continue
-            row_key = (
-                str(metadata["table_id"]), int(metadata["row_index"]),
-                str(metadata.get("chunk_type")),
-                bool(normalize_pii and metadata.get("pii_masked")),
-            )
-            row_leaf_bodies.setdefault(row_key, []).append(
-                _normalize(
-                    chunk.page_content,
-                    mask_pii=row_key[3],
+
+            # 条款内完整表格/长表行组在 metadata 中保留原始单元格结构；
+            # 用它建立逐行覆盖证据，无需为每行创建独立向量 Leaf。
+            try:
+                structured_rows = json.loads(
+                    metadata.get("table_rows_json") or "[]",
                 )
+            except (TypeError, ValueError):
+                structured_rows = []
+            if not isinstance(structured_rows, list) or not structured_rows:
+                continue
+            from backend.rag.preprocessing.parser._table_nl import (
+                detect_multi_level_header,
             )
+
+            header_count, _, _ = detect_multi_level_header(structured_rows)
+            header_count = min(max(int(header_count), 0), len(structured_rows))
+            row_start = int(metadata.get("row_start") or 1)
+            for index, _row in enumerate(structured_rows):
+                source_index = (
+                    index if index < header_count
+                    else row_start + index - header_count
+                )
+                row_key = (table_id, source_index, "table_row", is_masked)
+                row_leaf_bodies.setdefault(row_key, []).append(
+                    _normalize(chunk.page_content, mask_pii=is_masked)
+                )
         row_bodies = [
             ("".join(parts), key[3])
             for key, parts in row_leaf_bodies.items()

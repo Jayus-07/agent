@@ -29,6 +29,12 @@ _HEADING_RE = re.compile(r"^Heading\s+(\d+)$", re.IGNORECASE)
 _LIST_RE = re.compile(r"List\s+\w+", re.IGNORECASE)
 # 中文编号章节标题（一、二、三、）——Normal 段落但属于章节标题
 _CN_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
+_LEGAL_CLAUSE_RE = re.compile(
+    r"^(?P<number>第[一二三四五六七八九十百\d]+条)"
+    r"(?:[ \t\u3000]+(?P<title>[^:：\n]{1,60}))?"
+    r"(?:(?:[:：][ \t]*(?P<body>.*))|(?:\r?\n(?P<body_after_line>.*)))?$",
+    re.DOTALL,
+)
 
 
 def _find_parent_section(
@@ -105,6 +111,46 @@ class DocxParser(BaseDocumentParser):
                     parent = _find_parent_section(section_stack, level)
                     parent.children.append(section)
                     section_stack.append(section)
+                    raw_lines.append(text)
+                    continue
+
+                # DOCX 合同经常把条款标题与正文写在同一个 Normal 段落。
+                # 将明确的「第 N 条 标题：正文」恢复为 section + 正文叶子，
+                # 让后续 Legal 策略能把短表格附着到所属条款。
+                clause_match = _LEGAL_CLAUSE_RE.match(text)
+                if clause_match:
+                    clause_number = clause_match.group("number")
+                    clause_title = (clause_match.group("title") or "").strip()
+                    title = " ".join(
+                        part for part in (clause_number, clause_title) if part
+                    )
+                    # 后续条款必须与前一条款同级。条款中可能还包含小节，
+                    # 因此回到最近条款的父级，再复用该条款层级。
+                    previous_clause_index = next((
+                        index
+                        for index in range(len(section_stack) - 1, 0, -1)
+                        if _LEGAL_CLAUSE_RE.match(section_stack[index].text)
+                    ), None)
+                    if previous_clause_index is not None:
+                        level = section_stack[previous_clause_index].level
+                        del section_stack[previous_clause_index:]
+                    else:
+                        level = max(section_stack[-1].level + 1, 1)
+                    section = DocumentNode(
+                        type="section", text=title, level=level,
+                    )
+                    parent = _find_parent_section(section_stack, level)
+                    parent.children.append(section)
+                    section_stack.append(section)
+                    body = (
+                        clause_match.group("body")
+                        if clause_match.group("body") is not None
+                        else clause_match.group("body_after_line")
+                    )
+                    if body and body.strip():
+                        section.children.append(DocumentNode(
+                            type="paragraph", text=body.strip(),
+                        ))
                     raw_lines.append(text)
                     continue
 

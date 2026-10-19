@@ -20,6 +20,19 @@ from backend.rag.preprocessing.metadata_llm import (
 VALID_TYPES = {"policy", "sop", "financial", "faq", "general"}
 
 
+@pytest.mark.parametrize("doc_type", ["faq", "legal", "contract_template"])
+def test_document_summary_policy_skips_structured_documents(doc_type):
+    from backend.rag.indexing.stages.metadata_stage import _skip_document_summary
+
+    assert _skip_document_summary(doc_type) is True
+
+
+def test_document_summary_policy_keeps_general_summary():
+    from backend.rag.indexing.stages.metadata_stage import _skip_document_summary
+
+    assert _skip_document_summary("policy") is False
+
+
 GOOD = {
     "doc_type": "financial",
     "confidence": 0.9,

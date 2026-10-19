@@ -77,6 +77,9 @@ class PostgresChunkStore(ChunkStore):
                     id                   BIGSERIAL PRIMARY KEY,
                     doc_id               TEXT NOT NULL,
                     chunk_index          INTEGER NOT NULL DEFAULT 0,
+                    chunk_id             TEXT NOT NULL DEFAULT '',
+                    granularity          TEXT NOT NULL DEFAULT '',
+                    parent_chunk_id      TEXT NOT NULL DEFAULT '',
                     content              TEXT NOT NULL DEFAULT '',
                     char_count           INTEGER NOT NULL DEFAULT 0,
                     keywords             TEXT NOT NULL DEFAULT '',
@@ -88,6 +91,7 @@ class PostgresChunkStore(ChunkStore):
                     fixture_set          TEXT NOT NULL DEFAULT '',
                     department           TEXT NOT NULL DEFAULT '',
                     simulated_questions  TEXT NOT NULL DEFAULT '[]',
+                    chunk_metadata       JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                     created_at           TEXT NOT NULL DEFAULT ''
                 )
             """)
@@ -96,7 +100,21 @@ class PostgresChunkStore(ChunkStore):
                 f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS fixture_set TEXT NOT NULL DEFAULT ''"
             )
             conn.cursor().execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS chunk_id TEXT NOT NULL DEFAULT ''"
+            )
+            conn.cursor().execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS granularity TEXT NOT NULL DEFAULT ''"
+            )
+            conn.cursor().execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS parent_chunk_id TEXT NOT NULL DEFAULT ''"
+            )
+            conn.cursor().execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS chunk_metadata JSONB NOT NULL DEFAULT '{{}}'::jsonb"
+            )
+            conn.cursor().execute(
                 f"CREATE INDEX IF NOT EXISTS idx_{t}_doc_id ON {t}(doc_id)")
+            conn.cursor().execute(
+                f"CREATE INDEX IF NOT EXISTS idx_{t}_chunk_id ON {t}(chunk_id)")
 
     # ---- 写入 ----
 
@@ -104,7 +122,9 @@ class PostgresChunkStore(ChunkStore):
         if not chunks:
             return 0
         rows = [
-            (doc_id, c.get("chunk_index", i), c.get("content", ""),
+            (doc_id, c.get("chunk_index", i), c.get("chunk_id", ""),
+             c.get("granularity", ""), c.get("parent_chunk_id", ""),
+             c.get("content", ""),
              len(c.get("content", "") or ""),
              c.get("keywords", ""),
              c.get("llm_keywords", ""),
@@ -115,6 +135,7 @@ class PostgresChunkStore(ChunkStore):
              c.get("fixture_set", ""),
              c.get("department", ""),
              json.dumps(c.get("simulated_questions", []), ensure_ascii=False),
+             json.dumps(c.get("chunk_metadata", {}), ensure_ascii=False, default=str),
              _now_utc())
             for i, c in enumerate(chunks)
         ]
@@ -122,10 +143,12 @@ class PostgresChunkStore(ChunkStore):
             psycopg2.extras.execute_batch(
                 conn.cursor(),
                 f"""INSERT INTO {self._table}
-                   (doc_id, chunk_index, content, char_count, keywords,
-                    llm_keywords, llm_model, section_title, doc_type, kb_id,
-                    fixture_set, department, simulated_questions, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                   (doc_id, chunk_index, chunk_id, granularity, parent_chunk_id,
+                    content, char_count, keywords, llm_keywords, llm_model,
+                    section_title, doc_type, kb_id, fixture_set, department,
+                    simulated_questions, chunk_metadata, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s, %s::jsonb, %s)""",
                 rows,
             )
         logger.debug(f"[ChunkStore-PG] 写入 {len(rows)} chunks for doc={doc_id}")
@@ -143,9 +166,10 @@ class PostgresChunkStore(ChunkStore):
         with self._conn() as conn:
             rows = self._exec(
                 conn,
-                f"""SELECT chunk_index, content, char_count, keywords, llm_keywords,
+                f"""SELECT chunk_index, chunk_id, granularity, parent_chunk_id,
+                           content, char_count, keywords, llm_keywords,
                            llm_model, section_title, doc_type, kb_id, fixture_set, department,
-                           simulated_questions, created_at
+                           simulated_questions, chunk_metadata, created_at
                     FROM {self._table} WHERE doc_id = %s ORDER BY chunk_index""",
                 (doc_id,),
             ).fetchall()
@@ -156,8 +180,66 @@ class PostgresChunkStore(ChunkStore):
                 d["simulated_questions"] = json.loads(d.get("simulated_questions") or "[]")
             except (ValueError, TypeError):
                 d["simulated_questions"] = []
+            if not isinstance(d.get("chunk_metadata"), dict):
+                try:
+                    d["chunk_metadata"] = json.loads(d.get("chunk_metadata") or "{}")
+                except (ValueError, TypeError):
+                    d["chunk_metadata"] = {}
             out.append(d)
         return out
+
+    def _get_by_query(self, sql: str, params: tuple) -> list[dict[str, Any]]:
+        with self._conn() as conn:
+            rows = self._exec(conn, sql, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict[str, Any]]:
+        """按稳定 Chunk ID 读取正文与授权/关系元数据，不走向量检索。"""
+        ids = [str(value) for value in chunk_ids if str(value or "").strip()]
+        if not ids:
+            return []
+        rows = self._get_by_query(
+            f"""SELECT doc_id, chunk_index, chunk_id, granularity,
+                       parent_chunk_id, content, chunk_metadata
+                FROM {self._table} WHERE chunk_id = ANY(%s)
+                ORDER BY chunk_index""",
+            (ids,),
+        )
+        for row in rows:
+            if not isinstance(row.get("chunk_metadata"), dict):
+                try:
+                    row["chunk_metadata"] = json.loads(
+                        row.get("chunk_metadata") or "{}",
+                    )
+                except (ValueError, TypeError):
+                    row["chunk_metadata"] = {}
+        return rows
+
+    def get_by_table_ids(
+        self, doc_id: str, table_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """按同一文档内 table_id 找到完整表格 Leaf。"""
+        ids = [str(value) for value in table_ids if str(value or "").strip()]
+        if not doc_id or not ids:
+            return []
+        rows = self._get_by_query(
+            f"""SELECT doc_id, chunk_index, chunk_id, granularity,
+                       parent_chunk_id, content, chunk_metadata
+                FROM {self._table}
+                WHERE doc_id = %s AND granularity = 'leaf'
+                  AND chunk_metadata->>'table_id' = ANY(%s)
+                ORDER BY chunk_index""",
+            (doc_id, ids),
+        )
+        for row in rows:
+            if not isinstance(row.get("chunk_metadata"), dict):
+                try:
+                    row["chunk_metadata"] = json.loads(
+                        row.get("chunk_metadata") or "{}",
+                    )
+                except (ValueError, TypeError):
+                    row["chunk_metadata"] = {}
+        return rows
 
     def count_by_doc_id(self, doc_id: str) -> int:
         with self._conn() as conn:

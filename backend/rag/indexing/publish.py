@@ -109,6 +109,24 @@ class BufferingChunkStore:
         self._cleared_docs.add(doc_id)
         return 0
 
+    def get_by_chunk_ids(self, chunk_ids: list[str]) -> list[dict]:
+        wanted = set(chunk_ids)
+        return [
+            {**row, "doc_id": doc_id}
+            for doc_id, rows in self._rows_by_doc.items()
+            for row in rows
+            if row.get("chunk_id") in wanted
+        ]
+
+    def get_by_table_ids(self, doc_id: str, table_ids: list[str]) -> list[dict]:
+        wanted = set(table_ids)
+        return [
+            {**row, "doc_id": doc_id}
+            for row in self._rows_by_doc.get(doc_id, [])
+            if row.get("granularity") == "leaf"
+            and (row.get("chunk_metadata") or {}).get("table_id") in wanted
+        ]
+
     def flush(self, real_store) -> int:
         """发布翻新：先清旧版行再插入本次缓冲（与 indexer 直写顺序一致）。"""
         total = 0

@@ -24,6 +24,13 @@ from backend.rag.indexing.stages.contracts import stage_span
 from backend.shared.logger import logger
 from backend.rag.indexing.processing_lineage import ModelIdentity
 
+_DOC_TYPES_WITHOUT_SUMMARY = frozenset({"faq", "legal", "contract_template"})
+
+
+def _skip_document_summary(doc_type: str) -> bool:
+    """FAQ 与条款型合同保留结构正文，文档层仅用章节概览导航。"""
+    return str(doc_type or "").casefold() in _DOC_TYPES_WITHOUT_SUMMARY
+
 
 def _has_structured_qa(text: str) -> bool:
     """识别已有 Q/A 结构，避免对天然问答块重复生成模拟问题。"""
@@ -350,7 +357,7 @@ class MetadataStage:
                     with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
                         unified = await extract_metadata_llm_async(
                             full_text, fname, parent_span_id=parent_span_id,
-                            include_summary=doc_type.casefold() != "faq")
+                            include_summary=not _skip_document_summary(doc_type))
                     self._finish_lineage_stage(
                         processing_recorder, decision_lineage,
                         status="success" if unified else "fallback",
@@ -401,7 +408,7 @@ class MetadataStage:
                     unified["doc_type"] = doc_type
                     unified["confidence"] = confidence
                     unified["business_domain"] = domain
-                    if doc_type.casefold() == "faq":
+                    if _skip_document_summary(doc_type):
                         unified["summary"] = ""
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
@@ -556,7 +563,7 @@ class MetadataStage:
 
         # ⑧ 规则降级时用抽取式摘要；全文 LLM 增强已在上方最多尝试一次。
         summary = ""
-        skip_summary = doc_type.casefold() == "faq"
+        skip_summary = _skip_document_summary(doc_type)
 
         llm_generate_span = None
         if parent_span_id:
@@ -927,8 +934,9 @@ class MetadataStage:
             if contains_exact_source_match(full_text, str(value).strip())
         ] or extract_time_refs(full_text)
 
-        # FAQ 的完整问答对就是检索单元，不再生成重复的文档级摘要。
-        skip_summary = doc_type.casefold() == "faq"
+        # FAQ/合同的结构单元直接作为检索证据；文档层用章节概览导航，
+        # 不再生成会重复或改写原文的摘要。
+        skip_summary = _skip_document_summary(doc_type)
         summary = "" if skip_summary else (unified.get("summary") or "")
         if not summary and not skip_summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences

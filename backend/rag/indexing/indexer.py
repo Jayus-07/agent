@@ -61,6 +61,11 @@ _DOC_LEVEL_BODY_MIN_CHARS = 2000
 _EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
 
 
+def _select_vector_chunks(chunks: list[Document]) -> list[Document]:
+    """过滤只用于上下文恢复、不应独立向量化的 Parent。"""
+    return [chunk for chunk in chunks if chunk.metadata.get("vectorize") is not False]
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -280,6 +285,48 @@ def _filter_index_chunks(
 
     kept_chunks = []
     filtered_details: list[dict] = []
+
+    def _mask_structured_table_metadata(chunk, metadata: dict) -> None:
+        """Parent/Leaf 的表格结构与正文一起脱敏，保留 JSON 矩阵形状。"""
+        fields = ("table_rows_json", "table_structures_json")
+        if not any(metadata.get(key) for key in fields):
+            return
+
+        should_mask = (
+            chunk_filter.enable_pii or chunk_filter.financial_pii_force
+        )
+        if not should_mask:
+            return
+
+        masked_types: list[str] = []
+        masked_content, content_types = _mask_pii(chunk.page_content)
+        if chunk_filter.financial_pii_force:
+            masked_content, financial_types = _mask_financial_pii(masked_content)
+            content_types.extend(financial_types)
+        if content_types:
+            chunk.page_content = masked_content
+            masked_types.extend(content_types)
+
+        for key in fields:
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            masked_value, found_types = _mask_pii(value)
+            if chunk_filter.financial_pii_force:
+                masked_value, financial_types = _mask_financial_pii(masked_value)
+                found_types.extend(financial_types)
+            if found_types:
+                metadata[key] = masked_value
+                masked_types.extend(found_types)
+
+        if masked_types:
+            existing = metadata.get("pii_masked") or []
+            if isinstance(existing, str):
+                existing = [existing]
+            metadata["pii_masked"] = list(dict.fromkeys(
+                [*existing, *masked_types],
+            ))
+
     for chunk in chunks:
         metadata = chunk.metadata or {}
         if doc_type:
@@ -336,6 +383,7 @@ def _filter_index_chunks(
                 chunk.page_content = ChunkFilter.apply_pii_mask(
                     chunk.page_content
                 )
+            _mask_structured_table_metadata(chunk, metadata)
             kept_chunks.append(chunk)
             continue
 
@@ -2106,7 +2154,11 @@ class IncrementalIndexer:
             cs = self._cs()
             cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
             cs.insert_batch(doc_id, [
-                {"chunk_index": i, "content": ch.page_content,
+                {"chunk_index": i, "chunk_id": ch.metadata.get("chunk_id", ""),
+                 "granularity": ch.metadata.get("granularity", ""),
+                 "parent_chunk_id": ch.metadata.get("parent_chunk_id", ""),
+                 "chunk_metadata": dict(ch.metadata),
+                 "content": ch.page_content,
                  "keywords": ch.metadata.get("chunk_keywords", ""),
                  "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
                  "llm_model": ch.metadata.get("chunk_llm_model", ""),
@@ -2220,36 +2272,42 @@ class IncrementalIndexer:
             })
 
         # ── ⑦ embed（聚合；chunks 已带完整 metadata）──
+        vector_chunks = _select_vector_chunks(chunks)
+        non_vector_chunk_count = len(chunks) - len(vector_chunks)
         embed_span = trace_collector.start_span(
             "index_embed",
             parent_id="index_upload",
-            name=f"Embed {len(chunks)} chunks",
+            name=f"Embed {len(vector_chunks)} chunks",
             type="embedding",
             kind=SpanKind.INDEX_EMBED.value,
         )
-        embed_span.metrics["chunk_count"] = len(chunks)
+        embed_span.metrics.update({
+            "chunk_count": len(vector_chunks),
+            "context_only_chunk_count": non_vector_chunk_count,
+        })
         embedding_lineage = None
         if lineage_recorder is not None:
             embedding_lineage = lineage_recorder.begin_stage(
                 "embedding", role="embedding", engine_type="embedding",
                 model=_embedding_model_identity(self.embedding),
-                metadata={"chunk_count": len(chunks)},
+                metadata={"chunk_count": len(vector_chunks)},
             )
         # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
         # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
         with lineage_recorder.bind_stage(embedding_lineage[0]) if lineage_recorder and embedding_lineage else nullcontext():
             precomputed_vectors = self._embed_with_retry(
-                chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
+                vector_chunks, embed_span,
+                doc_summary=doc_meta.get("summary", "") or "")
         if embedding_lineage is not None:
             embedding_status = (
-                "success" if len(precomputed_vectors) == len(chunks) else "fallback"
+                "success" if len(precomputed_vectors) == len(vector_chunks) else "fallback"
             )
             lineage_recorder.finish_stage(
                 embedding_lineage[0], status=embedding_status,
-                started_at=embedding_lineage[1], input_count=len(chunks),
+                started_at=embedding_lineage[1], input_count=len(vector_chunks),
                 output_count=len(precomputed_vectors),
                 cache_status=(
-                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(chunks)
+                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(vector_chunks)
                     else "partial" if embed_span.metrics.get("embedding_cache_hit", 0)
                     else "miss"
                 ),
@@ -2259,9 +2317,10 @@ class IncrementalIndexer:
                 ),
             )
         trace_collector.end_span(embed_span,
-            metrics={"attempted": len(chunks),
+            metrics={"attempted": len(vector_chunks),
                      "succeeded": len(precomputed_vectors),
-                     "failed": len(chunks) - len(precomputed_vectors)})
+                     "failed": len(vector_chunks) - len(precomputed_vectors),
+                     "context_only_chunks": non_vector_chunk_count})
 
         # ── ⑤ vector_db ──
         vdb_span = trace_collector.start_span(
@@ -2279,28 +2338,29 @@ class IncrementalIndexer:
             )
         try:
             with lineage_recorder.bind_stage(vector_lineage[0]) if lineage_recorder and vector_lineage else nullcontext():
-                if chunks:
-                    if len(precomputed_vectors) == len(chunks):
+                if vector_chunks:
+                    if len(precomputed_vectors) == len(vector_chunks):
                         # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
                         chunk_ids = self.vectordb.add_documents(
-                            chunks, embeddings=precomputed_vectors) or []
+                            vector_chunks, embeddings=precomputed_vectors) or []
                     else:
                         # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
                         # 保证不产生向量空洞；此时预嵌入仅充当失败预检
                         logger.warning(
-                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
+                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(vector_chunks)})，"
                             f"回退由向量库嵌入: {os.path.basename(file_path)}"
                         )
-                        chunk_ids = self.vectordb.add_documents(chunks) or []
+                        chunk_ids = self.vectordb.add_documents(vector_chunks) or []
                 else:
                     chunk_ids = []
             trace_collector.end_span(vdb_span,
-                metrics={"written": len(chunk_ids),
+                    metrics={"written": len(chunk_ids),
+                         "context_only_chunks": non_vector_chunk_count,
                          "table": getattr(self.vectordb, "_collection_name", "")})
             if vector_lineage is not None:
                 lineage_recorder.finish_stage(
                     vector_lineage[0], status="success",
-                    started_at=vector_lineage[1], input_count=len(chunks),
+                    started_at=vector_lineage[1], input_count=len(vector_chunks),
                     output_count=len(chunk_ids),
                 )
         except Exception as e:
@@ -2318,7 +2378,7 @@ class IncrementalIndexer:
         # 不能再用「旧 BM25 + 当前文件」增量拼接：旧 BM25 可能已经属于另一批
         # 文档，必须从当前向量集合一次性重建。重索引的旧 chunk 仍在向量库中，
         # 由 exclude_ids 排除，待 _cleanup_superseded 删除后集合仍保持一致。
-        if self.bm25_store is not None and chunks:
+        if self.bm25_store is not None and vector_chunks:
             bm25_lineage = None
             if lineage_recorder is not None:
                 bm25_lineage = lineage_recorder.begin_stage(
@@ -2355,17 +2415,17 @@ class IncrementalIndexer:
                     # 兼容外部测试桩和旧实现；生产 BM25Store 一定走上面的
                     # 向量集合全量重建路径。
                     self.bm25_store.replace_documents(
-                        chunks, k=BM25_CANDIDATE_K,
+                        vector_chunks, k=BM25_CANDIDATE_K,
                         doc_id=doc_id, file_path=file_path,
                     )
                 if bm25_lineage is not None:
                     lineage_recorder.finish_stage(
                         bm25_lineage[0], status="success",
-                        started_at=bm25_lineage[1], input_count=len(chunks),
-                        output_count=len(chunks),
+                        started_at=bm25_lineage[1], input_count=len(vector_chunks),
+                        output_count=len(vector_chunks),
                     )
                 logger.info(
-                    f"[BM25] 已从向量集合发布快照: {len(chunks)} 新 chunks, "
+                    f"[BM25] 已从向量集合发布快照: {len(vector_chunks)} 新 chunks, "
                     f"{os.path.basename(file_path)}"
                 )
             except Exception as e:
