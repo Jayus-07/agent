@@ -258,11 +258,42 @@ export default function DocTracePage() {
             // dedup
             if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}
 
-            return (<div key={type} className={`flex items-center gap-4 px-5 py-2.5 text-sm ${isMulti?"cursor-pointer hover:bg-slate-50":""}`} onClick={()=>isMulti&&toggleTypeExpand(type)}>
-              <span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-slate-500 shrink-0">{info.label}</span><span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError?"text-red-500":"text-slate-400"}`}>{totalMs}ms</span>
-              <span className="text-xs text-slate-300 flex-1 truncate">{isMulti&&<span className="mr-1">×{spans.length}</span>}{summary}</span>
-              {isMulti&&<span className="text-[10px] text-slate-300">{expanded?"▲":"▼"}</span>}
-            </div>);
+            const groupId = `pipeline-span-group-${encodeURIComponent(type)}`;
+            return (
+              <div key={type} className="px-5 py-2.5">
+                <button
+                  type="button"
+                  disabled={!isMulti}
+                  aria-expanded={isMulti ? expanded : undefined}
+                  aria-controls={isMulti ? groupId : undefined}
+                  onClick={() => isMulti && toggleTypeExpand(type)}
+                  className={`flex w-full items-center gap-4 text-left text-sm ${isMulti ? "cursor-pointer rounded-md hover:bg-slate-50" : "cursor-default"}`}
+                >
+                  <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                  <span className="w-24 text-slate-500 shrink-0">{info.label}</span>
+                  <span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError ? "text-red-500" : "text-slate-400"}`}>{totalMs}ms</span>
+                  <span className="text-xs text-slate-300 flex-1 truncate">{isMulti && <span className="mr-1">×{spans.length}</span>}{summary}</span>
+                  {isMulti && <span className="text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>}
+                </button>
+                {isMulti && expanded && (
+                  <div id={groupId} className="ml-9 mt-2 space-y-2" role="region" aria-label={`${info.label} Span 明细`}>
+                    {spans.map((span, index) => {
+                      const spanSummary = summaryMetrics([span]);
+                      return (
+                        <div key={span.id || `${type}-${index}`} className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="text-xs font-medium text-slate-700">{span.name || info.label} <span className="text-slate-400">#{index + 1}</span></span>
+                            <span className="font-mono text-[10px] text-slate-500">{span.duration_ms}ms</span>
+                            <span className="font-mono text-[9px] text-slate-400">{span.id}</span>
+                          </div>
+                          {spanSummary && <p className="mt-1 break-words text-[10px] text-slate-500">{spanSummary}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
           })}
           {childSpans.length===0&&<div className="px-5 py-8 text-center text-xs text-slate-400">无 Span 数据</div>}
         </div>
