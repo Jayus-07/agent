@@ -126,16 +126,36 @@ def test_bare_dict_without_result_envelope(client, monkeypatch):
 # ── fail-open 兜底：DB 不可用 → 代码层厂商，而非空列表 ──────────────────
 
 
-def test_db_unavailable_returns_empty_with_builtin_source(client, monkeypatch):
-    """DB 不可用 → `source='builtin'` 且**空清单**（2026-09-22 拍板：内置厂商
-    特殊类退役，兜底不再伪装出代码层厂商行，由前端亮「DB 未就绪」横幅）。"""
+def test_db_unavailable_without_cache_returns_empty_with_builtin_source(client, monkeypatch):
+    """DB 不可用且从未成功读取 → `source='builtin'` 空清单 + degraded。"""
     monkeypatch.setattr(
         registry_store, "load_registry",
         AsyncMock(return_value=registry_store.RegistrySnapshot(loaded=False)),
     )
+    monkeypatch.setattr(registry_store, "last_loaded_snapshot", lambda: None)
     body = client.get("/sys/providers").json()
     assert body["source"] == "builtin"
     assert body["items"] == []
+    assert body["degraded"] is True
+
+
+def test_db_unavailable_returns_last_known_config(client, monkeypatch):
+    """DB 抖动（如连接耗尽）时必须回退上次成功快照，不能显示成空配置。
+
+    真实故障背景：PostgreSQL 连接打满 → `load_registry` 抛错 → 旧实现返回
+    `items=[] + source='builtin'`，管理端显示「DB 未就绪 / 暂无供应商配置」，
+    而库里明明有供应商、模型和凭据。
+    """
+    monkeypatch.setattr(
+        registry_store, "load_registry",
+        AsyncMock(return_value=registry_store.RegistrySnapshot(loaded=False)),
+    )
+    monkeypatch.setattr(registry_store, "last_loaded_snapshot", _db_snapshot)
+    body = client.get("/sys/providers").json()
+    assert body["source"] == "db_stale"
+    assert body["degraded"] is True
+    assert {row["id"] for row in body["items"]} == {"qwen", "glm-coding"}
+    assert "message" in body
 
 
 def test_db_loaded_but_empty_is_not_fallback(client, monkeypatch):
@@ -151,6 +171,7 @@ def test_db_loaded_but_empty_is_not_fallback(client, monkeypatch):
     body = client.get("/sys/providers").json()
     assert body["source"] == "db"
     assert body["items"] == []
+    assert body["degraded"] is False
 
 
 # ── DB 分支字段映射（对齐 UI 设计 §6 ProviderRow）───────────────────────

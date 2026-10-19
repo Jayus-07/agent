@@ -791,6 +791,56 @@ describe('ProvidersTab 列表筛选/搜索与角色占用徽标（B3）', () => 
   })
 })
 
+describe('ProvidersTab 数据库降级展示（2026-10-17 PostgreSQL 连接耗尽事故）', () => {
+  it('source=db_stale 时提示"展示上次配置"并隐藏写操作', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => root.render(
+      <ProvidersTab
+        providers={[{
+          id: 'glm-coding',
+          displayName: 'GLM 编码包',
+          driver: 'openai',
+          baseUrl: 'https://custom.example/v1',
+          networkScope: 'public',
+          billing: 'metered',
+          isBuiltin: false,
+          enabled: true,
+          modelCount: 0,
+          models: [],
+          credential: { configured: true, fingerprint: 'f1', last4: 'a1b2', rotatedAt: null, rotatedBy: null },
+          lastProbe: null,
+        }]}
+        defaultModels={{}}
+        source="db_stale"
+        canAdmin
+        onChanged={vi.fn(async () => undefined)}
+      />,
+    ))
+    mounted.push({ container, root })
+
+    // 不能再谎报「DB 未就绪」+空清单，也不能谎称真实配置为空
+    expect(container.textContent).toContain('展示上次配置')
+    expect(container.textContent).toContain('GLM 编码包')
+    expect(container.textContent).not.toContain('DB 未就绪')
+    // 降级期间禁止写操作（新增供应商按钮不出现）
+    expect(container.textContent).not.toContain('新增供应商')
+  })
+
+  it('source=builtin（从未读取成功）仍显示 DB 未就绪', () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    act(() => root.render(
+      <ProvidersTab providers={[]} defaultModels={{}} source="builtin" canAdmin onChanged={vi.fn(async () => undefined)} />,
+    ))
+    mounted.push({ container, root })
+    expect(container.textContent).toContain('DB 未就绪')
+    expect(container.textContent).toContain('暂无供应商配置')
+  })
+})
+
 describe('ProvidersTab 供应商删除（2026-09-22 拍板：软删 + 关联一并停用）', () => {
   it('自建无绑定供应商显示可点删除按钮，确认后调用 deleteProvider 并刷新', async () => {
     const onChanged = vi.fn(async () => undefined)
