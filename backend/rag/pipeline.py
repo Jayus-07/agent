@@ -1368,17 +1368,20 @@ class RAGPipeline:
                         return self._doc_matches_filter(
                             getattr(doc, "metadata", {}), filt)
                     kept = [d for d in self.bm25.invoke(question)
-                            if _bm25_keep(d, mf or None)]
+                            if d.metadata.get("granularity") != "parent"
+                            and _bm25_keep(d, mf or None)]
                     if not kept and mf and kb_scope and kb_scope != mf:
                         logger.info(
                             "[RAG.search] BM25 全量过滤 0 命中，放宽重试"
                             f"（保留 kb 范围）: {kb_scope}")
                         kept = [d for d in self.bm25.invoke(question)
-                                if _bm25_keep(d, kb_scope)]
+                                if d.metadata.get("granularity") != "parent"
+                                and _bm25_keep(d, kb_scope)]
                     if not kept and mf:
                         # 最终兜底：去 kb 维度（授权由 _keep 强制，见向量腿注释）
                         kept = [d for d in self.bm25.invoke(question)
-                                if _bm25_keep(d, None)]
+                                if d.metadata.get("granularity") != "parent"
+                                and _bm25_keep(d, None)]
                     sparse_docs.extend(kept)
                 except Exception as e:
                     logger.warning(f"[RAG.search] BM25 检索失败: {e}", exc_info=True)
@@ -1527,7 +1530,8 @@ class RAGPipeline:
                 bm25_results = self.bm25.invoke(question)
                 kept = [
                     d for d in bm25_results
-                    if self._doc_matches_filter(getattr(d, "metadata", {}), mf)
+                    if d.metadata.get("granularity") != "parent"
+                    and self._doc_matches_filter(getattr(d, "metadata", {}), mf)
                     and _authorized(d)
                 ]
                 if not kept and mf and kb_scope and kb_scope != mf:
