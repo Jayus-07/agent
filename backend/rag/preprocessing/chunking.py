@@ -207,12 +207,13 @@ def _detect_boundaries(
 _SECTION_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
 
 
+def _doc_title_node(ast: DocumentAST) -> DocumentNode | None:
+    return ast.document_title_node
+
+
 def _doc_title(ast: DocumentAST) -> str:
-    """取文档首个一级标题（H1）作为兜底 section_title（P1-9：文档头部无章节号时用）。"""
-    for n in walk(ast.root):
-        if n.type == "section" and n.level == 1 and n.text.strip():
-            return n.text.strip()
-    return ""
+    """读取解析器明确识别的文档标题，不从章节标题推断。"""
+    return ast.document_title.strip()
 
 
 def _is_section_heading(text: str) -> bool:
@@ -406,12 +407,17 @@ def _iter_leaves_with_section(ast: DocumentAST):
     leaf 的 section_title = 最近的祖先 section（level>0）标题；
     section 容器外的叶子标题为空串。
     """
+    document_title_node = _doc_title_node(ast)
+
     def _dfs(node: DocumentNode, title: str):
         for child in node.children:
             if child.type in LEAF_TYPES:
                 yield child.text, title
             elif child.type == "section" and child.level > 0:
-                yield from _dfs(child, child.text)
+                next_title = (
+                    title if child is document_title_node else child.text
+                )
+                yield from _dfs(child, next_title)
             else:
                 yield from _dfs(child, title)
     yield from _dfs(ast.root, "")
@@ -516,7 +522,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         # 「命中 leaf → 扩 parent」对兜底表静默退化）。
         fallback_meta = {
             "section_path": list(path),
-            "section_title": sec.text,
+            "section_title": sec.text if sec.level > 0 else "",
             "section_level": sec.level,
             "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
         }
@@ -530,6 +536,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
             }))
             return _attach_virtual_parents(
                 chunks, file_path, f"tblfb:{section_anchor}",
+                parent_scope="section",
             )
         for si, sub in enumerate(_split_to_budget(
                 node.text, LEAF_CHUNK_TOKENS, separators=["\n", " ", ""],
@@ -544,7 +551,8 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
             }))
         # 兜底分片挂文档内虚拟 parent（表级摘要不可用时的一致退路）
         return _attach_virtual_parents(
-            chunks, file_path, f"tblfb:{section_anchor}")
+            chunks, file_path, f"tblfb:{section_anchor}",
+            parent_scope="section")
 
     # Layer 1: 表级摘要(parent)
     summary = build_table_summary(node.rows, section_title=sec.text)
@@ -553,8 +561,9 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         "granularity": "parent",
         "chunk_id": parent_id,
         "table_id": parent_id,
+        "parent_scope": "section",
         "section_path": list(path),
-        "section_title": sec.text,
+        "section_title": sec.text if sec.level > 0 else "",
         "section_level": sec.level,
         "chunk_type": CHUNK_TYPE_TABLE_SUMMARY,
         "row_count": len(data_rows),
@@ -579,7 +588,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "parent_chunk_id": parent_id,
                 "table_id": parent_id,
                 "section_path": list(path),
-                "section_title": sec.text,
+                "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
                 "chunk_type": CHUNK_TYPE_TABLE_HEADER,
                 "row_index": hi,
@@ -613,7 +622,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "parent_chunk_id": parent_id,
                 "table_id": parent_id,
                 "section_path": list(path),
-                "section_title": sec.text,
+                "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
                 "chunk_type": CHUNK_TYPE_TABLE_ROW,
                 "row_index": ri,
@@ -627,7 +636,8 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
 
 
 def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
-                            anchor: str, group_size: int | None = None) -> List[Document]:
+                            anchor: str, group_size: int | None = None,
+                            parent_scope: str | None = None) -> List[Document]:
     """为需要跨块上下文的无结构 Leaf 挂虚拟 Parent。
 
     Args:
@@ -635,6 +645,7 @@ def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
         anchor: chunk_id anchor 前缀（区分策略，避免与既有 id 撞车）。
         group_size: None = 全部 leaf 挂一个文档级 parent（Step 等策略）；
             N = 每 N 个 leaf 一组各挂一个 parent（Legal 条款区间）。
+        parent_scope: 显式覆盖 parent 范围，表格兜底 Parent 使用 section。
 
     Returns:
         parent chunks（在前）+ 原 leaf 列表（parent_chunk_id 已回填）。
@@ -676,13 +687,29 @@ def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
     for gi, group in enumerate(groups):
         ptext, p_truncated = _parent_text(group)
         parent_id = _chunk_id(file_path, f"parent:{anchor}:{gi}", ptext)
+        scope = parent_scope or ("document" if group_size is None else "section")
+        section_titles = list(dict.fromkeys(
+            str(c.metadata.get("section_title") or "").strip()
+            for c in group
+            if str(c.metadata.get("section_title") or "").strip()
+        ))
+        section_title = (
+            section_titles[0]
+            if scope == "section" and len(section_titles) == 1
+            else ""
+        )
         pmeta = {
             "granularity": "parent",
             "chunk_id": parent_id,
             "parent_chunk_id": "",
-            "section_path": [],
-            "section_title": (group[0].metadata.get("section_title") or "").strip(),
-            "section_level": 1,
+            "parent_scope": scope,
+            "section_path": (
+                list(group[0].metadata.get("section_path") or [])
+                if scope == "section" else []
+            ),
+            "section_title": section_title,
+            "section_titles": section_titles if scope == "section" else [],
+            "section_level": 1 if scope == "section" else 0,
             "chunk_tokens": count_tokens(ptext),
         }
         if p_truncated:
@@ -807,7 +834,8 @@ class StructureChunkStrategy:
             "granularity": "parent",
             "chunk_id": parent_id,
             "section_path": path,
-            "section_title": sec.text,
+            "parent_scope": "section" if sec.level > 0 else "document",
+            "section_title": sec.text if sec.level > 0 else "",
             "section_level": sec.level,
             "chunk_tokens": count_tokens(text),
         }))
@@ -844,7 +872,7 @@ class StructureChunkStrategy:
                 "chunk_id": sub_id,
                 "parent_chunk_id": parent_id,
                 "section_path": path,
-                "section_title": sec.text,
+                "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
                 "chunk_tokens": count_tokens(sub),
             }
@@ -878,9 +906,14 @@ class StructureChunkStrategy:
 
     @staticmethod
     def _sections(ast: DocumentAST):
+        document_title_node = _doc_title_node(ast)
+
         def _dfs(node: DocumentNode, path: list):
             for child in node.children:
                 if child.type == "section":
+                    if child is document_title_node:
+                        yield from _dfs(child, path)
+                        continue
                     yield child, path + [child.text]
                     yield from _dfs(child, path + [child.text])
                 else:
@@ -1010,9 +1043,11 @@ class StepChunkStrategy:
     """
 
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
+        document_title_node = _doc_title_node(ast)
         sections = [
             n for n in walk(ast.root)
             if n.type == "section" and n.level > 0
+            and n is not document_title_node
         ]
         if sections:
             return self._split_by_sections(sections, file_path, ast)
@@ -1029,11 +1064,9 @@ class StepChunkStrategy:
                 n for n in ast.root.children if n.type in LEAF_TYPES
             ]
             if root_leaves:
-                fallback_title = _doc_title(ast)
                 chunks.extend(_make_leaf_chunks_bounded(
                     [n.text for n in root_leaves], file_path,
-                    section_title=fallback_title, section_level=1,
-                    section_path=[fallback_title] if fallback_title else [],
+                section_title="", section_level=0, section_path=[],
                 ))
         for sec in sections:
             # P1-9: 章节标题继承到 chunk（section_title/section_level/section_path）
@@ -1051,15 +1084,14 @@ class StepChunkStrategy:
         chunks: List[Document] = []
         current: list[str] = []
         current_title = ""
-        fallback_title = _doc_title(ast)
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
             if _is_section_heading(n.text) and current:
                 chunks.extend(_make_leaf_chunks_bounded(
                     current, file_path,
-                    section_title=current_title or fallback_title, section_level=1,
-                    section_path=[current_title or fallback_title] if (current_title or fallback_title) else [],
+                    section_title=current_title, section_level=1 if current_title else 0,
+                    section_path=[current_title] if current_title else [],
                 ))
                 current = []
             if _is_section_heading(n.text):
@@ -1068,8 +1100,8 @@ class StepChunkStrategy:
         if current:
             chunks.extend(_make_leaf_chunks_bounded(
                 current, file_path,
-                section_title=current_title or fallback_title, section_level=1,
-                section_path=[current_title or fallback_title] if (current_title or fallback_title) else [],
+                section_title=current_title, section_level=1 if current_title else 0,
+                section_path=[current_title] if current_title else [],
             ))
         # C1: 文档级虚拟 parent（flat 旧数据分支）
         return _enrich(_attach_virtual_parents(chunks, file_path, "step_flat"), file_path)
@@ -1119,8 +1151,6 @@ class LegalChunkStrategy:
         chunks: List[Document] = []
         current: list[str] = []
         current_clause = ""
-        fallback_title = _doc_title(ast)
-
         for n in walk(ast.root):
             if n.type not in LEAF_TYPES:
                 continue
@@ -1129,8 +1159,8 @@ class LegalChunkStrategy:
                 # P0-05: 超长条款继续切分，子块保留条款身份）
                 chunks.extend(_make_leaf_chunks_bounded(
                     current, file_path,
-                    section_title=current_clause or fallback_title, section_level=1,
-                    section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+                    section_title=current_clause, section_level=1 if current_clause else 0,
+                    section_path=[current_clause] if current_clause else [],
                     preserve_source=True,
                 ))
                 current = []
@@ -1141,8 +1171,8 @@ class LegalChunkStrategy:
         if current:
             chunks.extend(_make_leaf_chunks_bounded(
                 current, file_path,
-                section_title=current_clause or fallback_title, section_level=1,
-                section_path=[current_clause or fallback_title] if (current_clause or fallback_title) else [],
+                section_title=current_clause, section_level=1 if current_clause else 0,
+                section_path=[current_clause] if current_clause else [],
                 preserve_source=True,
             ))
 
@@ -1178,7 +1208,7 @@ class LegalChunkStrategy:
         import json
 
         from backend.rag.preprocessing.parser._table_nl import (
-            detect_multi_level_header, make_table_chunk_text,
+            detect_multi_level_header, table_to_markdown,
         )
 
         doc_title = _doc_title(ast)
@@ -1202,10 +1232,7 @@ class LegalChunkStrategy:
                         "rows": [list(row) for row in node.rows],
                         "section_id": section_id,
                     }
-                    table["text"] = make_table_chunk_text(
-                        table["rows"],
-                        section_title=clause_title,
-                    )
+                    table["text"] = table_to_markdown(table["rows"])
                     tables.append(table)
                     items.append({"kind": "table", "value": table})
                 elif node.type in LEAF_TYPES and node.text.strip():
@@ -1268,6 +1295,7 @@ class LegalChunkStrategy:
                 "section_id": record["section_id"],
                 "section_path": record["section_path"],
                 "section_title": record["section_title"],
+                "document_title": doc_title,
                 "section_level": 1,
             }
             tables = record["tables"]
@@ -1347,10 +1375,7 @@ class LegalChunkStrategy:
                     candidate_text = "\n".join(part for part in (
                         section_context,
                         record["body_text"] if not body_emitted and not row_groups else "",
-                        make_table_chunk_text(
-                            candidate_rows,
-                            section_title=record["section_title"],
-                        ),
+                        table_to_markdown(candidate_rows),
                     ) if part)
                     if current_rows and count_tokens(candidate_text) > LEAF_CHUNK_TOKENS:
                         row_groups.append((
@@ -1385,9 +1410,8 @@ class LegalChunkStrategy:
                     text_parts = [section_context]
                     if not body_emitted and group_index == 0 and record["body_text"]:
                         text_parts.append(record["body_text"])
-                    text_parts.append(make_table_chunk_text(
+                    text_parts.append(table_to_markdown(
                         header_rows + rows_group,
-                        section_title=record["section_title"],
                     ))
                     chunk_text = "\n".join(part for part in text_parts if part)
                     if count_tokens(chunk_text) > LEAF_CHUNK_TOKENS:
@@ -1488,12 +1512,38 @@ class LegalChunkStrategy:
             parent_groups.append(current_group)
 
         output: list[Document] = []
-        table_structures = [
-            table
-            for record in records
-            for table in record["tables"]
-        ]
         for group_index, group in enumerate(parent_groups):
+            group_section_ids = {
+                str(leaf.metadata.get("section_id") or "")
+                for leaf in group
+            }
+            group_records = [
+                record for record in records
+                if record["section_id"] in group_section_ids
+            ]
+            section_titles = list(dict.fromkeys(
+                str(leaf.metadata.get("section_title") or "").strip()
+                for leaf in group
+                if str(leaf.metadata.get("section_title") or "").strip()
+            ))
+            covers_document = (
+                len(parent_groups) == 1 and len(group) == len(leaves)
+            )
+            parent_scope = "document" if covers_document else "section"
+            parent_section_title = (
+                section_titles[0]
+                if parent_scope == "section" and len(section_titles) == 1
+                else ""
+            )
+            parent_path = (
+                [doc_title] if covers_document and doc_title
+                else [part for part in (doc_title, *section_titles) if part]
+            )
+            table_structures = [
+                table
+                for record in group_records
+                for table in record["tables"]
+            ]
             parent_parts = [doc_title] if doc_title else []
             for leaf in group:
                 content = leaf.page_content
@@ -1513,10 +1563,15 @@ class LegalChunkStrategy:
                 "chunk_id": parent_id,
                 "parent_chunk_id": "",
                 "chunk_type": "contract_context",
+                "parent_scope": parent_scope,
                 "vectorize": False,
-                "section_path": [doc_title] if doc_title else [],
-                "section_title": doc_title,
-                "section_level": 1 if doc_title else 0,
+                "section_path": parent_path,
+                "section_title": parent_section_title,
+                "section_titles": (
+                    section_titles if parent_scope == "section" else []
+                ),
+                "document_title": doc_title,
+                "section_level": 1 if parent_scope == "section" else 0,
                 "chunk_tokens": count_tokens(parent_text),
                 "table_structures_json": json.dumps(
                     table_structures, ensure_ascii=False,
@@ -1527,7 +1582,7 @@ class LegalChunkStrategy:
                         "section_title": record["section_title"],
                         "references": record["references"],
                     }
-                    for record in records
+                    for record in group_records
                 ], ensure_ascii=False),
             }))
             for leaf in group:
@@ -1971,9 +2026,14 @@ class FinancialTableChunkStrategy:
 
     @staticmethod
     def _sections(ast: DocumentAST):
+        document_title_node = _doc_title_node(ast)
+
         def _dfs(node: DocumentNode, path: list):
             for child in node.children:
                 if child.type == "section":
+                    if child is document_title_node:
+                        yield from _dfs(child, path)
+                        continue
                     yield child, path + [child.text]
                     yield from _dfs(child, path + [child.text])
                 else:

@@ -12,7 +12,7 @@ from backend.rag.preprocessing.metadata import classify_doc_type
 from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
 from backend.rag.preprocessing.chunking import (
-    ChunkStrategyRouter, coverage_audit, stamp_chunk_pages,
+    ChunkStrategyRouter, _doc_title, coverage_audit, stamp_chunk_pages,
 )
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
@@ -128,6 +128,9 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
 
     stage_started = time.monotonic()
     chunks = strategy.split(normalized_ast, file_path)
+    document_title = _doc_title(normalized_ast)
+    for chunk in chunks:
+        chunk.metadata.setdefault("document_title", document_title)
     stage_ms["split_ms"] = round((time.monotonic() - stage_started) * 1000)
 
     stage_started = time.monotonic()

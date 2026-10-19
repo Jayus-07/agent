@@ -119,6 +119,31 @@ def table_to_csv(rows: List[List[str]]) -> str:
     return "\n".join(", ".join(_cell_text(c) for c in r) for r in rows)
 
 
+def table_to_markdown(rows: List[List[str]]) -> str:
+    """将表格单元格排成一份 Markdown 表，不附加重复的行描述或 CSV。"""
+    normalized = [
+        [
+            _cell_text(cell, strip=True)
+            .replace("\\", "\\\\")
+            .replace("|", "\\|")
+            .replace("\r\n", "<br>")
+            .replace("\n", "<br>")
+            for cell in row
+        ]
+        for row in rows
+        if row and any(_cell_text(cell, strip=True) for cell in row)
+    ]
+    if not normalized:
+        return ""
+
+    width = max(len(row) for row in normalized)
+    normalized = [row + [""] * (width - len(row)) for row in normalized]
+    header = normalized[0]
+    separator = ["---"] * width
+    formatted = [header, separator, *normalized[1:]]
+    return "\n".join("| " + " | ".join(row) + " |" for row in formatted)
+
+
 def make_table_chunk_text(
     rows: List[List[str]],
     *,

@@ -194,6 +194,10 @@ def test_08_contract_with_table(tmp_path):
     assert len(parents) == 1
     assert len(leaves) == 4
     assert parents[0].metadata["vectorize"] is False
+    assert parents[0].metadata["granularity"] == "parent"
+    assert parents[0].metadata["parent_scope"] == "document"
+    assert parents[0].metadata["document_title"] == "服务合同"
+    assert parents[0].metadata["section_title"] == ""
     assert len(json.loads(parents[0].metadata["table_structures_json"])) == 1
     assert all(value in parents[0].page_content for value in (
         "6294", "28240", "12730", "47856", "4152",
@@ -201,12 +205,18 @@ def test_08_contract_with_table(tmp_path):
 
     fee_leaf = next(c for c in leaves if c.metadata.get("table_id"))
     assert fee_leaf.metadata["chunk_type"] == "table_inline"
+    assert fee_leaf.metadata["document_title"] == "服务合同"
+    assert fee_leaf.metadata["section_title"] == "第二条 服务费用"
     assert json.loads(fee_leaf.metadata["table_rows_json"]) == rows
     assert all(value in fee_leaf.page_content for value in (
         "6294", "28240", "12730", "47856", "4152",
     ))
     assert "SENTINEL-TABLE-REF" not in fee_leaf.page_content
     assert "SENTINEL-TABLE-REF" not in parents[0].page_content
+    assert "【原始数据】" not in fee_leaf.page_content
+    assert "【原始数据】" not in parents[0].page_content
+    assert fee_leaf.page_content.count("基础运维") == 1
+    assert parents[0].page_content.count("基础运维") == 1
     assert any(
         "SENTINEL-TABLE-REF" in paragraph.text
         for paragraph in docx.Document(str(p)).paragraphs

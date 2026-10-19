@@ -1003,24 +1003,10 @@ async def get_chunk_detail(doc_id: str, request: Request):
         from backend.rag.indexing.chunk_store import get_chunk_store
         cs = get_chunk_store()
         rows = cs.get_by_doc_id(doc_id)
+        from backend.rag.indexing.chunk_detail import build_chunk_detail_items
         return {
             "doc_id": doc_id,
-            "chunks": [
-                {
-                    "chunk_index": r["chunk_index"],
-                    "content": r["content"],
-                    "char_count": r["char_count"],
-                    "keywords": r["keywords"],
-                    "llm_keywords": r.get("llm_keywords", ""),
-                    "llm_model": r.get("llm_model", ""),
-                    "section_title": r.get("section_title", ""),
-                    "doc_type": r.get("doc_type", ""),
-                    "kb_id": r.get("kb_id", ""),
-                    "department": r.get("department", ""),
-                    "simulated_questions": r.get("simulated_questions", []),
-                }
-                for r in rows
-            ],
+            "chunks": build_chunk_detail_items(rows),
             "total": len(rows),
         }
     except HTTPException:

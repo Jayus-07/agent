@@ -50,6 +50,28 @@ def _find_parent_section(
     return stack[-1]
 
 
+def _document_title_node(root: DocumentNode) -> DocumentNode | None:
+    """识别位于全文最前且包含法律条款的合同标题。"""
+    if not root.children:
+        return None
+    candidate = root.children[0]
+    if (
+        candidate.type != "section"
+        or candidate.level != 1
+        or not candidate.text.strip()
+        or _LEGAL_CLAUSE_RE.match(candidate.text.strip())
+    ):
+        return None
+
+    pending = list(candidate.children)
+    while pending:
+        node = pending.pop()
+        if node.type == "section" and _LEGAL_CLAUSE_RE.match(node.text.strip()):
+            return candidate
+        pending.extend(node.children)
+    return None
+
+
 def _iter_body_items(document):
     """按 body 原始顺序产出 (kind, obj)，kind ∈ {"para", "table"}。
 
@@ -217,4 +239,11 @@ class DocxParser(BaseDocumentParser):
             )
 
         raw_text = "\n".join(raw_lines)
-        return DocumentAST(root=root, source_file=file_path, raw_text=raw_text)
+        title_node = _document_title_node(root)
+        return DocumentAST(
+            root=root,
+            source_file=file_path,
+            raw_text=raw_text,
+            document_title=title_node.text.strip() if title_node else "",
+            document_title_node=title_node,
+        )
