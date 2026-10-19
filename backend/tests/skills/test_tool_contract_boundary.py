@@ -277,6 +277,18 @@ class TestPendingApprovalReceiptKept:
                                      "output": None}) == ""
 
 
+class TestRagSearchKbSelector:
+    def test_requested_kb_selector_passes_capability_schema(self):
+        from backend.core.tool_governance.registry import get_tool_spec
+        from backend.core.tool_governance.schema_validator import validate_json_schema
+
+        spec = get_tool_spec("rag.search")
+        validate_json_schema(
+            {"question": "检索政策文档", "kb_id": "policy_general"},
+            spec.params_schema,
+        )
+
+
 class _PendingApprovalTool:
     """返回 ensure_approved 待审批提示形态的文本（与 tool_approval.py 同文案）。"""
 

@@ -100,7 +100,9 @@ class RAGPipeline:
         while len(self._seen_sessions) > self._SEEN_SESSIONS_MAX:
             self._seen_sessions.popitem(last=False)
 
-    def _session_has_history(self, session_id: str) -> bool:
+    def _session_has_history(
+        self, session_id: str, *, user_id: str = "", tenant_id: str = "",
+    ) -> bool:
         """检查会话在记忆库中是否已有历史轮次。
 
         防止服务重启后进程内 _seen_sessions 丢失，把带 PG 历史的多轮对话
@@ -110,7 +112,9 @@ class RAGPipeline:
         if memory is None or not session_id:
             return False
         try:
-            buf = memory.start_session(session_id, "")
+            buf = memory.start_session(
+                session_id, "", user_id=user_id, tenant_id=tenant_id,
+            )
             return bool(buf is not None and len(buf) > 0)
         except Exception:
             return False
@@ -968,7 +972,9 @@ class RAGPipeline:
                 return "系统资源紧张，请稍后重试", {}
 
             is_first_turn = session_id not in self._seen_sessions
-            if is_first_turn and self._session_has_history(session_id):
+            if is_first_turn and self._session_has_history(
+                session_id, user_id=user_id, tenant_id=tenant_id,
+            ):
                 # 进程重启后本地标记丢失，但会话实际有多轮历史 → 不走首轮缓存
                 is_first_turn = False
 

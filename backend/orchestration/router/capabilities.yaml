@@ -302,6 +302,10 @@ capabilities:
         type: string
         required: true
         description: 检索问题
+      kb_id:
+        type: string
+        required: false
+        description: 请求的知识库 ID；RAG 授权仍由服务端按主体校验
     planner_examples:
     - question: Amazon FBA发货的标准操作流程SOP
     routed: true
