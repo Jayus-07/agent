@@ -171,8 +171,13 @@ def test_doc_probe_usage_belongs_to_current_case_even_on_timeout(
     assert by_id["probe-timeout"].error_stage == "retrieval"
 
 
-@pytest.mark.parametrize("failed", [False, True])
-def test_full_runner_cannot_pass_when_rerank_failed(tmp_path, monkeypatch, failed):
+@pytest.mark.parametrize("failed,rewrite_timeout,multiquery", [
+    (False, False, False), (True, False, True),
+    (False, True, True), (False, True, False),
+])
+def test_full_runner_cannot_pass_when_rerank_failed(
+    tmp_path, monkeypatch, failed, rewrite_timeout, multiquery,
+):
     """同样命中的候选，重排失败必须阻止完整链路验收。"""
     from langchain_core.documents import Document
     from backend.observability.tracer import trace_collector
@@ -183,6 +188,9 @@ def test_full_runner_cannot_pass_when_rerank_failed(tmp_path, monkeypatch, faile
     retriever = MagicMock()
 
     def invoke(question):
+        if rewrite_timeout:
+            rewrite = trace_collector.start_span("query_rewrite", name="Fake")
+            trace_collector.end_span(rewrite, status="timeout")
         span = trace_collector.start_span("rerank", name="Fake")
         trace_collector.end_span(span, status="error" if failed else "success")
         return [Document(page_content="采购证据", metadata={
@@ -196,9 +204,12 @@ def test_full_runner_cannot_pass_when_rerank_failed(tmp_path, monkeypatch, faile
                     metadata={"kb_id": "rag_eval_kb", "fixture_set": "baseline"})
     with patch("backend.evaluation.runners.rag.init_rag_pipeline", return_value=pipeline), \
          patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
-        results = _run_rag([case], resume=False)
+        results = _run_rag([case], resume=False, multiquery=multiquery)
     assert len(results) == 1
     result = results[0]
-    assert result.status == ("fail" if failed else "pass")
-    assert result.actual["execution_complete"] is not failed
+    incomplete = failed or (rewrite_timeout and multiquery)
+    assert result.status == ("fail" if incomplete else "pass")
+    assert result.actual["execution_complete"] is not incomplete
+    if rewrite_timeout and multiquery:
+        assert result.actual["incomplete_reason"] == "multi_query_rewrite_incomplete"
     assert result.metrics["recall@5"] == 1.0

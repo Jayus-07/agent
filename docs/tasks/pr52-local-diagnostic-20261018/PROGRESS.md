@@ -166,3 +166,15 @@
 - RC031逐查询证据显示模型把组合条件拆成两个单条件问题，导致事故变体泛化。仅收紧待审Prompt候选：每条变体保留业务主体、场景及全部组合条件，只改变证据侧重点；仍共3条、原问题第一。不改评分算法、模型、Golden、质量门槛或生产Active v1。
 - 两笔旧run待核实账目无供应商成功响应/请求ID，本机记录不能证明收费；未取得供应商账单/API访问，不宣称供应商侧对账完成。保留UNVERIFIED，不伪造结算；新run不导入旧账目。证据见historical-reconciliation.json。
 - 新建唯一隔离project rag-eval-20261019-pr52-acceptance、全新数据卷/库/网络；上一project已销毁。宿主资源与共享服务限制仍存在，不声称独占4C8G等价。新run rag-local-pr52-20261019-acceptance-04；付费开始前冻结提交并完成免费门禁。
+
+
+### 本次授权运行结果与停止（2026-10-19）
+
+- 真正执行一次：rag-local-pr52-20261019-acceptance-04，代码e111b0c891eb9fdb3e2f87f44b3d9879494fe644；Draft v3/pinned/hash edff4f6748e419e9。冷索引16/16、213向量。价格副本脚本换行及容器主机名不符合本机预检入口曾正确阻断；修正脚本、改用既有本机预检入口后通过，期间Provider0。
+- 8/8重排完成，7/7适用Top1有分数，另1正常拒答。官方case8/8pass，但严格门禁FAIL：Top1=.7143<.80；Recall@5=.9286、MRR=.8333、MultiHop=.8333、P@5=.4375、Noise=.50。不能把旧run仅3/7覆盖的Top1=1与本次全覆盖分数直接解释为算法下降。
+- RC024改写1839ms/召回2258ms/重排3094ms，三查询各28候选84分完整，采购/质检参与；库存文档.6747/.6592排首，Top1失败。变体仍接近复述。RC005同义FAQ得1.0，高于正式政策.9741，Top1来源不合契约；未为过门禁按文件名或Golden硬编码加权。
+- RC031改写6001ms超时，Provider9730ms后返回stop/62tokens、reasoning_tokens0；迟到usage已归原请求结算。原问题评分940ms且供应商退出证据完整，但没有三路评分，噪声修复仍UNVERIFIED。
+- 新账本114条尝试、112431tokens、CNY.121087（含Embedding估算），114settled/0needs_review/差0，VERIFIED；索引78次/.112285、Smoke36次/.008802。旧两笔仍UNVERIFIED，未取得供应商账单/API访问，未混账或手工结算。
+- 据真实证据仅追加评测修正：full+multiquery中改写timeout/error退回原问题不能冒充多查询完整验收，case fail、execution_complete=false，原指标保留；业务降级不变。付费前62 passed；后续74 passed/44.97s（2既有collection warning），py_compile/定向Ruff/diff检查通过；后续改动无真实Provider验收，不再付费。
+- Artifact D:/tmp/rag-eval-20261019-pr52-acceptance/artifacts/：FINAL_REVIEW.md、官方report/per_case、84个真实逐查询分数、完整新账本、历史待核实复核、资源及清理记录。e111b0c免费CI641通过、Contract/SecretScan成功。14/14历史Review线程resolved，新代码未取得新云端批准。
+- BLOCKED/MERGE_READY=false；PR保持Draft、不合并、不发布Prompt。剩余：两例Top1来源排序、RC031完整三查询真实验收、历史供应商账单证据。先免费审查既有来源权威性规则与证据面生成，不扩重构、不盲目调参数。

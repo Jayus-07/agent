@@ -1096,12 +1096,19 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     else:
                         passed = chunk_hit and not dept_leak
 
-                # 完整链路重排失败时保留原指标，但不得按召回命中判通过。
-                incomplete_rerank = ablation_mode == "full" and any(
-                    sp["type"] == "rerank" and sp["status"] == "error"
-                    for sp in trace_spans
-                )
-                if incomplete_rerank:
+                # 保留原质量指标；完整链路不能把失败降级当作完整验收。
+                incomplete_reason = None
+                if ablation_mode == "full":
+                    if any(sp["type"] == "rerank" and sp["status"] == "error"
+                           for sp in trace_spans):
+                        incomplete_reason = "rerank_failed"
+                    elif scope.multiquery and any(
+                        sp["span_id"] == "query_rewrite"
+                        and sp["status"] in {"timeout", "error"}
+                        for sp in trace_spans
+                    ):
+                        incomplete_reason = "multi_query_rewrite_incomplete"
+                if incomplete_reason:
                     passed = False
 
                 _tok_after = _get_token_usage()
@@ -1140,8 +1147,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "details": details,
                         "pipeline": {**pipeline_info, "gate_mode": gate, "query_type": case.metadata.get("query_type", "")},
                         "stage_metrics": stage_metrics,
-                        "execution_complete": not incomplete_rerank,
-                        "incomplete_reason": "rerank_failed" if incomplete_rerank else None,
+                        "execution_complete": incomplete_reason is None,
+                        "incomplete_reason": incomplete_reason,
                         "generated_answer": _generated_answer or None,
                         "rejection": {
                             "confidence": confidence,
