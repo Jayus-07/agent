@@ -210,148 +210,31 @@ class MetadataStage:
                 classify_with_confidence, analyze_complexity,
                 extract_time_refs, detect_business_domain,
             )
-            from backend.config.rag import METADATA_SCHEMA_FINGERPRINT as _metadata_fp
-            from backend.rag.preprocessing.keyword import extract_doc_keywords_typed
+            from backend.config.rag import (
+                ENABLE_LLM_METADATA_EXTRACT,
+                METADATA_SCHEMA_FINGERPRINT as _metadata_fp,
+            )
             from backend.rag.preprocessing.entity import extract_entities, extract_person_names
         except ImportError:
             return {}
 
         try:
+            import time as _time
+            _t_build0 = _time.monotonic()
+            _stage_ms: dict = {}
+            # 统一（cascade）路径不经过规则 gather/near_dup 锚点，先置 None
+            # 防御未定义（enrich/finalize 仅在对应锚点被执行时记录）
+            _t_enrich0 = None
+            _t_final0 = None
             fname = base_meta.get("source_file", "")
             fpath = base_meta.get("file_path", "")
             cls_detail: dict | None = None
             domain_detail: dict | None = None
 
-            # ── 统一决策契约路径 ─────────────────────────────────────
-            # 级联打开后，R0/R1/R2/fallback 统一由 DecisionEnvelope 决策，
-            # 不再让 MetadataStage 自己拼接多个隐式分支。
-            from backend.config.rag import (
-                ENABLE_LLM_METADATA_EXTRACT,
-                METADATA_CASCADE_ENABLED,
-                metadata_cascade_rollout_allowed,
-            )
-            rollout_key = str(base_meta.get("doc_id") or fpath or fname or "unknown")
-            rollout_allowed = (
-                METADATA_CASCADE_ENABLED
-                and metadata_cascade_rollout_allowed(rollout_key)
-            )
-            if rollout_allowed:
-                from backend.rag.preprocessing.metadata_decision import decide_metadata
-
-                decision_lineage = self._begin_lineage_stage(
-                    processing_recorder,
-                    "metadata_extract",
-                    "metadata_extract",
-                    metadata={"route": "cascade"},
-                )
-                try:
-                    with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
-                        envelope = await decide_metadata(
-                            full_text,
-                            fname,
-                            fpath,
-                            embedding=self._embedding,
-                            parent_span_id=parent_span_id,
-                        )
-                except Exception as exc:
-                    self._finish_lineage_stage(
-                        processing_recorder,
-                        decision_lineage,
-                        status="failed",
-                        input_count=1,
-                        error_message=str(exc),
-                    )
-                    raise
-                source = str(getattr(envelope, "source", "") or "")
-                if source == "r0":
-                    self._finish_lineage_stage(
-                        processing_recorder, decision_lineage, status="skipped",
-                        input_count=1, skip_reason="route_r0",
-                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
-                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
-                        schema_fingerprint=_metadata_fp,
-                    )
-                elif source == "r1":
-                    classifier_model = str(getattr(envelope, "model_version", "") or "")
-                    self._finish_lineage_stage(
-                        processing_recorder, decision_lineage, status="success",
-                        model=ModelIdentity(
-                            role="metadata_extract",
-                            engine_type="classifier",
-                            provider="local",
-                            model_name=classifier_model or "metadata_classifier",
-                            artifact_fingerprint=classifier_model or None,
-                        ),
-                        input_count=1, output_count=1,
-                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
-                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
-                        schema_fingerprint=_metadata_fp,
-                    )
-                elif source == "llm":
-                    envelope_metadata = getattr(envelope, "metadata", {}) or {}
-                    actual_model = str(envelope_metadata.get("actual_model") or "")
-                    llm_usage = dict(envelope_metadata.get("llm_tokens") or {})
-                    usage_status = str(
-                        envelope_metadata.get("llm_usage_status")
-                        or ("reported" if llm_usage else "unavailable")
-                    )
-                    prompt_source = str(envelope_metadata.get("prompt_source") or "")
-                    prompt_hash = str(envelope_metadata.get("prompt_hash") or "")
-                    self._finish_lineage_stage(
-                        processing_recorder, decision_lineage, status="success",
-                        model=self._role_model_identity(
-                            "metadata_extract", actual_model
-                        ),
-                        input_count=1, output_count=1,
-                        prompt_key="rag.preprocessing.metadata_extract",
-                        prompt_version=str(getattr(envelope, "prompt_version", "") or "") or None,
-                        prompt_hash=prompt_hash or None,
-                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
-                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
-                        schema_fingerprint=_metadata_fp,
-                        usage=llm_usage or None,
-                        metadata={
-                            "llm_usage_status": usage_status,
-                            "prompt_source": prompt_source,
-                            # STOP B4：非 DB 来源显式打标，不允许静默 fallback
-                            "prompt_fallback": bool(prompt_source and prompt_source != "db"),
-                        },
-                    )
-                else:
-                    actual_model = str(
-                        (getattr(envelope, "metadata", {}) or {}).get("actual_model")
-                        or ""
-                    )
-                    self._finish_lineage_stage(
-                        processing_recorder, decision_lineage, status="fallback",
-                        model=(self._role_model_identity("metadata_extract", actual_model)
-                               if getattr(envelope, "llm_call_count", 0) else None),
-                        input_count=1, output_count=1,
-                        fallback_reason=str(getattr(envelope, "fallback_reason", "") or source),
-                        prompt_key=("rag.preprocessing.metadata_extract"
-                                    if getattr(envelope, "llm_call_count", 0) else None),
-                        prompt_version=str(getattr(envelope, "prompt_version", "") or "") or None,
-                        taxonomy_version=str(getattr(envelope, "taxonomy_version", "") or "") or None,
-                        rules_version=str(getattr(envelope, "rules_version", "") or "") or None,
-                        schema_fingerprint=_metadata_fp,
-                    )
-                # 级联路径也必须采集影子证据。提交在专用线程池中非阻塞，
-                # 影子失败不能影响主决策与入库；开关关闭时由方法内部直接返回。
-                self._dispatch_shadow_nonblocking(
-                    envelope, full_text, fname, fpath
-                )
-                return await self.finalize_decision(
-                    full_text,
-                    base_meta,
-                    envelope,
-                    parent_span_id=parent_span_id,
-                    chunks_text=chunks_text,
-                    processing_recorder=processing_recorder,
-                )
-            if METADATA_CASCADE_ENABLED and not rollout_allowed:
-                from backend.observability.metrics import metadata_route_total
-                metadata_route_total.labels(level="rollout", outcome="skip").inc()
-
+            # P0-3（2026-10-19 治理）：级联自动分类（R0/R1/R2 DecisionEnvelope
+            # + 影子对比）已退役——分类恒由规则分类器供给（classify_with_confidence），
+            # doc_type/business_domain 不再有任何 LLM 前置；LLM 仅承担可选增强
+            # （摘要/实体，ENABLE_LLM_METADATA_EXTRACT），见下方统一抽取路径。
             # 级联关闭时保留旧的统一 LLM 开关；失败后进入兼容规则路径。
             # 该路径已移除低置信复验、关键词 LLM，避免重复的 metadata 决策调用。
             unified: dict | None = None
@@ -406,10 +289,6 @@ class MetadataStage:
                     logger.warning(f"[MetaLLM] 统一抽取异常（降级规则路径）: {e}")
                     unified = None
                 if unified:
-                    main_envelope = self._legacy_decision_envelope(
-                        full_text, fname, fpath, unified)
-                    self._dispatch_shadow_nonblocking(
-                        main_envelope, full_text, fname, fpath)
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text,
@@ -516,23 +395,28 @@ class MetadataStage:
             complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
             person_names = extract_person_names(full_text)
         except Exception as e:
-            logger.warning(f"[Metadata] 6步预处理失败，进入完整确定性兜底: {e}")
-            from backend.rag.preprocessing.metadata_decision import (
-                build_deterministic_fallback,
-            )
-            from backend.rag.preprocessing.metadata_evidence import extract_evidence
-
-            fallback_envelope = build_deterministic_fallback(
-                full_text,
-                fname,
-                fpath,
-                extract_evidence(full_text, fname, fpath),
-                reason="legacy_rule_error",
-            )
-            return await self.finalize_decision(
+            # 规则六步失败 → 确定性兜底（合成最小 unified，走同一组包收口；
+            # 元数据失败不得导致文档无法入库）
+            logger.warning(f"[Metadata] 6步预处理失败，进入确定性兜底: {e}")
+            fallback_unified = {
+                "doc_type": "general",
+                "confidence": 0.0,
+                "business_domain": "general",
+                "summary": "",
+                "keywords": [],
+                "entities": {},
+                "risk": {"level": "none", "signals": []},
+                "llm_tokens": {},
+                "llm_usage_status": "unavailable",
+                "prompt_source": "",
+                "actual_model": "",
+                "prompt_version": "",
+                "prompt_hash": "",
+            }
+            return await self.finalize_unified(
                 full_text,
                 base_meta,
-                fallback_envelope,
+                fallback_unified,
                 parent_span_id=parent_span_id,
                 chunks_text=chunks_text,
                 processing_recorder=processing_recorder,
@@ -593,12 +477,16 @@ class MetadataStage:
                 raise
 
         async def task_keywords():
-            """规则+LLM 关键词提取（LLM 调用放线程池，不阻塞事件循环）"""
-            return await asyncio.to_thread(
-                extract_doc_keywords_typed, full_text,
-                doc_type=doc_type, confidence=confidence, complexity=complexity,
-                allow_llm=False,
-            )
+            """P0-2（2026-10-19 去词表化）：doc 级普通关键词停发。
+
+            词表/领域词/Jieba 排名提取已删（keyword.py），检索不再消费
+            doc_keywords（Stage1 门控已移除）；空产出保持 KeywordResult
+            契约与下游字段兼容（doc_keywords=[] / keywords_rule=[]）。
+            复杂度特征改由 extract_rule_keywords 的标识符计数承担。
+            不新增任何 LLM 关键词调用。
+            """
+            from backend.rag.preprocessing.keyword import KeywordResult as _KR
+            return _KR(rule_keywords=[], llm_keywords=[])
 
         async def task_questions():
             """模拟问题生成（Document Expansion，S0 恢复）。
@@ -641,12 +529,16 @@ class MetadataStage:
             person_names = persons
         kw_result = kw_res
         entities_nested = entities_res
+        _stage_ms["decision_ms"] = round((_time.monotonic() - _t_build0) * 1000)
+        _t_enrich0 = _time.monotonic()
         questions_by_chunk, question_gen_tokens = questions_res
 
         # 合并关键词（兼容旧字段，新字段已是对象数组）
         kws_rule_objs = kw_result.rule_keywords  # [{"word": ..., "source": "rule"}, ...]
         kws_llm_objs = kw_result.llm_keywords    # [{"word": ..., "source": "llm"}, ...]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+        from backend.rag.preprocessing.keyword import dedupe_keywords_normalized
+        kws_all_words = dedupe_keywords_normalized(
+            [k["word"] for k in kws_rule_objs + kws_llm_objs])
 
         # LLM 决策信息
         llm_decision = kw_result.llm_decision if hasattr(kw_result, 'llm_decision') else {}
@@ -697,7 +589,11 @@ class MetadataStage:
             # 章节提取失败 → 跳过 sections 元数据（软降级），留痕
             logger.debug(f"[Indexer] 章节提取失败，跳过: {e}", exc_info=True)
 
+        if _t_final0 is not None:
+            _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
+        _stage_ms["total_ms"] = round((_time.monotonic() - _t_build0) * 1000)
         return {
+            "stage_ms": dict(_stage_ms),
             "doc_type": doc_type,
             "confidence": confidence,
             "business_domain": domain,
@@ -734,116 +630,6 @@ class MetadataStage:
     # ---- 统一抽取路径的收口（纯规则部分照旧计算）----
 
     @staticmethod
-    def _legacy_decision_envelope(
-        full_text: str,
-        fname: str,
-        fpath: str,
-        unified: dict,
-    ):
-        """把旧统一抽取结果包装为影子任务使用的主结果契约。"""
-        from backend.rag.preprocessing.metadata_evidence import extract_evidence
-        from backend.rag.preprocessing.metadata_schema import (
-            DecisionEnvelope,
-            EvidenceItem,
-            UnifiedMetadata,
-        )
-        from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
-
-        parsed = UnifiedMetadata.model_validate(unified)
-        evidence = extract_evidence(full_text, fname, fpath)
-        return DecisionEnvelope(
-            decision="accepted",
-            doc_type=parsed.doc_type,
-            business_domain=parsed.business_domain,
-            confidence=parsed.confidence,
-            source="llm",
-            evidence=[
-                EvidenceItem(
-                    kind=signal.source,
-                    rule_id=signal.rule_id,
-                    value=signal.value,
-                    weight=signal.score,
-                    strength=signal.strength,
-                )
-                for signal in evidence.signals
-            ],
-            taxonomy_version=get_taxonomy().version,
-            rules_version=evidence.rules_version,
-            model_version="legacy-metadata-llm",
-            prompt_version=str(unified.get("prompt_version", "default")),
-            metadata={
-                **parsed.to_extract_dict(),
-                "llm_tokens": dict(unified.get("llm_tokens") or {}),
-                "llm_usage_status": str(
-                    unified.get("llm_usage_status")
-                    or ("reported" if unified.get("llm_tokens") else "unavailable")
-                ),
-                # STOP B3：Prompt 来源与内容指纹随信封进入处理血缘
-                "prompt_source": str(unified.get("prompt_source") or ""),
-                "prompt_hash": str(unified.get("prompt_hash") or ""),
-            },
-        )
-
-    def _dispatch_shadow_nonblocking(
-        self,
-        main_envelope,
-        full_text: str,
-        fname: str,
-        fpath: str,
-    ) -> None:
-        """把影子投递放到线程池，主索引不等待 broker/DB/Redis。"""
-        from backend.config.rag import METADATA_CASCADE_SHADOW_ENABLED
-
-        if not METADATA_CASCADE_SHADOW_ENABLED:
-            return
-
-        from backend.rag.preprocessing import metadata_shadow
-
-        if not metadata_shadow.try_acquire_shadow_dispatch_slot():
-            return
-
-        try:
-            # 这里必须直接提交到独立线程池。索引器通过 asyncio.run() 桥接
-            # 同步 Celery 任务；若先 create_task，再由临时事件循环驱动，
-            # build() 返回时 task 可能尚未真正提交就被取消，影子证据会丢失。
-            future = metadata_shadow.get_shadow_executor().submit(
-                metadata_shadow.submit_shadow_job,
-                main_envelope,
-                full_text,
-                fname,
-                fpath,
-            )
-        except Exception as exc:
-            metadata_shadow.release_shadow_dispatch_slot()
-            logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
-            return
-
-        self._shadow_tasks.add(future)
-
-        def _on_done(done: Future) -> None:
-            self._shadow_tasks.discard(done)
-            try:
-                done.result()
-            except Exception as exc:
-                logger.warning(f"[MetaShadow] 后台投递异常（不影响主索引）: {exc}")
-            finally:
-                metadata_shadow.release_shadow_dispatch_slot()
-
-        future.add_done_callback(_on_done)
-
-    async def _run_cascade_shadow(self, full_text: str, fname: str, fpath: str,
-                                  unified: dict, parent_span_id: str = "") -> None:
-        """兼容旧调用方：委托非阻塞影子投递，不在主路径执行路由。"""
-        del parent_span_id
-        try:
-            envelope = self._legacy_decision_envelope(
-                full_text, fname, fpath, unified)
-            self._dispatch_shadow_nonblocking(
-                envelope, full_text, fname, fpath)
-        except Exception as exc:
-            logger.warning(f"[MetaShadow] 影子任务包装失败（不影响主索引）: {exc}")
-
-    @staticmethod
     def detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
                         exclude_doc_id: str = "") -> str:
         """MinHash 近重复检测：与全部存量文档比对（跨 doc_type），返回 near_dup_id 或 ""。
@@ -872,67 +658,6 @@ class MetadataStage:
             except Exception as e:
                 logger.debug(f"[MinHash] 单文档签名比对失败，跳过: {e}", exc_info=True)
         return ""
-
-    async def finalize_decision(
-        self,
-        full_text: str,
-        base_meta: dict,
-        envelope,
-        parent_span_id: str = "",
-        chunks_text: list[str] | None = None,
-        processing_recorder=None,
-    ) -> dict:
-        """将所有决策来源收口成同一份下游 metadata 契约。"""
-        from backend.rag.preprocessing.entity import extract_entities
-        from backend.rag.preprocessing.metadata import (
-            _extract_first_sentences,
-            extract_time_refs,
-        )
-
-        unified = dict(getattr(envelope, "metadata", {}) or {})
-        if not unified:
-            try:
-                entities = extract_entities(full_text) or {}
-            except Exception as exc:
-                logger.warning(f"[Metadata] 确定性实体提取失败: {exc}")
-                entities = {}
-            unified = {
-                "doc_type": envelope.doc_type,
-                "confidence": envelope.confidence,
-                "business_domain": envelope.business_domain,
-                "summary": _extract_first_sentences(full_text, 3) or "",
-                "keywords": [],
-                "entities": entities,
-                "time_refs": extract_time_refs(full_text) or [],
-                "risk": {"level": "none", "signals": []},
-            }
-        unified.setdefault("doc_type", envelope.doc_type)
-        unified.setdefault("confidence", envelope.confidence)
-        unified.setdefault("business_domain", envelope.business_domain)
-        unified.setdefault("summary", _extract_first_sentences(full_text, 3) or "")
-        unified.setdefault("keywords", [])
-        unified.setdefault("entities", {})
-        unified.setdefault("time_refs", extract_time_refs(full_text) or [])
-        unified.setdefault("risk", {"level": "none", "signals": []})
-
-        allow_llm_enrichment = envelope.source == "llm"
-        out = await self.finalize_unified(
-            full_text,
-            base_meta,
-            unified,
-            parent_span_id=parent_span_id,
-            chunks_text=chunks_text,
-            route_level="" if envelope.source == "llm" else envelope.source,
-            allow_llm_enrichment=allow_llm_enrichment,
-            processing_recorder=processing_recorder,
-        )
-        out["llm_used"] = envelope.source == "llm"
-        out["llm_strategy"] = envelope.source
-        out["llm_decision"] = envelope.model_dump()
-        out["decision_envelope"] = envelope.model_dump()
-        out["fallback_reason"] = envelope.fallback_reason
-        out["risk"] = unified.get("risk") or {"level": "none", "signals": []}
-        return out
 
     async def finalize_unified(
         self, full_text: str, base_meta: dict, unified: dict,
@@ -966,6 +691,10 @@ class MetadataStage:
 
         # MinHash 近重复（规则产物，决定 pending_review，两条路径都必须算）
         minhash_sig = compute_minhash(full_text)
+        # P0-3 收敛后统一路径自治计时（不含 build 阶段的 LLM 抽取耗时）
+        import time as _time
+        _stage_ms: dict = {}
+        _t_final0 = _time.monotonic()
         near_dup_id = self.detect_near_dup(
             self._registry, minhash_sig, unified["doc_type"], exclude_doc_id=doc_id)
 
@@ -1029,7 +758,9 @@ class MetadataStage:
         # 关键词对象化（对齐 KeywordResult 输出口径：source=llm）
         kws_llm_objs = [{"word": w, "source": "llm"} for w in unified.get("keywords", [])]
         kws_rule_objs = [{"word": w, "source": "rule"} for w in rule_kws_preview]
-        kws_all_words = [k["word"] for k in kws_rule_objs + kws_llm_objs]
+        from backend.rag.preprocessing.keyword import dedupe_keywords_normalized
+        kws_all_words = dedupe_keywords_normalized(
+            [k["word"] for k in kws_rule_objs + kws_llm_objs])
 
         llm_tokens = dict(unified.get("llm_tokens") or {})
         if question_gen_tokens:
@@ -1040,7 +771,10 @@ class MetadataStage:
                 float(llm_tokens.get("cost_usd", 0) or 0)
                 + float(question_gen_tokens.get("cost_usd", 0) or 0), 6)
 
+        _stage_ms["finalize_ms"] = round((_time.monotonic() - _t_final0) * 1000)
+        _stage_ms["total_ms"] = round((_time.monotonic() - _t_final0) * 1000)
         return {
+            "stage_ms": dict(_stage_ms),
             "doc_type": unified["doc_type"],
             "confidence": unified["confidence"],
             "business_domain": unified["business_domain"],
@@ -1079,42 +813,3 @@ class MetadataStage:
             "risk": unified.get("risk") or {"level": "none", "signals": []},
         }
 
-    async def finalize_cascade(
-        self, full_text: str, base_meta: dict, decision,
-        parent_span_id: str = "", chunks_text: list[str] | None = None,
-        processing_recorder=None,
-    ) -> dict:
-        """级联路由 L0-L2 命中的收口（规划阶段 2.2）：分类用路由结果，
-        结构字段（summary/keywords/entities/time_refs）走规则提取——零 LLM
-        成本。委托 finalize_unified(route_level=...) 保证返回契约与统一
-        抽取路径完全一致，下游零感知。
-
-        keywords 传空：finalize_unified 内部的规则关键词预览会生成
-        source=rule 的关键词；unified["keywords"] 的语义是 LLM 产物，
-        级联路径没有 LLM 关键词。
-        """
-        from backend.rag.preprocessing.metadata import (
-            _extract_first_sentences, extract_time_refs,
-        )
-        from backend.rag.preprocessing.entity import extract_entities
-
-        entities: dict = {}
-        try:
-            entities = extract_entities(full_text) or {}
-        except Exception as e:
-            logger.warning(f"[MetaRouter] 级联实体提取失败（空实体兜底）: {e}")
-
-        unified = {
-            "doc_type": decision.doc_type,
-            "confidence": decision.confidence,
-            "business_domain": (decision.evidence or {}).get("domain") or "general",
-            "summary": _extract_first_sentences(full_text, 3) or "",
-            "keywords": [],
-            "entities": entities,
-            "time_refs": extract_time_refs(full_text) or [],
-        }
-        return await self.finalize_unified(
-            full_text, base_meta, unified,
-            parent_span_id=parent_span_id, chunks_text=chunks_text,
-            route_level=decision.level,
-            processing_recorder=processing_recorder)

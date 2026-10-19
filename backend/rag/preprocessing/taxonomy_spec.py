@@ -42,7 +42,6 @@ class MetadataTaxonomy:
     folder_hints: Mapping[str, str]
     domain_rules: Mapping[str, Mapping[str, int]]
     aliases: Mapping[str, Mapping[str, str]]
-    r0_allowlist: frozenset[str]
     raw_text: str
 
     def normalize_doc_type(self, value: object) -> str:
@@ -250,13 +249,6 @@ def _load_taxonomy(path: Path) -> MetadataTaxonomy:
                 raise _error(f"{field}.{hint} targets unknown doc_type {target}")
 
     aliases = _normalize_aliases(root.get("aliases", {}), doc_types, domains)
-    raw_allowlist = root.get("r0_allowlist", [])
-    if not isinstance(raw_allowlist, list):
-        raise _error("r0_allowlist must be a list")
-    r0_allowlist = frozenset(str(rule_id).strip() for rule_id in raw_allowlist)
-    unknown_r0 = r0_allowlist - rule_ids
-    if unknown_r0:
-        raise _error(f"r0_allowlist contains unknown rule ids: {sorted(unknown_r0)}")
 
     return MetadataTaxonomy(
         version=version,
@@ -268,7 +260,6 @@ def _load_taxonomy(path: Path) -> MetadataTaxonomy:
         folder_hints=folder_hints,
         domain_rules=domain_rules,
         aliases=aliases,
-        r0_allowlist=r0_allowlist,
         raw_text=raw_text,
     )
 

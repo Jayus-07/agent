@@ -91,11 +91,15 @@ function AdminLoginForm() {
     }
     setLoading(true);
     try {
-      await login(account.trim(), password);
+      const result = await login(account.trim(), password);
       // 2026-09-23 安全收口：只记账号，密码永不落 localStorage（XSS 可还原）
       if (remember) saveUsername(account.trim());
       else clearSavedUsername();
-      goNext();
+      if (result.userInfo?.mustChangePassword) {
+        router.replace("/change-password");
+      } else {
+        goNext();
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败，请稍后重试");
       setLoading(false);

@@ -561,12 +561,13 @@ async def stream_rag_traces():
 
 @router.get("/rag-traces/{trace_id}")
 async def get_rag_trace(trace_id: str):
-    """获取单条 RAG Trace 详情（SQLite TraceStore）"""
+    """获取单条 RAG Trace 详情（SQLite TraceStore）+ usage 读时回填（对齐通用端点）"""
     t = trace_collector.get(trace_id)
     if t is None:
         data = get_trace_store().get(trace_id)
         if data is None:
             raise HTTPException(status_code=404, detail=f"Trace {trace_id} 不存在或已过期")
+        _backfill_usage(data)
         return data
     return _to_trace_dto(t)
 

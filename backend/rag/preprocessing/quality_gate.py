@@ -156,6 +156,37 @@ def audit_chunk_integrity(chunks: list) -> dict[str, int]:
     }
 
 
+def audit_answer_evidence(chunks: list) -> dict:
+    """答案证据资格审计（P0，2026-10-19 faq_only.docx 实证）。
+
+    检测「问题清单冒充答案证据」风险：虚拟 parent 块的内容为多行纯问题
+    （行尾问号且无 A:/答： 答案标记）时，该块不具备回答业务问题的证据
+    资格。检索侧默认已过滤独立 parent 召回（RAG_FILTER_PARENT_RECALL），
+    此处记 warn 级异常供质量面观测；不确定结构不误报。
+
+    Returns:
+        {"suspect_no_answer_chunks": [chunk_id...], "count": N}
+    """
+    suspects: list[str] = []
+    for chunk in chunks or []:
+        metadata = getattr(chunk, "metadata", None) or {}
+        if str(metadata.get("granularity") or "") != "parent":
+            continue
+        lines = [ln.strip() for ln in
+                 str(getattr(chunk, "page_content", "") or "").splitlines()
+                 if ln.strip()]
+        if len(lines) < 2:
+            continue  # 单行/空内容不判定
+        question_lines = 0
+        for ln in lines:
+            if ln.endswith(("？", "?")) and not ln.startswith(("A：", "A:", "答：", "答:")):
+                question_lines += 1
+        # 全部行都是问句 → 纯问题清单（无答案内容）
+        if question_lines == len(lines):
+            suspects.append(str(metadata.get("chunk_id") or ""))
+    return {"suspect_no_answer_chunks": suspects, "count": len(suspects)}
+
+
 def _audit_normalize(text: str) -> str:
     return " ".join(str(text or "").split()).casefold()
 
@@ -400,6 +431,10 @@ def build_quality_record(
             "filtered_reasons": reason_breakdown,
         },
         "chunk_integrity": audit_chunk_integrity(chunks),
+        # P0（2026-10-19 faq_only.docx 实证）：答案证据资格审计——虚拟 parent
+        # 内容为纯问题列表（无答案）时记 warn（检索侧已默认过滤独立 parent
+        # 召回，此记录用于质量面可观测），不阻断入库
+        "answer_evidence": audit_answer_evidence(chunks),
         # §5.1 重试失败记录（本轮 per-file 异常；历史失败见 registry status）
         "index_errors": list(index_errors or []),
         # §5.2 节点级可追溯

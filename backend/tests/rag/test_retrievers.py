@@ -239,8 +239,10 @@ class TestKbIdFallback:
         from backend.core.request_context import RequestContext
         from backend.rag.context import RagRequestState, set_context, clear_context
 
+        # P0-2（2026-10-19）：QueryAnalyzer 不再产 doc_type 猜测，真实
+        # filter 只有 KBRouter 的 kb 维度 + 授权维度；放宽仅剥 kb_id/$or。
         set_context(RagRequestState(
-            metadata_filter={"kb_id": "policy_finance", "doc_type": "financial"},
+            metadata_filter={"kb_id": "policy_finance"},
             query="员工出差报销需要提交哪些材料？",
         ))
         try:

@@ -128,7 +128,6 @@ async def admin_task_queues(request: Request):
     from backend.config.tasks import (
         CELERY_AGENT_QUEUE,
         CELERY_MAINTENANCE_QUEUE,
-        CELERY_METADATA_SHADOW_QUEUE,
         CELERY_RAG_INDEX_QUEUE,
         CELERY_REPORT_QUEUE,
         TASK_WORKERS_PING_TIMEOUT,
@@ -137,7 +136,6 @@ async def admin_task_queues(request: Request):
     queues = {
         "agent": CELERY_AGENT_QUEUE,
         "rag_index": CELERY_RAG_INDEX_QUEUE,
-        "metadata_shadow": CELERY_METADATA_SHADOW_QUEUE,
         "report": CELERY_REPORT_QUEUE,
         "maintenance": CELERY_MAINTENANCE_QUEUE,
     }
