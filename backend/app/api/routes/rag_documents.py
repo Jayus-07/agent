@@ -261,7 +261,9 @@ async def list_operations(
     try:
         from backend.rag.indexing.index_run_store_pg import get_index_run_store
 
-        tenant_id = None if authz.is_admin else (authz.principal.tenant_id or "")
+        # 平台 admin 仍受可信租户边界约束；跨租户访问必须走单独授权能力。
+        # tenant_id 缺失时使用空租户值，查询保持 fail-closed。
+        tenant_id = authz.principal.tenant_id or ""
         kb_ids = None if authz.is_admin else sorted(authz.kb_scope)
         department = (
             None if authz.is_admin else (authz.principal.department or "")

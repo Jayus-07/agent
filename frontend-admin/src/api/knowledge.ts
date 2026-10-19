@@ -24,7 +24,7 @@ export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
 const BASE = '/api/rag'
 
-import { createIdempotencyKey, fetchRaw, mutationFetchRaw, randomId } from '@/api/client'
+import { createIdempotencyKey, fetchRaw, mutationFetchRaw, randomId, request } from '@/api/client'
 
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
@@ -337,7 +337,7 @@ export const knowledgeService: any = {
   },
 
   getOperations: (params: any = {}) =>
-    fetchRaw(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0, active_uploads: [] })),
+    request(`${BASE}/operations?${qs(params)}`),
 
   getChunkDetail: (chunkId: string) =>
     fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),

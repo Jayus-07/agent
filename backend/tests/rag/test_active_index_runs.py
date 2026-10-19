@@ -1,7 +1,9 @@
+import asyncio
 from contextlib import contextmanager
 from threading import Lock
 from types import SimpleNamespace
 
+from backend.app.api.routes import rag_documents
 from backend.app.api.routes.rag_documents import _active_upload_public_item
 from backend.rag.indexing.index_run_store_pg import IndexRunStore
 
@@ -76,3 +78,36 @@ def test_active_upload_projection_checks_manage_scope_and_hides_file_path():
     assert item["celery_task_id"] == "celery-1"
     assert "file_path" not in item
     assert _active_upload_public_item({**run, "kb_id": "kb-2"}, authz) is None
+
+
+def test_list_operations_scopes_admin_active_runs_to_own_tenant(monkeypatch):
+    authz = SimpleNamespace(
+        is_admin=True,
+        principal=SimpleNamespace(tenant_id="tenant-a"),
+        kb_scope=frozenset(),
+        can_manage_row=lambda _row: (True, ""),
+    )
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: authz)
+    monkeypatch.setattr(
+        rag_documents,
+        "_get_op_logger",
+        lambda: SimpleNamespace(list=lambda **_kwargs: {"items": [], "total": 0}),
+    )
+
+    captured = {}
+
+    class _RunStore:
+        def list_active_runs(self, **kwargs):
+            captured.update(kwargs)
+            return []
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: _RunStore(),
+    )
+
+    response = asyncio.run(rag_documents.list_operations(SimpleNamespace()))
+
+    assert captured["tenant_id"] == "tenant-a"
+    assert captured["kb_ids"] is None  # admin 可看本租户全部知识库
+    assert response["active_uploads"] == []

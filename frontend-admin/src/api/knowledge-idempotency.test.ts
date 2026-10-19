@@ -4,6 +4,7 @@ const apiMock = vi.hoisted(() => ({
   fetchRaw: vi.fn(),
   mutationFetchRaw: vi.fn(),
   createIdempotencyKey: vi.fn(() => "upload-key-1"),
+  request: vi.fn(),
 }));
 
 vi.mock("@/api/client", () => apiMock);
@@ -16,6 +17,7 @@ describe("knowledgeService 上传幂等接线", () => {
     apiMock.mutationFetchRaw.mockReset().mockResolvedValue(
       new Response(JSON.stringify({ ok: false, error: "校验失败" }), { status: 200 }),
     );
+    apiMock.request.mockReset();
     apiMock.createIdempotencyKey.mockClear();
   });
 
@@ -61,5 +63,12 @@ describe("knowledgeService 上传幂等接线", () => {
 
     expect(result.ok).toBe(true);
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it("操作日志请求错误继续向调用方抛出", async () => {
+    apiMock.request.mockRejectedValue(new Error("HTTP 503"));
+
+    await expect(knowledgeService.getOperations({ page: 2 })).rejects.toThrow("HTTP 503");
+    expect(apiMock.request).toHaveBeenCalledWith("/api/rag/operations?page=2");
   });
 });

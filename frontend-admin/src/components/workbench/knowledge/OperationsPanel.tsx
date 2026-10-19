@@ -26,6 +26,7 @@ export default function OperationsPanel() {
   const [pageSize] = useState(20)
   const [operation, setOperation] = useState<OperationType | ''>('')
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set())
+  const latestFetchIdRef = useRef(0)
 
   /** 将操作日志按批次折叠：
    *  - 同批次 ≥2 条 → 折叠为批次行
@@ -79,21 +80,26 @@ export default function OperationsPanel() {
   }
 
   const fetchOps = useCallback(async (showLoading = true) => {
+    const fetchId = ++latestFetchIdRef.current
     if (showLoading) setLoading(true)
     try {
       const res = await knowledgeService.getOperations({ page, page_size: pageSize, operation: operation || undefined })
+      if (fetchId !== latestFetchIdRef.current) return
       setItems(res.items)
       setTotal(res.total)
       setActiveUploads(Array.isArray(res.active_uploads) ? res.active_uploads : [])
     } catch (e) {
-      toastRef.current.error(`加载失败: ${(e as Error).message}`)
+      if (fetchId === latestFetchIdRef.current) {
+        toastRef.current.error(`加载失败: ${(e as Error).message}`)
+      }
     } finally {
-      if (showLoading) setLoading(false)
+      if (fetchId === latestFetchIdRef.current) setLoading(false)
     }
   }, [operation, page, pageSize])
 
   useEffect(() => {
     void fetchOps()
+    return () => { latestFetchIdRef.current += 1 }
   }, [fetchOps])
 
   useEffect(() => {
