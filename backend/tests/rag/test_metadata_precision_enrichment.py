@@ -146,7 +146,6 @@ def _patch_rule_fallback(monkeypatch, doc_type="general"):
     )
     monkeypatch.setattr(metadata_module, "compute_minhash", lambda text: [1, 2, 3])
     monkeypatch.setattr(metadata_module, "extract_time_refs", lambda text: [])
-    monkeypatch.setattr(metadata_module, "analyze_complexity", lambda *args: {})
     monkeypatch.setattr(metadata_module, "extract_person_names", lambda text: [])
     monkeypatch.setattr(metadata_module, "extract_sections", lambda *args, **kwargs: [])
     monkeypatch.setattr(keyword_module, "extract_rule_keywords", lambda *args, **kwargs: [])
@@ -187,9 +186,11 @@ async def test_rule_classification_wins_and_metadata_enrichment_is_single_call(m
     )
 
     metadata_llm.extract_metadata_llm_async.assert_awaited_once()
+    assert metadata_llm.extract_metadata_llm_async.await_args.kwargs["include_summary"] is False
     assert captured["doc_type"] == "faq"
     assert captured["business_domain"] == "hr"
     assert captured["unified"]["doc_type"] == "faq"
+    assert captured["unified"]["summary"] == ""
     assert result == {"doc_type": "faq", "business_domain": "hr"}
 
 
@@ -251,6 +252,8 @@ async def test_structured_faq_skips_metadata_and_question_generation_calls(monke
     extract.assert_not_awaited()
     generate_questions.assert_not_called()
     assert result["doc_type"] == "faq"
+    assert result["summary"] == ""
+    assert "complexity" not in result
     assert result["questions_by_chunk"] == []
     question_step = next(
         step for step in context.snapshot().steps

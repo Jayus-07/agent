@@ -199,7 +199,7 @@ def extract_chunk_keywords(text: str, top_k: int = 6,
 
 
 def extract_rule_keywords(text: str, doc_type: str = "general", top_k: int = 6) -> list:
-    """通用标识符识别 — metadata_stage 复杂度特征（len()）继续可用。"""
+    """按原文提取通用标识符。"""
     return extract_chunk_keywords_cached(text or "", doc_type=doc_type, top_k=top_k)
 
 
@@ -210,7 +210,6 @@ def extract_doc_keywords(text: str, top_k: int = 10) -> KeywordResult:
 
 def extract_doc_keywords_typed(text: str, doc_type: str = "general",
                                top_k: int = 10, confidence: float = 0.0,
-                               complexity: dict | None = None,
                                allow_llm: bool = False) -> KeywordResult:
     """同上（保留签名兼容；allow_llm 参数忽略，绝不调 LLM）。"""
     return extract_doc_keywords(text, top_k=top_k)

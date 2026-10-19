@@ -37,7 +37,6 @@ def _row_meta(row: dict, sig: list[int]) -> dict:
         "keywords": row.get("keywords") or "",
         "time_refs": row.get("time_refs") or "",
         "business_domain": row.get("business_domain") or "",
-        "complexity": row.get("complexity") or "",
         "metadata_fingerprint": row.get("metadata_fingerprint") or "",
         "doc_version": row.get("doc_version") or 1,
         "kb_version": row.get("kb_version") or "v1",

@@ -6,7 +6,11 @@
 """
 import pytest
 
-from backend.rag.preprocessing.quality_gate import compute_quality_score
+from backend.rag.preprocessing.quality_gate import (
+    compute_quality_score,
+    hard_anomalies,
+    quality_score_metrics,
+)
 
 
 def test_clean_document_scores_full():
@@ -22,6 +26,28 @@ def test_warns_deduct_ten_each():
 def test_hard_deducts_forty():
     hard = [{"check": "cleaned_chars", "severity": "hard", "detail": "x"}]
     assert compute_quality_score(hard) == 60
+
+
+def test_error_severity_is_counted_as_hard():
+    errors = [{"check": "cleaned_chars", "severity": "error", "detail": "x"}]
+    assert compute_quality_score(errors) == 60
+    assert hard_anomalies(errors) == errors
+
+
+def test_score_metrics_include_rule_and_matching_counts():
+    anomalies = [
+        {"check": "cleaned_chars", "severity": "error"},
+        {"check": "value_loss", "severity": "warn"},
+    ]
+    assert quality_score_metrics(anomalies) == {
+        "quality_score": 50,
+        "quality_score_base": 100,
+        "quality_score_hard_deduction": 40,
+        "quality_score_warn_deduction": 10,
+        "anomalies_total": 2,
+        "anomalies_hard": 1,
+        "anomalies_warn": 1,
+    }
 
 
 def test_floor_at_zero():

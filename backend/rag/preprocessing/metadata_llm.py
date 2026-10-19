@@ -181,11 +181,12 @@ async def extract_metadata_llm_async(
     full_text: str,
     filename: str,
     parent_span_id: str = "",
+    include_summary: bool = True,
 ) -> dict | None:
     """单次 LLM 调用抽齐文档级元数据（async，供 _build_doc_metadata await）。
 
     走 invoke_metadata_llm（云端 proxy，qwen 关思考模式，自动计量落库）。
-    成功返回字段子集（不含 minhash/complexity 等规则产物），失败返回 None。
+    成功返回字段子集（不含 minhash 等规则产物），失败返回 None。
     """
     if not full_text or not full_text.strip():
         return None
@@ -218,6 +219,11 @@ async def extract_metadata_llm_async(
             text=sample,
         )
         prompt = prompt_result.text
+        if not include_summary:
+            prompt += (
+                "\n\n本文件不需要文档级摘要。JSON 的 summary 字段必须返回空字符串，"
+                "不要概括或改写问答内容。"
+            )
         prompt_version = getattr(prompt_result, "version", None)
         # STOP B3/B4：显式记录 Prompt 来源与内容指纹。version 为 int = DB
         # active 版本（seed/publish 产生）；None = 内置 defaults（DB 缺失或
@@ -291,6 +297,8 @@ async def extract_metadata_llm_async(
 
         content = response.content if hasattr(response, "content") else str(response)
         result = parse_extract_response(content, valid_types)
+        if not include_summary:
+            result["summary"] = ""
         result["prompt_version"] = (
             f"v{prompt_version}" if isinstance(prompt_version, int) else "default"
         )

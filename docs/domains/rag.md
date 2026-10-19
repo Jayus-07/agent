@@ -88,6 +88,8 @@ flowchart TD
   - Token 上限统一走 `_split_to_budget`（语义切分 + `_hard_split_by_budget` 整串口径硬切收口），Leaf 和实际生成 Parent 的路径（含 Step/Legal/表格兜底/虚拟 parent）严格 ≤ 配置预算；FAQ 长答案继续拆为带问题前缀的 Leaf，不生成问题目录 Parent。chunk 级截断（超 MAX_CHUNKS_PER_DOC）是质量门禁**硬异常**——文档进 failed，不得以截断状态 active（P0-05/超长文档收口）。
   - 大表解析资源上限：`RAG_TABLE_MAX_ROWS` / `RAG_TABLE_MAX_CELLS` 按 Workbook 累计；Excel 在达到限制时停止读取后续行/Sheet，报告已扫描与至少截断下界，总量未知会明确标记。CSV 使用标准库逐行流式读取，在有界缓冲下保留 UTF-8 BOM/GBK、SKU 前导零及长订单号，并完整流式计数以精确记录截断量。行/单元格截断、OCR 页数超限或识别失败均进入质量硬异常，文档失败，不以部分内容标成 `active`。
 - 元数据：`metadata_schema.py::UnifiedMetadata/DecisionEnvelope`、taxonomy 与当前源文档/chunk contract 为事实源。必要检索键至少保持可溯源 doc/chunk/source、KB/部门/权限、版本/代次等已有字段；具体必填性按 schema 检查，不从本段临时发明字段。
+- 文档级元数据不再生成复杂度评分；FAQ 不生成文档级摘要，问答对直接作为检索单元，避免摘要重复或改写答案。
+- Trace 的质量记录评分按 `max(0, 100 - 40×硬异常数 - 10×告警数)` 计算；它反映解析与索引校验异常，不代表答案语义正确或检索召回效果。
 - 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。Parent-Child 身份契约：索引期 `apply_index_chunk_identity` 覆盖 chunk_id 时同步改写 parent_chunk_id，检索端 `attach_parent_context` 的 `$in` 查询才能命中（P0-03）；Parent 扩展结果由 `apply_review_visibility` 在扩展后统一复核，pending_review 不得经 Parent 通道绕过。文档级元数据的全文输入为**纯 leaf 拼接**（parent 章节全量不重复计入）；超长文档摘要采样走 `summary_sampling`（头+章节目录+分层采样+尾，标注覆盖范围）；模拟问题 LLM 选块均匀分布且规则降级不产占位问句。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。

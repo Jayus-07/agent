@@ -9,7 +9,7 @@ import { knowledgeService } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  getQualityScore, getQualityWarning, groupSpansByType,
+  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
 } from "../trace-metrics";
 import {
   getChunkSectionLabel,
@@ -189,10 +189,9 @@ export default function DocTracePage() {
               const llmStrategy=(llmMeta["llm_strategy"] as string)||"";
               const llmDecision=(llmMeta["llm_decision"] as Record<string,unknown>)||{};
               const llmScore=llmDecision["llm_score"] as number||0;
-              const llmReason=(llmDecision["llm_reason"] as string)||"";
+              const llmReason=String(llmDecision["llm_reason"]||"").split(";").filter(reason=>!reason.includes("complex_struct")).join(";");
               const docType=(ruleMeta["doc_type"] as string)||(spans[0]?.metrics?.doc_type as string)||"";
               const confidence=(ruleMeta["confidence"] as number)||0;
-              const complexity=(ruleMeta["complexity"] as Record<string,unknown>)||{};
               const hasRule=kwsRule.length>0;
               const strategyLabel=STRATEGY_LABEL(llmStrategy,llmUsed,hasRule);
               const tokenOk=llmUsed&&typeof llmTokens["prompt_tokens"]==="number"&&(llmTokens["prompt_tokens"]>0||(llmTokens["completion_tokens"]??0)>0);
@@ -206,9 +205,9 @@ export default function DocTracePage() {
               const domainOut=((domainSpan?.output||{})as any);
               const domainTopTypes=(Object.entries(domainOut.scores||{}) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,5);
               const domainHits=domainOut.hits||[];
-              const qualitySpan=childSpans.find(s=>s.id==='index_quality'||s.id.startsWith('index_quality#'));
-              const qualityDims=((qualitySpan?.output||{})as Record<string,number>);
-              const summaryText=ruleMeta["summary"] as string||"";
+              const qualityBreakdown=getQualityScoreBreakdown(childSpans);
+              const qualityCalculatedScore=qualityBreakdown.hardCount===null||qualityBreakdown.warningCount===null?null:Math.max(0,qualityBreakdown.base-qualityBreakdown.hardDeduction*qualityBreakdown.hardCount-qualityBreakdown.warningDeduction*qualityBreakdown.warningCount);
+              const summaryText=docType.toLowerCase()==="faq"?"":((ruleMeta["summary"] as string)||"");
               const sections=ruleMeta["sections"] as string[]||[];
 
               return (<div key={type} className="px-5 py-3 cursor-pointer hover:bg-violet-50/50 transition-colors" onClick={()=>toggleTypeExpand(type)}>
@@ -228,12 +227,14 @@ export default function DocTracePage() {
                       </div>)},
                     {k:'domain',icon:'🌐',label:'业务领域',value:overview.businessDomain||'—',hint:'关键词命中最高',show:!!(domainTopTypes.length||domainHits.length),
                       detail:()=>(<div className="space-y-1">{domainTopTypes.length>0&&(<div>{domainTopTypes.map(([t,s])=>(<div key={t} className="flex items-center gap-2" style={{fontSize:'9px'}}><span className="w-16 text-slate-500 text-right">{t}</span><div className="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden"><div className="h-full rounded-full bg-cyan-400" style={{width:Math.max(s/10*100,2)+'%'}}/></div><span className="w-8 text-right font-mono text-slate-500">{s}</span></div>))}</div>)}{domainHits.length>0&&<div className="flex flex-wrap gap-x-2 gap-y-0.5">{domainHits.map((h:string,i:number)=>{const m=h.match(/^(.+)\+(\d+)$/);return <span key={'dh'+i} className="text-[9px] text-slate-500">▸ {m?m[1]:h}{m&&<span className="font-mono text-cyan-500 ml-0.5">+{m[2]}</span>}</span>;})}</div>}</div>)},
-                    {k:'quality',icon:'📊',label:'质量评分',value:overview.qualityScore===null?'未提供':`${overview.qualityScore}/100 ${overview.qualityScore>=60?'✅':overview.qualityScore>=40?'⚠':'❌'}`,hint:'质量记录评分',show:true,
-                      detail:()=>(<div className="grid grid-cols-2 gap-1 text-[9px]">{Object.entries(qualityDims).filter(([k])=>k!=='total').map(([k,v])=>(<div key={k} className="flex justify-between"><span className="text-slate-500">{{completeness:'文本完整度',structure:'结构完整度',noise:'噪声检测',uniqueness:'去重检测'}[k]||k}</span><span className="font-mono text-slate-600">{v}</span></div>))}</div>)},
-                    {k:'complexity',icon:'🧩',label:'复杂度',value:`${String(complexity['complexity_score']??'—')}/100`,hint:'6 维度综合',show:true,
-                      detail:()=>{const dims=complexity['dimensions'] as Record<string,number>|undefined;if(dims)return(<div className="grid grid-cols-3 gap-1 text-[9px]">{[{l:'章节',max:10,k:'headings'},{l:'表格',max:5,k:'tables'},{l:'法规',max:15,k:'legal'},{l:'风险',max:30,k:'risk'},{l:'长度',max:10,k:'length'},{l:'置信度',max:10,k:'confidence'}].map(d=>(<div key={d.k} className="flex justify-between"><span className="text-slate-500">{d.l}</span><span className="font-mono text-slate-600">{dims[d.k]??0}<span className="text-slate-300">/{d.max}</span></span></div>))}</div>);return <div className="text-[9px] text-slate-400">无维度数据</div>}},
+                    {k:'quality',icon:'📊',label:'质量评分',value:overview.qualityScore===null?'未提供':`${overview.qualityScore}/100 ${overview.qualityScore>=60?'✅':overview.qualityScore>=40?'⚠':'❌'}`,hint:`${qualityBreakdown.base} − ${qualityBreakdown.hardDeduction}×硬异常 − ${qualityBreakdown.warningDeduction}×告警`,show:true,
+                      detail:()=>(<div className="space-y-1 text-[9px]">
+                        <div className="text-slate-600">公式：max(0，{qualityBreakdown.base} − {qualityBreakdown.hardDeduction}×硬异常数 − {qualityBreakdown.warningDeduction}×告警数)</div>
+                        {qualityCalculatedScore!==null?<div className="text-slate-500">本次计分：max(0，{qualityBreakdown.base} − {qualityBreakdown.hardDeduction}×{qualityBreakdown.hardCount} − {qualityBreakdown.warningDeduction}×{qualityBreakdown.warningCount}) = {qualityCalculatedScore}/100（异常 {qualityBreakdown.totalCount??(qualityBreakdown.hardCount!+qualityBreakdown.warningCount!)} 项）{overview.qualityScore!==null&&overview.qualityScore!==qualityCalculatedScore&&<span className="text-amber-600">；Trace 记录 {overview.qualityScore}/100，与现行公式不一致</span>}</div>:<div className="text-slate-500">此 Trace 未记录完整异常计数。</div>}
+                        <div className="text-slate-400">硬异常会阻止文档发布；此分数反映解析与索引校验异常，不代表答案语义正确或检索召回效果。</div>
+                      </div>)},
                     {k:'llm_decision',icon:'🔮',label:'LLM 决策',value:llmUsed?`评分${llmScore} · ${llmStrategy==='llm_force'?'强制触发':llmScore>=50?'达标触发':'未触发'}`:'未使用 LLM',hint:llmUsed?'评分累加':'—',show:llmUsed,
-                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label=p;let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${DOC_TYPE_CN[cv(p.split(":")[1])]||cv(p.split(":")[1])} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("complex_struct:")){label=`文档结构复杂（${cv(p.split(":")[1])} 分）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
+                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label=p;let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${DOC_TYPE_CN[cv(p.split(":")[1])]||cv(p.split(":")[1])} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
                     {k:'summary',icon:'📝',label:'摘要',value:summaryText?summaryText.slice(0,50)+'…':'—',hint:llmUsed?'LLM 生成':'抽取式',show:!!summaryText,
                       detail:()=>(<div className="text-[10px] text-slate-700 leading-relaxed">{summaryText.length>200?<SummaryExpand text={summaryText}/>:summaryText}</div>)},
                     {k:'sections',icon:'📑',label:'章节',value:`${sections.length} 个`,hint:'正则提取',show:sections.length>0,

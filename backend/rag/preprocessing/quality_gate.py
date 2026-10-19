@@ -26,6 +26,10 @@ from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
 QUALITY_RECORD_SCHEMA_VERSION = "1.0"
+QUALITY_SCORE_BASE = 100
+QUALITY_SCORE_HARD_DEDUCTION = 40
+QUALITY_SCORE_WARN_DEDUCTION = 10
+HARD_QUALITY_SEVERITIES = frozenset({"error", "hard"})
 
 # §5.3 文本类格式字符量下限：低于此值视为解析异常（与 RAG_OCR_MIN_TEXT_CHARS
 # 无关——那是 OCR 触发阈值，这是"解析产出是否为空壳"的门禁）
@@ -90,15 +94,37 @@ def _value_loss_check(raw_text: str, cleaned_text: str) -> list[dict]:
 def compute_quality_score(anomalies: list[dict]) -> int:
     """§5.1 质量评分（TD-09，2026-10-02）：确定性公式，供 registry/前端展示。
 
-    score = 100 - 40×硬异常数 - 10×警告数，下限 0。
+    score = max(0, 100 - 40×硬异常数 - 10×警告数)。
     此前 quality_score 列恒为默认 0（从未计算）→ 每份文档都触发前端
     「质量评分偏低 (0/100)」告警，纯噪音且掩盖真实质量差异。
     口径：硬异常在本层已被门禁拦截（文档不会 active），评分主要刻画
     警告密度——≤4 条警告仍 ≥60（前端阈值），持续劣化才跌破。
     """
-    hard = sum(1 for a in anomalies if a.get("severity") == "hard")
-    warn = sum(1 for a in anomalies if a.get("severity") != "hard")
-    return max(0, 100 - 40 * hard - 10 * warn)
+    return quality_score_metrics(anomalies)["quality_score"]
+
+
+def quality_score_metrics(anomalies: list[dict]) -> dict[str, int]:
+    """返回与评分同口径的规则、得分和异常计数，供 Trace 前端解释分数。"""
+    hard = sum(
+        1 for anomaly in anomalies
+        if anomaly.get("severity") in HARD_QUALITY_SEVERITIES
+    )
+    warn = len(anomalies) - hard
+    score = max(
+        0,
+        QUALITY_SCORE_BASE
+        - QUALITY_SCORE_HARD_DEDUCTION * hard
+        - QUALITY_SCORE_WARN_DEDUCTION * warn,
+    )
+    return {
+        "quality_score": score,
+        "quality_score_base": QUALITY_SCORE_BASE,
+        "quality_score_hard_deduction": QUALITY_SCORE_HARD_DEDUCTION,
+        "quality_score_warn_deduction": QUALITY_SCORE_WARN_DEDUCTION,
+        "anomalies_total": len(anomalies),
+        "anomalies_hard": hard,
+        "anomalies_warn": warn,
+    }
 
 
 def audit_chunk_integrity(chunks: list) -> dict[str, int]:
@@ -796,7 +822,10 @@ def _sanitize_path_segment(value: str) -> str:
 
 def hard_anomalies(anomalies: list[dict]) -> list[dict]:
     """§5.3 硬异常（error 级）：存在即不得置 active。"""
-    return [a for a in anomalies if a.get("severity") == "error"]
+    return [
+        anomaly for anomaly in anomalies
+        if anomaly.get("severity") in HARD_QUALITY_SEVERITIES
+    ]
 
 
 def anomaly_summary(anomalies: list[dict], *, include_hard: bool = False) -> str:

@@ -524,11 +524,12 @@ def _enforce_prepaid_content_integrity(
         doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
     )
     quality_score = None
+    quality_metrics = {}
     try:
         from backend.rag.preprocessing.quality_gate import (
             build_quality_record,
-            compute_quality_score,
             persist_quality_record,
+            quality_score_metrics,
             run_typed_validation,
         )
 
@@ -550,7 +551,8 @@ def _enforce_prepaid_content_integrity(
             )
         if not anomalies:
             anomalies = run_typed_validation(record, raw_ast)
-        quality_score = compute_quality_score(anomalies)
+        quality_metrics = quality_score_metrics(anomalies)
+        quality_score = quality_metrics["quality_score"]
         doc_meta["quality_score"] = quality_score
         record["quality_issues"] = doc_meta.get("quality_issues", "")
         record.setdefault("validation", {})["score"] = quality_score
@@ -576,13 +578,10 @@ def _enforce_prepaid_content_integrity(
                 "chunk_integrity": chunk_integrity,
             },
         )
-        _hard_prepaid = [a for a in anomalies if a.get("severity") == "error"]
         trace_collector.end_span(
             q_span, status="error",
             metrics={
-                "anomalies_total": len(anomalies),
-                "anomalies_hard": len(_hard_prepaid),
-                "anomalies_warn": len(anomalies) - len(_hard_prepaid),
+                **quality_metrics,
                 "record_path": doc_meta.get("quality_record_path", ""),
                 **coverage_metrics,
                 **chunk_integrity,
@@ -1747,14 +1746,15 @@ class IncrementalIndexer:
                 },
             )
             _hard = []
+            _quality_metrics = {}
             _quality_record_saved = False
             try:
                 from backend.rag.preprocessing.quality_gate import (
                     anomaly_summary,
                     build_quality_record,
-                    compute_quality_score,
                     hard_anomalies,
                     persist_quality_record,
+                    quality_score_metrics,
                     run_typed_validation,
                 )
                 _record = build_quality_record(
@@ -1780,7 +1780,8 @@ class IncrementalIndexer:
                 _record["quality_issues"] = doc_meta.get("quality_issues", "")
                 # TD-09：质量分落 doc_meta（→ registry quality_score 列），
                 # 替代此前恒 0 的默认值；评分同步写进质量记录便于审计
-                doc_meta["quality_score"] = compute_quality_score(_anomalies)
+                _quality_metrics = quality_score_metrics(_anomalies)
+                doc_meta["quality_score"] = _quality_metrics["quality_score"]
                 _record.setdefault("validation", {})["score"] = doc_meta["quality_score"]
                 _qpath = persist_quality_record(_record)
                 _quality_record_saved = True
@@ -1806,10 +1807,7 @@ class IncrementalIndexer:
                     "soft_warning" if _anomalies else "pass"
                 )
                 trace_collector.end_span(q_span,
-                    metrics={"anomalies_total": len(_anomalies),
-                             "anomalies_hard": len(_hard),
-                             "anomalies_warn": len(_anomalies) - len(_hard),
-                             "quality_score": doc_meta.get("quality_score"),
+                    metrics={**_quality_metrics,
                              "record_path": _qpath,
                              **_coverage_metrics,
                              **_chunk_integrity})
@@ -1822,6 +1820,7 @@ class IncrementalIndexer:
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
                     metrics={"error": "quality_gate_hard_anomaly",
+                             **_quality_metrics,
                              **_coverage_metrics,
                              **_chunk_integrity})
                 if (
@@ -1854,7 +1853,8 @@ class IncrementalIndexer:
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200], **_coverage_metrics,
+                    metrics={"error": str(e)[:200], **_quality_metrics,
+                             **_coverage_metrics,
                              **_chunk_integrity})
                 if _quality_requires_failure:
                     _failure_issue = _coverage_issue or _integrity_issue
@@ -2129,8 +2129,6 @@ class IncrementalIndexer:
         kws_llm = doc_meta.get("keywords_llm", [])
         llm_tokens = doc_meta.get("llm_tokens", {})
         llm_used = doc_meta.get("llm_used", False)
-        # 展平复杂对象（ChromaDB 不支持嵌套 dict）
-        complexity_val = doc_meta.get("complexity", {})
         time_refs_val = doc_meta.get("time_refs", [])
         # 写入 doc_db 前做深拷贝并展平嵌套字段（ChromaDB 不支持 dict/list metadata）
         doc_db_meta = {}
@@ -2203,7 +2201,6 @@ class IncrementalIndexer:
                     "business_domain": doc_meta.get("business_domain", ""),
                     "domain_classify": doc_meta.get("domain_detail", {}),
                     "person_names": doc_meta.get("person_names", ""),
-                    "complexity": complexity_val,
                     "time_refs": time_refs_val,
                     "keywords_rule": kws_rule if isinstance(kws_rule, list) else [],
                     "summary": doc_meta.get("summary", ""),
@@ -2434,7 +2431,6 @@ class IncrementalIndexer:
             "keywords": _serialize_registry_keywords(doc_meta),
             "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
             "business_domain": doc_meta.get("business_domain", ""),
-            "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
             "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
             "doc_version": doc_meta.get("doc_version", 1),
             "kb_version": doc_meta.get("kb_version", "v1"),

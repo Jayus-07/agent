@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Span } from "@/types/trace";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  getQualityScore, getQualityWarning, groupSpansByType,
+  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
 } from "./trace-metrics";
 
 function span(
@@ -68,5 +68,38 @@ describe("Trace duration and quality metrics", () => {
     ])).toBe(100);
     expect(getQualityWarning(100)).toBeNull();
     expect(getQualityWarning(60)).toBeNull();
+  });
+
+  it("exposes the backend score rule and this trace's anomaly counts", () => {
+    const breakdown = getQualityScoreBreakdown([
+      span("index_quality", "audit", "root", 10, {
+        quality_score_base: 100,
+        quality_score_hard_deduction: 40,
+        quality_score_warn_deduction: 10,
+        anomalies_total: 3,
+        anomalies_hard: 1,
+        anomalies_warn: 2,
+      }),
+    ]);
+
+    expect(breakdown).toEqual({
+      base: 100,
+      hardDeduction: 40,
+      warningDeduction: 10,
+      hardCount: 1,
+      warningCount: 2,
+      totalCount: 3,
+    });
+  });
+
+  it("uses the current score rule for older traces without policy metrics", () => {
+    expect(getQualityScoreBreakdown([])).toEqual({
+      base: 100,
+      hardDeduction: 40,
+      warningDeduction: 10,
+      hardCount: null,
+      warningCount: null,
+      totalCount: null,
+    });
   });
 });

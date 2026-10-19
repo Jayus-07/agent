@@ -31,13 +31,46 @@ export function groupSpansByType(spans: Span[]): SpanTypeGroup[] {
   }));
 }
 
+function getQualitySpan(spans: Span[]): Span | undefined {
+  return spans.find((span) => span.id === "index_quality"
+      && typeof span.metrics?.quality_score === "number")
+    || spans.find((span) => typeof span.metrics?.quality_score === "number")
+    || spans.find((span) => span.id === "index_quality");
+}
+
 /** 仅读取索引质量记录分数；缺失值保持 null，零分仍是有效分数。 */
 export function getQualityScore(spans: Span[]): number | null {
-  const qualitySpan = spans.find((span) => span.id === "index_quality")
-    || spans.find((span) => typeof span.metrics?.quality_score === "number");
+  const qualitySpan = getQualitySpan(spans);
   if (!qualitySpan) return null;
   const value = qualitySpan.metrics?.quality_score ?? qualitySpan.metrics?.score;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export interface QualityScoreBreakdown {
+  base: number;
+  hardDeduction: number;
+  warningDeduction: number;
+  hardCount: number | null;
+  warningCount: number | null;
+  totalCount: number | null;
+}
+
+/** 从质量 Trace 读取计分规则与异常数量，旧 Trace 使用现行规则兜底。 */
+export function getQualityScoreBreakdown(spans: Span[]): QualityScoreBreakdown {
+  const metrics = getQualitySpan(spans)?.metrics;
+  const readNumber = (key: string): number | null => {
+    const value = metrics?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  };
+
+  return {
+    base: readNumber("quality_score_base") ?? 100,
+    hardDeduction: readNumber("quality_score_hard_deduction") ?? 40,
+    warningDeduction: readNumber("quality_score_warn_deduction") ?? 10,
+    hardCount: readNumber("anomalies_hard"),
+    warningCount: readNumber("anomalies_warn"),
+    totalCount: readNumber("anomalies_total"),
+  };
 }
 
 export function getMetadataStageDuration(spans: Span[], rootSpanId?: string): number | null {

@@ -122,6 +122,31 @@ async def test_extract_success(_patch_prompt, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_extract_faq_without_summary(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    captured = {}
+
+    def _fake_invoke(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return _FakeResp(json.dumps(GOOD, ensure_ascii=False))
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "invoke_metadata_llm", _fake_invoke, raising=False)
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough, raising=False)
+
+    result = await extract_metadata_llm_async(
+        "问答内容", "faq.md", include_summary=False,
+    )
+
+    assert result is not None
+    assert result["summary"] == ""
+    assert "summary 字段必须返回空字符串" in captured["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
 

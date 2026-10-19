@@ -256,8 +256,8 @@ class MetadataStage:
         """异步构建文档级元数据；分类由规则权威决定，增强失败可确定性降级。"""
         try:
             from backend.rag.preprocessing.metadata import (
-                classify_with_confidence, analyze_complexity,
-                extract_time_refs, detect_business_domain,
+                classify_with_confidence, extract_time_refs,
+                detect_business_domain,
             )
             from backend.config.rag import (
                 ENABLE_LLM_METADATA_EXTRACT,
@@ -349,7 +349,8 @@ class MetadataStage:
                     from backend.rag.preprocessing.metadata_llm import extract_metadata_llm_async
                     with processing_recorder.bind_stage(decision_lineage[0]) if processing_recorder and decision_lineage else nullcontext():
                         unified = await extract_metadata_llm_async(
-                            full_text, fname, parent_span_id=parent_span_id)
+                            full_text, fname, parent_span_id=parent_span_id,
+                            include_summary=doc_type.casefold() != "faq")
                     self._finish_lineage_stage(
                         processing_recorder, decision_lineage,
                         status="success" if unified else "fallback",
@@ -400,6 +401,8 @@ class MetadataStage:
                     unified["doc_type"] = doc_type
                     unified["confidence"] = confidence
                     unified["business_domain"] = domain
+                    if doc_type.casefold() == "faq":
+                        unified["summary"] = ""
                     return await self.finalize_unified(
                         full_text, base_meta, unified,
                         parent_span_id=parent_span_id, chunks_text=chunks_text,
@@ -515,13 +518,9 @@ class MetadataStage:
             # 需要升级时必须回到上方的统一 DecisionEnvelope 路径，保证
             # 每个文档决策最多一次 metadata LLM 调用且可被计量。
 
-            # 规则关键词 + 复杂度（在最终 doc_type 确定之后）
             # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
             # 已移入下方 gather 并发执行——原先在主线程串行阻塞，P2-2 的
             # "并行"名不副实（关键词 LLM 调用先于 gather 发生）。
-            from backend.rag.preprocessing.keyword import extract_rule_keywords
-            rule_kws_preview = extract_rule_keywords(full_text, doc_type=doc_type)
-            complexity = analyze_complexity(full_text, len(rule_kws_preview), confidence)
             person_names = extract_person_names(full_text)
         except Exception as e:
             # 规则六步失败 → 确定性兜底（合成最小 unified，走同一组包收口；
@@ -557,6 +556,7 @@ class MetadataStage:
 
         # ⑧ 规则降级时用抽取式摘要；全文 LLM 增强已在上方最多尝试一次。
         summary = ""
+        skip_summary = doc_type.casefold() == "faq"
 
         llm_generate_span = None
         if parent_span_id:
@@ -572,9 +572,11 @@ class MetadataStage:
         # 摘要与实体增强已合并为上方单次调用，失败后只走确定性摘要。
         from backend.rag.preprocessing.metadata import _extract_first_sentences
         from backend.rag.preprocessing.keyword import KeywordResult as _KwResult
-        sample = _sample_for_summary(full_text)
+        sample = _sample_for_summary(full_text) if not skip_summary else ""
 
         async def task_summary():
+            if skip_summary:
+                return "", []
             return _extract_first_sentences(sample, 2), []
 
         async def task_keywords():
@@ -583,7 +585,6 @@ class MetadataStage:
             词表/领域词/Jieba 排名提取已删（keyword.py），检索不再消费
             doc_keywords（Stage1 门控已移除）；空产出保持 KeywordResult
             契约与下游字段兼容（doc_keywords=[] / keywords_rule=[]）。
-            复杂度特征改由 extract_rule_keywords 的标识符计数承担。
             不新增任何 LLM 关键词调用。
             """
             from backend.rag.preprocessing.keyword import KeywordResult as _KR
@@ -689,7 +690,9 @@ class MetadataStage:
                 })
 
         # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
-        if not summary and len(full_text) <= 1000:
+        if skip_summary:
+            summary = ""
+        elif not summary and len(full_text) <= 1000:
             summary = full_text.strip()
         elif not summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
@@ -719,7 +722,6 @@ class MetadataStage:
             "business_domain": domain,
             "domain_detail": domain_detail,
             "time_refs": time_refs,
-            "complexity": complexity,
             "doc_keywords": kws_all_words,
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
@@ -794,7 +796,7 @@ class MetadataStage:
         """
         import hashlib as _hashlib
         from backend.rag.preprocessing.metadata import (
-            assess_quality, analyze_complexity, compute_minhash,
+            assess_quality, compute_minhash,
             extract_sections, extract_person_names, extract_time_refs,
         )
         from backend.config.rag import (
@@ -839,13 +841,11 @@ class MetadataStage:
         near_dup_id = self.detect_near_dup(
             self._registry, minhash_sig, doc_type, exclude_doc_id=doc_id)
 
-        # 规则关键词预览（复杂度入参；rule/llm 关键词合并对齐旧字段口径）
+        # 规则关键词预览，用于过滤重复的 LLM 候选。
         from backend.rag.preprocessing.keyword import extract_rule_keywords
         rule_kws_preview = extract_rule_keywords(
             full_text, doc_type=doc_type, top_k=12,
         )
-        complexity = analyze_complexity(
-            full_text, len(rule_kws_preview), confidence)
 
         from backend.rag.preprocessing.keyword import (
             contains_exact_source_match,
@@ -927,9 +927,10 @@ class MetadataStage:
             if contains_exact_source_match(full_text, str(value).strip())
         ] or extract_time_refs(full_text)
 
-        # 摘要兜底：LLM 给了就用，异常空时取前几句
-        summary = unified.get("summary") or ""
-        if not summary:
+        # FAQ 的完整问答对就是检索单元，不再生成重复的文档级摘要。
+        skip_summary = doc_type.casefold() == "faq"
+        summary = "" if skip_summary else (unified.get("summary") or "")
+        if not summary and not skip_summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
             summary = _extract_first_sentences(full_text, 3) or ""
 
@@ -997,7 +998,6 @@ class MetadataStage:
             "business_domain": domain,
             "domain_detail": domain_detail,
             "time_refs": time_refs,
-            "complexity": complexity,
             "doc_keywords": kws_all_words,
             "keywords_rule": kws_rule_objs,
             "keywords_llm": kws_llm_objs,
