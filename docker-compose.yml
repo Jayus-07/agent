@@ -138,7 +138,7 @@ services:
       # LLM 供应商配置不从 env 注入，统一由数据库注册表提供。
       - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
       # 开发环境默认全量走级联；生产请通过环境变量显式设置 1/10/50/100。
-      - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-true}
+      - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-false}
       - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
       - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
@@ -437,7 +437,7 @@ services:
       # agent 执行需要 LLM/PG checkpoint/RAG(远端)：LLM key 来自 env_file(.env)，
       # 容器内地址（PG/Redis/RAG/Ollama）在 base-env 显式覆盖。
       # 与 app 保持同一元数据灰度指针；设 false/0 可立即回退主索引。
-      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-true}
+      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-false}
       METADATA_CASCADE_ROLLOUT_PERCENT: ${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       METADATA_CLASSIFIER_ENABLED: ${METADATA_CLASSIFIER_ENABLED:-false}
       METADATA_CLASSIFIER_MODEL_PATH: ${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
@@ -508,7 +508,7 @@ services:
       RAG_DATA_DIR: /app/data
       EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
       RERANKER_MODEL_PATH: ${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-true}
+      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-false}
       METADATA_CASCADE_ROLLOUT_PERCENT: ${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
       METADATA_CLASSIFIER_ENABLED: ${METADATA_CLASSIFIER_ENABLED:-false}
       METADATA_CLASSIFIER_MODEL_PATH: ${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
@@ -732,41 +732,6 @@ services:
   # ── 元数据影子 Worker（独立队列/并发/故障域）────────────────
   # 影子任务只消费 rag_metadata_shadow；不能并入主 worker，否则影子积压会
   # 抢占 agent/rag_index 槽位，破坏主索引的高并发隔离。
-  metadata-shadow-worker:
-    <<: *worker-common
-    command:
-      ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "${CELERY_METADATA_SHADOW_QUEUE:-rag_metadata_shadow}",
-       "--concurrency=${METADATA_SHADOW_WORKER_CONCURRENCY:-2}",
-       "-n", "metadata-shadow-worker@%h"]
-    environment:
-      <<: *worker-base-env
-      # 影子任务需要 PG 读取 job/input 状态；显式覆盖宿主机地址。
-      # embedding 在影子 worker 本地加载，使用共享模型缓存；不依赖 rag-service。
-      RAG_MODE: local
-      RAG_DATA_DIR: /app/data
-      EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      CELERY_METADATA_SHADOW_QUEUE: ${CELERY_METADATA_SHADOW_QUEUE:-rag_metadata_shadow}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d metadata-shadow-worker@$$(hostname) --timeout 10 | grep -q pong"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-          cpus: "1.0"
-
-  # ── PostgreSQL + pgvector ──
   postgres:
     image: pgvector/pgvector:pg16
     environment:

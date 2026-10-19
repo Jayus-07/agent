@@ -497,14 +497,28 @@ class RAGPipeline:
         # 增量模式下 self.docs 平时不加载，仅向量库语料不可用时懒加载兜底
         vectorstore_docs = self._build_bm25_corpus_from_vectorstore()
         if not vectorstore_docs and read_only:
-            raise RuntimeError(
-                f"{self.mode} 模式只读索引不可用：向量库没有可用于 BM25 校验的 chunk"
+            # 空库冷启动区分（2026-10-19 ragu1 隔离栈首传实证）：全新库向量库
+            # 为空且磁盘无已发布 BM25 快照是合法状态——首批文档发布时由 indexer
+            # 建立 BM25，此前检索返回空结果（hybrid 对 bm25 兜底召回已有异常
+            # 软降级）。向量库为空但磁盘 BM25 非空 = 向量数据丢失/混代，维持
+            # 拒绝（N-1 防混代语义不变）。
+            if self.bm25 is not None and bm25_store.doc_count() > 0:
+                raise RuntimeError(
+                    f"{self.mode} 模式只读索引不可用：向量库没有可用于 BM25 校验的 chunk"
+                )
+            logger.warning(
+                f"[RAG] {self.mode} 模式：向量库与 BM25 快照均为空（全新库冷启动），"
+                "以空索引启动，首批文档发布后自动建立 BM25"
             )
         if vectorstore_docs:
             bm25_source = vectorstore_docs
-        else:
+        elif not read_only:
             self._ensure_docs_loaded()
             bm25_source = self.docs
+        else:
+            # 只读冷启动：不回退 loader 语料（loader 与 indexer 切分不一致，
+            # 用它建 BM25 反而制造混代），保持空源等待首批发布
+            bm25_source = []
         bm25_snapshot_metadata = None
         if vectorstore_docs:
             bm25_snapshot_metadata = {
@@ -532,7 +546,9 @@ class RAGPipeline:
                     self.bm25 = bm25_store.build(
                         bm25_source, k=BM25_CANDIDATE_K,
                         metadata=bm25_snapshot_metadata)
-            if self.bm25 is None:
+            if self.bm25 is None and vectorstore_docs:
+                # 有 canonical 向量但磁盘快照缺失/损坏仍拒绝（防混代）；
+                # 空库冷启动（vectorstore_docs 为空）已在上方放行，bm25 保持 None
                 raise RuntimeError(
                     f"{self.mode} 模式只读索引不可用：BM25 索引不存在，请先执行 index/import_fixture"
                 )
@@ -558,28 +574,30 @@ class RAGPipeline:
                         return "BM25 内容 hash 不匹配"
                 return ""
 
-            if _snapshot_mismatch_reason():
-                logger.warning(
-                    f"[RAG] {self.mode} 模式只读快照校验失败"
-                    f"（{_snapshot_mismatch_reason()}），从 canonical 向量快照"
-                    "重建一次（N-1 自愈）")
-                try:
-                    self.bm25 = bm25_store.build(
-                        bm25_source, k=BM25_CANDIDATE_K,
-                        metadata=bm25_snapshot_metadata)
-                except Exception as exc:
-                    logger.error(f"[RAG] 只读快照 N-1 自愈重建失败: {exc}")
-            if _snapshot_mismatch_reason():
-                raise RuntimeError(
-                    f"{self.mode} 模式只读索引不可用：{_snapshot_mismatch_reason()}；"
-                    "恢复：docker exec agent-rag-service-1 /opt/venv/bin/python "
-                    "-m backend.scripts.rag_index_reconcile 对账后重启（N-1 自愈失败）"
+            if vectorstore_docs:
+                # 快照校验仅对非空库有意义：冷启动（空向量+空快照）无可校验对象
+                if _snapshot_mismatch_reason():
+                    logger.warning(
+                        f"[RAG] {self.mode} 模式只读快照校验失败"
+                        f"（{_snapshot_mismatch_reason()}），从 canonical 向量快照"
+                        "重建一次（N-1 自愈）")
+                    try:
+                        self.bm25 = bm25_store.build(
+                            bm25_source, k=BM25_CANDIDATE_K,
+                            metadata=bm25_snapshot_metadata)
+                    except Exception as exc:
+                        logger.error(f"[RAG] 只读快照 N-1 自愈重建失败: {exc}")
+                if _snapshot_mismatch_reason():
+                    raise RuntimeError(
+                        f"[RAG] {self.mode} 模式只读索引不可用：{_snapshot_mismatch_reason()}；"
+                        "恢复：docker exec agent-rag-service-1 /opt/venv/bin/python "
+                        "-m backend.scripts.rag_index_reconcile 对账后重启（N-1 自愈失败）"
+                    )
+                content_hash = bm25_store.get_content_hash()
+                logger.info(
+                    f"[RAG] {self.mode} 模式加载只读 BM25 索引 "
+                    f"({bm25_store.doc_count()} 文档, hash={content_hash})"
                 )
-            content_hash = bm25_store.get_content_hash()
-            logger.info(
-                f"[RAG] {self.mode} 模式加载只读 BM25 索引 "
-                f"({bm25_store.doc_count()} 文档, hash={content_hash})"
-            )
         elif self.bm25 is None:
             logger.info("[RAG] BM25 索引不存在，全量重建...")
             self.bm25 = bm25_store.build(

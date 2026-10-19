@@ -77,7 +77,16 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
 
 
 def _extract_first_sentences(text: str, n: int = 2) -> str:
-    """抽取式摘要: 优先剥 markdown 标记再按句切分, 取前 n 句."""
+    """抽取式摘要: 优先剥 markdown 标记再按句切分, 取前 n 句.
+
+    2026-10-19 修复（faq_only.docx 实证）：旧实现按
+    ``[。！？!?.\\s]+`` 切分——空格与半角句号被当句界，"A：请在 OA 系统
+    提交年假申请"被切成碎片，>4 字过滤后再把不相邻碎片拼成残缺摘要
+    （"Q：年假怎么申请。系统提交年假申请，经直属上级审批、HR。备案后
+    效。"）。现改为：① QA 结构文本优先取第一个完整问答对（不拆问、
+    不截答案）；② 通用路径仅按真正句终符零宽切句（句内空格与半角点
+    不再被误切）。
+    """
     if not text:
         return ""
     import re as _re
@@ -96,12 +105,20 @@ def _extract_first_sentences(text: str, n: int = 2) -> str:
     text = _re.sub(r"^#{1,6}\s+", "", text, flags=_re.MULTILINE)
     text = _re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
     text = _re.sub(r"^\s*[-*+]\s+", "", text, flags=_re.MULTILINE)
-    parts = _re.split(r"[。！？!?.\s]+", text)
-    parts = [p.strip() for p in parts if p and len(p.strip()) > 4][:n]
+    # QA 结构优先：完整问答对是天然的摘要单元
+    qa = _re.match(r"\s*Q\s*[：:]\s*(.+?)\s*\n+\s*A\s*[：:]\s*(.+)", text)
+    if qa:
+        q = qa.group(1).strip().rstrip("？?。")
+        a = qa.group(2).strip().splitlines()[0].strip()
+        if q and a:
+            return f"Q：{q}？ A：{a}"[:200]
+    # 零宽断言按句终符切句：句内空格、缩写半角点不再被误切
+    parts = [p.strip() for p in _re.split(r"(?<=[。！？!?；;])\s*", text)
+             if p and len(p.strip()) > 4][:n]
     if not parts:
         return text[:150].strip()
-    summary = "。".join(parts)
-    if not summary.endswith("。"):
+    summary = "".join(parts)
+    if not summary.endswith(("。", "！", "？", "；", ";", "!", "?")):
         summary += "。"
     return summary[:200]
 

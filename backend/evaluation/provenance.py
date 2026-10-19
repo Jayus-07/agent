@@ -125,7 +125,6 @@ def _retrieval_config(scope: dict[str, Any]) -> dict[str, Any]:
     """检索面配置快照（REPRO-02：top_k / reranker / multiquery）。"""
     try:
         from backend.config.rag import (
-            METADATA_CASCADE_L1_TOP_K,
             MULTI_QUERY_TOP_K_PER,
             RERANK_SCORE_THRESHOLD,
             RERANK_TOP_K,
@@ -133,7 +132,6 @@ def _retrieval_config(scope: dict[str, Any]) -> dict[str, Any]:
 
         return {
             "top_k": int(RERANK_TOP_K),
-            "metadata_cascade_l1_top_k": int(METADATA_CASCADE_L1_TOP_K),
             "multiquery_top_k_per": int(MULTI_QUERY_TOP_K_PER),
             "rerank_score_threshold": float(RERANK_SCORE_THRESHOLD),
             "multiquery": bool(scope.get("multiquery", False)),

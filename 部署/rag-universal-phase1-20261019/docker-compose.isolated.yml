@@ -1,0 +1,397 @@
+# RAG 通用测试集第一阶段 — 本机隔离上传栈（2026-10-19）
+#
+# 用途：为 rag-universal-phase1 任务提供「最新代码（b434138+分支修复）」的
+# 完整浏览器上传链路：管理端 BFF → APISIX → app(FastAPI) → Celery →
+# rag-index-worker → pgvector/BM25，检索经 app remote 代理 → rag-service。
+#
+# 隔离边界（与共享栈 agent-* 和 PR#52 栈 rag-eval-20261019-pr52-final-* 完全隔离）：
+#   - 独立 compose 项目名 ragu1（-p ragu1）：网络/卷/容器名全部 ragu1-* 前缀
+#   - 独立 PostgreSQL 数据卷（全新库，由 db-migrate 跑全量迁移建表）
+#   - 独立 Redis×3（缓存 / 认证控制面 / Celery broker）
+#   - 独立 RAG 数据卷（app_data：doc_registry/BM25/docs，从零建索引）
+#   - 镜像 agent-platform:ragu1-0423d69 由本任务工作树构建（代码=b434138+改密前端修复）
+#
+# 与主栈的差异（仅三处，其余与 docker-compose.yml 同构）：
+#   1. 不写 container_name（避免与共享栈容器名冲突），靠项目名前缀隔离
+#   2. 暴露端口改为 19080（网关）/ 15433（PG 只读对账通道），避开共享栈
+#   3. rag-index-worker 并发 1 + 2GiB（复用部署/prod-4c8g/docker-compose.rag-t2.yml 的隔离测试档）
+#
+# 凭据：env_file 只读引用共享工作区 .env（不复制、不落盘第二份密钥；
+# SECRETS_ENCRYPTION_KEY 同源，隔离库内 Fernet 密文可正常解密）。
+# 服务名（postgres/redis/auth-redis/redis-broker/rag-service）与主栈一致，
+# 因此容器内地址覆盖项无需改动即指向本网络内的新容器。
+#
+# 用法（工作树根目录）：
+#   docker compose -p ragu1 -f 部署/rag-universal-phase1-20261019/docker-compose.isolated.yml up -d
+#   停止并保留数据：... down
+#   彻底清理（含数据卷）：... down -v（仅限确认无保留价值后）
+
+x-build: &build
+  image: agent-platform:ragu1-0423d69
+
+networks:
+  ragu1-net:
+    driver: bridge
+
+services:
+  apisix:
+    image: apache/apisix:3.13.0-debian
+    ports:
+      - "127.0.0.1:19080:9080"
+    volumes:
+      - ../../apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      - ../../apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ../../apisix/plugins:/usr/local/apisix/custom_plugins/apisix/plugins:ro
+    environment:
+      - GATEWAY_AUTH_MODE=enforce
+      - GATEWAY_SESSION_CHECK=enforce
+      - JWT_SECRET=${JWT_SECRET:-}
+      - JWT_SECRET_PREVIOUS=${JWT_SECRET_PREVIOUS:-}
+      - JWT_ISSUER=${JWT_ISSUER:-agent-platform}
+      - AUTH_REDIS_HOST=auth-redis
+      - AUTH_REDIS_PORT=6379
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}
+    depends_on:
+      auth-redis:
+        condition: service_healthy
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      - POSTGRES_DB=agent_memory
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+    ports:
+      - "127.0.0.1:15433:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d agent_memory"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+          cpus: "1.5"
+
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+
+  auth-redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 128mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - auth_redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$AUTH_REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      - AUTH_REDIS_PASSWORD=${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 192m
+          cpus: "0.25"
+
+  redis-broker:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --requirepass
+      - "${REDIS_PASSWORD:-}"
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+    volumes:
+      - redis_broker_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+          cpus: "0.5"
+
+  db-migrate:
+    <<: *build
+    env_file:
+      - D:/Program Files/workplace/agent/.env
+    environment:
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - MEMORY_PGDATABASE=agent_memory
+      - BUSINESS_PGDATABASE=agent_business
+      - PG_READONLY_USER=agent_readonly
+      - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
+    command: ["python", "scripts/init_db.py"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - ragu1-net
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+
+  app:
+    <<: *build
+    env_file:
+      - D:/Program Files/workplace/agent/.env
+    environment:
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-false}
+      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
+      - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
+      - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
+      - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - BUSINESS_PGDATABASE=agent_business
+      - PG_READONLY_USER=agent_readonly
+      - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - API_KEY=${API_KEY:-}
+      - TRAVEL_V2_SHARE_TOKEN_SECRET=${TRAVEL_V2_SHARE_TOKEN_SECRET:-}
+      - IDENTITY_SOURCE=header
+      - PROMETHEUS_URL=http://prometheus:9090
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - AUTH_REDIS_ENABLED=true
+      - AUTH_REDIS_URL=redis://:${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}@auth-redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
+      - ALERT_WEBHOOK_TYPE=generic
+      - KAFKA_ENABLED=false
+      - KAFKA_CONSUMER_ENABLED=false
+      - CS_ENABLED=true
+      - CS_DEMO_MODE=false
+      - CS_DEMO_CUSTOMER_ID=99001
+      - TRAVEL_ENABLED=true
+      - TRAVEL_CHECKPOINTER_ENABLED=true
+      - TRAVEL_CHECKPOINTER_BACKEND=postgres
+      - TRAVEL_CHECKPOINT_TTL_DAYS=7
+      - AI_TOOLS_ENABLED=true
+      - BUSINESS_SERVICE_URL=
+      - CS_ADMIN_SOURCE=local
+      - INTERNAL_API_TOKEN=
+      - RAG_MODE=remote
+      - RAG_SERVICE_URL=http://rag-service:8090
+      - RAG_REINDEX_ASYNC_ENABLED=true
+      - RAG_DATA_DIR=/app/data
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 90s
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rag-service:
+        condition: service_started
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    stop_grace_period: 700s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.5"
+
+  rag-service:
+    <<: *build
+    command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090", "--timeout-graceful-shutdown", "600"]
+    env_file:
+      - D:/Program Files/workplace/agent/.env
+    environment:
+      - RAG_MODE=local
+      - PGHOST=postgres
+      - PGPORT=5432
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - RAG_DATA_DIR=/app/data
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5m
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    stop_grace_period: 700s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.5"
+
+  rag-index-worker:
+    <<: *build
+    env_file:
+      - D:/Program Files/workplace/agent/.env
+    command:
+      ["celery", "-A", "backend.workers.agent_worker", "worker",
+       "--loglevel=info", "-Q", "rag_index",
+       "--concurrency=1",
+       "-n", "rag-index-worker@%h"]
+    environment:
+      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - REDIS_ENABLED=true
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      - PGHOST=postgres
+      - PGPORT=5432
+      - PGDATABASE=agent_memory
+      - PGUSER=postgres
+      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      - LOG_FORMAT=json
+      - ALERT_WEBHOOK_URL=
+      - ALERT_WEBHOOK_TYPE=generic
+      - PROMETHEUS_MULTIPROC_DIR=/tmp/prom_multiproc
+      - WORKER_METRICS_PORT=9809
+      - METADATA_CASCADE_ENABLED=true
+      - METADATA_CASCADE_ROLLOUT_PERCENT=100
+      - METADATA_CLASSIFIER_ENABLED=false
+      - METADATA_CLASSIFIER_MODEL_PATH=/app/data/models/metadata_lr/lr_model_dryrun.joblib
+      - METADATA_CASCADE_SHADOW_ENABLED=false
+      - METADATA_SHADOW_QUEUE_ENABLED=false
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      - RAG_MODE=local
+      - RAG_SERVICE_URL=http://rag-service:8090
+      - RAG_DATA_DIR=/app/data
+    volumes:
+      - app_data:/app/data
+      - app_cache:/app/.cache
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rag-service:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d rag-index-worker@$$(hostname) --timeout 10 | grep -q pong"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks:
+      - ragu1-net
+    restart: unless-stopped
+    stop_grace_period: 60s
+    # 隔离测试档（同 rag-t2）：并发 1 + 2GiB，覆盖大文件解析峰值并留余量
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+          cpus: "1.5"
+
+volumes:
+  app_data:
+  app_cache:
+  pg_data:
+  redis_data:
+  auth_redis_data:
+  redis_broker_data:

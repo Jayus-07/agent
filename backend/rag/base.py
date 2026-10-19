@@ -64,14 +64,18 @@ class CustomRetriever:
         # RRF 融合参数
         rrf_k = 60
 
-        # 单 query 模式：直接调（保持向后兼容）
+        # 单 query 模式：直接调（保持向后兼容）。
+        # P0：parent 过滤开启时 over-fetch k*2，过滤后截回 k，避免虚拟
+        # parent 占名额导致 leaf 召回变少（与多 query 模式口径一致）。
         if len(queries_to_search) == 1:
+            from backend.config.rag import RAG_FILTER_PARENT_RECALL
+            _fetch_k = (k * 2) if RAG_FILTER_PARENT_RECALL else k
             if filter_dict:
                 docs_with_scores = (
                     self.vectordb
                     .similarity_search_with_score(
                         question,
-                        k=k * 2,
+                        k=_fetch_k,
                         filter=filter_dict
                     )
                 )
@@ -80,9 +84,14 @@ class CustomRetriever:
                     self.vectordb
                     .similarity_search_with_score(
                         question,
-                        k=k
+                        k=_fetch_k
                     )
                 )
+            if RAG_FILTER_PARENT_RECALL:
+                docs_with_scores = [
+                    (d, s) for d, s in docs_with_scores
+                    if d.metadata.get("granularity") != "parent"
+                ][:k]
         else:
             # 多 query 模式：每个 query 单独检索 + RRF 融合
             from collections import defaultdict
@@ -90,14 +99,19 @@ class CustomRetriever:
             all_docs: dict[str, tuple] = {}  # chunk_id -> (doc, score, query)
             succeeded = 0  # 成功执行的 query 数（embedding 故障时为 0 → 向量路降级）
             for qi, q in enumerate(queries_to_search):
+                from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                # P2-2（审查 2026-10-19）：parent 过滤开启时每路 over-fetch
+                # k*2——RRF 入池前剔除 parent，若只取 k 条且前 k 全为 parent，
+                # 排在后面的答案 leaf 会完全进不了候选池。
+                fetch_k = (k * 2) if RAG_FILTER_PARENT_RECALL else k
                 try:
                     if filter_dict:
                         batch = self.vectordb.similarity_search_with_score(
-                            q, k=k, filter=filter_dict,
+                            q, k=fetch_k, filter=filter_dict,
                         )
                     else:
                         batch = self.vectordb.similarity_search_with_score(
-                            q, k=k,
+                            q, k=fetch_k,
                         )
                     succeeded += 1
                 except Exception as e:
@@ -113,6 +127,10 @@ class CustomRetriever:
                 # 原始 query 权重最高（rank bonus）
                 rank_bonus = 1.0 if qi == 0 else 0.7  # 扩展 query 降权 30%
                 for rank, (doc, score) in enumerate(batch, start=1):
+                    # P0：parent 不进 RRF 候选池（不占名额），仅经扩展通道
+                    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                    if RAG_FILTER_PARENT_RECALL and doc.metadata.get("granularity") == "parent":
+                        continue
                     cid = doc.metadata.get("chunk_id") or f'{doc.metadata.get("doc_id","?")}:{doc.metadata.get("chunk_index",0)}'
                     rrf_scores[cid] += rank_bonus * (1 / (rrf_k + rank))
                     if cid not in all_docs:
@@ -153,6 +171,20 @@ class CustomRetriever:
         for doc, score in docs_with_scores:
             doc.metadata["similarity"] = round(score, 4)  # 保留向量相似度，供自适应检索用
             docs.append(doc)
+
+        # P0（2026-10-19 faq_only.docx 实证）：parent 块不作为独立召回证据。
+        # 虚拟 parent 内容是问题/标题列表（无答案），与用户问题高度相似却
+        # 不具备答案证据资格，曾以 Top-5 独立命中进入回答证据。parent 仅经
+        # attach_parent_context（leaf 命中后扩上下文）通道出现。开关供回滚。
+        from backend.config.rag import RAG_FILTER_PARENT_RECALL
+        if RAG_FILTER_PARENT_RECALL:
+            before = len(docs)
+            docs = [d for d in docs
+                    if d.metadata.get("granularity") != "parent"]
+            if len(docs) < before:
+                logger.debug(
+                    f"[ParentRecallFilter] 过滤独立 parent 命中 "
+                    f"{before - len(docs)} 条（parent 仅经扩展通道提供上下文）")
 
         # 4.1b: pending_review（near_dup 审核态）文档软过滤——本方法是
         # rag_search / retrieve_knowledge / hybrid 向量路径的公共出口，

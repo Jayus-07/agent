@@ -178,3 +178,11 @@
 - 据真实证据仅追加评测修正：full+multiquery中改写timeout/error退回原问题不能冒充多查询完整验收，case fail、execution_complete=false，原指标保留；业务降级不变。付费前62 passed；后续74 passed/44.97s（2既有collection warning），py_compile/定向Ruff/diff检查通过；后续改动无真实Provider验收，不再付费。
 - Artifact D:/tmp/rag-eval-20261019-pr52-acceptance/artifacts/：FINAL_REVIEW.md、官方report/per_case、84个真实逐查询分数、完整新账本、历史待核实复核、资源及清理记录。e111b0c免费CI641通过、Contract/SecretScan成功。14/14历史Review线程resolved，新代码未取得新云端批准。
 - BLOCKED/MERGE_READY=false；PR保持Draft、不合并、不发布Prompt。剩余：两例Top1来源排序、RC031完整三查询真实验收、历史供应商账单证据。先免费审查既有来源权威性规则与证据面生成，不扩重构、不盲目调参数。
+
+
+## 用户明确选择合并（2026-10-19）
+
+- 用户在获知Top1=.7143、RC031多查询未完成及历史两笔费用未核实后，明确指令“你直接合并 我后面做优化”。该授权取代此前本轮不合并的停止规则；并不代表真实质量验收通过，不发布生产Prompt，不再付费。
+- 合并前main已前进到86dde547bcc9e05205d8161cc8edf33eaf773460（PR91）。在本任务原worktree合入main，仅手动解决keyword.py/hybrid.py两处冲突：保留main退役关键词LLM链、冷启动BM25判空/Parent过滤，保留PR52共享deadline有界等待；未恢复已退役逻辑。
+- 冲突后免费定向77 passed /68.33s（1既有collection warning）；py_compile、定向Ruff、相对新main的diff检查通过；不接共享DB/Redis/Provider。新main自带metadata_stage.py末尾空行不作为PR52新增改动处理。
+- 使用GitHub正常合并机制，不绕过分支保护；保留全部失败诊断。合并将触发main的自动付费Smoke，取消对应merge SHA的该次运行以遵守不再付费，不修改工作流或Review设置。

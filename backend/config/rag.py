@@ -62,6 +62,12 @@ RAG_TMP_DIR = os.getenv("RAG_TMP_DIR", os.path.join(RAG_DATA_DIR, "rag", "tmp"))
 RAG_UPLOAD_PATH_GUARD = os.getenv("RAG_UPLOAD_PATH_GUARD", "true").strip().lower() in (
     "1", "true", "yes"
 )
+# P0（2026-10-19 faq_only.docx 实证）：parent 块不作为独立召回证据——虚拟
+# parent 内容为问题/标题列表（无答案），与查询高相似却无证据资格。默认开启
+# 过滤（parent 仅经 attach_parent_context 扩展通道出现）；置 false 回滚。
+RAG_FILTER_PARENT_RECALL = os.getenv("RAG_FILTER_PARENT_RECALL", "true").strip().lower() in (
+    "1", "true", "yes"
+)
 # 流式读块大小 (1MB 平衡内存和 syscall 次数)
 RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次
@@ -115,103 +121,19 @@ ENABLE_LLM_METADATA_EXTRACT = os.getenv("ENABLE_LLM_METADATA_EXTRACT", "true").l
 # 参与抽取的文本采样上限（超长文档按 60/20/20 头中尾采样，控制 token 成本）
 METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
 
-# ====================================
-# 元数据级联路由（规划阶段 2.2/3.1，metadata_router.py）
-# L0 文件名/路径强先验 → L1 taxonomy 嵌入检索 → L2 候选内词表复核 → L3 LLM
-# 默认关闭：影子模式（阶段 5）与阈值调优（阶段 3.3）未完成前不切流
-# ====================================
-METADATA_CASCADE_ENABLED = os.getenv("METADATA_CASCADE_ENABLED", "false").lower() == "true"
-
-
-def _parse_rollout_percent(name: str, raw: str | None = None) -> int:
-    value = raw if raw is not None else os.getenv(name, "0")
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be an integer from 0-100") from exc
-    if parsed < 0 or parsed > 100:
-        raise ValueError(f"{name} must be in range 0-100")
-    return parsed
-
-
-METADATA_CASCADE_ROLLOUT_PERCENT = _parse_rollout_percent(
-    "METADATA_CASCADE_ROLLOUT_PERCENT"
-)
-METADATA_CASCADE_ROLLOUT_KEY = os.getenv(
-    "METADATA_CASCADE_ROLLOUT_KEY", "metadata-doc"
-).strip()
-# 回滚基线由发布系统注入；空值表示启动时不覆盖共享路由指针。
-# 版本值只作为控制面兜底，不会删除数据库中的历史规则或模型文件。
-METADATA_ROLLBACK_RULES_VERSION = os.getenv(
-    "METADATA_ROLLBACK_RULES_VERSION", ""
-).strip()
-METADATA_ROLLBACK_MODEL_VERSION = os.getenv(
-    "METADATA_ROLLBACK_MODEL_VERSION", ""
-).strip()
-# 未显式设置百分比时，保留旧的“打开总开关即全量”测试/运维语义；生产
-# 灰度必须显式设置 1/10/50/100，百分比为 0 且显式配置代表全量关闭。
-_METADATA_CASCADE_ROLLOUT_EXPLICIT = "METADATA_CASCADE_ROLLOUT_PERCENT" in os.environ
-
-
-def metadata_cascade_rollout_allowed(stable_key: str) -> bool:
-    """按稳定 key 做确定性灰度；配置缺失时不绕过主开关。"""
-    if not METADATA_CASCADE_ENABLED:
-        return False
-    if METADATA_CASCADE_ROLLOUT_PERCENT == 0:
-        return not _METADATA_CASCADE_ROLLOUT_EXPLICIT
-    digest = hashlib.sha256(
-        f"{METADATA_CASCADE_ROLLOUT_KEY}:{stable_key}".encode("utf-8")
-    ).digest()
-    bucket = int.from_bytes(digest[:4], "big") % 100
-    return bucket < METADATA_CASCADE_ROLLOUT_PERCENT
-# L0 命中置信度（文件名/路径命中类型唯一时直接定案）
-METADATA_CASCADE_L0_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L0_CONFIDENCE", "0.95"))
-# L1 命中条件：top1 相似度下限 + top1-top2 分差下限（confidence = top1 相似度）
-METADATA_CASCADE_L1_MIN_SIM = float(os.getenv("METADATA_CASCADE_L1_MIN_SIM", "0.60"))
-METADATA_CASCADE_L1_MIN_GAP = float(os.getenv("METADATA_CASCADE_L1_MIN_GAP", "0.05"))
-# L1 召回给 L2 的候选数
-METADATA_CASCADE_L1_TOP_K = int(os.getenv("METADATA_CASCADE_L1_TOP_K", "4"))
-# L2 命中条件：候选内词表计分 top1 下限 + top1-top2 分差下限
-METADATA_CASCADE_L2_MIN_SCORE = int(os.getenv("METADATA_CASCADE_L2_MIN_SCORE", "5"))
-METADATA_CASCADE_L2_MIN_GAP = int(os.getenv("METADATA_CASCADE_L2_MIN_GAP", "3"))
-METADATA_CASCADE_L2_CONFIDENCE = float(os.getenv("METADATA_CASCADE_L2_CONFIDENCE", "0.75"))
-# taxonomy 索引构建/文档向量单次超时（秒）；超时或异常 → 跳过 L1/L2 直达 L3
-METADATA_CASCADE_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_EMBED_TIMEOUT", "10"))
-
-# R1 校准分类器默认只加载/影子验证，不参与线上接受；正式放量前必须通过
-# 黄金集门禁并显式开启。模型卡与当前 taxonomy/rules/feature 指纹不一致时跳过。
-METADATA_CLASSIFIER_ENABLED = os.getenv("METADATA_CLASSIFIER_ENABLED", "false").lower() == "true"
-METADATA_CLASSIFIER_MODEL_PATH = os.getenv(
-    "METADATA_CLASSIFIER_MODEL_PATH",
-    os.path.join(RAG_DATA_DIR, "models", "metadata_lr", "lr_model.joblib"),
-).strip()
-METADATA_CLASSIFIER_MIN_MARGIN = float(os.getenv("METADATA_CLASSIFIER_MIN_MARGIN", "0.05"))
-METADATA_CLASSIFIER_LOAD_TIMEOUT = float(os.getenv("METADATA_CLASSIFIER_LOAD_TIMEOUT", "2"))
 
 # 元数据资源级并发上限：外层 RAG_MAX_CONCURRENT_INDEX 负责单任务内存峰值，
 # 以下槽位负责 embedding/LLM/DB/shadow 的跨任务公平背压。
 METADATA_EMBED_CONCURRENCY = int(os.getenv("METADATA_EMBED_CONCURRENCY", "4"))
 METADATA_LLM_CONCURRENCY = int(os.getenv("METADATA_LLM_CONCURRENCY", "8"))
 METADATA_DB_CONCURRENCY = int(os.getenv("METADATA_DB_CONCURRENCY", "16"))
-METADATA_SHADOW_CONCURRENCY = int(os.getenv("METADATA_SHADOW_CONCURRENCY", "2"))
-METADATA_RESOURCE_WAIT_TIMEOUT = float(os.getenv("METADATA_RESOURCE_WAIT_TIMEOUT", "5"))
+# 表格描述等元数据缓存 TTL（通用，非级联专属——table_describe 消费）
 METADATA_CACHE_TTL_SECONDS = int(os.getenv("METADATA_CACHE_TTL_SECONDS", "604800"))
-METADATA_IDEMPOTENCY_TTL_SECONDS = int(os.getenv("METADATA_IDEMPOTENCY_TTL_SECONDS", "86400"))
 # 规则活动快照的进程内缓存不能无限期保留：发布发生在另一个 worker
 # 时，短 TTL 让各 worker 最迟在此窗口内从 PG 看到新快照。
 METADATA_RULE_LOCAL_CACHE_SECONDS = float(
     os.getenv("METADATA_RULE_LOCAL_CACHE_SECONDS", "5")
 )
-
-# 影子采集（规划阶段 5 基建）：主路径统一抽取成功后并行跑级联 L0-L2 只读对比，
-# 不参与任何决策；agree/differ 打点进 metadata_route_total{level=shadow_*}。
-# 默认关闭：影子一致率实测 69.3%（目标 >=95%）未达标，级联未切流，采集已无
-# 观测价值反而消耗 Embedding 配额；需要重启阶段 5 数据时显式设为 true。
-METADATA_CASCADE_SHADOW_ENABLED = os.getenv("METADATA_CASCADE_SHADOW_ENABLED", "false").lower() == "true"
-METADATA_SHADOW_QUEUE_ENABLED = os.getenv("METADATA_SHADOW_QUEUE_ENABLED", "false").lower() == "true"
-# 影子 embedding 独立短超时（秒）：压测实测云端单查询 P95≈338ms（A2 FAIL 记录），
-# 3s 余量足够且确保影子采集不拖累主路径延迟
-METADATA_CASCADE_SHADOW_EMBED_TIMEOUT = float(os.getenv("METADATA_CASCADE_SHADOW_EMBED_TIMEOUT", "3"))
 
 # ====================================
 # Chunk 配置
@@ -540,7 +462,6 @@ _METADATA_RULE_FILES = [
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_llm.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "keyword.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata.py"),
-    os.path.join(_BACKEND_DIR, "rag", "preprocessing", "metadata_router.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "domain_data.py"),
     os.path.join(_BACKEND_DIR, "rag", "preprocessing", "financial_normalizer.py"),
     os.path.join(_BACKEND_DIR, "rag", "indexing", "indexer.py"),

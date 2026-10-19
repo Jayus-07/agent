@@ -161,6 +161,9 @@ def test_all_baseline_fixtures_complete_offline():
                 for chunk in kept
                 if (chunk.metadata or {}).get("granularity") == "leaf"
             ),
+            # P2 收口（2026-10-19）：被显式规则过滤的 chunk 是合法排除，
+            # 以原文纳入覆盖对照豁免（与 indexer 付费前预检同口径）
+            excluded_texts=[d.get("content", "") for d in filtered],
         )
         integrity = audit_chunk_integrity(kept)
         record = build_quality_record(

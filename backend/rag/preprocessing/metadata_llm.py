@@ -16,6 +16,33 @@ keywords / entities / time_refs，正则链路整体降级为 fallback。
 import hashlib
 import json
 import re
+import asyncio
+import threading
+import weakref
+import os
+
+# LLM 背压槽位等待超时（秒）：等待超过此值计一次可观测降级并直接执行，
+# 避免元数据抽取在并发洪峰下无限排队（P2 审查修复 2026-10-19）。
+METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT = float(
+    os.getenv("METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT", "10"))
+
+# LLM 背压信号量按事件循环管理（P2 审查修复 2026-10-19）：
+# asyncio.Semaphore 绑定创建时的 loop，跨 loop 复用会抛
+# "bound to a different event loop"；weakref 键在 loop 销毁后自动回收。
+_llm_semaphores_by_loop: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_llm_semaphores_lock = threading.Lock()
+
+
+def _get_loop_llm_semaphore() -> "asyncio.Semaphore":
+    loop = asyncio.get_running_loop()
+    width = max(int(os.getenv("METADATA_LLM_CONCURRENCY", "8")), 1)
+    with _llm_semaphores_lock:
+        entry = _llm_semaphores_by_loop.get(loop)
+        if entry is None or entry[0] != width:
+            entry = (width, asyncio.Semaphore(width))
+            _llm_semaphores_by_loop[loop] = entry
+        return entry[1]
+
 
 from backend.config.llm import LLM_REQUEST_TIMEOUT
 from backend.infra.async_utils import async_safe_call_with_timeout
@@ -223,20 +250,34 @@ async def extract_metadata_llm_async(
     try:
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
-        # 二者均为模块级导入，测试可直接 monkeypatch
+        # 二者均为模块级导入，测试可直接 monkeypatch。
+        # P0-3（2026-10-19）：原 metadata_runtime.run_limited 随级联退役，
+        # 此处内联等价的 LLM 并发背压（宽度=METADATA_LLM_CONCURRENCY）。
+        # P2 修复（审查 2026-10-19）：asyncio.Semaphore 绑定创建时的事件循环，
+        # 模块级单例在同步入口多次 asyncio.run() 的场景下会跨循环复用并抛
+        # "bound to a different event loop"（审查复现：第二轮降级规则抽取）。
+        # 改为按事件循环管理（模块级 weakref 注册表，循环销毁自动回收），
+        # 并保留槽位等待超时（超时计一次可观测降级，不经背压直接执行）。
+        sem = _get_loop_llm_semaphore()
         from backend.observability.metrics import metadata_llm_calls_total
-        from backend.rag.preprocessing.metadata_runtime import run_limited
-
-        response = await run_limited(
-            "llm",
-            lambda: async_safe_call_with_timeout(
-                invoke_metadata_llm,
-                LLM_REQUEST_TIMEOUT,
-                None,
-                f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
-                prompt,
-            ),
-        )
+        try:
+            await asyncio.wait_for(sem.acquire(), METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT)
+        except asyncio.TimeoutError:
+            metadata_llm_calls_total.labels(result="llm_slot_wait_timeout").inc()
+            logger.warning(
+                f"[MetaLLM] LLM 背压槽位等待超时 "
+                f"({METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT}s)，本次不经背压直接执行")
+        else:
+            try:
+                response = await async_safe_call_with_timeout(
+                    invoke_metadata_llm,
+                    LLM_REQUEST_TIMEOUT,
+                    None,
+                    f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
+                    prompt,
+                )
+            finally:
+                sem.release()
         if response is None:
             raise MetadataExtractError("llm timeout")
 

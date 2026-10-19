@@ -354,18 +354,22 @@ def _evaluate_retrieval_gate(merged: list, query: str):
             # 查询分析失败 → Gate 走无 query_analysis 兜底（软降级），留痕
             logger.debug(f"[hybrid_retrieve] QueryAnalyzer 分析失败: {e}", exc_info=True)
 
-    from backend.config import DOC_TYPE_COVERAGE_REQUIRED, VEC_MIN_SCORE
+    from backend.config import VEC_MIN_SCORE
 
     has_semantic_score = any(
         d.metadata.get("rerank_score") is not None
         or d.metadata.get("similarity") is not None
         for d in merged
     )
+    # P0-2（2026-10-19 治理改造）：DOC_TYPE_COVERAGE_REQUIRED 硬门退役——
+    # 其输入 query_analysis.doc_types 100% 来自查询文本猜测，猜测即拒答
+    # （TD-13「发票认证」被猜 security 假拒答同源）。相关性归检索+Rerank，
+    # 不再按「猜测类型 vs 召回类型不匹配」二次拒答。
     return evidence_gate_retrieval(
         merged,
         query_analysis=qa_result,
         vec_min_score=VEC_MIN_SCORE if has_semantic_score else 0.0,
-        require_doc_type_coverage=DOC_TYPE_COVERAGE_REQUIRED,
+        require_doc_type_coverage=False,
     )
 
 
@@ -492,24 +496,33 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         bm25_docs: list = []
         if not vector_docs:
             # 向量空召回/失败 → BM25 兜底召回
-            budget = current_budget()
-            if budget is not None and budget.expired():
-                raise RetrievalDeadlineExceeded("向量召回后共享预算耗尽")
-            try:
-                bm25_docs = await_retrieval(submit_rag_task(
-                    "inner", bm25_retriever.invoke, query,
-                ))
-                bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
-                if doc_ids:
-                    bm25_docs = [d for d in bm25_docs
-                                 if d.metadata.get("doc_id") in doc_ids]
-            except Exception as e:
-                logger.warning(
-                    f"[hybrid_retrieve] Vector-only 降级后 BM25 也失败: {e}",
-                    exc_info=True,
-                )
-                failures["bm25"] = e
+            if bm25_retriever is None:
+                # P2-3：冷启动空索引，BM25 路无候选
                 bm25_docs = []
+            else:
+                try:
+                    budget = current_budget()
+                    if budget is not None and budget.expired():
+                        raise RetrievalDeadlineExceeded("向量召回后共享预算耗尽")
+                    bm25_docs = await_retrieval(submit_rag_task(
+                        "inner", bm25_retriever.invoke, query,
+                    ))
+                    # P0：同主融合路，BM25 兜底也过滤独立 parent 命中
+                    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+                    if RAG_FILTER_PARENT_RECALL:
+                        bm25_docs = [d for d in bm25_docs
+                                     if d.metadata.get("granularity") != "parent"]
+                    bm25_docs = _filter_by_metadata(bm25_docs, metadata_filter)
+                    if doc_ids:
+                        bm25_docs = [d for d in bm25_docs
+                                     if d.metadata.get("doc_id") in doc_ids]
+                except Exception as e:
+                    logger.warning(
+                        f"[hybrid_retrieve] Vector-only 降级后 BM25 也失败: {e}",
+                        exc_info=True,
+                    )
+                    failures["bm25"] = e
+                    bm25_docs = []
 
         if len(failures) == 2:
             # 向量 + BM25 都失败 = 真系统失败，向上抛（与 hybrid 路径口径一致）
@@ -582,7 +595,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     failures: dict[str, BaseException] = {}
     vf = submit_rag_task("inner", vector_retriever.retrieve, query, k=k, doc_ids=doc_ids,
                          metadata_filter=metadata_filter, expanded_queries=expanded_queries)
-    bf = submit_rag_task("inner", bm25_retriever.invoke, query)
+    # P2-3（审查 2026-10-19）：空库冷启动 pipeline 允许 bm25=None（首批
+    # 文档发布前为合法状态）。属性访问 None.invoke 会在 submit 行同步抛
+    # AttributeError（不在任何异常处理内），故先判空——BM25 路无候选，
+    # 向量路独立承接；首批发布后 BM25 自动可用。
+    if bm25_retriever is None:
+        failures_zero_bm25 = True
+        bf = None
+    else:
+        failures_zero_bm25 = False
+        bf = submit_rag_task("inner", bm25_retriever.invoke, query)
     try:
         vector_docs = await_retrieval(vf)
     except Exception as e:
@@ -601,7 +623,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["vector"] = e
         vector_docs = []
     try:
-        bm25_docs = await_retrieval(bf)
+        bm25_docs = await_retrieval(bf) if bf is not None else []
     except Exception as e:
         logger.warning(
             f"[hybrid_retrieve] BM25 检索失败，降级仅用 Vector: {e}",
@@ -610,15 +632,27 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         failures["bm25"] = e
         bm25_docs = []
 
-    if len(failures) == 2:
-        # 两侧都失败 = 真系统失败，向上抛（不伪装成『没有资料』的空召回）
+    if len(failures) == 2 or (
+        failures_zero_bm25 and "vector" in failures
+    ):
+        # 两侧都失败（或 BM25 检索器缺位+向量失败）= 真系统失败，向上抛
+        # （不伪装成『没有资料』的空召回）
         raise RuntimeError(
             f"Vector 与 BM25 检索均失败: "
-            f"vector={failures['vector']}, bm25={failures['bm25']}"
-        ) from failures["vector"]
+            f"vector={failures.get('vector')}, bm25={failures.get('bm25', 'retriever=None(冷启动)')}"
+        ) from failures.get("vector")
 
     if doc_ids:
         bm25_docs = [d for d in bm25_docs if d.metadata.get("doc_id") in doc_ids]
+
+    # P0（2026-10-19 faq_only.docx 实证）：BM25 路同样过滤独立 parent 命中
+    # （BM25 语料含虚拟 parent，问题列表与查询词面高度重合会挤占召回名额）；
+    # parent 仅经 attach_parent_context 扩展通道提供上下文。与 CustomRetriever
+    # 向量出口的过滤同源同开关。
+    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+    if RAG_FILTER_PARENT_RECALL:
+        bm25_docs = [d for d in bm25_docs
+                     if d.metadata.get("granularity") != "parent"]
 
     # BM25 检索不接受 filter 参数，结果返回后手动按 metadata_filter 过滤，
     # 否则不同知识库的残留文档会混入、挤占 RRF 位置

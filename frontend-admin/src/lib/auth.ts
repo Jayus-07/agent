@@ -27,6 +27,7 @@ export interface UserInfo {
   realName?: string;
   roles?: string[];
   platformRole?: string;
+  mustChangePassword?: boolean;
   tenantId?: string | null;
   csRole?: "agent" | "supervisor" | null;
   [key: string]: unknown;
@@ -158,6 +159,28 @@ export async function login(username: string, password: string): Promise<LoginRe
     }
   }
   return data;
+}
+
+/** 临时密码改密：复用后端现有接口，凭据仅用于当前请求。 */
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const token = getAccessToken();
+  if (!token) throw new Error("登录状态缺失，请重新登录");
+  const res = await fetch(`${API_BASE}/api/auth/change-password`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-App": CLIENT_APP,
+      Authorization: `Bearer ${token}`,
+    },
+    credentials: "include",
+    body: JSON.stringify({ oldPassword, newPassword }),
+  });
+  const body = await res.json().catch(() => null);
+  const data = unwrapResult<LoginResult>(body);
+  if (!res.ok || !data.token) throw new Error("改密失败或响应缺少新 token");
+  setAccessToken(data.token);
+  // 既有改密接口只返回 userId 和改密标记，保留原有角色与租户摘要。
+  writeUserInfo({ ...getCachedUser(), ...data.userInfo });
 }
 
 /** 刷新（single-flight）：并发 401 只触发一次 refresh 请求 */

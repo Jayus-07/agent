@@ -47,15 +47,12 @@ CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
 # - agent：IO-bound（LLM API/RAG/SQL），latency 优先
 # - rag_index：CPU/RAM 重（文档解析 + 本地 embedding/rerank 懒加载，每
 #   prefork 子进程各持一份模型内存），保守 2 防 RAM/VRAM 翻倍
-# - metadata_shadow：沿用既有默认 2
 # - maintenance：原子幂等扫描（sweep/zombie CAS），并行无益且 1 并发保证
 #   不重叠执行；准时性由专属 worker 保证
 # - report：低频长任务（每日 qa_daily_report），隔离即可无需吞吐
 AGENT_WORKER_CONCURRENCY = int(
     os.getenv("AGENT_WORKER_CONCURRENCY", str(CELERY_WORKER_CONCURRENCY)))
 RAG_INDEX_WORKER_CONCURRENCY = int(os.getenv("RAG_INDEX_WORKER_CONCURRENCY", "2"))
-METADATA_SHADOW_WORKER_CONCURRENCY = int(
-    os.getenv("METADATA_SHADOW_WORKER_CONCURRENCY", "2"))
 MAINTENANCE_WORKER_CONCURRENCY = int(os.getenv("MAINTENANCE_WORKER_CONCURRENCY", "1"))
 REPORT_WORKER_CONCURRENCY = int(os.getenv("REPORT_WORKER_CONCURRENCY", "1"))
 
@@ -170,11 +167,6 @@ CELERY_AGENT_QUEUE = os.getenv("CELERY_AGENT_QUEUE", "agent")
 # 自动回退进程内索引，上传可用性不受影响。
 CELERY_RAG_INDEX_QUEUE = os.getenv("CELERY_RAG_INDEX_QUEUE", "rag_index")
 
-# 元数据影子评估单独队列：只承载 job_id，允许独立扩缩容；影子失败不得
-# 占满 rag_index worker。默认沿用索引任务的可靠性边界，但单次更短。
-CELERY_METADATA_SHADOW_QUEUE = os.getenv(
-    "CELERY_METADATA_SHADOW_QUEUE", "rag_metadata_shadow"
-)
 
 # Phase2 Step5：maintenance / report 独立物理队列（各自专属 worker 消费），
 # 不再与 interactive_agent 共享 agent 队列——beat 周期扫描不再排在用户
@@ -192,12 +184,6 @@ TASK_WORKERS_PING_TIMEOUT = float(os.getenv("TASK_WORKERS_PING_TIMEOUT", "5"))
 # 默认空 = fail-closed（未登记直接拒绝入队）；显式设为物理队列名时
 # 未登记路由降级 legacy_fallback 并必打 warning（可审计的逃生门）。
 QUEUE_ROUTING_UNKNOWN_FALLBACK = os.getenv("QUEUE_ROUTING_UNKNOWN_FALLBACK", "")
-CELERY_METADATA_SHADOW_TASK_TIMEOUT = int(
-    os.getenv("CELERY_METADATA_SHADOW_TASK_TIMEOUT", "120")
-)
-CELERY_METADATA_SHADOW_MAX_RETRIES = int(
-    os.getenv("CELERY_METADATA_SHADOW_MAX_RETRIES", str(CELERY_MAX_RETRIES))
-)
 
 # ── Admission Control（Phase2 Step4：并发准入）────────────────
 # 语义：限制"同时执行的 RUNNING 任务数"（acquire 在 Worker 执行起点、
