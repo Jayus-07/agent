@@ -11,7 +11,7 @@ describe("Trace Chunk 元数据标签", () => {
     expect(getChunkSectionLabel()).toBe("章节")
   })
 
-  it("自动生成的问题明确标记为检索提示", () => {
-    expect(SIMULATED_QUESTIONS_LABEL).toBe("检索提示（自动生成）")
+  it("问题显示为检索提示", () => {
+    expect(SIMULATED_QUESTIONS_LABEL).toBe("检索提示")
   })
 })
