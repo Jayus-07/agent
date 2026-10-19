@@ -1790,7 +1790,8 @@ class ChunkStrategyRouter:
 
 def coverage_audit(ast: DocumentAST, chunks: List[Document],
                    max_audit_nodes: int = 2000,
-                   normalize_pii: bool = False) -> dict:
+                   normalize_pii: bool = False,
+                   excluded_texts: List[str] | None = None) -> dict:
     """源节点 → 输出 Leaf Chunk 覆盖对账（P0-02，2026-10-13）。
 
     策略产出的 chunk 应覆盖 AST 全部可索引叶子；本审计用双向文本包含
@@ -1872,6 +1873,14 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             split_entries.setdefault((is_masked, str(group_id)), []).append(
                 (part_index, part_total, chunk.page_content)
             )
+        # P2 收口（2026-10-19）：被 ChunkFilter 显式规则过滤（low_chinese_ratio
+        # 等，reason 已入 filtered_details）的 chunk 是合法排除而非静默丢失；
+        # Structure 粒度下此类叶子独立成 chunk，v3 路由变更后暴露为假
+        # coverage_gap。纳入对照集豁免，过滤面仍由 filtered_count/reasons 观测。
+        for _excluded in (excluded_texts or []):
+            _norm = _normalize(_excluded)
+            if _norm:
+                bodies.append((_norm, False))
         split_bodies: dict[bool, list[str]] = {False: [], True: []}
         for (is_masked, _), entries in split_entries.items():
             totals = {part_total for _, part_total, _ in entries}

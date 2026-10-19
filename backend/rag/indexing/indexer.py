@@ -335,6 +335,10 @@ def _filter_index_chunks(
             "chunk_index": metadata.get("chunk_index", len(kept_chunks)),
             "reason": reason,
             "preview": chunk.page_content[:80],
+            # P2 收口（2026-10-19）：原文全文供 coverage_audit 豁免对照——
+            # 被显式规则过滤的叶子是合法排除而非静默丢失（Structure 粒度下
+            # low_chinese_ratio 叶子独立成 chunk，v3 路由变更后暴露假 gap）
+            "content": chunk.page_content,
         })
         logger.debug(f"[Filter] 拒绝 chunk: {reason} (doc={file_path})")
     return kept_chunks, filtered_details
@@ -428,6 +432,9 @@ def _enforce_prepaid_content_integrity(
     )
     coverage = coverage_audit(
         audit_ast, chunks, normalize_pii=pii_normalized,
+        excluded_texts=[
+            d["content"] for d in (filtered_details or []) if d.get("content")
+        ],
     )
     qc["coverage"] = coverage
     chunk_integrity = audit_chunk_integrity(chunks)

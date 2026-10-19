@@ -167,3 +167,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - P2-3 冷启动混合检索抛异常：hybrid 主融合路 submit 前判 bm25_retriever=None（属性访问 None.invoke 在 submit 行同步抛、不在任何 try 内）；vector_only 兜底分支同判空；"两侧失败"判定把检索器缺位与检索失败区分。验证：bm25=None 混合检索无异常（0 docs 为审核过滤对假 doc_id 的正确行为）；enhanced 路径原有判空守卫确认无此问题。
 - P2-4 模型清单：回填提前返回前独立补 usage.models（已有真值的 Trace 不再缺失清单）；usage.models 改全量「组件×模型」明细（删除每组件代表压缩，同组件多模型全呈现）。验证：替身 store 双场景（新 trace/提前返回）models 均含 embedding+llm 两模型。
 - 存量失败甄别收口（22 项）：环境阻塞转绿 3（quality_gate/reindex/indexer_processing_lineage，连隔离栈 PG 即过）；过期断言挂下轮契约同步（lineage_e2e 8/keywords·级联 metrics、query_router 3/hybrid 权重、table_split 2、long_doc 2/Excel 保真、vector_degraded 2/fail-closed 交互、scorer 3/NLI 降级 UnboundLocalError 属产品健壮性问题单独记录）；其余为本地 PG 无密码环境项。git diff --check 复验无告警。
+
+## 2026-10-19 CI 门禁真回归修复：coverage_gap 假缺口（本地提交）
+
+- CI RAG Smoke preflight 抓到 test_rag_fixture_content_integrity 回归：baseline_structure_messy（uncovered=1）/baseline_homograph（uncovered=2）coverage_gap。本地复现确认（此前本地跑该文件被 --ignore 跳过，教训记录）。
+- 根因：v3 路由让这两个低中文占比叶子文档进入 Structure 切分，叶子独立成 chunk 后被 low_chinese_ratio 显式过滤；section parent 保留文本但 coverage_audit 只对 granularity=leaf 的 chunk 对账 → 合法过滤被计为 coverage_gap（v2 递归把叶子混进大文本块恰好掩盖）。**内容未真丢失**（文本在 kept parent 中可查）。
+- 修复：_filter_index_chunks 的 filtered_details 增带原文 content；coverage_audit 增 excluded_texts 豁免入参（显式规则过滤=合法排除纳入对照，静默丢失仍报 gap）；门禁测试与 indexer 付费前预检同口径透传。
+- 验证：fixture 完整性 23 passed 全绿（16/16 无缺口）；git diff --check 无告警。
+- 教训：本地定向跑时的 --ignore 恰好跳过了 CI 必需门禁文件——后续本地验证必须覆盖 CI workflow 的 targeted 清单。
