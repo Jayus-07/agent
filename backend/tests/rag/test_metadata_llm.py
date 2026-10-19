@@ -95,9 +95,14 @@ def _patch_prompt(monkeypatch):
 @pytest.mark.asyncio
 async def test_extract_success(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
+    received = {}
+
+    def _invoke(prompt, **kwargs):
+        received.update(kwargs)
+        return _FakeResp(json.dumps(GOOD, ensure_ascii=False))
+
     monkeypatch.setattr(
-        m, "invoke_metadata_llm", lambda prompt: _FakeResp(json.dumps(GOOD, ensure_ascii=False)),
-        raising=False)
+        m, "invoke_metadata_llm", _invoke, raising=False)
 
     # async_safe_call_with_timeout(fn, timeout, None, msg, prompt) → 透传 fn(prompt)
     async def _passthrough(fn, *args, **kwargs):
@@ -108,6 +113,8 @@ async def test_extract_success(_patch_prompt, monkeypatch):
     assert r is not None
     assert r["doc_type"] == "financial"
     assert r["llm_tokens"]["prompt_tokens"] == 10
+    from backend.config.rag import METADATA_LLM_OUTPUT_TOKENS
+    assert received["max_tokens"] == METADATA_LLM_OUTPUT_TOKENS
 
 
 @pytest.mark.asyncio
@@ -117,7 +124,7 @@ async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch)
     monkeypatch.setattr(
         m,
         "invoke_metadata_llm",
-        lambda prompt: _FakeResp(
+        lambda prompt, **kwargs: _FakeResp(
             json.dumps(GOOD, ensure_ascii=False),
             {"input_tokens": 17, "output_tokens": 8, "total_tokens": 25},
         ),
@@ -142,7 +149,7 @@ async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch)
 async def test_extract_llm_failure_returns_none(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
 
-    def _boom(prompt):
+    def _boom(prompt, **kwargs):
         raise RuntimeError("llm down")
 
     async def _passthrough(fn, *args, **kwargs):
@@ -152,6 +159,74 @@ async def test_extract_llm_failure_returns_none(_patch_prompt, monkeypatch):
 
     r = await extract_metadata_llm_async("文本", "x.md")
     assert r is None, "LLM 失败必须返回 None（调用方降级规则路径）"
+
+
+@pytest.mark.asyncio
+async def test_extract_provider_timeout_result_returns_none(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    async def _timeout_result(fn, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _timeout_result)
+    result = await extract_metadata_llm_async("文本", "timeout.md")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_extract_empty_provider_output_returns_none(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    monkeypatch.setattr(
+        m, "invoke_metadata_llm",
+        lambda prompt, **kwargs: _FakeResp(""), raising=False,
+    )
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough)
+    result = await extract_metadata_llm_async("文本", "empty.md")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_semaphore_wait_timeout_still_runs_provider_and_closes_slot_safely(
+    _patch_prompt, monkeypatch,
+):
+    import asyncio
+    import backend.rag.preprocessing.metadata_llm as m
+
+    class _SlowSemaphore:
+        released = 0
+
+        async def acquire(self):
+            await asyncio.sleep(0.05)
+
+        def release(self):
+            self.released += 1
+
+    semaphore = _SlowSemaphore()
+    received = []
+    monkeypatch.setattr(m, "_get_loop_llm_semaphore", lambda: semaphore)
+    monkeypatch.setattr(m, "METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT", 0.001)
+    monkeypatch.setattr(
+        m, "invoke_metadata_llm",
+        lambda prompt, **kwargs: (
+            received.append(kwargs) or _FakeResp(json.dumps(GOOD, ensure_ascii=False))
+        ),
+    )
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough)
+    result = await extract_metadata_llm_async("文本", "slot-timeout.md")
+
+    assert result is not None
+    assert received and semaphore.released == 0
 
 
 @pytest.mark.asyncio

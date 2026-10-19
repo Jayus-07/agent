@@ -115,11 +115,13 @@ DOC_LLM_MODEL = _literal_model("doc")
 # ====================================
 # 阶段2：元数据统一 LLM 抽取（metadata_llm.py）
 # ====================================
-# true = 上传时优先走单次 LLM JSON 抽取（doc_type/domain/summary/keywords/
-# entities/time_refs 一次抽齐），失败自动降级原规则路径；false = 维持纯规则链路
+# true = 允许对适合增强的非 FAQ 文档执行一次摘要/精确实体 LLM 增强；
+# 分类始终由规则提供，LLM 失败或跳过时使用抽取式摘要与规则实体。
 ENABLE_LLM_METADATA_EXTRACT = os.getenv("ENABLE_LLM_METADATA_EXTRACT", "true").lower() == "true"
 # 参与抽取的文本采样上限（超长文档按 60/20/20 头中尾采样，控制 token 成本）
 METADATA_LLM_EXTRACT_MAX_CHARS = int(os.getenv("METADATA_LLM_EXTRACT_MAX_CHARS", "6000"))
+# 元数据增强输出上限：结构化摘要与少量精确实体不需要长推理输出。
+METADATA_LLM_OUTPUT_TOKENS = int(os.getenv("METADATA_LLM_OUTPUT_TOKENS", "512"))
 
 
 # 元数据资源级并发上限：外层 RAG_MAX_CONCURRENT_INDEX 负责单任务内存峰值，
@@ -163,6 +165,8 @@ SEMANTIC_EMBED_RETRY = int(os.getenv("SEMANTIC_EMBED_RETRY", "3"))
 ENABLE_SIMULATED_QUESTIONS = os.getenv("ENABLE_SIMULATED_QUESTIONS", "true").lower() == "true"
 # 成本护栏：超长文档只对前 N chunk 走 LLM 生成问题，其余规则兜底
 QUESTION_GEN_MAX_CHUNKS = int(os.getenv("QUESTION_GEN_MAX_CHUNKS", "24"))
+# 每次模拟问题请求的输出上限；按最大采样块数保留足够 JSON 空间。
+QUESTION_GEN_OUTPUT_TOKENS = int(os.getenv("QUESTION_GEN_OUTPUT_TOKENS", "512"))
 # 问题生成提示词/输出契约变更时递增，避免旧问题缓存污染新索引。
 QUESTION_GEN_PROMPT_VERSION = os.getenv("QUESTION_GEN_PROMPT_VERSION", "v1")
 # 表格行语义描述提示词版本：变更提示词或输出契约时自然失效旧缓存。

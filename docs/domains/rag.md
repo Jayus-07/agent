@@ -46,7 +46,7 @@ Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由
 
 ## 上传元数据与级联决策
 
-上传元数据统一使用 `UnifiedMetadata` 和 `DecisionEnvelope`（`backend/rag/preprocessing/metadata_schema.py`）；分类词表由 taxonomy 模块维护，规则词典和 taxonomy 的一致性由测试守护。级联决策可能来自规则、相似度分类、LLM、fallback 或人工复核；各来源都归一到同一 envelope，并保留证据、版本、耗时和 LLM 调用数。阈值、灰度比例、外部模型开关及影子模式从 `backend/config/rag.py` 读取，不在文档维护静态阈值。改动前检查 `metadata_router.py`、索引 metadata stage、`backend/tests/rag/` 与 `backend/eval/metadata_baseline/`。
+上传元数据统一使用 `UnifiedMetadata` 和 `DecisionEnvelope`（`backend/rag/preprocessing/metadata_schema.py`）。索引入库的 `doc_type` 与 `business_domain` 以规则分类器为唯一权威；可选 LLM 只做摘要、原文可核实的专名/实体、风险信号和时间增强，不得改写分类。`ENABLE_LLM_METADATA_EXTRACT` 只控制这一次元数据增强调用；FAQ、短文及关闭开关时使用确定性摘要与规则实体。关键词字段保留兼容，但仅接收原文精确匹配的专名或格式化标识符，无可靠实体时为空；不调用独立关键词模型。规则、调用、缓存和降级来源通过现有 Trace/用量台账归因。级联分类能力仍以 `metadata_router.py` 和其独立评测契约为准，不得把它当作入库分类事实源。
 
 文档读写执行资源级授权和租户范围校验。管理端索引与发布操作遵循现有审批及状态管理。
 

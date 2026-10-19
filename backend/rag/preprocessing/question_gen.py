@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from contextvars import ContextVar
 from typing import Callable, Optional
 
@@ -129,7 +130,12 @@ def _invoke_llm(prompt: str, llm_obj=None):
     qwen 云模型自动关思考模式，且 proxy 层自动计量落 llm_usage_store。
     """
     from backend.rag.preprocessing.llm_enrichment import invoke_metadata_llm
-    return invoke_metadata_llm(prompt, llm_obj=llm_obj, role="question_gen")
+    from backend.config.rag import QUESTION_GEN_OUTPUT_TOKENS
+
+    return invoke_metadata_llm(
+        prompt, llm_obj=llm_obj, role="question_gen",
+        max_tokens=QUESTION_GEN_OUTPUT_TOKENS,
+    )
 
 
 def _read_last_tokens() -> dict:
@@ -140,6 +146,8 @@ def _read_last_tokens() -> dict:
         return {
             "prompt_tokens": int(meta.get("prompt_tokens", 0) or 0),
             "completion_tokens": int(meta.get("completion_tokens", 0) or 0),
+            "reasoning_tokens": int(meta.get("reasoning_tokens", 0) or 0),
+            "total_tokens": int(meta.get("total_tokens", 0) or 0),
             "cost_usd": float(meta.get("cost_usd", 0) or 0),
         }
     except Exception as e:  # pragma: no cover - 计量读取失败仅降级
@@ -215,7 +223,8 @@ def _cache_put(key: str, value: list[list[str]]) -> None:
 
 
 def generate_chunk_questions(chunks_text: list[str],
-                             doc_type: str = "general") -> tuple[list[list[str]], dict]:
+                             doc_type: str = "general",
+                             parent_span_id: str = "") -> tuple[list[list[str]], dict]:
     """为每个 chunk 生成模拟问题（Document Expansion）。
 
     Args:
@@ -230,10 +239,14 @@ def generate_chunk_questions(chunks_text: list[str],
           LLM 未调用或缓存命中时为 {}。
     """
     if not chunks_text:
-        _set_generation_meta(status="skipped", skip_reason="no_chunks")
+        _set_generation_meta(
+            status="skipped", skip_reason="no_chunks", provider_call=False,
+        )
         return [], {}
     if not ENABLE_SIMULATED_QUESTIONS:
-        _set_generation_meta(status="skipped", skip_reason="feature_disabled")
+        _set_generation_meta(
+            status="skipped", skip_reason="feature_disabled", provider_call=False,
+        )
         return [], {}
 
     # 内容寻址缓存：同内容重索引/副本 → 相同问题（前缀稳定 → 嵌入缓存可命中）
@@ -241,7 +254,10 @@ def generate_chunk_questions(chunks_text: list[str],
     cached = _cache_get(ckey)
     if cached is not None and len(cached) == len(chunks_text):
         logger.info(f"[QuestionGen] 缓存命中 {len(cached)} chunks")
-        _set_generation_meta(status="cached", cache_status="hit")
+        _set_generation_meta(
+            status="cached", cache_status="hit", provider_call=False,
+            usage_status="not_applicable",
+        )
         return cached, {}
 
     # 成本护栏：超长文档只对 N 个 chunk 走 LLM，其余规则兜底（返回空）。
@@ -270,8 +286,19 @@ def generate_chunk_questions(chunks_text: list[str],
         return fallback_result, {}
 
     prompt = _build_prompt(llm_scope, doc_type)
+    provider_span = None
+    if parent_span_id:
+        from backend.observability.tracer import SpanKind, trace_collector
+
+        provider_span = trace_collector.start_span(
+            "question_gen_provider", parent_id=parent_span_id,
+            name="Question generation provider call", type="llm",
+            kind=SpanKind.LLM.value,
+        )
+    provider_started = time.monotonic()
     try:
         result = _invoke_llm(prompt)
+        provider_call_wall_ms = round((time.monotonic() - provider_started) * 1000)
         content = result.content.strip() if hasattr(result, "content") else str(result)
         tokens = _read_last_tokens()
         actual_model = ""
@@ -281,12 +308,34 @@ def generate_chunk_questions(chunks_text: list[str],
             actual_model = str((_last_call_meta_var.get() or {}).get("model") or "")
         except Exception:
             pass
-        _set_generation_meta(status="success", cache_status="miss", model=actual_model)
+        _set_generation_meta(
+            status="success", cache_status="miss", model=actual_model,
+            provider_call=True, provider_call_wall_ms=provider_call_wall_ms,
+            usage_status="reported" if tokens else "unavailable",
+        )
+        if provider_span is not None:
+            from backend.observability.tracer import trace_collector
+
+            trace_collector.end_span(
+                provider_span, status="success",
+                metrics={
+                    "provider_call": True,
+                    "cache_status": "miss",
+                    "provider_call_wall_ms": provider_call_wall_ms,
+                    "prompt_tokens": tokens.get("prompt_tokens"),
+                    "completion_tokens": tokens.get("completion_tokens"),
+                    "reasoning_tokens": tokens.get("reasoning_tokens"),
+                    "total_tokens": tokens.get("total_tokens"),
+                    "usage_status": "reported" if tokens else "unavailable",
+                },
+            )
+            provider_span = None
         parsed = _extract_json_questions(content, len(llm_scope), llm_scope)
         if parsed is None:
             _set_generation_meta(
                 status="fallback", fallback_reason="invalid_response",
-                model=actual_model,
+                model=actual_model, provider_call=True,
+                provider_call_wall_ms=provider_call_wall_ms,
             )
             return fallback_result, tokens
         # 采样块结果按原索引回填（未采样 chunk 无问题=空列表，对齐契约）
@@ -298,5 +347,23 @@ def generate_chunk_questions(chunks_text: list[str],
         return result_questions, tokens
     except Exception as e:
         logger.warning(f"[QuestionGen] LLM 调用失败，规则降级: {type(e).__name__}: {e}")
-        _set_generation_meta(status="fallback", fallback_reason="llm_error")
+        provider_call_wall_ms = round((time.monotonic() - provider_started) * 1000)
+        if provider_span is not None:
+            from backend.observability.tracer import trace_collector
+
+            trace_collector.end_span(
+                provider_span, status="error",
+                metrics={
+                    "provider_call": True,
+                    "cache_status": "miss",
+                    "provider_call_wall_ms": provider_call_wall_ms,
+                    "fallback": True,
+                    "fallback_reason": "llm_error",
+                },
+            )
+        _set_generation_meta(
+            status="fallback", fallback_reason="llm_error",
+            provider_call=True, provider_call_wall_ms=provider_call_wall_ms,
+            usage_status="unavailable",
+        )
         return fallback_result, {}

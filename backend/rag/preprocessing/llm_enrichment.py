@@ -11,7 +11,13 @@ import time
 from backend.shared.logger import logger
 
 
-def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extract"):
+def invoke_metadata_llm(
+    prompt: str,
+    llm_obj=None,
+    *,
+    role: str = "metadata_extract",
+    max_tokens: int | None = None,
+):
     """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
 
     qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
@@ -31,7 +37,7 @@ def invoke_metadata_llm(prompt: str, llm_obj=None, *, role: str = "metadata_extr
         # 元数据角色也必须走统一代理，确保预算预占、韧性处理和用量结算
         # 与普通对话一致。get_llm_for_role 返回裸 LangChain 实例，会绕过这些门禁。
         from backend.infra.llm.proxy import bind_llm_for_role
-        llm_obj = bind_llm_for_role(role)
+        llm_obj = bind_llm_for_role(role, max_tokens=max_tokens)
 
     started = time.monotonic()
 

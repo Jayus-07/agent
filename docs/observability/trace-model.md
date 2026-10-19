@@ -109,6 +109,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 
 - 请求/任务创建 trace 时绑定由服务端验证的身份和归属；子请求/子图/任务用已有 parent、trace_id、span_id 关系传播，不能由浏览器或外部 Tool 回写别人的归属标签。
 - Span 至少明确开始、结束、真实耗时、执行状态、错误类别与合理的父子关系；异常、取消、超时和 fallback 同样必须收口。取消事件与业务副作用最终结果不同，不能当成功。
+- 展示 Pipeline 阶段时只比较直接逻辑阶段 Span 与 Trace 墙钟总时长；嵌套 Provider 调用单独显示并保留调用级耗时、缓存状态及 usage，不能重复累加到父阶段。阶段无法细分时应写明边界和可用的内部计时，不伪造精确耗时。
 - Router 要能解释选择层/候选目标；Tool 要能区分执行状态、业务状态和 DEGRADED；LLM 调用关联模型、prompt key/version、token/成本及成本事实状态。**字段名遵循现有 schema/埋点，不据本文硬增表。**
 - 同一请求可以调用同一 prompt key 多次；应在**调用级或节点级**追溯真实版本。现有 `backend/observability/prompt_trace.py` 的 trace-level `prompt_versions` 按 key 更新条目，不能仅凭这个汇总列表推断同一次 trace 中每次调用都用了同一版本；必要时审查具体调用侧追踪。
 - 当前 `backend/config/observability.py` 默认 `TRACE_DETAIL_LEVEL=full`；`backend/observability/redaction.py` 的掩码异常分支可能返回原文。这是必须审查的敏感数据边界，**不得把配置存在当作已安全**。任何写入/展示 prompt、question、SQL 或 token 计费身份的链路均须核对授权、最小采集、留存与脱敏失败策略。

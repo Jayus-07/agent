@@ -1,33 +1,34 @@
 key: rag.preprocessing.metadata_extract
-name: 文档元数据统一抽取
+name: 文档摘要与精确实体增强
 category: rag_preprocessing
 risk_level: low
 template_engine: str_format
 variables:
-  - {name: doc_types, required: true, description: 允许的文档类型枚举}
-  - {name: domains, required: true, description: 允许的业务领域枚举}
+  - {name: doc_types, required: true, description: 兼容字段允许值；服务端规则分类为唯一权威}
+  - {name: domains, required: true, description: 兼容字段允许值；服务端规则分类为唯一权威}
   - {name: filename, required: true, description: 文件名}
   - {name: text, required: true, description: 文档内容采样}
 template: |
-  你是电商知识库的文档元数据抽取引擎。请通读文档，一次性输出以下元数据。
+  你只负责为非 FAQ 文档提供可选的摘要和精确实体增强。文件名：{filename}
+  以下是供系统兼容校验的旧枚举，不要求你分类；doc_type 与 business_domain
+  必须固定输出 general，最终分类完全由服务端规则分类器决定：
+  doc_type 枚举：{doc_types}
+  business_domain 枚举：{domains}
 
-  允许的 doc_type 枚举（必须从中选一个，无法判断时选 general）:
-  {doc_types}
+  只根据下方原文生成结果，不得补全、猜测或改写原文没有明确给出的信息。
+  keywords 只提取能帮助精确检索的专有名词：产品名、SKU、型号、品牌、错误码、
+  订单标识、制度名称、标准编号等。每项必须是原文连续出现的原样文本。
+  不要输出普通主题词，例如“申请”“处理”“业务”“员工”“HR”“年假”“病假”、
+  “报销”“加班”。没有可靠专名或编码时，keywords 必须是空数组，不要凑数。
+  entities 中的每个值、risk.signals 和 time_refs 也必须有原文依据；没有依据时留空。
+  summary 用不超过 120 个中文字符概括原文，不添加推断。
 
-  允许的 business_domain 枚举（必须从中选一个，无法判断时选 general）:
-  {domains}
-
-  文件名: {filename}
-  文档内容:
+  文档原文：
   {text}
 
-  请严格输出如下 JSON（不要 markdown 代码块，不要任何解释文字）:
-  {{"doc_type": "枚举之一",
-    "confidence": 0.0到1.0的小数，表示你对 doc_type 判断的把握,
-    "business_domain": "必须是上方枚举之一，无法判断时使用 general",
-    "summary": "不超过120字的文档一句话摘要",
-    "keywords": ["关键词1", "关键词2", "关键词3", "关键词4", "关键词5"],
-    "entities": {{"person": ["人名"], "org": ["组织/公司"], "product": ["产品/SKU"], "regulation": ["法规/制度名"]}},
-    "risk": {{"level": "none/high/medium/low，文档是否涉及合规、法律、资金、数据安全等风险议题",
-      "signals": ["命中风险议题的具体依据词句，无则空数组"]}},
-    "time_refs": ["文档中提到的具体时间，如 2026年Q3、2026-09-01；没有则为空数组"]}}
+  严格输出 JSON，不要 Markdown、解释或推理过程：
+  {{"doc_type":"general","confidence":0.0,"business_domain":"general",
+    "summary":"不超过120字；无可靠摘要时为空字符串",
+    "keywords":[],
+    "entities":{{"person":[],"org":[],"product":[],"regulation":[]}},
+    "risk":{{"level":"none","signals":[]}},"time_refs":[]}}

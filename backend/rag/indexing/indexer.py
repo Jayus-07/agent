@@ -1374,6 +1374,11 @@ class IncrementalIndexer:
                          "page_count": _parse_pages if _pages_applicable else 0,
                          "page_count_applicable": _pages_applicable,
                          "chunk_count": len(chunks),
+                         "internal_timings_ms": _qc.get("timings_ms", {}),
+                         "timing_boundary": (
+                             "parse_and_chunk_full internal stages; parser_ms includes "
+                             "decode/extract and any OCR"
+                         ),
                          "loader": "pipeline", "ext": ext})
         except Exception as e:
             # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
@@ -1536,7 +1541,7 @@ class IncrementalIndexer:
             "index_metadata",
             parent_id="index_upload",
             name="Build metadata",
-            type="llm",
+            type="metadata_stage",
             kind=SpanKind.INDEX_METADATA.value,
         )
         # P1 元数据治理（2026-10-13）：文档全文 = 纯 leaf 拼接。
@@ -1796,6 +1801,9 @@ class IncrementalIndexer:
                     metrics={"anomalies_total": len(_anomalies),
                              "anomalies_hard": len(_hard),
                              "anomalies_warn": len(_anomalies) - len(_hard),
+                             "quality_score": doc_meta.get("quality_score"),
+                             "score": doc_meta.get("quality_score"),
+                             "quality_status": doc_meta.get("quality_status"),
                              "record_path": _qpath,
                              **_coverage_metrics,
                              **_chunk_integrity})
@@ -1808,6 +1816,9 @@ class IncrementalIndexer:
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
                     metrics={"error": "quality_gate_hard_anomaly",
+                             "quality_score": doc_meta.get("quality_score"),
+                             "score": doc_meta.get("quality_score"),
+                             "quality_status": doc_meta.get("quality_status"),
                              **_coverage_metrics,
                              **_chunk_integrity})
                 if (
@@ -1840,7 +1851,11 @@ class IncrementalIndexer:
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200], **_coverage_metrics,
+                    metrics={"error": str(e)[:200],
+                             "quality_score": doc_meta.get("quality_score"),
+                             "score": doc_meta.get("quality_score"),
+                             "quality_status": doc_meta.get("quality_status"),
+                             **_coverage_metrics,
                              **_chunk_integrity})
                 if _quality_requires_failure:
                     _failure_issue = _coverage_issue or _integrity_issue
