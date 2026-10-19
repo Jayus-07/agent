@@ -300,10 +300,17 @@ async def sql_query_stream(
 
     def worker() -> None:
         try:
-            result = _ask_sql_agent(
-                agent, req.question, policy=policy,
-                query_context=query_context, event_sink=emit_from_worker,
-            )
+            # StreamingResponse 在请求中间件恢复 ContextVar 后才消费 body_iterator；
+            # worker 必须从已验签 Principal 显式绑定账本身份，不能依赖流式上下文继承。
+            from backend.core.request_context import scoped_tool_identity
+
+            with scoped_tool_identity(
+                user_id=policy.user_id, tenant_id=policy.tenant_id,
+            ):
+                result = _ask_sql_agent(
+                    agent, req.question, policy=policy,
+                    query_context=query_context, event_sink=emit_from_worker,
+                )
             memory = persist_sql_query_result(
                 tenant_id=policy.tenant_id,
                 user_id=policy.user_id,
