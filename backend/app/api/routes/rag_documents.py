@@ -219,22 +219,70 @@ async def list_documents(
         return {"documents": [], "total": 0, "error": str(e)}
 
 
+def _active_upload_public_item(run: dict, authz) -> dict | None:
+    """将活动索引运行映射为操作日志可展示的安全字段。"""
+    allowed, _ = authz.can_manage_row(run)
+    if not allowed:
+        return None
+    return {
+        "upload_id": str(run.get("upload_id") or ""),
+        "celery_task_id": str(run.get("celery_task_id") or ""),
+        "doc_name": os.path.basename(str(run.get("file_path") or "")),
+        "doc_id": str(run.get("doc_id") or ""),
+        "kb_id": str(run.get("kb_id") or ""),
+        "department": str(run.get("department") or ""),
+        "status": str(run.get("status") or ""),
+        "stage": str(run.get("stage") or ""),
+        "error": str(run.get("error") or ""),
+        "created_at": str(run.get("created_at") or ""),
+        "updated_at": str(run.get("updated_at") or ""),
+    }
+
+
 @router.get("/operations")
 async def list_operations(
+    request: Request,
     page: int = 1,
     page_size: int = 20,
     operation: str = "",
     doc_id: str = "",
     batch_id: str = "",
 ):
-    """文档操作审计日志 — 谁上传/重索引/删除了哪个文档，含 trace_id + batch_id 关联"""
+    """文档操作日志和仍在运行的索引任务。"""
+    authz = _require_authz(request)
     try:
-        return _get_op_logger().list(
+        result = _get_op_logger().list(
             page=page, page_size=page_size, operation=operation, doc_id=doc_id, batch_id=batch_id,
         )
     except Exception as e:
         logger.error(f"[RAG] operations 失败: {e}")
-        return {"items": [], "total": 0, "error": str(e)}
+        return {"items": [], "total": 0, "active_uploads": [], "error": str(e)}
+
+    try:
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
+        tenant_id = None if authz.is_admin else (authz.principal.tenant_id or "")
+        kb_ids = None if authz.is_admin else sorted(authz.kb_scope)
+        department = (
+            None if authz.is_admin else (authz.principal.department or "")
+        )
+        active_runs = await asyncio.to_thread(
+            lambda: get_index_run_store().list_active_runs(
+                limit=100,
+                tenant_id=tenant_id,
+                kb_ids=kb_ids,
+                department=department,
+            ),
+        )
+        result["active_uploads"] = [
+            item for run in active_runs
+            if (item := _active_upload_public_item(run, authz)) is not None
+        ]
+    except Exception as e:
+        # 活动任务只是实时状态补充，不能让既有完成记录接口一起失败。
+        logger.warning(f"[RAG] 活动索引运行读取失败: {e}")
+        result["active_uploads"] = []
+    return result
 
 
 @router.get("/pending")

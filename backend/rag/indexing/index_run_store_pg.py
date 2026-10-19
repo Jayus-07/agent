@@ -221,6 +221,44 @@ class IndexRunStore:
             rows = cur.fetchall()
         return [dict(r) for r in rows]
 
+    def list_active_runs(
+        self,
+        *,
+        limit: int = 100,
+        tenant_id: str | None = None,
+        kb_ids: list[str] | None = None,
+        department: str | None = None,
+    ) -> list[dict]:
+        """列出排队或索引中的运行，供管理端即时显示后台任务状态。"""
+        limit = max(1, min(int(limit), 500))
+        if kb_ids is not None and not kb_ids:
+            return []
+        conditions = [f"status IN {ACTIVE_STATUSES!r}"]
+        params: list[Any] = []
+        if tenant_id is not None:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
+        if kb_ids is not None:
+            conditions.append("kb_id = ANY(%s)")
+            params.append(kb_ids)
+        if department is not None:
+            conditions.append("department = %s")
+            params.append(department)
+        with self._lock, self._conn() as conn:
+            cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+            cur.execute(
+                f"""SELECT upload_id, celery_task_id, file_path, doc_id,
+                           kb_id, department, status, stage, error,
+                           created_at, updated_at
+                    FROM {self._table}
+                    WHERE {' AND '.join(conditions)}
+                    ORDER BY created_at DESC, upload_id DESC
+                    LIMIT %s""",
+                (*params, limit),
+            )
+            rows = cur.fetchall()
+        return [dict(row) for row in rows]
+
     # ---- 待处理入库失败（管理端「入库失败」信号唯一出口，2026-10-02）----
     #
     # 派生口径（不加状态列，G2）：failed 且同 file_path 尚未出现更新的

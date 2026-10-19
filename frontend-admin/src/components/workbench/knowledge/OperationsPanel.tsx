@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useEffect, useMemo, Fragment } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, ChevronRight, RefreshCw, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
 import { useToast } from '@/components/shared/Toast'
-import { knowledgeService, OperationLog, type OperationType } from '@/api/knowledge'
+import { knowledgeService, OperationLog, type ActiveUploadOperation, type OperationType } from '@/api/knowledge'
 
 /** 操作徽章配置 */
 const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {
@@ -16,7 +16,10 @@ const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {
 
 export default function OperationsPanel() {
   const toast = useToast()
+  const toastRef = useRef(toast)
+  toastRef.current = toast
   const [items, setItems] = useState<OperationLog[]>([])
+  const [activeUploads, setActiveUploads] = useState<ActiveUploadOperation[]>([])
   const [loading, setLoading] = useState(false)
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -75,22 +78,36 @@ export default function OperationsPanel() {
     setExpandedBatches(next)
   }
 
-  const fetchOps = async () => {
-    setLoading(true)
+  const fetchOps = useCallback(async (showLoading = true) => {
+    if (showLoading) setLoading(true)
     try {
       const res = await knowledgeService.getOperations({ page, page_size: pageSize, operation: operation || undefined })
       setItems(res.items)
       setTotal(res.total)
+      setActiveUploads(Array.isArray(res.active_uploads) ? res.active_uploads : [])
     } catch (e) {
-      toast.error(`加载失败: ${(e as Error).message}`)
+      toastRef.current.error(`加载失败: ${(e as Error).message}`)
     } finally {
-      setLoading(false)
+      if (showLoading) setLoading(false)
     }
-  }
+  }, [operation, page, pageSize])
 
   useEffect(() => {
-    fetchOps()
-  }, [page, operation])
+    void fetchOps()
+  }, [fetchOps])
+
+  useEffect(() => {
+    const intervalMs = activeUploads.length > 0 ? 3000 : 10000
+    const timer = window.setInterval(() => void fetchOps(false), intervalMs)
+    return () => window.clearInterval(timer)
+  }, [activeUploads.length, fetchOps])
+
+  const activeStatusLabel = (status: string, stage: string) => {
+    if (status === 'claimed') return '排队中'
+    if (status === 'publishing') return '正在发布'
+    if (status === 'indexing') return stage ? `处理中 · ${stage}` : '索引处理中'
+    return status || '处理中'
+  }
 
   const totalPages = Math.ceil(total / pageSize)
 
@@ -173,7 +190,7 @@ export default function OperationsPanel() {
   return (
     <div className="max-w-5xl mx-auto px-6 py-8">
         <div className="mb-6 flex items-center justify-end">
-          <button onClick={fetchOps} disabled={loading} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-secondary hover:bg-surface-hover disabled:opacity-40 transition-colors">
+          <button onClick={() => void fetchOps()} disabled={loading} className="flex items-center gap-1 px-3 py-1.5 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-secondary hover:bg-surface-hover disabled:opacity-40 transition-colors">
             {loading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
             刷新
           </button>
@@ -192,6 +209,30 @@ export default function OperationsPanel() {
             <option value="delete">删除</option>
           </select>
         </div>
+
+        {(operation === '' || operation === 'upload') && activeUploads.length > 0 && (
+          <section className="mb-4 rounded-xl border border-blue-200 bg-blue-50/60 p-4" aria-label="正在处理的上传任务">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-xs font-semibold text-blue-800">处理中 · {activeUploads.length} 个上传任务</h3>
+              <span className="text-[10px] text-blue-600">每 {activeUploads.length > 0 ? '3' : '10'} 秒自动刷新</span>
+            </div>
+            <div className="space-y-2">
+              {activeUploads.map(item => (
+                <div key={item.upload_id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-lg bg-white/80 px-3 py-2 text-[11px]">
+                  <div className="min-w-0">
+                    <span className="font-medium text-text-primary">{item.doc_name || '未命名文件'}</span>
+                    <span className="ml-2 text-blue-700">{activeStatusLabel(item.status, item.stage)}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-3 text-[10px] text-text-muted">
+                    <span title={item.upload_id}>上传 ID: {item.upload_id}</span>
+                    {item.celery_task_id && <span title={item.celery_task_id}>Worker Task ID: {item.celery_task_id}</span>}
+                    <span>{item.updated_at || item.created_at}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* 表格 */}
         {loading && <div className="bg-surface-base rounded-xl border border-border-subtle p-3 text-center text-xs text-text-muted animate-pulse mb-2">加载中...</div>}
@@ -296,7 +337,7 @@ export default function OperationsPanel() {
                 }
               })}
               {!loading && groupedItems.all.length === 0 && (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-text-muted">暂无操作记录</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-text-muted">{activeUploads.length > 0 ? '暂无已完成操作记录' : '暂无操作记录'}</td></tr>
               )}
             </tbody>
           </table>

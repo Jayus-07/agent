@@ -95,8 +95,16 @@ def _patch_prompt(monkeypatch):
 @pytest.mark.asyncio
 async def test_extract_success(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
+    from backend.config.rag import METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS
+
+    captured = {}
+
+    def _fake_invoke(prompt, **kwargs):
+        captured.update(kwargs)
+        return _FakeResp(json.dumps(GOOD, ensure_ascii=False))
+
     monkeypatch.setattr(
-        m, "invoke_metadata_llm", lambda prompt: _FakeResp(json.dumps(GOOD, ensure_ascii=False)),
+        m, "invoke_metadata_llm", _fake_invoke,
         raising=False)
 
     # async_safe_call_with_timeout(fn, timeout, None, msg, prompt) → 透传 fn(prompt)
@@ -108,6 +116,9 @@ async def test_extract_success(_patch_prompt, monkeypatch):
     assert r is not None
     assert r["doc_type"] == "financial"
     assert r["llm_tokens"]["prompt_tokens"] == 10
+    assert r["provider_called"] is True
+    assert r["provider_duration_ms"] >= 0
+    assert captured["max_tokens"] == METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS
 
 
 @pytest.mark.asyncio
@@ -117,7 +128,7 @@ async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch)
     monkeypatch.setattr(
         m,
         "invoke_metadata_llm",
-        lambda prompt: _FakeResp(
+        lambda prompt, **kwargs: _FakeResp(
             json.dumps(GOOD, ensure_ascii=False),
             {"input_tokens": 17, "output_tokens": 8, "total_tokens": 25},
         ),
@@ -142,7 +153,7 @@ async def test_extract_normalizes_input_output_usage(_patch_prompt, monkeypatch)
 async def test_extract_llm_failure_returns_none(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
 
-    def _boom(prompt):
+    def _boom(prompt, **kwargs):
         raise RuntimeError("llm down")
 
     async def _passthrough(fn, *args, **kwargs):
@@ -152,6 +163,26 @@ async def test_extract_llm_failure_returns_none(_patch_prompt, monkeypatch):
 
     r = await extract_metadata_llm_async("文本", "x.md")
     assert r is None, "LLM 失败必须返回 None（调用方降级规则路径）"
+
+
+@pytest.mark.asyncio
+async def test_extract_timeout_and_empty_output_return_none(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    async def _timeout(fn, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _timeout, raising=False)
+    assert await extract_metadata_llm_async("文档内容", "timeout.md") is None
+
+    async def _empty(fn, *args, **kwargs):
+        class EmptyResponse:
+            content = ""
+            usage_metadata = {}
+        return EmptyResponse()
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _empty, raising=False)
+    assert await extract_metadata_llm_async("文档内容", "empty.md") is None
 
 
 @pytest.mark.asyncio

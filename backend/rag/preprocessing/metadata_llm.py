@@ -1,16 +1,11 @@
 """metadata_llm.py — 阶段2：元数据统一 LLM 抽取（主流化改造）。
 
-背景：原链路元数据由 6+ 个独立步骤拼出——正则计分分类、LLM 胶着仲裁、
-低置信复验、LLM 摘要、规则+LLM 关键词、正则实体/时间——步骤间强耦合
-（doc_type 必须先算），且一次上传最多触发 4 类 LLM 调用。
-
-主流做法（Contextual Extraction / schema-driven extraction）：单次 LLM
-调用按 JSON schema 抽齐 doc_type / confidence / business_domain / summary /
-keywords / entities / time_refs，正则链路整体降级为 fallback。
+职责：在规则分类确定后，按预算门禁可选调用一次 LLM，增强摘要、精确
+专名实体、风险信号和时间信息。Schema 保留 doc_type/business_domain 等
+历史字段，但调用方始终用规则分类覆盖模型返回值；关键词不另起模型调用。
 
 契约：
-  - extract_metadata_llm() 成功 → 返回与 _build_doc_metadata 兼容的字段子集，
-    调用方把 llm_used 置 True、来源标 metadata_llm；
+  - extract_metadata_llm() 成功 → 返回兼容字段子集及 Provider/usage 证据；
   - 任何失败（超时/坏 JSON/doc_type 越界）→ 返回 None，调用方走原规则路径。
 """
 import hashlib
@@ -20,6 +15,8 @@ import asyncio
 import threading
 import weakref
 import os
+import time
+from functools import partial
 
 # LLM 背压槽位等待超时（秒）：等待超过此值计一次可观测降级并直接执行，
 # 避免元数据抽取在并发洪峰下无限排队（P2 审查修复 2026-10-19）。
@@ -193,13 +190,14 @@ async def extract_metadata_llm_async(
     if not full_text or not full_text.strip():
         return None
 
-    from backend.config.rag import METADATA_LLM_EXTRACT_MAX_CHARS
+    from backend.config.rag import (
+        METADATA_LLM_EXTRACT_MAX_CHARS,
+        METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS,
+    )
     from backend.rag.preprocessing.taxonomy_spec import get_taxonomy
 
     taxonomy = get_taxonomy()
     valid_types = set(taxonomy.doc_types)
-    doc_types_str = ", ".join(taxonomy.doc_types)
-    domains_str = ", ".join(taxonomy.domains)
 
     # 采样：头部 + 中部 + 尾部，兼顾标题区/正文/结尾签名区
     max_chars = METADATA_LLM_EXTRACT_MAX_CHARS
@@ -216,8 +214,6 @@ async def extract_metadata_llm_async(
         from backend.prompts.service import prompt_service
         prompt_result = prompt_service.render_sync(
             "rag.preprocessing.metadata_extract",
-            doc_types=doc_types_str,
-            domains=domains_str,
             filename=filename or "(unknown)",
             text=sample,
         )
@@ -244,9 +240,12 @@ async def extract_metadata_llm_async(
         span_id = trace_collector.start_span(
             "metadata_llm_extract", parent_id=parent_span_id,
             name="LLM metadata extract (unified)",
-            type="llm", kind=SpanKind.INDEX_METADATA.value,
+            type="llm_call", kind=SpanKind.INDEX_METADATA.value,
         )
 
+    provider_call_attempted = False
+    provider_called = False
+    provider_duration_ms = 0
     try:
         # invoke_metadata_llm 是同步调用，async_safe_call_with_timeout 会把它
         # 放线程池执行并施加超时（与摘要路径 build_llm_summary_cached 同款）；
@@ -260,24 +259,33 @@ async def extract_metadata_llm_async(
         # 并保留槽位等待超时（超时计一次可观测降级，不经背压直接执行）。
         sem = _get_loop_llm_semaphore()
         from backend.observability.metrics import metadata_llm_calls_total
+        slot_acquired = False
         try:
             await asyncio.wait_for(sem.acquire(), METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT)
+            slot_acquired = True
         except asyncio.TimeoutError:
             metadata_llm_calls_total.labels(result="llm_slot_wait_timeout").inc()
             logger.warning(
                 f"[MetaLLM] LLM 背压槽位等待超时 "
                 f"({METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT}s)，本次不经背压直接执行")
-        else:
-            try:
-                response = await async_safe_call_with_timeout(
+        provider_started = time.monotonic()
+        provider_call_attempted = True
+        try:
+            response = await async_safe_call_with_timeout(
+                partial(
                     invoke_metadata_llm,
-                    LLM_REQUEST_TIMEOUT,
-                    None,
-                    f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
-                    prompt,
-                )
-            finally:
+                    max_tokens=METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS,
+                ),
+                LLM_REQUEST_TIMEOUT,
+                None,
+                f"元数据抽取 LLM 超时 ({LLM_REQUEST_TIMEOUT}s)",
+                prompt,
+            )
+        finally:
+            provider_duration_ms = round((time.monotonic() - provider_started) * 1000)
+            if slot_acquired:
                 sem.release()
+        provider_called = response is not None
         if response is None:
             raise MetadataExtractError("llm timeout")
 
@@ -294,6 +302,8 @@ async def extract_metadata_llm_async(
         result["llm_usage_status"] = (
             "reported" if result["llm_tokens"] else "unavailable"
         )
+        result["provider_called"] = provider_called
+        result["provider_duration_ms"] = provider_duration_ms
         response_metadata = getattr(response, "response_metadata", {}) or {}
         actual_model = (
             response_metadata.get("model_name")
@@ -305,6 +315,14 @@ async def extract_metadata_llm_async(
             result["actual_model"] = str(actual_model)
         if span_id:
             trace_collector.end_span(span_id, status="success", metrics={
+                "provider_call": provider_called,
+                "provider_duration_ms": provider_duration_ms,
+                "usage_status": result["llm_usage_status"],
+                "model": str(actual_model),
+                "prompt_tokens": int(result["llm_tokens"].get("prompt_tokens") or 0),
+                "completion_tokens": int(result["llm_tokens"].get("completion_tokens") or 0),
+                "reasoning_tokens": int(result["llm_tokens"].get("reasoning_tokens") or 0),
+                "total_tokens": int(result["llm_tokens"].get("total_tokens") or 0),
                 "doc_type": result["doc_type"],
                 "confidence": result["confidence"],
                 "keywords": len(result["keywords"]),
@@ -320,7 +338,10 @@ async def extract_metadata_llm_async(
         metadata_llm_calls_total.labels(result="invalid").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
-                                     metrics={"error": str(e)[:200]})
+                                     metrics={"provider_call": provider_called,
+                                              "provider_call_attempted": provider_call_attempted,
+                                              "provider_duration_ms": provider_duration_ms,
+                                              "error": str(e)[:200]})
         return None
     except Exception as e:
         logger.warning(f"[MetaLLM] 抽取调用失败（降级规则路径）: {e}")
@@ -329,5 +350,8 @@ async def extract_metadata_llm_async(
         metadata_llm_calls_total.labels(result="error").inc()
         if span_id:
             trace_collector.end_span(span_id, status="error",
-                                     metrics={"error": str(e)[:200]})
+                                     metrics={"provider_call": provider_called,
+                                              "provider_call_attempted": provider_call_attempted,
+                                              "provider_duration_ms": provider_duration_ms,
+                                              "error": str(e)[:200]})
         return None

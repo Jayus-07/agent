@@ -41,6 +41,19 @@ _LABELLED_ID_RE = re.compile(
     r"(?:编号|单号|订单号|错误码|型号|SKU|sku|No\.?)[：:\s]*([A-Za-z0-9][A-Za-z0-9_-]{1,31})"
     r"(?![A-Za-z0-9-])"
 )
+_ENTITY_LABEL_RE = re.compile(
+    r"(?:产品名|产品名称|品牌|制度名|制度名称|标准编号|标准名|型号|SKU|"
+    r"编号|单号|订单号|错误码|版本)[：:\s]*([^\s，,。；;、]{2,80})",
+    re.IGNORECASE,
+)
+_QUOTED_ENTITY_RE = re.compile(r"[《〈「『【“\"]([^》〉」』】”\"]{2,80})[》〉」』】”\"]")
+_ENTITY_SUFFIXES = (
+    "管理办法", "制度", "办法", "条例", "规范", "标准", "手册", "协议",
+    "研究院", "大学", "有限公司", "股份公司", "系统", "平台", "产品",
+    "品牌", "型号", "软件", "服务", "系列", "版本",
+)
+_NON_ALNUM_EDGE_RE = re.compile(r"^[\s:：,，。;；()（）\[\]【】《》]+|"
+                                r"[\s:：,，。;；()（）\[\]【】《》]+$")
 
 
 @dataclass
@@ -81,6 +94,94 @@ def extract_identifiers_cached(text: str) -> tuple:
 def extract_identifiers(text: str) -> list[str]:
     """通用标识符（SKU/型号/编号/错误码）列表 — 标识符识别唯一入口。"""
     return list(extract_identifiers_cached(text))
+
+
+def contains_exact_source_match(text: str, candidate: str) -> bool:
+    """按原文精确匹配实体；拉丁字母与数字项需同时满足 token 边界。"""
+    value = str(candidate or "").strip()
+    if not text or not value:
+        return False
+    if not any(ch.isascii() and ch.isalnum() for ch in value):
+        return value in text
+    left = r"(?<![A-Za-z0-9])" if value[0].isascii() and value[0].isalnum() else ""
+    right = r"(?![A-Za-z0-9])" if value[-1].isascii() and value[-1].isalnum() else ""
+    return re.search(left + re.escape(value) + right, text, re.IGNORECASE) is not None
+
+
+def extract_precise_keywords(
+    text: str, candidates=(), *, exact_named_entities=(),
+) -> list[str]:
+    """只保留有原文证据和通用格式信号的精确实体。
+
+    格式信号来自编号模式、明确实体标签、书名/名称引号、实体类型后缀，
+    或具有内部大小写/较长全大写形式的拉丁专名；不使用行业词表或主题词排序。
+    """
+    if not text:
+        return []
+
+    identifiers = extract_identifiers(text)
+    identifier_keys = {value.casefold() for value in identifiers}
+    labelled = {
+        match.group(1).strip().casefold()
+        for match in _ENTITY_LABEL_RE.finditer(text)
+    }
+    quoted = {
+        match.group(1).strip().casefold()
+        for match in _QUOTED_ENTITY_RE.finditer(text)
+    }
+    out = list(identifiers)
+    seen = set(identifier_keys)
+
+    # 统一元数据链中由 LLM 标注为专名类型的实体（组织、产品、制度/标准）
+    # 可补足格式规则无法识别的中文专名；仍要求原文逐字匹配。
+    for raw in exact_named_entities or ():
+        value = str(raw or "").strip()
+        if not value or len(value) > 80 or not contains_exact_source_match(text, value):
+            continue
+        key = value.casefold()
+        if key not in seen:
+            seen.add(key)
+            out.append(value)
+
+    for raw in candidates or ():
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        value = _NON_ALNUM_EDGE_RE.sub("", value)
+        if not value or len(value) > 80:
+            continue
+        key = value.casefold()
+        if key in seen or not contains_exact_source_match(text, value):
+            continue
+
+        has_format_evidence = (
+            key in labelled
+            or key in quoted
+            or any(
+                key.endswith(suffix)
+                and (
+                    len(value) >= len(suffix) + 3
+                    or any(
+                        ch.isascii() and ch.isalnum()
+                        for ch in value[:-len(suffix)]
+                    )
+                )
+                for suffix in _ENTITY_SUFFIXES
+            )
+        )
+        latin = "".join(ch for ch in value if ch.isascii() and ch.isalpha())
+        if latin:
+            has_format_evidence = has_format_evidence or (
+                len(latin) >= 4 and any(ch.islower() for ch in latin)
+                and any(ch.isupper() for ch in latin[1:])
+            ) or (len(latin) >= 4 and latin.isupper())
+        if not has_format_evidence:
+            continue
+        seen.add(key)
+        out.append(value)
+        if len(out) >= 12:
+            break
+    return out
 
 
 # ── 兼容契约（既有调用方零改动）──────────────────────────────────────

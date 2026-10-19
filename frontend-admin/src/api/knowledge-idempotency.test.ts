@@ -33,4 +33,33 @@ describe("knowledgeService 上传幂等接线", () => {
     expect(options.dedupeKey).toContain("policy.pdf");
     expect(apiMock.fetchRaw).not.toHaveBeenCalled();
   });
+
+  it("服务端受理后、索引 SSE 结束前发送上传回执", async () => {
+    const file = new File(["content"], "faq_only.docx");
+    const onAccepted = vi.fn();
+    apiMock.mutationFetchRaw.mockResolvedValue(
+      new Response(JSON.stringify({
+        ok: true,
+        upload_id: "upload-42",
+        filename: "faq_only.docx",
+      }), { status: 200 }),
+    );
+    apiMock.fetchRaw.mockImplementation(async () => {
+      expect(onAccepted).toHaveBeenCalledWith({
+        upload_id: "upload-42",
+        filename: "faq_only.docx",
+      });
+      return new Response(
+        `data: ${JSON.stringify({ stage: "done", message: "索引完成" })}\n\n`,
+        { status: 200 },
+      );
+    });
+
+    const result = await knowledgeService.uploadDocument(
+      file, undefined, undefined, undefined, undefined, onAccepted,
+    );
+
+    expect(result.ok).toBe(true);
+    expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
+  });
 });

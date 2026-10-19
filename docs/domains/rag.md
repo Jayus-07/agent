@@ -46,7 +46,7 @@ Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由
 
 ## 上传元数据与级联决策
 
-上传元数据统一使用 `UnifiedMetadata` 和 `DecisionEnvelope`（`backend/rag/preprocessing/metadata_schema.py`）；分类词表由 taxonomy 模块维护，规则词典和 taxonomy 的一致性由测试守护。级联决策可能来自规则、相似度分类、LLM、fallback 或人工复核；各来源都归一到同一 envelope，并保留证据、版本、耗时和 LLM 调用数。阈值、灰度比例、外部模型开关及影子模式从 `backend/config/rag.py` 读取，不在文档维护静态阈值。改动前检查 `metadata_router.py`、索引 metadata stage、`backend/tests/rag/` 与 `backend/eval/metadata_baseline/`。
+上传元数据契约仍使用 `UnifiedMetadata`（`backend/rag/preprocessing/metadata_schema.py`），并保留 `doc_type`、`business_domain` 等历史字段。当前入库分类和业务域以规则分类器及 taxonomy 规范化结果为唯一事实源；LLM 不做第二次分类。`ENABLE_LLM_METADATA_EXTRACT` 只控制一次可选增强调用，用于摘要、精确实体、风险和时间信号；短文本和已有结构化 Q/A 的 FAQ 跳过调用，失败后用规则实体和抽取式摘要继续。LLM 实体/时间/风险依据须能在原文中精确匹配；关键词字段只保留原文精确匹配的格式标识符，或由 LLM 标注为组织、产品、制度/标准的专名，不填普通主题词。Schema 限制输出字段长度和数量，`backend/tests/rag/` 覆盖分类权威、降级与精确匹配。
 
 文档读写执行资源级授权和租户范围校验。管理端索引与发布操作遵循现有审批及状态管理。
 
@@ -76,6 +76,7 @@ flowchart TD
 ```
 
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
+- 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。活动记录按现有租户、知识库、部门及行级授权范围过滤。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
   - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
   - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。

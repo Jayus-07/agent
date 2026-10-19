@@ -6,6 +6,19 @@ export interface ProcessingRun { run_id: string; doc_id: string; file_hash?: str
 export interface ProcessingStep { step_id: string; run_id: string; stage: string; status: string; role?: string; engine_type?: string; provider?: string; model_name?: string; model_revision?: string; config_source?: string; prompt_version?: string; taxonomy_version?: string; rules_version?: string; schema_fingerprint?: string; input_count?: number; output_count?: number; total_tokens?: number; cached_tokens?: number; duration_ms?: number; skip_reason?: string; fallback_reason?: string; [key: string]: any }
 export interface ProcessingRunDetail extends ProcessingRun { steps: ProcessingStep[]; usage?: Array<Record<string, any>> }
 export interface OperationLog { id: number; doc_id: string; doc_name: string; operation: string; result: string; created_at: string; trace_id?: string; batch_id: string; detail: any; duration_ms: number; user_id: string; source: string; [key: string]: any }
+export interface ActiveUploadOperation {
+  upload_id: string
+  celery_task_id: string
+  doc_name: string
+  doc_id: string
+  kb_id: string
+  department: string
+  status: string
+  stage: string
+  error: string
+  created_at: string
+  updated_at: string
+}
 /** 操作日志里的 operation 字段类型 — /knowledge/operations 页筛选下拉依赖此类型 */
 export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
@@ -74,6 +87,7 @@ export const knowledgeService: any = {
    * @param batchId 多文件上传批次 ID（透传 X-Batch-Id 头给后端）
    * @param kbId 目标知识库 ID
    * @param department 目标部门
+   * @param onAccepted 上传任务被后端受理后的即时回执
    */
   uploadDocument: (
     file: File,
@@ -81,6 +95,7 @@ export const knowledgeService: any = {
     batchId?: string,
     kbId?: string,
     department?: string,
+    onAccepted?: (receipt: { upload_id: string; filename: string }) => void,
   ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }> => {
     const fd = new FormData()
     fd.append('file', file)
@@ -142,6 +157,15 @@ export const knowledgeService: any = {
       .then((data) => {
         if (!data.ok || !data.upload_id) {
           return { ok: false, error: data.error || '上传失败' }
+        }
+        try {
+          onAccepted?.({
+            upload_id: String(data.upload_id),
+            filename: String(data.filename || file.name),
+          })
+        } catch (error) {
+          // 回执 UI 异常不能把已经受理的后台任务误报成上传失败。
+          console.warn('[RAG] 上传受理回调失败', error)
         }
 
         // 订阅 SSE 获取索引进度
@@ -313,7 +337,7 @@ export const knowledgeService: any = {
   },
 
   getOperations: (params: any = {}) =>
-    fetchRaw(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0 })),
+    fetchRaw(`${BASE}/operations?${qs(params)}`).then(r => r.json()).catch(() => ({ items: [], total: 0, active_uploads: [] })),
 
   getChunkDetail: (chunkId: string) =>
     fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),

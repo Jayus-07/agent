@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react'
 import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronDown, ChevronRight } from 'lucide-react'
 import { knowledgeService } from '@/api/knowledge'
 import { fetchRaw, randomId } from '@/api/client'
+import { useToast } from '@/components/shared/Toast'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
@@ -49,6 +50,7 @@ interface FileReport {
 }
 
 export default function UploadDialog({ open, onClose, onSuccess }: Props) {
+  const toast = useToast()
   const [files, setFiles] = useState<File[]>([])
   const [uploading, setUploading] = useState(false)
   const [reports, setReports] = useState<FileReport[]>([])
@@ -57,6 +59,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [ragReady, setRagReady] = useState<boolean | null>(null)
   const healthTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
+  const backgroundUploadRef = useRef(false)
+  const backgroundReceiptShownRef = useRef(false)
   const [selectedKbId, setSelectedKbId] = useState('policy_general')
   const [selectedDept, setSelectedDept] = useState('general')
   const [kbList, setKbList] = useState<{ id: string; name: string; depts: { id: string; label: string }[] }[]>([])
@@ -103,6 +107,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   if (!open) return null
 
   const handleClose = () => {
+    if (uploading) {
+      backgroundUploadRef.current = true
+      toast.info('上传会继续在后台运行；受理后可在操作日志查看处理中状态')
+      onClose()
+      return
+    }
     setFiles([])
     setUploading(false)
     setError('')
@@ -126,6 +136,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
 
     let okCount = 0
+    let failedCount = 0
     const batchId = files.length > 1 ? randomId('batch') : undefined
 
     for (let i = 0; i < files.length; i++) {
@@ -146,7 +157,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             currentStage: stage as StageKey,
             stageMessage: message,
           })
-        }, batchId, selectedKbId, selectedDept)
+        }, batchId, selectedKbId, selectedDept, (receipt: { upload_id: string; filename: string }) => {
+          if (backgroundUploadRef.current && !backgroundReceiptShownRef.current) {
+            backgroundReceiptShownRef.current = true
+            toast.success(`后台任务已受理：${receipt.filename}（${receipt.upload_id}）`)
+          }
+        })
 
         if (res.duplicate) {
           // 终态 stage_elapsed（后端传）优先；前端兜底仍按 SSE 间隔法
@@ -182,14 +198,22 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           updateReport(i, { status: 'success', stageElapsed: finalElapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
           okCount++
         } else {
+          failedCount++
           updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
         }
       } catch (e) {
+        failedCount++
         updateReport(i, { status: 'failed', error: (e as Error).message || '网络错误', currentStage: null, stageMessage: '' })
       }
     }
 
     setUploading(false)
+    if (backgroundUploadRef.current) {
+      if (okCount > 0) toast.success(`后台处理完成：${okCount} 个文件成功`)
+      if (failedCount > 0) toast.error(`后台处理结束：${failedCount} 个文件失败，可重新打开窗口查看原因`)
+      backgroundUploadRef.current = false
+      backgroundReceiptShownRef.current = false
+    }
     if (okCount > 0) onSuccess()
   }
 
@@ -363,7 +387,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           ) : (
             <>
               <button onClick={handleClose} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">
-                {uploading ? '后台上传' : '取消'}
+                {uploading ? '转入后台' : '取消'}
               </button>
               <button onClick={handleUpload} disabled={!files.length || uploading || ragReady === false}
                 className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors">

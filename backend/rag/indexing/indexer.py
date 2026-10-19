@@ -117,6 +117,14 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
     return header + "\n\n" + full_text[:body_budget]
 
 
+def _serialize_registry_keywords(doc_meta: dict) -> str:
+    """把统一元数据关键词写回历史 registry 字段，优先新字段并兼容旧名。"""
+    values = doc_meta.get("doc_keywords")
+    if values is None:
+        values = doc_meta.get("keywords") or []
+    return json.dumps(values, ensure_ascii=False)
+
+
 def _mask_index_text_for_pii(text: str, doc_type: str, chunk_filter) -> str:
     """用现有 ChunkFilter 规则脱敏索引的文档级文本。"""
     if not text:
@@ -1369,12 +1377,17 @@ class IncrementalIndexer:
                 if isinstance(_p, int) and _p > 0:
                     _parse_pages = max(_parse_pages, _p)
             _pages_applicable = ext.lower() == ".pdf"
-            trace_collector.end_span(parse_span,
-                metrics={"doc_count": len(chunks),
-                         "page_count": _parse_pages if _pages_applicable else 0,
-                         "page_count_applicable": _pages_applicable,
-                         "chunk_count": len(chunks),
-                         "loader": "pipeline", "ext": ext})
+            parse_metrics = {
+                "doc_count": len(chunks),
+                "page_count": _parse_pages if _pages_applicable else 0,
+                "page_count_applicable": _pages_applicable,
+                "chunk_count": len(chunks),
+                "loader": "pipeline", "ext": ext,
+            }
+            for stage_name, duration_ms in (_qc.get("stage_ms") or {}).items():
+                if isinstance(duration_ms, (int, float)):
+                    parse_metrics[f"internal_{stage_name}"] = duration_ms
+            trace_collector.end_span(parse_span, metrics=parse_metrics)
         except Exception as e:
             # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
             # 不被包装成 RuntimeError(避免 observability 误捕 + 丢失语义)
@@ -1796,6 +1809,7 @@ class IncrementalIndexer:
                     metrics={"anomalies_total": len(_anomalies),
                              "anomalies_hard": len(_hard),
                              "anomalies_warn": len(_anomalies) - len(_hard),
+                             "quality_score": doc_meta.get("quality_score"),
                              "record_path": _qpath,
                              **_coverage_metrics,
                              **_chunk_integrity})
@@ -2417,7 +2431,7 @@ class IncrementalIndexer:
             "minhash_sig": doc_meta.get("minhash_sig", ""),
             "near_dup_id": doc_meta.get("near_dup_id", ""),
             "summary": doc_meta.get("summary", ""),
-            "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+            "keywords": _serialize_registry_keywords(doc_meta),
             "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
             "business_domain": doc_meta.get("business_domain", ""),
             "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
