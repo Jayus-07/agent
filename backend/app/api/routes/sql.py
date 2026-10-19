@@ -331,7 +331,7 @@ async def sql_query_stream(
                 "data": {
                     "elapsed": time.monotonic() - started_at,
                     "sources": [],
-                    "result": response.model_dump(),
+                    "result": response.model_dump(mode="json"),
                 },
             })
         except Exception:  # noqa: BLE001 — 流式终帧需统一返回错误

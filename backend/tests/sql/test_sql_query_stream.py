@@ -1,10 +1,30 @@
 """SQL Agent 真实执行阶段事件测试。"""
 
+from decimal import Decimal
+
 from backend.sql import sql_agent as agent_module
 from backend.sql.sql_result import SQLResult
 from backend.tests.sql.conftest import build_ctx
 from backend.security.principal import Principal
 from fastapi.testclient import TestClient
+
+
+def test_sql_sse_done_payload_serializes_decimal_as_json():
+    from backend.app.api.routes.sql import _sql_sse_encode
+    from backend.app.api.schemas import SQLQueryResponse
+
+    response = SQLQueryResponse(
+        status="success",
+        columns=["price"],
+        rows=[{"price": Decimal("299.00")}],
+    )
+
+    encoded = _sql_sse_encode({
+        "event": "done",
+        "data": {"result": response.model_dump(mode="json")},
+    })
+
+    assert '"price":"299.00"' in encoded
 
 
 def test_sql_agent_emits_real_progress_phases(monkeypatch):
@@ -67,8 +87,8 @@ def test_http_stream_returns_existing_sse_event_types(monkeypatch):
                     }, "ts": 0.0,
                 }}) if event_sink else None
             ) or SQLResult.success(
-                rows=[{"product_name": "A"}],
-                columns=["product_name"],
+                rows=[{"product_name": "A", "price": Decimal("299.00")}],
+                columns=["product_name", "price"],
                 sql="SELECT product_name FROM product.products LIMIT 5",
             ),
         })(),
@@ -92,3 +112,4 @@ def test_http_stream_returns_existing_sse_event_types(monkeypatch):
     assert "event: status" in response.text
     assert "event: log" in response.text
     assert "event: done" in response.text
+    assert '"price":"299.00"' in response.text
