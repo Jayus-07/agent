@@ -66,6 +66,32 @@ def _select_vector_chunks(chunks: list[Document]) -> list[Document]:
     return [chunk for chunk in chunks if chunk.metadata.get("vectorize") is not False]
 
 
+def _question_candidate_indexes(chunks: list[Document]) -> list[int]:
+    """合同模拟问题只选择较长 Leaf；Parent 与短条款不产生重复问题。"""
+    is_contract = any(
+        (chunk.metadata or {}).get("chunk_type") == "contract_context"
+        for chunk in chunks
+    )
+    if not is_contract:
+        return list(range(len(chunks)))
+
+    minimum_tokens = 80
+    candidates = []
+    for index, chunk in enumerate(chunks):
+        metadata = chunk.metadata or {}
+        try:
+            token_count = int(metadata.get("chunk_tokens") or 0)
+        except (TypeError, ValueError):
+            token_count = 0
+        if (
+            metadata.get("granularity") == "leaf"
+            and metadata.get("vectorize") is not False
+            and token_count >= minimum_tokens
+        ):
+            candidates.append(index)
+    return candidates
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -1652,9 +1678,13 @@ class IncrementalIndexer:
                 metadata={"chunk_count": len(chunks)},
             )
         try:
+            question_chunk_indexes = _question_candidate_indexes(chunks)
             metadata_kwargs = {
                 "parent_span_id": meta_span.span_id,
-                "chunks_text": [ch.page_content for ch in chunks],
+                "chunks_text": [
+                    chunks[index].page_content
+                    for index in question_chunk_indexes
+                ],
             }
             if lineage_recorder is not None:
                 # 允许存量插件/测试替身继续使用旧签名；仓库内实现支持该参数
@@ -1976,7 +2006,12 @@ class IncrementalIndexer:
         domain_val = doc_meta.get("business_domain", "") or "general"
 
         # 模拟问题（从 doc_meta 拿；metadata 构建阶段已写入 questions_by_chunk）
-        questions_by_chunk = doc_meta.get("questions_by_chunk", []) or []
+        generated_questions = doc_meta.get("questions_by_chunk", []) or []
+        questions_by_chunk_index = {
+            chunk_index: generated_questions[position]
+            for position, chunk_index in enumerate(question_chunk_indexes)
+            if position < len(generated_questions)
+        }
 
         # ── 4.3c: 表格行描述（kv 数据行 → 一句话语义，供 embedding 前缀）──
         table_row_indexes = [
@@ -2109,7 +2144,7 @@ class IncrementalIndexer:
             # chunk_id 已在上方统一覆盖并同步 parent_chunk_id（P0-03），此处不再重复
             ch.metadata["chunk_keywords"] = ""  # P0-2 去词表化：停发（原规则提取已删）
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
-            _sq = questions_by_chunk[i] if i < len(questions_by_chunk) else []
+            _sq = questions_by_chunk_index.get(i, [])
             if _sq:
                 ch.metadata["simulated_questions"] = _sq
 

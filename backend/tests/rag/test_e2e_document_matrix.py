@@ -205,7 +205,13 @@ def test_08_contract_with_table(tmp_path):
     assert all(value in fee_leaf.page_content for value in (
         "6294", "28240", "12730", "47856", "4152",
     ))
-    assert "SENTINEL-TABLE-REF" in fee_leaf.page_content
+    assert "SENTINEL-TABLE-REF" not in fee_leaf.page_content
+    assert "SENTINEL-TABLE-REF" not in parents[0].page_content
+    assert any(
+        "SENTINEL-TABLE-REF" in paragraph.text
+        for paragraph in docx.Document(str(p)).paragraphs
+    ), "索引文本规范化不能改写上传的 DOCX 原文"
+    assert parents[0].page_content.count("服务合同") == 1
     assert not any(c.metadata.get("chunk_type") in {
         "table_header", "table_summary", "table_row",
     } for c in leaves)
@@ -213,7 +219,17 @@ def test_08_contract_with_table(tmp_path):
     payment_leaf = next(
         c for c in leaves if c.metadata.get("section_id") == "clause_3"
     )
-    assert payment_leaf.metadata["references"] == ["table_1"]
+    assert payment_leaf.metadata["references"] == [{
+        "table_id": "table_1", "relation": "refers_to",
+    }]
+    assert "SENTINEL-TABLE-REF" not in payment_leaf.page_content
+    breach_leaf = next(
+        c for c in leaves if c.metadata.get("section_id") == "clause_4"
+    )
+    assert breach_leaf.page_content.splitlines()[:2] == [
+        "服务合同", "第四条 违约责任",
+    ]
+    assert qc["coverage"]["uncovered_count"] == 0
     _assert_p0_invariants(chunks, qc["raw_ast"])
 
 

@@ -103,11 +103,18 @@ def attach_referenced_context(docs: List[Document], related_lookup) -> List[Docu
                 references = [references]
         if not isinstance(references, (list, tuple, set)):
             continue
-        table_ids = {
-            str(reference).strip()
-            for reference in references
-            if str(reference or "").strip()
-        }
+        table_ids: set[str] = set()
+        for reference in references:
+            if isinstance(reference, dict):
+                relation = str(reference.get("relation") or "").strip()
+                if relation and relation != "refers_to":
+                    continue
+                table_id = str(reference.get("table_id") or "").strip()
+            else:
+                # 兼容已入库的旧版 references=["table_1"] 元数据。
+                table_id = str(reference or "").strip()
+            if table_id:
+                table_ids.add(table_id)
         if doc_id and table_ids:
             requests.setdefault(doc_id, set()).update(table_ids)
 

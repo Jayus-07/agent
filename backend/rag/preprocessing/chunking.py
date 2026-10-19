@@ -1204,12 +1204,23 @@ class LegalChunkStrategy:
                     }
                     table["text"] = make_table_chunk_text(
                         table["rows"],
-                        section_title=f"{doc_title} / {clause_title}".strip(" /"),
+                        section_title=clause_title,
                     )
                     tables.append(table)
                     items.append({"kind": "table", "value": table})
                 elif node.type in LEAF_TYPES and node.text.strip():
                     items.append({"kind": "text", "value": node.text.strip()})
+
+            # 原始 DOCX 中的标记只在同条款内确有表格时才可移出索引文本；
+            # AST/源文件保持不变，避免丢失上传原文证据。
+            if tables:
+                for item in items:
+                    if item["kind"] == "text":
+                        item["value"] = re.sub(
+                            r"(?<![\w-])SENTINEL-TABLE-REF(?![\w-])",
+                            "",
+                            item["value"],
+                        ).strip()
 
             prefix_parts = [part for part in (doc_title, clause_title) if part]
             prefix = "\n".join(prefix_parts)
@@ -1226,11 +1237,14 @@ class LegalChunkStrategy:
             text_parts.extend(full_items)
             clause_text = "\n".join(part for part in text_parts if part)
 
-            references: list[str] = []
+            references: list[dict[str, str]] = []
             combined_body = "\n".join(body_texts)
             if re.search(r"上表|上述表格|前表|前述表格", combined_body):
                 if previous_table_id:
-                    references.append(previous_table_id)
+                    references.append({
+                        "table_id": previous_table_id,
+                        "relation": "refers_to",
+                    })
             if tables:
                 previous_table_id = tables[-1]["table_id"]
 
@@ -1243,7 +1257,7 @@ class LegalChunkStrategy:
                 "items": items,
                 "text": clause_text,
                 "tables": tables,
-                "references": list(dict.fromkeys(references)),
+                "references": references,
             })
 
         leaves: list[Document] = []
@@ -1335,9 +1349,7 @@ class LegalChunkStrategy:
                         record["body_text"] if not body_emitted and not row_groups else "",
                         make_table_chunk_text(
                             candidate_rows,
-                            section_title=(
-                                f"{doc_title} / {record['section_title']}".strip(" /")
-                            ),
+                            section_title=record["section_title"],
                         ),
                     ) if part)
                     if current_rows and count_tokens(candidate_text) > LEAF_CHUNK_TOKENS:
@@ -1375,9 +1387,7 @@ class LegalChunkStrategy:
                         text_parts.append(record["body_text"])
                     text_parts.append(make_table_chunk_text(
                         header_rows + rows_group,
-                        section_title=(
-                            f"{doc_title} / {record['section_title']}".strip(" /")
-                        ),
+                        section_title=record["section_title"],
                     ))
                     chunk_text = "\n".join(part for part in text_parts if part)
                     if count_tokens(chunk_text) > LEAF_CHUNK_TOKENS:
@@ -1484,10 +1494,17 @@ class LegalChunkStrategy:
             for table in record["tables"]
         ]
         for group_index, group in enumerate(parent_groups):
-            parent_text = "\n\n".join(
-                part for part in ([doc_title] + [c.page_content for c in group])
-                if part
-            )
+            parent_parts = [doc_title] if doc_title else []
+            for leaf in group:
+                content = leaf.page_content
+                if doc_title and (
+                    content.startswith(f"{doc_title}\n")
+                    or content.startswith(f"{doc_title}\r\n")
+                ):
+                    content = content[len(doc_title):].lstrip("\r\n")
+                if content:
+                    parent_parts.append(content)
+            parent_text = "\n\n".join(parent_parts)
             parent_id = _chunk_id(
                 file_path, f"legal_contract_parent:{group_index}", parent_text,
             )
@@ -2331,6 +2348,32 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
             for key, parts in row_leaf_bodies.items()
         ]
 
+        # 只有存在已关联表格 Leaf 的条款，才允许覆盖审计忽略其原文中的
+        # 引表技术标记；没有对应表格时，该标记仍按普通源文本核验。
+        associated_table_sections = {
+            str(metadata.get("section_id"))
+            for chunk in chunks
+            for metadata in [getattr(chunk, "metadata", {}) or {}]
+            if metadata.get("granularity") == "leaf"
+            and metadata.get("table_id")
+            and metadata.get("section_id")
+            and metadata.get("chunk_type") in {
+                "table_inline", "table_row_group",
+            }
+        }
+        normalized_marker_leaf_ids: set[int] = set()
+        if associated_table_sections:
+            for clause_index, clause in enumerate(
+                LegalChunkStrategy._clause_sections(ast), start=1,
+            ):
+                if f"clause_{clause_index}" not in associated_table_sections:
+                    continue
+                normalized_marker_leaf_ids.update(
+                    id(node) for node in walk(clause)
+                    if node.type in LEAF_TYPES
+                    and "SENTINEL-TABLE-REF" in str(node.text or "")
+                )
+
         max_audit_nodes = max(1, int(max_audit_nodes))
         sampled = len(source_leaves) > max_audit_nodes or len(bodies) > max_audit_nodes
         if len(source_leaves) > max_audit_nodes:
@@ -2408,6 +2451,10 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
 
         for node in leaves:
             text = (node.text or "").strip()
+            if id(node) in normalized_marker_leaf_ids:
+                text = re.sub(
+                    r"(?<![\w-])SENTINEL-TABLE-REF(?![\w-])", "", text,
+                ).strip()
             rows = getattr(node, "rows", None) if node.type == "table" else None
             if not rows:
                 hit = _covered_text(text)

@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from backend.rag.indexing.indexer import (
     IncrementalIndexer,
     _filter_index_chunks,
+    _question_candidate_indexes,
     _select_vector_chunks,
 )
 
@@ -82,6 +83,35 @@ def test_context_only_parent_is_not_vectorized():
     leaf = Document(page_content="第一条", metadata={"granularity": "leaf"})
 
     assert _select_vector_chunks([parent, leaf]) == [leaf]
+
+
+def test_contract_question_candidates_exclude_parent_and_short_clauses():
+    chunks = [
+        Document(page_content="完整合同", metadata={
+            "granularity": "parent", "chunk_type": "contract_context",
+            "vectorize": False, "chunk_tokens": 544,
+        }),
+        Document(page_content="第一条", metadata={
+            "granularity": "leaf", "chunk_type": "legal_clause",
+            "chunk_tokens": 30,
+        }),
+        Document(page_content="费用表内容", metadata={
+            "granularity": "leaf", "chunk_type": "table_inline",
+            "chunk_tokens": 425,
+        }),
+        Document(page_content="付款条款", metadata={
+            "granularity": "leaf", "chunk_type": "legal_clause",
+            "chunk_tokens": 43,
+        }),
+    ]
+
+    assert _question_candidate_indexes(chunks) == [2]
+
+
+def test_non_contract_question_candidates_keep_existing_alignment():
+    chunks = [Document(page_content="A"), Document(page_content="B")]
+
+    assert _question_candidate_indexes(chunks) == [0, 1]
 
 
 def test_contract_table_structure_obeys_pii_mask(monkeypatch):

@@ -66,7 +66,9 @@ def test_attach_referenced_table_context():
             "chunk_id": "payment",
             "doc_id": "doc-1",
             "granularity": "leaf",
-            "references": ["table_1"],
+            "references": [{
+                "table_id": "table_1", "relation": "refers_to",
+            }],
         },
     )
     fee_table = Document(
@@ -82,3 +84,23 @@ def test_attach_referenced_table_context():
     result = attach_referenced_context([payment], lookup)
     assert calls == [("doc-1", ["table_1"])]
     assert [doc.metadata["chunk_id"] for doc in result] == ["payment", "fees"]
+
+
+def test_attach_referenced_table_context_supports_legacy_ids():
+    """存量 string reference 继续可用，新写入使用关系对象。"""
+    payment = Document(
+        page_content="上表所列费用按季度结算。",
+        metadata={
+            "chunk_id": "payment",
+            "doc_id": "doc-1",
+            "granularity": "leaf",
+            "references": ["table_1"],
+        },
+    )
+    calls = []
+    result = attach_referenced_context(
+        [payment],
+        lambda doc_id, table_ids: calls.append((doc_id, table_ids)) or [],
+    )
+    assert calls == [("doc-1", ["table_1"])]
+    assert result == [payment]
