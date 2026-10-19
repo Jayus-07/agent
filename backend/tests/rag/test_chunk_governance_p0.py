@@ -10,7 +10,7 @@
 import docx
 import pytest
 
-from backend.config import LEAF_CHUNK_TOKENS, PARENT_CHUNK_TOKENS
+from backend.config import LEAF_CHUNK_TOKENS
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode, walk
 from backend.rag.preprocessing.chunking import (
     ChunkStrategyRouter,
@@ -22,7 +22,6 @@ from backend.rag.preprocessing.chunking import (
 from backend.rag.preprocessing.parser.markdown_parser import MarkdownParser
 from backend.rag.preprocessing.parser.txt_parser import TxtParser
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
-from backend.rag.preprocessing.token_counter import count_tokens
 
 
 def _ast_of(md_text: str, tmp_path, suffix=".md") -> DocumentAST:
@@ -227,11 +226,12 @@ def test_index_identity_overwrite_keeps_parent_linkage():
 
     ast = DocumentAST(
         root=DocumentNode(type="section", text="", level=0, children=[
-            DocumentNode(type="qa_question", text="Q1？"),
-            DocumentNode(type="qa_answer", text="A1。"),
+            DocumentNode(type="section", text="员工制度", level=1, children=[
+                DocumentNode(type="paragraph", text="员工按流程提交申请并等待直属主管审批。"),
+            ]),
         ]),
     )
-    chunks = QAChunkStrategy().split(ast, "faq.md")
+    chunks = StructureChunkStrategy().split(ast, "policy.md")
     split_parent_ids = {
         c.metadata["chunk_id"] for c in chunks
         if c.metadata["granularity"] == "parent"
@@ -258,11 +258,12 @@ def test_parent_expansion_end_to_end_after_index_identity():
 
     ast = DocumentAST(
         root=DocumentNode(type="section", text="", level=0, children=[
-            DocumentNode(type="qa_question", text="Q1？"),
-            DocumentNode(type="qa_answer", text="A1。"),
+            DocumentNode(type="section", text="员工制度", level=1, children=[
+                DocumentNode(type="paragraph", text="员工按流程提交申请并等待直属主管审批。"),
+            ]),
         ]),
     )
-    chunks = QAChunkStrategy().split(ast, "faq.md")
+    chunks = StructureChunkStrategy().split(ast, "policy.md")
     apply_index_chunk_identity(chunks, "docX")
     by_id = {c.metadata["chunk_id"]: c for c in chunks}
 
@@ -414,8 +415,8 @@ def test_long_qa_answer_split_keeps_question_prefix():
         assert c.metadata["chunk_tokens"] <= LEAF_CHUNK_TOKENS
 
 
-def test_qa_virtual_parent_truncated_when_huge():
-    """大量 QA 条目：虚拟 parent 超 PARENT 预算时截断并打标。"""
+def test_many_faq_entries_do_not_create_question_directory_parent():
+    """FAQ 问答条目再多也不生成无答案的问题目录 Parent。"""
     children = []
     for i in range(300):
         children.append(DocumentNode(
@@ -428,10 +429,10 @@ def test_qa_virtual_parent_truncated_when_huge():
     )
     chunks = QAChunkStrategy().split(ast, "faq.md")
     parents = [c for c in chunks if c.metadata["granularity"] == "parent"]
-    assert parents
-    for p in parents:
-        assert count_tokens(p.page_content) <= PARENT_CHUNK_TOKENS + 20
-        assert p.metadata.get("parent_truncated") == "true"
+    leaves = [c for c in chunks if c.metadata["granularity"] == "leaf"]
+    assert not parents
+    assert len(leaves) == 300
+    assert all(not chunk.metadata.get("parent_chunk_id") for chunk in leaves)
 
 
 def test_table_fallback_oversized_splits_by_lines():

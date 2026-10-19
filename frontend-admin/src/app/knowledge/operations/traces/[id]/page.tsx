@@ -8,23 +8,22 @@ import { statusBadge, formatTime, formatRelative } from "@/types/trace";
 import { knowledgeService } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
-  getLogicalPhases,
-  getMetadataSlowWarning,
-  getQualityScore,
-  getQualityWarning,
-} from "@/lib/ragTraceMetrics";
+  getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
+  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
+} from "../trace-metrics";
+import {
+  getChunkHeading,
+  SIMULATED_QUESTIONS_LABEL,
+} from "../chunk-detail-labels";
 
 const SPAN_LABELS: Record<string, { label: string; order: number }> = {
   load: { label: "文件加载", order: 1 }, parse: { label: "解析文档", order: 2 },
   clean: { label: "数据清洗", order: 3 }, dedup: { label: "去重检查", order: 4 },
-  chunk: { label: "文本分块", order: 5 },
-  metadata_stage: { label: "元数据生成", order: 6 },
-  metadata_extract_stage: { label: "摘要与实体增强", order: 6 },
-  question_stage: { label: "模拟问题生成", order: 6 },
-  llm: { label: "模型调用", order: 7 }, rule: { label: "规则处理", order: 6 },
-  audit: { label: "质量审计", order: 8 },
+  chunk: { label: "文本分块", order: 5 }, llm: { label: "元数据生成", order: 6 },
   embedding: { label: "向量嵌入", order: 7 }, vector_db: { label: "写入向量库", order: 8 },
   workflow: { label: "索引编排", order: 0 },
+  llm_call: { label: "LLM 调用", order: 6.5 },
+  stage: { label: "内部阶段", order: 99 },
 };
 function spanOrder(s: Span): number { return SPAN_LABELS[s.type]?.order ?? 99; }
 
@@ -64,7 +63,7 @@ const CHUNK_METHOD_CN: Record<string, string> = {
   "ContractChunkStrategy": "按条款边界切分（第X条、Article X、§X），禁止跨条款切割，短条款(<2000字)合并",
 };
 
-interface ChunkDetail { chunk_index: number; content: string; char_count: number; keywords: string; llm_keywords?: string; llm_model?: string; section_title?: string; simulated_questions?: string[]; }
+interface ChunkDetail { chunk_index: number; content: string; char_count: number; keywords: string; llm_keywords?: string; llm_model?: string; granularity?: string; parent_scope?: string; document_title?: string; section_title?: string; section_titles?: string[]; chunk_type?: string; doc_type?: string; simulated_questions?: string[]; }
 
 export default function DocTracePage() {
   const { id } = useParams<{ id: string }>(); const router = useRouter();
@@ -81,21 +80,22 @@ export default function DocTracePage() {
   useEffect(() => { if (!chunkPanelOpen) return; const onKey=(e:KeyboardEvent)=>{if(e.key==="Escape")setChunkPanelOpen(false)}; window.addEventListener("keydown",onKey); return ()=>window.removeEventListener("keydown",onKey); }, [chunkPanelOpen]);
 
   const childSpans = useMemo(() => { if(!trace)return[]; return (trace.spans||[]).filter(s=>s.parent_id!==null).sort((a,b)=>spanOrder(a)-spanOrder(b)); }, [trace]);
-  const typeGroups = useMemo(() => { const m=new Map<string,Span[]>(); for(const s of childSpans){const type=s.id==='index_metadata'?'metadata_stage':s.type;if(!m.has(type))m.set(type,[]); m.get(type)!.push(s);} return Array.from(m.entries()).sort((a,b)=>spanOrder(a[1][0])-spanOrder(b[1][0])); }, [childSpans]);
-  const phaseGroups = useMemo(() => getLogicalPhases(
-    trace?.spans||[], trace?.root_span_id||"index_upload",
-  ).sort((a,b)=>spanOrder(a.spans[0])-spanOrder(b.spans[0])), [trace]);
+  const pipelineGroups = useMemo(() => {
+    if (!trace) return [];
+    const direct = getLogicalStageSpans(trace.spans || [], trace.root_span_id);
+    return groupSpansByType(direct).sort((a,b)=>spanOrder(a.spans[0])-spanOrder(b.spans[0]));
+  }, [trace]);
+  const typeGroups = useMemo(() => { const m=new Map<string,Span[]>(); for(const s of childSpans){if(!m.has(s.type))m.set(s.type,[]); m.get(s.type)!.push(s);} return Array.from(m.entries()).sort((a,b)=>spanOrder(a[1][0])-spanOrder(b[1][0])); }, [childSpans]);
 
   const overview = useMemo(() => {
     if(!trace) return {fileSize:0,chunkCount:0,totalTokens:0,costCny:0,costUsd:0,llmCalls:0,models:[] as Array<{component:string;model:string;calls:number;total_tokens:number;cost_cny:number}>,docType:'',businessDomain:'',model:'',confidence:0,qualityScore:null as number|null};
     const ls=childSpans.find(s=>s.type==='load'); const cs=childSpans.find(s=>s.type==='chunk');
-    const metadataS=childSpans.find(s=>s.id==='index_metadata'); const es=childSpans.find(s=>s.type==='embedding');
-    const out=(metadataS?.output||{}) as Record<string,unknown>;
+    const llmS=childSpans.find(s=>s.type==='llm'); const es=childSpans.find(s=>s.type==='embedding');
+    const out=(llmS?.output||{}) as Record<string,unknown>;
     const rm=(out.rule_metadata||{}) as Record<string,unknown>;
     const lm=(out.llm_metadata||{}) as Record<string,unknown>;
     const lt=(lm.llm_tokens||{}) as Record<string,unknown>;
     const pt=(lt.prompt_tokens as number)||0; const ct=(lt.completion_tokens as number)||0;
-    const qualityScore=getQualityScore(childSpans);
     // llm_usage 台账读时回填（后端 _backfill_usage）：usage.by_component 按
     // 组件聚合 tokens（索引 trace 常为 embedding-only），usage.models 为
     // 组件×模型清单（一次索引可能 embedding+LLM+OCR 多模型并发），cost_cny
@@ -113,16 +113,15 @@ export default function DocTracePage() {
       docType:(rm.doc_type as string)||(out.doc_type as string)||'',
       businessDomain:(rm.business_domain as string)||(out.business_domain as string)||'',
       model:modelName||(typeof trace?.model==='string'? trace.model as string :'')||(lt.model as string)||(es?.metrics?.model_name as string)||'',
-      confidence:(rm.confidence as number)??0, qualityScore};
+      confidence:(rm.confidence as number)??0, qualityScore:getQualityScore(trace.spans||[])};
   }, [childSpans, trace]);
 
   const warnings = useMemo(() => {
     const items:string[]=[];
-    const qualityWarning=getQualityWarning(overview.qualityScore);
-    if(qualityWarning) items.push(qualityWarning);
-    if(trace){const metadataWarning=getMetadataSlowWarning(
-      trace.spans||[], trace.duration_ms, trace.root_span_id||"index_upload",
-    );if(metadataWarning)items.push(metadataWarning);}
+    const qualityWarning=getQualityWarning(overview.qualityScore); if(qualityWarning) items.push(qualityWarning);
+    if(trace){const performanceWarning=getMetadataPerformanceWarning(
+      getMetadataStageDuration(trace.spans||[],trace.root_span_id),trace.duration_ms,
+    ); if(performanceWarning) items.push(performanceWarning);}
     if(overview.fileSize>0&&overview.fileSize<500) items.push(`文档过短 (${overview.fileSize} bytes)`);
     return items;
   }, [overview, trace]);
@@ -138,7 +137,7 @@ export default function DocTracePage() {
   const badge = statusBadge(trace.status??"success");
   const toggleTypeExpand = (type:string) => { const next=new Set(expandedTypes); next.has(type)?next.delete(type):next.add(type); setExpandedTypes(next); };
   const toggleMeta = (key:string) => { const next=new Set(expandedMeta); next.has(key)?next.delete(key):next.add(key); setExpandedMeta(next); };
-  function summaryMetrics(spans: Span[]): string { const merged:Record<string,unknown>={}; for(const s of spans){if(!s.metrics)continue; for(const [k,v] of Object.entries(s.metrics)){if(k==="chunk_id"||k==="attempt"||k==="timing_boundary")continue; if(merged[k]===undefined)merged[k]=v;}} const e=Object.entries(merged); if(!e.length)return""; return e.map(([k,v])=>{if(k==="internal_timings_ms"&&v&&typeof v==="object")return `解析内部: ${Object.entries(v as Record<string,unknown>).map(([stage,ms])=>`${stage.replace(/_ms$/,'')} ${ms}ms`).join(' / ')}`;return `${k}: ${typeof v==="number"?v:String(v)}`;}).join(" · "); }
+  function summaryMetrics(spans: Span[]): string { const merged:Record<string,unknown>={}; for(const s of spans){if(!s.metrics)continue; for(const [k,v] of Object.entries(s.metrics)){if(k==="chunk_id"||k==="attempt")continue; if(merged[k]===undefined)merged[k]=v;}} const e=Object.entries(merged); if(!e.length)return""; return e.map(([k,v])=>`${k}: ${typeof v==="number"?v:String(v)}`).join(" · "); }
 
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
@@ -156,7 +155,7 @@ export default function DocTracePage() {
       </div>
 
       {/* Pipeline 耗时分布 */}
-      {phaseGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ Pipeline 耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：各逻辑阶段直接子 Span 的耗时 ÷ 用户墙钟总耗时；嵌套模型调用只在流水线明细显示，不重复计入。解析阶段包含解析器内部解码、提取及可能的 OCR。</p><div className="space-y-1.5">{phaseGroups.map(({type,duration_ms:totalMs})=>{const info=SPAN_LABELS[type]??{label:type,order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs}ms</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
+      {pipelineGroups.length>0&&trace.duration_ms>0&&(<div className="bg-white border border-slate-200 rounded-xl p-5"><h2 className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-1">⏱ Pipeline 耗时分布</h2><p className="text-[9px] text-slate-400 mb-3">口径：根 Span 的逻辑阶段耗时 / Trace 墙钟总耗时；嵌套调用不重复累加。</p><div className="space-y-1.5">{pipelineGroups.map(({type,totalMs})=>{const info=SPAN_LABELS[type]??{label:type,order:99};const pct=(totalMs/trace.duration_ms)*100;const isHot=pct>30;const barColor=isHot?'bg-amber-400':pct>10?'bg-blue-400':'bg-slate-300';return(<div key={type} className="flex items-center gap-2 text-xs"><span className="w-20 text-slate-500 text-right shrink-0">{info.label}</span><div className="flex-1 bg-slate-100 rounded-full h-4 overflow-hidden"><div className={`h-full rounded-full transition-all ${barColor}`} style={{width:`${Math.min(Math.max(pct,0.5),100)}%`,minWidth:pct>0?'4px':'0'}} /></div><span className="w-20 text-right font-mono text-slate-600 shrink-0">{totalMs}ms</span><span className="w-10 text-right text-slate-400 shrink-0">{pct.toFixed(0)}%</span></div>);})}</div></div>)}
 
       {/* 处理流水线 */}
       <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
@@ -164,7 +163,8 @@ export default function DocTracePage() {
         <div className="divide-y divide-slate-50">
           {typeGroups.map(([type,spans])=>{
             const info=SPAN_LABELS[type]??{label:spans[0]?.name||type,order:99};
-            const totalMs=spans.reduce((sum,s)=>sum+(s.duration_ms||0),0);
+            const logicalStageMs=pipelineGroups.find(group=>group.type===type)?.totalMs;
+            const totalMs=logicalStageMs??spans.reduce((sum,s)=>sum+(s.duration_ms||0),0);
             const hasError=spans.some(s=>s.status==="error"); const hasSkipped=spans.some(s=>s.status==="skipped");
             const statusIcon=hasError?"❌":hasSkipped?"⚠️":"✅"; const isMulti=spans.length>1;
             const expanded=expandedTypes.has(type); const summary=summaryMetrics(spans);
@@ -176,7 +176,7 @@ export default function DocTracePage() {
             if(type==="chunk"){const fs=spans[0];const output=(fs?.output||{}) as Record<string,unknown>;const preview=(output["preview"] as string[])||[];const total=(output["total"] as number)||(fs?.metrics?.kept_chunks as number)||0;const rawChunks=fs?.metrics?.raw_chunks as number||0;const filteredOut=fs?.metrics?.filtered_out as number||0;const strategy=(output["strategy"] as string)||"";const strategyCN=CHUNK_STRATEGY_CN[strategy]||strategy;return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">切分 <span className="font-mono text-slate-600">{total}</span> 块{rawChunks>0&&<span className="text-slate-400 ml-1">（原始 {rawChunks}{filteredOut>0?`，过滤 ${filteredOut}`:""}）</span>}</span>{docId&&total>0&&<button onClick={handleOpenChunkDetail} className="ml-auto text-xs text-accent hover:text-accent-hover hover:underline">📋 查看完整内容 →</button>}</div>{strategy&&<div className="ml-9 mb-2 text-[10px] text-slate-400"><span>✂️ 切分方案: </span><span className="text-slate-600 font-medium">{strategyCN||'—'}</span>{strategy&&CHUNK_METHOD_CN[strategy]&&<div className="text-[9px] text-slate-400 mt-0.5">切法: {CHUNK_METHOD_CN[strategy]}</div>}</div>}{preview.length>0&&<div className="ml-9 space-y-1 mb-2">{preview.map((text,i)=>(<div key={i} className="text-xs text-slate-500 bg-slate-50 rounded px-2 py-1 truncate"><span className="text-slate-300 mr-1">预览块 {i+1}</span>{text.slice(0,120)}{text.length>120?"…":""}</div>))}</div>}</div>);}
 
             // llm / metadata
-            if(type==="metadata_stage"){
+            if(type==="llm"){
               const out=(spans[0]?.output||{}) as Record<string,unknown>;
               const ruleMeta=(out["rule_metadata"]||out) as Record<string,unknown>;
               const llmMeta=(out["llm_metadata"]||out) as Record<string,unknown>;
@@ -189,10 +189,9 @@ export default function DocTracePage() {
               const llmStrategy=(llmMeta["llm_strategy"] as string)||"";
               const llmDecision=(llmMeta["llm_decision"] as Record<string,unknown>)||{};
               const llmScore=llmDecision["llm_score"] as number||0;
-              const llmReason=(llmDecision["llm_reason"] as string)||"";
+              const llmReason=String(llmDecision["llm_reason"]||"").split(";").filter(reason=>!reason.includes("complex_struct")).join(";");
               const docType=(ruleMeta["doc_type"] as string)||(spans[0]?.metrics?.doc_type as string)||"";
               const confidence=(ruleMeta["confidence"] as number)||0;
-              const complexity=(ruleMeta["complexity"] as Record<string,unknown>)||{};
               const hasRule=kwsRule.length>0;
               const strategyLabel=STRATEGY_LABEL(llmStrategy,llmUsed,hasRule);
               const tokenOk=llmUsed&&typeof llmTokens["prompt_tokens"]==="number"&&(llmTokens["prompt_tokens"]>0||(llmTokens["completion_tokens"]??0)>0);
@@ -206,9 +205,9 @@ export default function DocTracePage() {
               const domainOut=((domainSpan?.output||{})as any);
               const domainTopTypes=(Object.entries(domainOut.scores||{}) as [string,number][]).sort((a,b)=>b[1]-a[1]).slice(0,5);
               const domainHits=domainOut.hits||[];
-              const qualitySpan=childSpans.find(s=>s.id==='index_quality');
-              const qualityDims=((qualitySpan?.output||{})as Record<string,number>);
-              const summaryText=ruleMeta["summary"] as string||"";
+              const qualityBreakdown=getQualityScoreBreakdown(childSpans);
+              const qualityCalculatedScore=qualityBreakdown.hardCount===null||qualityBreakdown.warningCount===null?null:Math.max(0,qualityBreakdown.base-qualityBreakdown.hardDeduction*qualityBreakdown.hardCount-qualityBreakdown.warningDeduction*qualityBreakdown.warningCount);
+              const summaryText=docType.toLowerCase()==="faq"?"":((ruleMeta["summary"] as string)||"");
               const sections=ruleMeta["sections"] as string[]||[];
 
               return (<div key={type} className="px-5 py-3 cursor-pointer hover:bg-violet-50/50 transition-colors" onClick={()=>toggleTypeExpand(type)}>
@@ -228,12 +227,14 @@ export default function DocTracePage() {
                       </div>)},
                     {k:'domain',icon:'🌐',label:'业务领域',value:overview.businessDomain||'—',hint:'关键词命中最高',show:!!(domainTopTypes.length||domainHits.length),
                       detail:()=>(<div className="space-y-1">{domainTopTypes.length>0&&(<div>{domainTopTypes.map(([t,s])=>(<div key={t} className="flex items-center gap-2" style={{fontSize:'9px'}}><span className="w-16 text-slate-500 text-right">{t}</span><div className="flex-1 bg-slate-200 rounded-full h-2.5 overflow-hidden"><div className="h-full rounded-full bg-cyan-400" style={{width:Math.max(s/10*100,2)+'%'}}/></div><span className="w-8 text-right font-mono text-slate-500">{s}</span></div>))}</div>)}{domainHits.length>0&&<div className="flex flex-wrap gap-x-2 gap-y-0.5">{domainHits.map((h:string,i:number)=>{const m=h.match(/^(.+)\+(\d+)$/);return <span key={'dh'+i} className="text-[9px] text-slate-500">▸ {m?m[1]:h}{m&&<span className="font-mono text-cyan-500 ml-0.5">+{m[2]}</span>}</span>;})}</div>}</div>)},
-                    {k:'quality',icon:'📊',label:'质量评分',value:overview.qualityScore===null?'未提供':`${overview.qualityScore}/100 ${overview.qualityScore>=60?'✅':overview.qualityScore>=40?'⚠':'❌'}`,hint:'质量记录评分',show:true,
-                      detail:()=>(<div className="grid grid-cols-2 gap-1 text-[9px]">{Object.entries(qualityDims).filter(([k])=>k!=='total').map(([k,v])=>(<div key={k} className="flex justify-between"><span className="text-slate-500">{{completeness:'文本完整度',structure:'结构完整度',noise:'噪声检测',uniqueness:'去重检测'}[k]||k}</span><span className="font-mono text-slate-600">{v}</span></div>))}</div>)},
-                    {k:'complexity',icon:'🧩',label:'复杂度',value:`${String(complexity['complexity_score']??'—')}/100`,hint:'6 维度综合',show:true,
-                      detail:()=>{const dims=complexity['dimensions'] as Record<string,number>|undefined;if(dims)return(<div className="grid grid-cols-3 gap-1 text-[9px]">{[{l:'章节',max:10,k:'headings'},{l:'表格',max:5,k:'tables'},{l:'法规',max:15,k:'legal'},{l:'风险',max:30,k:'risk'},{l:'长度',max:10,k:'length'},{l:'置信度',max:10,k:'confidence'}].map(d=>(<div key={d.k} className="flex justify-between"><span className="text-slate-500">{d.l}</span><span className="font-mono text-slate-600">{dims[d.k]??0}<span className="text-slate-300">/{d.max}</span></span></div>))}</div>);return <div className="text-[9px] text-slate-400">无维度数据</div>}},
+                    {k:'quality',icon:'📊',label:'质量评分',value:overview.qualityScore===null?'未提供':`${overview.qualityScore}/100 ${overview.qualityScore>=60?'✅':overview.qualityScore>=40?'⚠':'❌'}`,hint:`${qualityBreakdown.base} − ${qualityBreakdown.hardDeduction}×硬异常 − ${qualityBreakdown.warningDeduction}×告警`,show:true,
+                      detail:()=>(<div className="space-y-1 text-[9px]">
+                        <div className="text-slate-600">公式：max(0，{qualityBreakdown.base} − {qualityBreakdown.hardDeduction}×硬异常数 − {qualityBreakdown.warningDeduction}×告警数)</div>
+                        {qualityCalculatedScore!==null?<div className="text-slate-500">本次计分：max(0，{qualityBreakdown.base} − {qualityBreakdown.hardDeduction}×{qualityBreakdown.hardCount} − {qualityBreakdown.warningDeduction}×{qualityBreakdown.warningCount}) = {qualityCalculatedScore}/100（异常 {qualityBreakdown.totalCount??(qualityBreakdown.hardCount!+qualityBreakdown.warningCount!)} 项）{overview.qualityScore!==null&&overview.qualityScore!==qualityCalculatedScore&&<span className="text-amber-600">；Trace 记录 {overview.qualityScore}/100，与现行公式不一致</span>}</div>:<div className="text-slate-500">此 Trace 未记录完整异常计数。</div>}
+                        <div className="text-slate-400">硬异常会阻止文档发布；此分数反映解析与索引校验异常，不代表答案语义正确或检索召回效果。</div>
+                      </div>)},
                     {k:'llm_decision',icon:'🔮',label:'LLM 决策',value:llmUsed?`评分${llmScore} · ${llmStrategy==='llm_force'?'强制触发':llmScore>=50?'达标触发':'未触发'}`:'未使用 LLM',hint:llmUsed?'评分累加':'—',show:llmUsed,
-                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label=p;let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${DOC_TYPE_CN[cv(p.split(":")[1])]||cv(p.split(":")[1])} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("complex_struct:")){label=`文档结构复杂（${cv(p.split(":")[1])} 分）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
+                      detail:()=>(<div className="space-y-1">{llmReason&&llmReason.split(";").map((s:string)=>s.trim()).filter(Boolean).map((p:string)=>{let label=p;let score=0;let forced=false;const sm=p.match(/\((\+?\d+)\)/);const parsed=sm?parseInt(sm[1]):0;const cv=(v:string)=>v.replace(/\(.*\)/,'').trim();if(p.includes("high_value:")){label=`${DOC_TYPE_CN[cv(p.split(":")[1])]||cv(p.split(":")[1])} 高价值`;score=parsed}else if(p.includes("risk_hits:")){label=`命中 ${cv(p.split(":")[1])} 个风险词`;score=parsed}else if(p.includes("low_conf:")){label=`分类置信度不足（${(parseFloat(cv(p.split(":")[1]))*100).toFixed(0)}%）`;score=parsed}else if(p.includes("forced:high_risk")){label="高风险类强制触发";forced=true}return(<div key={p} className="flex items-center gap-2 text-[9px]"><span className="text-slate-500 flex-1">· {label}</span>{forced?<span className="font-mono text-slate-300">—</span>:<span className={`font-mono ${score>0?'text-violet-500':'text-slate-300'}`}>+{score}</span>}</div>)})}{tokenOk&&<div className="text-[9px] text-slate-400 mt-1 pt-1 border-t border-slate-100">模型: {String(llmTokens["model"]||"")} · 入{llmTokens["prompt_tokens"]}/出{llmTokens["completion_tokens"]??0}{costOk&&<span> · ${costUsd!.toFixed(6)}</span>}</div>}</div>)},
                     {k:'summary',icon:'📝',label:'摘要',value:summaryText?summaryText.slice(0,50)+'…':'—',hint:llmUsed?'LLM 生成':'抽取式',show:!!summaryText,
                       detail:()=>(<div className="text-[10px] text-slate-700 leading-relaxed">{summaryText.length>200?<SummaryExpand text={summaryText}/>:summaryText}</div>)},
                     {k:'sections',icon:'📑',label:'章节',value:`${sections.length} 个`,hint:'正则提取',show:sections.length>0,
@@ -247,17 +248,52 @@ export default function DocTracePage() {
               </div>);
             }
 
+            if(type==="llm_call"){
+              return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4 mb-2"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="text-xs text-slate-400">{spans.length} 次真实 Provider 调用</span></div><div className="ml-9 space-y-1">{spans.map((span,index)=>{const metrics=span.metrics||{};const providerMs=typeof metrics.provider_duration_ms==="number"?metrics.provider_duration_ms:span.duration_ms;const promptTokens=typeof metrics.prompt_tokens==="number"?metrics.prompt_tokens:0;const completionTokens=typeof metrics.completion_tokens==="number"?metrics.completion_tokens:0;return(<div key={span.id||index} className="flex items-center gap-3 text-[10px] text-slate-500"><span className="truncate flex-1">{span.name}</span><span className="font-mono shrink-0">Provider {providerMs}ms</span><span className="font-mono shrink-0">{promptTokens.toLocaleString()} 入 / {completionTokens.toLocaleString()} 出</span><span className="shrink-0">{String(metrics.model||"模型未回报")}</span></div>);})}</div></div>);
+            }
+
             // embedding
             if(type==="embedding"){const s=spans[0];const attempted=s.metrics?.attempted as number||0;const succeeded=s.metrics?.succeeded as number||0;const failed=s.metrics?.failed as number||0;const embModel=(overview.models||[]).find(m=>m.component==='embedding')?.model||trace?.tags?.embedding_model||"";return(<div key={type} className={`px-5 py-4 ${hasError?"bg-red-50/30":""}`}><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span><span className="text-xs text-slate-400">成功 <span className="font-mono text-green-600">{succeeded}</span>{failed>0&&<span className="ml-1">失败 <span className="font-mono text-red-500">{failed}</span></span>}<span className="ml-1">/ 共 <span className="font-mono text-slate-500">{attempted}</span></span></span>{embModel&&<span className="ml-auto text-[10px] text-slate-300 shrink-0">模型: {embModel}</span>}</div></div>);}
 
             // dedup
             if(type==="dedup"){const s=spans[0];const cached=s.metrics?.cached as boolean|undefined;const existingDocId=s.metrics?.existing_doc_id as string||"";return(<div key={type} className="px-5 py-4"><div className="flex items-center gap-4"><span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-sm font-medium text-slate-700 shrink-0">{info.label}</span><span className="font-mono text-xs text-slate-500 w-16 text-right shrink-0">{totalMs}ms</span>{cached?<span className="text-xs text-amber-600">⚡ 命中缓存 → doc {existingDocId}</span>:<span className="text-xs text-slate-400">未命中缓存 → 进入完整索引流程</span>}</div></div>);}
 
-            return (<div key={type} className={`flex items-center gap-4 px-5 py-2.5 text-sm ${isMulti?"cursor-pointer hover:bg-slate-50":""}`} onClick={()=>isMulti&&toggleTypeExpand(type)}>
-              <span className="text-xs w-5 shrink-0">{statusIcon}</span><span className="w-24 text-slate-500 shrink-0">{info.label}</span><span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError?"text-red-500":"text-slate-400"}`}>{totalMs}ms</span>
-              <span className="text-xs text-slate-300 flex-1 truncate">{isMulti&&<span className="mr-1">×{spans.length}</span>}{summary}</span>
-              {isMulti&&<span className="text-[10px] text-slate-300">{expanded?"▲":"▼"}</span>}
-            </div>);
+            const groupId = `pipeline-span-group-${encodeURIComponent(type)}`;
+            return (
+              <div key={type} className="px-5 py-2.5">
+                <button
+                  type="button"
+                  disabled={!isMulti}
+                  aria-expanded={isMulti ? expanded : undefined}
+                  aria-controls={isMulti ? groupId : undefined}
+                  onClick={() => isMulti && toggleTypeExpand(type)}
+                  className={`flex w-full items-center gap-4 text-left text-sm ${isMulti ? "cursor-pointer rounded-md hover:bg-slate-50" : "cursor-default"}`}
+                >
+                  <span className="text-xs w-5 shrink-0">{statusIcon}</span>
+                  <span className="w-24 text-slate-500 shrink-0">{info.label}</span>
+                  <span className={`font-mono text-xs w-16 text-right shrink-0 ${hasError ? "text-red-500" : "text-slate-400"}`}>{totalMs}ms</span>
+                  <span className="text-xs text-slate-300 flex-1 truncate">{isMulti && <span className="mr-1">×{spans.length}</span>}{summary}</span>
+                  {isMulti && <span className="text-[10px] text-slate-300">{expanded ? "▲ 收起" : "▼ 展开"}</span>}
+                </button>
+                {isMulti && expanded && (
+                  <div id={groupId} className="ml-9 mt-2 space-y-2" role="region" aria-label={`${info.label} Span 明细`}>
+                    {spans.map((span, index) => {
+                      const spanSummary = summaryMetrics([span]);
+                      return (
+                        <div key={span.id || `${type}-${index}`} className="rounded-md border border-slate-100 bg-slate-50 px-3 py-2">
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            <span className="text-xs font-medium text-slate-700">{span.name || info.label} <span className="text-slate-400">#{index + 1}</span></span>
+                            <span className="font-mono text-[10px] text-slate-500">{span.duration_ms}ms</span>
+                            <span className="font-mono text-[9px] text-slate-400">{span.id}</span>
+                          </div>
+                          {spanSummary && <p className="mt-1 break-words text-[10px] text-slate-500">{spanSummary}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
           })}
           {childSpans.length===0&&<div className="px-5 py-8 text-center text-xs text-slate-400">无 Span 数据</div>}
         </div>
@@ -267,8 +303,8 @@ export default function DocTracePage() {
       {warnings.length>0&&(<div className="bg-amber-50 border border-amber-200 rounded-xl p-5"><h2 className="text-xs font-medium text-amber-700 uppercase tracking-wider mb-2">⚠ 警告</h2><ul className="space-y-1">{warnings.map((w,i)=>(<li key={i} className="text-xs text-amber-800 flex items-start gap-2"><span className="shrink-0 mt-0.5">⚠</span><span>{w}</span></li>))}</ul></div>)}
 
       {/* Chunk 详情侧边面板 */}
-      {chunkPanelOpen&&(<div className="fixed inset-0 z-50 flex justify-end"><div className="absolute inset-0 bg-black/20" onClick={()=>setChunkPanelOpen(false)}/><div className="relative w-[520px] bg-white shadow-xl border-l border-slate-200 flex flex-col h-full"><div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0"><div><h3 className="text-sm font-semibold text-slate-800">📋 Chunk 完整内容</h3><p className="text-[10px] text-slate-400 mt-0.5">文档 {docId}</p></div><button onClick={()=>setChunkPanelOpen(false)} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={16}/></button></div><div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">{chunkDetailLoading&&<div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-accent"/><span className="ml-2 text-sm text-slate-400">加载中...</span></div>}{chunkDetailError&&<div className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{chunkDetailError}</div>}{!chunkDetailLoading&&!chunkDetailError&&chunkDetailData.length===0&&<p className="text-sm text-slate-400 text-center py-8">暂无 Chunk 数据</p>}{!chunkDetailLoading&&chunkDetailData.map((ch,i)=>{const ruleKws=ch.keywords?ch.keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const llmKws=ch.llm_keywords?ch.llm_keywords.split(',').map(k=>k.trim()).filter(Boolean):[];return(<div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-100"><div className="flex items-center justify-between mb-2"><span className="text-[10px] font-semibold text-slate-500">Chunk #{ch.chunk_index}</span><div className="flex items-center gap-2 text-[10px] text-slate-400"><span>{ch.char_count.toLocaleString()} tokens</span></div></div><div className="space-y-1 mb-2">{ch.section_title&&<div className="flex items-center gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0">📑 章节</span><span className="text-slate-600">{ch.section_title}</span></div>}{ruleKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0 mt-0.5">📋 规则</span><div className="flex flex-wrap gap-0.5">{ruleKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">{kw}</span>)}</div></div>}{llmKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-violet-400 shrink-0 mt-0.5">🔮 LLM</span><div className="flex flex-wrap gap-0.5">{llmKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-violet-50 text-violet-600 ring-1 ring-violet-200">{kw}</span>)}</div>{ch.llm_model&&<span className="text-[9px] text-slate-300 ml-auto shrink-0">{ch.llm_model}</span>}</div>}
-{ch.simulated_questions&&ch.simulated_questions.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-amber-500 shrink-0 mt-0.5">❓ FAQ</span><div className="flex flex-col gap-0.5">{ch.simulated_questions.map((q,j)=><span key={j} className="text-slate-600 leading-relaxed">• {q}</span>)}</div></div>}</div><p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words border-t border-slate-200 pt-2">{ch.content}</p></div>);})}</div><div className="px-5 py-2.5 border-t border-slate-100 text-[10px] text-slate-400 shrink-0">共 {chunkDetailData.length} 个 Chunk</div></div></div>)}
+      {chunkPanelOpen&&(<div className="fixed inset-0 z-50 flex justify-end"><div className="absolute inset-0 bg-black/20" onClick={()=>setChunkPanelOpen(false)}/><div className="relative w-[520px] bg-white shadow-xl border-l border-slate-200 flex flex-col h-full"><div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-100 shrink-0"><div><h3 className="text-sm font-semibold text-slate-800">📋 Chunk 完整内容</h3><p className="text-[10px] text-slate-400 mt-0.5">文档 {docId}</p></div><button onClick={()=>setChunkPanelOpen(false)} className="p-1 rounded-md hover:bg-slate-100 text-slate-400"><X size={16}/></button></div><div className="flex-1 overflow-y-auto px-5 py-3 space-y-3">{chunkDetailLoading&&<div className="flex items-center justify-center py-12"><Loader2 size={20} className="animate-spin text-accent"/><span className="ml-2 text-sm text-slate-400">加载中...</span></div>}{chunkDetailError&&<div className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{chunkDetailError}</div>}{!chunkDetailLoading&&!chunkDetailError&&chunkDetailData.length===0&&<p className="text-sm text-slate-400 text-center py-8">暂无 Chunk 数据</p>}{!chunkDetailLoading&&chunkDetailData.map((ch,i)=>{const ruleKws=ch.keywords?ch.keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const llmKws=ch.llm_keywords?ch.llm_keywords.split(',').map(k=>k.trim()).filter(Boolean):[];const heading=getChunkHeading(ch);return(<div key={i} className="bg-slate-50 rounded-lg p-3 border border-slate-100"><div className="flex items-center justify-between mb-2"><span className="text-[10px] font-semibold text-slate-500">Chunk #{ch.chunk_index}</span><div className="flex items-center gap-2 text-[10px] text-slate-400"><span>{ch.char_count.toLocaleString()} tokens</span></div></div><div className="space-y-1 mb-2">{heading&&<div className="flex items-center gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0">{heading.label}</span>{heading.title&&<span className="text-slate-600">{heading.title}</span>}</div>}{ruleKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-slate-400 shrink-0 mt-0.5">📋 规则</span><div className="flex flex-wrap gap-0.5">{ruleKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-slate-100 text-slate-600 ring-1 ring-slate-200">{kw}</span>)}</div></div>}{llmKws.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-violet-400 shrink-0 mt-0.5">🔮 LLM</span><div className="flex flex-wrap gap-0.5">{llmKws.map((kw,j)=><span key={j} className="inline-block px-1.5 py-0.5 rounded text-[9px] bg-violet-50 text-violet-600 ring-1 ring-violet-200">{kw}</span>)}</div>{ch.llm_model&&<span className="text-[9px] text-slate-300 ml-auto shrink-0">{ch.llm_model}</span>}</div>}
+{ch.simulated_questions&&ch.simulated_questions.length>0&&<div className="flex items-start gap-1.5 text-[10px]"><span className="text-amber-500 shrink-0 mt-0.5">{SIMULATED_QUESTIONS_LABEL}</span><div className="flex flex-col gap-0.5">{ch.simulated_questions.map((q,j)=><span key={j} className="text-slate-600 leading-relaxed">• {q}</span>)}</div></div>}</div><p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words border-t border-slate-200 pt-2">{ch.content}</p></div>);})}</div><div className="px-5 py-2.5 border-t border-slate-100 text-[10px] text-slate-400 shrink-0">共 {chunkDetailData.length} 个 Chunk</div></div></div>)}
     </div></div>
   );
 }

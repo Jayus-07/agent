@@ -15,7 +15,7 @@ def _stage() -> MetadataStage:
     return MetadataStage(registry, embedding=None, department="general")
 
 
-def _patch_rules(monkeypatch) -> None:
+def _patch_rules(monkeypatch, *, doc_type: str = "policy") -> None:
     import backend.config.rag as rag_config
     import backend.rag.preprocessing.entity as entity_module
     import backend.rag.preprocessing.keyword as keyword_module
@@ -24,14 +24,13 @@ def _patch_rules(monkeypatch) -> None:
     monkeypatch.setattr(rag_config, "ENABLE_LLM_METADATA_EXTRACT", True)
     monkeypatch.setattr(
         metadata_module, "classify_with_confidence",
-        lambda *args, **kwargs: ("policy", 0.91, {"scores": {"policy": 9}}),
+        lambda *args, **kwargs: (doc_type, 0.91, {"scores": {doc_type: 9}}),
     )
     monkeypatch.setattr(
         metadata_module, "detect_business_domain",
         lambda *args, **kwargs: ("hr", [], {"scores": {"hr": 4}}),
     )
     monkeypatch.setattr(metadata_module, "extract_time_refs", lambda _text: [])
-    monkeypatch.setattr(metadata_module, "analyze_complexity", lambda *args: {})
     monkeypatch.setattr(entity_module, "extract_entities", lambda _text: {})
     monkeypatch.setattr(keyword_module, "extract_rule_keywords", lambda *args, **kwargs: [])
 
@@ -49,7 +48,7 @@ def test_rule_classification_wins_over_conflicting_llm_fields(monkeypatch):
             "keywords": ["员工", "SKU-900", "申请"],
             "entities": {},
             "llm_tokens": {"prompt_tokens": 12, "completion_tokens": 8},
-            "provider_call": True,
+            "provider_called": True,
             "actual_model": "mock-model",
         }
 
@@ -65,7 +64,7 @@ def test_rule_classification_wins_over_conflicting_llm_fields(monkeypatch):
 
 
 def test_faq_skips_metadata_and_simulated_question_provider_calls(monkeypatch):
-    _patch_rules(monkeypatch)
+    _patch_rules(monkeypatch, doc_type="faq")
     import backend.config.rag as rag_config
     import backend.rag.preprocessing.metadata_llm as metadata_llm
     import backend.rag.preprocessing.question_gen as question_gen
@@ -85,7 +84,7 @@ def test_faq_skips_metadata_and_simulated_question_provider_calls(monkeypatch):
         text, {"doc_id": "faq-1"}, chunks_text=["Q: 年假如何申请？\nA: 在系统提交。"],
     ))
 
-    assert result["doc_type"] == "policy"
+    assert result["doc_type"] == "faq"
     assert result["llm_used"] is False
     assert result["llm_tokens"] == {}
     assert result["questions_by_chunk"] == []
@@ -108,6 +107,83 @@ def test_metadata_failure_uses_extractive_summary_without_second_llm_call(monkey
     assert len(calls) == 1
     assert result["llm_used"] is False
     assert result["summary"].startswith("第一句说明 SKU-42")
+
+
+def test_failed_metadata_call_usage_is_kept_in_processing_lineage(monkeypatch):
+    _patch_rules(monkeypatch)
+    import backend.rag.preprocessing.metadata_llm as metadata_llm
+    from backend.rag.indexing.processing_lineage import ProcessingRunContext
+    from backend.rag.indexing.processing_lineage_recorder import ProcessingRunRecorder
+
+    async def _invalid_output(*args, **kwargs):
+        metadata_llm._set_last_metadata_call_meta(
+            provider_call_attempted=True,
+            provider_called=True,
+            provider_duration_ms=37,
+            llm_tokens={"prompt_tokens": 19, "completion_tokens": 6},
+            llm_usage_status="reported",
+            actual_model="mock-model",
+            prompt_version="v2",
+            prompt_source="db",
+            prompt_hash="abc123",
+            fallback_reason="invalid_output",
+        )
+        return None
+
+    monkeypatch.setattr(metadata_llm, "extract_metadata_llm_async", _invalid_output)
+    context = ProcessingRunContext.create("doc-lineage", "hash-lineage", "upload")
+    recorder = ProcessingRunRecorder(context)
+    text = "这份长文档触发元数据抽取。\n" * 180
+
+    asyncio.run(_stage().build(
+        text,
+        {"doc_id": "doc-lineage", "source_file": "policy.md"},
+        processing_recorder=recorder,
+    ))
+
+    step = next(item for item in context.snapshot().steps if item.stage == "metadata_extract")
+    assert step.status == "fallback"
+    assert step.fallback_reason == "invalid_output"
+    assert step.prompt_tokens == 19
+    assert step.completion_tokens == 6
+    assert step.model_name == "mock-model"
+    assert step.prompt_version == "v2"
+    assert step.metadata["provider_call"] is True
+    assert step.metadata["provider_call_attempted"] is True
+    assert step.metadata["provider_duration_ms"] == 37
+
+
+def test_question_generation_provider_call_counts_as_llm_use(monkeypatch):
+    _patch_rules(monkeypatch)
+    import backend.config.rag as rag_config
+    import backend.rag.preprocessing.question_gen as question_gen
+
+    monkeypatch.setattr(rag_config, "ENABLE_LLM_METADATA_EXTRACT", False)
+    monkeypatch.setattr(rag_config, "ENABLE_SIMULATED_QUESTIONS", True)
+    monkeypatch.setattr(
+        question_gen,
+        "generate_chunk_questions",
+        lambda chunks, doc_type: ([[] for _ in chunks], {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+        }),
+    )
+    monkeypatch.setattr(
+        question_gen,
+        "get_last_generation_meta",
+        lambda: {"status": "success", "provider_call": True},
+    )
+
+    result = asyncio.run(_stage().build(
+        "短文档中有一个可检索的规定。",
+        {"doc_id": "question-gen-only"},
+        chunks_text=["短文档中有一个可检索的规定。"],
+    ))
+
+    assert result["llm_used"] is True
+    assert result["llm_strategy"] == "question_gen"
+    assert result["llm_tokens"]["prompt_tokens"] == 11
+    assert result["llm_tokens"]["completion_tokens"] == 5
 
 
 def test_exact_entity_filter_rejects_topic_words_and_unsupported_candidates():

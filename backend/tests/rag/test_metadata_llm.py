@@ -14,10 +14,24 @@ import pytest
 from backend.rag.preprocessing.metadata_llm import (
     MetadataExtractError,
     extract_metadata_llm_async,
+    get_last_metadata_call_meta,
     parse_extract_response,
 )
 
 VALID_TYPES = {"policy", "sop", "financial", "faq", "general"}
+
+
+@pytest.mark.parametrize("doc_type", ["faq", "legal", "contract_template"])
+def test_document_summary_policy_skips_structured_documents(doc_type):
+    from backend.rag.indexing.stages.metadata_stage import _skip_document_summary
+
+    assert _skip_document_summary(doc_type) is True
+
+
+def test_document_summary_policy_keeps_general_summary():
+    from backend.rag.indexing.stages.metadata_stage import _skip_document_summary
+
+    assert _skip_document_summary("policy") is False
 
 
 GOOD = {
@@ -95,14 +109,17 @@ def _patch_prompt(monkeypatch):
 @pytest.mark.asyncio
 async def test_extract_success(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
-    received = {}
+    from backend.config.rag import METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS
 
-    def _invoke(prompt, **kwargs):
-        received.update(kwargs)
+    captured = {}
+
+    def _fake_invoke(prompt, **kwargs):
+        captured.update(kwargs)
         return _FakeResp(json.dumps(GOOD, ensure_ascii=False))
 
     monkeypatch.setattr(
-        m, "invoke_metadata_llm", _invoke, raising=False)
+        m, "invoke_metadata_llm", _fake_invoke,
+        raising=False)
 
     # async_safe_call_with_timeout(fn, timeout, None, msg, prompt) → 透传 fn(prompt)
     async def _passthrough(fn, *args, **kwargs):
@@ -113,8 +130,34 @@ async def test_extract_success(_patch_prompt, monkeypatch):
     assert r is not None
     assert r["doc_type"] == "financial"
     assert r["llm_tokens"]["prompt_tokens"] == 10
-    from backend.config.rag import METADATA_LLM_OUTPUT_TOKENS
-    assert received["max_tokens"] == METADATA_LLM_OUTPUT_TOKENS
+    assert r["provider_called"] is True
+    assert r["provider_duration_ms"] >= 0
+    assert captured["max_tokens"] == METADATA_LLM_EXTRACT_MAX_OUTPUT_TOKENS
+
+
+@pytest.mark.asyncio
+async def test_extract_faq_without_summary(_patch_prompt, monkeypatch):
+    import backend.rag.preprocessing.metadata_llm as m
+
+    captured = {}
+
+    def _fake_invoke(prompt, **kwargs):
+        captured["prompt"] = prompt
+        return _FakeResp(json.dumps(GOOD, ensure_ascii=False))
+
+    async def _passthrough(fn, *args, **kwargs):
+        return fn(*args[3:], **kwargs)
+
+    monkeypatch.setattr(m, "invoke_metadata_llm", _fake_invoke, raising=False)
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough, raising=False)
+
+    result = await extract_metadata_llm_async(
+        "问答内容", "faq.md", include_summary=False,
+    )
+
+    assert result is not None
+    assert result["summary"] == ""
+    assert "summary 字段必须返回空字符串" in captured["prompt"]
 
 
 @pytest.mark.asyncio
@@ -162,71 +205,58 @@ async def test_extract_llm_failure_returns_none(_patch_prompt, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_extract_provider_timeout_result_returns_none(_patch_prompt, monkeypatch):
+async def test_extract_timeout_and_empty_output_return_none(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
 
-    async def _timeout_result(fn, *args, **kwargs):
+    async def _timeout(fn, *args, **kwargs):
         return None
 
-    monkeypatch.setattr(m, "async_safe_call_with_timeout", _timeout_result)
-    result = await extract_metadata_llm_async("文本", "timeout.md")
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _timeout, raising=False)
+    assert await extract_metadata_llm_async("文档内容", "timeout.md") is None
+    timeout_meta = get_last_metadata_call_meta()
+    assert timeout_meta["provider_call_attempted"] is True
+    assert timeout_meta["provider_called"] is False
+    assert timeout_meta["fallback_reason"] == "provider_timeout"
 
-    assert result is None
+    async def _empty(fn, *args, **kwargs):
+        class EmptyResponse:
+            content = ""
+            usage_metadata = {}
+        return EmptyResponse()
+
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _empty, raising=False)
+    assert await extract_metadata_llm_async("文档内容", "empty.md") is None
+    invalid_meta = get_last_metadata_call_meta()
+    assert invalid_meta["provider_call_attempted"] is True
+    assert invalid_meta["provider_called"] is True
+    assert invalid_meta["fallback_reason"] == "invalid_output"
 
 
 @pytest.mark.asyncio
-async def test_extract_empty_provider_output_returns_none(_patch_prompt, monkeypatch):
+async def test_invalid_json_preserves_provider_usage(_patch_prompt, monkeypatch):
     import backend.rag.preprocessing.metadata_llm as m
 
-    monkeypatch.setattr(
-        m, "invoke_metadata_llm",
-        lambda prompt, **kwargs: _FakeResp(""), raising=False,
+    response = _FakeResp(
+        "这不是 JSON",
+        {"prompt_tokens": 21, "completion_tokens": 7, "total_tokens": 28},
     )
+    monkeypatch.setattr(m, "invoke_metadata_llm", lambda prompt, **kwargs: response)
 
     async def _passthrough(fn, *args, **kwargs):
         return fn(*args[3:], **kwargs)
 
-    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough)
-    result = await extract_metadata_llm_async("文本", "empty.md")
+    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough, raising=False)
 
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_semaphore_wait_timeout_still_runs_provider_and_closes_slot_safely(
-    _patch_prompt, monkeypatch,
-):
-    import asyncio
-    import backend.rag.preprocessing.metadata_llm as m
-
-    class _SlowSemaphore:
-        released = 0
-
-        async def acquire(self):
-            await asyncio.sleep(0.05)
-
-        def release(self):
-            self.released += 1
-
-    semaphore = _SlowSemaphore()
-    received = []
-    monkeypatch.setattr(m, "_get_loop_llm_semaphore", lambda: semaphore)
-    monkeypatch.setattr(m, "METADATA_LLM_SEMAPHORE_WAIT_TIMEOUT", 0.001)
-    monkeypatch.setattr(
-        m, "invoke_metadata_llm",
-        lambda prompt, **kwargs: (
-            received.append(kwargs) or _FakeResp(json.dumps(GOOD, ensure_ascii=False))
-        ),
-    )
-
-    async def _passthrough(fn, *args, **kwargs):
-        return fn(*args[3:], **kwargs)
-
-    monkeypatch.setattr(m, "async_safe_call_with_timeout", _passthrough)
-    result = await extract_metadata_llm_async("文本", "slot-timeout.md")
-
-    assert result is not None
-    assert received and semaphore.released == 0
+    assert await extract_metadata_llm_async("文档内容", "invalid.json") is None
+    call_meta = get_last_metadata_call_meta()
+    assert call_meta["provider_call_attempted"] is True
+    assert call_meta["provider_called"] is True
+    assert call_meta["llm_tokens"] == {
+        "prompt_tokens": 21,
+        "completion_tokens": 7,
+        "total_tokens": 28,
+    }
+    assert call_meta["fallback_reason"] == "invalid_output"
 
 
 @pytest.mark.asyncio

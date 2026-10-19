@@ -69,6 +69,8 @@ def build_profile(ast: DocumentAST) -> StructureProfile:
                 profile.section_count += 1
                 if _STEP_HEADING_RE.match((n.text or "").strip()):
                     profile.step_heading_count += 1
+                if _LEGAL_CLAUSE_RE.match((n.text or "").strip()):
+                    profile.legal_clause_count += 1
         elif n.type == "table":
             profile.table_count += 1
         elif n.type == "qa_question":

@@ -61,6 +61,37 @@ _DOC_LEVEL_BODY_MIN_CHARS = 2000
 _EVAL_FIXTURE_SETS = frozenset({"baseline", "expanded_100", "scale_20k"})
 
 
+def _select_vector_chunks(chunks: list[Document]) -> list[Document]:
+    """过滤只用于上下文恢复、不应独立向量化的 Parent。"""
+    return [chunk for chunk in chunks if chunk.metadata.get("vectorize") is not False]
+
+
+def _question_candidate_indexes(chunks: list[Document]) -> list[int]:
+    """合同模拟问题只选择较长 Leaf；Parent 与短条款不产生重复问题。"""
+    is_contract = any(
+        (chunk.metadata or {}).get("chunk_type") == "contract_context"
+        for chunk in chunks
+    )
+    if not is_contract:
+        return list(range(len(chunks)))
+
+    minimum_tokens = 80
+    candidates = []
+    for index, chunk in enumerate(chunks):
+        metadata = chunk.metadata or {}
+        try:
+            token_count = int(metadata.get("chunk_tokens") or 0)
+        except (TypeError, ValueError):
+            token_count = 0
+        if (
+            metadata.get("granularity") == "leaf"
+            and metadata.get("vectorize") is not False
+            and token_count >= minimum_tokens
+        ):
+            candidates.append(index)
+    return candidates
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -115,6 +146,14 @@ def _build_doc_level_text(full_text: str, doc_meta: dict) -> str:
         return full_text[:DOC_LEVEL_TEXT_MAX_CHARS]
     body_budget = max(DOC_LEVEL_TEXT_MAX_CHARS - len(header), _DOC_LEVEL_BODY_MIN_CHARS)
     return header + "\n\n" + full_text[:body_budget]
+
+
+def _serialize_registry_keywords(doc_meta: dict) -> str:
+    """把统一元数据关键词写回历史 registry 字段，优先新字段并兼容旧名。"""
+    values = doc_meta.get("doc_keywords")
+    if values is None:
+        values = doc_meta.get("keywords") or []
+    return json.dumps(values, ensure_ascii=False)
 
 
 def _mask_index_text_for_pii(text: str, doc_type: str, chunk_filter) -> str:
@@ -272,6 +311,48 @@ def _filter_index_chunks(
 
     kept_chunks = []
     filtered_details: list[dict] = []
+
+    def _mask_structured_table_metadata(chunk, metadata: dict) -> None:
+        """Parent/Leaf 的表格结构与正文一起脱敏，保留 JSON 矩阵形状。"""
+        fields = ("table_rows_json", "table_structures_json")
+        if not any(metadata.get(key) for key in fields):
+            return
+
+        should_mask = (
+            chunk_filter.enable_pii or chunk_filter.financial_pii_force
+        )
+        if not should_mask:
+            return
+
+        masked_types: list[str] = []
+        masked_content, content_types = _mask_pii(chunk.page_content)
+        if chunk_filter.financial_pii_force:
+            masked_content, financial_types = _mask_financial_pii(masked_content)
+            content_types.extend(financial_types)
+        if content_types:
+            chunk.page_content = masked_content
+            masked_types.extend(content_types)
+
+        for key in fields:
+            value = metadata.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            masked_value, found_types = _mask_pii(value)
+            if chunk_filter.financial_pii_force:
+                masked_value, financial_types = _mask_financial_pii(masked_value)
+                found_types.extend(financial_types)
+            if found_types:
+                metadata[key] = masked_value
+                masked_types.extend(found_types)
+
+        if masked_types:
+            existing = metadata.get("pii_masked") or []
+            if isinstance(existing, str):
+                existing = [existing]
+            metadata["pii_masked"] = list(dict.fromkeys(
+                [*existing, *masked_types],
+            ))
+
     for chunk in chunks:
         metadata = chunk.metadata or {}
         if doc_type:
@@ -328,6 +409,7 @@ def _filter_index_chunks(
                 chunk.page_content = ChunkFilter.apply_pii_mask(
                     chunk.page_content
                 )
+            _mask_structured_table_metadata(chunk, metadata)
             kept_chunks.append(chunk)
             continue
 
@@ -516,11 +598,12 @@ def _enforce_prepaid_content_integrity(
         doc_meta, f"{PREPAID_INTEGRITY_ISSUE_PREFIX}({detail},付费前拦截)"
     )
     quality_score = None
+    quality_metrics = {}
     try:
         from backend.rag.preprocessing.quality_gate import (
             build_quality_record,
-            compute_quality_score,
             persist_quality_record,
+            quality_score_metrics,
             run_typed_validation,
         )
 
@@ -542,7 +625,8 @@ def _enforce_prepaid_content_integrity(
             )
         if not anomalies:
             anomalies = run_typed_validation(record, raw_ast)
-        quality_score = compute_quality_score(anomalies)
+        quality_metrics = quality_score_metrics(anomalies)
+        quality_score = quality_metrics["quality_score"]
         doc_meta["quality_score"] = quality_score
         record["quality_issues"] = doc_meta.get("quality_issues", "")
         record.setdefault("validation", {})["score"] = quality_score
@@ -568,13 +652,10 @@ def _enforce_prepaid_content_integrity(
                 "chunk_integrity": chunk_integrity,
             },
         )
-        _hard_prepaid = [a for a in anomalies if a.get("severity") == "error"]
         trace_collector.end_span(
             q_span, status="error",
             metrics={
-                "anomalies_total": len(anomalies),
-                "anomalies_hard": len(_hard_prepaid),
-                "anomalies_warn": len(anomalies) - len(_hard_prepaid),
+                **quality_metrics,
                 "record_path": doc_meta.get("quality_record_path", ""),
                 **coverage_metrics,
                 **chunk_integrity,
@@ -1369,17 +1450,17 @@ class IncrementalIndexer:
                 if isinstance(_p, int) and _p > 0:
                     _parse_pages = max(_parse_pages, _p)
             _pages_applicable = ext.lower() == ".pdf"
-            trace_collector.end_span(parse_span,
-                metrics={"doc_count": len(chunks),
-                         "page_count": _parse_pages if _pages_applicable else 0,
-                         "page_count_applicable": _pages_applicable,
-                         "chunk_count": len(chunks),
-                         "internal_timings_ms": _qc.get("timings_ms", {}),
-                         "timing_boundary": (
-                             "parse_and_chunk_full internal stages; parser_ms includes "
-                             "decode/extract and any OCR"
-                         ),
-                         "loader": "pipeline", "ext": ext})
+            parse_metrics = {
+                "doc_count": len(chunks),
+                "page_count": _parse_pages if _pages_applicable else 0,
+                "page_count_applicable": _pages_applicable,
+                "chunk_count": len(chunks),
+                "loader": "pipeline", "ext": ext,
+            }
+            for stage_name, duration_ms in (_qc.get("stage_ms") or {}).items():
+                if isinstance(duration_ms, (int, float)):
+                    parse_metrics[f"internal_{stage_name}"] = duration_ms
+            trace_collector.end_span(parse_span, metrics=parse_metrics)
         except Exception as e:
             # P1-4:ChunkingEmptyError 是业务失败信号,直接透传给调用方做差异化处理,
             # 不被包装成 RuntimeError(避免 observability 误捕 + 丢失语义)
@@ -1541,7 +1622,7 @@ class IncrementalIndexer:
             "index_metadata",
             parent_id="index_upload",
             name="Build metadata",
-            type="metadata_stage",
+            type="llm",
             kind=SpanKind.INDEX_METADATA.value,
         )
         # P1 元数据治理（2026-10-13）：文档全文 = 纯 leaf 拼接。
@@ -1597,9 +1678,13 @@ class IncrementalIndexer:
                 metadata={"chunk_count": len(chunks)},
             )
         try:
+            question_chunk_indexes = _question_candidate_indexes(chunks)
             metadata_kwargs = {
                 "parent_span_id": meta_span.span_id,
-                "chunks_text": [ch.page_content for ch in chunks],
+                "chunks_text": [
+                    chunks[index].page_content
+                    for index in question_chunk_indexes
+                ],
             }
             if lineage_recorder is not None:
                 # 允许存量插件/测试替身继续使用旧签名；仓库内实现支持该参数
@@ -1739,14 +1824,15 @@ class IncrementalIndexer:
                 },
             )
             _hard = []
+            _quality_metrics = {}
             _quality_record_saved = False
             try:
                 from backend.rag.preprocessing.quality_gate import (
                     anomaly_summary,
                     build_quality_record,
-                    compute_quality_score,
                     hard_anomalies,
                     persist_quality_record,
+                    quality_score_metrics,
                     run_typed_validation,
                 )
                 _record = build_quality_record(
@@ -1772,7 +1858,8 @@ class IncrementalIndexer:
                 _record["quality_issues"] = doc_meta.get("quality_issues", "")
                 # TD-09：质量分落 doc_meta（→ registry quality_score 列），
                 # 替代此前恒 0 的默认值；评分同步写进质量记录便于审计
-                doc_meta["quality_score"] = compute_quality_score(_anomalies)
+                _quality_metrics = quality_score_metrics(_anomalies)
+                doc_meta["quality_score"] = _quality_metrics["quality_score"]
                 _record.setdefault("validation", {})["score"] = doc_meta["quality_score"]
                 _qpath = persist_quality_record(_record)
                 _quality_record_saved = True
@@ -1798,12 +1885,7 @@ class IncrementalIndexer:
                     "soft_warning" if _anomalies else "pass"
                 )
                 trace_collector.end_span(q_span,
-                    metrics={"anomalies_total": len(_anomalies),
-                             "anomalies_hard": len(_hard),
-                             "anomalies_warn": len(_anomalies) - len(_hard),
-                             "quality_score": doc_meta.get("quality_score"),
-                             "score": doc_meta.get("quality_score"),
-                             "quality_status": doc_meta.get("quality_status"),
+                    metrics={**_quality_metrics,
                              "record_path": _qpath,
                              **_coverage_metrics,
                              **_chunk_integrity})
@@ -1816,9 +1898,7 @@ class IncrementalIndexer:
             except ValueError:
                 trace_collector.end_span(q_span, status="error",
                     metrics={"error": "quality_gate_hard_anomaly",
-                             "quality_score": doc_meta.get("quality_score"),
-                             "score": doc_meta.get("quality_score"),
-                             "quality_status": doc_meta.get("quality_status"),
+                             **_quality_metrics,
                              **_coverage_metrics,
                              **_chunk_integrity})
                 if (
@@ -1851,10 +1931,7 @@ class IncrementalIndexer:
                 raise
             except Exception as e:
                 trace_collector.end_span(q_span, status="error",
-                    metrics={"error": str(e)[:200],
-                             "quality_score": doc_meta.get("quality_score"),
-                             "score": doc_meta.get("quality_score"),
-                             "quality_status": doc_meta.get("quality_status"),
+                    metrics={"error": str(e)[:200], **_quality_metrics,
                              **_coverage_metrics,
                              **_chunk_integrity})
                 if _quality_requires_failure:
@@ -1929,7 +2006,12 @@ class IncrementalIndexer:
         domain_val = doc_meta.get("business_domain", "") or "general"
 
         # 模拟问题（从 doc_meta 拿；metadata 构建阶段已写入 questions_by_chunk）
-        questions_by_chunk = doc_meta.get("questions_by_chunk", []) or []
+        generated_questions = doc_meta.get("questions_by_chunk", []) or []
+        questions_by_chunk_index = {
+            chunk_index: generated_questions[position]
+            for position, chunk_index in enumerate(question_chunk_indexes)
+            if position < len(generated_questions)
+        }
 
         # ── 4.3c: 表格行描述（kv 数据行 → 一句话语义，供 embedding 前缀）──
         table_row_indexes = [
@@ -2062,7 +2144,7 @@ class IncrementalIndexer:
             # chunk_id 已在上方统一覆盖并同步 parent_chunk_id（P0-03），此处不再重复
             ch.metadata["chunk_keywords"] = ""  # P0-2 去词表化：停发（原规则提取已删）
             # 模拟问题（按 chunk 索引对齐；空列表不写入 metadata，避免 ChromaDB 非空列表校验报错）
-            _sq = questions_by_chunk[i] if i < len(questions_by_chunk) else []
+            _sq = questions_by_chunk_index.get(i, [])
             if _sq:
                 ch.metadata["simulated_questions"] = _sq
 
@@ -2107,7 +2189,11 @@ class IncrementalIndexer:
             cs = self._cs()
             cs.delete_by_doc_id(doc_id)  # reindex 时先清旧数据
             cs.insert_batch(doc_id, [
-                {"chunk_index": i, "content": ch.page_content,
+                {"chunk_index": i, "chunk_id": ch.metadata.get("chunk_id", ""),
+                 "granularity": ch.metadata.get("granularity", ""),
+                 "parent_chunk_id": ch.metadata.get("parent_chunk_id", ""),
+                 "chunk_metadata": dict(ch.metadata),
+                 "content": ch.page_content,
                  "keywords": ch.metadata.get("chunk_keywords", ""),
                  "llm_keywords": ch.metadata.get("chunk_llm_keywords", ""),
                  "llm_model": ch.metadata.get("chunk_llm_model", ""),
@@ -2130,8 +2216,6 @@ class IncrementalIndexer:
         kws_llm = doc_meta.get("keywords_llm", [])
         llm_tokens = doc_meta.get("llm_tokens", {})
         llm_used = doc_meta.get("llm_used", False)
-        # 展平复杂对象（ChromaDB 不支持嵌套 dict）
-        complexity_val = doc_meta.get("complexity", {})
         time_refs_val = doc_meta.get("time_refs", [])
         # 写入 doc_db 前做深拷贝并展平嵌套字段（ChromaDB 不支持 dict/list metadata）
         doc_db_meta = {}
@@ -2204,7 +2288,6 @@ class IncrementalIndexer:
                     "business_domain": doc_meta.get("business_domain", ""),
                     "domain_classify": doc_meta.get("domain_detail", {}),
                     "person_names": doc_meta.get("person_names", ""),
-                    "complexity": complexity_val,
                     "time_refs": time_refs_val,
                     "keywords_rule": kws_rule if isinstance(kws_rule, list) else [],
                     "summary": doc_meta.get("summary", ""),
@@ -2224,36 +2307,42 @@ class IncrementalIndexer:
             })
 
         # ── ⑦ embed（聚合；chunks 已带完整 metadata）──
+        vector_chunks = _select_vector_chunks(chunks)
+        non_vector_chunk_count = len(chunks) - len(vector_chunks)
         embed_span = trace_collector.start_span(
             "index_embed",
             parent_id="index_upload",
-            name=f"Embed {len(chunks)} chunks",
+            name=f"Embed {len(vector_chunks)} chunks",
             type="embedding",
             kind=SpanKind.INDEX_EMBED.value,
         )
-        embed_span.metrics["chunk_count"] = len(chunks)
+        embed_span.metrics.update({
+            "chunk_count": len(vector_chunks),
+            "context_only_chunk_count": non_vector_chunk_count,
+        })
         embedding_lineage = None
         if lineage_recorder is not None:
             embedding_lineage = lineage_recorder.begin_stage(
                 "embedding", role="embedding", engine_type="embedding",
                 model=_embedding_model_identity(self.embedding),
-                metadata={"chunk_count": len(chunks)},
+                metadata={"chunk_count": len(vector_chunks)},
             )
         # 预嵌入：除失败预检外，成功向量直接传给 vectordb.add_documents(embeddings=...)，
         # 避免 langchain 内部对同一批文本再次全量嵌入（原先向量被丢弃，成本翻倍）
         with lineage_recorder.bind_stage(embedding_lineage[0]) if lineage_recorder and embedding_lineage else nullcontext():
             precomputed_vectors = self._embed_with_retry(
-                chunks, embed_span, doc_summary=doc_meta.get("summary", "") or "")
+                vector_chunks, embed_span,
+                doc_summary=doc_meta.get("summary", "") or "")
         if embedding_lineage is not None:
             embedding_status = (
-                "success" if len(precomputed_vectors) == len(chunks) else "fallback"
+                "success" if len(precomputed_vectors) == len(vector_chunks) else "fallback"
             )
             lineage_recorder.finish_stage(
                 embedding_lineage[0], status=embedding_status,
-                started_at=embedding_lineage[1], input_count=len(chunks),
+                started_at=embedding_lineage[1], input_count=len(vector_chunks),
                 output_count=len(precomputed_vectors),
                 cache_status=(
-                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(chunks)
+                    "hit" if embed_span.metrics.get("embedding_cache_hit", 0) == len(vector_chunks)
                     else "partial" if embed_span.metrics.get("embedding_cache_hit", 0)
                     else "miss"
                 ),
@@ -2263,9 +2352,10 @@ class IncrementalIndexer:
                 ),
             )
         trace_collector.end_span(embed_span,
-            metrics={"attempted": len(chunks),
+            metrics={"attempted": len(vector_chunks),
                      "succeeded": len(precomputed_vectors),
-                     "failed": len(chunks) - len(precomputed_vectors)})
+                     "failed": len(vector_chunks) - len(precomputed_vectors),
+                     "context_only_chunks": non_vector_chunk_count})
 
         # ── ⑤ vector_db ──
         vdb_span = trace_collector.start_span(
@@ -2283,28 +2373,29 @@ class IncrementalIndexer:
             )
         try:
             with lineage_recorder.bind_stage(vector_lineage[0]) if lineage_recorder and vector_lineage else nullcontext():
-                if chunks:
-                    if len(precomputed_vectors) == len(chunks):
+                if vector_chunks:
+                    if len(precomputed_vectors) == len(vector_chunks):
                         # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
                         chunk_ids = self.vectordb.add_documents(
-                            chunks, embeddings=precomputed_vectors) or []
+                            vector_chunks, embeddings=precomputed_vectors) or []
                     else:
                         # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
                         # 保证不产生向量空洞；此时预嵌入仅充当失败预检
                         logger.warning(
-                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(chunks)})，"
+                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(vector_chunks)})，"
                             f"回退由向量库嵌入: {os.path.basename(file_path)}"
                         )
-                        chunk_ids = self.vectordb.add_documents(chunks) or []
+                        chunk_ids = self.vectordb.add_documents(vector_chunks) or []
                 else:
                     chunk_ids = []
             trace_collector.end_span(vdb_span,
-                metrics={"written": len(chunk_ids),
+                    metrics={"written": len(chunk_ids),
+                         "context_only_chunks": non_vector_chunk_count,
                          "table": getattr(self.vectordb, "_collection_name", "")})
             if vector_lineage is not None:
                 lineage_recorder.finish_stage(
                     vector_lineage[0], status="success",
-                    started_at=vector_lineage[1], input_count=len(chunks),
+                    started_at=vector_lineage[1], input_count=len(vector_chunks),
                     output_count=len(chunk_ids),
                 )
         except Exception as e:
@@ -2322,7 +2413,7 @@ class IncrementalIndexer:
         # 不能再用「旧 BM25 + 当前文件」增量拼接：旧 BM25 可能已经属于另一批
         # 文档，必须从当前向量集合一次性重建。重索引的旧 chunk 仍在向量库中，
         # 由 exclude_ids 排除，待 _cleanup_superseded 删除后集合仍保持一致。
-        if self.bm25_store is not None and chunks:
+        if self.bm25_store is not None and vector_chunks:
             bm25_lineage = None
             if lineage_recorder is not None:
                 bm25_lineage = lineage_recorder.begin_stage(
@@ -2359,17 +2450,17 @@ class IncrementalIndexer:
                     # 兼容外部测试桩和旧实现；生产 BM25Store 一定走上面的
                     # 向量集合全量重建路径。
                     self.bm25_store.replace_documents(
-                        chunks, k=BM25_CANDIDATE_K,
+                        vector_chunks, k=BM25_CANDIDATE_K,
                         doc_id=doc_id, file_path=file_path,
                     )
                 if bm25_lineage is not None:
                     lineage_recorder.finish_stage(
                         bm25_lineage[0], status="success",
-                        started_at=bm25_lineage[1], input_count=len(chunks),
-                        output_count=len(chunks),
+                        started_at=bm25_lineage[1], input_count=len(vector_chunks),
+                        output_count=len(vector_chunks),
                     )
                 logger.info(
-                    f"[BM25] 已从向量集合发布快照: {len(chunks)} 新 chunks, "
+                    f"[BM25] 已从向量集合发布快照: {len(vector_chunks)} 新 chunks, "
                     f"{os.path.basename(file_path)}"
                 )
             except Exception as e:
@@ -2432,10 +2523,9 @@ class IncrementalIndexer:
             "minhash_sig": doc_meta.get("minhash_sig", ""),
             "near_dup_id": doc_meta.get("near_dup_id", ""),
             "summary": doc_meta.get("summary", ""),
-            "keywords": json.dumps(doc_meta.get("keywords") or [], ensure_ascii=False),
+            "keywords": _serialize_registry_keywords(doc_meta),
             "time_refs": json.dumps(doc_meta.get("time_refs") or [], ensure_ascii=False),
             "business_domain": doc_meta.get("business_domain", ""),
-            "complexity": json.dumps(doc_meta.get("complexity") or {}, ensure_ascii=False),
             "metadata_fingerprint": doc_meta.get("metadata_fingerprint", ""),
             "doc_version": doc_meta.get("doc_version", 1),
             "kb_version": doc_meta.get("kb_version", "v1"),

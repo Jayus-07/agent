@@ -158,6 +158,34 @@ async def log_build_identity():
 
 
 @app.on_event("startup")
+def init_checkpoint_storage():
+    """启动时确保 LangGraph 共享 checkpoint 表已创建。"""
+    import psycopg
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    config = MEMORY_DB_CONFIG
+    conn = psycopg.connect(
+        host=config["host"],
+        port=config["port"],
+        dbname=config["dbname"],
+        user=config["user"],
+        password=config["password"],
+        autocommit=True,
+        connect_timeout=5,
+    )
+    try:
+        PostgresSaver(conn).setup()
+    finally:
+        conn.close()
+    logger.info(
+        "[Startup] LangGraph checkpoint tables ready (%s/%s)",
+        config["host"], config["dbname"],
+    )
+
+
+@app.on_event("startup")
 async def bind_agent_hub_loop():
     """坐席 WS Hub 绑定主 loop：业务线程 publish() 跳板（2026-09-17）。"""
     import asyncio

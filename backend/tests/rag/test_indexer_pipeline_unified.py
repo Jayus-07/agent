@@ -7,7 +7,14 @@
 """
 import inspect
 
-from backend.rag.indexing.indexer import IncrementalIndexer
+from langchain_core.documents import Document
+
+from backend.rag.indexing.indexer import (
+    IncrementalIndexer,
+    _filter_index_chunks,
+    _question_candidate_indexes,
+    _select_vector_chunks,
+)
 
 
 def test_indexer_does_not_use_langchain_pdf_loader():
@@ -69,6 +76,83 @@ def test_pipeline_indexer_passes_derive_kb_id():
         "RAGPipeline 实例化 indexer 未传 kb_id='default'，"
         "所有文档会被标成默认 policy_general，kb 隔离失效"
     )
+
+
+def test_context_only_parent_is_not_vectorized():
+    parent = Document(page_content="完整合同", metadata={"vectorize": False})
+    leaf = Document(page_content="第一条", metadata={"granularity": "leaf"})
+
+    assert _select_vector_chunks([parent, leaf]) == [leaf]
+
+
+def test_contract_question_candidates_exclude_parent_and_short_clauses():
+    chunks = [
+        Document(page_content="完整合同", metadata={
+            "granularity": "parent", "chunk_type": "contract_context",
+            "vectorize": False, "chunk_tokens": 544,
+        }),
+        Document(page_content="第一条", metadata={
+            "granularity": "leaf", "chunk_type": "legal_clause",
+            "chunk_tokens": 30,
+        }),
+        Document(page_content="费用表内容", metadata={
+            "granularity": "leaf", "chunk_type": "table_inline",
+            "chunk_tokens": 425,
+        }),
+        Document(page_content="付款条款", metadata={
+            "granularity": "leaf", "chunk_type": "legal_clause",
+            "chunk_tokens": 43,
+        }),
+    ]
+
+    assert _question_candidate_indexes(chunks) == [2]
+
+
+def test_non_contract_question_candidates_keep_existing_alignment():
+    chunks = [Document(page_content="A"), Document(page_content="B")]
+
+    assert _question_candidate_indexes(chunks) == [0, 1]
+
+
+def test_contract_table_structure_obeys_pii_mask(monkeypatch):
+    import json
+
+    from backend.rag.preprocessing import filter as filter_module
+    from backend.rag.preprocessing.filter import ChunkFilter
+    monkeypatch.setattr(filter_module.config, "FILTER_ENABLE_PII_MASK", True)
+    rows = [["项目", "联系人", "电话", "金额"], ["续费", "张三", "13800138000", "6294"]]
+    table_json = json.dumps(rows, ensure_ascii=False)
+    parent = Document(
+        page_content="完整合同包含联系人张三，联系电话13800138000，金额6294。" * 5,
+        metadata={
+            "chunk_id": "parent",
+            "granularity": "parent",
+            "table_structures_json": json.dumps(
+                [{"rows": rows}], ensure_ascii=False,
+            ),
+        },
+    )
+    parent.metadata["parent_chunk_id"] = ""
+    leaf = Document(
+        page_content="续费联系人张三，电话13800138000，金额6294。" * 3,
+        metadata={
+            "chunk_id": "leaf",
+            "parent_chunk_id": "parent",
+            "granularity": "leaf",
+            "chunk_type": "table_inline",
+            "table_rows_json": table_json,
+        },
+    )
+
+    kept, _ = _filter_index_chunks(
+        [parent, leaf], ChunkFilter(), "contract.docx", "legal",
+    )
+    assert len(kept) == 2
+    assert "13800138000" not in kept[0].metadata["table_structures_json"]
+    assert "13800138000" not in kept[1].metadata["table_rows_json"]
+    assert "13800138000" not in kept[0].page_content
+    assert "138****8000" in kept[1].page_content
+    assert "6294" in kept[1].metadata["table_rows_json"]
 
 
 def test_index_file_inner_uses_kb_id_param_not_self():

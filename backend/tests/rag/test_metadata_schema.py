@@ -15,7 +15,10 @@ from backend.rag.preprocessing.metadata_schema import (
     DOMAINS,
     DOC_TYPES,
     DecisionEnvelope,
+    ENTITY_VALUE_MAX_CHARS,
+    ENTITY_VALUES_MAX,
     KEYWORDS_MAX,
+    SUMMARY_MAX_CHARS,
     TIME_REFS_MAX,
     RiskInfo,
     UnifiedMetadata,
@@ -86,6 +89,23 @@ class TestUnifiedMetadata:
         assert m.keywords[0] == "1"
         assert "ok" in m.keywords
         assert len(m.keywords) == KEYWORDS_MAX
+
+    def test_enrichment_output_fields_have_bounded_sizes(self):
+        m = UnifiedMetadata.model_validate(dict(
+            GOOD,
+            summary="摘要" * 300,
+            keywords=["候选" * 60 for _ in range(KEYWORDS_MAX + 3)],
+            entities={"product": ["产品" * 60 for _ in range(ENTITY_VALUES_MAX + 2)]},
+            time_refs=["2026年" * 30 for _ in range(TIME_REFS_MAX + 3)],
+            risk={"level": "high", "signals":["依据" * 100 for _ in range(8)]},
+        ))
+        assert len(m.summary) <= SUMMARY_MAX_CHARS
+        assert len(m.keywords) == KEYWORDS_MAX
+        assert max(map(len, m.keywords)) <= ENTITY_VALUE_MAX_CHARS
+        assert len(m.entities["product"]) == ENTITY_VALUES_MAX
+        assert max(map(len, m.entities["product"])) <= ENTITY_VALUE_MAX_CHARS
+        assert len(m.time_refs) == TIME_REFS_MAX
+        assert len(m.risk.signals) == 5
 
     def test_entities_non_list_value_dropped(self):
         m = UnifiedMetadata.model_validate(

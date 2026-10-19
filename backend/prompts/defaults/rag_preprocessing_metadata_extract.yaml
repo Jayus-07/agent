@@ -1,34 +1,29 @@
 key: rag.preprocessing.metadata_extract
-name: 文档摘要与精确实体增强
+name: 文档元数据统一抽取
 category: rag_preprocessing
 risk_level: low
 template_engine: str_format
 variables:
-  - {name: doc_types, required: true, description: 兼容字段允许值；服务端规则分类为唯一权威}
-  - {name: domains, required: true, description: 兼容字段允许值；服务端规则分类为唯一权威}
   - {name: filename, required: true, description: 文件名}
   - {name: text, required: true, description: 文档内容采样}
 template: |
-  你只负责为非 FAQ 文档提供可选的摘要和精确实体增强。文件名：{filename}
-  以下是供系统兼容校验的旧枚举，不要求你分类；doc_type 与 business_domain
-  必须固定输出 general，最终分类完全由服务端规则分类器决定：
-  doc_type 枚举：{doc_types}
-  business_domain 枚举：{domains}
+  你是知识库的文档元数据增强器。分类和业务领域由系统规则确定，不要尝试分类。
+  你只负责基于原文生成简短摘要、精确专名实体、风险信号和时间信息。
 
-  只根据下方原文生成结果，不得补全、猜测或改写原文没有明确给出的信息。
-  keywords 只提取能帮助精确检索的专有名词：产品名、SKU、型号、品牌、错误码、
-  订单标识、制度名称、标准编号等。每项必须是原文连续出现的原样文本。
-  不要输出普通主题词，例如“申请”“处理”“业务”“员工”“HR”“年假”“病假”、
-  “报销”“加班”。没有可靠专名或编码时，keywords 必须是空数组，不要凑数。
-  entities 中的每个值、risk.signals 和 time_refs 也必须有原文依据；没有依据时留空。
-  summary 用不超过 120 个中文字符概括原文，不添加推断。
-
-  文档原文：
+  文件名: {filename}
+  文档内容:
   {text}
 
-  严格输出 JSON，不要 Markdown、解释或推理过程：
-  {{"doc_type":"general","confidence":0.0,"business_domain":"general",
-    "summary":"不超过120字；无可靠摘要时为空字符串",
-    "keywords":[],
-    "entities":{{"person":[],"org":[],"product":[],"regulation":[]}},
-    "risk":{{"level":"none","signals":[]}},"time_refs":[]}}
+  仅输出 JSON，不要 markdown 或解释文字。doc_type、confidence、business_domain 是兼容字段，必须分别填写 "general"、0 和 "general"；服务端会用规则结果替换它们。
+  keywords 只能填写原文中可精确匹配的产品/品牌/型号/SKU/编号/错误码/制度/标准等专名，不能填写主题词、普通名词或推测内容。
+  每个实体和关键词都必须逐字出现在上面的原文中；没有可靠依据时返回空数组。摘要不超过120字；每个数组最多5项，time_refs 最多10项。
+
+  请严格输出如下 JSON:
+  {{"doc_type": "general",
+    "confidence": 0,
+    "business_domain": "general",
+    "summary": "不超过120字的摘要",
+    "keywords": ["原文中有明确格式或专名依据的实体"],
+    "entities": {{"person": [], "org": [], "product": [], "regulation": []}},
+    "risk": {{"level": "none/high/medium/low", "signals": ["原文中逐字出现的依据，无则空数组"]}},
+    "time_refs": ["原文中逐字出现的时间，无则空数组"]}}

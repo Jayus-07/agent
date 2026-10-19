@@ -84,6 +84,62 @@ def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]
     return list(docs) + added
 
 
+def attach_referenced_context(docs: List[Document], related_lookup) -> List[Document]:
+    """将 Leaf 明确引用的同文档表格 Leaf 加入上下文。"""
+    if not docs:
+        return list(docs)
+
+    requests: dict[str, set[str]] = {}
+    for doc in docs:
+        metadata = doc.metadata or {}
+        if metadata.get("granularity") != "leaf":
+            continue
+        doc_id = str(metadata.get("doc_id") or "").strip()
+        references = metadata.get("references") or []
+        if isinstance(references, str):
+            try:
+                references = json.loads(references)
+            except (TypeError, ValueError):
+                references = [references]
+        if not isinstance(references, (list, tuple, set)):
+            continue
+        table_ids: set[str] = set()
+        for reference in references:
+            if isinstance(reference, dict):
+                relation = str(reference.get("relation") or "").strip()
+                if relation and relation != "refers_to":
+                    continue
+                table_id = str(reference.get("table_id") or "").strip()
+            else:
+                # 兼容已入库的旧版 references=["table_1"] 元数据。
+                table_id = str(reference or "").strip()
+            if table_id:
+                table_ids.add(table_id)
+        if doc_id and table_ids:
+            requests.setdefault(doc_id, set()).update(table_ids)
+
+    if not requests:
+        return list(docs)
+
+    seen = {doc.metadata.get("chunk_id") for doc in docs}
+    related: list[Document] = []
+    try:
+        for doc_id, table_ids in requests.items():
+            related.extend(related_lookup(doc_id, sorted(table_ids)))
+    except Exception as e:
+        logger.warning(
+            f"[ChunkReference] 关联表格读取失败({type(e).__name__})，"
+            f"降级返回原结果: {e}"
+        )
+        return list(docs)
+
+    added = [doc for doc in related
+             if doc.metadata.get("chunk_id") not in seen]
+    if added:
+        logger.info(f"[ChunkReference] 加载 {len(added)} 个关联表格 Leaf")
+    return list(docs) + added
+
+
 # =====================================================
 # 请求内检索缓存（2026-09-03 P1-5）
 # =====================================================
@@ -672,6 +728,8 @@ class ChunkLevelRetriever(BaseRetriever):
 
         # ── Parent-Child 上下文增强：检索命中的 leaf，拉取对应 parent ──
         st.docs = attach_parent_context(st.docs, self._lookup_parents)
+        # 条款通过 references 指向同文档的表格时，附加该表格 Leaf。
+        st.docs = attach_referenced_context(st.docs, self._lookup_referenced_tables)
 
         # ── 收口过滤：adaptive 扩展可能再拉入文档，统一在此执行 ──
         # 已声明主体 → 白名单强制（无条件）；未声明 → 仅跨库兜底剔除 test 库
@@ -716,16 +774,66 @@ class ChunkLevelRetriever(BaseRetriever):
             return True
 
     def _lookup_parents(self, chunk_ids: List[str]) -> List[Document]:
-        """按 chunk_id 列表从向量库查 parent chunk（Parent-Child 上下文）。"""
-        data = self.vectordb.get(where={"chunk_id": {"$in": chunk_ids}})
+        """先从全文 ChunkStore 取上下文 Parent，兼容旧向量 Parent。"""
+        result: list[Document] = []
+        found: set[str] = set()
+        try:
+            from backend.rag.indexing.chunk_store import get_chunk_store
+
+            rows = get_chunk_store().get_by_chunk_ids(chunk_ids)
+            for row in rows:
+                metadata = dict(row.get("chunk_metadata") or {})
+                metadata.setdefault("chunk_id", row.get("chunk_id", ""))
+                metadata.setdefault("doc_id", row.get("doc_id", ""))
+                metadata.setdefault("granularity", row.get("granularity", ""))
+                metadata.setdefault("parent_chunk_id", row.get("parent_chunk_id", ""))
+                if metadata.get("granularity") != "parent":
+                    continue
+                chunk_id = str(metadata.get("chunk_id") or "")
+                if chunk_id:
+                    found.add(chunk_id)
+                result.append(Document(
+                    page_content=str(row.get("content") or ""),
+                    metadata=metadata,
+                ))
+        except Exception as e:
+            logger.debug(
+                f"[Parent-Child] ChunkStore 查询失败，尝试旧向量 Parent: {e}"
+            )
+
+        missing_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in found]
+        if not missing_ids:
+            return result
+        data = self.vectordb.get(where={"chunk_id": {"$in": missing_ids}})
         ids = data.get("ids") or []
         documents = data.get("documents") or []
         metadatas = data.get("metadatas") or []
-        result: List[Document] = []
-        for i in range(len(ids)):
+        for i, chunk_id in enumerate(ids):
+            if chunk_id in found:
+                continue
             result.append(Document(
                 page_content=documents[i] if i < len(documents) else "",
                 metadata=metadatas[i] if i < len(metadatas) else {},
+            ))
+        return result
+
+    def _lookup_referenced_tables(
+        self, doc_id: str, table_ids: list[str],
+    ) -> List[Document]:
+        """按文档和 table_id 从 ChunkStore 恢复完整表格 Leaf。"""
+        from backend.rag.indexing.chunk_store import get_chunk_store
+
+        rows = get_chunk_store().get_by_table_ids(doc_id, table_ids)
+        result: list[Document] = []
+        for row in rows:
+            metadata = dict(row.get("chunk_metadata") or {})
+            metadata.setdefault("chunk_id", row.get("chunk_id", ""))
+            metadata.setdefault("doc_id", row.get("doc_id", doc_id))
+            metadata.setdefault("granularity", row.get("granularity", "leaf"))
+            metadata.setdefault("parent_chunk_id", row.get("parent_chunk_id", ""))
+            result.append(Document(
+                page_content=str(row.get("content") or ""),
+                metadata=metadata,
             ))
         return result
 

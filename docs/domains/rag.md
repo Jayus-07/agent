@@ -46,7 +46,7 @@ Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由
 
 ## 上传元数据与级联决策
 
-上传元数据统一使用 `UnifiedMetadata` 和 `DecisionEnvelope`（`backend/rag/preprocessing/metadata_schema.py`）。索引入库的 `doc_type` 与 `business_domain` 以规则分类器为唯一权威；可选 LLM 只做摘要、原文可核实的专名/实体、风险信号和时间增强，不得改写分类。`ENABLE_LLM_METADATA_EXTRACT` 只控制这一次元数据增强调用；FAQ、短文及关闭开关时使用确定性摘要与规则实体。关键词字段保留兼容，但仅接收原文精确匹配的专名或格式化标识符，无可靠实体时为空；不调用独立关键词模型。规则、调用、缓存和降级来源通过现有 Trace/用量台账归因。级联分类能力仍以 `metadata_router.py` 和其独立评测契约为准，不得把它当作入库分类事实源。
+上传元数据契约仍使用 `UnifiedMetadata`（`backend/rag/preprocessing/metadata_schema.py`），并保留 `doc_type`、`business_domain` 等历史字段。当前入库分类和业务域以规则分类器及 taxonomy 规范化结果为唯一事实源；LLM 不做第二次分类。`ENABLE_LLM_METADATA_EXTRACT` 只控制一次可选增强调用，用于摘要、精确实体、风险和时间信号；短文本和已有结构化 Q/A 的 FAQ 跳过调用，失败后用规则实体和抽取式摘要继续。LLM 实体/时间/风险依据须能在原文中精确匹配；关键词字段只保留原文精确匹配的格式标识符，或由 LLM 标注为组织、产品、制度/标准的专名，不填普通主题词。Schema 限制输出字段长度和数量，`backend/tests/rag/` 覆盖分类权威、降级与精确匹配。
 
 文档读写执行资源级授权和租户范围校验。管理端索引与发布操作遵循现有审批及状态管理。
 
@@ -76,16 +76,21 @@ flowchart TD
 ```
 
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
+- 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。活动记录按现有租户、知识库、部门及行级授权范围过滤。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
   - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
+  - 识别到的 FAQ 问答以每个完整 Q+A 对作为独立 Leaf；不再为整份 FAQ 生成只列问题、不含答案的虚拟 Parent，避免一个 FAQ 命中后把所有问题都附加到回答上下文。Parent-Child 仍用于有实际跨块上下文价值的其他策略。
   - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。
   - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号；Router 强信号豁免：legal(≥3条款)/faq(qa节点)/sop(≥3标题) 与 doc_type 同时成立时不因整篇完整度 < 阈值降级 Recursive。`route_with_decision` 产出 `ChunkRouteDecision`（信号/策略版本/降级原因/处理范围）随质量记录与 Trace 落盘，策略版本表 `_STRATEGY_VERSIONS` 在 chunking.py 集中维护。
+  - 合同表格切分（2026-10-20）：多条款合同优先按条款规划；能放入 Leaf 预算的短表跟随所属条款，索引正文只保留一份 Markdown 表格，原始单元格矩阵另存于 `table_rows_json`/`table_structures_json`，不再重复生成逐行 NL 与 CSV；超预算表按数据行分组并重复表头，每组共享 `table_id` 和行范围。已关联表格的 `SENTINEL-TABLE-REF` 只从标准化索引文本移除，上传原文不变。Chunk 元数据分别保存 `document_title`、真实 `section_title`、`granularity` 与 Parent 的 `parent_scope`；文档级 Parent 不把文档标题写入章节字段，Trace 展示从结构字段映射“📄 文档”或“📑 章节”。完整合同 Parent 保存全部条款文本及表格矩阵，仅进入 ChunkStore 作为上下文，不独立进入向量/BM25；Parent 不参与模拟问题生成。合同模拟问题只对达到 80-token 阈值的 Leaf 生成。条款出现“上表”等引用时记录 `references=[{table_id, relation: refers_to}]`，命中后从同文档 ChunkStore 加载关联表格 Leaf，再执行已有知识库、权限和审核过滤。
   - 切分覆盖对账：`coverage_audit` 只核对实际输出 Leaf，不把 Parent 计入覆盖；文本按窗口检查，表格按行与单元格检查。抽样结果显式标记 `sampled`，不宣称全量 100%。覆盖缺口或审计失败进入 Quality Record 和 Trace；普通索引路径同步 `quality_issues`/`quality_status` 并由现有 QualityGate 阻止进入 `active`。候选失败时问题码保存在 Quality Record、Trace 和失败上传运行记录，不改写同路径旧版本 registry 行（P0-02）。
   - 清洗边界与清洗对账（2026-10-18）：Cleaner 按**节点**执行（`structured=True`），结构化节点自带语义边界、没有版面上下文，依赖「前后空行」的孤立图注启发式在节点级不成立必须停用；节点内的模板行/维基噪音/页码页脚等形态确定性噪音照旧清洗，删除证据（操作名/分类/原行样本）记入 `node.cleaning_dropped` 与质量记录 `cleaning.dropped_*`。新增 `cleaning_coverage_audit`（Raw AST → 清洗输出）独立于 `coverage_audit`：规范化差异与确定性噪音删除算合法，其余消失正文计入 uncovered 并以 `cleaner_content_loss`/`cleaning_audit_failed` 硬异常阻断——**不允许**通过清空节点让覆盖审计分母缩水来假通过。
   - 过滤器边界（2026-10-18）：Parent 与 Leaf 各自独立的 SimHash 已见集合（Parent 文本包含 Leaf 正文，不能作为 Leaf 的判重依据）；表格 row chunk 与「承载事实的 Leaf 短文本」（短段落/状态值/编号/英文技术字段）不套用正文长度与中文占比阈值，去重仍对正文 Leaf 生效。解析/清洗/切分/过滤已确定内容缺失时，索引器在元数据 LLM 与 embedding 之前用 `coverage_audit`+`audit_chunk_integrity`+`cleaning_coverage_audit` 失败（付费前预检），付费后与写库前门禁保留。
-  - Token 上限统一走 `_split_to_budget`（语义切分 + `_hard_split_by_budget` 整串口径硬切收口），Leaf/Parent 全部路径（含 Step/Legal/QA/表格兜底/虚拟 parent）严格 ≤ 配置预算；chunk 级截断（超 MAX_CHUNKS_PER_DOC）是质量门禁**硬异常**——文档进 failed，不得以截断状态 active（P0-05/超长文档收口）。
+  - Token 上限统一走 `_split_to_budget`（语义切分 + `_hard_split_by_budget` 整串口径硬切收口），Leaf 和实际生成 Parent 的路径（含 Step/Legal/表格兜底/虚拟 parent）严格 ≤ 配置预算；FAQ 长答案继续拆为带问题前缀的 Leaf，不生成问题目录 Parent。chunk 级截断（超 MAX_CHUNKS_PER_DOC）是质量门禁**硬异常**——文档进 failed，不得以截断状态 active（P0-05/超长文档收口）。
   - 大表解析资源上限：`RAG_TABLE_MAX_ROWS` / `RAG_TABLE_MAX_CELLS` 按 Workbook 累计；Excel 在达到限制时停止读取后续行/Sheet，报告已扫描与至少截断下界，总量未知会明确标记。CSV 使用标准库逐行流式读取，在有界缓冲下保留 UTF-8 BOM/GBK、SKU 前导零及长订单号，并完整流式计数以精确记录截断量。行/单元格截断、OCR 页数超限或识别失败均进入质量硬异常，文档失败，不以部分内容标成 `active`。
 - 元数据：`metadata_schema.py::UnifiedMetadata/DecisionEnvelope`、taxonomy 与当前源文档/chunk contract 为事实源。必要检索键至少保持可溯源 doc/chunk/source、KB/部门/权限、版本/代次等已有字段；具体必填性按 schema 检查，不从本段临时发明字段。
+- 文档级元数据不再生成复杂度评分；FAQ、法律及合同模板不生成文档级摘要，问答对/条款作为检索单元；保留轻量章节概览，用于识别文档和导航。
+- Trace 的质量记录评分按 `max(0, 100 - 40×硬异常数 - 10×告警数)` 计算；它反映解析与索引校验异常，不代表答案语义正确或检索召回效果。
 - 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。Parent-Child 身份契约：索引期 `apply_index_chunk_identity` 覆盖 chunk_id 时同步改写 parent_chunk_id，检索端 `attach_parent_context` 的 `$in` 查询才能命中（P0-03）；Parent 扩展结果由 `apply_review_visibility` 在扩展后统一复核，pending_review 不得经 Parent 通道绕过。文档级元数据的全文输入为**纯 leaf 拼接**（parent 章节全量不重复计入）；超长文档摘要采样走 `summary_sampling`（头+章节目录+分层采样+尾，标注覆盖范围）；模拟问题 LLM 选块均匀分布且规则降级不产占位问句。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。

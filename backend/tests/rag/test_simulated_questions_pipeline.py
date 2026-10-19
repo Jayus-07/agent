@@ -138,6 +138,26 @@ class TestQuestionGenModule:
         assert result == []
         assert tokens == {}
 
+    def test_cache_hit_is_marked_without_provider_call(self, monkeypatch):
+        from backend.rag.preprocessing import question_gen
+
+        monkeypatch.setattr(question_gen, "ENABLE_SIMULATED_QUESTIONS", True)
+        monkeypatch.setattr(question_gen, "_cache_get", lambda key: [["已有问题？"]])
+        monkeypatch.setattr(
+            question_gen, "_invoke_llm",
+            lambda *args, **kwargs: pytest.fail("缓存命中不应调用 Provider"),
+        )
+
+        result, tokens = question_gen.generate_chunk_questions(["正文"], doc_type="policy")
+        meta = question_gen.get_last_generation_meta()
+
+        assert result == [["已有问题？"]]
+        assert tokens == {}
+        assert meta["status"] == "cached"
+        assert meta["cache_status"] == "hit"
+        assert meta["provider_call"] is False
+        assert meta["provider_duration_ms"] == 0
+
     def test_llm_call_uses_question_gen_role(self, monkeypatch):
         from backend.rag.preprocessing import question_gen
         from backend.rag.preprocessing import llm_enrichment
@@ -159,6 +179,7 @@ class TestQuestionGenModule:
         question_gen.generate_chunk_questions(["第一条流程内容。"], doc_type="policy")
 
         assert captured["role"] == "question_gen"
+        assert captured["max_tokens"] == question_gen.QUESTION_GEN_MAX_OUTPUT_TOKENS
 
     def test_question_cache_key_contains_model_prompt_version(self, monkeypatch):
         import backend.rag.preprocessing.question_gen as question_gen
