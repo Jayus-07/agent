@@ -175,3 +175,11 @@ Artifact：`D:/tmp/rag-universal-phase1-20261019/free-inspection.json`、`free-p
 - 修复：_filter_index_chunks 的 filtered_details 增带原文 content；coverage_audit 增 excluded_texts 豁免入参（显式规则过滤=合法排除纳入对照，静默丢失仍报 gap）；门禁测试与 indexer 付费前预检同口径透传。
 - 验证：fixture 完整性 23 passed 全绿（16/16 无缺口）；git diff --check 无告警。
 - 教训：本地定向跑时的 --ignore 恰好跳过了 CI 必需门禁文件——后续本地验证必须覆盖 CI workflow 的 targeted 清单。
+
+## 2026-10-19 重传对账补漏：retrieve_knowledge BM25 腿 parent 过滤（本地提交）
+
+- 用户重传 faq_only.docx（版本覆盖 921d5068a5e1 published，41 chunks）。对账发现 P2-2 遗漏路径：/retrieve（rag-service retrieve_knowledge）的向量腿走 CustomRetriever（过滤已生效），但 **BM25 腿（self.bm25.invoke 四处）直接召回**——BM25 语料含 parent 文本，问题清单与查询词面重合仍进 Top-8。
+- 修复：pipeline.py 四处 BM25 腿（retrieve_documents 三处放宽链 + retrieve_knowledge 一处）补 granularity!=parent 过滤，与 base.py/hybrid.py 同开关同语义。
+- 端到端复验：top-8 无 parent 问题清单块、FAQ-001 答案照常命中、index_status=ok。
+- 对账顺带确认：重传 trace（68a6c776）page_count=0+applicable=False ✓、metadata_llm_extract 子 span 7.3s（LLM 增强真实触发）✓、读侧回填模型清单双模型（doubao 2 次+qwen 6 次，cost 0.008614）✓。
+- 清理：本地 pytest 运行曾把两行假数据（doc.md/doc2.md，doc_id=d1/d2，来自 pytest 临时目录）写进隔离库 doc_registry/chunk_store——已确认为纯测试数据并清除；隔离库恢复纯净（1 文档/41 chunks/42 向量）。
