@@ -45,7 +45,7 @@ def test_invoke_metadata_llm_uses_governed_role_proxy(monkeypatch):
     monkeypatch.setattr(
         proxy,
         "bind_llm_for_role",
-        lambda role: seen.append(role) or fake,
+        lambda role, **kwargs: seen.append(role) or fake,
     )
     monkeypatch.setattr(
         proxy,
@@ -64,7 +64,7 @@ def test_invoke_metadata_llm_disables_thinking_through_role_proxy(monkeypatch):
     fake = MagicMock()
     fake.model = "qwen3.7-plus"
     fake.invoke.return_value = "ok"
-    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role: fake)
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role, **kwargs: fake)
     monkeypatch.setattr(
         "backend.infra.llm.models.supports_thinking_flag",
         lambda model_name: model_name == "qwen3.7-plus",
@@ -86,7 +86,7 @@ def test_invoke_metadata_llm_plain_invoke_when_policy_declines(monkeypatch):
     fake = MagicMock()
     fake.model = "qwen3.7-plus"
     fake.invoke.return_value = "ok"
-    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role: fake)
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role, **kwargs: fake)
     monkeypatch.setattr(
         "backend.infra.llm.models.supports_thinking_flag",
         lambda _model: True,
