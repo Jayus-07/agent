@@ -64,12 +64,11 @@ scrape_configs:
     # 不发布宿主机）。每个 worker 副本一个 target（多副本水平扩展）。
     static_configs:
       - targets:
-          # 单容器后端：各 Celery 池指标端点在同一个 IP 的不同端口
-          # （docker/backend-supervisord.conf 的 WORKER_METRICS_PORT 分配）
-          - "backend:9809"
-          - "backend:9810"
-          - "backend:9811"
-          - "backend:9812"
+          - "agent-worker:9809"
+          - "rag-index-worker:9809"
+          - "maintenance-worker:9809"
+          - "report-worker:9809"
+          - "metadata-shadow-worker:9809"
 
   # ── 自监控（2026-10-06 验收 I1/I6/M3 补缺：PM 自身指标此前无自抓取，
   # prometheus_build_info / tsdb / rule_evaluation_failures 全部不可查）──

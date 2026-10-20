@@ -5,7 +5,7 @@ BFF(:3100) 未运行时的等价回归：直连后端走同一 Router/SSE 全链
 场景与判定标准来自 docs/domains/travel-test-scenarios.md §八。
 D1→D2→D3 同会话（跨轮改单），D7→D8 同会话。
 
-用法: docker exec agent-backend python scripts/dgroup_direct_regression.py
+用法: docker exec agent-app-1 python scripts/dgroup_direct_regression.py
 """
 import json
 import os

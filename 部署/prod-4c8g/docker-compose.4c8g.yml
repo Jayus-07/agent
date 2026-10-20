@@ -1,12 +1,9 @@
 # ============================================================================
 # 生产覆盖层：4 vCPU / 8 GB RAM / 40 GB SSD
-# 2026-10-20 后端容器合一：原 app / agent-worker / rag-index-worker /
-# maintenance-worker / report-worker / beat / cs-dispatcher 合并为单 backend
-# 容器（supervisord 托管，内含 rag-service / mcp-service 进程）。
 # 用法（仓库根目录）：
 #   docker compose --env-file .env.production \
-#     -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml up -d <services>
-# 只启动 README §3 列出的服务；kafka/ollama/observability 不启动。
+#     -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.prod.yml up -d <services>
+# 只启动 README §3 列出的服务；kafka/ollama/rag-service/observability 不启动。
 # ============================================================================
 
 x-logging: &prod-logging
@@ -100,17 +97,62 @@ services:
           cpus: "0.5"
     logging: *prod-logging
 
-  backend:
-    # 单容器 = 原 app 1100m + agent-worker 768m + rag-index-worker 800m +
-    # maintenance 256m + report 256m + beat 128m + dispatcher 224m ≈ 3.5G，
-    # 另含此前生产不启动的 rag-service / mcp-service 进程的空闲开销
-    # （uvicorn 常驻、模型懒加载，空闲约 300-500m）；限额取 3.8G。
-    # 上限而非预占：单 cgroup 内各进程互相借用余量，超限由 cgroup OOM 兜底。
+  app:
+    # 单 uvicorn 进程（4C 用 uvicorn 单 worker + 异步 IO 足够；多 worker 会成倍放大连接池）
     deploy:
       resources:
         limits:
-          memory: 3800m
-          cpus: "3.0"
+          memory: 1100m
+          cpus: "1.5"
+    logging: *prod-logging
+
+  agent-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 768m
+          cpus: "1.0"
+    logging: *prod-logging
+
+  rag-index-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 800m
+          cpus: "1.0"
+    logging: *prod-logging
+
+  maintenance-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  report-worker:
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+          cpus: "0.3"
+    logging: *prod-logging
+
+  beat:
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          cpus: "0.2"
+    logging: *prod-logging
+
+  cs-dispatcher:
+    # 客服坐席分发：未上线客服域时可整体不启动（README §3 的启动清单已排除）
+    deploy:
+      resources:
+        limits:
+          memory: 224m
+          cpus: "0.3"
     logging: *prod-logging
 
   pg-backup:

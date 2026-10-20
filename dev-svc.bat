@@ -8,7 +8,7 @@ setlocal enabledelayedexpansion
 ::
 ::   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|web^|all] [/y]
 ::
-::   backend = docker compose "backend" service   127.0.0.1:8000  (/health)
+::   backend = docker compose "app" service   127.0.0.1:8000  (/health)
 ::   admin   = frontend-admin  next dev       :3200           (/login)
 ::   web     = frontend        next dev       :3100           (/login)
 ::   /y      = skip the confirmation prompt of stop/restart/rebuild
@@ -157,7 +157,7 @@ exit /b 1
 :: =====================================================================
 :status_backend
 set "CSTAT=container not running"
-for /f "tokens=*" %%s in ('docker ps --filter "name=agent-backend" --format "{{.Status}}" 2^>nul') do set "CSTAT=%%s"
+for /f "tokens=*" %%s in ('docker ps --filter "name=agent-app-1" --format "{{.Status}}" 2^>nul') do set "CSTAT=%%s"
 curl.exe -s -o nul --max-time 5 "http://127.0.0.1:%BACKEND_PORT%/health"
 if not errorlevel 1 (
     echo   [UP  ] backend  "%CSTAT%"  health-200
@@ -167,19 +167,19 @@ if not errorlevel 1 (
 exit /b 0
 
 :start_backend
-echo   [backend] docker compose up -d --build backend ...
+echo   [backend] docker compose up -d --build app ...
 pushd "%ROOT%"
-docker compose up -d --build backend
+docker compose up -d --build app
 if errorlevel 1 goto start_backend_retry
 goto start_backend_up_ok
 
 :start_backend_retry
 echo   [backend] up failed - prune stale containers, retry once ...
 call :prune_stale_backend_containers
-docker compose up -d --build backend
+docker compose up -d --build app
 if errorlevel 1 (
     popd
-    echo   [ERROR] docker compose up -d --build backend failed after retry
+    echo   [ERROR] docker compose up -d --build app failed after retry
     exit /b 1
 )
 
@@ -189,13 +189,13 @@ call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
 exit /b 0
 
 :stop_backend
-echo   [backend] docker compose stop backend ...
+echo   [backend] docker compose stop app ...
 pushd "%ROOT%"
-docker compose stop backend
+docker compose stop app
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
-    echo   [ERROR] docker compose stop backend failed, rc=%RC%
+    echo   [ERROR] docker compose stop app failed, rc=%RC%
     exit /b 1
 )
 exit /b 0
@@ -208,7 +208,7 @@ exit /b 0
 :: re-run automatically through the compose depends_on chain.
 :: =====================================================================
 :rebuild_backend
-set "BACKEND_SERVICES=backend db-migrate"
+set "BACKEND_SERVICES=app db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher metadata-shadow-worker"
 echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %BACKEND_SERVICES%
@@ -384,7 +384,7 @@ echo dev-svc.bat - shared impl of dev-start / dev-stop / dev-restart / dev-rebui
 echo.
 echo   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|cs^|web^|all] [/y]
 echo.
-echo   backend = docker compose backend service   127.0.0.1:8000
+echo   backend = docker compose app service   127.0.0.1:8000
 echo   admin   = frontend-admin next dev      :3200
 echo   cs      = frontend-cs next dev         :3300
 echo   web     = frontend next dev            :3100

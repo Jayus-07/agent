@@ -32,9 +32,9 @@ def b64(raw):
 
 
 def setup_auth():
-    jwt_secret = sh("agent-backend", "JWT_SECRET")
-    api_key = sh("agent-backend", "API_KEY")
-    auth_pw = sh("agent-backend", "AUTH_REDIS_URL").split("redis://:", 1)[-1].split("@", 1)[0]
+    jwt_secret = sh("agent-app-1", "JWT_SECRET")
+    api_key = sh("agent-app-1", "API_KEY")
+    auth_pw = sh("agent-app-1", "AUTH_REDIS_URL").split("redis://:", 1)[-1].split("@", 1)[0]
     jti = uuid.uuid4().hex
     subprocess.run(
         ["docker", "exec", "agent-auth-redis", "redis-cli", "-a", auth_pw,

@@ -52,7 +52,7 @@ MANUAL_DRILLS = [
     },
     {
         "target": "api",
-        "steps": ["docker compose stop backend", "等待 60s", "docker compose start backend"],
+        "steps": ["docker compose stop app", "等待 60s", "docker compose start app"],
         "expect": "用户转人工入池 503，dispatcher/reaper/relay 继续运行（独立进程）",
         "recovery": "app 恢复后入池恢复；期间无工单丢失",
     },

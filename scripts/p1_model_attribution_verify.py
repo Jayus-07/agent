@@ -8,7 +8,7 @@
 4. price_unknown：usage 记真实 model_id + cost_status
 验证后恢复原角色绑定（tool_selector 若原为 inherit 则删行还原）。
 
-用法: docker exec agent-backend python scripts/p1_model_attribution_verify.py
+用法: docker exec agent-app-1 python scripts/p1_model_attribution_verify.py
 环境变量: ADMIN_TOKEN（管理端 JWT）
 """
 import json
