@@ -95,6 +95,30 @@ def test_index_mode_can_skip_implicit_sync_for_explicit_import(monkeypatch):
     assert calls == []
 
 
+def test_session_history_probe_uses_authenticated_memory_owner():
+    from types import SimpleNamespace
+
+    from backend.rag.pipeline import RAGPipeline
+
+    class Memory:
+        call = None
+
+        def start_session(self, session_id, question, *, user_id, tenant_id):
+            self.call = (session_id, question, user_id, tenant_id)
+            return [object()]
+
+    pipeline = RAGPipeline.__new__(RAGPipeline)
+    memory = Memory()
+    pipeline.lc_chain = SimpleNamespace(_memory=memory)
+
+    assert pipeline._session_has_history(
+        "agent::history", user_id="99001601", tenant_id="tenant-a",
+    )
+    assert memory.call == (
+        "agent::history", "", "99001601", "tenant-a",
+    )
+
+
 def test_unordered_bm25_hash_accepts_vector_store_return_order():
     from backend.rag.retrieval.bm25_store import compute_content_hash_unordered
 

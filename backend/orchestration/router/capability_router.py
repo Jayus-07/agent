@@ -34,6 +34,7 @@ class CapabilityRouter:
         canonical_domain = _DOMAIN_ALIASES.get(domain, domain)
         candidates = self._authorized_candidates(
             resolve_domain_tools(canonical_domain), context,
+            effective_domain=canonical_domain,
         )
         if not candidates:
             return {
@@ -197,12 +198,19 @@ class CapabilityRouter:
         }
 
     @staticmethod
-    def _authorized_candidates(candidates, context: dict[str, Any]):
+    def _authorized_candidates(
+        candidates,
+        context: dict[str, Any],
+        *,
+        effective_domain: str = "",
+    ):
         """按服务端已验证的角色/范围收窄候选；Tool Governance 仍做执行期复核。"""
         from backend.core.tool_governance.registry import get_tool_spec
 
         roles = set(context.get("_verified_roles") or ())
         scopes = set(context.get("_verified_scopes") or ())
+        product_id = str(context.get("product_id") or "internal")
+        from backend.core.product_context import product_allows_capability
         allowed = []
         for candidate in candidates:
             spec = get_tool_spec(candidate.name)
@@ -211,6 +219,12 @@ class CapabilityRouter:
             if spec.required_roles and not roles.intersection(spec.required_roles):
                 continue
             if spec.required_scopes and not set(spec.required_scopes).issubset(scopes):
+                continue
+            if not product_allows_capability(
+                product_id,
+                candidate.name,
+                (effective_domain,) if effective_domain else (),
+            ):
                 continue
             allowed.append(candidate)
         return allowed

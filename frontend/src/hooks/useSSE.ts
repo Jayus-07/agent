@@ -28,9 +28,7 @@ export function useSSE() {
     sessionId: string,
     // 会话级模型覆盖（B.9 决策②）；null / 缺省 = 走后端全局默认
     modelOverride?: string | null,
-    // 入口域提示（2026-10-08）：AI 助手页锁域传 "main"——后端不进旅游/选品
-    // /预订/商务域图，旅游强信号改产 handoff 引导卡；缺省 = 全局入口按需路由
-    domainHint?: string,
+    // 主助手产品入口；产品范围由服务端注册路由固定。
   ) => {
     // Abort any previous in-flight stream
     activeController?.abort()
@@ -56,9 +54,9 @@ export function useSSE() {
         { question, session_id: sessionId, request_id: requestId,
           idempotency_key: requestId,
           // 会话级模型覆盖：只有本次会话显式选过模型才带，否则用后端全局默认
-          model: modelOverride || undefined,
-          domain_hint: domainHint || undefined },
+          model: modelOverride || undefined },
         controller.signal,
+        "agent",
       )) {
         if (controller.signal.aborted) return
 
@@ -163,10 +161,9 @@ export function useSSE() {
   const startStream = useCallback(async (
     question: string,
     sessionId: string,
-    domainHint?: string,
   ) => {
     useChatStore.getState().addMessage('user', question, sessionId)
-    await runStream(question, sessionId, useChatStore.getState().sessionModel, domainHint)
+    await runStream(question, sessionId, useChatStore.getState().sessionModel)
   }, [runStream])
 
   /** 重新生成最后一条回答：移除尾部 assistant 消息，用最近一条 user 提问重跑一轮。
@@ -190,7 +187,7 @@ export function useSSE() {
     store.removeLastAssistant(sessionId)
     // 重新生成沿用同一模型：否则「重新生成」会换模型，两次结果不可比（B.9）。
     // AI 助手页的重新生成与首问同源锁域（main）。
-    await runStream(question, sessionId, store.sessionModel, 'main')
+    await runStream(question, sessionId, store.sessionModel)
   }, [runStream])
 
   /** 停止生成：断开连接 + 发送中止信号 */
@@ -204,7 +201,7 @@ export function useSSE() {
 
     // 2) 通知后端中止
     if (requestId) {
-      await abortChat(sessionId, requestId)
+      await abortChat(sessionId, requestId, "agent")
     }
   }, [])
 

@@ -124,3 +124,65 @@ async def test_repo_user_isolation_physical(tmp_path):
                 "DELETE FROM memory_records WHERE user_id IN (:ua, :ub)"),
                 {"ua": user_a, "ub": user_b})
             await db.commit()
+
+
+async def test_repo_tenant_isolation_physical():
+    """真实 PG：同一用户在租户 A 的事实对租户 B 物理不可见。"""
+    import psycopg2
+
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    try:
+        with psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2):
+            pass
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"agent_memory 不可达，跳过隔离真实验收: {exc}")
+
+    vector = [1.0] + [0.0] * (EMBEDDING_DIM - 1)
+    user_id = f"iso7-tenant-user-{uuid.uuid4().hex[:6]}"
+    tenant_a = f"iso7-tenant-a-{uuid.uuid4().hex[:6]}"
+    tenant_b = f"iso7-tenant-b-{uuid.uuid4().hex[:6]}"
+    marker_text = f"tenant-a-only-{uuid.uuid4().hex}"
+
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(MemoryRecord(
+                tenant_id=tenant_a,
+                user_id=user_id,
+                session_id="iso7-same-session",
+                memory_type="fact",
+                content=marker_text,
+                embedding=vector,
+            ))
+            await db.commit()
+
+        async with AsyncSessionLocal() as db:
+            from backend.memory.repository.memory_repo import MemoryRepository
+
+            repo = MemoryRepository(db)
+            hits_a = [
+                record
+                for record, _score in await repo.search_hybrid(
+                    vector, user_id, top_k=10, tenant_id=tenant_a,
+                )
+            ]
+            hits_b = [
+                record
+                for record, _score in await repo.search_hybrid(
+                    vector, user_id, top_k=10, tenant_id=tenant_b,
+                )
+            ]
+
+        assert any(marker_text in hit.content for hit in hits_a)
+        assert hits_b == []
+    finally:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text(
+                "DELETE FROM memory_records "
+                "WHERE user_id = :user_id AND tenant_id IN (:tenant_a, :tenant_b)"
+            ), {
+                "user_id": user_id,
+                "tenant_a": tenant_a,
+                "tenant_b": tenant_b,
+            })
+            await db.commit()

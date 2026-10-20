@@ -6,6 +6,8 @@
   - SSE 事件按会话隔离：晚到事件不冒充他人连接
   - 分项 token：分布（Histogram）+ 总量（Counter）可聚合，Gauge 仅最近值
 """
+from dataclasses import replace
+
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -132,46 +134,184 @@ class TestProjectionPairAtomic:
 
 
 class TestSseEventIsolation:
-    def _emit(self, session_id):
+    @staticmethod
+    def _scope(**overrides):
+        from backend.context_budget.metrics import ContextEventScope
+
+        fields = {
+            "product_id": "agent",
+            "tenant_id": "tenant-A",
+            "user_id": "user-A",
+            "session_id": "same-session",
+            "request_id": "request-A",
+        }
+        fields.update(overrides)
+        return ContextEventScope(**fields)
+
+    def _emit(self, scope, **extra):
         from backend.context_budget.metrics import emit_context_event
-        emit_context_event(level="L2", action="history_trim",
-                           before_tokens=100, after_tokens=60,
-                           session_id=session_id)
 
-    def test_events_isolated_per_session(self):
-        self._emit("sess-A")
-        self._emit("sess-B")
-        got_a = []
-        from backend.context_budget.metrics import drain_pending_events
-        got_a = drain_pending_events(session_id="sess-A")
-        got_b = drain_pending_events(session_id="sess-B")
-        assert len(got_a) == 1 and len(got_b) == 1
-        assert drain_pending_events(session_id="sess-B") == []
-        assert drain_pending_events(session_id="sess-A") == []
+        emit_context_event(
+            level="L2", action="history_trim", before_tokens=100,
+            after_tokens=60, session_id=scope.session_id,
+            event_scope=scope, **extra,
+        )
 
-    def test_no_cross_session_delivery(self):
-        """A 会话的晚到事件不得被 B 会话取走（旧单队列缺陷）。"""
-        self._emit("sess-A")
+    @pytest.mark.parametrize(
+        "field", ["product_id", "tenant_id", "user_id", "session_id", "request_id"]
+    )
+    def test_events_require_exact_product_identity_and_request_scope(self, field):
+        """任一身份维度不同都不能排空另一个请求的 context 事件。"""
+        scope_a = self._scope()
+        scope_b = replace(scope_a, **{field: f"other-{field}"})
+        self._emit(scope_a)
         from backend.context_budget.metrics import drain_pending_events
-        assert drain_pending_events(session_id="sess-B") == [], \
-            "B 会话取走了 A 的事件（归属缺陷复现）"
-        assert len(drain_pending_events(session_id="sess-A")) == 1
 
-    def test_drain_without_session_refused(self):
-        self._emit("sess-A")
+        assert drain_pending_events(scope=scope_b) == []
+        assert len(drain_pending_events(scope=scope_a)) == 1
+
+    def test_late_event_from_previous_request_is_not_delivered_to_next(self):
+        """同一会话的前一请求迟到事件不能进入下一次请求的 SSE。"""
+        old_request = self._scope(request_id="timed-out-request")
+        next_request = replace(old_request, request_id="next-request")
+        self._emit(old_request)
         from backend.context_budget.metrics import drain_pending_events
-        assert drain_pending_events() == [], "无 id 调用不得整队取走"
-        # A 的事件仍在，可被 A 自己取走
-        assert len(drain_pending_events(session_id="sess-A")) == 1
+
+        assert drain_pending_events(scope=next_request) == []
+        assert len(drain_pending_events(scope=old_request)) == 1
+
+    def test_drain_without_complete_scope_refused(self):
+        scope = self._scope()
+        self._emit(scope)
+        from backend.context_budget.metrics import drain_pending_events
+
+        assert drain_pending_events() == [], "无请求作用域调用不得排空事件"
+        assert len(drain_pending_events(scope=scope)) == 1
 
     def test_unattributed_event_not_buffered(self):
-        """无会话归属的晚到事件只降级日志，不入任何桶。"""
+        """只有 session_id、缺少完整可信作用域时不缓存晚到事件。"""
         from backend.context_budget import metrics as cbm
-        cbm.emit_context_event(level="L2", action="history_trim",
-                               before_tokens=10, after_tokens=5)
+
+        cbm.emit_context_event(
+            level="L2", action="history_trim", before_tokens=10,
+            after_tokens=5, session_id="same-session",
+        )
         with cbm._pending_lock:
             assert cbm._pending_events == {}
 
+    def test_sink_rejects_event_from_another_request_scope(self):
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            reset_context_event_scope,
+            reset_context_sink,
+            set_context_event_scope,
+            set_context_sink,
+        )
+
+        owner = self._scope()
+        foreign = replace(owner, user_id="user-B")
+        received = []
+        scope_token = set_context_event_scope(owner)
+        sink_token = set_context_sink(received.append, scope=owner)
+        try:
+            emit_context_event(
+                level="L2", action="history_trim", before_tokens=10,
+                after_tokens=5, event_scope=foreign,
+            )
+            assert received == []
+            emit_context_event(
+                level="L2", action="history_trim", before_tokens=10,
+                after_tokens=5, event_scope=owner,
+            )
+            assert len(received) == 1
+        finally:
+            reset_context_sink(sink_token)
+            reset_context_event_scope(scope_token)
+
+    def test_context_event_does_not_expose_unapproved_extra_content(self):
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            reset_context_event_scope,
+            reset_context_sink,
+            set_context_event_scope,
+            set_context_sink,
+        )
+
+        scope = self._scope()
+        received = []
+        scope_token = set_context_event_scope(scope)
+        sink_token = set_context_sink(received.append, scope=scope)
+        try:
+            emit_context_event(
+                level="L2", action="history_trim", before_tokens=10,
+                after_tokens=5, event_scope=scope,
+                question="用户的敏感问题原文", folded_messages=2,
+                fold_id="fold-aaaaaaaaaaaa",
+            )
+        finally:
+            reset_context_sink(sink_token)
+            reset_context_event_scope(scope_token)
+
+        assert len(received) == 1
+        assert "question" not in received[0]
+        assert received[0]["folded_messages"] == 2
+        assert received[0]["fold_id"] == "fold-aaaaaaaaaaaa"
+        assert "用户的敏感问题原文" not in str(received[0])
+
+    def test_context_event_rejects_untrusted_fold_identifier(self):
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            reset_context_event_scope,
+            reset_context_sink,
+            set_context_event_scope,
+            set_context_sink,
+        )
+
+        scope = self._scope()
+        received = []
+        scope_token = set_context_event_scope(scope)
+        sink_token = set_context_sink(received.append, scope=scope)
+        try:
+            emit_context_event(
+                level="L4", action="collapse", before_tokens=10,
+                after_tokens=5, event_scope=scope,
+                fold_id="用户备注原文可能进入这里",
+            )
+        finally:
+            reset_context_sink(sink_token)
+            reset_context_event_scope(scope_token)
+
+        assert len(received) == 1
+        assert "fold_id" not in received[0]
+        assert "用户备注原文可能进入这里" not in str(received[0])
+
+    def test_context_event_rejects_unknown_action_and_malformed_metadata(self):
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            reset_context_event_scope,
+            reset_context_sink,
+            set_context_event_scope,
+            set_context_sink,
+        )
+
+        scope = self._scope()
+        received = []
+        scope_token = set_context_event_scope(scope)
+        sink_token = set_context_sink(received.append, scope=scope)
+        try:
+            emit_context_event(
+                level="L2", action=["history_trim"], before_tokens=10,
+                after_tokens=5, event_scope=scope,
+            )
+            emit_context_event(
+                level="L2", action="unknown_action", before_tokens=10,
+                after_tokens=5, event_scope=scope,
+            )
+        finally:
+            reset_context_sink(sink_token)
+            reset_context_event_scope(scope_token)
+
+        assert received == []
 
 class TestUsageComponentMetrics:
     def test_distribution_and_total_recorded(self):

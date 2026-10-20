@@ -154,7 +154,6 @@ def test_rag_claim_rejection_never_streams_unverified_body(monkeypatch):
     finally:
         proxy_mod.reset_stream_sink()
         trace_collector.bind(None)
-        trace_collector._thread_current = None
         from backend.observability.tracer import _scope_root_var
 
         _scope_root_var.set(None)

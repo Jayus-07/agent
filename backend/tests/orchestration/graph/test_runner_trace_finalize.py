@@ -67,7 +67,7 @@ class _FakeMemory:
         self.end_turn_idempotency_keys = []
 
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id=""):
+                      tenant_id="", event_scope=None):
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 

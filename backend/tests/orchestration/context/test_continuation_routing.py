@@ -236,8 +236,8 @@ class TestRouterNodeContinuation:
 # =====================================================
 
 class TestGeneralChatNode:
-    def test_llm_failure_falls_back(self, monkeypatch):
-        """LLM 故障 → 静态话术兜底，绝不抛异常拖垮主图。"""
+    def test_llm_failure_propagates_for_error_terminal(self, monkeypatch):
+        """LLM 故障必须进入 Runner 错误终态，不能伪造静态成功答案。"""
         from backend.orchestration.graph import general_chat_node as g
 
         class _Boom:
@@ -250,8 +250,8 @@ class TestGeneralChatNode:
         import backend.infra.llm as llm_mod
 
         monkeypatch.setattr(llm_mod, "llm", _Boom())
-        out = g.general_chat_node({"question": "你好", "messages": []})
-        assert "final_answer" in out and out["final_answer"]
+        with pytest.raises(RuntimeError, match="llm down"):
+            g.general_chat_node({"question": "你好", "messages": []})
 
     def test_no_tool_calls_structure(self, monkeypatch):
         """节点输出只有 final_answer，不产出 plan/step_results（禁工具路径）。"""

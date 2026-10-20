@@ -151,7 +151,7 @@ class BaseAgentSkill(BaseCapability):
             if meta["prompt_tokens"] or meta["completion_tokens"]:
                 try:
                     from backend.observability.tracer import trace_collector
-                    trace = trace_collector._thread_current
+                    trace = trace_collector.current()
                     if trace and trace.spans:
                         trace.spans[-1].metrics.update({
                             "prompt_tokens": meta["prompt_tokens"],

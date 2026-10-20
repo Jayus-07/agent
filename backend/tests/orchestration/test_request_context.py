@@ -94,6 +94,8 @@ class TestCheckpointSafe:
         assert safe == {"session_id": "s1", "user_id": "u1",
                         "tenant_id": "",
                         "domain_hint": "",
+                        "product_id": "internal",
+                        "product_source": "internal_call",
                         "idempotency_key": "",
                         "kb_id": "k1", "department": "",
                         "roles": (), "data_scope": "",
@@ -106,6 +108,8 @@ class TestCheckpointSafe:
     def test_dict_state_round_trip(self):
         ctx = RequestContext(session_id="s1", user_id="u2", kb_id="k2",
                              tenant_id="tenant-2", domain_hint="travel",
+                             product_id="agent",
+                             product_source="registered_route",
                              idempotency_key="req-2",
                              model="deepseek-chat", trace=object())
         state = {"request_context": ctx.checkpoint_safe()}
@@ -115,6 +119,8 @@ class TestCheckpointSafe:
         assert restored.user_id == "u2"
         assert restored.tenant_id == "tenant-2"
         assert restored.domain_hint == "travel"
+        assert restored.product_id == "agent"
+        assert restored.product_source == "registered_route"
         assert restored.idempotency_key == "req-2"
         assert restored.model == "deepseek-chat"
         assert restored.subject_type == ""

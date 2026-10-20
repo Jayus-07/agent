@@ -8,7 +8,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import desc, func, select, update
+from sqlalchemy import and_, desc, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.customer_service.errors import ValidationError
@@ -105,6 +105,101 @@ class ConversationManager:
             q = q.where(CSConversation.conversation_status == status.value)
         result = await self._s.execute(q)
         return list(result.scalars().all())
+
+    async def list_by_owner(
+        self, user_id: str, tenant_id: str, *, limit: int = 50,
+        before: datetime | None = None,
+        before_conversation_id: str | None = None,
+    ) -> list[CSConversation]:
+        """按认证属主和租户列出会话，供最终用户历史 API 使用。"""
+        user = (user_id or "").strip()
+        tenant = (tenant_id or "").strip()
+        if not user or not tenant:
+            raise ValidationError("user_id and tenant_id are required")
+        q = select(CSConversation).where(
+            CSConversation.user_id == user,
+            CSConversation.tenant_id == tenant,
+        )
+        if before is not None:
+            if before_conversation_id:
+                q = q.where(or_(
+                    CSConversation.updated_at < before,
+                    and_(
+                        CSConversation.updated_at == before,
+                        CSConversation.conversation_id < before_conversation_id,
+                    ),
+                ))
+            else:
+                q = q.where(CSConversation.updated_at < before)
+        q = q.order_by(
+            desc(CSConversation.updated_at),
+            desc(CSConversation.conversation_id),
+        ).limit(max(1, min(int(limit), 200)))
+        result = await self._s.execute(q)
+        return list(result.scalars().all())
+
+    async def count_by_owner(self, user_id: str, tenant_id: str) -> int:
+        """统计指定属主和租户的会话数。"""
+        user = (user_id or "").strip()
+        tenant = (tenant_id or "").strip()
+        if not user or not tenant:
+            raise ValidationError("user_id and tenant_id are required")
+        result = await self._s.execute(
+            select(func.count()).select_from(CSConversation).where(
+                CSConversation.user_id == user,
+                CSConversation.tenant_id == tenant,
+            )
+        )
+        return int(result.scalar() or 0)
+
+    async def get_by_owner(
+        self, conversation_id: str, user_id: str, tenant_id: str,
+    ) -> CSConversation | None:
+        """读取最终用户自己的会话；用户和租户必须同时匹配。"""
+        user = (user_id or "").strip()
+        tenant = (tenant_id or "").strip()
+        if not user or not tenant:
+            raise ValidationError("user_id and tenant_id are required")
+        result = await self._s.execute(
+            select(CSConversation).where(
+                CSConversation.conversation_id == conversation_id,
+                CSConversation.user_id == user,
+                CSConversation.tenant_id == tenant,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def rename_by_owner(
+        self, conversation_id: str, user_id: str, tenant_id: str,
+        title: str,
+    ) -> bool:
+        """更新用户可见标题，所有权条件和更新在同一条语句中校验。"""
+        user = (user_id or "").strip()
+        tenant = (tenant_id or "").strip()
+        if not user or not tenant:
+            raise ValidationError("user_id and tenant_id are required")
+        result = await self._s.execute(
+            update(CSConversation)
+            .where(
+                CSConversation.conversation_id == conversation_id,
+                CSConversation.user_id == user,
+                CSConversation.tenant_id == tenant,
+            )
+            .values(summary=title, updated_at=_now())
+        )
+        await self._s.flush()
+        return result.rowcount > 0
+
+    async def delete_by_owner(
+        self, conversation_id: str, user_id: str, tenant_id: str,
+    ) -> bool:
+        """删除属主和租户均匹配的会话，沿用模型的消息级联关系。"""
+        conv = await self.get_by_owner(conversation_id, user_id, tenant_id)
+        if not conv:
+            return False
+        await self._s.delete(conv)
+        await self._s.flush()
+        return True
 
     async def count(self, user_id: str | None = None,
                     status: ConvStatus | None = None) -> int:

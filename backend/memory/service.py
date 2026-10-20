@@ -56,6 +56,16 @@ class MemoryTurnIdempotencyConflict(ValueError):
     """幂等键已绑定到不同问题；拒绝把冲突请求写入 L2。"""
 
 
+async def _embed_query_off_loop(
+    embedding, query: str, *, user_id: str, tenant_id: str,
+):
+    """在线程池中执行同步 embedding，并绑定可信用量归属。"""
+    from backend.core.request_context import scoped_tool_identity
+
+    with scoped_tool_identity(user_id=user_id, tenant_id=tenant_id):
+        return await asyncio.to_thread(embedding.embed_query, query)
+
+
 class MemoryService:
     """统一记忆服务。Agent 只能通过此接口访问记忆。"""
 
@@ -82,6 +92,7 @@ class MemoryService:
     async def start_session(
         self, session_id: str, user_id: str = "default", query: str = "",
         tenant_id: str = "", domain: str | None = None,
+        event_scope=None,
     ) -> ShortTermBuffer:
         from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
         tenant_id = normalize_tenant_id(tenant_id)
@@ -175,7 +186,10 @@ class MemoryService:
                             "memory.embedding_query", name="记忆检索向量化", type="embedding")
                         embedding_started = time.perf_counter()
                         try:
-                            emb = l3.embedding.embed_query(l3_query)
+                            emb = await _embed_query_off_loop(
+                                l3.embedding, l3_query,
+                                user_id=user_id, tenant_id=tenant_id,
+                            )
                         except BaseException as exc:
                             trace_collector.end_span(
                                 embedding_span,
@@ -359,7 +373,8 @@ class MemoryService:
                         emit_context_event(level="L2", action="history_trim",
                                            before_tokens=_before,
                                            after_tokens=_after,
-                                           session_id=session_id)
+                                           session_id=session_id,
+                                           event_scope=event_scope)
                     except Exception:
                         logger.debug("L2 观测留痕失败", exc_info=True)
 
@@ -603,7 +618,10 @@ class MemoryService:
                 mrepo = MemoryRepository(db_session)
                 l3 = LongTermMemory(mrepo)
                 retriever = HybridRetriever(mrepo)
-                emb = l3.embedding.embed_query(query)
+                emb = await _embed_query_off_loop(
+                    l3.embedding, query,
+                    user_id=user_id, tenant_id=tenant_id,
+                )
                 # 工具显式搜索（§70/§71）：宽松 gate（enforce_gate=False），
                 # 但 SQL eligibility（scope/active/not expired）同样生效；
                 # 仅真正返回给 Agent 的记忆 mark_accessed（§31，带 scope）

@@ -34,6 +34,11 @@ from backend.config.settings import (
 
 from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
 from backend.app.api.deps import get_multi_agent
+from backend.core.product_context import (
+    AGENT_PRODUCT, CUSTOMER_SERVICE_PRODUCT, PUBLIC_PRODUCT,
+    identity_scope_key, memory_user_id, namespace_session_id,
+    namespaced_stream_id,
+)
 from backend.app.api.stream_resume import (
     DuplicateStreamIdError,
     get_stream_registry,
@@ -54,6 +59,54 @@ from backend.observability.metrics import (
 
 router = APIRouter(prefix="/chat", tags=["对话"])
 
+
+def _product_for_chat_route(request: Request):
+    """产品身份只由 FastAPI 注册路径确定，不读 body/header。"""
+    route = request.scope.get("route")
+    route_path = str(getattr(route, "path", "") or "")
+    if any(route_path.endswith(suffix) for suffix in (
+        "/chat/agent", "/chat/agent/stream", "/chat/agent/stream/resume",
+        "/chat/agent/abort", "/chat/agent/messages",
+    )):
+        return AGENT_PRODUCT
+    if any(route_path.endswith(suffix) for suffix in (
+        "/chat/customer-service", "/chat/customer-service/stream",
+        "/chat/customer-service/stream/resume",
+        "/chat/customer-service/abort", "/chat/customer-service/messages",
+    )):
+        return CUSTOMER_SERVICE_PRODUCT
+    return PUBLIC_PRODUCT
+
+
+def _chat_identity(request: Request, product):
+    """专属产品入口只接受网关身份；共享入口不接受 body 身份。"""
+    from backend.app.api.identity import require_product_identity, resolve_identity
+
+    ident = (
+        require_product_identity(request)
+        if product.requires_identity else resolve_identity(request)
+    )
+    return ident, (ident.user_id if ident.authenticated else "anonymous")
+
+
+def _product_session_id(product, session_id: str) -> str:
+    try:
+        return namespace_session_id(product, session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="会话标识过长") from exc
+
+
+def _product_idempotency_key(product, supplied_key: str | None,
+                             fallback: str = "") -> str:
+    """仅对真实幂等键加产品作用域；空键保持空值。"""
+    key = (supplied_key or "").strip() or (fallback or "").strip()
+    if not key:
+        return ""
+    if product.product_id in {"public", "internal"}:
+        return key
+    return f"{product.product_id}::{key}"
+
+
 # ── 全局线程池（按 CPU 自适应，预留 1 核给 event loop） ──
 # SSE 流的 worker 数 = SSE 并发上限；同时第 N+1 路会排队等待有空闲 worker。
 # 阈值可通过 CHAT_SSE_MAX_WORKERS 覆盖（P1-14：配置收敛到 config/settings.py）。
@@ -64,6 +117,7 @@ _executor = ThreadPoolExecutor(
 )
 # 用户停止信号字典（aborted 路径在 chat_abort 中按 key 触发）
 _active_stops: dict[str, threading.Event] = {}
+_active_stop_owners: dict[str, tuple[str, str, str]] = {}
 # 容量 1024 → 在 100Hz 输出下可撑 ~10s；超出时 backpressure（增量记 metric + set stop）
 _SSE_QUEUE_MAXSIZE = CHAT_SSE_QUEUE_MAXSIZE
 # consumer 阻塞拉取超时（秒）→ CPU 占用从 100Hz 轮询降到 ~0.5Hz
@@ -201,6 +255,8 @@ def _sse_error_event(exc: BaseException, trace_id: str = "") -> dict:
 # POST /chat — 同步对话（非流式，兼容旧版）
 # ═══════════════════════════════════════════════════
 @router.post("", response_model=ChatResponse, responses={500: {"model": ErrorResponse}})
+@router.post("/agent", response_model=ChatResponse, responses={500: {"model": ErrorResponse}})
+@router.post("/customer-service", response_model=ChatResponse, responses={500: {"model": ErrorResponse}})
 async def chat(req: ChatRequest, request: Request,
                _rate=Depends(require_rate_limit)):
     """提交自然语言问题，Multi-Agent 自动拆解+执行+汇总"""
@@ -208,19 +264,23 @@ async def chat(req: ChatRequest, request: Request,
     t0 = time.monotonic()
     agent = get_multi_agent()
     kb_id = req.kb_id or "default"
-    from backend.app.api.identity import resolve_identity
-    ident = resolve_identity(request, body_user_id=req.user_id)
-    user_id = ident.user_id or "default"
+    product = _product_for_chat_route(request)
+    ident, user_id = _chat_identity(request, product)
+    session_id = req.session_id
     try:
         # E3（2026-09-23）：sources 随返回值带回——不再读 MultiAgentSystem
         # 单例的 _last_sources（并发请求互相覆盖串扰）
         outcome = await asyncio.to_thread(
-            agent.ask_result, req.question, req.session_id, kb_id=kb_id,
+            agent.ask_result, req.question, session_id, kb_id=kb_id,
             user_id=user_id, department=ident.department,
             permissions=ident.permissions, model=req.model or "",
-            domain_hint=req.domain_hint or "", tenant_id=ident.tenant_id,
-            idempotency_key=(request.headers.get("Idempotency-Key") or "").strip(),
-            roles=ident.roles)
+            domain_hint=product.domain_hint, tenant_id=ident.tenant_id,
+            idempotency_key=_product_idempotency_key(
+                product, request.headers.get("Idempotency-Key"),
+            ),
+            roles=ident.roles, product_id=product.product_id,
+            product_source=product.source,
+            persist_memory=product.persist_memory)
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
             answer=outcome.answer,
@@ -238,6 +298,8 @@ async def chat(req: ChatRequest, request: Request,
 # POST /chat/stream — SSE 流式对话 (v2)
 # ═══════════════════════════════════════════════════
 @router.post("/stream", responses={500: {"model": ErrorResponse}})
+@router.post("/agent/stream", responses={500: {"model": ErrorResponse}})
+@router.post("/customer-service/stream", responses={500: {"model": ErrorResponse}})
 async def chat_stream(
     r: Request,
     _rate=Depends(require_rate_limit),
@@ -317,6 +379,11 @@ async def chat_stream(
 
     _validate_model_override(req.model)
 
+    product = _product_for_chat_route(r)
+    ident, user_id = _chat_identity(r, product)
+    session_id = req.session_id
+    product_session_id = _product_session_id(product, session_id)
+
     t0 = time.monotonic()
     # TTFT 追踪器建在 handler 层：producer（TTFT 落库）与 event_generator
     # （on_delta 采样）两处闭包都要可见——放 event_generator 内 producer
@@ -326,12 +393,12 @@ async def chat_stream(
     kb_id = req.kb_id or "default"
     request_id = _resolve_request_id(req.request_id)
 
-    # user_id 解析：统一走 identity.py（P3 收敛）。
-    # legacy=请求体优先+网关头兜底（现网行为不变）；header/strict=网关权威，body 身份被无视。
-    from backend.app.api.identity import resolve_identity
-    ident = resolve_identity(r, body_user_id=req.user_id)
-    user_id = ident.user_id or "default"
-    key = _request_key(req.session_id, request_id)
+    # 产品身份来自静态注册路由；请求体的 user_id/domain_hint/product_id 均不参与。
+    scoped_session_id = (
+        f"{identity_scope_key(product, user_id, ident.tenant_id or '')}::"
+        f"{product_session_id}"
+    )
+    key = _request_key(scoped_session_id, request_id)
 
     # —— 中止标志延后到生成器内部注册，确保只在真正进入流式后注册 _active_stops；
     #    之前的代码在请求 body 解析前就注册，r.json() 抛错时不会清理（P1-10 修复）。 ——
@@ -350,8 +417,12 @@ async def chat_stream(
     # —— 客户端断开只脱离订阅，服务端跑完供 resume 重放。——
     try:
         record = get_stream_registry().create(
-            stream_id=request_id, session_id=req.session_id,
-            user_id=user_id, tenant_id=ident.tenant_id or "",
+            stream_id=namespaced_stream_id(
+                product, request_id, user_id=user_id,
+                tenant_id=ident.tenant_id or "",
+            ),
+            session_id=product_session_id, user_id=user_id,
+            tenant_id=ident.tenant_id or "",
         )
     except DuplicateStreamIdError:
         # 不能覆盖原恢复记录后再启动第二次 Runner，否则会丢失原流并重复写记忆。
@@ -417,20 +488,24 @@ async def chat_stream(
         try:
             for evt in agent.stream_events(
                 req.question,
-                req.session_id,
+                session_id,
                 kb_id=kb_id,
                 stop_event=stop_event,
                 user_id=user_id,
                 department=ident.department,
                 permissions=ident.permissions,
                 model=req.model or "",
-                domain_hint=req.domain_hint or "",
+                domain_hint=product.domain_hint,
                 tenant_id=ident.tenant_id,
-                idempotency_key=(
-                    (r.headers.get("Idempotency-Key") or "").strip()
-                    or request_id
+                idempotency_key=_product_idempotency_key(
+                    product,
+                    r.headers.get("Idempotency-Key"),
+                    fallback=request_id,
                 ),
                 roles=ident.roles,
+                product_id=product.product_id,
+                product_source=product.source,
+                persist_memory=product.persist_memory,
             ):
                 # 先入恢复缓冲再检查 stop：abort 的「用户中止」error 帧本身
                 # 就是 stop 置位后的第一帧——丢弃它会让注册表缺终端帧
@@ -465,13 +540,17 @@ async def chat_stream(
             _put_final_frame(aq, loop, stop_event, None)  # sentinel
             record.finish()
             _record_ttft_to_store()  # M13 尾项：TTFT 旁路落 trace_summary（软失败）
-            _active_stops.pop(key, None)  # 断连脱离后 /chat/abort 仍可命中直至终态
+            _active_stops.pop(key, None)  # 断连脱离后 abort 仍可命中直至终态
+            _active_stop_owners.pop(key, None)
             chat_sse_executor_active.dec()  # P1-3：与入口 inc 对称，任何出口都归零
 
     async def event_generator():
         """异步生成器：从 asyncio.Queue 取事件 → SSE 格式化 → yield。"""
         # 注册中止标志（cleanup 在 finally 强制执行）
         _active_stops[key] = stop_event
+        _active_stop_owners[key] = (
+            product.product_id, user_id, ident.tenant_id or "",
+        )
         # P1-3：锚定提交时刻（run_in_executor 后 producer 可能因池满排队）
         pool_wait_anchor["submitted_at"] = time.monotonic()
         future = loop.run_in_executor(_executor, producer)
@@ -543,6 +622,7 @@ async def chat_stream(
                 # 兜底：非断连退出（异常路径）确保生产者退出，避免线程悬挂
                 stop_event.set()
                 _active_stops.pop(key, None)
+                _active_stop_owners.pop(key, None)
                 try:
                     await asyncio.wait_for(future, timeout=2.0)
                 except (asyncio.TimeoutError, Exception):
@@ -583,6 +663,8 @@ def _resume_error(status_code: int, code: ErrorCode, message: str,
 
 
 @router.post("/stream/resume")
+@router.post("/agent/stream/resume")
+@router.post("/customer-service/stream/resume")
 async def chat_stream_resume(
     r: Request,
     _rate=Depends(require_rate_limit),
@@ -594,7 +676,11 @@ async def chat_stream_resume(
     - 不可恢复（进程重启/记录过期/缓冲 gap）→ 404 STREAM_NOT_RESUMABLE；
       身份不匹配 → 403；游标非法 → 422。
     """
-    from backend.app.api.identity import resolve_identity
+    product = _product_for_chat_route(r)
+    ident, user_id = _chat_identity(r, product)
+    if not ident.authenticated:
+        return _resume_error(403, ErrorCode.PERMISSION_DENIED,
+                             "无权恢复此对话流。", "FORBIDDEN")
 
     try:
         raw = await r.json()
@@ -609,7 +695,9 @@ async def chat_stream_resume(
         return _resume_error(422, ErrorCode.INVALID_PARAM,
                              "请求参数有误，请检查后重试。", "INVALID_CURSOR")
 
-    record = get_stream_registry().get(request_id)
+    record = get_stream_registry().get(namespaced_stream_id(
+        product, request_id, user_id=user_id, tenant_id=ident.tenant_id or "",
+    ))
     if record is None:
         sse_resume_failure_total.labels(reason="not_found").inc()
         sse_resume_total.labels(result="not_found").inc()
@@ -617,8 +705,7 @@ async def chat_stream_resume(
             404, ErrorCode.NOT_FOUND,
             "原流已结束且超出恢复窗口，请重新发起提问。", "STREAM_NOT_RESUMABLE")
 
-    ident = resolve_identity(r)
-    if not record.identity_matches(user_id=ident.user_id or "default",
+    if not record.identity_matches(user_id=user_id,
                                    tenant_id=ident.tenant_id or ""):
         sse_resume_failure_total.labels(reason="forbidden").inc()
         sse_resume_total.labels(result="forbidden").inc()
@@ -685,6 +772,8 @@ async def chat_stream_resume(
 # POST /chat/messages — 持久化会话消息到 PG
 # ═══════════════════════════════════════════════════
 @router.post("/messages")
+@router.post("/agent/messages")
+@router.post("/customer-service/messages")
 def save_messages(req: dict, request: Request):
     """批量保存会话消息（前端 SSE done 后调用）
 
@@ -694,18 +783,23 @@ def save_messages(req: dict, request: Request):
     主 loop 直接 await 会抛 "attached to a different loop"（CS 页消息
     持久化失败的根因）。
     """
-    from backend.app.api.identity import resolve_identity
-
-    identity = resolve_identity(request)
+    product = _product_for_chat_route(request)
+    identity, user_id = _chat_identity(request, product)
     if not identity.authenticated:
         raise HTTPException(status_code=401, detail="未认证：会话记忆按登录身份隔离")
+    if not product.persist_memory:
+        raise HTTPException(
+            status_code=403,
+            detail="共享对话入口不开放持久记忆，请使用产品专属入口",
+        )
+    session_id = _product_session_id(product, req.get("session_id", ""))
     from backend.memory.manager import memory_manager
     from backend.memory.service import MemoryService
     return memory_manager.run_tool(
         lambda: MemoryService().save_messages(
-            session_id=req.get("session_id", ""),
+            session_id=session_id,
             messages=req.get("messages", []),
-            user_id=identity.user_id,
+            user_id=memory_user_id(product, user_id),
             tenant_id=identity.tenant_id,
         )
     )
@@ -715,19 +809,34 @@ def save_messages(req: dict, request: Request):
 # POST /chat/abort — 前端主动中止
 # ═══════════════════════════════════════════════════
 @router.post("/abort")
-async def chat_abort(req: AbortRequest):
+@router.post("/agent/abort")
+@router.post("/customer-service/abort")
+async def chat_abort(req: AbortRequest, request: Request):
     """前端点击停止按钮后调用，触发 stop_event 中断后端执行"""
-    key = _request_key(req.session_id, req.request_id)
+    product = _product_for_chat_route(request)
+    identity, user_id = _chat_identity(request, product)
+    if not identity.authenticated:
+        raise HTTPException(status_code=401, detail="未认证：无法中止对话流")
+    session_id = _product_session_id(product, req.session_id)
+    scoped_session_id = (
+        f"{identity_scope_key(product, user_id, identity.tenant_id or '')}::"
+        f"{session_id}"
+    )
+    key = _request_key(scoped_session_id, req.request_id)
+    expected_owner = (product.product_id, user_id, identity.tenant_id or "")
     evt = _active_stops.get(key)
-    if evt:
+    if evt and _active_stop_owners.get(key) == expected_owner:
         evt.set()
         return {"status": "aborted", "key": key}
     # #14：服务端可能自行生成了唯一 request_id（meta 事件回传），旧客户端未回传时
     # 精确 key 未命中 → 按 session 前缀兜底（abort 语义 = 停该会话的活跃流）
-    prefix = f"{req.session_id}:"
-    hits = [e for k, e in _active_stops.items() if k.startswith(prefix)]
+    prefix = f"{scoped_session_id}:"
+    hits = [
+        (k, e) for k, e in _active_stops.items()
+        if k.startswith(prefix) and _active_stop_owners.get(k) == expected_owner
+    ]
     if hits:
-        for e in hits:
-            e.set()
+        for _, event in hits:
+            event.set()
         return {"status": "aborted", "key": f"{prefix}*"}
     return {"status": "not_found", "key": key}

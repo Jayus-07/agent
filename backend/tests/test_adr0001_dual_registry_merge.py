@@ -50,6 +50,11 @@ class TestADRDualRegistryMerge:
         assert "知识库" in rag["description"]
         assert rag["params"] == {
             "question": {"type": "string", "required": True, "description": "检索问题"},
+            "kb_id": {
+                "type": "string",
+                "required": False,
+                "description": "请求的知识库 ID；RAG 授权仍由服务端按主体校验",
+            },
         }
         assert "question" in rag["示例"]
 

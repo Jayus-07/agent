@@ -193,7 +193,10 @@ def _fake_guard(monkeypatch):
 
 
 class _FakeMemory:
-    def start_session(self, session_id, question, user_id="default", tenant_id=""):
+    def start_session(
+        self, session_id, question, user_id="default", tenant_id="",
+        event_scope=None,
+    ):
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 

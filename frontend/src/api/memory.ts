@@ -24,14 +24,15 @@ export interface SessionPage {
 }
 
 export const SESSION_PAGE_SIZE = 10;
+const MEMORY_BASE = "/api/memory/agent";
 
-/** GET /memory/sessions — 列出所有会话 */
+/** GET /memory/agent/sessions — 列出主助手会话 */
 export async function listSessions(): Promise<SessionMeta[]> {
-  const data = await request<{ sessions: SessionMeta[] }>("/api/memory/sessions");
+  const data = await request<{ sessions: SessionMeta[] }>(`${MEMORY_BASE}/sessions`);
   return data.sessions || [];
 }
 
-/** GET /memory/sessions — 分页读取历史会话 */
+/** GET /memory/agent/sessions — 分页读取主助手历史会话 */
 export async function listSessionsPage(
   limit = SESSION_PAGE_SIZE,
   before?: string,
@@ -40,7 +41,7 @@ export async function listSessionsPage(
   const params = new URLSearchParams({ limit: String(limit) });
   if (before) params.set("before", before);
   if (beforeSessionId) params.set("before_session_id", beforeSessionId);
-  return request<SessionPage>(`/api/memory/sessions?${params.toString()}`);
+  return request<SessionPage>(`${MEMORY_BASE}/sessions?${params.toString()}`);
 }
 
 /** 画像记忆条目（memory_records active 行的只读投影） */
@@ -50,35 +51,35 @@ export interface ProfileMemory {
   created_at: string | null;
 }
 
-/** GET /memory/profile — 列出当前用户的画像记忆（长期记忆，仅本人） */
+/** GET /memory/agent/profile — 列出当前用户的主助手画像记忆（长期记忆，仅本人） */
 export async function listProfileMemories(limit = 50): Promise<ProfileMemory[]> {
   const data = await request<{ records: ProfileMemory[] }>(
-    `/api/memory/profile?limit=${limit}`,
+    `${MEMORY_BASE}/profile?limit=${limit}`,
   );
   return data.records || [];
 }
 
-/** GET /memory/sessions/{id} — 获取会话消息 */
+/** GET /memory/agent/sessions/{id} — 获取会话消息 */
 export async function getSessionMessages(
   sessionId: string,
 ): Promise<{ role: string; content: string; created_at?: string | null }[]> {
   const data = await request<{ messages: { role: string; content: string }[] }>(
-    `/api/memory/sessions/${encodeURIComponent(sessionId)}`,
+    `${MEMORY_BASE}/sessions/${encodeURIComponent(sessionId)}`,
   );
   return data.messages || [];
 }
 
-/** DELETE /memory/sessions/{id} — 删除会话；会话不存在时后端返回 404（抛 ApiError） */
+/** DELETE /memory/agent/sessions/{id} — 删除会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function deleteMemorySession(sessionId: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`${MEMORY_BASE}/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
   return data.ok === true;
 }
 
-/** PATCH /memory/sessions/{id} — 重命名会话；会话不存在时后端返回 404（抛 ApiError） */
+/** PATCH /memory/agent/sessions/{id} — 重命名会话；会话不存在时后端返回 404（抛 ApiError） */
 export async function renameMemorySession(sessionId: string, title: string): Promise<boolean> {
-  const data = await request<{ ok: boolean }>(`/api/memory/sessions/${encodeURIComponent(sessionId)}`, {
+  const data = await request<{ ok: boolean }>(`${MEMORY_BASE}/sessions/${encodeURIComponent(sessionId)}`, {
     method: "PATCH",
     body: JSON.stringify({ title }),
   });

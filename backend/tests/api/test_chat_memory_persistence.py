@@ -11,13 +11,15 @@ from backend.app.api.routes import chat as chat_route
 
 def _client() -> TestClient:
     app = FastAPI()
-    app.add_api_route("/chat/messages", chat_route.save_messages, methods=["POST"])
+    app.add_api_route(
+        "/chat/agent/messages", chat_route.save_messages, methods=["POST"],
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 
 def test_chat_message_persistence_rejects_guest():
     response = _client().post(
-        "/chat/messages",
+        "/chat/agent/messages",
         json={"session_id": "s1", "messages": [{"role": "user", "content": "hi"}]},
     )
     assert response.status_code == 401
@@ -42,7 +44,7 @@ def test_chat_message_persistence_uses_trusted_tenant_and_user(monkeypatch):
     )
 
     response = _client().post(
-        "/chat/messages",
+        "/chat/agent/messages",
         headers={
             "X-User-Id": "trusted-user",
             "X-Tenant-Id": "tenant-a",
@@ -63,3 +65,15 @@ def test_chat_message_persistence_uses_trusted_tenant_and_user(monkeypatch):
         "user_id": "trusted-user",
         "tenant_id": "tenant-a",
     }]
+
+
+def test_product_idempotency_key_keeps_absent_header_empty():
+    from backend.app.api.routes.chat import _product_idempotency_key
+    from backend.core.product_context import AGENT_PRODUCT, CUSTOMER_SERVICE_PRODUCT
+
+    assert _product_idempotency_key(AGENT_PRODUCT, None) == ""
+    assert _product_idempotency_key(AGENT_PRODUCT, "  ") == ""
+    assert _product_idempotency_key(AGENT_PRODUCT, "turn-1") == "agent::turn-1"
+    assert _product_idempotency_key(
+        CUSTOMER_SERVICE_PRODUCT, None, fallback="request-1",
+    ) == "customer_service::request-1"

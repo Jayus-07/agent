@@ -37,6 +37,10 @@ _current_user_id: ContextVar[str] = ContextVar("tool_user_id", default="")
 _current_tenant_id: ContextVar[str] = ContextVar("tool_tenant_id", default="")
 # 当前请求的可信业务域提示；记忆 Tool 用它过滤 user_domain 记忆，模型参数不可覆盖。
 _current_domain_hint: ContextVar[str] = ContextVar("tool_domain_hint", default="")
+_current_product_id: ContextVar[str] = ContextVar("product_id", default="internal")
+_current_product_source: ContextVar[str] = ContextVar(
+    "product_source", default="internal_call"
+)
 # 客户端幂等键（Idempotency-Key）；未提供时由业务工具从请求体指纹派生。
 _current_idempotency_key: ContextVar[str] = ContextVar(
     "tool_idempotency_key", default=""
@@ -156,6 +160,22 @@ def get_tool_domain_hint() -> str:
     return _current_domain_hint.get()
 
 
+def set_product_context(product_id: str, source: str) -> None:
+    """绑定由服务端路由确定的产品身份及来源。"""
+    _current_product_id.set(product_id or "internal")
+    _current_product_source.set(source or "internal_call")
+
+
+def get_current_product_id() -> str:
+    """当前服务端产品身份；没有请求上下文时返回 internal。"""
+    return _current_product_id.get()
+
+
+def get_current_product_source() -> str:
+    """当前产品身份的服务端来源类别。"""
+    return _current_product_source.get()
+
+
 def set_tool_idempotency_key(idempotency_key: str) -> None:
     _current_idempotency_key.set(idempotency_key or "")
 
@@ -242,6 +262,8 @@ class RequestContext:
     # 入口路由域提示，不是 Tool/LLM 参数；隔离域级用户记忆。
     # 放在末尾以保持既有 RequestContext 位置参数顺序兼容。
     domain_hint: str = ""
+    product_id: str = "internal"
+    product_source: str = "internal_call"
 
     def bind(self) -> None:
         """把上下文绑定到当前线程的 ContextVar（节点入口 / worker 入口调用）。
@@ -285,6 +307,7 @@ class RequestContext:
         set_tool_user_id(self.user_id)
         set_tool_tenant_id(self.tenant_id)
         set_tool_domain_hint(self.domain_hint)
+        set_product_context(self.product_id, self.product_source)
         set_tool_idempotency_key(self.idempotency_key)
         set_tool_department(self.department)
         set_tool_permissions(self.permissions)
@@ -310,6 +333,8 @@ class RequestContext:
             "user_id": self.user_id,
             "tenant_id": self.tenant_id,
             "domain_hint": self.domain_hint,
+            "product_id": self.product_id,
+            "product_source": self.product_source,
             "idempotency_key": self.idempotency_key,
             "kb_id": self.kb_id,
             "department": self.department,

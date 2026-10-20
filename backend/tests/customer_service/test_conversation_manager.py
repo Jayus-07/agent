@@ -81,6 +81,46 @@ class TestGet:
         assert result is None
 
 
+class TestOwnerScopedHistory:
+    async def test_list_by_owner_filters_user_and_tenant(self, manager, mock_session):
+        mock_result = MagicMock()
+        mock_result.scalars.return_value.all.return_value = []
+        mock_session.execute.return_value = mock_result
+
+        await manager.list_by_owner("user-1", "tenant-1", limit=10)
+
+        statement = mock_session.execute.await_args.args[0]
+        sql = str(statement.compile(compile_kwargs={"literal_binds": True}))
+        assert "user_id = 'user-1'" in sql
+        assert "tenant_id = 'tenant-1'" in sql
+
+    async def test_owner_scoped_rename_and_delete(self, manager, mock_session):
+        update_result = MagicMock()
+        update_result.rowcount = 1
+        mock_session.execute.return_value = update_result
+        assert await manager.rename_by_owner(
+            "conv-1", "user-1", "tenant-1", "标题",
+        )
+        update_sql = str(
+            mock_session.execute.await_args.args[0].compile(
+                compile_kwargs={"literal_binds": True},
+            )
+        )
+        assert "user_id = 'user-1'" in update_sql
+        assert "tenant_id = 'tenant-1'" in update_sql
+
+        conv = MagicMock()
+        select_result = MagicMock()
+        select_result.scalar_one_or_none.return_value = conv
+        mock_session.execute.return_value = select_result
+        assert await manager.delete_by_owner("conv-1", "user-1", "tenant-1")
+        mock_session.delete.assert_awaited_once_with(conv)
+
+    async def test_owner_scoped_history_fails_closed_without_tenant(self, manager):
+        with pytest.raises(ValidationError, match="tenant_id"):
+            await manager.list_by_owner("user-1", "")
+
+
 class TestTransition:
     async def test_resolve_sets_closed_at(self, manager, mock_session):
         mock_conv = MagicMock()

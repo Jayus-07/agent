@@ -62,6 +62,9 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
     """
     action = meta.get("domain_action") or "plan"
     fields = _hierarchical_state_fields(meta)
+    scope_session_id = (
+        state.get("product_session_id") or state.get("session_id") or ""
+    )
 
     # rule override（workflow / 复合意图）：无粗分类字段，沿用既有决策路径
     if not fields["domain"]:
@@ -74,7 +77,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
 
             mark_domain_turn(
                 state.get("tenant_id") or "", state.get("user_id") or "",
-                state.get("session_id") or "",
+                scope_session_id,
                 domain="general", intent="general_chat", action="general_chat",
                 pending_question="",
             )
@@ -152,10 +155,10 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 clarify_allowed,
                 mark_clarified,
             )
-            if clarify_allowed(state.get("session_id", ""), query):
+            if clarify_allowed(scope_session_id, query):
                 clarify = build_refusal_clarify(query, state.get("domain_hint") or "")
                 mark_clarified(
-                    state.get("session_id", ""), query,
+                    scope_session_id, query,
                     options=clarify.get("options"),
                     source=clarify.get("source", ""),
                 )
@@ -169,7 +172,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
 
                     set_pending_question(
                         state.get("tenant_id") or "", state.get("user_id") or "",
-                        state.get("session_id") or "",
+                        scope_session_id,
                         clarify.get("question") or "",
                     )
                 except Exception:
@@ -212,7 +215,7 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
 
             mark_domain_turn(
                 state.get("tenant_id") or "", state.get("user_id") or "",
-                state.get("session_id") or "",
+                scope_session_id,
                 domain=fields["domain"], intent=action,
                 action=fields["selected_tool"] or fields["domain"],
                 pending_question="",

@@ -117,6 +117,10 @@ class AgentState(TypedDict):
     # 每轮由 make_initial_state 写入当前请求值，无跨轮残留问题。
     user_id: str
     department: str
+    # 产品入口身份仅由服务器注册路由写入，作为 RequestContext 的图投影。
+    product_id: str
+    product_source: str
+    product_session_id: str
     # 入口域提示平铺（2026-09-18 客服窗口锁域）：CSDrawer 每条消息带
     # domain_hint=customer_service，router_node 据此强制走 CS 预过滤
     # （跳过域检测门/灰度/其他域图 prefilter）；空串 = 全局入口，行为不变。

@@ -13,10 +13,10 @@ class ChatRequest(BaseModel):
     session_id: str = Field("default", description="会话ID，同一会话内记忆持久化")
     kb_id: Optional[str] = Field(None, description="知识库ID（policy/tech/finance/hr 等，默认 default）")
     request_id: Optional[str] = Field("default", description="请求ID，用于中止信号路由")
-    user_id: Optional[str] = Field(None, description="用户ID（优先从请求体获取，其次从信任网关注头获取）")
+    user_id: Optional[str] = Field(None, description="兼容旧客户端的字段；服务端忽略，请求身份只取可信网关注入头")
     department: Optional[str] = Field("", description="员工部门ID（检索授权用；空=未声明，按对客最严格集合处理）")
     model: Optional[str] = Field(None, description="按请求模型覆盖（须为已注册模型名，空 = 全局默认）")
-    domain_hint: Optional[str] = Field("", description="入口域提示：customer_service=客服窗口锁域（直接进客服管线，不重新判域/不受灰度影响）；main/agent=AI助手页锁域（不进旅游/选品/预订/商务域图，强信号改产handoff引导卡）；空=全局入口按需路由")
+    domain_hint: Optional[str] = Field("", description="兼容旧客户端的字段；服务端忽略，产品身份和路由范围由注册 API 路径确定")
 
 class ChatResponse(BaseModel):
     answer: str

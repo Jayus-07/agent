@@ -108,6 +108,14 @@ class GovernanceRuntime:
     def evaluate(self, request: ToolCallRequest, *, require_confirmation: bool = False) -> GovernanceDecision:
         request = self._request_context(request)
         spec = get_tool_spec(request.capability)
+        from backend.core.request_context import get_current_product_id
+        from backend.core.product_context import product_allows_capability
+        product_id = get_current_product_id()
+        if not product_allows_capability(
+            product_id, request.capability,
+            (request.domain,) if request.domain else (),
+        ):
+            return GovernanceDecision(False, "product_capability_denied", "当前产品入口不可执行该能力", ToolLifecycle.BLOCKED, request.capability, {})
         if spec is None:
             return GovernanceDecision(False, "tool_not_registered", "ToolSpec 不存在", ToolLifecycle.BLOCKED, request.capability, {})
         if request.candidate_capabilities and request.capability not in request.candidate_capabilities:

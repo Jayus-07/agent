@@ -9,7 +9,7 @@
   - 不进 planner/supervisor/任何 Skill（零工具调用）；
   - 不进 RAG 检索（知识库拒答话术对寒暄是纯噪声）；
   - 复用 L1 会话历史（memory.start_session 产出的 messages）保持语气连贯；
-  - 流式走既有 proxy sink（与 reporter 同一模式），失败降级静态话术。
+  - 流式走既有 proxy sink（与 reporter 同一模式），模型失败交由 Runner 输出安全错误终态。
 """
 from __future__ import annotations
 
@@ -36,13 +36,6 @@ def _chat_system_prompt() -> str:
     except Exception as exc:  # noqa: BLE001 — 寒暄路径不因 prompt 读取失败报错
         logger.warning(f"[GeneralChat] 注册表渲染失败，降级内置常量: {exc}")
         return _SYSTEM_PROMPT
-
-_FALLBACK_ANSWER = (
-    "你好！我是企业智能运营助手，可以帮你规划旅游行程、处理订单售后、"
-    "做商品智能选品、查询与分析经营数据，也能回答知识库里的制度问题。"
-    "请问今天想从哪件事开始？"
-)
-
 
 def general_chat_node(state: dict) -> dict:
     """寒暄直答：主 LLM 生成，不调用任何工具/Skill/RAG。"""
@@ -85,6 +78,9 @@ def general_chat_node(state: dict) -> dict:
             raise ValueError("empty answer")
         logger.info(f"[GeneralChat] 直答完成: {len(answer)} 字符")
         return {"final_answer": answer}
-    except Exception as e:
-        logger.warning(f"[GeneralChat] 主 LLM 直答失败，降级静态话术: {e}")
-        return {"final_answer": _FALLBACK_ANSWER}
+    except Exception as exc:
+        logger.warning(
+            "[GeneralChat] 主 LLM 直答失败，按错误终态中止: %s",
+            type(exc).__name__,
+        )
+        raise

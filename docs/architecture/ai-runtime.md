@@ -23,11 +23,13 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - LangGraph state、RouteDecision 与兼容投影以 backend/orchestration/ 的现行 schema 为准；新增状态字段需检查状态投影、Checkpoint 与调用方。
 - Checkpoint 的身份键和数据读写必须按用户、租户、会话隔离；只读查询不应覆盖可写工作流状态。主图每次执行使用不透明 `agent-<UUID>` thread_id，避免 session_id 写入 checkpoint 索引；该键不跨轮复用，当前没有按此键恢复中断主图执行的公开路径。
 - SSE 事件结构与事件顺序以 backend/orchestration/graph/event_schema.py、具体事件生成器和 API 契约为准；新增事件须同步检查后端和消费端。
+- 上下文预算事件的缓冲作用域包含 Product、Tenant、User、命名空间 Session 和 Request。后台记忆裁剪事件只有在完整作用域与当前请求完全一致时才能进入该 SSE；作用域缺失、请求已超时或晚到事件不会转交给后续请求。事件只允许发送约定的结构元数据，不携带问题原文或摘要正文。
+- 主助手与客服分别使用 `/chat/agent/*`、`/chat/customer-service/*` 和 `/memory/agent/*`、`/memory/customer-service/*`。身份由注册路由固定，产品入口要求可信用户与租户；body `user_id`、`domain_hint` 不授予身份或能力。Agent Memory 保持存量 raw user/session key，由 `/memory/agent/*` 独占访问；客服历史读写既有 `customer_service.conversations/messages`，并用可信 user/tenant 校验归属。旧共享 `/chat/*` 仅提供公共对话，旧共享 `/memory/*` 不开放持久记忆。
 - L2 会话所有权由 `chat_sessions.tenant_id/user_id/session_id` 共同界定；会话列表、单会话读写和删除均校验服务端身份的租户与用户。旧会话仅按 `auth.users` 权威映射租户，无法映射的记录保留在不可由运行时身份产生的 `quarantine` 范围。schema 由 `092_chat_session_tenant_scope.sql` 管理。旅游旧消息适配器把租户摘要并入内部 user key，兼容其专用调用路径。
-- `/chat/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
+- 产品专属 `/chat/{product}/stream` 的成功轮次持久化以 `Idempotency-Key` 为幂等键；未提供时使用服务端 `request_id`。Memory 在同一事务中提交 L2 问答、幂等收据与 L3 outbox；收据按 tenant/user/session 隔离，只保留键和问题的 SHA-256。相同键与问题复用原轮次；相同键绑定不同问题时拒绝再次写入。表结构由 `090_memory_turn_idempotency.sql` 管理，随会话/消息删除级联清除。
 - L2 `chat_messages` 兼容保留普通 user/assistant 文本行；成功轮次的 `end_turn → save_turn` 以受控 LangChain 写入记录 `message_type`（human/ai）及 JSON `message_metadata`。通用写入也支持 tool，可恢复 `AIMessage.tool_calls` 和 `ToolMessage.tool_call_id` 等协议字段；恢复时始终以数据库消息 ID 生成 LangChain ID，旧行的空类型列继续按 user/assistant 还原。字段由 `091_chat_message_langchain_metadata.sql` 管理。当前主 Graph Runner 只暴露最终问答和结构化 step results，尚无可信 LangChain ToolMessage 流可接入。
 - HTTP 请求完成、Tool 执行结果、Domain Graph 业务结果是不同状态；错误和部分成功须保留可解释结果。
-- `/chat/stream` 的浏览器断连由 SSE 恢复层继续消费 producer；若 Runner 生成器本身被关闭，则设置取消信号停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
+- 产品专属流式对话的浏览器断连由 SSE 恢复层继续消费 producer；若 Runner 生成器本身被关闭，则设置取消信号停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
 - Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
 
 ## Node Runtime

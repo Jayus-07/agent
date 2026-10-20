@@ -2,13 +2,11 @@
 api/routes/memory.py — 会话记忆 API
 
 端点:
-  GET    /memory/sessions              — 列出所有会话
-  GET    /memory/sessions/{id}         — 获取会话详情（消息列表）
-  GET    /memory/sessions/{id}/extractions — 查询会话 L3 提取任务状态
-  GET    /memory/sessions/{id}/context — 获取 Agent 工作上下文
-  DELETE /memory/sessions/{id}         — 删除会话
-  PATCH  /memory/sessions/{id}         — 重命名会话
-  GET    /memory/profile               — 当前用户长期画像（设置页只读）
+  /memory/agent/* 与 /memory/customer-service/* — 产品专属会话与画像入口
+  /memory/* 旧共享路径保留兼容路由，但拒绝持久记忆访问
+
+Agent Memory 保留历史 raw user/session key，存量会话和画像继续归 Agent；
+客服会话与消息读取 customer_service.conversations/messages，避免双写或空历史。
 
 PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委托。
 
@@ -21,7 +19,11 @@ PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委�
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from backend.app.api.identity import resolve_identity
+from backend.app.api.identity import require_product_identity, resolve_identity
+from backend.core.product_context import (
+    memory_user_id, namespace_session_id, product_for_memory_path,
+    unnamespace_session_id,
+)
 
 from backend.memory.manager import memory_manager
 
@@ -63,19 +65,39 @@ class RenameRequest(BaseModel):
     title: str
 
 
-def _require_identity(request: Request):
-    """记忆按登录身份隔离：返回可信用户/租户身份，guest 直接 401。
+def _product_for_request(request: Request):
+    """产品身份由已注册的 Memory API 路径决定。"""
+    route = request.scope.get("route")
+    return product_for_memory_path(str(getattr(route, "path", "") or ""))
 
-    注意必须在 memory_manager.run_tool 之外先解析——Request 头读取
-    在线程池 lambda 里也可用，但统一在路由入口判定语义更清晰。
-    """
-    ident = resolve_identity(request)
+
+def _require_identity(request: Request):
+    """记忆只接受可信用户；专属产品还要求可信租户。"""
+    product = _product_for_request(request)
+    ident = (
+        require_product_identity(request)
+        if product.requires_identity else resolve_identity(request)
+    )
     if not ident.authenticated:
         raise HTTPException(status_code=401, detail="未认证：记忆库按登录用户隔离")
+    if not product.persist_memory:
+        raise HTTPException(
+            status_code=403,
+            detail="共享对话入口不开放持久记忆，请使用产品专属入口",
+        )
     return ident
 
 
+def _session_id(request: Request, session_id: str) -> str:
+    try:
+        return namespace_session_id(_product_for_request(request), session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="会话标识过长") from exc
+
+
 @router.get("/sessions")
+@router.get("/agent/sessions")
+@router.get("/customer-service/sessions")
 def list_sessions(request: Request,
                   limit: int = 50, before: str | None = None,
                   before_session_id: str | None = None):
@@ -92,18 +114,44 @@ def list_sessions(request: Request,
     同步 def 由 FastAPI 放线程池执行，阻塞等待桥接结果不占主 loop。
     """
     ident = _require_identity(request)
-    return _raise_for_error(
-        memory_manager.run_tool(
-            lambda: _get_service().list_sessions(
-                user_id=ident.user_id, tenant_id=ident.tenant_id,
-                limit=limit, before=before,
-                before_session_id=before_session_id,
+    product = _product_for_request(request)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        result = _raise_for_error(memory_history.list_sessions(
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+            limit=limit,
+            before=before,
+            before_session_id=(
+                _session_id(request, before_session_id)
+                if before_session_id else None
+            ),
+        ))
+    else:
+        result = _raise_for_error(
+            memory_manager.run_tool(
+                lambda: _get_service().list_sessions(
+                    user_id=memory_user_id(product, ident.user_id),
+                    tenant_id=ident.tenant_id,
+                    limit=limit, before=before,
+                    before_session_id=(
+                        _session_id(request, before_session_id)
+                        if before_session_id else None
+                    ),
+                )
             )
         )
-    )
+    for session in result.get("sessions", []):
+        session["session_id"] = unnamespace_session_id(
+            product, session.get("session_id", ""),
+        )
+    return result
 
 
 @router.get("/profile")
+@router.get("/agent/profile")
+@router.get("/customer-service/profile")
 def get_profile(request: Request, limit: int = 50):
     """当前用户的长期画像记忆（设置页只读展示，仅本人）。
 
@@ -112,36 +160,45 @@ def get_profile(request: Request, limit: int = 50):
     按 memory_type 自行渲染。
     """
     ident = _require_identity(request)
+    product = _product_for_request(request)
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_profile(
-                user_id=ident.user_id, tenant_id=ident.tenant_id, limit=limit,
+                user_id=memory_user_id(product, ident.user_id),
+                tenant_id=ident.tenant_id, limit=limit,
             )
         )
     )
 
 
 @router.get("/profile/pending")
+@router.get("/agent/profile/pending")
+@router.get("/customer-service/profile/pending")
 def get_pending_profile(request: Request, limit: int = 100):
     """列出当前用户需确认的自动推断候选；候选不会进入有效画像。"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_pending_profile(
-                user_id=ident.user_id, tenant_id=ident.tenant_id, limit=limit,
+                user_id=memory_user_id(product, ident.user_id),
+                tenant_id=ident.tenant_id, limit=limit,
             )
         )
     )
 
 
 @router.post("/profile/{memory_id}/verify")
+@router.post("/agent/profile/{memory_id}/verify")
+@router.post("/customer-service/profile/{memory_id}/verify")
 def verify_profile_memory(memory_id: str, request: Request):
     """用户明确确认本人候选记忆；仅服务端身份可以提升 verification 状态。"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
     result = _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().verify_profile_memory(
-                user_id=ident.user_id,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
                 memory_id=memory_id,
             )
@@ -155,13 +212,16 @@ def verify_profile_memory(memory_id: str, request: Request):
 
 
 @router.delete("/profile/{memory_id}")
+@router.delete("/agent/profile/{memory_id}")
+@router.delete("/customer-service/profile/{memory_id}")
 def delete_profile_memory(memory_id: str, request: Request):
     """删除本人画像记忆；身份和租户来自验签上下文，不能由请求参数自报。"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
     result = _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().delete_profile_memory(
-                user_id=ident.user_id,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
                 memory_id=memory_id,
             )
@@ -175,40 +235,60 @@ def delete_profile_memory(memory_id: str, request: Request):
 
 
 @router.get("/sessions/{session_id}")
+@router.get("/agent/sessions/{session_id}")
+@router.get("/customer-service/sessions/{session_id}")
 def get_session(session_id: str, request: Request):
     """获取指定会话的消息列表（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.get_session_messages(
+            session_id=namespaced_session_id,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_session_messages(
-                session_id, user_id=ident.user_id, tenant_id=ident.tenant_id,
+                namespaced_session_id,
+                user_id=memory_user_id(product, ident.user_id),
+                tenant_id=ident.tenant_id,
             )
         )
     )
 
 
 @router.get("/sessions/{session_id}/context")
+@router.get("/agent/sessions/{session_id}/context")
+@router.get("/customer-service/sessions/{session_id}/context")
 def get_session_context(session_id: str, request: Request):
     """获取会话的 Agent 工作上下文（SQL结果/RAG文档/报告摘要，仅属主）"""
     ident = _require_identity(request)
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_session_context(
-                session_id, user_id=ident.user_id, tenant_id=ident.tenant_id,
+                _session_id(request, session_id),
+                user_id=memory_user_id(_product_for_request(request), ident.user_id),
+                tenant_id=ident.tenant_id,
             )
         )
     )
 
 
 @router.get("/sessions/{session_id}/extractions")
+@router.get("/agent/sessions/{session_id}/extractions")
+@router.get("/customer-service/sessions/{session_id}/extractions")
 def list_extraction_jobs(session_id: str, request: Request, limit: int = 100):
     """查询本人会话的长期记忆抽取状态；身份域来自网关验签上下文。"""
     ident = _require_identity(request)
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().list_extraction_jobs(
-                session_id=session_id,
-                user_id=ident.user_id,
+                session_id=_session_id(request, session_id),
+                user_id=memory_user_id(_product_for_request(request), ident.user_id),
                 tenant_id=ident.tenant_id,
                 limit=limit,
             )
@@ -217,26 +297,54 @@ def list_extraction_jobs(session_id: str, request: Request, limit: int = 100):
 
 
 @router.delete("/sessions/{session_id}")
+@router.delete("/agent/sessions/{session_id}")
+@router.delete("/customer-service/sessions/{session_id}")
 def delete_session(session_id: str, request: Request):
     """删除会话及其所有消息（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.delete_session(
+            session_id=namespaced_session_id,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().delete_session(
-                session_id, user_id=ident.user_id, tenant_id=ident.tenant_id,
+                namespaced_session_id,
+                user_id=memory_user_id(product, ident.user_id),
+                tenant_id=ident.tenant_id,
             )
         )
     )
 
 
 @router.patch("/sessions/{session_id}")
+@router.patch("/agent/sessions/{session_id}")
+@router.patch("/customer-service/sessions/{session_id}")
 def rename_session(session_id: str, req: RenameRequest, request: Request):
     """重命名会话标题（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.rename_session(
+            session_id=namespaced_session_id,
+            title=req.title,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().rename_session(
-                session_id, req.title, user_id=ident.user_id,
+                namespaced_session_id, req.title,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
             )
         )

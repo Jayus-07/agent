@@ -31,7 +31,7 @@
 - **唯一事实源**：产品身份由服务端从已注册的入口配置派生：使用服务端绑定的产品专属路由；确需按主机区分时，只接受可信反向代理校验并重写、且命中服务端 allowlist 的主机名。多个产品共用路由时，使用认证网关验签后的产品声明，并由服务端 allowlist 映射为产品 ID；网关须先清除同名客户端头，再写入已验证值。当前主助手与客服 UI 共用 `POST /chat/stream`，所以仅靠 URL 或请求体 `domain_hint` 不能区分产品；在可信声明接通前，不能把客户端 hint 升格为产品身份。
 - **失败关闭**：产品专属入口没有可信且唯一的产品身份时，拒绝该产品专属请求；通用 `/agent` 只能进入其服务端配置的通用能力范围。`product_id`、`domain_hint`、`session_id`、`tool_name`、`capability` 和 Planner 输出中的同名字段，无论来自 body 还是未验证 header，都不能声明产品身份或授权。`domain_hint` 只保留为兼容路由/体验提示。
 - **Runtime 传播**：入口解析一次，将已验证的 `product_id`、身份来源和主体上下文写入不可由模型覆盖的 Runtime `RequestContext`，显式传播至 Graph/Planner 状态、异步任务和 checkpoint-safe 上下文；缺少身份时不得在下游补默认的宽权限产品。Trace 记录解析后的产品 ID 与来源类别，供审计核对，不记录凭据。
-- **会话命名空间**：服务端以 `(product_id, tenant_id, user_id, client_conversation_id)` 派生内部会话/记忆/checkpoint 命名空间。客户端 conversation/session ID 只是命名空间内的不透明键，不能跨产品复用历史、记忆或恢复 checkpoint；用户和租户身份仍由既有可信身份解析及授权契约提供。
+- **会话逻辑隔离与存量兼容**：授权作用域仍由 `(product_id, tenant_id, user_id, client_conversation_id)` 决定，但物理存储键要服从现有事实源。主助手历史与画像沿用原始可信 user/session key，并只允许 `/memory/agent/*` 访问；客服会话继续使用独立的 `customer_service.conversations/messages` 表与原 conversation ID。产品路由、租户/用户归属校验和分离的事实源共同阻止跨产品读取；不得为了命名空间前缀让已归属的存量历史变成不可见，也不得复制一套客服历史存储。
 - **强制校验点**：产品范围先参与能力候选发现，再由 Router/Planner 只在裁剪后的能力集合中选路；Tool 执行器及 MCP 入口必须在实际调用前再次按同一服务端上下文校验，不能依赖 UI 隐藏、Prompt 或 Router 结果。RAG、SQL、Workflow 和其他数据访问还须独立执行现有租户、资源、部门及操作权限校验；产品身份不能替代这些授权。
 - **当前实现边界**：当前 [identity.py](../../../backend/app/api/identity.py) 解析用户/租户身份，[request_context.py](../../../backend/core/request_context.py) 的 `RequestContext` 尚无可信产品身份字段；[chat.py](../../../backend/app/api/routes/chat.py) 将请求体 `domain_hint` 传入 Runtime。以上内容是未来入口隔离的实施契约，不表示源码已经具备产品身份派生或隔离能力。
 
