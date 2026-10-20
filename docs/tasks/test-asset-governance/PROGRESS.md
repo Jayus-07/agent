@@ -139,5 +139,5 @@ E   SyntaxError: unexpected character after line continuation character
 - 交叉核实：下一步 1 的 `capability_router.py` 文件末尾字面量 `
 ` 已在 main
   （tail 确认以 `__all__` 正常收尾），无需重复修复。
-- 仍开放（待用户决策）：CI 是否加入 pytest 门禁（会改 `.github/workflows/`）；
+- CI pytest 门禁：2026-10-20 用户决策**不加**（不改动 `.github/workflows/`）；用例级硬超时按 pytest.ini 配置在本地/会话执行时生效。
   70 例阻断项复测（他会话施工均已并 main，可择期重测定性）。

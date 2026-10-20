@@ -8,7 +8,7 @@
 - 演示只使用隔离的模拟业务数据，不连接真实支付或退款网关。
 - 区分客服申请登记、人工审核和资金退款；案件 `open` 不表示退款成功。
 - 结果和指标注明代码提交、命令、模型及样本范围；没有执行的项目不填写通过率或效果数字。
-- 持续任务的状态和证据见[标准任务文件](../../tasks/cs-portfolio-showcase/TASK.md)和[进度记录](../../tasks/cs-portfolio-showcase/PROGRESS.md)。
+- 作品集改造任务已于 2026-10-20 取消（T2–T4 不再进行），本章任务引用随之归档。
 
 ## 实现事实源
 
@@ -32,7 +32,7 @@
 python -m pytest backend/tests/customer_service/test_refund_policy_consistency.py -q
 ```
 
-该命令的具体执行环境和结果记入[任务进度](../../tasks/cs-portfolio-showcase/PROGRESS.md)。真实 PostgreSQL 验收需要显式配置隔离 `REFUND_POLICY_PG_TEST_DSN`；不使用共享或生产数据库代替。
+该命令的具体执行环境和结果记入当次交付记录。真实 PostgreSQL 验收需要显式配置隔离 `REFUND_POLICY_PG_TEST_DSN`；不使用共享或生产数据库代替。
 
 ### T2　端到端演示
 
