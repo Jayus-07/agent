@@ -164,19 +164,27 @@ if not errorlevel 1 (
 ) else (
     echo   [DOWN] backend  "%CSTAT%"
 )
+set "ASTAT=not running"
+for /f "tokens=*" %%s in ('docker ps --filter "name=agent-apisix" --format "{{.Status}}" 2^>nul') do set "ASTAT=%%s"
+curl.exe -s -o nul --max-time 5 "%GATEWAY_URL%/health"
+if not errorlevel 1 (
+    echo   [UP  ] apisix   "%ASTAT%"  gateway-200
+) else (
+    echo   [DOWN] apisix   "%ASTAT%"
+)
 exit /b 0
 
 :start_backend
-echo   [backend] docker compose up -d --build app ...
+echo   [backend] docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher ...
 pushd "%ROOT%"
-docker compose up -d --build app
+docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 goto start_backend_retry
 goto start_backend_up_ok
 
 :start_backend_retry
 echo   [backend] up failed - prune stale containers, retry once ...
 call :prune_stale_backend_containers
-docker compose up -d --build app
+docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 (
     popd
     echo   [ERROR] docker compose up -d --build app failed after retry
@@ -189,9 +197,9 @@ call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
 exit /b 0
 
 :stop_backend
-echo   [backend] docker compose stop app ...
+echo   [backend] docker compose stop app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis ...
 pushd "%ROOT%"
-docker compose stop app
+docker compose stop app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
@@ -208,7 +216,7 @@ exit /b 0
 :: re-run automatically through the compose depends_on chain.
 :: =====================================================================
 :rebuild_backend
-set "BACKEND_SERVICES=app db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher metadata-shadow-worker"
+set "BACKEND_SERVICES=app db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher"
 echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %BACKEND_SERVICES%
