@@ -165,3 +165,18 @@
 - 隔离 SQLite 覆盖同一 user 跨 tenant 的列表、读取、改名、删除与键隔离；API 覆盖可信身份传递、请求体伪造忽略及 guest 401。实际运行：`D:/Python/python.exe -m pytest backend/tests/domain_runtime/test_session_ownership.py backend/tests/memory/test_session_tenant_scope.py backend/tests/memory/test_message_codec.py backend/tests/memory/test_migration_registration.py -q --no-cov`：12 passed；`D:/Python/python.exe -m pytest backend/tests/api/test_memory_routes.py backend/tests/api/test_chat_memory_persistence.py backend/tests/api/test_travel_conversation_messages.py backend/tests/api/test_path_classes.py -q --no-cov`：31 passed。
 - 在一次性 PostgreSQL 17 容器中执行迁移两次：首次权威映射 1 行，未映射行保留 `quarantine`；第二次更新 0 行且索引/列保持幂等。容器随后停止并移除，未连接共享开发库。相关 Python `py_compile`、`git diff --check` 均通过。
 - 未运行需要共享 PostgreSQL 的 `test_memory_extraction_outbox.py`、全量回归或真实流式 Agent E2E；未对共享库应用迁移。无法由 `auth.users` 映射的历史会话在正式迁移后将不可由普通租户读取，需按权威归属另行处理。Phase 1 的取消/重启、Redis 恢复及完整真实链路门禁仍未完成。
+
+---
+
+## 2026-10-20：共享 PG（127.0.0.1:5433 容器实例）12 文件批跑复验
+
+- 命令：10-10 检查点同款 12 文件清单 + 真实 PG 环境变量（PGHOST=127.0.0.1/PGPORT=5433）。
+- 结果：**87 passed / 1 failed**。此前 53 个 skip 的真实 PG 用例本轮全部实际执行。
+- 失败用例：`test_memory_extraction_outbox.py::test_end_turn_idempotency_is_atomic_and_scoped`
+  —— 断言 231 行预期 2 条消息实得 4 条（多出一轮 user/assistant）：
+  并发同键 `end_turn` 在批跑上下文写入了重复轮次。**单文件单跑稳定通过**（7.86s），
+  批跑两轮均稳定复现 → 测试上下文隔离/竞态类缺陷（对齐 AUDIT「单跑绿、批跑红」已知模式），
+  非生产缺陷直接证据；原子性保证建议专项根因（怀疑点：跨文件 event loop 切换重建
+  engine 与 monkeypatch 泄漏的叠加）。
+- 结论：本任务仍保持开放。剩余未验收项不变：真实迁移与账号订单数据、真实
+  Agent/LLM/队列链路、六个月画像演化、真实跨会话与跨租户 E2E，以及上述隔离缺陷专项。
