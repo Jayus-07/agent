@@ -205,7 +205,7 @@ def test_list_sessions_success_returns_200(client_factory):
     assert res.status_code == 200
     assert res.json()["total"] == 1
     # 2026-09-16 按登录用户隔离：user_id 必须来自身份头，而非查询参数
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
 
 
@@ -226,9 +226,9 @@ def test_session_routes_pass_trusted_tenant_scope(client_factory):
     ):
         response = getattr(client, method)(path + "?tenant_id=attacker", headers=headers, **kwargs)
         assert response.status_code == 200
-        assert service.seen_user_id == "agent::15"
+        assert service.seen_user_id == "15"
         assert service.seen_tenant_id == "tenant-a"
-        assert service.seen_session_id == "agent::session-a"
+        assert service.seen_session_id == "session-a"
 
 
 def test_list_sessions_guest_returns_401(client_factory):
@@ -256,7 +256,34 @@ def test_product_memory_requires_trusted_tenant(client_factory):
     assert res.status_code == 403
 
 
-def test_memory_user_and_session_namespaces_include_product(client_factory):
+def test_customer_service_session_routes_use_canonical_store(monkeypatch, client_factory):
+    from backend.customer_service import memory_history
+
+    calls: dict[str, dict] = {}
+
+    def fake_list_sessions(**kwargs):
+        calls["list"] = kwargs
+        return {
+            "sessions": [{"session_id": "legacy-cs-session", "title": "客服对话"}],
+            "total": 1,
+        }
+
+    def fake_get_session_messages(**kwargs):
+        calls["get"] = kwargs
+        return {"session_id": kwargs["session_id"], "messages": []}
+
+    def fake_delete_session(**kwargs):
+        calls["delete"] = kwargs
+        return {"ok": True}
+
+    def fake_rename_session(**kwargs):
+        calls["rename"] = kwargs
+        return {"ok": True}
+
+    monkeypatch.setattr(memory_history, "list_sessions", fake_list_sessions)
+    monkeypatch.setattr(memory_history, "get_session_messages", fake_get_session_messages)
+    monkeypatch.setattr(memory_history, "delete_session", fake_delete_session)
+    monkeypatch.setattr(memory_history, "rename_session", fake_rename_session)
     service = _FakeService({"messages": [], "session_id": "session-a"})
     client = client_factory(service)
     headers = {
@@ -265,19 +292,40 @@ def test_memory_user_and_session_namespaces_include_product(client_factory):
         "X-Auth-Type": "jwt",
     }
 
-    agent_response = client.get(
-        "/memory/agent/sessions/session-a", headers=headers,
+    listed = client.get(
+        "/memory/customer-service/sessions?tenant_id=attacker&before_session_id=older",
+        headers=headers,
     )
-    assert agent_response.status_code == 200
-    assert service.seen_user_id == "agent::15"
-    assert service.seen_session_id == "agent::session-a"
+    assert listed.status_code == 200
+    assert listed.json()["sessions"][0]["session_id"] == "legacy-cs-session"
+    assert calls["list"] == {
+        "user_id": "15",
+        "tenant_id": "tenant-a",
+        "limit": 50,
+        "before": None,
+        "before_session_id": "older",
+    }
 
-    cs_response = client.get(
-        "/memory/customer-service/sessions/session-a", headers=headers,
+    read = client.get(
+        "/memory/customer-service/sessions/legacy-cs-session", headers=headers,
     )
-    assert cs_response.status_code == 200
-    assert service.seen_user_id == "customer_service::15"
-    assert service.seen_session_id == "customer-service::session-a"
+    assert read.status_code == 200
+    deleted = client.delete(
+        "/memory/customer-service/sessions/legacy-cs-session", headers=headers,
+    )
+    assert deleted.status_code == 200
+    renamed = client.patch(
+        "/memory/customer-service/sessions/legacy-cs-session",
+        headers=headers, json={"title": "新标题"},
+    )
+    assert renamed.status_code == 200
+    for action in ("get", "delete", "rename"):
+        assert calls[action]["session_id"] == "legacy-cs-session"
+        assert calls[action]["user_id"] == "15"
+        assert calls[action]["tenant_id"] == "tenant-a"
+    # 客服对话不再从只有 Agent 写入方的 Memory 表读取。
+    assert service.seen_user_id is None
+    assert service.seen_session_id is None
 
 
 def test_list_sessions_rejects_self_reported_user_id(client_factory):
@@ -289,7 +337,7 @@ def test_list_sessions_rejects_self_reported_user_id(client_factory):
         headers={"X-User-Id": "15", "X-Tenant-Id": "tenant-a"},
     )
     assert res.status_code == 200
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
 
 
 def test_list_sessions_passes_stable_cursor_to_service(client_factory):
@@ -301,7 +349,7 @@ def test_list_sessions_passes_stable_cursor_to_service(client_factory):
     )
     assert res.status_code == 200
     assert service.seen_before == "2026-10-10T12:00:00+00:00"
-    assert service.seen_before_session_id == "agent::s-1"
+    assert service.seen_before_session_id == "s-1"
 
 
 def test_profile_uses_authenticated_tenant_scope(client_factory):
@@ -316,7 +364,7 @@ def test_profile_uses_authenticated_tenant_scope(client_factory):
         },
     )
     assert res.status_code == 200
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
 
 
@@ -332,7 +380,7 @@ def test_delete_profile_memory_uses_owner_and_tenant_scope(client_factory):
         },
     )
     assert res.status_code == 200
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
     assert service.seen_memory_id == "m-1"
 
@@ -356,14 +404,14 @@ def test_pending_profile_and_verify_use_authenticated_scope(client_factory):
         "/memory/agent/profile/pending?tenant_id=attacker", headers=headers,
     )
     assert pending.status_code == 200
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
 
     verified = client.post(
         "/memory/agent/profile/m-1/verify?user_id=attacker", headers=headers,
     )
     assert verified.status_code == 200
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
     assert service.seen_memory_id == "m-1"
 
@@ -381,7 +429,7 @@ def test_extraction_status_uses_authenticated_scope(client_factory):
     )
     assert res.status_code == 200
     assert res.json()["jobs"][0]["status"] == "pending"
-    assert service.seen_user_id == "agent::15"
+    assert service.seen_user_id == "15"
     assert service.seen_tenant_id == "tenant-a"
 
 

@@ -2,8 +2,11 @@
 api/routes/memory.py — 会话记忆 API
 
 端点:
-  /memory/agent/* 与 /memory/customer-service/* — 按注册产品身份隔离的会话与画像记忆
+  /memory/agent/* 与 /memory/customer-service/* — 产品专属会话与画像入口
   /memory/* 旧共享路径保留兼容路由，但拒绝持久记忆访问
+
+Agent Memory 保留历史 raw user/session key，存量会话和画像继续归 Agent；
+客服会话与消息读取 customer_service.conversations/messages，避免双写或空历史。
 
 PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委托。
 
@@ -112,19 +115,33 @@ def list_sessions(request: Request,
     """
     ident = _require_identity(request)
     product = _product_for_request(request)
-    result = _raise_for_error(
-        memory_manager.run_tool(
-            lambda: _get_service().list_sessions(
-                user_id=memory_user_id(product, ident.user_id),
-                tenant_id=ident.tenant_id,
-                limit=limit, before=before,
-                before_session_id=(
-                    _session_id(request, before_session_id)
-                    if before_session_id else None
-                ),
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        result = _raise_for_error(memory_history.list_sessions(
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+            limit=limit,
+            before=before,
+            before_session_id=(
+                _session_id(request, before_session_id)
+                if before_session_id else None
+            ),
+        ))
+    else:
+        result = _raise_for_error(
+            memory_manager.run_tool(
+                lambda: _get_service().list_sessions(
+                    user_id=memory_user_id(product, ident.user_id),
+                    tenant_id=ident.tenant_id,
+                    limit=limit, before=before,
+                    before_session_id=(
+                        _session_id(request, before_session_id)
+                        if before_session_id else None
+                    ),
+                )
             )
         )
-    )
     for session in result.get("sessions", []):
         session["session_id"] = unnamespace_session_id(
             product, session.get("session_id", ""),
@@ -223,11 +240,21 @@ def delete_profile_memory(memory_id: str, request: Request):
 def get_session(session_id: str, request: Request):
     """获取指定会话的消息列表（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.get_session_messages(
+            session_id=namespaced_session_id,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().get_session_messages(
-                _session_id(request, session_id),
-                user_id=memory_user_id(_product_for_request(request), ident.user_id),
+                namespaced_session_id,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
             )
         )
@@ -275,11 +302,21 @@ def list_extraction_jobs(session_id: str, request: Request, limit: int = 100):
 def delete_session(session_id: str, request: Request):
     """删除会话及其所有消息（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.delete_session(
+            session_id=namespaced_session_id,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().delete_session(
-                _session_id(request, session_id),
-                user_id=memory_user_id(_product_for_request(request), ident.user_id),
+                namespaced_session_id,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
             )
         )
@@ -292,11 +329,22 @@ def delete_session(session_id: str, request: Request):
 def rename_session(session_id: str, req: RenameRequest, request: Request):
     """重命名会话标题（仅属主）"""
     ident = _require_identity(request)
+    product = _product_for_request(request)
+    namespaced_session_id = _session_id(request, session_id)
+    if product.product_id == "customer_service":
+        from backend.customer_service import memory_history
+
+        return _raise_for_error(memory_history.rename_session(
+            session_id=namespaced_session_id,
+            title=req.title,
+            user_id=ident.user_id,
+            tenant_id=ident.tenant_id,
+        ))
     return _raise_for_error(
         memory_manager.run_tool(
             lambda: _get_service().rename_session(
-                _session_id(request, session_id), req.title,
-                user_id=memory_user_id(_product_for_request(request), ident.user_id),
+                namespaced_session_id, req.title,
+                user_id=memory_user_id(product, ident.user_id),
                 tenant_id=ident.tenant_id,
             )
         )

@@ -96,6 +96,17 @@ def _product_session_id(product, session_id: str) -> str:
         raise HTTPException(status_code=422, detail="会话标识过长") from exc
 
 
+def _product_idempotency_key(product, supplied_key: str | None,
+                             fallback: str = "") -> str:
+    """仅对真实幂等键加产品作用域；空键保持空值。"""
+    key = (supplied_key or "").strip() or (fallback or "").strip()
+    if not key:
+        return ""
+    if product.product_id in {"public", "internal"}:
+        return key
+    return f"{product.product_id}::{key}"
+
+
 # ── 全局线程池（按 CPU 自适应，预留 1 核给 event loop） ──
 # SSE 流的 worker 数 = SSE 并发上限；同时第 N+1 路会排队等待有空闲 worker。
 # 阈值可通过 CHAT_SSE_MAX_WORKERS 覆盖（P1-14：配置收敛到 config/settings.py）。
@@ -264,9 +275,8 @@ async def chat(req: ChatRequest, request: Request,
             user_id=user_id, department=ident.department,
             permissions=ident.permissions, model=req.model or "",
             domain_hint=product.domain_hint, tenant_id=ident.tenant_id,
-            idempotency_key=(
-                (f"{product.product_id}::" if product.product_id != "public" else "")
-                + (request.headers.get("Idempotency-Key") or "").strip()
+            idempotency_key=_product_idempotency_key(
+                product, request.headers.get("Idempotency-Key"),
             ),
             roles=ident.roles, product_id=product.product_id,
             product_source=product.source,
@@ -487,9 +497,10 @@ async def chat_stream(
                 model=req.model or "",
                 domain_hint=product.domain_hint,
                 tenant_id=ident.tenant_id,
-                idempotency_key=(
-                    (f"{product.product_id}::" if product.product_id != "public" else "")
-                    + ((r.headers.get("Idempotency-Key") or "").strip() or request_id)
+                idempotency_key=_product_idempotency_key(
+                    product,
+                    r.headers.get("Idempotency-Key"),
+                    fallback=request_id,
                 ),
                 roles=ident.roles,
                 product_id=product.product_id,

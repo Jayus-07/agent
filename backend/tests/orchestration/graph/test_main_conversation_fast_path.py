@@ -82,7 +82,7 @@ def test_agent_concept_prompt_skips_classifier_and_embedding(monkeypatch):
             "product_id": "agent",
             "product_source": "registered_route",
         },
-        "product_session_id": "agent::session-1",
+        "product_session_id": "session-1",
         "session_id": "session-1",
         "guard_result": {"category": "business_query"},
         "routing_context": {},

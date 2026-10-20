@@ -37,12 +37,12 @@ class _TravelClassifier:
         )
 
 
-def test_product_routes_scope_memory_and_stream_keys():
-    assert namespace_session_id(AGENT_PRODUCT, "same") == "agent::same"
-    assert namespace_session_id(CUSTOMER_SERVICE_PRODUCT, "same") == (
-        "customer-service::same"
-    )
-    assert memory_user_id(AGENT_PRODUCT, "u1") == "agent::u1"
+def test_product_routes_preserve_history_keys_and_scope_stream_keys():
+    # 旧 Agent Memory 归 Agent 产品所有，保持旧 user/session key 以续读存量数据。
+    # 客服会话存于独立 customer_service 表，也保持原 conversation ID。
+    assert namespace_session_id(AGENT_PRODUCT, "same") == "same"
+    assert namespace_session_id(CUSTOMER_SERVICE_PRODUCT, "same") == "same"
+    assert memory_user_id(AGENT_PRODUCT, "u1") == "u1"
     assert memory_user_id(CUSTOMER_SERVICE_PRODUCT, "u1") == "customer_service::u1"
 
     agent_stream = namespaced_stream_id(
@@ -58,7 +58,7 @@ def test_product_routes_scope_memory_and_stream_keys():
 
 def test_namespaced_session_id_enforces_storage_limit():
     with pytest.raises(ValueError, match="会话标识过长"):
-        namespace_session_id(AGENT_PRODUCT, f"agent::{'x' * 128}")
+        namespace_session_id(AGENT_PRODUCT, "x" * 129)
 
 
 def test_main_product_ignores_domain_hint_and_prefilter_exclusive_domain():

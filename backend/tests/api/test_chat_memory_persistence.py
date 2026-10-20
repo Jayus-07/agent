@@ -60,8 +60,20 @@ def test_chat_message_persistence_uses_trusted_tenant_and_user(monkeypatch):
     assert response.status_code == 200
     assert response.json() == {"saved": 1}
     assert calls == [{
-        "session_id": "agent::s1",
+        "session_id": "s1",
         "messages": [{"role": "user", "content": "hi"}],
-        "user_id": "agent::trusted-user",
+        "user_id": "trusted-user",
         "tenant_id": "tenant-a",
     }]
+
+
+def test_product_idempotency_key_keeps_absent_header_empty():
+    from backend.app.api.routes.chat import _product_idempotency_key
+    from backend.core.product_context import AGENT_PRODUCT, CUSTOMER_SERVICE_PRODUCT
+
+    assert _product_idempotency_key(AGENT_PRODUCT, None) == ""
+    assert _product_idempotency_key(AGENT_PRODUCT, "  ") == ""
+    assert _product_idempotency_key(AGENT_PRODUCT, "turn-1") == "agent::turn-1"
+    assert _product_idempotency_key(
+        CUSTOMER_SERVICE_PRODUCT, None, fallback="request-1",
+    ) == "customer_service::request-1"

@@ -20,7 +20,10 @@ AGENT_PRODUCT = ProductContext(
     product_id="agent",
     source="registered_route",
     domain_hint="main",
-    session_prefix="agent::",
+    # Existing main-agent Memory rows use the raw authenticated user/session IDs.
+    # The dedicated /memory/agent route remains their sole owner, so retaining
+    # these keys is the compatibility path for existing sessions and profiles.
+    session_prefix="",
     requires_identity=True,
     persist_memory=True,
 )
@@ -28,7 +31,9 @@ CUSTOMER_SERVICE_PRODUCT = ProductContext(
     product_id="customer_service",
     source="registered_route",
     domain_hint="customer_service",
-    session_prefix="customer-service::",
+    # Customer Service conversations have their own customer_service tables;
+    # preserve their existing conversation IDs instead of changing the key.
+    session_prefix="",
     requires_identity=True,
     persist_memory=True,
 )
@@ -54,9 +59,7 @@ def namespace_session_id(product: ProductContext, session_id: str) -> str:
     """按服务端产品命名空间隔离会话，同时保持客户端 ID 不透明。"""
     value = str(session_id or "default")
     prefix = product.session_prefix
-    if not prefix:
-        return value
-    if not value.startswith(prefix):
+    if prefix and not value.startswith(prefix):
         value = f"{prefix}{value}"
     if len(value) > 128:
         raise ValueError("会话标识过长")
@@ -84,13 +87,18 @@ def product_by_id(product_id: str) -> ProductContext:
 
 
 def memory_user_id(product: ProductContext, user_id: str) -> str:
-    """为长期画像增加产品隔离，同时不改变授权使用的真实用户 ID。"""
+    """返回产品 Memory owner key；Agent 保留旧键，客服画像单独命名空间。"""
     value = str(user_id or "").strip()
     if not value:
         raise ValueError("产品记忆需要可信用户身份")
     if not product.persist_memory:
         raise ValueError("该产品入口未启用持久记忆")
     if product.product_id == "internal":
+        return value
+    if product.product_id == "agent":
+        # Agent owns the pre-product-scope Memory namespace. Keeping the raw
+        # authenticated ID preserves existing sessions and long-term profiles;
+        # Customer Service history is read from its separate conversation store.
         return value
     scoped = f"{product.product_id}::{value}"
     if len(scoped) > 128:

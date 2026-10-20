@@ -111,7 +111,7 @@ def test_runner_scopes_memory_events_to_trusted_request_identity(monkeypatch):
     assert scope.product_id == "agent"
     assert scope.tenant_id == "tenant-A"
     assert scope.user_id == "user-A"
-    assert scope.session_id == "agent::same-session"
+    assert scope.session_id == "same-session"
     assert scope.request_id
 
 
