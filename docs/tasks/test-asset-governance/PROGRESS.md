@@ -122,3 +122,22 @@ E   SyntaxError: unexpected character after line continuation character
 1. 待用户指派后修复 §阻塞 2 的一行语法损坏，重测 travel 真实耗时。
 2. 等他会话收口，复测 70 例阻断项并定性。
 3. 联网后按 AUDIT.md §11 三步收口 pytest-timeout（装插件 → 验证后落 ini 键 → 重生成 lock）。
+
+---
+
+## 2026-10-20：pytest-timeout 收口（下一步 3 完成；下一步 1 已由他会话完成）
+
+- 装插件：开发 venv 离线实装 **pytest-timeout 2.5.0**（pyproject 早已声明 `>=2.3`，venv 此前未装，
+  即 AUDIT §3.6 的 `ModuleNotFoundError` 根因）。
+- 落键：pytest.ini 与 pyproject `[tool.pytest.ini_options]` 落 `timeout = 300` /
+  `timeout_method = thread`。2026-10-09 的暂缓条件（键名未经验证不写生效配置）已解除：
+  实装后经 `backend/tests/memory/test_profile_projection.py` 3 passed 验证，0 个
+  Unknown config option 告警。命令行仍可覆盖（如 `--timeout=600`）。
+- lock：requirements-lock.txt **定向补入** `pytest-timeout==2.5.0`。未做全量 relock——
+  venv 与 lock 已漂移数月（大小写规范化+版本演进），全量 freeze 会一次性固化漂移，
+  留待依赖升级专项；补入方式对齐 pytest-xdist「补声明」先例。
+- 交叉核实：下一步 1 的 `capability_router.py` 文件末尾字面量 `
+` 已在 main
+  （tail 确认以 `__all__` 正常收尾），无需重复修复。
+- 仍开放（待用户决策）：CI 是否加入 pytest 门禁（会改 `.github/workflows/`）；
+  70 例阻断项复测（他会话施工均已并 main，可择期重测定性）。

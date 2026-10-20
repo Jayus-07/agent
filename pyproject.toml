@@ -166,6 +166,9 @@ testpaths = ["backend/tests", "tests"]
 pythonpath = ["backend"]
 asyncio_mode = "auto"
 addopts = "-v --tb=short"
+# 与 pytest.ini 保持同步（pytest.ini 优先生效）：用例级硬超时，2026-10-20 实装验证后落地
+timeout = 300
+timeout_method = "thread"
 
 [tool.ruff]
 target-version = "py310"
