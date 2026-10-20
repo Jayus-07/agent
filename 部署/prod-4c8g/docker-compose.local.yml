@@ -91,10 +91,6 @@ services:
     deploy: { resources: { limits: { memory: 256m, cpus: "0.4" } } }
     logging: *prod-logging
 
-  metadata-shadow-worker:
-    deploy: { resources: { limits: { memory: 256m, cpus: "0.3" } } }
-    logging: *prod-logging
-
   maintenance-worker:
     deploy: { resources: { limits: { memory: 224m, cpus: "0.3" } } }
     logging: *prod-logging
