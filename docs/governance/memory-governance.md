@@ -53,4 +53,4 @@ flowchart LR
 | MM-09 | 画像在数月更新下保留清晰版本/来源，冲突可定位 |
 | MM-10 | 提取模型/Prompt 变更关联评测集、Trace、Token/成本与回滚 |
 
-实施/验证和历史变更记录放在 `docs/tasks/memory-system-profile-upgrade/`，它不是本规范的替代事实源。
+实施以 `backend/memory/` 与 `backend/tests/memory/` 为事实源；历史变更记录已归档（2026-10-20，Git 历史可检索 `docs/tasks/memory-system-profile-upgrade/`），本规范不被任何任务文件替代。

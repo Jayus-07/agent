@@ -11,7 +11,7 @@
 | T2 | 鉴权、租户、公共契约、Router、Tool、SSE、状态机、目录移动 | API/Graph/Skill/DB/客户端关联测试、越权/并发/重试/降级契约 |
 | T3 | 发布级改动、业务数据升级、外部 Provider 切换 | 隔离真实集成、端到端、迁移、告警与恢复演练，发布清单完整 |
 
-以 [testing-guide](../development/testing-guide.md) 为准，不因测试数量大每次都全量跑。当前测试资产的已知技术债见 `docs/tasks/test-asset-governance/AUDIT.md`，属于基线证据，不自动作为当前 CI 结论。
+以 [testing-guide](../development/testing-guide.md) 为准，不因测试数量大每次都全量跑。测试资产基线审计已归档（2026-10-20，Git 历史可检索 `docs/tasks/test-asset-governance/AUDIT.md`）；用例级硬超时以根目录 pytest.ini 配置为准。
 
 ## 2. 门禁范围
 
