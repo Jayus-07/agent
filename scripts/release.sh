@@ -24,11 +24,9 @@ echo "== 1. Migration preflight =="
 
 if [ "${1:-}" != "--skip-build" ]; then
   echo "== 2. 全量构建（stop-the-world 发布形态，B10）=="
-  docker compose build app rag-service mcp-service business-mock \
-    agent-worker rag-index-worker maintenance-worker report-worker \
-    metadata-shadow-worker beat cs-dispatcher db-migrate || exit 1
+  docker compose build backend business-mock db-migrate || exit 1
   # 构建身份硬校验（STOP G 教训：构建吞没 args 必须当场暴露）
-  for svc in app agent-worker db-migrate; do
+  for svc in backend db-migrate; do
     img=$(docker compose config --images 2>/dev/null | head -1)
     got=$(docker inspect -f "{{range .Config.Env}}{{.}} {{end}}" \
           "$(docker compose images -q $svc 2>/dev/null || echo $svc)" 2>/dev/null \

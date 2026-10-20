@@ -21,10 +21,13 @@
 
 ~~~powershell
 docker compose ps
-docker compose up -d apisix app
-docker compose stop app
-docker compose logs --tail=100 app
-docker compose logs -f app agent-worker cs-dispatcher
+docker compose up -d apisix backend
+docker compose stop backend
+docker compose logs --tail=100 backend
+# 单容器内多进程：总览 / 单进程日志 / 只重启某进程（2026-10-20 容器合一）
+docker exec agent-backend supervisorctl status
+docker exec agent-backend supervisorctl tail -f app
+docker exec agent-backend supervisorctl restart agent-worker
 docker compose --profile observability up -d prometheus grafana
 ~~~
 
