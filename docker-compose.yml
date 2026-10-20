@@ -32,47 +32,6 @@ x-build: &build
     PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     TORCH_CPU_INDEX_URL: ${TORCH_CPU_INDEX_URL:-https://download.pytorch.org/whl/cpu}
 
-# ── Worker 公共锚（Phase2 Step5：五 workload 五 worker）────────
-# 所有 Celery worker 共享：镜像/env_file/数据卷/网络/重启与温停策略/
-# broker+result+PG+Redis 基础环境。差异只声明在各 worker：
-# command（-Q 队列 / --concurrency / -n hostname）、healthcheck（-d 本机
-# 节点名）、depends_on、资源限额。队列名唯一事实源 = backend/config/
-# tasks.py（CELERY_*_QUEUE），compose 只声明消费关系，不做业务路由。
-x-worker-base-env: &worker-base-env
-  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
-  # 控制面（取消/暂停标志、事件 pub/sub 走业务 db0）
-  REDIS_ENABLED: "true"
-  REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
-  # PostgreSQL — 任务状态权威（agent_memory.tasks）+ LangGraph checkpoint
-  PGHOST: postgres
-  PGPORT: "5432"
-  PGDATABASE: agent_memory
-  PGUSER: postgres
-  PGPASSWORD: ${PGPASSWORD:?PGPASSWORD is required}
-  OLLAMA_HOST: ${OLLAMA_HOST:-http://ollama:11434}
-  LOG_FORMAT: ${LOG_FORMAT:-json}
-  # 应用级降级告警外推（B4：Celery 任务侧 alerts.py 也读这组变量）
-  ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
-  ALERT_WEBHOOK_TYPE: ${ALERT_WEBHOOK_TYPE:-generic}
-  # Worker 运行时指标（Phase2-F）：multiprocess 目录 + 容器内聚合端点
-  # （:9809 仅 agent-net 内可达，prometheus 抓 worker:9809；不发布宿主机）
-  PROMETHEUS_MULTIPROC_DIR: /tmp/prom_multiproc
-  WORKER_METRICS_PORT: "9809"
-
-x-worker-common: &worker-common
-  build: *build
-  env_file:
-    - .env
-  volumes:
-    - app_data:/app/data
-    - app_cache:/app/.cache
-  networks:
-    - agent-net
-  restart: unless-stopped
-  # B6：60s 温停后强杀。acks_late + task_reject_on_worker_lost 保证被杀
-  # 任务的未 ack 消息回队重投（无需等 1h visibility timeout）
-  stop_grace_period: 60s
 
 services:
   # ── APISIX（Python 项目独立入口，B1 起）──
@@ -118,128 +77,147 @@ services:
       - agent-net
     restart: unless-stopped
 
-  # ── API Gateway（Spring Cloud Gateway，统一入口）──
-  # ── 应用服务（AI 系统：RAG/Agent/LLM）──
-  app:
+  # ── 单容器后端（2026-10-20 后端容器合一）────────────────────
+  # app / rag-service / mcp-service 三个 uvicorn + 四个 Celery 队列池 +
+  # beat + 双 cs-dispatcher 全部跑在同一个容器里，由 supervisord 托管
+  # （进程清单与端口分配见 docker/backend-supervisord.conf；镜像仍是
+  # 同一份构建，db-migrate / business-mock 继续复用）。
+  #
+  # 兼容性：网络别名保留 app / rag-service / mcp-service 三个旧 DNS 名——
+  # APISIX 上游（app:8000）、Prometheus 抓取目标、.env 的
+  # RAG_SERVICE_URL 全部零改动；进程间 RAG 调用走容器内回环 127.0.0.1。
+  #
+  # 日常运维：
+  #   改后端代码后:  docker compose ... up -d --build backend   （重建+重启一气呵成）
+  #   进程总览:      docker exec agent-backend supervisorctl status
+  #   单进程日志:    docker exec agent-backend supervisorctl tail -f app
+  #   只重启某进程:  docker exec agent-backend supervisorctl restart agent-worker
+  #
+  # 注意：本服务必须单副本——beat 多副本会重复调度周期任务，
+  # cs-dispatcher 双实例已在容器内用显式实例名区分心跳。
+  backend:
     build: *build
+    container_name: agent-backend
     ports:
-      # P3（docs/auth 修复清单④）：信任边界=网络边界——app 信任网关注入的
-      # 身份头（IDENTITY_SOURCE=header/strict），8000 只允许宿主机内部访问，
-      # 外部流量必须走 8080 网关；对外暴露 8000 等于允许任何人伪造身份头。
+      # 信任边界与拆分版一致（P3）：8000 只绑宿主机回环，外部流量必须走
+      # 9080 网关；对外暴露 8000 等于允许伪造身份头。8090/8091 仅本机调试。
       - "127.0.0.1:8000:8000"
-    # 环境变量来源（2026-09-15 固化）：.env 全量注入。
-    # 显式 environment 条目优先级更高——列表中的容器内地址（PGHOST=postgres、
-    # REDIS_URL=redis://...）不会被 .env 的宿主值覆盖。
-      # 模型供应商、Base URL、模型名与凭据统一从数据库注册表读取；这里只保留
-      # 容器网络、数据库、队列和本地推理等基础设施配置。
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8091:8091"
+    # 环境变量来源（2026-09-15 固化口径不变）：.env 全量注入；显式
+    # environment 优先级更高——容器内地址（PGHOST=postgres 等）不会被
+    # .env 的宿主值覆盖。原 app / rag-service / mcp-service / 各 worker
+    # 的差异变量在此取并集；进程级差异（RAG_MODE、指标端口、dispatcher
+    # 实例名）下沉到 supervisord 的 program environment。
     env_file:
       - .env
     environment:
-      # LLM 供应商配置不从 env 注入，统一由数据库注册表提供。
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
-      # 开发环境默认全量走级联；生产请通过环境变量显式设置 1/10/50/100。
-      - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-false}
-      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
-      - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
-      - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
-      # 开发阶段关闭影子，避免额外 Embedding 成本；生产观察期显式打开。
-      - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
-      - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
-      # PostgreSQL — 记忆库（读写，服务账号）
+      # ── PostgreSQL：记忆库（读写）+ 业务库（只读账号）──
       - PGHOST=postgres
-      # 向量库唯一实现 = pgvector（agent_memory.rag_vectors 表）；Chroma 与
-      # VECTOR_BACKEND 开关已于 2026-09-17 删除（方案：docs/chroma-pgvector迁移方案-2026-09-17.md）
       - PGPORT=5432
       - PGDATABASE=agent_memory
       - PGUSER=postgres
       - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      # PostgreSQL — 业务库（只读账号，数据库层强制只读）
       - BUSINESS_PGDATABASE=agent_business
       - PG_READONLY_USER=agent_readonly
       - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
-      # 模型
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      # 日志
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-      # 认证（fail-closed：未配置 API_KEY 时业务端点拒绝服务）
-      - API_KEY=${API_KEY:-}
-      # 分享令牌只存摘要；该独立 HMAC 密钥用于相同幂等请求重放恢复原链接。
-      - TRAVEL_V2_SHARE_TOKEN_SECRET=${TRAVEL_V2_SHARE_TOKEN_SECRET:-}
-      # 身份来源：只认网关验签后注入的身份头（默认 header；生产禁 legacy 由
-      # backend/config/startup.py 启动校验强制）。9000 外任何直连 8000 的
-      # 流量一律按 guest 处理
-      - IDENTITY_SOURCE=${IDENTITY_SOURCE:-header}
-      # 网关安全页数据源（/observability/gateway-auth 只读代理）。prometheus 属
-      # observability profile：未启动时该路由返回 available=false，前端显式降级
-      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
-      # Redis（B1：requirepass 启用后 URL 携带 :pass@；REDIS_PASSWORD 为空时
-      # 不鉴权，行为与旧版一致。缓存/限流/控制面 db0 走 redis 实例）
+      # ── Redis：缓存/控制面 db0 + 认证控制面 + Celery broker/result ──
+      # broker/result 拆独立 redis-broker（noeviction+AOF），未 ack 任务
+      # 消息与结果永不被逐出
       - REDIS_ENABLED=${REDIS_ENABLED:-true}
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # 认证控制面独立于缓存：JWT 黑名单/会话闸不受缓存 Redis 停机影响。
       - AUTH_REDIS_ENABLED=${AUTH_REDIS_ENABLED:-true}
       - AUTH_REDIS_URL=redis://:${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}@${AUTH_REDIS_HOST:-auth-redis}:${AUTH_REDIS_PORT:-6379}/0
-      # Celery（B1：broker/result 拆到独立 redis-broker 实例——noeviction+AOF，
-      # 未 ack 任务消息与结果永不被逐出，修复内存压力下任务丢失）
-      # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
       - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
       - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
-      # 告警触达（B4）：应用级降级告警外推通道（企微/钉钉/飞书机器人或
-      # 自建接收端）。.env 设 ALERT_WEBHOOK_URL 即启用（alerts.py 读取）
+      # ── RAG：容器默认 local（rag-service 进程与索引执行体口径）；
+      # app / mcp 两个进程在 supervisord 里覆盖为 remote，走容器内
+      # 127.0.0.1:8090，不再经网络别名绕行
+      - RAG_MODE=local
+      - RAG_SERVICE_URL=http://127.0.0.1:8090
+      # 重索引任务化：提交进 rag_index 队列由 rag-index-worker 执行
+      - RAG_REINDEX_ASYNC_ENABLED=true
+      # RAG 数据根（文档注册表/索引/docs 全在 app_data 卷，进程间共享）
+      - RAG_DATA_DIR=/app/data
+      # ── 模型路径与本地推理（模型/凭据事实源仍是数据库注册表）──
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
+      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
+      # ── 元数据级联灰度（API 进程与 Celery 池共用同一指针）──
+      - METADATA_CASCADE_ENABLED=${METADATA_CASCADE_ENABLED:-false}
+      - METADATA_CASCADE_ROLLOUT_PERCENT=${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
+      - METADATA_CLASSIFIER_ENABLED=${METADATA_CLASSIFIER_ENABLED:-false}
+      - METADATA_CLASSIFIER_MODEL_PATH=${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
+      - METADATA_CASCADE_SHADOW_ENABLED=${METADATA_CASCADE_SHADOW_ENABLED:-false}
+      - METADATA_SHADOW_QUEUE_ENABLED=${METADATA_SHADOW_QUEUE_ENABLED:-false}
+      # ── 认证 / 网关信任边界 ──
+      # fail-closed：未配置 API_KEY 时业务端点拒绝服务；只认网关验签后
+      # 注入的身份头，直连 8000 的流量一律按 guest 处理
+      - API_KEY=${API_KEY:-}
+      - IDENTITY_SOURCE=${IDENTITY_SOURCE:-header}
+      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      # 分享令牌只存摘要；该独立 HMAC 密钥用于相同幂等请求重放恢复原链接
+      - TRAVEL_V2_SHARE_TOKEN_SECRET=${TRAVEL_V2_SHARE_TOKEN_SECRET:-}
+      # ── 网关安全页数据源（observability profile 未启动时显式降级）──
+      - PROMETHEUS_URL=${PROMETHEUS_URL:-http://prometheus:9090}
+      # ── 日志与告警外推（应用级降级告警通道，alerts.py 读取）──
+      - LOG_FORMAT=${LOG_FORMAT:-json}
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
       - ALERT_WEBHOOK_TYPE=${ALERT_WEBHOOK_TYPE:-generic}
-      # Kafka（事件发布，默认关闭；需要 WhatsApp/Java 闭环时在 .env 设 true）
+      # ── Kafka 事件总线（默认关闭；WhatsApp/Java 闭环时 .env 开启）──
       - KAFKA_ENABLED=${KAFKA_ENABLED:-false}
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
-      # Kafka 入站消费者（WhatsApp 闭环：webhook → 本消费者 → agent.ask → ai.reply.events）
       - KAFKA_CONSUMER_ENABLED=${KAFKA_CONSUMER_ENABLED:-false}
-      # 客服模块（意图路由/转人工/确认态，.env 中 CS_ENABLED 控制）
+      # ── 客服域（意图路由/转人工/确认态/演示沙盒/自动派单）──
       - CS_ENABLED=${CS_ENABLED:-true}
-      # 客服演示沙盒（2026-09-17）：开启后业务查询身份映射为演示客户
-      # 99001，配合 demo_sandbox.sql 的 DEMO- 前缀数据走完整客服流程；
-      # 设 CS_DEMO_MODE=false 回到真实身份与真实数据
       - CS_DEMO_MODE=${CS_DEMO_MODE:-false}
       - CS_DEMO_CUSTOMER_ID=${CS_DEMO_CUSTOMER_ID:-99001}
-      # 旅游域图（行程规划，.env 中 TRAVEL_ENABLED 控制；checkpointer 走
-      # postgres，需 agent_memory 库已建 checkpoints 表——首次由
-      # PostgresSaver.setup 自动建表）
+      - CS_ADMIN_SOURCE=${CS_ADMIN_SOURCE:-local}
+      - BUSINESS_SERVICE_URL=${BUSINESS_SERVICE_URL:-}
+      # off | shadow | enforce：派单容器可先起，确认候选与容量后再切
+      - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
+      - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
+      - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-3}
+      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-120}
+      - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
+      - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
+      # ── 旅游域图（checkpointer 走 postgres，表由 PostgresSaver 自建）──
       - TRAVEL_ENABLED=${TRAVEL_ENABLED:-true}
       - TRAVEL_CHECKPOINTER_ENABLED=${TRAVEL_CHECKPOINTER_ENABLED:-true}
       - TRAVEL_CHECKPOINTER_BACKEND=${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
       - TRAVEL_CHECKPOINT_TTL_DAYS=${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
-      # AI 工具网关（唯一保留的 Java 侧联系：Java 客服系统经 /internal/ai/call 调用 Python 工具）
+      # 旅游独立入口跨副本 admission：Redis 不可用时 fail-closed
+      - TRAVEL_ADMISSION_BACKEND=${TRAVEL_ADMISSION_BACKEND:-redis}
+      - TRAVEL_REQUEST_WORKERS=${TRAVEL_REQUEST_WORKERS:-16}
+      - TRAVEL_REQUEST_GLOBAL_LIMIT=${TRAVEL_REQUEST_GLOBAL_LIMIT:-100}
+      - TRAVEL_REQUEST_TENANT_LIMIT=${TRAVEL_REQUEST_TENANT_LIMIT:-32}
+      - TRAVEL_REQUEST_USER_LIMIT=${TRAVEL_REQUEST_USER_LIMIT:-2}
+      - TRAVEL_REQUEST_TIMEOUT_S=${TRAVEL_REQUEST_TIMEOUT_S:-50}
+      # ── AI 工具网关（Java 客服经 /internal/ai/call 调用 Python 工具）──
       - AI_TOOLS_ENABLED=${AI_TOOLS_ENABLED:-true}
-      # 业务系统（Java）地址：cs_admin cutover 开关用——项目拆分后 Java 容器已移出
-      # 本 compose；除非 Java 侧自行恢复容器并接入网络，否则保持 CS_ADMIN_SOURCE=local
-      - BUSINESS_SERVICE_URL=${BUSINESS_SERVICE_URL:-}
-      - CS_ADMIN_SOURCE=${CS_ADMIN_SOURCE:-local}
-      - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
-      # RAG 服务化：app 走远端代理（rag-service 持有 embedding/Chroma/索引）
-      - RAG_MODE=remote
-      - RAG_SERVICE_URL=http://rag-service:8090
-      # 重索引任务化（2026-10-02 remote 断层收口）：提交进 rag_index 队列，
-      # 由 rag-index-worker（RAG_MODE=local）执行；关闭则 remote 下同步路径
-      # 恢复「明确报错」语义
-      - RAG_REINDEX_ASYNC_ENABLED=true
-      # RAG 数据根目录指向 app_data 卷挂载点（文档注册表/Chroma/BM25/docs 全在此，
-      # 与 rag-service 共享同一份数据；文档管理路由读的注册表也在这里）
-      - RAG_DATA_DIR=/app/data
+      # ── 副作用幂等实机验收探针（默认全关，验收窗口经 .env 开启）──
+      - SIDE_EFFECT_PROBE_ENABLED=${SIDE_EFFECT_PROBE_ENABLED:-0}
+      - SIDE_EFFECT_PROBE_LEASE_SECONDS=${SIDE_EFFECT_PROBE_LEASE_SECONDS:-300}
+      - SIDE_EFFECT_PROBE_SLEEP_MS=${SIDE_EFFECT_PROBE_SLEEP_MS:-0}
+      - SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT=${SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT:-0}
+      - SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT=${SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT:-0}
+      - SIDE_EFFECT_TEST_FAIL_ONCE=${SIDE_EFFECT_TEST_FAIL_ONCE:-0}
+      # ── MCP streamable HTTP：DNS rebinding 防护白名单（经网关/域名
+      # 接入时追加对应 host，如 mcp.example.com:*）──
+      - MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
-      # 评测明细单一事实源（M7：明细在 data/eval_runs/）：宿主 CLI 产生
-      # 的 run 直接对容器可见，/evaluation/runs 不再只见容器内写入的 run
-      # （2026-09-30 实测宿主两条 smoke run 在具名卷模型下页面不可见）
+      # 评测明细单一事实源（M7）：宿主 CLI 产生的 run 直接对容器可见
       - ./data/eval_runs:/app/data/eval_runs
-    # 健康检查统一在 compose 定义（镜像级 HEALTHCHECK 已从 Dockerfile 移除——
-    # 它写死 8000 端口，对同镜像的非 8000 服务是永久 unhealthy 陷阱）
+    # 三个 HTTP 进程逐一探活：rag 用 /healthz（只看进程，就绪看 /readyz，
+    # 初始化含全量增量同步时 readiness 503 但进程活着）
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8000/health && curl -fsS http://127.0.0.1:8090/healthz && curl -fsS http://127.0.0.1:8091/health"]
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 3
-      start_period: 90s
+      start_period: 300s
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -247,141 +225,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      # kafka 依赖已移除：项目拆分后 Kafka 归 Java 闭环（profiles: java-loop），
-      # py 侧 KAFKA_ENABLED=false 不消费
-      rag-service:
-        condition: service_started
-    networks:
-      - agent-net
-    restart: unless-stopped
-    # B6 优雅停机：docker stop 先 SIGTERM，等 stop_grace_period 再 SIGKILL。
-    # 分钟级 SSE 流需要足够窗口走完 --timeout-graceful-shutdown（Dockerfile 600s）
-    stop_grace_period: 700s
-    # H1 资源限制（compose v2 非 swarm 也生效）：防单服务 OOM 连坐同宿主机 PG
-    deploy:
-      resources:
-        limits:
-          memory: 4g
-          cpus: "2.0"
-
-  # ── RAG 独立服务（重资源：embedding 模型 + pgvector + BM25 + 索引同步）──
-  # 初始化含全量增量同步（可能数十分钟），readyz 就绪前 /ask 返回 503；
-  # 与 app 共享 app_data 卷（索引数据原地复用，存量部署无迁移成本；
-  # remote 模式下 app 不再写索引路径，实际写路径归本服务独占）；
-  # 共享 app_cache 卷（embedding/reranker 模型只存一份，不重复下载）
-  rag-service:
-    build: *build
-    # B6：--timeout-graceful-shutdown 600 —— SIGTERM 后最多等 600s 让在途
-    # 请求（长 RAG 检索/SSE）自然收尾，避免 docker stop 10s 默认硬断
-    command: ["python", "-m", "uvicorn", "backend.services.rag_server:app", "--host", "0.0.0.0", "--port", "8090", "--timeout-graceful-shutdown", "600"]
-    ports:
-      - "127.0.0.1:8090:8090"
-    env_file:
-      - .env
-    environment:
-      # 强制本地模式（服务端自我代理防护，rag_server 内部还有二次校验）
-      - RAG_MODE=local
-      # PostgreSQL：memory 会话/索引注册需要（缺 PGHOST 会连容器内 localhost:5432 失败）。
-      # env_file 注入的是宿主值 localhost，故此处必须显式覆盖为容器网络别名。
-      - PGHOST=postgres
-      - PGPORT=5432
-      # Redis：影子任务投递/缓存需要（同 PGHOST 的 localhost 坑，2026-09-21 补）。
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # MetaShadow 影子任务经 Celery 投递（apply_async → CELERY_BROKER_URL）。
-      # 2026-09-28 修复：此前未覆盖，env_file 的宿主值 localhost:6380 漏进
-      # 容器 → 投递恒 Error 111、metadata-shadow-worker 空转。
-      # CELERY_RESULT_BACKEND 同理必须覆盖（send_task 的 on_task_call 连
-      # result backend，漏了同样 Error 111）。
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
-      # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
-      - PGDATABASE=agent_memory
-      - PGUSER=postgres
-      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      # RAG 数据根目录指向 app_data 卷（与 app 共享同一份注册表/索引/文档）
-      - RAG_DATA_DIR=/app/data
-      # 向量/重排/生成模型及凭据由数据库注册表提供；本地模型路径仍由 env 注入。
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://ollama:11434}
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      - RERANKER_MODEL_PATH=${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-    volumes:
-      - app_data:/app/data
-      - app_cache:/app/.cache
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8090/healthz"]
-      # liveness 只看进程；就绪状态看 /readyz（app 侧 fail-fast + 重试）
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 5m
-    networks:
-      - agent-net
-    restart: unless-stopped
-    # B6：grace period 700s > uvicorn graceful 600s，给在途请求完整收尾窗口
-    stop_grace_period: 700s
-    # H1：bge+reranker 常驻内存的大头，单独限住防 OOM 连坐
-    deploy:
-      resources:
-        limits:
-          memory: 4g
-          cpus: "2.0"
-
-  # ── 标准 MCP 协议服务（streamable HTTP，供 Claude/Cursor 等外部 client）──
-  # 工具执行复用 MCPServer.call_tool；RAG 工具经代理转发 rag-service（不重复
-  # 加载 embedding/Chroma）；鉴权沿用全局 API_KEY（X-API-Key，fail-closed）
-  mcp-service:
-    build: *build
-    # B6：MCP streamable HTTP 为长连接，同样给 600s 优雅收尾窗口
-    command: ["python", "-m", "uvicorn", "mcp_servers.protocol_app:app", "--host", "0.0.0.0", "--port", "8091", "--timeout-graceful-shutdown", "600"]
-    ports:
-      - "127.0.0.1:8091:8091"
-    environment:
-      # RAG 走远端：本进程不加载索引（rag-service 才是索引单点）
-      - RAG_MODE=remote
-      - RAG_SERVICE_URL=http://rag-service:8090
-      # 鉴权（fail-closed：未配置时拒绝所有 MCP 调用）
-      - API_KEY=${API_KEY:-}
-      # DNS rebinding 防护白名单（只经 127.0.0.1 发布端口访问时够用；
-      # 经网关/域名接入时追加对应 host，如 mcp.example.com:*）
-      - MCP_ALLOWED_HOSTS=localhost:*,127.0.0.1:*
-      # SQL 工具（本进程直连业务库）
-      - PGHOST=postgres
-      - PGPORT=5432
-      # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
-      - PGDATABASE=agent_memory
-      - PGUSER=postgres
-      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      - BUSINESS_PGDATABASE=agent_business
-      - PG_READONLY_USER=agent_readonly
-      - PG_READONLY_PASSWORD=${PG_READONLY_PASSWORD:?PG_READONLY_PASSWORD is required}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-    volumes:
-      - app_data:/app/data
-    # 覆盖镜像级 HEALTHCHECK（Dockerfile 写死 8000，本服务监听 8091，
-    # 不覆盖会永远 unhealthy——与 rag-service 同款修正）
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8091/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      rag-service:
-        condition: service_started
-      postgres:
+      redis-broker:
+        condition: service_healthy
+      auth-redis:
         condition: service_healthy
     networks:
-      - agent-net
+      agent-net:
+        aliases:
+          - app
+          - rag-service
+          - mcp-service
     restart: unless-stopped
+    # B6 优雅停机：supervisor 逆序停进程（dispatcher→worker→beat→HTTP），
+    # uvicorn 有 --timeout-graceful-shutdown 收尾窗口；700s 兜底 SIGKILL。
+    # 注意：单容器共享一份 grace 预算（拆分版每容器各 700s），极端情况下
+    # 多进程同时有超长在途请求时尾部进程可能被 SIGKILL——Celery 靠
+    # acks_late 重投，HTTP 靠客户端重试。
     stop_grace_period: 700s
     deploy:
       resources:
         limits:
-          memory: 1g
-          cpus: "1.0"
+          memory: 6g
+          cpus: "4.0"
 
   # ── business-service HTTP mock（批次B 联调）────────────────
   # Java business-service 未就绪期间的只读订单查询 mock，契约见
@@ -420,318 +285,6 @@ services:
           memory: 256m
           cpus: "0.25"
 
-  # ── Celery Worker 池（Phase2 Step5：1 worker pool ≈ 1 workload class）──
-  # agent-worker：interactive_agent 专属（IO-bound：LLM API/RAG/SQL，latency
-  # 优先）。不再消费 rag_index/maintenance/report——高 CPU 索引、beat 扫描、
-  # 报表长任务各自有专属池，不会挤占 agent 并发槽。
-  # 业务路由唯一事实源 = backend/tasks/queue_router.py；本文件只声明消费关系。
-  agent-worker:
-    <<: *worker-common
-    command:
-      ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "${CELERY_AGENT_QUEUE:-agent}",
-       "--concurrency=${AGENT_WORKER_CONCURRENCY:-4}",
-       "-n", "agent-worker@%h"]
-    environment:
-      <<: *worker-base-env
-      # agent 执行需要 LLM/PG checkpoint/RAG(远端)：LLM key 来自 env_file(.env)，
-      # 容器内地址（PG/Redis/RAG/Ollama）在 base-env 显式覆盖。
-      # 与 app 保持同一元数据灰度指针；设 false/0 可立即回退主索引。
-      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-false}
-      METADATA_CASCADE_ROLLOUT_PERCENT: ${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
-      METADATA_CLASSIFIER_ENABLED: ${METADATA_CLASSIFIER_ENABLED:-false}
-      METADATA_CLASSIFIER_MODEL_PATH: ${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
-      METADATA_CASCADE_SHADOW_ENABLED: ${METADATA_CASCADE_SHADOW_ENABLED:-false}
-      METADATA_SHADOW_QUEUE_ENABLED: ${METADATA_SHADOW_QUEUE_ENABLED:-false}
-      EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      RERANKER_MODEL_PATH: ${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      # 索引执行体必须在本地：Celery worker 消费 rag_index 队列跑上传索引，
-      # RAG_MODE=remote 下 RAGPipeline 是 ask/retrieve 代理（索引管理面被
-      # client.py 明确拒绝），reindex_file 无法执行。改为 local 直接加载
-      # 索引资源（bge 模型在共享 app_cache 卷内），写共享 app_data 存储
-      # （与 rag-service 同卷）；ask/retrieve 仍由 rag-service 承担。
-      RAG_MODE: local
-      RAG_SERVICE_URL: http://rag-service:8090
-      RAG_DATA_DIR: /app/data
-      TRAVEL_CHECKPOINTER_ENABLED: ${TRAVEL_CHECKPOINTER_ENABLED:-true}
-      TRAVEL_CHECKPOINTER_BACKEND: ${TRAVEL_CHECKPOINTER_BACKEND:-postgres}
-      TRAVEL_CHECKPOINT_TTL_DAYS: ${TRAVEL_CHECKPOINT_TTL_DAYS:-7}
-      # 旅游独立入口的跨副本 admission；Redis 不可用时 fail-closed，避免
-      # 多副本各自放行导致供应商和 checkpoint 超载。
-      TRAVEL_ADMISSION_BACKEND: ${TRAVEL_ADMISSION_BACKEND:-redis}
-      TRAVEL_REQUEST_WORKERS: ${TRAVEL_REQUEST_WORKERS:-16}
-      TRAVEL_REQUEST_GLOBAL_LIMIT: ${TRAVEL_REQUEST_GLOBAL_LIMIT:-100}
-      TRAVEL_REQUEST_TENANT_LIMIT: ${TRAVEL_REQUEST_TENANT_LIMIT:-32}
-      TRAVEL_REQUEST_USER_LIMIT: ${TRAVEL_REQUEST_USER_LIMIT:-2}
-      TRAVEL_REQUEST_TIMEOUT_S: ${TRAVEL_REQUEST_TIMEOUT_S:-50}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rag-service:
-        condition: service_started
-    # 存活判定：向本容器节点发 inspect ping（-n agent-worker@%h 时节点名为
-    # agent-worker@<hostname>）。$$ 为 compose 转义 → 运行时由 shell 展开 hostname。
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d agent-worker@$$(hostname) --timeout 10 | grep -q pong"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 4g
-          cpus: "2.0"
-
-  # ── rag-index-worker：rag_index 专属（CPU/RAM 重）────────────
-  # 文档解析（PyMuPDF/DOCX）+ 本地 embedding（bge-small-zh 懒加载）+ 可能的
-  # 本地 rerank（RERANKER_DEVICE=cuda）。prefork 每子进程懒加载各自一份模型
-  # 内存，并发过高会使 RAM/VRAM 翻倍——保守 2（可经 env 调整）。
-  # 与 agent-worker 独立池：索引积压不再挤占交互式 agent 的并发槽。
-  rag-index-worker:
-    <<: *worker-common
-    command:
-      ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "${CELERY_RAG_INDEX_QUEUE:-rag_index}",
-       "--concurrency=${RAG_INDEX_WORKER_CONCURRENCY:-2}",
-       "-n", "rag-index-worker@%h"]
-    environment:
-      <<: *worker-base-env
-      # 索引执行体本地化（同 agent-worker 口径）：模型走共享 app_cache 卷，
-      # 产物写共享 app_data 存储（与 rag-service 同卷）。
-      RAG_MODE: local
-      RAG_SERVICE_URL: http://rag-service:8090
-      RAG_DATA_DIR: /app/data
-      EMBEDDING_MODEL_PATH: ${EMBEDDING_MODEL_PATH:-BAAI/bge-small-zh-v1.5}
-      RERANKER_MODEL_PATH: ${RERANKER_MODEL_PATH:-BAAI/bge-reranker-base}
-      METADATA_CASCADE_ENABLED: ${METADATA_CASCADE_ENABLED:-false}
-      METADATA_CASCADE_ROLLOUT_PERCENT: ${METADATA_CASCADE_ROLLOUT_PERCENT:-100}
-      METADATA_CLASSIFIER_ENABLED: ${METADATA_CLASSIFIER_ENABLED:-false}
-      METADATA_CLASSIFIER_MODEL_PATH: ${METADATA_CLASSIFIER_MODEL_PATH:-/app/data/models/metadata_lr/lr_model_dryrun.joblib}
-      METADATA_CASCADE_SHADOW_ENABLED: ${METADATA_CASCADE_SHADOW_ENABLED:-false}
-      METADATA_SHADOW_QUEUE_ENABLED: ${METADATA_SHADOW_QUEUE_ENABLED:-false}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      rag-service:
-        condition: service_started
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d rag-index-worker@$$(hostname) --timeout 10 | grep -q pong"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 3g
-          cpus: "2.0"
-
-  # ── maintenance-worker：控制面周期任务专属（准时性优先）──────
-  # 消费 beat 调度的全部扫描/收尸/补偿/探测任务（QueueRouter binding:
-  # maintenance）。任务全部原子幂等（条件 UPDATE/原子认领），但并行无益
-  # 且 sweep/zombie 同时跑多实例只会空转——concurrency=1 是安全默认，
-  # 拆出后不再排在用户任务 backlog 之后（Step5 核心收益）。
-  maintenance-worker:
-    <<: *worker-common
-    command:
-      ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "${CELERY_MAINTENANCE_QUEUE:-maintenance}",
-       "--concurrency=${MAINTENANCE_WORKER_CONCURRENCY:-1}",
-       "-n", "maintenance-worker@%h"]
-    environment:
-      <<: *worker-base-env
-      # Phase2 Step6：副作用幂等实机验收探针（默认全关，验收窗口经 .env 开启）
-      SIDE_EFFECT_PROBE_ENABLED: ${SIDE_EFFECT_PROBE_ENABLED:-0}
-      SIDE_EFFECT_PROBE_LEASE_SECONDS: ${SIDE_EFFECT_PROBE_LEASE_SECONDS:-300}
-      SIDE_EFFECT_PROBE_SLEEP_MS: ${SIDE_EFFECT_PROBE_SLEEP_MS:-0}
-      SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT: ${SIDE_EFFECT_TEST_CRASH_AFTER_EFFECT:-0}
-      SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT: ${SIDE_EFFECT_TEST_CRASH_BEFORE_EFFECT:-0}
-      SIDE_EFFECT_TEST_FAIL_ONCE: ${SIDE_EFFECT_TEST_FAIL_ONCE:-0}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d maintenance-worker@$$(hostname) --timeout 10 | grep -q pong"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-          cpus: "0.5"
-
-  # ── report-worker：报表长任务专属（隔离即可，无需吞吐）──────
-  # 当前仅 cs.qa_daily_report（每日 06:10 UTC 聚合，查表+LLM/Markdown，
-  # 分钟级长任务）。拆出后不再占用 agent 并发槽。
-  report-worker:
-    <<: *worker-common
-    command:
-      ["celery", "-A", "backend.workers.agent_worker", "worker",
-       "--loglevel=info", "-Q", "${CELERY_REPORT_QUEUE:-report}",
-       "--concurrency=${REPORT_WORKER_CONCURRENCY:-1}",
-       "-n", "report-worker@%h"]
-    environment:
-      <<: *worker-base-env
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "celery -A backend.workers.agent_worker inspect ping -d report-worker@$$(hostname) --timeout 10 | grep -q pong"]
-      interval: 30s
-      timeout: 15s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          memory: 1g
-          cpus: "0.5"
-
-  # ── Celery Beat（客服周期维护的唯一调度者，单实例）──────────
-  # beat_schedule 只有在 beat 进程运行时才会投递；调度职责不能塞进可水平
-  # 扩展的 worker —— 扩容会重复调度，单 worker 又不会调度。故 beat 必须
-  # 单实例，worker 才可多副本。
-  # 当前调度（定义见 backend/tasks/celery_app.py）：
-  #   cs.handoff_timeout_scan       60s   转人工超时收口
-  #   cs.confirmation_expiry_scan   60s   确认态过期
-  #   cs.event_outbox_compensation  15s   事件 outbox 补发
-  #   tasks.zombie_reconcile        300s  僵尸 RUNNING 任务收尸（审查 B5）
-  # 任务体在 backend/tasks/cs_maintenance_tasks.py 与
-  # backend/tasks/task_maintenance_tasks.py（薄壳，逻辑在
-  # backend/customer_service/maintenance.py / tasks/task_manager.py，纯函数，可手动触发）。
-  # 历史债：2026-09-21 前本服务只存在于 worktree / 临时 override
-  # （D:\tmp\agent-worker-branch.override.yml，已删除），按主干 up 不会起
-  # beat → 客服三条周期任务静默停摆。现正式纳入主干，禁止再移除。
-  beat:
-    build: *build
-    command:
-      ["celery", "-A", "backend.tasks.celery_app", "beat",
-       "--loglevel=info"]
-    env_file:
-      - .env
-    environment:
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
-      # 控制面（事件 pub/sub 走业务 db0）
-      - REDIS_ENABLED=true
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # 客服维护扫描需要 PG（后台任务状态权威在 agent_memory）
-      - PGHOST=postgres
-      - PGPORT=5432
-      - PGDATABASE=agent_memory
-      - PGUSER=postgres
-      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      redis:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    # 存活判定：beat 无 HTTP 端口，直接看 PID 1 的 argv 是否是 beat 入口
-    # （与 cs-dispatcher 同款，不依赖 procps/pgrep）
-    healthcheck:
-      test:
-        ["CMD-SHELL",
-         "python -c \"import sys; sys.exit(0 if b'beat' in open('/proc/1/cmdline','rb').read() else 1)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    networks:
-      - agent-net
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-          cpus: "0.5"
-
-  # ── 客服自动派单 dispatcher（P6）────────────────────────────
-  # 与 app/worker 共用镜像，但没有 HTTP 端口：只消费 PostgreSQL 的
-  # waiting_human 队列并写 agent_offered。
-  #   - 水平扩展：本服务声明 2 副本（deploy.replicas），正确性由
-  #     FOR UPDATE SKIP LOCKED + 活动 assignment 部分唯一索引保证，
-  #     副本之间不通信、不抢 Redis 锁。
-  #   - 不需要 API/Celery 队列：派单是周期轮询而非任务投递。
-  #   - 连接占用：本服务只用一个 AsyncSession 小池，与 API 实例的连接上限
-  #     总和须低于 PG max_connections 的 70%（方案 §八）。
-  #   - 默认 CS_DISPATCH_MODE=off：容器可以先起，确认候选与容量后再切
-  #     shadow/enforce，不需要重建镜像。
-  cs-dispatcher:
-    build: *build
-    command: ["python", "-m", "backend.workers.cs_dispatcher"]
-    env_file:
-      - .env
-    environment:
-      - PGHOST=postgres
-      - PGPORT=5432
-      - PGDATABASE=agent_memory
-      - PGUSER=postgres
-      - PGPASSWORD=${PGPASSWORD:?PGPASSWORD is required}
-      # 在线状态与心跳都走业务 Redis（db0，与 AgentHub 的 pub/sub 同库）
-      - REDIS_ENABLED=true
-      - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
-      # off | shadow | enforce
-      - CS_DISPATCH_MODE=${CS_DISPATCH_MODE:-off}
-      - CS_OFFER_TIMEOUT_SECONDS=${CS_OFFER_TIMEOUT_SECONDS:-30}
-      - CS_MAX_DISPATCH_ATTEMPTS=${CS_MAX_DISPATCH_ATTEMPTS:-3}
-      - CS_HANDOFF_TIMEOUT_SECONDS=${CS_HANDOFF_TIMEOUT_SECONDS:-120}
-      - CS_DISPATCH_INTERVAL_SECONDS=${CS_DISPATCH_INTERVAL_SECONDS:-1.0}
-      - CS_DISPATCHER_HEARTBEAT_TTL_SECONDS=${CS_DISPATCHER_HEARTBEAT_TTL_SECONDS:-30}
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-    depends_on:
-      db-migrate:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # 存活判定：本服务无 HTTP 端口，直接看容器 PID 1 的 argv 是否是
-    # dispatcher 入口（不依赖 procps/pgrep 是否装进镜像）。
-    # 是否"真的在派单"另以 Redis 心跳判定：cs:dispatcher:heartbeat:<hostname>，TTL 30s。
-    healthcheck:
-      test:
-        ["CMD-SHELL",
-         "python -c \"import sys; sys.exit(0 if b'cs_dispatcher' in open('/proc/1/cmdline','rb').read() else 1)\""]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    deploy:
-      # 2 副本是最低生产要求（一轮 dispatcher 挂掉不影响派单）
-      replicas: 2
-      resources:
-        limits:
-          memory: 512m
-          cpus: "0.5"
-    networks:
-      - agent-net
-    restart: unless-stopped
-
-  # ── 元数据影子 Worker（独立队列/并发/故障域）────────────────
-  # 影子任务只消费 rag_metadata_shadow；不能并入主 worker，否则影子积压会
-  # 抢占 agent/rag_index 槽位，破坏主索引的高并发隔离。
   postgres:
     image: pgvector/pgvector:pg16
     environment:

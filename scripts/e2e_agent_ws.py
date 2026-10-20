@@ -1,4 +1,4 @@
-"""坐席 WS 推送链路 e2e（在 agent-app-1 容器内运行）。
+"""坐席 WS 推送链路 e2e（在 agent-backend 容器内运行）。
 
 步骤：ticket 签发 → WS 握手(hello) → 认领(claimed) → 坐席消息(message.created)
 → 关闭(closed) → 无效 ticket 拒绝(4401)。

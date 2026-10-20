@@ -3,7 +3,7 @@
 
 被 start.bat（网关模式）调用，决定 `docker compose up -d` 是否需要加 `--build`。
 
-判定逻辑：取源代码目录/文件中「最新的 mtime」，与 compose 服务 app 所用镜像的
+判定逻辑：取源代码目录/文件中「最新的 mtime」，与 compose 服务 backend 所用镜像的
 「构建完成时间」比较；源代码比镜像新 → 视为过期。
 
 退出码：
@@ -77,7 +77,7 @@ def newest_source_mtime() -> float:
 
 
 def image_created_epoch() -> float | None:
-    """compose 服务 app 所用镜像的构建完成时间（epoch 秒）；找不到镜像返回 None
+    """compose 服务 backend 所用镜像的构建完成时间（epoch 秒）；找不到镜像返回 None
 
     注意不用 `docker compose images`：容器运行中重建过镜像后，它可能返回
     已被覆盖的旧 sha（实测报 No such image）。compose 构建的镜像带
@@ -85,7 +85,7 @@ def image_created_epoch() -> float | None:
     """
     r = subprocess.run(
         ["docker", "image", "ls", "-q",
-         "--filter", "label=com.docker.compose.service=app"],
+         "--filter", "label=com.docker.compose.service=backend"],
         capture_output=True, text=True, cwd=ROOT,
     )
     image_ids = r.stdout.split()

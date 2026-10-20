@@ -18,9 +18,9 @@
 
 用法：
   # 容器内（推荐，直接用 compose 的 env）
-  docker compose exec app python scripts/ensure_dbs.py
+  docker compose exec backend python scripts/ensure_dbs.py
   # 只体检不落库
-  docker compose exec app python scripts/ensure_dbs.py --check
+  docker compose exec backend python scripts/ensure_dbs.py --check
   # 宿主机（读 .env 或环境变量）
   ./.venv/Scripts/python.exe scripts/ensure_dbs.py
 

@@ -90,6 +90,13 @@ RUN if [ -n "$RUNTIME_DEBIAN_MIRROR" ]; then \
 # ── 依赖 venv（来自 builder）──
 COPY --from=builder /opt/venv /opt/venv
 
+# ── 单容器进程编排（2026-10-20 后端容器合一）──
+# supervisord 托管 app/rag-service/mcp-service 三个 uvicorn + 四个 Celery
+# 队列池 + beat + 双 dispatcher（进程清单见 docker/backend-supervisord.conf）。
+# 镜像源口径同 builder：国内不可达 pypi.org 时经 build arg 切换。
+ARG PIP_INDEX_URL=
+RUN pip install --no-cache-dir --index-url "${PIP_INDEX_URL:-https://pypi.org/simple}" supervisor
+
 # ── 非 root 用户（uid 10001，固定值便于宿主侧对齐卷权限）──
 # 用户层置于代码 COPY 之前，代码变更时可复用；运行时数据与缓存由 compose named volume 提供。
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
@@ -104,12 +111,13 @@ COPY mcp_servers/ ./mcp_servers/
 # appuser(uid 10001) 运行时要在代码目录下建 data/uploads（routes/data.py 模块导入期 mkdir；2026-10-07 容器部署实测 PermissionError 崩溃循环）
 RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
 COPY scripts/ ./scripts/
+COPY docker/backend-supervisord.conf /etc/supervisord-backend.conf
 
 USER appuser
 
-EXPOSE 8000
+EXPOSE 8000 8090 8091
 
-# B6（2026-09-21 审查）：--timeout-graceful-shutdown 600 —— SIGTERM 后最多
-# 等 600s 让在途请求（分钟级 SSE/长 RAG）自然收尾；compose 侧配套
-# stop_grace_period: 700s（app/rag/mcp），worker 用 acks_late 重投兜底。
-CMD ["python", "-m", "uvicorn", "backend.app.server:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "600"]
+# PID 1 = supervisord（nodaemon）：compose stop 先 SIGTERM，supervisor 逆序
+# 停各进程（uvicorn 走 --timeout-graceful-shutdown 优雅收尾，Celery 靠
+# acks_late 重投兜底）；stop_grace_period 由 compose 各服务声明。
+CMD ["supervisord", "-n", "-c", "/etc/supervisord-backend.conf"]
