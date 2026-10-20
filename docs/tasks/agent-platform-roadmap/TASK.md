@@ -1,5 +1,14 @@
 # Agent Platform 总改造计划（P0–P7）
 
+> **状态刷新（2026-10-20，依据当日合并记录与运行栈实测，仅标注可直接证实的主题）**：
+> 已落地主题——路由/Runtime 语义收口（V2 事实源+验收门）、Tool Governance 五闸、
+> Prompt 治理收口、观测栈（Prometheus/Grafana/Tempo/Loki+账本投影）、评测中心与
+> Release Gate、RAG 治理改造（PR #91）与上传切分治理、客服域语义层/派单/工单、
+> 旅游 V2 主线验收（FE 批次至 FE-3）、计费统一（price_usage 唯一入口）、
+> CI 评测门禁（strict-gate 端到端 PASS）、部署形态（拆分式 compose，4C8G 档位，
+> 单容器方案见 PR #96/#97）。条目级勾选仍以各任务文件与代码为准，本注记不逐项改写。
+
+
 > 状态：**目标路线图 / 不代表功能已实现**。2026-10-15 对账 main `24a0182e`、PR #53/#63/#65/#68 后，P1-G 按 A/B/C 三个交付包推进；#53 计划和 #68 Next.js 15.5.28 安全修复均已合入。#63 自动化门禁 PASS、真实授权 E2E BLOCKED；#65 head `5d9ef18` 修复 Review 后，定向测试、安全 audit、CI build 均 PASS，真实 API E2E BLOCKED。具体施工验收以源代码、已合并 PR、测试和真实运行证据为准。
 >
 > 核心目标：一套 Agent Platform 底座，支持 **求职技术作品** 与 **跨境电商 AI 客服商业化验证** 两条交付路线。
