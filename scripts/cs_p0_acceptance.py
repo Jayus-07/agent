@@ -1,4 +1,4 @@
-"""客服 P0 验收脚本（批次四能力 MVP，2026-09-22）—— 在 agent-backend 容器内运行。
+"""客服 P0 验收脚本（批次四能力 MVP，2026-09-22）—— 在 agent-app-1 容器内运行。
 
 覆盖场景清单（docs/customer-service/acceptance-scenarios.md）
 中可脚本化的 P0：
@@ -23,7 +23,7 @@
     B6 越权工单 → 查他人单返回 None（路由层 404 防探测）
 
 用法:
-    docker exec -w /app agent-backend python scripts/cs_p0_acceptance.py
+    docker exec -w /app agent-app-1 python scripts/cs_p0_acceptance.py
 """
 from __future__ import annotations
 

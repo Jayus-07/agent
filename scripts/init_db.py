@@ -48,7 +48,7 @@
   ./.venv/Scripts/python.exe scripts/init_db.py --port 5433 --check
 
   # 容器内（compose 已注入 PGHOST=postgres PGPORT=5432）
-  docker compose exec backend python scripts/init_db.py
+  docker compose exec app python scripts/init_db.py
 
   # 追加客服演示数据
   ./.venv/Scripts/python.exe scripts/init_db.py --port 5433 --demo-sandbox
