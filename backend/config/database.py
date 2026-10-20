@@ -115,6 +115,28 @@ DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "10"))
 DB_CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT", "5"))
 DB_KEEPALIVES_IDLE = int(os.getenv("DB_KEEPALIVES_IDLE", "30"))
 
+# === PgBouncer 旁路开关（连接治理，2026-10-21 连接耗尽事故）===
+# 打开后，两个池化引擎（backend/infra/db.py 同步池 + backend/memory/database.py
+# 异步池）经 PgBouncer（transaction 模式）访问 PG，把「N 进程 × 池大小」压成
+# 少量真实连接，应用侧连接泄漏不再直接打穿 PG。会话级 PG 特性使用方
+# （checkpointer_cleanup 抢主锁、travel 恢复锁的自建短连接）不经本开关，
+# 始终直连 PG。默认关闭：worker 常驻 loop + 池上限已满足当前连接预算，
+# PgBouncer 作为上线防御层按需启用（.env 设 PG_VIA_PGBOUNCER=true + rebuild）。
+PG_VIA_PGBOUNCER = os.getenv("PG_VIA_PGBOUNCER", "false").lower() == "true"
+PGBOUNCER_HOST = os.getenv("PGBOUNCER_HOST", "pgbouncer")
+PGBOUNCER_PORT = int(os.getenv("PGBOUNCER_PORT", "6432"))
+
+
+def pooled_pg_target(cfg: dict) -> dict:
+    """按开关返回池化路径应使用的连接目标（其余字段原样保留）。
+
+    只供两个池化引擎构造点调用；会话级特性使用方必须直接用原始
+    *_PG_CONFIG 直连，不得经过本函数。
+    """
+    if not PG_VIA_PGBOUNCER:
+        return cfg
+    return {**cfg, "host": PGBOUNCER_HOST, "port": PGBOUNCER_PORT}
+
 # === 向后兼容：旧代码仍 import DB_CONFIG（指向 memory 库）===
 # 注意：新代码应直接用 MEMORY_DB_CONFIG / BUSINESS_DB_CONFIG
 DB_CONFIG = MEMORY_DB_CONFIG

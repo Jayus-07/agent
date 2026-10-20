@@ -36,6 +36,7 @@ from backend.config.database import (
     DB_POOL_MAX_CONN,
     DB_POOL_MIN_CONN,
     MEMORY_DB_CONFIG,
+    pooled_pg_target,
 )
 
 _ENGINES: dict[str, Engine] = {}
@@ -48,14 +49,19 @@ _BUSINESS_DBNAME = BUSINESS_DB_CONFIG["dbname"]
 
 
 def _make_engine(cfg: dict) -> Engine:
-    """由既有连接参数 dict（_pg_cfg 五键）构造池化 Engine。"""
+    """由既有连接参数 dict（_pg_cfg 五键）构造池化 Engine。
+
+    池化路径按 PG_VIA_PGBOUNCER 开关可经 PgBouncer（transaction 模式）；
+    会话级 PG 特性使用方的自建短连接不走本函数，始终直连。
+    """
+    target = pooled_pg_target(cfg)
     url = URL.create(
         drivername="postgresql+psycopg2",
-        username=cfg["user"],
-        password=cfg["password"],
-        host=cfg["host"],
-        port=cfg["port"],
-        database=cfg["dbname"],
+        username=target["user"],
+        password=target["password"],
+        host=target["host"],
+        port=target["port"],
+        database=target["dbname"],
     )
     return create_engine(
         url,

@@ -55,11 +55,13 @@ async def _mark_poll_timeout(release_id: str, reason: str) -> None:
 def poll_github_prompt_eval(self, release_id: str) -> dict[str, Any]:
     """查询一次 GitHub Actions；未完成时将同一个 release_id 延迟重投。"""
     try:
-        result = asyncio.run(poll_github_prompt_eval_once(release_id))
+        from backend.infra.async_utils import run_on_worker_loop
+
+        result = run_on_worker_loop(poll_github_prompt_eval_once(release_id))
     except Exception as exc:  # noqa: BLE001 — 外部 GitHub 暂时不可用时重试
         if self.request.retries >= PROMPT_EVAL_POLL_MAX_ATTEMPTS:
             reason = f"GitHub Actions 轮询超时: {type(exc).__name__}: {exc}"
-            asyncio.run(_mark_poll_timeout(release_id, reason))
+            run_on_worker_loop(_mark_poll_timeout(release_id, reason))
             return {"state": "failed", "reason": reason}
         logger.warning(
             "[PromptEvalPoller] release=%s GitHub 查询失败，将重试: %s",
@@ -75,7 +77,7 @@ def poll_github_prompt_eval(self, release_id: str) -> dict[str, Any]:
     if result.state == "pending":
         if self.request.retries >= PROMPT_EVAL_POLL_MAX_ATTEMPTS:
             reason = result.reason or "GitHub Actions 评测超时"
-            asyncio.run(_mark_poll_timeout(release_id, reason))
+            run_on_worker_loop(_mark_poll_timeout(release_id, reason))
             return {"state": "failed", "reason": reason}
         raise self.retry(
             countdown=PROMPT_EVAL_POLL_INTERVAL_SECONDS,

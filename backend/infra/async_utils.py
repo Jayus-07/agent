@@ -42,6 +42,35 @@ def run_async(coro):
             return pool.submit(asyncio.run, coro).result()
 
 
+_worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_loop_lock = threading.Lock()
+
+
+def run_on_worker_loop(coro):
+    """在当前线程的常驻事件循环上同步执行协程（Celery worker 任务专用）。
+
+    为什么不能用 asyncio.run()：它每次调用新建并关闭一个 loop，绑定
+    loop 的资源随 loop 作废——memory 异步引擎（backend/memory/database.py）
+    检测到 loop 切换就重建引擎，旧引擎的 asyncpg 连接挂在已关闭的旧
+    loop 上无法释放，在常驻 worker 进程内随任务数累积成 PG 连接泄漏
+    （2026-10-21 实测：maintenance-worker 4 小时泄漏 47 个连接，打穿
+    max_connections 导致全站数据库 500）。常驻 loop 让引擎生命周期与
+    worker 进程对齐，连接池跨任务复用。
+
+    约束：Celery prefork 池中任务由子进程主线程串行执行，同一 loop
+    不会并发进入本函数；不要把本函数用于多线程并发提交的场景
+    （run_until_complete 非线程安全）。协程在当前线程执行，ContextVar
+    （调用方身份/租户上下文）原样保留。
+    """
+    global _worker_loop
+    if _worker_loop is None or _worker_loop.is_closed():
+        with _worker_loop_lock:
+            if _worker_loop is None or _worker_loop.is_closed():
+                _worker_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(_worker_loop)
+    return _worker_loop.run_until_complete(coro)
+
+
 async def async_safe_call_with_timeout(
     func: Callable,
     timeout: int,

@@ -360,10 +360,14 @@ async def process_memory_extraction(job_id_value: str) -> dict:
 @celery_app.task(name="memory.extract")
 def memory_extract_task(job_id: str) -> dict:
     """按 job UUID 提取并写入单轮 L3 记忆。"""
-    return asyncio.run(process_memory_extraction(job_id))
+    from backend.infra.async_utils import run_on_worker_loop
+
+    return run_on_worker_loop(process_memory_extraction(job_id))
 
 
 @celery_app.task(name="memory.extraction_recovery")
 def memory_extraction_recovery_task() -> dict:
     """恢复漏投消息、worker 崩溃和到达重试上限的 outbox 任务。"""
-    return asyncio.run(recover_memory_extractions())
+    from backend.infra.async_utils import run_on_worker_loop
+
+    return run_on_worker_loop(recover_memory_extractions())

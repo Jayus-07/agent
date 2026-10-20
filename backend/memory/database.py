@@ -3,11 +3,18 @@ import asyncio
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from backend.config import DB_CONFIG, MEMORY_ASYNC_POOL_SIZE, MEMORY_ASYNC_MAX_OVERFLOW
+# 开关走 database 模块属性而非 from-import 值快照：pooled_pg_target 函数内
+# 动态读取 backend.config.database 的全局，本模块必须与其同源，否则
+# URL 路由与语句缓存开关可能各自取到不同代次的配置（测试 reload 场景实测）。
+from backend.config import database as _db_config
 from backend.shared.logger import logger
 
+# 池化路径按开关可经 PgBouncer（transaction 模式）；会话级 PG 特性使用方
+# （checkpointer_cleanup / travel 恢复锁的自建短连接）不经此 URL，始终直连。
+_async_target = _db_config.pooled_pg_target(DB_CONFIG)
 DATABASE_URL = (
-    f"postgresql+asyncpg://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-    f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}"
+    f"postgresql+asyncpg://{_async_target['user']}:{_async_target['password']}"
+    f"@{_async_target['host']}:{_async_target['port']}/{_async_target['dbname']}"
 )
 
 _engine = None
@@ -78,6 +85,19 @@ async def _ensure_engine():
             pool_pre_ping=True,
             pool_recycle=3600,  # 1 小时回收连接，防止 LB/防火墙断开空闲连接
             echo=False,
+            # PG 侧连接归因到组件（2026-10-21 连接耗尽事故的定位手段；
+            # 同步统一引擎 infra/db.py 已有同款 application_name）。
+            # PgBouncer transaction 模式下 prepared statements 不能跨真实
+            # 连接复用，开关打开时必须关掉驱动侧语句缓存，否则报
+            # "prepared statement ... does not exist"；直连时保持默认缓存。
+            connect_args={
+                "server_settings": {"application_name": "agent-memory-async"},
+                **(
+                    {"prepared_statement_cache_size": 0}
+                    if _db_config.PG_VIA_PGBOUNCER
+                    else {}
+                ),
+            },
         )
         _sessionmaker = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
         _engine_loop = loop

@@ -30,6 +30,21 @@ docker compose --profile observability up -d prometheus grafana
 
 停止或重建前先确认服务是否被其他会话使用。不要使用 `down -v` 清理共享数据卷。观测栈的启停配置见根目录 Compose 文件中的 `observability` profile。
 
+### 数据库连接耗尽排障（2026-10-21 事故）
+
+症状：登录/查询报 500，后端日志见 `asyncpg.exceptions.TooManyConnectionsError`。
+
+~~~bash
+# 连接分布（按 application_name 归因到组件；连不上说明保留槽也满，先重启占用大户）
+docker exec agent-postgres-1 psql -U postgres -d agent_memory -c   "SELECT application_name, client_addr, count(*) FROM pg_stat_activity WHERE backend_type='client backend' GROUP BY 1,2 ORDER BY 3 DESC;"
+~~~
+
+治理层（本分支起生效）：Celery 任务一律经 `run_on_worker_loop`（常驻 loop，禁 `asyncio.run`）；
+memory 异步引擎带 `application_name=agent-memory-async`；PG 侧 `idle_session_timeout=10min`、
+`idle_in_transaction_session_timeout=5min` 兜底；PgBouncer 容器已进 compose（默认空转），
+`.env` 设 `PG_VIA_PGBOUNCER=true` + rebuild 后池化引擎改经 PgBouncer（transaction 模式），
+会话级锁路径（checkpointer 抢主 / travel 恢复锁）始终直连不受影响。
+
 ## 后端与前端检查
 
 后端局部测试从仓库根目录执行，并指定受影响测试路径：
