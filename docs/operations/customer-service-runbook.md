@@ -3,7 +3,7 @@
 > 范围：客服域（cs_graph_node）问答主链的**运行期**操作手册——已知风险处置、
 > FAQ 双轨运维节奏、告警响应、缺口闭环流程。当前域边界见
 > [客服域边界](../domains/customer-service.md)；未完成部署验收见
-> [客服派单验收进度](../tasks/cs-dispatch-rollout-acceptance/PROGRESS.md)。
+> 派单灰度验收已于 2026-10-20 取消（CS_DISPATCH_MODE 保持 off）；恢复验收时再立任务。
 > 平台级启停/网关/部署见 [常用命令](commands.md)。
 
 ## 一、链路与依赖速览
@@ -106,6 +106,5 @@ Celery beat 挂载（maintenance 队列）**待混线解锁**：`backend/tasks/c
 ## 六、关联文档
 
 - 客服域边界：[domains/customer-service.md](../domains/customer-service.md)
-- 当前部署验收：[tasks/cs-dispatch-rollout-acceptance/TASK.md](../tasks/cs-dispatch-rollout-acceptance/TASK.md)
 - C9 实验台：`python -m backend.scripts.rag_gate_lab report --face rerank`
 - 平台级运维：[operations/commands.md](commands.md)
