@@ -12,6 +12,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+
 import time
 import threading
 
@@ -323,13 +325,17 @@ async def admin_task_operations(task_id: str, request: Request):
         from backend.config.database import OBS_DB_PG_CONFIG
         from backend.infra.db import engine_for
 
-        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT operation, actor, reason, before_status, after_status, "
-                "new_task_id, created_at FROM ai.task_operation_audits "
-                "WHERE task_id = %s ORDER BY id DESC LIMIT 100", (task_id,))
-            rows = cur.fetchall()
+        def _query():
+            with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT operation, actor, reason, before_status, after_status, "
+                    "new_task_id, created_at FROM ai.task_operation_audits "
+                    "WHERE task_id = %s ORDER BY id DESC LIMIT 100", (task_id,))
+                return cur.fetchall()
+
+        # 同步 PG 往返不能跑在事件循环上（观测库抖动即卡全站）
+        rows = await asyncio.to_thread(_query)
     except Exception as e:  # noqa: BLE001 — 审计查询软失败
         logger.warning(f"[AdminTasksAPI] 操作审计查询失败: {e}")
         rows = []

@@ -220,7 +220,9 @@ def refresh_worker_model_registry() -> bool:
     try:
         from backend.infra.llm.registry_store import refresh_registry
 
-        loaded = bool(asyncio.run(refresh_registry()))
+        from backend.infra.async_utils import run_on_worker_loop
+
+        loaded = bool(run_on_worker_loop(refresh_registry()))
         if not loaded:
             logger.warning("[Worker] 模型注册表未加载，保留现有进程内配置")
         return loaded
@@ -241,7 +243,7 @@ def refresh_worker_prompt_snapshot() -> bool:
     try:
         from backend.prompts.service import prompt_service
 
-        asyncio.run(prompt_service.refresh_snapshot())
+        run_on_worker_loop(prompt_service.refresh_snapshot())
         logger.info("[Worker] Prompt DB 快照加载完成")
         return True
     except Exception:

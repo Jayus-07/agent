@@ -300,8 +300,14 @@ def _start_index_published_listener() -> None:
                 from backend.config.redis import REDIS_KEY_PREFIX, REDIS_URL
                 from backend.rag.pipeline import _get_local_pipeline_state
 
+                # socket_timeout 必须带：半开连接时 pubsub.listen() 会永久
+                # 阻塞且不抛异常，重连逻辑永不触发 → 索引热刷新静默失效
+                # （超时引发的异常由外层重连分支捕获重建）
                 client = _redis_lib.Redis.from_url(
-                    REDIS_URL, decode_responses=True, socket_keepalive=True)
+                    REDIS_URL, decode_responses=True, socket_keepalive=True,
+                    socket_timeout=30, socket_connect_timeout=5,
+                    # 空闲期由客户端 PING 保活，避免 socket_timeout 到期无谓重连
+                    health_check_interval=25)
                 pubsub = client.pubsub(ignore_subscribe_messages=True)
                 pubsub.subscribe(f"{REDIS_KEY_PREFIX}rag:index:published")
                 logger.info("[rag-server] 索引发布监听已连接")

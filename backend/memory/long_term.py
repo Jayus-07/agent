@@ -208,7 +208,7 @@ class LongTermMemory:
     # ── Retrieval ──
     async def retrieve(self, query: str, user_id: str = "default", k: int = 20,
                        tenant_id: str = "", domain: str | None = None) -> list[MemoryFact]:
-        emb = self.embedding.embed_query(query)
+        emb = await asyncio.to_thread(self.embedding.embed_query, query)
         rows = await self._repo.search_hybrid(emb, user_id, top_k=k,
                                               tenant_id=normalize_tenant_id(tenant_id),
                                               domain=domain)
@@ -249,7 +249,9 @@ class LongTermMemory:
             if fact.structured_value is None:
                 fact.memory_key = None  # key/value 成对约束
 
-        emb = self.embedding.embed_query(fact.content)
+        # 本地 BGE 推理/同步 HTTP 为秒级阻塞调用，本协程运行在主循环上，
+        # 必须下放线程池（同 service.py 的 classify/embed 下放模式）
+        emb = await asyncio.to_thread(self.embedding.embed_query, fact.content)
         from backend.memory import conflict
         if fact.memory_key is not None:
             return await conflict.resolve_keyed(

@@ -24,8 +24,8 @@ async def seed_demo_data() -> dict[str, Any]:
         result = runner.seed_data()
         return {"ok": True, "result": result}
     except Exception as e:
-        logger.warning(f"[Demo] seed 失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"[Demo] seed 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="演示数据初始化失败，请稍后重试") from e
 
 
 @router.post("/run/{scenario_id}")
@@ -50,5 +50,5 @@ async def run_demo_scenario(scenario_id: str) -> dict[str, Any]:
         result = await runner.run_scenario(scenario_id)
         return {"ok": True, **result}
     except Exception as e:
-        logger.warning(f"[Demo] run {scenario_id} 失败: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning(f"[Demo] run {scenario_id} 失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="演示场景执行失败，请稍后重试") from e

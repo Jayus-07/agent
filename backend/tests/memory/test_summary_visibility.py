@@ -125,15 +125,22 @@ class TestEndTurnSkipsOverwrite:
             async def __aexit__(self, *a):
                 return False
 
-        def _capture_future(coro):
+        def _capture_task(coro, *, name=None):
+            # 摘要改经 spawn_background_task（持引用防 GC）；捕获协程不执行
             background_coros.append(coro)
-            return None
+
+            class _FakeTask:
+                def add_done_callback(self, _cb):
+                    return None
+
+            return _FakeTask()
 
         service = service_mod.MemoryService.__new__(service_mod.MemoryService)
         service._sessions = {}
         monkeypatch.setattr(service_mod, "AsyncSessionLocal", lambda: _FakeCtx())
         monkeypatch.setattr(service_mod, "SessionRepository", lambda db: _FakeSRepo())
-        monkeypatch.setattr(service_mod.asyncio, "ensure_future", _capture_future)
+        import backend.infra.async_utils as _async_utils
+        monkeypatch.setattr(_async_utils, "spawn_background_task", _capture_task)
 
         asyncio.run(service.end_turn("s-3", "q", "a", user_id="u"))
         assert calls["save_turn"] == 1, "正常落库不受摘要失败影响"
@@ -146,7 +153,7 @@ class TestEndTurnSkipsOverwrite:
 
 class TestMemoryManagerShutdown:
     def test_disposes_engine_on_engine_owner_loop(self, monkeypatch):
-        """engine 被其他 loop 创建时，退出必须回到 engine 所属 loop 关闭。"""
+        """engine 注册在后台 loop 上时，退出必须回到该 loop 关闭（per-loop 注册表）。"""
         from backend.memory import database
         from backend.memory.manager import MemoryManager
 
@@ -166,8 +173,9 @@ class TestMemoryManagerShutdown:
         owner_loop = _FakeLoop()
         manager_loop = _FakeLoop()
         manager._loop = manager_loop
-        monkeypatch.setattr(database, "_engine", _FakeEngine())
-        monkeypatch.setattr(database, "_engine_loop", owner_loop)
+        engine = _FakeEngine()
+        with database._engines_lock:
+            database._engines[id(owner_loop)] = (owner_loop, engine, None)
 
         submitted_loop = None
 
@@ -187,3 +195,4 @@ class TestMemoryManagerShutdown:
         manager._shutdown()
 
         assert submitted_loop is owner_loop
+        assert len(database._engines) == 0, "退出路径必须清空引擎注册表"

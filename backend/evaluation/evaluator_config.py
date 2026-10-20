@@ -67,7 +67,9 @@ def _judge_prompt_snapshot() -> dict[str, Any]:
         version = prompt_service.current_versions().get("evaluation.judge.user")
         out["prompt_version"] = version
         if version is not None:
-            hash_value = asyncio.run(
+            from backend.infra.async_utils import run_on_worker_loop
+
+            hash_value = run_on_worker_loop(
                 prompt_service.get_template_hash("evaluation.judge.user", int(version))
             )
             out["prompt_hash"] = str(hash_value)

@@ -37,7 +37,9 @@ def memory_daily_decay() -> dict:
 
     from backend.memory.service import MemoryService
 
-    result = asyncio.run(MemoryService().run_decay())
+    from backend.infra.async_utils import run_on_worker_loop
+
+    result = run_on_worker_loop(MemoryService().run_decay())
     logger.info("[MemoryDecayTask] decayed=%s archived=%s",
                 result.get("decayed", 0), result.get("archived", 0))
     try:

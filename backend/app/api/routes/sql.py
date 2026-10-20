@@ -389,7 +389,12 @@ async def sql_query_stream(
                 await asyncio.sleep(0)
         finally:
             if not task.done():
-                await task
+                # 客户端断连后取消传播收尾要限时：LLM+持久化最长几十秒，
+                # 无超时会挂住响应协程的清理路径
+                try:
+                    await asyncio.wait_for(asyncio.shield(task), timeout=10)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    task.cancel()
 
     return StreamingResponse(
         event_stream(),

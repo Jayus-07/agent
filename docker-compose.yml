@@ -738,6 +738,16 @@ services:
       - POSTGRES_DB=agent_memory
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+    # 连接治理兜底（2026-10-21 连接耗尽事故）：空闲连接 10 分钟、空闲事务
+    # 5 分钟由 PG 侧强制回收，应用侧泄漏不再无限堆积。池化客户端
+    # （pool_pre_ping）对被回收的连接自动重连，常驻池不受影响；人工
+    # psql 会话闲置超 10 分钟会被断开，重连即可。
+    command:
+      - postgres
+      - -c
+      - idle_session_timeout=600000
+      - -c
+      - idle_in_transaction_session_timeout=300000
     # 本地调试/迁移脚本通道：绑 127.0.0.1:5433（宿主机 5432 被本机原生 PG 占用）
     ports:
       - "127.0.0.1:5433:5432"
@@ -760,6 +770,40 @@ services:
         limits:
           memory: 2g
           cpus: "2.0"
+
+  # ── PgBouncer：连接治理中间层（transaction 池化）────────────
+  # 2026-10-21 连接耗尽事故的防御层：应用池化引擎在 PG_VIA_PGBOUNCER=true
+  # 时经此访问 PG，把「N 进程 × 池大小」压成少量真实连接。开关关闭时
+  # 应用仍直连 postgres，本服务空转（内存占用个位数 MB）。会话级 PG 特性
+  # （checkpointer 抢主锁 / travel 恢复锁的自建短连接）始终直连，不经此层。
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.23.1-p2
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=${PGPASSWORD:?PGPASSWORD is required}
+      - AUTH_TYPE=scram-sha-256
+      - POOL_MODE=transaction
+      - MAX_CLIENT_CONN=500
+      - DEFAULT_POOL_SIZE=25
+      - RESERVE_POOL_SIZE=5
+      # 真实空闲连接 5 分钟回收：即使应用侧泄漏，真实层也不堆积
+      - SERVER_IDLE_TIMEOUT=300
+      # transaction 模式下放行 asyncpg/psycopg2 的 prepared statements
+      # （应用侧同步引擎 psycopg2 池 + 异步引擎已关语句缓存，双保险）
+      - MAX_PREPARED_STATEMENTS=200
+      - ADMIN_USERS=postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
 
   # ── 数据库迁移（one-shot init container，迁移事实源唯一化）──
   # 复用 app 镜像（共享构建缓存）跑 scripts/init_db.py：自动扫描

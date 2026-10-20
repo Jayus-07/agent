@@ -1677,9 +1677,11 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     # ── 发布段（索引锁串行化；锁只保护发布段，候选期不占锁）──
     sync_emit("embedding", "候选索引完成，正在发布...")
     lock_fd = acquire_index_lock(filepath)
-    _heartbeat_stop = threading.Event()
-    _start_lock_heartbeat(filepath + ".lock", _heartbeat_stop)
     try:
+        # 心跳启动夹在锁获取与 try 之间曾留下窗口：启动失败则 fd 不释放、
+        # .lock 文件残留至 stale TTL，期间该文件所有发布被拒
+        _heartbeat_stop = threading.Event()
+        _start_lock_heartbeat(filepath + ".lock", _heartbeat_stop)
         old_row = reg.get_by_path(filepath)
         try:
             _raw_old = (old_row or {}).get("chunk_ids") or "[]"

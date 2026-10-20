@@ -547,7 +547,9 @@ async def _proxy_to_java(path: str) -> dict:
     except BusinessServiceError as e:
         if e.status_code == 404:
             raise HTTPException(404, detail="Conversation not found")
-        raise HTTPException(502, detail=f"business-service error: {e}")
+        # business-service 响应体可能含内部拓扑/路径，不透传给客户端
+        logger.error(f"[cs_admin] business-service 调用失败: {e}")
+        raise HTTPException(502, detail="下游业务服务暂不可用，请稍后重试") from e
 
 
 # ── Response models ──────────────────────────────────────

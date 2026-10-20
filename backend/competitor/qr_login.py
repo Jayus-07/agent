@@ -258,8 +258,10 @@ async def start_qr_login(platform: str) -> dict[str, Any]:
         "initial_cookie_names": initial_cookie_names,
     }
 
-    # 调度自动清理
-    asyncio.create_task(_auto_cleanup(token))
+    # 调度自动清理（持引用防 GC 静默丢弃：丢 = 浏览器/登录会话泄漏）
+    from backend.infra.async_utils import spawn_background_task
+
+    spawn_background_task(_auto_cleanup(token), name=f"qr-cleanup-{token[:8]}")
 
     logger.info(
         f"[QR-Login] {platform} QR 码已生成 (token={token[:8]}..., "
