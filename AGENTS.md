@@ -33,6 +33,15 @@
 - Tool/Provider 失败先区分传输、执行、业务结果及任务终态；按当前用户目标动态判硬依赖，执行 [失败与降级规范](docs/architecture/failure-degradation.md)，不得吞异常、伪造成功或静默丢任务。
 - 关键链路保留必要的结构化日志与 Trace；敏感数据不得写入日志。
 
+## 本地 Docker 运行纪律
+
+- 本机共享栈 = 仓库根 docker-compose.yml 叠加 部署/prod-4c8g/docker-compose.local.yml（compose 项目名 agent）。`ragu1-*` 为隔离测试栈、`agent-gh-runner` 为 CI、observability 全家桶属 profile 储备，均不属日常栈，禁擅动。
+- 改后端代码唯一生效路径 = `devctl.bat rebuild`（compose --build 重建）；start/restart 不换代码、不换 .env。
+- 一键启停用 `devctl.bat start / stop`（含 apisix 与全部基础设施）；不要使用 `--remove-orphans` 或 `down -v` 清理共享栈。
+- 端口 8000 / 8090 / 8091 / 9080 / 5433 由主栈占用；并行会话做验证时用错位端口与独立容器名，不与主栈抢绑定。
+- worktree 默认没有 .env（gitignore）：compose 或依赖 SSRF_FAKEIP_AWARE 等开关的测试需要时，从主仓库拷贝。
+- 命令与排障细节见 [commands.md](docs/operations/commands.md)；生产与本机 4C8G 资源档位见 [部署/prod-4c8g/README.md](部署/prod-4c8g/README.md)。
+
 ## 按需读取
 
 | 任务                                         | 现行文档                                                                                                                         |
@@ -66,6 +75,7 @@
 | 选品/电商领域的目标与现状 | [selection-ecommerce.md](docs/domains/selection-ecommerce.md) |
 | 测试策略                                     | [testing-guide.md](docs/development/testing-guide.md)                                                                            |
 | 常用启动、测试和调试命令                     | [commands.md](docs/operations/commands.md)                                                                                       |
+| 生产/本机 4C8G 部署、资源档位与启动清单 | [部署/prod-4c8g/README.md](部署/prod-4c8g/README.md) |
 | 旅游、客服、RAG、SQL 业务                    | [旅游](docs/domains/travel.md)、[客服](docs/domains/customer-service.md)、[RAG](docs/domains/rag.md)、[SQL](docs/domains/sql.md) |
 | 旅游 V2 产品设计、审计与前端施工计划 | [product-design.md](docs/domains/travel-v2/product-design.md)、[fe0-audit.md](docs/domains/travel-v2/fe0-audit.md)、[implementation-plan.md](docs/domains/travel-v2/implementation-plan.md) |
 
@@ -88,8 +98,6 @@
 - 文档与代码冲突时，核实当前代码、配置、迁移和测试后再修正文档。
 - 文档移动或删除前检查 Git 跟踪状态、引用、工具依赖和是否属于在途任务。
 - 交付时简述改动、实际验证结果、文档同步情况及未完成风险。
-
-
 
 ## Git 并行开发规范
 
