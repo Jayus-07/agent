@@ -45,7 +45,7 @@ def test_invoke_metadata_llm_uses_governed_role_proxy(monkeypatch):
     monkeypatch.setattr(
         proxy,
         "bind_llm_for_role",
-        lambda role: seen.append(role) or fake,
+        lambda role, **kwargs: seen.append(role) or fake,
     )
     monkeypatch.setattr(
         proxy,
@@ -60,20 +60,45 @@ def test_invoke_metadata_llm_uses_governed_role_proxy(monkeypatch):
 
 
 def test_invoke_metadata_llm_disables_thinking_through_role_proxy(monkeypatch):
+    """能力策略生成的供应商专属关闭参数必须经统一角色代理透传到底层调用。"""
     fake = MagicMock()
     fake.model = "qwen3.7-plus"
     fake.invoke.return_value = "ok"
-    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role: fake)
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role, **kwargs: fake)
     monkeypatch.setattr(
         "backend.infra.llm.models.supports_thinking_flag",
         lambda model_name: model_name == "qwen3.7-plus",
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.models.thinking_disabled_extra_body",
+        lambda _model: {"thinking": {"type": "disabled"}},
     )
 
     invoke_metadata_llm("prompt")
 
     fake.invoke.assert_called_once_with(
-        "prompt", extra_body={"enable_thinking": False},
+        "prompt", extra_body={"thinking": {"type": "disabled"}},
     )
+
+
+def test_invoke_metadata_llm_plain_invoke_when_policy_declines(monkeypatch):
+    """策略判定不注入参数（如无法识别供应商）时回落普通调用。"""
+    fake = MagicMock()
+    fake.model = "qwen3.7-plus"
+    fake.invoke.return_value = "ok"
+    monkeypatch.setattr(proxy, "bind_llm_for_role", lambda _role, **kwargs: fake)
+    monkeypatch.setattr(
+        "backend.infra.llm.models.supports_thinking_flag",
+        lambda _model: True,
+    )
+    monkeypatch.setattr(
+        "backend.infra.llm.models.thinking_disabled_extra_body",
+        lambda _model: None,
+    )
+
+    invoke_metadata_llm("prompt")
+
+    fake.invoke.assert_called_once_with("prompt")
 
 
 def test_invoke_metadata_llm_keeps_telemetry_for_explicit_raw_client(monkeypatch):

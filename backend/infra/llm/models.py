@@ -19,7 +19,9 @@ DB 是模型清单的唯一事实来源，代码层不再维护种子清单。
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
+from urllib.parse import urlparse
 
 from backend.shared.logger import logger
 
@@ -556,7 +558,7 @@ def model_supports(entry: dict | None, capability: str) -> bool:
 
 
 def supports_thinking_flag(model_name: str) -> bool:
-    """enable_thinking 开关支持的**统一判定**（STOP D / D4 收敛口）。
+    """思考开关支持的**统一判定**（STOP D / D4 收敛口）。
 
     此前三套口径漂移（STOP A P1-7）：
       - auto_compact：名称 qw* OR provider ∈ (qwen, siliconflow)
@@ -580,6 +582,60 @@ def supports_thinking_flag(model_name: str) -> bool:
         return resolve_provider(model_name) in ("qwen", "siliconflow")
     except Exception:
         return False
+
+
+def thinking_disabled_extra_body(
+    model_name: str,
+    *,
+    base_url: str | None = None,
+    configured_body: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """返回按供应商协议关闭思考的调用参数，并保留供应商附加字段。
+
+    LangChain 的调用级 ``extra_body`` 会覆盖模型实例上的同名默认值，不能
+    在这里无条件传入另一套参数。火山方舟使用 ``thinking.type``，Qwen 等
+    兼容端点使用 ``enable_thinking``；无法解析供应商时不注入跨协议参数，
+    让模型实例继续使用供应商页保存的请求体。探测客户端可直接提供 base_url，
+    此时不需要读取运行时供应商凭据。
+    """
+    if not supports_thinking_flag(model_name):
+        return None
+
+    body = dict(configured_body or {})
+    provider = ""
+    if base_url is None:
+        try:
+            provider = resolve_provider(model_name)
+            from backend.infra.llm.credentials import resolve_credentials
+
+            credentials = resolve_credentials(provider, model_name=model_name)
+        except Exception:
+            logger.warning(
+                "[LLM] 无法解析 thinking 请求参数的供应商配置，沿用实例默认值",
+                exc_info=True,
+            )
+            return None
+
+        base_url = credentials.base_url
+        body = {**dict(credentials.extra_body or {}), **body}
+
+    hostname = urlparse(str(base_url or "")).hostname or ""
+    thinking_value = body.get("thinking")
+    if hostname.endswith(".volces.com") or isinstance(thinking_value, Mapping):
+        thinking = dict(thinking_value) if isinstance(thinking_value, Mapping) else {}
+        thinking["type"] = "disabled"
+        body["thinking"] = thinking
+    elif (
+        provider in {"qwen", "qwen_tp", "siliconflow"}
+        or hostname.endswith(".siliconflow.cn")
+        or "qwen" in model_name.lower()
+        or "qwq" in model_name.lower()
+        or "enable_thinking" in body
+    ):
+        body["enable_thinking"] = False
+    else:
+        return None
+    return body
 
 
 def registry_declares(entry: dict | None, capability: str) -> bool:

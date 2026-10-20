@@ -4,7 +4,7 @@
 - Config：L5 开关默认值 / timeout 默认值 / 模型角色解析链（DB → config → inherit）/ env override
 - Amount：裸金额识别 / 裸金额更新（最新值优先 supersede）/ 大数字非金额不误判
 - L5 Disabled：kill switch 下不调用 LLM、确定性 fallback 生效
-- Non-thinking：qwen 系摘要调用显式带 enable_thinking=False + max_tokens + 低温
+- Non-thinking：按供应商协议关闭思考 + max_tokens + 低温
 - Provider unavailable：摘要模型不可用 → 安全回退，主聊天不受阻
 """
 import pytest
@@ -143,6 +143,19 @@ class TestSummaryInvokeKwargs:
         kwargs = _summary_invoke_kwargs("doubao-seed-2.0-mini")
         assert "extra_body" not in kwargs
         assert kwargs["max_tokens"] == 512
+
+    def test_supported_model_uses_provider_specific_thinking_body(self, monkeypatch):
+        from backend.infra.llm import models
+
+        monkeypatch.setattr(ac_mod, "_provider_supports_thinking_flag", lambda _: True)
+        monkeypatch.setattr(
+            models,
+            "thinking_disabled_extra_body",
+            lambda _: {"thinking": {"type": "disabled"}},
+        )
+        kwargs = _summary_invoke_kwargs("doubao-seed-2.0-mini")
+
+        assert kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
 
     def test_provider_flag_detection(self):
         assert _provider_supports_thinking_flag("qwen3.7-flash") is True

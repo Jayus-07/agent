@@ -92,6 +92,57 @@ def test_thinking_legacy_fallback_for_unregistered():
     assert models.supports_thinking_flag("deepseek-chat") is False
 
 
+def test_thinking_disabled_extra_body_uses_ark_schema(monkeypatch):
+    """火山方舟使用 thinking.type，并保留供应商其它附加字段。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import credentials
+
+    models.set_dynamic_models([
+        {"name": "seed-test", "provider": "custom-ark",
+         "capabilities": {"thinking": True}, "source": "db"},
+    ])
+    configured = SimpleNamespace(
+        base_url="https://ark.cn-beijing.volces.com/api/plan/v3",
+        extra_body={
+            "trace_mode": "brief",
+            "thinking": {"type": "enabled", "budget": 1024},
+        },
+    )
+    monkeypatch.setattr(
+        credentials, "resolve_credentials", lambda *args, **kwargs: configured
+    )
+
+    assert models.thinking_disabled_extra_body("seed-test") == {
+        "trace_mode": "brief",
+        "thinking": {"type": "disabled", "budget": 1024},
+    }
+
+
+def test_thinking_disabled_extra_body_keeps_qwen_schema(monkeypatch):
+    """Qwen 兼容端点保留 enable_thinking 协议及已有附加字段。"""
+    from types import SimpleNamespace
+
+    from backend.infra.llm import credentials
+
+    models.set_dynamic_models([
+        {"name": "qwen-test", "provider": "qwen",
+         "capabilities": {"thinking": True}, "source": "db"},
+    ])
+    configured = SimpleNamespace(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        extra_body={"custom_option": "preserve"},
+    )
+    monkeypatch.setattr(
+        credentials, "resolve_credentials", lambda *args, **kwargs: configured
+    )
+
+    assert models.thinking_disabled_extra_body("qwen-test") == {
+        "custom_option": "preserve",
+        "enable_thinking": False,
+    }
+
+
 def test_thinking_unregistered_name_with_known_provider():
     models.reset_dynamic_models_for_tests()
     models.set_dynamic_providers([

@@ -18,11 +18,11 @@ def invoke_metadata_llm(
     role: str = "metadata_extract",
     max_tokens: int | None = None,
 ):
-    """RAG 元数据提取专用 LLM 调用 — qwen3 混合思考模型关闭思考模式。
+    """RAG 元数据提取专用 LLM 调用 — 按供应商协议关闭思考模式。
 
     qwen3.x-plus/max 默认开启思考（thinking budget ~4k token），结构化提取
     （关键词/摘要/分类仲裁）不需要推理链：实测单次调用 8.5s → 1.3s（-85%）。
-    仅对 qwen 云模型传 extra_body；DeepSeek/Ollama 不识别该参数，保持原调用。
+    关闭参数由统一的模型能力策略生成；供应商附加请求体会被合并保留。
 
     Args:
         prompt: 提示词
@@ -74,16 +74,17 @@ def invoke_metadata_llm(
         return response
 
     try:
-        # STOP D（D4）：thinking 开关判定统一走 Registry 口径
-        # （models.supports_thinking_flag：capabilities 显式声明优先 + legacy
-        # 兼容）。实测背景：qwen 系默认思考 14.3s/727 字，摘要关闭后 0.8s。
+        # STOP D（D4）：thinking 开关判定与供应商协议参数统一走 Registry。
         model_name = str(getattr(llm_obj, "model", "") or "")
-        from backend.infra.llm.models import supports_thinking_flag
+        from backend.infra.llm.models import (
+            supports_thinking_flag,
+            thinking_disabled_extra_body,
+        )
 
         if supports_thinking_flag(model_name):
-            return _invoke_and_record(
-                prompt, extra_body={"enable_thinking": False}
-            )
+            extra_body = thinking_disabled_extra_body(model_name)
+            if extra_body is not None:
+                return _invoke_and_record(prompt, extra_body=extra_body)
     except Exception as e:  # 解析失败不影响主流程，按普通调用
         logger.debug(f"[MetadataLLM] 模型解析失败，走普通调用: {e}")
     return _invoke_and_record(prompt)
