@@ -89,7 +89,8 @@ async def cs_agent_ws(
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        logger.debug("[AgentWS] connection error: %s", e)
+        # 连接级故障必须生产可见：静默会让坐席通道「假在线」无从排障
+        logger.warning("[AgentWS] 连接异常关闭: %s", e, exc_info=True)
     finally:
         heartbeat_task.cancel()
         hub.disconnect(websocket)
@@ -115,5 +116,8 @@ async def _heartbeat_loop(
                 await ws.close(code=1013)
                 return
             await ws.send_json({"type": "heartbeat"})
-    except Exception:
-        pass
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        # 心跳死亡 = presence 不再刷新，坐席端显示离线；必须留痕
+        logger.warning("[AgentWS] 心跳循环退出: %s", e, exc_info=True)

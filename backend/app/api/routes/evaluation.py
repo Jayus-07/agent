@@ -181,7 +181,9 @@ async def run_evaluation(
             from backend.evaluation.storage import persist_report
             from backend.infra.llm.registry_store import refresh_registry
 
-            asyncio.run(refresh_registry())
+            from backend.infra.async_utils import run_on_worker_loop
+
+            run_on_worker_loop(refresh_registry())
             report = EvaluationService().evaluate(
                 EvalConfig(
                     module="rag",
@@ -413,20 +415,23 @@ async def eval_runs_for_prompt_version(
         from backend.config.database import OBS_DB_PG_CONFIG
         from backend.infra.db import engine_for
 
-        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                """
-                SELECT run_id, module, pass_rate, case_count, pass_count,
-                       trigger, triggered_by, git_sha, created_at
-                FROM ai.eval_run_records
-                WHERE prompt_snapshot @> %s::jsonb
-                ORDER BY created_at DESC LIMIT %s
-                """,
-                # 台账写入侧口径 = str(version)（run_records.collect_prompt_snapshot），
-                # JSONB @> 严格类型匹配：这里同样转 str 才能命中
-                (json.dumps({key: str(version)}), limit))
-            rows = cur.fetchall()
+        def _query():
+            with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT run_id, module, pass_rate, case_count, pass_count,
+                           trigger, triggered_by, git_sha, created_at
+                    FROM ai.eval_run_records
+                    WHERE prompt_snapshot @> %s::jsonb
+                    ORDER BY created_at DESC LIMIT %s
+                    """,
+                    # 台账写入侧口径 = str(version)（run_records.collect_prompt_snapshot），
+                    # JSONB @> 严格类型匹配：这里同样转 str 才能命中
+                    (json.dumps({key: str(version)}), limit))
+                return cur.fetchall()
+
+        rows = await asyncio.to_thread(_query)
     except Exception as e:  # noqa: BLE001 — 查询软失败
         # C7-3/UI-07：内部错误细节只进日志，响应不回 str(e)
         logger.error(f"评测台账查询失败: {e}", exc_info=True)
@@ -497,7 +502,8 @@ async def cancel_eval_run(
     try:
         request_cancel(run_id, requested_by=_operator.actor)
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"取消请求写入失败: {e}") from e
+        logger.error(f"[evaluation] 取消请求写入失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="取消请求写入失败，请稍后重试") from e
     status = read_run_status(run_id) or {}
     # C2-6/REL-09：取消动作落审计；审计失败时显式暴露（验收口径「取消必有痕」）
     from backend.evaluation.audit import record_operation

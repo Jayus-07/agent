@@ -17,6 +17,8 @@ GET /admin/tools/stats  — 运行统计聚合（总数/成功/失败/成功率/
 """
 from __future__ import annotations
 
+import asyncio
+
 import json
 from pathlib import Path
 from typing import Any
@@ -479,14 +481,17 @@ async def tool_contract_changes(request: Request, limit: int = 20):
         from backend.config.database import OBS_DB_PG_CONFIG
         from backend.infra.db import engine_for
 
-        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT id, from_lock_hash, to_lock_hash, classification, "
-                "changed_tools, tool_count, git_sha, detected_by, created_at "
-                "FROM ai.tool_contract_changes ORDER BY id DESC LIMIT %s",
-                (min(limit, 100),))
-            rows = cur.fetchall()
+        def _query():
+            with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT id, from_lock_hash, to_lock_hash, classification, "
+                    "changed_tools, tool_count, git_sha, detected_by, created_at "
+                    "FROM ai.tool_contract_changes ORDER BY id DESC LIMIT %s",
+                    (min(limit, 100),))
+                return cur.fetchall()
+
+        rows = await asyncio.to_thread(_query)
     except Exception as e:  # noqa: BLE001 — 历史查询软失败
         raise _HTTP(503, f"契约历史查询失败: {e}")
     import json as _json

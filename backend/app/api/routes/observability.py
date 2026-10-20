@@ -689,8 +689,12 @@ async def get_alerts(
     total = 0
     try:
         if os.path.exists(DEGRADATION_LOG_FILE):
-            with open(DEGRADATION_LOG_FILE, "r", encoding="utf-8") as f:
-                lines = f.readlines()
+            # 该文件只追加无轮转，整读会随时间线性变慢；至少不占事件循环
+            def _read_lines():
+                with open(DEGRADATION_LOG_FILE, "r", encoding="utf-8") as f:
+                    return f.readlines()
+
+            lines = await asyncio.to_thread(_read_lines)
             total = len(lines)
             for line in lines[-limit:]:
                 line = line.strip()

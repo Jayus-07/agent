@@ -505,7 +505,13 @@ class MemoryService:
         # 请求关闭路径同步等待——稳态长会话会把每次流关闭阻塞至多 5s
         # （MemoryManager._MEMORY_TIMEOUT），超时还会误报 memory_op_failed。
         # save_turn 已提交，摘要读独立会话；失败安全回退（旧摘要保留）。
-        asyncio.ensure_future(self._summarize_if_needed(session_id))
+        # 持引用防 GC 静默丢摘要任务（ensure_future 仅弱引用）。
+        from backend.infra.async_utils import spawn_background_task
+
+        spawn_background_task(
+            self._summarize_if_needed(session_id),
+            name=f"l2-summary-{session_id}",
+        )
 
         # Broker 只收到 job UUID；投递失败留给 durable recovery 扫描器恢复。
         if job_id:

@@ -1,4 +1,5 @@
 """L2 会话记忆 — PostgreSQL async backend"""
+import asyncio
 from langchain_core.messages import BaseMessage
 from backend.config import SESSION_MAX_MESSAGES
 from backend.shared.logger import logger
@@ -84,8 +85,12 @@ class SessionMemory:
             from backend.prompts.service import prompt_service
             r = prompt_service.render_sync("memory.session.summary", conversation=conversation)
             # STOP E E3：fallback 全量摘要与增量路径同一输出预算——
-            # provider 级 max_tokens 硬帽，防异常 provider 无限长输出
-            resp = llm.invoke(
+            # provider 级 max_tokens 硬帽，防异常 provider 无限长输出。
+            # llm.invoke 是同步 HTTP（秒级）：本协程经 ensure_future 挂在
+            # uvicorn 主循环上，必须下放线程池，否则摘要期间全站请求停摆
+            # （2026-10-21 评审 P0；同文件 embedding 下放同款模式）。
+            resp = await asyncio.to_thread(
+                llm.invoke,
                 r.text,
                 max_tokens=int(CONTEXT_L5_SUMMARY_MAX_TOKENS),
                 temperature=float(CONTEXT_L5_SUMMARY_TEMPERATURE),

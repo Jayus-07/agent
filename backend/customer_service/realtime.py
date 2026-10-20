@@ -545,8 +545,14 @@ class AgentHub:
             ]
         if not conns:
             return
+        # 单连接 send 必须限时：TCP 零窗口的僵死连接会让裸 send 永久挂起，
+        # 而每个事件都经独立调度广播——一个坏客户端 = 每事件累积一个
+        # 永不结束的协程，最坏拖垮 CS 共享主循环（2026-10-21 评审 P1）。
+        _SEND_TIMEOUT_SECONDS = 5.0
         results = await asyncio.gather(
-            *(ws.send_text(data) for ws in conns), return_exceptions=True
+            *(asyncio.wait_for(ws.send_text(data), _SEND_TIMEOUT_SECONDS)
+              for ws in conns),
+            return_exceptions=True,
         )
         for ws, result in zip(conns, results):
             if isinstance(result, BaseException):

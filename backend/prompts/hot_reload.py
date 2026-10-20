@@ -388,8 +388,13 @@ def ensure_prompt_snapshot_fresh(*, force: bool = False) -> int:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(ensure_prompt_snapshot_fresh_async(force=force))
-    # 同一事件循环不能嵌套 asyncio.run；异步请求入口使用 async 版本。
+        # 常驻 loop 而非 asyncio.run：本函数在聊天每请求的 graph-worker
+        # 线程执行，asyncio.run 的临时 loop 会让共享 memory 引擎换绑、
+        # loop 关闭后旧池无法 dispose（2026-10-21 连接泄漏事故主链路通道）。
+        from backend.infra.async_utils import run_on_worker_loop
+
+        return run_on_worker_loop(ensure_prompt_snapshot_fresh_async(force=force))
+    # 同一事件循环不能嵌套跑新 loop；异步请求入口使用 async 版本。
     return local_epoch()
 
 

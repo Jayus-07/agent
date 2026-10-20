@@ -37,7 +37,11 @@ def _run_coro_sync(coro):
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        # 常驻 loop 而非 asyncio.run：技能可能在协程内使用 loop 绑定资源
+        # （memory 引擎等），临时 loop 会让其泄漏（2026-10-21 事故同机制）。
+        from backend.infra.async_utils import run_on_worker_loop
+
+        return run_on_worker_loop(coro)
     logger.warning(
         "[DirectExecutor] 检测到调用线程已有事件循环，协程转入专用线程执行"
     )

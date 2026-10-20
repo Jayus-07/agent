@@ -410,7 +410,11 @@ def scan_all_models() -> dict[str, Any]:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        asyncio.run(registry_store.refresh_registry())  # 同步上下文（worker 任务）
+        # 常驻 loop 而非 asyncio.run：beat 周期任务路径，临时 loop 会让
+        # 共享 memory 引擎换绑泄漏（2026-10-21 事故同机制）。
+        from backend.infra.async_utils import run_on_worker_loop
+
+        run_on_worker_loop(registry_store.refresh_registry())
     else:  # pragma: no cover - 极少在已运行 loop 内被调
         asyncio.ensure_future(registry_store.refresh_registry())
     results: dict[str, str] = {}

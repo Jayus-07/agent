@@ -46,7 +46,9 @@ def _default_connection():
         f"postgresql://{config['user']}:{config['password']}"
         f"@{config['host']}:{config['port']}/{config['dbname']}"
     )
-    return psycopg.connect(dsn)
+    # connect_timeout 与全仓 psycopg 裸连防御一致（faq.py/lifecycle.py 等）：
+    # 宿主回环偶发 connect 挂死会占住线程至 OS 级超时
+    return psycopg.connect(dsn, connect_timeout=5)
 
 
 def _insert_adjudication_audit(

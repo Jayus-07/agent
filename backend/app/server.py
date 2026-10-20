@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse  # 2026-08-11 /ops 看板路由需要
 
 from backend.app.api.router import api_router
+from backend.infra.async_utils import spawn_background_task
 from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
@@ -400,7 +401,7 @@ async def start_progress_queue_gc():
     """后台周期清理过期 SSE 进度队列（默认每 5 分钟一轮）。"""
     import asyncio
     from backend.app.api.routes.rag_upload import progress_queue_gc_loop
-    asyncio.create_task(progress_queue_gc_loop(), name="progress-queue-gc")
+    spawn_background_task(progress_queue_gc_loop(), name="progress-queue-gc")
 
 
 @app.on_event("startup")
@@ -411,7 +412,7 @@ async def start_sys_config_refresh():
     """
     import asyncio
     from backend.services.sys_config import refresh_loop
-    asyncio.create_task(refresh_loop(), name="sys-config-refresh")
+    spawn_background_task(refresh_loop(), name="sys-config-refresh")
 
 
 @app.on_event("startup")
@@ -428,7 +429,7 @@ async def start_llm_registry_refresh():
     """
     import asyncio
     from backend.infra.llm.registry_store import refresh_loop
-    asyncio.create_task(refresh_loop(), name="llm-registry-refresh")
+    spawn_background_task(refresh_loop(), name="llm-registry-refresh")
 
 
 @app.on_event("startup")
@@ -440,7 +441,7 @@ async def start_consistency_sweeper():
     """
     import asyncio
     from backend.rag.indexing.consistency import consistency_sweep_loop
-    asyncio.create_task(consistency_sweep_loop(), name="consistency-sweeper")
+    spawn_background_task(consistency_sweep_loop(), name="consistency-sweeper")
 
 
 @app.on_event("startup")
@@ -451,7 +452,7 @@ async def start_trace_retention_loop():
     """
     import asyncio
     from backend.observability.trace_retention import trace_retention_loop
-    asyncio.create_task(trace_retention_loop(), name="trace-retention")
+    spawn_background_task(trace_retention_loop(), name="trace-retention")
 
 
 # ═══════════════════════════════════════════════════

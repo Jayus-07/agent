@@ -96,20 +96,11 @@ class MemoryManager:
 
     def _shutdown(self) -> None:
         try:
+            # 引擎已改为按 loop 注册（2026-10-21 连接治理），统一交还：
+            # 对所有仍运行中的 loop 的引擎提交 dispose 并等待。
             from backend.memory import database
 
-            engine = database._engine
-            owner_loop = database._engine_loop
-            if engine is not None and owner_loop is not None and owner_loop.is_running():
-                dispose_coro = engine.dispose()
-                try:
-                    future = asyncio.run_coroutine_threadsafe(
-                        dispose_coro, owner_loop,
-                    )
-                except Exception:
-                    dispose_coro.close()
-                    raise
-                future.result(timeout=3)
+            database.dispose_loop_engines(timeout=3)
 
             loop = self._loop
             if loop is not None and loop.is_running():

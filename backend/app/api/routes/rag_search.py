@@ -123,8 +123,13 @@ async def search_knowledge(req: SearchRequest, request: Request):
             },
         ) from e
     except Exception as e:
-        logger.error(f"[RAG] 检索失败: {e}")
-        return {"query": query, "results": [], "error": str(e)}
+        # 检索失败必须与「合法空结果」可区分（failure-degradation.md §2），
+        # 且内部异常细节不得进响应体：统一 5xx + 稳定错误码，详情留日志。
+        logger.error(f"[RAG] 检索失败: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail="检索服务内部错误，请稍后重试",
+        ) from e
 
 
 # ── 问答（已有）──

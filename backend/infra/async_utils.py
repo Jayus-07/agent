@@ -32,43 +32,46 @@ def sync_call_with_timeout(func: Callable, timeout: float, *args, **kwargs) -> A
 
 
 def run_async(coro):
-    """安全运行异步协程 — 兼容有/无事件循环两种场景。"""
+    """安全运行异步协程 — 兼容有/无事件循环两种场景。
+
+    无 loop 分支走当前线程常驻 loop（避免临时 loop 泄漏绑定资源，
+    见 run_on_worker_loop）；有 loop 分支必须另起线程（同一 loop 不能
+    嵌套跑），属合法桥接。
+    """
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return run_on_worker_loop(coro)
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(asyncio.run, coro).result()
 
 
-_worker_loop: asyncio.AbstractEventLoop | None = None
-_worker_loop_lock = threading.Lock()
+_worker_loop_state = threading.local()
 
 
 def run_on_worker_loop(coro):
-    """在当前线程的常驻事件循环上同步执行协程（Celery worker 任务专用）。
+    """在当前线程的常驻事件循环上同步执行协程（Celery worker / 图工作线程专用）。
 
     为什么不能用 asyncio.run()：它每次调用新建并关闭一个 loop，绑定
     loop 的资源随 loop 作废——memory 异步引擎（backend/memory/database.py）
-    检测到 loop 切换就重建引擎，旧引擎的 asyncpg 连接挂在已关闭的旧
-    loop 上无法释放，在常驻 worker 进程内随任务数累积成 PG 连接泄漏
-    （2026-10-21 实测：maintenance-worker 4 小时泄漏 47 个连接，打穿
-    max_connections 导致全站数据库 500）。常驻 loop 让引擎生命周期与
-    worker 进程对齐，连接池跨任务复用。
+    按	loop 注册引擎，临时 loop 关闭后其引擎连接挂在已关闭的 loop 上无法
+    释放，在常驻 worker 进程内随任务数累积成 PG 连接泄漏（2026-10-21
+    实测：maintenance-worker 4 小时泄漏 47 个连接，打穿 max_connections
+    导致全站数据库 500）。常驻 loop 让引擎生命周期与工作线程对齐，
+    连接池跨任务复用。
 
-    约束：Celery prefork 池中任务由子进程主线程串行执行，同一 loop
-    不会并发进入本函数；不要把本函数用于多线程并发提交的场景
-    （run_until_complete 非线程安全）。协程在当前线程执行，ContextVar
-    （调用方身份/租户上下文）原样保留。
+    loop 按**线程**隔离（threading.local）：graph-worker、Celery 主线程、
+    to_thread 工作线程各自持有自己的常驻 loop，互不争抢——run_until_complete
+    非线程安全，同一线程串行调用安全，跨线程天然隔离。协程在当前线程
+    执行，ContextVar（调用方身份/租户上下文）原样保留。
     """
-    global _worker_loop
-    if _worker_loop is None or _worker_loop.is_closed():
-        with _worker_loop_lock:
-            if _worker_loop is None or _worker_loop.is_closed():
-                _worker_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(_worker_loop)
-    return _worker_loop.run_until_complete(coro)
+    loop = getattr(_worker_loop_state, "loop", None)
+    if loop is None or loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        _worker_loop_state.loop = loop
+    return loop.run_until_complete(coro)
 
 
 async def async_safe_call_with_timeout(
@@ -100,3 +103,15 @@ async def async_safe_call_with_timeout(
     except Exception as e:
         logger.error(f"❌ 异步调用失败: {e}")
         return default_value
+
+# 后台 fire-and-forget 任务的强引用集：asyncio 仅对 task 持弱引用，不持有
+# 引用的任务可能在完成前被 GC 静默丢弃（官方文档要求自行保存引用）。
+_BACKGROUND_TASKS: set = set()
+
+
+def spawn_background_task(coro, *, name: str | None = None) -> asyncio.Task:
+    """create_task 并持有引用直至完成，防 GC 静默丢任务；异常留 warning 痕。"""
+    task = asyncio.create_task(coro, name=name)
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
+    return task

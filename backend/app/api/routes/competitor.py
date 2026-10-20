@@ -260,7 +260,7 @@ def analyze_competitor(req: AnalyzeRequest, request: Request):
             return {"result": result, "url": req.url}
         except Exception as e:
             logger.error(f"[competitor:api] 分析失败: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"分析失败: {e}")
+            raise HTTPException(status_code=500, detail="竞品分析失败，请稍后重试") from e
 
     return _run_idempotent_write(
         request, "competitor.api.analyze",
@@ -282,7 +282,7 @@ def scan_all(request: Request):
             return {"report": report}
         except Exception as e:
             logger.error(f"[competitor:api] 巡检失败: {e}", exc_info=True)
-            raise HTTPException(status_code=500, detail=f"巡检失败: {e}")
+            raise HTTPException(status_code=500, detail="竞品巡检失败，请稍后重试") from e
 
     return _run_idempotent_write(
         request, "competitor.api.scan", {"scope": "enabled_watchlist"}, _write,

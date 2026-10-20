@@ -9,6 +9,7 @@ api/routes/data.py — 数据接入 + 处理 + 资产 API
   GET  /pipeline/history    — 执行历史
   GET  /assets              — 数据资产列表
 """
+import asyncio
 import os, csv, json, io, uuid, time, threading
 from fastapi import APIRouter, UploadFile, File, Form
 from backend.shared.logger import logger
@@ -257,7 +258,14 @@ async def run_pipeline(file_id: str = Form(...), steps: str = Form("detect,clean
     errors = 0
 
     try:
-        df = pd.read_csv(filepath) if filepath.endswith(".csv") else pd.DataFrame(json.load(open(filepath)))
+        # 全量读入 + 清洗是秒级 CPU/IO 重活，下放线程池（2026-10-21 评审 P1）
+        def _load_dataframe():
+            if filepath.endswith(".csv"):
+                return pd.read_csv(filepath)
+            with open(filepath, encoding="utf-8") as f:
+                return pd.DataFrame(json.load(f))
+
+        df = await asyncio.to_thread(_load_dataframe)
         input_rows = len(df)
         stages.append({"name": "字段检测", "status": "done", "rows": input_rows})
 
@@ -380,7 +388,10 @@ async def trigger_collect(
     pipeline = _build_dcc_pipeline(enable_write=enable_write)
 
     try:
-        result = pipeline.run(
+        # 同步 fetch + pandas 清洗 + 整表写入，秒级重活必须下放线程池，
+        # 否则单次采集冻结整个事件循环（2026-10-21 评审 P1）
+        result = await asyncio.to_thread(
+            pipeline.run,
             source=task_config["source"],
             table=task_config["table"],
             dedup_keys=task_config.get("dedup_keys"),
@@ -444,7 +455,8 @@ async def trigger_collect_all(enable_write: bool = Form(False)):
 
     for dataset, task_config in _COLLECT_TASKS.items():
         try:
-            result = pipeline.run(
+            result = await asyncio.to_thread(
+                pipeline.run,
                 source=task_config["source"],
                 table=task_config["table"],
                 dedup_keys=task_config.get("dedup_keys"),

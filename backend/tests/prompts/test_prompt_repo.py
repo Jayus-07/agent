@@ -27,24 +27,24 @@ async def repo_session():
     import backend.memory.database as db_mod
     from backend.memory.models.prompt import Base
 
-    db_mod._engine = None
-    db_mod._sessionmaker = None
+    with db_mod._engines_lock:
+        db_mod._engines.clear()
 
-    await db_mod._ensure_engine()
-    async with db_mod._engine.begin() as conn:
+    engine, _sm = await db_mod._ensure_engine()
+    async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
     async with db_mod.AsyncSessionLocal() as session:
         yield session
 
-    async with db_mod._engine.begin() as conn:
+    async with engine.begin() as conn:
         await conn.execute(
             delete(PromptAuditLog).where(PromptAuditLog.prompt_key.like("test.%"))
         )
         await conn.execute(delete(Prompt).where(Prompt.key.like("test.%")))
-    await db_mod._engine.dispose()
-    db_mod._engine = None
-    db_mod._sessionmaker = None
+    await engine.dispose()
+    with db_mod._engines_lock:
+        db_mod._engines.clear()
 
 
 @pytest_asyncio.fixture

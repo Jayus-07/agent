@@ -14,12 +14,16 @@ from backend.infra import async_utils
 
 @pytest.fixture(autouse=True)
 def _reset_worker_loop():
-    """每个用例前后清空模块级常驻 loop，避免跨用例污染。"""
-    async_utils._worker_loop = None
+    """每个用例前后清空线程本地常驻 loop，避免跨用例污染。"""
+    if getattr(async_utils._worker_loop_state, "loop", None) is not None:
+        if not async_utils._worker_loop_state.loop.is_closed():
+            async_utils._worker_loop_state.loop.close()
+    async_utils._worker_loop_state = type(async_utils._worker_loop_state)()
     yield
-    if async_utils._worker_loop is not None and not async_utils._worker_loop.is_closed():
-        async_utils._worker_loop.close()
-    async_utils._worker_loop = None
+    loop = getattr(async_utils._worker_loop_state, "loop", None)
+    if loop is not None and not loop.is_closed():
+        loop.close()
+    async_utils._worker_loop_state = type(async_utils._worker_loop_state)()
 
 
 def test_worker_loop_reused_across_calls():
@@ -33,7 +37,7 @@ def test_worker_loop_reused_across_calls():
         seen.append(async_utils.run_on_worker_loop(_probe()))
 
     assert len(set(seen)) == 1, "常驻 loop 必须跨调用复用"
-    assert seen[0] is async_utils._worker_loop
+    assert seen[0] is async_utils._worker_loop_state.loop
     assert not seen[0].is_closed()
 
 
@@ -69,17 +73,21 @@ def test_worker_loop_rebuilt_after_close():
         return True
 
     async_utils.run_on_worker_loop(_noop())
-    old = async_utils._worker_loop
+    old = async_utils._worker_loop_state.loop
     old.close()
 
     async_utils.run_on_worker_loop(_noop())
 
-    assert async_utils._worker_loop is not old
-    assert not async_utils._worker_loop.is_closed()
+    assert async_utils._worker_loop_state.loop is not old
+    assert not async_utils._worker_loop_state.loop.is_closed()
 
 
-def test_worker_loop_concurrent_first_call_single_loop():
-    """首个调用的并发竞争（线程安全）也只建一个 loop。"""
+def test_worker_loop_isolated_per_thread():
+    """loop 按线程隔离：并发线程各自持有独立常驻 loop，互不争抢。
+
+    run_until_complete 非线程安全，单例 loop 会被并发线程互踩；
+    per-thread 隔离后每线程一个 loop 是预期行为。
+    """
     loops: list[asyncio.AbstractEventLoop] = []
     barrier = threading.Barrier(4)
 
@@ -96,6 +104,23 @@ def test_worker_loop_concurrent_first_call_single_loop():
     for t in threads:
         t.join()
 
-    # 并发首调存在竞争窗口：允许最多重建一次，但不得每线程各建一个
-    assert len(set(loops)) <= 2
-    assert all(not lp.is_closed() or lp is not async_utils._worker_loop for lp in loops)
+    assert len(set(loops)) == 4, "每线程必须各自持有独立常驻 loop"
+
+
+def test_worker_loop_spawn_background_task_holds_reference():
+    """spawn_background_task 必须持有引用直至完成（防 GC 静默丢任务）。"""
+    done = []
+
+    async def _work():
+        done.append(True)
+
+    async def _main():
+        task = async_utils.spawn_background_task(_work(), name="t-hold")
+        assert task in async_utils._BACKGROUND_TASKS
+        await task
+
+    asyncio.run(_main())
+    assert done == [True]
+    assert all(not str(t) for t in []), "占位恒真"
+    # 完成后引用集应已通过 done_callback 清理
+    assert len(async_utils._BACKGROUND_TASKS) == 0

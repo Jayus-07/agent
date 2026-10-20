@@ -55,15 +55,19 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         try:
             import pymupdf as fitz
             doc = fitz.open(file_path)
-            page_count = len(doc)
-            img_blocks = 0
-            for pi in range(page_count):
-                page = doc[pi]
-                img_blocks += sum(
-                    1 for b in page.get_text("dict").get("blocks", [])
-                    if b.get("type") == 1
-                )
-            doc.close()
+            try:
+                page_count = len(doc)
+                img_blocks = 0
+                for pi in range(page_count):
+                    page = doc[pi]
+                    img_blocks += sum(
+                        1 for b in page.get_text("dict").get("blocks", [])
+                        if b.get("type") == 1
+                    )
+            finally:
+                # 异常页/损坏 PDF 必须关闭 Document：常驻进程反复上传场景
+                # 下泄漏 fd 与内部缓冲（与 pdf_parser 的 finally 范式一致）
+                doc.close()
             hint = (
                 f"该 PDF 共 {page_count} 页但无文字层"
                 + (f"（含 {img_blocks} 个图片块，可能为扫描件/纯图片）" if img_blocks else "（可能为图片型 PDF）")
