@@ -138,10 +138,10 @@ def test_tech_manual_english_config_content_kept():
 
 
 def test_all_baseline_fixtures_complete_offline():
-    """16/16 baseline fixture 离线完整性验收（免费，无任何外部调用）。"""
+    """28/28 baseline fixture 离线完整性验收（免费，无任何外部调用）。"""
     documents = json.loads(MANIFEST.read_text(encoding="utf-8"))["documents"]
     baseline = [d for d in documents if d["fixture_set"] == "baseline"]
-    assert len(baseline) == 16
+    assert len(baseline) == 28
 
     failures: list[str] = []
     for document in baseline:
@@ -203,7 +203,7 @@ def test_all_baseline_fixtures_complete_offline():
         if problems:
             failures.append(f"{fixture_id}: {', '.join(problems)}")
 
-    assert not failures, "16 份 fixture 离线完整性失败:\n" + "\n".join(failures)
+    assert not failures, "28 份 fixture 离线完整性失败:\n" + "\n".join(failures)
 
 
 # ── 2. Parent / Leaf 去重隔离（P0-B）───────────────────────────────

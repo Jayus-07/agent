@@ -16,7 +16,7 @@ def test_baseline_snapshot_has_stable_scope():
     assert snapshot["kb_id"] == "rag_eval_kb"
     assert snapshot["fixture_set"] == "baseline"
     assert snapshot["version_id"]
-    assert snapshot["cases_path"].endswith("pr_baseline.json")
+    assert snapshot["cases_path"].endswith("desktop_upload_full.json")
 
 
 def test_unknown_snapshot_fails_without_directory_fallback():
@@ -30,11 +30,11 @@ def test_scope_and_filter_carry_snapshot_version():
     scope = build_eval_scope(
         kb_id="rag_eval_kb",
         fixture_set="baseline",
-        version_id="rag_eval_kb-baseline-2026-09-18",
+        version_id="rag_eval_kb-baseline-6.0.0-desktop-candidate.1",
         multiquery=False,
     )
 
-    assert scope.as_dict()["version_id"] == "rag_eval_kb-baseline-2026-09-18"
+    assert scope.as_dict()["version_id"] == "rag_eval_kb-baseline-6.0.0-desktop-candidate.1"
     assert build_scope_metadata_filter(
         scope.kb_id,
         fixture_set=scope.fixture_set,
@@ -42,5 +42,5 @@ def test_scope_and_filter_carry_snapshot_version():
     ) == {
         "kb_id": "rag_eval_kb",
         "fixture_set": "baseline",
-        "version_id": "rag_eval_kb-baseline-2026-09-18",
+        "version_id": "rag_eval_kb-baseline-6.0.0-desktop-candidate.1",
     }

@@ -1,0 +1,20 @@
+{
+  "name": "desktop_upload_smoke",
+  "version": "6.0.0-desktop-candidate.1",
+  "dataset_version": "6.0.0-desktop-candidate.1",
+  "kb_id": "rag_eval_kb",
+  "fixture_set": "baseline",
+  "description": "桌面文档上传专项；不等同于原业务场景覆盖",
+  "case_ids": [
+    "UFQ-001",
+    "UFQ-002",
+    "UFQ-007",
+    "UFQ-008",
+    "UFQ-011",
+    "UFQ-016",
+    "UFQ-022",
+    "UFQ-023"
+  ],
+  "cases_hash": "56bf7b08d0e36d22",
+  "min_samples": 8
+}

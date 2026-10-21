@@ -1,31 +1,428 @@
 {
   "kb_id": "rag_eval_kb",
-  "fixture_version": "2026-09-18",
-  "migration_note": "迁移期保留旧路径；待一个发布周期内无调用方后，才可复制到本目录并移除兼容字段。",
+  "fixture_version": "6.0.0-desktop-candidate.1",
   "documents": [
-    {"fixture_doc_id": "baseline_structure_messy", "source_file": "data/docs/rag_test_kb/general/10_结构混乱的长文档.pdf", "source_compat_path": "data/docs/rag_test_kb/general/10_结构混乱的长文档.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_one_sentence_faq", "source_file": "data/docs/rag_test_kb/general/16_一句话FAQ.md", "source_compat_path": "data/docs/rag_test_kb/general/16_一句话FAQ.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_keyword_noise", "source_file": "data/docs/rag_test_kb/general/24_关键词干扰文档.md", "source_compat_path": "data/docs/rag_test_kb/general/24_关键词干扰文档.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_homograph", "source_file": "data/docs/rag_test_kb/general/25_同形异义词.md", "source_compat_path": "data/docs/rag_test_kb/general/25_同形异义词.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_numeric_trap", "source_file": "data/docs/rag_test_kb/general/26_数字近似陷阱.md", "source_compat_path": "data/docs/rag_test_kb/general/26_数字近似陷阱.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_after_sales_faq", "source_file": "data/docs/rag_test_kb/general/cs_售后FAQ.docx", "source_compat_path": "data/docs/rag_test_kb/general/cs_售后FAQ.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_faq", "source_file": "data/docs/rag_test_kb/general/faq_常见问题FAQ.md", "source_compat_path": "data/docs/rag_test_kb/general/faq_常见问题FAQ.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_expense", "source_file": "data/docs/rag_test_kb/general/finance_员工报销制度.pdf", "source_compat_path": "data/docs/rag_test_kb/general/finance_员工报销制度.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_employee_handbook", "source_file": "data/docs/rag_test_kb/general/hr_员工手册.docx", "source_compat_path": "data/docs/rag_test_kb/general/hr_员工手册.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_inventory", "source_file": "data/docs/rag_test_kb/general/ops_库存管理制度.pdf", "source_compat_path": "data/docs/rag_test_kb/general/ops_库存管理制度.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_product_spec", "source_file": "data/docs/rag_test_kb/general/product_商品规格说明.pdf", "source_compat_path": "data/docs/rag_test_kb/general/product_商品规格说明.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_purchase", "source_file": "data/docs/rag_test_kb/general/purchase_采购流程.docx", "source_compat_path": "data/docs/rag_test_kb/general/purchase_采购流程.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_qc_sop", "source_file": "data/docs/rag_test_kb/general/qc_质检标准SOP.docx", "source_compat_path": "data/docs/rag_test_kb/general/qc_质检标准SOP.docx", "fixture_set": "baseline", "format": "docx", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_returns", "source_file": "data/docs/rag_test_kb/general/returns_退货政策.pdf", "source_compat_path": "data/docs/rag_test_kb/general/returns_退货政策.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_supplier", "source_file": "data/docs/rag_test_kb/general/supplier_供应商管理规范.md", "source_compat_path": "data/docs/rag_test_kb/general/supplier_供应商管理规范.md", "fixture_set": "baseline", "format": "md", "kb_id": "rag_eval_kb"},
-    {"fixture_doc_id": "baseline_tech_manual", "source_file": "data/docs/rag_test_kb/general/tech_技术手册.pdf", "source_compat_path": "data/docs/rag_test_kb/general/tech_技术手册.pdf", "fixture_set": "baseline", "format": "pdf", "kb_id": "rag_eval_kb"}
-  ],
-  "source_manifests": [
     {
-      "fixture_set": "expanded_100",
-      "source_manifest": "backend/evaluation/fixtures/rag_100_docs/manifest.json",
-      "source_files_prefix": "backend/evaluation/fixtures/rag_100_docs/files",
-      "migration_note": "兼容层引用原有 100 份语料清单，避免首次统一时移动或删除旧文件。"
+      "fixture_doc_id": "UF-01-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/01_policy/staff_regulation_scnu.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "aa819099435b2afc6b0b40d484607384de201c6e0ad37de489040dd69d4f0968",
+      "scenario_id": "UPLOAD-01",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "01_policy/staff_regulation_scnu.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-02-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/02_faq_mixed/help_center_mixed.md",
+      "fixture_set": "baseline",
+      "format": "md",
+      "kb_id": "rag_eval_kb",
+      "sha256": "b582e4fee741056466e2363f036c099bcc474c25dcd2c54299a3bab62adad2c1",
+      "scenario_id": "UPLOAD-02",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "02_faq_mixed/help_center_mixed.md",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-03-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/03_faq_only/faq_only.docx",
+      "fixture_set": "baseline",
+      "format": "docx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "f09277a695a6b86d2d322a3181c44865f25a8efe61dbd9a819dbe2a87f627ea4",
+      "scenario_id": "UPLOAD-03",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "03_faq_only/faq_only.docx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-03-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/03_faq_only/faq_only.md",
+      "fixture_set": "baseline",
+      "format": "md",
+      "kb_id": "rag_eval_kb",
+      "sha256": "b927c3cf473d5d90d8332f33642810548de7be3950dc0e6ac4c2588313f30fe6",
+      "scenario_id": "UPLOAD-03",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "03_faq_only/faq_only.md",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-04-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/04_no_title_txt/no_title.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "386d71d23e40b5876709e3bdb8cf00d4acdc63dd438684f689b556c0833956de",
+      "scenario_id": "UPLOAD-04",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "04_no_title_txt/no_title.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-04-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/04_no_title_txt/no_title_oneline.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "8c8d67977420908de15a18a8bf9c519a04ff2e3ea7db099c7f08c2a5ab64cdd4",
+      "scenario_id": "UPLOAD-04",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "04_no_title_txt/no_title_oneline.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-05-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/05_preamble_before_heading/preamble.docx",
+      "fixture_set": "baseline",
+      "format": "docx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "e1578845eda19782cf1dd44fe2ca1d23cba05c4e9166dc9bd617024f12b4e8a8",
+      "scenario_id": "UPLOAD-05",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "05_preamble_before_heading/preamble.docx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-05-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/05_preamble_before_heading/preamble.md",
+      "fixture_set": "baseline",
+      "format": "md",
+      "kb_id": "rag_eval_kb",
+      "sha256": "e7ac0341e8f340a49911b15afcb356e45767bbea10850ea1718dd34380c844d0",
+      "scenario_id": "UPLOAD-05",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "05_preamble_before_heading/preamble.md",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-06-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/06_long_sop_step/long_sop.docx",
+      "fixture_set": "baseline",
+      "format": "docx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "9138550e6b6853e980787b8632bdcced606b486fce602a078f3746243a815d12",
+      "scenario_id": "UPLOAD-06",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "06_long_sop_step/long_sop.docx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-07-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/07_long_contract_clause/contract_gf2017_0201_cn.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "7faa2df1b4b2bb05501cb5e003f3f7110152f1f5a87c8c3e71f8983fc86b0e96",
+      "scenario_id": "UPLOAD-07",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "07_long_contract_clause/contract_gf2017_0201_cn.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-08-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/08_contract_with_table/contract_table.docx",
+      "fixture_set": "baseline",
+      "format": "docx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "a440713440a8cb4e51ea44106f4637cfeb198356a34e1c1ac07a32c6de9258b3",
+      "scenario_id": "UPLOAD-08",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "08_contract_with_table/contract_table.docx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-09-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/09_pdf_cross_page_table/report.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "2125ff97a452ea79b0d784e2432f7d224b6aecc330b644b593477d69e22f4ed1",
+      "scenario_id": "UPLOAD-09",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "09_pdf_cross_page_table/report.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-10-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/10_docx_interleaved/interleaved.docx",
+      "fixture_set": "baseline",
+      "format": "docx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "546dae15828462a9b70f4513b10788c9e5f839a0eae442aaa89680b3a6fd1bbe",
+      "scenario_id": "UPLOAD-10",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "10_docx_interleaved/interleaved.docx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-11-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/11_csv_leading_zero_sku/sku.csv",
+      "fixture_set": "baseline",
+      "format": "csv",
+      "kb_id": "rag_eval_kb",
+      "sha256": "0a1f31032f9e47a8e98710a81e92daa3c7223cbdd87453d03acdc1ecbb125af9",
+      "scenario_id": "UPLOAD-11",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "11_csv_leading_zero_sku/sku.csv",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-11-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/11_csv_leading_zero_sku/sku_bom.csv",
+      "fixture_set": "baseline",
+      "format": "csv",
+      "kb_id": "rag_eval_kb",
+      "sha256": "53819b9a9e91613f80bd42c0acb023d9e52f39521c3769db30e095110aaf9aa7",
+      "scenario_id": "UPLOAD-11",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "11_csv_leading_zero_sku/sku_bom.csv",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-11-03",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/11_csv_leading_zero_sku/sku_gbk.csv",
+      "fixture_set": "baseline",
+      "format": "csv",
+      "kb_id": "rag_eval_kb",
+      "sha256": "a2f25a56fada2fa84509ce88729c3fff884d1cd2c15fc1e9091de36c5c8f6b53",
+      "scenario_id": "UPLOAD-11",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "11_csv_leading_zero_sku/sku_gbk.csv",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-12-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/12_multi_sheet_excel/multi_sheet.xlsx",
+      "fixture_set": "baseline",
+      "format": "xlsx",
+      "kb_id": "rag_eval_kb",
+      "sha256": "5d15275538cf1435d640593fd5ef4a6f9b5f16edc1dfdcd25bb59639cf3067ed",
+      "scenario_id": "UPLOAD-12",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "12_multi_sheet_excel/multi_sheet.xlsx",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-13-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/13_long_100p/doc_cn.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "68e0f9f282227e9502ae201320c8358d98dfce25643f7d595a1a869eeea5c222",
+      "scenario_id": "UPLOAD-13",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "13_long_100p/doc_cn.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-14-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/14_long_300_500p/progit_en_501p.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "461791d73e2497dc748e2663b438f067beb98e738d4347917b878240ae03a729",
+      "scenario_id": "UPLOAD-14",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "14_long_300_500p/progit_en_501p.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-14-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/14_long_300_500p/progit_zh.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "14a7ca742aeb3327a11eb7b19e3f62c321f091b71fe119ee562bce7197588eaa",
+      "scenario_id": "UPLOAD-14",
+      "profile": "slow",
+      "legacy_metadata": {
+        "file": "14_long_300_500p/progit_zh.pdf",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-15-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/15_scanned_ocr_partial_fail/scanned_partial_fail.pdf",
+      "fixture_set": "baseline",
+      "format": "pdf",
+      "kb_id": "rag_eval_kb",
+      "sha256": "13a742fa8a93636ac9f45a59886357ebecb551c5849750534bd9e8e5585e6004",
+      "scenario_id": "UPLOAD-15",
+      "profile": "ocr",
+      "legacy_metadata": {
+        "file": "15_scanned_ocr_partial_fail/scanned_partial_fail.pdf",
+        "permission_scope": "general",
+        "is_scanned": true
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-01",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/base_v1.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "ca8f3ba207edfb6a7d529a4315624f01338efb21dc3a1ea112f319fc66a3aa57",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/base_v1.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-02",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/exact_copy.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "ca8f3ba207edfb6a7d529a4315624f01338efb21dc3a1ea112f319fc66a3aa57",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/exact_copy.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-03",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/near_numbers.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "809247d0c3d68798e22004da722a6436e33d08ae9ca6614158821079fc1d0657",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/near_numbers.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-04",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/near_reorder.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "1c019076d26d916d2bddf7d743bb57178125b36820729160d67ab38552e3f8fc",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/near_reorder.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-05",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/near_typos.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "922b0ca7f79932bc62eb0a6f2dea745a1c92954fac6e0c8b07ee24e4a6fb327c",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/near_typos.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-06",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/unrelated_control.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "f673fa25de9e3eb477a6e5e87cf6af2c2296498a4f72f8c896c864cefd6d0046",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/unrelated_control.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
+    },
+    {
+      "fixture_doc_id": "UF-16-07",
+      "source_file": "backend/evaluation/fixtures/rag_eval_kb/files/16_dedup_near_dup/v2_revised_2024.txt",
+      "fixture_set": "baseline",
+      "format": "txt",
+      "kb_id": "rag_eval_kb",
+      "sha256": "7c0a0dcd3bb24abb41825cf41c30ea4e400b67df227ab152499da3be944b0061",
+      "scenario_id": "UPLOAD-16",
+      "profile": "fast",
+      "legacy_metadata": {
+        "file": "16_dedup_near_dup/v2_revised_2024.txt",
+        "permission_scope": "general",
+        "is_scanned": false
+      }
     }
-  ]
+  ],
+  "source_manifests": [],
+  "description": "桌面上传测试集候选；独立替换包，不与旧baseline混装"
 }

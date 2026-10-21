@@ -204,8 +204,8 @@ def main() -> int:
         if arg == "--fixture-set" and index + 1 < len(sys.argv):
             requested_set = sys.argv[index + 1]
     if requested_set is None:
-        requested_set = "expanded_100"
-        print("[DEPRECATED] 未指定 --fixture-set，兼容映射到 expanded_100；新命令请显式指定。")
+        requested_set = "baseline"
+        print("[DEPRECATED] 未指定 --fixture-set，默认使用 baseline；新命令请显式指定。")
 
     catalog = load_fixture_catalog()
     catalog.validate()

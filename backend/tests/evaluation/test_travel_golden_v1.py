@@ -50,5 +50,5 @@ def test_rag_regression_workflows_cover_pr_and_scheduled_gates():
         assert path_prefix in smoke
     assert "schedule:" in regression
     assert 'cron: "0 18 * * *"' in regression
-    for selection in ("regression", "ci_golden", "expanded_100", "scale_20k"):
+    for selection in ("desktop_upload_full", "desktop_upload_smoke"):
         assert selection in regression

@@ -8,7 +8,7 @@ name: RAG PR Smoke
 #   写权限者人工触发），执行 DB API 模型口径的真实检索评测。
 # - 完整回归由 rag_regression.yml 的 workflow_dispatch 承担（无 PR/定时触发）。
 #
-# 语义定位：固定 8 条用例（pr_smoke suite）的真实检索评测，全部层级阈值
+# 语义定位：固定 8 条用例（desktop_upload_smoke suite）的真实检索评测，全部层级阈值
 # 达标才 PASS；检索评测与生成/Judge 评测（--judge/--ragas 显式 opt-in）分开。
 
 on:
@@ -136,7 +136,7 @@ jobs:
           python -m pip install -r requirements-lock.txt
 
       - name: Evaluation preflight (E0, free)
-        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+        run: python -m backend.evaluation.preflight --module rag --selection desktop_upload_smoke
 
       - name: Initialize isolated database for free Prompt contracts
         run: |
@@ -296,13 +296,15 @@ jobs:
           python -m pip install -r requirements-lock.txt
 
       - name: Evaluation preflight
-        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+        run: python -m backend.evaluation.preflight --module rag --selection desktop_upload_smoke
 
       - name: Trim corpora to evaluation scope
         run: |
-          # 与 rag_regression 同口径：业务知识库不进评测隔离库
-          #（pipeline 全量 sync 会混入业务文档并触发 near-dup 交叉 HOLD）。
+          # 只从本次 rag_eval_kb manifest 部署 fixture；旧 baseline 与兼容别名
+          # 会被全量 sync 再次纳入并触发 near-dup 交叉 HOLD。
           rm -rf data/docs/policy_general
+          rm -rf data/docs/rag_eval_kb data/docs/rag_test_kb data/docs/rag_100_docs
+          mkdir -p data/docs/rag_eval_kb
           ls data/docs/
 
       - name: Prepare migration compatibility database
@@ -421,7 +423,7 @@ jobs:
             MULTIQUERY_ARGS+=(--multiquery)
           fi
           python -u -m backend.evaluation.cli rag \
-            --selection pr_smoke \
+            --selection desktop_upload_smoke \
             --run-id "$EVAL_RUN_ID" \
             "${MULTIQUERY_ARGS[@]}" \
             --no-ragas \

@@ -152,7 +152,7 @@ class RunEvalRequest(BaseModel):
     """评测中心运行选项；旧客户端不传 body 时保持离线口径。"""
 
     evaluation_mode: str = "offline"
-    suite: str = "pr_baseline"
+    suite: str = "desktop_upload_full"
 
 
 @router.post("/run", response_model=RunEvalResponse)

@@ -15,33 +15,32 @@ def test_runner_rejects_unknown_fixture_set():
 
 def test_runner_records_scope_and_multiquery():
     scope = build_eval_scope(
-        kb_id="rag_eval_kb", fixture_set="expanded_100", multiquery=True,
+        kb_id="rag_eval_kb", fixture_set="baseline", multiquery=True,
     )
 
-    # C6-3/REPRO-06（2026-10-04）：非 baseline fixture 也登记语料快照
-    # version_id（进 evaluation_scope → 快照哈希），但不过滤检索
+    # 桌面上传候选的 baseline scope 固定记录版本并启用版本过滤。
     assert scope.as_dict() == {
         "kb_id": "rag_eval_kb",
-        "fixture_set": "expanded_100",
+        "fixture_set": "baseline",
         "multiquery": True,
-        "version_id": "rag_eval_kb-expanded_100-2026-10-04",
-        "version_filter_enforced": False,
+        "version_id": "rag_eval_kb-baseline-6.0.0-desktop-candidate.1",
+        "version_filter_enforced": True,
     }
 
 
 def test_eval_config_carries_explicit_scope_fields():
     config = EvalConfig(
         module="rag",
-        selection="expanded_100",
+        selection="desktop_upload_full",
         kb_id="rag_eval_kb",
-        fixture_set="expanded_100",
-        dataset_version="5.0.0-unified",
+        fixture_set="baseline",
+        dataset_version="6.0.0-desktop-candidate.1",
         run_id="resume-me-001",
     )
 
     assert config.kb_id == "rag_eval_kb"
-    assert config.fixture_set == "expanded_100"
-    assert config.dataset_version == "5.0.0-unified"
+    assert config.fixture_set == "baseline"
+    assert config.dataset_version == "6.0.0-desktop-candidate.1"
     assert config.run_id == "resume-me-001"
 
 
