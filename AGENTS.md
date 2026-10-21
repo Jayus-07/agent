@@ -40,6 +40,7 @@
 
 - 本机共享栈 = 仓库根 docker-compose.yml 叠加 部署/prod-4c8g/docker-compose.local.yml（compose 项目名 agent）。`ragu1-*` 为隔离测试栈、`agent-gh-runner` 为 CI、observability 全家桶属 profile 储备，均不属日常栈，禁擅动。
 - 改后端代码唯一生效路径 = `devctl.bat rebuild`（compose --build 重建）；start/restart 不换代码、不换 .env。
+- 每次代码修改完成后，必须使用本次任务 Worktree 中包含最新改动的代码重建受影响的本机代码服务，并确认健康状态；不得从含有其他会话未提交改动的主目录构建。无法安全重建或健康检查失败时，明确标记 `BLOCKED` / `UNVERIFIED`，说明原因和下一步，不得报告为已部署。
 - 一键启停用 `devctl.bat start / stop`（含 apisix 与全部基础设施）；不要使用 `--remove-orphans` 或 `down -v` 清理共享栈。
 - 端口 8000 / 8090 / 8091 / 9080 / 5433 由主栈占用；并行会话做验证时用错位端口与独立容器名，不与主栈抢绑定。
 - worktree 默认没有 .env（gitignore）：compose 或依赖 SSRF_FAKEIP_AWARE 等开关的测试需要时，从主仓库拷贝。
@@ -107,7 +108,7 @@
 1. 每个独立开发任务使用独立 Git Worktree 和任务分支，优先使用 AI 工具内置 Worktree 功能；没有内置功能时使用 Git 原生命令。
 2. 新任务从已提交的 main 创建工作树，同一任务跨会话继续时复用原工作树。
 3. 修改代码前确认实际工作目录；不得直接修改 main 或其他任务工作树。如果无法切换到目标目录，停止修改并报告。
-4. 开发结束后提交任务分支，输出 Commit SHA、测试结果和未完成事项；未经确认不得合并 main。
+4. 完成实现后，先按适用规则完成代码重建和验证，再向用户展示 Diff、实际验证结果及未完成事项，并询问是否提交；收到明确确认后才可提交任务分支并输出 Commit SHA。未获确认时保持未提交状态；未经确认不得合并 main。
 5. 合并后才允许清理工作树；未提交修改、未合并提交、忽略文件和历史记录必须先检查并保留。
 6. 禁止强制清理、覆盖其他任务修改或操作共享数据库；涉及冲突时先报告。
 
