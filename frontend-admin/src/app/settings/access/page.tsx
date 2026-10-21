@@ -873,8 +873,8 @@ function AccessControlContent() {
                     {audit.map((item) => (
                       <tr key={item.id} className="text-text-primary">
                         <td className="whitespace-nowrap px-3 py-3 text-text-secondary">{item.createdAt ? new Date(item.createdAt).toLocaleString("zh-CN") : "—"}</td>
-                        <td className="px-3 py-3">{item.operator || item.actor || "系统"}</td>
-                        <td className="px-3 py-3">{item.target || `用户 ${item.targetUserId}`}</td>
+                        <td className="px-3 py-3">{item.actorUsername || (item.actorUserId === null ? "系统服务" : "用户已删除")}</td>
+                        <td className="px-3 py-3">{item.targetUsername || "用户已删除"}</td>
                         <td className="max-w-md px-3 py-3 text-text-secondary">{auditChanges(item)}</td>
                         <td className="px-3 py-3">
                           <span className={`rounded-full px-2 py-1 text-[10px] ${item.result === "success" ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>

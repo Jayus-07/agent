@@ -73,8 +73,10 @@ export interface RbacAuditItem {
   operator: string;
   actor: string;
   actorUserId: number | null;
+  actorUsername: string | null;
   target: string;
   targetUserId: number;
+  targetUsername: string | null;
   action: string;
   oldPlatformRole: PlatformRole | null;
   newPlatformRole: PlatformRole | null;

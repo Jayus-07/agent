@@ -1274,14 +1274,18 @@ def _audit_item(row: Any) -> dict[str, Any]:
     after = _parse_json(_row_value(row, "after_state", {}))
     actor_user_id = _row_value(row, "actor_user_id")
     target_user_id = _row_value(row, "target_user_id")
+    actor_username = _row_value(row, "actor_username")
+    target_username = _row_value(row, "target_username")
     operator = f"user:{actor_user_id}" if actor_user_id is not None else "service"
     return {
         "id": _row_value(row, "id"),
         "operator": operator,
         "actor": operator,
         "actorUserId": actor_user_id,
+        "actorUsername": actor_username,
         "target": f"user:{target_user_id}",
         "targetUserId": target_user_id,
+        "targetUsername": target_username,
         "action": _row_value(row, "action"),
         "oldPlatformRole": before.get("platformRole"),
         "newPlatformRole": after.get("platformRole"),
@@ -1310,24 +1314,30 @@ async def list_audit(
         if not user_id.isdigit() or int(user_id) < 1:
             raise _http_error("user_id 必须是正整数", 400)
         target_user_id = int(user_id)
-    where = "WHERE tenant_id = :tenant_id"
+    where = "WHERE a.tenant_id = :tenant_id"
     params: dict[str, Any] = {
         "tenant_id": tenant_id,
         "limit": page_size,
         "offset": (page - 1) * page_size,
     }
     if target_user_id is not None:
-        where += " AND target_user_id = :user_id"
+        where += " AND a.target_user_id = :user_id"
         params["user_id"] = target_user_id
 
     async with _db() as db:
         total = int((await db.execute(text(
-            f"SELECT COUNT(*) FROM auth.rbac_audits {where}"), params)).scalar() or 0)
+            f"SELECT COUNT(*) FROM auth.rbac_audits a {where}"), params)).scalar() or 0)
         rows = (await db.execute(text(
-            f"SELECT id, tenant_id, actor_user_id, target_user_id, action, "
-            f"before_state, after_state, result, created_at "
-            f"FROM auth.rbac_audits {where} "
-            "ORDER BY created_at DESC, id DESC LIMIT :limit OFFSET :offset"),
+            f"SELECT a.id, a.tenant_id, a.actor_user_id, a.target_user_id, "
+            f"actor.username AS actor_username, target.username AS target_username, "
+            f"a.action, a.before_state, a.after_state, a.result, a.created_at "
+            f"FROM auth.rbac_audits a "
+            "LEFT JOIN auth.users actor ON actor.id = a.actor_user_id "
+            "AND actor.tenant_id = a.tenant_id "
+            "LEFT JOIN auth.users target ON target.id = a.target_user_id "
+            "AND target.tenant_id = a.tenant_id "
+            f"{where} "
+            "ORDER BY a.created_at DESC, a.id DESC LIMIT :limit OFFSET :offset"),
             params)).mappings().all()
     return {
         "items": [_audit_item(row) for row in rows],
