@@ -29,6 +29,7 @@ router = APIRouter(prefix="/sys/rbac", tags=["管理端-RBAC"])
 
 _ALLOWED_PLATFORM_ROLES = {"viewer", "editor", "admin", "super_admin"}
 _ALLOWED_CS_ROLES = {"agent", "supervisor"}
+_DEPARTMENT_CODE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,49}$")
 _MISSING = object()
 _session_service = SessionService(redis_getter=get_auth_redis)
 
@@ -569,6 +570,107 @@ async def list_departments(
             "ORDER BY code"),
             {"tenant_id": tenant_id})).mappings().all()
     return {"items": [{"code": r["code"], "name": r["name"]} for r in rows]}
+
+
+@router.post("/departments", status_code=201)
+async def create_department(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """创建本租户部门；租户来自已验证身份，创建记录写入部门审计表。"""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise _http_error("请求体必须是 JSON 对象", 400)
+
+    tenant_id = _tenant_id(request)
+    requested_tenant = str(body.get("tenantId") or "").strip()
+    if requested_tenant and requested_tenant != tenant_id:
+        raise _http_error("tenantId 与操作者租户不一致（多租户规则禁止跨租户创建）", 403)
+
+    raw_code = body.get("code")
+    raw_name = body.get("name")
+    if not isinstance(raw_code, str) or not isinstance(raw_name, str):
+        raise _http_error("code 和 name 必须是字符串", 400)
+    code = raw_code.strip().lower()
+    name = raw_name.strip()
+    if not _DEPARTMENT_CODE_RE.fullmatch(code):
+        raise _http_error(
+            "部门编码须为 1-50 位小写字母开头，后续只能包含小写字母、数字、_ 或 -",
+            400,
+        )
+    if code == "all":
+        raise _http_error("部门编码 all 为系统保留值，不能使用", 400)
+    if not name or len(name) > 100 or any(ord(char) < 32 for char in name):
+        raise _http_error("部门名称不能为空，且不能超过 100 个字符", 400)
+
+    db = None
+    try:
+        async with _db() as db:
+            available = (await db.execute(text(
+                "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+                "WHERE table_schema = 'auth' AND table_name = 'departments'"
+            ))).scalar()
+            audit_available = (await db.execute(text(
+                "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+                "WHERE table_schema = 'auth' AND table_name = 'department_audits'"
+            ))).scalar()
+            if not available:
+                raise _http_error(
+                    "部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
+            if not audit_available:
+                raise _http_error(
+                    "部门审计表未初始化（请先应用 102_rbac_department_audits 迁移）", 503)
+
+            duplicate = (await db.execute(text(
+                "SELECT 1 FROM auth.departments "
+                "WHERE tenant_id = :tenant_id AND code = :code"
+            ), {"tenant_id": tenant_id, "code": code})).first()
+            if duplicate is not None:
+                raise _http_error("该部门编码已存在", 409)
+
+            row = (await db.execute(text(
+                "INSERT INTO auth.departments (tenant_id, code, name, status) "
+                "VALUES (:tenant_id, :code, :name, 1) "
+                "RETURNING code, name, status"
+            ), {"tenant_id": tenant_id, "code": code, "name": name})).mappings().first()
+            if row is None:
+                raise RuntimeError("部门创建未返回记录")
+
+            await db.execute(text(
+                "INSERT INTO auth.department_audits "
+                "(tenant_id, actor_user_id, department_code, department_name, "
+                "action, after_state, result) VALUES "
+                "(:tenant_id, :actor_user_id, :code, :name, 'department.create', "
+                "CAST(:after_state AS JSONB), 'success')"
+            ), {
+                "tenant_id": tenant_id,
+                "actor_user_id": _actor_user_id(operator),
+                "code": code,
+                "name": name,
+                "after_state": json.dumps(
+                    {"code": code, "name": name, "status": 1},
+                    ensure_ascii=False,
+                ),
+            })
+            await db.commit()
+    except HTTPException:
+        await _rollback(db)
+        raise
+    except Exception as exc:
+        await _rollback(db)
+        if _is_concurrency_conflict(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="部门创建发生并发冲突，请刷新后重试",
+            ) from exc
+        logger.exception("[RBAC] 部门创建事务失败 tenant_id=%s", tenant_id)
+        raise HTTPException(status_code=500, detail="部门创建失败") from exc
+
+    return {
+        "code": _row_value(row, "code"),
+        "name": _row_value(row, "name"),
+        "status": int(_row_value(row, "status", 1)),
+    }
 
 
 @router.get("/users")

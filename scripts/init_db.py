@@ -291,6 +291,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "100_model_price_change_alert_outbox.sql": "memory",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
     "101_travel_v2_trip_conversations.sql": "memory",
+    # RBAC 部门创建审计，写入与 auth.departments 同库。
+    "102_rbac_department_audits.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

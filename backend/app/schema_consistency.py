@@ -37,7 +37,7 @@ _MEMORY_TABLES = [
     "model_price", "model_price_versions", "llm_config_history",
     # Auth（008/009/023/029/033/041）
     "auth.users", "auth.sessions", "auth.refresh_tokens",
-    "auth.departments", "auth.rbac_audits",
+    "auth.departments", "auth.rbac_audits", "auth.department_audits",
     # Task Runtime + Idempotency（ai schema）
     "ai.idempotency_records", "ai.agent_tasks", "ai.agent_trace",
     "ai.gateway_access_logs",

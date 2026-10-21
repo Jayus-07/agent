@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import {
+  Building2,
   Check,
   ChevronLeft,
   ChevronRight,
@@ -21,6 +22,7 @@ import {
   Users,
 } from "lucide-react";
 import RoleGate from "@/components/auth/RoleGate";
+import DepartmentManagement from "@/components/rbac/DepartmentManagement";
 import {
   type CsRole,
   type PlatformRole,
@@ -42,7 +44,7 @@ import { describeApiError } from "@/api/errors";
 import { ApiError } from "@/lib/fetcher";
 
 const PAGE_SIZE = 20;
-type Tab = "users" | "roles" | "audit";
+type Tab = "users" | "departments" | "roles" | "audit";
 
 interface UserDraft {
   platformRole: PlatformRole;
@@ -149,21 +151,31 @@ function AccessControlContent() {
   const [actingUserId, setActingUserId] = useState<number | null>(null);
   // ── P9 部门维护：下拉数据源来自 departments API（禁前端写死部门清单）──
   const [departments, setDepartments] = useState<RbacDepartment[]>([]);
+  const [loadingDepartments, setLoadingDepartments] = useState(false);
+  const [departmentLoadError, setDepartmentLoadError] = useState<string | null>(null);
   const [rowNotices, setRowNotices] = useState<Record<number, string>>({});
 
-  useEffect(() => {
-    let cancelled = false;
-    listRbacDepartments()
-      .then((items) => {
-        if (!cancelled) setDepartments(items);
-      })
-      .catch(() => {
-        // 部门主数据未就绪/无权限时下拉为空，不阻塞用户管理主功能
-      });
-    return () => {
-      cancelled = true;
-    };
+  const loadDepartments = useCallback(async () => {
+    setLoadingDepartments(true);
+    setDepartmentLoadError(null);
+    try {
+      setDepartments(await listRbacDepartments());
+      return true;
+    } catch (error) {
+      setDepartmentLoadError(
+        statusOf(error) === 403
+          ? "当前账号没有查看部门的权限。"
+          : readableError(error, "部门列表加载失败，请稍后重试。"),
+      );
+      return false;
+    } finally {
+      setLoadingDepartments(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void loadDepartments();
+  }, [loadDepartments]);
 
   const loadUsers = useCallback(async () => {
     setLoadingUsers(true);
@@ -392,14 +404,18 @@ function AccessControlContent() {
             <ShieldCheck size={17} aria-hidden="true" />
             <span className="text-xs font-medium">访问控制</span>
           </div>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight text-text-primary">用户与客服权限</h1>
+          <h1 className="mt-1 text-xl font-semibold tracking-tight text-text-primary">用户、部门与权限</h1>
           <p className="mt-1 text-xs leading-5 text-text-secondary">
-            只展示当前租户的权限摘要；保存使用版本校验，避免覆盖其他管理员的修改。
+            管理当前租户的用户、部门和平台权限；用户权限变更使用版本校验，避免覆盖其他管理员的修改。
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 rounded-xl bg-surface-elevated px-4 py-3 text-xs text-text-secondary">
-          <Users size={16} className="text-accent" aria-hidden="true" />
-          <span>当前列表 {total} 位用户</span>
+          {tab === "departments" ? (
+            <Building2 size={16} className="text-accent" aria-hidden="true" />
+          ) : (
+            <Users size={16} className="text-accent" aria-hidden="true" />
+          )}
+          <span>{tab === "departments" ? "部门主数据" : `当前列表 ${total} 位用户`}</span>
           <span className="h-4 w-px bg-gray-200" aria-hidden="true" />
           <span>仅管理员</span>
         </div>
@@ -407,7 +423,7 @@ function AccessControlContent() {
 
       <section className="rounded-2xl border border-gray-200 bg-white/90 shadow-card">
         <div className="flex flex-col gap-3 border-b border-gray-100 px-4 pt-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-          <div className="flex gap-1" role="tablist" aria-label="访问控制内容">
+          <div className="flex flex-wrap gap-1" role="tablist" aria-label="访问控制内容">
             <button
               type="button"
               role="tab"
@@ -416,6 +432,16 @@ function AccessControlContent() {
               className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "users" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               用户
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "departments"}
+              onClick={() => setTab("departments")}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "departments" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+            >
+              <Building2 size={14} aria-hidden="true" />
+              部门
             </button>
             <button
               type="button"
@@ -471,7 +497,14 @@ function AccessControlContent() {
           )}
         </div>
 
-        {tab === "users" ? (
+        {tab === "departments" ? (
+          <DepartmentManagement
+            departments={departments}
+            loading={loadingDepartments}
+            error={departmentLoadError}
+            onRefresh={loadDepartments}
+          />
+        ) : tab === "users" ? (
           <div className="p-4 sm:p-5">
             {pageError && (
               <div className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-xs text-red-700" role="alert">

@@ -49,6 +49,11 @@ export interface RbacDepartment {
   name: string;
 }
 
+export interface RbacCreateDepartmentBody {
+  code: string;
+  name: string;
+}
+
 export interface RbacAuditItem {
   id: number;
   operator: string;
@@ -110,6 +115,16 @@ function queryString(entries: Array<[string, string | number | undefined]>): str
 export async function listRbacDepartments(): Promise<RbacDepartment[]> {
   const body = await request(`/api/sys/rbac/departments`);
   return unwrap<{ items: RbacDepartment[] }>(body).items;
+}
+
+export async function createRbacDepartment(
+  payload: RbacCreateDepartmentBody,
+): Promise<RbacDepartment> {
+  const body = await request(`/api/sys/rbac/departments`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  return unwrap<RbacDepartment>(body);
 }
 
 export async function listRbacUsers(params: {
