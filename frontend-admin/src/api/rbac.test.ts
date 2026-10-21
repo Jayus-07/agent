@@ -44,7 +44,7 @@ describe("RBAC API 客户端", () => {
     );
   });
 
-  it("PATCH 携带当前 version 与 camelCase 字段，不接受浏览器传 agentId", async () => {
+  it("平台用户 PATCH 只携带平台和资料字段，不接受客服档案字段", async () => {
     vi.mocked(request).mockResolvedValueOnce({
       userId: 7,
       username: "alice",
@@ -58,10 +58,6 @@ describe("RBAC API 客户端", () => {
       platformRole: "editor",
       realName: "Alice",
       email: "alice@example.com",
-      csRole: "agent",
-      maxConversations: 4,
-      enabled: true,
-      accepting: false,
     });
 
     expect(request).toHaveBeenCalledWith(
@@ -73,16 +69,10 @@ describe("RBAC API 客户端", () => {
           platformRole: "editor",
           realName: "Alice",
           email: "alice@example.com",
-          csRole: "agent",
-          maxConversations: 4,
-          enabled: true,
-          accepting: false,
         }),
       },
     );
-    expect(JSON.stringify(vi.mocked(request).mock.calls[0])).not.toContain(
-      "agentId",
-    );
+    expect(JSON.stringify(vi.mocked(request).mock.calls[0])).not.toContain("csRole");
   });
 
   it("部门目录可选包含停用项，改名和停用都携带版本号", async () => {

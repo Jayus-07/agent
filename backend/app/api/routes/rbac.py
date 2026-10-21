@@ -17,11 +17,12 @@ from backend.app.api.deps import (
     OperatorIdentity,
     is_platform_admin,
     require_admin_user,
+    require_user_actor,
 )
 from backend.app.api.identity import resolve_identity
+from backend.infra.redis.client import get_auth_redis
 from backend.memory.database import get_session
 from backend.security.local_jwt import hash_password
-from backend.infra.redis.client import get_auth_redis
 from backend.security.session_service import SessionRef, SessionService
 from backend.shared.logger import logger
 
@@ -59,6 +60,51 @@ async def require_rbac_admin(
             pass
         raise HTTPException(status_code=403, detail="仅 admin 可访问 RBAC 管理端")
     return operator
+
+
+@dataclass(frozen=True)
+class RbacAccess:
+    """平台管理员或当前操作者可管理的部门范围。"""
+
+    operator: OperatorIdentity
+    is_platform_admin: bool
+    managed_departments: tuple[str, ...] = ()
+
+
+async def _manager_departments(db, *, tenant_id: str, user_id: int) -> list[dict[str, str]]:
+    rows = (await db.execute(text(
+        "SELECT d.code, d.name FROM auth.departments d "
+        "JOIN auth.users u ON u.id = d.manager_user_id "
+        "AND u.tenant_id = d.tenant_id AND u.dept = d.code AND u.status = 1 "
+        "WHERE d.tenant_id = :tenant_id AND d.status = 1 "
+        "AND d.manager_user_id = :user_id ORDER BY d.name, d.code"),
+        {"tenant_id": tenant_id, "user_id": user_id})).mappings().all()
+    return [{"code": row["code"], "name": row["name"]} for row in rows]
+
+
+async def require_rbac_access(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_user_actor),
+) -> RbacAccess:
+    """允许平台管理员或有有效部门主管关联的用户访问用户管理读写接口。"""
+    if is_platform_admin(operator.role):
+        return RbacAccess(operator=operator, is_platform_admin=True)
+
+    actor_user_id = _actor_user_id(operator)
+    if actor_user_id is None:
+        raise _http_error("当前账号没有访问控制权限", 403)
+    tenant_id = _tenant_id(request)
+    async with _db() as db:
+        departments = await _manager_departments(
+            db, tenant_id=tenant_id, user_id=actor_user_id
+        )
+    if not departments:
+        raise _http_error("当前账号没有部门主管授权", 403)
+    return RbacAccess(
+        operator=operator,
+        is_platform_admin=False,
+        managed_departments=tuple(item["code"] for item in departments),
+    )
 
 
 @dataclass(frozen=True)
@@ -269,6 +315,17 @@ async def _department_active(db, *, tenant_id: str, code: str) -> bool:
     return row is not None
 
 
+async def _is_customer_service_department(
+    db, *, tenant_id: str, code: str
+) -> bool:
+    row = (await db.execute(text(
+        "SELECT 1 FROM auth.departments "
+        "WHERE tenant_id = :tenant_id AND code = :code "
+        "AND department_type = 'customer_service'"),
+        {"tenant_id": tenant_id, "code": code})).first()
+    return row is not None
+
+
 async def _load_cs_agent(db, *, tenant_id: str, user_id: int):
     row = (await db.execute(text(
         "SELECT agent_id, tenant_id, auth_user_id, display_name, role, "
@@ -331,8 +388,10 @@ async def update_user_in_transaction(
     tenant_id: str,
     require_version: bool = True,
 ) -> UserUpdateOutcome:
-    """执行用户、客服档案、会话撤销与审计的同事务部分。"""
+    """执行平台用户更新、会话撤销与审计的同事务部分。"""
     parsed = _validate_body(body, require_version=require_version)
+    if parsed["cs_fields_present"]:
+        raise _http_error("客服档案请在客服团队页面单独管理", 400)
     # 所有 RBAC 写操作先争抢同一事务级 advisory lock，再按固定顺序锁
     # 活动高权限管理员与目标用户，避免两个管理员并发降权时交叉持锁死锁。
     await db.execute(text(
@@ -385,6 +444,16 @@ async def update_user_in_transaction(
             raise _http_error(
                 f"部门 '{new_dept}' 不存在或未启用（须为本租户 active 部门）", 400)
 
+    if new_dept != current_dept or new_status != 1:
+        manager_assignment = (await db.execute(text(
+            "SELECT 1 FROM auth.departments "
+            "WHERE tenant_id = :tenant_id AND manager_user_id = :user_id "
+            "AND status = 1 FOR UPDATE"),
+            {"tenant_id": tenant_id, "user_id": user_id})).first()
+        if manager_assignment:
+            raise _http_error(
+                "该用户仍是部门主管，请先在部门管理中更换或取消主管", 409)
+
     was_active_admin = (
         _row_value(current, "role") in {"admin", "super_admin"}
         and int(_row_value(current, "status", 1)) == 1
@@ -420,77 +489,35 @@ async def update_user_in_transaction(
         raise _http_error("用户版本冲突，请刷新后重试", 409)
 
     after_agent = current_agent
-    if parsed["cs_fields_present"]:
-        requested_role = parsed["cs_role"]
-        if requested_role is None and "csRole" in body:
-            if current_agent is not None:
-                await db.execute(text(
-                    "UPDATE customer_service.cs_agents SET enabled = FALSE, "
-                    "accepting = FALSE, updated_at = now() "
-                    "WHERE tenant_id = :tenant_id AND agent_id = :agent_id"),
-                    {"tenant_id": tenant_id,
-                     "agent_id": _row_value(current_agent, "agent_id")})
-                after_agent = _merge_agent(
-                    current_agent, {"enabled": False, "accepting": False}
-                )
-        elif current_agent is not None:
-            values = {
-                "role": (
-                    _row_value(current_agent, "role", "agent")
-                    if requested_role is _MISSING
-                    else requested_role
-                ),
-                "max_conversations": (
-                    _row_value(current_agent, "max_conversations", 10)
-                    if parsed["max_conversations"] is _MISSING
-                    else parsed["max_conversations"]
-                ),
-                "enabled": (
-                    _row_value(current_agent, "enabled", True)
-                    if parsed["enabled"] is _MISSING
-                    else parsed["enabled"]
-                ),
-                "accepting": (
-                    _row_value(current_agent, "accepting", True)
-                    if parsed["accepting"] is _MISSING
-                    else parsed["accepting"]
-                ),
-            }
-            await db.execute(text(
-                "UPDATE customer_service.cs_agents SET role = :role, "
-                "max_conversations = :max_conversations, enabled = :enabled, "
-                "accepting = :accepting, updated_at = now() "
-                "WHERE tenant_id = :tenant_id AND agent_id = :agent_id"),
-                {**values, "tenant_id": tenant_id,
-                 "agent_id": _row_value(current_agent, "agent_id")})
-            after_agent = _merge_agent(current_agent, values)
-        elif requested_role is not None or requested_role is _MISSING:
-            # agent_id 由服务端生成，永远不读取浏览器传入的同名字段。
-            values = {
-                "agent_id": f"cs-{uuid.uuid4().hex}",
+    if current_agent is not None and new_real_name != current_real_name:
+        display_name = _stable_display_name(updated, user_id)
+        await db.execute(text(
+            "UPDATE customer_service.cs_agents SET display_name = :display_name, "
+            "updated_at = now() WHERE tenant_id = :tenant_id "
+            "AND agent_id = :agent_id"), {
+                "display_name": display_name,
                 "tenant_id": tenant_id,
-                "auth_user_id": str(user_id),
-                "display_name": _stable_display_name(current, user_id),
-                "role": "agent" if requested_role is _MISSING else requested_role,
-                "max_conversations": (
-                    10 if parsed["max_conversations"] is _MISSING
-                    else parsed["max_conversations"]
-                ),
-                "enabled": (
-                    True if parsed["enabled"] is _MISSING else parsed["enabled"]
-                ),
-                "accepting": (
-                    True if parsed["accepting"] is _MISSING else parsed["accepting"]
-                ),
-            }
-            await db.execute(text(
-                "INSERT INTO customer_service.cs_agents "
-                "(agent_id, tenant_id, auth_user_id, display_name, role, "
-                "max_conversations, "
-                "enabled, accepting) VALUES "
-                "(:agent_id, :tenant_id, :auth_user_id, :display_name, :role, "
-                ":max_conversations, :enabled, :accepting)"), values)
-            after_agent = values
+                "agent_id": _row_value(current_agent, "agent_id"),
+            })
+        after_agent = _merge_agent(after_agent, {"display_name": display_name})
+
+    new_dept_is_customer_service = bool(
+        new_dept and await _is_customer_service_department(
+            db, tenant_id=tenant_id, code=new_dept
+        )
+    )
+    if current_agent is not None and (
+        new_status != 1 or not new_dept_is_customer_service
+    ):
+        await db.execute(text(
+            "UPDATE customer_service.cs_agents SET enabled = FALSE, "
+            "accepting = FALSE, updated_at = now() "
+            "WHERE tenant_id = :tenant_id AND agent_id = :agent_id"),
+            {"tenant_id": tenant_id,
+             "agent_id": _row_value(current_agent, "agent_id")})
+        after_agent = _merge_agent(
+            after_agent, {"enabled": False, "accepting": False}
+        )
 
     after_state = _state(updated, after_agent)
     cs_changes: dict[str, Any] = {}
@@ -503,6 +530,9 @@ async def update_user_in_transaction(
     ):
         if field in body:
             cs_changes[field] = parsed[parsed_key]
+    if current_agent is not None and after_agent is not current_agent:
+        cs_changes.setdefault("enabled", False)
+        cs_changes.setdefault("accepting", False)
     after_state["csChanges"] = cs_changes
 
     actor_user_id = _actor_user_id(operator)
@@ -547,7 +577,6 @@ async def update_user_in_transaction(
         "platformRole": _row_value(updated, "role", new_role),
         "status": int(_row_value(updated, "status", new_status)),
         "version": int(_row_value(updated, "version", current_version + 1)),
-        "csAgent": _cs_public(after_agent),
     }
     return UserUpdateOutcome(user=public_user, revoked_sessions=revoked_sessions)
 
@@ -580,6 +609,11 @@ def _department_public(row: Any) -> dict[str, Any]:
         "name": _row_value(row, "name"),
         "status": int(_row_value(row, "status", 1)),
         "version": int(_row_value(row, "version", 0)),
+        "departmentType": _row_value(row, "department_type", "general"),
+        "managerUserId": _row_value(row, "manager_user_id"),
+        "managerUsername": _row_value(row, "manager_username"),
+        "managerName": _row_value(row, "manager_real_name")
+        or _row_value(row, "manager_username"),
         "memberCount": int(_row_value(row, "member_count", 0) or 0),
         "updatedAt": updated_at.isoformat() if hasattr(updated_at, "isoformat") else None,
     }
@@ -614,6 +648,28 @@ async def _write_department_audit(
     })
 
 
+@router.get("/context")
+async def access_context(
+    request: Request,
+    access: RbacAccess = Depends(require_rbac_access),
+):
+    """返回当前用户在访问控制页内可用的服务端授权范围。"""
+    tenant_id = _tenant_id(request)
+    if access.is_platform_admin:
+        return {
+            "isPlatformAdmin": True,
+            "managedDepartments": [],
+        }
+    actor_user_id = _actor_user_id(access.operator)
+    if actor_user_id is None:
+        raise _http_error("当前账号没有部门主管授权", 403)
+    async with _db() as db:
+        departments = await _manager_departments(
+            db, tenant_id=tenant_id, user_id=actor_user_id
+        )
+    return {"isPlatformAdmin": False, "managedDepartments": departments}
+
+
 @router.get("/departments")
 async def list_departments(
     request: Request,
@@ -637,13 +693,18 @@ async def list_departments(
             return {"items": []}
         rows = (await db.execute(text(
             "SELECT d.code, d.name, d.status, d.version, d.updated_at, "
+            "d.department_type, d.manager_user_id, "
+            "m.username AS manager_username, m.real_name AS manager_real_name, "
             "COUNT(u.id)::INTEGER AS member_count "
             "FROM auth.departments d "
             "LEFT JOIN auth.users u ON u.tenant_id = d.tenant_id "
             "AND u.dept = d.code "
+            "LEFT JOIN auth.users m ON m.tenant_id = d.tenant_id "
+            "AND m.id = d.manager_user_id "
             "WHERE d.tenant_id = :tenant_id "
             "AND (:include_inactive OR d.status = 1) "
-            "GROUP BY d.code, d.name, d.status, d.version, d.updated_at "
+            "GROUP BY d.code, d.name, d.status, d.version, d.updated_at, "
+            "d.department_type, d.manager_user_id, m.username, m.real_name "
             "ORDER BY d.status DESC, d.name, d.code"),
             {"tenant_id": tenant_id, "include_inactive": include_inactive}
         )).mappings().all()
@@ -667,6 +728,7 @@ async def create_department(
 
     raw_code = body.get("code")
     raw_name = body.get("name")
+    department_type = body.get("departmentType", "general")
     if not isinstance(raw_code, str) or not isinstance(raw_name, str):
         raise _http_error("code 和 name 必须是字符串", 400)
     code = raw_code.strip().lower()
@@ -680,6 +742,10 @@ async def create_department(
         raise _http_error("部门编码 all 为系统保留值，不能使用", 400)
     if not name or len(name) > 100 or any(ord(char) < 32 for char in name):
         raise _http_error("部门名称不能为空，且不能超过 100 个字符", 400)
+    if not isinstance(department_type, str) or department_type not in {
+        "general", "customer_service",
+    }:
+        raise _http_error("departmentType 必须是 general/customer_service", 400)
 
     db = None
     try:
@@ -703,11 +769,23 @@ async def create_department(
             if duplicate is not None:
                 raise _http_error("该部门编码已存在", 409)
 
+            if department_type == "customer_service":
+                existing_customer_service = (await db.execute(text(
+                    "SELECT 1 FROM auth.departments WHERE tenant_id = :tenant_id "
+                    "AND status = 1 AND department_type = 'customer_service' "
+                    "LIMIT 1 FOR UPDATE"),
+                    {"tenant_id": tenant_id})).first()
+                if existing_customer_service:
+                    raise _http_error("本租户已有启用的客服部门", 409)
+
             row = (await db.execute(text(
-                "INSERT INTO auth.departments (tenant_id, code, name, status) "
-                "VALUES (:tenant_id, :code, :name, 1) "
-                "RETURNING code, name, status, version, updated_at"
-            ), {"tenant_id": tenant_id, "code": code, "name": name})).mappings().first()
+                "INSERT INTO auth.departments "
+                "(tenant_id, code, name, status, department_type) "
+                "VALUES (:tenant_id, :code, :name, 1, :department_type) "
+                "RETURNING code, name, status, version, updated_at, "
+                "department_type, manager_user_id"
+            ), {"tenant_id": tenant_id, "code": code, "name": name,
+                "department_type": department_type})).mappings().first()
             if row is None:
                 raise RuntimeError("部门创建未返回记录")
 
@@ -737,8 +815,10 @@ async def create_department(
 async def _change_department(
     *, code: str, request: Request, operator: OperatorIdentity,
     version: int, name: str | None = None, status: int | None = None,
+    department_type: str | None = None,
+    manager_user_id: int | None | object = _MISSING,
 ) -> dict[str, Any]:
-    """按版本修改部门；停用保留主数据，且不能留下用户归属。"""
+    """按版本修改部门、类型和主管，并审计每次变更。"""
     tenant_id = _tenant_id(request)
     normalized_code = code.strip().lower()
     if not _DEPARTMENT_CODE_RE.fullmatch(normalized_code):
@@ -751,8 +831,20 @@ async def _change_department(
         raise _http_error("部门名称不能为空，且不能超过 100 个字符", 400)
     if status is not None and status not in {0, 1}:
         raise _http_error("部门状态只能是启用或停用", 400)
-    if name is None and status is None:
-        raise _http_error("请至少修改部门名称或状态", 400)
+    if department_type is not None and (
+        not isinstance(department_type, str)
+        or department_type not in {"general", "customer_service"}
+    ):
+        raise _http_error("departmentType 必须是 general/customer_service", 400)
+    if manager_user_id is not _MISSING and manager_user_id is not None and (
+        isinstance(manager_user_id, bool)
+        or not isinstance(manager_user_id, int)
+        or manager_user_id <= 0
+    ):
+        raise _http_error("managerUserId 必须是正整数或 null", 400)
+    if (name is None and status is None and department_type is None
+            and manager_user_id is _MISSING):
+        raise _http_error("请至少修改部门名称、类型、主管或状态", 400)
 
     db = None
     try:
@@ -769,9 +861,15 @@ async def _change_department(
                     "部门审计表未初始化（请先应用 102_rbac_department_audits 迁移）", 503)
 
             current = (await db.execute(text(
-                "SELECT code, name, status, version, updated_at "
-                "FROM auth.departments "
-                "WHERE tenant_id = :tenant_id AND code = :code FOR UPDATE"
+                "SELECT d.code, d.name, d.status, d.version, d.updated_at, "
+                "d.department_type, d.manager_user_id, "
+                "m.username AS manager_username, "
+                "m.real_name AS manager_real_name "
+                "FROM auth.departments d "
+                "LEFT JOIN auth.users m ON m.tenant_id = d.tenant_id "
+                "AND m.id = d.manager_user_id "
+                "WHERE d.tenant_id = :tenant_id AND d.code = :code "
+                "FOR UPDATE OF d"
             ), {"tenant_id": tenant_id, "code": normalized_code})).mappings().first()
             if current is None:
                 raise _http_error("部门不存在", 404)
@@ -786,6 +884,11 @@ async def _change_department(
             old_state["memberCount"] = member_count
             new_name = name if name is not None else old_state["name"]
             new_status = status if status is not None else old_state["status"]
+            new_type = department_type or old_state["departmentType"]
+            new_manager_id = (
+                old_state["managerUserId"]
+                if manager_user_id is _MISSING else manager_user_id
+            )
             if old_state["status"] == 1 and new_status == 0:
                 if member_count:
                     raise _http_error(
@@ -793,33 +896,97 @@ async def _change_department(
                         409,
                     )
 
-            if new_name == old_state["name"] and new_status == old_state["status"]:
+            if new_manager_id is not None:
+                manager = (await db.execute(text(
+                    "SELECT id FROM auth.users WHERE id = :user_id "
+                    "AND tenant_id = :tenant_id AND dept = :code AND status = 1 "
+                    "FOR UPDATE"), {
+                        "user_id": new_manager_id,
+                        "tenant_id": tenant_id,
+                        "code": normalized_code,
+                    })).first()
+                if manager is None:
+                    raise _http_error("主管必须是本租户该部门的启用用户", 400)
+
+            if new_status == 1 and new_type == "customer_service":
+                existing_cs_department = (await db.execute(text(
+                    "SELECT 1 FROM auth.departments "
+                    "WHERE tenant_id = :tenant_id AND code <> :code "
+                    "AND status = 1 AND department_type = 'customer_service' "
+                    "LIMIT 1"), {
+                        "tenant_id": tenant_id, "code": normalized_code,
+                    })).first()
+                if existing_cs_department:
+                    raise _http_error("本租户已有启用的客服部门", 409)
+
+            if (old_state["departmentType"] == "customer_service"
+                    and new_type != "customer_service"):
+                enabled_agent = (await db.execute(text(
+                    "SELECT 1 FROM customer_service.cs_agents a "
+                    "JOIN auth.users u ON a.auth_user_id = CAST(u.id AS VARCHAR) "
+                    "AND u.tenant_id = a.tenant_id "
+                    "WHERE u.tenant_id = :tenant_id AND u.dept = :code "
+                    "AND a.enabled IS TRUE LIMIT 1"), {
+                        "tenant_id": tenant_id, "code": normalized_code,
+                    })).first()
+                if enabled_agent:
+                    raise _http_error(
+                        "客服部门仍有启用的客服档案，请先在客服团队中停用或移出成员",
+                        409,
+                    )
+
+            if (
+                new_name == old_state["name"]
+                and new_status == old_state["status"]
+                and new_type == old_state["departmentType"]
+                and new_manager_id == old_state["managerUserId"]
+            ):
                 await db.commit()
                 return old_state
 
             updated = (await db.execute(text(
                 "UPDATE auth.departments SET name = :name, status = :status, "
+                "department_type = :department_type, "
+                "manager_user_id = :manager_user_id, "
                 "version = version + 1, updated_at = now() "
                 "WHERE tenant_id = :tenant_id AND code = :code "
                 "AND version = :version "
-                "RETURNING code, name, status, version, updated_at"
+                "RETURNING code, name, status, version, updated_at, "
+                "department_type, manager_user_id"
             ), {
                 "tenant_id": tenant_id, "code": normalized_code,
-                "name": new_name, "status": new_status, "version": version,
+                "name": new_name, "status": new_status,
+                "department_type": new_type,
+                "manager_user_id": new_manager_id,
+                "version": version,
             })).mappings().first()
             if updated is None:
                 raise _http_error("部门已被其他管理员修改，请刷新后重试", 409)
 
-            new_state = _department_public(updated)
+            updated_public = (await db.execute(text(
+                "SELECT d.code, d.name, d.status, d.version, d.updated_at, "
+                "d.department_type, d.manager_user_id, "
+                "m.username AS manager_username, "
+                "m.real_name AS manager_real_name "
+                "FROM auth.departments d "
+                "LEFT JOIN auth.users m ON m.tenant_id = d.tenant_id "
+                "AND m.id = d.manager_user_id "
+                "WHERE d.tenant_id = :tenant_id AND d.code = :code"), {
+                    "tenant_id": tenant_id, "code": normalized_code,
+                })).mappings().first()
+            new_state = _department_public(updated_public or updated)
             new_state["memberCount"] = member_count
             name_changed = new_name != old_state["name"]
             status_changed = new_status != old_state["status"]
-            action = (
-                "department.update" if name_changed and status_changed
-                else "department.update" if name_changed
-                else "department.activate" if new_status == 1
-                else "department.deactivate"
-            )
+            manager_changed = new_manager_id != old_state["managerUserId"]
+            action = "department.update"
+            if manager_changed and not (
+                name_changed or status_changed
+                or new_type != old_state["departmentType"]
+            ):
+                action = "department.manager_changed"
+            elif not name_changed and new_type == old_state["departmentType"]:
+                action = "department.activate" if new_status == 1 else "department.deactivate"
             await _write_department_audit(
                 db, tenant_id=tenant_id, operator=operator,
                 code=normalized_code, name=new_name, action=action,
@@ -839,7 +1006,7 @@ async def _change_department(
         logger.exception("[RBAC] 部门更新事务失败 tenant_id=%s code=%s", tenant_id, normalized_code)
         raise HTTPException(status_code=500, detail="部门更新失败") from exc
 
-    updated_state = _department_public(updated)
+    updated_state = _department_public(updated_public or updated)
     updated_state["memberCount"] = member_count
     return updated_state
 
@@ -862,9 +1029,15 @@ async def update_department(
     raw_status = body.get("status")
     if raw_status is not None and (isinstance(raw_status, bool) or not isinstance(raw_status, int)):
         raise _http_error("部门状态必须是整数", 400)
+    department_type = body.get("departmentType")
+    if department_type is not None and not isinstance(department_type, str):
+        raise _http_error("departmentType 必须是字符串", 400)
+    manager_user_id = body.get("managerUserId", _MISSING)
     return await _change_department(
         code=code, request=request, operator=operator, version=version,
         name=name.strip() if name is not None else None, status=raw_status,
+        department_type=department_type,
+        manager_user_id=manager_user_id,
     )
 
 
@@ -887,12 +1060,12 @@ async def list_users(
     request: Request,
     search: str = Query("", max_length=100),
     status: int | None = Query(None, ge=0, le=1),
+    dept: str | None = Query(None, max_length=50),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    operator: OperatorIdentity = Depends(require_rbac_admin),
+    access: RbacAccess = Depends(require_rbac_access),
 ):
-    """分页列出用户和客服档案摘要。"""
-    del operator
+    """管理员查看全租户用户；部门主管只能查看被授权部门成员。"""
     search = search.strip()
     tenant_id = _tenant_id(request)
     where = " WHERE u.tenant_id = :tenant_id"
@@ -901,6 +1074,34 @@ async def list_users(
         "offset": (page - 1) * page_size,
         "tenant_id": tenant_id,
     }
+    if access.is_platform_admin:
+        if dept:
+            where += " AND u.dept = :dept"
+            params["dept"] = dept.strip()
+    else:
+        scoped_departments = list(access.managed_departments)
+        if dept and dept.strip() not in scoped_departments:
+            raise _http_error("不能查看授权部门范围外的用户", 403)
+        if dept:
+            scoped_departments = [dept.strip()]
+        if not scoped_departments:
+            raise _http_error("当前账号没有部门主管授权", 403)
+        actor_user_id = _actor_user_id(access.operator)
+        if actor_user_id is None:
+            raise _http_error("缺少有效的部门主管身份", 403)
+        params["actor_user_id"] = actor_user_id
+        where += (
+            " AND EXISTS (SELECT 1 FROM auth.departments managed "
+            "WHERE managed.tenant_id = u.tenant_id AND managed.code = u.dept "
+            "AND managed.manager_user_id = :actor_user_id "
+            "AND managed.status = 1)"
+        )
+        department_params = []
+        for index, department_code in enumerate(scoped_departments):
+            key = f"managed_dept_{index}"
+            department_params.append(f":{key}")
+            params[key] = department_code
+        where += f" AND u.dept IN ({', '.join(department_params)})"
     if search:
         where += (
             " AND (u.username ILIKE :search OR u.real_name ILIKE :search "
@@ -916,71 +1117,501 @@ async def list_users(
             f"SELECT COUNT(*) FROM auth.users u{where}"), params)
         total = int(total_result.scalar() or 0)
         rows = (await db.execute(text(
-            "SELECT u.id AS user_id, u.username, u.real_name, u.dept, "
-             "u.role AS platform_role, u.status, u.version, u.tenant_id, "
-            "COUNT(DISTINCT s.id) AS session_count, "
-             "a.agent_id AS cs_agent_id, a.display_name AS cs_display_name, "
-             "a.role AS cs_role, "
-            "a.max_conversations AS cs_max_conversations, "
-            "a.enabled AS cs_enabled, a.accepting AS cs_accepting "
+            "SELECT u.id AS user_id, u.username, u.real_name, u.email, u.dept, "
+            "u.role AS platform_role, u.status, u.version, "
+            "COUNT(DISTINCT s.id) AS session_count "
             "FROM auth.users u "
             "LEFT JOIN auth.sessions s ON s.user_id = u.id "
             "AND s.revoked_at IS NULL AND s.refresh_expires_at > now() "
+            f"{where} "
+            "GROUP BY u.id, u.username, u.real_name, u.email, u.dept, "
+            "u.role, u.status, u.version "
+            "ORDER BY u.id LIMIT :limit OFFSET :offset"),
+            params)).mappings().all()
+
+    items = []
+    for row in rows:
+        item = {
+            "userId": _row_value(row, "user_id"),
+            "username": _row_value(row, "username"),
+            "realName": _row_value(row, "real_name") or _row_value(row, "username"),
+            "email": _row_value(row, "email") or "",
+            "dept": _row_value(row, "dept", ""),
+            "status": _row_value(row, "status"),
+            "version": int(_row_value(row, "version", 0)),
+        }
+        if access.is_platform_admin:
+            item["platformRole"] = _row_value(row, "platform_role")
+            item["sessionCount"] = int(_row_value(row, "session_count", 0) or 0)
+        items.append(item)
+    return {"items": items, "total": total, "page": page, "pageSize": page_size}
+
+
+@router.get("/customer-service/team")
+async def list_customer_service_team(
+    request: Request,
+    search: str = Query("", max_length=100),
+    status: int | None = Query(None, ge=0, le=1),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """仅列出本租户客服部门成员及其客服档案。"""
+    del operator
+    tenant_id = _tenant_id(request)
+    search = search.strip()
+    params: dict[str, Any] = {
+        "tenant_id": tenant_id,
+        "limit": page_size,
+        "offset": (page - 1) * page_size,
+    }
+    where = (
+        " WHERE u.tenant_id = :tenant_id AND d.status = 1 "
+        "AND d.department_type = 'customer_service'"
+    )
+    if search:
+        where += " AND (u.username ILIKE :search OR u.real_name ILIKE :search)"
+        params["search"] = f"%{search}%"
+    if status is not None:
+        where += " AND u.status = :status"
+        params["status"] = status
+
+    async with _db() as db:
+        department = (await db.execute(text(
+            "SELECT code, name FROM auth.departments "
+            "WHERE tenant_id = :tenant_id AND status = 1 "
+            "AND department_type = 'customer_service'"),
+            {"tenant_id": tenant_id})).mappings().first()
+        if department is None:
+            return {
+                "items": [], "total": 0, "page": page,
+                "pageSize": page_size, "department": None,
+            }
+        total = int((await db.execute(text(
+            "SELECT COUNT(*) FROM auth.users u "
+            "JOIN auth.departments d ON d.tenant_id = u.tenant_id "
+            "AND d.code = u.dept" + where), params)).scalar() or 0)
+        rows = (await db.execute(text(
+            "SELECT u.id AS user_id, u.username, u.real_name, u.email, "
+            "u.dept, u.status, u.version, a.agent_id, a.display_name, "
+            "a.role AS cs_role, a.max_conversations, a.enabled, a.accepting "
+            "FROM auth.users u "
+            "JOIN auth.departments d ON d.tenant_id = u.tenant_id "
+            "AND d.code = u.dept "
             "LEFT JOIN customer_service.cs_agents a "
             "ON a.auth_user_id = CAST(u.id AS VARCHAR) "
-            "AND a.tenant_id = :tenant_id "
-            f"{where} "
-            "GROUP BY u.id, u.username, u.real_name, u.dept, u.role, u.status, "
-             "u.version, u.tenant_id, a.agent_id, a.display_name, a.role, "
-             "a.max_conversations, a.enabled, "
-            "a.accepting ORDER BY u.id LIMIT :limit OFFSET :offset"),
+            "AND a.tenant_id = u.tenant_id "
+            + where + " ORDER BY u.id LIMIT :limit OFFSET :offset"),
             params)).mappings().all()
 
     items = []
     for row in rows:
         agent = None
-        if _row_value(row, "cs_agent_id"):
+        if _row_value(row, "agent_id"):
             agent = {
-                "agent_id": _row_value(row, "cs_agent_id"),
-                "display_name": _row_value(row, "cs_display_name"),
+                "agent_id": _row_value(row, "agent_id"),
+                "display_name": _row_value(row, "display_name"),
                 "role": _row_value(row, "cs_role"),
-                "max_conversations": _row_value(row, "cs_max_conversations"),
-                "enabled": _row_value(row, "cs_enabled"),
-                "accepting": _row_value(row, "cs_accepting"),
+                "max_conversations": _row_value(row, "max_conversations"),
+                "enabled": _row_value(row, "enabled"),
+                "accepting": _row_value(row, "accepting"),
             }
         items.append({
             "userId": _row_value(row, "user_id"),
             "username": _row_value(row, "username"),
             "realName": _row_value(row, "real_name") or _row_value(row, "username"),
-            "dept": _row_value(row, "dept", ""),
-            "platformRole": _row_value(row, "platform_role"),
-            "status": _row_value(row, "status"),
+            "email": _row_value(row, "email") or "",
+            "dept": _row_value(row, "dept"),
+            "status": int(_row_value(row, "status", 1)),
             "version": int(_row_value(row, "version", 0)),
-            "sessionCount": int(_row_value(row, "session_count", 0) or 0),
             "csAgent": _cs_public(agent),
         })
-    return {"items": items, "total": total, "page": page, "pageSize": page_size}
+    return {
+        "items": items, "total": total, "page": page, "pageSize": page_size,
+        "department": {"code": department["code"], "name": department["name"]},
+    }
+
+
+@router.patch("/customer-service/team/{user_id}")
+async def update_customer_service_member(
+    user_id: int,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """独立维护客服部成员客服角色、容量和接单状态。"""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise _http_error("请求体必须是 JSON 对象", 400)
+    allowed_fields = {
+        "version", "csRole", "maxConversations", "enabled", "accepting",
+    }
+    if set(body) - allowed_fields:
+        raise _http_error("客服团队接口只接受客服档案字段", 400)
+    if not set(body) - {"version"}:
+        raise _http_error("请至少修改一项客服档案", 400)
+    parsed = _validate_body(body, require_version=True)
+    tenant_id = _tenant_id(request)
+    db = None
+    revoked_sessions: list[SessionRef] = []
+    try:
+        async with _db() as db:
+            current = (await db.execute(text(
+                "SELECT u.id, u.username, u.real_name, u.email, u.dept, "
+                "u.status, u.version "
+                "FROM auth.users u JOIN auth.departments d "
+                "ON d.tenant_id = u.tenant_id AND d.code = u.dept "
+                "WHERE u.id = :user_id AND u.tenant_id = :tenant_id "
+                "AND u.status = 1 AND d.status = 1 "
+                "AND d.department_type = 'customer_service' "
+                "FOR UPDATE OF u, d"), {
+                    "user_id": user_id, "tenant_id": tenant_id,
+                })).mappings().first()
+            if current is None:
+                raise _http_error("仅可配置本租户启用客服部门中的在职账号", 404)
+            current_version = int(_row_value(current, "version", 0))
+            if parsed["version"] != current_version:
+                raise _http_error("用户版本冲突，请刷新后重试", 409)
+            current_agent = await _load_cs_agent(
+                db, tenant_id=tenant_id, user_id=user_id
+            )
+            requested_role = parsed["cs_role"]
+            if requested_role is _MISSING:
+                requested_role = _row_value(current_agent, "role", "agent")
+            if requested_role is None and current_agent is None:
+                await db.commit()
+                return {
+                    "userId": user_id,
+                    "version": current_version,
+                    "csAgent": None,
+                    "revokedSessionCount": 0,
+                }
+
+            if requested_role is None:
+                new_values = {"enabled": False, "accepting": False}
+                role = _row_value(current_agent, "role", "agent")
+                max_conversations = int(
+                    _row_value(current_agent, "max_conversations", 10) or 10
+                )
+            else:
+                role = requested_role
+                max_conversations = (
+                    int(_row_value(current_agent, "max_conversations", 10) or 10)
+                    if parsed["max_conversations"] is _MISSING
+                    else parsed["max_conversations"]
+                )
+                enabled = (
+                    bool(_row_value(current_agent, "enabled", True))
+                    if parsed["enabled"] is _MISSING else parsed["enabled"]
+                )
+                accepting = (
+                    bool(_row_value(current_agent, "accepting", True))
+                    if parsed["accepting"] is _MISSING else parsed["accepting"]
+                )
+                if not enabled and parsed["accepting"] is _MISSING:
+                    accepting = False
+                if accepting and not enabled:
+                    raise _http_error("停用的客服档案不能处于可接单状态", 400)
+                new_values = {
+                    "enabled": enabled,
+                    "accepting": accepting,
+                }
+
+            before_state = _state(current, current_agent)
+            if current_agent is None:
+                agent_id = f"cs-{uuid.uuid4().hex}"
+                agent_values = {
+                    "agent_id": agent_id,
+                    "tenant_id": tenant_id,
+                    "auth_user_id": str(user_id),
+                    "display_name": _stable_display_name(current, user_id),
+                    "role": role,
+                    "max_conversations": max_conversations,
+                    "enabled": new_values["enabled"],
+                    "accepting": new_values["accepting"],
+                }
+                await db.execute(text(
+                    "INSERT INTO customer_service.cs_agents "
+                    "(agent_id, tenant_id, auth_user_id, display_name, role, "
+                    "max_conversations, enabled, accepting) VALUES "
+                    "(:agent_id, :tenant_id, :auth_user_id, :display_name, "
+                    ":role, :max_conversations, :enabled, :accepting)"),
+                    agent_values)
+                after_agent = agent_values
+            else:
+                agent_id = _row_value(current_agent, "agent_id")
+                await db.execute(text(
+                    "UPDATE customer_service.cs_agents SET role = :role, "
+                    "max_conversations = :max_conversations, enabled = :enabled, "
+                    "accepting = :accepting, updated_at = now() "
+                    "WHERE tenant_id = :tenant_id AND agent_id = :agent_id"), {
+                        "role": role,
+                        "max_conversations": max_conversations,
+                        "enabled": new_values["enabled"],
+                        "accepting": new_values["accepting"],
+                        "tenant_id": tenant_id,
+                        "agent_id": agent_id,
+                    })
+                after_agent = {
+                    **dict(current_agent),
+                    "role": role,
+                    "max_conversations": max_conversations,
+                    **new_values,
+                }
+
+            updated = (await db.execute(text(
+                "UPDATE auth.users SET version = version + 1, updated_at = now() "
+                "WHERE id = :user_id AND tenant_id = :tenant_id "
+                "AND version = :version RETURNING version"), {
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
+                    "version": current_version,
+                })).mappings().first()
+            if updated is None:
+                raise _http_error("用户版本冲突，请刷新后重试", 409)
+
+            after_state = _state(current, after_agent)
+            cs_changes = {}
+            if before_state["csRole"] != after_state["csRole"]:
+                cs_changes["role"] = after_state["csRole"]
+            for key in ("maxConversations", "enabled", "accepting"):
+                if before_state.get(key) != after_state.get(key):
+                    cs_changes[key] = after_state.get(key)
+            after_state["csChanges"] = cs_changes
+            await db.execute(text(
+                "INSERT INTO auth.rbac_audits "
+                "(tenant_id, actor_user_id, target_user_id, action, before_state, "
+                "after_state, result) VALUES (:tenant_id, :actor_user_id, "
+                ":target_user_id, 'user.update', CAST(:before_state AS JSONB), "
+                "CAST(:after_state AS JSONB), 'success')"), {
+                    "tenant_id": tenant_id,
+                    "actor_user_id": _actor_user_id(operator),
+                    "target_user_id": user_id,
+                    "before_state": json.dumps(before_state, ensure_ascii=False),
+                    "after_state": json.dumps(after_state, ensure_ascii=False),
+                })
+            if before_state["csRole"] != after_state["csRole"] or (
+                before_state.get("enabled") != after_state.get("enabled")
+            ):
+                revoked_sessions = await _session_service.revoke_user_sessions(
+                    db, user_id, reason="rbac_changed"
+                )
+            await db.commit()
+    except HTTPException:
+        await _rollback(db)
+        raise
+    except Exception as exc:
+        await _rollback(db)
+        if _is_concurrency_conflict(exc):
+            raise HTTPException(
+                status_code=409, detail="客服档案更新发生并发冲突，请重试"
+            ) from exc
+        logger.exception(
+            "[RBAC] 客服档案更新事务失败 user_id=%s", user_id
+        )
+        raise HTTPException(status_code=500, detail="客服档案更新失败") from exc
+
+    deleted = _session_service.clear_redis_for_sessions(revoked_sessions)
+    return {
+        "userId": user_id,
+        "version": int(_row_value(updated, "version", current_version + 1)),
+        "csAgent": _cs_public(after_agent),
+        "revokedSessionCount": len(revoked_sessions),
+        "redisKeysDeleted": deleted,
+    }
+
+
+async def _update_department_member_in_transaction(
+    db,
+    *,
+    user_id: int,
+    body: Any,
+    access: RbacAccess,
+    tenant_id: str,
+) -> UserUpdateOutcome:
+    """部门主管仅修改本部门成员资料或账号状态。"""
+    allowed_fields = {"version", "realName", "email", "status"}
+    if not isinstance(body, dict):
+        raise _http_error("请求体必须是 JSON 对象", 400)
+    if set(body) - allowed_fields:
+        raise _http_error("部门主管只能修改成员资料和账号状态", 403)
+    parsed = _validate_body(body, require_version=True)
+    actor_user_id = _actor_user_id(access.operator)
+    if actor_user_id is None:
+        raise _http_error("缺少有效的部门主管身份", 403)
+
+    current = (await db.execute(text(
+        "SELECT id, username, real_name, email, dept, role, status, version "
+        "FROM auth.users WHERE id = :user_id AND tenant_id = :tenant_id "
+        "FOR UPDATE"), {
+            "user_id": user_id, "tenant_id": tenant_id,
+        })).mappings().first()
+    if current is None:
+        raise _http_error("用户不存在", 404)
+    current_dept = str(_row_value(current, "dept", "") or "")
+    if current_dept not in access.managed_departments:
+        raise _http_error("不能管理授权部门范围外的用户", 404)
+    assignment = (await db.execute(text(
+        "SELECT 1 FROM auth.departments WHERE tenant_id = :tenant_id "
+        "AND code = :dept AND manager_user_id = :actor_user_id "
+        "AND status = 1 FOR UPDATE"), {
+            "tenant_id": tenant_id,
+            "dept": current_dept,
+            "actor_user_id": actor_user_id,
+        })).first()
+    if assignment is None:
+        raise _http_error("部门主管授权已变更，请刷新后重试", 403)
+
+    current_version = int(_row_value(current, "version", 0))
+    if parsed["version"] != current_version:
+        raise _http_error("用户版本冲突，请刷新后重试", 409)
+    current_status = int(_row_value(current, "status", 1))
+    new_status = current_status if parsed["status"] is _MISSING else parsed["status"]
+    if user_id == actor_user_id and new_status != current_status:
+        raise _http_error("部门主管不能通过此页面停用自己的账号", 403)
+    if current_status == 1 and new_status == 0:
+        manages_department = (await db.execute(text(
+            "SELECT 1 FROM auth.departments WHERE tenant_id = :tenant_id "
+            "AND manager_user_id = :user_id AND status = 1 "
+            "LIMIT 1 FOR UPDATE"), {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+            })).first()
+        if manages_department:
+            raise _http_error(
+                "该用户仍担任部门主管，请先更换或取消主管配置", 409
+            )
+    if (
+        new_status != current_status
+        and _row_value(current, "role") in {"admin", "super_admin"}
+    ):
+        raise _http_error("部门主管不能变更平台管理员账号状态", 403)
+
+    current_name = str(_row_value(current, "real_name", "") or "")
+    current_email = str(_row_value(current, "email", "") or "")
+    new_name = current_name if parsed["real_name"] is _MISSING else parsed["real_name"]
+    new_email = current_email if parsed["email"] is _MISSING else parsed["email"]
+    if (new_status == current_status and new_name == current_name
+            and new_email == current_email):
+        return UserUpdateOutcome(
+            user={
+                "userId": user_id,
+                "username": _row_value(current, "username"),
+                "realName": current_name,
+                "email": current_email,
+                "dept": current_dept,
+                "status": current_status,
+                "version": current_version,
+            },
+            revoked_sessions=[],
+        )
+
+    updated = (await db.execute(text(
+        "UPDATE auth.users SET real_name = :real_name, email = :email, "
+        "status = :status, version = version + 1, updated_at = now() "
+        "WHERE id = :user_id AND tenant_id = :tenant_id "
+        "AND version = :version "
+        "RETURNING id, username, real_name, email, dept, status, version"), {
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "real_name": new_name,
+            "email": new_email,
+            "status": new_status,
+            "version": current_version,
+        })).mappings().first()
+    if updated is None:
+        raise _http_error("用户版本冲突，请刷新后重试", 409)
+
+    await db.execute(text(
+        "UPDATE customer_service.cs_agents SET display_name = :display_name, "
+        "updated_at = now() WHERE tenant_id = :tenant_id "
+        "AND auth_user_id = CAST(:user_id AS VARCHAR)"), {
+            "display_name": new_name or _row_value(current, "username"),
+            "tenant_id": tenant_id,
+            "user_id": user_id,
+        })
+
+    before_state = {
+        "realName": current_name,
+        "email": current_email,
+        "dept": current_dept,
+        "status": current_status,
+    }
+    after_state = {
+        "realName": new_name,
+        "email": new_email,
+        "dept": current_dept,
+        "status": new_status,
+    }
+    if current_status == 1 and new_status == 0:
+        disabled_agent = (await db.execute(text(
+            "UPDATE customer_service.cs_agents SET enabled = FALSE, "
+            "accepting = FALSE, updated_at = now() "
+            "WHERE tenant_id = :tenant_id "
+            "AND auth_user_id = CAST(:user_id AS VARCHAR) "
+            "RETURNING agent_id"), {
+                "tenant_id": tenant_id,
+                "user_id": user_id,
+            })).first()
+        if disabled_agent:
+            after_state["csChanges"] = {"enabled": False, "accepting": False}
+    await db.execute(text(
+        "INSERT INTO auth.rbac_audits "
+        "(tenant_id, actor_user_id, target_user_id, action, before_state, "
+        "after_state, result) VALUES (:tenant_id, :actor_user_id, :target_user_id, "
+        "'department_member.update', CAST(:before_state AS JSONB), "
+        "CAST(:after_state AS JSONB), 'success')"), {
+            "tenant_id": tenant_id,
+            "actor_user_id": actor_user_id,
+            "target_user_id": user_id,
+            "before_state": json.dumps(before_state, ensure_ascii=False),
+            "after_state": json.dumps(after_state, ensure_ascii=False),
+        })
+
+    revoked_sessions = []
+    if current_status == 1 and new_status == 0:
+        revoked_sessions = await _session_service.revoke_user_sessions(
+            db, user_id, reason="rbac_changed"
+        )
+    return UserUpdateOutcome(
+        user={
+            "userId": user_id,
+            "username": _row_value(updated, "username"),
+            "realName": _row_value(updated, "real_name") or "",
+            "email": _row_value(updated, "email") or "",
+            "dept": _row_value(updated, "dept") or "",
+            "status": int(_row_value(updated, "status", 1)),
+            "version": int(_row_value(updated, "version", current_version + 1)),
+        },
+        revoked_sessions=revoked_sessions,
+    )
 
 
 @router.patch("/users/{user_id}")
 async def update_user(
     user_id: int,
     request: Request,
-    operator: OperatorIdentity = Depends(require_rbac_admin),
+    access: RbacAccess = Depends(require_rbac_access),
 ):
-    """事务性更新平台角色/客服档案，并在提交后清理会话闸键。"""
+    """管理员修改平台用户；部门主管仅能修改本部门基础资料和账号状态。"""
     body = await request.json()
     tenant_id = _tenant_id(request)
     db = None
     try:
         async with _db() as db:
-            outcome = await update_user_in_transaction(
-                db,
-                user_id=user_id,
-                body=body,
-                operator=operator,
-                tenant_id=tenant_id,
-            )
+            if access.is_platform_admin:
+                if not isinstance(body, dict):
+                    raise _http_error("请求体必须是 JSON 对象", 400)
+                if set(body) & {"csRole", "maxConversations", "enabled", "accepting"}:
+                    raise _http_error("客服档案请在客服团队页面单独管理", 400)
+                outcome = await update_user_in_transaction(
+                    db, user_id=user_id, body=body,
+                    operator=access.operator, tenant_id=tenant_id,
+                )
+            else:
+                outcome = await _update_department_member_in_transaction(
+                    db, user_id=user_id, body=body, access=access,
+                    tenant_id=tenant_id,
+                )
             await db.commit()
     except HTTPException:
         await _rollback(db)
@@ -1048,6 +1679,8 @@ async def create_user(
     body = await request.json()
     if not isinstance(body, dict):
         raise _http_error("请求体必须是 JSON 对象", 400)
+    if set(body) & {"csRole", "maxConversations", "enabled", "accepting"}:
+        raise _http_error("客服档案请在客服团队页面单独管理", 400)
     tenant_id = _tenant_id(request)
     requested_tenant = str(body.get("tenantId") or "").strip()
     if requested_tenant and requested_tenant != tenant_id:
@@ -1147,7 +1780,7 @@ async def get_user_detail(
     request: Request,
     operator: OperatorIdentity = Depends(require_rbac_admin),
 ):
-    """用户详情（P6.1）：基本资料 + 平台/客服角色 + 会话/登录信息。"""
+    """用户详情（P6.1）：基本资料、平台角色和会话/登录信息。"""
     del operator
     tenant_id = _tenant_id(request)
     async with _db() as db:
@@ -1158,21 +1791,12 @@ async def get_user_detail(
             {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
         if row is None:
             raise _http_error("用户不存在", 404)
-        cs_row = (await db.execute(text(
-            "SELECT agent_id, display_name, role, max_conversations, "
-            "enabled, accepting FROM customer_service.cs_agents "
-            "WHERE tenant_id = :tenant_id "
-            "AND auth_user_id = CAST(:uid AS VARCHAR)"),
-            {"tenant_id": tenant_id, "uid": str(user_id)})).mappings().first()
         session_stat = (await db.execute(text(
             "SELECT COUNT(*) AS active_sessions, "
             "MAX(created_at) AS last_login_at FROM auth.sessions "
             "WHERE user_id = :uid AND revoked_at IS NULL"),
             {"uid": user_id})).mappings().first()
 
-    agent = None
-    if cs_row is not None:
-        agent = _cs_public(cs_row)
     return {
         "userId": _row_value(row, "id"),
         "username": _row_value(row, "username"),
@@ -1181,8 +1805,6 @@ async def get_user_detail(
         "dept": _row_value(row, "dept", ""),
         "tenantId": _row_value(row, "tenant_id"),
         "platformRoles": [_row_value(row, "role", "viewer")],
-        "csRoles": [agent["role"]] if agent and agent.get("role") else [],
-        "csAgent": agent,
         "status": int(_row_value(row, "status", 1)),
         "version": int(_row_value(row, "version", 0)),
         "mustChangePassword": bool(_row_value(row, "must_change_password", False)),

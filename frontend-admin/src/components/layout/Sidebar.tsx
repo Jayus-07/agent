@@ -5,6 +5,8 @@ import { Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react'
 import NavGroup from './NavGroup'
 import { visibleNav } from './navConfig'
 import SidebarUserMenu from './SidebarUserMenu'
+import { getRbacAccessContext } from '@/api/rbac'
+import { atLeast } from '@/lib/auth'
 
 interface Props { collapsed: boolean; onToggle: () => void }
 
@@ -14,8 +16,19 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
   // 首帧逐字节一致；mount 后再切真实角色（admin 多出的菜单延后一帧）。
   // 否则角色差异图标（如 Database 的 <ellipse>）触发整树 hydration 失败。
   const [mounted, setMounted] = useState(false)
-  useEffect(() => setMounted(true), [])
-  const groups = mounted ? visibleNav() : visibleNav(true)
+  const [departmentManager, setDepartmentManager] = useState(false)
+  useEffect(() => {
+    setMounted(true)
+    if (atLeast('admin')) return undefined
+    let active = true
+    void getRbacAccessContext().then((context) => {
+      if (active) setDepartmentManager(
+        !context.isPlatformAdmin && context.managedDepartments.length > 0,
+      )
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [])
+  const groups = mounted ? visibleNav(false, departmentManager) : visibleNav(true)
 
   if (collapsed) {
     return (

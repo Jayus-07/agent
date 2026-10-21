@@ -18,11 +18,11 @@ export interface RbacUser {
   realName: string;
   email?: string;
   dept: string;
-  platformRole: PlatformRole;
+  platformRole?: PlatformRole;
   status: number;
   version: number;
-  sessionCount: number;
-  csAgent: RbacAgent | null;
+  sessionCount?: number;
+  csAgent?: RbacAgent | null;
 }
 
 export interface RbacUserPage {
@@ -40,19 +40,37 @@ export interface RbacUserPatch {
   status?: number;
   /** 部门 code（授权属性）：空串=清空；非空须为本租户 active 部门（后端校验） */
   dept?: string;
+}
+
+export interface RbacAccessContext {
+  isPlatformAdmin: boolean;
+  managedDepartments: Array<{ code: string; name: string }>;
+}
+
+export interface CustomerServiceTeamPage extends RbacUserPage {
+  items: Array<RbacUser & { csAgent: RbacAgent | null }>;
+  department: { code: string; name: string } | null;
+}
+
+export interface CustomerServiceMemberPatch {
+  version: number;
   csRole?: CsRole | null;
   maxConversations?: number;
   enabled?: boolean;
   accepting?: boolean;
 }
 
-/** 部门主数据（041_auth_departments；管理端部门下拉唯一数据源，禁前端写死） */
+/** 部门主数据（041/104 迁移；管理端部门下拉唯一数据源，禁前端写死） */
 export interface RbacDepartment {
   code: string;
   name: string;
   status: number;
   /** 旧后端尚无部门版本号时为 null；前端应禁用编辑/状态变更。 */
   version: number | null;
+  departmentType: "general" | "customer_service";
+  managerUserId: number | null;
+  managerUsername: string | null;
+  managerName: string | null;
   memberCount: number | null;
   updatedAt: string | null;
 }
@@ -60,12 +78,15 @@ export interface RbacDepartment {
 export interface RbacCreateDepartmentBody {
   code: string;
   name: string;
+  departmentType?: "general" | "customer_service";
 }
 
 export interface RbacDepartmentPatch {
   version: number;
   name?: string;
   status?: 0 | 1;
+  departmentType?: "general" | "customer_service";
+  managerUserId?: number | null;
 }
 
 export interface RbacAuditItem {
@@ -137,6 +158,14 @@ function normalizeDepartment(
     // 舊 API 只返回启用部门的 code/name，保持其兼容语义。
     status: department.status === 0 ? 0 : 1,
     version: Number.isInteger(department.version) ? department.version! : null,
+    departmentType: department.departmentType === "customer_service"
+      ? "customer_service" : "general",
+    managerUserId: Number.isInteger(department.managerUserId)
+      ? department.managerUserId! : null,
+    managerUsername: typeof department.managerUsername === "string"
+      ? department.managerUsername : null,
+    managerName: typeof department.managerName === "string"
+      ? department.managerName : null,
     memberCount: Number.isInteger(department.memberCount) ? department.memberCount! : null,
     updatedAt: typeof department.updatedAt === "string" ? department.updatedAt : null,
   };
@@ -152,6 +181,11 @@ export async function listRbacDepartments(options: {
   );
   return unwrap<{ items: Array<Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">> }>(body)
     .items.map(normalizeDepartment);
+}
+
+export async function getRbacAccessContext(): Promise<RbacAccessContext> {
+  const body = await request("/api/sys/rbac/context");
+  return unwrap<RbacAccessContext>(body);
 }
 
 export async function updateRbacDepartment(
@@ -189,6 +223,7 @@ export async function createRbacDepartment(
 export async function listRbacUsers(params: {
   search?: string;
   status?: number;
+  dept?: string;
   page?: number;
   pageSize?: number;
 } = {}): Promise<RbacUserPage> {
@@ -198,11 +233,40 @@ export async function listRbacUsers(params: {
     `/api/sys/rbac/users${queryString([
       ["search", params.search?.trim()],
       ["status", params.status],
+      ["dept", params.dept],
       ["page", page],
       ["page_size", pageSize],
     ])}`,
   );
   return unwrap<RbacUserPage>(body);
+}
+
+export async function listCustomerServiceTeam(params: {
+  search?: string;
+  status?: number;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<CustomerServiceTeamPage> {
+  const body = await request(
+    `/api/sys/rbac/customer-service/team${queryString([
+      ["search", params.search?.trim()],
+      ["status", params.status],
+      ["page", params.page ?? 1],
+      ["page_size", params.pageSize ?? 20],
+    ])}`,
+  );
+  return unwrap<CustomerServiceTeamPage>(body);
+}
+
+export async function updateCustomerServiceMember(
+  userId: number,
+  patch: CustomerServiceMemberPatch,
+): Promise<{ userId: number; version: number; csAgent: RbacAgent | null }> {
+  const body = await request(
+    `/api/sys/rbac/customer-service/team/${userId}`,
+    { method: "PATCH", body: JSON.stringify(patch) },
+  );
+  return unwrap<{ userId: number; version: number; csAgent: RbacAgent | null }>(body);
 }
 
 export async function updateRbacUser(
@@ -243,8 +307,6 @@ export interface RbacUserDetail {
   dept: string;
   tenantId: string;
   platformRoles: PlatformRole[];
-  csRoles: CsRole[];
-  csAgent: RbacAgent | null;
   status: number;
   version: number;
   mustChangePassword: boolean;
@@ -259,7 +321,6 @@ export interface RbacCreateUserBody {
   dept?: string;
   email?: string;
   platformRole?: PlatformRole;
-  csRole?: CsRole | null;
 }
 
 export interface RbacCreateUserResult {

@@ -30,6 +30,8 @@ export interface NavItem {
   /** 可见所需最低角色（缺省 viewer=所有登录用户）；仅控制 UI 显隐，
    *  真正的权限判定在后端（403 兜底），与 apisix 角色闸同语义 */
   minRole?: RoleName
+  /** 部门主管的数据库授权可单独开放该入口，不加入平台角色体系。 */
+  allowDepartmentManager?: boolean
 }
 
 export interface NavEntry {
@@ -128,7 +130,7 @@ export const NAV: NavEntry[] = [
   {
     icon: <ShieldCheck size={18} />, label: '安全运维', alwaysOpen: true,
     items: [
-      { label: '访问控制', path: '/settings/access', icon: <KeyRound size={16} />, minRole: 'admin', section: '权限与租户' },
+      { label: '访问控制', path: '/settings/access', icon: <KeyRound size={16} />, minRole: 'admin', allowDepartmentManager: true, section: '权限与租户' },
       { label: '审批与审计', path: '/approvals', icon: <CheckCheck size={16} />, minRole: 'admin' },
       { label: '安全运营', path: '/security', icon: <ShieldCheck size={16} />, section: '服务健康与告警' },
       { label: '服务健康与告警', path: '/observability/alerts', icon: <AlertTriangle size={16} />, minRole: 'admin', section: '服务健康与告警' },
@@ -184,13 +186,15 @@ export function getActiveNavLabel(pathname: string | null | undefined): string |
  * Sidebar 的约定：mount 前 visibleNav(true)（与 SSR 一致），mount 后
  * 再切 visibleNav()。
  */
-export function visibleNav(baseline = false): NavEntry[] {
+export function visibleNav(baseline = false, departmentManager = false): NavEntry[] {
   const canSee = (minRole?: RoleName) => baseline ? !minRole : !minRole || atLeast(minRole)
   return NAV.flatMap((entry) => {
     if (!canSee(entry.minRole)) return []
     if (!entry.items) return [entry]
 
-    const items = entry.items.filter((item) => canSee(item.minRole))
+    const items = entry.items.filter((item) => (
+      canSee(item.minRole) || (departmentManager && item.allowDepartmentManager)
+    ))
     if (items.length === 0) return []
     return [{ ...entry, items }]
   })

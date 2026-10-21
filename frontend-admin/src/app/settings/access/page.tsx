@@ -22,11 +22,12 @@ import {
   UserRound,
   Users,
 } from "lucide-react";
-import RoleGate from "@/components/auth/RoleGate";
+import CustomerServiceTeamManagement from "@/components/rbac/CustomerServiceTeamManagement";
+import DepartmentManagerAccess from "@/components/rbac/DepartmentManagerAccess";
 import DepartmentManagement from "@/components/rbac/DepartmentManagement";
 import {
-  type CsRole,
   type PlatformRole,
+  type RbacAccessContext,
   type RbacAuditItem,
   type RbacDepartment,
   type RbacUser,
@@ -34,6 +35,7 @@ import {
   type RbacUserPatch,
   createRbacUser,
   forceLogoutRbacUser,
+  getRbacAccessContext,
   getRbacUserDetail,
   listRbacAudit,
   listRbacDepartments,
@@ -45,25 +47,17 @@ import { describeApiError } from "@/api/errors";
 import { ApiError } from "@/lib/fetcher";
 
 const PAGE_SIZE = 20;
-type Tab = "users" | "departments" | "roles" | "audit";
+type Tab = "users" | "customerService" | "departments" | "roles" | "audit";
 
 interface UserDraft {
   platformRole: PlatformRole;
   dept: string;
-  csRole: CsRole | null;
-  maxConversations: number;
-  enabled: boolean;
-  accepting: boolean;
 }
 
 function draftFor(user: RbacUser): UserDraft {
   return {
-    platformRole: user.platformRole,
+    platformRole: user.platformRole ?? "viewer",
     dept: user.dept ?? "",
-    csRole: user.csAgent?.role ?? null,
-    maxConversations: user.csAgent?.maxConversations ?? 10,
-    enabled: user.csAgent?.enabled ?? false,
-    accepting: user.csAgent?.accepting ?? false,
   };
 }
 
@@ -105,6 +99,9 @@ function auditChanges(item: RbacAuditItem): string {
     changes.push(`姓名：${String(before.realName || "未填写")} → ${String(after.realName || "未填写")}`);
   }
   if (before.email !== after.email) changes.push("邮箱已更新");
+  if (before.status !== after.status && after.status !== undefined) {
+    changes.push(`账号状态：${Number(after.status) === 1 ? "启用" : "停用"}`);
+  }
   if (before.dept !== after.dept) {
     changes.push(`部门：${String(before.dept || "未分配")} → ${String(after.dept || "未分配")}`);
   }
@@ -134,7 +131,7 @@ function auditChanges(item: RbacAuditItem): string {
   return changes.length ? changes.join("；") : "无权限字段变化";
 }
 
-function AccessControlContent() {
+function AdminAccessControlContent() {
   const [tab, setTab] = useState<Tab>("users");
   const [users, setUsers] = useState<RbacUser[]>([]);
   const [total, setTotal] = useState(0);
@@ -278,10 +275,6 @@ function AccessControlContent() {
       version: user.version,
       platformRole: draft.platformRole,
       dept: draft.dept,
-      csRole: draft.csRole,
-      maxConversations: draft.maxConversations,
-      enabled: draft.enabled,
-      accepting: draft.accepting,
     };
     try {
       const updated = await updateRbacUser(user.userId, patch);
@@ -458,9 +451,9 @@ function AccessControlContent() {
             <ShieldCheck size={17} aria-hidden="true" />
             <span className="text-xs font-medium">访问控制</span>
           </div>
-          <h1 className="mt-1 text-xl font-semibold tracking-tight text-text-primary">用户、部门与权限</h1>
+          <h1 className="mt-1 text-xl font-semibold tracking-tight text-text-primary">用户、客服与部门权限</h1>
           <p className="mt-1 text-xs leading-5 text-text-secondary">
-            管理当前租户的用户、部门和平台权限；用户权限变更使用版本校验，避免覆盖其他管理员的修改。
+            平台账号、客服档案和部门主管分区管理；权限更新使用版本校验，并记录操作审计。
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3 rounded-xl bg-surface-elevated px-4 py-3 text-xs text-text-secondary">
@@ -469,7 +462,7 @@ function AccessControlContent() {
           ) : (
             <Users size={16} className="text-accent" aria-hidden="true" />
           )}
-          <span>{tab === "departments" ? "部门主数据" : `当前列表 ${total} 位用户`}</span>
+          <span>{tab === "departments" ? "部门主数据" : tab === "customerService" ? "客服团队" : `当前列表 ${total} 位用户`}</span>
           <span className="h-4 w-px bg-gray-200" aria-hidden="true" />
           <span>仅管理员</span>
         </div>
@@ -486,6 +479,16 @@ function AccessControlContent() {
               className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "users" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               用户
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "customerService"}
+              onClick={() => setTab("customerService")}
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "customerService" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+            >
+              <Users size={14} aria-hidden="true" />
+              客服团队
             </button>
             <button
               type="button"
@@ -572,6 +575,8 @@ function AccessControlContent() {
             error={departmentLoadError}
             onRefresh={loadDepartments}
           />
+        ) : tab === "customerService" ? (
+          <CustomerServiceTeamManagement />
         ) : tab === "users" ? (
           <div className="p-4 sm:p-5">
             {pageError && (
@@ -599,15 +604,12 @@ function AccessControlContent() {
             ) : (
               <>
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
-                  <table className="min-w-[820px] w-full border-collapse text-left text-xs">
-                    <caption className="sr-only">用户与客服权限列表</caption>
+                  <table className="min-w-[680px] w-full border-collapse text-left text-xs">
+                    <caption className="sr-only">平台用户与账号权限列表</caption>
                     <thead className="bg-surface-elevated text-[11px] font-medium text-text-secondary">
                       <tr>
                         <th className="px-3 py-3">用户</th>
                         <th className="px-3 py-3">平台角色</th>
-                        <th className="px-3 py-3">客服角色</th>
-                        <th className="px-3 py-3">容量</th>
-                        <th className="px-3 py-3">客服状态</th>
                         <th className="px-3 py-3">会话</th>
                         <th className="px-3 py-3 text-right">操作</th>
                       </tr>
@@ -654,55 +656,7 @@ function AccessControlContent() {
                                 ))}
                               </select>
                             </td>
-                            <td className="px-3 py-3">
-                              <label className="sr-only" htmlFor={`cs-role-${user.userId}`}>客服角色</label>
-                              <select
-                                id={`cs-role-${user.userId}`}
-                                value={draft.csRole ?? ""}
-                                onChange={(event) => setDraft(user.userId, { csRole: (event.target.value || null) as CsRole | null })}
-                                className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
-                              >
-                                <option value="">未绑定</option>
-                                <option value="agent">坐席</option>
-                                <option value="supervisor">主管</option>
-                              </select>
-                            </td>
-                            <td className="px-3 py-3">
-                              <label className="sr-only" htmlFor={`capacity-${user.userId}`}>最大会话数</label>
-                              <input
-                                id={`capacity-${user.userId}`}
-                                type="number"
-                                min={1}
-                                max={1000}
-                                value={draft.maxConversations}
-                                disabled={!draft.csRole}
-                                onChange={(event) => setDraft(user.userId, { maxConversations: Math.max(1, Number(event.target.value) || 1) })}
-                                className="w-20 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none disabled:cursor-not-allowed disabled:bg-gray-50 disabled:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
-                              />
-                            </td>
-                            <td className="space-y-2 px-3 py-3">
-                              <label className="flex items-center gap-2 text-xs text-text-secondary">
-                                <input
-                                  type="checkbox"
-                                  checked={draft.enabled}
-                                  disabled={!draft.csRole}
-                                  onChange={(event) => setDraft(user.userId, { enabled: event.target.checked })}
-                                  className="h-3.5 w-3.5 rounded border-gray-300 text-accent accent-accent focus-visible:ring-2 focus-visible:ring-accent/30"
-                                />
-                                启用
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-text-secondary">
-                                <input
-                                  type="checkbox"
-                                  checked={draft.accepting}
-                                  disabled={!draft.csRole || !draft.enabled}
-                                  onChange={(event) => setDraft(user.userId, { accepting: event.target.checked })}
-                                  className="h-3.5 w-3.5 rounded border-gray-300 text-accent accent-accent focus-visible:ring-2 focus-visible:ring-accent/30"
-                                />
-                                可接单
-                              </label>
-                            </td>
-                            <td className="px-3 py-3 text-text-secondary">{user.sessionCount}</td>
+                            <td className="px-3 py-3 text-text-secondary">{user.sessionCount ?? 0}</td>
                             <td className="px-3 py-3 text-right">
                               <div className="flex flex-col items-end gap-1.5">
                                 <div className="flex items-center justify-end gap-1.5">
@@ -819,8 +773,8 @@ function AccessControlContent() {
                     { role: "admin", category: "平台角色", desc: "管理员", scope: "全部功能：用户与客服档案管理、模型与供应商、工具审批、访问控制及全部读写" },
                     { role: "editor", category: "平台角色", desc: "编辑者", scope: "知识库运营（入库/复核/词库）、业务分析读写；无用户管理与审批权" },
                     { role: "viewer", category: "平台角色", desc: "查看者", scope: "只读访问总览、业务分析与监控面板；写操作由后端 403 兜底" },
-                    { role: "supervisor", category: "客服角色", desc: "客服主管", scope: "坐席工作台全部能力 + 工单重派；由管理员在用户页绑定" },
-                    { role: "agent", category: "客服角色", desc: "客服坐席", scope: "接单/处理人工会话；容量与接单状态由管理员配置" },
+                    { role: "supervisor", category: "客服角色", desc: "客服主管", scope: "坐席工作台全部能力 + 工单重派；由管理员在客服团队页绑定" },
+                    { role: "agent", category: "客服角色", desc: "客服坐席", scope: "接单/处理人工会话；容量与接单状态在客服团队页配置" },
                   ].map((item) => (
                     <tr key={item.role} className="text-text-primary">
                       <td className="px-3 py-3 font-medium">{item.desc}</td>
@@ -1006,7 +960,6 @@ function AccessControlContent() {
                 ["租户", detail.tenantId],
                 ["部门", detail.dept || "—"],
                 ["平台角色", detail.platformRoles.map(roleLabel).join("、")],
-                ["客服角色", detail.csRoles.length ? detail.csRoles.map(roleLabel).join("、") : "未绑定"],
                 ["状态", detail.status === 1 ? "已启用" : "已禁用"],
                 ["创建时间", detail.createdAt ? new Date(detail.createdAt).toLocaleString("zh-CN") : "—"],
                 ["最近登录", detail.lastLoginAt ? new Date(detail.lastLoginAt).toLocaleString("zh-CN") : "—"],
@@ -1053,10 +1006,40 @@ function AccessControlContent() {
   );
 }
 
+function AccessControlContent() {
+  const [context, setContext] = useState<RbacAccessContext | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [denied, setDenied] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void getRbacAccessContext().then((value) => {
+      if (active) setContext(value);
+    }).catch(() => {
+      if (active) setDenied(true);
+    }).finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => { active = false; };
+  }, []);
+
+  if (loading) {
+    return <div className="mx-auto w-full max-w-7xl p-6"><div className="h-32 animate-pulse rounded-2xl bg-surface-elevated motion-reduce:animate-none" aria-label="正在确认访问范围" /></div>;
+  }
+  if (denied || !context) {
+    return (
+      <div className="mx-auto mt-10 max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-card">
+        <h1 className="text-base font-semibold text-text-primary">没有访问控制权限</h1>
+        <p className="mt-2 text-xs leading-5 text-text-secondary">此页面仅对平台管理员和已配置部门主管的账号开放。请联系平台管理员检查你的角色或部门主管设置。</p>
+      </div>
+    );
+  }
+  if (context.isPlatformAdmin) return <AdminAccessControlContent />;
+  return <DepartmentManagerAccess context={context} />;
+}
+
 export default function AccessControlPage() {
   return (
-    <RoleGate minRole="admin" pageName="访问控制">
-      <AccessControlContent />
-    </RoleGate>
+    <AccessControlContent />
   );
 }

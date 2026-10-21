@@ -5,7 +5,9 @@ import { Building2, Check, Pencil, Plus, RefreshCw, Search, X } from "lucide-rea
 import {
   createRbacDepartment,
   deactivateRbacDepartment,
+  listRbacUsers,
   type RbacDepartment,
+  type RbacUser,
   updateRbacDepartment,
 } from "@/api/rbac";
 import { describeApiError } from "@/api/errors";
@@ -41,6 +43,9 @@ export default function DepartmentManagement({
   const [formError, setFormError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [managerCandidates, setManagerCandidates] = useState<RbacUser[]>([]);
+  const [loadingManagers, setLoadingManagers] = useState(false);
+  const [selectedManagerId, setSelectedManagerId] = useState("");
 
   const activeCount = departments.filter((item) => item.status === 1).length;
   const inactiveCount = departments.length - activeCount;
@@ -64,15 +69,34 @@ export default function DepartmentManagement({
 
   const openCreate = () => {
     setEditing(null);
+    setSelectedManagerId("");
+    setManagerCandidates([]);
     setFormError(null);
     setShowForm(true);
   };
 
-  const openEdit = (department: RbacDepartment) => {
+  const openEdit = async (department: RbacDepartment) => {
     if (department.version === null) return;
     setEditing(department);
+    setSelectedManagerId(department.managerUserId ? String(department.managerUserId) : "");
     setFormError(null);
     setShowForm(true);
+    setManagerCandidates([]);
+    setLoadingManagers(true);
+    try {
+      const first = await listRbacUsers({ dept: department.code, status: 1, pageSize: 100 });
+      const candidates = [...first.items];
+      const pages = Math.ceil(first.total / 100);
+      for (let page = 2; page <= pages; page += 1) {
+        const result = await listRbacUsers({ dept: department.code, status: 1, page, pageSize: 100 });
+        candidates.push(...result.items);
+      }
+      setManagerCandidates(candidates);
+    } catch {
+      setFormError("部门成员加载失败，主管候选人暂不可用，请重试。");
+    } finally {
+      setLoadingManagers(false);
+    }
   };
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -83,6 +107,8 @@ export default function DepartmentManagement({
       : null;
     const form = new FormData(event.currentTarget);
     const name = String(form.get("name") || "").trim();
+    const departmentType = String(form.get("departmentType") || "general") as RbacDepartment["departmentType"];
+    const managerValue = String(form.get("managerUserId") || "");
     if (editing && !editingDepartment) {
       setFormError("当前服务尚未提供部门版本信息，请先更新后端并应用 103 号迁移。");
       return;
@@ -93,10 +119,16 @@ export default function DepartmentManagement({
     setNotice(null);
     try {
       const department = editingDepartment
-        ? await updateRbacDepartment(editingDepartment.code, { version: editingDepartment.version, name })
+        ? await updateRbacDepartment(editingDepartment.code, {
+          version: editingDepartment.version,
+          name,
+          departmentType,
+          managerUserId: managerValue ? Number(managerValue) : null,
+        })
         : await createRbacDepartment({
           code: String(form.get("code") || "").trim().toLowerCase(),
           name,
+          departmentType,
         });
       const refreshed = await onRefresh();
       setShowForm(false);
@@ -263,6 +295,12 @@ export default function DepartmentManagement({
                   <tr key={department.code} className="text-text-primary">
                     <td className="px-3 py-3 sm:px-4">
                       <div className="font-medium">{department.name}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] ${department.departmentType === "customer_service" ? "bg-violet-50 text-violet-700" : "bg-gray-100 text-gray-600"}`}>
+                          {department.departmentType === "customer_service" ? "客服部门" : "普通部门"}
+                        </span>
+                        {department.managerName && <span className="text-[10px] text-text-muted">主管：{department.managerName}</span>}
+                      </div>
                       {department.status === 0 && <div className="mt-0.5 text-[10px] text-text-muted">停用后用户无法再选择此部门</div>}
                     </td>
                     <td className="px-3 py-3"><code className="rounded bg-surface-elevated px-1.5 py-1 text-[11px] text-text-secondary">{department.code}</code></td>
@@ -276,7 +314,7 @@ export default function DepartmentManagement({
                       <div className="inline-flex items-center justify-end gap-1.5">
                         <button
                           type="button"
-                          onClick={() => openEdit(department)}
+                          onClick={() => void openEdit(department)}
                           disabled={busy || department.version === null}
                           title={department.version === null ? "当前服务未提供部门版本信息，请更新服务后再编辑" : undefined}
                           className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
@@ -337,6 +375,19 @@ export default function DepartmentManagement({
                   className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs text-text-primary outline-none placeholder:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                 />
               </div>
+              <div>
+                <label htmlFor="department-type" className="text-xs text-text-secondary">部门类型</label>
+                <select
+                  id="department-type"
+                  name="departmentType"
+                  defaultValue={editing?.departmentType ?? "general"}
+                  className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs text-text-primary outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                >
+                  <option value="general">普通部门</option>
+                  <option value="customer_service">客服部门（每租户仅一个启用）</option>
+                </select>
+                <p className="mt-1 text-[10px] leading-4 text-text-muted">客服成员管理只读取此类型的启用部门；移除客服类型前需先停用客服档案。</p>
+              </div>
               {!editing && (
                 <div>
                   <label htmlFor="department-code" className="text-xs text-text-secondary">部门编码</label>
@@ -353,6 +404,29 @@ export default function DepartmentManagement({
                     className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 font-mono text-xs text-text-primary outline-none placeholder:font-sans placeholder:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                   />
                   <p className="mt-1 text-[10px] leading-4 text-text-muted">小写字母开头，可包含数字、下划线和短横线；编码创建后固定。</p>
+                </div>
+              )}
+              {editing && (
+                <div>
+                  <label htmlFor="department-manager" className="text-xs text-text-secondary">部门主管</label>
+                  <select
+                    id="department-manager"
+                    name="managerUserId"
+                    value={selectedManagerId}
+                    onChange={(event) => setSelectedManagerId(event.target.value)}
+                    disabled={loadingManagers}
+                    className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs text-text-primary outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20 disabled:bg-gray-50"
+                  >
+                    <option value="">暂不设置主管</option>
+                    {managerCandidates.map((user) => (
+                      <option key={user.userId} value={user.userId}>
+                        {user.realName || user.username}（{user.username}）
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-[10px] leading-4 text-text-muted">
+                    仅可选择本部门启用用户；主管能管理本部门成员资料和账号状态，不能修改平台角色或跨部门授权。
+                  </p>
                 </div>
               )}
               {formError && <p className="text-[11px] text-red-600" role="alert">{formError}</p>}
