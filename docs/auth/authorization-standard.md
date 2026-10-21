@@ -40,10 +40,11 @@ flowchart TD
 6. **异常**：身份缺失、租户上下文缺失、DB/策略不可验证时拒绝；资源不存在或无权查看可统一返回 404，避免泄露目标 ID 是否存在；具体错误契约以既有 API 为准。
 7. **日志**：记录 actor/tenant/resource type/operation/deny reason/trace_id 的必要非敏感标识；不泄露 token、密钥、用户原文、受保护文档正文。
 
-部门主数据由 `auth.departments` 按租户维护。部门创建仅允许平台管理员通过
-`POST /api/sys/rbac/departments` 执行，租户取自已验证身份；创建人与部门编码、名称
-写入 `auth.department_audits`。新部门可用于用户归属，但知识库可见范围仍由各知识库
-的 `owner_depts` 配置决定。
+部门主数据由 `auth.departments` 按租户维护。创建、改名和停用仅允许平台管理员
+通过 RBAC 管理路由执行，租户取自已验证身份；更新使用版本号 CAS，并与
+`auth.department_audits` 在同一事务记录操作者和前后状态。部门编码创建后不可变，
+停用使用软删除并拒绝仍有用户归属的部门；硬删除会破坏历史部门引用。启用部门可
+用于用户归属，但知识库可见范围仍由各知识库的 `owner_depts` 配置决定。
 
 ## 4. 新业务必须填写的资源权限矩阵
 

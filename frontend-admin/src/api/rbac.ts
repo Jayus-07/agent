@@ -16,6 +16,7 @@ export interface RbacUser {
   userId: number;
   username: string;
   realName: string;
+  email?: string;
   dept: string;
   platformRole: PlatformRole;
   status: number;
@@ -33,6 +34,8 @@ export interface RbacUserPage {
 
 export interface RbacUserPatch {
   version: number;
+  realName?: string;
+  email?: string;
   platformRole?: PlatformRole;
   status?: number;
   /** 部门 code（授权属性）：空串=清空；非空须为本租户 active 部门（后端校验） */
@@ -47,11 +50,22 @@ export interface RbacUserPatch {
 export interface RbacDepartment {
   code: string;
   name: string;
+  status: number;
+  /** 旧后端尚无部门版本号时为 null；前端应禁用编辑/状态变更。 */
+  version: number | null;
+  memberCount: number | null;
+  updatedAt: string | null;
 }
 
 export interface RbacCreateDepartmentBody {
   code: string;
   name: string;
+}
+
+export interface RbacDepartmentPatch {
+  version: number;
+  name?: string;
+  status?: 0 | 1;
 }
 
 export interface RbacAuditItem {
@@ -112,9 +126,52 @@ function queryString(entries: Array<[string, string | number | undefined]>): str
   return encoded ? `?${encoded}` : "";
 }
 
-export async function listRbacDepartments(): Promise<RbacDepartment[]> {
-  const body = await request(`/api/sys/rbac/departments`);
-  return unwrap<{ items: RbacDepartment[] }>(body).items;
+function normalizeDepartment(
+  department: Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">,
+): RbacDepartment {
+  return {
+    code: department.code,
+    name: department.name,
+    // 舊 API 只返回启用部门的 code/name，保持其兼容语义。
+    status: department.status === 0 ? 0 : 1,
+    version: Number.isInteger(department.version) ? department.version! : null,
+    memberCount: Number.isInteger(department.memberCount) ? department.memberCount! : null,
+    updatedAt: typeof department.updatedAt === "string" ? department.updatedAt : null,
+  };
+}
+
+export async function listRbacDepartments(options: {
+  includeInactive?: boolean;
+} = {}): Promise<RbacDepartment[]> {
+  const body = await request(
+    `/api/sys/rbac/departments${queryString([
+      ["include_inactive", options.includeInactive ? "true" : undefined],
+    ])}`,
+  );
+  return unwrap<{ items: Array<Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">> }>(body)
+    .items.map(normalizeDepartment);
+}
+
+export async function updateRbacDepartment(
+  code: string,
+  patch: RbacDepartmentPatch,
+): Promise<RbacDepartment> {
+  const body = await request(`/api/sys/rbac/departments/${encodeURIComponent(code)}`, {
+    method: "PATCH",
+    body: JSON.stringify(patch),
+  });
+  return normalizeDepartment(unwrap<Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">>(body));
+}
+
+export async function deactivateRbacDepartment(
+  code: string,
+  version: number,
+): Promise<RbacDepartment> {
+  const body = await request(
+    `/api/sys/rbac/departments/${encodeURIComponent(code)}${queryString([["version", version]])}`,
+    { method: "DELETE" },
+  );
+  return normalizeDepartment(unwrap<Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">>(body));
 }
 
 export async function createRbacDepartment(
@@ -124,11 +181,12 @@ export async function createRbacDepartment(
     method: "POST",
     body: JSON.stringify(payload),
   });
-  return unwrap<RbacDepartment>(body);
+  return normalizeDepartment(unwrap<Partial<RbacDepartment> & Pick<RbacDepartment, "code" | "name">>(body));
 }
 
 export async function listRbacUsers(params: {
   search?: string;
+  status?: number;
   page?: number;
   pageSize?: number;
 } = {}): Promise<RbacUserPage> {
@@ -137,6 +195,7 @@ export async function listRbacUsers(params: {
   const body = await request(
     `/api/sys/rbac/users${queryString([
       ["search", params.search?.trim()],
+      ["status", params.status],
       ["page", page],
       ["page_size", pageSize],
     ])}`,

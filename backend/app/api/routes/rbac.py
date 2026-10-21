@@ -216,6 +216,22 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
         else:
             dept = dept.strip()[:50]
 
+    real_name = body.get("realName", _MISSING)
+    if real_name is not _MISSING:
+        if not isinstance(real_name, str):
+            raise _http_error("realName 必须是字符串", 400)
+        real_name = real_name.strip()
+        if len(real_name) > 100 or any(ord(char) < 32 for char in real_name):
+            raise _http_error("姓名不能超过 100 个字符", 400)
+
+    email = body.get("email", _MISSING)
+    if email is not _MISSING:
+        if not isinstance(email, str):
+            raise _http_error("email 必须是字符串", 400)
+        email = email.strip()
+        if len(email) > 255 or any(ord(char) < 32 for char in email):
+            raise _http_error("邮箱格式无效", 400)
+
     return {
         "version": None if version is _MISSING else version,
         "platform_role": platform_role,
@@ -225,6 +241,8 @@ def _validate_body(body: Any, *, require_version: bool) -> dict[str, Any]:
         "enabled": body.get("enabled", _MISSING),
         "accepting": body.get("accepting", _MISSING),
         "dept": dept,
+        "real_name": real_name,
+        "email": email,
         "cs_fields_present": any(
             key in body
             for key in ("csRole", "maxConversations", "enabled", "accepting")
@@ -245,7 +263,8 @@ async def _department_active(db, *, tenant_id: str, code: str) -> bool:
         raise _http_error("部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
     row = (await db.execute(text(
         "SELECT 1 FROM auth.departments "
-        "WHERE tenant_id = :tenant_id AND code = :code AND status = 1"),
+        "WHERE tenant_id = :tenant_id AND code = :code AND status = 1 "
+        "FOR UPDATE"),
         {"tenant_id": tenant_id, "code": code})).first()
     return row is not None
 
@@ -284,6 +303,8 @@ def _cs_public(agent: Any) -> dict[str, Any] | None:
 
 def _state(user: Any, agent: Any) -> dict[str, Any]:
     return {
+        "realName": _row_value(user, "real_name", ""),
+        "email": _row_value(user, "email", ""),
         "platformRole": _row_value(user, "role", "viewer"),
         "status": int(_row_value(user, "status", 1)),
         "dept": _row_value(user, "dept", ""),
@@ -324,7 +345,7 @@ async def update_user_in_transaction(
         "ORDER BY id FOR UPDATE"),
         {"tenant_id": tenant_id})).mappings().all()
     current = (await db.execute(text(
-        "SELECT id, username, real_name, dept, role, status, version, tenant_id "
+        "SELECT id, username, real_name, email, dept, role, status, version, tenant_id "
         "FROM auth.users "
         "WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
         {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
@@ -355,6 +376,10 @@ async def update_user_in_transaction(
     # dept（P9）：未携带 = 保持现状；携带空串 = 清空；非空 = 主数据校验
     current_dept = str(_row_value(current, "dept", "") or "")
     new_dept = current_dept if parsed["dept"] is _MISSING else parsed["dept"]
+    current_real_name = str(_row_value(current, "real_name", "") or "")
+    new_real_name = current_real_name if parsed["real_name"] is _MISSING else parsed["real_name"]
+    current_email = str(_row_value(current, "email", "") or "")
+    new_email = current_email if parsed["email"] is _MISSING else parsed["email"]
     if parsed["dept"] is not _MISSING and new_dept:
         if not await _department_active(db, tenant_id=tenant_id, code=new_dept):
             raise _http_error(
@@ -376,16 +401,19 @@ async def update_user_in_transaction(
 
     updated = (await db.execute(text(
         "UPDATE auth.users SET role = :role, status = :status, dept = :dept, "
+        "real_name = :real_name, email = :email, "
         "version = version + 1, updated_at = now() "
         "WHERE id = :uid AND tenant_id = :tenant_id "
         "AND version = :expected_version "
-        "RETURNING id, username, real_name, dept, role, status, version, tenant_id"),
+        "RETURNING id, username, real_name, email, dept, role, status, version, tenant_id"),
         {
             "uid": user_id,
             "tenant_id": tenant_id,
             "role": new_role,
             "status": new_status,
             "dept": new_dept,
+            "real_name": new_real_name,
+            "email": new_email,
             "expected_version": expected_version,
         })).mappings().first()
     if updated is None:
@@ -514,6 +542,7 @@ async def update_user_in_transaction(
         "userId": _row_value(updated, "id", user_id),
         "username": _row_value(updated, "username", _row_value(current, "username")),
         "realName": _row_value(updated, "real_name", _row_value(current, "real_name", "")),
+        "email": _row_value(updated, "email", _row_value(current, "email", "")),
         "dept": _row_value(updated, "dept", _row_value(current, "dept", "")),
         "platformRole": _row_value(updated, "role", new_role),
         "status": int(_row_value(updated, "status", new_status)),
@@ -544,12 +573,54 @@ def _is_concurrency_conflict(exc: BaseException) -> bool:
     return False
 
 
+def _department_public(row: Any) -> dict[str, Any]:
+    updated_at = _row_value(row, "updated_at")
+    return {
+        "code": _row_value(row, "code"),
+        "name": _row_value(row, "name"),
+        "status": int(_row_value(row, "status", 1)),
+        "version": int(_row_value(row, "version", 0)),
+        "memberCount": int(_row_value(row, "member_count", 0) or 0),
+        "updatedAt": updated_at.isoformat() if hasattr(updated_at, "isoformat") else None,
+    }
+
+
+async def _department_audit_ready(db) -> bool:
+    return bool((await db.execute(text(
+        "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+        "WHERE table_schema = 'auth' AND table_name = 'department_audits'"
+    ))).scalar())
+
+
+async def _write_department_audit(
+    db, *, tenant_id: str, operator: OperatorIdentity, code: str,
+    name: str, action: str, before_state: dict[str, Any],
+    after_state: dict[str, Any],
+) -> None:
+    await db.execute(text(
+        "INSERT INTO auth.department_audits "
+        "(tenant_id, actor_user_id, department_code, department_name, "
+        "action, before_state, after_state, result) VALUES "
+        "(:tenant_id, :actor_user_id, :code, :name, :action, "
+        "CAST(:before_state AS JSONB), CAST(:after_state AS JSONB), 'success')"
+    ), {
+        "tenant_id": tenant_id,
+        "actor_user_id": _actor_user_id(operator),
+        "code": code,
+        "name": name,
+        "action": action,
+        "before_state": json.dumps(before_state, ensure_ascii=False),
+        "after_state": json.dumps(after_state, ensure_ascii=False),
+    })
+
+
 @router.get("/departments")
 async def list_departments(
     request: Request,
+    include_inactive: bool = Query(False),
     operator: OperatorIdentity = Depends(require_rbac_admin),
 ):
-    """本租户 active 部门列表（P9）：管理端部门下拉唯一数据源。
+    """列出本租户部门；用户归属下拉默认只返回启用项。
 
     禁止前端硬编码部门清单——主数据权威在 auth.departments（041 迁移）。
     未就绪（迁移未应用）时返回空列表 + warning，管理端下拉自然为空，
@@ -565,11 +636,18 @@ async def list_departments(
             logger.warning("[RBAC] auth.departments 未就绪（041 迁移未应用），部门列表为空")
             return {"items": []}
         rows = (await db.execute(text(
-            "SELECT code, name, status FROM auth.departments "
-            "WHERE tenant_id = :tenant_id AND status = 1 "
-            "ORDER BY code"),
-            {"tenant_id": tenant_id})).mappings().all()
-    return {"items": [{"code": r["code"], "name": r["name"]} for r in rows]}
+            "SELECT d.code, d.name, d.status, d.version, d.updated_at, "
+            "COUNT(u.id)::INTEGER AS member_count "
+            "FROM auth.departments d "
+            "LEFT JOIN auth.users u ON u.tenant_id = d.tenant_id "
+            "AND u.dept = d.code "
+            "WHERE d.tenant_id = :tenant_id "
+            "AND (:include_inactive OR d.status = 1) "
+            "GROUP BY d.code, d.name, d.status, d.version, d.updated_at "
+            "ORDER BY d.status DESC, d.name, d.code"),
+            {"tenant_id": tenant_id, "include_inactive": include_inactive}
+        )).mappings().all()
+    return {"items": [_department_public(row) for row in rows]}
 
 
 @router.post("/departments", status_code=201)
@@ -610,10 +688,7 @@ async def create_department(
                 "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
                 "WHERE table_schema = 'auth' AND table_name = 'departments'"
             ))).scalar()
-            audit_available = (await db.execute(text(
-                "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
-                "WHERE table_schema = 'auth' AND table_name = 'department_audits'"
-            ))).scalar()
+            audit_available = await _department_audit_ready(db)
             if not available:
                 raise _http_error(
                     "部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
@@ -631,27 +706,17 @@ async def create_department(
             row = (await db.execute(text(
                 "INSERT INTO auth.departments (tenant_id, code, name, status) "
                 "VALUES (:tenant_id, :code, :name, 1) "
-                "RETURNING code, name, status"
+                "RETURNING code, name, status, version, updated_at"
             ), {"tenant_id": tenant_id, "code": code, "name": name})).mappings().first()
             if row is None:
                 raise RuntimeError("部门创建未返回记录")
 
-            await db.execute(text(
-                "INSERT INTO auth.department_audits "
-                "(tenant_id, actor_user_id, department_code, department_name, "
-                "action, after_state, result) VALUES "
-                "(:tenant_id, :actor_user_id, :code, :name, 'department.create', "
-                "CAST(:after_state AS JSONB), 'success')"
-            ), {
-                "tenant_id": tenant_id,
-                "actor_user_id": _actor_user_id(operator),
-                "code": code,
-                "name": name,
-                "after_state": json.dumps(
-                    {"code": code, "name": name, "status": 1},
-                    ensure_ascii=False,
-                ),
-            })
+            after_state = _department_public(row)
+            await _write_department_audit(
+                db, tenant_id=tenant_id, operator=operator, code=code,
+                name=name, action="department.create", before_state={},
+                after_state=after_state,
+            )
             await db.commit()
     except HTTPException:
         await _rollback(db)
@@ -666,17 +731,162 @@ async def create_department(
         logger.exception("[RBAC] 部门创建事务失败 tenant_id=%s", tenant_id)
         raise HTTPException(status_code=500, detail="部门创建失败") from exc
 
-    return {
-        "code": _row_value(row, "code"),
-        "name": _row_value(row, "name"),
-        "status": int(_row_value(row, "status", 1)),
-    }
+    return _department_public(row)
+
+
+async def _change_department(
+    *, code: str, request: Request, operator: OperatorIdentity,
+    version: int, name: str | None = None, status: int | None = None,
+) -> dict[str, Any]:
+    """按版本修改部门；停用保留主数据，且不能留下用户归属。"""
+    tenant_id = _tenant_id(request)
+    normalized_code = code.strip().lower()
+    if not _DEPARTMENT_CODE_RE.fullmatch(normalized_code):
+        raise _http_error("部门编码格式无效", 400)
+    if version < 0:
+        raise _http_error("部门版本号无效", 400)
+    if name is not None and (
+        not name or len(name) > 100 or any(ord(char) < 32 for char in name)
+    ):
+        raise _http_error("部门名称不能为空，且不能超过 100 个字符", 400)
+    if status is not None and status not in {0, 1}:
+        raise _http_error("部门状态只能是启用或停用", 400)
+    if name is None and status is None:
+        raise _http_error("请至少修改部门名称或状态", 400)
+
+    db = None
+    try:
+        async with _db() as db:
+            available = (await db.execute(text(
+                "SELECT COUNT(*) = 1 AS available FROM information_schema.tables "
+                "WHERE table_schema = 'auth' AND table_name = 'departments'"
+            ))).scalar()
+            if not available:
+                raise _http_error(
+                    "部门主数据未初始化（请先应用 041_auth_departments 迁移）", 503)
+            if not await _department_audit_ready(db):
+                raise _http_error(
+                    "部门审计表未初始化（请先应用 102_rbac_department_audits 迁移）", 503)
+
+            current = (await db.execute(text(
+                "SELECT code, name, status, version, updated_at "
+                "FROM auth.departments "
+                "WHERE tenant_id = :tenant_id AND code = :code FOR UPDATE"
+            ), {"tenant_id": tenant_id, "code": normalized_code})).mappings().first()
+            if current is None:
+                raise _http_error("部门不存在", 404)
+            if int(_row_value(current, "version", 0)) != version:
+                raise _http_error("部门已被其他管理员修改，请刷新后重试", 409)
+
+            old_state = _department_public(current)
+            member_count = int((await db.execute(text(
+                "SELECT COUNT(*) FROM auth.users "
+                "WHERE tenant_id = :tenant_id AND dept = :code"
+            ), {"tenant_id": tenant_id, "code": normalized_code})).scalar() or 0)
+            old_state["memberCount"] = member_count
+            new_name = name if name is not None else old_state["name"]
+            new_status = status if status is not None else old_state["status"]
+            if old_state["status"] == 1 and new_status == 0:
+                if member_count:
+                    raise _http_error(
+                        f"部门仍有 {member_count} 位用户归属，请先调整用户部门后再停用",
+                        409,
+                    )
+
+            if new_name == old_state["name"] and new_status == old_state["status"]:
+                await db.commit()
+                return old_state
+
+            updated = (await db.execute(text(
+                "UPDATE auth.departments SET name = :name, status = :status, "
+                "version = version + 1, updated_at = now() "
+                "WHERE tenant_id = :tenant_id AND code = :code "
+                "AND version = :version "
+                "RETURNING code, name, status, version, updated_at"
+            ), {
+                "tenant_id": tenant_id, "code": normalized_code,
+                "name": new_name, "status": new_status, "version": version,
+            })).mappings().first()
+            if updated is None:
+                raise _http_error("部门已被其他管理员修改，请刷新后重试", 409)
+
+            new_state = _department_public(updated)
+            new_state["memberCount"] = member_count
+            name_changed = new_name != old_state["name"]
+            status_changed = new_status != old_state["status"]
+            action = (
+                "department.update" if name_changed and status_changed
+                else "department.update" if name_changed
+                else "department.activate" if new_status == 1
+                else "department.deactivate"
+            )
+            await _write_department_audit(
+                db, tenant_id=tenant_id, operator=operator,
+                code=normalized_code, name=new_name, action=action,
+                before_state=old_state, after_state=new_state,
+            )
+            await db.commit()
+    except HTTPException:
+        await _rollback(db)
+        raise
+    except Exception as exc:
+        await _rollback(db)
+        if _is_concurrency_conflict(exc):
+            raise HTTPException(
+                status_code=409,
+                detail="部门发生并发冲突，请刷新后重试",
+            ) from exc
+        logger.exception("[RBAC] 部门更新事务失败 tenant_id=%s code=%s", tenant_id, normalized_code)
+        raise HTTPException(status_code=500, detail="部门更新失败") from exc
+
+    updated_state = _department_public(updated)
+    updated_state["memberCount"] = member_count
+    return updated_state
+
+
+@router.patch("/departments/{code}")
+async def update_department(
+    code: str,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise _http_error("请求体必须是 JSON 对象", 400)
+    version = body.get("version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        raise _http_error("部门版本号必须是整数", 400)
+    name = body.get("name")
+    if name is not None and not isinstance(name, str):
+        raise _http_error("部门名称必须是字符串", 400)
+    raw_status = body.get("status")
+    if raw_status is not None and (isinstance(raw_status, bool) or not isinstance(raw_status, int)):
+        raise _http_error("部门状态必须是整数", 400)
+    return await _change_department(
+        code=code, request=request, operator=operator, version=version,
+        name=name.strip() if name is not None else None, status=raw_status,
+    )
+
+
+@router.delete("/departments/{code}")
+async def deactivate_department(
+    code: str,
+    request: Request,
+    version: int = Query(..., ge=0),
+    operator: OperatorIdentity = Depends(require_rbac_admin),
+):
+    """停用部门而非物理删除，保护历史审计和现有授权引用。"""
+    return await _change_department(
+        code=code, request=request, operator=operator, version=version,
+        status=0,
+    )
 
 
 @router.get("/users")
 async def list_users(
     request: Request,
     search: str = Query("", max_length=100),
+    status: int | None = Query(None, ge=0, le=1),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     operator: OperatorIdentity = Depends(require_rbac_admin),
@@ -697,6 +907,9 @@ async def list_users(
             "OR u.dept ILIKE :search)"
         )
         params["search"] = f"%{search}%"
+    if status is not None:
+        where += " AND u.status = :status"
+        params["status"] = status
 
     async with _db() as db:
         total_result = await db.execute(text(

@@ -35,7 +35,7 @@ _MEMORY_TABLES = [
     "llm_models", "llm_providers", "llm_provider_credentials",
     "llm_model_role_bindings", "llm_specialized_model_bindings",
     "model_price", "model_price_versions", "llm_config_history",
-    # Auth（008/009/023/029/033/041）
+    # Auth（008/009/023/029/033/041/102）
     "auth.users", "auth.sessions", "auth.refresh_tokens",
     "auth.departments", "auth.rbac_audits", "auth.department_audits",
     # Task Runtime + Idempotency（ai schema）
@@ -74,6 +74,7 @@ _MEMORY_COLUMNS = [
     "llm_models.model_kind",            # 039
     "auth.users.dept",                  # 041
     "auth.users.must_change_password",  # 033
+    "auth.departments.version",         # 103
     "doc_registry.fixture_set",         # 024
     "tasks.execution_id",               # 任务运行时租约
     "trace_summary.ttft_ms",            # 064（M13 尾项：TTFT 落库列）

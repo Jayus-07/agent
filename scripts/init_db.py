@@ -293,6 +293,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "101_travel_v2_trip_conversations.sql": "memory",
     # RBAC 部门创建审计，写入与 auth.departments 同库。
     "102_rbac_department_audits.sql": "memory",
+    # 部门名称/状态并发修改使用乐观锁版本号。
+    "103_auth_department_version.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

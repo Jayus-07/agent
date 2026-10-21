@@ -19,6 +19,7 @@ import {
   Search,
   ShieldCheck,
   UserPlus,
+  UserRound,
   Users,
 } from "lucide-react";
 import RoleGate from "@/components/auth/RoleGate";
@@ -98,6 +99,15 @@ function roleLabel(role: string | null | undefined): string {
 
 function auditChanges(item: RbacAuditItem): string {
   const changes: string[] = [];
+  const before = item.beforeState ?? {};
+  const after = item.afterState ?? {};
+  if (before.realName !== after.realName) {
+    changes.push(`姓名：${String(before.realName || "未填写")} → ${String(after.realName || "未填写")}`);
+  }
+  if (before.email !== after.email) changes.push("邮箱已更新");
+  if (before.dept !== after.dept) {
+    changes.push(`部门：${String(before.dept || "未分配")} → ${String(after.dept || "未分配")}`);
+  }
   if (item.oldPlatformRole !== item.newPlatformRole) {
     changes.push(
       `平台角色 ${roleLabel(item.oldPlatformRole)} → ${roleLabel(item.newPlatformRole)}`,
@@ -131,6 +141,7 @@ function AccessControlContent() {
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [userStatusFilter, setUserStatusFilter] = useState<"all" | "active" | "inactive">("all");
   const [drafts, setDrafts] = useState<Record<number, UserDraft>>({});
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [loadingAudit, setLoadingAudit] = useState(false);
@@ -146,6 +157,9 @@ function AccessControlContent() {
   const [creating, setCreating] = useState(false);
   const [issuedPassword, setIssuedPassword] = useState<string | null>(null);
   const [detail, setDetail] = useState<RbacUserDetail | null>(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actingUserId, setActingUserId] = useState<number | null>(null);
@@ -159,7 +173,7 @@ function AccessControlContent() {
     setLoadingDepartments(true);
     setDepartmentLoadError(null);
     try {
-      setDepartments(await listRbacDepartments());
+      setDepartments(await listRbacDepartments({ includeInactive: true }));
       return true;
     } catch (error) {
       setDepartmentLoadError(
@@ -181,7 +195,12 @@ function AccessControlContent() {
     setLoadingUsers(true);
     setPageError(null);
     try {
-      const result = await listRbacUsers({ search, page, pageSize: PAGE_SIZE });
+      const result = await listRbacUsers({
+        search,
+        status: userStatusFilter === "all" ? undefined : userStatusFilter === "active" ? 1 : 0,
+        page,
+        pageSize: PAGE_SIZE,
+      });
       setUsers(result.items);
       setTotal(result.total);
       setDrafts(
@@ -198,7 +217,7 @@ function AccessControlContent() {
     } finally {
       setLoadingUsers(false);
     }
-  }, [page, search]);
+  }, [page, search, userStatusFilter]);
 
   const loadAudit = useCallback(async () => {
     setLoadingAudit(true);
@@ -310,6 +329,9 @@ function AccessControlContent() {
 
   const toggleUserStatus = async (user: RbacUser) => {
     if (actingUserId !== null) return;
+    if (user.status === 1 && !window.confirm(
+      `停用「${user.realName || user.username}」？账号会立即失去访问权限，历史记录会保留；之后可以重新启用。`,
+    )) return;
     setActingUserId(user.userId);
     setActionError(null);
     try {
@@ -323,6 +345,7 @@ function AccessControlContent() {
         ),
       );
       setDrafts((current) => ({ ...current, [user.userId]: draftFor({ ...user, ...updated }) }));
+      await loadUsers();
     } catch (error) {
       setActionError(readableError(error, "账号状态变更失败，请稍后重试。"));
     } finally {
@@ -364,12 +387,43 @@ function AccessControlContent() {
   const openDetail = async (user: RbacUser) => {
     setDetailLoading(true);
     setActionError(null);
+    setEditingProfile(false);
+    setProfileError(null);
     try {
       setDetail(await getRbacUserDetail(user.userId));
     } catch (error) {
       setActionError(readableError(error, "用户详情加载失败，请稍后重试。"));
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const submitProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!detail || savingProfile) return;
+    const form = new FormData(event.currentTarget);
+    const realName = String(form.get("realName") || "").trim();
+    const email = String(form.get("email") || "").trim();
+    setSavingProfile(true);
+    setProfileError(null);
+    try {
+      const updated = await updateRbacUser(detail.userId, {
+        version: detail.version,
+        realName,
+        email,
+      });
+      setDetail((current) => current ? {
+        ...current,
+        realName: updated.realName,
+        email: updated.email ?? "",
+        version: updated.version,
+      } : current);
+      setEditingProfile(false);
+      await loadUsers();
+    } catch (error) {
+      setProfileError(readableError(error, "用户资料更新失败，请稍后重试。"));
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -398,7 +452,7 @@ function AccessControlContent() {
 
   return (
     <div className="mx-auto w-full max-w-7xl space-y-5 p-4 sm:p-6 lg:p-8">
-      <header className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white/90 p-5 shadow-card sm:flex-row sm:items-center sm:justify-between">
+      <header className="flex flex-col gap-4 rounded-2xl border border-gray-200 bg-white/90 p-5 shadow-card lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex items-center gap-2 text-accent">
             <ShieldCheck size={17} aria-hidden="true" />
@@ -422,14 +476,14 @@ function AccessControlContent() {
       </header>
 
       <section className="rounded-2xl border border-gray-200 bg-white/90 shadow-card">
-        <div className="flex flex-col gap-3 border-b border-gray-100 px-4 pt-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+        <div className="flex flex-col gap-3 border-b border-gray-100 px-4 pt-4 lg:flex-row lg:items-center lg:justify-between lg:px-5">
           <div className="flex flex-wrap gap-1" role="tablist" aria-label="访问控制内容">
             <button
               type="button"
               role="tab"
               aria-selected={tab === "users"}
               onClick={() => setTab("users")}
-              className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "users" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "users" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               用户
             </button>
@@ -438,7 +492,7 @@ function AccessControlContent() {
               role="tab"
               aria-selected={tab === "departments"}
               onClick={() => setTab("departments")}
-              className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "departments" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+              className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "departments" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               <Building2 size={14} aria-hidden="true" />
               部门
@@ -448,7 +502,7 @@ function AccessControlContent() {
               role="tab"
               aria-selected={tab === "roles"}
               onClick={() => setTab("roles")}
-              className={`rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "roles" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+              className={`whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "roles" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               角色
             </button>
@@ -457,7 +511,7 @@ function AccessControlContent() {
               role="tab"
               aria-selected={tab === "audit"}
               onClick={() => setTab("audit")}
-              className={`flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "audit" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
+              className={`flex items-center gap-1.5 whitespace-nowrap rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none ${tab === "audit" ? "bg-accent/10 text-accent" : "text-text-secondary hover:bg-gray-50"}`}
             >
               <History size={14} aria-hidden="true" />
               审计
@@ -465,10 +519,10 @@ function AccessControlContent() {
             </button>
           </div>
           {tab === "users" && (
-            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-              <form className="flex w-full gap-2 sm:w-auto" onSubmit={submitSearch}>
+            <div className="flex w-full flex-col gap-2 lg:w-auto lg:flex-row lg:items-center">
+              <form className="flex w-full gap-2 lg:w-auto" onSubmit={submitSearch}>
                 <label className="sr-only" htmlFor="rbac-user-search">搜索用户</label>
-                <div className="relative min-w-0 flex-1 sm:w-64">
+                <div className="relative min-w-0 flex-1 lg:w-64">
                   <Search size={14} className="pointer-events-none absolute left-3 top-2.5 text-text-muted" aria-hidden="true" />
                   <input
                     id="rbac-user-search"
@@ -485,6 +539,20 @@ function AccessControlContent() {
                   搜索
                 </button>
               </form>
+              <label className="sr-only" htmlFor="rbac-user-status">账号状态</label>
+              <select
+                id="rbac-user-status"
+                value={userStatusFilter}
+                onChange={(event) => {
+                  setUserStatusFilter(event.target.value as typeof userStatusFilter);
+                  setPage(1);
+                }}
+                className="h-9 rounded-lg border border-gray-200 bg-white px-2.5 text-xs text-text-secondary outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+              >
+                <option value="all">全部账号</option>
+                <option value="active">启用中</option>
+                <option value="inactive">已停用</option>
+              </select>
               <button
                 type="button"
                 onClick={() => { setShowCreate(true); setCreateError(null); }}
@@ -531,7 +599,7 @@ function AccessControlContent() {
             ) : (
               <>
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
-                  <table className="min-w-[980px] w-full border-collapse text-left text-xs">
+                  <table className="min-w-[820px] w-full border-collapse text-left text-xs">
                     <caption className="sr-only">用户与客服权限列表</caption>
                     <thead className="bg-surface-elevated text-[11px] font-medium text-text-secondary">
                       <tr>
@@ -553,7 +621,12 @@ function AccessControlContent() {
                             <td className="px-3 py-3">
                               <div className="font-medium">{user.realName || user.username}</div>
                               <div className="mt-0.5 text-[11px] text-text-muted">{user.username} · {user.dept || "未填写部门"}</div>
-                              <div className="mt-1 text-[10px] text-text-muted">账号{user.status === 1 ? "已启用" : "已停用"}</div>
+                              <div className="mt-1">
+                                <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] ${user.status === 1 ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
+                                  <span className={`h-1.5 w-1.5 rounded-full ${user.status === 1 ? "bg-emerald-500" : "bg-gray-400"}`} aria-hidden="true" />
+                                  {user.status === 1 ? "启用中" : "已停用"}
+                                </span>
+                              </div>
                             </td>
                             <td className="px-3 py-3">
                               <label className="sr-only" htmlFor={`platform-role-${user.userId}`}>平台角色</label>
@@ -576,7 +649,7 @@ function AccessControlContent() {
                                 className="mt-1.5 block rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                               >
                                 <option value="">未分配部门</option>
-                                {departments.map((d) => (
+                                {departments.filter((d) => d.status === 1).map((d) => (
                                   <option key={d.code} value={d.code}>{d.name}</option>
                                 ))}
                               </select>
@@ -631,7 +704,8 @@ function AccessControlContent() {
                             </td>
                             <td className="px-3 py-3 text-text-secondary">{user.sessionCount}</td>
                             <td className="px-3 py-3 text-right">
-                              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                              <div className="flex flex-col items-end gap-1.5">
+                                <div className="flex items-center justify-end gap-1.5">
                                 <button
                                   type="button"
                                   disabled={actingUserId === user.userId}
@@ -647,34 +721,41 @@ function AccessControlContent() {
                                   onClick={() => void toggleUserStatus(user)}
                                   className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
                                 >
-                                  {user.status === 1 ? "禁用" : "启用"}
+                                  {user.status === 1 ? "停用账号" : "重新启用"}
                                 </button>
+                                </div>
+                                <div className="flex items-center justify-end gap-1">
                                 <button
                                   type="button"
                                   disabled={actingUserId === user.userId}
                                   onClick={() => void resetPassword(user)}
-                                  className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                  aria-label={`重置${user.realName || user.username}的密码`}
+                                  title="重置密码"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                                 >
-                                  <KeyRound size={12} aria-hidden="true" />
-                                  重置密码
+                                  <KeyRound size={14} aria-hidden="true" />
                                 </button>
                                 <button
                                   type="button"
                                   disabled={actingUserId === user.userId}
                                   onClick={() => void forceLogout(user)}
-                                  className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                  aria-label={`强制下线${user.realName || user.username}`}
+                                  title="强制下线"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                                 >
-                                  <LogOut size={12} aria-hidden="true" />
-                                  强制下线
+                                  <LogOut size={14} aria-hidden="true" />
                                 </button>
                                 <button
                                   type="button"
                                   disabled={detailLoading}
                                   onClick={() => void openDetail(user)}
-                                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent motion-reduce:transition-none"
+                                  aria-label={`查看${user.realName || user.username}详情`}
+                                  title="查看详情"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 text-text-secondary hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                                 >
-                                  详情
+                                  <UserRound size={14} aria-hidden="true" />
                                 </button>
+                                </div>
                               </div>
                               {(rowErrors[user.userId] || actionError) && (
                                 <p className="mt-2 max-w-56 text-left text-[11px] leading-4 text-red-600" role="alert">
@@ -871,7 +952,7 @@ function AccessControlContent() {
                   className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                 >
                   <option value="">未分配部门</option>
-                  {departments.map((d) => (
+                  {departments.filter((d) => d.status === 1).map((d) => (
                     <option key={d.code} value={d.code}>{d.name}</option>
                   ))}
                 </select>
@@ -902,10 +983,25 @@ function AccessControlContent() {
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" role="dialog" aria-modal="true" aria-label="用户详情">
           <div className="max-h-[85vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-gray-200 bg-white p-5 shadow-card">
-            <h2 className="text-sm font-semibold text-text-primary">用户详情</h2>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-text-primary">用户详情</h2>
+                <p className="mt-1 text-[11px] text-text-muted">账号标识保持不变，可更新姓名和联系邮箱。</p>
+              </div>
+              {!editingProfile && (
+                <button
+                  type="button"
+                  onClick={() => { setProfileError(null); setEditingProfile(true); }}
+                  className="rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-text-secondary hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                >
+                  编辑资料
+                </button>
+              )}
+            </div>
             <dl className="mt-3 grid grid-cols-[96px_1fr] gap-x-3 gap-y-2 text-xs">
               {[
                 ["用户名", detail.username],
+                ["姓名", detail.realName || "—"],
                 ["邮箱", detail.email || "—"],
                 ["租户", detail.tenantId],
                 ["部门", detail.dept || "—"],
@@ -923,11 +1019,33 @@ function AccessControlContent() {
                 </div>
               ))}
             </dl>
-            <div className="mt-4 flex justify-end">
-              <button type="button" onClick={() => setDetail(null)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
-                关闭
-              </button>
-            </div>
+            {editingProfile && (
+              <form className="mt-4 space-y-3 rounded-xl border border-gray-100 bg-surface-elevated p-3" onSubmit={submitProfile}>
+                <div>
+                  <label htmlFor="profile-real-name" className="text-xs text-text-secondary">姓名</label>
+                  <input id="profile-real-name" name="realName" maxLength={100} defaultValue={detail.realName} className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+                </div>
+                <div>
+                  <label htmlFor="profile-email" className="text-xs text-text-secondary">联系邮箱</label>
+                  <input id="profile-email" name="email" type="email" maxLength={255} defaultValue={detail.email} className="mt-1 h-9 w-full rounded-lg border border-gray-200 bg-white px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+                </div>
+                {profileError && <p className="text-[11px] text-red-600" role="alert">{profileError}</p>}
+                <div className="flex justify-end gap-2 pt-1">
+                  <button type="button" disabled={savingProfile} onClick={() => setEditingProfile(false)} className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-text-secondary hover:bg-white disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">取消</button>
+                  <button type="submit" disabled={savingProfile} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                    {savingProfile && <RefreshCw size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                    {savingProfile ? "保存中…" : "保存资料"}
+                  </button>
+                </div>
+              </form>
+            )}
+            {!editingProfile && (
+              <div className="mt-4 flex justify-end">
+                <button type="button" onClick={() => setDetail(null)} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
+                  关闭
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

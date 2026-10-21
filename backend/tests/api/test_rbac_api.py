@@ -218,6 +218,8 @@ class _FakeRbacSession:
                     user for user in users
                     if user["tenant_id"] == params["tenant_id"]
                 ]
+            if "u.status = :status" in normalized:
+                users = [user for user in users if user["status"] == params["status"]]
             search = (params.get("search") or "").strip("%").lower()
             if search:
                 users = [
@@ -250,7 +252,7 @@ class _FakeRbacSession:
                 if session["user_id"] == uid and session["revoked_at"] is None
             ])
 
-        if "select id, username, real_name, dept, role, status, version" in normalized:
+        if "select id, username, real_name, email, dept, role, status, version" in normalized:
             user = next(
                 (
                     item for item in self.users
@@ -270,6 +272,9 @@ class _FakeRbacSession:
             for user in self.users:
                 if "u.tenant_id = :tenant_id" in normalized \
                         and user["tenant_id"] != params["tenant_id"]:
+                    continue
+                if "u.status = :status" in normalized \
+                        and user["status"] != params["status"]:
                     continue
                 haystack = " ".join(
                     str(user[key]).lower()
@@ -311,7 +316,7 @@ class _FakeRbacSession:
                 return _FakeResult()
             if "expected_version" in params and user["version"] != params["expected_version"]:
                 return _FakeResult()
-            for key in ("role", "status"):
+            for key in ("role", "status", "dept", "real_name", "email"):
                 if key in params:
                     user[key] = params[key]
             user["version"] += 1
@@ -459,6 +464,33 @@ def test_admin_user_list_returns_paginated_safe_fields(monkeypatch):
         "version", "sessionCount", "csAgent",
     }
     assert "password_hash" not in response.text
+
+
+def test_admin_user_list_can_filter_enabled_status(monkeypatch):
+    client = _client(monkeypatch, _FakeRbacSession())
+
+    response = client.get("/api/sys/rbac/users?status=0")
+
+    assert response.status_code == 200
+    assert response.json()["total"] == 1
+    assert response.json()["items"][0]["username"] == "disabled-user"
+
+
+def test_admin_can_update_user_profile_with_audit(monkeypatch):
+    session = _FakeRbacSession()
+    client = _client(monkeypatch, session)
+
+    response = client.patch(
+        "/api/sys/rbac/users/2",
+        json={"version": 0, "realName": "客服乙", "email": "service@example.com"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["realName"] == "客服乙"
+    assert response.json()["email"] == "service@example.com"
+    assert session.users[1]["real_name"] == "客服乙"
+    assert session.users[1]["email"] == "service@example.com"
+    assert '"realName": "客服乙"' in session.audits[-1]["after_state"]
 
 
 def test_update_rejects_invalid_role_and_version_conflict(monkeypatch):

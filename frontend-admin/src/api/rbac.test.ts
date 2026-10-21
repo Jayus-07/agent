@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/fetcher";
 import { request } from "@/lib/fetcher";
-import { listRbacAudit, listRbacUsers, updateRbacUser } from "./rbac";
+import {
+  deactivateRbacDepartment,
+  listRbacAudit,
+  listRbacDepartments,
+  listRbacUsers,
+  updateRbacDepartment,
+  updateRbacUser,
+} from "./rbac";
 
 vi.mock("@/lib/fetcher", () => ({
   ApiError: class ApiError extends Error {
@@ -30,10 +37,10 @@ describe("RBAC API 客户端", () => {
     });
 
     await expect(
-      listRbacUsers({ search: "alice", page: 2, pageSize: 10 }),
+      listRbacUsers({ search: "alice", status: 0, page: 2, pageSize: 10 }),
     ).resolves.toMatchObject({ total: 0, pageSize: 10 });
     expect(request).toHaveBeenCalledWith(
-      "/api/sys/rbac/users?search=alice&page=2&page_size=10",
+      "/api/sys/rbac/users?search=alice&status=0&page=2&page_size=10",
     );
   });
 
@@ -49,6 +56,8 @@ describe("RBAC API 客户端", () => {
     await updateRbacUser(7, {
       version: 8,
       platformRole: "editor",
+      realName: "Alice",
+      email: "alice@example.com",
       csRole: "agent",
       maxConversations: 4,
       enabled: true,
@@ -62,6 +71,8 @@ describe("RBAC API 客户端", () => {
         body: JSON.stringify({
           version: 8,
           platformRole: "editor",
+          realName: "Alice",
+          email: "alice@example.com",
           csRole: "agent",
           maxConversations: 4,
           enabled: true,
@@ -72,6 +83,43 @@ describe("RBAC API 客户端", () => {
     expect(JSON.stringify(vi.mocked(request).mock.calls[0])).not.toContain(
       "agentId",
     );
+  });
+
+  it("部门目录可选包含停用项，改名和停用都携带版本号", async () => {
+    vi.mocked(request).mockResolvedValueOnce({ items: [] });
+    await listRbacDepartments({ includeInactive: true });
+    expect(request).toHaveBeenCalledWith(
+      "/api/sys/rbac/departments?include_inactive=true",
+    );
+
+    vi.mocked(request).mockResolvedValueOnce({ code: "sales", name: "销售部" });
+    await updateRbacDepartment("sales", { version: 4, name: "华东销售部" });
+    expect(request).toHaveBeenLastCalledWith(
+      "/api/sys/rbac/departments/sales",
+      { method: "PATCH", body: JSON.stringify({ version: 4, name: "华东销售部" }) },
+    );
+
+    vi.mocked(request).mockResolvedValueOnce({ code: "sales", status: 0 });
+    await deactivateRbacDepartment("sales", 5);
+    expect(request).toHaveBeenLastCalledWith(
+      "/api/sys/rbac/departments/sales?version=5",
+      { method: "DELETE" },
+    );
+  });
+
+  it("兼容仅返回已启用部门名称和编码的旧列表响应", async () => {
+    vi.mocked(request).mockResolvedValueOnce({
+      items: [{ code: "support", name: "客服部" }],
+    });
+
+    await expect(listRbacDepartments()).resolves.toEqual([{
+      code: "support",
+      name: "客服部",
+      status: 1,
+      version: null,
+      memberCount: null,
+      updatedAt: null,
+    }]);
   });
 
   it("审计请求使用 snake_case query，并保留 camelCase 审计字段", async () => {
