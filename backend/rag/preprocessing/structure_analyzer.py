@@ -10,6 +10,7 @@ P1 Structure Profile（2026-10-13）：StructureReport 携带结构信号集合
 """
 from __future__ import annotations
 
+import copy
 import re
 from dataclasses import dataclass, field
 
@@ -18,7 +19,10 @@ from backend.rag.preprocessing.ast import DocumentAST, DocumentNode, LEAF_TYPES,
 from backend.rag.preprocessing.token_counter import count_tokens
 
 _STEP_HEADING_RE = re.compile(r"^[一二三四五六七八九十]+、")
-_LEGAL_CLAUSE_RE = re.compile(r"^第[一二三四五六七八九十百\d]+条")
+_LEGAL_CLAUSE_RE = re.compile(r"^第[零〇两一二三四五六七八九十百千万\d]+条")
+_LEGAL_CLAUSE_LINE_RE = re.compile(
+    r"(?m)^[ \t]*(?P<marker>第[零〇两一二三四五六七八九十百千万\d]+条)"
+)
 
 
 @dataclass
@@ -83,6 +87,68 @@ def build_profile(ast: DocumentAST) -> StructureProfile:
     return profile
 
 
+def _normalize_inline_legal_clauses(ast: DocumentAST) -> DocumentAST:
+    """把同一解析叶子中的多条制度条款归一化为独立 section 节点。
+
+    PDF 版面提取经常把连续的多条款合在一个 paragraph 中。覆盖率审计只能
+    证明正文没有丢，不能证明条款边界正确；这里按行首条款编号把合并叶子拆成
+    独立叶子，再交给既有 LegalChunkStrategy 切分。原始 AST 保持不变，清洗
+    审计和来源证据仍基于解析器原始节点。
+    """
+    marker_count = sum(
+        (
+            len(_LEGAL_CLAUSE_LINE_RE.findall(node.text or ""))
+            if node.type in {"paragraph", "list"}
+            else int(bool(_LEGAL_CLAUSE_RE.match((node.text or "").strip())))
+        )
+        for node in walk(ast.root)
+        if node.type in {"paragraph", "list", "section"}
+    )
+    if marker_count < 2:
+        return ast
+
+    normalized = copy.deepcopy(ast)
+
+    def _visit(parent: DocumentNode) -> None:
+        normalized_children: list[DocumentNode] = []
+        for child in parent.children:
+            if child.type == "section":
+                _visit(child)
+                normalized_children.append(child)
+                continue
+            if child.type not in {"paragraph", "list"}:
+                normalized_children.append(child)
+                continue
+
+            text = child.text or ""
+            matches = list(_LEGAL_CLAUSE_LINE_RE.finditer(text))
+            if not matches:
+                normalized_children.append(child)
+                continue
+
+            prefix = text[:matches[0].start()].strip()
+            if prefix:
+                prefix_node = copy.deepcopy(child)
+                prefix_node.text = prefix
+                prefix_node.raw_text = ""
+                prefix_node.children = []
+                normalized_children.append(prefix_node)
+
+            for index, match in enumerate(matches):
+                end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+                clause_text = text[match.start():end].strip()
+                if clause_text:
+                    clause = copy.deepcopy(child)
+                    clause.text = clause_text
+                    clause.raw_text = ""
+                    clause.children = []
+                    normalized_children.append(clause)
+        parent.children = normalized_children
+
+    _visit(normalized.root)
+    return normalized
+
+
 def _find_parent_section(root: DocumentNode, target: DocumentNode) -> DocumentNode | None:
     """在 AST 中查找 target 的直接父 section 节点。"""
     stack: list[tuple[DocumentNode, DocumentNode | None]] = [(root, None)]
@@ -100,15 +166,14 @@ def _find_parent_section(root: DocumentNode, target: DocumentNode) -> DocumentNo
 
 class StructureAnalyzer:
     def analyze(self, raw_ast: DocumentAST) -> tuple[DocumentAST, StructureReport]:
-        # Phase 1 归一化为最小实现：原样透传（结构已由 Parser 建好）
-        normalized = raw_ast
-        completeness = self._compute_completeness(raw_ast)
-        deficit = self._detect_deficit(raw_ast, completeness)
+        normalized = _normalize_inline_legal_clauses(raw_ast)
+        completeness = self._compute_completeness(normalized)
+        deficit = self._detect_deficit(normalized, completeness)
         report = StructureReport(
             ast=normalized,
             completeness=completeness,
             deficit_signal=deficit,
-            profile=build_profile(raw_ast),
+            profile=build_profile(normalized),
         )
         return normalized, report
 

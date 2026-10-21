@@ -1,4 +1,4 @@
-"""原文定位（P0）回归：页码从解析层到来源卡的全链透传。
+"""原文定位（P0）回归：页码与版面位置从解析层到 chunk 的透传。
 
 链路：pdf_parser 叶子节点 page_number（§5.2 可追溯字段）→
 chunking.stamp_chunk_pages 回映射 chunk.metadata["pages"]（标量逗号串，
@@ -11,6 +11,7 @@ format_references 文本协议）→ reporter.parse_sources_from_text 反解析
 - 参考文献行新格式解析 + 旧格式向后兼容（无定位段行不受影响）；
 - extract_sources 与文本解析两出口的 pages/section 字段一致。
 """
+import json
 import types
 
 from langchain_core.documents import Document
@@ -42,6 +43,9 @@ def test_stamp_chunk_pages_merges_leaf_prefixes():
                        metadata={})]
     stamp_chunk_pages(chunks, ast)
     assert chunks[0].metadata["pages"] == "1,3"
+    locations = json.loads(chunks[0].metadata["source_locations_json"])
+    assert [item["page"] for item in locations] == [1, 3]
+    assert all(item["bbox"] == [0, 0, 0, 0] for item in locations)
 
 
 def test_stamp_chunk_pages_maps_slice_back_to_leaf():
@@ -60,6 +64,29 @@ def test_stamp_chunk_pages_rewritten_text_gets_no_pages():
     ast = _ast_with_pages()
     chunk = Document(page_content="问题：报销范围是什么？\n答案：（模板重写内容）", metadata={})
     stamp_chunk_pages([chunk], ast)
+    assert "pages" not in chunk.metadata
+
+
+def test_stamp_chunk_pages_maps_unique_short_source_text():
+    """短块只有唯一回源位置时也能带页码和版面坐标。"""
+    ast = _ast_with_pages()
+    chunk = Document(page_content="报销范围", metadata={})
+
+    stamp_chunk_pages([chunk], ast)
+
+    assert chunk.metadata["pages"] == "1"
+    assert json.loads(chunk.metadata["source_locations_json"]) == [
+        {"page": 1, "bbox": [0, 0, 0, 0]},
+    ]
+
+
+def test_stamp_chunk_pages_does_not_guess_ambiguous_short_source_text():
+    """重复短语对应多页时保持无页码，避免错误引用。"""
+    ast = _ast_with_pages()
+    chunk = Document(page_content="报销", metadata={})
+
+    stamp_chunk_pages([chunk], ast)
+
     assert "pages" not in chunk.metadata
 
 

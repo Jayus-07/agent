@@ -1410,7 +1410,7 @@ class IncrementalIndexer:
                         ocr_lineage[0], status="skipped",
                         started_at=ocr_lineage[1],
                         skip_reason=(
-                            "feature_disabled"
+                            "ocr_unavailable"
                             if ocr_required
                             else "text_layer_sufficient"
                         ),

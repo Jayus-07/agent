@@ -216,13 +216,57 @@ def _doc_title(ast: DocumentAST) -> str:
     return ast.document_title.strip()
 
 
+def _section_ancestor_titles(ast: DocumentAST, target: DocumentNode) -> list[str]:
+    """返回条款 section 的章节祖先标题，保持 AST 中的层级顺序。"""
+    document_title_node = _doc_title_node(ast)
+
+    def _find(node: DocumentNode, path: list[str]) -> list[str] | None:
+        for child in node.children:
+            if child.type != "section":
+                continue
+            if child is target:
+                return path
+            next_path = path
+            if child.level > 0 and child is not document_title_node and child.text.strip():
+                next_path = path + [child.text.strip()]
+            found = _find(child, next_path)
+            if found is not None:
+                return found
+        return None
+
+    return _find(ast.root, []) or []
+
+
+def _iter_leaf_nodes_with_section_path(ast: DocumentAST):
+    """按文档顺序遍历叶子，并保留其章节祖先路径。"""
+    document_title_node = _doc_title_node(ast)
+
+    def _visit(node: DocumentNode, path: list[str]):
+        for child in node.children:
+            if child.type == "section":
+                next_path = path
+                if (
+                    child.level > 0
+                    and child is not document_title_node
+                    and child.text.strip()
+                ):
+                    next_path = path + [child.text.strip()]
+                yield from _visit(child, next_path)
+            elif child.type in LEAF_TYPES:
+                yield child, path
+            elif child.children:
+                yield from _visit(child, path)
+
+    yield from _visit(ast.root, [])
+
+
 def _is_section_heading(text: str) -> bool:
     """判断文本是否中文编号章节标题（一、二、三、）。"""
     return bool(_SECTION_HEADING_RE.match(text.strip()))
 
 
 # 法律条款编号（第 N 条），用于 legal 文档的条款级切分
-_LEGAL_CLAUSE_RE = re.compile(r"^第[一二三四五六七八九十百\d]+条")
+_LEGAL_CLAUSE_RE = re.compile(r"^第[零〇两一二三四五六七八九十百千万\d]+条")
 
 
 def _is_legal_clause(text: str) -> bool:
@@ -372,9 +416,10 @@ def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
     同 ocr_triggered）；非 PDF 文档叶子无 page_number → 整体无页码可标。
     单点收口在 parse_and_chunk_full，8 个切分策略零改动（G2）。
     """
-    leaves: list[tuple[str, str, int]] = []
+    sources: list[tuple[str, str, int, tuple]] = []
+    fallback_sources: list[tuple[str, int, tuple]] = []
     for n in walk(ast.root):
-        if n.type not in LEAF_TYPES:
+        if n.type not in LEAF_TYPES and n.type != "section":
             continue
         try:
             page = int(getattr(n, "page_number", 0) or 0)
@@ -384,8 +429,12 @@ def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
             continue
         text = (n.text or "").strip()
         if text:
-            leaves.append((text[:60], text, page))
-    if not leaves:
+            bbox = tuple(getattr(n, "bbox", ()) or ())
+            sources.append((text[:60], text, page, bbox))
+            if n.type in LEAF_TYPES:
+                normalized = " ".join(text.split()).casefold()
+                fallback_sources.append((normalized, page, bbox))
+    if not sources:
         return
     for c in chunks:
         meta = getattr(c, "metadata", None)
@@ -394,11 +443,37 @@ def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
             continue
         core = body[:200]
         pages: set = set()
-        for prefix, full, page in leaves:
+        locations: set[tuple[int, tuple]] = set()
+        for prefix, full, page, bbox in sources:
             if prefix in body or (len(core) >= 40 and core in full):
                 pages.add(page)
+                locations.add((page, bbox))
+        # 超短切分块没有足够长的核心用于双向包含，但可能仍能唯一回源。
+        # 仅在其完整规范化文本只命中一个带页码叶子位置时补映射；重复短语
+        #（如“执行”“应当”）不标页，继续遵守宁缺勿错。
+        if not locations:
+            normalized_body = " ".join(body.split()).casefold()
+            if len(normalized_body) >= 4:
+                exact_locations = {
+                    (page, bbox)
+                    for full, page, bbox in fallback_sources
+                    if normalized_body in full
+                }
+                if len(exact_locations) == 1:
+                    page, bbox = next(iter(exact_locations))
+                    pages.add(page)
+                    locations.add((page, bbox))
         if pages:
             meta["pages"] = ",".join(str(p) for p in sorted(pages))
+            ordered = sorted(locations, key=lambda item: (item[0], item[1]))[:32]
+            meta["source_locations_json"] = json.dumps(
+                [
+                    {"page": page, "bbox": list(bbox) if bbox else None}
+                    for page, bbox in ordered
+                ],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
 
 
 def _iter_leaves_with_section(ast: DocumentAST):
@@ -1151,30 +1226,40 @@ class LegalChunkStrategy:
         chunks: List[Document] = []
         current: list[str] = []
         current_clause = ""
-        for n in walk(ast.root):
-            if n.type not in LEAF_TYPES:
-                continue
-            if _is_legal_clause(n.text) and current:
-                # 新条款 → flush 之前的 chunk（P1-9: 条款编号作为 section_title；
-                # P0-05: 超长条款继续切分，子块保留条款身份）
-                chunks.extend(_make_leaf_chunks_bounded(
-                    current, file_path,
-                    section_title=current_clause, section_level=1 if current_clause else 0,
-                    section_path=[current_clause] if current_clause else [],
-                    preserve_source=True,
-                ))
-                current = []
-            if _is_legal_clause(n.text):
-                current_clause = n.text
-            current.append(n.text)
+        current_prefix: list[str] = []
+        current_path: list[str] = []
 
-        if current:
+        def _flush_current() -> None:
+            if not current:
+                return
+            chunk_texts = [*current_prefix, *current]
             chunks.extend(_make_leaf_chunks_bounded(
-                current, file_path,
-                section_title=current_clause, section_level=1 if current_clause else 0,
-                section_path=[current_clause] if current_clause else [],
+                chunk_texts, file_path,
+                section_title=current_clause,
+                section_level=len(current_path),
+                section_path=current_path,
                 preserve_source=True,
             ))
+            current.clear()
+
+        doc_title = _doc_title(ast)
+        for n, ancestor_titles in _iter_leaf_nodes_with_section_path(ast):
+            clause_match = _LEGAL_CLAUSE_RE.match((n.text or "").strip())
+            if clause_match:
+                _flush_current()
+                current_clause = clause_match.group(0)
+                current_prefix = [
+                    part for part in (doc_title, *ancestor_titles) if part
+                ]
+                current_path = [*current_prefix, current_clause]
+            elif not current:
+                current_clause = ""
+                current_prefix = [
+                    part for part in (doc_title, *ancestor_titles) if part
+                ]
+                current_path = list(current_prefix)
+            current.append(n.text)
+        _flush_current()
 
         # C1: 每连续 N 条款挂一个虚拟 parent（默认 5，LEGAL_CLAUSES_PER_PARENT），
         # 修复 legal/contract_template leaf 无 parent_chunk_id 的检索退化
@@ -1219,6 +1304,11 @@ class LegalChunkStrategy:
         for clause_index, section in enumerate(clause_sections, start=1):
             section_id = f"clause_{clause_index}"
             clause_title = section.text.strip()
+            ancestor_titles = _section_ancestor_titles(ast, section)
+            context_path = [
+                part for part in (doc_title, *ancestor_titles, clause_title)
+                if part
+            ]
             items: list[dict] = []
             tables: list[dict] = []
             for node in walk(section):
@@ -1249,7 +1339,7 @@ class LegalChunkStrategy:
                             item["value"],
                         ).strip()
 
-            prefix_parts = [part for part in (doc_title, clause_title) if part]
+            prefix_parts = context_path
             prefix = "\n".join(prefix_parts)
             text_parts = [prefix] if prefix else []
             full_items: list[str] = []
@@ -1278,7 +1368,7 @@ class LegalChunkStrategy:
             records.append({
                 "section_id": section_id,
                 "section_title": clause_title,
-                "section_path": [part for part in (doc_title, clause_title) if part],
+                "section_path": context_path,
                 "prefix": prefix,
                 "body_text": "\n".join(body_texts),
                 "items": items,
@@ -2108,7 +2198,7 @@ _STRATEGY_VERSIONS = {
     "FixedSizeChunkStrategy": "v2",
     "RecursiveChunkStrategy": "v2",
     "StepChunkStrategy": "v2",
-    "LegalChunkStrategy": "v3",
+    "LegalChunkStrategy": "v4",
     "QAChunkStrategy": "v2",
     "FinancialTableChunkStrategy": "v2",
     "SemanticChunkStrategy": "v1",

@@ -82,6 +82,9 @@ flowchart TD
   - 识别到的 FAQ 问答以每个完整 Q+A 对作为独立 Leaf；不再为整份 FAQ 生成只列问题、不含答案的虚拟 Parent，避免一个 FAQ 命中后把所有问题都附加到回答上下文。Parent-Child 仍用于有实际跨块上下文价值的其他策略。
   - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。
   - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号；Router 强信号豁免：legal(≥3条款)/faq(qa节点)/sop(≥3标题) 与 doc_type 同时成立时不因整篇完整度 < 阈值降级 Recursive。`route_with_decision` 产出 `ChunkRouteDecision`（信号/策略版本/降级原因/处理范围）随质量记录与 Trace 落盘，策略版本表 `_STRATEGY_VERSIONS` 在 chunking.py 集中维护。
+  - 解析结果契约：Parser 输出 `DocumentAST`，PDF 节点 `page_number` 为 1-based，`bbox` 使用 PDF 页面坐标；Chunk 以标量 `pages` 和 `source_locations_json` 传递页码与 bbox，避免向量库对 list/dict metadata 的后端差异。质量记录 schema 1.1 另存 `parse_status`（complete/partial/failed）、按页 `parse_issues`、OCR 状态、图片页、表格检测失败页和跳过页；问题记录只保存代码、严重度、页码及短说明，不复制正文。
+  - PDF OCR 按页和图片区域判定：低文本量扫描页识别页内图片；文字层充足但含大面积图片的页面只裁剪图片 bbox 做 OCR，避免整页重复提取原生文字；全篇没有原生文本时逐页兜底。质量记录保留所需页码/区域 bbox、失败页码/区域 bbox；供应商不可用、页数上限或区域识别失败属于硬异常，不允许残缺内容进入 `active`。OCR 只提取图中文字，不声称能还原图表行列或图片语义；表格检测失败和仍未解析的大面积图片按页及区域记 warn，供人工复核。
+  - 制度边界归一化与校验：同一解析叶子包含多个行首「第 N 条」时，`StructureAnalyzer` 在副本 AST 中拆成独立条款叶子，原始 AST 保持不变；`LegalChunkStrategy` 为每条款生成独立 Leaf，超长条款拆分时保留同一 `section_title`。`audit_legal_chunk_boundaries` 独立于字符覆盖率，跨条款合并或源条款缺失会在 embedding 前作为硬异常拦截。
   - 合同表格切分（2026-10-20）：多条款合同优先按条款规划；能放入 Leaf 预算的短表跟随所属条款，索引正文只保留一份 Markdown 表格，原始单元格矩阵另存于 `table_rows_json`/`table_structures_json`，不再重复生成逐行 NL 与 CSV；超预算表按数据行分组并重复表头，每组共享 `table_id` 和行范围。已关联表格的 `SENTINEL-TABLE-REF` 只从标准化索引文本移除，上传原文不变。Chunk 元数据分别保存 `document_title`、真实 `section_title`、`granularity` 与 Parent 的 `parent_scope`；文档级 Parent 不把文档标题写入章节字段，Trace 展示从结构字段映射“📄 文档”或“📑 章节”。完整合同 Parent 保存全部条款文本及表格矩阵，仅进入 ChunkStore 作为上下文，不独立进入向量/BM25；Parent 不参与模拟问题生成。合同模拟问题只对达到 80-token 阈值的 Leaf 生成。条款出现“上表”等引用时记录 `references=[{table_id, relation: refers_to}]`，命中后从同文档 ChunkStore 加载关联表格 Leaf，再执行已有知识库、权限和审核过滤。
   - 切分覆盖对账：`coverage_audit` 只核对实际输出 Leaf，不把 Parent 计入覆盖；文本按窗口检查，表格按行与单元格检查。抽样结果显式标记 `sampled`，不宣称全量 100%。覆盖缺口或审计失败进入 Quality Record 和 Trace；普通索引路径同步 `quality_issues`/`quality_status` 并由现有 QualityGate 阻止进入 `active`。候选失败时问题码保存在 Quality Record、Trace 和失败上传运行记录，不改写同路径旧版本 registry 行（P0-02）。
   - 清洗边界与清洗对账（2026-10-18）：Cleaner 按**节点**执行（`structured=True`），结构化节点自带语义边界、没有版面上下文，依赖「前后空行」的孤立图注启发式在节点级不成立必须停用；节点内的模板行/维基噪音/页码页脚等形态确定性噪音照旧清洗，删除证据（操作名/分类/原行样本）记入 `node.cleaning_dropped` 与质量记录 `cleaning.dropped_*`。新增 `cleaning_coverage_audit`（Raw AST → 清洗输出）独立于 `coverage_audit`：规范化差异与确定性噪音删除算合法，其余消失正文计入 uncovered 并以 `cleaner_content_loss`/`cleaning_audit_failed` 硬异常阻断——**不允许**通过清空节点让覆盖审计分母缩水来假通过。
@@ -118,11 +121,11 @@ flowchart LR
 | --- | --- |
 | RAG-01 | 不支持格式、过大、伪造魔数、恶意路径、无权限的上传安全拒绝 |
 | RAG-02 | SHA 去重、同名新版本、跨 KB 隔离与并发上传有确定结果 |
-| RAG-03 | 文档类型策略正确；Chunk parent/leaf、表格/QA/长文边界及 metadata 可复查 |
+| RAG-03 | 文档类型策略正确；制度条款不跨 Leaf 合并；Parent/Leaf、表格/QA/长文边界、页码/bbox 定位及 metadata 可复查 |
 | RAG-04 | 元数据 taxonomy/schema 和 LLM fallback 的来源、版本、耗时可追溯 |
 | RAG-05 | 索引发布前候选不可见；已发布但 `pending_review` 的文档仍不得越过审核过滤；故障恢复遵循代次提交点 |
 | RAG-06 | 代次 CAS 冲突与提交点后失败可恢复；审核批准只变更 registry 状态并刷新过滤缓存，不重复发布 |
-| RAG-07 | dense/BM25、RRF、rerank、引用/拒答在对应 Golden 集达到有效门禁 |
+| RAG-07 | dense/BM25、RRF、rerank、检索命中、答案依据、引用/拒答在对应 Golden 集达到有效门禁；工程质量分不替代检索/答案评测 |
 | RAG-08 | 精确 ID、跨文档、表格、无答案、过期信息及非法问题覆盖 |
 | RAG-09 | 同租户越权、跨租户/部门/KB 搜索、缓存命中均不得泄漏 |
 | RAG-10 | 本地/remote RAG 与 SSE/API/Tool 结果语义一致，Provider 失败不假成功 |

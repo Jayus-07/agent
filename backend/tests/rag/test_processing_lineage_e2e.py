@@ -15,10 +15,6 @@ from langchain_core.documents import Document
 
 from backend.rag.indexing.indexer import IncrementalIndexer
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
-from backend.tests.fixtures.pg_env import (  # noqa: F401
-    pg_clean_tables,
-    pg_iso_env,
-)
 
 
 class _LineageRepository:
@@ -67,6 +63,47 @@ class _Registry:
 
     def update_fields(self, file_path, fields):
         self.rows.setdefault(file_path, {}).update(fields)
+
+
+class _Trace:
+    id = "fixture-trace"
+
+    def __init__(self):
+        self.tags = {}
+
+
+class _Span:
+    span_id = "fixture-span"
+    duration_ms = 0
+
+    def __init__(self):
+        self.metrics = {}
+
+
+class _TraceCollector:
+    """替代 Trace 持久化边界，确保阶段契约测试不连接共享 PostgreSQL。"""
+
+    def start(self, **kwargs):
+        return _Trace()
+
+    def start_span(self, *args, **kwargs):
+        return _Span()
+
+    def end_span(self, *args, **kwargs):
+        return None
+
+    def finish(self, *args, **kwargs):
+        return None
+
+
+class _ChunkStore:
+    """内存替身，避免血缘契约测试触碰共享 chunk 数据库。"""
+
+    def delete_by_doc_id(self, doc_id):
+        return None
+
+    def insert_batch(self, doc_id, rows):
+        return None
 
 
 def _raw_ast(
@@ -124,7 +161,7 @@ def _raw_ast(
     ],
 )
 def test_four_format_indexing_records_stage_matrix(
-    tmp_path, monkeypatch, pg_clean_tables, filename, tabular, ocr, table_status,
+    tmp_path, monkeypatch, filename, tabular, ocr, table_status,
     ocr_required, ocr_attempted, ocr_status, ocr_pages, ocr_outcome,
 ):
     """不同文件格式必须产生正确的 OCR/表格阶段和成功 current pointer。"""
@@ -138,12 +175,38 @@ def test_four_format_indexing_records_stage_matrix(
         ocr_attempted=ocr_attempted,
         ocr_pages=ocr_pages,
     )
-    chunks = [
-        Document(
-            page_content="科目 货币资金 金额 123456" if tabular else "正文内容" * 20,
-            metadata={"chunk_type": "table_row"} if tabular else {},
-        )
-    ]
+    if tabular:
+        chunks = [
+            Document(
+                page_content="科目 金额",
+                metadata={
+                    "chunk_id": "fixture-table-header",
+                    "granularity": "leaf",
+                    "chunk_type": "table_header",
+                    "table_id": "fixture-table",
+                    "row_index": 0,
+                },
+            ),
+            Document(
+                page_content="货币资金 123456",
+                metadata={
+                    "chunk_id": "fixture-table-row-1",
+                    "granularity": "leaf",
+                    "chunk_type": "table_row",
+                    "table_id": "fixture-table",
+                    "row_index": 1,
+                },
+            ),
+        ]
+    else:
+        chunks = [Document(
+            page_content=raw_ast.root.children[0].text,
+            metadata={
+                "chunk_id": "fixture-text-leaf",
+                "granularity": "leaf",
+                "chunk_type": "text",
+            },
+        )]
 
     def _parse_stub(path):
         if ocr_outcome == "cached":
@@ -164,6 +227,10 @@ def test_four_format_indexing_records_stage_matrix(
 
     from backend.rag.preprocessing import pipeline as pipeline_module
     monkeypatch.setattr(pipeline_module, "parse_and_chunk_full", _parse_stub)
+    from backend.rag.indexing import indexer as indexer_module
+    monkeypatch.setattr(
+        indexer_module, "trace_collector", _TraceCollector(),
+    )
 
     # 让质量门禁只验证当前 fixture 的 AST，不产生真实质量文件。
     from backend.rag.preprocessing import quality_gate
@@ -228,6 +295,17 @@ def test_four_format_indexing_records_stage_matrix(
         processing_task_id=f"task-{filename}",
         processing_batch_id="batch-e2e",
     )
+    monkeypatch.setattr(indexer, "_cs", lambda: _ChunkStore())
+    if ocr_required and not ocr_attempted:
+        with pytest.raises(ValueError, match="ocr_coverage_partial"):
+            indexer._index_file(str(document))
+        assert repository.finished[0][1] == "failed"
+        assert vector_db.add_documents.call_count == 0
+        stages = {step.stage: step for step in repository.steps}
+        assert stages["ocr"].status == "skipped"
+        assert stages["ocr"].skip_reason == "ocr_unavailable"
+        return
+
     result = indexer._index_file(str(document))
 
     assert result["status"] == "active"
@@ -251,7 +329,7 @@ def test_four_format_indexing_records_stage_matrix(
         expected_skip_reason = "not_pdf"
         if document.suffix.lower() == ".pdf":
             expected_skip_reason = (
-                "feature_disabled" if ocr_required else "text_layer_sufficient"
+                "ocr_unavailable" if ocr_required else "text_layer_sufficient"
             )
         assert stages["ocr"].skip_reason == expected_skip_reason
     elif ocr_status == "fallback":
