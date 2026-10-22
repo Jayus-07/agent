@@ -34,7 +34,7 @@ function errorText(error: unknown): string {
   if (error instanceof ApiError && error.message.trim()) return error.message.trim();
   const description = describeApiError(error);
   return description.cause === error && description.status
-    ? description.message : "客服档案更新失败，请稍后重试。";
+    ? description.message : "客服设置更新失败，请稍后重试。";
 }
 
 export default function CustomerServiceTeamManagement() {
@@ -75,7 +75,7 @@ export default function CustomerServiceTeamManagement() {
   const totalPages = Math.max(1, Math.ceil((result?.total ?? 0) / PAGE_SIZE));
   const memberSummary = useMemo(() => {
     const bound = result?.items.filter((item) => item.csAgent).length ?? 0;
-    return `${result?.total ?? 0} 位客服部成员 · 本页 ${bound} 位已配置客服档案`;
+    return `${result?.total ?? 0} 位客服部门成员 · 本页 ${bound} 位已配置客服身份`;
   }, [result]);
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
@@ -124,7 +124,7 @@ export default function CustomerServiceTeamManagement() {
         ...current,
         [user.userId]: draftFor({ ...user, version: update.version, csAgent: update.csAgent }),
       }));
-      setNotice(`已更新「${user.realName || user.username}」的客服档案。`);
+      setNotice(`已更新「${user.realName || user.username}」的客服设置。`);
     } catch (saveError) {
       setRowErrors((current) => ({ ...current, [user.userId]: errorText(saveError) }));
     } finally {
@@ -138,7 +138,7 @@ export default function CustomerServiceTeamManagement() {
         <div>
           <h2 className="text-base font-semibold text-text-primary">客服团队</h2>
           <p className="mt-1 max-w-2xl text-xs leading-5 text-text-secondary">
-            仅展示归属启用客服部门的用户。客服角色、容量和接单状态与平台角色分开管理。
+            仅展示客服部门成员。客服角色与平台角色分开管理；启用客服身份后可使用客服工作台，接单状态由“允许接单”控制。
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -183,7 +183,7 @@ export default function CustomerServiceTeamManagement() {
             <>
               <div className="mt-4 overflow-x-auto rounded-xl border border-gray-100">
                 <table className="min-w-[850px] w-full border-collapse text-left text-xs">
-                  <caption className="sr-only">客服部门成员和客服档案</caption>
+                  <caption className="sr-only">客服部门成员和客服身份设置</caption>
                   <thead className="bg-surface-elevated text-[11px] font-medium text-text-secondary">
                     <tr><th className="px-3 py-3">成员</th><th className="px-3 py-3">客服角色</th><th className="px-3 py-3">容量</th><th className="px-3 py-3">接单设置</th><th className="px-3 py-3 text-right">操作</th></tr>
                   </thead>
@@ -209,7 +209,7 @@ export default function CustomerServiceTeamManagement() {
                             <input id={`cs-capacity-${user.userId}`} type="number" min={1} max={1000} value={draft.capacity} disabled={!draft.role || user.status !== 1} onChange={(event) => setDraft(user.userId, { capacity: Math.max(1, Number(event.target.value) || 1) })} className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none disabled:bg-gray-50 focus-visible:border-accent" />
                           </td>
                           <td className="space-y-2 px-3 py-3">
-                            <label className="flex items-center gap-2 text-xs text-text-secondary"><input type="checkbox" checked={draft.enabled} disabled={!draft.role || user.status !== 1} onChange={(event) => setDraft(user.userId, { enabled: event.target.checked, accepting: event.target.checked && draft.accepting })} className="h-3.5 w-3.5 accent-accent" />客服档案启用</label>
+                            <label className="flex items-center gap-2 text-xs text-text-secondary"><input type="checkbox" checked={draft.enabled} disabled={!draft.role || user.status !== 1} onChange={(event) => setDraft(user.userId, { enabled: event.target.checked, accepting: event.target.checked && draft.accepting })} className="h-3.5 w-3.5 accent-accent" />启用客服身份</label>
                             <label className="flex items-center gap-2 text-xs text-text-secondary"><input type="checkbox" checked={draft.accepting} disabled={!draft.role || !draft.enabled || user.status !== 1} onChange={(event) => setDraft(user.userId, { accepting: event.target.checked })} className="h-3.5 w-3.5 accent-accent" />允许接单</label>
                           </td>
                           <td className="px-3 py-3 text-right">

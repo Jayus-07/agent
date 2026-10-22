@@ -604,12 +604,13 @@ function AdminAccessControlContent() {
             ) : (
               <>
                 <div className="overflow-x-auto rounded-xl border border-gray-100">
-                  <table className="min-w-[680px] w-full border-collapse text-left text-xs">
+                  <table className="min-w-[800px] w-full border-collapse text-left text-xs">
                     <caption className="sr-only">平台用户与账号权限列表</caption>
                     <thead className="bg-surface-elevated text-[11px] font-medium text-text-secondary">
                       <tr>
                         <th className="px-3 py-3">用户</th>
                         <th className="px-3 py-3">平台角色</th>
+                        <th className="px-3 py-3">部门</th>
                         <th className="px-3 py-3">会话</th>
                         <th className="px-3 py-3 text-right">操作</th>
                       </tr>
@@ -622,7 +623,7 @@ function AdminAccessControlContent() {
                           <tr key={user.userId} className="align-top text-text-primary">
                             <td className="px-3 py-3">
                               <div className="font-medium">{user.realName || user.username}</div>
-                              <div className="mt-0.5 text-[11px] text-text-muted">{user.username} · {user.dept || "未填写部门"}</div>
+                              <div className="mt-0.5 text-[11px] text-text-muted">{user.username}</div>
                               <div className="mt-1">
                                 <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] ${user.status === 1 ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-600"}`}>
                                   <span className={`h-1.5 w-1.5 rounded-full ${user.status === 1 ? "bg-emerald-500" : "bg-gray-400"}`} aria-hidden="true" />
@@ -643,12 +644,14 @@ function AdminAccessControlContent() {
                                 <option value="admin">管理员</option>
                                 <option value="super_admin" disabled>超级管理员（仅运维）</option>
                               </select>
+                            </td>
+                            <td className="px-3 py-3">
                               <label className="sr-only" htmlFor={`user-dept-${user.userId}`}>部门</label>
                               <select
                                 id={`user-dept-${user.userId}`}
                                 value={draft.dept}
                                 onChange={(event) => setDraft(user.userId, { dept: event.target.value })}
-                                className="mt-1.5 block rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                                className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                               >
                                 <option value="">未分配部门</option>
                                 {departments.filter((d) => d.status === 1).map((d) => (
