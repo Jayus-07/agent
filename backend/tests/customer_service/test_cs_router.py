@@ -34,6 +34,23 @@ def _make_router_with_mocks(coarse_result, fine_result):
 
 
 class TestCSRouterRoute:
+    def test_refund_status_question_routes_to_business_query(self):
+        result = CSRouter().route("刚刚那笔退款申请审核到哪一步了？")
+
+        assert result.domain == CSDomain.TRANSACTION
+        assert result.intent == "t_refund_status"
+        assert result.route_path == CSRoutePath.BUSINESS_QUERY
+        assert result.requires_auth is True
+
+    def test_refund_reason_correction_routes_to_confirmed_action(self):
+        result = CSRouter().route("退款原因写错了，改成商品破损")
+
+        assert result.domain == CSDomain.AFTER_SALES
+        assert result.intent == "as_refund_reason_update"
+        assert result.route_path == CSRoutePath.BUSINESS_ACTION
+        assert result.requires_auth is True
+        assert result.requires_action is True
+
     def test_knowledge_intent_full_pipeline(self):
         router = _make_router_with_mocks(
             coarse_result=(CSDomain.KNOWLEDGE, 0.9, "rule: KNOWLEDGE(3hits)"),

@@ -384,7 +384,7 @@ services:
           cpus: "1.0"
 
   # ── business-service HTTP mock（批次B 联调）────────────────
-  # Java business-service 未就绪期间的只读订单查询 mock，契约见
+  # Java business-service 未就绪期间的有状态订单/售后流程 mock，契约见
   # backend/mock/business_service/contract.md（真实服务落地时照此实现）。
   # 与 app 共用镜像（fastapi/uvicorn 已内置），仅独立进程 + 端口。
   #   - 鉴权：mock 配置 INTERNAL_API_TOKEN（与 app 相同 env 注入）时
@@ -402,6 +402,8 @@ services:
       - "127.0.0.1:8081:8081"
     environment:
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
+      - CS_REFUND_WINDOW_DAYS=${CS_REFUND_WINDOW_DAYS:-30}
+      - CS_REFUNDABLE_STATUSES=${CS_REFUNDABLE_STATUSES:-paid,shipped,completed}
       - LOG_FORMAT=${LOG_FORMAT:-json}
     healthcheck:
       test:

@@ -80,6 +80,17 @@ def test_action_reference_inherits_last_order_without_guessing():
     assert "申请退款" in r.resolved_query
 
 
+def test_guarded_conditional_refund_inherits_last_logistics_order():
+    """已支持的条件退款计划可承接前一轮唯一物流订单。"""
+    _seed("MO-1001")
+
+    r = _resolve("如果还没发货，就帮我申请退款")
+
+    assert r is not None and r.order_id == "MO-1001"
+    assert "MO-1001" in r.resolved_query
+    assert _resolve("如果还没发货，就取消订单") is None
+
+
 # ── Test 2：当前轮显式实体永远优先 ─────────────────────────────
 
 

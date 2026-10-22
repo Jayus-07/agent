@@ -7,18 +7,21 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from backend.customer_service.errors import (
     DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
+    RefundRequestUnavailableError,
 )
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
 from backend.shared.logger import logger
 
 _INTENT_ACTION_MAP = {
     "as_refund":   "refund",
+    "as_refund_reason_update": "refund_update",
     "as_return":   "return",
     "as_exchange": "exchange",
     "a_address":   "address",
@@ -115,6 +118,14 @@ def execute_action(
         )
 
     if pending_action:
+        if (
+            pending_action.get("action_type") == "refund_request"
+            and intent == "as_refund_reason_update"
+        ):
+            return _revise_pending_refund_reason(
+                pending_action, user_message, user_id, session_id, store,
+                tenant_id=tenant_id,
+            )
         return _handle_pending_confirmation(
             pending_action, user_message, user_id, session_id,
             tenant_id=tenant_id,
@@ -179,6 +190,12 @@ def execute_action(
     try:
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
                                    user_message, tenant_id=tenant_id)
+    except RefundRequestUnavailableError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
     except DatabaseError:
         # 业务网关不可用（http 模式下订单事实源连接失败/超时/5xx）：显式
         # 告知暂不可用 —— 绝不 fallback 本地演示库（缺陷6.5 红线）；
@@ -423,7 +440,9 @@ def _build_new_proposal(
     from backend.customer_service.risk import RiskLevel, requires_human_review
     from backend.observability.metrics import record_cs_confirmation
 
-    proposal = _build_proposal(user_id, intent, cs_route, user_message)
+    proposal = _build_proposal(
+        user_id, intent, cs_route, user_message, tenant_id=tenant_id,
+    )
     pending = build_pending_action(proposal)
 
     try:
@@ -537,10 +556,26 @@ def _handle_pending_confirmation(
 
 
 def _build_proposal(
-    user_id: str, intent: str, cs_route: dict, user_message: str = ""
+    user_id: str,
+    intent: str,
+    cs_route: dict,
+    user_message: str = "",
+    *,
+    tenant_id: str = "",
 ) -> Any:
     """Dispatch to the appropriate service to build an ActionProposal。"""
     action_type = _INTENT_ACTION_MAP.get(intent, "refund")
+
+    if action_type == "refund_update":
+        from backend.customer_service.service.refund_service import get_refund_service
+
+        return get_refund_service().build_refund_reason_update_proposal(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            reason=_extract_updated_refund_reason(
+                cs_route, user_message,
+            ),
+        )
 
     if action_type == "refund":
         from backend.customer_service.service.refund_service import get_refund_service
@@ -573,6 +608,98 @@ def _build_proposal(
 
     from backend.customer_service.errors import ValidationError
     raise ValidationError(f"不支持的操作类型: {intent}")
+
+
+def _extract_updated_refund_reason(cs_route: dict, user_message: str) -> str:
+    """只提取用户明确给出的新原因；不能从旧上下文猜测内容。"""
+    text = str(user_message or "")
+    match = re.search(
+        r"(?:改成|改为|更正为|修改为|写成|换成)\s*(.{1,200})$", text,
+    )
+    if match:
+        return match.group(1).strip(" \t\r\n，。；;！!？?")[:500]
+
+    metadata = (cs_route or {}).get("metadata") or {}
+    reason = str(metadata.get("reason") or "").strip()
+    if not reason:
+        for slot in metadata.get("semantic_slots") or []:
+            if slot.get("name") == "reason":
+                reason = str(slot.get("value") or "").strip()
+                break
+    return reason[:500]
+
+
+def _revise_pending_refund_reason(
+    pending_action: dict,
+    user_message: str,
+    user_id: str,
+    session_id: str,
+    store: Any,
+    *,
+    tenant_id: str,
+) -> ExpertResult:
+    """CAS 更新未提交提案的原因，并递增版本使旧确认失效。"""
+    reason = _extract_updated_refund_reason({}, user_message)
+    if not reason:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft="请告诉我正确的退款原因，例如「改成商品破损」。",
+            data={"pending_action": pending_action},
+        )
+
+    revised = dict(pending_action)
+    before = dict(revised.get("before_state") or {})
+    after = dict(revised.get("after_state") or {})
+    operation = str(after.get("operation") or "create")
+    after["reason"] = reason
+    revised["before_state"] = before
+    revised["after_state"] = after
+
+    proposal_text = str(revised.get("proposal_text") or "")
+    display_label = "修改为" if operation == "update_reason" else "退款原因"
+    line = f"**{display_label}:** {reason}"
+    pattern = rf"\*\*{re.escape(display_label)}:\*\*[^\n]*"
+    if re.search(pattern, proposal_text):
+        proposal_text = re.sub(pattern, line, proposal_text, count=1)
+    else:
+        proposal_text = f"{proposal_text.rstrip()}\n{line}\n"
+    revised["proposal_text"] = proposal_text
+
+    expected_version = int(
+        revised.get("version") or revised.get("proposal_version") or 1,
+    )
+    proposal_id = str(
+        revised.get("proposal_id") or revised.get("action_id") or "",
+    )
+    revised["version"] = expected_version + 1
+    if not proposal_id or not store.update_pending_if_version(
+        user_id,
+        session_id,
+        revised,
+        tenant_id=tenant_id,
+        proposal_id=proposal_id,
+        expected_version=expected_version,
+    ):
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "退款提案状态已变化，刚才的修改没有应用；"
+                "请刷新后重新查询申请。"
+            ),
+            data={},
+        )
+
+    return ExpertResult(
+        expert="action", status=ExpertStatus.SUCCESS.value,
+        response_draft=(
+            "已更新退款原因，请重新核对后确认：\n\n"
+            f"{proposal_text}"
+        ),
+        data={
+            "pending_action": revised,
+            "confirmation_state": revised.get("confirmation_state", "pending_confirmation"),
+        },
+    )
 
 
 def _resolve_order_id(cs_route: dict, user_message: str) -> str:

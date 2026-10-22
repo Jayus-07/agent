@@ -125,7 +125,11 @@ class TestPendingHandlerConfirm:
         mock_execute.return_value = mock_record
 
         cmd = cs_pending_handler_node(_state(
-            pending_action=_pending_action(),
+            pending_action=_pending_action(
+                action_type="address_update",
+                target_type="address",
+                target_id="ADDR-001",
+            ),
             confirmation_state="pending",
             user_message="确认",
         ))

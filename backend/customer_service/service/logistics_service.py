@@ -79,6 +79,35 @@ class LogisticsService:
         order = self._resolve_order(user_id, order_id)
         status = str(order.get("status") or "unknown")
 
+        from backend.customer_service.service.order_service import (
+            _use_http_gateway,
+            get_order_service,
+        )
+
+        if _use_http_gateway():
+            logistics = get_order_service().query_logistics(
+                user_id, str(order.get("order_no") or order_id),
+            )
+            events = logistics.get("events") or []
+            if any(
+                not isinstance(event, dict)
+                or not all(event.get(key) for key in ("time", "location", "description"))
+                for event in events
+            ):
+                raise DatabaseError("业务网关物流轨迹格式异常")
+            return LogisticsResult(
+                order_id=str(order.get("id") or order.get("order_no") or order_id),
+                order_no=str(order.get("order_no") or order_id),
+                status=status,
+                status_display=str(
+                    logistics.get("status_display")
+                    or _STATUS_DISPLAY.get(status, status)
+                ),
+                estimated_delivery=logistics.get("estimated_delivery"),
+                tracking_info=str(logistics.get("tracking_info") or ""),
+                trace_events=list(events),
+            )
+
         tracking_info, trace_events, estimated_delivery = self._resolve_tracking(
             str(order.get("order_no") or order_id), status
         )

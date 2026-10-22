@@ -232,7 +232,7 @@ def _execute_confirmed_action(
     except IdempotencyUnavailable as exc:
         if action_type == "refund_request" and refund_request_written:
             raise SideEffectOutcomeUnknown(
-                "退款申请已写入，但幂等终态未能确认"
+                "退款申请操作已写入，但幂等终态未能确认"
             ) from exc
         raise
 
@@ -252,6 +252,9 @@ def _handle_confirm(
     store = get_confirmation_store()
     CS = confirmation_sm.ConfirmationState
     action_type = pending_action.get("action_type", "unknown")
+    refund_operation = str(
+        ((pending_action.get("after_state") or {}).get("operation") or "create")
+    )
 
     # ── 原子认领（幂等闸门）：认领失败 = 已被处理，绝不重复执行 ──
     claimed_id = store.claim_for_execution(
@@ -312,8 +315,15 @@ def _handle_confirm(
             target_type=pending_action.get("target_type", ""),
             target_id=pending_action.get("target_id", ""),
             detail=(
-                f"refund request registered; funds not refunded; "
-                f"request_id={((record.get('data') or {}).get('request') or {}).get('request_id', '')}"
+                (
+                    "refund request reason updated; "
+                    if refund_operation == "update_reason"
+                    else "refund request registered; funds not refunded; "
+                )
+                + "request_id="
+                + str(((record.get("data") or {}).get("request") or {}).get(
+                    "request_id", "",
+                ))
                 if action_type == "refund_request"
                 else f"simulated execution, action_id={record.get('action_id', '')}"
             ),
@@ -327,12 +337,22 @@ def _handle_confirm(
         label = _ACTION_TYPE_LABELS.get(action_type, action_type)
         if action_type == "refund_request":
             request = (record.get("data") or {}).get("request") or {}
-            request_id = str(request.get("request_id") or "")
-            answer = (
-                f"✅ 退款申请已登记，正在等待人工审核。\n\n"
-                f"**申请编号:** `{request_id}`\n"
-                "当前仅登记了申请，尚未退款；审核结果会通过客服会话通知。"
+            request_no = str(
+                request.get("request_no") or request.get("request_id") or "",
             )
+            if refund_operation == "update_reason":
+                answer = (
+                    "✅ 退款申请原因已更新。\n\n"
+                    f"**申请编号:** `{request_no}`\n"
+                    f"**当前原因:** {request.get('reason') or '已更新'}\n"
+                    "申请仍在等待审核，尚未退款。"
+                )
+            else:
+                answer = (
+                    "✅ 退款申请已登记，正在等待人工审核。\n\n"
+                    f"**申请编号:** `{request_no}`\n"
+                    "当前仅登记了申请，尚未退款；审核结果会通过客服会话通知。"
+                )
         else:
             answer = (
                 f"✅ 操作已提交成功！\n\n"

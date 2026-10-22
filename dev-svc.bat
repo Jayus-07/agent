@@ -172,19 +172,27 @@ if not errorlevel 1 (
 ) else (
     echo   [DOWN] apisix   "%ASTAT%"
 )
+set "MSTAT=container not running"
+for /f "tokens=*" %%s in ('docker ps --filter "name=agent-business-mock-1" --format "{{.Status}}" 2^>nul') do set "MSTAT=%%s"
+curl.exe -s -o nul --max-time 5 "http://127.0.0.1:8081/health"
+if not errorlevel 1 (
+    echo   [UP  ] business-mock "%MSTAT%" health-200
+) else (
+    echo   [DOWN] business-mock "%MSTAT%"
+)
 exit /b 0
 
 :start_backend
-echo   [backend] docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher ...
+echo   [backend] docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher ...
 pushd "%ROOT%"
-docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
+docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 goto start_backend_retry
 goto start_backend_up_ok
 
 :start_backend_retry
 echo   [backend] up failed - prune stale containers, retry once ...
 call :prune_stale_backend_containers
-docker compose up -d --build app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
+docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 (
     popd
     echo   [ERROR] docker compose up -d --build app failed after retry
@@ -194,12 +202,13 @@ if errorlevel 1 (
 :start_backend_up_ok
 popd
 call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
+call :wait_http "http://127.0.0.1:8081/health" business-mock
 exit /b 0
 
 :stop_backend
-echo   [backend] docker compose stop app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis ...
+echo   [backend] docker compose stop app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis ...
 pushd "%ROOT%"
-docker compose stop app apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis
+docker compose stop app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher postgres redis redis-broker auth-redis
 set "RC=%ERRORLEVEL%"
 popd
 if not "%RC%"=="0" (
@@ -216,7 +225,7 @@ exit /b 0
 :: re-run automatically through the compose depends_on chain.
 :: =====================================================================
 :rebuild_backend
-set "BACKEND_SERVICES=app db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher"
+set "BACKEND_SERVICES=app business-mock db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher"
 echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %BACKEND_SERVICES%
@@ -236,6 +245,7 @@ if errorlevel 1 goto rebuild_fail
 :rebuild_up_ok
 popd
 call :wait_http "http://127.0.0.1:%BACKEND_PORT%/health" backend
+call :wait_http "http://127.0.0.1:8081/health" business-mock
 exit /b 0
 
 :rebuild_fail

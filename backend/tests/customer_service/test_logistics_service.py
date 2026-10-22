@@ -60,6 +60,16 @@ class TestHttpGatewayDelegation:
                     "id": 9, "order_no": "GW-001", "status": "shipped",
                 }])
 
+            def query_logistics(self, user_id, order_id):
+                captured["logistics_args"] = (user_id, order_id)
+                return {
+                    "shipping_status": "shipped",
+                    "status_display": "已发货，运输中",
+                    "tracking_info": "快递已揽收。",
+                    "estimated_delivery": None,
+                    "events": [],
+                }
+
         monkeypatch.setattr(
             "backend.customer_service.service.order_service._use_http_gateway",
             lambda: True,
@@ -72,6 +82,7 @@ class TestHttpGatewayDelegation:
         result = mod.LogisticsService().query_logistics(
             user_id="42", order_id="GW-001")
         assert captured["args"] == ("42", "GW-001", "detail")
+        assert captured["logistics_args"] == ("42", "GW-001")
         assert result.order_no == "GW-001"
         assert result.status == "shipped"
         assert result.status_display == "已发货，运输中"
