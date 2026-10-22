@@ -195,12 +195,14 @@ class TestRuntimeFrozen:
         }
 
     def test_expert_history_shape_frozen(self):
-        # 空候选路径可离线执行：expert_history 追加形态必须与迁移前逐字段一致
+        # 空候选路径可离线执行；规划器决策元数据随 poi 专家历史进入 Trace。
         from backend.travel.experts.poi import poi_expert_node
 
         update = poi_expert_node({"user_message": " xyz"})
         history = update["expert_history"]
-        assert history and set(history[-1]) == {"expert", "status", "duration_ms"}
+        assert history and set(history[-1]) == {
+            "expert", "status", "duration_ms", "planner_decision",
+        }
         assert history[-1]["expert"] == "poi"
         assert set(update["last_expert_result"]) >= {"expert", "status"}
 
@@ -254,11 +256,13 @@ class TestNodeRegistrationOrder:
 # ---------- 附加：确定性抽查（parity 基线） ----------
 
 class TestServiceDeterminism:
-    def test_build_skeleton_deterministic(self):
+    def test_build_skeleton_deterministic_when_llm_disabled(self, monkeypatch):
+        from backend.config import travel as travel_config
         from backend.travel.agents.planning_agent import PlanningAgent
         from backend.travel.models.brief import TravelBrief
         from backend.travel.models.poi import Poi
 
+        monkeypatch.setattr(travel_config, "TRAVEL_PLANNING_LLM_ENABLED", False)
         candidates = [
             Poi(poi_id=f"p{i}", name=f"点{i}", city="福州", lat=26.0 + i * 0.01,
                 lng=119.3, rating=4.0 + i * 0.1, suggested_minutes=90,

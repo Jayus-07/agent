@@ -5,6 +5,7 @@ LLM 只产生 TravelTurnDecision 候选；业务字段仍由确定性校验和 s
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import time
 from dataclasses import dataclass
@@ -87,11 +88,7 @@ def interpret_turn_with_llm(
         from langchain_core.messages import HumanMessage, SystemMessage
 
         from backend.infra.async_utils import sync_call_with_timeout
-        from backend.infra.llm.proxy import (
-            _build_llm_for,
-            enforce_model_input_price_tier,
-            record_llm_result,
-        )
+        from backend.infra.llm.proxy import bind_llm_for_role
         from backend.observability.llm_context import llm_attribution_scope
 
         outcome.prompt_version = ""
@@ -104,7 +101,7 @@ def interpret_turn_with_llm(
             outcome.fallback_reason = "no_model"
             return outcome
 
-        llm = _build_llm_for(model_name).bind(temperature=0, max_tokens=1400)
+        llm = bind_llm_for_role("main", temperature=0, max_tokens=1400)
         human_payload = json.dumps(
             {"user_message": message, "verified_context": context or {}},
             ensure_ascii=False,
@@ -114,22 +111,13 @@ def interpret_turn_with_llm(
             SystemMessage(content=system_prompt),
             HumanMessage(content=human_payload),
         ]
-        enforce_model_input_price_tier((messages,), model_name=model_name)
         timeout = (timeout_ms or TRAVEL_TURN_DECISION_TIMEOUT_MS) / 1000.0
         with llm_attribution_scope(agent_domain="travel"):
+            call_context = contextvars.copy_context()
             response = sync_call_with_timeout(
-                llm.invoke,
+                lambda: call_context.run(llm.invoke, messages),
                 timeout,
-                messages,
             )
-            try:
-                record_llm_result(
-                    response,
-                    duration_ms=(time.monotonic() - started) * 1000,
-                    model_name=model_name,
-                )
-            except Exception as exc:  # noqa: BLE001 — 计量故障不丢弃有效决策
-                logger.warning("[TravelTurnDecision] Token 计量补账失败: %s", exc)
 
         usage = getattr(response, "usage_metadata", None) or {}
         response_metadata = getattr(response, "response_metadata", None) or {}

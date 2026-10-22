@@ -550,6 +550,15 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="travel.planning_agent",
+    name="旅游 Planner 逐日安排建议 Prompt",
+    category="travel",
+    risk_level="medium",
+    default_file="travel_planning_agent.yaml",
+    agent="travel_planner",
+))
+
+_register(PromptSpec(
     key="travel.v2.trip_ai_edit",
     name="旅游 V2 Trip 单项修改候选生成 Prompt",
     category="travel",

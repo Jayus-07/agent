@@ -14,17 +14,16 @@ import concurrent.futures
 import contextvars
 from typing import Any, Callable
 
+# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：Agent 封装落地后，
+# 能力调用走 Node → Agent → Service；纯数据契约（Skeleton）直通 service
 from backend.shared.logger import logger
+from backend.travel.agents.planning_agent import PlanningAgent
+from backend.travel.agents.research_agent import ResearchAgent
 from backend.travel.core.events import run_travel_tool
 from backend.travel.experts.base import run_expert_safely
 from backend.travel.graph_state import load_brief
 from backend.travel.planning import resolve_must_go
 from backend.travel.services import live_search_service
-
-# 兼容面 + 节点调用面（本模块命名空间 = 补丁缝）：Agent 封装落地后，
-# 能力调用走 Node → Agent → Service；纯数据契约（Skeleton）直通 service
-from backend.travel.agents.planning_agent import PlanningAgent
-from backend.travel.agents.research_agent import ResearchAgent
 from backend.travel.services.poi_service import Skeleton  # noqa: F401
 
 _research = ResearchAgent()
@@ -134,7 +133,14 @@ def poi_expert_node(state: dict) -> dict:
             logger.info("[TravelPOI] 无候选: destination=%r", brief.destination)
             return {
                 "status": "success",
-                "data": {"candidates": [], "day_plan": [], "dropped": []},
+                "data": {
+                    "candidates": [], "day_plan": [], "dropped": [],
+                    "planner_decision": {
+                        "status": "skipped",
+                        "fallback_reason": "no_candidates",
+                        "has_proposal": False,
+                    },
+                },
                 "notes": extra_notes + [f"暂时没有「{brief.destination}」的地点数据"],
             }
 
@@ -232,6 +238,7 @@ def poi_expert_node(state: dict) -> dict:
                 "candidates": [p.model_dump() for p in candidates],
                 "day_plan": [[p.poi_id for p in day] for day in skeleton.days],
                 "dropped": skeleton.dropped,
+                "planner_decision": skeleton.planner_decision,
                 "must_go_unresolved": resolution.unresolved,
                 "evidences": evidences,
                 "live_search": live_search,
@@ -245,7 +252,8 @@ def poi_expert_node(state: dict) -> dict:
 
     history = list(state.get("expert_history", []))
     history.append({"expert": "poi", "status": result.get("status", "failed"),
-                    "duration_ms": result.get("duration_ms", 0)})
+                    "duration_ms": result.get("duration_ms", 0),
+                    "planner_decision": data.get("planner_decision") or {}})
 
     update = {
         "last_expert_result": dict(result),

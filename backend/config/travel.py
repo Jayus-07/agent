@@ -51,14 +51,11 @@ TRAVEL_LLM_SLOT_TIMEOUT_MS = max(500, int(os.getenv("TRAVEL_LLM_SLOT_TIMEOUT_MS"
 TRAVEL_LLM_SLOT_MIN_CONFIDENCE = max(0.0, min(1.0, float(os.getenv("TRAVEL_LLM_SLOT_MIN_CONFIDENCE", "0.7"))))
 
 # Requirement 统一决策（Phase 2）：一次 LLM Structured Output 同时给出动作、
-# 修改候选、附加任务与槽位候选；未单独配置时沿用旧意图/槽位开关的开启状态，
-# 但执行链不再分别调用两个旧理解服务。
-_TRAVEL_TURN_LLM_DEFAULT = (
-    TRAVEL_LLM_INTENT_ENABLED or TRAVEL_LLM_SLOT_ENRICHMENT_ENABLED
-)
+# 修改候选、附加任务与槽位候选；模型不可用或输出不合约时继续走规则解析。
+# 默认启用自然语言补判，仍可显式关闭以排障或控制模型预算。
 TRAVEL_TURN_DECISION_LLM_ENABLED = os.getenv(
     "TRAVEL_TURN_DECISION_LLM_ENABLED",
-    "true" if _TRAVEL_TURN_LLM_DEFAULT else "false",
+    "true",
 ).strip().lower() in ("1", "true", "yes")
 TRAVEL_TURN_DECISION_TIMEOUT_MS = max(
     500,
@@ -66,6 +63,21 @@ TRAVEL_TURN_DECISION_TIMEOUT_MS = max(
         "TRAVEL_TURN_DECISION_TIMEOUT_MS",
         str(max(TRAVEL_LLM_INTENT_TIMEOUT_MS, TRAVEL_LLM_SLOT_TIMEOUT_MS)),
     )),
+)
+
+# Planner 使用 LLM 为真实候选景点提出逐日分配；日容量、必去项、来源事实、
+# 路线和最终行程仍由确定性服务校验。失败时回退到现有骨架算法。
+TRAVEL_PLANNING_LLM_ENABLED = os.getenv(
+    "TRAVEL_PLANNING_LLM_ENABLED", "true",
+).strip().lower() in ("1", "true", "yes")
+TRAVEL_PLANNING_LLM_TIMEOUT_MS = max(
+    500, int(os.getenv("TRAVEL_PLANNING_LLM_TIMEOUT_MS", "6000")),
+)
+TRAVEL_PLANNING_LLM_MAX_TOKENS = max(
+    256, int(os.getenv("TRAVEL_PLANNING_LLM_MAX_TOKENS", "3000")),
+)
+TRAVEL_PLANNING_LLM_MAX_CANDIDATES = max(
+    1, int(os.getenv("TRAVEL_PLANNING_LLM_MAX_CANDIDATES", "120")),
 )
 
 # LLM Clarification Renderer（2026-10-08 STOP 4）：只把**已确定**的追问意图

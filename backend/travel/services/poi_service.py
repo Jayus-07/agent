@@ -377,6 +377,7 @@ class Skeleton:
     days: list[list[Poi]] = field(default_factory=list)
     dropped: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    planner_decision: dict = field(default_factory=dict)
 
 
 def resolve_missing_candidates(
@@ -488,22 +489,42 @@ def build_candidate_evidences(candidates: list[Poi]) -> dict[str, dict]:
     return evidences
 
 
-def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
+def build_skeleton(
+    brief: TravelBrief,
+    candidates: list[Poi],
+    *,
+    preferred_day_by_poi: dict[str, int] | None = None,
+    excluded_poi_ids: set[str] | None = None,
+) -> Skeleton:
     """把候选 POI 分配到各天（纯函数，可单测）。
 
-    分配算法（确定性，无 LLM）：
+    分配算法（确定性）：
       1. 必去项置顶，其余按热度降序 —— 用户点名的地点必须优先落地
-      2. 逐个挑「当前项数最少」的天（先保证各天均衡，避免出现空白天）；
+      2. 有受校验的 Planner 建议时优先采用其日分配；否则挑当前项数最少的天；
          项数相同时挑「加入后当日地理跨度最小」的天（就近聚类，减少折返）
       3. **同时受两道容量约束**：单日地点数上限（节奏档位）与单日有效活动
          时长上限。实测只卡数量会出现「5 个点合计 600 分钟」的骨架。
       4. 超过容量的候选进入丢弃清单并如实记录
+
+    Planner 建议只影响候选 POI 的日期选择；本服务仍掌握硬容量、必去项、
+    餐饮过滤、地理均衡和丢弃披露。无建议时保持原有确定性行为。
     """
     total_days = brief.resolved_days()
     pace = brief.normalized_pace()
     max_pois = T.TRAVEL_PACE_MAX_POIS.get(pace, 5)
     max_minutes = T.TRAVEL_PACE_MINUTES.get(pace, 360)
     skeleton = Skeleton(days=[[] for _ in range(total_days)])
+
+    candidate_ids = {poi.poi_id for poi in candidates}
+    preferred_day_by_poi = preferred_day_by_poi or {}
+    excluded_poi_ids = excluded_poi_ids or set()
+    if not set(preferred_day_by_poi).issubset(candidate_ids):
+        raise ValueError("Planner day assignment references an unknown POI")
+    if not excluded_poi_ids.issubset(candidate_ids):
+        raise ValueError("Planner exclusion references an unknown POI")
+    if any(day < 1 or day > total_days
+           for day in preferred_day_by_poi.values()):
+        raise ValueError("Planner day assignment is outside the requested trip")
 
     if not candidates:
         return skeleton
@@ -569,6 +590,13 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
         more = f" 等 {len(meal_skipped)} 家" if len(meal_skipped) > 5 else ""
         skeleton.notes.append(
             f"{len(meal_skipped)} 个餐饮类候选不排进行程（吃饭看美食推荐）：{preview}{more}")
+    excluded = [poi for poi in ordered if poi.poi_id in excluded_poi_ids]
+    if any(poi.required for poi in excluded):
+        raise ValueError("Planner cannot exclude a required POI")
+    if excluded:
+        skeleton.dropped.extend(poi.name for poi in excluded)
+        excluded_ids = {poi.poi_id for poi in excluded}
+        ordered = [poi for poi in ordered if poi.poi_id not in excluded_ids]
     day_minutes = [0] * total_days
 
     for poi in ordered:
@@ -583,7 +611,9 @@ def build_skeleton(brief: TravelBrief, candidates: list[Poi]) -> Skeleton:
             skeleton.dropped.append(poi.name)
             continue
         # 项数均衡优先，地理紧凑次之，索引最后（保证同分时结果稳定）
+        preferred_day = preferred_day_by_poi.get(poi.poi_id)
         chosen = min(options, key=lambda i: (
+            0 if preferred_day == i + 1 else 1 if preferred_day else 0,
             len(skeleton.days[i]),
             day_radius_km(_coords(skeleton.days[i]) + [(poi.lat, poi.lng)]),
             i,
