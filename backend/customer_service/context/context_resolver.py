@@ -249,7 +249,15 @@ def resolve_turn_reference(
     if not ordinal and not bare_ordinal and not (
         _REFERENCE_PRONOUN.search(query) and _REFERENCE_PREDICATE.search(query)
     ):
-        return None  # 不是订单回指表达：照常路由，不强行注入
+        # 允许已支持的受控任务计划在紧邻的多轮对话里承接唯一订单，
+        # 例如上一轮查到耳机物流后，用户说「如果还没发货，就帮我申请退款」。
+        # 仅在规则计划完整匹配时继承，不扩展成任意条件任务的猜测。
+        from backend.customer_service.understanding.task_plan import (
+            build_rule_task_plan,
+        )
+
+        if build_rule_task_plan(query) is None:
+            return None
 
     if _LOGISTICS_HINT.search(query):
         resolved_query = f"查询订单 {order_id} 的物流状态"

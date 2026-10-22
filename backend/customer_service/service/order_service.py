@@ -110,6 +110,22 @@ class OrderService:
 
         return result.rows
 
+    def query_logistics(self, user_id: str, order_id: str) -> dict:
+        """从已选订单事实源读取物流详情。"""
+        if not _use_http_gateway():
+            raise DatabaseError("本地订单库没有独立物流网关")
+        PermissionChecker.validate_order_id(order_id)
+        data = self._http_get(
+            f"/business/orders/{order_no_urlsafe(order_id)}/logistics",
+            user_id,
+        )
+        logistics = data.get("logistics")
+        if not isinstance(logistics, dict):
+            raise DatabaseError("业务网关物流响应格式异常")
+        if not isinstance(logistics.get("events", []), list):
+            raise DatabaseError("业务网关物流轨迹格式异常")
+        return logistics
+
     # ── http 网关模式（批次B）─────────────────────────────
 
     def _http_query_orders(
@@ -232,11 +248,22 @@ class OrderService:
 
         与 list_refundable_orders 的区别：不过滤状态/政策窗口 —— 语义
         引用（「买耳机的那笔」）针对用户全部近期订单，状态筛选是调用方
-        （动作资格校验）的职责。http 网关模式暂不支持（返回空，上层走
-        既有降级路径）。
+        （动作资格校验）的职责。HTTP 模式也只读取 business-service 提供
+        的用户订单列表，不回退本地演示库。
         """
         if _use_http_gateway():
-            return []
+            data = self._http_get("/business/orders", user_id)
+            orders = data.get("orders")
+            if not isinstance(orders, list):
+                raise DatabaseError("业务网关订单列表响应格式异常")
+            normalized = []
+            for order in orders[:max(1, min(int(limit), 100))]:
+                if not isinstance(order, dict):
+                    raise DatabaseError("业务网关订单列表包含非法数据")
+                item = dict(order)
+                item.setdefault("product_names", item.get("item_summary", ""))
+                normalized.append(item)
+            return normalized
 
         from backend.customer_service.service.demo_mode import resolve_user_id
 

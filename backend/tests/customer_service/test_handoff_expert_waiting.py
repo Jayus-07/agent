@@ -63,6 +63,8 @@ def test_execute_handoff_enters_waiting_human(monkeypatch):
     # P0-6：单次持久化、最终态 WAITING_HUMAN（lifecycle 唯一入口，
     # 同事务维护 conversations.handling_mode，不再经 store 两跳写）
     assert len(persisted) == 1
+    assert persisted[0]["conversation_id"] == "conv-test"
+    assert persisted[0]["user_id"] == "u-test"
     assert persisted[0]["trigger_type"] == "explicit_request"
 
     states = [s["handoff_state"] for s in store.saved]

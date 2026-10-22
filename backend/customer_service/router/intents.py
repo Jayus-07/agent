@@ -13,9 +13,11 @@ FINE_INTENTS: dict[str, str] = {
     "t_order_status": "订单状态查询",
     "t_logistics": "物流查询",
     "t_ticket_status": "工单进度查询",
+    "t_refund_status": "退款申请进度查询",
     "t_delivery_estimate": "配送时效",
     # AFTER_SALES
     "as_refund": "退款",
+    "as_refund_reason_update": "修改退款申请原因",
     "as_return": "退货",
     "as_exchange": "换货",
     "as_repair": "维修",
@@ -84,6 +86,11 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
     ),
+    "t_refund_status": IntentProfile(
+        intent="t_refund_status", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq", "cs_aftersales"],
+    ),
     "t_delivery_estimate": IntentProfile(
         intent="t_delivery_estimate", domain=CSDomain.TRANSACTION,
         route_path=CSRoutePath.KNOWLEDGE_QUERY,
@@ -92,6 +99,12 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     # AFTER_SALES → business_action (Phase 4)
     "as_refund": IntentProfile(
         intent="as_refund", domain=CSDomain.AFTER_SALES,
+        requires_auth=True, requires_action=True, risk_level="high",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_aftersales"],
+    ),
+    "as_refund_reason_update": IntentProfile(
+        intent="as_refund_reason_update", domain=CSDomain.AFTER_SALES,
         requires_auth=True, requires_action=True, risk_level="high",
         route_path=CSRoutePath.BUSINESS_ACTION,
         kb_ids=["cs_policy", "cs_aftersales"],

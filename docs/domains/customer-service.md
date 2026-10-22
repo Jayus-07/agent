@@ -13,9 +13,11 @@
 - Supervisor 按当前请求状态分派知识查询、业务查询、动作提案、投诉或人工接管；专家通过共享 state 和显式结果协作，不互相直接调用。
 - 权限与租户范围只取自服务端验证后的身份；订单、工单及会话数据必须按资源授权隔离。输出守卫和知识库证据规则按当前安全模块及测试执行。
 - 退款、退货等写操作先形成提案并校验必填信息，再进入用户确认、授权执行和幂等保护；`pending`、`executed`、`failed`、`unknown` 等状态不可互相伪装。
-- 当前退款申请仅在 `CS_REFUND_REQUEST_MODE=sandbox` 且业务网关为 sandbox 时可登记到既有 `customer_service.cs_case`；默认关闭。案件 `open` 只表示等待人工审核，不表示退款已执行。HTTP 业务网关没有退款 API，因此确认会 fail-closed，不在本地写入替代成功。
-- 活跃退款申请由 PostgreSQL 按租户、用户和规范化订单 ID 跨会话唯一约束；案件关闭后仍按当前退款资格规则允许重新申请。应用层预检只提供提示，数据库唯一索引负责并发裁决。
-- 退款申请查询按服务端认证的 user 和 tenant 限定；原因编辑只改申请原因，并通过现有 Proposal Version CAS 失效旧确认版本。确认时会重查订单归属、状态、金额及政策版本。
+- 退款写入默认关闭。`CS_BUSINESS_GATEWAY_MODE=sandbox` 与 `CS_REFUND_REQUEST_MODE=sandbox` 时，确认后登记到 `customer_service.cs_case`；HTTP 模式须同时显式设为 `http`，退款申请由 business-service 创建。两条路径都只登记待人工审核，不执行资金退款。
+- sandbox 活跃申请由 PostgreSQL 按租户、用户和规范化订单 ID 跨会话唯一约束；HTTP 活跃申请由 business-service 按相同所有权维度裁决。HTTP 失败不回退 sandbox；写请求无自动重试，网络错误或 5xx 结果未知时确认进入 `verifying`。
+- 订单列表、详情和物流轨迹经 business-service HTTP 契约读取；商品/时间指称先用真实用户订单匹配，歧义时追问，不由模型提供订单 ID。唯一物流查询会写入会话级订单上下文，后续已支持的条件退款计划可以承接该订单。退款提案确认时重查订单归属、状态、金额及政策版本。
+- 退款申请状态查询按服务端认证的 user 和 tenant 限定。未提交提案的原因修改使用 Proposal Version CAS 使旧确认失效；已提交申请的原因修改先形成新提案、用户确认后再调用 business-service，服务端只允许审核中的申请被修改。
+- business-service Mock 在内存模拟订单、物流和售后状态，服务重启会清空售后申请；它不代替生产数据库，也不执行资金退款。接口事实源见 [Mock 契约](../../backend/mock/business_service/contract.md)。
 - 坐席工作台通过既有实时事件与补偿查询同步队列和会话；人工接管的认领、回复和关闭服从服务端状态机。
 - 管理端客服档案独立于平台用户维护：`/sys/rbac/customer-service/team` 只列出租户内标记为客服部门的成员，角色、容量、启用和接单状态由专用更新接口维护。客服部门类型与主管配置由访问控制的部门管理维护；用户调离客服部门或账号停用时，后端会停用其客服档案并关闭接单状态。
 - 可选演示沙盒仅映射业务查询所用的 customer id，不改变认证身份或权限判断；开关默认关闭。见[演示沙盒说明](../customer-service/demo-sandbox.md)。

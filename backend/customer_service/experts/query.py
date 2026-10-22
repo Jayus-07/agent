@@ -18,6 +18,7 @@ _INTENT_SERVICE_MAP = {
     "t_order_status": "order",
     "t_logistics": "logistics",
     "t_ticket_status": "ticket",  # 批次C：工单进度
+    "t_refund_status": "refund_status",
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -162,6 +163,39 @@ def _execute_task_query(
         order_ref = resolve_order_slot(cs_route, user_message)
 
     try:
+        if not order_ref and metadata.get("semantic_slots"):
+            from backend.customer_service.context.semantic_slots import (
+                resolve_from_metadata,
+            )
+
+            resolution = resolve_from_metadata(
+                str(state.get("tenant_id") or "default"), user_id, cs_route,
+            )
+            if resolution.resolved:
+                order_ref = resolution.order_id
+            elif resolution.ambiguous:
+                choices = "\n".join(
+                    f"- `{item.get('order_no')}` — "
+                    f"{item.get('product_names')}（{item.get('created_at')}）"
+                    for item in resolution.candidates
+                )
+                result = CSTaskResult(
+                    task_id=task_id, status="needs_clarification",
+                    facts={"order_count": len(resolution.candidates)},
+                    source=_task_query_source("order"),
+                )
+                return ExpertResult(
+                    expert="query", status=ExpertStatus.SUCCESS.value,
+                    response_draft=(
+                        "找到多笔符合描述的订单，请告诉我想查询哪一笔：\n"
+                        f"{choices}"
+                    ),
+                    data={
+                        "task_result": result.model_dump(),
+                        "intent": current_task.get("capability"),
+                    },
+                )
+
         from backend.customer_service.service.order_service import get_order_service
 
         order_service = get_order_service()
@@ -396,6 +430,41 @@ def _dispatch_service(
     """根据 intent 分发到对应的 Service。"""
     service_type = _INTENT_SERVICE_MAP.get(intent, "order")
 
+    if service_type == "refund_status":
+        from backend.customer_service.errors import (
+            DatabaseError,
+            RefundRequestUnavailableError,
+        )
+        from backend.customer_service.service.refund_service import (
+            get_refund_service,
+        )
+
+        try:
+            requests = get_refund_service().list_refund_requests(
+                user_id=user_id, tenant_id=tenant_id, limit=20,
+            )
+        except DatabaseError:
+            return "退款申请服务暂时不可用，请稍后再试。"
+        except RefundRequestUnavailableError:
+            return "当前无法安全查询退款申请，请联系人工客服协助。"
+        if not requests:
+            return "没有找到您当前可见的退款申请记录。"
+
+        request = requests[0]
+        request_no = str(
+            request.get("request_no") or request.get("request_id") or "申请记录",
+        )
+        order_no = str(request.get("order_no") or "订单信息暂缺")
+        status = str(request.get("status_display") or request.get("status") or "状态未知")
+        answer = (
+            f"退款申请 `{request_no}`（订单 `{order_no}`）当前状态：{status}。"
+        )
+        if request.get("status") in {"pending_review", "reviewing"}:
+            answer += "申请仍在等待人工审核，尚未退款。"
+        elif request.get("status") == "approved":
+            answer += "审核已通过；此状态不代表资金已到账。"
+        return answer
+
     if service_type == "order":
         from backend.customer_service.context_manager import resolve_order_slot
         from backend.customer_service.service.order_service import get_order_service
@@ -525,6 +594,19 @@ def _dispatch_service(
             return "您名下暂时没有可查询物流的订单，查询订单后即可查看物流。"
         try:
             result = logistics.query_logistics(user_id=user_id, order_id=order_id)
+            # 物流查询已把订单精确解析到唯一的用户订单，供下一轮受控条件
+            # 计划（如「如果还没发货，就帮我申请退款」）安全承接。
+            from backend.customer_service.context_resolver import (
+                record_recent_order,
+            )
+
+            record_recent_order(
+                tenant_id,
+                user_id,
+                session_id,
+                str(getattr(result, "order_no", "") or order_id),
+                source_intent=intent,
+            )
             shipping_status = {
                 "pending": "not_shipped", "paid": "not_shipped",
                 "shipped": "shipped", "completed": "delivered",

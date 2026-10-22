@@ -45,6 +45,233 @@ class RefundEligibility:
 
 
 class RefundService:
+    @staticmethod
+    def _business_request(
+        method: str,
+        path: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+    ) -> dict:
+        """访问统一业务客户端；写请求的不确定结果绝不伪装成失败或成功。"""
+        from backend.infra.http.business_client import (
+            BusinessServiceError,
+            request_json_sync,
+        )
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        write = method.upper() in {"POST", "PATCH"}
+        try:
+            response = request_json_sync(
+                method, path, params=params, json_body=json_body,
+            )
+        except BusinessServiceError as exc:
+            if write and (exc.status_code == 0 or exc.status_code >= 500):
+                raise SideEffectOutcomeUnknown(
+                    "业务服务未能确认售后写入结果",
+                ) from exc
+            if exc.status_code == 404:
+                if "/orders/" in path:
+                    raise OrderNotFoundError("订单不存在或不属于当前用户") from exc
+                raise RefundRequestUnavailableError(
+                    "退款申请不存在或不属于当前用户",
+                ) from exc
+            if exc.status_code == 409:
+                raise OrderNotEligibleError(
+                    "订单或退款申请状态已变化，请重新查询后再操作。",
+                ) from exc
+            raise DatabaseError(
+                "业务服务暂时不可用，未确认售后操作结果。",
+            ) from exc
+        except Exception as exc:
+            if write:
+                raise SideEffectOutcomeUnknown(
+                    "业务服务响应异常，售后写入结果未知",
+                ) from exc
+            raise DatabaseError("业务服务暂时不可用") from exc
+
+        if not isinstance(response, dict) or response.get("code") != 0:
+            if write:
+                raise SideEffectOutcomeUnknown(
+                    "业务服务未返回可核验的售后写入结果",
+                )
+            raise DatabaseError("业务服务响应封套无效")
+        data = response.get("data")
+        if not isinstance(data, dict):
+            if write:
+                raise SideEffectOutcomeUnknown(
+                    "业务服务售后响应缺少结果数据",
+                )
+            raise DatabaseError("业务服务响应缺少 data 字段")
+        return data
+
+    def list_refund_requests(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        order_no: str | None = None,
+        limit: int = 20,
+    ) -> list[dict]:
+        """读取当前可信用户和租户可见的售后申请。"""
+        if (
+            not user_id or user_id == "anonymous" or not tenant_id
+            or tenant_id == "default"
+        ):
+            raise RefundRequestUnavailableError("售后查询缺少可信身份")
+
+        from backend.customer_service.service.order_service import _use_http_gateway
+
+        if _use_http_gateway():
+            params = {
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "limit": max(1, min(int(limit), 100)),
+            }
+            if order_no:
+                params["order_no"] = order_no
+            data = self._business_request(
+                "GET", "/business/refund-requests",
+                params=params,
+            )
+            requests = data.get("requests")
+            if not isinstance(requests, list) or any(
+                not isinstance(item, dict) for item in requests
+            ):
+                raise DatabaseError("业务服务售后申请列表格式异常")
+            return requests
+
+        from backend.customer_service._db_loop import run_sync
+        from backend.customer_service.case.service import get_case_service
+
+        requests = run_sync(get_case_service().async_list_refund_requests(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            limit=max(1, min(int(limit), 100)),
+        ))
+        if order_no:
+            requests = [item for item in requests if item.get("order_no") == order_no]
+        return list(requests)
+
+    def build_refund_reason_update_proposal(
+        self, *, user_id: str, tenant_id: str, reason: str,
+    ) -> ActionProposal:
+        """为最近一笔仍可编辑的售后申请生成高风险确认提案。"""
+        from backend.customer_service.service.order_service import _use_http_gateway
+
+        if not _use_http_gateway():
+            raise RefundRequestUnavailableError(
+                "退款原因修改需要连接业务服务，请转人工协助。",
+            )
+        clean_reason = str(reason or "").strip()[:500]
+        if not clean_reason:
+            raise OrderNotEligibleError("请告诉我正确的退款原因后再修改。")
+        requests = self.list_refund_requests(
+            user_id=user_id, tenant_id=tenant_id, limit=20,
+        )
+        editable = [
+            item for item in requests
+            if item.get("status") in {"pending_review", "reviewing"}
+        ]
+        if not editable:
+            raise RefundRequestUnavailableError(
+                "没有找到可修改原因的待审核退款申请。",
+            )
+        request = editable[0]
+        request_id = str(request.get("request_id") or "").strip()
+        request_no = str(request.get("request_no") or request_id).strip()
+        order_no = str(request.get("order_no") or "").strip()
+        if not request_id or not order_no:
+            raise DatabaseError("业务服务售后申请缺少关联订单信息")
+
+        proposal_text = (
+            "## 修改退款申请原因\n\n"
+            f"**申请编号:** `{request_no}`\n"
+            f"**订单号:** `{order_no}`\n"
+            f"**原原因:** {str(request.get('reason') or '未填写')}\n"
+            f"**修改为:** {clean_reason}\n\n"
+            "确认后只修改待审核申请的原因，不会执行退款。\n\n"
+            "请确认是否修改？（回复「确认」提交 / 「取消」放弃）"
+        )
+        return ActionProposal(
+            action_type=ActionType.REFUND_REQUEST,
+            target_type="refund_request",
+            target_id=request_id,
+            risk_level=RiskLevel.HIGH,
+            proposal_text=proposal_text,
+            before_state={
+                "operation": "update_reason",
+                "request_id": request_id,
+                "request_no": request_no,
+                "order_no": order_no,
+                "status": str(request.get("status") or ""),
+                "reason": str(request.get("reason") or ""),
+            },
+            after_state={
+                "operation": "update_reason",
+                "reason": clean_reason,
+            },
+        )
+
+    def execute_refund_reason_update(
+        self,
+        pending_action: dict,
+        *,
+        confirmation_id: str,
+        user_id: str,
+        tenant_id: str,
+    ) -> dict:
+        """重新核对申请归属/状态后，经幂等 PATCH 更新原因。"""
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        before = pending_action.get("before_state")
+        after = pending_action.get("after_state")
+        if not isinstance(before, dict) or not isinstance(after, dict):
+            raise OrderNotEligibleError("退款申请修改信息不完整，请重新发起。")
+        request_id = str(before.get("request_id") or "").strip()
+        expected_reason = str(before.get("reason") or "")
+        reason = str(after.get("reason") or "").strip()[:500]
+        if (
+            not request_id or not reason or not confirmation_id
+            or before.get("operation") != "update_reason"
+            or after.get("operation") != "update_reason"
+        ):
+            raise OrderNotEligibleError("退款申请修改信息无效，未执行修改。")
+
+        data = self._business_request(
+            "GET", f"/business/refund-requests/{request_id}",
+            params={"user_id": user_id, "tenant_id": tenant_id},
+        )
+        request = data.get("request")
+        if not isinstance(request, dict):
+            raise DatabaseError("业务服务售后申请详情格式异常")
+        if (
+            str(request.get("request_id") or "") != request_id
+            or str(request.get("order_no") or "")
+            != str(before.get("order_no") or "")
+            or str(request.get("reason") or "") != expected_reason
+            or request.get("status") not in {"pending_review", "reviewing"}
+        ):
+            raise OrderNotEligibleError(
+                "退款申请状态或原因已变化，未执行修改；请重新查询后再试。",
+            )
+
+        updated = self._business_request(
+            "PATCH", f"/business/refund-requests/{request_id}/reason",
+            json_body={
+                "operation_id": confirmation_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "reason": reason,
+            },
+        )
+        result = updated.get("request")
+        if not isinstance(result, dict):
+            raise SideEffectOutcomeUnknown(
+                "业务服务未返回可核验的退款申请修改结果",
+            )
+        return result
+
     def check_refund_eligibility(
         self, user_id: str, order_id: str
     ) -> RefundEligibility:
@@ -181,15 +408,18 @@ class RefundService:
         tenant_id: str,
         conversation_id: str,
     ) -> AgentActionRecord:
-        """在显式 sandbox 模式下登记待审核申请；不会执行退款或触碰资金。"""
+        """在明确启用的业务模式中登记申请；此操作不会执行资金退款。"""
         from backend.config import customer_service as cfg
 
-        if (
-            str(getattr(cfg, "CS_REFUND_REQUEST_MODE", "disabled")).lower()
-            != "sandbox"
-            or str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
-            != "sandbox"
-        ):
+        refund_mode = str(
+            getattr(cfg, "CS_REFUND_REQUEST_MODE", "disabled"),
+        ).lower()
+        gateway_mode = str(
+            getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", ""),
+        ).lower()
+        http_mode = gateway_mode == "http" and refund_mode == "http"
+        sandbox_mode = gateway_mode == "sandbox" and refund_mode == "sandbox"
+        if not (http_mode or sandbox_mode):
             raise RefundRequestUnavailableError()
         if (
             not user_id or user_id == "anonymous" or not tenant_id
@@ -205,6 +435,48 @@ class RefundService:
         after = pending_action.get("after_state")
         if not isinstance(before, dict) or not isinstance(after, dict):
             raise OrderNotEligibleError("退款确认信息不完整，请重新发起申请")
+        try:
+            stable_confirmation_id = str(uuid.UUID(str(confirmation_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise OrderNotEligibleError("确认标识无效，申请未登记") from None
+
+        operation = str(after.get("operation") or "create")
+        if operation == "update_reason":
+            request_id = str(before.get("request_id") or "").strip()
+            if pending_action.get("target_id") != request_id:
+                raise OrderNotEligibleError(
+                    "退款申请与确认目标不一致，未执行修改。",
+                )
+            if not http_mode:
+                raise RefundRequestUnavailableError(
+                    "当前业务模式不支持修改已提交的退款申请。",
+                )
+            request = self.execute_refund_reason_update(
+                pending_action,
+                confirmation_id=stable_confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+            )
+            return AgentActionRecord(
+                action_id=stable_confirmation_id,
+                action_type=ActionType.REFUND_REQUEST,
+                agent_type="ai",
+                target_type="refund_request",
+                target_id=request_id,
+                data={
+                    "request": request,
+                    "request_status": request.get("status", ""),
+                    "funds_refunded": False,
+                    "execution_mode": "business_service",
+                    "operation": "update_reason",
+                },
+                status="executed",
+                executed_at=datetime.now(timezone.utc),
+            )
+
+        if operation != "create":
+            raise OrderNotEligibleError("退款操作类型无效，未执行任何写入。")
+
         order_id = str(pending_action.get("target_id") or "").strip()
         if not order_id or str(before.get("order_id") or "") != order_id:
             raise OrderNotEligibleError("退款确认订单与提案不一致，请重新发起申请")
@@ -230,12 +502,46 @@ class RefundService:
                 "订单或退款政策已变化，申请未登记；请重新查询并发起。",
             )
 
-        try:
-            stable_confirmation_id = str(uuid.UUID(str(confirmation_id)))
-        except (ValueError, TypeError, AttributeError):
-            raise OrderNotEligibleError("确认标识无效，申请未登记") from None
-
         reason = str(after.get("reason") or "").strip()[:500]
+        if http_mode:
+            data = self._business_request(
+                "POST", "/business/refund-requests",
+                json_body={
+                    "request_id": stable_confirmation_id,
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
+                    "conversation_id": conversation_id,
+                    "order_no": eligibility.order_no,
+                    "expected_order_status": eligibility.status,
+                    "expected_amount": format(current_amount, ".2f"),
+                    "policy_version": eligibility.policy_version,
+                    "reason": reason,
+                },
+            )
+            request = data.get("request")
+            if not isinstance(request, dict):
+                from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+                raise SideEffectOutcomeUnknown(
+                    "业务服务没有返回可核验的退款申请结果",
+                )
+            return AgentActionRecord(
+                action_id=stable_confirmation_id,
+                action_type=ActionType.REFUND_REQUEST,
+                agent_type="ai",
+                target_type="order",
+                target_id=eligibility.order_id,
+                data={
+                    "request": request,
+                    "request_status": request.get("status", "pending_review"),
+                    "funds_refunded": False,
+                    "execution_mode": "business_service",
+                    "operation": "create",
+                },
+                status="executed",
+                executed_at=datetime.now(timezone.utc),
+            )
+
         from backend.customer_service.case.service import get_case_service
 
         request = get_case_service().create_refund_request_sync(
@@ -315,10 +621,9 @@ class RefundService:
         降级方向不安全 —— 重复退款闸门失效。改为 fail-closed：无法确认
         不存在退款记录时拒绝并提示用户，宁可多一次人工介入也不双退款。
 
-        http 网关模式跳过本地 refunds 查重（能力边界，非 fallback）：订单
-        事实在 business service 侧，其退款记录本地库必然查不到；网关契约
-        暂无退款端点，因此退款申请写入被关闭，不能回退到本地沙盒数据。
-        未来真实退款能力接入时必须由业务网关侧提供重复申请/退款校验。
+        HTTP 模式跳过本地 refunds 查重（能力边界，非 fallback）：订单事实
+        在 business-service 侧，活跃申请唯一性由其退款申请写接口原子裁决；
+        Python 不以本地演示库结果代替远端查重。
         """
         from backend.customer_service.service.order_service import _use_http_gateway
 

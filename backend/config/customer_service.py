@@ -238,10 +238,10 @@ CS_CONFIRM_LLM_CANDIDATE_ENABLED = os.getenv("CS_CONFIRM_LLM_CANDIDATE_ENABLED",
 
 # ── 业务网关（批次B：客服业务服务经 HTTP 调真实业务系统）────────
 # sandbox（默认）：直查内部演示库 + demo 身份映射，行为与历史版本一致
-# http：经 infra/http/business_client 调 business-service（Java/mock），
-#       仅收口的只读查询先切；失败返回友好话术，绝不降级回 sandbox 假数据
+# http：经 infra/http/business_client 调 business-service（Java/mock）；
+#       订单、物流和售后申请都以远端为事实源，失败不回退 sandbox
 CS_BUSINESS_GATEWAY_MODE = os.getenv("CS_BUSINESS_GATEWAY_MODE", "sandbox").strip().lower()
-# 默认关闭退款申请写入；本机隔离环境显式设为 sandbox 才可创建案件。
+# 默认关闭退款申请写入；仅同网关模式下显式配置 sandbox 或 http 才开放。
 CS_REFUND_REQUEST_MODE = os.getenv(
     "CS_REFUND_REQUEST_MODE", "disabled",
 ).strip().lower()
