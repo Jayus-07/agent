@@ -43,11 +43,28 @@ async def list_knowledge_bases(request: Request):
     """知识库列表（含文档计数）— 按主体授权集合收窄（不返回不可见库）。"""
     principal = require_principal(request)
     try:
-        authz = RagAuthorization.build(principal)
+        authz = await asyncio.to_thread(RagAuthorization.build, principal)
     except RagAuthorizationError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    if not principal.tenant_id:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     from backend.config.knowledge_base import get_kb_list
-    kbs = [kb for kb in get_kb_list() if authz.can_search_kb(kb["id"])]
+    from backend.rag.knowledge_base_store import list_active_departments
+    try:
+        departments = await asyncio.to_thread(
+            list_active_departments, principal.tenant_id
+        )
+        kb_options = await asyncio.to_thread(get_kb_list, departments)
+        kbs = [kb for kb in kb_options if authz.can_search_kb(kb["id"])]
+    except Exception as exc:
+        logger.error("读取知识库或部门目录失败，拒绝返回上传选项: %s", exc, exc_info=True)
+        raise HTTPException(status_code=503, detail="知识库或部门目录暂不可用") from exc
+    if not authz.is_admin:
+        # 普通员工只能将文档归属到自己的部门；UI 也只提供一个有效选项，
+        # 后端上传仍会再次按 Principal 校验，不能依赖前端限制。
+        own_department = principal.department
+        for kb in kbs:
+            kb["depts"] = [d for d in kb["depts"] if d["id"] == own_department]
     try:
         reg = _get_registry()
         for kb in kbs:
@@ -66,7 +83,7 @@ async def search_knowledge(req: SearchRequest, request: Request):
     if not query.strip():
         return {"query": query, "results": [], "error": "请输入检索词"}
     try:
-        authz = RagAuthorization.build(principal)
+        authz = await asyncio.to_thread(RagAuthorization.build, principal)
     except RagAuthorizationError as e:
         # 授权服务故障 fail-closed：拒绝请求，绝不退化为无过滤检索
         logger.error(f"[RAG] /search 授权失败: {e}")
@@ -144,7 +161,7 @@ async def rag_ask(req: RAGAskRequest, request: Request):
     kb_id = req.kb_id or "default"
     principal = require_principal(request)
     try:
-        authz = RagAuthorization.build(principal)
+        authz = await asyncio.to_thread(RagAuthorization.build, principal)
     except RagAuthorizationError as e:
         logger.error(f"[RAG] /ask 授权失败: {e}")
         raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝检索")

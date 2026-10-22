@@ -289,6 +289,40 @@ def test_coverage_joins_declared_parts_and_detects_a_missing_part():
     assert incomplete["uncovered_count"] == 1, incomplete
 
 
+def test_filter_keeps_symbol_heavy_split_continuation_for_source_coverage():
+    """拆分块的有效尾段不能因符号占比高而被过滤丢失。"""
+    from langchain_core.documents import Document
+    from backend.rag.indexing.indexer import _filter_index_chunks
+
+    left = "条款字段需要保留。"
+    right = "！" * 20 + "责任"
+    source = left + right
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[
+            DocumentNode(type="paragraph", text=source),
+        ]),
+        raw_text=source,
+    )
+    chunks = [
+        Document(left, metadata={
+            "granularity": "leaf", "chunk_id": "part-0",
+            "split_group_id": "source-1", "split_part": 0, "split_total": 2,
+        }),
+        Document(right, metadata={
+            "granularity": "leaf", "chunk_id": "part-1",
+            "split_group_id": "source-1", "split_part": 1, "split_total": 2,
+        }),
+    ]
+
+    kept, filtered = _filter_index_chunks(
+        chunks, ChunkFilter(), "source.pdf", "legal",
+    )
+
+    assert len(kept) == 2
+    assert filtered == []
+    assert coverage_audit(ast, kept)["uncovered_count"] == 0
+
+
 def test_legal_long_clause_keeps_every_source_window():
     """长法律条款切分后，各输出片段仍须连续覆盖源文本。"""
     from backend.rag.preprocessing.chunking import LegalChunkStrategy

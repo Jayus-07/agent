@@ -87,7 +87,10 @@ def test_list_operations_scopes_admin_active_runs_to_own_tenant(monkeypatch):
         kb_scope=frozenset(),
         can_manage_row=lambda _row: (True, ""),
     )
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: authz)
+    async def _require_authz(_request):
+        return authz
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     monkeypatch.setattr(
         rag_documents,
         "_get_op_logger",

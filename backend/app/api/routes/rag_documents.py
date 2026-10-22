@@ -1,6 +1,6 @@
 """RAG 文档管理路由 — PR-2.x 从 rag.py 抽出。"""
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
-from fastapi.responses import StreamingResponse, FileResponse, Response
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends, Query
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse, Response
 from backend.app.api.schemas import RAGAskRequest, ErrorResponse
 from backend.app.api.deps import (
     get_rag_pipeline,
@@ -9,9 +9,11 @@ from backend.app.api.deps import (
     require_rag_user,
     require_rag_editor,
     require_admin_user,
+    require_user_actor,
 )
 import asyncio
 import os
+import re
 import time
 
 from backend.config import EMBEDDING_MODEL, EMBEDDING_MODEL_PATH, ENV_MODE
@@ -55,7 +57,7 @@ from backend.app.api.routes._rag_shared import (
 router = APIRouter(dependencies=[Depends(require_rag_user)])
 
 
-def _require_authz(request: Request):
+async def _require_authz(request: Request):
     """路由级授权入口（2026-10-01 权限收口）：Principal → RagAuthorization。
 
     授权服务异常 fail-closed（403），绝不退化为无过滤查询。
@@ -65,7 +67,7 @@ def _require_authz(request: Request):
 
     principal = require_principal(request)
     try:
-        return RagAuthorization.build(principal)
+        return await asyncio.to_thread(RagAuthorization.build, principal)
     except RagAuthorizationError as e:
         logger.error(f"[RAG] 授权失败: {e}")
         raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝操作")
@@ -90,7 +92,7 @@ def _deny_manage(reason: str):
 async def get_stats(request: Request):
     """知识库统计 — 只统计当前主体可见范围（授权下推，不泄露全局量）。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         reg = _get_registry()
         docs = [d for d in reg.list_active() if authz.can_read_row(d)]
         total_chunks = sum(d.get("chunk_count", 0) for d in docs)
@@ -129,7 +131,7 @@ async def list_documents(
 ):
     """文档列表 — 支持搜索、分页、元数据过滤；行集与 total 同受授权范围约束"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         reg = _get_registry()
 
         # 授权范围下推（2026-10-01）：显式 kb/department 参数是查询条件，
@@ -249,7 +251,7 @@ async def list_operations(
     batch_id: str = "",
 ):
     """文档操作日志和仍在运行的索引任务。"""
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     try:
         result = _get_op_logger().list(
             page=page, page_size=page_size, operation=operation, doc_id=doc_id, batch_id=batch_id,
@@ -292,7 +294,7 @@ async def list_pending_docs(request: Request, page: int = 1, page_size: int = 20
     """列出待审核文档（status=pending_review）— 按「可管理范围」过滤：
     非 admin 编辑只看到本部门、可见库的待审文档（total 同口径）。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         reg = _get_registry()
         dept_filter = "" if authz.is_admin else (authz.principal.department or "")
         result = reg.list_pending_review(
@@ -321,7 +323,7 @@ async def list_pending_docs(request: Request, page: int = 1, page_size: int = 20
 async def approve_pending_doc(doc_id: str, request: Request):
     """批准 pending 文档 → status='active'（2026-08-11）。"""
     source = _extract_source(request)
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     try:
         # 归属校验先于任何模式分支：registry 是共享 PG，app 侧可直接裁决
         reg = _get_registry()
@@ -384,7 +386,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
 async def reject_pending_doc(doc_id: str, request: Request):
     """拒绝 pending 文档 → status='deleted'（2026-08-11）。"""
     source = _extract_source(request)
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     try:
         # 归属校验先于任何模式分支
         reg = _get_registry()
@@ -446,7 +448,7 @@ async def get_document(doc_id: str, request: Request):
     from backend.config import CHUNK_SIZE, CHUNK_OVERLAP
 
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
@@ -522,7 +524,7 @@ async def preview_document_file(doc_id: str, request: Request):
       内部令牌转发 rag-service（文件在服务侧主机，app 不可直读）；
     - file_path 仅服务器侧使用，不回显、不出 API 边界。
     """
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     try:
         reg = _get_registry()
         doc = await asyncio.to_thread(reg.get_by_doc_id, doc_id)
@@ -567,7 +569,7 @@ async def preview_document_file(doc_id: str, request: Request):
 async def list_processing_runs(doc_id: str, request: Request, page: int = 1, page_size: int = 20):
     """返回文档历次入库运行及其模型血缘摘要（先授权后取数）。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         doc = _get_registry().get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
             return {"doc_id": doc_id, "items": [], "total": 0, "error": "文档不存在"}
@@ -587,7 +589,7 @@ async def list_processing_runs(doc_id: str, request: Request, page: int = 1, pag
 async def get_processing_run_detail(doc_id: str, run_id: str, request: Request):
     """返回一次入库运行的阶段、模型、版本和 token 明细（先授权后取数）。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         doc = _get_registry().get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
             return {"doc_id": doc_id, "run_id": run_id, "error": "文档不存在"}
@@ -680,7 +682,7 @@ async def reindex_document(doc_id: str, request: Request, force: bool = False):
     source = _extract_source(request)
     batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     reg = _get_registry()
 
     try:
@@ -746,7 +748,7 @@ async def reindex_status(doc_id: str, request: Request):
     SUCCESS/FAILED/CANCELLED = 终态（前端停止轮询）。
     progress 为 Redis 镜像的最新阶段事件（stage=done/error/duplicate 即终态）。
     """
-    authz = _require_authz(request)
+    authz = await _require_authz(request)
     doc = _get_registry().get_by_doc_id(doc_id)
     if not doc or not authz.can_read_row(doc):
         return {"ok": False, "error": "文档不存在"}
@@ -876,12 +878,18 @@ async def delete_document(doc_id: str, request: Request):
     batch_id = request.headers.get("X-Batch-Id") or None
     doc_name = ""
     _delete_t0 = time.time()
-    authz = _require_authz(request)
+    delete_started = False
+    delete_mode = "local"
+    authz = await _require_authz(request)
     try:
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc:
-            return {"ok": False, "error": "文档不存在"}
+            return JSONResponse(
+                status_code=404,
+                content={"ok": False, "code": "document_not_found",
+                         "operation_state": "failed", "error": "文档不存在"},
+            )
         doc_name = doc.get("file_name", "")
         # 归属校验（2026-10-01）：删除含 os.remove 副作用，必须先过归属裁决
         ok, reason = authz.can_manage_row(doc)
@@ -892,11 +900,31 @@ async def delete_document(doc_id: str, request: Request):
         # remote 模式：app 不持有向量库，级联清理（向量/chunk_store/BM25/源文件）
         # 必须由持有本地索引的 rag-service 执行（2026-10-01 删除收口）
         from backend.config.rag import RAG_MODE
+        delete_mode = RAG_MODE
         if RAG_MODE == "remote":
             pipeline = await asyncio.to_thread(get_rag_pipeline)
+            # 请求一旦发往 rag-service，连接断开时无法确认服务端是否已经
+            # 软删或清理了索引；该结果必须作为“状态未知”交给调用方。
+            delete_started = True
             result = await asyncio.to_thread(pipeline.delete_document_cascade, doc_id)
+            if not result.get("ok"):
+                error = str(result.get("error") or "删除未完成")
+                _safe_log_op(
+                    doc_id, doc_name, "delete", source, trace_id=None,
+                    batch_id=batch_id, result="failed",
+                    duration_ms=int((time.time() - _delete_t0) * 1000),
+                    detail={"mode": "remote", "code": "delete_rejected",
+                            "operation_state": "failed", "error": error[:200]},
+                    user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                )
+                return JSONResponse(
+                    status_code=404 if error == "文档不存在" else 409,
+                    content={"ok": False, "code": "document_not_found" if error == "文档不存在" else "delete_rejected",
+                             "operation_state": "failed", "error": error},
+                )
+            result["operation_state"] = "partial" if result.get("degraded") else "success"
             _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
-                         result="success" if result.get("ok") else "failed",
+                         result="partial" if result.get("degraded") else "success",
                          duration_ms=int((time.time() - _delete_t0) * 1000),
                          detail={"mode": "remote", "deleted_rows": result.get("deleted_rows"),
                                  "degraded": result.get("degraded"),
@@ -905,6 +933,7 @@ async def delete_document(doc_id: str, request: Request):
             return result
 
         # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）
+        delete_started = True
         deleted_rows = reg.mark_deleted_by_doc_id(doc_id)
         logger.info(f"[RAG] 软删 doc_id={doc_id}: {deleted_rows} 行")
         warnings: list[str] = []
@@ -928,14 +957,36 @@ async def delete_document(doc_id: str, request: Request):
                      duration_ms=int((time.time() - _delete_t0) * 1000),
                      detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None},
                      user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
-        return {"ok": True, "doc_id": doc_id, "degraded": degraded, "warnings": warnings or None}
+        return {
+            "ok": True,
+            "doc_id": doc_id,
+            "degraded": degraded,
+            "operation_state": "partial" if degraded else "success",
+            "warnings": warnings or None,
+        }
     except Exception as e:
-        logger.error(f"[RAG] 删除文档失败: {e}")
+        operation_state = "unknown" if delete_started else "failed"
+        result_state = "unknown" if delete_started else "failed"
+        error_text = str(e)[:500]
+        logger.error(
+            "[RAG] 删除文档%s: %s",
+            "状态未知" if operation_state == "unknown" else "失败",
+            e,
+        )
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
-                     result="failed", duration_ms=int((time.time() - _delete_t0) * 1000),
-                     detail={"error": str(e)[:200]},
+                     result=result_state, duration_ms=int((time.time() - _delete_t0) * 1000),
+                     detail={"error": error_text[:200], "operation_state": operation_state,
+                             "code": "delete_outcome_unknown" if delete_started else "delete_failed"},
                      user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
-        return {"ok": False, "error": str(e)}
+        return JSONResponse(
+            status_code=502 if delete_mode == "remote" and delete_started else 500,
+            content={
+                "ok": False,
+                "code": "delete_outcome_unknown" if delete_started else "delete_failed",
+                "operation_state": operation_state,
+                "error": error_text,
+            },
+        )
 
 
 @router.get("/documents/{doc_id}/chunks")
@@ -944,7 +995,7 @@ async def get_chunks(doc_id: str, request: Request):
     active（已发布）文档暴露正文；候选/失败文档不可见。数据源 =
     chunk_store（agent_memory.chunk_store，与 rag-service 同库）。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         reg = _get_registry()
         doc = reg.get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
@@ -996,7 +1047,7 @@ async def get_chunk_detail(doc_id: str, request: Request):
     """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
     供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
     try:
-        authz = _require_authz(request)
+        authz = await _require_authz(request)
         doc = _get_registry().get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
             return {"doc_id": doc_id, "chunks": [], "total": 0, "error": "文档不存在"}
@@ -1014,37 +1065,291 @@ async def get_chunk_detail(doc_id: str, request: Request):
     except Exception as e:
         return {"doc_id": doc_id, "chunks": [], "total": 0, "error": str(e)}
 
-# ── S2 知识库授权盘点（2026-10-05，管理端「知识库授权」面板数据源）──
-@router.get("/kb-authority", dependencies=[Depends(require_admin_user)])
-async def kb_authority_overview():
-    """全量 KB 注册口径盘点（admin）：owner_depts/audience/文档计数/状态。
+# ── 知识库目录管理：版本并发控制、软删除与同事务审计 ──
+_KB_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,63}$")
+_KB_DOMAIN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+_KB_AUDIENCES = {"internal", "customer", "test"}
 
-    注册表以 backend/config/knowledge_base.py 为单一事实源（G2，禁止手抄
-    第二份）；此端点只读派生，不做授权变更——可见性变更走代码评审（注册表
-    变更随仓库发布），避免运行时改口径造成审计断链。
-    """
-    from backend.config.knowledge_base import KNOWLEDGE_BASES
-    items = []
-    counts: dict = {}
+
+def _kb_management_identity(request: Request):
+    from backend.app.api.identity import resolve_identity
+
+    identity = resolve_identity(request)
+    if not identity.authenticated or not identity.tenant_id:
+        raise HTTPException(status_code=403, detail="需要可信用户和租户身份")
+    return identity
+
+
+async def require_kb_catalog_super_admin(
+    request: Request, operator=Depends(require_user_actor),
+):
+    """知识库目录是平台级共享资源，写操作仅允许平台超级管理员。"""
+    role = str(getattr(operator, "role", "") or "").strip().lower()
+    if role != "super_admin":
+        try:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "AUTHZ_DENIED",
+                category="KB_CATALOG_SUPER_ADMIN_REQUIRED",
+                detail={
+                    "path": str(getattr(request.url, "path", ""))[:200],
+                    "actor": getattr(operator, "actor", ""),
+                    "role": role,
+                },
+            )
+        except Exception:
+            logger.warning("知识库目录超管拒绝审计写入失败", exc_info=True)
+        raise HTTPException(status_code=403, detail="知识库目录修改仅限 super_admin")
+    return operator
+
+
+async def _kb_departments_for_write(
+    identity, owner_depts: list[str], existing_owner_depts: list[str] | None = None,
+) -> list[str]:
+    from backend.rag.knowledge_base_store import list_active_departments
+
+    active = await asyncio.to_thread(list_active_departments, identity.tenant_id)
+    available = {item["id"] for item in active if item.get("active", True)}
+    if not available:
+        raise HTTPException(status_code=409, detail="当前租户没有启用部门，不能配置知识库")
+    values = list(dict.fromkeys(value.strip().lower() for value in owner_depts))
+    if not values or any(not value for value in values):
+        raise HTTPException(status_code=400, detail="至少选择一个负责部门")
+    if "all" in values:
+        if values != ["all"]:
+            raise HTTPException(status_code=400, detail="全部部门不能与具体部门同时选择")
+        return values
+    preserved_inactive = set(existing_owner_depts or []) - available
+    unknown = sorted(set(values) - available - preserved_inactive)
+    if unknown:
+        raise HTTPException(
+            status_code=400,
+            detail=f"部门不存在或已停用：{', '.join(unknown)}",
+        )
+    return values
+
+
+def _validate_kb_name(value) -> str:
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="知识库名称必须是文本")
+    normalized = value.strip()
+    if not normalized or len(normalized) > 120 or any(ord(char) < 32 for char in normalized):
+        raise HTTPException(status_code=400, detail="知识库名称不能为空且不能超过 120 个字符")
+    return normalized
+
+
+def _validate_kb_domain(value) -> str:
+    if not isinstance(value, str) or not _KB_DOMAIN_RE.fullmatch(value.strip().lower()):
+        raise HTTPException(status_code=400, detail="域标识格式无效")
+    return value.strip().lower()
+
+
+def _kb_operator_id(identity) -> str:
+    return str(identity.user_id)
+
+
+def _map_kb_store_error(exc):
+    from backend.rag.knowledge_base_store import (
+        KnowledgeBaseConflict,
+        KnowledgeBaseNotFound,
+        KnowledgeBaseStoreError,
+    )
+
+    if isinstance(exc, KnowledgeBaseConflict):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, KnowledgeBaseNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, KnowledgeBaseStoreError):
+        return HTTPException(status_code=400, detail=str(exc))
+    logger.exception("知识库目录数据库操作失败", exc_info=exc)
+    return HTTPException(status_code=503, detail="知识库目录暂不可用")
+
+
+@router.get("/kb-authority", dependencies=[Depends(require_admin_user)])
+async def kb_authority_overview(
+    request: Request,
+    include_inactive: bool = Query(False),
+):
+    """读取知识库目录、当前租户的启用部门及文档计数。"""
+    identity = _kb_management_identity(request)
+    from backend.rag.knowledge_base_store import (
+        list_departments,
+        list_knowledge_bases,
+    )
+    try:
+        items = await asyncio.to_thread(
+            list_knowledge_bases, include_inactive=include_inactive
+        )
+        departments = await asyncio.to_thread(
+            list_departments, identity.tenant_id, include_inactive=True
+        )
+    except Exception as exc:
+        raise _map_kb_store_error(exc) from exc
+    counts: dict[str, int] = {}
     try:
         reg = _get_registry()
-        for kid in KNOWLEDGE_BASES:
-            try:
-                counts[kid] = reg.count_by_kb_id(kid)
-            except Exception:
-                counts[kid] = 0
+        for item in items:
+            counts[item["kb_id"]] = reg.count_by_kb_id(item["kb_id"])
     except Exception:
-        logger.warning("KB 授权盘点：registry 计数失败，回退 0", exc_info=True)
-    for kid, meta in sorted(KNOWLEDGE_BASES.items()):
-        items.append({
-            "kb_id": kid,
-            "name": meta.get("name", kid),
-            "domain": meta.get("domain", ""),
-            "owner_depts": meta.get("owner_depts", []),
-            "audience": meta.get("audience", "internal"),
-            "deprecated": bool(meta.get("deprecated", False)),
-            "read_only": bool(meta.get("read_only", False)),
-            "alias_for": meta.get("alias_for"),
-            "doc_count": counts.get(kid, 0),
-        })
-    return {"knowledge_bases": items, "total": len(items)}
+        logger.warning("知识库文档计数失败，回退为 0", exc_info=True)
+    for item in items:
+        item["doc_count"] = counts.get(item["kb_id"], 0)
+    return {"knowledge_bases": items, "departments": departments, "total": len(items)}
+
+
+@router.post("/knowledge-bases", status_code=201)
+async def create_knowledge_base(request: Request, operator=Depends(require_kb_catalog_super_admin)):
+    identity = _kb_management_identity(request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+    unknown = set(body) - {"kb_id", "name", "domain", "owner_depts", "audience"}
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"不支持的字段：{', '.join(sorted(unknown))}")
+    kb_id = str(body.get("kb_id") or "").strip().lower()
+    if not _KB_ID_RE.fullmatch(kb_id) or kb_id in {"default", "all"}:
+        raise HTTPException(status_code=400, detail="知识库标识格式无效或使用了保留标识")
+    owner_depts = body.get("owner_depts")
+    if not isinstance(owner_depts, list) or any(not isinstance(value, str) for value in owner_depts):
+        raise HTTPException(status_code=400, detail="负责部门必须是字符串数组")
+    owner_depts = await _kb_departments_for_write(identity, owner_depts)
+    audience = body.get("audience", "internal")
+    if not isinstance(audience, str) or audience not in _KB_AUDIENCES:
+        raise HTTPException(status_code=400, detail="受众类型无效")
+    if audience != "internal" and operator.role != "super_admin":
+        raise HTTPException(status_code=403, detail="设置对客或测试知识库仅限 super_admin")
+    from backend.rag.knowledge_base_store import create_knowledge_base as create_record
+    try:
+        return await asyncio.to_thread(
+            create_record,
+            kb_id=kb_id,
+            name=_validate_kb_name(body.get("name")),
+            domain=_validate_kb_domain(body.get("domain")),
+            owner_depts=owner_depts,
+            audience=audience,
+            tenant_id=identity.tenant_id,
+            actor_id=_kb_operator_id(identity),
+        )
+    except Exception as exc:
+        raise _map_kb_store_error(exc) from exc
+
+
+@router.patch("/knowledge-bases/{kb_id}")
+async def update_knowledge_base(
+    kb_id: str, request: Request, operator=Depends(require_kb_catalog_super_admin),
+):
+    identity = _kb_management_identity(request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON 对象")
+    version = body.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        raise HTTPException(status_code=400, detail="知识库版本号必须是非负整数")
+    unknown = set(body) - {"version", "name", "domain", "owner_depts", "audience"}
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"不支持的字段：{', '.join(sorted(unknown))}")
+    changes = {}
+    if "name" in body:
+        changes["name"] = _validate_kb_name(body["name"])
+    if "domain" in body:
+        changes["domain"] = _validate_kb_domain(body["domain"])
+    from backend.rag.knowledge_base_store import (
+        KnowledgeBaseNotFound,
+        get_knowledge_base,
+        update_knowledge_base as update_record,
+    )
+    try:
+        current = await asyncio.to_thread(get_knowledge_base, kb_id)
+        if not current:
+            raise KnowledgeBaseNotFound("知识库不存在")
+        if current["audience"] == "test" and operator.role != "super_admin":
+            raise HTTPException(status_code=403, detail="测试知识库仅限 super_admin 管理")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_kb_store_error(exc) from exc
+    if "owner_depts" in body:
+        if not isinstance(body["owner_depts"], list) or any(
+            not isinstance(value, str) for value in body["owner_depts"]
+        ):
+            raise HTTPException(status_code=400, detail="负责部门必须是字符串数组")
+        changes["owner_depts"] = await _kb_departments_for_write(
+            identity, body["owner_depts"], current["owner_depts"]
+        )
+    if "audience" in body:
+        if not isinstance(body["audience"], str) or body["audience"] not in _KB_AUDIENCES:
+            raise HTTPException(status_code=400, detail="受众类型无效")
+        if operator.role != "super_admin":
+            raise HTTPException(status_code=403, detail="修改受众类型仅限 super_admin")
+        changes["audience"] = body["audience"]
+    try:
+        return await asyncio.to_thread(
+            update_record,
+            kb_id=kb_id,
+            version=version,
+            changes=changes,
+            tenant_id=identity.tenant_id,
+            actor_id=_kb_operator_id(identity),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_kb_store_error(exc) from exc
+
+
+async def _set_knowledge_base_status(
+    kb_id: str, request: Request, operator, *, active: bool,
+):
+    identity = _kb_management_identity(request)
+    try:
+        body = await request.json()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="请求体必须是 JSON") from exc
+    version = body.get("version") if isinstance(body, dict) else None
+    if isinstance(version, bool) or not isinstance(version, int) or version < 0:
+        raise HTTPException(status_code=400, detail="知识库版本号必须是非负整数")
+    from backend.rag.knowledge_base_store import (
+        KnowledgeBaseNotFound,
+        activate_knowledge_base,
+        deactivate_knowledge_base,
+        get_knowledge_base,
+    )
+    try:
+        current = await asyncio.to_thread(get_knowledge_base, kb_id)
+        if not current:
+            raise KnowledgeBaseNotFound("知识库不存在")
+        if (current["audience"] == "test" or current["audience"] == "customer") and operator.role != "super_admin":
+            raise HTTPException(status_code=403, detail="对客或测试知识库仅限 super_admin 管理")
+        operation = activate_knowledge_base if active else deactivate_knowledge_base
+        return await asyncio.to_thread(
+            operation,
+            kb_id=kb_id,
+            version=version,
+            tenant_id=identity.tenant_id,
+            actor_id=_kb_operator_id(identity),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise _map_kb_store_error(exc) from exc
+
+
+@router.post("/knowledge-bases/{kb_id}/activate")
+async def activate_knowledge_base_route(
+    kb_id: str, request: Request, operator=Depends(require_kb_catalog_super_admin),
+):
+    return await _set_knowledge_base_status(kb_id, request, operator, active=True)
+
+
+@router.delete("/knowledge-bases/{kb_id}")
+async def deactivate_knowledge_base_route(
+    kb_id: str, request: Request, operator=Depends(require_kb_catalog_super_admin),
+):
+    return await _set_knowledge_base_status(kb_id, request, operator, active=False)

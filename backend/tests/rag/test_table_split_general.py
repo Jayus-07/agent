@@ -7,12 +7,15 @@
   特有 reporting_period/fiscal_year/is_latest 元数据补丁）
 - 表头规范化失败 → 整表兜底 chunk，不丢内容
 """
+import json
+
 import pytest
 from langchain_core.documents import Document
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.chunking import (
     FinancialTableChunkStrategy,
+    LegalChunkStrategy,
     StructureChunkStrategy,
     _split_table_node,
 )
@@ -56,6 +59,22 @@ class TestHelperDirect:
             assert r.metadata["parent_chunk_id"] == parent.metadata["chunk_id"]
             assert r.metadata["table_id"] == parent.metadata["chunk_id"]
 
+    def test_pdf_table_source_location_is_stamped_on_each_table_chunk(self):
+        node = _table_node(FIN_ROWS)
+        node.page_number = 7
+        node.bbox = (18.5, 42.0, 560.0, 710.5)
+        sec = _section([node])
+
+        chunks = _split_table_node(node, sec, ["测试章节"], "table.pdf")
+
+        assert chunks
+        for chunk in chunks:
+            assert chunk.metadata["pages"] == "7"
+            assert json.loads(chunk.metadata["source_locations_json"]) == [
+                {"page": 7, "bbox": [18.5, 42.0, 560.0, 710.5]},
+            ]
+
+
     def test_rows_not_cut_midline(self):
         """行不被切断：每行 chunk 的 kv 文本只含本行科目。"""
         node = _table_node(FIN_ROWS)
@@ -76,13 +95,35 @@ class TestHelperDirect:
         assert with_numbers, "行级 leaf 应含 numeric_values"
 
     def test_header_normalize_failure_falls_back(self):
-        """表头规范化失败 → 整表单个 chunk 兜底。"""
+        """表头规范化失败 → 兜底 Leaf 保留原文并挂虚拟 Parent。"""
         node = _table_node([[], []])  # 空表头/空数据
         sec = _section([node])
         chunks = _split_table_node(node, sec, ["测试章节"], "/x.md")
-        assert len(chunks) == 1
-        assert chunks[0].metadata["chunk_type"] == "table_fallback"
-        assert chunks[0].metadata["parent_chunk_id"] == ""
+        leaves = [chunk for chunk in chunks if chunk.metadata["granularity"] == "leaf"]
+        parents = [chunk for chunk in chunks if chunk.metadata["granularity"] == "parent"]
+        assert len(leaves) == 1
+        assert len(parents) == 1
+        assert leaves[0].metadata["chunk_type"] == "table_fallback"
+        assert leaves[0].metadata["parent_chunk_id"] == parents[0].metadata["chunk_id"]
+
+
+def test_legal_inline_table_keeps_pdf_source_location():
+    table = _table_node(FIN_ROWS)
+    table.page_number = 12
+    table.bbox = (30.0, 90.0, 540.0, 680.0)
+    clause = _section([table], text="第二条 服务费用")
+    ast = DocumentAST(
+        root=DocumentNode(type="section", text="", level=0, children=[clause]),
+    )
+
+    chunks = LegalChunkStrategy().split(ast, "contract.pdf")
+
+    inline = [chunk for chunk in chunks if chunk.metadata["chunk_type"] == "table_inline"]
+    assert len(inline) == 1
+    assert inline[0].metadata["pages"] == "12"
+    assert json.loads(inline[0].metadata["source_locations_json"]) == [
+        {"page": 12, "bbox": [30.0, 90.0, 540.0, 680.0]},
+    ]
 
 
 class TestStructureStrategyIntegration:
@@ -148,5 +189,9 @@ class TestFinancialStrategyUnchanged:
         fin_chunks = [c for c in FinancialTableChunkStrategy().split(ast, "/tmp/r.md")
                       if c.metadata.get("chunk_type") in ("table_summary", "table_row")]
 
+        direct_table_chunks = [
+            chunk for chunk in direct
+            if chunk.metadata.get("chunk_type") in ("table_summary", "table_row")
+        ]
         assert {c.metadata["chunk_id"] for c in fin_chunks} == \
-               {c.metadata["chunk_id"] for c in direct}
+               {c.metadata["chunk_id"] for c in direct_table_chunks}

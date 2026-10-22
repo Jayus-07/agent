@@ -15,7 +15,11 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from backend.app.api.deps import require_rag_user
+from backend.app.api.deps import (
+    require_admin_user,
+    require_rag_editor,
+    require_rag_user,
+)
 from backend.app.api.routes import rag as rag_route
 from backend.app.api.routes import rag_documents
 
@@ -33,6 +37,22 @@ def _client(app: FastAPI) -> TestClient:
     app.dependency_overrides[require_rag_user] = lambda: SimpleNamespace(
         user_id="1", authenticated=True)
     return TestClient(app)
+
+
+def _admin_client(app: FastAPI) -> TestClient:
+    app.dependency_overrides[require_rag_user] = lambda: SimpleNamespace(
+        user_id="1", authenticated=True)
+    app.dependency_overrides[require_admin_user] = lambda: SimpleNamespace(
+        role="admin", actor="user:1")
+    app.dependency_overrides[rag_documents.require_kb_catalog_super_admin] = lambda: SimpleNamespace(
+        role="super_admin", actor="user:1")
+    return TestClient(app)
+
+
+def _async_value(value):
+    async def _return(*_args, **_kwargs):
+        return value
+    return _return
 
 
 def test_root_ask_reads_question_field(monkeypatch):
@@ -97,7 +117,7 @@ def test_document_detail_exposes_summary(monkeypatch):
             return (True, "")
 
     monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubReg())
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda request: StubAuthz())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(StubAuthz()))
     app = FastAPI()
     app.include_router(rag_documents.router)
 
@@ -120,7 +140,7 @@ def test_document_detail_hides_unauthorized_doc_with_404(monkeypatch):
             return False
 
     monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubReg())
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda request: StubAuthz())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(StubAuthz()))
     app = FastAPI()
     app.include_router(rag_documents.router)
 
@@ -128,6 +148,86 @@ def test_document_detail_hides_unauthorized_doc_with_404(monkeypatch):
 
     assert resp.status_code == 404
     assert resp.json() == {"ok": False, "error": "文档不存在"}
+
+
+def test_remote_delete_disconnect_reports_unknown_state(monkeypatch):
+    """远端删除断连不能回成 HTTP 200/失败，必须显式标记结果待核对。"""
+    from backend.config import rag as rag_config
+
+    class StubRegistry:
+        def get_by_doc_id(self, doc_id):
+            return {"doc_id": doc_id, "file_name": "制度.pdf", "file_path": ""}
+
+    class StubAuthz:
+        principal = SimpleNamespace(user_id="operator-1")
+
+        def can_manage_row(self, doc):
+            return True, ""
+
+    class StubPipeline:
+        def delete_document_cascade(self, doc_id):
+            raise RuntimeError("RAG 删除级联失败: Server disconnected")
+
+    logs = []
+    monkeypatch.setattr(rag_config, "RAG_MODE", "remote")
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(StubAuthz()))
+    monkeypatch.setattr(rag_documents, "get_rag_pipeline", lambda: StubPipeline())
+    monkeypatch.setattr(
+        rag_documents, "_safe_log_op",
+        lambda *args, **kwargs: logs.append(kwargs),
+    )
+
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: None
+    app.dependency_overrides[require_rag_editor] = lambda: None
+
+    response = TestClient(app).delete("/documents/doc-1")
+
+    assert response.status_code == 502
+    assert response.json()["ok"] is False
+    assert response.json()["code"] == "delete_outcome_unknown"
+    assert response.json()["operation_state"] == "unknown"
+    assert "Server disconnected" in response.json()["error"]
+    assert logs[-1]["result"] == "unknown"
+    assert logs[-1]["detail"]["operation_state"] == "unknown"
+
+
+def test_remote_delete_missing_document_returns_http_404(monkeypatch):
+    """rag-service 明确拒绝删除时按失败返回 404，不能把业务错误当成功。"""
+    from backend.config import rag as rag_config
+
+    class StubRegistry:
+        def get_by_doc_id(self, doc_id):
+            return {"doc_id": doc_id, "file_name": "制度.pdf", "file_path": ""}
+
+    class StubAuthz:
+        principal = SimpleNamespace(user_id="operator-1")
+
+        def can_manage_row(self, doc):
+            return True, ""
+
+    class StubPipeline:
+        def delete_document_cascade(self, doc_id):
+            return {"ok": False, "error": "文档不存在"}
+
+    monkeypatch.setattr(rag_config, "RAG_MODE", "remote")
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(StubAuthz()))
+    monkeypatch.setattr(rag_documents, "get_rag_pipeline", lambda: StubPipeline())
+    monkeypatch.setattr(rag_documents, "_safe_log_op", lambda *args, **kwargs: None)
+
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: None
+    app.dependency_overrides[require_rag_editor] = lambda: None
+
+    response = TestClient(app).delete("/documents/doc-1")
+
+    assert response.status_code == 404
+    assert response.json()["ok"] is False
+    assert response.json()["operation_state"] == "failed"
 
 
 def test_ask_response_carries_answer_meta(monkeypatch):
@@ -242,3 +342,104 @@ def test_search_exposes_citation_version_chain(monkeypatch):
     metadata = resp.json()["results"][0]["metadata"]
     assert metadata["version_id"] == "v1"
     assert metadata["supersedes_version_id"] == "v0"
+
+
+def test_create_knowledge_base_accepts_multiple_active_departments(monkeypatch):
+    from backend.rag import knowledge_base_store
+
+    captured = {}
+    monkeypatch.setattr(
+        rag_documents,
+        "_kb_management_identity",
+        lambda _request: SimpleNamespace(
+            authenticated=True, tenant_id="tenant-a", user_id="u-1"),
+    )
+    monkeypatch.setattr(
+        knowledge_base_store,
+        "list_active_departments",
+        lambda _tenant: [
+            {"id": "hr", "label": "人事部", "active": True},
+            {"id": "finance", "label": "财务部", "active": True},
+        ],
+    )
+
+    def create_record(**kwargs):
+        captured.update(kwargs)
+        return {"kb_id": kwargs["kb_id"], "version": 0, "active": True}
+
+    monkeypatch.setattr(knowledge_base_store, "create_knowledge_base", create_record)
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+
+    response = _admin_client(app).post("/knowledge-bases", json={
+        "kb_id": "shared_policy",
+        "name": "共享制度库",
+        "domain": "policy",
+        "owner_depts": ["hr", "finance"],
+        "audience": "internal",
+    })
+
+    assert response.status_code == 201, response.text
+    assert captured["owner_depts"] == ["hr", "finance"]
+    assert captured["tenant_id"] == "tenant-a"
+
+
+def test_tenant_admin_cannot_write_platform_kb_catalog(monkeypatch):
+    from backend.app.api.deps import require_user_actor
+    from backend.security import events
+
+    monkeypatch.setattr(events, "record_security_event", lambda *_args, **_kwargs: None)
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: SimpleNamespace(
+        user_id="1", authenticated=True)
+
+    async def tenant_admin():
+        return SimpleNamespace(role="admin", actor="user:1")
+
+    app.dependency_overrides[require_user_actor] = tenant_admin
+    response = _client(app).post("/knowledge-bases", json={
+        "kb_id": "tenant_policy",
+        "name": "租户制度库",
+        "domain": "policy",
+        "owner_depts": ["hr"],
+    })
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "知识库目录修改仅限 super_admin"
+
+
+def test_create_knowledge_base_rejects_inactive_department(monkeypatch):
+    from backend.rag import knowledge_base_store
+
+    monkeypatch.setattr(
+        rag_documents,
+        "_kb_management_identity",
+        lambda _request: SimpleNamespace(
+            authenticated=True, tenant_id="tenant-a", user_id="u-1"),
+    )
+    monkeypatch.setattr(
+        knowledge_base_store,
+        "list_active_departments",
+        lambda _tenant: [{"id": "hr", "label": "人事部", "active": True}],
+    )
+    create_called = False
+
+    def create_record(**_kwargs):
+        nonlocal create_called
+        create_called = True
+
+    monkeypatch.setattr(knowledge_base_store, "create_knowledge_base", create_record)
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+
+    response = _admin_client(app).post("/knowledge-bases", json={
+        "kb_id": "shared_policy",
+        "name": "共享制度库",
+        "domain": "policy",
+        "owner_depts": ["finance"],
+    })
+
+    assert response.status_code == 400
+    assert "已停用" in response.json()["detail"]
+    assert not create_called

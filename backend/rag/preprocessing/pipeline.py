@@ -13,6 +13,7 @@ from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
 from backend.rag.preprocessing.chunking import (
     ChunkStrategyRouter, _doc_title, coverage_audit, stamp_chunk_pages,
+    ensure_unique_chunk_ids,
 )
 from backend.rag.preprocessing.ast import walk
 from backend.shared.logger import logger
@@ -21,17 +22,28 @@ from backend.shared.logger import logger
 _SUPPORTED_EXTS = set(PARSABLE_EXTS)
 
 
-def parse_and_chunk(file_path: str, doc_type_hint: str = "") -> List[Document]:
+def parse_and_chunk(
+    file_path: str, doc_type_hint: str = "", *,
+    ocr_page_budget: int | None = None,
+) -> List[Document]:
     """单文件完整切分流水线。返回 leaf + parent 双粒度 chunk。
 
     兼容包装：需要质量记录上下文（AST/清洗统计）的调用方（indexer 质量门禁）
     请用 parse_and_chunk_full。
     """
-    chunks, _qc = parse_and_chunk_full(file_path, doc_type_hint)
+    if ocr_page_budget is None:
+        chunks, _qc = parse_and_chunk_full(file_path, doc_type_hint)
+    else:
+        chunks, _qc = parse_and_chunk_full(
+            file_path, doc_type_hint, ocr_page_budget=ocr_page_budget,
+        )
     return chunks
 
 
-def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[Document], dict]:
+def parse_and_chunk_full(
+    file_path: str, doc_type_hint: str = "", *,
+    ocr_page_budget: int | None = None,
+) -> tuple[List[Document], dict]:
     """parse_and_chunk 的完整版：额外返回 §5.1 质量门禁所需上下文。
 
     qc 字典携带 raw_ast（清洗后节点已含可追溯字段）/normalized_ast/completeness
@@ -45,7 +57,10 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
         logger.warning(f"[ChunkPipeline] 暂不支持 {ext}（Phase 2），跳过: {file_path}")
         return [], {}
     stage_started = time.monotonic()
-    raw_ast = parse_file(file_path)
+    if ocr_page_budget is None:
+        raw_ast = parse_file(file_path)
+    else:
+        raw_ast = parse_file(file_path, ocr_page_budget=ocr_page_budget)
     stage_ms["parse_file_ms"] = round((time.monotonic() - stage_started) * 1000)
 
     # P0-3: 无文字层 PDF（扫描件/纯图片）友好报错，避免 0-chunk 假成功。
@@ -125,7 +140,8 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     strategy, route_decision = ChunkStrategyRouter().route_with_decision(doc_type, report)
     logger.info(
         f"[ChunkPipeline] {file_path} doc_type={doc_type} "
-        f"completeness={report.completeness} → {strategy.__class__.__name__}"
+        f"structure_confidence={report.structural_confidence} "
+        f"content_coverage={report.content_coverage} → {strategy.__class__.__name__}"
         + (f" (degrade={route_decision.degrade_reason})" if route_decision.degrade_reason else "")
     )
     stage_ms["classification_routing_ms"] = round((time.monotonic() - stage_started) * 1000)
@@ -141,6 +157,11 @@ def parse_and_chunk_full(file_path: str, doc_type_hint: str = "") -> tuple[List[
     # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
     # 供来源卡「第 X 页」展示与后续原文预览定位；单点收口，策略零改动
     stamp_chunk_pages(chunks, normalized_ast)
+    if ensure_unique_chunk_ids(chunks, file_path):
+        logger.warning(
+            f"[ChunkPipeline] {file_path} 策略输出存在重复 chunk_id，"
+            "已按原输出顺序消歧并同步修复 Parent/表格引用"
+        )
     # §5.1 质量记录：扫描件 OCR 触发 → 打进 chunk metadata（Chroma 只收标量，
     # 沿用 chunks_truncated 的字符串标记惯例），indexer 汇总进 quality_issues
     if getattr(raw_ast, "ocr_triggered", False):

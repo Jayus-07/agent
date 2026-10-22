@@ -450,6 +450,19 @@ def build_quality_record(
     if coverage_record is not None and coverage_record.get("sampled"):
         # 抽样审计没有全量覆盖率；不接受调用方传入的 100% 数值。
         coverage_record["coverage_rate"] = None
+    source_text_audit = getattr(raw_ast, "pdf_source_text_audit", {}) or {}
+    if not isinstance(source_text_audit, dict):
+        source_text_audit = {}
+    source_coverage_rate = source_text_audit.get("coverage_rate")
+    source_coverage_status = str(source_text_audit.get("status") or "")
+    reported_coverage = (
+        getattr(completeness, "content_coverage", None)
+        if completeness is not None else None
+    )
+    observed_coverage = (
+        getattr(completeness, "content_coverage_observed", None)
+        if completeness is not None else None
+    )
 
     record: dict = {
         "schema_version": QUALITY_RECORD_SCHEMA_VERSION,
@@ -464,6 +477,35 @@ def build_quality_record(
         "doc_type": doc_type,
         "chunking_strategy": strategy_name,
         "completeness": getattr(completeness, "completeness", None) if completeness is not None else None,
+        "quality_metrics": {
+            "structure_confidence": (
+                getattr(completeness, "structural_confidence", None)
+                if getattr(completeness, "structural_confidence", None) is not None
+                else getattr(completeness, "completeness", None)
+            ) if completeness is not None else None,
+            "content_coverage": (
+                (reported_coverage if reported_coverage is not None
+                 else source_coverage_rate)
+                if source_coverage_status == "complete"
+                else None
+            ),
+            "content_coverage_observed": (
+                observed_coverage if observed_coverage is not None
+                else source_coverage_rate
+            ),
+            "content_coverage_scope": (
+                getattr(completeness, "content_coverage_scope", "")
+                or (
+                    source_text_audit.get("scope", "")
+                )
+            ),
+            "content_coverage_status": (
+                getattr(completeness, "content_coverage_status", "")
+                or source_coverage_status
+            ),
+            # 当前没有独立语义评估器；None 表示未测量，不能以结构分代替。
+            "semantic_quality": getattr(completeness, "semantic_quality", None),
+        },
         # §5.1 解析统计
         "parsing": {
             "node_count": len(node_summaries),
@@ -483,6 +525,10 @@ def build_quality_record(
             },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
+            "ocr_page_budget": int(getattr(raw_ast, "ocr_page_budget", 0) or 0),
+            "ocr_page_budget_source": str(
+                getattr(raw_ast, "ocr_page_budget_source", "default") or "default"
+            ),
             "ocr_required": bool(getattr(raw_ast, "ocr_required", False)),
             "ocr_attempted": bool(getattr(raw_ast, "ocr_attempted", False)),
             "ocr_required_pages": list(
@@ -508,6 +554,21 @@ def build_quality_record(
             ),
             "pdf_skipped_page_numbers": list(
                 getattr(raw_ast, "pdf_skipped_page_numbers", []) or []
+            ),
+            "pdf_blank_pages": list(
+                getattr(raw_ast, "pdf_blank_pages", []) or []
+            ),
+            "pdf_unparsed_content_pages": list(
+                getattr(raw_ast, "pdf_unparsed_content_pages", []) or []
+            ),
+            "pdf_vector_text_suspect_pages": list(
+                getattr(raw_ast, "pdf_vector_text_suspect_pages", []) or []
+            ),
+            "pdf_layout_fallback_pages": list(
+                getattr(raw_ast, "pdf_layout_fallback_pages", []) or []
+            ),
+            "pdf_source_text_audit": dict(
+                source_text_audit
             ),
             "pdf_image_count": int(getattr(raw_ast, "pdf_image_count", 0) or 0),
             "pdf_image_pages": list(getattr(raw_ast, "pdf_image_pages", []) or []),
@@ -876,7 +937,9 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
             "check": "ocr_coverage_partial", "severity": "error",
             "detail": (
                 ("OCR 所需页面未执行识别（当前供应商不可用或未配置）；" if unavailable else "")
-                + f"页数上限遗漏 {ocr_limit or 0} 页，"
+                + f"页预算 {int(getattr(raw_ast, 'ocr_page_budget', 0) or 0)} 页"
+                f"（来源 {getattr(raw_ast, 'ocr_page_budget_source', 'default')}），"
+                f"上限遗漏 {ocr_limit or 0} 页，"
                 f"失败页 {ocr_failed}，实际产出 {parsing['ocr_pages']} 页；"
                 f"失败页码 {getattr(raw_ast, 'ocr_failed_page_numbers', [])}；"
                 "不允许以部分内容 active"
@@ -887,16 +950,26 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
         getattr(raw_ast, "pdf_pages_with_content", 0) or 0
     )
     pdf_skipped_pages = int(getattr(raw_ast, "pdf_skipped_pages", 0) or 0)
-    pdf_repaired = bool(getattr(raw_ast, "pdf_repaired", False))
-    if pdf_page_count and (pdf_skipped_pages or pdf_repaired):
-        missing_pages = max(0, pdf_page_count - pdf_pages_with_content)
-        allowed_missing = int(pdf_page_count * 0.01) if pdf_repaired else 0
-        if pdf_skipped_pages or missing_pages > allowed_missing:
+    if pdf_page_count:
+        blank_pages = {
+            int(page) for page in getattr(raw_ast, "pdf_blank_pages", []) or []
+            if isinstance(page, int) and 1 <= page <= pdf_page_count
+        }
+        parsed_page_numbers = {
+            int(getattr(node, "page_number", 0) or 0)
+            for node in walk(raw_ast.root)
+            if getattr(node, "page_number", 0)
+        }
+        missing_page_numbers = sorted(
+            set(range(1, pdf_page_count + 1)) - blank_pages - parsed_page_numbers
+        )
+        if pdf_skipped_pages or missing_page_numbers:
             anomalies.append({
                 "check": "pdf_page_coverage", "severity": "error",
                 "detail": (
-                    f"PDF 结构修复/解析跳页后仅 {pdf_pages_with_content}/"
-                    f"{pdf_page_count} 页有正文或表格，跳过 {pdf_skipped_pages} 页"
+                    f"PDF 共 {pdf_page_count} 页，识别真实空白页 {len(blank_pages)} 页，"
+                    f"有内容页 {pdf_pages_with_content} 页；未映射页码 {missing_page_numbers[:50]}，"
+                    f"解析跳页 {pdf_skipped_pages} 页"
                     f"（页码 {getattr(raw_ast, 'pdf_skipped_page_numbers', [])}）；"
                     "拒绝将不完整 PDF 标记为 active"
                 ),

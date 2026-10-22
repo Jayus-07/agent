@@ -73,11 +73,11 @@ def readable_kb_ids(
     对客请求主体永远不含 super_admin，测试库数据不进对客检索。
     其余主体按 authorized_kbs（None = 未声明主体，HTTP 入口视同空集拒绝）。
     """
-    from backend.config.knowledge_base import KNOWLEDGE_BASES, authorized_kbs
+    from backend.config.knowledge_base import get_knowledge_bases, authorized_kbs
 
     if is_admin:
         return [
-            kb_id for kb_id, info in KNOWLEDGE_BASES.items()
+            kb_id for kb_id, info in get_knowledge_bases().items()
             if info.get("audience") != "test" or include_test
         ]
     return authorized_kbs(subject_type, department)
@@ -105,6 +105,7 @@ class RagAuthorization:
     kb_scope: frozenset[str]
     is_admin: bool
     user_permissions: tuple[str, ...] | None
+    active_departments: frozenset[str] | None
 
     @classmethod
     def build(cls, principal: Principal) -> "RagAuthorization":
@@ -117,6 +118,13 @@ class RagAuthorization:
                 principal.subject_type, principal.department,
                 is_admin=is_admin, include_test=is_super_admin(principal.roles),
             )
+            active_departments = None
+            if principal.tenant_id:
+                from backend.rag.knowledge_base_store import list_active_departments
+
+                active_departments = frozenset(
+                    item["id"] for item in list_active_departments(principal.tenant_id)
+                )
             # None 只可能来自未声明主体（authorized_kbs 的内部直调语义）；
             # HTTP 入口视为授权失效，按空集拒绝而不是放行。
             scope = frozenset(allowed or [])
@@ -129,6 +137,7 @@ class RagAuthorization:
                     if principal.permissions is None
                     else tuple(principal.permissions)
                 ),
+                active_departments=active_departments,
             )
         except RagAuthorizationError:
             raise
@@ -164,7 +173,15 @@ class RagAuthorization:
 
         if not kb_id or not department:
             return False, "缺少目标知识库或部门"
-        if not validate_kb_dept(kb_id, department):
+        if self.principal.authenticated and not self.principal.tenant_id:
+            return False, "缺少可信租户身份"
+        if not validate_kb_dept(
+            kb_id, department, tenant_id=self.principal.tenant_id,
+            active_departments=(
+                self.active_departments
+                if self.active_departments is not None else None
+            ),
+        ):
             return False, f"知识库 '{kb_id}' 不允许选择部门 '{department}'"
         if kb_id not in self.kb_scope:
             return False, f"没有知识库 '{kb_id}' 的访问权限"

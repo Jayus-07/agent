@@ -10,7 +10,9 @@
 """
 import pytest
 
-from backend.app.api.routes.rag_upload import _validate_mime, ALLOWED_MIME_TYPES
+from backend.app.api.routes.rag_upload import (
+    _validate_mime, _validate_ocr_page_budget, ALLOWED_MIME_TYPES,
+)
 
 
 # ============ ALLOWED_MIME_TYPES 结构测试 ============
@@ -150,3 +152,26 @@ class TestSyncUploadMimeIntegration:
             "octet-stream 应放行并交由魔数校验兜底"
             f",实际拒绝: {err}"
         )
+
+
+class TestValidateOcrPageBudget:
+    def test_budget_override_is_admin_only_and_pdf_only(self):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_ocr_page_budget(is_admin=False, ext="pdf", budget=200)
+        assert exc.value.status_code == 403
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_ocr_page_budget(is_admin=True, ext="docx", budget=200)
+        assert exc.value.status_code == 422
+
+        _validate_ocr_page_budget(is_admin=True, ext="pdf", budget=200)
+
+    @pytest.mark.parametrize("budget", [0, 501])
+    def test_budget_override_has_a_hard_upper_and_lower_bound(self, budget):
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            _validate_ocr_page_budget(is_admin=True, ext="pdf", budget=budget)
+        assert exc.value.status_code == 422

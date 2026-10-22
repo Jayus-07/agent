@@ -111,4 +111,41 @@ describe('UploadDialog 后台上传体验', () => {
 
     act(() => root.unmount())
   })
+
+  it('切换知识库时刷新部门候选并重置无效的当前部门', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? {
+            knowledge_bases: [
+              { id: 'hr_policy', name: '人事制度库', depts: [{ id: 'hr', label: '人事部' }] },
+              { id: 'shared_policy', name: '共享制度库', depts: [
+                { id: 'finance', label: '财务部' },
+                { id: 'customer', label: '客服部' },
+              ] },
+            ],
+          }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const selects = container.querySelectorAll('select')
+    const kbSelect = selects[0] as HTMLSelectElement
+    const departmentSelect = selects[1] as HTMLSelectElement
+    expect(kbSelect.value).toBe('hr_policy')
+    expect(departmentSelect.value).toBe('hr')
+
+    await act(async () => {
+      kbSelect.value = 'shared_policy'
+      kbSelect.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(departmentSelect.value).toBe('finance')
+    expect(Array.from(departmentSelect.options).map(option => option.value))
+      .toEqual(['finance', 'customer'])
+    act(() => root.unmount())
+  })
 })

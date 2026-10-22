@@ -56,6 +56,13 @@ class StructureReport:
     topic_shift_detected: bool = False        # Phase 2 接入
     is_high_value_and_chaotic: bool = False   # Phase 2 接入
     profile: StructureProfile = field(default_factory=StructureProfile)
+    # 旧 completeness 为兼容字段；实际含义是 AST 结构置信度，不是原文覆盖率。
+    structural_confidence: float | None = None
+    content_coverage: float | None = None
+    content_coverage_observed: float | None = None
+    content_coverage_scope: str = ""
+    content_coverage_status: str = ""
+    semantic_quality: float | None = None
 
     @property
     def is_complete(self) -> bool:
@@ -167,11 +174,30 @@ def _find_parent_section(root: DocumentNode, target: DocumentNode) -> DocumentNo
 class StructureAnalyzer:
     def analyze(self, raw_ast: DocumentAST) -> tuple[DocumentAST, StructureReport]:
         normalized = _normalize_inline_legal_clauses(raw_ast)
-        completeness = self._compute_completeness(normalized)
-        deficit = self._detect_deficit(normalized, completeness)
+        structural_confidence = self._compute_completeness(normalized)
+        deficit = self._detect_deficit(normalized, structural_confidence)
+        source_audit = getattr(raw_ast, "pdf_source_text_audit", {}) or {}
         report = StructureReport(
             ast=normalized,
-            completeness=completeness,
+            completeness=structural_confidence,
+            structural_confidence=structural_confidence,
+            content_coverage=(
+                source_audit.get("coverage_rate")
+                if isinstance(source_audit, dict)
+                and source_audit.get("status") == "complete" else None
+            ),
+            content_coverage_observed=(
+                source_audit.get("coverage_rate")
+                if isinstance(source_audit, dict) else None
+            ),
+            content_coverage_scope=(
+                str(source_audit.get("scope") or "")
+                if isinstance(source_audit, dict) else ""
+            ),
+            content_coverage_status=(
+                str(source_audit.get("status") or "")
+                if isinstance(source_audit, dict) else ""
+            ),
             deficit_signal=deficit,
             profile=build_profile(normalized),
         )
@@ -184,19 +210,44 @@ class StructureAnalyzer:
         leaves = [n for n in walk(ast.root) if n.type in LEAF_TYPES]
         if not leaves:
             return 0.0
-        # Q/A 文档：qa_question/qa_answer 本身就是结构信号（无需 section 层级），
-        # 视为完整结构，让 Router 命中 STRUCTURE_STRATEGIES["faq"] = QAChunkStrategy
-        if any(n.type in ("qa_question", "qa_answer") for n in leaves):
-            return 1.0
+        qa_questions = sum(n.type == "qa_question" for n in leaves)
+        qa_pair_count = sum(
+            leaves[index].type == "qa_question"
+            and leaves[index + 1].type == "qa_answer"
+            for index in range(len(leaves) - 1)
+        )
+        qa_chars = sum(
+            len(n.text or "") for n in leaves
+            if n.type in ("qa_question", "qa_answer")
+        )
+        leaf_chars = sum(len(n.text or "") for n in leaves)
+        qa_fraction = qa_chars / max(leaf_chars, 1)
+        qa_pair_rate = min(qa_pair_count / max(qa_questions, 1), 1.0)
         sections = [n for n in walk(ast.root) if n.type == "section" and n.level > 0]
         if not sections:
+            if qa_questions:
+                # FAQ 的成对结构是强信号，但仅代表识别到问答单元；混合内容比例
+                # 和问答配对完整度仍参与评分，因此单个 FAQ 不会把整篇抬到 1.0。
+                return round(min(
+                    0.9,
+                    0.65 * qa_pair_rate + 0.25 * qa_fraction + 0.1,
+                ), 4)
             return 0.1   # 无任何章节结构 → 结构性极低，交由递归兜底
         covered = sum(len(n.text) for n in leaves) + sum(len(n.text) for n in sections)
         coverage = covered / total
         oversized = sum(1 for n in leaves if count_tokens(n.text) > PARENT_CHUNK_TOKENS)
         size_fitness = 1.0 - oversized / len(leaves)
         hq = self._hierarchy_quality(ast, sections)
-        return round(0.4 * min(coverage, 1.0) + 0.25 * size_fitness + 0.35 * hq, 4)
+        base_score = (
+            0.4 * min(coverage, 1.0)
+            + 0.25 * size_fitness
+            + 0.35 * hq
+        )
+        if qa_questions:
+            qa_score = 0.65 * qa_pair_rate + 0.25 * qa_fraction + 0.1
+            # FAQ 单元对整篇结构只按其内容占比加权，不能单独决定整体分数。
+            base_score = base_score * (1.0 - qa_fraction) + qa_score * qa_fraction
+        return round(min(base_score, 0.95), 4)
 
     @staticmethod
     def _hierarchy_quality(ast: DocumentAST, sections: list[DocumentNode]) -> float:

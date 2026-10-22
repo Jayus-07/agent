@@ -295,6 +295,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "102_rbac_department_audits.sql": "memory",
     # 部门名称/状态并发修改使用乐观锁版本号。
     "103_auth_department_version.sql": "memory",
+    # RAG 知识库目录持久化、版本控制与同事务审计。
+    "107_auth_knowledge_bases.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

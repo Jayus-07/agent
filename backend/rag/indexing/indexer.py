@@ -734,6 +734,7 @@ class IncrementalIndexer:
         candidate_mode: bool = False,
         chunk_store: Any = None,
         bm25_source_vectordb: Any = None,
+        ocr_page_budget: int | None = None,
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -752,6 +753,8 @@ class IncrementalIndexer:
         self.processing_lineage_repository = processing_lineage_repository
         self.processing_task_id = processing_task_id
         self.processing_batch_id = processing_batch_id
+        # None 沿用服务端全局 OCR 页数限制；仅管理员上传任务能显式覆盖。
+        self.ocr_page_budget = ocr_page_budget
         # ── 候选版本模式（2026-10-01 B 阶段）──
         # candidate_mode=True：vectordb/doc_db/bm25_store 为候选代次隔离实例，
         # registry 只读（parsing 占位与最终 register 都由发布协议承担）；
@@ -1345,7 +1348,12 @@ class IncrementalIndexer:
                 else None
             )
             with lineage_recorder.bind_stage(bind_step) if lineage_recorder else nullcontext():
-                chunks, _qc = parse_and_chunk_full(file_path)
+                if self.ocr_page_budget is None:
+                    chunks, _qc = parse_and_chunk_full(file_path)
+                else:
+                    chunks, _qc = parse_and_chunk_full(
+                        file_path, ocr_page_budget=self.ocr_page_budget,
+                    )
             if ocr_lineage is not None and ext == ".pdf":
                 raw_ast = _qc.get("raw_ast")
                 ocr_triggered = bool(getattr(raw_ast, "ocr_triggered", False))
@@ -1404,6 +1412,21 @@ class IncrementalIndexer:
                             else "partial" if cache_hits else "miss"
                         ),
                         fallback_reason=ocr_fallback_reason,
+                        metadata={
+                            "page_budget": int(
+                                getattr(raw_ast, "ocr_page_budget", 0) or 0
+                            ),
+                            "page_budget_source": str(
+                                getattr(raw_ast, "ocr_page_budget_source", "default")
+                                or "default"
+                            ),
+                            "required_page_count": len(
+                                getattr(raw_ast, "ocr_required_pages", []) or []
+                            ),
+                            "page_limit_omitted": int(
+                                getattr(raw_ast, "ocr_page_limit", 0) or 0
+                            ),
+                        },
                     )
                 else:
                     lineage_recorder.finish_stage(
@@ -1414,6 +1437,21 @@ class IncrementalIndexer:
                             if ocr_required
                             else "text_layer_sufficient"
                         ),
+                        metadata={
+                            "page_budget": int(
+                                getattr(raw_ast, "ocr_page_budget", 0) or 0
+                            ),
+                            "page_budget_source": str(
+                                getattr(raw_ast, "ocr_page_budget_source", "default")
+                                or "default"
+                            ),
+                            "required_page_count": len(
+                                getattr(raw_ast, "ocr_required_pages", []) or []
+                            ),
+                            "page_limit_omitted": int(
+                                getattr(raw_ast, "ocr_page_limit", 0) or 0
+                            ),
+                        },
                     )
             if not chunks:
                 # 空 chunks → 视为"无可索引内容"。

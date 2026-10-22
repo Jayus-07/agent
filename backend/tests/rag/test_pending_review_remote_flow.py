@@ -181,7 +181,10 @@ def test_remote_review_routes_delegate_to_rag_service(monkeypatch, route_name, a
 
     monkeypatch.setattr("backend.config.rag.RAG_MODE", "remote")
     monkeypatch.setattr(rag_documents, "get_rag_pipeline", lambda: _Proxy())
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: _Authorization())
+    async def _require_authz(_request):
+        return _Authorization()
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     monkeypatch.setattr(rag_documents, "_get_registry", lambda: _Registry())
     monkeypatch.setattr(rag_documents, "_extract_source", lambda _request: "test")
     monkeypatch.setattr(rag_documents, "_safe_log_op", MagicMock())

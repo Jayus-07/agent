@@ -135,7 +135,8 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                             generation: str = "",
                             file_hash: str = "",
                             retries: int = 0,
-                            worker: str | None = None) -> dict:
+                            worker: str | None = None,
+                            ocr_page_budget: int | None = None) -> dict:
     """索引执行主体（Celery task 与 eager 测试共用的纯函数）。
 
     成功返回 {"status": terminal, ...}；可重试失败抛 TaskRetryScheduled
@@ -170,11 +171,18 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
         # main_loop 传 None：Worker 进程无 asyncio 主循环，
         # _do_index_sync 的 sync_emit 在队列不存在时只写 Redis，不碰 loop。
         # B 阶段候选模式：Worker 只读不可变暂存文件，发布协议统一提交。
-        result = _do_index_sync(upload_id, filepath, filename, None,
-                                kb_id, department, batch_id=batch_id,
-                                staging_path=staging_path,
-                                generation=generation,
-                                file_hash=file_hash) or {}
+        index_options = {
+            "batch_id": batch_id,
+            "staging_path": staging_path,
+            "generation": generation,
+            "file_hash": file_hash,
+        }
+        if ocr_page_budget is not None:
+            index_options["ocr_page_budget"] = ocr_page_budget
+        result = _do_index_sync(
+            upload_id, filepath, filename, None, kb_id, department,
+            **index_options,
+        ) or {}
         _settle_index_result(
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, t0,
@@ -263,7 +271,8 @@ def _register_task():
                            db_task_id: str | None = None,
                            staging_path: str = "",
                            generation: str = "",
-                           file_hash: str = "") -> dict:
+                           file_hash: str = "",
+                           ocr_page_budget: int | None = None) -> dict:
         from backend.tasks.retry_policy import TaskRetryScheduled
 
         try:
@@ -275,6 +284,7 @@ def _register_task():
                 db_task_id=db_task_id,
                 staging_path=staging_path, generation=generation,
                 file_hash=file_hash,
+                ocr_page_budget=ocr_page_budget,
                 retries=self.request.retries,
                 worker=getattr(self.request, "hostname", None))
         except AdmissionDeferred as deferred:
@@ -297,7 +307,8 @@ def _register_task():
                     upload_elapsed_ms=upload_elapsed_ms,
                     was_overwrite=was_overwrite, db_task_id=db_task_id,
                     staging_path=staging_path, generation=generation,
-                    file_hash=file_hash),
+                    file_hash=file_hash,
+                    ocr_page_budget=ocr_page_budget),
                 queue=route.physical_queue,
                 countdown=deferred.delay_seconds)
             return {"status": "ADMISSION_DEFERRED", "skipped": True}

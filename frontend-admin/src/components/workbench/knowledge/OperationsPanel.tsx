@@ -14,6 +14,18 @@ const OPERATION_CONFIG: Record<string, { label: string; className: string }> = {
   '':      { label: '未知',   className: 'bg-gray-50 text-gray-600' },
 }
 
+const RESULT_CONFIG: Record<string, { label: string; className: string }> = {
+  success: { label: '成功', className: 'bg-green-50 text-green-600' },
+  partial: { label: '部分清理异常', className: 'bg-amber-50 text-amber-600' },
+  failed: { label: '失败', className: 'bg-red-50 text-red-600' },
+  unknown: { label: '状态待核对', className: 'bg-amber-50 text-amber-700' },
+}
+
+function ResultBadge({ result }: { result: string }) {
+  const config = RESULT_CONFIG[result] || { label: result || '未知', className: 'bg-gray-50 text-gray-600' }
+  return <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${config.className}`}>{config.label}</span>
+}
+
 export default function OperationsPanel() {
   const toast = useToast()
   const toastRef = useRef(toast)
@@ -47,20 +59,22 @@ export default function OperationsPanel() {
 
     // 拆分：同批次 ≥2 条才折叠，单条的合并回独立行
     const BATCH_LABELS: Record<string, string> = { upload: '批量上传', delete: '批量删除', reindex: '批量重索引' }
-    const batches: { batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string; opLabel: string }[] = []
+    const batches: { batch_id: string; logs: OperationLog[]; successCount: number; partialCount: number; failCount: number; unknownCount: number; latestTime: string; firstFile: string; opLabel: string }[] = []
     Array.from(batchMap.entries()).forEach(([bid, logs]) => {
       if (logs.length >= 2) {
-        const okCount = logs.filter((l: OperationLog) => l.result === 'success').length
+        const successCount = logs.filter((l: OperationLog) => l.result === 'success').length
+        const partialCount = logs.filter((l: OperationLog) => l.result === 'partial').length
         const failCount = logs.filter((l: OperationLog) => l.result === 'failed').length
+        const unknownCount = logs.filter((l: OperationLog) => l.result === 'unknown').length
         const latestTime = logs.reduce((max: string, l: OperationLog) => l.created_at > max ? l.created_at : max, '')
         const firstFile = logs[0]?.doc_name || ''
-        batches.push({ batch_id: bid, logs, okCount, failCount, latestTime, firstFile, opLabel: BATCH_LABELS[logs[0]?.operation] || '批量操作' })
+        batches.push({ batch_id: bid, logs, successCount, partialCount, failCount, unknownCount, latestTime, firstFile, opLabel: BATCH_LABELS[logs[0]?.operation] || '批量操作' })
       } else {
         singles.push(...logs)
       }
     })
     // 批次和单条混在一起按时间倒序
-    const all: ({ kind: "batch"; batch_id: string; logs: OperationLog[]; okCount: number; failCount: number; latestTime: string; firstFile: string; opLabel: string } | { kind: "single"; log: OperationLog })[] = [
+    const all: ({ kind: "batch"; batch_id: string; logs: OperationLog[]; successCount: number; partialCount: number; failCount: number; unknownCount: number; latestTime: string; firstFile: string; opLabel: string } | { kind: "single"; log: OperationLog })[] = [
       ...batches.map(b => ({ kind: "batch" as const, ...b })),
       ...singles.map(log => ({ kind: "single" as const, log })),
     ]
@@ -152,6 +166,12 @@ export default function OperationsPanel() {
   const formatDetail = (detail: OperationLog['detail']) => {
     const obj = parseDetail(detail)
     if (!obj) return null
+    if (obj.operation_state === 'unknown') {
+      return { text: `删除状态待核对：${obj.error || '服务端未确认结果'}`, type: 'warning' as const }
+    }
+    if (Array.isArray(obj.warnings) && obj.warnings.length) {
+      return { text: `部分清理异常：${obj.warnings.join('；')}`, type: 'warning' as const }
+    }
     if (obj.error) return { text: `错误: ${obj.error}`, type: 'error' as const }
     if (obj.duplicate) return { text: '已存在，跳过索引', type: 'duplicate' as const }
     // 删除操作：只含 file_path，提取文件名展示
@@ -175,6 +195,7 @@ export default function OperationsPanel() {
     const info = formatDetail(detail)
     if (!info) return <span className="text-text-muted">-</span>
     if (info.type === 'error') return <span className="text-red-500 truncate" title={info.text}>{info.text}</span>
+    if (info.type === 'warning') return <span className="text-amber-600 truncate" title={info.text}>{info.text}</span>
     if (info.type === 'duplicate') return <span className="text-amber-500 text-[10px]">{info.text}</span>
     return (
       <div className="flex items-center gap-1.5 flex-wrap">
@@ -265,8 +286,8 @@ export default function OperationsPanel() {
                         <td className="px-3 py-2.5 text-text-muted text-[10px]">{batch.logs[0]?.user_id || '-'}</td>
                         <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(batch.logs[0]?.source || '')}</td>
                         <td className="px-3 py-2.5">
-                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${batch.failCount > 0 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
-                            ✓ {batch.okCount}{batch.failCount > 0 ? ` ✗ ${batch.failCount}` : ''}
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${batch.partialCount > 0 || batch.failCount > 0 || batch.unknownCount > 0 ? 'bg-amber-50 text-amber-600' : 'bg-green-50 text-green-600'}`}>
+                            ✓ {batch.successCount}{batch.partialCount > 0 ? ` ⚠ ${batch.partialCount} 部分` : ''}{batch.failCount > 0 ? ` ✗ ${batch.failCount}` : ''}{batch.unknownCount > 0 ? ` ? ${batch.unknownCount} 待核对` : ''}
                           </span>
                         </td>
                         <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(batchTotalMs)}</td>
@@ -286,9 +307,7 @@ export default function OperationsPanel() {
                           <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
                           <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
                           <td className="px-3 py-2.5">
-                            <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${op.result === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
-                              {op.result === 'success' ? '成功' : '失败'}
-                            </span>
+                            <ResultBadge result={op.result} />
                           </td>
                           <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(op.duration_ms)}</td>
                           <td className="px-3 py-2.5 max-w-[160px]">{renderDetailCell(op.detail)}</td>
@@ -322,9 +341,7 @@ export default function OperationsPanel() {
                       <td className="px-3 py-2.5 text-text-muted text-[10px]">{op.user_id}</td>
                       <td className="px-3 py-2.5 text-text-muted text-[10px]">{formatSource(op.source)}</td>
                       <td className="px-3 py-2.5">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${op.result === 'success' ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
-                          {op.result === 'success' ? '成功' : '失败'}
-                        </span>
+                        <ResultBadge result={op.result} />
                       </td>
                       <td className="px-3 py-2.5 text-text-muted text-[10px] tabular-nums">{formatDuration(op.duration_ms)}</td>
                       <td className="px-3 py-2.5 max-w-[160px]">{renderDetailCell(op.detail)}</td>

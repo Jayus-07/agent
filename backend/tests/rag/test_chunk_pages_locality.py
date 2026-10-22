@@ -17,7 +17,12 @@ import types
 from langchain_core.documents import Document
 
 from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
-from backend.rag.preprocessing.chunking import stamp_chunk_pages
+from backend.rag.preprocessing.chunking import (
+    FinancialTableChunkStrategy,
+    StructureChunkStrategy,
+    coverage_audit,
+    stamp_chunk_pages,
+)
 from backend.rag.citation import CitationFormatter, _pages_label
 from backend.agents.reporter.context_filter import parse_sources_from_text
 
@@ -46,6 +51,97 @@ def test_stamp_chunk_pages_merges_leaf_prefixes():
     locations = json.loads(chunks[0].metadata["source_locations_json"])
     assert [item["page"] for item in locations] == [1, 3]
     assert all(item["bbox"] == [0, 0, 0, 0] for item in locations)
+
+
+def test_structure_strategy_preserves_parser_location_on_leaf():
+    """结构策略直接透传解析器位置，不依赖文本回配。"""
+    leaf = DocumentNode(
+        type="paragraph", text="本段来自 PDF 第 12 页。",
+        page_number=12, bbox=(10, 20, 300, 40),
+    )
+    section = DocumentNode(
+        type="section", text="来源位置验证", level=1, children=[leaf],
+    )
+    ast = DocumentAST(root=DocumentNode(
+        type="section", text="", level=0, children=[section],
+    ))
+
+    chunks = StructureChunkStrategy().split(ast, "report.pdf")
+    leaf_chunk = next(
+        chunk for chunk in chunks
+        if chunk.metadata.get("granularity") == "leaf"
+    )
+
+    assert leaf_chunk.metadata["pages"] == "12"
+    assert json.loads(leaf_chunk.metadata["source_locations_json"]) == [
+        {"page": 12, "bbox": [10, 20, 300, 40]},
+    ]
+
+
+def test_financial_oversized_root_leaf_keeps_locations_after_hard_split(
+    monkeypatch,
+):
+    """财务策略根级超长正文的 parent/leaf 二次硬切仍带原始位置。"""
+    import backend.rag.preprocessing.chunking as chunking_module
+
+    monkeypatch.setattr(chunking_module, "PARENT_CHUNK_TOKENS", 5)
+    monkeypatch.setattr(chunking_module, "LEAF_CHUNK_TOKENS", 3)
+    source_text = "财务报告中的原始段落需要连续拆分并保留来源位置。" * 12
+    leaf = DocumentNode(
+        type="paragraph", text=source_text,
+        page_number=12, bbox=(10, 20, 300, 400),
+    )
+    ast = DocumentAST(root=DocumentNode(
+        type="section", text="", level=0, children=[leaf],
+    ))
+
+    chunks = FinancialTableChunkStrategy().split(ast, "report.pdf")
+    leaf_chunks = [
+        chunk for chunk in chunks
+        if chunk.metadata.get("granularity") == "leaf"
+    ]
+
+    assert len(leaf_chunks) > 1
+    assert all(chunk.metadata.get("pages") == "12" for chunk in leaf_chunks)
+    assert all(
+        json.loads(chunk.metadata["source_locations_json"])
+        == [{"page": 12, "bbox": [10, 20, 300, 400]}]
+        for chunk in leaf_chunks
+    )
+    assert coverage_audit(ast, chunks)["uncovered_count"] == 0
+
+
+def test_financial_split_maps_section_text_and_leaf_by_source_span(monkeypatch):
+    """混合章节超长硬切按原文跨度分别映射标题与正文位置。"""
+    import backend.rag.preprocessing.chunking as chunking_module
+
+    monkeypatch.setattr(chunking_module, "PARENT_CHUNK_TOKENS", 5)
+    monkeypatch.setattr(chunking_module, "LEAF_CHUNK_TOKENS", 3)
+    section = DocumentNode(
+        type="section", text="章节来源内容。" * 8, level=1,
+        page_number=11, bbox=(10, 20, 300, 40),
+    )
+    leaf = DocumentNode(
+        type="paragraph", text="正文来源内容。" * 8,
+        page_number=12, bbox=(10, 50, 300, 90),
+    )
+    chunks = []
+
+    FinancialTableChunkStrategy._emit_plain_group(
+        chunks, "report.pdf", section, [section.text], [leaf],
+    )
+    leaf_chunks = [
+        chunk for chunk in chunks
+        if chunk.metadata.get("granularity") == "leaf"
+    ]
+
+    assert leaf_chunks
+    assert all(chunk.metadata.get("pages") for chunk in leaf_chunks)
+    observed_pages = {
+        page for chunk in leaf_chunks
+        for page in chunk.metadata["pages"].split(",")
+    }
+    assert observed_pages == {"11", "12"}
 
 
 def test_stamp_chunk_pages_maps_slice_back_to_leaf():
@@ -88,6 +184,25 @@ def test_stamp_chunk_pages_does_not_guess_ambiguous_short_source_text():
     stamp_chunk_pages([chunk], ast)
 
     assert "pages" not in chunk.metadata
+
+
+def test_stamp_chunk_pages_does_not_expand_repeated_page_header():
+    """长重复页眉跨页出现时不把一个 Leaf 错标到所有页面。"""
+    repeated = "附录 文件编号 ABC-2026 修订版 供内部使用 请勿外传"
+    root = DocumentNode(type="section", text="", level=0)
+    root.children = [
+        DocumentNode(type="paragraph", text=repeated, page_number=1,
+                     bbox=(10, 10, 200, 20)),
+        DocumentNode(type="paragraph", text=repeated, page_number=8,
+                     bbox=(10, 10, 200, 20)),
+    ]
+    ast = DocumentAST(root=root, raw_text=repeated + repeated)
+    chunk = Document(page_content=repeated, metadata={"granularity": "leaf"})
+
+    stamp_chunk_pages([chunk], ast)
+
+    assert "pages" not in chunk.metadata
+    assert "source_locations_json" not in chunk.metadata
 
 
 def test_stamp_chunk_pages_no_page_leaves_is_noop():

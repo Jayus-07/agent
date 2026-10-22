@@ -38,7 +38,10 @@ def test_processing_lineage_routes_return_runs_and_detail(monkeypatch):
     app.dependency_overrides[require_rag_user] = lambda: _Identity()
     # 路由已收口到请求级 Principal/RagAuthorization；测试同时隔离
     # 授权与 registry 外部边界，避免依赖本机登录头和真实 PG 数据。
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: _Authz())
+    async def _require_authz(_request):
+        return _Authz()
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     monkeypatch.setattr(rag_documents, "_get_registry", lambda: _Registry())
     monkeypatch.setattr(
         rag_documents,

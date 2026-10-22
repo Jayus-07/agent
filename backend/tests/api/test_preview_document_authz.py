@@ -69,7 +69,10 @@ def route_env(monkeypatch):
     authz = _StubAuthz(can_read=False)
     registry = _StubRegistry(_RESTRICTED_DOC)
     pipeline = _StubPipeline()
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda request: authz)
+    async def _require_authz(_request):
+        return authz
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     monkeypatch.setattr(rag_documents, "_get_registry", lambda: registry)
     monkeypatch.setattr(rag_documents, "get_rag_pipeline", lambda: pipeline)
     env = types.SimpleNamespace(authz=authz, registry=registry, pipeline=pipeline)

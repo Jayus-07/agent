@@ -249,7 +249,11 @@ class ChunkFilter:
             return False
 
         symbol_count = sum(1 for c in stripped if not _is_meaningful_char(c))
-        if len(stripped) > 0 and symbol_count / len(stripped) > self.max_symbol_ratio:
+        if (
+            len(stripped) > 0
+            and symbol_count / len(stripped) > self.max_symbol_ratio
+            and not split_chunk
+        ):
             metadata["filter_status"] = "filtered"
             metadata["filter_reason"] = "all_symbols"
             return False, "all_symbols"
