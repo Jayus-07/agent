@@ -54,4 +54,6 @@ def test_qa_doc_high_completeness():
     )
     _, report = StructureAnalyzer().analyze(qa)
     assert report.is_complete is True
-    assert report.completeness == 1.0
+    # 纯 FAQ 无 section 时结构分上限为 0.9（0.65×配对率+0.25×占比+0.1），
+    # 但已高于 STRUCTURE_COMPLETE_THRESHOLD，仍应视为结构完整。
+    assert report.completeness >= 0.9

@@ -7,6 +7,8 @@ from backend.rag.preprocessing.ast import DocumentAST
 
 
 class BaseDocumentParser(ABC):
+    PARSER_VERSION = "v1"
+
     @abstractmethod
     def parse(self, file_path: str) -> DocumentAST:
         """读取文件并产出 Raw AST（格式级结构）。"""

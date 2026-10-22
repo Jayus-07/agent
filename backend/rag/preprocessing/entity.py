@@ -12,6 +12,29 @@ from backend.shared.logger import logger
 
 _SKU_PATTERN = re.compile(r'\b([A-Z]{2,4}\d{2,4}(?:-[A-Z0-9]+)*)\b')
 _REGULATION_PATTERN = re.compile(r'(GDPR|CCPA|HIPAA|PCI[-\s]?DSS|SOX)\b', re.IGNORECASE)
+_EXACT_IDENTIFIER_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Z]{2,}[A-Z0-9]*(?:[-_][A-Z0-9]+)+)(?![A-Za-z0-9])"
+)
+_MODEL_NAME_PATTERN = re.compile(
+    r"\b[A-Z][a-zA-Z]{2,}(?:\s+[A-Z0-9][A-Za-z0-9-]{1,})\b"
+)
+
+
+def extract_exact_terms(text: str, limit: int = 32) -> list[str]:
+    """提取在原文中逐字出现的型号、代码和精确标识符。"""
+    source = str(text or "")
+    found: list[str] = []
+    seen: set[str] = set()
+    for pattern in (_EXACT_IDENTIFIER_PATTERN, _MODEL_NAME_PATTERN):
+        for match in pattern.finditer(source):
+            value = match.group(0).strip()
+            normalized = value.casefold()
+            if value and normalized not in seen:
+                seen.add(normalized)
+                found.append(value[:120])
+                if len(found) >= max(1, limit):
+                    return found
+    return found
 
 
 def extract_entities(text: str) -> dict:

@@ -234,11 +234,26 @@ def _ocr_image_rapidocr(png_bytes: bytes) -> str:
         raise ValueError("PNG 解码失败")
     result, _elapse = _get_rapidocr_engine()(img)
     if not result:
+        _ocr_last_confidence.set(None)
         return ""
     # result: [[box, text, score], ...]，按识别顺序（大致阅读序）拼接；
     # 低置信行丢弃（OCR 脏数据由 DocumentCleaner 的 OCR 清洗分支兜底）
-    lines = [str(item[1]).strip() for item in result
-             if len(item) >= 2 and float(item[2]) >= 0.5 and str(item[1]).strip()]
+    lines: list[str] = []
+    scores: list[float] = []
+    for item in result:
+        if len(item) < 3 or not str(item[1]).strip():
+            continue
+        try:
+            score = float(item[2])
+        except (TypeError, ValueError):
+            continue
+        if score < 0.5:
+            continue
+        lines.append(str(item[1]).strip())
+        scores.append(max(0.0, min(1.0, score)))
+    _ocr_last_confidence.set(
+        round(sum(scores) / len(scores), 4) if scores else None
+    )
     return "\n".join(lines)
 
 
@@ -328,6 +343,7 @@ def ocr_image(png_bytes: bytes) -> str:
     云端供应商（dashscope）外层套 按页缓存 + 限流（D6 ③：在线 API 有成本，
     幂等重跑不重复调用）；离线 rapidocr 免费，直连不缓存。
     """
+    _ocr_last_confidence.set(None)
     effective = model_roles.resolve_effective("ocr")
     provider = (rag_cfg.RAG_OCR_PROVIDER or "").lower()
     try:
@@ -337,7 +353,10 @@ def ocr_image(png_bytes: bytes) -> str:
             return _ocr_image_cloud_cached(png_bytes)
         if provider == "rapidocr":
             result = _ocr_image_rapidocr(png_bytes)
-            _record_ocr_result(status="success", cache_status="miss")
+            _record_ocr_result(
+                status="success", cache_status="miss",
+                confidence=get_last_ocr_confidence(),
+            )
             return result
         if _ocr_cloud_configured():
             if not _resolve_ocr_runtime_config()["api_key"]:
@@ -364,6 +383,9 @@ _ocr_actual_model: ContextVar[str | None] = ContextVar(
 _ocr_actual_upstream_model: ContextVar[str | None] = ContextVar(
     "ocr_actual_upstream_model", default=None
 )
+_ocr_last_confidence: ContextVar[float | None] = ContextVar(
+    "ocr_last_confidence", default=None
+)
 
 
 def reset_ocr_tracking() -> None:
@@ -379,9 +401,14 @@ def reset_ocr_tracking() -> None:
         "upstream_model": None,
         "model_revision": None,
         "provider": None,
+        "confidence_mean": None,
+        "confidence_min": None,
+        "confidence_scored_regions": 0,
+        "confidence_unavailable_regions": 0,
     })
     _ocr_actual_model.set(None)
     _ocr_actual_upstream_model.set(None)
+    _ocr_last_confidence.set(None)
 
 
 def get_ocr_result_meta() -> dict:
@@ -389,8 +416,14 @@ def get_ocr_result_meta() -> dict:
     return dict(_ocr_result_meta.get() or {})
 
 
+def get_last_ocr_confidence() -> float | None:
+    """返回当前 OCR 调用的区域平均置信度；供应商未提供时为 None。"""
+    return _ocr_last_confidence.get()
+
+
 def _record_ocr_result(
-    *, status: str, cache_status: str, model_name: str | None = None
+    *, status: str, cache_status: str, model_name: str | None = None,
+    confidence: float | None = None,
 ) -> None:
     current = get_ocr_result_meta()
     current["calls"] = int(current.get("calls") or 0) + 1
@@ -411,6 +444,29 @@ def _record_ocr_result(
     current["upstream_model"] = _ocr_actual_upstream_model.get()
     current["model_revision"] = identity.model_revision
     current["provider"] = identity.provider
+    if status in {"success", "cached"}:
+        if confidence is None:
+            current["confidence_unavailable_regions"] = int(
+                current.get("confidence_unavailable_regions") or 0
+            ) + 1
+        else:
+            confidence = max(0.0, min(1.0, float(confidence)))
+            scored = int(current.get("confidence_scored_regions") or 0)
+            previous_mean = current.get("confidence_mean")
+            confidence_sum = (
+                float(previous_mean) * scored if previous_mean is not None else 0.0
+            )
+            confidence_sum += confidence
+            current["confidence_scored_regions"] = scored + 1
+            current["confidence_mean"] = round(
+                confidence_sum / (scored + 1), 4,
+            )
+            previous_min = current.get("confidence_min")
+            current["confidence_min"] = round(
+                min(confidence, float(previous_min))
+                if previous_min is not None else confidence,
+                4,
+            )
     _ocr_result_meta.set(current)
 
 

@@ -25,7 +25,7 @@ from backend.rag.preprocessing.ast import LEAF_TYPES, DocumentAST, walk
 from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
-QUALITY_RECORD_SCHEMA_VERSION = "1.1"
+QUALITY_RECORD_SCHEMA_VERSION = "1.3"
 QUALITY_SCORE_BASE = 100
 QUALITY_SCORE_HARD_DEDUCTION = 40
 QUALITY_SCORE_WARN_DEDUCTION = 10
@@ -58,17 +58,42 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 
 
+def _source_locator_summary(locator: dict) -> dict:
+    """质量记录只保留有界的定位字段，不复制图注或字段内容。"""
+    result = {}
+    for key, value in (locator or {}).items():
+        if key in {"alt", "chart_title"}:
+            continue
+        if isinstance(value, str):
+            result[str(key)] = value[:256]
+        elif isinstance(value, (int, float, bool)) or value is None:
+            result[str(key)] = value
+        elif isinstance(value, (list, tuple)):
+            result[str(key)] = [str(item)[:128] for item in value[:32]]
+        elif isinstance(value, dict):
+            result[str(key)] = {
+                str(item_key)[:64]: str(item_value)[:128]
+                for item_key, item_value in list(value.items())[:32]
+                if isinstance(item_value, (str, int, float, bool))
+            }
+    return result
+
+
 def _node_summary(ast: DocumentAST) -> list[dict]:
-    """§5.2 节点级可追溯摘要（preorder 序号即确定性 node_id）。"""
+    """§5.2 节点级摘要：稳定节点身份、章节关系和原文定位。"""
     nodes: list[dict] = []
     for i, node in enumerate(walk(ast.root)):
         nodes.append({
-            "node_id": f"n{i}",
+            "node_id": node.node_id or f"n{i}",
+            "parent_node_id": node.parent_node_id,
+            "section_id": node.section_id,
+            "parent_section_id": node.parent_section_id,
             "type": node.type,
             "source_range": list(node.source_range or (0, 0)),
             "page_number": getattr(node, "page_number", 0) or None,
             "bbox": list(node.bbox) if getattr(node, "bbox", None) else None,
             "content_hash": _content_hash(node.text),
+            "source_locator": _source_locator_summary(node.source_locator),
             "chars": len(node.text),
             "cleaned": bool(node.cleaning_operations),
         })
@@ -389,6 +414,40 @@ def cleaning_coverage_audit(
         }
 
 
+def _chunk_locator_audit(chunks: list) -> dict:
+    """统计缺少可回查定位的 Leaf；定位存在性不阻断，但必须可观测。"""
+    missing: list[str] = []
+    for index, chunk in enumerate(chunks or []):
+        metadata = getattr(chunk, "metadata", None) or {}
+        if str(metadata.get("granularity") or "") != "leaf":
+            continue
+        has_locator = any(
+            metadata.get(key)
+            for key in (
+                "pages",
+                "source_spans_json",
+                "source_locators_json",
+                "source_locations_json",
+            )
+        )
+        if not has_locator and metadata.get("table_id") and (
+            metadata.get("row_index") is not None
+            or metadata.get("row_start") is not None
+        ):
+            has_locator = True
+        if not has_locator:
+            missing.append(str(metadata.get("chunk_id") or f"leaf_{index}"))
+    return {
+        "leaf_count": sum(
+            1 for chunk in chunks or []
+            if str((getattr(chunk, "metadata", None) or {}).get("granularity") or "")
+            == "leaf"
+        ),
+        "missing_locator_count": len(missing),
+        "missing_locator_chunk_ids": missing[:20],
+    }
+
+
 def build_quality_record(
     *,
     file_path: str,
@@ -407,6 +466,10 @@ def build_quality_record(
     ocr_pages: int = 0,
     index_errors: list[str] | None = None,
     route_decision: dict | None = None,
+    section_tree: list[dict] | None = None,
+    index_metadata: dict | None = None,
+    document_title: str = "",
+    language: str = "",
     coverage: dict | None = None,
     cleaning_coverage: dict | None = None,
 ) -> dict:
@@ -435,6 +498,7 @@ def build_quality_record(
         dropped_by_operation[op] = dropped_by_operation.get(op, 0) + 1
 
     chunk_meta = [ch.metadata or {} for ch in chunks]
+    first_chunk_meta = chunk_meta[0] if chunk_meta else {}
     parent_count = sum(1 for m in chunk_meta if m.get("granularity") == "parent")
     leaf_chunk_count = len(chunks) - parent_count
 
@@ -474,6 +538,35 @@ def build_quality_record(
         "file_size": file_size,
         "file_sha256": file_hash,
         "format": os.path.splitext(file_path)[1].lower().lstrip("."),
+        "source_format": str(getattr(raw_ast, "source_format", "") or ""),
+        "parser_version": str(getattr(raw_ast, "parser_version", "") or ""),
+        "section_tree": [
+            {
+                **item,
+                "source_locator": _source_locator_summary(
+                    item.get("source_locator") or {},
+                ),
+            }
+            for item in (section_tree or [])
+        ],
+        "index_metadata": {
+            key: str(
+                (index_metadata or {}).get(key)
+                or first_chunk_meta.get(key)
+                or ""
+            )
+            for key in (
+                "chunk_policy_version",
+                "embedding_model",
+                "embedding_version",
+                "index_generation",
+                "indexed_at",
+            )
+        },
+        "title": document_title or str(
+            first_chunk_meta.get("document_title") or ""
+        ),
+        "language": language or str(first_chunk_meta.get("language") or ""),
         "doc_type": doc_type,
         "chunking_strategy": strategy_name,
         "completeness": getattr(completeness, "completeness", None) if completeness is not None else None,
@@ -525,6 +618,16 @@ def build_quality_record(
             },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
+            "ocr_confidence": {
+                "mean": getattr(raw_ast, "ocr_confidence_mean", None),
+                "minimum": getattr(raw_ast, "ocr_confidence_min", None),
+                "scored_regions": int(
+                    getattr(raw_ast, "ocr_confidence_scored_regions", 0) or 0
+                ),
+                "unavailable_regions": int(
+                    getattr(raw_ast, "ocr_confidence_unavailable_regions", 0) or 0
+                ),
+            },
             "ocr_page_budget": int(getattr(raw_ast, "ocr_page_budget", 0) or 0),
             "ocr_page_budget_source": str(
                 getattr(raw_ast, "ocr_page_budget_source", "default") or "default"
@@ -612,8 +715,11 @@ def build_quality_record(
         "answer_evidence": audit_answer_evidence(chunks),
         # §5.1 重试失败记录（本轮 per-file 异常；历史失败见 registry status）
         "index_errors": list(index_errors or []),
-        # §5.2 节点级可追溯
-        "traceability": {"nodes": node_summaries},
+        # §5.2 节点级可追溯（含 Leaf 引用定位可用性）
+        "traceability": {
+            "nodes": node_summaries,
+            "citation_locator": _chunk_locator_audit(chunks),
+        },
         # P1 切分路由可审计决策（为什么用这个策略）
         "route_decision": dict(route_decision or {}),
         "coverage": coverage_record,
@@ -718,6 +824,23 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 int(chunk_integrity.get("parent_reference_count") or 0),
             ),
         )
+
+    citation_locator = (
+        record.get("traceability", {}).get("citation_locator") or {}
+    )
+    missing_locator_count = int(
+        citation_locator.get("missing_locator_count") or 0
+    )
+    _check(
+        "citation_locator",
+        missing_locator_count == 0,
+        (
+            f"{missing_locator_count}/{int(citation_locator.get('leaf_count') or 0)} "
+            "个 Leaf 缺少可回查的页码/字符跨度/来源定位"
+            f"，样例: {citation_locator.get('missing_locator_chunk_ids', [])[:3]}"
+        ),
+        severity="warn",
+    )
 
     semantic_boundaries = record.get("semantic_boundaries") or {}
     if semantic_boundaries.get("applicable"):

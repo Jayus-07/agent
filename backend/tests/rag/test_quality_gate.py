@@ -222,8 +222,20 @@ class TestTypedValidation:
 
     def test_repaired_pdf_with_complete_pages_passes_page_coverage(self):
         ast = _make_ast()
+        # 页覆盖按 AST 页号对账：500 个有内容页必须都有 page_number，
+        # 第 501 页为真实空白页才允许通过。
+        ast.root.children = [
+            DocumentNode(
+                type="paragraph", text=f"第{page}页正文", page_number=page,
+            )
+            for page in range(1, 501)
+        ]
+        ast.raw_text = "\n".join(
+            node.text for node in ast.root.children
+        )
         ast.pdf_page_count = 501
         ast.pdf_pages_with_content = 500
+        ast.pdf_blank_pages = [501]
         ast.pdf_repaired = True
         rec = build_quality_record(
             file_path="repaired.pdf", doc_id="repaired", kb_id="kb1",

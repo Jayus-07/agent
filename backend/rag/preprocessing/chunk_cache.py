@@ -25,7 +25,7 @@ from backend.config.database import RAG_DATA_DIR
 from backend.shared.logger import logger
 
 # 流水线行为版本：解析器/清洗/分类/分块策略有语义变化时 +1，旧缓存整体失效
-PIPELINE_VERSION = 3
+PIPELINE_VERSION = 4
 
 _CACHE_DIR = Path(RAG_DATA_DIR) / "chunk_cache"
 

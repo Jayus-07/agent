@@ -11,7 +11,8 @@
 import pytest
 
 from backend.app.api.routes.rag_upload import (
-    _validate_mime, _validate_ocr_page_budget, ALLOWED_MIME_TYPES,
+    _magic_matches, _validate_mime, _validate_ocr_page_budget,
+    ALLOWED_MIME_TYPES,
 )
 
 
@@ -21,9 +22,11 @@ class TestAllowedMimeStructure:
     """白名单表结构必须覆盖所有支持的扩展名,且 octet-stream 仅作兜底。"""
 
     def test_all_supported_exts_have_entry(self):
-        # F6: 白名单从解析器注册表派生，必须覆盖全部 7 个已注册扩展名（含 csv）
+        # F6: 白名单从解析器注册表派生，必须覆盖全部已注册扩展名。
         assert set(ALLOWED_MIME_TYPES.keys()) == {
-            "pdf", "md", "markdown", "txt", "docx", "xlsx", "csv"}
+            "pdf", "md", "markdown", "txt", "docx", "xlsx", "csv",
+            "html", "htm", "pptx", "json", "xml",
+        }
 
     def test_derived_from_parsable_exts(self):
         """F6: ALLOWED_MIME_TYPES 必须与 PARSABLE_EXTS 一一对应（单一来源，防漂移）。"""
@@ -39,6 +42,16 @@ class TestAllowedMimeStructure:
     def test_csv_has_proper_mime(self):
         # csv 解析器注册后上传白名单同步开放，且登记 text/csv
         assert "text/csv" in ALLOWED_MIME_TYPES["csv"]
+
+    def test_new_formats_have_specific_mime_types(self):
+        assert "text/html" in ALLOWED_MIME_TYPES["html"]
+        assert "text/html" in ALLOWED_MIME_TYPES["htm"]
+        assert "application/json" in ALLOWED_MIME_TYPES["json"]
+        assert "application/xml" in ALLOWED_MIME_TYPES["xml"]
+        assert (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            in ALLOWED_MIME_TYPES["pptx"]
+        )
 
     def test_octet_stream_not_in_whitelist_dicts(self):
         # 白名单表只登记"显式声明时允许的具体 MIME"。
@@ -133,6 +146,17 @@ class TestValidateMime:
         """扩展名为空(无后缀文件)拒。"""
         ok, err = _validate_mime("", "text/plain")
         assert ok is False
+
+    @pytest.mark.parametrize("ext", ["docx", "xlsx", "pptx"])
+    def test_ooxml_formats_require_zip_magic(self, ext):
+        assert _magic_matches(ext, b"PK\x03\x04data")
+        assert not _magic_matches(ext, b"<xml>forged</xml>")
+
+    @pytest.mark.parametrize("ext", ["html", "htm", "json", "xml"])
+    def test_new_text_formats_reject_binary_headers(self, ext):
+        assert _magic_matches(ext, b"text content")
+        assert not _magic_matches(ext, b"\x00binary")
+        assert not _magic_matches(ext, b"\xff\xfeutf16")
 
 
 # ============ 与 sync_upload_impl 的集成点测试 ============

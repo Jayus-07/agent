@@ -22,6 +22,7 @@ import hashlib
 import inspect
 import json
 import os
+from datetime import datetime, timezone
 from dataclasses import replace
 from contextlib import nullcontext
 from collections.abc import Mapping
@@ -472,6 +473,17 @@ def _coverage_quality_metrics(coverage: dict) -> dict:
     }
 
 
+def _quality_index_metadata(doc_meta: dict) -> dict:
+    """质量记录使用的索引运行元数据，优先取本次 doc_meta 的实际值。"""
+    return {
+        "chunk_policy_version": str(doc_meta.get("chunk_policy_version") or ""),
+        "embedding_model": str(doc_meta.get("embedding_model") or ""),
+        "embedding_version": str(doc_meta.get("embedding_version") or ""),
+        "index_generation": str(doc_meta.get("index_generation") or ""),
+        "indexed_at": str(doc_meta.get("indexed_at") or ""),
+    }
+
+
 def _enforce_prepaid_content_integrity(
     indexer,
     qc: dict,
@@ -570,6 +582,10 @@ def _enforce_prepaid_content_integrity(
             ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
             ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
             route_decision=qc.get("route_decision"),
+            section_tree=qc.get("section_tree"),
+            index_metadata=_quality_index_metadata(doc_meta),
+            document_title=str(doc_meta.get("title") or ""),
+            language=str(doc_meta.get("language") or ""),
             coverage=coverage,
             cleaning_coverage=cleaning,
         )
@@ -620,6 +636,7 @@ def _enforce_prepaid_content_integrity(
                 ocr_triggered=bool(getattr(raw_ast, "ocr_triggered", False)),
                 ocr_pages=int(getattr(raw_ast, "ocr_pages", 0) or 0),
                 route_decision=qc.get("route_decision"),
+                section_tree=qc.get("section_tree"),
                 coverage=coverage,
                 cleaning_coverage=cleaning,
             )
@@ -1676,6 +1693,15 @@ class IncrementalIndexer:
             ch.page_content for ch in chunks
             if ch.metadata.get("granularity") != "parent"
         )
+        from backend.rag.preprocessing.metadata import detect_document_language
+
+        document_title = str(_qc.get("document_title") or "").strip()
+        if not document_title:
+            document_title = next((
+                str((chunk.metadata or {}).get("document_title") or "").strip()
+                for chunk in chunks
+                if str((chunk.metadata or {}).get("document_title") or "").strip()
+            ), "")
         doc_meta = {
             "doc_id": doc_id,
             "source_file": os.path.basename(file_path),
@@ -1695,7 +1721,23 @@ class IncrementalIndexer:
             "quality_status": quality_status,
             "doc_type": "general",
             "person_names": [],
+            "title": document_title,
+            "language": detect_document_language(full_text),
+            "source_format": str(_qc.get("source_format") or ""),
+            "parser_version": str(_qc.get("parser_version") or ""),
+            "chunk_policy_version": str(
+                ":".join(
+                    str(value) for value in (
+                        (_qc.get("route_decision") or {}).get("strategy"),
+                        (_qc.get("route_decision") or {}).get("strategy_version"),
+                    ) if value
+                )
+            ),
+            "indexed_at": datetime.now(timezone.utc).isoformat(),
         }
+        collection_name = str(getattr(self.vectordb, "_collection", "") or "")
+        if "::cand:" in collection_name:
+            doc_meta["index_generation"] = collection_name.split("::cand:", 1)[1]
         # 截断标记先算出来：付费前预检与质量记录都要用（定义在使用点之前）。
         chunks_truncated = any(
             ch.metadata.get("chunks_truncated") for ch in chunks
@@ -1754,6 +1796,8 @@ class IncrementalIndexer:
                 # Registry 摘要供文档列表直接展示，必须与本次实际向量化
                 # 的客户端一致，不能保留旧 env/default 模型名。
                 doc_meta["embedding_model"] = runtime_embedding.model_name
+            if runtime_embedding.model_revision:
+                doc_meta["embedding_version"] = runtime_embedding.model_revision
             if metadata_lineage is not None:
                 lineage_recorder.finish_stage(
                     metadata_lineage[0], status="success",
@@ -1888,6 +1932,10 @@ class IncrementalIndexer:
                     ocr_triggered=bool(getattr(_raw_ast, "ocr_triggered", False)),
                     ocr_pages=int(getattr(_raw_ast, "ocr_pages", 0) or 0),
                     route_decision=_qc.get("route_decision"),
+                    section_tree=_qc.get("section_tree"),
+                    index_metadata=_quality_index_metadata(doc_meta),
+                    document_title=str(doc_meta.get("title") or ""),
+                    language=str(doc_meta.get("language") or ""),
                     coverage=_coverage,
                     cleaning_coverage=_qc.get("cleaning_coverage"),
                 )
@@ -2133,16 +2181,27 @@ class IncrementalIndexer:
 
         # ── 4.3a/4.3b: 实体与时间引用随 chunk 落库（数据可达性）──
         # 检索加分/时效降权策略待评测数据与业务规则输入后另做
-        entities_json = ""
-        if doc_meta.get("entities"):
-            try:
-                entities_json = json.dumps(doc_meta["entities"], ensure_ascii=False)[:500]
-            except (TypeError, ValueError):
-                entities_json = ""
+        from backend.rag.preprocessing.entity import extract_exact_terms
         time_refs_val = doc_meta.get("time_refs") or []
         time_refs_str = ", ".join(str(t) for t in time_refs_val[:10]) if isinstance(time_refs_val, list) else str(time_refs_val)[:200]
 
         for i, ch in enumerate(chunks):
+            ch.metadata["chunk_index"] = i
+            ch.metadata["source_format"] = str(doc_meta.get("source_format") or "")
+            ch.metadata["parser_version"] = str(doc_meta.get("parser_version") or "")
+            ch.metadata["chunk_policy_version"] = str(
+                doc_meta.get("chunk_policy_version") or ""
+            )
+            if doc_meta.get("index_generation"):
+                ch.metadata["index_generation"] = str(doc_meta["index_generation"])
+            ch.metadata["indexed_at"] = str(doc_meta.get("indexed_at") or "")
+            if doc_meta.get("embedding_model"):
+                ch.metadata["embedding_model"] = str(doc_meta["embedding_model"])
+            if doc_meta.get("embedding_version"):
+                ch.metadata["embedding_version"] = str(doc_meta["embedding_version"])
+            ch.metadata["content_hash"] = hashlib.sha256(
+                ch.page_content.encode("utf-8"),
+            ).hexdigest()
             ch.metadata["doc_type"] = doc_type_val
             # P1 元数据治理（2026-10-13）：切分时的类型是切分策略的事实依据，
             # 级联决策可能改写入库类型——两者都留痕，审计「切分/元数据分类
@@ -2198,8 +2257,28 @@ class IncrementalIndexer:
                 "pending_review" if doc_meta.get("near_dup_id") else "active"
             )
             # 4.3a: 结构化实体（检索加分策略待评测数据）
-            if entities_json:
-                ch.metadata["entities"] = entities_json
+            exact_terms = extract_exact_terms(ch.page_content)
+            if exact_terms:
+                ch.metadata["exact_terms"] = json.dumps(
+                    exact_terms, ensure_ascii=False, separators=(",", ":"),
+                )
+            chunk_entities: dict[str, list[str]] = {}
+            raw_entities = doc_meta.get("entities") or {}
+            if isinstance(raw_entities, dict):
+                content_folded = ch.page_content.casefold()
+                for entity_type, values in raw_entities.items():
+                    verified = [
+                        str(value).strip()[:120]
+                        for value in values or []
+                        if str(value).strip()
+                        and str(value).strip().casefold() in content_folded
+                    ]
+                    if verified:
+                        chunk_entities[str(entity_type)] = verified[:32]
+            if chunk_entities:
+                ch.metadata["entities"] = json.dumps(
+                    chunk_entities, ensure_ascii=False, separators=(",", ":"),
+                )
             # 4.3b: 时间引用（时效降权策略待业务规则输入）
             if time_refs_str:
                 ch.metadata["time_refs"] = time_refs_str
@@ -2564,6 +2643,14 @@ class IncrementalIndexer:
             "quality_score": doc_meta.get("quality_score", 0),
             "quality_issues": doc_meta.get("quality_issues", ""),
             "embedding_model": doc_meta.get("embedding_model", ""),
+            "embedding_version": doc_meta.get("embedding_version", ""),
+            "title": doc_meta.get("title", ""),
+            "language": doc_meta.get("language", ""),
+            "source_format": doc_meta.get("source_format", ""),
+            "parser_version": doc_meta.get("parser_version", ""),
+            "chunk_policy_version": doc_meta.get("chunk_policy_version", ""),
+            "index_generation": doc_meta.get("index_generation", ""),
+            "indexed_at": doc_meta.get("indexed_at", ""),
             "minhash_sig": doc_meta.get("minhash_sig", ""),
             "near_dup_id": doc_meta.get("near_dup_id", ""),
             "summary": doc_meta.get("summary", ""),
@@ -2640,7 +2727,7 @@ class IncrementalIndexer:
 
     @staticmethod
     def _embed_text_for(chunk, doc_summary: str = "") -> str:
-        return EmbeddingStage.text_for(chunk, doc_summary=doc_summary)
+        return EmbeddingStage.embedding_text_for(chunk, doc_summary=doc_summary)
 
     def _embed_single_with_retry(self, i: int, chunk, embed_text: str):
         return self._embed_stage.single_with_retry(i, chunk, embed_text)
