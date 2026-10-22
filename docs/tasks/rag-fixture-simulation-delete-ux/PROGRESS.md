@@ -156,11 +156,8 @@ the preceding task; preserve them and review them together without resetting.
 
 ## Next steps
 
-1. Resolve the shared-database migration/rebuild gate before presenting the
-   knowledge-base management panel as runtime-ready.
-2. Show the combined diff and remaining ProGit PDF limitations to the user for
-   review. Let the user test upload and delete behavior in the worktree-backed
-   local admin; do not commit without explicit confirmation.
+1. 迁移已顺延为 107；仍需在隔离数据库和服务栈中重建，才能运行时验证知识库管理界面。
+2. 上传、删除的端到端 UI/API 体验仍待本地服务按隔离环境启动后验证。
 
 ## Final authorization review
 
@@ -177,3 +174,10 @@ the preceding task; preserve them and review them together without resetting.
   project instructions prohibit shared database operations. End-to-end UI/API
   validation therefore remains `UNVERIFIED` until an isolated runtime/database
   is available or the repository rule changes.
+
+## 合并结果（2026-10-22）
+
+- 任务提交 `36213ea` 已合并到本地 `main`，合并提交为 `10426e7`；未推送远端。
+- 合并时保留了 `main` 的租户隔离改动和同期客服业务提交，并将知识库目录迁移登记为 `107_auth_knowledge_bases.sql`。
+- 合并后定向后端用例 193 项通过；知识库 API/删除/上传前端 20 项通过；TypeScript 检查通过。pytest 有两条环境告警：当前 Python 未识别 `timeout` 与 `timeout_method` 配置。
+- 共享数据库未迁移，未按 `devctl.bat rebuild` 重建本机服务；部署和浏览器端到端仍为 `UNVERIFIED`。用户可在隔离服务部署后继续验证上传及删除体验。
