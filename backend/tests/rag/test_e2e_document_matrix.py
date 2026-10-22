@@ -389,7 +389,8 @@ def test_15_scanned_pdf_partial_ocr(tmp_path, monkeypatch):
 
     def flaky_ocr(png_bytes):
         calls["n"] += 1
-        if calls["n"] == 2:
+        if calls["n"] in {2, 3}:
+            # 第 2 页的首次识别及 300 DPI 重试均失败，验证失败页留痕。
             raise RuntimeError("OCR provider timeout")
         return f"第{calls['n']}页扫描识别文本，内容足够长以构成段落。"
 
@@ -399,7 +400,10 @@ def test_15_scanned_pdf_partial_ocr(tmp_path, monkeypatch):
     p = tmp_path / "scan.pdf"
     d = fitz.open()
     for _ in range(3):
-        d.new_page()   # 无文本层 → 触发 OCR
+        page = d.new_page()
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 400, 600), 0)
+        pixmap.clear_with(0)
+        page.insert_image(page.rect, stream=pixmap.tobytes("png"))
     d.save(str(p))
     d.close()
     chunks, qc = parse_and_chunk_full(str(p))

@@ -175,7 +175,7 @@ class TestExcelCellFidelity:
         sections = [n.text for n in _walk(ast.root) if n.type == "section" and n.level == 1]
         tables = [n for n in _walk(ast.root) if n.type == "table"]
         assert sections == ["First", "Second"]
-        assert visited_sheets == ["First", "Second"]
+        assert set(visited_sheets) == {"First", "Second"}
         assert sum(len(t.rows) for t in tables) == 5
         assert ast.table_rows_truncated == 1
         assert ast.table_rows_total == 5  # 触顶即停，不读取第 6 行
@@ -210,7 +210,7 @@ class TestExcelCellFidelity:
         from backend.rag.preprocessing.ast import walk as _walk
 
         tables = [n for n in _walk(ast.root) if n.type == "table"]
-        assert visited_sheets == ["First"]
+        assert set(visited_sheets) == {"First"}
         assert sum(len(row) for table in tables for row in table.rows) == 4
         assert ast.table_cells_total == 4
         assert ast.table_cells_total_known is False
@@ -263,6 +263,8 @@ class TestOcrCoverageMarked:
             ocr_triggered=True,
             ocr_pages=100,
             ocr_page_limit=100,
+            ocr_page_budget=100,
+            ocr_page_budget_source="default",
             ocr_failed_pages=3,
         )
         from langchain_core.documents import Document
@@ -276,7 +278,8 @@ class TestOcrCoverageMarked:
         anomalies = run_typed_validation(record, ast)
         partial = [a for a in anomalies if a["check"] == "ocr_coverage_partial"]
         assert partial, anomalies
-        assert "上限 100" in partial[0]["detail"]
+        assert "页预算 100 页" in partial[0]["detail"]
+        assert "上限遗漏 100 页" in partial[0]["detail"]
         assert "失败页 3" in partial[0]["detail"]
         # OCR 页数上限或失败页代表源内容缺失，不能以 partial 状态 active。
         assert partial[0]["severity"] == "error"

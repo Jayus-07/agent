@@ -416,6 +416,7 @@ def _filter_index_chunks(
 
         filtered_details.append({
             "chunk_index": metadata.get("chunk_index", len(kept_chunks)),
+            "chunk_type": metadata.get("chunk_type"),
             "reason": reason,
             "preview": chunk.page_content[:80],
             # P2 收口（2026-10-19）：原文全文供 coverage_audit 豁免对照——
@@ -509,7 +510,10 @@ def _enforce_prepaid_content_integrity(
     失败语义与既有质量门禁一致（ValueError + quality_issues 留痕），
     不新增价格/预算/账本体系；付费后与写库前的门禁原样保留。
     """
-    from backend.rag.preprocessing.chunking import coverage_audit
+    from backend.rag.preprocessing.chunking import (
+        coverage_audit,
+        is_table_chunk,
+    )
     from backend.rag.preprocessing.quality_gate import (
         audit_chunk_integrity,
         cleaning_coverage_audit,
@@ -526,8 +530,15 @@ def _enforce_prepaid_content_integrity(
     )
     coverage = coverage_audit(
         audit_ast, chunks, normalize_pii=pii_normalized,
+        # 显式过滤的非表格叶子可合法排除；表格过滤意味着数据未入库，必须计入缺口。
         excluded_texts=[
-            d["content"] for d in (filtered_details or []) if d.get("content")
+            d["content"]
+            for d in (filtered_details or [])
+            if d.get("content")
+            and not (
+                isinstance(d.get("chunk_type"), str)
+                and is_table_chunk(d["chunk_type"])
+            )
         ],
     )
     qc["coverage"] = coverage
