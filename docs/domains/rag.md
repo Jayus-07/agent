@@ -32,7 +32,7 @@ deadline；按原问题优先消费结果，max聚合和阈值保持不变。原
 按字面子串匹配，转义 SQL LIKE 通配符。多轮 contextualize 的 system/human
 均来自当前治理模板，保留 history 占位符，无效模板回退内置默认。
 
-解析分块缓存使用 v3 JSON，旧 pickle 不加载，失效后按正常流水线重新构建。
+解析分块缓存使用 v4 JSON，旧 pickle 不加载，失效后按正常流水线重新构建（切分/溯源语义变更时同步递增缓存版本）。
 BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒绝加载并走
 既有重建/旧快照降级；SHA256 是损坏检测，不是来源认证。
 
@@ -88,10 +88,15 @@ flowchart TD
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
 - 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。普通用户的日志与活动记录按可信租户、知识库、部门及文档授权范围过滤；有文档 ID 的日志须能在注册表中确认授权范围，无文档 ID 的日志仅对记录操作者可见。当前租户 admin 可查看该租户全部记录；跨租户访问仍须单独授权。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
+  - 统一结构来源（2026-10-22）：`parse_file` 为 AST 节点确定性生成 `node_id`、父节点/章节 ID、章节树和字符跨度；格式解析器另提供 PDF 页/bbox、DOCX 正文序号、表格行列、HTML DOM 路径、PPTX 幻灯片/形状、JSON 路径或 XML XPath。章节树写入质量记录，Section 带 `section_type`（section/clause/slide/record/element），Leaf/Parent 保存标量章节 ID 与 JSON 来源定位；合同条款、JSON 记录等非显式章节按完整标题路径派生稳定章节 ID，并回写章节树。无法唯一回源时不猜页码或节点。
+  - 解析入口新增 HTML/HTM、PPTX、JSON、XML，上传 MIME 白名单仍只从 Parser 注册表派生；OOXML 继续做 ZIP 魔数校验，文本类继续拒绝 NUL/UTF-16 伪装。HTML 排除导航、页脚、脚本及 class/id/role 标识的广告位；Markdown 解析 fenced code 与 pipe table；PPTX 每页都生成 slide section（无标题页使用“幻灯片 N”并标记 heading_source），并提取可见文本、表格、图表缓存值、演讲备注及有说明的图片，未识别图表/无说明图片写质量告警；JSON/XML 保留字段路径与数组记录边界，无 id/name 的记录使用“记录 N”并标记来源，XML 拒绝 DTD/ENTITY，JSON/XML 的结构上限触发时明确标记 partial 并阻止当作完整解析发布。
+  - 上传弹窗文件选择器与后端注册表同步开放 PDF、Markdown、TXT、DOCX、XLSX、CSV、HTML、PPTX、JSON、XML。RapidOCR 保留区域平均置信度并汇总最低值；低于 0.7 标记 `ocr_confidence_low`，云端未返回分数时标记 `ocr_confidence_unavailable`，不伪造置信度。
+  - 嵌套混合结构按 AST 递归分派：FAQ、法律条款、表格、步骤和普通章节可在不同子章节选择各自策略，同时保留完整祖先标题路径。完整 FAQ Q+A 仍为一个 Leaf，并保存问题文本与 FAQ ID；混合文档中 FAQ 与非 QA 内容分开处理，不重复产出同一 Q+A。表格行使用 `table_node_id` 绑定到具体表格节点，保留表头、行序、表格 ID 与来源定位；同章节多表不再回退到第一张表。
+  - 三种文本职责分开：`page_content`/`content_for` 是可引用原文；`EmbeddingStage.embedding_text_for` 只为向量输入添加必要文档/章节上下文；BM25 使用 `search_text_for` 返回原文。Chunk 保留内容 Hash、chunk_type、精确标识符、Parser/切分策略版本、章节 ID、来源节点/跨度/格式定位；普通 Leaf 至少标记 paragraph/list/code/step/legal_clause 之一。Document 级 `title/language/source_format/parser_version`，以及 Chunk 索引期的 `chunk_policy_version/embedding_model/embedding_version/index_generation/indexed_at` 同时写入 registry 与质量记录（registry 存量表由惰性列迁移补齐）。实体候选按原文逐字匹配后才绑定到 Chunk。候选代次仍以发布协议和 registry Active 指针为权威，tenant、权限和审核状态仍从可信服务端上下文继承。
   - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
   - 识别到的 FAQ 问答以每个完整 Q+A 对作为独立 Leaf；不再为整份 FAQ 生成只列问题、不含答案的虚拟 Parent，避免一个 FAQ 命中后把所有问题都附加到回答上下文。Parent-Child 仍用于有实际跨块上下文价值的其他策略。
   - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。
-  - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号。普通文档保留既有主路由；多个根级章节命中不同内容类型时，由 `ContentUnitDispatchStrategy` 按单元局部调用 QA、Legal、Step、Table 或 Structure 处理器。局部策略重新编号时必须把 `content_unit_id` 纳入 `chunk_id`、Parent 和表格 ID 命名空间；最终完整性边界还会消歧残余重复 ID 并同步修复引用。`route_with_decision` 记录各单元选择的策略、结构信号和处理范围。结构置信度只代表 AST 结构启发式，不代表源文件覆盖率或语义质量。
+  - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号。普通文档保留既有主路由；多个嵌套章节命中不同内容类型时，由 `ContentUnitDispatchStrategy` 按单元局部调用 QA、Legal、Step、Table 或 Structure 处理器。局部策略重新编号时必须把 `content_unit_id` 纳入 `chunk_id`、Parent 和表格 ID 命名空间；最终完整性边界还会消歧残余重复 ID 并同步修复引用。`route_with_decision` 记录各单元选择的策略、结构信号和处理范围。结构置信度只代表 AST 结构启发式，不代表源文件覆盖率或语义质量。
   - 解析结果契约：Parser 输出 `DocumentAST`，PDF 节点 `page_number` 为 1-based，`bbox` 使用 PDF 页面坐标；Chunk 以标量 `pages` 和 `source_locations_json` 传递页码与 bbox，避免向量库对 list/dict metadata 的后端差异。Chunk 生成时优先从 AST 节点透传位置；硬切按原文跨度映射位置。表格节点改写成摘要/行块前也要先继承来源位置。文本回映射遇到跨页重复页眉/页脚或相同正文时，歧义文本不作为定位证据，避免一个 Leaf 错标到多个页面。质量记录另存 `parse_status`、按页 `parse_issues`、OCR 状态、图片页、空白页、未解析内容页、布局回退页、表格检测失败页和跳过页；问题记录只保存代码、严重度、页码及短说明，不复制正文。
   - PDF OCR 按页和图片区域判定：低文本量扫描页识别页内图片；文字层充足但含大面积图片的页面只裁剪图片 bbox 做 OCR；没有图片块但渲染后可见、或文字层稀疏且矢量图形密集的页面走整页 OCR。低分辨率渲染区分纯空白页与疑似内容页，空白页不计为丢页。本地 RapidOCR 对空结果或单页异常只重试一次，并提高渲染 DPI；云端 OCR 不自动重试，避免不确定请求重复计费。供应商不可用、页数上限、区域识别失败或有内容页面最终无 AST 节点均为质量硬异常。OCR 只提取图中文字，不声称能还原图表语义。
     - OCR 页预算默认使用 `RAG_OCR_MAX_PAGES`（默认 100）。管理员可在单次 PDF 上传时显式指定 `ocr_page_budget`（1–500 页；管理端提供 200/300/500 选项）；该值随 Celery 任务和重投持久化，只影响该次 PDF。未指定时不变更全局默认。预算、来源、所需页数和遗漏页数进入 AST 质量记录与 OCR 血缘 Trace；超预算或 OCR 失败仍触发硬门禁，不能发布部分索引。提高预算可能增加处理时间及云端 OCR 用量。

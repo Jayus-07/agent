@@ -245,6 +245,8 @@ def _is_heading_line(text: str, size: float, body_size: float) -> bool:
 
 
 class PdfParser(BaseDocumentParser):
+    PARSER_VERSION = "v2"
+
     def parse(
         self, file_path: str, *,
         ocr_page_budget: int | None = None,
@@ -455,6 +457,7 @@ class PdfParser(BaseDocumentParser):
         if ocr_required:
             from backend.config import rag as rag_cfg
             from backend.rag.preprocessing.parser import ocr as ocr_mod
+            ocr_mod.reset_ocr_tracking()
 
             max_ocr_pages = (
                 int(ocr_page_budget)
@@ -699,6 +702,16 @@ class PdfParser(BaseDocumentParser):
         ast.ocr_attempted = ocr_attempted
         ast.ocr_triggered = ocr_pages > 0
         ast.ocr_pages = ocr_pages
+        if ocr_required:
+            ocr_stats = ocr_mod.get_ocr_result_meta()
+            ast.ocr_confidence_mean = ocr_stats.get("confidence_mean")
+            ast.ocr_confidence_min = ocr_stats.get("confidence_min")
+            ast.ocr_confidence_scored_regions = int(
+                ocr_stats.get("confidence_scored_regions") or 0
+            )
+            ast.ocr_confidence_unavailable_regions = int(
+                ocr_stats.get("confidence_unavailable_regions") or 0
+            )
         ast.ocr_page_limit = ocr_page_limit
         ast.ocr_page_budget = max_ocr_pages if ocr_required else 0
         ast.ocr_page_budget_source = budget_source if ocr_required else "not_needed"

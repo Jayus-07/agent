@@ -54,6 +54,14 @@ CREATE TABLE IF NOT EXISTS {table} (
     quality_score DOUBLE PRECISION DEFAULT 0,
     quality_issues TEXT DEFAULT '',
     embedding_model TEXT DEFAULT '',
+    embedding_version TEXT DEFAULT '',
+    title        TEXT DEFAULT '',
+    language     TEXT DEFAULT '',
+    source_format TEXT DEFAULT '',
+    parser_version TEXT DEFAULT '',
+    chunk_policy_version TEXT DEFAULT '',
+    index_generation TEXT DEFAULT '',
+    indexed_at   TEXT,
     minhash_sig  TEXT DEFAULT '',
     near_dup_id  TEXT DEFAULT '',
     status       TEXT DEFAULT 'active',
@@ -208,6 +216,22 @@ class PostgresDocumentRegistry(DocumentRegistry):
                     f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
                 )
                 logger.info(f"[doc_registry_pg] 迁移：补列 {col}（处理血缘）")
+        index_columns = (
+            ("embedding_version", "TEXT DEFAULT ''"),
+            ("title", "TEXT DEFAULT ''"),
+            ("language", "TEXT DEFAULT ''"),
+            ("source_format", "TEXT DEFAULT ''"),
+            ("parser_version", "TEXT DEFAULT ''"),
+            ("chunk_policy_version", "TEXT DEFAULT ''"),
+            ("index_generation", "TEXT DEFAULT ''"),
+            ("indexed_at", "TEXT"),
+        )
+        for col, coldef in index_columns:
+            if col not in existing:
+                conn.cursor().execute(
+                    f"ALTER TABLE {self._table} ADD COLUMN {col} {coldef}"
+                )
+                logger.info(f"[doc_registry_pg] 迁移：补列 {col}（索引运行元数据）")
         if "active_generation" not in existing:
             conn.cursor().execute(
                 f"ALTER TABLE {self._table} ADD COLUMN active_generation TEXT DEFAULT ''"
@@ -458,7 +482,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "minhash_sig", "near_dup_id", "doc_type", "summary", "keywords",
             "time_refs", "business_domain", "quality_score",
             "quality_issues", "confidence", "permission_scope",
-            "fixture_set",
+            "fixture_set", "embedding_version", "title", "language",
+            "source_format", "parser_version", "chunk_policy_version",
+            "index_generation", "indexed_at",
             # §6 治理 11 字段（R4）：版本治理元数据可回填
             "version_id", "effective_from", "effective_to",
             "supersedes_version_id", "source_priority", "quality_status",
@@ -509,6 +535,14 @@ class PostgresDocumentRegistry(DocumentRegistry):
         quality_score = meta.get("quality_score", 0)
         quality_issues = meta.get("quality_issues", "")
         embedding_model = meta.get("embedding_model", "")
+        embedding_version = meta.get("embedding_version", "")
+        title = meta.get("title", "")
+        language = meta.get("language", "")
+        source_format = meta.get("source_format", "")
+        parser_version = meta.get("parser_version", "")
+        chunk_policy_version = meta.get("chunk_policy_version", "")
+        index_generation = meta.get("index_generation", "")
+        indexed_at = meta.get("indexed_at") or None
         minhash_sig = meta.get("minhash_sig", "")
         near_dup_id = meta.get("near_dup_id", "")
         summary = meta.get("summary", "")
@@ -547,7 +581,13 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "chunk_ids": psycopg2.extras.Json(chunk_ids), "doc_db_id": doc_db_id,
             "doc_type": doc_type, "confidence": confidence, "llm_used": llm_used,
             "quality_score": quality_score, "quality_issues": quality_issues,
-            "embedding_model": embedding_model, "minhash_sig": minhash_sig,
+            "embedding_model": embedding_model,
+            "embedding_version": embedding_version, "title": title,
+            "language": language, "source_format": source_format,
+            "parser_version": parser_version,
+            "chunk_policy_version": chunk_policy_version,
+            "index_generation": index_generation, "indexed_at": indexed_at,
+            "minhash_sig": minhash_sig,
             "near_dup_id": near_dup_id, "summary": summary, "keywords": keywords,
             "time_refs": time_refs, "business_domain": business_domain,
             "metadata_fingerprint": metadata_fingerprint,

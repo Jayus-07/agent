@@ -194,13 +194,15 @@ class RAGPipeline:
     def _build_doc_index(self):
         self.doc_map = {}
         all_file_paths = set()
+        from backend.rag.indexing.stages.embedding_stage import EmbeddingStage
+
         for d in self.docs:
             fname = d.metadata["file_path"]
             all_file_paths.add(fname)
             name = os.path.basename(fname)
             if name not in self.doc_map:
                 self.doc_map[name] = []
-            self.doc_map[name].append(d.page_content)
+            self.doc_map[name].append(EmbeddingStage.search_text_for(d))
         logger.info(
             f"文档级索引: {len(self.doc_map)} 个唯一文档名, "
             f"{len(all_file_paths)} 个源文件"

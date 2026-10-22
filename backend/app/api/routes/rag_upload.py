@@ -423,6 +423,11 @@ _MIME_BY_EXT: dict[str, set[str]] = {
     # csv 解析器注册后同步补齐（F6 单一来源派生，避免漂移）；
     # 浏览器/客户端常以 text/plain 声明，一并放行。
     "csv":      {"text/csv", "text/plain"},
+    "html":     {"text/html"},
+    "htm":      {"text/html"},
+    "pptx":     {"application/vnd.openxmlformats-officedocument.presentationml.presentation"},
+    "json":     {"application/json", "text/json"},
+    "xml":      {"application/xml", "text/xml"},
 }
 
 ALLOWED_MIME_TYPES: dict[str, set[str]] = {
@@ -482,6 +487,19 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     if ctype not in ALLOWED_MIME_TYPES[ext]:
         return False, f"MIME type not allowed for .{ext}: {ctype}"
     return True, ""
+
+
+def _magic_matches(ext: str, head: bytes) -> bool:
+    """按扩展名校验上传文件头；文本格式拒绝明显的二进制伪装。"""
+    if ext == "pdf":
+        return head.startswith(b"%PDF-")
+    if ext in {"docx", "xlsx", "pptx"}:
+        return head.startswith(b"PK\x03\x04")
+    if ext in {
+        "md", "markdown", "txt", "csv", "html", "htm", "json", "xml",
+    }:
+        return b"\x00" not in head and head[:2] not in (b"\xff\xfe", b"\xfe\xff")
+    return True
 
 
 @router.post("/upload", dependencies=[Depends(require_rag_editor)])
@@ -787,19 +805,7 @@ async def sync_upload_impl(
             return {"ok": False, "error": "file is empty"}
         with open(staging_path, "rb") as _f:
             head = _f.read(8192)
-        _magic_ok = True
-        if ext == "pdf" and not head.startswith(b"%PDF-"):
-            _magic_ok = False
-        elif ext in ("docx", "xlsx") and not head.startswith(b"PK\x03\x04"):
-            # F6: xlsx 同为 OOXML zip 容器，魔数与 docx 一致
-            _magic_ok = False
-        elif ext in ("md", "markdown", "txt", "csv") and (
-            b"\x00" in head or head[:2] in (b"\xff\xfe", b"\xfe\xff")
-        ):
-            # P2: 文本格式无魔数可查,用 NUL 字节探测拒绝二进制伪装;
-            # UTF-16 BOM 同拒（解析器只有 utf-8/gbk 链路,UTF-16 会整体乱码）。
-            # 历史教训:P0-1 二进制/乱码文件曾直接进入 doc_db。
-            _magic_ok = False
+        _magic_ok = _magic_matches(ext, head)
         if not _magic_ok:
             try:
                 os.unlink(staging_path)

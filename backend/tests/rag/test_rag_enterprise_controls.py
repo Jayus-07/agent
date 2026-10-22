@@ -143,7 +143,7 @@ def test_parser_issues_are_retained_in_quality_record_and_validation():
     )
     anomalies = run_typed_validation(record, ast)
 
-    assert record["schema_version"] == "1.1"
+    assert record["schema_version"] == "1.3"
     assert record["parsing"]["parse_status"] == "partial"
     assert record["parsing"]["pdf_image_pages"] == [2]
     assert record["parsing"]["ocr_required_regions"] == [

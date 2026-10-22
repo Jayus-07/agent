@@ -430,6 +430,17 @@ class TestReadonlyPassword:
         assert "ALTER ROLE AGENT_READONLY NOLOGIN" in migration.upper()
         assert "STANDALONE EXECUTION FAILS CLOSED" in migration.upper()
 
+    def test_approval_tenant_migration_targets_business_database_once(self):
+        from scripts.init_db import MIGRATION_TARGETS, discover_migrations
+
+        name = "106_approval_tenant_isolation.sql"
+        plan, unregistered = discover_migrations()
+        assert not unregistered
+        assert MIGRATION_TARGETS[name] == "business"
+        assert [target for filename, target in plan if filename == name] == [
+            "business",
+        ]
+
     def test_004_creates_role_without_password(self):
         from pathlib import Path
 

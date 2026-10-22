@@ -299,7 +299,6 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 部门类型、客服部门标记及部门主管关联。
     "104_rbac_department_type_manager.sql": "memory",
     "105_rag_tenant_isolation.sql": "memory",
-    "106_approval_tenant_isolation.sql": "memory",
     # RAG 知识库目录持久化、版本控制与同事务审计。
     "107_auth_knowledge_bases.sql": "memory",
 }

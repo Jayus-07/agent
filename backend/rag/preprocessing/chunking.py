@@ -310,7 +310,8 @@ def _ast_has_sections(ast: DocumentAST) -> bool:
 
 def _make_leaf_chunk(texts: list[str], file_path: str,
                      section_title: str = "", section_level: int = 0,
-                     section_path: list | None = None) -> Document:
+                     section_path: list | None = None,
+                     chunk_type: str = "") -> Document:
     """合并文本列表成一个 leaf chunk（Step/Legal 等按编号切分的策略共用）。
 
     chunk_id 由合并内容派生（幂等）：同内容重复切分产出相同 id。
@@ -318,7 +319,7 @@ def _make_leaf_chunk(texts: list[str], file_path: str,
     此前产出空标题，检索上下文弱）。
     """
     text = "\n".join(texts)
-    return _make_doc(text, {
+    metadata = {
         "granularity": "leaf",
         "chunk_id": _chunk_id(file_path, "leaf", text),
         "parent_chunk_id": "",
@@ -326,14 +327,18 @@ def _make_leaf_chunk(texts: list[str], file_path: str,
         "section_title": section_title,
         "section_level": section_level,
         "chunk_tokens": count_tokens(text),
-    })
+    }
+    if chunk_type:
+        metadata["chunk_type"] = chunk_type
+    return _make_doc(text, metadata)
 
 
 def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
                               section_title: str = "", section_level: int = 0,
                               section_path: list | None = None,
                               budget: int | None = None,
-                              preserve_source: bool = False) -> List[Document]:
+                              preserve_source: bool = False,
+                              chunk_type: str = "") -> List[Document]:
     """合并文本为 leaf，超 token 预算时继续切分，每个子块保留节点身份（P0-05）。
 
     背景：Step/Legal/QA 策略此前把「一个章节/条款/问答」直接合并成单一
@@ -346,8 +351,10 @@ def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
         budget = LEAF_CHUNK_TOKENS
     text = "\n".join(texts)
     if count_tokens(text) <= budget:
-        return [_make_leaf_chunk(texts, file_path, section_title,
-                                 section_level, section_path)]
+        return [_make_leaf_chunk(
+            texts, file_path, section_title, section_level, section_path,
+            chunk_type=chunk_type,
+        )]
     # Legal 长条款的 Coverage 需要能从实际 Leaf 无损重建源文；递归切分
     # 会产生重叠片段，直接重组会重复边界。复用结构策略已有硬切，保持连续。
     subs = (
@@ -372,6 +379,8 @@ def _make_leaf_chunks_bounded(texts: list[str], file_path: str,
             "split_part": index,
             "split_total": len(subs),
         }
+        if chunk_type:
+            metadata["chunk_type"] = chunk_type
         chunks.append(_make_doc(sub, metadata))
     return chunks
 
@@ -485,6 +494,319 @@ def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
                 {"page": page, "bbox": list(bbox) if bbox else None}
                 for page, bbox in locations
             ])
+
+
+def stamp_chunk_structure(chunks: list, ast: DocumentAST) -> None:
+    """为 Chunk 补齐章节身份、稳定源节点 ID 和格式专属定位。"""
+    from backend.rag.preprocessing.ast import (
+        infer_section_type, iter_sections, section_tree,
+    )
+
+    sections_by_path: dict[tuple[str, ...], list[DocumentNode]] = {}
+    for section, path in iter_sections(ast):
+        if section.level <= 0:
+            continue
+        sections_by_path.setdefault(tuple(path), []).append(section)
+
+    tree = section_tree(ast)
+    section_by_heading_path = {
+        tuple(item.get("heading_path") or []): item for item in tree
+    }
+    section_by_id = {
+        str(item.get("section_id") or ""): item for item in tree
+    }
+    ast_section_ids = set(section_by_id)
+    derived_sections: list[dict] = []
+    document_title = str(getattr(ast, "document_title", "") or "").strip()
+
+    def _as_list(value) -> list:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return []
+        return value if isinstance(value, list) else []
+
+    def _new_section_id(path: list[str], parent_id: str) -> str:
+        identity = ["section", document_title, list(path), parent_id]
+        return hashlib.sha256(
+            json.dumps(
+                identity, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"), default=str,
+            ).encode("utf-8")
+        ).hexdigest()[:24]
+
+    def _remap_section_id(value, old_id: str, new_id: str):
+        if isinstance(value, list):
+            return [_remap_section_id(item, old_id, new_id) for item in value]
+        if isinstance(value, dict):
+            return {
+                key: (
+                    new_id
+                    if key == "section_id" and str(item) == old_id
+                    else _remap_section_id(item, old_id, new_id)
+                )
+                for key, item in value.items()
+            }
+        return value
+
+    def _apply_section_id_remap(metadata: dict, old_id: str, new_id: str) -> None:
+        for key in ("table_structures_json", "sections_json", "references"):
+            value = metadata.get(key)
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                except (TypeError, ValueError):
+                    continue
+                metadata[key] = json.dumps(
+                    _remap_section_id(parsed, old_id, new_id),
+                    ensure_ascii=False, separators=(",", ":"),
+                )
+            elif isinstance(value, (list, dict)):
+                metadata[key] = _remap_section_id(value, old_id, new_id)
+
+    def _resolve_section(path: tuple[str, ...], chunk) -> dict | None:
+        """按完整标题路径解析章节；缺失的条款/记录层级生成稳定虚拟章节。"""
+        if not path:
+            return None
+        if path in section_by_heading_path:
+            return section_by_heading_path[path]
+        parent = _resolve_section(path[:-1], chunk)
+        heading = str(path[-1]).strip()
+        if not heading:
+            return parent
+        section_type = "clause" if _is_legal_clause(heading) else "section"
+        if str((chunk.metadata or {}).get("chunk_type") or "") == "faq":
+            section_type = "faq_group"
+        parent_id = str((parent or {}).get("section_id") or "")
+        level = int((parent or {}).get("heading_level") or 0) + 1
+        metadata = chunk.metadata or {}
+        spans = _as_list(metadata.get("source_spans_json"))
+        locators = _as_list(metadata.get("source_locators_json"))
+        page_numbers: list[int] = []
+        for value in str(metadata.get("pages") or "").split(","):
+            try:
+                page_numbers.append(int(value))
+            except (TypeError, ValueError):
+                continue
+        section = {
+            "section_id": _new_section_id(list(path), parent_id),
+            "parent_section_id": parent_id,
+            "heading": heading,
+            "heading_level": level,
+            "heading_path": list(path),
+            "section_order": len(tree),
+            "page_start": min(page_numbers) if page_numbers else None,
+            "page_end": max(page_numbers) if page_numbers else None,
+            "section_type": section_type,
+            "source_span": spans[0] if spans and isinstance(spans[0], dict) else None,
+            "source_locator": locators[0] if locators and isinstance(locators[0], dict) else {},
+            "derived_from": "chunk_path",
+        }
+        tree.append(section)
+        section_by_heading_path[path] = section
+        section_by_id[section["section_id"]] = section
+        ast_section_ids.add(section["section_id"])
+        derived_sections.append(section)
+        return section
+
+    def _norm(value: str) -> str:
+        return " ".join(str(value or "").split()).casefold()
+
+    table_nodes = [
+        node for node in walk(ast.root)
+        if node.type == "table" and node.source_locator
+    ]
+
+    for chunk in chunks:
+        metadata = getattr(chunk, "metadata", None)
+        content = str(getattr(chunk, "page_content", "") or "")
+        if not isinstance(metadata, dict):
+            continue
+        original_section_id = str(metadata.get("section_id") or "")
+        raw_path = metadata.get("section_path") or []
+        if isinstance(raw_path, str):
+            try:
+                raw_path = json.loads(raw_path)
+            except (TypeError, ValueError):
+                raw_path = [raw_path] if raw_path else []
+        path = tuple(str(part) for part in raw_path if str(part))
+        heading_path = list(path)
+        document_title = str(getattr(ast, "document_title", "") or "").strip()
+        if document_title and (
+            not heading_path or heading_path[0] != document_title
+        ):
+            heading_path.insert(0, document_title)
+        if heading_path:
+            metadata["heading_path_json"] = json.dumps(
+                heading_path, ensure_ascii=False, separators=(",", ":"),
+            )
+        candidates = sections_by_path.get(path, []) if path else []
+        if not candidates and metadata.get("section_title"):
+            title = str(metadata["section_title"])
+            candidates = [
+                section for entries in sections_by_path.values()
+                for section in entries if section.text.strip() == title
+            ]
+
+        if len(candidates) > 1:
+            evidence = _norm(content[:240])
+            matching = []
+            for section in candidates:
+                section_text = " ".join(
+                    node.text for node in walk(section) if node.text
+                )
+                if evidence and evidence in _norm(section_text):
+                    matching.append(section)
+            if len(matching) == 1:
+                candidates = matching
+
+        if len(candidates) == 1:
+            section = candidates[0]
+            metadata["section_id"] = section.section_id
+            metadata["parent_section_id"] = section.parent_section_id
+            metadata["section_type"] = (
+                section.source_locator.get("section_type")
+                or infer_section_type(section)
+            )
+        else:
+            section = None
+
+        section_id = str(metadata.get("section_id") or "")
+        if not section_id or section_id not in ast_section_ids:
+            resolved = _resolve_section(tuple(heading_path or path), chunk)
+            if resolved is not None:
+                metadata["section_id"] = resolved["section_id"]
+                metadata["parent_section_id"] = resolved["parent_section_id"]
+                metadata["section_type"] = resolved["section_type"]
+        else:
+            resolved = section_by_id.get(section_id)
+            if resolved is not None and resolved.get("section_type"):
+                metadata["section_type"] = resolved["section_type"]
+
+        if str(metadata.get("chunk_type") or "") == "faq" and metadata.get(
+            "section_id",
+        ):
+            metadata["section_type"] = "faq_group"
+            faq_section = section_by_id.get(str(metadata["section_id"]))
+            if faq_section is not None and faq_section.get(
+                "section_type",
+            ) == "section":
+                faq_section["section_type"] = "faq_group"
+
+        final_section_id = str(metadata.get("section_id") or "")
+        if (
+            original_section_id
+            and final_section_id
+            and original_section_id != final_section_id
+        ):
+            # 合同策略内部的 clause_N 会随路径解析替换为稳定章节 ID；
+            # 同步改写表格结构/引用 JSON，避免顶层与嵌套身份不一致。
+            _apply_section_id_remap(
+                metadata, original_section_id, final_section_id,
+            )
+
+        table_node = None
+        chunk_type = str(metadata.get("chunk_type") or "")
+        if chunk_type.startswith("table_"):
+            wanted_node_id = str(metadata.get("table_node_id") or "")
+            if wanted_node_id:
+                table_node = next(
+                    (node for node in table_nodes if node.node_id == wanted_node_id),
+                    None,
+                )
+            if table_node is None:
+                scoped = [
+                    node for node in table_nodes
+                    if not metadata.get("section_id")
+                    or node.section_id == metadata.get("section_id")
+                ]
+                # 没有稳定表格身份时，仅当该章节只有一张表才可安全回退；
+                # 多表章节宁可留空，也不把引用指到错误的表。
+                if len(scoped) == 1:
+                    table_node = scoped[0]
+
+        if table_node is not None:
+            locator = dict(table_node.source_locator)
+            for key in ("row_index", "row_start", "row_end"):
+                row_value = metadata.get(key)
+                if row_value is None:
+                    continue
+                try:
+                    locator[key] = int(row_value)
+                except (TypeError, ValueError):
+                    locator[key] = str(row_value)[:32]
+            if table_node.rows:
+                locator["columns"] = [
+                    str(value) for value in table_node.rows[0]
+                ][:64]
+            locator["table_id"] = metadata.get("table_id", "")
+            metadata["source_locators_json"] = json.dumps(
+                [locator], ensure_ascii=False, separators=(",", ":"),
+            )[:4096]
+            metadata["source_node_ids_json"] = json.dumps(
+                [table_node.node_id], ensure_ascii=False, separators=(",", ":"),
+            )
+            start, end = table_node.source_range
+            if end > start:
+                metadata["source_spans_json"] = json.dumps(
+                    [{"start": start, "end": end, "unit": "char"}],
+                    ensure_ascii=False, separators=(",", ":"),
+                )[:4096]
+        else:
+            source_nodes: list[DocumentNode] = []
+            normalized_content = _norm(content)
+            for node in walk(ast.root):
+                if node.type not in LEAF_TYPES or not node.source_locator:
+                    continue
+                if node.section_id and metadata.get("section_id") and (
+                    node.section_id != metadata.get("section_id")
+                ):
+                    node_text = _norm(node.text)
+                    if not (node_text and node_text in normalized_content):
+                        continue
+                node_text = _norm(node.text)
+                if not node_text:
+                    continue
+                core = node_text[:160]
+                if node_text in normalized_content or (
+                    len(core) >= 40 and core in normalized_content
+                ) or (
+                    len(normalized_content) >= 40
+                    and normalized_content[:160] in node_text
+                ):
+                    source_nodes.append(node)
+
+            if source_nodes:
+                spans = []
+                locators = []
+                node_ids = []
+                for node in source_nodes[:16]:
+                    node_ids.append(node.node_id)
+                    start, end = node.source_range
+                    if end > start:
+                        spans.append({"start": start, "end": end, "unit": "char"})
+                    if node.source_locator:
+                        locators.append(node.source_locator)
+                metadata["source_node_ids_json"] = json.dumps(
+                    node_ids, ensure_ascii=False, separators=(",", ":"),
+                )
+                if spans:
+                    metadata["source_spans_json"] = json.dumps(
+                        spans[:16], ensure_ascii=False, separators=(",", ":"),
+                    )[:4096]
+                if locators:
+                    metadata["source_locators_json"] = json.dumps(
+                        locators[:16], ensure_ascii=False, separators=(",", ":"),
+                    )[:4096]
+        metadata["content_hash"] = hashlib.sha256(
+            content.encode("utf-8"),
+        ).hexdigest()
+
+    if derived_sections:
+        # section_tree() 返回的是快照副本；写回缓存，让质量记录看到
+        # 由 chunk 路径派生出的条款/记录章节。
+        ast._section_tree = tree
 
 
 def _merge_source_locations(meta: dict, locations: list[dict]) -> None:
@@ -802,6 +1124,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
             "section_title": sec.text if sec.level > 0 else "",
             "section_level": sec.level,
             "chunk_type": CHUNK_TYPE_TABLE_FALLBACK,
+            "table_node_id": str(getattr(node, "node_id", "") or ""),
         }
         if count_tokens(node.text) <= LEAF_CHUNK_TOKENS:
             chunks.append(_make_doc(node.text, {
@@ -840,6 +1163,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
         "granularity": "parent",
         "chunk_id": parent_id,
         "table_id": parent_id,
+        "table_node_id": str(getattr(node, "node_id", "") or ""),
         "parent_scope": "section",
         "section_path": list(path),
         "section_title": sec.text if sec.level > 0 else "",
@@ -867,6 +1191,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "chunk_id": header_id,
                 "parent_chunk_id": parent_id,
                 "table_id": parent_id,
+                "table_node_id": str(getattr(node, "node_id", "") or ""),
                 "section_path": list(path),
                 "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
@@ -902,6 +1227,7 @@ def _split_table_node(node, sec, path: list, file_path: str) -> List[Document]:
                 "chunk_id": leaf_id,
                 "parent_chunk_id": parent_id,
                 "table_id": parent_id,
+                "table_node_id": str(getattr(node, "node_id", "") or ""),
                 "section_path": list(path),
                 "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
@@ -980,15 +1306,24 @@ def _attach_virtual_parents(leaf_chunks: List[Document], file_path: str,
             if scope == "section" and len(section_titles) == 1
             else ""
         )
+        group_paths = [
+            [str(part) for part in (c.metadata.get("section_path") or []) if str(part)]
+            for c in group
+        ]
+        common_path: list[str] = []
+        if scope == "section" and group_paths:
+            for parts in zip(*group_paths):
+                if len(set(parts)) != 1:
+                    break
+                common_path.append(parts[0])
         pmeta = {
             "granularity": "parent",
             "chunk_id": parent_id,
             "parent_chunk_id": "",
             "parent_scope": scope,
-            "section_path": (
-                list(group[0].metadata.get("section_path") or [])
-                if scope == "section" else []
-            ),
+            # 跨多个条款的虚拟 Parent 不能挂在第一个条款下；只保留
+            # 组内所有 Leaf 的公共祖先路径。
+            "section_path": common_path if scope == "section" else [],
             "section_title": section_title,
             "section_titles": section_titles if scope == "section" else [],
             "section_level": 1 if scope == "section" else 0,
@@ -1035,8 +1370,11 @@ class StructureChunkStrategy:
         for sec, path in self._sections(ast):
             leaves = list(self._leaves(sec))
             if exclude_qa:
+                # _leaves() 会把相邻问答合并成 qa_pair；排除 QA 时必须
+                # 一并排除该伪叶子，否则混合文档的 Q+A 会被 QA 策略和
+                # Structure 策略各写一份，造成重复召回。
                 leaves = [l for l in leaves
-                          if l.type not in ("qa_question", "qa_answer")]
+                          if l.type not in ("qa_question", "qa_answer", "qa_pair")]
             if not leaves:
                 # 纯容器 section（只有子章节无直接叶子）：子章节各自有
                 # parent，此处不再产空 parent
@@ -1115,6 +1453,7 @@ class StructureChunkStrategy:
         chunks.append(_make_doc(text, {
             "granularity": "parent",
             "chunk_id": parent_id,
+            "chunk_type": "section",
             "section_path": path,
             "parent_scope": "section" if sec.level > 0 else "document",
             "section_title": sec.text if sec.level > 0 else "",
@@ -1156,6 +1495,15 @@ class StructureChunkStrategy:
                 "granularity": "leaf",
                 "chunk_id": sub_id,
                 "parent_chunk_id": parent_id,
+                "chunk_type": {
+                    "paragraph": "paragraph",
+                    "list": "list",
+                    "code": "code",
+                    "figure": "figure",
+                    "qa_pair": "faq",
+                    "qa_question": "faq",
+                    "qa_answer": "faq",
+                }.get(getattr(leaf, "type", ""), "paragraph"),
                 "section_path": path,
                 "section_title": sec.text if sec.level > 0 else "",
                 "section_level": sec.level,
@@ -1360,7 +1708,7 @@ class StepChunkStrategy:
             chunks.extend(_make_leaf_chunks_bounded(
                 [self._section_text(sec)], file_path,
                 section_title=sec.text, section_level=sec.level,
-                section_path=[sec.text],
+                section_path=[sec.text], chunk_type="step",
             ))
         # C1: 文档级虚拟 parent，修复 SOP/培训 leaf 无 parent_chunk_id
         return _enrich(_attach_virtual_parents(chunks, file_path, "step"), file_path)
@@ -1378,6 +1726,7 @@ class StepChunkStrategy:
                     current, file_path,
                     section_title=current_title, section_level=1 if current_title else 0,
                     section_path=[current_title] if current_title else [],
+                    chunk_type="step",
                 ))
                 current = []
             if _is_section_heading(n.text):
@@ -1450,6 +1799,7 @@ class LegalChunkStrategy:
                 section_level=len(current_path),
                 section_path=current_path,
                 preserve_source=True,
+                chunk_type="legal_clause",
             ))
             current.clear()
 
@@ -1458,7 +1808,9 @@ class LegalChunkStrategy:
             clause_match = _LEGAL_CLAUSE_RE.match((n.text or "").strip())
             if clause_match:
                 _flush_current()
-                current_clause = clause_match.group(0)
+                clause_text = (n.text or "").strip()
+                first_line = clause_text.splitlines()[0].strip() if clause_text else ""
+                current_clause = (first_line or clause_match.group(0))[:80]
                 current_prefix = [
                     part for part in (doc_title, *ancestor_titles) if part
                 ]
@@ -1530,6 +1882,7 @@ class LegalChunkStrategy:
                     next_table_number += 1
                     table = {
                         "table_id": table_id,
+                        "table_node_id": str(getattr(node, "node_id", "") or ""),
                         "rows": [list(row) for row in node.rows],
                         "section_id": section_id,
                         "source_location": _node_source_location(node),
@@ -1618,6 +1971,9 @@ class LegalChunkStrategy:
                 }
                 if len(table_ids) == 1:
                     metadata["table_id"] = table_ids[0]
+                    metadata["table_node_id"] = tables[0].get(
+                        "table_node_id", "",
+                    )
                     metadata["table_rows_json"] = json.dumps(
                         tables[0]["rows"], ensure_ascii=False,
                     )
@@ -1781,6 +2137,7 @@ class LegalChunkStrategy:
                             ),
                             "chunk_type": "table_row_group",
                             "table_id": table["table_id"],
+                            "table_node_id": table.get("table_node_id", ""),
                             "row_start": row_start,
                             "row_end": row_end,
                             "table_rows_json": json.dumps(
@@ -1951,12 +2308,17 @@ class QAChunkStrategy:
                 # P0-05：超预算 → A 部分继续切，每个子块带 Q 前缀
                 if count_tokens(full) > LEAF_CHUNK_TOKENS and a_text:
                     chunks.extend(self._split_long_qa(
-                        file_path, q_text, a_text))
+                        file_path, q_text, a_text,
+                        _chunk_id(file_path, "faq", q_text),
+                    ))
                 else:
                     chunks.append(_make_doc(full, {
                         "granularity": "leaf",
                         "chunk_id": _chunk_id(file_path, "leaf", full),
                         "parent_chunk_id": "",
+                        "chunk_type": "faq",
+                        "faq_id": _chunk_id(file_path, "faq", q_text),
+                        "question": q_text,
                         "section_path": [],
                         "section_title": q_text[:40],
                         "section_level": 0,
@@ -1972,15 +2334,22 @@ class QAChunkStrategy:
         return chunks
 
     @staticmethod
-    def _split_long_qa(file_path: str, q_text: str, a_text: str) -> List[Document]:
+    def _split_long_qa(
+        file_path: str, q_text: str, a_text: str, faq_id: str,
+    ) -> List[Document]:
         prefix = f"Q：{q_text}\nA："
         budget = LEAF_CHUNK_TOKENS - count_tokens(prefix)
         if budget < 50:
             # 问题本身超长：整条按预算切（退化为普通文本切分）
-            return _make_leaf_chunks_bounded(
+            fallback = _make_leaf_chunks_bounded(
                 [f"Q：{q_text}\nA：{a_text}"], file_path,
                 section_title=q_text[:40], section_level=0,
             )
+            for chunk in fallback:
+                chunk.metadata.update({
+                    "chunk_type": "faq", "faq_id": faq_id, "question": q_text,
+                })
+            return fallback
         subs = _split_to_budget(a_text, budget)
         chunks: List[Document] = []
         split_group_id = _chunk_id(file_path, f"split:qa:{q_text}", a_text)
@@ -1990,6 +2359,9 @@ class QAChunkStrategy:
                 "granularity": "leaf",
                 "chunk_id": _chunk_id(file_path, f"leaf:qa:{si}", text),
                 "parent_chunk_id": "",
+                "chunk_type": "faq",
+                "faq_id": faq_id,
+                "question": q_text,
                 "section_path": [],
                 "section_title": q_text[:40],
                 "section_level": 0,
@@ -2481,7 +2853,7 @@ class ChunkRouteDecision:
 # 策略版本表（决策记录元数据，集中维护）：切分行为变更的类递增——
 # v2 = 2026-10-13 批次1（根引导块/覆盖补全/严格 Token 上限/局部 QA 配对）。
 _STRATEGY_VERSIONS = {
-    "StructureChunkStrategy": "v2",
+    "StructureChunkStrategy": "v3",
     "FixedSizeChunkStrategy": "v2",
     "RecursiveChunkStrategy": "v2",
     "StepChunkStrategy": "v2",
@@ -2489,7 +2861,7 @@ _STRATEGY_VERSIONS = {
     "QAChunkStrategy": "v2",
     "FinancialTableChunkStrategy": "v2",
     "SemanticChunkStrategy": "v1",
-    "ContentUnitDispatchStrategy": "v1",
+    "ContentUnitDispatchStrategy": "v2",
 }
 
 # 强信号豁免阈值（P1 Structure Profile）：强结构信号不因整篇完整度
@@ -2511,37 +2883,59 @@ _STRONG_SIGNAL_FIELD = {
 }
 
 
-def _top_level_content_units(ast: DocumentAST) -> list[DocumentAST]:
-    """将根级章节及章节前后游离叶子拆成可独立路由的内容单元。"""
-    units: list[list[DocumentNode]] = []
-    loose_leaves: list[DocumentNode] = []
-    for child in ast.root.children:
-        if child.type == "section":
-            if loose_leaves:
-                units.append(loose_leaves)
-                loose_leaves = []
-            units.append([child])
-        else:
-            loose_leaves.append(child)
-    if loose_leaves:
-        units.append(loose_leaves)
+def _recursive_content_units(ast: DocumentAST) -> list[tuple[DocumentAST, list[str]]]:
+    """依 AST 的实际嵌套层级拆出局部路由单元，并保留祖先标题路径。"""
+    result: list[tuple[DocumentAST, list[str]]] = []
 
-    result = []
-    for nodes in units:
-        unit_root = DocumentNode(
-            type="section", text="", level=0, children=copy.deepcopy(nodes),
-        )
+    def make_unit(nodes: list[DocumentNode], prefix_path: list[str]) -> None:
+        copied = copy.deepcopy(nodes)
+        unit_root = DocumentNode(type="section", text="", level=0, children=copied)
         body_text = "\n".join(
             node.text for node in walk(unit_root)
             if node is not unit_root and node.text
         )
-        result.append(DocumentAST(
+        result.append((DocumentAST(
             root=unit_root,
             source_file=ast.source_file,
             raw_text=body_text,
             document_title=ast.document_title,
-        ))
+            source_format=ast.source_format,
+            parser_version=ast.parser_version,
+        ), list(prefix_path)))
+
+    def visit(parent: DocumentNode, ancestors: list[str]) -> None:
+        pending: list[DocumentNode] = []
+        for child in parent.children:
+            if child.type == "section":
+                if pending:
+                    if parent.level > 0:
+                        wrapper = copy.deepcopy(parent)
+                        wrapper.children = pending
+                        make_unit([wrapper], ancestors)
+                    else:
+                        make_unit(pending, ancestors)
+                    pending = []
+                next_ancestors = ancestors
+                if parent.level > 0 and parent.text.strip():
+                    next_ancestors = ancestors + [parent.text.strip()]
+                visit(child, next_ancestors)
+            else:
+                pending.append(child)
+        if pending:
+            if parent.level > 0:
+                wrapper = copy.deepcopy(parent)
+                wrapper.children = pending
+                make_unit([wrapper], ancestors)
+            else:
+                make_unit(pending, ancestors)
+
+    visit(ast.root, [])
     return result
+
+
+def _top_level_content_units(ast: DocumentAST) -> list[DocumentAST]:
+    """兼容旧调用：返回递归路由单元而不附带祖先路径。"""
+    return [unit for unit, _ in _recursive_content_units(ast)]
 
 
 def _local_strategy_class(ast: DocumentAST, doc_type: str):
@@ -2571,7 +2965,7 @@ def _local_strategy_class(ast: DocumentAST, doc_type: str):
 
 
 class ContentUnitDispatchStrategy:
-    """混合文档按根级章节局部选择策略，再合并成统一 Leaf/Parent 结果。"""
+    """混合文档按嵌套章节局部选择策略，再合并成统一 Leaf/Parent 结果。"""
 
     def __init__(self, doc_type: str):
         self.doc_type = doc_type
@@ -2580,7 +2974,9 @@ class ContentUnitDispatchStrategy:
     def split(self, ast: DocumentAST, file_path: str) -> List[Document]:
         chunks: list[Document] = []
         self.last_plan = []
-        for index, unit_ast in enumerate(_top_level_content_units(ast), start=1):
+        for index, (unit_ast, ancestor_path) in enumerate(
+            _recursive_content_units(ast), start=1,
+        ):
             strategy_cls = _local_strategy_class(unit_ast, self.doc_type)
             strategy = strategy_cls()
             unit_chunks = strategy.split(unit_ast, file_path)
@@ -2588,6 +2984,14 @@ class ContentUnitDispatchStrategy:
                 child.text for child in unit_ast.root.children
                 if child.type == "section" and child.text
             ]
+            for chunk in unit_chunks:
+                current_path = chunk.metadata.get("section_path") or []
+                if not current_path and section_titles:
+                    current_path = section_titles
+                if ancestor_path or current_path:
+                    chunk.metadata["section_path"] = (
+                        list(ancestor_path) + list(current_path)
+                    )
             unit_name = " / ".join(section_titles)[:120] or f"根内容单元 {index}"
             _namespace_content_unit_chunks(
                 unit_chunks, file_path, f"{index}:{unit_name}",
@@ -2595,6 +2999,7 @@ class ContentUnitDispatchStrategy:
             self.last_plan.append({
                 "unit": index,
                 "section": unit_name,
+                "ancestor_path": list(ancestor_path),
                 "strategy": strategy_cls.__name__,
             })
             for chunk in unit_chunks:
@@ -2657,8 +3062,8 @@ class ChunkStrategyRouter:
                              degrade_reason="business_exception_ad_policy",
                              scope="全篇固定大小")
 
-        # 多个根级内容单元命中不同结构时，保留文档级默认路由，同时让每个
-        # 章节/根内容组按本地信号选择处理器，避免 FAQ 主信号覆盖合同或表格。
+        # 多个嵌套内容单元命中不同结构时，让每个章节按本地信号选择处理器，
+        # 避免 FAQ 主信号覆盖同一文档其他章节的合同或表格结构。
         content_units = _top_level_content_units(report.ast)
         unit_routes = [
             (unit, _local_strategy_class(unit, doc_type))
@@ -2684,7 +3089,7 @@ class ChunkStrategyRouter:
             )
             return _decision(
                 ContentUnitDispatchStrategy,
-                scope="按根级章节/内容单元局部分派",
+                scope="按嵌套章节/内容单元局部分派",
                 signal="mixed_content_units",
                 strategy_instance=ContentUnitDispatchStrategy(doc_type),
             )
@@ -2930,12 +3335,27 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                 "table_inline", "table_row_group",
             }
         }
+        associated_table_titles = {
+            str(metadata.get("section_title") or "").strip()
+            for chunk in chunks
+            for metadata in [getattr(chunk, "metadata", {}) or {}]
+            if metadata.get("granularity") == "leaf"
+            and metadata.get("table_id")
+            and metadata.get("chunk_type") in {
+                "table_inline", "table_row_group",
+            }
+        }
         normalized_marker_leaf_ids: set[int] = set()
-        if associated_table_sections:
+        if associated_table_sections or associated_table_titles:
             for clause_index, clause in enumerate(
                 LegalChunkStrategy._clause_sections(ast), start=1,
             ):
-                if f"clause_{clause_index}" not in associated_table_sections:
+                clause_title = str(clause.text or "").strip()
+                if not (
+                    f"clause_{clause_index}" in associated_table_sections
+                    or str(clause.section_id or "") in associated_table_sections
+                    or clause_title in associated_table_titles
+                ):
                     continue
                 normalized_marker_leaf_ids.update(
                     id(node) for node in walk(clause)

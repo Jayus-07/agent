@@ -25,6 +25,20 @@ from backend.config.database import DOCS_DIRECTORY
 from backend.rag.indexing.doc_id import derive_doc_id_from_path
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def detect_document_language(text: str) -> str:
+    """确定性语言识别：以文档正文的主导字符集返回 zh/en，未知返回空串。"""
+    sample = str(text or "")[:50000]
+    cjk = len(_CJK_RE.findall(sample))
+    latin = len(_LATIN_RE.findall(sample))
+    if cjk == 0 and latin == 0:
+        return ""
+    return "zh" if cjk >= latin else "en"
+
+
 # =====================================================
 # 文档类型分类（V2 加权计分 + 文件名辅助 + LLM 胶着仲裁）
 # 阈值/权重已收口至 config/indexing_rules.py（get_rules()，支持热加载）

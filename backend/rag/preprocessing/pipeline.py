@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import json
 import time
 from typing import List
 
@@ -13,13 +14,39 @@ from backend.rag.preprocessing.parser import parse_file, PARSABLE_EXTS
 from backend.rag.preprocessing.structure_analyzer import StructureAnalyzer
 from backend.rag.preprocessing.chunking import (
     ChunkStrategyRouter, _doc_title, coverage_audit, stamp_chunk_pages,
-    ensure_unique_chunk_ids,
+    stamp_chunk_structure, ensure_unique_chunk_ids,
 )
-from backend.rag.preprocessing.ast import walk
+from backend.rag.preprocessing.ast import annotate_ast_provenance, section_tree, walk
 from backend.shared.logger import logger
 
 # F6: 从解析器注册表派生（单一来源），不再硬编码
 _SUPPORTED_EXTS = set(PARSABLE_EXTS)
+_OCR_LOW_CONFIDENCE_THRESHOLD = 0.7
+
+
+def _ocr_quality_flags(raw_ast) -> list[str]:
+    """按可得的 OCR 分数区分低置信与供应商未提供分数。"""
+    if not getattr(raw_ast, "ocr_triggered", False):
+        return []
+    flags = ["ocr_fallback"]
+    scored_regions = int(
+        getattr(raw_ast, "ocr_confidence_scored_regions", 0) or 0
+    )
+    unavailable_regions = int(
+        getattr(raw_ast, "ocr_confidence_unavailable_regions", 0) or 0
+    )
+    confidence_min = getattr(raw_ast, "ocr_confidence_min", None)
+    if confidence_min is not None:
+        try:
+            if float(confidence_min) < _OCR_LOW_CONFIDENCE_THRESHOLD:
+                flags.append("ocr_confidence_low")
+        except (TypeError, ValueError):
+            flags.append("ocr_confidence_invalid")
+    if not scored_regions:
+        flags.append("ocr_confidence_unavailable")
+    elif unavailable_regions:
+        flags.append("ocr_confidence_partial")
+    return flags
 
 
 def parse_and_chunk(
@@ -131,6 +158,7 @@ def parse_and_chunk_full(
 
     stage_started = time.monotonic()
     normalized_ast, report = StructureAnalyzer().analyze(raw_ast)
+    annotate_ast_provenance(normalized_ast, raw_ast.parser_version)
     stage_ms["structure_analysis_ms"] = round((time.monotonic() - stage_started) * 1000)
 
     stage_started = time.monotonic()
@@ -151,12 +179,42 @@ def parse_and_chunk_full(
     document_title = _doc_title(normalized_ast)
     for chunk in chunks:
         chunk.metadata.setdefault("document_title", document_title)
+        chunk.metadata["source_format"] = normalized_ast.source_format
+        chunk.metadata["parser_version"] = normalized_ast.parser_version
+        chunk.metadata["chunk_policy_version"] = (
+            f"{route_decision.strategy}:{route_decision.strategy_version}"
+        )
     stage_ms["split_ms"] = round((time.monotonic() - stage_started) * 1000)
 
     stage_started = time.monotonic()
     # 原文定位（P0）：叶子页码（PDF §5.2）回映射进 chunk metadata["pages"]，
     # 供来源卡「第 X 页」展示与后续原文预览定位；单点收口，策略零改动
     stamp_chunk_pages(chunks, normalized_ast)
+    stamp_chunk_structure(chunks, normalized_ast)
+    for chunk in chunks:
+        metadata = chunk.metadata or {}
+        if not metadata.get("chunk_type"):
+            metadata["chunk_type"] = (
+                "section" if metadata.get("granularity") == "parent"
+                else "paragraph"
+            )
+    quality_flags = sorted({
+        str(issue.get("code") or "parser_issue")
+        for issue in (getattr(raw_ast, "parse_issues", []) or [])
+        if isinstance(issue, dict)
+        and str(issue.get("severity") or "warn").lower() != "info"
+    })
+    quality_flags.extend(_ocr_quality_flags(raw_ast))
+    if getattr(raw_ast, "table_rows_truncated", 0) or getattr(
+        raw_ast, "table_cells_truncated", 0,
+    ):
+        quality_flags.append("table_truncated")
+    if quality_flags:
+        serialized_flags = json.dumps(
+            sorted(set(quality_flags)), ensure_ascii=False, separators=(",", ":"),
+        )
+        for chunk in chunks:
+            chunk.metadata["quality_flags"] = serialized_flags
     if ensure_unique_chunk_ids(chunks, file_path):
         logger.warning(
             f"[ChunkPipeline] {file_path} 策略输出存在重复 chunk_id，"
@@ -185,6 +243,10 @@ def parse_and_chunk_full(
         "doc_type": doc_type,
         "strategy_name": strategy.__class__.__name__,
         "route_decision": route_decision.as_dict(),
+        "document_title": document_title,
+        "section_tree": section_tree(normalized_ast),
+        "source_format": normalized_ast.source_format,
+        "parser_version": normalized_ast.parser_version,
         "coverage": coverage,
         "cleaning_coverage": cleaning_coverage,
         "stage_ms": stage_ms,

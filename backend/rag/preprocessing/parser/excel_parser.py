@@ -27,6 +27,8 @@ def _cell_to_str(c) -> str:
 
 
 class ExcelParser(BaseDocumentParser):
+    PARSER_VERSION = "v2"
+
     def parse(self, file_path: str) -> DocumentAST:
         import openpyxl
         from backend.config.rag import RAG_TABLE_MAX_CELLS, RAG_TABLE_MAX_ROWS
@@ -164,6 +166,13 @@ class ExcelParser(BaseDocumentParser):
                             type="table", text=table_text, rows=rows,
                         )],
                     )
+                    section.source_locator = {"worksheet": sheet_name}
+                    section.children[0].source_locator = {
+                        "worksheet": sheet_name,
+                        "row_start": 1,
+                        "row_end": max(0, len(rows) - 1),
+                        "columns": [str(value) for value in rows[0]][:64],
+                    }
                     root.children.append(section)
                     raw_lines.append(f"[{sheet_name}]\n{table_text}")
 

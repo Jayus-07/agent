@@ -90,6 +90,8 @@ def _iter_body_items(document):
 
 
 class DocxParser(BaseDocumentParser):
+    PARSER_VERSION = "v2"
+
     def parse(self, file_path: str) -> DocumentAST:
         try:
             d = docx.Document(file_path)
@@ -130,6 +132,9 @@ class DocxParser(BaseDocumentParser):
                 if heading_match and text:
                     level = int(heading_match.group(1))
                     section = DocumentNode(type="section", text=text, level=level)
+                    section.source_locator = {
+                        "body_index": tbl_idx, "kind": "heading", "style": style_name,
+                    }
                     parent = _find_parent_section(section_stack, level)
                     parent.children.append(section)
                     section_stack.append(section)
@@ -161,6 +166,9 @@ class DocxParser(BaseDocumentParser):
                     section = DocumentNode(
                         type="section", text=title, level=level,
                     )
+                    section.source_locator = {
+                        "body_index": tbl_idx, "kind": "legal_clause",
+                    }
                     parent = _find_parent_section(section_stack, level)
                     parent.children.append(section)
                     section_stack.append(section)
@@ -173,12 +181,18 @@ class DocxParser(BaseDocumentParser):
                         section.children.append(DocumentNode(
                             type="paragraph", text=body.strip(),
                         ))
+                        section.children[-1].source_locator = {
+                            "body_index": tbl_idx, "kind": "legal_clause_body",
+                        }
                     raw_lines.append(text)
                     continue
 
                 # 中文编号标题（一、二、三、）——Normal 段落但属于章节标题
                 if _CN_HEADING_RE.match(text) and not _LIST_RE.search(style_name):
                     section = DocumentNode(type="section", text=text, level=1)
+                    section.source_locator = {
+                        "body_index": tbl_idx, "kind": "heading", "style": style_name,
+                    }
                     parent = _find_parent_section(section_stack, 1)
                     parent.children.append(section)
                     section_stack.append(section)
@@ -187,12 +201,18 @@ class DocxParser(BaseDocumentParser):
 
                 if _LIST_RE.search(style_name) and text:
                     list_node = DocumentNode(type="list", text=text)
+                    list_node.source_locator = {
+                        "body_index": tbl_idx, "kind": "list", "style": style_name,
+                    }
                     section_stack[-1].children.append(list_node)
                     raw_lines.append(text)
                     continue
 
                 if text:
                     para_node = DocumentNode(type="paragraph", text=text)
+                    para_node.source_locator = {
+                        "body_index": tbl_idx, "kind": "paragraph",
+                    }
                     section_stack[-1].children.append(para_node)
                     raw_lines.append(text)
                 continue
@@ -220,6 +240,12 @@ class DocxParser(BaseDocumentParser):
             sec_title = _section_title_for_table()
             table_text = make_table_chunk_text(rows, section_title=sec_title)
             table_node = DocumentNode(type="table", text=table_text, rows=rows)
+            table_node.source_locator = {
+                "body_index": tbl_idx,
+                "row_start": 1,
+                "row_end": max(0, len(rows) - 1),
+                "columns": [str(value) for value in rows[0]][:64] if rows else [],
+            }
             section_stack[-1].children.append(table_node)
             raw_lines.append(table_text)
 

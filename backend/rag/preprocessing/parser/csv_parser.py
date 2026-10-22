@@ -64,6 +64,8 @@ def _read_bounded_rows(file_path: str, encoding: str, max_rows: int,
 
 
 class CsvParser(BaseDocumentParser):
+    PARSER_VERSION = "v2"
+
     def parse(self, file_path: str) -> DocumentAST:
         filename = os.path.basename(file_path)
         root = DocumentNode(type="section", text="", level=0)
@@ -116,12 +118,19 @@ class CsvParser(BaseDocumentParser):
             normalized_rows = rows
 
         section = DocumentNode(type="section", text=filename, level=1)
+        section.source_locator = {"csv_file": filename}
         table_text = make_table_chunk_text(
             normalized_rows, section_title=filename,
         )
-        section.children.append(DocumentNode(
+        table_node = DocumentNode(
             type="table", text=table_text, rows=normalized_rows,
-        ))
+        )
+        table_node.source_locator = {
+            "row_start": 1,
+            "row_end": max(0, len(normalized_rows) - 1),
+            "columns": [str(value) for value in normalized_rows[0]][:64],
+        }
+        section.children.append(table_node)
         root.children.append(section)
 
         if truncated_rows or truncated_cells:

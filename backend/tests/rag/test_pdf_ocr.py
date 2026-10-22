@@ -816,6 +816,7 @@ class TestCloudCacheAndThrottle:
             calls["n"] += 1
             if calls["n"] == 2:
                 raise RuntimeError("page failed")
+            ocr_mod._ocr_last_confidence.set(0.62)
             return "识别文本"
 
         monkeypatch.setattr(ocr_mod, "_ocr_image_rapidocr", _fake_rapidocr)
@@ -829,6 +830,10 @@ class TestCloudCacheAndThrottle:
         assert stats["successes"] == 1
         assert stats["failures"] == 1
         assert stats["model_name"] == "RapidOCR"
+        assert stats["confidence_mean"] == 0.62
+        assert stats["confidence_min"] == 0.62
+        assert stats["confidence_scored_regions"] == 1
+        assert stats["confidence_unavailable_regions"] == 0
 
 
 # ============ ocr_triggered 标记贯通（AST → chunk metadata → quality_issues）============

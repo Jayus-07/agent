@@ -38,8 +38,9 @@ def _assert_p0_invariants(chunks, ast):
     for c in leaves:
         pid = c.metadata.get("parent_chunk_id")
         # 完整 Q+A 已是检索单元，依照 FAQ 契约不挂全局 Parent，
-        # 避免命中单个问题后扩展出其他无关问答。
-        if not pid and has_qa_nodes and not c.metadata.get("section_path"):
+        # 避免命中单个问题后扩展出其他无关问答。FAQ Leaf 可以携带
+        # 标题路径，因此按 chunk_type 判定，而不是按 section_path 是否为空。
+        if not pid and c.metadata.get("chunk_type") == "faq":
             assert c.metadata.get("section_title")
             continue
         assert pid, f"leaf 缺 parent_chunk_id: {c.page_content[:40]}"
@@ -227,14 +228,16 @@ def test_08_contract_with_table(tmp_path):
     } for c in leaves)
 
     payment_leaf = next(
-        c for c in leaves if c.metadata.get("section_id") == "clause_3"
+        c for c in leaves
+        if c.metadata.get("section_title") == "第三条 付款方式"
     )
     assert payment_leaf.metadata["references"] == [{
         "table_id": "table_1", "relation": "refers_to",
     }]
     assert "SENTINEL-TABLE-REF" not in payment_leaf.page_content
     breach_leaf = next(
-        c for c in leaves if c.metadata.get("section_id") == "clause_4"
+        c for c in leaves
+        if c.metadata.get("section_title") == "第四条 违约责任"
     )
     assert breach_leaf.page_content.splitlines()[:2] == [
         "服务合同", "第四条 违约责任",

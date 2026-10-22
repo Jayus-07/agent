@@ -41,8 +41,18 @@ class EmbeddingStage:
     # ---- contextual prefix ----
 
     @staticmethod
-    def text_for(chunk, doc_summary: str = "") -> str:
-        """构造 embedding 文本：Contextual Prefix + 正文（1.2）。
+    def content_for(chunk) -> str:
+        """返回用于引用的原始 Chunk 内容，不包含检索上下文前缀。"""
+        return str(getattr(chunk, "page_content", "") or "")
+
+    @staticmethod
+    def search_text_for(chunk) -> str:
+        """返回 BM25/关键词检索文本；与可引用正文保持同一事实内容。"""
+        return EmbeddingStage.content_for(chunk)
+
+    @staticmethod
+    def embedding_text_for(chunk, doc_summary: str = "") -> str:
+        """构造 embedding_text：Contextual Prefix + 原始正文（1.2）。
 
         三级前缀（字段缺失自动跳过对应段，全缺则纯正文）：
           1.【文档】文档级摘要前 100 字——contextual retrieval 的零 LLM 版：
@@ -66,7 +76,12 @@ class EmbeddingStage:
         prefix = "\n".join(parts)
         if prefix:
             return prefix + "\n\n" + chunk.page_content
-        return chunk.page_content
+        return EmbeddingStage.content_for(chunk)
+
+    @staticmethod
+    def text_for(chunk, doc_summary: str = "") -> str:
+        """兼容旧调用名，新的索引链路使用 ``embedding_text_for``。"""
+        return EmbeddingStage.embedding_text_for(chunk, doc_summary=doc_summary)
 
     # ---- 逐条 + 批量嵌入 ----
 
