@@ -18,13 +18,13 @@ import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import resolve_operator_role
+from backend.app.api.deps import require_editor_user, resolve_operator_role
 from backend.selection_funnel import import_pool as _ip
 from backend.selection_funnel import market_data as _md
 from backend.shared.logger import logger
 
-# 域运行时收口（2026-09-24 STOP A）：导入通道写共享选品池，与决策任务同档，
-# 必须过运营角色门禁（JWT 用户取平台角色，服务凭据走内部令牌），此前无任何身份门禁。
+# 读取保留已认证用户/内部服务门禁；执行漏斗、导入和删除批次属于写操作，
+# 额外要求 JWT 用户至少具备 editor 角色。
 router = APIRouter(
     prefix="/selection-funnel",
     tags=["智能选品"],
@@ -63,7 +63,11 @@ class FunnelRunRequest(BaseModel):
 
 
 @router.post("/run", summary="执行选品漏斗（专属页直达，不经主图）")
-def run_funnel(req: FunnelRunRequest, request: Request) -> dict:
+def run_funnel(
+    req: FunnelRunRequest,
+    request: Request,
+    _editor=Depends(require_editor_user),
+) -> dict:
     """复用主图域适配器 selection_funnel_graph_node（同一条执行链）：
     淘空/缺槽如实收尾、E1 候选同步 ConversationContext、执行标签埋点全同。
     同步 def → FastAPI 线程池执行，不阻塞事件循环（漏斗为秒级线性管线，
@@ -120,6 +124,7 @@ async def import_file(
     kind: str = Form("products", description="products / keywords / reviews"),
     category: str = Form("", description="批次级类目"),
     platform: str = Form("", description="批次级平台（仅 products 用）"),
+    _editor=Depends(require_editor_user),
 ) -> ImportResult:
     data = await file.read()
     if not data:
@@ -133,7 +138,10 @@ async def import_file(
 
 
 @router.post("/import/text", response_model=ImportResult, summary="粘贴表格文本导入（商品/关键词榜/差评）")
-async def import_text(req: TextImportRequest) -> ImportResult:
+async def import_text(
+    req: TextImportRequest,
+    _editor=Depends(require_editor_user),
+) -> ImportResult:
     batch_id, count, notes = _dispatch_import(req.content, req.kind, req.category,
                                               req.platform, filename="")
     if not batch_id:
@@ -165,7 +173,10 @@ async def review_pain_points(category: str = "", titles: str = "") -> dict:
 
 
 @router.delete("/import/batch/{batch_id}", summary="清除指定导入批次")
-async def clear_batch(batch_id: str) -> dict:
+async def clear_batch(
+    batch_id: str,
+    _editor=Depends(require_editor_user),
+) -> dict:
     if batch_id.startswith("imp-"):
         removed = _ip.get_import_store().clear_batch(batch_id)
     else:  # kw- / rv- → 市场库（关键词榜/差评），2026-09-17 全流程实测补

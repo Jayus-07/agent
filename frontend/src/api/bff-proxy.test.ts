@@ -46,6 +46,28 @@ beforeEach(() => {
 });
 
 describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
+  it("登录限流来源由 BFF 重建，忽略请求方直接提供的 X-Client-IP", async () => {
+    const fetchSpy = upstream();
+
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Forwarded-For": "203.0.113.9, 10.0.0.2",
+          "X-Client-IP": "198.51.100.44",
+        },
+        body: "{}",
+      }),
+      ctx(["auth", "login"]),
+    );
+
+    const sent = new Headers(
+      (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers,
+    );
+    expect(sent.get("x-client-ip")).toBe("203.0.113.9");
+  });
+
   it("转人工 POST 的 Idempotency-Key 必须原样到达上游", async () => {
     const fetchSpy = upstream();
 
@@ -81,7 +103,10 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     await POST(
       makeProxyRequest("http://localhost:3000/api/x", {
         method: "POST",
-        headers: { "idempotency-key": "idem-lower-1" },
+        headers: {
+          "idempotency-key": "idem-lower-1",
+          Authorization: "Bearer user-token",
+        },
         body: "{}",
       }),
       ctx(["x"]),
@@ -124,7 +149,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
       await POST(
         makeProxyRequest("http://localhost:3000/api/x", {
           method: "POST",
-          headers: { "X-Evil": "nope" },
+        headers: { "X-Evil": "nope", Authorization: "Bearer user-token" },
           body: "{}",
         }),
         ctx(["x"]),
@@ -222,7 +247,10 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
         "http://localhost:3000/api/travel/v2/trips/123e4567-e89b-42d3-a456-426614174000",
         {
           method: "GET",
-          headers: { "X-Travel-Share-Token": ["must-not", "forward"].join("-") },
+          headers: {
+            "X-Travel-Share-Token": ["must-not", "forward"].join("-"),
+            Authorization: "Bearer user-token",
+          },
         },
       ),
       ctx(["travel", "v2", "trips", "123e4567-e89b-42d3-a456-426614174000"]),
@@ -256,6 +284,7 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
           headers: {
             "Content-Type": "application/json",
             "X-Travel-Share-Token": ["must-not-forward", "on-create"].join("-"),
+            Authorization: "Bearer user-token",
           },
           body: JSON.stringify({ revision: 1 }),
         },
@@ -292,5 +321,57 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     const body = await response.text();
     expect(body).not.toContain("postgres://private");
     expect(body).not.toContain("token=secret");
+  });
+
+  it("私有 API 缺少 Bearer 时在 BFF 拒绝，不注入服务密钥", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    process.env.API_KEY = "server-only-key";
+    try {
+      const response = await POST(
+        makeProxyRequest("http://localhost:3000/api/private/write", {
+          method: "POST",
+          headers: { "X-Evil": "nope" },
+          body: "{}",
+        }),
+        ctx(["private", "write"]),
+      );
+      expect(response.status).toBe(401);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.API_KEY;
+    }
+  });
+
+  it("登录与验证码公共入口仍可匿名转发", async () => {
+    const fetchSpy = upstream();
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      }),
+      ctx(["auth", "login"]),
+    );
+    await GET(
+      makeProxyRequest("http://localhost:3000/api/sys/users/captcha", {
+        method: "GET",
+      }),
+      ctx(["sys", "users", "captcha"]),
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("登录路径的额外后缀不会获得匿名白名单", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const response = await POST(
+      makeProxyRequest("http://localhost:3000/api/auth/login/extra", {
+        method: "POST",
+        body: "{}",
+      }),
+      ctx(["auth", "login", "extra"]),
+    );
+
+    expect(response.status).toBe(401);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

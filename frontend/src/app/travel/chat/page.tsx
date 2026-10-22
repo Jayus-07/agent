@@ -1,5 +1,6 @@
 import TravelChatPage from '@/components/travel/v2/TravelChatPage'
 
-export default function TravelChatRoute({ searchParams }: { searchParams: { prompt?: string; conversation_id?: string; trip_id?: string } }) {
-  return <TravelChatPage key={`${searchParams.trip_id ?? ''}:${searchParams.conversation_id ?? ''}`} initialPrompt={searchParams.prompt ?? ''} initialConversationId={searchParams.conversation_id ?? ''} initialTripId={searchParams.trip_id ?? ''} />
+export default async function TravelChatRoute({ searchParams }: { searchParams: Promise<{ prompt?: string; conversation_id?: string; trip_id?: string }> }) {
+  const query = await searchParams
+  return <TravelChatPage key={`${query.trip_id ?? ''}:${query.conversation_id ?? ''}`} initialPrompt={query.prompt ?? ''} initialConversationId={query.conversation_id ?? ''} initialTripId={query.trip_id ?? ''} />
 }

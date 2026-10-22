@@ -67,7 +67,8 @@ def _index_failure_exit(exc: BaseException, *, emit_fn, upload_id: str,
                         department: str, source: str, batch_id: str | None,
                         upload_elapsed_ms: int | None, was_overwrite: bool,
                         db_task_id: str | None, retries: int,
-                        staging_path: str = "", actor_id: str = "") -> None:
+                        staging_path: str = "", actor_id: str = "",
+                        tenant_id: str = "") -> None:
     """索引统一失败出口：分类 → 等待重试事件 或 registry 终态收口。
 
     - retryable 且 budget 未耗尽：只发 uploading 进度（不发终态），抛
@@ -99,7 +100,7 @@ def _index_failure_exit(exc: BaseException, *, emit_fn, upload_id: str,
         upload_id, filepath, filename, source, batch_id, kb_id,
         upload_elapsed_ms, was_overwrite, 0.0,
         result=None, emit_fn=emit_fn, exc=exc, staging_path=staging_path,
-        actor_id=actor_id)
+        actor_id=actor_id, tenant_id=tenant_id)
     if db_task_id:
         from backend.models.task import TaskStatus
         from backend.services import task_service
@@ -174,12 +175,13 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
                                 kb_id, department, batch_id=batch_id,
                                 staging_path=staging_path,
                                 generation=generation,
-                                file_hash=file_hash) or {}
+                                file_hash=file_hash,
+                                tenant_id=tenant_id) or {}
         _settle_index_result(
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, t0,
             result=result, emit_fn=emit_fn, staging_path=staging_path,
-            actor_id=actor_id)
+            actor_id=actor_id, tenant_id=tenant_id)
         return result
 
     # Phase1 Step8：TaskState 包装（租约/状态落库/节点边界 pause-cancel，
@@ -230,7 +232,8 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
             source=source, batch_id=batch_id,
             upload_elapsed_ms=upload_elapsed_ms, was_overwrite=was_overwrite,
             db_task_id=db_task_id, retries=retries,
-            staging_path=staging_path, actor_id=actor_id)
+            staging_path=staging_path, actor_id=actor_id,
+            tenant_id=tenant_id)
         raise  # 仅终态路径可达：re-raise 原始异常
 
     if (result or {}).get("skipped"):

@@ -76,7 +76,7 @@ flowchart TD
 ```
 
 - API 入口：`backend/app/api/routes/rag_upload.py`、`rag_documents.py`、`rag_lifecycle.py`，异步索引及任务跟踪以当前 Celery 配置为准。不能只凭 HTTP 200 判断“上传即 active”。
-- 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。活动记录按现有租户、知识库、部门及行级授权范围过滤。
+- 操作可见性：`GET /api/v1/rag/documents/operations` 同时返回终态日志 `items` 和现有 `rag_index_runs` 中的活动上传 `active_uploads`；后台上传被接受后操作面板轮询活动记录，展示文件、upload ID、Celery task ID、状态与阶段，终态继续沿用原操作日志和 Trace 链接。普通用户的日志与活动记录按可信租户、知识库、部门及文档授权范围过滤；有文档 ID 的日志须能在注册表中确认授权范围，无文档 ID 的日志仅对记录操作者可见。当前租户 admin 可查看该租户全部记录；跨租户访问仍须单独授权。
 - 解析与文档策略：`backend/rag/preprocessing/parser/`、`structure_analyzer.py`、`chunking.py::ChunkStrategyRouter`；按真实 AST/类型选择 Manual/Legal/QA/Table/Generic 等已注册策略。**不在单个上传接口写第二份固定切分逻辑。**
   - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
   - 识别到的 FAQ 问答以每个完整 Q+A 对作为独立 Leaf；不再为整份 FAQ 生成只列问题、不含答案的虚拟 Parent，避免一个 FAQ 命中后把所有问题都附加到回答上下文。Parent-Child 仍用于有实际跨块上下文价值的其他策略。

@@ -4,8 +4,10 @@
 """
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from backend.app.api.deps import require_admin_user
 
 from backend.selection.recommender import (
     batch_scores,
@@ -87,7 +89,7 @@ def get_weights():
 
 
 @router.put("/weights")
-def put_weights(req: WeightsRequest):
+def put_weights(req: WeightsRequest, _admin=Depends(require_admin_user)):
     """更新评分权重（仅接受五维度 key）"""
     unknown = set(req.weights) - set(DEFAULT_WEIGHTS)
     if unknown:

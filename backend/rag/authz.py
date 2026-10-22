@@ -113,6 +113,8 @@ class RagAuthorization:
             is_admin = is_admin_roles(principal.roles)
             if not principal.authenticated:
                 raise RagAuthorizationError("未认证主体不允许进入 RAG 授权面")
+            if not str(principal.tenant_id or "").strip():
+                raise RagAuthorizationError("缺少可信租户身份")
             allowed = readable_kb_ids(
                 principal.subject_type, principal.department,
                 is_admin=is_admin, include_test=is_super_admin(principal.roles),
@@ -141,8 +143,12 @@ class RagAuthorization:
         return kb_id in self.kb_scope
 
     def can_read_row(self, row: dict | None) -> bool:
-        """registry/chunk 行 → 文档级可读裁决（KB 范围 + permission_scope）。"""
+        """registry/chunk 行 → 租户、KB 与 permission_scope 三级可读裁决。"""
         if not row:
+            return False
+        # 无 tenant_id 的历史行仅归属当前单租户部署的 default；其他租户拒绝。
+        row_tenant = str(row.get("tenant_id") or "default").strip()
+        if row_tenant != self.principal.tenant_id:
             return False
         kb_id = str(row.get("kb_id") or "")
         if kb_id not in self.kb_scope:
@@ -177,6 +183,9 @@ class RagAuthorization:
         """文档管理（审核/重索引/删除）裁决 = 对该文档归属的上传权。"""
         if not row:
             return False, "文档不存在"
+        row_tenant = str(row.get("tenant_id") or "default").strip()
+        if row_tenant != self.principal.tenant_id:
+            return False, "没有该文档的管理权限"
         return self.can_upload_to(
             str(row.get("kb_id") or ""), str(row.get("department") or "")
         )

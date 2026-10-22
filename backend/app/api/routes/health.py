@@ -4,6 +4,8 @@
 """
 import asyncio
 import os
+from collections.abc import Mapping
+from pathlib import Path
 
 from fastapi import APIRouter
 
@@ -17,7 +19,7 @@ async def health():
     Platform Readiness STOP B1/B4 增补：
     - build：本进程构建身份（commit/build_time，镜像构建注入）——回答
       「现在运行的 app 是哪个 commit」；
-    - migrations：迁移水位观测（packaged_max vs applied_max）——status=
+    - migrations：agent_memory 迁移水位观测（packaged_max vs applied_max）——status=
       "drifted" 表示镜像内迁移领先于 DB 已登记水位（历史静默跳过场景）。
       观测面而非硬门：fail-closed 责任链 = db-migrate fail-fast（未登记
       rc=2 阻断下游）+ 发布前 verify_migration_state.py preflight。
@@ -76,18 +78,17 @@ def _redis_status() -> dict:
 def _migration_watermark() -> dict:
     """迁移水位观测（软失败，任何异常返回 unknown 不影响存活判定）。"""
     try:
-        from pathlib import Path
-
         import psycopg2
 
         from backend.config.database import MEMORY_DB_CONFIG
+        from scripts.init_db import MIGRATION_TARGETS
 
-        # 仓库根 sql/migrations 不存在（迁移唯一目录 = backend/sql/migrations，
-        # 2026-09-28 修正 parents[4]→parents[3]：旧路径使 packaged 恒为空、
-        # drifted 永不触发）
+        # 迁移文件按 MIGRATION_TARGETS 分属不同数据库；只读 agent_memory 水位
+        # 时必须排除 agent_business 的尾部迁移，否则健康检查会误报 drifted。
         migrations_dir = Path(__file__).resolve().parents[3] / "sql" / "migrations"
-        packaged = sorted(p.name for p in migrations_dir.glob("*.sql")) if migrations_dir.is_dir() else []
-        packaged_max = packaged[-1] if packaged else ""
+        packaged_max = _packaged_migration_max(
+            migrations_dir, MIGRATION_TARGETS, target="memory",
+        )
         cfg = MEMORY_DB_CONFIG
         conn = psycopg2.connect(
             host=cfg["host"], port=cfg["port"], dbname=cfg["dbname"],
@@ -109,6 +110,23 @@ def _migration_watermark() -> dict:
         }
     except Exception:  # noqa: BLE001
         return {"status": "unknown"}
+
+
+def _packaged_migration_max(
+    migrations_dir: Path,
+    migration_targets: Mapping[str, str],
+    *,
+    target: str,
+) -> str:
+    """返回指定数据库对应的最高已登记迁移名。"""
+    if not migrations_dir.is_dir():
+        return ""
+    packaged = sorted(
+        path.name
+        for path in migrations_dir.glob("*.sql")
+        if migration_targets.get(path.name) == target
+    )
+    return packaged[-1] if packaged else ""
 
 
 def _schema_consistency() -> dict:

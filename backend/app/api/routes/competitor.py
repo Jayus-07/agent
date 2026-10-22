@@ -8,10 +8,10 @@ from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import unquote
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import require_idempotency_key
+from backend.app.api.deps import require_admin_user, require_idempotency_key
 from backend.app.api.identity import resolve_identity
 from backend.competitor import cookie_manager
 from backend.competitor.store import get_store
@@ -383,7 +383,7 @@ def clear_cookies(request: Request,
 # ── POST /competitor/test-cookies ─────────────
 
 @router.post("/test-cookies")
-def test_cookies(req: TestCookiesRequest):
+def test_cookies(req: TestCookiesRequest, _admin=Depends(require_admin_user)):
     """测试 Cookie 是否生效：用当前 Cookie 抓取指定 URL"""
     from backend.tools.crawler_runtime import crawl
     from backend.competitor.pipeline import _is_login_page

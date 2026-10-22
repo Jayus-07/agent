@@ -89,6 +89,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "017_business_stores_pg.sql": "business",
     "021_selection_funnel_pg.sql": "business",
     "022_feedback_review_candidates.sql": "business",
+    "106_approval_tenant_isolation.sql": "business",
     # ── agent_memory ──
     "002_agent_memory_schema.sql": "memory",
     "003_agent_memory_seed.sql": "memory",
@@ -297,6 +298,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "103_auth_department_version.sql": "memory",
     # 部门类型、客服部门标记及部门主管关联。
     "104_rbac_department_type_manager.sql": "memory",
+    "105_rag_tenant_isolation.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

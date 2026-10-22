@@ -11,19 +11,29 @@
 来源 source: "manual"（手动粘贴）/ "qr"（扫码登录）。
 """
 import json
+from urllib.parse import urlsplit
 
 from datetime import datetime
 from typing import Any
 
 from backend.competitor.adapters import detect_platform
 from backend.competitor.store import get_store
-from backend.config.competitor import crawler_cookies_raw
+from backend.config.competitor import crawler_cookies_platform, crawler_cookies_raw
 from backend.shared.logger import logger
 
 # 支持的平台（顺序即前端选择器/列表展示顺序）
 SUPPORTED_PLATFORMS = [
     "taobao", "tmall", "jd", "douyin", "pdd", "suning", "amazon",
 ]
+
+_PLATFORM_HOST_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "taobao": ("taobao.com", "tmall.com"),
+    "jd": ("jd.com",),
+    "douyin": ("douyin.com", "jinritemai.com"),
+    "pdd": ("pinduoduo.com", "yangkeduo.com"),
+    "suning": ("suning.com",),
+    "amazon": ("amazon.com", "amazon.cn", "amazon.de", "amazon.co.jp"),
+}
 
 # 平台 → Cookie 生效域名（用于 BrowserConfig 注入时设置 domain）
 PLATFORM_DOMAINS: dict[str, list[str]] = {
@@ -105,14 +115,34 @@ def get_cookies_for_platform(platform: str) -> str:
 
 
 def get_cookies_for_url(url: str) -> str:
-    """按 URL 识别平台并返回对应 Cookie；无则回退旧全局键/环境变量"""
-    platform = normalize_platform(detect_platform(url))
+    """按 URL 识别平台并返回绑定到该平台的 Cookie。"""
+    try:
+        host = (urlsplit(url).hostname or "").rstrip(".").lower()
+    except ValueError:
+        return ""
+    if not host:
+        return ""
+    platform = normalize_platform(detect_platform(host))
+    if platform not in SUPPORTED_PLATFORMS:
+        return ""
+    if not any(
+        host == suffix or host.endswith("." + suffix)
+        for suffix in _PLATFORM_HOST_SUFFIXES.get(platform, ())
+    ):
+        return ""
     val = get_cookies_for_platform(platform)
     if not val:
         store = get_store()
-        val = (store.get_config("crawler_cookies") or "").strip()
+        legacy = (store.get_config("crawler_cookies") or "").strip()
+        legacy_platform = normalize_platform(
+            _read_meta("crawler_cookies_meta").get("platform") or "taobao"
+        )
+        if legacy and legacy_platform == platform:
+            val = legacy
     if not val:
-        val = crawler_cookies_raw()
+        env_platform = normalize_platform(crawler_cookies_platform())
+        if env_platform == platform:
+            val = crawler_cookies_raw()
     return val
 
 

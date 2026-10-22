@@ -653,7 +653,15 @@ async def sync_upload_impl(
     # P1 fix: 用 realpath 解析 backend/data junction 符号链接
     # 避免同一物理文件被存为两条不同 file_path 记录（SQLite 主键冲突 → 重复 doc_id）
     abs_docs_dir = os.path.realpath(_DOCS_DIRECTORY)
-    final_dir = os.path.abspath(os.path.join(abs_docs_dir, kb_id, department))
+    tenant_component = ""
+    if tenant_id and tenant_id != "default":
+        import hashlib
+        tenant_component = "tenant_" + hashlib.sha256(
+            tenant_id.encode("utf-8")
+        ).hexdigest()[:24]
+    final_dir = os.path.abspath(os.path.join(
+        abs_docs_dir, kb_id, department, tenant_component,
+    ))
     final_path = os.path.normpath(os.path.join(final_dir, safe_name))
     # 末尾再 realpath 一次（防御 abspath 残留符号链接组件）
     final_path = os.path.realpath(final_path)
@@ -929,7 +937,8 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                          upload_elapsed_ms: int | None, was_overwrite: bool,
                          upload_t0: float, result: dict | None, emit_fn,
                          exc: BaseException | None = None,
-                         staging_path: str = "", actor_id: str = "") -> dict | None:
+                         staging_path: str = "", actor_id: str = "",
+                         tenant_id: str = "default") -> dict | None:
     """索引终态收口 —— API 进程内与 Celery Worker 两条路径的统一出口（阶段4）。
 
     emit_fn: 同步事件发射器 (stage, message, **extra)。
@@ -1015,6 +1024,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
+                         tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "chunking_empty"})
         elif isinstance(exc, FileLockedByOtherError):
             # P0-2:锁冲突 = 同文件另一请求正在索引。源文件绝不能删 ——
@@ -1034,6 +1044,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
+                         tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "file_locked"})
         elif isinstance(exc, UploadIdempotencyConflict):
             protocol_error = ProtocolError(
@@ -1050,6 +1061,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
+                         tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "idempotency_conflict"})
         elif isinstance(exc, SupersededCandidate):
             # 单发布者裁决：另一个（更新的）候选已发布，本次候选被取代。
@@ -1068,6 +1080,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             )
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
+                         tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "superseded"})
         else:
             envelope = error_envelope_from_exception(exc, source="sse")
@@ -1075,6 +1088,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                     error_protocol=envelope.to_dict())
             _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
+                         tenant_id=tenant_id,
                          detail={"error": str(exc)[:200]})
         return None
 
@@ -1102,6 +1116,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             duration_ms=total_ms,
             detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
             user_id=str(actor_id or ""),
+            tenant_id=tenant_id,
         )
         return
 
@@ -1161,6 +1176,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             "confidence": (new_doc or {}).get("confidence", 0),
         },
         user_id=str(actor_id or ""),
+        tenant_id=tenant_id,
     )
 
 
@@ -1433,7 +1449,8 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
                 upload_id, filepath, filename, source, batch_id, kb_id,
                 upload_elapsed_ms, was_overwrite, _upload_t0,
                 result=None, emit_fn=emit_fn, exc=enqueue_err,
-                staging_path=staging_path, actor_id=actor_id)
+                staging_path=staging_path, actor_id=actor_id,
+                tenant_id=tenant_id)
             await _finalize_upload_queue(upload_id)
             return
         # broker 不可达：可用性优先，回退本进程索引（与 task_manager 503 语义对齐）
@@ -1463,6 +1480,7 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
                     batch_id=batch_id,
                     staging_path=staging_path, generation=generation,
                     file_hash=file_hash,
+                    tenant_id=tenant_id,
                 ),
             )
     except FileLockedByOtherError:
@@ -1483,14 +1501,16 @@ async def _run_index_background(upload_id: str, filepath: str, filename: str, so
             upload_id, filepath, filename, source, batch_id, kb_id,
             upload_elapsed_ms, was_overwrite, _upload_t0,
             result=None, emit_fn=emit_fn, exc=e,
-            staging_path=staging_path, actor_id=actor_id)
+            staging_path=staging_path, actor_id=actor_id,
+            tenant_id=tenant_id)
         await _finalize_upload_queue(upload_id)
         return
 
     _settle_index_result(
         upload_id, filepath, filename, source, batch_id, kb_id,
         upload_elapsed_ms, was_overwrite, _upload_t0,
-        result=result, emit_fn=emit_fn, actor_id=actor_id)
+        result=result, emit_fn=emit_fn, actor_id=actor_id,
+        tenant_id=tenant_id)
     await _finalize_upload_queue(upload_id)
 
 def _remove_bak(filepath: str) -> None:
@@ -1513,7 +1533,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
                    batch_id: str | None = None,
                    staging_path: str = "",
                    generation: str = "",
-                   file_hash: str = ""):
+                   file_hash: str = "",
+                   tenant_id: str = ""):
     """候选模式索引（B 阶段）：解析→向量→BM25 全部落在 generation 隔离层，
     发布协议统一提交；任何阶段失败旧版保持可读可检索。
 
@@ -1547,6 +1568,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     )
     run_store = get_index_run_store()
     run = run_store.get_run(upload_id)
+    tenant_id = str(tenant_id or (run or {}).get("tenant_id") or "default")
     if run is None:
         # 旧消息/回退路径现场登记（base 取当前 registry 指针）
         generation = generation or uuid.uuid4().hex[:16]
@@ -1658,6 +1680,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
         processing_lineage_repository=get_processing_lineage_repository(),
         processing_task_id=upload_id,
         processing_batch_id=batch_id,
+        tenant_id=tenant_id,
     )
     try:
         index_result = indexer.index_candidate(
@@ -1890,6 +1913,8 @@ def _ensure_progress_owner(request: Request, upload_id: str) -> bool:
     tenant, actor = _progress_owner_of(upload_id)
     if not tenant and not actor:
         return False  # 无归属记录（过期/不可信请求）→ 一律拒绝
+    if not tenant or principal.tenant_id != tenant:
+        return False
     if tenant and principal.tenant_id == tenant and principal.user_id == actor:
         return True
     try:
@@ -1899,7 +1924,7 @@ def _ensure_progress_owner(request: Request, upload_id: str) -> bool:
 
 
 @router.get("/upload-failures", dependencies=[Depends(require_rag_editor)])
-async def list_upload_failures(limit: int = 50):
+async def list_upload_failures(request: Request, limit: int = 50):
     """待处理入库失败清单（质量门禁/解析 0 分块/向量化终态等异步失败）。
 
     上传受理后索引在 worker 异步执行，失败发生在对话框关闭之后——此端点是
@@ -1908,10 +1933,35 @@ async def list_upload_failures(limit: int = 50):
     重传成功自动消数；见 index_run_store_pg.list_pending_failures。
     """
     from backend.rag.indexing.index_run_store_pg import get_index_run_store
+    from backend.app.api.identity import require_principal
 
+    principal = require_principal(request)
+    try:
+        authz = RagAuthorization.build(principal)
+    except RagAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝操作") from exc
+
+    tenant_id = principal.tenant_id or ""
+    department = None if authz.is_admin else (principal.department or "")
+    kb_ids = None if authz.is_admin else sorted(
+        kb_id
+        for kb_id in authz.kb_scope
+        if authz.can_upload_to(kb_id, department or "")[0]
+    )
     store = get_index_run_store()
-    items = await asyncio.to_thread(store.list_pending_failures, limit=limit)
-    total = await asyncio.to_thread(store.count_pending_failures)
+    items = await asyncio.to_thread(
+        store.list_pending_failures,
+        limit=limit,
+        tenant_id=tenant_id,
+        kb_ids=kb_ids,
+        department=department,
+    )
+    total = await asyncio.to_thread(
+        store.count_pending_failures,
+        tenant_id=tenant_id,
+        kb_ids=kb_ids,
+        department=department,
+    )
     return {"ok": True, "total": total, "items": items}
 
 

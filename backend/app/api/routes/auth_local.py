@@ -690,6 +690,7 @@ async def change_password(request: Request, response: Response):
 # （发码与校验落在不同进程会导致永远验不过）。
 
 _CAPTCHA_TTL_SECONDS = 300
+_CAPTCHA_MAX_TICKETS = 5000
 _CAPTCHA_STORE: dict[str, tuple[str, float]] = {}
 _CAPTCHA_LOCK = threading.Lock()
 
@@ -707,6 +708,14 @@ def _captcha_issue() -> tuple[str, str]:
         expired = [k for k, (_, exp) in _CAPTCHA_STORE.items() if exp <= now]
         for k in expired:
             _CAPTCHA_STORE.pop(k, None)
+        if len(_CAPTCHA_STORE) >= _CAPTCHA_MAX_TICKETS:
+            # 保持存储有界，同时淘汰最早的未使用票据，避免全局满载后
+            # 所有新用户都无法获取验证码。新票据仍按相同 TTL 过期。
+            oldest_ticket = min(
+                _CAPTCHA_STORE,
+                key=lambda key: _CAPTCHA_STORE[key][1],
+            )
+            _CAPTCHA_STORE.pop(oldest_ticket, None)
         _CAPTCHA_STORE[ticket] = (code, now + _CAPTCHA_TTL_SECONDS)
 
     # 手绘 SVG：86×42 与前端验证码图框一致

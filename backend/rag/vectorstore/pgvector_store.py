@@ -205,6 +205,10 @@ def _cond_sql(key: str, value: Any, params: list) -> str:
         return "content ILIKE %s ESCAPE '!'"
     if not isinstance(key, str) or re.fullmatch(r"[A-Za-z0-9_]+", key) is None:
         raise ValueError("非法 metadata 字段名")
+    if key == "tenant_id" and value == "default":
+        # tenant_id 列上线前写入的向量元数据没有此键；迁移后它们归属 default。
+        params.append("default")
+        return "(metadata->>'tenant_id' = %s OR NOT (metadata ? 'tenant_id'))"
     if isinstance(value, dict):
         op, v = next(iter(value.items()))
         if op == "$eq":

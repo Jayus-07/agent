@@ -15,7 +15,8 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import OperatorIdentity, require_admin_user, resolve_operator_role
+from backend.app.api.identity import require_product_identity
 from backend.app.api.routes import approvals as approvals_mod
 from backend.app.api.routes import auth_local
 from backend.app.api.routes.approvals import router as approvals_router
@@ -72,14 +73,34 @@ async def test_operator_no_credentials_raises(monkeypatch):
 def _approvals_client(monkeypatch, role: str) -> TestClient:
     app = FastAPI()
     app.include_router(approvals_router)
+    async def _require_admin():
+        if role != "admin":
+            raise HTTPException(status_code=403, detail="admin required")
+        return OperatorIdentity(role="admin", actor="user:1")
+
     app.dependency_overrides[resolve_operator_role] = lambda: OperatorIdentity(
         role=role, actor="user:15" if role != "admin" else "user:1")
-    client = TestClient(app, raise_server_exceptions=False)
+    app.dependency_overrides[require_admin_user] = _require_admin
+    app.dependency_overrides[require_product_identity] = lambda: type(
+        "Principal", (), {"tenant_id": "default"}
+    )()
+    client = TestClient(
+        app,
+        headers={
+            "X-Auth-Type": "jwt",
+            "X-User-Id": "user-1",
+            "X-Tenant-Id": "default",
+        },
+        raise_server_exceptions=False,
+    )
     # decide_request 打桩：返回一条已批准记录
     monkeypatch.setattr(approvals_mod, "decide_request",
-                        lambda rid, approve, reviewer, reason: {
+                        lambda rid, approve, reviewer, reason, tenant_id="default": {
                             "id": rid, "status": "approved" if approve else "rejected",
-                            "reviewer": reviewer, "reason": reason})
+                            "reviewer": reviewer, "reason": reason,
+                            "tenant_id": tenant_id})
+    monkeypatch.setattr(approvals_mod, "list_requests",
+                        lambda **kwargs: [{"tenant_id": kwargs["tenant_id"]}])
     return client
 
 
@@ -104,6 +125,16 @@ def test_approve_reason_passthrough(monkeypatch):
     res = client.post("/approvals/req-1/approve", json={"reason": "SQL 已核对"})
     assert res.status_code == 200
     assert res.json()["request"]["reason"] == "SQL 已核对"
+
+
+def test_approval_list_requires_admin_and_scopes_tenant(monkeypatch):
+    viewer = _approvals_client(monkeypatch, "viewer")
+    assert viewer.get("/approvals").status_code == 403
+
+    admin = _approvals_client(monkeypatch, "admin")
+    response = admin.get("/approvals")
+    assert response.status_code == 200
+    assert response.json()["items"] == [{"tenant_id": "default"}]
 
 
 # ── PATCH /sys/users/{id}/role：提权接口 ─────────────────────

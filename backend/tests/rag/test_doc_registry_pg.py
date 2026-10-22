@@ -120,7 +120,8 @@ class TestInterface:
             ["doc_a_0", "doc_a_1"], "dbid_a",
             metadata={"doc_type": "faq", "confidence": 0.9, "llm_used": True,
                       "summary": "s", "keywords": "k", "department": "legal",
-                      "doc_version": 3, "kb_version": "v2"},
+                      "doc_version": 3, "kb_version": "v2",
+                      "tenant_id": "tenant-a"},
         )
         row = pg_reg.get_by_path("test://a/doc.md")
         assert row is not None
@@ -128,6 +129,7 @@ class TestInterface:
         assert row["chunk_count"] == 2 and row["status"] == "active"
         assert row["llm_used"] == 1 and abs(row["confidence"] - 0.9) < 1e-9
         assert row["doc_version"] == 3 and row["department"] == "legal"
+        assert row["tenant_id"] == "tenant-a"
         # chunk_ids 往返（TEXT JSON）
         import json
         assert json.loads(row["chunk_ids"]) == ["doc_a_0", "doc_a_1"]
@@ -239,6 +241,38 @@ class TestInterface:
         assert result["total"] == 1 and result["items"][0]["doc_id"] == "s1"
         by_type = pg_reg.search(doc_type="faq", kb_id="kb1")
         assert by_type["total"] == 1
+
+    def test_search_and_scopes_are_tenant_filtered(self, pg_reg):
+        pg_reg.register(
+            "test://tenant/a.md", "tenant-a-doc", "ha", "kb-tenant", [], "da",
+            metadata={"permission_scope": "tenant_a_scope", "tenant_id": "tenant-a"},
+        )
+        pg_reg.register(
+            "test://tenant/b.md", "tenant-b-doc", "hb", "kb-tenant", [], "db",
+            metadata={"permission_scope": "tenant_b_scope", "tenant_id": "tenant-b"},
+        )
+
+        result = pg_reg.search(kb_id="kb-tenant", tenant_id="tenant-a")
+        assert result["total"] == 1
+        assert [item["doc_id"] for item in result["items"]] == ["tenant-a-doc"]
+        assert pg_reg.distinct_permission_scopes(tenant_id="tenant-a") == ["tenant_a_scope"]
+        assert pg_reg.count_by_kb_id("kb-tenant", tenant_id="tenant-a") == 1
+
+    def test_pending_review_count_and_rows_are_tenant_filtered(self, pg_reg):
+        for tenant_id, doc_id in (("tenant-a", "pending-a"), ("tenant-b", "pending-b")):
+            pg_reg.register(
+                f"test://pending/{doc_id}.md", doc_id, f"hash-{doc_id}",
+                "kb-pending", [], f"db-{doc_id}",
+                metadata={"tenant_id": tenant_id, "department": "hr"},
+            )
+            pg_reg.update_status_by_doc_id(doc_id, "pending_review")
+
+        result = pg_reg.list_pending_review(
+            tenant_id="tenant-a", kb_scope=["kb-pending"], department="hr",
+        )
+
+        assert result["total"] == 1
+        assert [item["doc_id"] for item in result["items"]] == ["pending-a"]
 
     def test_search_pagination(self, pg_reg):
         for i in range(5):

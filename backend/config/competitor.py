@@ -25,8 +25,13 @@ def robots_override() -> str:
 
 
 def crawler_cookies_raw() -> str:
-    """全局兜底 Cookie：store 无平台级/全局配置时的最后回退（可能为空）。"""
+    """旧版 Cookie 环境变量；仅由 cookie_manager 按指定平台读取。"""
     return os.getenv("CRAWLER_COOKIES", "").strip()
+
+
+def crawler_cookies_platform() -> str:
+    """旧版全局 Cookie 的绑定平台；未设置时沿用历史默认 taobao。"""
+    return os.getenv("CRAWLER_COOKIES_PLATFORM", "taobao").strip().lower()
 
 
 def pg_table_prefix() -> str:

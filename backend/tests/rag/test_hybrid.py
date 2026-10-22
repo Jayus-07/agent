@@ -22,6 +22,19 @@ def test_filter_by_metadata_kb_id():
     assert [d.metadata["doc_id"] for d in filtered] == ["a", "c"]
 
 
+def test_legacy_chunks_without_tenant_metadata_are_default_only():
+    docs = [
+        _doc({"doc_id": "legacy"}),
+        _doc({"doc_id": "default", "tenant_id": "default"}),
+        _doc({"doc_id": "tenant-a", "tenant_id": "tenant-a"}),
+    ]
+    default_docs = _filter_by_metadata(docs, {"tenant_id": "default"})
+    other_tenant_docs = _filter_by_metadata(docs, {"tenant_id": "tenant-b"})
+
+    assert [doc.metadata["doc_id"] for doc in default_docs] == ["legacy", "default"]
+    assert other_tenant_docs == []
+
+
 def test_filter_by_metadata_no_filter_keeps_all():
     """无 filter 时原样返回。"""
     docs = [_doc({"kb_id": "rag_test_kb"}), _doc({"kb_id": "policy_general"})]

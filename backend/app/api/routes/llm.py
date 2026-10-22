@@ -62,7 +62,7 @@ async def get_multiquery_mode():
 
 
 @router.post("/multiquery")
-async def set_multiquery_mode(req: MQSwitchRequest):
+async def set_multiquery_mode(req: MQSwitchRequest, _admin=Depends(require_admin_user)):
     if req.mode not in ("auto", "on", "always", "off"):
         from fastapi import HTTPException
         raise HTTPException(status_code=400, detail="mode 必须为 auto/on/off")

@@ -84,16 +84,46 @@ function isShareCreateApi(path: string[], method: string): boolean {
   );
 }
 
+function hasRefreshCookie(req: NextRequest): boolean {
+  return /(?:^|;\s*)refresh_token(?:_(?:web|admin|cs))?=/.test(
+    req.headers.get("cookie") || "",
+  );
+}
+
+function isPublicApi(path: string[], method: string, req: NextRequest): boolean {
+  if (isAnonymousShareApi(path, method)) return true;
+  if (method === "POST" && path.length === 2 && path[0] === "auth" && path[1] === "login") return true;
+  if (
+    method === "POST" && path.length === 2 && path[0] === "auth" &&
+    (path[1] === "refresh" || path[1] === "logout") && hasRefreshCookie(req)
+  ) return true;
+  if (method === "GET" && path.join("/") === "sys/users/captcha") return true;
+  if (method === "POST" && path.join("/") === "sys/users/register") return true;
+  return false;
+}
+
 async function proxy(
   req: NextRequest,
-  ctx: { params: { path: string[] } },
+  ctx: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
-  const target = `${GATEWAY}/api/${ctx.params.path
+  const { path } = await ctx.params;
+  if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+
+  const authorization = req.headers.get("authorization") || "";
+  const hasBearer = /^Bearer\s+\S+$/i.test(authorization);
+  if (!hasBearer && !isPublicApi(path, req.method, req)) {
+    return Response.json(
+      { error: "Unauthorized", message: "需要有效的用户访问令牌" },
+      { status: 401 },
+    );
+  }
+
+  const target = `${GATEWAY}/api/${path
     .map(encodeURIComponent)
     .join("/")}${req.nextUrl.search}`;
-  const isAnonymousShareRead = isAnonymousShareApi(ctx.params.path, req.method);
+  const isAnonymousShareRead = isAnonymousShareApi(path, req.method);
   const forwardShareSecurityHeaders =
-    isAnonymousShareRead || isShareCreateApi(ctx.params.path, req.method);
+    isAnonymousShareRead || isShareCreateApi(path, req.method);
 
   const headers = new Headers();
   for (const h of FORWARD_REQ_HEADERS) {
@@ -109,12 +139,10 @@ async function proxy(
   const apiKey = process.env.API_KEY;
   if (apiKey) headers.set("X-API-Key", apiKey);
 
-  // 客户端真实 IP 透传（2026-09-19 会话台账）：不透传时后端只能看到本服务
-  // 的出口连接（APISIX 侧 X-Real-IP = 容器网桥地址）。优先 Next 按连接算出
-  // 的 req.ip，回退 XFF 首段（上游代理链场景）。仅作台账展示，不参与鉴权。
+  // 登录限流和会话台账使用此地址；前置入口必须覆盖客户端伪造的代理头。
   const clientIp =
-    req.ip ||
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    req.headers.get("x-real-ip")?.trim() ||
     "";
   if (clientIp) headers.set("X-Client-IP", clientIp);
 

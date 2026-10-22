@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 from contextlib import contextmanager
@@ -77,6 +78,7 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
                     doc_name     TEXT NOT NULL,
                     operation    TEXT NOT NULL,
                     user_id      TEXT DEFAULT 'anonymous',
+                    tenant_id    TEXT NOT NULL DEFAULT 'default',
                     source       TEXT,
                     trace_id     TEXT,
                     batch_id     TEXT,
@@ -87,10 +89,15 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
                 )
             """)
             cur = conn.cursor()
+            cur.execute(
+                f"ALTER TABLE {t} ADD COLUMN IF NOT EXISTS "
+                "tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_created ON {t}(created_at DESC)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_doc ON {t}(doc_id)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_operation ON {t}(operation)")
             cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_batch ON {t}(batch_id)")
+            cur.execute(f"CREATE INDEX IF NOT EXISTS idx_{t}_tenant_created ON {t}(tenant_id, created_at DESC)")
 
     # ---- 写入 ----
 
@@ -106,6 +113,7 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
         result: str = "success",
         detail: dict | None = None,
         duration_ms: int = 0,
+        tenant_id: str = "default",
     ) -> None:
         if operation not in OPERATIONS:
             raise ValueError(f"无效操作: {operation}，有效值: {OPERATIONS}")
@@ -114,10 +122,10 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
             self._exec(
                 conn,
                 f"""INSERT INTO {self._table}
-                   (doc_id, doc_name, operation, user_id, source, trace_id,
+                   (doc_id, doc_name, operation, user_id, tenant_id, source, trace_id,
                     batch_id, result, detail, duration_ms, created_at)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-                (doc_id, doc_name, operation, user_id, source, trace_id,
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (doc_id, doc_name, operation, user_id, tenant_id, source, trace_id,
                  batch_id, result, detail_str, duration_ms, _now_utc()),
             )
 
@@ -130,25 +138,52 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
         operation: str = "",
         doc_id: str = "",
         batch_id: str = "",
+        tenant_id: str = "default",
+        kb_ids: list[str] | None = None,
+        department: str | None = None,
+        user_id: str = "",
+        registry_table: str = "",
     ) -> dict[str, Any]:
-        conditions: list[str] = []
-        params: list[Any] = []
+        conditions: list[str] = ["o.tenant_id = %s"]
+        params: list[Any] = [tenant_id]
         if operation.strip():
-            conditions.append("operation = %s")
+            conditions.append("o.operation = %s")
             params.append(operation.strip())
         if doc_id.strip():
-            conditions.append("doc_id = %s")
+            conditions.append("o.doc_id = %s")
             params.append(doc_id.strip())
         if batch_id.strip():
-            conditions.append("batch_id = %s")
+            conditions.append("o.batch_id = %s")
             params.append(batch_id.strip())
 
-        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        if kb_ids is not None:
+            if not kb_ids or not department:
+                conditions.append("FALSE")
+            else:
+                if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", registry_table):
+                    raise ValueError("无效的文档注册表名称")
+                scope_clauses = []
+                if user_id:
+                    scope_clauses.append("(o.doc_id = '' AND o.user_id = %s)")
+                    params.append(user_id)
+                scope_clauses.append(
+                    f"""EXISTS (
+                           SELECT 1 FROM {registry_table} AS d
+                           WHERE d.tenant_id = o.tenant_id
+                             AND d.doc_id = o.doc_id
+                             AND d.kb_id = ANY(%s)
+                             AND d.department = %s
+                       )"""
+                )
+                params.extend((kb_ids, department))
+                conditions.append("(" + " OR ".join(scope_clauses) + ")")
+
+        where_clause = "WHERE " + " AND ".join(conditions)
 
         with self._lock, self._conn() as conn:
             count_row = self._exec_scalar(
                 conn,
-                f"SELECT COUNT(*) FROM {self._table} {where_clause}",
+                f"SELECT COUNT(*) FROM {self._table} AS o {where_clause}",
                 tuple(params),
             ).fetchone()
             total = count_row[0] if count_row else 0
@@ -156,8 +191,8 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
             offset = max(0, (page - 1)) * page_size
             rows = self._exec(
                 conn,
-                f"""SELECT * FROM {self._table} {where_clause}
-                    ORDER BY created_at DESC, id DESC
+                f"""SELECT o.* FROM {self._table} AS o {where_clause}
+                    ORDER BY o.created_at DESC, o.id DESC
                     LIMIT %s OFFSET %s""",
                 (*params, page_size, offset),
             ).fetchall()
@@ -169,7 +204,11 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
             "page_size": page_size,
         }
 
-    def get_last_ops_batch(self, doc_ids: list[str]) -> tuple[dict[str, dict], dict[str, str]]:
+    def get_last_ops_batch(
+        self,
+        doc_ids: list[str],
+        tenant_id: str = "default",
+    ) -> tuple[dict[str, dict], dict[str, str]]:
         if not doc_ids:
             return {}, {}
         placeholders = ",".join(["%s"] * len(doc_ids))
@@ -178,19 +217,22 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
                 conn,
                 f"""SELECT doc_id, operation, created_at, trace_id, result
                     FROM {self._table}
-                    WHERE id IN (SELECT MAX(id) FROM {self._table}
-                                 WHERE doc_id IN ({placeholders}) GROUP BY doc_id)""",
-                tuple(doc_ids),
+                    WHERE tenant_id = %s
+                      AND id IN (SELECT MAX(id) FROM {self._table}
+                                 WHERE tenant_id = %s AND doc_id IN ({placeholders})
+                                 GROUP BY doc_id)""",
+                (tenant_id, tenant_id, *doc_ids),
             ).fetchall()
             last_ops = {r["doc_id"]: dict(r) for r in rows}
             trace_rows = self._exec(
                 conn,
                 f"""SELECT doc_id, trace_id FROM {self._table}
-                    WHERE trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders})
+                    WHERE tenant_id = %s
+                      AND trace_id IS NOT NULL AND trace_id != '' AND doc_id IN ({placeholders})
                     AND id IN (SELECT MAX(id) FROM {self._table}
-                               WHERE trace_id IS NOT NULL AND trace_id != ''
+                               WHERE tenant_id = %s AND trace_id IS NOT NULL AND trace_id != ''
                                  AND doc_id IN ({placeholders}) GROUP BY doc_id)""",
-                (*doc_ids, *doc_ids),
+                (tenant_id, *doc_ids, tenant_id, *doc_ids),
             ).fetchall()
             last_traces = {r["doc_id"]: r["trace_id"] for r in trace_rows}
         return last_ops, last_traces

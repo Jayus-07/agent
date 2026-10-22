@@ -142,7 +142,9 @@ async def list_documents(
         if department and not authz.is_admin and department != authz.principal.department:
             return {"documents": [], "total": 0, "page": page,
                     "page_size": page_size, "current_fingerprint": METADATA_SCHEMA_FINGERPRINT}
-        visible_scopes = authz.sql_visible_scopes(reg.distinct_permission_scopes())
+        visible_scopes = authz.sql_visible_scopes(
+            reg.distinct_permission_scopes(tenant_id=authz.principal.tenant_id)
+        )
 
         result = reg.search(
             keyword=keyword, type_filter=type, status_filter=status or "active",
@@ -151,13 +153,16 @@ async def list_documents(
             llm_used=llm_used, quality_min=quality_min, sort_by=sort_by,
             page=page, page_size=page_size,
             kb_scope=kb_scope, visible_scopes=visible_scopes,
+            tenant_id=authz.principal.tenant_id,
         )
         docs = result["items"]
         total = result["total"]
 
         # 批量查询每个文档的最新操作日志（委托给 DocumentOperationLogger）
         doc_ids = [d["doc_id"] for d in docs]
-        last_ops, last_traces = _get_op_logger().get_last_ops_batch(doc_ids)
+        last_ops, last_traces = _get_op_logger().get_last_ops_batch(
+            doc_ids, tenant_id=authz.principal.tenant_id,
+        )
 
         embedding_model_name = _embedding_model_name()
 
@@ -251,8 +256,20 @@ async def list_operations(
     """文档操作日志和仍在运行的索引任务。"""
     authz = _require_authz(request)
     try:
+        tenant_id = authz.principal.tenant_id or ""
+        registry = _get_registry()
+        kb_ids = None if authz.is_admin else sorted(authz.kb_scope)
+        department = (
+            None if authz.is_admin else (authz.principal.department or "")
+        )
         result = _get_op_logger().list(
-            page=page, page_size=page_size, operation=operation, doc_id=doc_id, batch_id=batch_id,
+            page=page, page_size=page_size, operation=operation, doc_id=doc_id,
+            batch_id=batch_id,
+            tenant_id=tenant_id,
+            kb_ids=kb_ids,
+            department=department,
+            user_id=str(authz.principal.user_id or ""),
+            registry_table=getattr(registry, "_table", ""),
         )
     except Exception as e:
         logger.error(f"[RAG] operations 失败: {e}")
@@ -298,6 +315,7 @@ async def list_pending_docs(request: Request, page: int = 1, page_size: int = 20
         result = reg.list_pending_review(
             page=page, page_size=page_size,
             kb_scope=sorted(authz.kb_scope), department=dept_filter,
+            tenant_id=authz.principal.tenant_id,
         )
         # 格式化（与 list_documents 一致）+ 行级归属校验双保险
         items = []
@@ -346,6 +364,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
                     result="success", duration_ms=0,
                     detail={"to": result.get("new_status")},
                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                    tenant_id=authz.principal.tenant_id,
                 )
             return result
 
@@ -365,6 +384,7 @@ async def approve_pending_doc(doc_id: str, request: Request):
             result="success", duration_ms=0,
             detail={"from": "pending_review", "to": result.get("new_status")},
             user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+            tenant_id=authz.principal.tenant_id,
         )
 
         # 触发 metadata_coverage 重算
@@ -409,6 +429,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
                     result="success", duration_ms=0,
                     detail={"to": result.get("new_status")},
                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                    tenant_id=authz.principal.tenant_id,
                 )
             return result
 
@@ -432,6 +453,7 @@ async def reject_pending_doc(doc_id: str, request: Request):
                 "warnings": result.get("warnings"),
             },
             user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+            tenant_id=authz.principal.tenant_id,
         )
 
         return result
@@ -901,7 +923,8 @@ async def delete_document(doc_id: str, request: Request):
                          detail={"mode": "remote", "deleted_rows": result.get("deleted_rows"),
                                  "degraded": result.get("degraded"),
                                  "warnings": result.get("warnings")},
-                         user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
+                         user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                         tenant_id=authz.principal.tenant_id)
             return result
 
         # ① 软删 registry — 按 doc_id 删所有行（修复绝对/相对路径重复行漏删）
@@ -927,14 +950,16 @@ async def delete_document(doc_id: str, request: Request):
                      result="partial" if degraded else "success",
                      duration_ms=int((time.time() - _delete_t0) * 1000),
                      detail={"file_path": file_path, "deleted_rows": deleted_rows, "warnings": warnings or None},
-                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
+                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                     tenant_id=authz.principal.tenant_id)
         return {"ok": True, "doc_id": doc_id, "degraded": degraded, "warnings": warnings or None}
     except Exception as e:
         logger.error(f"[RAG] 删除文档失败: {e}")
         _safe_log_op(doc_id, doc_name, "delete", source, trace_id=None, batch_id=batch_id,
                      result="failed", duration_ms=int((time.time() - _delete_t0) * 1000),
                      detail={"error": str(e)[:200]},
-                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""))
+                     user_id=str(getattr(getattr(authz, "principal", None), "user_id", "") or ""),
+                     tenant_id=authz.principal.tenant_id)
         return {"ok": False, "error": str(e)}
 
 
@@ -1016,13 +1041,14 @@ async def get_chunk_detail(doc_id: str, request: Request):
 
 # ── S2 知识库授权盘点（2026-10-05，管理端「知识库授权」面板数据源）──
 @router.get("/kb-authority", dependencies=[Depends(require_admin_user)])
-async def kb_authority_overview():
+async def kb_authority_overview(request: Request):
     """全量 KB 注册口径盘点（admin）：owner_depts/audience/文档计数/状态。
 
     注册表以 backend/config/knowledge_base.py 为单一事实源（G2，禁止手抄
     第二份）；此端点只读派生，不做授权变更——可见性变更走代码评审（注册表
     变更随仓库发布），避免运行时改口径造成审计断链。
     """
+    authz = _require_authz(request)
     from backend.config.knowledge_base import KNOWLEDGE_BASES
     items = []
     counts: dict = {}
@@ -1030,7 +1056,9 @@ async def kb_authority_overview():
         reg = _get_registry()
         for kid in KNOWLEDGE_BASES:
             try:
-                counts[kid] = reg.count_by_kb_id(kid)
+                counts[kid] = reg.count_by_kb_id(
+                    kid, tenant_id=authz.principal.tenant_id,
+                )
             except Exception:
                 counts[kid] = 0
     except Exception:

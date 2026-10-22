@@ -412,6 +412,23 @@ async def require_admin_user(request: Request):
     )
 
 
+async def require_editor_user(request: Request):
+    """共享运营数据与任务的写入门禁：至少 editor 且必须是 JWT 用户。"""
+    ident = await require_user_actor(request)
+    if _ROLE_RANK.get(ident.role, -1) >= _ROLE_RANK["editor"]:
+        return ident
+    if get_mode("SENSITIVE_API_GUARD_MODE") == "audit":
+        logger.warning(
+            "[SensitiveGuard] audit 放行低角色访问 editor 端点: "
+            f"actor={ident.actor} role={ident.role}"
+        )
+        return ident
+    raise HTTPException(
+        status_code=403,
+        detail={"error": "Forbidden", "message": "此端点需要 editor 或更高角色"},
+    )
+
+
 def run_authenticated_mutation(
     request: Request,
     operation: str,

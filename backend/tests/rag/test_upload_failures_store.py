@@ -51,9 +51,11 @@ def store():
 
 
 def _add(store: IndexRunStore, upload_id: str, file_path: str, status: str, *,
-         created_at: str, error: str = "", department: str = "finance") -> None:
+         created_at: str, error: str = "", department: str = "finance",
+         tenant_id: str = "default") -> None:
     store.create_run(upload_id=upload_id, generation=f"g-{upload_id}",
-                     file_path=file_path, department=department)
+                     file_path=file_path, department=department,
+                     tenant_id=tenant_id)
     _exec(f"UPDATE {TEST_TABLE} SET status=%s, error=%s, created_at=%s "
           f"WHERE upload_id=%s", (status, error, created_at, upload_id))
 
@@ -121,3 +123,13 @@ def test_independent_files_and_order(store):
     assert store.count_pending_failures() == 2
     items = store.list_pending_failures()
     assert [i["upload_id"] for i in items] == ["u2", "u1"]
+
+
+def test_failure_list_and_republish_are_tenant_scoped(store):
+    _add(store, "a-failed", "/shared/name.pdf", "failed",
+         created_at="2026-10-01 10:00:00", tenant_id="tenant-a")
+    _add(store, "b-published", "/shared/name.pdf", "published",
+         created_at="2026-10-01 11:00:00", tenant_id="tenant-b")
+    assert store.count_pending_failures(tenant_id="tenant-a") == 1
+    assert store.list_pending_failures(tenant_id="tenant-a")[0]["upload_id"] == "a-failed"
+    assert store.count_pending_failures(tenant_id="tenant-b") == 0

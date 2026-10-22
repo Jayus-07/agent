@@ -49,11 +49,12 @@ class _MemoryApprovalStore:
         self._records: dict[str, dict] = {}
 
     def create(self, tool_name: str, action: str, fingerprint: str,
-               detail: dict, user_id: str) -> dict:
+               detail: dict, user_id: str, tenant_id: str = "default") -> dict:
         rid = str(uuid.uuid4())
         rec = {
             "id": rid, "tool_name": tool_name, "action": action,
             "fingerprint": fingerprint, "detail": detail, "user_id": user_id,
+            "tenant_id": tenant_id or "default",
             "status": STATUS_PENDING, "reviewer": None, "reason": None,
             "created_at": _now_iso(), "decided_at": None, "executed_at": None,
         }
@@ -91,10 +92,11 @@ class _MemoryApprovalStore:
             return dict(rec)
 
     def decide(self, request_id: str, approve: bool, reviewer: str,
-               reason: str) -> dict | None:
+               reason: str, tenant_id: str = "default") -> dict | None:
         with self._lock:
             rec = self._records.get(request_id)
-            if rec is None or rec["status"] != STATUS_PENDING:
+            if (rec is None or rec["status"] != STATUS_PENDING
+                    or rec.get("tenant_id", "default") != tenant_id):
                 return None
             rec["status"] = STATUS_APPROVED if approve else STATUS_REJECTED
             rec["reviewer"] = reviewer
@@ -103,7 +105,7 @@ class _MemoryApprovalStore:
             return dict(rec)
 
     def list(self, status: str | None = None, limit: int = 50,
-             tool: str | None = None) -> list[dict]:
+             tool: str | None = None, tenant_id: str = "default") -> list[dict]:
         with self._lock:
             recs = [dict(r) for r in self._records.values()]
         recs.sort(key=lambda r: r["created_at"], reverse=True)
@@ -111,6 +113,7 @@ class _MemoryApprovalStore:
             recs = [r for r in recs if r["status"] == status]
         if tool:
             recs = [r for r in recs if r.get("tool_name") == tool]
+        recs = [r for r in recs if r.get("tenant_id", "default") == tenant_id]
         return recs[:limit]
 
 
@@ -138,6 +141,7 @@ class _PgApprovalStore:
                     fingerprint TEXT NOT NULL,
                     detail JSONB NOT NULL DEFAULT '{}'::jsonb,
                     user_id TEXT NOT NULL DEFAULT 'default',
+                    tenant_id TEXT NOT NULL DEFAULT 'default',
                     status TEXT NOT NULL DEFAULT 'pending',
                     reviewer TEXT,
                     reason TEXT,
@@ -146,6 +150,14 @@ class _PgApprovalStore:
                     executed_at TIMESTAMPTZ
                 )
             """)
+            cur.execute(
+                "ALTER TABLE ai.tool_approval_requests "
+                "ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
+            cur.execute(
+                "UPDATE ai.tool_approval_requests SET tenant_id = 'default' "
+                "WHERE tenant_id IS NULL OR tenant_id = ''"
+            )
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tool_approval_status
                 ON ai.tool_approval_requests(status, created_at DESC)
@@ -154,6 +166,10 @@ class _PgApprovalStore:
                 CREATE INDEX IF NOT EXISTS idx_tool_approval_fingerprint
                 ON ai.tool_approval_requests(fingerprint)
             """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_tool_approval_tenant_status
+                ON ai.tool_approval_requests(tenant_id, status, created_at DESC)
+            """)
             # 同指纹仅一张 pending 单（幂等建单）；partial index，executed/rejected
             # 历史不受限。并发建单冲突由 create() 捕获后复用现有单兜底。
             cur.execute("""
@@ -161,16 +177,19 @@ class _PgApprovalStore:
                 ON ai.tool_approval_requests(fingerprint) WHERE status = 'pending'
             """)
 
-    def create(self, tool_name, action, fingerprint, detail, user_id) -> dict:
+    def create(self, tool_name, action, fingerprint, detail, user_id,
+               tenant_id="default") -> dict:
         rid = str(uuid.uuid4())
         try:
             with self._conn.cursor() as cur:
                 cur.execute(
                     """INSERT INTO ai.tool_approval_requests
-                       (id, tool_name, action, fingerprint, detail, user_id, status, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, now())""",
+                       (id, tool_name, action, fingerprint, detail, user_id,
+                        tenant_id, status, created_at)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, now())""",
                     (rid, tool_name, action, fingerprint,
-                     json.dumps(detail, ensure_ascii=False), user_id, STATUS_PENDING),
+                     json.dumps(detail, ensure_ascii=False), user_id,
+                     tenant_id or "default", STATUS_PENDING),
                 )
         except Exception:
             # 并发下同指纹 pending 已存在（uq_tool_approval_fingerprint_pending）：
@@ -182,6 +201,7 @@ class _PgApprovalStore:
         return self.get(rid) or {
             "id": rid, "tool_name": tool_name, "action": action,
             "fingerprint": fingerprint, "detail": detail, "user_id": user_id,
+            "tenant_id": tenant_id or "default",
             "status": STATUS_PENDING, "reviewer": None, "reason": None,
             "created_at": _now_iso(), "decided_at": None, "executed_at": None,
         }
@@ -240,15 +260,16 @@ class _PgApprovalStore:
         return _row_to_record(dict(zip(cols, row)))
 
     def decide(self, request_id: str, approve: bool, reviewer: str,
-               reason: str) -> dict | None:
+               reason: str, tenant_id: str = "default") -> dict | None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """UPDATE ai.tool_approval_requests
                    SET status = %s, reviewer = %s, reason = %s, decided_at = now()
-                   WHERE id = %s AND status = %s
+                   WHERE id = %s AND status = %s AND tenant_id = %s
                    RETURNING *""",
                 (STATUS_APPROVED if approve else STATUS_REJECTED,
-                 reviewer, reason, request_id, STATUS_PENDING),
+                 reviewer, reason, request_id, STATUS_PENDING,
+                 tenant_id or "default"),
             )
             row = cur.fetchone()
             if row is None:
@@ -257,9 +278,9 @@ class _PgApprovalStore:
         return _row_to_record(dict(zip(cols, row)))
 
     def list(self, status: str | None = None, limit: int = 50,
-             tool: str | None = None) -> list[dict]:
+             tool: str | None = None, tenant_id: str = "default") -> list[dict]:
         # 动态 WHERE：status/tool 都是可选筛选，条件顺序与参数顺序对齐
-        conds, params = [], []
+        conds, params = ["tenant_id = %s"], [tenant_id or "default"]
         if status:
             conds.append("status = %s")
             params.append(status)
@@ -374,7 +395,7 @@ def ensure_approved(tool_name: str, action: str,
         return None
 
     from backend.core.request_context import get_tool_tenant_id
-    tenant_id = get_tool_tenant_id() or ""
+    tenant_id = get_tool_tenant_id() or "default"
 
     fp = _fingerprint(tool_name, action, detail, uid, tenant_id)
     store = get_store()
@@ -392,7 +413,7 @@ def ensure_approved(tool_name: str, action: str,
     if existing is not None:
         rid = existing["id"]
     else:
-        rec = store.create(tool_name, action, fp, detail, uid)
+        rec = store.create(tool_name, action, fp, detail, uid, tenant_id=tenant_id)
         rid = rec["id"]
         logger.warning(f"[ToolApproval] 写操作待审批: {tool_name}.{action} "
                        f"(id={rid}, user={uid})")
@@ -408,14 +429,18 @@ def ensure_approved(tool_name: str, action: str,
 
 
 def list_requests(status: str | None = None, limit: int = 50,
-                  tool: str | None = None) -> list[dict]:
-    return get_store().list(status, limit, tool=tool)
+                  tool: str | None = None,
+                  tenant_id: str = "default") -> list[dict]:
+    return get_store().list(status, limit, tool=tool, tenant_id=tenant_id)
 
 
 def decide_request(request_id: str, approve: bool,
-                   reviewer: str = "admin", reason: str = "") -> dict | None:
+                   reviewer: str = "admin", reason: str = "",
+                   tenant_id: str = "default") -> dict | None:
     """批准/驳回审批单。返回更新后的单据；单不存在或非 pending 返回 None。"""
-    rec = get_store().decide(request_id, approve, reviewer, reason)
+    rec = get_store().decide(
+        request_id, approve, reviewer, reason, tenant_id=tenant_id,
+    )
     if rec is not None:
         verb = "批准" if approve else "驳回"
         logger.warning(f"[ToolApproval] 审批{verb}: id={request_id} reviewer={reviewer}")

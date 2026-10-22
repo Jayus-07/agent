@@ -21,9 +21,9 @@ services:
     environment:
       POSTGRES_DB: ${OBS_PG_DB:-observability}
       POSTGRES_USER: ${OBS_PG_USER:-obs_admin}
-      POSTGRES_PASSWORD: ${OBS_PG_PASSWORD:-obs-local-2026}
+      POSTGRES_PASSWORD: ${OBS_PG_PASSWORD:?Set OBS_PG_PASSWORD before starting the observability stack}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - obs_pg_data:/var/lib/postgresql/data
     healthcheck:

@@ -18,6 +18,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
+from backend.app.api.deps import require_admin_user
+
 from backend.orchestration.inventory import (
     InventoryStore,
     get_inventory_store,
@@ -46,6 +48,7 @@ async def list_thresholds(store: InventoryStore = Depends(get_store)) -> dict[st
 async def create_threshold(
     body: dict = Body(...),
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """新增阈值规则"""
     required = ["rule_type", "min_qty"]
@@ -60,6 +63,7 @@ async def create_threshold(
 async def delete_threshold(
     rule_id: int,
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """删除阈值规则（软删：enabled=false）"""
     existing = next(
@@ -120,6 +124,7 @@ async def get_case(
 async def manual_resolve_case(
     case_id: int,
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """人工标记 case 为已解决（不发邮件）"""
     case = store.get_case(case_id)
@@ -154,6 +159,7 @@ async def update_case_status(
     case_id: int,
     body: dict = Body(...),
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """更新 case 状态（acknowledged / resolved / closed）"""
     case = store.get_case(case_id)
@@ -204,6 +210,7 @@ async def list_policies(store: InventoryStore = Depends(get_store)) -> dict[str,
 async def create_policy(
     body: dict = Body(...),
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """新增通知策略"""
     if "policy_name" not in body or "notify_email" not in body:
@@ -219,6 +226,7 @@ async def create_policy(
 async def delete_policy(
     policy_id: int,
     store: InventoryStore = Depends(get_store),
+    _admin=Depends(require_admin_user),
 ) -> dict[str, Any]:
     """删除通知策略（软删：enabled=false）"""
     all_p = store.list_policies(enabled_only=False)

@@ -52,6 +52,13 @@ class TestWhereToSql:
                        "AND (metadata->>'kb_id')::jsonb @> to_jsonb(%s::text)))")
         assert params == ['{"kb_id": "kb-a"}', "kb-a"]
 
+    def test_default_tenant_condition_includes_legacy_metadata(self):
+        params: list = []
+        sql = where_to_sql({"tenant_id": "default"}, params)
+        assert "metadata ? 'tenant_id'" in sql
+        assert "NOT (metadata ? 'tenant_id')" in sql
+        assert params == ["default"]
+
     def test_scalar_eq_array_field_second_arm(self):
         """list 型字段（JSON 数组串落库）标量等值走数组包含臂（person_names 缺陷修复）。"""
         params: list = []

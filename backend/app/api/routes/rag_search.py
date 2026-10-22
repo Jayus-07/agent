@@ -51,7 +51,9 @@ async def list_knowledge_bases(request: Request):
     try:
         reg = _get_registry()
         for kb in kbs:
-            kb["doc_count"] = reg.count_by_kb_id(kb["id"])
+            kb["doc_count"] = reg.count_by_kb_id(
+                kb["id"], tenant_id=principal.tenant_id,
+            )
     except Exception:
         logger.warning("统计知识库文档数失败，回退为 0", exc_info=True)
         for kb in kbs:
@@ -87,6 +89,7 @@ async def search_knowledge(req: SearchRequest, request: Request):
             principal.department,
             principal.permissions,
             principal.roles,
+            tenant_id=principal.tenant_id,
         )
         results = []
         for i, doc in enumerate(docs):
@@ -95,6 +98,7 @@ async def search_knowledge(req: SearchRequest, request: Request):
             if not authz.can_read_row({
                 "kb_id": meta.get("kb_id", ""),
                 "permission_scope": meta.get("permission_scope", "general"),
+                "tenant_id": meta.get("tenant_id"),
             }):
                 continue
             results.append({

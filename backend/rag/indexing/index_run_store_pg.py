@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     department   TEXT NOT NULL DEFAULT '',
     file_hash    TEXT NOT NULL DEFAULT '',
     staging_path TEXT NOT NULL DEFAULT '',
-    tenant_id    TEXT NOT NULL DEFAULT '',
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
     actor_id     TEXT NOT NULL DEFAULT '',
     base_generation TEXT NOT NULL DEFAULT '',
     celery_task_id  TEXT NOT NULL DEFAULT '',
@@ -113,7 +113,7 @@ class IndexRunStore:
         self, *, upload_id: str, generation: str, file_path: str,
         doc_id: str = "", kb_id: str = "", department: str = "",
         file_hash: str = "", staging_path: str = "",
-        tenant_id: str = "", actor_id: str = "",
+        tenant_id: str = "default", actor_id: str = "",
         base_generation: str = "", celery_task_id: str = "",
     ) -> dict:
         """登记运行。同 upload_id 重传（同键幂等重放/失败重试）→ 重置为新一轮
@@ -265,9 +265,38 @@ class IndexRunStore:
     # published 运行——重传成功即自动消数。created_at 为 UTC 字符串
     # （'YYYY-MM-DD HH24:MI:SS'），字典序即时间序，可直接比较。
 
-    def list_pending_failures(self, *, limit: int = 50) -> list[dict]:
+    @staticmethod
+    def _pending_failure_scope(
+        *,
+        tenant_id: str,
+        kb_ids: list[str] | None,
+        department: str | None,
+    ) -> tuple[str, tuple]:
+        conditions = ["runs.tenant_id = %s"]
+        params: list = [tenant_id]
+        if kb_ids is not None:
+            if not kb_ids or not department:
+                conditions.append("FALSE")
+            else:
+                conditions.extend(("runs.kb_id = ANY(%s)", "runs.department = %s"))
+                params.extend((kb_ids, department))
+        return " AND ".join(conditions), tuple(params)
+
+    def list_pending_failures(
+        self,
+        *,
+        limit: int = 50,
+        tenant_id: str = "default",
+        kb_ids: list[str] | None = None,
+        department: str | None = None,
+    ) -> list[dict]:
         """待处理入库失败清单（每文件取最新一次失败，新失败在前）。"""
         limit = max(1, min(int(limit), 200))
+        scope_sql, scope_params = self._pending_failure_scope(
+            tenant_id=tenant_id,
+            kb_ids=kb_ids,
+            department=department,
+        )
         with self._lock, self._conn() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             cur.execute(
@@ -275,35 +304,50 @@ class IndexRunStore:
                         SELECT DISTINCT ON (file_path)
                                upload_id, file_path, doc_id, kb_id, department,
                                error, created_at, actor_id
-                        FROM {self._table}
-                        WHERE status = 'failed'
+                        FROM {self._table} AS runs
+                        WHERE runs.status = 'failed' AND {scope_sql}
                           AND NOT EXISTS (
                               SELECT 1 FROM {self._table} p
-                              WHERE p.file_path = {self._table}.file_path
+                              WHERE p.file_path = runs.file_path
+                                AND p.tenant_id = runs.tenant_id
                                 AND p.status = 'published'
-                                AND p.created_at > {self._table}.created_at)
-                        ORDER BY file_path, created_at DESC
+                                AND p.created_at > runs.created_at)
+                        ORDER BY runs.file_path, runs.created_at DESC
                     ) t ORDER BY created_at DESC LIMIT %s""",
-                (limit,))
+                (*scope_params, limit))
             rows = cur.fetchall()
         return [dict(r) for r in rows]
 
-    def count_pending_failures(self) -> int:
+    def count_pending_failures(
+        self,
+        *,
+        tenant_id: str = "default",
+        kb_ids: list[str] | None = None,
+        department: str | None = None,
+    ) -> int:
         """待处理入库失败计数（与 list_pending_failures 同一派生口径）。"""
+        scope_sql, scope_params = self._pending_failure_scope(
+            tenant_id=tenant_id,
+            kb_ids=kb_ids,
+            department=department,
+        )
         with self._lock, self._conn() as conn:
             cur = conn.cursor()
             cur.execute(
                 f"""SELECT COUNT(*) FROM (
                         SELECT DISTINCT ON (file_path) file_path
-                        FROM {self._table}
-                        WHERE status = 'failed'
+                        FROM {self._table} AS runs
+                        WHERE runs.status = 'failed' AND {scope_sql}
                           AND NOT EXISTS (
                               SELECT 1 FROM {self._table} p
-                              WHERE p.file_path = {self._table}.file_path
+                              WHERE p.file_path = runs.file_path
+                                AND p.tenant_id = runs.tenant_id
                                 AND p.status = 'published'
-                                AND p.created_at > {self._table}.created_at)
-                        ORDER BY file_path, created_at DESC
-                    ) t""")
+                                AND p.created_at > runs.created_at)
+                        ORDER BY runs.file_path, runs.created_at DESC
+                    ) t""",
+                scope_params,
+            )
             row = cur.fetchone()
         return int(row[0]) if row else 0
 

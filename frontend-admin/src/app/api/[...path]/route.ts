@@ -46,11 +46,36 @@ const FORWARD_RES_HEADERS = [
   "x-trace-id",
 ] as const;
 
+function hasRefreshCookie(req: NextRequest): boolean {
+  return /(?:^|;\s*)refresh_token(?:_(?:web|admin|cs))?=/.test(
+    req.headers.get("cookie") || "",
+  );
+}
+
+function isPublicApi(path: string[], method: string, req: NextRequest): boolean {
+  if (method === "POST" && path.length === 2 && path[0] === "auth" && path[1] === "login") return true;
+  if (
+    method === "POST" && path.length === 2 && path[0] === "auth" &&
+    (path[1] === "refresh" || path[1] === "logout") && hasRefreshCookie(req)
+  ) return true;
+  if (method === "GET" && path.join("/") === "sys/users/captcha") return true;
+  if (method === "POST" && path.join("/") === "sys/users/register") return true;
+  return false;
+}
+
 async function proxy(
   req: NextRequest,
   ctx: { params: Promise<{ path: string[] }> },
 ): Promise<Response> {
   const { path } = await ctx.params;
+  if (req.method === "OPTIONS") return new Response(null, { status: 204 });
+  const authorization = req.headers.get("authorization") || "";
+  if (!/^Bearer\s+\S+$/i.test(authorization) && !isPublicApi(path, req.method, req)) {
+    return Response.json(
+      { error: "Unauthorized", message: "需要有效的用户访问令牌" },
+      { status: 401 },
+    );
+  }
   const target = `${GATEWAY}/api/${path
     .map(encodeURIComponent)
     .join("/")}${req.nextUrl.search}`;
@@ -65,6 +90,7 @@ async function proxy(
   if (apiKey) headers.set("X-API-Key", apiKey);
 
   // 客户端 IP 仅用于会话台账展示，不参与鉴权；Next 15 已移除 req.ip，
+  // 登录限流和会话台账使用此地址；前置入口必须覆盖客户端伪造的代理头。
   // 优先使用受信代理链传入的 XFF 首段，缺失时回退 X-Real-IP。
   const clientIp =
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||

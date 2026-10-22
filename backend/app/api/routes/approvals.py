@@ -13,9 +13,10 @@ from pydantic import BaseModel, Field
 from backend.app.api.deps import (
     OperatorIdentity,
     is_platform_admin,
+    require_admin_user,
     resolve_operator_role,
 )
-from backend.app.api.identity import resolve_identity
+from backend.app.api.identity import require_product_identity, resolve_identity
 from backend.security.tool_approval import decide_request, is_degraded, list_requests
 
 router = APIRouter(prefix="/approvals", tags=["工具审批"])
@@ -48,23 +49,32 @@ def _require_admin(operator: OperatorIdentity) -> None:
 
 
 @router.get("")
-async def list_approvals(status: str = "", limit: int = 50, tool: str = ""):
+async def list_approvals(
+    request: Request, status: str = "", limit: int = 50, tool: str = "",
+    _admin=Depends(require_admin_user),
+):
     """审批单列表。status=pending/approved/rejected/executed，空=全部；
     tool=按工具名筛选（如 tool=email.send 只看邮件发送审批，空=全部）。"""
     limit = max(1, min(limit, 200))
+    principal = require_product_identity(request)
     return {
         "degraded": is_degraded(),
-        "items": list_requests(status=status or None, limit=limit, tool=tool or None),
+        "items": list_requests(
+            status=status or None, limit=limit, tool=tool or None,
+            tenant_id=principal.tenant_id,
+        ),
     }
 
 
 @router.post("/{request_id}/approve")
 async def approve(request_id: str, body: ApprovalDecision, request: Request,
-                  operator: OperatorIdentity = Depends(resolve_operator_role)):
+                  operator: OperatorIdentity = Depends(resolve_operator_role),
+                  principal=Depends(require_product_identity)):
     """批准审批单。批准后 TTL 内重试相同操作即可执行（仅 admin）。"""
     _require_admin(operator)
     rec = decide_request(request_id, approve=True,
-                         reviewer=_resolve_reviewer(request, body, operator), reason=body.reason)
+                         reviewer=_resolve_reviewer(request, body, operator), reason=body.reason,
+                         tenant_id=principal.tenant_id)
     if rec is None:
         raise HTTPException(404, "审批单不存在或已处理")
     return {"ok": True, "request": rec}
@@ -72,11 +82,13 @@ async def approve(request_id: str, body: ApprovalDecision, request: Request,
 
 @router.post("/{request_id}/reject")
 async def reject(request_id: str, body: ApprovalDecision, request: Request,
-                 operator: OperatorIdentity = Depends(resolve_operator_role)):
+                 operator: OperatorIdentity = Depends(resolve_operator_role),
+                 principal=Depends(require_product_identity)):
     """驳回审批单。被驳回的指纹再次触发不会重复建单前需先处理 pending（仅 admin）。"""
     _require_admin(operator)
     rec = decide_request(request_id, approve=False,
-                         reviewer=_resolve_reviewer(request, body, operator), reason=body.reason)
+                         reviewer=_resolve_reviewer(request, body, operator), reason=body.reason,
+                         tenant_id=principal.tenant_id)
     if rec is None:
         raise HTTPException(404, "审批单不存在或已处理")
     return {"ok": True, "request": rec}

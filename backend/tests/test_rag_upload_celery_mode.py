@@ -210,6 +210,23 @@ class TestExecuteIndexTaskImpl:
 
         assert out["status"] == "done"
         assert settle.call_args.kwargs["actor_id"] == "actor-42"
+        assert settle.call_args.kwargs["tenant_id"] == "tenant-9"
+
+    def test_operation_log_skips_missing_tenant_instead_of_using_default(self, monkeypatch):
+        from backend.app.api.routes import _rag_shared
+
+        writes = []
+
+        class _Logger:
+            def log(self, **kwargs):
+                writes.append(kwargs)
+
+        monkeypatch.setattr(_rag_shared, "_get_op_logger", lambda: _Logger())
+        _rag_shared._safe_log_op(
+            "doc", "name", "upload", "worker", tenant_id="",
+        )
+
+        assert writes == []
 
     def test_worker_binds_identity_and_budget_from_run_record(self, monkeypatch):
         """Worker 模型用量和预占必须归属任务记录中的用户与租户。"""

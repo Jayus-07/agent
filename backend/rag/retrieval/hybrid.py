@@ -77,7 +77,10 @@ def _metadata_matches(metadata: dict, metadata_filter: dict | None) -> bool:
     if "$or" in metadata_filter:
         return any(_metadata_matches(metadata, part) for part in metadata_filter["$or"])
     return all(
-        _metadata_value_matches(metadata.get(key), expected)
+        (
+            key == "tenant_id" and expected == "default"
+            and key not in metadata
+        ) or _metadata_value_matches(metadata.get(key), expected)
         for key, expected in metadata_filter.items()
     )
 

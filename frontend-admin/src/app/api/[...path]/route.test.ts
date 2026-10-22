@@ -45,6 +45,7 @@ describe("BFF 代理转发契约", () => {
       "user-agent": "Mozilla/5.0 TestBrowser/1.0",
       cookie: "refresh_token=old; Path=/api/auth",
       "x-forwarded-for": "203.0.113.9, 10.0.0.2",
+      "x-client-ip": "198.51.100.44",
     });
     const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
     const res = await GET(req, ctx);
@@ -90,5 +91,14 @@ describe("BFF 代理转发契约", () => {
     const cookies = res.headers.getSetCookie();
     expect(cookies.length).toBeGreaterThanOrEqual(1);
     expect(cookies.some((c) => c.startsWith("refresh_token=abc"))).toBe(true);
+  });
+
+  it("私有路由无 Bearer 时本地拒绝", async () => {
+    const req = makeReq("/api/sys/model-roles/fallback", {}, "GET");
+    const ctx = { params: Promise.resolve({ path: ["sys", "model-roles", "fallback"] }) };
+    const res = await GET(req, ctx);
+
+    expect(res.status).toBe(401);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

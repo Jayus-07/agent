@@ -259,7 +259,16 @@ end
 local ROLE_RANK = { viewer = 0, editor = 1, admin = 2, super_admin = 3 }
 local READ_METHODS = { GET = true, HEAD = true, OPTIONS = true }
 local ROLE_GATE_PREFIXES = {
-    ["/api/approvals"] = { write = "admin" },   -- 审批处置权（后端已同语义 403，网关是外层硬闸）
+    ["/api/approvals"] = { read = "admin", write = "admin" }, -- 审批列表含处置与执行详情
+    ["/api/workflows"] = { read = "admin", write = "admin" },
+    ["/api/reports"] = { read = "admin", write = "admin" },
+    ["/api/selection-decision"] = { write = "editor" },
+    ["/api/selection-funnel"] = { write = "editor" },
+    ["/api/inventory"] = { write = "admin" },
+    ["/api/schedules"] = { write = "admin" },
+    ["/api/selection/weights"] = { write = "admin" },
+    ["/api/llm/multiquery"] = { write = "admin" },
+    ["/api/competitor/test-cookies"] = { write = "admin" },
     ["/api/prompts"]   = { write = "editor" },  -- draft/publish/rollback 的粗闸；高风险仍由后端收紧为 admin
     -- 方案 A（2026-09-16）：网关审计类端点外层硬闸（前后缀精确覆盖
     -- /gateway-auth 与 /gateway-access-logs 两个 GET 端点；后端

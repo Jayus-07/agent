@@ -154,7 +154,7 @@ class AskRequest(BaseModel):
     # TD-14（2026-10-03）：调用方用户/租户身份——预算预占与结算在
     # rag-service 侧落库的归属主体；空 = 未声明（保持旧行为，不建预算）。
     user_id: str = Field("", description="调用方用户 ID（预算归属）")
-    tenant_id: str = Field("", description="调用方租户 ID（预算归属）")
+    tenant_id: str = Field("default", min_length=1, description="调用方租户 ID（预算归属）")
     # 默认保持独立 RAG 问答的既有 Memory 行为；主聊天图显式关闭，
     # 由父 Runner 统一保存 Reporter 的最终答案。
     persist_memory: bool = Field(True, description="是否由 RAG 服务写入会话记忆")
@@ -168,6 +168,7 @@ class RetrieveRequest(BaseModel):
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
     roles: list[str] = Field(default_factory=list, description="JWT 角色")
+    tenant_id: str = Field("default", min_length=1, description="可信租户 ID")
     system_subject: str = Field("", description="内部系统调用方标识（M3 权限显式化）")
 
 
@@ -190,6 +191,7 @@ class RetrieveDocsRequest(BaseModel):
     department: str = Field("", description="主体部门")
     permissions: list[str] | None = Field(None, description="文档级权限集合")
     roles: list[str] = Field(default_factory=list, description="JWT 角色")
+    tenant_id: str = Field("default", min_length=1, description="调用方可信租户 ID")
 
 
 class PendingReviewDecision(BaseModel):
@@ -345,6 +347,9 @@ def ask(
         request.state.rag_prehandler_ms = max(
             0, (started - getattr(request.state, "rag_received_at", started)) * 1000,
         )
+    tenant_id = req.tenant_id.strip()
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
@@ -355,12 +360,12 @@ def ask(
     # TD-14：带身份的请求绑定请求级预算（reserve/settle 在本进程落库，
     # 归属 user/tenant；此前旁路告警 [Budget] reserve 旁路 即缺此绑定）。
     _budget_bound = False
-    if req.user_id and req.tenant_id:
+    if req.user_id and tenant_id:
         try:
             from backend.infra.llm.budget import bind_request_budget
             bind_request_budget(
                 f"rag-ask:{req.session_id}",
-                user_id=req.user_id, tenant_id=req.tenant_id,
+                user_id=req.user_id, tenant_id=tenant_id,
             )
             _budget_bound = True
         except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞问答
@@ -396,7 +401,7 @@ def ask(
             permissions=req.permissions,
             roles=tuple(req.roles),
             user_id=req.user_id,
-            tenant_id=req.tenant_id,
+            tenant_id=tenant_id,
             persist_memory=req.persist_memory,
         )
     except ReviewVisibilityUnavailableError as e:
@@ -422,6 +427,9 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
     index_status（2026-10-01 热刷新收口）："stale" = 已发布索引代次加载失败，
     正以旧快照服务；调用方必须显式呈现，不得静默当作最新。
     """
+    tenant_id = req.tenant_id.strip()
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
@@ -435,6 +443,7 @@ def retrieve(req: RetrieveRequest) -> dict[str, Any]:
             department=req.department,
             permissions=req.permissions,
             roles=tuple(req.roles),
+            tenant_id=tenant_id,
             system_subject=req.system_subject,
         )
     except ReviewVisibilityUnavailableError as e:
@@ -452,6 +461,9 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
     permission_scope 双过滤）；metadata 在服务侧先做白名单裁剪，
     file_path 等内部字段不出服务边界。
     """
+    tenant_id = req.tenant_id.strip()
+    if not tenant_id:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
@@ -466,6 +478,7 @@ def retrieve_docs(req: RetrieveDocsRequest) -> dict[str, Any]:
             department=req.department,
             permissions=req.permissions,
             roles=tuple(req.roles),
+            tenant_id=tenant_id,
         )
     except ReviewVisibilityUnavailableError as e:
         # Batch 1A fail-closed：审核状态无法确认时不返回任何内容

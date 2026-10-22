@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -18,6 +19,7 @@ from fastapi.testclient import TestClient
 from backend.app.api.deps import require_rag_user
 from backend.app.api.routes import rag as rag_route
 from backend.app.api.routes import rag_documents
+from backend.app.api.routes import rag_upload
 
 
 class StubPipeline:
@@ -128,6 +130,117 @@ def test_document_detail_hides_unauthorized_doc_with_404(monkeypatch):
 
     assert resp.status_code == 404
     assert resp.json() == {"ok": False, "error": "文档不存在"}
+
+
+def test_pending_list_passes_principal_tenant_to_registry(monkeypatch):
+    captured = {}
+
+    class StubReg:
+        def list_pending_review(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "items": [{
+                    "doc_id": "pending-a", "tenant_id": "tenant-a",
+                    "kb_id": "policy_hr", "department": "hr",
+                    "permission_scope": "general", "status": "pending_review",
+                    "file_name": "a.md",
+                }],
+                "total": 1, "page": 1, "page_size": 20,
+            }
+
+    class StubAuthz:
+        principal = SimpleNamespace(tenant_id="tenant-a", department="hr")
+        kb_scope = {"policy_hr"}
+        is_admin = False
+
+        def can_manage_row(self, row):
+            return row.get("tenant_id") == self.principal.tenant_id, ""
+
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubReg())
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: StubAuthz())
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+
+    resp = _client(app).get("/pending")
+
+    assert resp.status_code == 200, resp.text
+    assert captured["tenant_id"] == "tenant-a"
+    assert resp.json()["total"] == 1
+
+
+def test_kb_authority_counts_only_the_authenticated_tenant(monkeypatch):
+    captured = []
+
+    class StubRegistry:
+        def count_by_kb_id(self, kb_id, *, tenant_id):
+            captured.append((kb_id, tenant_id))
+            return 2
+
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(tenant_id="tenant-a"),
+    )
+    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: authz)
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(
+        "backend.config.knowledge_base.KNOWLEDGE_BASES",
+        {"kb-hr": {"name": "HR"}},
+    )
+
+    response = asyncio.run(rag_documents.kb_authority_overview(SimpleNamespace()))
+
+    assert captured == [("kb-hr", "tenant-a")]
+    assert response["knowledge_bases"][0]["doc_count"] == 2
+
+
+def test_upload_failure_list_uses_resource_scope_for_items_and_count(monkeypatch):
+    from backend.app.api import identity
+
+    principal = SimpleNamespace(
+        tenant_id="tenant-a", user_id="user-a", department="hr",
+    )
+    authz = SimpleNamespace(
+        is_admin=False,
+        kb_scope=frozenset({"kb-hr", "kb-finance"}),
+        can_upload_to=lambda kb_id, department: (
+            kb_id == "kb-hr" and department == "hr",
+            "",
+        ),
+    )
+    monkeypatch.setattr(identity, "require_principal", lambda _request: principal)
+    monkeypatch.setattr(
+        rag_upload.RagAuthorization,
+        "build",
+        lambda _principal: authz,
+    )
+
+    captured = {}
+
+    class StubStore:
+        def list_pending_failures(self, **kwargs):
+            captured["list"] = kwargs
+            return []
+
+        def count_pending_failures(self, **kwargs):
+            captured["count"] = kwargs
+            return 0
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: StubStore(),
+    )
+
+    response = asyncio.run(
+        rag_upload.list_upload_failures(SimpleNamespace(), limit=25),
+    )
+
+    expected_scope = {
+        "tenant_id": "tenant-a",
+        "kb_ids": ["kb-hr"],
+        "department": "hr",
+    }
+    assert captured["list"] == {"limit": 25, **expected_scope}
+    assert captured["count"] == expected_scope
+    assert response == {"ok": True, "total": 0, "items": []}
 
 
 def test_ask_response_carries_answer_meta(monkeypatch):

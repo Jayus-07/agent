@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     doc_version  INTEGER DEFAULT 1,
     kb_version   TEXT DEFAULT 'v1',
     department   TEXT DEFAULT '',
+    tenant_id    TEXT NOT NULL DEFAULT 'default',
     summary      TEXT DEFAULT '',
     keywords     TEXT DEFAULT '',
     time_refs    TEXT DEFAULT '',
@@ -173,6 +174,12 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 "ADD COLUMN permission_scope TEXT DEFAULT 'general'"
             )
             logger.info("[doc_registry_pg] 迁移：补列 permission_scope（默认 general）")
+        if "tenant_id" not in existing:
+            conn.cursor().execute(
+                f"ALTER TABLE {self._table} "
+                "ADD COLUMN tenant_id TEXT NOT NULL DEFAULT 'default'"
+            )
+            logger.info("[doc_registry_pg] 迁移：补列 tenant_id（历史行归属 default）")
         if "fixture_set" not in existing:
             conn.cursor().execute(
                 f"ALTER TABLE {self._table} ADD COLUMN fixture_set TEXT DEFAULT ''"
@@ -336,6 +343,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         page_size: int = 20,
         kb_scope: list[str] | None = None,
         visible_scopes: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> dict:
         """kb_scope/visible_scopes（2026-10-01 权限收口）：授权范围下推到 SQL，
         行集与 COUNT(total) 同条件——列表页不允许「总数全库、行集截断」的
@@ -343,6 +351,10 @@ class PostgresDocumentRegistry(DocumentRegistry):
         无可见范围（正确返回 0 行）。"""
         conditions: list[str] = []
         params: list = []
+
+        if tenant_id is not None:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
 
         if kb_scope is not None:
             conditions.append("kb_id = ANY(%s)")
@@ -507,6 +519,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         doc_version = meta.get("doc_version", 1)
         kb_version = meta.get("kb_version", "v1")
         department = meta.get("department", "")
+        tenant_id = str(meta.get("tenant_id") or "default")
         permission_scope = meta.get("permission_scope", "general")
         fixture_set = meta.get("fixture_set", "")
         # §6 治理 11 字段（R4 版本治理），与 SQLite 版 register 语义一致
@@ -540,6 +553,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "metadata_fingerprint": metadata_fingerprint,
             "doc_version": doc_version, "kb_version": kb_version,
             "department": department, "permission_scope": permission_scope,
+            "tenant_id": tenant_id,
             "fixture_set": fixture_set, "version_id": version_id,
             "effective_from": effective_from, "effective_to": effective_to,
             "supersedes_version_id": supersedes_version_id,
@@ -645,12 +659,17 @@ class PostgresDocumentRegistry(DocumentRegistry):
                 ),
             )
 
-    def count_by_kb_id(self, kb_id: str) -> int:
+    def count_by_kb_id(self, kb_id: str, tenant_id: str | None = None) -> int:
+        sql = f"SELECT COUNT(*) FROM {self._table} WHERE kb_id = %s AND status = 'active'"
+        params: tuple = (kb_id,)
+        if tenant_id is not None:
+            sql += " AND tenant_id = %s"
+            params = (kb_id, tenant_id)
         with self._lock, self._conn() as conn:
             row = self._exec_scalar(
                 conn,
-                f"SELECT COUNT(*) FROM {self._table} WHERE kb_id = %s AND status = 'active'",
-                (kb_id,),
+                sql,
+                params,
             ).fetchone()
         return row[0]
 
@@ -716,12 +735,16 @@ class PostgresDocumentRegistry(DocumentRegistry):
         self, page: int = 1, page_size: int = 20,
         kb_scope: list[str] | None = None,
         department: str = "",
+        tenant_id: str | None = None,
     ) -> dict:
         """待审核列表。kb_scope/department（2026-10-01 权限收口）：
         管理面按「可管理范围」过滤——非 admin 编辑只审本部门、可见库的文档；
         total 同条件统计。"""
         conditions: list[str] = ["status = 'pending_review'"]
         params: list = []
+        if tenant_id is not None:
+            conditions.append("tenant_id = %s")
+            params.append(tenant_id)
         if kb_scope is not None:
             conditions.append("kb_id = ANY(%s)")
             params.append([str(k) for k in kb_scope])
@@ -750,7 +773,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "page_size": page_size,
         }
 
-    def distinct_permission_scopes(self) -> list[str]:
+    def distinct_permission_scopes(self, tenant_id: str | None = None) -> list[str]:
         """registry 中实际存在的 permission_scope 值（空串归一为 general）。
 
         供授权层把文档级裁决下推为 SQL ANY 过滤（visible_scopes），
@@ -758,11 +781,15 @@ class PostgresDocumentRegistry(DocumentRegistry):
         with self._lock, self._conn() as conn:
             # 必须用普通游标：r[0] 是位置索引取列，_exec 的 RealDictCursor
             # 返回按列名索引的字典行，r[0] 会 KeyError: 0（2026-10-01 修复）
-            rows = self._exec_scalar(
-                conn,
+            sql = (
                 f"""SELECT DISTINCT COALESCE(NULLIF(permission_scope, ''), 'general')
-                   FROM {self._table} WHERE status = 'active'""",
-            ).fetchall()
+                   FROM {self._table} WHERE status = 'active'"""
+            )
+            params = ()
+            if tenant_id is not None:
+                sql += " AND tenant_id = %s"
+                params = (tenant_id,)
+            rows = self._exec_scalar(conn, sql, params).fetchall()
         return [r[0] for r in rows]
 
     def clear(self):

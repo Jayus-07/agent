@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
+
+from backend.app.api.deps import require_admin_user
 
 from backend.orchestration.workflow.registry import get_workflow_registry
 from backend.orchestration.workflow.scheduler import get_workflow_scheduler
@@ -18,7 +20,10 @@ from backend.orchestration.workflow.persistence import get_workflow_run_store
 from backend.shared.logger import logger
 
 
-router = APIRouter(prefix="/workflows", tags=["Workflow"])
+router = APIRouter(
+    prefix="/workflows", tags=["Workflow"],
+    dependencies=[Depends(require_admin_user)],
+)
 
 
 @router.get("")

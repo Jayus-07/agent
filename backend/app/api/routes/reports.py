@@ -9,11 +9,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from backend.app.api.deps import require_admin_user
 
 from backend.seed.demo.runner import get_daily_report_store
 
-router = APIRouter(prefix="/reports", tags=["报告中心"])
+router = APIRouter(
+    prefix="/reports", tags=["报告中心"],
+    dependencies=[Depends(require_admin_user)],
+)
 
 
 @router.get("")

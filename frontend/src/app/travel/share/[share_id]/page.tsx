@@ -7,6 +7,7 @@ export const metadata: Metadata = {
   referrer: 'no-referrer',
 }
 
-export default function TravelSharePage({ params }: { params: { share_id: string } }) {
-  return <TravelV2PublicShare shareId={params.share_id} />
+export default async function TravelSharePage({ params }: { params: Promise<{ share_id: string }> }) {
+  const { share_id } = await params
+  return <TravelV2PublicShare shareId={share_id} />
 }

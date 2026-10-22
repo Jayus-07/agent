@@ -28,8 +28,13 @@ from backend.rag.retrieval.review_filter import (
 )
 
 
-def _doc(doc_id: str, content: str = "正文") -> Document:
-    return Document(page_content=content, metadata={"doc_id": doc_id})
+def _doc(
+    doc_id: str, content: str = "正文", tenant_id: str = "default",
+) -> Document:
+    return Document(
+        page_content=content,
+        metadata={"doc_id": doc_id, "tenant_id": tenant_id},
+    )
 
 
 def _doc_id_of(d):
@@ -551,6 +556,30 @@ class TestPipelineExits:
         text = module.RAGPipeline.retrieve_knowledge(
             p, "q", kb_id="kb", subject_type="employee", department="general")
         assert text.count("正文") == 1, "四类不可见状态全部剔除"
+
+    def test_retrieve_knowledge_filters_by_tenant(self, monkeypatch):
+        from backend.rag import pipeline as module
+
+        h = _Harness()
+        _patch_registry(monkeypatch, h)
+        p = self._pipeline([
+            _doc("tenant-a", "A 租户内容", tenant_id="tenant-a"),
+            _doc("tenant-b", "B 租户内容", tenant_id="tenant-b"),
+        ])
+        result = module.RAGPipeline.retrieve_knowledge(
+            p, "q", kb_id="kb", subject_type="employee",
+            department="general", tenant_id="tenant-a",
+        )
+        assert "A 租户内容" in result
+        assert "B 租户内容" not in result
+
+    def test_legacy_chunk_without_tenant_is_default_only(self):
+        from backend.rag.pipeline import RAGPipeline
+
+        assert RAGPipeline._doc_matches_filter({}, {"tenant_id": "default"})
+        assert not RAGPipeline._doc_matches_filter(
+            {}, {"tenant_id": "tenant-a"},
+        )
 
     def test_internal_system_subject_missing_doc_id_also_dropped(
             self, monkeypatch):

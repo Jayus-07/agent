@@ -2,12 +2,13 @@
 
 P0 修复背景：selection_decision / selection_funnel 两个路由此前无任何身份门禁
 （网关 JWT 后任意已认证用户可读/写全部任务与导入池，无角色档位、无操作者留痕）。
-收口动作：两路由统一挂 deps.resolve_operator_role（JWT 用户取平台角色，
-服务凭据走内部令牌映射 admin，与 prompts/model_prices 同档）。
+收口动作：两路由读取要求 deps.resolve_operator_role；写操作额外要求
+JWT 用户至少具备 editor 角色，服务凭据不能写入共享运营数据。
 
 本文件只测门禁三态，业务契约在 tests/selection_decision/ 与 tests/selection_funnel/：
 - 无凭据 → 401（require_internal_token 拒绝，打桩保证确定性）
 - JWT 用户（平台角色 viewer）→ 放行
+- JWT viewer 写操作 → enforce 模式下拒绝
 - 服务凭据（X-Internal-Token）→ 放行且映射 admin（create 留痕 actor）
 """
 from __future__ import annotations
@@ -56,6 +57,19 @@ class TestSelectionDecisionAuthz:
         assert resp.status_code == 200
         assert resp.json() == {"tasks": []}
 
+    def test_jwt_viewer_cannot_create_task(self, monkeypatch):
+        monkeypatch.setattr("backend.app.api.deps.get_mode", lambda _key: "enforce")
+        client = _build_app(decision_mod.router)
+        resp = client.post(
+            "/selection-decision/tasks",
+            headers=_JWT_HEADERS,
+            json={
+                "category": "test",
+                "finance": {"sell_price": 10, "unit_cost": 4},
+            },
+        )
+        assert resp.status_code == 403
+
     def test_internal_token_allowed(self, monkeypatch):
         monkeypatch.setattr("backend.config.messaging.AI_INTERNAL_TOKEN", "tok-1")
 
@@ -91,3 +105,13 @@ class TestSelectionFunnelAuthz:
         resp = client.get("/selection-funnel/import/candidates", headers=_JWT_HEADERS)
         assert resp.status_code == 200
         assert resp.json() == {"count": 0, "items": []}
+
+    def test_jwt_viewer_cannot_import_text(self, monkeypatch):
+        monkeypatch.setattr("backend.app.api.deps.get_mode", lambda _key: "enforce")
+        client = _build_app(funnel_mod.router)
+        resp = client.post(
+            "/selection-funnel/import/text",
+            headers=_JWT_HEADERS,
+            json={"content": "title\nitem"},
+        )
+        assert resp.status_code == 403

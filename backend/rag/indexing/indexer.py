@@ -734,6 +734,7 @@ class IncrementalIndexer:
         candidate_mode: bool = False,
         chunk_store: Any = None,
         bm25_source_vectordb: Any = None,
+        tenant_id: str = "default",
     ):
         self.docs_dir = Path(docs_dir).resolve()
         self.vectordb = vectordb
@@ -742,6 +743,7 @@ class IncrementalIndexer:
         self.registry = registry
         self.kb_id = kb_id
         self.department = department
+        self.tenant_id = str(tenant_id or "default")
         # 仅评测入库使用；生产索引保持 None，避免把测试范围字段误当授权字段。
         self.fixture_set = fixture_set
         # 上传/重索引后立即同步 BM25（避免"上传成功但 BM25 未更新"）。
@@ -1644,6 +1646,7 @@ class IncrementalIndexer:
             "fixture_set": fixture_set or "",
             "dataset": "rag_eval" if fixture_set else "",
             "department": department,  # 同上：用路径派生值，否则部门隔离失效
+            "tenant_id": self.tenant_id,
             "permission_scope": permission_scope,  # §4 权限范围：registry 行声明值
             # §6 版本治理：registry 行声明值（R4）
             "version_id": version_id,
@@ -2123,6 +2126,9 @@ class IncrementalIndexer:
             )
             ch.metadata["business_domain"] = domain_val
             ch.metadata["department"] = department
+            ch.metadata["tenant_id"] = str(
+                doc_meta.get("tenant_id") or self.tenant_id or "default"
+            )
             # §4 权限范围：随 chunk 进向量库/doc_db，检索侧按请求者持有权限
             # 裁决（backend/rag/permissions.py）；缺省 general 行为不变
             ch.metadata["permission_scope"] = permission_scope
@@ -2530,6 +2536,7 @@ class IncrementalIndexer:
             "doc_version": doc_meta.get("doc_version", 1),
             "kb_version": doc_meta.get("kb_version", "v1"),
             "department": doc_meta.get("department", "") or department,
+            "tenant_id": doc_meta.get("tenant_id") or self.tenant_id or "default",
             # §4 权限范围：沿用 registry 行声明值（doc_meta 已带），
             # 否则最终 upsert 会把入库脚本预注册的受限标记冲回 general
             "permission_scope": doc_meta.get("permission_scope", "general"),

@@ -1028,6 +1028,7 @@ class RAGPipeline:
             current_identity.user_id = user_id
         if tenant_id:
             current_identity.tenant_id = tenant_id
+        effective_tenant_id = str(tenant_id or current_identity.tenant_id or "").strip()
         if roles:
             current_identity.roles = tuple(roles)
         effective_subject_type = (
@@ -1071,6 +1072,9 @@ class RAGPipeline:
             mf.update({k: v for k, v in qf.items() if v})
         except Exception:
             logger.debug("query_filter 合并失败", exc_info=True)
+
+        if effective_tenant_id:
+            mf["tenant_id"] = effective_tenant_id
 
         # 保留旧契约：没有过滤条件且调用方没有声明任何授权属性时，
         # 不创建新的 RAG 状态，避免覆盖图路径已绑定的身份实例。
@@ -1269,6 +1273,7 @@ class RAGPipeline:
         roles: tuple[str, ...] = (),
         *,
         candidate_k: int | None = None,
+        tenant_id: str = "",
     ) -> list:
         """授权检索的文档级出口（/rag/search 消费，2026-10-01 权限收口）。
 
@@ -1290,7 +1295,7 @@ class RAGPipeline:
         self._prepare_context(
             kb_id, question,
             subject_type=subject_type, department=department,
-            permissions=permissions, roles=roles,
+            permissions=permissions, roles=roles, tenant_id=tenant_id,
         )
         try:
             try:
@@ -1306,6 +1311,18 @@ class RAGPipeline:
                 subject_type, department, roles=eff_roles)
             # 显式 kb 与授权集合求交：请求只能收窄，不能扩大（含 admin 全集）
             mf = self._constrain_filter_to_authorized(mf, authorized)
+            effective_tenant_id = str(tenant_id or "").strip()
+            if not effective_tenant_id:
+                try:
+                    from backend.rag.context import get_context
+                    effective_tenant_id = str(
+                        get_context().identity.tenant_id or ""
+                    ).strip()
+                except Exception:
+                    effective_tenant_id = ""
+            effective_tenant_id = effective_tenant_id or "default"
+            if effective_tenant_id:
+                mf["tenant_id"] = effective_tenant_id
 
             # ── 审核可见性（Batch 1A fail-closed）：两腿统一剔除 ──
             # 检索前先取不可见集合（pending_review/deprecated/过期）：Registry
@@ -1316,7 +1333,8 @@ class RAGPipeline:
             # 0 命中放宽重试的兜底范围（与 retrieve_knowledge 同策略：
             # 只保留 kb 维度，且已收敛到授权集合——放宽不越权）
             kb_scope = (
-                {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
+                {k: v for k, v in (mf or {}).items()
+                 if k in ("kb_id", "$or", "tenant_id")}
                 or None
             )
 
@@ -1329,6 +1347,8 @@ class RAGPipeline:
             def _keep(doc) -> bool:
                 meta = getattr(doc, "metadata", {}) or {}
                 if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                if effective_tenant_id and str(meta.get("tenant_id") or "default") != effective_tenant_id:
                     return False
                 if review_blocked and meta.get("doc_id") in review_blocked:
                     return False
@@ -1444,6 +1464,7 @@ class RAGPipeline:
         roles: tuple[str, ...] = (),
         *,
         system_subject: str = "",
+        tenant_id: str = "",
     ) -> str:
         """轻量检索：只检索不生成回答，供 BusinessAnalyzer 等下游使用。
 
@@ -1478,6 +1499,7 @@ class RAGPipeline:
             department=department,
             permissions=permissions,
             roles=roles,
+            tenant_id=tenant_id,
         )
         try:
             # 读取 _prepare_context 注入的 metadata_filter（KB 路由 + QueryAnalyzer）
@@ -1486,10 +1508,18 @@ class RAGPipeline:
                 mf = get_context().metadata_filter
                 user_permissions = get_context().identity.permissions
                 eff_roles = tuple(getattr(get_context().identity, "roles", ()) or ())
+                effective_tenant_id = str(
+                    tenant_id or get_context().identity.tenant_id or "default"
+                ).strip()
             except Exception:
                 mf = None
                 user_permissions = None
                 eff_roles = ()
+                effective_tenant_id = str(tenant_id or "default").strip()
+
+            mf = dict(mf or {})
+            if effective_tenant_id:
+                mf["tenant_id"] = effective_tenant_id
 
             # ── 主体授权（2026-10-01 权限收口）：两条腿统一的 keep-set ──
             # kb 范围先与主体可见集收敛（只能收窄）；召回结果再按授权集 +
@@ -1514,7 +1544,8 @@ class RAGPipeline:
 
             chunks = []
             kb_scope = (
-                {k: v for k, v in (mf or {}).items() if k in ("kb_id", "$or")}
+                {k: v for k, v in (mf or {}).items()
+                 if k in ("kb_id", "$or", "tenant_id")}
                 or None
             )
 
@@ -1522,6 +1553,8 @@ class RAGPipeline:
                 """单条召回的授权后过滤（KB keep-set + 文档 permission_scope + 审核可见性）。"""
                 meta = getattr(doc, "metadata", {}) or {}
                 if authorized is not None and meta.get("kb_id") not in authorized:
+                    return False
+                if str(meta.get("tenant_id") or "default") != effective_tenant_id:
                     return False
                 if review_blocked and meta.get("doc_id") in review_blocked:
                     return False
@@ -1654,6 +1687,12 @@ class RAGPipeline:
                 elif k == "$or":
                     if not any(where(sub) for sub in v):
                         return False
+                elif (
+                    k == "tenant_id" and v == "default"
+                    and k not in (meta or {})
+                ):
+                    # 元字段加入前索引的历史 chunk 由迁移归属 default。
+                    continue
                 elif not match(v, (meta or {}).get(k)):
                     return False
             return True

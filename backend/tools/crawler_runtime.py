@@ -22,6 +22,7 @@ import asyncio
 import os
 import threading
 from typing import Any
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from backend.shared.logger import logger
 
@@ -53,6 +54,7 @@ class _CrawlerRuntime:
         from crawl4ai import AsyncWebCrawler
         bc = _build_browser_config()
         self._crawler = AsyncWebCrawler(config=bc)
+        _install_ssrf_guard(self._crawler)
         await self._crawler.start()
         logger.info("[CrawlerRuntime] 单例浏览器已启动（常驻，不关闭，stealth+UA+proxy）")
 
@@ -159,6 +161,8 @@ def _load_browser_cookies() -> list[dict]:
 
 _runtime: _CrawlerRuntime | None = None
 _runtime_lock = threading.Lock()
+_safe_redirect_lock = threading.Lock()
+_safe_redirect_targets: dict[str, str] = {}
 
 
 def _get_runtime() -> _CrawlerRuntime:
@@ -167,6 +171,136 @@ def _get_runtime() -> _CrawlerRuntime:
         if _runtime is None:
             _runtime = _CrawlerRuntime()
         return _runtime
+
+
+def _same_origin(left: str, right: str) -> bool:
+    """比较跳转前后 origin，用于跨域时剥离显式认证头。"""
+    a, b = urlsplit(left), urlsplit(right)
+    return (
+        a.scheme.lower(), a.hostname, a.port or (443 if a.scheme == "https" else 80)
+    ) == (
+        b.scheme.lower(), b.hostname, b.port or (443 if b.scheme == "https" else 80)
+    )
+
+
+def _redirect_key(url: str) -> str:
+    """归一化浏览器规范化过的初始 URL，用于 HTTP→HTTPS 安全重试。"""
+    parsed = urlsplit(url)
+    scheme = parsed.scheme.lower()
+    host = (parsed.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    port = parsed.port
+    if port and port != (443 if scheme == "https" else 80):
+        host = f"{host}:{port}"
+    return urlunsplit((scheme, host, parsed.path or "/", parsed.query, ""))
+
+
+async def _guarded_route(route) -> None:
+    """逐跳抓取重定向；先校验 Location，再对目标发起请求。"""
+    from backend.tools.url_guard import UrlBlockedError, assert_url_allowed
+
+    request = route.request
+    url = request.url
+    if urlsplit(url).scheme.lower() in {"about", "blob", "data"}:
+        await route.continue_()
+        return
+    method = request.method
+    headers = await request.all_headers()
+    post_data = request.post_data_buffer
+
+    for _ in range(10):
+        try:
+            assert_url_allowed(url)
+        except UrlBlockedError as exc:
+            logger.warning("[CrawlerRuntime] 出站请求 SSRF 拦截: %s — %s", url, exc)
+            await route.abort(error_code="blockedbyclient")
+            return
+
+        try:
+            response = await route.fetch(
+                url=url,
+                method=method,
+                headers=headers,
+                post_data=post_data,
+                max_redirects=0,
+                timeout=60_000,
+            )
+        except Exception as exc:  # noqa: BLE001 — 失败时不退回自动跟随重定向
+            logger.warning("[CrawlerRuntime] 安全转发请求失败: %s", exc)
+            await route.abort(error_code="failed")
+            return
+
+        location = response.headers.get("location")
+        if response.status not in (301, 302, 303, 307, 308) or not location:
+            await route.fulfill(response=response)
+            return
+
+        next_url = urljoin(url, location)
+        try:
+            # 重定向必须进行严格 DNS/IP 检查；不套用竞品平台的可信域名旁路。
+            assert_url_allowed(next_url, allow_trusted_hosts=False)
+        except UrlBlockedError as exc:
+            logger.warning(
+                "[CrawlerRuntime] 重定向 SSRF 拦截: %s -> %s — %s",
+                url, next_url, exc,
+            )
+            await response.dispose()
+            await route.abort(error_code="blockedbyclient")
+            return
+
+        if urlsplit(next_url).scheme.lower() != urlsplit(url).scheme.lower():
+            # route.fetch 按 Playwright 契约不能跨协议改写 URL。仅允许同主机
+            # HTTP→HTTPS 由外层重试；跨主机重试会把原 URL 配置的 JS Cookie
+            # 注入脚本带到跳转目标。
+            initial_url = urlsplit(request.url)
+            source_host = (initial_url.hostname or "").casefold()
+            target_host = (urlsplit(next_url).hostname or "").casefold()
+            if (
+                request.is_navigation_request()
+                and initial_url.scheme.lower() == "http"
+                and urlsplit(next_url).scheme.lower() == "https"
+                and source_host
+                and source_host == target_host
+            ):
+                with _safe_redirect_lock:
+                    _safe_redirect_targets[_redirect_key(request.url)] = next_url
+            await response.dispose()
+            await route.abort(error_code="blockedbyclient")
+            return
+
+        next_headers = dict(headers)
+        if not _same_origin(url, next_url):
+            for name in (
+                "authorization", "cookie", "proxy-authorization", "host",
+            ):
+                next_headers.pop(name, None)
+        if response.status == 303 or (
+            response.status in (301, 302) and method.upper() == "POST"
+        ):
+            method, post_data = "GET", None
+            for name in ("content-length", "content-type", "transfer-encoding"):
+                next_headers.pop(name, None)
+        await response.dispose()
+        headers = next_headers
+        url = next_url
+
+    logger.warning("[CrawlerRuntime] 重定向次数超过上限: %s", request.url)
+    await route.abort(error_code="blockedbyclient")
+
+
+def _install_ssrf_guard(crawler) -> None:
+    """在每个 Crawl4AI 页面上下文安装 Playwright 网络路由闸。"""
+    async def on_page_context_created(page, context, **kwargs):
+        await context.route("**/*", _guarded_route)
+        return page
+
+    crawler.crawler_strategy.set_hook("on_page_context_created", on_page_context_created)
+
+
+def _take_safe_redirect_target(url: str) -> str | None:
+    with _safe_redirect_lock:
+        return _safe_redirect_targets.pop(_redirect_key(url), None)
 
 
 def crawl(url: str, mode: str = "markdown", timeout: float = 60.0,
@@ -227,6 +361,9 @@ def crawl(url: str, mode: str = "markdown", timeout: float = 60.0,
                 )
         config = CrawlerRunConfig(**config_kwargs)
         result = await crawler.arun(url, config=config)
+        safe_target = _take_safe_redirect_target(url)
+        if safe_target:
+            result = await crawler.arun(safe_target, config=config)
         if result is None:
             return {"ok": False, "content": "", "error": "无响应"}
         if result.error_message:
@@ -255,6 +392,7 @@ def _fallback_crawl(url: str, mode: str,
 
         bc = _build_browser_config()
         crawler = AsyncWebCrawler(config=bc)
+        _install_ssrf_guard(crawler)
         await crawler.start()
         run_kwargs: dict[str, Any] = dict(
             page_timeout=60_000, magic=False,
@@ -274,7 +412,11 @@ def _fallback_crawl(url: str, mode: str,
                 run_kwargs["js_code_before_wait"] = (
                     f"{base_js}\n{humanize_js}" if base_js else humanize_js
                 )
-        result = await crawler.arun(url, config=CrawlerRunConfig(**run_kwargs))
+        run_config = CrawlerRunConfig(**run_kwargs)
+        result = await crawler.arun(url, config=run_config)
+        safe_target = _take_safe_redirect_target(url)
+        if safe_target:
+            result = await crawler.arun(safe_target, config=run_config)
         if result is None:
             return {"ok": False, "content": "", "error": "无响应"}
         if result.error_message:

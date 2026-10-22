@@ -60,6 +60,13 @@ routes:
     upstream_id: app
     plugins:
       prometheus: {}
+      # BFF 注入 X-Client-IP，避免所有登录请求共用 BFF 的 remote_addr 配额。
+      # 前置入口必须覆盖客户端自带的 X-Forwarded-For / X-Real-IP；缺失时插件回退 remote_addr。
+      limit-count:
+        key: http_x_client_ip
+        count: 30
+        time_window: 60
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
         headers:
@@ -76,6 +83,11 @@ routes:
     upstream_id: app
     plugins:
       prometheus: {}
+      limit-count:
+        key: remote_addr
+        count: 10
+        time_window: 60
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
         headers:
@@ -92,6 +104,11 @@ routes:
     upstream_id: app
     plugins:
       prometheus: {}
+      limit-count:
+        key: remote_addr
+        count: 20
+        time_window: 60
+        rejected_code: 429
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
         headers:

@@ -58,6 +58,17 @@ def test_hr_editor_cannot_read_finance_doc_row():
     assert not authz.can_read_row(restricted_hr)
 
 
+def test_doc_row_must_match_trusted_tenant():
+    authz = RagAuthorization.build(_principal(tenant_id="tenant-a"))
+    row = {
+        "tenant_id": "tenant-b", "kb_id": "policy_general",
+        "permission_scope": "general",
+    }
+    assert not authz.can_read_row(row)
+    assert not authz.can_manage_row(row)[0]
+    assert authz.can_read_row({**row, "tenant_id": "tenant-a"})
+
+
 def test_permission_grant_unlocks_restricted_doc():
     authz = RagAuthorization.build(
         _principal(permissions=("hr_confidential",)))

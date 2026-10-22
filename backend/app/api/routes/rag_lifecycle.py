@@ -74,7 +74,9 @@ def _check_manageable(request: Request, doc_id: str):
     ok, reason = authz.can_manage_row(doc)
     if not ok:
         return None, _deny_manage(reason), None
-    return doc, None, (_actor_of(principal), _extract_source(request))
+    return doc, None, (
+        _actor_of(principal), _extract_source(request), principal.tenant_id,
+    )
 
 
 class LifecycleTransitionRequest(BaseModel):
@@ -99,7 +101,7 @@ async def transition_lifecycle(doc_id: str, body: LifecycleTransitionRequest, re
     doc, deny, ctx = _check_manageable(request, doc_id)
     if deny is not None:
         return deny
-    actor, source = ctx
+    actor, source, tenant_id = ctx
     try:
         result = _get_lifecycle_service().transition(
             doc_id, body.to_status, actor=actor, reason=body.reason,
@@ -109,6 +111,7 @@ async def transition_lifecycle(doc_id: str, body: LifecycleTransitionRequest, re
                 doc_id, doc.get("file_name", ""), f"lifecycle:{body.to_status}", source,
                 detail={"from": doc.get("status"), "to": result.get("to")},
                 user_id=actor,
+                tenant_id=tenant_id,
             )
             _invalidate_retrieval_cache(doc)
         return result
@@ -127,7 +130,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
     doc, deny, ctx = _check_manageable(request, doc_id)
     if deny is not None:
         return deny
-    actor, source = ctx
+    actor, source, tenant_id = ctx
     expire_at = (body.expire_at or "").strip()
     if expire_at:
         try:
@@ -143,6 +146,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
                 doc_id, doc.get("file_name", ""), "lifecycle:expire_at_set", source,
                 detail={"from": doc.get("status"), "expire_at": expire_at},
                 user_id=actor,
+                tenant_id=tenant_id,
             )
             _invalidate_retrieval_cache(doc)
         return result

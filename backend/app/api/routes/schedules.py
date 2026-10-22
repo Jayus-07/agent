@@ -51,6 +51,7 @@ async def get_schedule(workflow_name: str) -> dict[str, Any]:
 async def update_schedule(
     workflow_name: str,
     body: dict = Body(...),
+    _operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict[str, Any]:
     """修改定时任务（hour / minute）
 

@@ -292,12 +292,30 @@ class TestProxyHTTP:
         assert captured["department"] == ""
 
     def test_retrieve_returns_result(self):
+        captured = {}
+
         def handler(request: httpx.Request) -> httpx.Response:
             assert request.url.path == "/retrieve"
+            captured.update(json.loads(request.read()))
             return httpx.Response(200, json={"result": "chunk1\n\n---\n\nchunk2"})
 
         proxy = _make_proxy(handler)
-        assert "chunk1" in proxy.retrieve_knowledge("问题", kb_id="default", top_k=2)
+        assert "chunk1" in proxy.retrieve_knowledge(
+            "问题", kb_id="default", top_k=2, tenant_id="tenant-a",
+        )
+        assert captured["tenant_id"] == "tenant-a"
+
+    def test_retrieve_documents_forwards_tenant(self):
+        captured = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            assert request.url.path == "/retrieve_docs"
+            captured.update(json.loads(request.read()))
+            return httpx.Response(200, json={"docs": [], "index_status": "ok"})
+
+        proxy = _make_proxy(handler)
+        assert proxy.retrieve_documents("问题", tenant_id="tenant-a") == []
+        assert captured["tenant_id"] == "tenant-a"
 
     def test_service_error_raises_with_guidance(self):
         def handler(request: httpx.Request) -> httpx.Response:

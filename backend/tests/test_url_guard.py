@@ -105,6 +105,14 @@ class TestAssertUrl:
         with pytest.raises(UrlBlockedError, match="scheme"):
             assert_url_allowed("file://item.taobao.com/secret")
 
+    def test_strict_check_does_not_bypass_trusted_host_dns(self):
+        fake = [("AF_INET", 1, 6, "", ("10.1.2.3", 0))]
+        with patch.object(socket, "getaddrinfo", return_value=fake):
+            with pytest.raises(UrlBlockedError, match="内网/保留地址"):
+                assert_url_allowed(
+                    "https://item.taobao.com/", allow_trusted_hosts=False,
+                )
+
     def test_trusted_suffix_matching(self):
         assert _is_trusted_host("taobao.com")
         assert _is_trusted_host("item.taobao.com")
@@ -176,3 +184,151 @@ class TestFakeIpAware:
         assert _is_forbidden_ip(_ip("169.254.169.254"))
         with pytest.raises(UrlBlockedError):
             assert_url_allowed("http://192.168.1.1/admin")
+
+
+class _FakeResponse:
+    def __init__(self, status: int, headers: dict[str, str] | None = None):
+        self.status = status
+        self.headers = headers or {}
+        self.disposed = False
+
+    async def dispose(self):
+        self.disposed = True
+
+
+class _FakeRequest:
+    def __init__(self, url: str, *, navigation: bool = False):
+        self.url = url
+        self.method = "GET"
+        self.post_data_buffer = None
+        self._navigation = navigation
+
+    async def all_headers(self):
+        return {
+            "authorization": "Bearer secret",
+            "cookie": "session=secret",
+        }
+
+    def is_navigation_request(self):
+        return self._navigation
+
+
+class _FakeRoute:
+    def __init__(self, url: str, responses: list[_FakeResponse], *, navigation=False):
+        self.request = _FakeRequest(url, navigation=navigation)
+        self.responses = list(responses)
+        self.fetch_calls: list[dict] = []
+        self.aborted = None
+        self.fulfilled = None
+
+    async def fetch(self, **kwargs):
+        self.fetch_calls.append(kwargs)
+        return self.responses.pop(0)
+
+    async def abort(self, *, error_code: str):
+        self.aborted = error_code
+
+    async def fulfill(self, *, response):
+        self.fulfilled = response
+
+
+@pytest.mark.anyio
+async def test_crawler_redirect_to_private_ip_is_blocked(monkeypatch):
+    from backend.tools import crawler_runtime
+
+    fake_dns = [("AF_INET", 1, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: fake_dns)
+    route = _FakeRoute(
+        "https://public.example/",
+        [_FakeResponse(302, {"location": "http://127.0.0.1/admin"})],
+    )
+
+    await crawler_runtime._guarded_route(route)
+
+    assert len(route.fetch_calls) == 1
+    assert route.fetch_calls[0]["max_redirects"] == 0
+    assert route.aborted == "blockedbyclient"
+    assert route.fulfilled is None
+
+
+@pytest.mark.anyio
+async def test_crawler_cross_origin_redirect_strips_credentials(monkeypatch):
+    from backend.tools import crawler_runtime
+
+    fake_dns = [("AF_INET", 1, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: fake_dns)
+    route = _FakeRoute(
+        "https://public.example/",
+        [
+            _FakeResponse(302, {"location": "https://other.example/final"}),
+            _FakeResponse(200),
+        ],
+    )
+
+    await crawler_runtime._guarded_route(route)
+
+    assert len(route.fetch_calls) == 2
+    headers = route.fetch_calls[1]["headers"]
+    assert "authorization" not in headers
+    assert "cookie" not in headers
+    assert route.fulfilled.status == 200
+    assert route.aborted is None
+
+
+@pytest.mark.anyio
+async def test_crawler_http_to_https_redirect_is_retried_only_after_check(monkeypatch):
+    from backend.tools import crawler_runtime
+
+    fake_dns = [("AF_INET", 1, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: fake_dns)
+    route = _FakeRoute(
+        "http://public.example",
+        [_FakeResponse(301, {"location": "https://public.example/secure"})],
+        navigation=True,
+    )
+
+    await crawler_runtime._guarded_route(route)
+
+    assert route.aborted == "blockedbyclient"
+    assert crawler_runtime._take_safe_redirect_target("http://public.example") == (
+        "https://public.example/secure"
+    )
+
+
+@pytest.mark.anyio
+async def test_crawler_cross_host_http_to_https_redirect_is_not_retried(monkeypatch):
+    from backend.tools import crawler_runtime
+
+    fake_dns = [("AF_INET", 1, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: fake_dns)
+    route = _FakeRoute(
+        "http://platform.example/",
+        [_FakeResponse(302, {"location": "https://attacker.example/collect"})],
+        navigation=True,
+    )
+
+    await crawler_runtime._guarded_route(route)
+
+    assert route.aborted == "blockedbyclient"
+    assert crawler_runtime._take_safe_redirect_target("http://platform.example/") is None
+
+
+@pytest.mark.anyio
+async def test_crawler_multi_hop_redirect_cannot_retry_cookie_config_on_other_host(monkeypatch):
+    from backend.tools import crawler_runtime
+
+    fake_dns = [("AF_INET", 1, 6, "", ("93.184.216.34", 0))]
+    monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: fake_dns)
+    route = _FakeRoute(
+        "http://platform.example/",
+        [
+            _FakeResponse(302, {"location": "http://attacker.example/step2"}),
+            _FakeResponse(301, {"location": "https://attacker.example/collect"}),
+        ],
+        navigation=True,
+    )
+
+    await crawler_runtime._guarded_route(route)
+
+    assert route.aborted == "blockedbyclient"
+    assert crawler_runtime._take_safe_redirect_target("http://platform.example/") is None

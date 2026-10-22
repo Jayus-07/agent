@@ -167,6 +167,24 @@ class TestIdentityBinding:
         assert r1 == r2
         assert len(memory_store.list(status=STATUS_PENDING, limit=10)) == 1
 
+    def test_approval_records_are_tenant_scoped(self, memory_store):
+        tenant_a = memory_store.create(
+            "send_email", "send", "fp-a", {"to": "a@example.com"},
+            "u1", tenant_id="tenant-a",
+        )
+        tenant_b = memory_store.create(
+            "send_email", "send", "fp-b", {"to": "b@example.com"},
+            "u2", tenant_id="tenant-b",
+        )
+        assert [r["id"] for r in memory_store.list(tenant_id="tenant-a")] == [tenant_a["id"]]
+        assert memory_store.decide(
+            tenant_a["id"], True, "admin", "", tenant_id="tenant-b",
+        ) is None
+        assert memory_store.decide(
+            tenant_a["id"], True, "admin", "", tenant_id="tenant-a",
+        )["status"] == STATUS_APPROVED
+        assert memory_store.list(tenant_id="tenant-b")[0]["id"] == tenant_b["id"]
+
 
 @pytest.mark.usefixtures("required_mode")
 class TestListToolFilter:

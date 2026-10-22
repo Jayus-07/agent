@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
 from backend.app.api import deps
@@ -62,3 +65,42 @@ def test_super_admin_login_and_refresh_claims_keep_platform_and_cs_roles():
         "dept": "",
         "mustChangePassword": False,
     }
+
+
+def test_repeated_invalid_login_attempts_do_not_lock_account(monkeypatch):
+    @asynccontextmanager
+    async def fake_db():
+        yield object()
+
+    async def no_user(_session, _username, _tenant_id):
+        return None
+
+    app = FastAPI()
+    app.include_router(auth_local.router)
+    monkeypatch.setattr(auth_local, "_db", fake_db)
+    monkeypatch.setattr(auth_local, "_fetch_user", no_user)
+
+    with TestClient(app) as client:
+        responses = [
+            client.post(
+                "/auth/login",
+                headers={"X-Tenant-Id": "tenant-a"},
+                json={"username": "alice", "password": "wrong"},
+            )
+            for _ in range(12)
+        ]
+
+    assert [response.status_code for response in responses] == [400] * 12
+
+
+def test_captcha_store_evicts_oldest_ticket_at_hard_capacity(monkeypatch):
+    auth_local._CAPTCHA_STORE.clear()
+    monkeypatch.setattr(auth_local, "_CAPTCHA_MAX_TICKETS", 1)
+    try:
+        first_ticket, _ = auth_local._captcha_issue()
+        second_ticket, _ = auth_local._captcha_issue()
+        assert len(auth_local._CAPTCHA_STORE) == 1
+        assert first_ticket not in auth_local._CAPTCHA_STORE
+        assert second_ticket in auth_local._CAPTCHA_STORE
+    finally:
+        auth_local._CAPTCHA_STORE.clear()

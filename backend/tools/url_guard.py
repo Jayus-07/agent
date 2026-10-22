@@ -7,8 +7,8 @@
        以及「公网域名解析到内网 IP」的 DNS rebinding 初级变种）
 
 已知限制（文档化，不做过度承诺）：
-  - 浏览器层重定向仍可能跳向内网（crawl4ai/Playwright 控制粒度有限），
-    生产环境应配合出口防火墙 / 代理白名单使用。
+  - Crawl4AI/Playwright 出站请求及每一跳重定向会在浏览器路由层复检；
+    生产环境仍应配合出口防火墙 / 代理白名单使用。
   - TOCTOU：校验后到真实发起请求之间 DNS 可能变化（高级 DNS rebinding）。
     彻底方案需在代理层 pin IP，超出本次改动范围。
 
@@ -136,7 +136,9 @@ def _check_resolved_ips(host: str, *, allow_private: bool = False) -> None:
             raise UrlBlockedError(f"目标 {host} 解析到{reason} {ip}，已拦截（SSRF 防护）")
 
 
-def assert_url_allowed(url: str, *, allow_private: bool = False) -> str:
+def assert_url_allowed(
+    url: str, *, allow_private: bool = False, allow_trusted_hosts: bool = True,
+) -> str:
     """校验 URL 是否允许出站抓取。通过则原样返回，否则抛 UrlBlockedError。
 
     校验内容：
@@ -179,7 +181,7 @@ def assert_url_allowed(url: str, *, allow_private: bool = False) -> str:
         raise UrlBlockedError("URL 缺少 host")
 
     # 可信域名后缀跳过 IP 段检查（scheme 白名单仍然生效）
-    if _is_trusted_host(host):
+    if allow_trusted_hosts and _is_trusted_host(host):
         return url
 
     # 字面 IP（含 [IPv6] 已被 urlparse 处理为 hostname）

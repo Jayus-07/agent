@@ -10,15 +10,16 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity, require_editor_user, resolve_operator_role,
+)
 from backend.competitor.store import get_store
 from backend.orchestration.workflow.executor import WorkflowExecutor
 from backend.selection_decision.store import get_selection_decision_store
 from backend.shared.logger import logger
 
-# 域运行时收口（2026-09-24 STOP A）：决策/拍板/回填是管理端运营面，
-# 与 prompts/model_prices 同档——必须过运营角色门禁（JWT 用户取平台角色，
-# 服务凭据走内部令牌映射 admin），此前无任何身份门禁属 P0 权限缺口。
+# 域运行时收口：读取保留已认证用户/内部服务门禁；创建任务、拍板与回填
+# 属于写操作，额外要求 JWT 用户至少具备 editor 角色。
 router = APIRouter(
     prefix="/selection-decision",
     tags=["选品决策"],
@@ -86,7 +87,7 @@ async def _run_task(task_id: str, inputs: dict) -> None:
 
 
 @router.post("/tasks")
-async def create_task(req: TaskRequest, operator: OperatorIdentity = Depends(resolve_operator_role)):
+async def create_task(req: TaskRequest, operator: OperatorIdentity = Depends(require_editor_user)):
     """提交选品决策任务（异步执行）"""
     # watchlist 预校验（同步轻量：只查启用条目数，不查快照）：
     # 空则直接 400，避免创建注定失败的异步任务；有候选但无快照仍走异步失败路径。
@@ -162,7 +163,11 @@ def list_task_decisions(task_id: str):
 
 
 @router.post("/tasks/{task_id}/decisions", status_code=201)
-def submit_decision(task_id: str, req: DecisionRequest):
+def submit_decision(
+    task_id: str,
+    req: DecisionRequest,
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     """拍板：创建决策留痕并回填用户决策（幂等由 decision_version 递增表达）"""
     if req.decision not in VALID_USER_DECISIONS:
         raise HTTPException(
@@ -185,7 +190,11 @@ def submit_decision(task_id: str, req: DecisionRequest):
 
 
 @router.post("/decisions/{decision_id}/feedback")
-def submit_feedback(decision_id: str, req: FeedbackRequest):
+def submit_feedback(
+    decision_id: str,
+    req: FeedbackRequest,
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     """表现回填：事后真实销量/评价/收益等，记 feedback_at"""
     store = get_selection_decision_store()
     if not store.set_feedback(decision_id, req.actual_metrics):

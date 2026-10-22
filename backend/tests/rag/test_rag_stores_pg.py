@@ -199,6 +199,20 @@ class TestOpLogPG:
         assert last_traces["d2"] == "tr-b"
         assert logger.get_last_ops_batch([]) == ({}, {})
 
+    def test_get_last_ops_batch_is_tenant_scoped(self, clean_tables):
+        from backend.app.api.routes._rag_shared import _get_op_logger
+        logger = _get_op_logger()
+        logger.log(doc_id="shared-doc", doc_name="a.md", operation="upload",
+                   trace_id="tenant-a-trace", tenant_id="tenant-a")
+        logger.log(doc_id="shared-doc", doc_name="b.md", operation="delete",
+                   trace_id="tenant-b-trace", tenant_id="tenant-b")
+
+        last_ops, last_traces = logger.get_last_ops_batch(
+            ["shared-doc"], tenant_id="tenant-a",
+        )
+        assert last_ops["shared-doc"]["operation"] == "upload"
+        assert last_traces["shared-doc"] == "tenant-a-trace"
+
     def test_invalid_operation_rejected(self, clean_tables):
         from backend.app.api.routes._rag_shared import _get_op_logger
         logger = _get_op_logger()

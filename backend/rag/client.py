@@ -42,6 +42,25 @@ _RETRIEVE_TIMEOUT_S = 30.0
 _REVIEW_TIMEOUT_S = 300.0
 
 
+def _effective_tenant_id(tenant_id: str) -> str:
+    value = str(tenant_id or "").strip()
+    if value:
+        return value
+    try:
+        from backend.core.request_context import get_tool_tenant_id
+        value = str(get_tool_tenant_id() or "").strip()
+    except Exception:
+        pass
+    if not value:
+        try:
+            from backend.rag.context import get_context
+            value = str(get_context().identity.tenant_id or "").strip()
+        except Exception:
+            pass
+    # 旧调用方只允许查询当前单租户部署的 default 数据；空过滤不能退化为全租户。
+    return value or "default"
+
+
 def _set_child_trace_link(parent_trace, span, old_id: str | None, new_id: str | None) -> None:
     """更新既有父 Trace / Tool Span 子 Trace 关联，避免依赖响应才能建链。"""
     if parent_trace is None:
@@ -109,6 +128,7 @@ class RAGServiceProxy:
         roles: tuple[str, ...] = (),
         persist_memory: bool = True,
     ) -> str:
+        tenant_id = _effective_tenant_id(tenant_id)
         try:
             headers = {}
             parent_trace = None
@@ -204,9 +224,11 @@ class RAGServiceProxy:
         department: str = "",
         permissions: Iterable[str] | None = None,
         roles: tuple[str, ...] = (),
+        tenant_id: str = "",
         *,
         system_subject: str = "",
     ) -> str:
+        tenant_id = _effective_tenant_id(tenant_id)
         try:
             resp = self._client.post(
                 "/retrieve",
@@ -218,6 +240,7 @@ class RAGServiceProxy:
                     "department": department,
                     "permissions": permissions,
                     "roles": list(roles),
+                    "tenant_id": tenant_id,
                     "system_subject": system_subject,
                 },
                 timeout=_RETRIEVE_TIMEOUT_S,
@@ -246,6 +269,7 @@ class RAGServiceProxy:
         department: str = "",
         permissions: Iterable[str] | None = None,
         roles: tuple[str, ...] = (),
+        tenant_id: str = "",
     ) -> list:
         """授权检索的文档级出口（/rag/search remote 分支）。
 
@@ -253,6 +277,7 @@ class RAGServiceProxy:
         语义（KB keep-set + permission_scope 后过滤），序列化回 Document
         形态（metadata.score = 向量距离，BM25 补充结果无 score）。
         """
+        tenant_id = _effective_tenant_id(tenant_id)
         try:
             resp = self._client.post(
                 "/retrieve_docs",
@@ -264,6 +289,7 @@ class RAGServiceProxy:
                     "department": department,
                     "permissions": permissions,
                     "roles": list(roles),
+                    "tenant_id": tenant_id,
                 },
                 timeout=_RETRIEVE_TIMEOUT_S,
             )

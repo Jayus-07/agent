@@ -46,8 +46,10 @@ def test_retrieve_docs_forwards_explicit_candidate_pool_size(monkeypatch):
 
     req = rag_server.RetrieveDocsRequest(
         question="候选池测试", top_k=8, candidate_k=20,
+        tenant_id="tenant-a",
     )
     rag_server.retrieve_docs(req)
 
     assert captured["top_k"] == 8
     assert captured["candidate_k"] == 20
+    assert captured["tenant_id"] == "tenant-a"
