@@ -51,6 +51,9 @@ class DocumentAST:
     # 其后页面未识别；ocr_failed_pages 为 OCR 失败页数。
     ocr_page_limit: int = 0
     ocr_failed_pages: int = 0
+    # 本次 PDF 实际采用的 OCR 页预算；供质量记录/Trace 说明上限来源。
+    ocr_page_budget: int = 0
+    ocr_page_budget_source: str = "default"
     # 表格解析资源保护：CSV 流式计数可得精确总量；Excel 达到上限即停止，
     # total_known=False 时总量与截断量都只报告已观察到的下界。
     table_rows_truncated: int = 0
@@ -65,9 +68,30 @@ class DocumentAST:
     pdf_pages_with_content: int = 0
     pdf_skipped_pages: int = 0
     pdf_repaired: bool = False
+    # 解析结果契约：partial 表示存在需要关注的解析降级；issues 只保存
+    # 代码、严重度、页码和短说明，不复制文档正文。
+    parse_status: str = "complete"
+    parse_issues: list[dict] = field(default_factory=list)
+    pdf_skipped_page_numbers: list[int] = field(default_factory=list)
+    pdf_image_count: int = 0
+    pdf_image_pages: list[int] = field(default_factory=list)
+    pdf_unparsed_visual_pages: list[int] = field(default_factory=list)
+    pdf_table_detection_failed_pages: list[int] = field(default_factory=list)
+    # OCR 页码统一为 1-based；区域 bbox 仍使用 PDF 页面坐标。
+    ocr_required_pages: list[int] = field(default_factory=list)
+    ocr_required_regions: list[dict] = field(default_factory=list)
+    ocr_failed_page_numbers: list[int] = field(default_factory=list)
+    ocr_failed_regions: list[dict] = field(default_factory=list)
     # 解析器明确识别出的文档标题；不从普通章节标题兜底推断。
     document_title: str = ""
     document_title_node: DocumentNode | None = None
+    # PDF 页面级审计：纯空白页不计为丢页；有可见内容但无 AST 内容的页需拦截。
+    pdf_blank_pages: list[int] = field(default_factory=list)
+    pdf_unparsed_content_pages: list[int] = field(default_factory=list)
+    pdf_vector_text_suspect_pages: list[int] = field(default_factory=list)
+    pdf_layout_fallback_pages: list[int] = field(default_factory=list)
+    # 独立调用 PDF 原生文字提取与 AST 页内容对账；扫描/OCR 页明确标为未验证。
+    pdf_source_text_audit: dict = field(default_factory=dict)
 
 
 def walk(node: DocumentNode) -> Iterator[DocumentNode]:

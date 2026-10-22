@@ -17,6 +17,7 @@ from backend.rag.authz import (
     readable_kb_ids,
     retrieval_authorized_kbs,
 )
+from backend.config import knowledge_base as kb_config
 from backend.security.principal import Principal
 
 
@@ -164,6 +165,31 @@ def test_manage_denied_for_foreign_dept_doc():
            "permission_scope": "general"}
     ok, _ = authz.can_manage_row(doc)
     assert not ok
+
+
+def test_multi_department_kb_options_use_only_enabled_departments(monkeypatch):
+    """一个 KB 可关联多部门；停用部门不再成为上传选项。"""
+    monkeypatch.setattr(kb_config, "get_knowledge_bases", lambda **_kwargs: {
+        "shared_policy": {
+            "name": "共享制度库",
+            "domain": "policy",
+            "owner_depts": ["hr", "finance"],
+        },
+    })
+
+    items = kb_config.get_kb_list([
+        {"id": "hr", "label": "人事部", "active": True},
+        {"id": "finance", "label": "财务部", "active": False},
+        {"id": "warehouse", "label": "仓储部", "active": True},
+    ])
+
+    assert items[0]["depts"] == [{"id": "hr", "label": "人事部"}]
+    assert kb_config.validate_kb_dept(
+        "shared_policy", "hr", active_departments={"hr"}
+    )
+    assert not kb_config.validate_kb_dept(
+        "shared_policy", "finance", active_departments={"hr"}
+    )
 
 
 # ── fail-closed 与未声明主体 ──

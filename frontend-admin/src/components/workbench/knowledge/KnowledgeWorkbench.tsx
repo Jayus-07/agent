@@ -16,7 +16,7 @@ const TABS = [
   { id: 'failures', label: '入库失败' },
   { id: 'keywords', label: '词库' },
   { id: 'operations', label: '操作日志' },
-  { id: 'authority', label: '授权盘点' },
+  { id: 'authority', label: '知识库管理' },
 ] as const satisfies readonly WorkbenchTab<'documents' | 'pending' | 'failures' | 'keywords' | 'operations' | 'authority'>[]
 
 const TAB_IDS = TABS.map((tab) => tab.id) as readonly ('documents' | 'pending' | 'failures' | 'keywords' | 'operations' | 'authority')[]

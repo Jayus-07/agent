@@ -27,8 +27,14 @@ _PARSERS = {
 PARSABLE_EXTS: frozenset[str] = frozenset(_PARSERS.keys())
 
 
-def parse_file(file_path: str) -> DocumentAST:
+def parse_file(
+    file_path: str, *, ocr_page_budget: int | None = None,
+) -> DocumentAST:
     """按扩展名分发解析器，未知扩展回退 TxtParser。"""
     ext = os.path.splitext(file_path)[1].lower()
     parser_cls = _PARSERS.get(ext, TxtParser)
+    if ext == ".pdf" and ocr_page_budget is not None:
+        return parser_cls().parse(
+            file_path, ocr_page_budget=ocr_page_budget,
+        )
     return parser_cls().parse(file_path)

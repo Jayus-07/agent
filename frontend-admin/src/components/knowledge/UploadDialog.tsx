@@ -5,6 +5,7 @@ import { Upload, Loader2, CheckCircle2, XCircle, FileText, AlertCircle, ChevronD
 import { knowledgeService } from '@/api/knowledge'
 import { fetchRaw, randomId } from '@/api/client'
 import { useToast } from '@/components/shared/Toast'
+import { atLeast } from '@/lib/auth'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
@@ -63,25 +64,59 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const backgroundReceiptShownRef = useRef(false)
   const [selectedKbId, setSelectedKbId] = useState('policy_general')
   const [selectedDept, setSelectedDept] = useState('general')
+  const [ocrPageBudget, setOcrPageBudget] = useState('')
+  const [canOverrideOcrBudget, setCanOverrideOcrBudget] = useState(false)
   const [kbList, setKbList] = useState<{ id: string; name: string; depts: { id: string; label: string }[] }[]>([])
 
   // 加载 KB 列表
   useEffect(() => {
     if (!open) return
+    setCanOverrideOcrBudget(atLeast('admin'))
+    setOcrPageBudget('')
+    setError('')
     fetchRaw('/api/rag/knowledge-bases')
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) {
+          const payload = await r.json().catch(() => null)
+          throw new Error(payload?.detail || `知识库列表加载失败（HTTP ${r.status}）`)
+        }
+        return r.json()
+      })
       .then(d => {
         const kbs = d.knowledge_bases || []
         setKbList(kbs)
-        if (kbs.length > 0 && !kbs.find((k: any) => k.id === selectedKbId)) {
-          setSelectedKbId(kbs[0].id)
-          setSelectedDept(kbs[0].depts?.[0]?.id || 'general')
-        }
+        const target = kbs.find((k: any) => k.id === selectedKbId)
+          || kbs.find((k: any) => k.id === 'policy_general')
+          || kbs[0]
+        setSelectedKbId(target?.id || '')
+        setSelectedDept((previous: string) =>
+          target?.depts?.some((dept: { id: string }) => dept.id === previous)
+            ? previous
+            : target?.depts?.[0]?.id || '',
+        )
       })
-      .catch(() => {})
+      .catch(loadError => {
+        setKbList([])
+        setSelectedKbId('')
+        setSelectedDept('')
+        setError(loadError instanceof Error ? loadError.message : '知识库列表加载失败')
+      })
   }, [open])
 
   const currentKb = kbList.find(k => k.id === selectedKbId)
+  const departmentOptions = currentKb?.depts || []
+  const validUploadSelection = Boolean(
+    currentKb && departmentOptions.some(dept => dept.id === selectedDept),
+  )
+
+  useEffect(() => {
+    const options = kbList.find(kb => kb.id === selectedKbId)?.depts || []
+    setSelectedDept(previous =>
+      options.some(dept => dept.id === previous)
+        ? previous
+        : options[0]?.id || '',
+    )
+  }, [selectedKbId, kbList])
 
   // 轮询 RAG 就绪状态
   useEffect(() => {
@@ -118,6 +153,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setError('')
     setReports([])
     setAggregatedExpanded(true)
+    setOcrPageBudget('')
     onClose()
   }
 
@@ -131,6 +167,10 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
 
   const handleUpload = async () => {
     if (!files.length) return
+    if (!validUploadSelection) {
+      setError('当前知识库没有可用部门，请刷新知识库列表或联系管理员')
+      return
+    }
     setUploading(true)
     setError('')
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
@@ -162,7 +202,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             backgroundReceiptShownRef.current = true
             toast.success(`后台任务已受理：${receipt.filename}（${receipt.upload_id}）`)
           }
-        })
+        }, ocrPageBudget ? Number(ocrPageBudget) : undefined)
 
         if (res.duplicate) {
           // 终态 stage_elapsed（后端传）优先；前端兜底仍按 SSE 间隔法
@@ -254,13 +294,23 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           <div className="space-y-3 mb-4">
             {/* KB + 部门选择 */}
             <div className="flex gap-2">
-              <select value={selectedKbId} onChange={e => { setSelectedKbId(e.target.value); const kb = kbList.find(k => k.id === e.target.value); if (kb?.depts[0]) setSelectedDept(kb.depts[0].id) }}
-                className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none">
+              <select value={selectedKbId} disabled={!kbList.length || uploading}
+                onChange={e => {
+                  const nextId = e.target.value
+                  const nextKb = kbList.find(k => k.id === nextId)
+                  setSelectedKbId(nextId)
+                  setSelectedDept(previous => nextKb?.depts.some(dept => dept.id === previous)
+                    ? previous
+                    : nextKb?.depts[0]?.id || '')
+                }}
+                className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none disabled:opacity-60">
                 {kbList.map(kb => <option key={kb.id} value={kb.id}>{kb.name}</option>)}
               </select>
-              <select value={selectedDept} onChange={e => setSelectedDept(e.target.value)}
-                className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none">
-                {(currentKb?.depts || [{id:'general',label:'通用'}]).map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+              <select value={selectedDept} disabled={!departmentOptions.length || uploading}
+                onChange={e => setSelectedDept(e.target.value)}
+                className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none disabled:opacity-60">
+                {departmentOptions.map(d => <option key={d.id} value={d.id}>{d.label}</option>)}
+                {!departmentOptions.length && <option value="">暂无可用部门</option>}
               </select>
             </div>
 
@@ -295,6 +345,27 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+            {canOverrideOcrBudget && files.some(file => file.name.toLowerCase().endsWith('.pdf')) && (
+              <div className="rounded-lg border border-border-subtle bg-surface-elevated px-3 py-2.5">
+                <label htmlFor="upload-ocr-page-budget" className="block text-xs font-medium text-text-primary">
+                  PDF OCR 页数上限
+                </label>
+                <select
+                  id="upload-ocr-page-budget"
+                  value={ocrPageBudget}
+                  onChange={e => setOcrPageBudget(e.target.value)}
+                  className="mt-2 w-full rounded-md border border-border-subtle bg-surface-base px-2.5 py-2 text-xs text-text-primary outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                >
+                  <option value="">跟随服务端默认</option>
+                  <option value="200">200 页</option>
+                  <option value="300">300 页</option>
+                  <option value="500">500 页（最高）</option>
+                </select>
+                <p className="mt-1.5 text-[10px] leading-4 text-text-muted">
+                  只对本次 PDF 生效。页数越多，处理耗时和云端 OCR 用量可能越高；未识别页面仍会被质量门禁拦截。
+                </p>
               </div>
             )}
             {error && <div className="flex items-center gap-2 text-xs text-red-500"><AlertCircle size={13} /> {error}</div>}
@@ -389,7 +460,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               <button onClick={handleClose} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">
                 {uploading ? '转入后台' : '取消'}
               </button>
-              <button onClick={handleUpload} disabled={!files.length || uploading || ragReady === false}
+              <button onClick={handleUpload} disabled={!files.length || !validUploadSelection || uploading || ragReady === false}
                 className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors">
                 {ragReady === false ? '等待服务就绪…' : uploading ? '上传中...' : `上传并索引${files.length > 1 ? `（${files.length}）` : ''}`}
               </button>

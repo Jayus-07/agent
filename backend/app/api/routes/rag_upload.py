@@ -13,6 +13,7 @@ from backend.app.api.identity import require_principal, resolve_identity, resolv
 from backend.config.rag import (
     RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
     RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS, RAG_UPLOAD_PATH_GUARD,
+    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
 )
 from backend.config.rag import (
     RAG_MAX_CONCURRENT_INDEX,
@@ -99,6 +100,26 @@ LOCK_STALE_SECONDS = 30 * 60
 
 # 锁心跳间隔:持锁期间每 N 秒重写 .lock 时间戳。判死需 TTL >> 该值。
 LOCK_HEARTBEAT_SECONDS = 60.0
+
+
+def _validate_ocr_page_budget(
+    *, is_admin: bool, ext: str, budget: int | None,
+) -> None:
+    """校验可选的管理员单次 PDF OCR 预算覆盖。"""
+    if budget is None:
+        return
+    if not is_admin:
+        raise HTTPException(status_code=403, detail="提高单次 OCR 页预算仅限管理员")
+    if ext != "pdf":
+        raise HTTPException(status_code=422, detail="OCR 页预算只适用于 PDF 文件")
+    if not 1 <= budget <= RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "OCR 页预算必须在 1 到 "
+                f"{RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT} 页之间"
+            ),
+        )
 
 
 def _lock_age_seconds(lock_path: str) -> float | None:
@@ -466,14 +487,15 @@ def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
 @router.post("/upload", dependencies=[Depends(require_rag_editor)])
 async def upload_document(request: Request, file: UploadFile = File(...),
                           kb_id: str = Form(...),
-                          department: str = Form(...)):
+                          department: str = Form(...),
+                          ocr_page_budget: int | None = Form(None)):
     """P0-1 流式上传: 临时文件 + atomic rename + 双保险大小限制 + SSE 进度"""
     require_rag_ready()
     # 归属裁决（2026-10-01 权限收口）：department 只认主体自身部门（admin 可
     # 代传任意合法部门），KB 必须 ∈ 主体可见集；请求体自报部门不再单独放行。
     principal = resolve_principal(request)
     try:
-        authz = RagAuthorization.build(principal)
+        authz = await asyncio.to_thread(RagAuthorization.build, principal)
     except RagAuthorizationError as e:
         logger.warning(f"[RAG] 上传授权失败: {e}")
         from fastapi.responses import JSONResponse
@@ -489,6 +511,9 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     )
 
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    _validate_ocr_page_budget(
+        is_admin=authz.is_admin, ext=ext, budget=ocr_page_budget,
+    )
     ok, err = _validate_mime(ext, file.content_type)
     if not ok:
         return {"ok": False, "error": err}
@@ -534,6 +559,8 @@ async def upload_document(request: Request, file: UploadFile = File(...),
         "actor_id": identity.user_id, "tenant_id": identity.tenant_id,
         "was_overwrite": result.get("was_overwrite", False),
     }
+    if ocr_page_budget is not None:
+        task_kwargs["ocr_page_budget"] = ocr_page_budget
     pre_dispatched = None
     if identity.tenant_id and identity.user_id:
         try:
@@ -1534,7 +1561,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
                    staging_path: str = "",
                    generation: str = "",
                    file_hash: str = "",
-                   tenant_id: str = ""):
+                   tenant_id: str = "",
+                   ocr_page_budget: int | None = None):
     """候选模式索引（B 阶段）：解析→向量→BM25 全部落在 generation 隔离层，
     发布协议统一提交；任何阶段失败旧版保持可读可检索。
 
@@ -1681,6 +1709,8 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
         processing_task_id=upload_id,
         processing_batch_id=batch_id,
         tenant_id=tenant_id,
+        **({"ocr_page_budget": ocr_page_budget}
+           if ocr_page_budget is not None else {}),
     )
     try:
         index_result = indexer.index_candidate(
@@ -1980,7 +2010,7 @@ async def stream_upload_progress(upload_id: str, request: Request):
       入队成功后无缝切换 Redis 轮询（携带 last_sig 去重）。
       入队失败回退本机索引时标记不会出现，全程队列模式。
     """
-    if not _ensure_progress_owner(request, upload_id):
+    if not await asyncio.to_thread(_ensure_progress_owner, request, upload_id):
         # 统一「不存在或已过期」：不区分「无权」与「不存在」，不泄露存在性
         async def forbidden():
             yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})

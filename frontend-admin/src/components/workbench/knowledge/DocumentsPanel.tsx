@@ -67,6 +67,7 @@ export default function DocumentsPanel() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
   // 批量操作
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [batchReindexing, setBatchReindexing] = useState(false)
@@ -119,16 +120,31 @@ export default function DocumentsPanel() {
   }, [page, keyword, status, type, kbId, dept])
 
   const handleDelete = async () => {
-    if (!deleteTarget) return
+    if (!deleteTarget || deletePending) return
     const { id, name } = deleteTarget
-    setDeleteTarget(null)
-    // #21：补 try/catch + toast——此前失败成 unhandled rejection，无提示、不刷新
+    setDeletePending(true)
     try {
-      await knowledgeService.deleteDocument(id)
-      toast.success(`已删除「${name}」`)
+      const result = await knowledgeService.deleteDocument(id)
+      if (result?.ok === true) {
+        if (result.degraded || result.warnings?.length) {
+          const detail = result.warnings?.length ? `：${result.warnings.join('；')}` : ''
+          toast.warning(`已删除「${name}」，但部分清理未完成${detail}`)
+        } else {
+          toast.success(`已删除「${name}」`)
+        }
+      } else if (result?.operation_state === 'unknown') {
+        toast.warning(`「${name}」删除状态暂未确认。列表已刷新，请核对文档是否仍存在后再决定是否重试。${result.error ? `（${result.error}）` : ''}`)
+      } else {
+        toast.error(`删除「${name}」失败：${result?.error || '服务端拒绝删除请求'}`)
+      }
+      setDeleteTarget(null)
       refresh()
     } catch (err) {
       toast.error(`删除「${name}」失败：${err instanceof Error ? err.message : '未知错误'}`)
+      setDeleteTarget(null)
+      refresh()
+    } finally {
+      setDeletePending(false)
     }
   }
 
@@ -246,8 +262,20 @@ export default function DocumentsPanel() {
     setBatchDeleting(true)
     try {
       const result = await knowledgeService.batchDelete(docs)
-      if (result.failed.length > 0) {
-        toast.error(`${result.ok} 篇已删除，${result.failed.length} 篇失败：${result.failed.map((f: { name: string; error: string }) => `${f.name}(${f.error})`).join('；')}`)
+      const unknown = result.unknown || []
+      if (result.failed.length > 0 || unknown.length > 0) {
+        const failedText = result.failed.length
+          ? `${result.failed.length} 篇失败：${result.failed.map((f: { name: string; error: string }) => `${f.name}(${f.error})`).join('；')}`
+          : ''
+        const unknownText = unknown.length
+          ? `${unknown.length} 篇状态未确认：${unknown.map((f: { name: string; error: string }) => `${f.name}(${f.error})`).join('；')}`
+          : ''
+        const parts = [failedText, unknownText].filter(Boolean).join('；')
+        if (unknown.length > 0 && result.failed.length === 0) {
+          toast.warning(`${result.ok} 篇已删除；${parts}。列表已刷新，请核对后再决定是否重试`)
+        } else {
+          toast.error(`${result.ok} 篇已删除；${parts}`)
+        }
       } else if (result.warnings.length > 0) {
         const wText = result.warnings.map((w: { name: string; warnings: string[] }) => `${w.name}: ${w.warnings.join(', ')}`).join('；')
         toast.warning(`已删除 ${result.ok} 篇（部分清理异常：${wText}）`)
@@ -514,7 +542,7 @@ export default function DocumentsPanel() {
 
     {/* 删除确认对话框 */}
     {deleteTarget && (
-      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => setDeleteTarget(null)}>
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm" onClick={() => !deletePending && setDeleteTarget(null)}>
         <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[400px] p-6" onClick={e => e.stopPropagation()}>
           <h3 className="text-sm font-semibold text-text-primary mb-2">确认删除</h3>
           <p className="text-xs text-text-muted mb-4">
@@ -522,8 +550,11 @@ export default function DocumentsPanel() {
             <br />该操作不可恢复，文档将从知识库中移除。
           </p>
           <div className="flex justify-end gap-2">
-            <button onClick={() => setDeleteTarget(null)} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors">取消</button>
-            <button onClick={handleDelete} className="px-4 py-2 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors">删除</button>
+            <button onClick={() => setDeleteTarget(null)} disabled={deletePending} className="px-4 py-2 text-xs rounded-lg border border-border-subtle text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50">取消</button>
+            <button onClick={handleDelete} disabled={deletePending} className="inline-flex items-center gap-1.5 px-4 py-2 text-xs rounded-lg bg-red-500 text-white hover:bg-red-600 transition-colors disabled:opacity-70">
+              {deletePending && <Loader2 size={12} className="animate-spin" />}
+              {deletePending ? '正在删除…' : '删除'}
+            </button>
           </div>
         </div>
       </div>

@@ -11,6 +11,7 @@ POST /rag/pending/{doc_id}/approve（代次发布语义）。
 """
 
 from datetime import date as _date
+import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -43,14 +44,14 @@ def _get_lifecycle_service() -> KnowledgeLifecycleService:
     return _service
 
 
-def _require_authz(request: Request):
+async def _require_authz(request: Request):
     """与 rag_documents 同口径的路由级授权（fail-closed，403 不降级）。"""
     from backend.app.api.identity import require_principal
     from backend.rag.authz import RagAuthorization, RagAuthorizationError
 
     principal = require_principal(request)
     try:
-        return RagAuthorization.build(principal), principal
+        return await asyncio.to_thread(RagAuthorization.build, principal), principal
     except RagAuthorizationError as e:
         logger.error(f"[RAG] 授权失败: {e}")
         raise HTTPException(status_code=403, detail="授权服务暂不可用，已拒绝操作")
@@ -65,9 +66,9 @@ def _actor_of(principal) -> str:
     return f"{principal.subject_type}:{principal.user_id or 'anonymous'}"
 
 
-def _check_manageable(request: Request, doc_id: str):
+async def _check_manageable(request: Request, doc_id: str):
     """归属校验 + 返回 (doc, actor, source)；文档不存在/越权统一在此拦截。"""
-    authz, principal = _require_authz(request)
+    authz, principal = await _require_authz(request)
     doc = _get_registry().get_by_doc_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
@@ -98,7 +99,7 @@ async def transition_lifecycle(doc_id: str, body: LifecycleTransitionRequest, re
     active→pending_review（改版回审）。其余（含一切 →active 直跳、
     →deleted 裸切）一律 422 拒绝并说明原因。
     """
-    doc, deny, ctx = _check_manageable(request, doc_id)
+    doc, deny, ctx = await _check_manageable(request, doc_id)
     if deny is not None:
         return deny
     actor, source, tenant_id = ctx
@@ -127,7 +128,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
     到期知识的检索过滤在 rag 检索链内实时生效（hybrid._pending_review_doc_ids
     并入 list_expired 结果，60s 进程内缓存）。
     """
-    doc, deny, ctx = _check_manageable(request, doc_id)
+    doc, deny, ctx = await _check_manageable(request, doc_id)
     if deny is not None:
         return deny
     actor, source, tenant_id = ctx
@@ -158,7 +159,7 @@ async def set_expire_at(doc_id: str, body: ExpireAtRequest, request: Request):
 @router.get("/knowledge/{doc_id}/lifecycle/events")
 async def list_lifecycle_events(doc_id: str, request: Request):
     """流转审计查询（含 doc 不存在与越权的统一不可见语义）。"""
-    authz, _principal = _require_authz(request)
+    authz, _principal = await _require_authz(request)
     doc = _get_registry().get_by_doc_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")

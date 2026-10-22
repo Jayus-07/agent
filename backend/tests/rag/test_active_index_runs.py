@@ -87,14 +87,16 @@ def test_list_operations_scopes_admin_active_runs_to_own_tenant(monkeypatch):
         kb_scope=frozenset(),
         can_manage_row=lambda _row: (True, ""),
     )
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: authz)
-
     logger_args = {}
 
     def list_operations(**kwargs):
         logger_args.update(kwargs)
         return {"items": [], "total": 0}
 
+    async def _require_authz(_request):
+        return authz
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     monkeypatch.setattr(
         rag_documents,
         "_get_op_logger",
@@ -135,7 +137,10 @@ def test_list_operations_passes_resource_scope_to_terminal_log_query(monkeypatch
         ),
         kb_scope=frozenset({"kb-hr"}),
     )
-    monkeypatch.setattr(rag_documents, "_require_authz", lambda _request: authz)
+    async def _require_authz(_request):
+        return authz
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _require_authz)
     captured = {}
     monkeypatch.setattr(
         rag_documents,

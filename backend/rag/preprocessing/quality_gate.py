@@ -25,7 +25,7 @@ from backend.rag.preprocessing.ast import LEAF_TYPES, DocumentAST, walk
 from backend.rag.preprocessing.redaction import mask_sensitive_text
 from backend.shared.logger import logger
 
-QUALITY_RECORD_SCHEMA_VERSION = "1.0"
+QUALITY_RECORD_SCHEMA_VERSION = "1.1"
 QUALITY_SCORE_BASE = 100
 QUALITY_SCORE_HARD_DEDUCTION = 40
 QUALITY_SCORE_WARN_DEDUCTION = 10
@@ -49,6 +49,9 @@ _VALUE_PATTERNS: dict[str, re.Pattern] = {
     "date": re.compile(r"\d{4}[-/年]\d{1,2}[-/月]\d{1,2}"),
     "number": re.compile(r"\d{4,}(?:\.\d+)?"),  # 长数字串（编号/金额数值部分）
 }
+_LEGAL_CLAUSE_MARKER_RE = re.compile(
+    r"(?m)^[ \t]*(第[零〇两一二三四五六七八九十百千万\d]+条)"
+)
 
 
 def _content_hash(text: str) -> str:
@@ -179,6 +182,61 @@ def audit_chunk_integrity(chunks: list) -> dict[str, int]:
         "duplicate_chunk_id_count": duplicate_id_count,
         "parent_reference_count": parent_reference_count,
         "invalid_parent_reference_count": invalid_parent_reference_count,
+    }
+
+
+def audit_legal_chunk_boundaries(
+    raw_ast: DocumentAST, chunks: list, strategy_name: str,
+) -> dict[str, Any]:
+    """检查法律/制度条款是否跨 Leaf 合并或从输出中消失。
+
+    覆盖审计只验证原文字符是否出现在 Leaf 中；本审计独立核对行首条款编号，
+    防止“内容 100% 覆盖、但多个制度条款落在同一块”的语义假通过。
+    """
+    if "LegalChunkStrategy" not in str(strategy_name or ""):
+        return {"applicable": False, "passed": True}
+
+    source_text = raw_ast.raw_text or ""
+    if not source_text.strip():
+        source_text = "\n".join(
+            node.text for node in walk(raw_ast.root)
+            if node.type in LEAF_TYPES or node.type == "section"
+        )
+    source_markers = list(dict.fromkeys(_LEGAL_CLAUSE_MARKER_RE.findall(source_text)))
+    if not source_markers:
+        return {
+            "applicable": False,
+            "passed": True,
+            "source_clause_count": 0,
+        }
+
+    observed: set[str] = set()
+    cross_boundary_chunks: list[str] = []
+    for index, chunk in enumerate(chunks):
+        metadata = getattr(chunk, "metadata", None) or {}
+        if metadata.get("granularity") == "parent":
+            continue
+        content = str(getattr(chunk, "page_content", "") or "")
+        markers = set(_LEGAL_CLAUSE_MARKER_RE.findall(content))
+        title_markers = _LEGAL_CLAUSE_MARKER_RE.findall(
+            str(metadata.get("section_title") or "")
+        )
+        markers.update(title_markers)
+        observed.update(markers)
+        if len(markers) > 1:
+            cross_boundary_chunks.append(
+                str(metadata.get("chunk_id") or f"leaf_{index}")
+            )
+
+    missing = [marker for marker in source_markers if marker not in observed]
+    return {
+        "applicable": True,
+        "passed": not cross_boundary_chunks and not missing,
+        "source_clause_count": len(source_markers),
+        "observed_clause_count": len(observed),
+        "cross_boundary_chunk_count": len(cross_boundary_chunks),
+        "cross_boundary_chunk_ids": cross_boundary_chunks[:20],
+        "missing_source_clauses": missing[:20],
     }
 
 
@@ -392,6 +450,19 @@ def build_quality_record(
     if coverage_record is not None and coverage_record.get("sampled"):
         # 抽样审计没有全量覆盖率；不接受调用方传入的 100% 数值。
         coverage_record["coverage_rate"] = None
+    source_text_audit = getattr(raw_ast, "pdf_source_text_audit", {}) or {}
+    if not isinstance(source_text_audit, dict):
+        source_text_audit = {}
+    source_coverage_rate = source_text_audit.get("coverage_rate")
+    source_coverage_status = str(source_text_audit.get("status") or "")
+    reported_coverage = (
+        getattr(completeness, "content_coverage", None)
+        if completeness is not None else None
+    )
+    observed_coverage = (
+        getattr(completeness, "content_coverage_observed", None)
+        if completeness is not None else None
+    )
 
     record: dict = {
         "schema_version": QUALITY_RECORD_SCHEMA_VERSION,
@@ -406,6 +477,35 @@ def build_quality_record(
         "doc_type": doc_type,
         "chunking_strategy": strategy_name,
         "completeness": getattr(completeness, "completeness", None) if completeness is not None else None,
+        "quality_metrics": {
+            "structure_confidence": (
+                getattr(completeness, "structural_confidence", None)
+                if getattr(completeness, "structural_confidence", None) is not None
+                else getattr(completeness, "completeness", None)
+            ) if completeness is not None else None,
+            "content_coverage": (
+                (reported_coverage if reported_coverage is not None
+                 else source_coverage_rate)
+                if source_coverage_status == "complete"
+                else None
+            ),
+            "content_coverage_observed": (
+                observed_coverage if observed_coverage is not None
+                else source_coverage_rate
+            ),
+            "content_coverage_scope": (
+                getattr(completeness, "content_coverage_scope", "")
+                or (
+                    source_text_audit.get("scope", "")
+                )
+            ),
+            "content_coverage_status": (
+                getattr(completeness, "content_coverage_status", "")
+                or source_coverage_status
+            ),
+            # 当前没有独立语义评估器；None 表示未测量，不能以结构分代替。
+            "semantic_quality": getattr(completeness, "semantic_quality", None),
+        },
         # §5.1 解析统计
         "parsing": {
             "node_count": len(node_summaries),
@@ -425,12 +525,58 @@ def build_quality_record(
             },
             "ocr_triggered": ocr_triggered,
             "ocr_pages": ocr_pages,
+            "ocr_page_budget": int(getattr(raw_ast, "ocr_page_budget", 0) or 0),
+            "ocr_page_budget_source": str(
+                getattr(raw_ast, "ocr_page_budget_source", "default") or "default"
+            ),
+            "ocr_required": bool(getattr(raw_ast, "ocr_required", False)),
+            "ocr_attempted": bool(getattr(raw_ast, "ocr_attempted", False)),
+            "ocr_required_pages": list(
+                getattr(raw_ast, "ocr_required_pages", []) or []
+            ),
+            "ocr_required_regions": list(
+                getattr(raw_ast, "ocr_required_regions", []) or []
+            ),
+            "ocr_failed_page_numbers": list(
+                getattr(raw_ast, "ocr_failed_page_numbers", []) or []
+            ),
+            "ocr_failed_regions": list(
+                getattr(raw_ast, "ocr_failed_regions", []) or []
+            ),
+            "parse_status": str(getattr(raw_ast, "parse_status", "complete") or "complete"),
+            "parse_issues": list(getattr(raw_ast, "parse_issues", []) or []),
             "pdf_page_count": int(getattr(raw_ast, "pdf_page_count", 0) or 0),
             "pdf_pages_with_content": int(
                 getattr(raw_ast, "pdf_pages_with_content", 0) or 0
             ),
             "pdf_skipped_pages": int(
                 getattr(raw_ast, "pdf_skipped_pages", 0) or 0
+            ),
+            "pdf_skipped_page_numbers": list(
+                getattr(raw_ast, "pdf_skipped_page_numbers", []) or []
+            ),
+            "pdf_blank_pages": list(
+                getattr(raw_ast, "pdf_blank_pages", []) or []
+            ),
+            "pdf_unparsed_content_pages": list(
+                getattr(raw_ast, "pdf_unparsed_content_pages", []) or []
+            ),
+            "pdf_vector_text_suspect_pages": list(
+                getattr(raw_ast, "pdf_vector_text_suspect_pages", []) or []
+            ),
+            "pdf_layout_fallback_pages": list(
+                getattr(raw_ast, "pdf_layout_fallback_pages", []) or []
+            ),
+            "pdf_source_text_audit": dict(
+                source_text_audit
+            ),
+            "pdf_image_count": int(getattr(raw_ast, "pdf_image_count", 0) or 0),
+            "pdf_image_pages": list(getattr(raw_ast, "pdf_image_pages", []) or []),
+            "pdf_unparsed_visual_pages": list(
+                getattr(raw_ast, "pdf_unparsed_visual_pages", []) or []
+            ),
+            "pdf_table_detection_failed_pages": list(
+                getattr(raw_ast, "pdf_table_detection_failed_pages", []) or []
             ),
             "pdf_repaired": bool(getattr(raw_ast, "pdf_repaired", False)),
             "degraded": degraded,
@@ -457,6 +603,9 @@ def build_quality_record(
             "filtered_reasons": reason_breakdown,
         },
         "chunk_integrity": audit_chunk_integrity(chunks),
+        "semantic_boundaries": audit_legal_chunk_boundaries(
+            raw_ast, chunks, strategy_name,
+        ),
         # P0（2026-10-19 faq_only.docx 实证）：答案证据资格审计——虚拟 parent
         # 内容为纯问题列表（无答案）时记 warn（检索侧已默认过滤独立 parent
         # 召回，此记录用于质量面可观测），不阻断入库
@@ -569,6 +718,50 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
                 int(chunk_integrity.get("parent_reference_count") or 0),
             ),
         )
+
+    semantic_boundaries = record.get("semantic_boundaries") or {}
+    if semantic_boundaries.get("applicable"):
+        _check(
+            "legal_clause_boundaries",
+            bool(semantic_boundaries.get("passed")),
+            (
+                f"源条款 {semantic_boundaries.get('source_clause_count', 0)} 条，"
+                f"输出识别 {semantic_boundaries.get('observed_clause_count', 0)} 条，"
+                f"跨条款 Leaf {semantic_boundaries.get('cross_boundary_chunk_count', 0)} 个，"
+                f"缺失条款 {semantic_boundaries.get('missing_source_clauses', [])}"
+            ),
+        )
+
+    for issue in parsing.get("parse_issues", []) or []:
+        if not isinstance(issue, dict):
+            _check("parser_issue_record_invalid", False, "解析器问题记录格式错误")
+            continue
+        code = str(issue.get("code") or "parser_issue")
+        if code in {
+            "pdf_ocr_unavailable", "pdf_ocr_failed", "pdf_ocr_page_limit",
+        }:
+            # OCR 覆盖统一由下方 ocr_coverage_partial 聚合为一个硬异常；
+            # 详细页码保留在 parsing.parse_issues，避免质量分重复扣分。
+            continue
+        severity = str(issue.get("severity") or "warn").lower()
+        if severity == "info":
+            detail = str(issue.get("detail") or "解析器记录了额外内容")
+            pages = issue.get("page_numbers") or []
+            if pages:
+                detail += f"；页码={pages[:20]}"
+            checks.append({
+                "check": f"parser_{code}", "pass": True, "detail": detail,
+            })
+            continue
+        severity = "error" if severity in {"error", "hard"} else "warn"
+        pages = issue.get("page_numbers") or []
+        detail = str(issue.get("detail") or "解析器报告了未完成或降级内容")
+        if pages:
+            detail += f"；页码={pages[:20]}"
+        regions = issue.get("regions") or []
+        if regions:
+            detail += f"；区域定位={regions[:20]}"
+        _check(f"parser_{code}", False, detail, severity=severity)
 
     cleaning_coverage = record.get("cleaning_coverage")
     if cleaning_coverage is not None:
@@ -736,12 +929,19 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
         })
     ocr_limit = getattr(raw_ast, "ocr_page_limit", 0) or 0
     ocr_failed = getattr(raw_ast, "ocr_failed_pages", 0) or 0
-    if ocr_limit or ocr_failed:
+    ocr_required = bool(getattr(raw_ast, "ocr_required", False))
+    ocr_attempted = bool(getattr(raw_ast, "ocr_attempted", False))
+    if ocr_limit or ocr_failed or (ocr_required and not ocr_attempted):
+        unavailable = ocr_required and not ocr_attempted
         anomalies.append({
             "check": "ocr_coverage_partial", "severity": "error",
             "detail": (
-                f"OCR 覆盖不完整：页数上限 {ocr_limit or '∞'}，"
+                ("OCR 所需页面未执行识别（当前供应商不可用或未配置）；" if unavailable else "")
+                + f"页预算 {int(getattr(raw_ast, 'ocr_page_budget', 0) or 0)} 页"
+                f"（来源 {getattr(raw_ast, 'ocr_page_budget_source', 'default')}），"
+                f"上限遗漏 {ocr_limit or 0} 页，"
                 f"失败页 {ocr_failed}，实际产出 {parsing['ocr_pages']} 页；"
+                f"失败页码 {getattr(raw_ast, 'ocr_failed_page_numbers', [])}；"
                 "不允许以部分内容 active"
             ),
         })
@@ -750,16 +950,27 @@ def run_typed_validation(record: dict, raw_ast: DocumentAST) -> list[dict]:
         getattr(raw_ast, "pdf_pages_with_content", 0) or 0
     )
     pdf_skipped_pages = int(getattr(raw_ast, "pdf_skipped_pages", 0) or 0)
-    pdf_repaired = bool(getattr(raw_ast, "pdf_repaired", False))
-    if pdf_page_count and (pdf_skipped_pages or pdf_repaired):
-        missing_pages = max(0, pdf_page_count - pdf_pages_with_content)
-        allowed_missing = int(pdf_page_count * 0.01) if pdf_repaired else 0
-        if pdf_skipped_pages or missing_pages > allowed_missing:
+    if pdf_page_count:
+        blank_pages = {
+            int(page) for page in getattr(raw_ast, "pdf_blank_pages", []) or []
+            if isinstance(page, int) and 1 <= page <= pdf_page_count
+        }
+        parsed_page_numbers = {
+            int(getattr(node, "page_number", 0) or 0)
+            for node in walk(raw_ast.root)
+            if getattr(node, "page_number", 0)
+        }
+        missing_page_numbers = sorted(
+            set(range(1, pdf_page_count + 1)) - blank_pages - parsed_page_numbers
+        )
+        if pdf_skipped_pages or missing_page_numbers:
             anomalies.append({
                 "check": "pdf_page_coverage", "severity": "error",
                 "detail": (
-                    f"PDF 结构修复/解析跳页后仅 {pdf_pages_with_content}/"
-                    f"{pdf_page_count} 页有正文或表格，跳过 {pdf_skipped_pages} 页；"
+                    f"PDF 共 {pdf_page_count} 页，识别真实空白页 {len(blank_pages)} 页，"
+                    f"有内容页 {pdf_pages_with_content} 页；未映射页码 {missing_page_numbers[:50]}，"
+                    f"解析跳页 {pdf_skipped_pages} 页"
+                    f"（页码 {getattr(raw_ast, 'pdf_skipped_page_numbers', [])}）；"
                     "拒绝将不完整 PDF 标记为 active"
                 ),
             })

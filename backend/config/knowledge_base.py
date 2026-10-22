@@ -49,6 +49,29 @@ KNOWLEDGE_BASES: Dict[str, dict] = {
     # 内容对客输出（audience=customer）——介绍类语料无部门归属，owner 放开
     "travel":         {"name": "旅游知识库", "domain": "travel",       "owner_depts": ["all"], "audience": "customer"},
 }
+_BOOTSTRAP_KNOWLEDGE_BASES = KNOWLEDGE_BASES
+
+
+def get_knowledge_bases(*, include_inactive: bool = False) -> dict[str, dict]:
+    """读取持久化目录；静态表只用于迁移前兼容和初始数据基线。"""
+    # 保留测试和内部调用显式替换注册表的能力，不让它们触发数据库依赖。
+    if KNOWLEDGE_BASES is not _BOOTSTRAP_KNOWLEDGE_BASES:
+        return dict(KNOWLEDGE_BASES)
+    try:
+        from backend.rag.knowledge_base_store import list_knowledge_bases
+
+        return {
+            item["kb_id"]: item
+            for item in list_knowledge_bases(include_inactive=include_inactive)
+        }
+    except Exception as exc:
+        # 升级期间若迁移尚未创建新表，保留既有代码目录行为；数据库连接等
+        # 其他故障不回退，授权链必须 fail-closed。
+        original = getattr(exc, "orig", None)
+        sqlstate = getattr(original, "pgcode", None) or getattr(original, "sqlstate", None)
+        if sqlstate in {"42P01", "3F000"}:
+            return dict(_BOOTSTRAP_KNOWLEDGE_BASES)
+        raise
 
 
 def cross_kb_fallback_excluded() -> list[str]:
@@ -62,7 +85,7 @@ def cross_kb_fallback_excluded() -> list[str]:
     """
     if os.getenv("CROSS_KB_FALLBACK_EXCLUDE_TEST", "true").strip().lower() != "true":
         return []
-    return [kb_id for kb_id, info in KNOWLEDGE_BASES.items()
+    return [kb_id for kb_id, info in get_knowledge_bases().items()
             if info.get("audience") == "test"]
 
 
@@ -84,11 +107,11 @@ def authorized_kbs(subject_type: str, department: str = "") -> list[str] | None:
     主体属性在入口解析一次，下游只读。
     """
     if subject_type == "customer":
-        return [kb_id for kb_id, info in KNOWLEDGE_BASES.items()
+        return [kb_id for kb_id, info in get_knowledge_bases().items()
                 if info.get("audience") == "customer"]
     if subject_type == "employee":
         out: list[str] = []
-        for kb_id, info in KNOWLEDGE_BASES.items():
+        for kb_id, info in get_knowledge_bases().items():
             if info.get("audience") == "test":
                 continue
             depts = info.get("owner_depts", [])
@@ -121,28 +144,50 @@ DEPT_LABELS: Dict[str, str] = {
 }
 
 
-def validate_kb_dept(kb_id: str, department: str) -> bool:
+def validate_kb_dept(
+    kb_id: str,
+    department: str,
+    tenant_id: str = "",
+    active_departments: set[str] | frozenset[str] | None = None,
+) -> bool:
     """校验 kb_id 和 department 的组合是否允许。
-    owner_depts 含 "all" 表示该 KB 对所有部门开放。
+    owner_depts 含 "all" 表示该 KB 对所有启用部门开放；HTTP 上传还校验
+    当前可信租户的部门状态。
     """
-    kb = KNOWLEDGE_BASES.get(kb_id)
+    kb = get_knowledge_bases().get(kb_id)
     if kb is None:
         return False
     depts = kb.get("owner_depts", [])
+    active = set(active_departments) if active_departments is not None else None
+    if tenant_id and active is None:
+        from backend.rag.knowledge_base_store import list_active_departments
+
+        active = {item["id"] for item in list_active_departments(tenant_id)}
+    if active is not None and department not in active:
+        return False
     if "all" in depts:
-        return department in DEPARTMENTS
+        return department in (active if active is not None else DEPARTMENTS)
     return department in depts
 
 
-def get_kb_list() -> list[dict]:
-    """返回 KB 列表（供 API 使用），部门名已转为中文。"""
+def get_kb_list(departments: list[dict[str, str]] | None = None) -> list[dict]:
+    """返回知识库列表，部门选项使用调用方提供的当前租户启用部门。"""
     result = []
-    for kb_id, info in KNOWLEDGE_BASES.items():
-        dept_ids = info["owner_depts"]
-        if "all" in dept_ids:
-            dept_labels = [{"id": d, "label": DEPT_LABELS.get(d, d)} for d in DEPARTMENTS]
+    department_items = [
+        item for item in departments if item.get("active", True)
+    ] if departments is not None else [
+        {"id": d, "label": DEPT_LABELS.get(d, d)} for d in DEPARTMENTS
+    ]
+    for kb_id, info in get_knowledge_bases().items():
+        owners = info.get("owner_depts", [])
+        if "all" in owners:
+            dept_ids = {item["id"] for item in department_items}
         else:
-            dept_labels = [{"id": d, "label": DEPT_LABELS.get(d, d)} for d in dept_ids]
+            dept_ids = set(owners)
+        dept_labels = [
+            {"id": item["id"], "label": item["label"]}
+            for item in department_items if item["id"] in dept_ids
+        ]
         result.append({
             "id": kb_id,
             "name": info["name"],

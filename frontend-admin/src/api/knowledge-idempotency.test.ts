@@ -65,6 +65,19 @@ describe("knowledgeService 上传幂等接线", () => {
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
   });
 
+  it("管理员指定 PDF OCR 页预算时随本次上传发送", async () => {
+    const file = new File(["pdf"], "long-scan.pdf", { type: "application/pdf" });
+
+    await knowledgeService.uploadDocument(
+      file, undefined, undefined, "policy_general", "general", undefined, 200,
+    );
+
+    const [, options] = apiMock.mutationFetchRaw.mock.calls[0];
+    expect(options.body).toBeInstanceOf(FormData);
+    expect((options.body as FormData).get("ocr_page_budget")).toBe("200");
+    expect(options.dedupeKey).toContain("200");
+  });
+
   it("操作日志请求错误继续向调用方抛出", async () => {
     apiMock.request.mockRejectedValue(new Error("HTTP 503"));
 

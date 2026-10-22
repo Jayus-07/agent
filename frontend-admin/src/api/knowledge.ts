@@ -22,6 +22,54 @@ export interface ActiveUploadOperation {
 /** 操作日志里的 operation 字段类型 — /knowledge/operations 页筛选下拉依赖此类型 */
 export type OperationType = 'upload' | 'reindex' | 'delete' | ''
 
+export interface DeleteDocumentResult {
+  ok: boolean
+  error?: string
+  code?: string
+  operation_state?: 'success' | 'partial' | 'failed' | 'unknown'
+  degraded?: boolean
+  warnings?: string[] | null
+  [key: string]: any
+}
+
+function deleteErrorMessage(payload: any, status: number): string {
+  const detail = payload?.error ?? payload?.detail ?? payload?.message
+  if (typeof detail === 'string' && detail.trim()) return detail
+  if (detail && typeof detail === 'object') {
+    const nested = detail.error ?? detail.message
+    if (typeof nested === 'string' && nested.trim()) return nested
+  }
+  return `删除请求失败（HTTP ${status}）`
+}
+
+/** 统一处理删除 JSON 和 HTTP 状态，避免 200 + {ok:false} 被误当成功。 */
+export function normalizeDeleteDocumentResponse(
+  httpOk: boolean,
+  status: number,
+  payload: unknown,
+): DeleteDocumentResult {
+  const body = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload as Record<string, any>
+    : {}
+  const ok = httpOk && body.ok === true
+  const fallbackState = !httpOk && status >= 500 ? 'unknown' : 'failed'
+  const failureState = body.operation_state === 'unknown'
+    ? 'unknown'
+    : body.operation_state === 'partial'
+      ? 'partial'
+      : body.operation_state === 'failed'
+        ? 'failed'
+        : fallbackState
+  return {
+    ...body,
+    ok,
+    operation_state: ok
+      ? (body.operation_state || (body.degraded ? 'partial' : 'success'))
+      : failureState,
+    error: ok ? body.error : deleteErrorMessage(body, status),
+  }
+}
+
 const BASE = '/api/rag'
 
 import { createIdempotencyKey, fetchRaw, mutationFetchRaw, randomId, request } from '@/api/client'
@@ -96,16 +144,21 @@ export const knowledgeService: any = {
     kbId?: string,
     department?: string,
     onAccepted?: (receipt: { upload_id: string; filename: string }) => void,
+    ocrPageBudget?: number,
   ): Promise<{ ok: boolean; doc?: KnowledgeDoc; error?: string; duplicate?: boolean; trace_id?: string; stage_elapsed?: Record<string, number>; total_ms?: number }> => {
     const fd = new FormData()
     fd.append('file', file)
     if (kbId) fd.append('kb_id', kbId)
     if (department) fd.append('department', department)
+    if (ocrPageBudget && file.name.toLowerCase().endsWith('.pdf')) {
+      fd.append('ocr_page_budget', String(ocrPageBudget))
+    }
     const headers: Record<string, string> = {}
     if (batchId) headers['X-Batch-Id'] = batchId
     const idempotencyKey = createIdempotencyKey()
     const dedupeKey = [
       batchId || '', kbId || 'policy_general', department || 'general',
+      ocrPageBudget || 'server-default',
       file.name, file.size, file.lastModified,
     ].join(':')
 
@@ -258,8 +311,20 @@ export const knowledgeService: any = {
       })
   },
 
-  deleteDocument: (id: string) =>
-    fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
+  deleteDocument: async (id: string): Promise<DeleteDocumentResult> => {
+    try {
+      const response = await fetchRaw(`${BASE}/documents/${encodeURIComponent(id)}`, { method: 'DELETE' })
+      const payload = await response.json().catch(() => null)
+      return normalizeDeleteDocumentResponse(response.ok, response.status, payload)
+    } catch (error) {
+      return {
+        ok: false,
+        code: 'delete_transport_error',
+        operation_state: 'unknown',
+        error: error instanceof Error && error.message ? error.message : '网络连接中断，服务端未确认删除状态',
+      }
+    }
+  },
 
   // 重索引（2026-10-02 任务化）：响应即提交回执 {ok, async, joined, task_id}，
   // 终态/进度走 getReindexStatus 轮询；async=false = 同步降级路径（响应即终态）
@@ -290,26 +355,44 @@ export const knowledgeService: any = {
     return Promise.all(
       docs.map(async ({ id, name }) => {
         try {
-          const res = await fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
-          const r = await res.json()
-          return { id, name, ok: r.ok as boolean, error: r.error as string | undefined, warnings: r.warnings as string[] | undefined }
+          const res = await fetchRaw(`${BASE}/documents/${encodeURIComponent(id)}`, { method: 'DELETE', headers })
+          const payload = await res.json().catch(() => null)
+          const result = normalizeDeleteDocumentResponse(res.ok, res.status, payload)
+          return {
+            id,
+            name,
+            ok: result.ok,
+            error: result.error,
+            operation_state: result.operation_state,
+            warnings: result.warnings || undefined,
+          }
         } catch (e) {
-          return { id, name, ok: false, error: (e as Error).message || '网络错误', warnings: undefined }
+          return {
+            id,
+            name,
+            ok: false,
+            error: (e as Error).message || '网络连接中断，服务端未确认删除状态',
+            operation_state: 'unknown' as const,
+            warnings: undefined,
+          }
         }
       })
     ).then((results) => {
       let ok = 0
       const failed: { id: string; name: string; error: string }[] = []
+      const unknown: { id: string; name: string; error: string }[] = []
       const warnings: { id: string; name: string; warnings: string[] }[] = []
       for (const r of results) {
         if (r.ok) {
           ok++
           if (r.warnings?.length) warnings.push({ id: r.id, name: r.name, warnings: r.warnings })
+        } else if (r.operation_state === 'unknown') {
+          unknown.push({ id: r.id, name: r.name, error: r.error || '服务端未确认删除状态' })
         } else {
           failed.push({ id: r.id, name: r.name, error: r.error || '删除失败' })
         }
       }
-      return { ok, failed, warnings }
+      return { ok, failed, unknown, warnings }
     })
   },
 
@@ -353,9 +436,90 @@ export const knowledgeService: any = {
   getChunkDetail: (chunkId: string) =>
     fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
 }
-export interface KbAuthorityItem { kb_id: string; name: string; domain: string; owner_depts: string[]; audience: string; deprecated: boolean; read_only: boolean; alias_for?: string | null; doc_count: number }
-export interface KbAuthorityOverview { knowledge_bases: KbAuthorityItem[]; total: number }
+export interface KbAuthorityItem {
+  kb_id: string
+  name: string
+  domain: string
+  owner_depts: string[]
+  audience: 'internal' | 'customer' | 'test'
+  deprecated: boolean
+  read_only: boolean
+  alias_for?: string | null
+  active: boolean
+  version: number
+  doc_count: number
+}
+export interface KbAuthorityOverview {
+  knowledge_bases: KbAuthorityItem[]
+  departments: Array<{ id: string; label: string; active: boolean }>
+  total: number
+}
+export interface KbAuthorityWrite {
+  name: string
+  domain: string
+  owner_depts: string[]
+  audience: KbAuthorityItem['audience']
+}
 
-/** S2 知识库授权盘点（admin）——全量 KB 注册口径 + 文档计数 */
-export const listKbAuthority = (): Promise<KbAuthorityOverview> =>
-  fetchRaw(`${BASE}/kb-authority`).then(r => r.json())
+async function knowledgeBaseMutation<T>(
+  path: string,
+  method: 'POST' | 'PATCH' | 'DELETE',
+  body: Record<string, unknown>,
+  operation: string,
+): Promise<T> {
+  const response = await mutationFetchRaw(path, {
+    operation,
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    dedupeKey: JSON.stringify(body),
+  })
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    const detail = payload?.detail
+    throw new Error(typeof detail === 'string' ? detail : `知识库操作失败（HTTP ${response.status}）`)
+  }
+  return payload as T
+}
+
+/** 读取知识库目录，可包含已停用项。 */
+export const listKbAuthority = async (includeInactive = false): Promise<KbAuthorityOverview> => {
+  const query = includeInactive ? '?include_inactive=true' : ''
+  const response = await fetchRaw(`${BASE}/kb-authority${query}`)
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(payload?.detail || `知识库目录加载失败（HTTP ${response.status}）`)
+  return payload as KbAuthorityOverview
+}
+
+export const createKnowledgeBase = (kbId: string, body: KbAuthorityWrite) =>
+  knowledgeBaseMutation<KbAuthorityItem>(`${BASE}/knowledge-bases`, 'POST', {
+    kb_id: kbId,
+    ...body,
+  }, 'rag.knowledge-base.create')
+
+export const updateKnowledgeBase = (
+  kbId: string,
+  body: Partial<KbAuthorityWrite>,
+  version: number,
+) => knowledgeBaseMutation<KbAuthorityItem>(
+  `${BASE}/knowledge-bases/${encodeURIComponent(kbId)}`,
+  'PATCH',
+  { ...body, version },
+  'rag.knowledge-base.update',
+)
+
+export const deactivateKnowledgeBase = (kbId: string, version: number) =>
+  knowledgeBaseMutation<KbAuthorityItem>(
+    `${BASE}/knowledge-bases/${encodeURIComponent(kbId)}`,
+    'DELETE',
+    { version },
+    'rag.knowledge-base.deactivate',
+  )
+
+export const activateKnowledgeBase = (kbId: string, version: number) =>
+  knowledgeBaseMutation<KbAuthorityItem>(
+    `${BASE}/knowledge-bases/${encodeURIComponent(kbId)}/activate`,
+    'POST',
+    { version },
+    'rag.knowledge-base.activate',
+  )

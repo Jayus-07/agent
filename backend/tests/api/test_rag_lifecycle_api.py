@@ -52,6 +52,7 @@ class StubAuthz:
 class StubPrincipal:
     subject_type = "employee"
     user_id = "op1"
+    tenant_id = "tenant-a"
 
 
 class FakeCursor:
@@ -105,10 +106,10 @@ def client(monkeypatch):
         rag_lifecycle, "_get_lifecycle_service",
         lambda: KnowledgeLifecycleService(registry, audit),
     )
-    monkeypatch.setattr(
-        rag_lifecycle, "_require_authz",
-        lambda request: (StubAuthz(), StubPrincipal()),
-    )
+    async def _require_authz(_request):
+        return StubAuthz(), StubPrincipal()
+
+    monkeypatch.setattr(rag_lifecycle, "_require_authz", _require_authz)
     monkeypatch.setattr(rag_lifecycle, "_extract_source", lambda request: "test")
 
     app = FastAPI()
@@ -151,10 +152,10 @@ def test_unknown_doc_404(client):
 
 
 def test_manage_denied_403(client, monkeypatch):
-    monkeypatch.setattr(
-        rag_lifecycle, "_require_authz",
-        lambda request: (StubAuthz(manage_ok=False), StubPrincipal()),
-    )
+    async def _require_authz(_request):
+        return StubAuthz(manage_ok=False), StubPrincipal()
+
+    monkeypatch.setattr(rag_lifecycle, "_require_authz", _require_authz)
     r = client.post("/rag/knowledge/d1/lifecycle", json={"to_status": "deprecated"})
     assert r.status_code == 403
     assert r.json()["error"] == "非本部门文档"

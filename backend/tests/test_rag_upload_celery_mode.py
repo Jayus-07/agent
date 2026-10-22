@@ -194,6 +194,25 @@ class TestSettleIndexResult:
 
 class TestExecuteIndexTaskImpl:
 
+    def test_worker_passes_upload_ocr_page_budget_to_indexer(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(ru, "_write_progress_redis", lambda *a, **kw: None)
+        monkeypatch.setattr(it, "_get_index_identity", lambda _upload_id: ("", ""))
+        monkeypatch.setattr(
+            ru, "_do_index_sync",
+            lambda *args, **kwargs: captured.update(kwargs) or {
+                "terminal": "done", "doc": {"doc_id": "d-ocr"},
+            },
+        )
+        monkeypatch.setattr(ru, "_settle_index_result", MagicMock())
+
+        result = it.execute_index_task_impl(
+            "u-ocr", "/docs/scan.pdf", "scan.pdf", ocr_page_budget=200,
+        )
+
+        assert result["status"] == "done"
+        assert captured["ocr_page_budget"] == 200
+
     def test_worker_settle_carries_actor_id_from_run(self, monkeypatch):
         """Worker 收口审计必须带回派发时写入运行记录的上传者。"""
         monkeypatch.setattr(ru, "_write_progress_redis", lambda *a, **kw: None)

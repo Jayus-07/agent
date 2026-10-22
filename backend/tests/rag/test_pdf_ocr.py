@@ -36,13 +36,76 @@ def _make_pdf(tmp_path, name, pages, text=None):
     return str(p)
 
 
+def _make_scanned_pdf(tmp_path, name, pages):
+    """创建有可见像素、但没有文字层的扫描件页面。"""
+    import fitz
+
+    path = tmp_path / name
+    doc = fitz.open()
+    for _ in range(pages):
+        page = doc.new_page()
+        pixmap = fitz.Pixmap(
+            fitz.csRGB, fitz.IRect(0, 0, 400, 600), 0,
+        )
+        pixmap.clear_with(0)
+        page.insert_image(page.rect, stream=pixmap.tobytes("png"))
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def _make_hybrid_pdf(tmp_path, name="hybrid.pdf", *, native_text=True):
+    """第一页有原生文字，第二页是整页图片，模拟混合扫描 PDF。"""
+    import fitz
+
+    path = tmp_path / name
+    doc = fitz.open()
+    first = doc.new_page()
+    if native_text:
+        first.insert_text(
+            (72, 72), "这页文字层完整，足以跳过 OCR。" * 8,
+        )
+    scanned = doc.new_page()
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 400, 600), 0)
+    pixmap.clear_with(0)
+    scanned.insert_image(scanned.rect, stream=pixmap.tobytes("png"))
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def _make_rich_page_with_image(tmp_path, name="rich-image-region.pdf"):
+    """文字层充足的一页内嵌大图，检查只 OCR 图片 bbox。"""
+    import fitz
+
+    path = tmp_path / name
+    doc = fitz.open()
+    page = doc.new_page()
+    for index in range(5):
+        page.insert_text(
+            (72, 72 + index * 22),
+            "该页原生文字充足，图片区域应单独识别而不重复整页文字。" * 2,
+        )
+    pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 300, 300), 0)
+    pixmap.clear_with(255)
+    page.insert_image(
+        fitz.Rect(72, 220, 320, 500), stream=pixmap.tobytes("png"),
+    )
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
 @pytest.fixture
 def ocr_on(monkeypatch):
-    """模拟 OCR 供应商可用，记录每页调用。"""
-    calls = {"n": 0}
+    """模拟 OCR 供应商可用，记录裁剪图像尺寸。"""
+    calls = {"n": 0, "sizes": []}
 
     def fake_ocr_image(png_bytes):
         calls["n"] += 1
+        import fitz
+        pixmap = fitz.Pixmap(png_bytes)
+        calls["sizes"].append((pixmap.width, pixmap.height))
         return f"第{calls['n']}页 OCR 识别文本内容，用于段落断言。"
 
     monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
@@ -55,12 +118,101 @@ def ocr_on(monkeypatch):
 class TestPdfParserOcrFallback:
 
     def test_scanned_pdf_triggers_ocr_per_page(self, tmp_path, ocr_on):
-        pdf = _make_pdf(tmp_path, "scan.pdf", pages=2)
+        pdf = _make_scanned_pdf(tmp_path, "scan.pdf", pages=2)
         ast = PdfParser().parse(pdf)
         assert ocr_on["n"] == 2, "每页各调一次 OCR"
         texts = [n.text for n in ast.root.children if n.type == "paragraph"]
         assert any("第1页 OCR" in t for t in texts)
         assert any("第2页 OCR" in t for t in texts)
+
+    def test_upload_ocr_budget_overrides_default_for_one_parse_only(
+        self, tmp_path, monkeypatch,
+    ):
+        pdf = _make_scanned_pdf(tmp_path, "budget-scan.pdf", pages=3)
+        monkeypatch.setattr(rag_cfg, "RAG_OCR_MAX_PAGES", 1)
+        calls = {"n": 0}
+
+        def fake_ocr(_png):
+            calls["n"] += 1
+            return f"OCR 页 {calls['n']} 的测试正文。"
+
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr_mod, "ocr_image", fake_ocr)
+
+        override_ast = PdfParser().parse(pdf, ocr_page_budget=2)
+        assert calls["n"] == 2
+        assert override_ast.ocr_page_budget == 2
+        assert override_ast.ocr_page_budget_source == "upload_override"
+        assert override_ast.ocr_page_limit == 1
+
+        calls["n"] = 0
+        default_ast = PdfParser().parse(pdf)
+        assert calls["n"] == 1
+        assert default_ast.ocr_page_budget == 1
+        assert default_ast.ocr_page_budget_source == "default"
+        assert default_ast.ocr_page_limit == 2
+
+    @pytest.mark.parametrize("budget", [0, 501])
+    def test_upload_ocr_budget_rejects_out_of_range_values(
+        self, tmp_path, budget,
+    ):
+        pdf = _make_pdf(tmp_path, "budget-bound.pdf", pages=1, text="正文内容")
+        with pytest.raises(ValueError, match="OCR 页预算"):
+            PdfParser().parse(pdf, ocr_page_budget=budget)
+
+    def test_local_ocr_retries_empty_page_once_at_higher_dpi(
+        self, tmp_path, monkeypatch,
+    ):
+        from types import SimpleNamespace
+
+        pdf = _make_scanned_pdf(tmp_path, "retry-scan.pdf", pages=1)
+        calls = []
+
+        def fail_then_succeed(png_bytes):
+            import fitz
+            pixmap = fitz.Pixmap(png_bytes)
+            calls.append((pixmap.width, pixmap.height))
+            return "" if len(calls) == 1 else "第二次识别成功，保留页面文本。"
+
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr_mod, "ocr_image", fail_then_succeed)
+        monkeypatch.setattr(
+            ocr_mod, "get_ocr_model_identity",
+            lambda: SimpleNamespace(provider="rapidocr"),
+        )
+
+        ast = PdfParser().parse(pdf)
+
+        assert len(calls) == 2
+        assert calls[1][0] > calls[0][0]
+        assert ast.ocr_failed_page_numbers == []
+        assert ast.ocr_pages == 1
+        assert any(
+            node.type == "paragraph" and "第二次识别成功" in node.text
+            for node in ast.root.children
+        )
+
+    def test_cloud_ocr_failure_is_not_retried(self, tmp_path, monkeypatch):
+        from types import SimpleNamespace
+
+        pdf = _make_scanned_pdf(tmp_path, "cloud-no-retry.pdf", pages=1)
+        calls = []
+
+        def fail_ocr(_png_bytes):
+            calls.append(1)
+            return ""
+
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr_mod, "ocr_image", fail_ocr)
+        monkeypatch.setattr(
+            ocr_mod, "get_ocr_model_identity",
+            lambda: SimpleNamespace(provider="dashscope"),
+        )
+
+        ast = PdfParser().parse(pdf)
+
+        assert len(calls) == 1
+        assert ast.ocr_failed_page_numbers == [1]
 
     def test_text_pdf_skips_ocr(self, tmp_path, ocr_on):
         """文本层足够长（> RAG_OCR_MIN_TEXT_CHARS）→ 完全不走 OCR。"""
@@ -72,24 +224,114 @@ class TestPdfParserOcrFallback:
     def test_scanned_pdf_records_ocr_required_but_disabled(self, tmp_path, monkeypatch):
         """扫描件需要 OCR 但供应商关闭时，AST 要保留可解释的跳过原因。"""
         monkeypatch.setattr(ocr_mod, "ocr_available", lambda: False)
-        pdf = _make_pdf(tmp_path, "scan-disabled.pdf", pages=1)
+        pdf = _make_scanned_pdf(tmp_path, "scan-disabled.pdf", pages=1)
 
         ast = PdfParser().parse(pdf)
 
         assert ast.ocr_required is True
         assert ast.ocr_attempted is False
         assert ast.ocr_triggered is False
+        issue = next(
+            item for item in ast.parse_issues
+            if item["code"] == "pdf_ocr_unavailable"
+        )
+        assert issue["severity"] == "error"
+        assert issue["page_numbers"] == [1]
+        assert issue["regions"] == ast.ocr_required_regions
 
     def test_min_text_chars_threshold(self, tmp_path, ocr_on, monkeypatch):
-        """文本层仅有页码级噪音（< 阈值）→ 视为无文本层，触发 OCR。"""
+        """纯文字短页不应因字符量低而重复 OCR。"""
         monkeypatch.setattr(pdf_parser_mod, "RAG_OCR_MIN_TEXT_CHARS", 50)
         pdf = _make_pdf(tmp_path, "noise.pdf", pages=1, text="第1页")
-        PdfParser().parse(pdf)
+        ast = PdfParser().parse(pdf)
+        assert ocr_on["n"] == 0
+        assert ast.ocr_required is False
+
+    def test_hybrid_pdf_ocr_targets_only_sparse_image_page(self, tmp_path, ocr_on):
+        pdf = _make_hybrid_pdf(tmp_path)
+
+        ast = PdfParser().parse(pdf)
+
         assert ocr_on["n"] == 1
+        assert ast.ocr_required_pages == [2]
+        assert ast.ocr_pages == 1
+        assert ast.pdf_image_pages == [2]
+        ocr_nodes = [
+            node for node in ast.root.children
+            if node.type == "paragraph" and "OCR 识别文本" in node.text
+        ]
+        assert len(ocr_nodes) == 1
+        assert ocr_nodes[0].page_number == 2
+
+    def test_rich_text_page_ocr_uses_image_region_only(self, tmp_path, ocr_on):
+        pdf = _make_rich_page_with_image(tmp_path)
+
+        ast = PdfParser().parse(pdf)
+
+        assert ocr_on["n"] == 1
+        assert ast.ocr_required is True
+        assert ast.ocr_required_pages == [1]
+        assert ast.ocr_required_regions[0]["page"] == 1
+        assert ast.ocr_required_regions[0]["bbox"] == [72.0, 220.0, 320.0, 500.0]
+        assert ast.pdf_image_pages == [1]
+        assert ast.pdf_unparsed_visual_pages == [1]
+        page_width = 612 * rag_cfg.RAG_OCR_DPI / 72
+        assert ocr_on["sizes"][0][0] < page_width
+        ocr_node = next(
+            node for node in ast.root.children
+            if node.type == "paragraph" and "OCR 识别文本" in node.text
+        )
+        assert ocr_node.page_number == 1
+        assert ocr_node.bbox == (72.0, 220.0, 320.0, 500.0)
+        assert any(
+            issue["code"] == "pdf_visual_content_unparsed"
+            for issue in ast.parse_issues
+        )
+
+    def test_ocr_region_failure_records_page_and_bbox(self, tmp_path, monkeypatch):
+        def fail_ocr(_png):
+            raise RuntimeError("OCR engine error")
+
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr_mod, "ocr_image", fail_ocr)
+        pdf = _make_rich_page_with_image(tmp_path, "failed-image-region.pdf")
+
+        ast = PdfParser().parse(pdf)
+
+        assert ast.ocr_failed_page_numbers == [1]
+        assert ast.ocr_failed_regions == [
+            {"page": 1, "bbox": [72.0, 220.0, 320.0, 500.0]},
+        ]
+        issue = next(
+            item for item in ast.parse_issues
+            if item["code"] == "pdf_ocr_failed"
+        )
+        assert issue["severity"] == "error"
+        assert issue["regions"] == ast.ocr_failed_regions
+
+    def test_pdf_table_detector_failure_is_recorded(self, tmp_path, monkeypatch):
+        def fail_table_detection(_page):
+            raise RuntimeError("table detector unavailable")
+
+        monkeypatch.setattr(
+            pdf_parser_mod.fitz.Page,
+            "find_tables",
+            fail_table_detection,
+        )
+        pdf = _make_pdf(
+            tmp_path, "table-detector-failure.pdf", pages=1,
+            text="这份文档有足够长的原生文本，不需要扫描件 OCR。" * 4,
+        )
+
+        ast = PdfParser().parse(pdf)
+
+        assert ast.pdf_table_detection_failed_pages == [1]
+        assert ast.parse_status == "partial"
+        assert ast.parse_issues[0]["code"] == "pdf_table_detection_failed"
 
     def test_ocr_unavailable_returns_empty_ast(self, tmp_path, monkeypatch):
         monkeypatch.setattr(ocr_mod, "ocr_available", lambda: False)
-        pdf = _make_pdf(tmp_path, "scan.pdf", pages=2)
+        pdf = _make_scanned_pdf(tmp_path, "scan.pdf", pages=2)
         ast = PdfParser().parse(pdf)
         assert ast.root.children == [], "OCR 不可用时不产出节点，交由下游报业务失败"
 
@@ -279,7 +521,7 @@ def test_precheck_allows_scanned_pdf_when_ocr_on(upload_env, tmp_path, monkeypat
     import asyncio
     from backend.app.api.routes.rag_upload import sync_upload_impl
     monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "rapidocr")
-    blank = _make_pdf(tmp_path, "scan.pdf", pages=1)
+    blank = _make_scanned_pdf(tmp_path, "scan.pdf", pages=1)
     with open(blank, "rb") as f:
         data = f.read()
 
@@ -297,7 +539,7 @@ def test_precheck_rejects_scanned_pdf_when_ocr_off(upload_env, tmp_path, monkeyp
     import asyncio
     from backend.app.api.routes.rag_upload import sync_upload_impl
     monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "off")
-    blank = _make_pdf(tmp_path, "scan.pdf", pages=1)
+    blank = _make_scanned_pdf(tmp_path, "scan.pdf", pages=1)
     with open(blank, "rb") as f:
         data = f.read()
 
@@ -595,7 +837,7 @@ class TestOcrTriggeredPropagation:
     """§5.1 质量记录：OCR 触发必须全链路可追溯，不得静默发生。"""
 
     def test_ast_flag_set_on_scanned_pdf(self, tmp_path, ocr_on):
-        pdf = _make_pdf(tmp_path, "scan_flag.pdf", pages=2)
+        pdf = _make_scanned_pdf(tmp_path, "scan_flag.pdf", pages=2)
         ast = PdfParser().parse(pdf)
         assert ast.ocr_triggered is True
         assert ast.ocr_pages == 2
@@ -609,7 +851,7 @@ class TestOcrTriggeredPropagation:
 
     def test_chunks_marked_ocr_triggered(self, tmp_path, ocr_on):
         from backend.rag.preprocessing.pipeline import parse_and_chunk
-        pdf = _make_pdf(tmp_path, "scan_chunks.pdf", pages=1)
+        pdf = _make_scanned_pdf(tmp_path, "scan_chunks.pdf", pages=1)
         chunks = parse_and_chunk(pdf)
         assert chunks, "扫描件经 OCR 应产出 chunk 而非空"
         assert all(c.metadata.get("ocr_triggered") == "true" for c in chunks)
