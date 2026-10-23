@@ -2508,18 +2508,12 @@ class IncrementalIndexer:
         try:
             with lineage_recorder.bind_stage(vector_lineage[0]) if lineage_recorder and vector_lineage else nullcontext():
                 if vector_chunks:
-                    if len(precomputed_vectors) == len(vector_chunks):
-                        # 预嵌入全部成功 → 直接传入向量，跳过 add_documents 内部的二次嵌入
-                        chunk_ids = self.vectordb.add_documents(
-                            vector_chunks, embeddings=precomputed_vectors) or []
-                    else:
-                        # 预嵌入不完整（部分 chunk 嵌入失败）→ 回退由向量库统一嵌入，
-                        # 保证不产生向量空洞；此时预嵌入仅充当失败预检
-                        logger.warning(
-                            f"[Embed] 预嵌入不完整 ({len(precomputed_vectors)}/{len(vector_chunks)})，"
-                            f"回退由向量库嵌入: {os.path.basename(file_path)}"
-                        )
-                        chunk_ids = self.vectordb.add_documents(vector_chunks) or []
+                    # batch_with_retry 按位置返回等长向量（P1，2026-10-24）：
+                    # 重试穷尽仍失败的位置在 stage 内已 fail-closed 抛异常，
+                    # 这里不再有「数量不齐回退向量库全量重嵌」的旧分支——
+                    # 旧语义下单 chunk 失败 = 全文档 embedding 成本翻倍。
+                    chunk_ids = self.vectordb.add_documents(
+                        vector_chunks, embeddings=precomputed_vectors) or []
                 else:
                     chunk_ids = []
             trace_collector.end_span(vdb_span,

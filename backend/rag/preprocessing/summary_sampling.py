@@ -33,48 +33,77 @@ _HEADING_LINE_RE = re.compile(
 )
 
 
-def sample_for_summary(text: str) -> str:
-    """文档全文 → 摘要采样（覆盖范围显式标注）。"""
-    n = len(text or "")
+def sample_for_summary(text: str, *, max_chars: int | None = None) -> str:
+    """文档全文 → 摘要采样（覆盖范围显式标注）。
+
+    max_chars（P1，2026-10-24）：显式预算（LLM 元数据抽取接入用）。
+    全文 ≤ 预算时原文返回；超出预算时保持「头 + 章节标题目录 + 中段
+    分层采样 + 尾」结构，各段按预算缩放——超长文档的 LLM 抽取不再退回
+    「头 60% + 中 20% + 尾 20%」的旧采样（中间章节缺席）。不传时行为
+    与旧版完全一致。
+    """
+    text = text or ""
+    n = len(text)
+    if max_chars is not None and max_chars >= n:
+        return text
     if n <= _SHORT:
-        return text or ""
+        return text
     if n <= _MID:
         cut = int(n * 0.6)
         return text[:cut] + "\n...(中略)...\n" + text[-int(n * 0.4):]
-    if n <= _FULL_LIMIT:
+    if max_chars is None and n <= _FULL_LIMIT:
         return text
 
-    # ── 超长：头 + 章节目录 + 分层采样 + 尾 ──
+    # ── 超长/超预算：头 + 章节目录 + 分层采样 + 尾 ──
+    if max_chars is not None:
+        budget = max(1000, int(max_chars))
+        head_len = max(200, int(budget * 0.5))
+        tail_len = max(100, int(budget * 0.2))
+        # 分层步长自适应：预算内取 ~6 个中段片段
+        span = max(1, n - head_len - tail_len)
+        stride = max(200, int(span / 6))
+        block_head = min(300, stride)
+        toc_limit = 100
+    else:
+        head_len, tail_len = _HEAD, _TAIL
+        stride, block_head, toc_limit = _STRIDE_BLOCK, _BLOCK_HEAD, 200
+
     lines = text.split("\n")
     toc = [
         ln.strip() for ln in lines
         if _HEADING_LINE_RE.match(ln.strip())
     ]
-    toc_text = "\n".join(toc[:200])   # 目录上限 200 行防膨胀
-    head = text[:_HEAD]
-    tail = text[-_TAIL:] if n > _HEAD + _TAIL else ""
+    toc_kept = toc[:toc_limit]
+    toc_text = "\n".join(toc_kept)
+    head = text[:head_len]
+    tail = text[-tail_len:] if n > head_len + tail_len else ""
 
-    middle_start, middle_end = _HEAD, n - _TAIL
+    middle_start, middle_end = head_len, n - tail_len
     samples: list[str] = []
     pos = middle_start
     while pos < middle_end:
-        block = text[pos:min(pos + _BLOCK_HEAD, middle_end)]
+        block = text[pos:min(pos + block_head, middle_end)]
         if block.strip():
             samples.append(block.rstrip())
-        pos += _STRIDE_BLOCK
+        pos += stride
     sampled = "\n…\n".join(samples)
 
-    covered = _HEAD + len(samples) * min(_BLOCK_HEAD, _STRIDE_BLOCK) + _TAIL
+    covered = head_len + len(samples) * block_head + tail_len
     banner = (
         f"\n...(本文档共约 {n} 字符；以下采样覆盖：文档开头、"
-        f"{len(toc[:200])} 条章节标题目录、中段 {len(samples)} 个分层片段"
-        f"（约每 {_STRIDE_BLOCK} 字符取段首）、文档结尾；"
-        f"采样总覆盖约 {covered} 字符，中间未展示内容未读)...\n"
+        f"{len(toc_kept)} 条章节标题目录、中段 {len(samples)} 个分层片段、"
+        f"文档结尾；采样总覆盖约 {covered} 字符，中间未展示内容未读)...\n"
     )
-    logger.info(
-        f"[SummarySampling] 超长文档采样: total={n} toc={len(toc[:200])} "
-        f"blocks={len(samples)} covered~{covered}"
-    )
+    if max_chars is None:
+        logger.info(
+            f"[SummarySampling] 超长文档采样: total={n} toc={len(toc_kept)} "
+            f"blocks={len(samples)} covered~{covered}"
+        )
+    else:
+        logger.info(
+            f"[SummarySampling] 预算采样: total={n} budget={budget} "
+            f"toc={len(toc_kept)} blocks={len(samples)} covered~{covered}"
+        )
     return (
         head
         + "\n\n...(章节标题目录)...\n" + toc_text

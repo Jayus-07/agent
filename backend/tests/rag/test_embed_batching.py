@@ -104,7 +104,12 @@ class TestBatchFallback:
         assert emb.embed_query.call_count == 2
 
     def test_single_chunk_failure_isolated(self, patched):
-        """批降级后单点失败只丢该 chunk，其余照常入库，且失败 span 被记录。"""
+        """批降级后单点失败 → fail-closed 抛异常（P1 契约，2026-10-24）。
+
+        旧契约丢弃失败位置并让 indexer 全量重嵌（1 chunk 失败 = 全文档
+        embedding 成本翻倍且无对账痕迹）；新契约按位置返回，重试穷尽仍
+        缺失 → 抛 ValueError 让文档 failed，不发布带向量空洞的半成品。
+        """
         emb = MagicMock()
         emb.embed_documents.side_effect = RuntimeError("batch down")
 
@@ -116,12 +121,27 @@ class TestBatchFallback:
         emb.embed_query.side_effect = single
         idx = _mk_indexer(emb)
 
-        vecs = idx._embed_with_retry(_chunks(2), parent_span=None)
-        assert vecs == [[9.9]], "失败 chunk 的向量不能混入成功列表"
+        import pytest as _pytest
+        with _pytest.raises(ValueError, match="重试穷尽"):
+            idx._embed_with_retry(_chunks(2), parent_span=None)
         # 失败 chunk 记录了 error span（trace_collector 已 mock，随实现迁至 embedding_stage）
         tc = embed_stage_mod.trace_collector
         assert tc.start_span.called
         assert tc.end_span.called
+
+    def test_all_success_returns_position_aligned(self, patched):
+        """全部成功 → 与 chunks 等长且按位置对齐（无静默丢弃）。"""
+        emb = MagicMock()
+        # mock 按文本内容返回可辨识向量（与批划分无关）
+        emb.embed_documents.side_effect = lambda texts: [
+            [float(sum(ord(c) for c in t))] for t in texts
+        ]
+        idx = _mk_indexer(emb)
+
+        vecs = idx._embed_with_retry(_chunks(3), parent_span=None)
+        assert len(vecs) == 3
+        assert all(v is not None for v in vecs)
+        assert vecs[0] != vecs[2], "位置对齐：不同 chunk 的向量不得串位"
 
 
 class TestNoBatchApi:

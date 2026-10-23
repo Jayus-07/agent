@@ -299,12 +299,53 @@ def _write_published_pointer(index_dir: Path, meta: dict, generation: str) -> No
             os.unlink(tmp)
 
 
+def _bm25_global_lock(main_dir: Path):
+    """BM25 目录级全局发布锁（P1，2026-10-24）。
+
+    索引锁按文件粒度，跨文档并发发布时 B 的快照切换可能与 A 交错执行，
+    逐文件 os.replace 出现「部分文件来自 A、部分来自 B」的撕裂中间态。
+    这里用与 acquire_index_lock 同源的 O_CREAT|O_EXCL 方案在 BM25 主目录
+    上做跨进程互斥；stale 锁（>10 分钟）自愈清理。
+    """
+    import time as _time
+
+    lock_path = main_dir / ".publish.lock"
+    deadline = _time.monotonic() + 30
+    while _time.monotonic() < deadline:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, f"{os.getpid()}\n{_time.time()}\n".encode())
+            except OSError:
+                pass
+            return fd
+        except FileExistsError:
+            try:
+                if _time.time() - lock_path.stat().st_mtime > 600:
+                    lock_path.unlink(missing_ok=True)
+                    continue
+            except OSError:
+                pass
+            _time.sleep(0.2)
+    raise CandidatePublishError(
+        f"BM25 全局发布锁获取超时: {lock_path}")
+
+
+def _release_bm25_global_lock(fd) -> None:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+
 def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
     """把候选目录构建好的 BM25 快照原子切换为线上快照。
 
     逐文件 os.replace（同文件系统原子）；读取方要么读到完整旧代、要么完整
     新代（bundle 自带 meta，加载不混代）。全部产物落定后写 PUBLISHED 指针。
     非 文件型主 store（测试桩/旧实现）走 adopt_snapshot 协议钩子。
+    切换全程持有 BM25 目录级全局锁（P1，2026-10-24）：跨文档并发发布不再
+    交错切换产生撕裂快照；切换后按 doc_count 与向量库对账，漂移可见。
     """
     cand_dir = Path(cand_store.index_dir)
     meta = cand_store.get_metadata()
@@ -319,16 +360,20 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
         return meta
     main_dir = Path(main_store.index_dir)
     main_dir.mkdir(parents=True, exist_ok=True)
-    for name in _BM25_ARTIFACTS:
-        src = cand_dir / name
-        if not src.exists():
-            raise CandidatePublishError(f"BM25 staging 缺少产物: {name}")
-        os.replace(src, main_dir / name)
-        chk = Path(str(src) + ".sha256")
-        if chk.exists():
-            os.replace(chk, Path(str(main_dir / name) + ".sha256"))
-    # 指针统一由 store 维护（重建/切换同一入口，最后写）
-    main_store.write_published_pointer(generation, meta)
+    lock_fd = _bm25_global_lock(main_dir)
+    try:
+        for name in _BM25_ARTIFACTS:
+            src = cand_dir / name
+            if not src.exists():
+                raise CandidatePublishError(f"BM25 staging 缺少产物: {name}")
+            os.replace(src, main_dir / name)
+            chk = Path(str(src) + ".sha256")
+            if chk.exists():
+                os.replace(chk, Path(str(main_dir / name) + ".sha256"))
+        # 指针统一由 store 维护（重建/切换同一入口，最后写）
+        main_store.write_published_pointer(generation, meta)
+    finally:
+        _release_bm25_global_lock(lock_fd)
     logger.info(
         f"[Publish] BM25 快照已切换 generation={generation} "
         f"doc_count={meta.get('doc_count')}")
@@ -430,6 +475,29 @@ def publish_candidate(
             f"文档已被更新的版本发布（base={expected_base[:12] or '∅'}），"
             f"本次候选被取代: {os.path.basename(final_path)}")
 
+    # ── c0. 财务版本快照：旧 chunk 批量翻 is_latest=False（必须在晋级前）──
+    # 新旧 chunk 复用同一 doc_id（doc_id 按路径派生）；翻转按 doc_id 全量
+    # 命中。若发生在晋级之后，刚晋级的新 chunk（is_latest=True）会被一并
+    # 翻成 False——财务检索注入 is_latest=True 过滤后新旧两版同时不可见
+    # （P0，2026-10-24；对齐 reindex_file 的先翻转后写入顺序）。翻转失败
+    # 阻断晋级，旧版保持可检索，续跑重入本步骤。
+    use_snapshot = False
+    if old_doc_id:
+        from backend.rag.indexing.indexer import IncrementalIndexer
+        use_snapshot = IncrementalIndexer._should_use_version_snapshot(
+            (old_row or {}).get("doc_type", ""), final_path)
+        if use_snapshot:
+            try:
+                flipped = stores.main_vectordb.update_metadata_where(
+                    where={"doc_id": old_doc_id},
+                    metadata_update={"is_latest": False},
+                )
+                logger.info(
+                    f"[Publish] 财务版本快照: 旧版 {flipped} chunks is_latest=False")
+            except Exception as e:
+                raise CandidatePublishError(
+                    f"旧版 is_latest 翻转失败（待续跑）: {e}") from e
+
     # ── c. 候选向量晋级主 collection（在主 store 上执行：source=候选名）──
     promoted_chunks = stores.main_vectordb.promote_collection(
         _collection_of(stores.vectordb))
@@ -457,23 +525,7 @@ def publish_candidate(
     except Exception as e:
         raise CandidatePublishError(f"chunk_store 翻新失败（待续跑）: {e}") from e
 
-    # ── g. 财务版本快照：旧 chunk 批量翻 is_latest=False ──
-    use_snapshot = False
-    if old_doc_id:
-        from backend.rag.indexing.indexer import IncrementalIndexer
-        use_snapshot = IncrementalIndexer._should_use_version_snapshot(
-            (old_row or {}).get("doc_type", ""), final_path)
-        if use_snapshot:
-            try:
-                flipped = stores.main_vectordb.update_metadata_where(
-                    where={"doc_id": old_doc_id},
-                    metadata_update={"is_latest": False},
-                )
-                logger.info(
-                    f"[Publish] 财务版本快照: 旧版 {flipped} chunks is_latest=False")
-            except Exception as e:
-                raise CandidatePublishError(
-                    f"旧版 is_latest 翻转失败（待续跑）: {e}") from e
+    # ── g.（已前移至步骤 c0）财务版本快照翻转在晋级前执行 ──
 
     # ── h. 旧版清理（精确按 id，绝不 doc_id 条件删）──
     if not use_snapshot and old_chunk_ids:
