@@ -1,6 +1,6 @@
 # 评测资产与知识库管理整理
 
-状态：ACTIVE（实现和验证完成，待提交与合并）；分支 codex/evaluation-management；基线 main c9bfa8c。
+状态：COMPLETE；功能提交 0c7abe41122b1c587bf68f57ff629b5436f32d36 已非快进合并到 main，合并提交 31ce692185657b6d62a58ac1b09f12b4146254a7；分支 codex/evaluation-management；基线 main c9bfa8c。
 
 目标：补齐统一业务题集管理、前后端操作流程、不可变版本、固定语料复跑、异步运行、答案/权限评测、上传发布门禁、候选转换、Ragas 合成与既有 CLI/CI 接入。
 
