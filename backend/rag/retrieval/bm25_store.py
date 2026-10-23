@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import re
 import tempfile
 import threading
 import time
@@ -29,25 +30,44 @@ from backend.shared.logger import logger
 # 索引格式版本：分词器等影响倒排统计的变更需递增，load 时版本不符自动重建。
 # v3（2026-10-01 C 阶段）：条目身份收口为 doc_id+vector_id，废除 basename
 # 兜底匹配（跨 KB 同名文件互删的根源）——版本不符触发一次 canonical 重建。
-BM25_META_VERSION = 3
+# v4（2026-10-24）：分词保留字母数字连串 token（"AQL-2.5"/"SKU-007A" 类
+# 型号与标识符不再被 jieba 切碎），BM25 精确标识符匹配恢复——版本不符
+# 触发一次重建。
+BM25_META_VERSION = 4
 
 # 同一进程内的读写互斥。跨进程读取使用单文件 bundle，避免看到
 # corpus.pkl 与 docs.pkl 来自不同一代索引的中间状态。
 _BUILD_LOCK = threading.RLock()
 
+# 字母数字+连字符标识符（产品型号/单号）：jieba 会把它们切成 "AQL"/"2.5"
+# 两段，BM25 对 "AQL-2.5" 的整串精确查询失配。切分前先抽出整串 token。
+_ALNUM_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9\-_.]*[A-Za-z0-9]|[A-Za-z0-9]")
+
 
 def _tokenize_chinese(text: str) -> List[str]:
-    """BM25 中文分词（jieba）。
+    """BM25 中文分词（jieba + 标识符整串保留）。
 
     langchain BM25Retriever 默认按空格/小写切分，对中文语料会退化成整句匹配；
     构建索引与查询两侧必须使用同一分词函数（load 时也需显式设置，
     preprocess_func 不会被 pickle 持久化）。
+
+    P2（2026-10-24）：先抽出字母数字+连字符标识符整串（型号/单号不再被
+    jieba 切碎），剩余文本走 jieba——BM25 的精确标识符匹配价值恢复。
     """
+    tokens: List[str] = []
     try:
         import jieba
     except ImportError:
         return [t for t in text.split() if t]
-    return [t for t in jieba.lcut(text) if t.strip()]
+    remainder = text
+    for m in _ALNUM_TOKEN_RE.finditer(text):
+        token = m.group(0)
+        if len(token) >= 2 or token.isalnum():
+            tokens.append(token)
+        # 从剩余文本中剔除已抽出的标识符，避免 jieba 再切碎重复入表
+        remainder = remainder.replace(token, " ", 1)
+    tokens.extend(t for t in jieba.lcut(remainder) if t.strip())
+    return tokens
 
 
 def _doc_matches(
@@ -320,16 +340,15 @@ class BM25Store:
         self, doc_ids: List[str], k: int | None = None,
         file_paths: Optional[List[str]] = None
     ) -> Optional[BM25Retriever]:
-        """按 doc_id 或 file_path（含 source_file 文件名）删除文档后全量重建索引。
+        """按 doc_id 删除文档后全量重建索引（C 阶段收口后的现状契约）。
 
-        doc_id 与 file_path 双键过滤（P0-2）：历史上 loader 与 indexer 的 doc_id 协议
-        不一致（loader=sha256[:16] vs registry=md5[:10]），仅按 doc_id 过滤会导致
-        删除后 BM25 残留。BM25 的 chunk metadata 始终含 file_path/source_file，
-        以文件名为第二键可绕开协议分裂，保证删除真正命中。
+        身份唯一键 = doc_id（vector_id 为补充精确键）。历史上的 doc_id
+        协议分裂已收口，basename 第二键因「跨 KB 同名误伤」被废除
+        （_doc_matches）；``file_paths`` 参数仅为兼容旧调用签名保留，
+        内部忽略并记录 warning——不要依赖它做删除命中。
 
         Args:
             doc_ids: 要删除的 doc_id 列表
-            file_paths: 要删除的完整文件路径列表（取其 basename 与 metadata.source_file 匹配）
             k: 检索候选数量；为空时使用 config.BM25_CANDIDATE_K
 
         Returns:
@@ -581,12 +600,21 @@ class BM25Store:
         return self.get_metadata().get("content_hash", "")
 
     def get_metadata(self) -> dict[str, Any]:
-        """返回 BM25 快照元数据，供启动门禁和管理端审计使用。"""
+        """返回 BM25 快照元数据，供启动门禁和管理端审计使用。
+
+        P2（2026-10-24）：meta.json 优先（轻量 JSON 读）；仅当 meta.json
+        缺失/为空才回退反序列化整个 index bundle——大语料下每次探测
+        （is_stale/doc_count/get_content_hash）不再做几十 MB 级 unpickle。
+        build/切换同时落 meta.json 与 bundle.meta，两者同代。
+        """
+        meta = self._read_meta()
+        if meta:
+            return meta
         if self._bundle_path.exists():
             bundle = self._safe_load_pickle(self._bundle_path)
             if isinstance(bundle, dict) and isinstance(bundle.get("meta"), dict):
                 return dict(bundle["meta"])
-        return self._read_meta()
+        return {}
 
     def write_published_pointer(self, generation: str, meta: dict | None = None) -> None:
         """写发布指针（PUBLISHED.json，全部产物落定后最后写）。

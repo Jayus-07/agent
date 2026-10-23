@@ -222,6 +222,14 @@ def _cond_sql(key: str, value: Any, params: list) -> str:
         op, v = next(iter(value.items()))
         if op == "$eq":
             return _cond_sql(key, v, params)
+        if op == "$in" and key == "doc_id":
+            # P2（2026-10-24）：doc_id 有真实列与 idx_{t}_scope(collection, doc_id)
+            # 索引；$in 走 metadata->> = ANY 是顺序扫描。列值与 metadata.doc_id
+            # 同源（写入时 _doc_id_of 提取），NULL = ANY 为假，语义等价。
+            # Stage-1 门控（按 doc_ids 过滤）在大表上恢复索引命中。
+            vals = [_scalar_to_text(x) for x in (v or [])]
+            params.append(vals)
+            return "doc_id = ANY(%s)"
         if op == "$ne":
             # 缺失字段视为 ≠（与 Chroma where 对缺失字段的宽松语义取宽侧，注释备案）
             params.append(json.dumps({key: v}, ensure_ascii=False))

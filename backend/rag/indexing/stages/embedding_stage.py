@@ -31,6 +31,23 @@ def embed_backoff_seconds(attempt: int) -> float:
     return base + random.uniform(0, 1.0)
 
 
+def _clip_summary_prefix(summary: str, limit: int) -> str:
+    """按句边界截断摘要前缀（P2，2026-10-24）。
+
+    硬切 [:limit] 常把句子拦腰截断，前缀带残句噪声进 embedding；在
+    limit 内找最后一个句末标点收口，找不到再回退硬切。
+    """
+    if len(summary) <= limit:
+        return summary
+    window = summary[:limit]
+    cut = max(
+        window.rfind(c) for c in "。！？；.!?"
+    )
+    if cut >= int(limit * 0.5):
+        return window[:cut + 1]
+    return window
+
+
 class EmbeddingStage:
     """embedding 阶段：持有 embedding 实例与实例级缓存，无 registry 依赖。"""
 
@@ -62,7 +79,7 @@ class EmbeddingStage:
         """
         parts: list[str] = []
         if doc_summary:
-            parts.append("【文档】" + doc_summary.strip()[:100])
+            parts.append("【文档】" + _clip_summary_prefix(doc_summary.strip(), 100))
         section_title = (chunk.metadata.get("section_title") or "").strip()
         if section_title:
             parts.append("【章节】" + section_title)
@@ -92,9 +109,20 @@ class EmbeddingStage:
         保留旧版"逐 chunk 失败 span"语义。
         """
         last_err = None
+        # P2（2026-10-24）：优先 embed_documents 单条批——embed_query 路径带
+        # 请求级去重与进程 LRU（查询缓存），大批失败降级时数千条 chunk 文本
+        # 会挤占查询向量的缓存位；文档路径不消费查询缓存语义。
+        single_embed = getattr(self._embedding, "embed_documents", None)
         for attempt in range(EMBED_RETRY_MAX):
             try:
-                vec = self._embedding.embed_query(embed_text)
+                if callable(single_embed):
+                    vecs = single_embed([embed_text])
+                    if not isinstance(vecs, (list, tuple)) or len(vecs) != 1:
+                        raise ValueError(
+                            f"embed_documents 单条返回非法: {type(vecs).__name__}")
+                    vec = vecs[0]
+                else:
+                    vec = self._embedding.embed_query(embed_text)
                 if attempt > 0:
                     chunk_span = trace_collector.start_span(
                         f"embed_chunk_{i}",

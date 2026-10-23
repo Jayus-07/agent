@@ -160,6 +160,53 @@ class PostgresChunkStore(ChunkStore):
                 conn, f"DELETE FROM {self._table} WHERE doc_id = %s", (doc_id,))
             return cur.rowcount
 
+    def replace_doc_rows(self, doc_id: str, chunks: list[dict]) -> int:
+        """同事务原子翻新：DELETE 旧行 + INSERT 新行一次提交（P2，2026-10-24）。
+
+        发布提交点后的旧两步路径（独立连接各自提交）在两步之间崩溃会导致
+        chunk_store 空而 registry 已 published，parent 上下文恢复失效；
+        同事务保证翻新要么完整落定、要么完全回滚（续跑幂等重入）。
+        """
+        if not chunks:
+            with self._lock, self._conn() as conn:
+                self._exec_scalar(
+                    conn, f"DELETE FROM {self._table} WHERE doc_id = %s",
+                    (doc_id,))
+            return 0
+        rows = [
+            (doc_id, c.get("chunk_index", i), c.get("chunk_id", ""),
+             c.get("granularity", ""), c.get("parent_chunk_id", ""),
+             c.get("content", ""),
+             len(c.get("content", "") or ""),
+             c.get("keywords", ""),
+             c.get("llm_keywords", ""),
+             c.get("llm_model", ""),
+             c.get("section_title", ""),
+             c.get("doc_type", ""),
+             c.get("kb_id", ""),
+             c.get("fixture_set", ""),
+             c.get("department", ""),
+             json.dumps(c.get("simulated_questions", []), ensure_ascii=False),
+             json.dumps(c.get("chunk_metadata", {}), ensure_ascii=False, default=str),
+             _now_utc())
+            for i, c in enumerate(chunks)
+        ]
+        with self._lock, self._conn() as conn:
+            self._exec_scalar(
+                conn, f"DELETE FROM {self._table} WHERE doc_id = %s", (doc_id,))
+            psycopg2.extras.execute_batch(
+                conn.cursor(),
+                f"""INSERT INTO {self._table}
+                   (doc_id, chunk_index, chunk_id, granularity, parent_chunk_id,
+                    content, char_count, keywords, llm_keywords, llm_model,
+                    section_title, doc_type, kb_id, fixture_set, department,
+                    simulated_questions, chunk_metadata, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           %s, %s, %s, %s::jsonb, %s)""",
+                rows,
+            )
+        return len(rows)
+
     # ---- 查询 ----
 
     def get_by_doc_id(self, doc_id: str) -> list[dict[str, Any]]:

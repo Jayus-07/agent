@@ -128,7 +128,18 @@ class BufferingChunkStore:
         ]
 
     def flush(self, real_store) -> int:
-        """发布翻新：先清旧版行再插入本次缓冲（与 indexer 直写顺序一致）。"""
+        """发布翻新：优先同事务原子替换（P2，2026-10-24）。
+
+        旧两步路径（独立连接 delete→insert 各自提交）在两步之间崩溃会让
+        chunk_store 空而 registry 已 published；`replace_doc_rows` 同事务
+        落定，不支持该方法的实现回退旧两步。
+        """
+        replace = getattr(real_store, "replace_doc_rows", None)
+        if callable(replace):
+            total = 0
+            for doc_id in self._cleared_docs:
+                total += replace(doc_id, self._rows_by_doc.get(doc_id, []))
+            return total
         total = 0
         for doc_id in self._cleared_docs:
             try:
@@ -143,6 +154,17 @@ class BufferingChunkStore:
     def discard(self) -> None:
         self._rows_by_doc.clear()
         self._cleared_docs.clear()
+
+    # P2（2026-10-24）：候选期语义是"写缓冲、发布翻新"，不支持全量读取；
+    # 显式声明替代裸 AttributeError，未来调用方在候选期读全量会得到可读错误。
+    def get_by_doc_id(self, doc_id: str) -> list[dict]:
+        raise NotImplementedError(
+            "BufferingChunkStore 候选期不提供全量读取；"
+            "发布 flush 后经正式 chunk_store 访问"
+        )
+
+    def count_by_doc_id(self, doc_id: str) -> int:
+        return len(self._rows_by_doc.get(doc_id, []))
 
 
 @dataclass

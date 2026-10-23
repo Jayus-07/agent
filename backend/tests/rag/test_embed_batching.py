@@ -92,16 +92,24 @@ class TestBatchPath:
 class TestBatchFallback:
 
     def test_exhausted_batch_degrades_to_single(self, patched):
-        """embed_documents 持续返回非法长度 → 批重试耗尽 → 降级逐条全部成功。"""
+        """embed_documents 持续返回非法长度 → 批重试耗尽 → 降级逐条全部成功。
+
+        P2（2026-10-24）：逐条降级优先走 embed_documents 单条批（不污染
+        查询缓存）——单条调用 [[0.0]] 长度合法、逐条成功；批级 5 次重试
+        计数不变，embed_query 不再被调用。
+        """
         emb = MagicMock()
-        emb.embed_documents.return_value = [[0.0]]  # 长度恒不匹配 → ValueError
+        emb.embed_documents.return_value = [[0.0]]  # 批级长度恒不匹配 → ValueError
         emb.embed_query.side_effect = lambda t: [1.0, 2.0]
         idx = _mk_indexer(emb)
 
         vecs = idx._embed_with_retry(_chunks(2), parent_span=None)
         assert len(vecs) == 2
-        assert emb.embed_documents.call_count == embed_stage_mod.EMBED_RETRY_MAX
-        assert emb.embed_query.call_count == 2
+        assert all(v is not None for v in vecs)
+        # 批级重试 5 次 + 逐条降级 2 次（单条批合法）
+        assert emb.embed_documents.call_count == (
+            embed_stage_mod.EMBED_RETRY_MAX + 2)
+        assert emb.embed_query.call_count == 0
 
     def test_single_chunk_failure_isolated(self, patched):
         """批降级后单点失败 → fail-closed 抛异常（P1 契约，2026-10-24）。
