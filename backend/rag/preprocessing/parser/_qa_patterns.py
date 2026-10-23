@@ -36,8 +36,10 @@ _QA_HEADING_RE = re.compile(
 )
 
 # 模式 3: Q1. ... A1. ...（编号配对）
+# 分隔符兼容 `.` `、` `:` `：`；Q/A 标签可被 `**` 加粗包裹
+# （真实网页导出 FAQ 常见 `**Q1:问题**` + `A1:答案`，2026-10-24）。
 _QA_NUMBERED_RE = re.compile(
-    rf"^Q(\d+)[.、]?\s*(.+?)\n+A\1[.、]?\s*(.+?)(?=\nQ\d+|\n+#{{1,6}}\s|\n+[一二三四五六七八九十]+、|\Z)",
+    rf"^\s*(?:\*\*)?Q(\d+)[.、:：]?\s*(.+?)\n+(?:\*\*)?A\1[.、:：]?\s*(.+?)(?=\n+\s*(?:\*\*)?Q\d+|\n+#{{1,6}}\s|\n+[一二三四五六七八九十]+、|\Z)",
     re.MULTILINE | re.DOTALL,
 )
 
@@ -69,6 +71,11 @@ def extract_qa_pairs(
         for m in pattern.finditer(text):
             q = m.group(q_idx).strip()
             a = m.group(a_idx).strip()
+            # 剥 `**Q1:问题**` 形态残留在文本首尾的加粗标记
+            q = q[2:].strip() if q.startswith("**") else q
+            a = a[2:].strip() if a.startswith("**") else a
+            q = q[:-2].strip() if q.endswith("**") else q
+            a = a[:-2].strip() if a.endswith("**") else a
             if q and a:  # 过滤空匹配
                 results.append((q, a, ptype))
     return results
@@ -105,10 +112,11 @@ def dominant_pattern(text: str) -> str:
 
 # Q 标签正则 MULTILINE：解析器常把 Q 行与后续行合并成同一段落，
 # `(.*)$` 需在首行尾锚定（组=第一行问题），剩余行由 caller 并入答案。
+# 标签可带 `**` 加粗、分隔符兼容 `.` `、` `:` `：`（`**Q1:问题**` 形态）。
 _Q_LABEL_RE = re.compile(r"^\s*(?:\*\*)?Q[:：]\s*(.*)$", re.MULTILINE)
 _A_LABEL_RE = re.compile(r"^\s*(?:\*\*)?A[:：]\s*(.*)$", re.DOTALL)
-_Q_NUM_LABEL_RE = re.compile(r"^\s*Q(\d+)[.、]\s*(.*)$", re.MULTILINE)
-_A_NUM_LABEL_RE = re.compile(r"^\s*A(\d+)[.、]\s*(.*)$", re.DOTALL)
+_Q_NUM_LABEL_RE = re.compile(r"^\s*(?:\*\*)?Q(\d+)[.、:：]?\s*(.*)$", re.MULTILINE)
+_A_NUM_LABEL_RE = re.compile(r"^\s*(?:\*\*)?A(\d+)[.、:：]?\s*(.*)$", re.DOTALL)
 # section 标题形态的问题/答案（qa_heading 模式的 AST 形态）
 _Q_SECTION_RE = re.compile(r"^\s*(?:问题|Question|问|疑问)[:：]?\s*(.*)$")
 _A_SECTION_RE = re.compile(r"^\s*(?:答案|Answer|答|解答)[:：]?\s*(.*)$")
@@ -258,7 +266,16 @@ def _annotate_container(children: list) -> list:
 def _make_qa_node(ntype: str, text: str):
     from backend.rag.preprocessing.ast import DocumentNode
 
-    return DocumentNode(type=ntype, text=text)
+    # 剥首尾 `**`：`**Q1:问题**` 形态的标签正则只吃行首加粗，
+    # 行尾加粗残留在文本里；Q/A 节点保存纯文本，不保存 markdown 源码。
+    t = text.strip()
+    while t.startswith("**") and t.endswith("**") and len(t) > 4:
+        t = t[2:-2].strip()
+    if t.startswith("**"):
+        t = t[2:].strip()
+    if t.endswith("**"):
+        t = t[:-2].strip()
+    return DocumentNode(type=ntype, text=t)
 
 
 def annotate_qa_nodes(root) -> int:

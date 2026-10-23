@@ -69,3 +69,32 @@ def test_excel_wired_into_pipeline():
     assert ".xlsx" in _PARSERS
     assert ".xlsx" in _SUPPORTED_EXTS
     assert ".xlsx" in IncrementalIndexer.SUPPORTED_EXTS
+
+
+def test_excel_parser_hidden_sheet_skipped(tmp_path):
+    """隐藏 Sheet 不进索引（数据泄漏边界），跳过留痕 warn issue。"""
+    p = tmp_path / "hidden_sheet.xlsx"
+    wb = openpyxl.Workbook()
+    ws1 = wb.active
+    ws1.title = "员工"
+    ws1.append(["工号", "姓名"])
+    ws1.append(["0001", "张三"])
+    ws2 = wb.create_sheet("隐藏表")
+    ws2.append(["secret", "SENTINEL-HIDDEN"])
+    ws2.sheet_state = "hidden"
+    wb.save(str(p))
+
+    ast = ExcelParser().parse(str(p))
+    sections = [
+        n.text for n in walk(ast.root)
+        if n.type == "section" and n.level > 0
+    ]
+    assert sections == ["员工"]
+    assert "SENTINEL-HIDDEN" not in ast.raw_text
+    codes = [i["code"] for i in ast.parse_issues]
+    assert "excel_hidden_sheet_skipped" in codes
+    skipped = next(
+        i for i in ast.parse_issues if i["code"] == "excel_hidden_sheet_skipped"
+    )
+    assert skipped["severity"] == "warn"
+    assert "隐藏表" in skipped["detail"]

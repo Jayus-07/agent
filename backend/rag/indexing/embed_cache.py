@@ -23,14 +23,21 @@ class EmbeddingCache:
 
     def __init__(self, model_name: str, enabled: bool = True,
                  ttl_seconds: int = 30 * 86400, *, provider: str = "",
-                 model_revision: str = ""):
+                 model_revision: str = "", config_signature: str = ""):
         from backend.config.rag import RAG_EMBED_CACHE_ENABLED, RAG_EMBED_CACHE_TTL_SECONDS
         self.model_name = (model_name or "").strip() or "unknown"
         self.provider = (provider or "").strip() or "unknown"
         self.model_revision = (model_revision or "").strip() or "unknown"
+        # config_signature（P1，2026-10-24）：维度 + embedding 配置签名。
+        # 同 provider+模型名下维度变更或配置变更时命名空间随之变化，旧缓存
+        # 自然失效，防止脏向量在 TTL 内继续命中（对齐检索侧身份口径）。
+        self.config_signature = (config_signature or "").strip() or "unknown"
         self.enabled = enabled and RAG_EMBED_CACHE_ENABLED
         self.ttl = ttl_seconds or RAG_EMBED_CACHE_TTL_SECONDS
-        identity = "|".join((self.provider, self.model_name, self.model_revision))
+        identity = "|".join((
+            self.provider, self.model_name, self.model_revision,
+            self.config_signature,
+        ))
         namespace = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
         self.prefix = f"rag:emb:{namespace}:"
 

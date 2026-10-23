@@ -104,8 +104,13 @@ def _enhanced_hybrid_retrieve_impl(
     # Step 2: 三路并行召回（outer 池；Phase 3 统一经 submit_rag_task 出口）
     from backend.infra.thread_pools import submit_rag_task
 
+    # P1（2026-10-24）：tier 短路对齐主路——vector_only（简单 FAQ/短问）跳过
+    # sparse/rule 路，避免关键词噪声稀释语义信号与白付三路召回成本；
+    # dense 失败/空召回时仍走既有 fallback（hybrid_retrieve 内含 BM25 兜底）。
+    vector_only_tier = query_tier == "vector_only"
+
     # Path A: Rule-Based (仅当启用时)
-    if rule_retriever:
+    if rule_retriever and not vector_only_tier:
         rule_future = submit_rag_task(
             "outer", _timed_retrieval, path_timings, "rule",
             rule_retriever.retrieve, query, k=int(effective_k * 0.3),
@@ -113,7 +118,7 @@ def _enhanced_hybrid_retrieve_impl(
         metrics["rule_available"] = True
     else:
         rule_future = None
-        metrics["rule_available"] = False
+        metrics["rule_available"] = bool(rule_retriever) and not vector_only_tier
 
     # Path B: Dense Vector Search
     dense_future = submit_rag_task(
@@ -127,14 +132,24 @@ def _enhanced_hybrid_retrieve_impl(
     sparse_future = submit_rag_task(
         "outer", _timed_retrieval, path_timings, "sparse",
         bm25_retriever.invoke, query,
-    ) if bm25_retriever else None
+    ) if (bm25_retriever and not vector_only_tier) else None
     if sparse_future:
         metrics["sparse_available"] = True
 
     # Step 3: 收集结果（按路径分开，带权重；dense 权重最高因为 embedding 语义匹配更可靠）
+    # P1（2026-10-24）：与主路同源同开关过滤独立 parent 命中——parent 仅经
+    # attach_parent_context 扩展通道提供上下文，独立命中会挤占融合名额
+    # （2026-10-19 faq_only.docx 实证问题的增强路径回归）。
+    from backend.config.rag import RAG_FILTER_PARENT_RECALL
+
+    def _drop_parent_hits(docs: list) -> list:
+        if not RAG_FILTER_PARENT_RECALL:
+            return docs
+        return [d for d in docs if d.metadata.get("granularity") != "parent"]
+
     try:
         if rule_future:
-            rule_docs = await_retrieval(rule_future) or []
+            rule_docs = _drop_parent_hits(await_retrieval(rule_future) or [])
             metrics["rule_hits"] = len(rule_docs)
             if rule_docs:
                 path_results.append((rule_docs, 2.0))
@@ -143,7 +158,7 @@ def _enhanced_hybrid_retrieve_impl(
         logger.warning(f"[EnhancedRetrieve] Rule retrieval failed: {e}", exc_info=True)
 
     try:
-        dense_docs = await_retrieval(dense_future)
+        dense_docs = _drop_parent_hits(await_retrieval(dense_future))
         metrics["dense_hits"] = len(dense_docs)
         if dense_docs:
             # §7 路由加权：dense 基础权重 3.0 × 策略 vector_weight
@@ -155,7 +170,7 @@ def _enhanced_hybrid_retrieve_impl(
 
     try:
         if sparse_future:
-            sparse_docs = await_retrieval(sparse_future) or []
+            sparse_docs = _drop_parent_hits(await_retrieval(sparse_future) or [])
             metrics["sparse_hits"] = len(sparse_docs)
             if doc_ids:
                 sparse_docs = [d for d in sparse_docs if d.metadata.get("doc_id") in doc_ids]
@@ -200,12 +215,17 @@ def _enhanced_hybrid_retrieve_impl(
     metrics["fusion_elapsed_ms"] = round((time.perf_counter() - fusion_started) * 1000, 1)
     
     # Step 6: 计算综合置信度
+    # P1（2026-10-24）：向量分数在 metadata["similarity"]（Document 无 .score
+    # 属性），旧 getattr(d, "score", 0) 恒 0 → 每请求必触发 Low confidence 误告警
     overall_confidence = 0.0
     if confidence_aggregator:
         overall_confidence = confidence_aggregator.aggregate(merged_docs, query)
     else:
         # 简易版：直接用平均向量相似度
-        vector_scores = [getattr(d, "score", 0) for d in merged_docs[:min(5, len(merged_docs))]]
+        vector_scores = [
+            float((d.metadata or {}).get("similarity") or 0)
+            for d in merged_docs[:min(5, len(merged_docs))]
+        ]
         overall_confidence = sum(vector_scores) / len(vector_scores) if vector_scores else 0.0
     
     # Step 7: 置信度门控检查
@@ -360,8 +380,10 @@ class ConfidenceAggregator:
         """计算整体置信度"""
         scores = {}
         
-        # 1. 向量相似度平均分
-        vector_scores = [getattr(d, "score", 0) for d in docs[:5]]
+        # 1. 向量相似度平均分（metadata["similarity"]；Document 无 .score 属性）
+        vector_scores = [
+            float((d.metadata or {}).get("similarity") or 0) for d in docs[:5]
+        ]
         scores["vector_sim"] = sum(vector_scores) / len(vector_scores) if vector_scores else 0
         
         # 2. BM25 分数

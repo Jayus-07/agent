@@ -84,6 +84,25 @@ def attach_parent_context(docs: List[Document], parent_lookup) -> List[Document]
     return list(docs) + added
 
 
+def _truncate_leaves_keep_parents(docs: List[Document], effective_k: int) -> List[Document]:
+    """按 effective_k 截断 leaf，parent 上下文不占名额（P1，2026-10-24）。
+
+    旧实现 `docs[:effective_k]` 在常态下（leaf 恰好占满名额）把 attach 的
+    parent 全部截掉——Parent-Child 增强失效且白付一次 chunk_store 查询。
+    parent 是上下文载体不是独立检索单元，不应计入 k。
+    """
+    if len(docs) <= effective_k:
+        return list(docs)
+    kept_leaves: List[Document] = []
+    parents: List[Document] = []
+    for d in docs:
+        if (d.metadata or {}).get("granularity") == "parent":
+            parents.append(d)
+        elif len(kept_leaves) < effective_k:
+            kept_leaves.append(d)
+    return kept_leaves + parents
+
+
 def attach_referenced_context(docs: List[Document], related_lookup) -> List[Document]:
     """将 Leaf 明确引用的同文档表格 Leaf 加入上下文。"""
     if not docs:
@@ -189,6 +208,42 @@ def _scope_kb_filter(metadata_filter: dict, allowed: set) -> dict:
         return metadata_filter
     return {k: v for k, v in metadata_filter.items()
             if k not in ("kb_id", "$or")}
+
+
+# permission_scope pushdown 的组合枚举上限：用户权限 >4 项时子集组合不可
+# 控，放弃 pushdown 退回纯后置过滤（行为同旧版，不劣化）。
+_PERMISSION_PUSHDOWN_MAX_PERMS = 4
+
+
+def _permission_scope_pushdown(
+    metadata_filter: dict, user_permissions: tuple[str, ...] | None,
+) -> dict:
+    """把可见 permission_scope 枚举进向量 where（P1，2026-10-24）。
+
+    旧实现权限过滤纯后置：越权 chunk 先占融合名额再被剔除，受限库中
+    有效证据 <k 且不回补，且对越权 chunk 白付了向量检索成本。这里把
+    「可见 scope 值集合」编译进 metadata_filter（$in + 缺字段放行由
+    pgvector 编译器按 tenant_id 先例处理）：
+      - 可见 = 无需权限（缺字段/general）或 所需权限 ⊆ 用户权限集；
+      - permission_scope 是单字符串（可含逗号多权限），精确枚举用户集
+        的所有非空子集组合（≤4 项权限 → ≤15 组合）；
+      - pushdown 是必要条件超集（组合外但等价的值不存在——精确枚举），
+        后置 filter_documents_by_permission 保留为最终裁决（双保险）。
+    """
+    if user_permissions is None:
+        return metadata_filter
+    perms = sorted({p for p in user_permissions if p and p.strip()})
+    if not perms or len(perms) > _PERMISSION_PUSHDOWN_MAX_PERMS:
+        return metadata_filter
+    visible_values = {"general", ""}
+    from itertools import combinations
+    for size in range(1, len(perms) + 1):
+        for combo in combinations(perms, size):
+            visible_values.add(",".join(combo))
+    scope_cond = {"permission_scope": {"$in": sorted(visible_values)}}
+    if not metadata_filter:
+        return scope_cond
+    return {"$and": [metadata_filter, scope_cond]}
 
 
 def _keep_docs_in_allowed_kbs(docs: list, allowed: set, span=None) -> list:
@@ -395,7 +450,7 @@ class ChunkLevelRetriever(BaseRetriever):
         if early is not None:
             return early
         self._stage2_postprocess(st)
-        return st.docs[: st.effective_k], {
+        return _truncate_leaves_keep_parents(st.docs, st.effective_k), {
             "retrieved_chunks": len(st.docs),
             "stage1_path": st.stage1_path,
             "stage1_fallback_count": st.stage1_fallback_count,
@@ -437,6 +492,12 @@ class ChunkLevelRetriever(BaseRetriever):
         if authorized is not None:
             st.authorized = set(authorized)
             st.metadata_filter = _scope_kb_filter(st.metadata_filter, st.authorized)
+        # 权限 scope pushdown：可见 scope 枚举进向量 where，越权 chunk 不再
+        # 白付检索成本/挤占融合名额；后置 filter_documents_by_permission 仍为
+        # 最终裁决（双保险，见 _permission_scope_pushdown docstring）。
+        st.metadata_filter = _permission_scope_pushdown(
+            st.metadata_filter, st.user_permissions,
+        )
 
     def _authorized_doc_search(
         self, st: "_Staging", k: int | None = None, flt: dict | None = None

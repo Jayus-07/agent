@@ -25,7 +25,9 @@ from backend.config.database import RAG_DATA_DIR
 from backend.shared.logger import logger
 
 # 流水线行为版本：解析器/清洗/分类/分块策略有语义变化时 +1，旧缓存整体失效
-PIPELINE_VERSION = 4
+# v5（2026-10-24）：FAQ 编号+冒号+加粗识别、Excel 隐藏 Sheet 跳过、
+# 标题文件名回退、PDF 页码节点清洗、页码回映射跨度守卫
+PIPELINE_VERSION = 5
 
 _CACHE_DIR = Path(RAG_DATA_DIR) / "chunk_cache"
 

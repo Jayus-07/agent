@@ -223,16 +223,12 @@ async def extract_metadata_llm_async(
     taxonomy = get_taxonomy()
     valid_types = set(taxonomy.doc_types)
 
-    # 采样：头部 + 中部 + 尾部，兼顾标题区/正文/结尾签名区
-    max_chars = METADATA_LLM_EXTRACT_MAX_CHARS
-    if len(full_text) <= max_chars:
-        sample = full_text
-    else:
-        head = full_text[: int(max_chars * 0.6)]
-        mid_start = max(0, len(full_text) // 2 - int(max_chars * 0.1))
-        mid = full_text[mid_start: mid_start + int(max_chars * 0.2)]
-        tail = full_text[-int(max_chars * 0.2):]
-        sample = f"{head}\n\n[...中间省略...]\n\n{mid}\n\n[...省略...]\n\n{tail}"
+    # 采样：章节感知采样（P1，2026-10-24）——超预算文档保留章节标题目录
+    # 与中段分层采样，不再退回「头 60% + 中 20% + 尾 20%」的旧采样
+    # （中间章节缺席曾致摘要/关键词偏差，2026-10-13 治理项的 LLM 侧收口）。
+    from backend.rag.preprocessing.summary_sampling import sample_for_summary
+    sample = sample_for_summary(
+        full_text, max_chars=METADATA_LLM_EXTRACT_MAX_CHARS)
 
     try:
         from backend.prompts.service import prompt_service

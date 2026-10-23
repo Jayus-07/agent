@@ -49,6 +49,29 @@ def _ocr_quality_flags(raw_ast) -> list[str]:
     return flags
 
 
+def _filename_title(file_path: str) -> str:
+    """解析器未识别出标题时的文件名回退。
+
+    文件名是上传者的显式命名（可信信号），不是从内容猜测——与
+    `_doc_title`「不从章节标题推断」的契约不冲突。清洗保持保守：
+    去扩展名与下载副本后缀、分隔符转空格；纯数字/单字符等无语义
+    文件名不回退，保留空标题。
+    """
+    import re as _re
+
+    name = os.path.splitext(os.path.basename(file_path))[0].strip()
+    # 常见下载副本后缀：file(1) / file（2）
+    name = _re.sub(r"[（(]\d+[)）]$", "", name).strip()
+    name = _re.sub(r"[_\-]+", " ", name).strip()
+    name = _re.sub(r"\s+", " ", name)
+    if len(name) > 100:
+        name = name[:100].strip()
+    # 纯数字/单字符/空 → 无语义，不作为标题
+    if not name or name.isdigit() or len(name) < 2:
+        return ""
+    return name
+
+
 def parse_and_chunk(
     file_path: str, doc_type_hint: str = "", *,
     ocr_page_budget: int | None = None,
@@ -176,7 +199,10 @@ def parse_and_chunk_full(
 
     stage_started = time.monotonic()
     chunks = strategy.split(normalized_ast, file_path)
-    document_title = _doc_title(normalized_ast)
+    # 标题优先解析器显式识别；PDF 等无标题样式的格式回落到文件名
+    # （2026-10-24：此前三份 PDF 全部块的 document_title 为空，向量前缀
+    # 的【文档】上下文与来源卡展示失去文档级锚点）。
+    document_title = _doc_title(normalized_ast) or _filename_title(file_path)
     for chunk in chunks:
         chunk.metadata.setdefault("document_title", document_title)
         chunk.metadata["source_format"] = normalized_ast.source_format

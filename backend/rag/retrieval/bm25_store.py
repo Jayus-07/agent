@@ -430,27 +430,58 @@ class BM25Store:
         但已不属于待发布版本，必须在 BM25 快照中排除。构建完成后才会原子
         发布 bundle；构建失败会保留上一代 BM25。
         """
-        payload = vectorstore.get()
-        ids = list(payload.get("ids") or [])
-        texts = list(payload.get("documents") or [])
-        metadatas = list(payload.get("metadatas") or [])
-        if not (len(ids) == len(texts) == len(metadatas)):
-            raise ValueError(
-                "向量库返回的 ids/documents/metadatas 数量不一致"
-            )
-
         excluded = {str(item) for item in (exclude_ids or set())}
+
+        def _row_docs(ids, texts, metadatas) -> list[Document]:
+            if not (len(ids) == len(texts) == len(metadatas)):
+                raise ValueError(
+                    "向量库返回的 ids/documents/metadatas 数量不一致"
+                )
+            out: list[Document] = []
+            for vector_id, text, raw_meta in zip(ids, texts, metadatas):
+                vector_id = str(vector_id)
+                if vector_id in excluded:
+                    continue
+                if not str(text or "").strip():
+                    raise ValueError(
+                        f"向量 chunk 内容为空，拒绝发布 BM25: {vector_id}")
+                meta = dict(raw_meta or {})
+                meta.setdefault("vector_id", vector_id)
+                meta.setdefault("chunk_id", vector_id)
+                out.append(Document(page_content=str(text), metadata=meta))
+            return out
+
+        # P1（2026-10-24）：分页流式读取（优先），避免大语料一次性把全部
+        # 行拉进内存的尖峰；不支持 limit 参数的向量库实现回退全量 get()。
+        page_size = 5000
+        offset = 0
         docs: list[Document] = []
-        for vector_id, text, raw_meta in zip(ids, texts, metadatas):
-            vector_id = str(vector_id)
-            if vector_id in excluded:
-                continue
-            if not str(text or "").strip():
-                raise ValueError(f"向量 chunk 内容为空，拒绝发布 BM25: {vector_id}")
-            meta = dict(raw_meta or {})
-            meta.setdefault("vector_id", vector_id)
-            meta.setdefault("chunk_id", vector_id)
-            docs.append(Document(page_content=str(text), metadata=meta))
+        supports_paging = True
+        try:
+            first = vectorstore.get(limit=page_size, offset=0)
+        except TypeError:
+            supports_paging = False
+            first = None
+        if supports_paging:
+            payload = first
+            while payload is not None:
+                ids = list(payload.get("ids") or [])
+                docs.extend(_row_docs(
+                    ids,
+                    list(payload.get("documents") or []),
+                    list(payload.get("metadatas") or []),
+                ))
+                if len(ids) < page_size:
+                    break
+                offset += len(ids)
+                payload = vectorstore.get(limit=page_size, offset=offset)
+        else:
+            payload = vectorstore.get()
+            docs = _row_docs(
+                list(payload.get("ids") or []),
+                list(payload.get("documents") or []),
+                list(payload.get("metadatas") or []),
+            )
 
         collection = str(
             getattr(vectorstore, "_collection", None)

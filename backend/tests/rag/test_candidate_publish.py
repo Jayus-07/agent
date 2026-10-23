@@ -64,11 +64,14 @@ class FakeVectorStore:
         self.promoted: list[str] = []
         self.deleted_ids: list[list[str]] = []
         self.metadata_updates: list[tuple] = []
+        # P0（2026-10-24）：记录跨 store 调用顺序，供「翻转先于晋级」断言
+        self.events: list[str] = []
 
     def clone_for_candidate(self, generation):
         return FakeVectorStore(f"{self._collection}::cand:{generation}")
 
     def promote_collection(self, source_collection):
+        self.events.append("promote")
         self.promoted.append(source_collection)
         return 1
 
@@ -78,6 +81,7 @@ class FakeVectorStore:
         return len(ids or [])
 
     def update_metadata_where(self, where, metadata_update):
+        self.events.append(f"flip:{where.get('doc_id')}")
         self.metadata_updates.append((where, metadata_update))
         return 1
 
@@ -313,6 +317,33 @@ def test_financial_snapshot_keeps_old_vectors(tmp_path, monkeypatch):
     # is_latest 批量翻转按 doc_id 发生
     assert main_v.metadata_updates == [
         ({"doc_id": "doc-1"}, {"is_latest": False})]
+
+
+def test_financial_snapshot_flip_precedes_promotion(tmp_path, monkeypatch):
+    """P0 回归：is_latest 翻转必须发生在候选晋级之前。
+
+    新旧 chunk 复用同一 doc_id；翻转晚于晋级会把刚晋级的新版（is_latest=True）
+    一并翻成 False，财务检索（is_latest=True 过滤）新旧两版同时不可见。
+    """
+    _patch_switch(monkeypatch)
+    from backend.rag.indexing.indexer import IncrementalIndexer
+    monkeypatch.setattr(
+        IncrementalIndexer, "_should_use_version_snapshot",
+        staticmethod(lambda doc_type, path: doc_type == "financial"))
+    stores, main_v, main_d, _, idx = _stores(tmp_path=tmp_path)
+    registry, run_store = FakeRegistry(), FakeRunStore()
+    chunk_real = FakeChunkStoreReal()
+    monkeypatch.setattr(
+        "backend.rag.indexing.chunk_store.get_chunk_store", lambda: chunk_real)
+
+    old_row = {"doc_id": "doc-1", "chunk_ids": "[\"old1\"]",
+               "doc_db_id": "doc::old", "doc_type": "financial"}
+
+    result = _publish(tmp_path, stores, idx, registry, run_store,
+                      old_row=old_row, old_chunk_ids=["old1"])
+    assert result == "published"
+    # 顺序契约：先翻转旧版，后晋级候选向量
+    assert main_v.events.index("flip:doc-1") < main_v.events.index("promote")
 
 
 def test_buffering_chunk_store_flush_semantics(tmp_path):

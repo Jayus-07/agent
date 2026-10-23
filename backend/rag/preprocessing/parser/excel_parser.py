@@ -27,7 +27,8 @@ def _cell_to_str(c) -> str:
 
 
 class ExcelParser(BaseDocumentParser):
-    PARSER_VERSION = "v2"
+    # v3：隐藏 Sheet 默认跳过并留痕（数据泄漏边界，2026-10-24）
+    PARSER_VERSION = "v3"
 
     def parse(self, file_path: str) -> DocumentAST:
         import openpyxl
@@ -68,6 +69,8 @@ class ExcelParser(BaseDocumentParser):
         cells_total_known = True
         truncation_reasons: set[str] = set()
         stop_workbook = False
+        parse_issues: list[dict] = []
+        hidden_sheets: list[str] = []
 
         try:
             for sheet_name in wb.sheetnames:
@@ -85,6 +88,13 @@ class ExcelParser(BaseDocumentParser):
                     break
 
                 ws = wb[sheet_name]
+                # 隐藏 Sheet 默认跳过：隐藏是作者明确的「不对外」意图，
+                # 其内容被索引后可被任何被授权用户检索到，属于数据泄漏面。
+                # 跳过必须留痕（warn），不得静默。
+                sheet_state = getattr(ws, "sheet_state", "visible") or "visible"
+                if sheet_state != "visible":
+                    hidden_sheets.append(sheet_name)
+                    continue
                 rows: list[list[str]] = []
                 sheet_max_row = int(ws.max_row or 0)
                 sheet_max_col = int(ws.max_column or 0)
@@ -190,6 +200,18 @@ class ExcelParser(BaseDocumentParser):
                 f"至少未纳入 {truncated_rows} 行、{truncated_cells} 个单元格；"
                 "后续内容未读取"
             )
+        if hidden_sheets:
+            logger.info(
+                f"[ExcelParser] {file_path} 跳过隐藏 Sheet: {hidden_sheets}"
+            )
+            parse_issues.append({
+                "code": "excel_hidden_sheet_skipped",
+                "severity": "warn",
+                "detail": (
+                    "隐藏 Sheet 未纳入索引（隐藏即不对外）；如需检索请在 "
+                    f"Excel 中取消隐藏后重新上传。涉及: {', '.join(hidden_sheets[:10])}"
+                ),
+            })
 
         return DocumentAST(
             root=root,
@@ -202,4 +224,5 @@ class ExcelParser(BaseDocumentParser):
             table_cells_total=cells_scanned,
             table_cells_total_known=cells_total_known,
             table_truncation_reason=reason,
+            parse_issues=parse_issues,
         )

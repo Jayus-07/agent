@@ -93,8 +93,13 @@ flowchart TD
   - 上传弹窗文件选择器与后端注册表同步开放 PDF、Markdown、TXT、DOCX、XLSX、CSV、HTML、PPTX、JSON、XML。RapidOCR 保留区域平均置信度并汇总最低值；低于 0.7 标记 `ocr_confidence_low`，云端未返回分数时标记 `ocr_confidence_unavailable`，不伪造置信度。
   - 嵌套混合结构按 AST 递归分派：FAQ、法律条款、表格、步骤和普通章节可在不同子章节选择各自策略，同时保留完整祖先标题路径。完整 FAQ Q+A 仍为一个 Leaf，并保存问题文本与 FAQ ID；混合文档中 FAQ 与非 QA 内容分开处理，不重复产出同一 Q+A。表格行使用 `table_node_id` 绑定到具体表格节点，保留表头、行序、表格 ID 与来源定位；同章节多表不再回退到第一张表。
   - 三种文本职责分开：`page_content`/`content_for` 是可引用原文；`EmbeddingStage.embedding_text_for` 只为向量输入添加必要文档/章节上下文；BM25 使用 `search_text_for` 返回原文。Chunk 保留内容 Hash、chunk_type、精确标识符、Parser/切分策略版本、章节 ID、来源节点/跨度/格式定位；普通 Leaf 至少标记 paragraph/list/code/step/legal_clause 之一。Document 级 `title/language/source_format/parser_version`，以及 Chunk 索引期的 `chunk_policy_version/embedding_model/embedding_version/index_generation/indexed_at` 同时写入 registry 与质量记录（registry 存量表由惰性列迁移补齐）。实体候选按原文逐字匹配后才绑定到 Chunk。候选代次仍以发布协议和 registry Active 指针为权威，tenant、权限和审核状态仍从可信服务端上下文继承。
-  - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。
+  - FAQ 识别为**局部配对**（`_qa_patterns.annotate_qa_nodes`）：parser 一律走正常结构解析，命中 Q/A 形态的段落转 qa 节点、其余章节/段落原样保留——混合文档不得因 FAQ 判定丢内容（P0-01，2026-10-13）。编号配对（qa_numbered）兼容 `.`/`、`/`:`/`：` 分隔符与 `**` 加粗包裹（`**Q1:问题**`+`A1:答案` 形态，2026-10-24）；Q/A 节点保存剥除加粗标记后的纯文本。
   - 识别到的 FAQ 问答以每个完整 Q+A 对作为独立 Leaf；不再为整份 FAQ 生成只列问题、不含答案的虚拟 Parent，避免一个 FAQ 命中后把所有问题都附加到回答上下文。Parent-Child 仍用于有实际跨块上下文价值的其他策略。
+  - 文档标题：解析器仅在具备格式语义依据时设置 `document_title`（DOCX 合同标题模式、HTML `<title>`、PPTX 首页标题占位符），不从章节标题推断；其余格式（PDF/MD/TXT 等）由 pipeline 以文件名清洗结果回退（去扩展名/副本后缀/分隔符转空格，纯数字或单字符文件名保持空）。回退只补空值，不覆盖解析器识别值（2026-10-24）。
+  - Excel 隐藏 Sheet（`sheet_state != visible`）默认跳过不入索引：隐藏是作者明确的「不对外」意图，其内容被索引后可被任何被授权用户检索。跳过以 `excel_hidden_sheet_skipped`（warn）记入 parse_issues 与质量记录，不静默（2026-10-24）。
+  - PDF 页码清洗：整节点仅为装饰符包裹的 1-4 位数字（`1`/`— 1 —`）时视为页脚页码残留，Cleaner 在 `structured`+pdf 场景清空该节点并记删除证据；`classify_noise_line` 的 page_number 白名单与该正则同口径，清空的页码节点在清洗对账中计为合法噪音。页码回映射（`stamp_chunk_pages`）新增跨度守卫：命中页码集合跨度 >50 页（目录块包含全书标题的伪证据）时不标页码，宁缺勿错（2026-10-24）。
+  - 跨页表格合并（2026-10-24）：`_merge_cross_page_tables` 在事件汇总前对相邻页表格做保守合并——页尾表格 + 续页首表格（前导仅页眉/页码级短噪声）+ 列数一致 → 数据行并入首页表格（重复表头丢弃续页表头行，无表头直接延续）；合并后若续页无其它内容则链式继续（跨 3+ 页）。合并行并入 T1 原事件（bbox/阅读顺序不变），每次合并以 `cross_page_table_merged`（info）记入 parse_issues；合并不宣称替代 UPLOAD-09 的人工逐行基线。
+  - 近重复版本豁免（2026-10-24）：`detect_near_dup` 支持 `version_scope`（同租户+同KB+同路径三重匹配）——满足匹配的存量行是本文档旧代次，高相似是版本演进的必然结果，跳过比对，同名覆盖上传新版本不再被误卡 pending_review；跨路径高相似副本不受豁免，照旧 pending_review。三要素缺失则整个豁免不生效（宁保守）。
   - DOCX/PDF 表格按文档原始阅读顺序归属章节（docx 按 body XML 单遍遍历；pdf 按 页序+页内y 统一事件流），不得先处理全部段落再把表格堆到最后一个 section（P0-04）。
   - Structure Profile（`StructureReport.profile`）承载章节/表格/QA/条款/SOP 结构信号。普通文档保留既有主路由；多个嵌套章节命中不同内容类型时，由 `ContentUnitDispatchStrategy` 按单元局部调用 QA、Legal、Step、Table 或 Structure 处理器。局部策略重新编号时必须把 `content_unit_id` 纳入 `chunk_id`、Parent 和表格 ID 命名空间；最终完整性边界还会消歧残余重复 ID 并同步修复引用。`route_with_decision` 记录各单元选择的策略、结构信号和处理范围。结构置信度只代表 AST 结构启发式，不代表源文件覆盖率或语义质量。
   - 解析结果契约：Parser 输出 `DocumentAST`，PDF 节点 `page_number` 为 1-based，`bbox` 使用 PDF 页面坐标；Chunk 以标量 `pages` 和 `source_locations_json` 传递页码与 bbox，避免向量库对 list/dict metadata 的后端差异。Chunk 生成时优先从 AST 节点透传位置；硬切按原文跨度映射位置。表格节点改写成摘要/行块前也要先继承来源位置。文本回映射遇到跨页重复页眉/页脚或相同正文时，歧义文本不作为定位证据，避免一个 Leaf 错标到多个页面。质量记录另存 `parse_status`、按页 `parse_issues`、OCR 状态、图片页、空白页、未解析内容页、布局回退页、表格检测失败页和跳过页；问题记录只保存代码、严重度、页码及短说明，不复制正文。
@@ -116,6 +121,19 @@ flowchart TD
 - 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。Parent-Child 身份契约：索引期 `apply_index_chunk_identity` 覆盖 chunk_id 时同步改写 parent_chunk_id，检索端 `attach_parent_context` 的 `$in` 查询才能命中（P0-03）；Parent 扩展结果由 `apply_review_visibility` 在扩展后统一复核，pending_review 不得经 Parent 通道绕过。文档级元数据的全文输入为**纯 leaf 拼接**（parent 章节全量不重复计入）；超长文档摘要采样走 `summary_sampling`（头+章节目录+分层采样+尾，标注覆盖范围）；模拟问题 LLM 选块均匀分布且规则降级不产占位问句。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。删除接口明确区分 `success`、`partial`、`failed` 与 `unknown`；远端清理请求发出后连接中断时返回 `502 + operation_state=unknown`，前端刷新列表并提示核对，不可假报成功或盲目重试。操作记录对部分清理异常和待核对状态分别标记。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。
+- 发布与嵌入质量修复（2026-10-24 P0/P1 批次）：
+  - 财务版本快照翻转（is_latest=False）必须发生在候选向量晋级**之前**——新旧 chunk 复用同一 doc_id，翻转晚于晋级会把刚发布的新版一并翻成 False，财务检索（is_latest=True 过滤）新旧两版同时不可见（P0）。
+  - `batch_with_retry` 按位置返回等长向量列表；整批+逐条重试穷尽仍有缺失 → 抛 ValueError 让文档 failed（fail-closed），不再回退向量库全量重嵌（旧语义 1 个 chunk 失败 = 全文档 embedding 成本翻倍且无对账痕迹）。
+  - embedding Redis 缓存命名空间并入维度+配置签名（对齐检索侧身份口径）；维度/配置变更时旧缓存自然失效，防脏向量 TTL 内命中。
+  - embedding 批间并发默认 2 路（`EMBED_BATCH_CONCURRENCY`，限流敏感环境可设 1 恢复串行）；批结果写入互不重叠位置区间。
+  - BM25 快照切换持有目录级全局锁（`.publish.lock`，O_EXCL 跨进程互斥，stale >10 分钟自愈），跨文档并发发布不再交错产生撕裂快照；`rebuild_from_vectorstore` 分页流式读取（5000/页，不支持分页的桩自动回退全量）。
+  - LLM 元数据抽取接入章节感知采样（`sample_for_summary(max_chars=...)`）：超预算文档保留章节标题目录与中段分层采样，不再退回「头 60%+中 20%+尾 20%」旧采样。
+- 检索侧修复（2026-10-24 P0/P1 批次）：
+  - 主路最终截断只作用于 leaf，attach 的 parent 不占 effective_k 名额（旧实现把 parent 全部截掉，Parent-Child 增强常态失效）。
+  - 增强路径（默认开启）三路召回过滤独立 parent 命中（与主路同源同开关）；vector_only tier 跳过 sparse/rule 路（对齐主路短路语义）。
+  - 置信度聚合读 `metadata["similarity"]`（Document 无 `.score` 属性，旧实现恒 0 致每请求误报 Low confidence）。
+  - SQL 旁路合成 doc_id（`sql_bypass:` 前缀）按内部主体豁免审核可见性正向校验（合成 id 不在 registry 生命周期内，旧实现被出口全量剔除、功能整体无效）。
+  - 权限 scope pushdown：可信权限声明 ≤4 项时把可见 scope 组合枚举进向量 where（`permission_scope $in` + 缺字段放行，对齐 tenant_id 先例）；后置 `filter_documents_by_permission` 仍为最终裁决（双保险），越权 chunk 不再挤占融合名额。
 
 ### B. 检索与回答链路
 

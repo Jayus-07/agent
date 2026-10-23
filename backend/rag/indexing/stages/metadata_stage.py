@@ -781,19 +781,38 @@ class MetadataStage:
 
     @staticmethod
     def detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
-                        exclude_doc_id: str = "") -> str:
+                        exclude_doc_id: str = "",
+                        version_scope: dict | None = None) -> str:
         """MinHash 近重复检测：与全部存量文档比对（跨 doc_type），返回 near_dup_id 或 ""。
 
         2026-09-17 起不再按 doc_type 过滤：LLM/规则分类存在漂移，同一文档重索引
         可能被判成不同 doc_type，按类型过滤会造成近重复漏检（副本被误翻 active
         的事故根因之一）。内容相似度本身与类型无关。
+
+        version_scope（2026-10-24）＝「同租户 + 同 KB + 同路径」的版本演进豁免：
+        满足三重匹配的存量行是本文档自身的旧代次（同名覆盖上传新内容，UL-02），
+        高相似是版本演进的必然结果而非重复堆积，跳过比对——版本更新不再被
+        误卡 pending_review。跨路径的高相似副本不受豁免，照旧进人工审核。
+        三字段任一缺失则整个豁免不生效（宁保守）。
         """
         from backend.config.indexing_rules import get_rules
         from backend.rag.preprocessing.metadata import minhash_similarity
         rules = get_rules()
+
+        def _is_own_prior_version(row: dict) -> bool:
+            if not version_scope:
+                return False
+            return (
+                str(row.get("file_path") or "") == version_scope.get("file_path")
+                and str(row.get("kb_id") or "") == version_scope.get("kb_id")
+                and str(row.get("tenant_id") or "") == version_scope.get("tenant_id")
+            )
+
         existing_rows = list(registry.list_all().values())
         for existing in existing_rows:
             if existing.get("doc_id") == exclude_doc_id:
+                continue
+            if _is_own_prior_version(existing):
                 continue
             existing_sig = existing.get("minhash_sig", "")
             if not existing_sig:
@@ -808,6 +827,18 @@ class MetadataStage:
             except Exception as e:
                 logger.debug(f"[MinHash] 单文档签名比对失败，跳过: {e}", exc_info=True)
         return ""
+
+    @staticmethod
+    def _version_scope_from_base_meta(base_meta: dict) -> dict | None:
+        """从 base_meta 构造版本豁免范围；三要素齐全才豁免，缺一返回 None。"""
+        file_path = str(base_meta.get("file_path") or "").strip()
+        kb_id = str(base_meta.get("kb_id") or "").strip()
+        tenant_id = str(base_meta.get("tenant_id") or "").strip()
+        if not (file_path and kb_id and tenant_id):
+            return None
+        return {
+            "file_path": file_path, "kb_id": kb_id, "tenant_id": tenant_id,
+        }
 
     async def finalize_unified(
         self, full_text: str, base_meta: dict, unified: dict,
@@ -867,7 +898,9 @@ class MetadataStage:
         _stage_ms: dict = {}
         _t_final0 = _time.monotonic()
         near_dup_id = self.detect_near_dup(
-            self._registry, minhash_sig, doc_type, exclude_doc_id=doc_id)
+            self._registry, minhash_sig, doc_type, exclude_doc_id=doc_id,
+            version_scope=self._version_scope_from_base_meta(base_meta),
+        )
 
         # 规则关键词预览，用于过滤重复的 LLM 候选。
         from backend.rag.preprocessing.keyword import extract_rule_keywords

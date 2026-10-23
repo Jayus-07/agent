@@ -125,6 +125,104 @@ def _text_bbox(event: tuple) -> tuple[float, float, float, float]:
     return tuple(float(value) for value in bbox)
 
 
+# 跨页表格合并的页首噪声容忍：续页首表格前的页眉/页码噪声事件数与
+# 单事件字符上限（真实页眉/页码行远短于正文段落）。
+_CROSS_PAGE_HEADER_NOISE_EVENTS = 2
+_CROSS_PAGE_HEADER_NOISE_CHARS = 20
+
+
+def _merge_cross_page_tables(
+    page_events: list[list],
+) -> list[dict]:
+    """相邻页表格合并（保守规则，2026-10-24）。
+
+    PDF 表格按单页 find_tables 提取，跨页表格被拦腰截断、完整行查不全。
+    合并条件（全部满足才并，宁漏勿错）：
+      1. 页 p 的**最后一个内容事件**是表格 T1（表格在页尾，其后无正文）；
+      2. 页 p+1 的**第一个表格** T2 之前只有页眉/页码级短噪声
+         （事件数 ≤ _CROSS_PAGE_HEADER_NOISE_EVENTS 且单条 ≤ 噪声字符上限）；
+      3. T2 表头行与 T1 表头行逐单元格一致（重复表头形态）→ 丢弃 T2
+         表头行后并入；不一致但列数一致 → 视为无表头延续，数据行直接并入。
+    合并只扩展 T1 的 rows（事件引用不变，阅读顺序与 bbox 保持 T1 原位），
+    T2 事件从续页事件流移除；合并成功后停在当前页继续尝试与再下一页合并
+    （同一表格跨 3+ 页的链式合并）。每次合并记入 parse_issues（info）供
+    人工审计（UPLOAD-09：表头及页码可追踪，不宣称无人工核对的全量正确）。
+    """
+    merged_records: list[dict] = []
+    page_count = len(page_events)
+    p = 0
+    chain_t1 = None  # 跨页链上当前打开的表格（逻辑上已延续到页 p）
+    while p < page_count - 1:
+        if chain_t1 is None:
+            page_a = [
+                e for e in page_events[p] if e[1] in ("text", "table")
+            ]
+            if not page_a or page_a[-1][1] != "table":
+                p += 1
+                continue
+            t1 = page_a[-1]
+        else:
+            t1 = chain_t1
+        page_b = [
+            e for e in page_events[p + 1] if e[1] in ("text", "table")
+        ]
+        if not page_b:
+            chain_t1 = None
+            p += 1
+            continue
+        t2_idx = next(
+            (i for i, e in enumerate(page_b) if e[1] == "table"), None,
+        )
+        chain_t1 = None
+        if t2_idx is None:
+            p += 1
+            continue
+        lead_texts = [
+            str(e[2][0] or "") for e in page_b[:t2_idx] if e[1] == "text"
+        ]
+        if (
+            len(lead_texts) > _CROSS_PAGE_HEADER_NOISE_EVENTS
+            or any(len(t) > _CROSS_PAGE_HEADER_NOISE_CHARS for t in lead_texts)
+        ):
+            p += 1
+            continue
+        t2 = page_b[t2_idx]
+        t1_rows = t1[2]
+        t2_rows = t2[2]
+        if not t1_rows or not t2_rows or len(t1_rows) < 2:
+            p += 1
+            continue
+        if len(t1_rows[0]) != len(t2_rows[0]):
+            p += 1
+            continue
+        header_repeated = all(
+            str(a or "").strip() == str(b or "").strip()
+            for a, b in zip(t1_rows[0], t2_rows[0])
+        )
+        merged_rows = t2_rows[1:] if header_repeated else t2_rows
+        if not merged_rows:
+            p += 1
+            continue
+        t1_rows.extend(merged_rows)
+        page_events[p + 1] = [
+            e for e in page_events[p + 1] if e is not t2
+        ]
+        merged_records.append({
+            "start_page": p + 1,
+            "end_page": p + 2,
+            "appended_rows": len(merged_rows),
+            "header_repeated": header_repeated,
+        })
+        # 续页移除 T2 与前导噪声后若无其它内容，表格逻辑上延续到页 p+1，
+        # 下一轮继续检查页 p+2；若 T2 之后还有正文，链终止。
+        tail_content = [
+            e for e in page_events[p + 1] if e[1] in ("text", "table")
+        ]
+        chain_t1 = t1 if not tail_content else None
+        p += 1
+    return merged_records
+
+
 def _order_page_events(events: list[tuple], page_width: float) -> tuple[list[tuple], bool]:
     """复杂双栏页按列阅读；普通单栏页保留纵坐标排序。"""
     ordered = sorted(events, key=lambda event: event[0])
@@ -245,7 +343,8 @@ def _is_heading_line(text: str, size: float, body_size: float) -> bool:
 
 
 class PdfParser(BaseDocumentParser):
-    PARSER_VERSION = "v2"
+    # v3（2026-10-24）：相邻页表格合并（保守规则），跨页表格完整行可检索
+    PARSER_VERSION = "v3"
 
     def parse(
         self, file_path: str, *,
@@ -512,6 +611,17 @@ class PdfParser(BaseDocumentParser):
                     "但当前 OCR 供应商不可用"
                 )
 
+        # 跨页表格合并（保守规则）：在事件汇总前对相邻页表格做合并 pass。
+        cross_page_merges = _merge_cross_page_tables(page_events)
+        if cross_page_merges:
+            for rec in cross_page_merges:
+                logger.info(
+                    f"[PdfParser] {file_path} 跨页表格合并: "
+                    f"第{rec['start_page']}页表格延续至第{rec['end_page']}页，"
+                    f"并入 {rec['appended_rows']} 行"
+                    f"（{'重复表头' if rec['header_repeated'] else '无表头延续'}）"
+                )
+
         ordered_events = _ordered_events()
         raw_items = _text_items(ordered_events)
         table_count = sum(1 for _, kind, *_ in ordered_events if kind == "table")
@@ -527,6 +637,21 @@ class PdfParser(BaseDocumentParser):
             logger.info(f"[PdfParser] {file_path} 识别 {table_count} 个表格")
 
         parse_issues = []
+        if cross_page_merges:
+            parse_issues.append({
+                "code": "cross_page_table_merged",
+                "severity": "info",
+                "page_numbers": sorted({
+                    p for rec in cross_page_merges
+                    for p in (rec["start_page"], rec["end_page"])
+                }),
+                "detail": (
+                    f"跨页表格合并 {len(cross_page_merges)} 处（表头及页码见 "
+                    f"Trace；合并行数 "
+                    f"{sum(r['appended_rows'] for r in cross_page_merges)}，"
+                    "供 UPLOAD-09 人工核对，不替代逐行基线）"
+                ),
+            })
         if image_pages:
             parse_issues.append({
                 "code": "pdf_images_detected",

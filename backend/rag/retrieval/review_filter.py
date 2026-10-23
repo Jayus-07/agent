@@ -198,10 +198,17 @@ def apply_review_visibility(
 
     with_id: list = []
     missing: list = []
+    internal: list = []
     for d in docs:
         doc_id = d.metadata.get("doc_id") if hasattr(d, "metadata") else None
         if not doc_id:
             missing.append(d)
+        elif str(doc_id).startswith("sql_bypass:"):
+            # P1（2026-10-24）：SQL 旁路结果是内部计算产物（合成 doc_id
+            # 不在 registry 生命周期内），正向校验必然剔除——财务 SQL
+            # 旁路在 hybrid 出口被全量丢弃，功能整体无效。归入内部主体
+            # 豁免通道直接放行；黑名单语义不适用于合成 id。
+            internal.append(d)
         elif doc_id in blocked:
             continue  # 黑名单快路径
         else:
@@ -210,6 +217,11 @@ def apply_review_visibility(
     visible_ids = verify_visible_doc_ids(
         d.metadata.get("doc_id") for d in with_id)
     visible = [d for d in with_id if d.metadata.get("doc_id") in visible_ids]
+    if internal:
+        logger.info(
+            "[ReviewFilter] %d 条 SQL 旁路合成结果按内部主体放行%s",
+            len(internal), f"（{context}）" if context else "")
+        visible.extend(internal)
 
     if missing:
         if allow_missing_doc_id:

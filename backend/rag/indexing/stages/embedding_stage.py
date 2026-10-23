@@ -135,7 +135,7 @@ class EmbeddingStage:
         return None
 
     def batch_with_retry(self, chunks, parent_span, doc_summary: str = "") -> list:
-        """批量嵌入（P2 批量化）；成功静默，失败单独 child span 记录。
+        """批量嵌入（P2 批量化）；按位置返回向量，任一位置最终失败则抛异常。
 
         - 每批 EMBED_BATCH_SIZE 条调 embed_documents：本地模型批推理走矩阵
           运算，比逐条 embed_query 快数倍（对齐 chunking._embed_sentences_batched 模式）
@@ -144,7 +144,13 @@ class EmbeddingStage:
         - embedding 实现无 embed_documents → 直接逐条路径
         - doc_summary：1.2 Contextual Prefix——文档级摘要拼入每条嵌入文本
 
-        Returns: 成功嵌入的向量列表（失败的 chunk 不在此列）。
+        Returns: 与 chunks 等长的向量列表（按位置对齐）。
+
+        P1（2026-10-24）契约变更：旧实现丢弃失败位置的向量并返回压缩列表，
+        调用方（indexer）发现数量不齐后回退向量库全量重嵌——1 个 chunk
+        失败 = 全文档 embedding 成本翻倍，且失败无对账痕迹。新契约按位置
+        返回；整批 + 逐条重试全部穷尽后仍失败的位置 → 抛 ValueError 让
+        文档 failed（fail-closed，不发布带向量空洞的半成品，不浪费全量重嵌）。
 
         P1: 每个 chunk 在 embedding 前拼接"模拟问题前缀"（Document Expansion），
         召回率 +10-15%（口语化提问 ↔ 书面文档的语义鸿沟）。
@@ -152,7 +158,7 @@ class EmbeddingStage:
         if not chunks:
             return []
         texts = [self.text_for(c, doc_summary=doc_summary) for c in chunks]
-        succeeded: list = []
+        vectors: list = [None] * len(chunks)
         cache = self.cache()
         cache_hits = 0
 
@@ -168,66 +174,110 @@ class EmbeddingStage:
                     vec = self.single_with_retry(i, chunk, texts[i])
                     if vec is not None:
                         cache.put_many([texts[i]], [vec])
-                if vec is not None:
-                    succeeded.append(vec)
+                vectors[i] = vec
             self.report_cache_metrics(parent_span, cache_hits, len(chunks))
-            return succeeded
+            self._raise_on_missing_vectors(vectors, chunks)
+            return vectors
 
         # 批大小：优先取 embedding 实现声明的最优批（cloud 模式受 DashScope
         # 单请求上限约束，直接取上限避免外层大批被内部再拆）；实现未声明
         # （测试 fake / 非标准包装）或非法时回退配置批大小。
         _declared = getattr(self._embedding, "embed_batch_size", None)
         batch_size = _declared if isinstance(_declared, int) and _declared > 0 else EMBED_BATCH_SIZE
-        for start in range(0, len(chunks), batch_size):
-            batch_chunks = chunks[start:start + batch_size]
-            batch_texts = texts[start:start + batch_size]
-            batch_vecs: list = [None] * len(batch_texts)
-            # 3.1: 缓存优先——命中的位置直接填充，只对 miss 的子集真实嵌入
-            if cache.enabled:
-                cached = cache.get_many(batch_texts)
-                for i, v in enumerate(cached):
-                    if v is not None:
-                        batch_vecs[i] = v
-            miss_positions = [i for i, v in enumerate(batch_vecs) if v is None]
-            cache_hits += len(batch_texts) - len(miss_positions)
-            last_err = None
-            batch_ok = False
-            if miss_positions:
-                miss_texts = [batch_texts[i] for i in miss_positions]
-                for _attempt in range(EMBED_RETRY_MAX):
-                    try:
-                        vecs = batch_embed(miss_texts)
-                        if not isinstance(vecs, (list, tuple)) or len(vecs) != len(miss_texts):
-                            raise ValueError(
-                                f"embed_documents 返回非法: type={type(vecs).__name__}, "
-                                f"期望 {len(miss_texts)} 条向量"
-                            )
-                        for i, v in zip(miss_positions, vecs):
-                            batch_vecs[i] = v
-                        cache.put_many(miss_texts, list(vecs))
-                        batch_ok = True
-                        break
-                    except Exception as e:
-                        last_err = e
-                        # 指数退避 + 抖动（整批重试路径）
-                        if _attempt < EMBED_RETRY_MAX - 1:
-                            time.sleep(embed_backoff_seconds(_attempt))
-                if batch_ok:
-                    succeeded.extend(v for v in batch_vecs if v is not None)
-                    continue
-                # 整批（miss 子集）耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
-                logger.warning(
-                    f"[Embed] 批次 {start // batch_size}（{len(miss_texts)}/{len(batch_texts)} chunks，"
-                    f"其余命中缓存）重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
-                )
-                for i in miss_positions:
-                    vec = self.single_with_retry(start + i, batch_chunks[i], batch_texts[i])
-                    if vec is not None:
-                        batch_vecs[i] = vec
-                        cache.put_many([batch_texts[i]], [vec])
-            succeeded.extend(v for v in batch_vecs if v is not None)
+        from backend.config.rag import EMBED_BATCH_CONCURRENCY
+        batches = [
+            (start, chunks[start:start + batch_size], texts[start:start + batch_size])
+            for start in range(0, len(chunks), batch_size)
+        ]
+
+        def _run_batch(entry):
+            start, batch_chunks, batch_texts = entry
+            batch_vecs, hits = self._process_one_batch(
+                start, batch_chunks, batch_texts, batch_embed, cache,
+            )
+            return start, batch_vecs, hits
+
+        # P1（2026-10-24）：批间小并发（默认 2 路）。批结果写入互不重叠的
+        # 位置区间，线程安全；并发度 1 时与旧串行行为一致。
+        if len(batches) > 1 and EMBED_BATCH_CONCURRENCY > 1:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(
+                max_workers=min(EMBED_BATCH_CONCURRENCY, len(batches)),
+                thread_name_prefix="embed-batch",
+            ) as pool:
+                results = list(pool.map(_run_batch, batches))
+        else:
+            results = [_run_batch(entry) for entry in batches]
+        for start, batch_vecs, hits in results:
+            cache_hits += hits
+            for i, v in enumerate(batch_vecs):
+                if v is not None:
+                    vectors[start + i] = v
         self.report_cache_metrics(parent_span, cache_hits, len(texts))
-        return succeeded
+        self._raise_on_missing_vectors(vectors, chunks)
+        return vectors
+
+    def _process_one_batch(self, start, batch_chunks, batch_texts,
+                           batch_embed, cache) -> tuple[list, int]:
+        """单批嵌入：缓存优先 → 整批重试 → 逐条降级。返回 (batch_vecs, 缓存命中数)。"""
+        batch_vecs: list = [None] * len(batch_texts)
+        cache_hits = 0
+        # 3.1: 缓存优先——命中的位置直接填充，只对 miss 的子集真实嵌入
+        if cache.enabled:
+            cached = cache.get_many(batch_texts)
+            for i, v in enumerate(cached):
+                if v is not None:
+                    batch_vecs[i] = v
+        miss_positions = [i for i, v in enumerate(batch_vecs) if v is None]
+        cache_hits += len(batch_texts) - len(miss_positions)
+        last_err = None
+        if not miss_positions:
+            return batch_vecs, cache_hits
+        miss_texts = [batch_texts[i] for i in miss_positions]
+        for _attempt in range(EMBED_RETRY_MAX):
+            try:
+                vecs = batch_embed(miss_texts)
+                if not isinstance(vecs, (list, tuple)) or len(vecs) != len(miss_texts):
+                    raise ValueError(
+                        f"embed_documents 返回非法: type={type(vecs).__name__}, "
+                        f"期望 {len(miss_texts)} 条向量"
+                    )
+                for i, v in zip(miss_positions, vecs):
+                    batch_vecs[i] = v
+                cache.put_many(miss_texts, list(vecs))
+                return batch_vecs, cache_hits
+            except Exception as e:
+                last_err = e
+                # 指数退避 + 抖动（整批重试路径）
+                if _attempt < EMBED_RETRY_MAX - 1:
+                    time.sleep(embed_backoff_seconds(_attempt))
+        # 整批（miss 子集）耗尽重试 → 降级逐条，隔离单点失败（旧语义保留）
+        logger.warning(
+            f"[Embed] 批次起始 {start}（{len(miss_texts)}/{len(batch_texts)} chunks，"
+            f"其余命中缓存）重试 {EMBED_RETRY_MAX} 次全失败 ({last_err})，降级逐条"
+        )
+        for i in miss_positions:
+            vec = self.single_with_retry(start + i, batch_chunks[i], batch_texts[i])
+            if vec is not None:
+                batch_vecs[i] = vec
+                cache.put_many([batch_texts[i]], [vec])
+        return batch_vecs, cache_hits
+
+    @staticmethod
+    def _raise_on_missing_vectors(vectors: list, chunks) -> None:
+        """存在重试穷尽后仍缺失的向量位置 → fail-closed 抛异常（P1 契约）。"""
+        missing = [i for i, v in enumerate(vectors) if v is None]
+        if not missing:
+            return
+        first_chunk = chunks[missing[0]]
+        first_id = ""
+        if hasattr(first_chunk, "metadata") and isinstance(first_chunk.metadata, dict):
+            first_id = str(first_chunk.metadata.get("chunk_id") or "")
+        raise ValueError(
+            f"embedding 重试穷尽后仍有 {len(missing)}/{len(chunks)} 个 chunk "
+            f"无向量（首个失败位置 {missing[0]}, chunk_id={first_id}）；"
+            "文档标记失败，不发布带向量空洞的半成品"
+        )
 
     # ---- 缓存与指标 ----
 
@@ -278,10 +328,22 @@ class EmbeddingStage:
                     provider = resolve_provider(model_name)
             except Exception as exc:
                 logger.debug("[Embed] 读取缓存模型版本失败，使用运行时身份: %s", exc)
+            # P1（2026-10-24）：缓存键并入配置签名与维度（对齐检索侧
+            # embedding 身份口径）——同 provider+模型名下维度变更或供应商
+            # 侧升级时旧缓存不再命中，防脏向量写库。
+            config_signature = ""
+            try:
+                config_signature = repr(
+                    getattr(self._embedding, "_config_signature", "")
+                )
+            except Exception:
+                config_signature = ""
+            from backend.rag.embedding_singleton import EMBEDDING_DIM
             self._cache = EmbeddingCache(
                 model_name,
                 provider=provider,
                 model_revision=model_revision,
+                config_signature=f"dim{EMBEDDING_DIM}|{config_signature}",
             )
         return self._cache
 

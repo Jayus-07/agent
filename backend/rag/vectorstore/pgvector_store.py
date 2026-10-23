@@ -209,6 +209,15 @@ def _cond_sql(key: str, value: Any, params: list) -> str:
         # tenant_id 列上线前写入的向量元数据没有此键；迁移后它们归属 default。
         params.append("default")
         return "(metadata->>'tenant_id' = %s OR NOT (metadata ? 'tenant_id'))"
+    if key == "permission_scope" and isinstance(value, dict) and "$in" in value:
+        # 权限 pushdown（P1，2026-10-24）：可见 scope 枚举 $in。缺字段的行
+        # 视为开放（required_permissions 对缺失 metadata 返回空集 = 无需
+        # 权限），必须放行——对齐 tenant_id 的缺字段先例；后置权限过滤
+        # 仍是最终裁决（双保险）。
+        vals = [_scalar_to_text(x) for x in (value["$in"] or [])]
+        params.append(vals)
+        return ("(metadata->>'permission_scope' = ANY(%s) "
+                "OR NOT (metadata ? 'permission_scope'))")
     if isinstance(value, dict):
         op, v = next(iter(value.items()))
         if op == "$eq":
@@ -640,13 +649,19 @@ class PgVectorKnowledgeStore(KnowledgeStore):
     ) -> list[Any]:
         return [doc for doc, _ in self.similarity_search_with_score(query, k=k, filter=filter)]
 
-    def get(self, where: dict | None = None) -> dict:
+    def get(self, where: dict | None = None, *,
+            limit: int | None = None, offset: int = 0) -> dict:
         params: list = [self._collection]
         where_sql = where_to_sql(normalize_where(where), params)
         sql = f"SELECT id, content, metadata FROM {self._table} WHERE collection = %s"
         if where_sql:
             sql += f" AND {where_sql}"
         sql += " ORDER BY id"
+        # 分页参数（P1，2026-10-24）：BM25 全量重建改为分页流式读取，
+        # 避免大语料一次性 fetchall 的内存尖峰；不传参数行为同旧版。
+        if limit is not None:
+            sql += " LIMIT %s OFFSET %s"
+            params.extend([int(limit), int(offset)])
         with self._conn() as conn:
             cur = conn.cursor()
             cur.execute(sql, params)

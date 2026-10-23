@@ -413,6 +413,13 @@ def _merge_small_texts(texts: list[str], budget: int) -> list[str]:
     return merged
 
 
+# 页码回映射的跨度守卫：合法 chunk（正文/表格跨页）页码跨度最多几十页；
+# 目录块包含全书章节标题与页码数字，会把分散在几百页外的叶子文本当证据
+# 错误命中（progit_zh 实测首块被标 "1,498,499,500"）。跨度超限视为不可信，
+# 不标页码，继续遵守宁缺勿错。
+_MAX_PAGE_SPAN_FOR_STAMP = 50
+
+
 def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
     """把叶子节点的页码（PDF 解析 §5.2 可追溯字段 page_number）映射进 chunk metadata。
 
@@ -490,6 +497,11 @@ def stamp_chunk_pages(chunks: list, ast: DocumentAST) -> None:
                 if len(exact_locations) == 1:
                     locations = exact_locations
         if locations:
+            pages_set = {page for page, _ in locations}
+            if len(pages_set) > 1 and (
+                max(pages_set) - min(pages_set)
+            ) > _MAX_PAGE_SPAN_FOR_STAMP:
+                continue
             _merge_source_locations(meta, [
                 {"page": page, "bbox": list(bbox) if bbox else None}
                 for page, bbox in locations
