@@ -544,7 +544,13 @@ class MetadataStage:
             # extract_doc_keywords_typed（含 LLM 调用）与 extract_entities
             # 已移入下方 gather 并发执行——原先在主线程串行阻塞，P2-2 的
             # "并行"名不副实（关键词 LLM 调用先于 gather 发生）。
-            person_names = extract_person_names(full_text)
+            # P2（2026-10-24）：人名提取是 CPU 密集正则，包 to_thread 避免
+            # 阻塞本线程 loop 上的其他协程（对齐 extract_entities 的处理）。
+            import asyncio as _asyncio
+
+            person_names = await _asyncio.to_thread(
+                extract_person_names, full_text,
+            )
         except Exception as e:
             # 规则六步失败 → 确定性兜底（合成最小 unified，走同一组包收口；
             # 元数据失败不得导致文档无法入库）
@@ -712,14 +718,17 @@ class MetadataStage:
                     "simulated_questions_chunks": len(questions_by_chunk),
                 })
 
-        # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取前几句
+        # 兜底：<1KB 全文当摘要 / 没生成出来的剥 markdown 取采样前几句
+        # （P2，2026-10-24：兜底与主路径共用同一采样，不再对多 MB 全文跑
+        # 句提取——超长文档全文句正则扫描是纯浪费，采样首段信息量等价）
         if skip_summary:
             summary = ""
         elif not summary and len(full_text) <= 1000:
             summary = full_text.strip()
         elif not summary:
             from backend.rag.preprocessing.metadata import _extract_first_sentences
-            summary = _extract_first_sentences(full_text, 3) or ""
+            _fallback_src = sample if not skip_summary else full_text
+            summary = _extract_first_sentences(_fallback_src, 3) or ""
 
         # ⑨ 章节提取（纯正则，零成本，所有文档都做）— span 收口到 stage_span
         sections = []
@@ -779,6 +788,25 @@ class MetadataStage:
 
     # ---- 统一抽取路径的收口（纯规则部分照旧计算）----
 
+    # P2（2026-10-24）：MinHash 签名解析缓存（内容寻址）。registry 每行的
+    # minhash_sig 是 JSON 串，每次近重复检测逐行 json.loads；万级文档下
+    # O(N) 扫描 × 每行解析。key=原始签名字符串，值只依赖内容，天然免失效。
+    _SIG_PARSE_CACHE: dict[str, list[int]] = {}
+    _SIG_PARSE_CACHE_MAX = 20000
+
+    @classmethod
+    def _parse_minhash_sig(cls, raw):
+        if isinstance(raw, list):
+            return raw
+        cached = cls._SIG_PARSE_CACHE.get(raw)
+        if cached is not None:
+            return cached
+        parsed = json.loads(raw)
+        if len(cls._SIG_PARSE_CACHE) >= cls._SIG_PARSE_CACHE_MAX:
+            cls._SIG_PARSE_CACHE.clear()
+        cls._SIG_PARSE_CACHE[raw] = parsed
+        return parsed
+
     @staticmethod
     def detect_near_dup(registry, minhash_sig: list[int], doc_type: str,
                         exclude_doc_id: str = "",
@@ -818,7 +846,7 @@ class MetadataStage:
             if not existing_sig:
                 continue
             try:
-                existing_sig = json.loads(existing_sig) if isinstance(existing_sig, str) else existing_sig
+                existing_sig = MetadataStage._parse_minhash_sig(existing_sig)
                 sim = minhash_similarity(minhash_sig, existing_sig)
                 if sim > rules.near_dup_similarity_threshold:
                     logger.warning(

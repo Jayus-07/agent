@@ -847,8 +847,9 @@ def _purge_doc_vectors(doc_id: str, file_path: str, pipeline, warnings: list[str
     except Exception as e:
         warnings.append(f"chunk_store 清理失败: {e}")
     try:
-        # P0-2: 传入 file_path 作为 BM25 删除的第二过滤键（doc_id 协议分裂时按文件名兜底命中）
-        pipeline.remove_documents_from_bm25([doc_id], file_paths=[file_path])
+        # BM25 删除以 doc_id 为唯一键（C 阶段收口；basename 第二键已废除，
+        # 跨 KB 同名误伤）。file_paths 仅兼容旧签名，内部忽略。
+        pipeline.remove_documents_from_bm25([doc_id])
     except Exception as e:
         warnings.append(f"BM25 清理失败: {e}")
     if file_path:
