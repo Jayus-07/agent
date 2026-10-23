@@ -3,7 +3,7 @@
 > 目标机：**4 vCPU / 8 GB RAM / 40 GB SSD**，Docker Compose 单机部署。
 > 本目录只放「额外覆盖」，主定义仍是仓库根 `docker-compose.yml`。
 
-## 1. 内存预算（合计 ≤ 6.3 GB，留 ≥1.7 GB 给系统与 Next.js）
+## 1. 内存预算（合计约 6.8 GB，留约 1.2 GB 给系统与 Next.js）
 
 | 服务 | 限制 | CPU | 说明 |
 | --- | --- | --- | --- |
@@ -12,7 +12,7 @@
 | agent-worker | 768m | 1.0 | 并发 2 |
 | rag-index-worker | 800m | 1.0 | 并发 1 |
 | maintenance-worker | 256m | 0.3 | 并发 1 |
-| report-worker | 256m | 0.3 | 并发 1 |
+| report-worker | 768m | 0.5 | 并发 1，包含真实 RAG 与候选合成评测 |
 | beat | 128m | 0.2 | 定时调度 |
 | cs-dispatcher | 224m | 0.3 | 不开客服可停 |
 | apisix | 224m | 0.5 | 网关 |
@@ -20,7 +20,7 @@
 | redis-broker | 384m | 0.3 | maxmemory 320mb |
 | auth-redis | 128m | 0.2 | maxmemory 96mb |
 | pg-backup | 96m | 0.2 | 每日备份 |
-| **合计** | **≈ 6.3 GB** | 7.8（上限，非峰值） | 4 核按需调度 |
+| **合计** | **≈ 6.8 GB** | 8.0（上限，非峰值） | 4 核按需调度 |
 
 **不启动**：`kafka`、`ollama`、`rag-service`（4G/2C，8G 机器跑不动本地模型）、`business-mock`、`mcp-12306`、`mcp-service`、`metadata-shadow-worker`、observability 全套（prometheus/grafana/loki/tempo/promtail/exporters）。
 

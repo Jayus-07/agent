@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
@@ -71,7 +72,7 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
                 trace_id: str = "",
                 biz_type: str = "", biz_id: str = "",
                 parent_task_id: str = "",
-                extra_input: dict | None = None) -> TaskRecord:
+                extra_input: dict | None = None, connection=None) -> TaskRecord:
     """创建 PENDING 任务并落库。thread_id 全局唯一（checkpoint 定位键）。
 
     extra_input：执行器重投所需的业务参数（如 rag_index 的索引 kwargs），
@@ -83,7 +84,7 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
     task_id = str(uuid.uuid4())
     thread_id = f"task-{task_id}"
     input_payload = {"query": query, **(extra_input or {})}
-    with _conn() as conn, conn.cursor() as cur:
+    with (nullcontext(connection) if connection is not None else _conn()) as conn, conn.cursor() as cur:
         cur.execute(
             """
             INSERT INTO tasks (id, user_id, tenant_id, graph_name,
@@ -98,6 +99,11 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
              thread_id, trace_id, biz_type, biz_id,
              parent_task_id or None, CELERY_MAX_RETRIES),
         )
+    if connection is not None:
+        return TaskRecord(id=task_id, user_id=user_id, tenant_id=tenant_id,
+                          graph_name=graph_name, input=input_payload,
+                          thread_id=thread_id, biz_type=biz_type, biz_id=biz_id,
+                          max_retries=CELERY_MAX_RETRIES)
     return get_task(task_id)  # type: ignore[return-value]
 
 
@@ -566,12 +572,24 @@ def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
     """按预期状态原子落 CANCELLED（Phase1 Step6 队列内/暂停态取消）。
 
     第五条例外通道（原生条件 SQL，与状态机白名单一致：PENDING/PAUSED/
-    WAITING_USER→CANCELLED）。竞态回落由调用方负责——不得经 update_status
+    WAITING_USER→CANCELLED；FAILED 仅允许仍可自动重试的任务走此通道）。
+    FAILED 还需在同一 SQL CAS 中核验未耗尽、重试计数及可重试错误类型，
+    防止刚耗尽的任务被覆盖为取消。竞态回落由调用方负责——不得经 update_status
     的并发重判直写：把刚被拾取的 RUNNING 行直标 CANCELLED 会让在跑的
     Worker 无从感知（它必须经 Redis 标志在节点边界自行停下）。
     竞态失败（rowcount=0）= 状态已变，调用方应重读后走标志路径。
     终态字段对齐 update_status：finished_at + duration 补算。
     """
+    if expected not in (TaskStatus.PENDING, TaskStatus.PAUSED, TaskStatus.WAITING_USER, TaskStatus.FAILED):
+        raise ValueError("运行中的任务必须通过控制标志在边界取消")
+    retry_guard = ""
+    retry_args = ()
+    if expected == TaskStatus.FAILED:
+        from backend.tasks.error_taxonomy import _RETRYABLE_TYPES
+
+        # 同一状态下重试可能刚刚耗尽，CAS 必须同时核验重试字段。
+        retry_guard = " AND retry_exhausted = false AND retry_count < max_retries AND error_type = ANY(%s)"
+        retry_args = (list(_RETRYABLE_TYPES),)
     ensure_schema()
     with _conn() as conn, conn.cursor() as cur:
         cur.execute(
@@ -580,9 +598,9 @@ def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
             "duration_ms = CASE WHEN started_at IS NOT NULL THEN "
             "(EXTRACT(EPOCH FROM (now() - started_at)) * 1000)::int "
             "ELSE duration_ms END "
-            "WHERE id = %s AND status = %s",
+            "WHERE id = %s AND status = %s" + retry_guard,
             (TaskStatus.CANCELLED.value, progress[:500],
-             error_message[:2000], task_id, expected.value),
+             error_message[:2000], task_id, expected.value) + retry_args,
         )
         return cur.rowcount > 0
 

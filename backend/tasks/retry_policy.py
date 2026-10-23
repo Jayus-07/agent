@@ -31,9 +31,7 @@ class RetryPolicy:
 
 
 def _load_policies() -> dict[str, RetryPolicy]:
-    from backend.config.tasks import (TASK_RETRY_INITIAL_DELAY,
-                                      TASK_RETRY_JITTER,
-                                      TASK_RETRY_MAX_DELAY)
+    from backend.config.tasks import TASK_RETRY_INITIAL_DELAY, TASK_RETRY_JITTER, TASK_RETRY_MAX_DELAY
 
     default = RetryPolicy(
         initial_delay=TASK_RETRY_INITIAL_DELAY, backoff=2.0,
@@ -68,6 +66,18 @@ def compute_delay(policy: RetryPolicy, retry_index: int) -> int:
     if not policy.jitter or base <= 1:
         return base
     return random.randint(max(1, base // 2), base)
+
+
+def is_waiting_retry(record) -> bool:
+    """任务表的 FAILED 同时承载等待重试，按统一分类与预算区分终态。"""
+    from backend.tasks.error_taxonomy import _RETRYABLE_TYPES
+
+    return (
+        record.status.value == "FAILED"
+        and not record.retry_exhausted
+        and record.error_type in _RETRYABLE_TYPES
+        and record.retry_count < record.max_retries
+    )
 
 
 class TaskRetryScheduled(Exception):

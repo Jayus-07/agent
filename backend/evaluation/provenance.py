@@ -56,6 +56,9 @@ def collect_snapshot_inputs(config: Any, report: EvalReport) -> dict[str, Any]:
         "tool_contract_fingerprint": str(metadata.get("tool_contract_fingerprint")
                                          or _tool_contract_fingerprint()),
         "corpus_version_id": str(scope.get("version_id") or ""),
+        "corpus_snapshot": metadata.get("corpus_snapshot") or [],
+        "corpus_snapshot_id": metadata.get("corpus_snapshot_id") or "",
+        "corpus_snapshot_content_hash": metadata.get("corpus_snapshot_hash") or "",
         "git_sha": str(metadata.get("git_sha") or _git_sha()),
         "threshold_snapshot": {
             "tier_thresholds": dict(TIER_THRESHOLDS),
@@ -159,6 +162,8 @@ def build_eval_provenance(config: Any, report: EvalReport) -> dict[str, Any]:
         "kb_id": scope.get("kb_id") or getattr(config, "kb_id", None) or "",
         "fixture_set": scope.get("fixture_set") or getattr(config, "fixture_set", None) or "",
         "version_id": scope.get("version_id") or "",
+        "dataset_content_hash": str((metadata.get("suite_governance") or {}).get("content_hash") or ""),
+        "corpus_snapshot_hash": build_snapshot_hash({"documents": metadata["corpus_snapshot"]}) if metadata.get("corpus_snapshot") else "",
         "multiquery": bool(scope.get("multiquery", getattr(config, "multiquery", False))),
         "prompt_snapshot": prompt_snapshot,
         "release_id": str(getattr(config, "release_id", "") or ""),

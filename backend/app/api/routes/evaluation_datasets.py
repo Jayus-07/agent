@@ -443,7 +443,7 @@ async def approve_dataset_candidate(
         return _candidate_payload(candidate)
     if not candidate.question.strip():
         raise HTTPException(status_code=422, detail="候选问题不能为空")
-    return _candidate_payload(_stage_candidate(candidate, body.reviewer))
+    return _candidate_payload(_stage_candidate(candidate, _operator.actor))
 
 
 @router.post("/dataset-candidates/{candidate_id}/reject")
@@ -456,7 +456,7 @@ async def reject_dataset_candidate(
     if candidate is None:
         raise HTTPException(status_code=404, detail="评测集候选不存在")
     candidate.status = "rejected"
-    candidate.reviewer = body.reviewer
+    candidate.reviewer = _operator.actor
     candidate.review_reason = body.reason or "审核未通过"
     _persist_candidate(candidate)
     return _candidate_payload(candidate)
@@ -476,3 +476,8 @@ __all__ = [
     "register_dataset_candidate",
     "router",
 ]
+
+# 在既有评测治理路由下扩展，沿用同一 API 前缀与身份边界。
+from backend.app.api.routes.evaluation_imports import router as imports_router
+
+router.include_router(imports_router)

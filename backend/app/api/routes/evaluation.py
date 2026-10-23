@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user
+from backend.app.api.deps import OperatorIdentity, require_admin_user, resolve_operator_role
 from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.mode import resolve_evaluation_mode
@@ -146,6 +146,7 @@ class RunEvalResponse(BaseModel):
     suite: str = ""
     evaluation_mode: str = ""
     evaluator_mode: str = ""
+    validity: str = ""
 
 
 class RunEvalRequest(BaseModel):
@@ -167,15 +168,6 @@ async def run_evaluation(
     try:
         request = body or RunEvalRequest()
         mode = resolve_evaluation_mode(request.evaluation_mode)
-        if mode.mode == "offline":
-            result = await asyncio.to_thread(run_weekly_rag_eval)
-            return RunEvalResponse(
-                **result,
-                suite=request.suite,
-                evaluation_mode=mode.mode,
-                evaluator_mode="self",
-            )
-
         def _run_selected() -> RunEvalResponse:
             from backend.evaluation.service import EvaluationService
             from backend.evaluation.storage import persist_report
@@ -183,6 +175,7 @@ async def run_evaluation(
 
             from backend.infra.async_utils import run_on_worker_loop
 
+            # 仅检索仍需 Embedding/重排供应商，不能只在生成模式刷新配置。
             run_on_worker_loop(refresh_registry())
             report = EvaluationService().evaluate(
                 EvalConfig(
@@ -191,6 +184,7 @@ async def run_evaluation(
                     ragas=mode.ragas,
                     no_ragas=mode.no_ragas,
                     selection=request.suite,
+                    triggered_by=_operator.actor,
                 )
             )
             run_dir = persist_report(report)
@@ -213,6 +207,7 @@ async def run_evaluation(
                 suite=request.suite,
                 evaluation_mode=mode.mode,
                 evaluator_mode=str(report.metadata.get("evaluator_mode") or ""),
+                validity=str((report.metadata.get("run_validity") or {}).get("validity") or ""),
             )
 
         return await asyncio.to_thread(_run_selected)
@@ -448,10 +443,14 @@ async def eval_runs_for_prompt_version(
 async def get_eval_run(
     run_id: str,
     _tenant: str = Depends(_eval_tenant_scope),
+    _operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     """获取单次评测的完整报告（C7-1：展示/导出层 PII 脱敏，原始文件不动）。"""
     try:
         report, meta = load_report(run_id)
+        if report.metadata.get("managed_dataset") or str(report.metadata.get("selection") or "").startswith("import:"):
+            if _operator.kind != "user" or _operator.role != "super_admin":
+                raise HTTPException(403, "业务题集报告包含知识库原文，仅平台超级管理员可查看")
         from backend.evaluation.export_masking import mask_report_for_viewer
 
         # P0-02 三层防御·第三层：历史旧 report 文件中仍可能存在 NaN/Infinity
@@ -466,6 +465,8 @@ async def get_eval_run(
         }
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"Run not found: {run_id}")
+    except HTTPException:
+        raise
     except Exception as e:
         # C7-3/UI-07：内部异常细节只进日志，响应回统一错误码+可读原因，
         # 不把 str(e)（可能含堆栈/路径/SQL）暴露给客户端

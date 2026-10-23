@@ -21,6 +21,7 @@ vi.mock('@/components/evaluations/DatasetVersionDetail', () => ({
 vi.mock('@/components/evaluations/EvaluationRunDetail', () => ({
   default: () => <div data-child="run">评测运行详情</div>,
 }))
+vi.mock('./ImportedDatasetsPanel', () => ({ default: () => <div data-child="imports">业务评测集导入</div> }))
 
 import DatasetGovernancePanel from './DatasetGovernancePanel'
 
@@ -58,7 +59,7 @@ afterEach(() => {
 })
 
 describe('DatasetGovernancePanel', () => {
-  it('加载评测集治理数据并组合四类治理子组件', async () => {
+  it('业务题集优先展示，内置基准按需加载，不混入审核或运行详情', async () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -69,7 +70,14 @@ describe('DatasetGovernancePanel', () => {
       await Promise.resolve()
     })
 
+    expect(evaluationService.listDatasets).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-child="imports"]')).not.toBeNull()
+    await act(async () => {
+      Array.from(container.querySelectorAll('button')).find(b => b.textContent === '内置基准')!.click()
+    })
     expect(evaluationService.listDatasets).toHaveBeenCalledTimes(1)
-    expect(container.querySelectorAll('[data-child]')).toHaveLength(4)
+    expect(evaluationService.listDatasetCandidates).not.toHaveBeenCalled()
+    expect(evaluationService.listRuns).not.toHaveBeenCalled()
+    expect(container.querySelector('[data-child="catalog"]')).not.toBeNull()
   })
 })

@@ -152,7 +152,9 @@ def get_full_retriever(pipeline, use_multiquery: bool = False):
     用 CLI --multiquery 开启，用于度量线上真实链路。
     """
     global _full_retriever
-    cached = _full_retriever.get(use_multiquery)
+    frozen = getattr(pipeline, "_evaluation_frozen", False)
+    local_cache = pipeline.__dict__.setdefault("_evaluation_retrievers", {}) if frozen else _full_retriever
+    cached = local_cache.get(use_multiquery)
     if cached is not None:
         return cached
 
@@ -177,7 +179,7 @@ def get_full_retriever(pipeline, use_multiquery: bool = False):
         base_retriever=retriever,
     )
 
-    _full_retriever[use_multiquery] = full_retriever
+    local_cache[use_multiquery] = full_retriever
     return full_retriever
 
 

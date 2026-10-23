@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { RefreshCw, ChevronDown, ChevronRight, CheckCircle2, XCircle, AlertCircle, SkipForward, PlayCircle, Download, Ban } from 'lucide-react'
-import { evaluationService, type EvaluationMode, type RunSummary, type EvalRunDetail } from '@/api/evaluation'
+import { evaluationService, type EvaluationMode, type RunSummary, type EvalRunDetail, type EvaluationSuite } from '@/api/evaluation'
 import CaseSampleDetail from '@/components/evaluations/CaseSampleDetail'
 import { useToast } from '@/components/shared/Toast'
 import EmptyState from '@/components/shared/EmptyState'
@@ -109,6 +109,16 @@ export default function EvaluationResultsPanel() {
   const [suiteFilter, setSuiteFilter] = useState<string>('')
   const [triggerFilter, setTriggerFilter] = useState<string>('')
   const [evaluationMode, setEvaluationMode] = useState<EvaluationMode>('offline')
+  const [suites, setSuites] = useState<EvaluationSuite[]>([])
+  const [selectedSuite, setSelectedSuite] = useState('pr_baseline')
+  const [suiteError, setSuiteError] = useState('')
+  useEffect(() => {
+    let active = true
+    void evaluationService.listSuites().then(items => {
+      if (active) setSuites(items.filter(item => item.module === 'rag'))
+    }).catch(() => { if (active) setSuiteError('无法读取内置套件，请刷新后重试') })
+    return () => { active = false }
+  }, [])
 
   const filteredRuns = useMemo(() => runs.filter(r => {
     if (statusFilter !== 'all' && (r.status || '') !== statusFilter) return false
@@ -191,9 +201,11 @@ export default function EvaluationResultsPanel() {
     try {
       const result = await evaluationService.runEval('rag', {
         evaluation_mode: evaluationMode,
-        suite: 'pr_baseline',
+        suite: selectedSuite,
       })
-      toast.success(`评测完成：通过率 ${(result.pass_rate * 100).toFixed(1)}%`)
+      if (!result.ok) throw new Error(result.error || '评测执行失败')
+      if (result.validity?.startsWith('INVALID')) toast.error('本轮评测环境无效，请查看结果原因')
+      else toast.success(`评测完成：通过率 ${(result.pass_rate * 100).toFixed(1)}%`)
       await loadRuns()
     } catch (e) {
       toast.error(`评测失败：${e instanceof Error ? e.message : String(e)}`)
@@ -280,6 +292,8 @@ export default function EvaluationResultsPanel() {
         {/* 操作 */}
         <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
+            <label className="text-xs text-text-secondary">内置套件<select aria-label="内置评测套件" className="ml-2 rounded border border-border-subtle bg-surface-base px-2 py-1.5" value={selectedSuite} disabled={running} onChange={e => setSelectedSuite(e.target.value)}>{suites.map(item => <option key={item.name} value={item.name}>{item.name} / {item.case_count} 题</option>)}</select></label>
+            {suiteError && <span role="alert" className="text-xs text-red-700">{suiteError}</span>}
             <label className="flex items-center gap-2 text-xs text-text-secondary">
               <span>测评方式</span>
               <select
@@ -296,7 +310,7 @@ export default function EvaluationResultsPanel() {
             </label>
             <button
               onClick={handleRunEval}
-              disabled={running}
+              disabled={running || suites.length === 0 || Boolean(suiteError)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
             >
               <PlayCircle size={14} />

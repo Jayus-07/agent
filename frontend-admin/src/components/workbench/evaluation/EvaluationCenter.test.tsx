@@ -20,6 +20,8 @@ vi.mock('@/components/auth/RoleGate', () => ({
 vi.mock('./EvaluationResultsPanel', () => ({ default: () => <div data-panel="results">评测结果面板</div> }))
 vi.mock('./DatasetGovernancePanel', () => ({ default: () => <div data-panel="datasets">评测集治理面板</div> }))
 vi.mock('./FeedbackCandidatesPanel', () => ({ default: () => <div data-panel="feedback">反馈候选面板</div> }))
+vi.mock('./DatasetReviewsPanel', () => ({ default: () => <div data-panel="reviews">候选审核面板</div> }))
+vi.mock('./EvaluationBindingsPanel', () => ({ default: () => <div data-panel="bindings">关联运行面板</div> }))
 
 import EvaluationCenter from './EvaluationCenter'
 
@@ -42,18 +44,18 @@ function mount(): { root: Root; container: HTMLDivElement } {
 }
 
 describe('EvaluationCenter', () => {
-  it('默认展示评测结果，且只挂载一个面板', () => {
+  it('默认展示评测集，且只挂载一个面板', () => {
     const { root, container } = mount()
 
     expect(container.textContent).toContain('评测中心')
-    expect(container.textContent).toContain('评测结果面板')
+    expect(container.textContent).toContain('评测集治理面板')
     expect(container.querySelectorAll('[data-panel]')).toHaveLength(1)
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(5)
 
     act(() => root.unmount())
   })
 
-  it('合法 feedback Tab 可直接定位，非法值回退到结果', () => {
+  it('合法 feedback Tab 可直接定位，非法值回退到评测集', () => {
     navigation.query = 'tab=feedback'
     const feedback = mount()
     expect(feedback.container.textContent).toContain('反馈候选面板')
@@ -61,7 +63,18 @@ describe('EvaluationCenter', () => {
 
     navigation.query = 'tab=unknown'
     const invalid = mount()
-    expect(invalid.container.textContent).toContain('评测结果面板')
+    expect(invalid.container.textContent).toContain('评测集治理面板')
     act(() => invalid.root.unmount())
+  })
+  it('知识库深链接直接进入关联页，审核页不挂载运行面板', () => {
+    navigation.query = 'tab=bindings&kb_id=policy_general'
+    const bindings = mount()
+    expect(bindings.container.querySelector('[data-panel="bindings"]')).not.toBeNull()
+    act(() => bindings.root.unmount())
+    navigation.query = 'tab=reviews'
+    const reviews = mount()
+    expect(reviews.container.querySelector('[data-panel="reviews"]')).not.toBeNull()
+    expect(reviews.container.querySelectorAll('[data-panel]')).toHaveLength(1)
+    act(() => reviews.root.unmount())
   })
 })

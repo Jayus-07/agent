@@ -242,6 +242,7 @@ def refresh_worker_prompt_snapshot() -> bool:
     """
     try:
         from backend.prompts.service import prompt_service
+        from backend.infra.async_utils import run_on_worker_loop
 
         run_on_worker_loop(prompt_service.refresh_snapshot())
         logger.info("[Worker] Prompt DB 快照加载完成")

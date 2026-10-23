@@ -323,8 +323,13 @@ def execute_agent_task_impl(task_id: str, *,
             logger.warning("[AgentTask] retry #%d for %s (从 checkpoint 续跑)",
                            retries, task_id)
 
-        executor = TaskGraphExecutor()
-        output = executor.execute(record, execution_id=lease_id, heartbeat=hb)
+        if record.graph_name == "rag_eval":
+            from backend.evaluation.managed_tasks import execute
+
+            output = execute(record, execution_id=lease_id, heartbeat=hb)
+        else:
+            executor = TaskGraphExecutor()
+            output = executor.execute(record, execution_id=lease_id, heartbeat=hb)
         exit_status = str(output.get("status", TaskStatus.SUCCESS.value))
         return {"status": exit_status,
                 "output": output}

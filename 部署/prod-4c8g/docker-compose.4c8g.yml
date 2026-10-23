@@ -134,8 +134,9 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256m
-          cpus: "0.3"
+          # 真实 RAG 与候选合成评测复用该队列，避免加载依赖时 OOM。
+          memory: 768m
+          cpus: "0.5"
     logging: *prod-logging
 
   beat:

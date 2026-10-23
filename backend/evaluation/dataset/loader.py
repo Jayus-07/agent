@@ -301,6 +301,10 @@ def load_dataset_directory(
 
 def load_dataset_file(filename: str, default_module: str = "rag") -> list[TestCase]:
     """加载指定文件名的测试集（相对于 datasets/ 目录）。支持 .json 和 .jsonl。"""
+    if filename.startswith("managed:"):
+        from backend.evaluation.dataset.imports import normalized_cases
+
+        return normalized_cases(filename.removeprefix("managed:"))
     if ".deprecated." in filename:
         raise FileNotFoundError(
             f"评测集 '{filename}' 已弃用，拒绝加载。请改用现行评测集（如 cases.jsonl）。"
