@@ -36,7 +36,8 @@ dependencies = [
     # ═══════════════════════════════════════════
     "langchain>=0.3",
     "langchain-core>=0.3",
-    "langchain-community>=0.3",
+    # Ragas 0.4.3 仍导入旧 VertexAI 适配器；0.4.2 已删除该模块。
+    "langchain-community>=0.3,<0.4.2",
     "langchain-openai>=0.2",
     "langchain-ollama>=0.2",
     "langchain-huggingface>=0.1",
@@ -151,6 +152,8 @@ postgres = [
 # RAGAS 评测基准对比
 ragas = [
     "ragas>=0.4.0",
+    # 合成图的字符串关系构建器需要，Ragas 基础安装未声明此可选依赖。
+    "rapidfuzz>=3.0,<4",
 ]
 
 # 文档

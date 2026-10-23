@@ -27,6 +27,7 @@ fail-closed 契约：
 from __future__ import annotations
 
 import time
+from contextvars import ContextVar
 
 from backend.shared.logger import logger
 
@@ -55,6 +56,7 @@ class ReviewVisibilityUnavailableError(RuntimeError):
 
 # 进程内两层缓存：版本号（节流轮询）+ 不可见集合（短 TTL）。
 _version_cache: dict = {"value": None, "ts": 0.0, "last_seen": None}
+visibility_snapshot: ContextVar = ContextVar("rag_visibility_snapshot", default=None)
 _block_cache: dict = {"ids": frozenset(), "ts": 0.0}
 
 
@@ -114,6 +116,8 @@ def get_review_blocked_doc_ids() -> frozenset[str]:
     :class:`ReviewVisibilityUnavailableError`。黑名单只作快路径，最终可见性
     由 :func:`verify_visible_doc_ids` 实时正向校验决定。
     """
+    if visibility_snapshot.get() is not None:
+        return frozenset()
     now = time.monotonic()
 
     if now - _version_cache["ts"] >= _VERSION_POLL_TTL:
@@ -154,6 +158,9 @@ def verify_visible_doc_ids(doc_ids) -> set[str]:
     刚发生状态变更的文档。Registry 异常抛 :class:`ReviewVisibilityUnavailableError`。
     """
     ids = {d for d in (doc_ids or []) if d}
+    frozen = visibility_snapshot.get()
+    if frozen is not None:
+        return ids & set(frozen)
     if not ids:
         return set()
     from backend.config import DOC_REGISTRY_PATH

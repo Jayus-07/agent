@@ -157,6 +157,25 @@ def _patch_switch(monkeypatch):
     )
 
 
+def test_evaluation_gate_failure_precedes_registry_commit(tmp_path, monkeypatch):
+    """门禁失败不能推进发布状态、CAS、向量晋级或源文件替换。"""
+    from backend.evaluation import publication_gate
+
+    monkeypatch.setenv("RAG_DATA_DIR", str(tmp_path))
+    stores, main_v, main_d, _, index_result = _stores(tmp_path=tmp_path)
+    registry, runs = FakeRegistry(), FakeRunStore()
+
+    def deny(*args, **kwargs):
+        raise ValueError("候选发布评测未通过")
+
+    monkeypatch.setattr(publication_gate, "check_candidate", deny)
+    with pytest.raises(ValueError, match="评测未通过"):
+        _publish(tmp_path, stores, index_result, registry, runs)
+    assert registry.register_calls == 0
+    assert main_v.promoted == [] and main_d.promoted == []
+    assert runs.status == {}
+
+
 # ── 协议行为 ──
 
 

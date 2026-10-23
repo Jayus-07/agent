@@ -6,6 +6,10 @@ OLTP 查询，因此独立建表存储，仅供 trace 页查询，不参与检�
 """
 from __future__ import annotations
 
+from contextvars import ContextVar
+
+read_store_override: ContextVar = ContextVar("chunk_read_store_override", default=None)
+
 
 class ChunkStore:
     """Chunk 文本存储接口（唯一实现：PostgresChunkStore）。"""
@@ -26,6 +30,10 @@ _store: ChunkStore | None = None
 def get_chunk_store(db_path: str | None = None) -> ChunkStore:
     """存储工厂（2026-09-17 SQLite 轨删除，直连 PG 实现）。db_path 参数保留兼容旧签名。"""
     global _store
+    # 评测固定语料的全文 Parent/表格必须与向量快照一致。
+    override = read_store_override.get()
+    if override is not None:
+        return override
     if _store is None:
         from backend.rag.indexing.chunk_store_pg import PostgresChunkStore
         _store = PostgresChunkStore(db_path)

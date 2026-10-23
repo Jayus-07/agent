@@ -67,6 +67,8 @@ x-worker-common: &worker-common
   volumes:
     - app_data:/app/data
     - app_cache:/app/.cache
+    # 后台评测与 API/宿主 CLI 共享同一明细目录，避免写入被底层卷遮蔽的 root 目录。
+    - ./data/eval_runs:/app/data/eval_runs
   networks:
     - agent-net
   restart: unless-stopped

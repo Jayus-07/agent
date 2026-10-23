@@ -86,6 +86,16 @@ def _resolve_rag_scope(cases: list[TestCase], config: EvalConfig):
     """从 suite 案例解析并校验唯一 RAG 运行范围。"""
     from backend.evaluation.runners.rag import build_eval_scope
 
+    if config.dataset and config.dataset.startswith("managed:"):
+        from backend.evaluation.dataset.imports import load_binding
+        from backend.evaluation.runners.rag import EvalScope
+
+        identity = config.dataset.removeprefix("managed:")
+        binding, record = load_binding(identity)
+        if not cases or any(case.metadata.get("managed_binding_id") != identity or case.metadata.get("kb_id") != binding["kb_id"] for case in cases):
+            raise ValueError("导入题集与评测绑定不一致")
+        return EvalScope(kb_id=binding["kb_id"], fixture_set="", multiquery=False), record["manifest"]["version"]
+
     case_kbs = {str(case.metadata.get("kb_id", "")) for case in cases}
     case_fixture_sets = {str(case.metadata.get("fixture_set", "")) for case in cases}
     if len(case_kbs) != 1 or len(case_fixture_sets) != 1:
@@ -241,6 +251,11 @@ def _run_module(
     try:
         return entry.func(cases, live=live, **kwargs)
     except Exception as e:
+        from backend.models.task import TaskLeaseLost
+        from backend.orchestration.checkpoint import TaskCancelled, TaskPaused
+
+        if isinstance(e, (TaskLeaseLost, TaskCancelled, TaskPaused)):
+            raise
         return _error_results(cases, module, str(e))
 
 
@@ -502,7 +517,7 @@ class EvaluationService:
 
         # N-02/B1-B：评测请求身份与预算只在该次评测作用域内生效；
         # 作用域退出后恢复线程原有 ContextVar，避免线程池复用串入 eval 身份。
-        eval_user = _current_actor() or "eval-runner"
+        eval_user = (config.triggered_by or _current_actor() or "eval-runner").removeprefix("user:")
 
         # C2-2/RUN-02：终态 run 拒绝隐式重跑。显式 resume（同 run_id 断点
         # 续跑）或 force_rerun（全量重跑）才放行；默认参数撞上终态 run 视为
@@ -574,9 +589,10 @@ class EvaluationService:
             report.metadata["run_guards"] = guard_meta
             # P0-04：run 有效性（VALID/INVALID_*）随报告落盘——release_gate、
             # DB 台账与管理端「环境无效」徽章共用这一个裁决口径
-            from backend.evaluation.validity import classify_report_validity
+            from backend.evaluation.validity import classify_report_validity, validity_from_report_metadata
 
-            report.metadata["run_validity"] = classify_report_validity(report).as_dict()
+            verdict = validity_from_report_metadata(report.metadata) or classify_report_validity(report)
+            report.metadata["run_validity"] = verdict.as_dict()
             return report
         except Exception as exc:
             mark_run_status(run_id, "failed", error=str(exc))
@@ -623,7 +639,27 @@ class EvaluationService:
             if config.strict_fields or _strict_fields_enabled():
                 _strict_fields_check(cases)
             scope, dataset_version = _resolve_rag_scope(cases, config)
-            results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id)
+            managed_snapshot = None
+            managed_record = None
+            frozen_record = None
+            if config.dataset.startswith("managed:"):
+                from backend.evaluation.dataset import imports as imported
+
+                managed_binding, managed_record = imported.load_binding(config.dataset.removeprefix("managed:"))
+                if managed_binding.get("snapshot_id"):
+                    from backend.evaluation.corpus_snapshots import load
+
+                    frozen_record = load(managed_binding["snapshot_id"])
+                    if frozen_record["kb_id"] != scope.kb_id:
+                        raise ValueError("固定快照与知识库范围不一致")
+                    managed_snapshot = frozen_record["documents"]
+                else:
+                    managed_snapshot = imported.corpus_snapshot(scope.kb_id)
+                imported.check_evidence(managed_record, managed_snapshot)
+            from backend.evaluation.corpus_snapshots import activate
+
+            with activate(frozen_record) as frozen_pipeline:
+                results = _run_module("rag", cases, live=live, judge=config.judge, ragas=config.ragas, no_ragas=config.no_ragas, ragas_level=config.ragas_level, semantic_thresholds=config.semantic_thresholds, workers=config.workers, ragas_workers=config.ragas_workers, resume=config.resume, multiquery=config.multiquery, full_trace=config.full_trace, eval_scope=scope, run_id=run_id, pipeline=frozen_pipeline, snapshot_documents=managed_snapshot or [])
             summaries = [_build_summary(results, "rag")]
             _inject_token_totals(summaries, run_started_ts)
             # C4-1/C4-2/C7-4：judge/RAGAS 调用参数快照（含 seed_support 显式口径）
@@ -642,6 +678,49 @@ class EvaluationService:
                 "ragas_samples": _ragas_sample_stats(results),
                 "suite_governance": suite_governance,
             }
+            if managed_record is not None:
+                dataset_report_metadata["managed_dataset"] = True
+                errors = [result.case_id for result in results if result.status == "error"]
+                if errors:
+                    dataset_report_metadata["run_validity"] = {
+                        "validity": "INVALID_INFRA", "invalid_reason": "managed_case_execution_error",
+                        "detail": {"case_ids": errors},
+                    }
+                subjects = [case.metadata["evaluation_subject"] for case in cases if case.metadata.get("evaluation_subject")]
+                dataset_report_metadata["evaluation_subjects"] = subjects[:1]
+                if subjects:
+                    current_cases = imported.normalized_cases(config.dataset.removeprefix("managed:"))
+                    current_subjects = [case.metadata["evaluation_subject"] for case in current_cases if case.metadata.get("evaluation_subject")]
+                    if current_subjects != subjects:
+                        dataset_report_metadata["run_validity"] = {
+                            "validity": "INVALID_DATASET", "invalid_reason": "authorization_changed_during_run",
+                        }
+                dataset_report_metadata["managed_gate_policy"] = {
+                    "min_samples": managed_binding.get("min_samples", 5),
+                    "pass_rate": managed_binding.get("pass_rate", 0.95),
+                }
+                dataset_report_metadata["selection"] = f"import:{config.dataset.removeprefix('managed:')}"
+                dataset_report_metadata["suite_governance"] = {
+                    "content_hash": managed_record["content_hash"],
+                    "schema_version": managed_record["manifest"]["schema_version"],
+                }
+                dataset_report_metadata["evaluation_contract"] = "answer_and_retrieval" if managed_binding.get("mode") == "answer" else "retrieval_evidence_only"
+                dataset_report_metadata["corpus_snapshot"] = managed_snapshot
+                dataset_report_metadata["corpus_snapshot_enforced"] = frozen_record is not None
+                if frozen_record is not None:
+                    dataset_report_metadata["corpus_snapshot_id"] = frozen_record["snapshot_id"]
+                    dataset_report_metadata["corpus_snapshot_hash"] = frozen_record["content_hash"]
+                    dataset_report_metadata["corpus_source_mapping_complete"] = frozen_record.get("registry_vector_mapping_complete", False)
+                    dataset_report_metadata["corpus_capture_warnings"] = frozen_record.get("capture_warnings", [])
+                try:
+                    current_snapshot = imported.corpus_snapshot(scope.kb_id)
+                except Exception:
+                    current_snapshot = None
+                if frozen_record is None and current_snapshot != managed_snapshot:
+                    dataset_report_metadata["run_validity"] = {
+                        "validity": "INVALID_DATASET",
+                        "invalid_reason": "corpus_changed_during_run",
+                    }
             dataset_report_metadata["ragas_degraded"] = _ragas_degraded(
                 dataset_report_metadata["ragas_samples"],
             )

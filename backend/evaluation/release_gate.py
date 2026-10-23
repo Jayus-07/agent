@@ -378,6 +378,28 @@ def compute_module_release_gate(
     if validity is None:
         validity = classify_report_validity(report)
 
+    metadata = getattr(report, "metadata", None) or {}
+    if metadata.get("managed_dataset"):
+        results = list(getattr(report, "results", []) or [])
+        policy = metadata.get("managed_gate_policy", {})
+        total = len(results)
+        rate = sum(item.status == "pass" for item in results) / max(total, 1)
+        items = []
+        for metric, value, threshold in (
+            ("sample_count", total, policy.get("min_samples", 5)),
+            ("pass_rate", rate, policy.get("pass_rate", 0.95)),
+            ("fixed_corpus", int(bool(metadata.get("corpus_snapshot_enforced"))), 1),
+            ("source_mapping", int(bool(metadata.get("corpus_source_mapping_complete"))), 1),
+        ):
+            passed = value >= threshold
+            items.append({"module": "rag", "metric": metric, "label": metric,
+                          "dimension": "业务评测", "requirement": "required", "source": "自研",
+                          "value": value, "threshold": threshold, "passed": passed,
+                          "status": "pass" if passed else "fail", "reason": "" if passed else "未达到发布要求"})
+        verdict = "INVALID" if validity.validity is not RunValidity.VALID else "PASS" if all(i["passed"] for i in items) else "FAIL"
+        return {"module": "rag", "verdict": verdict, "overall": verdict == "PASS",
+                "invalid_reason": validity.invalid_reason, "validity": validity.as_dict(), "items": items}
+
     module = str(getattr(report, "module", "") or "")
     ragas_mode = "ragas" in str((getattr(report, "metadata", None) or {}).get("evaluator_mode", "") or "")
     tier_summaries = list(getattr(report, "tier_summaries", None) or [])

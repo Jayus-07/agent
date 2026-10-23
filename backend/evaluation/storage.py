@@ -396,7 +396,7 @@ def persist_report(report: EvalReport, run_id: str | None = None) -> Path:
             or _collect_prompt_versions_authoritative()
         ),
         "prompt_versions_yaml_source": collect_prompt_versions(),
-        "env": collect_env_info(),
+        "env": {**collect_env_info(), **{key: report.metadata[key] for key in ("trigger", "triggered_by") if key in report.metadata}},
         # RAGAS-01/02：本次运行的评估器模式（self / self+ragas），随快照落盘
         "evaluator_mode": report.metadata.get("evaluator_mode", ""),
         # C3-3/REPRO-09：统一快照哈希 + 模板哈希（REPRO-04）随 meta 落盘

@@ -20,6 +20,7 @@ class EvalConfig(BaseModel):
     kb_id: str | None = None             # RAG suite 解析出的实际 KB
     fixture_set: str | None = None       # RAG 运行时语料范围
     dataset_version: str | None = None   # suite/canonical 版本快照
+    triggered_by: str | None = None     # 服务端验证的操作者，供预算与执行留痕
     run_id: str | None = None            # 断点续跑标识；启动时生成或由 CLI 指定
     # RUN-02：对已有终态的 run_id 再次启动时的显式覆盖（全量重跑，忽略 checkpoint）
     force_rerun: bool = False

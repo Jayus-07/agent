@@ -14,6 +14,8 @@ import {
   type KbAuthorityWrite,
 } from '@/api/knowledge'
 import { atLeast } from '@/lib/auth'
+import Link from 'next/link'
+import { evaluationAssets, type EvaluationBinding } from '@/api/evaluation-assets'
 
 type Draft = KbAuthorityWrite & { kb_id: string }
 
@@ -47,6 +49,14 @@ export default function KbAuthorityPanel() {
   const [draft, setDraft] = useState<Draft | null>(null)
   const [editingId, setEditingId] = useState<string | null>(null)
   const isSuperAdmin = atLeast('super_admin')
+  const [bindings, setBindings] = useState<EvaluationBinding[] | null>(null)
+  const [bindingError, setBindingError] = useState(false)
+  useEffect(() => {
+    if (!isSuperAdmin) return
+    let active = true
+    void evaluationAssets.bindings().then(items => { if (active) { setBindings(items); setBindingError(false) } }).catch(() => { if (active) setBindingError(true) })
+    return () => { active = false }
+  }, [isSuperAdmin])
 
   const departmentLabels = useMemo(
     () => new Map(data.departments.map(department => [department.id, department.label])),
@@ -223,6 +233,7 @@ export default function KbAuthorityPanel() {
                   <th className="px-3 py-2.5 font-medium">受众</th>
                   <th className="px-3 py-2.5 text-right font-medium">文档数</th>
                   <th className="px-3 py-2.5 font-medium">状态</th>
+                  <th className="px-3 py-2.5 font-medium">评测关联</th>
                   <th className="px-3 py-2.5 text-right font-medium">操作</th>
                 </tr>
               </thead>
@@ -253,7 +264,11 @@ export default function KbAuthorityPanel() {
                       </span>
                     </td>
                     <td className="px-3 py-3">
+                      {isSuperAdmin ? <Link className="text-blue-600" href={`/evaluations/center?tab=bindings&kb_id=${encodeURIComponent(item.kb_id)}`}>{bindingError ? '读取失败 · 前往重试' : bindings ? `${bindings.filter(b => b.kb_id === item.kb_id).length} 个题集版本` : '加载中…'}</Link> : <span className="text-gray-400">由平台超管管理</span>}
+                    </td>
+                    <td className="px-3 py-3">
                       <div className="flex justify-end gap-1.5">
+                        {isSuperAdmin && !item.read_only && <Link className="rounded border border-blue-200 px-2 py-1 text-blue-600" href={`/evaluations/center?tab=bindings&kb_id=${encodeURIComponent(item.kb_id)}`}>关联评测</Link>}
                         {isSuperAdmin && !item.read_only && (
                           <button
                             onClick={() => beginEdit(item)}
@@ -275,7 +290,7 @@ export default function KbAuthorityPanel() {
                   </tr>
                 ))}
                 {!loading && data.knowledge_bases.length === 0 && (
-                  <tr><td colSpan={6} className="px-3 py-8 text-center text-gray-400">没有匹配的知识库</td></tr>
+                  <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-400">没有匹配的知识库</td></tr>
                 )}
               </tbody>
             </table>

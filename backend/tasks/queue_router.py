@@ -75,6 +75,7 @@ _LOGICAL_QUEUES: dict[str, str] = {
 # 未登记的 graph_name 一律 QueueRoutingError（case I）。
 _WORKFLOW_ROUTES: dict[str, tuple[str, str]] = {
     "main": ("interactive_agent", "workflow_binding"),
+    "rag_eval": ("report", "workflow_binding"),
     "rag_index": ("rag_index", "workflow_binding"),
 }
 

@@ -315,7 +315,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         if case.metadata.get("fixture_set") != scope.fixture_set:
             raise ValueError(f"案例 {case.id} 的 fixture_set 与评测 scope 不一致")
 
-    pipeline = init_rag_pipeline()
+    pipeline = kwargs.get("pipeline") or init_rag_pipeline()
     if pipeline is None:
         return [
             EvalResult(
@@ -339,13 +339,13 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     ablation_mode = kwargs.get("ablation_mode", "full")
     stage1_probe_k = max(1, int(kwargs.get("stage1_probe_k") or _DEFAULT_STAGE1_PROBE_K))
 
-    global _ANSWERS_FILE
-    _ANSWERS_FILE = _get_answers_path(kwargs.get("run_id"))
-    _ANSWERS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    run_id = str(kwargs.get("run_id") or "")
+    answers_file = _get_answers_path(run_id)
+    answers_file.parent.mkdir(parents=True, exist_ok=True)
     logger.info(
         "[RAG eval] run_id=%s，checkpoint/report 目录=%s",
-        kwargs.get("run_id") or "未指定",
-        _ANSWERS_FILE.parent,
+        run_id or "未指定",
+        answers_file.parent,
     )
 
     # ── 断点续跑（checkpoint）──
@@ -353,7 +353,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # 100 条全量作废（一轮 30-90 分钟）。现在逐用例追加 checkpoint，
     # 同一 run 目录重跑时跳过已完成用例；--no-resume 强制全量重跑。
     # C2-4：RAGAS 阶段被杀的样本由 _collect_ragas_backfill 补跑（下方批量段）。
-    checkpoint_file = _ANSWERS_FILE.parent / "results_checkpoint.jsonl"
+    checkpoint_file = answers_file.parent / "results_checkpoint.jsonl"
     resume_enabled = kwargs.get("resume", True)
     done_results: dict[str, EvalResult] = {}
     ragas_backfill: dict[str, dict] = {}
@@ -366,13 +366,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
             )
     else:
         _reset_jsonl(checkpoint_file)
-        _reset_jsonl(_ANSWERS_FILE)
+        _reset_jsonl(answers_file)
 
     results: list[EvalResult] = []
     _deferred_ragas: list[tuple[int, TestCase, dict, dict]] = []
     from backend.evaluation.runners.doc_id_resolver import DocIdResolver
     resolver = DocIdResolver()
-    def _eval_case(case: TestCase) -> tuple[EvalResult, dict | None]:
+    for document in kwargs.get("snapshot_documents", []):
+        resolver.seed_alias(document["doc_id"], document["file_name"])
+    def _eval_case_inner(case: TestCase) -> tuple[EvalResult, dict | None]:
         """评估单条用例（原 _run_rag 循环体）。
 
         返回 (result, deferred_ragas_entry|None)。以单元素 for 包裹原循环体，
@@ -381,6 +383,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         result_holder: list[EvalResult] = []
         deferred_holder: list = []
         for case in (case,):
+            managed_case = bool(case.metadata.get("managed_binding_id"))
+            managed_answer = managed_case and bool(case.metadata.get("generation_eval"))
+            managed_retrieval = managed_case and not managed_answer
+            subject = case.metadata.get("evaluation_subject")
+            if subject and not subject["kb_allowed"]:
+                denied_expected = case.expected.get("should_reject") and case.expected.get("reject_reason") == "permission_denied"
+                return EvalResult(case_id=case.id, module="rag", status="pass" if denied_expected else "fail",
+                                  expected=case.expected, actual={"authorization": "kb_denied", "details": [], "evaluation_subject": subject},
+                                  metrics={"permission_leak": 0.0}), None
             t0 = time.time()
             trace = None
             try:
@@ -395,6 +406,8 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     p for p in (_annotation.get("permission_scope") or ["general"])
                     if p != "general"
                 }
+                if subject:
+                    _user_perms = set(subject.get("permissions") or ()) - {"general"}
                 # §4 版本要求消费方（R4）：any → 无约束；as_of/current/all_versions
                 # 由 backend/rag/versioning.py 在检索证据上做窗口裁决
                 # （chain 生成侧过滤 + runner 判分剔除双路一致）。
@@ -445,6 +458,12 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         query=question,
                         version_requirement=_vreq,
                     )
+                    if subject:
+                        from backend.core.request_context import RequestContext
+
+                        ctx.identity = RequestContext(user_id=subject["user_id"], tenant_id="default",
+                                                      subject_type="employee", department=subject["department"],
+                                                      roles=tuple(subject["roles"]), permissions=tuple(subject.get("permissions") or ()))
                     set_context(ctx)
                 else:
                     from backend.rag.context import RagRequestState, set_context
@@ -700,20 +719,24 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 retrieved_texts_for_gen = [
                     d.get("page_content", "") for d in details if d.get("page_content")
                 ]
-                if retrieved_texts_for_gen:
+                if retrieved_texts_for_gen and not managed_retrieval:
                     try:
                         from backend.evaluation.generation import generate_answer
                         # 云生成仅评测显式 opt-in（--judge/--ragas）时启用——
                         # 默认不改变"cloud 模式不生成答案"的既有基线口径
                         _allow_cloud = bool(
-                            kwargs.get("judge") or kwargs.get("ragas")
+                            kwargs.get("judge") or kwargs.get("ragas") or managed_answer
                         )
                         _generated_answer = generate_answer(
                             question, retrieved_texts_for_gen,
                             allow_cloud=_allow_cloud,
                         )
                     except Exception as e:
+                        if managed_answer:
+                            raise RuntimeError("generate_answer unavailable") from e
                         logger.warning(f"[GenAnswer] {case.id} 答案生成失败: {e}")
+                    if managed_answer and not _generated_answer.strip():
+                        raise RuntimeError("generate_answer returned empty output")
 
                 # === 组装 RAGAS 输入（四张答卷）===
                 expected_answer = case.expected.get("expected_answer") or case.metadata.get("expected_answer", "")
@@ -746,7 +769,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         "ragas_level": kwargs.get("ragas_level", "standard"),
                     },
                     "_ragas_results": None,
-                })
+                }, path=answers_file)
 
                 # === 生成质量评估（P0 修复：用 generated_answer 而非 retrieved_text）===
                 generation_metrics: dict[str, float] = {}
@@ -852,7 +875,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 semantic_metrics: dict[str, float] = {}
                 from backend.evaluation.evaluators.semantic import SemanticEvaluator
                 sem_eval = SemanticEvaluator(thresholds=kwargs.get("semantic_thresholds"))
-                if sem_eval.should_run(case, eval_ctx):
+                if not managed_case and sem_eval.should_run(case, eval_ctx):
                     semantic_metrics = sem_eval.evaluate(case, eval_ctx)
                 eval_ctx["semantic_metrics"] = semantic_metrics
 
@@ -1096,6 +1119,25 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     else:
                         passed = chunk_hit and not dept_leak
 
+                # 上传题集需要全部原文证据；只命中同一文档不能视为通过。
+                if case.metadata.get("managed_binding_id") and not should_reject:
+                    passed = passed and chunk_recall == 1.0 and bool(expected_canonical) and expected_canonical.issubset(set(actual_doc_strs))
+                    if managed_answer:
+                        passed = passed and bool(_generated_answer.strip())
+                        passed = passed and generation_metrics.get("S6_answer_correctness", 0) >= 0.5
+                        passed = passed and generation_metrics.get("S7_faithfulness", 0) >= 0.8
+                        if required_facts:
+                            passed = passed and required_fact_coverage == 1.0
+                        from backend.evaluation.dataset.assertions import check_assertions
+
+                        checks = check_assertions(_generated_answer, case.metadata.get("assertions", []))
+                        generation_metrics["assertions_passed"] = float(all(checks))
+                        passed = passed and all(checks)
+                if managed_answer and should_reject and _generated_answer:
+                    from backend.evaluation.dataset.assertions import is_refusal
+
+                    passed = passed and is_refusal(_generated_answer)
+
                 # 保留原质量指标；完整链路不能把失败降级当作完整验收。
                 incomplete_reason = None
                 if ablation_mode == "full":
@@ -1236,6 +1278,12 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 ))
         return result_holder[0], (deferred_holder[0] if deferred_holder else None)
 
+    def _eval_case(case: TestCase) -> tuple[EvalResult, dict | None]:
+        from backend.evaluation.managed_tasks import managed_case_budget
+
+        with managed_case_budget(case, run_id):
+            return _eval_case_inner(case)
+
     # ── 用例执行（workers=1 串行；>1 线程池并发，结果按用例顺序组装）──
     # 检索器/模型为可复用单例，case 间无共享可变状态；本地 Ollama 生成
     # 仍会在服务端排队，并发收益主要来自检索/打分/云端调用场景
@@ -1256,6 +1304,11 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
         只返回 ``EvalResult``，导致串行/并发两条路径都静默丢弃 RAGAS
         任务，报告虽标记 ``self+ragas``，实际 ``ragas_samples`` 却始终为 0。
         """
+        from backend.evaluation.managed_tasks import case_boundary
+
+        boundary = case_boundary.get()
+        if boundary:
+            boundary(case.id)
         if case_timeout_s <= 0:
             return _eval_case(case)
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)

@@ -397,6 +397,13 @@ def publish_candidate(
         registry_metadata.setdefault("_file_size", _st.st_size)
         registry_metadata.setdefault("_file_mtime", _st.st_mtime)
 
+    # 提交点之前执行；配置失败、环境无效或质量失败均不能改写正式版本。
+    if not same_generation:
+        from backend.evaluation.publication_gate import check_candidate
+
+        check_candidate(kb_id, stores=stores, doc_id=doc_id, old_doc_id=old_doc_id,
+                        file_path=final_path, file_hash=file_hash)
+
     run_store.mark_status(upload_id, "publishing", stage="publish")
 
     # ── b. registry CAS（提交点）──

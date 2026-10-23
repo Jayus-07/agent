@@ -493,7 +493,7 @@ class RAGPipeline:
         read_only = getattr(self, "mode", "index") in {"runtime", "evaluation"}
 
         # BM25: 优先从磁盘加载持久化索引，避免每次启动重建
-        bm25_store = BM25Store()
+        bm25_store = BM25Store(getattr(self, "evaluation_bm25_dir", None))
         self.bm25_store = bm25_store  # 保留 store 引用，供删除/重索引时更新
         self.bm25 = bm25_store.load(k=BM25_CANDIDATE_K)
 

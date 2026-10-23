@@ -165,7 +165,8 @@ def enqueue_task(record: TaskRecord, *, dispatch_type: str = "initial") -> str |
     from backend.services import task_service
     from backend.tasks.queue_router import log_route, resolve_for_task
 
-    clear_flags(record.id)
+    # 初次派发与自动恢复都必须保留已经送达的取消/暂停意图。
+    # 只有用户显式 resume 才在状态认领之前清理控制标志。
     route = resolve_for_task(record)  # 未知 workflow 在此 fail-closed（不被下方 broker 兜底吞掉）
     _record_enqueued(route.workflow, dispatch_type)
     try:
@@ -205,6 +206,7 @@ def _redispatch_index(task_id: str, dispatch_type: str) -> str | None:
 # lambda 体引用模块 globals（enqueue_task），monkeypatch 该名字仍生效。
 _WORKFLOW_DISPATCHERS = {
     "main": lambda record, dt: enqueue_task(record, dispatch_type=dt),
+    "rag_eval": lambda record, dt: enqueue_task(record, dispatch_type=dt),
     "rag_index": lambda record, dt: _redispatch_index(record.id, dt),
 }
 
@@ -239,18 +241,19 @@ def cancel_task(task_id: str) -> dict:
     返回 {"ok", "already", "status", "mode": db|flag}。
     """
     from backend.services import task_service
+    from backend.tasks.retry_policy import is_waiting_retry
 
     record = task_service.get_task(task_id)
     if record is None:
         raise LookupError(f"task not found: {task_id}")
-    if record.status.is_terminal():
+    if record.status.is_terminal() and not is_waiting_retry(record):
         return {"ok": True, "already": True, "status": record.status.value}
 
     # 队列内消息直接失效（已在执行则 revoke 无效，幂等无害）
     _revoke_queued(task_id)
 
     if record.status in (TaskStatus.PENDING, TaskStatus.PAUSED,
-                         TaskStatus.WAITING_USER):
+                         TaskStatus.WAITING_USER, TaskStatus.FAILED):
         if task_service.mark_cancelled_if_status(task_id, record.status):
             clear_flags(task_id)
             publish_event(task_id, "cancelled",
@@ -262,7 +265,7 @@ def cancel_task(task_id: str) -> dict:
         record = task_service.get_task(task_id)
         if record is None:
             raise LookupError(f"task not found: {task_id}")
-        if record.status.is_terminal():
+        if record.status.is_terminal() and not is_waiting_retry(record):
             return {"ok": True, "already": True,
                     "status": record.status.value}
 

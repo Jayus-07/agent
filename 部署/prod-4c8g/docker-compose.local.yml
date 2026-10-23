@@ -96,7 +96,8 @@ services:
     logging: *prod-logging
 
   report-worker:
-    deploy: { resources: { limits: { memory: 224m, cpus: "0.3" } } }
+    # 承担真实 RAG/合成评测，224m 会在加载检索依赖时触发 OOM。
+    deploy: { resources: { limits: { memory: 768m, cpus: "0.5" } } }
     logging: *prod-logging
 
   beat:

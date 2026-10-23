@@ -39,6 +39,7 @@ export interface RunEvalResult {
   suite?: string;
   evaluation_mode?: string;
   evaluator_mode?: string;
+  validity?: string;
 }
 
 export type EvaluationMode = 'offline' | 'semantic' | 'ragas' | 'self+ragas'
