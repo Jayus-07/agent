@@ -186,6 +186,35 @@ def test_stamp_chunk_pages_does_not_guess_ambiguous_short_source_text():
     assert "pages" not in chunk.metadata
 
 
+def test_stamp_chunk_pages_rejects_toc_style_wide_span():
+    """跨度守卫：目录型 chunk 命中相距几百页的叶子证据时不标页码。
+
+    progit_zh 实测首块曾被标 "1,498,499,500"（目录文字包含全书章节
+    标题，各证据唯一命中分散页）；合法跨页块页码跨度不会超过几十页。
+    """
+    toc_ast = DocumentAST(root=DocumentNode(type="section", text="", level=0, children=[
+        DocumentNode(type="paragraph", text="第一章 起步", page_number=1),
+        DocumentNode(type="paragraph", text="第十章 远程仓库", page_number=498),
+        DocumentNode(type="paragraph", text="附录", page_number=499),
+    ]), raw_text="")
+    toc_chunk = Document(
+        page_content="第一章 起步 第十章 远程仓库 附录", metadata={},
+    )
+    stamp_chunk_pages([toc_chunk], toc_ast)
+    assert "pages" not in toc_chunk.metadata
+
+    # 相邻页（合法跨页表格/长段落）仍正常标注
+    near_ast = DocumentAST(root=DocumentNode(type="section", text="", level=0, children=[
+        DocumentNode(type="paragraph", text="第一章 起步", page_number=10),
+        DocumentNode(type="paragraph", text="第十章 远程仓库", page_number=12),
+    ]), raw_text="")
+    near_chunk = Document(
+        page_content="第一章 起步 第十章 远程仓库", metadata={},
+    )
+    stamp_chunk_pages([near_chunk], near_ast)
+    assert near_chunk.metadata["pages"] == "10,12"
+
+
 def test_stamp_chunk_pages_does_not_expand_repeated_page_header():
     """长重复页眉跨页出现时不把一个 Leaf 错标到所有页面。"""
     repeated = "附录 文件编号 ABC-2026 修订版 供内部使用 请勿外传"

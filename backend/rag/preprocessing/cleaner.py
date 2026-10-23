@@ -142,6 +142,8 @@ class DocumentCleaner:
                 result = self._remove_pdf_headers(result)
             if config.CLEAN_REMOVE_PDF_FOOTERS:
                 result = self._remove_pdf_footers(result)
+            if structured:
+                result = self._remove_page_number_nodes(result)
 
         # ── OCR 专用（P1）──
         if source_type == "ocr":
@@ -393,11 +395,34 @@ class DocumentCleaner:
                 r.changes.append("removed_page_number_footer")
         return r
 
+    # 孤立页码节点形态：装饰符（— - – · .）包裹的 1-4 位数字独占整节点。
+    # 与 _remove_pdf_footers 的边界区分：那是"带标签页脚行"（行级），
+    # 这里是"整节点只有页码"——页脚页码被 PDF 解析器切成独立段落节点
+    # （progit_zh 500 页实测每页页码独立成 chunk，向量化后为纯噪声）。
+    # 整节点纯数字与行内数字（金额/比例）不同形，误删风险收敛在
+    # "正文段落恰好只有 1-4 位数字"这一罕见形态，且删除留痕可审计。
+    _RE_PAGE_NUM_NODE = re.compile(
+        r'^[\s—\-–·.。]*\d{1,4}[\s—\-–·.。]*$'
+    )
+
+    @classmethod
+    def _remove_page_number_nodes(cls, r: CleanResult) -> CleanResult:
+        """structured 节点级：整节点只是页码时清空（PDF 页脚页码独立成节点）。"""
+        stripped = r.text.strip()
+        if stripped and cls._RE_PAGE_NUM_NODE.fullmatch(stripped):
+            cls._note_drop(r, "page_number_node", stripped)
+            r.text = ""
+            r.changes.append("removed_page_number_node")
+        return r
+
     # 审计侧噪音形态：只收"行形态即可判定"的确定性噪音（页码/页脚/
     # 模板行/维基噪音/URL 邮箱/纯符号）。故意**不含**孤立图注这类版面
     # 启发式——它必须依靠版面证据，不能自己免除自己的嫌疑。
     _AUDIT_NOISE_PATTERNS = {
-        "page_number": re.compile(r'^\d{1,4}$'),
+        # 装饰符包裹的 1-4 位数字独占行（"— 1 —"/"1"）：页脚/页眉页码形态。
+        # 与 _remove_page_number_nodes 的节点级正则同口径，保证被清的
+        # 页码节点在 cleaning_coverage_audit 中计为合法噪音而非内容丢失。
+        "page_number": re.compile(r'^[\s—\-–·.。]*\d{1,4}[\s—\-–·.。]*$'),
         "page_footer": re.compile(r'^第\s*\d+\s*页\s*共\s*\d+\s*页$'),
         "page_footer_en": re.compile(r'^Page\s+\d+\s+of\s+\d+$', re.IGNORECASE),
         "template_line": _RE_TEMPLATE_LINE,

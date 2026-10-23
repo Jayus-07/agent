@@ -201,3 +201,53 @@ def test_extract_qa_colon_pattern():
     assert len(pairs) == 2
     assert pairs[0] == ("签收后发现商品破损怎么办？", "请在签收后 48 小时内拍照留证。", "qa_colon")
     assert pairs[1] == ("换货的流程是怎样的？", "提交换货申请。", "qa_colon")
+
+
+def test_extract_qa_numbered_bold_colon_pattern():
+    """`**Q1:问题**` + `A1:答案`（编号+冒号+加粗，真实网页导出 FAQ 形态）。
+
+    回归：02_faq_mixed 实测该形态曾 0 识别，问答对被拆进普通段落。
+    """
+    text = (
+        "**Q1: 为什么我会收到短信？**\n\nA1: 您会收到银行发送的短信。\n\n"
+        "**Q2: 为什么必须完成授权？**\n\nA2: 印度储备银行有新法规。\n"
+    )
+    pairs = extract_qa_pairs(text)
+    assert len(pairs) == 2
+    assert pairs[0] == ("为什么我会收到短信？", "您会收到银行发送的短信。", "qa_numbered")
+    assert pairs[1] == ("为什么必须完成授权？", "印度储备银行有新法规。", "qa_numbered")
+
+
+def test_markdown_numbered_bold_colon_produces_qa_nodes():
+    """Markdown 全链路：`**Q1:问题**` 段落识别为 qa 节点，加粗标记不入正文。"""
+    text = (
+        "# 帮助中心\n\n## 第一章 收款\n\nApple Pay 快捷结账说明。\n\n"
+        "## 第二章 常见问题\n\n"
+        "**Q1: 为什么我会收到短信？**\n\nA1: 您会收到银行发送的短信。\n\n"
+        "**Q2: 为什么必须完成授权？**\n\nA2: 印度储备银行有新法规。\n"
+    )
+    from backend.rag.preprocessing.ast import walk
+    ast = MarkdownParser().parse_from_text(text) if hasattr(
+        MarkdownParser(), "parse_from_text"
+    ) else _parse_md_text(text)
+    qa_types = [n.type for n in walk(ast.root) if n.type in ("qa_question", "qa_answer")]
+    assert len(qa_types) == 4  # 2 问 + 2 答
+    for n in walk(ast.root):
+        if n.type == "qa_question":
+            assert n.text == "为什么我会收到短信？"
+            break
+
+
+def _parse_md_text(text):
+    """MarkdownParser 无 parse_from_text 时的临时文件路径。"""
+    import tempfile, os
+    from backend.rag.preprocessing.parser import parse_file
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".md", delete=False, encoding="utf-8",
+    ) as f:
+        f.write(text)
+        path = f.name
+    try:
+        return parse_file(path)
+    finally:
+        os.unlink(path)

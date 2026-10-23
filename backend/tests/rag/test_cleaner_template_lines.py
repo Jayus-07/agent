@@ -111,6 +111,40 @@ def test_wiki_banner_rosetta_coord_dropped(cleaner):
     assert "首届中华名小吃之一" in result.text
 
 
+def test_pdf_structured_page_number_node_removed(cleaner):
+    """PDF 结构化节点：整节点只是页码（"1"/"— 1 —"）清空并留痕（P1-2 回归）。
+
+    progit_zh 500 页实测每页页码独立成 chunk，向量化后为纯噪声。
+    """
+    for raw in ("1", "— 1 —", "- 12 -", "。99。"):
+        result = cleaner.clean(raw, source_type="pdf", structured=True)
+        assert result.text == "", f"页码节点未被清空: {raw!r}"
+        assert "removed_page_number_node" in result.changes
+        assert any(d["operation"] == "page_number_node" for d in result.dropped)
+
+
+def test_page_number_node_rule_scoped_to_pdf_structured(cleaner):
+    """规则只对 PDF 结构化节点生效：text 全文/非 structured 不删裸数字。"""
+    result = cleaner.clean("1", source_type="text", structured=True)
+    assert result.text == "1"
+    result2 = cleaner.clean("1", source_type="pdf", structured=False)
+    assert result2.text == "1"
+
+
+def test_pdf_structured_numeric_prose_kept(cleaner):
+    """正文数字段（含文字混排/长数字串）不受页码规则影响。"""
+    for keep in ("共计 6294 元", "第十二条 服务费用为 6294 元。", "12345678901234567890"):
+        result = cleaner.clean(keep, source_type="pdf", structured=True)
+        assert "6294" in result.text or "12345" in result.text, keep
+
+
+def test_audit_noise_classifier_accepts_decorated_page_number():
+    """审计白名单与节点级正则同口径："— 1 —" 计为合法噪音而非内容丢失。"""
+    assert DocumentCleaner.classify_noise_line("— 1 —") == "page_number"
+    assert DocumentCleaner.classify_noise_line("1") == "page_number"
+    assert DocumentCleaner.classify_noise_line("第一章 起步") == ""
+
+
 def test_isolated_caption_dropped_prose_kept(cleaner):
     """孤立图注行剔除：无句读短孤立段删、有句读的正常陈述保留"""
     result = cleaner.clean(WIKI_NOISE_SAMPLE, source_type="text")
