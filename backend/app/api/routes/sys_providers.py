@@ -378,11 +378,46 @@ async def list_providers(ident=Depends(require_user_actor)) -> dict:
 
     `lastProbe` 来自 provider 表中的最近一次探测结果；尚未探测的 provider
     仍返回 `null`，前端按「未验证」灰显（tab⑤ 漂移会点名）。
+    P1（2026-10-24）口径统一：lastProbe 与模型级健康扫描（llm_model_health）
+    合并——供应商表未探测但其模型有健康数据的，用健康数据合成 lastProbe
+    （修复「探测过却显示未验证」）；任一模型上游不可达时附 `upstreamDown`
+    与失败模型清单，卡片可显示「探测失败」而不是笼统的「未验证」。
     """
     snap = await registry_store.load_registry()
     if snap.loaded:
+        items = _db_rows(snap)
+        try:
+            health_rows = await get_model_config_service().list_model_health()
+        except Exception:  # noqa: BLE001 — 健康缓存读失败不阻塞清单
+            health_rows = []
+        if health_rows:
+            health_by_provider: dict[str, list[dict]] = {}
+            for hr in health_rows:
+                health_by_provider.setdefault(str(hr.get("provider") or ""), []).append(hr)
+            for row in items:
+                hrows = health_by_provider.get(str(row.get("id") or ""), [])
+                if not hrows:
+                    continue
+                down = [
+                    h for h in hrows
+                    if h.get("status") and h.get("status") not in ("healthy", "slow")
+                ]
+                latest = max(hrows, key=lambda h: str(h.get("lastCheckedAt") or ""))
+                if row.get("lastProbe") is None:
+                    row["lastProbe"] = {
+                        "at": latest.get("lastCheckedAt"),
+                        "ok": not down,
+                        "worstGrade": (
+                            str(down[0].get("status")) if down
+                            else str(latest.get("status") or "")
+                        ),
+                        "source": "model-health",
+                    }
+                row["upstreamDown"] = bool(down)
+                if down:
+                    row["downModels"] = [str(h.get("modelName")) for h in down]
         return {
-            "items": _db_rows(snap),
+            "items": items,
             "source": "db",
             "degraded": False,
             "actor": ident.actor,

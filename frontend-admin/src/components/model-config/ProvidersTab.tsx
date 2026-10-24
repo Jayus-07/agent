@@ -608,10 +608,23 @@ export default function ProvidersTab({
                       {isTesting
                         ? <span className="text-accent">正在{probeModeLabel(testingMode || 'fast')} · 已耗时 {formatLiveElapsed(testingElapsedMs)}</span>
                         : row.lastProbe
-                          ? <span className={row.lastProbe.ok ? 'flex items-center gap-1 text-emerald-700' : 'text-red-700'}>
-                              {row.lastProbe.ok && <CheckCircle2 size={11} />}
-                              {row.lastProbe.ok ? '已通过' : `卡在 ${row.lastProbe.worstGrade || '未知'}`}
-                            </span>
+                          ? (
+                            <>
+                              <span className={row.lastProbe.ok ? 'flex items-center gap-1 text-emerald-700' : 'text-red-700'}>
+                                {row.lastProbe.ok && <CheckCircle2 size={11} />}
+                                {row.lastProbe.ok
+                                  ? (row.lastProbe.source === 'model-health' ? '已通过（模型健康）' : '已通过')
+                                  : `探测失败（${row.lastProbe.worstGrade || '未知'}）`}
+                              </span>
+                              {/* P1（2026-10-24）：上游不可达模型清单就地可见，
+                                  不再只躺在角色行的手动测试里。 */}
+                              {row.upstreamDown && !!row.downModels?.length && (
+                                <span className="text-red-700" title={`上游不可达：${row.downModels.join('、')}`}>
+                                  上游不可达：{row.downModels.join('、')}
+                                </span>
+                              )}
+                            </>
+                          )
                           : <span>未验证</span>}
                     </div>
                   </div>

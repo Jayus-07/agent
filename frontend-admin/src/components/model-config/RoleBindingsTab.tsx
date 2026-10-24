@@ -529,6 +529,21 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                                 {healthActionHint(visibleHealth.status)}
                               </div>
                             )}
+                            {/* P2（2026-10-24）：本地计费供应商探测失败 → 针对性指引，
+                                替代通用的「核对地址/网络」——最常见的真实原因是服务
+                                进程没随部署启动，其次才是改绑云端。 */}
+                            {visibleHealth.status !== 'healthy'
+                              && visibleHealth.status !== 'slow'
+                              && visibleHealth.billing === 'local'
+                              && (
+                                <div
+                                  className="mt-1 max-w-[220px] text-[10px] leading-4 text-text-secondary"
+                                  data-testid={`role-health-local-hint-${row.role}`}
+                                >
+                                  该模型是本地推理服务：请确认对应服务进程已在服务器上启动；
+                                  或点「修改」临时改绑云端模型，服务恢复后切回。
+                                </div>
+                              )}
                           </div>
                         )}
                         {ocrNeedsManualProbe && (
