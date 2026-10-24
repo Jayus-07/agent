@@ -25,9 +25,14 @@ from backend.shared.logger import logger
 # 猜成错误类型/域造成 0 召回假拒答（TD-13「发票认证时限」被猜 security、
 # 「广告法」advertising 域标注漂移全库空命中）。相关性交由混合检索+Rerank
 # 判断；解析出的 doc_types/domains 仍保留在 ParsedQuery 供软信号与 Trace。
+# 2026-10-25：person_names 同理退出硬过滤——persons 同样 100% 来自查询侧
+# NER 猜测，且索引侧元数据用同一抽取函数打标（双侧同源），NER 把领域主题
+# 词误判为实体时交叉验证防不住（实测「信息安全管理制度」问答：查询侧抽出
+# 「信息安全」→ person_names 硬过滤把正确制度文档全部挡掉，只剩同标签噪声
+# 文档 → 拒答）。实体相关性交由混合检索+Rerank；persons 保留在 ParsedQuery
+# 供软信号/Stage1 候选（带 D-13 交叉验证与 miss 回退）与 Trace。
 # 用户显式指定的 kb_id、租户边界、permission_scope、部门授权不受影响。
 RETRIEVAL_FILTERABLE_METADATA_FIELDS = frozenset({
-    "person_names",     # 品牌/关键实体（metadata.py）
     "reporting_period", # 财务报告期（chunking.py 表格版本快照）
     "is_latest",        # 财务版本快照最新标记（chunking/indexer）
 })
@@ -72,11 +77,15 @@ class ParsedQuery:
         不剥这些键、同义词重试同样带毒。
         """
         f: dict = {}
+        # 2026-10-25：persons 与 doc_types/domains 同理退出 hard filter——
+        # 100% 来自查询侧 NER 猜测且双侧同源（索引侧元数据用同一抽取函数
+        # 打标），误判主题词即造成"标签锁定噪声文档"的漏召回（实测案例见
+        # 白名单注释）。仅软信号（Stage1 候选 + 重叠加分）与 Trace 留痕；
+        # Stage1 的 person_index 候选路径自带 D-13 交叉验证与 miss 回退。
         if self.persons:
-            # 多实体 $in 包装（P0-2 顺手修复的存量缺陷：2026-09-14 修
-            # doc_type 裸 list 时漏了 persons——裸 list 同样被 Chroma 拒收）
-            f["person_names"] = (self.persons[0] if len(self.persons) == 1
-                                 else {"$in": self.persons})
+            logger.debug(
+                "[QueryAnalyzer] persons=%s 仅作软信号，不进 hard filter",
+                self.persons)
         # P0-2：doc_types/domains 不再进 hard filter（猜测即过滤 =
         # 漏召回根源）；仅软信号（enhanced_hybrid 重叠加分）与 Trace 留痕。
         if self.doc_types or self.domains:
