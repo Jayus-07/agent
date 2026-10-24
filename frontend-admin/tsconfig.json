@@ -58,13 +58,14 @@
     ".next-dev-rot8731/types/**/*.ts",
     ".next-dev/types/**/*.ts",
     ".next-p0-rolegate/types/**/*.ts",
+    ".next-phase1-cached/types/**/*.ts",
     ".next-phase1-symlink/types/**/*.ts",
     ".next-phase1/types/**/*.ts",
     ".next-smoke/types/**/*.ts",
     ".next/dev/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-phase1-cached/types/**/*.ts"
+    ".next-dev-3201/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
