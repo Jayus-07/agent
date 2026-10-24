@@ -368,12 +368,40 @@ def _evaluate_retrieval_gate(merged: list, query: str):
     # 其输入 query_analysis.doc_types 100% 来自查询文本猜测，猜测即拒答
     # （TD-13「发票认证」被猜 security 假拒答同源）。相关性归检索+Rerank，
     # 不再按「猜测类型 vs 召回类型不匹配」二次拒答。
+    # 实体覆盖校验（2026-10-25）在 rerank 前全集上执行并随 decision 注入：
+    # 文档级标题 chunk（承载查询对文档的称呼实体）常被 Rerank 淘汰，
+    # chain 层在 rerank 后子集上重算必误拒（实测「信息安全管理制度」问答
+    # missing=['信息安全'] 挡住正确召回）。注入后 chain 凭 diagnostics 的
+    # entity_check 键跳过重算；fail 拒答经 gate_passed=False 在 chain Gate 1 生效。
+    from backend.config import GATE_ENTITY_CHECK_ENABLED
+
     return evidence_gate_retrieval(
         merged,
         query_analysis=qa_result,
         vec_min_score=VEC_MIN_SCORE if has_semantic_score else 0.0,
         require_doc_type_coverage=False,
+        query=query,
+        entity_check=GATE_ENTITY_CHECK_ENABLED,
     )
+
+
+def _inject_gate_decision(docs: list, query: str) -> None:
+    """在 rerank 前候选集上评估 Gate 并把 decision 注入每个 doc（2026-10-25）。
+
+    注入全部候选而非仅首位：Rerank 可能淘汰任意候选（含 merged[0]），
+    只写首位会让 decision 随淘汰丢失。chain 层 Gate 1 凭注入快路径消费
+    rerank 前全集口径的实体覆盖校验结论，避免在 rerank 后子集上重算
+    （子集覆盖面单调变窄，必制造误拒）。异常不拦截 docs（软降级留痕）。
+    """
+    if not docs:
+        return
+    try:
+        decision = _evaluate_retrieval_gate(docs, query)
+        _gate_payload = decision.to_metrics()
+        for _d in docs:
+            _d.metadata["__evidence_gate_decision__"] = _gate_payload
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
 
 
 def hybrid_retrieve(query, vector_retriever, bm25_retriever, k=5, doc_ids=None, rrf_k=60, metadata_filter=None,
@@ -440,7 +468,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             # 将 confidence 信息注入 metadata 供下游使用
             for i, doc in enumerate(docs[:3]):
                 doc.metadata[f"enhanced_confidence_{i}"] = meta.get("confidence_score", 0)
-            
+
+            # Gate 注入（2026-10-25）：enhanced 分支此前直接 return，绕过
+            # 尾部两处注入 → chain Gate 1 injected=None → 实体覆盖校验退化到
+            # rerank 后子集重算（实测「信息安全管理制度」问答误拒）。
+            _inject_gate_decision(docs, query)
             return docs
             
         except RetrievalDeadlineExceeded:
@@ -572,11 +604,7 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         trace_collector.end_span(span, metrics=metrics)
 
         if merged:
-            try:
-                decision = _evaluate_retrieval_gate(merged, query)
-                merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
-            except Exception as e:
-                logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
+            _inject_gate_decision(merged, query)
         return merged
 
     # 财务 SQL 旁路检索：查询含财务指标 + 数值条件时并行执行
@@ -747,14 +775,11 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     trace_collector.end_span(span, metrics=metrics)
 
     # ── Evidence Gate: Retrieval 阶段拒答判定 ────────────────
-    # 接入 docs[0].metadata 让下游 chain.py 能读取；
-    # 若 docs 为空，下游 chain.py 直接再调一次 gate 处理 NO_EVIDENCE。
+    # 接入各 doc 的 metadata 让下游 chain.py 能读取（Rerank 可能淘汰任意
+    # 候选，只写首位会让 decision 随淘汰丢失）；若 docs 为空，下游
+    # chain.py 直接再调一次 gate 处理 NO_EVIDENCE。
     if merged:
-        try:
-            decision = _evaluate_retrieval_gate(merged, query)
-            merged[0].metadata["__evidence_gate_decision__"] = decision.to_metrics()
-        except Exception as e:
-            logger.warning(f"[hybrid_retrieve] evidence_gate 评估异常: {e}")
+        _inject_gate_decision(merged, query)
 
     return merged
 

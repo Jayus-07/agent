@@ -100,3 +100,41 @@ def test_hybrid_span_exposes_canonical_retrieval_counts(monkeypatch):
     assert metrics["bm25_count"] == 3
     assert metrics["fused_count"] == 4
     assert metrics["rerank_count"] == 4
+
+
+def test_enhanced_branch_injects_gate_decision(monkeypatch):
+    """2026-10-25 回归：enhanced 分支此前直接 return，绕过尾部 Gate 注入
+    → chain Gate 1 injected=None → 实体覆盖校验退化到 rerank 后子集重算
+    （实测「信息安全管理制度」问答误拒）。enhanced 返回的每个候选都必须
+    带 __evidence_gate_decision__，且为全量注入（任意候选被 Rerank 淘汰
+    后注入仍在幸存者上）。"""
+
+    def fake_enhanced_retrieve(query, vector, bm25, **kwargs):
+        docs = [
+            _doc({"chunk_id": "e1", "doc_id": "d1"}),
+            _doc({"chunk_id": "e2", "doc_id": "d2"}),
+        ]
+        return docs, {"confidence_score": 0.8}
+
+    import backend.rag.retrieval.hybrid as hybrid_module
+    import backend.rag.retrieval.enhanced_hybrid_retrieval as enhanced_module
+    from backend.config import rag as rag_config
+
+    monkeypatch.setattr(rag_config, "ADAPTIVE_THRESHOLD_ENABLED", True)
+    monkeypatch.setattr(rag_config, "CONFIDENCE_AGGREGATOR_ENABLED", True)
+    monkeypatch.setattr(
+        enhanced_module, "enhanced_hybrid_retrieve", fake_enhanced_retrieve)
+    monkeypatch.setattr(
+        hybrid_module,
+        "_evaluate_retrieval_gate",
+        lambda _docs, _query: SimpleNamespace(
+            to_metrics=lambda: {"gate_passed": True, "entity_check": "pass"}),
+    )
+
+    result = _hybrid_retrieve_impl("查制度", MagicMock(), MagicMock(), k=2)
+
+    assert [d.metadata["chunk_id"] for d in result] == ["e1", "e2"]
+    for d in result:
+        injected = d.metadata.get("__evidence_gate_decision__")
+        assert injected is not None, "enhanced 分支候选缺 Gate 注入"
+        assert injected["entity_check"] == "pass"

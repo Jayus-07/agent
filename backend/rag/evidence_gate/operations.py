@@ -87,7 +87,7 @@ _QUERY_STOPWORDS = {
 # 生产链路额外泛称（双字高频词，几乎任何召回都难逐字覆盖，作实体必误拒）
 _GATE_EXTRA_STOPWORDS = {
     "问题", "情况", "东西", "事情", "内容", "方式", "时间", "日期",
-    "金额", "费用标准", "流程制度", "策略", "办法", "细则", "说明",
+    "金额", "费用标准", "流程制度", "管理制度", "策略", "办法", "细则", "说明",
     "流程", "操作", "售后", "发货", "收货", "查不到", "维修",
 }
 
@@ -270,9 +270,16 @@ def evidence_gate_retrieval(
                 )
 
     # --- 通过 ---
+    # entity_check="pass" 标记（2026-10-25）：hybrid 层在 rerank 前全集上
+    # 评估实体覆盖后，下游 chain 层凭 diagnostics 中的 entity_check 键识别
+    # "已评估过"，跳过 rerank 后子集窗口的重算（子集覆盖面单调变窄，重算
+    # 必然制造误拒——文档级标题 chunk 被 Rerank 淘汰不代表主题缺失）。
+    passed_diags: dict = {"doc_count": len(docs), "top_score": round(top_score, 4)}
+    if entity_check and query:
+        passed_diags["entity_check"] = "pass"
     return GateDecision(
         passed=True, layer=layer, score=top_score,
-        diagnostics={"doc_count": len(docs), "top_score": round(top_score, 4)},
+        diagnostics=passed_diags,
     )
 
 

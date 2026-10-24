@@ -83,3 +83,19 @@ def test_business_phrase_synonyms_prevent_false_missing_entities():
     """书面政策词与用户口语短语等价时，不误判为缺少实体。"""
     docs = [_Doc("差旅住宿报销标准：福州每晚 500 元；市内交通费用按票据报销。")]
     assert find_missing_entities("出差住宿费和市内交通费报销标准", docs) == []
+
+
+def test_policy_document_term_does_not_trigger_false_missing_entities():
+    """2026-10-25 实测误拒回归：问"信息安全管理制度"的密码要求，召回命中
+    密码条款正文（不含"管理制度"连写）→ "管理制度"是泛指词，不得单独
+    构成强实体拒答（与"流程制度"同类，见 _GATE_EXTRA_STOPWORDS 注释）。"""
+    docs = [
+        _Doc("1. 办公账号密码长度不少于 12 位，须包含大小写字母、数字与符号；"
+             "2. 密码每 90 天强制更换，新密码不得与最近 5 次历史密码重复；"),
+        _Doc("归属：行政通用制度（全员适用），由行政部信息安全组负责解释、维护与年度修订。"),
+    ]
+    missing = find_missing_entities(
+        "根据公司信息安全管理制度，员工账号密码有什么要求？", docs)
+    assert "管理制度" not in missing
+    # 召回已覆盖问题的核心实体（信息安全/员工/账号/密码）→ 零缺失
+    assert missing == []

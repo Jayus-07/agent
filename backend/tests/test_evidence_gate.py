@@ -441,6 +441,22 @@ class TestEntityCoverage:
         decision = evidence_gate_retrieval(docs, vec_min_score=0.2)
         assert decision.passed is True
 
+    def test_gate_entity_check_pass_is_marked(self):
+        """2026-10-25 契约：entity_check 通过时 diagnostics 带 entity_check="pass"。
+
+        chain 层凭该键识别「hybrid 已在 rerank 前全集上评估过」，跳过
+        rerank 后子集窗口的重算（子集覆盖面单调变窄，重算必制造误拒）。
+        """
+        docs = self._docs("笔记本电脑保修期为一年，故障可提交维修申请。")
+        for d in docs:
+            d.metadata["rerank_score"] = 0.7
+        decision = evidence_gate_retrieval(
+            docs, vec_min_score=0.2,
+            query="笔记本电脑的保修期是多久？", entity_check=True,
+        )
+        assert decision.passed is True
+        assert decision.diagnostics.get("entity_check") == "pass"
+
     def test_config_default_enabled(self):
         """代码默认开启（与离线验证结论一致）"""
         default = TestConfigDefaults._code_default(

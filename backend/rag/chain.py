@@ -1474,30 +1474,46 @@ class RAGChain:
             return ret_decision
 
         # ── Gate 1.5: 查询实体覆盖校验（P2，2026-08-21）──
-        # 主题相近但无答案：问题核心实体（含同义词闭包）不在 rerank 后窗口
-        # 召回文本中 → 改判拒答。在 chain 层用原始 question 判定（hybrid 层
-        # 拿到的是同义词变体 query，不适用）；异常不干预原判（软降级）。
+        # 主题相近但无答案：问题核心实体（含同义词闭包）不在召回文本中 →
+        # 改判拒答。异常不干预原判（软降级）。
+        # 2026-10-25 口径修正：hybrid 层已在 rerank 前全集上评估实体覆盖并
+        # 随 __evidence_gate_decision__ 注入（rerank 后子集覆盖面单调变窄，
+        # 此处重算必制造误拒——文档级标题 chunk 承载查询对文档的称呼实体，
+        # 常被 Rerank 淘汰，实测「信息安全管理制度」问答被
+        # missing=['信息安全'] 挡住正确召回）。注入含 entity_check 键时
+        # 直接采用（fail 拒答已在 Gate 1 经 gate_passed=False 生效）；
+        # 无注入（空召回/fallback/反序列化失败）时维持本层 rerank 后重算。
         if context_docs:
             try:
                 from backend.config import GATE_ENTITY_CHECK_ENABLED
                 if GATE_ENTITY_CHECK_ENABLED:
-                    from backend.rag.evidence_gate import (
-                        GateDecision,
-                        RejectReason,
-                        find_missing_entities,
+                    _injected_diags = (ret_decision.diagnostics or {})
+                    _hybrid_checked = (
+                        injected is not None
+                        and _injected_diags.get("entity_check") in ("pass", "fail")
                     )
-                    missing = find_missing_entities(question, context_docs)
-                    if missing:
-                        ret_decision = GateDecision(
-                            passed=False, reason=RejectReason.NO_EVIDENCE,
-                            layer="retrieval", score=ret_decision.score,
-                            diagnostics={**(ret_decision.diagnostics or {}),
-                                         "entity_check": "fail",
-                                         "missing_entities": missing[:5]},
+                    if _hybrid_checked:
+                        logger.debug(
+                            "[RAGChain] 实体覆盖校验沿用 hybrid 注入判定: "
+                            "entity_check=%s", _injected_diags.get("entity_check"))
+                    else:
+                        from backend.rag.evidence_gate import (
+                            GateDecision,
+                            RejectReason,
+                            find_missing_entities,
                         )
-                        logger.info(
-                            f"[RAGChain] 实体覆盖校验拒答: missing={missing[:5]}"
-                        )
+                        missing = find_missing_entities(question, context_docs)
+                        if missing:
+                            ret_decision = GateDecision(
+                                passed=False, reason=RejectReason.NO_EVIDENCE,
+                                layer="retrieval", score=ret_decision.score,
+                                diagnostics={**(ret_decision.diagnostics or {}),
+                                             "entity_check": "fail",
+                                             "missing_entities": missing[:5]},
+                            )
+                            logger.info(
+                                f"[RAGChain] 实体覆盖校验拒答: missing={missing[:5]}"
+                            )
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[RAGChain] 实体覆盖校验异常，忽略: {e}")
                 _mark_gate_degraded("gate1_entity", "skip_check", e)
