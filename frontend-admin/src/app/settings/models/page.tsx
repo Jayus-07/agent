@@ -65,11 +65,13 @@ export default function ModelConfigPage() {
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
   }
 
-  const roles = useQuery({ queryKey: ['model-config-roles'], queryFn: listModelRoles, enabled: canEditor })
+  // P0 收尾（2026-10-24）：角色/供应商清单 60s 轮询（对齐 drift）——
+  // 上游宕机/恢复后，开着的页面计数与状态行自动翻转，不再依赖手动刷新。
+  const roles = useQuery({ queryKey: ['model-config-roles'], queryFn: listModelRoles, enabled: canEditor, refetchInterval: 60_000 })
   const catalog = useQuery({ queryKey: ['model-config-catalog'], queryFn: listModelCatalog, enabled: canEditor })
   // B3：清单读端点后端已放宽为 JWT 用户可读，editor 也拉取（只读浏览，
   // 写操作在 ProvidersTab 内部仍按 canAdmin 门控）。
-  const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor })
+  const providers = useQuery({ queryKey: ['model-config-providers'], queryFn: listProviders, enabled: canEditor, refetchInterval: 60_000 })
   const history = useQuery({ queryKey: ['model-config-history'], queryFn: () => listConfigHistory(), enabled: canEditor && tab === 'history' })
   const drift = useQuery({ queryKey: ['model-config-drift'], queryFn: getConfigDrift, enabled: canEditor, refetchInterval: 60_000 })
   const monitor = useQuery({ queryKey: ['model-price-monitor-runs'], queryFn: () => listModelPriceMonitorRuns(), enabled: canEditor && tab === 'monitor', refetchInterval: tab === 'monitor' ? 30_000 : false })
