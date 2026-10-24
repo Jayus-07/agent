@@ -263,7 +263,10 @@ async def chat(req: ChatRequest, request: Request,
     _validate_model_override(req.model)
     t0 = time.monotonic()
     agent = get_multi_agent()
-    kb_id = req.kb_id or "default"
+    # 默认 "*"（授权范围推断）而非写死 "default"：default 库通常无文档，
+    # 前端聊天不传 kb_id 时旧默认恒查空库拒答。"*" 由 KBRouter 按问题
+    # 推断候选库 + 检索侧 audience 白名单收窄（员工只见 all 库）。
+    kb_id = req.kb_id or "*"
     product = _product_for_chat_route(request)
     ident, user_id = _chat_identity(request, product)
     session_id = req.session_id
@@ -390,7 +393,8 @@ async def chat_stream(
     # 线程读不到（M13 尾项实施时发现的跨作用域 bug）
     _latency_tracker = StreamLatencyTracker(start=t0)
     agent = get_multi_agent()
-    kb_id = req.kb_id or "default"
+    # 与 /chat/agent 同语义：默认 "*"（授权范围推断），见同步入口注释
+    kb_id = req.kb_id or "*"
     request_id = _resolve_request_id(req.request_id)
 
     # 产品身份来自静态注册路由；请求体的 user_id/domain_hint/product_id 均不参与。
