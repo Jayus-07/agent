@@ -25,23 +25,33 @@ class RAGSkill(BaseSkill):
     def _normalize_invocation_params(
         self, state: dict, capability: str, params: dict,
     ) -> dict:
-        """RAG 的 question 为空时回退本轮原始用户问题。
+        """补全 rag.search 的请求级参数（question / kb_id）。
 
-        Planner/FC 可能给必填字段留下空字符串；当前参数 schema 只验证字段
-        存在，空字符串会继续到 RAG 服务并被其 min_length 校验拒绝。
+        - question：Planner/FC 可能给必填字段留下空字符串；当前参数 schema
+          只验证字段存在，空字符串会继续到 RAG 服务并被其 min_length 校验拒绝。
+        - kb_id：direct 快路径 FC 只选 question，不会填 kb_id，工具落回
+          "default" 空库；请求级 kb_id（用户显式指定的检索范围）必须从
+          graph state 注入，语义与 supervisor/scheduler.py 的 plan 路径
+          `state.get("kb_id", "default")` 一致。state 为空时保留 params
+          原值（工具默认 default），不伪造检索范围。
         """
         if capability != "rag.search":
             return params
 
-        question = params.get("question")
+        updated = dict(params)
+        state_kb = str(state.get("kb_id") or "").strip()
+        if state_kb and updated.get("kb_id") != state_kb:
+            updated["kb_id"] = state_kb
+
+        question = updated.get("question")
         if isinstance(question, str) and question.strip():
-            return params
+            return updated
 
         original_question = state.get("question")
         if not isinstance(original_question, str) or not original_question.strip():
-            return params
+            return updated
 
-        return {**params, "question": original_question}
+        return {**updated, "question": original_question}
 
 
 async def rag_skill_node(state: dict) -> dict:
