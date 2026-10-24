@@ -6,6 +6,7 @@ import DatasetCatalog from '@/components/evaluations/DatasetCatalog'
 import DatasetVersionDetailView from '@/components/evaluations/DatasetVersionDetail'
 import ImportedDatasetsPanel from './ImportedDatasetsPanel'
 import EvaluationV2DatasetPanel from './EvaluationV2DatasetPanel'
+import { EvalPageHeader } from './evalUi'
 
 export default function DatasetGovernancePanel({ onGoReview }: { onGoReview: () => void }) {
   const [source, setSource] = useState<'business' | 'builtin'>('business')
@@ -28,9 +29,13 @@ export default function DatasetGovernancePanel({ onGoReview }: { onGoReview: () 
     try { setSelected(await evaluationService.getDatasetVersion(item.dataset_id, item.dataset_version)) }
     catch (e) { setError(e instanceof Error ? e.message : '读取版本失败') }
   }
-  return <div className="mx-auto max-w-7xl space-y-5 px-6 py-6">
+  return <div>
+    <EvalPageHeader
+      title="数据集中心"
+      subtitle="统一管理评测输入、不可变 Golden 版本、业务归属与证据覆盖；已发布版本不可修改，修订必须产生新版本。"
+    />
     <EvaluationV2DatasetPanel onGoReview={onGoReview} />
-    <div className="flex gap-2 border-b border-border-subtle pb-3" role="group" aria-label="评测集来源">{[['business', '业务评测集'], ['builtin', '内置基准']].map(([value, label]) => <button key={value} aria-pressed={source === value} className={`rounded-md px-3 py-2 text-xs ${source === value ? 'bg-accent text-white' : 'bg-slate-100 text-text-secondary'}`} onClick={() => setSource(value as 'business' | 'builtin')}>{label}</button>)}</div>
+    <div className="mt-6 flex gap-2 border-b border-border-subtle pb-3" role="group" aria-label="评测集来源">{[['business', '业务评测集'], ['builtin', '内置基准']].map(([value, label]) => <button key={value} aria-pressed={source === value} className={`rounded-md px-3 py-2 text-xs ${source === value ? 'bg-accent text-white' : 'bg-bg-elevated text-text-secondary'}`} onClick={() => setSource(value as 'business' | 'builtin')}>{label}</button>)}</div>
     {source === 'business' ? <ImportedDatasetsPanel /> : <>
       <p className="text-xs text-text-muted">内置基准随代码发布，覆盖平台能力回归。业务题集在“业务评测集”中导入和发布；审核在“候选审核”中处理。</p>
       <button className="text-xs text-accent" disabled={loading} onClick={() => void load()}>{loading ? '加载中…' : '刷新内置基准'}</button>

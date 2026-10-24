@@ -77,7 +77,7 @@ describe('EvaluationV2RunsPanel', () => {
 
     expect(container.textContent).toContain('Gate 固定为 INVALID')
     expect(container.querySelector('select[aria-label="目标知识库"]')).toBeNull()
-    const button = [...container.querySelectorAll('button')].find(item => item.textContent === '创建异步运行')
+    const button = [...container.querySelectorAll('button')].find(item => item.textContent === '▶ 创建并运行实验')
     expect(button?.hasAttribute('disabled')).toBe(false)
     await act(async () => {
       button?.dispatchEvent(new MouseEvent('click', { bubbles: true }))

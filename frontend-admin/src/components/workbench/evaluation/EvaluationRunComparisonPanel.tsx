@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
 import { evaluationService, type EvaluationV2Comparison, type EvaluationV2Experiment, type EvaluationV2Run } from '@/api/evaluation'
 import { atLeast } from '@/lib/auth'
 import EvaluationV2ComparisonCaseDetailButton from './EvaluationV2ComparisonCaseDetailButton'
+import { EvalBadge, EvalButton, EvalCard, EvalKpiCard, EvalMetricRow, EvalPageHeader, EvalDiffBar, evalControl } from './evalUi'
 
 function percent(value: number): string {
   return new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 }).format(value)
@@ -131,38 +131,58 @@ export default function EvaluationRunComparisonPanel() {
   const canViewRunDetails = atLeast('super_admin')
 
   if (!atLeast('admin')) return <p className="p-5 text-sm text-text-secondary">实验运行和对比需要评测管理员权限。</p>
-  return <div className="mx-auto max-w-7xl space-y-5 px-6 py-6">
-    <section className="rounded-lg border border-border-subtle bg-surface-base p-4" aria-labelledby="evaluation-compare-heading">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div><h2 id="evaluation-compare-heading" className="text-base font-semibold text-text-primary">V2 实验 A/B 对比</h2><p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">对比请求由服务端校验 Suite、Golden、语料和逐例覆盖。快照不兼容时只返回原因，不生成提升或回退结论。</p></div>
-        <button type="button" onClick={() => void load()} disabled={loading || comparing} className="inline-flex min-h-10 items-center gap-2 rounded-md border border-border-subtle px-3 text-sm text-text-primary hover:bg-bg-hover disabled:opacity-50"><RefreshCw size={15} />刷新运行</button>
+  const selectionComparable = Boolean(selectedBaseline && selectedCandidate && selectedBaseline.suite_version_id === selectedCandidate.suite_version_id)
+  return <div>
+    <EvalPageHeader
+      title="实验对比分析"
+      subtitle="锁定相同样本和判分规则，明确每一项收益、成本与风险变化；对比请求由服务端校验 Suite、Golden、语料和逐例覆盖，快照不兼容时只返回原因，不生成提升或回退结论。"
+      actions={<EvalButton onClick={() => void load()} disabled={loading || comparing}>刷新运行</EvalButton>}
+    />
+    <EvalCard
+      title="选择对比配置"
+      subtitle="同一 Suite 版本的运行才能保存为实验；分数差只在快照一致时有意义。"
+      actions={selectedBaseline && selectedCandidate
+        ? <EvalBadge text={selectionComparable ? '基础口径可比较' : '不可直接比较'} tone={selectionComparable ? 'good' : 'bad'} />
+        : null}
+      className="mb-4"
+    >
+      <div className="grid gap-3 md:grid-cols-2">
+        <label className="text-sm font-medium text-text-primary">基线 A<select aria-label="基线 A" value={baselineId} onChange={event => { setBaselineId(event.target.value); setResult(null) }} className={'mt-2 w-full ' + evalControl}><option value="">选择运行</option>{options.map(item => <option key={item.run_id} value={item.run_id}>{item.label}</option>)}</select></label>
+        <label className="text-sm font-medium text-text-primary">候选 B<select aria-label="候选 B" value={candidateId} onChange={event => { setCandidateId(event.target.value); setResult(null) }} className={'mt-2 w-full ' + evalControl}><option value="">选择运行</option>{options.map(item => <option key={item.run_id} value={item.run_id}>{item.label}</option>)}</select></label>
       </div>
-      <div className="mt-4 grid gap-3 md:grid-cols-2">
-        <label className="text-sm font-medium text-text-primary">基线 A<select aria-label="基线 A" value={baselineId} onChange={event => { setBaselineId(event.target.value); setResult(null) }} className="mt-2 min-h-11 w-full rounded-md border border-border-subtle bg-surface-base px-3 text-sm"><option value="">选择运行</option>{options.map(item => <option key={item.run_id} value={item.run_id}>{item.label}</option>)}</select></label>
-        <label className="text-sm font-medium text-text-primary">候选 B<select aria-label="候选 B" value={candidateId} onChange={event => { setCandidateId(event.target.value); setResult(null) }} className="mt-2 min-h-11 w-full rounded-md border border-border-subtle bg-surface-base px-3 text-sm"><option value="">选择运行</option>{options.map(item => <option key={item.run_id} value={item.run_id}>{item.label}</option>)}</select></label>
-      </div>
-      <button type="button" onClick={() => void compare()} disabled={loading || comparing || !baselineId || !candidateId} className="mt-4 min-h-11 rounded-md bg-accent px-4 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50">{comparing ? '校验快照并比较…' : '比较实验'}</button>
+      <div className="mt-4"><EvalButton variant="primary" onClick={() => void compare()} disabled={loading || comparing || !baselineId || !candidateId}>{comparing ? '校验快照并比较…' : '比较实验'}</EvalButton></div>
       <div className="mt-4 grid gap-3 border-t border-border-subtle pt-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <label className="text-sm font-medium text-text-primary">已保存实验<select aria-label="已保存实验" value={experimentId} onChange={event => selectExperiment(event.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-border-subtle bg-surface-base px-3 text-sm"><option value="">选择已保存实验</option>{experiments.map(item => <option key={item.experiment_id} value={item.experiment_id}>{item.name} · {item.experiment_id.slice(0, 8)}</option>)}</select></label>
-        <label className="text-sm font-medium text-text-primary">新实验名称<input aria-label="新实验名称" value={experimentName} onChange={event => setExperimentName(event.target.value)} maxLength={160} className="mt-2 min-h-11 w-full rounded-md border border-border-subtle bg-surface-base px-3 text-sm" /></label>
-        <button type="button" onClick={() => void saveExperiment()} disabled={loading || savingExperiment || !canSaveExperiment} className="mt-6 min-h-11 rounded-md border border-border-subtle px-4 text-sm font-medium text-text-primary hover:bg-bg-hover disabled:opacity-50">{savingExperiment ? '保存中…' : '保存为实验'}</button>
+        <label className="text-sm font-medium text-text-primary">已保存实验<select aria-label="已保存实验" value={experimentId} onChange={event => selectExperiment(event.target.value)} className={'mt-2 w-full ' + evalControl}><option value="">选择已保存实验</option>{experiments.map(item => <option key={item.experiment_id} value={item.experiment_id}>{item.name} · {item.experiment_id.slice(0, 8)}</option>)}</select></label>
+        <label className="text-sm font-medium text-text-primary">新实验名称<input aria-label="新实验名称" value={experimentName} onChange={event => setExperimentName(event.target.value)} maxLength={160} className={'mt-2 w-full ' + evalControl} /></label>
+        <div className="flex items-end"><EvalButton onClick={() => void saveExperiment()} disabled={loading || savingExperiment || !canSaveExperiment}>{savingExperiment ? '保存中…' : '保存为实验'}</EvalButton></div>
       </div>
       {loading && <p className="mt-3 text-sm text-text-secondary" role="status">正在读取 V2 运行记录…</p>}
       {runs.length === 0 && !loading && <p className="mt-3 rounded-md bg-bg-elevated p-4 text-sm text-text-secondary">没有 V2 运行记录。请先启动已发布 RAG Suite。</p>}
       {error && <p className="mt-3 rounded-md border border-red-200 p-3 text-sm text-red-800" role="alert">{error}</p>}
       {message && <p className="mt-3 text-sm text-text-secondary" role="status">{message}</p>}
-    </section>
+    </EvalCard>
     {result && !result.comparable && <section className="rounded-lg border border-amber-300 bg-amber-50 p-4" aria-labelledby="evaluation-incomparable-heading"><h3 id="evaluation-incomparable-heading" className="font-semibold text-amber-950">不可直接比较</h3><p className="mt-1 text-sm text-amber-900">关键运行快照不一致或结果未完成，系统没有计算差值：</p><ul className="mt-3 list-disc space-y-1 pl-5 text-sm text-amber-900">{result.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul></section>}
     {result?.comparable && <>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">通过率差值 · B − A</p><p className={'mt-2 text-2xl font-semibold tabular-nums ' + deltaTone('pass_rate', delta)}>{delta > 0 ? '+' : ''}{percent(delta)}</p><p className="mt-1 text-xs text-text-muted">{percent(baselineRate)} → {percent(candidateRate)}</p></article>
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">可比较样本</p><p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">{result.cases.length}</p><p className="mt-1 text-xs text-text-muted">相同 Case ID 与修订</p></article>
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">仅 B 通过</p><p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">{candidateOnlyPass}</p></article>
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">仅 A 通过</p><p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">{baselineOnlyPass}</p></article>
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">双方通过</p><p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">{bothPass}</p></article>
-        <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">双方未通过 / 错误</p><p className="mt-2 text-2xl font-semibold tabular-nums text-text-primary">{bothNotPass}</p></article>
+      <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <EvalKpiCard label="通过率差值 · B − A" value={(delta > 0 ? '+' : '') + percent(delta)} detail={percent(baselineRate) + ' → ' + percent(candidateRate)} tone={delta > 0.000001 ? 'good' : delta < -0.000001 ? 'bad' : undefined} />
+        <EvalKpiCard label="可比较样本" value={String(result.cases.length)} detail="相同 Case ID 与修订" />
+        <EvalKpiCard label="仅 B 通过" value={String(candidateOnlyPass)} detail="候选端新通过的用例" tone={candidateOnlyPass > 0 ? 'good' : undefined} />
+        <EvalKpiCard label="仅 A 通过" value={String(baselineOnlyPass)} detail="基线通过而候选未通过的用例" tone={baselineOnlyPass > 0 ? 'bad' : undefined} />
       </div>
-      {passRateInference && <section className="rounded-lg border border-border-subtle bg-surface-base p-4" aria-labelledby="evaluation-compare-inference"><div className="flex flex-wrap items-start justify-between gap-2"><div><h3 id="evaluation-compare-inference" className="font-semibold text-text-primary">配对通过率不确定性</h3><p className="mt-1 text-xs text-text-muted">双侧精确 McNemar 检验；95% 区间使用配对 Wilson 近似。该检验只针对整体二分类结果。</p></div><span className="rounded-full bg-bg-elevated px-2.5 py-1 text-xs text-text-secondary">有效样本 {passRateInference.sample_count} · 状态不完整排除 {passRateInference.excluded_count}</span></div><div className="mt-3 grid gap-3 sm:grid-cols-3"><div><p className="text-xs text-text-muted">通过率差值 95% 区间</p><p className="mt-1 text-sm font-medium text-text-primary">{passRateInference.ci95_lower === null || passRateInference.ci95_upper === null ? '无方向变化样本，无法估计' : `${percent(passRateInference.ci95_lower)} 至 ${percent(passRateInference.ci95_upper)}`}</p></div><div><p className="text-xs text-text-muted">双侧精确 p 值</p><p className="mt-1 text-sm font-medium tabular-nums text-text-primary">{passRateInference.p_value < 0.001 ? '< 0.001' : passRateInference.p_value.toFixed(3)}</p></div><div><p className="text-xs text-text-muted">不一致样本方向</p><p className="mt-1 text-sm text-text-primary">B 新通过 {passRateInference.candidate_only_pass} · A 通过而 B 未通过 {passRateInference.baseline_only_pass}</p></div></div><p className="mt-3 text-xs text-text-muted">下方切片仅对有效样本至少 20 的标签组计算配对推断，并对可检验组统一做 Holm 校正；结果仅供探索，不参与 Gate。</p></section>}
+      <div className="mb-4 grid gap-4 md:grid-cols-2">
+        <EvalCard title="变化归因" subtitle="按双方逐例状态分组，平均分不会掩盖高风险失败。">
+          <EvalMetricRow label="双方均通过">{bothPass} 条</EvalMetricRow>
+          <EvalMetricRow label="双方未通过 / 错误">{bothNotPass} 条</EvalMetricRow>
+          <EvalMetricRow label="仅 B 通过"><span className="text-emerald-700">{candidateOnlyPass} 条</span></EvalMetricRow>
+          <EvalMetricRow label="仅 A 通过"><span className="text-red-700">{baselineOnlyPass} 条</span></EvalMetricRow>
+        </EvalCard>
+        {passRateInference && <EvalCard title="配对通过率不确定性" subtitle="双侧精确 McNemar 检验；95% 区间使用配对 Wilson 近似。">
+          <EvalMetricRow label="有效样本">{passRateInference.sample_count} · 状态不完整排除 {passRateInference.excluded_count}</EvalMetricRow>
+          <EvalMetricRow label="通过率差值 95% 区间">{passRateInference.ci95_lower === null || passRateInference.ci95_upper === null ? '无方向变化样本，无法估计' : `${percent(passRateInference.ci95_lower)} 至 ${percent(passRateInference.ci95_upper)}`}</EvalMetricRow>
+          <EvalMetricRow label="双侧精确 p 值">{passRateInference.p_value < 0.001 ? '< 0.001' : passRateInference.p_value.toFixed(3)}</EvalMetricRow>
+          <p className="mt-3 text-xs text-text-muted">切片推断仅对有效样本至少 20 的标签组计算，统一做 Holm 校正；结果仅供探索，不参与 Gate。</p>
+        </EvalCard>}
+      </div>
       <section className="overflow-x-auto rounded-lg border border-border-subtle bg-surface-base" aria-labelledby="evaluation-compare-metrics"><div className="border-b border-border-subtle p-4"><h3 id="evaluation-compare-metrics" className="font-semibold text-text-primary">共同返回的质量指标</h3><p className="mt-1 text-xs text-text-muted">按逐例已持久化指标求均值；旧 Runner 未记录的成本不填为零。</p></div>{result.metrics.length === 0 ? <p className="p-4 text-sm text-text-secondary">两次运行没有共同数值指标。</p> : <table className="w-full min-w-[620px] text-left text-sm"><thead className="bg-bg-elevated text-xs text-text-secondary"><tr><th className="px-4 py-3">指标</th><th className="px-4 py-3">基线 A</th><th className="px-4 py-3">候选 B</th><th className="px-4 py-3">变化 B − A</th><th className="px-4 py-3">样本量</th></tr></thead><tbody className="divide-y divide-border-subtle">{result.metrics.map(metric => <tr key={metric.key}><td className="px-4 py-3">{metric.key}</td><td className="px-4 py-3 tabular-nums">{metricValue(metric.key, metric.baseline)}</td><td className="px-4 py-3 tabular-nums">{metricValue(metric.key, metric.candidate)}</td><td className={'px-4 py-3 tabular-nums font-medium ' + deltaTone(metric.key, metric.delta)}>{metric.delta > 0 ? '+' : ''}{metricValue(metric.key, metric.delta)}</td><td className="px-4 py-3 tabular-nums">{metric.sample_count}</td></tr>)}</tbody></table>}</section>
       <section className="overflow-x-auto rounded-lg border border-border-subtle bg-surface-base" aria-labelledby="evaluation-compare-slices">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border-subtle p-4">

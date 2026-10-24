@@ -9,6 +9,7 @@ import {
 } from '@/api/evaluation'
 import { atLeast } from '@/lib/auth'
 import { createIdempotencyKey } from '@/api/client'
+import { EvalButton, EvalCard, EvalKpiCard, EvalMetricRow, EvalPageHeader, EvalWarnBox } from './evalUi'
 
 function verdictLabel(value: string | null | undefined): string {
   if (value === 'PASS') return 'PASS · 通过'
@@ -161,21 +162,34 @@ export default function EvaluationReleaseQualityPanel() {
   const selected = runs.find(run => run.run_id === selectedId)
   const canApprove = atLeast('super_admin') && gate?.verdict === 'PASS' && Boolean(gate.decisions[0]?.decision_id)
 
-  return <div className="mx-auto max-w-7xl space-y-5 px-6 py-6">
-    <div className="flex flex-wrap items-end justify-between gap-3">
-      <div>
-        <h2 className="text-base font-semibold text-text-primary">V2 发布质量与 Gate</h2>
-        <p className="mt-1 max-w-3xl text-sm leading-6 text-text-secondary">Gate 决策从服务端追加式记录读取；任务成功、质量通过与运行有效性分别展示。人工审批绑定具体 PASS 裁决，只记意见，不触发 CI 或部署。</p>
-      </div>
-      <button type="button" onClick={() => void load()} disabled={loading} className="min-h-10 rounded-md border border-border-subtle bg-surface-base px-3 text-sm">刷新</button>
-    </div>
-    {error && <p className="rounded-md border border-red-200 bg-surface-base p-3 text-sm text-red-800" role="alert">{error}</p>}
-    {message && <p className="rounded-md border border-border-subtle bg-surface-base p-3 text-sm text-text-secondary" role="status">{message}</p>}
+  return <div>
+    <EvalPageHeader
+      title="发布质量与门禁"
+      subtitle="发布决策由数据有效性、必需指标与安全否决组合产生，不由单一平均分决定；人工审批只记录意见，不触发 CI 或部署。"
+      actions={<EvalButton onClick={() => void load()} disabled={loading}>刷新</EvalButton>}
+    />
+    {error && <p className="mb-3 rounded-md border border-red-200 bg-surface-base p-3 text-sm text-red-800" role="alert">{error}</p>}
+    {message && <p className="mb-3 rounded-md border border-border-subtle bg-surface-base p-3 text-sm text-text-secondary" role="status">{message}</p>}
 
-    <div className="grid gap-3 sm:grid-cols-3">
-      <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">Gate 通过</p><p className="mt-2 text-2xl font-semibold tabular-nums text-emerald-700">{passed}</p></article>
-      <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">Gate 未通过</p><p className="mt-2 text-2xl font-semibold tabular-nums text-red-700">{failed}</p></article>
-      <article className="rounded-lg border border-border-subtle bg-surface-base p-4"><p className="text-sm text-text-secondary">无效运行</p><p className="mt-2 text-2xl font-semibold tabular-nums text-amber-800">{invalid}</p></article>
+    <div className="mb-4 grid gap-4 sm:grid-cols-3">
+      <EvalKpiCard label="质量通过" value={String(passed)} detail="固定样本与有效运行的 PASS 裁决" tone="good" />
+      <EvalKpiCard label="质量或安全失败" value={String(failed)} detail="安全硬否决不得被抵消" tone={failed > 0 ? 'bad' : undefined} />
+      <EvalKpiCard label="无效运行" value={String(invalid)} detail="缺凭据/快照/真值，不能评价质量" tone={invalid > 0 ? 'warn' : undefined} />
+    </div>
+
+    <div className="mb-4 grid gap-4 md:grid-cols-2">
+      <EvalCard title="不可绕过的硬规则" subtitle="任一命中直接决定裁决，不参与加权平均。">
+        <EvalMetricRow label="租户 / 权限越权失败"><span className="text-red-700">任何一次 → FAIL</span></EvalMetricRow>
+        <EvalMetricRow label="Golden 或语料快照无效"><span className="text-amber-700">INVALID</span></EvalMetricRow>
+        <EvalMetricRow label="Provider 缺失 / 超时"><span className="text-amber-700">INVALID / BLOCKED</span></EvalMetricRow>
+        <EvalMetricRow label="强制指标不达标"><span className="text-red-700">FAIL</span></EvalMetricRow>
+      </EvalCard>
+      <EvalCard title="CI 运行层级" subtitle="免费层在 CI 中确定性执行；付费层需审批与预算。">
+        <EvalMetricRow label="L0 · Schema / Hash 校验"><span className="text-emerald-700">免费</span></EvalMetricRow>
+        <EvalMetricRow label="L1 · 确定性逻辑评测"><span className="text-emerald-700">免费</span></EvalMetricRow>
+        <EvalMetricRow label="L2 · 真实模型 / 检索">审批 + 预算</EvalMetricRow>
+        <EvalMetricRow label="L3 · 真实网关 / E2E">发布前验证</EvalMetricRow>
+      </EvalCard>
     </div>
 
     <section className="overflow-x-auto rounded-lg border border-border-subtle bg-surface-base" aria-labelledby="evaluation-v2-gates-heading">

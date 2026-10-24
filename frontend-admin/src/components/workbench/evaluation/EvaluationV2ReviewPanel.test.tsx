@@ -42,7 +42,7 @@ describe('EvaluationV2ReviewPanel', () => {
       valueSetter?.call(rationale, '核对当前制度原文')
       rationale.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    const approve = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '核验并通过')
+    const approve = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认事实并批准')
     expect(approve?.disabled).toBe(false)
     await act(async () => { approve?.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
 
@@ -78,18 +78,16 @@ describe('EvaluationV2ReviewPanel', () => {
     mounted = { root, container }
     await act(async () => { root.render(<EvaluationV2ReviewPanel />); await Promise.resolve() })
 
-    const expected = container.querySelector('textarea[aria-label="审核后的标准事实 JSON"]') as HTMLTextAreaElement
-    expect(JSON.parse(expected.value)).toMatchObject({ gold_sql: 'SELECT COUNT(*) FROM product.products' })
     expect(container.querySelector('textarea[aria-label="原文证据锚点 JSON"]')).toBeNull()
     const rationale = container.querySelector('textarea[required]') as HTMLTextAreaElement
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set?.call(rationale, '核对 SQL 预期表和查询语义')
       rationale.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    const approve = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '核验并通过')
+    const approve = Array.from(container.querySelectorAll('button')).find(button => button.textContent === '确认事实并批准')
     await act(async () => { approve?.click(); await new Promise(resolve => setTimeout(resolve, 0)) })
     expect(evaluationService.reviewV2Candidate).toHaveBeenCalledWith('candidate-sql', expect.objectContaining({
-      expected: expect.objectContaining({ expected_tables: ['product.products'], should_reject: false }),
+      expected: expect.objectContaining({ expected_tables: ['product.products'], should_reject: false, gold_sql: 'SELECT COUNT(*) FROM product.products' }),
       evidence: [],
     }))
   })
