@@ -224,7 +224,8 @@ class TestBuildRejectionResponse:
                                 layer="retrieval",
                                 diagnostics={"doc_count": 0, "threshold": {"vec_min": 0.2}})
         msg, info = build_rejection_response(decision, "retrieval")
-        assert "知识库暂无" in msg
+        # 2026-10-25 文案用户语言化：断言语义而非字面（避免文案演进即碎）
+        assert "未找到" in msg
         assert info.rejected is True
         assert info.reason == "no_evidence"
         assert info.layer == "retrieval"
@@ -236,7 +237,7 @@ class TestBuildRejectionResponse:
                                 score=0.05,
                                 diagnostics={"top_score": 0.05, "doc_count": 3})
         msg, info = build_rejection_response(decision, "retrieval")
-        assert "相关性不足" in msg
+        assert "相关性" in msg
         assert info.scores["top_score"] == 0.05
 
     def test_self_correction_attempted_appended(self):

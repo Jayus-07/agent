@@ -24,12 +24,15 @@ class RejectReason(str, Enum):
 # 中文 user-facing 提示语 (按层分类)
 # 注意：self_correction_attempted 由 build_rejection_response 追加，
 # 这里保持纯描述，避免重复语义。
+# 文案口径（2026-10-25 用户语言化）：描述用户可理解的现象，不暴露召回/
+# rerank/门禁等内部机制词；行动引导由前端 ErrorCard 按 answer_status
+# 稳定码叠加（RAG_REJECTION_ACTIONS），此处不重复行动建议。
 REJECT_MESSAGES: dict[RejectReason, str] = {
-    RejectReason.NO_EVIDENCE: "知识库暂无相关资料。",
-    RejectReason.LOW_RELEVANCE: "已检索到部分内容，但相关性不足以可靠回答，请尝试换一种提问方式。",
-    RejectReason.DOC_TYPE_MISMATCH: "已检索到相关内容，但文档类型与问题不匹配。",
-    RejectReason.INSUFFICIENT: "召回的多条证据之间支撑不充分。",
-    RejectReason.HALLUCINATION: "已生成的答案中包含未经资料支撑的事实，已自动拒答以避免错误信息。",
+    RejectReason.NO_EVIDENCE: "知识库中未找到与该问题相关的内容。",
+    RejectReason.LOW_RELEVANCE: "找到的内容与问题的相关性不够强，暂时无法给出可靠回答。",
+    RejectReason.DOC_TYPE_MISMATCH: "找到的文档类型与问题不太匹配，暂时无法给出可靠回答。",
+    RejectReason.INSUFFICIENT: "找到的内容与问题的相关性不够强，暂时无法给出可靠回答。",
+    RejectReason.HALLUCINATION: "生成的回答未能通过事实一致性校验，已自动拦截以避免错误信息。",
 }
 
 # 权限剔除话术（与五类 REJECT_MESSAGES 分列）：它描述的是「有资料但你看不了」，

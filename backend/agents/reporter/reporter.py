@@ -765,26 +765,36 @@ def _is_step_successful(result: dict) -> bool:
 
 # Skill 层的"标准空结果"话术——内容为空但 status=success 的产出。
 # 命中即视为该步骤"未获得数据"，Reporter 汇总时必须显式交代，不得透传。
-_EMPTY_RESULT_PHRASES = frozenset({
-    "知识库暂无相关资料。",
-    "知识库暂无相关资料",
-    "未找到相关信息。",
-    "未找到相关信息",
-    "无结果",
-    "未能获取任何有效数据。",
-})
-# 前缀变体：RAG self-correction 会在拒答话术后追加改写说明
-# （"知识库暂无相关资料。\n（已尝试改写提问重新检索，仍未找到可靠答案）"），
-# 精确匹配拦不住，被当有效结果透传（实测 2026-09-19，拒答转追问由此漏判）
-_EMPTY_RESULT_PREFIXES = ("知识库暂无相关资料", "未找到相关信息")
+# 2026-10-25 收敛为单一事实源：拒答短语直接引用 evidence_gate.REJECT_MESSAGES
+# （此前手抄清单，文案一改就漏判——本轮文案用户语言化时再次踩中）；
+# 旧文案保留兼容（存量会话/滚动发布期间旧 rag-service 仍返回旧话术）。
+def _empty_result_phrases() -> frozenset:
+    from backend.rag.evidence_gate.models import REJECT_MESSAGES
+    return frozenset({
+        "知识库暂无相关资料。",
+        "知识库暂无相关资料",
+        "未找到相关信息。",
+        "未找到相关信息",
+        "无结果",
+        "未能获取任何有效数据。",
+        *REJECT_MESSAGES.values(),
+    })
+
+
+def _empty_result_prefixes() -> tuple:
+    from backend.rag.evidence_gate.models import REJECT_MESSAGES
+    # 前缀变体：RAG self-correction 会在拒答话术后追加改写说明
+    # （"知识库暂无相关资料。\n（已尝试改写提问重新检索，仍未找到可靠答案）"），
+    # 精确匹配拦不住，被当有效结果透传（实测 2026-09-19，拒答转追问由此漏判）
+    return ("知识库暂无相关资料", "未找到相关信息", *REJECT_MESSAGES.values())
 
 
 def _is_empty_output(output: str) -> bool:
     """空结果话术判定：精确短语 + 带后缀的前缀变体。"""
     text = output.strip()
-    if text in _EMPTY_RESULT_PHRASES:
+    if text in _empty_result_phrases():
         return True
-    return any(text.startswith(p) for p in _EMPTY_RESULT_PREFIXES)
+    return any(text.startswith(p) for p in _empty_result_prefixes())
 
 
 def _extract_rag_references(step_results: dict) -> str:
