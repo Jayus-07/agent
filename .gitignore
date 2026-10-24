@@ -462,3 +462,4 @@ tmp/
 
 # 安全扫描插件（Mimosa）本地缓存产物
 frontend-admin/.mimosa/
+frontend/.mimosa/
