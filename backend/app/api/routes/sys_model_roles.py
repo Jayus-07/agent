@@ -189,6 +189,8 @@ async def _governance_context() -> tuple[dict, dict, list | None]:
                 "consecutiveFailures": r["consecutiveFailures"],
                 "probeSource": r.get("probeSource"),
                 "probeMode": r.get("probeMode"),
+                # P2（2026-10-24）：本地计费供应商失败时前端给针对性指引
+                "billing": r.get("billing"),
             }
             for r in health_rows
         }
