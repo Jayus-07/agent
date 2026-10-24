@@ -21,6 +21,7 @@ const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 vi.mock('@/api/evaluation', () => ({
   evaluationService: {
     listSuites: vi.fn(async () => [{ name: 'pr_baseline', module: 'rag', case_count: 1 }]),
+    listLegacySuites: vi.fn(async () => [{ name: 'pr_baseline', module: 'rag', case_count: 1 }]),
     listRuns: vi.fn(async () => [
       {
         run_id: 'run-sql-1', module: 'sql', status: 'completed',

@@ -72,7 +72,8 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
                 trace_id: str = "",
                 biz_type: str = "", biz_id: str = "",
                 parent_task_id: str = "",
-                extra_input: dict | None = None, connection=None) -> TaskRecord:
+                extra_input: dict | None = None, connection=None,
+                task_id: str | None = None) -> TaskRecord:
     """创建 PENDING 任务并落库。thread_id 全局唯一（checkpoint 定位键）。
 
     extra_input：执行器重投所需的业务参数（如 rag_index 的索引 kwargs），
@@ -81,7 +82,7 @@ def create_task(user_id: str, query: str, *, tenant_id: str = "default",
     from backend.config.tasks import CELERY_MAX_RETRIES
 
     ensure_schema()
-    task_id = str(uuid.uuid4())
+    task_id = str(uuid.UUID(task_id)) if task_id else str(uuid.uuid4())
     thread_id = f"task-{task_id}"
     input_payload = {"query": query, **(extra_input or {})}
     with (nullcontext(connection) if connection is not None else _conn()) as conn, conn.cursor() as cur:
@@ -307,8 +308,10 @@ def update_status(task_id: str, status: TaskStatus, *,
 
     Phase2 Step2 错误口径：``error_message=None`` 表示**不改写**既有错误
     字段（signals retry/failure 兜底不再清掉分类器写入的错误信息）；显式
-    ``""`` 仍清空（终态 SUCCESS 收尾时用）。``error_type`` 传 None 不改写、
-    传值覆写（runtime 分类词表）。``retry_exhausted`` 仅终态 FAILED 携带。
+    ``""`` 仍清空。进入 SUCCESS 时统一清掉上一次尝试残留的错误类型、堆栈和
+    耗尽标记，避免管理员重试成功后任务仍显示为失败。非成功状态下
+    ``error_type=None`` 与 ``traceback_text=None`` 表示不改写，传值则覆写。
+    ``retry_exhausted`` 仅终态 FAILED 携带。
 
     时间戳自动治理：
     - RUNNING → started_at（COALESCE 保留首次启动，重试不覆盖）
@@ -345,15 +348,15 @@ def update_status(task_id: str, status: TaskStatus, *,
 
         sets = ["status = %s", "updated_at = now()"]
         args: list = [status.value]
-        if error_message is not None:
+        if error_message is not None or status == TaskStatus.SUCCESS:
             sets.append("error_message = %s")
-            args.append(error_message)
-        if error_type is not None:
+            args.append(error_message or "")
+        if error_type is not None or status == TaskStatus.SUCCESS:
             sets.append("error_type = %s")
-            args.append(error_type[:128])
-        if traceback_text is not None:
+            args.append(error_type[:128] if status != TaskStatus.SUCCESS and error_type else "")
+        if traceback_text is not None or status == TaskStatus.SUCCESS:
             sets.append("traceback = %s")
-            args.append(traceback_text[:20000])
+            args.append(traceback_text[:20000] if status != TaskStatus.SUCCESS and traceback_text else "")
         if worker is not None:
             sets.append("worker = %s")
             args.append(worker[:128])
@@ -372,9 +375,9 @@ def update_status(task_id: str, status: TaskStatus, *,
         if celery_task_id is not None:
             sets.append("celery_task_id = %s")
             args.append(celery_task_id)
-        if retry_exhausted is not None:
+        if retry_exhausted is not None or status == TaskStatus.SUCCESS:
             sets.append("retry_exhausted = %s")
-            args.append(bool(retry_exhausted))
+            args.append(bool(retry_exhausted) if status != TaskStatus.SUCCESS else False)
         if status == TaskStatus.RUNNING:
             sets.append("started_at = COALESCE(started_at, now())")
         if status.is_terminal():

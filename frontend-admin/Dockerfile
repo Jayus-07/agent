@@ -4,13 +4,13 @@
 # =============================================
 # Stage 1: Build
 # =============================================
-FROM node:18-alpine AS builder
+# Vite 8 / Tailwind 4 的锁定依赖要求 Node 20.19+ 或 22.12+。
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 # 安装依赖（利用 Docker 缓存层）
 COPY package.json package-lock.json* ./
-# Next 14 的 SWC/图像依赖含平台可选包；Docker Linux 构建必须显式保留
-# optionalDependencies，否则 npm ci 会误报 package-lock 缺少 @emnapi/*。
+# Tailwind 4 的平台原生/WASM 后端使用 optionalDependencies；构建需保留可选包。
 RUN --mount=type=cache,id=agent-platform-npm,target=/root/.npm npm ci --include=optional
 
 # 复制源码
@@ -26,7 +26,7 @@ RUN npm run build
 # =============================================
 # Stage 2: Runtime
 # =============================================
-FROM node:18-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production \

@@ -257,17 +257,55 @@ def store(tmp_path):
     # setup：清残留（前次中断可能留下数据）；注意不能 DROP 表——
     # store 的 _DDL_DONE 进程级缓存假设表在进程生命周期内持续存在
     conn.cursor().execute(f"DELETE FROM {s._table} WHERE collection = %s", (s._collection,))
+    conn.cursor().execute(
+        "DELETE FROM test_rag_index_meta WHERE collection = %s", (s._collection,)
+    )
     conn.close()
     yield s
     conn = psycopg2.connect(**VECTOR_PG_CONFIG)
     conn.autocommit = True
     conn.cursor().execute(f"DELETE FROM {s._table} WHERE collection = %s", (s._collection,))
+    conn.cursor().execute(
+        "DELETE FROM test_rag_index_meta WHERE collection = %s", (s._collection,)
+    )
     conn.close()
     os.environ.pop("VECTOR_PG_TABLE_PREFIX", None)
 
 
 @pytest.mark.usefixtures("store")
 class TestPgVectorStoreIntegration:
+    def test_promote_candidate_also_promotes_index_metadata(
+        self, store: PgVectorKnowledgeStore,
+    ):
+        candidate = store.clone_for_candidate(f"promote-{uuid.uuid4().hex}")
+        source_collection = candidate._collection
+        try:
+            candidate.add_texts(
+                ["候选代次元数据晋级校验"],
+                [{"doc_id": "promotion-smoke", "kb_id": "kb-a"}],
+            )
+            source_meta = candidate.get_index_meta()
+            assert source_meta is not None
+
+            assert store.promote_collection(source_collection) == 1
+
+            target_meta = store.get_index_meta()
+            assert target_meta is not None
+            assert target_meta["embeddingDimension"] == source_meta["embeddingDimension"]
+            assert target_meta["embeddingModel"] == source_meta["embeddingModel"]
+            assert candidate.get_index_meta() is None
+        finally:
+            with store._conn() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"DELETE FROM {store._table} WHERE collection = %s",
+                    (source_collection,),
+                )
+                cursor.execute(
+                    "DELETE FROM test_rag_index_meta WHERE collection = %s",
+                    (source_collection,),
+                )
+
     def test_roundtrip(self, store: PgVectorKnowledgeStore):
         docs = [
             _Doc("退款政策：7 天无理由退款", {"doc_id": "d1", "chunk_index": 0, "kb_id": "kb-a"}),

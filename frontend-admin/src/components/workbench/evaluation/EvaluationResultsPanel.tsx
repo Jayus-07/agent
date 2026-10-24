@@ -114,7 +114,7 @@ export default function EvaluationResultsPanel() {
   const [suiteError, setSuiteError] = useState('')
   useEffect(() => {
     let active = true
-    void evaluationService.listSuites().then(items => {
+    void evaluationService.listLegacySuites().then(items => {
       if (active) setSuites(items.filter(item => item.module === 'rag'))
     }).catch(() => { if (active) setSuiteError('无法读取内置套件，请刷新后重试') })
     return () => { active = false }
@@ -292,7 +292,7 @@ export default function EvaluationResultsPanel() {
         {/* 操作 */}
         <div className="flex items-center justify-end mb-6">
           <div className="flex items-center gap-2">
-            <label className="text-xs text-text-secondary">内置套件<select aria-label="内置评测套件" className="ml-2 rounded border border-border-subtle bg-surface-base px-2 py-1.5" value={selectedSuite} disabled={running} onChange={e => setSelectedSuite(e.target.value)}>{suites.map(item => <option key={item.name} value={item.name}>{item.name} / {item.case_count} 题</option>)}</select></label>
+            <label className="text-xs text-text-secondary">旧版 Runner 套件<select aria-label="旧版 Runner 评测套件" className="ml-2 rounded border border-border-subtle bg-surface-base px-2 py-1.5" value={selectedSuite} disabled={running} onChange={e => setSelectedSuite(e.target.value)}>{suites.map(item => <option key={item.name} value={item.name}>{item.name} / {item.case_count} 题</option>)}</select></label>
             {suiteError && <span role="alert" className="text-xs text-red-700">{suiteError}</span>}
             <label className="flex items-center gap-2 text-xs text-text-secondary">
               <span>测评方式</span>
@@ -311,7 +311,7 @@ export default function EvaluationResultsPanel() {
             <button
               onClick={handleRunEval}
               disabled={running || suites.length === 0 || Boolean(suiteError)}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors disabled:opacity-50"
             >
               <PlayCircle size={14} />
               {running ? '评测执行中…' : '发起 RAG 评测'}

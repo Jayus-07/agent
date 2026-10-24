@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { evaluationAssets, type ImportedDataset, type EvaluationBinding, type EvaluationTask } from '@/api/evaluation-assets'
+import { createIdempotencyKey } from '@/api/client'
 import { evaluationService, type EvalRunDetail } from '@/api/evaluation'
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { atLeast } from '@/lib/auth'
@@ -12,7 +13,7 @@ import CaseSampleDetail from '@/components/evaluations/CaseSampleDetail'
 import EvaluationSubjectPicker from './EvaluationSubjectPicker'
 import PublicationGateControl from './PublicationGateControl'
 
-const control = 'min-h-11 rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-blue-300 disabled:opacity-50'
+const control = 'min-h-11 rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-accent disabled:opacity-50'
 const taskLabels: Record<string, string> = { PENDING: '排队中', RETRYING: '等待自动重试', RUNNING: '评测中', SUCCESS: '已完成', FAILED: '执行失败', CANCELLED: '已取消', PAUSED: '已暂停', WAITING_USER: '等待处理' }
 
 export default function EvaluationBindingsPanel() {
@@ -104,13 +105,13 @@ export default function EvaluationBindingsPanel() {
       <label className="text-xs">门禁最少题数<input aria-label="门禁最少题数" className={`${control} w-20`} type="number" min={1} max={100} value={minimum} onChange={e => setMinimum(Number(e.target.value))} /></label>
       <label className="text-xs">门禁通过率<input aria-label="门禁通过率" className={`${control} w-24`} type="number" min={0.5} max={1} step={0.01} value={passRate} onChange={e => setPassRate(Number(e.target.value))} /></label>
       </div></details>
-      <button disabled={busy || !selected || !kb} className={`${control} bg-blue-600 text-white`} onClick={() => void action(async () => { const snapshot = fixed ? await evaluationAssets.freeze(kb) : null; await evaluationAssets.bind(selected, kb, { mode, split, snapshot_id: snapshot?.snapshot_id || '', subject_user_id: subject ? Number(subject) : null, min_samples: minimum, pass_rate: passRate }); if (snapshot?.warnings?.length) toast.warning('关联已保存：旧索引登记需要复核，可运行诊断评测，发布门禁不会放行'); else toast.success('知识库关联已保存'); await load() })}>校验证据并关联</button>
+      <button disabled={busy || !selected || !kb} className={`${control} bg-accent text-white`} onClick={() => void action(async () => { const snapshot = fixed ? await evaluationAssets.freeze(kb) : null; await evaluationAssets.bind(selected, kb, { mode, split, snapshot_id: snapshot?.snapshot_id || '', subject_user_id: subject ? Number(subject) : null, min_samples: minimum, pass_rate: passRate }); if (snapshot?.warnings?.length) toast.warning('关联已保存：旧索引登记需要复核，可运行诊断评测，发布门禁不会放行'); else toast.success('知识库关联已保存'); await load() })}>校验证据并关联</button>
     </div>
-    {imports.length === 0 && <p className="text-xs text-text-muted">暂无已发布业务题集。<Link className="ml-2 text-blue-600" href="/evaluations/center?tab=datasets">导入评测集</Link></p>}
-    <div className="overflow-x-auto rounded-lg border border-border-subtle"><table className="w-full min-w-[650px] text-left text-xs"><thead className="bg-slate-50"><tr><th className="p-3">评测集 / 固定版本</th><th className="p-3">知识库</th><th className="p-3">最近运行</th><th className="p-3">操作</th></tr></thead><tbody>{scopedBindings.map(item => <tr key={item.binding_id} className="border-t border-border-subtle"><td className="p-3">{item.dataset_name}<span className="ml-2 text-text-muted">v{item.dataset_version}</span><p className="mt-1 text-xs text-text-muted">{item.mode === "answer" ? "检索与答案" : "仅检索"} · {item.split || "全部题目"} · {item.snapshot_id ? "固定语料" : "当前语料"}</p></td><td className="p-3"><Link href={`/knowledge/workbench?tab=authority&kb_id=${encodeURIComponent(item.kb_id)}`} className="text-blue-600">{kbs.find(k => k.kb_id === item.kb_id)?.name || item.kb_id}</Link></td><td className="p-3">{item.latest_run ? <button className="text-blue-600" disabled={busy} onClick={() => void action(async () => { setRun(await evaluationService.getRun(item.latest_run!.run_id)) })}>{item.latest_run.validity === 'VALID' ? '已完成 · 查看结果' : '未能有效评测 · 查看原因'}</button> : '尚未运行'}</td><td className="p-3"><button disabled={busy || Boolean(runningTask)} className={control} onClick={() => void action(async () => {
+    {imports.length === 0 && <p className="text-xs text-text-muted">暂无已发布业务题集。<Link className="ml-2 text-accent" href="/evaluations/center?tab=datasets">导入评测集</Link></p>}
+    <div className="overflow-x-auto rounded-lg border border-border-subtle"><table className="w-full min-w-[650px] text-left text-xs"><thead className="bg-slate-50"><tr><th className="p-3">评测集 / 固定版本</th><th className="p-3">知识库</th><th className="p-3">最近运行</th><th className="p-3">操作</th></tr></thead><tbody>{scopedBindings.map(item => <tr key={item.binding_id} className="border-t border-border-subtle"><td className="p-3">{item.dataset_name}<span className="ml-2 text-text-muted">v{item.dataset_version}</span><p className="mt-1 text-xs text-text-muted">{item.mode === "answer" ? "检索与答案" : "仅检索"} · {item.split || "全部题目"} · {item.snapshot_id ? "固定语料" : "当前语料"}</p></td><td className="p-3"><Link href={`/knowledge/workbench?tab=authority&kb_id=${encodeURIComponent(item.kb_id)}`} className="text-accent">{kbs.find(k => k.kb_id === item.kb_id)?.name || item.kb_id}</Link></td><td className="p-3">{item.latest_run ? <button className="text-accent" disabled={busy} onClick={() => void action(async () => { setRun(await evaluationService.getRun(item.latest_run!.run_id)) })}>{item.latest_run.validity === 'VALID' ? '已完成 · 查看结果' : '未能有效评测 · 查看原因'}</button> : '尚未运行'}</td><td className="p-3"><button disabled={busy || Boolean(runningTask)} className={control} onClick={() => void action(async () => {
       setRun(null)
       const storageKey = `evaluation-request-${item.binding_id}`
-      const requestId = localStorage.getItem(storageKey) || crypto.randomUUID()
+      const requestId = localStorage.getItem(storageKey) || createIdempotencyKey()
       localStorage.setItem(storageKey, requestId)
       const result = await evaluationAssets.run(item.binding_id, requestId)
       localStorage.removeItem(storageKey)

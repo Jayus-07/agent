@@ -132,20 +132,24 @@ def _judge_one(exp: dict, act: dict, turn: str) -> list[str]:
 def _get_graph(cross_turn: bool):
     """获取旅游域图；跨轮用例临时切 memory checkpointer（degraded 三态）。
 
-    返回 (graph, restore)。restore() 恢复默认图配置（checkpointer disabled）。
+    返回 (graph, restore)。restore() 精确恢复调用前的图配置与缓存图。
     """
-    import backend.config.travel as T
+    import backend.config.travel as travel_config
     import backend.travel.graph_builder as gb
 
+    original_enabled = travel_config.TRAVEL_CHECKPOINTER_ENABLED
+    original_backend = travel_config.TRAVEL_CHECKPOINTER_BACKEND
+    original_graph = gb._travel_graph
     if cross_turn:
-        T.TRAVEL_CHECKPOINTER_ENABLED = True
-        T.TRAVEL_CHECKPOINTER_BACKEND = "memory"
+        travel_config.TRAVEL_CHECKPOINTER_ENABLED = True
+        travel_config.TRAVEL_CHECKPOINTER_BACKEND = "memory"
         gb._travel_graph = None
     graph = gb.get_travel_graph()
 
     def restore() -> None:
-        T.TRAVEL_CHECKPOINTER_ENABLED = False
-        gb._travel_graph = None
+        travel_config.TRAVEL_CHECKPOINTER_ENABLED = original_enabled
+        travel_config.TRAVEL_CHECKPOINTER_BACKEND = original_backend
+        gb._travel_graph = original_graph
 
     return graph, restore
 

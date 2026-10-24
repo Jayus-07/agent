@@ -11,8 +11,8 @@ export const WORKBENCH_ROUTES = {
   },
   evaluations: {
     path: '/evaluations/center',
-    defaultTab: 'results',
-    tabs: ['results', 'datasets', 'feedback'],
+    defaultTab: 'overview',
+    tabs: ['overview', 'datasets', 'generate', 'review', 'suites', 'runs', 'compare', 'gates'],
   },
   observability: {
     path: '/observability/monitoring',

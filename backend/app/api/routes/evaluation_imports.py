@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.api.deps import require_user_actor
+from backend.app.api.identity import Identity, require_product_identity
 from backend.app.api.routes.evaluation import _eval_tenant_scope
 from backend.evaluation.dataset import imports as assets
 
@@ -319,10 +320,19 @@ class SynthesisRequest(BaseModel):
 
 
 @router.post("/dataset-synthesis", status_code=202)
-async def synthesize_dataset(body: SynthesisRequest, operator=Depends(require_curator)):
+async def synthesize_dataset(
+    body: SynthesisRequest,
+    identity: Identity = Depends(require_product_identity),
+    operator=Depends(require_curator),
+):
     from backend.evaluation.corpus_snapshots import load
     from backend.evaluation.managed_tasks import submit_payload
 
+    if identity.tenant_id != "default":
+        raise HTTPException(
+            403,
+            "Ragas 生成目前依赖单租户语料快照，只接受可信 default tenant；V2 资产可按各自 tenant 单独导入审核",
+        )
     try:
         snapshot = load(body.snapshot_id)
         require_kb(snapshot["kb_id"])
@@ -331,6 +341,7 @@ async def synthesize_dataset(body: SynthesisRequest, operator=Depends(require_cu
             "manifest": body.manifest.model_dump(),
             "count": body.count,
             "operation": "synthesize",
+            "tenant_id": identity.tenant_id,
         }
         return await asyncio.to_thread(submit_payload, payload, operator.actor, body.request_id)
     except Exception as exc:

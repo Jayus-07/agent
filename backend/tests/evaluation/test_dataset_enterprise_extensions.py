@@ -163,6 +163,69 @@ def test_synthetic_only_accepts_unique_original_quote():
         )
 
 
+def test_synthetic_rejects_reference_number_missing_from_evidence():
+    from backend.evaluation.dataset.synthetic import generated_payload
+
+    sample = SimpleNamespace(
+        eval_sample=SimpleNamespace(
+            reference_contexts=["年假需提前三个工作日提交申请。"],
+            user_input="年假需要提前多久申请？",
+            reference="年假需提前五个工作日提交申请。",
+        )
+    )
+    document = SimpleNamespace(
+        page_content="公司规定：年假需提前三个工作日提交申请。",
+        metadata={"doc_id": "leave-policy"},
+    )
+
+    with pytest.raises(ValueError, match="原文未支持的数值"):
+        generated_payload(package()["manifest"], [sample], [document])
+
+
+def test_synthetic_accepts_chinese_number_matching_arabic_evidence():
+    from backend.evaluation.dataset.synthetic import generated_payload
+
+    sample = SimpleNamespace(
+        eval_sample=SimpleNamespace(
+            reference_contexts=["年假需提前3个工作日提交申请。"],
+            user_input="年假需要提前多久申请？",
+            reference="年假需提前三个工作日提交申请。",
+        )
+    )
+    document = SimpleNamespace(
+        page_content="公司规定：年假需提前3个工作日提交申请。",
+        metadata={"doc_id": "leave-policy"},
+    )
+
+    payload = generated_payload(package()["manifest"], [sample], [document])
+
+    assert payload["cases"][0]["expected"]["reference_answer"] == (
+        "年假需提前三个工作日提交申请。"
+    )
+
+
+def test_synthetic_normalizes_arabic_large_unit_before_support_check():
+    from backend.evaluation.dataset.synthetic import generated_payload
+
+    sample = SimpleNamespace(
+        eval_sample=SimpleNamespace(
+            reference_contexts=["该项目预算为25000元。"],
+            user_input="项目预算是多少？",
+            reference="该项目预算为2.5万元。",
+        )
+    )
+    document = SimpleNamespace(
+        page_content="经审批，该项目预算为25000元。",
+        metadata={"doc_id": "project-budget"},
+    )
+
+    payload = generated_payload(package()["manifest"], [sample], [document])
+
+    assert payload["cases"][0]["expected"]["reference_answer"] == (
+        "该项目预算为2.5万元。"
+    )
+
+
 def test_managed_worker_authorization_and_cancel_boundary(monkeypatch):
     from backend.evaluation import managed_tasks
     from backend.models.task import TaskRecord
@@ -333,6 +396,8 @@ def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeyp
     from backend.infra import async_utils
     from backend.infra.llm import budget, registry_store
     from backend.observability.tracer import trace_collector
+    from backend.evaluation_v2 import repository
+    from backend.rag.indexing import doc_registry
 
     monkeypatch.setenv('RAG_DATA_DIR', str(tmp_path))
     rows = {'documents': ['隐藏原文' * 100, '可见原文甲' * 100, '重复甲' * 100, '可见原文乙' * 100],
@@ -340,6 +405,22 @@ def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeyp
     monkeypatch.setattr(corpus_snapshots, 'load', lambda _: {'kb_id': 'kb', 'snapshot_id': 'a' * 24, 'visible_ids': ['doc-a', 'doc-b']})
     monkeypatch.setattr(corpus_snapshots, 'pipeline', lambda _: SimpleNamespace(vectordb=SimpleNamespace(get=lambda: rows)))
     monkeypatch.setattr(managed_execution, 'validate_kb', lambda _: {})
+    class Registry:
+        def list_by_kb(self, kb_id):
+            assert kb_id == 'kb'
+            return [
+                {'doc_id': 'doc-a', 'version_id': 'version-a', 'status': 'active'},
+                {'doc_id': 'doc-b', 'version_id': 'version-b', 'status': 'active'},
+            ]
+    monkeypatch.setattr(doc_registry, 'DocumentRegistry', lambda: Registry())
+    stored_v2 = []
+    monkeypatch.setattr(repository, 'ensure_dataset', lambda *_args, **_kwargs: {'dataset_id': 'v2-dataset'})
+    def store_candidates(_tenant, _actor, *, source_kind, payloads, request_id):
+        stored_v2.extend(payloads)
+        assert source_kind == 'document_synthesized'
+        assert request_id == 'task-probe'
+        return [{'candidate_id': str(index)} for index, _ in enumerate(payloads)]
+    monkeypatch.setattr(repository, 'create_candidates_bulk', store_candidates)
     async def refresh():
         pass
     monkeypatch.setattr(registry_store, 'refresh_registry', refresh)
@@ -361,10 +442,13 @@ def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeyp
         calls.append(content)
         return SimpleNamespace(user_input=f'业务问题{len(calls)}', reference='可信答案', reference_contexts=[content])
     monkeypatch.setattr(SingleHopSpecificQuerySynthesizer, 'generate_sample', sample)
-    request = {'snapshot_id': 'a' * 24, 'task_id': 'task-probe', 'actor': 'user:1', 'count': 5,
+    request = {'snapshot_id': 'a' * 24, 'task_id': 'task-probe', 'tenant_id': 'default', 'actor': 'user:1', 'count': 5,
                'manifest': {'dataset_key': 'synthetic_probe', 'name': '候选题', 'version': '1.0.0'}}
     result = synthetic.generate(request, boundary=boundaries.append)
     assert result['review'] == 'pending_review' and result['case_count'] == 5
+    assert result['v2_candidate_count'] == 5 and len(stored_v2) == 5
+    assert 'expected' not in stored_v2[0] and stored_v2[0]['observed_answer'] == ''
+    assert stored_v2[0]['proposed_evidence'][0]['doc_version'] in {'version-a', 'version-b'}
     assert budget_ids == [('eval-synthesis:task-probe', {'user_id': '1', 'tenant_id': 'default'})]
     assert len(calls) == 5 and all('隐藏' not in text and '重复' not in text for text in calls)
     assert len(boundaries) == 7 and len(finishes) == 1

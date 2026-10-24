@@ -48,7 +48,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 | 环境 | 存储 | 模型配置来源 | 可声明的结果 | 状态 |
 | --- | --- | --- | --- | --- |
 | 本地真实评测 | 独立测试库/容器（如 `agent_memory_eval_ci`），不得清洗共享 `agent_memory` | DB 注册 API 模型，`ENV_MODE=cloud` | 仅代表本机对应 commit/模型/数据集版本的结果 | 🚧 流程已在 PR #30 实跑验证（29 用例 96.5% PASS），脚本随 PR #30 |
-| GitHub 静态/单元 CI | 无需真实向量库，可用确定性 fake | 不调用付费模型 | E0/E1 契约与 Mock 测试，不得标为真实 API 质量 PASS | ❌ 尚未实现：main 当前无通用定向测试/类型检查 workflow（release-quality 已登记该缺口） |
+| GitHub 静态/单元 CI | 无需真实向量库，可用确定性 fake | 不调用付费模型 | E0/E1 契约与 Mock 测试，不得标为真实 API 质量 PASS | 🚧 本任务工作树新增 [`evaluation-v2.yml`](../../.github/workflows/evaluation-v2.yml)：后端编译后先跑无模型 `pr_smoke` E0 suite/manifest/hash/case 预检，再跑 V2 确定性契约与离线 SQL/客服/旅游兼容、pgvector SQL 翻译和任务错误分类用例；管理端在 Node 22 上跑评测中心 Vitest、TypeScript 和生产构建，不注入 Provider Secrets。YAML 与路径触发静态校验及本地命令已通过，等待 PR 后的 GitHub Actions 实跑。它不是全仓通用后端测试 workflow，后者仍有缺口。 |
 | GitHub 受信任真实集成 CI | **每次隔离**的 PostgreSQL/pgvector、索引目录 | 初始化后从 CI DB 的 Provider/Model/Role/Specialized Binding 加载真实 API 模型 | E2 真实 Provider/检索质量，附成本与指纹 | 🚧 PR #30 施工中；main 现状：`rag_regression.yml` 仍为本地 BGE 512 维口径（与生产脱节，已知问题） |
 
 `ENV_MODE=cloud` 是真实评测的**模型运行策略**，不表示连接生产 DB。真实评测禁止静默回退 Ollama/BGE、旧环境凭据或未声明模型。

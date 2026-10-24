@@ -87,6 +87,51 @@ def submit_payload(payload: dict, actor: str, client_key: str) -> dict:
     return {**result, **(task_view(task) if task else {"status": "PENDING", "output": None})}
 
 
+def submit_v2_run(run_id: str, actor: str) -> dict:
+    """以 V2 run_id 作为稳定任务 ID，消除 Run 与任务重复投递的双写窗口。"""
+    from backend.services import task_service
+    from backend.tasks.task_manager import dispatch_task
+
+    task_service.ensure_schema()
+    user_id = actor.removeprefix("user:")
+    task = task_service.get_task(run_id)
+    created = False
+    if task is None:
+        try:
+            task = task_service.create_task(
+                user_id,
+                "企业评测 V2 运行",
+                tenant_id="default",
+                graph_name="rag_eval",
+                biz_type="evaluation_v2",
+                biz_id=run_id,
+                extra_input={
+                    "operation": "evaluate_v2",
+                    "run_id": run_id,
+                    "actor": actor,
+                },
+                task_id=run_id,
+            )
+            created = True
+        except Exception:
+            # 主键并发冲突由确定性 task_id 仲裁；必须确认胜者写入的是同一任务。
+            task = task_service.get_task(run_id)
+            if task is None:
+                raise
+    if (
+        task.tenant_id != "default"
+        or task.graph_name != "rag_eval"
+        or task.input.get("operation") != "evaluate_v2"
+        or task.input.get("run_id") != run_id
+        or task.user_id != user_id
+    ):
+        raise PermissionError("运行幂等键已绑定到其他任务")
+    if task.status.value == "PENDING":
+        # 任意同请求重试都可补投；执行权仍由既有 Lease 仲裁。
+        dispatch_task(task)
+    return {"run_id": run_id, **task_view(task), "created": created}
+
+
 def execute(record, *, execution_id: str, heartbeat) -> dict:
     from backend.observability.tracer import trace_collector
     from backend.shared.logger import clear_log_context
@@ -126,7 +171,19 @@ def execute(record, *, execution_id: str, heartbeat) -> dict:
     if record.input.get("operation") == "synthesize":
         from backend.evaluation.dataset.synthetic import generate
 
-        result = generate({**record.input, "task_id": record.id}, boundary=boundary)
+        result = generate(
+            {**record.input, "task_id": record.id, "tenant_id": record.tenant_id},
+            boundary=boundary,
+        )
+    elif record.input.get("operation") == "evaluate_v2":
+        from backend.evaluation_v2.runner import execute_run
+
+        result = execute_run(
+            str(record.input["run_id"]),
+            tenant_id=record.tenant_id,
+            actor=record.input["actor"],
+            boundary=boundary,
+        )
     else:
         binding, _ = assets.load_binding(record.input["binding_id"])
         require_kb(binding["kb_id"])

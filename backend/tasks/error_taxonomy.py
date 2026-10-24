@@ -106,6 +106,13 @@ def classify_task_error(exc: BaseException) -> TaskErrorClassification:
         if type(exc).__name__ == "IllegalTaskTransition":
             return TaskErrorClassification(
                 "illegal_transition", False, _SOURCE_BY_TYPE["illegal_transition"])
+        # V2 Run 已将固定环境快照漂移写为 INVALID；若按未知 RuntimeError
+        # 处理，Celery 会在 INVALID Run 上继续自动重试，造成 Run/Task 状态分叉。
+        # 这是本次执行契约的确定性校验失败，等待管理员修正环境后显式重试。
+        if type(exc).__name__ == "RuntimeEnvironmentMismatchError":
+            return TaskErrorClassification(
+                "validation_error", False,
+                _SOURCE_BY_TYPE["validation_error"])
         if isinstance(exc, PermissionError):
             return TaskErrorClassification(
                 "permission_denied", False, _SOURCE_BY_TYPE["permission_denied"])

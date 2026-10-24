@@ -14,14 +14,23 @@ def validate_kb(kb_id: str) -> dict:
     return item
 
 
-def execute_binding(binding_id: str, actor: str, *, run_id=None, boundary=None) -> dict:
+def execute_binding(
+    binding_id: str,
+    actor: str,
+    *,
+    run_id=None,
+    boundary=None,
+    prompt_versions=None,
+    refresh_registry_before_run: bool = True,
+) -> dict:
     from backend.evaluation.config import EvalConfig
     from backend.evaluation.service import EvaluationService
     from backend.evaluation.storage import persist_report
     from backend.infra.async_utils import run_on_worker_loop
     from backend.infra.llm.registry_store import refresh_registry
 
-    run_on_worker_loop(refresh_registry())
+    if refresh_registry_before_run:
+        run_on_worker_loop(refresh_registry())
 
     from backend.evaluation.managed_tasks import case_boundary
 
@@ -36,6 +45,7 @@ def execute_binding(binding_id: str, actor: str, *, run_id=None, boundary=None) 
                 triggered_by=actor,
                 run_id=run_id,
                 resume=True,
+                prompt_versions=prompt_versions or {},
             )
         )
     finally:
