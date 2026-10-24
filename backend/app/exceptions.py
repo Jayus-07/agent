@@ -1,5 +1,6 @@
 """全局异常处理与统一失败协议适配。"""
 import traceback
+from dataclasses import replace
 
 from fastapi import Request
 from fastapi.exceptions import RequestValidationError
@@ -24,9 +25,25 @@ def _http_payload(envelope: ErrorEnvelope) -> dict:
     return payload
 
 
+# FastAPI/Starlette 自动产生的标准 detail 是英文占位文案；仓库业务代码
+# raise HTTPException 的 detail 全部是面向用户的中文操作指引。透传后者、
+# 排除前者，避免把「Not Found」这类无意义文案展示给用户。
+_STANDARD_HTTP_DETAILS = {"Not Found", "Method Not Allowed", "Forbidden", "Internal Server Error"}
+
+
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """HTTP 失败保持状态码，并统一为安全错误封套。"""
     envelope = error_envelope_from_exception(exc, source="http")
+    # 业务方显式写入 detail 的 4xx（如「知识库没有已发布文档」）是给用户看
+    # 的操作指引：保留为用户可见 message；5xx 与标准英文占位仍走协议默认。
+    detail = getattr(exc, "detail", None)
+    if (
+        isinstance(detail, str)
+        and detail.strip()
+        and detail.strip() not in _STANDARD_HTTP_DETAILS
+        and exc.status_code < 500
+    ):
+        envelope = replace(envelope, message=detail.strip())
     return JSONResponse(
         status_code=exc.status_code,
         content=_http_payload(envelope),

@@ -97,8 +97,15 @@ def current_runtime_environment() -> dict:
 
 
 def assert_runtime_environment(expected: object) -> None:
-    """配置缺失或漂移时拒绝运行，防止错误比较不同执行环境的结果。"""
+    """配置缺失或漂移时拒绝运行，防止错误比较不同执行环境的结果。
+
+    只比较影响结果可比性的模型配置（embedding/rerank 及其策略）。
+    rag_mode 不参与断言：平台既有架构是 app=remote、执行 worker=local
+    （compose 由服务角色决定），同一 Run 的执行固定发生在 worker，
+    跨 Run 的可比性由 Compare 的 Suite/Golden/Corpus 校验保证；
+    rag_mode 仍保留在运行快照中作审计信息。
+    """
     if not isinstance(expected, dict):
         raise RuntimeEnvironmentMismatchError("runtime_snapshot_missing")
-    if expected != current_runtime_environment():
+    if expected.get("models") != current_runtime_environment().get("models"):
         raise RuntimeEnvironmentMismatchError("runtime_environment_changed")

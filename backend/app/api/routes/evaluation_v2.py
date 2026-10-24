@@ -1503,7 +1503,12 @@ async def create_eval_run(
                 "kb_id": body.kb_id,
             })
             from backend.evaluation_v2.runtime_environment import current_runtime_environment
+            from backend.infra.llm.registry_store import refresh_registry
 
+            # 冻结指纹前与 Worker 执行侧同基准刷新注册表：Worker 执行前也会
+            # refresh，两侧都解析最新全局角色绑定，避免请求上下文的注册表
+            # 缓存与执行侧漂移造成必然 INVALID。
+            await refresh_registry()
             runtime_environment = await asyncio.to_thread(current_runtime_environment)
             environment = {
                 "runner": "legacy-rag-v1",
