@@ -1,9 +1,59 @@
 # PROGRESS: 评测中心简化改造
 
 - Worktree: `D:/Program Files/workplace/agent-eval-simplify`（分支 `task/eval-center-simplify`，基线 870e829）
-- 状态: **IN_PROGRESS**
+- 状态: **IN_PROGRESS — Phase D 执行中**
 
-## 已完成
+## 提交记录
+
+- `7952716` feat(evaluation): 运行快照补齐被测模型指纹，新增导入模板与快照证据检索端点
+- `20a1f55` refactor(admin): 评测中心收敛为三核心 tab 并深化数据集/运行/对比交互
+- `4c3f81d` docs(tasks): 评测中心简化改造任务档案与进度
+- `bd96f85` feat(evaluation): 证据选择器接入候选审核，Golden 版本支持 copy-on-write 回退
+- （本次）docs(tasks): Phase D 运行时验证记录与收尾
+
+## Phase D 运行时验证（2026-10-25）
+
+### 已验证通过
+- **共享主栈已用本工作树代码重建**：以 `COMPOSE_PROJECT_NAME=agent` +
+  worktree compose 上下文 build + up -d 全部代码服务（app/worker/rag-service/
+  beat/mcp 等 11 个），容器全部 healthy；`/health` 迁移一致（72 checked,
+  0 missing）、RAG/Redis/Provider 全绿
+- **新端点已挂载**：`/api/evaluation/v2/import-template`（401）、
+  `/datasets/evidence-search`（401）、`/runs/{id}`（401）——路由存在且
+  认证门禁生效
+- **前端页面编译通过**：worktree admin next dev（错位端口 **3201**，因
+  3200 被另一会话 codex worktree 的 dev 进程占用，未抢占），
+  `/evaluations/center?tab=datasets|runs|compare` 与 Prompt 深链
+  `?tab=runs&prompt=rag.qa&pv=23` 全部 200
+
+### 过程事故与处置（已恢复，无损失）
+1. **compose 项目名陷阱**：首次从 worktree 直接 `devctl.bat rebuild` 时
+   compose 项目名取目录 basename（`agent-eval-simplify`），起了一套并行
+   新栈而非重建主栈。处置：`docker compose -p agent-eval-simplify down`
+   清理后，改用 `COMPOSE_PROJECT_NAME=agent` 重跑 build/up，正确 recreate
+   共享主栈（复用 agent_* 数据卷与网络）。**教训：worktree 重建主栈必须
+   显式 `-p agent`。**
+2. **Git Bash 调 cmd 吞参数**：`cmd /c "..."` 打印 banner 后静默退出
+   （exit 0 但未执行），与避坑纪律 §7 描述一致；改用 PowerShell 包装。
+
+### BLOCKED：浏览器登录交互复核
+- 登录页正常渲染；`uitest_admin/admin` 凭据无效（该测试账号创建来源不在
+  本仓，密码不可考）。为避免锁定与审计噪音停止尝试。
+- 影响：数据集页模板按钮/指纹卡/回退按钮等**浏览器端人工复核**待凭据。
+  代码级保障已覆盖：tsc 全绿 + 评测组件 vitest 21/21 + SSR 路由 200。
+- 解锁条件：用户提供任一 admin 凭据后，访问
+  `http://127.0.0.1:3201/evaluations/center` 逐交互复核。
+
+### 遗留运行时环境
+- worktree admin dev 进程仍在 3201 端口（后台任务），复核完成后可停；
+  `frontend-admin/.env.local` 已从主仓拷贝（API_KEY 等，gitignore 不入库）
+- 3200 端口属另一会话（codex evaluation-management），本任务未触碰
+- [x] 证据选择器 `EvidenceSearchPicker` 接入 EvaluationV2ReviewPanel 证据锚点区：
+      快照内检索 → 勾选 → 回填 kb_id/doc_id/doc_version/quote；空结果提示可标
+      no_evidence 对抗样本；后端检索返回逐字 content（可作 quote）+ doc_version
+- [x] Golden 版本「以此版本回退」：导出旧版本用例 → 以新版本号发布
+      （copy-on-write，历史与运行引用永不改动）
+- [x] 验证：tsc 全绿、评测组件 vitest 21/21、evidence_search pytest 3/3
 
 ### Phase B/C 前端（2026-10-25）
 - [x] `EvaluationCenter.tsx` 重写：8 tab → 3 tab（数据集/运行评测/结果对比），
