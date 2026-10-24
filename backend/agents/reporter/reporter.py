@@ -430,7 +430,14 @@ def _result_kind(result: dict) -> str:
     if status == "success" and (
             result.get("degraded") is True
             or tool_status == "degraded"
-            or bool(result.get("fallback_used"))):
+            # fallback_used 排除 dedupe_cache（2026-10-25）：值域里
+            # circuit_breaker/bulkhead/deadline_budget 均为 UNAVAILABLE
+            # 失败路径（进不到 success 判定），成功路径的 fallback_used 实际
+            # 只会是 dedupe_cache——读操作的确定性缓存复用，结果与重算
+            # 一致，不是降级供数。此前该条件只把「同一问题 30s 内二次
+            # 提问」误挂"已使用降级结果"警告。
+            or (result.get("fallback_used")
+                and result.get("fallback_used") != "dedupe_cache")):
         return "degraded"
 
     output = result.get("output")
@@ -680,6 +687,16 @@ def _append_degraded_disclosure(answer: str, step_results: dict) -> str:
         return answer
     if _FAILURE_TEXT["degraded"] in answer:
         return answer
+    # 诊断（2026-10-25 降级提示误挂排查）：打出触发 sr 的判定字段，
+    # status=success 却被标降级时可直接归因。
+    for sr in degraded:
+        logger.info(
+            "[Reporter] 降级披露触发: step=%s kind=%s status=%s "
+            "tool_status=%s fallback_used=%r degraded=%r error_code=%r",
+            sr.get("step_id"), _result_kind(sr), sr.get("status"),
+            sr.get("tool_status"), sr.get("fallback_used"),
+            sr.get("degraded"), sr.get("error_code"),
+        )
     notes = sorted({_FAILURE_TEXT[_result_kind(sr)] for sr in degraded})
     return answer.rstrip() + "\n\n> ⚠️ " + "；".join(notes)
 
