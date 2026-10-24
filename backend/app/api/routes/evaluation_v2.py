@@ -20,6 +20,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
@@ -217,8 +218,15 @@ class TraceIntake(StrictModel):
     idempotency_key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,128}$")
 
 
+class EvidenceSearchCreate(StrictModel):
+    snapshot_id: str = Field(min_length=8, max_length=160)
+    query: str = Field(min_length=1, max_length=200)
+    top_k: int = Field(default=5, ge=1, le=10)
+
+
 class EvalRunCreate(StrictModel):
     suite_version_id: uuid.UUID
+    source: str = Field(default="manual", pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     kb_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
     subject_user_id: int | None = Field(default=None, gt=0)
@@ -538,6 +546,57 @@ def _import_candidate_content(item: dict[str, Any], module: str) -> dict[str, An
         "proposed_facts": proposed_facts,
         "proposed_evidence": proposed_evidence,
         "metadata": metadata,
+    }
+
+
+@router.get("/import-template")
+async def download_import_template(
+    module: str = Query(default="rag"),
+    format: str = Query(default="jsonl", pattern="^(jsonl|csv|fields)$"),
+    _identity: Identity = Depends(require_product_identity),
+    _actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """下载导入模板三件套：RAG JSONL 样例 / 非 RAG CSV 样例 / 字段说明。"""
+    from backend.evaluation_v2.import_templates import build_template
+
+    try:
+        filename, content, media_type = build_template(module, fmt=format)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/datasets/evidence-search")
+async def search_dataset_evidence(
+    body: EvidenceSearchCreate,
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """在知识库快照内检索证据切片，供建集/编辑时勾选引用。
+
+    检索范围固定为快照 fulltext：引用只能来自快照内切片，与转正时的
+    ``verify_evidence_anchors`` 同一来源约束，从源头保证引用可核验。
+    """
+    _role(actor, "admin")
+    from backend.evaluation.corpus_snapshots import load
+    from backend.evaluation_v2.evidence_search import search_evidence
+
+    try:
+        snapshot = await asyncio.to_thread(load, body.snapshot_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(404, "知识库快照不存在") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    fulltext = snapshot.get("fulltext") or []
+    items = await asyncio.to_thread(search_evidence, fulltext, body.query, body.top_k)
+    return {
+        "snapshot_id": body.snapshot_id,
+        "kb_id": str(snapshot.get("kb_id") or ""),
+        "items": items,
     }
 
 
@@ -1534,11 +1593,13 @@ async def create_eval_run(
                 "execution_semantics": execution_semantics,
                 "suite_hash": str(definition["suite_hash"]),
                 "dataset_hash": str(definition["dataset_hash"]),
+                "prompt_versions": body.prompt_versions,
             }
             runtime_environment = None
 
         snapshot_json = {
             "schema_version": "evaluation.run.v2",
+            "source": body.source,
             "request_fingerprint": request_fingerprint,
             "runner": "legacy-rag-v1" if is_rag else f"legacy-{module}-v1",
             "module": module,
@@ -1599,9 +1660,44 @@ async def get_eval_run(
 ):
     _role(actor, "admin")
     try:
-        return await asyncio.to_thread(repository.get_run, identity.tenant_id, str(run_id))
+        run = await asyncio.to_thread(repository.get_run, identity.tenant_id, str(run_id))
+        return {"run": run, "fingerprint": _run_fingerprint(run.get("snapshot_json"))}
     except Exception as exc:  # noqa: BLE001
         _safe_error(exc)
+
+
+def _run_fingerprint(snapshot_json: Any) -> dict[str, Any]:
+    """从运行快照提取前端可读的环境指纹；缺字段返回空值而非报错。"""
+    snapshot = snapshot_json
+    if isinstance(snapshot, str):
+        try:
+            snapshot = json.loads(snapshot)
+        except json.JSONDecodeError:
+            snapshot = {}
+    if not isinstance(snapshot, dict):
+        return {}
+    models = (snapshot.get("runtime_environment") or {}).get("models") or {}
+    if not isinstance(models, dict):
+        models = {}
+
+    def _model_name(role: str) -> str:
+        entry = models.get(role)
+        return str(entry.get("model", "")) if isinstance(entry, dict) else ""
+
+    return {
+        "source": str(snapshot.get("source") or "manual"),
+        "runner": str(snapshot.get("runner") or ""),
+        "module": str(snapshot.get("module") or ""),
+        "dataset_version_id": str(snapshot.get("dataset_version_id") or ""),
+        "prompt_versions": snapshot.get("prompt_versions") or {},
+        "evaluator_versions": snapshot.get("evaluator_versions") or [],
+        "generation_model": _model_name("generation"),
+        "embedding_model": _model_name("embedding"),
+        "rerank_model": _model_name("rerank"),
+        "corpus_snapshot_id": str(snapshot.get("corpus_snapshot_id") or ""),
+        "dataset_hash": str(snapshot.get("dataset_hash") or ""),
+        "corpus_hash": str(snapshot.get("corpus_hash") or ""),
+    }
 
 
 @router.get("/runs/{run_id}/results")

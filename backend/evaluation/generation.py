@@ -59,6 +59,25 @@ def resolve_eval_model() -> tuple[str, str]:
     return model_name, provider
 
 
+def peek_eval_model() -> dict[str, str]:
+    """解析 eval_gen 模型名与供应商，但不做凭据可用性探测。
+
+    供运行快照冻结指纹使用：快照只记录"将用什么"，可用性失败仍由
+    ``resolve_eval_model`` 在真正调用时按既有路径报错。
+    """
+    model_name = _configured_eval_model().strip()
+    if not model_name:
+        return {"model": "", "provider": ""}
+
+    from backend.infra.llm.models import ProviderResolutionError, resolve_provider
+
+    try:
+        provider = resolve_provider(model_name, strict=True)
+    except ProviderResolutionError:
+        provider = ""
+    return {"model": model_name, "provider": provider}
+
+
 def get_token_usage() -> dict[str, int]:
     """返回累计的 token 消耗。"""
     return dict(_token_usage)

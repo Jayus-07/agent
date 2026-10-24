@@ -72,12 +72,28 @@ def _model_role_snapshot(
     }
 
 
+def _generation_model_snapshot() -> dict:
+    """冻结被测生成模型（eval_gen 角色）的身份，不含凭据与可用性探测。"""
+    from backend.evaluation.generation import peek_eval_model
+
+    resolved = peek_eval_model()
+    return {
+        "model": _safe_identifier(resolved.get("model", "")),
+        "provider": _safe_identifier(resolved.get("provider", "")),
+    }
+
+
 def current_runtime_environment() -> dict:
-    """返回不包含凭据、URL 或绝对本地路径的 RAG 检索环境快照。"""
+    """返回不包含凭据、URL 或绝对本地路径的 RAG 检索环境快照。
+
+    ``models["generation"]`` 固定被测生成模型（eval_gen）：回答质量评测里
+    生成模型就是被测对象的一部分，不冻结则两次运行的分数不可归因。
+    """
     import backend.config.llm as llm_config
     import backend.config.rag as rag_config
 
     models = {
+        "generation": _generation_model_snapshot(),
         "embedding": _model_role_snapshot(
             role="embedding",
             provider_mode=llm_config.EMBEDDING_PROVIDER,
@@ -99,13 +115,22 @@ def current_runtime_environment() -> dict:
 def assert_runtime_environment(expected: object) -> None:
     """配置缺失或漂移时拒绝运行，防止错误比较不同执行环境的结果。
 
-    只比较影响结果可比性的模型配置（embedding/rerank 及其策略）。
+    只比较影响结果可比性的模型配置（generation/embedding/rerank 及其策略）。
     rag_mode 不参与断言：平台既有架构是 app=remote、执行 worker=local
     （compose 由服务角色决定），同一 Run 的执行固定发生在 worker，
     跨 Run 的可比性由 Compare 的 Suite/Golden/Corpus 校验保证；
     rag_mode 仍保留在运行快照中作审计信息。
+
+    断言用子集口径：只核对快照中实际存在的角色键。部署新增角色（如
+    generation 指纹）不会让部署前创建的历史快照重试必然 INVALID；
+    而快照里已冻结的角色漂移仍然拒绝运行。
     """
     if not isinstance(expected, dict):
         raise RuntimeEnvironmentMismatchError("runtime_snapshot_missing")
-    if expected.get("models") != current_runtime_environment().get("models"):
-        raise RuntimeEnvironmentMismatchError("runtime_environment_changed")
+    expected_models = expected.get("models")
+    if not isinstance(expected_models, dict):
+        raise RuntimeEnvironmentMismatchError("runtime_snapshot_missing")
+    current_models = current_runtime_environment().get("models") or {}
+    for role, frozen in expected_models.items():
+        if current_models.get(role) != frozen:
+            raise RuntimeEnvironmentMismatchError("runtime_environment_changed")
