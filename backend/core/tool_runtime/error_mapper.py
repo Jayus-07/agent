@@ -124,6 +124,14 @@ def _map_exception(exc: BaseException) -> ErrorClassification:
     if "sqlalchemy" in name.lower() or "rediserror" in name.lower() or "redis" in name.lower():
         return ErrorClassification(ToolStatus.UNAVAILABLE, "infra_error", str(exc)[:200], True)
 
+    # 文件系统/OS 权限错误（Errno 13 Permission denied）是基础设施故障而非
+    # 账号鉴权问题——下方按消息文本 "permission" 匹配会把它误标成
+    # unauthorized（实测报告快照写只读层被当「账号无权」，误导排障方向）。
+    # 类型判定优先；字符串兜底覆盖被包装丢失类型的场景。
+    if isinstance(exc, PermissionError) or (
+            "errno 13" in msg and "denied" in msg):
+        return ErrorClassification(ToolStatus.UNAVAILABLE, "infra_error", str(exc)[:200], False)
+
     if "permission" in msg or "unauthorized" in msg or "forbidden" in msg or "权限" in str(exc):
         return ErrorClassification(ToolStatus.UNAUTHORIZED, "unauthorized", str(exc)[:200], False)
 

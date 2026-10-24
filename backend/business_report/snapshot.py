@@ -36,10 +36,20 @@ class _SnapshotEncoder(json.JSONEncoder):
 # =====================================================
 
 def _get_snapshot_dir() -> str:
-    base = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "data", "report_snapshots"
-    )
+    # 目录解析优先级（2026-10-25 容器写权限修复）：
+    #   1. REPORT_SNAPSHOT_DIR 显式指定；
+    #   2. RAG_DATA_DIR（compose 数据卷事实源 /app/data，app/rag 共享可写）；
+    #   3. 代码相对路径（本地开发 backend/../data 可写，保持旧行为）。
+    # 旧实现固定走代码相对路径，容器内落在只读镜像层
+    # （实测 /app/backend/data Permission denied → report.generate 恒失败）。
+    explicit = os.getenv("REPORT_SNAPSHOT_DIR")
+    if explicit:
+        base = os.path.join(explicit, "report_snapshots")
+    else:
+        data_root = os.getenv("RAG_DATA_DIR") or os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"
+        )
+        base = os.path.join(data_root, "report_snapshots")
     os.makedirs(base, exist_ok=True)
     return base
 
