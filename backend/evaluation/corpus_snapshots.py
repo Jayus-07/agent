@@ -9,6 +9,29 @@ from contextlib import contextmanager
 from backend.evaluation.dataset import imports as assets
 
 
+class EmptyCorpusError(ValueError):
+    """知识库没有已发布文档，无法创建固定语料快照。"""
+
+
+def corpus_content_hash(record: dict) -> str:
+    """对语料语义内容计算稳定指纹，排除快照自身和存储分配信息。"""
+    stable_fulltext = [
+        {key: value for key, value in row.items() if key not in {"id", "created_at"}}
+        for row in record["fulltext"]
+    ]
+    return assets.digest(
+        {
+            "kb_id": record["kb_id"],
+            "documents": record["documents"],
+            "visible_ids": record["visible_ids"],
+            "capture_warnings": record["capture_warnings"],
+            "registry_vector_mapping_complete": record["registry_vector_mapping_complete"],
+            "fulltext": stable_fulltext,
+            "vector_manifests": record["vector_manifests"],
+        }
+    )
+
+
 def capture(kb_id: str, actor: str, *, candidate=None) -> dict:
     from psycopg2.extras import RealDictCursor
 
@@ -21,7 +44,12 @@ def capture(kb_id: str, actor: str, *, candidate=None) -> dict:
 
     if not (DOC_REGISTRY_PG_CONFIG == RAG_STORES_PG_CONFIG == VECTOR_PG_CONFIG):
         raise ValueError("固定快照要求 registry、全文与向量存储位于同一数据库")
-    registry, chunks = DocumentRegistry(), get_chunk_store()
+    registry = DocumentRegistry()
+    # 先用注册表快速拒绝空知识库，避免在无语料时初始化 Embedding
+    # （云端模式可能因缺少凭据失败，掩盖真正的输入校验错误）。
+    if not registry.list_by_kb(kb_id):
+        raise EmptyCorpusError("知识库没有已发布文档")
+    chunks = get_chunk_store()
     embedding = get_embedding()
     stores = [PgVectorKnowledgeStore(path, embedding) for path in (CHROMA_PATH, DOC_DB_PATH)]
     identity = uuid.uuid4().hex[:24]
@@ -51,7 +79,7 @@ def capture(kb_id: str, actor: str, *, candidate=None) -> dict:
                 }
             )
         if not documents:
-            raise ValueError("知识库没有已发布文档")
+            raise EmptyCorpusError("知识库没有已发布文档")
         doc_ids = [row["doc_id"] for row in documents]
         cur.execute(
             f"""SELECT DISTINCT r.doc_id FROM {registry._table} r
@@ -177,7 +205,9 @@ def capture(kb_id: str, actor: str, *, candidate=None) -> dict:
         }
         # 统一转换日期类型，哈希与落盘内容一致。
         record = json.loads(json.dumps(record, default=str))
-        record["content_hash"] = assets.digest(record)
+        record["content_hash"] = corpus_content_hash(record)
+        # content_hash 用于跨 Run 比较；integrity_hash 保护包含随机快照标识的完整落盘记录。
+        record["integrity_hash"] = assets.digest(record)
     # PG 提交成功后才公布；文件失败仅留下不可见的独立 collection，不污染正式索引。
     return assets.write_once("snapshots", identity, record)
 
@@ -187,12 +217,32 @@ def vector_manifest(cur, table: str, collection: str) -> str:
         f"SELECT id,md5(content||metadata::text||embedding::text) AS hash FROM {table} WHERE collection=%s ORDER BY id",
         (collection,),
     )
-    return assets.digest([dict(row) if hasattr(row, "keys") else list(row) for row in cur.fetchall()])
+    prefix = f"{collection}:"
+    rows = []
+    for row in cur.fetchall():
+        item = dict(row) if hasattr(row, "keys") else {"id": row[0], "hash": row[1]}
+        vector_id = str(item["id"])
+        if not vector_id.startswith(prefix):
+            raise ValueError("固定语料向量 ID 不属于当前快照 collection")
+        rows.append({"id": vector_id[len(prefix):], "hash": item["hash"]})
+    return assets.digest(rows)
 
 
 def load(identity: str) -> dict:
     record = assets.read("snapshots", identity)
-    if assets.digest({k: v for k, v in record.items() if k != "content_hash"}) != record["content_hash"]:
+    if record.get("integrity_hash"):
+        payload = {k: v for k, v in record.items() if k != "integrity_hash"}
+        integrity_valid = assets.digest(payload) == record["integrity_hash"]
+        try:
+            content_valid = corpus_content_hash(record) == record.get("content_hash")
+        except (KeyError, TypeError):
+            content_valid = False
+    else:
+        # 兼容旧快照：旧 content_hash 同时承担了内容指纹与整条记录校验。
+        payload = {k: v for k, v in record.items() if k != "content_hash"}
+        integrity_valid = assets.digest(payload) == record.get("content_hash")
+        content_valid = integrity_valid
+    if not integrity_valid or not content_valid:
         raise ValueError("语料快照内容校验失败")
     return record
 

@@ -38,17 +38,22 @@ def test_travel_golden_v1_has_fixed_50_case_mix():
     assert manifest["content_sha256"] == digest
 
 
-def test_rag_regression_workflows_cover_pr_and_scheduled_gates():
+def test_rag_regression_workflow_keeps_manual_gates_and_supported_suites():
     workflows = _ROOT.parent / ".github" / "workflows"
     smoke = (workflows / "rag_smoke.yml").read_text(encoding="utf-8")
     regression = (workflows / "rag_regression.yml").read_text(encoding="utf-8")
+    path_filter = (
+        _ROOT.parent / ".github" / "scripts" / "rag_smoke_path_filter.py"
+    ).read_text(encoding="utf-8")
 
     assert "pull_request:" in smoke
     assert "RAG Smoke (8 cases)" in smoke
+    assert ".github/scripts/rag_smoke_path_filter.py" in smoke
     for path_prefix in ("backend/rag/", "backend/evaluation/", "backend/config/",
                          "backend/prompts/", "pyproject.toml"):
-        assert path_prefix in smoke
-    assert "schedule:" in regression
-    assert 'cron: "0 18 * * *"' in regression
-    for selection in ("regression", "ci_golden", "expanded_100", "scale_20k"):
-        assert selection in regression
+        assert path_prefix in path_filter
+    assert "workflow_dispatch:" in regression
+    assert "pull_request:" not in regression
+    assert "schedule:" not in regression
+    for selection in ("regression", "ci_golden", "pr_smoke"):
+        assert f"- {selection}" in regression

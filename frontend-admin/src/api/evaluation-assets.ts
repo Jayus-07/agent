@@ -11,7 +11,7 @@ export interface EvaluationBinding {
   latest_run?: { run_id: string; validity: string; total: number; gate?: string } | null
   mode?: 'retrieval' | 'answer'; split?: string; snapshot_id?: string
 }
-export interface EvaluationTask { task_id: string; run_id: string; status: string; progress?: string; error?: string; output?: { run_id: string; validity: string; total: number } }
+export interface EvaluationTask { task_id: string; run_id: string; status: string; progress?: string; error?: string; output?: { run_id?: string; validity?: string; total?: number; import_id?: string; v2_dataset_key?: string; v2_candidate_count?: number } }
 export interface ImportValidation { valid: boolean; manifest?: ImportManifest; case_count?: number; errors: Array<{ line: number; field: string; message: string }>; preview?: ImportedDataset['preview'] }
 
 function uploadBody(file: File, manifest: ImportManifest) {

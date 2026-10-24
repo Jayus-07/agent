@@ -734,7 +734,8 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         只改 collection 列，不改 id：id 内嵌 generation（见
         candidate_collection_name），同文档多代次行互不冲突，旧行由发布
         协议显式清理——「先写后删」窗口内新旧行共存于主 collection，
-        都属于已发布内容，无候选泄漏。
+        都属于已发布内容，无候选泄漏。同步晋级索引身份元数据，确保快照、
+        检索模型校验读取到与候选向量相同的模型版本。
         """
         if source_collection == self._collection:
             return 0
@@ -745,7 +746,41 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 f"WHERE collection = %s RETURNING id",
                 (self._collection, source_collection),
             )
-            return len(cur.fetchall())
+            promoted = len(cur.fetchall())
+            meta_table = _meta_table_name()
+            _ensure_meta_table(conn)
+            cur.execute(
+                f"""INSERT INTO {meta_table}
+                       (collection, embedding_provider, embedding_model,
+                        embedding_dimension, model_revision, index_version,
+                        built_at, updated_at, status)
+                   SELECT %s, embedding_provider, embedding_model,
+                          embedding_dimension, model_revision, index_version,
+                          built_at, now(), status
+                   FROM {meta_table} WHERE collection = %s
+                   ON CONFLICT (collection) DO UPDATE SET
+                       embedding_provider = EXCLUDED.embedding_provider,
+                       embedding_model = EXCLUDED.embedding_model,
+                       embedding_dimension = EXCLUDED.embedding_dimension,
+                       model_revision = EXCLUDED.model_revision,
+                       index_version = EXCLUDED.index_version,
+                       built_at = EXCLUDED.built_at,
+                       updated_at = now(),
+                       status = EXCLUDED.status""",
+                (self._collection, source_collection),
+            )
+            metadata_promoted = cur.rowcount == 1
+            if metadata_promoted:
+                cur.execute(
+                    f"DELETE FROM {meta_table} WHERE collection = %s",
+                    (source_collection,),
+                )
+            elif promoted:
+                logger.warning(
+                    "[PgVectorStore] 候选向量已晋级但缺少索引身份元数据 "
+                    f"(source={source_collection}, target={self._collection})"
+                )
+            return promoted
 
     def clone_for_candidate(self, generation: str) -> "PgVectorKnowledgeStore":
         """候选代次实例（B 阶段）：同表、generation 专属 collection。

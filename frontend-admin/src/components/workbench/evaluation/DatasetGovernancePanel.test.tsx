@@ -22,6 +22,7 @@ vi.mock('@/components/evaluations/EvaluationRunDetail', () => ({
   default: () => <div data-child="run">评测运行详情</div>,
 }))
 vi.mock('./ImportedDatasetsPanel', () => ({ default: () => <div data-child="imports">业务评测集导入</div> }))
+vi.mock('./EvaluationV2DatasetPanel', () => ({ default: () => <div data-child="v2-datasets">V2 数据集</div> }))
 
 import DatasetGovernancePanel from './DatasetGovernancePanel'
 
@@ -45,7 +46,7 @@ beforeEach(() => {
     fixture_set: 'golden',
   }])
   vi.spyOn(evaluationService, 'listDatasetCandidates').mockResolvedValue([])
-  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'listLegacySuites').mockResolvedValue([])
   vi.spyOn(evaluationService, 'listRuns').mockResolvedValue([{ run_id: 'run-1' }] as never)
   vi.spyOn(evaluationService, 'getDatasetVersion').mockResolvedValue({} as never)
   vi.spyOn(evaluationService, 'getRun').mockResolvedValue({} as never)
@@ -65,7 +66,7 @@ describe('DatasetGovernancePanel', () => {
     const root = createRoot(container)
     mounted = { root, container }
 
-    act(() => root.render(<DatasetGovernancePanel />))
+    act(() => root.render(<DatasetGovernancePanel onGoReview={() => undefined} />))
     await act(async () => {
       await Promise.resolve()
     })

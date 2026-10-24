@@ -30,6 +30,7 @@ from backend.app.api.routes import (
     demo,
     evaluation,
     evaluation_datasets,
+    evaluation_v2,
     feedback,
     internal_ai,
     inventory_alerts,
@@ -121,6 +122,7 @@ api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户�
 api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）
 api_router.include_router(evaluation.router)  # 评测集管理
 api_router.include_router(evaluation_datasets.router)  # 评测集治理与候选审核
+api_router.include_router(evaluation_v2.router)  # 评测平台 V2 独立领域
 api_router.include_router(prompt_releases.router)  # Prompt 发布评测门禁
 api_router.include_router(prompt_eval_callback.router)  # 外部 Prompt 评测回调
 api_router.include_router(internal_ai.router)  # Java→Python 工具网关（X-Internal-Token 鉴权）

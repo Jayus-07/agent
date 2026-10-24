@@ -18,7 +18,7 @@ import time
 
 from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
-from backend.providers.travel.live.result import ProviderStatus
+from backend.providers.travel.live.result import ProviderResult
 
 
 # =============================================
@@ -124,8 +124,8 @@ def _place_provider(resolve_fn):
     provider = TencentPlaceProvider()
     provider._live_map = type("M", (), {
         "resolve_place": staticmethod(resolve_fn)})()
-    # is_enabled 需要真配置——探针强制启用
-    type(provider).is_enabled = lambda self: True
+    # 仅覆盖该探针实例，不能污染同一 Worker 后续任务的 Provider 配置。
+    provider.is_enabled = lambda: True
     return provider
 
 
@@ -134,7 +134,8 @@ def _routing_provider(live_fn):
 
     provider = TencentRoutingProvider()
     provider._live_map = type("M", (), {"live_leg": staticmethod(live_fn)})()
-    type(provider).is_enabled = lambda self: True
+    # 仅覆盖该探针实例，不能污染同一 Worker 后续任务的 Provider 配置。
+    provider.is_enabled = lambda: True
     return provider
 
 
@@ -156,7 +157,8 @@ def _run_travel_provider(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET=1 时全部探针被误软停。
     # quota 探针（P-07）自行临时覆盖预算，不受此默认隔离影响。
     from backend.infra.cache.backend import InMemoryCache
-    from backend.providers.travel.live import cache as pcache, quota
+    from backend.providers.travel.live import cache as pcache
+    from backend.providers.travel.live import quota
 
     orig_backend = pcache._backend
     orig_budget = quota.daily_budget

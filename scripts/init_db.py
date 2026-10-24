@@ -301,6 +301,15 @@ MIGRATION_TARGETS: dict[str, str] = {
     "105_rag_tenant_isolation.sql": "memory",
     # RAG 知识库目录持久化、版本控制与同事务审计。
     "107_auth_knowledge_bases.sql": "memory",
+    # 评测平台 V2 独立领域：版本快照、运行/逐例索引、RLS 与审计。
+    "108_evaluation_v2_domain.sql": "memory",
+    # 评测 Gate 人工放行意见，绑定不可变 PASS 裁决并追加留痕。
+    "109_evaluation_v2_gate_approvals.sql": "memory",
+    # 评测运行人工复核，绑定冻结的 Human Evaluator/Rubric 并追加校准证据。
+    "110_evaluation_v2_human_reviews.sql": "memory",
+    "111_evaluation_v2_case_revision_candidates.sql": "memory",
+    # 非 RAG 模块的 Run 不绑定知识库语料快照。
+    "112_evaluation_v2_domain_runner.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

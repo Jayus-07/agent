@@ -157,3 +157,29 @@ def test_second_cas_preemption_not_silent(pg):
         assert record.error_message != "二次抢占终审"
     finally:
         _cleanup(pg, task.id)
+
+
+def test_success_clears_failure_metadata_after_explicit_retry(pg):
+    """失败 Run 经管理员重试成功后，当前 Task 不残留旧失败诊断。"""
+    task = _create_running(pg)
+    try:
+        pg.update_status(
+            task.id,
+            TaskStatus.FAILED,
+            error_message="环境指纹已变化",
+            error_type="validation_error",
+            traceback_text="stale traceback",
+            retry_exhausted=True,
+        )
+        assert pg.claim_for_resume(task.id, TaskStatus.FAILED)
+        pg.update_status(task.id, TaskStatus.RUNNING)
+        pg.update_status(task.id, TaskStatus.SUCCESS)
+
+        record = pg.get_task(task.id)
+        assert record.status == TaskStatus.SUCCESS
+        assert record.error_message == ""
+        assert record.error_type == ""
+        assert record.traceback == ""
+        assert record.retry_exhausted is False
+    finally:
+        _cleanup(pg, task.id)

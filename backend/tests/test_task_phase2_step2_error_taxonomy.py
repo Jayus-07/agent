@@ -103,6 +103,18 @@ class TestClassify:
         c = classify_task_error(_stub_exc("ChunkingEmptyError", "0 chunks"))
         assert (c.error_type, c.retryable) == ("validation_error", False)
 
+    def test_evaluation_runtime_drift_is_terminal_validation_error(self):
+        from backend.evaluation_v2.runtime_environment import (
+            RuntimeEnvironmentMismatchError,
+        )
+
+        c = classify_task_error(
+            RuntimeEnvironmentMismatchError("runtime_environment_changed")
+        )
+        assert (c.error_type, c.retryable, c.source) == (
+            "validation_error", False, "validation"
+        )
+
     def test_retryable_of(self):
         assert retryable_of("provider_timeout") is True
         assert retryable_of("quota_exhausted") is False
