@@ -664,7 +664,7 @@ export const evaluationService = {
   searchDatasetEvidence(payload: { snapshot_id: string; query: string; top_k?: number }): Promise<{
     snapshot_id: string;
     kb_id: string;
-    items: Array<{ doc_id: string; chunk_id: string; chunk_index: number; title: string; snippet: string; score: number }>;
+    items: Array<{ doc_id: string; chunk_id: string; chunk_index: number; title: string; snippet: string; content: string; doc_version?: string; score: number }>;
   }> {
     return request(`${BASE}/v2/datasets/evidence-search`, { method: 'POST', body: payload });
   },

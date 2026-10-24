@@ -82,6 +82,9 @@ def search_evidence(fulltext_rows: list[dict], query: str, top_k: int = 5) -> li
             "chunk_index": int(row.get("chunk_index") or 0),
             "title": _row_title(row),
             "snippet": _snippet(text, terms),
+            # 逐字原文（截断）：证据 quote 必须能在快照原文中逐字核验，
+            # 因此返回未改写的内容切片，前端引用时直接整段填入。
+            "content": text[:1000],
             "score": score,
         })
     scored.sort(key=lambda item: (-item["score"], item["doc_id"], item["chunk_index"]))

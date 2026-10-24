@@ -5,6 +5,7 @@ import { RefreshCw } from 'lucide-react'
 import { createIdempotencyKey } from '@/api/client'
 import { evaluationService, type EvaluationV2Candidate, type EvaluationV2EvidenceClaim } from '@/api/evaluation'
 import { EvalBadge, EvalButton, EvalCard, EvalEmpty, EvalField, EvalInfoBox, EvalPageHeader, EvalToolbar, evalControl } from './evalUi'
+import EvidenceSearchPicker from './EvidenceSearchPicker'
 
 const emptyExpected = { behavior: 'answer', reference_answer: '', required_facts: [], evidence: [] }
 
@@ -169,11 +170,19 @@ export default function EvaluationV2ReviewPanel() {
         </EvalCard>
         <EvalCard title="可信原文证据" subtitle="服务端按当前可信权限重新核验；不得填写自制校验哈希。">
           {selectedDomain === 'rag' ? (
-            <label className="block text-sm text-text-secondary">
-              原文证据锚点 JSON
+            <div className="block text-sm text-text-secondary">
+              <span className="mb-1 block">原文证据锚点 JSON</span>
+              <EvidenceSearchPicker onInsert={claim => setEvidenceText(current => {
+                try {
+                  const parsed = JSON.parse(current) as unknown[]
+                  return JSON.stringify([...(Array.isArray(parsed) ? parsed : []), claim], null, 2)
+                } catch {
+                  return JSON.stringify([claim], null, 2)
+                }
+              })} />
               <textarea aria-label="原文证据锚点 JSON" value={evidenceText} onChange={event => setEvidenceText(event.target.value)} className={evalControl + ' mt-1.5 min-h-36 w-full font-mono text-xs'} />
               <span className="mt-1 block text-xs text-text-muted">每项包含 kb_id、doc_id、doc_version 和 quote。</span>
-            </label>
+            </div>
           ) : (
             <EvalInfoBox>当前模块不使用 KB 证据锚点；提交时服务端会按该模块契约校验标准结果。</EvalInfoBox>
           )}

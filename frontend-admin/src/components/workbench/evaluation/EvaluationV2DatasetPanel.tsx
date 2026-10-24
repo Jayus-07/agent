@@ -64,6 +64,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview?: 
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const [exportingVersionId, setExportingVersionId] = useState('')
+  const [rollbackVersion, setRollbackVersion] = useState('')
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
 
@@ -218,6 +219,22 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview?: 
     finally { setBusy(false) }
   }
 
+  const rollbackTo = (item: EvaluationV2DatasetVersion) => void perform(async () => {
+    if (!selected) throw new Error('先选择数据集')
+    const targetVersion = rollbackVersion.trim()
+    if (!targetVersion) throw new Error('先在右侧填写回退后的新版本号')
+    const blob = await evaluationService.exportV2DatasetVersion(selected.dataset_id, item.dataset_version_id)
+    const lines = (await blob.text()).split('\n').filter(line => line.trim())
+    const items = lines.slice(1)
+      .map(line => JSON.parse(line) as { type?: string; case_id?: string; revision?: number })
+      .filter(row => row.type === 'case' && row.case_id && row.revision)
+      .map(row => ({ case_id: String(row.case_id), revision: Number(row.revision) }))
+    if (!items.length) throw new Error('该版本没有可发布的用例')
+    const result = await evaluationService.publishV2DatasetVersion(selected.dataset_id, { version: targetVersion, items })
+    setMessage(`已按 v${item.version} 内容发布新版本 v${result.version}（${items.length} 条）：回退不改写历史，旧版本与运行引用不变。`)
+    await load()
+  })
+
   const exportVersion = (item: EvaluationV2DatasetVersion) => void perform(async () => {
     setExportingVersionId(item.dataset_version_id)
     try {
@@ -359,7 +376,8 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview?: 
         </section>
 
         <section className="space-y-4 rounded-md border border-border-subtle p-4" aria-labelledby="v2-version-heading">
-          <div><h3 id="v2-version-heading" className="text-sm font-semibold text-text-primary">已发布版本</h3><p className="mt-1 text-xs text-text-muted">版本清单不可变；差异仅展示样本 ID、修订与哈希，不读取答案正文。</p></div>
+          <div><h3 id="v2-version-heading" className="text-sm font-semibold text-text-primary">已发布版本</h3><p className="mt-1 text-xs text-text-muted">版本清单不可变；差异仅展示样本 ID、修订与哈希，不读取答案正文。回退 = 以旧版本内容发布新版本，历史与运行引用永不改动。</p>
+            <label className="mt-2 inline-flex items-center gap-2 text-xs text-text-secondary">回退后的新版本号<input aria-label="回退后的新版本号" value={rollbackVersion} onChange={event => setRollbackVersion(event.target.value)} placeholder="如 v9" className={`${control} min-h-9 w-28`} /></label></div>
           {!selected ? <p className="mt-3 text-sm text-text-muted">选择数据集查看版本。</p> : versions.length === 0 ? <p className="mt-3 text-sm text-text-muted">尚无已发布版本。</p> : <div className="mt-3 divide-y divide-border-subtle">{versions.map(item => <article key={item.dataset_version_id} className="py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <p className="text-sm font-medium text-text-primary">v{item.version} · {item.case_count ?? 0} 条</p>
@@ -368,6 +386,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview?: 
                 <button type="button" disabled={busy} onClick={() => exportVersion(item)} aria-label={`导出 Golden ${item.version} JSONL`} className={`${control} inline-flex min-h-9 items-center gap-1.5 px-2.5`}>
                   <Download size={14} />{exportingVersionId === item.dataset_version_id ? '导出中…' : '导出 JSONL'}
                 </button>
+                <button type="button" disabled={busy || !rollbackVersion.trim()} onClick={() => rollbackTo(item)} aria-label={`按 ${item.version} 内容发布新版本`} className={`${control} min-h-9 px-2.5 disabled:opacity-50`}>以此版本回退</button>
               </div>
             </div>
             <p className="mt-1 break-all font-mono text-[11px] text-text-muted">SHA-256 {item.content_hash}</p>

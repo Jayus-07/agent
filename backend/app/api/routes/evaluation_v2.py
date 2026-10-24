@@ -593,6 +593,13 @@ async def search_dataset_evidence(
         raise HTTPException(422, str(exc)) from exc
     fulltext = snapshot.get("fulltext") or []
     items = await asyncio.to_thread(search_evidence, fulltext, body.query, body.top_k)
+    version_by_doc = {
+        str(row.get("doc_id")): str(row.get("version_id") or row.get("active_generation") or row.get("index_generation") or "")
+        for row in (snapshot.get("documents") or [])
+        if isinstance(row, dict) and row.get("doc_id")
+    }
+    for item in items:
+        item["doc_version"] = version_by_doc.get(item["doc_id"], "")
     return {
         "snapshot_id": body.snapshot_id,
         "kb_id": str(snapshot.get("kb_id") or ""),
