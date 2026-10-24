@@ -6,6 +6,7 @@ import EvaluationV2RunsPanel from './EvaluationV2RunsPanel'
 
 vi.mock('@/lib/auth', () => ({ atLeast: () => true }))
 vi.mock('@/api/knowledge', () => ({ listKbAuthority: vi.fn(async () => ({ knowledge_bases: [] })) }))
+vi.mock('@/api/prompts', () => ({ promptsService: { list: vi.fn(async () => []) } }))
 
 let mounted: { root: Root; container: HTMLDivElement } | null = null
 beforeAll(() => { (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true })

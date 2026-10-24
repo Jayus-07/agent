@@ -8,18 +8,11 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: navigation.push }),
   useSearchParams: () => new URLSearchParams(navigation.query),
 }))
-vi.mock('./DatasetGovernancePanel', () => ({ default: () => <div data-panel="datasets">数据集中心</div> }))
-vi.mock('./DatasetSynthesisPanel', () => ({ default: () => <div data-panel="generate">智能生成</div> }))
-vi.mock('./DatasetReviewsPanel', () => ({ default: () => <div data-panel="reviews">候选审核</div> }))
-vi.mock('./FeedbackCandidatesPanel', () => ({ default: () => <div data-panel="feedback">反馈候选</div> }))
-vi.mock('./EvaluationResultsPanel', () => ({ default: () => <div data-panel="results">评测结果</div> }))
-vi.mock('./EvaluationBindingsPanel', () => ({ default: () => <div data-panel="bindings">关联运行</div> }))
-vi.mock('./EvaluationOperationsOverview', () => ({ default: () => <div data-panel="overview">真实评测概览</div> }))
-vi.mock('./EvaluationSuitesPanel', () => ({ default: () => <div data-panel="suites">评测方案</div> }))
-vi.mock('./EvaluationRunComparisonPanel', () => ({ default: () => <div data-panel="compare">实验对比</div> }))
-vi.mock('./EvaluationReleaseQualityPanel', () => ({ default: () => <div data-panel="gates">发布质量</div> }))
-vi.mock('./EvaluationV2ReviewPanel', () => ({ default: () => <div data-panel="v2-review">V2 候选审核</div> }))
-vi.mock('./EvaluationV2RunsPanel', () => ({ default: () => <div data-panel="runs">V2 实验运行</div> }))
+vi.mock('./DatasetGovernancePanel', () => ({ default: () => <div data-panel="datasets">数据集</div> }))
+vi.mock('./EvaluationV2RunsPanel', () => ({ default: ({ promptPrefill }: { promptPrefill?: { key: string; version: string } | null }) => (
+  <div data-panel="runs" data-prompt={promptPrefill?.key || ''} data-pv={promptPrefill?.version || ''}>运行评测</div>
+) }))
+vi.mock('./EvaluationRunComparisonPanel', () => ({ default: () => <div data-panel="compare">结果对比</div> }))
 
 import EvaluationCenter from './EvaluationCenter'
 
@@ -38,47 +31,51 @@ function mount(): { root: Root; container: HTMLDivElement } {
 }
 
 describe('EvaluationCenter', () => {
-  it('默认进入评测概览，八个功能区仅挂载当前面板', () => {
+  it('默认进入数据集，三个功能区仅挂载当前面板', () => {
     const { root, container } = mount()
     expect(container.textContent).toContain('评测中心')
-    expect(container.textContent).toContain('真实评测概览')
+    expect(container.textContent).toContain('数据集')
     expect(container.querySelectorAll('[data-panel]')).toHaveLength(1)
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(8)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3)
     act(() => root.unmount())
   })
-  it('保留旧入口别名并支持无效 Tab 回退', () => {
+  it('旧入口别名统一收敛到三个核心区', () => {
     navigation.query = 'tab=feedback'
     const feedback = mount()
-    expect(feedback.container.querySelector('[data-panel="reviews"]')).not.toBeNull()
-    expect(feedback.container.querySelector('[data-panel="feedback"]')).not.toBeNull()
+    expect(feedback.container.querySelector('[data-panel="datasets"]')).not.toBeNull()
     act(() => feedback.root.unmount())
 
     navigation.query = 'tab=results'
     const results = mount()
-    expect(results.container.querySelector('[role="tabpanel"]')?.getAttribute('aria-label')).toBe('实验运行')
-    expect(results.container.querySelector('[data-panel="runs"]')).not.toBeNull()
+    expect(results.container.querySelector('[role="tabpanel"]')?.getAttribute('aria-label')).toBe('运行评测')
     act(() => results.root.unmount())
 
-    navigation.query = 'tab=bindings&kb_id=kb_demo'
+    navigation.query = 'tab=bindings'
     const bindings = mount()
-    expect(bindings.container.querySelector('[role="tabpanel"]')?.getAttribute('aria-label')).toBe('实验运行')
-    expect(bindings.container.querySelector('[data-panel="bindings"]')).not.toBeNull()
-    expect(bindings.container.querySelector('details[open] summary')?.textContent).toContain('旧版题集关联知识库运行')
+    expect(bindings.container.querySelector('[data-panel="runs"]')).not.toBeNull()
     act(() => bindings.root.unmount())
+
+    navigation.query = 'tab=gates'
+    const gates = mount()
+    expect(gates.container.querySelector('[data-panel="compare"]')).not.toBeNull()
+    act(() => gates.root.unmount())
 
     navigation.query = 'tab=unknown'
     const invalid = mount()
-    expect(invalid.container.querySelector('[data-panel="overview"]')).not.toBeNull()
+    expect(invalid.container.querySelector('[data-panel="datasets"]')).not.toBeNull()
     act(() => invalid.root.unmount())
   })
-  it('八区深链接直接定位目标页面', () => {
-    navigation.query = 'tab=compare'
-    const comparison = mount()
-    expect(comparison.container.querySelector('[data-panel="compare"]')).not.toBeNull()
-    act(() => comparison.root.unmount())
-    navigation.query = 'tab=gates'
-    const gates = mount()
-    expect(gates.container.querySelector('[data-panel="gates"]')).not.toBeNull()
-    act(() => gates.root.unmount())
+  it('Prompt 治理深链预填运行参数', () => {
+    navigation.query = 'tab=runs&prompt=rag.qa&pv=23'
+    const deep = mount()
+    const runs = deep.container.querySelector('[data-panel="runs"]')
+    expect(runs?.getAttribute('data-prompt')).toBe('rag.qa')
+    expect(runs?.getAttribute('data-pv')).toBe('23')
+    act(() => deep.root.unmount())
+
+    navigation.query = 'tab=runs&prompt=rag.qa'
+    const noVersion = mount()
+    expect(noVersion.container.querySelector('[data-panel="runs"]')?.getAttribute('data-pv')).toBe('')
+    act(() => noVersion.root.unmount())
   })
 })

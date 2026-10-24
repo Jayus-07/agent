@@ -13,6 +13,7 @@ import {
   type EvaluationV2ImportPreview,
 } from '@/api/evaluation'
 import EmptyState from '@/components/shared/EmptyState'
+import ImportTemplateButtons from './ImportTemplateButtons'
 
 const control = 'min-h-11 rounded-md border border-border-subtle bg-surface-base px-3 py-2 text-sm text-text-primary disabled:opacity-50'
 const coverageLabels = {
@@ -33,7 +34,7 @@ const domainOptions = [
   { value: 'e2e', label: '端到端' },
 ]
 
-export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: () => void }) {
+export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview?: () => void }) {
   const [datasets, setDatasets] = useState<EvaluationV2Dataset[]>([])
   const [datasetSearch, setDatasetSearch] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -241,7 +242,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: (
     const created = await evaluationService.createV2Dataset({
       dataset_key: datasetKey.trim(), name: datasetName.trim(), domain: domain.trim(), description: description.trim(),
     })
-    setMessage('已创建 V2 数据集。导入样本后到“标注审核”完成证据审核，再回到此处发布 Golden。')
+    setMessage('已创建 V2 数据集。导入样本后展开“候选审核与修订”完成证据审核，再回到此处发布 Golden。')
     await load()
     setSelectedId(created.dataset_id)
   })
@@ -266,7 +267,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: (
     if (!selected || !file || !preview?.valid) throw new Error('先完成有效的导入预检')
     const result = await evaluationService.importV2Candidates(file, manifest(), createIdempotencyKey())
     setPreview(null)
-    setMessage(`已写入 ${result.candidate_count} 条待审核候选，请前往“标注审核”补齐原文证据。`)
+    setMessage(`已写入 ${result.candidate_count} 条待审核候选，请展开“候选审核与修订”补齐原文证据。`)
     await load()
   })
 
@@ -293,7 +294,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: (
     })
     setMessage(`Case r${revisionBaseNumber} 的修订候选已进入审核队列；通过后会追加新 revision，旧 Golden 不变。`)
     await load()
-    onGoReview()
+    onGoReview?.()
   })
 
   return <div className="mx-auto max-w-7xl space-y-5 px-6 py-6">
@@ -326,6 +327,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: (
         <div className="space-y-4 rounded-md border border-border-subtle p-4">
           <h3 className="text-sm font-semibold text-text-primary">导入并预检候选</h3>
           <p className="text-xs leading-5 text-text-muted">上传所选业务域的 JSON、JSONL 或 CSV。预检不写数据；导入后进入 V2 审核队列，审核通过前不会成为 Golden。</p>
+          <ImportTemplateButtons domain={selected?.domain || 'rag'} />
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_150px]">
             <label className="block text-sm text-text-secondary">目标数据集<select value={selectedId} onChange={event => setSelectedId(event.target.value)} className={`${control} mt-1 w-full`}><option value="">选择数据集</option>{datasets.map(item => <option key={item.dataset_id} value={item.dataset_id}>{item.name} · {item.dataset_key}</option>)}</select></label>
             <label className="block text-sm text-text-secondary">版本<input value={version} onChange={event => setVersion(event.target.value)} className={`${control} mt-1 w-full`} /></label>
@@ -333,7 +335,7 @@ export default function EvaluationV2DatasetPanel({ onGoReview }: { onGoReview: (
           <label className="block text-sm text-text-secondary">评测文件<input type="file" accept=".json,.jsonl,.csv,application/json,text/csv" onChange={event => { setFile(event.target.files?.[0] || null); setPreview(null) }} className="mt-2 block w-full text-sm text-text-secondary file:mr-3 file:min-h-10 file:rounded-md file:border file:border-border-subtle file:bg-surface-base file:px-3 file:text-text-primary" /></label>
           <div className="flex flex-wrap gap-2"><button type="button" disabled={busy || !file || !selected} onClick={inspectFile} className={control}>{busy ? '处理中…' : '只做预检'}</button><button type="button" disabled={busy || !file || !selected || !preview?.valid} onClick={importFile} className={`${control} bg-accent text-white`}>写入待审核候选</button></div>
           {preview && <div className="rounded-md bg-bg-elevated p-3 text-xs text-text-secondary"><p>{preview.valid ? `预检通过 · ${preview.case_count} 条` : `预检未通过 · ${preview.errors.length} 项错误`}</p>{preview.errors.slice(0, 12).map((item, index) => <p key={`${item.line}-${item.field}-${index}`} className="mt-1 text-red-700">第 {item.line} 行 · {item.field}：{item.message}</p>)}{preview.preview.length > 0 && <pre className="mt-2 max-h-48 overflow-auto rounded bg-surface-base p-2">{JSON.stringify(preview.preview, null, 2)}</pre>}</div>}
-          <button type="button" onClick={onGoReview} className="inline-flex min-h-10 items-center gap-1 text-sm font-medium text-accent">打开标注审核 <ArrowRight size={15} /></button>
+          <button type="button" onClick={onGoReview} className="inline-flex min-h-10 items-center gap-1 text-sm font-medium text-accent">打开候选审核 <ArrowRight size={15} /></button>
         </div>
       </div>
 

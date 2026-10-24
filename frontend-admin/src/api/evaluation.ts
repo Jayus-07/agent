@@ -300,6 +300,21 @@ export interface EvaluationV2Run {
   invalid_reason?: string;
 }
 
+export interface EvaluationV2RunFingerprint {
+  source?: string;
+  runner?: string;
+  module?: string;
+  dataset_version_id?: string;
+  prompt_versions?: Record<string, number | string | null>;
+  evaluator_versions?: Array<Record<string, unknown>>;
+  generation_model?: string;
+  embedding_model?: string;
+  rerank_model?: string;
+  corpus_snapshot_id?: string;
+  dataset_hash?: string;
+  corpus_hash?: string;
+}
+
 export interface EvaluationV2RunResult {
   result_id: string;
   case_id: string;
@@ -627,11 +642,34 @@ export const evaluationService = {
     return request<EvaluationV2Experiment>(`${BASE}/v2/experiments/${encodeURIComponent(experimentId)}/runs`, { method: 'POST', body: payload });
   },
 
-  getV2Run(runId: string): Promise<EvaluationV2Run> {
-    return request<EvaluationV2Run>(`${BASE}/v2/runs/${encodeURIComponent(runId)}`);
+  getV2Run(runId: string): Promise<{ run: EvaluationV2Run; fingerprint: EvaluationV2RunFingerprint }> {
+    return request<{ run: EvaluationV2Run; fingerprint: EvaluationV2RunFingerprint }>(`${BASE}/v2/runs/${encodeURIComponent(runId)}`);
   },
 
-  createV2Run(payload: { suite_version_id: string; kb_id?: string; request_id: string; subject_user_id?: number; prompt_versions?: Record<string, number | string | null> }): Promise<{ run: EvaluationV2Run; task: Record<string, unknown>; reused: boolean }> {
+  async downloadImportTemplate(module: string, format: 'jsonl' | 'csv' | 'fields'): Promise<void> {
+    const response = await fetchRaw(`${BASE}/v2/import-template?module=${encodeURIComponent(module)}&format=${encodeURIComponent(format)}`);
+    const blob = await response.blob();
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = match?.[1] || `eval-template.${format}`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+  },
+
+  searchDatasetEvidence(payload: { snapshot_id: string; query: string; top_k?: number }): Promise<{
+    snapshot_id: string;
+    kb_id: string;
+    items: Array<{ doc_id: string; chunk_id: string; chunk_index: number; title: string; snippet: string; score: number }>;
+  }> {
+    return request(`${BASE}/v2/datasets/evidence-search`, { method: 'POST', body: payload });
+  },
+
+  createV2Run(payload: { suite_version_id: string; source?: string; kb_id?: string; request_id: string; subject_user_id?: number; prompt_versions?: Record<string, number | string | null> }): Promise<{ run: EvaluationV2Run; task: Record<string, unknown>; reused: boolean }> {
     return request(`${BASE}/v2/runs`, { method: 'POST', body: payload });
   },
 

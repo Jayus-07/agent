@@ -1,7 +1,8 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { evaluationService, type EvaluationSuite, type EvaluationV2Run, type EvaluationV2RunResult } from '@/api/evaluation'
+import { evaluationService, type EvaluationSuite, type EvaluationV2Run, type EvaluationV2RunFingerprint, type EvaluationV2RunResult } from '@/api/evaluation'
+import { promptsService, type PromptListItem } from '@/api/prompts'
 import { createIdempotencyKey } from '@/api/client'
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { atLeast } from '@/lib/auth'
@@ -36,7 +37,7 @@ function runStatusBadge(run: EvaluationV2Run) {
   return <EvalBadge text={statusLabels[status] || status} tone="blue" />
 }
 
-export default function EvaluationV2RunsPanel() {
+export default function EvaluationV2RunsPanel({ promptPrefill }: { promptPrefill?: { key: string; version: string } | null } = {}) {
   const [runs, setRuns] = useState<EvaluationV2Run[]>([])
   const [suites, setSuites] = useState<EvaluationSuite[]>([])
   const [knowledgeBases, setKnowledgeBases] = useState<KbAuthorityItem[]>([])
@@ -50,17 +51,23 @@ export default function EvaluationV2RunsPanel() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [fingerprint, setFingerprint] = useState<EvaluationV2RunFingerprint | null>(null)
+  const [promptKeys, setPromptKeys] = useState<PromptListItem[]>([])
+  const [promptKey, setPromptKey] = useState('')
+  const [promptVersion, setPromptVersion] = useState('')
 
   const load = useCallback(async () => {
     if (!atLeast('super_admin')) { setLoading(false); return }
     setLoading(true)
     setError('')
     try {
-      const [runItems, suiteItems, kbCatalog] = await Promise.all([
+      const [runItems, suiteItems, kbCatalog, promptItems] = await Promise.all([
         evaluationService.listV2Runs(100),
         evaluationService.listSuites(),
         listKbAuthority(),
+        promptsService.list().catch(() => [] as PromptListItem[]),
       ])
+      setPromptKeys(promptItems)
       setRuns(runItems)
       setSuites(suiteItems.filter(item => item.source === 'evaluation_v2' && item.status === 'published' && item.suite_version_id))
       const kbs = kbCatalog.knowledge_bases.filter(item => item.active && !item.alias_for && !item.deprecated)
@@ -77,6 +84,15 @@ export default function EvaluationV2RunsPanel() {
   }, [])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (!promptPrefill) return
+    const version = promptPrefill.version.trim()
+    if (!/^\d+$/.test(version)) return
+    setPromptVersionsText(JSON.stringify({ [promptPrefill.key]: Number(version) }))
+    setPromptKey(promptPrefill.key)
+    setPromptVersion(version)
+  }, [promptPrefill])
 
   useEffect(() => {
     if (!runs.length || !runs.some(run => !terminal.has(run.job_status))) return
@@ -145,6 +161,14 @@ export default function EvaluationV2RunsPanel() {
     finally { setBusy(false) }
   }
 
+  useEffect(() => {
+    if (!selectedRunId) { setFingerprint(null); return }
+    let active = true
+    void evaluationService.getV2Run(selectedRunId).then(value => { if (active) setFingerprint(value.fingerprint) })
+      .catch(() => { if (active) setFingerprint(null) })
+    return () => { active = false }
+  }, [selectedRunId])
+
   const selectedRun = runs.find(run => run.run_id === selectedRunId)
 
   if (!atLeast('super_admin')) return <p className="p-5 text-sm text-text-secondary">V2 运行沿用现有任务授权，只允许平台超级管理员启动和查看逐例结果。</p>
@@ -164,7 +188,14 @@ export default function EvaluationV2RunsPanel() {
           <label className="text-xs text-text-secondary">已发布方案（Suite 版本）<select aria-label="已发布方案" value={suiteVersionId} onChange={event => setSuiteVersionId(event.target.value)} className={`${evalControl} mt-1 w-full`}><option value="">选择方案版本</option>{publishedSuites.map(item => <option key={item.suite_version_id} value={item.suite_version_id}>{item.name} · {item.module} · v{item.version}</option>)}</select></label>
           {isRagSuite && <label className="text-xs text-text-secondary">目标知识库<select aria-label="目标知识库" value={kbId} onChange={event => setKbId(event.target.value)} className={`${evalControl} mt-1 w-full`}><option value="">选择有权访问的知识库</option>{knowledgeBases.map(item => <option key={item.kb_id} value={item.kb_id}>{item.name} · {item.kb_id}</option>)}</select></label>}
           {isRagSuite && <label className="text-xs text-text-secondary">权限拒答测试用户（仅权限拒答题需要）<input aria-label="权限拒答测试用户" type="number" min={1} value={subjectUserId} onChange={event => setSubjectUserId(event.target.value)} placeholder="可留空" className={`${evalControl} mt-1 w-full`} /></label>}
-          {isRagSuite && <label className="text-xs text-text-secondary sm:col-span-2">候选 Prompt 版本 JSON（用于 A/B 对比）<textarea aria-label="候选 Prompt 版本 JSON" value={promptVersionsText} onChange={event => setPromptVersionsText(event.target.value)} rows={2} className={`${evalControl} mt-1 w-full font-mono text-xs`} /></label>}
+          {isRagSuite && <div className="text-xs text-text-secondary sm:col-span-2"><span>候选 Prompt 版本（用于 A/B 对比）</span>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <select aria-label="选择 Prompt" value={promptKey} onChange={event => setPromptKey(event.target.value)} className={`${evalControl} min-w-[220px] flex-1`}><option value="">选择 Prompt</option>{promptKeys.map(item => <option key={item.key} value={item.key}>{item.key} · {item.name}</option>)}</select>
+              <input aria-label="Prompt 版本号" type="number" min={1} placeholder="版本号" value={promptVersion} onChange={event => setPromptVersion(event.target.value)} className={`${evalControl} w-28`} />
+              <button type="button" disabled={!promptKey || !promptVersion} onClick={() => setPromptVersionsText(JSON.stringify({ [promptKey]: Number(promptVersion) }))} className="min-h-9 rounded-md border border-border-subtle px-3 text-xs text-text-secondary hover:bg-bg-hover disabled:opacity-50">设为候选版本</button>
+            </div>
+            <details className="mt-2"><summary className="cursor-pointer text-text-muted">高级：直接编辑 Prompt 版本 JSON</summary><textarea aria-label="候选 Prompt 版本 JSON" value={promptVersionsText} onChange={event => setPromptVersionsText(event.target.value)} rows={2} className={`${evalControl} mt-1 w-full font-mono text-xs`} /></details>
+          </div>}
         </div>
         <div className="mt-4"><EvalButton variant="primary" onClick={() => void start()} disabled={busy || !suiteVersionId || (isRagSuite && !kbId)}>▶ 创建并运行实验</EvalButton></div>
         {selectedSuite && <div className="mt-3"><EvalInfoBox>{isContractOnlySuite ? '此模块当前仅校验 Golden 契约；运行会生成逐例记录，但 Gate 固定为 INVALID。' : isRagSuite ? 'RAG 运行会固定经过授权的知识库语料快照；旧 Runner 未提供费用账单归因时仍标记为未报告。' : '此模块通过已有离线 Runner 执行，不会调用模型或真实 Provider。'}</EvalInfoBox></div>}
@@ -201,6 +232,22 @@ export default function EvaluationV2RunsPanel() {
       <table className="w-full min-w-[950px] text-left text-sm"><thead className="bg-bg-elevated text-xs text-text-secondary"><tr><th className="px-4 py-3">Suite</th><th className="px-4 py-3">Run</th><th className="px-4 py-3">任务状态</th><th className="px-4 py-3">Gate</th><th className="px-4 py-3">样本进度</th><th className="px-4 py-3">费用</th><th className="px-4 py-3">操作</th></tr></thead><tbody className="divide-y divide-border-subtle">{runs.map(run => <tr key={run.run_id}><td className="px-4 py-3">{run.suite_name || run.suite_key || 'RAG Suite'} <span className="text-text-muted">v{run.suite_version || '—'}</span></td><td className="px-4 py-3 font-mono text-xs">{run.run_id}</td><td className="px-4 py-3">{runStatusBadge(run)}</td><td className="px-4 py-3">{gateBadge(run)}</td><td className="px-4 py-3 tabular-nums">{run.completed_cases} / {run.total_cases} · 通过 {run.passed_cases}</td><td className="px-4 py-3 tabular-nums" aria-label={`费用：${formatEvaluationRunCost(run.cost_amount, run.cost_currency)}`}>{formatEvaluationRunCost(run.cost_amount, run.cost_currency)}</td><td className="px-4 py-3"><button type="button" onClick={() => setSelectedRunId(run.run_id)} className="mr-3 font-semibold text-accent hover:underline">逐题与 Trace</button>{run.job_status === 'failed' ? <button type="button" disabled={busy} onClick={() => void retry(run)} className="font-semibold text-accent disabled:opacity-50">恢复</button> : !terminal.has(run.job_status) && <button type="button" disabled={busy} onClick={() => void cancel(run)} className="text-red-700 disabled:opacity-50">取消</button>}</td></tr>)}</tbody></table>
       {!runs.length && <EvalEmpty>暂无 V2 运行。</EvalEmpty>}
     </EvalCard>
+
+    {selectedRun && fingerprint && <div className="mt-4"><EvalCard
+      title="运行环境指纹"
+      subtitle="发起时冻结的被测配置；两次运行只有在指纹一致（同数据集版本、同模式）时才可直接对比。"
+    >
+      <div className="grid gap-2 text-xs text-text-secondary sm:grid-cols-2">
+        {fingerprint.source && fingerprint.source !== 'manual' && <p>来源：<span className="rounded bg-accent-soft px-1.5 py-0.5 text-accent">{fingerprint.source}</span></p>}
+        <p>Runner：{fingerprint.runner || '—'}</p>
+        <p>生成模型（eval_gen）：{fingerprint.generation_model || '未记录'}</p>
+        <p>Embedding：{fingerprint.embedding_model || '—'}</p>
+        <p>Rerank：{fingerprint.rerank_model || '—'}</p>
+        <p>数据集版本：{fingerprint.dataset_version_id || '—'}</p>
+        <p>语料快照：{fingerprint.corpus_snapshot_id || '—'}</p>
+        <p className="sm:col-span-2">Prompt 版本：{(() => { const versions = fingerprint.prompt_versions || {}; return Object.keys(versions).length ? Object.entries(versions).map(([key, value]) => `${key}@${String(value)}`).join(' · ') : '未指定' })()}</p>
+      </div>
+    </EvalCard></div>}
 
     {selectedRun && <div className="mt-4"><EvalCard
       title={'逐题样本 · ' + selectedRun.run_id.slice(0, 8)}

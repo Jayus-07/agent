@@ -1,47 +1,39 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
-import { evaluationService, type DatasetCatalogItem, type DatasetVersionDetail, type EvaluationSuite } from '@/api/evaluation'
-import DatasetCatalog from '@/components/evaluations/DatasetCatalog'
-import DatasetVersionDetailView from '@/components/evaluations/DatasetVersionDetail'
-import ImportedDatasetsPanel from './ImportedDatasetsPanel'
+import { useState } from 'react'
+import DatasetSynthesisPanel from './DatasetSynthesisPanel'
 import EvaluationV2DatasetPanel from './EvaluationV2DatasetPanel'
+import EvaluationV2ReviewPanel from './EvaluationV2ReviewPanel'
 import { EvalPageHeader } from './evalUi'
 
-export default function DatasetGovernancePanel({ onGoReview }: { onGoReview: () => void }) {
-  const [source, setSource] = useState<'business' | 'builtin'>('business')
-  const [catalog, setCatalog] = useState<DatasetCatalogItem[]>([])
-  const [suites, setSuites] = useState<EvaluationSuite[]>([])
-  const [selected, setSelected] = useState<DatasetVersionDetail | null>(null)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const load = useCallback(async () => {
-    setLoading(true); setError('')
-    try {
-      const [datasets, suiteItems] = await Promise.all([evaluationService.listDatasets(), evaluationService.listLegacySuites()])
-      setCatalog(datasets); setSuites(suiteItems)
-    } catch (e) { setError(e instanceof Error ? e.message : '加载内置基准失败') }
-    finally { setLoading(false) }
-  }, [])
-  useEffect(() => { if (source === 'builtin') void load() }, [source, load])
-  const select = async (item: DatasetCatalogItem) => {
-    setSelected(null); setError('')
-    try { setSelected(await evaluationService.getDatasetVersion(item.dataset_id, item.dataset_version)) }
-    catch (e) { setError(e instanceof Error ? e.message : '读取版本失败') }
-  }
+export default function DatasetGovernancePanel() {
+  const [showReview, setShowReview] = useState(false)
+  const [showGenerator, setShowGenerator] = useState(false)
   return <div>
     <EvalPageHeader
-      title="数据集中心"
-      subtitle="统一管理评测输入、不可变 Golden 版本、业务归属与证据覆盖；已发布版本不可修改，修订必须产生新版本。"
+      title="数据集"
+      subtitle="导入、生成与编辑只写草稿；发布后版本不可变，被运行锁定，修改产生新版本。"
     />
-    <EvaluationV2DatasetPanel onGoReview={onGoReview} />
-    <div className="mt-6 flex gap-2 border-b border-border-subtle pb-3" role="group" aria-label="评测集来源">{[['business', '业务评测集'], ['builtin', '内置基准']].map(([value, label]) => <button key={value} aria-pressed={source === value} className={`rounded-md px-3 py-2 text-xs ${source === value ? 'bg-accent text-white' : 'bg-bg-elevated text-text-secondary'}`} onClick={() => setSource(value as 'business' | 'builtin')}>{label}</button>)}</div>
-    {source === 'business' ? <ImportedDatasetsPanel /> : <>
-      <p className="text-xs text-text-muted">内置基准随代码发布，覆盖平台能力回归。业务题集在“业务评测集”中导入和发布；审核在“候选审核”中处理。</p>
-      <button className="text-xs text-accent" disabled={loading} onClick={() => void load()}>{loading ? '加载中…' : '刷新内置基准'}</button>
-      {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
-      <div className="grid gap-4 lg:grid-cols-2"><DatasetCatalog items={catalog} selectedId={selected?.dataset_id} onSelect={item => void select(item)} />{selected ? <DatasetVersionDetailView dataset={selected} /> : <p className="p-6 text-xs text-text-muted">选择数据集查看固定版本及覆盖范围。</p>}</div>
-      <section className="rounded-lg border border-border-subtle p-4"><h2 className="text-sm font-semibold">内置评测套件</h2><div className="mt-3 divide-y divide-border-subtle">{suites.map(suite => <div className="flex flex-wrap justify-between gap-2 py-3 text-xs" key={`${suite.module}-${suite.name}`}><span>{suite.name} · {suite.case_count} 题</span><span className="text-text-muted">{suite.kb_id} / {suite.fixture_set} / {suite.dataset_version}</span></div>)}</div></section>
-    </>}
+    <EvaluationV2DatasetPanel onGoReview={() => setShowReview(true)} />
+    <div className="mt-6 space-y-3 border-t border-border-subtle pt-4">
+      <button
+        type="button"
+        aria-expanded={showReview}
+        onClick={() => setShowReview(value => !value)}
+        className="block text-sm font-medium text-accent hover:underline"
+      >
+        {showReview ? '收起候选审核与修订' : '展开候选审核与修订（补齐真值与证据）'}
+      </button>
+      {showReview && <EvaluationV2ReviewPanel />}
+      <button
+        type="button"
+        aria-expanded={showGenerator}
+        onClick={() => setShowGenerator(value => !value)}
+        className="block text-sm font-medium text-accent hover:underline"
+      >
+        {showGenerator ? '收起从知识库生成' : '从知识库生成评测题（基于快照，自动带证据）'}
+      </button>
+      {showGenerator && <DatasetSynthesisPanel expanded />}
+    </div>
   </div>
 }

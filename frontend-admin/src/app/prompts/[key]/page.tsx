@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Save, Send, GitBranch, History, FileText, Lock, Play, Zap, Activity } from 'lucide-react'
 import { promptsService, type PromptDetail, type PromptVersion, type AuditEntry, type DiffResult, type PromptStatus, type PromptRuntimeStatus, type PromptReleaseRecord, type PromptEvaluationMode } from '@/api/prompts'
-import { evaluationService } from '@/api/evaluation'
 import { WHITELIST_KEYS } from '@/config/promptGroups'
 import { PROMPT_RELEASE_EXECUTOR, PROMPT_RELEASE_SUITE } from '@/config/promptRelease'
 import { useToast } from '@/components/shared/Toast'
@@ -214,34 +213,12 @@ export default function PromptDetailPage() {
     }
   }
 
-  const [evalRunning, setEvalRunning] = useState(false)
-
-  const handleRunEval = async () => {
-    if (latestVersion) {
-      await handleCreateRelease(latestVersion.version)
-      return
-    }
-    if (evalRunning) return
-    setEvalRunning(true)
-    toast.info('评测运行中，完成后会通知你')
-    try {
-      const result = await evaluationService.runEval('rag')
-      if (result.ok) {
-        const pct = (result.pass_rate * 100).toFixed(1)
-        const top1 = (result.top1_accuracy * 100).toFixed(1)
-        if (result.pass_rate >= 0.85) {
-          toast.success(`评测通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
-        } else {
-          toast.warning(`评测未通过 — 通过率 ${pct}% · Top-1 ${top1}%`)
-        }
-      } else {
-        toast.error('评测运行异常')
-      }
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : '评测运行失败')
-    } finally {
-      setEvalRunning(false)
-    }
+  // 评测发起收敛到评测中心；此处只保留 Prompt 治理自己的发布评测（release 门禁）入口
+  const handleGoEvalCenter = () => {
+    const version = latestVersion?.version ? String(latestVersion.version) : ''
+    const query = new URLSearchParams({ tab: 'runs', prompt: decodedKey })
+    if (version) query.set('pv', version)
+    router.push(`/evaluations/center?${query.toString()}`)
   }
 
   const handleDiff = async () => {
@@ -310,14 +287,20 @@ export default function PromptDetailPage() {
                 Playground
               </button>
             )}
-            {decodedKey === 'rag.qa' && (
+            {decodedKey === 'rag.qa' && latestVersion && (
               <button
-                onClick={handleRunEval}
-                disabled={evalRunning}
-                className={`${BTN_PRIMARY} ${evalRunning ? 'opacity-60' : ''}`}
+                onClick={() => void handleCreateRelease(latestVersion.version)}
+                disabled={releaseLoading}
+                className={`${BTN_PRIMARY} ${releaseLoading ? 'opacity-60' : ''}`}
               >
                 <Zap size={14} />
-                {evalRunning ? '评测中...' : '运行评测'}
+                {releaseLoading ? '提交中...' : '发起发布评测'}
+              </button>
+            )}
+            {decodedKey === 'rag.qa' && (
+              <button onClick={handleGoEvalCenter} className={BTN_SECONDARY}>
+                <Zap size={14} />
+                到评测中心运行
               </button>
             )}
           </div>
