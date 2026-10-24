@@ -82,6 +82,12 @@ export default function ModelConfigPage() {
   // 摘要卡随 tab 切换：每张卡都应描述当前 tab 正在看的东西，
   // 而不是把别的 tab 的指标顶成「—」占位（原实现 4 张卡全 tab 共用）。
   const unavailableRoles = (roles.data?.items ?? []).filter((role) => !role.available).length
+  // P0（2026-10-24）：配置齐全但上游最近健康探测失败的角色——此前只看
+  // 配置口径，本地推理服务宕机时顶部仍显示「全部可用」，与事实矛盾。
+  const upstreamDownRoles = (roles.data?.items ?? []).filter((role) => {
+    if (!role.available || !role.health) return false
+    return role.health.status !== 'healthy' && role.health.status !== 'slow'
+  }).length
   const roleCount = roles.data?.items.length ?? 0
   const modelCount = catalog.data?.models.length ?? 0
   const historyCount = history.data?.items.length ?? 0
@@ -91,9 +97,22 @@ export default function ModelConfigPage() {
     const roleCard = { icon: <Settings2 size={15} />, label: '模型角色', value: String(roleCount), note: '当前注册角色' }
     const modelCard = { icon: <Database size={15} />, label: '登记模型', value: String(modelCount), note: '供应商目录' }
     if (current === 'roles') {
+      // P0（2026-10-24）：计数 = 配置不可用 + 上游探测失败，note 说明构成；
+      // 「全部可用」只在上游真的可达（或有探测数据且健康）时出现。
+      const downTotal = unavailableRoles + upstreamDownRoles
       return [
         roleCard,
-        { icon: <CheckCircle2 size={15} />, label: '不可用角色', value: String(unavailableRoles), note: unavailableRoles ? '需处理绑定' : '全部可用', tone: (unavailableRoles ? 'bad' : 'good') as 'bad' | 'good' },
+        {
+          icon: <CheckCircle2 size={15} />,
+          label: '不可用角色',
+          value: String(downTotal),
+          note: unavailableRoles
+            ? '需处理绑定'
+            : upstreamDownRoles
+              ? `${upstreamDownRoles} 个角色上游探测失败`
+              : '全部可用',
+          tone: (downTotal ? 'bad' : 'good') as 'bad' | 'good',
+        },
         modelCard,
         driftCard,
       ]

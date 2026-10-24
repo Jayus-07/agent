@@ -729,7 +729,12 @@ class ModelConfigService:
     # ── 模型健康缓存读取（探测在 Celery beat，见 tasks/model_health_tasks.py）──
 
     async def list_model_health(self) -> list[dict]:
-        """全部已探测模型 health 快照（只读缓存，不在线探测）。"""
+        """全部已探测模型 health 快照（只读缓存，不在线探测）。
+
+        附带供应商 billing 口径（P1 状态口径统一，2026-10-24）：本地计费
+        供应商的探测失败要给「确认服务进程已启动或改绑云端」的针对性
+        提示，前端与漂移检查共用同一份数据，不再各自解释。
+        """
         from backend.infra.llm.health import safe_error_for_status
 
         rows: list[Mapping[str, Any]] = []
@@ -741,12 +746,24 @@ class ModelConfigService:
             ))
             rows = list(result.mappings())
             break
+        billing_by_provider: dict[str, str] = {}
+        try:
+            snap = await registry_store.load_registry()
+            if snap.loaded:
+                billing_by_provider = {
+                    str(p.get("id") or ""): str(p.get("billing") or "metered")
+                    for p in snap.providers
+                }
+        except Exception:  # noqa: BLE001 — billing 标注失败不阻塞健康快照
+            logger.warning("[ModelConfig] 读取供应商 billing 失败，健康行省略该字段")
         out: list[dict] = []
         for r in rows:
             status = str(r["status"] or "unknown")
+            provider_id = str(r["provider"] or "")
             out.append({
                 "modelName": str(r["model_name"]),
-                "provider": str(r["provider"] or ""),
+                "provider": provider_id,
+                "billing": billing_by_provider.get(provider_id),
                 "modelKind": str(r["model_kind"] or "chat"),
                 "probeMode": (
                     "availability_only"
@@ -2527,24 +2544,76 @@ class ModelConfigService:
                 )
 
         if snap.loaded:
+            # P1（2026-10-24）状态口径统一：供应商级探测（provider 表）与
+            # 模型级健康扫描（llm_model_health）此前是两座孤岛——正在被
+            # 角色使用的供应商上游宕机，只会躺在绑定行的手动测试里，汇总
+            # 与体检全绿。这里把模型健康并入漂移判定：
+            #   任一模型最近探测失败 → critical（含本地服务的针对性指引）
+            #   两级都无任何探测数据 → warn（真·未验证）
+            #   仅供应商级探测失败 → warn（维持原语义）
+            try:
+                health_rows = await self.list_model_health()
+            except Exception:  # noqa: BLE001 — 健康缓存读失败不阻塞其余体检项
+                logger.warning("[ModelConfig] drift 读取模型健康缓存失败")
+                health_rows = []
+            health_by_provider: dict[str, list[dict]] = {}
+            for hr in health_rows:
+                health_by_provider.setdefault(str(hr.get("provider") or ""), []).append(hr)
             for provider in snap.providers:
-                if provider.get("last_probe_at") is None:
+                pid = str(provider.get("id") or "")
+                probed_at = provider.get("last_probe_at")
+                hrows = health_by_provider.get(pid, [])
+                down = [
+                    h for h in hrows
+                    if h.get("status") and h.get("status") not in ("healthy", "slow")
+                ]
+                if down:
+                    worst = max(
+                        down, key=lambda h: int(h.get("consecutiveFailures") or 0),
+                    )
+                    names = "、".join(str(h.get("modelName")) for h in down[:3])
+                    billing = str(hrows[0].get("billing") or "metered")
+                    hint = (
+                        "本地推理服务可能未随本次部署启动：请在服务器上启动对应"
+                        "服务进程，或将相关角色改绑云端模型；服务恢复后下次探测"
+                        "会自动转绿。"
+                        if billing == "local"
+                        else "查看角色行「手动测试」的分级结果并修正 URL、密钥或"
+                        "模型名；或改绑其他可用模型。"
+                    )
+                    items.append(
+                        {
+                            "severity": "critical",
+                            "kind": "provider_model_unreachable",
+                            "subject": pid,
+                            "message": (
+                                f"供应商 {pid} 有 {len(down)} 个模型健康探测失败"
+                                f"（{names}；连续失败 {worst.get('consecutiveFailures')} 次）"
+                            ),
+                            "hint": hint,
+                        }
+                    )
+                elif probed_at is None and not hrows:
                     items.append(
                         {
                             "severity": "warn",
                             "kind": "unverified_provider",
-                            "subject": provider.get("id") or "",
-                            "message": f"供应商 {provider.get('id')} 尚未完成连通性探测",
+                            "subject": pid,
+                            "message": f"供应商 {pid} 尚未完成连通性探测",
                             "hint": "在供应商页点击测试，确认 URL、密钥与模型均可用。",
                         }
                     )
-                elif not provider.get("last_probe_ok"):
+                elif (
+                    probed_at is not None
+                    and not provider.get("last_probe_ok")
+                    and not hrows
+                ):
                     items.append(
                         {
                             "severity": "warn",
                             "kind": "unverified_provider",
-                            "subject": provider.get("id") or "",
-                            "message": f"供应商 {provider.get('id')} 最近一次探测未通过",
+                            "subject": pid,
+                            "message": f"供应商 {pid} 最近一次探测未通过",
                             "hint": "查看探测分级结果并修正对应的 URL、密钥或模型名。",
                         }
                     )

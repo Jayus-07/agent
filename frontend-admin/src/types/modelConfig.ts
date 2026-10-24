@@ -42,6 +42,8 @@ export interface ModelHealth {
   probeSource?: 'scheduled' | 'manual' | null
   /** 探测深度：真实模型调用、仅凭据可用性或仅允许手动探测。 */
   probeMode?: 'live_call' | 'availability_only' | 'manual_only'
+  /** 供应商计费口径（P1 状态统一，2026-10-24）：local 失败时给针对性指引 */
+  billing?: 'metered' | 'subscription' | 'local' | null
 }
 
 /** 角色运行策略（后端 llm_model_role_policy 镜像；source=default 时为代码默认值） */
@@ -333,7 +335,13 @@ export interface ProviderRow {
     at: string
     ok: boolean
     worstGrade: ProbeGrade | null
+    /** P1 状态统一（2026-10-24）：provider 表无探测但模型健康缓存有数据时合成 */
+    source?: 'provider-probe' | 'model-health'
   } | null
+  /** 该供应商名下任一模型最近健康探测失败（合并口径，2026-10-24） */
+  upstreamDown?: boolean
+  /** 上游不可达的模型名列表（upstreamDown 时非空） */
+  downModels?: string[]
 }
 
 export type SpecializedRole = 'embedding' | 'rerank'
