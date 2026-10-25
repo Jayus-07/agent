@@ -90,7 +90,9 @@ class TestCrossSourceMerge:
             return None
 
         with patch.object(admin_tools, "_aggregate_tool_stats", return_value=fake_stats), \
-             patch.object(admin_tools, "require_admin_user", _noop_auth):
+             patch.object(admin_tools, "_STATS_CACHE", {"at": 0.0, "payload": None}), \
+             patch.object(admin_tools, "require_admin_user", _noop_auth), \
+             patch.object(admin_tools, "require_editor_user", _noop_auth):
             resp = await admin_tools.tool_inventory(request=None)
 
         row = next(t for t in resp["tools"] if t["name"] == target)

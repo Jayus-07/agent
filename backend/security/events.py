@@ -24,6 +24,7 @@ EVENT_TYPES = (
     "JWT_INVALID",
     "EVIDENCE_REJECT",
     "GATEWAY_DENIED",
+    "ADMIN_ACTION",
 )
 
 

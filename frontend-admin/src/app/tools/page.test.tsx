@@ -7,6 +7,10 @@ const getToolStats = vi.hoisted(() => vi.fn())
 const getToolContractChanges = vi.hoisted(() => vi.fn())
 const getToolErrors = vi.hoisted(() => vi.fn())
 const runToolFailureProbe = vi.hoisted(() => vi.fn())
+const navigation = vi.hoisted(() => ({
+  params: new URLSearchParams(),
+  router: { push: vi.fn(), replace: vi.fn() },
+}))
 
 vi.mock('@/api/governance', () => ({
   getToolInventory,
@@ -14,6 +18,10 @@ vi.mock('@/api/governance', () => ({
   getToolContractChanges,
   getToolErrors,
   runToolFailureProbe,
+}))
+vi.mock('next/navigation', () => ({
+  useRouter: () => navigation.router,
+  useSearchParams: () => navigation.params,
 }))
 
 import ToolsPage from './page'
@@ -26,7 +34,7 @@ const mounted: { container: HTMLDivElement; root: Root }[] = []
 
 beforeEach(() => {
   getToolInventory.mockResolvedValue({
-    count: 1,
+    count: 2,
     lock_git_sha: 'abc1234',
     lock_error: '',
     tools: [{
@@ -49,6 +57,18 @@ beforeEach(() => {
       content_hash: 'abcdef1234567890',
       description_hash: 'description-hash',
       runtime: { calls: 4, success: 3, failures: 1, success_rate: 0.75, error_classes: { timeout: 1 } },
+    }, {
+      name: 'calculate_tool',
+      display_name: '数学计算',
+      data_source: null,
+      quota_runtime: null,
+      args_schema: {},
+      module: 'backend/tools/calculator.py',
+      capabilities: [],
+      output_types: {},
+      content_hash: '1122334455667788',
+      description_hash: 'description-hash-2',
+      runtime: { calls: 0, success: 0, failures: 0, success_rate: null, error_classes: {} },
     }],
   })
   getToolStats.mockResolvedValue({
@@ -87,6 +107,8 @@ afterEach(() => {
     container.remove()
   }
   vi.clearAllMocks()
+  navigation.params = new URLSearchParams()
+  navigation.router.replace.mockClear()
 })
 
 describe('Tool 治理页面', () => {
@@ -168,5 +190,96 @@ describe('Tool 治理页面', () => {
     expect(runToolFailureProbe).toHaveBeenCalledWith('map.lookup', 'timeout')
     expect(container.textContent).toContain('已生成模拟失败')
     expect(container.querySelector('a[href="/observability/traces/probe-trace-1"]')).toBeTruthy()
+  })
+
+  async function mountPage() {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    mounted.push({ container, root })
+    await act(async () => {
+      root.render(<ToolsPage />)
+      await Promise.resolve()
+    })
+    return container
+  }
+
+  function visibleToolNames(container: HTMLElement): string[] {
+    return Array.from(container.querySelectorAll('tbody > tr'))
+      .filter((tr) => tr.querySelector('.font-mono'))
+      .map((tr) => tr.querySelector('.font-mono')?.textContent ?? '')
+  }
+
+  it('搜索词过滤清单并同步到 URL', async () => {
+    const container = await mountPage()
+    expect(visibleToolNames(container).length).toBe(2)
+
+    const input = container.querySelector<HTMLInputElement>('input[aria-label="搜索工具"]')
+    expect(input).toBeTruthy()
+    const nativeSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      nativeSetter!.call(input!, 'calculate')
+      input!.dispatchEvent(new Event('input', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    const names = visibleToolNames(container)
+    expect(names).toEqual(['calculate_tool'])
+    expect(container.textContent).toContain('1 / 2 个')
+    expect(navigation.router.replace).toHaveBeenCalled()
+    const url = navigation.router.replace.mock.calls.at(-1)?.[0] as string
+    expect(url).toContain('q=calculate')
+  })
+
+  it('数据源筛选与仅看失败组合过滤', async () => {
+    const container = await mountPage()
+
+    const ds = container.querySelector<HTMLSelectElement>('select[aria-label="数据源筛选"]')
+    expect(ds).toBeTruthy()
+    await act(async () => {
+      ds!.value = 'mcp'
+      ds!.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(visibleToolNames(container)).toEqual(['map.lookup'])
+
+    const failedOnly = container.querySelector<HTMLInputElement>('input[type="checkbox"]')
+    expect(failedOnly).toBeTruthy()
+    await act(async () => {
+      failedOnly!.click()
+      await Promise.resolve()
+    })
+    // mcp + 仅失败：map.lookup（失败 1）仍命中
+    expect(visibleToolNames(container)).toEqual(['map.lookup'])
+
+    // 切回全部数据源 + 仅失败：calculate_tool（0 失败）被过滤
+    await act(async () => {
+      ds!.value = 'all'
+      ds!.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(visibleToolNames(container)).toEqual(['map.lookup'])
+  })
+
+  it('变更分类筛选走服务端参数', async () => {
+    getToolContractChanges.mockResolvedValue({
+      changes: [{
+        id: 1, from_lock_hash: 'a', to_lock_hash: 'b', classification: 'BREAKING',
+        changed_tools: [], tool_count: 40, git_sha: 'd177694', detected_by: 'gen',
+        created_at: '2026-10-10T07:02:58',
+      }],
+    })
+    const container = await mountPage()
+
+    const cls = container.querySelector<HTMLSelectElement>('select[aria-label="变更分类筛选"]')
+    expect(cls).toBeTruthy()
+    await act(async () => {
+      cls!.value = 'BREAKING'
+      cls!.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(getToolContractChanges).toHaveBeenLastCalledWith({ classification: 'BREAKING' })
+    expect(container.textContent).toContain('BREAKING')
   })
 })
