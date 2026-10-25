@@ -39,6 +39,10 @@ _SKIP_AUTH_PREFIXES = (
     # 自建认证公开端点（2026-09-15 拆分：login/refresh/logout/register 本就无凭据）
     "/auth",
     "/sys",
+    # 报告图表 artifact（2026-10-25）：报告 Markdown 的 <img> 引用，浏览器
+    # 请求带不了凭据；文件名含 8 位 hex 不可枚举（capability URL），网关侧
+    # 已按 /api/report-files/* 白名单放行并限流，本层同步豁免 X-API-Key。
+    "/report-files",
 )
 
 # 精确匹配豁免（绝不能进 _SKIP_AUTH_PREFIXES：那里的 startswith 语义

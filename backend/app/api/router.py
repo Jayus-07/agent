@@ -47,6 +47,7 @@ from backend.app.api.routes import (
     rag,
     rbac,
     report,
+    report_files,
     reports,
     schedules,
     selection,
@@ -138,6 +139,7 @@ api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /
 api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）
 api_router.include_router(travel_v2_router)  # 旅游 V2：独立 Trip/Revision/Template 数据接口
 api_router.include_router(question_ledger.router)  # 线上问题台账（候选评测集供给侧，2026-10-08 #13）
+api_router.include_router(report_files.router)  # 报告图表 artifact 只读服务（图表落盘改造配套）
 
 # ── 系统路由 ──────────────────────────────────
 api_router.include_router(health_router)

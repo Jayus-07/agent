@@ -479,8 +479,21 @@ def workflow_executor_node(state: dict) -> dict:
         from backend.agents.reporter.reporter import render_result_for_user
 
         answer_parts = []
-        report_out = ctx.outputs.get("report") or {}
-        report_md = report_out.get("report_md") if isinstance(report_out, dict) else None
+        # outputs 顶层键是 step 名（fetch_sales/generate_report/...），报告
+        # md 在 generate_report step 输出的 "report" 键里（daily_report 契约
+        # {"report": md_or_dict}）。此前误按 outputs["report"] 取值 → 恒空
+        # → 退化为逐个渲染原始数据 dict（用户看到"无法展示"，2026-10-25）。
+        report_out = next(
+            (v.get("report") for v in ctx.outputs.values()
+             if isinstance(v, dict) and v.get("report") is not None),
+            {},
+        )
+        if isinstance(report_out, str):
+            report_md = report_out
+        elif isinstance(report_out, dict):
+            report_md = report_out.get("report_md") or report_out.get("content")
+        else:
+            report_md = None
         if ctx.status == "failed":
             answer_parts.append("## 工作流未完成\n\n工作流未能完成，建议稍后重试。")
         elif report_md:

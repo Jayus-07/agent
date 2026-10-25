@@ -43,8 +43,20 @@ _llm_polisher = None
 def _get_chart_generator():
     global _chart_generator
     if _chart_generator is None:
-        from backend.business_report.chart_generator import chart_generator as cg
-        _chart_generator = cg
+        from backend.business_report.chart_generator import ChartGenerator
+        # 图表落盘 artifact（2026-10-25）：目录与快照同根（数据卷解析，
+        # 容器内 /app/data 可写）。URL 前缀取 REPORT_FILES_PUBLIC_BASE（网关
+        # 对外绝对地址，浏览器 <img> 直连公开路由，BFF 鉴权面不为此开口）；
+        # 未配置时用相对路径（需调用方自行保证可解析）。
+        # base64 内嵌曾让报告 Markdown 达数万 token，被 L1 上下文预算压成
+        # 预览后无法展示（实测 49713 tokens）。
+        import os
+        from backend.business_report.snapshot import _get_snapshot_dir
+        _chart_generator = ChartGenerator(
+            chart_output_dir=os.path.join(
+                os.path.dirname(_get_snapshot_dir()), "report_charts"),
+            url_prefix=os.getenv("REPORT_FILES_PUBLIC_BASE", ""),
+        )
     return _chart_generator
 
 

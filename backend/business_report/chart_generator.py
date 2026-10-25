@@ -9,6 +9,9 @@ chart_generator.py — matplotlib 图表自动生成
 
 import io
 import base64
+import os
+import re
+import uuid
 from typing import Dict, Any, List, Optional
 from collections import Counter
 
@@ -63,11 +66,29 @@ _COLORS = ["#4E79A7", "#F28E2B", "#E15759", "#76B7B2", "#59A14F",
 # =====================================================
 
 class ChartGenerator:
-    """根据配置自动生成 matplotlib 图表，返回 Markdown 嵌入片段"""
+    """根据配置自动生成 matplotlib 图表，返回 Markdown 嵌入片段
 
-    def __init__(self, figsize=(8, 5), dpi=100):
+    chart_output_dir（2026-10-25）：配置后图表 PNG 落盘为 artifact 文件，
+    Markdown 引用 url_prefix + 文件名；未配置保持 base64 内嵌（旧行为，
+    兼容单测与离线脚本）。动机：base64 内嵌让报告 Markdown 动辄数万
+    token，被 L1 上下文预算压成预览后用户看到"无法展示"（实测日报
+    before_tokens=49713，其中图表 base64 占绝对主体）。
+    """
+
+    def __init__(self, figsize=(8, 5), dpi=100,
+                 chart_output_dir: Optional[str] = None,
+                 url_prefix: str = ""):
         self.figsize = figsize
         self.dpi = dpi
+        self.chart_output_dir = chart_output_dir
+        # url_prefix：图表 URL 前缀。绝对地址（如 http://gw:9080）时前端
+        # <img> 直连网关公开路由（浏览器 img 无 Authorization，BFF/网关
+        # 鉴权面不为此开口）；空则用相对 /api/report-files/（需 BFF 放行，
+        # 当前未启用）。
+        if url_prefix:
+            self.url_prefix = url_prefix.rstrip("/") + "/api/report-files/"
+        else:
+            self.url_prefix = "/api/report-files/"
 
     # ---------------------------------------------------
     # 主入口
@@ -89,6 +110,14 @@ class ChartGenerator:
         if not chart_configs or not data:
             return ""
 
+        if self.chart_output_dir:
+            try:
+                os.makedirs(self.chart_output_dir, exist_ok=True)
+            except OSError as e:
+                logger.warning(
+                    f"[Chart] 图表目录不可写，回退 base64 内嵌: {e}")
+                self.chart_output_dir = None
+
         parts = []
         for i, cfg in enumerate(chart_configs):
             try:
@@ -97,17 +126,30 @@ class ChartGenerator:
                 w = cfg.get("width", self.figsize[0])
                 h = cfg.get("height", self.figsize[1])
 
-                if chart_type == "bar":
-                    img_base64 = self._bar_chart(data, cfg, title, (w, h))
-                elif chart_type == "pie":
-                    img_base64 = self._pie_chart(data, cfg, title, (w, h))
-                elif chart_type == "line":
-                    img_base64 = self._line_chart(data, cfg, title, (w, h))
-                else:
-                    logger.warning(f"[Chart] 不支持的图表类型: {chart_type}")
+                fig = self._render_figure(chart_type, data, cfg, title, (w, h))
+                if fig is None:
                     continue
 
-                parts.append(f"### {title}\n\n![{title}](data:image/png;base64,{img_base64})\n")
+                if self.chart_output_dir:
+                    # 文件名纯 ASCII（中文标题经 URL 各端编码差异大，实测
+                    # urllib ascii 直连失败）：slug 剔除非 ASCII，空则回退
+                    # chart；中文可读性由 Markdown alt 文本承载
+                    slug = re.sub(r"[^A-Za-z0-9_-]+", "_", title).strip("_")[:40]
+                    fname = f"{slug or 'chart'}_{uuid.uuid4().hex[:8]}.png"
+                    fpath = os.path.join(self.chart_output_dir, fname)
+                    fig.savefig(fpath, format="png", bbox_inches="tight",
+                                dpi=self.dpi)
+                    fig.clf()
+                    plt.close(fig)
+                    parts.append(f"### {title}\n\n![{title}]({self.url_prefix}{fname})\n")
+                else:
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format="png", bbox_inches="tight", dpi=self.dpi)
+                    fig.clf()
+                    plt.close(fig)
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.read()).decode("ascii")
+                    parts.append(f"### {title}\n\n![{title}](data:image/png;base64,{img_base64})\n")
                 logger.info(f"[Chart] 生成图表: {title} ({chart_type})")
 
             except Exception as e:
@@ -116,12 +158,24 @@ class ChartGenerator:
 
         return "\n".join(parts)
 
+    def _render_figure(self, chart_type: str, data: List[dict], cfg: dict,
+                       title: str, figsize: tuple):
+        """按类型渲染并返回 figure（不负责保存/编码）；未知类型返回 None。"""
+        if chart_type == "bar":
+            return self._bar_figure(data, cfg, title, figsize)
+        if chart_type == "pie":
+            return self._pie_figure(data, cfg, title, figsize)
+        if chart_type == "line":
+            return self._line_figure(data, cfg, title, figsize)
+        logger.warning(f"[Chart] 不支持的图表类型: {chart_type}")
+        return None
+
     # ---------------------------------------------------
     # 柱状图
     # ---------------------------------------------------
 
-    def _bar_chart(self, data: List[dict], cfg: dict, title: str,
-                   figsize: tuple) -> str:
+    def _bar_figure(self, data: List[dict], cfg: dict, title: str,
+                    figsize: tuple):
         x_key = cfg["x"]
         y_key = cfg["y"]
         xs = [str(d.get(x_key, "")) for d in data]
@@ -146,14 +200,14 @@ class ChartGenerator:
         ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.0f"))
 
         fig.tight_layout()
-        return self._fig_to_base64(fig)
+        return fig
 
     # ---------------------------------------------------
     # 饼图
     # ---------------------------------------------------
 
-    def _pie_chart(self, data: List[dict], cfg: dict, title: str,
-                   figsize: tuple) -> str:
+    def _pie_figure(self, data: List[dict], cfg: dict, title: str,
+                    figsize: tuple):
         x_key = cfg["x"]
         y_key = cfg["y"]
         labels = [str(d.get(x_key, "")) for d in data]
@@ -163,7 +217,7 @@ class ChartGenerator:
         filtered = [(l, v) for l, v in zip(labels, values) if v > 0]
         if not filtered:
             logger.warning("[Chart] 饼图数据全为零，跳过")
-            return ""
+            return None
         labels, values = zip(*filtered)
 
         fig, ax = plt.subplots(figsize=figsize, dpi=self.dpi)
@@ -179,14 +233,14 @@ class ChartGenerator:
 
         ax.set_title(title, fontsize=13, fontweight="bold")
         fig.tight_layout()
-        return self._fig_to_base64(fig)
+        return fig
 
     # ---------------------------------------------------
     # 折线图
     # ---------------------------------------------------
 
-    def _line_chart(self, data: List[dict], cfg: dict, title: str,
-                    figsize: tuple) -> str:
+    def _line_figure(self, data: List[dict], cfg: dict, title: str,
+                     figsize: tuple):
         x_key = cfg["x"]
         y_key = cfg["y"]
         xs = [str(d.get(x_key, "")) for d in data]
@@ -210,7 +264,23 @@ class ChartGenerator:
         ax.grid(axis="y", alpha=0.3)
 
         fig.tight_layout()
-        return self._fig_to_base64(fig)
+        return fig
+
+    # ---------------------------------------------------
+    # 兼容入口（base64 模式，旧调用方/单测）
+    # ---------------------------------------------------
+
+    def _bar_chart(self, data, cfg, title, figsize) -> str:
+        fig = self._bar_figure(data, cfg, title, figsize)
+        return self._fig_to_base64(fig) if fig is not None else ""
+
+    def _pie_chart(self, data, cfg, title, figsize) -> str:
+        fig = self._pie_figure(data, cfg, title, figsize)
+        return self._fig_to_base64(fig) if fig is not None else ""
+
+    def _line_chart(self, data, cfg, title, figsize) -> str:
+        fig = self._line_figure(data, cfg, title, figsize)
+        return self._fig_to_base64(fig) if fig is not None else ""
 
     # ---------------------------------------------------
     # 工具方法

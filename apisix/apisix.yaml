@@ -115,6 +115,23 @@ routes:
           set:
             X-Tenant-Id: "default"
 
+  # 报告图表 artifact（2026-10-25）：报告 Markdown 的 <img> 引用，浏览器
+  # img 请求带不了 Authorization → gateway-auth 必 401。匿名可达的代价由
+  # 文件名承担：slug_<8位hex>.png 不可枚举（capability URL 语义），内容为
+  # 已生成报告的图表快照；后端 report_files 路由同时限制目录/扩展名。
+  - id: report-files
+    uri: /api/report-files/*
+    upstream_id: app
+    plugins:
+      prometheus: {}
+      limit-count:
+        key: remote_addr
+        count: 120
+        time_window: 60
+        rejected_code: 429
+      proxy-rewrite:
+        regex_uri: ["^/api/(.*)$", "/$1"]
+
   - id: system-service
     uri: /api/sys/*
     upstream_id: app
