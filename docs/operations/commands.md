@@ -25,7 +25,7 @@ bge-reranker-v2-m3 提供 DashScope 兼容 rerank。该服务是独立进程，
 **宿主机重启后不会自启**，需手动拉起：
 
 ~~~powershell
-.\dev-local-models.bat start    # 启动（首次加载模型约 10-30s，日志在 logs\local_model_server.log）
+.\dev-local-models.bat start    # 后台启动，等待真实预热成功；最长等待180秒
 .\dev-local-models.bat status   # 状态
 .\dev-local-models.bat stop     # 停止
 .\dev-local-models.bat restart  # 重启
@@ -33,8 +33,15 @@ bge-reranker-v2-m3 提供 DashScope 兼容 rerank。该服务是独立进程，
 
 验证：`curl http://127.0.0.1:8088/healthz`。模型路径可用环境变量
 `BGE_M3_MODEL_PATH` / `RERANKER_MODEL_PATH` 覆盖，默认读本机
-HuggingFace / ModelScope 缓存。切换 embedding 模型后语料向量空间随之
-变化，需重建向量索引（管理端角色绑定接口会返回 `requiresReindex`）。
+HuggingFace / ModelScope 缓存。启动脚本只管理自身 PID，端口被其他进程占用时拒绝启动，不杀未知进程。日志在 `logs/local_model_server.log` 和 `.err`；`status` 区分已就绪、进程存在但未就绪、未运行，启动失败返回非零。embedding 自动选设备，reranker 默认 CPU，避免小显存同时装两模型；`RERANKER_DEVICE` 可覆盖重排设备，`RERANKER_CPU_THREADS` 可调整其 CPU 线程数。
+
+项目 `devctl.bat start` 不会启动上述宿主机模型进程。Docker Desktop 内通过 `http://host.docker.internal:8088` 调宿主服务，不能在容器内填写 `127.0.0.1:8088`。该主机名指 Docker 宿主机，不指开发者电脑；迁到另一台服务器后不能照搬来访问原电脑。无本地模型需求的服务器无需启动本地模型进程。
+
+管理端登记本地 Provider 时选择私网范围（仅供可信服务），嵌入使用 OpenAI 兼容协议，重排使用本服务支持的 DashScope 协议；登记模型后分别绑定 `embedding` / `rerank`。本地费用方式为 `local`，仍记录调用与估算 token。
+
+迁到服务器改用云端时，先登记云端 Provider、凭据、模型及有效价格，再按[模型切换流程](../governance/model-provider-runtime.md#5-本地与云端嵌入模型切换)预检、确认、重建。相同1024维不足以复用另一模型的旧向量；单独换 reranker 不重建。重建期间暂停向量检索，任务失败保留旧向量并维持待重建状态，处理任务错误后恢复同任务或重新提交。不要手改索引为 ready、手写 SQL 重嵌或将旧向量认领为新模型产物。
+
+切换模型是注册表配置操作，不需要为每次换模型重建镜像。代码变更才从对应任务工作树执行 `devctl.bat rebuild`；依赖文件不变时复用 Docker 层缓存，创建工作树本身不会下载容器依赖。重建共享栈前保留既有数据卷、挂载与运行参数。
 
 ## Docker Compose 与排障
 

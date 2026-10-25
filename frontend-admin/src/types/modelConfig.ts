@@ -518,7 +518,7 @@ export const ROLE_GROUPS: RoleGroup[] = [
   {
     id: 'retrieve',
     label: '检索链路',
-    hint: '向量化与重排，与向量索引的语义空间强绑定',
+    hint: '向量化需匹配索引语义空间；重排独立对文本候选评分',
     roles: ['embedding', 'rerank'],
   },
   {

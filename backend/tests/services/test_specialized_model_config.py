@@ -110,6 +110,7 @@ async def test_successful_specialized_config_encrypts_key_and_returns_no_secret(
             summary="专项模型调用通过",
             detail="已收到有效响应",
             elapsed_ms=87,
+            embedding_dimension=1024 if kwargs["role"] == "embedding" else None,
         )
 
     monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))

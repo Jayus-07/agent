@@ -6,6 +6,9 @@ const apiMock = vi.hoisted(() => ({
   saveModelRole: vi.fn(),
   saveModelRolePolicy: vi.fn(),
   checkModelHealth: vi.fn(),
+  previewEmbeddingChange: vi.fn(),
+  rebuildEmbeddingIndex: vi.fn(),
+  getEmbeddingRebuildStatus: vi.fn().mockResolvedValue({ taskId: null }),
 }))
 const toastMock = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }))
 
@@ -105,11 +108,65 @@ afterEach(() => {
   apiMock.saveModelRole.mockReset()
   apiMock.saveModelRolePolicy.mockReset()
   apiMock.checkModelHealth.mockReset()
+  apiMock.previewEmbeddingChange.mockReset()
+  apiMock.rebuildEmbeddingIndex.mockReset()
   toastMock.success.mockReset()
   toastMock.error.mockReset()
 })
 
 describe('RoleBindingsTab 模型目录选择', () => {
+  it('普通管理员不能修改全平台嵌入模型', () => {
+    const container = mount({ roles: [roleRow({ role: 'embedding', requiresReindex: true })] })
+    expect(buttonByText(container, '修改').disabled).toBe(true)
+    expect(container.textContent).not.toContain('检查并重建全部向量')
+  })
+
+  it('预检失败时不保存模型，也不打开确认框', async () => {
+    apiMock.previewEmbeddingChange.mockRejectedValueOnce(new Error('输出维度不匹配'))
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({
+      role: 'embedding', requiresReindex: true,
+      effectiveModel: 'qwen3.7-text-embedding', literalValue: 'qwen3.7-text-embedding',
+    })] })
+    await startEditing(container)
+    await act(async () => { buttonByText(container, '保存').click(); await Promise.resolve() })
+    expect(apiMock.saveModelRole).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+    expect(toastMock.error).toHaveBeenCalledWith('输出维度不匹配')
+  })
+
+  it('切换须先显示真实范围和费用，确认后携带旧配置与指纹保存', async () => {
+    const preview = { modelName: 'qwen3.7-text-embedding', currentModel: 'old',
+      fingerprint: 'configuration-version', dimension: 1024, vectors: 3006,
+      collections: [{ collection: 'chroma', vectors: 3006 }], billing: 'metered', requiresRebuild: true }
+    apiMock.previewEmbeddingChange.mockResolvedValueOnce(preview)
+    apiMock.saveModelRole.mockResolvedValueOnce({})
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({
+      role: 'embedding', requiresReindex: true, effectiveModel: 'old', literalValue: 'old',
+    })] })
+    await startEditing(container)
+    choose(container, 'role-model-select-embedding', 'qwen3.7-text-embedding')
+    await act(async () => { buttonByText(container, '保存').click(); await Promise.resolve() })
+    expect(apiMock.saveModelRole).not.toHaveBeenCalled()
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('3006')
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('模型调用费用')
+    await act(async () => { buttonByText(container, '保存配置').click(); await Promise.resolve() })
+    expect(apiMock.saveModelRole).toHaveBeenCalledWith('embedding', 'qwen3.7-text-embedding', preview)
+  })
+
+  it('重建只有二次确认后才入队，并展示任务状态', async () => {
+    apiMock.previewEmbeddingChange.mockResolvedValueOnce({ modelName: 'embedding',
+      currentModel: 'embedding', fingerprint: 'fp', dimension: 1024, vectors: 10,
+      collections: [{ collection: 'chroma', vectors: 10 }], billing: 'local', requiresRebuild: true })
+    apiMock.rebuildEmbeddingIndex.mockResolvedValueOnce({ taskId: 'job-1', status: 'PENDING' })
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({ role: 'embedding' })] })
+    await act(async () => { buttonByText(container, '检查并重建全部向量').click(); await Promise.resolve() })
+    expect(apiMock.rebuildEmbeddingIndex).not.toHaveBeenCalled()
+    await act(async () => { buttonByText(container, '确认费用并开始重建').click(); await Promise.resolve() })
+    expect(apiMock.rebuildEmbeddingIndex).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('等待执行')
+    expect(container.querySelector('a[href="/tasks"]')).toBeTruthy()
+  })
+
   it('专项角色编辑使用匹配用途的下拉框，不允许自由输入模型名', async () => {
     const container = mount()
     await startEditing(container)

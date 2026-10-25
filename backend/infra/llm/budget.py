@@ -118,12 +118,20 @@ class RequestBudget:
         """在实际模型调用前预占一次调用额度。"""
         if kind not in _VALID_CALL_KINDS:
             raise ValueError(f"非法预算调用类型: {kind}")
+        from backend.infra.llm.models import get_model_billing, lookup_model_entry
+
+        # 本地推理仍受调用/Token 限额约束，但不预占不存在的云端账单。
+        local_inference = (
+            bool(model_name) and lookup_model_entry(model_name) is not None
+            and get_model_billing(model_name) == "local"
+        )
         with self._lock:
             reason = self._exceeded_reason(kind)
             if reason and self.mode == "enforce":
                 _record_budget_request(self.mode, "rejected")
                 raise RequestBudgetExceeded(reason)
-            if self.mode == "enforce" and model_name and self.quota_store is not None:
+            if (self.mode == "enforce" and model_name and self.quota_store is not None
+                    and not local_inference):
                 from backend.infra.llm.pricing import (
                     PriceConflict,
                     get_current_price_table,
@@ -182,6 +190,7 @@ class RequestBudget:
                 and self.quota_store is not None
                 and self.user_id
                 and self.tenant_id
+                and not local_inference
             ):
                 try:
                     # 已结算费用已经计入 PG 的 used_cny，不得在下一次调用时
@@ -207,6 +216,7 @@ class RequestBudget:
                 self.mode == "enforce"
                 and self.quota_store is None
                 and self.user_id
+                and not local_inference
             ):
                 # TD-05 可诊断化：enforce + 有用户但 quota_store 为空 =
                 # bind 时 tenant_id 缺失（网关未注入租户头），本请求全部

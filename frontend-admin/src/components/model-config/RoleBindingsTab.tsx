@@ -2,8 +2,8 @@
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, CheckCircle2, CircleAlert, Edit3, FlaskConical, Save, SlidersHorizontal, X } from 'lucide-react'
-import type { ModelCatalogEntry } from '@/api/modelConfig'
-import { checkModelHealth, saveModelRole, saveModelRolePolicy } from '@/api/modelConfig'
+import type { EmbeddingPreview, EmbeddingRebuildStatus, ModelCatalogEntry } from '@/api/modelConfig'
+import { checkModelHealth, getEmbeddingRebuildStatus, previewEmbeddingChange, rebuildEmbeddingIndex, saveModelRole, saveModelRolePolicy } from '@/api/modelConfig'
 import type {
   FailurePolicy,
   ModelHealthStatus,
@@ -33,6 +33,7 @@ interface Props {
   roles: RoleRow[]
   catalog: ModelCatalogEntry[]
   canAdmin: boolean
+  canManageEmbedding?: boolean
   onSaved: () => Promise<unknown>
   /** B3：从供应商页角色徽标跳转而来 —— 高亮该角色行并滚动定位，直到用户离开。 */
   highlightRole?: string | null
@@ -143,12 +144,15 @@ function needsAttention(row: RoleRow, verdict: SelectableVerdict): boolean {
   return !health || health.status !== 'healthy'
 }
 
-export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, highlightRole }: Props) {
+export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmbedding = false, onSaved, highlightRole }: Props) {
   const toast = useToast()
   const [editing, setEditing] = useState<string | null>(null)
   const [value, setValue] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmRow, setConfirmRow] = useState<RoleRow | null>(null)
+  const [embeddingPreview, setEmbeddingPreview] = useState<EmbeddingPreview | null>(null)
+  const [confirmMode, setConfirmMode] = useState<'switch' | 'rebuild'>('switch')
+  const [rebuildStatus, setRebuildStatus] = useState<EmbeddingRebuildStatus | null>(null)
   const [onlyProblem, setOnlyProblem] = useState(false)
   // 手动健康探测：同一时刻只允许一个角色行在探（探测本身是同步极低成本调用）
   const [checkingHealthRole, setCheckingHealthRole] = useState<string | null>(null)
@@ -162,6 +166,28 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   })
   const byName = useMemo(() => new Map(catalog.map((item) => [item.name, item])), [catalog])
   const byRole = useMemo(() => new Map(roles.map((item) => [item.role, item])), [roles])
+
+  useEffect(() => {
+    if (!canManageEmbedding) return
+    let disposed = false
+    void getEmbeddingRebuildStatus().then((result) => {
+      if (!disposed) setRebuildStatus(result)
+    }).catch(() => { if (!disposed) setRebuildStatus({ taskId: null, error: '重建状态暂不可用' }) })
+    return () => { disposed = true }
+  }, [canManageEmbedding])
+
+  useEffect(() => {
+    if (!canManageEmbedding || !['PENDING', 'RUNNING'].includes(rebuildStatus?.status ?? '')) return
+    let disposed = false
+    const timer = setInterval(() => {
+      void getEmbeddingRebuildStatus().then((result) => {
+        if (disposed) return
+        setRebuildStatus(result)
+        if (result.status === 'SUCCESS') void onSaved()
+      }).catch(() => { if (!disposed) setRebuildStatus((current) => current ? { ...current, error: '状态查询失败，请刷新重试' } : current) })
+    }, 4000)
+    return () => { disposed = true; clearInterval(timer) }
+  }, [canManageEmbedding, rebuildStatus?.status, onSaved])
 
   // 高亮定位：等表格渲染完（roles 数据到达后）再滚动，避免对空 DOM 查询。
   useEffect(() => {
@@ -179,6 +205,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   )
 
   function begin(row: RoleRow) {
+    setConfirmMode('switch')
+    setEmbeddingPreview(null)
     setEditing(row.role)
     setValue(row.effectiveModel)
   }
@@ -186,6 +214,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   function cancel() {
     setEditing(null)
     setValue('')
+    setConfirmMode('switch')
+    setEmbeddingPreview(null)
   }
 
   /** 手动触发当前绑定模型的健康探测（beat 自动扫描之外的手动兜底）。
@@ -254,11 +284,23 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
   async function persist(row: RoleRow) {
     setBusy(true)
     try {
-      await saveModelRole(row.role, value.trim())
-      if (row.requiresReindex) {
-        toast.success('已保存；重建索引时会读取新模型，当前索引不会自动切换')
+      if (row.role === 'embedding' && confirmMode === 'rebuild' && embeddingPreview) {
+        const result = await rebuildEmbeddingIndex(embeddingPreview)
+        setRebuildStatus(result)
+        toast.success('重建任务已提交，可在任务中心查看进度和执行记录')
       } else {
-        toast.success('模型角色已保存，下一次对应链路调用生效')
+        if (row.role === 'embedding') {
+          await saveModelRole(row.role, value.trim(), embeddingPreview ?? undefined)
+        } else {
+          await saveModelRole(row.role, value.trim())
+        }
+        if (row.requiresReindex) {
+          toast.success(embeddingPreview?.requiresRebuild
+            ? '模型已切换，检索已暂停；请重建全部向量后恢复使用'
+            : '模型兼容性检查通过，配置已保存')
+        } else {
+          toast.success('模型角色已保存，下一次对应链路调用生效')
+        }
       }
       cancel()
       setConfirmRow(null)
@@ -270,7 +312,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
     }
   }
 
-  function submit(row: RoleRow) {
+  async function submit(row: RoleRow) {
     const next = value.trim()
     if (!next && row.role !== 'eval_gen') {
       toast.error('模型名不能为空')
@@ -283,11 +325,32 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
       return
     }
     // 向量化模型换值会换掉语义空间，必须走带代价说明的确认弹窗（§6：不用 window.confirm）
-    if (row.requiresReindex && next !== row.effectiveModel) {
-      setConfirmRow(row)
+    if (row.requiresReindex) {
+      setBusy(true)
+      try {
+        const preview = await previewEmbeddingChange(next)
+        setEmbeddingPreview(preview)
+        setConfirmMode('switch')
+        setConfirmRow(row)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '模型兼容性检查失败，未切换')
+      } finally { setBusy(false) }
       return
     }
     void persist(row)
+  }
+
+  async function beginRebuild(row: RoleRow) {
+    setBusy(true)
+    try {
+      const preview = await previewEmbeddingChange(row.effectiveModel)
+      setValue(row.effectiveModel)
+      setEmbeddingPreview(preview)
+      setConfirmMode('rebuild')
+      setConfirmRow(row)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '重建检查失败，未提交任务')
+    } finally { setBusy(false) }
   }
 
   const groups = useMemo(() => {
@@ -324,6 +387,20 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
 
   return (
     <section className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-card">
+      {canManageEmbedding && embeddingRow && (
+        <div className="border-b border-slate-100 px-4 py-3 text-xs">
+          <button type="button" disabled={busy || ['PENDING', 'RUNNING', 'PAUSED'].includes(rebuildStatus?.status ?? '')}
+            onClick={() => void beginRebuild(embeddingRow)} className="rounded border px-3 py-2 disabled:opacity-50">
+            检查并重建全部向量
+          </button>
+          <p className="mt-2 text-text-muted">检查会真实调用模型，云端可能产生少量费用。同为 1024 维也不代表旧向量可以复用。仅更换重排模型无需重建。</p>
+          {rebuildStatus?.taskId && <p className="mt-2" role="status">
+            重建任务：{rebuildStatus.progress || ({ PENDING: '等待执行', RUNNING: '正在重建', SUCCESS: '重建完成', FAILED: '重建失败', PAUSED: '已暂停', CANCELLED: '已取消' } as Record<string, string>)[rebuildStatus.status ?? ''] || '请查看任务中心'}
+            {' · '}<a href="/tasks" className="underline">打开任务中心</a>
+          </p>}
+          {rebuildStatus?.error && <p className="mt-2 text-red-700">{rebuildStatus.error}</p>}
+        </div>
+      )}
       {badIndexes.length > 0 && (
         <div
           data-testid="index-compat-warning"
@@ -541,7 +618,9 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                                   data-testid={`role-health-local-hint-${row.role}`}
                                 >
                                   该模型是本地推理服务：请确认对应服务进程已在服务器上启动；
-                                  或点「修改」临时改绑云端模型，服务恢复后切回。
+                                  {row.role === 'embedding'
+                                    ? '如需改用云端，请先预检并确认全量重建；切回本地同样需要检查索引兼容性。'
+                                    : '也可以通过「修改」选择可用的云端模型。'}
                                 </div>
                               )}
                           </div>
@@ -635,6 +714,8 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                             <button
                               type="button"
                               onClick={() => begin(row)}
+                              disabled={row.role === 'embedding' && !canManageEmbedding}
+                              title={row.role === 'embedding' && !canManageEmbedding ? '全平台向量模型切换需要超级管理员权限' : undefined}
                               aria-label={`修改 ${roleLabel(row.role)}`}
                               className="flex items-center gap-1 rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5"
                             >
@@ -678,20 +759,28 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
           <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl">
             <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
               <AlertTriangle size={15} className="text-amber-600" />
-              <div className="text-sm font-medium text-text-primary">修改{roleLabel(confirmRow.role)}</div>
+              <div className="text-sm font-medium text-text-primary">{confirmMode === 'rebuild' ? '重建全部向量' : `修改${roleLabel(confirmRow.role)}`}</div>
             </div>
             <div className="space-y-3 px-5 py-4 text-xs text-text-secondary">
-              <p>
+              {embeddingPreview && <div className="rounded border border-amber-200 bg-amber-50 p-3">
+                <p>影响 {embeddingPreview.collections.length} 个索引集合，共 {embeddingPreview.vectors} 条向量；已实测输出 {embeddingPreview.dimension} 维。</p>
+                <p className="mt-2">复用已入库文本，不重复 OCR 和解析。{embeddingPreview.billing === 'local'
+                  ? '本地推理仍记录使用量和执行耗时。'
+                  : '会产生模型调用费用，金额尚未估算，以实际用量和有效价格结算。'}</p>
+                {(embeddingPreview.requiresRebuild || confirmMode === 'rebuild') && <p className="mt-2">重建完成前暂停检索；失败保留旧向量，并继续显示待重建，不会把部分完成当作成功。</p>}
+              </div>}
+              {embeddingPreview?.requiresRebuild ? <p>
                 已有索引与查询向量不在同一空间，<strong className="text-red-700">检索结果会不可用</strong>，
                 必须全量重建索引（耗时较长）。
-              </p>
+              </p> : confirmMode === 'rebuild' ? <p>本次将重新生成全部向量，期间暂停检索，成功后统一发布。</p>
+                : <p>当前没有不兼容的旧向量，保存后无需重建。兼容性检查和模型调用均有执行记录。</p>}
               <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-[11px] text-text-primary">
                 {confirmRow.effectiveModel || '—'} → {value.trim() || '（空）'}
               </div>
-              <p className="text-[11px] text-text-muted">
+              {(embeddingPreview?.requiresRebuild || confirmMode === 'rebuild') && <p className="text-[11px] text-text-muted">
                 不同向量模型通常不共享同一语义空间。保存后现有向量索引将进入「待重建」状态，
                 完成重建前系统会拒绝按新模型查询旧索引（INDEX_EMBEDDING_MISMATCH），不会静默降级。
-              </p>
+              </p>}
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
               <button
@@ -708,7 +797,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, onSaved, hig
                 disabled={busy}
                 className="rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"
               >
-                {busy ? '保存中…' : '保存配置'}
+                {busy ? '处理中…' : confirmMode === 'rebuild' ? '确认费用并开始重建' : '保存配置'}
               </button>
             </div>
           </div>

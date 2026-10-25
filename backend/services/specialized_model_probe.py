@@ -26,9 +26,10 @@ class SpecializedProbeResult:
     summary: str
     detail: str
     elapsed_ms: int
+    embedding_dimension: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "role": self.role,
             "adapter": self.adapter,
             "ok": self.ok,
@@ -37,6 +38,9 @@ class SpecializedProbeResult:
             "detail": self.detail,
             "elapsedMs": self.elapsed_ms,
         }
+        if self.embedding_dimension is not None:
+            result["embeddingDimension"] = self.embedding_dimension
+        return result
 
 
 def _clip(value: Any) -> str:
@@ -101,6 +105,16 @@ async def probe_specialized(
         elapsed_ms = int((time.monotonic() - started) * 1000)
         if 200 <= response.status_code < 300 and isinstance(payload, Mapping):
             if protocol_adapter.response_is_success(payload):
+                dimension = None
+                if role == "embedding":
+                    from backend.rag.indexing.embedding_migration import validate_vectors
+
+                    data = payload.get("data") or []
+                    vectors = [item.get("embedding") for item in data]
+                    if not vectors or not isinstance(vectors[0], list) or not vectors[0]:
+                        raise ValueError("模型未返回有效向量")
+                    dimension = len(vectors[0])
+                    validate_vectors(vectors, 1, dimension)
                 return SpecializedProbeResult(
                     role=role,
                     adapter=adapter,
@@ -109,6 +123,7 @@ async def probe_specialized(
                     summary="专项模型调用通过",
                     detail="已收到有效响应",
                     elapsed_ms=elapsed_ms,
+                    embedding_dimension=dimension,
                 )
         detail = _safe_error(payload, api_key)
         return SpecializedProbeResult(

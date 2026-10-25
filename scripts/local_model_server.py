@@ -14,6 +14,7 @@ host.docker.internal:8088 访问），与 dev-local-models.bat start/stop 配套
 from __future__ import annotations
 
 import glob
+from contextlib import asynccontextmanager
 import os
 import sys
 import threading
@@ -23,7 +24,21 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any
 
-app = FastAPI(title="local-model-server", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """完成真实推理后才接收请求；启动失败交由服务管理脚本报告。"""
+    embeddings(EmbeddingsRequest(input=["模型启动预热"]))
+    rerank(RerankRequest(input={
+        "query": "模型启动预热", "documents": ["模型启动预热"],
+    }))
+    _log("双模型推理预热完成")
+    yield
+
+
+app = FastAPI(
+    title="local-model-server", docs_url=None, redoc_url=None, lifespan=_lifespan,
+)
 
 _LOCK = threading.Lock()
 _ST: dict[str, Any] = {}
@@ -83,6 +98,14 @@ def _get_embedder():
         return _ST["embedder"]
 
 
+def _reranker_device() -> str:
+    """reranker 设备：默认 CPU（RERANKER_DEVICE 可覆盖）。
+
+    将有限显存留给 embedding；实际延迟随候选数量和文本长度变化。
+    """
+    return os.getenv("RERANKER_DEVICE", "cpu")
+
+
 def _get_reranker():
     """懒加载 bge-reranker-v2-m3（交叉编码器，logit → sigmoid 归一）。"""
     with _LOCK:
@@ -90,11 +113,16 @@ def _get_reranker():
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             path = _reranker_path()
+            device = _reranker_device()
+            if device == "cpu":
+                import torch
+
+                torch.set_num_threads(int(os.getenv("RERANKER_CPU_THREADS", "4")))
             t0 = time.time()
-            _log(f"加载 rerank 模型: {path}")
+            _log(f"加载 rerank 模型: {path} (device={device})")
             tok = AutoTokenizer.from_pretrained(path)
             model = AutoModelForSequenceClassification.from_pretrained(path)
-            model.to(_device())
+            model.to(device)
             model.eval()
             _ST["reranker_tok"] = tok
             _ST["reranker"] = model

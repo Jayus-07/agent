@@ -33,6 +33,7 @@ export default function ModelConfigPage() {
   const queryClient = useQueryClient()
   const canEditor = atLeast('editor')
   const canAdmin = atLeast('admin')
+  const canManageEmbedding = atLeast('super_admin')
   const [tab, setTab] = useState<Tab>('roles')
   // 「去改绑」来源角色：供应商页徽标 → 角色绑定页高亮定位（B3）。
   const [highlightRole, setHighlightRole] = useState<string | null>(null)
@@ -178,7 +179,7 @@ export default function ModelConfigPage() {
         <div className="space-y-5">
           {/* 运行时链路：按角色绑定动态生成的问答/入库模型链（治理 2026-09-22） */}
           <RuntimeChainCard roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} />
-          <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} highlightRole={highlightRole} onSaved={refreshAll} />
+          <RoleBindingsTab roles={roles.data?.items ?? []} catalog={catalog.data?.models ?? []} canAdmin={canAdmin} canManageEmbedding={canManageEmbedding} highlightRole={highlightRole} onSaved={refreshAll} />
         </div>
       )
     }

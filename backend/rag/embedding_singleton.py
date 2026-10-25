@@ -126,6 +126,9 @@ def _resolve_cloud_embedding_config() -> dict[str, Any]:
         model_name=binding.model_name,
     )
     dimensions = binding.options.get("dimensions")
+    from backend.infra.llm import models as models_mod
+
+    provider_entry = models_mod.get_provider_entry(binding.provider_id) or {}
     return {
         # 登记名/上游名拆分（2026-09-22）：发给厂商 API 的 model 用 upstream。
         "model": binding.upstream_name or binding.model_name,
@@ -133,12 +136,13 @@ def _resolve_cloud_embedding_config() -> dict[str, Any]:
         "base_url": binding.base_url,
         "dimensions": int(dimensions) if dimensions is not None else None,
         "provider": binding.provider_id,
+        "network_scope": provider_entry.get("network_scope", "public"),
     }
 
 
-def _get_cloud_embedding() -> Embeddings:
+def _get_cloud_embedding(runtime_config: dict[str, Any] | None = None) -> Embeddings:
     """获取 Cloud Embedding (DashScope OpenAI 兼容)."""
-    runtime_config = _resolve_cloud_embedding_config()
+    runtime_config = runtime_config or _resolve_cloud_embedding_config()
     if not runtime_config["api_key"]:
         raise RuntimeError(
             "数据库未配置可用的 embedding 供应商 API Key，请先在管理端测试并保存"
@@ -174,6 +178,12 @@ def _get_cloud_embedding() -> Embeddings:
     }
     if runtime_config["dimensions"] is not None:
         embedding_kwargs["dimensions"] = runtime_config["dimensions"]
+    if runtime_config.get("network_scope") == "private":
+        import httpx
+
+        # 已明确登记的内网服务直连，避免继承宿主机公网代理后误转发。
+        embedding_kwargs["http_client"] = httpx.Client(trust_env=False)
+        embedding_kwargs["http_async_client"] = httpx.AsyncClient(trust_env=False)
     embedding = OpenAIEmbeddings(**embedding_kwargs)
     
     logger.info(
@@ -529,10 +539,11 @@ _PROCESS_EMBED_CACHE: "OrderedDict[str, list[float]]" = OrderedDict()
 class _TrackedEmbedding(Embeddings):
     """拦截 embed_documents / embed_query，记录 token 用量到 SQLite。"""
 
-    def __init__(self, inner: Embeddings, tracker):
+    def __init__(self, inner: Embeddings, tracker, *, fixed_binding=None):
         self._inner = inner
         self._tracker = tracker
         self._refresh_lock = threading.RLock()
+        self._fixed_binding = fixed_binding
         self._config_signature = _embedding_runtime_signature()
         cloud_enabled = _embedding_is_cloud()
         self._model_name = _metered_embedding_model() if cloud_enabled else EMBEDDING_MODEL_PATH
@@ -550,9 +561,32 @@ class _TrackedEmbedding(Embeddings):
         else:
             from backend.config.rag import EMBED_BATCH_SIZE
             self.embed_batch_size = max(1, EMBED_BATCH_SIZE)
+        if fixed_binding is not None:
+            self._model_name = fixed_binding.model_name
+            self._provider = "cloud"
+            self._provider_id = fixed_binding.provider_id
+            self._config_signature = (
+                "fixed", specialized_mod.embedding_fingerprint(fixed_binding),
+            )
+        self._set_index_fingerprint()
+
+    def _set_index_fingerprint(self) -> None:
+        binding = self._fixed_binding or specialized_mod.resolve_binding("embedding")
+        self._index_fingerprint = (
+            specialized_mod.embedding_fingerprint(binding)
+            if binding and binding.model_name == self._model_name else ""
+        )
+
+    def close(self) -> None:
+        """短生命周期的预检/迁移客户端用完关闭，单例调用方不调用此方法。"""
+        client = getattr(self._inner, "http_client", None)
+        if self._fixed_binding is not None and client is not None:
+            client.close()
 
     def _refresh_if_changed(self) -> None:
         """配置轮询后，在下一次调用前替换旧的出站 embedding 客户端。"""
+        if self._fixed_binding is not None:
+            return
         signature = _embedding_runtime_signature()
         if signature == self._config_signature:
             return
@@ -573,6 +607,7 @@ class _TrackedEmbedding(Embeddings):
             else:
                 from backend.config.rag import EMBED_BATCH_SIZE
                 self.embed_batch_size = max(1, EMBED_BATCH_SIZE)
+            self._set_index_fingerprint()
             logger.info(
                 "[Embedding] 检测到配置变化，已热切换客户端 (model=%s)",
                 self._model_name,
@@ -995,6 +1030,33 @@ def _init_tracker():
             backend=EMBEDDING_PROVIDER,
         )
     return _tracker
+
+
+def get_registered_embedding(model_name: str) -> Embeddings:
+    """迁移/预检复用正式客户端和用量链路，本次配置固定不随角色热切换。"""
+    from backend.tools.url_guard import assert_url_allowed
+    from backend.infra.llm import models as models_mod
+
+    binding = specialized_mod.registered_binding("embedding", model_name)
+    provider = models_mod.get_provider_entry(binding.provider_id) or {}
+    assert_url_allowed(
+        binding.base_url, allow_private=provider.get("network_scope") == "private",
+    )
+    credentials = credentials_mod.resolve_credentials(
+        binding.provider_id, model_name=model_name,
+    )
+    inner = _get_cloud_embedding({
+        "model": binding.upstream_name or model_name,
+        "api_key": credentials.api_key or "", "base_url": binding.base_url,
+        "dimensions": binding.options.get("dimensions"),
+        "provider": binding.provider_id,
+        "network_scope": provider.get("network_scope", "public"),
+    })
+    tracker = create_tracker_for_embedding(
+        log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
+        model_name=model_name, backend="cloud",
+    )
+    return _TrackedEmbedding(inner, tracker, fixed_binding=binding)
 
 
 def get_embedding() -> Embeddings:

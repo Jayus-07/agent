@@ -63,3 +63,11 @@ flowchart TD
 | AT-10 | Trace/告警能关联 task_id、execution_id、队列/重试，记录清洗敏感载荷 |
 
 验证先使用隔离任务/队列及假 Provider 的副作用测试，再按风险执行真实 Worker E2E；未接本机 Docker、Redis、PG 的项保持 NOT VERIFIED。
+
+## 全库嵌入重建任务
+
+`tasks.rebuild_embeddings` 归属既有 `rag_index` workflow/队列；TaskRecord 使用 `biz_type=embedding_rebuild`、`biz_id=global`，这是超级管理员发起的平台级维护，不是租户自行修改全库。持久输入 `embedding_rebuild_kwargs` 保存目标模型及指纹，resume/recovery 走 `redispatch_index_task`，不另建队列或状态表。建任务或入队失败明确失败，不降级为无 TaskState 执行。
+
+同一幂等键定位原任务，即使已有更新任务也不重复提交；同目标已有活动任务则搭车，异目标冲突。每批检查租约与配置，发布时持任务行锁及向量事务锁核对完整快照；已成功批次可在同任务恢复时复用。发布提交凭证与向量同事务写入候选命名空间的索引元数据，覆盖发布后、任务终态前进程退出的窗口。
+
+当前重建沿用索引原子节点边界：暂停/取消在整个节点开始前或完成后生效，不保证每批立即中断，也不回滚已发布向量。配置切换后检索暂停；部分失败不会恢复 ready。阶段进度是已处理行数，不等同任务成功；只有全库校验发布及正式任务终态才能确认完成。

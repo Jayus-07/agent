@@ -9,7 +9,7 @@
 | **Provider Driver**（代码） | OpenAI 兼容/专用协议，流式、Embedding、rerank、超时和 Tool Calling 适配 | `backend/infra/llm/providers/`、`backend/infra/llm/models.py` |
 | **Provider Instance**（数据库） | 实例 ID、driver、base_url、网络范围、服务能力、是否启用、加密凭据 | `backend/infra/llm/registry_store.py`、`backend/services/model_config.py`、供应商表/迁移 |
 | **Model**（数据库） | 模型名称、provider_id、model_kind、能力、上下文窗口、输入输出限制、价格关联 | 模型注册表 DB、`backend/infra/llm/models.py` |
-| **Model Role**（数据库覆盖 + 代码定义） | 例如已注册的 `main`、`doc`、`embedding` 等 role 对应模型及运行策略，Embedding/rerank 独立匹配索引 | `backend/config/model_roles.py`、DB 绑定、`registry_store.py` |
+| **Model Role**（数据库覆盖 + 代码定义） | 已注册角色对应模型及运行策略；Embedding 匹配索引身份，rerank 独立排序文本候选 | `backend/config/model_roles.py`、DB 绑定、`registry_store.py` |
 | **Secret / Runtime Snapshot** | 授权的密钥解密、热更新快照、失败时旧值保留及可观测来源 | `backend/infra/llm/credentials.py`、`registry_store.py` |
 
 **数据库是用户配置的持久事实源，代码定义的是合法角色、Provider 驱动及安全约束**，进程快照是热路径投影，不是另一套可任意改写的配置真相。代码默认值和角色继承是兼容/缺省语义，不可无审计地把未登记或无凭据的模型当作健康可用模型。
@@ -40,7 +40,7 @@ sequenceDiagram
 - **刷新失败**：当前 `registry_store` 表示 DB 抖动时保留旧快照而非清空；但**凭据解密失败、绑定不存在或模型未注册不能假成功/回退到不安全的环境密钥**。管理端应展示最后刷新版本、失败原因以及“旧快照仍有效”的区别。
 - **模型探测**：真实推理探测与“列出模型目录”是两个能力；后者失败不等于供应商不可用。OCR 角色不参加后台周期探测，避免把“凭据存在”误报为上游可调用；管理员可手动执行一次最小文本调用验证模型名与凭据。该探测可能产生少量供应商费用，且不代表图片识别质量已验证。供应商地址、协议、凭据或请求头变更后，旧人工探测标记为待重新验证。带密钥的草稿探测必须经过管理员闸、受限 URL/SSRF 策略、低速率及请求体白名单。
 - **手动健康探测限流**：按网关注入的操作者身份执行限制，复用 `/sys/providers` 每实例 10 次/滚动分钟的滑动窗口，并用现有 Redis Token Bucket 共享多实例的每人 10 次突发额度和 10 次/分钟补充速率。Token Bucket 不是严格的全局滚动分钟窗口。Redis 不可用时，滑动窗口仍限制当前实例；多实例合计配额无法保证为每人每分钟 10 次。
-- **模型能力**：Chat、Vision、Embedding、rerank、Tool Calling、结构化输出、流式 usage 能力按该模型真实声明和实测判定。Embedding/rerank 的模型变化要检查向量维度和索引版本；不兼容时拒用或经正式迁移重建，不能直接替换后保留旧向量。
+- **模型能力**：Chat、Vision、Embedding、rerank、Tool Calling、结构化输出、流式 usage 能力按该模型真实声明和实测判定。Embedding 变化检查向量维度及索引身份；同为 1024 维不代表相同语义空间。rerank 输入文本对、输出分数，无需匹配向量维度；单独切换 rerank 不重建向量，但质量、超时与阈值仍需验收。
 
 ## 3. 配置、凭据与模型调用红线
 
@@ -68,3 +68,20 @@ sequenceDiagram
 | MP-12 | 模型数据库不可用、备份/恢复及发布回滚有可核验证据 |
 
 验收先跑 isolated unit/DB integration，再用至少一个授权真实 Provider 测试（需要本机凭据时标 `BLOCKED`）。新增厂商不是给调用点新增第二份 Provider 配置表；应从实际运行 `ModelRole → Registered Model → Provider Instance → Driver` 链路证明。
+
+## 5. 本地与云端嵌入模型切换
+
+当前实现采用维护窗口：切换后暂停向量检索，全量重建发布成功后恢复。不是无停机双索引切流，也不会自动回退到另一个嵌入模型。
+
+1. 在既有供应商/模型注册表登记目标，云端按量模型先提供有效价格；本地 `billing=local` 声明仅超级管理员用户可写。
+2. 超级管理员在角色绑定选择目标，`POST /sys/model-roles/embedding/preview` 实际调用一条文本，校验输出数量、有限数值、非零及真实存储列维度，返回影响集合/向量数、配置指纹、费用方式及 Trace。预检本身也有用量，云端可能收费。
+3. 管理端展示后果并二次确认。`PUT /sys/model-roles/embedding` 必须携带 `expectedModel`、`expectedFingerprint`，涉及重建时须 `confirmRebuild=true`。后端会再预检，配置并发变化返回 409；维度不符返回 422，保存前拒绝。空库可直接启用，新旧 worker 仍受全局身份围栏保护。
+4. 点击“检查并重建全部向量”，经预检及确认后调用 `POST /sys/model-roles/embedding/rebuild`，携带模型、指纹、确认及 `Idempotency-Key`。任务复用 `rag_index` 队列、TaskState 租约、进度、Trace 和统一用量账本。`GET` 同路径读取最近一次全局任务；任务中心提供既有控制入口。
+5. 本次只重做向量，复用已入库文本及权限元数据，不重复 OCR、解析或切分；解析策略/内容改变另走文档 reindex。重建覆盖所有主向量集合（含文档、分块、路由及保留的历史集合），不只处理当前可见文档。
+6. 候选完整后，持任务租约与配置行锁，核对源文本/元数据快照，一次事务发布。失败保留旧向量且不解除待重建状态；不会把一个已完成的批次当作全库成功。同任务恢复复用已落库且快照一致的候选；同事务提交凭证防止“向量已提交、任务状态未成功”恢复时重复生成。供应商已收费但响应丢失的调用仍可能无法复用，不能宣称上游费用严格恰好一次。
+
+索引身份包括登记模型、供应商、上游名、地址、协议及模型参数的指纹，密钥轮换不改变向量空间。已有向量但无身份不自动认领；有旧身份但缺指纹的存量索引暂按模型名兼容，下次正式重建补齐指纹。正在使用的嵌入配置不能通过旧专项入口、原地改上游地址/模型或历史回滚绕过预检；需登记独立供应商/模型再切换。重建活动期间禁止再次切换嵌入角色。
+
+查询在调用模型前检查索引，获得查询向量后按其固定身份再次核对，并持共享事务锁完成向量 SQL；发布不能穿过第二次核对与检索之间。仅在请求开始时检查不足以覆盖模型调用期间的切换。
+
+`VECTOR_PG_DIM` 必须与真实 `vector(N)` 列一致；本功能拒绝维度不符，不会自动改列或丢弃数据。将来迁移不同维度属于独立存储迁移，需先备份、规划容量及恢复方式。

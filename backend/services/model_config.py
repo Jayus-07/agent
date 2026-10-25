@@ -497,7 +497,82 @@ def _worst_probe_grade(result: Mapping[str, Any]) -> str | None:
 class ModelConfigService:
     """模型配置治理的数据库服务，按请求创建并发安全的短事务。"""
 
-    async def update_role(self, role: str, model_name: str, operator: str) -> dict:
+    async def preview_embedding_change(self, model_name: str) -> dict:
+        """保存前真实检查输出维度，不修改角色、旧索引或凭据。"""
+        import asyncio
+
+        if not await registry_store.refresh_registry():
+            raise RuntimeError("模型注册表暂不可用，请稍后重试")
+        issue = _model_validation_issue(model_name, role="embedding")
+        if issue:
+            raise ValueError(issue)
+        from backend.infra.llm import specialized
+        from backend.rag.embedding_singleton import get_registered_embedding
+        from backend.rag.indexing.embedding_migration import (
+            storage_snapshot, validate_vectors,
+        )
+
+        info = await asyncio.to_thread(storage_snapshot)
+        billing_mode = models_mod.get_model_billing(model_name)
+        if billing_mode == "metered":
+            from backend.infra.llm.pricing import clear_price_cache, get_current_price_table
+
+            try:
+                clear_price_cache()
+                table = await asyncio.to_thread(
+                    get_current_price_table, model_name, "embedding",
+                )
+                table.require(model_name, "embedding", enforce=True)
+            except Exception as exc:
+                raise ValueError("云端嵌入模型缺少有效或一致的价格，请先配置价格") from exc
+        embedding = await asyncio.to_thread(get_registered_embedding, model_name)
+        binding = getattr(embedding, "_fixed_binding", None) or specialized.registered_binding(
+            "embedding", model_name,
+        )
+        fingerprint = specialized.embedding_fingerprint(binding)
+        from backend.core.request_context import get_tool_tenant_id, get_tool_user_id
+        from backend.infra.llm.budget import bind_request_budget
+        from backend.observability.tracer import trace_collector
+        import time
+
+        trace = trace_collector.start("嵌入模型切换预检", session_id="embedding-preview")
+        started = time.monotonic()
+        bind_request_budget(trace.id, user_id=get_tool_user_id(),
+                            tenant_id=get_tool_tenant_id())
+        try:
+            vectors = await asyncio.to_thread(
+                embedding.embed_documents, ["向量模型切换兼容性检查"],
+            )
+            validate_vectors(vectors, 1, info["dimension"])
+        except Exception:
+            trace.status = "error"
+            trace_collector.finish(trace, "预检失败，未改变模型和索引",
+                                   int((time.monotonic()-started)*1000), model_name)
+            raise
+        finally:
+            close = getattr(embedding, "close", None)
+            if callable(close):
+                close()
+        trace_collector.finish(trace, "预检通过",
+                               int((time.monotonic()-started)*1000), model_name)
+        current = model_roles.resolve_effective("embedding")["value"]
+        requires_rebuild = any(
+            item["status"] != "ready" or item["model"] != model_name
+            or (item["fingerprint"] and item["fingerprint"] != fingerprint)
+            for item in info["collections"]
+        ) or (info["vectors"] > 0 and current != model_name)
+        return {
+            **info, "modelName": model_name,
+            "currentModel": current, "fingerprint": fingerprint,
+            "billing": billing_mode,
+            "provider": binding.provider_id,
+            "requiresRebuild": requires_rebuild, "traceId": trace.id,
+        }
+
+    async def update_role(self, role: str, model_name: str, operator: str, *,
+                          confirm_rebuild: bool = False,
+                          expected_model: str | None = None,
+                          expected_fingerprint: str | None = None) -> dict:
         if role not in model_roles.MODEL_ROLES:
             raise ModelConfigNotFound(f"未注册的模型角色：{role}")
         model_name = (model_name or "").strip()
@@ -505,8 +580,32 @@ class ModelConfigService:
         if issue:
             raise ValueError(issue)
 
+        preview = None
+        if role == "embedding":
+            # 后端独立检查，直接调用 API 也不能绕过维度/确认边界。
+            preview = await self.preview_embedding_change(model_name)
+            if expected_model is None or preview["currentModel"] != expected_model:
+                raise ModelConfigConflict("嵌入模型配置已变化，请刷新后重新确认")
+            if expected_fingerprint != preview["fingerprint"]:
+                raise ModelConfigConflict("模型或供应商配置已变化，请重新检查")
+            if preview["requiresRebuild"] and not confirm_rebuild:
+                raise ModelConfigConflict("切换后检索将暂停，需确认全量重新生成向量")
+
         old_value: str | None = None
         async for session in get_session():
+            if role == "embedding":
+                from backend.models.task import TaskStatus
+                from backend.services import task_service
+
+                # 并发管理请求通过同一数据库事务锁串行，再校验旧绑定。
+                await session.execute(text(
+                    "SELECT pg_advisory_xact_lock(hashtext('embedding-role-change'))"
+                ))
+                latest = task_service.get_latest_biz_task("embedding_rebuild", "global")
+                if latest and latest.status in (
+                    TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.PAUSED,
+                ):
+                    raise ModelConfigConflict("向量重建任务尚未结束，暂不能再次切换模型")
             row = (
                 await session.execute(
                     text(
@@ -518,6 +617,20 @@ class ModelConfigService:
             ).first()
             if row is not None:
                 old_value = str(row[0])
+            if role == "embedding":
+                effective_old = old_value or model_roles.resolve_effective("embedding")["value"]
+                if effective_old != expected_model:
+                    raise ModelConfigConflict("另一位管理员已修改嵌入模型，请重新确认")
+                if preview["vectors"] == 0:
+                    from backend.rag.indexing.embedding_migration import activate_empty_space
+
+                    activate_empty_space(model_name, preview["fingerprint"],
+                                         preview["provider"], preview["dimension"])
+                elif preview["requiresRebuild"]:
+                    from backend.rag.indexing.embedding_migration import mark_required
+
+                    # 先关闭旧索引，配置写入失败最多造成明确暂停，不会混用向量。
+                    mark_required()
             await session.execute(
                 text(
                     "INSERT INTO llm_model_role_bindings "
@@ -547,25 +660,6 @@ class ModelConfigService:
                 # embedding 换模型 = 换语义空间：既有索引立即进入待重建状态
                 # （治理改造 2026-09-22）。查询门禁（pgvector_store）会据此
                 # 拒绝检索并返回 INDEX_EMBEDDING_MISMATCH，重建写回后恢复 ready。
-                if role == "embedding" and old_value:
-                    try:
-                        await session.execute(
-                            text(
-                                "UPDATE rag_index_meta SET status = 'rebuild_required', "
-                                "updated_at = now() WHERE status <> 'rebuilding'"
-                            )
-                        )
-                    except Exception as meta_exc:
-                        # 全新环境还没建过索引（表不存在）：无索引可标记，不算失败
-                        logger.debug(
-                            "[ModelConfig] rag_index_meta 标记跳过（可能尚未建索引）: %s",
-                            meta_exc,
-                        )
-                    logger.warning(
-                        "[ModelConfig] embedding 角色由 %s 切换为 %s，"
-                        "全部向量索引已标记 rebuild_required",
-                        old_value, model_name,
-                    )
             # get_session() 是 async generator；break 会提前结束迭代，无法执行
             # 生成器 yield 后的自动 commit。写入必须在 break 前显式提交。
             await session.commit()
@@ -788,20 +882,18 @@ class ModelConfigService:
 
     async def get_index_compat(self) -> list[dict]:
         """全部向量索引的 embedding 元数据（与运行时角色对比供前端展示）。"""
-        rows: list[Mapping[str, Any]] = []
-        async for session in get_session():
-            result = await session.execute(text(
-                "SELECT collection, embedding_provider, embedding_model, "
-                "embedding_dimension, index_version, built_at, updated_at, status "
-                "FROM rag_index_meta ORDER BY collection"
-            ))
-            rows = list(result.mappings())
-            break
+        import asyncio
+
+        from backend.rag.indexing.embedding_migration import read_index_metadata
+
+        rows = await asyncio.to_thread(read_index_metadata)
         runtime_model = str(
             model_roles.resolve_effective("embedding").get("value") or ""
         )
         out: list[dict] = []
         for r in rows:
+            if r["collection"] == "__embedding_control__" or "::cand:" in r["collection"]:
+                continue
             index_model = str(r["embedding_model"] or "")
             status = str(r["status"] or "ready")
             mismatch = bool(index_model) and index_model != runtime_model
@@ -862,6 +954,14 @@ class ModelConfigService:
         if not base_url:
             raise ValueError("供应商 Base URL 不能为空")
         provider_id = str(provider.get("providerId") or provider.get("provider_id") or "").strip()
+        if provider_id:
+            from backend.infra.llm.specialized import resolve_binding
+
+            active_binding = resolve_binding("embedding")
+            if active_binding and active_binding.provider_id == provider_id:
+                raise ModelConfigConflict(
+                    "该供应商正用于嵌入模型，旧专项入口不能覆盖其配置；请登记独立供应商后使用预检切换"
+                )
         api_key_input = str(provider.get("apiKey") or provider.get("api_key") or "").strip()
         if not provider_id and not api_key_input:
             raise ValueError("新供应商必须填写 API Key")
@@ -875,6 +975,17 @@ class ModelConfigService:
         raw_bindings = payload.get("bindings") or {}
         if not isinstance(raw_bindings, Mapping):
             raise ValueError("bindings 必须是对象")
+        embedding_storage = None
+        if "embedding" in raw_bindings:
+            import asyncio
+
+            from backend.rag.indexing.embedding_migration import storage_snapshot
+
+            embedding_storage = await asyncio.to_thread(storage_snapshot)
+            if embedding_storage["vectors"]:
+                raise ModelConfigConflict(
+                    "已有向量时不能通过旧专项接口切换嵌入配置，请使用角色绑定的预检、确认和重建流程"
+                )
         bindings: list[dict[str, Any]] = []
         for role in ("embedding", "rerank"):
             raw = raw_bindings.get(role)
@@ -905,6 +1016,13 @@ class ModelConfigService:
                 "tests": probe_results,
                 "summary": "专项模型测试未全部通过，配置未保存",
             }
+        if embedding_storage is not None:
+            dimension = next((item.get("embeddingDimension") for item in probe_results
+                              if item.get("role") == "embedding"), None)
+            if dimension != embedding_storage["dimension"]:
+                raise ValueError(
+                    f"嵌入模型输出 {dimension} 维，当前索引要求 {embedding_storage['dimension']} 维"
+                )
 
         network_scope = str(provider.get("networkScope") or "public").strip().lower()
         if network_scope not in {"public", "private"}:
@@ -1249,6 +1367,19 @@ class ModelConfigService:
             if row is None:
                 raise ModelConfigNotFound(f"未找到供应商：{provider_id}")
             old_row = dict(row)
+            from backend.infra.llm import specialized
+
+            active_embedding = specialized.resolve_binding("embedding")
+            if active_embedding and active_embedding.provider_id == provider_id:
+                if (base_url != str(old_row.get("base_url") or "")
+                        or driver != old_row.get("driver")
+                        or (upstream_model_name and upstream_model_name != (
+                            active_embedding.upstream_name or active_embedding.model_name))
+                        or (extra_body is not None and extra_body != (old_row.get("extra_body") or {}))):
+                    raise ModelConfigConflict(
+                        "正在使用的嵌入供应商不能直接修改推理地址或模型参数；"
+                        "请登记新供应商/模型，再经预检切换和重建"
+                    )
             # 2026-09-22 拍板：内置供应商特殊类退役 —— 供应商一律用户自管，
             # driver 不再因「代码目录登记过」而被锁定（ollama / specialized
             # 等特殊驱动的锁定仍在编辑抽屉的前置校验里）。
@@ -1506,6 +1637,14 @@ class ModelConfigService:
         existing_enabled = bool(existing.get("enabled")) if existing else False
         existing_upstream = str(existing.get("upstream_model_name") or "") if existing else ""
         requested_upstream = str(upstream_model_name or "")
+        current_embedding = model_roles.resolve_effective("embedding").get("value")
+        if existing and model_name == current_embedding and (
+            existing_provider_id != provider_id or effective_kind != "embedding"
+            or requested_upstream != existing_upstream
+        ):
+            raise ModelConfigConflict(
+                "正在使用的嵌入模型不能原名换供应商或修改上游模型；请登记新名称后经预检切换"
+            )
         # 复活过户：占用行已软删（enabled=false）→ 允许迁移到新供应商。
         # 场景：删除供应商后其模型名成为幽灵占用，用户在新供应商下重加同名模型。
         takeover_soft_deleted = bool(
@@ -2399,7 +2538,8 @@ class ModelConfigService:
             break
         return {"items": items}
 
-    async def rollback(self, history_id: int, operator: str) -> dict:
+    async def rollback(self, history_id: int, operator: str, *,
+                       allow_local_billing: bool = False) -> dict:
         result: dict[str, Any] = {}
         role_refresh: tuple[str, str] | None = None
         async for session in get_session():
@@ -2417,6 +2557,15 @@ class ModelConfigService:
             object_type = row["object_type"]
             key = row["object_key"]
             target = row["old_value"]
+            from backend.infra.llm import specialized
+
+            binding = specialized.resolve_binding("embedding")
+            if ((object_type == "role" and key == "embedding")
+                    or (binding and object_type in {"provider", "provider_network_scope"}
+                        and key == binding.provider_id)):
+                raise ModelConfigConflict(
+                    "嵌入配置不能绕过兼容性检查直接回滚，请在角色绑定中选择历史模型并确认重建"
+                )
             if object_type == "role":
                 if target is None:
                     await session.execute(
@@ -2450,6 +2599,8 @@ class ModelConfigService:
                     previous = json.loads(target or "{}")
                 except json.JSONDecodeError as exc:
                     raise ModelConfigConflict("供应商历史格式损坏，拒绝回滚") from exc
+                if previous.get("billing") == "local" and not allow_local_billing:
+                    raise ModelConfigConflict("恢复本地计费声明需要超级管理员权限")
                 await session.execute(
                     text(
                         "UPDATE llm_providers SET display_name = :display_name, "

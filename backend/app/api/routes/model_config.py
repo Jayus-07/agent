@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from backend.app.api.deps import (
     OperatorIdentity,
     require_admin_user,
+    require_super_admin_user,
     require_idempotency_key,
     require_user_actor,
 )
@@ -42,6 +43,29 @@ class ModelRoleUpdateRequest(BaseModel):
 
     # eval_gen 允许保存空值，表示明确停用评测生成；其它角色仍由 service 校验非空。
     model_name: str = Field(..., alias="modelName", min_length=0, max_length=256)
+    confirm_rebuild: bool = Field(False, alias="confirmRebuild")
+    expected_model: str | None = Field(None, alias="expectedModel", max_length=256)
+    expected_fingerprint: str | None = Field(
+        None, alias="expectedFingerprint", max_length=64,
+    )
+
+
+@router.post("/sys/model-roles/embedding/preview")
+async def preview_embedding_change(
+    body: ModelRoleUpdateRequest, request: Request,
+    operator=Depends(require_super_admin_user),
+):
+    """平台管理员显式预检；真实调用可能产生少量模型费用。"""
+    from backend.app.api.identity import require_principal
+    from backend.core.request_context import RequestContext
+
+    principal = require_principal(request)
+    RequestContext(session_id="embedding-preview", user_id=principal.user_id,
+                   tenant_id=principal.tenant_id).bind()
+    try:
+        return await _service(request).preview_embedding_change(body.model_name)
+    except Exception as exc:
+        raise _error(exc) from exc
 
 
 class RolePolicyUpdateRequest(BaseModel):
@@ -170,6 +194,14 @@ def _service(request: Request):
     return getattr(request.app.state, "model_config_service", None) or get_model_config_service()
 
 
+def _require_local_billing_permission(operator, billing: str) -> None:
+    """免云端按量费用的声明需要与价格治理相同的最高用户权限。"""
+    if billing == "local" and (
+        operator.role != "super_admin" or operator.kind != "user"
+    ):
+        raise _ModelConfigUserError(403, "本地计费声明仅限超级管理员，不能绕过云端费用治理")
+
+
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, ModelConfigNotFound):
         return _ModelConfigUserError(status_code=404, message=str(exc))
@@ -193,12 +225,59 @@ async def update_model_role(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict[str, Any]:
     require_idempotency_key(request)
+    if role == "embedding":
+        await require_super_admin_user(request)
+        from backend.app.api.identity import require_principal
+        from backend.core.request_context import RequestContext
+
+        principal = require_principal(request)
+        RequestContext(session_id="embedding-save", user_id=principal.user_id,
+                       tenant_id=principal.tenant_id).bind()
     try:
+        if role == "embedding":
+            return await _service(request).update_role(
+                role, body.model_name, operator.actor,
+                confirm_rebuild=body.confirm_rebuild,
+                expected_model=body.expected_model,
+                expected_fingerprint=body.expected_fingerprint,
+            )
         return await _service(request).update_role(
             role, body.model_name, operator.actor
         )
     except Exception as exc:  # 统一把存储异常转为可操作的 5xx
         raise _error(exc) from exc
+
+
+@router.post("/sys/model-roles/embedding/rebuild")
+async def rebuild_embedding_index(
+    body: ModelRoleUpdateRequest, request: Request,
+    operator=Depends(require_super_admin_user),
+):
+    """显式确认后创建正式任务；队列失败不会返回假成功。"""
+    from backend.app.api.identity import require_principal
+    from backend.rag.indexing.embedding_migration import submit_rebuild
+
+    request_key = require_idempotency_key(request)
+    principal = require_principal(request)
+    try:
+        return await submit_rebuild(
+            body.model_name, body.expected_fingerprint, body.confirm_rebuild,
+            principal.user_id, principal.tenant_id, request_key,
+        )
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
+@router.get("/sys/model-roles/embedding/rebuild")
+async def embedding_rebuild_status(operator=Depends(require_super_admin_user)):
+    from backend.services import task_service
+
+    record = task_service.get_latest_biz_task("embedding_rebuild", "global")
+    if record is None:
+        return {"taskId": None}
+    return {"taskId": record.id, "status": record.status.value,
+            "progress": record.progress, "output": record.output,
+            "error": record.error_message}
 
 
 @router.get("/sys/model-roles/{role}/policy")
@@ -243,6 +322,7 @@ async def update_provider(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict[str, Any]:
     require_idempotency_key(request)
+    _require_local_billing_permission(operator, body.billing)
     try:
         return await _service(request).update_provider(
             provider_id, body.model_dump(by_alias=True), operator.actor
@@ -259,6 +339,7 @@ async def create_provider(
 ) -> dict[str, Any]:
     """创建自定义供应商并注册一个模型。"""
     require_idempotency_key(request)
+    _require_local_billing_permission(operator, body.billing)
     try:
         return await _service(request).create_provider(
             body.model_dump(by_alias=True), operator.actor
@@ -357,6 +438,7 @@ async def configure_specialized_models(
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict[str, Any]:
     require_idempotency_key(request)
+    _require_local_billing_permission(operator, body.provider.billing)
     try:
         return await _service(request).configure_specialized(
             body.model_dump(by_alias=True), operator.actor
@@ -389,6 +471,10 @@ async def rollback_config_history(
 ) -> dict[str, Any]:
     require_idempotency_key(request)
     try:
+        if operator.role == "super_admin" and operator.kind == "user":
+            return await _service(request).rollback(
+                history_id, operator.actor, allow_local_billing=True,
+            )
         return await _service(request).rollback(history_id, operator.actor)
     except Exception as exc:
         raise _error(exc) from exc

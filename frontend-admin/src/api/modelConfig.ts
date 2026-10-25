@@ -147,11 +147,50 @@ export async function listModelCatalog(): Promise<{ models: ModelCatalogEntry[];
   return request<{ models: ModelCatalogEntry[]; current: string }>('/api/llm/models')
 }
 
-export async function saveModelRole(role: string, modelName: string): Promise<Record<string, unknown>> {
+export interface EmbeddingPreview {
+  modelName: string
+  currentModel: string
+  fingerprint: string
+  dimension: number
+  vectors: number
+  collections: { collection: string; vectors: number }[]
+  billing: string
+  requiresRebuild: boolean
+  traceId: string
+}
+
+export interface EmbeddingRebuildStatus {
+  taskId: string | null
+  status?: string
+  progress?: string
+  error?: string
+}
+
+export function previewEmbeddingChange(modelName: string): Promise<EmbeddingPreview> {
+  return mutationRequest('/api/sys/model-roles/embedding/preview', {
+    operation: 'embedding-preview', method: 'POST', body: { modelName },
+  })
+}
+
+export function rebuildEmbeddingIndex(preview: EmbeddingPreview): Promise<EmbeddingRebuildStatus> {
+  return mutationRequest('/api/sys/model-roles/embedding/rebuild', {
+    operation: 'embedding-rebuild', method: 'POST',
+    body: { modelName: preview.modelName, expectedFingerprint: preview.fingerprint, confirmRebuild: true },
+  })
+}
+
+export function getEmbeddingRebuildStatus(): Promise<EmbeddingRebuildStatus> {
+  return request('/api/sys/model-roles/embedding/rebuild')
+}
+
+export async function saveModelRole(role: string, modelName: string, preview?: EmbeddingPreview): Promise<Record<string, unknown>> {
   return mutationRequest<Record<string, unknown>>(`/api/sys/model-roles/${encodeURIComponent(role)}`, {
     operation: `model-role:${role}`,
     method: 'PUT',
-    body: { modelName },
+    body: { modelName, ...(preview ? {
+      confirmRebuild: true, expectedModel: preview.currentModel,
+      expectedFingerprint: preview.fingerprint,
+    } : {}) },
   })
 }
 

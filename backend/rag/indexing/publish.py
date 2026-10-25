@@ -405,6 +405,30 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
 # ── 发布协议 ──────────────────────────────────────────────────
 
 
+def _guard_embedding_publication(function):
+    """复用向量存储的发布围栏，配置切换不能穿过登记提交点。"""
+    from contextlib import ExitStack
+    from functools import wraps
+
+    @wraps(function)
+    def guarded(*args, **kwargs):
+        stores = kwargs["stores"]
+        with ExitStack() as stack:
+            for main, candidate in (
+                (stores.main_vectordb, stores.vectordb),
+                (stores.main_doc_db, stores.doc_db),
+            ):
+                guard = getattr(main, "publication_guard", None)
+                if callable(guard):
+                    stack.enter_context(guard())
+                    if candidate.count() > 0:
+                        with candidate._conn() as conn:
+                            candidate._check_index_compat(conn)
+            return function(*args, **kwargs)
+    return guarded
+
+
+@_guard_embedding_publication
 def publish_candidate(
     *,
     run_store,

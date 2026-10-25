@@ -626,6 +626,21 @@ def price_usage(
     """
     from backend.config.budget import BUDGET_BASE_CURRENCY, to_base_currency
     from backend.shared.logger import logger
+    from backend.infra.llm.models import get_model_billing, lookup_model_entry
+
+    if lookup_model_entry(model_name) is not None and get_model_billing(model_name) == "local":
+        # 只说明没有云端按量费用，硬件/电费不在这份调用账单内。
+        return BillingResult(
+            model_name=model_name, component=component,
+            input_tokens=usage.input_tokens,
+            billable_input_tokens=usage.billable_input_tokens,
+            cached_input_tokens=usage.cached_input_tokens,
+            output_tokens=usage.output_tokens,
+            native_currency="CNY", pricing_source="local_inference",
+            usage_source=usage_source,
+            cost_status=(COST_STATUS_ESTIMATED
+                         if usage_source == USAGE_SOURCE_ESTIMATED else COST_STATUS_EXACT),
+        )
 
     rows: dict[str, PriceLine] | None
     currency = "USD"

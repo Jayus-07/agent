@@ -104,7 +104,13 @@ def redispatch_index_task(task_id: str, *,
     if record is None:
         return None
     task_input = record.input or {}
-    if task_input.get("reindex_kwargs"):
+    if task_input.get("embedding_rebuild_kwargs"):
+        from backend.tasks.index_tasks import rebuild_embeddings_task
+
+        kwargs = {**task_input["embedding_rebuild_kwargs"], "db_task_id": task_id}
+        celery_task = rebuild_embeddings_task
+        task_name = "tasks.rebuild_embeddings"
+    elif task_input.get("reindex_kwargs"):
         from backend.tasks.index_tasks import reindex_document_task
 
         kwargs = {**task_input["reindex_kwargs"], "db_task_id": task_id}
@@ -328,7 +334,9 @@ def run_with_task_state(db_task_id: str | None, upload_id: str,
         terminal = (result or {}).get("terminal", "done")
         try:
             TaskManager.mark_success(
-                db_task_id, output={"terminal": terminal,
+                db_task_id, output={
+                    **(result if (result or {}).get("embedding_rebuild") else {}),
+                    "terminal": terminal,
                                     "doc_id": (result or {}).get("doc", {}).get("doc_id", "")
                                     if isinstance((result or {}).get("doc"), dict) else ""},
                 progress=f"索引完成（{terminal}）", execution_id=lease_id)

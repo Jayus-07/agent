@@ -154,7 +154,11 @@ def _runtime_embedding_identity(embedding_function: Any) -> dict[str, str]:
                 provider = str(info.get("source") or "")
         except Exception:
             pass
-    return {"provider": provider, "model": model_name}
+    return {
+        "provider": getattr(embedding_function, "_provider_id", None) or provider,
+        "model": model_name,
+        "revision": getattr(embedding_function, "_index_fingerprint", ""),
+    }
 
 
 def _meta_model_matches(meta_model: str, runtime_model: str) -> bool:
@@ -342,6 +346,8 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             yield conn
             conn.commit()
         except Exception:
+            # 元数据 DDL 也可能随失败事务回滚，不能缓存“已建表”的假状态。
+            _META_DDL_DONE.discard(_meta_table_name())
             try:
                 conn.rollback()
             except Exception:
@@ -416,10 +422,39 @@ class PgVectorKnowledgeStore(KnowledgeStore):
 
     # ---- 写入 ----
 
+    @contextmanager
+    def publication_guard(self):
+        """文件登记提交到向量晋级期间，阻止全局模型切换穿过发布窗口。"""
+        with self._conn() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT pg_advisory_lock_shared(hashtext('rag-embedding-publication'))")
+            try:
+                self._record_index_meta(conn)
+                conn.commit()
+                yield
+            finally:
+                # 会话级锁不随回滚释放，异常出口也必须显式解锁。
+                conn.rollback()
+                cur.execute("SELECT pg_advisory_unlock_shared(hashtext('rag-embedding-publication'))")
+
     def _upsert_rows(self, rows: list[tuple]) -> int:
         if not rows:
             return 0
         with self._lock, self._conn() as conn:
+            # 与角色切换/全量重嵌发布串行，旧 worker 不得补写旧空间向量。
+            conn.cursor().execute(
+                "SELECT pg_advisory_xact_lock(hashtext('rag-embedding-write'))"
+            )
+            self._record_index_meta(conn)
+            identity = _runtime_embedding_identity(self.embedding_function)
+            for row in rows:
+                metadata = json.loads(row[4])
+                if (metadata.get("embedding_model") != identity["model"]
+                        or metadata.get("embedding_fingerprint") != identity["revision"]):
+                    raise IndexEmbeddingMismatchError(
+                        metadata.get("embedding_model", "未登记"),
+                        identity["model"], self._collection,
+                    )
             psycopg2.extras.execute_values(
                 conn.cursor(),
                 f"""INSERT INTO {self._table}
@@ -434,41 +469,72 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 template="(%s, %s, %s, %s, %s::jsonb, %s)",
                 page_size=500,
             )
-            # 写入即登记索引身份：任何成功写入都说明本 collection 是用当前
-            # 运行时 embedding 建的 → 元数据对齐 + 状态回 ready。
-            self._record_index_meta(conn)
         return len(rows)
 
     def _record_index_meta(self, conn: Any) -> None:
-        """把当前运行时 embedding 身份写入 rag_index_meta（复用借出连接）。"""
+        """只初始化空集合；写一批向量不得覆盖已有集合身份或解除重建闸。"""
         try:
             _ensure_meta_table(conn)
             identity = _runtime_embedding_identity(self.embedding_function)
+            self._check_embedding_control(conn)
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT embedding_model, status, model_revision, embedding_dimension "
+                f"FROM {_meta_table_name()} WHERE collection = %s FOR UPDATE",
+                (self._collection,),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                if (row[1] != "ready" or row[0] != identity["model"]
+                        or int(row[3]) != EMBEDDING_DIM
+                        or (row[2] and row[2] != identity["revision"])):
+                    raise IndexEmbeddingMismatchError(
+                        str(row[0]), identity["model"], self._collection,
+                    )
+                return
+            cur.execute(
+                f"SELECT 1 FROM {self._table} WHERE collection = %s LIMIT 1",
+                (self._collection,),
+            )
+            if cur.fetchone():
+                raise IndexEmbeddingMismatchError(
+                    "身份未登记", identity["model"], self._collection,
+                )
             conn.cursor().execute(
                 f"""INSERT INTO {_meta_table_name()}
                        (collection, embedding_provider, embedding_model,
                         embedding_dimension, model_revision, status)
                    VALUES (%s, %s, %s, %s, %s, 'ready')
-                   ON CONFLICT (collection) DO UPDATE SET
-                       embedding_provider = EXCLUDED.embedding_provider,
-                       embedding_model    = EXCLUDED.embedding_model,
-                       embedding_dimension = EXCLUDED.embedding_dimension,
-                       model_revision     = EXCLUDED.model_revision,
-                       status             = 'ready',
-                       updated_at         = now()""",
+                   ON CONFLICT (collection) DO NOTHING""",
                 (
                     self._collection,
                     identity["provider"],
                     identity["model"],
                     EMBEDDING_DIM,
-                    "",
+                    identity["revision"],
                 ),
             )
         except Exception as e:
-            # 元数据登记失败不阻塞索引写入本身，但必须留痕 —— 否则会出现
-            # 「索引建好了却不知道用什么模型建的」的治理盲区。
             logger.warning(
                 f"[PgVectorStore] 索引元数据登记失败 collection={self._collection}: {e}")
+            raise
+
+    def _check_embedding_control(self, conn: Any, identity: dict | None = None) -> None:
+        """全局切换围栏也覆盖重建开始后新建的集合及旧 worker。"""
+        if "::cand:" in self._collection:
+            return
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT embedding_model,status,model_revision FROM {_meta_table_name()} "
+            "WHERE collection='__embedding_control__'"
+        )
+        row = cur.fetchone()
+        if row is None:
+            return
+        identity = identity or _runtime_embedding_identity(self.embedding_function)
+        if (row[1] != "ready" or row[0] != identity["model"]
+                or row[2] != identity["revision"]):
+            raise IndexEmbeddingMismatchError(row[0], identity["model"], self._collection)
 
     def get_index_meta(self) -> dict | None:
         """读取本 collection 的索引元数据（管理端展示 / 校验用）。"""
@@ -516,37 +582,39 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             logger.warning(
                 f"[PgVectorStore] 标记 rebuild_required 失败 collection={self._collection}: {e}")
 
-    def _check_index_compat(self, conn: Any) -> None:
+    def _check_index_compat(self, conn: Any, identity: dict | None = None) -> None:
         """查询前门禁：索引 embedding ≠ 运行时 embedding → 显式失败。
 
-        - 元数据缺失（旧索引升级后首次查询）：采纳当前运行时身份作为基线
-          并放行 —— 否则存量索引全部不可用；采纳只发生一次且留 warning。
+        - 有旧向量但元数据缺失：拒绝认领，须经过正式重建。
         - 明确不一致：抛 IndexEmbeddingMismatchError，禁止任何静默降级。
         """
         try:
             _ensure_meta_table(conn)
+            self._check_embedding_control(conn, identity)
             cur = conn.cursor()
             cur.execute(
-                f"""SELECT embedding_model, status FROM {_meta_table_name()}
+                f"""SELECT embedding_model, status, model_revision, embedding_dimension
+                    FROM {_meta_table_name()}
                     WHERE collection = %s""",
                 (self._collection,),
             )
             row = cur.fetchone()
+        except IndexEmbeddingMismatchError:
+            raise
         except Exception as e:
-            # 元数据表本身不可用时不能把查询一起打死 —— 记警告放行，
-            # 但这属于治理盲区，监控应关注该告警。
-            logger.warning(f"[PgVectorStore] 索引兼容性校验跳过（元数据不可读）: {e}")
-            return
-        runtime = _runtime_embedding_identity(self.embedding_function)
+            raise IndexEmbeddingMismatchError(
+                "元数据暂不可校验", "当前模型", self._collection,
+            ) from e
+        runtime = identity or _runtime_embedding_identity(self.embedding_function)
         if row is None:
-            # 存量索引无元数据：首次查询时采纳运行时身份为基线（幂等 upsert）
-            logger.warning(
-                f"[PgVectorStore] collection={self._collection} 缺少索引元数据，"
-                f"采纳当前运行时 embedding 为基线: {runtime['model']!r}")
+            # 只有真正空集合可以初始化；不能把旧向量认领为当前模型产物。
             self._record_index_meta(conn)
             return
         meta_model, status = str(row[0] or ""), str(row[1] or "ready")
-        if status == "rebuild_required" or not _meta_model_matches(meta_model, runtime["model"]):
+        if (status != "ready" or not meta_model or not runtime["model"]
+                or not _meta_model_matches(meta_model, runtime["model"])
+                or int(row[3]) != EMBEDDING_DIM
+                or (row[2] and row[2] != runtime["revision"])):
             raise IndexEmbeddingMismatchError(
                 index_model=meta_model or "(unknown)",
                 runtime_model=runtime["model"] or "(unknown)",
@@ -559,13 +627,21 @@ class PgVectorKnowledgeStore(KnowledgeStore):
     ) -> list[tuple]:
         if metadatas is None:
             metadatas = [{} for _ in texts]
-        if embeddings is None:
-            embeddings = self.embedding_function.embed_documents(texts)
+        from contextlib import nullcontext
+
+        # 模型热切换不能穿过一次向量计算与身份快照。
+        lock = getattr(self.embedding_function, "_refresh_lock", None)
+        with lock if lock is not None else nullcontext():
+            if embeddings is None:
+                embeddings = self.embedding_function.embed_documents(texts)
+            identity = _runtime_embedding_identity(self.embedding_function)
         if len(embeddings) != len(texts):
             raise ValueError(f"embeddings 数量({len(embeddings)})与 texts({len(texts)})不一致")
         rows = []
         for i, (text, meta) in enumerate(zip(texts, metadatas)):
             meta = _sanitize_metadata(dict(meta or {}))
+            meta["embedding_model"] = identity["model"]
+            meta["embedding_fingerprint"] = identity["revision"]
             rid = explicit_ids[i] if explicit_ids else self._static_id(meta, text, i)
             rows.append((
                 rid,
@@ -623,7 +699,12 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         with self._conn() as conn:
             self._check_index_compat(conn)
 
-        qvec = np.asarray(self.embedding_function.embed_query(query), dtype=np.float32)
+        from contextlib import nullcontext
+
+        lock = getattr(self.embedding_function, "_refresh_lock", None)
+        with lock if lock is not None else nullcontext():
+            qvec = np.asarray(self.embedding_function.embed_query(query), dtype=np.float32)
+            query_identity = _runtime_embedding_identity(self.embedding_function)
         params: list = [qvec, self._collection]
         where_sql = where_to_sql(normalize_where(filter), params)
         sql = (
@@ -636,6 +717,10 @@ class PgVectorKnowledgeStore(KnowledgeStore):
         params.extend([qvec, k])
         with self._conn() as conn:
             cur = conn.cursor()
+            # 模型往返期间可能完成了切换；按本次查询向量的固定身份复核，
+            # 并持共享事务锁直到检索结束，发布不能穿过校验与 SQL 之间。
+            cur.execute("SELECT pg_advisory_xact_lock_shared(hashtext('rag-embedding-write'))")
+            self._check_index_compat(conn, query_identity)
             # SET LOCAL 只在当前事务生效，归还连接后不会把本次高召回参数
             # 泄漏给其他请求；过滤条件越强，适当提高 ef_search 越能减少漏召回。
             cur.execute("SET LOCAL hnsw.ef_search = %s", (VECTOR_HNSW_EF_SEARCH,))
@@ -764,6 +849,24 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             return 0
         with self._lock, self._conn() as conn:
             cur = conn.cursor()
+            cur.execute("SELECT pg_advisory_xact_lock(hashtext('rag-embedding-write'))")
+            self._record_index_meta(conn)
+            cur.execute(
+                f"SELECT embedding_model,model_revision FROM {_meta_table_name()} "
+                "WHERE collection=%s", (source_collection,),
+            )
+            source = cur.fetchone()
+            identity = _runtime_embedding_identity(self.embedding_function)
+            if source is None:
+                cur.execute(f"SELECT 1 FROM {self._table} WHERE collection=%s LIMIT 1",
+                            (source_collection,))
+                if cur.fetchone() is None:
+                    return 0
+            if (source is None or source[0] != identity["model"]
+                    or source[1] != identity["revision"]):
+                raise IndexEmbeddingMismatchError(
+                    source[0] if source else "未登记", identity["model"], source_collection,
+                )
             cur.execute(
                 f"UPDATE {self._table} SET collection = %s "
                 f"WHERE collection = %s RETURNING id",

@@ -87,6 +87,38 @@ def resolve_binding(role: str) -> SpecializedBinding | None:
     return binding
 
 
+def registered_binding(role: str, model_name: str) -> SpecializedBinding:
+    """从同一注册表派生指定模型配置，不修改全局角色或进程缓存。"""
+    from dataclasses import replace
+
+    from backend.infra.llm import registry_store
+
+    snapshot = registry_store.last_loaded_snapshot()
+    if snapshot is None or not snapshot.loaded:
+        raise RuntimeError("模型注册表尚未就绪，请稍后重试")
+    selected = replace(snapshot, roles={**snapshot.roles, role: model_name})
+    value = registry_store._derive_specialized_bindings(selected).get(role)
+    binding = _binding(role, value) if value else None
+    if binding is None or binding.model_name != model_name:
+        raise ValueError("模型未登记、用途不匹配或供应商配置不完整")
+    return binding
+
+
+def embedding_fingerprint(binding: SpecializedBinding) -> str:
+    """记录影响向量空间的配置，密钥轮换不改变向量身份。"""
+    import hashlib
+    import json
+
+    value = {
+        "provider": binding.provider_id, "model": binding.model_name,
+        "upstream": binding.upstream_name, "base_url": binding.base_url,
+        "adapter": binding.adapter, "options": dict(binding.options),
+    }
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+
 def snapshot() -> dict[str, dict[str, Any]]:
     """返回不含密钥的缓存快照，仅供测试和诊断使用。"""
     return {

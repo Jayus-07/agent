@@ -557,3 +557,40 @@ def _register_reindex_task():
 
 
 reindex_document_task = _register_reindex_task()
+
+
+def _register_embedding_rebuild_task():
+    """全量重嵌沿用索引任务租约、状态、恢复与队列治理。"""
+    from backend.tasks.celery_app import celery_app
+
+    @celery_app.task(
+        bind=True, name="tasks.rebuild_embeddings", acks_late=True,
+        soft_time_limit=3600, time_limit=3660, max_retries=0,
+    )
+    def rebuild_embeddings_task(self, model_name: str, fingerprint: str,
+                                db_task_id: str) -> dict:
+        from backend.rag.indexing.embedding_migration import run_rebuild
+        from backend.tasks.index_task_runtime import run_with_task_state
+
+        try:
+            return run_with_task_state(
+                db_task_id, db_task_id,
+                lambda: {**run_rebuild(db_task_id, model_name, fingerprint),
+                         "embedding_rebuild": True},
+                worker=getattr(self.request, "hostname", None),
+            )
+        except AdmissionDeferred as deferred:
+            from backend.tasks.queue_router import resolve_for_workflow
+
+            route = resolve_for_workflow("rag_index")
+            rebuild_embeddings_task.apply_async(
+                kwargs={"model_name": model_name, "fingerprint": fingerprint,
+                        "db_task_id": db_task_id},
+                queue=route.physical_queue, countdown=deferred.delay_seconds,
+            )
+            return {"status": "ADMISSION_DEFERRED", "skipped": True}
+
+    return rebuild_embeddings_task
+
+
+rebuild_embeddings_task = _register_embedding_rebuild_task()

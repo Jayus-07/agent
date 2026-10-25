@@ -85,6 +85,7 @@ _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.execute_agent": ("interactive_agent", "workflow_binding"),
     "tasks.execute_index": ("rag_index", "workflow_binding"),
     "tasks.reindex_document": ("rag_index", "workflow_binding"),
+    "tasks.rebuild_embeddings": ("rag_index", "workflow_binding"),
     "memory.extract": ("maintenance", "workflow_binding"),
 }
 
