@@ -551,6 +551,21 @@ class GraphRunner:
         trace = trace_collector.start(
             question, product_session_id, workflow_name="agent",
         )
+        # 预算状态先行绑定（2026-10-25 TD-05 收口）：trace 建立到 _worker
+        # 的 RequestContext.bind 之间存在 LLM/embedding 调用（FollowUp 语义
+        # 解析等，本 producer 线程），此前这些调用整体旁路预占/结算（每请求
+        # 首段 reserve 旁路告警即来源于此）。bind 幂等，_worker 内的完整
+        # bind 仍照常执行并覆盖身份细节。
+        try:
+            from backend.infra.llm.budget import bind_request_budget
+
+            bind_request_budget(
+                str(getattr(trace, "request_id", "") or getattr(trace, "id", "")),
+                user_id=str(user_id or ""),
+                tenant_id=str(tenant_id or ""),
+            )
+        except Exception:  # noqa: BLE001 — 预算绑定失败不阻断主链
+            logger.debug("[Runner] 预算先行绑定失败，维持 worker 内绑定", exc_info=True)
         from backend.context_budget.metrics import ContextEventScope
         context_event_scope = ContextEventScope(
             product_id=str(product_id or ""),
