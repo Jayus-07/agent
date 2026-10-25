@@ -270,6 +270,20 @@ _FOLLOW_UP_PROMPT = re.compile(
     r"^(?:继续|接着说|再解释(?:一下|下)?|重新解释|换一种说法|举个例子|"
     r"上面第?[一二三四五六七八九十\d]+点|刚才第?[一二三四五六七八九十\d]+点)[。！？?！]*$"
 )
+# 无需企业数据/文档即可完成的一般请求（conversation-first 直答扩展，
+# 2026-10-25）：纯算式求值与通用写作。命中即 general_chat 直答；业务
+# 数据类（销售日报/库存报表）不匹配触发词（"生成/查询"），仍走工具路由。
+# 计算式 = 全句仅由数字/运算/单位助词构成且至少含一个数字（防纯助词句）。
+_GENERAL_CALCULATION_PROMPT = re.compile(
+    r"^[\d\s.,，%％+\-*/×÷()（）乘以加减去除平方开方根再的约等于多少是?？。！!]+$"
+)
+_GENERAL_CALCULATION_HAS_DIGIT = re.compile(r"\d")
+_GENERAL_WRITING_PROMPT = re.compile(
+    r"(?:帮我写|帮我起?草|起草|怎么写|如何写|写一份|写个|列一?个)"
+    r".{0,24}"
+    r"(?:周报|工作总结|总结|框架|提纲|大纲|草稿|模板|文案|自我介绍|"
+    r"感谢信|道歉信|通知|公告|邀请函|朋友圈)"
+)
 _PRIVATE_FACT_PROMPT = re.compile(
     r"(?:本公司|我们公司|公司的|公司内部|企业内部|内部知识库|知识库|"
     r"制度|政策|规定|流程|SOP|员工手册|内部文档|业务文档|经营数据|"
@@ -293,6 +307,9 @@ def _is_general_conversation_prompt(query: str, state: dict) -> bool:
         or _GENERAL_LOCATION_PROMPT.fullmatch(query)
         or _GENERAL_CONVERSATION_PROMPT.search(query)
         or _FOLLOW_UP_PROMPT.fullmatch(query)
+        or (_GENERAL_CALCULATION_PROMPT.fullmatch(query)
+            and _GENERAL_CALCULATION_HAS_DIGIT.search(query))
+        or _GENERAL_WRITING_PROMPT.search(query)
     )
 
 
