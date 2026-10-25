@@ -17,6 +17,25 @@
 
 `rebuild` 会重建后端服务；日常查看状态和日志优先使用下面的 Compose 命令。共享环境中不要擅自停止或重建服务。
 
+## 本地专项模型服务（embedding / rerank）
+
+管理端专项绑定指向本机推理服务（127.0.0.1:8088，容器内经
+`host.docker.internal:8088`）：bge-m3 提供 OpenAI 兼容 `/embeddings`，
+bge-reranker-v2-m3 提供 DashScope 兼容 rerank。该服务是独立进程，
+**宿主机重启后不会自启**，需手动拉起：
+
+~~~powershell
+.\dev-local-models.bat start    # 启动（首次加载模型约 10-30s，日志在 logs\local_model_server.log）
+.\dev-local-models.bat status   # 状态
+.\dev-local-models.bat stop     # 停止
+.\dev-local-models.bat restart  # 重启
+~~~
+
+验证：`curl http://127.0.0.1:8088/healthz`。模型路径可用环境变量
+`BGE_M3_MODEL_PATH` / `RERANKER_MODEL_PATH` 覆盖，默认读本机
+HuggingFace / ModelScope 缓存。切换 embedding 模型后语料向量空间随之
+变化，需重建向量索引（管理端角色绑定接口会返回 `requiresReindex`）。
+
 ## Docker Compose 与排障
 
 ~~~powershell
