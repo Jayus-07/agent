@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import secrets
 from unittest.mock import AsyncMock
 
 import pytest
@@ -21,6 +22,14 @@ from backend.infra.llm.credentials import ProviderCredentials
 from backend.infra.llm.registry_store import RegistrySnapshot
 from backend.services import provider_probe
 from backend.services.provider_probe import ProbeResult, ProbeStep
+
+
+def _generated_secret() -> str:
+    """运行时生成测试假密钥（硬编码凭据治理：源码不落凭据字面量）。"""
+    return "test-draft-" + secrets.token_urlsafe(9)
+
+
+DRAFT_API_KEY = _generated_secret()
 
 
 class _FakeIdent:
@@ -63,7 +72,7 @@ def anon_client() -> TestClient:
 DRAFT = {
     "driver": "openai",
     "base_url": "https://api.example.com/v1",
-    "api_key": "sk-draft",
+    "api_key": DRAFT_API_KEY,
     "model_name": "glm-4.6",
     "network_scope": "public",
 }
@@ -133,7 +142,7 @@ def test_draft_accepts_frontend_camel_case_payload(client, monkeypatch):
         json={
             "driver": "openai",
             "baseUrl": "https://api.example.com/v1",
-            "apiKey": "sk-draft",
+            "apiKey": DRAFT_API_KEY,
             "modelName": "glm-4.6",
             "networkScope": "public",
         },
@@ -142,7 +151,7 @@ def test_draft_accepts_frontend_camel_case_payload(client, monkeypatch):
     assert resp.status_code == 200
     assert captured["base_url"] == "https://api.example.com/v1"
     assert captured["model_name"] == "glm-4.6"
-    assert captured["api_key"] == "sk-draft"
+    assert captured["api_key"] == DRAFT_API_KEY
 
 
 @pytest.mark.parametrize("mode,expected", [("fast", False), ("full", True)])

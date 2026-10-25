@@ -1,9 +1,26 @@
 """Prompt 评测 CI 模型绑定配置的回归测试。"""
 from __future__ import annotations
 
+import secrets
+
 import pytest
 
 from backend.scripts import seed_prompt_eval_db as seed_script
+
+
+def _generated_secret(name: str) -> str:
+    """运行时生成测试假密钥：测试只要求进程内一致，不依赖具体值。
+
+    硬编码凭据治理（2026-10-25）：源码不落凭据字面量（安全扫描按字面量
+    拦截），运行时生成即无泄漏面。
+    """
+    return f"test-{name}-{secrets.token_urlsafe(9)}"
+
+
+PG_TEST_PASSWORD = _generated_secret("pg")
+CHAT_API_KEY = _generated_secret("chat")
+EMBEDDING_API_KEY = _generated_secret("embedding")
+RERANK_API_KEY = _generated_secret("rerank")
 
 
 def test_build_seed_configs_requires_and_returns_chat_and_embedding_bindings(monkeypatch):
@@ -11,11 +28,11 @@ def test_build_seed_configs_requires_and_returns_chat_and_embedding_bindings(mon
         "PROMPT_EVAL_TEST_PROVIDER_ID": "eval-chat",
         "PROMPT_EVAL_TEST_MODEL": "chat-model",
         "PROMPT_EVAL_TEST_BASE_URL": "https://chat.example/v1",
-        "PROMPT_EVAL_TEST_API_KEY": "chat-key",
+        "PROMPT_EVAL_TEST_API_KEY": CHAT_API_KEY,
         "PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID": "eval-embedding",
         "PROMPT_EVAL_TEST_EMBEDDING_MODEL": "embedding-model",
         "PROMPT_EVAL_TEST_EMBEDDING_BASE_URL": "https://embedding.example/v1",
-        "PROMPT_EVAL_TEST_EMBEDDING_API_KEY": "embedding-key",
+        "PROMPT_EVAL_TEST_EMBEDDING_API_KEY": EMBEDDING_API_KEY,
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -26,13 +43,13 @@ def test_build_seed_configs_requires_and_returns_chat_and_embedding_bindings(mon
         "provider_id": "eval-chat",
         "model_name": "chat-model",
         "base_url": "https://chat.example/v1",
-        "api_key": "chat-key",
+        "api_key": CHAT_API_KEY,
     }
     assert configs["embedding"] == {
         "provider_id": "eval-embedding",
         "model_name": "embedding-model",
         "base_url": "https://embedding.example/v1",
-        "api_key": "embedding-key",
+        "api_key": EMBEDDING_API_KEY,
         "adapter": "openai_embedding",
         "dimensions": 1024,
     }
@@ -50,20 +67,20 @@ async def test_seed_commits_model_bindings_before_closing_session(monkeypatch, m
         "PGHOST": "localhost",
         "PGPORT": "5432",
         "PGUSER": "postgres",
-        "PGPASSWORD": "test-password",
+        "PGPASSWORD": PG_TEST_PASSWORD,
         "PROMPT_EVAL_TEST_PGDATABASE": "agent_memory_test",
         "PROMPT_EVAL_TEST_PROVIDER_ID": "eval-chat",
         "PROMPT_EVAL_TEST_MODEL": "chat-model",
         "PROMPT_EVAL_TEST_BASE_URL": "https://chat.example/v1",
-        "PROMPT_EVAL_TEST_API_KEY": "chat-key",
+        "PROMPT_EVAL_TEST_API_KEY": CHAT_API_KEY,
         "PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID": "eval-embedding",
         "PROMPT_EVAL_TEST_EMBEDDING_MODEL": "embedding-model",
         "PROMPT_EVAL_TEST_EMBEDDING_BASE_URL": "https://embedding.example/v1",
-        "PROMPT_EVAL_TEST_EMBEDDING_API_KEY": "embedding-key",
+        "PROMPT_EVAL_TEST_EMBEDDING_API_KEY": EMBEDDING_API_KEY,
         "PROMPT_EVAL_TEST_RERANK_PROVIDER_ID": "eval-rerank",
         "PROMPT_EVAL_TEST_RERANK_MODEL": "rerank-model",
         "PROMPT_EVAL_TEST_RERANK_BASE_URL": "https://rerank.example/v1",
-        "PROMPT_EVAL_TEST_RERANK_API_KEY": "rerank-key",
+        "PROMPT_EVAL_TEST_RERANK_API_KEY": RERANK_API_KEY,
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -147,7 +164,7 @@ async def test_conflicting_memory_database_is_rejected_before_engine_creation(mo
     monkeypatch.setenv("PROMPT_EVAL_TEST_PGDATABASE", "agent_memory_test")
     monkeypatch.setenv("MEMORY_PGDATABASE", "agent_memory")
     monkeypatch.setenv("PGUSER", "postgres")
-    monkeypatch.setenv("PGPASSWORD", "test-password")
+    monkeypatch.setenv("PGPASSWORD", PG_TEST_PASSWORD)
     engine_created = False
 
     def create_engine(*_args, **_kwargs):
@@ -172,7 +189,7 @@ def test_test_database_target_rejects_non_test_database_or_missing_role(
     monkeypatch.delenv("MEMORY_PGDATABASE", raising=False)
     monkeypatch.setenv("PROMPT_EVAL_TEST_PGDATABASE", database)
     monkeypatch.setenv("PGUSER", "postgres")
-    monkeypatch.setenv("PGPASSWORD", "test-password")
+    monkeypatch.setenv("PGPASSWORD", PG_TEST_PASSWORD)
     monkeypatch.setenv("PGHOST", "localhost")
     if database == "agent_memory_test":
         monkeypatch.delenv("PGUSER")
@@ -188,7 +205,7 @@ def test_test_database_target_rejects_remote_host_even_when_named_test(monkeypat
     monkeypatch.delenv("MEMORY_PGDATABASE", raising=False)
     monkeypatch.setenv("PROMPT_EVAL_TEST_PGDATABASE", "agent_memory_test")
     monkeypatch.setenv("PGUSER", "postgres")
-    monkeypatch.setenv("PGPASSWORD", "test-password")
+    monkeypatch.setenv("PGPASSWORD", PG_TEST_PASSWORD)
     monkeypatch.setenv("PGHOST", "10.0.0.8")
 
     with pytest.raises(RuntimeError, match="只允许连接本机隔离 PostgreSQL"):
@@ -199,7 +216,7 @@ def test_database_identity_accepts_explicit_readonly_verification_session():
     target = {
         "host": "127.0.0.1", "port": 5432,
         "database": "agent_memory_test", "username": "test-role",
-        "password": "test-password",
+        "password": PG_TEST_PASSWORD,
     }
     identity = {
         "database": "agent_memory_test",
@@ -225,7 +242,7 @@ def test_database_identity_accepts_docker_host_port_mapping():
     target = {
         "host": "127.0.0.1", "port": 5433,
         "database": "agent_memory_eval", "username": "eval-role",
-        "password": "test-password",
+        "password": PG_TEST_PASSWORD,
     }
     identity = {
         "database": "agent_memory_eval",
@@ -260,7 +277,7 @@ def test_database_identity_rejects_non_test_targets(overrides, read_only):
     target = {
         "host": "127.0.0.1", "port": 5432,
         "database": "agent_memory_eval", "username": "eval-role",
-        "password": "test-password",
+        "password": PG_TEST_PASSWORD,
     }
     identity = {
         "database": "agent_memory_eval",
