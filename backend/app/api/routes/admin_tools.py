@@ -13,13 +13,15 @@ GET /admin/tools/stats  — 运行统计聚合（总数/成功/失败/成功率/
   redis   = 仅 Redis 日键合计（TOOL_STATS_REDIS_ENABLED 写侧开启后多副本合计）；
   merged  = 两者相加（scope 如实反映）。
 错误分类口径 = M3 统一七分类（observability.error_taxonomy）。
-权限：仅管理员（require_admin_user）。
+权限分级：GET（清单/统计/错误明细/变更历史）editor 及以上（与前端
+「能力治理」导航 minRole 对齐）；失败探针保持 admin + ADMIN_ACTION 审计。
 """
 from __future__ import annotations
 
 import asyncio
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -27,11 +29,38 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException as _HTTP, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_admin_user, require_editor_user
 from backend.config import ENVIRONMENT
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/admin/tools", tags=["Admin-Tools"])
+
+# lock 是构建期产物，同一进程内只有文件本身变化（mtime_ns）才会换内容；
+# stats 全量 REGISTRY.collect() 代价不低，看板 5 秒陈旧可接受。
+_LOCK_CACHE: dict[str, Any] = {"mtime_ns": None, "raw": None}
+_STATS_TTL_SECONDS = 5.0
+_STATS_CACHE: dict[str, Any] = {"at": 0.0, "payload": None}
+
+
+def _load_tool_lock(path: Path | None = None) -> tuple[dict, str, str]:
+    """读契约 lock（进程内 mtime 缓存），返回 (tools, git_sha, error)。
+
+    path 仅供测试注入；读失败软失败返回 error 字符串，调用方按空清单 +
+    lock_error 呈现，不 500；失败不缓存，下一次请求照常重试（lock 可能
+    随发布被补齐）。
+    """
+    path = path or (Path(__file__).resolve().parents[4]
+                    / "backend" / "tool_contracts.lock.json")
+    try:
+        mtime_ns = path.stat().st_mtime_ns
+        if _LOCK_CACHE["mtime_ns"] == mtime_ns and _LOCK_CACHE["raw"] is not None:
+            raw = _LOCK_CACHE["raw"]
+        else:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            _LOCK_CACHE.update(mtime_ns=mtime_ns, raw=raw)
+    except (OSError, ValueError) as e:
+        return {}, "", f"lock 读取失败: {e}"
+    return raw.get("tools", {}), str(raw.get("git_sha", "")), ""
 
 _PROBE_ERROR_CLASSES = frozenset({
     "timeout", "network_error", "permission_denied", "validation_error",
@@ -235,6 +264,19 @@ def _aggregate_tool_stats(source: str | None = None) -> dict[str, Any]:
     }
 
 
+def _cached_tool_stats() -> dict[str, Any]:
+    """stats 聚合短 TTL 缓存：/stats 与 /inventory 共用，避免每请求全量 collect。
+
+    失败不缓存（聚合本身各数据源软失败、永不抛错），TTL 过期即重算。
+    """
+    now = time.monotonic()
+    payload = _STATS_CACHE["payload"]
+    if payload is None or now - _STATS_CACHE["at"] > _STATS_TTL_SECONDS:
+        payload = _aggregate_tool_stats()
+        _STATS_CACHE.update(at=now, payload=payload)
+    return payload
+
+
 def _quota_runtime(ds: dict | None) -> dict | None:
     """额度运行时读数（软失败）：声明来自 labels.py data_source.quota。
 
@@ -287,8 +329,8 @@ def _quota_runtime(ds: dict | None) -> dict | None:
 @router.get("/stats")
 async def tool_stats(request: Request):
     """Tool 运行统计聚合（TOOL_STATS_SOURCE 三源，M3 七分类口径）。"""
-    await require_admin_user(request)
-    return _aggregate_tool_stats()
+    await require_editor_user(request)
+    return _cached_tool_stats()
 
 
 @router.post("/failure-probe")
@@ -297,6 +339,7 @@ async def tool_failure_probe(request: Request, body: ToolFailureProbeRequest):
 
     探针不调用 Tool、不访问外部服务，只复用生产的 ToolResult、指标、Trace
     和统一错误分类出口；生产环境明确拒绝，避免把模拟数据写入生产观测面。
+    探针属管理端主动动作，除 synthetic trace 外补 ADMIN_ACTION 审计留痕。
     """
     await require_admin_user(request)
     if ENVIRONMENT == "production":
@@ -304,11 +347,9 @@ async def tool_failure_probe(request: Request, body: ToolFailureProbeRequest):
     if body.error_class not in _PROBE_ERROR_CLASSES:
         raise _HTTP(422, f"不支持的统一错误分类: {body.error_class}")
 
-    lock_path = Path(__file__).resolve().parents[4] / "backend" / "tool_contracts.lock.json"
-    try:
-        lock_tools = json.loads(lock_path.read_text(encoding="utf-8")).get("tools", {})
-    except (OSError, ValueError) as exc:
-        raise _HTTP(503, f"Tool 契约 lock 读取失败: {exc}") from exc
+    lock_tools, _, lock_error = _load_tool_lock()
+    if lock_error:
+        raise _HTTP(503, f"Tool 契约 lock 读取失败: {lock_error}")
     contract = lock_tools.get(body.tool)
     if not contract:
         raise _HTTP(404, f"Tool 不在契约 lock 中: {body.tool}")
@@ -354,6 +395,19 @@ async def tool_failure_probe(request: Request, body: ToolFailureProbeRequest):
         model="admin-probe",
         provider="synthetic",
     )
+    # 操作审计旁路：record_security_event 自身软失败永不抛错，这里再兜一层
+    # 保险（探针结果已生成，不能被审计故障带崩）。
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event(
+            "ADMIN_ACTION",
+            category="tool_failure_probe",
+            detail={"tool": body.tool, "error_class": body.error_class,
+                    "trace_id": trace.id, "simulated": True},
+        )
+    except Exception:  # noqa: BLE001 — 审计旁路软失败
+        logger.debug("[AdminTools] 探针审计写入失败（不影响探针结果）")
     return {
         "trace_id": trace.id,
         "tool": body.tool,
@@ -366,20 +420,11 @@ async def tool_failure_probe(request: Request, body: ToolFailureProbeRequest):
 @router.get("")
 async def tool_inventory(request: Request):
     """Tool 治理清单：lock 契约（hash/归属/output_type）× 运行统计合并视图。"""
-    await require_admin_user(request)
-    import json
-    from pathlib import Path
+    await require_editor_user(request)
 
-    repo_root = Path(__file__).resolve().parents[4]
-    lock = {}
-    lock_error = ""
-    lock_path = repo_root / "backend" / "tool_contracts.lock.json"
-    try:
-        lock = json.loads(lock_path.read_text(encoding="utf-8")).get("tools", {})
-    except (OSError, ValueError) as e:
-        lock_error = f"lock 读取失败: {e}"
+    lock, lock_git_sha, lock_error = _load_tool_lock()
 
-    stats = {t["tool"]: t for t in _aggregate_tool_stats()["tools"]}
+    stats = {t["tool"]: t for t in _cached_tool_stats()["tools"]}
     inventory = []
     for name, entry in sorted(lock.items()):
         run = stats.get(name, {})
@@ -399,27 +444,35 @@ async def tool_inventory(request: Request):
         })
     return {
         "count": len(inventory),
-        "lock_git_sha": json.loads(lock_path.read_text(encoding="utf-8"))
-        .get("git_sha", "") if not lock_error else "",
+        "lock_git_sha": lock_git_sha,
         "lock_error": lock_error,
         "tools": inventory,
     }
 
 
 @router.get("/errors")
-async def tool_errors(request: Request, tool: str | None = None, limit: int = 20):
+async def tool_errors(
+    request: Request,
+    tool: str | None = None,
+    limit: int = 20,
+    scan: int = 100,
+):
     """Tool 错误来源明细：进程内 trace 直读，不另建存储。
 
     按 tool_call span（input.tool = @tool 函数名，治理埋点 W3 落的键）扫
     最近 trace，返回失败明细及其来源（skill 归属 / capability / session /
     错误码与摘要），供 /tools 页失败行展开。旧 trace 无 input.tool 时回退
     span name（skill:capability 口径，只能按前缀过滤到 skill 级）。
+
+    scan = 扫描最近 N 条 trace（默认 100，钳 1-500）：高频系统下 100 条
+    只覆盖极短时间窗，调用方可按流量放大扫描窗（换内存扫描成本）。
     """
-    await require_admin_user(request)
+    await require_editor_user(request)
     limit = max(1, min(limit, 100))
+    scan = max(1, min(scan, 500))
     from backend.observability.tracer import trace_collector
 
-    records = trace_collector.list(100, include_spans=True)
+    records = trace_collector.list(scan, include_spans=True)
     errors = []
     for rec in records:
         spans = {s.span_id: s for s in rec.spans}
@@ -473,22 +526,65 @@ async def tool_errors(request: Request, tool: str | None = None, limit: int = 20
     return {"count": len(errors), "errors": errors}
 
 
+_CHANGE_CLASSIFICATIONS = ("BREAKING", "DEGRADED", "COMPATIBLE", "INIT")
+
+
 @router.get("/changes")
-async def tool_contract_changes(request: Request, limit: int = 20):
-    """契约变更历史（治理 #9：gen_tool_contract_lock 检测到变更时自动落库）。"""
-    await require_admin_user(request)
+async def tool_contract_changes(
+    request: Request,
+    limit: int = 20,
+    classification: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+):
+    """契约变更历史（治理 #9：gen_tool_contract_lock 检测到变更时自动落库）。
+
+    classification（四分类白名单）/ since / until（ISO 时间，created_at 边界）
+    为可选过滤；全部参数化直查，无 offset 翻页（历史量小，LIMIT 截断）。
+    """
+    await require_editor_user(request)
+    if classification is not None and classification not in _CHANGE_CLASSIFICATIONS:
+        raise _HTTP(422, f"不支持的契约变更分类: {classification}")
+    for name, value in (("since", since), ("until", until)):
+        if value is None:
+            continue
+        try:
+            from datetime import datetime
+
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise _HTTP(422, f"{name} 需要 ISO 时间格式: {value}") from exc
+
+    where: list[str] = []
+    params: list[Any] = []
+    if classification:
+        where.append("classification = %s")
+        params.append(classification)
+    if since:
+        where.append("created_at >= %s")
+        params.append(since)
+    if until:
+        where.append("created_at <= %s")
+        params.append(until)
+
     try:
         from backend.config.database import OBS_DB_PG_CONFIG
         from backend.infra.db import engine_for
 
+        sql = (
+            "SELECT id, from_lock_hash, to_lock_hash, classification, "
+            "changed_tools, tool_count, git_sha, detected_by, created_at "
+            "FROM ai.tool_contract_changes"
+        )
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT %s"
+        params.append(min(limit, 100))
+
         def _query():
             with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
                 cur = conn.cursor()
-                cur.execute(
-                    "SELECT id, from_lock_hash, to_lock_hash, classification, "
-                    "changed_tools, tool_count, git_sha, detected_by, created_at "
-                    "FROM ai.tool_contract_changes ORDER BY id DESC LIMIT %s",
-                    (min(limit, 100),))
+                cur.execute(sql, tuple(params))
                 return cur.fetchall()
 
         rows = await asyncio.to_thread(_query)
