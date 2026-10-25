@@ -310,6 +310,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "111_evaluation_v2_case_revision_candidates.sql": "memory",
     # 非 RAG 模块的 Run 不绑定知识库语料快照。
     "112_evaluation_v2_domain_runner.sql": "memory",
+    # security_events 扩展 ADMIN_ACTION：管理端主动动作（Tool 失败探针等）操作审计。
+    "113_security_events_admin_action.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

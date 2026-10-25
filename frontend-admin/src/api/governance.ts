@@ -135,8 +135,19 @@ export interface ToolContractChange {
   created_at: string
 }
 
-export function getToolContractChanges(limit = 20): Promise<{ changes: ToolContractChange[] }> {
-  return request<{ changes: ToolContractChange[] }>(`/api/admin/tools/changes?limit=${limit}`)
+/** changes 过滤参数：classification 四分类白名单；since/until 为 ISO 时间（created_at 边界） */
+export function getToolContractChanges(params: {
+  limit?: number
+  classification?: 'BREAKING' | 'DEGRADED' | 'COMPATIBLE' | 'INIT'
+  since?: string
+  until?: string
+} = {}): Promise<{ changes: ToolContractChange[] }> {
+  const q = new URLSearchParams()
+  q.set('limit', String(params.limit ?? 20))
+  if (params.classification) q.set('classification', params.classification)
+  if (params.since) q.set('since', params.since)
+  if (params.until) q.set('until', params.until)
+  return request<{ changes: ToolContractChange[] }>(`/api/admin/tools/changes?${q.toString()}`)
 }
 
 export interface ToolStats {
