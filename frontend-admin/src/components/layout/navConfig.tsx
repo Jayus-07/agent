@@ -10,7 +10,7 @@
 import {
   Activity, AlertTriangle, Bot, CalendarClock, ChartColumn, CheckCheck, CircleDollarSign,
   ClipboardList, Database, FileCode, FileText, Gauge, GitBranch, KeyRound, LayoutDashboard,
-  ListTree, Package, Puzzle, Rocket, Settings, Shield, ShieldCheck, TrendingUp, Wrench,
+  ListTree, MessagesSquare, Package, Puzzle, Rocket, Settings, Shield, ShieldCheck, TrendingUp, Wrench,
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { atLeast, type RoleName } from '@/lib/auth'
@@ -95,6 +95,7 @@ export const NAV: NavEntry[] = [
         icon: <ListTree size={16} />, activePaths: ['/observability/traces'], section: '运行状态',
       },
       { label: 'Agent 与工作流', path: '/agents', icon: <Bot size={16} /> },
+      { label: 'Agent 圆桌', path: '/roundtable', icon: <MessagesSquare size={16} />, minRole: 'admin', section: '服务观测' },
       { label: '任务中心', path: '/tasks', icon: <ClipboardList size={16} />, section: '异步任务' },
       { label: '定时任务', path: '/schedules', icon: <CalendarClock size={16} />, section: '异步任务' },
       {

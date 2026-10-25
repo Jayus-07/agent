@@ -14,6 +14,7 @@ from backend.app.api.routes import (
     admin_unanswered,
     admin_clarify,
     agents,
+    agent_roundtable,
     approvals,
     auth_local,
     capabilities,
@@ -92,6 +93,7 @@ api_router.include_router(data.assets_router)
 api_router.include_router(data.pipeline_router)
 api_router.include_router(mcp.router)
 api_router.include_router(agents.router)  # Agent 层只读总览（B13 管理端 /agents）
+api_router.include_router(agent_roundtable.router)  # Agent 圆桌演示（管理端 /agents/roundtable；SSE+LLM 消耗，独立于 agents 只读承诺）
 api_router.include_router(capabilities.router)  # Capability 清单只读对账（B13 管理端 /skills）
 api_router.include_router(consistency.router)  # 资产一致性单页对账矩阵（治理 M6）
 api_router.include_router(admin_tools.router)  # Tool 治理统计与清单（治理 M2）
