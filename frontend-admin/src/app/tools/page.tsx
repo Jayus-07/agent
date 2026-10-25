@@ -7,10 +7,13 @@
  * （进程内 Prometheus 直读聚合）。事实源在代码 + tool_contracts.lock.json，
  * 清单/统计仍是只读；强制失败测试只写入明确标记的模拟 Trace，不触达真实 Tool。
  * 失败 Tool 行点击跳转运行监控工作台的 Trace Tab（预置过滤）。
+ * 清单筛选（搜索/数据源/仅失败）与变更历史分类筛选进 URL querystring，
+ * 分类过滤走服务端（changes 本地只有最近一页，前端过滤会漏更早记录）。
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, ShieldCheck } from 'lucide-react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, RefreshCw, Search, ShieldCheck } from 'lucide-react'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
 import EmptyState from '@/components/shared/EmptyState'
@@ -357,7 +360,33 @@ function ToolRow({ tool }: { tool: ToolContractEntry }) {
   )
 }
 
+/** 清单筛选：与 DataSourceBadge 同口径（无徽章 = internal） */
+const DS_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: 'all', label: '全部数据源' },
+  { value: 'mcp', label: 'MCP' },
+  { value: 'rest', label: '外部 API' },
+  { value: 'internal', label: '平台内部' },
+]
+
+const CLS_FILTER_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: '全部分类' },
+  { value: 'BREAKING', label: 'BREAKING' },
+  { value: 'DEGRADED', label: 'DEGRADED' },
+  { value: 'COMPATIBLE', label: 'COMPATIBLE' },
+  { value: 'INIT', label: 'INIT' },
+]
+
+type ChangeCls = '' | 'BREAKING' | 'DEGRADED' | 'COMPATIBLE' | 'INIT'
+
+/** URL 读入的分类值只接受白名单，脏值回落全部分类 */
+function parseCls(value: string | null): ChangeCls {
+  const v = value ?? ''
+  return (CLS_FILTER_OPTIONS.some((o) => o.value === v) ? v : '') as ChangeCls
+}
+
 export default function ToolsPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
   const [inventory, setInventory] = useState<ToolInventory | null>(null)
   const [stats, setStats] = useState<ToolStats | null>(null)
   const [changes, setChanges] = useState<ToolContractChange[]>([])
@@ -368,24 +397,85 @@ export default function ToolsPage() {
   const [probeLoading, setProbeLoading] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
   const [probeResult, setProbeResult] = useState<{ trace_id: string; status: string } | null>(null)
+  // 清单筛选（q/ds/failed）与变更历史分类（cls）进 URL，复用 TracesPanel 的 querystring 模式
+  const [query, setQuery] = useState(searchParams.get('q') ?? '')
+  const [dsFilter, setDsFilter] = useState(searchParams.get('ds') ?? 'all')
+  const [failedOnly, setFailedOnly] = useState(searchParams.get('failed') === '1')
+  const [clsFilter, setClsFilter] = useState<ChangeCls>(parseCls(searchParams.get('cls')))
+  const changesLoadedOnce = useRef(false)
+
+  const loadChanges = (classification: ChangeCls) => {
+    // 分类筛选走服务端过滤：本地只存最近 20 条，前端过滤会漏更早的 BREAKING
+    getToolContractChanges({ classification: classification || undefined })
+      .then((ch) => setChanges(ch.changes))
+      .catch(() => setChanges([]))
+  }
 
   const load = () => {
     setLoading(true)
     setError(null)
-    Promise.all([getToolInventory(), getToolStats(), getToolContractChanges()])
-      .then(([inv, st, ch]) => {
+    Promise.all([getToolInventory(), getToolStats()])
+      .then(([inv, st]) => {
         setInventory(inv)
         setStats(st)
-        setChanges(ch.changes)
       })
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
+    loadChanges(clsFilter)
   }
 
   useEffect(load, [])
 
+  // 分类切换重新拉取（首载已由 load 覆盖）
+  useEffect(() => {
+    if (!changesLoadedOnce.current) {
+      changesLoadedOnce.current = true
+      return
+    }
+    loadChanges(clsFilter)
+  }, [clsFilter])
+
+  // 浏览器后退/外链带参时回填筛选状态（同值 set 不触发渲染，无循环）
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    const next = {
+      q: params.get('q') ?? '',
+      ds: params.get('ds') ?? 'all',
+      failed: params.get('failed') === '1',
+    }
+    setQuery((c) => (c === next.q ? c : next.q))
+    setDsFilter((c) => (c === next.ds ? c : next.ds))
+    setFailedOnly((c) => (c === next.failed ? c : next.failed))
+    setClsFilter((c) => {
+      const parsed = parseCls(params.get('cls'))
+      return c === parsed ? c : parsed
+    })
+  }, [searchParams])
+
+  const syncFilterUrl = (patch: Record<string, string | null>) => {
+    const params = new URLSearchParams(searchParams.toString())
+    for (const [k, v] of Object.entries(patch)) {
+      if (v) params.set(k, v)
+      else params.delete(k)
+    }
+    router.replace(`?${params.toString()}`, { scroll: false })
+  }
+
   // 契约清单 × 运行统计合并（runtime 已在后端合并，这里只排序展示）
   const tools = useMemo(() => inventory?.tools ?? [], [inventory])
+
+  const filteredTools = useMemo(() => {
+    const kw = query.trim().toLowerCase()
+    return tools.filter((t) => {
+      if (failedOnly && !((t.runtime?.failures ?? 0) > 0)) return false
+      if (dsFilter !== 'all' && (t.data_source?.type ?? 'internal') !== dsFilter) return false
+      if (!kw) return true
+      return [t.name, t.display_name, t.module, ...t.capabilities]
+        .join('\n')
+        .toLowerCase()
+        .includes(kw)
+    })
+  }, [tools, query, dsFilter, failedOnly])
 
   const runProbe = async () => {
     const tool = probeTool || tools[0]?.name || ''
@@ -551,7 +641,50 @@ export default function ToolsPage() {
             </AssetSection>
           )}
 
-          <AssetSection title="Tool 契约清单" meta={`${tools.length} 个`} bodyClassName="p-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative">
+              <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted/60" />
+              <input
+                aria-label="搜索工具"
+                value={query}
+                onChange={(e) => {
+                  setQuery(e.target.value)
+                  syncFilterUrl({ q: e.target.value.trim() || null })
+                }}
+                placeholder="搜索名称 / 模块 / Capability"
+                className="min-w-[220px] rounded-md border border-border-subtle bg-surface-base py-1.5 pl-8 pr-2.5 text-[12px] text-text-primary"
+              />
+            </div>
+            <select
+              aria-label="数据源筛选"
+              value={dsFilter}
+              onChange={(e) => {
+                setDsFilter(e.target.value)
+                syncFilterUrl({ ds: e.target.value !== 'all' ? e.target.value : null })
+              }}
+              className="rounded-md border border-border-subtle bg-surface-base px-2.5 py-1.5 text-[12px] text-text-primary"
+            >
+              {DS_FILTER_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
+            <label className="flex min-h-9 items-center gap-1.5 text-[12px] text-text-secondary">
+              <input
+                type="checkbox"
+                checked={failedOnly}
+                onChange={(e) => {
+                  setFailedOnly(e.target.checked)
+                  syncFilterUrl({ failed: e.target.checked ? '1' : null })
+                }}
+              />
+              仅看失败
+            </label>
+            <span className="text-[11px] text-text-muted">
+              {filteredTools.length} / {tools.length} 个
+            </span>
+          </div>
+
+          <AssetSection title="Tool 契约清单" meta={`${filteredTools.length}/${tools.length} 个`} bodyClassName="p-0">
             <table className="w-full">
               <thead>
                 <tr className="border-b border-border-subtle bg-bg-elevated/60 text-left text-[11px] uppercase tracking-wide text-text-muted">
@@ -566,13 +699,16 @@ export default function ToolsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-black/[0.04]">
-                {tools.map((t) => (
+                {filteredTools.map((t) => (
                   <ToolRow key={t.name} tool={t} />
                 ))}
               </tbody>
             </table>
-            {tools.length === 0 && !loading && (
-              <EmptyState title="暂无 Tool 契约数据" description="请先运行 gen_tool_contract_lock 生成 lock" />
+            {filteredTools.length === 0 && !loading && (
+              <EmptyState
+                title={tools.length > 0 ? '没有匹配筛选的 Tool' : '暂无 Tool 契约数据'}
+                description={tools.length > 0 ? '调整搜索词 / 数据源 / 失败筛选' : '请先运行 gen_tool_contract_lock 生成 lock'}
+              />
             )}
           </AssetSection>
 
@@ -581,8 +717,25 @@ export default function ToolsPage() {
             中文名在 backend/tools/labels.py 登记、随契约 lock 派生（G2 禁手抄）；红色失败行点击可展开错误来源明细；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）；数据源徽章：MCP=外部 MCP server 数据源（tooltip 含上游工具与开关）、外部=外部网络 API，无徽章 = 平台内部数据源
           </p>
 
-          {changes.length > 0 && (
+          {changes.length > 0 || clsFilter ? (
             <AssetSection title="契约变更历史" meta="生成器检测到变更时自动落库，最新在前" bodyClassName="p-0">
+              <div className="border-b border-border-subtle px-4 py-2.5">
+                <select
+                  aria-label="变更分类筛选"
+                  value={clsFilter}
+                  onChange={(e) => {
+                    // select 选项本身来自白名单，as 收窄安全
+                    setClsFilter(e.target.value as ChangeCls)
+                    syncFilterUrl({ cls: e.target.value || null })
+                  }}
+                  className="rounded-md border border-border-subtle bg-surface-base px-2.5 py-1.5 text-[12px] text-text-primary"
+                >
+                  {CLS_FILTER_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              {changes.length > 0 ? (
               <ul className="divide-y divide-black/[0.04]">
                 {changes.map((ch) => {
                   const meta = CLASS_META[ch.classification] ?? CLASS_META.INIT
@@ -619,8 +772,13 @@ export default function ToolsPage() {
                   )
                 })}
               </ul>
+              ) : (
+                <div className="px-4 py-6 text-center text-[12px] text-text-muted">
+                  该分类下暂无变更记录（服务端按分类过滤，最近 20 条范围内无匹配）
+                </div>
+              )}
             </AssetSection>
-          )}
+          ) : null}
           </div>
         </>
       )}
