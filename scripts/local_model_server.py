@@ -59,6 +59,15 @@ def _reranker_path() -> str:
     return r"C:\Users\wh\.cache\modelscope\hub\models\BAAI\bge-reranker-v2-m3"
 
 
+def _device() -> str:
+    """GPU 优先（CUDA torch）；无 GPU 回退 CPU。"""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def _get_embedder():
     """懒加载 bge-m3（SentenceTransformer，dense 1024 维）。"""
     with _LOCK:
@@ -66,9 +75,10 @@ def _get_embedder():
             from sentence_transformers import SentenceTransformer
 
             path = _m3_path()
+            device = _device()
             t0 = time.time()
-            _log(f"加载 embedding 模型: {path}")
-            _ST["embedder"] = SentenceTransformer(path, device="cpu")
+            _log(f"加载 embedding 模型: {path} (device={device})")
+            _ST["embedder"] = SentenceTransformer(path, device=device)
             _log(f"embedding 模型就绪 ({time.time() - t0:.1f}s)")
         return _ST["embedder"]
 
@@ -84,6 +94,7 @@ def _get_reranker():
             _log(f"加载 rerank 模型: {path}")
             tok = AutoTokenizer.from_pretrained(path)
             model = AutoModelForSequenceClassification.from_pretrained(path)
+            model.to(_device())
             model.eval()
             _ST["reranker_tok"] = tok
             _ST["reranker"] = model
@@ -142,7 +153,7 @@ def rerank(req: RerankRequest):
     pairs = [[query, doc] for doc in documents]
     with torch.no_grad():
         batch = tok(pairs, padding=True, truncation=True, max_length=512,
-                    return_tensors="pt")
+                    return_tensors="pt").to(model.device)
         logits = model(**batch).logits.reshape(-1).float()
     scores = [1.0 / (1.0 + math.exp(-float(x))) for x in logits]
 

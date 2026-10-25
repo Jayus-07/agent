@@ -18,10 +18,16 @@ setlocal
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
 set "SERVER=%ROOT%\scripts\local_model_server.py"
-set "PY=%ROOT%\.venv\Scripts\python.exe"
 set "LOG=%ROOT%\logs\local_model_server.log"
 set "PIDFILE=%ROOT%\logs\local_model_server.pid"
 set "PORT=8088"
+
+:: Interpreter preference: CUDA-capable system Python first (GPU inference,
+:: ~10-50x faster than CPU for bge-m3/reranker); fall back to repo venv (CPU).
+:: Override with LOCAL_MODEL_PY env if your layout differs.
+set "PY=%LOCAL_MODEL_PY%"
+if not defined PY if exist "D:\Python\python.exe" set "PY=D:\Python\python.exe"
+if not defined PY set "PY=%ROOT%\.venv\Scripts\python.exe"
 
 if /i "%~1"=="start"   goto start
 if /i "%~1"=="stop"    goto stop
