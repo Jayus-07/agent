@@ -144,12 +144,27 @@ def list_datasets(tenant_id: str, *, limit: int = 50, offset: int = 0) -> list[d
             """
             SELECT d.dataset_id, d.dataset_key, d.name, d.domain, d.description,
                    d.owner_user_id, d.status, d.created_at, d.updated_at,
-                   COUNT(DISTINCT v.dataset_version_id) FILTER (WHERE v.status = 'published') AS version_count
+                   COUNT(DISTINCT v.dataset_version_id) FILTER (WHERE v.status = 'published') AS version_count,
+                   lv.version AS latest_version,
+                   lv.status AS latest_status,
+                   COALESCE(lv.case_count, 0) AS case_count
             FROM evaluation_v2.eval_datasets AS d
             LEFT JOIN evaluation_v2.eval_dataset_versions AS v
               ON v.tenant_id = d.tenant_id AND v.dataset_id = d.dataset_id
+            LEFT JOIN LATERAL (
+                SELECT ver.version, ver.status,
+                       (SELECT COUNT(*)::integer
+                        FROM evaluation_v2.eval_dataset_items AS i
+                        WHERE i.tenant_id = ver.tenant_id
+                          AND i.dataset_version_id = ver.dataset_version_id) AS case_count
+                FROM evaluation_v2.eval_dataset_versions AS ver
+                WHERE ver.tenant_id = d.tenant_id AND ver.dataset_id = d.dataset_id
+                ORDER BY CASE ver.status WHEN 'published' THEN 0 ELSE 1 END,
+                         ver.created_at DESC
+                LIMIT 1
+            ) AS lv ON TRUE
             WHERE d.tenant_id = %s AND d.status = 'active'
-            GROUP BY d.dataset_id
+            GROUP BY d.dataset_id, lv.version, lv.status, lv.case_count
             ORDER BY d.updated_at DESC, d.dataset_id
             LIMIT %s OFFSET %s
             """,
@@ -2147,6 +2162,9 @@ def list_runs(tenant_id: str, *, limit: int = 50, offset: int = 0) -> list[dict[
                    sv.version AS suite_version, r.job_status, r.gate_verdict,
                    r.cost_amount, r.cost_currency,
                    r.total_cases, r.completed_cases, r.passed_cases,
+                   r.snapshot_json->>'evaluation_mode' AS evaluation_mode,
+                   r.snapshot_json->>'source' AS source,
+                   r.snapshot_json->'prompt_versions' AS prompt_versions,
                    r.created_by, r.created_at, r.started_at, r.finished_at
             FROM evaluation_v2.eval_runs AS r
             JOIN evaluation_v2.eval_suite_versions AS sv

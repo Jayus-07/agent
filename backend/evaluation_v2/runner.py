@@ -578,6 +578,7 @@ def execute_run(run_id: str, *, tenant_id: str, actor: str, boundary) -> dict[st
                 run_id=run_id,
                 boundary=guarded_boundary,
                 prompt_versions=snapshot_json.get("prompt_versions") or {},
+                evaluation_mode=str(snapshot_json.get("evaluation_mode") or "offline"),
                 refresh_registry_before_run=False,
             )
         elif repository.get_run(tenant_id, run_id)["job_status"] in {"preparing", "running"}:
