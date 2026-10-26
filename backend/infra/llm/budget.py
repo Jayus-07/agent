@@ -50,8 +50,9 @@ def _record_budget_request(mode: str, result: str) -> None:
 
 @dataclass(frozen=True)
 class RequestBudgetLimits:
-    """请求级限制；小于等于 0 表示该项不限制。"""
+    """请求级限制；max_calls 保留兼容但只记账，不再作为拒绝门禁。"""
 
+    # 调用数用于用量观测；多 Agent/工具过程不能因固定次数而被截断。
     max_calls: int = 8
     max_total_tokens: int = 32000
     max_cost: Decimal = Decimal("0.50")
@@ -274,8 +275,6 @@ class RequestBudget:
             )
 
     def _exceeded_reason(self, kind: str) -> str:
-        if self.limits.max_calls > 0 and self.calls >= self.limits.max_calls:
-            return "request_calls"
         if (
             self.limits.max_total_tokens > 0
             and self.total_tokens >= self.limits.max_total_tokens

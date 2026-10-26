@@ -17,9 +17,9 @@ export interface StreamCoreFields {
   nodeLabels: Record<string, string>
 }
 
-/** 终态判定：done/error 之后流式阶段结束 */
+/** 终态判定：done/error/paused 之后流式阶段结束 */
 export function isTerminalEvent(evt: SSEStreamEvent): boolean {
-  return evt.event === 'done' || evt.event === 'error'
+  return evt.event === 'done' || evt.event === 'error' || evt.event === 'paused'
 }
 
 /** 归约公共字段，返回需要合并的增量更新（无变化的字段不出现在结果里） */
@@ -36,6 +36,7 @@ export function reduceStreamCore(
       return { deltaText: state.deltaText + evt.data.content }
     case 'done':
     case 'error':
+    case 'paused':
       // 终态清空状态节点：否则 error/中断路径（无 done 事件）下
       // StatusBar 会残留最后一个阶段标签（如"✍️ 生成回复"）
       return { currentStatus: '' }

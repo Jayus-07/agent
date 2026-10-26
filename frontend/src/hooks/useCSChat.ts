@@ -60,6 +60,15 @@ export function useCSChat() {
           return
         }
 
+        if (evt.event === 'paused') {
+          const partial = useCSChatStore.getState().deltaText.trim()
+          replaceLastAssistant(
+            partial ? `${partial}\n\n${evt.data.message}` : evt.data.message,
+            sessionId,
+          )
+          break
+        }
+
         // 退款候选点选（2026-10-08）：clarification 帧的 options 渲染为
         // 可点选订单卡，点击即把选项话术作为用户消息发送（与主图
         // ClarificationCard 同语义）。新提问时 resetStream 已清上一轮。

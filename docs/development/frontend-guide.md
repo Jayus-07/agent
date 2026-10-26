@@ -18,7 +18,7 @@
 
 - 请求必须从客户端统一出口处理 `401/403/404/409/422/429/5xx` 与结构化业务 `failed/degraded/empty`；`HTTP 200` 不是业务成功。错误码及页面文案映射应集中，不直接把异常堆栈、密钥、provider raw body 展示给用户。
 - **认证**：沿用本端现有 `api/client.ts` + `lib/auth.ts` + BFF 的可信边界；401 的刷新与原请求重试必须保持受控次数。对非幂等写请求不得因网络中断/刷新而盲目重投；依当前业务幂等协议核验。
-- **SSE**：逐事件遵守 `backend/orchestration/graph/event_schema.py`、`backend/app/api/stream_resume.py` 和 [公共契约](../architecture/Frozen-Contracts.md)。处理 `meta/status/log/delta/done/error` 等**实际声明的**核心事件（按 schema 兼容 AUX 事件）；不得仅凭前端收到 `done` 而忽略终态业务错误；处理序号去重和不可恢复断流。
+- **SSE**：逐事件遵守 `backend/orchestration/graph/event_schema.py`、`backend/app/api/stream_resume.py` 和 [公共契约](../architecture/Frozen-Contracts.md)。处理 `meta/status/log/delta/done/error/paused` 等**实际声明的**核心事件（按 schema 兼容 AUX 事件）；`paused` 是用户余额不足终态，不是执行续跑；不得仅凭前端收到 `done` 而忽略终态业务错误；处理序号去重和不可恢复断流。
 - **取消**：组件卸载或用户停止时取消相应读流；不要将浏览器断线当作已撤销服务器副作用。长任务以服务端 task/revision/status 查询恢复；避免多个组件竞争不同 AbortController。
 - **并发**：更新使用服务端 revision/CAS 或幂等 key；冲突有可见提示，不能把前端本地最后写入覆盖正式结果。部分成功必须说明哪些信息未核验。
 - **WS**：鉴权/订阅授权在后端；断线重连与去重不能跨租户收发消息。

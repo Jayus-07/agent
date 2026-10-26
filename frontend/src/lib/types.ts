@@ -29,7 +29,7 @@ export interface Source {
 }
 
 // ========================================
-// SSE v2 流式事件（event: meta|status|log|delta|done|error）
+// SSE v2 流式事件（主 Chat 终态：done / error / paused）
 // ========================================
 
 export interface MetaEvent {
@@ -144,6 +144,14 @@ export interface ErrorEvent {
   details?: Record<string, unknown>
 }
 
+export interface PausedEvent {
+  code: 'USER_BALANCE_INSUFFICIENT'
+  message: string
+  action: 'top_up_and_resend'
+  elapsed: number
+  ts: number
+}
+
 // ========================================
 // P1: todo 快照 + 流中用量
 // ========================================
@@ -209,6 +217,7 @@ export type SSEStreamEvent =
   | { event: 'ping';     data: PingEvent }
   | { event: 'done';     data: DoneEvent }
   | { event: 'error';    data: ErrorEvent }
+  | { event: 'paused';   data: PausedEvent }
 
 // ========================================
 // 对话模式
@@ -237,6 +246,8 @@ export interface Message {
   timestamp: number
   /** 执行过程快照（done 时写入；历史恢复的消息无此字段） */
   trace?: AgentTrace
+  /** 用户个人模型用量不足时的暂停状态；仅保留在当前前端会话中。 */
+  pause?: PausedEvent
   /** SSE v2 流式事件 */
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */

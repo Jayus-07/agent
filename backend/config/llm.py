@@ -324,6 +324,7 @@ if LLM_BUDGET_MODE not in ("off", "observe", "enforce"):
         f"LLM_BUDGET_MODE 非法: {os.getenv('LLM_BUDGET_MODE')!r}，"
         "只允许 off / observe / enforce（禁止静默回退）"
     )
+# 兼容旧配置与用量观测；请求调用次数不再作为拒绝门禁。
 LLM_REQUEST_MAX_CALLS = int(os.getenv("LLM_REQUEST_MAX_CALLS", "8"))
 LLM_REQUEST_MAX_TOKENS = int(os.getenv("LLM_REQUEST_MAX_TOKENS", "32000"))
 # 请求级单次预占上限；2026-10-01 起单位 = 记账本位币（CNY，见 config/budget.py），

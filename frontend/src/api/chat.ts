@@ -27,7 +27,7 @@ export interface ChatRequest {
 }
 
 /**
- * 复用 lib/types 的具体联合类型（meta/status/log/delta/done/error）
+ * 复用 lib/types 的具体联合类型（meta/status/log/delta/done/error/paused）
  * 这样 store/chat 等已有消费方不需要改类型签名
  */
 export type SSEStreamEvent = TypedSSEStreamEvent;
@@ -43,7 +43,7 @@ function seqOf(evt: SSEStreamEvent): number | null {
 /**
  * POST /chat/{product}/stream — 产品专属流式对话（F2 可恢复）
  *
- * 传输 at-least-once：断流（非 done/error 的意外终止）自动调
+ * 传输 at-least-once：断流（非 done/error/paused 的意外终止）自动调
  * /chat/{product}/stream/resume 从 last seq 续播，按 seq 去重 → UI effectively-once。
  * 404 STREAM_NOT_RESUMABLE（进程重启/超出缓冲窗口）如实上抛，由用户重发。
  */
@@ -113,7 +113,7 @@ export async function* streamChat(
         if (seq <= afterSeq) continue; // 重放与 live 交叠：seq 去重
         afterSeq = seq;
       }
-      if (evt.event === "done" || evt.event === "error") sawTerminal = true;
+      if (evt.event === "done" || evt.event === "error" || evt.event === "paused") sawTerminal = true;
       yield evt;
     }
 

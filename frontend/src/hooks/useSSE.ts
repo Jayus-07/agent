@@ -60,9 +60,9 @@ export function useSSE() {
       )) {
         if (controller.signal.aborted) return
 
-        // done 前快照执行过程（done 事件本身会清空 streamEvents，防 OOM）
-        const isDone = evt.event === 'done'
-        const snapshot = isDone
+        // 终态前快照真实过程事件（终态帧会清空 streamEvents，防 OOM）
+        const isTerminal = evt.event === 'done' || evt.event === 'error' || evt.event === 'paused'
+        const snapshot = isTerminal
           ? {
               streamEvents: useChatStore.getState().streamEvents,
               todoItems: useChatStore.getState().todoItems,
@@ -74,6 +74,14 @@ export function useSSE() {
 
         // error 事件 → 立即持久化到消息内容
         if (evt.event === 'error') {
+          if (snapshot) {
+            useChatStore.getState().attachTrace(sessionId, {
+              elapsed: 0,
+              streamEvents: snapshot.streamEvents,
+              todoItems: snapshot.todoItems,
+              nodeLabels: snapshot.nodeLabels,
+            })
+          }
           setError(apiErrorFromEnvelope(evt.data))
           replaceLastAssistant(
             `## ${evt.data.message}`,
@@ -87,6 +95,32 @@ export function useSSE() {
             setLoading(false)
           }
           return
+        }
+
+        // paused 不是错误：保留已经收到的回答与过程，并提供补足余额后的重发入口。
+        if (evt.event === 'paused') {
+          const finalState = useChatStore.getState()
+          if (snapshot) {
+            useChatStore.getState().attachTrace(sessionId, {
+              elapsed: evt.data.elapsed,
+              streamEvents: snapshot.streamEvents,
+              todoItems: snapshot.todoItems,
+              nodeLabels: snapshot.nodeLabels,
+            })
+          }
+          setError(null)
+          replaceLastAssistant(
+            finalState.deltaText,
+            sessionId,
+            undefined,
+            undefined,
+            finalState.thinkingText,
+            finalState.thinkingSeconds ?? undefined,
+            undefined,
+            undefined,
+            evt.data,
+          )
+          break
         }
 
         // done 事件 → 以服务端权威答案定稿；旧后端缺字段时兼容回退 delta。

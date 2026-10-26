@@ -5,7 +5,7 @@
 ## 职责
 
 - `backend/app/api/` 负责服务端可信身份解析、URL/DTO、HTTP/SSE/WS 错误与响应编排；Domain Service 掌握正式业务状态；前端三个独立客户端消费稳定的接口。
-- `backend/orchestration/graph/event_schema.py` 是主 Chat SSE 帧定义的唯一事件事实源：核心 `meta/status/log/delta/done/error`，辅助 `todo/usage/file/clarification/context/thinking/handoff`，传输保活 `ping`。**没有名为 `progress` 的主图核心事件**。领域独立 SSE 需引用该域自己的事件契约，不能套用主图枚举。
+- `backend/orchestration/graph/event_schema.py` 是主 Chat SSE 帧定义的唯一事件事实源：核心 `meta/status/log/delta/done/error/paused`，辅助 `todo/usage/file/clarification/context/thinking/handoff`，传输保活 `ping`。**没有名为 `progress` 的主图核心事件**。领域独立 SSE 需引用该域自己的事件契约，不能套用主图枚举。
 - `backend/app/api/stream_resume.py` 的主 Chat 恢复使用 `(stream_id,seq)` at-least-once；客户端按 seq 去重。重放缓存有界且进程本地；Gap 或进程重启须明确报不可恢复，不可跳帧续播。
 - 冻结的通用边界以 [公共契约](../architecture/Frozen-Contracts.md) 为准；失败分类见 [统一错误](../architecture/failure-degradation.md)，前端状态见 [前端规范](../development/frontend-guide.md)。
 
@@ -22,7 +22,7 @@
 | 修改/写操作 | 预览/确认与正式提交边界、并发 CAS、幂等与 UNKNOWN 查询 | 自动重试未知结果的副作用或本地宣告保存成功 |
 | 兼容 | Schema 字段增删、未知枚举/事件处理、发布窗口、消费者更新和回滚 | 只改 backend 不看 3 个前端/外部客户端 |
 
-主 Chat 的事件序列：`meta` 第一帧且唯一，中段 `status/log/delta/AUX`，末尾 `done` 或 `error` 恰有一个；`ping` 不计入内容帧、不需要重放。Terminal 的业务成功与模型/Tool 子步骤成功不同，要检查终态结果。流连接断开不等同于 Server 已停止生成或已回滚业务操作。
+主 Chat 的事件序列：`meta` 第一帧且唯一，中段 `status/log/delta/AUX`，末尾 `done`、`error` 或 `paused` 恰有一个；`ping` 不计入内容帧、不需要重放。`paused` 专用于用户个人模型用量余额不足，表示本轮停止且保留已传输的部分内容；补足额度后重新发送，不表示从图节点恢复。Terminal 的业务成功与模型/Tool 子步骤成功不同，要检查终态结果。流连接断开不等同于 Server 已停止生成或已回滚业务操作。
 
 ## 兼容变更流程
 

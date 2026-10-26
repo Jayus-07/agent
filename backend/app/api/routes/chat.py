@@ -600,6 +600,8 @@ async def chat_stream(
                 evt_type = evt.get("event")
                 if evt_type == "error":
                     final_status = "error"
+                elif evt_type == "paused":
+                    final_status = "paused"
                 elif evt_type == "delta":
                     # TTFT / TPOT：首 delta 记 TTFT，收尾统一算 TPOT（P1 流式核心验收指标）
                     try:

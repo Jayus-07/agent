@@ -73,7 +73,8 @@ interface ChatState {
   removeLastAssistant: (sessionId?: string) => void
   replaceLastAssistant: (content: string, sessionId?: string, sources?: any[], usage?: import('@/lib/types').TokenUsage,
     thinking?: string, thinkingSeconds?: number, traceId?: string,
-    ragMeta?: { answerStatus?: string; confidence?: number; replySource?: string }) => void
+    ragMeta?: { answerStatus?: string; confidence?: number; replySource?: string },
+    pause?: import('@/lib/types').PausedEvent) => void
 
   /** done 时固化执行过程快照到尾部 assistant 消息（CompletionLine 回看用） */
   attachTrace: (sessionId: string, trace: import('@/lib/types').AgentTrace) => void
@@ -210,7 +211,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     //     流式文本只写入 store.deltaText，由 StreamingContent 单独订阅。
     //   - 公共字段（deltaText/currentStatus/nodeLabels）归约走 stream-reduce.ts
     //     共享实现，与 csChat 保持一致。
-    //   - done/error 终态事件清空 message.streamEvents 和 store.streamEvents（P0-5：
+    //   - done/error/paused 终态事件清空 message.streamEvents 和 store.streamEvents（P0-5：
     //     防止长会话累积撑爆内存；OOM 风险）。
     //   - 通用事件（status/log/delta）按 200 上限环形追加；超长后丢弃最老。
     addStreamEvent: (evt, sessionId) => {
@@ -268,10 +269,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         const MAX_STREAM_EVENTS = 200
         let storeEvents = state.streamEvents
         if (isCurrentSession) {
-          if (evt.event === 'meta' || evt.event === 'done' || evt.event === 'ping') {
-            // meta 是握手事件，不入流；done 清空队列（流结束 = 全部渲染完）；
+          if (evt.event === 'meta' || isTerminalEvent(evt) || evt.event === 'ping') {
+            // meta 是握手事件，不入流；终态清空队列；
             // ping 是后端 SSE 保活心跳（P0 防空闲断流），消费方零语义，不入渲染流
-            if (evt.event === 'done') storeEvents = []
+            if (isTerminalEvent(evt)) storeEvents = []
           } else {
             storeEvents = storeEvents.length >= MAX_STREAM_EVENTS
               ? [...storeEvents.slice(storeEvents.length - MAX_STREAM_EVENTS + 1), evt]
@@ -339,7 +340,7 @@ export const useChatStore = create<ChatState>((set, get) => {
       })
     },
 
-    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId, ragMeta) => {
+    replaceLastAssistant: (content, sessionId, sources, usage, thinking, thinkingSeconds, traceId, ragMeta, pause) => {
       set((state) => ({
         sessions: state.sessions.map((s) => {
           const sid = targetId(state, sessionId)
@@ -356,6 +357,7 @@ export const useChatStore = create<ChatState>((set, get) => {
               answerStatus: ragMeta?.answerStatus ?? msgs[lastIdx].answerStatus,
               confidence: ragMeta?.confidence ?? msgs[lastIdx].confidence,
               replySource: ragMeta?.replySource ?? msgs[lastIdx].replySource,
+              pause,
               usage: usage || msgs[lastIdx].usage,
               thinking: thinking ?? msgs[lastIdx].thinking,
               thinkingSeconds: thinkingSeconds ?? msgs[lastIdx].thinkingSeconds,

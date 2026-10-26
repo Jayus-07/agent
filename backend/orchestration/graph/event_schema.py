@@ -6,16 +6,16 @@
 TS 类型）另行立项，不在此范围。
 
 契约分三层（与 2026-09-30 实测的 13 种事件一一核对）：
-  CORE（六类，帧序约束参与者）：
-    meta（首帧握手）/ status / log / delta / done / error（终帧）
+  CORE（帧序约束参与者）：
+    meta（首帧握手）/ status / log / delta / done / error / paused（终帧）
   AUX（中段辅助帧，任意位置任意次）：todo / usage / file /
     clarification / context / thinking
   TRANSPORT（传输层保活）：ping——不计入帧序
 
-帧序（AGENTS.md 冻结口径「meta → status/log/delta → done/error」的精确化）：
+帧序（AGENTS.md 冻结口径「meta → status/log/delta → terminal」的精确化）：
   ① meta 必为首帧且唯一（HTTP 层注入；runner 层事件流无 meta，
      校验时以 require_meta=False 放行）
-  ② done / error 互斥：只能有一个终帧，其后不得再有任何帧
+  ② done / error / paused 互斥：只能有一个终帧，其后不得再有任何帧
   ③ 中段帧（status/log/delta/AUX）次序与次数不约束
 
 data 契约原则：**只锁源码恒定提供的必填字段**，其余 extra=allow——
@@ -28,7 +28,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 CORE_EVENTS: tuple[str, ...] = (
-    "meta", "status", "log", "delta", "done", "error",
+    "meta", "status", "log", "delta", "done", "error", "paused",
 )
 AUX_EVENTS: tuple[str, ...] = (
     "todo", "usage", "file", "clarification", "context", "thinking",
@@ -38,7 +38,7 @@ AUX_EVENTS: tuple[str, ...] = (
 )
 TRANSPORT_EVENTS: tuple[str, ...] = ("ping",)
 KNOWN_EVENTS: frozenset[str] = frozenset(CORE_EVENTS + AUX_EVENTS + TRANSPORT_EVENTS)
-TERMINAL_EVENTS: frozenset[str] = frozenset(("done", "error"))
+TERMINAL_EVENTS: frozenset[str] = frozenset(("done", "error", "paused"))
 
 
 class _Loose(BaseModel):
@@ -96,6 +96,14 @@ class DoneData(_Loose):
 
 class ErrorData(_Loose):
     message: str
+    ts: float
+
+
+class PausedData(_Loose):
+    code: Literal["USER_BALANCE_INSUFFICIENT"]
+    message: str
+    action: Literal["top_up_and_resend"]
+    elapsed: float
     ts: float
 
 
@@ -164,6 +172,7 @@ _DATA_MODELS: dict[str, type[BaseModel]] = {
     "delta": DeltaData,
     "done": DoneData,
     "error": ErrorData,
+    "paused": PausedData,
     "todo": TodoData,
     "usage": UsageData,
     "file": FileData,
@@ -230,7 +239,7 @@ def validate_frame_sequence(
         i, term = terminals[-1]
         if len(terminals) > 1:
             raise ValueError(
-                f"终帧（done/error）必须唯一，出现 {len(terminals)} 次"
+                f"终帧（done/error/paused）必须唯一，出现 {len(terminals)} 次"
             )
         if i != len(effective) - 1:
             raise ValueError(

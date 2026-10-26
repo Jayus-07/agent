@@ -13,7 +13,7 @@
 | 用量持久化/归因 | `backend/observability/llm_usage_store_pg.py`、迁移 `079_llm_usage_billing_v2.sql` | 将 Grafana 曲线当作账本权威 |
 | 异常预占对账 | `backend/infra/llm/reconciliation_report.py`、`backend/tasks/budget_reconciliation_tasks.py` | 让未决预占永远占额或任意删除历史 |
 
-模型调用的授权/额度在模型真正调用前检查；primary、retry、fallback 都应纳入同一请求预算、身份和实际计费用量归因。预算功能失败的业务语义必须依据安全策略 fail-closed 或由已有明确的 observe/off 配置决定，不能在各消费点静默放开。
+模型调用的授权/额度在模型真正调用前检查；primary、retry、fallback 都应纳入同一请求预算、身份和实际计费用量归因。请求内调用次数保留为观测值，不作为拒绝条件，避免复杂 Agent 因工具、嵌入等调用次数固定被截断；用户/租户额度、token、成本、重试和 fallback 仍按各自门禁执行。用户个人模型用量额度不足在主助手 SSE 中以 `paused` 终态返回，保留已传输内容并提示补足额度后重新发起。预算功能失败的业务语义必须依据安全策略 fail-closed 或由已有明确的 observe/off 配置决定，不能在各消费点静默放开。
 
 请求设置正数成本上限时，每次调用保守预占该请求的剩余成本额度（上限减去本请求已记录的结算成本）。已结算成本已经占用用户/租户账本的 `used_cny`，不能在后续调用中再次预占。未决调用仍由 PostgreSQL 的 `reserved_cny` 保留占额；本规则不释放 `needs_review`，也不按预计单次调用价格缩小预占。因此，剩余额度不足以同时容纳多个在途预占时，现有硬门禁仍可拒绝并发调用。
 

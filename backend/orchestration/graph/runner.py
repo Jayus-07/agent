@@ -7,7 +7,7 @@ ask() 与 stream_events() 的单一实现（重构 #2：收敛双轨编排）。
 是否 finish trace、final_answer 何时空）需要人肉对齐，改任何一边都要同步另一边。
 
 现在: GraphRunner.iter_events() 产出统一事件流
-    status / log / delta / _answer(内部) / done / error
+    status / log / delta / _answer(内部) / done / error / paused
   - stream_events()   → 逐个转发给 SSE（过滤 _answer 内部事件）
   - ask()             → 物化事件流，取 _answer 作为最终回答
 
@@ -64,6 +64,18 @@ from backend.shared.logger import logger
 # _answer 是 runner → 调用方的内部事件（携带最终回答文本），
 # 不属于 SSE 协议，stream_events 转发层必须过滤
 _ANSWER_EVENT = "_answer"
+
+
+def _is_user_balance_exhausted(exc: Exception) -> bool:
+    """只将真实用户账本余额不足识别为暂停，租户额度和配置错误仍报错。"""
+    try:
+        from backend.infra.llm.quota import QuotaExceeded
+    except Exception:
+        return False
+    if not isinstance(exc, QuotaExceeded):
+        return False
+    scope = str(getattr(exc, "subject_id", "")).partition(":")[0]
+    return scope == "user"
 
 
 def _runner_error_event(exc: Exception) -> tuple[dict, str]:
@@ -755,6 +767,7 @@ class GraphRunner:
             "usage": None,
             "aborted": False,       # 用户中止（worker 内检测）
             "worker_error": False,  # 图执行异常（worker 已 yield error 事件）
+            "worker_paused": False,  # 用户个人用量余额不足，暂停本轮
             "memory_persisted": False,
         }
         streamed = [False]  # 本轮是否发生过真流式 delta
@@ -958,11 +971,19 @@ class GraphRunner:
                 ctx["worker_error_code"] = "TIMEOUT"
                 merged_q.put(("evt", sse_error_event(e)))
             except Exception as e:
-                logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
-                ctx["worker_error"] = True
-                event, error_code = _runner_error_event(e)
-                ctx["worker_error_code"] = error_code
-                merged_q.put(("evt", event))
+                if _is_user_balance_exhausted(e):
+                    # 个人额度耗尽是可恢复的业务暂停，不包装成系统错误。
+                    # 只记录安全分类；不把用户 ID 或余额细节写入应用日志。
+                    logger.info(
+                        "[GraphRunner] 用户模型用量余额不足，暂停当前执行"
+                    )
+                    ctx["worker_paused"] = True
+                else:
+                    logger.error(f"[GraphRunner] 流式执行失败: {e}", exc_info=True)
+                    ctx["worker_error"] = True
+                    event, error_code = _runner_error_event(e)
+                    ctx["worker_error_code"] = error_code
+                    merged_q.put(("evt", event))
             finally:
                 ctx["sse_events_closed"] = True
                 reset_sse_event_sink(_sse_sink_token)
@@ -1000,6 +1021,9 @@ class GraphRunner:
                     )
                     trace.tags["cancel_stage"] = str(stage)
                     trace.metadata["cancelled"] = True
+                elif status == "paused":
+                    trace.tags["pause_reason"] = "user_balance_insufficient"
+                    trace.metadata["paused"] = True
                 # B1-F：终态错误码落 trace（SSE code ↔ trace 归因一致）；
                 # timeout 等稳定码据 metadata 可与普通执行失败区分
                 if error_code:
@@ -1047,6 +1071,25 @@ class GraphRunner:
                 yield sse_cancelled_event()
                 # STOP CS-A P0-3/F4：trace 终态 = cancelled（cancel_source= user）
                 _finalize_trace("cancelled", {"reason": "user_abort"})
+                return
+            if ctx["worker_paused"]:
+                pause_message = (
+                    "用户模型用量余额不足，本轮已暂停。补足余额后可以重新发送这条问题。"
+                )
+                yield {
+                    "event": "paused",
+                    "data": {
+                        "code": "USER_BALANCE_INSUFFICIENT",
+                        "message": pause_message,
+                        "action": "top_up_and_resend",
+                        "elapsed": max(0.0, time.time() - start_time),
+                        "ts": time.time(),
+                    },
+                }
+                _finalize_trace(
+                    "paused",
+                    {"pause_reason": "user_balance_insufficient"},
+                )
                 return
             if ctx["worker_error"]:
                 _finalize_trace("error", {"error": "graph_failed"},
