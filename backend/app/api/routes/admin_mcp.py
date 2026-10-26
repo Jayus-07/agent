@@ -875,7 +875,21 @@ async def list_all_tools(request: Request, status_filter: str = ""):
             params["status"] = status_filter
         rows = _query_all(
             f"{_TOOL_SELECT} WHERE {where} ORDER BY t.updated_at DESC", params)
-        return [_tool_view(r) for r in rows]
+        # 授权产品随列表下发（/tools 统一目录的授权列；与连接内清单同口径）
+        grants = _query_all(
+            "SELECT tool_id, product_key FROM ai.mcp_tool_grants "
+            "WHERE tenant_id = %(tenant)s AND enabled", {"tenant": tenant})
+        grants_by_tool: dict[int, list[str]] = {}
+        for g in grants:
+            grants_by_tool.setdefault(int(g["tool_id"]), []).append(
+                str(g["product_key"]))
+        views = []
+        for r in rows:
+            view = _tool_view(r)
+            view["grants"] = [
+                {"product_key": p} for p in grants_by_tool.get(int(r["id"]), [])]
+            views.append(view)
+        return views
 
     return {"tools": await asyncio.to_thread(_load)}
 
