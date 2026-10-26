@@ -339,6 +339,13 @@ chat_ttft_seconds = Histogram(
     buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 20.0, 30.0, 60.0),
 )
 
+# 首次明确状态反馈与首token分开统计，不能用“已收到”冒充答案已生成。
+chat_first_feedback_seconds = Histogram(
+    "chat_first_feedback_seconds",
+    "Time to first meaningful SSE feedback in seconds (not TTFT)",
+    buckets=(0.1, 0.25, 0.5, 1.0, 2.0, 3.0, 5.0, 8.0, 12.0, 30.0, 60.0),
+)
+
 # TPOT：首 delta 到末 delta 之间平均每 token 生成耗时（受 LLM 服务端 decode 速度
 # 与网络吞吐影响，与 TTFT 的 prefill 阶段正交）。deltas < 2 时不采样。
 chat_tpot_seconds = Histogram(
@@ -365,6 +372,7 @@ class StreamLatencyTracker:
     def __init__(self, start: float) -> None:
         self._start = start
         self._first_delta: float | None = None
+        self._first_feedback: float | None = None
         self._last_delta: float | None = None
         self._delta_count = 0
         self._finished = False
@@ -393,6 +401,22 @@ class StreamLatencyTracker:
             except Exception:
                 pass
         self._last_delta = now
+
+    @property
+    def first_feedback_ms(self) -> int | None:
+        if self._first_feedback is None:
+            return None
+        return max(1, round((self._first_feedback - self._start) * 1000))
+
+    def on_feedback(self, now: float) -> None:
+        """消费方实际投递首个可见状态时采样，不计meta和心跳。"""
+        if self._first_feedback is not None:
+            return
+        self._first_feedback = now
+        try:
+            chat_first_feedback_seconds.observe(max(0, now - self._start))
+        except Exception:
+            pass
 
     def finish(self) -> None:
         """流结束时计算并上报 TPOT；delta 不足 2 个（无 decode 过程）跳过。幂等。"""

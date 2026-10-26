@@ -91,6 +91,50 @@ def _valid_fast_path_state():
 
 
 class TestGating:
+    @pytest.mark.parametrize(
+        "denied_field", [None, "permission_ready", "fast_path_enabled", "risk", "missing"],
+    )
+    def test_engine_projection_preserves_fast_path_evidence(self, denied_field):
+        """真实引擎序列化和V2投影后，可用能力直通，缺失安全条件仍阻断。"""
+        from backend.orchestration.router.engine import RoutingEngine
+        from backend.orchestration.router.models import ExecutionModeDecision
+        from backend.orchestration.router.projection import (
+            build_route_decision_v2_from_engine,
+            project_route_decision_to_legacy_state,
+        )
+
+        row = {"name": "rag.search", "score": 0.899, "risk": "LOW",
+               "fast_path_enabled": True, "permission_ready": True}
+        if denied_field == "missing":
+            row = {"name": "rag.search", "score": 0.899}
+        elif denied_field:
+            row[denied_field] = "HIGH" if denied_field == "risk" else False
+        decision = RoutingEngine._assemble(
+            {"domain": "knowledge", "confidence": 0.95, "source": "rule"},
+            {"domain": "knowledge", "capability": "rag.search",
+             "candidates": [row, {"name": "web.search", "score": 0.3}],
+             "confidence": 0.899, "selection_mode": "fast_path",
+             "top1_score": 0.899, "top2": "web.search", "top2_score": 0.3,
+             "margin": 0.599, "score_type": "vector_similarity_heuristic"},
+            ExecutionModeDecision(mode="direct", target="rag.search"),
+            decision_source="domain_capability_policy",
+        )
+        # 经过JSON往返，不能只测手写的selector状态字典。
+        decision = type(decision).model_validate_json(decision.model_dump_json())
+        state = project_route_decision_to_legacy_state(
+            build_route_decision_v2_from_engine(decision),
+        )
+        state["question"] = "退款流程是什么？"
+        fake = _FakeLLM()
+        with patch.object(ts, "llm", fake):
+            out = tool_selector_node(state)
+        assert fake.bound_calls == 0
+        if denied_field:
+            assert out["selection_blocked"] is True
+        else:
+            assert out["_tool_selection"]["reason"] == "validated_hierarchical_fast_path"
+            assert out["_tool_selection"]["capability"] == "rag.search"
+
     def test_fast_path_skips_llm(self):
         """已注册、低风险且分数与 margin 达标的 hierarchical Fast Path 直通。"""
         fake = _FakeLLM()

@@ -41,6 +41,10 @@ class CapabilityScore(BaseModel):
     """单个 capability 的启发式排序分数，不是概率或最终决定。"""
     name: str = Field(..., description="capability 名，如 'sql.query'")
     score: float = Field(..., ge=0.0, le=1.0, description="路由排序分数；解释见 score_type")
+    # 服务端能力解析的检查结果必须穿过JSON/V2投影；缺失时不能视为已授权。
+    risk: str = "UNKNOWN"
+    fast_path_enabled: bool = False
+    permission_ready: bool = False
 
 
 class DomainDecisionV2(BaseModel):

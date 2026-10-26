@@ -200,6 +200,8 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     assert len(_spy_finish.calls) == 1
     record, answer = _spy_finish.calls[0]
     assert answer == "最终回答"
+    timing = record.metadata["entry_timing"]
+    assert 0 <= timing["before_trace_ms"] <= timing["worker_launch_ms"]
     assert sys_obj._memory.end_turn_calls == [("s-1", "测试问题", "最终回答")]
     assert sys_obj._memory.end_turn_idempotency_keys == ["turn-key-1"]
     root = _root(record)
@@ -264,7 +266,11 @@ def test_generator_close_finishes_once_as_client_disconnect(_spy_finish):
         stop_event=threading.Event())
 
     first = next(gen)          # 消费一个事件后挂起在 yield 处
-    assert first["event"] in ("status", "delta")
+    # 假图只有router/reporter；reporter已声明的summary日志也可能是首帧。
+    assert first["event"] in ("status", "delta", "log")
+    if first["event"] == "log":
+        assert (first["data"]["node"], first["data"]["step_id"]) == ("reporter", "summary")
+        assert first["data"]["payload"]["char_count"] == len("最终回答")
     gen.close()                # GeneratorExit 在挂起点抛出
 
     assert len(_spy_finish.calls) == 1

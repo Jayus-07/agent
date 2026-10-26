@@ -39,14 +39,15 @@ class StubRegistry:
 
 
 class StubAuthz:
-    def __init__(self, manage_ok: bool = True):
+    def __init__(self, manage_ok: bool = True, read_ok: bool = True):
         self.manage_ok = manage_ok
+        self.read_ok = read_ok
 
     def can_manage_row(self, row):
         return (True, "") if self.manage_ok else (False, "非本部门文档")
 
     def can_read_row(self, row):
-        return (True, "")
+        return self.read_ok
 
 
 class StubPrincipal:
@@ -159,6 +160,21 @@ def test_manage_denied_403(client, monkeypatch):
     r = client.post("/rag/knowledge/d1/lifecycle", json={"to_status": "deprecated"})
     assert r.status_code == 403
     assert r.json()["error"] == "非本部门文档"
+
+
+def test_lifecycle_audit_read_denied(client, monkeypatch):
+    async def _require_authz(_request):
+        return StubAuthz(read_ok=False), StubPrincipal()
+
+    monkeypatch.setattr(rag_lifecycle, "_require_authz", _require_authz)
+    response = client.get("/rag/knowledge/d1/lifecycle/events")
+    assert response.status_code == 403
+    assert "events" not in response.json()
+
+
+def test_lifecycle_audit_unknown_doc(client):
+    response = client.get("/rag/knowledge/nope/lifecycle/events")
+    assert response.status_code == 404
 
 
 def test_expire_at_validation_and_set(client):

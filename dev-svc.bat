@@ -37,6 +37,17 @@ setlocal enabledelayedexpansion
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
 
+:: Keep local resource limits on every start/rebuild. Discover the deployment
+:: parent without non-ASCII literals because cmd reads this file as ANSI/GBK.
+if not defined COMPOSE_FILE (
+    for /d %%D in ("%ROOT%\*") do (
+        if exist "%%~fD\prod-4c8g\docker-compose.local.yml" (
+            set "COMPOSE_FILE=%ROOT%\docker-compose.yml;%%~fD\prod-4c8g\docker-compose.local.yml"
+            set "COMPOSE_PATH_SEPARATOR=;"
+        )
+    )
+)
+
 set "BACKEND_PORT=8000"
 set "ADMIN_DIR=frontend-admin"
 set "ADMIN_PORT=3200"
@@ -310,6 +321,13 @@ set "DIR=%~1"
 set "PORT=%~2"
 set "LABEL=%~3"
 
+call :find_frontend_container "%PORT%"
+if defined FRONTEND_CONTAINER (
+    docker start "%FRONTEND_CONTAINER%" >nul
+    call :wait_http "http://127.0.0.1:%PORT%/login" "%LABEL%"
+    exit /b 0
+)
+
 if not exist "%ROOT%\%DIR%\package.json" (
     echo   [ERROR] not found: %ROOT%\%DIR%
     exit /b 1
@@ -336,6 +354,11 @@ exit /b 0
 :stop_next
 set "PORT=%~1"
 set "LABEL=%~2"
+call :find_frontend_container "%PORT%"
+if defined FRONTEND_CONTAINER (
+    docker stop "%FRONTEND_CONTAINER%"
+    exit /b 0
+)
 set "FOUND=0"
 for /f "tokens=5" %%a in ('netstat -ano ^| findstr /C:":%PORT% " ^| findstr /C:"LISTENING"') do (
     taskkill /F /PID %%a /T >nul 2>&1
@@ -359,6 +382,16 @@ exit /b 0
 :: =====================================================================
 :: helpers
 :: =====================================================================
+:find_frontend_container
+set "FRONTEND_CONTAINER="
+set "FRONTEND_SERVICE="
+if "%~1"=="3100" set "FRONTEND_SERVICE=frontend"
+if "%~1"=="3200" set "FRONTEND_SERVICE=frontend-admin"
+if "%~1"=="3300" set "FRONTEND_SERVICE=frontend-cs"
+if not defined FRONTEND_SERVICE exit /b 0
+for /f "delims=" %%c in ('docker ps -a --filter "label=com.docker.compose.project=agent" --filter "label=com.docker.compose.service=%FRONTEND_SERVICE%" --format "{{.ID}}" 2^>nul') do set "FRONTEND_CONTAINER=%%c"
+exit /b 0
+
 :wait_port
 set "PORT=%~1"
 set "LABEL=%~2"

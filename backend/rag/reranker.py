@@ -195,8 +195,6 @@ _RERANK_BATCH_SIZE = max(1, int(os.getenv("RERANK_MAX_CANDIDATES", "100")))
 _RERANK_MQ_MIN_BUDGET_MS = max(0.0, float(os.getenv("RERANK_MQ_MIN_BUDGET_MS", "1200")))
 # 单次 HTTP 尝试的最短可用预算；不足即视为"不得提交的调用"。
 _RERANK_MIN_ATTEMPT_S = 0.2
-# 重试同样消耗共享预算：剩余不足时不再重试。
-_RERANK_MIN_RETRY_BUDGET_S = 0.3
 # 分数合法区间 0-1 的浮点噪声容忍度（只夹紧，不放宽语义）。
 _RERANK_SCORE_EPS = 1e-6
 # 仅原问题Worker绑定；成功预占并准备发出HTTP后才放行变体预占。
@@ -385,38 +383,26 @@ class DashScopeReranker(BaseDocumentCompressor):
                 },
             }
 
-        last_err: Exception | None = None
-        for attempt in range(2):
-            attempt_timeout = _bounded_attempt_timeout(
-                self.timeout, timeout_s, deadline_at,
+        from backend.rag.context import get_context
+
+        request_state = get_context()
+        provider_key = f"{self._provider_id}|{self._endpoint}|{self._model}"
+        if provider_key in request_state.rerank_unavailable:
+            raise requests.exceptions.Timeout("本请求的重排服务已超时，跳过重复投递")
+        attempt_timeout = _bounded_attempt_timeout(
+            self.timeout, timeout_s, deadline_at,
+        )
+        if attempt_timeout < _RERANK_MIN_ATTEMPT_S:
+            raise requests.exceptions.Timeout("rerank 剩余检索预算不足，未发起 HTTP 尝试")
+        try:
+            return self._rank_once(
+                payload, len(documents), "primary",
+                timeout=attempt_timeout, deadline_at=deadline_at,
             )
-            if attempt_timeout < _RERANK_MIN_ATTEMPT_S:
-                # 预算不足以完成哪怕一次最短尝试：不提交这次 HTTP 调用。
-                if last_err is not None:
-                    raise last_err
-                raise requests.exceptions.Timeout(
-                    "rerank 剩余检索预算不足，未发起 HTTP 尝试"
-                )
-            try:
-                return self._rank_once(
-                    payload, len(documents), "retry" if attempt else "primary",
-                    timeout=attempt_timeout, deadline_at=deadline_at,
-                )
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-                last_err = exc
-                # 重试也消耗共享预算：剩余不够再试一次就停，避免迟到调用
-                # 在用户响应结束后继续产生付费请求。
-                if (
-                    deadline_at is not None
-                    and not _budget_allows_extra_query(
-                        deadline_at, _RERANK_MIN_RETRY_BUDGET_S * 1000,
-                    )
-                ):
-                    raise
-            except Exception:
-                # 鉴权、预算拒绝及非法响应不重复投递。
-                raise
-        raise last_err or RuntimeError("云端 rerank 未返回结果")
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            # 客户端超时不代表供应商已停算；同轮纠错不得再叠加相同推理。
+            request_state.rerank_unavailable.add(provider_key)
+            raise
 
     def rank_all(
         self,

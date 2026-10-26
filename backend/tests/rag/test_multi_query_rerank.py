@@ -353,6 +353,34 @@ class TestSingleQueryPath:
 
 
 class TestProviderBudgetContract:
+    @pytest.mark.parametrize("failure", ["timeout", "connection"])
+    def test_transport_failure_is_not_resent_in_same_request(self, monkeypatch, failure):
+        import requests
+
+        from backend.rag.context import RagRequestState, clear_context, set_context
+
+        reranker, _ = self._reranker(monkeypatch)
+        calls = []
+
+        def fail(*args, **kwargs):
+            calls.append(1)
+            error = requests.exceptions.Timeout if failure == "timeout" else requests.exceptions.ConnectionError
+            raise error("provider unavailable")
+
+        monkeypatch.setattr(reranker, "_rank_once", fail)
+        set_context(RagRequestState())
+        try:
+            for query in ["退款流程", "退款的具体步骤"]:
+                with pytest.raises(requests.exceptions.RequestException):
+                    reranker.rank(query, ["授权文档"], deadline_at=time.monotonic() + 10)
+            assert len(calls) == 1
+            # 新用户/新请求不能继承上一请求的失败标记。
+            set_context(RagRequestState())
+            monkeypatch.setattr(reranker, "_rank_once", lambda *a, **k: [(0, 0.9)])
+            assert reranker.rank("退款流程", ["授权文档"], deadline_at=time.monotonic() + 10) == [(0, 0.9)]
+        finally:
+            clear_context()
+
     def _reranker(self, monkeypatch, *, budget_ms=None, provider_timeout=4):
         from backend.rag import reranker as mod
 
