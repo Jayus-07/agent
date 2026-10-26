@@ -140,6 +140,10 @@ export interface EvaluationV2Dataset {
   status: string;
   version_count?: number;
   created_at?: string;
+  latest_version?: string;
+  latest_status?: string;
+  case_count?: number;
+  updated_at?: string;
 }
 
 export interface EvaluationV2DatasetVersion {
@@ -298,10 +302,14 @@ export interface EvaluationV2Run {
   corpus_hash?: string;
   env_hash?: string;
   invalid_reason?: string;
+  evaluation_mode?: string | null;
+  source?: string | null;
+  prompt_versions?: Record<string, number | string | null> | null;
 }
 
 export interface EvaluationV2RunFingerprint {
   source?: string;
+  evaluation_mode?: string;
   runner?: string;
   module?: string;
   dataset_version_id?: string;
@@ -669,7 +677,7 @@ export const evaluationService = {
     return request(`${BASE}/v2/datasets/evidence-search`, { method: 'POST', body: payload });
   },
 
-  createV2Run(payload: { suite_version_id: string; source?: string; kb_id?: string; request_id: string; subject_user_id?: number; prompt_versions?: Record<string, number | string | null> }): Promise<{ run: EvaluationV2Run; task: Record<string, unknown>; reused: boolean }> {
+  createV2Run(payload: { suite_version_id: string; source?: string; evaluation_mode?: string; kb_id?: string; request_id: string; subject_user_id?: number; prompt_versions?: Record<string, number | string | null> }): Promise<{ run: EvaluationV2Run; task: Record<string, unknown>; reused: boolean }> {
     return request(`${BASE}/v2/runs`, { method: 'POST', body: payload });
   },
 

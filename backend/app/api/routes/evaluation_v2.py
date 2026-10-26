@@ -227,6 +227,10 @@ class EvidenceSearchCreate(StrictModel):
 class EvalRunCreate(StrictModel):
     suite_version_id: uuid.UUID
     source: str = Field(default="manual", pattern=r"^[a-z][a-z0-9_-]{1,63}$")
+    evaluation_mode: str = Field(
+        default="self+ragas",
+        pattern=r"^(offline|semantic|ragas|self\+ragas)$",
+    )
     kb_id: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{1,63}$")
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
     subject_user_id: int | None = Field(default=None, gt=0)
@@ -1578,6 +1582,7 @@ async def create_eval_run(
             runtime_environment = await asyncio.to_thread(current_runtime_environment)
             environment = {
                 "runner": "legacy-rag-v1",
+                "evaluation_mode": body.evaluation_mode,
                 "suite_hash": str(definition["suite_hash"]),
                 "dataset_hash": str(definition["dataset_hash"]),
                 "corpus_hash": str(snapshot["content_hash"]),
@@ -1597,6 +1602,7 @@ async def create_eval_run(
             environment = {
                 "runner": f"legacy-{module}-v1",
                 "module": module,
+                "evaluation_mode": body.evaluation_mode,
                 "execution_semantics": execution_semantics,
                 "suite_hash": str(definition["suite_hash"]),
                 "dataset_hash": str(definition["dataset_hash"]),
@@ -1607,6 +1613,7 @@ async def create_eval_run(
         snapshot_json = {
             "schema_version": "evaluation.run.v2",
             "source": body.source,
+            "evaluation_mode": body.evaluation_mode,
             "request_fingerprint": request_fingerprint,
             "runner": "legacy-rag-v1" if is_rag else f"legacy-{module}-v1",
             "module": module,
@@ -1693,6 +1700,7 @@ def _run_fingerprint(snapshot_json: Any) -> dict[str, Any]:
 
     return {
         "source": str(snapshot.get("source") or "manual"),
+        "evaluation_mode": str(snapshot.get("evaluation_mode") or ""),
         "runner": str(snapshot.get("runner") or ""),
         "module": str(snapshot.get("module") or ""),
         "dataset_version_id": str(snapshot.get("dataset_version_id") or ""),

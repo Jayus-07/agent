@@ -21,9 +21,11 @@ def execute_binding(
     run_id=None,
     boundary=None,
     prompt_versions=None,
+    evaluation_mode: str = "offline",
     refresh_registry_before_run: bool = True,
 ) -> dict:
     from backend.evaluation.config import EvalConfig
+    from backend.evaluation.mode import resolve_evaluation_mode
     from backend.evaluation.service import EvaluationService
     from backend.evaluation.storage import persist_report
     from backend.infra.async_utils import run_on_worker_loop
@@ -34,14 +36,16 @@ def execute_binding(
 
     from backend.evaluation.managed_tasks import case_boundary
 
+    mode = resolve_evaluation_mode(evaluation_mode)
     token = case_boundary.set(boundary)
     try:
         report = EvaluationService().evaluate(
             EvalConfig(
                 module="rag",
                 dataset=f"managed:{binding_id}",
-                live=False,
-                no_ragas=True,
+                live=mode.live,
+                ragas=mode.ragas,
+                no_ragas=mode.no_ragas,
                 triggered_by=actor,
                 run_id=run_id,
                 resume=True,

@@ -1,11 +1,11 @@
 'use client'
 
 import { useSearchParams } from 'next/navigation'
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
-import DatasetGovernancePanel from './DatasetGovernancePanel'
-import EvaluationV2RunsPanel from './EvaluationV2RunsPanel'
-import EvaluationRunComparisonPanel from './EvaluationRunComparisonPanel'
+import DatasetsTab from './proto/DatasetsTab'
+import RunsTab from './proto/RunsTab'
+import CompareTab from './proto/CompareTab'
 
 type EvaluationTab = 'datasets' | 'runs' | 'compare'
 const TABS: readonly { id: EvaluationTab; label: string }[] = [
@@ -41,6 +41,8 @@ export default function EvaluationCenter() {
     return { key, version: version || '' }
   }, [searchParams])
 
+  const [compareRunId, setCompareRunId] = useState('')
+
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-bg-root">
     <header className="shrink-0 border-b border-border-subtle bg-surface-base px-4 py-5 sm:px-6">
       <div className="mx-auto w-full max-w-[1500px]">
@@ -61,9 +63,9 @@ export default function EvaluationCenter() {
         </div>
       </nav>
       <section id={'evaluation-panel-' + activeTab} role="tabpanel" aria-label={label} className="min-h-0 flex-1 overflow-y-auto">
-        {activeTab === 'datasets' && <DatasetGovernancePanel />}
-        {activeTab === 'runs' && <EvaluationV2RunsPanel promptPrefill={promptPrefill} />}
-        {activeTab === 'compare' && <EvaluationRunComparisonPanel />}
+        {activeTab === 'datasets' && <div className="mx-auto max-w-[1200px] px-5 py-5"><DatasetsTab onGoRuns={() => selectTab('runs')} /></div>}
+        {activeTab === 'runs' && <div className="mx-auto max-w-[1200px] px-5 py-5"><RunsTab promptPrefill={promptPrefill} onGoCompare={runId => { setCompareRunId(runId); selectTab('compare') }} /></div>}
+        {activeTab === 'compare' && <div className="mx-auto max-w-[1200px] px-5 py-5"><CompareTab focusRunId={compareRunId} /></div>}
       </section>
     </div>
   </div>
