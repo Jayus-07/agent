@@ -138,7 +138,7 @@ export default function ModelConfigPage() {
     }
     if (current === 'history') {
       return [
-        { icon: <RefreshCw size={15} />, label: '变更记录', value: history.isLoading ? '…' : String(historyCount), note: '全部可回滚' },
+        { icon: <RefreshCw size={15} />, label: '变更记录', value: history.isLoading ? '…' : String(historyCount), note: '部分配置支持恢复，需通过校验' },
         roleCard,
         modelCard,
         driftCard,

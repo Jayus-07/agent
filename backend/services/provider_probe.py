@@ -167,10 +167,36 @@ class ProbeResult:
     summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
+        failed = next((s for s in self.steps if s.status == STATUS_FAIL), None)
+        reason = failed.reason if failed else None
+        explanations = {
+            REASON_API_KEY: ("密钥无效或没有访问权限", "请检查供应商密钥及模型授权。"),
+            REASON_BILLING: ("供应商账户额度不足", "请检查账户余额、套餐和可用额度。"),
+            REASON_RATE_LIMITED: ("请求过于频繁或额度受限", "请稍后重试，并检查供应商的请求限制。"),
+            REASON_MODEL_NAME: ("服务未接受该模型请求", "请检查模型名称及当前密钥的模型访问权限。"),
+            REASON_BASE_URL: ("模型服务地址或接口不匹配", "请检查服务地址和所选接口协议。"),
+            REASON_CLIENT_BUILD: ("无法创建模型连接", "请检查服务地址、协议及连接设置。"),
+            REASON_NO_MODEL: ("尚未填写模型名称", "请填写模型名称后重新测试。"),
+            REASON_BLOCKED: ("服务地址被安全策略拦截", "请检查地址及允许访问的网络范围。"),
+            REASON_INVALID_URL: ("服务地址格式不正确", "请检查地址、协议和端口。"),
+            REASON_UNREACHABLE: ("无法连接模型服务", "请确认服务已启动，并检查地址、网络和证书。"),
+            REASON_TIMEOUT: (
+                "连接模型服务超时" if failed and failed.level == "L0" else "模型响应超时",
+                "请稍后重试；持续超时时检查网络和服务负载。",
+            ),
+        }
+        message, action = (
+            ("模型调用成功", "本次仅验证模型调用，不代表实际业务效果已验收。")
+            if self.ok else explanations.get(
+                reason, ("模型测试未通过，原因暂未确定", "请查看技术详情，或稍后重新测试。")
+            )
+        )
         return {
             "ok": self.ok,
             "blocked_at": self.blocked_at,
             "summary": self.summary,
+            "userMessage": message,
+            "nextAction": action,
             "steps": [s.to_dict() for s in self.steps],
         }
 

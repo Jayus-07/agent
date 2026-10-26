@@ -26,7 +26,6 @@ import {
 } from '@/api/modelConfig'
 import {
   maskSecret,
-  probeFallbackSummary,
   type ModelKind,
   type ProviderRow,
 } from '@/types/modelConfig'
@@ -207,7 +206,7 @@ export default function ProvidersTab({
       })
       setModelProbe(result)
       if (result.ok) setAddingModel({ ...addingModel, error: null })
-      toast[result.ok ? 'success' : 'error'](result.summary || (result.ok ? '测试通过' : '测试失败'))
+      toast[result.ok ? 'success' : 'error'](result.userMessage || (result.ok ? '模型调用成功' : '模型测试未通过'))
     } catch (error) {
       const message = error instanceof Error ? error.message : '测试失败'
       setModelProbeError(message)
@@ -507,11 +506,11 @@ export default function ProvidersTab({
       stopTesting()
       setProbeResults((previous) => ({ ...previous, [row.id]: result }))
       setProbeErrors((previous) => ({ ...previous, [row.id]: '' }))
-      toast[result.ok ? 'success' : 'error'](result.summary || (result.ok ? '厂商连通性通过' : '探测未通过'))
+      toast[result.ok ? 'success' : 'error'](result.userMessage || (result.ok ? '模型调用成功' : '模型测试未通过'))
       await onChanged()
     } catch (error) {
       const elapsedMs = stopTesting()
-      const message = error instanceof Error ? error.message : '供应商探测失败'
+      const message = error instanceof Error ? error.message : '模型测试失败，请检查连接后重试'
       setProbeErrors((previous) => ({ ...previous, [row.id]: `${message}（耗时 ${formatElapsed(elapsedMs)}）` }))
       toast.error(message)
     } finally {
@@ -569,7 +568,7 @@ export default function ProvidersTab({
           >
             <option value="all">全部状态</option>
             <option value="verified">已验证</option>
-            <option value="failed">探测失败</option>
+            <option value="failed">测试未通过</option>
             <option value="unverified">未验证</option>
           </select>
           <span data-testid="provider-filter-count" className="shrink-0 font-mono text-[10px] text-text-muted">
@@ -614,13 +613,13 @@ export default function ProvidersTab({
                                 {row.lastProbe.ok && <CheckCircle2 size={11} />}
                                 {row.lastProbe.ok
                                   ? (row.lastProbe.source === 'model-health' ? '已通过（模型健康）' : '已通过')
-                                  : `探测失败（${row.lastProbe.worstGrade || '未知'}）`}
+                                  : '上次测试未通过'}
                               </span>
                               {/* P1（2026-10-24）：上游不可达模型清单就地可见，
                                   不再只躺在角色行的手动测试里。 */}
                               {row.upstreamDown && !!row.downModels?.length && (
                                 <span className="text-red-700" title={`上游不可达：${row.downModels.join('、')}`}>
-                                  上游不可达：{row.downModels.join('、')}
+                                  最近调用异常：{row.downModels.join('、')}
                                 </span>
                               )}
                             </>
@@ -717,7 +716,7 @@ export default function ProvidersTab({
                     {liveResult && <ProbeResultDetails result={liveResult} />}
                     {liveError && <ErrorNote message={liveError} />}
                     {!liveResult && !liveError && !isTesting && row.lastProbe && !row.lastProbe.ok && row.lastProbe.worstGrade && (
-                      <div className="rounded-lg border border-red-100 bg-red-50/60 px-2.5 py-2 text-[10px] text-red-700">建议：{probeFallbackSummary(row.lastProbe.worstGrade, 'fail')}</div>
+                      <div className="rounded-lg border border-amber-100 bg-amber-50/60 px-3 py-2 text-xs text-amber-800">上次测试时间：{new Date(row.lastProbe.at).toLocaleString('zh-CN')}。历史记录未包含完整失败原因，请对具体模型重新测试；不能仅凭测试阶段判断是密钥或模型名称问题。</div>
                     )}
                   </div>
                 )}

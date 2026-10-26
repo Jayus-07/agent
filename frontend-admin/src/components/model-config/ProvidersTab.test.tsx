@@ -603,7 +603,7 @@ describe('ProvidersTab 模型目录与「去修」动作（B2）', () => {
     await click(container.querySelector('[data-testid="provider-test"]') as HTMLButtonElement)
 
     const fixArea = container.querySelector('[data-testid="probe-fix-L2"]') as HTMLElement
-    expect(fixArea.textContent).toContain('可以直接修')
+    expect(fixArea.textContent).toContain('建议操作')
     await click(Array.from(fixArea.querySelectorAll('button')).find((b) => b.textContent?.includes('从模型清单里选一个')) as HTMLButtonElement)
     expect(apiMock.fetchModelCatalog).toHaveBeenCalled()
     expect(container.querySelector('[data-testid="model-catalog-panel"]')).toBeTruthy()

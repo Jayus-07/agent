@@ -403,7 +403,12 @@ async def list_providers(ident=Depends(require_user_actor)) -> dict:
                     if h.get("status") and h.get("status") not in ("healthy", "slow")
                 ]
                 latest = max(hrows, key=lambda h: str(h.get("lastCheckedAt") or ""))
-                if row.get("lastProbe") is None:
+                previous_probe = row.get("lastProbe")
+                # 新模型健康结果不能被旧供应商测试覆盖；保留时间供用户核对。
+                if previous_probe is None or (
+                    str(latest.get("lastCheckedAt") or "")
+                    > str(previous_probe.get("at") or "")
+                ):
                     row["lastProbe"] = {
                         "at": latest.get("lastCheckedAt"),
                         "ok": not down,

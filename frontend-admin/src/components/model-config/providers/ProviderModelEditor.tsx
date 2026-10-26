@@ -9,6 +9,7 @@ import { FlaskConical, Save, X } from 'lucide-react'
 import { modelKindLabel, type ModelKind } from '@/types/modelConfig'
 import type { ProbeResponse } from '@/api/modelConfig'
 import type { ModelDraft } from './draft'
+import ProbeResultDetails from './ProbeResultDetails'
 
 const PRICE_HINT = '每 1M tokens'
 
@@ -41,7 +42,7 @@ export default function ProviderModelEditor({
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-sm font-semibold text-text-primary">{draft.editingExisting ? '调整模型价格' : '新增模型'}</div>
-            <p className="mt-1 text-[11px] text-text-muted">供应商：{draft.provider.displayName}。保存即按填写的单价登记生效{metered ? '（登记即生效）' : ''}；连通性验证请用供应商卡片上的「测试连接」。</p>
+            <p className="mt-1 text-xs text-text-muted">供应商：{draft.provider.displayName}。保存登记配置；点击下方「测试连接」验证模型调用，云端可能产生少量费用。</p>
           </div>
           <button onClick={onCancel} className="text-text-muted hover:text-text-primary" aria-label="关闭"><X size={16} /></button>
         </div>
@@ -93,17 +94,7 @@ export default function ProviderModelEditor({
               )}
             </fieldset>
           )}
-          {probe && (
-            <div className={`rounded-lg px-3 py-2 text-[11px] ${probe.ok ? 'border border-emerald-200 bg-emerald-50 text-emerald-800' : 'border border-red-200 bg-red-50 text-red-800'}`}>
-              {probe.ok ? '✓ ' : '✗ '}{probe.summary}
-              {probe.steps?.some((s) => s.raw) && (
-                <details className="mt-1">
-                  <summary className="cursor-pointer text-[10px] opacity-70">技术细节（上游原文，排障用）</summary>
-                  <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all text-[10px] leading-4">{probe.steps.filter((s) => s.raw).map((s) => `${s.grade}: ${s.summary}${s.raw ? ` | ${s.raw}` : ''}`).join('\n')}</pre>
-                </details>
-              )}
-            </div>
-          )}
+          {probe && <ProbeResultDetails result={probe} />}
           {draft.error && <div className="break-words rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-800">{draft.error}</div>}
         </div>
         <div className="mt-5 flex justify-end gap-2">

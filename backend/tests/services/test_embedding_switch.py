@@ -39,7 +39,18 @@ async def test_preview_reports_real_scope_and_dimension_without_role_write(previ
     assert result["vectors"] == 2
     assert result["requiresRebuild"] is True
     assert result["currentModel"] == "old"
+    assert result["modelChanged"] is True
+    assert result["incompatibleCollections"] == 1
     assert result["traceId"]
+
+
+@pytest.mark.asyncio
+async def test_same_model_preview_distinguishes_old_indexes(preview_env, monkeypatch):
+    monkeypatch.setattr(model_config.model_roles, "resolve_effective", lambda role: {"value": "new"})
+    result = await model_config.ModelConfigService().preview_embedding_change("new")
+    assert result["modelChanged"] is False
+    assert result["requiresRebuild"] is True
+    assert result["incompatibleCollections"] == 1
 
 
 @pytest.mark.asyncio

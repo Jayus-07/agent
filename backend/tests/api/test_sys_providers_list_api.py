@@ -371,3 +371,21 @@ def test_never_leaks_secret(client, monkeypatch):
     assert "sk-secret-value" not in raw      # 明文
     assert "key_cipher" not in raw           # 密文列名
     assert "apiKey" not in raw and "api_key" not in raw
+
+
+def test_newer_model_health_replaces_old_provider_failure(client, monkeypatch):
+    snapshot = _db_snapshot()
+    snapshot.providers[0].update({
+        "last_probe_at": "2026-10-25T00:00:00+00:00",
+        "last_probe_ok": False, "last_probe_worst_grade": "L2",
+    })
+    monkeypatch.setattr(registry_store, "load_registry", AsyncMock(return_value=snapshot))
+    service = sys_providers.get_model_config_service()
+    monkeypatch.setattr(service, "list_model_health", AsyncMock(return_value=[{
+        "provider": "qwen", "modelName": "qwen3.7-plus", "status": "healthy",
+        "lastCheckedAt": "2026-10-26T00:00:00+00:00",
+    }]))
+    item = next(row for row in client.get("/sys/providers").json()["items"] if row["id"] == "qwen")
+    assert item["lastProbe"]["ok"] is True
+    assert item["lastProbe"]["source"] == "model-health"
+    assert item["upstreamDown"] is False

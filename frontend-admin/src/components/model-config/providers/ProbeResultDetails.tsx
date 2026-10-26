@@ -21,23 +21,23 @@ export default function ProbeResultDetails({
   return (
     <div
       data-testid="probe-result-details"
-      className={`mt-2 rounded-lg border px-2.5 py-2 text-[10px] ${result.ok ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800' : 'border-red-200 bg-red-50/80 text-red-800'}`}
+      className={`mt-2 rounded-lg border px-3 py-3 text-xs ${result.ok ? 'border-emerald-200 bg-emerald-50/70 text-emerald-800' : 'border-red-200 bg-red-50/80 text-red-800'}`}
     >
       <div className="flex items-center justify-between gap-2">
-        <div className="font-medium">{result.ok ? '探测通过' : failure}</div>
+        <div className="font-medium">{result.userMessage || (result.ok ? '模型调用成功' : failure)}</div>
         {elapsedMs > 0 && <span className="shrink-0 font-mono opacity-70">总耗时 {formatElapsed(elapsedMs)}</span>}
       </div>
+      <p className="mt-1">{result.nextAction || (result.ok ? '本次仅验证模型调用，不代表实际业务效果已验收。' : '请核对连接设置与模型权限；原因不明时查看技术详情。')}</p>
       {/* 这次测的是谁、实际打的哪个地址 —— 模型级测试后必看，防止
           「模型名错误」之类的归因把人引去改模型名（实际是地址问题）。 */}
       {(result.model || result.target) && (
         <div className="mt-0.5 break-words opacity-80">
-          {result.model && <>模型 <span className="font-mono">{result.model}</span></>}
-          {result.model && result.target && ' · '}
-          {result.target && <>实际地址 <span className="font-mono">{result.target}</span></>}
+          {result.model && <>测试模型：<span className="font-mono">{result.model}</span></>}
         </div>
       )}
-      <details open={!result.ok} className="mt-1.5">
-        <summary className="cursor-pointer select-none text-[10px] font-medium">查看探测详情</summary>
+      <details className="mt-2">
+        <summary className="cursor-pointer select-none text-xs font-medium">查看技术详情</summary>
+        {result.target && <div className="mt-1 break-all">请求地址：{result.target}</div>}
         <ol className="mt-1.5 space-y-1.5">
           {result.steps.map((step) => {
             const hints = step.status === 'fail' ? fixHints?.[step.grade] ?? [] : []
@@ -50,7 +50,7 @@ export default function ProbeResultDetails({
                 <div className="mt-0.5 break-words" data-testid={`probe-step-summary-${step.grade}`}>{probeStepSummary(step)}</div>
                 {hints.length > 0 && onFix && (
                   <div data-testid={`probe-fix-${step.grade}`} className="mt-1 space-y-1.5">
-                    <span className="flex items-center gap-1 opacity-80"><Wrench size={10} />可以直接修：</span>
+                    <span className="flex items-center gap-1 opacity-80"><Wrench size={12} />建议操作：</span>
                     {hints.map((hint) => (
                       <div key={`${hint.kind}:${hint.label}`} className="space-y-1">
                         {'description' in hint && (

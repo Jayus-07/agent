@@ -107,6 +107,8 @@ export interface DriftResponse {
 }
 
 export interface ProbeResponse extends ProbeResult {
+  userMessage?: string
+  nextAction?: string
   provider: string | null
   /** 这次探测用的模型名（模型级测试时=点按钮的那个模型；否则为供应商第一个模型） */
   model?: string
@@ -120,6 +122,8 @@ export interface ProbeResponse extends ProbeResult {
 function normalizeProbeResponse(input: Record<string, any>): ProbeResponse {
   return {
     ok: Boolean(input.ok),
+    userMessage: typeof input.userMessage === 'string' ? input.userMessage : undefined,
+    nextAction: typeof input.nextAction === 'string' ? input.nextAction : undefined,
     provider: input.provider ?? null,
     model: typeof input.model === 'string' ? input.model : undefined,
     target: String(input.target ?? ''),
@@ -148,6 +152,8 @@ export async function listModelCatalog(): Promise<{ models: ModelCatalogEntry[];
 }
 
 export interface EmbeddingPreview {
+  modelChanged?: boolean
+  incompatibleCollections?: number
   modelName: string
   currentModel: string
   fingerprint: string

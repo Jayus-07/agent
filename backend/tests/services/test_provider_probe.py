@@ -730,7 +730,9 @@ def test_probe_result_dict_shape():
     res = P.ProbeResult(ok=True, blocked_at=None, summary="ok",
                         steps=[P.ProbeStep("L0", P.STATUS_PASS, "可达")])
     d = res.to_dict()
-    assert set(d) == {"ok", "blocked_at", "summary", "steps"}
+    assert set(d) == {"ok", "blocked_at", "summary", "steps", "userMessage", "nextAction"}
+    assert d["userMessage"]
+    assert d["nextAction"]
     assert set(d["steps"][0]) == {
         "level", "status", "summary", "detail", "elapsed_ms", "reason",
     }

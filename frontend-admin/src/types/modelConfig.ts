@@ -710,12 +710,14 @@ export function probeOverallLabel(result: {
 
 export interface ConfigHistoryEntry {
   id: string
-  object: 'role' | 'provider' | 'provider_credential' | 'provider_network_scope'
+  object: 'role' | 'role_policy' | 'provider' | 'provider_credential' | 'provider_network_scope'
   /** role 名 / provider id */
   key: string
   oldValue: string | null
   newValue: string | null
   operator: string
+  /** 展示用户名；operator 保留原始审计身份。 */
+  operatorName?: string
   at: string
   /** 密钥类条目后端只回指纹 */
   secretFingerprint?: string | null

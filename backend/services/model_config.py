@@ -556,17 +556,22 @@ class ModelConfigService:
         trace_collector.finish(trace, "预检通过",
                                int((time.monotonic()-started)*1000), model_name)
         current = model_roles.resolve_effective("embedding")["value"]
-        requires_rebuild = any(
-            item["status"] != "ready" or item["model"] != model_name
-            or (item["fingerprint"] and item["fingerprint"] != fingerprint)
+        incompatible_count = sum(
+            bool(item["status"] != "ready" or item["model"] != model_name
+                 or (item["fingerprint"] and item["fingerprint"] != fingerprint))
             for item in info["collections"]
-        ) or (info["vectors"] > 0 and current != model_name)
+        )
+        requires_rebuild = bool(incompatible_count) or (
+            info["vectors"] > 0 and current != model_name
+        )
         return {
             **info, "modelName": model_name,
             "currentModel": current, "fingerprint": fingerprint,
             "billing": billing_mode,
             "provider": binding.provider_id,
             "requiresRebuild": requires_rebuild, "traceId": trace.id,
+            "modelChanged": current != model_name,
+            "incompatibleCollections": incompatible_count,
         }
 
     async def update_role(self, role: str, model_name: str, operator: str, *,
@@ -2513,10 +2518,11 @@ class ModelConfigService:
             rows = (
                 await session.execute(
                     text(
-                        "SELECT id, object_type, object_key, old_value, new_value, "
-                        "secret_fingerprint, operator, changed_at, rollbackable "
-                        f"FROM llm_config_history {where} "
-                        "ORDER BY changed_at DESC, id DESC LIMIT :limit"
+                        "SELECT h.*, u.username AS operator_username "
+                        "FROM (SELECT * FROM llm_config_history "
+                        f"{where} ORDER BY changed_at DESC, id DESC LIMIT :limit) h "
+                        "LEFT JOIN auth.users u ON h.operator = 'user:' || u.id::text "
+                        "ORDER BY h.changed_at DESC, h.id DESC"
                     ),
                     params,
                 )
@@ -2531,6 +2537,15 @@ class ModelConfigService:
                         "newValue": row["new_value"],
                         "secretFingerprint": row["secret_fingerprint"],
                         "operator": row["operator"],
+                        "operatorName": (
+                            row.get("operator_username")
+                            or (
+                                f"未知用户（ID：{row['operator'][5:]}）"
+                                if str(row["operator"] or "").startswith("user:")
+                                else "系统" if row["operator"] in ("system", "")
+                                else f"自动化：{row['operator']}"
+                            )
+                        ),
                         "at": _iso(row["changed_at"]),
                         "rollbackable": bool(row["rollbackable"]),
                     }

@@ -121,13 +121,27 @@ describe('RoleBindingsTab 模型目录选择', () => {
     expect(container.textContent).not.toContain('检查并重建全部向量')
   })
 
-  it('预检失败时不保存模型，也不打开确认框', async () => {
-    apiMock.previewEmbeddingChange.mockRejectedValueOnce(new Error('输出维度不匹配'))
+  it('相同嵌入模型保存不预检、不写入，也不触发重建', async () => {
     const container = mount({ canManageEmbedding: true, roles: [roleRow({
       role: 'embedding', requiresReindex: true,
       effectiveModel: 'qwen3.7-text-embedding', literalValue: 'qwen3.7-text-embedding',
     })] })
     await startEditing(container)
+    await act(async () => { buttonByText(container, '保存').click(); await Promise.resolve() })
+    expect(apiMock.previewEmbeddingChange).not.toHaveBeenCalled()
+    expect(apiMock.saveModelRole).not.toHaveBeenCalled()
+    expect(apiMock.rebuildEmbeddingIndex).not.toHaveBeenCalled()
+    expect(toastMock.success).toHaveBeenCalledWith('当前已使用该模型，无需切换')
+  })
+
+  it('预检失败时不保存模型，也不打开确认框', async () => {
+    apiMock.previewEmbeddingChange.mockRejectedValueOnce(new Error('输出维度不匹配'))
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({
+      role: 'embedding', requiresReindex: true,
+      effectiveModel: 'old', literalValue: 'old',
+    })] })
+    await startEditing(container)
+    choose(container, 'role-model-select-embedding', 'qwen3.7-text-embedding')
     await act(async () => { buttonByText(container, '保存').click(); await Promise.resolve() })
     expect(apiMock.saveModelRole).not.toHaveBeenCalled()
     expect(container.querySelector('[role="dialog"]')).toBeNull()
@@ -161,7 +175,10 @@ describe('RoleBindingsTab 模型目录选择', () => {
     const container = mount({ canManageEmbedding: true, roles: [roleRow({ role: 'embedding' })] })
     await act(async () => { buttonByText(container, '检查并重建全部向量').click(); await Promise.resolve() })
     expect(apiMock.rebuildEmbeddingIndex).not.toHaveBeenCalled()
-    await act(async () => { buttonByText(container, '确认费用并开始重建').click(); await Promise.resolve() })
+    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('当前模型保持不变')
+    expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain('→')
+    expect(container.querySelector('[role="dialog"]')?.textContent).not.toContain('不在同一空间')
+    await act(async () => { buttonByText(container, '确认并开始重建').click(); await Promise.resolve() })
     expect(apiMock.rebuildEmbeddingIndex).toHaveBeenCalledTimes(1)
     expect(container.querySelector('[role="status"]')?.textContent).toContain('等待执行')
     expect(container.querySelector('a[href="/tasks"]')).toBeTruthy()

@@ -314,6 +314,11 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
 
   async function submit(row: RoleRow) {
     const next = value.trim()
+    if (next === row.effectiveModel && next === row.literalValue) {
+      toast.success('当前已使用该模型，无需切换')
+      cancel()
+      return
+    }
     if (!next && row.role !== 'eval_gen') {
       toast.error('模型名不能为空')
       return
@@ -759,28 +764,25 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
           <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-2xl">
             <div className="flex items-center gap-2 border-b border-slate-100 px-5 py-4">
               <AlertTriangle size={15} className="text-amber-600" />
-              <div className="text-sm font-medium text-text-primary">{confirmMode === 'rebuild' ? '重建全部向量' : `修改${roleLabel(confirmRow.role)}`}</div>
+              <div className="text-sm font-medium text-text-primary">{confirmMode === 'rebuild' ? `使用 ${value.trim()} 重建全部向量` : `修改${roleLabel(confirmRow.role)}`}</div>
             </div>
             <div className="space-y-3 px-5 py-4 text-xs text-text-secondary">
               {embeddingPreview && <div className="rounded border border-amber-200 bg-amber-50 p-3">
-                <p>影响 {embeddingPreview.collections.length} 个索引集合，共 {embeddingPreview.vectors} 条向量；已实测输出 {embeddingPreview.dimension} 维。</p>
+                <p>将处理 {embeddingPreview.vectors} 条向量，分布在 {embeddingPreview.collections.length} 个数据集合中（不是文档数量）；已验证模型输出 {embeddingPreview.dimension} 维。</p>
+                <details className="mt-2"><summary className="cursor-pointer">查看处理范围</summary><ul className="mt-1 max-h-40 overflow-y-auto break-all">{embeddingPreview.collections.map((item) => <li key={item.collection}>{item.collection}：{item.vectors} 条向量</li>)}</ul></details>
                 <p className="mt-2">复用已入库文本，不重复 OCR 和解析。{embeddingPreview.billing === 'local'
                   ? '本地推理仍记录使用量和执行耗时。'
                   : '会产生模型调用费用，金额尚未估算，以实际用量和有效价格结算。'}</p>
                 {(embeddingPreview.requiresRebuild || confirmMode === 'rebuild') && <p className="mt-2">重建完成前暂停检索；失败保留旧向量，并继续显示待重建，不会把部分完成当作成功。</p>}
               </div>}
-              {embeddingPreview?.requiresRebuild ? <p>
-                已有索引与查询向量不在同一空间，<strong className="text-red-700">检索结果会不可用</strong>，
-                必须全量重建索引（耗时较长）。
-              </p> : confirmMode === 'rebuild' ? <p>本次将重新生成全部向量，期间暂停检索，成功后统一发布。</p>
+              {confirmMode === 'rebuild' ? <p>当前模型保持不变。本次重新生成全部向量，期间相关向量检索暂停，全部发布成功后恢复。</p> : embeddingPreview?.requiresRebuild ? <p>
+                切换后现有索引需要更新，重建完成前相关向量检索暂停。
+              </p>
                 : <p>当前没有不兼容的旧向量，保存后无需重建。兼容性检查和模型调用均有执行记录。</p>}
               <div className="rounded-lg border border-slate-100 bg-slate-50 px-3 py-2 font-mono text-[11px] text-text-primary">
-                {confirmRow.effectiveModel || '—'} → {value.trim() || '（空）'}
+                {confirmMode === 'rebuild' ? `重建使用：${value.trim()}` : `${confirmRow.effectiveModel || '—'} → ${value.trim() || '（空）'}`}
               </div>
-              {(embeddingPreview?.requiresRebuild || confirmMode === 'rebuild') && <p className="text-[11px] text-text-muted">
-                不同向量模型通常不共享同一语义空间。保存后现有向量索引将进入「待重建」状态，
-                完成重建前系统会拒绝按新模型查询旧索引（INDEX_EMBEDDING_MISMATCH），不会静默降级。
-              </p>}
+              {(embeddingPreview?.incompatibleCollections ?? incompatibleIndexes(confirmRow).length) > 0 && <p className="text-xs text-amber-700">检测到 {embeddingPreview?.incompatibleCollections ?? incompatibleIndexes(confirmRow).length} 个集合待处理。{incompatibleIndexes(confirmRow).length > 0 && <>旧索引模型：{Array.from(new Set(incompatibleIndexes(confirmRow).map((item) => item.embeddingModel || '未记录'))).join('、')}。</>}{confirmMode === 'rebuild' && '这是索引现状，不代表本次切换了模型。'}</p>}
             </div>
             <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-4">
               <button
@@ -797,7 +799,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
                 disabled={busy}
                 className="rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"
               >
-                {busy ? '处理中…' : confirmMode === 'rebuild' ? '确认费用并开始重建' : '保存配置'}
+                {busy ? '处理中…' : confirmMode === 'rebuild' ? '确认并开始重建' : '保存配置'}
               </button>
             </div>
           </div>
