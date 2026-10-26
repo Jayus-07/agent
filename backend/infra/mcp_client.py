@@ -125,6 +125,19 @@ def _extract_payload(result) -> Any:
         return joined
 
 
+def _direct_client_factory(**kwargs):
+    """httpx client 工厂：禁用环境/系统代理，MCP 调用永远直连目标。
+
+    Windows/CI 常配系统代理（如 127.0.0.1:7897），httpx trust_env 默认
+    会走代理——这既破坏内网服务名直连，也架空 url_guard 的逐 IP SSRF
+    校验（校验的是 DNS 解析结果，实际连接却由代理转发）。
+    """
+    import httpx
+
+    kwargs.setdefault("trust_env", False)
+    return httpx.AsyncClient(**kwargs)
+
+
 async def _call_async(base_url: str, tool_name: str, arguments: dict,
                       timeout_s: float,
                       headers: dict | None = None) -> Any:
@@ -132,10 +145,10 @@ async def _call_async(base_url: str, tool_name: str, arguments: dict,
     from mcp.client.streamable_http import streamablehttp_client
 
     timeout = timedelta(seconds=timeout_s)
-    async with streamablehttp_client(base_url, timeout=timeout,
-                                     headers=headers) as (
-        read, write, _
-    ):
+    async with streamablehttp_client(
+        base_url, timeout=timeout, headers=headers,
+        httpx_client_factory=_direct_client_factory,
+    ) as (read, write, _):
         async with ClientSession(read, write, read_timeout_seconds=timeout) as session:
             init = await asyncio.wait_for(session.initialize(), timeout_s)
             if init is None:
@@ -150,6 +163,78 @@ async def _call_async(base_url: str, tool_name: str, arguments: dict,
                     payload, ensure_ascii=False)
                 raise McpClientError(f"MCP 工具报错 {tool_name}: {detail}")
             return _extract_payload(result)
+
+
+async def _list_tools_async(base_url: str, timeout_s: float,
+                            headers: dict | None = None) -> list[dict[str, Any]]:
+    """短命会话执行 tools/list，返回上游工具元数据的原始 dict 列表。
+
+    返回内容全部是不可信输入（名称/描述/Schema 由外部 server 声明），
+    调用方必须经 content_hash 与人工审核后才能进入平台治理面。
+    """
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    timeout = timedelta(seconds=timeout_s)
+    async with streamablehttp_client(
+        base_url, timeout=timeout, headers=headers,
+        httpx_client_factory=_direct_client_factory,
+    ) as (read, write, _):
+        async with ClientSession(read, write, read_timeout_seconds=timeout) as session:
+            init = await asyncio.wait_for(session.initialize(), timeout_s)
+            if init is None:
+                raise McpClientError(f"MCP 握手失败（无响应）: {base_url}")
+            listed = await asyncio.wait_for(session.list_tools(), timeout_s)
+            tools: list[dict[str, Any]] = []
+            for item in (getattr(listed, "tools", None) or []):
+                schema = getattr(item, "inputSchema", None)
+                if not isinstance(schema, dict):
+                    schema = {"type": "object", "properties": {}}
+                # 归一为 JSON Schema object 形态（上游可能缺 type/properties）
+                if schema.get("type") != "object":
+                    schema = {**schema, "type": "object"}
+                schema.setdefault("properties", {})
+                schema.setdefault("additionalProperties", False)
+                raw_output = getattr(item, "outputSchema", None)
+                tools.append({
+                    "name": str(getattr(item, "name", "") or ""),
+                    "description": str(getattr(item, "description", "") or ""),
+                    "input_schema": schema,
+                    # 上游声明的结构化输出（多数 server 不声明 → None）
+                    "output_schema": dict(raw_output)
+                    if isinstance(raw_output, dict) else None,
+                })
+            return tools
+
+
+def list_tools(base_url: str, *, timeout: float | None = None,
+               headers: dict | None = None) -> list[dict[str, Any]]:
+    """同步发现外部 MCP server 的工具列表（tools/list）。
+
+    返回 [{name, description, input_schema}]；name 为空或 Schema 非 object
+    的条目已在协议层归一。上游声明不可信——调用方负责快照、hash 与审核。
+
+    Raises:
+        McpClientError: 连接失败 / 超时 / 握手失败 / 协议错误。
+    """
+    timeout_s = float(MCP_CFG.TRAIN_MCP_TIMEOUT if timeout is None else timeout)
+    started = time.perf_counter()
+    try:
+        tools = run_async(_list_tools_async(base_url, timeout_s, headers))
+    except McpClientError:
+        raise
+    except asyncio.TimeoutError as e:
+        raise McpClientError(
+            f"MCP 工具发现超时（>{timeout_s}s）: {base_url}") from e
+    except Exception as e:  # noqa: BLE001 — 连接/协议层异常统一收口
+        root = _unwrap_exception_group(e)
+        if root is not e and isinstance(root, McpClientError):
+            raise root
+        detail = f"{type(root).__name__}: {root}" if root is not e else f"{type(e).__name__}: {e}"
+        raise McpClientError(f"MCP 工具发现失败: {base_url} — {detail}") from e
+    logger.info("[McpClient] %s tools/list ok: %d tools (%.0fms)",
+                base_url, len(tools), (time.perf_counter() - started) * 1000)
+    return tools
 
 
 def call_tool(base_url: str, tool_name: str, arguments: dict, *,

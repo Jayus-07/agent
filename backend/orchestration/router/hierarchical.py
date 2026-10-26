@@ -30,7 +30,7 @@ from backend.orchestration.router.domain_classifier import (
     DomainPrediction,
     get_coarse_classifier,
 )
-from backend.orchestration.router.manifest import load_manifest
+from backend.orchestration.router.manifest import effective_manifest
 from backend.orchestration.router.rule_router import RuleRouter
 from backend.orchestration.router.vector_router import VectorRouter
 from backend.orchestration.router.vector_router import VectorRouteError
@@ -99,7 +99,7 @@ def resolve_domain_tools(domain: str) -> list[ToolCandidate]:
     """
     from backend.orchestration.capability_registry import tool_registry
 
-    manifest = load_manifest()
+    manifest = effective_manifest()
     decls = {c.name: c for c in manifest.capabilities}
     candidates: list[ToolCandidate] = []
     for name in manifest.capabilities_by_domain.get(domain, ()):

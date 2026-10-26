@@ -30,6 +30,7 @@ import {
   type ToolInventory,
   type ToolStats,
 } from '@/api/governance'
+import { getMcpTools, type McpTool } from '@/api/mcp'
 
 const ERROR_CLASS_LABEL: Record<string, string> = {
   timeout: '超时',
@@ -368,6 +369,15 @@ const DS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: 'internal', label: '平台内部' },
 ]
 
+/** 动态 MCP 工具状态徽章（与 /mcp 页一致口径） */
+const MCP_STATUS_META: Record<string, { label: string; cls: string }> = {
+  pending: { label: '待审核', cls: 'bg-amber-100 text-amber-700' },
+  approved: { label: '已生效', cls: 'bg-emerald-100 text-emerald-700' },
+  rejected: { label: '已拒绝', cls: 'bg-red-100 text-red-700' },
+  disabled: { label: '已停用', cls: 'bg-slate-100 text-slate-600' },
+  retired: { label: '上游已消失', cls: 'bg-zinc-100 text-zinc-600' },
+}
+
 const CLS_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: '', label: '全部分类' },
   { value: 'BREAKING', label: 'BREAKING' },
@@ -403,6 +413,9 @@ export default function ToolsPage() {
   const [failedOnly, setFailedOnly] = useState(searchParams.get('failed') === '1')
   const [clsFilter, setClsFilter] = useState<ChangeCls>(parseCls(searchParams.get('cls')))
   const changesLoadedOnce = useRef(false)
+  // 外部 MCP 动态工具（数据库事实源，非契约 lock；管理入口在 /mcp）
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([])
+  const [mcpError, setMcpError] = useState<string | null>(null)
 
   const loadChanges = (classification: ChangeCls) => {
     // 分类筛选走服务端过滤：本地只存最近 20 条，前端过滤会漏更早的 BREAKING
@@ -422,6 +435,9 @@ export default function ToolsPage() {
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false))
     loadChanges(clsFilter)
+    getMcpTools()
+      .then((tools) => setMcpTools(tools))
+      .catch((e: Error) => setMcpError(e.message))
   }
 
   useEffect(load, [])
@@ -716,6 +732,61 @@ export default function ToolsPage() {
             <CheckCircle2 size={12} />
             中文名在 backend/tools/labels.py 登记、随契约 lock 派生（G2 禁手抄）；红色失败行点击可展开错误来源明细；「不可静态派生」= 该 Skill 的 Tool 分发逻辑无法从 _tool_fn 主链求值（如 SQL/Competitor）；数据源徽章：MCP=外部 MCP server 数据源（tooltip 含上游工具与开关）、外部=外部网络 API，无徽章 = 平台内部数据源
           </p>
+
+          {mcpTools.length > 0 || mcpError ? (
+            <AssetSection
+              title="外部 MCP 工具（动态注册）"
+              meta={`${mcpTools.length} 个 · 数据库事实源，管理入口在 MCP 能力中心`}
+              bodyClassName="p-0"
+            >
+              {mcpError ? (
+                <div className="px-4 py-6 text-center text-[12px] text-red-600">
+                  MCP 工具目录加载失败：{mcpError}
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-[12.5px]">
+                    <thead>
+                      <tr className="border-b border-border-subtle text-left text-[11px] text-text-muted">
+                        <th className="px-4 py-2 font-normal">Capability</th>
+                        <th className="px-2 py-2 font-normal">上游工具</th>
+                        <th className="px-2 py-2 font-normal">连接</th>
+                        <th className="px-2 py-2 font-normal">状态</th>
+                        <th className="px-2 py-2 font-normal">风险</th>
+                        <th className="px-4 py-2 font-normal">授权产品</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {mcpTools.map((t) => {
+                        const meta = MCP_STATUS_META[t.status] ?? { label: t.status, cls: 'bg-slate-100 text-slate-600' }
+                        return (
+                          <tr key={t.id} className="border-b border-border-subtle">
+                            <td className="px-4 py-2 font-mono">
+                              {t.capability}
+                              {t.schema_changed && (
+                                <span className="ml-1 rounded bg-red-100 px-1 text-[10px] text-red-700" title="上游 Schema 已变化，需重新审核">漂移</span>
+                              )}
+                            </td>
+                            <td className="px-2 py-2 font-mono text-[11px] text-text-muted">{t.tool_name}</td>
+                            <td className="px-2 py-2">{t.connection_name}</td>
+                            <td className="px-2 py-2">
+                              <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>
+                            </td>
+                            <td className="px-2 py-2">{t.governance?.risk_level ?? '—'}</td>
+                            <td className="px-4 py-2 text-[11px] text-text-secondary">
+                              {(t.grants ?? []).length > 0
+                                ? (t.grants ?? []).map((g) => g.product_key).join('、')
+                                : <span className="text-text-muted">未授权</span>}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </AssetSection>
+          ) : null}
 
           {changes.length > 0 || clsFilter ? (
             <AssetSection title="契约变更历史" meta="生成器检测到变更时自动落库，最新在前" bodyClassName="p-0">

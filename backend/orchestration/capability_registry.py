@@ -36,6 +36,13 @@ from backend.shared.logger import logger
 # ── 节点名约定 ──────────────────────────────────────────────
 # Skill.name + "_skill" → LangGraph 节点名
 # 例: RAGSkill.name="rag" → 节点名 "rag_skill"
+
+# 动态 MCP 工具的统一执行节点（backend/skills/mcp_dynamic 启动时注册）。
+# 所有 mcp.* capability 都路由到这一个节点，运行时按 capability 查
+# mcp_registry 快照解析连接与上游工具——不需要为每个动态工具重建图。
+MCP_DYNAMIC_NODE = "mcp_dynamic_skill"
+
+
 def _node_name(skill_name: str) -> str:
     return f"{skill_name}_skill"
 
@@ -121,7 +128,7 @@ class ToolRegistry:
     @cached_property
     def CAPABILITY_SCHEMA(self) -> Dict[str, dict]:
         """派生：capability → Planner prompt schema"""
-        from backend.orchestration.router.manifest import load_manifest
+        from backend.orchestration.router.manifest import effective_manifest
 
         return {
             declaration.name: {
@@ -129,7 +136,7 @@ class ToolRegistry:
                 "params": dict(declaration.params_schema),
                 "示例": dict(declaration.planner_examples[0]),
             }
-            for declaration in load_manifest().capabilities
+            for declaration in effective_manifest().capabilities
         }
 
     # =====================================================
@@ -137,11 +144,21 @@ class ToolRegistry:
     # =====================================================
 
     def get_node(self, capability: str) -> Optional[str]:
-        """根据 capability 获取对应的图节点名"""
+        """根据 capability 获取对应的图节点名。
+
+        `mcp.*` 动态 capability 固定映射到 MCP_DYNAMIC_NODE（节点启动时
+        已注册）；未注册（如测试快照未注入）返回 None，路由层按未注册
+        能力 fail-safe 过滤。
+        """
         node = self.CAPABILITY_MAP.get(capability)
-        if not node:
-            logger.warning(f"[ToolRegistry] 未知 capability: {capability}")
-        return node
+        if node:
+            return node
+        if str(capability or "").startswith("mcp."):
+            if MCP_DYNAMIC_NODE in self._skill_nodes:
+                return MCP_DYNAMIC_NODE
+            return None
+        logger.warning(f"[ToolRegistry] 未知 capability: {capability}")
+        return None
 
     def get_worker(self, capability: str) -> Optional[str]:
         """向后兼容别名（同 get_node）"""

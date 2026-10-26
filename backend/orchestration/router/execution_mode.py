@@ -9,7 +9,7 @@ from backend.orchestration.domain_registry import (
     DerivedDomainMap,
     domain_graph_registry,
 )
-from backend.orchestration.router.manifest import load_manifest
+from backend.orchestration.router.manifest import effective_manifest, load_manifest
 from backend.orchestration.router.models import (
     CapabilityDecision,
     DomainDecision,
@@ -185,7 +185,7 @@ class ExecutionModeResolver:
             from backend.core.tool_governance.registry import get_tool_spec
             canonical_domain = {"travel_booking": "travel", "travel_commerce": "travel"}.get(domain, domain)
             declaration = next(
-                item for item in load_manifest().capabilities if item.name == capability
+                item for item in effective_manifest().capabilities if item.name == capability
             )
             spec = get_tool_spec(capability)
             declared_domains = set(spec.domains if spec is not None else ())
@@ -249,7 +249,8 @@ class ExecutionModeResolver:
         try:
             from backend.orchestration.capability_registry import tool_registry
             from backend.orchestration.router.capability_router import CapabilityRouter
-            allowed = set(load_manifest().planner_visible_capability_names)
+            from backend.orchestration.router.manifest import effective_manifest
+            allowed = set(effective_manifest().planner_visible_capability_names)
             for item in candidates:
                 name = str(item.get("name") if isinstance(item, Mapping) else item)
                 if name not in allowed or tool_registry.get_node(name) is None:
