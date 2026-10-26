@@ -110,6 +110,8 @@ afterEach(() => {
   apiMock.checkModelHealth.mockReset()
   apiMock.previewEmbeddingChange.mockReset()
   apiMock.rebuildEmbeddingIndex.mockReset()
+  apiMock.getEmbeddingRebuildStatus.mockReset().mockResolvedValue({ taskId: null })
+  vi.useRealTimers()
   toastMock.success.mockReset()
   toastMock.error.mockReset()
 })
@@ -182,6 +184,37 @@ describe('RoleBindingsTab 模型目录选择', () => {
     expect(apiMock.rebuildEmbeddingIndex).toHaveBeenCalledTimes(1)
     expect(container.querySelector('[role="status"]')?.textContent).toContain('等待执行')
     expect(container.querySelector('a[href="/tasks"]')).toBeTruthy()
+  })
+
+  it('返回页面恢复真实进度，生成百分百时仍等待服务端发布成功', async () => {
+    vi.useFakeTimers()
+    apiMock.getEmbeddingRebuildStatus
+      .mockResolvedValueOnce({ taskId: 'job-1', status: 'RUNNING', progress: '已生成 50/100 条向量' })
+      .mockResolvedValueOnce({ taskId: 'job-1', status: 'RUNNING', progress: '已生成 100/100 条向量' })
+      .mockResolvedValueOnce({ taskId: 'job-1', status: 'SUCCESS', progress: '索引完成（done）' })
+    const onSaved = vi.fn(async () => undefined)
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({ role: 'embedding' })], onSaved })
+    await act(async () => { await Promise.resolve() })
+    expect(container.querySelector('progress')?.value).toBe(50)
+    expect(container.textContent).toContain('可以离开本页')
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(container.querySelector('progress')?.hasAttribute('value')).toBe(false)
+    expect(container.querySelector('[role="status"]')?.textContent).toContain('正在重建')
+    expect(onSaved).not.toHaveBeenCalled()
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(container.querySelector('progress')).toBeNull()
+    expect(container.textContent).toContain('全部向量已校验并发布')
+    expect(onSaved).toHaveBeenCalledOnce()
+  })
+
+  it('失败时保留旧向量提示和重试入口，状态查询异常不伪装成功', async () => {
+    apiMock.getEmbeddingRebuildStatus.mockResolvedValueOnce({ taskId: 'job-1', status: 'FAILED', error: '模型调用超时' })
+    const container = mount({ canManageEmbedding: true, roles: [roleRow({ role: 'embedding' })] })
+    await act(async () => { await Promise.resolve() })
+    expect(container.textContent).toContain('旧向量保留')
+    expect(container.textContent).toContain('模型调用超时')
+    expect(container.textContent).not.toContain('全部向量已校验并发布')
+    expect(container.querySelector('a[href="/tasks"]')?.textContent).toContain('重试')
   })
 
   it('专项角色编辑使用匹配用途的下拉框，不允许自由输入模型名', async () => {

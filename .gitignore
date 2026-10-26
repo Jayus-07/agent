@@ -233,6 +233,8 @@ desktop.ini
 # ============================================
 .docker/
 .dockerignore
+!frontend-admin/.dockerignore
+!frontend-cs/.dockerignore
 docker-compose.override.yml
 docker-compose.prod.yml
 docker-compose.dev.yml

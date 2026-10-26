@@ -121,6 +121,9 @@ flowchart TD
 - 索引与发布：`backend/rag/indexing/indexer.py`、`stages/`、`publish.py`、`lifecycle.py`。候选存储在物理发布前不可作为正式检索源；`publish_candidate` 的 registry CAS 是**索引代次发布提交点**：提交前失败清理候选、旧版可用，提交后失败需续跑幂等收尾。**内容审核可见性是另一个独立状态**：近重复文档即便代次已发布，registry 仍可能是 `pending_review`，检索必须按审核状态过滤；`review_pending_doc(..., "approve")` 更新文档状态并失效审核缓存，不是第二次调用 `publish_candidate`。不能把代次发布等同人工批准，也不能擅自回滚已提交代次。Parent-Child 身份契约：索引期 `apply_index_chunk_identity` 覆盖 chunk_id 时同步改写 parent_chunk_id，检索端 `attach_parent_context` 的 `$in` 查询才能命中（P0-03）；Parent 扩展结果由 `apply_review_visibility` 在扩展后统一复核，pending_review 不得经 Parent 通道绕过。文档级元数据的全文输入为**纯 leaf 拼接**（parent 章节全量不重复计入）；超长文档摘要采样走 `summary_sampling`（头+章节目录+分层采样+尾，标注覆盖范围）；模拟问题 LLM 选块均匀分布且规则降级不产占位问句。
 - 状态机：草稿/审核/active/deprecated/deleted 的合法迁移由现有 lifecycle/review 服务管理。正式删除需连同向量、BM25、文档及注册元数据按现有路径处理。删除接口明确区分 `success`、`partial`、`failed` 与 `unknown`；远端清理请求发出后连接中断时返回 `502 + operation_state=unknown`，前端刷新列表并提示核对，不可假报成功或盲目重试。操作记录对部分清理异常和待核对状态分别标记。重试、覆盖、同名不同内容和文件质量缺陷必须有可复现证据。
 - Embedding/model 变更需核对维度、模型版本、索引兼容与重建策略；未经兼容检查不能用旧向量宣称新模型检索准确。
+- 重排Provider发生传输超时/连接失败时不自动重发（客户端超时不代表服务端停算）；同一次RAG请求记录失败的供应商/端点/模型，后续查询改写或纠错不再向同一服务重复投递。标记随请求隔离，下一请求正常重新尝试；降级仍保留候选并经过既有证据与Claim校验，不伪造重排分数。主助手沿用现有SSE日志，在执行前显示请求准备、RAG结果返回后显示整理回答；不会在证据核验前流出未经确认的答案。Trace的entry_timing记录进入Runner到Trace建立及worker启动的时间，区分入口准备和实际图执行。
+- 全库模型重嵌入走 `embedding_migration.run_rebuild`：先在同表候选命名空间生成向量，失败保留正式向量及可复用候选；模型不兼容时正式向量仍不可用于当前模型检索。完整快照校验后，在同一 PostgreSQL 事务中更新正式行的向量/模型指纹及集合身份、删除本任务候选。文档原文、正式行 ID 和集合归属保留；成功后不保留独立旧向量版本，不能宣称支持一键回滚。此流程不同于文档代次发布。离线模型请求默认单条、60 秒超时、SDK 不自动重试，在线客户端参数不随之改变。
+- 管理端模型角色页提交全量重建后每 4 秒读取正式任务状态，显示生成条数/百分比、后台执行说明及任务中心入口；离开后返回恢复最新状态。生成 100% 仍需等待校验发布，只有服务端 `SUCCESS` 才显示完成；失败提示旧向量保留并引导处理后重试。
 - 发布与嵌入质量修复（2026-10-24 P0/P1 批次）：
   - 财务版本快照翻转（is_latest=False）必须发生在候选向量晋级**之前**——新旧 chunk 复用同一 doc_id，翻转晚于晋级会把刚发布的新版一并翻成 False，财务检索（is_latest=True 过滤）新旧两版同时不可见（P0）。
   - `batch_with_retry` 按位置返回等长向量列表；整批+逐条重试穷尽仍有缺失 → 抛 ValueError 让文档 failed（fail-closed），不再回退向量库全量重嵌（旧语义 1 个 chunk 失败 = 全文档 embedding 成本翻倍且无对账痕迹）。
@@ -149,6 +152,7 @@ flowchart LR
 
 - 实现见 `backend/rag/chain.py`、`backend/rag/retrieval/query_router.py`、`hybrid.py`、`enhanced_hybrid_retrieval.py`、`backend/rag/evidence_gate/`；查询分类、RRF、rerank、top_k、阈值必须走已有配置/单一事实源，不在不同端点手写一套。
 - 云端 rerank 的输入保留已授权候选的标题或来源文件名，并在现有 2000 字符上限内附带正文；不发送来源目录，不修改原始文档内容。embedding 与 rerank 的实际云端调用复用统一预算及预占账本，缓存命中不重复预占；估算 embedding token 明确标为 `estimated`。
+- 生成阶段的用量由实际模型步通过请求态带回 Trace；LCEL 子上下文结束后，父级 ContextVar 可能仍是查询分类用量，不得据此推断生成输入大小。`generation_input_chars` 仅记录生成提示词字符数，不保存提示词正文；用量缺失明确标记 unavailable，计费仍由统一代理结算。
 - 向量/BM25/文档检索前后的 **tenant、kb_id、department、permission_scope** 过滤都要可证实；缓存键不能缺少授权范围、模型/索引版本而引发跨用户泄漏。检索 trace 应展示 route、候选数、证据 chunk、引用来源、索引代次和耗时。
 - 结果包括成功、empty、evidence insufficient、Provider failed、degraded 等不同语义；没有可信证据时拒答或标明不确定，不让 LLM 根据用户问题捏造引用。不能把跨文档、表格和精确标识检索都当普通 FAQ。
 

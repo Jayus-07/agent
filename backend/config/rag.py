@@ -210,6 +210,11 @@ EMBED_RETRY_BACKOFF_MAX = float(os.getenv("EMBED_RETRY_BACKOFF_MAX", "30"))
 # HTTP（纯嵌入 1.5-2.5 分钟）；2 路批并发减半时延。限流敏感环境可设 1
 # 恢复纯串行；重试退避期间不占用并发位。
 EMBED_BATCH_CONCURRENCY = max(1, int(os.getenv("EMBED_BATCH_CONCURRENCY", "2")))
+# 全量离线重建允许较长模型响应；不能修改在线检索的短请求超时。
+EMBEDDING_REBUILD_REQUEST_TIMEOUT = float(
+    os.getenv("EMBEDDING_REBUILD_REQUEST_TIMEOUT", "60")
+)
+EMBEDDING_REBUILD_BATCH_SIZE = int(os.getenv("EMBEDDING_REBUILD_BATCH_SIZE", "1"))
 # 单文档 chunk 数量上限（生产防护）：异常超长/解析失控文档超限时截断 + 告警，
 # 防止无界产出撑爆 embedding/向量库；501 页有效文本 PDF 实测需约 5,395 个 chunk。
 MAX_CHUNKS_PER_DOC = int(os.getenv("MAX_CHUNKS_PER_DOC", "6000"))

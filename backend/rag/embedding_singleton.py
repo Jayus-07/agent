@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import math
 import os
 import threading
 import time
@@ -140,9 +141,25 @@ def _resolve_cloud_embedding_config() -> dict[str, Any]:
     }
 
 
-def _get_cloud_embedding(runtime_config: dict[str, Any] | None = None) -> Embeddings:
+def _get_cloud_embedding(
+    runtime_config: dict[str, Any] | None = None,
+    *,
+    request_timeout: float | None = None,
+    batch_size: int | None = None,
+    max_retries: int = 1,
+) -> Embeddings:
     """获取 Cloud Embedding (DashScope OpenAI 兼容)."""
     runtime_config = runtime_config or _resolve_cloud_embedding_config()
+    timeout = EMBEDDING_REQUEST_TIMEOUT if request_timeout is None else request_timeout
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise ValueError("embedding 请求超时必须为有限正数")
+    batch_size = EMBEDDING_BATCH_SIZE if batch_size is None else batch_size
+    if (
+        isinstance(batch_size, bool)
+        or not isinstance(batch_size, int)
+        or batch_size <= 0
+    ):
+        raise ValueError("embedding 请求批大小必须为正整数")
     if not runtime_config["api_key"]:
         raise RuntimeError(
             "数据库未配置可用的 embedding 供应商 API Key，请先在管理端测试并保存"
@@ -168,13 +185,14 @@ def _get_cloud_embedding(runtime_config: dict[str, Any] | None = None) -> Embedd
         # 单次请求携带的文本条数（EMBEDDING_BATCH_SIZE，默认 10）：
         # DashScope text-embedding-v3 上限 10；换 SiliconFlow / TEI 时可
         # 在 .env 调大到 32+ 提速索引。
-        "chunk_size": EMBEDDING_BATCH_SIZE,
+        "chunk_size": batch_size,
         # 让 HTTP 请求在专家总超时前自行结束，不能依赖外层线程中断。
-        "timeout": EMBEDDING_REQUEST_TIMEOUT,
+        "timeout": timeout,
         # openai SDK 默认失败重试 2 次：检索期 embedding 故障会被放大成
         # 3 × timeout 的串行等待，显式压到 1 次（首次 + 1 重试），配合
         # EMBEDDING_REQUEST_TIMEOUT 限制最坏单调用耗时。
-        "max_retries": 1,
+        # 离线重建传 0，由任务级重试复用候选，避免超时后叠加长推理请求。
+        "max_retries": max_retries,
     }
     if runtime_config["dimensions"] is not None:
         embedding_kwargs["dimensions"] = runtime_config["dimensions"]
@@ -1032,7 +1050,10 @@ def _init_tracker():
     return _tracker
 
 
-def get_registered_embedding(model_name: str) -> Embeddings:
+def get_registered_embedding(
+    model_name: str, *, request_timeout: float | None = None,
+    batch_size: int | None = None, max_retries: int = 1,
+) -> Embeddings:
     """迁移/预检复用正式客户端和用量链路，本次配置固定不随角色热切换。"""
     from backend.tools.url_guard import assert_url_allowed
     from backend.infra.llm import models as models_mod
@@ -1051,7 +1072,8 @@ def get_registered_embedding(model_name: str) -> Embeddings:
         "dimensions": binding.options.get("dimensions"),
         "provider": binding.provider_id,
         "network_scope": provider.get("network_scope", "public"),
-    })
+    }, request_timeout=request_timeout, batch_size=batch_size,
+        max_retries=max_retries)
     tracker = create_tracker_for_embedding(
         log_path=str(Path(TOKEN_USAGE_LOG_PATH).expanduser().resolve()),
         model_name=model_name, backend="cloud",

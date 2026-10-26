@@ -4,7 +4,7 @@
 # =============================================
 # Stage 1: Build
 # =============================================
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 # 安装依赖（利用 Docker 缓存层）
@@ -24,7 +24,7 @@ RUN npm run build
 # =============================================
 # Stage 2: Runtime
 # =============================================
-FROM node:18-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production \

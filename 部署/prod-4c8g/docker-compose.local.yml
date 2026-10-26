@@ -1,114 +1,244 @@
-# ============================================================================
-# 本机覆盖层：让开发机按 4C8G 生产档运行（本机 Docker 只有 8 GiB / 12 CPU）
-# 与生产不同的是：这里包含本机在跑的 rag-service / mcp-service /
-# metadata-shadow-worker / 双 cs-dispatcher，并保留开发鉴权（ALLOW_UNAUTHENTICATED）。
-# 用法（仓库根目录）：
-#   docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml up -d <services>
-# PostgreSQL 的 max_connections/shared_buffers 用 ALTER SYSTEM 落库，不在此挂载。
-# ============================================================================
-
-x-logging: &prod-logging
+# 4C8G 共享资源层：本机与生产均加载本文件；模型服务必须外置。
+# 同一 cpuset 将整套容器限制在 4 个 CPU 上；内存上限按 README 总预算分配。
+x-logging: &logging
   driver: json-file
-  options:
-    max-size: "50m"
-    max-file: "3"
-
+  options: { max-size: "10m", max-file: "3" }
+x-runtime: &runtime
+  cpuset: "0-3"
+  logging: *logging
+x-python: &python
+  DB_POOL_MIN_CONN: "1"
+  DB_POOL_MAX_CONN: "2"
+  DIST_CONCURRENCY_ENABLED: "true"
+  DIST_MAX_CONCURRENT_REQUESTS: "12"
+  # 覆盖既有 RAG 45秒策略及路由/收尾；避免父请求19秒超时丢弃子服务成功答案。
+  BUSINESS_DEADLINE_S: "60"
+  WORKFLOW_DEADLINE_S: "55"
+  REPORTER_RESERVED_S: "5"
+  # 搜索结果约833 token即被旧768上限截断；2048仍受8192总上下文硬门禁约束。
+  TOOL_INLINE_MAX_TOKENS: "2048"
+  EMBED_BATCH_CONCURRENCY: "1"
+  EMBEDDING_REBUILD_REQUEST_TIMEOUT: "60"
+  EMBEDDING_REBUILD_BATCH_SIZE: "1"
+  # 全量任务硬时限 3660 秒，可见性必须覆盖它，避免未完成消息提前重投。
+  CELERY_BROKER_VISIBILITY_TIMEOUT: "3900"
+  OMP_NUM_THREADS: "1"
+  OPENBLAS_NUM_THREADS: "1"
+  MKL_NUM_THREADS: "1"
+  NUMEXPR_NUM_THREADS: "1"
 services:
   postgres:
-    deploy: { resources: { limits: { memory: 1100m, cpus: "1.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 1024
+    command: ["postgres", "-c", "max_connections=120", "-c", "shared_buffers=256MB", "-c", "effective_cache_size=768MB", "-c", "work_mem=4MB", "-c", "maintenance_work_mem=64MB", "-c", "autovacuum_max_workers=2"]
+    deploy:
+      resources:
+        limits: { memory: 1024m, cpus: "1.5" }
   redis:
-    command:
-      - redis-server
-      - --maxmemory
-      - 256mb
-      - --maxmemory-policy
-      - allkeys-lru
-      - --requirepass
-      - "${REDIS_PASSWORD:-}"
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-    deploy: { resources: { limits: { memory: 448m, cpus: "0.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    # 当前 AOF 在 4 核约束下加载约 36 秒，避免加载期被误判为不健康。
+    healthcheck: { start_period: 60s }
+    cpu_shares: 512
+    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru", "--requirepass", "${REDIS_PASSWORD:-}", "--appendonly", "yes", "--appendfsync", "everysec"]
+    deploy:
+      resources:
+        limits: { memory: 384m, cpus: "0.4" }
   redis-broker:
-    command:
-      - redis-server
-      - --maxmemory
-      - 256mb
-      - --maxmemory-policy
-      - noeviction
-      - --requirepass
-      - "${REDIS_PASSWORD:-}"
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-    deploy: { resources: { limits: { memory: 320m, cpus: "0.3" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    healthcheck: { start_period: 60s }
+    cpu_shares: 512
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_PASSWORD:-}", "--appendonly", "yes", "--appendfsync", "everysec"]
+    deploy:
+      resources:
+        limits: { memory: 192m, cpus: "0.2" }
   auth-redis:
-    command:
-      - redis-server
-      - --maxmemory
-      - 96mb
-      - --maxmemory-policy
-      - noeviction
-      - --requirepass
-      - "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}"
-      - --appendonly
-      - "yes"
-      - --appendfsync
-      - everysec
-    deploy: { resources: { limits: { memory: 128m, cpus: "0.2" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    healthcheck: { start_period: 60s }
+    cpu_shares: 512
+    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "noeviction", "--requirepass", "${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}", "--appendonly", "yes", "--appendfsync", "everysec"]
+    deploy:
+      resources:
+        limits: { memory: 96m, cpus: "0.2" }
   apisix:
-    deploy: { resources: { limits: { memory: 320m, cpus: "0.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 1024
+    deploy:
+      resources:
+        limits: { memory: 288m, cpus: "0.5" }
+  pgbouncer:
+    <<: *runtime
+    cpu_shares: 1024
+    environment:
+      MAX_CLIENT_CONN: "200"
+      DEFAULT_POOL_SIZE: "15"
+      RESERVE_POOL_SIZE: "3"
+    deploy:
+      resources:
+        limits: { memory: 64m, cpus: "0.2" }
   app:
-    deploy: { resources: { limits: { memory: 1000m, cpus: "1.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 1024
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 768m, cpus: "1.5" }
   agent-worker:
-    deploy: { resources: { limits: { memory: 768m, cpus: "1.0" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 768
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1" }
   rag-index-worker:
-    deploy: { resources: { limits: { memory: 768m, cpus: "1.0" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 256
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 768m, cpus: "1" }
   rag-service:
-    # 本机保留：RAG_MODE=local 时它不参与请求，模型模式切 remote 才用到
-    deploy: { resources: { limits: { memory: 512m, cpus: "0.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 768
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 512m, cpus: "1" }
   mcp-service:
-    deploy: { resources: { limits: { memory: 256m, cpus: "0.4" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 512
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 224m, cpus: "0.4" }
   maintenance-worker:
-    deploy: { resources: { limits: { memory: 224m, cpus: "0.3" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 384
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 384m, cpus: "0.3" }
   report-worker:
-    # 承担真实 RAG/合成评测，224m 会在加载检索依赖时触发 OOM。
-    deploy: { resources: { limits: { memory: 768m, cpus: "0.5" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 128
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 768m, cpus: "0.5" }
   beat:
-    deploy: { resources: { limits: { memory: 128m, cpus: "0.2" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 256
+    environment: *python
+    deploy:
+      resources:
+        limits: { memory: 128m, cpus: "0.2" }
   cs-dispatcher:
-    # 本机跑了 2 个副本，单副本 192m
-    deploy: { resources: { limits: { memory: 192m, cpus: "0.3" } } }
-    logging: *prod-logging
-
+    <<: *runtime
+    cpu_shares: 512
+    environment: *python
+    deploy:
+      replicas: 1
+      resources:
+        limits: { memory: 192m, cpus: "0.3" }
   pg-backup:
-    deploy: { resources: { limits: { memory: 96m, cpus: "0.2" } } }
-    logging: *prod-logging
+    <<: *runtime
+    environment:
+      PG_BACKUP_RETENTION_DAYS: ${PG_BACKUP_RETENTION_DAYS:-7}
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: { memory: 96m, cpus: "0.2" }
+  business-mock:
+    <<: *runtime
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: { memory: 128m, cpus: "0.2" }
+  # 可选旅游适配器；生产默认不启用，启用时额外占用 128MiB 预算。
+  mcp-12306:
+    <<: *runtime
+    profiles: ["travel-adapter"]
+    cpu_shares: 128
+    deploy:
+      resources:
+        limits: { memory: 128m, cpus: "0.2" }
+  frontend:
+    build:
+      context: ./frontend
+      args: { API_URL: "http://apisix:9080" }
+    environment:
+      API_URL: http://apisix:9080
+      API_KEY: ${API_KEY:?API_KEY is required}
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NODE_OPTIONS: --max-old-space-size=160
+    ports: ["127.0.0.1:${WEB_PORT:-3100}:3000"]
+    cpuset: "0-3"
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits: { memory: 256m, cpus: "0.5" }
+    networks: [agent-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  frontend-admin:
+    build:
+      context: ./frontend-admin
+      args: { API_URL: "http://apisix:9080" }
+    environment:
+      API_URL: http://apisix:9080
+      API_KEY: ${API_KEY:?API_KEY is required}
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NODE_OPTIONS: --max-old-space-size=160
+    ports: ["127.0.0.1:${ADMIN_PORT:-3200}:3000"]
+    cpuset: "0-3"
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits: { memory: 256m, cpus: "0.5" }
+    networks: [agent-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+  frontend-cs:
+    build:
+      context: ./frontend-cs
+      args: { API_URL: "http://apisix:9080" }
+    environment:
+      API_URL: http://apisix:9080
+      API_KEY: ${API_KEY:?API_KEY is required}
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+      NODE_OPTIONS: --max-old-space-size=160
+    ports: ["127.0.0.1:${CS_PORT:-3300}:3000"]
+    cpuset: "0-3"
+    cpu_shares: 256
+    deploy:
+      resources:
+        limits: { memory: 256m, cpus: "0.5" }
+    networks: [agent-net]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login',{signal:AbortSignal.timeout(3000)}).then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }

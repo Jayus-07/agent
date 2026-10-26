@@ -76,6 +76,27 @@ class TestRagSearchTimeoutAlignment:
 
 
 class TestDeadlineInteraction:
+    def test_4c8g_profile_can_fit_observed_rag_response_and_remains_bounded(self):
+        """读取实际部署档：26秒成功响应不能再被旧19秒预算误杀。"""
+        from pathlib import Path
+
+        import yaml
+
+        profile = Path(__file__).resolve().parents[3] / "部署/prod-4c8g/docker-compose.local.yml"
+        env = yaml.safe_load(profile.read_text(encoding="utf-8"))["x-python"]
+        deadline = RequestDeadline(
+            total_budget_ms=float(env["BUSINESS_DEADLINE_S"]) * 1000,
+            workflow_budget_ms=float(env["WORKFLOW_DEADLINE_S"]) * 1000,
+            reporter_reserved_ms=float(env["REPORTER_RESERVED_S"]) * 1000,
+            _mono_started=time.monotonic() - 2,
+        )
+        allow, budget_ms, _, _ = deadline.check_tool_execution(get_policy("rag.search").timeout_ms)
+        assert allow
+        assert 26_000 < budget_ms <= 45_000
+        assert deadline.workflow_budget_ms < deadline.total_budget_ms
+        deadline._mono_started -= 60
+        assert deadline.check_tool_execution(45_000)[0] is False
+
     def test_workflow_path_deadline_absent_policy_is_sole_bound(self):
         """workflow 路径（rag_agent）：deadline=None，policy 超时唯一约束。
 

@@ -28,6 +28,23 @@ def test_ttft_recorded_on_first_delta(monkeypatch):
     assert observed["ttft"] == pytest.approx(1.5)
 
 
+def test_first_feedback_is_separate_from_answer_token(monkeypatch):
+    import backend.observability.metrics as metrics
+
+    observed = []
+    monkeypatch.setattr(metrics.chat_first_feedback_seconds, "observe", observed.append)
+    tracker = StreamLatencyTracker(start=100)
+    assert tracker.first_feedback_ms is None
+    tracker.on_feedback(100.2)
+    assert tracker.first_feedback_ms == 200
+    assert tracker.ttft_ms is None
+    tracker.on_feedback(101)
+    tracker.on_delta(102)
+    assert tracker.ttft_ms == 2000
+    assert tracker.first_feedback_ms == 200
+    assert observed == [pytest.approx(0.2)]
+
+
 def test_tpot_computed_on_finish(monkeypatch):
     observed = {}
     import backend.observability.metrics as m

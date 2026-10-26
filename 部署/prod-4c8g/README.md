@@ -1,126 +1,86 @@
-# 4C8G / 40G 生产配置（上线用）
+# 4C8G / 40G 生产配置
 
-> 目标机：**4 vCPU / 8 GB RAM / 40 GB SSD**，Docker Compose 单机部署。
-> 本目录只放「额外覆盖」，主定义仍是仓库根 `docker-compose.yml`。
+目标为 Linux 4 vCPU / 8 GiB RAM，模型推理运行在独立机器或外部服务。模型角色、供应商和凭据继续由管理端数据库管理。此配置不包含在 8 GiB 主机上同时加载 BGE 与 reranker 的容量承诺。
 
-## 1. 内存预算（合计约 6.8 GB，留约 1.2 GB 给系统与 Next.js）
+## 资源预算
 
-| 服务 | 限制 | CPU | 说明 |
-| --- | --- | --- | --- |
-| postgres | 1200m | 1.5 | 唯一状态权威，优先保 |
-| app | 1100m | 1.5 | 单 uvicorn 进程 |
-| agent-worker | 768m | 1.0 | 并发 2 |
-| rag-index-worker | 800m | 1.0 | 并发 1 |
-| maintenance-worker | 256m | 0.3 | 并发 1 |
-| report-worker | 768m | 0.5 | 并发 1，包含真实 RAG 与候选合成评测 |
-| beat | 128m | 0.2 | 定时调度 |
-| cs-dispatcher | 224m | 0.3 | 不开客服可停 |
-| apisix | 224m | 0.5 | 网关 |
-| redis（缓存） | 384m | 0.5 | maxmemory 320mb |
-| redis-broker | 384m | 0.3 | maxmemory 320mb |
-| auth-redis | 128m | 0.2 | maxmemory 96mb |
-| pg-backup | 96m | 0.2 | 每日备份 |
-| **合计** | **≈ 6.8 GB** | 8.0（上限，非峰值） | 4 核按需调度 |
+根 `docker-compose.yml` 定义服务，`docker-compose.local.yml` 是本机与生产共用的资源层（保留文件名以兼容现有入口），`docker-compose.4c8g.yml` 仅覆盖生产运行环境文件。所有常驻容器共享 CPU 0–3，并按 cpu_shares 分配争用时优先级；单服务 CPU 上限之和可以超过 4，但实际执行被限制在这 4 个 CPU 上。
 
-**不启动**：`kafka`、`ollama`、`rag-service`（4G/2C，8G 机器跑不动本地模型）、`business-mock`、`mcp-12306`、`mcp-service`、`metadata-shadow-worker`、observability 全套（prometheus/grafana/loki/tempo/promtail/exporters）。
+| 服务 | 内存上限 MiB | CPU 上限 | 说明 |
+| --- | ---: | ---: | --- |
+| PostgreSQL | 1024 | 1.5 | max_connections=120、shared_buffers=256MB、work_mem=4MB |
+| Redis 缓存 | 384 | 0.4 | maxmemory=192mb，LRU，给 AOF/分配器留余量 |
+| Redis broker/result | 192 | 0.2 | maxmemory=128mb，noeviction |
+| Auth Redis | 96 | 0.2 | maxmemory=48mb，noeviction |
+| APISIX | 288 | 0.5 | 实测常驻约 228MiB |
+| PgBouncer | 64 | 0.2 | client=200、pool=15+3；应用是否经池化仍取既有开关 |
+| API | 768 | 1.5 | 单 uvicorn 进程 |
+| Agent worker | 512 | 1.0 | 并发 2 |
+| 索引 worker | 768 | 1.0 | 并发 1；外部 embedding 服务 |
+| RAG 服务 | 512 | 1.0 | 与当前 remote 请求链路一致 |
+| MCP 服务 | 224 | 0.4 | 工具接入 |
+| 维护 worker | 384 | 0.3 | 并发 1，常驻实测约 280MiB |
+| 报表 worker | 768 | 0.5 | 并发 1，保留 RAG/评测依赖空间 |
+| Beat | 128 | 0.2 | 单实例调度 |
+| 客服 dispatcher | 192 | 0.3 | 单副本；不保留单机多副本冗余 |
+| PostgreSQL 备份 | 96 | 0.2 | 每日基础备份；外部异地备份仍需配置 |
+| 三个 Next.js 前端 | 768 | 各 0.5 | 每个 256MiB、生产 standalone；不在服务器运行 next dev |
+| **常驻服务合计** | **7168** | 共享 4 核 | 包含全部三个前端和备份服务 |
+| **系统预留** | **1024** | — | 合计 8192MiB |
 
-**前端（3 个 Next 应用）不在 compose 内**，在宿主机用 `next start` 跑，每个约 150–250 MB：
-- 必须：`frontend`（用户端）、`frontend-admin`（管理端）
-- 按需：`frontend-cs`（客服坐席）
-- 建议 `next build` 时加 `output: 'standalone'`，只用 `node .next/standalone/server.js` 起，省 30% 内存。
+迁移容器 512MiB 是启动期一次性任务，迁移完成后才启动应用 worker。开发业务 mock 额外 128MiB，不在生产启动清单中。Kafka、Ollama、metadata-shadow、外部 MCP 12306 和完整 observability profiles 默认不启动；启用前必须重新核算预算，不能叠加到本档位。
 
-## 2. 首次部署
+本机其他操作已启动的12306适配器可保留并受128MiB/0.2CPU约束，归入travel-adapter可选profile；它和业务mock不属于7168MiB生产基线。生产启用适配器时须额外预留128MiB或关闭不使用的前端，不能把可选服务算作零成本。
+
+API/worker 的每进程数据库池为 min=1/max=2；请求全局闸门为 12。索引任务复用独立队列、Celery prefetch=1、单索引 worker。普通文档索引批间并发为 1；全量向量重建当前固定最多 8 条/批、串行生成，不受 EMBED_BATCH_CONCURRENCY 控制。容器日志轮转为每份 10MiB × 3。
+
+全量重建使用独立的 EMBEDDING_REBUILD_REQUEST_TIMEOUT=60 秒与 EMBEDDING_REBUILD_BATCH_SIZE=1：候选每次读取最多8条，但向模型逐条发送，避免长短文本混批引起GPU显存和计算放大。SDK层不自动重发离线请求，防止客户端超时而模型仍计算时继续叠加推理。在线检索仍使用原有短超时、批大小和重试策略；这些执行策略不改变模型语义空间或指纹。Celery 全量任务软/硬时限为3600/3660秒，队列可见性设为3900秒，避免仍在执行的消息提前重投。失败后在任务中心重试同一任务；源文本和元数据仍一致的候选会复用，不重复推理已完成部分。
+
+这些是容量基线。必须结合真实重建和并发问答检查 OOM、任务失败与延迟，不能以健康检查代替负载验收。8 GiB 是内存预算；云服务器实际可用内存较小时，应按实测可用量重新缩减预算。
+
+在线时间预算为 BUSINESS_DEADLINE_S=60、WORKFLOW_DEADLINE_S=55、REPORTER_RESERVED_S=5；请求仍受现有全局并发12约束。rag.search沿用45秒策略上限及零自动重试，实际取剩余图预算扣除收尾与45秒中的较小值。真实请求曾出现RAG服务约26秒成功、主助手约19秒提前超时并丢弃答案，因此本档位覆盖默认30/25/5秒配置；不增加模型调用次数或绕过检索证据校验。
+
+本档位 TOOL_INLINE_MAX_TOKENS=2048。真实5条搜索结果约833 token，默认768会将结果裁成无法完整展示的预览；2048保留常规结果，但超限仍走既有压缩协议，模型调用仍受8192总上下文预算及输出/安全预留约束。该调整不改变容器并发或内存限额。
+
+## 生产启动
+
+镜像在开发机或 CI 顺序构建，避免在 4C8G 生产服务器同时运行多个 Next.js 构建。前端 Dockerfile 使用 Node 22，依赖层使用既有 npm 缓存，运行时只向 BFF 注入 API_KEY，不编译到浏览器。
 
 ```bash
-# 1) 环境变量
 cp 部署/prod-4c8g/env.production .env.production
-#    逐项替换 <...>；生成随机串：
-#    openssl rand -hex 32
-#    python -c "from cryptography.fernet import Fernet;print(Fernet.generate_key().decode())"   # SECRETS_ENCRYPTION_KEY
-#    AI_INTERNAL_TOKEN / API_KEY 同样用 openssl rand -hex 32
+# 替换全部占位凭据，确认生产网关鉴权启用；文件只允许部署账号读取。
 chmod 600 .env.production
-
-# 2) 构建（首次约 10–15 分钟；40G 磁盘只留一份镜像）
-docker compose --env-file .env.production -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml build
-
-# 3) 起核心栈（顺序：PG/Redis → 迁移 → 应用 → Worker）
-docker compose --env-file .env.production -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml up -d \
-  postgres redis redis-broker auth-redis apisix
-docker compose --env-file .env.production -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml run --rm db-migrate
-docker compose --env-file .env.production -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml up -d \
-  app agent-worker rag-index-worker maintenance-worker report-worker beat pg-backup
+export COMPOSE_FILE=docker-compose.yml:部署/prod-4c8g/docker-compose.local.yml:部署/prod-4c8g/docker-compose.4c8g.yml
+# CLI 插值与容器 env_file 都读取生产配置；不依赖开发 .env。
+docker compose --env-file .env.production build app rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher db-migrate
+for service in frontend frontend-admin frontend-cs; do
+  docker compose --env-file .env.production build "$service"
+done
+docker compose --env-file .env.production up -d postgres redis redis-broker auth-redis apisix pgbouncer
+docker compose --env-file .env.production run --rm db-migrate
+docker compose --env-file .env.production up -d app rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher pg-backup frontend frontend-admin frontend-cs
 ```
 
-> `up` 必须显式列服务：不列就不会启动 kafka/ollama 等重服务。
+`RUNTIME_ENV_FILE` 默认是 .env.production；只有本机演练才可显式指向 .env。生产层用 !override 替换根服务 env_file，避免误读开发凭据。前端端口默认仅绑定 127.0.0.1:3100/3200/3300，由已有 HTTPS 入口反向代理；本配置不自动扩大公网暴露。
 
-## 3. 上线核对（真实命令）
+模型供应商需由管理端登记为可从生产服务器访问的外部地址。host.docker.internal:8088 是本机联调地址，不能直接视为生产模型地址。登记/切换模型继续经过预检、身份围栏和重建确认。
 
-```bash
-docker compose ps                                    # 期望：全部 healthy，无 kafka/ollama
-curl -s localhost:9080/health                        # APISIX → 200
-curl -s localhost:8000/health                        # FastAPI → 200
-curl -s -H "X-API-Key: $API_KEY" localhost:8000/sys/providers | head -c 200   # source=db
-docker exec agent-postgres-1 psql -U postgres -d agent_memory -tAc \
-  "select count(*) from pg_stat_activity"            # 期望 < 90（max_connections=120）
-docker stats --no-stream --format "table {{.Name}}\t{{.MemUsage}}\t{{.CPUPerc}}"  # 峰值 RSS 不得贴近 limit
+## 本机演练与恢复
+
+Windows 的 devctl 在未指定 COMPOSE_FILE 时默认加载根 Compose 与共享资源层。已有前端容器时，start/stop 操作容器；没有容器时仍启动本机 Next dev，需要另行配置该前端的服务端 API_KEY/API_URL。4C8G验收与生产均使用上述前端容器，不依赖开发进程的凭据或内存占用。
+
+```powershell
+.\devctl.bat rebuild /y
+# 前端顺序构建，停止占用相同端口的旧本机前端后再启动。
+docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-admin
 ```
 
-**必须先在管理端「模型与供应商」里**：新增供应商 → 填 base_url → 填 API Key → 测通 → 绑定角色（main/eval_gen/embedding/rerank）。模型密钥只写数据库，不写 .env。
+运行后确认 docker inspect 中 cpuset=0-3、实际内存/并发配置、容器健康与 OOM/重启计数；检查 8000/health、8090/readyz、8091/health、9080/health，以及三个前端。检查 PostgreSQL 当前参数与连接数，确认备份日志成功，并用 pg_restore -l 验证备份可读。恢复演练需要隔离数据库，禁止覆盖共享数据库。
 
-## 4. 40 GB 磁盘规划（硬约束）
+随后从管理端“模型与供应商”点击“检查并重建全部向量”，预检显示实际模型、集合数量及向量数量后确认提交。跟踪任务到终态，核对集合模型/供应商/指纹与状态，再发起一次企业助手退款问答。失败时先读取任务/Trace 根因，旧向量保留；不能跳过发布校验强行标 ready。
 
-| 项 | 预算 |
-| --- | --- |
-| 系统 + Docker Engine | 6 GB |
-| 镜像（python/torch 基础镜像最大） | 10 GB |
-| `pg_data` 卷 | 4 GB |
-| `app_data` 卷（docs/索引/BM25） | 6 GB |
-| Redis AOF + 备份卷 | 2 GB |
-| 日志（已轮转 50m×3/容器） | 2 GB |
-| 余量 | 10 GB |
+## 磁盘与回滚
 
-上线前设置并加进 cron：
+40GB 磁盘需同时容纳系统、镜像、业务数据、Redis AOF、日志和备份；各目录占用以实际 df/du 为准，超过 85% 停止新增构建/导入并扩容或按既有保留策略处理。备份默认保留 7 天，仍需外部异地副本。不要删除 volume 或自动清理其他任务镜像。
 
-```bash
-# 每周清理 dangling 镜像/构建缓存（不要动 volume）
-docker image prune -f && docker builder prune -f --filter until=168h
-# 每天检查磁盘，>85% 告警
-df -h / | awk 'NR==2{print $5}'
-```
-
-## 5. 4C8G 上的已知取舍
-
-- **RAG 用云端 embedding/rerank**（`EMBEDDING_PROVIDER=cloud`）：本地 BGE 模型会多占 800MB–1.2GB，8G 机器与 app/workers 抢内存。
-- **APISIX + app + 4 worker + PG + 3 Redis** 已是这台机器的上限；再加服务请先加内存。
-- `DIST_MAX_CONCURRENT_REQUESTS=24`：超过即 503 + Retry-After，保护 PG 与模型配额。
-- 观测建议外置：Prometheus/Grafana 放另一台，本机只保留 `/metrics`。
-- `max_connections=120` 与 `DB_POOL_MAX_CONN=2` 是配套的；**只调其中一个会把 PG 打满**（2026-10-17 开发环境即因 103/100 打满导致管理端误报「DB 未就绪」）。
-
-## 6. 回滚
-
-```bash
-# 只回滚应用镜像（不动数据）
-docker compose --env-file .env.production -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.4c8g.yml \
-  up -d --no-deps --force-recreate app agent-worker rag-index-worker
-```
-
-迁移回滚按 `scripts/init_db.py` 的迁移台账反向执行；**不要 DROP 已应用迁移**，用新迁移修正。
-
-## 7. 本机按同档运行（Docker 只有 8 GiB 时）
-
-本机开发栈也可按同一档位收敛，使用 `docker-compose.local.yml`（保留本机特有服务与开发鉴权）：
-
-```bash
-# PG 参数用 ALTER SYSTEM 落库（免绑定挂载，重启即生效）
-docker exec agent-postgres-1 psql -U postgres -d agent_memory -c \
-  "ALTER SYSTEM SET max_connections='120'"
-# ……shared_buffers=384MB / effective_cache_size=1024MB / work_mem=8MB 等同理
-docker restart agent-postgres-1
-
-# 其余服务套用本机覆盖层（含 rag-service / mcp / 双 cs-dispatcher）
-docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml up -d --force-recreate \
-  postgres redis redis-broker auth-redis apisix app agent-worker rag-index-worker \
-  rag-service mcp-service metadata-shadow-worker maintenance-worker report-worker beat cs-dispatcher
-```
-
-实测（2026-10-17，本机 6C/12T + Docker 8 GiB）：16 个容器全部 healthy，**总内存占用约 3.0 GiB**，PG 连接 **32/120**，`/health` 与 `/sys/providers` 均正常。
+回滚应用使用已知可用镜像并重新创建对应服务，保留数据卷。配置回滚恢复对应 Compose 与环境文件后重建；数据库结构回滚走迁移治理，不能 DROP 已应用迁移。资源限制回滚不能代替已发布向量数据的恢复。

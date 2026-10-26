@@ -10,7 +10,9 @@
 
 能力 Fast Path 还须满足分数、top1/top2 分差、LOW 风险、清单白名单及请求权限门禁。其余候选交 Tool Selector 在域内注册候选中消歧；无法确认时转澄清。LLM 仅从动态合法候选中给出选择提示，模型自报分数不参与授权。Trace 保留候选、分数类型、分差、阻断原因、最终归宿和策略版本；缓存键包含会话状态、租户、权限及路由策略版本。
 
-Capability 映射与治理声明维护于 backend/orchestration/router/capabilities.yaml。Tool 的选择和执行必须经过现有 Tool Governance；细节见 [tool-skill-guide.md](../development/tool-skill-guide.md)。
+候选 `CapabilityScore` 同时传递服务端解析得到的 `risk`、`fast_path_enabled`、`permission_ready`，这些字段在引擎组装、JSON往返和V2投影后保留，供 Tool Selector 二次校验。缺失时默认为 UNKNOWN/false/false，不能把分数或候选名称当作权限；实际执行仍由 Tool Governance 复核产品与主体权限。
+
+Capability 映射与治理声明维护于 backend/orchestration/router/capabilities.yaml。明确的“联网查找/搜索”进入 knowledge 粗域，再由细路由在已授权能力中选择 web.search；否定联网不构成联网强信号，也不绕过工具权限。Tool 的选择和执行必须经过现有 Tool Governance；细节见 [tool-skill-guide.md](../development/tool-skill-guide.md)。
 
 ## Domain Graph
 

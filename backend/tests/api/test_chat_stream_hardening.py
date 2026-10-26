@@ -75,6 +75,8 @@ class TestServerRequestId:
         assert server_id, "X-Request-Id 头必须回传"
         assert server_id != "default", "服务端不得使用 'default' 占位 id"
         assert _parse_meta(body).get("request_id") == server_id, "meta 事件须回传同一 id"
+        assert "正在准备会话并检查请求" in body
+        assert body.index("event: log") < body.index("event: delta")
 
     def test_default_placeholder_also_gets_unique_id(self, client):
         """旧客户端显式传 "default"（schema 旧默认值）也必须唯一化"""

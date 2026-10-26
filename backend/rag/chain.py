@@ -84,9 +84,24 @@ def _llm_stream(msgs):
     两种形态都归一成逐个 PromptValue 消费，否则真实模型会校验报错。
     """
     from collections.abc import Iterator
+    from backend.infra.llm.proxy import _last_call_meta_var
+
+    state = get_context()
+    state.generation_call_meta = {}
+    state.generation_input_chars = 0
     inputs = msgs if isinstance(msgs, Iterator) else (msgs,)
     for m in inputs:
-        yield from llm.stream(m)
+        # 只记录大小，不记录资料正文；流结束后在同一上下文读取代理结算信息。
+        if hasattr(m, "to_string"):
+            state.generation_input_chars = len(m.to_string())
+        elif isinstance(m, str):
+            state.generation_input_chars = len(m)
+        token = _last_call_meta_var.set({})
+        try:
+            yield from llm.stream(m)
+        finally:
+            state.generation_call_meta = dict(_last_call_meta_var.get() or {})
+            _last_call_meta_var.reset(token)
 
 
 # =====================================================
@@ -618,10 +633,10 @@ class RAGChain:
                     r = AIMessage(content=joined) if is_message else joined
                 else:
                     r = _stuff.invoke(inp)
-                # 注入 token + finish_reason + cost_usd（从 proxy ContextVar 读，
-                # 与 _record_tokens 同上下文，保证并发下各请求读到自己的 token）
-                from backend.infra.llm.proxy import _last_call_meta_var
-                metrics = dict(_last_call_meta_var.get())
+                # LCEL 在子上下文执行模型步，父 ContextVar 可能还是查询分类用量。
+                # 由模型步在请求态带回本次生成观测，不再次结算或写用量账本。
+                metrics = dict(get_context().generation_call_meta)
+                metrics["generation_input_chars"] = get_context().generation_input_chars
                 # P0-3: ContextVar 为空（跨线程丢失 / provider 未返回）时，
                 # 兜底从 response_metadata 提取；仍缺失则显式留痕，
                 # 让 token 采集失败可观测而非静默归零。

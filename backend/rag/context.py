@@ -62,6 +62,11 @@ class RagRequestState:
     # 向量路降级信号（TD-01）：全部 query embedding 检索失败时置位，
     # AdaptiveRetriever 据此放行 parent 扩展（残缺分数不做低置信跳过）
     vector_degraded: bool = False
+    # 同请求内的超时服务不再重复投递；请求结束即清空，不影响其他用户。
+    rerank_unavailable: set[str] = field(default_factory=set)
+    # LCEL 子上下文的生成观测随本次请求带回，不能读取前一阶段的 ContextVar。
+    generation_call_meta: dict = field(default_factory=dict)
+    generation_input_chars: int = 0
     # 请求级输出（2026-09-23 D1-6）：sources 随 ask_result 返回值带回，
     # 不再落 RAGChain 单例实例属性（并发请求互相覆盖串扰）
     sources: list = field(default_factory=list)

@@ -39,6 +39,30 @@ class ExplodingBackend:
 
 
 class TestRuleOverride:
+    @pytest.mark.parametrize("query", [
+        "请联网查找 Docker 官方关于容器内存限制的文档，用两句话概括并给出链接。",
+        "请联网搜索公开资料，概括主要内容并给出出处。",
+    ])
+    def test_explicit_web_lookup_enters_knowledge(self, query):
+        result = CoarseIntentClassifier(ExplodingBackend()).classify(query)
+        assert result.domain == "knowledge"
+        assert result.source == "rule"
+
+    def test_negated_web_lookup_is_not_strong_rule(self):
+        result = CoarseIntentClassifier(ExplodingBackend()).classify(
+            "不需要联网搜索，请解释这句话。",
+        )
+        assert result.source != "rule"
+
+    def test_explicit_enterprise_knowledge_request_keeps_knowledge_domain(self):
+        """显式知识库检索不因含退款一词被送进客服专属域。"""
+        clf = CoarseIntentClassifier(backend=ExplodingBackend())
+        result = clf.classify("请在企业知识库中检索退款处理流程，依据检索结果回答并提供出处。")
+        assert result.domain == "knowledge"
+        assert result.source == "rule"
+        action = clf.classify("帮我申请退款并查询订单")
+        assert action.domain == "customer_service"
+
     def test_strong_rule_hits_decide_domain(self):
         """「公司的年假规定是什么」：规定+是什么 = 2 次强命中 → knowledge（rule override）。"""
         clf = CoarseIntentClassifier(backend=ExplodingBackend())  # 规则层不该碰后端

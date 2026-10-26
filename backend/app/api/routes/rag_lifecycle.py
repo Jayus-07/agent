@@ -163,10 +163,11 @@ async def list_lifecycle_events(doc_id: str, request: Request):
     doc = _get_registry().get_by_doc_id(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="文档不存在")
-    ok, reason = authz.can_read_row(doc)
-    if not ok:
+    if not authz.can_read_row(doc):
         from fastapi.responses import JSONResponse
-        return JSONResponse(status_code=403, content={"ok": False, "error": reason})
+        return JSONResponse(
+            status_code=403, content={"ok": False, "error": "无权读取文档"},
+        )
     return {"ok": True, "doc_id": doc_id, "events": _get_lifecycle_service().list_events(doc_id)}
 
 

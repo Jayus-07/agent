@@ -41,6 +41,7 @@ app = FastAPI(
 )
 
 _LOCK = threading.Lock()
+_INFERENCE_LOCK = threading.Lock()
 _ST: dict[str, Any] = {}
 
 
@@ -99,29 +100,30 @@ def _get_embedder():
 
 
 def _reranker_device() -> str:
-    """reranker 设备：默认 CPU（RERANKER_DEVICE 可覆盖）。
-
-    将有限显存留给 embedding；实际延迟随候选数量和文本长度变化。
-    """
-    return os.getenv("RERANKER_DEVICE", "cpu")
+    """参考模型服务优先使用可用GPU；可显式指定CPU，加载失败不会伪装就绪。"""
+    configured = os.getenv("RERANKER_DEVICE", "auto").strip().lower()
+    return _device() if configured == "auto" else configured
 
 
 def _get_reranker():
     """懒加载 bge-reranker-v2-m3（交叉编码器，logit → sigmoid 归一）。"""
     with _LOCK:
         if "reranker" not in _ST:
+            import torch
             from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
             path = _reranker_path()
             device = _reranker_device()
             if device == "cpu":
-                import torch
-
                 torch.set_num_threads(int(os.getenv("RERANKER_CPU_THREADS", "4")))
             t0 = time.time()
             _log(f"加载 rerank 模型: {path} (device={device})")
             tok = AutoTokenizer.from_pretrained(path)
-            model = AutoModelForSequenceClassification.from_pretrained(path)
+            # 只改变重排计算精度；embedding 模型和归一化策略保持不变。
+            dtype = torch.float16 if device.startswith("cuda") else torch.float32
+            model = AutoModelForSequenceClassification.from_pretrained(
+                path, torch_dtype=dtype,
+            )
             model.to(device)
             model.eval()
             _ST["reranker_tok"] = tok
@@ -144,7 +146,10 @@ class RerankRequest(BaseModel):
 
 @app.get("/healthz")
 def healthz():
-    return {"status": "ok", "models_loaded": sorted(k for k in _ST)}
+    reranker = _ST.get("reranker")
+    return {"status": "ok", "models_loaded": sorted(k for k in _ST),
+            "reranker_device": str(reranker.device) if reranker is not None else None,
+            "reranker_dtype": str(reranker.dtype) if reranker is not None else None}
 
 
 @app.post("/embeddings")
@@ -154,7 +159,9 @@ def embeddings(req: EmbeddingsRequest):
     if not texts:
         return {"object": "list", "data": [], "model": req.model, "usage": {"prompt_tokens": 0, "total_tokens": 0}}
     model = _get_embedder()
-    vectors = model.encode(texts, normalize_embeddings=True).tolist()
+    # 两个模型共享有限显存，串行推理避免并发激活张量叠加。
+    with _INFERENCE_LOCK:
+        vectors = model.encode(texts, normalize_embeddings=True).tolist()
     return {
         "object": "list",
         "data": [
@@ -168,7 +175,6 @@ def embeddings(req: EmbeddingsRequest):
 
 @app.post("/services/rerank/text-rerank/text-rerank")
 def rerank(req: RerankRequest):
-    import math
     import torch
 
     query = str((req.input or {}).get("query") or "")
@@ -178,12 +184,19 @@ def rerank(req: RerankRequest):
         return {"output": {"results": []}}
 
     tok, model = _get_reranker()
-    pairs = [[query, doc] for doc in documents]
-    with torch.no_grad():
-        batch = tok(pairs, padding=True, truncation=True, max_length=512,
-                    return_tensors="pt").to(model.device)
-        logits = model(**batch).logits.reshape(-1).float()
-    scores = [1.0 / (1.0 + math.exp(-float(x))) for x in logits]
+    batch_size = int(os.getenv("RERANKER_BATCH_SIZE", "2"))
+    if batch_size < 1:
+        raise ValueError("RERANKER_BATCH_SIZE 必须为正整数")
+    scores = []
+    with _INFERENCE_LOCK, torch.inference_mode():
+        for offset in range(0, len(documents), batch_size):
+            pairs = [[query, doc] for doc in documents[offset:offset + batch_size]]
+            batch = tok(pairs, padding=True, truncation=True, max_length=512,
+                        return_tensors="pt").to(model.device)
+            logits = model(**batch).logits.reshape(-1).float()
+            if not torch.isfinite(logits).all():
+                raise ValueError("重排模型返回非有限分数")
+            scores.extend(torch.sigmoid(logits).cpu().tolist())
 
     ranked = sorted(
         ({"index": i, "relevance_score": round(s, 6)}
