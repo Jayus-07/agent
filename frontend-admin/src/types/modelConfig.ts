@@ -65,12 +65,15 @@ export interface IndexCompat {
   collection: string
   embeddingProvider: string
   embeddingModel: string
+  modelRevision?: string
   embeddingDimension: number
   indexVersion: number
   builtAt: string | null
   updatedAt: string | null
   status: 'ready' | 'rebuild_required' | 'rebuilding' | 'failed'
+  runtimeProvider?: string
   runtimeModel: string
+  mismatchReasons?: string[]
   mismatch: boolean
 }
 

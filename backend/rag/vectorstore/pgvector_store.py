@@ -7,7 +7,8 @@ Chroma 本地目录 → PG rag_vectors 表（collection 列区分）。
 
 设计要点：
   - persist_directory 语义映射为 collection 名（路径 basename），
-    与既有 Chroma 实例目录一一对应（data/chroma → "chroma"）。
+    与既有 Chroma 实例目录一一对应（data/chroma → "chroma"）；
+    `chroma` 是保留的集合键，不表示当前仍使用 ChromaDB。
   - embedding 固定 1024 维（text-embedding-v3，env VECTOR_PG_DIM 可覆盖）；
     bge-small-zh-v1.5 本地轨（512 维）已确认弃用，不建第二张表。
   - 确定性 ID：`{collection}:{doc_id|md5(content)[:12]}:{chunk_index|批内序号}`
@@ -44,6 +45,10 @@ from backend.config.rag import (
     VECTOR_PG_POOL_MAX,
     VECTOR_PG_POOL_MIN,
 )
+from backend.rag.embedding_identity import (
+    embedding_identity_mismatch_reasons,
+    embedding_identity_missing_reasons,
+)
 from backend.rag.vectorstore.knowledge_store import (
     KnowledgeStore,
     _sanitize_metadata,
@@ -71,13 +76,47 @@ class IndexEmbeddingMismatchError(RuntimeError):
 
     code = "INDEX_EMBEDDING_MISMATCH"
 
-    def __init__(self, index_model: str, runtime_model: str, collection: str = "") -> None:
+    def __init__(
+        self,
+        index_model: str,
+        runtime_model: str,
+        collection: str = "",
+        *,
+        index_provider: str = "",
+        runtime_provider: str = "",
+        mismatch_reasons: list[str] | None = None,
+    ) -> None:
         self.index_model = index_model
         self.runtime_model = runtime_model
         self.collection = collection
+        self.index_provider = index_provider
+        self.runtime_provider = runtime_provider
+        self.mismatch_reasons = mismatch_reasons or []
+        index_identity = f"provider={index_provider or '未记录'}, model={index_model or '未记录'}"
+        runtime_identity = f"provider={runtime_provider or '未知'}, model={runtime_model or '未知'}"
+        reason_labels = {
+            "index_model_missing": "索引模型未记录",
+            "runtime_model_missing": "当前模型身份未知",
+            "model_mismatch": "模型不同",
+            "index_provider_missing": "索引供应商未记录",
+            "runtime_provider_missing": "当前供应商身份未知",
+            "provider_mismatch": "供应商不同",
+            "index_fingerprint_missing": "索引指纹缺失",
+            "runtime_fingerprint_missing": "当前指纹不可用",
+            "fingerprint_mismatch": "模型配置指纹不同",
+            "dimension_mismatch": "向量维度不同",
+            "index_metadata_missing": "索引身份元数据缺失",
+            "index_not_ready": "索引未就绪",
+        }
+        reason_detail = (
+            "；原因：" + "、".join(
+                reason_labels.get(reason, reason) for reason in self.mismatch_reasons
+            )
+            if self.mismatch_reasons else ""
+        )
         super().__init__(
-            f"INDEX_EMBEDDING_MISMATCH: 索引由 {index_model!r} 构建，"
-            f"当前向量化模型为 {runtime_model!r}"
+            f"INDEX_EMBEDDING_MISMATCH: 索引身份({index_identity})与当前身份"
+            f"({runtime_identity})不兼容{reason_detail}"
             + (f"（collection={collection}）" if collection else "")
             + "。请重建索引后再使用。"
         )
@@ -479,17 +518,52 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             self._check_embedding_control(conn)
             cur = conn.cursor()
             cur.execute(
-                f"SELECT embedding_model, status, model_revision, embedding_dimension "
+                f"SELECT embedding_provider, embedding_model, status, model_revision, "
+                f"embedding_dimension "
                 f"FROM {_meta_table_name()} WHERE collection = %s FOR UPDATE",
                 (self._collection,),
             )
             row = cur.fetchone()
             if row is not None:
-                if (row[1] != "ready" or row[0] != identity["model"]
-                        or int(row[3]) != EMBEDDING_DIM
-                        or (row[2] and row[2] != identity["revision"])):
+                cur.execute(
+                    f"SELECT EXISTS(SELECT 1 FROM {self._table} WHERE collection=%s)",
+                    (self._collection,),
+                )
+                has_vectors = bool(cur.fetchone()[0])
+                index_identity = {
+                    "provider": row[0], "model": row[1], "revision": row[3],
+                }
+                mismatch_reasons = embedding_identity_mismatch_reasons(
+                    index_identity, identity, has_vectors=has_vectors,
+                )
+                if row[2] == "ready" and not has_vectors:
+                    # 空集合没有旧语义空间，可以安全登记当前完整身份。
+                    mismatch_reasons = embedding_identity_missing_reasons(identity)
+                    if mismatch_reasons:
+                        raise IndexEmbeddingMismatchError(
+                            str(row[1] or ""), identity["model"], self._collection,
+                            index_provider=str(row[0] or ""),
+                            runtime_provider=str(identity["provider"] or ""),
+                            mismatch_reasons=mismatch_reasons,
+                        )
+                    cur.execute(
+                        f"UPDATE {_meta_table_name()} SET embedding_provider=%s,"
+                        "embedding_model=%s,embedding_dimension=%s,model_revision=%s,"
+                        "updated_at=now() WHERE collection=%s AND status='ready'",
+                        (identity["provider"], identity["model"], EMBEDDING_DIM,
+                         identity["revision"], self._collection),
+                    )
+                    return
+                if row[2] != "ready":
+                    mismatch_reasons.append("index_not_ready")
+                if has_vectors and int(row[4]) != EMBEDDING_DIM:
+                    mismatch_reasons.append("dimension_mismatch")
+                if mismatch_reasons:
                     raise IndexEmbeddingMismatchError(
-                        str(row[0]), identity["model"], self._collection,
+                        str(row[1] or ""), identity["model"], self._collection,
+                        index_provider=str(row[0] or ""),
+                        runtime_provider=str(identity["provider"] or ""),
+                        mismatch_reasons=mismatch_reasons,
                     )
                 return
             cur.execute(
@@ -497,8 +571,21 @@ class PgVectorKnowledgeStore(KnowledgeStore):
                 (self._collection,),
             )
             if cur.fetchone():
+                mismatch_reasons = embedding_identity_mismatch_reasons(
+                    {}, identity, has_vectors=True,
+                )
+                mismatch_reasons.append("index_metadata_missing")
                 raise IndexEmbeddingMismatchError(
                     "身份未登记", identity["model"], self._collection,
+                    runtime_provider=str(identity["provider"] or ""),
+                    mismatch_reasons=mismatch_reasons,
+                )
+            mismatch_reasons = embedding_identity_missing_reasons(identity)
+            if mismatch_reasons:
+                raise IndexEmbeddingMismatchError(
+                    "", identity["model"], self._collection,
+                    runtime_provider=str(identity["provider"] or ""),
+                    mismatch_reasons=mismatch_reasons,
                 )
             conn.cursor().execute(
                 f"""INSERT INTO {_meta_table_name()}
@@ -525,16 +612,30 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             return
         cur = conn.cursor()
         cur.execute(
-            f"SELECT embedding_model,status,model_revision FROM {_meta_table_name()} "
+            f"SELECT embedding_provider,embedding_model,status,model_revision,"
+            f"embedding_dimension FROM {_meta_table_name()} "
             "WHERE collection='__embedding_control__'"
         )
         row = cur.fetchone()
         if row is None:
             return
         identity = identity or _runtime_embedding_identity(self.embedding_function)
-        if (row[1] != "ready" or row[0] != identity["model"]
-                or row[2] != identity["revision"]):
-            raise IndexEmbeddingMismatchError(row[0], identity["model"], self._collection)
+        mismatch_reasons = embedding_identity_mismatch_reasons(
+            {"provider": row[0], "model": row[1], "revision": row[3]},
+            identity,
+            has_vectors=True,
+        )
+        if int(row[4]) != EMBEDDING_DIM:
+            mismatch_reasons.append("dimension_mismatch")
+        if row[2] != "ready":
+            mismatch_reasons.append("index_not_ready")
+        if mismatch_reasons:
+            raise IndexEmbeddingMismatchError(
+                str(row[1] or ""), identity["model"], self._collection,
+                index_provider=str(row[0] or ""),
+                runtime_provider=str(identity["provider"] or ""),
+                mismatch_reasons=mismatch_reasons,
+            )
 
     def get_index_meta(self) -> dict | None:
         """读取本 collection 的索引元数据（管理端展示 / 校验用）。"""
@@ -593,7 +694,8 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             self._check_embedding_control(conn, identity)
             cur = conn.cursor()
             cur.execute(
-                f"""SELECT embedding_model, status, model_revision, embedding_dimension
+                f"""SELECT embedding_provider, embedding_model, status,
+                           model_revision, embedding_dimension
                     FROM {_meta_table_name()}
                     WHERE collection = %s""",
                 (self._collection,),
@@ -607,18 +709,49 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             ) from e
         runtime = identity or _runtime_embedding_identity(self.embedding_function)
         if row is None:
-            # 只有真正空集合可以初始化；不能把旧向量认领为当前模型产物。
-            self._record_index_meta(conn)
+            # 空集合无需在查询时写入元数据；有向量却无元数据时必须拒绝认领。
+            cur = conn.cursor()
+            cur.execute(
+                f"SELECT EXISTS(SELECT 1 FROM {self._table} WHERE collection=%s)",
+                (self._collection,),
+            )
+            if cur.fetchone()[0]:
+                mismatch_reasons = embedding_identity_mismatch_reasons(
+                    {}, runtime, has_vectors=True,
+                )
+                mismatch_reasons.append("index_metadata_missing")
+                raise IndexEmbeddingMismatchError(
+                    "身份未登记", runtime["model"], self._collection,
+                    runtime_provider=str(runtime["provider"] or ""),
+                    mismatch_reasons=mismatch_reasons,
+                )
             return
-        meta_model, status = str(row[0] or ""), str(row[1] or "ready")
-        if (status != "ready" or not meta_model or not runtime["model"]
-                or not _meta_model_matches(meta_model, runtime["model"])
-                or int(row[3]) != EMBEDDING_DIM
-                or (row[2] and row[2] != runtime["revision"])):
+        cur = conn.cursor()
+        cur.execute(
+            f"SELECT EXISTS(SELECT 1 FROM {self._table} WHERE collection=%s)",
+            (self._collection,),
+        )
+        has_vectors = bool(cur.fetchone()[0])
+        meta_provider = str(row[0] or "")
+        meta_model = str(row[1] or "")
+        status = str(row[2] or "ready")
+        mismatch_reasons = embedding_identity_mismatch_reasons(
+            {"provider": meta_provider, "model": meta_model, "revision": row[3]},
+            runtime,
+            has_vectors=has_vectors,
+        )
+        if has_vectors and int(row[4]) != EMBEDDING_DIM:
+            mismatch_reasons.append("dimension_mismatch")
+        if status != "ready":
+            mismatch_reasons.append("index_not_ready")
+        if mismatch_reasons:
             raise IndexEmbeddingMismatchError(
                 index_model=meta_model or "(unknown)",
                 runtime_model=runtime["model"] or "(unknown)",
                 collection=self._collection,
+                index_provider=meta_provider,
+                runtime_provider=str(runtime["provider"] or ""),
+                mismatch_reasons=mismatch_reasons,
             )
 
     def _texts_to_rows(
@@ -852,20 +985,47 @@ class PgVectorKnowledgeStore(KnowledgeStore):
             cur.execute("SELECT pg_advisory_xact_lock(hashtext('rag-embedding-write'))")
             self._record_index_meta(conn)
             cur.execute(
-                f"SELECT embedding_model,model_revision FROM {_meta_table_name()} "
+                f"SELECT embedding_provider,embedding_model,model_revision,status,"
+                f"embedding_dimension "
+                f"FROM {_meta_table_name()} "
                 "WHERE collection=%s", (source_collection,),
             )
             source = cur.fetchone()
             identity = _runtime_embedding_identity(self.embedding_function)
+            cur.execute(
+                f"SELECT EXISTS(SELECT 1 FROM {self._table} WHERE collection=%s)",
+                (source_collection,),
+            )
+            source_has_vectors = bool(cur.fetchone()[0])
+            if not source_has_vectors:
+                if source is not None:
+                    cur.execute(
+                        f"DELETE FROM {_meta_table_name()} WHERE collection=%s",
+                        (source_collection,),
+                    )
+                return 0
+            source_identity = {
+                "provider": source[0] if source else "",
+                "model": source[1] if source else "",
+                "revision": source[2] if source else "",
+            }
+            mismatch_reasons = embedding_identity_mismatch_reasons(
+                source_identity, identity, has_vectors=True,
+            )
             if source is None:
-                cur.execute(f"SELECT 1 FROM {self._table} WHERE collection=%s LIMIT 1",
-                            (source_collection,))
-                if cur.fetchone() is None:
-                    return 0
-            if (source is None or source[0] != identity["model"]
-                    or source[1] != identity["revision"]):
+                mismatch_reasons.append("index_metadata_missing")
+            else:
+                if source[3] != "ready":
+                    mismatch_reasons.append("index_not_ready")
+                if int(source[4]) != EMBEDDING_DIM:
+                    mismatch_reasons.append("dimension_mismatch")
+            if source is None or mismatch_reasons:
                 raise IndexEmbeddingMismatchError(
-                    source[0] if source else "未登记", identity["model"], source_collection,
+                    str(source[1] or "") if source else "未登记",
+                    identity["model"], source_collection,
+                    index_provider=str(source[0] or "") if source else "",
+                    runtime_provider=str(identity["provider"] or ""),
+                    mismatch_reasons=mismatch_reasons or ["index_metadata_missing"],
                 )
             cur.execute(
                 f"UPDATE {self._table} SET collection = %s "

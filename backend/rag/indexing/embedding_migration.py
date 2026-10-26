@@ -75,12 +75,14 @@ def storage_snapshot() -> dict:
         cur.execute("SELECT to_regclass(%s)", (_meta_table_name(),))
         metadata = {}
         if cur.fetchone()[0] is not None:
-            cur.execute(f"SELECT collection,embedding_model,model_revision,status "
+            cur.execute(f"SELECT collection,embedding_provider,embedding_model,"
+                        f"embedding_dimension,model_revision,status "
                         f"FROM {_meta_table_name()}")
             metadata = {row[0]: row[1:] for row in cur.fetchall()}
         for item in collections:
-            meta = metadata.get(item["collection"]) or (None, None, None)
-            item.update(model=meta[0], fingerprint=meta[1], status=meta[2])
+            meta = metadata.get(item["collection"]) or (None, None, None, None, None)
+            item.update(provider=meta[0], model=meta[1],
+                        dimension=meta[2], fingerprint=meta[3], status=meta[4])
     return {"dimension": int(match[1]),
             "vectors": sum(item["vectors"] for item in collections),
             "collections": collections}
@@ -89,17 +91,47 @@ def storage_snapshot() -> dict:
 def read_index_metadata() -> list[dict]:
     """管理端也读取真实向量库，支持元数据库与向量数据库分开部署。"""
     with connection() as conn, conn.cursor() as cur:
+        metadata: dict[str, dict] = {}
+        vector_collections: set[str] = set()
         cur.execute("SELECT to_regclass(%s)", (_meta_table_name(),))
-        if cur.fetchone()[0] is None:
-            return []
-        cur.execute(
-            f"SELECT collection,embedding_provider,embedding_model,embedding_dimension,"
-            "index_version,built_at,updated_at,status "
-            f"FROM {_meta_table_name()} WHERE collection<>'__embedding_control__' "
-            "AND position('::cand:' in collection)=0 ORDER BY collection"
-        )
-        columns = [item[0] for item in cur.description]
-        return [dict(zip(columns, row)) for row in cur.fetchall()]
+        if cur.fetchone()[0] is not None:
+            cur.execute(
+                f"SELECT collection,embedding_provider,embedding_model,"
+                "embedding_dimension,model_revision,index_version,built_at,"
+                f"updated_at,status FROM {_meta_table_name()} "
+                "WHERE collection<>'__embedding_control__' "
+                "AND position('::cand:' in collection)=0"
+            )
+            columns = [item[0] for item in cur.description]
+            metadata = {
+                str(row["collection"]): row
+                for row in (dict(zip(columns, values)) for values in cur.fetchall())
+            }
+
+        cur.execute("SELECT to_regclass(%s)", (_table(),))
+        if cur.fetchone()[0] is not None:
+            cur.execute(
+                f"SELECT DISTINCT collection FROM {_table()} "
+                "WHERE position('::cand:' in collection)=0 "
+            )
+            vector_collections = {str(row[0]) for row in cur.fetchall()}
+
+        collections = sorted(set(metadata) | vector_collections)
+        return [
+            {
+                "collection": collection,
+                "embedding_provider": metadata.get(collection, {}).get("embedding_provider"),
+                "embedding_model": metadata.get(collection, {}).get("embedding_model"),
+                "embedding_dimension": metadata.get(collection, {}).get("embedding_dimension"),
+                "model_revision": metadata.get(collection, {}).get("model_revision"),
+                "index_version": metadata.get(collection, {}).get("index_version"),
+                "built_at": metadata.get(collection, {}).get("built_at"),
+                "updated_at": metadata.get(collection, {}).get("updated_at"),
+                "status": metadata.get(collection, {}).get("status"),
+                "has_vectors": collection in vector_collections,
+            }
+            for collection in collections
+        ]
 
 
 def validate_vectors(vectors: list, count: int, dimension: int) -> None:

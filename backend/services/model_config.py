@@ -507,6 +507,7 @@ class ModelConfigService:
         if issue:
             raise ValueError(issue)
         from backend.infra.llm import specialized
+        from backend.rag.embedding_identity import embedding_identity_mismatch_reasons
         from backend.rag.embedding_singleton import get_registered_embedding
         from backend.rag.indexing.embedding_migration import (
             storage_snapshot, validate_vectors,
@@ -556,9 +557,28 @@ class ModelConfigService:
         trace_collector.finish(trace, "预检通过",
                                int((time.monotonic()-started)*1000), model_name)
         current = model_roles.resolve_effective("embedding")["value"]
+        target_identity = {
+            "provider": binding.provider_id,
+            "model": binding.model_name,
+            "revision": fingerprint,
+        }
         incompatible_count = sum(
-            bool(item["status"] != "ready" or item["model"] != model_name
-                 or (item["fingerprint"] and item["fingerprint"] != fingerprint))
+            bool(
+                item.get("status") != "ready"
+                or embedding_identity_mismatch_reasons(
+                    {
+                        "provider": item.get("provider"),
+                        "model": item.get("model"),
+                        "revision": item.get("fingerprint"),
+                    },
+                    target_identity,
+                    has_vectors=int(item.get("vectors") or 0) > 0,
+                )
+                or (
+                    int(item.get("vectors") or 0) > 0
+                    and int(item.get("dimension") or 0) != info["dimension"]
+                )
+            )
             for item in info["collections"]
         )
         requires_rebuild = bool(incompatible_count) or (
@@ -889,31 +909,71 @@ class ModelConfigService:
         """全部向量索引的 embedding 元数据（与运行时角色对比供前端展示）。"""
         import asyncio
 
-        from backend.rag.indexing.embedding_migration import read_index_metadata
+        from backend.infra.llm import specialized
+        from backend.rag.embedding_identity import embedding_identity_mismatch_reasons
+        from backend.rag.indexing.embedding_migration import (
+            EMBEDDING_DIM, read_index_metadata,
+        )
 
         rows = await asyncio.to_thread(read_index_metadata)
         runtime_model = str(
             model_roles.resolve_effective("embedding").get("value") or ""
         )
+        runtime_provider = ""
+        runtime_fingerprint = ""
+        try:
+            binding = specialized.registered_binding("embedding", runtime_model)
+            runtime_provider = binding.provider_id
+            runtime_fingerprint = specialized.embedding_fingerprint(binding)
+        except Exception:
+            # 无法从注册表确立完整身份时，非空索引会按不兼容展示并由检索门禁拒绝。
+            pass
         out: list[dict] = []
         for r in rows:
             if r["collection"] == "__embedding_control__" or "::cand:" in r["collection"]:
                 continue
             index_model = str(r["embedding_model"] or "")
-            status = str(r["status"] or "ready")
-            mismatch = bool(index_model) and index_model != runtime_model
+            index_provider = str(r["embedding_provider"] or "")
+            index_fingerprint = str(r["model_revision"] or "")
+            has_vectors = bool(r.get("has_vectors"))
+            raw_status = r.get("status")
+            status = str(raw_status or ("rebuild_required" if has_vectors else "ready"))
+            mismatch_reasons = embedding_identity_mismatch_reasons(
+                {
+                    "provider": index_provider,
+                    "model": index_model,
+                    "revision": index_fingerprint,
+                },
+                {
+                    "provider": runtime_provider,
+                    "model": runtime_model,
+                    "revision": runtime_fingerprint,
+                },
+                has_vectors=has_vectors,
+            )
+            if has_vectors and raw_status is None:
+                mismatch_reasons.append("index_metadata_missing")
+            if (has_vectors
+                    and int(r["embedding_dimension"] or 0) != EMBEDDING_DIM):
+                mismatch_reasons.append("dimension_mismatch")
+            if status != "ready":
+                mismatch_reasons.append("index_not_ready")
+            mismatch = bool(mismatch_reasons)
             if mismatch and status == "ready":
                 status = "rebuild_required"
             out.append({
                 "collection": str(r["collection"]),
-                "embeddingProvider": str(r["embedding_provider"] or ""),
+                "embeddingProvider": index_provider,
                 "embeddingModel": index_model,
+                "modelRevision": index_fingerprint,
                 "embeddingDimension": int(r["embedding_dimension"] or 0),
                 "indexVersion": int(r["index_version"] or 1),
                 "builtAt": _iso(r["built_at"]),
                 "updatedAt": _iso(r["updated_at"]),
                 "status": status,
+                "runtimeProvider": runtime_provider,
                 "runtimeModel": runtime_model,
+                "mismatchReasons": sorted(set(mismatch_reasons)),
                 "mismatch": mismatch,
             })
         return out

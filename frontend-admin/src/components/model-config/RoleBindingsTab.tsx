@@ -113,6 +113,36 @@ function incompatibleIndexes(row: RoleRow) {
   )
 }
 
+const INDEX_COLLECTION_LABELS: Record<string, string> = {
+  chroma: '知识库分块向量',
+  doc_db: '知识库文档向量',
+  router_index: '路由分类向量',
+}
+
+const INDEX_MISMATCH_LABELS: Record<string, string> = {
+  index_model_missing: '索引模型未记录',
+  runtime_model_missing: '当前模型身份未知',
+  model_mismatch: '模型不同',
+  index_provider_missing: '索引供应商未记录',
+  runtime_provider_missing: '当前供应商身份未知',
+  provider_mismatch: '供应商不同',
+  index_fingerprint_missing: '索引指纹缺失',
+  runtime_fingerprint_missing: '当前指纹不可用',
+  fingerprint_mismatch: '模型配置指纹不同',
+  dimension_mismatch: '向量维度不同',
+  index_metadata_missing: '索引身份元数据缺失',
+  index_not_ready: '索引未就绪',
+}
+
+function indexCollectionLabel(collection: string): string {
+  return INDEX_COLLECTION_LABELS[collection] ?? collection
+}
+
+function indexMismatchLabels(reasons: string[] | undefined, fallback: string): string {
+  if (!reasons?.length) return fallback
+  return reasons.map((reason) => INDEX_MISMATCH_LABELS[reason] ?? reason).join('、')
+}
+
 /** 根据健康状态给出可执行方向，不把供应商原始错误报文展示给操作员。 */
 function healthActionHint(status: ModelHealthStatus | undefined): string | null {
   switch (status) {
@@ -413,11 +443,13 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
         >
           <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-600" />
           <div>
-            <div className="font-medium">当前向量化模型与现有知识库索引不一致，请重建索引后再使用。</div>
+            <div className="font-medium">现有向量索引身份不匹配或记录不完整，请重建索引后再使用。</div>
             <div className="mt-0.5 font-mono text-[10px] text-amber-700">
               {badIndexes.map((item) => (
                 <span key={item.collection} className="mr-3">
-                  {item.collection}: {item.embeddingModel || '（未记录）'} → {item.runtimeModel}（{item.status}）
+                  {indexCollectionLabel(item.collection)}: {item.embeddingProvider || '供应商未记录'}
+                  /{item.embeddingModel || '模型未记录'} → {item.runtimeProvider || '供应商未知'}
+                  /{item.runtimeModel || '模型未知'}（{indexMismatchLabels(item.mismatchReasons, item.status)}）
                 </span>
               ))}
             </div>
@@ -769,7 +801,7 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
             <div className="space-y-3 px-5 py-4 text-xs text-text-secondary">
               {embeddingPreview && <div className="rounded border border-amber-200 bg-amber-50 p-3">
                 <p>将处理 {embeddingPreview.vectors} 条向量，分布在 {embeddingPreview.collections.length} 个数据集合中（不是文档数量）；已验证模型输出 {embeddingPreview.dimension} 维。</p>
-                <details className="mt-2"><summary className="cursor-pointer">查看处理范围</summary><ul className="mt-1 max-h-40 overflow-y-auto break-all">{embeddingPreview.collections.map((item) => <li key={item.collection}>{item.collection}：{item.vectors} 条向量</li>)}</ul></details>
+                <details className="mt-2"><summary className="cursor-pointer">查看处理范围</summary><ul className="mt-1 max-h-40 overflow-y-auto break-all">{embeddingPreview.collections.map((item) => <li key={item.collection}>{indexCollectionLabel(item.collection)}：{item.vectors} 条向量</li>)}</ul></details>
                 <p className="mt-2">复用已入库文本，不重复 OCR 和解析。{embeddingPreview.billing === 'local'
                   ? '本地推理仍记录使用量和执行耗时。'
                   : '会产生模型调用费用，金额尚未估算，以实际用量和有效价格结算。'}</p>
