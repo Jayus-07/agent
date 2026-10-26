@@ -44,7 +44,7 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
     try {
       const [ds, pending, kbCatalog] = await Promise.all([
         evaluationService.listV2Datasets(100),
-        evaluationService.listV2Candidates('pending', 200).catch(() => [] as EvaluationV2Candidate[]),
+        evaluationService.listV2Candidates('in_review', 200).catch(() => [] as EvaluationV2Candidate[]),
         listKbAuthority().catch(() => ({ knowledge_bases: [] as KbAuthorityItem[] })),
       ])
       setDatasets(ds); setCandidates(pending)
@@ -77,6 +77,7 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
         </select>
         <span className="flex-1" />
         <button type="button" className={ctl} onClick={() => setGenOpen(v => !v)}><Sparkles size={13} className="mr-1 inline" aria-hidden="true" />从知识库生成</button>
+        <a className={`${ctl} inline-flex items-center`} href="/observability/monitoring?tab=traces" title="在执行记录中把失败会话一键转为评测候选">从 Trace 添加</a>
         <button type="button" className={ctl} onClick={() => setImportOpen(true)}><Upload size={13} className="mr-1 inline" aria-hidden="true" />导入数据集</button>
         <button type="button" className={ctlPrimary} onClick={() => setNewOpen(v => !v)}><Plus size={13} className="mr-1 inline" aria-hidden="true" />新建数据集</button>
       </div>
@@ -159,33 +160,73 @@ function NewDatasetForm({ onDone }: { onDone: () => void }) {
   </Card>
 }
 
+const TASK_STATUS_LABELS: Record<string, string> = { PENDING: '排队中', RUNNING: '正在生成', RETRYING: '等待自动重试', SUCCESS: '生成完成', FAILED: '生成失败', CANCELLED: '已取消', PAUSED: '已暂停' }
+
 function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => void }) {
   const [kbId, setKbId] = useState('')
   const [count, setCount] = useState(5)
   const [task, setTask] = useState<EvaluationTask | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [finished, setFinished] = useState(false)
   const datasetKey = `synthetic_${Date.now()}`
-  const submit = () => { setBusy(true); setError('')
-    evaluationAssets.synthesize(
-      kbId,
-      { dataset_key: datasetKey, name: `从知识库生成 ${new Date().toLocaleString('zh-CN')}`, module: 'rag', schema_version: 'rag-eval/1.0' } as unknown as ImportManifest,
-      count, createIdempotencyKey(),
-    ).then(setTask).catch((e: unknown) => setError(e instanceof Error ? e.message : '提交生成任务失败')).finally(() => setBusy(false))
+  const [datasetName, setDatasetName] = useState('')
+
+  // 任务提交后实时轮询进度；终态自动刷新数据集与候选，用户无需手动刷新
+  useEffect(() => {
+    if (!task || ['SUCCESS', 'FAILED', 'CANCELLED'].includes(task.status)) return
+    let active = true
+    const timer = setInterval(() => {
+      void evaluationAssets.task(task.task_id).then(next => {
+        if (!active) return
+        setTask(next)
+        if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(next.status)) {
+          setFinished(true)
+          if (next.status === 'SUCCESS') onDone()
+        }
+      }).catch(() => undefined)
+    }, 2500)
+    return () => { active = false; clearInterval(timer) }
+  }, [task, onDone])
+
+  const submit = () => { setBusy(true); setError(''); setFinished(false); setMessage('')
+    // 先冻结知识库语料快照（snapshot_id 为 24 位 hex），再基于快照提交合成任务
+    const generatedName = `从知识库生成 ${new Date().toLocaleString('zh-CN')}`
+    setDatasetName(generatedName)
+    evaluationAssets.freeze(kbId)
+      .then(snapshot => evaluationAssets.synthesize(
+        snapshot.snapshot_id,
+        { dataset_key: datasetKey, name: `从知识库生成 ${new Date().toLocaleString('zh-CN')}`, module: 'rag', schema_version: 'rag-eval/1.0', version: '1.0.0' } as unknown as ImportManifest,
+        count, createIdempotencyKey(),
+      ))
+      .then(task => setTask(task))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : '提交生成任务失败（生成依赖评测模型配置，请先在「模型与供应商」绑定 eval_gen 角色）')).finally(() => setBusy(false))
   }
+  const running = task && !['SUCCESS', 'FAILED', 'CANCELLED'].includes(task.status)
   return <Card title="从知识库生成评测题" subtitle="基于知识库语料（自动冻结快照）单跳合成：问题、参考答案与证据引用自动带出，产出直接进入候选，确认后发布。">
     <div className="grid gap-3 sm:grid-cols-[2fr_1fr_auto]">
-      <select aria-label="知识库" value={kbId} onChange={e => setKbId(e.target.value)} className={ctl}>
+      <select aria-label="知识库" value={kbId} onChange={e => setKbId(e.target.value)} className={ctl} disabled={Boolean(running)}>
         <option value="">选择知识库</option>
         {kbs.map(item => <option key={item.kb_id} value={item.kb_id}>{item.name} · {item.kb_id}</option>)}
       </select>
-      <input aria-label="生成题数" type="number" min={1} max={5} value={count} onChange={e => setCount(Number(e.target.value) || 5)} className={ctl} />
-      <button type="button" className={ctlPrimary} disabled={busy || !kbId} onClick={submit}>{busy ? '提交中…' : '开始生成'}</button>
+      <input aria-label="生成题数" type="number" min={1} max={5} value={count} onChange={e => setCount(Number(e.target.value) || 5)} className={ctl} disabled={Boolean(running)} />
+      <button type="button" className={ctlPrimary} disabled={busy || !kbId || Boolean(running)} onClick={submit}>{busy ? '冻结快照中…' : running ? '生成中…' : '开始生成'}</button>
     </div>
-    <p className="mt-2 text-xs text-text-muted">每批 1–5 题（保留预算余量）；需扩量可连续提交多批。生成依赖知识库语料与评测模型配置。</p>
+    <p className="mt-2 text-xs text-text-muted">每批 1–5 题（保留预算余量）；需扩量可连续提交多批。生成依赖知识库语料与评测模型配置；冻结大知识库快照可能需要数十秒。</p>
     {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
-    {task && <p role="status" className="mt-2 text-xs text-text-secondary">任务 {task.task_id}：{task.status} {task.progress || ''} — 完成后候选出现在下方编辑视图，批准后即可发布。</p>}
-    {task && task.status === 'SUCCESS' && <button type="button" className={`${ctlPrimary} mt-2`} onClick={onDone}>刷新数据集与候选</button>}
+    {message && !task && <p role="status" className="mt-2 text-xs text-text-secondary">{message}</p>}
+    {task && running && <div className="mt-2 flex items-center gap-2 rounded-md bg-bg-elevated p-2.5 text-xs text-text-secondary" role="status">
+      <span className="inline-block size-2 animate-pulse rounded-full bg-accent" aria-hidden="true"></span>
+      {TASK_STATUS_LABELS[task.status] || task.status}{task.progress ? ` · ${task.progress}` : ''}（任务 {task.task_id.slice(0, 8)}，完成后自动加载结果）
+    </div>}
+    {task && task.status === 'SUCCESS' && finished && <div className="mt-2 space-y-2">
+      <p role="status" className="rounded-md bg-emerald-50 p-2.5 text-xs text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
+        生成完成：已生成 {count} 条候选并进入待确认列表（数据集「{datasetName}」）。请在下方编辑视图核对参考答案与证据后批准。
+      </p>
+      <button type="button" className={ctlPrimary} onClick={onDone}>查看待确认候选</button>
+    </div>}
+    {task && task.status === 'FAILED' && <p role="alert" className="mt-2 text-xs text-red-700">任务失败：{task.progress || '请检查评测模型绑定与知识库语料后重试。'}</p>}
   </Card>
 }
 
@@ -277,11 +318,31 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
   perform: (fn: () => Promise<void>) => Promise<void>
   busy: boolean
 }) {
-  const mine = candidates.filter(item => {
-    const meta = (item.payload_json as Record<string, Record<string, string>> | null)?.metadata || {}
-    return (meta.dataset_key || '') === dataset.dataset_key
-  })
+  // 候选是全局待确认池（与数据集在发布时才建立关联），编辑视图展示全部待确认候选；
+  // 采纳后可在「版本历史」中把已批准用例发布进当前数据集的新版本。
+  const mine = candidates
   const [edits, setEdits] = useState<Record<string, { question: string; reference: string; facts: string; snapshotId: string }>>({})
+  const [manualOpen, setManualOpen] = useState(false)
+  const [manual, setManual] = useState({ question: '', reference: '', facts: '' })
+  const [manualMessage, setManualMessage] = useState('')
+  const addManual = () => perform(async () => {
+    if (!manual.question.trim() || !manual.reference.trim()) throw new Error('问题和参考答案为必填')
+    const facts = manual.facts.split(/[,，]/).map(item => item.trim()).filter(Boolean)
+    await evaluationService.createV2Candidate({
+      source_kind: 'manual',
+      payload: {
+        input: { query: manual.question.trim() },
+        proposed_facts: [{ behavior: 'answer', reference_answer: manual.reference.trim(), required_facts: facts }],
+        proposed_evidence: [],
+        metadata: { dataset_key: dataset.dataset_key, dataset_name: dataset.name, tags: ['manual'] },
+      },
+      idempotency_key: createIdempotencyKey(),
+    })
+    setManual({ question: '', reference: '', facts: '' })
+    setManualOpen(false)
+    setManualMessage('已创建手工候选，批准后可发布。')
+    onChanged()
+  })
   const getEdit = (id: string, candidate: EvaluationV2Candidate) => edits[id] || {
     question: String((candidate.payload_json as Record<string, Record<string, string>> | null)?.input?.query || ''),
     reference: String((candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_facts?.[0]?.reference_answer || ''),
@@ -293,8 +354,9 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
   const approve = (candidate: EvaluationV2Candidate) => perform(async () => {
     const edit = getEdit(candidate.candidate_id, candidate)
     const facts = edit.facts.split(/[,，]/).map(item => item.trim()).filter(Boolean)
+    // 与展示同源：优先用户经选择器追加的锚点，否则用生成/导入自动带出的证据
     const payloadEvidence = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
-    const evidence = JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || JSON.stringify(payloadEvidence)) as Array<Record<string, unknown>>
+    const evidence = (JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || 'null') || payloadEvidence) as Array<Record<string, unknown>>
     await evaluationService.reviewV2Candidate(candidate.candidate_id, {
       expected_revision: candidate.revision,
       verdict: 'approved',
@@ -327,13 +389,30 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
       <span className="text-sm font-medium text-text-primary">编辑：{dataset.name} · {dataset.latest_version ? `v${dataset.latest_version}` : '尚无版本'}</span>
       <span className="flex-1" />
       <button type="button" className={ctl} onClick={onOpenHistory}>版本历史</button>
+      <button type="button" className={ctlPrimary} onClick={() => setManualOpen(v => !v)}>添加用例</button>
     </div>
+    {manualOpen && <Card title="手工新增用例" subtitle="提交后进入待确认候选，与其他来源候选一并审核批准。">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <input aria-label="新用例问题" placeholder="问题（必填）" value={manual.question} onChange={e => setManual(m => ({ ...m, question: e.target.value }))} className={ctl} />
+        <input aria-label="新用例参考答案" placeholder="参考答案（必填）" value={manual.reference} onChange={e => setManual(m => ({ ...m, reference: e.target.value }))} className={ctl} />
+        <input aria-label="新用例必需事实" placeholder="必需事实（逗号分隔）" value={manual.facts} onChange={e => setManual(m => ({ ...m, facts: e.target.value }))} className={ctl} />
+        <div className="flex items-center gap-2">
+          <button type="button" className={ctlPrimary} disabled={busy || !manual.question.trim() || !manual.reference.trim()} onClick={addManual}>创建候选</button>
+          <button type="button" className={ctlGhost} onClick={() => setManualOpen(false)}>收起</button>
+          {manualMessage && <span role="status" className="text-xs text-text-secondary">{manualMessage}</span>}
+        </div>
+      </div>
+    </Card>}
     <Card title="待确认候选" subtitle="与导入模板同 schema：问题 / 参考答案 / 必需事实 / 证据引用；批准后可发布版本。">
       {mine.length === 0 ? <Empty text="该数据集暂无待确认候选：通过「从知识库生成」或「导入数据集」写入。" />
         : <div className="space-y-3">
           {mine.map(candidate => {
             const edit = getEdit(candidate.candidate_id, candidate)
             const complete = edit.reference.trim() !== ''
+            // 证据 = 生成/导入自动带出的锚点 + 用户经证据选择器追加的锚点（sessionStorage 暂存）
+            const baseEvidence = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
+            const sessionEvidence = JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || 'null') as Array<Record<string, unknown>> | null
+            const evidenceList = (sessionEvidence || baseEvidence) as Array<{ doc_id?: string; doc_version?: string; quote?: string }>
             return <div key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
               <div className="grid gap-2 sm:grid-cols-2">
                 <input aria-label="问题" placeholder="问题" value={edit.question} onChange={e => setEdit(candidate.candidate_id, { question: e.target.value })} className={ctl} />
@@ -341,11 +420,24 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
                 <input aria-label="必需事实" placeholder="必需事实（逗号分隔）" value={edit.facts} onChange={e => setEdit(candidate.candidate_id, { facts: e.target.value })} className={ctl} />
                 <div className="flex items-center gap-2">
                   <Badge text={complete ? '✓ 可批准' : '⚠ 缺参考答案'} tone={complete ? 'good' : 'warn'} />
+                  {!edit.facts.trim() && <Badge text="必需事实待补充" tone="warn" />}
+                  <Badge text={evidenceList.length ? `证据 ${evidenceList.length} 条` : '⚠ 无证据'} tone={evidenceList.length ? 'blue' : 'warn'} />
                   <span className="font-mono text-[11px] text-text-muted">{candidate.candidate_id.slice(0, 8)}</span>
                 </div>
               </div>
+              <div className="mt-2 rounded-md bg-bg-elevated p-2.5">
+                <p className="text-[11px] font-medium text-text-muted">自动带出的证据引用</p>
+                {evidenceList.length === 0
+                  ? <p className="mt-1 text-xs text-amber-600">无证据引用：生成的候选应自动带出证据；若持续为空，可用下方证据选择器检索快照切片补齐。</p>
+                  : <ul className="mt-1 space-y-1">
+                    {evidenceList.map((item, i) => <li key={i} className="text-xs text-text-secondary">
+                      <span className="font-mono text-[11px] text-text-muted">{item.doc_id || '（未知文档）'}{item.doc_version ? ` · ${item.doc_version}` : ''}</span>
+                      <span className="ml-1.5">{String(item.quote || '').slice(0, 90)}{String(item.quote || '').length > 90 ? '…' : ''}</span>
+                    </li>)}
+                  </ul>}
+              </div>
               <div className="mt-2">
-                <EvidenceSearchPicker onInsert={(claim: { kb_id: string; doc_id: string; doc_version: string; quote: string }) => {
+                <EvidenceSearchPicker defaultSnapshotId={edit.snapshotId} onInsert={(claim: { kb_id: string; doc_id: string; doc_version: string; quote: string }) => {
                   const payloadEvidence2 = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
                   const current = JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || JSON.stringify(payloadEvidence2)) as Array<Record<string, unknown>>
                   sessionStorage.setItem(`evidence:${candidate.candidate_id}`, JSON.stringify([...current, claim]))
@@ -354,7 +446,7 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
               </div>
               <div className="mt-2 flex justify-end gap-2">
                 <button type="button" className={ctlGhost} disabled={busy} onClick={() => discard(candidate)}>丢弃</button>
-                <button type="button" className={ctlPrimary} disabled={busy || !complete} onClick={() => approve(candidate)}>批准进草稿</button>
+                <button type="button" className={ctlPrimary} disabled={busy || !complete || evidenceList.length === 0} onClick={() => approve(candidate)}>批准进草稿</button>
               </div>
             </div>
           })}
@@ -404,13 +496,14 @@ function HistoryView({ dataset, onBack, perform, busy, onChanged }: {
         <input aria-label="回退后的新版本号" value={rollbackVersion} onChange={e => setRollbackVersion(e.target.value)} placeholder="如 v9" className={ctl} />
       </label>
       {versions.length === 0 ? <Empty text="尚无已发布版本。" /> : <TableWrap minWidth={760}>
-        <thead className="bg-bg-elevated"><tr><Th>版本</Th><Th>状态</Th><Th end>用例数</Th><Th>发布时间</Th><Th end>操作</Th></tr></thead>
+        <thead className="bg-bg-elevated"><tr><Th>版本</Th><Th>状态</Th><Th end>用例数</Th><Th>发布时间</Th><Th end>被运行引用</Th><Th end>操作</Th></tr></thead>
         <tbody className="divide-y divide-border-subtle">
           {versions.map(item => <tr key={item.dataset_version_id}>
             <Td>v{item.version}</Td>
             <Td><StatusBadge status={item.status} /></Td>
             <Td end>{item.case_count ?? 0}</Td>
             <Td>{timeShort(item.published_at)}</Td>
+            <Td end>{item.run_refs ?? 0}</Td>
             <Td end>
               <button type="button" className={`${ctlGhost} mr-1`} onClick={() => void perform(async () => {
                 const blob = await evaluationService.exportV2DatasetVersion(dataset.dataset_id, item.dataset_version_id)

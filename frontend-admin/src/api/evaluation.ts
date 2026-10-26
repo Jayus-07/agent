@@ -156,6 +156,7 @@ export interface EvaluationV2DatasetVersion {
   published_by?: string;
   published_at?: string;
   case_count?: number;
+  run_refs?: number;
 }
 
 export interface EvaluationV2DatasetVersionDiff {
@@ -401,7 +402,7 @@ export interface EvaluationV2Comparison {
     p_value_method: 'exact_mcnemar_two_sided';
     confidence_interval_method: 'paired_wilson_95';
   };
-  cases: Array<{ case_id: string; baseline: string; candidate: string; scores: { baseline: Record<string, number | null>; candidate: Record<string, number | null> } }>;
+  cases: Array<{ case_id: string; question?: string; baseline: string; candidate: string; scores: { baseline: Record<string, number | null>; candidate: Record<string, number | null> } }>;
   slices: Array<{
     field: 'category' | 'scenario' | 'risk_level' | 'difficulty';
     value: string;
@@ -761,6 +762,10 @@ export const evaluationService = {
     body.append('manifest', JSON.stringify(manifest));
     body.append('request_id', requestId);
     return request(`${BASE}/v2/datasets/imports`, { method: 'POST', body });
+  },
+
+  createV2Candidate(payload: { source_kind: 'manual'; payload: { input: { query: string }; proposed_facts: Array<{ behavior: string; reference_answer: string; required_facts: string[] }>; proposed_evidence: Array<Record<string, unknown>>; metadata: Record<string, unknown> }; idempotency_key: string }): Promise<EvaluationV2Candidate> {
+    return request(`${BASE}/v2/candidates`, { method: 'POST', body: payload });
   },
 
   reviewV2Candidate(candidateId: string, payload: {

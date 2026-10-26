@@ -139,15 +139,21 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
       </Card>
 
       <Card title="逐用例结果" subtitle="点击行查看对比侧详情。">
-        {comparison.cases.length === 0 ? <Empty text="没有逐用例记录。" /> : <TableWrap minWidth={720}>
-          <thead className="bg-bg-elevated"><tr><Th>用例</Th><Th>基准</Th><Th>对比</Th><Th end>操作</Th></tr></thead>
+        {comparison.cases.length === 0 ? <Empty text="没有逐用例记录。" /> : <TableWrap minWidth={860}>
+          <thead className="bg-bg-elevated"><tr><Th>用例</Th><Th>问题</Th><Th>基准状态</Th><Th>对比状态</Th><Th end>变化</Th><Th end>操作</Th></tr></thead>
           <tbody className="divide-y divide-border-subtle">
-            {comparison.cases.map(item => <tr key={item.case_id}>
-              <Td mono>{item.case_id.slice(0, 8)}</Td>
-              <Td><Badge text={item.baseline} tone={item.baseline === 'pass' ? 'good' : item.baseline === 'fail' ? 'bad' : 'warn'} /></Td>
-              <Td><Badge text={item.candidate} tone={item.candidate === 'pass' ? 'good' : item.candidate === 'fail' ? 'bad' : 'warn'} /></Td>
-              <Td end><button type="button" className={ctlGhost} onClick={() => openCase(item.case_id)}>详情<ArrowRight size={11} className="ml-1 inline" aria-hidden="true" /></button></Td>
-            </tr>)}
+            {comparison.cases.map(item => {
+              const improved = item.baseline !== 'pass' && item.candidate === 'pass'
+              const regressed = item.baseline === 'pass' && item.candidate !== 'pass'
+              return <tr key={item.case_id}>
+                <Td mono>{item.case_id.slice(0, 8)}</Td>
+                <Td className="max-w-[280px] truncate" >{item.question || '—'}</Td>
+                <Td><Badge text={item.baseline === 'pass' ? '通过' : item.baseline === 'fail' ? '未通过' : item.baseline} tone={item.baseline === 'pass' ? 'good' : item.baseline === 'fail' ? 'bad' : 'warn'} /></Td>
+                <Td><Badge text={item.candidate === 'pass' ? '通过' : item.candidate === 'fail' ? '未通过' : item.candidate} tone={item.candidate === 'pass' ? 'good' : item.candidate === 'fail' ? 'bad' : 'warn'} /></Td>
+                <Td end><span className={improved ? 'font-medium text-emerald-600' : regressed ? 'font-medium text-red-600' : 'text-text-muted'}>{improved ? '↑ 改善' : regressed ? '↓ 退步' : '→ 持平'}</span></Td>
+                <Td end><button type="button" className={ctlGhost} onClick={() => openCase(item.case_id)}>详情<ArrowRight size={11} className="ml-1 inline" aria-hidden="true" /></button></Td>
+              </tr>
+            })}
           </tbody>
         </TableWrap>}
       </Card>
@@ -162,6 +168,40 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
           <p><b className="text-text-primary">指标：</b>{Object.entries(caseDetail.result.metrics || {}).map(([key, value]) => `${key}=${typeof value === 'number' ? value.toFixed(3) : '—'}`).join(' · ') || '无数值'}</p>
           {caseDetail.result.error_stage && <p><b className="text-text-primary">失败阶段：</b>{caseDetail.result.error_stage}</p>}
         </div>
+        {(() => {
+          const expectedObj = caseDetail.result.expected as Record<string, unknown> | null
+          const anchors = (expectedObj?.evidence as Array<{ doc_id?: string }> | undefined) || []
+          const truthDocs = new Set(anchors.map(a => String(a.doc_id || '')))
+          const details = ((caseDetail.result.actual as Record<string, unknown> | null)?.details as Array<Record<string, unknown>> | undefined) || []
+          if (!details.length) return null
+          return <div className="mt-3">
+            <p className="mb-1.5 text-xs font-medium text-text-muted">检索命中与判分裁决</p>
+            <TableWrap minWidth={640}>
+              <thead className="bg-bg-elevated"><tr><Th>#</Th><Th>文档 / 切片</Th><Th end>Rerank 分</Th><Th>判分裁决</Th><Th>摘要</Th></tr></thead>
+              <tbody className="divide-y divide-border-subtle">
+                {details.map((hit, i) => {
+                  const denied = Boolean(hit.permission_denied)
+                  const versionHidden = hit.version_visible === false
+                  const verdict = denied
+                    ? { text: '✕ 越权剔除 · 仅留痕', tone: 'bad' as const }
+                    : versionHidden
+                      ? { text: '⚠ 版本不可见 · 剔除判分', tone: 'warn' as const }
+                      : truthDocs.has(String(hit.doc_id || ''))
+                        ? { text: '✓ 计入召回', tone: 'good' as const }
+                        : { text: '– 未命中真值', tone: 'gray' as const }
+                  return <tr key={String(hit.chunk_id || i)}>
+                    <Td end>{i + 1}</Td>
+                    <Td><span className="block font-mono text-[11px] text-text-muted">{String(hit.doc_id || '')}</span>{String(hit.title || '')}</Td>
+                    <Td end>{typeof hit.rerank_score === 'number' ? hit.rerank_score.toFixed(2) : '—'}</Td>
+                    <Td><Badge text={verdict.text} tone={verdict.tone} /></Td>
+                    <Td className="max-w-[260px]">{String(hit.snippet || String(hit.page_content || '')).slice(0, 120)}{String(hit.snippet || String(hit.page_content || '')).length > 120 ? '…' : ''}</Td>
+                  </tr>
+                })}
+              </tbody>
+            </TableWrap>
+            <p className="mt-1.5 text-xs text-text-muted">越权与版本不可见的切片仍保留在命中列表供审计，但不参与召回判分。</p>
+          </div>
+        })()}
       </Card>}
 
       <p className="text-xs text-text-muted">对比仅在相同数据集版本与相同评测方式的运行间有效；RAGAS 指标仅在该运行的评测方式包含 RAGAS 时产出。</p>

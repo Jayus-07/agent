@@ -23,9 +23,10 @@ export interface EvidenceClaimDraft {
 }
 
 /** 证据选择器：在知识库快照内检索切片，勾选后回填为证据锚点。
- * 引用只能来自快照内切片（与转正核验同一来源约束）。 */
-export default function EvidenceSearchPicker({ onInsert }: { onInsert: (claim: EvidenceClaimDraft) => void }) {
-  const [snapshotId, setSnapshotId] = useState('')
+ * 引用只能来自快照内切片（与转正核验同一来源约束）；
+ * 合成候选自带冻结快照 ID 时自动预填。 */
+export default function EvidenceSearchPicker({ onInsert, defaultSnapshotId = '' }: { onInsert: (claim: EvidenceClaimDraft) => void; defaultSnapshotId?: string }) {
+  const [snapshotId, setSnapshotId] = useState(defaultSnapshotId)
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<EvidenceItem[]>([])
   const [kbId, setKbId] = useState('')

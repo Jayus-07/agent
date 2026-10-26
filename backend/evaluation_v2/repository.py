@@ -334,11 +334,14 @@ def list_dataset_versions(tenant_id: str, dataset_id: str) -> list[dict[str, Any
             """
             SELECT v.dataset_version_id, v.dataset_id, v.version, v.status, v.content_hash,
                    v.published_by, v.published_at, v.created_at,
-                   COUNT(i.case_id)::integer AS case_count
+                   COUNT(i.case_id)::integer AS case_count,
+                   (SELECT COUNT(*)::integer FROM evaluation_v2.eval_runs AS r
+                     WHERE r.tenant_id = v.tenant_id
+                       AND r.snapshot_json->>'dataset_version_id' = v.dataset_version_id::text) AS run_refs
             FROM evaluation_v2.eval_dataset_versions AS v
             LEFT JOIN evaluation_v2.eval_dataset_items AS i
               ON i.tenant_id = v.tenant_id AND i.dataset_version_id = v.dataset_version_id
-            WHERE v.tenant_id = %s AND v.dataset_id = %s AND v.status = 'published'
+            WHERE v.tenant_id = %s AND v.dataset_id = %s
             GROUP BY v.dataset_version_id
             ORDER BY v.created_at DESC, v.version DESC
             """,
@@ -3254,9 +3257,23 @@ def compare_runs(tenant_id: str, baseline_run_id: str, candidate_run_id: str) ->
                     "delta": round(right_mean - left_mean, 6),
                     "sample_count": len(left_values),
                 })
+        question_by_case: dict[str, str] = {}
+        if baseline_by_case:
+            with _transaction(tenant_id) as (_conn, qcur):
+                qcur.execute(
+                    """
+                    SELECT DISTINCT ON (r.case_id) r.case_id, r.input_json->>'query' AS query
+                    FROM evaluation_v2.eval_case_revisions AS r
+                    WHERE r.tenant_id = %s AND r.case_id::text = ANY(%s)
+                    ORDER BY r.case_id, r.revision DESC
+                    """,
+                    (tenant_id, list(baseline_by_case.keys())),
+                )
+                question_by_case = {str(row["case_id"]): str(row["query"] or "") for row in qcur.fetchall() if row["query"]}
         cases = [
             {
                 "case_id": case_id,
+                "question": question_by_case.get(case_id, ""),
                 "baseline": baseline_by_case[case_id]["result_status"],
                 "candidate": candidate_by_case[case_id]["result_status"],
                 "scores": {

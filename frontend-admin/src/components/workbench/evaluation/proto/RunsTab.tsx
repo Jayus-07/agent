@@ -158,7 +158,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
 
     <Card title="运行记录" subtitle="失败区分执行错误与质量不达标；错误不计入通过率分母。">
       {loading ? <Empty text="正在读取运行状态…" /> : runs.length === 0 ? <Empty text="还没有运行记录。选择上方方案发起第一次评测。" /> : <TableWrap minWidth={980}>
-        <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
+        <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th end>耗时</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
         <tbody className="divide-y divide-border-subtle">
           {runs.map(run => <tr key={run.run_id} className={run.run_id === selectedRunId ? 'bg-accent-soft/40' : ''}>
             <Td mono>{run.run_id.slice(0, 8)}</Td>
@@ -168,6 +168,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
             <Td><StatusBadge status={run.job_status} /></Td>
             <Td>{run.completed_cases}/{run.total_cases} · 通过 {run.passed_cases}</Td>
             <Td end>{fmtCost(run.cost_amount, run.cost_currency)}</Td>
+            <Td end>{run.started_at && run.finished_at ? `${Math.max(1, Math.round((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000))}s` : '—'}</Td>
             <Td>{timeShort(run.finished_at)}</Td>
             <Td end>
               <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setSelectedRunId(run.run_id)}>指纹</button>
