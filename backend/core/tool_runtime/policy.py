@@ -144,6 +144,39 @@ def _apply_env_overrides() -> dict[str, ToolPolicy]:
     return policies
 
 
+def _dynamic_mcp_policy(tool_key: str) -> ToolPolicy | None:
+    """MCP 动态工具的策略派生层（ADR-0011 D4）。
+
+    未注册的 `mcp.*` capability 从治理快照的 ToolSpec 派生 ToolPolicy：
+    超时/重试/熔断/操作类型取审核治理配置；写操作强制零重试。
+    快照无此工具（未审核/停用/漂移）返回 None——执行会被 guard 拦截，
+    策略层无需再给默认值。
+    """
+    if not tool_key.startswith("mcp."):
+        return None
+    try:
+        from backend.infra.mcp_registry import store as _mcp_store
+
+        runtime = _mcp_store.get_runtime(tool_key)
+        if runtime is None:
+            return None
+        spec = runtime.spec
+        is_write = spec.operation.value != "read"
+        policy = ToolPolicy(
+            timeout_ms=float(spec.timeout_ms),
+            retries=0 if is_write else spec.retry_max_attempts,
+            circuit_breaker=spec.circuit_breaker_enabled,
+            cb_failure_threshold=spec.circuit_failure_threshold,
+            cb_recovery_seconds=spec.circuit_cooldown_seconds,
+            operation_type=(
+                OperationType.WRITE if is_write else OperationType.READ
+            ),
+        )
+        return policy.for_write() if is_write else policy
+    except Exception:  # noqa: BLE001 — 策略派生失败走保守默认
+        return None
+
+
 def get_policy(tool_key: str) -> ToolPolicy:
     """按 capability 名取策略；未注册走保守默认 + 写操作后缀启发。"""
     global _policy_cache
@@ -152,17 +185,26 @@ def get_policy(tool_key: str) -> ToolPolicy:
     policy = _policy_cache.get(tool_key)
     if policy is not None:
         return policy
+    dynamic = _dynamic_mcp_policy(tool_key)
+    if dynamic is not None:
+        return dynamic
     if tool_key.endswith(_WRITE_SUFFIXES):
         return DEFAULT_POLICY.for_write()
     return DEFAULT_POLICY
 
 
 def is_registered(tool_key: str) -> bool:
-    """该 tool key 是否有显式注册的策略（区别于兜底默认）。"""
+    """该 tool key 是否有显式注册的策略（区别于兜底默认）。
+
+    MCP 动态工具有快照派生策略，视为已注册（base.py 据此决定
+    是否用注册表超时替代类级默认）。
+    """
     global _policy_cache
     if _policy_cache is None:
         _policy_cache = _apply_env_overrides()
-    return tool_key in _policy_cache
+    if tool_key in _policy_cache:
+        return True
+    return _dynamic_mcp_policy(tool_key) is not None
 
 
 def reset_policy_cache() -> None:

@@ -40,6 +40,30 @@ WORKFLOW_EXAMPLES: dict[str, list[str]] = {
 _EXPECTED_EXAMPLE_COUNT = _manifest.total_example_count
 
 
+def _effective_examples() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """静态 + MCP 动态工具的 example 合并视图（索引数据源）。
+
+    动态工具的 examples 由审核者提供（ADR-0011 D6）；快照缺席时与静态
+    等价。返回 (route_examples, workflow_examples)。
+    """
+    try:
+        from backend.orchestration.router.manifest import effective_manifest
+
+        manifest = effective_manifest()
+        return (
+            {c.name: list(c.examples) for c in manifest.routed_capabilities},
+            {w.name: list(w.examples) for w in manifest.workflows},
+        )
+    except Exception:  # noqa: BLE001 — 动态面缺席回退静态
+        return dict(ROUTE_EXAMPLES), dict(WORKFLOW_EXAMPLES)
+
+
+def _expected_example_count() -> int:
+    """当前应入库的 example 总条数（对账口径，含动态工具）。"""
+    route, workflows = _effective_examples()
+    return sum(len(v) for v in route.values()) + sum(len(v) for v in workflows.values())
+
+
 class VectorRouteError(RuntimeError):
     """向量路由基础设施故障，交由 RoutingEngine 做受控降级。"""
 
@@ -90,16 +114,17 @@ class VectorRouter:
             )
 
             # 空索引 → 初始化；非空但数量与 manifest 对不上 → manifest 改过
-            # 而索引没重建（如新增 capability），自动重建自愈。旧逻辑只在
-            # count()==0 时建，曾导致新增 capability 的 examples 永远进不了
-            # 索引（静默漏路由）。
+            # 而索引没重建（如新增 capability / MCP 动态工具上下线），自动
+            # 重建自愈。旧逻辑只在 count()==0 时建，曾导致新增 capability
+            # 的 examples 永远进不了索引（静默漏路由）。
             count = self._store.count()
+            expected = _expected_example_count()
             if count == 0:
                 self._init_examples()
-            elif count != _EXPECTED_EXAMPLE_COUNT:
+            elif count != expected:
                 from backend.shared.logger import logger
                 logger.warning(
-                    f"[VectorRouter] 路由索引条数({count})与 manifest({_EXPECTED_EXAMPLE_COUNT})"
+                    f"[VectorRouter] 路由索引条数({count})与 manifest({expected})"
                     "不符，自动重建索引"
                 )
                 self._rebuild_index()
@@ -109,14 +134,19 @@ class VectorRouter:
             logger.warning(f"[VectorRouter] 索引初始化失败（将走 LLM Router）: {e}")
             self._store = None
 
+    def reconcile_index(self) -> None:
+        """外部对账入口（MCP 动态工具快照变化时触发；幂等）。"""
+        self._ensure_index()
+
     def _init_examples(self) -> None:
         """把所有 capability 的 example queries 写入索引。"""
         from backend.shared.logger import logger
         if self._store is None:
             return
 
+        route_examples, workflow_examples = _effective_examples()
         all_examples = []
-        for cap, queries in {**ROUTE_EXAMPLES, **WORKFLOW_EXAMPLES}.items():
+        for cap, queries in {**route_examples, **workflow_examples}.items():
             for q in queries:
                 all_examples.append({"text": q, "metadata": {"capability": cap}})
 

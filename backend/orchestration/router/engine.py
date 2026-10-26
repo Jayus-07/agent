@@ -177,9 +177,9 @@ def _manifest_fingerprint() -> str:
     """返回 capability/workflow 声明快照指纹。"""
 
     try:
-        from backend.orchestration.router.manifest import load_manifest
+        from backend.orchestration.router.manifest import effective_manifest
 
-        manifest = load_manifest()
+        manifest = effective_manifest()
         payload = {
             "capabilities": [
                 {
@@ -586,9 +586,9 @@ class RoutingEngine:
         candidates = mapping.get("candidates") or []
         try:
             from backend.orchestration.capability_registry import tool_registry
-            from backend.orchestration.router.manifest import load_manifest
+            from backend.orchestration.router.manifest import effective_manifest
 
-            manifest = load_manifest()
+            manifest = effective_manifest()
             if mode == ExecutionMode.WORKFLOW.value:
                 workflow = str(mapping.get("workflow_name") or "")
                 return workflow in {item.name for item in manifest.workflows}

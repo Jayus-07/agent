@@ -133,6 +133,22 @@ def identity_scope_key(product: ProductContext, user_id: str, tenant_id: str) ->
     return f"{product.product_id}::{identity}"
 
 
+def _dynamic_mcp_granted(product_id: str, capability: str) -> bool:
+    """MCP 动态工具的产品授权裁决（ADR-0011 D5）。
+
+    授权事实源是 ai.mcp_tool_grants 的进程内快照（product + capability +
+    租户三元组）；授权系统不可用时 fail-closed。
+    """
+    try:
+        from backend.core.request_context import get_tool_tenant_id
+        from backend.infra.mcp_registry import store as _mcp_store
+
+        return _mcp_store.product_granted(
+            product_id, capability, get_tool_tenant_id())
+    except Exception:  # noqa: BLE001 — 授权判定失败按拒绝
+        return False
+
+
 def product_allows_capability(
     product_id: str,
     capability: str,
@@ -147,6 +163,10 @@ def product_allows_capability(
     name = str(capability or "").strip().lower()
     domain_values = {str(value or "").strip().lower() for value in domains}
     roots = {name.split(".", 1)[0]} | domain_values
+    # 动态 MCP 能力没有静态前缀语义，唯一放行依据是授权快照；
+    # 工具名、domain_hint、Planner 输出都不构成授权（ADR-0002 决策 5）。
+    if name.startswith("mcp."):
+        return _dynamic_mcp_granted(product.product_id, name)
     forbidden = {"travel", "travel_booking", "travel_commerce", "customer_service", "selection_funnel", "booking", "commerce"}
     if product.product_id == "agent":
         return not bool(roots.intersection(forbidden))

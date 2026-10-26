@@ -312,6 +312,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "112_evaluation_v2_domain_runner.sql": "memory",
     # security_events 扩展 ADMIN_ACTION：管理端主动动作（Tool 失败探针等）操作审计。
     "113_security_events_admin_action.sql": "memory",
+    # MCP 能力中心：连接/凭据/工具发现与审核/快照历史/产品授权。
+    "114_mcp_capability_center.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

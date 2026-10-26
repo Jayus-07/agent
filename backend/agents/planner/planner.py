@@ -43,9 +43,9 @@ def _planner_visible_capabilities() -> tuple[str, ...]:
     routed:false 的内部能力（email.watch 120s 阻塞长轮询等）退出规划面；
     兜底白名单见 manifest.PLANNER_FALLBACK_CAPABILITIES。
     """
-    from backend.orchestration.router.manifest import load_manifest
+    from backend.orchestration.router.manifest import effective_manifest
 
-    return load_manifest().planner_visible_capability_names
+    return effective_manifest().planner_visible_capability_names
 
 
 # =====================================================

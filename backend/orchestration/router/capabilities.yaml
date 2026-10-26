@@ -225,6 +225,18 @@ domains:
       - 谢谢
       - 再见
       - 你是谁
+  # 外部 MCP 动态工具的统一粗域（ADR-0011 D6）：capability 名固定
+  # mcp.<slug>，由 mcp_registry 快照派生并挂本域；本文件不逐个登记
+  # 动态工具。examples 是域心文本（非路由示例），保持通用检索语义。
+  - name: mcp
+    description: 外部系统接入的扩展工具能力（MCP 动态注册，按审核与授权开放）
+    examples:
+      - 用外部工具查一下这个数据
+      - 调用刚接入的那个系统接口
+    keywords:
+      - 外部工具
+      - MCP
+      - 接入系统
 
 capabilities:
   - name: sql.query

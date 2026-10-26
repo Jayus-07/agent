@@ -54,7 +54,7 @@
 | Router、LangGraph、Runtime、SSE、Checkpoint  | [ai-runtime.md](docs/architecture/ai-runtime.md)                                                                                 |
 | `/agent` 对话优先目标架构与跨产品隔离         | [ADR-0002：Conversation-first](docs/architecture/adr/0002-main-agent-conversation-first.md)（待施工）                           |
 | Provider、凭据和跨域服务关系                 | [domain-service-map.md](docs/architecture/domain-service-map.md)                                                                 |
-| 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)                                                                      |
+| 新增或修改 Agent、Skill、Tool、Workflow、MCP | [tool-skill-guide.md](docs/development/tool-skill-guide.md)、动态 MCP 工具另见 [ADR-0011](docs/architecture/adr/0011-mcp-capability-center.md) |
 | Tool/Provider 异常、失败分级与降级           | [failure-degradation.md](docs/architecture/failure-degradation.md)                                                                 |
 | 文档标准、同步责任与交付                    | [documentation-standard.md](docs/development/documentation-standard.md)                                                               |
 | 全平台模块边界与目录归属                 | [module-boundaries.md](docs/architecture/module-boundaries.md)、[repository-layout.md](docs/development/repository-layout.md) |

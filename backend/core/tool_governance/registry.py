@@ -1,4 +1,11 @@
-"""从 capabilities.yaml 派生 ToolSpec V2，禁止运行时散落第二份配置。"""
+"""从 capabilities.yaml 派生静态 ToolSpec V2，并合并 MCP 动态注册表。
+
+ToolSpec 的两个来源（ADR-0011 D1）：
+  - 静态内置 Tool：capabilities.yaml（本文件解析，lru_cache）；
+  - 外部 MCP Tool：ai.mcp_* 表派生的进程内快照（infra/mcp_registry），
+    仅含 approved 且未漂移的工具。
+两类来源合并为同一治理视图，guard / planner / 执行器不区分来源。
+"""
 
 from __future__ import annotations
 
@@ -120,7 +127,7 @@ def _parse_spec(item: dict[str, Any]) -> ToolSpec:
 
 
 @lru_cache(maxsize=1)
-def all_tool_specs() -> dict[str, ToolSpec]:
+def static_tool_specs() -> dict[str, ToolSpec]:
     raw = yaml.safe_load(_MANIFEST_PATH.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ToolSpecRegistryError("capabilities.yaml 顶层必须是 object")
@@ -144,12 +151,35 @@ def all_tool_specs() -> dict[str, ToolSpec]:
     return specs
 
 
+def dynamic_tool_specs() -> dict[str, ToolSpec]:
+    """MCP 动态注册表快照派生的 ToolSpec（approved 且未漂移）。
+
+    快照不可用（DB 未初始化等）返回空 dict——动态面缺席不阻塞静态工具。
+    """
+    try:
+        from backend.infra.mcp_registry import store as _mcp_store
+
+        return {
+            capability: runtime.spec
+            for capability, runtime in _mcp_store.snapshot().tools.items()
+        }
+    except Exception:  # noqa: BLE001 — 动态面缺席不影响静态治理
+        return {}
+
+
+def all_tool_specs() -> dict[str, ToolSpec]:
+    """静态 YAML + 动态 MCP 合并视图（guard.evaluate / execute 的唯一入口）。"""
+    specs = dict(static_tool_specs())
+    specs.update(dynamic_tool_specs())
+    return specs
+
+
 def get_tool_spec(capability: str) -> ToolSpec | None:
     return all_tool_specs().get(capability)
 
 
 def validate_tool_spec_registry() -> dict[str, Any]:
-    specs = all_tool_specs()
+    specs = dict(static_tool_specs())
     raw = yaml.safe_load(_MANIFEST_PATH.read_text(encoding="utf-8"))
     capability_count = len(raw.get("capabilities") or [])
     failures: list[str] = []
@@ -173,6 +203,7 @@ def validate_tool_spec_registry() -> dict[str, Any]:
         "tool_registry_pass": True,
         "capability_spec_count": capability_count,
         "tool_spec_count": len(specs),
+        "dynamic_tool_spec_count": len(dynamic_tool_specs()),
         "failures": [],
     }
 
@@ -180,6 +211,8 @@ def validate_tool_spec_registry() -> dict[str, Any]:
 __all__ = [
     "ToolSpecRegistryError",
     "all_tool_specs",
+    "dynamic_tool_specs",
     "get_tool_spec",
+    "static_tool_specs",
     "validate_tool_spec_registry",
 ]
