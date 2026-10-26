@@ -55,8 +55,30 @@
 - 容器级部署验证 **UNVERIFIED**：改动在 PR 分支，按 AGENTS.md 待合并授权后
   `devctl.bat rebuild`（注意须以合并后代码构建）。
 - 合并 PR #107：待用户额外授权（提交与推送已确认完成）。
-- main 既有 CI 故障（ragas、frontend-admin ECONNREFUSED、execution_mode
-  硬编码守卫）不在本批范围，需另立修复。
+
+## 推送后 CI 定性（2026-10-27，HEAD 21e37d2）
+
+- **Detect RAG changes：pass**——迁移登记修复生效。
+- **RAG Smoke preflight：13 failed = main 基线回归，非 PR 引入**。
+  决定性对比（同机同库 5433/agent_memory 同命令）：
+  - PR 代码（worktree）`test_llm_budget.py` 17 passed、
+    `test_specialized_budget.py + test_pgvector_store.py` 56 passed；
+  - main 代码（c5782c2）同命令 6 failed + 7 failed；
+  - 破坏源在 main 基点后合入的提交：`231675e`（改 infra/llm/budget.py，
+    预算不拒绝/observe 计数丢失）、`41f69a7`/`d886f7c`（pgvector 指纹
+    校验，INDEX_EMBEDDING_MISMATCH）。
+  - CI 的 pull_request 事件 checkout 的是 PR⊕main 的 merge 预览，因此带
+    上 main 的破坏；RAG Smoke (8 cases) 失败为 preflight 的级联聚合。
+- **Evaluation V2 free contract tests：4 failed = main 基线故障**。
+  1 × ragas 缺失（main 同款）+ 3 × CI PG service connection refused
+  （环境类）；该 workflow 在 main push 10-25/10-26 也均 failure。
+- **frontend-admin-functional：main 基线故障**（rbac.test.ts
+  ECONNREFUSED :3000，main c5782c2 同款）。
+- contract-check / scan / static-structure / frontend-admin-security /
+  admin-observability-auth / Evaluation admin build：pass。
+- **结论：PR #107 分支未引入任何 CI 回归；PR 引入的门禁问题已修复转绿。**
+- 新发现待办：main 的 budget/pgvector 回归（本机可复现，非 flaky）需另立
+  任务修复，属于 Batch 1 前的优先阻断候选。
 
 ## 下一步
 
