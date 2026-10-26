@@ -46,6 +46,7 @@
     ".next-dev-297125151/types/**/*.ts",
     ".next-dev-3268529199/types/**/*.ts",
     ".next-dev-645517998/types/**/*.ts",
+    ".next-dev-690617259/types/**/*.ts",
     ".next-dev/types/**/*.ts",
     ".next-smoke/types/**/*.ts",
     ".next-travel-v2-3220/types/**/*.ts",
@@ -54,7 +55,7 @@
     ".next/dev/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-dev-690617259/types/**/*.ts"
+    ".next-dev-183595529/types/**/*.ts"
   ],
   "exclude": [
     "node_modules"
