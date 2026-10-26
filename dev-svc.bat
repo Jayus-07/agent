@@ -17,8 +17,12 @@ setlocal enabledelayedexpansion
 ::             - the ONLY way code / .env changes reach the containers
 ::
 :: Conventions kept from start_frontend*.bat:
-::   * every next dev start uses a NEW EMPTY distDir (NEXT_DIST_DIR),
-::     reusing a non-empty one always fails to boot
+::   * next dev always boots from an EMPTY distDir (NEXT_DIST_DIR);
+::     reusing a non-empty one always fails to boot. The dir name is
+::     pinned to .next-dev and wiped before start (random-suffix
+::     fallback only when the wipe is blocked), so Next's generated
+::     tsconfig/next-env references stay byte-stable across boots
+::     instead of appending a new fingerprint to tsconfig.json per run
 ::   * stopping a frontend only kills the LISTENING pid on its port,
 ::     never the browsers/clients that merely connected to it
 ::   * backend runs in docker compose (the only complete runtime);
@@ -322,8 +326,18 @@ if not errorlevel 1 (
 )
 
 :pickdist
+:: Pinned distDir: a random name per start made Next append a new
+:: "<distDir>/types" include line to the tracked tsconfig.json and
+:: rewrite next-env.d.ts on EVERY boot (git churn). Wipe the pinned
+:: dir first; fall back to a random fresh dir only if the wipe is
+:: blocked by locked files.
+set "DISTDIR=.next-dev"
+if exist "%ROOT%\%DIR%\%DISTDIR%" rd /s /q "%ROOT%\%DIR%\%DISTDIR%" >nul 2>&1
+if not exist "%ROOT%\%DIR%\%DISTDIR%" goto distok
+:pickrandom
 set "DISTDIR=.next-dev-%RANDOM%%RANDOM%"
-if exist "%ROOT%\%DIR%\%DISTDIR%" goto pickdist
+if exist "%ROOT%\%DIR%\%DISTDIR%" goto pickrandom
+:distok
 
 echo   [%LABEL%] starting :%PORT% (distDir=%DISTDIR%, gateway=%GATEWAY_URL%)
 start "%LABEL%-%PORT%" /D "%ROOT%\%DIR%" cmd /k "set NEXT_DIST_DIR=%DISTDIR%&& set AUTH_GATEWAY_URL=%GATEWAY_URL%&& npx next dev -p %PORT%"
