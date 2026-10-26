@@ -1171,6 +1171,47 @@ def create_candidates_bulk(
     return results
 
 
+def count_duplicate_queries(tenant_id: str, dataset_key: str, queries: list[str]) -> int:
+    """统计导入用例与既有内容的重复题目数（MVP 提示口径）。
+
+    重复 = 归一化后的问题在该数据集的未决/已批准候选或任一已发布版本中出现过；
+    仅作提示，不阻断导入——跨请求内容去重由导入幂等键承担。
+    """
+    tenant_id = _tenant(tenant_id)
+    normalized = sorted({q.strip().lower() for q in queries if q and q.strip()})
+    if not normalized or not dataset_key.strip():
+        return 0
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT DISTINCT lower(btrim(payload_json->'input'->>'query')) AS q
+            FROM evaluation_v2.eval_candidates
+            WHERE tenant_id = %s
+              AND review_status IN ('in_review', 'approved')
+              AND lower(btrim(payload_json->'input'->>'query')) = ANY(%s)
+              AND COALESCE(
+                    payload_json->'metadata'->>'dataset_key',
+                    payload_json->'source_ref'->>'dataset_key', ''
+                  ) = %s
+            UNION
+            SELECT DISTINCT lower(btrim(r.input_json->>'query')) AS q
+            FROM evaluation_v2.eval_datasets AS d
+            JOIN evaluation_v2.eval_dataset_versions AS v
+              ON v.tenant_id = d.tenant_id AND v.dataset_id = d.dataset_id
+            JOIN evaluation_v2.eval_dataset_items AS i
+              ON i.tenant_id = v.tenant_id AND i.dataset_version_id = v.dataset_version_id
+            JOIN evaluation_v2.eval_case_revisions AS r
+              ON r.tenant_id = i.tenant_id AND r.case_id = i.case_id
+             AND r.revision = i.case_revision
+            WHERE d.tenant_id = %s AND d.dataset_key = %s
+              AND lower(btrim(r.input_json->>'query')) = ANY(%s)
+            """,
+            (tenant_id, normalized, dataset_key, tenant_id, dataset_key, normalized),
+        )
+        existing = {str(item["q"]) for item in (cur.fetchall() or [])}
+        return sum(1 for q in queries if q.strip().lower() in existing)
+
+
 def list_candidates(
     tenant_id: str, *, review_status: str | None = None, limit: int = 50, offset: int = 0
 ) -> list[dict[str, Any]]:

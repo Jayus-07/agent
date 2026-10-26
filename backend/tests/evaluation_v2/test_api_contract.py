@@ -85,6 +85,7 @@ def test_import_preview_validates_without_creating_candidates(monkeypatch):
     import backend.app.api.routes.evaluation_v2 as routes
 
     monkeypatch.setattr(routes.repository, "get_dataset_domain", lambda *_args, **_kwargs: "rag")
+    monkeypatch.setattr(routes.repository, "count_duplicate_queries", lambda *_args, **_kwargs: 0)
     payload = {
         "manifest": {
             "schema_version": "rag-eval/1.0",
@@ -116,6 +117,7 @@ def test_import_preview_validates_without_creating_candidates(monkeypatch):
 
     assert result["valid"] is True
     assert result["persisted"] is False
+    assert result["duplicates"] == 0
     assert result["case_count"] == 1
     assert "proposed_facts" in result["preview"][0]["candidate"]
 
@@ -124,6 +126,7 @@ def test_csv_preview_reports_five_missing_fields_in_one_hundred_rows_without_per
     import backend.app.api.routes.evaluation_v2 as routes
 
     monkeypatch.setattr(routes.repository, "get_dataset_domain", lambda *_args, **_kwargs: "rag")
+    monkeypatch.setattr(routes.repository, "count_duplicate_queries", lambda *_args, **_kwargs: 0)
 
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=["id", "question", "tier", "query_type", "expected"])
@@ -169,6 +172,7 @@ def test_non_rag_import_preview_uses_domain_contract_and_does_not_create_candida
     import backend.app.api.routes.evaluation_v2 as routes
 
     monkeypatch.setattr(routes.repository, "get_dataset_domain", lambda *_args, **_kwargs: "sql")
+    monkeypatch.setattr(routes.repository, "count_duplicate_queries", lambda *_args, **_kwargs: 0)
     case = {
         "id": "SQL-NEG-001",
         "question": "讀取未授權的系統表",

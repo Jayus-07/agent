@@ -254,7 +254,7 @@ def validate_upload(filename: str, data: bytes, manifest_data: dict) -> dict:
                 errors.append({"line": number, "field": ".".join(map(str, error["loc"])), "message": error["msg"]})
         except ValueError as exc:
             errors.append({"line": number, "field": "case", "message": str(exc)})
-    return {"valid": not errors, "manifest": manifest, "cases": cases, "case_count": len(rows), "errors": errors[:100]}
+    return {"valid": not errors, "manifest": manifest, "cases": cases, "case_count": len(rows), "rows_count": len(rows), "errors": errors[:100]}
 
 
 def create_import(validation: dict, actor: str) -> dict:

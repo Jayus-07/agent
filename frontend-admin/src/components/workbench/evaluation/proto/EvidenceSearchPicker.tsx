@@ -24,8 +24,8 @@ export interface EvidenceClaimDraft {
 
 /** 证据选择器：在知识库快照内检索切片，勾选后回填为证据锚点。
  * 引用只能来自快照内切片（与转正核验同一来源约束）；
- * 合成候选自带冻结快照 ID 时自动预填。 */
-export default function EvidenceSearchPicker({ onInsert, defaultSnapshotId = '' }: { onInsert: (claim: EvidenceClaimDraft) => void; defaultSnapshotId?: string }) {
+ * 合成候选自带冻结快照 ID 时自动预填；question 用于一键自动检索。 */
+export default function EvidenceSearchPicker({ onInsert, defaultSnapshotId = '', question = '' }: { onInsert: (claim: EvidenceClaimDraft) => void; defaultSnapshotId?: string; question?: string }) {
   const [snapshotId, setSnapshotId] = useState(defaultSnapshotId)
   const [query, setQuery] = useState('')
   const [items, setItems] = useState<EvidenceItem[]>([])
@@ -34,10 +34,12 @@ export default function EvidenceSearchPicker({ onInsert, defaultSnapshotId = '' 
   const [error, setError] = useState('')
   const [searched, setSearched] = useState(false)
 
-  const search = async () => {
+  const search = async (overrideQuery?: string) => {
+    const effective = (overrideQuery ?? query).trim()
+    if (!snapshotId.trim() || !effective) return
     setBusy(true); setError('')
     try {
-      const result = await evaluationService.searchDatasetEvidence({ snapshot_id: snapshotId.trim(), query: query.trim(), top_k: 5 })
+      const result = await evaluationService.searchDatasetEvidence({ snapshot_id: snapshotId.trim(), query: effective, top_k: 5 })
       setItems(result.items)
       setKbId(result.kb_id)
       setSearched(true)
@@ -53,6 +55,7 @@ export default function EvidenceSearchPicker({ onInsert, defaultSnapshotId = '' 
       <input aria-label="语料快照 ID" placeholder="语料快照 ID（snapshot_id）" value={snapshotId} onChange={event => setSnapshotId(event.target.value)} className={`${control} w-64`} />
       <input aria-label="证据检索关键词" placeholder="按问题或关键词检索切片" value={query} onChange={event => setQuery(event.target.value)} className={`${control} w-56`} onKeyDown={event => { if (event.key === 'Enter' && snapshotId.trim() && query.trim()) void search() }} />
       <button type="button" disabled={busy || !snapshotId.trim() || !query.trim()} onClick={() => void search()} className={`${control} inline-flex items-center gap-1 bg-accent text-white disabled:opacity-50`}><Search size={13} aria-hidden="true" />{busy ? '检索中…' : '检索'}</button>
+      {question.trim() && <button type="button" disabled={busy || !snapshotId.trim()} onClick={() => { setQuery(question); void search(question) }} className={`${control} inline-flex items-center gap-1 disabled:opacity-50`}>用问题自动检索</button>}
     </div>
     {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
     {searched && items.length === 0 && <p className="mt-2 text-xs text-text-muted">没有命中切片：若该问题确实检索不到，可考虑把候选标为 no_evidence 拒答样本（对抗用例），不要硬凑证据。</p>}

@@ -672,10 +672,23 @@ async def preview_dataset_import(
     for item in cases[:5]:
         clean, _changed = sanitize_candidate_payload(_import_candidate_content(item, module))
         preview.append({"id": item.get("id", ""), "candidate": clean})
+    duplicates = 0
+    queries = [
+        str((item.get("input") or {}).get("query") or item.get("question") or "").strip()
+        for item in cases
+    ]
+    dataset_key = str(source_manifest.get("dataset_key", "")).strip()
+    if any(queries) and dataset_key:
+        duplicates = await asyncio.to_thread(
+            repository.count_duplicate_queries, identity.tenant_id, dataset_key, queries,
+        )
     return {
         "valid": bool(validation.get("valid")),
-        "case_count": validation.get("case_count", len(cases)),
+        # 预检统计口径：case_count=解析行数（含错误行），valid_count=合法行数
+        "case_count": validation.get("rows_count", validation.get("case_count", len(cases))),
+        "valid_count": len(cases),
         "errors": validation.get("errors", []),
+        "duplicates": duplicates,
         "preview": preview,
         "persisted": False,
     }
@@ -686,14 +699,23 @@ async def import_dataset_candidates(
     file: UploadFile = File(...),
     manifest: str = Form("{}"),
     request_id: str = Form(..., min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_-]+$"),
+    skip_errors: bool = Form(default=False),
     identity: Identity = Depends(require_product_identity),
     actor: OperatorIdentity = Depends(require_user_actor),
 ):
     _role(actor, "editor")
     data = await file.read(5 * 1024 * 1024 + 1)
     validation = _validate_import_file(file.filename or "", data, manifest)
+    skipped_lines = 0
     if not validation.get("valid"):
-        raise HTTPException(422, {"code": "IMPORT_VALIDATION_FAILED", "errors": validation.get("errors", [])})
+        errors = validation.get("errors", [])
+        # 行级错误才计入跳过数；file/manifest 级错误（line=0）无法按行跳过
+        skipped_lines = len({
+            error.get("line", 0) for error in errors
+            if isinstance(error.get("line"), int) and error["line"] > 0
+        })
+        if not (skip_errors and skipped_lines and validation.get("cases")):
+            raise HTTPException(422, {"code": "IMPORT_VALIDATION_FAILED", "errors": errors})
     source_manifest = validation.get("manifest") or json.loads(manifest or "{}")
     module = await _validate_import_dataset_domain(identity, source_manifest)
     upload_hash = hashlib.sha256(data).hexdigest()
@@ -720,6 +742,7 @@ async def import_dataset_candidates(
             "candidate_count": len(candidates),
             "candidate_ids": [str(item["candidate_id"]) for item in candidates],
             "review_status": "in_review",
+            "skipped": skipped_lines,
         }
     except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
         _safe_error(exc)

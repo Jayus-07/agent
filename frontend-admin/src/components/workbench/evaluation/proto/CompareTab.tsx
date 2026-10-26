@@ -31,6 +31,21 @@ const METRIC_LABELS: Record<string, string> = {
   top1_accuracy: 'Top-1 准确率',
 }
 
+/** 逐题主分数：不同 Runner 的分数键不统一，按优先级取第一个数值分 */
+const PRIMARY_SCORE_KEYS = ['overall', 'score', 'pass_score', 'judge_score', 'total_score']
+function primaryScore(scores: Record<string, number | null> | undefined): number | null {
+  if (!scores) return null
+  for (const key of PRIMARY_SCORE_KEYS) {
+    const value = scores[key]
+    if (typeof value === 'number' && Number.isFinite(value)) return value
+  }
+  return null
+}
+
+function formatScore(value: number | null): string {
+  return value === null ? '—' : value.toFixed(2)
+}
+
 export default function CompareTab({ focusRunId }: { focusRunId?: string | null }) {
   const [runs, setRuns] = useState<EvaluationV2Run[]>([])
   const [suiteFilter, setSuiteFilter] = useState('all')
@@ -138,18 +153,22 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
         {comparison.pass_rate_inference && <p className="mt-2 text-xs text-text-muted">配对推断（McNemar）：不一致样本 {comparison.pass_rate_inference.discordant_count}/{comparison.pass_rate_inference.sample_count}，通过率变化 {comparison.pass_rate_inference.pass_rate_delta >= 0 ? '+' : ''}{(comparison.pass_rate_inference.pass_rate_delta * 100).toFixed(1)}pp，p={comparison.pass_rate_inference.p_value.toFixed(4)}。</p>}
       </Card>
 
-      <Card title="逐用例结果" subtitle="点击行查看对比侧详情。">
-        {comparison.cases.length === 0 ? <Empty text="没有逐用例记录。" /> : <TableWrap minWidth={860}>
-          <thead className="bg-bg-elevated"><tr><Th>用例</Th><Th>问题</Th><Th>基准状态</Th><Th>对比状态</Th><Th end>变化</Th><Th end>操作</Th></tr></thead>
+      <Card title="逐用例结果" subtitle="点击行查看对比侧详情；分数为该题主评分（无主分的 Runner 显示 —）。">
+        {comparison.cases.length === 0 ? <Empty text="没有逐用例记录。" /> : <TableWrap minWidth={960}>
+          <thead className="bg-bg-elevated"><tr><Th>用例</Th><Th>问题</Th><Th>基准状态</Th><Th>对比状态</Th><Th end>基准分</Th><Th end>对比分</Th><Th end>变化</Th><Th end>操作</Th></tr></thead>
           <tbody className="divide-y divide-border-subtle">
             {comparison.cases.map(item => {
               const improved = item.baseline !== 'pass' && item.candidate === 'pass'
               const regressed = item.baseline === 'pass' && item.candidate !== 'pass'
+              const baselineScore = primaryScore(item.scores?.baseline)
+              const candidateScore = primaryScore(item.scores?.candidate)
               return <tr key={item.case_id}>
                 <Td mono>{item.case_id.slice(0, 8)}</Td>
                 <Td className="max-w-[280px] truncate" >{item.question || '—'}</Td>
                 <Td><Badge text={item.baseline === 'pass' ? '通过' : item.baseline === 'fail' ? '未通过' : item.baseline} tone={item.baseline === 'pass' ? 'good' : item.baseline === 'fail' ? 'bad' : 'warn'} /></Td>
                 <Td><Badge text={item.candidate === 'pass' ? '通过' : item.candidate === 'fail' ? '未通过' : item.candidate} tone={item.candidate === 'pass' ? 'good' : item.candidate === 'fail' ? 'bad' : 'warn'} /></Td>
+                <Td end className="tabular-nums">{formatScore(baselineScore)}</Td>
+                <Td end className="tabular-nums">{formatScore(candidateScore)}</Td>
                 <Td end><span className={improved ? 'font-medium text-emerald-600' : regressed ? 'font-medium text-red-600' : 'text-text-muted'}>{improved ? '↑ 改善' : regressed ? '↓ 退步' : '→ 持平'}</span></Td>
                 <Td end><button type="button" className={ctlGhost} onClick={() => openCase(item.case_id)}>详情<ArrowRight size={11} className="ml-1 inline" aria-hidden="true" /></button></Td>
               </tr>
@@ -164,8 +183,22 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
             <a className="ml-2 text-accent hover:underline" href={`/observability/monitoring?tab=traces&q=${encodeURIComponent(caseDetail.trace_id)}`}>查看完整 Trace</a>
             <span className="ml-2">时延 {caseDetail.latency_ms ?? '—'} ms · 费用 {caseDetail.cost_status === 'available' ? `${caseDetail.cost_amount} ${caseDetail.cost_currency || ''}` : '未归因'}</span></p>}
           <p><b className="text-text-primary">问题：</b>{String((caseDetail.result.expected as Record<string, unknown>).query ?? (caseDetail.result.actual as Record<string, unknown>).query ?? '—')}</p>
+          <p><b className="text-text-primary">期望答案：</b>{(() => {
+            const expected = caseDetail.result.expected as Record<string, unknown> | null
+            const reference = String(expected?.reference_answer ?? expected?.answer ?? '').trim()
+            const facts = (expected?.required_facts as string[] | undefined) || []
+            if (!reference && !facts.length) return '—'
+            return `${reference || '（无参考答案文本）'}${facts.length ? `（必需事实：${facts.join('、')}）` : ''}`
+          })()}</p>
           <p><b className="text-text-primary">实际回答：</b>{String((caseDetail.result.actual as Record<string, unknown>).answer ?? '—')}</p>
-          <p><b className="text-text-primary">指标：</b>{Object.entries(caseDetail.result.metrics || {}).map(([key, value]) => `${key}=${typeof value === 'number' ? value.toFixed(3) : '—'}`).join(' · ') || '无数值'}</p>
+          <p><b className="text-text-primary">评分理由：</b>{(() => {
+            const actual = caseDetail.result.actual as Record<string, unknown> | null
+            const reason = String(actual?.reason ?? actual?.rationale ?? actual?.judge_reason ?? '').trim()
+            if (reason) return reason
+            const metrics = caseDetail.result.metrics || {}
+            const entries = Object.entries(metrics).map(([key, value]) => `${key}=${typeof value === 'number' ? value.toFixed(3) : '—'}`)
+            return entries.length ? `（无评语，按指标判分：${entries.join(' · ')}）` : '无数值'
+          })()}</p>
           {caseDetail.result.error_stage && <p><b className="text-text-primary">失败阶段：</b>{caseDetail.result.error_stage}</p>}
         </div>
         {(() => {

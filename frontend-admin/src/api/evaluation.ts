@@ -233,7 +233,12 @@ export interface EvaluationV2ImportManifest {
 
 export interface EvaluationV2ImportPreview {
   valid: boolean;
+  /** 解析行数（含错误行） */
   case_count: number;
+  /** 合法行数；旧后端缺省时前端用 case_count - errors.length 兜底 */
+  valid_count?: number;
+  /** 与该数据集既有候选/已发布用例的重复题数（提示口径，不阻断导入） */
+  duplicates?: number;
   errors: Array<{ line: number; field: string; message: string }>;
   preview: Array<{ id: string; candidate: Record<string, unknown> }>;
   persisted: false;
@@ -756,11 +761,12 @@ export const evaluationService = {
     return request<EvaluationV2ImportPreview>(`${BASE}/v2/datasets/imports/preview`, { method: 'POST', body });
   },
 
-  importV2Candidates(file: File, manifest: EvaluationV2ImportManifest, requestId: string): Promise<{ request_id: string; candidate_count: number; candidate_ids: string[]; review_status: string }> {
+  importV2Candidates(file: File, manifest: EvaluationV2ImportManifest, requestId: string, options?: { skipErrors?: boolean }): Promise<{ request_id: string; candidate_count: number; candidate_ids: string[]; review_status: string; skipped?: number }> {
     const body = new FormData();
     body.append('file', file);
     body.append('manifest', JSON.stringify(manifest));
     body.append('request_id', requestId);
+    if (options?.skipErrors) body.append('skip_errors', 'true');
     return request(`${BASE}/v2/datasets/imports`, { method: 'POST', body });
   },
 

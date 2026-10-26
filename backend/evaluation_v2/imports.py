@@ -66,8 +66,11 @@ def validate_non_rag_upload(
     return {
         "valid": not errors and len(cases) == len(rows),
         "case_count": len(cases),
+        "rows_count": len(rows),
         "errors": errors[:100],
-        "cases": cases if not errors else [],
+        # 始终带回合法行：预检展示与「跳过错误行导入」都依赖它；调用方自行
+        # 决定是否在有错误时放行（RAG 侧 legacy validate_upload 同口径）。
+        "cases": cases,
         "manifest": manifest,
     }
 
