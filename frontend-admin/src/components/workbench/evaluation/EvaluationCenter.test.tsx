@@ -8,11 +8,11 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: navigation.push }),
   useSearchParams: () => new URLSearchParams(navigation.query),
 }))
-vi.mock('./DatasetGovernancePanel', () => ({ default: () => <div data-panel="datasets">数据集</div> }))
-vi.mock('./EvaluationV2RunsPanel', () => ({ default: ({ promptPrefill }: { promptPrefill?: { key: string; version: string } | null }) => (
+vi.mock('./proto/DatasetsTab', () => ({ default: () => <div data-panel="datasets">数据集</div> }))
+vi.mock('./proto/RunsTab', () => ({ default: ({ promptPrefill }: { promptPrefill?: { key: string; version: string } | null }) => (
   <div data-panel="runs" data-prompt={promptPrefill?.key || ''} data-pv={promptPrefill?.version || ''}>运行评测</div>
 ) }))
-vi.mock('./EvaluationRunComparisonPanel', () => ({ default: () => <div data-panel="compare">结果对比</div> }))
+vi.mock('./proto/CompareTab', () => ({ default: () => <div data-panel="compare">结果对比</div> }))
 
 import EvaluationCenter from './EvaluationCenter'
 
