@@ -22,6 +22,10 @@ from backend.skills.business_analysis.skill import BusinessAnalysisSkill
 from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.travel_poi.skill import TravelPoiSkill
 from backend.skills.map.skill import MapLookupSkill
+# mcp_dynamic 只注册统一执行节点（mcp_dynamic_skill），不进入静态
+# _instances/_registry——动态 capability 的映射在 capability_registry
+# .get_node 的 mcp.* 特判完成（ADR-0011 D4）。
+import backend.skills.mcp_dynamic  # noqa: F401  (节点注册副作用)
 
 # 全局实例（PR-2.x: DataCollection 已从外部惰性加载升级为内置注册）
 _instances: list = [

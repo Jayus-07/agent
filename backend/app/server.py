@@ -433,6 +433,53 @@ async def start_llm_registry_refresh():
 
 
 @app.on_event("startup")
+async def start_mcp_registry_refresh():
+    """MCP 动态工具注册表：首轮拉取 + 15s 轮询 + 变更失效钩子（ADR-0011）。
+
+    ai.mcp_* 表是动态 MCP 工具的事实源；快照签名变化时失效
+    capability_registry 缓存并对账重建向量路由索引。表未建 / DB 闪断
+    均为软失败（空快照 / 保留上次值），不阻塞启动。
+    """
+    import threading
+
+    from backend.infra.mcp_registry import store as mcp_store
+
+    def _on_mcp_snapshot_change() -> None:
+        try:
+            from backend.orchestration.capability_registry import tool_registry
+
+            tool_registry.invalidate_cache()
+        except Exception:
+            logger.warning("[Startup] MCP 快照失效 capability 缓存失败",
+                           exc_info=True)
+        # 索引重建涉及 embedding 写库，放后台线程避免阻塞事件循环；
+        # 对账幂等，多触发无害
+        def _rebuild() -> None:
+            try:
+                from backend.orchestration.router.hierarchical import (
+                    get_hierarchical_router,
+                )
+                vector = getattr(get_hierarchical_router(), "vector", None)
+                if vector is not None:
+                    vector.reconcile_index()
+            except Exception:
+                logger.warning("[Startup] MCP 快照触发路由索引对账失败",
+                               exc_info=True)
+
+        threading.Thread(target=_rebuild, name="mcp-vector-reconcile",
+                         daemon=True).start()
+
+    mcp_store.register_on_change(_on_mcp_snapshot_change)
+    try:
+        await mcp_store.refresh()
+    except Exception:
+        logger.warning("[Startup] MCP 注册表首轮拉取失败（稍后轮询重试）",
+                       exc_info=True)
+    spawn_background_task(mcp_store.refresh_loop(),
+                          name="mcp-registry-refresh")
+
+
+@app.on_event("startup")
 async def start_consistency_sweeper():
     """五路存储最终一致性清扫：定期对账孤儿向量 / BM25 幽灵残留并修复。
 

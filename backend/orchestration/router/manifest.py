@@ -350,3 +350,33 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         wfs.append(WorkflowDecl(name=name, examples=examples))
 
     return RouterManifest(capabilities=tuple(caps), workflows=tuple(wfs), domains=tuple(domains))
+
+
+def effective_manifest() -> RouterManifest:
+    """静态 manifest + MCP 动态 capability 的合并视图（ADR-0011 D1）。
+
+    路由候选、Planner 可见集、FC schema、向量索引对账等**能力可见性**
+    消费点一律读本函数；`load_manifest` 保持纯静态语义（结构校验、
+    一致性测试、skill 元数据绑定）。动态部分来自 mcp_registry 快照的
+    CapabilityDecl，快照缺席时与静态视图等价。
+    """
+    base = load_manifest()
+    try:
+        from backend.infra.mcp_registry import store as _mcp_store
+
+        decls = _mcp_store.snapshot().capability_decls
+    except Exception:  # noqa: BLE001 — 动态面缺席不影响静态路由
+        return base
+    if not decls:
+        return base
+    seen = {c.name for c in base.capabilities}
+    merged = list(base.capabilities)
+    for name in sorted(decls):
+        if name in seen:
+            continue  # 冲突防御：静态优先（派生层已剔除，此处双保险）
+        merged.append(decls[name])
+    return RouterManifest(
+        capabilities=tuple(merged),
+        workflows=base.workflows,
+        domains=base.domains,
+    )

@@ -202,9 +202,9 @@ def _converge_candidates(candidates: list, domain: str = "") -> list[str]:
             allowed_for_domain = set()
     else:
         try:
-            from backend.orchestration.router.manifest import load_manifest
+            from backend.orchestration.router.manifest import effective_manifest
 
-            allowed_for_domain = {c.name for c in load_manifest().routed_capabilities}
+            allowed_for_domain = {c.name for c in effective_manifest().routed_capabilities}
         except Exception:
             allowed_for_domain = set()
     seen: set[str] = set()
@@ -227,9 +227,9 @@ def _converge_candidates(candidates: list, domain: str = "") -> list[str]:
 def _capability_domain(cap: str) -> str:
     """capability 的粗域声明（capabilities.yaml 唯一事实源）；未声明返回空。"""
     try:
-        from backend.orchestration.router.manifest import load_manifest
+        from backend.orchestration.router.manifest import effective_manifest
 
-        for c in load_manifest().capabilities:
+        for c in effective_manifest().capabilities:
             if c.name == cap:
                 return c.domain
     except Exception:

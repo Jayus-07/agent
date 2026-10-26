@@ -44,9 +44,9 @@ def _check_capabilities_exist(nodes: dict) -> list[str]:
     prompt 渲染的清单同源，防缓存/改单路径把 email.watch 这类内部能力
     塞回计划。
     """
-    from backend.orchestration.router.manifest import load_manifest
+    from backend.orchestration.router.manifest import effective_manifest
 
-    valid = set(load_manifest().planner_visible_capability_names)
+    valid = set(effective_manifest().planner_visible_capability_names)
     issues = []
     for sid, node in nodes.items():
         cap = node.get("capability", "")

@@ -25,6 +25,27 @@
 6. 平台 MCP Server 在 mcp_servers/servers/ 实现并由 register_all() 登记，启动入口见 backend/app/server.py；参数 Schema 从 Tool 派生，适配器见 mcp_servers/schema_adapter.py。外部 MCP 消费走 backend/infra/mcp_client.py。两条通路都复用既有 Tool、鉴权和错误契约，不创建第二套 Tool 注册表。
 7. 为新增或变化的失败、拒绝、降级和输出行为添加针对性断言，选择范围见 testing-guide.md。
 
+## 动态 MCP 工具（MCP 能力中心）
+
+外部 MCP Server 的接入走**配置级集成**（ADR-0011），不改代码、不重新部署：
+
+- 连接、凭据引用、工具快照、审核状态与产品授权的事实源是数据库
+  （迁移 114 的 `ai.mcp_*` 表）；进程内快照每 15s 轮询刷新（与 LLM
+  registry 同契约），管理端写操作后本进程立即生效。
+- 新发现的工具默认 `pending`（不可执行）；审核通过（approve 时落库治理
+  配置与 ≥2 条路由示例）并授权给产品入口（agent / customer_service）
+  后，才进入 `all_tool_specs()` 与 `effective_manifest()` 的合并视图，
+  经唯一的 `mcp_dynamic_skill` 节点按既有 GovernanceRuntime 执行。
+- 上游 Schema/描述变化 → `schema_changed=true`，工具立即退出运行时，
+  重新审核后才恢复；上游消失 → `retired`；停用连接/工具对运行时即时生效。
+- `capabilities.yaml` 只静态声明一次 `mcp` 粗域；**禁止**把动态工具逐个
+  登记进 yaml 或环境变量。上游工具名/描述/Schema 全部是不可信输入，
+  进入 Planner prompt 的描述由审核者确认并截断。
+- 管理端入口：`/api/admin/mcp/*`（admin 门禁 + 幂等键 + SSRF 校验 +
+  security_events 审计）；前端 `/mcp` 页面（连接 → 发现 → 审核 → 授权 →
+  只读测试调用）。写操作工具不能通过测试调用裸测，必须走真实业务链的
+  确认/审批/幂等机制。
+
 ## Tool 与 Skill 输出契约
 
 每个 Skill 都要显式声明 `text` 或 `structured` 输出类型，并与其实际 Tool 结果保持一致：
