@@ -149,3 +149,38 @@
   KbAuthorityPanel publication policies 四处已知外部依赖）
 - `resolve_provider(strict=True)` 在 eval_gen 未登记时抛错 → peek 已兜底返回空，
   快照中 model 为空即"未配置"，运行仍会走 resolve_eval_model 的原有失败路径
+
+---
+
+# 第二轮：按定稿原型重写（2026-10-26/27）
+
+> 第一轮是"旧面板收敛"，第二轮按评审通过的原型图从零重写三 tab 的页面结构与交互，后端补齐原型所需真实能力。
+
+## 提交（全部已合并 main）
+
+- `600372d` feat(evaluation): 评测方式四模式贯通到 V2 执行层，数据集列表补原型六列字段
+- `95f3c4d` refactor(admin): 评测中心三 tab 按定稿原型重写（净删 1775 行旧面板）
+- `c3e1f97` Merge branch 'task/eval-center-proto-ui'
+- `497c909` feat(evaluation): 对照定稿原型补齐差距项（对比问题列/状态变化、检索裁决表、耗时列、从 Trace 添加、手工添加用例、版本历史被运行引用列）
+
+## 工作方式
+
+独立工作树 `agent-eval-proto`（分支 `task/eval-center-proto-ui`，基于 e5178cd）→ 提交 → 合并 main → 清理。第二轮后端改动（evaluation_mode/compare question/版本引用数）涉及运行容器，已重建 agent-app。
+
+## 验证
+
+- pytest evaluation_v2：127 passed（新增 execute_mode 4 项）
+- tsc 全仓通过；评测组件 vitest 9/9；全仓 4 个失败为主仓存量（rbac/RoleGate）
+- 浏览器实测：生成全链路（freeze→合成→候选落库→编辑视图证据清单展示）、版本历史（回退/导出/被运行引用）、三 tab 全要素对照审计
+
+## 运行环境终态
+
+- 3200 = 主仓 main 的 next dev（启动方式：`NEXT_DIST_DIR=.next-dev-main AUTH_GATEWAY_URL=http://127.0.0.1:9080 npx next dev -p 3200`，日志 D:/tmp/next-3200.log）
+- 后端共享栈 = 合并后代码重建，healthy
+- 坑：启动命令接 `| head` 会因管道断裂使 dev 进程假死（两次事故）；worktree 内重建共享主栈必须 `COMPOSE_PROJECT_NAME=agent`
+
+## 剩余差异（有意保留或待后续）
+
+- 逐用例对比表用"状态变化（改善/退步/持平）"替代原型的分数列（逐题无单一总分）
+- 冻结区（阶段二候选池自动化/AI 起草、阶段三门禁自动裁决）未实施——设计见本档案与对话定稿
+- 提交遗留： Mimosa 钩子以存量告警（auth.ts SSRF 误报/测试 mock 凭据）拦截过一次提交，第二轮改动最终以 497c909 入库；存量告警需单独安全整改任务
