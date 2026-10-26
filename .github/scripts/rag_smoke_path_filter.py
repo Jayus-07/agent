@@ -103,6 +103,13 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/092_chat_session_tenant_scope.sql",
     "backend/sql/migrations/093_revoke_readonly_default_password.sql",
     "backend/sql/migrations/097_llm_model_health_probe_source.sql",
+    "backend/sql/migrations/105_rag_tenant_isolation.sql",
+    "backend/sql/migrations/107_auth_knowledge_bases.sql",
+    "backend/sql/migrations/108_evaluation_v2_domain.sql",
+    "backend/sql/migrations/109_evaluation_v2_gate_approvals.sql",
+    "backend/sql/migrations/110_evaluation_v2_human_reviews.sql",
+    "backend/sql/migrations/111_evaluation_v2_case_revision_candidates.sql",
+    "backend/sql/migrations/112_evaluation_v2_domain_runner.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
@@ -172,6 +179,12 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/098_cs_refund_order_unique.sql",
     "backend/sql/migrations/100_model_price_change_alert_outbox.sql",
     "backend/sql/migrations/101_travel_v2_trip_conversations.sql",
+    "backend/sql/migrations/102_rbac_department_audits.sql",
+    "backend/sql/migrations/103_auth_department_version.sql",
+    "backend/sql/migrations/104_rbac_department_type_manager.sql",
+    "backend/sql/migrations/106_approval_tenant_isolation.sql",
+    "backend/sql/migrations/113_security_events_admin_action.sql",
+    "backend/sql/migrations/114_mcp_capability_center.sql",
 })
 
 
