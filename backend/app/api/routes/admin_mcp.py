@@ -79,10 +79,12 @@ def _query_one(sql: str, params: dict | None = None) -> dict | None:
     return rows[0] if rows else None
 
 
-def _execute(sql: str, params: dict | None = None) -> None:
+def _execute(sql: str, params: dict | None = None) -> int:
+    """执行写语句并返回受影响行数（CAS 更新按 0 判定并发冲突）。"""
     with _db() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, params or {})
+            return cur.rowcount
 
 
 def _audit(event: str, detail: dict[str, Any], *, user_id: str = "",
@@ -978,7 +980,10 @@ async def review_tool(request: Request, tool_id: int, body: ReviewRequest):
     def _write() -> dict[str, Any]:
         if body.action == "approve":
             description = body.description or row["description"]
-            _execute(
+            # 审核绑定所见版本（CAS）：读取后若发现流程改写 content_hash
+            # （漂移）或工具转 retired，本次审核拒绝——绝不能用旧摘要
+            # 覆盖新内容并清掉漂移标记，否则未审核的新 Schema 会进入运行时。
+            updated = _execute(
                 """
                 UPDATE ai.mcp_tools
                 SET status = 'approved', description = %(desc)s,
@@ -988,12 +993,19 @@ async def review_tool(request: Request, tool_id: int, body: ReviewRequest):
                     approved_hash = %(digest)s, content_hash = %(digest)s,
                     schema_changed = false, updated_at = now()
                 WHERE id = %(tid)s
+                  AND content_hash = %(expected)s
+                  AND status <> 'retired'
                 """,
                 {"desc": description[:spec_lib.MAX_DESCRIPTION_CHARS],
                  "gov": PgJson(body.governance),
                  "examples": PgJson(body.examples),
                  "notes": body.notes, "actor": actor,
-                 "digest": row["content_hash"], "tid": tool_id})
+                 "digest": row["content_hash"], "tid": tool_id,
+                 "expected": row["content_hash"]})
+            if updated == 0:
+                raise _MutationConflict(
+                    "审核期间发现内容已变化（上游 Schema 漂移或工具已退役），"
+                    "请刷新后按最新版本重新审核")
         else:
             _execute(
                 """
@@ -1012,9 +1024,12 @@ async def review_tool(request: Request, tool_id: int, body: ReviewRequest):
         }, user_id=actor, tenant_id=tenant)
         return {"tool_id": tool_id, "status": body.action + "d"}
 
-    result = await asyncio.to_thread(
-        run_governance_mutation, request, operator, "mcp_tool_review",
-        {"tool_id": tool_id, "action": body.action}, _write)
+    try:
+        result = await asyncio.to_thread(
+            run_governance_mutation, request, operator, "mcp_tool_review",
+            {"tool_id": tool_id, "action": body.action}, _write)
+    except _MutationConflict as exc:
+        return _conflict(str(exc))
     await _refresh_runtime()
     return result
 

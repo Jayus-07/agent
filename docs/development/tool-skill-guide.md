@@ -32,12 +32,16 @@
 - 连接、凭据引用、工具快照、审核状态与产品授权的事实源是数据库
   （迁移 114 的 `ai.mcp_*` 表）；进程内快照每 15s 轮询刷新（与 LLM
   registry 同契约），管理端写操作后本进程立即生效。
+- 撤权/停用/漂移的时效：写操作工具（operation != read）在出网前由
+  `mcp_registry.store.verify_write_authorization()` 按事实源强一致复核，
+  即时拦截（fail-closed）；读操作走快照，其他 worker 最迟 15s 收敛。
 - 新发现的工具默认 `pending`（不可执行）；审核通过（approve 时落库治理
   配置与 ≥2 条路由示例）并授权给产品入口（agent / customer_service）
   后，才进入 `all_tool_specs()` 与 `effective_manifest()` 的合并视图，
   经唯一的 `mcp_dynamic_skill` 节点按既有 GovernanceRuntime 执行。
 - 上游 Schema/描述变化 → `schema_changed=true`，工具立即退出运行时，
-  重新审核后才恢复；上游消失 → `retired`；停用连接/工具对运行时即时生效。
+  重新审核后才恢复（审核写入带 content_hash CAS，发现并发改写时拒绝
+  旧审核）；上游消失 → `retired`；停用连接/工具对写调用即时拦截。
 - `capabilities.yaml` 只静态声明一次 `mcp` 粗域；**禁止**把动态工具逐个
   登记进 yaml 或环境变量。上游工具名/描述/Schema 全部是不可信输入，
   进入 Planner prompt 的描述由审核者确认并截断。

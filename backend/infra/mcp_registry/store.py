@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -46,6 +47,9 @@ class McpToolRuntime:
     tenant_id: str
     spec: Any  # ToolSpec（避免与 specs.py 循环引用，运行时必为 ToolSpec）
     network_scope: str = "public"
+    # 派生输入（描述/Schema/治理配置/示例）的稳定摘要——签名比较用，
+    # 同名工具内容变化时让其他 worker 的派生缓存失效
+    content_digest: str = ""
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,13 @@ class McpRegistrySnapshot:
             sorted(self.grants),
             self.errors,
             tuple(sorted(self.capability_decls.keys())),
+            # 声明内容参与签名：只比键集合时，同名工具的描述/Schema/
+            # 治理配置变化不会触发其他 worker 失效派生缓存（CAPABILITY_
+            # SCHEMA 停留旧内容），必须按内容摘要比较。
+            tuple(sorted(
+                (cap, tool.content_digest)
+                for cap, tool in self.tools.items()
+            )),
         )
         return hashlib.sha256(repr(payload).encode("utf-8")).hexdigest()[:16]
 
@@ -150,6 +161,27 @@ def _static_capability_conflicts(capabilities: list[str]) -> set[str]:
         return set(capabilities).intersection(static_tool_specs().keys())
     except Exception:  # noqa: BLE001 — 静态表加载失败按无冲突处理
         return set()
+
+
+def derived_content_digest(
+    description, input_schema, governance, examples,
+) -> str:
+    """派生输入内容的稳定摘要（描述/Schema/治理/示例）——快照签名比较用。
+
+    与 spec_lib.content_hash（发现内容，绑定审核）语义不同：本摘要覆盖
+    审核后的治理字段，用于让"同名工具内容变化"在其他 worker 触发失效。
+    """
+    payload = json.dumps(
+        {
+            "description": str(description or ""),
+            "input_schema": input_schema or {},
+            "governance": governance or {},
+            "examples": examples or [],
+        },
+        sort_keys=True, ensure_ascii=False, separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
 async def load_snapshot() -> McpRegistrySnapshot:
@@ -246,6 +278,9 @@ async def load_snapshot() -> McpRegistrySnapshot:
             tenant_id=str(row["tenant_id"] or "default"),
             spec=spec,
             network_scope=conn.network_scope,
+            content_digest=derived_content_digest(
+                row["description"], row["input_schema"],
+                row["governance"], row["examples"]),
         )
         decls[capability] = decl
 
@@ -316,6 +351,59 @@ def product_granted(product_id: str, capability: str, tenant_id: str) -> bool:
     return (product_id, capability, tenant_id or "default") in snapshot().grants
 
 
+# 写操作强一致复核：命中行 = 审核有效 + 未漂移 + 连接启用 + 产品授权在册
+_VERIFY_WRITE_SQL = """
+SELECT t.id
+FROM ai.mcp_tools t
+JOIN ai.mcp_connections c ON c.id = t.connection_id AND c.enabled
+JOIN ai.mcp_tool_grants g
+  ON g.tool_id = t.id AND g.enabled AND g.revoked_at IS NULL
+ AND g.tenant_id = %(tenant)s AND g.product_key = %(product)s
+WHERE t.capability_slug = %(slug)s AND t.tenant_id = %(tenant)s
+  AND t.status = 'approved' AND t.schema_changed = false
+LIMIT 1
+"""
+
+
+def verify_write_authorization(
+    capability: str, product_id: str, tenant_id: str,
+) -> tuple[bool, str]:
+    """写操作（operation != read）执行前的 DB 直查强一致校验。
+
+    进程内快照是 15s 轮询的最终一致视图——撤权/停用/漂移在其他 worker
+    可能仍有最长一个周期的旧授权。带副作用的调用不能依赖该窗口，此处在
+    出网前按事实源（ai.mcp_* 表）原子复核；internal 产品（管理端治理
+    验证通道）不依赖 grants，由调用方另行判定。DB 不可用时 fail-closed。
+    """
+    if not capability.startswith(_CAPABILITY_PREFIX):
+        return False, f"非动态能力: {capability}"
+    try:
+        from backend.infra.db import get_memory_engine
+
+        engine = get_memory_engine()
+        raw = engine.raw_connection()
+        try:
+            with raw.cursor() as cur:
+                cur.execute(_VERIFY_WRITE_SQL, {
+                    "slug": capability[len(_CAPABILITY_PREFIX):],
+                    "tenant": tenant_id or "default",
+                    "product": product_id,
+                })
+                if cur.fetchone() is not None:
+                    return True, ""
+                return False, (
+                    "授权/审核/连接状态在事实源中已失效"
+                    "（撤权、停用、漂移或未授权）")
+        finally:
+            raw.rollback()  # 只读复核，不留事务
+            raw.close()
+    except Exception:  # noqa: BLE001 — 强一致校验失败按拒绝
+        logger.warning(
+            "[McpRegistry] 写操作强一致复核失败（fail-closed）: %s",
+            capability, exc_info=True)
+        return False, "授权复核不可用，按拒绝处理"
+
+
 def get_runtime(capability: str) -> McpToolRuntime | None:
     return snapshot().tools.get(capability)
 
@@ -365,6 +453,7 @@ __all__ = [
     "McpConnectionRuntime",
     "McpRegistrySnapshot",
     "McpToolRuntime",
+    "derived_content_digest",
     "dynamic_capabilities",
     "get_runtime",
     "inject_snapshot_for_tests",
@@ -378,4 +467,5 @@ __all__ = [
     "reset_for_tests",
     "resolve_headers",
     "snapshot",
+    "verify_write_authorization",
 ]

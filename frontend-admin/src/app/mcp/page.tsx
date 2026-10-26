@@ -150,7 +150,11 @@ function ToolPanel({
   const [description, setDescription] = useState(tool.description)
   const [operation, setOperation] = useState(tool.governance?.operation ?? 'read')
   const [risk, setRisk] = useState(tool.governance?.risk_level ?? 'R1')
-  const [timeoutMs, setTimeoutMs] = useState(tool.governance?.timeout_ms ?? 15000)
+  // 后端 derive_tool_spec 读 governance.runtime.timeout_ms（与静态
+  // capabilities.yaml 的 tool_spec.runtime 同构）；顶层 timeout_ms 仅作
+  // 历史数据回显兜底，提交一律走 runtime 路径
+  const [timeoutMs, setTimeoutMs] = useState(
+    tool.governance?.runtime?.timeout_ms ?? tool.governance?.timeout_ms ?? 15000)
   const [examplesText, setExamplesText] = useState((tool.examples ?? []).join('\n'))
   const [plannerExample, setPlannerExample] = useState(
     JSON.stringify(tool.governance?.planner_example ?? { query: '示例问题' }, null, 0))
@@ -180,7 +184,7 @@ function ToolPanel({
           operation, risk_level: risk, confirmation_policy:
             risk === 'R2' ? 'user_confirmation'
             : risk === 'R3' ? 'dual' : 'none',
-          timeout_ms: timeoutMs,
+          runtime: { timeout_ms: timeoutMs },
           planner_example: plannerExampleParsed,
         } : {},
         examples: action === 'approve'
@@ -473,6 +477,8 @@ export default function McpPage() {
       }
       await reload()
       await loadTools(conn.id)
+      // 重新发现可能改写 Schema/状态：详情缓存整体失效，展开中的工具重拉
+      await resyncToolDetails()
     } catch (e) {
       toast.error(`发现失败: ${errMessage(e)}`)
     } finally {
@@ -484,7 +490,9 @@ export default function McpPage() {
     setBusyAction(`toggle:${conn.id}`)
     try {
       await setMcpConnectionEnabled(conn.id, !conn.enabled)
-      toast.success(conn.enabled ? '连接已停用，其工具立即退出运行时' : '连接已启用')
+      toast.success(conn.enabled
+        ? '连接已停用；写调用立即被拦截，读调用最迟 15 秒退出候选'
+        : '连接已启用')
       await reload()
     } catch (e) {
       toast.error(`操作失败: ${errMessage(e)}`)
@@ -514,6 +522,7 @@ export default function McpPage() {
       await grantMcpTool(tool.id, product, active)
       toast.success(active ? `已撤销 ${product} 授权` : `已授权给 ${product}`)
       if (expandedConn) await loadTools(expandedConn)
+      await resyncToolDetails([tool.id])
       await reload()
     } catch (e) {
       toast.error(`授权操作失败: ${errMessage(e)}`)
@@ -526,8 +535,9 @@ export default function McpPage() {
     setBusyAction(`disableTool:${tool.id}`)
     try {
       await disableMcpTool(tool.id)
-      toast.success('工具已停用，新调用立即被拒绝')
+      toast.success('工具已停用；写调用立即被拦截，读调用最迟 15 秒退出候选')
       if (expandedConn) await loadTools(expandedConn)
+      await resyncToolDetails([tool.id])
       await reload()
     } catch (e) {
       toast.error(`停用失败: ${errMessage(e)}`)
@@ -535,6 +545,28 @@ export default function McpPage() {
       setBusyAction('')
     }
   }
+
+  /** 变更后同步详情视图：失效缓存并按需重拉——否则展开面板继续用旧
+   *  Schema/治理配置覆盖最新列表数据（审核人在旧内容上提交重审）。 */
+  const resyncToolDetails = useCallback(async (toolIds?: number[]) => {
+    invalidateMcpToolDetailCache(toolIds)
+    setSnapshotsByTool((prev) => {
+      const keys = new Set(toolIds ?? Object.keys(prev).map(Number))
+      if (![...keys].some((k) => k in prev)) return prev
+      const next = { ...prev }
+      for (const k of keys) delete next[k]
+      return next
+    })
+    const affected = toolIds ?? (expandedTool != null ? [expandedTool] : [])
+    if (expandedTool != null && affected.includes(expandedTool)) {
+      try {
+        const detail = await fetchMcpToolDetailFresh(expandedTool)
+        setSnapshotsByTool((prev) => ({ ...prev, [expandedTool]: detail }))
+      } catch {
+        // 重拉失败保持列表态，下次展开重新加载
+      }
+    }
+  }, [expandedTool])
 
   const openToolDetail = async (tool: McpTool) => {
     if (expandedTool === tool.id) {
@@ -561,7 +593,7 @@ export default function McpPage() {
   return (
     <AssetPageShell
       title="MCP 能力中心"
-      desc="接入外部 MCP Server：连接 → 发现 → 审核 → 授权，全程走统一治理 Runtime；停用与撤权即时生效。"
+      desc="接入外部 MCP Server：连接 → 发现 → 审核 → 授权，全程走统一治理 Runtime；停用与撤权对写调用立即拦截（出网前强一致复核），读调用最迟 15 秒收敛。"
       actions={
         <>
           <AssetActionButton onClick={() => void reload()} disabled={loading}>
@@ -714,6 +746,7 @@ export default function McpPage() {
                               onToggleTool={openToolDetail}
                               onToggleGrant={toggleGrant}
                               onDisableTool={disableTool}
+                              onToolMutated={resyncToolDetails}
                               onReload={reload}
                               busyAction={busyAction} />
                           </td>
@@ -734,7 +767,7 @@ export default function McpPage() {
 /** 连接展开后的工具清单（含授权开关与行展开审核/测试面板）。 */
 function ToolListSection({
   connId, tools, snapshotsByTool, expandedTool, onToggleTool,
-  onToggleGrant, onDisableTool, onReload, busyAction,
+  onToggleGrant, onDisableTool, onToolMutated, onReload, busyAction,
 }: {
   connId: string
   tools: McpTool[]
@@ -743,6 +776,8 @@ function ToolListSection({
   onToggleTool: (tool: McpTool) => void
   onToggleGrant: (tool: McpTool, product: 'agent' | 'customer_service') => void
   onDisableTool: (tool: McpTool) => void
+  /** 单工具变更（审核/停用/授权）后失效其详情缓存 */
+  onToolMutated: (toolIds?: number[]) => Promise<void>
   onReload: () => Promise<void>
   busyAction: string
 }) {
@@ -768,7 +803,9 @@ function ToolListSection({
           </thead>
           <tbody>
             {tools.map((tool) => {
-              const merged = { ...tool, ...(snapshotsByTool[tool.id] ?? {}) }
+              // 列表数据（状态/hash/漂移标记）是最新事实源；详情快照只补
+              // snapshots 等列表没有的字段，绝不让过期详情反向覆盖列表
+              const merged = { ...(snapshotsByTool[tool.id] ?? {}), ...tool }
               const open = expandedTool === tool.id
               const grants = tool.grants ?? []
               return (
@@ -821,7 +858,11 @@ function ToolListSection({
                   {open && (
                     <tr className="border-b border-border-subtle">
                       <td colSpan={5} className="p-0">
-                        <ToolPanel tool={merged} onDone={onReload} />
+                        <ToolPanel tool={merged}
+                          onDone={async () => {
+                            await onReload()
+                            await onToolMutated([tool.id])
+                          }} />
                       </td>
                     </tr>
                   )}
@@ -842,4 +883,20 @@ async function getMcpToolDetailCached(id: number): Promise<McpTool> {
   const detail = await getMcpToolDetail(id)
   _detailCache = { ..._detailCache, [id]: detail }
   return detail
+}
+
+/** 失效详情缓存：重新发现 / 审核 / 停用 / 授权变更后必须调用，
+ *  否则审核面板会继续展示旧 Schema 与旧治理配置。 */
+function invalidateMcpToolDetailCache(ids?: number[]) {
+  if (!ids) {
+    _detailCache = {}
+    return
+  }
+  _detailCache = Object.fromEntries(
+    Object.entries(_detailCache).filter(([k]) => !ids.includes(Number(k))))
+}
+
+async function fetchMcpToolDetailFresh(id: number): Promise<McpTool> {
+  const { getMcpToolDetail } = await import('@/api/mcp')
+  return getMcpToolDetail(id)
 }

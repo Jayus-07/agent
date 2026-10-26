@@ -34,6 +34,10 @@ def _make_snapshot(tool_capabilities: dict[str, dict], grants=()):
                  "properties": {"q": {"type": "string"}}},
                 governance),
             network_scope="private",
+            content_digest=mcp_store.derived_content_digest(
+                "测试工具",
+                {"type": "object", "properties": {"q": {"type": "string"}}},
+                governance, ["示例一", "示例二"]),
         )
         tools[capability] = runtime
         decls[capability] = spec_lib.derive_capability_decl(
@@ -261,3 +265,211 @@ class TestProductAuthorization:
 
         mcp_store.inject_snapshot_for_tests(_snapshot_with_tool())
         assert product_context.product_allows_capability("internal", CAP) is True
+
+
+class TestSnapshotSignature:
+    """签名必须覆盖声明内容（Review P2）：只比较键集合时，同名工具的
+    治理/Schema 变化不会让其他 worker 失效派生缓存。"""
+
+    def test_identical_content_same_signature(self):
+        assert (_make_snapshot(
+            {CAP: {"operation": "read", "risk_level": "R1"}}).signature()
+            == _make_snapshot(
+                {CAP: {"operation": "read", "risk_level": "R1"}}).signature())
+
+    def test_governance_change_changes_signature(self):
+        snap_a = _make_snapshot({CAP: {"operation": "read", "risk_level": "R1"}})
+        snap_b = _make_snapshot({CAP: {"operation": "read", "risk_level": "R2",
+                                       "confirmation_policy": "user_confirmation"}})
+        assert snap_a.signature() != snap_b.signature()
+
+    def test_schema_change_changes_signature(self):
+        snap_a = _make_snapshot({CAP: {"operation": "read", "risk_level": "R1"}})
+        snap_b = _make_snapshot({CAP: {"operation": "read", "risk_level": "R1"}})
+        # 同名工具、同 governance，但派生 Schema/描述内容变化（摘要不同）
+        object.__setattr__(snap_b.tools[CAP], "content_digest", "d2")
+        assert snap_a.signature() != snap_b.signature()
+
+
+class TestPlanNormalization:
+    """Review P1：normalize_plan 的有效能力集必须与 Planner/Critique 的
+    effective_manifest 视图一致——否则动态 mcp.* 步骤被静默删除。"""
+
+    def test_normalize_plan_keeps_dynamic_capability(self):
+        from backend.agents.planner.plan_utils import normalize_plan
+
+        mcp_store.inject_snapshot_for_tests(_snapshot_with_tool())
+        plan = {"nodes": [
+            {"step_id": "1", "capability": CAP,
+             "description": "动态工具步骤", "params": {"q": "x"}},
+        ], "edges": {}}
+        out = normalize_plan(plan)
+        assert "1" in out["nodes"] and out["nodes"]["1"]["capability"] == CAP
+
+    def test_normalize_plan_still_drops_unknown_dynamic(self):
+        from backend.agents.planner.plan_utils import normalize_plan
+
+        mcp_store.inject_snapshot_for_tests(_snapshot_with_tool())
+        plan = {"nodes": [
+            {"step_id": "1", "capability": "mcp.nope__missing",
+             "description": "未注册", "params": {}},
+        ], "edges": {}}
+        out = normalize_plan(plan)
+        assert out["nodes"] == {}
+
+    def test_normalize_plan_keeps_static_capability(self):
+        from backend.agents.planner.plan_utils import normalize_plan
+        from backend.orchestration.router.manifest import effective_manifest
+
+        mcp_store.inject_snapshot_for_tests(_snapshot_with_tool())
+        visible = [c.name for c in effective_manifest().capabilities
+                   if not c.name.startswith("mcp.")]
+        assert visible, "静态能力必须始终可见"
+        plan = {"nodes": [
+            {"step_id": "1", "capability": visible[0],
+             "description": "静态能力", "params": {}},
+        ], "edges": {}}
+        out = normalize_plan(plan)
+        assert "1" in out["nodes"]
+
+
+class TestVerifyWriteAuthorization:
+    """写操作出网前的 DB 强一致复核（撤权/停用/漂移即时拦截）。"""
+
+    def _patch_engine(self, monkeypatch, fetchone_result, execute_error=None):
+        class _Cur:
+            params = None
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params):
+                if execute_error:
+                    raise execute_error
+                self.params = params
+
+            def fetchone(self):
+                return fetchone_result
+
+        cur = _Cur()
+        class _Raw:
+            def cursor(self):
+                return cur
+
+            def rollback(self):
+                pass
+
+            def close(self):
+                pass
+
+        class _Engine:
+            def raw_connection(self):
+                return _Raw()
+
+        import backend.infra.db as db_mod
+
+        monkeypatch.setattr(db_mod, "get_memory_engine", lambda: _Engine())
+        return cur
+
+    def test_authorized_write_passes(self, monkeypatch):
+        cur = self._patch_engine(monkeypatch, fetchone_result={"id": 1})
+        ok, reason = mcp_store.verify_write_authorization(
+            CAP, "agent", "tenant_a")
+        assert ok is True and reason == ""
+        assert cur.params == {"slug": CAP[4:], "tenant": "tenant_a",
+                              "product": "agent"}
+
+    def test_revoked_write_denied(self, monkeypatch):
+        self._patch_engine(monkeypatch, fetchone_result=None)
+        ok, reason = mcp_store.verify_write_authorization(
+            CAP, "agent", "tenant_a")
+        assert ok is False and "失效" in reason
+
+    def test_db_failure_fail_closed(self, monkeypatch):
+        self._patch_engine(monkeypatch, fetchone_result=None,
+                           execute_error=RuntimeError("db down"))
+        ok, reason = mcp_store.verify_write_authorization(
+            CAP, "agent", "tenant_a")
+        assert ok is False and "拒绝" in reason
+
+    def test_non_dynamic_capability_denied_without_db(self, monkeypatch):
+        self._patch_engine(monkeypatch, fetchone_result={"id": 1})
+        ok, _ = mcp_store.verify_write_authorization(
+            "rag.search", "agent", "tenant_a")
+        assert ok is False
+
+
+class TestWriteStrongConsistencyAtInvoke:
+    """adapter.invoke 的写操作强一致拦截与 internal/只读豁免。"""
+
+    @staticmethod
+    def _adapter(capability):
+        from backend.skills.mcp_dynamic.skill import _McpDynamicToolAdapter
+
+        return _McpDynamicToolAdapter(capability)
+
+    def _stub_outbound(self, monkeypatch):
+        import backend.skills.mcp_dynamic.skill as skill_mod
+        import backend.tools.url_guard as url_guard
+
+        monkeypatch.setattr(skill_mod, "call_tool", lambda *a, **k: {"ok": True})
+        # invoke 内部延迟 from ... import assert_url_allowed → patch 源模块
+        monkeypatch.setattr(url_guard, "assert_url_allowed", lambda *a, **k: None)
+
+    def test_write_tool_rejected_when_source_of_truth_denies(self, monkeypatch):
+        from backend.core.request_context import (
+            set_product_context, set_tool_tenant_id)
+        from backend.infra.mcp_client import McpClientError
+
+        mcp_store.inject_snapshot_for_tests(_make_snapshot(
+            {CAP: {"operation": "update", "risk_level": "R1"}}))
+        calls = []
+
+        def fake_verify(capability, product_id, tenant_id):
+            calls.append((capability, product_id, tenant_id))
+            return False, "撤权"
+
+        monkeypatch.setattr(
+            mcp_store, "verify_write_authorization", fake_verify)
+        set_product_context("agent", "test")
+        set_tool_tenant_id("tenant_a")
+        with pytest.raises(McpClientError, match="写操作被拒绝"):
+            self._adapter(CAP).invoke({"q": "x"})
+        assert calls == [(CAP, "agent", "tenant_a")]
+
+    def test_read_tool_skips_strong_check(self, monkeypatch):
+        from backend.core.request_context import (
+            set_product_context, set_tool_tenant_id)
+
+        mcp_store.inject_snapshot_for_tests(_snapshot_with_tool())
+        self._stub_outbound(monkeypatch)
+
+        def fail_verify(*args, **kwargs):
+            raise AssertionError("只读工具不应触发强一致复核")
+
+        monkeypatch.setattr(
+            mcp_store, "verify_write_authorization", fail_verify)
+        set_product_context("agent", "test")
+        set_tool_tenant_id("tenant_a")
+        result = self._adapter(CAP).invoke({"q": "x"})
+        assert result == {"ok": True}
+
+    def test_internal_product_write_skips_grant_verify(self, monkeypatch):
+        from backend.core.request_context import (
+            set_product_context, set_tool_tenant_id)
+
+        mcp_store.inject_snapshot_for_tests(_make_snapshot(
+            {CAP: {"operation": "update", "risk_level": "R1"}}))
+        self._stub_outbound(monkeypatch)
+
+        def fail_verify(*args, **kwargs):
+            raise AssertionError("internal 治理验证通道不依赖产品授权快照")
+
+        monkeypatch.setattr(
+            mcp_store, "verify_write_authorization", fail_verify)
+        set_product_context("internal", "test")
+        set_tool_tenant_id("tenant_a")
+        assert self._adapter(CAP).invoke({"q": "x"}) == {"ok": True}

@@ -40,6 +40,15 @@
   绝不因 DB 抖动把已生效工具集清空。
 - 快照只加载 `status=approved AND schema_changed=false AND 连接 enabled`
   的工具——未审核、Schema 漂移、停用连接三者在派生层即被排除。
+- 快照签名包含每个工具声明内容的稳定摘要（描述/Schema/治理配置/示例），
+  同名工具内容变化同样触发其他 worker 的派生缓存失效——只比较键集合时，
+  其他 worker 的 CAPABILITY_SCHEMA 会一直保留旧参数声明。
+- **写操作强一致（撤权/停用/漂移的即时拦截）**：快照是最终一致视图，
+  `operation != read` 的动态工具在出网前由
+  `store.verify_write_authorization()` 按事实源（ai.mcp_* 表）原子复核
+  审核/漂移/连接/授权四态，任一失效即拒绝（fail-closed）；读操作保持
+  15s 收敛语义。internal（管理端治理验证）不依赖产品授权，测试调用
+  通道本身限只读工具。
 
 ### D3. 上游 Schema 变化 = 待重审（保守失效策略）
 
@@ -95,8 +104,8 @@ content_hash；与 `approved_hash` 不一致即置 `schema_changed=true`，工�
 
 ## 后果
 
-- 多 worker 下停用/撤权最迟 15s 生效（与 LLM provider 配置一致）；
-  本进程立即生效。
+- 多 worker 下停用/撤权对**写调用**即时生效（出网前按事实源强一致复核，
+  见 D2）；对读调用最迟 15s 生效（与 LLM provider 配置一致）；本进程立即生效。
 - 动态工具不进入 `tool_contracts.lock.json`（构建期产物只覆盖静态工具），
   其版本追溯依赖 mcp_tool_snapshots + trace 中的 capability/slug。
 - 上游工具描述不可信：只作为审核参考展示；进入 Planner/FC prompt 的

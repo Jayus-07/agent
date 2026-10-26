@@ -6,11 +6,11 @@ _extract_json / _normalize_plan 历史上定义在 planner.py，critique.py 又�
 critique，形成 planner ↔ critique 循环导入（import 顺序敏感，先导 planner
 即收集失败）。抽到独立模块后 critique → plan_utils，双向依赖消失。
 
-依赖约束：本模块只允许依赖 shared/ + orchestration.capability_registry（轻量），
-禁止 import planner / critique / orchestration.graph。
+依赖约束：本模块只允许依赖 shared/ + 函数内延迟导入的
+orchestration.router.manifest（与 critique 同模式，manifest 不反向依赖
+本模块，无循环），禁止 import planner / critique / orchestration.graph。
 """
 from backend.observability.alerts import log_degradation, make_alert
-from backend.orchestration.capability_registry import tool_registry
 from backend.shared.logger import logger
 
 # 计划依赖链（edges 连成的最长路径）允许的最大深度。
@@ -80,8 +80,15 @@ def extract_json(text: str, source: str = "planner.system") -> dict:
 
 
 def normalize_plan(plan: dict) -> dict:
-    """校验并规范化 plan 结构"""
-    valid_capabilities = set(tool_registry.get_available_capabilities())
+    """校验并规范化 plan 结构。
+
+    有效能力集与 Planner 渲染、Critique 校验同源（effective_manifest：
+    静态 manifest + MCP 动态 mcp.*）——此前取 tool_registry 静态
+    CAPABILITY_MAP，动态 mcp.* 步骤会被静默删除（纯 MCP 计划变空计划）。
+    """
+    from backend.orchestration.router.manifest import effective_manifest
+
+    valid_capabilities = set(effective_manifest().planner_visible_capability_names)
 
     raw_nodes = plan.get("nodes", [])
     nodes = {}

@@ -57,6 +57,8 @@ export interface McpGovernance {
   risk_level?: string
   confirmation_policy?: string
   timeout_ms?: number
+  /** 运行时策略（后端 derive_tool_spec 的实际读取路径） */
+  runtime?: { timeout_ms?: number; max_calls_per_request?: number }
   required_roles?: string[]
   planner_example?: Record<string, unknown>
   [key: string]: unknown

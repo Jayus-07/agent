@@ -427,3 +427,61 @@ class TestEndToEnd:
         snap = mcp_store.snapshot()
         assert "mcp.e2e_srv__echo" in snap.tools
         assert ("agent", "mcp.e2e_srv__echo", TENANT) in snap.grants
+
+
+class TestReviewConcurrency:
+    def test_stale_review_rejected_by_cas(self, client, mock_ports, monkeypatch):
+        """E05：审核读取工具行之后、写库之前，再次发现改写了 content_hash
+        ——旧审核必须被 CAS 拒绝（409），绝不能用旧摘要覆盖新内容并清掉
+        漂移标记（否则未审核的新 Schema 会获得执行权限）。"""
+        conn_id = _create_connection(client, mock_ports)
+        _discover(client, conn_id)
+        echo_id = _tools_of(client, conn_id)["echo"]["id"]
+
+        # 审核员所见 = 发现之前的旧行（并发窗口：读取 → 发现改写 → 提交审核）
+        stale_row = admin_mcp._load_tool(echo_id, TENANT)
+
+        upd = client.put(
+            f"/admin/mcp/connections/{conn_id}", headers=ADMIN_HEADERS,
+            json={"base_url": f"http://127.0.0.1:{mock_ports['b']}/mcp"})
+        assert upd.status_code == 200, upd.text
+        _discover(client, conn_id)
+
+        current = admin_mcp._load_tool(echo_id, TENANT)
+        assert current["content_hash"] != stale_row["content_hash"]
+
+        # 让本次 review 请求读到旧行（等价于读取发生在发现之前）
+        orig_load = admin_mcp._load_tool
+
+        def stale_loader(tid, tenant):
+            return stale_row if tid == echo_id else orig_load(tid, tenant)
+
+        monkeypatch.setattr(admin_mcp, "_load_tool", stale_loader)
+        r = client.post(f"/admin/mcp/tools/{echo_id}/review",
+                        headers=ADMIN_HEADERS,
+                        json={"action": "approve",
+                              "governance": {"operation": "read",
+                                             "risk_level": "R1"},
+                              "examples": ["a", "b"], "notes": "并发旧审核"})
+        assert r.status_code == 409, r.text
+        assert "已变化" in r.json()["message"]
+
+        # 事实源未被旧审核污染：仍 pending、无 approved_hash、hash 保持新版
+        row = _db_rows(
+            "SELECT status, content_hash, approved_hash, schema_changed "
+            "FROM ai.mcp_tools WHERE id = %(i)s", {"i": echo_id})[0]
+        assert row["status"] == "pending"
+        assert not row["approved_hash"]  # 列默认 ''，用 falsy 断言
+        assert row["content_hash"] == current["content_hash"]
+
+    def test_fresh_review_still_succeeds_after_cas(self, client, mock_ports):
+        """CAS 不误伤正常路径：基于当前版本的审核照常通过。"""
+        conn_id = _create_connection(client, mock_ports)
+        _discover(client, conn_id)
+        echo_id = _tools_of(client, conn_id)["echo"]["id"]
+        _approve(client, echo_id)
+        row = _db_rows(
+            "SELECT status, approved_hash, content_hash "
+            "FROM ai.mcp_tools WHERE id = %(i)s", {"i": echo_id})[0]
+        assert row["status"] == "approved"
+        assert row["approved_hash"] == row["content_hash"]

@@ -30,6 +30,10 @@ class _McpDynamicToolAdapter:
         return self._capability
 
     def invoke(self, params: dict) -> Any:
+        from backend.core.request_context import (
+            get_current_product_id,
+            get_tool_tenant_id,
+        )
         from backend.infra.mcp_registry import store as mcp_store
         from backend.tools.url_guard import UrlBlockedError, assert_url_allowed
 
@@ -41,6 +45,22 @@ class _McpDynamicToolAdapter:
         if conn is None:
             raise McpClientError(
                 f"MCP 连接未启用: {runtime.connection_id}")
+        # 写操作出网前按事实源强一致复核（ADR-0011 D2 安全语义）：快照是
+        # 15s 轮询的最终一致视图，撤权/停用/漂移在其他 worker 仍可能有旧
+        # 授权——带副作用的调用不接受该窗口。internal（管理端治理验证）
+        # 不依赖产品授权快照，跳过 grants 复核。
+        if str(runtime.spec.operation.value) != "read":
+            product_id = get_current_product_id() or "internal"
+            if product_id != "internal":
+                ok, reason = mcp_store.verify_write_authorization(
+                    self._capability, product_id, get_tool_tenant_id())
+                if not ok:
+                    logger.warning(
+                        "[mcp_dynamic] 写操作强一致拦截: capability=%s "
+                        "product=%s 原因=%s",
+                        self._capability, product_id, reason)
+                    raise McpClientError(
+                        f"写操作被拒绝（{reason}）: {self._capability}")
         # SSRF 运行时兜底：连接登记时已校验，此处防 DNS rebinding（每次
         # 调用重新解析目标 IP；private scope 才放行内网地址）。
         try:
