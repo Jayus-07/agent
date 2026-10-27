@@ -320,18 +320,40 @@ async def process_memory_extraction(job_id_value: str) -> dict:
 
     heartbeat = asyncio.create_task(_heartbeat(job_id, payload["attempt"]))
     try:
+        from backend.core.request_context import scoped_tool_identity
+        from backend.infra.llm.budget import scoped_request_budget
+        from backend.infra.llm.proxy import scoped_current_user_id
         from backend.memory.service import MemoryService
 
-        result = await MemoryService().store(
-            payload["question"],
-            payload["answer"],
-            payload["session_id"],
-            payload["user_id"],
-            source_message_id=payload["source_message_id"],
-            tenant_id=payload["tenant_id"],
-            job_id=payload["job_id"],
-            job_attempt=payload["attempt"],
-        )
+        # 后台记忆任务的模型调用（extract/classify/embedding）必须归属到
+        # 来源用户/租户——此前这些明细 user/tenant/request/trace 全空，
+        # 成本无法对账（2026-10-28 计费审计）。ContextVar 随 to_thread
+        # 进入同步 LLM 线程；预算模式随全局配置（enforce 下超预算不调用
+        # Provider，与主链路一致）。
+        with (
+            scoped_request_budget(
+                f"memory-extract:{payload['job_id']}",
+                user_id=payload["user_id"], tenant_id=payload["tenant_id"],
+                on_error=lambda exc: logger.warning(
+                    "[MemoryExtraction] 预算绑定失败（放行）job=%s error=%s",
+                    job_id, type(exc).__name__,
+                ),
+            ),
+            scoped_tool_identity(
+                user_id=payload["user_id"], tenant_id=payload["tenant_id"],
+            ),
+            scoped_current_user_id(payload["user_id"]),
+        ):
+            result = await MemoryService().store(
+                payload["question"],
+                payload["answer"],
+                payload["session_id"],
+                payload["user_id"],
+                source_message_id=payload["source_message_id"],
+                tenant_id=payload["tenant_id"],
+                job_id=payload["job_id"],
+                job_attempt=payload["attempt"],
+            )
     except Exception as exc:
         logger.exception("[MemoryExtraction] worker failed job=%s error=%s",
                          job_id, type(exc).__name__)
