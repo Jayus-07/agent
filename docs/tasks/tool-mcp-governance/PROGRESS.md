@@ -203,3 +203,67 @@ PR #108 已合并（`64091d6`）。Batch 1 第一批：外部 REST API 以"HTTP 
 - 本批提交推送建 PR（待用户确认）。
 - Batch 2：能力包（CapabilityBundle）/ Skill 依赖 / Agent 授权矩阵、
   独立 Tool Discovery Agent、多工具真实路径验证。
+
+## Batch 2 主体：能力包与产品授权矩阵（2026-10-27）
+
+PR #111 已合并（`561eae8`），`devctl.bat rebuild` 后运行栈健康并确认
+PR #111 代码在容器内（`_probe_http_api`）。
+
+### 设计决策（调研结论）
+
+现有三层授权链已相当完整（`product_allows_capability` → 域内候选过滤 →
+GovernanceRuntime 执行期复核），动态 mcp.* 已有 DB 授权表。真实缺口：
+1. 静态能力的产品上限是硬编码域黑名单，管理端不可管理；
+2. 无能力包聚合单元——不能把 Tool/Skill 组合后统一授权；
+3. Discovery 策略不可配置（tool_selector 已有预算闸/角色策略，够用）。
+
+最小方案：迁移 116 建能力包三表；`product_allows_capability` 静态分支
+改为**授权表非空 → 白名单判定，空/未加载 → 回退既有黑名单**（部署零
+破坏）；Discovery 不另建 Agent，复用既有 tool_selector 的 FC 链与预算闸
+（原计划的"独立 Discovery Agent"按删除优先原则裁剪——现有链已具备
+权限预过滤、预算上限、trace 归因，重复建即平行系统）。
+
+### 后端
+
+- **迁移 116**：`ai.capability_bundles` / `ai.capability_bundle_items`
+  （静态+动态成员统一存名）/ `ai.product_bundle_grants`（已对本机库执行）。
+- **infra/bundle_registry**：15s 轮询快照（与 mcp_registry 同模式），
+  内容签名 + 失效回调；`bundle_allows` 三态（True/False/None=回退）。
+- **product_context**：静态分支优先走包授权白名单（跨域成员显式授权
+  即放行，白名单优先于黑名单）；None 回退黑名单；internal/public 不变。
+- **admin_bundles API**：CRUD + 授权/撤销（run_governance_mutation 幂等
+  + 审计）。**授权 bundle 自动为其中动态成员补建 ai.mcp_tool_grants，
+  撤销同步禁用**——写操作强一致撤权对 bundle 撤销同样即时生效。
+  动态成员登记时校验运行时生效（防悬空授权）。
+- **server.py** 挂载 bundle_registry 刷新循环；router 注册新路由。
+
+### 前端
+
+- `src/api/bundles.ts`（mutationRequest 幂等封装）；
+- `/skills` 页新增 `BundleGrantMatrix`：能力包 × 产品入口授权矩阵、
+  创建（成员多行输入）、启停；授权/撤销即时刷新。
+
+### 验证（本机真实 PG:5433）
+
+- 单元：`tests/mcp_registry/test_bundle_registry.py` → 10 passed
+  （成员并集/禁用包排除/签名内容/白名单与黑名单回退/租户隔离三态）；
+- e2e：`tests/api/test_admin_bundles_api.py` → 3 passed（创建冲突/非法
+  domain 拒绝 → 授权后白名单生效、非成员拒绝 → 成员替换即时生效 →
+  撤销回退黑名单；动态成员 grants 同步补建/禁用 + 快照同步；悬空成员
+  拒绝）；
+- 回归：mcp_registry + admin_mcp_api + e2e + product_scope → **97 passed**
+  （既有授权链无破坏）；
+- 前端：tsc 通过；/skills 页既有测试 2 passed。
+
+### 修复记录
+
+- 迁移 116 首版漏 `product_bundle_grants.updated_by` 列（revoke SQL 引用
+  报 UndefinedColumn），已补列并对本机库 ALTER 生效。
+- Mimosa 两次误报 SQL 注入（模块级常量查询/测试工具函数），均为
+  psycopg2 参数化写法，改为纯字面量形式后通过。
+
+### 下一步
+
+- 本批提交推送建 PR（待用户确认）→ CI → 合并授权。
+- Batch 2 剩余：以"销售数据 → 库存查询 → 补货分析"真实多工具路径做
+  e2e（计划验收场景）；budgets 页加工具次数/并发约束展示（Batch 3）。

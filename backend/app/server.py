@@ -480,6 +480,25 @@ async def start_mcp_registry_refresh():
 
 
 @app.on_event("startup")
+async def start_bundle_registry_refresh():
+    """能力包注册表：15s 轮询（Batch 2，ADR-0011 D5 扩展）。
+
+    ai.capability_bundles / product_bundle_grants 是静态能力产品授权的
+    事实源；快照未加载或无授权行时 product_allows_capability 回退既有
+    域黑名单（部署兼容）。表未建 / DB 闪断均为软失败。
+    """
+    from backend.infra.bundle_registry import store as bundle_store
+
+    try:
+        await bundle_store.refresh()
+    except Exception:
+        logger.warning("[Startup] 能力包注册表首轮拉取失败（稍后轮询重试）",
+                       exc_info=True)
+    spawn_background_task(bundle_store.refresh_loop(),
+                          name="bundle-registry-refresh")
+
+
+@app.on_event("startup")
 async def start_consistency_sweeper():
     """五路存储最终一致性清扫：定期对账孤儿向量 / BM25 幽灵残留并修复。
 
