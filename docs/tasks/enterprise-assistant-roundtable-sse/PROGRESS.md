@@ -1,5 +1,14 @@
 # 进度
 
+## 2026-10-28：方案(a)实施——发布门禁打通，新阻塞为本机 eval KB 快照
+
+- 用户拍板方案(a)。实施发现"缺 ground_truth"实为 **schema 适配缺口**：V4 canonical（cases.jsonl）把参考依据放在 `expected.ground_truth_context`（含原文片段+来源文档），strict 门禁只认旧扁平 `expected.ground_truth`；且 RC-061 为负向拒答样本（should_reject=true），无答案字段即标注本身。修复 `_strict_fields_check`：识别 V4 结构化上下文 + should_reject 契约（门槛不放松，空 context/空答案仍拦截），新增 4 用例（15 项评测组全过）。
+- **发布评测真实跑通**：quick_26（26 样本）live 评测执行（此前卡 preflight 从未跑到）。门禁按真实数据判定失败：smoke 通过率 40%（阈值95%）、core 12.5%（85%）、hard 0%（70%）、MRR=0。**新阻塞定位**：per_case 报告显示 `retrieved_docs=[]`，eval 管线强制 `version_id=rag_eval_kb-baseline-2026-09-18` 版本过滤，本机该快照下检索为空——eval KB 语料快照与向量不匹配（本机 21 个 eval-* 集合各 471 向量存在但版本归属未对齐）。**下一步：修复 eval KB 快照/重建该 KB 索引**，这是任何 prompt 发布的前置条件。
+- 失败 release 不可重评：`mark_running` 仅允许 pending→running，failed 记录永久卡死（去重键 key+version+env+suite）；已用换 suite 维度（pr_smoke→quick_26）取新行绕过，**建议后续为 release 增加重评入口**（记录为改进项）。
+- **memory.extract 归属绑定**：`process_memory_extraction` 以 `memory-extract:{job_id}` 绑定 scoped_request_budget + scoped_tool_identity + scoped_current_user_id（ContextVar 随 to_thread 进同步线程），extract/classify/embedding 明细从此归属来源用户/租户；预算模式随全局配置（与主链路一致，超预算不调用）。
+- **rerank 计价修复**：远端重排 API 不回 token → `total_tokens=0` → `price_usage` 被跳过 → 全部 unpriced（当日 413 行）。修复 `_record_tokens`：无 token 时按候选文档数估算（doc_count×150，与本地路径同口径，usage_source=estimated）；模型已在注册表（billing=local）→ 走 local_inference 零云费口径。embedding 同批 92 行空归属亦随任务绑定修复。
+- 部署：rebuild exit 0（含 strict/归属/计价三项），容器 healthy 归属本 worktree。提交 ed8bcaa 合并 main 3ec9738。待验证：下一轮真实问答后复查 llm_usage 归属与 pricing_source 分布；发货/发票复测等 prompt v2 发布后进行。
+
 ## 2026-10-28：持续任务第一轮——基线实测、三异常根因修复与发布管线死锁
 
 - 用户指令：作为持续任务，费用不设限，用最优解让五类任务全部达标；验收加入上下文/记忆/多轮/计费四维度；全部修复后用 browser-use 复测。
