@@ -94,7 +94,7 @@ export interface McpTool {
 
 /** HTTP API 工具的受控调用定义（method/path/query/headers/body_from） */
 export interface HttpToolInvocation {
-  method: 'GET' | 'POST'
+  method: 'GET' | 'POST' | 'PUT'
   path: string
   query?: Record<string, string>
   headers?: Record<string, string>

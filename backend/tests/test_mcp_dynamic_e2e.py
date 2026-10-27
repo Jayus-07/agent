@@ -24,10 +24,10 @@ import time
 import uuid
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from backend.app.api.routes import admin_mcp
+from backend.app.api.routes import admin_bundles, admin_mcp
 
 pytestmark = pytest.mark.pg
 
@@ -493,12 +493,13 @@ class TestReviewConcurrency:
 # ═══════════════════════════════════════════════════
 
 def _build_rest_app():
-    """最小 REST mock：GET 订单查询 + POST 记录写入（供 HTTP 工具出网）。"""
-    from fastapi import FastAPI
+    """最小 REST mock：订单/销售/库存端点（供 HTTP 工具出网与多工具路径）。"""
     from fastapi.responses import JSONResponse
 
     app = FastAPI()
     calls: list[tuple] = []
+    # 可变的补货建议存储（PUT 后 GET 可见 → 验证跨工具数据传递）
+    replenishments: dict[str, dict] = {}
 
     @app.get("/orders/{order_id}")
     def get_order(order_id: str, verbose: str = ""):
@@ -512,7 +513,33 @@ def _build_rest_app():
         return JSONResponse({"created": True, "text": request.get("text", "")},
                             status_code=201)
 
+    @app.get("/sales/{sku}")
+    def get_sales(sku: str, days: int = 30):
+        calls.append(("GET-sales", sku, days))
+        return {"sku": sku, "days": days, "sold": 42}
+
+    @app.get("/inventory/{sku}")
+    def get_inventory(sku: str):
+        calls.append(("GET-inventory", sku))
+        return {"sku": sku, "stock": 3}
+
+    @app.put("/replenishment/{sku}")
+    async def put_replenishment(sku: str, raw: Request):
+        # body_from 语义：body 就是所引参数的 JSON 值（此处为整数数量）
+        body = await raw.json()
+        calls.append(("PUT-replenishment", sku, body))
+        replenishments[sku] = {"quantity": body}
+        return {"sku": sku, "planned": True, "quantity": body}
+
+    @app.get("/replenishment/{sku}")
+    def get_replenishment(sku: str):
+        plan = replenishments.get(sku)
+        if plan is None:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return {"sku": sku, **plan}
+
     app.state.calls = calls
+    app.state.replenishments = replenishments
     return app
 
 
@@ -700,3 +727,187 @@ class TestHttpApiProbe:
         finally:
             _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
                      {"c": conn_id})
+
+
+# ═══════════════════════════════════════════════════
+# Batch 2 收尾：多工具真实路径（销售 → 库存 → 补货，计划验收场景 E08）
+# ═══════════════════════════════════════════════════
+
+class TestMultiToolReplenishmentPath:
+    """查询类多工具任务——授权的 HTTP API 组合在一次任务中传递结构化
+    数据引用。
+
+    路径：销售查询（GET）→ 库存查询（GET）→ 补货建议写入（PUT，
+    写操作带强一致复核）→ 读回验证数据真实落上游。
+    全部工具经能力包授权给 agent 产品。
+    """
+
+    def test_sales_to_inventory_to_replenishment(self, mock_ports,
+                                                 monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from backend.skills.mcp_dynamic.skill import _McpDynamicToolAdapter
+        from backend.infra.mcp_registry import store as mcp_store
+        from backend.core.request_context import (
+            set_product_context, set_tool_tenant_id, set_tool_user_id)
+
+        # 幂等旁路 patch 必须包住整个请求执行期（含 client.post），
+        # 否则恢复真实幂等链路（Redis lease 在测试环境不可用 →
+        # complete/fail 回写 ValueError → 500）。monkeypatch 作用域 =
+        # 整个测试方法，天然满足。
+        monkeypatch.setattr(
+            admin_mcp, "run_governance_mutation",
+            lambda req, op, oper, payload, cb: cb())
+        monkeypatch.setattr(
+            admin_bundles, "run_governance_mutation",
+            lambda req, op, oper, payload, cb: cb())
+
+        app = FastAPI()
+        app.include_router(admin_mcp.router)
+        app.include_router(admin_bundles.router)
+        client = TestClient(app, raise_server_exceptions=False)
+
+        base = f"http://127.0.0.1:{mock_ports['rest']}"
+        # 治理门禁：写操作（连接/登记/审核/grant）全部要求幂等键，
+        # 且相同键不同内容会被 IDEMPOTENCY_CONFLICT 拦截 → 按序号生成
+        seq = [0]
+        idem_prefix = f"path-e2e-{uuid.uuid4().hex[:8]}"
+
+        def W():
+            seq[0] += 1
+            return {**ADMIN_HEADERS,
+                    "Idempotency-Key": f"{idem_prefix}-{seq[0]}"}
+
+        # ── 1. http_api 连接 + 三个工具登记（读/读/写）──
+        r = client.post("/admin/mcp/connections", headers=W(), json={
+            "name": "path-rest", "base_url": base,
+            "transport": "http_api", "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+
+        def _register(tool_name, method, path, props, required, body_from=None):
+            invocation = {"method": method, "path": path}
+            if body_from:
+                invocation["body_from"] = body_from
+            r = client.post(
+                f"/admin/mcp/connections/{conn_id}/tools/manual",
+                headers=W(),
+                json={"tool_name": tool_name, "description": tool_name,
+                      "invocation": invocation,
+                      "input_schema": {"type": "object",
+                                       "properties": props,
+                                       "required": required}})
+            assert r.status_code == 200, r.text
+            return r.json()["tool_id"]
+
+        sales_id = _register("get_sales", "GET", "/sales/{sku}",
+                             {"sku": {"type": "string"}}, ["sku"])
+        stock_id = _register("get_inventory", "GET", "/inventory/{sku}",
+                             {"sku": {"type": "string"}}, ["sku"])
+        replenish_id = _register(
+            "put_replenishment", "PUT", "/replenishment/{sku}",
+            {"sku": {"type": "string"},
+             "quantity": {"type": "integer"},
+             "based_on_sold": {"type": "integer"}},
+            ["sku", "quantity"], body_from="quantity")
+
+        # ── 2. 审核（销售/库存 R1 读；补货 R2 写 → 强制用户确认）──
+        def _approve(tool_id, operation="read", risk="R1"):
+            gov = {"operation": operation, "risk_level": risk,
+                   "confirmation_policy":
+                       "user_confirmation" if risk in ("R2", "R3") else "none",
+                   "planner_example": {"sku": "SKU-1"}}
+            r = client.post(f"/admin/mcp/tools/{tool_id}/review",
+                            headers=W(),
+                            json={"action": "approve", "governance": gov,
+                                  "examples": ["查销售", "查库存数据"],
+                                  "notes": "path-e2e"})
+            assert r.status_code == 200, r.text
+
+        _approve(sales_id)
+        _approve(stock_id)
+        _approve(replenish_id, "update", "R2")
+
+        # ── 3. 授权给 agent 产品（写工具 → grants 表 = 强一致复核事实源）──
+        for tid in (sales_id, stock_id, replenish_id):
+            r = client.post(f"/admin/mcp/tools/{tid}/grants",
+                            headers=W(),
+                            json={"product_key": "agent"})
+            assert r.status_code == 200, r.text
+
+        # ── 4. 能力包聚合三工具并授权（bundle 白名单链路）──
+        r = client.post("/admin/capability-bundles", headers=W(),
+                        json={
+                            "name": "补货分析包",
+                            "description": "销售→库存→补货",
+                            "domain": "mcp",
+                            "capabilities": [
+                                "mcp.path_rest__get_sales",
+                                "mcp.path_rest__get_inventory",
+                                "mcp.path_rest__put_replenishment"],
+                        })
+        assert r.status_code == 200, r.text
+        bundle_id = r.json()["id"]
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=W(),
+                        json={"product_key": "agent"})
+        assert r.status_code == 200, r.text
+
+        try:
+            # ── 5. 快照刷新 + 产品上下文 = agent（走强一致复核的产品身份）──
+            # 租户必须与 ADMIN_HEADERS 一致：工具/grants 行的 tenant_id 来自
+            # 请求头；写操作的 DB 强一致复核按 (slug, tenant, product) 精确
+            # 匹配——租户不一致会被拒绝（这正是租户隔离语义）。
+            import asyncio
+            assert asyncio.run(mcp_store.refresh())
+            set_product_context("agent", "e2e-path")
+            set_tool_tenant_id(ADMIN_HEADERS["X-Tenant-Id"])
+            set_tool_user_id("u-path-e2e")
+
+            # ── 6. 步骤一：销售查询（读）──
+            sales = _McpDynamicToolAdapter("mcp.path_rest__get_sales").invoke(
+                {"sku": "SKU-1"})
+            assert sales["sold"] == 42
+
+            # ── 7. 步骤二：库存查询（读），结果决定补货量 ──
+            stock = _McpDynamicToolAdapter(
+                "mcp.path_rest__get_inventory").invoke({"sku": "SKU-1"})
+            assert stock["stock"] == 3
+            quantity = max(sales["sold"] - stock["stock"], 0)
+
+            # ── 8. 步骤三：补货写入（写操作 → 强一致复核放行）──
+            result = _McpDynamicToolAdapter(
+                "mcp.path_rest__put_replenishment").invoke(
+                {"sku": "SKU-1", "quantity": quantity,
+                 "based_on_sold": sales["sold"]})
+            assert result["planned"] is True
+
+            # ── 9. 读回验证数据真实落上游（非伪造成功）。
+            # based_on_sold 不在 invocation 模板/body_from 中引用 → 不出网
+            # （参数走私防护）；body 只含 body_from 所引的 quantity。
+            # 读回直连 mock REST（绕平台工具链，独立确认上游状态）。
+            import httpx
+
+            r = httpx.get(f"{base}/replenishment/SKU-1", trust_env=False)
+            assert r.status_code == 200, r.text
+            plan = r.json()
+            assert plan["quantity"] == quantity
+
+            # ── 10. 撤销补货工具授权 → 写调用立即被强一致复核拦截 ──
+            r = client.post(f"/admin/mcp/tools/{replenish_id}/grants",
+                            headers=W(),
+                            json={"product_key": "agent", "revoke": True})
+            assert r.status_code == 200, r.text
+            from backend.infra.mcp_client import McpClientError
+
+            with pytest.raises(McpClientError, match="写操作被拒绝"):
+                _McpDynamicToolAdapter(
+                    "mcp.path_rest__put_replenishment").invoke(
+                    {"sku": "SKU-1", "quantity": 1, "based_on_sold": 1})
+        finally:
+            set_product_context("internal", "internal_call")
+            _db_exec("DELETE FROM ai.capability_bundles WHERE id = %(b)s",
+                     {"b": bundle_id})
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
+            mcp_store.reset_for_tests()
