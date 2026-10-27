@@ -350,3 +350,48 @@ prompt/lock 版本机制覆盖，不另建）：
 ### Batch 3 状态：主体完成。剩余（Batch 4 范畴）：配置导入导出与
 环境映射、健康检查与退避重连巡检、端到端 SSE 断线恢复联测、清理与
 交付整合。
+
+## Batch 4 收官（2026-10-27）
+
+PR #114 已合并（`953c201`），rebuild 后运行栈验证 Batch 3 代码生效
+（consistency 动态段 6 处符号、admin_tools constraints 3 处）。
+
+### 4-1 配置导出（不含凭据）
+
+- `GET /api/admin/mcp/export`：连接声明（name/base_url/transport/
+  auth_type/network_scope）+ 能力包（成员 + 授权产品）+ 版本/时间/
+  租户；**凭据密文、fingerprint、last4、审核状态、运行时状态绝不
+  导出**——目标环境重新配置凭据并重新审核（ADR-0011 D7 红线）。
+- e2e：导出含声明字段、全文无 `sk-export-`/`secret_cipher`/
+  `fingerprint`/`last4`、无 enabled/status 运行时字段。
+- 环境映射：导出物即"声明清单"，导入方按目标环境改 base_url 后重建
+  连接 → 重新发现/登记 → 重新审核授权（不自动导入，避免绕过审核）。
+
+### 4-2 清理与同构问题修复
+
+- `get_capabilities_schema_text()`（Critique LLM 修正的 prompt 数据源）
+  与已修复的 normalize_plan 同病——仍基于静态 CAPABILITY_MAP，会把
+  动态 mcp.* 步骤判无效"修正"掉。改为 effective_manifest 同源。
+- 复查确认：无其他静态白名单残留消费点（get_available_capabilities
+  仅剩 critique schema_text 一处，已改）；无平行系统残留。
+
+### 交付验证
+
+- 全量相关回归：`test_mcp_dynamic_e2e + test_admin_bundles_api +
+  test_admin_mcp_api + test_consistency_dynamic + mcp_registry +
+  planner_critique` → **107 passed**（9m36s，真实 PG + mock server）
+- 运行栈：rebuild 后 /health ok、迁移 116 生效、Batch 3 符号在容器内。
+
+## 任务终态
+
+| Batch | 内容 | PR |
+|---|---|---|
+| 0 | PR #107 收敛：5 项 Review 修复 + 写操作强一致撤权 + CI 门禁登记 | #107（已合并） |
+| 1 | 连接中心（MCP+HTTP API）：invocation 受控调用、审核 CAS、探活、版本对比、OpenAPI 导入 | #110 #111（已合并） |
+| 2 | 能力包与产品授权矩阵、多工具真实路径 e2e | #112 #113（已合并） |
+| 3 | 预算×工具约束视图、Prompt 工具治理入口、一致性动态对账 | #114（已合并） |
+| 4 | 配置导出（凭据红线）+ Critique 同构修复 + 交付验证 | 本批 |
+
+计划"明确不做"清单均未实施（第二 Runtime / 管理端任务控制台 /
+在线编辑器 / 自动授权等）。裁剪记录：独立 Discovery Agent 复用
+tool_selector FC 链；发布记录联动复用 prompt/lock 版本机制。
