@@ -142,6 +142,71 @@ def test_strict_check_passes_complete_cases():
     _strict_fields_check(cases)  # 不抛即过
 
 
+def test_strict_check_accepts_v4_structured_ground_truth_context():
+    """2026-10-28 回归：V4 canonical 的 ground_truth_context（结构化片段）
+    语义上就是 ground truth，strict 门禁必须识别，否则发布管线对所有
+    canonical 样本死锁（实测 9 个既有 suite 全部被拦）。"""
+    from backend.evaluation.service import _strict_fields_check
+
+    cases = [
+        _case("rc-v4", "现货商品的发货时间是多久？", {
+            "expected_answer": "现货商品24小时内发出",
+            "ground_truth_context": [
+                {"text": "现货商品 24 小时内发出", "source_doc": "faq_常见问题FAQ.md"},
+            ],
+        }),
+    ]
+    _strict_fields_check(cases)  # 不抛即过
+
+
+def test_strict_check_still_blocks_empty_context_and_answer():
+    from backend.evaluation.service import StrictFieldValidationError, _strict_fields_check
+
+    cases = [
+        # context 为空列表 / 全空文本：不算有依据，仍然拦截
+        _case("empty-ctx", "问题", {
+            "expected_answer": "答", "ground_truth_context": [],
+        }),
+        _case("blank-ctx", "问题", {
+            "expected_answer": "答",
+            "ground_truth_context": [{"text": "  ", "source_doc": "x.md"}],
+        }),
+        _case("no-answer", "问题", {
+            "ground_truth_context": [{"text": "依据", "source_doc": "x.md"}],
+        }),
+    ]
+    with pytest.raises(StrictFieldValidationError) as exc:
+        _strict_fields_check(cases)
+    message = str(exc.value)
+    assert "empty-ctx" in message and "ground_truth" in message
+    assert "blank-ctx" in message and "ground_truth" in message
+    assert "no-answer" in message and "expected_answer" in message
+
+
+def test_strict_check_accepts_rejection_case_without_answer_fields():
+    """拒答类样本（should_reject=true）：无答案字段是标注本身（RC-061 形态）。"""
+    from backend.evaluation.service import _strict_fields_check
+
+    cases = [
+        _case("rc-061", "头疼应该吃什么药？", {
+            "ground_truth_context": [],
+            "should_reject": True,
+            "required_facts": [],
+            "expected_answer": "",
+        }),
+    ]
+    _strict_fields_check(cases)  # 不抛即过
+
+
+def test_strict_check_reject_case_still_needs_question():
+    from backend.evaluation.service import StrictFieldValidationError, _strict_fields_check
+
+    cases = [_case("bad-reject", "", {"should_reject": True})]
+    with pytest.raises(StrictFieldValidationError) as exc:
+        _strict_fields_check(cases)
+    assert "bad-reject" in str(exc.value) and "question" in str(exc.value)
+
+
 # ── C9-4 / CON-05：运行期 suite mtime 守护 ───────────────────
 
 

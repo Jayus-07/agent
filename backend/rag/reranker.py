@@ -650,10 +650,17 @@ class DashScopeReranker(BaseDocumentCompressor):
 
         2026-09-22 起成本与 token 计量连通：按 `model_price` 实价计费
         （供应商页登记即生效），enforce=False 时缺价回落旧估算，不丢用量行。
+        2026-10-28：重排 API 不回 token 时按候选文档数估算（与本地
+        CrossEncoder 路径同口径，usage_source=estimated）——此前 total=0
+        直接跳过 price_usage，本地重排（billing=local）全部落 unpriced。
         """
         billing = None
         ledger_written = False
         settlement_status = "unknown"
+        usage_estimated = (total_tokens or 0) <= 0 and doc_count > 0
+        if usage_estimated:
+            # 估算口径与本地路径一致：平均每文档 ~500 chars ÷ 3 chars/token。
+            total_tokens = doc_count * 150
         try:
             from backend.infra.llm.budget import current_call_decision
             from backend.observability.llm_usage_store import (
@@ -668,6 +675,7 @@ class DashScopeReranker(BaseDocumentCompressor):
             if (total_tokens or 0) > 0:
                 try:
                     from backend.infra.llm.pricing import (
+                        USAGE_SOURCE_ESTIMATED,
                         NormalizedUsage,
                         price_usage,
                     )
@@ -677,6 +685,10 @@ class DashScopeReranker(BaseDocumentCompressor):
                         "rerank",
                         NormalizedUsage(input_tokens=total_tokens),
                         enforce=False,
+                        usage_source=(
+                            USAGE_SOURCE_ESTIMATED if usage_estimated
+                            else USAGE_SOURCE_PROVIDER
+                        ),
                     )
                 except Exception as e:
                     logger.debug(

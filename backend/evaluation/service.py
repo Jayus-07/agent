@@ -368,6 +368,26 @@ def _strict_fields_enabled() -> bool:
     return _os.getenv("EVAL_STRICT_FIELDS", "").strip().lower() in ("1", "true", "yes")
 
 
+def _has_ground_truth(expected: dict) -> bool:
+    """ground truth 判定：兼容旧扁平字符串与 V4 canonical 结构化上下文。
+
+    V4 canonical（cases.jsonl schema 4.0）把参考依据放在
+    ``expected.ground_truth_context``（[{text, source_doc, section}]），
+    语义上就是 ground truth 的结构化形态；只认旧扁平字段会让发布门禁
+    对任何 canonical 样本都误报缺字段（实测 9 个既有 suite 全部被拦，
+    发布管线死锁）。两形态任一非空即视为有依据，门槛本身不放松。
+    """
+    if str(expected.get("ground_truth", "") or "").strip():
+        return True
+    context = expected.get("ground_truth_context")
+    if not isinstance(context, list):
+        return False
+    return any(
+        isinstance(item, dict) and str(item.get("text", "") or "").strip()
+        for item in context
+    )
+
+
 def _strict_fields_check(cases: list[TestCase]) -> None:
     """C9-2/P0-03：严格字段校验（EVAL_STRICT_FIELDS=1 或 config.strict_fields）。
 
@@ -383,9 +403,15 @@ def _strict_fields_check(cases: list[TestCase]) -> None:
         if not str(case.question or "").strip():
             missing.append("question")
         expected = case.expected or {}
+        if expected.get("should_reject"):
+            # 拒答类样本（query_type=negative）：预期行为就是"无可引用证据、
+            # 正确拒答"——其标注即 should_reject 契约本身，不要求答案字段。
+            if missing:
+                problems.append(f"{case.id}: 缺 {', '.join(missing)}")
+            continue
         if not str(expected.get("expected_answer", "") or "").strip():
             missing.append("expected_answer")
-        if not str(expected.get("ground_truth", "") or "").strip():
+        if not _has_ground_truth(expected):
             missing.append("ground_truth")
         if missing:
             problems.append(f"{case.id}: 缺 {', '.join(missing)}")
