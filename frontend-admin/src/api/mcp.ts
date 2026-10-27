@@ -33,6 +33,40 @@ export interface McpConnection {
   created_by: string
   updated_by: string
   updated_at: string | null
+  /** 健康巡检（Batch 5-3）：最近探活时间与连续失败计数（退避依据） */
+  last_checked_at?: string | null
+  probe_fail_count?: number
+}
+
+export interface McpHealthEvent {
+  ok: boolean
+  error: string
+  elapsed_ms: number
+  source: 'monitor' | 'manual'
+  created_at: string
+}
+
+export interface McpConnectionHealth {
+  id: string
+  name: string
+  transport: string
+  status: string
+  network_scope: string
+  last_error: string
+  last_checked_at: string | null
+  probe_fail_count: number
+  probe_interval_seconds: number
+  next_probe_in_seconds: number
+  tool_count: number
+  approved_count: number
+  recent_events: McpHealthEvent[]
+}
+
+export async function getMcpHealthOverview(): Promise<{
+  connections: McpConnectionHealth[]
+  probe_interval_seconds: number
+}> {
+  return request('/api/admin/mcp/health')
 }
 
 export interface McpToolGrant {

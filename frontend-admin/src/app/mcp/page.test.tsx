@@ -4,6 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 
 const getMcpOverview = vi.hoisted(() => vi.fn())
 const getMcpConnections = vi.hoisted(() => vi.fn())
+const getMcpHealthOverview = vi.hoisted(() => vi.fn())
 const getMcpTools = vi.hoisted(() => vi.fn())
 const exportMcpConfiguration = vi.hoisted(() => vi.fn())
 const createMcpConnection = vi.hoisted(() => vi.fn())
@@ -29,6 +30,7 @@ vi.mock('@/api/mcp', () => ({
   getMcpOverview,
   getMcpConnections,
   getMcpTools,
+  getMcpHealthOverview,
   exportMcpConfiguration,
   createMcpConnection,
   updateMcpConnection,
@@ -231,7 +233,21 @@ describe('连接中心页面（V2：连接为一级资产）', () => {
     expect(link?.textContent).toContain('前往 Tool 治理')
   })
 
-  it('运行健康与版本历史为置灰壳位（data-stub=demo，元素 disabled）', async () => {
+  it('运行健康为真实数据区：巡检状态 + 事件时间线 + 立即探活；故障模拟仍为壳位', async () => {
+    getMcpHealthOverview.mockResolvedValue({
+      connections: [{
+        id: 'conn-1', name: 'zhihu', transport: 'http_api', status: 'connected',
+        network_scope: 'private', last_error: '',
+        last_checked_at: '2026-10-28T00:00:00Z',
+        probe_fail_count: 0, probe_interval_seconds: 300,
+        next_probe_in_seconds: 0, tool_count: 2, approved_count: 2,
+        recent_events: [
+          { ok: true, error: '', elapsed_ms: 12, source: 'monitor',
+            created_at: '2026-10-28T00:00:00Z' },
+        ],
+      }],
+      probe_interval_seconds: 300,
+    })
     const container = await mountPage()
 
     const detailButton = Array.from(container.querySelectorAll('button'))
@@ -242,13 +258,20 @@ describe('连接中心页面（V2：连接为一级资产）', () => {
     })
 
     clickDrawerTab(container, '运行健康')
-    await act(async () => { await Promise.resolve() })
-    expect(container.textContent).toContain('主动健康监测属下一批')
-    expect(container.textContent).toContain('自动退避重连策略')
-    expect(container.querySelectorAll('[data-stub="demo"]').length).toBeGreaterThan(0)
+    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    expect(container.textContent).toContain('自动巡检')
+    expect(container.textContent).toContain('健康')
+    expect(container.textContent).toContain('健康事件')
+    expect(container.textContent).toContain('自动巡检')  // 事件 source 标注
+    expect(container.textContent).toContain('12ms')
+    expect(container.textContent).toContain('指数退避')
+    const probeButton = container.querySelector<HTMLButtonElement>('[data-testid="health-probe-btn"]')
+    expect(probeButton?.textContent).toContain('立即探活')
+    // 故障模拟四按钮保持置灰壳位（演练能力不属健康监测本体）
     const faultButton = Array.from(container.querySelectorAll('button'))
       .find((b) => b.textContent?.includes('模拟断线'))
     expect(faultButton?.disabled).toBe(true)
+    expect(container.querySelectorAll('[data-stub="demo"]').length).toBeGreaterThan(0)
 
     clickDrawerTab(container, '版本历史')
     await act(async () => { await Promise.resolve() })
