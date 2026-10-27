@@ -1,71 +1,95 @@
 'use client'
 
 /**
- * /mcp — MCP 能力中心（B1/B2/B3/B4，ADR-0011）
+ * /mcp — 连接中心（V2 治理工作台：连接为一级资产，ADR-0011）
  *
- * 工作流：新增连接（SSRF 校验在服务端）→ 连接测试 → 工具发现 → 审核
- * （治理配置 + 路由示例）→ 授权给产品入口 → 只读测试调用。
- * 凭据只上行一次，服务端仅回 fingerprint/last4；schema_changed 的工具
- * 必须重新审核才会回到运行时。
+ * 工作流：新建连接（SSRF 校验在服务端）→ 测试健康 → 工具发现/登记。
+ * 动态工具的审核、治理配置、授权与测试调用已迁往 /tools（Tool 治理），
+ * 本页只管「连接」资产本身：卡片目录 + 详情抽屉（概览/已发现工具/配置/
+ * 运行健康/版本历史）+ 凭据管理。凭据只上行一次，服务端仅回 fingerprint/last4。
  */
-import { Fragment, useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
 import {
-  AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, CircleSlash,
-  Clock, KeyRound, Loader2, Plug, Plus, RefreshCw, Search, ShieldCheck, Trash2,
+  AlertTriangle, CheckCircle2, CircleSlash, Download, KeyRound, Loader2,
+  Plug, Plus, RefreshCw, Search, Trash2,
 } from 'lucide-react'
-import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard } from '@/components/layout/AssetPageShell'
+import WorkbenchShell, { type WorkbenchTab } from '@/components/workbench/WorkbenchShell'
+import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
+import DetailDrawer from '@/components/layout/DetailDrawer'
+import StatusChip, { type StatusTone } from '@/components/layout/StatusChip'
+import StatMetricBar from '@/components/layout/StatMetricBar'
+import { ASSET_SURFACE, AssetActionButton, AssetSection } from '@/components/layout/AssetPageShell'
 import EmptyState from '@/components/shared/EmptyState'
 import ErrorState from '@/components/shared/ErrorState'
+import Skeleton from '@/components/shared/Skeleton'
 import { useToast } from '@/components/shared/Toast'
 import {
-  createMcpConnection, deleteMcpConnection, disableMcpTool, discoverMcpTools,
-  getConnectionTools, getMcpConnections, getMcpOverview,
-  grantMcpTool, registerHttpTool, reviewMcpTool, setMcpConnectionEnabled,
-  testInvokeMcpTool, testMcpConnection, updateHttpToolInvocation,
+  createMcpConnection, deleteMcpConnection, discoverMcpTools, exportMcpConfiguration,
+  getMcpConnections, getMcpOverview, getMcpTools, registerHttpTool,
+  setMcpConnectionEnabled, testMcpConnection, updateHttpToolInvocation,
   updateMcpConnection,
   type ConnectionInput, type ConnectionTestResult, type DiscoverResult,
   type HttpToolInvocation, type McpConnection, type McpOverview,
-  type McpTool, type TestInvokeResult,
+  type McpTool,
 } from '@/api/mcp'
 import { ApiError } from '@/api/client'
 
-const CONN_STATUS_META: Record<string, { label: string; cls: string }> = {
-  never_connected: { label: '未连接', cls: 'bg-slate-100 text-slate-600' },
-  connected: { label: '已连接', cls: 'bg-emerald-100 text-emerald-700' },
-  error: { label: '连接异常', cls: 'bg-red-100 text-red-700' },
-  disabled: { label: '已停用', cls: 'bg-amber-100 text-amber-700' },
-}
+const MCP_PAGE_TABS = [
+  { id: 'all', label: '全部连接' },
+  { id: 'mcp', label: 'MCP 服务' },
+  { id: 'http', label: 'HTTP API' },
+  { id: 'credentials', label: '凭据管理' },
+] as const satisfies readonly WorkbenchTab<'all' | 'mcp' | 'http' | 'credentials'>[]
 
-const TOOL_STATUS_META: Record<string, { label: string; cls: string }> = {
-  pending: { label: '待审核', cls: 'bg-amber-100 text-amber-700' },
-  approved: { label: '已生效', cls: 'bg-emerald-100 text-emerald-700' },
-  rejected: { label: '已拒绝', cls: 'bg-red-100 text-red-700' },
-  disabled: { label: '已停用', cls: 'bg-slate-100 text-slate-600' },
-  retired: { label: '上游已消失', cls: 'bg-zinc-100 text-zinc-600' },
-}
+const MCP_PAGE_TAB_IDS = MCP_PAGE_TABS.map((tab) => tab.id) as readonly (
+  | 'all' | 'mcp' | 'http' | 'credentials')[]
 
-const RISK_OPTIONS = [
-  { value: 'R0', label: 'R0 无风险（纯只读展示）' },
-  { value: 'R1', label: 'R1 低风险（默认只读）' },
-  { value: 'R2', label: 'R2 高风险（强制用户确认）' },
-  { value: 'R3', label: 'R3 严重（强制确认 + 管理员审批）' },
+/** 连接抽屉：概览 / 已发现工具 / 配置 / 运行健康（壳位）/ 版本历史（壳位） */
+const CONN_DRAWER_TABS = [
+  { id: 'overview', label: '概览' },
+  { id: 'tools', label: '已发现工具' },
+  { id: 'config', label: '配置' },
+  { id: 'health', label: '运行健康' },
+  { id: 'versions', label: '版本历史' },
 ]
 
-const OPERATION_OPTIONS = [
-  { value: 'read', label: 'read 只读' },
-  { value: 'create', label: 'create 写入' },
-  { value: 'update', label: 'update 更新' },
-  { value: 'delete', label: 'delete 删除' },
-  { value: 'send', label: 'send 发送' },
-  { value: 'external_write', label: 'external_write 外部写' },
-]
+const CONN_STATUS_META: Record<string, { label: string; tone: StatusTone }> = {
+  never_connected: { label: '未连接', tone: 'neutral' },
+  connected: { label: '已连接', tone: 'success' },
+  error: { label: '连接异常', tone: 'danger' },
+  disabled: { label: '已停用', tone: 'warn' },
+}
+
+const TOOL_STATUS_META: Record<string, { label: string; tone: StatusTone }> = {
+  pending: { label: '待审核', tone: 'warn' },
+  approved: { label: '已生效', tone: 'success' },
+  rejected: { label: '已拒绝', tone: 'danger' },
+  disabled: { label: '已停用', tone: 'neutral' },
+  retired: { label: '上游已消失', tone: 'neutral' },
+}
+
+const TRANSPORT_META: Record<string, { label: string; badgeCls: string }> = {
+  streamable_http: { label: 'MCP · Streamable HTTP', badgeCls: 'bg-violet-100 text-violet-700' },
+  http_api: { label: 'HTTP API', badgeCls: 'bg-sky-100 text-sky-700' },
+}
 
 function errMessage(e: unknown): string {
   if (e instanceof ApiError) return e.message
   return e instanceof Error ? e.message : '请求失败'
 }
 
-/** 连接编辑表单（新增/编辑复用；secret 留空 = 保持现有凭据）。
+function TransportBadge({ transport }: { transport: string }) {
+  const meta = TRANSPORT_META[transport]
+  if (!meta) return <span className="rounded bg-slate-100 px-1 py-0.5 text-[10px] font-medium text-slate-600">{transport}</span>
+  return (
+    <span className={`rounded px-1 py-0.5 text-[10px] font-medium whitespace-nowrap ${meta.badgeCls}`}>
+      {meta.label}
+    </span>
+  )
+}
+
+/** 连接编辑表单（抽屉配置 Tab 与顶部「新建连接」复用；secret 留空 = 保持现有凭据）。
  *  transport 仅创建时可选择，编辑时保持原类型（改类型等同重建连接）。 */
 function ConnectionForm({
   initial, onSubmit, onCancel, submitting,
@@ -214,7 +238,7 @@ function parseOpenApiOperation(specText: string): {
   return null
 }
 
-/** HTTP API 工具登记/编辑表单（http_api 连接专用）。
+/** HTTP API 工具登记/编辑表单（http_api 连接专用，入口在连接抽屉）。
  *  method/path/query/headers/body_from 服务端白名单校验；
  *  headers 禁 Authorization/Cookie（凭据统一注入）。 */
 function HttpToolForm({
@@ -396,280 +420,161 @@ function HttpToolForm({
   )
 }
 
-/** 工具审核 + 授权 + 测试调用面板（行展开）。 */
-function ToolPanel({
-  tool, onDone,
-}: {
-  tool: McpTool
-  onDone: () => void
+/** 连接卡片：状态 / 类型 / 工具数 / 最近检查 + 查看详情。 */
+function ConnectionCard({ conn, toolCount, onOpen }: {
+  conn: McpConnection
+  toolCount: number
+  onOpen: (conn: McpConnection) => void
 }) {
-  const toast = useToast()
-  const [tab, setTab] = useState<'review' | 'invoke'>(tool.status === 'approved' ? 'invoke' : 'review')
-  const [description, setDescription] = useState(tool.description)
-  const [operation, setOperation] = useState(tool.governance?.operation ?? 'read')
-  const [risk, setRisk] = useState(tool.governance?.risk_level ?? 'R1')
-  // 后端 derive_tool_spec 读 governance.runtime.timeout_ms（与静态
-  // capabilities.yaml 的 tool_spec.runtime 同构）；顶层 timeout_ms 仅作
-  // 历史数据回显兜底，提交一律走 runtime 路径
-  const [timeoutMs, setTimeoutMs] = useState(
-    tool.governance?.runtime?.timeout_ms ?? tool.governance?.timeout_ms ?? 15000)
-  const [examplesText, setExamplesText] = useState((tool.examples ?? []).join('\n'))
-  const [plannerExample, setPlannerExample] = useState(
-    JSON.stringify(tool.governance?.planner_example ?? { query: '示例问题' }, null, 0))
-  const [notes, setNotes] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [invokeArgs, setInvokeArgs] = useState('{}')
-  const [invokeProduct, setInvokeProduct] = useState<'internal' | 'agent' | 'customer_service'>('internal')
-  const [invokeResult, setInvokeResult] = useState<TestInvokeResult | null>(null)
-  const schema = tool.snapshots?.[0]?.input_schema as
-    { properties?: Record<string, { type?: string; description?: string }> } | undefined
-  const properties = Object.entries(schema?.properties ?? {})
-
-  const submitReview = async (action: 'approve' | 'reject') => {
-    setSubmitting(true)
-    try {
-      let plannerExampleParsed: Record<string, unknown> | undefined
-      try {
-        plannerExampleParsed = plannerExample.trim() ? JSON.parse(plannerExample) : undefined
-      } catch {
-        toast.error('Planner 示例必须是合法 JSON')
-        return
-      }
-      await reviewMcpTool(tool.id, {
-        action,
-        description: description.trim(),
-        governance: action === 'approve' ? {
-          operation, risk_level: risk, confirmation_policy:
-            risk === 'R2' ? 'user_confirmation'
-            : risk === 'R3' ? 'dual' : 'none',
-          runtime: { timeout_ms: timeoutMs },
-          planner_example: plannerExampleParsed,
-        } : {},
-        examples: action === 'approve'
-          ? examplesText.split('\n').map((s) => s.trim()).filter(Boolean) : [],
-        notes,
-      })
-      toast.success(action === 'approve' ? '审核通过，工具已进入运行时' : '已拒绝')
-      onDone()
-    } catch (e) {
-      toast.error(`审核失败: ${errMessage(e)}`)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const runInvoke = async () => {
-    setSubmitting(true)
-    setInvokeResult(null)
-    try {
-      let args: Record<string, unknown>
-      try {
-        args = JSON.parse(invokeArgs || '{}')
-      } catch {
-        toast.error('参数必须是合法 JSON 对象')
-        return
-      }
-      const result = await testInvokeMcpTool(tool.id, args, invokeProduct)
-      setInvokeResult(result)
-      if (result.tool_status === 'success') toast.success(`调用成功 (${result.elapsed_ms}ms)`)
-      else toast.warning(`调用未成功: ${result.tool_status}${result.error_code ? ` / ${result.error_code}` : ''}`)
-    } catch (e) {
-      toast.error(`测试调用失败: ${errMessage(e)}`)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
+  const meta = CONN_STATUS_META[conn.status] ?? { label: conn.status, tone: 'neutral' as StatusTone }
   return (
-    <div className="border-t border-border-subtle bg-surface-elevated/40 px-4 py-3 text-[12px]">
-      <div className="mb-3 flex items-center gap-2">
-        {(['review', 'invoke'] as const).map((key) => (
-          <button key={key}
-            onClick={() => setTab(key)}
-            className={`rounded px-2 py-1 ${tab === key ? 'bg-accent text-white' : 'bg-surface-base text-text-muted'}`}>
-            {key === 'review' ? '审核与治理配置' : '只读测试调用'}
-          </button>
-        ))}
-        <span className="ml-auto font-mono text-[11px] text-text-muted">
-          {tool.capability} · hash {tool.content_hash.slice(0, 8)} · v{tool.last_seen_version}
+    <div className={ASSET_SURFACE + ' flex flex-col gap-2 p-4'}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate text-[13px] font-semibold text-text-primary">{conn.name}</span>
+            <TransportBadge transport={conn.transport} />
+          </div>
+          <div className="mt-0.5 truncate font-mono text-[11px] text-text-muted" title={conn.base_url}>
+            {conn.base_url}
+          </div>
+        </div>
+        <StatusChip tone={meta.tone}>{meta.label}</StatusChip>
+      </div>
+      {conn.last_error && (
+        <div className="truncate text-[11px] text-red-600" title={conn.last_error}>{conn.last_error}</div>
+      )}
+      <div className="mt-auto flex items-end justify-between gap-2 pt-1">
+        <div className="text-[11px] leading-relaxed text-text-muted">
+          <div>发现工具 <span className="font-mono text-text-secondary">{toolCount}</span> 个 · v{conn.discovery_version}</div>
+          <div>最近检查 {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : '—'}</div>
+        </div>
+        <AssetActionButton onClick={() => onOpen(conn)}>查看详情</AssetActionButton>
+      </div>
+    </div>
+  )
+}
+
+/** 连接抽屉「运行健康」置灰壳位：主动健康监测属下一批，元素全部 disabled。 */
+function HealthStubSection() {
+  return (
+    <div data-stub="demo" className="space-y-3">
+      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
+        主动健康监测属下一批（能力建设中）：以下开关与故障模拟为置灰壳位，暂不可操作。
+      </div>
+      <div className="flex items-center justify-between gap-3 rounded-lg border border-border-subtle bg-surface-base px-3 py-2.5">
+        <div>
+          <div className="text-[12px] font-medium text-text-primary">自动退避重连策略</div>
+          <div className="text-[11px] text-text-muted">连接异常时按指数退避自动重连，并记录健康事件</div>
+        </div>
+        <span aria-disabled="true"
+          className="inline-block h-5 w-9 shrink-0 rounded-full bg-black/10 p-0.5"
+          title="建设中，暂不可操作">
+          <span className="block h-4 w-4 rounded-full bg-white shadow" />
         </span>
       </div>
+      <div className="grid grid-cols-2 gap-2">
+        {['模拟断线', '恢复网络', '模拟 Schema 漂移', '检查并重连'].map((label) => (
+          <button key={label} type="button" disabled data-stub="demo"
+            title="故障模拟能力建设中，暂不可操作"
+            className="rounded-lg border border-border-subtle bg-surface-base px-3 py-2 text-[12px] text-text-muted disabled:cursor-not-allowed disabled:opacity-50">
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
 
-      {tab === 'review' ? (
-        <div className="grid gap-3 md:grid-cols-2">
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <span className="text-text-muted">平台描述（进入 Planner / 路由 prompt，可改写上游声明）</span>
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">操作类型（写操作强制幂等与零重试）</span>
-            <select value={operation} onChange={(e) => setOperation(e.target.value)}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5">
-              {OPERATION_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">风险等级（决定确认/审批策略）</span>
-            <select value={risk} onChange={(e) => setRisk(e.target.value)}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5">
-              {RISK_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">超时（毫秒）</span>
-            <input type="number" value={timeoutMs} min={1000} max={120000} step={1000}
-              onChange={(e) => setTimeoutMs(Number(e.target.value))}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">Planner 参数示例（JSON）</span>
-            <textarea value={plannerExample} onChange={(e) => setPlannerExample(e.target.value)} rows={3}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono" />
-          </label>
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <span className="text-text-muted">路由示例（每行一条；≥2 条才进入路由候选）</span>
-            <textarea value={examplesText} onChange={(e) => setExamplesText(e.target.value)} rows={3}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5"
-              placeholder={'用这个工具查一下数据\n调用外部接口获取结果'} />
-          </label>
-          <label className="flex flex-col gap-1 md:col-span-2">
-            <span className="text-text-muted">审核备注（留痕）</span>
-            <input value={notes} onChange={(e) => setNotes(e.target.value)}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5" />
-          </label>
-          {tool.conn_transport === 'http_api' && (tool.snapshots?.length ?? 0) > 1 && (
-            <div className="md:col-span-2">
-              <div className="mb-1 text-text-muted">调用定义版本对比（最近 3 版；新版漂移需重审）</div>
-              <div className="grid gap-2">
-                {(tool.snapshots ?? []).slice(0, 3).map((snap, idx) => (
-                  <div key={`${snap.discovery_version}-${idx}`}
-                    className={`rounded border p-2 font-mono text-[11px] ${
-                      idx === 0 ? 'border-accent/50 bg-accent/5' : 'border-border-subtle'
-                    }`}>
-                    <div className="mb-1 flex items-center gap-2">
-                      <span className="font-medium">v{snap.discovery_version}</span>
-                      {idx === 0 && (
-                        <span className="rounded bg-accent/10 px-1 text-[10px] text-accent">当前</span>
-                      )}
-                      <span className="text-text-muted">hash {snap.content_hash.slice(0, 8)}</span>
-                      <span className="text-text-muted">
-                        {new Date(snap.discovered_at).toLocaleString()}
-                      </span>
-                    </div>
-                    {snap.invocation ? (
-                      <pre className="whitespace-pre-wrap break-all">
-                        {JSON.stringify(snap.invocation, null, 0)}
-                      </pre>
-                    ) : (
-                      <div className="text-text-muted">（该版本未记录调用定义）</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-          <div className="flex items-center gap-2 md:col-span-2">
-            <AssetActionButton tone="primary" disabled={submitting} onClick={() => submitReview('approve')}>
-              {submitting ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
-              审核通过并生效
-            </AssetActionButton>
-            <AssetActionButton disabled={submitting} onClick={() => submitReview('reject')}>
-              拒绝
-            </AssetActionButton>
-            <span className="text-text-muted">审核通过后仍需在列表中授权给产品入口，Agent 才能调用。</span>
-          </div>
+/** 连接抽屉「版本历史」置灰壳位：配置版本时间线属下一批，展示真实当前版本锚点。 */
+function VersionHistoryStub({ conn }: { conn: McpConnection }) {
+  return (
+    <div data-stub="demo" className="space-y-3">
+      <div className="rounded-lg border border-border-subtle bg-surface-base px-3 py-6 text-center text-[12px] text-text-muted">
+        配置版本时间线属下一批：当前仅显示最新发现版本，历史版本追溯建设中。
+      </div>
+      <div className="rounded-lg border border-border-subtle px-3 py-2.5 text-[12px]">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium text-text-primary">当前发现版本 v{conn.discovery_version}</span>
+          <span className="text-text-muted">
+            最后同步 {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : '—'}
+          </span>
         </div>
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          <div className="md:col-span-2">
-            <div className="mb-1 text-text-muted">参数 Schema（来自发现快照）</div>
-            {properties.length === 0 ? <div className="text-text-muted">无参数</div> : (
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-[11px] text-text-muted">
-                    <th className="py-1 pr-3 font-normal">参数</th>
-                    <th className="py-1 pr-3 font-normal">类型</th>
-                    <th className="py-1 font-normal">说明（上游声明，不可信）</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {properties.map(([pname, pdef]) => (
-                    <tr key={pname} className="border-t border-border-subtle">
-                      <td className="py-1 pr-3 font-mono">{pname}</td>
-                      <td className="py-1 pr-3">{pdef?.type ?? '-'}</td>
-                      <td className="py-1 text-text-muted">{pdef?.description ?? ''}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
+        {conn.updated_at && (
+          <div className="mt-0.5 text-[11px] text-text-muted">
+            连接配置更新于 {new Date(conn.updated_at).toLocaleString()}（by {conn.updated_by || '—'}）
           </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">测试参数（JSON，走完整治理链）</span>
-            <textarea value={invokeArgs} onChange={(e) => setInvokeArgs(e.target.value)} rows={4}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono" />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-text-muted">产品身份（验证真实授权边界）</span>
-            <select value={invokeProduct} onChange={(e) => setInvokeProduct(e.target.value as typeof invokeProduct)}
-              className="rounded border border-border-subtle bg-surface-base px-2 py-1.5">
-              <option value="internal">internal（运维身份，不校验产品授权）</option>
-              <option value="agent">agent（主助手，校验授权）</option>
-              <option value="customer_service">customer_service（客服，校验授权）</option>
-            </select>
-            <span className="text-text-muted">仅只读工具可测试；写操作走真实业务链路。</span>
-          </label>
-          <div className="md:col-span-2">
-            <AssetActionButton tone="primary" disabled={submitting} onClick={runInvoke}>
-              {submitting ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
-              执行测试调用
-            </AssetActionButton>
-          </div>
-          {invokeResult && (
-            <div className="md:col-span-2 rounded border border-border-subtle bg-surface-base p-3">
-              <div className="mb-2 flex items-center gap-2">
-                <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${
-                  invokeResult.tool_status === 'success'
-                    ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-red-100 text-red-700'}`}>
-                  {invokeResult.tool_status}
-                </span>
-                <span className="text-text-muted">{invokeResult.elapsed_ms}ms</span>
-                {invokeResult.error_code && (
-                  <span className="font-mono text-[11px] text-red-600">
-                    {invokeResult.error_code}: {invokeResult.error_message}
-                  </span>
-                )}
-              </div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded bg-surface-elevated p-2 text-[11px]">
-                {JSON.stringify(invokeResult.result, null, 2)}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** 凭据管理（只读，真实数据派生）：连接名 / 认证方式 / 凭据 / 连接状态。 */
+function CredentialTable({ connections, onGoBind }: {
+  connections: McpConnection[]
+  onGoBind: (conn: McpConnection) => void
+}) {
+  if (connections.length === 0) {
+    return <EmptyState title="凭据" description="尚未接入任何连接；先在「全部连接」新建" />
+  }
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-[12.5px]">
+        <thead>
+          <tr className="border-b border-border-subtle text-left text-[11px] text-text-muted">
+            <th className="px-4 py-2 font-normal">连接名</th>
+            <th className="px-2 py-2 font-normal">认证方式</th>
+            <th className="px-2 py-2 font-normal">凭据</th>
+            <th className="px-2 py-2 font-normal">连接状态</th>
+            <th className="px-4 py-2 text-right font-normal">操作</th>
+          </tr>
+        </thead>
+        <tbody>
+          {connections.map((conn) => {
+            const status = CONN_STATUS_META[conn.status] ?? { label: conn.status, tone: 'neutral' as StatusTone }
+            return (
+              <tr key={conn.id} className="border-b border-border-subtle">
+                <td className="px-4 py-2 font-medium text-text-primary">{conn.name}</td>
+                <td className="px-2 py-2">
+                  {conn.auth_type === 'none' ? '无认证' : '静态 Bearer Token'}
+                </td>
+                <td className="px-2 py-2">
+                  {conn.credential.configured
+                    ? <span title={`指纹 ${conn.credential.fingerprint}`}>已配置 ****{conn.credential.last4 || '????'}</span>
+                    : <span className="text-text-muted">未配置</span>}
+                </td>
+                <td className="px-2 py-2"><StatusChip tone={status.tone}>{status.label}</StatusChip></td>
+                <td className="px-4 py-2 text-right">
+                  <AssetActionButton onClick={() => onGoBind(conn)}>前往绑定</AssetActionButton>
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
 
 export default function McpPage() {
   const toast = useToast()
+  const { tab, selectTab } = useWorkbenchTab(MCP_PAGE_TAB_IDS, 'all')
   const [overview, setOverview] = useState<McpOverview | null>(null)
   const [connections, setConnections] = useState<McpConnection[]>([])
-  const [toolsByConn, setToolsByConn] = useState<Record<string, McpTool[]>>({})
-  const [snapshotsByTool, setSnapshotsByTool] = useState<Record<number, McpTool>>({})
+  const [mcpTools, setMcpTools] = useState<McpTool[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  const [showForm, setShowForm] = useState(false)
-  const [editing, setEditing] = useState<McpConnection | null>(null)
-  const [submitting, setSubmitting] = useState(false)
   const [search, setSearch] = useState('')
-  const [expandedConn, setExpandedConn] = useState<string | null>(null)
-  const [expandedTool, setExpandedTool] = useState<number | null>(null)
+  const [showForm, setShowForm] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const [busyAction, setBusyAction] = useState('')
   const [testResult, setTestResult] = useState<Record<string, ConnectionTestResult>>({})
   const [discoverResult, setDiscoverResult] = useState<Record<string, DiscoverResult>>({})
+  // 连接详情抽屉：connId 为空 = 关闭；抽屉数据始终取 connections 最新事实源
+  const [drawerConnId, setDrawerConnId] = useState<string | null>(null)
+  const [drawerTab, setDrawerTab] = useState('overview')
   // HTTP API 工具登记/编辑：{ connId, tool } | null（tool 空 = 新登记）
   const [httpToolForm, setHttpToolForm] = useState<
     { connId: string; tool: McpTool | null } | null>(null)
@@ -678,45 +583,43 @@ export default function McpPage() {
     setLoading(true)
     setError('')
     try {
-      const [ov, conns] = await Promise.all([getMcpOverview(), getMcpConnections()])
+      const [ov, conns, tools] = await Promise.all([
+        getMcpOverview(), getMcpConnections(), getMcpTools(),
+      ])
       setOverview(ov)
       setConnections(conns)
-      if (expandedConn) {
-        const tools = await getConnectionTools(expandedConn)
-        setToolsByConn((prev) => ({ ...prev, [expandedConn]: tools }))
-      }
+      setMcpTools(tools)
     } catch (e) {
       setError(errMessage(e))
     } finally {
       setLoading(false)
     }
-  }, [expandedConn])
+  }, [])
 
   useEffect(() => {
     void reload()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [reload])
 
-  const loadTools = async (connId: string) => {
-    try {
-      const tools = await getConnectionTools(connId)
-      setToolsByConn((prev) => ({ ...prev, [connId]: tools }))
-    } catch (e) {
-      toast.error(`工具列表加载失败: ${errMessage(e)}`)
-    }
+  /** 新建连接：表单渲染在连接卡片分支，凭据 Tab 下先切回「全部连接」保证可见。 */
+  const handleNewConnection = () => {
+    setShowForm(true)
+    if (tab === 'credentials') selectTab('all')
   }
 
-  const toggleConn = async (connId: string) => {
-    if (expandedConn === connId) {
-      setExpandedConn(null)
-      return
-    }
-    setExpandedConn(connId)
-    setExpandedTool(null)
-    await loadTools(connId)
+  const openDrawer = (conn: McpConnection, tabId = 'overview') => {
+    setDrawerConnId(conn.id)
+    setDrawerTab(tabId)
   }
 
-  const submitConnection = async (input: ConnectionInput & { keepSecret?: boolean }) => {
+  // ── 写操作（沿用原确认与提示文案）────────────────────────
+
+  const submitConnection = async (
+    input: ConnectionInput & { keepSecret?: boolean },
+    mode: 'create' | 'edit',
+  ) => {
+    const editing = mode === 'edit'
+      ? connections.find((c) => c.id === drawerConnId) ?? null
+      : null
     setSubmitting(true)
     try {
       if (editing) {
@@ -729,9 +632,8 @@ export default function McpPage() {
       } else {
         await createMcpConnection(input)
         toast.success('连接已创建；请先测试连接再发现工具')
+        setShowForm(false)
       }
-      setShowForm(false)
-      setEditing(null)
       await reload()
     } catch (e) {
       toast.error(`保存失败: ${errMessage(e)}`)
@@ -768,54 +670,10 @@ export default function McpPage() {
         toast.error(`发现失败 (${result.error_class})`)
       }
       await reload()
-      await loadTools(conn.id)
-      // 重新发现可能改写 Schema/状态：详情缓存整体失效，展开中的工具重拉
-      await resyncToolDetails()
     } catch (e) {
       toast.error(`发现失败: ${errMessage(e)}`)
     } finally {
       setBusyAction('')
-    }
-  }
-
-  const submitRegisterHttpTool = async (
-    connId: string,
-    input: { tool_name: string; description: string;
-      invocation: HttpToolInvocation; input_schema: Record<string, unknown> },
-  ) => {
-    setSubmitting(true)
-    try {
-      const r = await registerHttpTool(connId, input)
-      toast.success(`已登记 ${r.capability}（待审核）`)
-      setHttpToolForm(null)
-      await loadTools(connId)
-      await reload()
-    } catch (e) {
-      toast.error(`登记失败: ${errMessage(e)}`)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const submitUpdateHttpTool = async (
-    connId: string, toolId: number,
-    input: { description: string; invocation: HttpToolInvocation;
-      input_schema: Record<string, unknown> },
-  ) => {
-    setSubmitting(true)
-    try {
-      const r = await updateHttpToolInvocation(toolId, input)
-      toast.success(r.schema_changed
-        ? `已保存 v${r.version}；approved 工具已漂移，需重新审核`
-        : `已保存 v${r.version}（待审核）`)
-      setHttpToolForm(null)
-      await resyncToolDetails([toolId])
-      if (expandedConn) await loadTools(expandedConn)
-      await reload()
-    } catch (e) {
-      toast.error(`保存失败: ${errMessage(e)}`)
-    } finally {
-      setSubmitting(false)
     }
   }
 
@@ -840,6 +698,7 @@ export default function McpPage() {
     try {
       await deleteMcpConnection(conn.id)
       toast.success('连接已删除')
+      if (drawerConnId === conn.id) setDrawerConnId(null)
       await reload()
     } catch (e) {
       toast.error(`删除被拒绝: ${errMessage(e)}`)
@@ -848,424 +707,409 @@ export default function McpPage() {
     }
   }
 
-  const toggleGrant = async (tool: McpTool, product: 'agent' | 'customer_service') => {
-    const active = (tool.grants ?? []).some((g) => g.product_key === product)
-    setBusyAction(`grant:${tool.id}:${product}`)
+  const submitRegisterHttpTool = async (
+    connId: string,
+    input: { tool_name: string; description: string;
+      invocation: HttpToolInvocation; input_schema: Record<string, unknown> },
+  ) => {
+    setSubmitting(true)
     try {
-      await grantMcpTool(tool.id, product, active)
-      toast.success(active ? `已撤销 ${product} 授权` : `已授权给 ${product}`)
-      if (expandedConn) await loadTools(expandedConn)
-      await resyncToolDetails([tool.id])
+      const r = await registerHttpTool(connId, input)
+      toast.success(`已登记 ${r.capability}（待审核）`)
+      setHttpToolForm(null)
       await reload()
     } catch (e) {
-      toast.error(`授权操作失败: ${errMessage(e)}`)
+      toast.error(`登记失败: ${errMessage(e)}`)
     } finally {
-      setBusyAction('')
+      setSubmitting(false)
     }
   }
 
-  const disableTool = async (tool: McpTool) => {
-    setBusyAction(`disableTool:${tool.id}`)
+  const submitUpdateHttpTool = async (
+    toolId: number,
+    input: { description: string; invocation: HttpToolInvocation;
+      input_schema: Record<string, unknown> },
+  ) => {
+    setSubmitting(true)
     try {
-      await disableMcpTool(tool.id)
-      toast.success('工具已停用；写调用立即被拦截，读调用最迟 15 秒退出候选')
-      if (expandedConn) await loadTools(expandedConn)
-      await resyncToolDetails([tool.id])
+      const r = await updateHttpToolInvocation(toolId, input)
+      toast.success(r.schema_changed
+        ? `已保存 v${r.version}；approved 工具已漂移，需重新审核`
+        : `已保存 v${r.version}（待审核）`)
+      setHttpToolForm(null)
       await reload()
     } catch (e) {
-      toast.error(`停用失败: ${errMessage(e)}`)
+      toast.error(`保存失败: ${errMessage(e)}`)
     } finally {
-      setBusyAction('')
+      setSubmitting(false)
     }
   }
 
-  /** 变更后同步详情视图：失效缓存并按需重拉——否则展开面板继续用旧
-   *  Schema/治理配置覆盖最新列表数据（审核人在旧内容上提交重审）。 */
-  const resyncToolDetails = useCallback(async (toolIds?: number[]) => {
-    invalidateMcpToolDetailCache(toolIds)
-    setSnapshotsByTool((prev) => {
-      const keys = new Set(toolIds ?? Object.keys(prev).map(Number))
-      if (![...keys].some((k) => k in prev)) return prev
-      const next = { ...prev }
-      for (const k of keys) delete next[k]
-      return next
-    })
-    const affected = toolIds ?? (expandedTool != null ? [expandedTool] : [])
-    if (expandedTool != null && affected.includes(expandedTool)) {
-      try {
-        const detail = await fetchMcpToolDetailFresh(expandedTool)
-        setSnapshotsByTool((prev) => ({ ...prev, [expandedTool]: detail }))
-      } catch {
-        // 重拉失败保持列表态，下次展开重新加载
-      }
+  /** 配置导出：GET /admin/mcp/export → 触发浏览器下载 JSON（凭据不导出）。 */
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      const data = await exportMcpConfiguration()
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = `mcp-export-${new Date().toISOString().slice(0, 10)}.json`
+      anchor.click()
+      URL.revokeObjectURL(url)
+      toast.success('配置已导出（凭据密文与指纹不包含在导出内容中）')
+    } catch (e) {
+      toast.error(`导出失败: ${errMessage(e)}`)
+    } finally {
+      setExporting(false)
     }
-  }, [expandedTool])
-
-  const openToolDetail = async (tool: McpTool) => {
-    if (expandedTool === tool.id) {
-      setExpandedTool(null)
-      return
-    }
-    if (!tool.snapshots) {
-      try {
-        const detail = await getMcpToolDetailCached(tool.id)
-        setSnapshotsByTool((prev) => ({ ...prev, [tool.id]: detail }))
-      } catch (e) {
-        toast.error(`详情加载失败: ${errMessage(e)}`)
-      }
-    }
-    setExpandedTool(tool.id)
   }
 
-  const filtered = connections.filter((c) =>
-    !search || c.name.toLowerCase().includes(search.toLowerCase())
-    || c.base_url.toLowerCase().includes(search.toLowerCase()))
-  const pendingCount = Object.values(toolsByConn)
-    .flat().filter((t) => t.status === 'pending').length
+  // ── 派生数据 ─────────────────────────────────────────────
+
+  const toolCountByConn = useMemo(() => {
+    const counts: Record<string, number> = {}
+    for (const t of mcpTools) counts[t.connection_id] = (counts[t.connection_id] ?? 0) + 1
+    return counts
+  }, [mcpTools])
+
+  const healthyCount = connections.filter((c) => c.status === 'connected').length
+  const errorCount = connections.filter((c) => c.status === 'error').length
+  const driftCount = mcpTools.filter((t) => t.schema_changed).length
+
+  const scopeFiltered = useMemo(() => {
+    if (tab === 'mcp') return connections.filter((c) => c.transport === 'streamable_http')
+    if (tab === 'http') return connections.filter((c) => c.transport === 'http_api')
+    return connections
+  }, [connections, tab])
+
+  const filtered = useMemo(() => {
+    const kw = search.trim().toLowerCase()
+    if (!kw) return scopeFiltered
+    return scopeFiltered.filter((c) =>
+      c.name.toLowerCase().includes(kw) || c.base_url.toLowerCase().includes(kw))
+  }, [scopeFiltered, search])
+
+  const drawerConn = drawerConnId
+    ? connections.find((c) => c.id === drawerConnId) ?? null
+    : null
+  const drawerTools = drawerConn
+    ? mcpTools.filter((t) => t.connection_id === drawerConn.id)
+    : []
+
+  const showCardLoading = loading && connections.length === 0
 
   return (
-    <AssetPageShell
-      title="MCP 能力中心"
-      desc="连接中心：MCP（自动发现）与 HTTP API（手工登记）统一接入 → 审核 → 授权，全程走统一治理 Runtime；停用与撤权对写调用立即拦截（出网前强一致复核），读调用最迟 15 秒收敛。"
+    <WorkbenchShell
+      title="连接中心"
+      description="MCP（Streamable HTTP 自动发现）与 HTTP API（手工登记）统一接入；动态工具的审核、治理与授权在 Tool 治理进行。"
+      tabs={MCP_PAGE_TABS}
+      activeTab={tab}
+      onTabChange={selectTab}
       actions={
         <>
           <AssetActionButton onClick={() => void reload()} disabled={loading}>
             {loading ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
             刷新
           </AssetActionButton>
-          <AssetActionButton tone="primary" onClick={() => { setEditing(null); setShowForm(true) }}>
-            <Plus size={14} /> 新增连接
+          <AssetActionButton onClick={() => void handleExport()} disabled={exporting}>
+            {exporting ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+            配置导出
+          </AssetActionButton>
+          <AssetActionButton tone="primary" onClick={handleNewConnection}>
+            <Plus size={14} /> 新建连接
           </AssetActionButton>
         </>
       }
     >
-      {error && <ErrorState title="加载失败" message={error} onRetry={() => void reload()} className="mb-4" />}
+      <div className="mx-auto w-full max-w-7xl space-y-4 px-4 py-5 sm:px-6">
+        {error && <ErrorState title="加载失败" message={error} onRetry={() => void reload()} />}
 
-      <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-        <AssetStatCard label="连接" value={connections.length} icon={<Plug size={16} />} />
-        <AssetStatCard label="运行时生效工具" value={overview?.active_tools.length ?? 0}
-          icon={<CheckCircle2 size={16} />} hint={overview?.loaded ? undefined : '快照未加载（DB 不可用）'} />
-        <AssetStatCard label="待审核工具" value={pendingCount} icon={<Clock size={16} />}
-          tone={pendingCount > 0 ? 'warn' : 'default'} />
-        <AssetStatCard label="产品授权" value={overview?.grant_count ?? 0} icon={<KeyRound size={16} />} />
-      </div>
+        <StatMetricBar items={[
+          { label: '连接总数', value: connections.length },
+          { label: '健康连接', value: healthyCount, tone: healthyCount > 0 ? 'accent' : 'default' },
+          { label: '连接异常', value: errorCount, tone: errorCount > 0 ? 'danger' : 'default' },
+          { label: 'Schema 漂移', value: driftCount, tone: driftCount > 0 ? 'warn' : 'default' },
+          {
+            label: '发现工具数', value: mcpTools.length,
+            hint: overview ? `运行时生效 ${overview.active_tools.length}` : undefined,
+          },
+        ]} />
 
-      {overview && overview.derive_errors.length > 0 && (
-        <div className="mb-4 rounded border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
-          <div className="mb-1 flex items-center gap-1 font-medium">
-            <AlertTriangle size={14} /> {overview.derive_errors.length} 个工具派生失败（未进入运行时）
-          </div>
-          {overview.derive_errors.map((e) => (
-            <div key={e.capability} className="font-mono">{e.capability}: {e.reason}</div>
-          ))}
-        </div>
-      )}
-
-      <AssetSection title="MCP 连接" icon={<Plug size={16} />}
-        meta={`${filtered.length} 个 · Streamable HTTP`}>
-        {showForm ? (
-          <div className="border-b border-border-subtle">
-            <ConnectionForm initial={editing} onSubmit={submitConnection}
-              onCancel={() => { setShowForm(false); setEditing(null) }}
-              submitting={submitting} />
-          </div>
-        ) : null}
-        {filtered.length === 0 && !showForm ? (
-          <EmptyState title="MCP 连接" description="尚未接入任何外部 MCP Server"
-            actionLabel="新增连接" onAction={() => { setEditing(null); setShowForm(true) }} />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-b border-border-subtle text-left text-[11px] text-text-muted">
-                  <th className="px-4 py-2 font-normal">名称</th>
-                  <th className="px-2 py-2 font-normal">地址</th>
-                  <th className="px-2 py-2 font-normal">认证</th>
-                  <th className="px-2 py-2 font-normal">状态</th>
-                  <th className="px-2 py-2 font-normal">发现版本</th>
-                  <th className="px-2 py-2 font-normal">最后同步</th>
-                  <th className="px-4 py-2 text-right font-normal">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((conn) => {
-                  const open = expandedConn === conn.id
-                  const tr = testResult[conn.id]
-                  const dr = discoverResult[conn.id]
-                  return (
-                    <Fragment key={conn.id}>
-                      <tr
-                        className="cursor-pointer border-b border-border-subtle hover:bg-surface-hover/50"
-                        onClick={() => void toggleConn(conn.id)}>
-                        <td className="px-4 py-2">
-                          <span className="inline-flex items-center gap-1 font-medium">
-                            {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                            {conn.name}
-                          </span>
-                          {!conn.enabled && (
-                            <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">已停用</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-2 font-mono text-[11px] text-text-muted">{conn.base_url}</td>
-                        <td className="px-2 py-2">
-                          {conn.auth_type === 'none' ? '无' : (
-                            <span title={`指纹 ${conn.credential.fingerprint}`}>
-                              Bearer ****{conn.credential.last4 || '????'}
-                            </span>
-                          )}
-                          {conn.network_scope === 'private' && (
-                            <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">内网</span>
-                          )}
-                        </td>
-                        <td className="px-2 py-2">
-                          <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${CONN_STATUS_META[conn.status]?.cls ?? ''}`}>
-                            {CONN_STATUS_META[conn.status]?.label ?? conn.status}
-                          </span>
-                          {conn.last_error && (
-                            <div className="mt-0.5 max-w-48 truncate text-[10px] text-red-600" title={conn.last_error}>
-                              {conn.last_error}
-                            </div>
-                          )}
-                        </td>
-                        <td className="px-2 py-2">v{conn.discovery_version}</td>
-                        <td className="px-2 py-2 text-text-muted">
-                          {conn.last_synced_at ? new Date(conn.last_synced_at).toLocaleString() : '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                          <div className="inline-flex gap-1">
-                            <AssetActionButton disabled={busyAction === `test:${conn.id}`} onClick={() => void runTest(conn)}>
-                              {busyAction === `test:${conn.id}` ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />} 测试
-                            </AssetActionButton>
-                            {conn.transport === 'http_api' ? (
-                              <AssetActionButton onClick={() => setHttpToolForm({ connId: conn.id, tool: null })}>
-                                <Plus size={13} /> 登记工具
-                              </AssetActionButton>
-                            ) : (
-                              <AssetActionButton disabled={busyAction === `discover:${conn.id}`} onClick={() => void runDiscover(conn)}>
-                                {busyAction === `discover:${conn.id}` ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />} 发现
-                              </AssetActionButton>
-                            )}
-                            <AssetActionButton disabled={busyAction === `toggle:${conn.id}`} onClick={() => void toggleEnabled(conn)}>
-                              {conn.enabled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} />}
-                            </AssetActionButton>
-                            <AssetActionButton onClick={() => { setEditing(conn); setShowForm(true) }}>编辑</AssetActionButton>
-                            <AssetActionButton disabled={busyAction === `delete:${conn.id}`} onClick={() => void removeConnection(conn)}>
-                              <Trash2 size={13} />
-                            </AssetActionButton>
-                          </div>
-                        </td>
-                      </tr>
-                      {tr && (
-                        <tr className="border-b border-border-subtle bg-surface-elevated/30">
-                          <td colSpan={7} className="px-4 py-1.5 text-[11px]">
-                            {tr.ok
-                              ? <span className="text-emerald-700">连接测试：成功 {tr.elapsed_ms}ms · {tr.tool_count} 个工具</span>
-                              : <span className="text-red-600">连接测试：失败 {tr.error_class} · {tr.error}</span>}
-                          </td>
-                        </tr>
-                      )}
-                      {dr && (
-                        <tr className="border-b border-border-subtle bg-surface-elevated/30">
-                          <td colSpan={7} className="px-4 py-1.5 text-[11px] text-text-muted">
-                            上次发现 v{dr.discovery_version}：
-                            新增 {(dr.new ?? []).map((t) => t.tool).join('、') || '无'}；
-                            变化 {(dr.changed ?? []).map((t) => t.tool).join('、') || '无'}；
-                            消失 {(dr.retired ?? []).map((t) => t.tool).join('、') || '无'}
-                            {(dr.skipped ?? []).length > 0 && `；跳过 ${(dr.skipped ?? []).map((t) => t.tool).join('、')}`}
-                          </td>
-                        </tr>
-                      )}
-                      {open && (
-                        <tr className="border-b border-border-subtle">
-                          <td colSpan={7} className="p-0">
-                            {httpToolForm?.connId === conn.id && (
-                              <div className="border-b border-border-subtle bg-surface-elevated/40">
-                                <div className="px-4 pt-3 text-[12px] font-medium">
-                                  {httpToolForm.tool
-                                    ? `编辑调用定义：${httpToolForm.tool.tool_name}`
-                                    : `登记 HTTP API 工具：${conn.name}`}
-                                </div>
-                                <HttpToolForm mode={httpToolForm.tool ? 'edit' : 'register'}
-                                  initial={httpToolForm.tool}
-                                  submitting={submitting}
-                                  onRegister={(input) =>
-                                    void submitRegisterHttpTool(conn.id, input)}
-                                  onUpdate={(input) =>
-                                    void submitUpdateHttpTool(
-                                      conn.id, httpToolForm.tool!.id, input)}
-                                  onCancel={() => setHttpToolForm(null)} />
-                              </div>
-                            )}
-                            <ToolListSection connId={conn.id}
-                              tools={toolsByConn[conn.id] ?? []}
-                              snapshotsByTool={snapshotsByTool}
-                              expandedTool={expandedTool}
-                              onToggleTool={openToolDetail}
-                              onToggleGrant={toggleGrant}
-                              onDisableTool={disableTool}
-                              onToolMutated={resyncToolDetails}
-                              onEditInvocation={(tool) =>
-                                setHttpToolForm({ connId: conn.id, tool })}
-                              onReload={reload}
-                              busyAction={busyAction} />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  )
-                })}
-              </tbody>
-            </table>
+        {overview && overview.derive_errors.length > 0 && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-[12px] text-amber-800">
+            <div className="mb-1 flex items-center gap-1 font-medium">
+              <AlertTriangle size={14} /> {overview.derive_errors.length} 个工具派生失败（未进入运行时）
+            </div>
+            {overview.derive_errors.map((e) => (
+              <div key={e.capability} className="font-mono">{e.capability}: {e.reason}</div>
+            ))}
           </div>
         )}
-      </AssetSection>
-    </AssetPageShell>
-  )
-}
 
-/** 连接展开后的工具清单（含授权开关与行展开审核/测试面板）。 */
-function ToolListSection({
-  connId, tools, snapshotsByTool, expandedTool, onToggleTool,
-  onToggleGrant, onDisableTool, onToolMutated, onEditInvocation, onReload,
-  busyAction,
-}: {
-  connId: string
-  tools: McpTool[]
-  snapshotsByTool: Record<number, McpTool>
-  expandedTool: number | null
-  onToggleTool: (tool: McpTool) => void
-  onToggleGrant: (tool: McpTool, product: 'agent' | 'customer_service') => void
-  onDisableTool: (tool: McpTool) => void
-  /** 单工具变更（审核/停用/授权）后失效其详情缓存 */
-  onToolMutated: (toolIds?: number[]) => Promise<void>
-  /** HTTP API 工具：打开调用定义编辑表单 */
-  onEditInvocation: (tool: McpTool) => void
-  onReload: () => Promise<void>
-  busyAction: string
-}) {
-  if (tools.length === 0) {
-    return (
-      <div className="p-4">
-        <EmptyState title="工具" description="尚未发现工具；MCP 连接点击「发现」，HTTP API 连接点击「登记工具」" />
-      </div>
-    )
-  }
-  return (
-    <div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-[12px]">
-          <thead>
-            <tr className="border-b border-border-subtle text-left text-[11px] text-text-muted">
-              <th className="px-4 py-2 font-normal">上游工具</th>
-              <th className="px-2 py-2 font-normal">Capability</th>
-              <th className="px-2 py-2 font-normal">状态</th>
-              <th className="px-2 py-2 font-normal">授权</th>
-              <th className="px-4 py-2 text-right font-normal">操作</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tools.map((tool) => {
-              // 列表数据（状态/hash/漂移标记）是最新事实源；详情快照只补
-              // snapshots 等列表没有的字段，绝不让过期详情反向覆盖列表
-              const merged = { ...(snapshotsByTool[tool.id] ?? {}), ...tool }
-              const open = expandedTool === tool.id
-              const grants = tool.grants ?? []
-              return (
-                <Fragment key={`${connId}-${tool.id}`}>
-                  <tr
-                    className="cursor-pointer border-b border-border-subtle hover:bg-surface-hover/50"
-                    onClick={() => onToggleTool(tool)}>
-                    <td className="px-4 py-2 font-mono">
-                      <span className="inline-flex items-center gap-1">
-                        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                        {tool.tool_name}
-                      </span>
-                      {tool.schema_changed && (
-                        <span className="ml-1 rounded bg-red-100 px-1 text-[10px] text-red-700"
-                          title="上游 Schema 已变化，需重新审核">Schema 已变化</span>
-                      )}
-                    </td>
-                    <td className="px-2 py-2 font-mono text-[11px]">{tool.capability}</td>
-                    <td className="px-2 py-2">
-                      <span className={`rounded px-1.5 py-0.5 text-[11px] font-medium ${TOOL_STATUS_META[tool.status]?.cls ?? ''}`}>
-                        {TOOL_STATUS_META[tool.status]?.label ?? tool.status}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex gap-1">
-                        {(['agent', 'customer_service'] as const).map((product) => {
-                          const active = grants.some((g) => g.product_key === product)
-                          return (
-                            <button key={product} disabled={tool.status !== 'approved' && !active}
-                              onClick={() => onToggleGrant(tool, product)}
-                              className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                                active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-500'
-                              } ${busyAction === `grant:${tool.id}:${product}` ? 'opacity-50' : ''}`}>
-                              {product === 'agent' ? '主助手' : '客服'}
-                              {active ? ' ✓' : ''}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="inline-flex gap-1">
-                        {tool.conn_transport === 'http_api' && (
-                          <AssetActionButton onClick={() => onEditInvocation(tool)}>
-                            编辑调用
-                          </AssetActionButton>
-                        )}
-                        {tool.status === 'approved' && (
-                          <AssetActionButton disabled={busyAction === `disableTool:${tool.id}`}
-                            onClick={() => onDisableTool(tool)}>
-                            停用
-                          </AssetActionButton>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                  {open && (
-                    <tr className="border-b border-border-subtle">
-                      <td colSpan={5} className="p-0">
-                        <ToolPanel tool={merged}
-                          onDone={async () => {
-                            await onReload()
-                            await onToolMutated([tool.id])
-                          }} />
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
+        {tab === 'credentials' ? (
+          <AssetSection title="凭据管理" icon={<KeyRound size={16} />}
+            meta="只读视图：凭据密文不出服务端，仅显示配置状态与尾号；绑定/更换在连接详情的配置 Tab">
+            {showCardLoading ? <Skeleton rows={4} cols={5} /> : (
+              <CredentialTable connections={connections}
+                onGoBind={(conn) => openDrawer(conn, 'config')} />
+            )}
+          </AssetSection>
+        ) : (
+          <>
+            {showForm && (
+              <AssetSection title="新建连接" icon={<Plus size={16} />}
+                meta="SSRF 校验在服务端；创建后先测试连接再发现工具">
+                <ConnectionForm initial={null} submitting={submitting}
+                  onSubmit={(input) => void submitConnection(input, 'create')}
+                  onCancel={() => setShowForm(false)} />
+              </AssetSection>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative">
+                <Search size={13} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted/60" />
+                <input aria-label="搜索连接"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="搜索连接名称 / 地址"
+                  className="min-w-[220px] rounded-md border border-border-subtle bg-surface-base py-1.5 pl-8 pr-2.5 text-[12px] text-text-primary" />
+              </div>
+              <span className="text-[11px] text-text-muted">{filtered.length} 个连接</span>
+            </div>
+
+            {showCardLoading ? (
+              <Skeleton rows={3} cols={3} />
+            ) : filtered.length === 0 ? (
+              connections.length === 0 && !search ? (
+                <EmptyState title="连接" description="尚未接入任何外部 MCP Server 或 HTTP API"
+                  actionLabel="新建连接" onAction={() => setShowForm(true)} />
+              ) : (
+                <EmptyState title="连接" description="没有匹配筛选的连接；调整搜索词或切换页级 Tab" />
               )
-            })}
-          </tbody>
-        </table>
+            ) : (
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {filtered.map((conn) => (
+                  <ConnectionCard key={conn.id} conn={conn}
+                    toolCount={toolCountByConn[conn.id] ?? 0}
+                    onOpen={(c) => openDrawer(c)} />
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
-    </div>
+
+      {drawerConn && (
+        <DetailDrawer
+          open
+          width="lg"
+          onClose={() => { setDrawerConnId(null); setHttpToolForm(null) }}
+          title={drawerConn.name}
+          subtitle={
+            <span className="flex flex-wrap items-center gap-1.5">
+              <TransportBadge transport={drawerConn.transport} />
+              <span className="font-mono">{drawerConn.base_url}</span>
+            </span>
+          }
+          tabs={CONN_DRAWER_TABS}
+          activeTab={drawerTab}
+          onTabChange={setDrawerTab}
+          actions={
+            <>
+              <AssetActionButton disabled={busyAction === `test:${drawerConn.id}`}
+                onClick={() => void runTest(drawerConn)}>
+                {busyAction === `test:${drawerConn.id}`
+                  ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />}
+                测试健康
+              </AssetActionButton>
+              {drawerConn.transport === 'http_api' ? (
+                <AssetActionButton onClick={() => setHttpToolForm({ connId: drawerConn.id, tool: null })}>
+                  <Plus size={13} /> 登记工具
+                </AssetActionButton>
+              ) : (
+                <AssetActionButton disabled={busyAction === `discover:${drawerConn.id}`}
+                  onClick={() => void runDiscover(drawerConn)}>
+                  {busyAction === `discover:${drawerConn.id}`
+                    ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                  重新发现
+                </AssetActionButton>
+              )}
+              <AssetActionButton disabled={busyAction === `toggle:${drawerConn.id}`}
+                onClick={() => void toggleEnabled(drawerConn)}>
+                {busyAction === `toggle:${drawerConn.id}`
+                  ? <Loader2 size={13} className="animate-spin" />
+                  : drawerConn.enabled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} />}
+                {drawerConn.enabled ? '停用连接' : '启用连接'}
+              </AssetActionButton>
+            </>
+          }
+        >
+          {drawerTab === 'overview' && (
+            <div className="space-y-3 text-[12.5px]">
+              <div className="grid gap-x-4 gap-y-2 md:grid-cols-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">状态</span>
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <StatusChip tone={CONN_STATUS_META[drawerConn.status]?.tone ?? 'neutral'}>
+                      {CONN_STATUS_META[drawerConn.status]?.label ?? drawerConn.status}
+                    </StatusChip>
+                    {!drawerConn.enabled && (
+                      <span className="rounded bg-slate-100 px-1 text-[10px] text-slate-500">已停用</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">地址</span>
+                  <span className="truncate font-mono text-[11px]" title={drawerConn.base_url}>{drawerConn.base_url}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">凭据</span>
+                  <span>
+                    {drawerConn.auth_type === 'none' ? '无认证' : (
+                      <span title={`指纹 ${drawerConn.credential.fingerprint}`}>
+                        Bearer ****{drawerConn.credential.last4 || '????'}
+                      </span>
+                    )}
+                    {drawerConn.network_scope === 'private' && (
+                      <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">内网</span>
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">传输方式</span>
+                  <TransportBadge transport={drawerConn.transport} />
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">发现版本</span>
+                  <span>v{drawerConn.discovery_version}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 text-text-muted">最近检查</span>
+                  <span className="text-text-muted">
+                    {drawerConn.last_synced_at ? new Date(drawerConn.last_synced_at).toLocaleString() : '—'}
+                  </span>
+                </div>
+              </div>
+              {drawerConn.last_error && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-[12px] text-red-700">
+                  <span className="font-medium">最近错误：</span>{drawerConn.last_error}
+                </div>
+              )}
+              {testResult[drawerConn.id] && (
+                <div className="rounded-lg border border-border-subtle bg-surface-base px-3 py-2 text-[11px]">
+                  {testResult[drawerConn.id].ok
+                    ? <span className="text-emerald-700">连接测试：成功 {testResult[drawerConn.id].elapsed_ms}ms · {testResult[drawerConn.id].tool_count} 个工具</span>
+                    : <span className="text-red-600">连接测试：失败 {testResult[drawerConn.id].error_class} · {testResult[drawerConn.id].error}</span>}
+                </div>
+              )}
+              {discoverResult[drawerConn.id] && (
+                <div className="rounded-lg border border-border-subtle bg-surface-base px-3 py-2 text-[11px] text-text-muted">
+                  上次发现 v{discoverResult[drawerConn.id].discovery_version}：
+                  新增 {(discoverResult[drawerConn.id].new ?? []).map((t) => t.tool).join('、') || '无'}；
+                  变化 {(discoverResult[drawerConn.id].changed ?? []).map((t) => t.tool).join('、') || '无'}；
+                  消失 {(discoverResult[drawerConn.id].retired ?? []).map((t) => t.tool).join('、') || '无'}
+                  {(discoverResult[drawerConn.id].skipped ?? []).length > 0 &&
+                    `；跳过 ${(discoverResult[drawerConn.id].skipped ?? []).map((t) => t.tool).join('、')}`}
+                </div>
+              )}
+              <div className="text-[11px] text-text-muted">
+                编辑连接信息请切换到「配置」Tab；动态工具的审核与授权在 Tool 治理进行。
+              </div>
+            </div>
+          )}
+
+          {drawerTab === 'tools' && (
+            <div className="space-y-3">
+              {httpToolForm?.connId === drawerConn.id && (
+                <div className="rounded-lg border border-border-subtle bg-surface-elevated/40">
+                  <div className="px-4 pt-3 text-[12px] font-medium">
+                    {httpToolForm.tool
+                      ? `编辑调用定义：${httpToolForm.tool.tool_name}`
+                      : `登记 HTTP API 工具：${drawerConn.name}`}
+                  </div>
+                  <HttpToolForm mode={httpToolForm.tool ? 'edit' : 'register'}
+                    initial={httpToolForm.tool}
+                    submitting={submitting}
+                    onRegister={(input) => void submitRegisterHttpTool(drawerConn.id, input)}
+                    onUpdate={(input) =>
+                      void submitUpdateHttpTool(httpToolForm.tool!.id, input)}
+                    onCancel={() => setHttpToolForm(null)} />
+                </div>
+              )}
+              {drawerTools.length === 0 && !httpToolForm ? (
+                <EmptyState title="已发现工具"
+                  description={drawerConn.transport === 'http_api'
+                    ? '尚未登记工具；点击右上角「登记工具」手工登记'
+                    : '尚未发现工具；点击右上角「重新发现」从上游拉取'} />
+              ) : (
+                <ul className="divide-y divide-border-subtle">
+                  {drawerTools.map((tool) => {
+                    const status = TOOL_STATUS_META[tool.status] ?? { label: tool.status, tone: 'neutral' as StatusTone }
+                    const isHttp = tool.conn_transport === 'http_api'
+                    return (
+                      <li key={tool.id} className="py-2.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-mono text-[12px] text-text-primary">{tool.tool_name}</span>
+                          <span className="font-mono text-[11px] text-text-muted">{tool.capability}</span>
+                          <StatusChip tone={status.tone}>{status.label}</StatusChip>
+                          {tool.schema_changed && (
+                            <span className="rounded bg-red-100 px-1 text-[10px] text-red-700"
+                              title="上游 Schema 已变化，需重新审核">Schema 漂移</span>
+                          )}
+                          <span className="text-[11px] text-text-muted">
+                            风险 {tool.governance?.risk_level ?? '—'}
+                          </span>
+                          {isHttp && (
+                            <AssetActionButton
+                              onClick={() => setHttpToolForm({ connId: drawerConn.id, tool })}>
+                              编辑调用
+                            </AssetActionButton>
+                          )}
+                          <Link
+                            href={`/tools?q=${encodeURIComponent(tool.capability)}`}
+                            className="ml-auto text-[11px] font-medium text-accent hover:underline"
+                            title="在 Tool 治理中查看并审核该工具（预填搜索）">
+                            前往 Tool 治理 →
+                          </Link>
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+              <div className="text-[11px] text-text-muted">
+                工具的审核、执行策略与授权在「Tool 治理」统一操作；此处仅查看发现结果。
+              </div>
+            </div>
+          )}
+
+          {drawerTab === 'config' && (
+            <div className="space-y-4">
+              <ConnectionForm initial={drawerConn} submitting={submitting}
+                onSubmit={(input) => void submitConnection(input, 'edit')}
+                onCancel={() => setDrawerTab('overview')} />
+              <div className="rounded-lg border border-red-200 bg-red-50/50 p-3">
+                <div className="mb-2 text-[12px] font-medium text-red-700">危险操作</div>
+                <div className="mb-2 text-[11px] text-text-muted">
+                  删除连接会一并校验工具记录与有效授权；仍被引用时服务端会拒绝。
+                </div>
+                <button type="button" disabled={busyAction === `delete:${drawerConn.id}`}
+                  onClick={() => void removeConnection(drawerConn)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-300 bg-white px-3 py-1.5 text-[12px] font-medium text-red-600 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50">
+                  {busyAction === `delete:${drawerConn.id}`
+                    ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                  删除连接
+                </button>
+              </div>
+            </div>
+          )}
+
+          {drawerTab === 'health' && <HealthStubSection />}
+
+          {drawerTab === 'versions' && <VersionHistoryStub conn={drawerConn} />}
+        </DetailDrawer>
+      )}
+    </WorkbenchShell>
   )
-}
-
-let _detailCache: Record<number, McpTool> = {}
-async function getMcpToolDetailCached(id: number): Promise<McpTool> {
-  if (_detailCache[id]) return _detailCache[id]
-  const { getMcpToolDetail } = await import('@/api/mcp')
-  const detail = await getMcpToolDetail(id)
-  _detailCache = { ..._detailCache, [id]: detail }
-  return detail
-}
-
-/** 失效详情缓存：重新发现 / 审核 / 停用 / 授权变更后必须调用，
- *  否则审核面板会继续展示旧 Schema 与旧治理配置。 */
-function invalidateMcpToolDetailCache(ids?: number[]) {
-  if (!ids) {
-    _detailCache = {}
-    return
-  }
-  _detailCache = Object.fromEntries(
-    Object.entries(_detailCache).filter(([k]) => !ids.includes(Number(k))))
-}
-
-async function fetchMcpToolDetailFresh(id: number): Promise<McpTool> {
-  const { getMcpToolDetail } = await import('@/api/mcp')
-  return getMcpToolDetail(id)
 }

@@ -1,5 +1,5 @@
 /**
- * MCP 能力中心 API（/mcp 页面数据源，ADR-0011）
+ * MCP 动态工具 API（/mcp 连接中心 + /tools Tool 治理的数据源，ADR-0011）
  *
  * 后端：backend/app/api/routes/admin_mcp.py（/api/admin/mcp/*）
  * 契约：读接口裸 dict；写接口带 Idempotency-Key（mutationRequest 自动注入）。
@@ -62,6 +62,8 @@ export interface McpGovernance {
   /** 运行时策略（后端 derive_tool_spec 的实际读取路径） */
   runtime?: { timeout_ms?: number; max_calls_per_request?: number }
   required_roles?: string[]
+  /** 业务域（决策 #15 硬隔离）：审核登记，授权时服务端按禁行域拦截 */
+  domain?: string
   planner_example?: Record<string, unknown>
   [key: string]: unknown
 }
@@ -173,6 +175,15 @@ export async function getMcpTools(statusFilter = ''): Promise<McpTool[]> {
 
 export async function getMcpToolDetail(id: number): Promise<McpTool> {
   return request<McpTool>(`/api/admin/mcp/tools/${id}`)
+}
+
+/**
+ * 配置导出（GET /admin/mcp/export，只读）：连接声明 + 能力包 + 授权关系。
+ * 服务端红线：凭据密文/fingerprint/last4 绝不导出，URL 内嵌凭据导出前净化；
+ * 前端只负责取 JSON 并触发浏览器下载。
+ */
+export async function exportMcpConfiguration(): Promise<unknown> {
+  return request<unknown>('/api/admin/mcp/export')
 }
 
 // ── 写接口（幂等键由 mutationRequest 自动注入）────────────────
