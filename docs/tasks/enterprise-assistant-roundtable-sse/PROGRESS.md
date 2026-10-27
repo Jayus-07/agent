@@ -1,7 +1,34 @@
 # 进度
 
+## 2026-10-28：Zcode接手后完成父子时限传播（P1）
+
+- 接手核验：worktree/branch/HEAD与交接文档一致（d11ab4a，分支codex/enterprise-assistant-reliability-fixes），8个未提交文件A/B分层确认未覆盖；容器栈healthy且compose working_dir为本worktree。8088模型服务交接后掉线，经本worktree `dev-local-models.bat start`恢复（healthz双模型CUDA/float16就绪），未重建索引、未改模型绑定。
+- B组WIP已完成全链路接线（此前`provider_deadline_kwargs`无调用方、未测试未重建）：
+  - `executor.py`：`scoped_execution_timeout(effective_timeout_s)`包住每次工具尝试，ContextVar经to_thread传入同步工具线程（新增真实executor继承用例）。
+  - `deadline.py`：`provider_deadline_kwargs`修正——补查ChatAnthropic的`default_request_timeout`字段，已有更短超时只收窄不放宽；httpx.Timeout逐分量封顶；过期直接抛TimeoutError。已核对宿主安装版本（langchain-openai 1.4.1/langchain-anthropic 1.4.8）源码确认per-invoke kwargs并入SDK create payload，`timeout`为请求级覆盖。
+  - `proxy.py`：invoke/ainvoke韧性循环每次尝试前按剩余时限收窄SDK读取超时，过期不再预占、不出站；流式sync/async包装调用点收窄+chunk边界检查（单次read超时≠总时长上限）；主/备两条模型路径同样收窄。
+  - `rag/client.py`：ask在执行时限内发送`X-Agent-Deadline-Seconds`（剩余−1s回传余量）并把读超时封顶到剩余值；顺带修正此前per-request浮点超时把connect也放大到300s的旧不一致（对齐长短分离设计）。后台/无作用域调用行为不变。
+  - `services/rag_server.py`：/ask校验头值（有限数值、≤3600s、过期归零），扣除接收→绑定间耗时与0.5s服务端回传余量后以本地单调钟还原为执行作用域包住pipeline.ask；无头保持旧行为。新增两端`[RAG client deadline]`/`[RAG /ask deadline]`观测日志。
+- 传播语义实测：父rag.search 45s → 头43.99s → 服务端作用域43.47s；rag-service内部LLM读取超时从固定120s变为随剩余时限递减，父超时后子不再长时间空转；SDK隐式重试已被A组max_retries=0消除；时限过期不再发起新的出站尝试。
+- 测试：新增`backend/tests/tool_runtime/test_execution_deadline_propagation.py`30项（作用域嵌套/线程继承/收窄不放宽/过期不出站/流式边界/头校验/服务端还原，/ask经TestClient打桩验证作用域真实生效）；定向回归：executor边界+RAG超时对齐+server令牌+remote模式48 passed；驱动/预算/绑定+入口流61 passed；任务/移交/额度/一致性36 passed；resilience+SSE契约43 passed。约218项全部通过，存在既有pytest-timeout配置警告与Windows事件循环清理警告，未冒充无警告。
+- 既有失败定界（非本次改动引入）：`test_llm_resilience.py::TestCircuitBreakerFallback::test_open_circuit_uses_fallback_model`在本机环境必失败——共享库登记了带价格档位的fallback模型，熔断开路走fallback时`_enforce_model_input_price_tier`对空入参按`price_tier_unrecognized_input`硬抛ContextBudgetExceededError（proxy.py:645→2438，均为未修改的既有代码；该用例无执行作用域，本次插入点全部为no-op）。待后续单独修复该用例的环境假设。
+- 重建与真实验证：`devctl.bat rebuild /y`返回0（首次执行曾被本会话主动中断留下半死容器，按避坑纪律重跑完成）；app/rag-service/agent-worker/rag-index/mcp healthy、compose working_dir为本worktree、8000/8090/9080均200、无OOM无重启。真实API两问：普通解释2.09s（首反馈0.065s、首正文1.694s）、显式知识库问答10.40s（首反馈0.072s、首正文10.345s），均在目标区间且与改动前基线一致；两端时限传播日志已核实。证据`D:/tmp/agent-deadline-prop-20261028.json`。
+- 边界与未完成：时限传播消除了"父超时后子空转"与SDK重试放大，但122秒生成等待当时的供应商/传输根因无历史现场可复现，现以"同类等待最长不超过父预算"硬约束兜底；冷/热P95与统计性时延、复杂报告来源完整性等整体UNVERIFIED项不变。本轮未提交前保持原状，提交/合并按用户既有授权执行并另行汇报。
+
+## 2026-10-28 01:47：用户要求交接Zcode
+
+- 用户要求把当前任务工作树交由Zcode继续，Codex停止功能修改，原工作树和常驻服务保留。交接入口为根`ZCODE_HANDOFF.md`，包含完整目标、Git、端口/进程、测试/证据、未完成事项及续工顺序；不包含密码/令牌。
+- HEAD/main仍d11ab4a727a080ba2ee2f398018d3e9c9b0af1f0，任务分支codex/enterprise-assistant-reliability-fixes。交接前已有8个未提交文件：6个已验证后续优化/任务记录，另2个为刚写的deadline.py/executor.py时限传播WIP。WIP未测试、未重建，provider_deadline_kwargs尚未被调用，不能宣称RAG时限传播完成。
+- 最新核验Docker代码服务healthy、Compose工作目录为本worktree，8088双模型CUDA就绪；3100/3200/8000/8081/8088/8090/8091/9080/5433/6379/6380已监听，3300未监听。更多映射和宿主5432区别见交接文档。
+- 整体目标未完成，不标complete；本会话执行转为PAUSED交接状态，防止与Zcode并发写入。交接文档写好不等于已通过接口启动Zcode任务。
+
 ## 2026-10-28：阶段合并与下一阶段总耗时优化
 
+- 用户新增“作为持续任务优化总任务”的要求，已创建本会话active持续目标：按原目标和最新边界持续定位、修复、实测、阶段性本地合并。当前仍复用d11ab4a上的任务worktree，保留未提交的冷首反馈与SDK重试修复；下一优先项为RAG跨服务时限不一致及完整回答时延分解，不设重复定时任务或擅自推送生产。
+- 阶段合并完成：功能提交fe36a22，接入最新main的合并提交d11ab4a；主目录main已通过ff-only更新至d11ab4a，工作区干净，未推送。接入后T2后端83 passed、前端45 passed；本worktree devctl rebuild /y返回0，API/网关健康。无新PR或云端Review；这只是已验证功能阶段合并，不代表剩余性能/业务质量已通过。
+- 合并后继续定位：RAG容器实际LLM_REQUEST_TIMEOUT=120秒，远端/ask读取超时300秒，父rag.search工具45秒；自建OpenAI兼容驱动没有设置max_retries，实际SDK默认2次，代理层另有重试。已确认是可放大失败总耗时的因素，尚不能据此断言首次122秒生成等待的唯一根因。下一批在任务工作区关闭OpenAI/Anthropic自建驱动的SDK隐式重试，保留统一代理重试/预算/Trace，不全局砍长文生成时限。真实SDK+MockTransport对408/429/503的invoke/stream六个反例均只发一个请求；驱动/预算/绑定回归44 passed，T0通过。该批暂未提交/合并，正在重建与正常调用验收。
+- SDK改动重建后正常接口：53ea5e18d089普通解释4.637秒，9d73eef6d45e知识库6.806秒且FAQ出处正确，D:/tmp/agent-sdk-retry-smoke-20261028.json；冷启动首反馈2.213秒未达标。定位get_multi_agent仍在HTTP处理阶段同步初始化，改为producer工作线程中执行；deps已有双重锁单例，不重复初始化。新增直接消费StreamingResponse的异步测试阻塞图初始化，确认meta与明确反馈先到且最终done正常，连同驱动组31 passed。下一次重建后复验冷首反馈；不把本次首次反馈失败隐去。
+- 下一批两项优化已从本worktree再次devctl rebuild /y，返回0，API/网关及worker健康。重建后首问0307060656f9：首反馈0.043秒、首正文1.234秒、完整终帧1.740秒，回答正确，D:/tmp/agent-cold-feedback-fixed-20261028.json。仅为本次首问样本，仍不是P95验收。下一批6文件（驱动/入口/测试/任务文档）保留未提交；本地main仍d11ab4a且干净，阶段合并后总耗时优化继续进行。
 - 用户明确授权：达到可合并条件时先提交并合并本地main，然后继续优化不同任务的端到端总耗时。指标分别记录反馈、正文、流终帧以及后台任务最终完成，转后台通知不能冒充完成。
 - 合并前检查：本任务HEAD 4a7a0b4，最新main为953c201（工具治理/管理端新增9个提交），变更文件无重叠；主目录工作区干净。保留本任务既有修改，排除Next构建产生的next-env路径噪音，不推送、不创建PR、不擅自发布生产。
 - 本地Diff自查重点：可信产品/用户/租户、恢复时当前授权、移交状态先落库后入队、节点检查点与额度拒绝、会话任务锁、成功记忆事务及outbox、单模型推理准入。已有T1/T2及真实页面证据保留，偶发生成长等待和复杂报告来源完整性仍作为未验收项，不宣称本次合并即完成性能目标。接入main后补跑相邻契约与实际服务健康检查。
