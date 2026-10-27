@@ -632,3 +632,43 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
 ### 下一批剩余
 
 - Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
+
+## Discovery（#18）差距评估结论（2026-10-28，评估完成待施工）
+
+### 已有基座（三项满足两项半）
+
+- 权限预过滤在 selector 之前（capability_router._authorized_candidates，
+  上游收窄后 selector 只做去重/截断）；
+- 时间预算闸已管到 selector LLM 调用（RequestDeadline.selector_budget_ms
+  =35%×T，耗尽直接 clarify）；模型/超时/重试 DB 可配 + 管理端
+  （llm_model_role_policy，15s 生效）；prompt 版本治理
+  （router.tool_selector，请求级 pin）；selection_reason 全链路 trace；
+  离线评测 67 条（单轮）。
+
+### 差距清单（#18 未满足项）
+
+1. 多轮重新发现：`_fc_decide` 重试循环内候选集固定（tool_selector.py:396），
+   无扩候选/换域再发现；
+2. 发现策略对象不可配：模式/topK/最多轮数/费用预算（topK、预算比 env
+   硬编码，无 DB 无管理端）；
+3. 发现模拟器：无（原语已有：from_routing_meta + _authorized_candidates）；
+4. 费用级预算：只有时间预算，selector LLM token/cost 只记账不设闸；
+5. 多轮发现评测用例缺失（现有 67 条全单轮）。
+
+### 方案对比与推荐
+
+- A selector 内建多轮：改动集中单文件、职责膨胀，回归面集中；
+- **B（推荐）逻辑独立 DiscoveryService**：新 discovery/service.py 复用
+  resolve_domain_tools + _authorized_candidates + FC 原语；DiscoveryPolicy
+  （mode/topK/max_rounds/cost_budget/timeout/prompt_version）落 DB 表；
+  管理端策略表单 + `POST /admin/tools/discovery/simulate` 模拟器（纯读）；
+  运行链 selector 经同一 policy loader 消费。**正是 #18「逻辑独立发现
+  能力、不建第二 Runtime」的形态**；
+- C 独立子图/ReAct Agent：延迟/预算/治理三重分裂，逼近红线，不推荐。
+
+### 落地顺序（B 拆两步）
+
+- **B1（零运行时风险）**：DiscoveryService 只读 + 策略表迁移 + 模拟器
+  端点与 /tools（或 /evaluations）Discovery 页块——纯管理端增量；
+- **B2**：selector 接同一 policy loader + 预算内多轮重新发现 + 费用闸
+  挂 LLM span（tool_selector.py:293-330 已有挂点）+ 多轮评测用例。
