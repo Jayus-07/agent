@@ -587,3 +587,48 @@ Discovery 增强）并要求持续推进；main 基线守卫修复已另开 PR #
 - ⬜ 健康监测/Discovery 增强（#16/#18，运行健康壳位解禁前置）
 - ⬜ 演示型壳位现状：/mcp 运行健康、/mcp 连接级版本时间线（治理配置
   版本已由 /releases 承载，连接级时间线仍待后端）、/tools AI 语义
+
+## Batch 5-3：连接健康巡检（2026-10-28，PR #118 待合并）
+
+分支 `feat/toolgov-health`（基于 ac789d6）；#115/#116/#117 已合并进
+main 并重建验证（迁移 117 生效、admin 容器归主栈）。
+
+### 后端（fdc38e9）
+
+- 迁移 118：`ai.mcp_health_events`（source=monitor|manual，7 天保留）
+  + 连接 `last_checked_at`/`probe_fail_count`；
+- `infra/mcp_registry/probe.py`：探活原语（http_api=HEAD 可达性、
+  streamable_http=握手+tools/list 只读），`/test` 委托同源；
+- `infra/mcp_registry/health.py`：巡检循环（scan 60s / 基础探活 300s ×
+  2^min(失败,4) 上限 ×16；成功恢复 connected 不动 enabled；事件裁剪；
+  `MCP_HEALTH_MONITOR=0` 关闭）；server startup 挂载（spawn_background_task）；
+- `GET /admin/mcp/health` 总览（租户隔离 + 退避/下次探活字段 + 每连接
+  最近 5 条事件）；`/test` 统一 `_record_probe_result`（状态+计数+事件）；
+- 迁移登记 CI 清单 + init_db（守卫 12 passed）。
+
+### 前端（c2f4d5e）
+
+- 「运行健康」壳位 → 真实数据区：巡检状态/退避说明/事件时间线
+  （monitor·manual 标注）/「立即探活」按钮；连接卡片补最近探活与
+  连续失败角标；故障模拟四按钮保持 `data-stub` 置灰（演练能力）。
+
+### 验证
+
+- `test_mcp_health_monitor.py` 4 passed：退避曲线断言、手工探活成功→
+  断线（计数 1）→恢复（清零）全链 + 事件时间线、巡检器 probe_once
+  失败/恢复（enabled 不动）、租户隔离；回归 admin_mcp 15 + e2e 探针/
+  导出 5 passed；
+- 前端 tsc 0 错误、vitest 83 文件 572 用例全绿（mcp 页壳位断言更新为
+  真实健康区断言）；
+- 容器级 UNVERIFIED（合并授权后 rebuild；迁移 118 已对本机库执行）。
+
+### 演示型壳位现状（更新）
+
+- ✅ 解禁：/mcp「运行健康」（本轮转真实）
+- ⬜ /mcp 连接抽屉「版本历史」（连接级配置时间线待后端）
+- ⬜ /tools「AI 语义」Tab（#19）
+- ⬜ 故障模拟四按钮（演练/评测能力，#16 深化）
+
+### 下一批剩余
+
+- Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
