@@ -267,3 +267,86 @@ GovernanceRuntime 执行期复核），动态 mcp.* 已有 DB 授权表。真实
 - 本批提交推送建 PR（待用户确认）→ CI → 合并授权。
 - Batch 2 剩余：以"销售数据 → 库存查询 → 补货分析"真实多工具路径做
   e2e（计划验收场景）；budgets 页加工具次数/并发约束展示（Batch 3）。
+
+## Batch 2 收尾：多工具真实路径 e2e（2026-10-27）
+
+PR #112 已合并（`4a7a0b4`）；`devctl.bat rebuild` 后 /health 报
+`applied_max = 116_capability_bundles.sql`、容器内 bundle_registry 符号
+核实——迁移 116 在共享栈生效。
+
+### 多工具 e2e（TestMultiToolReplenishmentPath，1 passed）
+
+计划验收场景 E08 的完整路径（真实 PG + mock REST server，agent 产品
+身份）：
+1. http_api 连接 + 三工具登记（销售 GET / 库存 GET / 补货 PUT·R2 写）
+2. 审核（R2 强制用户确认）→ 逐工具 grants 授权 → **能力包聚合三工具
+   并授权**（bundle → 动态成员 grants 自动补建）
+3. 任务执行：销售查询（42 件）→ 库存查询（3 件）→ 按差值计算补货量 →
+   补货写入（PUT，写操作强一致复核**放行**）→ 绕平台链直连 mock 读回，
+   确认数据真实落上游（非伪造成功）
+4. 撤销补货工具 grants → 写调用**立即被强一致复核拦截**（E06）
+
+### 顺带修复与验证中发现的治理行为
+
+- **HTTP method 白名单扩展 PUT**（补货场景）：specs / http_tool_client /
+  前端类型与表单选项三处同步；body_from 支持 POST/PUT。
+- 强一致复核的**租户隔离**得到实证：测试上下文租户与工具 grants 租户
+  不一致时写调用被拒（读操作走快照不受影响）——修正测试后放行。
+- `based_on_sold` 参数不在 invocation 模板/body_from 引用中 → 不出网
+  （参数走私防护实证）。
+- e2e 基建教训：幂等旁路 patch 的作用域必须覆盖全部请求执行期
+  （monkeypatch 而非 with 块）；`from __future__ import annotations`
+  下 FastAPI 端点的 Request 注解必须模块级导入。
+- 环境：Docker Desktop 中途重启导致一次 PG 间歇断连（测试 skip/500），
+  恢复后复跑通过；幂等键冲突（IDEMPOTENCY_CONFLICT）为治理门禁正确
+  行为，测试改用按操作唯一键。
+
+### 验证
+
+- `test_mcp_dynamic_e2e + test_admin_bundles_api + test_admin_mcp_api +
+  mcp_registry` → **92 passed**
+- 前端 tsc 通过（method 联合类型加 PUT）
+
+### Batch 2 状态：完成。下一步 Batch 3（预算策略工具约束 / Prompt 版本
+Discovery 入口 / 资产一致性扩展 / 发布记录联动）。
+
+## Batch 3 主体（2026-10-27）
+
+PR #113 已合并（`a655d2b`）。Batch 3 三项（发布记录联动经调研由既有
+prompt/lock 版本机制覆盖，不另建）：
+
+### 3-1 预算策略 × 工具执行约束
+
+- 后端：`GET /api/admin/tools/constraints`——每 capability 一行超时 /
+  单请求调用上限 / 并发隔离 / 重试 / 熔断 / 限流（ToolPolicy ∪
+  ToolSpec，静态策略表 + 动态审核 governance 统一视图，只读）。
+- 前端：`cost-governance/budgets/ToolConstraintsSection.tsx` 嵌入预算
+  治理页（静态/动态来源徽章；只读，约束修改走 /mcp 审核流）。
+
+### 3-2 Prompt 版本页工具治理入口
+
+- `promptGroups.ts` 新增「工具治理（发现与选择）」分组，纳入已注册的
+  `router.tool_selector`（FC 工具选择/发现 prompt）——复用既有版本
+  流水线（草稿→测试→评估→发布），不建第二套。
+- AI 语义建议/失败分析按计划属"AI 建议+人工审核"范畴，当前无独立
+  prompt 消费点（失败分析由 trace 差异+人工完成），按删除优先不预建。
+
+### 3-3 资产一致性检查扩展
+
+- `consistency.py` 新增第 8 段 `dynamic_registry`：
+  - 运行时快照派生失败清单（审核配置/调用定义非法）；
+  - bundle 引用未生效动态 capability（悬空授权）；
+  - 连接声明 Bearer 凭据但密文行缺失；
+  - invocation 合法性复用 validate_invocation 统一校验器。
+- DB 段 async 直连（报告端点 async 上下文），对账失败软失败不炸整份
+  报告。前端 consistency 页消费同一 report 结构，自动展示新段。
+
+### 验证
+
+- `test_consistency_dynamic` 4 passed（干净快照/派生失败/悬空引用/
+  DB 异常软失败）；`test_bare_prompt_collection` 21 passed（prompt
+  逐字守卫未破坏）；前端 tsc 通过、prompts config 测试 2 passed。
+
+### Batch 3 状态：主体完成。剩余（Batch 4 范畴）：配置导入导出与
+环境映射、健康检查与退避重连巡检、端到端 SSE 断线恢复联测、清理与
+交付整合。

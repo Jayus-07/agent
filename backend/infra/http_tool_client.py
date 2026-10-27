@@ -73,7 +73,7 @@ def invoke_http_tool(
     import httpx
 
     method = str((invocation or {}).get("method") or "").upper()
-    if method not in {"GET", "POST"}:
+    if method not in {"GET", "POST", "PUT"}:
         raise HttpToolError(f"HTTP 工具方法非法: {method!r}")
     args = dict(arguments or {})
     path = render_path(str(invocation.get("path") or ""), args)
@@ -88,7 +88,7 @@ def invoke_http_tool(
 
     json_body = None
     body_from = str(invocation.get("body_from") or "")
-    if method == "POST":
+    if method in ("POST", "PUT"):
         if body_from:
             if body_from not in args:
                 raise HttpToolError(f"body 参数缺失: {body_from}")

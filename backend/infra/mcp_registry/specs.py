@@ -94,8 +94,8 @@ _VALID_OPERATIONS = {item.value for item in Operation}
 _VALID_RISKS = {item.value for item in RiskLevel}
 _VALID_APPROVALS = {item.value for item in ApprovalPolicy}
 
-# HTTP API 工具调用定义的白名单（Batch 1 第一批）
-_VALID_HTTP_METHODS = {"GET", "POST"}
+# HTTP API 工具调用定义的白名单（Batch 1；PUT 为 Batch 2 补货场景扩展）
+_VALID_HTTP_METHODS = {"GET", "POST", "PUT"}
 _MAX_PATH_TEMPLATES = 8
 
 # Authorization 系列头由连接凭据统一注入，配置面不可覆盖（防提权/防凭证泄露）
@@ -167,8 +167,8 @@ def validate_invocation(invocation: dict | None,
 
     body_from = str(raw.get("body_from") or "")
     if body_from:
-        if method != "POST":
-            raise SpecDeriveError("invocation.body_from 仅 POST 支持")
+        if method not in ("POST", "PUT"):
+            raise SpecDeriveError("invocation.body_from 仅 POST/PUT 支持")
         if body_from not in declared:
             raise SpecDeriveError(
                 f"invocation.body_from 引用未声明参数: {body_from}")
