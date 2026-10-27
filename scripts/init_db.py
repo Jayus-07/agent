@@ -320,6 +320,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "116_capability_bundles.sql": "memory",
     # 治理配置发布/回滚（Batch 5-2）。
     "117_governance_releases.sql": "memory",
+    # 连接健康巡检（Batch 5-3）。
+    "118_mcp_health_monitor.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
