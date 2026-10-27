@@ -314,6 +314,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "113_security_events_admin_action.sql": "memory",
     # MCP 能力中心：连接/凭据/工具发现与审核/快照历史/产品授权。
     "114_mcp_capability_center.sql": "memory",
+    # HTTP API Tool：transport 放宽 + 工具调用定义列（Batch 1）。
+    "115_http_api_tools.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
