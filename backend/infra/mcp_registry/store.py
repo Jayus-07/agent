@@ -36,6 +36,7 @@ class McpConnectionRuntime:
     auth_type: str
     network_scope: str
     secret_cipher: str = ""  # '' = 无凭据；密文仅在调用点解密，不进日志
+    transport: str = "streamable_http"  # streamable_http | http_api
 
 
 @dataclass(frozen=True)
@@ -50,6 +51,9 @@ class McpToolRuntime:
     # 派生输入（描述/Schema/治理配置/示例）的稳定摘要——签名比较用，
     # 同名工具内容变化时让其他 worker 的派生缓存失效
     content_digest: str = ""
+    # HTTP API 工具的受控调用定义（method/path/query/headers/body_from）；
+    # MCP 工具为空 dict
+    invocation: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -84,7 +88,8 @@ class McpRegistrySnapshot:
 
 
 _SELECT_CONNECTIONS = """
-SELECT c.id, c.base_url, c.auth_type, c.network_scope, k.secret_cipher
+SELECT c.id, c.base_url, c.auth_type, c.network_scope, c.transport,
+       k.secret_cipher
 FROM ai.mcp_connections c
 LEFT JOIN ai.mcp_connection_credentials k ON k.connection_id = c.id
 WHERE c.enabled
@@ -92,7 +97,7 @@ WHERE c.enabled
 
 _SELECT_TOOLS = """
 SELECT t.id, t.connection_id, t.tool_name, t.capability_slug,
-       t.description, t.governance, t.examples, t.tenant_id,
+       t.description, t.governance, t.examples, t.tenant_id, t.invocation,
        s.input_schema, s.output_schema
 FROM ai.mcp_tools t
 LEFT JOIN LATERAL (
@@ -164,12 +169,14 @@ def _static_capability_conflicts(capabilities: list[str]) -> set[str]:
 
 
 def derived_content_digest(
-    description, input_schema, governance, examples,
+    description, input_schema, governance, examples, invocation=None,
 ) -> str:
-    """派生输入内容的稳定摘要（描述/Schema/治理/示例）——快照签名比较用。
+    """派生输入内容的稳定摘要（描述/Schema/治理/示例/调用定义）——快照
+    签名比较用。
 
     与 spec_lib.content_hash（发现内容，绑定审核）语义不同：本摘要覆盖
     审核后的治理字段，用于让"同名工具内容变化"在其他 worker 触发失效。
+    HTTP API 工具的 invocation 参与（连接方法变更同样触发失效）。
     """
     payload = json.dumps(
         {
@@ -177,6 +184,7 @@ def derived_content_digest(
             "input_schema": input_schema or {},
             "governance": governance or {},
             "examples": examples or [],
+            "invocation": invocation or {},
         },
         sort_keys=True, ensure_ascii=False, separators=(",", ":"),
         default=str,
@@ -221,6 +229,7 @@ async def load_snapshot() -> McpRegistrySnapshot:
             auth_type=str(row["auth_type"] or "none"),
             network_scope=str(row["network_scope"] or "public"),
             secret_cipher=str(row["secret_cipher"] or ""),
+            transport=str(row["transport"] or "streamable_http"),
         )
 
     tools: dict[str, McpToolRuntime] = {}
@@ -253,7 +262,12 @@ async def load_snapshot() -> McpRegistrySnapshot:
         if conn is None:
             errors.append((capability, "所属连接未启用或不存在"))
             continue
+        invocation = dict(row["invocation"] or {})
         try:
+            # HTTP API 工具：调用定义必须通过受控校验（模板参数均已声明）
+            if conn.transport == "http_api":
+                invocation = spec_lib.validate_invocation(
+                    invocation, row["input_schema"])
             spec = spec_lib.derive_tool_spec(
                 capability,
                 description=str(row["description"] or ""),
@@ -280,7 +294,9 @@ async def load_snapshot() -> McpRegistrySnapshot:
             network_scope=conn.network_scope,
             content_digest=derived_content_digest(
                 row["description"], row["input_schema"],
-                row["governance"], row["examples"]),
+                row["governance"], row["examples"],
+                invocation=invocation if conn.transport == "http_api" else None),
+            invocation=invocation if conn.transport == "http_api" else {},
         )
         decls[capability] = decl
 

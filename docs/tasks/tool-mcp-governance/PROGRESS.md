@@ -119,3 +119,57 @@ tests/rag/test_pgvector_store.py tests/mcp_registry/` → **126 passed**。
 - PR #108 合并待用户授权；合并后开始 Batch 1 主体（连接中心 + Tool 治理）。
 - main 既有故障另立任务：Evaluation workflow（ragas 缺失 / PG service）、
   frontend-admin rbac 测试（:3000）。
+
+## Batch 1 主体：HTTP API Tool 统一接入（2026-10-27）
+
+PR #108 已合并（`64091d6`）。Batch 1 第一批：外部 REST API 以"HTTP API
+连接 + 受控调用定义"接入既有 ai.mcp_* 注册表——**同一张注册表、同一套
+审核/授权/漂移/CAS/强一致撤权链，零新 Runtime**。
+
+### 后端（生产代码）
+
+- **迁移 115**：`mcp_connections.transport` 放宽为
+  `streamable_http | http_api`；`mcp_tools.invocation` JSONB（调用定义）+
+  快照表同列（已对本机 5433 库执行并验证）。
+- **specs.validate_invocation()**：method ∈ {GET, POST}；path 必须相对路径；
+  path/query/headers 的 `{name}` 模板只能引用 input_schema 已声明参数；
+  禁配 Authorization/Cookie 头（凭据统一注入）；POST 可 body_from。
+- **specs.content_hash()** 纳入 invocation——调用目标变化 = 契约漂移，
+  复用既有"漂移 → 重审"机制；**CAS 与写操作强一致撤权自动覆盖 HTTP 工具**
+  （同一 review/invoke 链）。
+- **infra/http_tool_client.py**：httpx trust_env=False 直连（与 mcp_client
+  同模式，防系统代理架空 SSRF）；path 逐段 URL 编码防注入；模板参数缺失
+  显式报错；未引用参数整体入 POST body。
+- **skill.py**：按 `conn.transport` 分流 MCP/HTTP 执行；强一致复核与
+  SSRF 兜底对两类工具同等生效。
+- **admin_mcp.py**：连接创建支持 transport；新增
+  `POST /connections/{id}/tools/manual`（手工登记，pending 起步）与
+  `PUT /tools/{id}/invocation`（编辑产生新快照版本，approved 即漂移）；
+  transport 不匹配 / slug 冲突 / 非法模板全部 fail-fast。
+
+### 前端（frontend-admin）
+
+- 连接表单：新增连接类型选择（MCP 自动发现 / HTTP API 手工登记），编辑时
+  类型锁定；http_api 连接的操作按钮从"发现"切换为"登记工具"。
+- `HttpToolForm`：登记/编辑表单（method/path/query/headers/body_from/
+  JSON Schema），编辑已批准工具时明确提示"保存将漂移需重审"。
+- `/tools` 统一目录：外部动态工具段增加 MCP/HTTP 徽章区分（HTTP 徽章
+  tooltip 展示 method+path），段标题同步。
+
+### 验证（本机真实 PG:5433 + FastAPI/uvicorn mock server）
+
+- `pytest tests/test_mcp_dynamic_e2e.py tests/api/test_admin_mcp_api.py
+  tests/mcp_registry/` → **76 passed**（含新增 HTTP 工具全链路 E2E：
+  连接 → 登记 → transport 隔离 → 非法模板拒绝 → slug 冲突 → 审核 →
+  授权 → 真实 HTTP 出网调用 → pending 不可调用 → 编辑漂移退出运行时 →
+  重审恢复 → invocation 快照版本可追溯）
+- frontend-admin：`tsc --noEmit` 通过；vitest 547 passed / 6 failed
+  ——rbac（:3000）、RoleGate（基点漂移）为既有故障；surface /
+  design-tokens 单跑即过（全量并发环境抖动），与本次改动无关。
+
+### 待办
+
+- 提交推送 / PR 待用户确认；`devctl.bat rebuild` 容器验证在合并后执行。
+- Batch 1 剩余（后续提交）：OpenAPI 可选导入、HTTP 工具连接测试适配
+  （当前 test 端点走 MCP 握手，http_api 需探活语义）、详情抽屉的
+  invocation 版本对比视图。

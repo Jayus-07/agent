@@ -735,7 +735,7 @@ export default function ToolsPage() {
 
           {mcpTools.length > 0 || mcpError ? (
             <AssetSection
-              title="外部 MCP 工具（动态注册）"
+              title="外部动态工具（MCP 发现 + HTTP API 登记）"
               meta={`${mcpTools.length} 个 · 数据库事实源，管理入口在 MCP 能力中心`}
               bodyClassName="p-0"
             >
@@ -759,9 +759,17 @@ export default function ToolsPage() {
                     <tbody>
                       {mcpTools.map((t) => {
                         const meta = MCP_STATUS_META[t.status] ?? { label: t.status, cls: 'bg-slate-100 text-slate-600' }
+                        const isHttp = t.conn_transport === 'http_api'
                         return (
                           <tr key={t.id} className="border-b border-border-subtle">
                             <td className="px-4 py-2 font-mono">
+                              <span className={`mr-1.5 rounded px-1 py-0.5 text-[10px] font-medium align-middle ${
+                                isHttp ? 'bg-sky-100 text-sky-700' : 'bg-violet-100 text-violet-700'
+                              }`} title={isHttp
+                                ? `HTTP API 工具：${t.invocation?.method ?? ''} ${t.invocation?.path ?? ''}`
+                                : 'MCP 工具（Streamable HTTP 发现）'}>
+                                {isHttp ? 'HTTP' : 'MCP'}
+                              </span>
                               {t.capability}
                               {t.schema_changed && (
                                 <span className="ml-1 rounded bg-red-100 px-1 text-[10px] text-red-700" title="上游 Schema 已变化，需重新审核">漂移</span>

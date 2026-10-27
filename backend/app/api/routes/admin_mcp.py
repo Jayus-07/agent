@@ -125,6 +125,7 @@ class _MutationConflict(RuntimeError):
 class ConnectionCreate(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     base_url: str = Field(min_length=1, max_length=512)
+    transport: Literal["streamable_http", "http_api"] = "streamable_http"
     auth_type: Literal["none", "static_bearer"] = "none"
     secret: str = Field(default="", max_length=4096)  # 空串=不配置凭据
     network_scope: Literal["public", "private"] = "public"
@@ -158,6 +159,25 @@ class GrantRequest(BaseModel):
 class TestInvokeRequest(BaseModel):
     arguments: dict[str, Any] = Field(default_factory=dict)
     product_key: Literal["agent", "customer_service", "internal"] = "internal"
+
+
+class HttpToolRegisterRequest(BaseModel):
+    """HTTP API 工具手工登记（http_api 连接专用；MCP 连接走发现）。
+
+    tool_name/description/input_schema/invocation 全部是不可信输入：
+    content_hash 绑定后由审核放行，capability_slug 平台归一。
+    """
+    tool_name: str = Field(min_length=1, max_length=64)
+    description: str = Field(default="", max_length=500)
+    invocation: dict[str, Any] = Field(default_factory=dict)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
+
+
+class HttpToolInvocationUpdateRequest(BaseModel):
+    """HTTP API 工具调用定义编辑：产生新快照版本；approved 工具即漂移。"""
+    description: str = Field(default="", max_length=500)
+    invocation: dict[str, Any] = Field(default_factory=dict)
+    input_schema: dict[str, Any] = Field(default_factory=dict)
 
 
 # ═══════════════════════════════════════════════════
@@ -371,18 +391,21 @@ async def create_connection(request: Request, body: ConnectionCreate):
         _execute(
             """
             INSERT INTO ai.mcp_connections
-                (id, name, base_url, auth_type, network_scope, enabled,
-                 status, tenant_id, created_by, updated_by)
-            VALUES (%(id)s, %(name)s, %(url)s, %(auth)s, %(scope)s, %(enabled)s,
-                    'never_connected', %(tenant)s, %(actor)s, %(actor)s)
+                (id, name, base_url, transport, auth_type, network_scope,
+                 enabled, status, tenant_id, created_by, updated_by)
+            VALUES (%(id)s, %(name)s, %(url)s, %(transport)s, %(auth)s,
+                    %(scope)s, %(enabled)s, 'never_connected',
+                    %(tenant)s, %(actor)s, %(actor)s)
             """,
             {"id": conn_id, "name": body.name, "url": body.base_url,
-             "auth": body.auth_type, "scope": body.network_scope,
+             "transport": body.transport, "auth": body.auth_type,
+             "scope": body.network_scope,
              "enabled": body.enabled, "tenant": tenant, "actor": actor})
         if body.auth_type == "static_bearer" and body.secret:
             _upsert_credential(conn_id, body.secret, actor)
         _audit("mcp_connection_create", {
             "connection_id": conn_id, "name": body.name,
+            "transport": body.transport,
             "network_scope": body.network_scope,
             "credential_configured": bool(body.secret),
         }, user_id=actor, tenant_id=tenant)
@@ -558,6 +581,165 @@ async def test_connection(request: Request, conn_id: str):
             "ok": False, "elapsed_ms": elapsed_ms,
             "error_class": error_class, "error": str(exc)[:500],
         }
+
+
+@router.post("/connections/{conn_id}/tools/manual")
+async def register_http_tool(request: Request, conn_id: str,
+                             body: HttpToolRegisterRequest):
+    """手工登记 HTTP API 工具（仅 http_api 连接；MCP 连接走发现）。
+
+    登记即产生 pending 工具（不可执行）；invocation 经受控校验并计入
+    content_hash，审核通过后才进入运行时快照。
+    """
+    from backend.infra.mcp_registry import specs as spec_lib
+
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+    conn = await asyncio.to_thread(_load_connection, conn_id, tenant)
+    if conn is None:
+        return _not_found("连接不存在")
+    if conn["transport"] != "http_api":
+        return _bad_request(
+            "手工登记仅支持 HTTP API 连接；MCP 连接请使用发现",
+            code="TRANSPORT_MISMATCH")
+    try:
+        input_schema = spec_lib.normalize_input_schema(body.input_schema)
+        invocation = spec_lib.validate_invocation(body.invocation, input_schema)
+    except spec_lib.SpecDeriveError as exc:
+        return _bad_request(f"调用定义非法: {exc}")
+
+    slug = spec_lib.capability_slug(conn["name"], body.tool_name)
+
+    def _write() -> dict[str, Any]:
+        with _db() as db:
+            with db.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM ai.mcp_tools WHERE capability_slug = %(slug)s",
+                    {"slug": slug})
+                if cur.fetchone():
+                    raise _MutationConflict(f"capability 已存在: mcp.{slug}")
+                cur.execute(
+                    """
+                    INSERT INTO ai.mcp_tools
+                        (connection_id, tool_name, capability_slug,
+                         description, status, content_hash, invocation,
+                         last_seen_version, tenant_id)
+                    VALUES (%(cid)s, %(tool)s, %(slug)s, %(desc)s,
+                            'pending', %(digest)s, %(inv)s, 1, %(tenant)s)
+                    RETURNING id
+                    """,
+                    {"cid": conn_id, "tool": body.tool_name, "slug": slug,
+                     "desc": body.description[:spec_lib.MAX_DESCRIPTION_CHARS],
+                     "digest": spec_lib.content_hash(
+                         body.description, input_schema, invocation=invocation),
+                     "inv": PgJson(invocation), "tenant": tenant})
+                tool_row_id = cur.fetchone()[0]
+                cur.execute(
+                    """
+                    INSERT INTO ai.mcp_tool_snapshots
+                        (tool_id, discovery_version, content_hash,
+                         input_schema, description, invocation)
+                    VALUES (%(tid)s, 1, %(digest)s, %(schema)s, %(desc)s,
+                            %(inv)s)
+                    """,
+                    {"tid": tool_row_id, "digest": spec_lib.content_hash(
+                        body.description, input_schema, invocation=invocation),
+                     "schema": PgJson(input_schema),
+                     "desc": body.description,
+                     "inv": PgJson(invocation)})
+        _audit("mcp_http_tool_register", {
+            "connection_id": conn_id, "tool_id": tool_row_id,
+            "tool_name": body.tool_name, "capability": f"mcp.{slug}",
+            "method": invocation.get("method"), "path": invocation.get("path"),
+        }, user_id=actor, tenant_id=tenant)
+        return {"tool_id": tool_row_id, "capability": f"mcp.{slug}",
+                "status": "pending"}
+
+    try:
+        result = await asyncio.to_thread(
+            run_governance_mutation, request, operator,
+            "mcp_http_tool_register",
+            {"connection_id": conn_id, "tool_name": body.tool_name}, _write)
+    except _MutationConflict as exc:
+        return _conflict(str(exc))
+    await _refresh_runtime()
+    return result
+
+
+@router.put("/tools/{tool_id}/invocation")
+async def update_http_tool_invocation(request: Request, tool_id: int,
+                                      body: HttpToolInvocationUpdateRequest):
+    """编辑 HTTP API 工具调用定义：产生新快照版本。
+
+    pending 工具直接更新待审内容；approved 工具置 schema_changed=true
+    （漂移，立即退出运行时，重审后恢复）——调用目标变化等同契约变化。
+    """
+    from backend.infra.mcp_registry import specs as spec_lib
+
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+    row = await asyncio.to_thread(_load_tool, tool_id, tenant)
+    if row is None:
+        return _not_found("工具不存在")
+    if row.get("conn_transport") != "http_api":
+        return _bad_request(
+            "仅 HTTP API 工具支持编辑调用定义", code="TRANSPORT_MISMATCH")
+    if row["status"] == "retired":
+        return _conflict("上游已消失（retired）的工具不能编辑")
+    description = body.description or row["description"]
+    try:
+        input_schema = spec_lib.normalize_input_schema(body.input_schema)
+        invocation = spec_lib.validate_invocation(body.invocation, input_schema)
+    except spec_lib.SpecDeriveError as exc:
+        return _bad_request(f"调用定义非法: {exc}")
+    digest = spec_lib.content_hash(description, input_schema, invocation=invocation)
+    next_version = int(row["last_seen_version"] or 0) + 1
+
+    def _write() -> dict[str, Any]:
+        _execute(
+            """
+            UPDATE ai.mcp_tools
+            SET description = %(desc)s, invocation = %(inv)s,
+                content_hash = %(digest)s,
+                schema_changed = (status = 'approved'),
+                last_seen_version = %(version)s, updated_at = now()
+            WHERE id = %(tid)s
+            """,
+            {"desc": description[:spec_lib.MAX_DESCRIPTION_CHARS],
+             "inv": PgJson(invocation), "digest": digest,
+             "version": next_version, "tid": tool_id})
+        _execute(
+            """
+            INSERT INTO ai.mcp_tool_snapshots
+                (tool_id, discovery_version, content_hash, input_schema,
+                 description, invocation)
+            VALUES (%(tid)s, %(version)s, %(digest)s, %(schema)s, %(desc)s,
+                    %(inv)s)
+            """,
+            {"tid": tool_id, "version": next_version, "digest": digest,
+             "schema": PgJson(input_schema),
+             "desc": description[:spec_lib.MAX_DESCRIPTION_CHARS],
+             "inv": PgJson(invocation)})
+        _audit("mcp_http_tool_invocation_update", {
+            "tool_id": tool_id, "capability": f"mcp.{row['capability_slug']}",
+            "version": next_version,
+            "drift": row["status"] == "approved",
+        }, user_id=actor, tenant_id=tenant)
+        return {"tool_id": tool_id, "content_hash": digest,
+                "version": next_version,
+                "schema_changed": row["status"] == "approved"}
+
+    try:
+        result = await asyncio.to_thread(
+            run_governance_mutation, request, operator,
+            "mcp_http_tool_invocation_update",
+            {"tool_id": tool_id}, _write)
+    except _MutationConflict as exc:
+        return _conflict(str(exc))
+    await _refresh_runtime()
+    return result
 
 
 @router.post("/connections/{conn_id}/discover")
@@ -787,7 +969,8 @@ async def _set_connection_enabled(request: Request, conn_id: str,
 # ═══════════════════════════════════════════════════
 
 _TOOL_SELECT = """
-    SELECT t.*, c.name AS connection_name, c.enabled AS conn_enabled
+    SELECT t.*, c.name AS connection_name, c.enabled AS conn_enabled,
+           c.transport AS conn_transport
     FROM ai.mcp_tools t
     JOIN ai.mcp_connections c ON c.id = t.connection_id
 """
@@ -805,6 +988,7 @@ def _tool_view(row: dict) -> dict:
         "id": row["id"],
         "connection_id": row["connection_id"],
         "connection_name": row.get("connection_name"),
+        "conn_transport": row.get("conn_transport") or "streamable_http",
         "tool_name": row["tool_name"],
         "capability": f"mcp.{row['capability_slug']}",
         "capability_slug": row["capability_slug"],
@@ -814,6 +998,7 @@ def _tool_view(row: dict) -> dict:
         "approved_hash": row["approved_hash"],
         "schema_changed": bool(row["schema_changed"]),
         "governance": row.get("governance") or {},
+        "invocation": row.get("invocation") or {},
         "examples": row.get("examples") or [],
         "review_notes": row["review_notes"],
         "reviewed_by": row["reviewed_by"],
@@ -974,6 +1159,10 @@ async def review_tool(request: Request, tool_id: int, body: ReviewRequest):
             spec_lib.derive_capability_decl(
                 capability, body.description or row["description"],
                 schema, body.governance, body.examples)
+            if row.get("conn_transport") == "http_api":
+                # HTTP API 工具：审核绑定时刻再校验一次调用定义
+                spec_lib.validate_invocation(
+                    row.get("invocation") or {}, schema)
         except spec_lib.SpecDeriveError as exc:
             return _bad_request(f"治理配置非法: {exc}")
 

@@ -68,6 +68,7 @@ export interface McpTool {
   id: number
   connection_id: string
   connection_name?: string
+  conn_transport?: 'streamable_http' | 'http_api'
   tool_name: string
   capability: string
   capability_slug: string
@@ -77,6 +78,7 @@ export interface McpTool {
   approved_hash: string
   schema_changed: boolean
   governance: McpGovernance
+  invocation?: HttpToolInvocation
   examples: string[]
   review_notes: string
   reviewed_by: string
@@ -86,6 +88,15 @@ export interface McpTool {
   updated_at: string | null
   grants?: McpToolGrant[]
   snapshots?: McpToolSnapshot[]
+}
+
+/** HTTP API 工具的受控调用定义（method/path/query/headers/body_from） */
+export interface HttpToolInvocation {
+  method: 'GET' | 'POST'
+  path: string
+  query?: Record<string, string>
+  headers?: Record<string, string>
+  body_from?: string
 }
 
 export interface McpOverview {
@@ -167,6 +178,7 @@ export async function getMcpToolDetail(id: number): Promise<McpTool> {
 export interface ConnectionInput {
   name: string
   base_url: string
+  transport?: 'streamable_http' | 'http_api'
   auth_type: 'none' | 'static_bearer'
   secret?: string
   network_scope: 'public' | 'private'
@@ -215,8 +227,7 @@ export async function testMcpConnection(id: string): Promise<ConnectionTestResul
 export async function discoverMcpTools(id: string): Promise<DiscoverResult> {
   return mutationRequest<DiscoverResult>(
     `/api/admin/mcp/connections/${id}/discover`,
-    { operation: 'mcp_connection_discover', method: 'POST', body: {} },
-  )
+    { operation: 'mcp_connection_discover', method: 'POST', body: {} },  )
 }
 
 export async function setMcpConnectionEnabled(id: string, enabled: boolean) {
@@ -233,6 +244,33 @@ export interface ReviewInput {
   governance?: McpGovernance
   examples?: string[]
   notes?: string
+}
+
+export interface HttpToolRegisterInput {
+  tool_name: string
+  description: string
+  invocation: HttpToolInvocation
+  input_schema: Record<string, unknown>
+}
+
+export async function registerHttpTool(connId: string,
+                                       input: HttpToolRegisterInput) {
+  return mutationRequest<{ tool_id: number; capability: string; status: string }>(
+    `/api/admin/mcp/connections/${connId}/tools/manual`,
+    { operation: 'mcp_http_tool_register', method: 'POST', body: input },
+  )
+}
+
+export async function updateHttpToolInvocation(
+  toolId: number,
+  input: { description: string; invocation: HttpToolInvocation;
+           input_schema: Record<string, unknown> },
+) {
+  return mutationRequest<{ tool_id: number; content_hash: string;
+                           version: number; schema_changed: boolean }>(
+    `/api/admin/mcp/tools/${toolId}/invocation`,
+    { operation: 'mcp_http_tool_invocation_update', method: 'PUT', body: input },
+  )
 }
 
 export async function reviewMcpTool(toolId: number, input: ReviewInput) {
