@@ -309,3 +309,44 @@ PR #112 已合并（`4a7a0b4`）；`devctl.bat rebuild` 后 /health 报
 
 ### Batch 2 状态：完成。下一步 Batch 3（预算策略工具约束 / Prompt 版本
 Discovery 入口 / 资产一致性扩展 / 发布记录联动）。
+
+## Batch 3 主体（2026-10-27）
+
+PR #113 已合并（`a655d2b`）。Batch 3 三项（发布记录联动经调研由既有
+prompt/lock 版本机制覆盖，不另建）：
+
+### 3-1 预算策略 × 工具执行约束
+
+- 后端：`GET /api/admin/tools/constraints`——每 capability 一行超时 /
+  单请求调用上限 / 并发隔离 / 重试 / 熔断 / 限流（ToolPolicy ∪
+  ToolSpec，静态策略表 + 动态审核 governance 统一视图，只读）。
+- 前端：`cost-governance/budgets/ToolConstraintsSection.tsx` 嵌入预算
+  治理页（静态/动态来源徽章；只读，约束修改走 /mcp 审核流）。
+
+### 3-2 Prompt 版本页工具治理入口
+
+- `promptGroups.ts` 新增「工具治理（发现与选择）」分组，纳入已注册的
+  `router.tool_selector`（FC 工具选择/发现 prompt）——复用既有版本
+  流水线（草稿→测试→评估→发布），不建第二套。
+- AI 语义建议/失败分析按计划属"AI 建议+人工审核"范畴，当前无独立
+  prompt 消费点（失败分析由 trace 差异+人工完成），按删除优先不预建。
+
+### 3-3 资产一致性检查扩展
+
+- `consistency.py` 新增第 8 段 `dynamic_registry`：
+  - 运行时快照派生失败清单（审核配置/调用定义非法）；
+  - bundle 引用未生效动态 capability（悬空授权）；
+  - 连接声明 Bearer 凭据但密文行缺失；
+  - invocation 合法性复用 validate_invocation 统一校验器。
+- DB 段 async 直连（报告端点 async 上下文），对账失败软失败不炸整份
+  报告。前端 consistency 页消费同一 report 结构，自动展示新段。
+
+### 验证
+
+- `test_consistency_dynamic` 4 passed（干净快照/派生失败/悬空引用/
+  DB 异常软失败）；`test_bare_prompt_collection` 21 passed（prompt
+  逐字守卫未破坏）；前端 tsc 通过、prompts config 测试 2 passed。
+
+### Batch 3 状态：主体完成。剩余（Batch 4 范畴）：配置导入导出与
+环境映射、健康检查与退避重连巡检、端到端 SSE 断线恢复联测、清理与
+交付整合。
