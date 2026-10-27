@@ -278,6 +278,7 @@ _CONNECTION_SELECT = """
            c.network_scope, c.enabled, c.status, c.last_error,
            c.last_synced_at, c.discovery_version, c.tenant_id,
            c.created_by, c.updated_by, c.updated_at,
+           c.last_checked_at, c.probe_fail_count,
            k.secret_fingerprint, k.secret_last4, k.secret_version
     FROM ai.mcp_connections c
     LEFT JOIN ai.mcp_connection_credentials k ON k.connection_id = c.id
@@ -307,6 +308,9 @@ def _connection_view(row: dict) -> dict:
         "last_synced_at": row["last_synced_at"].isoformat()
         if row.get("last_synced_at") else None,
         "discovery_version": row["discovery_version"],
+        "last_checked_at": row["last_checked_at"].isoformat()
+        if row.get("last_checked_at") else None,
+        "probe_fail_count": int(row.get("probe_fail_count") or 0),
         "credential": {
             "configured": bool(row.get("secret_fingerprint")),
             "fingerprint": row.get("secret_fingerprint") or "",
@@ -333,9 +337,9 @@ def _connection_secret(conn_id: str) -> str:
 
 
 def _conn_headers(auth_type: str, secret: str) -> dict[str, str] | None:
-    if auth_type == "static_bearer" and secret:
-        return {"Authorization": f"Bearer {secret}"}
-    return None
+    from backend.infra.mcp_registry.probe import conn_headers
+
+    return conn_headers(auth_type, secret)
 
 
 async def _refresh_runtime() -> None:
@@ -356,26 +360,37 @@ def _mark_connection_status(conn_id: str, status: str, error: str = "") -> None:
     )
 
 
+def _record_probe_result(conn_id: str, tenant_id: str, ok: bool, error: str,
+                         elapsed_ms: int, source: str) -> None:
+    """探活结果统一落库（/test 手工探活与后台巡检同语义，决策 #16）：
+    状态 + last_checked_at + 失败计数（退避依据）+ 健康事件。"""
+    fail_count = 0
+    if not ok:
+        row = _query_one(
+            "SELECT probe_fail_count FROM ai.mcp_connections WHERE id = %(cid)s",
+            {"cid": conn_id})
+        fail_count = int((row or {}).get("probe_fail_count") or 0) + 1
+    _execute(
+        "UPDATE ai.mcp_connections SET status = %(status)s, "
+        "last_error = %(err)s, last_checked_at = now(), "
+        "probe_fail_count = %(fails)s, updated_at = now() WHERE id = %(cid)s",
+        {"status": "connected" if ok else "error", "err": error[:1000],
+         "fails": 0 if ok else fail_count, "cid": conn_id})
+    _execute(
+        "INSERT INTO ai.mcp_health_events "
+        "(connection_id, tenant_id, ok, error, elapsed_ms, source) "
+        "VALUES (%(cid)s, %(tenant)s, %(ok)s, %(err)s, %(ms)s, %(src)s)",
+        {"cid": conn_id, "tenant": tenant_id, "ok": ok,
+         "err": error[:1000], "ms": int(elapsed_ms), "src": source})
+
+
 def _probe_http_api(
     base_url: str, headers: dict[str, str] | None,
 ) -> tuple[int, bool, str]:
-    """HTTP API 连接探活：HEAD base_url，验证网络/TLS 可达性。
+    """HTTP API 连接探活（委托 infra.probe 规范实现，巡检器同源）。"""
+    from backend.infra.mcp_registry.probe import probe_http_api
 
-    任何 HTTP 响应（含 404/405）都算可达——根路径不要求有路由；
-    连接/超时/TLS 失败才算不可达。trust_env=False 直连，与调用链一致。
-    """
-    import httpx
-
-    started = time.perf_counter()
-    try:
-        with httpx.Client(trust_env=False, timeout=10.0) as client:
-            response = client.head(str(base_url or ""), headers=headers or None,
-                                   follow_redirects=True)
-        elapsed = int((time.perf_counter() - started) * 1000)
-        return elapsed, True, ""
-    except Exception as exc:  # noqa: BLE001 — 探活收口全部网络异常
-        elapsed = int((time.perf_counter() - started) * 1000)
-        return elapsed, False, f"{type(exc).__name__}: {exc}"
+    return probe_http_api(base_url, headers)
 
 
 def _classify_mcp_error(exc: Exception) -> str:
@@ -658,7 +673,8 @@ async def test_connection(request: Request, conn_id: str):
         elapsed_ms, ok, error = await asyncio.to_thread(
             _probe_http_api, row["base_url"], headers)
         if ok:
-            await asyncio.to_thread(_mark_connection_status, conn_id, "connected")
+            await asyncio.to_thread(_record_probe_result, conn_id, tenant,
+                                    True, "", elapsed_ms, "manual")
             await _refresh_runtime()
             _audit("mcp_connection_test", {
                 "connection_id": conn_id, "ok": True,
@@ -666,8 +682,8 @@ async def test_connection(request: Request, conn_id: str):
             }, user_id=actor, tenant_id=tenant)
             return {"ok": True, "elapsed_ms": elapsed_ms,
                     "transport": "http_api"}
-        await asyncio.to_thread(
-            _mark_connection_status, conn_id, "error", error)
+        await asyncio.to_thread(_record_probe_result, conn_id, tenant,
+                                False, error, elapsed_ms, "manual")
         _audit("mcp_connection_test", {
             "connection_id": conn_id, "ok": False,
             "elapsed_ms": elapsed_ms, "transport": "http_api",
@@ -680,7 +696,8 @@ async def test_connection(request: Request, conn_id: str):
         tools = await asyncio.to_thread(
             mcp_list_tools, row["base_url"], timeout=15.0, headers=headers)
         elapsed_ms = int((time.perf_counter() - started) * 1000)
-        await asyncio.to_thread(_mark_connection_status, conn_id, "connected")
+        await asyncio.to_thread(_record_probe_result, conn_id, tenant,
+                                True, "", elapsed_ms, "manual")
         await _refresh_runtime()
         _audit("mcp_connection_test", {
             "connection_id": conn_id, "ok": True, "elapsed_ms": elapsed_ms,
@@ -693,8 +710,8 @@ async def test_connection(request: Request, conn_id: str):
     except Exception as exc:  # noqa: BLE001 — 测试端点收口全部异常
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         error_class = _classify_mcp_error(exc)
-        await asyncio.to_thread(
-            _mark_connection_status, conn_id, "error", str(exc))
+        await asyncio.to_thread(_record_probe_result, conn_id, tenant,
+                                False, str(exc), elapsed_ms, "manual")
         _audit("mcp_connection_test", {
             "connection_id": conn_id, "ok": False, "elapsed_ms": elapsed_ms,
             "error_class": error_class,
@@ -1599,6 +1616,76 @@ def _export_payload(tenant: str) -> dict[str, Any]:
         "redacted_connections": redacted_connections,
         "rejected_connections": rejected_connections,
     }
+
+
+@router.get("/health")
+async def health_overview(request: Request):
+    """连接健康总览（决策 #16，Batch 5-3）：巡检状态 + 退避 + 最近事件。
+
+    只读聚合；探活节奏见 infra/mcp_registry/health.py（基础周期 ×
+    2^min(失败次数,4)，上限 ×16）。影响工具按连接从 /tools 列表过滤呈现。
+    """
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+
+    def _load() -> dict[str, Any]:
+        from backend.infra.mcp_registry.health import backoff_seconds
+
+        conns = _query_all(
+            "SELECT c.id, c.name, c.transport, c.status, c.network_scope, "
+            "       c.enabled, c.last_error, c.last_checked_at, "
+            "       c.probe_fail_count, "
+            "       (SELECT count(*) FROM ai.mcp_tools t "
+            "         WHERE t.connection_id = c.id) AS tool_count, "
+            "       (SELECT count(*) FROM ai.mcp_tools t "
+            "         WHERE t.connection_id = c.id AND t.status = 'approved') "
+            "         AS approved_count "
+            "FROM ai.mcp_connections c "
+            "WHERE c.enabled = true AND c.tenant_id = %(tenant)s "
+            "ORDER BY c.name", {"tenant": tenant})
+        conn_ids = [str(c["id"]) for c in conns]
+        events_by_conn: dict[str, list[dict[str, Any]]] = {}
+        if conn_ids:
+            for e in _query_all(
+                    "SELECT * FROM ("
+                    "  SELECT e.id, e.connection_id, e.ok, e.error, "
+                    "         e.elapsed_ms, e.source, e.created_at, "
+                    "         row_number() OVER (PARTITION BY e.connection_id "
+                    "           ORDER BY e.created_at DESC) AS rn "
+                    "  FROM ai.mcp_health_events e "
+                    "  WHERE e.connection_id = ANY(%(ids)s)"
+                    ") t WHERE t.rn <= 5 "
+                    "ORDER BY t.connection_id, t.created_at DESC",
+                    {"ids": conn_ids}):
+                events_by_conn.setdefault(str(e["connection_id"]), []).append({
+                    "ok": e["ok"], "error": e["error"],
+                    "elapsed_ms": e["elapsed_ms"], "source": e["source"],
+                    "created_at": e["created_at"].isoformat(),
+                })
+        views = []
+        for c in conns:
+            backoff = backoff_seconds(int(c["probe_fail_count"] or 0))
+            last_epoch = (
+                c["last_checked_at"].timestamp() if c["last_checked_at"] else 0)
+            views.append({
+                "id": c["id"], "name": c["name"], "transport": c["transport"],
+                "status": c["status"], "network_scope": c["network_scope"],
+                "last_error": c["last_error"] or "",
+                "last_checked_at": (
+                    c["last_checked_at"].isoformat()
+                    if c["last_checked_at"] else None),
+                "probe_fail_count": int(c["probe_fail_count"] or 0),
+                "probe_interval_seconds": int(backoff),
+                "next_probe_in_seconds": max(
+                    0, int(backoff - (time.time() - last_epoch))
+                ) if last_epoch else 0,
+                "tool_count": int(c["tool_count"]),
+                "approved_count": int(c["approved_count"]),
+                "recent_events": events_by_conn.get(str(c["id"]), []),
+            })
+        return {"connections": views, "probe_interval_seconds": 300}
+
+    return await asyncio.to_thread(_load)
 
 
 @router.get("/export")

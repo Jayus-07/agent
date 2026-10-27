@@ -188,6 +188,7 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/115_http_api_tools.sql",
     "backend/sql/migrations/116_capability_bundles.sql",
     "backend/sql/migrations/117_governance_releases.sql",
+    "backend/sql/migrations/118_mcp_health_monitor.sql",
 })
 
 

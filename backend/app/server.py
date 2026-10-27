@@ -433,6 +433,20 @@ async def start_llm_registry_refresh():
 
 
 @app.on_event("startup")
+async def start_mcp_health_monitor():
+    """连接健康巡检（Batch 5-3，决策 #16）：非副作用探活 + 断线退避重连。
+
+    MCP_HEALTH_MONITOR=0 可关闭（默认开启）。失败不阻塞启动；探活语义
+    与管理端 /test 同口径，详见 infra/mcp_registry/health.py。
+    """
+    from backend.infra.mcp_registry import health as mcp_health
+
+    if not mcp_health.enabled_by_env():
+        return
+    spawn_background_task(mcp_health.health_loop(), name="mcp-health-monitor")
+
+
+@app.on_event("startup")
 async def start_mcp_registry_refresh():
     """MCP 动态工具注册表：首轮拉取 + 15s 轮询 + 变更失效钩子（ADR-0011）。
 
