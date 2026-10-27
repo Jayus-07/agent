@@ -207,6 +207,72 @@ def _validate_connection_url(base_url: str, network_scope: str) -> str:
         raise ValueError(f"MCP 地址被 SSRF 防护拦截: {exc}") from exc
 
 
+# URL 内嵌凭据红线（Batch 4 收口，PR #115 Codex P1）：连接地址不得携带
+# userinfo（user:pass@host）或凭据型 query 参数（?api_key=...）——这类信息
+# 会随 base_url 落库，并可能进入导出物、日志与 Trace；LLM/导出红线
+# （ADR-0011 D7）要求任何出口都不含密钥，包括 URL 内嵌形态。
+_SENSITIVE_QUERY_KEYS = frozenset({
+    "api_key", "api-key", "apikey", "access_key", "access_token",
+    "auth_key", "auth_token", "authorization", "credential", "credentials",
+    "id_token", "key", "passwd", "password", "pwd", "refresh_token",
+    "secret", "secret_key", "session_token", "sig", "signature", "token",
+})
+
+
+def _embedded_credential_reason(base_url: str) -> str | None:
+    """检查 URL 内嵌凭据：命中返回原因（创建/更新入口据此拒绝）。"""
+    from urllib.parse import parse_qsl, urlparse
+
+    try:
+        parsed = urlparse(str(base_url or ""))
+    except ValueError:
+        return "URL 无法解析"
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return ("连接地址不得内嵌 userinfo（user:password@host），"
+                "请在凭据中配置认证信息")
+    for q_key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        if q_key.strip().lower() in _SENSITIVE_QUERY_KEYS:
+            return (f"连接地址 query 不得携带凭据型参数（{q_key}=...），"
+                    "请在凭据中配置认证信息")
+    if parsed.fragment:
+        return "连接地址不得携带 fragment（#...）"
+    return None
+
+
+def _sanitize_export_url(base_url: str) -> tuple[str, list[str]] | None:
+    """导出清洗（历史数据守门）：剔除 userinfo / 凭据型 query / fragment。
+
+    返回 (净化后 URL, 剔除项列表)；无法安全净化（解析失败或净化后仍命中
+    凭据样式）返回 None——调用方应将该连接拒绝导出并要求重新配置。
+    """
+    from urllib.parse import parse_qsl, urlencode, urlparse
+
+    try:
+        parsed = urlparse(str(base_url or ""))
+    except ValueError:
+        return None
+    removed: list[str] = []
+    netloc = parsed.netloc or ""
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[1]
+        removed.append("userinfo")
+    kept_pairs = []
+    for q_key, q_value in parse_qsl(parsed.query, keep_blank_values=True):
+        if q_key.strip().lower() in _SENSITIVE_QUERY_KEYS:
+            removed.append(f"query:{q_key}")
+            continue
+        kept_pairs.append((q_key, q_value))
+    if not (parsed.hostname or "") or not netloc:
+        return None
+    cleaned = parsed._replace(
+        netloc=netloc, query=urlencode(kept_pairs), fragment="",
+    ).geturl()
+    # 防御兜底：净化后仍命中凭据样式（编码变体等）→ 拒绝而非带病导出
+    if _embedded_credential_reason(cleaned):
+        return None
+    return cleaned, removed
+
+
 _CONNECTION_SELECT = """
     SELECT c.id, c.name, c.base_url, c.transport, c.auth_type,
            c.network_scope, c.enabled, c.status, c.last_error,
@@ -401,6 +467,9 @@ async def create_connection(request: Request, body: ConnectionCreate):
         _validate_connection_url(body.base_url, body.network_scope)
     except ValueError as exc:
         return _bad_request(str(exc))
+    cred_reason = _embedded_credential_reason(body.base_url)
+    if cred_reason:
+        return _bad_request(cred_reason)
 
     def _write() -> dict[str, Any]:
         conn_id = f"mcp_conn_{uuid.uuid4().hex[:12]}"
@@ -466,6 +535,10 @@ async def update_connection(request: Request, conn_id: str,
 
     next_url = body.base_url or row["base_url"]
     next_scope = body.network_scope or row["network_scope"]
+    if body.base_url is not None:
+        cred_reason = _embedded_credential_reason(body.base_url)
+        if cred_reason:
+            return _bad_request(cred_reason)
     if body.base_url is not None or body.network_scope is not None:
         try:
             _validate_connection_url(next_url, next_scope)
@@ -1448,6 +1521,8 @@ async def export_configuration(request: Request):
 
     红线（ADR-0011 D7）：
       - 凭据密文、fingerprint、last4 **绝不导出**——目标环境重新配置；
+      - URL 内嵌凭据（user:pass@host / ?api_key= / #fragment）导出前净化，
+        无法安全净化的连接拒绝导出（见 redacted/rejected_connections）；
       - 工具快照/审核状态/审批历史不导出——审核必须在新环境重新进行；
       - 导出内容含授权关系（bundle→product），由导入方管理员确认后重建。
     """
@@ -1456,8 +1531,18 @@ async def export_configuration(request: Request):
     actor = _actor_of(operator)
 
     def _load() -> dict[str, Any]:
-        connections = [
-            {
+        connections: list[dict[str, Any]] = []
+        # URL 内嵌凭据守护（PR #115 Codex P1）：历史行可能带有
+        # user:pass@host / ?api_key= 形态——导出前净化；无法安全净化的
+        # 连接拒绝导出，由导入方重新配置。不能以「未读取 secret_cipher」
+        # 推断导出无密钥。
+        redacted_connections: list[dict[str, Any]] = []
+        rejected_connections: list[dict[str, Any]] = []
+        for r in _query_all(
+                "SELECT name, base_url, transport, auth_type, network_scope "
+                "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
+                "ORDER BY name", {"t": tenant}):
+            view = {
                 "name": r["name"],
                 "base_url": r["base_url"],
                 "transport": r["transport"],
@@ -1465,11 +1550,21 @@ async def export_configuration(request: Request):
                 "network_scope": r["network_scope"],
                 # enabled/status 为运行时状态，不导出（导入方按需启用）
             }
-            for r in _query_all(
-                "SELECT name, base_url, transport, auth_type, network_scope "
-                "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
-                "ORDER BY name", {"t": tenant})
-        ]
+            cred_reason = _embedded_credential_reason(r["base_url"])
+            sanitized = _sanitize_export_url(r["base_url"])
+            if sanitized is None:
+                # 解析失败/无 host/净化后仍命中凭据样式 → 拒绝导出
+                rejected_connections.append({
+                    "name": r["name"],
+                    "reason": cred_reason or "URL 无法安全净化",
+                })
+                continue
+            cleaned_url, removed = sanitized
+            if removed:
+                view["base_url"] = cleaned_url
+                redacted_connections.append(
+                    {"name": r["name"], "removed": removed})
+            connections.append(view)
         bundles = _query_all(
             "SELECT b.id, b.name, b.description, b.domain, b.enabled "
             "FROM ai.capability_bundles b ORDER BY b.name")
@@ -1496,6 +1591,8 @@ async def export_configuration(request: Request):
         } for b in bundles]
         _audit("mcp_configuration_export", {
             "connections": len(connections), "bundles": len(bundle_views),
+            "redacted": len(redacted_connections),
+            "rejected": len(rejected_connections),
         }, user_id=actor, tenant_id=tenant)
         return {
             "version": 1,
@@ -1503,6 +1600,8 @@ async def export_configuration(request: Request):
             "tenant": tenant,
             "connections": connections,
             "capability_bundles": bundle_views,
+            "redacted_connections": redacted_connections,
+            "rejected_connections": rejected_connections,
         }
 
     return await asyncio.to_thread(_load)
