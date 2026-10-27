@@ -158,6 +158,62 @@ function ConnectionForm({
   )
 }
 
+/** 轻量 OpenAPI 3.0 导入：取第一个 path+method 预填表单（仅前端解析，
+ *  服务端 validate_invocation 仍是唯一校验事实源）。
+ *  仅支持 2xx/默认响应中声明的 JSON Schema；参数含 query/path 两来源。 */
+function parseOpenApiOperation(specText: string): {
+  toolName: string; description: string;
+  method: 'GET' | 'POST'; path: string;
+  query: Record<string, string>; inputSchema: Record<string, unknown>;
+} | null {
+  let spec: {
+    paths?: Record<string, Record<string, {
+      operationId?: string; summary?: string; description?: string;
+      parameters?: { name: string; in: string; required?: boolean;
+        schema?: Record<string, unknown> }[]
+    }>>
+  }
+  try {
+    spec = JSON.parse(specText)
+  } catch {
+    return null
+  }
+  const httpMethods = new Set(['get', 'post'])
+  for (const [rawPath, ops] of Object.entries(spec.paths ?? {})) {
+    for (const [m, op] of Object.entries(ops)) {
+      if (!httpMethods.has(m) || !op) continue
+      const toolName = op.operationId
+        ?? `${m}_${rawPath.replaceAll(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '')}`
+      const inputSchema: Record<string, unknown> = {
+        type: 'object', properties: {}, additionalProperties: false,
+      }
+      const properties: Record<string, unknown> = {}
+      const required: string[] = []
+      const query: Record<string, string> = {}
+      for (const p of op.parameters ?? []) {
+        if (p.in === 'path' || p.in === 'query') {
+          properties[p.name] = p.schema
+            ? { ...p.schema, description: p.schema.description ?? '' }
+            : { type: 'string' }
+          if (p.in === 'path' || p.required) required.push(p.name)
+          if (p.in === 'query') query[p.name] = `{${p.name}}`
+        }
+      }
+      inputSchema.properties = properties
+      if (required.length) inputSchema.required = required
+      return {
+        toolName: toolName.slice(0, 64),
+        description: (op.summary ?? op.description ?? '').slice(0, 500),
+        method: m.toUpperCase() as 'GET' | 'POST',
+        path: rawPath,
+        query,
+        inputSchema,
+      }
+    }
+  }
+  return null
+}
+
 /** HTTP API 工具登记/编辑表单（http_api 连接专用）。
  *  method/path/query/headers/body_from 服务端白名单校验；
  *  headers 禁 Authorization/Cookie（凭据统一注入）。 */
@@ -191,6 +247,26 @@ function HttpToolForm({
       initial?.snapshots?.[0]?.input_schema
       ?? { type: 'object', properties: {}, additionalProperties: false },
       null, 0))
+  const [openApiText, setOpenApiText] = useState('')
+  const [showOpenApi, setShowOpenApi] = useState(false)
+
+  const importOpenApi = () => {
+    const parsed = parseOpenApiOperation(openApiText)
+    if (!parsed) {
+      toast.error('OpenAPI 解析失败：需合法 JSON 且 paths 下至少一个 GET/POST 操作')
+      return
+    }
+    setToolName(parsed.toolName)
+    setDescription(parsed.description)
+    setMethod(parsed.method)
+    setPath(parsed.path)
+    setQueryText(Object.entries(parsed.query)
+      .map(([k, v]) => `${k}=${v}`).join('\n'))
+    setSchemaText(JSON.stringify(parsed.inputSchema, null, 0))
+    setShowOpenApi(false)
+    setOpenApiText('')
+    toast.success(`已导入 ${parsed.method} ${parsed.path}（服务端仍会完整校验）`)
+  }
 
   const parseKv = (text: string): Record<string, string> | null => {
     const out: Record<string, string> = {}
@@ -235,6 +311,25 @@ function HttpToolForm({
 
   return (
     <div className="grid gap-3 p-4 text-[13px] md:grid-cols-2">
+      {mode === 'register' && (
+        <div className="md:col-span-2">
+          <AssetActionButton onClick={() => setShowOpenApi((v) => !v)}>
+            {showOpenApi ? '收起 OpenAPI 导入' : '从 OpenAPI 导入（可选）'}
+          </AssetActionButton>
+          {showOpenApi && (
+            <div className="mt-2 flex flex-col gap-2">
+              <textarea value={openApiText}
+                onChange={(e) => setOpenApiText(e.target.value)} rows={5}
+                className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono text-[11px]"
+                placeholder='粘贴 OpenAPI 3.0 JSON（取第一个 GET/POST 操作预填；仅前端预填，服务端仍是唯一校验事实源）' />
+              <AssetActionButton tone="primary" disabled={!openApiText.trim()}
+                onClick={importOpenApi}>
+                解析并预填表单
+              </AssetActionButton>
+            </div>
+          )}
+        </div>
+      )}
       {mode === 'register' && (
         <label className="flex flex-col gap-1">
           <span className="text-text-muted">上游工具名（全局唯一）</span>
@@ -441,6 +536,37 @@ function ToolPanel({
             <input value={notes} onChange={(e) => setNotes(e.target.value)}
               className="rounded border border-border-subtle bg-surface-base px-2 py-1.5" />
           </label>
+          {tool.conn_transport === 'http_api' && (tool.snapshots?.length ?? 0) > 1 && (
+            <div className="md:col-span-2">
+              <div className="mb-1 text-text-muted">调用定义版本对比（最近 3 版；新版漂移需重审）</div>
+              <div className="grid gap-2">
+                {(tool.snapshots ?? []).slice(0, 3).map((snap, idx) => (
+                  <div key={`${snap.discovery_version}-${idx}`}
+                    className={`rounded border p-2 font-mono text-[11px] ${
+                      idx === 0 ? 'border-accent/50 bg-accent/5' : 'border-border-subtle'
+                    }`}>
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="font-medium">v{snap.discovery_version}</span>
+                      {idx === 0 && (
+                        <span className="rounded bg-accent/10 px-1 text-[10px] text-accent">当前</span>
+                      )}
+                      <span className="text-text-muted">hash {snap.content_hash.slice(0, 8)}</span>
+                      <span className="text-text-muted">
+                        {new Date(snap.discovered_at).toLocaleString()}
+                      </span>
+                    </div>
+                    {snap.invocation ? (
+                      <pre className="whitespace-pre-wrap break-all">
+                        {JSON.stringify(snap.invocation, null, 0)}
+                      </pre>
+                    ) : (
+                      <div className="text-text-muted">（该版本未记录调用定义）</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-2 md:col-span-2">
             <AssetActionButton tone="primary" disabled={submitting} onClick={() => submitReview('approve')}>
               {submitting ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
