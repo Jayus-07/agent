@@ -55,6 +55,8 @@ def test_budget_blocks_fallback_and_token_overrun():
 
 
 def test_budget_observe_mode_records_without_blocking():
+    """observe 模式只记账不阻断；max_calls 自 2026-10-26 起不再产生
+    request_calls 超限标记（只作用量观测），exceeded 仅含仍生效的门禁。"""
     from backend.infra.llm.budget import RequestBudget
 
     budget = RequestBudget(_limits(max_calls=1), mode="observe")
@@ -64,7 +66,7 @@ def test_budget_observe_mode_records_without_blocking():
     snapshot = budget.snapshot()
     assert snapshot.calls == 2
     assert snapshot.retries == 1
-    assert snapshot.exceeded == ("request_calls",)
+    assert snapshot.exceeded == ()
 
 
 def test_budget_observe_does_not_apply_pg_hard_block():
@@ -98,10 +100,12 @@ def test_budget_blocks_request_cost_after_usage_is_recorded():
 
 
 def test_budget_error_maps_to_protocol_budget_exceeded():
+    """超限拒绝（token 门禁触发）统一映射为 BUDGET_EXCEEDED 协议错误。"""
     from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
 
-    budget = RequestBudget(_limits(max_calls=1), mode="enforce")
+    budget = RequestBudget(_limits(max_total_tokens=10), mode="enforce")
     budget.reserve("primary")
+    budget.record_usage(prompt_tokens=6, completion_tokens=4, total_tokens=10)
     with pytest.raises(RequestBudgetExceeded) as exc_info:
         budget.reserve("primary")
 
@@ -196,8 +200,9 @@ def test_price_conflict_rejects_call(monkeypatch):
     assert "price_conflict" in exc_info.value.reason
 
 
-def test_priced_model_still_respects_call_limits(monkeypatch):
-    """放行 ≠ 无限调用：注册表估价的模型调用次数仍受 max_calls 约束。"""
+def test_priced_model_call_count_is_metered_not_capped(monkeypatch):
+    """2026-10-26 语义：max_calls 只记账不拒绝（多 Agent/工具过程不被固定
+    次数截断）；"放行 ≠ 无限"由 token/费用门禁承接，二者都必须成立。"""
     from backend.infra.llm import pricing as pricing_module
     from backend.infra.llm.budget import RequestBudget, RequestBudgetExceeded
 
@@ -215,8 +220,21 @@ def test_priced_model_still_respects_call_limits(monkeypatch):
         quota_store=_NoPriceStore(),
     )
     budget.reserve("primary", model_name="__registry_priced_model__")
-    with pytest.raises(RequestBudgetExceeded):
-        budget.reserve("primary", model_name="__registry_priced_model__")
+    # 调用数超限不再拒绝，只累计记账
+    budget.reserve("primary", model_name="__registry_priced_model__")
+    assert budget.snapshot().calls == 2
+
+    # token 门禁仍然生效：放行的边界由费用承担
+    capped = RequestBudget(
+        _limits(max_total_tokens=1), mode="enforce",
+        user_id="user-a", tenant_id="tenant-a",
+        quota_store=_NoPriceStore(),
+    )
+    capped.reserve("primary", model_name="__registry_priced_model__")
+    capped.record_usage(prompt_tokens=0, completion_tokens=1, total_tokens=1)
+    with pytest.raises(RequestBudgetExceeded) as exc_info:
+        capped.reserve("primary", model_name="__registry_priced_model__")
+    assert exc_info.value.reason == "request_tokens"
 
 
 def test_record_tokens_marks_price_unknown(monkeypatch):
@@ -293,7 +311,8 @@ def test_token_tracker_shares_request_budget(monkeypatch, tmp_path):
     from backend.infra.llm.budget import RequestBudgetExceeded
 
     budget_module.clear_request_budget()
-    monkeypatch.setattr(budget_module, "_config_limits", lambda: _limits(max_calls=1))
+    monkeypatch.setattr(
+        budget_module, "_config_limits", lambda: _limits(max_total_tokens=3))
     monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
     budget_module.bind_request_budget("trace-budget-token-tracker-1")
 
@@ -314,8 +333,10 @@ def test_token_tracker_shares_request_budget(monkeypatch, tmp_path):
 
     try:
         assert wrapped() == "ok"
-        with pytest.raises(RequestBudgetExceeded):
+        # token 门禁触发第二次拒绝（max_calls 只记账，不再作为拒绝门禁）
+        with pytest.raises(RequestBudgetExceeded) as exc_info:
             wrapped()
+        assert exc_info.value.reason == "request_tokens"
         snapshot = budget_module.current_request_budget().snapshot()
         assert snapshot.calls == 1
         assert snapshot.total_tokens == 3
@@ -324,6 +345,9 @@ def test_token_tracker_shares_request_budget(monkeypatch, tmp_path):
 
 
 def test_proxy_reserves_retry_before_second_model_call(monkeypatch):
+    """重试预算在超出 max_retries 的出网前拦截（max_calls 已不构成门禁）：
+    LLM_MAX_RETRIES=2 次投递均超时后，第 3 次出网前 request_retries 拒绝，
+    provider_attempted 保留已出网事实。"""
     from backend.infra import circuit_breaker
     from backend.infra.llm import budget as budget_module
     from backend.infra.llm import proxy
@@ -333,11 +357,11 @@ def test_proxy_reserves_retry_before_second_model_call(monkeypatch):
     monkeypatch.setattr(
         budget_module,
         "_config_limits",
-        lambda: _limits(max_calls=1, max_retries=2),
+        lambda: _limits(max_retries=1),
     )
     monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
     budget_module.bind_request_budget("trace-budget-proxy-1")
-    monkeypatch.setattr(proxy, "LLM_MAX_RETRIES", 1)
+    monkeypatch.setattr(proxy, "LLM_MAX_RETRIES", 2)
     monkeypatch.setattr(proxy, "LLM_RETRY_BACKOFF_BASE", 0)
     monkeypatch.setattr(proxy, "LLM_ALLOW_DEGRADED_ANSWER", False)
 
@@ -360,14 +384,15 @@ def test_proxy_reserves_retry_before_second_model_call(monkeypatch):
     try:
         with pytest.raises(RequestBudgetExceeded) as exc_info:
             proxy._call_with_resilience(always_timeout)
-        assert exc_info.value.reason == "request_calls"
+        assert exc_info.value.reason == "request_retries"
         assert exc_info.value.provider_attempted is True
-        assert calls == ["model"]
+        assert calls == ["model", "model"]
     finally:
         budget_module.clear_request_budget()
 
 
 def test_proxy_primary_budget_rejection_has_no_provider_attempt(monkeypatch):
+    """primary 阶段预算拒绝不触达 provider（token 门禁触发）。"""
     from backend.infra import circuit_breaker
     from backend.infra.llm import budget as budget_module
     from backend.infra.llm import proxy
@@ -375,11 +400,14 @@ def test_proxy_primary_budget_rejection_has_no_provider_attempt(monkeypatch):
 
     budget_module.clear_request_budget()
     monkeypatch.setattr(
-        budget_module, "_config_limits", lambda: _limits(max_calls=1),
+        budget_module,
+        "_config_limits", lambda: _limits(max_total_tokens=10),
     )
     monkeypatch.setattr(budget_module, "_config_mode", lambda: "enforce")
     budget_module.bind_request_budget("trace-budget-primary-reject-1")
-    budget_module.current_request_budget().reserve("primary")
+    state = budget_module.current_request_budget()
+    state.reserve("primary")
+    state.record_usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
     calls = []
 
     class _Breaker:
