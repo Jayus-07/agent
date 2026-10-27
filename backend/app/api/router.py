@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from backend.app.api.routes import (
     admin_email,
     admin_tasks,
+    admin_bundles,
     admin_mcp,
     admin_tools,
     admin_releases,
@@ -100,6 +101,7 @@ api_router.include_router(capabilities.router)  # Capability 清单只读对账�
 api_router.include_router(consistency.router)  # 资产一致性单页对账矩阵（治理 M6）
 api_router.include_router(admin_tools.router)
 api_router.include_router(admin_mcp.router)  # MCP 能力中心（连接/发现/审核/授权/测试）  # Tool 治理统计与清单（治理 M2）
+api_router.include_router(admin_bundles.router)  # 能力包与产品授权矩阵（Batch 2）
 api_router.include_router(admin_email.router)  # 邮件通道状态（审批中心通道卡片）
 api_router.include_router(admin_security.router)  # 安全事件查询（治理 M9）
 api_router.include_router(admin_unanswered.router)  # 未答问题查询（知识运营闭环）

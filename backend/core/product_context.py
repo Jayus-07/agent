@@ -149,6 +149,22 @@ def _dynamic_mcp_granted(product_id: str, capability: str) -> bool:
         return False
 
 
+def _static_bundle_granted(product_id: str, capability: str) -> bool | None:
+    """静态能力的包授权裁决（Batch 2）。
+
+    事实源是 ai.product_bundle_grants 的进程内快照（bundle_registry）；
+    返回 None = 快照未加载或库中无任何授权行（部署兼容：回退域黑名单）。
+    """
+    try:
+        from backend.core.request_context import get_tool_tenant_id
+        from backend.infra.bundle_registry import store as _bundle_store
+
+        return _bundle_store.bundle_allows(
+            product_id, capability, get_tool_tenant_id())
+    except Exception:  # noqa: BLE001 — 授权判定失败按拒绝（不回退黑名单）
+        return False
+
+
 def product_allows_capability(
     product_id: str,
     capability: str,
@@ -167,6 +183,11 @@ def product_allows_capability(
     # 工具名、domain_hint、Planner 输出都不构成授权（ADR-0002 决策 5）。
     if name.startswith("mcp."):
         return _dynamic_mcp_granted(product.product_id, name)
+    # 静态能力：能力包授权表非空 → 白名单判定（Batch 2）；
+    # 表为空/未加载（None）→ 回退既有域黑名单（部署兼容）。
+    bundle_verdict = _static_bundle_granted(product.product_id, name)
+    if bundle_verdict is not None:
+        return bundle_verdict
     forbidden = {"travel", "travel_booking", "travel_commerce", "customer_service", "selection_funnel", "booking", "commerce"}
     if product.product_id == "agent":
         return not bool(roots.intersection(forbidden))
