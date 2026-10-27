@@ -20,10 +20,12 @@ import { useToast } from '@/components/shared/Toast'
 import {
   createMcpConnection, deleteMcpConnection, disableMcpTool, discoverMcpTools,
   getConnectionTools, getMcpConnections, getMcpOverview,
-  grantMcpTool, reviewMcpTool, setMcpConnectionEnabled, testInvokeMcpTool,
-  testMcpConnection, updateMcpConnection,
+  grantMcpTool, registerHttpTool, reviewMcpTool, setMcpConnectionEnabled,
+  testInvokeMcpTool, testMcpConnection, updateHttpToolInvocation,
+  updateMcpConnection,
   type ConnectionInput, type ConnectionTestResult, type DiscoverResult,
-  type McpConnection, type McpOverview, type McpTool, type TestInvokeResult,
+  type HttpToolInvocation, type McpConnection, type McpOverview,
+  type McpTool, type TestInvokeResult,
 } from '@/api/mcp'
 import { ApiError } from '@/api/client'
 
@@ -63,7 +65,8 @@ function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : '请求失败'
 }
 
-/** 连接编辑表单（新增/编辑复用；secret 留空 = 保持现有凭据）。 */
+/** 连接编辑表单（新增/编辑复用；secret 留空 = 保持现有凭据）。
+ *  transport 仅创建时可选择，编辑时保持原类型（改类型等同重建连接）。 */
 function ConnectionForm({
   initial, onSubmit, onCancel, submitting,
 }: {
@@ -73,6 +76,8 @@ function ConnectionForm({
   submitting: boolean
 }) {
   const [name, setName] = useState(initial?.name ?? '')
+  const [transport, setTransport] = useState<'streamable_http' | 'http_api'>(
+    initial?.transport === 'http_api' ? 'http_api' : 'streamable_http')
   const [baseUrl, setBaseUrl] = useState(initial?.base_url ?? '')
   const [authType, setAuthType] = useState<'none' | 'static_bearer'>(
     initial?.auth_type ?? 'none')
@@ -92,10 +97,23 @@ function ConnectionForm({
           placeholder="如 zhihu-open-api" />
       </label>
       <label className="flex flex-col gap-1">
-        <span className="text-text-muted">Streamable HTTP 地址</span>
+        <span className="text-text-muted">连接类型</span>
+        <select value={transport} disabled={!!initial}
+          onChange={(e) => setTransport(e.target.value as 'streamable_http' | 'http_api')}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 disabled:opacity-60">
+          <option value="streamable_http">MCP（Streamable HTTP；自动发现工具）</option>
+          <option value="http_api">HTTP API（REST；手工登记工具）</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">
+          {transport === 'http_api' ? 'API Base 地址' : 'Streamable HTTP 地址'}
+        </span>
         <input value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
           className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
-          placeholder="https://example.com/mcp" />
+          placeholder={transport === 'http_api'
+            ? 'https://api.example.com（不含路径）'
+            : 'https://example.com/mcp'} />
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-text-muted">认证方式</span>
@@ -125,12 +143,155 @@ function ConnectionForm({
       <div className="flex items-center gap-2 md:col-span-2">
         <AssetActionButton tone="primary" disabled={submitting || !name.trim() || !baseUrl.trim()}
           onClick={() => onSubmit({
-            name: name.trim(), base_url: baseUrl.trim(), auth_type: authType,
+            name: name.trim(), base_url: baseUrl.trim(),
+            transport: initial ? undefined : transport,
+            auth_type: authType,
             secret: secret || undefined, network_scope: networkScope,
             keepSecret: !secret,
           })}>
           {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
           {initial ? '保存修改' : '创建连接'}
+        </AssetActionButton>
+        <AssetActionButton onClick={onCancel}>取消</AssetActionButton>
+      </div>
+    </div>
+  )
+}
+
+/** HTTP API 工具登记/编辑表单（http_api 连接专用）。
+ *  method/path/query/headers/body_from 服务端白名单校验；
+ *  headers 禁 Authorization/Cookie（凭据统一注入）。 */
+function HttpToolForm({
+  initial, onRegister, onUpdate, onCancel, submitting, mode,
+}: {
+  initial?: McpTool | null
+  onRegister: (input: { tool_name: string; description: string;
+    invocation: HttpToolInvocation;
+    input_schema: Record<string, unknown> }) => void
+  onUpdate: (input: { description: string;
+    invocation: HttpToolInvocation;
+    input_schema: Record<string, unknown> }) => void
+  onCancel: () => void
+  submitting: boolean
+  mode: 'register' | 'edit'
+}) {
+  const toast = useToast()
+  const initialInv = initial?.invocation ?? undefined
+  const [toolName, setToolName] = useState(initial?.tool_name ?? '')
+  const [description, setDescription] = useState(initial?.description ?? '')
+  const [method, setMethod] = useState<'GET' | 'POST'>(initialInv?.method ?? 'GET')
+  const [path, setPath] = useState(initialInv?.path ?? '/')
+  const [queryText, setQueryText] = useState(
+    Object.entries(initialInv?.query ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'))
+  const [headersText, setHeadersText] = useState(
+    Object.entries(initialInv?.headers ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'))
+  const [bodyFrom, setBodyFrom] = useState(initialInv?.body_from ?? '')
+  const [schemaText, setSchemaText] = useState(
+    JSON.stringify(
+      initial?.snapshots?.[0]?.input_schema
+      ?? { type: 'object', properties: {}, additionalProperties: false },
+      null, 0))
+
+  const parseKv = (text: string): Record<string, string> | null => {
+    const out: Record<string, string> = {}
+    for (const line of text.split('\n').map((s) => s.trim()).filter(Boolean)) {
+      const idx = line.indexOf('=')
+      if (idx <= 0) return null
+      out[line.slice(0, idx).trim()] = line.slice(idx + 1).trim()
+    }
+    return out
+  }
+
+  const submit = () => {
+    const query = parseKv(queryText)
+    const headers = parseKv(headersText)
+    if (query === null || headers === null) {
+      toast.error('Query/Headers 每行必须是 key=value 形式')
+      return
+    }
+    let inputSchema: Record<string, unknown>
+    try {
+      inputSchema = JSON.parse(schemaText || '{}')
+    } catch {
+      toast.error('参数 Schema 必须是合法 JSON')
+      return
+    }
+    const invocation: HttpToolInvocation = {
+      method, path: path.trim(),
+      ...(Object.keys(query).length ? { query } : {}),
+      ...(Object.keys(headers).length ? { headers } : {}),
+      ...(bodyFrom.trim() ? { body_from: bodyFrom.trim() } : {}),
+    }
+    if (mode === 'register') {
+      if (!toolName.trim()) { toast.error('工具名不能为空'); return }
+      onRegister({
+        tool_name: toolName.trim(), description: description.trim(),
+        invocation, input_schema: inputSchema,
+      })
+    } else {
+      onUpdate({ description: description.trim(), invocation, input_schema: inputSchema })
+    }
+  }
+
+  return (
+    <div className="grid gap-3 p-4 text-[13px] md:grid-cols-2">
+      {mode === 'register' && (
+        <label className="flex flex-col gap-1">
+          <span className="text-text-muted">上游工具名（全局唯一）</span>
+          <input value={toolName} onChange={(e) => setToolName(e.target.value)}
+            className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
+            placeholder="如 get_order" />
+        </label>
+      )}
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">平台描述（审核时可改写）</span>
+        <input value={description} onChange={(e) => setDescription(e.target.value)}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5"
+          placeholder="这个工具做什么" />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">HTTP 方法</span>
+        <select value={method} onChange={(e) => setMethod(e.target.value as 'GET' | 'POST')}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5">
+          <option value="GET">GET</option>
+          <option value="POST">POST</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">路径模板（相对 Base，{'{参数}'} 引用 Schema 属性）</span>
+        <input value={path} onChange={(e) => setPath(e.target.value)}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
+          placeholder="/orders/{order_id}" />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">Query 模板（每行 key={'{param}'}；空串=不发送）</span>
+        <textarea value={queryText} onChange={(e) => setQueryText(e.target.value)} rows={2}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
+          placeholder={'verbose={verbose}'} />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-text-muted">Headers 模板（每行 key=value；禁 Authorization/Cookie）</span>
+        <textarea value={headersText} onChange={(e) => setHeadersText(e.target.value)} rows={2}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
+          placeholder={'X-Channel={channel}'} />
+      </label>
+      {method === 'POST' && (
+        <label className="flex flex-col gap-1">
+          <span className="text-text-muted">JSON Body 参数名（留空 = 未引用参数整体作为 body）</span>
+          <input value={bodyFrom} onChange={(e) => setBodyFrom(e.target.value)}
+            className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono"
+            placeholder="text" />
+        </label>
+      )}
+      <label className="flex flex-col gap-1 md:col-span-2">
+        <span className="text-text-muted">参数 JSON Schema（additionalProperties 固定 false）</span>
+        <textarea value={schemaText} onChange={(e) => setSchemaText(e.target.value)} rows={4}
+          className="rounded border border-border-subtle bg-surface-base px-2 py-1.5 font-mono" />
+      </label>
+      <div className="flex items-center gap-2 md:col-span-2">
+        <AssetActionButton tone="primary" disabled={submitting} onClick={submit}>
+          {submitting ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+          {mode === 'register' ? '登记为待审核工具' : '保存为新版本（approved 将漂移）'}
         </AssetActionButton>
         <AssetActionButton onClick={onCancel}>取消</AssetActionButton>
       </div>
@@ -381,6 +542,9 @@ export default function McpPage() {
   const [busyAction, setBusyAction] = useState('')
   const [testResult, setTestResult] = useState<Record<string, ConnectionTestResult>>({})
   const [discoverResult, setDiscoverResult] = useState<Record<string, DiscoverResult>>({})
+  // HTTP API 工具登记/编辑：{ connId, tool } | null（tool 空 = 新登记）
+  const [httpToolForm, setHttpToolForm] = useState<
+    { connId: string; tool: McpTool | null } | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)
@@ -483,6 +647,47 @@ export default function McpPage() {
       toast.error(`发现失败: ${errMessage(e)}`)
     } finally {
       setBusyAction('')
+    }
+  }
+
+  const submitRegisterHttpTool = async (
+    connId: string,
+    input: { tool_name: string; description: string;
+      invocation: HttpToolInvocation; input_schema: Record<string, unknown> },
+  ) => {
+    setSubmitting(true)
+    try {
+      const r = await registerHttpTool(connId, input)
+      toast.success(`已登记 ${r.capability}（待审核）`)
+      setHttpToolForm(null)
+      await loadTools(connId)
+      await reload()
+    } catch (e) {
+      toast.error(`登记失败: ${errMessage(e)}`)
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const submitUpdateHttpTool = async (
+    connId: string, toolId: number,
+    input: { description: string; invocation: HttpToolInvocation;
+      input_schema: Record<string, unknown> },
+  ) => {
+    setSubmitting(true)
+    try {
+      const r = await updateHttpToolInvocation(toolId, input)
+      toast.success(r.schema_changed
+        ? `已保存 v${r.version}；approved 工具已漂移，需重新审核`
+        : `已保存 v${r.version}（待审核）`)
+      setHttpToolForm(null)
+      await resyncToolDetails([toolId])
+      if (expandedConn) await loadTools(expandedConn)
+      await reload()
+    } catch (e) {
+      toast.error(`保存失败: ${errMessage(e)}`)
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -593,7 +798,7 @@ export default function McpPage() {
   return (
     <AssetPageShell
       title="MCP 能力中心"
-      desc="接入外部 MCP Server：连接 → 发现 → 审核 → 授权，全程走统一治理 Runtime；停用与撤权对写调用立即拦截（出网前强一致复核），读调用最迟 15 秒收敛。"
+      desc="连接中心：MCP（自动发现）与 HTTP API（手工登记）统一接入 → 审核 → 授权，全程走统一治理 Runtime；停用与撤权对写调用立即拦截（出网前强一致复核），读调用最迟 15 秒收敛。"
       actions={
         <>
           <AssetActionButton onClick={() => void reload()} disabled={loading}>
@@ -703,9 +908,15 @@ export default function McpPage() {
                             <AssetActionButton disabled={busyAction === `test:${conn.id}`} onClick={() => void runTest(conn)}>
                               {busyAction === `test:${conn.id}` ? <Loader2 size={13} className="animate-spin" /> : <Plug size={13} />} 测试
                             </AssetActionButton>
-                            <AssetActionButton disabled={busyAction === `discover:${conn.id}`} onClick={() => void runDiscover(conn)}>
-                              {busyAction === `discover:${conn.id}` ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />} 发现
-                            </AssetActionButton>
+                            {conn.transport === 'http_api' ? (
+                              <AssetActionButton onClick={() => setHttpToolForm({ connId: conn.id, tool: null })}>
+                                <Plus size={13} /> 登记工具
+                              </AssetActionButton>
+                            ) : (
+                              <AssetActionButton disabled={busyAction === `discover:${conn.id}`} onClick={() => void runDiscover(conn)}>
+                                {busyAction === `discover:${conn.id}` ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />} 发现
+                              </AssetActionButton>
+                            )}
                             <AssetActionButton disabled={busyAction === `toggle:${conn.id}`} onClick={() => void toggleEnabled(conn)}>
                               {conn.enabled ? <CircleSlash size={13} /> : <CheckCircle2 size={13} />}
                             </AssetActionButton>
@@ -739,6 +950,24 @@ export default function McpPage() {
                       {open && (
                         <tr className="border-b border-border-subtle">
                           <td colSpan={7} className="p-0">
+                            {httpToolForm?.connId === conn.id && (
+                              <div className="border-b border-border-subtle bg-surface-elevated/40">
+                                <div className="px-4 pt-3 text-[12px] font-medium">
+                                  {httpToolForm.tool
+                                    ? `编辑调用定义：${httpToolForm.tool.tool_name}`
+                                    : `登记 HTTP API 工具：${conn.name}`}
+                                </div>
+                                <HttpToolForm mode={httpToolForm.tool ? 'edit' : 'register'}
+                                  initial={httpToolForm.tool}
+                                  submitting={submitting}
+                                  onRegister={(input) =>
+                                    void submitRegisterHttpTool(conn.id, input)}
+                                  onUpdate={(input) =>
+                                    void submitUpdateHttpTool(
+                                      conn.id, httpToolForm.tool!.id, input)}
+                                  onCancel={() => setHttpToolForm(null)} />
+                              </div>
+                            )}
                             <ToolListSection connId={conn.id}
                               tools={toolsByConn[conn.id] ?? []}
                               snapshotsByTool={snapshotsByTool}
@@ -747,6 +976,8 @@ export default function McpPage() {
                               onToggleGrant={toggleGrant}
                               onDisableTool={disableTool}
                               onToolMutated={resyncToolDetails}
+                              onEditInvocation={(tool) =>
+                                setHttpToolForm({ connId: conn.id, tool })}
                               onReload={reload}
                               busyAction={busyAction} />
                           </td>
@@ -767,7 +998,8 @@ export default function McpPage() {
 /** 连接展开后的工具清单（含授权开关与行展开审核/测试面板）。 */
 function ToolListSection({
   connId, tools, snapshotsByTool, expandedTool, onToggleTool,
-  onToggleGrant, onDisableTool, onToolMutated, onReload, busyAction,
+  onToggleGrant, onDisableTool, onToolMutated, onEditInvocation, onReload,
+  busyAction,
 }: {
   connId: string
   tools: McpTool[]
@@ -778,13 +1010,15 @@ function ToolListSection({
   onDisableTool: (tool: McpTool) => void
   /** 单工具变更（审核/停用/授权）后失效其详情缓存 */
   onToolMutated: (toolIds?: number[]) => Promise<void>
+  /** HTTP API 工具：打开调用定义编辑表单 */
+  onEditInvocation: (tool: McpTool) => void
   onReload: () => Promise<void>
   busyAction: string
 }) {
   if (tools.length === 0) {
     return (
       <div className="p-4">
-        <EmptyState title="工具" description="尚未发现工具；点击「发现」拉取上游 tools/list" />
+        <EmptyState title="工具" description="尚未发现工具；MCP 连接点击「发现」，HTTP API 连接点击「登记工具」" />
       </div>
     )
   }
@@ -847,12 +1081,19 @@ function ToolListSection({
                       </div>
                     </td>
                     <td className="px-4 py-2 text-right" onClick={(e) => e.stopPropagation()}>
-                      {tool.status === 'approved' && (
-                        <AssetActionButton disabled={busyAction === `disableTool:${tool.id}`}
-                          onClick={() => onDisableTool(tool)}>
-                          停用
-                        </AssetActionButton>
-                      )}
+                      <div className="inline-flex gap-1">
+                        {tool.conn_transport === 'http_api' && (
+                          <AssetActionButton onClick={() => onEditInvocation(tool)}>
+                            编辑调用
+                          </AssetActionButton>
+                        )}
+                        {tool.status === 'approved' && (
+                          <AssetActionButton disabled={busyAction === `disableTool:${tool.id}`}
+                            onClick={() => onDisableTool(tool)}>
+                            停用
+                          </AssetActionButton>
+                        )}
+                      </div>
                     </td>
                   </tr>
                   {open && (
