@@ -596,16 +596,28 @@ class RoutingEngine:
                 # direct 旧 override 永远不是执行授权，必须重新经过 CapabilityRouter。
                 return False
             allowed = set(manifest.planner_visible_capability_names)
+            from backend.core.product_context import product_allows_capability
             from backend.orchestration.router.capability_router import CapabilityRouter
-            return all(
-                (str(item.get("name") if isinstance(item, Mapping) else item) in allowed)
-                and tool_registry.get_node(
-                    str(item.get("name") if isinstance(item, Mapping) else item)
-                ) is not None
-                and CapabilityRouter._permission_ready(
-                    str(item.get("name") if isinstance(item, Mapping) else item),
-                    dict(verified_context or {}),
+            context_product = str(
+                (verified_context or {}).get("product_id") or "internal")
+            override_domain = str(mapping.get("domain") or "")
+
+            def _override_allows(item_name: str) -> bool:
+                return (
+                    item_name in allowed
+                    and product_allows_capability(
+                        context_product, item_name,
+                        (override_domain,) if override_domain else (),
+                    )
+                    and tool_registry.get_node(item_name) is not None
+                    and CapabilityRouter._permission_ready(
+                        item_name, dict(verified_context or {}),
+                    )
                 )
+
+            return all(
+                _override_allows(
+                    str(item.get("name") if isinstance(item, Mapping) else item))
                 for item in candidates
             )
         except Exception:

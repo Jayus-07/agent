@@ -134,3 +134,43 @@ def test_tool_governance_rejects_shared_rag_in_customer_service_scope_for_agent(
 
     assert decision.allowed is False
     assert decision.code == "product_capability_denied"
+
+
+def test_planner_visibility_filters_mcp_capability_by_tenant_grant():
+    """PR #115 Codex P2：mcp.* 工具的可见性按 (product, capability, tenant)
+    授权快照收窄——未授权租户的 Planner/Critique 渲染面不得出现该工具。"""
+    from backend.core.product_context import filter_capabilities_for_state
+    from backend.core.request_context import _current_tenant_id
+    from backend.infra.mcp_registry import store as mcp_store
+    from backend.infra.mcp_registry.store import McpRegistrySnapshot
+    from backend.orchestration.router.manifest import CapabilityDecl
+
+    decl = CapabilityDecl(
+        name="mcp.echo", skill="mcp_dynamic", routed=True,
+        description="回显查询（测试动态工具）",
+        params_schema={"query": {"type": "string", "required": True}},
+        planner_examples=({"query": "示例"},),
+        examples=("回显示例一", "回显示例二"),
+    )
+    mcp_store.inject_snapshot_for_tests(McpRegistrySnapshot(
+        loaded=True,
+        capability_decls={"mcp.echo": decl},
+        grants=frozenset({("agent", "mcp.echo", "tenant-a")}),
+    ))
+    try:
+        state = {"product_id": "agent", "domain": "general"}
+
+        tenant_token = _current_tenant_id.set("tenant-a")
+        try:
+            assert filter_capabilities_for_state(["mcp.echo"], state) == (
+                "mcp.echo",)
+        finally:
+            _current_tenant_id.reset(tenant_token)
+
+        tenant_token = _current_tenant_id.set("tenant-b")
+        try:
+            assert filter_capabilities_for_state(["mcp.echo"], state) == ()
+        finally:
+            _current_tenant_id.reset(tenant_token)
+    finally:
+        mcp_store.reset_for_tests()

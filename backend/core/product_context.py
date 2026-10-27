@@ -165,6 +165,37 @@ def _static_bundle_granted(product_id: str, capability: str) -> bool | None:
         return False
 
 
+# ── 域专属禁行根（决策 #15 业务域硬隔离，运行门与授权端点共用）───────
+# agent/customer_service 产品不可执行跨域专属能力；bundle 白名单只能在
+# 边界内放宽非专属能力，不得越过本边界——「管理员授权」不构成跨域提权
+# 依据（PR #115 审计修复，覆盖 Batch 2「白名单优先于黑名单」的旧语义）。
+# 说明：cs 域静态能力历史命名为 cs.*（root=cs），customer_service 为
+# 规范 root，两者都在 agent 禁行集合内。
+_DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
+    "agent": frozenset({
+        "travel", "travel_booking", "travel_commerce",
+        "customer_service", "cs", "selection_funnel",
+        "booking", "commerce"}),
+    "customer_service": frozenset({
+        "travel", "travel_booking", "travel_commerce",
+        "selection_funnel", "booking", "commerce"}),
+}
+
+
+def domain_exclusive_forbidden_roots(product_id: str) -> frozenset[str]:
+    """产品入口的域专属禁行根集合（授权端点据此拒绝跨域误授权）。"""
+    return _DOMAIN_EXCLUSIVE_ROOTS.get(str(product_id or ""), frozenset())
+
+
+# bundle.domain 标签 → 该域的禁行根（bundle 授权端点校验动态成员时使用，
+# 动态 mcp.* 工具名无域语义，bundle.domain 是其唯一域归属信号）。
+_BUNDLE_DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
+    "travel": frozenset({"travel"}),
+    "cs": frozenset({"customer_service", "cs"}),
+    "selection": frozenset({"selection_funnel", "booking", "commerce"}),
+}
+
+
 def product_allows_capability(
     product_id: str,
     capability: str,
@@ -179,21 +210,58 @@ def product_allows_capability(
     name = str(capability or "").strip().lower()
     domain_values = {str(value or "").strip().lower() for value in domains}
     roots = {name.split(".", 1)[0]} | domain_values
+    forbidden_roots = _DOMAIN_EXCLUSIVE_ROOTS.get(product.product_id, frozenset())
     # 动态 MCP 能力没有静态前缀语义，唯一放行依据是授权快照；
     # 工具名、domain_hint、Planner 输出都不构成授权（ADR-0002 决策 5）。
     if name.startswith("mcp."):
         return _dynamic_mcp_granted(product.product_id, name)
-    # 静态能力：能力包授权表非空 → 白名单判定（Batch 2）；
+    # 静态能力：能力包授权表非空 → 白名单判定（Batch 2），但域专属禁行根
+    # 始终生效——白名单只放宽边界内能力，不构成跨域提权（决策 #15）；
     # 表为空/未加载（None）→ 回退既有域黑名单（部署兼容）。
     bundle_verdict = _static_bundle_granted(product.product_id, name)
     if bundle_verdict is not None:
-        return bundle_verdict
-    forbidden = {"travel", "travel_booking", "travel_commerce", "customer_service", "selection_funnel", "booking", "commerce"}
+        return bool(bundle_verdict) and not bool(roots.intersection(forbidden_roots))
     if product.product_id == "agent":
-        return not bool(roots.intersection(forbidden))
+        return not bool(roots.intersection(forbidden_roots))
     if product.product_id == "customer_service":
-        return not bool(roots.intersection({"travel", "travel_booking", "travel_commerce", "selection_funnel", "booking", "commerce"}))
+        return not bool(roots.intersection(forbidden_roots))
     return False
+
+
+def product_id_from_state(state: dict | None) -> str:
+    """图状态 → 可信产品 ID（图状态管道口径）。
+
+    与执行期门（skills/base.py、direct_executor）同取值链：request_context
+    投影优先，state 平铺键兜底，缺省 internal（内部调用/单测不经产品过滤；
+    真实请求由 runner 从服务端注册路由写入，两处一致）。
+    """
+    ctx = (state or {}).get("request_context")
+    product_id = (
+        ctx.get("product_id")
+        if isinstance(ctx, dict)
+        else getattr(ctx, "product_id", None)
+    ) or (state or {}).get("product_id") or "internal"
+    return str(product_id or "internal")
+
+
+def filter_capabilities_for_state(
+    capabilities, state: dict | None,
+) -> tuple[str, ...]:
+    """按当前请求的产品/域收窄能力清单（Planner/Critique 渲染面专用）。
+
+    与执行期门（skills/base.py、direct_executor、GovernanceRuntime）同谓词：
+    product_allows_capability(product, cap, (state.domain,))——渲染面不得
+    宽于执行面，否则未授权工具的描述/参数会被送进 LLM（PR #115 Codex P2）。
+    动态 mcp.* 的租户裁决经 product_allows_capability 内部 ContextVar 取值，
+    图内节点入口已由 RequestContext.bind() 绑定。
+    """
+    product_id = product_id_from_state(state)
+    domain = str((state or {}).get("domain") or "")
+    return tuple(
+        str(name) for name in capabilities
+        if product_allows_capability(
+            product_id, str(name), (domain,) if domain else ())
+    )
 
 
 def product_allows_workflow(product_id: str, workflow_name: str) -> bool:

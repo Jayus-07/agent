@@ -94,8 +94,9 @@ class TestProductAllowsCapability:
         # 未授权成员：即使域黑名单允许（data 不在黑名单）也拒绝
         assert not product_context.product_allows_capability("agent", "rag.search")
 
-    def test_cross_domain_member_allowed_when_granted(self, monkeypatch):
-        """白名单语义：跨域成员只要被授权即放行（黑名单仅在回退时生效）。"""
+    def test_cross_domain_member_denied_even_when_granted(self, monkeypatch):
+        """决策 #15 业务域硬隔离（PR #115 审计修复）：bundle 白名单只在
+        域专属边界内放宽能力——cs 域成员即使被授权给 agent 也拒绝执行。"""
         from backend.core import product_context
 
         self._patch_tenant(monkeypatch)
@@ -103,8 +104,18 @@ class TestProductAllowsCapability:
             {"b1": {"name": "客服包", "domain": "cs", "enabled": True}},
             {"b1": ["cs.ticket.manage"]},
             [("agent", "b1", "default")]))
-        # cs 域在 agent 的黑名单里，但显式授权的白名单优先
-        assert product_context.product_allows_capability("agent", "cs.ticket.manage")
+        assert not product_context.product_allows_capability(
+            "agent", "cs.ticket.manage")
+        # 同一边界在无 bundle（回退黑名单）时同样生效
+        bundle_store.reset_for_tests()
+        assert not product_context.product_allows_capability(
+            "agent", "cs.ticket.manage")
+        # 边界内的能力不受影响：数据包成员照常放行
+        bundle_store.inject_snapshot_for_tests(_make_snapshot(
+            {"b1": {"name": "数据", "domain": "data", "enabled": True}},
+            {"b1": ["sql.query"]},
+            [("agent", "b1", "default")]))
+        assert product_context.product_allows_capability("agent", "sql.query")
 
     def test_no_grant_rows_falls_back_to_domain_blacklist(self, monkeypatch):
         from backend.core import product_context
