@@ -30,12 +30,13 @@ from backend.app.api.routes.admin_mcp import (
     _query_one,
     _tenant_of,
 )
+from backend.core.product_context import DOMAIN_LABELS
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/admin/capability-bundles", tags=["CapabilityBundles"])
 
-_VALID_DOMAINS = {"general", "cs", "selection", "travel", "data",
-                  "knowledge", "business", "report", "communication", "mcp"}
+# 与工具治理 governance.domain 共用同一业务域词汇表（单一事实源）
+_VALID_DOMAINS = DOMAIN_LABELS
 
 
 class BundleCreate(BaseModel):
@@ -293,6 +294,54 @@ async def grant_bundle(request: Request, bundle_id: str,
     row = await _run_db(_load_bundle, bundle_id, tenant)
     if row is None:
         return _not_found("能力包不存在")
+
+    if not body.revoke:
+        # 决策 #15 业务域硬隔离：跨域专属能力不可授权给该产品入口。
+        # 静态成员按能力名根判断；动态 mcp.* 工具按 bundle.domain 与
+        # 审核登记的 governance.domain 双层判断（授权端点是跨域误授权
+        # 的服务端拒绝点）。
+        from backend.core.product_context import (
+            _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS,
+            domain_exclusive_forbidden_roots,
+        )
+
+        forbidden = domain_exclusive_forbidden_roots(body.product_key)
+        offending = sorted({
+            str(cap) for cap in row["capabilities"]
+            if str(cap).split(".", 1)[0] in forbidden
+        })
+        bundle_domain = str(row.get("domain") or "")
+        if forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(bundle_domain, frozenset()):
+            offending.append(f"bundle.domain={bundle_domain}")
+        if offending:
+            return _bad_request(
+                "跨域专属能力不可授权给该产品入口（业务域硬隔离）："
+                + "、".join(offending))
+
+        # 动态成员逐工具校验审核登记的业务域（bundle.domain 之外的精细层：
+        # domain 标签无关的 bundle 也不得夹带跨域专属工具）
+        mcp_members = [str(c) for c in row["capabilities"]
+                       if str(c).startswith("mcp.")]
+        if mcp_members:
+            slugs = [c[len("mcp."):] for c in mcp_members]
+            tool_rows = await _run_db(
+                _query_all,
+                "SELECT capability_slug, governance FROM ai.mcp_tools "
+                "WHERE capability_slug = ANY(%(slugs)s) "
+                "AND tenant_id = %(tenant)s",
+                {"slugs": slugs, "tenant": tenant})
+            offending_tools = sorted({
+                f"mcp.{r['capability_slug']}(domain={tool_domain})"
+                for r in tool_rows
+                for tool_domain in [
+                    str((r.get("governance") or {}).get("domain") or "")]
+                if tool_domain and forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(
+                    tool_domain, frozenset())
+            })
+            if offending_tools:
+                return _bad_request(
+                    "跨域专属工具不可授权给该产品入口（业务域硬隔离）："
+                    + "、".join(offending_tools))
 
     def _write() -> dict[str, Any]:
         if body.revoke:

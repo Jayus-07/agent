@@ -207,6 +207,72 @@ def _validate_connection_url(base_url: str, network_scope: str) -> str:
         raise ValueError(f"MCP 地址被 SSRF 防护拦截: {exc}") from exc
 
 
+# URL 内嵌凭据红线（Batch 4 收口，PR #115 Codex P1）：连接地址不得携带
+# userinfo（user:pass@host）或凭据型 query 参数（?api_key=...）——这类信息
+# 会随 base_url 落库，并可能进入导出物、日志与 Trace；LLM/导出红线
+# （ADR-0011 D7）要求任何出口都不含密钥，包括 URL 内嵌形态。
+_SENSITIVE_QUERY_KEYS = frozenset({
+    "api_key", "api-key", "apikey", "access_key", "access_token",
+    "auth_key", "auth_token", "authorization", "credential", "credentials",
+    "id_token", "key", "passwd", "password", "pwd", "refresh_token",
+    "secret", "secret_key", "session_token", "sig", "signature", "token",
+})
+
+
+def _embedded_credential_reason(base_url: str) -> str | None:
+    """检查 URL 内嵌凭据：命中返回原因（创建/更新入口据此拒绝）。"""
+    from urllib.parse import parse_qsl, urlparse
+
+    try:
+        parsed = urlparse(str(base_url or ""))
+    except ValueError:
+        return "URL 无法解析"
+    if parsed.username or parsed.password or "@" in (parsed.netloc or ""):
+        return ("连接地址不得内嵌 userinfo（user:password@host），"
+                "请在凭据中配置认证信息")
+    for q_key, _ in parse_qsl(parsed.query, keep_blank_values=True):
+        if q_key.strip().lower() in _SENSITIVE_QUERY_KEYS:
+            return (f"连接地址 query 不得携带凭据型参数（{q_key}=...），"
+                    "请在凭据中配置认证信息")
+    if parsed.fragment:
+        return "连接地址不得携带 fragment（#...）"
+    return None
+
+
+def _sanitize_export_url(base_url: str) -> tuple[str, list[str]] | None:
+    """导出清洗（历史数据守门）：剔除 userinfo / 凭据型 query / fragment。
+
+    返回 (净化后 URL, 剔除项列表)；无法安全净化（解析失败或净化后仍命中
+    凭据样式）返回 None——调用方应将该连接拒绝导出并要求重新配置。
+    """
+    from urllib.parse import parse_qsl, urlencode, urlparse
+
+    try:
+        parsed = urlparse(str(base_url or ""))
+    except ValueError:
+        return None
+    removed: list[str] = []
+    netloc = parsed.netloc or ""
+    if "@" in netloc:
+        netloc = netloc.rsplit("@", 1)[1]
+        removed.append("userinfo")
+    kept_pairs = []
+    for q_key, q_value in parse_qsl(parsed.query, keep_blank_values=True):
+        if q_key.strip().lower() in _SENSITIVE_QUERY_KEYS:
+            removed.append(f"query:{q_key}")
+            continue
+        kept_pairs.append((q_key, q_value))
+    if not (parsed.hostname or "") or not netloc:
+        return None
+    cleaned = parsed._replace(
+        netloc=netloc, query=urlencode(kept_pairs), fragment="",
+    ).geturl()
+    # 防御兜底：净化后仍命中凭据样式（编码变体等）→ 拒绝而非带病导出
+    if _embedded_credential_reason(cleaned):
+        return None
+    return cleaned, removed
+
+
 _CONNECTION_SELECT = """
     SELECT c.id, c.name, c.base_url, c.transport, c.auth_type,
            c.network_scope, c.enabled, c.status, c.last_error,
@@ -401,6 +467,9 @@ async def create_connection(request: Request, body: ConnectionCreate):
         _validate_connection_url(body.base_url, body.network_scope)
     except ValueError as exc:
         return _bad_request(str(exc))
+    cred_reason = _embedded_credential_reason(body.base_url)
+    if cred_reason:
+        return _bad_request(cred_reason)
 
     def _write() -> dict[str, Any]:
         conn_id = f"mcp_conn_{uuid.uuid4().hex[:12]}"
@@ -466,6 +535,10 @@ async def update_connection(request: Request, conn_id: str,
 
     next_url = body.base_url or row["base_url"]
     next_scope = body.network_scope or row["network_scope"]
+    if body.base_url is not None:
+        cred_reason = _embedded_credential_reason(body.base_url)
+        if cred_reason:
+            return _bad_request(cred_reason)
     if body.base_url is not None or body.network_scope is not None:
         try:
             _validate_connection_url(next_url, next_scope)
@@ -1317,6 +1390,22 @@ async def grant_tool(request: Request, tool_id: int, body: GrantRequest):
         return _conflict(
             f"工具当前状态为 {row['status']}，只有 approved 工具可授权")
 
+    if not body.revoke:
+        # 决策 #15 业务域硬隔离：审核时登记的业务域（governance.domain）
+        # 属目标产品禁行域 → 拒绝授权。未分类（domain 为空）不设限，
+        # 兼容存量数据；bundle 路径已按 bundle.domain 校验。
+        from backend.core.product_context import (
+            _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS,
+            domain_exclusive_forbidden_roots,
+        )
+
+        tool_domain = str((row.get("governance") or {}).get("domain") or "")
+        forbidden = domain_exclusive_forbidden_roots(body.product_key)
+        if forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(tool_domain, frozenset()):
+            return _bad_request(
+                f"工具业务域为 {tool_domain}，不可授权给 {body.product_key} "
+                "产品入口（业务域硬隔离），请改审核业务域或授权对应产品")
+
     def _write() -> dict[str, Any]:
         if body.revoke:
             _execute(
@@ -1439,6 +1528,114 @@ async def test_invoke_tool(request: Request, tool_id: int,
         "elapsed_ms": elapsed_ms,
         "result": result.data,
     }
+
+
+def _export_payload(tenant: str) -> dict[str, Any]:
+    """导出/发布快照共用的声明载荷（同构，D7 红线）。
+
+    红线（ADR-0011 D7）：凭据密文、fingerprint、last4 绝不出现；URL 内嵌
+    凭据（user:pass@host / ?api_key= / #fragment）统一净化，无法安全净化
+    的连接进 rejected_connections——不能以「未读取 secret_cipher」推断
+    载荷无密钥。
+    """
+    connections: list[dict[str, Any]] = []
+    redacted_connections: list[dict[str, Any]] = []
+    rejected_connections: list[dict[str, Any]] = []
+    for r in _query_all(
+            "SELECT name, base_url, transport, auth_type, network_scope "
+            "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
+            "ORDER BY name", {"t": tenant}):
+        view = {
+            "name": r["name"],
+            "base_url": r["base_url"],
+            "transport": r["transport"],
+            "auth_type": r["auth_type"],
+            "network_scope": r["network_scope"],
+        }
+        cred_reason = _embedded_credential_reason(r["base_url"])
+        sanitized = _sanitize_export_url(r["base_url"])
+        if sanitized is None:
+            # 解析失败/无 host/净化后仍命中凭据样式 → 拒绝导出
+            rejected_connections.append({
+                "name": r["name"],
+                "reason": cred_reason or "URL 无法安全净化",
+            })
+            continue
+        cleaned_url, removed = sanitized
+        if removed:
+            view["base_url"] = cleaned_url
+            redacted_connections.append(
+                {"name": r["name"], "removed": removed})
+        connections.append(view)
+    bundles = _query_all(
+        "SELECT b.id, b.name, b.description, b.domain, b.enabled "
+        "FROM ai.capability_bundles b ORDER BY b.name")
+    items = _query_all(
+        "SELECT bundle_id, capability FROM ai.capability_bundle_items")
+    grants = _query_all(
+        "SELECT bundle_id, product_key FROM ai.product_bundle_grants "
+        "WHERE enabled AND revoked_at IS NULL AND tenant_id = %(t)s",
+        {"t": tenant})
+    items_by_bundle: dict[str, list[str]] = {}
+    for i in items:
+        items_by_bundle.setdefault(str(i["bundle_id"]), []).append(
+            str(i["capability"]))
+    grants_by_bundle: dict[str, list[str]] = {}
+    for g in grants:
+        grants_by_bundle.setdefault(str(g["bundle_id"]), []).append(
+            str(g["product_key"]))
+    bundle_views = [{
+        "name": b["name"],
+        "description": b["description"],
+        "domain": b["domain"],
+        "capabilities": items_by_bundle.get(str(b["id"]), []),
+        "granted_products": grants_by_bundle.get(str(b["id"]), []),
+    } for b in bundles]
+    return {
+        "version": 1,
+        "tenant": tenant,
+        "connections": connections,
+        "capability_bundles": bundle_views,
+        "redacted_connections": redacted_connections,
+        "rejected_connections": rejected_connections,
+    }
+
+
+@router.get("/export")
+async def export_configuration(request: Request):
+    """配置导出（Batch 4，只读）：连接声明 + 能力包 + 授权关系，目标环境
+    重新映射与审核的输入。
+
+    红线（ADR-0011 D7）：
+      - 凭据密文、fingerprint、last4 **绝不导出**——目标环境重新配置；
+      - URL 内嵌凭据（user:pass@host / ?api_key= / #fragment）导出前净化，
+        无法安全净化的连接拒绝导出（见 redacted/rejected_connections）；
+      - 工具快照/审核状态/审批历史不导出——审核必须在新环境重新进行；
+      - 导出内容含授权关系（bundle→product），由导入方管理员确认后重建。
+    """
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+
+    def _load() -> dict[str, Any]:
+        payload = _export_payload(tenant)
+        _audit("mcp_configuration_export", {
+            "connections": len(payload["connections"]),
+            "bundles": len(payload["capability_bundles"]),
+            "redacted": len(payload["redacted_connections"]),
+            "rejected": len(payload["rejected_connections"]),
+        }, user_id=actor, tenant_id=tenant)
+        return {
+            "version": 1,
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "tenant": tenant,
+            "connections": payload["connections"],
+            "capability_bundles": payload["capability_bundles"],
+            "redacted_connections": payload["redacted_connections"],
+            "rejected_connections": payload["rejected_connections"],
+        }
+
+    return await asyncio.to_thread(_load)
 
 
 __all__ = ["router"]

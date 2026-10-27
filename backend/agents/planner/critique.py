@@ -36,22 +36,23 @@ _KNOWLEDGE_CAPS = {"rag.search", "web.search", "web.crawl"}
 _ANALYSIS_TRIGGER_WORDS = ["分析", "风险", "建议", "洞察", "报告", "report", "insight"]
 
 
-def _check_capabilities_exist(nodes: dict) -> list[str]:
-    """规则1: 检查所有 capability 是否在 Planner 可见清单内。返回问题列表。
+def _check_capabilities_exist(nodes: dict, allowed: set[str]) -> list[str]:
+    """规则1: 检查所有 capability 是否在当前请求授权可见清单内。返回问题列表。
 
     多域隔离 M5/E9（2026-10-06）：口径从「已注册全量」收缩为「Planner 可见
     清单」（manifest 派生，routed:false 内部能力退出规划面）——与 planner
     prompt 渲染的清单同源，防缓存/改单路径把 email.watch 这类内部能力
     塞回计划。
-    """
-    from backend.orchestration.router.manifest import effective_manifest
 
-    valid = set(effective_manifest().planner_visible_capability_names)
+    产品授权预过滤（PR #115 Codex P2）：可见集再经 product_allows_capability
+    收窄（由 critique_node 传入 allowed）——agent 产品不得保留 travel/cs
+    专属步骤，其他租户未授权的 mcp.* 工具不得进计划。
+    """
     issues = []
     for sid, node in nodes.items():
         cap = node.get("capability", "")
-        if cap and cap not in valid:
-            issues.append(f"步骤{sid}: capability '{cap}' 不在 Planner 可见清单内")
+        if cap and cap not in allowed:
+            issues.append(f"步骤{sid}: capability '{cap}' 不在当前授权可见清单内")
     return issues
 
 
@@ -112,15 +113,19 @@ def _check_plan_depth(plan: dict) -> list[str]:
     return []
 
 
-def _run_rules(question: str, plan: dict) -> list[str]:
-    """跑所有规则，返回问题列表。空列表表示计划无需修正。"""
+def _run_rules(question: str, plan: dict, allowed: set[str]) -> list[str]:
+    """跑所有规则，返回问题列表。空列表表示计划无需修正。
+
+    `allowed` 为当前请求的授权可见集（critique_node 派生后贯穿全部规则、
+    schema 渲染与 normalize_plan，保证同一口径）。
+    """
     nodes = plan.get("nodes", {})
     edges = plan.get("edges", {})
     if not nodes:
         return ["计划为空"]
 
     issues = []
-    issues += _check_capabilities_exist(nodes)
+    issues += _check_capabilities_exist(nodes, allowed)
     issues += _check_edges_valid(nodes, edges)
     issues += _check_missing_analysis(question, nodes)
     issues += _check_redundant_knowledge(question, nodes)
@@ -223,8 +228,22 @@ def critique_node(state: dict) -> dict:
 
     logger.info(f"[Critique] 开始规则审查 ({node_count} 步骤)")
 
+    # ── 授权可见集（PR #115 Codex P2）：渲染面与执行面同谓词 ──
+    # manifest 可见集再经 product_allows_capability 收窄：agent 不渲染
+    # travel/cs 专属步骤，mcp.* 按租户授权快照过滤；与 normalize_plan、
+    # schema 文本、规则引擎共用同一集合。
+    from backend.core.product_context import (
+        filter_capabilities_for_state,
+        product_id_from_state,
+    )
+    from backend.orchestration.router.manifest import effective_manifest
+
+    visible = set(filter_capabilities_for_state(
+        effective_manifest().planner_visible_capability_names, state))
+    product_id = product_id_from_state(state)
+
     # ── 阶段1: 规则引擎（0ms）──
-    issues = _run_rules(question, plan)
+    issues = _run_rules(question, plan, visible)
 
     if not issues:
         logger.info("[Critique] 规则校验通过，跳过 LLM 审查")
@@ -234,9 +253,12 @@ def critique_node(state: dict) -> dict:
 
     # ── 阶段2: 自动修复 ──
     auto_fixed = _auto_fix_plan(plan, issues, question)
+    # 自动修复结果同样过授权 normalize：LLM 失败回退路径不得把越权步骤
+    # 带回计划（执行期 product 门兜底，但渲染面先收口）
+    auto_fixed = _normalize_plan(auto_fixed, allowed=visible)
 
     # 判断剩余问题是否需要 LLM
-    remaining = _run_rules(question, auto_fixed)
+    remaining = _run_rules(question, auto_fixed, visible)
     if not remaining:
         logger.info("[Critique] 规则引擎自动修复完成，跳过 LLM")
         plan_changed = json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
@@ -244,7 +266,7 @@ def critique_node(state: dict) -> dict:
 
     # ── 阶段3: LLM 修正（仅余复杂问题）──
     logger.info(f"[Critique] {len(remaining)} 个问题需 LLM 修正: {remaining}")
-    capabilities_schema = tool_registry.get_capabilities_schema_text()
+    capabilities_schema = tool_registry.get_capabilities_schema_text(allowed=visible)
     system_prompt = prompt_service.render_sync("planner.critique", capabilities_schema=capabilities_schema).text
 
     user_message = f"""原始用户问题: {question}
@@ -271,7 +293,7 @@ def critique_node(state: dict) -> dict:
             plan_changed = not rejected and json.dumps(plan, sort_keys=True) != json.dumps(auto_fixed, sort_keys=True)
             return {"plan": auto_fixed, "_plan_critiqued": True, "_plan_changed": plan_changed}
 
-        corrected = _normalize_plan(corrected)
+        corrected = _normalize_plan(corrected, allowed=visible)
         corrected, rejected = _depth_backstop(corrected)
         if rejected:
             return {"plan": corrected, "_plan_critiqued": True, "_plan_changed": True}
@@ -282,7 +304,7 @@ def critique_node(state: dict) -> dict:
 
         if plan_changed:
             logger.info(
-                f"[Critique] LLM 已修正: "
+                f"[Critique] LLM 已修正(product={product_id}): "
                 f"原={len(plan.get('nodes',{}))}步 → 新={len(corrected.get('nodes',{}))}步"
             )
         else:

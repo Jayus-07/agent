@@ -27,10 +27,16 @@ from backend.prompts.planner import build_output_example, is_knowledge_question
 from backend.shared.logger import logger
 
 
-def _cache_key(question: str, kb_id: str, prompt_version: int | None = None) -> str:
-    """缓存键：问题 + KB ID + capability 集合 + prompt 版本的 hash。"""
+def _cache_key(question: str, kb_id: str, product_id: str = "", domain: str = "",
+               prompt_version: int | None = None) -> str:
+    """缓存键：问题 + KB ID + 产品/域 + capability 集合 + prompt 版本的 hash。
+
+    产品/域必须参与键：可见集按产品授权过滤后，同一问题在不同产品下
+    计划不同——共用键会让一个产品命中另一产品的（可能越权的）计划
+    （PR #115 Codex P2）。
+    """
     caps = tuple(sorted(_planner_visible_capabilities()))
-    raw = f"{question}|{kb_id}|{caps}|{prompt_version or 0}"
+    raw = f"{question}|{kb_id}|{product_id}|{domain}|{caps}|{prompt_version or 0}"
     return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
 
@@ -48,11 +54,26 @@ def _planner_visible_capabilities() -> tuple[str, ...]:
     return effective_manifest().planner_visible_capability_names
 
 
+def _authorized_visible_capabilities(product_id: str, domain: str) -> tuple[str, ...]:
+    """当前请求的**授权**可见集：manifest 可见集 ∩ product_allows_capability。
+
+    与执行期门（skills/base.py、direct_executor、GovernanceRuntime）同谓词——
+    Planner 渲染面不得宽于执行面：travel/cs 专属能力不进 agent 规划面，
+    其他租户未授权的 mcp.* 工具不进 prompt（PR #115 Codex P2）。
+    """
+    from backend.core.product_context import filter_capabilities_for_state
+
+    return filter_capabilities_for_state(
+        _planner_visible_capabilities(),
+        {"product_id": product_id, "domain": domain},
+    )
+
+
 # =====================================================
 # Planner 节点
 # =====================================================
 
-def _format_capabilities_schema() -> str:
+def _format_capabilities_schema(visible: tuple[str, ...] | None = None) -> str:
     """格式化 Planner 可见 capability 的 schema 为 prompt 用。
 
     注：依赖 tool_registry 保留在 planner.py 而非 prompts/planner.py
@@ -60,9 +81,13 @@ def _format_capabilities_schema() -> str:
     清单来源是 manifest 派生（多域隔离 M5/E9）：routed:false 内部能力
     不再渲染进 prompt——此前取 tool_registry 全量 17 个，Planner 能选到
     email.watch 这类内部长轮询能力。
+
+    `visible` 传入 `_authorized_visible_capabilities` 的结果（产品授权
+    过滤后）——未传时退回 manifest 全量可见集（仅供离线/单测）。
     """
     lines = []
-    for cap_name in _planner_visible_capabilities():
+    for cap_name in (visible if visible is not None
+                     else _planner_visible_capabilities()):
         schema = tool_registry.get_schema(cap_name)
         if not schema:
             continue
@@ -120,6 +145,12 @@ def planner_node(state: dict) -> dict:
         logger.warning("[Planner] 空问题，返回空 plan")
         return {"plan": {"nodes": {}, "edges": {}}}
 
+    # 可信产品/域（执行门同取值链：request_context 投影 → state 平铺 →
+    # internal），决定授权可见集与缓存隔离
+    from backend.core.product_context import product_id_from_state
+    product_id = product_id_from_state(state)
+    domain = str(state.get("domain") or "")
+
     # ── 2026-08-11: Router candidates hint ──
     router_decision = state.get("route_decision") or {}
     router_candidates = router_decision.get("candidates", []) if isinstance(router_decision, dict) else []
@@ -133,13 +164,15 @@ def planner_node(state: dict) -> dict:
     # ── P2 性能优化：缓存命中 → 跳过 LLM ──
     from backend.prompts.service import prompt_service
     prompt_version = prompt_service.get_version_for_cache_key("planner.system")
-    cached = _planner_cache.get_json(_cache_key(question, kb_id, prompt_version))
+    cached = _planner_cache.get_json(
+        _cache_key(question, kb_id, product_id, domain, prompt_version))
     if cached is not None:
         logger.info(f"[Planner] 缓存命中 → {len(cached.get('nodes',{}))} 节点")
         return {"plan": cached}
 
-    capabilities_schema = _format_capabilities_schema()
-    cap_example = _planner_visible_capabilities()[0]
+    visible = _authorized_visible_capabilities(product_id, domain)
+    capabilities_schema = _format_capabilities_schema(visible)
+    cap_example = visible[0] if visible else "rag.search"
     schema_overview = _format_schema_overview()
     output_example = build_output_example(cap_example)
 
@@ -177,25 +210,30 @@ def planner_node(state: dict) -> dict:
         # 提取 JSON（现在直接返回 dict）
         plan = _extract_json(content)
 
-        # 校验
-        plan = _normalize_plan(plan)
+        # 校验（叠加当前请求授权集：LLM 输出不得保留越权能力）
+        plan = _normalize_plan(plan, allowed=set(visible))
 
         # 后置规则过滤器：非知识类问题强制移除冗余 RAG 步骤
         plan = _filter_plan(plan, question)
 
         # 知识类问题强制补 RAG：如果问题含知识库关键词但 Planner 未创建 RAG 步骤
-        plan = _ensure_knowledge_step(plan, question)
+        plan = _ensure_knowledge_step(plan, question,
+                                      rag_allowed="rag.search" in visible)
 
         node_count = len(plan.get("nodes", {}))
         edge_count = len(plan.get("edges", {}))
-        logger.info(f"[Planner] 计划生成: {node_count} 个节点, {edge_count} 条依赖")
+        logger.info(f"[Planner] 计划生成(product={product_id}): "
+                    f"{node_count} 个节点, {edge_count} 条依赖")
 
         # P2 perf: 写入缓存
-        _planner_cache.set_json(_cache_key(question, kb_id, prompt_version), plan)
+        _planner_cache.set_json(
+            _cache_key(question, kb_id, product_id, domain, prompt_version),
+            plan)
 
         # 兜底：空计划 → 自动添加 search_knowledge 步骤
         if not plan.get("nodes"):
-            plan = _fallback_plan(question)
+            plan = _fallback_plan(question,
+                                  rag_allowed="rag.search" in visible)
             logger.info("[Planner] 空计划，使用兜底 RAG 步骤")
 
         # KB 隔离：为所有 search_knowledge 步骤注入 kb_id
@@ -209,11 +247,13 @@ def planner_node(state: dict) -> dict:
     except json.JSONDecodeError as e:
         logger.error(f"[Planner] JSON 解析失败: {e}, 内容: {content[:200]}")
         logger.info("[Planner] 使用兜底 RAG 步骤")
-        return {"plan": _fallback_plan(question)}
+        return {"plan": _fallback_plan(question,
+                                       rag_allowed="rag.search" in visible)}
     except Exception as e:
         logger.error(f"[Planner] 规划失败: {e}")
         logger.info("[Planner] 使用兜底 RAG 步骤")
-        return {"plan": _fallback_plan(question)}
+        return {"plan": _fallback_plan(question,
+                                       rag_allowed="rag.search" in visible)}
 
 
 # =====================================================
@@ -286,12 +326,16 @@ def _filter_plan(plan: dict, question: str) -> dict:
     return {"nodes": nodes, "edges": cleaned_edges}
 
 
-def _ensure_knowledge_step(plan: dict, question: str) -> dict:
+def _ensure_knowledge_step(plan: dict, question: str,
+                           rag_allowed: bool = True) -> dict:
     """
     知识类问题强制补 RAG：如果问题明确涉及知识库内容，但 Planner 未生成 RAG 步骤，自动补充。
     解决小模型 Planner 将知识类问题误路由到 SQL 的问题。
+
+    `rag_allowed=False`（rag.search 不在当前产品授权可见集）时不注入——
+    同 _fallback_plan，补步骤不得越过产品授权。
     """
-    if not is_knowledge_question(question):
+    if not rag_allowed or not is_knowledge_question(question):
         return plan
 
     nodes = plan.get("nodes", {})
@@ -321,8 +365,14 @@ def _ensure_knowledge_step(plan: dict, question: str) -> dict:
     return plan
 
 
-def _fallback_plan(question: str) -> dict:
-    """空计划时的兜底：自动走知识库检索"""
+def _fallback_plan(question: str, rag_allowed: bool = True) -> dict:
+    """空计划时的兜底：自动走知识库检索。
+
+    `rag_allowed=False`（rag.search 不在当前产品授权可见集）时退空计划——
+    兜底不得注入执行期会被 product 门拒绝的步骤。
+    """
+    if not rag_allowed:
+        return {"nodes": {}, "edges": {}}
     return {
         "nodes": {
             "1": {

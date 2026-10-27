@@ -13,6 +13,8 @@ interface WorkbenchShellProps<TabId extends string> {
   tabs: readonly WorkbenchTab<TabId>[]
   activeTab: TabId
   onTabChange: (tab: TabId) => void
+  /** 页头动作区（导出/新建等）；缺省不渲染，既有用法不受影响 */
+  actions?: ReactNode
   children: ReactNode
 }
 
@@ -22,14 +24,18 @@ export default function WorkbenchShell<TabId extends string>({
   tabs,
   activeTab,
   onTabChange,
+  actions,
   children,
 }: WorkbenchShellProps<TabId>) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <header className="shrink-0 border-b border-black/5 bg-white px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-7xl">
-          <h1 className="text-xl font-semibold tracking-tight text-text-primary">{title}</h1>
-          {description && <p className="mt-1 text-xs leading-5 text-text-secondary">{description}</p>}
+        <div className="mx-auto flex w-full max-w-7xl items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold tracking-tight text-text-primary">{title}</h1>
+            {description && <p className="mt-1 text-xs leading-5 text-text-secondary">{description}</p>}
+          </div>
+          {actions && <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">{actions}</div>}
         </div>
       </header>
       <div className="shrink-0 border-b border-black/5 bg-white px-4 sm:px-6">

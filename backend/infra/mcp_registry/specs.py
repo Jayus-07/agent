@@ -13,6 +13,7 @@ import json
 import re
 from typing import Any
 
+from backend.core.product_context import DOMAIN_LABELS
 from backend.core.tool_governance.models import (
     ApprovalPolicy,
     Operation,
@@ -199,6 +200,10 @@ def derive_tool_spec(
     operation = str(raw.get("operation") or "read")
     risk_level = str(raw.get("risk_level") or "R1")
     approval = str(raw.get("confirmation_policy") or "none")
+    # 业务域标签（决策 #15 域硬隔离的授权校验依据；空 = 未分类，兼容存量）
+    domain = str(raw.get("domain") or "").strip().lower()
+    if domain and domain not in DOMAIN_LABELS:
+        raise SpecDeriveError(f"{capability}: domain 非法: {domain}")
     if operation not in _VALID_OPERATIONS:
         raise SpecDeriveError(f"{capability}: operation 非法: {operation}")
     if risk_level not in _VALID_RISKS:

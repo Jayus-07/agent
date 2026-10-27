@@ -183,7 +183,11 @@ class ExecutionModeResolver:
         try:
             from backend.orchestration.capability_registry import tool_registry
             from backend.core.tool_governance.registry import get_tool_spec
-            canonical_domain = {"travel_booking": "travel", "travel_commerce": "travel"}.get(domain, domain)
+            # 域别名单一事实源 = capability_router（域字面量守卫测试禁止
+            # 在 router 生产文件里再维护第二份映射表）
+            from backend.orchestration.router.capability_router import _DOMAIN_ALIASES
+
+            canonical_domain = _DOMAIN_ALIASES.get(domain, domain)
             declaration = next(
                 item for item in effective_manifest().capabilities if item.name == capability
             )

@@ -118,7 +118,7 @@ export const NAV: NavEntry[] = [
     icon: <Settings size={18} />, label: '能力治理', minRole: 'editor', alwaysOpen: true,
     items: [
       { label: 'Tool 治理', path: '/tools', icon: <Wrench size={16} />, minRole: 'admin', section: 'Tool 与 Capability' },
-      { label: 'MCP 能力中心', path: '/mcp', icon: <Plug size={16} />, minRole: 'admin', section: 'Tool 与 Capability' },
+      { label: '连接中心', path: '/mcp', icon: <Plug size={16} />, minRole: 'admin', section: 'Tool 与 Capability' },
       { label: 'Skill 与 Capability', path: '/skills', icon: <Puzzle size={16} />, section: 'Tool 与 Capability' },
       {
         label: '模型与供应商', path: '/settings/models', icon: <Settings size={16} />, minRole: 'admin', section: '模型与成本',

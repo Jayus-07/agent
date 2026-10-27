@@ -42,7 +42,7 @@ export default function ToolConstraintsSection() {
           工具执行约束
           <span className="text-[11px] font-normal text-text-muted">
             {data ? `${data.count} 个能力` : '加载中…'}
-            （只读：动态工具的约束修改走 MCP 能力中心审核流）
+            （只读：动态工具的约束修改走 Tool 治理审核流）
           </span>
         </h2>
         <button onClick={() => void refetch()} disabled={isFetching}

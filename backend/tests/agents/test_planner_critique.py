@@ -129,6 +129,102 @@ class TestPlannerNode:
 
 
 # =====================================================
+# 产品授权预过滤（PR #115 Codex P2）
+# =====================================================
+
+class TestProductAuthorizedVisibility:
+    """渲染面与执行面同谓词：Planner/Critique 可见集 ⊆ 执行授权集。"""
+
+    def test_agent_visible_set_excludes_domain_exclusive_capabilities(self):
+        from backend.core.product_context import filter_capabilities_for_state
+        from backend.orchestration.router.manifest import effective_manifest
+
+        visible = set(filter_capabilities_for_state(
+            effective_manifest().planner_visible_capability_names,
+            {"product_id": "agent", "domain": "general"},
+        ))
+        assert "travel.poi_search" not in visible
+        assert "map.lookup" in visible        # 刻意保留主图的一次性答案能力
+        assert "rag.search" in visible
+
+    def test_schema_text_with_allowed_set_hides_unauthorized(self):
+        from backend.core.product_context import filter_capabilities_for_state
+        from backend.orchestration.capability_registry import tool_registry
+        from backend.orchestration.router.manifest import effective_manifest
+
+        visible = set(filter_capabilities_for_state(
+            effective_manifest().planner_visible_capability_names,
+            {"product_id": "agent", "domain": "general"},
+        ))
+        text = tool_registry.get_capabilities_schema_text(allowed=visible)
+        assert "### travel.poi_search" not in text
+        assert "### rag.search" in text
+
+    def test_normalize_plan_drops_steps_not_in_allowed_set(self):
+        from backend.agents.planner.plan_utils import normalize_plan
+
+        plan = {
+            "nodes": {
+                "1": {"step_id": "1", "capability": "sql.query",
+                      "description": "x", "params": {}},
+                "2": {"step_id": "2", "capability": "mcp.echo",
+                      "description": "y", "params": {}},
+            },
+            "edges": {},
+        }
+        normalized = normalize_plan(plan, allowed={"sql.query"})
+        assert "1" in normalized["nodes"]
+        assert "2" not in normalized["nodes"]
+
+    def test_critique_llm_correction_cannot_restore_unauthorized_step(self):
+        """agent 产品：计划含 travel 步骤 + 坏 edges → LLM 返回含 travel 的
+        修正 → normalize 按授权集剔除 travel 步骤。"""
+        state = {
+            "product_id": "agent",
+            "domain": "general",
+            "question": "查一下今天的订单数据",
+            "plan": {
+                "nodes": {
+                    "1": {"step_id": "1", "capability": "sql.query",
+                          "description": "x", "params": {}},
+                    "2": {"step_id": "2", "capability": "travel.poi_search",
+                          "description": "y", "params": {}},
+                    "3": {"step_id": "3", "capability": "report.generate",
+                          "description": "z", "params": {}},
+                },
+                "edges": {"3": ["99"]},
+            },
+        }
+        corrected = json.dumps({
+            "nodes": {
+                "1": {"step_id": "1", "capability": "sql.query",
+                      "description": "x", "params": {}},
+                "2": {"step_id": "2", "capability": "travel.poi_search",
+                      "description": "y", "params": {}},
+                "3": {"step_id": "3", "capability": "report.generate",
+                      "description": "z", "params": {}},
+            },
+            "edges": {"3": ["1"]},
+        })
+        fake = _FakeLLM([corrected])
+        with patch.object(critique_mod, "llm", fake):
+            result = critique_node(state)
+
+        caps = {n["capability"] for n in result["plan"]["nodes"].values()}
+        assert "travel.poi_search" not in caps
+        assert {"sql.query", "report.generate"} <= caps
+        # LLM prompt 的 schema 文本同样不含 travel 描述
+        system_text = fake.calls[0][0][1]
+        assert "### travel.poi_search" not in system_text
+
+    def test_planner_cache_key_separates_products(self):
+        k_agent = planner_mod._cache_key("同一问题", "kb", "agent", "general", 1)
+        k_cs = planner_mod._cache_key(
+            "同一问题", "kb", "customer_service", "customer_service", 1)
+        assert k_agent != k_cs
+
+
+# =====================================================
 # Critique
 # =====================================================
 
