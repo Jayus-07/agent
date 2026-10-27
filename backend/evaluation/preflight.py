@@ -14,8 +14,8 @@
 输出机器判定行（CI 直接 grep）：
 
     EVAL_PREFLIGHT_PASS=true
-    selection=regression kb_id=rag_eval_kb fixture_set=baseline
-    dataset_version=5.0.0-unified case_count=29 suite_hash=87c0... git_sha=abc1234
+    selection=desktop_upload_full kb_id=rag_eval_kb fixture_set=baseline
+    dataset_version=6.0.0-desktop-candidate.1 case_count=24 suite_hash=... git_sha=abc1234
 
 失败：``EVAL_PREFLIGHT_PASS=false`` + ``EVAL_PREFLIGHT_FAIL_STAGE=<stage>``，
 退出码 1，在真正评测开始前终止。
@@ -203,7 +203,7 @@ def run_preflight_strict(module: str = "rag", selection: str | None = None) -> P
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="评测运行前置校验（P0-03）")
     parser.add_argument("--module", default="rag", help="评测模块（当前 suite 化的为 rag）")
-    parser.add_argument("--selection", required=True, help="评测集 selection 名（如 regression）")
+    parser.add_argument("--selection", required=True, help="评测集 selection 名（如 desktop_upload_full）")
     args = parser.parse_args(argv)
     result = run_preflight(module=args.module, selection=args.selection)
     print(result.render())

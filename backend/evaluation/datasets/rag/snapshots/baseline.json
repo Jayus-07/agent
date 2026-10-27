@@ -2,7 +2,7 @@
   "name": "baseline",
   "kb_id": "rag_eval_kb",
   "fixture_set": "baseline",
-  "version_id": "rag_eval_kb-baseline-2026-09-18",
-  "dataset_version": "5.0.0-unified",
-  "cases_path": "backend/evaluation/datasets/rag/suites/pr_baseline.json"
+  "version_id": "rag_eval_kb-baseline-6.0.0-desktop-candidate.1",
+  "dataset_version": "6.0.0-desktop-candidate.1",
+  "cases_path": "backend/evaluation/datasets/rag/suites/desktop_upload_full.json"
 }

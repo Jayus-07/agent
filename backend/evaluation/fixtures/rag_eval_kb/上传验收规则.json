@@ -1,0 +1,37 @@
+{
+  "version": "desktop-rag-upload-1.0.0",
+  "status": "基础验收规范；实际产品执行尚未接入",
+  "common": [
+    "HTTP 200 只代表受理，必须核对处理终态和 Active 发布",
+    "入库文档关联本轮样本SHA256、实际doc_id和generation",
+    "Registry、ChunkStore、向量和BM25引用同一发布代次，无悬空Parent引用",
+    "关键正文、数字、表格行不可丢失；明确失败不得发布半成品",
+    "未执行、缺依赖或无证据必须报告BLOCKED或UNVERIFIED，不算PASS"
+  ],
+  "scenarios": [
+    {"id":"UPLOAD-01","checks":["章节及条款来源可追踪","正文完整，章节路径不丢失"]},
+    {"id":"UPLOAD-02","checks":["11组FAQ问答完整","普通章节不得被FAQ策略丢弃"]},
+    {"id":"UPLOAD-03","checks":["40组FAQ问答完整","FAQ-001等编号与对应答案同属有效证据"]},
+    {"id":"UPLOAD-04","checks":["150段及单行文本均可处理","无标题时可退化切分但不得吞正文"]},
+    {"id":"UPLOAD-05","checks":["标题前版本说明及适用范围可检索","保留SENTINEL-PREAMBLE-001"]},
+    {"id":"UPLOAD-06","checks":["长步骤可拆分且保留步骤上下文","START/MID/END三个哨兵全部保留"]},
+    {"id":"UPLOAD-07","checks":["长条款切分后保留条款号及来源页","正文完整且不把截断片段假报完整"]},
+    {"id":"UPLOAD-08","checks":["5行数据及表头完整","6294、28240、12730、47856、4152正确","拆表时每块可辨识列含义"]},
+    {"id":"UPLOAD-09","checks":["以源PDF选定跨页表格逐行核对，不以总chunk数替代","表头及页码可追踪"],"manual_baseline":"待人工固化完整跨页表格行清单；该子项不得报告PASS"},
+    {"id":"UPLOAD-10","checks":["正文表格顺序P1,T1,P2,T2,P3,T3,P4保持"]},
+    {"id":"UPLOAD-11","checks":["UTF-8、BOM、GBK解码正确","00012345、0001、007A、000123、12E3、00E5、0123456789012保持字符串","源XLSX已损坏的前导零不得凭空恢复"],"diagnostic_only":["sku_mangled_by_excel.xlsx"]},
+    {"id":"UPLOAD-12","checks":["员工、产品、汇总按Sheet保留身份","空Sheet不报错","公式无缓存不得当作0或编造计算值","隐藏Sheet行为须与运行前声明的产品策略一致"],"required_run_policy":["hidden_sheet_policy","formula_policy"]},
+    {"id":"UPLOAD-13","checks":["长中文PDF内容与来源页保留","记录耗时与峰值内存，不凭空制定性能门槛"]},
+    {"id":"UPLOAD-14","checks":["中文与英文长PDF不能因语言过滤全量丢弃后假成功","超限应明确失败且无半成品发布","记录峰值内存和恢复行为"],"performance_gate":"尚无固定环境基线，当前仅观测"},
+    {"id":"UPLOAD-15","checks":["正常页1、2、4的哨兵可识别","空白及不可识别页有明确状态","空白页不产生垃圾正文","无OCR依赖时明确BLOCKED或失败，不能PASS"],"required_run_policy":["ocr_provider","partial_document_publish_policy"],"reference_only":["source_text.pdf，禁止作为扫描件的检索证据"]},
+    {"id":"UPLOAD-16","checks":["相同SHA256可映射同一文档，重复请求不堆积向量","数字变化和新版不得只因高相似度静默丢失","无关负对照不得误合并","覆盖更新与并存采用独立运行步骤，禁止混淆"],"required_run_policy":["near_duplicate_policy","version_policy"]}
+  ],
+  "lifecycle": [
+    {"id":"UL-01","steps":["上传base_v1","重复上传相同文件"],"assertions":["重复处理幂等","不新增重复索引"]},
+    {"id":"UL-02","steps":["上传base_v1","将v2内容以base_v1同名上传"],"assertions":["新代成功发布后旧代不可见","检索命中新版事实"]},
+    {"id":"UL-03","steps":["确认旧代Active","同名上传确定性解析失败样本"],"assertions":["失败终态明确","旧代仍可检索","候选未误发布"]},
+    {"id":"UL-04","steps":["上传并确认Active","删除文档","等待删除终态"],"assertions":["Registry、向量、BM25均不可检索已删除文档"]},
+    {"id":"UL-05","steps":["仅在隔离栈中断索引Worker","恢复Worker并等待任务终态"],"assertions":["恢复或失败有明确终态","不重复发布","无孤立候选"]},
+    {"id":"UL-06","steps":["在不同租户及部门上传同名不同内容文件","用各自身份检索"],"assertions":["禁止跨租户泄漏","部门授权有效","同名不导致判分串样本"]}
+  ]
+}

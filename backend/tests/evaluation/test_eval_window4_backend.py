@@ -76,27 +76,30 @@ def test_retention_reference_query_shapes(monkeypatch):
     )
 
 
-# ── C6-3 / REPRO-06：语料快照全 fixture 覆盖 ─────────────────
+# ── C6-3 / REPRO-06：候选 baseline 语料快照 ──────────────────
 
 
-def test_all_fixtures_have_snapshot_files():
+def test_candidate_baseline_has_snapshot_file():
     from backend.evaluation.datasets.rag.snapshots import load_rag_snapshot
 
-    for fixture in ("baseline", "expanded_100", "scale_20k"):
-        snapshot = load_rag_snapshot(fixture)
-        assert snapshot["version_id"], f"{fixture} 缺 version_id"
-        assert snapshot["kb_id"] == "rag_eval_kb"
+    snapshot = load_rag_snapshot("baseline")
+    assert snapshot["version_id"] == "rag_eval_kb-baseline-6.0.0-desktop-candidate.1"
+    assert snapshot["kb_id"] == "rag_eval_kb"
+    assert snapshot["cases_path"].endswith("desktop_upload_full.json")
 
 
-def test_nonbaseline_scope_records_version_without_filtering():
-    """expanded_100/scale_20k：version_id 进 scope（哈希输入）但不过滤检索。"""
+def test_explicit_nonbaseline_scope_records_version_without_filtering():
+    """外部 non-baseline 范围显式提供版本时仍不启用版本过滤。"""
     from backend.evaluation.runners.rag import build_eval_scope
 
-    scope = build_eval_scope(kb_id="rag_eval_kb", fixture_set="expanded_100", multiquery=False)
-    assert scope.version_id == "rag_eval_kb-expanded_100-2026-10-04"
+    scope = build_eval_scope(
+        kb_id="rag_eval_kb", fixture_set="expanded_100", multiquery=False,
+        version_id="external-expanded-version",
+    )
+    assert scope.version_id == "external-expanded-version"
     assert scope.enforce_filter is False
     assert scope.filter_version_id is None  # 过滤不受影响
-    assert scope.as_dict()["version_id"] == "rag_eval_kb-expanded_100-2026-10-04"
+    assert scope.as_dict()["version_id"] == "external-expanded-version"
 
 
 def test_baseline_scope_still_enforces_filter():

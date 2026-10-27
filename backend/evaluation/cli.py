@@ -119,7 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--selection", type=str, default=None, metavar="NAME",
-        help="命名 RAG suite（如 pr_baseline/expanded_100/scale_20k）",
+        help="命名 RAG suite（如 desktop_upload_smoke/desktop_upload_full）",
     )
     parser.add_argument("--kb-id", type=str, default=None, help="显式校验评测 KB")
     parser.add_argument("--fixture-set", type=str, default=None, help="显式校验运行时语料范围")

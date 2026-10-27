@@ -16,11 +16,11 @@ def _report(config: EvalConfig) -> EvalReport:
             "evaluation_scope": {
                 "kb_id": "rag_eval_kb",
                 "fixture_set": "baseline",
-                "version_id": "rag_eval_kb-baseline-2026-09-18",
+                "version_id": "rag_eval_kb-baseline-6.0.0-desktop-candidate.1",
                 "multiquery": False,
             },
             "selection": config.selection,
-            "dataset_version": "5.0.0-unified",
+            "dataset_version": "6.0.0-desktop-candidate.1",
             "prompt_snapshot": {"test.prompt": 1},
         },
         prompt_versions={"test.prompt": 1},
@@ -28,14 +28,14 @@ def _report(config: EvalConfig) -> EvalReport:
 
 
 def test_rag_provenance_contains_suite_and_scope():
-    config = EvalConfig(module="rag", selection="pr_baseline")
+    config = EvalConfig(module="rag", selection="desktop_upload_full")
 
     provenance = build_eval_provenance(config, _report(config))
 
-    assert provenance["suite"] == "pr_baseline"
+    assert provenance["suite"] == "desktop_upload_full"
     assert provenance["kb_id"] == "rag_eval_kb"
     assert provenance["fixture_set"] == "baseline"
-    assert provenance["version_id"] == "rag_eval_kb-baseline-2026-09-18"
+    assert provenance["version_id"] == "rag_eval_kb-baseline-6.0.0-desktop-candidate.1"
     assert provenance["dataset_version"]
     assert provenance["git_sha"]
 
@@ -43,7 +43,7 @@ def test_rag_provenance_contains_suite_and_scope():
 def test_prompt_candidate_snapshot_is_not_replaced_by_current_active_version():
     config = EvalConfig(
         module="rag",
-        selection="pr_baseline",
+        selection="desktop_upload_full",
         prompt_versions={"test.prompt": "2"},
         release_id="rel-1",
     )

@@ -7,69 +7,46 @@ import pytest
 from backend.evaluation.dataset import load_dataset
 
 
-def test_pr_suite_has_canonical_cases_and_baseline_scope():
-    """PR 套件只能跑统一评测 KB 的 baseline 语料。"""
-    cases = load_dataset("rag", selection="pr_baseline")
+def test_desktop_upload_suites_cover_the_new_canonical_cases():
+    """上传专项 smoke/full 组必须只引用新 canonical 题库。"""
+    full = load_dataset("rag", selection="desktop_upload_full")
+    smoke = load_dataset("rag", selection="desktop_upload_smoke")
 
-    assert cases
-    assert {case.metadata["kb_id"] for case in cases} == {"rag_eval_kb"}
-    assert {case.metadata["fixture_set"] for case in cases} == {"baseline"}
-    assert {case.metadata["source_fixture_set"] for case in cases} == {"baseline"}
-
-
-def test_prompt_release_smoke_suite_has_eight_representative_cases():
-    """Prompt 发布短门禁固定为 8 条，完整 baseline 仍用于更慢的回归。"""
-    cases = load_dataset("rag", selection="pr_smoke")
-
-    assert len(cases) == 8
-    assert {case.metadata["kb_id"] for case in cases} == {"rag_eval_kb"}
-    assert {case.metadata["fixture_set"] for case in cases} == {"baseline"}
-    assert {case.metadata["source_fixture_set"] for case in cases} == {"baseline"}
-    assert {case.metadata["tier"] for case in cases} == {"smoke", "core", "hard"}
+    assert [case.id for case in full] == [f"UFQ-{number:03d}" for number in range(1, 25)]
+    assert [case.id for case in smoke] == [
+        "UFQ-001", "UFQ-002", "UFQ-007", "UFQ-008",
+        "UFQ-011", "UFQ-016", "UFQ-022", "UFQ-023",
+    ]
+    assert {case.id for case in smoke} <= {case.id for case in full}
+    for cases in (full, smoke):
+        assert {case.metadata["kb_id"] for case in cases} == {"rag_eval_kb"}
+        assert {case.metadata["fixture_set"] for case in cases} == {"baseline"}
+        assert {case.metadata["source_fixture_set"] for case in cases} == {"baseline"}
 
 
-def test_expanded_suite_is_separate_from_pr_suite():
-    """100 文档专项案例不能与 PR baseline 复用同一批 ID。"""
-    baseline = {case.id for case in load_dataset("rag", selection="pr_baseline")}
-    expanded = {case.id for case in load_dataset("rag", selection="expanded_100")}
+def test_canonical_loader_returns_the_24_case_candidate_dataset():
+    """未指定 suite 时加载 24 条 canonical 桌面上传题目。"""
+    cases = load_dataset("rag")
 
-    assert baseline
-    assert expanded
-    assert baseline.isdisjoint(expanded)
-    assert all(case.metadata["fixture_set"] == "expanded_100" for case in load_dataset("rag", selection="expanded_100"))
-
-
-def test_scale_suite_reuses_expanded_questions_but_changes_runtime_scope():
-    """20k 套件复用 RD 问题，但运行时必须要求 staging 的 scale_20k 语料。"""
-    expanded = load_dataset("rag", selection="expanded_100")
-    scale = load_dataset("rag", selection="scale_20k")
-
-    assert [case.id for case in scale] == [case.id for case in expanded]
-    assert {case.metadata["fixture_set"] for case in scale} == {"scale_20k"}
-    assert {case.metadata["source_fixture_set"] for case in scale} == {"expanded_100"}
-
-
-def test_suite_metadata_is_not_mutated_across_loads():
-    """同一 canonical 案例被不同 suite 引用时，不能污染后续加载结果。"""
-    scale = load_dataset("rag", selection="scale_20k")
-    expanded = load_dataset("rag", selection="expanded_100")
-
-    assert scale[0].metadata["fixture_set"] == "scale_20k"
-    assert expanded[0].metadata["fixture_set"] == "expanded_100"
+    assert len(cases) == 24
+    assert {case.metadata["dataset_version"] for case in cases} == {
+        "6.0.0-desktop-candidate.1"
+    }
 
 
 def test_suites_declare_required_scope_fields():
-    """套件文件必须显式声明范围，禁止再次依赖默认路径猜测。"""
+    """两组必须声明版本、统一 KB 和 baseline 范围。"""
     from backend.evaluation.dataset.loader import DATASET_DIR
 
-    for suite_name in ("pr_baseline", "pr_smoke", "expanded_100", "scale_20k"):
+    for suite_name, case_count in (("desktop_upload_smoke", 8), ("desktop_upload_full", 24)):
         data = json.loads(
             (DATASET_DIR / "rag" / "suites" / f"{suite_name}.json").read_text(encoding="utf-8")
         )
         assert data["kb_id"] == "rag_eval_kb"
-        assert data["fixture_set"] in {"baseline", "expanded_100", "scale_20k"}
-        assert data["dataset_version"]
-        assert data["case_ids"]
+        assert data["fixture_set"] == "baseline"
+        assert data["dataset_version"] == "6.0.0-desktop-candidate.1"
+        assert len(data["case_ids"]) == case_count
+        assert data["min_samples"] == case_count
 
 
 def test_suite_rejects_conflicting_case_kb(tmp_path, monkeypatch):

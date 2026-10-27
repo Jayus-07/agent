@@ -42,7 +42,7 @@ def load_dataset(
 
     Args:
         module: 模块名（rag / planner）
-        selection: 选择集名称（如 "ci_golden"），优先从 suites/ 加载
+        selection: 选择集名称（如 "desktop_upload_full"），优先从 suites/ 加载
         limit: 截断返回前 N 条（用于 smoke test）
     """
     split_dir = DATASET_DIR / module

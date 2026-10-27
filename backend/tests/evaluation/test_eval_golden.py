@@ -6,13 +6,13 @@
   3. 前端 /evaluations "运行" 按钮的离线后端
 
 运行方式：
-  # golden set（10 条 CI 门禁子集）— 默认被跳过（真实重建索引+检索 ~10min），
+  # desktop_upload_full（24 条候选题组）— 默认被跳过（真实重建索引+检索 ~10min），
   # 必须显式开启：
   pytest backend/tests/evaluation/test_eval_golden.py -v --quality-gate
   #   或 RUN_QUALITY_GATE=1 pytest backend/tests/evaluation/test_eval_golden.py -v
   #   并行跑建议加 --dist loadscope（module 级 fixture 只在每个 worker 各建一次）
 
-  # 完整评测集（145 条 canonical）
+  # canonical 完整题组（24 条）
   pytest backend/tests/evaluation/test_eval_golden.py -v --full
 
 环境变量：
@@ -53,13 +53,13 @@ def _is_semantic_mode() -> bool:
 
 
 def _load_golden_cases():
-    """加载 CI golden 子集（10 条）。ID 不可解析时直接 FAIL。"""
+    """加载桌面上传专项完整题组（24 条）。ID 不可解析时直接 FAIL。"""
     from backend.evaluation.dataset import load_dataset
-    return load_dataset("rag", selection="ci_golden")
+    return load_dataset("rag", selection="desktop_upload_full")
 
 
 def _load_golden_thresholds() -> dict:
-    """从 ci_golden.jsonl 的 companion 元数据或默认值获取阈值。"""
+    """获取完整题组的确定性评测阈值。"""
     return {
         "recall_at_5_min": 0.60,
         "mrr_min": 0.50,
@@ -72,7 +72,7 @@ def _load_golden_thresholds() -> dict:
     }
 
 
-def _run_rag_cases(selection: str = "ci_golden") -> tuple:
+def _run_rag_cases(selection: str = "desktop_upload_full") -> tuple:
     """通过 EvaluationService 运行指定评测集 — 单一核心链路。"""
     from backend.evaluation.config import EvalConfig
     from backend.evaluation.service import EvaluationService

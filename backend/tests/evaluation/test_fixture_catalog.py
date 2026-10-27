@@ -11,18 +11,15 @@ from backend.evaluation.dataset.fixture_catalog import (
 
 
 def test_catalog_has_one_kb_and_known_fixture_sets():
-    """若统一 manifest 漏映射任一语料集合，评测范围会被静默缩小。"""
+    """桌面上传候选 manifest 必须完整包含其正式 baseline 语料。"""
     catalog = load_fixture_catalog()
 
     catalog.validate()
 
     assert catalog.kb_id == RAG_EVAL_KB_ID
-    assert {document.fixture_set for document in catalog.documents()} >= {
-        "baseline",
-        "expanded_100",
-    }
-    assert len(catalog.documents("baseline")) == 16
-    assert len(catalog.documents("expanded_100")) == 100
+    assert {document.fixture_set for document in catalog.documents()} == {"baseline"}
+    assert len(catalog.documents("baseline")) == 28
+    assert catalog.documents("expanded_100") == []
 
 
 def test_catalog_rejects_duplicate_fixture_doc_id():

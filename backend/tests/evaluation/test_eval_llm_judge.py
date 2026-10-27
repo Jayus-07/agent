@@ -18,9 +18,9 @@ import pytest
 
 
 def _get_gen_eval_ids() -> list[str]:
-    """获取 generation_eval=true 的 CI golden 用例 ID。"""
+    """获取 generation_eval=true 的完整题组用例 ID。"""
     from backend.evaluation.dataset import load_dataset
-    golden_cases = load_dataset("rag", selection="ci_golden")
+    golden_cases = load_dataset("rag", selection="desktop_upload_full")
     return [c.id for c in golden_cases if c.metadata.get("generation_eval")]
 
 
@@ -39,7 +39,7 @@ def _ollama_available() -> bool:
 
 @pytest.fixture(scope="module")
 def llm_results():
-    """运行 CI golden 中 generation_eval 用例的 Ollama 生成 + 评估。"""
+    """运行完整题组中 generation_eval 用例的 Ollama 生成 + 评估。"""
     if not _ollama_available():
         pytest.skip("Ollama 服务不可用")
 
@@ -48,12 +48,12 @@ def llm_results():
     from backend.evaluation.generation import answer_relevancy_llm, generate_answer_ollama
     from backend.evaluation.service import EvaluationService
 
-    golden_cases = load_dataset("rag", selection="ci_golden")
+    golden_cases = load_dataset("rag", selection="desktop_upload_full")
     gen_ids = set(_get_gen_eval_ids())
     filtered = [c for c in golden_cases if c.id in gen_ids]
 
     config = EvalConfig(
-        module="rag", dataset="rag", selection="ci_golden", live=False,
+        module="rag", dataset="rag", selection="desktop_upload_full", live=False,
     )
     report = EvaluationService().evaluate(config)
     base_results = [r for r in report.results if r.case_id in gen_ids]

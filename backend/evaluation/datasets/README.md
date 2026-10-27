@@ -1,4 +1,4 @@
-# 评测数据集盘点（2026-09-15 整理）
+# 评测数据集盘点（2026-10-21 更新）
 
 > 位置：`backend/evaluation/datasets/`。加载入口统一为 `backend/evaluation/dataset/loader.py::load_dataset(module, selection)`。
 > 优先级：`selection`（suites/）→ `{module}/cases.jsonl`（V3 canonical）→ `{module}/` 目录分片 → 顶层 `{module}_v2.json` / `{module}_test_kb.json` / `{module}.json`。文件名含 `.deprecated.` 一律跳过。
@@ -7,7 +7,7 @@
 
 | 模块 | Canonical | 条数 | 版本 | 加载方式 | 备注 |
 |------|-----------|------|------|----------|------|
-| rag | `rag/cases.jsonl` | 100 | v4.0 | `load_dataset('rag')` | 唯一有 suites 的模块：`smoke`(19) / `quick_26`(26) / `ci_golden`(99) / `feasibility_10`(10) |
+| rag | `rag/cases.jsonl` | 24 | 6.0.0-desktop-candidate.1 | `load_dataset('rag')` | `desktop_upload_smoke`(8) / `desktop_upload_full`(24)，对应 `rag_eval_kb` 的 28 份上传样本 |
 | planner | `planner/cases.jsonl` | 20 | v1.0 | `load_dataset('planner')` | 2026-09-15 由顶层 planner.json 迁入 V3，内容逐条一致 |
 | cs | `cs/cases.jsonl` | 20 | v1.0 | `load_dataset('cs')` | ID 体系 CS-001~020；manifest 2026-09-15 补齐 |
 | sql | `sql/cases.jsonl` | 15 | v1.0 | `load_dataset('sql')` | 含 S014~S017 安全用例 |
@@ -17,7 +17,7 @@
 
 ## 特殊文件
 
-- `rag_test_kb.json`（v4.0，103 条）：**双重角色**——既是 rag 评测知识库的注册源（`backend/config/knowledge_base.py` 的 kb_id `rag_test_kb`），也被 rag 检索/indexer 测试引用。活跃，勿动。
+- `rag_test_kb.json`（v4.0，103 条）：迁移期兼容数据；知识库注册源为 `backend/config/knowledge_base.py` 中的旧 KB `rag_test_kb`，仍被部分检索/indexer 测试引用。新的 RAG 评测使用 `rag/cases.jsonl` 和 `rag_eval_kb` fixture。
 - `rag.v1.deprecated.json` / `rag_v2.deprecated.json`：历史存档，loader 自动跳过。
 - `cs.v1.deprecated.json`：旧 cs 集（ID CS001~020），与新集零交集，2026-09-15 标记弃用。
 - `planner.v1.deprecated.json`：迁移前的顶层 planner.json 原件留档。
@@ -37,7 +37,7 @@
 
 | 模块 | kb_id | 性质 | 说明 |
 |------|-------|------|------|
-| rag | `rag_eval_kb` | ✅ 唯一独立测试库（audience=test） | 269 条全绑定；语料源=data/docs/{rag_test_kb,rag_100_docs,rag_eval_kb}（兼容目录，勿删）；UI 不可见，走 fixture/脚本灌数 |
+| rag | `rag_eval_kb` | ✅ 唯一独立测试库（audience=test） | 当前桌面上传候选版含 24 道问答、28 份正式 fixture；详见 `fixtures/rag_eval_kb/README.md`。旧 data/docs 目录仅作兼容留存；UI 不可见，走 fixture/脚本灌数 |
 | cs | `cs_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 评测本体零检索依赖；合成测试语料存此库；域图 live 仍走生产库 cs_*，接线为后续任务 |
 | travel | `travel_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 离线评测零检索依赖；合成测试语料存此库；live 探针仍走生产库 travel，接线为后续任务 |
 | sql | （空） | 非 RAG | NL2SQL 直连业务库 agent_business |

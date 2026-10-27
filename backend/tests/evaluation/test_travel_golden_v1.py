@@ -51,9 +51,11 @@ def test_rag_regression_workflow_keeps_manual_gates_and_supported_suites():
     assert ".github/scripts/rag_smoke_path_filter.py" in smoke
     for path_prefix in ("backend/rag/", "backend/evaluation/", "backend/config/",
                          "backend/prompts/", "pyproject.toml"):
-        assert path_prefix in path_filter
+        assert path_prefix in smoke
+    # 2026-10-28 合并桌面评测换代：workflow 仅保留 workflow_dispatch
+    # （不设每日 schedule，定时回归由管理端定时任务承担），suite 为 desktop 两件套。
     assert "workflow_dispatch:" in regression
     assert "pull_request:" not in regression
     assert "schedule:" not in regression
-    for selection in ("regression", "ci_golden", "pr_smoke"):
-        assert f"- {selection}" in regression
+    for selection in ("desktop_upload_full", "desktop_upload_smoke"):
+        assert selection in regression

@@ -90,6 +90,9 @@ Dockerfile.*      text eol=lf
 *.woff2 binary
 *.ttf   binary
 
+# RAG 上传测评样本由 manifest SHA-256 锁定，保留源文件原始字节与行尾。
+backend/evaluation/fixtures/rag_eval_kb/** -text -eol
+
 # ── 生成物 / 快照：不参与语言统计与 diff ───────────────────────
 package-lock.json   -diff linguist-generated
 pnpm-lock.yaml      -diff linguist-generated

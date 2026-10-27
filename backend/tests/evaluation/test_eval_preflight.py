@@ -29,14 +29,14 @@ def test_file_content_hash_is_eol_independent(tmp_path):
     assert file_content_hash(crlf) == expected
 
 
-def test_preflight_passes_on_real_regression_suite():
-    """仓库内 regression suite 必须通过全部校验，身份指纹完整。"""
-    result = run_preflight(module="rag", selection="regression")
+def test_preflight_passes_on_real_desktop_upload_suite():
+    """仓库内完整上传题组必须通过全部校验，身份指纹完整。"""
+    result = run_preflight(module="rag", selection="desktop_upload_full")
     assert result.passed, f"reason={result.fail_stage}: {result.reason}"
     assert result.identity["kb_id"] == "rag_eval_kb"
     assert result.identity["fixture_set"] == "baseline"
-    assert result.identity["dataset_version"] == "5.0.0-unified"
-    assert result.identity["case_count"] == 29
+    assert result.identity["dataset_version"] == "6.0.0-desktop-candidate.1"
+    assert result.identity["case_count"] == 24
     rendered = result.render()
     assert "EVAL_PREFLIGHT_PASS=true" in rendered
     assert "fixture_set=baseline" in rendered
@@ -114,7 +114,7 @@ def test_preflight_rejects_missing_case_ids(tmp_path, monkeypatch):
 def test_preflight_cli_exit_codes(tmp_path, capsys):
     from backend.evaluation.preflight import main
 
-    assert main(["--module", "rag", "--selection", "regression"]) == 0
+    assert main(["--module", "rag", "--selection", "desktop_upload_full"]) == 0
     out = capsys.readouterr().out
     assert "EVAL_PREFLIGHT_PASS=true" in out
 
@@ -125,7 +125,7 @@ def test_preflight_cli_exit_codes(tmp_path, capsys):
 
 
 def test_all_declared_suite_hashes_match_normalized_canonical():
-    """仓库一致性：9 个 rag suite 声明的 cases_hash 必须等于归一化 canonical hash。"""
+    """仓库一致性：RAG suite 声明的 cases_hash 必须等于归一化 canonical hash。"""
     from backend.evaluation.dataset.loader import DATASET_DIR
 
     root = DATASET_DIR / "rag"

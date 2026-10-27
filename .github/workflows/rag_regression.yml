@@ -1,7 +1,7 @@
 name: RAG Regression
 
-# 语义定位（2026-10-11 决策）：固定样本质量门禁 —— 对固定 suite（regression,
-# 29 cases）按 DB API 模型口径跑真实检索评测，全部层级阈值达标才 PASS。
+# 语义定位：固定样本质量门禁 —— 对 desktop_upload_full（24 cases）或
+# desktop_upload_smoke（8 cases）按 DB API 模型口径跑真实检索评测，全部层级阈值达标才 PASS。
 # 不包含历史指标基线对比（那是独立的 --compare/--promote-baseline 机制，
 # 本 workflow 未启用，命名不夸大能力）。
 #
@@ -28,11 +28,10 @@ on:
         description: "要运行的 RAG 评测集"
         required: true
         type: choice
-        default: regression
+        default: desktop_upload_full
         options:
-          - regression
-          - ci_golden
-          - pr_smoke
+          - desktop_upload_full
+          - desktop_upload_smoke
 
 permissions:
   contents: read
@@ -43,7 +42,7 @@ concurrency:
 
 jobs:
   rag-regression:
-    name: RAG Regression (${{ inputs.selection || 'regression' }})
+    name: RAG Regression (${{ inputs.selection || 'desktop_upload_full' }})
     runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets；
     # 外部 Fork PR 触发的 run 拿不到 secrets，seed 步骤会显式失败（BLOCKED）。
@@ -121,16 +120,16 @@ jobs:
 
       - name: Evaluation preflight
         env:
-          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
         run: python -m backend.evaluation.preflight --module rag --selection "$EVAL_SELECTION"
 
       - name: Trim corpora to evaluation scope
         run: |
-          # data/docs 里的业务知识库（policy_general 等）不属于评测语料：
-          # pipeline sync 是全量 delta，会把业务文档索引进隔离库并触发
-          # near-dup 交叉 HOLD 评测 fixture。评测只保留 rag_eval_kb 部署
-          # 目录与 fixture 源 rag_test_kb / rag_100_docs。
+          # 本次 RAG fixture 源位于 backend/evaluation/fixtures/rag_eval_kb。
+          # 清除旧 baseline 与兼容别名目录，避免全量 sync 混入旧文档。
           rm -rf data/docs/policy_general
+          rm -rf data/docs/rag_eval_kb data/docs/rag_test_kb data/docs/rag_100_docs
+          mkdir -p data/docs/rag_eval_kb
           ls data/docs/
 
       - name: Prepare migration compatibility database
@@ -172,7 +171,7 @@ jobs:
 
       - name: Verify bindings and probe real API
         env:
-          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
           EVAL_MEMORY_PGDATABASE: agent_memory_test
         run: |
           # 校验绑定（模型名/Provider/维度/凭据可解密）后真实调用一次
@@ -183,7 +182,7 @@ jobs:
 
       - name: Import selected evaluation fixtures
         env:
-          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
         run: |
           python - <<'PY'
           import json
@@ -205,7 +204,7 @@ jobs:
 
       - name: Assert index completeness
         env:
-          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
         run: |
           # 评测前断言：正确 collection/KB、向量非空、维度与绑定一致、
           # 可查询。任一不满足阻断评测（P0-04）。
@@ -254,7 +253,7 @@ jobs:
 
       - name: Run selected RAG regression
         env:
-          EVAL_SELECTION: ${{ inputs.selection || 'regression' }}
+          EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
         run: |
           # 原始退出码直捕（禁止管道 tail 吞码）；完整日志落 artifacts。
           set -o pipefail
