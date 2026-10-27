@@ -1390,6 +1390,22 @@ async def grant_tool(request: Request, tool_id: int, body: GrantRequest):
         return _conflict(
             f"工具当前状态为 {row['status']}，只有 approved 工具可授权")
 
+    if not body.revoke:
+        # 决策 #15 业务域硬隔离：审核时登记的业务域（governance.domain）
+        # 属目标产品禁行域 → 拒绝授权。未分类（domain 为空）不设限，
+        # 兼容存量数据；bundle 路径已按 bundle.domain 校验。
+        from backend.core.product_context import (
+            _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS,
+            domain_exclusive_forbidden_roots,
+        )
+
+        tool_domain = str((row.get("governance") or {}).get("domain") or "")
+        forbidden = domain_exclusive_forbidden_roots(body.product_key)
+        if forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(tool_domain, frozenset()):
+            return _bad_request(
+                f"工具业务域为 {tool_domain}，不可授权给 {body.product_key} "
+                "产品入口（业务域硬隔离），请改审核业务域或授权对应产品")
+
     def _write() -> dict[str, Any]:
         if body.revoke:
             _execute(
@@ -1514,6 +1530,77 @@ async def test_invoke_tool(request: Request, tool_id: int,
     }
 
 
+def _export_payload(tenant: str) -> dict[str, Any]:
+    """导出/发布快照共用的声明载荷（同构，D7 红线）。
+
+    红线（ADR-0011 D7）：凭据密文、fingerprint、last4 绝不出现；URL 内嵌
+    凭据（user:pass@host / ?api_key= / #fragment）统一净化，无法安全净化
+    的连接进 rejected_connections——不能以「未读取 secret_cipher」推断
+    载荷无密钥。
+    """
+    connections: list[dict[str, Any]] = []
+    redacted_connections: list[dict[str, Any]] = []
+    rejected_connections: list[dict[str, Any]] = []
+    for r in _query_all(
+            "SELECT name, base_url, transport, auth_type, network_scope "
+            "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
+            "ORDER BY name", {"t": tenant}):
+        view = {
+            "name": r["name"],
+            "base_url": r["base_url"],
+            "transport": r["transport"],
+            "auth_type": r["auth_type"],
+            "network_scope": r["network_scope"],
+        }
+        cred_reason = _embedded_credential_reason(r["base_url"])
+        sanitized = _sanitize_export_url(r["base_url"])
+        if sanitized is None:
+            # 解析失败/无 host/净化后仍命中凭据样式 → 拒绝导出
+            rejected_connections.append({
+                "name": r["name"],
+                "reason": cred_reason or "URL 无法安全净化",
+            })
+            continue
+        cleaned_url, removed = sanitized
+        if removed:
+            view["base_url"] = cleaned_url
+            redacted_connections.append(
+                {"name": r["name"], "removed": removed})
+        connections.append(view)
+    bundles = _query_all(
+        "SELECT b.id, b.name, b.description, b.domain, b.enabled "
+        "FROM ai.capability_bundles b ORDER BY b.name")
+    items = _query_all(
+        "SELECT bundle_id, capability FROM ai.capability_bundle_items")
+    grants = _query_all(
+        "SELECT bundle_id, product_key FROM ai.product_bundle_grants "
+        "WHERE enabled AND revoked_at IS NULL AND tenant_id = %(t)s",
+        {"t": tenant})
+    items_by_bundle: dict[str, list[str]] = {}
+    for i in items:
+        items_by_bundle.setdefault(str(i["bundle_id"]), []).append(
+            str(i["capability"]))
+    grants_by_bundle: dict[str, list[str]] = {}
+    for g in grants:
+        grants_by_bundle.setdefault(str(g["bundle_id"]), []).append(
+            str(g["product_key"]))
+    bundle_views = [{
+        "name": b["name"],
+        "description": b["description"],
+        "domain": b["domain"],
+        "capabilities": items_by_bundle.get(str(b["id"]), []),
+        "granted_products": grants_by_bundle.get(str(b["id"]), []),
+    } for b in bundles]
+    return {
+        "version": 1,
+        "tenant": tenant,
+        "connections": connections,
+        "capability_bundles": bundle_views,
+        "redacted_connections": redacted_connections,
+        "rejected_connections": rejected_connections,
+    }
+
+
 @router.get("/export")
 async def export_configuration(request: Request):
     """配置导出（Batch 4，只读）：连接声明 + 能力包 + 授权关系，目标环境
@@ -1531,77 +1618,21 @@ async def export_configuration(request: Request):
     actor = _actor_of(operator)
 
     def _load() -> dict[str, Any]:
-        connections: list[dict[str, Any]] = []
-        # URL 内嵌凭据守护（PR #115 Codex P1）：历史行可能带有
-        # user:pass@host / ?api_key= 形态——导出前净化；无法安全净化的
-        # 连接拒绝导出，由导入方重新配置。不能以「未读取 secret_cipher」
-        # 推断导出无密钥。
-        redacted_connections: list[dict[str, Any]] = []
-        rejected_connections: list[dict[str, Any]] = []
-        for r in _query_all(
-                "SELECT name, base_url, transport, auth_type, network_scope "
-                "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
-                "ORDER BY name", {"t": tenant}):
-            view = {
-                "name": r["name"],
-                "base_url": r["base_url"],
-                "transport": r["transport"],
-                "auth_type": r["auth_type"],
-                "network_scope": r["network_scope"],
-                # enabled/status 为运行时状态，不导出（导入方按需启用）
-            }
-            cred_reason = _embedded_credential_reason(r["base_url"])
-            sanitized = _sanitize_export_url(r["base_url"])
-            if sanitized is None:
-                # 解析失败/无 host/净化后仍命中凭据样式 → 拒绝导出
-                rejected_connections.append({
-                    "name": r["name"],
-                    "reason": cred_reason or "URL 无法安全净化",
-                })
-                continue
-            cleaned_url, removed = sanitized
-            if removed:
-                view["base_url"] = cleaned_url
-                redacted_connections.append(
-                    {"name": r["name"], "removed": removed})
-            connections.append(view)
-        bundles = _query_all(
-            "SELECT b.id, b.name, b.description, b.domain, b.enabled "
-            "FROM ai.capability_bundles b ORDER BY b.name")
-        items = _query_all(
-            "SELECT bundle_id, capability FROM ai.capability_bundle_items")
-        grants = _query_all(
-            "SELECT bundle_id, product_key FROM ai.product_bundle_grants "
-            "WHERE enabled AND revoked_at IS NULL AND tenant_id = %(t)s",
-            {"t": tenant})
-        items_by_bundle: dict[str, list[str]] = {}
-        for i in items:
-            items_by_bundle.setdefault(str(i["bundle_id"]), []).append(
-                str(i["capability"]))
-        grants_by_bundle: dict[str, list[str]] = {}
-        for g in grants:
-            grants_by_bundle.setdefault(str(g["bundle_id"]), []).append(
-                str(g["product_key"]))
-        bundle_views = [{
-            "name": b["name"],
-            "description": b["description"],
-            "domain": b["domain"],
-            "capabilities": items_by_bundle.get(str(b["id"]), []),
-            "granted_products": grants_by_bundle.get(str(b["id"]), []),
-        } for b in bundles]
+        payload = _export_payload(tenant)
         _audit("mcp_configuration_export", {
-            "connections": len(connections), "bundles": len(bundle_views),
-            "redacted": len(redacted_connections),
-            "rejected": len(rejected_connections),
+            "connections": len(payload["connections"]),
+            "bundles": len(payload["capability_bundles"]),
+            "redacted": len(payload["redacted_connections"]),
+            "rejected": len(payload["rejected_connections"]),
         }, user_id=actor, tenant_id=tenant)
         return {
             "version": 1,
             "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "tenant": tenant,
-            "connections": connections,
-            "capability_bundles": bundle_views,
-            "redacted_connections": redacted_connections,
-            "rejected_connections": rejected_connections,
+            "connections": payload["connections"],
+            "capability_bundles": payload["capability_bundles"],
+            "redacted_connections": payload["redacted_connections"],
+            "rejected_connections": payload["rejected_connections"],
         }
 
     return await asyncio.to_thread(_load)

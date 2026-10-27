@@ -195,6 +195,13 @@ _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
     "selection": frozenset({"selection_funnel", "booking", "commerce"}),
 }
 
+# 管理端业务域标签词汇表（工具治理 governance.domain / 能力包 domain
+# 共用；空值 = 未分类，不做域约束——兼容存量数据）。
+DOMAIN_LABELS = frozenset({
+    "general", "cs", "selection", "travel", "data",
+    "knowledge", "business", "report", "communication", "mcp",
+})
+
 
 def product_allows_capability(
     product_id: str,

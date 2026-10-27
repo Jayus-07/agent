@@ -487,3 +487,103 @@ handoff 有测试、bundle 表空回退正常；但**管理面无域边界**—�
 #20 AI 失败分析、#25 结果引用+Schema 映射、#27 自动任务/Webhook、
 #29 运行中多轮修改、治理配置独立发布/回滚（发布记录页仅系统 Gate）——
 均按第 32 题列增强批次，未擅自取消；动态工具域字段为硬隔离增强前置。
+
+## Batch 5-1：硬隔离补全——mcp 工具业务域字段（2026-10-28）
+
+用户授权下一批顺序（硬隔离补全 → 治理配置发布/回滚+导入 → 健康监测/
+Discovery 增强）并要求持续推进；main 基线守卫修复已另开 PR #116。
+
+### 分支与事实
+
+- 本批分支 `feat/tool-governance-batch5`（基于 a8b138d，即 #115 head +
+  交接包收口修复）；#115 保持 Merge Ready 不动。
+- main 基线修复 PR **#116**（`fix/router-domain-literal`，99ce938，
+  execution_mode 域字面量复用 _DOMAIN_ALIASES，守卫测试 16 passed，
+  与 #115 无文件交集）。
+
+### 改动（64fa7a8，6 文件 +130/−6）
+
+- `core/product_context`：新增 `DOMAIN_LABELS` 业务域词汇表（工具治理
+  governance.domain 与能力包 domain 共用单一事实源；空=未分类兼容存量）。
+- `infra/mcp_registry/specs`：derive_tool_spec 校验可选 `domain` 标签。
+- `admin_mcp.grant_tool`：授权方向按 governance.domain 校验禁行域，
+  跨域专属工具授权 agent/cs 直接 400。
+- `admin_bundles.grant_bundle`：动态成员逐工具按 governance.domain 校验
+  （堵住「bundle 标签无关但成员工具是 travel 域」的洞）；`_VALID_DOMAINS`
+  改为引用 DOMAIN_LABELS。
+- 测试卫生修复：test_admin_bundles_api 清理 fixture 的 created_by 前缀
+  失配（实库为 `user:<id>`），残留行曾致重名 409。
+
+### 验证
+
+- `pytest backend/tests/mcp_registry/ backend/tests/api/test_admin_bundles_api.py`
+  → **69 passed**；新增 E2E `TestToolDomainGrantBoundary` 2 passed
+  （travel 域授权 agent/cs 拒、general 放行、cs 域 cs 过 agent 拒、
+  非法 domain 审核拒绝）。
+- 至此决策 #15 的服务端拒绝点闭环：bundle 域标签 + 静态成员根 + 动态
+  工具 governance.domain + 运行门白名单∩非域专属，四层校验。
+
+### 下一批剩余
+
+- 治理配置发布/回滚 + 配置导入（#08/#14 收口；/releases 第一档前置）。
+- 健康监测/Discovery 增强（#16/#18）。
+
+## Batch 5-2：治理配置发布/回滚/导入 后端（2026-10-28）
+
+### 交付（d1c95d2，7 文件 +906/−65）
+
+- **迁移 117** `ai.governance_releases`：租户内 version 递增，status
+  draft/published/rolled_back；payload 与 /admin/mcp/export **同构**
+  （凭据红线同源，复用 _export_payload——导出逻辑抽取为共享函数，
+  export 端点行为不变，e2e 复跑 3 passed）。
+- **新路由 admin_governance_releases.py**（`/admin/mcp` 前缀；与既有
+  admin_releases.py=系统发布 Gate 严格区分，V2 两档对应两个文件）：
+  - `POST /releases` 快照草稿（空配置 409）；
+  - `GET /releases/{id}/diff` 结构化差异（modified/added/removed，
+    方向=回滚将发生什么；added 仅提示不删除）；
+  - `POST /releases/{id}/publish`（draft→published，重复发布 409）；
+  - `POST /releases/{id}/rollback`：连接声明字段恢复（URL 二次净化
+    双保险，不恢复凭据）+ bundle 描述/域/成员整体替换 + 授权精确对齐
+    快照（多余禁用、快照授权启用/补建）+ **动态成员 mcp_tool_grants
+    同步**（运行时契约源）+ **生成新版本**记录（原型语义）；
+  - `POST /import`：纯增量导入——连接 disabled+无凭据+凭据 URL 净化
+    标注（redacted 透明返回）、bundle 重建不建授权、名称冲突跳过。
+  - 写操作全部 run_governance_mutation（幂等+审计）+ 写后刷新双快照。
+- 迁移登记：rag_smoke_path_filter（NON_AI）+ init_db（memory），
+  守卫测试 12 passed。
+
+### 验证
+
+- `pytest backend/tests/api/test_admin_governance_releases.py` → 3 passed
+  （快照-发布-回滚全生命周期含授权对齐断言；导入增量/无凭据/无授权/
+  冲突跳过；租户隔离）；回归 admin_mcp+bundles+registry **84 passed**、
+  导出 E2E 3 passed。
+- 容器级部署 UNVERIFIED（迁移 117 已对本机 5433 库执行并核实表结构）。
+
+### 下一批剩余
+
+- **前端 /releases 第一档转真实**（本批后端已就绪：列表/快照/差异/发布/
+  回滚/导入六个交互 + api 封装）——下一个增量。
+- 健康监测/Discovery 增强（#16/#18）。
+
+## Batch 5-2 前端：/releases 治理配置发布档（2026-10-28，0524301）
+
+- 页级两档（WorkbenchShell，?tab= 进 URL）：**治理配置发布**（默认）+
+  **系统发布与质量 Gate**（原 M8 内容原样保留为第二档）。
+- 治理档：快照草稿创建（说明输入 + 计数回显）、版本历史表（状态 chip/
+  说明/连接包计数/创建与发布时间/操作）、差异预览抽屉（counts 指标条 +
+  字段级 release→current 变更条目）、发布/回滚（确认弹窗，结果回显）、
+  **配置导入抽屉**（JSON 粘贴 → created/skipped/rejected/redacted 透明
+  结果面板）。
+- 发布前检查=差异预览面（五项自动预检属后续增强，不做假检查——记录进
+  增强清单，不入壳位）。
+- API：新增 `api/governanceReleases.ts`（6 封装，mutationRequest 幂等键）。
+- 验证：tsc 0 错误；vitest 全量 **83 文件 / 572 用例全绿**（新增 3 例；
+  首次全量单文件失败为仓库已记录的并发抖动，复跑全绿）。
+
+### Batch 5 完成度与剩余
+
+- ✅ 硬隔离补全（域字段）✅ 发布/回滚/导入（后端+前端）✅ 前端批次 0/1
+- ⬜ 健康监测/Discovery 增强（#16/#18，运行健康壳位解禁前置）
+- ⬜ 演示型壳位现状：/mcp 运行健康、/mcp 连接级版本时间线（治理配置
+  版本已由 /releases 承载，连接级时间线仍待后端）、/tools AI 语义
