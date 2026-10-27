@@ -32,7 +32,118 @@ from __future__ import annotations
 
 import time
 import uuid
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+
+
+_execution_deadline: ContextVar[float | None] = ContextVar(
+    "tool_execution_deadline", default=None,
+)
+
+
+def remaining_execution_seconds() -> float | None:
+    """当前工具调用的剩余时间；同步线程继承该上下文，不能重新获得整段预算。"""
+    expires = _execution_deadline.get()
+    return None if expires is None else max(0.0, expires - time.monotonic())
+
+
+def check_execution_deadline() -> None:
+    remaining = remaining_execution_seconds()
+    if remaining is not None and remaining <= 0:
+        raise TimeoutError("工具执行时限已到")
+
+
+@contextmanager
+def scoped_execution_timeout(seconds: float | None):
+    """嵌套调用只能收窄时限；退出后恢复外层请求，避免线程复用串扰。"""
+    if seconds is None:
+        yield
+        return
+    expires = time.monotonic() + max(0.0, seconds)
+    outer = _execution_deadline.get()
+    token = _execution_deadline.set(min(outer, expires) if outer is not None else expires)
+    try:
+        check_execution_deadline()
+        yield
+    finally:
+        _execution_deadline.reset(token)
+
+
+_MODEL_TIMEOUT_ATTRS = (
+    # langchain_openai.ChatOpenAI 与 langchain_anthropic.ChatAnthropic 的
+    # 实测字段名（1.4.x）：两者不同，漏查会把已有更短超时放宽成剩余时限。
+    "request_timeout",
+    "default_request_timeout",
+    "timeout",
+)
+
+
+def _model_timeout_value(model: Any, kwargs: dict) -> float | httpx.Timeout | tuple | None:
+    if "timeout" in kwargs and kwargs["timeout"] is not None:
+        return kwargs["timeout"]
+    for attr in _MODEL_TIMEOUT_ATTRS:
+        value = getattr(model, attr, None)
+        if value is not None:
+            return value
+    return None
+
+
+def _cap_to_remaining(value: float, remaining: float) -> float:
+    return min(value, remaining)
+
+
+def provider_deadline_kwargs(call, kwargs: dict) -> dict:
+    """按剩余执行时限收窄本次模型调用的 SDK 请求超时。
+
+    约束（任何一条不满足就原样返回，不猜不试）：
+      - 仅识别 langchain_openai / langchain_anthropic 驱动：per-invoke
+        kwargs 会并入 OpenAI/Anthropic SDK 的 create() payload，
+        ``timeout`` 是请求级覆盖（已按安装版本源码核实）；
+      - 已有的更短超时（构造期 request_timeout 或调用方显式传参）只收窄
+        不放宽 —— min(existing, remaining)；
+      - 不修改共享模型实例，只返回新的 kwargs dict；
+      - 时限已过期直接抛 TimeoutError（调用方不得再发起出站请求）。
+    """
+    check_execution_deadline()
+    remaining = remaining_execution_seconds()
+    if remaining is None:
+        return kwargs
+    model = getattr(call, "__self__", None)
+    # LangChain绑定对象仍复用同一个模型；最多解开四层，防异常自引用。
+    for _ in range(4):
+        bound = getattr(model, "bound", None)
+        if bound is None or bound is model:
+            break
+        model = bound
+    supported = any(
+        cls.__module__.startswith(("langchain_openai.", "langchain_anthropic."))
+        for cls in type(model).__mro__
+    )
+    if not supported or model is None:
+        return kwargs
+
+    timeout = _model_timeout_value(model, kwargs)
+    if timeout is None:
+        # 无既有超时（不限时）：封顶到剩余时限，避免长读拖穿父请求预算。
+        value: float | httpx.Timeout | tuple = remaining
+    elif isinstance(timeout, httpx.Timeout):
+        # None 分量表示沿用客户端默认（可无限等），统一收窄到剩余时限。
+        capped = {
+            key: min(v, remaining) if v is not None else remaining
+            for key, v in timeout.as_dict().items()
+        }
+        value = httpx.Timeout(**capped)
+    elif isinstance(timeout, tuple):
+        value = tuple(_cap_to_remaining(v, remaining) for v in timeout)
+    elif isinstance(timeout, (int, float)):
+        value = _cap_to_remaining(float(timeout), remaining)
+    else:
+        return kwargs
+    return {**kwargs, "timeout": value}
 
 
 class BudgetExhausted(Exception):

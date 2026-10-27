@@ -15,6 +15,8 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
 启动:
     python -m uvicorn backend.services.rag_server:app --host 0.0.0.0 --port 8090
 """
+import contextlib
+import math
 import threading
 import re
 import time
@@ -26,6 +28,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from backend.core.request_context import scoped_tool_identity
+from backend.core.tool_runtime.deadline import scoped_execution_timeout
 from backend.infra.llm.proxy import scoped_current_user_id
 from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 from backend.shared.logger import logger
@@ -348,6 +351,48 @@ def _start_index_published_listener() -> None:
                      daemon=True).start()
 
 
+# ==================== 父请求时限传播 ====================
+
+# app 侧 rag client 在工具执行时限内下发相对剩余秒数（非绝对时钟：
+# 服务端以本地单调钟还原，不做跨机时钟假设）。仅内部令牌链路可达。
+_DEADLINE_HEADER = "X-Agent-Deadline-Seconds"
+# 服务端自留响应回传余量：服务端完成+响应需赶在客户端读超时前回来
+_DEADLINE_SERVER_MARGIN_S = 0.5
+# 头值合理性上限：超过按异常值截断（正常最大 300s ask 超时）
+_DEADLINE_MAX_S = 3600.0
+
+
+def parse_parent_deadline_seconds(raw: str | None) -> float | None:
+    """解析父请求剩余时限头；缺失/非法返回 None，已过期归一为 0.0。"""
+    if not raw:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value):
+        return None
+    return min(max(value, 0.0), _DEADLINE_MAX_S)
+
+
+def ask_deadline_usable(request: Request | None, entry_perf: float) -> float | None:
+    """/ask 可绑定的本地时限秒数；无头返回 None（保持旧行为）。
+
+    扣除接收→此刻的排队/初始化耗时与服务端回传余量；≤0 表示父请求
+    已到期，调用方不应再绑定作用域。
+    """
+    raw = request.headers.get(_DEADLINE_HEADER) if request is not None else None
+    value = parse_parent_deadline_seconds(raw)
+    if value is None:
+        return None
+    received = (
+        getattr(request.state, "rag_received_at", None)
+        if request is not None else None
+    )
+    elapsed = time.perf_counter() - (received if received else entry_perf)
+    return value - elapsed - _DEADLINE_SERVER_MARGIN_S
+
+
 # ==================== 端点 ====================
 
 @app.post("/ask")
@@ -413,22 +458,38 @@ def ask(
             scoped_tool_identity(user_id=req.user_id, tenant_id=tenant_id),
             scoped_current_user_id(req.user_id),
         ):
-            answer = pipeline.ask(
-                question=req.question,
-                session_id=req.session_id,
-                kb_id=req.kb_id,
-                kb_ids=req.kb_ids,
-                subject_type=req.subject_type,
-                department=req.department,
-                permissions=req.permissions,
-                roles=tuple(req.roles),
-                user_id=req.user_id,
-                tenant_id=tenant_id,
-                persist_memory=req.persist_memory,
-            )
-            from backend.infra.llm.budget import check_quota_blocked
+            # 父请求剩余时限>0 时以本地单调钟还原为执行作用域：检索/
+            # rerank/LLM 共享同一条递减时限，LLM 代理按剩余秒数收窄
+            # SDK 读取超时并禁止过期出站。无头（后台/独立调用）或
+            # ≤0（父请求已到期）不绑作用域，保持旧行为。
+            deadline_usable = ask_deadline_usable(request, started)
+            if deadline_usable is not None:
+                logger.info(
+                    "[RAG /ask deadline] usable=%.2fs scope=%s",
+                    deadline_usable,
+                    "bound" if deadline_usable > 0 else "skipped_expired",
+                )
+            with (
+                scoped_execution_timeout(deadline_usable)
+                if deadline_usable is not None and deadline_usable > 0
+                else contextlib.nullcontext()
+            ):
+                answer = pipeline.ask(
+                    question=req.question,
+                    session_id=req.session_id,
+                    kb_id=req.kb_id,
+                    kb_ids=req.kb_ids,
+                    subject_type=req.subject_type,
+                    department=req.department,
+                    permissions=req.permissions,
+                    roles=tuple(req.roles),
+                    user_id=req.user_id,
+                    tenant_id=tenant_id,
+                    persist_memory=req.persist_memory,
+                )
+                from backend.infra.llm.budget import check_quota_blocked
 
-            check_quota_blocked()
+                check_quota_blocked()
     except ReviewVisibilityUnavailableError as e:
         # /ask 与轻量检索使用相同审核失败码，避免以通用 500 丢失安全语义。
         raise _review_visibility_http_exception("ask", e) from e

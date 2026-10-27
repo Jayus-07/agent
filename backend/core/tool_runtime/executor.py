@@ -231,9 +231,12 @@ class SafeToolExecutor:
 
             attempt_started = time.monotonic()
             try:
-                output = await asyncio.wait_for(
-                    self._invoke(call), timeout=effective_timeout_s
-                )
+                from backend.core.tool_runtime.deadline import scoped_execution_timeout
+
+                with scoped_execution_timeout(effective_timeout_s):
+                    output = await asyncio.wait_for(
+                        self._invoke(call), timeout=effective_timeout_s
+                    )
                 latency = int((time.monotonic() - attempt_started) * 1000)
                 if cb is not None:
                     cb.record_success()

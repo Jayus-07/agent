@@ -29,6 +29,46 @@ class _EchoAgent:
         yield {"event": "done", "data": {"elapsed": 0.0, "sources": []}}
 
 
+@pytest.mark.asyncio
+async def test_cold_graph_initialization_does_not_block_first_feedback(monkeypatch):
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from starlette.requests import Request
+    from backend.app.api.routes import agent_chat_tasks, chat
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def cold_agent():
+        entered.set()
+        assert release.wait(timeout=3)
+        return _EchoAgent()
+
+    ident = SimpleNamespace(tenant_id="t1", department="", permissions=None, roles=())
+    monkeypatch.setattr(chat, "get_multi_agent", cold_agent)
+    monkeypatch.setattr(chat, "_chat_identity", lambda *_: (ident, "42"))
+    monkeypatch.setattr(agent_chat_tasks, "cancel_previous", lambda *_: None)
+    body = json.dumps({"question": "你好", "session_id": "cold-" + uuid4().hex}).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request = Request({"type": "http", "method": "POST", "path": "/chat/agent/stream",
+                       "headers": [], "query_string": b""}, receive)
+    try:
+        response = await chat.chat_stream(request)
+        assert not entered.is_set(), "HTTP处理阶段不能等待冷启动初始化"
+        frames = response.body_iterator
+        assert "event: meta" in await anext(frames)
+        feedback = await anext(frames)
+        assert "请求已收到，正在准备处理" in feedback
+        release.set()
+        rest = "".join([frame async for frame in frames])
+        assert "event: done" in rest
+    finally:
+        release.set()
+
+
 class _CapturingAgent:
     def __init__(self):
         self.calls = []
