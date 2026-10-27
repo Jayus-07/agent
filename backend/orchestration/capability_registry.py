@@ -179,14 +179,28 @@ class ToolRegistry:
             lines.append(f"  - {cap_name}: {schema['description']}")
         return "\n".join(lines)
 
-    def get_capabilities_schema_text(self) -> str:
-        """生成完整的 capability schema 文本，用于 Critique prompt"""
+    def get_capabilities_schema_text(self, allowed: set[str] | None = None) -> str:
+        """生成完整的 capability schema 文本，用于 Critique prompt。
+
+        与 normalize_plan 同源（effective_manifest）：静态 manifest +
+        动态 mcp.*——Critique 若只见静态清单，会把动态步骤判为无效并
+        "修正"掉，与 normalize_plan 的白名单问题同构。
+
+        `allowed` 非空时叠加当前请求的授权集过滤（product_allows_capability
+        裁决，由 critique_node 传入）——其他租户/业务域 Tool 的描述与参数
+        不得进入 LLM prompt（PR #115 Codex P2）。生产调用方必须传授权集；
+        None = 旧口径（全量可见集，仅供离线/单测）。
+        """
+        from backend.orchestration.router.manifest import effective_manifest
+
         lines = []
-        for cap_name in self.get_available_capabilities():
-            schema = self.get_schema(cap_name)
+        for declaration in effective_manifest().capabilities:
+            if allowed is not None and declaration.name not in allowed:
+                continue
+            schema = self.get_schema(declaration.name)
             if not schema:
                 continue
-            lines.append(f"### {cap_name}")
+            lines.append(f"### {declaration.name}")
             lines.append(f"描述: {schema['description']}")
             lines.append("参数:")
             lines.append(format_params_schema(schema["params"]))

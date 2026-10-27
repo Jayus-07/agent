@@ -911,3 +911,143 @@ class TestMultiToolReplenishmentPath:
             _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
                      {"c": conn_id})
             mcp_store.reset_for_tests()
+
+
+class TestConfigurationExport:
+    def test_export_excludes_credentials_and_state(self, client, mock_ports):
+        """配置导出：凭据/fingerprint/last4/审核状态绝不导出（Batch 4）。"""
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "export-rest",
+            "base_url": f"http://127.0.0.1:{mock_ports['rest']}",
+            "transport": "http_api", "auth_type": "static_bearer",
+            "secret": f"sk-export-{uuid.uuid4().hex}",
+            "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+        try:
+            r = client.get("/admin/mcp/export", headers=ADMIN_HEADERS)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data["version"] == 1
+            conns = [c for c in data["connections"]
+                     if c["name"] == "export-rest"]
+            assert conns, "导出应包含连接声明"
+            c = conns[0]
+            # 声明字段导出
+            assert c["base_url"].startswith("http://127.0.0.1:")
+            assert c["transport"] == "http_api"
+            assert c["auth_type"] == "static_bearer"
+            # 凭据红线：全文不含密钥/指纹/last4
+            raw = str(data)
+            assert "sk-export-" not in raw
+            assert "secret_cipher" not in raw
+            assert "fingerprint" not in raw
+            assert "last4" not in raw
+            # 运行时状态不导出
+            assert "enabled" not in c and "status" not in c
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
+
+    def test_create_and_update_reject_url_embedded_credentials(
+            self, client, mock_ports):
+        """连接创建/更新入口拒绝内嵌凭据（userinfo / 凭据型 query /
+        fragment）——凭据必须走凭据中心（PR #115 Codex P1）。"""
+        base = f"http://127.0.0.1:{mock_ports['rest']}/mcp"
+        for bad_url in (
+            f"http://user:pass@127.0.0.1:{mock_ports['rest']}/mcp",
+            f"{base}?api_key=sk-embedded",
+            f"{base}?token=abc&region=cn",
+            f"{base}#frag",
+        ):
+            r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS,
+                            json={
+                                "name": f"cred-{uuid.uuid4().hex[:6]}",
+                                "base_url": bad_url,
+                                "transport": "http_api",
+                                "auth_type": "none",
+                                "network_scope": "private"})
+            assert r.status_code == 400, (bad_url, r.text)
+
+        # 合法 URL（非敏感 query）可创建；更新为内嵌凭据被拒
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "cred-guard-clean",
+            "base_url": f"{base}?region=cn",
+            "transport": "http_api", "auth_type": "none",
+            "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+        try:
+            r = client.put(f"/admin/mcp/connections/{conn_id}",
+                           headers=ADMIN_HEADERS,
+                           json={"base_url": f"{base}?api_key=sk-x"})
+            assert r.status_code == 400, r.text
+            # 不改 URL 的其他更新不受影响
+            r = client.put(f"/admin/mcp/connections/{conn_id}",
+                           headers=ADMIN_HEADERS, json={"enabled": False})
+            assert r.status_code == 200, r.text
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
+
+    def test_export_sanitizes_legacy_url_credentials(self, client, mock_ports):
+        """历史行（绕过入口直接落库）导出前净化：剔除 userinfo/凭据 query/
+        fragment，保留 host 与非敏感参数；无法净化的连接拒绝导出
+        （PR #115 Codex P1）。"""
+        rest_port = mock_ports["rest"]
+        legacy_id = f"mcp_conn_{uuid.uuid4().hex[:12]}"
+        _db_exec(
+            """
+            INSERT INTO ai.mcp_connections
+                (id, name, base_url, transport, auth_type, network_scope,
+                 enabled, status, tenant_id, created_by, updated_by)
+            VALUES (%(id)s, 'legacy-cred-conn', %(url)s, 'http_api', 'none',
+                    'private', false, 'never_connected', %(tenant)s,
+                    'legacy', 'legacy')
+            """,
+            {"id": legacy_id,
+             "url": (f"http://legacy:p%40ss@127.0.0.1:{rest_port}"
+                     "/mcp?api_key=sk-legacy-xyz&region=cn#frag"),
+             "tenant": TENANT})
+        broken_id = f"mcp_conn_{uuid.uuid4().hex[:12]}"
+        _db_exec(
+            """
+            INSERT INTO ai.mcp_connections
+                (id, name, base_url, transport, auth_type, network_scope,
+                 enabled, status, tenant_id, created_by, updated_by)
+            VALUES (%(id)s, 'legacy-broken-conn', 'http://', 'http_api',
+                    'none', 'private', false, 'never_connected',
+                    %(tenant)s, 'legacy', 'legacy')
+            """,
+            {"id": broken_id, "tenant": TENANT})
+        try:
+            r = client.get("/admin/mcp/export", headers=ADMIN_HEADERS)
+            assert r.status_code == 200, r.text
+            data = r.json()
+
+            conns = {c["name"]: c for c in data["connections"]}
+            assert "legacy-cred-conn" in conns
+            cleaned = conns["legacy-cred-conn"]["base_url"]
+            assert cleaned == (f"http://127.0.0.1:{rest_port}"
+                               "/mcp?region=cn")
+            raw = str(data)
+            # 密钥与 userinfo 任何形态都不得出现在导出物中
+            assert "sk-legacy-xyz" not in raw
+            assert "legacy:p%40ss" not in raw
+            assert "p%40ss@" not in raw
+            assert "api_key=" not in raw
+            # 剔除行为透明可审计
+            redacted = {item["name"]: item["removed"]
+                        for item in data["redacted_connections"]}
+            assert redacted.get("legacy-cred-conn") == [
+                "userinfo", "query:api_key"]
+
+            # 无法净化的连接拒绝导出，不携带 URL
+            assert "legacy-broken-conn" not in conns
+            rejected = {item["name"]: item["reason"]
+                        for item in data["rejected_connections"]}
+            assert "legacy-broken-conn" in rejected
+        finally:
+            _db_exec(
+                "DELETE FROM ai.mcp_connections WHERE id = ANY(%(ids)s)",
+                {"ids": [legacy_id, broken_id]})

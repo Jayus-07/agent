@@ -79,16 +79,23 @@ def extract_json(text: str, source: str = "planner.system") -> dict:
     return result
 
 
-def normalize_plan(plan: dict) -> dict:
+def normalize_plan(plan: dict, allowed: set[str] | None = None) -> dict:
     """校验并规范化 plan 结构。
 
     有效能力集与 Planner 渲染、Critique 校验同源（effective_manifest：
     静态 manifest + MCP 动态 mcp.*）——此前取 tool_registry 静态
     CAPABILITY_MAP，动态 mcp.* 步骤会被静默删除（纯 MCP 计划变空计划）。
+
+    `allowed` 非空时在 manifest 可见集之上叠加**当前请求的授权集**
+    （product_allows_capability 裁决，Planner/Critique 传入）——LLM 修正
+    结果不得保留当前产品/租户无权执行的能力（PR #115 Codex P2）；None =
+    旧口径（仅 manifest 可见集，不过产品过滤）。
     """
     from backend.orchestration.router.manifest import effective_manifest
 
     valid_capabilities = set(effective_manifest().planner_visible_capability_names)
+    if allowed is not None:
+        valid_capabilities &= set(allowed)
 
     raw_nodes = plan.get("nodes", [])
     nodes = {}

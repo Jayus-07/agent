@@ -294,6 +294,28 @@ async def grant_bundle(request: Request, bundle_id: str,
     if row is None:
         return _not_found("能力包不存在")
 
+    if not body.revoke:
+        # 决策 #15 业务域硬隔离：跨域专属能力不可授权给该产品入口。
+        # 静态成员按能力名根判断；动态 mcp.* 工具名无域语义，按
+        # bundle.domain 判断（授权端点是跨域误授权的服务端拒绝点）。
+        from backend.core.product_context import (
+            _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS,
+            domain_exclusive_forbidden_roots,
+        )
+
+        forbidden = domain_exclusive_forbidden_roots(body.product_key)
+        offending = sorted({
+            str(cap) for cap in row["capabilities"]
+            if str(cap).split(".", 1)[0] in forbidden
+        })
+        bundle_domain = str(row.get("domain") or "")
+        if forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(bundle_domain, frozenset()):
+            offending.append(f"bundle.domain={bundle_domain}")
+        if offending:
+            return _bad_request(
+                "跨域专属能力不可授权给该产品入口（业务域硬隔离）："
+                + "、".join(offending))
+
     def _write() -> dict[str, Any]:
         if body.revoke:
             _execute(

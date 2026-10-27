@@ -350,3 +350,140 @@ prompt/lock 版本机制覆盖，不另建）：
 ### Batch 3 状态：主体完成。剩余（Batch 4 范畴）：配置导入导出与
 环境映射、健康检查与退避重连巡检、端到端 SSE 断线恢复联测、清理与
 交付整合。
+
+## Batch 4 收官（2026-10-27）
+
+PR #114 已合并（`953c201`），rebuild 后运行栈验证 Batch 3 代码生效
+（consistency 动态段 6 处符号、admin_tools constraints 3 处）。
+
+### 4-1 配置导出（不含凭据）
+
+- `GET /api/admin/mcp/export`：连接声明（name/base_url/transport/
+  auth_type/network_scope）+ 能力包（成员 + 授权产品）+ 版本/时间/
+  租户；**凭据密文、fingerprint、last4、审核状态、运行时状态绝不
+  导出**——目标环境重新配置凭据并重新审核（ADR-0011 D7 红线）。
+- e2e：导出含声明字段、全文无 `sk-export-`/`secret_cipher`/
+  `fingerprint`/`last4`、无 enabled/status 运行时字段。
+- 环境映射：导出物即"声明清单"，导入方按目标环境改 base_url 后重建
+  连接 → 重新发现/登记 → 重新审核授权（不自动导入，避免绕过审核）。
+
+### 4-2 清理与同构问题修复
+
+- `get_capabilities_schema_text()`（Critique LLM 修正的 prompt 数据源）
+  与已修复的 normalize_plan 同病——仍基于静态 CAPABILITY_MAP，会把
+  动态 mcp.* 步骤判无效"修正"掉。改为 effective_manifest 同源。
+- 复查确认：无其他静态白名单残留消费点（get_available_capabilities
+  仅剩 critique schema_text 一处，已改）；无平行系统残留。
+
+### 交付验证
+
+- 全量相关回归：`test_mcp_dynamic_e2e + test_admin_bundles_api +
+  test_admin_mcp_api + test_consistency_dynamic + mcp_registry +
+  planner_critique` → **107 passed**（9m36s，真实 PG + mock server）
+- 运行栈：rebuild 后 /health ok、迁移 116 生效、Batch 3 符号在容器内。
+
+## 任务终态
+
+| Batch | 内容 | PR |
+|---|---|---|
+| 0 | PR #107 收敛：5 项 Review 修复 + 写操作强一致撤权 + CI 门禁登记 | #107（已合并） |
+| 1 | 连接中心（MCP+HTTP API）：invocation 受控调用、审核 CAS、探活、版本对比、OpenAPI 导入 | #110 #111（已合并） |
+| 2 | 能力包与产品授权矩阵、多工具真实路径 e2e | #112 #113（已合并） |
+| 3 | 预算×工具约束视图、Prompt 工具治理入口、一致性动态对账 | #114（已合并） |
+| 4 | 配置导出（凭据红线）+ Critique 同构修复 + 交付验证 | 本批 |
+
+计划"明确不做"清单均未实施（第二 Runtime / 管理端任务控制台 /
+在线编辑器 / 自动授权等）。裁剪记录：独立 Discovery Agent 复用
+tool_selector FC 链；发布记录联动复用 prompt/lock 版本机制。
+
+## 交接包对照收口（2026-10-28，未提交待确认）
+
+用户提供 32 项已确认决策 + 融合版 V2 原型交接包，本轮按指令做差异审查
+与 P0/P1 安全修复；不重做 Batch 0–4、不合并 PR、不扩范围。
+
+### GitHub 事实
+
+- PR #115 OPEN / MERGEABLE，HEAD `e3148d9` = 分支 HEAD；Codex Review
+  两条未解决发现（P1 导出 URL 内嵌凭据、P2 Critique 无授权预过滤），
+  `has_unresolved_findings=true`。
+- main `953c201`（PR #114 合并点）；已合并 #107 #110 #111 #112 #113 #114。
+
+### P0 修复一：导出凭据红线（admin_mcp.py）
+
+- 连接创建/更新入口拒绝 URL 内嵌凭据（userinfo `user:pass@`、凭据型
+  query `?api_key=`/`token=` 等 22 类敏感参数名、`#fragment`）→ 400。
+- 导出端点对每行 base_url 统一净化（剔除 userinfo/凭据 query/fragment，
+  保留 host 与非敏感参数）；净化失败或无 host 的历史行拒绝导出，响应
+  新增 `redacted_connections` / `rejected_connections` 透明可审计。
+- e2e（真 PG）：创建/更新拒绝 4 形态 + 合法 query 放行 + 更新不受影响；
+  历史行（直插 `legacy:p%40ss@...?api_key=...#frag`）导出净化断言全文
+  无密钥/userinfo/参数名、region=cn 保留、redacted 列表精确匹配；
+  `http://` 行进 rejected。
+
+### P0 修复二：Critique/Planner/normalize 共用授权集（Codex P2）
+
+- `product_context` 新增 `product_id_from_state`（与执行门同取值链）与
+  `filter_capabilities_for_state`（同谓词 `product_allows_capability`
+  (product, cap, (state.domain,))——渲染面不得宽于执行面；`map.lookup`
+  因 domain=travel 但刻意保留主图，按执行门同谓词判断而非声明域）。
+- Planner：可见集按产品/域过滤；**缓存键加 product_id+domain**（否则跨
+  产品缓存命中=越权计划泄露）；`_fallback_plan`/`_ensure_knowledge_step`
+  补 rag 授权守卫。
+- Critique：授权可见集贯穿规则引擎、schema 文本（`get_capabilities_schema_text(allowed=)`
+  新参）、自动修复结果与 LLM 修正（`normalize_plan(allowed=)` 新参）——
+  LLM 修正无法恢复越权步骤。
+- engine `_is_execution_override` 快路复核补 product 门（verified_context
+  可信 product_id）。
+- 测试：agent 不渲染 travel/cs；`normalize_plan(allowed)` 剔除越权步骤；
+  critique LLM 修正无法恢复 travel 步骤且 prompt 无 travel schema；
+  缓存键跨产品不同；跨租户 mcp.*（快照注入 + ContextVar 租户）B 租户
+  不可见。
+
+### P1 修复：决策 #15 业务域硬隔离（管理面缺口）
+
+审计结论：运行链（路由候选/Planner/Critique/direct_executor/skills/base/
+GovernanceRuntime/写复核）产品过滤完整、domain_hint 未参与授权、M1 锁域
+handoff 有测试、bundle 表空回退正常；但**管理面无域边界**——bundle 授权
+与 MCP 工具授权端点均可把 travel/cs 专属能力授权给 agent，且 Batch 2
+「白名单优先于黑名单」语义 + 测试固化了跨域放行，与决策 #15 直接冲突。
+
+- `product_context`：新增 `_DOMAIN_EXCLUSIVE_ROOTS`（agent 集含 cs 域
+  历史 root `cs.*`——原黑名单漏该根）与 `domain_exclusive_forbidden_roots`；
+  静态分支改为「白名单 ∩ 非域专属」——授权不构成跨域提权；黑名单回退
+  语义不变（单一事实源，agent/cs 集合与原值一致 + 补 `cs` 根）。
+- `admin_bundles.grant_bundle`：授权方向校验 bundle.domain（travel/cs/
+  selection 标签）与静态成员根名，跨域误授权 400 并列明成员（撤销不受限）。
+- 已知剩余缺口（下一批）：`ai.mcp_tools` 无业务域字段，动态工具直授
+  （`POST /tools/{id}/grants`）无法按域校验——最小路径为治理 JSONB 增
+  `domain` 字段（审核 UI 采集）+ grant_tool 校验 + 快照透传；bundle 路径
+  已由 bundle.domain 堵住。
+- 测试反转：`test_cross_domain_member_allowed_when_granted` →
+  `test_cross_domain_member_denied_even_when_granted`（含回退与边界内
+  放行对照）；新增 API 三例（travel 包→agent/cs 拒、cs 包→agent 拒/
+  cs 过、general 标签夹带 travel 成员拒）。
+
+### 验证（本机，D:/Python/python.exe，真 PG:5433 + mock MCP server）
+
+- `pytest backend/tests/agents/test_planner_critique.py
+  backend/tests/orchestration/router/test_product_scope.py` → 22 passed
+- `pytest backend/tests/mcp_registry/ backend/tests/orchestration/router/` →
+  70 + 145 中 144 passed（1 failed =
+  `test_router_has_no_second_registered_domain_mapping_literal`，main
+  `953c201` 基线已有：`execution_mode.py:186` 域字面量重复，非本轮引入）
+- `pytest backend/tests/api/test_admin_bundles_api.py
+  backend/tests/agents/test_planner_critique.py` → 21 passed
+- `pytest backend/tests/test_mcp_dynamic_e2e.py` → 14 passed（含导出
+  3 例、多工具路径 1 例复跑）
+- `pytest backend/tests/api/test_admin_mcp_api.py
+  backend/tests/api/test_admin_bundles_api.py` → 18 passed
+- 容器级部署验证 UNVERIFIED（改动未提交/未合并，按 AGENTS.md 合并后
+  rebuild）。
+
+### 32 决策差异台账与下一批清单
+
+详见本轮交付报告（会话输出）。要点：#14 仅导出（导入/环境映射/差异
+预览未建）、#16 仅手动探活（主动健康监测/退避重连/漂移巡检未建）、
+#18 复用 tool_selector（独立多轮 Discovery 未建）、#19 AI 语义契约、
+#20 AI 失败分析、#25 结果引用+Schema 映射、#27 自动任务/Webhook、
+#29 运行中多轮修改、治理配置独立发布/回滚（发布记录页仅系统 Gate）——
+均按第 32 题列增强批次，未擅自取消；动态工具域字段为硬隔离增强前置。

@@ -284,3 +284,41 @@ class TestBundleLifecycle:
                               "capabilities": ["mcp.nope__missing"]})
         assert r.status_code == 400
         assert "未在运行时生效" in r.json()["message"]
+
+
+class TestGrantDomainBoundary:
+    """决策 #15 业务域硬隔离：跨域专属 bundle 不可授权给该产品入口，
+    授权端点服务端拒绝（PR #115 审计修复）。"""
+
+    def test_travel_bundle_rejected_for_agent_and_cs(self, client):
+        bundle_id = _create(client, "旅游专属包", ["travel.poi_search"],
+                            domain="travel")
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=ADMIN_HEADERS, json={"product_key": "agent"})
+        assert r.status_code == 400, r.text
+        assert "跨域专属能力" in r.json()["message"]
+        assert "travel.poi_search" in r.json()["message"]
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=ADMIN_HEADERS,
+                        json={"product_key": "customer_service"})
+        assert r.status_code == 400, r.text
+
+    def test_cs_bundle_rejected_for_agent_but_allowed_for_cs(self, client):
+        bundle_id = _create(client, "客服专属包", ["cs.ticket.manage"],
+                            domain="cs")
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=ADMIN_HEADERS, json={"product_key": "agent"})
+        assert r.status_code == 400, r.text
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=ADMIN_HEADERS,
+                        json={"product_key": "customer_service"})
+        assert r.status_code == 200, r.text
+
+    def test_member_root_rejected_even_when_domain_label_general(self, client):
+        """domain 标注为 general 但静态成员是跨域专属 → 按成员根拒绝。"""
+        bundle_id = _create(client, "伪通用包", ["travel.poi_search"],
+                            domain="general")
+        r = client.post(f"/admin/capability-bundles/{bundle_id}/grants",
+                        headers=ADMIN_HEADERS, json={"product_key": "agent"})
+        assert r.status_code == 400, r.text
+        assert "travel.poi_search" in r.json()["message"]
