@@ -25,6 +25,8 @@ from backend.orchestration.router.manifest import CapabilityDecl
 _SLUG_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 # 上游工具名常见合法字符（- 与 .），统一折叠为下划线
 _SLUG_STRIP_RE = re.compile(r"[^a-z0-9_]+")
+# invocation 模板占位符：{name}
+_TEMPLATE_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 MAX_DESCRIPTION_CHARS = 500
 
@@ -49,13 +51,19 @@ def is_valid_slug(slug: str) -> bool:
 
 
 def content_hash(description: str, input_schema: dict | None,
-                 output_schema: dict | None = None) -> str:
-    """发现内容的稳定摘要（审核绑定 + 漂移检测）。"""
+                 output_schema: dict | None = None,
+                 invocation: dict | None = None) -> str:
+    """发现内容的稳定摘要（审核绑定 + 漂移检测）。
+
+    HTTP API 工具的调用定义（invocation）参与摘要——调用目标/方法/参数
+    映射变化等同契约变化，必须重审。
+    """
     canonical = json.dumps(
         {
             "description": str(description or ""),
             "input_schema": input_schema or {},
             "output_schema": output_schema or {},
+            "invocation": invocation or {},
         },
         sort_keys=True, ensure_ascii=False, separators=(",", ":"),
     )
@@ -85,6 +93,95 @@ class SpecDeriveError(ValueError):
 _VALID_OPERATIONS = {item.value for item in Operation}
 _VALID_RISKS = {item.value for item in RiskLevel}
 _VALID_APPROVALS = {item.value for item in ApprovalPolicy}
+
+# HTTP API 工具调用定义的白名单（Batch 1 第一批）
+_VALID_HTTP_METHODS = {"GET", "POST"}
+_MAX_PATH_TEMPLATES = 8
+
+# Authorization 系列头由连接凭据统一注入，配置面不可覆盖（防提权/防凭证泄露）
+_FORBIDDEN_HEADER_NAMES = {"authorization", "proxy-authorization", "cookie"}
+
+
+def validate_invocation(invocation: dict | None,
+                        input_schema: dict | None) -> dict[str, Any]:
+    """HTTP API 工具的受控调用定义校验（fail-fast）。
+
+    结构：{method, path, query?, headers?, body_from?}
+      - method ∈ {GET, POST}；path 为相对路径（/ 开头，禁 scheme/host）；
+      - path/query/headers 里的 {name} 模板引用 input_schema.properties 中
+        声明的参数——未声明即拒绝（不出网发现不了，登记时就拦）；
+      - headers 禁止 Authorization/Cookie（凭据注入专用）；
+      - POST 可用 body_from 指定整体作为 JSON body 的参数名。
+    返回归一后的 invocation；非法抛 SpecDeriveError。
+    """
+    raw = dict(invocation or {})
+    if not raw:
+        return {}
+    method = str(raw.get("method") or "").upper()
+    if method not in _VALID_HTTP_METHODS:
+        raise SpecDeriveError(
+            f"invocation.method 非法: {method!r}（允许 {_VALID_HTTP_METHODS}）")
+    path = str(raw.get("path") or "")
+    if not path.startswith("/") or "://" in path or path.startswith("//"):
+        raise SpecDeriveError(
+            f"invocation.path 必须是以 / 开头的相对路径: {path!r}")
+
+    properties = (input_schema or {}).get("properties") or {}
+    declared = set(properties) if isinstance(properties, dict) else set()
+
+    def _check_templates(section: str, mapping: Any) -> dict[str, str]:
+        if mapping is None:
+            return {}
+        if not isinstance(mapping, dict):
+            raise SpecDeriveError(f"invocation.{section} 必须是对象")
+        out: dict[str, str] = {}
+        for key, value in mapping.items():
+            str_key, str_value = str(key), str(value or "")
+            if section == "headers" and str_key.lower() in _FORBIDDEN_HEADER_NAMES:
+                raise SpecDeriveError(
+                    f"invocation.headers 禁止配置 {str_key}（凭据统一注入）")
+            for placeholder in _TEMPLATE_RE.findall(str_value):
+                if placeholder not in declared:
+                    raise SpecDeriveError(
+                        f"invocation.{section}.{key} 引用未声明参数: "
+                        f"{{{placeholder}}}")
+            for placeholder in _TEMPLATE_RE.findall(str_key):
+                if placeholder not in declared:
+                    raise SpecDeriveError(
+                        f"invocation.{section} 键引用未声明参数: "
+                        f"{{{placeholder}}}")
+            out[str_key] = str_value
+        return out
+
+    query = _check_templates("query", raw.get("query"))
+    headers = _check_templates("headers", raw.get("headers"))
+
+    path_templates = _TEMPLATE_RE.findall(path)
+    if len(path_templates) > _MAX_PATH_TEMPLATES:
+        raise SpecDeriveError(
+            f"invocation.path 模板参数过多（>{_MAX_PATH_TEMPLATES}）")
+    for placeholder in path_templates:
+        if placeholder not in declared:
+            raise SpecDeriveError(
+                f"invocation.path 引用未声明参数: {{{placeholder}}}")
+
+    body_from = str(raw.get("body_from") or "")
+    if body_from:
+        if method != "POST":
+            raise SpecDeriveError("invocation.body_from 仅 POST 支持")
+        if body_from not in declared:
+            raise SpecDeriveError(
+                f"invocation.body_from 引用未声明参数: {body_from}")
+
+    normalized: dict[str, Any] = {
+        "method": method,
+        "path": path,
+        "query": query,
+        "headers": headers,
+    }
+    if body_from:
+        normalized["body_from"] = body_from
+    return normalized
 
 
 def derive_tool_spec(
@@ -213,4 +310,5 @@ __all__ = [
     "is_valid_slug",
     "normalize_input_schema",
     "slugify",
+    "validate_invocation",
 ]

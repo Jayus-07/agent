@@ -71,15 +71,37 @@ class _McpDynamicToolAdapter:
         except UrlBlockedError as exc:
             raise McpClientError(f"MCP 目标地址被 SSRF 防护拦截: {exc}") from exc
         headers = mcp_store.resolve_headers(self._capability)
-        payload = call_tool(
-            conn.base_url,
-            runtime.upstream_tool_name,
-            dict(params or {}),
-            timeout=runtime.spec.timeout_ms / 1000.0,
-            ttl=0.0,  # 动态工具结果语义未知且可能含写操作，一律不缓存
-            headers=headers,
-            min_interval=0.0,  # 节流/限流由治理层统一执行
-        )
+        timeout_s = runtime.spec.timeout_ms / 1000.0
+        if conn.transport == "http_api":
+            # HTTP API 工具：按审核过的 invocation 模板出网（Batch 1）
+            if not runtime.invocation:
+                raise McpClientError(
+                    f"HTTP API 工具缺少调用定义: {self._capability}")
+            from backend.infra.http_tool_client import (
+                HttpToolError,
+                invoke_http_tool,
+            )
+
+            try:
+                payload = invoke_http_tool(
+                    conn.base_url,
+                    runtime.invocation,
+                    dict(params or {}),
+                    timeout_s=timeout_s,
+                    headers=headers,
+                )
+            except HttpToolError as exc:
+                raise McpClientError(str(exc)) from exc
+        else:
+            payload = call_tool(
+                conn.base_url,
+                runtime.upstream_tool_name,
+                dict(params or {}),
+                timeout=timeout_s,
+                ttl=0.0,  # 动态工具结果语义未知且可能含写操作，一律不缓存
+                headers=headers,
+                min_interval=0.0,  # 节流/限流由治理层统一执行
+            )
         return _wrap_payload(payload)
 
 

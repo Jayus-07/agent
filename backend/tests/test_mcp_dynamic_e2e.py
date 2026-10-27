@@ -102,7 +102,8 @@ def _start_uvicorn(app) -> tuple["uvicorn.Server", int]:
 def mock_ports():
     _, port_a = _start_uvicorn(_build_app_v1())
     _, port_b = _start_uvicorn(_build_app_v2())
-    return {"a": port_a, "b": port_b}
+    _, port_rest = _start_uvicorn(_build_rest_app())
+    return {"a": port_a, "b": port_b, "rest": port_rest}
 
 
 # ── DB 前置 ──────────────────────────────────────────────────
@@ -485,3 +486,173 @@ class TestReviewConcurrency:
             "FROM ai.mcp_tools WHERE id = %(i)s", {"i": echo_id})[0]
         assert row["status"] == "approved"
         assert row["approved_hash"] == row["content_hash"]
+
+
+# ═══════════════════════════════════════════════════
+# Batch 1：HTTP API Tool（统一注册表扩展，ADR-0011）
+# ═══════════════════════════════════════════════════
+
+def _build_rest_app():
+    """最小 REST mock：GET 订单查询 + POST 记录写入（供 HTTP 工具出网）。"""
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+
+    app = FastAPI()
+    calls: list[tuple] = []
+
+    @app.get("/orders/{order_id}")
+    def get_order(order_id: str, verbose: str = ""):
+        calls.append(("GET", order_id, verbose))
+        return {"order_id": order_id, "status": "shipped",
+                "verbose": bool(verbose)}
+
+    @app.post("/records")
+    async def create_record(request: dict):
+        calls.append(("POST", request.get("text", "")))
+        return JSONResponse({"created": True, "text": request.get("text", "")},
+                            status_code=201)
+
+    app.state.calls = calls
+    return app
+
+
+class TestHttpApiTools:
+    """HTTP API 工具全链路：连接 → 登记 → 审核 → 授权 → 调用 → 漂移。"""
+
+    def test_http_tool_full_lifecycle(self, client, mock_ports):
+        from backend.infra.mcp_registry import store as mcp_store
+
+        # ── 1. 创建 http_api 连接 ──
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "rest-api", "base_url": f"http://127.0.0.1:{mock_ports['rest']}",
+            "transport": "http_api", "network_scope": "private", "enabled": True,
+        })
+        assert r.status_code == 200, r.text
+        rest_conn = r.json()["id"]
+
+        # ── 2. 登记 GET 工具（path 模板 + query 模板）──
+        r = client.post(
+            f"/admin/mcp/connections/{rest_conn}/tools/manual",
+            headers=ADMIN_HEADERS,
+            json={
+                "tool_name": "get_order",
+                "description": "查询订单状态",
+                "invocation": {
+                    "method": "GET",
+                    "path": "/orders/{order_id}",
+                    "query": {"verbose": "{verbose}"},
+                },
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "order_id": {"type": "string"},
+                        "verbose": {"type": "string"},
+                    },
+                    "required": ["order_id"],
+                },
+            })
+        assert r.status_code == 200, r.text
+        get_order_id = r.json()["tool_id"]
+        assert r.json()["capability"] == "mcp.rest_api__get_order"
+        assert r.json()["status"] == "pending"
+
+        # ── 3. MCP 连接上手工登记被拒（transport 隔离）──
+        mcp_conn = _create_connection(client, mock_ports)
+        r = client.post(
+            f"/admin/mcp/connections/{mcp_conn}/tools/manual",
+            headers=ADMIN_HEADERS,
+            json={"tool_name": "x", "invocation": {"method": "GET",
+                                                   "path": "/x"}})
+        assert r.status_code == 400
+        assert r.json()["code"] == "TRANSPORT_MISMATCH"
+
+        # ── 4. 非法 invocation（引用未声明参数）登记被拒 ──
+        r = client.post(
+            f"/admin/mcp/connections/{rest_conn}/tools/manual",
+            headers=ADMIN_HEADERS,
+            json={"tool_name": "bad", "invocation": {
+                "method": "GET", "path": "/orders/{missing}"}})
+        assert r.status_code == 400
+        assert "未声明参数" in r.json()["message"]
+
+        # ── 5. slug 冲突拒绝 ──
+        r = client.post(
+            f"/admin/mcp/connections/{rest_conn}/tools/manual",
+            headers=ADMIN_HEADERS,
+            json={"tool_name": "get_order",
+                  "invocation": {"method": "GET", "path": "/orders/{order_id}"},
+                  "input_schema": {"type": "object",
+                                   "properties": {"order_id": {}}}})
+        assert r.status_code == 409
+
+        # ── 6. 审核 → 授权 → 只读测试调用（真实 HTTP 出网）──
+        _approve(client, get_order_id)
+        r = client.post(
+            f"/admin/mcp/tools/{get_order_id}/grants",
+            headers=ADMIN_HEADERS, json={"product_key": "agent"})
+        assert r.status_code == 200, r.text
+        r = _invoke(client, get_order_id, {"order_id": "ORD-9",
+                                           "verbose": "1"})
+        assert r.status_code == 200, r.text
+        assert r.json()["tool_status"] == "success"
+        assert r.json()["result"]["data"]["order_id"] == "ORD-9"
+        assert r.json()["result"]["data"]["verbose"] is True
+
+        # ── 7. pending 工具不出现在运行时快照 ──
+        # （write_record 保持 pending，仅登记）
+        r = client.post(
+            f"/admin/mcp/connections/{rest_conn}/tools/manual",
+            headers=ADMIN_HEADERS,
+            json={"tool_name": "write_record", "description": "写入记录",
+                  "invocation": {"method": "POST", "path": "/records",
+                                 "body_from": "text"},
+                  "input_schema": {"type": "object",
+                                   "properties": {"text": {"type": "string"}},
+                                   "required": ["text"]}})
+        assert r.status_code == 200, r.text
+        write_id = r.json()["tool_id"]
+        r = _invoke(client, write_id, {"text": "x"})
+        assert r.status_code == 409  # 未审核工具不可调用
+
+        # ── 8. 编辑 approved 工具调用定义 → 漂移（退出运行时）──
+        r = client.put(f"/admin/mcp/tools/{get_order_id}/invocation",
+                       headers=ADMIN_HEADERS,
+                       json={"description": "查询订单状态 v2",
+                             "invocation": {"method": "GET",
+                                            "path": "/orders/{order_id}"},
+                             "input_schema": {
+                                 "type": "object",
+                                 "properties": {"order_id": {"type": "string"}},
+                                 "required": ["order_id"]}})
+        assert r.status_code == 200, r.text
+        assert r.json()["schema_changed"] is True
+        assert r.json()["version"] == 2
+        r = _invoke(client, get_order_id, {"order_id": "ORD-9"})
+        assert r.status_code == 409  # 漂移立即退出运行时
+
+        # ── 9. 重审恢复 ──
+        _approve(client, get_order_id)
+        r = _invoke(client, get_order_id, {"order_id": "ORD-10"})
+        assert r.status_code == 200, r.text
+        assert r.json()["tool_status"] == "success"
+
+        # ── 10. 持久化：invocation 落库、快照版本可追溯 ──
+        rows = _db_rows(
+            "SELECT invocation FROM ai.mcp_tools WHERE id = %(i)s",
+            {"i": get_order_id})
+        assert rows[0]["invocation"]["method"] == "GET"
+        assert rows[0]["invocation"]["path"] == "/orders/{order_id}"
+        snaps = _db_rows(
+            "SELECT discovery_version, invocation FROM ai.mcp_tool_snapshots "
+            "WHERE tool_id = %(i)s ORDER BY discovery_version",
+            {"i": get_order_id})
+        assert [s["discovery_version"] for s in snaps] == [1, 2]
+        assert snaps[0]["invocation"]["query"] == {"verbose": "{verbose}"}
+        assert not (snaps[1]["invocation"].get("query") or {})
+
+        # 清理
+        _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                 {"c": rest_conn})
+        _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                 {"c": mcp_conn})
+        mcp_store.reset_for_tests()
