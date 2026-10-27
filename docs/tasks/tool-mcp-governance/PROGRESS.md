@@ -527,3 +527,41 @@ Discovery 增强）并要求持续推进；main 基线守卫修复已另开 PR #
 
 - 治理配置发布/回滚 + 配置导入（#08/#14 收口；/releases 第一档前置）。
 - 健康监测/Discovery 增强（#16/#18）。
+
+## Batch 5-2：治理配置发布/回滚/导入 后端（2026-10-28）
+
+### 交付（d1c95d2，7 文件 +906/−65）
+
+- **迁移 117** `ai.governance_releases`：租户内 version 递增，status
+  draft/published/rolled_back；payload 与 /admin/mcp/export **同构**
+  （凭据红线同源，复用 _export_payload——导出逻辑抽取为共享函数，
+  export 端点行为不变，e2e 复跑 3 passed）。
+- **新路由 admin_governance_releases.py**（`/admin/mcp` 前缀；与既有
+  admin_releases.py=系统发布 Gate 严格区分，V2 两档对应两个文件）：
+  - `POST /releases` 快照草稿（空配置 409）；
+  - `GET /releases/{id}/diff` 结构化差异（modified/added/removed，
+    方向=回滚将发生什么；added 仅提示不删除）；
+  - `POST /releases/{id}/publish`（draft→published，重复发布 409）；
+  - `POST /releases/{id}/rollback`：连接声明字段恢复（URL 二次净化
+    双保险，不恢复凭据）+ bundle 描述/域/成员整体替换 + 授权精确对齐
+    快照（多余禁用、快照授权启用/补建）+ **动态成员 mcp_tool_grants
+    同步**（运行时契约源）+ **生成新版本**记录（原型语义）；
+  - `POST /import`：纯增量导入——连接 disabled+无凭据+凭据 URL 净化
+    标注（redacted 透明返回）、bundle 重建不建授权、名称冲突跳过。
+  - 写操作全部 run_governance_mutation（幂等+审计）+ 写后刷新双快照。
+- 迁移登记：rag_smoke_path_filter（NON_AI）+ init_db（memory），
+  守卫测试 12 passed。
+
+### 验证
+
+- `pytest backend/tests/api/test_admin_governance_releases.py` → 3 passed
+  （快照-发布-回滚全生命周期含授权对齐断言；导入增量/无凭据/无授权/
+  冲突跳过；租户隔离）；回归 admin_mcp+bundles+registry **84 passed**、
+  导出 E2E 3 passed。
+- 容器级部署 UNVERIFIED（迁移 117 已对本机 5433 库执行并核实表结构）。
+
+### 下一批剩余
+
+- **前端 /releases 第一档转真实**（本批后端已就绪：列表/快照/差异/发布/
+  回滚/导入六个交互 + api 封装）——下一个增量。
+- 健康监测/Discovery 增强（#16/#18）。
