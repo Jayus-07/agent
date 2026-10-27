@@ -163,7 +163,7 @@ function ConnectionForm({
  *  仅支持 2xx/默认响应中声明的 JSON Schema；参数含 query/path 两来源。 */
 function parseOpenApiOperation(specText: string): {
   toolName: string; description: string;
-  method: 'GET' | 'POST'; path: string;
+  method: 'GET' | 'POST' | 'PUT'; path: string;
   query: Record<string, string>; inputSchema: Record<string, unknown>;
 } | null {
   let spec: {
@@ -178,7 +178,7 @@ function parseOpenApiOperation(specText: string): {
   } catch {
     return null
   }
-  const httpMethods = new Set(['get', 'post'])
+  const httpMethods = new Set(['get', 'post', 'put'])
   for (const [rawPath, ops] of Object.entries(spec.paths ?? {})) {
     for (const [m, op] of Object.entries(ops)) {
       if (!httpMethods.has(m) || !op) continue
@@ -204,7 +204,7 @@ function parseOpenApiOperation(specText: string): {
       return {
         toolName: toolName.slice(0, 64),
         description: (op.summary ?? op.description ?? '').slice(0, 500),
-        method: m.toUpperCase() as 'GET' | 'POST',
+        method: m.toUpperCase() as 'GET' | 'POST' | 'PUT',
         path: rawPath,
         query,
         inputSchema,
@@ -235,7 +235,8 @@ function HttpToolForm({
   const initialInv = initial?.invocation ?? undefined
   const [toolName, setToolName] = useState(initial?.tool_name ?? '')
   const [description, setDescription] = useState(initial?.description ?? '')
-  const [method, setMethod] = useState<'GET' | 'POST'>(initialInv?.method ?? 'GET')
+  const [method, setMethod] = useState<'GET' | 'POST' | 'PUT'>(
+    initialInv?.method ?? 'GET')
   const [path, setPath] = useState(initialInv?.path ?? '/')
   const [queryText, setQueryText] = useState(
     Object.entries(initialInv?.query ?? {}).map(([k, v]) => `${k}=${v}`).join('\n'))
@@ -346,10 +347,11 @@ function HttpToolForm({
       </label>
       <label className="flex flex-col gap-1">
         <span className="text-text-muted">HTTP 方法</span>
-        <select value={method} onChange={(e) => setMethod(e.target.value as 'GET' | 'POST')}
+        <select value={method} onChange={(e) => setMethod(e.target.value as 'GET' | 'POST' | 'PUT')}
           className="rounded border border-border-subtle bg-surface-base px-2 py-1.5">
           <option value="GET">GET</option>
           <option value="POST">POST</option>
+          <option value="PUT">PUT</option>
         </select>
       </label>
       <label className="flex flex-col gap-1">
