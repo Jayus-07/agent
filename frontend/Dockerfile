@@ -4,7 +4,7 @@
 # =============================================
 # Stage 1: Build
 # =============================================
-FROM node:18-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 # 安装依赖（利用 Docker 缓存层）
@@ -15,7 +15,7 @@ RUN --mount=type=cache,id=agent-platform-npm,target=/root/.npm npm ci
 COPY . .
 
 # API 代理目标（Docker 内部服务名）
-ARG API_URL=http://api:8000
+ARG API_URL=http://apisix:9080
 ARG NEXT_PUBLIC_ADMIN_URL=
 ARG NEXT_PUBLIC_CS_URL=
 ENV NEXT_PUBLIC_ADMIN_URL=${NEXT_PUBLIC_ADMIN_URL} NEXT_PUBLIC_CS_URL=${NEXT_PUBLIC_CS_URL}
@@ -27,7 +27,7 @@ RUN npm run build
 # =============================================
 # Stage 2: Runtime
 # =============================================
-FROM node:18-alpine AS runner
+FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production \
@@ -36,6 +36,7 @@ ENV NODE_ENV=production \
 # 复制 standalone 输出
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
 EXPOSE 3000
 

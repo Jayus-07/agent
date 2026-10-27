@@ -419,6 +419,11 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
   // 索引兼容全局告警（embedding 换模型后既有索引进入待重建态）
   const embeddingRow = byRole.get('embedding')
   const badIndexes = embeddingRow ? incompatibleIndexes(embeddingRow) : []
+  const rebuildActive = ['PENDING', 'RUNNING'].includes(rebuildStatus?.status ?? '')
+  const rebuildCounts = rebuildStatus?.progress?.match(/已生成\s+(\d+)\/(\d+)\s*条向量/)
+  const rebuildPercent = rebuildCounts && Number(rebuildCounts[2]) > 0
+    ? Math.min(100, Math.floor(Number(rebuildCounts[1]) / Number(rebuildCounts[2]) * 100)) : null
+  const rebuildLabel = ({ PENDING: '等待执行', RUNNING: '正在重建', SUCCESS: '重建完成', FAILED: '重建失败', PAUSED: '已暂停', CANCELLED: '已取消' } as Record<string, string>)[rebuildStatus?.status ?? ''] ?? '状态待确认'
 
   return (
     <section className="overflow-hidden rounded-xl border border-black/5 bg-white shadow-card">
@@ -429,10 +434,24 @@ export default function RoleBindingsTab({ roles, catalog, canAdmin, canManageEmb
             检查并重建全部向量
           </button>
           <p className="mt-2 text-text-muted">检查会真实调用模型，云端可能产生少量费用。同为 1024 维也不代表旧向量可以复用。仅更换重排模型无需重建。</p>
-          {rebuildStatus?.taskId && <p className="mt-2" role="status">
-            重建任务：{rebuildStatus.progress || ({ PENDING: '等待执行', RUNNING: '正在重建', SUCCESS: '重建完成', FAILED: '重建失败', PAUSED: '已暂停', CANCELLED: '已取消' } as Record<string, string>)[rebuildStatus.status ?? ''] || '请查看任务中心'}
-            {' · '}<a href="/tasks" className="underline">打开任务中心</a>
-          </p>}
+          {rebuildStatus?.taskId && <div className="mt-3 border-l-2 border-blue-500 bg-slate-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2" role="status" aria-live="polite">
+              <span className="font-medium text-text-primary">{rebuildLabel}</span>
+              <span>{rebuildStatus.progress}{rebuildActive && rebuildPercent !== null ? `（${rebuildPercent}%）` : ''}</span>
+            </div>
+            {rebuildActive && <progress aria-label="向量重建进度" className="mt-2 h-2 w-full accent-blue-600" max={100}
+              {...(rebuildPercent !== null && rebuildPercent < 100 ? { value: rebuildPercent } : {})} />}
+            <p className="mt-2 text-text-muted">{rebuildActive
+              ? '任务在后台执行，每 4 秒自动更新。可以离开本页，返回后会恢复显示最新进度。生成完成后还需校验并发布，请以“重建完成”为准。'
+              : rebuildStatus.status === 'SUCCESS'
+                ? '全部向量已校验并发布，正式向量已替换，临时数据已清理。'
+                : '本次未完成发布，旧向量保留。请在任务中心查看原因、处理后重试。'}</p>
+            {rebuildStatus.status !== 'SUCCESS' && <p className="mt-1 text-amber-800">模型不兼容的集合在重建完成前无法检索；其他业务可继续使用。</p>}
+            <div className="mt-2 flex flex-wrap items-center gap-3">
+              <a href="/tasks" className="underline">打开任务中心查看详情与重试</a>
+              <span className="break-all text-text-muted">任务编号：{rebuildStatus.taskId}</span>
+            </div>
+          </div>}
           {rebuildStatus?.error && <p className="mt-2 text-red-700">{rebuildStatus.error}</p>}
         </div>
       )}

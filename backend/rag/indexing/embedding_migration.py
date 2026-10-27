@@ -361,6 +361,9 @@ def _published_count(stage: str, model_name: str, fingerprint: str) -> int | Non
 
 def run_rebuild(task_id: str, model_name: str, fingerprint: str) -> dict:
     """候选构建可以重试，只有全量成功且仍持有租约才能发布。"""
+    from backend.config.rag import (
+        EMBEDDING_REBUILD_BATCH_SIZE, EMBEDDING_REBUILD_REQUEST_TIMEOUT,
+    )
     from backend.core.request_context import RequestContext
     from backend.infra.llm import registry_store
     from backend.observability.tracer import trace_collector
@@ -386,7 +389,10 @@ def run_rebuild(task_id: str, model_name: str, fingerprint: str) -> dict:
     from backend.infra.llm.pricing import clear_price_cache
 
     clear_price_cache()
-    embedding = get_registered_embedding(model_name)
+    embedding = get_registered_embedding(
+        model_name, request_timeout=EMBEDDING_REBUILD_REQUEST_TIMEOUT,
+        batch_size=EMBEDDING_REBUILD_BATCH_SIZE, max_retries=0,
+    )
     info = storage_snapshot()
     dimension = info["dimension"]
     table = _table()

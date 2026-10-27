@@ -35,7 +35,7 @@ from backend.orchestration.router.types import (
 from backend.observability.tracer import trace_collector
 
 
-_ROUTE_ENGINE_CACHE_VERSION = "v4"
+_ROUTE_ENGINE_CACHE_VERSION = "v6"
 ROUTING_POLICY_VERSION = "routing-p0-1"
 ROUTING_STAGE_ORDER = (
     "entry_gate",
@@ -940,6 +940,9 @@ class RoutingEngine:
             CapabilityScore(
                 name=str(row.get("name") or ""),
                 score=float(row.get("score") or 0.0),
+                risk=str(row.get("risk") or "UNKNOWN"),
+                fast_path_enabled=bool(row.get("fast_path_enabled", False)),
+                permission_ready=bool(row.get("permission_ready", False)),
             )
             for row in capability.get("candidates") or []
             if row.get("name")

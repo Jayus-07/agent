@@ -405,7 +405,7 @@ function processSteps(events: SSEStreamEvent[], labels: Record<string, string>, 
         steps.push({ key: `tool-${toolKey}-${index}`, title: `调用 ${tool || event.data.node}`, detail: event.data.message, state: 'running' })
       } else {
         const state: ProcessStep['state'] = event.data.level === 'error' ? 'error' : event.data.level === 'warn' ? 'warning' : 'success'
-        steps.push({ key: `log-${event.data.step_id}-${index}`, title: event.data.message, detail: labels[event.data.node] || event.data.node, state })
+        steps.push({ key: `log-${event.data.step_id}-${index}`, title: event.data.message, detail: event.data.node === 'request_entry' ? '请求准备' : labels[event.data.node] || event.data.node, state })
       }
     } else if (event.event === 'file') {
       steps.push({ key: `file-${event.data.step_id}-${index}`, title: '生成文件', detail: event.data.files.join('、'), state: 'success' })
@@ -567,7 +567,7 @@ function AssistantMessage({
         <div className="mb-1.5 flex items-center gap-2"><span className="text-xs font-semibold text-slate-800">Agent AI</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">企业助手</span></div>
         <div className="rounded-2xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,.035)] sm:px-5">
           <ProcessPanel events={events} labels={labels} todos={active ? todos : message.trace?.todoItems || []} streaming={active} />
-          {active && !answer ? <div className="flex items-center gap-2 py-1 text-xs text-slate-500"><span className="flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:150ms]" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:300ms]" /></span>正在组织回复…</div> : <RichAnswer content={answer} />}
+          {active && !answer ? <div className="flex items-center gap-2 py-1 text-xs text-slate-500"><span className="flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:150ms]" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:300ms]" /></span>正在处理请求…</div> : <RichAnswer content={answer} />}
           {message.pause && <PauseNotice message={message.pause.message} disabled={blocked} onRetry={onRetry} />}
           {errorMessage && !message.pause && <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-800"><AlertCircle size={14} className="mt-0.5 shrink-0" />{errorMessage}</div>}
           {sources.length > 0 && <div className="mt-4 border-t border-slate-100 pt-3"><p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">参考来源</p><div className="flex flex-wrap gap-1.5">{sources.map((source, index) => <span key={`${source.filename}-${index}`} title={source.section || source.filename} className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[10px] text-slate-600"><FileText size={12} className="shrink-0 text-indigo-400" /><span className="truncate">{source.filename}</span></span>)}</div></div>}

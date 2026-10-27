@@ -204,6 +204,12 @@ class RAGServiceProxy:
                 f"是否运行及 /readyz 状态"
             ) from e
         payload = resp.json()
+        from backend.orchestration.graph.sse_event_sink import emit_sse_progress
+
+        emit_sse_progress(
+            node="rag_skill", phase="rag_result_received",
+            message="已收到知识库结果，正在整理回答", tool="rag.search",
+        )
         self.last_answer_meta = payload.get("meta") or {}
         child_trace_id = self.last_answer_meta.get("trace_id")
         if (parent_trace is not None and isinstance(child_trace_id, str)

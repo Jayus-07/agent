@@ -377,6 +377,7 @@ class GraphRunner:
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
+        entry_started = time.perf_counter()
 
         # ── 追问漏斗：选项点击检测（2026-10-03 企业口径）──────────────
         # 前端点选项 = 原文重发；命中上一张卡的选项暂存即计 clicked。
@@ -563,6 +564,9 @@ class GraphRunner:
         trace = trace_collector.start(
             question, product_session_id, workflow_name="agent",
         )
+        trace.metadata["entry_timing"] = {
+            "before_trace_ms": round((time.perf_counter() - entry_started) * 1000, 1),
+        }
         # 预算状态先行绑定（2026-10-25 TD-05 收口）：trace 建立到 _worker
         # 的 RequestContext.bind 之间存在 LLM/embedding 调用（FollowUp 语义
         # 解析等，本 producer 线程），此前这些调用整体旁路预占/结算（每请求
@@ -992,6 +996,9 @@ class GraphRunner:
                 reset_stream_sink()
                 merged_q.put(("done", None))
 
+        trace.metadata["entry_timing"]["worker_launch_ms"] = round(
+            (time.perf_counter() - entry_started) * 1000, 1,
+        )
         threading.Thread(target=_worker, daemon=True, name="graph-worker").start()
 
         def _finalize_trace(status: str, metrics: dict | None = None,

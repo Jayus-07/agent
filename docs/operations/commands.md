@@ -33,7 +33,7 @@ bge-reranker-v2-m3 提供 DashScope 兼容 rerank。该服务是独立进程，
 
 验证：`curl http://127.0.0.1:8088/healthz`。模型路径可用环境变量
 `BGE_M3_MODEL_PATH` / `RERANKER_MODEL_PATH` 覆盖，默认读本机
-HuggingFace / ModelScope 缓存。启动脚本只管理自身 PID，端口被其他进程占用时拒绝启动，不杀未知进程。日志在 `logs/local_model_server.log` 和 `.err`；`status` 区分已就绪、进程存在但未就绪、未运行，启动失败返回非零。embedding 自动选设备，reranker 默认 CPU，避免小显存同时装两模型；`RERANKER_DEVICE` 可覆盖重排设备，`RERANKER_CPU_THREADS` 可调整其 CPU 线程数。
+HuggingFace / ModelScope 缓存。启动脚本只管理自身 PID，端口被其他进程占用时拒绝启动，不杀未知进程。日志在 `logs/local_model_server.log` 和 `.err`；`status` 区分已就绪、进程存在但未就绪、未运行，启动失败返回非零。embedding 自动选设备；参考模型服务的 reranker 默认 auto（CUDA可用则GPU，否则CPU），GPU使用float16、CPU使用float32，`RERANKER_DEVICE=cpu`可显式保留CPU模式，CPU线程由`RERANKER_CPU_THREADS`控制。`RERANKER_BATCH_SIZE`默认2，全部候选分批评分后统一排序；两个模型串行推理以限制激活显存叠加。启动执行真实双模型预热，加载失败不会静默回退并声称就绪。`/healthz`返回实际重排设备和精度。此参考服务仍需按模型机的显存做实测，不代表4C8G应用机应加载模型。
 
 项目 `devctl.bat start` 不会启动上述宿主机模型进程。Docker Desktop 内通过 `http://host.docker.internal:8088` 调宿主服务，不能在容器内填写 `127.0.0.1:8088`。该主机名指 Docker 宿主机，不指开发者电脑；迁到另一台服务器后不能照搬来访问原电脑。无本地模型需求的服务器无需启动本地模型进程。
 

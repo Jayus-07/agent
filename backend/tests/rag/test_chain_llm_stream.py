@@ -116,3 +116,47 @@ def test_callable_proxy_direct_is_single_chunk():
     }))
     assert len(chunks) == 1
     assert str(chunks[0]) == "".join(_TOKENS)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_generation_usage_survives_lcel_context_boundary(monkeypatch, streaming):
+    """LCEL 子上下文的生成用量不能被父上下文的分类用量覆盖。"""
+    import backend.rag.chain as chain_mod
+    from backend.rag.context import RagRequestState, get_context, set_context
+
+    class UsageModel:
+        def stream(self, prompt):
+            assert "退货窗口 30 天" in prompt.to_string()
+            yield AIMessageChunk(content="30天")
+            proxy_mod._last_call_meta_var.set({"prompt_tokens": 1234})
+
+    monkeypatch.setattr(chain_mod, "llm", UsageModel())
+    previous = get_context()
+    token = proxy_mod._last_call_meta_var.set({"prompt_tokens": 78})
+    state = RagRequestState()
+    set_context(state)
+    try:
+        chain = _make_chain(_llm_stream)
+        payload = {
+            "q": "退货政策是什么",
+            "context": [Document(page_content="退货窗口 30 天。")],
+        }
+        result = "".join(chain.stream(payload)) if streaming else chain.invoke(payload)
+        assert result == "30天"
+        assert state.generation_call_meta["prompt_tokens"] == 1234
+        assert state.generation_input_chars > len("退货窗口 30 天。")
+        assert proxy_mod._last_call_meta_var.get() == {"prompt_tokens": 78}
+
+        class NoUsageModel:
+            def stream(self, prompt):
+                yield AIMessageChunk(content="用量未知")
+
+        monkeypatch.setattr(chain_mod, "llm", NoUsageModel())
+        assert chain.invoke(payload) == "用量未知"
+        assert state.generation_call_meta == {}
+        other_state = RagRequestState()
+        assert other_state.generation_call_meta == {}
+        assert other_state.generation_input_chars == 0
+    finally:
+        set_context(previous)
+        proxy_mod._last_call_meta_var.reset(token)

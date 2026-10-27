@@ -490,6 +490,15 @@ async def chat_stream(
         chat_sse_executor_active.inc()
         _record_executor_wait(pool_wait_anchor.get("submitted_at"))
         try:
+            # 入口反馈走既有重放缓冲，不改变Runner生成器的取消/收尾生命周期。
+            preparing = {"event": "log", "data": {
+                "level": "info", "node": "request_entry", "step_id": "request_prepare",
+                "message": "正在准备会话并检查请求",
+                "payload": {"phase": "request_prepare", "status": "running"},
+                "ts": time.time(),
+            }}
+            record.append(preparing)
+            _threadsafe_put(preparing)
             for evt in agent.stream_events(
                 req.question,
                 session_id,
@@ -598,6 +607,8 @@ async def chat_stream(
                     break
 
                 evt_type = evt.get("event")
+                if evt_type in {"log", "status", "delta", "answer", "done", "error", "paused", "clarification", "file"}:
+                    _latency_tracker.on_feedback(time.monotonic())
                 if evt_type == "error":
                     final_status = "error"
                 elif evt_type == "paused":

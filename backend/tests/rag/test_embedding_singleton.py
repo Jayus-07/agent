@@ -6,6 +6,8 @@ from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from backend.shared.processing_context import ProcessingBinding, bind_processing
 
 
@@ -52,6 +54,56 @@ def test_cloud_embedding_sets_bounded_request_timeout():
     # 被限制在客服总超时以内，避免把配置默认值硬编码进单元测试。
     assert 0 < captured["timeout"] <= 20
     assert captured["api_key"] == "sk-test"
+
+
+def test_rebuild_timeout_override_does_not_change_online_default(monkeypatch):
+    """离线请求可以等待长文本，后续在线客户端仍使用原有短超时。"""
+    from backend.rag import embedding_singleton
+
+    captured = []
+
+    class FakeOpenAIEmbeddings:
+        def __init__(self, **kwargs):
+            keys = ("timeout", "chunk_size", "max_retries")
+            captured.append({key: kwargs[key] for key in keys})
+
+    monkeypatch.setitem(sys.modules, "langchain_openai", SimpleNamespace(
+        ChatOpenAI=object, OpenAIEmbeddings=FakeOpenAIEmbeddings,
+    ))
+    config = {"model": "test", "api_key": "sk-test",
+              "base_url": "https://example.com/v1", "dimensions": None}
+    online_timeout = embedding_singleton.EMBEDDING_REQUEST_TIMEOUT
+    embedding_singleton._get_cloud_embedding(
+        config, request_timeout=60, batch_size=1, max_retries=0,
+    )
+    embedding_singleton._get_cloud_embedding(config)
+
+    assert captured == [
+        {"timeout": 60, "chunk_size": 1, "max_retries": 0},
+        {"timeout": online_timeout,
+         "chunk_size": embedding_singleton.EMBEDDING_BATCH_SIZE, "max_retries": 1},
+    ]
+    assert embedding_singleton.EMBEDDING_REQUEST_TIMEOUT == online_timeout
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf")])
+def test_embedding_timeout_rejects_unbounded_values(timeout):
+    from backend.rag import embedding_singleton
+
+    with pytest.raises(ValueError, match="有限正数"):
+        embedding_singleton._get_cloud_embedding(
+            {"api_key": "sk-test"}, request_timeout=timeout,
+        )
+
+
+@pytest.mark.parametrize("batch_size", [0, -1, True, 1.5])
+def test_embedding_rebuild_batch_size_requires_positive_integer(batch_size):
+    from backend.rag import embedding_singleton
+
+    with pytest.raises(ValueError, match="正整数"):
+        embedding_singleton._get_cloud_embedding(
+            {"api_key": "sk-test"}, batch_size=batch_size,
+        )
 
 
 def test_embedding_usage_payload_contains_processing_binding(monkeypatch):
@@ -111,9 +163,12 @@ def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     monkeypatch.setattr(
         embedding_singleton.specialized_mod,
         "resolve_binding",
-        lambda role: SimpleNamespace(
+        lambda role: embedding_singleton.specialized_mod.SpecializedBinding(
+            role="embedding",
             provider_id="embedding-provider",
+            adapter="openai",
             model_name="registered-embedding",
+            base_url="https://example.com/v1",
         )
         if role == "embedding"
         else None,
@@ -129,6 +184,7 @@ def test_tracked_embedding_uses_specialized_provider_id(monkeypatch):
     assert tracked._provider == "cloud"
     assert tracked._provider_id == "embedding-provider"
     assert tracked._model_name == "registered-embedding"
+    assert tracked._index_fingerprint
     tracked._record(12, 1, 2.0)
 
     assert priced == [("registered-embedding", "embedding")]

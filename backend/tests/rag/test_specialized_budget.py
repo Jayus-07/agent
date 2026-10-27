@@ -73,6 +73,9 @@ def test_embedding_cache_bills_once_and_budget_rejects_before_outbound(monkeypat
     es._EMBED_REQUEST_RECORD.set(None)
     es.begin_embedding_request(reset=True)
     state, entries, events, outer = metering
+    # max_calls 只记账（2026-10-26 语义）；本测试的拒绝门禁改由 token 承担：
+    # 估算 max(1, chars//3)，单次 embed 记 1 token，3 次后第 4 次 reserve 被拒
+    state.limits = budget.RequestBudgetLimits(max_calls=3, max_total_tokens=3)
     try:
         tracked.embed_query("同一查询")
         tracked.embed_query("同一查询")
@@ -96,7 +99,10 @@ def test_embedding_cache_bills_once_and_budget_rejects_before_outbound(monkeypat
         es._EMBED_REQUEST_RECORD.set(None)
 
 
-def test_rerank_retry_has_separate_unknown_and_settled_entries(monkeypatch, metering):
+def test_rerank_timeout_marks_unavailable_without_retry(monkeypatch, metering):
+    """2026-10-27 语义（1eeca23）：rerank HTTP 超时不再重试——本请求内该
+    rerank 服务直接标记不可用、跳过重复投递（迟到调用不得在用户响应结束后
+    继续产生付费请求）。预算条目只保留 primary 失败记录。"""
     import requests
 
     from backend.rag.reranker import DashScopeReranker
@@ -105,23 +111,19 @@ def test_rerank_retry_has_separate_unknown_and_settled_entries(monkeypatch, mete
 
     def post(*_args, **_kwargs):
         attempts.append(1)
-        if len(attempts) == 1:
-            raise requests.exceptions.Timeout()
-        return SimpleNamespace(status_code=200, json=lambda: {
-            "output": {"results": [{"index": 0, "relevance_score": 0.9}]},
-            "usage": {"total_tokens": 12},
-        })
+        raise requests.exceptions.Timeout()
 
     monkeypatch.setattr("backend.rag.reranker.requests.post", post)
     model = DashScopeReranker("synthetic", model="test-rerank", api_format="dashscope")
-    assert model.rank("查询", ["正文"]) == [(0, 0.9)]
+    with pytest.raises(requests.exceptions.Timeout):
+        model.rank("查询", ["正文"])
     state, entries, events, outer = metering
-    assert state.calls == 2 and state.retries == 1
-    assert [entry["status"] for entry in entries] == ["needs_review", "settled"]
-    assert [event["decision"] for event in events] == ["primary", "retry"]
+    assert attempts == [1]  # 只投递一次，不重试
+    assert state.calls == 1 and state.retries == 0
+    assert [entry["status"] for entry in entries] == ["needs_review"]
+    assert [event["decision"] for event in events] == ["primary"]
     assert events[0]["finish_reason"] == "error"
     assert all(event["user_id"] == "eval-user" and event["tenant_id"] == "eval" for event in events)
-    assert entries[1]["amount"] == Decimal("0.000012")
     assert budget._current_quota_reservation.get() is outer
 
 

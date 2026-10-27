@@ -218,7 +218,17 @@ def _pg_available() -> bool:
 
 
 class _StubEmbedding:
-    """确定性伪嵌入：文本 hash → 固定维度向量（不触网、可复现）。"""
+    """确定性伪嵌入：文本 hash → 固定维度向量（不触网、可复现）。
+
+    2026-10-26 起索引元数据登记要求完整运行时身份（provider/model/指纹），
+    桩必须与生产 _TrackedEmbedding 一样携带身份属性，否则 index 身份校验
+    会以 runtime_fingerprint_missing 拒绝登记。
+    """
+
+    _model_name = "stub-embedding"
+    _provider = "stub"
+    _provider_id = "stub-provider"
+    _index_fingerprint = "stub-fingerprint-v1"
 
     def __init__(self, dim: int = EMBEDDING_DIM):
         self.dim = dim
