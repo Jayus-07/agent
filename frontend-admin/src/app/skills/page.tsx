@@ -23,6 +23,7 @@ import {
   type McpServer,
   type McpTool,
 } from '@/api/registry'
+import BundleGrantMatrix from './BundleGrantMatrix'
 
 function RoutedBadge({ routed }: { routed: boolean }) {
   return (
@@ -116,6 +117,9 @@ export default function SkillsPage() {
               hint="运行时 Skill 注册表现状"
             />
           </div>
+
+          {/* 能力包与 Agent 授权（Batch 2：写入口，授权立即生效） */}
+          <BundleGrantMatrix />
 
           {/* 能力清单表 */}
           <AssetSection title="能力清单" meta={`${caps.count} 条`} bodyClassName="p-0">
