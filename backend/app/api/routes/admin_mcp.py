@@ -1390,6 +1390,22 @@ async def grant_tool(request: Request, tool_id: int, body: GrantRequest):
         return _conflict(
             f"工具当前状态为 {row['status']}，只有 approved 工具可授权")
 
+    if not body.revoke:
+        # 决策 #15 业务域硬隔离：审核时登记的业务域（governance.domain）
+        # 属目标产品禁行域 → 拒绝授权。未分类（domain 为空）不设限，
+        # 兼容存量数据；bundle 路径已按 bundle.domain 校验。
+        from backend.core.product_context import (
+            _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS,
+            domain_exclusive_forbidden_roots,
+        )
+
+        tool_domain = str((row.get("governance") or {}).get("domain") or "")
+        forbidden = domain_exclusive_forbidden_roots(body.product_key)
+        if forbidden & _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS.get(tool_domain, frozenset()):
+            return _bad_request(
+                f"工具业务域为 {tool_domain}，不可授权给 {body.product_key} "
+                "产品入口（业务域硬隔离），请改审核业务域或授权对应产品")
+
     def _write() -> dict[str, Any]:
         if body.revoke:
             _execute(

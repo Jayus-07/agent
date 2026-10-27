@@ -40,9 +40,13 @@ def _exec_delete_bundles_by_user():
     raw = _raw_conn()
     try:
         with raw.cursor() as cur:
+            # created_by 实际落库为 "user:<id>"（_actor_of 前缀），裸 id
+            # 永远匹配不上——残留行会让重名创建 409（2026-10-28 实证）
             cur.execute(
-                "DELETE FROM ai.capability_bundles WHERE created_by = %(u)s",
-                {"u": "u-e2e-bundle-admin"})
+                "DELETE FROM ai.capability_bundles "
+                "WHERE created_by IN (%(u)s, %(prefixed)s)",
+                {"u": "u-e2e-bundle-admin",
+                 "prefixed": "user:u-e2e-bundle-admin"})
         raw.commit()
     finally:
         raw.close()

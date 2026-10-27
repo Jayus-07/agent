@@ -1051,3 +1051,68 @@ class TestConfigurationExport:
             _db_exec(
                 "DELETE FROM ai.mcp_connections WHERE id = ANY(%(ids)s)",
                 {"ids": [legacy_id, broken_id]})
+
+
+class TestToolDomainGrantBoundary:
+    """决策 #15 硬隔离补全（Batch 5）：审核登记 governance.domain 后，
+    跨域专属动态工具的产品授权被服务端拒绝。"""
+
+    def test_domain_tagged_tool_grant_boundary(self, client, mock_ports):
+        from backend.infra.mcp_registry import store as mcp_store
+
+        conn_id = _create_connection(client, mock_ports, name="domain-srv")
+        try:
+            _discover(client, conn_id)
+            echo_id = _tools_of(client, conn_id)["echo"]["id"]
+
+            # travel 域工具：agent / customer_service 授权均被拒
+            _approve(client, echo_id, domain="travel")
+            for product in ("agent", "customer_service"):
+                r = client.post(f"/admin/mcp/tools/{echo_id}/grants",
+                                headers=ADMIN_HEADERS,
+                                json={"product_key": product})
+                assert r.status_code == 400, (product, r.text)
+                assert "业务域硬隔离" in r.json()["message"]
+
+            # general 域工具：正常授权
+            _approve(client, echo_id, domain="general")
+            r = client.post(f"/admin/mcp/tools/{echo_id}/grants",
+                            headers=ADMIN_HEADERS,
+                            json={"product_key": "agent"})
+            assert r.status_code == 200, r.text
+
+            # cs 域工具：customer_service 可授权，agent 被拒
+            _approve(client, echo_id, domain="cs")
+            r = client.post(f"/admin/mcp/tools/{echo_id}/grants",
+                            headers=ADMIN_HEADERS,
+                            json={"product_key": "customer_service"})
+            assert r.status_code == 200, r.text
+            r = client.post(f"/admin/mcp/tools/{echo_id}/grants",
+                            headers=ADMIN_HEADERS,
+                            json={"product_key": "agent"})
+            assert r.status_code == 400, r.text
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
+            mcp_store.reset_for_tests()
+
+    def test_invalid_domain_label_rejected_at_review(self, client, mock_ports):
+        conn_id = _create_connection(client, mock_ports, name="domain-bad")
+        try:
+            _discover(client, conn_id)
+            echo_id = _tools_of(client, conn_id)["echo"]["id"]
+            r = client.post(f"/admin/mcp/tools/{echo_id}/review",
+                            headers=ADMIN_HEADERS,
+                            json={"action": "approve",
+                                  "governance": {
+                                      "operation": "read",
+                                      "risk_level": "R1",
+                                      "confirmation_policy": "none",
+                                      "domain": "not-a-domain"},
+                                  "examples": ["示例一", "示例二"],
+                                  "notes": ""})
+            assert r.status_code == 400, r.text
+            assert "domain 非法" in r.json()["message"]
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
