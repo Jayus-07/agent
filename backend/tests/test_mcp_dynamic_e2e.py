@@ -911,3 +911,40 @@ class TestMultiToolReplenishmentPath:
             _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
                      {"c": conn_id})
             mcp_store.reset_for_tests()
+
+
+class TestConfigurationExport:
+    def test_export_excludes_credentials_and_state(self, client, mock_ports):
+        """配置导出：凭据/fingerprint/last4/审核状态绝不导出（Batch 4）。"""
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "export-rest",
+            "base_url": f"http://127.0.0.1:{mock_ports['rest']}",
+            "transport": "http_api", "auth_type": "static_bearer",
+            "secret": f"sk-export-{uuid.uuid4().hex}",
+            "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+        try:
+            r = client.get("/admin/mcp/export", headers=ADMIN_HEADERS)
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data["version"] == 1
+            conns = [c for c in data["connections"]
+                     if c["name"] == "export-rest"]
+            assert conns, "导出应包含连接声明"
+            c = conns[0]
+            # 声明字段导出
+            assert c["base_url"].startswith("http://127.0.0.1:")
+            assert c["transport"] == "http_api"
+            assert c["auth_type"] == "static_bearer"
+            # 凭据红线：全文不含密钥/指纹/last4
+            raw = str(data)
+            assert "sk-export-" not in raw
+            assert "secret_cipher" not in raw
+            assert "fingerprint" not in raw
+            assert "last4" not in raw
+            # 运行时状态不导出
+            assert "enabled" not in c and "status" not in c
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})

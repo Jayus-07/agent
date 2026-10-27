@@ -1441,4 +1441,71 @@ async def test_invoke_tool(request: Request, tool_id: int,
     }
 
 
+@router.get("/export")
+async def export_configuration(request: Request):
+    """配置导出（Batch 4，只读）：连接声明 + 能力包 + 授权关系，目标环境
+    重新映射与审核的输入。
+
+    红线（ADR-0011 D7）：
+      - 凭据密文、fingerprint、last4 **绝不导出**——目标环境重新配置；
+      - 工具快照/审核状态/审批历史不导出——审核必须在新环境重新进行；
+      - 导出内容含授权关系（bundle→product），由导入方管理员确认后重建。
+    """
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+
+    def _load() -> dict[str, Any]:
+        connections = [
+            {
+                "name": r["name"],
+                "base_url": r["base_url"],
+                "transport": r["transport"],
+                "auth_type": r["auth_type"],
+                "network_scope": r["network_scope"],
+                # enabled/status 为运行时状态，不导出（导入方按需启用）
+            }
+            for r in _query_all(
+                "SELECT name, base_url, transport, auth_type, network_scope "
+                "FROM ai.mcp_connections WHERE tenant_id = %(t)s "
+                "ORDER BY name", {"t": tenant})
+        ]
+        bundles = _query_all(
+            "SELECT b.id, b.name, b.description, b.domain, b.enabled "
+            "FROM ai.capability_bundles b ORDER BY b.name")
+        items = _query_all(
+            "SELECT bundle_id, capability FROM ai.capability_bundle_items")
+        grants = _query_all(
+            "SELECT bundle_id, product_key FROM ai.product_bundle_grants "
+            "WHERE enabled AND revoked_at IS NULL AND tenant_id = %(t)s",
+            {"t": tenant})
+        items_by_bundle: dict[str, list[str]] = {}
+        for i in items:
+            items_by_bundle.setdefault(str(i["bundle_id"]), []).append(
+                str(i["capability"]))
+        grants_by_bundle: dict[str, list[str]] = {}
+        for g in grants:
+            grants_by_bundle.setdefault(str(g["bundle_id"]), []).append(
+                str(g["product_key"]))
+        bundle_views = [{
+            "name": b["name"],
+            "description": b["description"],
+            "domain": b["domain"],
+            "capabilities": items_by_bundle.get(str(b["id"]), []),
+            "granted_products": grants_by_bundle.get(str(b["id"]), []),
+        } for b in bundles]
+        _audit("mcp_configuration_export", {
+            "connections": len(connections), "bundles": len(bundle_views),
+        }, user_id=actor, tenant_id=tenant)
+        return {
+            "version": 1,
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "tenant": tenant,
+            "connections": connections,
+            "capability_bundles": bundle_views,
+        }
+
+    return await asyncio.to_thread(_load)
+
+
 __all__ = ["router"]
