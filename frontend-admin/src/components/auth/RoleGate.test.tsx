@@ -3,6 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { createRoot, type Root } from "react-dom/client";
 import AccessControlPage from "@/app/settings/access/page";
 import {
+  getRbacAccessContext,
   listRbacAudit,
   listRbacDepartments,
   listRbacUsers,
@@ -10,6 +11,7 @@ import {
 } from "@/api/rbac";
 
 vi.mock("@/api/rbac", () => ({
+  getRbacAccessContext: vi.fn(),
   listRbacAudit: vi.fn(),
   listRbacDepartments: vi.fn(),
   listRbacUsers: vi.fn(),
@@ -24,6 +26,7 @@ let mounted: { container: HTMLElement; root: Root } | null = null;
 
 beforeEach(() => {
   sessionStorage.clear();
+  vi.mocked(getRbacAccessContext).mockReset();
   vi.mocked(listRbacUsers).mockReset();
   vi.mocked(listRbacDepartments).mockReset().mockResolvedValue([]);
   vi.mocked(listRbacAudit).mockReset();
@@ -48,14 +51,22 @@ function renderPage() {
 
 describe("访问控制页 RoleGate", () => {
   it.each(["viewer", "editor"])(
-    "%s 直接访问显示现有 ForbiddenCard，且不请求用户或审计 API",
-    (role) => {
+    "%s 访问时服务端判权 403，显示无权限卡且不请求用户或审计 API",
+    async (role) => {
       sessionStorage.setItem(
         "agent.user_info",
         JSON.stringify({ userId: 9, roles: [role] }),
       );
+      // 非平台管理员且无部门主管授权时，后端 /rbac/context 返回 403。
+      vi.mocked(getRbacAccessContext).mockRejectedValueOnce(
+        Object.assign(new Error("当前账号没有部门主管授权"), { status: 403 }),
+      );
       const container = renderPage();
-      expect(container.textContent).toContain("没有访问「访问控制」的权限");
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(container.textContent).toContain("没有访问控制权限");
       expect(listRbacUsers).not.toHaveBeenCalled();
       expect(listRbacAudit).not.toHaveBeenCalled();
     },
@@ -91,6 +102,10 @@ describe("访问控制页 RoleGate", () => {
       page: 1,
       pageSize: 20,
     };
+    vi.mocked(getRbacAccessContext).mockResolvedValue({
+      isPlatformAdmin: true,
+      managedDepartments: [],
+    });
     vi.mocked(listRbacUsers).mockResolvedValue(page);
     const container = renderPage();
     await act(async () => {
