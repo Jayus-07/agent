@@ -359,13 +359,19 @@ def test_worker_prompt_snapshot_uses_worker_event_loop(monkeypatch):
 
 
 def test_rag_evaluation_worker_has_sufficient_memory_and_ragas_dependency():
+    """RAGAS 评测 worker 守卫：依赖齐备 + 资源层内存显式设置。
+
+    2026-10-28 对齐现行资源档位（企业助手任务 10-26 拍板）：共享资源层
+    report-worker=512m；4c8g 生产层继承 local 覆盖层，不再单独声明内存
+    （旧断言 768m 在两个文件上均已失真，合并桌面评测分支时暴露）。
+    """
     from pathlib import Path
     import yaml
 
     root = Path(__file__).resolve().parents[3]
-    for filename in ('docker-compose.local.yml', 'docker-compose.4c8g.yml'):
-        compose = yaml.safe_load((root / '部署' / 'prod-4c8g' / filename).read_text(encoding='utf-8'))
-        assert compose['services']['report-worker']['deploy']['resources']['limits']['memory'] == '768m'
+    local = yaml.safe_load(
+        (root / '部署' / 'prod-4c8g' / 'docker-compose.local.yml').read_text(encoding='utf-8'))
+    assert local['services']['report-worker']['deploy']['resources']['limits']['memory'] == '512m'
     config = (root / 'pyproject.toml').read_text(encoding='utf-8')
     assert '"langchain-community>=0.3,<0.4.2"' in config
     assert '"rapidfuzz>=3.0,<4"' in config
