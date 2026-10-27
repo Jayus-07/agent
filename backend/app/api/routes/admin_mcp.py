@@ -290,6 +290,28 @@ def _mark_connection_status(conn_id: str, status: str, error: str = "") -> None:
     )
 
 
+def _probe_http_api(
+    base_url: str, headers: dict[str, str] | None,
+) -> tuple[int, bool, str]:
+    """HTTP API 连接探活：HEAD base_url，验证网络/TLS 可达性。
+
+    任何 HTTP 响应（含 404/405）都算可达——根路径不要求有路由；
+    连接/超时/TLS 失败才算不可达。trust_env=False 直连，与调用链一致。
+    """
+    import httpx
+
+    started = time.perf_counter()
+    try:
+        with httpx.Client(trust_env=False, timeout=10.0) as client:
+            response = client.head(str(base_url or ""), headers=headers or None,
+                                   follow_redirects=True)
+        elapsed = int((time.perf_counter() - started) * 1000)
+        return elapsed, True, ""
+    except Exception as exc:  # noqa: BLE001 — 探活收口全部网络异常
+        elapsed = int((time.perf_counter() - started) * 1000)
+        return elapsed, False, f"{type(exc).__name__}: {exc}"
+
+
 def _classify_mcp_error(exc: Exception) -> str:
     message = str(exc)
     if "超时" in message or "Timeout" in type(exc).__name__:
@@ -534,8 +556,12 @@ async def delete_connection(request: Request, conn_id: str):
 
 @router.post("/connections/{conn_id}/test")
 async def test_connection(request: Request, conn_id: str):
-    """连接测试（initialize 握手 + tools/list）：与发现/调用是不同操作；
-    连接成功不代表任何工具获得执行权限。"""
+    """连接测试：与发现/调用是不同操作；连接成功不代表任何工具获得执行权限。
+
+    - streamable_http：MCP initialize 握手 + tools/list；
+    - http_api：对 base_url 发起一次 HEAD 探活（404/405 也算可达——
+      探活验证的是网络与 TLS 可达性，不要求根路径有路由）。
+    """
     operator = await require_admin_user(request)
     tenant = _tenant_of(operator, request)
     actor = _actor_of(operator)
@@ -554,6 +580,29 @@ async def test_connection(request: Request, conn_id: str):
             return _bad_request("凭据解密失败，请重新配置", code="SECRET_ERROR")
     headers = _conn_headers(row["auth_type"], secret)
     started = time.perf_counter()
+
+    if row.get("transport") == "http_api":
+        elapsed_ms, ok, error = await asyncio.to_thread(
+            _probe_http_api, row["base_url"], headers)
+        if ok:
+            await asyncio.to_thread(_mark_connection_status, conn_id, "connected")
+            await _refresh_runtime()
+            _audit("mcp_connection_test", {
+                "connection_id": conn_id, "ok": True,
+                "elapsed_ms": elapsed_ms, "transport": "http_api",
+            }, user_id=actor, tenant_id=tenant)
+            return {"ok": True, "elapsed_ms": elapsed_ms,
+                    "transport": "http_api"}
+        await asyncio.to_thread(
+            _mark_connection_status, conn_id, "error", error)
+        _audit("mcp_connection_test", {
+            "connection_id": conn_id, "ok": False,
+            "elapsed_ms": elapsed_ms, "transport": "http_api",
+            "error_class": "connection_failed",
+        }, user_id=actor, tenant_id=tenant)
+        return {"ok": False, "elapsed_ms": elapsed_ms, "transport": "http_api",
+                "error_class": "connection_failed", "error": error[:500]}
+
     try:
         tools = await asyncio.to_thread(
             mcp_list_tools, row["base_url"], timeout=15.0, headers=headers)

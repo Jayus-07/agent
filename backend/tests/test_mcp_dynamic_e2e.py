@@ -656,3 +656,47 @@ class TestHttpApiTools:
         _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
                  {"c": mcp_conn})
         mcp_store.reset_for_tests()
+
+
+class TestHttpApiProbe:
+    def test_http_api_connection_probe(self, client, mock_ports):
+        """http_api 连接的 /test：HEAD 探活（不要求根路径有路由）。"""
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "probe-api",
+            "base_url": f"http://127.0.0.1:{mock_ports['rest']}",
+            "transport": "http_api", "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+        try:
+            r = client.post(f"/admin/mcp/connections/{conn_id}/test",
+                            headers=ADMIN_HEADERS)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            # mock REST 服务根路径无路由 → 404，探活验证可达性仍算成功
+            assert body["ok"] is True
+            assert body["transport"] == "http_api"
+            detail = client.get(f"/admin/mcp/connections/{conn_id}",
+                                headers=ADMIN_HEADERS).json()
+            assert detail["status"] == "connected"
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})
+
+    def test_http_api_probe_unreachable(self, client):
+        """不可达端口：探活显式失败（ok=False + error_class），不伪装成功。"""
+        r = client.post("/admin/mcp/connections", headers=ADMIN_HEADERS, json={
+            "name": "probe-dead", "base_url": "http://127.0.0.1:1",
+            "transport": "http_api", "network_scope": "private"})
+        assert r.status_code == 200, r.text
+        conn_id = r.json()["id"]
+        try:
+            r = client.post(f"/admin/mcp/connections/{conn_id}/test",
+                            headers=ADMIN_HEADERS)
+            assert r.status_code == 200, r.text
+            body = r.json()
+            assert body["ok"] is False
+            assert body["error_class"] == "connection_failed"
+            assert body["error"]
+        finally:
+            _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",
+                     {"c": conn_id})

@@ -170,6 +170,36 @@ PR #108 已合并（`64091d6`）。Batch 1 第一批：外部 REST API 以"HTTP 
 ### 待办
 
 - 提交推送 / PR 待用户确认；`devctl.bat rebuild` 容器验证在合并后执行。
-- Batch 1 剩余（后续提交）：OpenAPI 可选导入、HTTP 工具连接测试适配
-  （当前 test 端点走 MCP 握手，http_api 需探活语义）、详情抽屉的
-  invocation 版本对比视图。
+
+## Batch 1 收尾（2026-10-27，PR #110 合并后）
+
+- PR #110 已合并（`6deae1a`）；经用户选择方案 B，以主仓库执行
+  `devctl.bat rebuild /y` 重建共享栈（原栈由另一会话 worktree 管理、
+  基线 7c39450，重建前已确认其无未提交改动）。
+- **容器级验证通过**：15 容器全部 healthy；/health 报
+  `migrations.packaged_max = applied_max = 115_http_api_tools.sql`；
+  容器内 `specs.py` 含 `_VALID_HTTP_METHODS`、`http_tool_client.py`
+  存在；admin 前端 :3200 可达。
+
+### 本批改动（PR #110 后续，未提交）
+
+- **http_api 连接探活**：`/test` 按 transport 分流——http_api 用 HEAD
+  探活（404/405 也算可达，验证网络/TLS 而非路由存在）；不可达显式
+  `ok=False + connection_failed`。e2e 2 passed。
+- **invocation 版本对比视图**：审核面板对 http_api 工具展示最近 3 版
+  调用定义（版本号/hash/时间 + 当前版高亮）。
+- **OpenAPI 可选导入**：登记表单粘贴 OpenAPI 3.0 JSON → 前端轻量解析
+  （第一个 GET/POST 操作）预填 method/path/query/Schema；服务端
+  validate_invocation 仍是唯一校验事实源，不引新依赖。
+
+### 验证
+
+- 后端：`test_mcp_dynamic_e2e + test_admin_mcp_api + mcp_registry` →
+  **78 passed**
+- 前端：`tsc --noEmit` 通过；mcp 页面无既有测试文件，surface 回归 18 passed
+
+### 下一步（Batch 1 剩余 → Batch 2）
+
+- 本批提交推送建 PR（待用户确认）。
+- Batch 2：能力包（CapabilityBundle）/ Skill 依赖 / Agent 授权矩阵、
+  独立 Tool Discovery Agent、多工具真实路径验证。

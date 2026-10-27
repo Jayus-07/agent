@@ -50,6 +50,8 @@ export interface McpToolSnapshot {
   output_schema: Record<string, unknown> | null
   description: string
   discovered_at: string
+  /** HTTP API 工具：该版本的调用定义（MCP 工具为 null） */
+  invocation?: HttpToolInvocation | null
 }
 
 export interface McpGovernance {
