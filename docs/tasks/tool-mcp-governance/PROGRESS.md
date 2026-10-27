@@ -84,3 +84,27 @@
 
 1. 用户确认后提交并推送 `feat/mcp-capability-center`，观察 PR #107 CI 全绿。
 2. 获合并授权后合并 PR #107，基于新 main 开 Batch 1（连接中心 + Tool 治理）。
+
+## Batch 1 启动与 main 回归修复（2026-10-27）
+
+- PR #107 已合并（merge commit `58fc327`）；本地 main 与另一会话提交
+  `1eeca23`（stabilize retrieval and 4c8g runtime）合流为 `7f78798`，
+  合流后 mcp_registry + planner 63 passed（MCP 能力中心完好）。
+- Batch 1 worktree：`D:/Program Files/workplace/agent-wt-toolgov`
+  （分支 `feat/tool-governance-batch1`，基于 7f78798）。
+
+### 回归根因与修复（3 个测试文件，生产代码零改动）
+
+| 失败 | 根因 | 修复 |
+|---|---|---|
+| test_llm_budget 6 例 | `231675e` 有意将 max_calls 改为"只记账不拒绝"，漏改测试 | 按新语义改写：observe 不再含 request_calls 标记；拒绝门禁断言迁移到 token/retries 路径；新增"调用数记账不封顶 + token 仍拒绝"回归保护 |
+| test_specialized_budget 2 例 | 同上（embedding）+ `1eeca23` 有意移除 rerank HTTP 重试（超时标记 unavailable 不重复投递），均漏改测试 | embedding fixture 内单独收紧 max_total_tokens=3（不动共享 fixture）；rerank 测试改写为"超时一次即停、条目 only primary" |
+| test_pgvector_store 7 例 | `41f69a7` 新增索引身份校验，`_StubEmbedding` 缺身份属性 → runtime_fingerprint_missing | 测试桩补齐 `_model_name/_provider/_provider_id/_index_fingerprint`（与生产 _TrackedEmbedding 对齐） |
+
+验证：`pytest tests/test_llm_budget.py tests/rag/test_specialized_budget.py
+tests/rag/test_pgvector_store.py tests/mcp_registry/` → **126 passed**。
+
+### 待办
+
+- 回归修复提交待用户确认；推送分支 + 建 PR 后 CI 才能对修复做门禁验证。
+- Batch 1 主体（连接中心 + Tool 治理）在回归合入 main 后开工。
