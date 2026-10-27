@@ -13,7 +13,10 @@ YAML；VectorRouter 启动时按 manifest 对账，数量不符自动重建索�
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import threading
+import time
 from typing import List
 
 from backend.orchestration.router.types import (
@@ -24,6 +27,24 @@ from backend.orchestration.router.types import (
     WORKFLOW_NAMES,
 )
 from backend.shared.logger import logger
+
+
+# 对账重建最小间隔：MCP 动态工具快照抖动（如 116↔118 每 ~30s 翻转）曾
+# 触发连续全量重建，每次 ~116 条串行 embedding 独占共享推理槽数秒，
+# 用户请求的路由 embedding 被排队（实测领域判断 5.4s）。冷却期内沿用
+# 现有索引继续路由，等下一次对账再收敛。
+_ROUTER_REBUILD_COOLDOWN_S = float(os.getenv("ROUTER_REBUILD_COOLDOWN_S", "300"))
+
+
+def _expected_signature() -> str:
+    """当前期望 example 集合的内容签名（与条数无关，防同量翻转重复重建）。"""
+    route, workflows = _effective_examples()
+    items = sorted(
+        (cap, q) for cap, qs in route.items() for q in qs
+    ) + sorted(
+        (f"workflow:{w}", q) for w, qs in workflows.items() for q in qs
+    )
+    return hashlib.sha1(repr(items).encode("utf-8")).hexdigest()
 
 
 # ── 路由 example queries：由 capabilities.yaml 派生（唯一事实源）──
@@ -100,6 +121,10 @@ class VectorRouter:
         # persist_dir 参数保留兼容旧签名，pgvector 下仅作 collection 名来源
         self.collection_name = collection_name or persist_dir or self._DEFAULT_COLLECTION
         self._store = None
+        # 重建节流状态：单飞 + 冷却 + 内容签名（防 MCP 快照抖振重建风暴）
+        self._rebuild_lock = threading.RLock()
+        self._last_rebuild_at = 0.0
+        self._last_built_signature: str | None = None
         self._ensure_index()
 
     def _ensure_index(self) -> None:
@@ -122,17 +147,36 @@ class VectorRouter:
             if count == 0:
                 self._init_examples()
             elif count != expected:
-                from backend.shared.logger import logger
-                logger.warning(
-                    f"[VectorRouter] 路由索引条数({count})与 manifest({expected})"
-                    "不符，自动重建索引"
-                )
-                self._rebuild_index()
+                signature = _expected_signature()
+                now = time.monotonic()
+                if signature == self._last_built_signature:
+                    # 内容一致：条数漂移来自并发重建中的瞬时读数，不重建。
+                    logger.debug(
+                        "[VectorRouter] 签名一致（count=%s expected=%s），跳过重建",
+                        count, expected,
+                    )
+                elif now - self._last_rebuild_at < _ROUTER_REBUILD_COOLDOWN_S:
+                    logger.warning(
+                        "[VectorRouter] 条数(%s)与 manifest(%s)不符，但距上次重建"
+                        "仅 %.0fs（冷却 %.0fs），沿用现有索引继续路由",
+                        count, expected, now - self._last_rebuild_at,
+                        _ROUTER_REBUILD_COOLDOWN_S,
+                    )
+                else:
+                    with self._rebuild_lock:
+                        # 双检：等锁期间其他线程可能已完成同签名重建
+                        if _expected_signature() != self._last_built_signature:
+                            self._rebuild_index()
+                            self._last_rebuilt(now)
         except Exception as e:
             # 启动期失败不阻塞（让 LLM Router 兜底）
-            from backend.shared.logger import logger
             logger.warning(f"[VectorRouter] 索引初始化失败（将走 LLM Router）: {e}")
             self._store = None
+
+    def _last_rebuilt(self, when: float | None = None) -> None:
+        """重建成功后登记冷却起点与内容签名。"""
+        self._last_rebuild_at = when if when is not None else time.monotonic()
+        self._last_built_signature = _expected_signature()
 
     def reconcile_index(self) -> None:
         """外部对账入口（MCP 动态工具快照变化时触发；幂等）。"""
@@ -155,6 +199,7 @@ class VectorRouter:
                 texts=[e["text"] for e in all_examples],
                 metadatas=[e["metadata"] for e in all_examples],
             )
+            self._last_rebuilt()
             logger.info(f"[VectorRouter] 已建路由索引: {len(all_examples)} 条 example")
 
     def _rebuild_index(self) -> None:

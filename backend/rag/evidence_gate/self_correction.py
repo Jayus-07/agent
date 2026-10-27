@@ -52,6 +52,12 @@ class SelfCorrectionStrategy:
         self._retry_count: int = 0
         self._pending_state: str | None = None
         self._max_retries_override = max_retries
+        # 同一轮改写产出的多条变体跨重试轮次逐个使用：改写 LLM 一次给出
+        # 多条候选，其首条不一定能过重排门槛（实测同一组里 0.24 与 0.57
+        # 并存），第二轮不再重复调用 LLM，直接取下一条变体重检索。
+        self._cached_rewrites: list[str] = []
+        self._cached_attempt_index: int = 0
+        self._cached_question: str = ""
 
     # =====================================================
     # 状态读写
@@ -74,6 +80,9 @@ class SelfCorrectionStrategy:
         """新会话开始时重置状态（每次 ask() 入口调用）。"""
         self._retry_count = 0
         self._pending_state = None
+        self._cached_rewrites = []
+        self._cached_attempt_index = 0
+        self._cached_question = ""
 
     # =====================================================
     # 决策
@@ -115,6 +124,18 @@ class SelfCorrectionStrategy:
             kind=SpanKind.SELF_CORRECTION.value,
         )
         try:
+            # 同一问题的后续重试轮次：依次复用已生成的改写变体，不再重复调用 LLM。
+            if (self._cached_rewrites
+                    and self._cached_question == question
+                    and self._cached_attempt_index < len(self._cached_rewrites)):
+                new_query = self._cached_rewrites[self._cached_attempt_index]
+                self._cached_attempt_index += 1
+                trace_collector.end_span(rewrite_span,
+                    metrics={"rewrites": len(self._cached_rewrites),
+                             "selected": new_query[:60],
+                             "source": "cached_variant"})
+                return new_query
+
             from backend.prompts.service import prompt_service
             rendered = prompt_service.render_sync(
                 "rag.evidence_gate.self_correction",
@@ -125,6 +146,10 @@ class SelfCorrectionStrategy:
             raw = result.content if hasattr(result, "content") else str(result)
             rewrites = [ln.strip() for ln in raw.strip().split("\n") if ln.strip()]
             new_query = rewrites[0] if rewrites else question
+            # 缓存剩余变体供后续重试轮次使用（首条已选，指针指向第 2 条）。
+            self._cached_rewrites = rewrites
+            self._cached_attempt_index = 1
+            self._cached_question = question
             trace_collector.end_span(rewrite_span,
                 metrics={"rewrites": len(rewrites), "selected": new_query[:60]})
             return new_query

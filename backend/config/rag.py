@@ -441,8 +441,10 @@ FAITHFULNESS_REJECT_SCORE = float(os.getenv("FAITHFULNESS_REJECT_SCORE", "0.5"))
 HIGH_RISK_REJECT_SCORE = float(os.getenv("HIGH_RISK_REJECT_SCORE", "0.7"))
 
 # --- Self-Correction：拒答后 query rewrite 重试 ---
+# 默认 2：改写 LLM 一次产出多条变体，首条不必然过重排门槛（实测同组
+# 0.24 与 0.57 并存）；第 2 轮复用缓存变体不再调用 LLM，仅多一轮检索。
 SELF_CORRECTION_ENABLED = os.getenv("SELF_CORRECTION_ENABLED", "true").lower() == "true"
-SELF_CORRECTION_MAX_RETRIES = int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "1"))
+SELF_CORRECTION_MAX_RETRIES = int(os.getenv("SELF_CORRECTION_MAX_RETRIES", "2"))
 
 # --- KB 反向驱动（cron 任务触发） ---
 KNOWLEDGE_GAP_MIN_OCCURRENCES = int(os.getenv("KNOWLEDGE_GAP_MIN_OCCURRENCES", "3"))
