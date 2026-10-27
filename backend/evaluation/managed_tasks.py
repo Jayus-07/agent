@@ -27,10 +27,13 @@ def task_view(task) -> dict:
 
 @contextmanager
 def managed_case_budget(case, run_id):
-    """批量评测以题目为请求预算单元，继续执行用户与租户总额度守卫。"""
-    if not case.metadata.get("managed_binding_id"):
-        yield
-        return
+    """批量评测以题目为请求预算单元，继续执行用户与租户总额度守卫。
+
+    2026-10-28：去掉 managed_binding 门槛，对所有评测路径统一按题拆分
+    请求预算——发布评测此前整轮共享 `eval:{run_id}`（32k tokens），
+    26 题跑到第 8 题即 request_tokens 超限，19 题 error（首次真实跑通
+    才暴露）。身份沿用外层 scoped 作用域（service 层已绑定评测用户）。
+    """
     from backend.core.request_context import get_tool_tenant_id, get_tool_user_id
     from backend.infra.llm.budget import scoped_request_budget
 

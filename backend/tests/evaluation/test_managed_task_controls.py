@@ -197,14 +197,30 @@ def test_managed_case_budget_is_stable_per_case_and_normalizes_actor(monkeypatch
     ]
 
 
-def test_unmanaged_case_keeps_legacy_budget_scope(monkeypatch):
+def test_builtin_suite_cases_now_get_per_case_budget(monkeypatch):
+    """2026-10-28 契约变更：所有评测路径统一按题拆分请求预算。
+
+    旧契约（非托管不进预算）在发布评测首次真实跑通时暴露缺陷：
+    整轮共享 eval:{run_id} 预算，26 题第 8 题即 request_tokens 超限，
+    19 题 error。内置 Suite 逐题预算后身份仍沿用外层评测作用域。
+    """
+    from backend.core import request_context
     from backend.evaluation import managed_tasks
     from backend.infra.llm import budget
 
-    monkeypatch.setattr(
-        budget, "scoped_request_budget",
-        lambda *a, **k: pytest.fail("内置 Suite 不应进入托管题集预算"),
-    )
+    observed = []
+
+    @contextmanager
+    def budget_scope(request_id, *, user_id, tenant_id):
+        observed.append((request_id, user_id, tenant_id))
+        yield
+
+    monkeypatch.setattr(request_context, "get_tool_user_id", lambda: "user:eval-runner")
+    monkeypatch.setattr(request_context, "get_tool_tenant_id", lambda: "default")
+    monkeypatch.setattr(budget, "scoped_request_budget", budget_scope)
+
     case = SimpleNamespace(id="legacy-case", metadata={})
     with managed_tasks.managed_case_budget(case, "run-legacy"):
         assert True
+
+    assert observed == [("eval:run-legacy:case:legacy-case", "eval-runner", "default")]
