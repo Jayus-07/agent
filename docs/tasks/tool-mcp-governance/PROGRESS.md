@@ -106,5 +106,16 @@ tests/rag/test_pgvector_store.py tests/mcp_registry/` → **126 passed**。
 
 ### 待办
 
-- 回归修复提交待用户确认；推送分支 + 建 PR 后 CI 才能对修复做门禁验证。
-- Batch 1 主体（连接中心 + Tool 治理）在回归合入 main 后开工。
+- ~~回归修复提交待用户确认~~ → 已确认提交（`e07f4c1` test(budget) /
+  `26f2ecc` test(rag)）并推送；**PR #108** 已创建：
+  <https://github.com/Jayus-07/agent/pull/108>
+- CI 验证（merge 预览，2026-10-27）：**RAG Smoke preflight 13 failed →
+  pass**，RAG Smoke (8 cases) 级联恢复 pass，Detect RAG changes pass，
+  contract-check / scan / static-structure / admin-observability-auth /
+  frontend-admin-security / Evaluation admin build pass；剩余失败仅
+  Evaluation V2 free contract tests（ragas + CI PG service，main 同款）
+  与 frontend-admin-functional（ECONNREFUSED :3000，main 同款）——均为
+  PR 描述声明的既有故障。
+- PR #108 合并待用户授权；合并后开始 Batch 1 主体（连接中心 + Tool 治理）。
+- main 既有故障另立任务：Evaluation workflow（ragas 缺失 / PG service）、
+  frontend-admin rbac 测试（:3000）。
