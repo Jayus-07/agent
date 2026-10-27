@@ -18,6 +18,7 @@ import {
   type BudgetPolicy,
 } from '@/api/budgets'
 import { atLeast } from '@/lib/auth'
+import ToolConstraintsSection from './ToolConstraintsSection'
 
 function ratioText(value: number) {
   return `${Math.round(value * 100)}%`
@@ -251,6 +252,10 @@ export default function BudgetGovernancePage() {
                   {(audit.data?.items ?? []).length === 0 && <EmptyRow text="暂无策略变更审计" />}
                 </div>
               </section>
+
+              <div className="mt-6">
+                <ToolConstraintsSection />
+              </div>
             </>
           )}
 
