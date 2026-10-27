@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 
 from backend.memory.database import AsyncSessionLocal
 from backend.memory.models.memory import MemoryExtractionJob, MemoryTurnReceipt
@@ -36,6 +36,13 @@ async def _isolated_postgres_data():
             "DELETE FROM memory_records WHERE user_id LIKE :prefix"),
             {"prefix": _PREFIX + "%"},
         )
+        # 兼容尚未补齐级联外键的测试库，显式清理本轮测试前缀的子记录。
+        await db.execute(delete(MemoryTurnReceipt).where(
+            MemoryTurnReceipt.user_id.like(_PREFIX + "%"),
+        ))
+        await db.execute(delete(ChatMessage).where(
+            ChatMessage.session_id.like(_PREFIX + "%"),
+        ))
         await db.execute(text(
             "DELETE FROM chat_sessions WHERE session_id LIKE :prefix"),
             {"prefix": _PREFIX + "%"},
@@ -120,6 +127,48 @@ async def test_end_turn_commits_outbox_with_messages_and_dispatches_only_job_id(
     assert jobs[0].assistant_message_id == messages[1].id
     assert jobs[0].status == "PENDING"
     assert published == [str(jobs[0].id)]
+
+
+async def test_committed_turn_does_not_wait_for_slow_broker(monkeypatch):
+    from backend.memory.service import MemoryService
+    from backend.tasks import memory_extraction_tasks
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    finished = asyncio.Event()
+
+    async def blocked_dispatch(job_id):
+        entered.set()
+        try:
+            await release.wait()
+        finally:
+            finished.set()
+
+    async def no_summary(self, session_id):
+        return None
+
+    monkeypatch.setattr(memory_extraction_tasks, "dispatch_memory_extraction", blocked_dispatch)
+    monkeypatch.setattr(MemoryService, "_summarize_if_needed", no_summary)
+    try:
+        await asyncio.wait_for(MemoryService().end_turn(
+            _SESSION, "本次对话项目代号记为蓝杉42", "已记下。",
+            user_id=_USER, tenant_id=_TENANT,
+        ), timeout=5)
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert not finished.is_set()
+        async with AsyncSessionLocal() as db:
+            messages = (await db.execute(select(ChatMessage).where(
+                ChatMessage.session_id == _SESSION,
+            ))).scalars().all()
+            jobs = (await db.execute(select(MemoryExtractionJob).where(
+                MemoryExtractionJob.session_id == _SESSION,
+            ))).scalars().all()
+        assert len(messages) == 2
+        assert len(jobs) == 1 and jobs[0].status == "PENDING"
+    finally:
+        release.set()
+        if entered.is_set():
+            await asyncio.wait_for(finished.wait(), timeout=1)
 
 
 async def test_end_turn_idempotency_is_atomic_and_scoped(monkeypatch):

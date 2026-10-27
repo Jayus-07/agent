@@ -103,6 +103,20 @@ class _StaticGraph:
         yield from self._events
 
 
+def test_background_handoff_returns_task_id_without_fallback_or_memory(_spy_finish):
+    system = _make_system(_StaticGraph([
+        {"__task_handoff": {"task_id": "durable-1"}},
+    ]))
+    events = list(system.stream_events("多来源报告", session_id="handoff-result"))
+    done = [event["data"] for event in events if event["event"] == "done"]
+    assert len(done) == 1
+    assert done[0]["task_id"] == "durable-1"
+    assert done[0]["answer_source"] == "persistent_task"
+    assert "无结果" not in done[0]["answer"]
+    assert system._memory.end_turn_calls == []
+    assert len(_spy_finish.calls) == 1
+
+
 class _CheckpointGraph(_StaticGraph):
     """捕获主图提交给 checkpointer 的每轮配置。"""
 
@@ -202,6 +216,9 @@ def test_normal_completion_finishes_once_with_answer(_spy_finish):
     assert answer == "最终回答"
     timing = record.metadata["entry_timing"]
     assert 0 <= timing["before_trace_ms"] <= timing["worker_launch_ms"]
+    assert all(0 <= timing[key] <= timing["before_trace_ms"] for key in (
+        "clarify_cache_ms", "prompt_refresh_ms", "input_guard_ms",
+    ))
     assert sys_obj._memory.end_turn_calls == [("s-1", "测试问题", "最终回答")]
     assert sys_obj._memory.end_turn_idempotency_keys == ["turn-key-1"]
     root = _root(record)

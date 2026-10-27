@@ -382,6 +382,15 @@ def execute_agent_task_impl(task_id: str, *,
             _fail(task_id, "用户暂停", TaskStatus.PAUSED,
                   "已暂停，可 resume 恢复", execution_id=lease_id)
             return {"status": "PAUSED"}
+        if record.biz_type == "agent_chat_long":
+            from backend.orchestration.graph.runner import _is_user_balance_exhausted
+
+            if _is_user_balance_exhausted(e):
+                exit_status = TaskStatus.PAUSED.value
+                _fail(task_id, "模型用量余额不足，补足余额后可继续原任务。",
+                      TaskStatus.PAUSED, "余额不足，任务已暂停",
+                      execution_id=lease_id, error_type="user_balance_insufficient")
+                return {"status": "PAUSED"}
         will_retry = _finalize_failure(task_id, e, record=record,
                                        retries=retries, execution_id=lease_id)
         if will_retry:

@@ -22,6 +22,7 @@ from __future__ import annotations
 import threading
 import time
 from contextlib import nullcontext
+from contextvars import copy_context
 from typing import Any, Generator
 
 from backend.models.task import TaskLeaseLost, TaskRecord, TaskStatus
@@ -180,7 +181,8 @@ class TaskGraphExecutor:
         auth_ctx = resolve_task_authorization(record.user_id, record.tenant_id)
         principal = auth_ctx.principal
         req_ctx = RequestContext(
-            session_id=record.id,
+            session_id=(record.input or {}).get("chat_session_id", record.id)
+            if record.biz_type == "agent_chat_long" else record.id,
             user_id=principal.user_id,
             tenant_id=principal.tenant_id,
             kb_id=(record.input or {}).get("kb_id", "default"),
@@ -189,6 +191,10 @@ class TaskGraphExecutor:
             # data_scope 由授权层按当前 roles 折算（单一来源），随状态透传
             data_scope=auth_ctx.data_scope or "",
             subject_type=principal.subject_type,
+            product_id="agent" if record.biz_type == "agent_chat_long" else "internal",
+            product_source="registered_route" if record.biz_type == "agent_chat_long" else "internal_call",
+            model=(record.input or {}).get("model", "") if record.biz_type == "agent_chat_long" else "",
+            idempotency_key=f"agent-task:{record.id}" if record.biz_type == "agent_chat_long" else "",
         )
         # 任务图强制 PostgresSaver：只能放可序列化 dict 形态（同 runner 主图
         # checkpointer 感知分支），节点入口经 get_context_from_state 还原
@@ -228,8 +234,10 @@ class TaskGraphExecutor:
         with context:
             trace_record = self._start_task_trace(record) if execution_id else None
             try:
-                result = self._execute_inner(record, execution_id=execution_id,
-                                             heartbeat=heartbeat)
+                result = copy_context().run(
+                    self._execute_inner, record, execution_id=execution_id,
+                    heartbeat=heartbeat,
+                )
             except BaseException as exc:  # noqa: BLE001 — 只读不吞，转给 finally 收口
                 self._finish_task_trace(trace_record, record, result=None, exc=exc)
                 raise
@@ -342,6 +350,9 @@ class TaskGraphExecutor:
         task_id = record.id
         query = (record.input or {}).get("query", "")
         thread_id = record.thread_id or f"task-{task_id}"
+        self._chat_record = record if record.biz_type == "agent_chat_long" else None
+        self._live_answer = ""
+        self._live_saved_at = 0.0
 
         # 终态短路（Phase1 Step2 纵深防御）：SUCCESS/FAILED/CANCELLED 不可执行，
         # 状态机会拒绝 SUCCESS→RUNNING 写入，此处更早拦截（重试路径在 impl
@@ -397,7 +408,31 @@ class TaskGraphExecutor:
             return {"answer": "任务执行身份授权校验未通过，任务终止。",
                     "step_results": {}, "blocked": True}
 
+        if self._chat_record is not None:
+            from backend.observability.tracer import trace_collector
+            from backend.orchestration.request_context import get_context_from_state
+
+            runtime_context = get_context_from_state({"request_context": request_ctx})
+            runtime_context.trace = trace_collector.current()
+            runtime_context.bind_sink = True
+            runtime_context.stream_sink = self._chat_delta
+            runtime_context.bind()
+
+        final_answer = ""
+        step_results: dict = {}
         if resume:
+            # updates 只包含本次执行的增量；图已到 END 时甚至没有事件。
+            # 从权威检查点恢复累计输出，不能依赖节点历史重放或重跑节点。
+            snapshot = self._graph.get_state(config)
+            if snapshot is None or not snapshot.config:
+                raise RuntimeError("任务检查点缺失，无法安全恢复")
+            saved_state = snapshot.values
+            if not isinstance(saved_state, dict):
+                raise RuntimeError("任务检查点状态无效，无法安全恢复")
+            saved_answer = saved_state.get("final_answer", "")
+            if saved_answer:
+                final_answer = str(saved_answer)
+            step_results = dict(saved_state.get("step_results") or {})
             # 授权刷新覆盖 checkpoint 旧权限：身份归属固定（actor 不变），
             # 授权权限动态（以本次解析为准）。与 user_input 注入同一
             # update_state 通道（产生新 checkpoint，下一跳节点立即可读）。
@@ -423,15 +458,27 @@ class TaskGraphExecutor:
                     execution_id=execution_id or None)
                 self._publish(task_id, "failed", message=message)
                 return {"answer": message, "step_results": {}, "blocked": True}
+            messages = []
+            if self._chat_record is not None:
+                from backend.memory.manager import memory_manager
+
+                messages = memory_manager.start_session(
+                    record.conversation_id, query, user_id=record.user_id,
+                    tenant_id=record.tenant_id,
+                ).messages
             payload = make_initial_state(
                 query, task_id, kb_id=(record.input or {}).get("kb_id", "default"),
-                messages=[], guard_result=guard.model_dump(mode="json"),
+                messages=messages, guard_result=guard.model_dump(mode="json"),
                 user_id=record.user_id,
+                tenant_id=record.tenant_id,
                 # department 用执行时解析的组织属性权威值（auth.users.dept），
                 # 不取创建时可伪造的 input.department
                 department=request_ctx.get("department", ""),
             )
             payload["request_context"] = request_ctx
+            if self._chat_record is not None:
+                payload.update({"product_id": "agent", "product_source": "registered_route",
+                                "product_session_id": record.conversation_id})
             task_service.update_status(
                 task_id, TaskStatus.RUNNING, progress="开始执行",
                 execution_id=execution_id or None)
@@ -443,8 +490,6 @@ class TaskGraphExecutor:
         # 取消/暂停检查点在「当前节点边界落库之后、下一节点调度之前」：
         # 语义 = 不强杀原子节点，已完成节点的 checkpoint/进度痕迹完整保留
         # （Phase1 Step4：pause 后 checkpoint 必须指向最后成功节点）。
-        final_answer = ""
-        step_results: dict = {}
         last_node = ""
         for event in self._stream(payload, config):
             if not isinstance(event, dict):
@@ -499,6 +544,13 @@ class TaskGraphExecutor:
             # 控制检查：当前节点已完成落库，下一节点尚未开始
             # （Phase2 Step1：租约丢失也在此退出，不开始下一节点）
             self._guard_lease()
+            if self._chat_record is not None:
+                task_service.update_status(
+                    task_id, TaskStatus.RUNNING, error_message=None,
+                    output={"answer": final_answer or self._live_answer,
+                            "step_results": step_results},
+                    execution_id=execution_id or None,
+                )
             if self._cancelled(task_id):
                 raise TaskCancelled(task_id)
             if self._paused(task_id):
@@ -508,11 +560,36 @@ class TaskGraphExecutor:
         if not final_answer:
             final_answer = _fallback_summary_from_results(step_results)
         output = {"answer": final_answer, "step_results": step_results}
+        if self._chat_record is not None:
+            from backend.memory.manager import memory_manager
+
+            memory_manager.end_turn(
+                record.conversation_id, query, final_answer,
+                user_id=record.user_id, tenant_id=record.tenant_id,
+                idempotency_key=f"agent-task:{record.id}",
+            )
         task_service.update_status(
             task_id, TaskStatus.SUCCESS, error_message="", progress="执行完成",
             output=output, execution_id=execution_id or None)
         self._publish(task_id, "completed", node="reporter")
         return output
+
+    def _chat_delta(self, text: str, kind: str = "answer") -> None:
+        """长任务正文按秒保存；页面离开不影响执行，检查点仍以节点为界。"""
+        if kind != "answer" or not text or self._chat_record is None:
+            return
+        self._live_answer += text
+        if time.monotonic() - self._live_saved_at < 1:
+            return
+        from backend.services import task_service
+
+        self._guard_lease()
+        task_service.update_status(
+            self._chat_record.id, TaskStatus.RUNNING, error_message=None,
+            output={"answer": self._live_answer, "partial": True},
+            execution_id=self._execution_id or None,
+        )
+        self._live_saved_at = time.monotonic()
 
     # ── 内部 ─────────────────────────────────────────────
     def _latest_checkpoint_id(self, config: dict) -> str | None:

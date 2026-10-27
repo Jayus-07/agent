@@ -22,6 +22,16 @@ def router():
 
 
 class TestCompositeIntent:
+    @pytest.mark.parametrize("query", [
+        "现货商品通常多久发货？请依据企业知识库回答并给出处。",
+        "请查询知识库中的订单退款流程并提供来源。",
+    ])
+    def test_citation_request_is_not_an_additional_data_operation(self, router, query):
+        decision = router.route(query)
+        assert decision is not None
+        assert decision.execution_mode != ExecutionMode.PLAN
+        assert decision.candidates[0].name == "rag.search"
+
     def test_compound_sql_and_rag_goes_plan(self, router):
         """连接词 + SQL/RAG 双组命中 → plan，候选含两能力。"""
         d = router.route("查询库存不足的商品，并说明员工报销制度")

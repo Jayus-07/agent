@@ -14,13 +14,13 @@ host.docker.internal:8088 访问），与 dev-local-models.bat start/stop 配套
 from __future__ import annotations
 
 import glob
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 import os
 import sys
 import threading
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Any
 
@@ -42,7 +42,53 @@ app = FastAPI(
 
 _LOCK = threading.Lock()
 _INFERENCE_LOCK = threading.Lock()
+_INFERENCE_CAPACITY = threading.BoundedSemaphore(2)
+_OOM_UNTIL = 0.0
 _ST: dict[str, Any] = {}
+
+
+@contextmanager
+def _inference_slot():
+    """两个模型共用单推理槽，只额外允许一个等待者，避免排队撑满内存。"""
+    global _OOM_UNTIL
+    if time.monotonic() < _OOM_UNTIL:
+        raise HTTPException(status_code=503, detail="model_memory_cooldown",
+                            headers={"Retry-After": "3"})
+    if not _INFERENCE_CAPACITY.acquire(blocking=False):
+        raise HTTPException(status_code=503, detail="model_busy",
+                            headers={"Retry-After": "1"})
+    acquired = False
+    try:
+        acquired = _INFERENCE_LOCK.acquire(timeout=5)
+        if not acquired:
+            raise HTTPException(status_code=503, detail="model_busy",
+                                headers={"Retry-After": "1"})
+        if time.monotonic() < _OOM_UNTIL:
+            raise HTTPException(status_code=503, detail="model_memory_cooldown",
+                                headers={"Retry-After": "3"})
+        try:
+            yield
+        except Exception as exc:
+            import torch
+
+            if not isinstance(exc, (MemoryError, torch.cuda.OutOfMemoryError)):
+                raise
+            _OOM_UNTIL = time.monotonic() + 3
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            _log("推理内存不足，已停止本次请求并进入短暂冷却")
+            raise HTTPException(status_code=503, detail="model_memory_exhausted",
+                                headers={"Retry-After": "3"}) from exc
+    finally:
+        if acquired:
+            _INFERENCE_LOCK.release()
+        _INFERENCE_CAPACITY.release()
+
+
+def _validate_texts(texts: list[str], *, max_items: int = 64) -> None:
+    """在分配模型张量前限制一次请求的输入规模，不改变既有切词语义。"""
+    if len(texts) > max_items or any(len(text) > 32768 for text in texts):
+        raise HTTPException(status_code=413, detail="model_input_too_large")
 
 
 def _log(msg: str) -> None:
@@ -149,19 +195,23 @@ def healthz():
     reranker = _ST.get("reranker")
     return {"status": "ok", "models_loaded": sorted(k for k in _ST),
             "reranker_device": str(reranker.device) if reranker is not None else None,
-            "reranker_dtype": str(reranker.dtype) if reranker is not None else None}
+            "reranker_dtype": str(reranker.dtype) if reranker is not None else None,
+            "inference_concurrency": 1, "max_inflight": 2,
+            "embedding_batch_size": 1,
+            "memory_cooldown": time.monotonic() < _OOM_UNTIL}
 
 
 @app.post("/embeddings")
 def embeddings(req: EmbeddingsRequest):
     inputs = req.input if isinstance(req.input, list) else [req.input]
     texts = [str(t) for t in inputs]
+    _validate_texts(texts)
     if not texts:
         return {"object": "list", "data": [], "model": req.model, "usage": {"prompt_tokens": 0, "total_tokens": 0}}
     model = _get_embedder()
     # 两个模型共享有限显存，串行推理避免并发激活张量叠加。
-    with _INFERENCE_LOCK:
-        vectors = model.encode(texts, normalize_embeddings=True).tolist()
+    with _inference_slot():
+        vectors = model.encode(texts, batch_size=1, normalize_embeddings=True).tolist()
     return {
         "object": "list",
         "data": [
@@ -179,16 +229,19 @@ def rerank(req: RerankRequest):
 
     query = str((req.input or {}).get("query") or "")
     documents = [str(d) for d in (req.input or {}).get("documents") or []]
+    _validate_texts(documents)
+    if len(query) > 4096:
+        raise HTTPException(status_code=413, detail="model_input_too_large")
     top_n = int((req.parameters or {}).get("top_n") or len(documents))
     if not query or not documents:
         return {"output": {"results": []}}
 
     tok, model = _get_reranker()
     batch_size = int(os.getenv("RERANKER_BATCH_SIZE", "2"))
-    if batch_size < 1:
-        raise ValueError("RERANKER_BATCH_SIZE 必须为正整数")
+    if not 1 <= batch_size <= 2:
+        raise ValueError("RERANKER_BATCH_SIZE 必须为1或2，避免显存峰值失控")
     scores = []
-    with _INFERENCE_LOCK, torch.inference_mode():
+    with _inference_slot(), torch.inference_mode():
         for offset in range(0, len(documents), batch_size):
             pairs = [[query, doc] for doc in documents[offset:offset + batch_size]]
             batch = tok(pairs, padding=True, truncation=True, max_length=512,
@@ -197,6 +250,7 @@ def rerank(req: RerankRequest):
             if not torch.isfinite(logits).all():
                 raise ValueError("重排模型返回非有限分数")
             scores.extend(torch.sigmoid(logits).cpu().tolist())
+            del batch, logits
 
     ranked = sorted(
         ({"index": i, "relevance_score": round(s, 6)}

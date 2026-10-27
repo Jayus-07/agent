@@ -17,6 +17,7 @@ from backend.app.api.routes import (
     admin_clarify,
     agents,
     agent_roundtable,
+    agent_chat_tasks,
     approvals,
     auth_local,
     capabilities,
@@ -138,6 +139,7 @@ api_router.include_router(budgets.router)  # 用户预算与管理员预算治�
 api_router.include_router(model_prices.router)  # 模型价格版本与双人审核治理
 api_router.include_router(idempotency.router)  # 原操作者幂等状态查询
 api_router.include_router(tasks.router)  # 异步任务编排（Celery + LangGraph checkpoint）
+api_router.include_router(agent_chat_tasks.router)
 api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
 api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）

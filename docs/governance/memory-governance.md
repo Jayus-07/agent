@@ -28,6 +28,7 @@ flowchart LR
 - `backend/memory/conflict.py` 已按 tenant→user→active→memory_key→normalized value→origin priority→confidence 裁决。用户**显式更正**优先于从行为推断的旧偏好；embedding 相似度只可帮助非结构化近重复识别，不能替代事实版本判断。
 - `backend/memory/profile.py::build_profile_projection` 只从有效结构化记忆构建画像。画像重新投影不会自行覆盖用户过去明确更正。
 - 记忆写入任务可由 `backend/tasks/memory_extraction_tasks.py`、维护任务异步运行，失败不得导致主请求“成功写入长期记忆”的虚假声明。需要追踪提取来源、版本、写入/冲突裁决、用户主体以及失败原因。
+- 成功轮次的L2消息、幂等收据与L3提取outbox先在同一事务提交；提交后异步尝试向队列投递job UUID，回答收尾不等待Broker。进程退出或投递失败时由既有持久outbox恢复扫描补投，不能用未持久化的后台协程代替该记录。L2可读不代表L3事实已提取完成。
 - 存储与召回应以**服务端验证的 tenant/user** 为主体隔离边界；领域提示（domain hint）是辅助检索维度，不应未经查询审计就宣称等同于强制 ACL；历史会话和向量缓存不能跨账号召回。
 - 时效性、敏感度与保留策略由实际配置/隐私规则确定。个人记忆的更正、停止使用/删除操作应有可追溯的结果语义；衍生的缓存、Profile Projection 及时失效，审计留存另按政策。
 - LLM 整理或压缩不得把臆测当事实，不允许把单轮旅游偏好无条件升级为持久人格偏好；过期事实在授权更新之前不能靠高相似度“复活”。

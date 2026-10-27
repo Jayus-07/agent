@@ -3,6 +3,7 @@
 为函数调用添加超时保护，防止长时间卡死
 """
 import signal
+from contextvars import copy_context
 from typing import Callable, Any
 from backend.shared.logger import logger
 
@@ -50,6 +51,9 @@ def _timeout_windows(func: Callable, seconds: float, error_message: str, *args, 
 
     result = [None]
     exception = [None]
+    # 原生 Thread 不继承 ContextVar。保留请求身份、预算预占及 Trace，
+    # 否则 Linux 的非主线程同样会绕过请求级计量与额度链。
+    context = copy_context()
 
     def target():
         try:
@@ -57,7 +61,7 @@ def _timeout_windows(func: Callable, seconds: float, error_message: str, *args, 
         except Exception as e:
             exception[0] = e
 
-    thread = threading.Thread(target=target)
+    thread = threading.Thread(target=context.run, args=(target,))
     thread.daemon = True
     thread.start()
     thread.join(timeout=seconds)

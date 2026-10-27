@@ -355,6 +355,7 @@ class GraphRunner:
         product_id: str = "internal",
         product_source: str = "internal_call",
         persist_memory: bool = True,
+        task_handoff=None,
     ) -> Generator[dict, None, None]:
         """执行图并产出统一事件流。
 
@@ -378,6 +379,8 @@ class GraphRunner:
 
         start_time = time.time()
         entry_started = time.perf_counter()
+        entry_stages = {}
+        stage_started = entry_started
 
         # ── 追问漏斗：选项点击检测（2026-10-03 企业口径）──────────────
         # 前端点选项 = 原文重发；命中上一张卡的选项暂存即计 clicked。
@@ -403,6 +406,10 @@ class GraphRunner:
                     clarify_click.get("source", ""), question or "")
         except Exception:  # noqa: BLE001 — 漏斗旁路绝不阻断主链
             clarify_click = None
+        entry_stages["clarify_cache_ms"] = round(
+            (time.perf_counter() - stage_started) * 1000, 1,
+        )
+        stage_started = time.perf_counter()
 
         # 请求开始先追平 Prompt Runtime epoch，再固定本次请求版本；Redis
         # 不可用时该检查 fail-open，继续使用当前快照。
@@ -412,10 +419,17 @@ class GraphRunner:
             ensure_prompt_snapshot_fresh()
         except Exception:  # noqa: BLE001 - 热更新旁路不得阻断主链路
             logger.debug("[Runner] Prompt Runtime freshness check skipped", exc_info=True)
+        entry_stages["prompt_refresh_ms"] = round(
+            (time.perf_counter() - stage_started) * 1000, 1,
+        )
+        stage_started = time.perf_counter()
 
         # ── Input Guard：输入侧门禁（Router/Planner 之前；拦截即短路不进图）──
         guard_result = get_input_guard().guard(
             question or "", session_id=product_session_id,
+        )
+        entry_stages["input_guard_ms"] = round(
+            (time.perf_counter() - stage_started) * 1000, 1,
         )
         if guard_result.action in (GuardAction.BLOCK, GuardAction.CLARIFY):
             # 显式转人工豁免（2026-09-17）：guard 的「模糊问题→clarify」规则
@@ -565,6 +579,7 @@ class GraphRunner:
             question, product_session_id, workflow_name="agent",
         )
         trace.metadata["entry_timing"] = {
+            **entry_stages,
             "before_trace_ms": round((time.perf_counter() - entry_started) * 1000, 1),
         }
         # 预算状态先行绑定（2026-10-25 TD-05 收口）：trace 建立到 _worker
@@ -856,11 +871,18 @@ class GraphRunner:
                     invoke_config["configurable"] = {
                         "thread_id": _new_main_graph_thread_id(),
                     }
-                for event in self._graph.stream(initial_state, config=invoke_config):
+                from backend.orchestration.checkpoint.chat_handoff import stream_with_handoff
+
+                for event in stream_with_handoff(
+                    self._graph, initial_state, invoke_config, task_handoff,
+                ):
                     if stop_event is not None and stop_event.is_set():
                         ctx["aborted"] = True
                         break
 
+                    if "__task_handoff" in event:
+                        ctx["background_task"] = event["__task_handoff"]
+                        break
                     node_name, node_output = _parse_event(event)
                     if node_name is None:
                         continue
@@ -1101,6 +1123,20 @@ class GraphRunner:
             if ctx["worker_error"]:
                 _finalize_trace("error", {"error": "graph_failed"},
                                 error_code=ctx.get("worker_error_code") or "")
+                return
+
+            if ctx.get("background_task"):
+                task_id = ctx["background_task"]["task_id"]
+                trace.tags["task_id"] = task_id
+                trace.tags["execution_disposition"] = "background"
+                _finalize_trace("success", {"task_id": task_id})
+                yield {"event": "done", "data": {
+                    "answer": "已形成多步骤业务计划，已转为后台任务，可暂停后继续。",
+                    "elapsed": max(0.0, time.time() - start_time),
+                    "trace_id": trace.id, "task_id": task_id,
+                    "sources": [],
+                    "answer_source": "persistent_task", "reply_source": "system_notice",
+                }}
                 return
 
             answer = ctx["final_answer"]

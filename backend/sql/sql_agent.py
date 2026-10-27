@@ -19,6 +19,7 @@ sql_agent.py — SQL Agent 主编排器
 """
 import inspect
 from contextlib import contextmanager
+from functools import wraps
 from typing import Callable, Optional
 
 from backend.config import SQL_AGENT_ENABLED
@@ -235,6 +236,7 @@ def _sql_trace_stage(
     返回，且当前 observability trace 端点未强制管理员角色，写入即等同泄漏。
     """
     span = None
+    parent_token = None
     try:
         from backend.observability.tracer import SpanKind, trace_collector
 
@@ -246,6 +248,10 @@ def _sql_trace_stage(
                   else SpanKind.TOOL.value),
             input=input_data,
         )
+        if not getattr(span, "_noop", False):
+            from backend.observability.tracer import bind_graph_node
+
+            parent_token = bind_graph_node(span.span_id)
     except Exception:
         logger.debug("SQL Trace 阶段启动失败: %s", span_id, exc_info=True)
 
@@ -279,6 +285,28 @@ def _sql_trace_stage(
                 )
             except Exception:
                 logger.debug("SQL Trace 阶段收口失败: %s", span_id, exc_info=True)
+            finally:
+                if parent_token is not None:
+                    from backend.observability.tracer import reset_graph_node
+
+                    reset_graph_node(parent_token)
+
+
+def _trace_sql_operation(method):
+    """用最终可信SQL结果收口本次操作，保留各次失败尝试的原始状态。"""
+    @wraps(method)
+    def call(*args, **kwargs):
+        with _sql_trace_stage("sql.operation", "SQL 查询") as (stage, metrics):
+            metrics["operation"] = "sql.query"
+            result = method(*args, **kwargs)
+            metrics["execution_status"] = result.status
+            stage["status"] = (
+                "success" if result.status in ("success", "no_data")
+                else "rejected" if result.status in ("permission_denied", "validation_error")
+                else "error"
+            )
+            return result
+    return call
 
 
 class SQLAgent:
@@ -318,6 +346,7 @@ class SQLAgent:
     # 主入口：新（结构化 SQLResult）
     # =================================================
 
+    @_trace_sql_operation
     def ask_struct(
         self,
         question: str,

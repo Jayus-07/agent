@@ -43,7 +43,10 @@ class _CapturingAgent:
 def client(monkeypatch):
     import backend.app.api.middleware.auth as auth_mw
     import backend.app.api.routes.chat as chat_mod
+    import backend.app.api.routes.agent_chat_tasks as long_tasks
 
+    # 本文件验证传输与产品身份，任务控制的存储/Redis边界另有专测。
+    monkeypatch.setattr(long_tasks, "cancel_previous", lambda *a: None)
     monkeypatch.setattr(chat_mod, "get_multi_agent", lambda: _EchoAgent())
     monkeypatch.setattr(auth_mw, "API_KEY", "test")
     from backend.app.server import app
@@ -75,7 +78,7 @@ class TestServerRequestId:
         assert server_id, "X-Request-Id 头必须回传"
         assert server_id != "default", "服务端不得使用 'default' 占位 id"
         assert _parse_meta(body).get("request_id") == server_id, "meta 事件须回传同一 id"
-        assert "正在准备会话并检查请求" in body
+        assert "请求已收到，正在准备处理" in body
         assert body.index("event: log") < body.index("event: delta")
 
     def test_default_placeholder_also_gets_unique_id(self, client):

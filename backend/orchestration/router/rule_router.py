@@ -204,7 +204,12 @@ class RuleRouter:
             )
 
         # 2. 复合意图强信号（显式连接词 + ≥2 能力组命中 → 稳定走 plan）
-        if _COMPOUND_CONNECTOR.search(query_lower):
+        # “并给出处”是答案格式约束，不是额外一次SQL/知识库操作。
+        intent_text = re.sub(
+            r"并(?:且)?(?:给出?|提供|引用|附上|附)?(?:相关)?(?:出处|来源|引用|链接)",
+            "", query_lower,
+        )
+        if _COMPOUND_CONNECTOR.search(intent_text):
             hit_groups = [
                 cap for cap, kws in _COMPOSITE_GROUP_KEYWORDS.items()
                 if any(re.search(k, query_lower) for k in kws)

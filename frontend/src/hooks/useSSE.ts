@@ -59,6 +59,11 @@ export function useSSE() {
         "agent",
       )) {
         if (controller.signal.aborted) return
+        if (useChatStore.getState().currentRequestId !== requestId) {
+          // 已切换会话或开始新请求；旧连接不再拥有当前页面状态。
+          controller.abort()
+          return
+        }
 
         // 终态前快照真实过程事件（终态帧会清空 streamEvents，防 OOM）
         const isTerminal = evt.event === 'done' || evt.event === 'error' || evt.event === 'paused'
@@ -126,6 +131,17 @@ export function useSSE() {
         // done 事件 → 以服务端权威答案定稿；旧后端缺字段时兼容回退 delta。
         if (evt.event === 'done') {
           const finalState = useChatStore.getState()
+          if (evt.data.task_id) {
+            const taskId = evt.data.task_id
+            useChatStore.setState((state) => ({
+              sessions: state.sessions.map((session) => session.id !== sessionId ? session : {
+                ...session,
+                messages: session.messages.map((message, index) =>
+                  index === session.messages.length - 1 && message.role === 'assistant'
+                    ? { ...message, taskId } : message),
+              }),
+            }))
+          }
           // 固化执行过程快照（完成态常驻行回看用）；done 前已截取，此处 streamEvents 已被终态清空
           if (snapshot) {
             useChatStore.getState().attachTrace(sessionId, {
@@ -164,7 +180,7 @@ export function useSSE() {
         }
       }
     } catch (err: any) {
-      if (controller.signal.aborted) return
+      if (controller.signal.aborted || useChatStore.getState().currentRequestId !== requestId) return
       // X3 语义化：存原始异常对象（streamChat 抛错带 status，ErrorCard 可解析
       // 出 kind + 行动指引）；err.message 作为流中断消息内容的兜底文案
       setError(err)
@@ -229,6 +245,24 @@ export function useSSE() {
     const store = useChatStore.getState()
     const sessionId = store.currentId
     const requestId = store.currentRequestId
+
+    // 停止后页面从流态切回消息正文，先固化已收到的内容和执行过程。
+    if (sessionId && requestId && store.isLoading) {
+      store.attachTrace(sessionId, {
+        elapsed: 0,
+        streamEvents: store.streamEvents,
+        todoItems: store.todoItems,
+        nodeLabels: store.nodeLabels,
+      })
+      store.replaceLastAssistant(
+        store.deltaText,
+        sessionId,
+        undefined,
+        undefined,
+        store.thinkingText,
+        store.thinkingSeconds ?? undefined,
+      )
+    }
 
     // 1) 前端断开 fetch
     activeController?.abort()

@@ -8,6 +8,36 @@ import pytest
 prefilters = importlib.import_module(
     "backend.orchestration.graph.routing.prefilter_chain",
 )
+
+
+@pytest.mark.parametrize("query", [
+    "请检索企业知识库：支持哪些支付方式？请提供出处。",
+    "你好，请查询本月销售额。",
+    "你能帮我查公司的退款政策吗？",
+])
+def test_greeting_hint_cannot_override_private_fact_request(query):
+    assert prefilters._try_general_chat({
+        "question": query,
+        "product_id": "agent",
+        "product_source": "registered_route",
+        "guard_result": {"category": "greeting"},
+    }) is None
+
+
+@pytest.mark.parametrize("query", [
+    "把“请尽快处理”改写成一句礼貌的工作提醒。",
+    "请润色这句话：请明天给我回复。",
+    "将‘感谢帮忙’改得正式一点。",
+])
+def test_supplied_text_rewrite_uses_general_chat(query):
+    result = prefilters._try_general_chat({
+        "question": query,
+        "product_id": "agent",
+        "product_source": "registered_route",
+        "guard_result": {"category": "business_query"},
+    })
+    assert result is not None
+    assert result["route_mode"] == "general_chat"
 router_node_module = importlib.import_module(
     "backend.orchestration.graph.router_node",
 )

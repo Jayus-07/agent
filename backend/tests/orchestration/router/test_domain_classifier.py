@@ -63,6 +63,13 @@ class TestRuleOverride:
         action = clf.classify("帮我申请退款并查询订单")
         assert action.domain == "customer_service"
 
+    def test_knowledge_source_constraint_beats_product_keyword(self):
+        result = CoarseIntentClassifier(ExplodingBackend()).classify(
+            "现货商品通常多久发货？请依据企业知识库回答并给出处。",
+        )
+        assert result.domain == "knowledge"
+        assert result.source == "rule"
+
     def test_strong_rule_hits_decide_domain(self):
         """「公司的年假规定是什么」：规定+是什么 = 2 次强命中 → knowledge（rule override）。"""
         clf = CoarseIntentClassifier(backend=ExplodingBackend())  # 规则层不该碰后端

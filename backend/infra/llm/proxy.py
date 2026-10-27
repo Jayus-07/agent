@@ -1286,12 +1286,12 @@ def _resolve_call_context(
 # <think> 剥离（防御性，正规方案是 Provider 传 reasoning_split）
 # =====================================================
 
-def _strip_think(text: str) -> str:
+def _strip_think(text: str, *, strip: bool = True) -> str:
     """剥离模型输出的 <think>...</think> 推理块"""
     import re
     text = re.sub(r'<think>[\s\S]*?</think>\s*', '', text)
     text = re.sub(r'<think>[\s\S]*', '', text)
-    return text.strip()
+    return text.strip() if strip else text
 
 
 # =====================================================
@@ -2030,16 +2030,16 @@ def _settle_estimated_stream_usage(
         return False
 
 
-def _wrap_result(result):
+def _wrap_result(result, *, strip: bool = True):
     """递归剥离 LLM 返回值中的 <think> 块，兼容 str / AIMessage / list / dict"""
     if isinstance(result, str):
-        return _strip_think(result)
+        return _strip_think(result, strip=strip)
     if hasattr(result, 'content') and isinstance(result.content, str):
-        result.content = _strip_think(result.content)
+        result.content = _strip_think(result.content, strip=strip)
     if isinstance(result, list):
-        return [_wrap_result(r) for r in result]
+        return [_wrap_result(r, strip=strip) for r in result]
     if isinstance(result, dict):
-        return {k: _wrap_result(v) for k, v in result.items()}
+        return {k: _wrap_result(v, strip=strip) for k, v in result.items()}
     return result
 
 
@@ -2967,7 +2967,7 @@ class _LLMProxy:
                                 usage_chunk = chunk
                             # 估算兜底计量：统计原始 chunk 文本（_wrap_result 会剥 think）
                             meter.add(extract_chunk_text(chunk))
-                            yield _wrap_result(chunk)
+                            yield _wrap_result(chunk, strip=False)
                     except Exception as e:
                         # 超长输入不重试不降级：稳定错误码透传（astream 无韧性链，
                         # 这里是 provider 原始异常唯一的映射点）
@@ -3034,7 +3034,7 @@ class _LLMProxy:
                                 for chunk in attr(*args, **kwargs):
                                     if getattr(chunk, "usage_metadata", None):
                                         usage_chunk = chunk
-                                    wrapped = _wrap_result(chunk)
+                                    wrapped = _wrap_result(chunk, strip=False)
                                     if extract_chunk_text(wrapped):
                                         yielded_content = True
                                     meter.add(extract_chunk_text(chunk))

@@ -84,11 +84,16 @@ services:
         limits: { memory: 768m, cpus: "1.5" }
   agent-worker:
     <<: *runtime
+    # 长任务单槽执行，避免多份图状态及本地推理请求叠加占用4C8G内存。
+    command:
+      ["celery", "-A", "backend.workers.agent_worker", "worker",
+       "--loglevel=info", "-Q", "${CELERY_AGENT_QUEUE:-agent}",
+       "--concurrency=1", "-n", "agent-worker@%h"]
     cpu_shares: 768
     environment: *python
     deploy:
       resources:
-        limits: { memory: 512m, cpus: "1" }
+        limits: { memory: 768m, cpus: "1" }
   rag-index-worker:
     <<: *runtime
     cpu_shares: 256
@@ -123,7 +128,7 @@ services:
     environment: *python
     deploy:
       resources:
-        limits: { memory: 768m, cpus: "0.5" }
+        limits: { memory: 512m, cpus: "0.5" }
   beat:
     <<: *runtime
     cpu_shares: 256

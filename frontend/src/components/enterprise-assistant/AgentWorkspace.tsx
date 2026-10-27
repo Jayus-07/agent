@@ -57,6 +57,8 @@ import {
   chatInputShowCounter,
 } from '@/lib/chatInputLimit'
 import { requestSilent } from '@/lib/fetcher'
+import { listAgentTasks, restoreAgentTasks } from '@/api/agentTasks'
+import { useAgentTask } from '@/hooks/useAgentTask'
 
 const PAUSE_MESSAGE = '模型用量余额不足，本轮已暂停。补足余额后可以重新发送这条问题。'
 
@@ -116,9 +118,22 @@ function AgentSidebar({
     const version = ++loadVersion.current
     if (force) setRefreshing(true)
     try {
-      const page = await getSessionPageCached(force)
+      const [page, longTasks] = await Promise.all([getSessionPageCached(force), listAgentTasks()])
       if (version !== loadVersion.current) return
-      setHistory(page.sessions)
+      const taskSessions = new Map<string, SessionMeta>()
+      for (const task of longTasks.tasks) {
+        if (!taskSessions.has(task.session_id)) taskSessions.set(task.session_id, {
+          session_id: task.session_id, title: task.question.slice(0, 30), message_count: 2,
+          created_at: task.created_at, updated_at: task.updated_at, context_summary: null,
+        })
+      }
+      const merged = [...page.sessions]
+      for (const taskSession of taskSessions.values()) {
+        const index = merged.findIndex((item) => item.session_id === taskSession.session_id)
+        if (index < 0) merged.push(taskSession)
+        else if ((taskSession.updated_at || '') > (merged[index].updated_at || '')) merged[index] = { ...merged[index], updated_at: taskSession.updated_at }
+      }
+      setHistory(merged.sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')))
       setHasMore(page.has_more)
       setLoadError('')
     } catch (error) {
@@ -537,6 +552,31 @@ function HandoffPanel({ event, router }: { event: HandoffEvent; router: ReturnTy
   </section>
 }
 
+function LongTaskReply({ taskId, blocked }: { taskId: string; blocked: boolean }) {
+  const { task, error, operation, control } = useAgentTask(taskId)
+  const labels = task?.node_labels || {}
+  const events: SSEStreamEvent[] = (task?.steps || []).map((step) => ({
+    event: 'log', data: { level: 'info', node: step.node, step_id: '',
+      message: `${labels[step.node] || step.node}已完成`, payload: {}, ts: new Date(step.at).getTime() / 1000 },
+  }))
+  const statusText = { PENDING: '排队中', RUNNING: '执行中', PAUSED: '已暂停', WAITING_USER: '等待补充信息', SUCCESS: '已完成', FAILED: '执行失败', CANCELLED: '已结束' }
+  return <div className="space-y-3" aria-label="长任务进度">
+    <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+      <span className="font-medium text-indigo-700">长任务 · {error ? '状态暂不可用' : task ? statusText[task.status] : '正在读取进度'}</span>
+      <div className="flex gap-2">
+        {task && ['PENDING', 'RUNNING'].includes(task.status) && <button type="button" disabled={!!error || !!operation} onClick={() => void control('pause')} className="rounded-lg border border-slate-200 px-3 py-1.5 text-slate-700 disabled:opacity-50">{operation === 'pause' ? '正在暂停…' : '暂停任务'}</button>}
+        {task?.status === 'PAUSED' && <button type="button" disabled={!!error || !!operation || (blocked && task.error_type === 'user_balance_insufficient')} onClick={() => void control('resume')} className="rounded-lg border border-indigo-200 px-3 py-1.5 text-indigo-700 disabled:opacity-50">{operation === 'resume' ? '正在继续…' : '继续任务'}</button>}
+      </div>
+    </div>
+    <p className="text-xs leading-5 text-slate-500">{operation === 'pause' && task?.status !== 'PAUSED' ? '正在保存当前步骤，完成后暂停；已完成的步骤会保留。' : task?.progress || '任务可在后台执行，离开页面后可从任务历史返回。'}</p>
+    <ProcessPanel events={events} labels={labels} todos={[]} streaming={task?.status === 'RUNNING'} />
+    {!!task?.result?.answer && <RichAnswer content={task.result.answer} />}
+    {task?.status === 'PAUSED' && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{task.error_type === 'user_balance_insufficient' ? '模型用量余额不足，补足后点击继续任务。' : '进度已保存，点击继续任务可接着执行。'}发送新文字会结束此任务并开始新请求。</p>}
+    {task?.status === 'FAILED' && <p className="text-xs text-rose-700">{task.error_message || '任务未完成，请查看执行记录。'}</p>}
+    {!!error && <p role="alert" className="text-xs text-rose-700">{error}</p>}
+  </div>
+}
+
 function AssistantMessage({
   message,
   active,
@@ -566,12 +606,14 @@ function AssistantMessage({
       <div className="min-w-0 flex-1">
         <div className="mb-1.5 flex items-center gap-2"><span className="text-xs font-semibold text-slate-800">Agent AI</span><span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] text-slate-500">企业助手</span></div>
         <div className="rounded-2xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,.035)] sm:px-5">
+          {message.taskId ? <LongTaskReply taskId={message.taskId} blocked={blocked} /> : <>
           <ProcessPanel events={events} labels={labels} todos={active ? todos : message.trace?.todoItems || []} streaming={active} />
           {active && !answer ? <div className="flex items-center gap-2 py-1 text-xs text-slate-500"><span className="flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:150ms]" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:300ms]" /></span>正在处理请求…</div> : <RichAnswer content={answer} />}
           {message.pause && <PauseNotice message={message.pause.message} disabled={blocked} onRetry={onRetry} />}
           {errorMessage && !message.pause && <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-800"><AlertCircle size={14} className="mt-0.5 shrink-0" />{errorMessage}</div>}
           {sources.length > 0 && <div className="mt-4 border-t border-slate-100 pt-3"><p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">参考来源</p><div className="flex flex-wrap gap-1.5">{sources.map((source, index) => <span key={`${source.filename}-${index}`} title={source.section || source.filename} className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[10px] text-slate-600"><FileText size={12} className="shrink-0 text-indigo-400" /><span className="truncate">{source.filename}</span></span>)}</div></div>}
           {message.usage && <div className="mt-3 flex items-center gap-1.5 text-[10px] text-slate-400"><Clock3 size={11} />{message.trace?.elapsed ? `${message.trace.elapsed.toFixed(1)} 秒 · ` : ''}{message.usage.total_tokens.toLocaleString()} tokens{message.usage.calls != null ? ` · ${message.usage.calls} 次模型调用` : ''}</div>}
+          </>}
         </div>
       </div>
     </article>
@@ -653,14 +695,23 @@ export default function AgentWorkspace() {
   const clarification = useChatStore((s) => s.clarification)
   const handoff = useChatStore((s) => s.handoff)
   const { status: budgetStatus }: { status: BudgetStatus | null } = useBudgetStatus(setBudgetBlocked)
-  const { send, stopStream } = useSendMessage()
+  const { send: sendMessage, stopStream } = useSendMessage()
+  const send = useCallback(async (text: string) => {
+    router.replace(`/agent?session=${encodeURIComponent(currentId)}`)
+    await sendMessage(text)
+  }, [currentId, router, sendMessage])
   const { regenerate } = useSSE()
   useAbortStreamOnUnmount()
 
   useEffect(() => {
     if (sessionParam) {
       useChatStore.getState().switchSession(sessionParam)
-      void useChatStore.getState().loadHistory(sessionParam)
+      const session = useChatStore.getState().sessions.find((item) => item.id === sessionParam)
+      if (!session?.messages.length) {
+        void useChatStore.getState().loadHistory(sessionParam).then(() => restoreAgentTasks(sessionParam)).catch((err) => {
+          if (useChatStore.getState().currentId === sessionParam) useChatStore.getState().setHistoryError(err instanceof Error ? err.message : '恢复长任务失败')
+        })
+      }
     }
   }, [sessionParam])
 

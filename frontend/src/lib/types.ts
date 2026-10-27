@@ -87,6 +87,8 @@ export interface TokenUsage {
 }
 
 export interface DoneEvent {
+  /** 仅长任务存在；普通问答仍采用当前 SSE 生命周期。 */
+  task_id?: string
   elapsed: number
   /** 服务端权威最终答案；缺省时兼容旧后端，回退到已收集的 delta。 */
   answer?: string
@@ -239,6 +241,7 @@ export interface AgentTrace {
 }
 
 export interface Message {
+  taskId?: string
   id: string
   role: 'user' | 'assistant'
   content: string

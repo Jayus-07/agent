@@ -109,6 +109,18 @@ function targetId(state: ChatState, sid?: string): string {
   return sid ?? state.currentId
 }
 
+/** 流状态只属于当前会话；持久消息不在此清理。 */
+function emptyStreamState(): Partial<ChatState> {
+  return {
+    streamEvents: [], currentStatus: '', deltaText: '',
+    thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
+    currentRequestId: null, nodeLabels: {}, isLoading: false,
+    todoItems: [], streamUsage: null, fileOps: [], clarification: null,
+    handoff: null, contextSavedTokens: 0, contextUsage: null,
+    error: null, historyError: null,
+  }
+}
+
 export const useChatStore = create<ChatState>((set, get) => {
   const initialSession = createSession()
   return {
@@ -148,13 +160,15 @@ export const useChatStore = create<ChatState>((set, get) => {
       set((state) => ({
         sessions: [s, ...state.sessions],
         currentId: s.id,
-        error: null,
+        ...emptyStreamState(), sessionModel: null,
       }))
       return s.id
     },
 
     switchSession: (id) => {
-      set({ currentId: id, error: null })
+      if (id !== get().currentId) {
+        set({ ...emptyStreamState(), currentId: id, sessionModel: null })
+      }
     },
 
     renameSession: (id, title) => {
@@ -170,9 +184,10 @@ export const useChatStore = create<ChatState>((set, get) => {
         const remaining = state.sessions.filter((s) => s.id !== id)
         if (remaining.length === 0) {
           const fallback = createSession()
-          return { sessions: [fallback], currentId: fallback.id }
+          return { ...emptyStreamState(), sessions: [fallback], currentId: fallback.id, sessionModel: null }
         }
         return {
+          ...(state.currentId === id ? { ...emptyStreamState(), sessionModel: null } : {}),
           sessions: remaining,
           currentId: state.currentId === id ? remaining[0].id : state.currentId,
         }
@@ -316,14 +331,7 @@ export const useChatStore = create<ChatState>((set, get) => {
     setClarification: (value) => set({ clarification: value }),
     setHandoff: (value) => set({ handoff: value }),
 
-    resetStream: () => set({
-      streamEvents: [], currentStatus: '', deltaText: '',
-      thinkingText: '', thinkingSeconds: null, thinkingStartAt: 0,
-      currentRequestId: null,
-      todoItems: [], streamUsage: null, fileOps: [], clarification: null,
-      handoff: null,
-      contextSavedTokens: 0, contextUsage: null,
-    }),
+    resetStream: () => set(emptyStreamState()),
 
     // 重新生成：移除尾部 assistant 占位/旧回答（user 提问保留，问题由调用方重发）
     removeLastAssistant: (sessionId) => {
@@ -372,10 +380,11 @@ export const useChatStore = create<ChatState>((set, get) => {
 
     // —— 从后端加载持久化会话历史消息 ——
     loadHistory: async (sessionId: string) => {
+      const loadingFromId = get().currentId
       try {
         const { getSessionMessages } = await import('@/api/memory')
         const msgs = await getSessionMessages(sessionId)
-        set({ historyError: null })
+        if (get().currentId === loadingFromId) set({ historyError: null })
         if (!msgs || msgs.length === 0) return
 
         // 历史双写修复：旧数据每轮问答被前端+后端各存了一次，且中止轮次会留下空回答。
@@ -422,12 +431,14 @@ export const useChatStore = create<ChatState>((set, get) => {
               },
               ...state.sessions,
             ],
-            currentId: sessionId,
+            ...(state.currentId === loadingFromId ? { currentId: sessionId } : {}),
           }
         })
       } catch (e) {
         // 不再静默：记忆库故障必须留下痕迹，否则历史消息凭空消失且无从排查
-        set({ historyError: e instanceof Error ? e.message : '加载历史消息失败' })
+        if (get().currentId === loadingFromId) {
+          set({ historyError: e instanceof Error ? e.message : '加载历史消息失败' })
+        }
       }
     },
 

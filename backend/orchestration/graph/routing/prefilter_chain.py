@@ -213,6 +213,10 @@ def _try_general_chat(state: dict) -> dict | None:
     私有制度、数据、订单状态和有活跃域任务的追问仍交给原路由判断。
     """
     try:
+        query = str(state.get("question") or state.get("query") or "").strip()
+        # 问候/能力咨询只是输入提示，不能抢占显式业务与知识库请求。
+        if _PRIVATE_FACT_PROMPT.search(query):
+            return None
         category = ((state.get("guard_result") or {}).get("category") or "")
         if category == "greeting":
             logger.info("[RouterNode] Guard GREETING → general_chat 直答")
@@ -220,7 +224,6 @@ def _try_general_chat(state: dict) -> dict | None:
         else:
             intent = "general_chat"
 
-        query = str(state.get("question") or state.get("query") or "").strip()
         request_context = state.get("request_context")
         if isinstance(request_context, dict):
             product_id = request_context.get("product_id") or state.get("product_id")
@@ -284,6 +287,16 @@ _GENERAL_WRITING_PROMPT = re.compile(
     r"(?:周报|工作总结|总结|框架|提纲|大纲|草稿|模板|文案|自我介绍|"
     r"感谢信|道歉信|通知|公告|邀请函|朋友圈)"
 )
+_GENERAL_REWRITE_PROMPT = re.compile(r"改写|润色|改得|改成|译成|翻译")
+_SUPPLIED_TEXT_PROMPT = re.compile(r"[“‘\"'][^”’\"']+[”’\"']|[：:]\s*\S+")
+_SESSION_CONTEXT_PROMPT = re.compile(
+    r"(?:本次|这次|当前)(?:对话|会话).{0,60}(?:记作|记为|称为|代号)|"
+    r"(?:刚才|前面|之前).{0,20}(?:说的|提到的|给出的).{0,20}(?:代号|名字|名称)"
+)
+_EXTERNAL_LOOKUP_PROMPT = re.compile(
+    r"(?:联网|上网)(?:查|搜|核|检)|(?:请|帮我)联网|"
+    r"(?:查找|搜索|检索|核实).{0,20}(?:官方|最新|实时)"
+)
 _PRIVATE_FACT_PROMPT = re.compile(
     r"(?:本公司|我们公司|公司的|公司内部|企业内部|内部知识库|知识库|"
     r"制度|政策|规定|流程|SOP|员工手册|内部文档|业务文档|经营数据|"
@@ -295,7 +308,8 @@ _PRIVATE_FACT_PROMPT = re.compile(
 
 def _is_general_conversation_prompt(query: str, state: dict) -> bool:
     """只识别显式的一般对话表达；不代替域/能力分类。"""
-    if not query or len(query) > 160 or _PRIVATE_FACT_PROMPT.search(query):
+    if (not query or len(query) > 160 or _PRIVATE_FACT_PROMPT.search(query)
+            or _EXTERNAL_LOOKUP_PROMPT.search(query)):
         return False
 
     routing_context = state.get("routing_context") or {}
@@ -310,6 +324,9 @@ def _is_general_conversation_prompt(query: str, state: dict) -> bool:
         or (_GENERAL_CALCULATION_PROMPT.fullmatch(query)
             and _GENERAL_CALCULATION_HAS_DIGIT.search(query))
         or _GENERAL_WRITING_PROMPT.search(query)
+        or _SESSION_CONTEXT_PROMPT.search(query)
+        or (_GENERAL_REWRITE_PROMPT.search(query)
+            and _SUPPLIED_TEXT_PROMPT.search(query))
     )
 
 

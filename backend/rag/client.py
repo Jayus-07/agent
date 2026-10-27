@@ -191,6 +191,16 @@ class RAGServiceProxy:
                 parent_span.metrics["rag_remote_timing"] = timing
             logger.info("[RAG client timing] trace_id=%s timing=%s", reserved_child_trace_id or "", timing)
         except httpx.HTTPError as e:
+            response = getattr(e, "response", None)
+            if (response is not None and response.status_code == 402
+                    and response.headers.get("X-Agent-Quota-Scope") in {"user", "tenant"}):
+                from backend.infra.llm.budget import note_quota_blocked
+                from backend.infra.llm.quota import QuotaExceeded
+
+                scope = response.headers["X-Agent-Quota-Scope"]
+                exc = QuotaExceeded(f"{scope}:{user_id if scope == 'user' else tenant_id}", "day_or_month")
+                note_quota_blocked(exc)
+                raise exc from e
             # 连接建立前失败时服务端不会创建子 Trace；清理预留关系。
             if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)):
                 _set_child_trace_link(

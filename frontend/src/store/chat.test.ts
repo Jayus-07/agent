@@ -29,12 +29,39 @@ function resetStore() {
     streamUsage: null,
     fileOps: [],
     clarification: null,
+    handoff: null,
   })
 }
 
 beforeEach(() => {
   resetStore()
   mockedGetMessages.mockReset()
+})
+
+describe('会话切换的临时状态隔离', () => {
+  it.each(['switch', 'new', 'delete'] as const)('%s 不保留旧交接和澄清卡', (operation) => {
+    const store = useChatStore.getState()
+    store.addStreamEvent({ event: 'clarification', data: { question: '旧问题', options: [] } }, 'local1')
+    useChatStore.setState({ handoff: { target_domain: 'travel' } as any, deltaText: '旧内容', currentStatus: 'router' })
+    if (operation === 'switch') store.switchSession('other')
+    if (operation === 'new') store.newSession()
+    if (operation === 'delete') store.deleteSession('local1')
+    expect(useChatStore.getState().handoff).toBeNull()
+    expect(useChatStore.getState().clarification).toBeNull()
+    expect(useChatStore.getState().deltaText).toBe('')
+    store.addStreamEvent({ event: 'clarification', data: { question: '晚到旧问题', options: [] } }, 'local1')
+    expect(useChatStore.getState().clarification).toBeNull()
+  })
+
+  it('晚到历史请求不能把当前会话切回旧会话', async () => {
+    let complete!: (value: any[]) => void
+    mockedGetMessages.mockReturnValue(new Promise((resolve) => { complete = resolve }))
+    const pending = useChatStore.getState().loadHistory('old-remote')
+    const current = useChatStore.getState().newSession()
+    complete([{ role: 'assistant', content: '旧会话答案' }])
+    await pending
+    expect(useChatStore.getState().currentId).toBe(current)
+  })
 })
 
 describe('loadHistory — 会话恢复', () => {

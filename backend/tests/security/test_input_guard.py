@@ -82,6 +82,13 @@ class TestBusinessAllow:
 # ═══════════════════════════════════════════════════════
 class TestGreeting:
     @pytest.mark.parametrize("q", [
+        "请检索企业知识库：支持哪些支付方式？请提供出处。",
+        "本公司支持哪些配送方式？",
+    ])
+    def test_business_support_question_is_not_assistant_capability(self, guard, q):
+        assert guard.guard(q).category != GuardCategory.GREETING
+
+    @pytest.mark.parametrize("q", [
         "你好", "您好", "早上好", "在吗",
         "你好，请问你能做什么？", "你是谁？你会做什么",
     ])

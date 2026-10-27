@@ -73,7 +73,8 @@ DEFAULT_POLICIES: dict[str, ToolPolicy] = {
         criticality=ToolCriticality.IMPORTANT, fallback="rag_degraded",
     ),
     "web.search": ToolPolicy(
-        timeout_ms=6_000.0, retries=1, bulkhead_limit=10,
+        # 官方目录请求最多8秒；通用两源各3秒+相关性校验，外层留余量。
+        timeout_ms=10_000.0, retries=0, bulkhead_limit=10,
         criticality=ToolCriticality.OPTIONAL, fallback="skip",
     ),
     "web.crawl": ToolPolicy(

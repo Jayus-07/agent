@@ -104,6 +104,26 @@ class TestFullLLMPathPromptContract:
 
 
 class TestSingleStepPassthrough:
+    @pytest.mark.parametrize("question", [
+        "搜索并总结 pgvector 功能", "查找pgvector官方仓库，用一句话说明用途并附链接",
+    ])
+    def test_requested_web_summary_uses_existing_reporter_and_keeps_source(self, fake_llm, question):
+        steps = {"s1": {"capability": "web.search", "status": "success",
+                         "output": "向量检索支持说明 https://github.com/pgvector/pgvector"}}
+        answer = generate_final_answer(question, steps,
+                                       context_filter=False)
+        assert fake_llm.calls
+        assert "总结" in answer
+        assert "https://github.com/pgvector/pgvector" in answer
+
+    def test_link_lookup_keeps_fast_path(self, fake_llm):
+        output = "pgvector 项目 https://github.com/pgvector/pgvector"
+        answer = generate_final_answer("pgvector GitHub 项目链接", {
+            "s1": {"capability": "web.search", "status": "success", "output": output},
+        }, context_filter=False)
+        assert not fake_llm.calls
+        assert output in answer
+
     def test_sql_dict_output_not_passthrough(self, fake_llm):
         """sql.query 单步输出是 dict，不得裸透传 dict repr。"""
         answer = generate_final_answer("上月订单量", {"s1": _sql_step()},

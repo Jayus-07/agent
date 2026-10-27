@@ -107,6 +107,7 @@ class RequestBudget:
     user_id: str = ""
     tenant_id: str = ""
     quota_store: Any = field(default=None, repr=False)
+    quota_error: Exception | None = field(default=None, repr=False)
     _lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def reserve(
@@ -127,6 +128,8 @@ class RequestBudget:
             and get_model_billing(model_name) == "local"
         )
         with self._lock:
+            if self.quota_error is not None:
+                raise self.quota_error
             reason = self._exceeded_reason(kind)
             if reason and self.mode == "enforce":
                 _record_budget_request(self.mode, "rejected")
@@ -210,7 +213,11 @@ class RequestBudget:
                         amount_cny=reservation_cost,
                         request_id=_current_request_id.get(),
                     )
-                except Exception:
+                except Exception as exc:
+                    from backend.infra.llm.quota import QuotaExceeded
+
+                    if isinstance(exc, QuotaExceeded):
+                        self.quota_error = exc
                     _record_budget_request(self.mode, "rejected")
                     raise
             elif (
@@ -399,6 +406,24 @@ def current_request_budget() -> RequestBudget | None:
         return None
     with _states_lock:
         return _states.get(request_id)
+
+
+def check_quota_blocked() -> None:
+    """预算拒绝不能被工具降级吞掉，更不能提交为已完成的节点检查点。"""
+    state = current_request_budget()
+    if state is not None and state.quota_error is not None:
+        raise state.quota_error
+
+
+def note_quota_blocked(exc: Exception) -> None:
+    """将可信内部服务返回的额度拒绝关联到当前请求预算。"""
+    state = current_request_budget()
+    if state is not None:
+        from backend.infra.llm.quota import QuotaExceeded
+
+        if isinstance(exc, QuotaExceeded):
+            with state._lock:
+                state.quota_error = exc
 
 
 def current_request_id() -> str:

@@ -57,6 +57,64 @@ afterEach(() => {
 })
 
 describe('useSSE 会话级模型覆盖', () => {
+  it('长任务交接只保存任务编号，后续继续不重发原问题', async () => {
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield { event: 'done', data: { answer: '长任务已开始', elapsed: 0, task_id: 'task-1' } }
+    })
+    const sessionId = useChatStore.getState().newSession()
+    const api = mount()
+    await act(async () => { await api.startStream('写长报告', sessionId) })
+    const message = useChatStore.getState().sessions.find((s) => s.id === sessionId)?.messages.at(-1)
+    expect(message?.taskId).toBe('task-1')
+    expect(message?.content).toBe('长任务已开始')
+    expect(useChatStore.getState().isLoading).toBe(false)
+    expect(streamChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('主动停止保留已生成正文和过程，晚到内容不能覆盖正文', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      yield { event: 'delta', data: { content: '已经生成的部分回答' } } as any
+      await gate
+      yield { event: 'delta', data: { content: '停止后晚到内容' } } as any
+    })
+    const sessionId = useChatStore.getState().newSession()
+    const api = mount()
+    let pending!: Promise<void>
+    await act(async () => { pending = api.startStream('测试停止', sessionId) })
+    await flush()
+    expect(useChatStore.getState().deltaText).toBe('已经生成的部分回答')
+    await act(async () => { await api.stopStream() })
+    release()
+    await act(async () => { await pending })
+    const session = useChatStore.getState().sessions.find((s) => s.id === sessionId)!
+    expect(session.messages.at(-1)?.content).toBe('已经生成的部分回答')
+    expect(useChatStore.getState().isLoading).toBe(false)
+  })
+
+  it.each(['event', 'exception'])('切换会话后忽略旧请求晚到的%s错误', async (kind) => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.mocked(streamChat).mockImplementation(async function* () {
+      await gate
+      if (kind === 'exception') throw new Error('旧请求连接异常')
+      yield { event: 'error', data: { message: '旧请求失败', code: 'UNKNOWN' } } as any
+    })
+    const oldId = useChatStore.getState().newSession()
+    const api = mount()
+    let pending!: Promise<void>
+    await act(async () => { pending = api.startStream('旧问题', oldId) })
+    const currentId = useChatStore.getState().newSession()
+    useChatStore.setState({ currentRequestId: 'new-request', isLoading: true })
+    release()
+    await act(async () => { await pending })
+    expect(useChatStore.getState().currentId).toBe(currentId)
+    expect(useChatStore.getState().error).toBeNull()
+    expect(useChatStore.getState().currentRequestId).toBe('new-request')
+    expect(useChatStore.getState().isLoading).toBe(true)
+  })
+
   it('会话未设覆盖时，请求体不带 model 字段', async () => {
     useChatStore.setState({ sessionModel: null })
     const api = mount()

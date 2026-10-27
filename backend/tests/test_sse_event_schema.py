@@ -79,12 +79,12 @@ def test_non_dict_frame_rejected():
 
 
 def test_known_events_complete():
-    """契约登记完备性：核心六类 + 辅助七类（含 handoff，多域隔离 M1）+ ping。"""
-    assert {"meta", "status", "log", "delta", "done", "error"} <= KNOWN_EVENTS
-    assert {"todo", "usage", "file", "clarification", "context", "thinking",
-            "handoff"} <= KNOWN_EVENTS
-    assert "ping" in KNOWN_EVENTS
-    assert len(KNOWN_EVENTS) == 14
+    """冻结明确的事件清单，包含个人余额不足的 paused 终帧。"""
+    assert KNOWN_EVENTS == {
+        "meta", "status", "log", "delta", "done", "error", "paused",
+        "todo", "usage", "file", "clarification", "context", "thinking",
+        "handoff", "ping",
+    }
 
 
 # ── 2) 帧序约束 ──────────────────────────────────────

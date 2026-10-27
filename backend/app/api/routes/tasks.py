@@ -81,11 +81,28 @@ def _get_owned_task(task_id: str, user_id: str, tenant_id: str):
 async def create_task(body: TaskCreateRequest, request: Request):
     ident = _identity(request, body.user_id or None)
     tenant_id = _tenant(request, body.tenant_id, identity=ident)
+    return submit_task(body.query, request, ident, tenant_id)
+
+
+def submit_task(query: str, request: Request, ident, tenant_id: str, *,
+                extra_input: dict | None = None, conversation_id: str = "",
+                biz_type: str = "", client_key: str = "",
+                before_enqueue=None) -> dict:
+    """服务端入口共用持久化、幂等与派发；扩展参数不接受客户端自报。"""
+    options = {}
+    if extra_input is not None:
+        options["extra_input"] = extra_input
+    if conversation_id:
+        options["conversation_id"] = conversation_id
+    if biz_type:
+        options["biz_type"] = biz_type
 
     def _create_and_enqueue() -> dict:
         record = task_service.create_task(
-            ident.user_id, body.query, tenant_id=tenant_id)
+            ident.user_id, query, tenant_id=tenant_id, **options)
         try:
+            if before_enqueue:
+                before_enqueue(record.id)
             task_manager.enqueue_task(record)
         except QueueRoutingError:
             # Step3 fail-closed：workflow 未登记路由 → 拒绝入队、不留假
@@ -117,11 +134,11 @@ async def create_task(body: TaskCreateRequest, request: Request):
 
         result = run_idempotent_operation_for_identity(
             "tasks.create",
-            {"query": body.query, "tenant_id": tenant_id},
+            {"query": query, "tenant_id": tenant_id, **options},
             _create_and_enqueue,
             tenant_id=ident.tenant_id,
             actor_id=ident.user_id,
-            client_key=(request.headers.get("Idempotency-Key") or "").strip(),
+            client_key=client_key or (request.headers.get("Idempotency-Key") or "").strip(),
         )
         return result
 

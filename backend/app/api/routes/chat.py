@@ -317,6 +317,7 @@ async def chat_stream(
     CHAT_INPUT_TOO_LARGE + limit_chars，引导走知识库上传）与其它参数错误
     （通用 INVALID_PARAM，实现细节只落日志不进响应）。
     """
+    t0 = time.monotonic()
     # 请求体字节上限（防超大 payload；APISIX client_max_body_size=0 不限，
     # 产品限制以 app 层为权威 —— 超限给业务错误而非网关/解析器裸错误）
     from backend.app.exceptions import _http_payload
@@ -387,7 +388,19 @@ async def chat_stream(
     session_id = req.session_id
     product_session_id = _product_session_id(product, session_id)
 
-    t0 = time.monotonic()
+    task_handoff = None
+    if product == AGENT_PRODUCT:
+        from backend.app.api.routes.agent_chat_tasks import (
+            cancel_previous, submit_long_task,
+        )
+
+        def task_handoff(state, node):
+            from backend.core.request_context import RequestCancelled
+
+            if stop_event.is_set():
+                raise RequestCancelled("chat_task_handoff")
+            return submit_long_task(req, r, ident, state=state, node=node)
+
     # TTFT 追踪器建在 handler 层：producer（TTFT 落库）与 event_generator
     # （on_delta 采样）两处闭包都要可见——放 event_generator 内 producer
     # 线程读不到（M13 尾项实施时发现的跨作用域 bug）
@@ -490,15 +503,8 @@ async def chat_stream(
         chat_sse_executor_active.inc()
         _record_executor_wait(pool_wait_anchor.get("submitted_at"))
         try:
-            # 入口反馈走既有重放缓冲，不改变Runner生成器的取消/收尾生命周期。
-            preparing = {"event": "log", "data": {
-                "level": "info", "node": "request_entry", "step_id": "request_prepare",
-                "message": "正在准备会话并检查请求",
-                "payload": {"phase": "request_prepare", "status": "running"},
-                "ts": time.time(),
-            }}
-            record.append(preparing)
-            _threadsafe_put(preparing)
+            if product == AGENT_PRODUCT:
+                cancel_previous(ident, req.session_id)
             for evt in agent.stream_events(
                 req.question,
                 session_id,
@@ -519,6 +525,7 @@ async def chat_stream(
                 product_id=product.product_id,
                 product_source=product.source,
                 persist_memory=product.persist_memory,
+                **({"task_handoff": task_handoff} if task_handoff else {}),
             ):
                 # 先入恢复缓冲再检查 stop：abort 的「用户中止」error 帧本身
                 # 就是 stop 置位后的第一帧——丢弃它会让注册表缺终端帧
@@ -564,6 +571,14 @@ async def chat_stream(
         _active_stop_owners[key] = (
             product.product_id, user_id, ident.tenant_id or "",
         )
+        # 入池前写入恢复缓冲；即使执行池排队，页面也立即获得明确反馈。
+        preparing = {"event": "log", "data": {
+            "level": "info", "node": "request_entry", "step_id": "request_prepare",
+            "message": "请求已收到，正在准备处理",
+            "payload": {"phase": "request_prepare", "status": "running"},
+            "ts": time.time(),
+        }}
+        record.append(preparing)
         # P1-3：锚定提交时刻（run_in_executor 后 producer 可能因池满排队）
         pool_wait_anchor["submitted_at"] = time.monotonic()
         future = loop.run_in_executor(_executor, producer)
@@ -580,6 +595,8 @@ async def chat_stream(
 
         try:
             yield meta_event
+            _latency_tracker.on_feedback(time.monotonic())
+            yield _sse_encode(preparing)
 
             last_yield_at = time.monotonic()  # 心跳节流基准（P0 保活）
 

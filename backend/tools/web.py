@@ -38,16 +38,31 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
     """
     errors: list[str] = []
     results: list[str] = []
+    from backend.infra.llm.budget import RequestBudgetExceeded
+
+    # 明确的开源项目查询使用官方目录，避免通用搜索源错配页面。
+    github_query = _github_project_query(query)
+    if github_query:
+        results = _search_github_projects(github_query, num_results)
+        return "\n\n".join(results) or NO_RESULTS_TEXT.format(query=query)
 
     try:
-        results = _search_duckduckgo(query, num_results)
+        results = _semantic_search_results(
+            query, _filter_search_results(query, _search_duckduckgo(query, num_results)),
+        )
+    except RequestBudgetExceeded:
+        raise
     except Exception as e:
         errors.append(f"duckduckgo: {e}")
         logger.warning(f"[Tool:web_search] DuckDuckGo 失败: {e}")
 
     if not results:
         try:
-            results = _search_bing(query, num_results)
+            results = _semantic_search_results(
+                query, _filter_search_results(query, _search_bing(query, num_results)),
+            )
+        except RequestBudgetExceeded:
+            raise
         except Exception as e:
             errors.append(f"bing: {e}")
             logger.warning(f"[Tool:web_search] Bing 兜底失败: {e}")
@@ -69,6 +84,110 @@ def web_search_tool(query: str, num_results: int = 5) -> str:
         return NO_RESULTS_TEXT.format(query=query)
 
     return "\n\n".join(results)
+
+
+def _github_project_query(query: str) -> str:
+    """只识别明确的 GitHub 项目目录查询，不把任意联网任务改成搜仓库。"""
+    import re
+
+    if not re.search(r"github", query, re.IGNORECASE):
+        return ""
+    if not re.search(r"项目|仓库|repository|repo\b", query, re.IGNORECASE):
+        return ""
+    terms = re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]*(?:/[a-zA-Z0-9_.-]+)?", query)
+    ignored = {"github", "official", "repository", "repo", "project", "link"}
+    return " ".join(term for term in terms if term.lower() not in ignored)
+
+
+def _semantic_search_results(query: str, results: list[str]) -> list[str]:
+    """复用已绑定重排模型检验相关性，验证失败不能把网页当作合格证据。"""
+    if not results:
+        return []
+    import time
+
+    from backend.config import RERANK_SCORE_THRESHOLD
+    from backend.rag.context import RagRequestState, get_context, set_context
+    from backend.rag.reranker import get_reranker_backend
+
+    previous = get_context()
+    # 检索故障标志只在这次搜索内生效，保留可信身份并在结束后还原。
+    state = RagRequestState()
+    state.identity = previous.identity
+    set_context(state)
+    try:
+        scores = get_reranker_backend().rank_all(
+            query, [result[:1500] for result in results],
+            deadline_at=time.monotonic() + 1.5,
+        )
+        accepted = {index for index, score in scores
+                    if score >= RERANK_SCORE_THRESHOLD}
+        return [result for index, result in enumerate(results) if index in accepted]
+    finally:
+        set_context(previous)
+
+
+def _search_github_projects(query: str, num_results: int) -> list[str]:
+    """读取 GitHub 官方公开目录；链接必须来自响应，不由模型生成。"""
+    import json
+    import urllib.parse
+    import urllib.request
+
+    count = max(1, min(num_results, 10))
+    url = "https://api.github.com/search/repositories?" + urllib.parse.urlencode({
+        "q": query + " in:name", "per_page": count,
+    })
+    request = urllib.request.Request(url, headers={
+        "Accept": "application/vnd.github+json", "User-Agent": "AgentPlatform",
+    })
+    with urllib.request.urlopen(request, timeout=8) as response:
+        payload = json.loads(response.read())
+    items = payload.get("items", [])
+    # 同名仓库不等于同一项目；存在项目自己的同名命名空间时优先收敛到它。
+    canonical = [item for item in items if str(item.get("full_name") or "").lower()
+                 == f"{query.lower()}/{query.lower()}"]
+    exact = [item for item in items if query.lower() in {
+        str(item.get("full_name") or "").lower(),
+        str(item.get("full_name") or "").rsplit("/", 1)[-1].lower(),
+    }]
+    results = []
+    for item in canonical or exact or items:
+        name = str(item.get("full_name") or "")
+        link = str(item.get("html_url") or "")
+        if link != "https://github.com/" + name or not name:
+            continue
+        description = str(item.get("description") or "").replace("\n", " ")
+        results.append(f"{len(results) + 1}. **{name}**\n   {description}\n   {link}")
+    return _filter_search_results(query, results)
+
+
+def _filter_search_results(query: str, results: list[str]) -> list[str]:
+    """校验显式站点与英文主题，拒绝搜索源返回的明显无关页面。"""
+    import re
+
+    sites = re.findall(r"\bsite:([a-zA-Z0-9.-]+)", query, re.IGNORECASE)
+    cleaned = re.sub(r"\bsite:[a-zA-Z0-9.-]+", "", query)
+    anchors = re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]{2,}", cleaned.lower())
+    ignored = {"github", "official", "repository", "repo", "project", "link"}
+    anchors = [term for term in anchors if term not in ignored]
+    accepted = []
+    for result in results:
+        links = re.findall(r"https?://[^\s<>]+", result)
+        if not links:
+            continue
+        if sites:
+            from urllib.parse import urlparse
+
+            hosts = [urlparse(link).hostname or "" for link in links]
+            if not all(any(host == site.lower() or host.endswith("." + site.lower())
+                           for host in hosts) for site in sites):
+                continue
+        if anchors and not any(re.search(r"(?<![a-z0-9])" + re.escape(term)
+                                         + r"(?![a-z0-9])", result.lower())
+                               for term in anchors):
+            continue
+        if result.strip() and not _has_kana(result):
+            accepted.append(result)
+    return accepted
 
 
 # 无结果的统一话术与判定（TD-07）：话术与判定同源，消费方禁止手抄前缀
@@ -108,7 +227,7 @@ def _search_duckduckgo(query: str, num_results: int) -> list[str]:
         "User-Agent": "Mozilla/5.0",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     })
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=3) as resp:
         html = resp.read().decode("utf-8", errors="replace")
 
     titles = re.findall(r'<a[^>]*class="result__a"[^>]*>(.*?)</a>', html, re.DOTALL)
@@ -119,7 +238,10 @@ def _search_duckduckgo(query: str, num_results: int) -> list[str]:
     for i in range(min(num_results, len(titles))):
         title = _strip_tags(titles[i]).strip()
         snippet = _strip_tags(snippets[i]).strip() if i < len(snippets) else ""
-        link = links[i].strip() if i < len(links) else ""
+        link = _strip_tags(links[i]).strip() if i < len(links) else ""
+        # DDG 的展示链接通常没有协议，规范化后保留可核查来源。
+        if link and not link.startswith(("https://", "http://")):
+            link = "https://" + link
         results.append(f"{i+1}. **{title}**\n   {snippet}\n   {link}")
     return results
 
@@ -155,7 +277,7 @@ def _search_bing(query: str, num_results: int) -> list[str]:
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     })
-    with urllib.request.urlopen(req, timeout=10) as resp:
+    with urllib.request.urlopen(req, timeout=3) as resp:
         html = resp.read().decode("utf-8", errors="replace")
 
     results = []

@@ -10,11 +10,14 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from backend.observability.tracer import TraceCollector
 from backend.sql.sql_result import SQLResult
 
 
-def test_policy_sql_path_records_stage_spans(monkeypatch):
+@pytest.mark.parametrize("repair", [False, True])
+def test_policy_sql_path_records_stage_spans(monkeypatch, repair):
     import backend.observability.tracer as tracer_module
     import backend.sql.policy as policy_module
     import backend.sql.sql_agent as sql_agent_module
@@ -25,6 +28,8 @@ def test_policy_sql_path_records_stage_spans(monkeypatch):
     collector.start_span("root", parent_id=None, name="Agent", type="workflow")
 
     class Guard:
+        calls = 0
+
         def precheck(self, _policy):
             return None
 
@@ -32,9 +37,17 @@ def test_policy_sql_path_records_stage_spans(monkeypatch):
             return ["product.products"]
 
         def validate_and_rewrite(self, _sql, _policy):
+            from backend.sql.sql_validator import ValidationError
+
+            self.calls += 1
             guard_span = tracer_module.trace_collector.start_span(
                 "sql.guard", name="sql.guard", type="tool_call",
             )
+            if repair and self.calls == 1:
+                tracer_module.trace_collector.end_span(
+                    guard_span, status="error", metrics={"reason_code": "validator:column_undefined"},
+                )
+                raise ValidationError("未知列", reason="column_undefined")
             tracer_module.trace_collector.end_span(
                 guard_span, metrics={"decision": "allow"},
             )
@@ -67,7 +80,7 @@ def test_policy_sql_path_records_stage_spans(monkeypatch):
         source_channel="graph",
     )
     try:
-        result = sql_agent_module.SQLAgent(db_config={}, max_retries=0).ask_struct(
+        result = sql_agent_module.SQLAgent(db_config={}, max_retries=int(repair)).ask_struct(
             "查上月销量", policy=policy,
         )
 
@@ -77,13 +90,23 @@ def test_policy_sql_path_records_stage_spans(monkeypatch):
             "sql.permission_precheck",
             "sql.generate.attempt_1",
             "sql.validate.attempt_1",
-            "sql.execute.attempt_1",
+            f"sql.execute.attempt_{2 if repair else 1}",
         ):
             assert span_id in spans
-            assert spans[span_id].status == "success"
-        assert spans["sql.generate.attempt_1"].parent_id == "root"
+            if not (repair and span_id == "sql.validate.attempt_1"):
+                assert spans[span_id].status == "success"
+        assert collector._aggregate_status(trace) == "success"
+        assert spans["sql.generate.attempt_1"].parent_id == "sql.operation"
+        assert spans["sql.operation"].parent_id == "root"
         assert spans["sql.guard"].parent_id == "sql.validate.attempt_1"
-        assert spans["sql.execute.attempt_1"].metrics["row_count"] == 1
+        executed = "sql.execute.attempt_2" if repair else "sql.execute.attempt_1"
+        assert spans[executed].metrics["row_count"] == 1
+        if repair:
+            assert spans["sql.guard"].status == "error"
+            assert spans["sql.guard"].metrics["recovered_by"] == "sql.operation"
+            sibling = collector.start_span("unrelated_failure", parent_id="root")
+            collector.end_span(sibling, status="error")
+            assert collector._aggregate_status(trace) == "error"
     finally:
         collector.clear_for_test()
 

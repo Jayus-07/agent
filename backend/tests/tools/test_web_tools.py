@@ -15,12 +15,12 @@ from unittest.mock import MagicMock, patch
 
 # ── 模块级 mock 助手：不打真实网络，统一模拟 DuckDuckGo 响应 ──
 
-def _ddg_html(n):
+def _ddg_html(n, topic=""):
     """构造 DuckDuckGo HTML 搜索结果页（n 条结果）"""
     items = []
     for i in range(n):
         items.append(
-            f'<a class="result__a" href="#">标题{i}</a>'
+            f'<a class="result__a" href="#">{topic}标题{i}</a>'
             f'<a class="result__snippet" href="#">摘要{i}</a>'
             f'<a class="result__url" href="#">example.com/{i}</a>'
         )
@@ -34,6 +34,17 @@ def _fake_urlopen(html: str):
     resp.__enter__ = MagicMock(return_value=resp)
     resp.__exit__ = MagicMock(return_value=False)
     return resp
+
+
+@pytest.fixture(autouse=True)
+def fake_search_relevance_backend(monkeypatch):
+    """解析测试隔离外部模型；质量门禁测试单独提供高低分与失败响应。"""
+    backend = MagicMock()
+    backend.rank_all.side_effect = lambda query, docs, **kwargs: [
+        (index, 0.9) for index in range(len(docs))
+    ]
+    monkeypatch.setattr("backend.rag.reranker.get_reranker_backend", lambda: backend)
+    return backend
 
 
 class TestWebToolsRegistry:
@@ -93,7 +104,7 @@ class TestWebSearchToolBasic:
 
         with patch("urllib.request.urlopen",
                    return_value=_fake_urlopen(_ddg_html(10))):
-            result = web_search_tool.invoke({"query": "default"})
+            result = web_search_tool.invoke({"query": "默认条数"})
         assert "标题4" in result
         assert "标题5" not in result
     
@@ -123,7 +134,7 @@ class TestWebSearchToolQueryHandling:
         from backend.tools.web import web_search_tool
 
         with patch("urllib.request.urlopen",
-                   return_value=_fake_urlopen(_ddg_html(3))):
+                   return_value=_fake_urlopen(_ddg_html(3, "Python"))):
             result = web_search_tool.invoke({
                 "query": "python",
                 "num_results": 3
@@ -186,7 +197,7 @@ class TestWebSearchResultValidation:
         with patch("urllib.request.urlopen",
                    return_value=_fake_urlopen(_ddg_html(10))):
             result = web_search_tool.invoke({
-                "query": "test", "num_results": num_results})
+                "query": "结果数量", "num_results": num_results})
         assert f"标题{num_results - 1}" in result
         if num_results < 10:
             assert f"标题{num_results}" not in result
@@ -429,7 +440,7 @@ class TestWebToolsIntegration:
         resp.__enter__ = MagicMock(return_value=resp)
         resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=resp):
-            result = web_search_tool.invoke({"query": "technology news", "num_results": 10})
+            result = web_search_tool.invoke({"query": "多条结果提取", "num_results": 10})
         assert isinstance(result, str)
         assert "标题0" in result and "标题2" in result  # 3 条结果全部提取
 
@@ -550,3 +561,109 @@ def test_kana_filter_and_helpers():
     assert _has_kana("") is False
     # 话术契约未被破坏（TD-07 回归确认）
     assert NO_RESULTS_TEXT.startswith("未在公开网络找到")
+
+
+def test_unrelated_search_response_falls_back_without_leaking_results():
+    from backend.tools.web import is_no_results, web_search_tool
+
+    unrelated = ["1. **香港搬屋**\n  搬运价格\n  https://example.com/moving"]
+    with patch("backend.tools.web._search_duckduckgo", return_value=unrelated), \
+         patch("backend.tools.web._search_bing", return_value=unrelated) as bing:
+        result = web_search_tool.invoke({"query": "pgvector 向量数据库"})
+    assert bing.call_count == 1
+    assert is_no_results(result)
+    assert "搬屋" not in result
+
+
+def test_explicit_site_cannot_be_satisfied_by_snippet_mention():
+    from backend.tools.web import _filter_search_results
+
+    assert _filter_search_results("site:github.com pgvector", [
+        "pgvector github.com https://evil.example/pgvector",
+    ]) == []
+    assert len(_filter_search_results("site:github.com pgvector", [
+        "pgvector https://github.com/pgvector/pgvector",
+    ])) == 1
+
+
+def test_github_project_uses_official_response_and_validates_links():
+    import json
+    from backend.tools.web import web_search_tool
+
+    payload = {"items": [
+        {"full_name": "pgvector/pgvector", "html_url":
+         "https://github.com/pgvector/pgvector", "description": "Vector search"},
+        {"full_name": "pgvector/fake", "html_url": "https://evil.example/x"},
+        {"full_name": "other/unrelated", "html_url":
+         "https://github.com/other/unrelated"},
+    ]}
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(
+        json.dumps(payload),
+    )) as request:
+        result = web_search_tool.invoke({"query": "pgvector 官方 GitHub 项目链接"})
+    assert request.call_args.args[0].full_url.startswith(
+        "https://api.github.com/search/repositories?",
+    )
+    assert "https://github.com/pgvector/pgvector" in result
+    assert "evil.example" not in result
+    assert "unrelated" not in result
+
+
+def test_github_project_prefers_project_namespace_over_same_name_ports():
+    import json
+    from backend.tools.web import _search_github_projects
+
+    payload = {"items": [
+        {"full_name": "tporadowski/redis", "html_url": "https://github.com/tporadowski/redis"},
+        {"full_name": "redis/redis", "html_url": "https://github.com/redis/redis"},
+        {"full_name": "someone/redis", "html_url": "https://github.com/someone/redis"},
+    ]}
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen(json.dumps(payload))):
+        result = _search_github_projects("Redis", 5)
+    assert len(result) == 1
+    assert "https://github.com/redis/redis" in result[0]
+    assert "tporadowski" not in result[0]
+
+
+def test_web_network_deadlines_fit_outer_policy_without_duplicate_retry():
+    from backend.core.tool_runtime.policy import DEFAULT_POLICIES
+    from backend.tools.web import _search_bing, _search_duckduckgo
+
+    policy = DEFAULT_POLICIES["web.search"]
+    with patch("urllib.request.urlopen", return_value=_fake_urlopen("")) as request:
+        _search_duckduckgo("查询", 1)
+        _search_bing("查询", 1)
+    timeouts = [call.kwargs["timeout"] for call in request.call_args_list]
+    assert sum(timeouts) * 1000 < policy.timeout_ms
+    assert policy.retries == 0
+
+
+def test_chinese_irrelevant_results_are_rejected_and_context_restored(fake_search_relevance_backend):
+    from backend.rag.context import get_context
+    from backend.tools.web import _semantic_search_results
+
+    previous = get_context()
+    fake_search_relevance_backend.rank_all.side_effect = None
+    fake_search_relevance_backend.rank_all.return_value = [(0, 0.01), (1, 0.9)]
+    unrelated = "搬屋价格 https://example.com/moving"
+    relevant = "容器内存限制说明 https://docs.example.com/memory"
+    assert _semantic_search_results("容器内存如何限制", [unrelated, relevant]) == [relevant]
+    assert get_context() is previous
+    fake_search_relevance_backend.rank_all.side_effect = TimeoutError("timeout")
+    with pytest.raises(TimeoutError):
+        _semantic_search_results("容器内存如何限制", [unrelated])
+    assert get_context() is previous
+
+
+def test_search_balance_failure_does_not_fall_back_or_hide_pause():
+    from backend.infra.llm.budget import RequestBudgetExceeded
+    from backend.tools.web import web_search_tool
+
+    with patch("backend.tools.web._search_duckduckgo", return_value=[
+        "容器内存说明 https://docs.example.com/memory",
+    ]), patch("backend.tools.web._semantic_search_results",
+              side_effect=RequestBudgetExceeded("balance_insufficient")), \
+         patch("backend.tools.web._search_bing") as bing:
+        with pytest.raises(RequestBudgetExceeded):
+            web_search_tool.invoke({"query": "容器内存限制"})
+    bing.assert_not_called()

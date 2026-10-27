@@ -900,7 +900,27 @@ class TraceCollector:
         business = record.metadata.get("business_outcome")
         if business in ("degraded", "failed"):
             return business
-        statuses = {s.status for s in record.spans}
+        spans = {span.span_id: span for span in record.spans}
+
+        def recovered(span: Span) -> bool:
+            # 只承认同一SQL操作已得到成功执行结果；兄弟任务错误不受影响。
+            parent_id = span.parent_id
+            seen = {span.span_id}
+            while parent_id in spans and parent_id not in seen:
+                seen.add(parent_id)
+                parent = spans[parent_id]
+                if (parent.metrics.get("operation") == "sql.query"
+                        and parent.status == "success" and parent.end_time
+                        and parent.metrics.get("execution_status") in ("success", "no_data")):
+                    span.metrics["recovered_by"] = parent.span_id
+                    return True
+                parent_id = parent.parent_id
+            return False
+
+        statuses = {
+            span.status for span in record.spans
+            if span.status not in ("error", "rejected") or not recovered(span)
+        }
         if "error" in statuses:
             return "error"
         if "rejected" in statuses:

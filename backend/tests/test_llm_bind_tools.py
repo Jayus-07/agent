@@ -156,6 +156,15 @@ class TestProxyBindTools:
 
 
 class TestWrapResultPreservesToolCalls:
+    def test_stream_chunks_keep_markdown_spaces_and_line_breaks(self):
+        from langchain_core.messages import AIMessageChunk
+
+        parts = ["##", " 标题", "\n\n", "来源：", "https://example.com", "\n\n", "下一段"]
+        text = "".join(proxy_mod._wrap_result(AIMessageChunk(content=part), strip=False).content
+                       for part in parts)
+        assert text == "## 标题\n\n来源：https://example.com\n\n下一段"
+        assert proxy_mod._wrap_result("  完整回答  ") == "完整回答"
+
     def test_think_stripped_tool_calls_kept(self):
         """_wrap_result 只剥 <think>，不得破坏 AIMessage.tool_calls（FC 依赖）"""
         msg = AIMessage(

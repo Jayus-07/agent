@@ -515,15 +515,19 @@ class MemoryService:
 
         # Broker 只收到 job UUID；投递失败留给 durable recovery 扫描器恢复。
         if job_id:
-            try:
-                from backend.tasks.memory_extraction_tasks import dispatch_memory_extraction
+            async def dispatch_committed_job():
+                try:
+                    from backend.tasks.memory_extraction_tasks import dispatch_memory_extraction
 
-                await dispatch_memory_extraction(job_id)
-            except Exception as exc:  # 聊天已提交，outbox 保证稍后可恢复
-                logger.warning(
-                    "[MemoryService] L3 任务投递失败，将由扫描器恢复 (job=%s, error=%s)",
-                    job_id, type(exc).__name__,
-                )
+                    await dispatch_memory_extraction(job_id)
+                except Exception as exc:  # 已提交的 outbox 保证稍后可恢复
+                    logger.warning(
+                        "[MemoryService] L3 任务投递失败，将由扫描器恢复 (job=%s, error=%s)",
+                        job_id, type(exc).__name__,
+                    )
+
+            spawn_background_task(dispatch_committed_job(),
+                                  name=f"l3-dispatch-{job_id}")
 
     async def _summarize_if_needed(self, session_id: str) -> None:
         """L2 摘要后台任务（STOP E）。

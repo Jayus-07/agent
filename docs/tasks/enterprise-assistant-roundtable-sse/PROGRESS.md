@@ -1,5 +1,26 @@
 # 进度
 
+## 2026-10-28：阶段合并与下一阶段总耗时优化
+
+- 用户明确授权：达到可合并条件时先提交并合并本地main，然后继续优化不同任务的端到端总耗时。指标分别记录反馈、正文、流终帧以及后台任务最终完成，转后台通知不能冒充完成。
+- 合并前检查：本任务HEAD 4a7a0b4，最新main为953c201（工具治理/管理端新增9个提交），变更文件无重叠；主目录工作区干净。保留本任务既有修改，排除Next构建产生的next-env路径噪音，不推送、不创建PR、不擅自发布生产。
+- 本地Diff自查重点：可信产品/用户/租户、恢复时当前授权、移交状态先落库后入队、节点检查点与额度拒绝、会话任务锁、成功记忆事务及outbox、单模型推理准入。已有T1/T2及真实页面证据保留，偶发生成长等待和复杂报告来源完整性仍作为未验收项，不宣称本次合并即完成性能目标。接入main后补跑相邻契约与实际服务健康检查。
+
+## 2026-10-28：实际业务计划持久化、性能与记忆/预算测试
+
+- 复工确认worktree为assistant-roundtable-sse/agent，分支codex/enterprise-assistant-reliability-fixes，HEAD 4a7a0b4；保留既有未提交修改。本轮未提交、未合并、未创建PR，未运行全量T3或云端Review。
+- 按用户最新决定删除HTTP字数/段落/关键词长任务判定。Critique后的实际计划有至少两个业务能力节点才移交现有TaskService/TaskManager/TaskGraphExecutor/PostgresSaver；完整values状态先持久化，之后入队，不重跑已完成Router/Planner/Critique。单次长文章仍普通SSE。主图内嵌工作流目前仍是原子节点，未宣称内部工具函数任意位置都可恢复。
+- 新增真实LangGraph/MemorySaver移交测试，保留历史和累计步骤结果，校验前台关闭后不执行后续业务节点、后台从下一节点恢复。真实接口发现内部移交事件被旧节点白名单忽略，导致已入队却前台显示无结果；改为白名单解析前处理，并补GraphRunner终帧/不写成功问答记忆的集成回归。
+- Chat入口在执行池排队之前发送可重放的明确反馈；耗时起点前移到handler入口，分别记录首反馈、首正文、流终帧。后台done.task_id代表移交，不代表报告完成。页面任务查询异常显示状态暂不可用，不伪装成缓存的已暂停；未成功任务有自身任务记录时可恢复，精确的会话不存在提示被消除。
+- 会话临时代号被误路由，现沿既有general_chat处理，查询企业私有事实仍保持工具授权；Planner后处理不再删除用户明确要求的知识库/退款政策来源。显式联网不被“一句话解释/用途”格式抢成普通直答。GitHub同名仓库优先项目自身同名命名空间，补Redis/Windows移植仓库反例；说明用途进入已有汇总链路，纯链接仍走快速路径。
+- MemoryService先事务提交L2、幂等收据和L3 outbox，再后台投递UUID，不等待Broker。新增真实PG故障注入验证Broker阻塞时仍可读取已提交消息/outbox；原子幂等、失败重试、恢复投递和删除取消均保留。测试发现旧清理依赖级联外键，造成同一测试前缀消息残留；改为ORM按本轮随机前缀显式清理子记录，未降低断言。
+- 本地BGE与rerank共享单推理槽，最多一个额外等待者，embedding batch=1，输入规模准入，OOM后释放槽位并冷却；等待者拿锁后再次检查冷却。真实8088 health确认双模型CUDA/float16已就绪，embedding返回1024维，65项请求413，证据D:/tmp/agent-model-guard-live-20261028.json。没有故意耗尽真实显存，不承诺任意模型/输入绝不OOM。生产模型外置；Agent worker改为单并发768MiB，报表worker512MiB，常驻总预算仍7168MiB。新worker实测约479/768MiB。
+- T0 py_compile与git diff --check通过。定向测试分组：计划/任务API/传输/Trace首组39 passed；记忆/上下文硬门禁/隔离/预算/额度暂停/模型guard/首反馈指标92 passed；前端useSSE/useAgentTask/agentTasks/store 45 passed；更新后的路由/身份/模型guard组40 passed；SSE契约和模型guard组34 passed；GraphRunner移交及真实图18 passed；最新计划/路由组49 passed（以上有重叠，不相加）。SSE旧测试漏paused的14种硬编码改为明确15事件清单。Web/Reporter组原57 passed，新增用途汇总参数用例后Reporter定向8 passed；Outbox清理修正后6 passed。Windows事件循环关闭时资源清理警告及缺pytest-timeout插件配置警告仍存在，未冒充无警告。
+- 实际UI：1012原任务cdc19a05…暂停后点击继续已完成，刷新正文仍在且无会话不存在提示。新会话uJVbEjLMarxnwP4PtOwW2的多步骤任务在2个已保存节点后PAUSED，执行本worktree重建、刷新后仍PAUSED，点击同一任务继续到9步完成；证据D:/tmp/agent-multistep-paused-20261028.png、after-rebuild-paused-20261028.txt、resumed-20261028.png/txt。业务回答指出退款知识库缺资料，不能称该账号的完整经营风险报告业务质量通过。后一次替换任务验收遇到任务自然完成竞态，未算取消成功。
+- 管理员正式接口样本：普通解释91ba5f6ffd2d约2.073秒；SQL b8415e9f371f约4.379秒；RAG 2226f077ec71约10.389秒且FAQ出处正确；最新联网952440df6d00约11.2秒，一句话+redis/redis链接且无同名移植仓库；最新记忆d71cb21b7ec3/6fe801196a73约2.438/3.923秒，正确记下和回忆蓝杉42。首反馈约0.03–0.12秒（另一个冷样本0.264秒），证据agent-latency-20261028.json、agent-latency-final-before-outbox-20261028.json、agent-latency-retest-20261028.json。
+- 未隐去失败：首次RAG c8878634de2b在48秒父工具超时；子Trace98531b95b702检索重排约1.6秒，生成等待122秒后失败，具体原因尚未定位。第二次正确但13.52秒，随后10.389秒。不是统计性P95或生产压测通过。管理员多步骤e9488f9a…已入队并最终SUCCESS，轮询期间一次非JSON网关响应使验收脚本中断；后续只读正式API确认终态，未将脚本中断当暂停恢复成功证据。
+- 当前功能定向验证通过，整体性能/业务质量仍UNVERIFIED；后续优先定位生成阶段偶发长等待、核对复杂报告来源完整性和统计性时延，再处理此前Trace展示、历史needs_review预占等遗留项。最后代码服务重建和健康检查已完成，文档补充不代表云端Review或生产发布。
+
 ## 已完成
 
 - 任务分支：`codex/enterprise-assistant-roundtable-sse`；基线 HEAD：`d886f7c`。合并前发现本地 `main` 已前进到 `c3e1f97`，已确认其提交不改本任务文件，并将任务分支快进至该 HEAD 后再构建。
@@ -124,3 +145,57 @@
 - 1 PARTIAL：管理员商品销量Top3 API3.075秒（566fbd7dd20e），实际返回3行且销量递减；首次SQL校验column_undefined，第二次校验/执行成功，父Trace却因历史sql.guard error仍error。首反馈0.037秒。此题答案与监控状态不一致，不能标干净PASS。
 - 保存支付失败证据时额外复现：旅游会话切回支付历史后，支付标题/正文已加载，上一会话旅游卡仍在，稳定后再次观测仍存在。截图agent-more-payment-routing-failure.png和agent-more-stale-travel-card.png。同用户会话本地展示残留，未推定跨用户泄露。
 - 本轮局部T2真实页面/API完成；无新增功能代码，未重复T1/全量T3/云端Review，保持未提交。总体FAIL。下一步优先支付prefilter与联网相关性/来源校验，再修改写识别、已恢复SQL顶层Trace聚合和会话卡片状态清理。
+
+## 2026-10-27：已有基线合并、新 main 同步与正确性修复
+
+- 已按用户授权提交旧46文件改动为1eeca23fcb5901ab0305036be5f1420ae45bf3cd，并在干净本地main正常合并为7c394503887d1961f7954af51da52b282fa40bd6。随后建立codex/enterprise-assistant-reliability-fixes修复分支。用户提醒main更新后快进同步至561eae8332f1903bfd66c4edb969d9dce40cf836，保留最新动态工具effective_manifest及产品/租户隔离。本轮新修复保持未提交。
+- 已修复：Guard裸“支持”误判能力咨询；明确私有知识请求优先于greeting直答；给定原文的改写/翻译进入普通对话。定向121项通过。前端切换/新建/删除当前会话清理流态及引导卡；晚到历史和SSE异常不得覆盖新会话，定向40项通过。SQL增加操作父Span及可信最终执行结果，历史失败保留recovered_by，兄弟失败不被覆盖，SQL/Trace定向66项通过。
+- 联网根因证据：同容器Bing RSS在query正确时返回搬屋/转账等无关页面；DDG/Bing HTML不稳定，GitHub官方公开API可访问。现有web.search增加站点/英文主题硬校验、复用既有rerank的中英文相关性判断；明确GitHub项目查询使用官方公开目录，链接只取响应。用户明确要求整理时复用Reporter汇总并保留来源。不得把搜索源无关结果概括成业务答案。
+- 第一次实际联网验收仍失败：内部HTTP允许8秒，外层web.search策略只有6秒，返回超时。随后对齐外层10秒零重试、普通两源各3秒且各有1.5秒相关性校验；GitHub目录最多8秒。该修复已再次经本worktree devctl rebuild /y重建，API/RAG/MCP/workers健康。联网最终复验尚在进行，不标PASS。
+- 后端Web/Reporter 86项、后续Web/策略/Reporter58项、入口Trace9项分别通过；有既有pytest-timeout插件配置警告。前端Docker生产构建/类型检查通过并更新frontend容器。入口Trace新增clarify_cache_ms/prompt_refresh_ms/input_guard_ms，继续定位冷路径，不凭暖机样本宣称冷启动修好。
+- 实际页面：礼貌改写正确答复（生成约2.4秒）；支付知识问答实际rag.search成功，返回支付宝/微信/银联/Visa/Mastercard及FAQ出处，执行链约8秒。旅游引导生成后切回支付会话，卡片消失且正文/引用正确，截图D:/tmp/agent-fixes-payment-verified.png、agent-fixes-session-isolation.png。
+- 管理员SQL正式API复验：fc1d0a2a6e03约4.691秒、54b02b56b8bc约3.535秒，首反馈0.040/0.075秒，结果分别1行统计与3行商品，Trace列表均success；本次未自然触发纠错，纠错恢复仍以定向运行测试为证，不称真实错误重试已验收。结果D:/tmp/agent-fixes-sql-results.json。
+- 剩余：联网最终页面与相关性真实模型验证、原10题整体验收、冷启动归因/优化、持久后台长任务实现及身份/恢复边界。整体UNVERIFIED，未跑全仓T3或云端Review，不建议宣称全部修复完成。
+
+### 本批最终验收补充
+
+- SQL Trace下钻更正：54b02b56b8bc实际触发了sql.validate.attempt_1 rejected/sql.guard error，随后attempt_2执行success；sql.operation与父Trace均success，原guard保留error且有恢复关联。并非仅靠单测推定恢复正确。fc1d0a2a6e03一次执行成功。
+- 冷路径6d684fdd5cc7新增分段确认input_guard_ms=9720.8，clarify_cache_ms=1.6、prompt_refresh_ms=0.3；容器/tmp/data-gym-cache词表文件创建时间与首次Guard对应。Dockerfile在独立构建缓存层预取并校验cl100k_base资源，运行目录/opt/tiktoken-cache。断网临时容器实际加载0.525秒；重建后的首问8e0befc595b3输入检查412.9ms、before_trace415.3ms、Trace duration2147ms，回答正确。仅为首轮实测，不称P95稳定达标。
+- 构建时曾因新增ENV位置导致运行系统包层失效，碰到Debian HTTP502。已把ENV移到原依赖层后方，恢复原apt/pip层缓存；随后重建成功，未升级或反复安装依赖。之后构建日志确认tokenizer层也命中缓存。
+- 实际BGE相关性验证：中文“容器内存限制”候选含搬屋价格与Docker内存约束，现有bge-reranker-v2-m3保留Docker、拒绝搬屋，约1.396秒，未改模型/权限/向量空间。GitHub目录精确仓库名优先，避免官方项目查询混入生态项目。
+- 联网概括中发现原公共代理对每个chunk strip，吞掉Markdown空格换行并污染裸链接。已仅对stream/astream保留边界空白，完整invoke仍去除首尾空白；LLM绑定/流式/RAG/MultiQuery/Reporter 54项通过。最终页面概括为两句话，来源链接精确为https://github.com/pgvector/pgvector，选择4.0秒+查询1.1秒+汇总0.9秒；证据agent-fixes-summary-verified.png/txt。纯链接请求仍无二次LLM汇总。
+- 发票实际回归正确（个人/企业抬头、企业税号/开户银行，FAQ出处，RAG3秒）。发货问题此前仍多走Planner，定位“并给出处”被复合意图规则当成额外SQL动作；增加格式约束剔除与manifest知识来源提示，39项路由回归通过，真正SQL+RAG复合任务保持PLAN。该项新容器实际复验尚待完成。
+- 后台报告接入草案已保存D:/tmp/agent-background-report-draft.patch，不在当前代码差异/部署中。现有TaskExecutor缺省internal产品，不能未经产品身份、撤权/恢复、模型预算暂停、队列幂等与离页结果验收就把Chat自动转入它。本批不将SSE断线重放冒充持久任务，后台任务仍未完成。
+- 当前修复分支与main的基线HEAD仍561eae8，新修复未提交。T0语法/Diff检查通过；T1各定向组通过（非去重总数），T2页面/API为分项实测；无全量T3、生产压测、云端Review或新PR。整体仍UNVERIFIED，剩余后台任务与最终原10题汇总不能省略。
+
+### 本批收尾证据
+
+- 最后一次devctl rebuild /y返回0；API/RAG/MCP与各worker健康，frontend此前生产构建/更新且健康，容器工作目录确认是本任务worktree。新任务草案未混入本次部署。
+- 发货修复实际PASS：3b376760f74a，Trace5.781秒，直接rag.search（无Planner），正确返回24小时内发货与FAQ出处；证据D:/tmp/agent-fixes-shipping-direct.txt。无资料复验d1e5b5b252b4约6.139秒，正文明确未找到，子Trace cd238d436c50 rejected，不编造火星制度。第一次该题碰到重建窗口的临时请求失败，未算业务验收，服务健康后已重测。
+- 普通解释2c1fc96661a5答复正确两句话、无联网/工具、换行正常；Trace5.686秒，生成5.1秒，略高2–5秒目标，不能称性能全通过。发票bfeb4bedce5a 4.558秒；最终联网概括8807010b454e 7.406秒，真实主项目链接可点击且无章节/链接粘连。
+- 本轮原10题的答案正确性与SQL恢复/会话隔离均有对应局部T2证据；没有做统计性压测或全部换问法穷举。持久后台报告仍未实施/验收，后续先补可信产品身份及错误/余额暂停终态，再复用TaskService/TaskManager/PostgresSaver接企业助手任务卡，不能直接借现有任务默认internal权限上下文上线。
+
+## 2026-10-27：新增问答、管理端Trace/价格/额度、中止与恢复专项验收
+
+- 用户要求再问几个问题，并实际核对管理端Trace、价格记录、用户扣额及中途中断/暂停能否点击继续。本轮无功能代码改动、未修改限额/价格/历史账单。容器仍本worktree部署；数据库采样采用readonly事务，任务控制只操作本轮正式API新建的两个自有测试任务。
+- 新问题：给定成本80/售价100计算毛利误澄清（7f9329a0b232，3.237秒，FAIL）；企业发票资料正确引用FAQ（父26ccde460ed0/子9673f1835f9c，13.569秒，正确但超目标）；幂等一句话解释正确（4dfa63059516，3.521秒）；Redis官方仓库查询包含正确redis/redis但混入非官方同名仓库与多余描述（acde6de1e39f，9.002秒，PARTIAL）。20段模板正常完成24.967秒；首次停止测试碰到自然完成竞态，未作为中途中止证据，随后另起50段模板在同一UI操作批次内于已产出第一段时点击停止。
+- 计费快照0.2/2/0.04 CNY每百万token、版本2026-10-cny-1与普通调用计算一致；4dfa63059516的171输入/42输出为0.000118，用户账本一致。本轮用户日/月used分别增加同一0.004280 CNY（RAG生成0.000214+短解释0.000118+20段模板0.003948），不是日/月相加双扣。无重复结算证据，但不能据此判全链计费正确。
+- P1归因/漏预算：RAG生成明细67587实际结算到用户1012，却user_id/tenant_id空；RAG选择明细67583（0.000280）trace/request/session/user/tenant全部空。同时间日志明确mode=enforce下缺request_id，本次不预占不结算，随后的ToolSelector日志归属本次1012/rag.search。此类调用漏入个人额度链；本地rerank仍unpriced/unavailable而非local_inference零云费用。
+- 管理端实际下钻：正常有213token与0.000118费用却显示LLM调用0/无LLM调用，general_chat被归工具且有leaked占位节点。RAG父显示费用0/LLM0，合并时间线有LLM生成，子Trace实为0.000214；自身费用与合并子Span口径不同。活跃态/HTTP/业务结果等仍BLOCKED或未采集。正常微额费用显示0.0001，不泛化为所有费用四舍五入成0。
+- 中途停止FAIL：2effe87fd8bd已显示开头与第一段，停止后正文消失且无继续入口；11:03:42 abort，11:06:11才落estimated用量0.004594，最终Trace cancelled。预占50dd8dd7-0341-497a-90e3-82f85bf1e6f1为needs_review/stream_failed_possibly_billed，用户日/月各保留同一0.50元预占（不是已扣0.50），不可未知账单直接释放。真实余额耗尽未通过改用户限额制造；当前paused按钮明确为补足后重新发送，非节点续跑。
+- SSE真实断线重放PASS（进程存活范围）：只收meta(seq1)后关闭连接，两次resume均200/done、同Trace29a136987e7e、完全相同事件；未重发问题，不代表重启或Checkpoint业务续跑。
+- 任务中心队列内暂停恢复PASS：新建9b897bc5-c123-448b-ae43-f35f0b9e6a11，PENDING→PAUSED，经管理端重试/确认重试→SUCCESS并有正确正文。运行中暂停恢复FAIL：新建946bd8d5-2351-4d3b-94d2-c80f59a26f44，在RUNNING/router完成时申请暂停，general_chat完成后PAUSED，有2条Checkpoint且保存final_answer 1631字；管理端恢复后SUCCESS，却发布“无结果/未能获取任何有效数据”。原Checkpoint仍在。Trace1716a7b9d98c→c4beacfc897c，两个测试任务现均终态，无其他任务被重试或撤销。
+- 完整报告D:/tmp/agent-billing-lifecycle-audit-20261027.md；原始账务agent-billing-before/after-normal/after-final/window-final.json、Trace详情agent-billing-trace-details.json、停止前后agent-stop-active-before/after.txt/png、SSE重放agent-sse-resume-real.json、任务agent-managed-task-pause/resumed.json和agent-node-pause-results/node-task-resumed.json。管理端截图agent-billing-admin-parent-cost-gap.png、agent-billing-admin-normal-trace.png、agent-node-resume-ui-detail.png。均无密码/JWT。
+- 状态FAIL；优先修请求/预算/Trace归属传播，其次取消与预占对账、Checkpoint累计输出恢复，再统一Trace展示及修正算术/官方仓库路由。不将本轮验收宣称修复完成；无新PR/提交/合并/部署、全仓T3或云端Review。
+
+## 2026-10-27：关机后恢复及首批账务/执行恢复修复
+
+- 复工核对：worktree/branch及HEAD仍为本任务codex/enterprise-assistant-reliability-fixes、561eae8；此前26文件改动完整保留。Docker栈已自行恢复健康，但宿主8088模型服务未运行。通过本worktree dev-local-models.bat start恢复，healthz确认embedding及rerank已加载，reranker cuda:0/float16；没有重新建索引或更改模型绑定。
+- 修复TaskGraphExecutor：恢复前仍重新解析当前授权，读取LangGraph权威检查点的累计final_answer/step_results，缺失或无效检查点拒绝恢复；之后照常刷新权限并只消费新节点增量。新增真实MemorySaver图用例在修复前2失败，修复后通过，覆盖END处零新事件、部分节点恢复、已完成节点不重跑及当前权限注入。连同既有异步任务授权回归13 passed。
+- 正式任务接口实测：2e688c76-b4d4-43a4-b7fb-dac7171d822d在general_chat完成后PAUSED，检查点保存1549字，resume后SUCCESS，result.answer与检查点逐字相等，Trace319075d79669。验收脚本首次误取output而非公开API的result字段，修正取值后对同一份原始响应重算通过，没有重复创建任务来掩盖失败。首次环境/路由样本2c9d11d1…自然澄清终态；中间暂停样本a658afa4…在tool_selector边界无回答，已正常恢复到SUCCESS，两者不作为有正文恢复证据，未留下暂停任务。
+- 工具选择漏预算根因：safe_call_with_timeout的原生线程不继承ContextVar，Linux非主线程也走该路径。现用copy_context为每次超时线程传入请求身份、预算和Trace。Windows/Linux并发隔离与异常传播回归、selector及预算旁路诊断组48 passed；未改变超时线程无法强杀底层调用的既有限制。
+- RAG明细归属根因：独立/ask仅bind_request_budget但未绑定用量存储读取的tool user/tenant。现复用scoped_tool_identity及scoped_current_user_id，退出/异常均恢复旧值；内部令牌及授权字段契约保持不变。RAG内部令牌、明细作用域、恢复及权限组28 passed（与前组有重叠）；有既有pytest-timeout配置警告及Windows事件循环关闭时资源清理警告，不等同于断言失败。
+- 前端停止前固化delta正文、思考及执行过程，晚到事件不覆盖消息。useSSE/store定向41 passed。实际页面在收到首段开头时同批点击停止，输入框恢复且部分正文保留；证据D:/tmp/agent-stop-fixed-active-before.txt、after.txt/png。此前两次自然完成竞态未算停止通过。仅证明当前页面正文保留，不宣称服务端保存中止正文、立即物理取消供应商或聊天已有断点继续。
+- 最新代码均从本worktree重建：devctl rebuild /y返回0，frontend生产构建16页/类型检查通过并更新容器；依赖层缓存复用。当前没有新提交/PR/合并。ai-runtime.md同步后台任务累计结果恢复契约，不把SSE续播混同执行续跑。
+- 新知识库页面实测正确返回企业税号/开户银行与FAQ来源；父Trace b7774e25e754、子86837bbca0b5。selector明细67717正确user1012/tenantdefault/request/trace，981输入+42输出=0.000280；RAG生成67721同用户/租户，621输入+42输出=0.000208，exact及既有价格快照。两笔预占均settled；日/月账本各增加同一0.000488，未观察到本样本重复扣费。原始只读证据D:/tmp/agent-billing-reboot-before/after/window.json。
+- 本批已验证恢复输出、停止正文及新调用归因/扣费，整体仍UNVERIFIED：Trace父子汇总/LLM分类、rerank本地成本口径、历史中止needs_review预占与取消物理传播、聊天入口持久恢复/余额暂停续跑、算术和官方仓库筛选尚未修完；未改历史账本或直接释放未知预占，未执行全仓T3/云端Review。

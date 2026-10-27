@@ -87,3 +87,42 @@ def test_dev_mode_without_token_allows_all(monkeypatch):
     m.app.add_api_route("/__probe2", lambda: {"ok": True}, methods=["GET"])
     client = TestClient(m.app, raise_server_exceptions=False)
     assert client.get("/__probe2").status_code == 200
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_ask_binds_usage_identity_and_restores_it(monkeypatch, failed):
+    from types import SimpleNamespace
+
+    from backend.core.request_context import (
+        get_tool_tenant_id, get_tool_user_id, scoped_tool_identity,
+    )
+    from backend.infra.llm import budget
+    from backend.infra.llm.proxy import (
+        _thread_local_user_id, scoped_current_user_id,
+    )
+
+    observed = []
+
+    def ask(**kwargs):
+        observed.append((get_tool_user_id(), get_tool_tenant_id(),
+                         _thread_local_user_id()))
+        if failed:
+            raise RuntimeError("生成失败")
+        return "答案"
+
+    monkeypatch.setattr(m, "_get_pipeline", lambda: SimpleNamespace(
+        ask=ask, last_answer_meta={},
+    ))
+    monkeypatch.setattr(budget, "bind_request_budget", lambda *a, **kw: None)
+    monkeypatch.setattr(budget, "clear_request_budget", lambda: None)
+    with scoped_tool_identity(user_id="outer", tenant_id="outer-tenant"), \
+            scoped_current_user_id("outer"):
+        request = m.AskRequest(question="测试", user_id="42", tenant_id="t1")
+        if failed:
+            with pytest.raises(RuntimeError, match="生成失败"):
+                m.ask(request)
+        else:
+            assert m.ask(request)["answer"] == "答案"
+        assert (get_tool_user_id(), get_tool_tenant_id(),
+                _thread_local_user_id()) == ("outer", "outer-tenant", "outer")
+    assert observed == [("42", "t1", "42")]

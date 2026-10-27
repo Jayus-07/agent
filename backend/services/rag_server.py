@@ -18,20 +18,36 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
 import threading
 import re
 import time
+import uuid
 from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.shared.logger import logger
+from backend.core.request_context import scoped_tool_identity
+from backend.infra.llm.proxy import scoped_current_user_id
 from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
+from backend.shared.logger import logger
 
 app = FastAPI(
     title="RAG Service",
     version="1.0.0",
     description="知识库检索/问答独立服务（重资源：embedding + Chroma + LLM）",
 )
+
+from backend.infra.llm.quota import QuotaExceeded
+
+
+@app.exception_handler(QuotaExceeded)
+async def quota_error_response(request: Request, exc: QuotaExceeded):
+    scope = str(exc.subject_id).partition(":")[0]
+    return JSONResponse(
+        status_code=402,
+        content={"code": "USER_BALANCE_INSUFFICIENT" if scope == "user" else "BUDGET_EXCEEDED",
+                 "message": "模型用量额度不足"},
+        headers={"X-Agent-Quota-Scope": scope},
+    )
 
 
 def _review_visibility_http_exception(operation: str, exc: Exception) -> HTTPException:
@@ -364,7 +380,7 @@ def ask(
         try:
             from backend.infra.llm.budget import bind_request_budget
             bind_request_budget(
-                f"rag-ask:{req.session_id}",
+                f"rag-ask:{uuid.uuid4().hex}",
                 user_id=req.user_id, tenant_id=tenant_id,
             )
             _budget_bound = True
@@ -391,19 +407,28 @@ def ask(
     parent_token = bind_external_parent_trace_id(parent_id)
     child_token = bind_external_child_trace_id(child_id)
     try:
-        answer = pipeline.ask(
-            question=req.question,
-            session_id=req.session_id,
-            kb_id=req.kb_id,
-            kb_ids=req.kb_ids,
-            subject_type=req.subject_type,
-            department=req.department,
-            permissions=req.permissions,
-            roles=tuple(req.roles),
-            user_id=req.user_id,
-            tenant_id=tenant_id,
-            persist_memory=req.persist_memory,
-        )
+        # 内部端点已验证服务令牌；用同一请求主体绑定明细与预算，退出后
+        # 恢复线程旧上下文，避免线程池复用导致用户归属残留。
+        with (
+            scoped_tool_identity(user_id=req.user_id, tenant_id=tenant_id),
+            scoped_current_user_id(req.user_id),
+        ):
+            answer = pipeline.ask(
+                question=req.question,
+                session_id=req.session_id,
+                kb_id=req.kb_id,
+                kb_ids=req.kb_ids,
+                subject_type=req.subject_type,
+                department=req.department,
+                permissions=req.permissions,
+                roles=tuple(req.roles),
+                user_id=req.user_id,
+                tenant_id=tenant_id,
+                persist_memory=req.persist_memory,
+            )
+            from backend.infra.llm.budget import check_quota_blocked
+
+            check_quota_blocked()
     except ReviewVisibilityUnavailableError as e:
         # /ask 与轻量检索使用相同审核失败码，避免以通用 500 丢失安全语义。
         raise _review_visibility_http_exception("ask", e) from e

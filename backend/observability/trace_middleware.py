@@ -16,6 +16,7 @@ import time
 import uuid
 
 from backend.config import STATE_KEY_GUARD_MODE
+from backend.infra.llm.budget import check_quota_blocked
 from backend.observability.metrics import state_unknown_key_total
 from backend.observability.tracer import (
     bind_graph_node,
@@ -119,6 +120,7 @@ def guard_node_update(node_name: str, node_fn):
     @functools.wraps(node_fn)
     def wrapper(state: dict) -> dict:
         result = node_fn(state)
+        check_quota_blocked()
         check_state_update(node_name, result)
         return result
 
@@ -211,6 +213,7 @@ class TraceMiddleware:
             try:
                 try:
                     result = node_fn(state)
+                    check_quota_blocked()
                     # 守卫在 span 收口前：enforce 抛错时 span 以 error 收口
                     check_state_update(node_name, result)
                     elapsed_ms = (time.monotonic() - t0) * 1000
@@ -309,6 +312,7 @@ class TraceMiddleware:
             try:
                 try:
                     result = await node_fn(state)
+                    check_quota_blocked()
                     check_state_update(node_name, result)
                     elapsed_ms = (time.monotonic() - t0) * 1000
                     node_status = self._node_span_status(result)
