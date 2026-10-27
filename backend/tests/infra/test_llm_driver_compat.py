@@ -148,3 +148,33 @@ def test_build_by_driver_ollama():
     llm = build_by_driver("ollama", "qwen2.5:3b", None)
 
     assert type(llm).__name__ == "ChatOllama"
+
+
+@pytest.mark.parametrize("status", [408, 429, 503])
+@pytest.mark.parametrize("stream", [False, True])
+def test_custom_driver_does_not_retry_inside_sdk(status, stream):
+    """真实SDK与HTTP传输边界故障注入：一次代理尝试只发一个HTTP请求。"""
+    import httpx
+    from openai import APIStatusError
+
+    requests = []
+
+    def fail(request):
+        requests.append(request)
+        return httpx.Response(status, json={"error": {
+            "message": "临时供应商故障", "type": "server_error",
+        }})
+
+    model = build_by_driver("openai", "m1", ProviderCredentials(
+        provider=PROVIDER_ID, api_key="test-only", base_url=BASE_URL,
+    ))
+    assert model.root_client.max_retries == 0
+    with httpx.Client(transport=httpx.MockTransport(fail)) as client:
+        root = model.root_client.with_options(http_client=client)
+        model.client = root.chat.completions
+        with pytest.raises(APIStatusError):
+            if stream:
+                list(model.stream("故障验收"))
+            else:
+                model.invoke("故障验收")
+    assert len(requests) == 1

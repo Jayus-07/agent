@@ -405,7 +405,6 @@ async def chat_stream(
     # （on_delta 采样）两处闭包都要可见——放 event_generator 内 producer
     # 线程读不到（M13 尾项实施时发现的跨作用域 bug）
     _latency_tracker = StreamLatencyTracker(start=t0)
-    agent = get_multi_agent()
     # 与 /chat/agent 同语义：默认 "*"（授权范围推断），见同步入口注释
     kb_id = req.kb_id or "*"
     request_id = _resolve_request_id(req.request_id)
@@ -505,6 +504,8 @@ async def chat_stream(
         try:
             if product == AGENT_PRODUCT:
                 cancel_previous(ident, req.session_id)
+            # 冷启动图初始化可能等待数秒，留在工作线程，不阻塞首反馈或事件循环。
+            agent = get_multi_agent()
             for evt in agent.stream_events(
                 req.question,
                 session_id,

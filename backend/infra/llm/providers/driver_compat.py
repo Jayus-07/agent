@@ -71,6 +71,8 @@ def build_by_driver(
             temperature=LLM_TEMPERATURE,
             max_tokens=effective_max_tokens,
             request_timeout=LLM_REQUEST_TIMEOUT,
+            # 重试统一由代理层记预算和Trace；SDK默认重试会放大总耗时并漏记调用。
+            max_retries=0,
             api_key=api_key or "EMPTY",  # 未设 Key 的自托管实例用占位符（同 vllm 约定）
             base_url=base_url,
             stream_usage=LLM_STREAM_USAGE,
@@ -101,6 +103,7 @@ def build_by_driver(
             max_tokens=effective_max_tokens,
             temperature=LLM_TEMPERATURE,
             timeout=LLM_REQUEST_TIMEOUT,
+            max_retries=0,
         )
 
     if d == "ollama":
