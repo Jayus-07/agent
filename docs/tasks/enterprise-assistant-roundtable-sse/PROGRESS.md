@@ -1,5 +1,18 @@
 # 进度
 
+## 2026-10-28：持续任务第一轮——基线实测、三异常根因修复与发布管线死锁
+
+- 用户指令：作为持续任务，费用不设限，用最优解让五类任务全部达标；验收加入上下文/记忆/多轮/计费四维度；全部修复后用 browser-use 复测。
+- **基线实测（12 题，管理端正式 API）**：普通解释 2.08s✅、支付 FAQ 5.70s✅、无资料正确拒答 3.35s✅、联网 pgvector 4.78s✅（链接精确）、旅游引导 0.72s✅、SQL 月度 4.92s✅、SQL Top3 2.87s✅、记忆写入/回忆 2.68/1.78s✅（"蓝杉42"正确）；首反馈 0.04-0.41s 全部达标。异常 3 项：礼貌改写 8.68s❌（目标2-5）、发货/发票两问答"未找到"❌（该 FAQ 明确存在）。
+- **计费审计（新增维度）**：主链路 23 条 llm 明细归属完整（trace/user/tenant/request 全有，成本实算）；**次级链路漏归属**——memory.extract 后台任务每题产生 ~900 tokens doubao 调用+embedding+rerank 全部无任何归属（user/tenant/request/trace 全空）；本地 rerank 全部 0 成本未计价；llm_usage.cost_usd 列恒 0（实际成本在 input_cost/output_cost，展示口径不一致）。
+- **异常1根因与修复（改写 8.7s）**：VectorRouter 对账在 MCP 快照抖动（expected 116↔118 每 ~30s 翻转）下连续全量重建，每次 ~116 条串行 embedding 独占 8088 单推理槽 7-8s，用户路由 embedding 被排队（领域判断 5.4s）。修复：`ROUTER_REBUILD_COOLDOWN_S=300` 冷却 + 内容签名门禁（同签名不重建）+ 单飞双检（vector_router.py）。实测改写 8.7→5.7s、领域判断 5.4→3.5s；残余为路由阶段 7 次串行 embedding（未竞争时 ~190ms/次）与后台记忆任务争抢单槽——后续优化项（减少/并行化路由 embedding、记忆任务错峰）。
+- **异常2根因与修复（发货/发票未命中）**：分两层。(a) DB chunk 陈旧——2026-10-04 旧版 QA 解析器写入的 chunk 问句行为空（源文件"Q：客户下单后多久发货?"完整，解析修复于 10-13 后该文档从未重建），重排只能靠答句打分；已走正规 reindex 接口重建（18 chunks 问句完整）。(b) 模型语义塌缩——bge-reranker-v2-m3 对语义等价问句打分差 20 倍（"现货商品通常多久发货"0.995 vs "企业订单的发货时效是怎么规定的"0.073；本地 CPU float32 复算与 GPU float16 服务完全一致，排除精度问题，为模型真实行为）；充实 simulated_questions 无效（0.09）；10-27 通过样本本就是词汇重合问法（0.99），此问法从未通过过——非回归，是召回鲁棒性缺口。
+- **纠错链修复**：自纠错改写提示词过薄（仅"改写使能命中"）产出书面压缩变体仍被淘汰。已改 default yaml（口语化同义桥接+证据侧重变体，playground 实测首变体"企业订单发货需要多久时间"重排分 0.57、发票"企业申请发票的流程是怎样的"0.64）；`try_rewrite` 跨重试轮次复用变体缓存（免重复 LLM 调用）+ `SELF_CORRECTION_MAX_RETRIES` 1→2。**v1 提示词下两问仍未命中**——v2 上线被发布管线死锁阻断（见下）。
+- **发布管线死锁（阻塞项，需用户决策）**：`prompt_release_runner.py:66` 硬编码 `strict_fields=True`，发布评测强制要求 question/expected_answer/ground_truth 全量可用；逐一核查全部 9 个既有 RAG suite 样本均缺 ground_truth → **任何 prompt 都无法走完发布流**。v2 草稿已建（版本 2）。两条出路：(a) 为评测样本注解 ground_truth（从权威 FAQ 源文档派生，增量式修改共享评测数据）；(b) 调整门禁策略（如允许带标注豁免的 smoke 发布）。缓解证据已留：playground 改写质量 + 直接重排分对照。
+- **重建与复测**：`devctl.bat rebuild /y` exit 0，app/rag/worker healthy 且归属本 worktree。复测：改写 5.75s（仍略超 2-5s 目标，残余为上述串行 embedding 争抢）、shipping 11.5s/invoice 6.6s 仍未命中（等 v2 提示词上线）、无资料拒答 2.97s 正确（重试上限调整未拖慢拒答）。
+- **测试**：新增 `test_vector_router_rebuild_throttle.py` 5 用例 + `test_self_correction_strategy.py` 变体缓存 4 用例，连同相邻组 32 项全部通过。**既有失败定界（非本轮引入）**：`test_router_domain_literal_guard`（execution_mode.py 领域字面量，上游提交遗留）；`test_chain.py` 7 处 + `test_rag_p1_self_correction.py` 1 处断言旧拒答文案（"暂无/未提及"，文案已在先前提交改为"知识库中未找到/未能通过事实一致性校验"，测试未同步）。
+- **未完成**：browser-use 完整复测（用户指定收口方式，等 prompt 出路确定）；memory.extract 归属绑定、rerank 计价口径、cost_usd 展示统一；路由 embedding 串行优化；P95/小并发统计与冷热分类；多轮会话/切换浏览器回归。
+
 ## 2026-10-28：Zcode接手后完成父子时限传播（P1）
 
 - 接手核验：worktree/branch/HEAD与交接文档一致（d11ab4a，分支codex/enterprise-assistant-reliability-fixes），8个未提交文件A/B分层确认未覆盖；容器栈healthy且compose working_dir为本worktree。8088模型服务交接后掉线，经本worktree `dev-local-models.bat start`恢复（healthz双模型CUDA/float16就绪），未重建索引、未改模型绑定。

@@ -173,3 +173,71 @@ class TestIsolation:
         s1.reset()
         assert s1.retry_count == 0
         assert s2.retry_count == 0  # 另一个不变
+
+
+class TestVariantCacheAcrossRetries:
+    """2026-10-28：改写 LLM 一次产出多条变体，跨重试轮次逐个复用。
+
+    背景：首条变体不必然过重排门槛（实测同一组 0.24 与 0.57 并存），
+    第 2 轮复用缓存变体不再重复调用 LLM。
+    """
+
+    def _mock_llm(self, content: str):
+        mock_result = MagicMock()
+        mock_result.content = content
+        return mock_result
+
+    def test_second_round_reuses_cached_variant(self, fresh_collector):
+        fresh_collector.start("test")
+        s = SelfCorrectionStrategy()
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
+            mock_llm.invoke.return_value = self._mock_llm(
+                "变体 A\n变体 B\n变体 C")
+            first = s.try_rewrite("发货时效是怎么规定的?", "no_evidence")
+            assert first == "变体 A"
+            assert mock_llm.invoke.call_count == 1
+            s.record_attempt(False)
+            second = s.try_rewrite("发货时效是怎么规定的?", "no_evidence")
+        assert second == "变体 B"
+        assert mock_llm.invoke.call_count == 1  # 未再调用 LLM
+
+    def test_variants_exhausted_falls_back_to_llm(self, fresh_collector):
+        fresh_collector.start("test")
+        s = SelfCorrectionStrategy()
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
+            mock_llm.invoke.side_effect = [
+                self._mock_llm("变体 A\n变体 B"),
+                self._mock_llm("新一轮 X"),
+            ]
+            assert s.try_rewrite("问题", "no_evidence") == "变体 A"
+            assert s.try_rewrite("问题", "no_evidence") == "变体 B"
+            # 变体耗尽 → 重新调用 LLM
+            assert s.try_rewrite("问题", "no_evidence") == "新一轮 X"
+        assert mock_llm.invoke.call_count == 2
+
+    def test_cache_invalidated_by_different_question(self, fresh_collector):
+        fresh_collector.start("test")
+        s = SelfCorrectionStrategy()
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
+            mock_llm.invoke.return_value = self._mock_llm("A1\nB1")
+            assert s.try_rewrite("问题一", "no_evidence") == "A1"
+            assert s.try_rewrite("问题二", "no_evidence") == "A1"  # 新问题重新改写
+        assert mock_llm.invoke.call_count == 2
+
+    def test_reset_clears_variant_cache(self, fresh_collector):
+        fresh_collector.start("test")
+        s = SelfCorrectionStrategy()
+        mock_llm = MagicMock()
+        with patch("backend.infra.llm.proxy._resolve_active_llm",
+                   return_value=mock_llm):
+            mock_llm.invoke.return_value = self._mock_llm("A\nB")
+            assert s.try_rewrite("问题", "no_evidence") == "A"
+            s.reset()
+            assert s.try_rewrite("问题", "no_evidence") == "A"  # 重新改写
+        assert mock_llm.invoke.call_count == 2
