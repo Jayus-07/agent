@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -5,6 +6,11 @@ import pytest
 from backend.evaluation.metrics.retrieval import mrr, ndcg_at_k, recall_at_k
 from backend.evaluation_v2 import repository
 from backend.evaluation_v2.runner import _case_result_payload
+
+
+@contextmanager
+def _empty_transaction():
+    yield None, SimpleNamespace(execute=lambda *_args, **_kwargs: None, fetchall=lambda: [])
 
 
 def test_case_result_persists_answer_generation_token_usage():
@@ -109,6 +115,11 @@ def test_v2_runner_and_compare_keep_zero_hit_qrels_in_macro_denominator(monkeypa
     }
     monkeypatch.setattr(repository, "get_run", lambda _tenant, run_id: runs[run_id])
     monkeypatch.setattr(repository, "list_run_results", lambda _tenant, run_id, **_kwargs: results[run_id])
+    # compare_runs 的问题回查走真实事务；CI 无 PG 服务，替换为空结果。
+    monkeypatch.setattr(
+        repository, "_transaction",
+        lambda _tenant: _empty_transaction(),
+    )
 
     comparison = repository.compare_runs("tenant-a", "baseline", "candidate")
     metrics = {item["key"]: item for item in comparison["metrics"]}

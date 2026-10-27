@@ -107,6 +107,10 @@ describe("RBAC API 客户端", () => {
       name: "客服部",
       status: 1,
       version: null,
+      departmentType: "general",
+      managerUserId: null,
+      managerUsername: null,
+      managerName: null,
       memberCount: null,
       updatedAt: null,
     }]);

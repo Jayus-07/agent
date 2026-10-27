@@ -387,6 +387,8 @@ def test_evaluation_task_distinguishes_automatic_retry_from_terminal_failure():
 
 
 def test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget(monkeypatch, tmp_path):
+    # ragas 是可选依赖（pyproject extras），CI 的 free contract 环境不安装。
+    pytest.importorskip("ragas")
     import asyncio
     from contextlib import nullcontext
     from types import SimpleNamespace

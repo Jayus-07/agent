@@ -1,5 +1,14 @@
+from contextlib import contextmanager
+from types import SimpleNamespace
+
 from backend.app.api.routes.evaluation_v2 import _safe_slice_tags
 from backend.evaluation_v2 import repository
+
+
+@contextmanager
+def _fake_question_transaction():
+    """compare_runs 只用事务回查问题文本；CI 无 PG 服务，返回空问题表。"""
+    yield None, SimpleNamespace(execute=lambda *_args, **_kwargs: None, fetchall=lambda: [])
 
 
 def test_run_slice_tags_keep_only_supported_redacted_labels():
@@ -64,6 +73,7 @@ def test_compare_runs_aggregates_paired_case_slices(monkeypatch):
     }
     monkeypatch.setattr(repository, "get_run", lambda _tenant, run_id: runs[run_id])
     monkeypatch.setattr(repository, "list_run_results", lambda _tenant, run_id, **_kwargs: results[run_id])
+    monkeypatch.setattr(repository, "_transaction", lambda _tenant: _fake_question_transaction())
 
     comparison = repository.compare_runs("tenant-a", "baseline", "candidate")
 
@@ -129,6 +139,7 @@ def test_slice_inference_uses_minimum_sample_and_holm_adjustment(monkeypatch):
     results = {"baseline": baseline_results, "candidate": candidate_results}
     monkeypatch.setattr(repository, "get_run", lambda _tenant, run_id: runs[run_id])
     monkeypatch.setattr(repository, "list_run_results", lambda _tenant, run_id, **_kwargs: results[run_id])
+    monkeypatch.setattr(repository, "_transaction", lambda _tenant: _fake_question_transaction())
 
     comparison = repository.compare_runs("tenant-a", "baseline", "candidate")
 
