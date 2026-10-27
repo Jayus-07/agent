@@ -1,23 +1,397 @@
 'use client'
 
 /**
- * /releases — 发布与版本中心（治理 M8，2026-09-30）
+ * /releases — 发布与版本中心（V2 两档）
  *
- * 数据源：GET /api/admin/releases(/latest)（ai.release_records，12 门
- * Release Gate 跑完由 verify_release_gate.py 直写）。本页只读：
- * 当前版本卡 + 历史发布列表（12 门结果展开）+ 回滚判据（最近一条 PASS）。
+ * 治理配置发布（默认档）：治理配置（连接声明 + 能力包 + 授权）的快照草稿 →
+ * 差异预览 → 发布 → 回滚 + 配置导入。后端 admin_governance_releases.py
+ * （Batch 5-2），发布=确认草稿为生效版本，回滚按快照恢复并生成新版本；
+ * 凭据绝不参与（导入连接一律 disabled 无凭据）。
+ * 系统发布与质量 Gate（第二档）：12 门 Release Gate 结果（ai.release_records，
+ * 原 M8 页面内容整体保留为第二档）。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
-  CheckCircle2, ChevronDown, ChevronRight, History, RefreshCw,
-  Rocket, RotateCcw, XCircle,
+  CheckCircle2, ChevronDown, ChevronRight, ClipboardPaste,
+  History, RefreshCw, Rocket, RotateCcw, XCircle,
 } from 'lucide-react'
-import PageHeader from '@/components/layout/PageHeader'
+import WorkbenchShell, { type WorkbenchTab } from '@/components/workbench/WorkbenchShell'
+import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
+import DetailDrawer from '@/components/layout/DetailDrawer'
+import StatMetricBar from '@/components/layout/StatMetricBar'
+import StatusChip from '@/components/layout/StatusChip'
+import { AssetSection } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
+import EmptyState from '@/components/shared/EmptyState'
 import {
   getReleaseLatest, getReleases,
   type ReleaseLatestResponse, type ReleaseListResponse, type ReleaseRecord,
 } from '@/api/governance'
+import {
+  createGovernanceRelease, getGovernanceReleaseDiff, importGovernanceConfiguration,
+  listGovernanceReleases, publishGovernanceRelease, rollbackGovernanceRelease,
+  type GovernanceImportResult, type GovernanceRelease, type GovernanceReleaseDiff,
+  type GovernanceReleaseStatus,
+} from '@/api/governanceReleases'
+
+const RELEASE_TABS = [
+  { id: 'governance', label: '治理配置发布' },
+  { id: 'system', label: '系统发布与质量 Gate' },
+] as const satisfies readonly WorkbenchTab<'governance' | 'system'>[]
+
+const TAB_IDS = RELEASE_TABS.map((tab) => tab.id) as readonly (
+  'governance' | 'system'
+)[]
+
+const RELEASE_STATUS_TONE: Record<GovernanceReleaseStatus, 'warn' | 'success' | 'neutral'> = {
+  draft: 'warn', published: 'success', rolled_back: 'neutral',
+}
+const RELEASE_STATUS_LABEL: Record<GovernanceReleaseStatus, string> = {
+  draft: '草稿', published: '已发布', rolled_back: '已回滚',
+}
+const CHANGE_LABEL: Record<string, string> = {
+  modified: '变更', added: '当前新增（回滚不删除）', removed: '版本有、当前无',
+}
+const CHANGE_TONE: Record<string, 'info' | 'warn' | 'danger'> = {
+  modified: 'info', added: 'warn', removed: 'danger',
+}
+
+function formatTime(value: string | null): string {
+  return value ? value.replace('T', ' ').slice(0, 19) : '—'
+}
+
+// ═══════════════ 治理配置发布（第一档） ═══════════════
+
+interface DiffDrawerState {
+  release: GovernanceRelease
+  diff: GovernanceReleaseDiff | null
+  loading: boolean
+  error: string | null
+}
+
+function GovernanceReleasesTab() {
+  const [releases, setReleases] = useState<GovernanceRelease[] | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [createDesc, setCreateDesc] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [busyId, setBusyId] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [drawer, setDrawer] = useState<DiffDrawerState | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
+  const [importText, setImportText] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importError, setImportError] = useState<string | null>(null)
+  const [importResult, setImportResult] = useState<GovernanceImportResult | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    listGovernanceReleases()
+      .then((r) => setReleases(r.releases))
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const onCreate = () => {
+    setCreating(true)
+    setNotice(null)
+    createGovernanceRelease(createDesc.trim())
+      .then((rel) => {
+        setNotice(`已创建草稿 v${rel.version}（${rel.connection_count} 个连接 / ${rel.bundle_count} 个能力包）`)
+        setCreateDesc('')
+        load()
+      })
+      .catch((e: Error) => setNotice(`创建失败：${e.message}`))
+      .finally(() => setCreating(false))
+  }
+
+  const onPublish = (rel: GovernanceRelease) => {
+    setBusyId(rel.id)
+    setNotice(null)
+    publishGovernanceRelease(rel.id)
+      .then(() => { setNotice(`v${rel.version} 已发布生效`); load() })
+      .catch((e: Error) => setNotice(`发布失败：${e.message}`))
+      .finally(() => setBusyId(null))
+  }
+
+  const onRollback = (rel: GovernanceRelease) => {
+    if (!window.confirm(
+      `回滚到 v${rel.version}？将按该版本快照恢复连接声明、能力包与授权关系`
+      + '（不恢复凭据；不删除快照外的新增资产），并生成新的回滚版本。')) return
+    setBusyId(rel.id)
+    setNotice(null)
+    rollbackGovernanceRelease(rel.id)
+      .then((r) => {
+        setNotice(`已回滚至 v${r.rolled_back_to}：恢复 ${r.restored_connections} 个连接 / `
+          + `${r.restored_bundles} 个能力包，生成新版本 v${r.new_version}`)
+        load()
+      })
+      .catch((e: Error) => setNotice(`回滚失败：${e.message}`))
+      .finally(() => setBusyId(null))
+  }
+
+  const openDiff = (rel: GovernanceRelease) => {
+    setDrawer({ release: rel, diff: null, loading: true, error: null })
+    getGovernanceReleaseDiff(rel.id)
+      .then((diff) => setDrawer({ release: rel, diff, loading: false, error: null }))
+      .catch((e: Error) => setDrawer({ release: rel, diff: null, loading: false, error: e.message }))
+  }
+
+  const onImport = () => {
+    let payload: unknown
+    try {
+      payload = JSON.parse(importText)
+    } catch {
+      setImportError('导入内容不是合法 JSON')
+      return
+    }
+    setImporting(true)
+    setImportError(null)
+    setImportResult(null)
+    importGovernanceConfiguration(payload)
+      .then((r) => { setImportResult(r); setImportText('') })
+      .catch((e: Error) => setImportError(e.message))
+      .finally(() => setImporting(false))
+  }
+
+  const hasDraft = releases?.some((r) => r.status === 'draft') ?? false
+
+  return (
+    <div className="mx-auto w-full max-w-7xl px-6 py-6">
+      {notice && (
+        <div data-testid="gov-release-notice" className="mb-4 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-[12px] text-text-primary">
+          {notice}
+        </div>
+      )}
+      <StatMetricBar
+        className="mb-4"
+        items={[
+          { label: '版本总数', value: releases?.length ?? '…' },
+          { label: '草稿', value: releases?.filter((r) => r.status === 'draft').length ?? 0, tone: 'warn' },
+          { label: '已发布', value: releases?.filter((r) => r.status === 'published').length ?? 0, tone: 'accent' },
+        ]}
+      />
+      <div className="mb-4 rounded-lg border border-border-subtle bg-white p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[12px] text-text-secondary">创建快照草稿（快照当前全部连接声明 + 能力包 + 授权关系，不含任何凭据）：</span>
+          <input
+            value={createDesc}
+            onChange={(e) => setCreateDesc(e.target.value)}
+            placeholder="版本说明（可留空）"
+            className="w-56 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+          />
+          <button
+            type="button"
+            data-testid="gov-create-snapshot"
+            onClick={onCreate}
+            disabled={creating}
+            className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {creating ? '创建中…' : '创建快照'}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setImportOpen(true); setImportResult(null); setImportError(null) }}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border-subtle px-3 py-1.5 text-[12px] text-text-secondary hover:border-accent/30 hover:bg-bg-hover"
+          >
+            <ClipboardPaste size={13} /> 导入配置
+          </button>
+        </div>
+        {hasDraft && (
+          <p className="mt-2 text-[11px] text-text-muted">
+            发布前请通过「查看差异」人工核对变更（连接声明 / 授权关系 / 能力包成员）——差异即发布前检查面。
+          </p>
+        )}
+      </div>
+
+      {error && <ErrorState message={error} onRetry={load} />}
+      {!error && loading && (
+        <div className="rounded-xl border border-border-subtle bg-white p-8 text-center text-[13px] text-text-muted">加载中…</div>
+      )}
+      {!error && !loading && releases && (
+        <AssetSection title="版本历史" meta={`共 ${releases.length} 个版本`}>
+          {releases.length === 0 ? (
+            <EmptyState
+              title="治理配置版本"
+              description="尚无版本——创建首个快照草稿后可发布与回滚"
+            />
+          ) : (
+            <div className="overflow-x-auto">
+              <table data-testid="gov-release-table" className="w-full text-[12px]">
+                <thead>
+                  <tr className="border-b border-border-subtle text-left text-text-muted">
+                    <th className="py-2 pr-3 font-medium">版本</th>
+                    <th className="py-2 pr-3 font-medium">状态</th>
+                    <th className="py-2 pr-3 font-medium">说明</th>
+                    <th className="py-2 pr-3 font-medium">连接 / 包</th>
+                    <th className="py-2 pr-3 font-medium">创建</th>
+                    <th className="py-2 pr-3 font-medium">发布</th>
+                    <th className="py-2 font-medium">操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {releases.map((rel) => (
+                    <tr key={rel.id} className="border-b border-black/[0.04] last:border-0">
+                      <td className="py-2.5 pr-3 font-mono font-medium text-text-primary">v{rel.version}</td>
+                      <td className="py-2.5 pr-3">
+                        <StatusChip tone={RELEASE_STATUS_TONE[rel.status]}>{RELEASE_STATUS_LABEL[rel.status]}</StatusChip>
+                      </td>
+                      <td className="max-w-[16rem] truncate py-2.5 pr-3 text-text-secondary" title={rel.description}>
+                        {rel.description || '—'}
+                      </td>
+                      <td className="py-2.5 pr-3 tabular-nums text-text-secondary">
+                        {rel.connection_count} / {rel.bundle_count}
+                      </td>
+                      <td className="py-2.5 pr-3 text-text-muted">
+                        {formatTime(rel.created_at)}{rel.created_by ? ` · ${rel.created_by}` : ''}
+                      </td>
+                      <td className="py-2.5 pr-3 text-text-muted">{formatTime(rel.published_at)}</td>
+                      <td className="py-2.5">
+                        <div className="flex flex-wrap gap-1.5">
+                          <button type="button" onClick={() => openDiff(rel)}
+                            className="rounded-md border border-border-subtle px-2 py-1 text-[11px] text-text-secondary hover:border-accent/30 hover:text-text-primary">
+                            查看差异
+                          </button>
+                          {rel.status === 'draft' && (
+                            <button type="button" data-testid={`gov-publish-${rel.version}`} onClick={() => onPublish(rel)}
+                              disabled={busyId === rel.id}
+                              className="rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white hover:bg-accent-hover disabled:opacity-50">
+                              {busyId === rel.id ? '发布中…' : '检查并发布'}
+                            </button>
+                          )}
+                          {rel.status === 'published' && (
+                            <button type="button" data-testid={`gov-rollback-${rel.version}`} onClick={() => onRollback(rel)}
+                              disabled={busyId === rel.id}
+                              className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-50 disabled:opacity-50">
+                              {busyId === rel.id ? '回滚中…' : '配置回滚'}
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </AssetSection>
+      )}
+
+      {/* 差异预览抽屉 */}
+      <DetailDrawer
+        open={drawer !== null}
+        onClose={() => setDrawer(null)}
+        title={drawer ? `v${drawer.release.version} 差异预览` : ''}
+        subtitle="方向 = 回滚到该版本将发生什么；「当前新增」不会被回滚删除，请显式处置"
+        width="lg"
+      >
+        {drawer?.loading && <div className="text-[13px] text-text-muted">计算差异中…</div>}
+        {drawer?.error && <ErrorState message={drawer.error} onRetry={() => openDiff(drawer.release)} />}
+        {drawer?.diff && (
+          <>
+            <StatMetricBar
+              className="mb-4"
+              items={[
+                { label: '变更', value: drawer.diff.counts.modified, tone: 'accent' },
+                { label: '当前新增', value: drawer.diff.counts.added, tone: 'warn' },
+                { label: '版本有当前无', value: drawer.diff.counts.removed, tone: 'danger' },
+              ]}
+            />
+            {drawer.diff.changes.length === 0 ? (
+              <EmptyState
+                title="差异"
+                description="与当前配置完全一致"
+              />
+            ) : (
+              <div className="space-y-2">
+                {drawer.diff.changes.map((ch) => (
+                  <div key={`${ch.kind}-${ch.name}`} data-testid="gov-diff-entry" className="rounded-lg border border-border-subtle p-3">
+                    <div className="flex items-center gap-2">
+                      <StatusChip tone={CHANGE_TONE[ch.change]}>{CHANGE_LABEL[ch.change]}</StatusChip>
+                      <span className="text-[11px] text-text-muted">{ch.kind === 'connection' ? '连接' : '能力包'}</span>
+                      <span className="text-[12px] font-medium text-text-primary">{ch.name}</span>
+                    </div>
+                    {ch.fields.length > 0 && (
+                      <table className="mt-2 w-full text-[11px]">
+                        <thead>
+                          <tr className="text-left text-text-muted">
+                            <th className="py-1 pr-2 font-medium">字段</th>
+                            <th className="py-1 pr-2 font-medium">版本值</th>
+                            <th className="py-1 font-medium">当前值</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {ch.fields.map((f) => (
+                            <tr key={f.field} className="border-t border-black/[0.04]">
+                              <td className="py-1 pr-2 font-medium text-text-secondary">{f.field}</td>
+                              <td className="max-w-[14rem] break-all py-1 pr-2 font-mono text-text-primary">
+                                {typeof f.release === 'object' ? JSON.stringify(f.release) : String(f.release)}
+                              </td>
+                              <td className="max-w-[14rem] break-all py-1 font-mono text-text-secondary">
+                                {typeof f.current === 'object' ? JSON.stringify(f.current) : String(f.current)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+      </DetailDrawer>
+
+      {/* 导入配置抽屉 */}
+      <DetailDrawer
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        title="导入治理配置"
+        subtitle="粘贴导出包 JSON：连接一律 disabled 且不带凭据；能力包不建授权；名称冲突跳过"
+        width="md"
+      >
+        <textarea
+          value={importText}
+          onChange={(e) => setImportText(e.target.value)}
+          rows={10}
+          placeholder='{"version": 1, "connections": [...], "capability_bundles": [...]}'
+          className="w-full rounded-lg border border-border-subtle p-3 font-mono text-[11px] outline-none focus:border-accent"
+        />
+        <div className="mt-3 flex items-center gap-2">
+          <button type="button" data-testid="gov-import-submit" onClick={onImport} disabled={importing || !importText.trim()}
+            className="rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white hover:bg-accent-hover disabled:opacity-50">
+            {importing ? '导入中…' : '导入'}
+          </button>
+          {importError && <span className="text-[12px] text-rose-600">{importError}</span>}
+        </div>
+        {importResult && (
+          <div data-testid="gov-import-result" className="mt-4 space-y-2 rounded-lg border border-border-subtle p-3 text-[12px]">
+            <div>新建连接：{importResult.created_connections.join('、') || '无'}</div>
+            <div>新建能力包：{importResult.created_bundles.join('、') || '无'}</div>
+            {importResult.skipped.length > 0 && (
+              <div className="text-amber-700">跳过（名称冲突）：{importResult.skipped.map((s) => `${s.name}（${s.reason}）`).join('、')}</div>
+            )}
+            {importResult.redacted.length > 0 && (
+              <div className="text-amber-700">URL 内嵌凭据已剔除：{importResult.redacted.map((r) => r.name).join('、')}</div>
+            )}
+            {importResult.rejected.length > 0 && (
+              <div className="text-rose-600">拒绝导入：{importResult.rejected.map((r) => `${r.name}（${r.reason}）`).join('、')}</div>
+            )}
+            <p className="text-[11px] text-text-muted">
+              导入的连接需重新配置凭据并启用后才能被发现；授权关系需在 Skill 与 Capability 页重新确认。
+            </p>
+          </div>
+        )}
+      </DetailDrawer>
+    </div>
+  )
+}
+
+// ═══════════════ 系统发布与质量 Gate（第二档，原 M8 页面内容） ═══════════════
 
 const GATE_LABEL: Record<string, string> = {
   Gate0_BuildIdentity: '构建身份',
@@ -165,7 +539,7 @@ function HistoryRow({ release }: { release: ReleaseRecord }) {
   )
 }
 
-export default function ReleasesPage() {
+function SystemGateTab() {
   const [latestInfo, setLatestInfo] = useState<ReleaseLatestResponse | null>(null)
   const [list, setList] = useState<ReleaseListResponse | null>(null)
   const [resultFilter, setResultFilter] = useState<'' | 'PASS' | 'FAIL'>('')
@@ -190,12 +564,11 @@ export default function ReleasesPage() {
   }, [resultFilter])
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto w-full max-w-7xl px-6 py-6">
       <div className="mb-6 flex items-start justify-between">
-        <PageHeader
-          title="发布记录"
-          desc="12 门 Release Gate 结果落库 · 发布时间轴与回滚判据"
-        />
+        <p className="text-[12px] text-text-secondary">
+          12 门 Release Gate 结果落库 · 发布时间轴与回滚判据（回滚 = 用 PASS commit 重建镜像，属代码部署）
+        </p>
         <button
           onClick={() => load()}
           className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-black/10 px-3 py-1.5 text-[13px] text-text-secondary hover:bg-black/[0.03]"
@@ -251,5 +624,20 @@ export default function ReleasesPage() {
         契约 lock 漂移检测与 CI 接线（tool_quality workflow）同源：gen_tool_contract_lock --check。
       </p>
     </div>
+  )
+}
+
+export default function ReleasesPage() {
+  const { tab, selectTab } = useWorkbenchTab(TAB_IDS, 'governance')
+  return (
+    <WorkbenchShell
+      title="发布记录"
+      description="治理配置发布（快照 → 差异 → 发布 → 回滚）与系统发布质量 Gate"
+      tabs={RELEASE_TABS}
+      activeTab={tab}
+      onTabChange={selectTab}
+    >
+      {tab === 'governance' ? <GovernanceReleasesTab /> : <SystemGateTab />}
+    </WorkbenchShell>
   )
 }
