@@ -487,3 +487,43 @@ handoff 有测试、bundle 表空回退正常；但**管理面无域边界**—�
 #20 AI 失败分析、#25 结果引用+Schema 映射、#27 自动任务/Webhook、
 #29 运行中多轮修改、治理配置独立发布/回滚（发布记录页仅系统 Gate）——
 均按第 32 题列增强批次，未擅自取消；动态工具域字段为硬隔离增强前置。
+
+## Batch 5-1：硬隔离补全——mcp 工具业务域字段（2026-10-28）
+
+用户授权下一批顺序（硬隔离补全 → 治理配置发布/回滚+导入 → 健康监测/
+Discovery 增强）并要求持续推进；main 基线守卫修复已另开 PR #116。
+
+### 分支与事实
+
+- 本批分支 `feat/tool-governance-batch5`（基于 a8b138d，即 #115 head +
+  交接包收口修复）；#115 保持 Merge Ready 不动。
+- main 基线修复 PR **#116**（`fix/router-domain-literal`，99ce938，
+  execution_mode 域字面量复用 _DOMAIN_ALIASES，守卫测试 16 passed，
+  与 #115 无文件交集）。
+
+### 改动（64fa7a8，6 文件 +130/−6）
+
+- `core/product_context`：新增 `DOMAIN_LABELS` 业务域词汇表（工具治理
+  governance.domain 与能力包 domain 共用单一事实源；空=未分类兼容存量）。
+- `infra/mcp_registry/specs`：derive_tool_spec 校验可选 `domain` 标签。
+- `admin_mcp.grant_tool`：授权方向按 governance.domain 校验禁行域，
+  跨域专属工具授权 agent/cs 直接 400。
+- `admin_bundles.grant_bundle`：动态成员逐工具按 governance.domain 校验
+  （堵住「bundle 标签无关但成员工具是 travel 域」的洞）；`_VALID_DOMAINS`
+  改为引用 DOMAIN_LABELS。
+- 测试卫生修复：test_admin_bundles_api 清理 fixture 的 created_by 前缀
+  失配（实库为 `user:<id>`），残留行曾致重名 409。
+
+### 验证
+
+- `pytest backend/tests/mcp_registry/ backend/tests/api/test_admin_bundles_api.py`
+  → **69 passed**；新增 E2E `TestToolDomainGrantBoundary` 2 passed
+  （travel 域授权 agent/cs 拒、general 放行、cs 域 cs 过 agent 拒、
+  非法 domain 审核拒绝）。
+- 至此决策 #15 的服务端拒绝点闭环：bundle 域标签 + 静态成员根 + 动态
+  工具 governance.domain + 运行门白名单∩非域专属，四层校验。
+
+### 下一批剩余
+
+- 治理配置发布/回滚 + 配置导入（#08/#14 收口；/releases 第一档前置）。
+- 健康监测/Discovery 增强（#16/#18）。
