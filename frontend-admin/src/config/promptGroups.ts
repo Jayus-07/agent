@@ -1,5 +1,5 @@
 import type { LucideIcon } from 'lucide-react'
-import { Headset, Database, Table, FileText } from 'lucide-react'
+import { Headset, Database, Table, FileText, Wrench } from 'lucide-react'
 
 export interface PromptGroup {
   id: string
@@ -25,6 +25,14 @@ export const PROMPT_GROUPS: PromptGroup[] = [
   { id: 'rag', label: 'RAG', icon: Database, keys: ['rag.qa'] },
   { id: 'sql', label: 'SQL Agent', icon: Table, keys: ['sql.generator'] },
   { id: 'report', label: 'Report Agent', icon: FileText, keys: ['business_report.polish'] },
+  {
+    id: 'tool_governance',
+    label: '工具治理（发现与选择）',
+    icon: Wrench,
+    keys: [
+      'router.tool_selector',
+    ],
+  },
 ]
 
 export const WHITELIST_KEYS = PROMPT_GROUPS.flatMap(g => g.keys)

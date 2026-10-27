@@ -165,6 +165,101 @@ def _check_tool_contract_lock() -> dict:
     )
 
 
+def _check_dynamic_registry_sync(
+    issues: list[str], counts: dict,
+) -> None:
+    """动态治理链对账的同步部分：快照 vs bundle 引用。"""
+    from backend.infra.bundle_registry import store as bundle_store
+    from backend.infra.mcp_registry import store as mcp_store
+
+    snap = mcp_store.snapshot()
+    counts["runtime_tools"] = len(snap.tools)
+    counts["derive_errors"] = len(snap.errors)
+    for capability, reason in snap.errors[:10]:
+        issues.append(f"派生失败 {capability}: {reason}")
+
+    # bundle 引用对账（快照未加载时跳过，不误报）
+    bsnap = bundle_store.snapshot()
+    counts["bundles"] = len(bsnap.bundles)
+    if bsnap.loaded:
+        known = set(snap.tools) | {
+            c.name for c in _manifest_capabilities()}
+        for bid, caps in bsnap.items.items():
+            for cap in caps:
+                if cap.startswith("mcp.") and cap not in known:
+                    issues.append(
+                        f"bundle {bsnap.bundles.get(bid, {}).get('name', bid)} "
+                        f"引用未生效的动态能力: {cap}")
+        counts["bundle_grants"] = len(bsnap.grants)
+
+
+async def _check_dynamic_registry_db(
+    issues: list[str], counts: dict,
+) -> None:
+    """动态治理链对账的 DB 部分：凭据引用 + invocation 合法性。"""
+    from sqlalchemy import text
+
+    from backend.infra.mcp_registry import specs as spec_lib
+    from backend.memory.database import get_session
+
+    async for session in get_session():
+        rows = (await session.execute(text(
+            "SELECT c.name, c.auth_type, "
+            "k.connection_id AS has_cred "
+            "FROM ai.mcp_connections c "
+            "LEFT JOIN ai.mcp_connection_credentials k "
+            "ON k.connection_id = c.id WHERE c.enabled"
+        ))).mappings().all()
+        counts["connections"] = len(rows)
+        for r in rows:
+            if r["auth_type"] == "static_bearer" and not r["has_cred"]:
+                issues.append(
+                    f"连接 {r['name']} 声明 Bearer 凭据但密文行缺失")
+        inv_rows = (await session.execute(text(
+            "SELECT capability_slug, invocation FROM ai.mcp_tools "
+            "WHERE status IN ('approved', 'pending')"
+        ))).mappings().all()
+        # invocation 合法性走统一校验器（fail-fast 语义复用）
+        bad = 0
+        for r in inv_rows:
+            try:
+                spec_lib.validate_invocation(
+                    dict(r["invocation"] or {}), None)
+            except spec_lib.SpecDeriveError as exc:
+                bad += 1
+                if len(issues) < 20:
+                    issues.append(
+                        f"工具 {r['capability_slug']} 调用定义非法: {exc}")
+        counts["invocation_invalid"] = bad
+        break
+
+
+async def _check_dynamic_registry() -> dict:
+    """动态工具治理链对账（Batch 3）：ai.mcp_* 事实源 vs 运行时快照 vs
+    能力包引用 vs 凭据引用。
+
+    检查项：
+      - 派生失败（derive error）的工具：审核配置或调用定义非法；
+      - bundle 成员引用未生效的动态 capability（悬空授权）；
+      - 连接声明 Bearer 凭据但密文行缺失；
+      - invocation 非法（旧数据未过新校验）。
+    """
+    issues: list[str] = []
+    counts: dict = {}
+    try:
+        _check_dynamic_registry_sync(issues, counts)
+        await _check_dynamic_registry_db(issues, counts)
+    except Exception as e:  # noqa: BLE001 — 对账失败不炸整份报告
+        issues.append(f"动态注册表对账异常: {e}")
+    return _section("dynamic_registry", not issues, counts, issues)
+
+
+def _manifest_capabilities():
+    from backend.orchestration.router.manifest import effective_manifest
+
+    return effective_manifest().capabilities
+
+
 @router.get("/report")
 async def consistency_report(request: Request):
     """平台资产一致性单页报告（全部实时派生，只读）。"""
@@ -180,6 +275,8 @@ async def consistency_report(request: Request):
         _check_mcp(),
         _check_tool_contract_lock(),
     ]
+    dynamic_section = await _check_dynamic_registry()
+    sections.append(dynamic_section)
     failed = [s["name"] for s in sections if s["status"] == "FAIL"]
     return {
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),

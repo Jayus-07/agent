@@ -450,6 +450,39 @@ async def tool_inventory(request: Request):
     }
 
 
+@router.get("/constraints")
+async def tool_constraints(request: Request):
+    """工具执行约束视图（Batch 3，预算页只读区块数据源）。
+
+    每个 capability 一行：超时 / 每请求调用上限 / 并发隔离 / 重试 / 熔断，
+    来源 = ToolPolicy（静态策略表）∪ ToolSpec（动态 mcp.* 来自审核
+    governance）。只读派生，不提供写路径——动态工具的约束修改走
+    /admin/mcp 审核流。
+    """
+    await require_editor_user(request)
+    from backend.core.tool_governance.registry import all_tool_specs
+    from backend.core.tool_runtime.policy import get_policy
+
+    rows = []
+    for capability, spec in sorted(all_tool_specs().items()):
+        policy = get_policy(capability)
+        rows.append({
+            "capability": capability,
+            "source": "dynamic" if capability.startswith("mcp.") else "static",
+            "operation": spec.operation.value,
+            "risk_level": spec.risk_level.value,
+            "timeout_ms": policy.timeout_ms,
+            "max_calls_per_request": spec.max_calls_per_request,
+            "bulkhead_limit": policy.bulkhead_limit,
+            "retries": policy.retries,
+            "circuit_breaker": policy.circuit_breaker,
+            "rate_limit_enabled": spec.rate_limit_enabled,
+            "rate_limit_requests": spec.rate_limit_requests,
+            "rate_limit_window_seconds": spec.rate_limit_window_seconds,
+        })
+    return {"count": len(rows), "constraints": rows}
+
+
 @router.get("/errors")
 async def tool_errors(
     request: Request,
