@@ -35,6 +35,10 @@ from backend.config.llm import (
     LLM_RETRY_BACKOFF_BASE,
     OLLAMA_ENABLED,
 )
+from backend.core.tool_runtime.deadline import (
+    check_execution_deadline,
+    provider_deadline_kwargs,
+)
 from backend.infra.llm.factory import get_llm_factory
 from backend.infra.llm.models import (
     canonical_model_id,
@@ -664,6 +668,8 @@ def _handle_terminal_failure(
                 **model_identity_extras(fallback_model),
             ))
             _raise_if_role_call_cancelled(role)
+            # 备用模型同样受执行时限约束：过期抛错走统一失败路径，不再出站。
+            kwargs = provider_deadline_kwargs(fb, kwargs)
             result = _bind_role_fallback_generation_kwargs(fb).invoke(
                 *args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
@@ -759,6 +765,8 @@ async def _ahandle_terminal_failure(
             ))
             fallback = _bind_role_fallback_generation_kwargs(fb)
             _raise_if_role_call_cancelled(role)
+            # 与同步路径一致：备用模型调用前按剩余时限收窄，过期不再出站。
+            kwargs = provider_deadline_kwargs(fb, kwargs)
             result = await fallback.ainvoke(*args, **kwargs)
             logger.info(f"[LLM:resilience] 备用模型接管成功 ({reason})")
             try:
@@ -882,6 +890,9 @@ def _call_with_resilience(attr, *args, **kwargs):
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
         _raise_if_role_call_cancelled(role)
+        # 工具执行时限内：每次尝试前收窄 SDK 读取超时到剩余时限；
+        # 已过期直接抛 TimeoutError，不再发起出站请求（无时限作用域时是 no-op）。
+        kwargs = provider_deadline_kwargs(attr, kwargs)
         call_id = uuid.uuid4().hex
         reserve_started = time.monotonic()
         try:
@@ -1008,6 +1019,8 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     max_retries = _role_max_retries(role)
     for attempt in range(max_retries + 1):
         _raise_if_role_call_cancelled(role)
+        # 与同步路径一致：每次尝试前按剩余执行时限收窄，过期不再出站。
+        kwargs = provider_deadline_kwargs(attr, kwargs)
         reserve_model_call(
             "primary" if attempt == 0 else "retry",
             model_name=model_name,
@@ -2960,8 +2973,12 @@ class _LLMProxy:
                     usage_chunk = None
                     from backend.infra.llm.usage_estimator import StreamTextMeter
                     meter = StreamTextMeter()
+                    # 执行时限内：按剩余时限收窄读取超时（生成器体惰性执行，此时才生效）。
+                    kwargs = provider_deadline_kwargs(attr, kwargs)
                     try:
                         async for chunk in attr(*args, **kwargs):
+                            # chunk 边界检查：单次 read 超时≠总时长上限
+                            check_execution_deadline()
                             # 携带 usage_metadata 的 chunk（通常为最后一个）留作用量记录
                             if getattr(chunk, "usage_metadata", None):
                                 usage_chunk = chunk
@@ -3026,12 +3043,17 @@ class _LLMProxy:
                     meter = StreamTextMeter()
                     try:
                         for attempt in range(LLM_MAX_RETRIES + 1):
+                            # 执行时限过期不再发起新尝试；每次尝试前按剩余时限收窄读取超时。
+                            check_execution_deadline()
+                            kwargs = provider_deadline_kwargs(attr, kwargs)
                             reserve_model_call(
                                 "primary" if attempt == 0 else "retry",
                                 model_name=get_active_model_name(),
                             )
                             try:
                                 for chunk in attr(*args, **kwargs):
+                                    # chunk 边界检查：单次 read 超时≠总时长上限
+                                    check_execution_deadline()
                                     if getattr(chunk, "usage_metadata", None):
                                         usage_chunk = chunk
                                     wrapped = _wrap_result(chunk, strip=False)

@@ -41,6 +41,12 @@ _RETRIEVE_TIMEOUT_S = 30.0
 # 审核拒绝会执行 BM25 重建，允许覆盖中等规模知识库的清理耗时
 _REVIEW_TIMEOUT_S = 300.0
 
+# 父请求工具执行时限经此响应头传给 rag-service（相对剩余秒数，非绝对时钟，
+# 服务端以自身单调钟还原）。仅内部令牌链路可达，不构成跨机时钟假设。
+_DEADLINE_HEADER = "X-Agent-Deadline-Seconds"
+# 发给服务端的时限扣回传余量：服务端完成+响应需在客户端读超时前回来
+_DEADLINE_SEND_MARGIN_S = 1.0
+
 
 def _effective_tenant_id(tenant_id: str) -> str:
     value = str(tenant_id or "").strip()
@@ -90,6 +96,28 @@ def _set_child_trace_link(parent_trace, span, old_id: str | None, new_id: str | 
         logger.debug("[RAGProxy] 子 Trace 关联更新失败", exc_info=True)
 
 
+def _deadline_request_parts(
+    deadline_s: float | None,
+) -> tuple[dict[str, str], float | httpx.Timeout]:
+    """由剩余时限推导 ask 请求头与请求级超时。
+
+    无时限 → ({}, _ASK_TIMEOUT_S)（旧行为）；有时限 →
+    （时限头，封顶后的四段超时）。显式四段超时同时修正 ask 此前
+    per-request 浮点把 connect 也放大到 300s 的旧不一致（对齐客户端
+    长短分离设计：connect 短快速失败，read 等待生成）。
+    """
+    if deadline_s is None:
+        return {}, _ASK_TIMEOUT_S
+    read_cap = max(0.1, min(_ASK_TIMEOUT_S, deadline_s))
+    timeout: float | httpx.Timeout = httpx.Timeout(
+        connect=5.0, read=read_cap, write=10.0, pool=5.0,
+    )
+    header = {
+        _DEADLINE_HEADER: f"{max(0.0, deadline_s - _DEADLINE_SEND_MARGIN_S):.3f}",
+    }
+    return header, timeout
+
+
 class RAGServiceProxy:
     """RAG 服务远端代理 —— 与 RAGPipeline 公共入口同签名。
 
@@ -131,6 +159,28 @@ class RAGServiceProxy:
         tenant_id = _effective_tenant_id(tenant_id)
         try:
             headers = {}
+            # 父请求在工具执行时限内（SafeToolExecutor 作用域）时：
+            #   1) 读等待同步封顶到剩余时限 —— 父请求 wait_for 取消后，
+            #      同步线程不再在 300s 读上空转（线程池/连接占用）；
+            #   2) 剩余时限随响应头下发，rag-service 以本地单调钟还原并
+            #      收窄其内部 LLM 读取超时，消除父子时限不一致。
+            # 无作用域（后台/独立调用）时两者都不变。
+            deadline_s = None
+            try:
+                from backend.core.tool_runtime.deadline import (
+                    remaining_execution_seconds,
+                )
+
+                deadline_s = remaining_execution_seconds()
+            except Exception:  # noqa: BLE001 — 时限读取失败不阻断问答
+                pass
+            deadline_headers, request_timeout = _deadline_request_parts(deadline_s)
+            headers.update(deadline_headers)
+            if deadline_s is not None:
+                logger.info(
+                    "[RAG client deadline] remaining=%.2fs header=%s",
+                    deadline_s, deadline_headers.get(_DEADLINE_HEADER, ""),
+                )
             parent_trace = None
             parent_span = None
             reserved_child_trace_id = None
@@ -170,7 +220,7 @@ class RAGServiceProxy:
                     "roles": list(roles),
                     "persist_memory": persist_memory,
                 },
-                timeout=_ASK_TIMEOUT_S,
+                timeout=request_timeout,
             )
             resp.raise_for_status()
             timing = {"roundtrip_ms": round((time.perf_counter() - http_started) * 1000, 1)}
