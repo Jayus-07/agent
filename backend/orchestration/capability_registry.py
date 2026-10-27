@@ -180,13 +180,20 @@ class ToolRegistry:
         return "\n".join(lines)
 
     def get_capabilities_schema_text(self) -> str:
-        """生成完整的 capability schema 文本，用于 Critique prompt"""
+        """生成完整的 capability schema 文本，用于 Critique prompt。
+
+        与 normalize_plan 同源（effective_manifest）：静态 manifest +
+        动态 mcp.*——Critique 若只见静态清单，会把动态步骤判为无效并
+        "修正"掉，与 normalize_plan 的白名单问题同构。
+        """
+        from backend.orchestration.router.manifest import effective_manifest
+
         lines = []
-        for cap_name in self.get_available_capabilities():
-            schema = self.get_schema(cap_name)
+        for declaration in effective_manifest().capabilities:
+            schema = self.get_schema(declaration.name)
             if not schema:
                 continue
-            lines.append(f"### {cap_name}")
+            lines.append(f"### {declaration.name}")
             lines.append(f"描述: {schema['description']}")
             lines.append("参数:")
             lines.append(format_params_schema(schema["params"]))
