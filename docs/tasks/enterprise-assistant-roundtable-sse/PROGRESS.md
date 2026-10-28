@@ -1,5 +1,36 @@
 # 进度
 
+## 2026-10-28：发布评测链真跑通——8 轮迭代修复判分体系（62.5%，剩 4 题两类真缺陷）
+
+- 用户指示作为持久计划继续。本轮 9 个提交，发布评测从"从不执行"修到"真实、可复现、判答案"：
+  - **逐题预算**（0c22c2c）：发布评测整轮共享 32k tokens，26 题第 8 题即 request_tokens 超限 19 题 error；`managed_case_budget` 去掉 managed 门槛，所有评测路径按题拆预算（契约变更，更新 test_unmanaged→test_builtin_suite_cases_now_get_per_case_budget）。
+  - **失败可重评**（2862e96）：`mark_running` 放行 failed→running（新 external_run_id；仓储 SQL 同步），环境类失败修复后可直接重考。
+  - **重排超时 4→10→15s**（9b0c997/eeca3b9）：GPU batch=2 在真实候选批实测 6.9-7.2s（24×512token），4s 是 CPU 时代值——**线上长候选查询此前每次都静默丢排序**。
+  - **检索时限 8→20s**（ee8805f）：trace 实证 `total_deadline_expired`——检索+重排≈8-9s 顶穿 8s 预算，重排结果被按"迟到"丢弃，未排序候选挤掉精确命中行（SKU 000001 rerank 打分 0.9884 却落选）。此修复后 rerank_failed 全消失，CSV 合同表格题（UFQ-011）开始答对。
+  - **发布评测启用云生成**（5439bc6）：judge=True（此前全题 ans_len=0，基于答案的用例恒不可判）。
+  - **答案判分全面生效**（89f624c）：S6/S7/事实覆盖判分此前仅 managed 题集生效——检索满分+胡乱拒答也能 pass。
+  - **忠实度 claim 清洗**（993c842）：`_split_claims` 剥列表编号与 [E1] 引用标记——按句号切分后它们成独立微 claim 必然无命中，带规范引用的忠实答案被系统性扣分（UFQ-007 正确答案 S7=0.67）。
+  - **评测生成 temperature=0**（37ae046）：0.1 采样致同检索结果跨轮次在正确作答/拒答话术间抖动。
+- **通过率轨迹**（每轮一个真缺陷）：0% → 62.5%（假判分）→ 50% → 25% → 50% → **62.5% 稳定**（desktop_upload_smoke 8 题，temperature=0 后逐题结果可复现）。
+- **剩余 4 题两类**：
+  1. **UFQ-016 题目自身缺陷**：三个 CSV 同 SKU 00012345 价格各异（380/207/886），模型合理拒答（答"资料未提及"），评测期待单一答案——需修题或改为"说明歧义"预期。
+  2. **UFQ-016/022 前导零 SKU 召回缺陷（真实业务问题）**：SKU 000001 行在向量库存在、重排打分 0.9884，但融合候选中缺席（vector=10+bm25=60 融合后未进）；CustomRetriever 三层路由可能在 SKU 数字查询上走了错误分层。埋点补丁未生效（内部函数引用），需代码级下钻 CustomRetriever/hybrid 路由。这影响生产 CSV/表格知识库的数字精确查询。
+- 门禁其余构成：smoke 层阈值 95% 是 8 题样本上的严格要求（0.5 题容错）；desktop_upload_full（24 题）作为正式门禁更合理。
+- 关联修复（同日早前）：strict 门禁识别 V4 结构化标注+拒答样本（ed8bcaa）、memory.extract 归属绑定、rerank 本地推理计价（usage_source=estimated）。
+- 桌面换代合并（3d923b3/89985d1）：codex/rag-eval-testset → main，28 文档入库激活（含 9 个近重复按设计审核激活）、24 题全标注；管理端 dataset-synthesis E2E 通过。
+- **下一步**：①SKU 数字召回下钻（CustomRetriever 路由→bm25 分词→RRF 融合逐层排查）；②UFQ-016 修题；③smoke 过线后 prompt v2 approve→publish；④复测发货/发票+计费验证；⑤browser-use 完整复测+P95 收口。任务分支领先 main 多个提交待合并。
+
+## 2026-10-28：方案A执行——桌面评测换代合并与发布链打通
+
+- 用户拍板方案(A)。合并 `codex/rag-eval-testset`（05bde0e，10-21 停在分支未并）到本地 main（3d923b3）：`6.0.0-desktop-candidate.1` 全套——28 文档 fixtures（用户桌面文件入库：16 类格式场景含 CSV/Excel/扫描件/100p+500p 长 PDF/近重复）、24 题全标注 cases（ground_truth_context 100%，与 strict 门禁结构化识别配套）、desktop_upload_full/smoke 两 suite、快照/CI workflow 配套更新。唯一冲突 test_travel_golden_v1（workflow 断言）按合并后实际解决。
+- 合并暴露 2 个测试失真并修正（89985d1）：rag_smoke 路径判定事实源已在 path_filter 脚本（断言改指脚本）；report-worker 内存断言 768m 已被 10-26 资源档位决策（512m）取代（该失败在合并前 main 已存在，属既有失真非本分支引入）。评测组 385 passed。
+- 逐题预算修复补提交（0c22c2c，此前只在工作区已部署未提交）；任务分支同步 main 后从本 worktree 重建（exit 0，容器 healthy）。
+- **旧 fixture 索引（2026-09-18 版 16 文档）先期完成**：容器内官方脚本 + 注册表装载 wrapper（裸跑脚本会因缺 DB 绑定报"未配置 embedding 供应商"——脚本进程需先 refresh_registry + prompt snapshot，已记录为脚本改进项），16/16 成功、244 chunks、MRR 0→0.83（regression suite 75.9% 通过、smoke 94.7%、core 100%）。
+- **标注-语料漂移根因确认**：main 上 5.0.0-unified 标注集（期望 400-000-0048/客服时间节）对应旧语料，而 0244a7e（8-26）已把 data/docs/rag_test_kb 重建成新内容（400-000-0000）——main 上这对组合本就互斥，评测此前从未真正跑通所以未暴露；方案A的配套换代（语料+标注同源）是正解。
+- **换代 fixtures（28 文档）入库进行中**：容器内同 wrapper 流程重跑，新版本向量已开始写入。完成后跑 desktop_upload_smoke/full 验证门禁，随后 prompt v2 release（新 suite）→ approve → publish → 复测发货/发票。
+- 管理端"生成评测集"（dataset-synthesis）E2E 验证通过：建测试 KB → 上传桌面文件夹文档（md/txt）→ 冻结快照 → Ragas 合成 5 题候选（question/reference_answer/evidence 三要素齐全，数值防幻觉校验生效）→ pending_review。观察项：5 题含 2 组重复问法，候选去重可作增强；路由前缀为 /api/evaluation/dataset-synthesis（evaluation_datasets 前缀嵌套）；.txt 上传需 text/plain MIME。
+- 失败 release 不可重评（mark_running 仅 pending→running）：本轮用换 suite 维度绕过三次（pr_smoke→quick_26→pr_baseline→regression），重评入口列为改进项。
+
 ## 2026-10-28：方案(a)实施——发布门禁打通，新阻塞为本机 eval KB 快照
 
 - 用户拍板方案(a)。实施发现"缺 ground_truth"实为 **schema 适配缺口**：V4 canonical（cases.jsonl）把参考依据放在 `expected.ground_truth_context`（含原文片段+来源文档），strict 门禁只认旧扁平 `expected.ground_truth`；且 RC-061 为负向拒答样本（should_reject=true），无答案字段即标注本身。修复 `_strict_fields_check`：识别 V4 结构化上下文 + should_reject 契约（门槛不放松，空 context/空答案仍拦截），新增 4 用例（15 项评测组全过）。
