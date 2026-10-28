@@ -60,7 +60,12 @@ def _warm_external_models() -> None:
         reranker = get_reranker_backend()
         warm = getattr(reranker, "rank", None)
         if callable(warm):
-            warm("预热", ["预热文档一", "预热文档二"], top_k=2)
+            # GPU 重排 kernel 按批大小分桶编译：2 文档预热覆盖不了真实
+            # 候选批量（首轮 desktop smoke 仍 7/8 超时、末题通过即此特征），
+            # 用 12 文档 × 2 轮覆盖典型批大小并留足编译时间。
+            docs = [f"预热文档{i}：知识库检索与重排链路验证。" for i in range(12)]
+            for _ in range(2):
+                warm("发布评测预热查询", docs, top_k=5)
         logger.info("[prompt_release] 外置模型预热完成")
     except Exception as exc:  # noqa: BLE001 — 预热失败不阻塞评测
         logger.warning("[prompt_release] 外置模型预热失败（继续评测）: %s", exc)
