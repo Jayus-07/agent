@@ -12,7 +12,11 @@ question 透传"的旧行为。
 降级策略：
   - 多候选时 LLM 超时/异常/无 tool_calls/校验重试失败 → 澄清，不执行首项
   - 单候选也必须有明确的 FC match；模型未选择时不能硬执行
-  - 选择越界/参数校验失败 → 带反馈重试 1 次
+  - 选择越界/参数校验失败 → 带反馈重试，重试上限 = Discovery 策略
+    max_rounds（默认 2，兼容既有「首试 + 重试 1 次」）；adaptive/reasoning
+    模式失败轮后重算扩展候选（权限收窄不放宽），fast 固定候选（B2）
+  - LLM token 累计超 policy.cost_budget_milliunits → 停止下一轮，澄清
+    block_reason=discovery_cost_budget（只记账 + 降级，不设硬闸，B2）
 """
 from __future__ import annotations
 
@@ -129,9 +133,25 @@ def _passthrough(state: dict, reason: str, capability: str = "") -> dict:
     return result
 
 
-def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
-    """多候选选择失败时阻断执行，交给上层输出澄清提示。"""
+def _clarify_selection(state: dict, reason: str, candidates: list[str],
+                       discovery_rounds: int | None = None,
+                       policy_mode: str = "") -> dict:
+    """多候选选择失败时阻断执行，交给上层输出澄清提示。
+
+    discovery_rounds / policy_mode 由 FC 主循环透传（B2 快照字段，
+    供 trace/评测归因；直通等非 FC 路径不带）。
+    """
     _record("clarify", reason)
+    snapshot = {
+        "source": "clarify",
+        "reason": reason,
+        "candidates": candidates,
+        "next_action": "clarify",
+    }
+    if discovery_rounds is not None:
+        snapshot["discovery_rounds"] = discovery_rounds
+    if policy_mode:
+        snapshot["policy_mode"] = policy_mode
     return {
         **state,
         "selection_blocked": True,
@@ -140,12 +160,7 @@ def _clarify_selection(state: dict, reason: str, candidates: list[str]) -> dict:
             "options": list(candidates),
             "source": reason,
         },
-        "_tool_selection": {
-            "source": "clarify",
-            "reason": reason,
-            "candidates": candidates,
-            "next_action": "clarify",
-        },
+        "_tool_selection": snapshot,
     }
 
 
@@ -184,12 +199,15 @@ def _build_user_prompt(query: str, valid_caps: list[str],
     return "\n".join(lines)
 
 
-def _converge_candidates(candidates: list, domain: str = "") -> list[str]:
-    """候选收敛：去重 + 当前域已注册 + 截断到 MAX_FC_CANDIDATES。
+def _converge_candidates(candidates: list, domain: str = "",
+                         limit: int | None = None) -> list[str]:
+    """候选收敛：去重 + 当前域已注册 + 截断到上限（默认 MAX_FC_CANDIDATES）。
 
     以 tool_registry 注册表为单一事实来源（ALL_CAPABILITIES 静态表缺
     competitor.analyze，不可作为校验依据）。
+    limit 供 Discovery 策略放宽（policy.top_k 仅在更大时放宽，B2）。
     """
+    max_candidates = max(1, int(limit or MAX_FC_CANDIDATES))
     allowed_for_domain: set[str] | None = None
     if domain:
         try:
@@ -217,9 +235,85 @@ def _converge_candidates(candidates: list, domain: str = "") -> list[str]:
                 and name in allowed_for_domain):
             seen.add(name)
             valid.append(name)
-            if len(valid) >= MAX_FC_CANDIDATES:
+            if len(valid) >= max_candidates:
                 break
     return valid
+
+
+# ── Discovery 策略接入（B2）：多轮重新发现 + 费用记账 ──────────────
+
+def _runtime_discovery_policy():
+    """运行链 Discovery 策略：discovery.service 统一 loader（延迟 import，
+    照本模块既有模式）。
+
+    loader 内部带 TTL 缓存；DB 异常/模块缺失回退代码默认值 + warning，
+    不阻塞选择链（与 load_active_policy 读侧软失败同语义）。
+    """
+    try:
+        from backend.core.request_context import get_tool_tenant_id
+        from backend.orchestration.discovery.service import load_policy_for_runtime
+
+        return load_policy_for_runtime(get_tool_tenant_id())
+    except Exception as exc:  # noqa: BLE001 — 策略读取失败不阻断选择链
+        logger.warning(f"[ToolSelector] Discovery 策略读取失败，按默认值: {exc}")
+        from backend.orchestration.discovery.service import DiscoveryPolicy
+
+        return DiscoveryPolicy()
+
+
+def _selector_round_tokens(raw) -> int:
+    """单轮 LLM 响应的 token 用量（复用 observability 统一解析层）。
+
+    usage 缺失按 0 记账（local 模式禁伪造 token，与 TokenTracker 同口径）。
+    """
+    try:
+        from backend.observability.usage_parse import parse_provider_usage
+
+        return int(parse_provider_usage(raw).get("total_tokens") or 0)
+    except Exception:
+        return 0
+
+
+def _expand_round_candidates(state: dict, raw_upstream: list[str],
+                             current_caps: list[str], mode: str,
+                             limit: int) -> list[str]:
+    """失败轮之后的候选重算（B2 多轮重新发现）。
+
+    - fast：固定候选（与既有两轮重试行为一致，零变化保障）；
+    - adaptive：上游原始候选 ∪ planner 可见集中同前缀能力；
+    - reasoning：planner 可见全集。
+    扩展池统一过 filter_capabilities_for_state（与执行期门同谓词的产品/域
+    收窄，不得把未授权能力的描述送进 LLM），再走 _converge_candidates
+    （注册 + 域 registry + 去重 + top_k 截断）。
+    """
+    if mode == "fast":
+        return list(current_caps)
+    try:
+        from backend.orchestration.router.manifest import effective_manifest
+
+        visible = list(effective_manifest().planner_visible_capability_names)
+    except Exception:
+        return list(current_caps)
+    if mode == "reasoning":
+        pool = list(dict.fromkeys(list(raw_upstream) + visible))
+    else:  # adaptive：仅扩同前缀（首段）能力
+        prefixes = {n.split(".", 1)[0] for n in current_caps if "." in n}
+        pool = list(dict.fromkeys(
+            list(raw_upstream)
+            + [n for n in visible if n.split(".", 1)[0] in prefixes]))
+    try:
+        from backend.core.product_context import filter_capabilities_for_state
+
+        pool = list(filter_capabilities_for_state(pool, state))
+    except Exception:
+        # 权限面不可用时不放宽：后续 _converge_candidates 的注册 + 域
+        # registry 过滤仍会把未注册/域外能力剔掉
+        pass
+    return _converge_candidates(
+        [{"name": n} for n in pool],
+        str(state.get("domain") or ""),
+        limit=limit,
+    )
 
 
 # ── selector 结果校验（路由专项 Step 2：candidate constraints → validation）──
@@ -290,9 +384,10 @@ def _parse_text_tool_call(content: str, fn2cap: dict[str, str]) -> tuple[str, di
     return cap, args if isinstance(args, dict) else {}
 
 
-def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
+def _select_via_fc(state: dict, valid_caps: list[str], t0: float,
+                   policy=None) -> dict:
     """FC 选择入口：包 LLM span（trace 瀑布图中可见耗时/token/模型），
-    决策逻辑在 _fc_decide。"""
+    决策逻辑在 _fc_decide（policy 为 B2 Discovery 策略，None=代码默认）。"""
     from backend.observability.tracer import SpanKind, trace_collector
 
     span = None
@@ -311,7 +406,7 @@ def _select_via_fc(state: dict, valid_caps: list[str], t0: float) -> dict:
     except Exception:
         span = None  # 埋点软失败不影响决策
 
-    result = _fc_decide(state, valid_caps, t0)
+    result = _fc_decide(state, valid_caps, t0, policy=policy)
     if span is not None:
         try:
             sel = result.get("_tool_selection") or {}
@@ -359,17 +454,39 @@ def _selector_degrade(state: dict, reason: str) -> dict:
     return _clarify_selection(state, reason, candidates)
 
 
-def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
-    """FC 决策主循环：最多 2 次尝试（首试 + 带反馈重试 1 次）。
+def _fc_decide(state: dict, valid_caps: list[str], t0: float,
+               policy=None) -> dict:
+    """FC 决策主循环（B2 多轮重新发现）：最多 policy.max_rounds 轮
+    （默认 2，兼容既有「首试 + 带反馈重试 1 次」）。
 
     P1 阶段 2：selector 只能消费 selector_budget（35% × T，绝对窗口），
-    每次尝试前重算剩余，耗尽即降级 —— 不得侵占工具执行保底预算。
+    每轮前重算剩余，耗尽即降级 —— 不得侵占工具执行保底预算。
+    B2 追加两闸（均不改变默认等价性）：
+      - 时间：既有 selector_remaining_ms 每轮检查；
+      - 费用：LLM token 用量按轮累计，超过 policy.cost_budget_milliunits
+        换算值时停止下一轮（当前轮完成），block_reason=discovery_cost_budget。
+        记账口径（诚实声明）：token_tracker/price_usage 是按模型价格即时
+        单调用计价（CNY/USD），无「毫单位」现成换算；DiscoveryPolicy 的
+        cost_budget_milliunits 亦无单位定义。B2 选定 1 milliunit = 1000
+        token 的纯 token 口径记账，真实金额口径待 Billing 统一后替换。
+      - 候选：mode=fast 固定候选（既有行为）；adaptive/reasoning 在越界
+        选择或参数校验失败后重算扩展候选（_expand_round_candidates，
+        权限收窄不放宽）。
     """
+    pol = policy if policy is not None else _runtime_discovery_policy()
+    mode = pol.mode
+    max_rounds = max(1, int(pol.max_rounds))
+    effective_top_k = max(MAX_FC_CANDIDATES, int(pol.top_k))
+    budget_tokens = max(0, int(pol.cost_budget_milliunits)) * 1000
+
     query = state.get("question", "")
     decision = state.get("route_decision") or {}
-    tools, fn2cap = capabilities_to_tools(valid_caps)
-    if not tools:
-        return _clarify_selection(state, "schema_convert_failed", valid_caps)
+    raw_upstream = [
+        str(c.get("name")) for c in (decision.get("candidates") or [])
+        if isinstance(c, dict) and c.get("name")
+    ]
+    current_caps = list(valid_caps)
+    spent_tokens = 0
 
     deadline = _deadline_from_state(state)
     selector_budget_ms = deadline.selector_budget_ms if deadline is not None else None
@@ -385,16 +502,13 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 reason="selector_budget_exhausted",
             ),
         )
-        return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
+        return _clarify_selection(state, "selector_budget_exhausted", current_caps)
 
-    # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
-    # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录
-    bound = bind_tools_for_model(_configured_tool_selector_model(), tools) or llm.bind_tools(tools)
     timeout_s = _selector_timeout()
     llm_retries = _selector_llm_retries()
     feedback = ""
-    for attempt in range(2):
-        # selector 预算闸（每次尝试前重算剩余；绝对窗口 = 预算 − 请求已耗时）
+    for attempt in range(max_rounds):
+        # selector 预算闸（每轮前重算剩余；绝对窗口 = 预算 − 请求已耗时）
         if deadline is not None:
             selector_remaining_ms = deadline.selector_remaining_ms()
             if selector_remaining_ms <= 0:
@@ -406,9 +520,35 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                         reason="selector_budget_exhausted",
                     ),
                 )
-                return _clarify_selection(state, "selector_budget_exhausted", valid_caps)
+                return _clarify_selection(
+                    state, "selector_budget_exhausted", current_caps,
+                    discovery_rounds=attempt, policy_mode=mode)
             # 单次尝试超时同时被角色策略与 selector 剩余预算封顶
             timeout_s = min(timeout_s, selector_remaining_ms / 1000)
+
+        # 费用闸：上一轮累计 token 已超预算 → 停止下一轮（当前轮已完成）。
+        # 首轮 spent=0 不触发（含预算 0：首轮后累计必超，第二轮起拦截）。
+        if spent_tokens > budget_tokens:
+            logger.warning(
+                "[ToolSelector] Discovery 费用预算超限，停止下一轮 "
+                "spent_tokens=%s budget_tokens=%s round=%s mode=%s",
+                spent_tokens, budget_tokens, attempt + 1, mode)
+            _selector_deadline_log(deadline, "selector_skip",
+                                   "discovery_cost_budget")
+            return _clarify_selection(
+                state, "discovery_cost_budget", current_caps,
+                discovery_rounds=attempt, policy_mode=mode)
+
+        tools, fn2cap = capabilities_to_tools(current_caps)
+        if not tools:
+            return _clarify_selection(
+                state, "schema_convert_failed", current_caps,
+                discovery_rounds=attempt, policy_mode=mode)
+
+        # 专用轻量模型优先（选择+填参小任务），未配置/不可用回退全局模型；
+        # 两者都经 _BoundLLMProxy 走限流/韧性链/token 记录。
+        # 每轮重建绑定：扩展轮的候选集可能变化（B2）。
+        bound = bind_tools_for_model(_configured_tool_selector_model(), tools) or llm.bind_tools(tools)
 
         # LLM 调用层重试（角色策略 max_retries）：超时/异常逐次重试，仍失败
         # 才落到底下的业务级反馈重试 / clarify
@@ -420,7 +560,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                 default_value=None,
                 error_message=f"[ToolSelector] LLM 超时 ({timeout_s}s)",
                 input=[("system", _selector_system_prompt()),
-                       ("human", _build_user_prompt(query, valid_caps, decision, feedback))],
+                       ("human", _build_user_prompt(query, current_caps, decision, feedback))],
                 max_tokens=TOOL_SELECTOR_LLM_MAX_TOKENS,
             )
             if raw is not None:
@@ -429,7 +569,12 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             # FC 故障时不能因候选分数或候选数量自动执行。
             logger.warning("[ToolSelector] LLM 超时/异常")
             _selector_deadline_log(deadline, "selector_timeout", "llm_failed")
-            return _clarify_selection(state, "llm_failed", valid_caps)
+            return _clarify_selection(
+                state, "llm_failed", current_caps,
+                discovery_rounds=attempt + 1, policy_mode=mode)
+
+        # 费用记账（B2）：本轮响应 usage 入账，轮首闸消费
+        spent_tokens += _selector_round_tokens(raw)
 
         tool_calls = getattr(raw, "tool_calls", None) or []
         fit = "match"
@@ -450,9 +595,11 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
                     **state,
                     "selection_blocked": True,
                     "_tool_selection": {
-                        "source": "no_match", "candidates": valid_caps,
+                        "source": "no_match", "candidates": current_caps,
                         "reason": "model_declined",
                         "next_action": "clarify",
+                        "discovery_rounds": attempt + 1,
+                        "policy_mode": mode,
                         "elapsed_ms": elapsed_ms,
                     },
                 }
@@ -465,31 +612,39 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             if cap is None:
                 feedback = f"工具 {tc.get('name')} 不在候选列表内，只能从候选工具中选择。"
                 logger.warning(f"[ToolSelector] 越界选择 {tc.get('name')}，重试")
+                # B2：失败后重算候选（fast 固定；adaptive/reasoning 扩展）
+                current_caps = _expand_round_candidates(
+                    state, raw_upstream, current_caps, mode, effective_top_k)
                 continue
             if fit not in {"match", "no_match"}:
-                return _clarify_selection(state, "invalid_intent_fit", valid_caps)
+                return _clarify_selection(
+                    state, "invalid_intent_fit", current_caps,
+                    discovery_rounds=attempt + 1, policy_mode=mode)
             if fit == "no_match":
                 return _clarify_selection(
-                    state, "tool_intent_mismatch", valid_caps
-                )
+                    state, "tool_intent_mismatch", current_caps,
+                    discovery_rounds=attempt + 1, policy_mode=mode)
 
         # selector 结果校验（Step 2）：非法选择直接拒绝进现有 fallback，
         # 不做带反馈重试（重试只会教模型钻规则，不会改变合法性）
-        reject_reason = _validate_selection(cap, valid_caps,
+        reject_reason = _validate_selection(cap, current_caps,
                                             str(state.get("domain") or ""))
         if reject_reason:
             logger.warning(
                 f"[ToolSelector] 非法选择 {cap}（{reject_reason}），直接拒绝")
             _record("rejected", reject_reason, capability=cap)
             return _clarify_selection(
-                state, f"selection_rejected:{reject_reason}", valid_caps
-            )
+                state, f"selection_rejected:{reject_reason}", current_caps,
+                discovery_rounds=attempt + 1, policy_mode=mode)
 
         schema = tool_registry.get_schema(cap)
         err = validate_params(schema["params"], args) if schema else None
         if err:
             feedback = f"参数校验失败: {err}"
             logger.warning(f"[ToolSelector] {cap} 参数校验失败: {err}，重试")
+            # B2：同越界分支，失败后重算候选再进下一轮
+            current_caps = _expand_round_candidates(
+                state, raw_upstream, current_caps, mode, effective_top_k)
             continue
 
         # 只有声明了 question 的 capability 才能使用旧的 question 回退。
@@ -509,7 +664,7 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
         logger.info(
             f"[ToolSelector] FC 选定 {cap} model={_configured_tool_selector_model() or get_active_model_name()} "
             f"params={list(params.keys())} "
-            f"(attempt={attempt + 1}, {elapsed_ms}ms)"
+            f"(attempt={attempt + 1}/{max_rounds}, mode={mode}, {elapsed_ms}ms)"
         )
         return {
             **state,
@@ -520,13 +675,17 @@ def _fc_decide(state: dict, valid_caps: list[str], t0: float) -> dict:
             "tool_route_mode": state.get("tool_route_mode") or "llm_selection",
             "_tool_selection": {
                 "source": "fc", "capability": cap, "params": params,
-                "candidates": valid_caps, "attempts": attempt + 1,
+                "candidates": current_caps, "attempts": attempt + 1,
+                "discovery_rounds": attempt + 1,
+                "policy_mode": mode,
                 "fit": "match", "selection_reason": reason,
                 "elapsed_ms": int((time.time() - t0) * 1000),
             },
         }
 
-    return _clarify_selection(state, "fc_invalid_after_retry", valid_caps)
+    return _clarify_selection(
+        state, "fc_invalid_after_retry", current_caps,
+        discovery_rounds=max_rounds, policy_mode=mode)
 
 
 def tool_selector_node(state: dict) -> dict:
@@ -594,10 +753,19 @@ def _decide(state: dict) -> dict:
 
     if selection_mode != "llm_selection":
         return _clarify_selection(state, "selection_mode_missing_or_invalid", valid_caps)
+    # B2：首轮候选收敛按 Discovery 策略放宽上限（policy.top_k 仅在大于
+    # 既有 MAX_FC_CANDIDATES 时放宽；默认 3 与现行为等价）。fast_path
+    # 分支不读策略，保持既有 gate 行为零变化。
+    policy = _runtime_discovery_policy()
+    valid_caps = _converge_candidates(
+        candidates,
+        str(state.get("domain") or route_meta.get("domain") or ""),
+        limit=max(MAX_FC_CANDIDATES, int(policy.top_k)),
+    )
     if not valid_caps:
         return _clarify_selection(state, "no_valid_candidates", [])
 
-    return _select_via_fc(state, valid_caps, t0)
+    return _select_via_fc(state, valid_caps, t0, policy=policy)
 
 
 def _write_trace_metadata(result: dict) -> None:
@@ -621,6 +789,8 @@ def _write_trace_metadata(result: dict) -> None:
             "params": sel.get("params"),
             "candidates": sel.get("candidates", []),
             "attempts": sel.get("attempts"),
+            "discovery_rounds": sel.get("discovery_rounds"),
+            "policy_mode": sel.get("policy_mode", ""),
             "model": _configured_tool_selector_model() or get_active_model_name(),
             "elapsed_ms": sel.get("elapsed_ms"),
         }

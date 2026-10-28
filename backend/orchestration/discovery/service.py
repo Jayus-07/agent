@@ -17,8 +17,11 @@ DB 访问：psycopg2 直查，助手照 admin_mcp._query_one/_execute 同款
 """
 from __future__ import annotations
 
+import threading
+import time
 import uuid
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any, Iterator
 
 from backend.shared.logger import logger
@@ -118,6 +121,82 @@ def load_active_policy(tenant_id: str) -> dict[str, Any]:
     if row is None:
         return dict(DEFAULT_POLICY, tenant_id=str(tenant_id or "default"))
     return _policy_row_to_dict(row)
+
+
+# ═══════════════════════════════════════════════════
+# 运行链策略入口（B2）：selector 与管理端共用同一策略事实源
+# ═══════════════════════════════════════════════════
+
+_DISCOVERY_POLICY_MODES = frozenset({"fast", "adaptive", "reasoning"})
+
+# 进程内 TTL 缓存（秒）：与 refresh_registry 的 15s 刷新循环同口径——
+# 选择链热路径零 DB IO，管理员改策略最迟 15s 生效；失败结果同样走负
+# 缓存，避免 DB 不可达时每个请求都撞一次连接超时拖垮选择链。
+_RUNTIME_POLICY_TTL_SECONDS = 15.0
+
+_runtime_policy_cache: dict[str, tuple[float, "DiscoveryPolicy"]] = {}
+_runtime_policy_lock = threading.Lock()
+
+
+@dataclass(frozen=True)
+class DiscoveryPolicy:
+    """运行链消费的策略视图：只含 selector 决策需要的字段（B2）。
+
+    字段默认值与 DEFAULT_POLICY / 迁移 119 列默认一致；非法值在
+    _policy_dict_to_runtime 归一，消费端无需再防御。
+    """
+
+    mode: str = "adaptive"
+    top_k: int = 3
+    max_rounds: int = 2
+    cost_budget_milliunits: int = 50
+    timeout_ms: int = 8000
+
+
+def _policy_dict_to_runtime(d: dict[str, Any]) -> DiscoveryPolicy:
+    """策略 dict → 运行链视图：mode 白名单外回退默认，数值钳制下限。"""
+    mode = str(d.get("mode") or "").strip().lower()
+    if mode not in _DISCOVERY_POLICY_MODES:
+        mode = str(DEFAULT_POLICY["mode"])
+
+    def _int(key: str, minimum: int, fallback: Any) -> int:
+        try:
+            return max(minimum, int(d.get(key)))
+        except (TypeError, ValueError):
+            return int(fallback)
+
+    return DiscoveryPolicy(
+        mode=mode,
+        top_k=_int("top_k", 1, DEFAULT_POLICY["top_k"]),
+        max_rounds=_int("max_rounds", 1, DEFAULT_POLICY["max_rounds"]),
+        cost_budget_milliunits=_int(
+            "cost_budget_milliunits", 0, DEFAULT_POLICY["cost_budget_milliunits"]),
+        timeout_ms=_int("timeout_ms", 1, DEFAULT_POLICY["timeout_ms"]),
+    )
+
+
+def load_policy_for_runtime(tenant_id: str) -> DiscoveryPolicy:
+    """运行链策略入口：active 行 → 代码默认值（照 load_active_policy）。
+
+    DB 异常在 load_active_policy 内回退默认并 log warning，不阻塞选择链；
+    本函数在其上加进程内 TTL 缓存（成功与失败结果都缓存，见常量注释）。
+    """
+    tenant = str(tenant_id or "default")
+    now = time.monotonic()
+    with _runtime_policy_lock:
+        cached = _runtime_policy_cache.get(tenant)
+        if cached is not None and now - cached[0] < _RUNTIME_POLICY_TTL_SECONDS:
+            return cached[1]
+    policy = _policy_dict_to_runtime(load_active_policy(tenant))
+    with _runtime_policy_lock:
+        _runtime_policy_cache[tenant] = (now, policy)
+    return policy
+
+
+def reset_runtime_policy_cache() -> None:
+    """清空进程内策略缓存（测试用；管理端写路径可借此立即生效）。"""
+    with _runtime_policy_lock:
+        _runtime_policy_cache.clear()
 
 
 def load_policies(tenant_id: str) -> list[dict[str, Any]]:

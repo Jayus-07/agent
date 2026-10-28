@@ -91,3 +91,54 @@ def test_identity_contextvar_wrapped_and_reset(monkeypatch):
     assert _current_product_id.get() == "internal"
     assert _current_tenant_id.get() == ""
     assert _current_product_source.get() == "internal_call"
+
+
+# ═══════════════════════════════════════════════════
+# B2：运行链策略入口 load_policy_for_runtime（归一 + TTL 缓存）
+# ═══════════════════════════════════════════════════
+
+class TestLoadPolicyForRuntime:
+    """运行链统一 loader：mode 白名单、数值钳制、进程内 TTL 缓存。"""
+
+    @pytest.fixture(autouse=True)
+    def _clean_cache(self):
+        discovery_service.reset_runtime_policy_cache()
+        yield
+        discovery_service.reset_runtime_policy_cache()
+
+    def test_invalid_mode_falls_back_and_values_clamped(self):
+        pol = discovery_service._policy_dict_to_runtime({
+            "mode": "turbo", "top_k": "5", "max_rounds": 0,
+            "cost_budget_milliunits": -3, "timeout_ms": "x",
+        })
+        assert pol.mode == DEFAULT_POLICY["mode"]  # 白名单外回退默认
+        assert pol.top_k == 5
+        assert pol.max_rounds == 1  # 下限钳制
+        assert pol.cost_budget_milliunits == 0
+        assert pol.timeout_ms == DEFAULT_POLICY["timeout_ms"]  # 非法值回落默认
+
+    def test_ttl_cache_reads_db_once(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            discovery_service, "load_active_policy",
+            lambda tenant_id: calls.append(tenant_id)
+            or dict(DEFAULT_POLICY, mode="reasoning"))
+        p1 = discovery_service.load_policy_for_runtime("t1")
+        p2 = discovery_service.load_policy_for_runtime("t1")
+        assert p1 is p2 and p1.mode == "reasoning"
+        assert len(calls) == 1  # TTL 内第二读走缓存
+        discovery_service.reset_runtime_policy_cache()
+        discovery_service.load_policy_for_runtime("t1")
+        assert len(calls) == 2  # 清缓存后重读
+
+    def test_different_tenants_cached_separately(self, monkeypatch):
+        seen = []
+
+        def _fake_load(tenant_id):
+            seen.append(tenant_id)
+            return dict(DEFAULT_POLICY, tenant_id=tenant_id)
+
+        monkeypatch.setattr(discovery_service, "load_active_policy", _fake_load)
+        assert discovery_service.load_policy_for_runtime("a").mode == DEFAULT_POLICY["mode"]
+        assert discovery_service.load_policy_for_runtime("b").mode == DEFAULT_POLICY["mode"]
+        assert set(seen) == {"a", "b"}  # 租户各自缓存，互不串读
