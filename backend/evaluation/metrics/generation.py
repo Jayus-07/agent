@@ -40,12 +40,25 @@ def _split_claims(text: str) -> list[str]:
 
     不按逗号/顿号切：中文一个长句会被拆成大量 2-3 字微 claim，
     bigram 子串命中即"支持"，faithfulness 系统性虚高。
+
+    2026-10-28 清洗：剥掉列表编号前缀（"1."/"2、"）与引用标记
+    （"[E1]"/"[2]"）——按句号切分后它们会成为独立微 claim，在原文
+    中必然无命中，导致带规范引用、编号作答的忠实答案被系统性扣分
+    （实测 UFQ-007 事实正确答案 S7=0.67 被判不忠实）。
     """
-    return [
-        c.strip()
-        for c in re.split(r"[。！？.!?；;\n]", text)
-        if c.strip()
-    ]
+    cleaned: list[str] = []
+    for part in re.split(r"[。！？.!?；;\n]", text):
+        claim = part.strip()
+        # 剥列表编号前缀（可多层："1."、"2、"、"（3)"）
+        claim = re.sub(r"^(?:[（(]?\d{1,3}[、.．)）]\s*)+", "", claim)
+        # 剥内联引用标记：[E1]/[E12]/[1]/[2,3]
+        claim = re.sub(r"\s*\[(?:E\d*|\d{1,2}(?:\s*,\s*\d{1,2})*)\]\s*", "", claim)
+        claim = claim.strip()
+        # 纯编号/纯标记/纯数字的残片不构成可验证主张
+        if not claim or not re.search(r"[\u4e00-\u9fffA-Za-z]", claim):
+            continue
+        cleaned.append(claim)
+    return cleaned
 
 
 def _numeric_match_score(actual: str, expected: str, tolerance: float) -> float:
