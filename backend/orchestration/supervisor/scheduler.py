@@ -233,14 +233,21 @@ def route_after_supervisor(state: dict) -> str | list:
 
             # 注入前置步骤的输出，支持 Capability 间数据传递
             # 例如 business.analyze 依赖 sql.query → 从 step_results["1"].output 取 SQLResult
-            # L3 微压缩（2026-09-22）：注入前做总预算压缩（默认 1024 token），
-            # 超预算时最新结果优先完整保留、旧结果降级为摘要结构。
-            # 只影响发给模型的 active context；step_results 原样传递，
-            # Reporter 汇总与前端展示不受影响。
-            _raw_prev = {
-                dep_id: step_results.get(dep_id, {}).get("output")
-                for dep_id in edges.get(item["step_id"], [])
-            }
+            # 决策 #25 解引用注入点：前置输出是受控引用对象时先解回整包
+            # （保持既有整包数据流；失败显式留痕 __result_ref_error__）。
+            from backend.orchestration.result_refs import (
+                identity_from_state,
+                resolve_previous_outputs,
+            )
+            _ref_identity = identity_from_state(state)
+            _raw_prev = resolve_previous_outputs(
+                {
+                    dep_id: step_results.get(dep_id, {}).get("output")
+                    for dep_id in edges.get(item["step_id"], [])
+                },
+                tenant_id=_ref_identity["tenant_id"],
+                user_id=_ref_identity["user_id"],
+            )
             _prev_meta = {
                 dep_id: {
                     "step_id": dep_id,
@@ -254,6 +261,10 @@ def route_after_supervisor(state: dict) -> str | list:
                 compact_previous_outputs,
                 compute_dependency_ranks,
             )
+            # L3 微压缩（2026-09-22）：注入前做总预算压缩（默认 1024 token），
+            # 超预算时最新结果优先完整保留、旧结果降级为摘要结构。
+            # 只影响发给模型的 active context；step_results 原样传递，
+            # Reporter 汇总与前端展示不受影响。
             # P1-3 依赖感知保留：由执行 DAG + step_results 计算各前驱的
             # 保留优先级（确定性、零 LLM），超预算时优先完整保留对当前步
             # 与最终答案最重要的结果，而非机械 latest-first

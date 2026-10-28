@@ -383,6 +383,22 @@ class BaseSkill(ABC):
         params = dict(step_info.get("params", {}))
         params.pop("_previous_outputs", None)
         capability = sr["capability"]
+        # Schema 映射（决策 #25）：{{step_id.field.path}} 参数模板按字段
+        # 路径取值；None/缺失/权限失败显式转为步骤 invalid_param，不静默空串。
+        try:
+            params = _resolve_param_refs_or_fail(state, params)
+        except (LookupError, PermissionError) as exc:
+            error_protocol = error_envelope_from_exception(
+                exc, source="skill").to_dict()
+            sr.update(status="failed", output=None,
+                      error=f"参数模板取值失败: {exc}",
+                      error_type="invalid_param",
+                      error_code="param_template_unresolved",
+                      error_protocol=error_protocol,
+                      started_at=time.time(), finished_at=time.time())
+            step_results[step_id] = dict(sr)
+            logger.warning(f"[{self.name}] step={step_id} 参数模板取值失败: {exc}")
+            return {"step_results": {step_id: step_results[step_id]}}
         params = self._normalize_invocation_params(state, capability, params)
 
         # 产品范围在 Skill/兼容 Tool 共同执行点复核，不能只依赖候选过滤。
@@ -475,7 +491,7 @@ class BaseSkill(ABC):
             )
         else:
             await self._execute_legacy_loop(
-                sr, step_results, tool_fn, invoke_params, params,
+                state, sr, step_results, tool_fn, invoke_params, params,
                 timeout, max_retries, tool_span,
             )
         return {"step_results": {step_id: step_results[step_id]}}
@@ -631,6 +647,10 @@ class BaseSkill(ABC):
                 return
             sr.update(status="success", output=output, error=None, error_type=None,
                       finished_at=time.time())
+            # 决策 #25 任务级受控结果引用（默认开启，见 _maybe_offload_step_output）：
+            # 必须先于 L1 预算——L1 会把超限输出裁成预览并丢弃全量，引用
+            # 要在此之前把完整 payload 落库存档；引用对象很小，L1 直通。
+            output = _maybe_offload_step_output(state, cap, sr["step_id"], output)
             # L1 上下文预算（2026-09-22）：工具结果写入 step_results 前统一
             # Guard——超 TOOL_INLINE_MAX_TOKENS 降级为预览（含 18 个 Markdown
             # 老 Tool，它们也走本基类）。校验在 Guard 之前：Guard 产出的预览
@@ -709,7 +729,7 @@ class BaseSkill(ABC):
     # 旧执行循环（TOOL_RUNTIME_ENABLED=false 时回滚用，行为与历史版本一致）
     # ================================================================
     async def _execute_legacy_loop(
-        self, sr: dict, step_results: dict,
+        self, state: dict, sr: dict, step_results: dict,
         tool_fn: Any, invoke_params: dict, params: dict,
         timeout: float, max_retries: int,
         tool_span: str,
@@ -748,6 +768,9 @@ class BaseSkill(ABC):
                 sr["error"] = None
                 sr["error_type"] = None
                 sr["finished_at"] = time.time()
+                # 决策 #25 受控结果引用（先于 L1，理由见治理路径同位注释）
+                output = _maybe_offload_step_output(
+                    state, sr["capability"], step_id, output)
                 # L1 上下文预算：与治理路径同语义（校验后、落 step_results 前）
                 output = _apply_tool_result_budget(output, sr["capability"], step_id)
                 if isinstance(output, dict) and output.get("context_compacted"):
@@ -828,6 +851,58 @@ def _apply_tool_result_budget(output: Any, capability: str, step_id: str) -> Any
     except Exception:
         logger.debug("tool result budget guard 失败，原样放行", exc_info=True)
         return output
+
+
+def _result_ref_identity(state: dict) -> dict:
+    """从 state 提取结果引用登记所需身份（委托 result_refs.identity_from_state）。"""
+    from backend.orchestration.result_refs import identity_from_state
+    return identity_from_state(state)
+
+
+def _maybe_offload_step_output(state: dict, capability: str, step_id: str,
+                               output: Any) -> Any:
+    """决策 #25 接线点：大结果 → ai.task_result_refs，返回引用对象（或原样）。
+
+    **默认开启**（阈值 8192 字节，env RESULT_REF_THRESHOLD_BYTES=0 可禁用，
+    0 = 永不 offload 保证部署零行为变化）。必须在 L1 预算 Guard 之前调用：
+    L1 会把超限输出裁成预览并丢弃全量，引用必须在此之前把完整 payload
+    落库存档；offload 后的引用对象远小于阈值，L1 直通不受影响。
+    offload 任何失败（DB 不可用等）软降级回内联，不阻断 Skill 执行。
+    """
+    try:
+        from backend.orchestration.result_refs import maybe_offload
+        identity = _result_ref_identity(state)
+        return maybe_offload(
+            output,
+            step_id=step_id,
+            capability=capability,
+            **identity,
+        )
+    except Exception:  # noqa: BLE001 — offload 失败回退内联（引用是增强不是依赖）
+        logger.warning(
+            f"[{capability}] step={step_id} 结果引用落库失败，回退内联输出",
+            exc_info=True,
+        )
+        return output
+
+
+def _resolve_param_refs_or_fail(state: dict, params: dict) -> dict:
+    """Schema 映射接线点：{{step_id.field.path}} 参数模板 → 字段级取值。
+
+    取值 None/缺失/租户校验失败 → LookupError/PermissionError 由调用方
+    显式转为该步骤 invalid_param 失败（不静默空串）。无模板的 params
+    零改动（默认行为兼容）。
+    """
+    from backend.core.request_context import get_tool_tenant_id, get_tool_user_id
+
+    identity = _result_ref_identity(state)
+    from backend.orchestration.result_refs import resolve_param_templates
+    return resolve_param_templates(
+        params,
+        state.get("previous_outputs") or {},
+        tenant_id=identity["tenant_id"],
+        user_id=identity["user_id"] or get_tool_user_id(),
+    )
 
 
 def _tool_runtime_enabled() -> bool:
