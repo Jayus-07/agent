@@ -213,6 +213,18 @@ def _enhanced_hybrid_retrieve_impl(
     fusion_started = time.perf_counter()
     merged_docs = _ultimate_rrf_fusion(path_results, rrf_k, k, query=query)
     metrics["fusion_elapsed_ms"] = round((time.perf_counter() - fusion_started) * 1000, 1)
+
+    # Step 5.5: 查询点名来源文件 → 只保留该文件候选（与 hybrid 主路同源同
+    # 开关；冲突值出上下文，生成端不再在多来源数值间摇摆）。置信度聚合放在
+    # 收口之后，反映最终交付的候选。
+    from backend.config.rag import RAG_QUERY_FILE_SCOPE
+    from backend.rag.retrieval.hybrid import scope_by_named_files
+
+    if RAG_QUERY_FILE_SCOPE:
+        _pre_scope = len(merged_docs)
+        merged_docs = scope_by_named_files(merged_docs, query)
+        if len(merged_docs) != _pre_scope:
+            metrics["named_file_scope"] = f"{_pre_scope}->{len(merged_docs)}"
     
     # Step 6: 计算综合置信度
     # P1（2026-10-24）：向量分数在 metadata["similarity"]（Document 无 .score

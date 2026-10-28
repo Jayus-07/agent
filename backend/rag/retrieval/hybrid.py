@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 
 from backend.rag.retrieval_budget import (
@@ -91,6 +92,43 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
         d for d in docs
         if _metadata_matches(d.metadata or {}, metadata_filter)
     ]
+
+
+# ── 查询点名来源文件的候选收口（2026-10-29，UFQ-016~021 实证）──────────
+#
+# 「sku.csv 中 SKU 00012345 的价格」是用户显式圈定范围：其他文件的同标识符
+# 行留在上下文里，生成端会在冲突值之间摇摆（枚举/拒答跨轮抖动）。点名文件
+# 在候选中有命中时只保留该文件候选；零命中（文件名写错/未索引）保持原候选
+# 不动，交由既有拒答规则处理。
+
+_QUERY_NAMED_FILE_RE = re.compile(
+    r"([0-9A-Za-z_\-\u4e00-\u9fff]{1,64}\.(?:csv|xlsx|xls|docx?|pptx?|md|txt|pdf|json))",
+    re.IGNORECASE,
+)
+
+_DOC_SOURCE_FIELDS = ("source_file", "file_name", "canonical_id")
+
+
+def _doc_source_file(doc) -> str:
+    md = getattr(doc, "metadata", None) or {}
+    for field in _DOC_SOURCE_FIELDS:
+        value = md.get(field)
+        if isinstance(value, str) and value.strip():
+            # 只取 basename，兼容目录路径形式的登记值
+            base = value.strip().replace("\\", "/").rsplit("/", 1)[-1]
+            return base.lower()
+    return ""
+
+
+def scope_by_named_files(docs: list, query: str) -> list:
+    """查询点名了来源文件时，只保留该文件的候选（有命中才收口）。"""
+    named = {m.group(1).lower() for m in _QUERY_NAMED_FILE_RE.finditer(query or "")}
+    if not named:
+        return docs
+    kept = [d for d in docs if _doc_source_file(d) in named]
+    if not kept:
+        return docs
+    return kept
 
 
 import re
@@ -757,6 +795,17 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         doc.metadata["rrf_score"] = round(rrf_score, 4)
         doc.metadata["retrieval_mode"] = "hybrid"
         merged.append(doc)
+
+    # 查询点名来源文件 → 只保留该文件候选（见 scope_by_named_files 注释）
+    from backend.config.rag import RAG_QUERY_FILE_SCOPE
+
+    if RAG_QUERY_FILE_SCOPE:
+        _pre_scope = len(merged)
+        merged = scope_by_named_files(merged, query)
+        if len(merged) != _pre_scope:
+            trace_collector.add_event(span, "named_file_scope", "info",
+                f"{_pre_scope}→{len(merged)}（查询点名来源文件，仅保留该文件候选）",
+                data={"kept": [d.metadata.get("chunk_id", "") for d in merged[:5]]})
 
     # ── Retrieval Debug event ──
     trace_collector.add_event(span, "rrf_fusion", "info",
