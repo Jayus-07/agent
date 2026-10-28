@@ -1,6 +1,6 @@
 {
   "name": "desktop_upload_smoke",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "dataset_version": "6.0.0-desktop-candidate.1",
   "kb_id": "rag_eval_kb",
   "fixture_set": "baseline",
@@ -15,6 +15,6 @@
     "UFQ-022",
     "UFQ-023"
   ],
-  "cases_hash": "472190f5b690cad3",
+  "cases_hash": "4c5301c379724c4b",
   "min_samples": 8
 }
