@@ -19,6 +19,7 @@ from backend.config.settings import (
 )
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.mode import resolve_evaluation_mode
+from backend.shared.logger import logger
 from backend.evaluation.service import EvaluationService
 from backend.evaluation.storage import persist_report
 from backend.infra.llm.registry_store import refresh_registry
@@ -42,9 +43,33 @@ async def run_prompt_release_evaluation(
     return await asyncio.to_thread(_run_sync, release)
 
 
+def _warm_external_models() -> None:
+    """发布评测前预热外置模型（软失败）。
+
+    2026-10-28 desktop_upload_smoke 首跑 7/8 题 rerank_failed：外置 8088
+    重排服务闲置后首批推理超 RERANK_TIMEOUT=4s（热态实测 0.8-1.0s），
+    冷启动超时按既有"传输失败不自动重发"策略整轮降级，门禁被运维态而非
+    提示词质量打穿。此处用 2 文档最小请求预热重排/embedding；失败仅记
+    日志，不阻塞评测（真实故障会在用例中如实暴露）。
+    """
+    try:
+        from backend.rag.embedding_singleton import get_embedding
+        from backend.rag.reranker import get_reranker_backend
+
+        get_embedding().embed_query("发布评测预热")
+        reranker = get_reranker_backend()
+        warm = getattr(reranker, "rank", None)
+        if callable(warm):
+            warm("预热", ["预热文档一", "预热文档二"], top_k=2)
+        logger.info("[prompt_release] 外置模型预热完成")
+    except Exception as exc:  # noqa: BLE001 — 预热失败不阻塞评测
+        logger.warning("[prompt_release] 外置模型预热失败（继续评测）: %s", exc)
+
+
 def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
     with _evaluation_env(release.created_by):
         asyncio.run(refresh_registry())
+        _warm_external_models()
         mode = resolve_evaluation_mode(
             release.dataset_provenance.get("evaluation_mode")
         )
