@@ -192,7 +192,8 @@ def detect_multi_level_header(
     if not rows or len(rows) < 2:
         return (1, rows[:1], rows[1:]) if rows else (0, [], [])
 
-    header_rows: List[List[str]] = []
+    header_rows: list = []
+    found_data_row = False
     for i, row in enumerate(rows[:max_header_rows + 1]):
         # 空行跳过
         meaningful_cells = [
@@ -206,9 +207,20 @@ def detect_multi_level_header(
         if numeric_ratio < 0.2:
             header_rows.append(row)
         else:
+            found_data_row = True
             break
 
     if not header_rows:
+        header_rows = [rows[0]]
+    elif not found_data_row and len(header_rows) > 1:
+        # 2026-10-28 修复：文本型数据表的表头误判。数值启发式对纯文本
+        # 数据行（员工名册/文字台账：0% 数值单元格）失效——扫描窗口内
+        # 找不到任何"数据行"，前 N 行数据全被拍进多级表头列摘要（实测
+        # 员工表 50 行只剩 `工号_E0001_E0002_E0003` 式摘要，行语义全毁，
+        # 模型合理拒答）。窗口耗尽仍无数值行 = 数值信号不可用 → 保守
+        # 回退首行为表头（电子表格解析器本就声明首行为列名）。真多级
+        # 数值表头（财务表）有数值数据行，不受影响；纯文本真多级表头
+        # 退化为"二级当数据行"，远轻于全表行语义被毁。
         header_rows = [rows[0]]
 
     header_count = len(header_rows)
