@@ -624,14 +624,140 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
 
 ### 演示型壳位现状（更新）
 
-- ✅ 解禁：/mcp「运行健康」（本轮转真实）
+- ✅ 解禁：/mcp「运行健康」（Batch 5-3 转真实）
+- ✅ 解禁：/tools「AI 语义」Tab（Batch 6 转真实，#19）
 - ⬜ /mcp 连接抽屉「版本历史」（连接级配置时间线待后端）
-- ⬜ /tools「AI 语义」Tab（#19）
 - ⬜ 故障模拟四按钮（演练/评测能力，#16 深化）
 
 ### 下一批剩余
 
 - Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
+
+## Batch 6：AI 语义契约——生成/草稿/审核并入（2026-10-28，决策 #19）
+
+分支 `feat/toolgov-semantic`（基于 84f3823 = origin/main 含 Batch B2）。
+
+### 后端
+
+- 迁移 120：`ai.mcp_tools` 增 `semantic_draft` / `semantic_approved`
+  JSONB 独立列（登记 init_db + CI 清单；已对本机库 5433 执行）。
+  草稿不进 governance JSONB——governance 是审核时整体落库的治理配置，
+  混入草稿会绕过/污染审核 CAS 语义；
+- prompt 注册：`tool.semantic_suggest`（defaults/tool_semantic_suggest.yaml +
+  registry PromptSpec；promptGroups.ts「工具治理」白名单同步；注册表 62 键）；
+- `admin_mcp.py` 三个端点（require_admin_user + run_governance_mutation +
+  security_events 审计）：
+  - `POST /tools/{id}/semantic/suggest`：仅 approved/pending；prompt 仅注入
+    工具元数据（名称/描述/Schema/示例/连接名/操作类型），全部经
+    `_redact_urls` 清洗，**绝不包含凭据与 URL**；LLM 不可用/失败 → 503，
+    解析失败重试 1 次仍失败 → 502，不伪造草稿；产物写 semantic_draft
+    （status=suggested + generated_at/by）；
+  - `PUT /tools/{id}/semantic/draft`：人工编辑保存（status=edited，保留
+    生成留痕），长度校验 summary≤300 / 单条≤200 / 条数≤10 → 400；
+  - `POST /tools/{id}/semantic/approve`：summary 并入正式 description
+    （截断 MAX_DESCRIPTION_CHARS），完整契约存 semantic_approved，草稿置
+    applied；幂等：无草稿/已并入 → 409；不动 content_hash/approved_hash
+    （它们绑定上游发现内容，平台描述变化不构成漂移），写后刷新运行时快照；
+- `_tool_view` 透出 semantic_draft / semantic_approved 两字段。
+
+### 前端
+
+- /tools 工具抽屉「AI 语义」壳位 → 真实 SemanticContractSection：
+  无草稿空态 + 生成（生成中态）；有草稿可编辑表单（summary/scenarios/
+  exclusions 每行一条/capability_hint）+ 保存草稿 + 审核通过并入
+  （confirm 弹窗）；已 applied 只读展示留痕 + 重新生成（覆盖草稿）；
+- `api/mcp.ts`：McpSemanticDraft/McpSemanticApproved 类型 + McpTool 补
+  semantic_draft/semantic_approved 可选字段 + suggest/save/approve 三封装
+  （mutationRequest 幂等键）。
+
+### 验证
+
+- `test_admin_semantic_api.py`（pg）11 passed：suggest 合法 JSON 落草稿 +
+  prompt 无 URL/凭据/连接地址 + governance 不被污染；垃圾输出 ×2 → 502
+  （LLM 恰好调用 2 次）；LLM 抛异常 → 503；retired → 409；viewer → 403；
+  draft 回显 + 长度非法 400；approve 并入 description + semantic_approved
+  落库 + 草稿 applied + 再 approve 409 + 重新生成→再并入成功 + 长摘要截断；
+- 回归：admin_mcp_api + semantic + discovery + prompts 全目录 **253 passed**
+  （prompt 守卫含注册表 62 键断言）；mcp 动态 e2e + mcp_registry **79 passed**；
+- 前端 tsc 0 错误；tools 页 12 用例全绿（壳位断言改为真实：无草稿空态 +
+  suggest 调用 / 草稿表单预填 + save+approve 调用 / applied 只读 + 重新生成）；
+  vitest 全量 **83 文件 576 用例全绿**（--no-file-parallelism；并行跑时
+  design-tokens 源码扫描 5s 超时属仓库已知的负载抖动，单跑与串行均绿）；
+- 容器级 UNVERIFIED（共享栈刚被并行会话重建，避免互相干扰；合并授权后
+  rebuild 时生效；迁移 120 已对本机库执行）。
+## Batch 7：AI 失败分析——聚类归因与候选评测用例（2026-10-28，决策 #20）
+
+分支 `feat/toolgov-failure-analysis`（基于 84f3823 = origin/main；与
+OPEN 的 #121 语义分支并行开发，合并时 registry.py / promptGroups.ts /
+test_registry_defaults.py / page.test.tsx 预期有小冲突面，见下）。
+
+### 后端
+
+- 迁移 121：`ai.tool_failure_analyses`（id/tenant_id/window_minutes/
+  input_summary/result/model/created_by/created_at；登记 init_db + CI
+  清单；已对本机库 5433 执行）。input_summary 只存聚类计数与摘要，
+  result 存 LLM 完整 JSON；7 天后参考价值有限，不自动清理（迁移注释
+  说明手动裁剪口径）；
+- prompt 注册：`tool.failure_analysis`（defaults/tool_failure_analysis.yaml
+  + registry PromptSpec；promptGroups.ts「工具治理」白名单同步；本分支
+  注册表 61→62 键，#121 合并后 63）；
+- `admin_tools.py` 两个端点（require_admin_user + run_governance_mutation
+  + security_events 审计）：
+  - `POST /admin/tools/failure-analysis`：body {window_minutes 5-1440 默认
+    60, limit 10-100 默认 50}，非法 400；聚类复用 /errors 同源数据路径
+    （进程内 trace tool_call span 直读），按 (tool, error_class) 聚类计数
+    取 top 10 组、每组 2-3 条代表性错误摘要（截断 300 字符 + URL 清洗）；
+    **只读 input.tool/capability，绝不读 input.params**；prompt key
+    `tool.failure_analysis`，要求严格 JSON clusters（attribution /
+    suggestions≤3 / candidate_eval_cases 合计≤6）；解析失败重试 1 次 →
+    502、LLM 不可用 → 503，失败不落库；空聚类跳过 LLM 直接落一条空分析；
+    结果落 ai.tool_failure_analyses 并返回 {analysis_id, clusters,
+    created_at}；
+  - `GET /admin/tools/failure-analysis?limit=10`：本租户最近分析列表
+    （editor 档，id/时间/窗口/聚类计数/model/完整 result）；
+- 防幻觉：LLM 返回的 (tool, error_class) 不在输入聚类中的一律丢弃。
+
+### 前端
+
+- `api/failureAnalysis.ts`：runFailureAnalysis（mutationRequest 幂等键）+
+  getFailureAnalyses 两封装与全套类型；
+- /tools「运行质量与失败」subTab 新增「AI 失败分析」区块（AssetSection）：
+  时间窗选择（60/360/1440 分钟）+「生成分析」；结果面板按聚类卡渲染
+  （tool/错误分类/归因/修复建议/候选评测用例表）；最近分析列表点击回看；
+  生成中/错误/空态齐全；候选用例区常驻标注「仅建议——应用需走评测中心
+  审核与回归」，区块说明明确「不含用户参数原文与凭据」。
+
+### 边界（决策 #20 红线）
+
+- 只生成建议与候选评测集（evalCandidate），不自动应用/改写任何正式
+  Prompt / 语义契约 / Golden 数据；
+- 送 LLM 的输入只有 (tool, error_class) 聚类计数与截断 300 字符错误摘要
+  （URL 已清洗）：span `input.params` 一概不读 + `_redact_urls` 清洗 +
+  落库的 input_summary 同口径——测试断言手机号/api_key/URL 主机名均不
+  出现在 prompt 与 input_summary 中。
+
+### 验证
+
+- `test_admin_failure_analysis.py`（pg）7 passed：聚类计数 + prompt 数据
+  边界（敏感 params/凭据/URL 不进 prompt）+ 落库 + GET 回显；时间窗过滤
+  （窗外失败不计入）+ 防幻觉丢弃；空聚类跳过 LLM（fake.calls==0）；
+  垃圾 ×2 → 502 且不落库；LLM 抛异常 → 503；非法 window/limit → 400；
+  写接口 admin 门禁 / 列表 editor 可读；
+- 回归：failure_analysis + discovery + failure_probe + prompts registry +
+  bundles **40 passed**；`-k admin` 全口径 188 passed / 5 failed——5 个
+  失败（rbac_api 4 + admin_mcp overview 1）经 origin/main 干净基线对照
+  实验证实为既有隔离抖动（基线同口径同 5 个失败），与本改动无关；
+- 前端 tsc 0 错误；tools 页 12 用例全绿（新增 2 例：AI 区块生成调用 +
+  聚类卡/边界标注；空聚类 + 最近分析回看）；vitest 全量 83 文件 /
+  576 用例全绿（基线 83 文件 / 574 用例 + 新增 2 例）；
+- 容器级 UNVERIFIED（本批为管理端增量端点 + 静态前端；迁移 121 已对本机
+  库执行；合并授权后 rebuild 生效）。
+
+### 合并注意（与 OPEN 的 #121 并行）
+
+- registry.py / promptGroups.ts / test_registry_defaults.py（61↔62 键）/
+  page.test.tsx 预期小冲突：#121 合并后注册表为 63 键、tools 页测试 mock
+  需并集；两批改动文件集不重叠（#121 全在 admin_mcp.py / mcp.ts / 抽屉）。
 
 ## Batch 8：增强批持续推进（#19 #20 #25 已交 PR，2026-10-28）
 
@@ -646,9 +772,11 @@ origin/main，CI 全绿，合并授权留用户）：
 
 ### 合并顺序注意
 
-#121 与 #122 并行开发：registry.py / promptGroups.ts / prompts 守卫计数
-（62↔63）/ tools page.test mock 有小冲突面，端点文件不重叠——先合 #121，
-#122 rebase 解冲突；#123 无交集。
+#121 与 #122 并行开发的冲突面（registry.py / promptGroups.ts / prompts
+守卫计数 62↔63 / tools page.test mock）已于 2026-10-29 在 #122 分支
+merge feat/toolgov-semantic 实际解掉（并集保留，计数 63，守卫与两批
+主测试复跑全绿）；#123 已同法合入 #122 head（登记并集 120/121/122）。
+建议合并顺序 #121 → #122 → #123 → #124 → #125，按序点击即可无冲突。
 
 ### 剩余
 
