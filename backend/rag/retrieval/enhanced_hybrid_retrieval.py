@@ -291,21 +291,38 @@ def _ultimate_rrf_fusion(path_results: list[tuple[list, float]], rrf_k: int, top
     # ── 标识符精确命中加权（2026-10-28，与 hybrid.py 同一修复）──
     # 查询含长标识符（SKU/单号/型号）时，仅被 BM25/稀疏路精确命中的候选
     # 会被多路径都出现的同模板相似行结构性埋没（dense 权重 3.0 更甚）。
-    # 原文精确命中给等效单路第 1 名的加性奖励，交由重排终裁。
+    # 原文精确命中给等效「最强单路第 1 名」的加性奖励，交由重排终裁。
+    # 2026-10-29 修正加成基准：原固定 1/rrf_k 在 dense 权重 3.0 下不足以
+    # 越过 dense 填充线——exact_id 路由（dense 3.0×0.85/sparse 1.0×1.5）时
+    # 仅稀疏路第 1 名合计 ≈0.0413，恰与 dense 第 1~2 名（0.0418/0.0411）
+    # 同量级，随池深与候选构成微扰进出 top_k（UFQ-023 E0001 跨轮排序波动
+    # 根因）。基准取实际参与融合的最重路径权重，保证精确行确定性地进入
+    # 重排视野；重排负责终裁，不改变相似行之间的相对顺序。
+    import os as _os
     import re as _re
 
     _id_tokens = {
         t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", str(query or ""))
         if not t.isalpha() or len(t) >= 6
     }
+    _bonus_hits: list[str] = []
     if _id_tokens:
-        _EXACT_TOKEN_BONUS = 1.0 / rrf_k
+        _max_path_weight = max((w for _, w in path_results), default=1.0)
+        _EXACT_TOKEN_BONUS = _max_path_weight / rrf_k
         for cid, doc in docs_by_id.items():
             text = str(getattr(doc, "page_content", "") or "").lower()
             if any(t in text for t in _id_tokens):
                 rank_map[cid] = rank_map.get(cid, 0.0) + _EXACT_TOKEN_BONUS
+                _bonus_hits.append(cid)
 
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
+
+    if _os.getenv("EVAL_TRIGGER") == "prompt_publish" and _id_tokens:
+        logger.info(
+            "[FusionDebug] id_tokens=%s bonus=%s hits=%s top10=%s",
+            sorted(_id_tokens), round(_EXACT_TOKEN_BONUS, 5), _bonus_hits[:10],
+            [(c, round(s, 5)) for c, s in sorted_cids[:10]],
+        )
 
     unique_doc_count = len({
         docs_by_id[cid].metadata.get("doc_id", "")

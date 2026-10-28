@@ -639,6 +639,21 @@ class DashScopeReranker(BaseDocumentCompressor):
             for doc, score in result:
                 doc.metadata["rerank_score"] = round(float(score), 4)
 
+            # 2026-10-29 评测诊断：拒答边界抖动（023 类排序波动）需区分
+            # 「精确行未进重排池」与「进了但被阈值截断」，只记 id/分数。
+            import os as _os
+
+            if _os.getenv("EVAL_TRIGGER") == "prompt_publish":
+                _cut = [
+                    (documents[idx].metadata.get("chunk_id", "?"), round(float(s), 4))
+                    for idx, s in ranked_results if s <= threshold
+                ][:10]
+                logger.info(
+                    "[RerankDebug] q=%r in=%d kept=%d threshold=%s cut_top=%s",
+                    str(query)[:40], len(documents), len(result),
+                    threshold, _cut,
+                )
+
             return [doc for doc, _ in result]
 
         except Exception as e:

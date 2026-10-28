@@ -717,15 +717,20 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     # 同模板相似行"（表格数据每行向量几乎相同）得分必然更高——精确行被
     # 系统性埋没（实测 SKU 000001 行 BM25 排第 1、重排打分 0.9884 却进
     # 不了 top5）。凡候选原文包含查询中的长标识符 token，给一个等效于
-    # "单路第 1 名"的加性奖励，让它至少进入 rerank 视野由重排终裁。
+    # "最强单路第 1 名"的加性奖励，让它至少进入 rerank 视野由重排终裁。
+    # 2026-10-29 加成基准对齐 enhanced 路径：路由加权（如 exact_id 的
+    # bm25_weight=1.5）或 SQL 旁路存在时，固定 1/rrf_k 不足以站上最强
+    # 单路第 1 名的分位，取实际权重上界作基准（中性路由下与旧值等价）。
+    import os as _os
     import re as _re
 
     _id_tokens = {
         t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", query or "")
         if not t.isalpha() or len(t) >= 6
     }
+    _bonus_hits: list[str] = []
     if _id_tokens:
-        _EXACT_TOKEN_BONUS = 1.0 / rrf_k
+        _EXACT_TOKEN_BONUS = max(vw, bw, 1.0) / rrf_k
         for doc in (*vector_docs, *bm25_docs, *sql_docs):
             cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
             if cid not in rank_map:
@@ -733,8 +738,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             text = (doc.page_content or "").lower()
             if any(t in text for t in _id_tokens):
                 rank_map[cid] += _EXACT_TOKEN_BONUS
+                _bonus_hits.append(cid)
 
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
+
+    if _os.getenv("EVAL_TRIGGER") == "prompt_publish" and _id_tokens:
+        logger.info(
+            "[FusionDebug:hybrid] id_tokens=%s bonus=%s hits=%s top10=%s",
+            sorted(_id_tokens), round(_EXACT_TOKEN_BONUS, 5), _bonus_hits[:10],
+            [(c, round(s, 5)) for c, s in sorted_cids[:10]],
+        )
 
     doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs + sql_docs}
 
