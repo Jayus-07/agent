@@ -1132,7 +1132,14 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     and (generation_metrics.get("S6_answer_correctness") is not None)
                 if _has_real_answer and not should_reject:
                     passed = passed and generation_metrics.get("S6_answer_correctness", 0) >= 0.5
-                    passed = passed and generation_metrics.get("S7_faithfulness", 0) >= 0.8
+                    # 忠实度门值：LLM judge 可用时以其为权威（token 命中式
+                    # S7 对表格数字/单位答案系统性低估——UFQ-012 事实 3/3、
+                    # judge 忠实 1.0，token 版仅 0.667）；judge 缺席回落 S7。
+                    _judge_faith = generation_metrics.get("judge_faithfulness")
+                    if _judge_faith is not None:
+                        passed = passed and _judge_faith >= 0.8
+                    else:
+                        passed = passed and generation_metrics.get("S7_faithfulness", 0) >= 0.8
                     if required_facts:
                         passed = passed and required_fact_coverage == 1.0
                 if _has_real_answer and should_reject:
