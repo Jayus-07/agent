@@ -31,6 +31,7 @@ export const PROMPT_GROUPS: PromptGroup[] = [
     icon: Wrench,
     keys: [
       'router.tool_selector',
+      'tool.semantic_suggest',
     ],
   },
 ]
