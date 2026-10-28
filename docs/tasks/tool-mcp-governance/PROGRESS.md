@@ -632,3 +632,26 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
 ### 下一批剩余
 
 - Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
+
+## Batch 8：增强批持续推进（#19 #20 #25 已交 PR，2026-10-28）
+
+用户授权「剩余增强批作为持续任务」。三项已完成 PR（均基于各自时点的
+origin/main，CI 全绿，合并授权留用户）：
+
+| 项 | PR | 内容 |
+|---|---|---|
+| #19 AI 语义契约 | **#121** | suggest/draft/approve 三端点 + 迁移 120（semantic_draft/semantic_approved 列）+ prompt tool.semantic_suggest + /tools AI 语义 Tab 转真实；LLM 输入经 _redact_urls 清洗不含 URL/凭据；approve 并入 description 不动 content_hash；11 用例 |
+| #20 AI 失败分析 | **#122** | 迁移 121 ai.tool_failure_analyses + prompt tool.failure_analysis + POST/GET 端点 + /tools 质量档 AI 分析区块；聚类输入四层防泄漏（不读 params 原文/摘要 300 截断/_redact_urls/测试断言防泄漏）；防幻觉丢弃输入外聚类；7 用例 |
+| #25 结果引用 | **#123** | 迁移 122 ai.task_result_refs（24h 失效/租户隔离）+ result_refs 服务（offload/摘要/解引用/ref_value 字段映射）；BaseSkill 先于 L1 预算 offload（8192B 阈值，=0 禁用）；reporter 统一摘要化（LLM 只见摘要）；四处受控解引用点显式留痕；参数模板 {{step.field.path}}；21 用例 + 多工具 e2e 绿 + stash 对照（orchestration 全量 20 个失败为 pre-existing） |
+
+### 合并顺序注意
+
+#121 与 #122 并行开发：registry.py / promptGroups.ts / prompts 守卫计数
+（62↔63）/ tools page.test mock 有小冲突面，端点文件不重叠——先合 #121，
+#122 rebase 解冲突；#123 无交集。
+
+### 剩余
+
+- #27 自动任务/Webhook（用户级定时+签名校验+去重+租户绑定；beat/schedules 基础已有）
+- #29 运行中任务多轮修改（Checkpointer/interrupt 交互，风险最大）
+- 壳位收尾：/tools AI 语义已在 #121 解禁；故障模拟（演练能力）保留壳位
