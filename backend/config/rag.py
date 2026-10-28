@@ -68,6 +68,12 @@ RAG_UPLOAD_PATH_GUARD = os.getenv("RAG_UPLOAD_PATH_GUARD", "true").strip().lower
 RAG_FILTER_PARENT_RECALL = os.getenv("RAG_FILTER_PARENT_RECALL", "true").strip().lower() in (
     "1", "true", "yes"
 )
+# 2026-10-29（UFQ-016~021 实证）：查询点名来源文件（如「sku.csv 中 SKU X」）
+# 时，其他文件的同标识符行留在上下文会让生成端在冲突值之间摇摆（枚举/拒答
+# 跨轮抖动）。点名文件在候选中有命中时只保留该文件候选；零命中不收口。
+RAG_QUERY_FILE_SCOPE = os.getenv("RAG_QUERY_FILE_SCOPE", "true").strip().lower() in (
+    "1", "true", "yes"
+)
 # 流式读块大小 (1MB 平衡内存和 syscall 次数)
 RAG_UPLOAD_CHUNK_SIZE = int(os.getenv("RAG_UPLOAD_CHUNK_SIZE", str(1024 * 1024)))
 # SSE 进度推送间隔: 每 5MB 或 500ms 触发一次

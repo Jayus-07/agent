@@ -36,4 +36,8 @@ class EvalConfig(BaseModel):
     multiquery: bool = False      # 评测检索链套生产 MultiQuery 层（口径对齐线上）
     full_trace: bool = False      # per_case 保留完整 page_content/span（默认瘦身）
     prompt_versions: dict[str, int | str | None] = {}  # 候选 Prompt 版本快照
+    # 候选模板正文显式注入（key → (version, template)）。草稿版本不在进程
+    # 快照/历史内，仅传 prompt_versions 会被钉住链路静默跳过、评测回落已
+    # 发布版——发布评测必须携带本字段（2026-10-29 修复）。
+    prompt_templates: dict[str, tuple[int, str]] | None = None
     release_id: str | None = None  # 关联的 Prompt 发布记录

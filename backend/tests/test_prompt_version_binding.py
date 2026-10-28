@@ -63,3 +63,63 @@ class TestTraceTagFormat:
         pv = {}
         tag = ",".join(f"{k}={v}" for k, v in sorted(pv.items())[:12]) or "none"
         assert tag == "none"
+
+
+class TestBindPromptEntries:
+    def test_entries_pin_draft_template_over_snapshot(self):
+        """显式模板注入优先于进程快照——发布评测草稿的唯一可靠通道。
+
+        回归：bind_prompt_versions 对草稿版本静默跳过、评测回落已发布版，
+        发布门禁因此从未真正评测过候选模板（2026-10-29 修复）。
+        """
+        from backend.prompts.service import PromptService, _SnapshotEntry
+
+        svc = PromptService()
+        svc._snapshot = {
+            "rag.qa": _SnapshotEntry(template="published", version=14, variables=[]),
+        }
+        with svc.bind_prompt_entries({"rag.qa": (15, "draft-template {context}")}):
+            assert svc.get_template_sync("rag.qa") == "draft-template {context}"
+            assert svc.current_versions() == {"rag.qa": 15}
+        # 退出 pin 后回落快照
+        assert svc.get_template_sync("rag.qa") == "published"
+
+    def test_entries_empty_is_noop(self):
+        from backend.prompts.service import PromptService, _SnapshotEntry
+
+        svc = PromptService()
+        svc._snapshot = {
+            "rag.qa": _SnapshotEntry(template="published", version=14, variables=[]),
+        }
+        with svc.bind_prompt_entries(None):
+            assert svc.get_template_sync("rag.qa") == "published"
+
+
+class TestBindPromptVersionsUnknownVersion:
+    def test_unknown_version_skips_pin_and_falls_back(self, caplog):
+        """快照/历史中不存在的版本（草稿）必须显式告警并回落，不能假装钉住。"""
+        import logging
+
+        from backend.prompts.service import PromptService, _SnapshotEntry
+
+        svc = PromptService()
+        svc._snapshot = {
+            "rag.qa": _SnapshotEntry(template="published", version=14, variables=[]),
+        }
+        with caplog.at_level(logging.WARNING):
+            with svc.bind_prompt_versions({"rag.qa": 15}):
+                # 未钉住 → 回落快照中的已发布版（不报错、不空模板）
+                assert svc.get_template_sync("rag.qa") == "published"
+        assert any(
+            "不在进程快照/历史中" in rec.message for rec in caplog.records
+        ), "未解析版本的告警缺失"
+
+    def test_known_version_still_pins(self):
+        from backend.prompts.service import PromptService, _SnapshotEntry
+
+        svc = PromptService()
+        svc._snapshot = {
+            "rag.qa": _SnapshotEntry(template="published", version=14, variables=[]),
+        }
+        with svc.bind_prompt_versions({"rag.qa": 14}):
+            assert svc.get_template_sync("rag.qa") == "published"

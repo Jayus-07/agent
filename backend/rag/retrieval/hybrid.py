@@ -1,4 +1,5 @@
 import json
+import re
 import threading
 
 from backend.rag.retrieval_budget import (
@@ -91,6 +92,43 @@ def _filter_by_metadata(docs: list, metadata_filter: dict | None) -> list:
         d for d in docs
         if _metadata_matches(d.metadata or {}, metadata_filter)
     ]
+
+
+# ── 查询点名来源文件的候选收口（2026-10-29，UFQ-016~021 实证）──────────
+#
+# 「sku.csv 中 SKU 00012345 的价格」是用户显式圈定范围：其他文件的同标识符
+# 行留在上下文里，生成端会在冲突值之间摇摆（枚举/拒答跨轮抖动）。点名文件
+# 在候选中有命中时只保留该文件候选；零命中（文件名写错/未索引）保持原候选
+# 不动，交由既有拒答规则处理。
+
+_QUERY_NAMED_FILE_RE = re.compile(
+    r"([0-9A-Za-z_\-\u4e00-\u9fff]{1,64}\.(?:csv|xlsx|xls|docx?|pptx?|md|txt|pdf|json))",
+    re.IGNORECASE,
+)
+
+_DOC_SOURCE_FIELDS = ("source_file", "file_name", "canonical_id")
+
+
+def _doc_source_file(doc) -> str:
+    md = getattr(doc, "metadata", None) or {}
+    for field in _DOC_SOURCE_FIELDS:
+        value = md.get(field)
+        if isinstance(value, str) and value.strip():
+            # 只取 basename，兼容目录路径形式的登记值
+            base = value.strip().replace("\\", "/").rsplit("/", 1)[-1]
+            return base.lower()
+    return ""
+
+
+def scope_by_named_files(docs: list, query: str) -> list:
+    """查询点名了来源文件时，只保留该文件的候选（有命中才收口）。"""
+    named = {m.group(1).lower() for m in _QUERY_NAMED_FILE_RE.finditer(query or "")}
+    if not named:
+        return docs
+    kept = [d for d in docs if _doc_source_file(d) in named]
+    if not kept:
+        return docs
+    return kept
 
 
 import re
@@ -717,15 +755,20 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
     # 同模板相似行"（表格数据每行向量几乎相同）得分必然更高——精确行被
     # 系统性埋没（实测 SKU 000001 行 BM25 排第 1、重排打分 0.9884 却进
     # 不了 top5）。凡候选原文包含查询中的长标识符 token，给一个等效于
-    # "单路第 1 名"的加性奖励，让它至少进入 rerank 视野由重排终裁。
+    # "最强单路第 1 名"的加性奖励，让它至少进入 rerank 视野由重排终裁。
+    # 2026-10-29 加成基准对齐 enhanced 路径：路由加权（如 exact_id 的
+    # bm25_weight=1.5）或 SQL 旁路存在时，固定 1/rrf_k 不足以站上最强
+    # 单路第 1 名的分位，取实际权重上界作基准（中性路由下与旧值等价）。
+    import os as _os
     import re as _re
 
     _id_tokens = {
         t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", query or "")
         if not t.isalpha() or len(t) >= 6
     }
+    _bonus_hits: list[str] = []
     if _id_tokens:
-        _EXACT_TOKEN_BONUS = 1.0 / rrf_k
+        _EXACT_TOKEN_BONUS = max(vw, bw, 1.0) / rrf_k
         for doc in (*vector_docs, *bm25_docs, *sql_docs):
             cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
             if cid not in rank_map:
@@ -733,8 +776,16 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
             text = (doc.page_content or "").lower()
             if any(t in text for t in _id_tokens):
                 rank_map[cid] += _EXACT_TOKEN_BONUS
+                _bonus_hits.append(cid)
 
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
+
+    if _os.getenv("EVAL_TRIGGER") == "prompt_publish" and _id_tokens:
+        logger.info(
+            "[FusionDebug:hybrid] id_tokens=%s bonus=%s hits=%s top10=%s",
+            sorted(_id_tokens), round(_EXACT_TOKEN_BONUS, 5), _bonus_hits[:10],
+            [(c, round(s, 5)) for c, s in sorted_cids[:10]],
+        )
 
     doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs + sql_docs}
 
@@ -744,6 +795,17 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         doc.metadata["rrf_score"] = round(rrf_score, 4)
         doc.metadata["retrieval_mode"] = "hybrid"
         merged.append(doc)
+
+    # 查询点名来源文件 → 只保留该文件候选（见 scope_by_named_files 注释）
+    from backend.config.rag import RAG_QUERY_FILE_SCOPE
+
+    if RAG_QUERY_FILE_SCOPE:
+        _pre_scope = len(merged)
+        merged = scope_by_named_files(merged, query)
+        if len(merged) != _pre_scope:
+            trace_collector.add_event(span, "named_file_scope", "info",
+                f"{_pre_scope}→{len(merged)}（查询点名来源文件，仅保留该文件候选）",
+                data={"kept": [d.metadata.get("chunk_id", "") for d in merged[:5]]})
 
     # ── Retrieval Debug event ──
     trace_collector.add_event(span, "rrf_fusion", "info",

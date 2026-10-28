@@ -40,7 +40,41 @@ async def run_prompt_release_evaluation(
     release: PromptReleaseRecord,
 ) -> dict[str, Any]:
     """用数据库绑定的外部模型执行发布评测并返回门禁结果。"""
-    return await asyncio.to_thread(_run_sync, release)
+    # 2026-10-29：候选版本（草稿）不在进程 Prompt 快照/历史内，仅传版本号
+    # 会被 bind_prompt_versions 静默跳过、生成回落已发布版——发布门禁曾在
+    # 此缺陷下从未评测到候选模板。async 侧先取出模板正文，显式注入评测。
+    prompt_templates = await _load_candidate_templates(release.prompt_snapshot)
+    return await asyncio.to_thread(_run_sync, release, prompt_templates)
+
+
+async def _load_candidate_templates(
+    snapshot: dict[str, Any] | None,
+) -> dict[str, tuple[int, str]]:
+    """按 prompt_snapshot 取各候选版本模板正文（草稿必须显式读取）。"""
+    if not snapshot:
+        return {}
+    from backend.memory.database import AsyncSessionLocal
+    from backend.memory.repository.prompt_repo import PromptRepository
+
+    out: dict[str, tuple[int, str]] = {}
+    async with AsyncSessionLocal() as session:
+        repo = PromptRepository(session)
+        for key, version in snapshot.items():
+            try:
+                version_int = int(version)
+            except (TypeError, ValueError):
+                logger.warning("[prompt_release] 候选版本号非法，跳过: %s=%r", key, version)
+                continue
+            prompt = await repo.get_by_key(str(key))
+            if prompt is None:
+                logger.warning("[prompt_release] 候选 Prompt 不存在: %s", key)
+                continue
+            ver = await repo.get_version(prompt.id, version_int)
+            if ver is None:
+                logger.warning("[prompt_release] 候选版本不存在: %s v%s", key, version_int)
+                continue
+            out[str(key)] = (version_int, ver.template)
+    return out
 
 
 def _warm_external_models() -> None:
@@ -71,7 +105,10 @@ def _warm_external_models() -> None:
         logger.warning("[prompt_release] 外置模型预热失败（继续评测）: %s", exc)
 
 
-def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
+def _run_sync(
+    release: PromptReleaseRecord,
+    prompt_templates: dict[str, tuple[int, str]] | None = None,
+) -> dict[str, Any]:
     with _evaluation_env(release.created_by):
         asyncio.run(refresh_registry())
         _warm_external_models()
@@ -96,6 +133,8 @@ def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
                     or ""
                 ),
                 prompt_versions=release.prompt_snapshot,
+                # 候选模板正文显式注入（草稿不在进程快照内，仅版本号会回落发布版）
+                prompt_templates=prompt_templates or None,
                 release_id=release.release_id,
                 # C9-2：发布评测强制严格字段校验——不接受静默降级样本
                 strict_fields=True,
