@@ -331,3 +331,10 @@
 - **重建纪律**：本轮 4 次 compose up -d --build（worktree 合成文件集与运行栈 label 核对一致），每次后核验容器内 DATA-01 链/修复代码/健康；第 1 次重建后镜像即烘焙 candidate.4 正确数据，root 手改手段退役。devctl.bat 经 cmd.exe 调用在本机失效（连 echo 都不执行），改用 docker compose 直调（COMPOSE_FILE 双文件+分隔符声明）。
 - **既有失败（非本轮引入）**：test_hybrid_gate_score_scale 2 处（基线 stash 对照复现，环境敏感）；其余沿用交接文档清单。
 - 未完成：P1 收尾序列（self_correction v2 approve/publish、发货/发票线上复测、计费复查、P95 压测、browser-use 验收）；001/004 类供应商抖动已由答所问约束+judge 形态稳定化缓解，题集未去重（本轮全过未触发预案）。
+
+### 2026-10-29 续：P1 收尾（self_correction v2 发布 + 复测 + 计费复查）
+
+- **self_correction v2 已审批发布**：交接文档记 rel-191e954a「过线」与 DB 不符——该 release 实际 status=failed（旧管线评测 smoke 62.5%，同属模板注入缺陷受害轮）。用修复后管线重评（POST versions/2/release upsert 重跑）→ **24/24 全绿**（与 rag.qa v17 组合）→ approve→publish，六进程快照 rag.qa=17 + self_correction=2（epoch 13 热更新传播核验）。
+- **线上复测（真实聊天 SSE，Trace 记录）**：支付问「请检索企业知识库：企业支持哪些支付方式？请给出处。」在 v17 下 **PASS**：4.6s 返回「支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。[E1]」带 FAQ 出处（相关度 0.92，trace 8518f4310193）——v17 生产链路正面验证通过。发货/发票两问的两种措辞（「请检索企业知识库：企业订单的发货时效是怎么规定的？」「客户下单后多久发货？」）均未达 RAG 生成：trace 33ea3bdceec0/9ce5e7eb33a0/b15c7a898351。
+- **发货/发票失败定性为既有缺陷（非 v17 回归）**：① 同措辞失败自 2026-10-27 19:17 起持续存在（近 3000 条 trace 扫描 44 次命中全部失败），10-28 晨基线 agent-baseline-20261028.json 即已如此（早于本会话任何改动）；② 两类根因：领域判断把「客户下单后多久发货？」判 domain=general/product_scope 直通 general_chat（trace b15c7a898351，与 10-27 记录的支付 prefilter FAIL 同型）；措辞带「企业知识库」前缀的进 rag.search 后 rerank 阈值 0.3 只留 1 块 0.4076（政策条款），FAQ 块（e07b25dc7b「Q：客户下单后多久发货? A：现货商品 24 小时内发出」）被截，自纠错改写二检仍 0 文档（trace d904053b1459）。rag.qa v17 在证据不匹配时 can_answer=false 判定本身正确。**待办**：产品域分流对「下单/发货/发票」类词的领域判定与 rerank 措辞泛化（multiquery/阈值）需下一阶段专项。
+- **计费复查通过**：最近 400 条 llm_usage——评测流量 user 279/tenant=eval（embedding 266/llm 48/rerank 24），线上复测流量 user 279/tenant=default，归属完整；9 行无归属为发布评测 _warm_external_models 预热调用（无请求上下文的系统调用，5 次 release × 预热批，与既有「诊断探针无归属」结论同性质）；rerank local_inference 零云费口径不变。
