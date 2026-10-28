@@ -64,6 +64,11 @@ TOOL_CB_RECOVERY_SECONDS = float(os.getenv("TOOL_CB_RECOVERY_SECONDS", "30"))
 TOOL_BULKHEAD_WAIT_MS = float(os.getenv("TOOL_BULKHEAD_WAIT_MS", "300"))
 # 按工具覆盖策略：JSON dict，如 {"rag.search": {"timeout_ms": 15000}}（见 core/tool_runtime/policy.py）
 TOOL_POLICY_JSON = os.getenv("TOOL_POLICY_JSON", "")
+# 任务级受控结果引用（决策 #25）：Skill 输出序列化后超过该字节数即 offload
+# 落 ai.task_result_refs（24h 失效），step_results 只留引用对象，LLM 上下文
+# 只见摘要；真实数据仅在受控解引用点（下游参数注入/ref_value 字段取值）出现。
+# 默认开启（8192 字节）；0 = 永不 offload，保证部署零行为变化。
+RESULT_REF_THRESHOLD_BYTES = int(os.getenv("RESULT_REF_THRESHOLD_BYTES", "8192"))
 
 # ── GitHub Prompt 评测轮询（发布门禁）────────────────────────
 # GitHub Actions 不回调业务后端；Celery worker 按此间隔拉取 Run 和 Artifact。

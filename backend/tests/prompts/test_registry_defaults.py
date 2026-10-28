@@ -15,8 +15,8 @@ from backend.prompts.renderer import PromptRenderer
 
 class TestRegistryShape:
     def test_total_count(self):
-        # 旅游 Planner 逐日安排 Prompt 新增后，共 61 个。
-        assert len(PROMPT_REGISTRY) == 61
+        # Tool 失败分析（#20）+ AI 语义契约建议（#19）Prompt 新增后，共 63 个。
+        assert len(PROMPT_REGISTRY) == 63
 
     def test_exactly_one_code_controlled(self):
         code_controlled = [s for s in PROMPT_REGISTRY.values() if s.code_controlled]

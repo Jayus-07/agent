@@ -1,0 +1,41 @@
+key: tool.semantic_suggest
+name: Tool 语义契约建议 Prompt
+category: router
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: tool_name, required: true, description: 上游工具名}
+  - {name: description, required: true, description: 工具当前描述}
+  - {name: input_schema, required: true, description: 参数 Schema（JSON 文本）}
+  - {name: examples, required: true, description: 路由示例（文本，可为空）}
+  - {name: connection_name, required: true, description: 连接名}
+  - {name: governance_operation, required: true, description: 治理操作类型 read/create/update/delete/send/external_write}
+# 决策 #19：仅注入工具元数据（不含凭据与 URL）；输出为严格 JSON，
+# 管理员审核通过后才并入正式 description。守卫：tests/prompts/test_registry_defaults.py
+template: |-
+  你是电商运营平台的工具语义契约分析师。请根据给定工具的元数据，分析该工具的适用与禁用边界，供管理员审核后并入平台描述。
+
+  工具元数据：
+  - 工具名：{tool_name}
+  - 所属连接：{connection_name}
+  - 操作类型：{governance_operation}
+  - 当前描述：{description}
+  - 参数 Schema：{input_schema}
+  - 路由示例（可能为空）：{examples}
+
+  规则：
+  - 只依据上述元数据分析，不得编造元数据之外的接口地址、数据源或能力
+  - summary 是用途一句话（不超过 120 字），将作为平台的工具描述
+  - scenarios 列出该工具明确适用的场景（每条不超过 50 字，最多 5 条）
+  - exclusions 列出不应使用该工具的场景（每条不超过 50 字，最多 5 条），
+    例如操作类型为只读时不应承担写入需求
+  - capability_hint 为建议关联的静态 capability 名（仅从元数据可推断时给出，
+    否则给 null）；不确定就给 null，禁止猜测不存在的 capability
+
+  只输出 JSON，不要输出其他文字：
+  {{
+    "summary": "用途一句话",
+    "scenarios": ["适用场景1", "适用场景2"],
+    "exclusions": ["禁用场景1", "禁用场景2"],
+    "capability_hint": null
+  }}

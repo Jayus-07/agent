@@ -11,6 +11,9 @@
 | `GET  /admin/mcp/connections/{id}/tools` | 该连接的工具清单（含审核状态/漂移标记） |
 | `GET  /admin/mcp/tools` | 全量 MCP 工具目录（统一目录数据源） |
 | `GET/POST /admin/mcp/tools/{id}/...` | 工具详情 / 审核 / 停用 / 授权 / 测试调用 |
+| `POST /admin/mcp/tools/{id}/semantic/suggest` | AI 语义契约建议（决策 #19，仅元数据入 prompt） |
+| `PUT  /admin/mcp/tools/{id}/semantic/draft` | 语义契约草稿编辑保存（候选，不生效） |
+| `POST /admin/mcp/tools/{id}/semantic/approve` | 草稿审核并入正式 description（幂等：无草稿 409） |
 
 安全基线：
 - 全部端点 admin 门禁（`require_admin_user`）；写操作带 Idempotency-Key
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -180,6 +184,18 @@ class HttpToolInvocationUpdateRequest(BaseModel):
     input_schema: dict[str, Any] = Field(default_factory=dict)
 
 
+class SemanticDraftRequest(BaseModel):
+    """语义契约草稿编辑（决策 #19）：管理员手工保存/修正 AI 生成的候选。
+
+    长度红线在此只做兜底（防超大 payload），面向用户的 400 校验在端点内
+    按语义契约限制（summary≤300 / 单条≤200 / 条数≤10）执行。
+    """
+    summary: str = Field(default="", max_length=2000)
+    scenarios: list[str] = Field(default_factory=list)
+    exclusions: list[str] = Field(default_factory=list)
+    capability_hint: str | None = Field(default=None, max_length=256)
+
+
 # ═══════════════════════════════════════════════════
 # 内部辅助
 # ═══════════════════════════════════════════════════
@@ -205,6 +221,120 @@ def _validate_connection_url(base_url: str, network_scope: str) -> str:
             base_url, allow_private=(network_scope == "private"))
     except UrlBlockedError as exc:
         raise ValueError(f"MCP 地址被 SSRF 防护拦截: {exc}") from exc
+
+
+# ── AI 语义契约（决策 #19）─────────────────────────────────────
+# 红线：进入 LLM prompt 的输入只有工具元数据（名称/描述/Schema/示例/
+# 连接名/操作类型），且全部经 _redact_urls 清洗；base_url 与任何凭据
+# 材料绝不进入 prompt（ADR-0011 D7 同源红线）。
+SEMANTIC_SUMMARY_MAX = 300
+SEMANTIC_ITEM_MAX = 200
+SEMANTIC_LIST_MAX = 10
+SEMANTIC_HINT_MAX = 128
+
+_URL_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://\S+")
+
+
+def _redact_urls(text: str) -> str:
+    """prompt 输入清洗：任何形如 scheme://... 的字符串替换为占位符，
+    防止上游描述/Schema 中携带的 URL（可能内嵌凭据）进入 LLM 出口。"""
+    return _URL_PATTERN.sub("[URL已屏蔽]", str(text or ""))
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_semantic_draft(content: str) -> dict[str, Any] | None:
+    """解析 LLM 输出为语义契约草稿；形状不合法返回 None（调用方重试）。"""
+    from backend.shared.json_extractor import extract_json
+
+    if not content or "{" not in content:
+        return None
+    parsed = extract_json(content, source="tool.semantic_suggest")
+    if not isinstance(parsed, dict):
+        return None
+    summary = str(parsed.get("summary") or "").strip()
+    if not summary:
+        return None
+
+    def _items(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        items = []
+        for entry in value:
+            text = str(entry or "").strip()
+            if text:
+                items.append(text[:SEMANTIC_ITEM_MAX])
+        return items[:SEMANTIC_LIST_MAX]
+
+    hint = parsed.get("capability_hint")
+    hint_text = str(hint).strip()[:SEMANTIC_HINT_MAX] \
+        if isinstance(hint, str) and hint.strip() else None
+    return {
+        "summary": summary[:SEMANTIC_SUMMARY_MAX],
+        "scenarios": _items(parsed.get("scenarios")),
+        "exclusions": _items(parsed.get("exclusions")),
+        "capability_hint": hint_text,
+    }
+
+
+def _validate_semantic_contract(summary: str, scenarios: list,
+                                exclusions: list,
+                                capability_hint: str | None) -> str | None:
+    """草稿保存的长度校验；命中返回可读原因（端点转 400）。"""
+    if not summary.strip():
+        return "summary 不能为空"
+    if len(summary.strip()) > SEMANTIC_SUMMARY_MAX:
+        return f"summary 超过 {SEMANTIC_SUMMARY_MAX} 字"
+    for name, items in (("scenarios", scenarios), ("exclusions", exclusions)):
+        if len(items) > SEMANTIC_LIST_MAX:
+            return f"{name} 条数超过 {SEMANTIC_LIST_MAX}"
+        for item in items:
+            if len(str(item).strip()) > SEMANTIC_ITEM_MAX:
+                return f"{name} 单条超过 {SEMANTIC_ITEM_MAX} 字"
+    if capability_hint is not None and \
+            len(str(capability_hint).strip()) > SEMANTIC_HINT_MAX:
+        return f"capability_hint 超过 {SEMANTIC_HINT_MAX} 字"
+    return None
+
+
+def _render_semantic_prompt(row: dict, input_schema: dict) -> str:
+    """组装语义建议 prompt：仅工具元数据，全部经 URL 清洗。"""
+    from backend.prompts.service import prompt_service
+
+    return prompt_service.render_sync(
+        "tool.semantic_suggest",
+        tool_name=_redact_urls(str(row["tool_name"] or "")),
+        description=_redact_urls(str(row["description"] or "")),
+        input_schema=_redact_urls(json.dumps(input_schema or {},
+                                             ensure_ascii=False)),
+        examples=_redact_urls("\n".join(str(e) for e in (row.get("examples")
+                                                         or []))),
+        connection_name=_redact_urls(str(row.get("connection_name") or "")),
+        governance_operation=str(
+            (row.get("governance") or {}).get("operation") or "read"),
+    ).text
+
+
+async def _invoke_semantic_llm(prompt_text: str) -> str:
+    """调用当前 LLM 生成语义契约 JSON（同步 invoke 经 to_thread 执行）。"""
+    from backend.infra.llm import llm
+
+    resp = await asyncio.to_thread(
+        llm.invoke,
+        [("system", prompt_text), ("human", "请只输出 JSON 结果。")],
+    )
+    content = getattr(resp, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):  # 多块内容（LangChain content blocks）
+        return "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content)
+    return str(content)
 
 
 # URL 内嵌凭据红线（Batch 4 收口，PR #115 Codex P1）：连接地址不得携带
@@ -1143,6 +1273,9 @@ def _tool_view(row: dict) -> dict:
         "reviewed_by": row["reviewed_by"],
         "reviewed_at": row["reviewed_at"].isoformat()
         if row.get("reviewed_at") else None,
+        # AI 语义契约（决策 #19）：草稿候选 + 已并入留痕（独立列，不动 governance）
+        "semantic_draft": row.get("semantic_draft"),
+        "semantic_approved": row.get("semantic_approved"),
         "last_seen_version": row["last_seen_version"],
         "retired_reason": row["retired_reason"],
         "updated_at": row["updated_at"].isoformat()
@@ -1384,6 +1517,192 @@ async def disable_tool(request: Request, tool_id: int):
     result = await asyncio.to_thread(
         run_governance_mutation, request, operator, "mcp_tool_disable",
         {"tool_id": tool_id}, _write)
+    await _refresh_runtime()
+    return result
+
+
+# ═══════════════════════════════════════════════════
+# AI 语义契约（决策 #19：生成候选 → 管理员编辑 → 审核并入）
+# ═══════════════════════════════════════════════════
+
+@router.post("/tools/{tool_id}/semantic/suggest")
+async def suggest_semantic(request: Request, tool_id: int):
+    """AI 生成语义契约候选：仅读工具元数据（不含凭据与 URL），产物只写
+    独立列 semantic_draft（候选，不生效）；管理员「审核通过并入」后才更新
+    正式 description。LLM 不可用/调用失败 → 503；解析失败重试 1 次仍失败
+    → 502，绝不伪造草稿。"""
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+    row = await asyncio.to_thread(_load_tool, tool_id, tenant)
+    if row is None:
+        return _not_found("工具不存在")
+    if row["status"] not in ("approved", "pending"):
+        return _conflict(
+            f"工具当前状态为 {row['status']}，仅 approved/pending 工具可生成语义建议")
+
+    schema = await asyncio.to_thread(_current_input_schema, tool_id)
+    try:
+        prompt_text = _render_semantic_prompt(row, schema)
+    except Exception as exc:  # noqa: BLE001 — prompt 渲染失败显式暴露
+        return JSONResponse(
+            status_code=503,
+            content={"code": "PROMPT_RENDER_FAILED",
+                     "message": f"语义建议 prompt 渲染失败: {exc}"})
+
+    draft: dict[str, Any] | None = None
+    last_reason = ""
+    for _attempt in range(2):  # 解析失败重试 1 次
+        try:
+            content = await _invoke_semantic_llm(prompt_text)
+        except Exception as exc:  # noqa: BLE001 — LLM 失败不伪造结果
+            return JSONResponse(
+                status_code=503,
+                content={"code": "LLM_UNAVAILABLE",
+                         "message": f"LLM 不可用或调用失败: {str(exc)[:300]}"})
+        draft = _normalize_semantic_draft(content)
+        if draft is not None:
+            break
+        last_reason = content.strip()[:200]
+
+    if draft is None:
+        return JSONResponse(
+            status_code=502,
+            content={"code": "SEMANTIC_PARSE_FAILED",
+                     "message": "语义解析失败（重试后仍无法得到合法 JSON）"
+                                f"：{last_reason}"})
+
+    def _write() -> dict[str, Any]:
+        record = {**draft, "status": "suggested",
+                  "generated_at": _now_iso(), "generated_by": actor}
+        _execute(
+            "UPDATE ai.mcp_tools SET semantic_draft = %(draft)s, "
+            "updated_at = now() WHERE id = %(tid)s",
+            {"draft": PgJson(record), "tid": tool_id})
+        _audit("mcp_tool_semantic_suggest", {
+            "tool_id": tool_id, "capability": f"mcp.{row['capability_slug']}",
+            "summary_chars": len(record["summary"]),
+            "scenarios": len(record["scenarios"]),
+            "exclusions": len(record["exclusions"]),
+        }, user_id=actor, tenant_id=tenant)
+        return record
+
+    result = await asyncio.to_thread(
+        run_governance_mutation, request, operator,
+        "mcp_tool_semantic_suggest", {"tool_id": tool_id}, _write)
+    return {"tool_id": tool_id, "draft": result}
+
+
+@router.put("/tools/{tool_id}/semantic/draft")
+async def save_semantic_draft(request: Request, tool_id: int,
+                              body: SemanticDraftRequest):
+    """保存管理员编辑后的语义契约草稿（status=edited）：候选行为，
+    不影响运行时；审核通过并入请走 /semantic/approve。"""
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+    row = await asyncio.to_thread(_load_tool, tool_id, tenant)
+    if row is None:
+        return _not_found("工具不存在")
+    reason = _validate_semantic_contract(
+        body.summary, body.scenarios, body.exclusions, body.capability_hint)
+    if reason:
+        return _bad_request(reason, code="SEMANTIC_CONTRACT_INVALID")
+
+    def _write() -> dict[str, Any]:
+        existing = row.get("semantic_draft") or {}
+        record = {
+            "summary": body.summary.strip(),
+            "scenarios": [s.strip() for s in body.scenarios if s.strip()],
+            "exclusions": [s.strip() for s in body.exclusions if s.strip()],
+            "capability_hint": (body.capability_hint or "").strip()
+            or None,
+            "status": "edited",
+            # 保留首次生成留痕（AI 建议 → 人工编辑的审计链）
+            "generated_at": existing.get("generated_at"),
+            "generated_by": existing.get("generated_by"),
+            "edited_at": _now_iso(),
+            "edited_by": actor,
+        }
+        _execute(
+            "UPDATE ai.mcp_tools SET semantic_draft = %(draft)s, "
+            "updated_at = now() WHERE id = %(tid)s",
+            {"draft": PgJson(record), "tid": tool_id})
+        _audit("mcp_tool_semantic_draft_save", {
+            "tool_id": tool_id, "capability": f"mcp.{row['capability_slug']}",
+            "status": "edited",
+        }, user_id=actor, tenant_id=tenant)
+        return record
+
+    return await asyncio.to_thread(
+        run_governance_mutation, request, operator,
+        "mcp_tool_semantic_draft_save", {"tool_id": tool_id}, _write)
+
+
+@router.post("/tools/{tool_id}/semantic/approve")
+async def approve_semantic(request: Request, tool_id: int):
+    """审核通过并入：草稿 summary 并入正式 description（平台可信描述，
+    经 prompt 供 Planner/路由使用），完整契约存 semantic_approved 留痕，
+    草稿置 applied。幂等：无草稿或已并入 → 409。
+
+    边界：只更新平台描述列，不动 content_hash/approved_hash——它们绑定
+    上游发现内容（漂移检测的事实源），平台描述变化不构成上游漂移。
+    """
+    from backend.infra.mcp_registry import specs as spec_lib
+
+    operator = await require_admin_user(request)
+    tenant = _tenant_of(operator, request)
+    actor = _actor_of(operator)
+    row = await asyncio.to_thread(_load_tool, tool_id, tenant)
+    if row is None:
+        return _not_found("工具不存在")
+    if row["status"] == "retired":
+        return _conflict("上游已消失（retired）的工具不能并入语义契约")
+    draft = row.get("semantic_draft") or {}
+    summary = str(draft.get("summary") or "").strip()
+    if not summary:
+        return _conflict("无待审语义草稿，请先生成或编辑草稿")
+    if draft.get("status") == "applied":
+        return _conflict("草稿已并入正式描述，无待审草稿（可重新生成）")
+    new_description = summary[:spec_lib.MAX_DESCRIPTION_CHARS]
+
+    def _write() -> dict[str, Any]:
+        approved = {
+            "summary": summary,
+            "scenarios": draft.get("scenarios") or [],
+            "exclusions": draft.get("exclusions") or [],
+            "capability_hint": draft.get("capability_hint"),
+            "approved_at": _now_iso(),
+            "approved_by": actor,
+            "description_after": new_description,
+        }
+        updated = _execute(
+            """
+            UPDATE ai.mcp_tools
+            SET description = %(desc)s,
+                semantic_approved = %(approved)s,
+                semantic_draft = semantic_draft || %(applied)s,
+                updated_at = now()
+            WHERE id = %(tid)s
+            """,
+            {"desc": new_description, "approved": PgJson(approved),
+             "applied": PgJson({"status": "applied"}), "tid": tool_id})
+        if updated == 0:
+            raise _MutationConflict("工具不存在或已被删除")
+        _audit("mcp_tool_semantic_approve", {
+            "tool_id": tool_id, "capability": f"mcp.{row['capability_slug']}",
+            "description_chars": len(new_description),
+            "scenarios": len(approved["scenarios"]),
+            "exclusions": len(approved["exclusions"]),
+        }, user_id=actor, tenant_id=tenant)
+        return {"tool_id": tool_id, "approved": True,
+                "description": new_description,
+                "semantic_approved": approved}
+
+    result = await asyncio.to_thread(
+        run_governance_mutation, request, operator,
+        "mcp_tool_semantic_approve", {"tool_id": tool_id}, _write)
+    # 描述已变：刷新运行时快照使新描述即时进入 Planner/路由 prompt
     await _refresh_runtime()
     return result
 
