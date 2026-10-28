@@ -262,6 +262,24 @@ _register(PromptSpec(
     default_file="tool_failure_analysis.yaml",
 ))
 
+# AI 语义契约建议（决策 #19）：管理端生成工具语义契约候选，仅读工具
+# 元数据（名称/描述/Schema/示例/连接名/操作类型），绝不注入凭据与 URL。
+_register(PromptSpec(
+    key="tool.semantic_suggest",
+    name="Tool 语义契约建议 Prompt",
+    category="router",
+    risk_level="medium",
+    variables=(
+        R("tool_name"),
+        R("description"),
+        R("input_schema"),
+        R("examples"),
+        R("connection_name"),
+        R("governance_operation"),
+    ),
+    default_file="tool_semantic_suggest.yaml",
+))
+
 _register(PromptSpec(
     key="selection_decision.review_pain",
     name="用户痛点分析",

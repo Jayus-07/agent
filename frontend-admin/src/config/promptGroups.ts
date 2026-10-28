@@ -32,6 +32,7 @@ export const PROMPT_GROUPS: PromptGroup[] = [
     keys: [
       'router.tool_selector',
       'tool.failure_analysis',
+      'tool.semantic_suggest',
     ],
   },
 ]

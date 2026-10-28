@@ -15,6 +15,9 @@ const disableMcpTool = vi.hoisted(() => vi.fn())
 const testInvokeMcpTool = vi.hoisted(() => vi.fn())
 const runFailureAnalysis = vi.hoisted(() => vi.fn())
 const getFailureAnalyses = vi.hoisted(() => vi.fn())
+const suggestMcpSemantic = vi.hoisted(() => vi.fn())
+const saveMcpSemanticDraft = vi.hoisted(() => vi.fn())
+const approveMcpSemantic = vi.hoisted(() => vi.fn())
 const navigation = vi.hoisted(() => ({
   params: new URLSearchParams(),
   router: { push: vi.fn(), replace: vi.fn() },
@@ -38,6 +41,9 @@ vi.mock('@/api/mcp', () => ({
   grantMcpTool,
   disableMcpTool,
   testInvokeMcpTool,
+  suggestMcpSemantic,
+  saveMcpSemanticDraft,
+  approveMcpSemantic,
 }))
 vi.mock('next/navigation', () => ({
   useRouter: () => navigation.router,
@@ -183,6 +189,23 @@ beforeEach(() => {
     created_at: '2026-10-28T12:00:00+00:00',
   })
   getFailureAnalyses.mockResolvedValue({ count: 0, analyses: [] })
+  suggestMcpSemantic.mockResolvedValue({
+    tool_id: 7,
+    draft: {
+      summary: 'AI 生成的摘要', scenarios: [], exclusions: [],
+      capability_hint: null, status: 'suggested',
+      generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+    },
+  })
+  saveMcpSemanticDraft.mockResolvedValue({
+    summary: '人工保存的摘要', scenarios: [], exclusions: [],
+    capability_hint: null, status: 'edited',
+    generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+    edited_at: '2026-10-21T10:00:00Z', edited_by: 'user:admin',
+  })
+  approveMcpSemantic.mockResolvedValue({
+    tool_id: 7, approved: true, description: '人工保存的摘要',
+  })
 })
 
 afterEach(() => {
@@ -302,11 +325,25 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     expect(container.textContent).toContain('zhihu-open-api')
     expect(container.textContent).toContain('获取知乎回答列表')
 
-    // AI 语义 Tab：置灰壳位（不可点击 + data-stub 标记 + 常驻提示）
-    const stubTab = container.querySelector('[data-stub="demo"]')
-    expect(stubTab?.textContent).toContain('AI 语义')
-    expect(stubTab?.getAttribute('aria-disabled')).toBe('true')
-    expect(container.textContent).toContain('AI 语义契约建议属下一批')
+    // AI 语义 Tab：真实语义契约工作区（壳位已移除；无草稿 → 空态 + 生成按钮）
+    expect(container.querySelector('[data-stub="demo"]')).toBeNull()
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    expect(aiTab).toBeTruthy()
+    expect(aiTab!.getAttribute('aria-disabled')).toBeNull()
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('绝不包含凭据与地址')
+    const suggestButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成语义建议'))
+    expect(suggestButton).toBeTruthy()
+    await act(async () => {
+      suggestButton!.click()
+      await Promise.resolve()
+    })
+    expect(suggestMcpSemantic).toHaveBeenCalledWith(7)
 
     // 执行策略：审核表单 + 业务域 select + 授权开关
     const policyTab = Array.from(container.querySelectorAll('button[role="tab"]'))
@@ -342,6 +379,113 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     })
     expect(testInvokeMcpTool).toHaveBeenCalled()
     expect(container.textContent).toContain('success')
+  })
+
+  it('AI 语义：草稿表单可编辑，保存草稿与审核并入调用对应 API', async () => {
+    // happy-dom 未内置 confirm，直接替换为可断言的桩
+    const confirmStub = vi.fn(() => true)
+    window.confirm = confirmStub as unknown as typeof window.confirm
+    // 打开抽屉前换成带草稿的工具详情
+    getMcpToolDetail.mockResolvedValue({
+      ...mcpTool,
+      semantic_draft: {
+        summary: 'AI 建议摘要', scenarios: ['场景一'], exclusions: ['写操作'],
+        capability_hint: 'order.lookup', status: 'suggested',
+        generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+      },
+    })
+    const container = await mountPage()
+    const mcpRow = Array.from(container.querySelectorAll('tbody tr'))
+      .find((tr) => tr.textContent?.includes('zhihu.get_answers'))
+    const detailButton = Array.from(mcpRow!.querySelectorAll('button'))
+      .find((item) => item.textContent?.trim() === '详情')
+    await act(async () => {
+      detailButton!.click()
+      await Promise.resolve()
+    })
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+
+    // 待审状态 chip + 草稿表单预填
+    expect(container.textContent).toContain('AI 生成（待审）')
+    const textareas = Array.from(container.querySelectorAll('textarea'))
+    expect(textareas[0]!.value).toBe('AI 建议摘要')
+
+    const saveButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('保存草稿'))
+    await act(async () => {
+      saveButton!.click()
+      await Promise.resolve()
+    })
+    expect(saveMcpSemanticDraft).toHaveBeenCalledWith(7, {
+      summary: 'AI 建议摘要',
+      scenarios: ['场景一'],
+      exclusions: ['写操作'],
+      capability_hint: 'order.lookup',
+    })
+
+    const approveButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('审核通过并入描述'))
+    expect(approveButton).toBeTruthy()
+    await act(async () => {
+      approveButton!.click()
+      await Promise.resolve()
+    })
+    expect(confirmStub).toHaveBeenCalled()
+    expect(approveMcpSemantic).toHaveBeenCalledWith(7)
+  })
+
+  it('AI 语义：已并入后只读展示留痕并允许再次生成', async () => {
+    getMcpToolDetail.mockResolvedValue({
+      ...mcpTool,
+      semantic_draft: {
+        summary: '已并入的摘要', scenarios: [], exclusions: [],
+        capability_hint: null, status: 'applied',
+        generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+      },
+      semantic_approved: {
+        summary: '已并入的摘要', scenarios: ['适用A'], exclusions: ['禁用B'],
+        capability_hint: null, approved_at: '2026-10-21T11:00:00Z',
+        approved_by: 'user:admin', description_after: '已并入的摘要',
+      },
+    })
+    const container = await mountPage()
+    const mcpRow = Array.from(container.querySelectorAll('tbody tr'))
+      .find((tr) => tr.textContent?.includes('zhihu.get_answers'))
+    const detailButton = Array.from(mcpRow!.querySelectorAll('button'))
+      .find((item) => item.textContent?.trim() === '详情')
+    await act(async () => {
+      detailButton!.click()
+      await Promise.resolve()
+    })
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('已并入正式描述')
+    expect(container.textContent).toContain('已并入的摘要')
+    expect(container.textContent).toContain('适用：适用A')
+    expect(container.textContent).toContain('禁用：禁用B')
+    // 已并入后不再出现「保存草稿 / 审核通过并入描述」，只允许再次生成
+    expect(Array.from(container.querySelectorAll('button'))
+      .some((item) => item.textContent?.includes('保存草稿'))).toBe(false)
+    expect(Array.from(container.querySelectorAll('button'))
+      .some((item) => item.textContent?.includes('审核通过并入描述'))).toBe(false)
+    const regen = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('重新生成'))
+    expect(regen).toBeTruthy()
+    await act(async () => {
+      regen!.click()
+      await Promise.resolve()
+    })
+    expect(suggestMcpSemantic).toHaveBeenCalledWith(7)
   })
 
   it('强制失败测试入口在「运行质量与失败」subTab，展示模拟结果并回链 Trace', async () => {
