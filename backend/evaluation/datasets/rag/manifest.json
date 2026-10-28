@@ -1,9 +1,9 @@
 {
-  "version": "6.0.0-desktop-candidate.3",
+  "version": "6.0.0-desktop-candidate.4",
   "module": "rag",
   "kb_id": "rag_eval_kb",
   "case_count": 24,
-  "content_hash": "4c5301c379724c4b",
-  "description": "上传专项候选题库；沿用项目现有格式与评分器（1.0.1：UFQ-016 限定 sku.csv 消除跨文件歧义）（1.0.2/candidate.3：SKU 组题目限定来源文件）",
+  "content_hash": "647aa6f8525ba232",
+  "description": "上传专项候选题库；沿用项目现有格式与评分器（1.0.1：UFQ-016 限定 sku.csv 消除跨文件歧义）（1.0.2/candidate.3：SKU 组题目限定来源文件）（1.0.3/candidate.4：018/019/021 题面来源文件纠正）",
   "cases_hash": "4c5301c379724c4b"
 }

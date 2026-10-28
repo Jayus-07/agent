@@ -1,10 +1,10 @@
 {
   "name": "desktop_upload_full",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "dataset_version": "6.0.0-desktop-candidate.1",
   "kb_id": "rag_eval_kb",
   "fixture_set": "baseline",
-  "description": "桌面文档上传专项；不等同于原业务场景覆盖",
+  "description": "桌面文档上传专项；不等同于原业务场景覆盖（1.0.3：018/019/021 题面来源文件与标注对齐）",
   "case_ids": [
     "UFQ-001",
     "UFQ-002",
@@ -31,6 +31,6 @@
     "UFQ-023",
     "UFQ-024"
   ],
-  "cases_hash": "4c5301c379724c4b",
+  "cases_hash": "647aa6f8525ba232",
   "min_samples": 24
 }
