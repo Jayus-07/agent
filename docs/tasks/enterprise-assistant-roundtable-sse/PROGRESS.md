@@ -1,5 +1,12 @@
 # 进度
 
+## 2026-10-29：计费验证通过；生成拒答边界专项定位（prompt 复放稳定→差异在实际调用组装）
+
+- **计费维度验证通过**（今日评测流量复查）：eval 流量（user 279/tenant eval）1400 条 embedding+188 条 llm 全部归属完整；rerank 227 条全部 `local_inference/estimated` 零云费（修复生效，此前 unpriced）；llm 191 条 approved_price_table/exact 计 0.0723 CNY。残留：172 embedding+133 rerank+3 llm 无归属行——经核对为本会话诊断探针（容器内直连 pipeline 无请求上下文）所致，非业务泄漏；另有 6 条 doubao unpriced 待查（量小）。
+- **生成拒答边界专项进展**：`_build_prompt` 复用生产 rag.qa 模板（"信息不足时写「资料未提及」"+META can_answer 协议）；**同 prompt 复放 3/3 稳定正确**（温度 0 生效）；降级话术文本不符（_DEGRADED_ANSWER 是"服务暂时不可用"）；memory 污染排除（eval 会话 memory_records 0 行）。结论收敛：**评测实际调用时的上下文组装与复放存在差异**（real 5 候选含同库近重复 FAQ 噪声 vs 复放 2 行干净上下文），或供应商非确定性。下一步：在 generate_answer 处加评测期 prompt 捕获（hash+前缀日志），单 case 重跑取 diff——区分"组装差异"与"供应商非确定性"后对症修复（前者修组装，后者需 judge_completeness 入门禁判别拒答合理性+多数投票）。
+- 已知相关事实：desktop 语料按设计含近重复场景（UF-16），faq 同一 Q/A 以 docx/md/mixed 三形态入库（此前 9 个近重复文档经我批量审核激活），生成模型面对同答案多副本+其他 FAQ 噪声时 can_answer 判断抖动——这是**真实的生成鲁棒性课题**（检索已把证据放到位），修复方向是 rag.qa 提示词对重复证据的指引或检索去重加权，属 rag.qa 自身的发布周期。
+- 当前账面：desktop_upload_full 24 题 62.5%（15/24，检索修复验证通过+判分真实化）；smoke 8 题同比率。判分体系/评测基建缺陷已清零；剩生成边界抖动一个专项 + UFQ-020 同类歧义修题。
+
 ## 2026-10-28：方案A后首轮全量门禁 62.5%——检索修复获验证，剩生成边界抖动一个专项
 
 - 生产指标口径已向用户书面确认（耗时表+质量维度+P95/小并发要求）。
