@@ -711,6 +711,29 @@ def _hybrid_retrieve_impl(query, vector_retriever, bm25_retriever, k=5, doc_ids=
         cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
         rank_map[cid] = rank_map.get(cid, 0) + 1 / (rrf_k + rank)
 
+    # ── 标识符精确命中加权（2026-10-28）──
+    # RRF 结构性偏差：查询含长数字/字母数字标识符（SKU/单号/型号）时，
+    # 唯一被 BM25 精确命中的候选只能拿 1/(rrf_k+rank)，而"两路都出现的
+    # 同模板相似行"（表格数据每行向量几乎相同）得分必然更高——精确行被
+    # 系统性埋没（实测 SKU 000001 行 BM25 排第 1、重排打分 0.9884 却进
+    # 不了 top5）。凡候选原文包含查询中的长标识符 token，给一个等效于
+    # "单路第 1 名"的加性奖励，让它至少进入 rerank 视野由重排终裁。
+    import re as _re
+
+    _id_tokens = {
+        t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", query or "")
+        if not t.isalpha() or len(t) >= 6
+    }
+    if _id_tokens:
+        _EXACT_TOKEN_BONUS = 1.0 / rrf_k
+        for doc in (*vector_docs, *bm25_docs, *sql_docs):
+            cid = doc.metadata.get("chunk_id") or _fallback_id(doc)
+            if cid not in rank_map:
+                continue
+            text = (doc.page_content or "").lower()
+            if any(t in text for t in _id_tokens):
+                rank_map[cid] += _EXACT_TOKEN_BONUS
+
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
     doc_dict = {doc.metadata.get("chunk_id") or _fallback_id(doc): doc for doc in vector_docs + bm25_docs + sql_docs}
