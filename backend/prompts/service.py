@@ -348,9 +348,40 @@ class PromptService:
                     entry = current
                 if entry is not None:
                     entries[key] = self._copy_entry(entry)
+                else:
+                    # 2026-10-29：草稿/未加载版本只能静默跳过（本方法只读
+                    # 进程快照，无法取 DB），钉住落空会回落已发布版——发布
+                    # 评测必须改走 bind_prompt_entries 显式注入模板正文。
+                    logger.warning(
+                        "[PromptPin] 版本 %s=%s 不在进程快照/历史中，钉住跳过"
+                        "（将回落当前发布版）；评测草稿请用 bind_prompt_entries",
+                        key, version_int,
+                    )
         token = _prompt_pin_var.set(entries)
         try:
             yield
+        finally:
+            _prompt_pin_var.reset(token)
+
+    @contextmanager
+    def bind_prompt_entries(
+        self, entries: dict[str, tuple[int, str]] | None,
+    ) -> Iterator[dict[str, int]]:
+        """以显式 (version, template) 固定模板——评测待发布草稿的唯一可靠通道。
+
+        bind_prompt_versions 只能钉住进程快照/历史里出现过的版本；草稿版本
+        既不在快照也不在历史，会被静默跳过、评测回落到已发布版（曾致发布
+        门禁一直在评旧模板、新版本从未被真正评测）。发布评测在 async 侧
+        取出草稿模板正文后经此入口注入，pin 语义与其余链路完全一致。
+        """
+        pinned: dict[str, _SnapshotEntry] = {}
+        for key, (version, template) in (entries or {}).items():
+            pinned[key] = _SnapshotEntry(
+                template=template, version=int(version), variables=[],
+            )
+        token = _prompt_pin_var.set(pinned)
+        try:
+            yield {k: e.version for k, e in pinned.items()}
         finally:
             _prompt_pin_var.reset(token)
 

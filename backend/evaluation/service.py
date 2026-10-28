@@ -493,7 +493,13 @@ class EvaluationService:
         """执行评估，并在整个运行期间固定候选 Prompt 快照。"""
         from contextlib import nullcontext
 
-        if config.prompt_versions:
+        if config.prompt_templates:
+            from backend.prompts.service import prompt_service
+
+            # 显式模板注入优先：草稿版本不在进程快照/历史内，仅传版本号会被
+            # bind_prompt_versions 静默跳过、评测回落已发布版（2026-10-29 修复）。
+            prompt_context = prompt_service.bind_prompt_entries(config.prompt_templates)
+        elif config.prompt_versions:
             from backend.prompts.service import prompt_service
 
             prompt_context = prompt_service.bind_prompt_versions(config.prompt_versions)
