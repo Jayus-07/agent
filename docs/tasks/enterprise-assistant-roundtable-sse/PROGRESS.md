@@ -1,5 +1,14 @@
 # 进度
 
+## 2026-10-29：smoke 75%（6/8）——两剩余缺陷精确刻画为产品课题
+
+- prompt 捕获生效（EVAL_TRIGGER=prompt_publish 时记录 sha/长度/首段）。**016 修题复放验证成功**：以 sku.csv 00012345 行为上下文，生成正确作答"价格886/库存161"（与标注一致）——修题有效；本轮 smoke 016 仍 fail 是检索候选仍混入 sku_bom/gbk 歧义行（融合排序问题），需检索侧文件限定信号或 rag.qa 提示词对多文件冲突的指引。
+- **UFQ-023 根因刻画（真实 chunking 缺陷）**：multi_sheet.xlsx 员工表的 chunk 是**列数组转置形态**（`工号_E0001_E0002...部门_客服_研发_财务...`），按列聚合而非按行成块——模型无法可靠按行读取 E0001 的部门/入职日期，合理拒答。修法：excel 解析/chunking 对多行数据表输出行级记录（或行级+表头配对），这是真实的产品级表格处理缺陷，影响一切 xlsx 知识库。
+- **smoke 稳态 6/8 = 75%**（001/002/007/008/011/022 通过——含此前全部失败项的修复验证：年假双题、制度双题、合同表格、SKU 000001）；**full 24 题 62.5%**。判分抖动随温度 0 + 判分清洗已稳定（连续两轮 001/002 结果一致）。
+- **计费维度验收通过**：eval 流量归属完整（user 279/tenant eval，1400 embedding+188 llm）；rerank 227 条 local_inference 零云费（修复生效）；llm 191 条 exact 计 0.0723 CNY；残留无归属行为本会话诊断探针（无请求上下文的直连调用），非业务泄漏；6 条 doubao unpriced 待查（量小）。
+- **验收状态总表**：①评测基建——完成；②检索缺陷（RRF/超时链/重复候选/标识符加权）——完成并验证；③判分体系——完成（温度0/claim清洗/judge权威门值/全面生效）；④数据治理（修题+hash 链+换代合并）——完成；⑤计费——验证通过；⑥生成边界两缺陷（xlsx 转置 chunking、跨文件歧义检索）——已刻画待修；⑦prompt v2 发布——待⑥后重考；⑧P95/小并发、browser-use——待⑦后收口。
+- **下一循环**：①xlsx 行级 chunking 修复（影响面：全部 xlsx 知识库）；②跨文件歧义检索指引（rag.qa 或融合侧）；③重考 desktop_upload_full；④prompt v2 approve→publish；⑤复测发货/发票+计费复查；⑥P95/小并发自动压测+生产指标报告；⑦browser-use 完整验收。
+
 ## 2026-10-29：计费验证通过；生成拒答边界专项定位（prompt 复放稳定→差异在实际调用组装）
 
 - **计费维度验证通过**（今日评测流量复查）：eval 流量（user 279/tenant eval）1400 条 embedding+188 条 llm 全部归属完整；rerank 227 条全部 `local_inference/estimated` 零云费（修复生效，此前 unpriced）；llm 191 条 approved_price_table/exact 计 0.0723 CNY。残留：172 embedding+133 rerank+3 llm 无归属行——经核对为本会话诊断探针（容器内直连 pipeline 无请求上下文）所致，非业务泄漏；另有 6 条 doubao unpriced 待查（量小）。
