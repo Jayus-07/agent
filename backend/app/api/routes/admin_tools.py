@@ -23,13 +23,13 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException as _HTTP, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import require_admin_user, require_editor_user
+from backend.app.api.deps import require_admin_user, require_editor_user, run_governance_mutation
 from backend.config import ENVIRONMENT
 from backend.shared.logger import logger
 
@@ -635,6 +635,175 @@ async def tool_contract_changes(
          "created_at": str(r[8])}
         for r in rows
     ]}
+
+
+# ═══════════════════════════════════════════════════
+# Tool Discovery 策略与模拟器（决策 #18，B1；只读候选解析，零运行时改动）
+# ═══════════════════════════════════════════════════
+
+_DISCOVERY_MODES = ("adaptive", "reasoning", "fast")
+_DISCOVERY_PRODUCTS = ("agent", "customer_service", "public", "internal")
+
+
+class DiscoveryPolicyUpsert(BaseModel):
+    """发现策略 upsert 请求（数值边界见 _validate_discovery_policy）。"""
+
+    name: str = Field(..., min_length=1, max_length=64)
+    mode: str = Field("adaptive", max_length=16)
+    top_k: int = Field(3)
+    max_rounds: int = Field(2)
+    cost_budget_milliunits: int = Field(50)
+    timeout_ms: int = Field(8000)
+    prompt_key: str = Field("router.tool_selector", min_length=1, max_length=128)
+
+
+class DiscoverySimulateRequest(BaseModel):
+    """发现模拟请求：纯读，不触发执行，不进路由运行时。"""
+
+    query: str = Field(..., min_length=1, max_length=2000)
+    domain: str = Field("", max_length=64)
+    top_k: int = Field(3)
+    product_id: str = Field("agent", max_length=32)
+
+
+def _validate_discovery_policy(body: DiscoveryPolicyUpsert) -> None:
+    """管理端显式 400 校验（Pydantic 默认 422；前端按 message 展示）。"""
+    if body.mode not in _DISCOVERY_MODES:
+        raise _HTTP(400, f"不支持的发现模式: {body.mode}（可选：{_DISCOVERY_MODES}）")
+    if not 1 <= body.top_k <= 20:
+        raise _HTTP(400, "top_k 需在 1-20 之间")
+    if not 1 <= body.max_rounds <= 5:
+        raise _HTTP(400, "max_rounds 需在 1-5 之间")
+    if not 1000 <= body.timeout_ms <= 30000:
+        raise _HTTP(400, "timeout_ms 需在 1000-30000 之间")
+    if not 0 <= body.cost_budget_milliunits <= 1_000_000:
+        raise _HTTP(400, "cost_budget_milliunits 需在 0-1000000 之间")
+
+
+def _audit_discovery(event: str, detail: dict[str, Any], *, user_id: str = "",
+                     tenant_id: str = "") -> None:
+    """操作审计旁路（照 admin_mcp._audit 同款软失败语义）。"""
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event(
+            "ADMIN_ACTION", category=event, detail=detail,
+            user_id=user_id or None, tenant_id=tenant_id or None,
+        )
+    except Exception:  # noqa: BLE001 — 审计旁路软失败
+        logger.warning("[AdminTools] Discovery 审计写入失败: %s", event, exc_info=True)
+
+
+def _discovery_tenant(request: Request) -> str:
+    """操作租户：网关注入身份头重解析；无租户头（服务凭据）落 default。"""
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    return str(ident.tenant_id or "default")
+
+
+def _discovery_permission_note(name: str, risk: str, product_id: str,
+                               domain: str) -> str:
+    """单候选的权限/过滤说明（如实描述已通过的检查与剩余执行期门）。"""
+    notes = [f"产品范围允许（product={product_id}"]
+    if domain:
+        notes.append(f"，域={domain}")
+    notes.append("）")
+    from backend.core.tool_governance.registry import get_tool_spec
+
+    spec = get_tool_spec(name)
+    if spec is not None:
+        if spec.required_roles:
+            notes.append(f"；声明角色 {','.join(spec.required_roles)}（模拟视角角色为空集，仅作展示）")
+        if spec.required_scopes:
+            notes.append(f"；声明 scope {','.join(spec.required_scopes)}")
+    if str(risk).upper() not in ("", "UNKNOWN", "LOW"):
+        notes.append(f"；风险级别 {risk}（执行期另有审批门）")
+    return "".join(notes)
+
+
+@router.get("/discovery/policy")
+async def get_discovery_policy(request: Request):
+    """生效发现策略（无 active 行返回代码内默认值）+ 本租户全部策略行。"""
+    await require_editor_user(request)
+    tenant = _discovery_tenant(request)
+    from backend.orchestration.discovery import service as discovery_service
+
+    def _read() -> dict[str, Any]:
+        return {
+            "policy": discovery_service.load_active_policy(tenant),
+            "policies": discovery_service.load_policies(tenant),
+        }
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as e:  # noqa: BLE001 — 历史查询软失败转 503
+        raise _HTTP(503, f"发现策略查询失败: {e}")
+
+
+@router.put("/discovery/policy")
+async def update_discovery_policy(request: Request, body: DiscoveryPolicyUpsert):
+    """upsert 并置为本租户唯一 active 策略（治理写：幂等 + 审计）。"""
+    operator = await require_admin_user(request)
+    _validate_discovery_policy(body)
+    tenant = _discovery_tenant(request)
+    actor = str(operator.actor or "")
+    from backend.orchestration.discovery import service as discovery_service
+
+    def _write() -> dict[str, Any]:
+        policy = discovery_service.upsert_policy(
+            tenant_id=tenant, name=body.name, actor=actor,
+            mode=body.mode, top_k=body.top_k, max_rounds=body.max_rounds,
+            cost_budget_milliunits=body.cost_budget_milliunits,
+            timeout_ms=body.timeout_ms, prompt_key=body.prompt_key)
+        _audit_discovery("tool_discovery_policy_upsert", {
+            "policy_id": policy.get("id"), "name": body.name,
+            "mode": body.mode, "top_k": body.top_k,
+            "max_rounds": body.max_rounds,
+            "cost_budget_milliunits": body.cost_budget_milliunits,
+            "timeout_ms": body.timeout_ms, "prompt_key": body.prompt_key,
+        }, user_id=actor, tenant_id=tenant)
+        return policy
+
+    return await asyncio.to_thread(
+        run_governance_mutation, request, operator, "tool_discovery_policy_upsert",
+        {"name": body.name, "mode": body.mode}, _write)
+
+
+@router.post("/discovery/simulate")
+async def simulate_discovery(request: Request, body: DiscoverySimulateRequest):
+    """发现模拟器：当前策略 + 权限下的候选解析视图（纯读，不进 runtime）。
+
+    与线上路由的诚实差异（响应 meta 如实声明）：B1 只做候选解析，
+    不做语义排序与 LLM 选型；候选顺序 = registry 声明序。
+    """
+    await require_editor_user(request)
+    if body.product_id not in _DISCOVERY_PRODUCTS:
+        raise _HTTP(400, f"不支持的产品视角: {body.product_id}")
+    if not 1 <= body.top_k <= 20:
+        raise _HTTP(400, "top_k 需在 1-20 之间")
+    tenant = _discovery_tenant(request)
+    from backend.orchestration.discovery import resolve_candidates
+
+    try:
+        result = await asyncio.to_thread(
+            resolve_candidates, body.query, body.product_id, tenant,
+            body.domain, body.top_k)
+    except _HTTP:
+        raise
+    except Exception as e:  # noqa: BLE001 — 模拟失败显式报错，不伪造结果
+        raise _HTTP(503, f"发现模拟失败: {e}")
+    result["candidates"] = [
+        {**c, "permission_note": _discovery_permission_note(
+            c["name"], c["risk"], result["product_id"], result["domain"])}
+        for c in result["candidates"]
+    ]
+    result["notes"] = [
+        f"{result['excluded_count']} 个候选被产品/角色/范围过滤剔除",
+        "B1 仅候选解析（registry 声明序），不含语义排序与 LLM 选型；"
+        "线上执行另有 Tool Governance 执行期复核",
+    ]
+    return result
 
 
 __all__ = ["router"]

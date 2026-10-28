@@ -1,20 +1,23 @@
 'use client'
 
 /**
- * /skills — 能力清单与路由状态（只读，B13）
+ * /skills — 能力清单、路由状态与 Tool Discovery（决策 #18，B1）
  *
- * 数据源：
- *   - GET /capabilities：capabilities.yaml 声明 ↔ Skill 注册表对账
- *     （routed / 规则路由关键词 / 向量路由样例 / registered 漂移信号）
- *   - GET /mcp/servers、/mcp/tools（复用既有只读接口）：内置 MCP Server
- *     与工具的注册情况。均为进程内注册，"健康"以「已注册 + 工具清单可
- *     枚举」呈现，不伪造运行时探活。
+ * 两档 Workbench（照 /releases 改法）：
+ *   - 能力与注册（原 B13 页面内容整体保留）：GET /capabilities 声明 ↔
+ *     Skill 注册表对账 + MCP 注册情况 + 能力包授权矩阵；
+ *   - Tool Discovery（B1）：发现策略表单（PUT /admin/tools/discovery/policy）
+ *     + 发现模拟器（POST /admin/tools/discovery/simulate，只读候选解析，
+ *     不进运行时路由链路）。
  */
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { RefreshCw, Server } from 'lucide-react'
+import { Play, RefreshCw, Save, Server, Search } from 'lucide-react'
 import { clsx } from 'clsx'
-import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
+import { AssetActionButton, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
+import WorkbenchShell, { type WorkbenchTab } from '@/components/workbench/WorkbenchShell'
+import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
+import EmptyState from '@/components/shared/EmptyState'
 import { atLeast } from '@/lib/auth'
 import {
   getCapabilities,
@@ -23,7 +26,27 @@ import {
   type McpServer,
   type McpTool,
 } from '@/api/registry'
+import {
+  getDiscoveryPolicy, simulateDiscovery, updateDiscoveryPolicy,
+  type DiscoveryMode, type DiscoveryPolicyUpsertInput,
+  type DiscoveryPolicyView, type DiscoverySimulateResult,
+} from '@/api/discovery'
 import BundleGrantMatrix from './BundleGrantMatrix'
+
+const SKILLS_TABS = [
+  { id: 'capabilities', label: '能力与注册' },
+  { id: 'discovery', label: 'Tool Discovery' },
+] as const satisfies readonly WorkbenchTab<'capabilities' | 'discovery'>[]
+
+const TAB_IDS = SKILLS_TABS.map((tab) => tab.id) as readonly (
+  'capabilities' | 'discovery'
+)[]
+
+const DISCOVERY_MODE_OPTIONS: { value: DiscoveryMode; label: string }[] = [
+  { value: 'adaptive', label: '自适应（灰区交 LLM 选型）' },
+  { value: 'reasoning', label: '推理档（仅 LLM 选型）' },
+  { value: 'fast', label: 'Fast Path 优先' },
+]
 
 function RoutedBadge({ routed }: { routed: boolean }) {
   return (
@@ -54,7 +77,9 @@ function KeywordChips({ words, empty }: { words: string[]; empty: string }) {
   )
 }
 
-export default function SkillsPage() {
+// ═══════════════ 第一档：能力与注册（原 B13 内容） ═══════════════
+
+function CapabilitiesTab() {
   const canOpenToolRegistry = atLeast('admin')
   const [caps, setCaps] = useState<Awaited<ReturnType<typeof getCapabilities>> | null>(null)
   const [servers, setServers] = useState<McpServer[] | null>(null)
@@ -85,17 +110,15 @@ export default function SkillsPage() {
   useEffect(() => { load() }, [])
 
   return (
-    <AssetPageShell
-        title="Skill 与 Capability"
-        desc="Capability 路由清单、Skill 注册对账与 MCP 注册情况；注册事实源沿用现有 manifest 和 registry。"
-        actions={<>
-          <Link href="/agents" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Agent 与工作流</Link>
-          {canOpenToolRegistry && <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>}
-          <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => load(true)}>
-            刷新
-          </AssetActionButton>
-        </>}
-      >
+    <div className="mx-auto w-full max-w-7xl px-6 py-6">
+      <div className="mb-4 flex items-center justify-between gap-2">
+        <p className="text-[12px] text-text-secondary">
+          Capability 路由清单、Skill 注册对账与 MCP 注册情况；注册事实源沿用现有 manifest 和 registry。
+        </p>
+        <AssetActionButton icon={<RefreshCw size={13} className={loading ? 'animate-spin' : ''} />} onClick={() => load(true)}>
+          刷新
+        </AssetActionButton>
+      </div>
 
       {loading ? (
         <AssetState>加载中…</AssetState>
@@ -225,6 +248,277 @@ export default function SkillsPage() {
           </AssetSection>
         </div>
       )}
-    </AssetPageShell>
+    </div>
+  )
+}
+
+// ═══════════════ 第二档：Tool Discovery（决策 #18，B1） ═══════════════
+
+const DEFAULT_FORM: DiscoveryPolicyUpsertInput = {
+  name: '默认发现策略',
+  mode: 'adaptive',
+  top_k: 3,
+  max_rounds: 2,
+  cost_budget_milliunits: 50,
+  timeout_ms: 8000,
+  prompt_key: 'router.tool_selector',
+}
+
+function DiscoveryTab() {
+  const [policyView, setPolicyView] = useState<DiscoveryPolicyView | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [form, setForm] = useState<DiscoveryPolicyUpsertInput>(DEFAULT_FORM)
+  const [saving, setSaving] = useState(false)
+  // 模拟器
+  const [simQuery, setSimQuery] = useState('')
+  const [simDomain, setSimDomain] = useState('')
+  const [simTopK, setSimTopK] = useState(3)
+  const [simulating, setSimulating] = useState(false)
+  const [simError, setSimError] = useState<string | null>(null)
+  const [simResult, setSimResult] = useState<DiscoverySimulateResult | null>(null)
+
+  const load = useCallback(() => {
+    setLoading(true)
+    setError(null)
+    getDiscoveryPolicy()
+      .then((v) => {
+        setPolicyView(v)
+        const p = v.policy
+        setForm({
+          name: p.name || DEFAULT_FORM.name,
+          mode: p.mode,
+          top_k: p.top_k,
+          max_rounds: p.max_rounds,
+          cost_budget_milliunits: p.cost_budget_milliunits,
+          timeout_ms: p.timeout_ms,
+          prompt_key: p.prompt_key || DEFAULT_FORM.prompt_key,
+        })
+      })
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false))
+  }, [])
+
+  useEffect(() => { load() }, [load])
+
+  const onSave = () => {
+    setSaving(true)
+    setNotice(null)
+    updateDiscoveryPolicy(form)
+      .then((p) => {
+        setNotice(`发现策略「${p.name}」已保存并生效（${DISCOVERY_MODE_OPTIONS.find((m) => m.value === p.mode)?.label ?? p.mode}，top_k=${p.top_k}）`)
+        load()
+      })
+      .catch((e: Error) => setNotice(`保存失败：${e.message}`))
+      .finally(() => setSaving(false))
+  }
+
+  const onSimulate = () => {
+    setSimulating(true)
+    setSimError(null)
+    setSimResult(null)
+    simulateDiscovery({
+      query: simQuery,
+      domain: simDomain.trim() || undefined,
+      top_k: simTopK,
+    })
+      .then(setSimResult)
+      .catch((e: Error) => setSimError(e.message))
+      .finally(() => setSimulating(false))
+  }
+
+  const numberField = (
+    label: string, key: 'top_k' | 'max_rounds' | 'cost_budget_milliunits' | 'timeout_ms',
+    min: number, max: number, hint: string,
+  ) => (
+    <label className="flex flex-col gap-1">
+      <span className="text-[11px] text-text-muted">{label}</span>
+      <input
+        type="number"
+        data-testid={`discovery-policy-${key}`}
+        value={form[key]}
+        min={min}
+        max={max}
+        onChange={(e) => setForm({ ...form, [key]: Number(e.target.value) })}
+        className="w-32 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+      />
+      <span className="text-[10px] text-text-muted">{hint}</span>
+    </label>
+  )
+
+  return (
+    <div className="mx-auto w-full max-w-7xl px-6 py-6">
+      <p className="mb-4 text-[12px] leading-relaxed text-text-secondary">
+        B1 边界（如实声明）：本页为发现策略与只读候选解析模拟器，
+        当前不进线上路由链路——候选 = 域 registry（域未知时 planner 可见全集）→ 产品/角色/范围过滤 → 前 top_k。
+      </p>
+
+      {notice && (
+        <div data-testid="discovery-notice" className="mb-4 rounded-lg border border-accent/30 bg-accent/5 px-4 py-2.5 text-[12px] text-text-primary">
+          {notice}
+        </div>
+      )}
+
+      {/* 上半：发现策略 */}
+      <AssetSection
+        title="发现策略"
+        meta={policyView?.policy.active ? '当前生效' : '未配置（代码内默认值）'}
+      >
+        {loading ? (
+          <div className="py-4 text-center text-[13px] text-text-muted">加载中…</div>
+        ) : error ? (
+          <div className="py-4 text-center text-[13px] text-red-700">{error}</div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] text-text-muted">策略名</span>
+                <input
+                  data-testid="discovery-policy-name"
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  className="w-44 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] text-text-muted">发现模式</span>
+                <select
+                  data-testid="discovery-policy-mode"
+                  value={form.mode}
+                  onChange={(e) => setForm({ ...form, mode: e.target.value as DiscoveryMode })}
+                  className="w-56 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+                >
+                  {DISCOVERY_MODE_OPTIONS.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+              </label>
+              {numberField('候选数 top_k', 'top_k', 1, 20, '1-20')}
+              {numberField('发现轮数', 'max_rounds', 1, 5, '1-5')}
+              {numberField('费用预算（毫单位）', 'cost_budget_milliunits', 0, 1000000, '单次发现预算')}
+              {numberField('超时（ms）', 'timeout_ms', 1000, 30000, '1000-30000')}
+              <button
+                type="button"
+                data-testid="discovery-policy-save"
+                onClick={onSave}
+                disabled={saving || !form.name.trim()}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Save size={13} /> {saving ? '保存中…' : '保存策略'}
+              </button>
+            </div>
+            <div className="text-[11px] text-text-muted">
+              prompt_key：<code>{form.prompt_key}</code>（B1 固定复用 router.tool_selector 提示词版本）
+              {policyView && policyView.policies.length > 0 && (
+                <> · 本租户共 {policyView.policies.length} 条策略行，生效：{policyView.policy.name || '—'}</>
+              )}
+            </div>
+          </div>
+        )}
+      </AssetSection>
+
+      {/* 下半：发现模拟器 */}
+      <div className="mt-4">
+        <AssetSection title="发现模拟器" meta="主助手视角 · 纯读不执行" icon={<Search size={14} />}>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              data-testid="discovery-sim-query"
+              value={simQuery}
+              onChange={(e) => setSimQuery(e.target.value)}
+              placeholder="输入用户问题，例如：规划福州 2 天的行程"
+              className="min-w-[280px] flex-1 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+            />
+            <input
+              data-testid="discovery-sim-domain"
+              value={simDomain}
+              onChange={(e) => setSimDomain(e.target.value)}
+              placeholder="业务域（可留空，如 travel / knowledge）"
+              className="w-56 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+            />
+            <input
+              type="number"
+              data-testid="discovery-sim-topk"
+              value={simTopK}
+              min={1}
+              max={20}
+              onChange={(e) => setSimTopK(Number(e.target.value))}
+              className="w-20 rounded-md border border-border-subtle px-2.5 py-1.5 text-[12px] outline-none focus:border-accent"
+              title="候选数 top_k"
+            />
+            <button
+              type="button"
+              data-testid="discovery-sim-run"
+              onClick={onSimulate}
+              disabled={simulating || !simQuery.trim()}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Play size={13} /> {simulating ? '模拟中…' : '模拟发现'}
+            </button>
+          </div>
+
+          {simError && <div className="mt-3 text-[12px] text-rose-600">{simError}</div>}
+
+          {simResult === null && !simError && (
+            <div className="mt-4">
+              <EmptyState
+                title="发现模拟结果"
+                description="输入问题后模拟候选解析：工具名 / 风险级别 / 来源 / 逐项权限过滤说明"
+              />
+            </div>
+          )}
+
+          {simResult !== null && (
+            <div data-testid="discovery-sim-result" className="mt-4 space-y-2">
+              <div className="text-[11px] text-text-muted">
+                候选来源：{simResult.source === 'domain_registry' ? `域 registry（${simResult.domain}）` : 'planner 可见全集（域未知回退）'}
+                · 解析 {simResult.candidate_count} 个 · 权限过滤剔除 {simResult.excluded_count} 个 · 保留 {simResult.candidates.length} 个
+              </div>
+              {simResult.candidates.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-black/10 bg-white p-4 text-center text-[12px] text-text-secondary">
+                  当前产品/权限下无保留候选（全部被过滤剔除）
+                </div>
+              ) : (
+                simResult.candidates.map((c) => (
+                  <div key={c.name} data-testid="discovery-sim-candidate" className="rounded-lg border border-border-subtle bg-white p-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <code className="text-[12px] font-medium text-text-primary">{c.name}</code>
+                      <span className="rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] text-text-secondary">risk: {c.risk}</span>
+                      <span className="rounded-full bg-black/[0.04] px-2 py-0.5 text-[10px] text-text-secondary">来源: {c.source}</span>
+                    </div>
+                    <div className="mt-1.5 text-[11px] leading-relaxed text-text-muted">{c.permission_note}</div>
+                  </div>
+                ))
+              )}
+              {simResult.notes.map((n, i) => (
+                <p key={i} className="text-[11px] leading-relaxed text-text-muted">{n}</p>
+              ))}
+            </div>
+          )}
+        </AssetSection>
+      </div>
+    </div>
+  )
+}
+
+// ═══════════════ 页面壳 ═══════════════
+
+export default function SkillsPage() {
+  const { tab, selectTab } = useWorkbenchTab(TAB_IDS, 'capabilities')
+  const canOpenToolRegistry = atLeast('admin')
+  return (
+    <WorkbenchShell
+      title="Skill 与 Capability"
+      description="Capability 路由清单、Skill 注册对账、MCP 注册情况与 Tool Discovery（B1）"
+      tabs={SKILLS_TABS}
+      activeTab={tab}
+      onTabChange={selectTab}
+      actions={<>
+        <Link href="/agents" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Agent 与工作流</Link>
+        {canOpenToolRegistry && <Link href="/tools" className="inline-flex min-h-9 items-center rounded-md border border-border-subtle px-3 text-[12px] text-text-secondary hover:bg-bg-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">Tool 注册表</Link>}
+      </>}
+    >
+      {tab === 'capabilities' ? <CapabilitiesTab /> : <DiscoveryTab />}
+    </WorkbenchShell>
   )
 }
