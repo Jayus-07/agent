@@ -138,3 +138,52 @@ def test_enhanced_branch_injects_gate_decision(monkeypatch):
         injected = d.metadata.get("__evidence_gate_decision__")
         assert injected is not None, "enhanced 分支候选缺 Gate 注入"
         assert injected["entity_check"] == "pass"
+
+
+def test_identifier_exact_hit_boost_rescues_bm25_unique_row(monkeypatch):
+    """2026-10-28 回归：查询含长标识符（SKU/单号）时，仅被 BM25 精确命中
+    的候选不得被 RRF 结构性埋没（同模板表格行两路都出现，得分必然更高，
+    精确行曾进不了 top5 → AI 答"未提及"）。标识符原文精确命中给等效
+    单路第 1 名的加性奖励，进入 rerank 视野由重排终裁。"""
+    import backend.config.rag as rag_config
+    import backend.observability.tracer as tracer_module
+    import backend.rag.retrieval.hybrid as hybrid_module
+
+    monkeypatch.setattr(rag_config, "ADAPTIVE_THRESHOLD_ENABLED", False)
+    monkeypatch.setattr(rag_config, "CONFIDENCE_AGGREGATOR_ENABLED", False)
+    monkeypatch.setattr(hybrid_module, "_classify_query_tier", lambda _q: "hybrid")
+    monkeypatch.setattr(
+        "backend.rag.retrieval.query_router.route",
+        lambda _q: {"query_type": "identifier", "vector_weight": 1.0,
+                    "bm25_weight": 1.0, "signals": [], "enabled": True},
+    )
+    monkeypatch.setattr(
+        hybrid_module,
+        "_evaluate_retrieval_gate",
+        lambda _docs, _query: SimpleNamespace(to_metrics=lambda: {"gate_passed": True}),
+    )
+    span = SimpleNamespace(metrics={})
+    collector = MagicMock()
+    collector.start_span.return_value = span
+    monkeypatch.setattr(tracer_module, "trace_collector", collector)
+
+    # 向量路：同模板相似行（无 000001），模板文本几乎相同
+    vector_docs = []
+    for i in range(1, 6):
+        d = _doc({"chunk_id": f"v{i}", "doc_id": f"d{i}"})
+        d.page_content = f"[产品] SKU 0000{i:02d} 名称 商品{i} 价格 {i * 10}"
+        vector_docs.append(d)
+    # BM25 路：精确行排第 1，其后是相似行
+    exact = _doc({"chunk_id": "b-exact", "doc_id": "dx"})
+    exact.page_content = "[产品] SKU 000001 名称 商品1 价格 311 【原始行】 000001, 商品1, 311"
+    bm25_docs = [exact] + vector_docs
+    vector = MagicMock()
+    vector.retrieve.return_value = vector_docs
+    bm25 = MagicMock()
+    bm25.invoke.return_value = bm25_docs
+
+    result = _hybrid_retrieve_impl(
+        "产品工作表中 SKU 000001 的商品名称和价格是什么？", vector, bm25, k=5)
+
+    ids = [d.metadata["chunk_id"] for d in result]
+    assert "b-exact" in ids, f"精确行必须进入 rerank 视野，实际: {ids}"
