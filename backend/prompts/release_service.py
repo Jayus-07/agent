@@ -96,6 +96,15 @@ class PromptReleaseService:
             if current.external_run_id != external_run_id:
                 raise ReleaseStateError("同一 release 不允许绑定不同 external run")
             return current
+        if current.status == PromptReleaseStatus.FAILED:
+            # 2026-10-28：允许失败 release 重新评测（新 external_run_id 覆盖）。
+            # 此前 failed 是终态，环境类失败（模型冷启动/预算/索引未就绪）
+            # 修复后无法重评，只能靠换 eval_suite 维度绕过去重键——重评是
+            # 发布门禁的正常环节，历史结论留在 metrics/审计里不删除。
+            if current.external_run_id == external_run_id:
+                raise ReleaseStateError("失败重评必须使用新的 external run")
+            row = await self._repository.mark_running(release_id, external_run_id)
+            return PromptReleaseRecord.from_row(row)
         if current.status != PromptReleaseStatus.PENDING:
             raise ReleaseStateError(
                 f"release 状态 {current.status.value} 不允许进入 running"

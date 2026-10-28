@@ -88,6 +88,8 @@ class PromptReleaseRepository:
                       AND (
                         status = 'pending'
                         OR (status = 'running' AND external_run_id = :external_run_id)
+                        -- 2026-10-28：失败重评（新 external run），历史结论留 metrics/审计
+                        OR (status = 'failed' AND external_run_id <> :external_run_id)
                       )
                     RETURNING *
                     """
