@@ -1,6 +1,6 @@
 {
   "name": "desktop_upload_full",
-  "version": "6.0.0-desktop-candidate.1",
+  "version": "1.0.1",
   "dataset_version": "6.0.0-desktop-candidate.1",
   "kb_id": "rag_eval_kb",
   "fixture_set": "baseline",
@@ -31,6 +31,6 @@
     "UFQ-023",
     "UFQ-024"
   ],
-  "cases_hash": "56bf7b08d0e36d22",
+  "cases_hash": "472190f5b690cad3",
   "min_samples": 24
 }

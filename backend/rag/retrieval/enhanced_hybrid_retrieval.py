@@ -288,6 +288,23 @@ def _ultimate_rrf_fusion(path_results: list[tuple[list, float]], rrf_k: int, top
                 docs_by_id[cid] = doc
             rank_map[cid] = rank_map.get(cid, 0.0) + weight / (rrf_k + rank)
 
+    # ── 标识符精确命中加权（2026-10-28，与 hybrid.py 同一修复）──
+    # 查询含长标识符（SKU/单号/型号）时，仅被 BM25/稀疏路精确命中的候选
+    # 会被多路径都出现的同模板相似行结构性埋没（dense 权重 3.0 更甚）。
+    # 原文精确命中给等效单路第 1 名的加性奖励，交由重排终裁。
+    import re as _re
+
+    _id_tokens = {
+        t.lower() for t in _re.findall(r"[0-9A-Za-z][0-9A-Za-z-]{3,}", str(query or ""))
+        if not t.isalpha() or len(t) >= 6
+    }
+    if _id_tokens:
+        _EXACT_TOKEN_BONUS = 1.0 / rrf_k
+        for cid, doc in docs_by_id.items():
+            text = str(getattr(doc, "page_content", "") or "").lower()
+            if any(t in text for t in _id_tokens):
+                rank_map[cid] = rank_map.get(cid, 0.0) + _EXACT_TOKEN_BONUS
+
     sorted_cids = sorted(rank_map.items(), key=lambda x: x[1], reverse=True)
 
     unique_doc_count = len({
