@@ -82,6 +82,11 @@ def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
             EvalConfig(
                 module="rag",
                 live=mode.live,
+                # 发布评测必须真实生成答案：被评审的 prompt（如自纠错改写）
+                # 影响生成链路，不生成则基于答案的用例永远无法判定（实测
+                # desktop smoke 全部 ans_len=0）。这是发布链路自身的云生成
+                # opt-in，与 --judge 语义一致；供应商仍走 DB 绑定的评测模型。
+                judge=True,
                 ragas=mode.ragas,
                 no_ragas=mode.no_ragas,
                 selection=release.eval_suite,
