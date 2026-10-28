@@ -324,6 +324,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "118_mcp_health_monitor.sql": "memory",
     # Discovery 策略与模拟器（B1）。
     "119_tool_discovery_policy.sql": "memory",
+    # 运行中任务的多轮计划修订（决策 #29）。
+    "124_plan_revisions.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

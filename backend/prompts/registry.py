@@ -64,6 +64,15 @@ _register(PromptSpec(
 ))
 
 _register(PromptSpec(
+    key="plan.revision",
+    name="运行中任务计划修订 Prompt",
+    category="planner",
+    risk_level="high",
+    variables=(R("capabilities_schema"),),
+    default_file="plan_revision.yaml",
+))
+
+_register(PromptSpec(
     key="reporter.system",
     name="报告汇总 Prompt",
     category="reporter",
