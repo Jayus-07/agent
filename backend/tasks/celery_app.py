@@ -47,6 +47,7 @@ celery_app = Celery(
              "backend.tasks.memory_extraction_tasks",  # L3 durable outbox + 提取 worker
              "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
              "backend.tasks.prompt_eval_tasks",  # Prompt 发布评测 GitHub 轮询
+             "backend.tasks.automation_tasks",  # 决策#27：用户自动任务（cron 扫描/触发/清理）
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
 )
@@ -205,6 +206,23 @@ celery_app.conf.update(
             "task": "model.price_page_monitor",
             "schedule": crontab(hour=8, minute=0),
             "options": {"queue": beat_queue("model.price_page_monitor")},
+        },
+        # 决策 #27（2026-10-28）：用户自动任务 cron 到期扫描。每分钟扫描
+        # enabled cron 自动任务，窗口命中经原子认领（last_run_at 条件 UPDATE
+        # + 事件唯一索引双保险）后派 automations.run 复用既有执行链。
+        # beat 单实例纪律：调度只在本进程发生，worker 多副本安全。
+        "automations-cron-scan": {
+            "task": "automations.scan",
+            "schedule": 60.0,
+            "options": {"queue": beat_queue("automations.scan")},
+        },
+        # #25 尾巴：每日 03:45 UTC 清理过期任务结果引用（result_refs 24h
+        # 失效）。result_refs 模块随 #123 PR 交付，未合并期间本任务显式
+        # 失败（惰性导入 + 不吞异常），合并后自动恢复。
+        "automations-cleanup-result-refs": {
+            "task": "automations.cleanup_result_refs",
+            "schedule": crontab(hour=3, minute=45),
+            "options": {"queue": beat_queue("automations.cleanup_result_refs")},
         },
     },
 )
