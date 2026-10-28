@@ -263,7 +263,11 @@ RAG_POOL_INNER_WORKERS = max(1, int(os.getenv("RAG_POOL_INNER_WORKERS", "6")))
 # deadline，下游统一 remaining_ms() 消费，禁止各层重算 timeout。
 # 默认值来自 2026-10-07 审计基线（rag 检索 p50 5.5s / p95 28.8s）——
 # 预算不是新的失败点：超预算一律走 §25 阶梯降级，不整链失败。
-RAG_RETRIEVAL_DEADLINE_MS = max(1000, float(os.getenv("RAG_RETRIEVAL_DEADLINE_MS", "8000")))
+# 2026-10-28 8s→20s：GPU 重排（batch=2）在表格/冻结管线真实候选批实测
+# ~6.8s，检索+重排 ≈8-9s 顶穿旧预算，重排结果被按"迟到"丢弃（
+# total_deadline_expired → 未排序候选挤掉精确命中行）。20s 仍在
+# rag.search 45s 工具预算内，留 25s 生成。
+RAG_RETRIEVAL_DEADLINE_MS = max(1000, float(os.getenv("RAG_RETRIEVAL_DEADLINE_MS", "20000")))
 # MQ 改写子预算：真实 Trace 为 3656/4973ms；默认 6000ms，仍取共享 deadline 剩余值。
 RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS = max(200, float(os.getenv("RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS", "6000")))
 # MQ fan-out 子预算：超时 → 用已完成变体的部分结果（部分成功语义）
