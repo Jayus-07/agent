@@ -132,6 +132,22 @@ routes:
       proxy-rewrite:
         regex_uri: ["^/api/(.*)$", "/$1"]
 
+  # 用户自动任务 Webhook 回调（2026-10-28 决策 #27）：外部系统机器回调，
+  # 无用户身份 → 不挂 gateway-auth（挂了必 401）；认证在应用层 =
+  # HMAC-SHA256 签名（X-Signature）+ X-Event-Id 去重 + 路径租户绑定校验，
+  # 三道全过才派发执行。路径含 tenant/automation 两段 id（后者 auto_<hex>
+  # 不可枚举），限流按 remote_addr 反滥用。
+  - id: automations-webhook
+    uri: /webhooks/automations/*
+    upstream_id: app
+    plugins:
+      prometheus: {}
+      limit-count:
+        key: remote_addr
+        count: 120
+        time_window: 60
+        rejected_code: 429
+
   - id: system-service
     uri: /api/sys/*
     upstream_id: app

@@ -1,0 +1,48 @@
+key: tool.failure_analysis
+name: Tool 失败分析 Prompt
+category: router
+risk_level: medium
+template_engine: str_format
+variables:
+  - {name: window_minutes, required: true, description: 聚类统计的回溯时间窗（分钟）}
+  - {name: clusters_text, required: true, description: 失败聚类统计文本（tool × error_class 计数与代表性摘要）}
+# 决策 #20：输入只有 (tool, error_class) 聚类计数与截断 300 字符的错误摘要
+# （URL 已清洗），绝不包含用户参数原文与凭据；输出为建议性质的 JSON
+# （归因/修复建议/候选评测用例），只入管理端展示与 ai.tool_failure_analyses
+# 留痕，不自动应用/改写任何正式 Prompt、语义契约或 Golden 数据。
+template: |-
+  你是电商运营平台的 Tool 可靠性分析师。以下是过去 {window_minutes} 分钟内
+  Tool 调用失败的聚类统计（按 tool × 错误分类聚合，附代表性错误摘要）。
+  请对每组失败做归因分析，并给出修复建议与候选评测用例。
+
+  失败聚类统计：
+  {clusters_text}
+
+  规则：
+  - attribution 用一两句话说明最可能的失败原因类别（如超时预算不足、
+    参数校验缺口、上游容量、契约漂移、凭据/权限配置等），基于统计推断，
+    不要编造统计中不存在的细节
+  - suggestions 每组最多 3 条，每条不超过 80 字，只给可执行的修复方向
+  - candidate_eval_cases 仅当该聚类存在可通过评测提前拦截的改进路径时才给
+    （例如参数校验、超时、重试语义），全部聚类合计不超过 6 条；没有就给
+    空数组，禁止为了凑数编造用例
+  - 每条候选用例：question 为可直接用于评测的用户问题（不含真实用户数据），
+    expected_capability 为期望用到的能力名（无法判断时给空字符串），
+    expectation_note 用一句话说明评测应验证什么
+  - 输出数据只作管理端建议展示，不会自动生效
+
+  只输出 JSON，不要输出其他文字：
+  {{
+    "clusters": [
+      {{
+        "tool": "聚类中的工具名",
+        "error_class": "聚类中的错误分类",
+        "attribution": "归因分析一两句",
+        "suggestions": ["修复建议1", "修复建议2"],
+        "candidate_eval_cases": [
+          {{"question": "评测问题", "expected_capability": "能力名或空",
+            "expectation_note": "评测验证点"}}
+        ]
+      }}
+    ]
+  }}
