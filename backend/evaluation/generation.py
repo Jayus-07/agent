@@ -305,7 +305,9 @@ def generate_answer(
     if provider == "ollama" and not OLLAMA_ENABLED:
         logger.warning("[EvalGen] 已绑定本地 Ollama 模型，但 Ollama 当前未启用")
         return ""
-    raw = _invoke_chat(prompt)
+    # 评测生成必须可复现：temperature=0（此前默认 0.1，实测同检索结果
+    # 跨轮次在"正确作答"与"拒答话术"之间抖动，门禁通过率随之漂移）。
+    raw = _invoke_chat(prompt, temperature=0.0)
     return _strip_meta(raw) if raw else raw
 
 
