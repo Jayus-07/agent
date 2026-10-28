@@ -691,6 +691,7 @@ class DashScopeReranker(BaseDocumentCompressor):
                 try:
                     from backend.infra.llm.pricing import (
                         USAGE_SOURCE_ESTIMATED,
+                        USAGE_SOURCE_PROVIDER,
                         NormalizedUsage,
                         price_usage,
                     )
