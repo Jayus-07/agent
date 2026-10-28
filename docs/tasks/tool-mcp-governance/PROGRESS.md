@@ -632,3 +632,45 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
 ### 下一批剩余
 
 - Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
+
+## 增强批交付记录：#27 自动任务/Webhook 简记 + #29 计划修订（2026-10-29，PR #125）
+
+### 增强批四项 PR 现状（CI 全绿，合并顺序 #121 → #122 → #123 → #125）
+
+- **#19 AI 语义契约 → PR #121**：prompt `tool.semantic_suggest`（62 键）、
+  `/tools/{id}/semantic/suggest` 等 3 端点、promptGroups「工具治理」白名单；
+  详情见 PR 描述与该分支 PROGRESS 段。
+- **#20 AI 失败分析 → PR #122**：与 #121 有小冲突面（registry.py /
+  promptGroups.ts / 守卫计数），已在 #122 合入 #121 head 解冲突。
+- **#25 结果引用+字段映射 → PR #123**：RESULT_REF 结果引用机制；
+  #124 的 `cleanup_expired` 依赖它。
+- **#27 自动任务/Webhook → PR #124**：迁移 123；曾因漏登
+  rag_smoke_path_filter 守卫 CI 红，4f458b2 补登后全绿。
+
+### #29 运行中任务多轮计划修订（7d5e2f1，10 文件 +1415/−2）
+
+- **迁移 124** `ai.plan_revisions`：修订账本（draft/applied/rejected），
+  `new_version = base_plan_version + 1` CHECK + 部分唯一索引
+  `(thread_id, new_version) WHERE status='applied'` 兜底并发 apply；
+  双登记 rag_smoke_path_filter（NON_AI）+ init_db（memory）。
+- **服务 `orchestration/discovery/plan_revision.py`**：draft（LLM 起草 +
+  服务端强制校验）/apply（版本双向复核 + 原子认领 + 写回 checkpoint
+  plan + 既有 resume 链重入图，FAILED 走 allow_failed 并标记
+  dispatch_type=plan_revision）/list。红线全落实：只改 pending/failed、
+  新 step_id `{sid}r{v}` 重发、skipped 下游机械级联、success 结果仅可
+  作废引用（外部写入不撤销不伪装）、running 不可动、不新增步骤、不引入
+  写操作（governance fail-closed）、normalize_plan + plan_depth 守门、
+  送 LLM 产出摘要化 300 字符（result_refs 规则本地等价，#123 合并后可
+  统一常量）。
+- **API `routes/plan_revisions.py`**：`/plan-revisions` 三端点；归属校验
+  同 tasks.py 口径（非本人/他租户 404 不泄露）；API-first 不接前端，
+  promptGroups 管理页白名单不含 planner 类（与 planner_critique 同口径）。
+- **本轮修复**：apply 前状态复核原用起草口径（pending/failed）校验全部
+  modified 条目，把服务端机械级联登记的 skipped 条目误拒（所有带级联的
+  apply 必 409）。复核白名单放宽至含 skipped（安全：LLM 无法直接修订
+  skipped、apply 仅任务静止时可用、静止期不新增 skipped）。
+- **验证**：`test_registry_defaults.py` 12 passed（62 键守卫）；
+  `test_plan_revision.py`（pg，真实库+迁移 124）**17 passed**（并发 409/
+  双 draft 先应用者胜/success 拒改/新增步骤与写操作拒绝/travel 越权
+  拒绝/级联重发/漂移复核/归属隔离/列表不回传完整计划）。容器级
+  UNVERIFIED（合并授权后 rebuild）。
