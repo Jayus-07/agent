@@ -19,6 +19,7 @@ from backend.config.settings import (
 )
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.mode import resolve_evaluation_mode
+from backend.shared.logger import logger
 from backend.evaluation.service import EvaluationService
 from backend.evaluation.storage import persist_report
 from backend.infra.llm.registry_store import refresh_registry
@@ -42,9 +43,38 @@ async def run_prompt_release_evaluation(
     return await asyncio.to_thread(_run_sync, release)
 
 
+def _warm_external_models() -> None:
+    """发布评测前预热外置模型（软失败）。
+
+    2026-10-28 desktop_upload_smoke 首跑 7/8 题 rerank_failed：外置 8088
+    重排服务闲置后首批推理超 RERANK_TIMEOUT=4s（热态实测 0.8-1.0s），
+    冷启动超时按既有"传输失败不自动重发"策略整轮降级，门禁被运维态而非
+    提示词质量打穿。此处用 2 文档最小请求预热重排/embedding；失败仅记
+    日志，不阻塞评测（真实故障会在用例中如实暴露）。
+    """
+    try:
+        from backend.rag.embedding_singleton import get_embedding
+        from backend.rag.reranker import get_reranker_backend
+
+        get_embedding().embed_query("发布评测预热")
+        reranker = get_reranker_backend()
+        warm = getattr(reranker, "rank", None)
+        if callable(warm):
+            # GPU 重排 kernel 按批大小分桶编译：2 文档预热覆盖不了真实
+            # 候选批量（首轮 desktop smoke 仍 7/8 超时、末题通过即此特征），
+            # 用 12 文档 × 2 轮覆盖典型批大小并留足编译时间。
+            docs = [f"预热文档{i}：知识库检索与重排链路验证。" for i in range(12)]
+            for _ in range(2):
+                warm("发布评测预热查询", docs, top_k=5)
+        logger.info("[prompt_release] 外置模型预热完成")
+    except Exception as exc:  # noqa: BLE001 — 预热失败不阻塞评测
+        logger.warning("[prompt_release] 外置模型预热失败（继续评测）: %s", exc)
+
+
 def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
     with _evaluation_env(release.created_by):
         asyncio.run(refresh_registry())
+        _warm_external_models()
         mode = resolve_evaluation_mode(
             release.dataset_provenance.get("evaluation_mode")
         )
@@ -52,6 +82,11 @@ def _run_sync(release: PromptReleaseRecord) -> dict[str, Any]:
             EvalConfig(
                 module="rag",
                 live=mode.live,
+                # 发布评测必须真实生成答案：被评审的 prompt（如自纠错改写）
+                # 影响生成链路，不生成则基于答案的用例永远无法判定（实测
+                # desktop smoke 全部 ans_len=0）。这是发布链路自身的云生成
+                # opt-in，与 --judge 语义一致；供应商仍走 DB 绑定的评测模型。
+                judge=True,
                 ragas=mode.ragas,
                 no_ragas=mode.no_ragas,
                 selection=release.eval_suite,

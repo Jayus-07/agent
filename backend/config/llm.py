@@ -165,9 +165,12 @@ LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
 # LLM 请求超时（秒）
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
-# Rerank API 超时：超时后 RerankCompressor 降级透传原文档（排序是增强组件），
-# 收紧到 4s 避免检索段被慢 rerank 拖住尾延迟
-RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "4"))
+# Rerank API 超时：超时后 RerankCompressor 降级透传原文档（排序是增强组件）。
+# 2026-10-28 两次对齐（4→10→15s）：GPU float16 重排（batch=2 显存档）在
+# 评测冻结管线/表格类真实候选批（24-30×512token 截断）实测可超 10s，
+# 超时降级会丢掉精确命中行（SKU 000001 在 rerank 打分 0.9884 却因降级
+# 未排序被挤出 top5）。15s 仍在 rag.search 45s 工具预算内。
+RERANK_TIMEOUT = int(os.getenv("RERANK_TIMEOUT", "15"))
 
 # ── TTFT 优化：定向节点输出上限与超时 ──
 # Router LLM 兜底：输出只是路由 JSON，限制 max_tokens 缩短生成时间；

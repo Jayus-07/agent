@@ -1122,17 +1122,30 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 # 上传题集需要全部原文证据；只命中同一文档不能视为通过。
                 if case.metadata.get("managed_binding_id") and not should_reject:
                     passed = passed and chunk_recall == 1.0 and bool(expected_canonical) and expected_canonical.issubset(set(actual_doc_strs))
-                    if managed_answer:
-                        passed = passed and bool(_generated_answer.strip())
-                        passed = passed and generation_metrics.get("S6_answer_correctness", 0) >= 0.5
-                        passed = passed and generation_metrics.get("S7_faithfulness", 0) >= 0.8
-                        if required_facts:
-                            passed = passed and required_fact_coverage == 1.0
-                        from backend.evaluation.dataset.assertions import check_assertions
 
-                        checks = check_assertions(_generated_answer, case.metadata.get("assertions", []))
-                        generation_metrics["assertions_passed"] = float(all(checks))
-                        passed = passed and all(checks)
+                # 2026-10-28：答案质量判分对一切真实生成了答案的用例生效，
+                # 不再限于 managed 绑定题集——此前发布评测（desktop_upload）
+                # 只看检索指标，AI 答拒答话术也能 pass（检索满分即过），
+                # 门禁测不出"答非所问/错误拒答"。检索指标永远不达标时
+                # （无答案场景）不适用本段。
+                _has_real_answer = bool((_generated_answer or "").strip()) \
+                    and (generation_metrics.get("S6_answer_correctness") is not None)
+                if _has_real_answer and not should_reject:
+                    passed = passed and generation_metrics.get("S6_answer_correctness", 0) >= 0.5
+                    passed = passed and generation_metrics.get("S7_faithfulness", 0) >= 0.8
+                    if required_facts:
+                        passed = passed and required_fact_coverage == 1.0
+                if _has_real_answer and should_reject:
+                    from backend.evaluation.dataset.assertions import is_refusal
+
+                    passed = passed and is_refusal(_generated_answer)
+
+                if managed_answer and not should_reject:
+                    from backend.evaluation.dataset.assertions import check_assertions
+
+                    checks = check_assertions(_generated_answer, case.metadata.get("assertions", []))
+                    generation_metrics["assertions_passed"] = float(all(checks))
+                    passed = passed and all(checks)
                 if managed_answer and should_reject and _generated_answer:
                     from backend.evaluation.dataset.assertions import is_refusal
 
