@@ -166,7 +166,7 @@ class PromptReleaseRepository:
                 """
                 UPDATE ai.prompt_release_records
                 SET status = 'published', published_by = :actor,
-                    updated_at = now()
+                    published_at = now(), updated_at = now()
                 WHERE release_id = :release_id AND status = 'approved'
                 RETURNING *
                 """
@@ -197,6 +197,14 @@ class PromptReleaseRepository:
     ) -> dict[str, Any]:
         if actor_column not in {"approved_by", "published_by", "rollback_by"}:
             raise ValueError(f"非法发布人字段: {actor_column}")
+        # ck_prompt_release_approved 要求 approved 时 approved_at 非空——此前
+        # UPDATE 只写角色不写时间戳，approve 直接被检查约束打 500。
+        timestamp_column = {
+            "approved_by": "approved_at",
+            "published_by": "published_at",
+            "rollback_by": None,
+        }[actor_column]
+        timestamp_sql = f", {timestamp_column} = now()" if timestamp_column else ""
         merge_sql = ""
         params = {
             "release_id": release_id,
@@ -214,7 +222,7 @@ class PromptReleaseRepository:
                     f"""
                     UPDATE ai.prompt_release_records
                     SET status = :to_status, {actor_column} = :actor,
-                        updated_at = now(){merge_sql}
+                        updated_at = now(){timestamp_sql}{merge_sql}
                     WHERE release_id = :release_id AND status = :from_status
                     RETURNING *
                     """
