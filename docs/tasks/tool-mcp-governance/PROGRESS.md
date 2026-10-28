@@ -624,11 +624,64 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
 
 ### 演示型壳位现状（更新）
 
-- ✅ 解禁：/mcp「运行健康」（本轮转真实）
+- ✅ 解禁：/mcp「运行健康」（Batch 5-3 转真实）
+- ✅ 解禁：/tools「AI 语义」Tab（Batch 6 转真实，#19）
 - ⬜ /mcp 连接抽屉「版本历史」（连接级配置时间线待后端）
-- ⬜ /tools「AI 语义」Tab（#19）
 - ⬜ 故障模拟四按钮（演练/评测能力，#16 深化）
 
 ### 下一批剩余
 
 - Discovery 增强（#18）：tool_selector 多轮化差距评估 → 决定形态。
+
+## Batch 6：AI 语义契约——生成/草稿/审核并入（2026-10-28，决策 #19）
+
+分支 `feat/toolgov-semantic`（基于 84f3823 = origin/main 含 Batch B2）。
+
+### 后端
+
+- 迁移 120：`ai.mcp_tools` 增 `semantic_draft` / `semantic_approved`
+  JSONB 独立列（登记 init_db + CI 清单；已对本机库 5433 执行）。
+  草稿不进 governance JSONB——governance 是审核时整体落库的治理配置，
+  混入草稿会绕过/污染审核 CAS 语义；
+- prompt 注册：`tool.semantic_suggest`（defaults/tool_semantic_suggest.yaml +
+  registry PromptSpec；promptGroups.ts「工具治理」白名单同步；注册表 62 键）；
+- `admin_mcp.py` 三个端点（require_admin_user + run_governance_mutation +
+  security_events 审计）：
+  - `POST /tools/{id}/semantic/suggest`：仅 approved/pending；prompt 仅注入
+    工具元数据（名称/描述/Schema/示例/连接名/操作类型），全部经
+    `_redact_urls` 清洗，**绝不包含凭据与 URL**；LLM 不可用/失败 → 503，
+    解析失败重试 1 次仍失败 → 502，不伪造草稿；产物写 semantic_draft
+    （status=suggested + generated_at/by）；
+  - `PUT /tools/{id}/semantic/draft`：人工编辑保存（status=edited，保留
+    生成留痕），长度校验 summary≤300 / 单条≤200 / 条数≤10 → 400；
+  - `POST /tools/{id}/semantic/approve`：summary 并入正式 description
+    （截断 MAX_DESCRIPTION_CHARS），完整契约存 semantic_approved，草稿置
+    applied；幂等：无草稿/已并入 → 409；不动 content_hash/approved_hash
+    （它们绑定上游发现内容，平台描述变化不构成漂移），写后刷新运行时快照；
+- `_tool_view` 透出 semantic_draft / semantic_approved 两字段。
+
+### 前端
+
+- /tools 工具抽屉「AI 语义」壳位 → 真实 SemanticContractSection：
+  无草稿空态 + 生成（生成中态）；有草稿可编辑表单（summary/scenarios/
+  exclusions 每行一条/capability_hint）+ 保存草稿 + 审核通过并入
+  （confirm 弹窗）；已 applied 只读展示留痕 + 重新生成（覆盖草稿）；
+- `api/mcp.ts`：McpSemanticDraft/McpSemanticApproved 类型 + McpTool 补
+  semantic_draft/semantic_approved 可选字段 + suggest/save/approve 三封装
+  （mutationRequest 幂等键）。
+
+### 验证
+
+- `test_admin_semantic_api.py`（pg）11 passed：suggest 合法 JSON 落草稿 +
+  prompt 无 URL/凭据/连接地址 + governance 不被污染；垃圾输出 ×2 → 502
+  （LLM 恰好调用 2 次）；LLM 抛异常 → 503；retired → 409；viewer → 403；
+  draft 回显 + 长度非法 400；approve 并入 description + semantic_approved
+  落库 + 草稿 applied + 再 approve 409 + 重新生成→再并入成功 + 长摘要截断；
+- 回归：admin_mcp_api + semantic + discovery + prompts 全目录 **253 passed**
+  （prompt 守卫含注册表 62 键断言）；mcp 动态 e2e + mcp_registry **79 passed**；
+- 前端 tsc 0 错误；tools 页 12 用例全绿（壳位断言改为真实：无草稿空态 +
+  suggest 调用 / 草稿表单预填 + save+approve 调用 / applied 只读 + 重新生成）；
+  vitest 全量 **83 文件 576 用例全绿**（--no-file-parallelism；并行跑时
+  design-tokens 源码扫描 5s 超时属仓库已知的负载抖动，单跑与串行均绿）；
+- 容器级 UNVERIFIED（共享栈刚被并行会话重建，避免互相干扰；合并授权后
+  rebuild 时生效；迁移 120 已对本机库执行）。
