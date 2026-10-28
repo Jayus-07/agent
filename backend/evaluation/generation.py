@@ -294,6 +294,18 @@ def generate_answer(
     角色绑定的供应商；未显式允许云调用时保持 cloud 模式不生成答案的旧口径。
     """
     prompt = _build_prompt(question, context)
+    # 2026-10-29 诊断捕获：评测期拒答边界抖动（同检索结果跨轮翻转）需
+    # 对比实际下发 prompt；hash+长度+首段足以定位组装差异，不落正文全文。
+    import hashlib as _hashlib
+    import os as _os
+
+    if _os.getenv("EVAL_TRIGGER") == "prompt_publish" or _os.getenv("EVAL_CAPTURE_PROMPT"):
+        logger.info(
+            "[EvalGen:capture] q=%r prompt_len=%d sha=%s head=%r",
+            question[:60], len(prompt),
+            _hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:16],
+            prompt[:240].replace("\n", "|"),
+        )
     try:
         _model_name, provider = resolve_eval_model()
     except EvalModelConfigurationError as exc:
