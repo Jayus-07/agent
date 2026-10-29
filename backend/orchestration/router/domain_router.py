@@ -117,10 +117,21 @@ class DomainRouter:
             query,
             context if isinstance(context, Mapping) else None,
         )
-        if product_id == "agent" and self._main_exclusive_domain(
-            prediction.domain,
-        ):
-            return self._main_decision()
+        if product_id == "agent":
+            if self._main_exclusive_domain(prediction.domain):
+                return self._main_decision(prediction)
+            # 主助手 knowledge 兜底（2026-10-29 发货问排障）：电商 FAQ 口语
+            # 问法（「客户下单后多久发货」）在域心上无主——top1 贴着客服域
+            # 但过不了置信门控，gate 拒判 unknown 后主助手原路径落到 clarify
+            # 追问，连检索都不做。次优域明确是 knowledge 时转知识检索兜底：
+            # 证据不匹配由 rag Evidence Gate 拒答，不会伪造答案。仅限
+            # product_id=agent；internal 全局入口与专属域判定行为不变。
+            if (
+                str(prediction.domain or "") == "unknown"
+                and str(getattr(prediction, "second_domain", "") or "")
+                == "knowledge"
+            ):
+                return self._knowledge_fallback_decision(prediction)
         return self.from_prediction(prediction)
 
     @staticmethod
@@ -130,12 +141,25 @@ class DomainRouter:
         }
 
     @staticmethod
-    def _main_decision() -> DomainDecision:
-        return {
+    def _main_decision(prediction: Any = None) -> DomainDecision:
+        # 产品域分流会丢弃粗分类的原始判定；保留次域/分差与原始判定域，
+        # 否则「电商 FAQ 被误判客服域后收进 general」在 trace 里无法解释
+        # （2026-10-29 发货问排障实测：span 只有 domain=general 无证据链）。
+        decision: DomainDecision = {
             "domain": "general", "subflow": None, "confidence": 1.0,
             "source": "product_scope", "score_type": "trusted_product_route",
             "reasoning": "主助手不执行专属旅游、客服或选品域图",
         }
+        if prediction is not None:
+            decision["second_domain"] = str(
+                getattr(prediction, "second_domain", "") or "")
+            decision["margin"] = float(getattr(prediction, "margin", 0.0) or 0.0)
+            pred = str(getattr(prediction, "domain", "") or "")
+            if pred:
+                decision["reasoning"] = (
+                    f"主助手不执行专属旅游、客服或选品域图（pred={pred}）"
+                )
+        return decision
 
     @staticmethod
     def _public_decision() -> DomainDecision:
@@ -143,6 +167,24 @@ class DomainRouter:
             "domain": "general", "subflow": None, "confidence": 1.0,
             "source": "product_scope", "score_type": "public_only",
             "reasoning": "公共入口仅支持一般对话",
+        }
+
+    @staticmethod
+    def _knowledge_fallback_decision(prediction: Any) -> DomainDecision:
+        """主助手低置信兜底：gate 拒判且次优域为 knowledge → 转知识检索。
+
+        confidence/margin 保留粗分类真实值供下游与 trace 解释；不伪装成
+        高置信判定（source 仍标 classifier，reasoning 写明兜底原因）。
+        """
+        return {
+            "domain": "knowledge",
+            "subflow": None,
+            "confidence": float(getattr(prediction, "second_confidence", 0.0) or 0.0),
+            "score_type": str(getattr(prediction, "score_type", "unknown")),
+            "margin": float(getattr(prediction, "margin", 0.0) or 0.0),
+            "second_domain": str(getattr(prediction, "second_domain", "") or ""),
+            "source": "classifier",
+            "reasoning": "粗分类低置信且次优域为 knowledge，主助手转知识检索兜底",
         }
 
     @staticmethod

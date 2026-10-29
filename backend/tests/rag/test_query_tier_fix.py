@@ -100,6 +100,21 @@ class TestPhase4SignalScore:
     def test_single_weak_signal_not_multi_query(self, query):
         assert _classify_query_tier(query) == "hybrid"
 
+    def test_shipping_faq_worded_query_triggers_multi_query(self):
+        """2026-10-29 发货问排障：书面制度问法需 MQ 出口语变体。
+
+        「企业订单的发货时效是怎么规定的?」与 FAQ 原文「客户下单后多久
+        发货」同义不同词，单查询检索命不中（目标块进了 rerank 池仍被阈值
+        截掉）；「是怎么规定的」命中书面制度强信号 → 升 MQ。注意该句
+        len=16 不满足弱信号叠加的 >16 长度门槛，只有强信号短语能救。
+        """
+        assert _classify_query_tier(
+            "企业订单的发货时效是怎么规定的?") == "hybrid_multi_query"
+
+    def test_short_deadline_query_stays_hybrid(self):
+        """「规定/怎么」散配不推高短问（只收完整短语，长度门槛语义不变）。"""
+        assert _classify_query_tier("报销时效怎么规定") != "hybrid_multi_query"
+
     @pytest.mark.parametrize("query", [
         "退货流程是什么，怎么操作",      # 流程 + 怎么，跨子句（弱信号叠加）
         "请分析一下上季度销售额下滑的原因以及应对方法",  # 分析+原因+方法+以及，长句
@@ -133,10 +148,12 @@ class TestPhase4SignalScore:
         assert _classify_query_tier("退货流程怎么走") != "vector_only"
 
     def test_complex_pattern_table_union_preserved(self):
-        """G2：聚合别名 = 强 ∪ 弱，旧消费方可见集不缩水。"""
+        """G2：聚合别名 = 强 ∪ 弱 ∪ 书面制度 ∪ 多来源，旧消费方可见集不缩水。"""
         assert set(hybrid_module.COMPLEX_PATTERNS) == (
             set(hybrid_module.COMPLEX_STRONG_PATTERNS)
             | set(hybrid_module.COMPLEX_WEAK_PATTERNS)
+            | set(hybrid_module.FORMAL_POLICY_PATTERNS)
+            | set(hybrid_module.MULTI_SOURCE_STRONG_PATTERNS)
         )
 
     def test_need_multi_query_follows_tier(self):

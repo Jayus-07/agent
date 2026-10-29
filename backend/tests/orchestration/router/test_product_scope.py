@@ -81,6 +81,71 @@ def test_main_product_ignores_domain_hint_and_prefilter_exclusive_domain():
     assert prefiltered["source"] == "product_scope"
 
 
+def test_main_decision_keeps_classifier_evidence_for_trace():
+    """2026-10-29 发货问排障：产品域分流保留粗分类证据。
+
+    电商 FAQ 被误判客服域后收进 general 时，trace 里若没有原始判定域/
+    次域/分差，「为什么直通 general_chat」无法解释。分流行为不变，
+    只补证据链。
+    """
+    router = DomainRouter(classifier=_TravelClassifier())
+    decision = router.route("旅行问题", {"product_id": "agent"})
+
+    assert decision["domain"] == "general"
+    assert decision["source"] == "product_scope"
+    assert "pred=travel" in decision["reasoning"]
+    assert decision["second_domain"] == "general"
+    assert decision["margin"] == 0.5
+
+
+class _UnknownButKnowledgeSecondClassifier:
+    """复刻 2026-10-29 发货问线上形态：gate 拒判 unknown，次优域 knowledge。"""
+
+    def classify(self, query: str, context=None):
+        return SimpleNamespace(
+            domain="unknown",
+            confidence=0.717,
+            source="gate",
+            reason_code="LOW_CONFIDENCE",
+            score_type="softmax_rank_score",
+            margin=0.394,
+            second_domain="knowledge",
+            second_confidence=0.323,
+        )
+
+
+def test_agent_unknown_with_knowledge_second_falls_back_to_knowledge():
+    """主助手低置信 + 次优域 knowledge → 转知识检索兜底，不落 clarify。
+
+    电商 FAQ 口语问法在域心上无主时，原路径 unknown → clarify 让用户
+    换说法；检索兜底由 rag Evidence Gate 把关（检索不到仍拒答）。
+    """
+    router = DomainRouter(classifier=_UnknownButKnowledgeSecondClassifier())
+
+    agent_decision = router.route("客户下单后多久发货", {"product_id": "agent"})
+    assert agent_decision["domain"] == "knowledge"
+    assert agent_decision["source"] == "classifier"
+    assert "知识检索兜底" in agent_decision["reasoning"]
+
+    # 非主助手入口保持 unknown 原行为（ clarify 分派），不受兜底影响
+    internal_decision = router.route("客户下单后多久发货", {"product_id": "internal"})
+    assert internal_decision["domain"] == "unknown"
+
+
+def test_agent_unknown_without_knowledge_second_keeps_unknown():
+    """次优域不是 knowledge（如寒暄/技术闲聊）不触发兜底。"""
+
+    class _UnknownGeneralSecondClassifier(_UnknownButKnowledgeSecondClassifier):
+        def classify(self, query: str, context=None):
+            ns = super().classify(query, context)
+            ns.second_domain = "general"
+            return ns
+
+    router = DomainRouter(classifier=_UnknownGeneralSecondClassifier())
+    decision = router.route("用一句话解释幂等", {"product_id": "agent"})
+    assert decision["domain"] == "unknown"
+
+
 def test_capability_candidates_are_limited_by_product_scope():
     candidates = [
         CapabilityScore(name="rag.search", score=0.9),

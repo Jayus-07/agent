@@ -408,6 +408,14 @@ class RoutingEngine:
                     "domain": str(domain_decision.get("domain") or "unknown"),
                     "source": str(domain_decision.get("source") or ""),
                 })
+                # 产品域分流会把粗分类原始判定收进 general；次域/分差是
+                # 排障「为什么判成专属域」的关键证据（缺它只能靠猜）。
+                if domain_decision.get("second_domain"):
+                    domain_span.metrics["pred_second"] = str(
+                        domain_decision["second_domain"])
+                if domain_decision.get("margin"):
+                    domain_span.metrics["pred_margin"] = round(
+                        float(domain_decision["margin"]), 4)
             except Exception as exc:
                 domain_error = exc
                 domain_span.metrics["outcome"] = "degraded"

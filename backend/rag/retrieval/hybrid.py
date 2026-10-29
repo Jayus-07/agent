@@ -164,6 +164,14 @@ COMPLEX_WEAK_PATTERNS = [
     "以及", "同时", "另外", "还有", "并且",
     "怎么", "如何", "流程", "步骤", "方法", "原因", "为什么",
 ]
+# 书面制度问法（2026-10-29 发货问排障）：「是怎么规定的」类措辞在问制度
+# 条文，但知识库 FAQ 常为口语原文（「多久发货」），同义不同词时单查询
+# 检索命不中（目标块进了 rerank 池仍被阈值截掉）。命中即升 MQ，靠 LLM
+# 改写出口语变体。只收完整短语，不收「规定/怎么」单字散配——弱信号叠加
+# 的长度门槛语义保持不变（§21 治理：短问不升级）。
+FORMAL_POLICY_PATTERNS = (
+    "是怎么规定的", "是怎么定义的", "如何规定的", "是怎样规定的",
+)
 # 多来源/多部门协作（2026-10-18）：这类问题的证据天然分散在多份文档，
 # 单文档检索即使相关也只能覆盖部分事实（如"供应商准入"在供应商规范、
 # "AQL/CE/FCC"在质检 SOP）。属于**结构性**多跳信号，命中即升 MQ。
@@ -172,9 +180,10 @@ MULTI_SOURCE_STRONG_PATTERNS = (
     "哪些部门", "哪些环节", "哪些岗位", "哪些角色",
     "涉及哪些", "由哪些", "分别由", "跨部门", "部门协作", "多方协作",
 )
-# 兼容别名（旧消费方 = multi_query 兜底检测）：强 ∪ 弱 ∪ 多来源
+# 兼容别名（旧消费方 = multi_query 兜底检测）：强 ∪ 弱 ∪ 书面制度 ∪ 多来源
 COMPLEX_PATTERNS = (
-    COMPLEX_STRONG_PATTERNS + COMPLEX_WEAK_PATTERNS + list(MULTI_SOURCE_STRONG_PATTERNS)
+    COMPLEX_STRONG_PATTERNS + COMPLEX_WEAK_PATTERNS
+    + list(FORMAL_POLICY_PATTERNS) + list(MULTI_SOURCE_STRONG_PATTERNS)
 )
 
 # 多意图连接词（长 query + 连接词 = §21 强信号「长 query + 多意图」）
@@ -199,7 +208,14 @@ _PROPER_QUESTION = re.compile(
 _RHETORICAL_MARKERS = re.compile(r"(难道|岂|莫非)")
 _NEGATION = re.compile(r"(不|没|别|无|非)")
 _QUESTION_WORDS = re.compile(
-    r"(为什么|怎么|什么|哪|谁|多少|几|是否|能否|如何|何时|何处)")
+    r"(为什么|怎么|什么|哪|谁|多少|多久|几|是否|能否|如何|何时|何处)")
+# 疑问分句判定标记 = 疑问代词 ∪ 正反问（A不A 是真问题，见 _is_rhetorical）
+_QUESTION_MARKERS = re.compile(
+    r"(为什么|怎么|什么|哪|谁|多少|多久|几|是否|能否|如何|何时|何处"
+    r"|是不是|要不要|能不能|有没有|可不可以|该不该|会不会|好不好)")
+# 「…吗/呢」结尾：无疑问代词但疑问语气明确的封闭式问句
+# （「需要税号吗」）；否定+吗/吧 的反问形态已由 _is_rhetorical 先行排除
+_QUESTION_PARTICLE = re.compile(r"(吗|呢)$")
 
 
 def _is_rhetorical(sentence: str) -> bool:
@@ -225,9 +241,18 @@ def _count_real_questions(query: str) -> int:
     """统计真实疑问句数量（反问句不计）。
 
     与旧 q.count("？") 的差异就是本次修复点：把标点计数换成意图计数。
+    2026-10-29 补第二处修复：分句必须**含疑问标记**（疑问代词或正反问）
+    才计为真实疑问——按问号 split 后，剩余分句的疑问语气只能靠词面证明，
+    否则「…？请给出处。」这类祈使后缀会被当成第二个疑问句，把单意图
+    FAQ 问句误升 MQ（实测五条对照全部多付改写+3路检索+大池重排）。
     """
     parts = [p.strip() for p in re.split(r"[？?]", query) if p.strip()]
-    return sum(0 if _is_rhetorical(p) else 1 for p in parts)
+    return sum(
+        1 for p in parts
+        if not _is_rhetorical(p)
+        and (_QUESTION_MARKERS.search(p)
+             or _QUESTION_PARTICLE.search(p.rstrip("。．.　 ")))
+    )
 
 # Tier 1「简单 FAQ」的最大长度（去标点后字符数，D-Q2 修复 2026-10-05）：
 # 此前兜底过宽——任何不含复杂词/标识符的问句（含专名长问「崇妙保圣坚牢塔
@@ -322,13 +347,14 @@ def _classify_query_tier(query: str) -> str:
     #   弱信号叠加的判别：必须跨子句或问句足够长——「报销流程怎么走？」
     #   这类单子句短问里 流程+怎么 天然共现，仍算单一意图（任务书 §21 原例）。
     strong_hits = [p for p in COMPLEX_STRONG_PATTERNS if p in q]
+    formal_hits = [p for p in FORMAL_POLICY_PATTERNS if p in q]
     multi_source_hits = [p for p in MULTI_SOURCE_STRONG_PATTERNS if p in q]
     weak_hits = [p for p in COMPLEX_WEAK_PATTERNS if p in q]
     # R1-B（P1-D 修正后）：简单事实豁免只作用于**弱信号叠加**分支，与基线
     # d1b9668 的 tier 语义保持一致（短问/Tier-2 标识符/弱信号单命中的既有
     # 行为不变）。强信号恒为 MQ：is_simple_fact_query 在强信号命中时必然
     # 返回空串，因此不会降级真正的多意图问句。
-    if strong_hits or multi_source_hits:
+    if strong_hits or formal_hits or multi_source_hits:
         return "hybrid_multi_query"
     if len(weak_hits) >= 2 and (len(sentence_parts) >= 2 or len(q) > 16):
         if is_simple_fact_query(q, sentence_parts=sentence_parts):

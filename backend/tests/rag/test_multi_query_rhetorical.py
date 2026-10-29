@@ -62,6 +62,18 @@ def test_count_real_questions_keeps_real_multi():
     assert _count_real_questions("怎么配置？超时是多少？") == 2
 
 
+def test_count_real_questions_ignores_imperative_suffix():
+    """2026-10-29 发货问排障：「…？请给出处。」是问句+祈使后缀。
+
+    「请给出处」无疑问标记，不得计为第二个疑问句——否则单意图 FAQ
+    问句被误升 MQ，多付改写+3路检索+大池重排（实测 +5-8s）。
+    """
+    assert _count_real_questions("客户下单后多久发货?请给出处。") == 1
+    assert _count_real_questions("企业申请发票需要税号和开户银行吗？请给出处。") == 1
+    # 疑问标记证明（含正反问）的多意图不受伤
+    assert _count_real_questions("是不是有问题？要不要改？") == 2
+
+
 # ── 分类器端到端 ──────────────────────────────────────
 
 def test_original_repro_no_longer_triggers():
