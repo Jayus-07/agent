@@ -13,6 +13,11 @@ const reviewMcpTool = vi.hoisted(() => vi.fn())
 const grantMcpTool = vi.hoisted(() => vi.fn())
 const disableMcpTool = vi.hoisted(() => vi.fn())
 const testInvokeMcpTool = vi.hoisted(() => vi.fn())
+const runFailureAnalysis = vi.hoisted(() => vi.fn())
+const getFailureAnalyses = vi.hoisted(() => vi.fn())
+const suggestMcpSemantic = vi.hoisted(() => vi.fn())
+const saveMcpSemanticDraft = vi.hoisted(() => vi.fn())
+const approveMcpSemantic = vi.hoisted(() => vi.fn())
 const navigation = vi.hoisted(() => ({
   params: new URLSearchParams(),
   router: { push: vi.fn(), replace: vi.fn() },
@@ -25,6 +30,10 @@ vi.mock('@/api/governance', () => ({
   getToolErrors,
   runToolFailureProbe,
 }))
+vi.mock('@/api/failureAnalysis', () => ({
+  runFailureAnalysis,
+  getFailureAnalyses,
+}))
 vi.mock('@/api/mcp', () => ({
   getMcpTools,
   getMcpToolDetail,
@@ -32,6 +41,9 @@ vi.mock('@/api/mcp', () => ({
   grantMcpTool,
   disableMcpTool,
   testInvokeMcpTool,
+  suggestMcpSemantic,
+  saveMcpSemanticDraft,
+  approveMcpSemantic,
 }))
 vi.mock('next/navigation', () => ({
   useRouter: () => navigation.router,
@@ -161,6 +173,39 @@ beforeEach(() => {
     tool_id: 7, capability: 'zhihu.get_answers', product_key: 'internal',
     tool_status: 'success', error_code: '', error_message: '', elapsed_ms: 42, result: { ok: true },
   })
+  runFailureAnalysis.mockResolvedValue({
+    analysis_id: 'tfa_abc123def456',
+    clusters: [{
+      tool: 'map.lookup',
+      error_class: 'timeout',
+      attribution: '上游超时预算不足',
+      suggestions: ['提高超时预算', '增加降级路径'],
+      candidate_eval_cases: [{
+        question: '查询上海门店的营业时间',
+        expected_capability: 'map.lookup',
+        expectation_note: '应在超时预算内返回',
+      }],
+    }],
+    created_at: '2026-10-28T12:00:00+00:00',
+  })
+  getFailureAnalyses.mockResolvedValue({ count: 0, analyses: [] })
+  suggestMcpSemantic.mockResolvedValue({
+    tool_id: 7,
+    draft: {
+      summary: 'AI 生成的摘要', scenarios: [], exclusions: [],
+      capability_hint: null, status: 'suggested',
+      generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+    },
+  })
+  saveMcpSemanticDraft.mockResolvedValue({
+    summary: '人工保存的摘要', scenarios: [], exclusions: [],
+    capability_hint: null, status: 'edited',
+    generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+    edited_at: '2026-10-21T10:00:00Z', edited_by: 'user:admin',
+  })
+  approveMcpSemantic.mockResolvedValue({
+    tool_id: 7, approved: true, description: '人工保存的摘要',
+  })
 })
 
 afterEach(() => {
@@ -280,11 +325,25 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     expect(container.textContent).toContain('zhihu-open-api')
     expect(container.textContent).toContain('获取知乎回答列表')
 
-    // AI 语义 Tab：置灰壳位（不可点击 + data-stub 标记 + 常驻提示）
-    const stubTab = container.querySelector('[data-stub="demo"]')
-    expect(stubTab?.textContent).toContain('AI 语义')
-    expect(stubTab?.getAttribute('aria-disabled')).toBe('true')
-    expect(container.textContent).toContain('AI 语义契约建议属下一批')
+    // AI 语义 Tab：真实语义契约工作区（壳位已移除；无草稿 → 空态 + 生成按钮）
+    expect(container.querySelector('[data-stub="demo"]')).toBeNull()
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    expect(aiTab).toBeTruthy()
+    expect(aiTab!.getAttribute('aria-disabled')).toBeNull()
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('绝不包含凭据与地址')
+    const suggestButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成语义建议'))
+    expect(suggestButton).toBeTruthy()
+    await act(async () => {
+      suggestButton!.click()
+      await Promise.resolve()
+    })
+    expect(suggestMcpSemantic).toHaveBeenCalledWith(7)
 
     // 执行策略：审核表单 + 业务域 select + 授权开关
     const policyTab = Array.from(container.querySelectorAll('button[role="tab"]'))
@@ -322,6 +381,113 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     expect(container.textContent).toContain('success')
   })
 
+  it('AI 语义：草稿表单可编辑，保存草稿与审核并入调用对应 API', async () => {
+    // happy-dom 未内置 confirm，直接替换为可断言的桩
+    const confirmStub = vi.fn(() => true)
+    window.confirm = confirmStub as unknown as typeof window.confirm
+    // 打开抽屉前换成带草稿的工具详情
+    getMcpToolDetail.mockResolvedValue({
+      ...mcpTool,
+      semantic_draft: {
+        summary: 'AI 建议摘要', scenarios: ['场景一'], exclusions: ['写操作'],
+        capability_hint: 'order.lookup', status: 'suggested',
+        generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+      },
+    })
+    const container = await mountPage()
+    const mcpRow = Array.from(container.querySelectorAll('tbody tr'))
+      .find((tr) => tr.textContent?.includes('zhihu.get_answers'))
+    const detailButton = Array.from(mcpRow!.querySelectorAll('button'))
+      .find((item) => item.textContent?.trim() === '详情')
+    await act(async () => {
+      detailButton!.click()
+      await Promise.resolve()
+    })
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+
+    // 待审状态 chip + 草稿表单预填
+    expect(container.textContent).toContain('AI 生成（待审）')
+    const textareas = Array.from(container.querySelectorAll('textarea'))
+    expect(textareas[0]!.value).toBe('AI 建议摘要')
+
+    const saveButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('保存草稿'))
+    await act(async () => {
+      saveButton!.click()
+      await Promise.resolve()
+    })
+    expect(saveMcpSemanticDraft).toHaveBeenCalledWith(7, {
+      summary: 'AI 建议摘要',
+      scenarios: ['场景一'],
+      exclusions: ['写操作'],
+      capability_hint: 'order.lookup',
+    })
+
+    const approveButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('审核通过并入描述'))
+    expect(approveButton).toBeTruthy()
+    await act(async () => {
+      approveButton!.click()
+      await Promise.resolve()
+    })
+    expect(confirmStub).toHaveBeenCalled()
+    expect(approveMcpSemantic).toHaveBeenCalledWith(7)
+  })
+
+  it('AI 语义：已并入后只读展示留痕并允许再次生成', async () => {
+    getMcpToolDetail.mockResolvedValue({
+      ...mcpTool,
+      semantic_draft: {
+        summary: '已并入的摘要', scenarios: [], exclusions: [],
+        capability_hint: null, status: 'applied',
+        generated_at: '2026-10-20T10:00:00Z', generated_by: 'user:admin',
+      },
+      semantic_approved: {
+        summary: '已并入的摘要', scenarios: ['适用A'], exclusions: ['禁用B'],
+        capability_hint: null, approved_at: '2026-10-21T11:00:00Z',
+        approved_by: 'user:admin', description_after: '已并入的摘要',
+      },
+    })
+    const container = await mountPage()
+    const mcpRow = Array.from(container.querySelectorAll('tbody tr'))
+      .find((tr) => tr.textContent?.includes('zhihu.get_answers'))
+    const detailButton = Array.from(mcpRow!.querySelectorAll('button'))
+      .find((item) => item.textContent?.trim() === '详情')
+    await act(async () => {
+      detailButton!.click()
+      await Promise.resolve()
+    })
+    const aiTab = Array.from(container.querySelectorAll('button[role="tab"]'))
+      .find((item): item is HTMLButtonElement => item.textContent === 'AI 语义')
+    await act(async () => {
+      aiTab!.click()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('已并入正式描述')
+    expect(container.textContent).toContain('已并入的摘要')
+    expect(container.textContent).toContain('适用：适用A')
+    expect(container.textContent).toContain('禁用：禁用B')
+    // 已并入后不再出现「保存草稿 / 审核通过并入描述」，只允许再次生成
+    expect(Array.from(container.querySelectorAll('button'))
+      .some((item) => item.textContent?.includes('保存草稿'))).toBe(false)
+    expect(Array.from(container.querySelectorAll('button'))
+      .some((item) => item.textContent?.includes('审核通过并入描述'))).toBe(false)
+    const regen = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('重新生成'))
+    expect(regen).toBeTruthy()
+    await act(async () => {
+      regen!.click()
+      await Promise.resolve()
+    })
+    expect(suggestMcpSemantic).toHaveBeenCalledWith(7)
+  })
+
   it('强制失败测试入口在「运行质量与失败」subTab，展示模拟结果并回链 Trace', async () => {
     const container = await mountPage('tab=quality')
 
@@ -345,6 +511,77 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     expect(container.textContent).toContain('失败 Tool')
     expect(container.textContent).toContain('失败原因分布')
     expect(container.textContent).toContain('超时')
+  })
+
+  it('quality subTab AI 失败分析：生成调用、聚类卡渲染与「仅建议」边界标注', async () => {
+    const container = await mountPage('tab=quality')
+
+    // 区块常驻：说明文案含数据边界（不含用户参数原文与凭据）
+    expect(container.textContent).toContain('AI 失败分析')
+    expect(container.textContent).toContain('不含用户参数原文与凭据')
+    expect(container.textContent).toContain('最近分析')
+
+    // 生成分析：默认 60 分钟窗
+    const windowSelect = container.querySelector<HTMLSelectElement>('select[aria-label="分析时间窗"]')
+    expect(windowSelect).toBeTruthy()
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成分析'))
+    expect(button).toBeTruthy()
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+    })
+
+    expect(runFailureAnalysis).toHaveBeenCalledWith({ window_minutes: 60 })
+    // 聚类卡：工具/错误分类/归因/修复建议/候选用例
+    expect(container.textContent).toContain('map.lookup')
+    expect(container.textContent).toContain('上游超时预算不足')
+    expect(container.textContent).toContain('提高超时预算')
+    expect(container.textContent).toContain('查询上海门店的营业时间')
+    // 候选用例仅建议的边界标注常驻
+    expect(container.textContent).toContain('应用需走评测中心审核与回归')
+    // 生成后刷新最近分析列表
+    expect(getFailureAnalyses).toHaveBeenCalled()
+  })
+
+  it('quality subTab AI 失败分析：空聚类展示无失败提示，可回看最近分析', async () => {
+    runFailureAnalysis.mockResolvedValue({
+      analysis_id: 'tfa_empty000001',
+      clusters: [],
+      created_at: '2026-10-28T13:00:00+00:00',
+    })
+    getFailureAnalyses.mockResolvedValue({
+      count: 1,
+      analyses: [{
+        id: 'tfa_hist0000001',
+        window_minutes: 360,
+        input_summary: {},
+        result: { clusters: [] },
+        model: 'doubao-seed-2.0-mini',
+        created_by: 'user:u-admin',
+        created_at: '2026-10-28T11:00:00+00:00',
+        cluster_count: 0,
+      }],
+    })
+    const container = await mountPage('tab=quality')
+
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成分析'))
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('没有 Tool 失败记录')
+
+    // 最近分析点击回看：结果面板切到历史分析 id
+    const historyButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('窗口 360 分钟'))
+    expect(historyButton).toBeTruthy()
+    await act(async () => {
+      historyButton!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('分析 tfa_hist0000001')
   })
 
   it('registry 搜索词过滤合并目录并同步到 URL', async () => {
