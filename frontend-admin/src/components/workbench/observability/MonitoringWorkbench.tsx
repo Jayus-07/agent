@@ -2,10 +2,10 @@
 
 import WorkbenchShell, { WorkbenchTab } from '@/components/workbench/WorkbenchShell'
 import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
-import GatewayPanel from './GatewayPanel'
-import TokensPanel from './TokensPanel'
-import TracesPanel from './TracesPanel'
-import RuntimeOverview from './RuntimeOverview'
+import GatewaySecurityPanel from './GatewaySecurityPanel'
+import TokensUsagePanel from './TokensUsagePanel'
+import TraceListPanel from './TraceListPanel'
+import OverviewPanel from './OverviewPanel'
 
 const TABS = [
   { id: 'overview', label: '运行总览' },
@@ -27,10 +27,10 @@ export default function MonitoringWorkbench() {
       activeTab={tab}
       onTabChange={selectTab}
     >
-      {tab === 'overview' && <RuntimeOverview />}
-      {tab === 'traces' && <TracesPanel />}
-      {tab === 'gateway' && <GatewayPanel />}
-      {tab === 'tokens' && <TokensPanel />}
+      {tab === 'overview' && <OverviewPanel />}
+      {tab === 'traces' && <TraceListPanel />}
+      {tab === 'gateway' && <GatewaySecurityPanel />}
+      {tab === 'tokens' && <TokensUsagePanel />}
     </WorkbenchShell>
   )
 }

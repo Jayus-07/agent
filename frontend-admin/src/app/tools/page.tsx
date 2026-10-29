@@ -1436,7 +1436,7 @@ export default function ToolsPage() {
   const [probeLoading, setProbeLoading] = useState(false)
   const [probeError, setProbeError] = useState<string | null>(null)
   const [probeResult, setProbeResult] = useState<{ trace_id: string; status: string } | null>(null)
-  // 清单筛选（q/ds/failed）与变更历史分类（cls）进 URL，复用 TracesPanel 的 querystring 模式
+  // 清单筛选（q/ds/failed）与变更历史分类（cls）进 URL，复用执行记录列表的 querystring 模式
   const [query, setQuery] = useState(searchParams.get('q') ?? '')
   const [dsFilter, setDsFilter] = useState(searchParams.get('ds') ?? 'all')
   const [failedOnly, setFailedOnly] = useState(searchParams.get('failed') === '1')

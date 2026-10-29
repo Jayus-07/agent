@@ -14,10 +14,10 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }))
 
-vi.mock('./TracesPanel', () => ({ default: () => <div data-panel="traces">问答追踪面板</div> }))
-vi.mock('./RuntimeOverview', () => ({ default: () => <div data-panel="overview">运行总览面板</div> }))
-vi.mock('./GatewayPanel', () => ({ default: () => <div data-panel="gateway">网关安全面板</div> }))
-vi.mock('./TokensPanel', () => ({ default: () => <div data-panel="tokens">Token 用量面板</div> }))
+vi.mock('./TraceListPanel', () => ({ default: () => <div data-panel="traces">问答追踪面板</div> }))
+vi.mock('./OverviewPanel', () => ({ default: () => <div data-panel="overview">运行总览面板</div> }))
+vi.mock('./GatewaySecurityPanel', () => ({ default: () => <div data-panel="gateway">网关安全面板</div> }))
+vi.mock('./TokensUsagePanel', () => ({ default: () => <div data-panel="tokens">Token 用量面板</div> }))
 
 import MonitoringWorkbench from './MonitoringWorkbench'
 

@@ -1,48 +1,28 @@
 "use client";
 
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
+import { Sparkles } from "lucide-react";
 import { getTraceDetail } from "@/api/observability";
-import dynamic from "next/dynamic";
-import TraceOverviewCard from "@/components/observability/trace/TraceOverviewCard";
-import InputOutputPanel from "@/components/observability/trace/InputOutputPanel";
+import { evaluationService } from "@/api/evaluation";
 import TraceBreadcrumb from "@/components/observability/trace/TraceBreadcrumb";
-import TraceOutcomePanel from "@/components/observability/trace/TraceOutcomePanel";
-import PromptVersionsBadge from "@/components/observability/trace/PromptVersionsBadge";
-import LLMCallDetail from "@/components/observability/trace/LLMCallDetail";
-import CostPanel from "@/components/observability/trace/CostPanel";
-import HttpBreakdown from "@/components/observability/trace/HttpBreakdown";
-import SpanTypeSummary from "@/components/observability/trace/SpanTypeSummary";
-import { mergeChildTraceSpans } from "@/components/observability/trace/traceSpanTree";
+import InputOutputPanel from "@/components/observability/trace/InputOutputPanel";
+import SpanGantt from "@/components/observability/trace/SpanGantt";
+import type { Span, TraceRecord } from "@/types/trace";
+import { formatCost, formatTime, safeNum } from "@/types/trace";
+import { getRunStatus, getRunStatusLabel, getRunStatusTone, safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
+import { deriveDomainLabel, deriveRunKind, runKindBadgeClass } from "@/lib/observability/runKind";
 
-// 两个可视化组件含 recharts，懒加载避免拖慢详情页首帧
-const StepTimeline = dynamic(() => import("@/components/observability/trace/StepTimeline"), {
-  ssr: false,
-  loading: () => <div className="h-40 rounded-lg bg-slate-100 animate-pulse" />,
-});
-const FlameGraph = dynamic(() => import("@/components/observability/trace/FlameGraph"), {
-  ssr: false,
-  loading: () => <div className="h-40 rounded-lg bg-slate-100 animate-pulse" />,
-});
-import SpanTypeFilter from "@/components/observability/trace/SpanTypeFilter";
-import GraphTopology, { hasGraphNodeExecution } from "@/components/observability/trace/GraphTopology";
-import {
-  formatTime,
-  formatRelative,
-  durationColor,
-  TraceRecord,
-  Span,
-  safeNum,
-} from "@/types/trace";
-import { getRunStatus, getRunStatusLabel, getRunStatusTone, safeDiagnosticCode, safeRuntimeLabel } from "@/lib/observability/runtimeStatus";
-
-// 注：safeNum 已统一在 @/types/trace.ts 导出。
-
-/** 辅助：从 spans 中查找指定 id 的 span */
-function findSpan(spans: Span[], id: string): Span | undefined {
-  return spans.find((s) => s.id === id);
-}
+/**
+ * Trace 详情页（2026-10-30 按模拟页「四问」布局重写，不复用旧 StepTimeline/FlameGraph/
+ * GraphTopology 等区块组件）：
+ *   ① 错在哪——问题与结果 + 错误诊断卡（含「错误题加入候选评测集」入口）
+ *   ② 慢在哪——Span 甘特时间线（SpanGantt，含未埋点黑洞）
+ *   ③ 答了什么——LLM 调用明细（含 Rerank/多查询等全部 llm_call 与跳过阶段）
+ *   ④ 花了多少——概要侧卡（成本/Token/模型/Prompt 版本/SLA 语义修正）
+ * 内容读取审计由后端 get_trace 写入；SLA 对失败运行显示「未参与判定」。
+ */
 
 function traceReadFailure(error: unknown): { title: string; message: string } {
   const status = (error as { status?: number } | null)?.status;
@@ -53,15 +33,15 @@ function traceReadFailure(error: unknown): { title: string; message: string } {
   return { title: "Trace 服务暂不可用", message: "读取详情失败，请检查连接后重试。" };
 }
 
+function fmtMs(ms: number): string {
+  return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
+}
+
 export default function TraceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
-  const [highlightStepId, setHighlightStepId] = useState<string | null>(null);
-  const [activeSpanTypes, setActiveSpanTypes] = useState<Set<string>>(new Set());  // 空=全部
 
-  // 异步加载：详情页需要单条 trace + 父子链
   const [trace, setTrace] = useState<TraceRecord | null>(null);
   const [parent, setParent] = useState<TraceRecord | null>(null);
   const [children, setChildren] = useState<TraceRecord[]>([]);
@@ -69,6 +49,8 @@ export default function TraceDetailPage() {
   const [loadError, setLoadError] = useState<{ title: string; message: string } | null>(null);
   const [relationshipLoadError, setRelationshipLoadError] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const [candidateState, setCandidateState] = useState<"idle" | "creating" | "done" | "error">("idle");
+  const [candidateId, setCandidateId] = useState<string>("");
 
   const requestedReturnTo = searchParams.get("returnTo") || "";
   const returnTo = requestedReturnTo === "/observability/monitoring"
@@ -81,8 +63,10 @@ export default function TraceDetailPage() {
     let cancelled = false;
     setLoading(true);
     setTrace(null);
-        setLoadError(null);
+    setLoadError(null);
     setRelationshipLoadError(false);
+    setCandidateState("idle");
+    setCandidateId("");
     (async () => {
       try {
         const t = await getTraceDetail(id);
@@ -94,7 +78,6 @@ export default function TraceDetailPage() {
           setLoading(false);
           return;
         }
-        // 关联 Trace 仍通过同一受资源授权的只读详情 API 获取。
         const relationError = () => { if (!cancelled) setRelationshipLoadError(true); };
         const pTask = t.parent_id
           ? getTraceDetail(t.parent_id).catch(() => { relationError(); return null; })
@@ -132,22 +115,37 @@ export default function TraceDetailPage() {
     return () => { cancelled = true; };
   }, [id, loadAttempt]);
 
-  const spans = (trace?.spans || []) as Span[];
-  const graphNodes = trace?.graph?.nodes.filter((node) => hasGraphNodeExecution(node.id, spans)) || [];
-  const graphNodeIds = new Set(graphNodes.map((node) => node.id));
-  const graphEdges = trace?.graph?.edges.filter((edge) => graphNodeIds.has(edge.source) && graphNodeIds.has(edge.target)) || [];
+  const spans = useMemo(() => (trace?.spans || []) as Span[], [trace]);
+  const runStatus = trace ? getRunStatus(trace) : "unknown";
+  const hasError = Boolean(trace?.error && Object.keys(trace.error).length > 0);
+  const err = (trace?.error ?? {}) as Record<string, unknown>;
+  const errorCode = typeof err.code === "string" ? err.code.trim() : "";
+  const errorMessage = typeof err.message === "string" ? err.message.trim() : "";
+  const errorClass = typeof err.class === "string" ? err.class.trim() : "";
 
-  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
-  useEffect(() => {
-    return () => {
-      timersRef.current.forEach(clearTimeout);
-      timersRef.current.clear();
-    };
-  }, []);
+  const rootSpan = useMemo(() => spans.find((s) => s.parent_id === null), [spans]);
+  const uncoveredMs = rootSpan ? Number(rootSpan.metrics?.uncovered_ms ?? 0) : 0;
+  const llmSpans = useMemo(() => spans.filter((s) => s.type === "llm_call"), [spans]);
+  const skippedStages = useMemo(() => {
+    const raw = rootSpan?.metrics?.skipped_stages;
+    return Array.isArray(raw) ? raw : [];
+  }, [rootSpan]);
+
+  const addErrorToEvalSet = async () => {
+    if (!trace || candidateState === "creating") return;
+    setCandidateState("creating");
+    try {
+      const candidate = await evaluationService.intakeV2TraceCandidate(trace.id, `trace-${trace.id}`);
+      setCandidateId(candidate?.candidate_id || "");
+      setCandidateState("done");
+    } catch {
+      setCandidateState("error");
+    }
+  };
 
   if (loading && !trace) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <div className="text-center text-sm text-slate-500" role="status">正在读取 Trace 详情…</div>
       </div>
     );
@@ -155,14 +153,12 @@ export default function TraceDetailPage() {
 
   if (!trace) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center px-4">
+      <div className="flex min-h-screen items-center justify-center bg-slate-50 px-4">
         <div className="max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center">
           <h1 className="font-semibold text-slate-900">{loadError?.title || "无法查看此 Trace"}</h1>
-          <p className="mt-2 text-sm text-slate-600">
-            {loadError?.message || "记录不存在，或当前身份无权查看该受保护资源。"}
-          </p>
+          <p className="mt-2 text-sm text-slate-600">{loadError?.message || "记录不存在，或当前身份无权查看该受保护资源。"}</p>
           <div className="mt-4 flex justify-center gap-3">
-            {loadError && <button type="button" onClick={() => setLoadAttempt((attempt) => attempt + 1)} className="min-h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">重试</button>}
+            {loadError && <button type="button" onClick={() => setLoadAttempt((a) => a + 1)} className="min-h-10 rounded-md border border-slate-300 px-3 text-sm text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">重试</button>}
             <button type="button" onClick={() => router.push(returnTo)} className="min-h-10 rounded-md bg-blue-700 px-3 text-sm font-medium text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2">返回执行记录</button>
           </div>
         </div>
@@ -170,57 +166,13 @@ export default function TraceDetailPage() {
     );
   }
 
-  const hasError = Boolean(trace.error && Object.keys(trace.error).length > 0);
-  const err = trace.error as Record<string, unknown>;
-  const runStatus = getRunStatus(trace);
-
-  // 业务 span 查找（按 type 或 id）
-  const rerankSpan = spans.find((s) => s.type === "rerank" || s.id === "rerank");
-  const rerankZero = rerankSpan && Number(rerankSpan.metrics?.output_docs ?? -1) === 0;
-  const faithSpan = spans.find((s) => s.id === "faithfulness" || s.name === "Faithfulness");
-  const mqSpan = spans.find((s) => s.id === "mq_check" || s.name === "MultiQuery");
-  const errorStepId = safeRuntimeLabel(err.error_node, "");
-  const errorCode = safeDiagnosticCode(err.code);
-  const hasErrorCode = typeof err.code === "string" && err.code.trim().length > 0;
-  const errorMessage = typeof err.message === "string" ? err.message.trim() : "";
-  const errorClass = typeof err.class === "string" ? err.class.trim() : "";
-
-  // 主 Trace 与远端子 Trace 共用一条时间线；子 Trace Span 会映射到其工具调用下。
-  const childSpans = mergeChildTraceSpans(spans, children);
-
-  // Span Type 过滤
-  const filteredSpans = activeSpanTypes.size === 0
-    ? childSpans
-    : childSpans.filter((s) => activeSpanTypes.has(s.type));
-
-  const toggleStep = (spanId: string) => {
-    const next = new Set(expandedSteps);
-    next.has(spanId) ? next.delete(spanId) : next.add(spanId);
-    setExpandedSteps(next);
-  };
-
-  const scrollToStep = (spanId: string) => {
-    setHighlightStepId(spanId);
-    timersRef.current.forEach(clearTimeout);
-    timersRef.current.clear();
-
-    const t1 = setTimeout(() => {
-      const el = document.getElementById(`step-${spanId}`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-      timersRef.current.delete(t1);
-    }, 50);
-    const t2 = setTimeout(() => {
-      setHighlightStepId(null);
-      timersRef.current.delete(t2);
-    }, 2500);
-    timersRef.current.add(t1);
-    timersRef.current.add(t2);
-  };
+  const kind = deriveRunKind(trace);
+  const domain = deriveDomainLabel(trace);
+  const isFailure = runStatus === "error" || runStatus === "timeout" || runStatus === "failed";
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="max-w-[1440px] mx-auto px-4 py-5 sm:px-6 sm:py-6 space-y-5">
-        {/* ── Breadcrumb ── */}
+      <div className="mx-auto max-w-[1440px] space-y-5 px-4 py-5 sm:px-6 sm:py-6">
         <TraceBreadcrumb
           crumbs={[
             { label: "运行控制中心", href: returnTo },
@@ -230,296 +182,146 @@ export default function TraceDetailPage() {
           ]}
         />
 
-        {/* ── Header ── */}
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div className="flex items-center gap-3 flex-wrap">
-            <button type="button" onClick={() => router.push(returnTo)} className="min-h-10 rounded px-2 text-sm text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">← 返回列表</button>
-            <span className="font-mono text-slate-700 font-semibold">{trace.id.slice(0, 12)}</span>
-            <span className={`inline-flex rounded border px-2 py-1 text-xs font-semibold ${getRunStatusTone(runStatus)}`}>{getRunStatusLabel(runStatus)}</span>
-            {trace.workflow_name && (
-              <span className="text-[10px] text-slate-400 bg-slate-100 rounded px-2 py-0.5 font-mono">
-                    {safeRuntimeLabel(trace.workflow_name, "工作流")}
-              </span>
-            )}
-            {trace.sla?.breached && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-semibold bg-red-100 text-red-700">
-                ⚠️ SLA 违反 ({trace.sla.threshold_ms}ms)
-              </span>
-            )}
-            <button type="button" onClick={() => void navigator.clipboard.writeText(trace.id)} className="min-h-10 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">复制 ID</button>
-            <span className="text-[10px] text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span>
-          </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => router.push(returnTo)} className="min-h-10 rounded px-2 text-sm text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">← 返回列表</button>
+          <span className="font-mono font-semibold text-slate-700">{trace.id.slice(0, 12)}</span>
+          <span className={`inline-flex rounded border px-2 py-1 text-xs font-semibold ${getRunStatusTone(runStatus)}`}>{getRunStatusLabel(runStatus)}</span>
+          <span className={`inline-flex rounded border px-2 py-0.5 text-xs font-medium ${runKindBadgeClass(kind.key)}`}>{kind.label}</span>
+          <span className="inline-flex rounded border border-dashed border-slate-300 px-2 py-0.5 text-xs text-slate-500">{domain}</span>
+          {trace.sla?.breached && <span className="inline-flex items-center rounded bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-700">⚠️ SLA 违反 ({trace.sla.threshold_ms}ms)</span>}
+          <button type="button" onClick={() => void navigator.clipboard.writeText(trace.id)} className="min-h-10 rounded border border-slate-200 px-2 text-xs text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">复制 ID</button>
+          <span className="text-[10px] text-slate-400" title={formatTime(trace.timestamp)}>{formatTime(trace.timestamp)}</span>
         </div>
 
-        {/* ── Parent / Children 关联 ── */}
         {(parent || children.length > 0) && (
-          <div className="bg-violet-50/50 border border-violet-200 rounded-xl p-4">
-            <p className="text-[10px] uppercase tracking-widest text-violet-700 mb-2">🔗 Trace 关联</p>
-            <div className="space-y-1.5 text-xs">
+          <div className="rounded-xl border border-violet-200 bg-violet-50/50 p-4">
+            <p className="mb-2 text-[10px] uppercase tracking-widest text-violet-700">🔗 Trace 关联</p>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
               {parent && (
-                <div className="flex items-center gap-2">
-                  <span className="text-slate-500">父:</span>
-                  <Link href={traceHref(parent.id)} className="font-mono text-violet-700 hover:underline">
-                    {parent.id.slice(0, 16)}
-                  </Link>
-                  <span className={`rounded border px-2 py-0.5 text-[10px] ${getRunStatusTone(getRunStatus(parent))}`}>{getRunStatusLabel(getRunStatus(parent))}</span>
-                </div>
+                <Link href={traceHref(parent.id)} className="inline-flex items-center gap-1 rounded border border-violet-200 bg-white px-2 py-0.5 font-mono text-violet-700 hover:border-violet-400">
+                  ↳ 父 {parent.id.slice(0, 8)}
+                </Link>
               )}
-              {children.length > 0 && (
-                <div className="flex items-start gap-2">
-                  <span className="text-slate-500 shrink-0">子 ({children.length}):</span>
-                  <div className="flex flex-wrap gap-1.5">
-                    {children.map((c) => (
-                      <Link
-                        key={c.id}
-                        href={traceHref(c.id)}
-                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-violet-200 hover:border-violet-400 transition-colors"
-                      >
-                        <span className="font-mono text-violet-700">{c.id.slice(0, 8)}</span>
-                        <span className="text-slate-400">·</span>
-                        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${getRunStatusTone(getRunStatus(c))}`}>{getRunStatusLabel(getRunStatus(c))}</span>
-                      </Link>
-                    ))}
-                  </div>
-                </div>
-              )}
+              {children.map((c) => (
+                <Link key={c.id} href={traceHref(c.id)} className="inline-flex items-center gap-1 rounded border border-violet-200 bg-white px-2 py-0.5 font-mono text-violet-700 hover:border-violet-400">
+                  {c.id.slice(0, 8)}
+                  <span className={`rounded border px-1 py-0.5 text-[10px] ${getRunStatusTone(getRunStatus(c))}`}>{getRunStatusLabel(getRunStatus(c))}</span>
+                </Link>
+              ))}
             </div>
           </div>
         )}
 
         {relationshipLoadError && <p className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status">Trace 本身已读取；部分父子关联记录暂不可用。</p>}
 
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-5">
-          {/* 主区域 */}
-          <div className="lg:col-span-3 space-y-5">
-            {/* ── Overview ── */}
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-4">
+          <div className="space-y-5 lg:col-span-3">
             <section>
-              <h2 className="text-sm font-semibold text-slate-700 mb-3">一、业务结果</h2>
+              <h2 className="mb-3 text-sm font-semibold text-slate-700">① 错在哪 · 业务结果与错误诊断</h2>
               <div className="space-y-3">
-                <TraceOutcomePanel trace={trace} />
                 <InputOutputPanel question={trace.question} answer={trace.answer_preview} answerLen={trace.answer_len} error={trace.error} />
-              </div>
-            </section>
-
-            <section>
-              <h2 className="text-sm font-semibold text-slate-700 mb-3">执行摘要</h2>
-              <TraceOverviewCard trace={trace} />
-            </section>
-
-            {/* ── LangGraph DAG（仅 Agent workflow） ── */}
-            {trace.graph && graphNodes.length > 0 && (
-              <section>
-                <h2 className="text-sm font-semibold text-slate-700 mb-3">二、实际执行步骤 · LangGraph 拓扑</h2>
-                <p className="mb-2 text-xs text-slate-500">仅显示可关联实际 Span 的节点；连线是后端编排拓扑关系，接口未提供边是否实际执行。</p>
-                <GraphTopology
-                  nodes={graphNodes}
-                  edges={graphEdges}
-                  spans={spans}
-                  loopCount={trace.graph.loop_count}
-                  maxLoops={trace.graph.max_loops}
-                  degradationTriggered={trace.graph.degradation_triggered}
-                  onNodeClick={scrollToStep}
-                />
-              </section>
-            )}
-            {trace.graph && graphNodes.length === 0 && (
-              <p className="rounded-md border border-border-subtle bg-white px-4 py-3 text-sm text-text-secondary" role="status">后端返回了编排拓扑，但没有可关联的实际 Span；为避免把计划节点显示成已执行，本页已隐藏该拓扑。</p>
-            )}
-
-            {/* ── Span 时间线（耗时分布 + 类型过滤，合并自旧"耗时分布/时间线"两个重复区块） ── */}
-            {childSpans.length > 0 && (
-              <section>
-                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-                    <h2 className="text-sm font-semibold text-slate-700">二、实际执行步骤 · Span 时间线</h2>
-                  <div className="flex items-center gap-4">
-                    <span className="text-[10px] text-slate-400">
-                      {filteredSpans.length}/{childSpans.length} span
-                      {activeSpanTypes.size > 0 && <button onClick={() => setActiveSpanTypes(new Set())} className="ml-2 text-violet-500 hover:text-violet-700">清除过滤</button>}
-                    </span>
-                  </div>
-                </div>
-                <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-                  <SpanTypeFilter spans={childSpans} activeTypes={activeSpanTypes} onChange={setActiveSpanTypes} />
-                  <div className="border-t border-slate-100 pt-3">
-                    <StepTimeline
-                      steps={filteredSpans}
-                      totalMs={trace.duration_ms}
-                      onToggle={toggleStep}
-                      expanded={expandedSteps}
-                      highlightStepId={highlightStepId}
-                    />
-                  </div>
-
-                  {/* 展开后追加 HTTP 拆分 */}
-                  {Array.from(expandedSteps).map((sid) => {
-                    const span = findSpan(spans, sid);
-                    if (!span || !span.http_breakdown) return null;
-                    return (
-                      <div key={`http-${sid}`} className="border-t border-slate-100 pt-3">
-                        <p className="text-[10px] uppercase tracking-wider text-slate-400 mb-2">📡 {safeRuntimeLabel(span.name, "执行步骤")} · HTTP 耗时拆分</p>
-                        <HttpBreakdown step={span} />
+                {hasError && (
+                  <div className="rounded-xl border border-red-200 bg-red-50 p-5">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-red-700">{errorCode ? `错误码：${errorCode}` : "错误码：未采集"}</p>
+                        {errorMessage ? (
+                          <p className="mt-1 whitespace-pre-wrap break-words text-sm text-red-600">{errorMessage}</p>
+                        ) : (
+                          <p className="mt-1 text-sm text-red-600">错误消息未采集；请结合下方失败步骤与受控服务端日志排查。</p>
+                        )}
+                        {errorClass && <p className="mt-1 text-xs text-red-500">错误类别：{errorClass}</p>}
+                        <p className="mt-1 text-xs text-red-500">
+                          失败步骤：{safeRuntimeLabel(String(err.error_node ?? ""), "未记录")} · 重试 {typeof err.retry_count === "number" ? safeNum(err.retry_count) : "未采集"} 次
+                        </p>
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {/* ── 时间轴甘特图（真实执行时序，点击定位到 Span） ── */}
-            {childSpans.length > 0 && <section>
-              <h2 className="text-sm font-semibold text-slate-700 mb-3">二、实际执行步骤 · 时间分布</h2>
-              <div className="bg-white border border-slate-200 rounded-xl p-5">
-                <FlameGraph
-                  steps={filteredSpans}
-                  totalMs={trace.duration_ms}
-                  onStepClick={scrollToStep}
-                  highlightStepId={highlightStepId}
-                />
-              </div>
-            </section>}
-
-            {/* ── Error Panel ── */}
-            {hasError && (
-              <section id="error-panel">
-                <h2 className="text-xs font-medium text-red-500 uppercase tracking-wider mb-3">⚠️ 错误详情</h2>
-                <div className="bg-red-50 border border-red-200 rounded-xl p-5 space-y-3">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <p className="font-semibold text-red-700">{errorCode ? `错误码：${errorCode}` : hasErrorCode ? "错误码文本已隐藏" : "错误码：未采集"}</p>
-                      {errorMessage ? (
-                        <p className="text-sm text-red-600 mt-1 whitespace-pre-wrap break-words">{errorMessage}</p>
-                      ) : (
-                        <p className="text-sm text-red-600 mt-1">错误消息未采集；请结合下方失败步骤与受控服务端日志排查。</p>
-                      )}
-                      {errorClass && <p className="text-xs text-red-500 mt-1">错误类别：{errorClass}</p>}
+                      <span className="font-mono text-xs text-red-400">{formatTime(trace.timestamp)}</span>
                     </div>
-                    <span className="text-xs text-red-400 font-mono">{formatTime(trace.timestamp)}</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-4 text-sm">
-                    <div>
-                      <span className="text-red-400 text-xs">Retry Count</span>
-                      <p className="text-red-700 font-mono font-semibold">{typeof err.retry_count === "number" ? safeNum(err.retry_count) : "未采集"}</p>
-                    </div>
-                    <div>
-                      <span className="text-red-400 text-xs">Error Node</span>
-                      {errorStepId ? (
-                        <button
-                          onClick={() => scrollToStep(errorStepId)}
-                          className="text-red-700 font-mono underline hover:text-red-900"
-                        >
-                          {errorStepId}
-                        </button>
+                    <div className="mt-3 border-t border-red-100 pt-3">
+                      {candidateState === "done" ? (
+                        <p className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700" role="status">
+                          ✓ 已创建评测候选{candidateId ? ` ${candidateId}` : ""}（来源 trace {trace.id}）· 待评测中心「候选审核」批准后进入不可变数据集版本
+                        </p>
                       ) : (
-                        <p className="text-red-700 font-mono">{safeRuntimeLabel(err.error_node, "未记录")}</p>
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => void addErrorToEvalSet()}
+                            disabled={candidateState === "creating"}
+                            className="min-h-10 rounded-md border border-violet-400 bg-white px-3 text-sm font-medium text-violet-700 hover:bg-violet-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 disabled:opacity-60"
+                          >
+                            {candidateState === "creating" ? "正在创建候选…" : "将本题加入候选评测集"}
+                          </button>
+                          {candidateState === "error" && <span className="ml-2 text-xs text-red-600" role="alert">创建失败，请稍后重试或到评测中心手工录入。</span>}
+                          <p className="mt-1.5 text-[11px] text-red-400">提交后进入评测中心「候选审核」（批准/驳回），批准进入不可变数据集版本用于回归。</p>
+                        </>
                       )}
                     </div>
-                    <div>
-                      <span className="text-red-400 text-xs">Status</span>
-                      <p className="text-red-700 font-semibold">{getRunStatusLabel(runStatus)}</p>
-                    </div>
                   </div>
-                </div>
-              </section>
-            )}
-
-            {/* ── Rerank Warning ── */}
-            {rerankZero && (
-              <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3">
-                <span className="text-amber-500 text-lg mt-0.5">⚠️</span>
-                <div className="flex-1">
-                  <p className="text-sm font-medium text-amber-800">Rerank 过滤掉全部文档</p>
-                  <p className="text-xs text-amber-700 mt-1">本次执行记录显示重排后结果数为 0；查询与回答内容已隐藏。</p>
-                </div>
-                <button onClick={() => scrollToStep("rerank")} className="text-xs text-amber-700 hover:text-amber-900 underline shrink-0">
-                  跳到 Span →
-                </button>
+                )}
               </div>
-            )}
-
-            {/* ── LLM 调用明细 ── */}
-            <section>
-              <h2 className="text-sm font-semibold text-slate-700 mb-3">二、实际执行步骤 · LLM 调用</h2>
-              <LLMCallDetail steps={spans} />
             </section>
 
-            {/* ── MultiQuery ── */}
-            {mqSpan && mqSpan.metrics?.triggered === true && (
-              <section>
-                <h2 className="text-sm font-semibold text-slate-700 mb-3">二、实际执行步骤 · MultiQuery</h2>
-                <div className="bg-white border border-slate-200 rounded-xl p-4">
-                  <p className="text-sm text-slate-600">MultiQuery 已触发；查询与改写文本已隐藏。</p>
-                </div>
-              </section>
-            )}
-
-            {/* ── Faithfulness Detail ── */}
-            {faithSpan && faithSpan.metrics?.claims && Number(faithSpan.metrics.claims) > 0 && (
-              <section>
-                <h2 className="text-sm font-semibold text-slate-700 mb-3">三、工程诊断 · 忠实度</h2>
-                <div className="bg-white border border-slate-200 rounded-xl p-5">
-                  <div className="grid grid-cols-4 gap-4 mb-4">
-                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{Number(faithSpan.metrics.score ?? 1).toFixed(2)}</p><p className="text-[10px] text-slate-400 mt-1">忠实度评分</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-slate-800">{safeNum(faithSpan.metrics.claims)}</p><p className="text-[10px] text-slate-400 mt-1">Claims</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-emerald-600">{safeNum(faithSpan.metrics.supported)}</p><p className="text-[10px] text-slate-400 mt-1">已支撑</p></div>
-                    <div className="text-center"><p className="text-2xl font-bold text-red-500">{safeNum(faithSpan.metrics.unsupported)}</p><p className="text-[10px] text-slate-400 mt-1">未支撑</p></div>
-                  </div>
-                </div>
-              </section>
-            )}
-
-            {/* ── Metadata ── */}
             <section>
-              <h2 className="text-sm font-semibold text-slate-700 mb-3">三、工程诊断 · 运行元数据</h2>
-              <div className="bg-white border border-slate-200 rounded-xl p-5">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div><span className="text-slate-500 text-xs">模型</span><p className="text-slate-800 font-mono">{trace.model?.name || "未采集"}</p></div>
-                  <div><span className="text-slate-500 text-xs">Provider</span><p className="text-slate-800 font-mono">{trace.model?.provider || "未采集"}</p></div>
-                  <div><span className="text-slate-500 text-xs">Workflow</span><p className="text-slate-800 font-mono">{safeRuntimeLabel(trace.workflow_name, "未采集")}</p></div>
-                  <div><span className="text-slate-500 text-xs">实际记录 Span</span><p className="text-slate-800 font-mono">{spans.length}</p></div>
-                  <div className="col-span-2 md:col-span-4">
-                    <span className="text-slate-500 text-xs">Prompt 版本</span>
-                    <div className="mt-1"><PromptVersionsBadge metadata={trace.metadata || {}} /></div>
-                    {!Array.isArray(trace.metadata?.prompt_versions) && <p className="text-xs text-slate-500">未采集</p>}
+              <h2 className="mb-3 text-sm font-semibold text-slate-700">② 慢在哪 · 耗时分析（Span 甘特时间线）</h2>
+              <div className="rounded-xl border border-slate-200 bg-white p-5">
+                {spans.length > 0 ? (
+                  <SpanGantt spans={spans} totalMs={trace.duration_ms} uncoveredMs={uncoveredMs} />
+                ) : (
+                  <p className="py-6 text-center text-sm text-slate-400">本 Trace 无 Span 记录（失败过早或采集链未覆盖）。</p>
+                )}
+              </div>
+            </section>
+
+            <section>
+              <h2 className="mb-3 text-sm font-semibold text-slate-700">③ 答了什么 · LLM 调用（含多查询 / Provider 尝试）</h2>
+              <div className="space-y-3">
+                {skippedStages.length > 0 && (
+                  <div className="rounded-md border border-dashed border-slate-300 px-3 py-2 text-xs text-slate-600" role="note">
+                    ⏭ 跳过阶段：{skippedStages.map((s) => (typeof s === "object" && s && "name" in s ? String((s as Record<string, unknown>).name) : String(s))).join("、")}
                   </div>
-                  <div>
-                    <span className="text-slate-500 text-xs">开始时间</span>
-                    <p className="text-slate-800 font-mono text-xs" title={formatTime(trace.timestamp)}>
-                      {formatRelative(trace.timestamp)} · {formatTime(trace.timestamp)}
-                    </p>
+                )}
+                {llmSpans.length === 0 && (
+                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">本次 Trace 未记录 LLM 调用。</div>
+                )}
+                {llmSpans.map((s) => (
+                  <div key={s.id} className="rounded-lg border border-slate-200 bg-white p-4">
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                      <Sparkles size={14} className="text-slate-400" aria-hidden="true" />
+                      <strong className="text-slate-800">{s.name || "LLM 调用"}</strong>
+                      <span>{s.llm_call?.model || "未记录模型"}</span>
+                      {s.llm_call && <span>Token {safeNum(s.llm_call.prompt_tokens)} / {safeNum(s.llm_call.completion_tokens)}</span>}
+                      {s.llm_call?.cost_cny != null && <span>{formatCost(s.llm_call.cost_cny)}</span>}
+                      <span className="text-slate-400">{fmtMs(s.duration_ms)}</span>
+                    </div>
+                    {s.llm_call?.prompt_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Prompt</b>{"\n"}{s.llm_call.prompt_text}</p>}
+                    {s.llm_call?.response_text && <p className="mt-2 whitespace-pre-wrap break-words rounded bg-slate-50 p-2 text-xs text-slate-600"><b className="font-medium">Response</b>{"\n"}{s.llm_call.response_text}</p>}
                   </div>
-                </div>
+                ))}
               </div>
             </section>
           </div>
 
-          {/* ── 右侧成本栏 ── */}
-          <aside className="lg:col-span-1 space-y-5">
-            <CostPanel trace={trace} />
-
-            {/* SLA 卡片 */}
-            {trace.sla && (
-              <div className="bg-white border border-slate-200 rounded-xl p-5">
-                <p className="text-[10px] uppercase tracking-widest text-slate-400 mb-2">SLA</p>
-                <div className="space-y-2">
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-xs text-slate-500">阈值</span>
-                    <span className="font-mono text-slate-700">{trace.sla.threshold_ms}ms</span>
-                  </div>
-                  <div className="flex items-baseline justify-between">
-                    <span className="text-xs text-slate-500">实际</span>
-                    <span className={`font-mono ${durationColor(trace.duration_ms)}`}>{trace.duration_ms}ms</span>
-                  </div>
-                  <div className="relative h-2 bg-slate-100 rounded-full overflow-hidden">
-                    <div className="absolute inset-y-0 left-0 bg-emerald-300" style={{ width: `${Math.min((trace.duration_ms / trace.sla.threshold_ms) * 100, 100)}%` }} />
-                    <div className="absolute inset-y-0 left-0 w-px bg-red-500" style={{ left: "100%" }} />
-                  </div>
-                  <p className={`text-xs font-semibold ${trace.sla.breached ? "text-red-600" : "text-emerald-600"}`}>
-                    {trace.sla.breached ? "❌ 已违反" : "✅ 合规"}
-                  </p>
-                </div>
+          <aside className="space-y-5 lg:col-span-1">
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <p className="mb-2 text-[10px] uppercase tracking-widest text-slate-400">④ 花了多少 · 概要</p>
+              <div className="space-y-1.5 text-sm">
+                <div className="flex justify-between"><span className="text-slate-500">总 Token</span><span className="font-mono">{trace.usage?.total_tokens ? trace.usage.total_tokens.toLocaleString() : "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">费用（CNY）</span><span className="font-mono">{typeof trace.cost_cny === "number" ? formatCost(trace.cost_cny) : "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">模型（main）</span><span className="font-mono text-xs">{trace.model?.name || "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Provider</span><span className="font-mono text-xs">{trace.model?.provider || "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">总耗时</span><span className="font-mono">{trace.duration_ms > 0 ? fmtMs(trace.duration_ms) : "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Prompt 版本</span><span className="font-mono text-xs">{Array.isArray(trace.metadata?.prompt_versions) && trace.metadata.prompt_versions.length > 0 ? `${trace.metadata.prompt_versions.length} 个` : "未采集"}</span></div>
               </div>
-            )}
-
+              {trace.sla && (
+                <div className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${isFailure ? "bg-slate-100 text-slate-500" : trace.sla.breached ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>
+                  {isFailure ? "SLA 未参与判定 · 失败运行不计入合规" : trace.sla.breached ? `❌ 已违反 SLA（阈值 ${trace.sla.threshold_ms}ms）` : `✅ SLA 合规（阈值 ${trace.sla.threshold_ms}ms）`}
+                </div>
+              )}
+            </div>
+            <div className="rounded-xl border border-slate-200 bg-white p-4 text-[11px] leading-5 text-slate-500">
+              本次详情读取已由服务端写入审计日志（trace_content_view）；输入输出按 TRACE_DETAIL_LEVEL 服务端脱敏后下发。
+            </div>
           </aside>
         </div>
       </div>
