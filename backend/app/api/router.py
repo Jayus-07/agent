@@ -49,6 +49,7 @@ from backend.app.api.routes import (
     prompt_releases,
     question_ledger,
     prompt_eval_callback,
+    plan_revisions,
     rag,
     rbac,
     report,
@@ -119,6 +120,7 @@ api_router.include_router(schedules.router)
 api_router.include_router(automations.router)  # 用户自动任务 CRUD（决策 #27）
 api_router.include_router(automations.webhook_router)  # Webhook 回调入口（验签/去重/租户绑定）
 api_router.include_router(automations.admin_router)  # 管理端自动任务总览与开关
+api_router.include_router(plan_revisions.router)  # 运行中任务多轮计划修订（决策 #29）
 api_router.include_router(feedback.router)  # 2026-08-11 P1 反馈循环
 api_router.include_router(competitor.router)  # 竞品监控
 api_router.include_router(selection.router)  # 智能选品

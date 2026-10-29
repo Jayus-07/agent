@@ -332,6 +332,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "122_task_result_refs.sql": "memory",
     # 用户自动任务（决策 #27）：cron/webhook 触发 + 事件去重账本。
     "123_user_automations.sql": "memory",
+    # 运行中任务的多轮计划修订（决策 #29）。
+    "124_plan_revisions.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
