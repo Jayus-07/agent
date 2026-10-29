@@ -520,7 +520,23 @@ async def get_trace(trace_id: str, request: Request,
         logger.debug("Trace 子关系补齐失败: %s", trace_id, exc_info=True)
     # 读取时回填：存量 trace 的 usage/model/cost 以 llm_usage 明细补齐（历史数据兼容）
     _backfill_usage(data)
-    return _to_trace_dto(data)  # 统一转为前端 DTO 格式
+    dto = _to_trace_dto(data)  # 统一转为前端 DTO 格式
+    # 内容读取审计（2026-10-30 错误诊断链路）：详情页展示问题/结果/错误原文后，
+    # 「谁在何时看了哪条 Trace 的内容」必须可追溯。复用 security_events 旁路
+    # 追加机制，软失败不影响读取；仅在实际下发内容（question/answer 非空）时记。
+    if dto.get("question") or dto.get("answer_preview"):
+        try:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "ADMIN_ACTION",
+                category="trace_content_view",
+                detail={"trace_id": trace_id},
+                user_id=ident.actor or None,
+            )
+        except Exception:
+            logger.debug("Trace 内容读取审计失败: %s", trace_id, exc_info=True)
+    return dto
 
 
 # ═══════════════════════════════════════════════════
