@@ -165,6 +165,12 @@ LLM_CONTEXT_LENGTH = int(os.getenv("LLM_CONTEXT_LENGTH", "4096"))
 
 # LLM 请求超时（秒）
 LLM_REQUEST_TIMEOUT = int(os.getenv("LLM_REQUEST_TIMEOUT", "30"))
+# general_chat 直答的整体执行时限（秒）：经 scoped_execution_timeout 传播，
+# SDK 读取超时按剩余时限收窄 + proxy 逐 chunk 间检查，双保险斩断「供应商
+# TTFT 极端拖长」（2026-10-29 排障：retry 尝试单次 hang 122s，trace
+# fa64e192291a——read timeout 被 SSE 心跳保活绕过，必须有整体 Deadline）。
+# 0 = 不限时。超过时限的尝试按瞬时错误走既有首块重试/熔断/降级。
+GENERAL_CHAT_LLM_DEADLINE = float(os.getenv("GENERAL_CHAT_LLM_DEADLINE", "30"))
 # Rerank API 超时：超时后 RerankCompressor 降级透传原文档（排序是增强组件）。
 # 2026-10-28 两次对齐（4→10→15s）：GPU float16 重排（batch=2 显存档）在
 # 评测冻结管线/表格类真实候选批（24-30×512token 截断）实测可超 10s，

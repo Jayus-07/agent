@@ -226,6 +226,36 @@ async def init_prompt_snapshot():
 
 
 @app.on_event("startup")
+async def warm_main_llm():
+    """启动后异步预热主模型首呼（软失败，不阻塞服务）。
+
+    2026-10-29 供应商冷启动排障（专项二）：栈重建/闲置后首问的供应商
+    调用可拖到 122s（trace fa64e192291a，retry 尝试单次 hang、无中间
+    观测）。general_chat 执行时限负责快速暴露失败；本预热吸收「进程
+    起来后首次建连/鉴权/模型装载」的固定开销，参照评测侧
+    _warm_external_models 的做法。最小请求如实记账（几十 token）。
+    """
+    import threading
+    import time as _time
+
+    def _warm():
+        # 等注册表/凭据装载完成（validate_settings 在同一 startup 阶段 await）
+        _time.sleep(5)
+        try:
+            from backend.infra.llm import llm
+
+            resp = llm.invoke([("human", "预热：请回复 OK")])
+            text = getattr(resp, "content", "") or ""
+            logger.info("[Startup] 主模型预热完成（%d 字符）", len(text))
+        except Exception as exc:
+            logger.warning(
+                "[Startup] 主模型预热失败（不阻塞服务）: %s", type(exc).__name__,
+            )
+
+    threading.Thread(target=_warm, name="llm-warmup", daemon=True).start()
+
+
+@app.on_event("startup")
 async def init_prompt_service():
     """加载 YAML 默认值到内存并 seed 到 DB（失败不阻塞启动）。
 

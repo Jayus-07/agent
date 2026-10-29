@@ -67,19 +67,29 @@ def general_chat_node(state: dict) -> dict:
         if question:
             msgs.append(("human", question))
 
-        if ENABLE_TOKEN_STREAMING:
-            parts: list[str] = []
-            for chunk in llm.stream(msgs):
-                reasoning = extract_chunk_reasoning(chunk)
-                if reasoning:
-                    emit_stream_delta(reasoning, kind="thinking")
-                text = extract_chunk_text(chunk)
-                if text:
-                    parts.append(text)
-                    emit_stream_delta(text)
-            resp = AIMessage(content="".join(parts))
-        else:
-            resp = llm.invoke(msgs)
+        # 整体执行时限（2026-10-29 供应商冷启动排障）：scoped deadline 经
+        # provider_deadline_kwargs 收窄 SDK 读取超时 + proxy 逐 chunk 间
+        # 过期检查，把「供应商 TTFT hang」从 122s 斩到时限封顶；超时按
+        # 瞬时错误走既有首块重试/熔断/降级，不吞不硬等。0 = 不限时。
+        from backend.config import GENERAL_CHAT_LLM_DEADLINE
+        from backend.core.tool_runtime.deadline import scoped_execution_timeout
+
+        with scoped_execution_timeout(
+            GENERAL_CHAT_LLM_DEADLINE if GENERAL_CHAT_LLM_DEADLINE > 0 else None,
+        ):
+            if ENABLE_TOKEN_STREAMING:
+                parts: list[str] = []
+                for chunk in llm.stream(msgs):
+                    reasoning = extract_chunk_reasoning(chunk)
+                    if reasoning:
+                        emit_stream_delta(reasoning, kind="thinking")
+                    text = extract_chunk_text(chunk)
+                    if text:
+                        parts.append(text)
+                        emit_stream_delta(text)
+                resp = AIMessage(content="".join(parts))
+            else:
+                resp = llm.invoke(msgs)
 
         answer = (resp.content or "").strip() if hasattr(resp, "content") else str(resp).strip()
         if not answer:

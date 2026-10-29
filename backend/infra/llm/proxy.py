@@ -1500,6 +1500,54 @@ def _notify_stream_usage_missing(mode: str) -> None:
         pass
 
 
+def _record_stream_attempt(
+    attempt: int,
+    duration_ms: float,
+    first_chunk_ms: float | None,
+    *,
+    error_type: str = "",
+):
+    """流式单次尝试的观测留痕（2026-10-29 供应商冷启动排障）。
+
+    122s 尖峰（trace fa64e192291a）时 general_chat span 只有总耗时、
+    无法回答「几次尝试、每次多久、首 token 等了多久」。此处把每次尝试
+    写成 trace 事件 + 结构化日志；trace 不可达时仅留日志（软失败）。
+    """
+    model = ""
+    try:
+        resolved = get_current_resolved_model()
+        model = resolved.model_id if resolved is not None else ""
+    except Exception:
+        pass
+    logger.info(
+        "[LLM:stream] attempt=%d model=%s duration_ms=%.0f first_chunk_ms=%s error=%s",
+        attempt, model or "unknown", duration_ms,
+        "n/a" if first_chunk_ms is None else f"{first_chunk_ms:.0f}",
+        error_type or "none",
+    )
+    try:
+        from backend.observability.tracer import trace_collector
+
+        t = trace_collector.current()
+        span = t.spans[-1] if t is not None and getattr(t, "spans", None) else None
+        if span is not None:
+            trace_collector.add_event(
+                span, "llm_stream_attempt", "info",
+                f"流式尝试 {attempt} 结束（{error_type or '成功'}）",
+                data={
+                    "attempt": attempt,
+                    "model": model,
+                    "duration_ms": round(duration_ms, 1),
+                    "first_chunk_ms": (
+                        None if first_chunk_ms is None else round(first_chunk_ms, 1)
+                    ),
+                    "error_type": error_type,
+                },
+            )
+    except Exception:
+        pass
+
+
 def _record_tokens(
     result,
     duration_ms: float | None = None,
@@ -3050,8 +3098,17 @@ class _LLMProxy:
                                 "primary" if attempt == 0 else "retry",
                                 model_name=get_active_model_name(),
                             )
+                            # per-attempt 观测（2026-10-29）：attempt 序号、
+                            # 单次耗时与首 chunk 耗时必须可回答，否则
+                            # 「重试叠加」类尖峰（122s）无法归因。
+                            _attempt_t0 = time.monotonic()
+                            _first_chunk_ms: float | None = None
                             try:
                                 for chunk in attr(*args, **kwargs):
+                                    if _first_chunk_ms is None:
+                                        _first_chunk_ms = (
+                                            time.monotonic() - _attempt_t0
+                                        ) * 1000
                                     # chunk 边界检查：单次 read 超时≠总时长上限
                                     check_execution_deadline()
                                     if getattr(chunk, "usage_metadata", None):
@@ -3061,8 +3118,19 @@ class _LLMProxy:
                                         yielded_content = True
                                     meter.add(extract_chunk_text(chunk))
                                     yield wrapped
+                                _record_stream_attempt(
+                                    attempt,
+                                    (time.monotonic() - _attempt_t0) * 1000,
+                                    _first_chunk_ms,
+                                )
                                 break  # 正常结束
                             except Exception as e:
+                                _record_stream_attempt(
+                                    attempt,
+                                    (time.monotonic() - _attempt_t0) * 1000,
+                                    _first_chunk_ms,
+                                    error_type=type(e).__name__,
+                                )
                                 # 2026-10-01 P0 修复：瞬时类失败供应商可能已计费；
                                 # 已产出内容后失败 = 必然已处理——都转待对账，
                                 # 只有"确定未发出"（非瞬时错误且未产出内容）才释放。
