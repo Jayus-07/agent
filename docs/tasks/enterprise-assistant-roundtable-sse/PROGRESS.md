@@ -345,3 +345,18 @@
 - **3 并发补测（独立会话 3 线程×5 轮，D:/tmp/agent-p95-concurrent-20261029.json）**：explain 首答 P50/P95=0.653/2.416s 总 1.703/2.972s；rag 1.207/4.309s 总 1.259/5.406s；sql 2.267/5.42s 总 2.33/5.516s；done 率 1.0，全部在目标档内。**注意**：主电池的并发阶段 15 请求全 429——APISIX chat 路由 limit-conn conn=3+burst=2（连续 60 条流后 BFF keep-alive 槽位未及时释放触发）；独立会话 3 并发实测通过，限流行为本身符合「每用户并发 3」的设计。
 - **browser-use 完整验收 PASS**：主前端 3100 真实注册新账号（13800002029，图形验证码页正常）→ 登录进入企业助手工作台（个人额度 ¥432 正常显示）→ 页面发送「请检索企业知识库：企业支持哪些支付方式？请给出处。」→ 14 步过程面板（路由决策→知识库检索 2 候选 1226ms→结果汇总）→ 回答「支持支付宝、微信支付、银联及境外信用卡(Visa/Mastercard)。[E1]」+ 参考文献 faq_常见问题FAQ.md 相关度 0.92。截图 D:/tmp/agent-v17-browser-acceptance-20261029.png。rag.qa v17 + self_correction v2 生产链路端到端验收通过。
 - **新增测试账号**：13800002029/Aa12345678（本地注册，额度默认，可用于后续页面验收）。
+
+### 2026-10-29 续2：两项剩余专项（发货/发票措辞 + 供应商冷启动韧性）
+
+**专项一：发货/发票措辞（三个失败场景两类根因，2/3 场景修复）**
+
+- 根因定位（trace 证据齐全）：①「客户下单后多久发货？」embedding 粗分类贴客服域心（top1≈0.717 过不了 0.75 置信门控）→ gate 拒判 unknown → 主助手原路径落 clarify，连检索都不做（域心校准后实测 trace 84abdfb1f63d；校准前更糟——top1 过门控判 customer_service 被产品域分流收 general_chat，trace b15c7a898351）；②「发货时效是怎么规定的？」属书面制度问法，弱信号「怎么」单命中不升 MQ，目标 FAQ 块（e07b25dc7b_0）其实进了 rerank 池但 bge-reranker 对书面 query 打分 <0.3 被 threshold 截掉（eviction 事件实证，trace d904053b1459），自纠错二检更书面化、4 块全截 → 拒答；③ 复测中发现既有边界缺陷：`_count_real_questions` 按「?」split 后无疑问词的分句（「请给出处。」）被计为第二个疑问句，致「问句+请给出处」格式全员误升 MQ（改写+3 路检索+17 块大池重排 ≈ +5-8s）。
+- 修复（各带回归测试）：capabilities.yaml knowledge 域心补 3 条电商 FAQ 口语样例；DomainRouter 主助手 knowledge 兜底（unknown 且 second=knowledge → 转知识检索，rag Evidence Gate 把关误召回，仅 product_id=agent）；`_main_decision` 保留粗分类证据（pred/second/margin 进 trace metrics）；hybrid.py 新增 FORMAL_POLICY_PATTERNS 书面制度强信号（「是怎么规定的」等命中即 MQ）；`_count_real_questions` 疑问分句必须含疑问标记（疑问代词/正反问/「吗|呢」结尾）。
+- 复测（真实 SSE + trace）：发货口语问 PASS 13.7s（「24 小时」+FAQ 出处相关度 0.99，trace a0410f11005d）；发货书面问 PASS 7.2s（FORMAL 强信号触发 MQ 救活，trace b50cdf18747a）；支付对照 PASS 3.4s（trace e0e54da982eb，回归基线 4.6s）；「用一句话解释幂等」仍 general_chat 直答 1.2s（trace 659478ac9fc0，边界未破坏）。单测 129+156+176 全绿。
+- **遗留（发票问未修复）**：「企业申请发票需要税号和开户银行吗？」仍拒答（trace ea7b04f4192f）。根因是召回丢失非打分：目标块 e07b25dc7b_14「能开发票抬头吗?需提供税号及开户银行」不在融合候选池（8-10 块全是发票报销主题，RRF 下被高频词文档淹没）；10-27 曾成功（trace 07c85a58dc1d，相关度 0.98）与 10-27 19:17 起持续失败的时间线与 embedding 模型切换（doc_registry 记录 qwen3.7-text-embedding → 当前绑定 bge-m3）吻合，属 bge-m3 下该 query-块对的排序竞争力问题。候选修法（池加深/融合权重/知识库补强口语条目）均有全局副作用或涉评测数据（DATA-01），未在本次最小修复内处理。
+
+**专项二：供应商冷启动韧性（122s 首问尖峰）**
+
+- 根因链（trace fa64e192291a + llm_usage 复盘）：首呼 primary 尝试失败（无 usage 行）→ proxy 首块前重试 → retry 尝试单次供应商调用 hang 122.7s（decision=retry，duration_ms=122668，finish_reason=unknown）最终成功。SDK 配置本身正确（driver_compat request_timeout=30s + max_retries=0），122s 成因是流式 read timeout 为 chunk 间隔语义、被供应商侧保活绕过——TTFT 极端拖长无整体上限。计费核对：该 trace 仅 1 行 success（207 token），无重复计费。
+- 修复：① general_chat 挂整体执行时限 GENERAL_CHAT_LLM_DEADLINE（默认 30s，env 可调，0=不限时）——scoped_execution_timeout 经 provider_deadline_kwargs 收窄 SDK 读取超时 + proxy 既有逐 chunk 间过期检查，双保险覆盖「hang 死」与「心跳保活」两种形态，超时按瞬时错误走既有首块重试/熔断/降级；② proxy 流式 wrapper 补 per-attempt 观测（`_record_stream_attempt`：attempt 序号/单次耗时/首 chunk 耗时/异常类型 → trace 事件 + 结构化日志），验收要求「trace 能回答每次尝试的耗时与次数」达成（实测 span 事件 `{"attempt": 0, "duration_ms": 1444.9, "first_chunk_ms": 1062.1}`）；③ server.py 启动预热主模型（后台线程 5s 后最小请求，软失败，参照 _warm_external_models，如实记账）。
+- 验收采样：冷启动 3 次（每次重建 app 后首问）1.99/1.64/1.40s；热态 5 次 1.63/1.27/1.31/1.54/1.56s——全部进入 2s 内，远优于「首反馈≤1s、总耗时 ≤10s」目标；冷热无差异（预热吸收首呼固定开销）。2s 缩时限实验验证时限链路真实生效（trace 05931796f324 观测事件齐全）。既有 deadline 传播测试 30 passed。
