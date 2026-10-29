@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -41,10 +42,12 @@ def _record_candidate_metric(action: str, result: str) -> None:
 
 
 def _table() -> str:
+    """按配置解析候选表名（拼接进 DDL，先做严格标识符校验）。"""
     explicit = os.getenv("FEEDBACK_CANDIDATE_PG_TABLE", "").strip()
-    if explicit:
-        return explicit
-    return f"{os.getenv('FEEDBACK_PG_TABLE', 'feedback')}_candidates"
+    table = explicit or f"{os.getenv('FEEDBACK_PG_TABLE', 'feedback')}_candidates"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError(f"候选表名含非法标识符字符: {table!r}")
+    return table
 
 
 @contextmanager
@@ -86,31 +89,37 @@ def promotion_lock(tenant_id: str, trace_id: str) -> Iterator[None]:
 
 
 def init_db() -> None:
+    """创建候选表（advisory lock 串行化，防多进程 import 竞态——同 pg.py）。"""
     table = _table()
     with _conn() as conn:
-        conn.cursor().execute(f"""
-            CREATE TABLE IF NOT EXISTS {table} (
-                candidate_id     TEXT PRIMARY KEY,
-                feedback_id      BIGINT NOT NULL,
-                tenant_id        TEXT NOT NULL,
-                actor_id         TEXT NOT NULL,
-                trace_id         TEXT NOT NULL,
-                module           TEXT NOT NULL,
-                case_json        TEXT NOT NULL,
-                status           TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','approved','rejected','promoted')),
-                reviewer_id      TEXT DEFAULT '',
-                review_note      TEXT DEFAULT '',
-                promoted_case_id TEXT DEFAULT '',
-                created_at       TEXT NOT NULL,
-                updated_at       TEXT NOT NULL,
-                UNIQUE (tenant_id, trace_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_{table}_tenant_status
-                ON {table}(tenant_id, status, updated_at DESC);
-            CREATE INDEX IF NOT EXISTS idx_{table}_trace
-                ON {table}(tenant_id, trace_id);
-        """)
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (table,))
+        try:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    candidate_id     TEXT PRIMARY KEY,
+                    feedback_id      BIGINT NOT NULL,
+                    tenant_id        TEXT NOT NULL,
+                    actor_id         TEXT NOT NULL,
+                    trace_id         TEXT NOT NULL,
+                    module           TEXT NOT NULL,
+                    case_json        TEXT NOT NULL,
+                    status           TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending','approved','rejected','promoted')),
+                    reviewer_id      TEXT DEFAULT '',
+                    review_note      TEXT DEFAULT '',
+                    promoted_case_id TEXT DEFAULT '',
+                    created_at       TEXT NOT NULL,
+                    updated_at       TEXT NOT NULL,
+                    UNIQUE (tenant_id, trace_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_{table}_tenant_status
+                    ON {table}(tenant_id, status, updated_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_{table}_trace
+                    ON {table}(tenant_id, trace_id);
+            """)
+        finally:
+            cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (table,))
 
 
 def _select_columns() -> str:
