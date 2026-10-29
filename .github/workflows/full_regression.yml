@@ -1,0 +1,107 @@
+name: Full Regression
+
+# 全量回归（2026-10-29 盘点后新增）：PR 口径的 targeted 清单只覆盖
+# ~650/12500 用例，实现迭代后清单外测试的漂移无人发现（历史实证：
+# 重排计费静默流失、孤儿测试、CI 引用悬空等 7 类）。本 workflow 让
+# 「全量可跑、全量绿」成为被监控状态——失败即红（GitHub 默认失败
+# 通知），但不属于任何 PR 门禁，不挡合并。
+on:
+  schedule:
+    # 每周一 03:00 UTC（北京时间周一 11:00）
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      xdist_workers:
+        description: "pytest-xdist 并行 worker 数（0 = 单进程）"
+        default: "4"
+        required: false
+
+jobs:
+  full-pytest:
+    name: Full backend pytest (all cases)
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+    env:
+      PGHOST: localhost
+      PGPORT: "5432"
+      PGUSER: postgres
+      PGPASSWORD: postgres
+      MEMORY_PGDATABASE: agent_memory_test
+      BUSINESS_PGDATABASE: agent_business_test
+      VECTOR_PGDATABASE: agent_memory_test
+      RAG_STORES_PGDATABASE: agent_memory_test
+      DOC_REGISTRY_PGDATABASE: agent_memory_test
+      OBS_DB_PGDATABASE: agent_memory_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+          cache-dependency-path: requirements-lock.txt
+
+      - name: Install locked dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-lock.txt
+
+      - name: Initialize isolated databases
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
+            -c 'CREATE DATABASE agent_business_test'
+          python scripts/init_db.py --host localhost --port 5432 --user postgres
+
+      - name: Full backend pytest
+        env:
+          XDIST_WORKERS: ${{ inputs.xdist_workers || '4' }}
+        run: |
+          # pytest.ini 已有 timeout=300（pytest-timeout 在 lock 中）：
+          # 单个挂死用例 300s 被截杀，不会拖垮整轮。
+          if [ "$XDIST_WORKERS" = "0" ]; then
+            python -m pytest backend/tests -q --no-cov -rf --timeout=300
+          else
+            python -m pytest backend/tests -q --no-cov -rf --timeout=300 \
+              -n "$XDIST_WORKERS" --dist loadfile
+          fi
+
+      - name: Summarize failures
+        if: always()
+        run: |
+          if [ -f .pytest_cache/v/cache/lastfailed ] && \
+             [ -s .pytest_cache/v/cache/lastfailed ]; then
+            COUNT=$(python -c "import json;print(len(json.load(open('.pytest_cache/v/cache/lastfailed'))))")
+            echo "## 全量回归失败用例（$COUNT 个）" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            python -c "import json;[print(k) for k in sorted(json.load(open('.pytest_cache/v/cache/lastfailed')))]" \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            echo "本周全量回归：$COUNT 个失败，明细见上。逐个定性修复后本清单应逐步收敛。"
+          else
+            echo "## 全量回归：全部通过 ✅" >> "$GITHUB_STEP_SUMMARY"
+          fi
