@@ -4,7 +4,7 @@ import WorkbenchShell, { WorkbenchTab } from '@/components/workbench/WorkbenchSh
 import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
 import GatewayPanel from './GatewayPanel'
 import TokensPanel from './TokensPanel'
-import TracesPanel from './TracesPanel'
+import TraceListPanel from './TraceListPanel'
 import RuntimeOverview from './RuntimeOverview'
 
 const TABS = [
@@ -28,7 +28,7 @@ export default function MonitoringWorkbench() {
       onTabChange={selectTab}
     >
       {tab === 'overview' && <RuntimeOverview />}
-      {tab === 'traces' && <TracesPanel />}
+      {tab === 'traces' && <TraceListPanel />}
       {tab === 'gateway' && <GatewayPanel />}
       {tab === 'tokens' && <TokensPanel />}
     </WorkbenchShell>

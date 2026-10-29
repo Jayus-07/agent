@@ -3,7 +3,7 @@
 /**
  * /observability/traces/compare — Trace 并排对比（2–4 条）
  *
- * 入口在执行记录列表（TracesPanel 选中后「对比 N 条」）。此前该路由缺失，
+ * 入口在执行记录列表（TraceListPanel 选中后「对比 N 条」）。此前该路由缺失，
  * 选中后跳转会误入 [id] 详情页。此处只读对比核心指标（状态/耗时/Token/
  * 费用/模型/错误摘要），完整视图各自下钻详情页；不在对比页重复实现详情。
  * 权限沿用 /observability 布局段 RoleGate（admin 及以上）。
