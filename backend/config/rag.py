@@ -237,12 +237,23 @@ VECTOR_PG_POOL_MIN = max(1, int(os.getenv("VECTOR_PG_POOL_MIN", "1")))
 VECTOR_PG_POOL_MAX = max(
     VECTOR_PG_POOL_MIN, int(os.getenv("VECTOR_PG_POOL_MAX", "10"))
 )
-VECTOR_HNSW_EF_SEARCH = max(1, int(os.getenv("VECTOR_HNSW_EF_SEARCH", "80")))
+# 80→100（2026-10-30 实证）：ef≤80 时 HNSW 图遍历会漏掉精确排名前 10 的块——
+# 发票问在 5440 块 chroma 库上真 sim=0.62 的目标块（精确 #6）不在 HNSW top9，
+# dense 路 3.0 权重名额被无关块占满，融合后 rerank 全截 → no_evidence 拒答
+# （trace 33153ba607db；ef≥90 起 top9 与精确检索一致）。5440 块规模 ef=100
+# 延迟增量可忽略；更大语料请结合 Recall@5 重新标定。
+VECTOR_HNSW_EF_SEARCH = max(1, int(os.getenv("VECTOR_HNSW_EF_SEARCH", "100")))
 
 # 文档级候选池：Stage 1 先扩大候选文档范围，再由关键词门控和 Stage 2 精排。
 # 旧值硬编码为 15，在 2 万份文档中容易把真正相关文档挡在 Stage 2 之外；
-# 50 是召回/延迟的保守起点，生产可按知识库密度调到 100/200。
-RAG_DOC_CANDIDATE_K = max(1, int(os.getenv("RAG_DOC_CANDIDATE_K", "50")))
+# 50→100（2026-10-30 实证）：doc 级候选是 Stage2 chunk 检索与 BM25 路唯一的
+# doc_id 白名单来源（$in 过滤），池浅一档目标文档就全局出局——发票问在
+# 227 文档库上目标 FAQ 文档 doc 级精确排名 #69（sim 0.459，被 68 个报销/
+# 发票主题文档压住），50 深度下落选 → 其全部 chunk 被 $in 排除 → 融合池
+# 全是报销块 → rerank 全截 → no_evidence 拒答（trace 049a6872caba 打点实锤）。
+# 100 深度覆盖 #69，rerank 池 top_k 不变故 rerank 耗时不变；更大语料请按
+# doc 级目标排名分布重新标定。
+RAG_DOC_CANDIDATE_K = max(1, int(os.getenv("RAG_DOC_CANDIDATE_K", "100")))
 
 BM25_SEARCH_K = max(1, int(os.getenv("BM25_SEARCH_K", "10")))
 # BM25 候选池与最终返回数解耦：BM25 不支持向量库的 metadata filter，

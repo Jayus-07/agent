@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { getTraceStats, listTracesPage, type AuthorizedTraceStats } from '@/api/observability'
+import { getTraceStats, listTracesPage, listActiveTraces, type AuthorizedTraceStats } from '@/api/observability'
 import type { TraceRecord } from '@/types/trace'
 import {
   getRunStatus,
@@ -46,6 +46,7 @@ export default function RuntimeOverview() {
   const range = windowFromUrl(searchParams.get('range'))
   const [traces, setTraces] = useState<TraceRecord[]>([])
   const [stats, setStats] = useState<AuthorizedTraceStats | null>(null)
+  const [activeCount, setActiveCount] = useState<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
@@ -60,7 +61,7 @@ export default function RuntimeOverview() {
     try {
       const until = new Date()
       const since = new Date(until.getTime() - WINDOW_HOURS[range] * 60 * 60_000)
-      const [result, authorizedStats] = await Promise.all([
+      const [result, authorizedStats, active] = await Promise.all([
         listTracesPage({
           limit: 200,
           offset: 0,
@@ -69,10 +70,13 @@ export default function RuntimeOverview() {
           excludeRunning: true,
         }),
         getTraceStats(WINDOW_HOURS[range]),
+        // 运行中走授权活跃端点（2026-10-30 解锁）；失败时计数置 null，不用历史样本推断
+        listActiveTraces().catch(() => null),
       ])
       if (requestId !== requestSequence.current) return
       setTraces(result.traces)
       setStats(authorizedStats)
+      setActiveCount(Array.isArray(active) ? active.length : null)
       hasFetched.current = true
       setLastFetchedAt(new Date().toISOString())
       setLoadFailed(false)
@@ -214,11 +218,11 @@ export default function RuntimeOverview() {
                 <span className="mt-1 block text-xs text-text-muted">授权留存记录 · {RUNTIME_WINDOW_LABELS[range]}</span>
               </Link>
             ))}
-            <div className="min-h-24 rounded-md border border-amber-200 bg-amber-50 px-4 py-3" aria-label="运行中状态暂不可统计">
-              <span className="block text-sm text-amber-900">运行中</span>
-              <strong className="mt-2 block text-base font-semibold text-amber-900">暂不可统计</strong>
-              <span className="mt-1 block text-xs text-amber-800">BLOCKED · 活跃 Trace 缺少资源授权</span>
-            </div>
+            <Link href={statusFilterHref(range, 'running')} className="min-h-24 rounded-md border border-violet-200 bg-violet-50/60 px-4 py-3 hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent" aria-label="运行中（实时）">
+              <span className="block text-sm text-violet-800">运行中（实时）</span>
+              <strong className="mt-2 block font-mono text-2xl tabular-nums text-violet-900">{activeCount === null ? '未采集' : activeCount}</strong>
+              <span className="mt-1 block text-xs text-violet-700">授权活跃端点实时计数 · 点击查看运行中记录</span>
+            </Link>
           </div>
 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
