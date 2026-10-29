@@ -69,8 +69,10 @@ def test_direct_eval_retrieval_uses_production_deadline_and_clears_context(tmp_p
          patch("backend.evaluation.runners.rag.get_full_retriever", return_value=retriever):
         _run_rag([case])
     assert len(seen) == 1
-    assert seen[0][0] == RAG_RETRIEVAL_DEADLINE_MS == 8000
-    assert 0 < seen[0][1] <= 8000
+    # 评测入口须使用生产 deadline 常量本身（ee8805f 已调参 8s→20s，
+    # 不对具体数值做硬编码守卫）。
+    assert seen[0][0] == RAG_RETRIEVAL_DEADLINE_MS
+    assert 0 < seen[0][1] <= RAG_RETRIEVAL_DEADLINE_MS
     assert current_budget() is None
 
 

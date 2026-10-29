@@ -149,6 +149,13 @@ def test_all_baseline_fixtures_complete_offline():
         path = REPO_ROOT / document["source_file"]
         assert path.is_file(), f"缺少真实 fixture: {path}"
 
+        # 扫描件场景（如 UF-15-01，manifest is_scanned=true / profile=ocr）
+        # 依赖 OCR 供应商，不在"离线零外部调用"承诺范围内；其链路由
+        # OCR 集成测试与付费评测覆盖。
+        if document.get("legacy_metadata", {}).get("is_scanned") \
+                or document.get("profile") == "ocr":
+            continue
+
         chunks, qc = parse_and_chunk_full(str(path))
         chunk_filter = ChunkFilter()
         kept, filtered = _filter_index_chunks(
