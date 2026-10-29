@@ -114,6 +114,9 @@ def test_detail_super_admin_reads_cross_tenant(client, monkeypatch):
                         lambda _tid: _trace("t1", tenant="B"))
     monkeypatch.setattr(observability, "get_trace_store", lambda: _FakeStore())
     monkeypatch.setattr(observability, "_backfill_usage", lambda _d: None)
+    # 内容读取审计为外部 DB 依赖（2026-10-30 错误诊断链路新增）：测试内打桩保持密闭
+    monkeypatch.setattr("backend.security.events.record_security_event",
+                        lambda *a, **k: True)
 
     r = client.get("/observability/traces/t1",
                    headers=_headers(user_id="su", tenant="A",
@@ -127,6 +130,8 @@ def test_detail_same_tenant_admin_allowed(client, monkeypatch):
                         lambda _tid: _trace("t1", tenant="A"))
     monkeypatch.setattr(observability, "get_trace_store", lambda: _FakeStore())
     monkeypatch.setattr(observability, "_backfill_usage", lambda _d: None)
+    monkeypatch.setattr("backend.security.events.record_security_event",
+                        lambda *a, **k: True)
 
     r = client.get("/observability/traces/t1",
                    headers=_headers(user_id="u1", tenant="A", roles="admin"))
@@ -278,3 +283,61 @@ def test_children_query_is_tenant_scoped():
         _req(tenant=""), store2, "p", role="admin")
     assert out == []
     assert store2.calls == [], "未声明租户不得发起无作用域子查询"
+
+
+# ── 3. 活跃端点 /traces/active（2026-10-30 资源级授权补齐）────────────────
+
+
+def _active_records():
+    return [
+        # 活跃记录与 stored dict 同构：tags 携带归属（tracer.list_active 下发）
+        {**_trace("live-a", tenant="A"), "status": "running"},
+        {**_trace("live-b", tenant="B"), "status": "running"},
+        {**_trace("live-none", tenant=""), "status": "running"},
+    ]
+
+
+def test_active_unauthenticated_is_denied(client, monkeypatch):
+    """活跃端点此前无任何守卫：现在未认证不得读取。"""
+    monkeypatch.setattr(observability.trace_collector, "list_active",
+                        _active_records)
+    r = client.get("/observability/traces/active")
+    assert r.status_code in (401, 403, 503), r.text
+    assert "live-a" not in r.text, "被拒时不得回显活跃记录"
+
+
+def test_active_filters_cross_tenant_and_unowned(client, monkeypatch):
+    """同租户 admin：可见本租户活跃记录；跨租户与未归属一律隐藏（从严口径）。"""
+    monkeypatch.setattr(observability.trace_collector, "list_active",
+                        _active_records)
+    r = client.get("/observability/traces/active",
+                   headers=_headers(user_id="u1", tenant="A", roles="admin"))
+    assert r.status_code == 200, r.text
+    ids = [t["id"] for t in r.json()["traces"]]
+    assert ids == ["live-a"], f"越权活跃记录不得下发: {ids}"
+
+
+def test_active_super_admin_sees_all(client, monkeypatch):
+    """super_admin 可跨租户读取活跃记录（与其他 trace 端点同口径）。"""
+    monkeypatch.setattr(observability.trace_collector, "list_active",
+                        _active_records)
+    r = client.get("/observability/traces/active",
+                   headers=_headers(user_id="su", tenant="A",
+                                    roles="super_admin"))
+    assert r.status_code == 200, r.text
+    ids = [t["id"] for t in r.json()["traces"]]
+    assert sorted(ids) == ["live-a", "live-b", "live-none"]
+
+
+def test_active_tenant_identity_comes_from_record_tags(monkeypatch):
+    """tracer.list_active 必须下发 tags/timestamp：缺失会导致授权端从严全拒。"""
+    from backend.observability.tracer import TraceCollector
+
+    collector = TraceCollector()
+    record = collector.start(question="进行中", session_id="s1")
+    record.tags["tenant_id"] = "A"
+
+    rows = collector.list_active()
+    assert rows and rows[0]["id"] == record.id
+    assert rows[0]["tags"] == {"tenant_id": "A"}
+    assert rows[0]["timestamp"], "timestamp 缺失会让前端时间列退化为无效值"

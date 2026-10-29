@@ -20,12 +20,20 @@ from backend.services import task_service
 from backend.services.task_state import TaskManager
 from backend.shared.crypto import encrypt_secret, fingerprint, last4
 from backend.tasks.index_tasks import rebuild_embeddings_task
+from backend.tests.rag._migration_residue_guard import cleanup_residue, orphan_binding_warning
 from backend.tests.rag.test_embedding_migration import data  # noqa: F401
 
 
 @pytest.fixture
 def worker_env(data):
     stores, _ = data
+    # 跨进程自愈：上次硬杀崩溃的残留（劫持的绑定/死端口供应商）会让运行栈
+    # embedding 全挂，且不能在坏状态上叠测。fresh 残留属并行活跃会话，守卫
+    # 自带时间阈值不会误杀；孤儿绑定说明上次清理被打断，fail-fast 交人工。
+    orphan = orphan_binding_warning()
+    if orphan:
+        pytest.fail(f"embedding 绑定处于残留状态，先人工修复再跑本验收：{orphan}")
+    cleanup_residue()
     state = SimpleNamespace(items=0, fail_after=None)
 
     class Provider(BaseHTTPRequestHandler):
@@ -91,9 +99,21 @@ def worker_env(data):
                 cur.execute("UPDATE llm_model_role_bindings SET model_name=%s WHERE role='embedding'", old_role)
             else:
                 cur.execute("DELETE FROM llm_model_role_bindings WHERE role='embedding'")
-            cur.execute("DELETE FROM llm_models WHERE name='new'")
+            # provider_id 限定：并行会话可能同建 name='new' 的模型，只删自己那行。
+            cur.execute("DELETE FROM llm_models WHERE name='new' AND provider_id=%s", (provider_id,))
+            assert cur.rowcount == 1, f"模型行删除失败（{provider_id}）——检查并发/残留"
             cur.execute("DELETE FROM llm_provider_credentials WHERE provider_id=%s", (provider_id,))
+            assert cur.rowcount == 1, f"凭据行删除失败（{provider_id}）"
             cur.execute("DELETE FROM llm_providers WHERE id=%s", (provider_id,))
+            assert cur.rowcount == 1, f"供应商行删除失败（{provider_id}）"
+            # 收尾断言（可发现性）：恢复失败若静默，运行栈 embedding 会热切换
+            # 到死端口——teardown 必须显式失败而不是放过。
+            cur.execute("SELECT model_name FROM llm_model_role_bindings WHERE role='embedding'")
+            restored = cur.fetchone()
+        expected = old_role  # old_role 即 fetchone() 结果（单值元组或 None）
+        assert restored == expected, (
+            f"embedding 绑定未恢复（当前={restored!r}，期望={expected!r}）——"
+            "运行栈 embedding 仍指向测试残留，立即人工修复")
         run_on_worker_loop(registry_store.refresh_registry())
 
 

@@ -7,6 +7,7 @@ import type { TraceRecord } from '@/types/trace'
 const mocks = vi.hoisted(() => ({
   listTracesPage: vi.fn(),
   getTraceStats: vi.fn(),
+  listActiveTraces: vi.fn(),
   navigation: {
     pathname: '/observability/monitoring',
     params: new URLSearchParams('tab=overview'),
@@ -17,6 +18,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/api/observability', () => ({
   listTracesPage: mocks.listTracesPage,
   getTraceStats: mocks.getTraceStats,
+  listActiveTraces: mocks.listActiveTraces,
 }))
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
@@ -41,6 +43,7 @@ afterEach(async () => {
   mounted = null
   mocks.listTracesPage.mockReset().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 200, has_more: false, retention_limit: 5000 })
   mocks.getTraceStats.mockReset().mockResolvedValue(makeStats())
+  mocks.listActiveTraces.mockReset().mockResolvedValue([])
   mocks.navigation.params = new URLSearchParams('tab=overview')
 })
 
@@ -102,18 +105,30 @@ async function mountOverview(): Promise<HTMLDivElement> {
 }
 
 describe('RuntimeOverview', () => {
-  it('不从历史 Trace 样本推断活跃运行数量，也不生成运行中筛选链接', async () => {
+  it('运行中卡片读取授权活跃端点计数并提供筛选入口', async () => {
     mocks.listTracesPage.mockResolvedValue({ traces: [makeTrace()], total: 1, offset: 0, limit: 200, has_more: false, retention_limit: 5000 })
+    mocks.listActiveTraces.mockResolvedValue([makeTrace(), makeTrace('running', { id: 'active-2' })])
     const container = await mountOverview()
 
     expect(mocks.listTracesPage).toHaveBeenCalledWith(expect.objectContaining({ limit: 200, offset: 0, excludeRunning: true }))
     expect(mocks.getTraceStats).toHaveBeenCalledWith(24)
-    expect(container.textContent).toContain('运行中')
-    expect(container.textContent).toContain('暂不可统计')
-    expect(container.textContent).toContain('BLOCKED')
-    expect(container.querySelector('a[href*="status=running"]')).toBeNull()
+    expect(mocks.listActiveTraces).toHaveBeenCalledTimes(1)
+    const runningCard = container.querySelector('a[href*="status=running"]')
+    expect(runningCard).toBeTruthy()
+    expect(runningCard?.textContent).toContain('2')
+    // 运行中计数来自授权活跃端点，不得从历史留存样本推断
+    expect(runningCard?.textContent).not.toContain('BLOCKED')
     expect(container.textContent).toContain('没有可确认的终态记录')
     expect(container.querySelector('tbody tr')).toBeNull()
+  })
+
+  it('活跃端点失败时运行中卡片显示未采集而非伪造计数', async () => {
+    mocks.listTracesPage.mockResolvedValue({ traces: [makeTrace('success', { id: 'ok-1' })], total: 1, offset: 0, limit: 200, has_more: false, retention_limit: 5000 })
+    mocks.listActiveTraces.mockRejectedValue(new Error('unavailable'))
+    const container = await mountOverview()
+
+    const runningCard = container.querySelector('a[href*="status=running"]')
+    expect(runningCard?.textContent).toContain('未采集')
   })
 
   it('为部分成功单独统计并提供对应筛选入口', async () => {

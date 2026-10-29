@@ -8,6 +8,7 @@ provenance 契约（047 迁移，STOP B）：
   - 提取候选必须携带「用户原话片段」且该片段能在用户消息中找到，
     否则拒绝写入（fail-closed）——prompt 不是安全边界，这是代码级防线
 """
+import asyncio
 import math
 import re
 from dataclasses import dataclass, field
