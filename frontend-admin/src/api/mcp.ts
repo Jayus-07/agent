@@ -102,6 +102,31 @@ export interface McpGovernance {
   [key: string]: unknown
 }
 
+/** AI 语义契约草稿（决策 #19）：suggested（AI 生成）/ edited（人工编辑）/
+ *  applied（已并入正式描述）；仅候选，不影响运行时行为。 */
+export interface McpSemanticDraft {
+  summary: string
+  scenarios: string[]
+  exclusions: string[]
+  capability_hint: string | null
+  status: 'suggested' | 'edited' | 'applied'
+  generated_at?: string | null
+  generated_by?: string | null
+  edited_at?: string | null
+  edited_by?: string | null
+}
+
+/** 已审核并入的语义契约留痕（approve 时落库快照）。 */
+export interface McpSemanticApproved {
+  summary: string
+  scenarios: string[]
+  exclusions: string[]
+  capability_hint: string | null
+  approved_at: string
+  approved_by: string
+  description_after: string
+}
+
 export interface McpTool {
   id: number
   connection_id: string
@@ -121,6 +146,9 @@ export interface McpTool {
   review_notes: string
   reviewed_by: string
   reviewed_at: string | null
+  /** AI 语义契约（决策 #19）：草稿候选 + 已并入留痕（独立列） */
+  semantic_draft?: McpSemanticDraft | null
+  semantic_approved?: McpSemanticApproved | null
   last_seen_version: number
   retired_reason: string
   updated_at: string | null
@@ -361,5 +389,47 @@ export async function testInvokeMcpTool(
       method: 'POST',
       body: { arguments: arguments_, product_key: productKey },
     },
+  )
+}
+
+// ── AI 语义契约（决策 #19）──────────────────────────────────
+// 边界：LLM 仅读工具元数据（不含凭据/URL），产物只写草稿列；
+// 管理员「审核通过并入」才更新正式 description。
+
+/** AI 生成语义契约候选（覆盖既有草稿；LLM 不可用 503 / 解析失败 502）。 */
+export async function suggestMcpSemantic(toolId: number) {
+  return mutationRequest<{ tool_id: number; draft: McpSemanticDraft }>(
+    `/api/admin/mcp/tools/${toolId}/semantic/suggest`,
+    { operation: 'mcp_tool_semantic_suggest', method: 'POST', body: {} },
+  )
+}
+
+export interface McpSemanticDraftInput {
+  summary: string
+  scenarios: string[]
+  exclusions: string[]
+  capability_hint: string | null
+}
+
+/** 保存管理员编辑后的语义契约草稿（status=edited，仍为候选）。 */
+export async function saveMcpSemanticDraft(
+  toolId: number,
+  input: McpSemanticDraftInput,
+) {
+  return mutationRequest<McpSemanticDraft>(
+    `/api/admin/mcp/tools/${toolId}/semantic/draft`,
+    { operation: 'mcp_tool_semantic_draft_save', method: 'PUT', body: input },
+  )
+}
+
+/** 审核通过并入：草稿 summary 并入正式 description（幂等：无待审草稿 409）。 */
+export async function approveMcpSemantic(toolId: number) {
+  return mutationRequest<{
+    tool_id: number
+    approved: boolean
+    description: string
+  }>(
+    `/api/admin/mcp/tools/${toolId}/semantic/approve`,
+    { operation: 'mcp_tool_semantic_approve', method: 'POST', body: {} },
   )
 }
