@@ -73,7 +73,11 @@ jobs:
 
       - name: Initialize isolated databases
         run: |
+          # agent_business（无 _test 后缀）是 004 只读角色迁移的兼容库：
+          # 该迁移硬编码库名，不显式创建会让 init_db 在 004 上失败
+          # （rag_smoke preflight 同款坑位注释）。
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
+            -c 'CREATE DATABASE agent_business' \
             -c 'CREATE DATABASE agent_business_test'
           python scripts/init_db.py --host localhost --port 5432 --user postgres
 
