@@ -448,9 +448,23 @@ async def trace_stats(
 
 
 @router.get("/traces/active")
-async def list_active_traces():
-    """当前活跃的 trace（contextvar / thread_local 中）"""
-    active = trace_collector.list_active()
+async def list_active_traces(request: Request,
+                             _reader=Depends(_require_trace_reader)):
+    """当前活跃的 trace（contextvar / thread_local 中）。
+
+    2026-10-30 补齐授权（此前端点完全无守卫，是前端「运行中 BLOCKED」的根因）：
+      ① 身份闸与其他 trace 端点同源（require_user_actor，仅 JWT 用户）；
+      ② 资源级过滤复用 trace_visible_to——活跃记录的 tags（tenant_id/user_id，
+         start() 时从权威请求上下文注入）是判定依据，无归属记录仅 super_admin 可见
+         （从严口径，与其他端点一致）。
+    """
+    from backend.app.api.routes._trace_authz import trace_visible_to
+
+    ident = _reader
+    active = [
+        t for t in trace_collector.list_active()
+        if trace_visible_to(request, t, role=ident.role)
+    ]
     return {"traces": [_stored_dict_to_dto(t) for t in active]}
 
 
@@ -520,7 +534,23 @@ async def get_trace(trace_id: str, request: Request,
         logger.debug("Trace 子关系补齐失败: %s", trace_id, exc_info=True)
     # 读取时回填：存量 trace 的 usage/model/cost 以 llm_usage 明细补齐（历史数据兼容）
     _backfill_usage(data)
-    return _to_trace_dto(data)  # 统一转为前端 DTO 格式
+    dto = _to_trace_dto(data)  # 统一转为前端 DTO 格式
+    # 内容读取审计（2026-10-30 错误诊断链路）：详情页展示问题/结果/错误原文后，
+    # 「谁在何时看了哪条 Trace 的内容」必须可追溯。复用 security_events 旁路
+    # 追加机制，软失败不影响读取；仅在实际下发内容（question/answer 非空）时记。
+    if dto.get("question") or dto.get("answer_preview"):
+        try:
+            from backend.security.events import record_security_event
+
+            record_security_event(
+                "ADMIN_ACTION",
+                category="trace_content_view",
+                detail={"trace_id": trace_id},
+                user_id=ident.actor or None,
+            )
+        except Exception:
+            logger.debug("Trace 内容读取审计失败: %s", trace_id, exc_info=True)
+    return dto
 
 
 # ═══════════════════════════════════════════════════

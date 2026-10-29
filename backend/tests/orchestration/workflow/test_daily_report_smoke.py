@@ -106,6 +106,24 @@ class TestDailyReportSmoke:
         assert "send_email" in ctx.outputs
         assert ctx.status in ("partial", "success")
 
+    def test_rag_step_params_match_tool_contract(
+        self, fresh_registry, patched_trace_collector, patched_persistence, patched_skill_adapter, patched_llm
+    ):
+        """回归：rag_query_template 传契约外参数必失败。
+
+        search_knowledge_tool 契约只声明 question/kb_id；daily_report 曾传
+        top_k → 参数校验拒绝（不允许未声明参数）→ 本步骤每次运行必失败。
+        """
+        fresh_registry.register(DailyReport)
+        executor = WorkflowExecutor(registry=fresh_registry)
+        ctx = asyncio.run(executor.run("daily_report"))
+
+        assert "rag_query_template" not in ctx.skip_steps
+        call_rag = patched_skill_adapter["call_rag"]
+        assert call_rag.await_count >= 1
+        params = call_rag.await_args.args[0]
+        assert set(params) <= {"question", "kb_id"}, f"契约外参数: {sorted(params)}"
+
     def test_trace_spans_created_for_each_step(
         self, fresh_registry, patched_trace_collector, patched_persistence, patched_skill_adapter, patched_llm
     ):

@@ -21,13 +21,22 @@ from typing import Any, Iterator
 
 import psycopg2
 
+import re
+
 from backend.config.database import FEEDBACK_PG_CONFIG
 from backend.infra.db import engine_for
 from backend.shared.logger import logger
 
 def _table() -> str:
-    """按当前进程配置解析表名，支持测试/租户隔离切换。"""
-    return os.getenv("FEEDBACK_PG_TABLE", "feedback").strip() or "feedback"
+    """按当前进程配置解析表名，支持测试/租户隔离切换。
+
+    表名会拼进 DDL（PG 不支持标识符参数化），先做严格标识符校验：
+    只允许字母数字下划线，杜绝环境变量注入 SQL。
+    """
+    table = os.getenv("FEEDBACK_PG_TABLE", "feedback").strip() or "feedback"
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+        raise ValueError(f"FEEDBACK_PG_TABLE 含非法标识符字符: {table!r}")
+    return table
 
 
 def _schema_sql(table: str) -> str:
@@ -79,9 +88,20 @@ def _conn() -> Iterator[Any]:
 
 
 def init_db() -> None:
-    """创建 feedback 表（幂等）"""
+    """创建 feedback 表（幂等；advisory lock 串行化并发初始化）。
+
+    模块 import 即执行 init（feedback.py 顶层调用），多进程同时导入
+    （uvicorn 多 worker 启动、xdist 并行收集）时 CREATE TABLE 会竞态：
+    建表隐式创建同名复合类型/序列，并发即撞 pg_type/pg_class 唯一键
+    （2026-10-30 全量回归 xdist 首跑实证）。advisory lock 按表名串行化。
+    """
     with _conn() as conn:
-        conn.cursor().execute(_schema_sql(_table()))
+        cur = conn.cursor()
+        cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (_table(),))
+        try:
+            cur.execute(_schema_sql(_table()))
+        finally:
+            cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (_table(),))
 
 
 def add_feedback(

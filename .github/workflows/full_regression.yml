@@ -1,26 +1,29 @@
 name: Full Regression
 
-# 全量回归（2026-10-29 盘点后新增）：PR 口径的 targeted 清单只覆盖
-# ~650/12500 用例，实现迭代后清单外测试的漂移无人发现（历史实证：
-# 重排计费静默流失、孤儿测试、CI 引用悬空等 7 类）。本 workflow 让
-# 「全量可跑、全量绿」成为被监控状态——失败即红（GitHub 默认失败
-# 通知），但不属于任何 PR 门禁，不挡合并。
+# 全量回归（2026-10-29 盘点后新增；2026-10-30 首轮单 job 实测改分治）：
+# PR 口径 targeted 清单只覆盖 ~650/12500 用例，清单外漂移无人发现。
+# 单 job 全量跑不进 180min 上限（挂死用例按 150-300s/个排队耗尽时长，
+# 被杀后失败清单不落盘）——按目录 matrix 分治：13 个 suite 并行、各自
+# 隔离 DB、互不阻塞；单 suite 可独立重跑（dispatch 传 suites 参数）。
+# 失败即红（GitHub 失败通知）但不属任何 PR 门禁，不挡合并。
 on:
   schedule:
     # 每周一 03:00 UTC（北京时间周一 11:00）
     - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
-      xdist_workers:
-        description: "pytest-xdist 并行 worker 数（0 = 单进程）"
-        default: "4"
+      suites:
+        description: "限定 suite（逗号分隔，空 = 全部）"
+        default: ""
         required: false
 
 jobs:
-  full-pytest:
-    name: Full backend pytest (all cases)
+  pytest-suite:
+    name: pytest ${{ matrix.suite.name }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 50
+    # 注：job 级 if 不可引用 matrix 上下文（dispatch 解析 422 实证），
+    # suites 参数过滤在下方 Suite gate 步骤以环境变量实现。
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -55,11 +58,39 @@ jobs:
       RAG_STORES_PGDATABASE: agent_memory_test
       DOC_REGISTRY_PGDATABASE: agent_memory_test
       OBS_DB_PGDATABASE: agent_memory_test
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - { name: rag, paths: "backend/tests/rag" }
+          - { name: customer_service, paths: "backend/tests/customer_service" }
+          - { name: travel, paths: "backend/tests/travel" }
+          - { name: orchestration, paths: "backend/tests/orchestration" }
+          - { name: api, paths: "backend/tests/api" }
+          - { name: evaluation, paths: "backend/tests/evaluation backend/tests/evaluation_v2" }
+          - { name: sql-infra, paths: "backend/tests/sql backend/tests/infra" }
+          - { name: prompts-context, paths: "backend/tests/prompts backend/tests/context_budget" }
+          - { name: tools-security-obs, paths: "backend/tests/tools backend/tests/security backend/tests/observability" }
+          - { name: services-travelv2, paths: "backend/tests/services backend/tests/memory backend/tests/travel_v2" }
+          - { name: misc, paths: "backend/tests/audit backend/tests/business_report backend/tests/config backend/tests/domain_runtime backend/tests/inventory backend/tests/mcp_registry backend/tests/messaging backend/tests/node_runtime backend/tests/runtime backend/tests/scripts backend/tests/skills backend/tests/tool_runtime backend/tests/workers" }
+          - { name: backend-root, paths: "" } # backend/tests 根散文件，步骤内展开
+          - { name: repo-tests, paths: "tests" }
     steps:
+      - name: Suite gate
+        env:
+          SELECTED: ${{ inputs.suites }}
+        run: |
+          # dispatch 限定 suites 时跳过未选中 job（scheduled 无 inputs 全跑）
+          if [ -n "$SELECTED" ] && ! echo "$SELECTED" | grep -qw "${{ matrix.suite.name }}"; then
+            echo "SKIP_SUITE=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout
+        if: env.SKIP_SUITE != 'true'
         uses: actions/checkout@v4
 
       - name: Setup Python
+        if: env.SKIP_SUITE != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -67,41 +98,78 @@ jobs:
           cache-dependency-path: requirements-lock.txt
 
       - name: Install locked dependencies
+        if: env.SKIP_SUITE != 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
 
       - name: Initialize isolated databases
+        if: env.SKIP_SUITE != 'true'
         run: |
+          # agent_business（无 _test 后缀）是 004 只读角色迁移的兼容库：
+          # 该迁移硬编码库名，不显式创建会让 init_db 在 004 上失败
+          # （rag_smoke preflight 同款坑位注释）。
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
+            -c 'CREATE DATABASE agent_business' \
             -c 'CREATE DATABASE agent_business_test'
           python scripts/init_db.py --host localhost --port 5432 --user postgres
 
-      - name: Full backend pytest
-        env:
-          XDIST_WORKERS: ${{ inputs.xdist_workers || '4' }}
+      - name: Suite pytest
+        if: env.SKIP_SUITE != 'true'
         run: |
-          # pytest.ini 已有 timeout=300（pytest-timeout 在 lock 中）：
-          # 单个挂死用例 300s 被截杀，不会拖垮整轮。
-          if [ "$XDIST_WORKERS" = "0" ]; then
-            python -m pytest backend/tests -q --no-cov -rf --timeout=300
-          else
-            python -m pytest backend/tests -q --no-cov -rf --timeout=300 \
-              -n "$XDIST_WORKERS" --dist loadfile
+          # pytest-timeout 截杀挂死/超慢用例（150s/个）；xdist 4 worker
+          # （4 核 runner；loadfile 按文件分组，避免同文件跨进程互踩）。
+          SUITE="${{ matrix.suite.name }}"
+          PATHS="${{ matrix.suite.paths }}"
+          if [ -z "$PATHS" ]; then
+            PATHS=$(ls backend/tests/test_*.py 2>/dev/null | tr '\n' ' ')
           fi
+          echo "suite=$SUITE paths=$PATHS"
+          RC=0
+          python -m pytest $PATHS -q --no-cov -rf --timeout=150 \
+            -n 4 --dist loadfile -p no:cacheprovider \
+            > pytest_out.txt 2>&1 || RC=$?
+          # 失败明细独立成文件（artifact 留档）
+          grep -E "^(FAILED|ERROR) " pytest_out.txt | sort -u \
+            > failures_${SUITE}.txt || true
+          {
+            echo "## suite $SUITE：exit=$RC 失败 $(wc -l < failures_${SUITE}.txt) 例"
+            echo '```'
+            grep -E "^(FAILED|ERROR) " pytest_out.txt | sort -u || echo "（无失败）"
+            echo '```'
+            echo '```'
+            tail -3 pytest_out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          tail -50 pytest_out.txt
+          exit "$RC"
 
-      - name: Summarize failures
-        if: always()
+      - name: Upload failure list
+        if: always() && env.SKIP_SUITE != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: failures-${{ matrix.suite.name }}
+          path: failures_*.txt
+          if-no-files-found: ignore
+
+  summary:
+    name: Regression summary
+    needs: pytest-suite
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Suite result table
+        env:
+          NEEDS: ${{ toJSON(needs.*) }}
         run: |
-          if [ -f .pytest_cache/v/cache/lastfailed ] && \
-             [ -s .pytest_cache/v/cache/lastfailed ]; then
-            COUNT=$(python -c "import json;print(len(json.load(open('.pytest_cache/v/cache/lastfailed'))))")
-            echo "## 全量回归失败用例（$COUNT 个）" >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            python -c "import json;[print(k) for k in sorted(json.load(open('.pytest_cache/v/cache/lastfailed')))]" \
-              >> "$GITHUB_STEP_SUMMARY"
-            echo '```' >> "$GITHUB_STEP_SUMMARY"
-            echo "本周全量回归：$COUNT 个失败，明细见上。逐个定性修复后本清单应逐步收敛。"
-          else
-            echo "## 全量回归：全部通过 ✅" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          python - <<'PY'
+          import json, os
+          needs = json.loads(os.environ["NEEDS"])
+          lines = ["## 全量回归 suite 终态", "", "| suite | 结论 |", "|---|---|"]
+          for name, job in sorted(needs.items()):
+              result = job.get("result", "?")
+              mark = "✅ pass" if result == "success" else f"❌ {result}"
+              lines.append(f"| {name} | {mark} |")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
+              f.write("\n".join(lines) + "\n")
+          PY
