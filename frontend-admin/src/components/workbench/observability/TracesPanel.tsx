@@ -315,7 +315,8 @@ export default function TracesPanel() {
   }
 
   const exportCsv = () => {
-    const headers = ['trace_id', 'workflow_name', 'source', 'status', 'duration_ms', 'timestamp', 'cost_cny']
+    // error_code 是分类法枚举值（非自由文本），属安全字段；错误消息原文仅详情页展示
+    const headers = ['trace_id', 'workflow_name', 'source', 'status', 'duration_ms', 'timestamp', 'cost_cny', 'error_code']
     const rows = filtered.map((trace) => [
       trace.id,
       trace.workflow_name || '',
@@ -324,6 +325,7 @@ export default function TracesPanel() {
       trace.duration_ms,
       trace.timestamp,
       typeof trace.cost_cny === 'number' ? trace.cost_cny : '',
+      typeof trace.error?.code === 'string' ? trace.error.code : '',
     ].map(csvCell).join(','))
     const blob = new Blob([[headers.map(csvCell).join(','), ...rows].join('\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)

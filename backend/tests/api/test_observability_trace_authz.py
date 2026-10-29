@@ -114,6 +114,9 @@ def test_detail_super_admin_reads_cross_tenant(client, monkeypatch):
                         lambda _tid: _trace("t1", tenant="B"))
     monkeypatch.setattr(observability, "get_trace_store", lambda: _FakeStore())
     monkeypatch.setattr(observability, "_backfill_usage", lambda _d: None)
+    # 内容读取审计为外部 DB 依赖（2026-10-30 错误诊断链路新增）：测试内打桩保持密闭
+    monkeypatch.setattr("backend.security.events.record_security_event",
+                        lambda *a, **k: True)
 
     r = client.get("/observability/traces/t1",
                    headers=_headers(user_id="su", tenant="A",
@@ -127,6 +130,8 @@ def test_detail_same_tenant_admin_allowed(client, monkeypatch):
                         lambda _tid: _trace("t1", tenant="A"))
     monkeypatch.setattr(observability, "get_trace_store", lambda: _FakeStore())
     monkeypatch.setattr(observability, "_backfill_usage", lambda _d: None)
+    monkeypatch.setattr("backend.security.events.record_security_event",
+                        lambda *a, **k: True)
 
     r = client.get("/observability/traces/t1",
                    headers=_headers(user_id="u1", tenant="A", roles="admin"))
