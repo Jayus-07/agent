@@ -22,7 +22,8 @@ jobs:
     name: pytest ${{ matrix.suite.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 50
-    if: inputs.suites == '' || contains(inputs.suites, matrix.suite.name)
+    # 注：job 级 if 不可引用 matrix 上下文（dispatch 解析 422 实证），
+    # suites 参数过滤在下方 Suite gate 步骤以环境变量实现。
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -75,10 +76,21 @@ jobs:
           - { name: backend-root, paths: "" } # backend/tests 根散文件，步骤内展开
           - { name: repo-tests, paths: "tests" }
     steps:
+      - name: Suite gate
+        env:
+          SELECTED: ${{ inputs.suites }}
+        run: |
+          # dispatch 限定 suites 时跳过未选中 job（scheduled 无 inputs 全跑）
+          if [ -n "$SELECTED" ] && ! echo "$SELECTED" | grep -qw "${{ matrix.suite.name }}"; then
+            echo "SKIP_SUITE=true" >> "$GITHUB_ENV"
+          fi
+
       - name: Checkout
+        if: env.SKIP_SUITE != 'true'
         uses: actions/checkout@v4
 
       - name: Setup Python
+        if: env.SKIP_SUITE != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.10"
@@ -86,11 +98,13 @@ jobs:
           cache-dependency-path: requirements-lock.txt
 
       - name: Install locked dependencies
+        if: env.SKIP_SUITE != 'true'
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements-lock.txt
 
       - name: Initialize isolated databases
+        if: env.SKIP_SUITE != 'true'
         run: |
           # agent_business（无 _test 后缀）是 004 只读角色迁移的兼容库：
           # 该迁移硬编码库名，不显式创建会让 init_db 在 004 上失败
@@ -101,6 +115,7 @@ jobs:
           python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Suite pytest
+        if: env.SKIP_SUITE != 'true'
         run: |
           # pytest-timeout 截杀挂死/超慢用例（150s/个）；xdist 4 worker
           # （4 核 runner；loadfile 按文件分组，避免同文件跨进程互踩）。
@@ -130,7 +145,7 @@ jobs:
           exit "$RC"
 
       - name: Upload failure list
-        if: always()
+        if: always() && env.SKIP_SUITE != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: failures-${{ matrix.suite.name }}
