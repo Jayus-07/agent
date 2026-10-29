@@ -2,6 +2,9 @@
 
 GET /admin/tools        — 34 Tool 清单（契约 hash + 归属，复用 M1 lock 派生）
 GET /admin/tools/stats  — 运行统计聚合（总数/成功/失败/成功率/Top 失败/Top 错误类）
+POST /admin/tools/failure-analysis — AI 失败分析（决策 #20：聚类 → LLM 归因/
+                          建议/候选评测用例；只建议不自动应用任何正式配置）
+GET /admin/tools/failure-analysis  — 本租户最近分析列表
 
 为什么存在：``agent_tool_*`` 指标齐全但管理端无聚合视图，管理员答不了
 「哪个 Tool 在失败、为什么」。``skill_failure_total`` 此前是死指标
@@ -13,14 +16,16 @@ GET /admin/tools/stats  — 运行统计聚合（总数/成功/失败/成功率/
   redis   = 仅 Redis 日键合计（TOOL_STATS_REDIS_ENABLED 写侧开启后多副本合计）；
   merged  = 两者相加（scope 如实反映）。
 错误分类口径 = M3 统一七分类（observability.error_taxonomy）。
-权限分级：GET（清单/统计/错误明细/变更历史）editor 及以上（与前端
-「能力治理」导航 minRole 对齐）；失败探针保持 admin + ADMIN_ACTION 审计。
+权限分级：GET（清单/统计/错误明细/变更历史/分析列表）editor 及以上（与前端
+「能力治理」导航 minRole 对齐）；失败探针与 AI 失败分析保持 admin +
+ADMIN_ACTION 审计。
 """
 from __future__ import annotations
 
 import asyncio
 
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -804,6 +809,379 @@ async def simulate_discovery(request: Request, body: DiscoverySimulateRequest):
         "线上执行另有 Tool Governance 执行期复核",
     ]
     return result
+
+
+# ═══════════════════════════════════════════════════
+# AI 失败分析（决策 #20：失败聚类 → LLM 归因/建议/候选评测用例）
+# 红线：只生成建议与候选评测集（evalCandidate），不自动应用/改写任何正式
+# 配置（Prompt / 语义契约 / Golden 数据）；送 LLM 的输入只有 (tool,
+# error_class) 聚类计数与截断 300 字符的错误摘要（URL 已清洗），绝不包含
+# 用户参数原文（span input.params 一概不读）与任何凭据材料。
+# ═══════════════════════════════════════════════════
+
+_FAILURE_WINDOW_MIN = 5
+_FAILURE_WINDOW_MAX = 1440
+_FAILURE_LIMIT_MIN = 10
+_FAILURE_LIMIT_MAX = 100
+_FAILURE_SCAN_DEFAULT = 200      # 与 /errors 同源（trace_collector.list），窗放大
+_FAILURE_CLUSTER_MAX = 10        # 送 LLM 的聚类组数上限
+_FAILURE_SAMPLES_PER_GROUP = 3   # 每组代表性错误摘要条数
+_FAILURE_SAMPLE_CHARS = 300      # 单条摘要截断（红线：摘要而非原文）
+_SUGGESTION_MAX = 3              # LLM 建议条数上限
+_CANDIDATE_CASES_MAX = 6         # 候选评测用例总条数上限（响应级）
+
+_URL_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://\S+")
+
+
+class FailureAnalysisRequest(BaseModel):
+    """AI 失败分析请求（边界校验在端点内显式 400，Pydantic 只兜超大 payload）。"""
+
+    window_minutes: int = Field(60)
+    limit: int = Field(50)
+
+
+def _redact_urls(text: str) -> str:
+    """prompt 输入清洗：任何 scheme://... 替换为占位符（防 URL 内嵌凭据出口）。"""
+    return _URL_PATTERN.sub("[URL已屏蔽]", str(text or ""))
+
+
+def _failure_tenant(request: Request) -> str:
+    """操作租户：网关注入身份头重解析；无租户头（服务凭据）落 default。"""
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    return str(ident.tenant_id or "default")
+
+
+def _span_error_info(s) -> tuple[str, str, str]:
+    """从失败 span 抽错误信息（与 /errors 端点同优先级：event→errors→metrics）。"""
+    error_code, error_class, error_msg = "", "", ""
+    for ev in reversed(s.events):
+        info = ev.get("attributes") or {}
+        if isinstance(info, dict) and (info.get("error") or info.get("error_code")):
+            error_code = info.get("error_code", "")
+            error_class = info.get("error_class", "")
+            error_msg = info.get("error", "")
+            break
+    if not error_msg and s.errors:
+        first = s.errors[0]
+        error_msg = first.get("message", "") if isinstance(first, dict) else str(first)
+    metrics = s.metrics or {}
+    error_code = error_code or metrics.get("error_code", "")
+    error_class = error_class or metrics.get("error_class", "")
+    error_msg = error_msg or metrics.get("error", "")
+    return error_code, error_class, error_msg
+
+
+def _span_ts(s, rec) -> float | None:
+    """span 失效时间（UTC 秒）；无法解析返回 None（调用方跳过，不进时间窗）。"""
+    from datetime import datetime, timezone
+
+    raw = s.end_time or rec.timestamp
+    try:
+        dt = datetime.fromisoformat(str(raw or "").replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.timestamp()
+    except ValueError:
+        return None
+
+
+def _collect_failure_clusters(window_minutes: int,
+                              max_failures: int) -> list[dict[str, Any]]:
+    """失败聚类（与 /errors 同一数据路径：进程内 trace tool_call span 直读）。
+
+    按 (tool, error_class) 聚类计数，取计数 top N 组；每组带代表性错误摘要
+    （截断 + URL 清洗）。**只读 input.tool/capability，绝不读 input.params**。
+    max_failures = 聚类输入的失败记录上限（最新优先，超出部分不计入）。
+    """
+    from datetime import datetime, timezone
+
+    from backend.observability.tracer import trace_collector
+
+    cutoff = datetime.now(timezone.utc).timestamp() - window_minutes * 60
+    records = trace_collector.list(_FAILURE_SCAN_DEFAULT, include_spans=True)
+    clusters: dict[tuple[str, str], dict[str, Any]] = {}
+    counted = 0
+    for rec in records:
+        if counted >= max_failures:
+            break
+        for s in rec.spans:
+            if s.type != "tool_call" or s.status not in ("error", "skipped"):
+                continue
+            ts = _span_ts(s, rec)
+            if ts is None or ts < cutoff:
+                continue
+            span_tool = (s.input or {}).get("tool") or s.name
+            _, error_class, error_msg = _span_error_info(s)
+            key = (span_tool, error_class or "unknown")
+            entry = clusters.setdefault(key, {
+                "tool": span_tool,
+                "error_class": key[1],
+                "count": 0,
+                "samples": [],
+            })
+            entry["count"] += 1
+            counted += 1
+            if len(entry["samples"]) < _FAILURE_SAMPLES_PER_GROUP and error_msg:
+                entry["samples"].append(
+                    _redact_urls(error_msg)[:_FAILURE_SAMPLE_CHARS])
+            if counted >= max_failures:
+                break
+    ranked = sorted(clusters.values(), key=lambda g: -g["count"])
+    return ranked[:_FAILURE_CLUSTER_MAX]
+
+
+def _render_clusters_text(groups: list[dict[str, Any]]) -> str:
+    """聚类统计 → prompt 文本块（只含 tool/分类/计数/摘要，无其他数据）。"""
+    lines = []
+    for i, g in enumerate(groups, 1):
+        lines.append(
+            f"{i}. tool={g['tool']} | error_class={g['error_class']} "
+            f"| 失败次数={g['count']}")
+        for sample in g.get("samples", []):
+            lines.append(f"   代表性错误摘要：{sample}")
+    return "\n".join(lines)
+
+
+def _normalize_failure_analysis(content: str,
+                                groups: list[dict[str, Any]]) -> list[dict] | None:
+    """解析 LLM 输出为 clusters 列表；形状不合法返回 None（调用方重试）。
+
+    防幻觉：只保留输入聚类中存在的 (tool, error_class) 组；建议 ≤3 条、
+    候选评测用例合计 ≤6 条，逐字段截断。
+    """
+    from backend.shared.json_extractor import extract_json
+
+    if not content or "{" not in content:
+        return None
+    parsed = extract_json(content, source="tool.failure_analysis")
+    raw_clusters = parsed.get("clusters") if isinstance(parsed, dict) else None
+    if not isinstance(raw_clusters, list):
+        return None
+    known = {(g["tool"], g["error_class"]) for g in groups}
+    clusters: list[dict] = []
+    candidate_budget = _CANDIDATE_CASES_MAX
+    for raw in raw_clusters:
+        if not isinstance(raw, dict):
+            continue
+        tool = str(raw.get("tool") or "").strip()
+        error_class = str(raw.get("error_class") or "").strip()
+        if (tool, error_class) not in known:
+            continue  # 输入里没有的组 = 模型幻觉，丢弃
+        suggestions = []
+        for item in (raw.get("suggestions") or [])[:_SUGGESTION_MAX]:
+            text = str(item or "").strip()
+            if text:
+                suggestions.append(text[:200])
+        cases: list[dict] = []
+        if candidate_budget > 0:
+            for raw_case in (raw.get("candidate_eval_cases") or []):
+                if not isinstance(raw_case, dict) or candidate_budget <= 0:
+                    continue
+                question = str(raw_case.get("question") or "").strip()
+                if not question:
+                    continue
+                cases.append({
+                    "question": question[:300],
+                    "expected_capability":
+                        str(raw_case.get("expected_capability") or "").strip()[:128],
+                    "expectation_note":
+                        str(raw_case.get("expectation_note") or "").strip()[:300],
+                })
+                candidate_budget -= 1
+        attribution = str(raw.get("attribution") or "").strip()
+        clusters.append({
+            "tool": tool,
+            "error_class": error_class,
+            "attribution": attribution[:500],
+            "suggestions": suggestions,
+            "candidate_eval_cases": cases,
+        })
+    return clusters
+
+
+async def _invoke_failure_llm(prompt_text: str) -> str:
+    """调用当前 LLM 生成失败分析 JSON（同步 invoke 经 to_thread 执行）。"""
+    from backend.infra.llm import llm
+
+    resp = await asyncio.to_thread(
+        llm.invoke,
+        [("system", prompt_text), ("human", "请只输出 JSON 结果。")],
+    )
+    content = getattr(resp, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):  # 多块内容（LangChain content blocks）
+        return "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content)
+    return str(content)
+
+
+def _current_llm_model() -> str:
+    """当前模型名（软失败留空：只作留痕展示，不影响分析结果）。"""
+    try:
+        from backend.infra.llm import get_llm_factory
+
+        return str(get_llm_factory().get_current_model_name() or "")
+    except Exception:  # noqa: BLE001 — 模型名读取失败不影响落库
+        return ""
+
+
+def _audit_failure_analysis(event: str, detail: dict[str, Any], *,
+                            user_id: str = "", tenant_id: str = "") -> None:
+    """操作审计旁路（软失败，不因审计故障带崩分析主流程）。"""
+    try:
+        from backend.security.events import record_security_event
+
+        record_security_event(
+            "ADMIN_ACTION", category=event, detail=detail,
+            user_id=user_id or None, tenant_id=tenant_id or None,
+        )
+    except Exception:  # noqa: BLE001 — 审计旁路软失败
+        logger.warning("[AdminTools] 失败分析审计写入失败: %s", event, exc_info=True)
+
+
+@router.post("/failure-analysis")
+async def run_failure_analysis(request: Request, body: FailureAnalysisRequest):
+    """AI 失败分析：时间窗失败聚类 → LLM 归因/建议/候选评测用例 → 落库。
+
+    边界（决策 #20）：只生成建议与候选用例并落 ai.tool_failure_analyses
+    留痕，不自动改写正式 Prompt / 语义契约 / Golden；候选用例仅供评测中心
+    人工审核后采纳。LLM 不可用/调用失败 → 503；解析重试 1 次仍失败 → 502，
+    绝不伪造分析结果（失败时不落库）。空聚类（时间窗内无失败）也允许调用，
+    跳过 LLM 直接落一条空分析（如实反映「无失败可分析」）。
+    """
+    operator = await require_admin_user(request)
+    if not _FAILURE_WINDOW_MIN <= body.window_minutes <= _FAILURE_WINDOW_MAX:
+        raise _HTTP(400, f"window_minutes 需在 "
+                         f"{_FAILURE_WINDOW_MIN}-{_FAILURE_WINDOW_MAX} 之间")
+    if not _FAILURE_LIMIT_MIN <= body.limit <= _FAILURE_LIMIT_MAX:
+        raise _HTTP(400, f"limit 需在 "
+                         f"{_FAILURE_LIMIT_MIN}-{_FAILURE_LIMIT_MAX} 之间")
+    tenant = _failure_tenant(request)
+    actor = str(operator.actor or "")
+
+    groups = await asyncio.to_thread(
+        _collect_failure_clusters, body.window_minutes, body.limit)
+
+    clusters: list[dict] | None = None
+    model_name = ""
+    if groups:
+        try:
+            from backend.prompts.service import prompt_service
+
+            prompt_text = prompt_service.render_sync(
+                "tool.failure_analysis",
+                window_minutes=str(body.window_minutes),
+                clusters_text=_render_clusters_text(groups),
+            ).text
+        except Exception as exc:  # noqa: BLE001 — prompt 渲染失败显式暴露
+            raise _HTTP(503, f"失败分析 prompt 渲染失败: {exc}")
+        last_reason = ""
+        for _attempt in range(2):  # 解析失败重试 1 次
+            try:
+                content = await _invoke_failure_llm(prompt_text)
+            except Exception as exc:  # noqa: BLE001 — LLM 失败不伪造结果
+                raise _HTTP(503, f"LLM 不可用或调用失败: {str(exc)[:300]}")
+            clusters = _normalize_failure_analysis(content, groups)
+            if clusters is not None:
+                break
+            last_reason = content.strip()[:200]
+        if clusters is None:
+            raise _HTTP(502, "失败分析解析失败（重试后仍无法得到合法 JSON）："
+                             f"{last_reason}")
+        model_name = _current_llm_model()
+    else:
+        clusters = []
+
+    input_summary = {
+        "window_minutes": body.window_minutes,
+        "groups": [
+            {"tool": g["tool"], "error_class": g["error_class"],
+             "count": g["count"], "samples": g.get("samples", [])}
+            for g in groups
+        ],
+    }
+    analysis_id = f"tfa_{uuid4().hex[:12]}"
+
+    def _write() -> dict[str, Any]:
+        from datetime import datetime, timezone
+
+        from psycopg2.extras import Json as PgJson
+
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        created_at = datetime.now(timezone.utc).isoformat()
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO ai.tool_failure_analyses "
+                    "(id, tenant_id, window_minutes, input_summary, result, "
+                    " model, created_by) "
+                    "VALUES (%(id)s, %(tenant)s, %(window)s, %(summary)s, "
+                    "        %(result)s, %(model)s, %(by)s)",
+                    {"id": analysis_id, "tenant": tenant,
+                     "window": body.window_minutes,
+                     "summary": PgJson(input_summary),
+                     "result": PgJson({"clusters": clusters}),
+                     "model": model_name, "by": actor})
+            conn.commit()
+        _audit_failure_analysis("tool_failure_analysis_run", {
+            "analysis_id": analysis_id, "window_minutes": body.window_minutes,
+            "cluster_groups": len(groups), "clusters": len(clusters),
+            "candidate_cases": sum(len(c.get("candidate_eval_cases") or [])
+                                   for c in clusters),
+        }, user_id=actor, tenant_id=tenant)
+        return {"analysis_id": analysis_id, "clusters": clusters,
+                "created_at": created_at}
+
+    return await asyncio.to_thread(
+        run_governance_mutation, request, operator,
+        "tool_failure_analysis_run", {"window_minutes": body.window_minutes},
+        _write)
+
+
+@router.get("/failure-analysis")
+async def list_failure_analyses(request: Request, limit: int = 10):
+    """本租户最近分析列表（id/时间/窗口/聚类计数/模型/完整 result）。"""
+    await require_editor_user(request)
+    limit = max(1, min(limit, 50))
+    tenant = _failure_tenant(request)
+
+    def _read() -> dict[str, Any]:
+        import json as _json
+
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, window_minutes, input_summary, result, model, "
+                    "       created_by, created_at "
+                    "FROM ai.tool_failure_analyses WHERE tenant_id = %s "
+                    "ORDER BY created_at DESC LIMIT %s",
+                    (tenant, limit))
+                rows = cur.fetchall()
+
+        def _parse(v):
+            return v if isinstance(v, (dict, list)) else _json.loads(v or "{}")
+
+        return {"count": len(rows), "analyses": [
+            {"id": r[0], "window_minutes": r[1],
+             "input_summary": _parse(r[2]), "result": _parse(r[3]),
+             "model": r[4], "created_by": r[5], "created_at": str(r[6]),
+             "cluster_count": len(_parse(r[3]).get("clusters") or [])}
+            for r in rows
+        ]}
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as e:  # noqa: BLE001 — 历史查询软失败转 503
+        raise _HTTP(503, f"失败分析查询失败: {e}")
 
 
 __all__ = ["router"]
