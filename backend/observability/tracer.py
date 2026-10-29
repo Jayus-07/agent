@@ -711,7 +711,12 @@ class TraceCollector:
 
     def list_active(self) -> list[dict]:
         """返回所有尚未 finish 的 Trace。
-        返回简易 dict 列表（不包含 spans）。"""
+        返回简易 dict 列表（不包含 spans）。
+
+        2026-10-30 /traces/active 资源级授权补齐：tags（tenant_id/user_id，
+        start() 时从权威请求上下文注入）是授权判定依据，timestamp 供前端
+        排序展示，二者必须随记录下发，缺失会导致授权端「从严拒绝」。
+        """
         active = []
         with self._lock:
             traces = list(self._active_records.values())
@@ -722,6 +727,8 @@ class TraceCollector:
                 "workflow_name": trace.workflow_name,
                 "duration_ms": trace.duration_ms,
                 "status": "running",
+                "timestamp": trace.timestamp,
+                "tags": dict(trace.tags or {}),
             })
         return active
 

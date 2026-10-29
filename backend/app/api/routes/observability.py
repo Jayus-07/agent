@@ -448,9 +448,23 @@ async def trace_stats(
 
 
 @router.get("/traces/active")
-async def list_active_traces():
-    """当前活跃的 trace（contextvar / thread_local 中）"""
-    active = trace_collector.list_active()
+async def list_active_traces(request: Request,
+                             _reader=Depends(_require_trace_reader)):
+    """当前活跃的 trace（contextvar / thread_local 中）。
+
+    2026-10-30 补齐授权（此前端点完全无守卫，是前端「运行中 BLOCKED」的根因）：
+      ① 身份闸与其他 trace 端点同源（require_user_actor，仅 JWT 用户）；
+      ② 资源级过滤复用 trace_visible_to——活跃记录的 tags（tenant_id/user_id，
+         start() 时从权威请求上下文注入）是判定依据，无归属记录仅 super_admin 可见
+         （从严口径，与其他端点一致）。
+    """
+    from backend.app.api.routes._trace_authz import trace_visible_to
+
+    ident = _reader
+    active = [
+        t for t in trace_collector.list_active()
+        if trace_visible_to(request, t, role=ident.role)
+    ]
     return {"traces": [_stored_dict_to_dto(t) for t in active]}
 
 

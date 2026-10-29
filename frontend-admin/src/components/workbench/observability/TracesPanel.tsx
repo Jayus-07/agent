@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { Download, ShoppingBag, BellRing, Scale, Wrench } from 'lucide-react'
-import { listTracesPage } from '@/api/observability'
+import { listTracesPage, listActiveTraces } from '@/api/observability'
 import TraceFilterBar from '@/components/observability/trace/TraceFilter'
 import TraceBreadcrumb from '@/components/observability/trace/TraceBreadcrumb'
 import TraceRow, { ColKey, VALID_COL_KEYS } from '@/components/observability/trace/TraceRow'
@@ -147,16 +147,20 @@ export default function TracesPanel() {
     }
     setRequestFailed(false)
     setPageOutOfRange(false)
-    if (filter.status === 'running') {
-      setTraces([])
-      setFilterOptions(EMPTY_FILTER_OPTIONS)
-      setTotalTraces(0)
-      setLastFetchedAt(null)
-      setLoading(false)
-      setRefreshing(false)
-      return
-    }
     try {
+      if (filter.status === 'running') {
+        // 运行中走专用授权端点（2026-10-30 解锁）：内存活跃记录，无分页与 facets；
+        // 服务端已按身份/租户/资源过滤，前端不再自行筛选归属。
+        const active = await listActiveTraces()
+        if (requestId !== requestSequence.current) return
+        setTraces(active)
+        setTotalTraces(active.length)
+        setFilterOptions(EMPTY_FILTER_OPTIONS)
+        setLastFetchedAt(new Date().toISOString())
+        setRequestFailed(false)
+        loadedOnce.current = true
+        return
+      }
       const until = new Date()
       const timeRange = filter.timeRange === 'custom' ? '24h' : filter.timeRange
       const since = new Date(until.getTime() - TIME_RANGE_MS[timeRange])
@@ -239,13 +243,17 @@ export default function TracesPanel() {
 
   const filteredBase = useMemo(
     // 时间、状态、来源、Agent/Workflow 和检索条件均已由服务端应用；排序仅作用于当前页。
-    () => traces.filter((trace) => getRunStatus(trace) !== 'running'),
-    [traces],
+    // 运行中视图的数据源是授权活跃端点，行全部为 running，过滤方向取反。
+    () => filter.status === 'running'
+      ? traces.filter((trace) => getRunStatus(trace) === 'running')
+      : traces.filter((trace) => getRunStatus(trace) !== 'running'),
+    [traces, filter.status],
   )
 
   const hasUnverifiedRunningRecords = useMemo(
-    () => traces.some((trace) => getRunStatus(trace) === 'running'),
-    [traces],
+    () => filter.status !== 'running'
+      && traces.some((trace) => getRunStatus(trace) === 'running'),
+    [traces, filter.status],
   )
 
   const filtered = useMemo(() => {
@@ -419,17 +427,11 @@ export default function TracesPanel() {
               ))}
             </fieldset>
           )}
-          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {filter.status === 'running' ? '暂不可统计' : `${total} 条`} / 当前页 {traces.length} 条</span>
+          <span className="text-sm text-text-secondary" aria-live="polite">当前筛选 {total} 条 / 当前页 {traces.length} 条</span>
         </div>
       </div>
 
-      {filter.status === 'running' ? (
-        <section className="rounded-md border border-amber-300 bg-amber-50 p-6" role="status">
-          <h3 className="font-semibold text-amber-950">运行中记录暂不可安全查询</h3>
-          <p className="mt-1 text-sm text-amber-900">当前活跃 Trace 接口缺少资源级授权。为避免越权读取或把历史列表当作实时数据，此筛选标记为 BLOCKED，也不显示伪造的空结果。</p>
-          <button type="button" onClick={() => updateFilter({ ...filter, status: 'all' })} className="mt-3 min-h-10 rounded-md border border-amber-400 bg-white px-3 text-sm font-medium text-amber-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-600">清除运行中筛选</button>
-        </section>
-      ) : pageOutOfRange ? (
+      {pageOutOfRange ? (
         <section className="rounded-md border border-amber-300 bg-amber-50 p-6" aria-live="polite">
           <h3 className="font-medium text-amber-950">当前页已无匹配记录</h3>
           <p className="mt-1 text-sm text-amber-900">记录总数在查询期间发生变化，已尝试一次回退；请返回上一页或刷新。</p>
