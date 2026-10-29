@@ -825,3 +825,40 @@ merge feat/toolgov-semantic 实际解掉（并集保留，计数 63，守卫与�
   双 draft 先应用者胜/success 拒改/新增步骤与写操作拒绝/travel 越权
   拒绝/级联重发/漂移复核/归属隔离/列表不回传完整计划）。容器级
   UNVERIFIED（合并授权后 rebuild）。
+
+## 增强批收官：#121–#125 全部合并 + 本机部署验证（2026-10-30）
+
+用户授权后按序合并（#121 → #125，期间因 #121 以 merge commit 进 main，
+各分支第三轮补合 main 解计数/登记冲突后逐个合并，全部 MERGED）：
+
+- **#121** AI 语义契约（#19）、**#122** AI 失败分析（#20）、**#123**
+  结果引用+字段映射（#25）、**#124** 自动任务/Webhook（#27）、
+  **#125** 运行中多轮计划修订（#29）——32 项决策增强批全部收官。
+- main 终态：迁移 120–124、prompt 注册表 64 键、/plan-revisions 等新
+  端点随部署生效。
+
+### CI 基线专项（同日完成，PR #126–#132 全部合并）
+
+- **#126** main 基线漂移清理：重排计费静默流失（USAGE_SOURCE_PROVIDER
+  漏导入，生产 bug）+ deadline 断言两副本 + 孤儿测试删除 + 同名测试
+  包冲突 + evaluation-v2 suite 引用对齐 + OCR 依赖入 lock + fixture
+  校验移至回归工作流；
+- **#127** 每周全量回归 workflow（Full Regression）+ AGENTS.md 第 7/8
+  条（改动一律走 PR + 连带更新要求）+ secret-scan merge-base 修正；
+- **#128** 全量环境补建 004 兼容库；**#129/#130** 全量回归改 13-suite
+  matrix 分治（单 job 全量 180min 跑不完实证）；**#131/#132**
+  feedback import 时 DDL 并发竞态根修（生产多 worker 启动隐患）。
+
+### 全量暗债基线（v1，2026-10-30）
+
+12/13 suite 一轮出图：共 108 失败（并发敏感/环境缺失/真回归三类待
+专项定性）；api 收集崩溃已根修；api/rag 挂死用例密集（撑爆 50min
+job 上限）待专项拿清单。后续按 suite 单独 dispatch 收敛。
+
+### 部署验证
+
+- devctl rebuild 完成，backend/mcp-service 等 healthy；
+- /health：migrations applied_max=124_plan_revisions.sql，
+  schema_consistency ok（72 对象零缺失）；
+- ai.plan_revisions / task_result_refs / tool_failure_analyses /
+  user_automations 四表落库确认（120 为既有表加列）。
