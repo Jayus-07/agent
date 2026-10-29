@@ -87,6 +87,9 @@ _CELERY_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "tasks.reindex_document": ("rag_index", "workflow_binding"),
     "tasks.rebuild_embeddings": ("rag_index", "workflow_binding"),
     "memory.extract": ("maintenance", "workflow_binding"),
+    # 决策 #27：自动任务触发器（只派发不执行 Agent——真正执行仍走
+    # tasks.execute_agent 到 interactive_agent 队列）。
+    "automations.run": ("maintenance", "workflow_binding"),
 }
 
 # beat / 手动维护任务 → workload_class（全部显式登记，禁止依赖 default queue）。
@@ -111,6 +114,9 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "budget.reconciliation_check": ("maintenance", "beat_binding"),
     "model.price_page_monitor": ("report", "beat_binding"),
     "prompts.poll_github_eval": ("maintenance", "prompt_eval_polling"),
+    # 决策 #27：用户自动任务 cron 扫描 + result_refs 每日清理（#25 尾巴）。
+    "automations.scan": ("maintenance", "beat_binding"),
+    "automations.cleanup_result_refs": ("maintenance", "beat_binding"),
 }
 
 # dispatch_type 合法词表（observability：每次路由决策必带）
