@@ -49,6 +49,32 @@ def pytest_addoption(parser):
     )
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """会话收尾时自愈 embedding 迁移验收测试的崩溃残留（跨进程兜底）。
+
+    test_embedding_migration_worker 会临时劫持 embedding 角色绑定到
+    'migration-test-*' 供应商，进程被硬杀时 fixture finally 不执行，
+    残留会让运行栈 embedding 热切换到死端口（2026-10-30 实证事故）。
+    本守卫在任意测试会话结束时按时间阈值清扫陈旧残留（并行安全，
+    见 _migration_residue_guard 模块 docstring）。守卫自身任何失败
+    只打提示，绝不影响测试退出码。
+    """
+    try:
+        from backend.tests.rag._migration_residue_guard import (
+            cleanup_residue,
+            orphan_binding_warning,
+        )
+
+        deleted = cleanup_residue()
+        if any(deleted.values()):
+            print(f"[residue-guard] 已清扫历史崩溃残留: {deleted}")
+        orphan = orphan_binding_warning()
+        if orphan:
+            print(f"[residue-guard] 警告：{orphan}")
+    except Exception as e:  # noqa: BLE001 — 守卫失败不能反过来弄挂测试
+        print(f"[residue-guard] 跳过（{type(e).__name__}: {e}）")
+
+
 def pytest_collection_modifyitems(config, items):
     """quality_gate 用例默认跳过，显式 opt-in 才运行。
 
