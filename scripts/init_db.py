@@ -330,6 +330,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "121_tool_failure_analysis.sql": "memory",
     # 任务级受控结果引用（决策 #25）：大结果 offload 落库 + 租户校验 + 24h 失效。
     "122_task_result_refs.sql": "memory",
+    # 用户自动任务（决策 #27）：cron/webhook 触发 + 事件去重账本。
+    "123_user_automations.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
