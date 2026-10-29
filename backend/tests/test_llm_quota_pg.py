@@ -79,3 +79,54 @@ def test_pg_quota_hard_limit_is_atomic_and_settled(pg_quota_policy):
             amount_cny=Decimal("0.020000"),
             request_id="quota-pg-test-2",
         )
+
+
+def test_concurrent_reserve_and_settle_never_deadlock(pg_quota_policy):
+    """回归：reserve 与 settle/release 并发不得死锁。
+
+    2026-10-29 生产实测 21 次 deadlock：reserve 按 user→tenant 顺序 upsert
+    账本行，而 settle/release 的 reservations 行读取无 ORDER BY，按索引
+    （tenant 在前）更新账本行 → 双向互持行锁。修复后所有路径统一按
+    user→tenant、day→month 加锁，锁序一致则 AB-BA 结构上不可能。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from backend.infra.llm.quota import PostgresQuotaStore
+
+    store = PostgresQuotaStore()
+    user_id = "quota-user-" + pg_quota_policy
+    rounds = 40
+    errors = []
+
+    def _reserve_then_release():
+        for i in range(rounds):
+            try:
+                r = store.reserve(
+                    user_id=user_id, tenant_id=pg_quota_policy,
+                    amount_cny=Decimal("0.001"),
+                    request_id=f"dlock-rel-{i}",
+                )
+                store.release(r)
+            except Exception as exc:  # 死锁被包装为 QuotaConfigurationError
+                errors.append(f"release#{i}: {exc}")
+                return
+
+    def _reserve_then_settle():
+        for i in range(rounds):
+            try:
+                r = store.reserve(
+                    user_id=user_id, tenant_id=pg_quota_policy,
+                    amount_cny=Decimal("0.001"),
+                    request_id=f"dlock-set-{i}",
+                )
+                store.settle(r, Decimal("0.001"))
+            except Exception as exc:
+                errors.append(f"settle#{i}: {exc}")
+                return
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(_reserve_then_release), pool.submit(_reserve_then_settle)]
+        for f in futures:
+            f.result(timeout=120)
+
+    assert errors == [], f"并发预占/结算出现失败: {errors}"
