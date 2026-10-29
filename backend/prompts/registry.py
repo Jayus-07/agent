@@ -250,6 +250,18 @@ _register(PromptSpec(
     default_file="router_tool_selector.yaml",
 ))
 
+# AI 失败分析（决策 #20）：管理端对失败聚类做归因与优化建议，输入只有
+# (tool, error_class) 聚类计数与截断摘要（URL 已清洗），绝不注入用户参数
+# 原文与凭据；输出为建议 JSON，不自动应用任何正式配置。
+_register(PromptSpec(
+    key="tool.failure_analysis",
+    name="Tool 失败分析 Prompt",
+    category="router",
+    risk_level="medium",
+    variables=(R("window_minutes"), R("clusters_text")),
+    default_file="tool_failure_analysis.yaml",
+))
+
 # AI 语义契约建议（决策 #19）：管理端生成工具语义契约候选，仅读工具
 # 元数据（名称/描述/Schema/示例/连接名/操作类型），绝不注入凭据与 URL。
 _register(PromptSpec(

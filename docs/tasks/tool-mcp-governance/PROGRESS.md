@@ -685,3 +685,76 @@ main 并重建验证（迁移 117 生效、admin 容器归主栈）。
   design-tokens 源码扫描 5s 超时属仓库已知的负载抖动，单跑与串行均绿）；
 - 容器级 UNVERIFIED（共享栈刚被并行会话重建，避免互相干扰；合并授权后
   rebuild 时生效；迁移 120 已对本机库执行）。
+## Batch 7：AI 失败分析——聚类归因与候选评测用例（2026-10-28，决策 #20）
+
+分支 `feat/toolgov-failure-analysis`（基于 84f3823 = origin/main；与
+OPEN 的 #121 语义分支并行开发，合并时 registry.py / promptGroups.ts /
+test_registry_defaults.py / page.test.tsx 预期有小冲突面，见下）。
+
+### 后端
+
+- 迁移 121：`ai.tool_failure_analyses`（id/tenant_id/window_minutes/
+  input_summary/result/model/created_by/created_at；登记 init_db + CI
+  清单；已对本机库 5433 执行）。input_summary 只存聚类计数与摘要，
+  result 存 LLM 完整 JSON；7 天后参考价值有限，不自动清理（迁移注释
+  说明手动裁剪口径）；
+- prompt 注册：`tool.failure_analysis`（defaults/tool_failure_analysis.yaml
+  + registry PromptSpec；promptGroups.ts「工具治理」白名单同步；本分支
+  注册表 61→62 键，#121 合并后 63）；
+- `admin_tools.py` 两个端点（require_admin_user + run_governance_mutation
+  + security_events 审计）：
+  - `POST /admin/tools/failure-analysis`：body {window_minutes 5-1440 默认
+    60, limit 10-100 默认 50}，非法 400；聚类复用 /errors 同源数据路径
+    （进程内 trace tool_call span 直读），按 (tool, error_class) 聚类计数
+    取 top 10 组、每组 2-3 条代表性错误摘要（截断 300 字符 + URL 清洗）；
+    **只读 input.tool/capability，绝不读 input.params**；prompt key
+    `tool.failure_analysis`，要求严格 JSON clusters（attribution /
+    suggestions≤3 / candidate_eval_cases 合计≤6）；解析失败重试 1 次 →
+    502、LLM 不可用 → 503，失败不落库；空聚类跳过 LLM 直接落一条空分析；
+    结果落 ai.tool_failure_analyses 并返回 {analysis_id, clusters,
+    created_at}；
+  - `GET /admin/tools/failure-analysis?limit=10`：本租户最近分析列表
+    （editor 档，id/时间/窗口/聚类计数/model/完整 result）；
+- 防幻觉：LLM 返回的 (tool, error_class) 不在输入聚类中的一律丢弃。
+
+### 前端
+
+- `api/failureAnalysis.ts`：runFailureAnalysis（mutationRequest 幂等键）+
+  getFailureAnalyses 两封装与全套类型；
+- /tools「运行质量与失败」subTab 新增「AI 失败分析」区块（AssetSection）：
+  时间窗选择（60/360/1440 分钟）+「生成分析」；结果面板按聚类卡渲染
+  （tool/错误分类/归因/修复建议/候选评测用例表）；最近分析列表点击回看；
+  生成中/错误/空态齐全；候选用例区常驻标注「仅建议——应用需走评测中心
+  审核与回归」，区块说明明确「不含用户参数原文与凭据」。
+
+### 边界（决策 #20 红线）
+
+- 只生成建议与候选评测集（evalCandidate），不自动应用/改写任何正式
+  Prompt / 语义契约 / Golden 数据；
+- 送 LLM 的输入只有 (tool, error_class) 聚类计数与截断 300 字符错误摘要
+  （URL 已清洗）：span `input.params` 一概不读 + `_redact_urls` 清洗 +
+  落库的 input_summary 同口径——测试断言手机号/api_key/URL 主机名均不
+  出现在 prompt 与 input_summary 中。
+
+### 验证
+
+- `test_admin_failure_analysis.py`（pg）7 passed：聚类计数 + prompt 数据
+  边界（敏感 params/凭据/URL 不进 prompt）+ 落库 + GET 回显；时间窗过滤
+  （窗外失败不计入）+ 防幻觉丢弃；空聚类跳过 LLM（fake.calls==0）；
+  垃圾 ×2 → 502 且不落库；LLM 抛异常 → 503；非法 window/limit → 400；
+  写接口 admin 门禁 / 列表 editor 可读；
+- 回归：failure_analysis + discovery + failure_probe + prompts registry +
+  bundles **40 passed**；`-k admin` 全口径 188 passed / 5 failed——5 个
+  失败（rbac_api 4 + admin_mcp overview 1）经 origin/main 干净基线对照
+  实验证实为既有隔离抖动（基线同口径同 5 个失败），与本改动无关；
+- 前端 tsc 0 错误；tools 页 12 用例全绿（新增 2 例：AI 区块生成调用 +
+  聚类卡/边界标注；空聚类 + 最近分析回看）；vitest 全量 83 文件 /
+  576 用例全绿（基线 83 文件 / 574 用例 + 新增 2 例）；
+- 容器级 UNVERIFIED（本批为管理端增量端点 + 静态前端；迁移 121 已对本机
+  库执行；合并授权后 rebuild 生效）。
+
+### 合并注意（与 OPEN 的 #121 并行）
+
+- registry.py / promptGroups.ts / test_registry_defaults.py（61↔62 键）/
+  page.test.tsx 预期小冲突：#121 合并后注册表为 63 键、tools 页测试 mock
+  需并集；两批改动文件集不重叠（#121 全在 admin_mcp.py / mcp.ts / 抽屉）。

@@ -13,6 +13,8 @@ const reviewMcpTool = vi.hoisted(() => vi.fn())
 const grantMcpTool = vi.hoisted(() => vi.fn())
 const disableMcpTool = vi.hoisted(() => vi.fn())
 const testInvokeMcpTool = vi.hoisted(() => vi.fn())
+const runFailureAnalysis = vi.hoisted(() => vi.fn())
+const getFailureAnalyses = vi.hoisted(() => vi.fn())
 const suggestMcpSemantic = vi.hoisted(() => vi.fn())
 const saveMcpSemanticDraft = vi.hoisted(() => vi.fn())
 const approveMcpSemantic = vi.hoisted(() => vi.fn())
@@ -27,6 +29,10 @@ vi.mock('@/api/governance', () => ({
   getToolContractChanges,
   getToolErrors,
   runToolFailureProbe,
+}))
+vi.mock('@/api/failureAnalysis', () => ({
+  runFailureAnalysis,
+  getFailureAnalyses,
 }))
 vi.mock('@/api/mcp', () => ({
   getMcpTools,
@@ -167,6 +173,22 @@ beforeEach(() => {
     tool_id: 7, capability: 'zhihu.get_answers', product_key: 'internal',
     tool_status: 'success', error_code: '', error_message: '', elapsed_ms: 42, result: { ok: true },
   })
+  runFailureAnalysis.mockResolvedValue({
+    analysis_id: 'tfa_abc123def456',
+    clusters: [{
+      tool: 'map.lookup',
+      error_class: 'timeout',
+      attribution: '上游超时预算不足',
+      suggestions: ['提高超时预算', '增加降级路径'],
+      candidate_eval_cases: [{
+        question: '查询上海门店的营业时间',
+        expected_capability: 'map.lookup',
+        expectation_note: '应在超时预算内返回',
+      }],
+    }],
+    created_at: '2026-10-28T12:00:00+00:00',
+  })
+  getFailureAnalyses.mockResolvedValue({ count: 0, analyses: [] })
   suggestMcpSemantic.mockResolvedValue({
     tool_id: 7,
     draft: {
@@ -489,6 +511,77 @@ describe('Tool 治理页面（V2 三 subTab）', () => {
     expect(container.textContent).toContain('失败 Tool')
     expect(container.textContent).toContain('失败原因分布')
     expect(container.textContent).toContain('超时')
+  })
+
+  it('quality subTab AI 失败分析：生成调用、聚类卡渲染与「仅建议」边界标注', async () => {
+    const container = await mountPage('tab=quality')
+
+    // 区块常驻：说明文案含数据边界（不含用户参数原文与凭据）
+    expect(container.textContent).toContain('AI 失败分析')
+    expect(container.textContent).toContain('不含用户参数原文与凭据')
+    expect(container.textContent).toContain('最近分析')
+
+    // 生成分析：默认 60 分钟窗
+    const windowSelect = container.querySelector<HTMLSelectElement>('select[aria-label="分析时间窗"]')
+    expect(windowSelect).toBeTruthy()
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成分析'))
+    expect(button).toBeTruthy()
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+    })
+
+    expect(runFailureAnalysis).toHaveBeenCalledWith({ window_minutes: 60 })
+    // 聚类卡：工具/错误分类/归因/修复建议/候选用例
+    expect(container.textContent).toContain('map.lookup')
+    expect(container.textContent).toContain('上游超时预算不足')
+    expect(container.textContent).toContain('提高超时预算')
+    expect(container.textContent).toContain('查询上海门店的营业时间')
+    // 候选用例仅建议的边界标注常驻
+    expect(container.textContent).toContain('应用需走评测中心审核与回归')
+    // 生成后刷新最近分析列表
+    expect(getFailureAnalyses).toHaveBeenCalled()
+  })
+
+  it('quality subTab AI 失败分析：空聚类展示无失败提示，可回看最近分析', async () => {
+    runFailureAnalysis.mockResolvedValue({
+      analysis_id: 'tfa_empty000001',
+      clusters: [],
+      created_at: '2026-10-28T13:00:00+00:00',
+    })
+    getFailureAnalyses.mockResolvedValue({
+      count: 1,
+      analyses: [{
+        id: 'tfa_hist0000001',
+        window_minutes: 360,
+        input_summary: {},
+        result: { clusters: [] },
+        model: 'doubao-seed-2.0-mini',
+        created_by: 'user:u-admin',
+        created_at: '2026-10-28T11:00:00+00:00',
+        cluster_count: 0,
+      }],
+    })
+    const container = await mountPage('tab=quality')
+
+    const button = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('生成分析'))
+    await act(async () => {
+      button!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('没有 Tool 失败记录')
+
+    // 最近分析点击回看：结果面板切到历史分析 id
+    const historyButton = Array.from(container.querySelectorAll('button'))
+      .find((item) => item.textContent?.includes('窗口 360 分钟'))
+    expect(historyButton).toBeTruthy()
+    await act(async () => {
+      historyButton!.click()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('分析 tfa_hist0000001')
   })
 
   it('registry 搜索词过滤合并目录并同步到 URL', async () => {
