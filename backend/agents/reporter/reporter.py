@@ -253,6 +253,15 @@ def generate_final_answer(
     Returns:
         最终 Markdown 格式回答（含参考文献）
     """
+    # 决策 #25 关键不变式：LLM 上下文只见引用摘要。步骤输出里的任务级
+    # 结果引用对象在此统一替换为摘要文本，后续所有渲染/喂 LLM 路径
+    # （结构化表格、数据摘要、参考文献提取、完整 LLM 路径）都基于摘要
+    # 后的形态工作；真实数据只在受控解引用点（下游步骤参数注入）出现。
+    from backend.orchestration.result_refs import (
+        materialize_step_results_for_context,
+    )
+    step_results = materialize_step_results_for_context(step_results)
+
     # —— 全部失败 / 无有效输出：按 Tool Runtime 的结构化状态给安全话术 ——
     all_success = {
         sid: sr for sid, sr in step_results.items()
@@ -736,6 +745,12 @@ def _append_degraded_disclosure(answer: str, step_results: dict) -> str:
 
 def render_step_results_deterministically(step_results: dict) -> str:
     """Runner 兜底与 Direct/Workflow 共用的纯规则安全渲染。"""
+    # 决策 #25：引用对象在此替换为摘要文本（同 generate_final_answer 入口，
+    # 保证 direct/workflow 确定性渲染也不把引用对象透成"无法展示"文案）
+    from backend.orchestration.result_refs import (
+        materialize_step_results_for_context,
+    )
+    step_results = materialize_step_results_for_context(step_results)
     sections = []
     for step_id, sr in sorted((step_results or {}).items()):
         kind = _result_kind(sr)
