@@ -17,7 +17,7 @@ afterEach(() => {
 })
 
 describe('TraceFilterBar', () => {
-  it('将无法安全查询的运行中筛选标记为禁用和 BLOCKED', async () => {
+  it('运行中筛选解锁为可用选项（活跃端点已补资源级授权）', async () => {
     const container = document.createElement('div')
     document.body.appendChild(container)
     const root = createRoot(container)
@@ -42,8 +42,8 @@ describe('TraceFilterBar', () => {
     })
 
     const runningOption = container.querySelector<HTMLOptionElement>('option[value="running"]')
-    expect(runningOption?.disabled).toBe(true)
-    expect(runningOption?.textContent).toContain('BLOCKED')
+    expect(runningOption?.disabled).toBe(false)
+    expect(runningOption?.textContent).not.toContain('BLOCKED')
     expect(container.querySelector('select[aria-label="Agent 或 Workflow"] option[value="workflow-page-two"]')).toBeTruthy()
     expect(container.querySelector('select[aria-label="模型"] option[value="model-page-two"]')).toBeTruthy()
     expect(container.querySelector('select[aria-label="知识库"] option[value="kb-page-two"]')).toBeTruthy()

@@ -26,7 +26,8 @@ const STATUS_OPTIONS: { value: FilterType["status"]; label: string; disabled?: b
   { value: "timeout", label: "超时" },
   { value: "cancelled", label: "取消" },
   { value: "rejected", label: "拒绝" },
-  { value: "running", label: "运行中（BLOCKED：缺少安全的活跃 Trace 查询）", disabled: true },
+  // 2026-10-30 解锁：/traces/active 已补资源级授权，运行中走专用实时端点
+  { value: "running", label: "运行中（实时）" },
   { value: "unknown", label: "状态未知" },
 ];
 

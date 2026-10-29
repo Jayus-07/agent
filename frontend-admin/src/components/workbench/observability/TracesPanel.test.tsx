@@ -7,6 +7,7 @@ import { filterRuntimeRecords, summarizeRuntimeSample } from '@/lib/observabilit
 
 const mocks = vi.hoisted(() => ({
   listTracesPage: vi.fn().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 20, has_more: false, retention_limit: 5000 }),
+  listActiveTraces: vi.fn().mockResolvedValue([]),
   toast: { error: vi.fn(), success: vi.fn(), info: vi.fn(), warning: vi.fn(), show: vi.fn() },
   navigation: {
     pathname: '/observability/monitoring',
@@ -15,7 +16,10 @@ const mocks = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('@/api/observability', () => ({ listTracesPage: mocks.listTracesPage }))
+vi.mock('@/api/observability', () => ({
+  listTracesPage: mocks.listTracesPage,
+  listActiveTraces: mocks.listActiveTraces,
+}))
 vi.mock('@/components/shared/Toast', () => ({ useToast: () => mocks.toast }))
 vi.mock('next/link', () => ({
   default: ({ href, children, ...props }: { href: string; children: ReactNode }) => <a href={href} {...props}>{children}</a>,
@@ -47,6 +51,7 @@ afterEach(async () => {
   mounted?.container.remove()
   mounted = null
   mocks.listTracesPage.mockReset().mockResolvedValue({ traces: [], total: 0, offset: 0, limit: 20, has_more: false, retention_limit: 5000 })
+  mocks.listActiveTraces.mockReset().mockResolvedValue([])
   Object.values(mocks.toast).forEach((fn) => fn.mockClear())
   mocks.navigation.params = new URLSearchParams()
   mocks.navigation.router.push.mockClear()
@@ -184,24 +189,30 @@ describe('TracesPanel', () => {
     expect(container.textContent).toContain('第 2 / 2 页')
   })
 
-  it('保留旧 URL 的运行中筛选，但明确标记 BLOCKED 而不报告空结果', async () => {
+  it('运行中筛选走授权活跃端点并渲染实时记录', async () => {
     mocks.navigation.params = new URLSearchParams('tab=traces&status=running')
+    mocks.listActiveTraces.mockResolvedValue([
+      makeTrace('running', 'active-live-1'),
+      makeTrace('running', 'active-live-2'),
+    ] satisfies TraceRecord[])
     const container = await mountPanel()
 
-    expect(container.textContent).toContain('运行中记录暂不可安全查询')
-    expect(container.textContent).toContain('BLOCKED')
-    expect(container.textContent).toContain('当前筛选 暂不可统计')
-    expect(container.textContent).not.toContain('当前筛选条件下无匹配记录')
-    expect(container.textContent).not.toContain('当前授权范围内没有运行记录')
+    expect(mocks.listActiveTraces).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-trace-id="active-live-1"]')).toBeTruthy()
+    expect(container.querySelector('[data-trace-id="active-live-2"]')).toBeTruthy()
+    expect(container.textContent).toContain('当前筛选 2 条')
+    expect(container.textContent).not.toContain('BLOCKED')
+    // 列表查询走留存端点；运行中不得重复请求或把历史 running 当实时数据
+    expect(mocks.listTracesPage).not.toHaveBeenCalled()
+  })
 
-    const clearButton = Array.from(container.querySelectorAll('button'))
-      .find((button) => button.textContent?.includes('清除运行中筛选'))
-    expect(clearButton).toBeTruthy()
-    await act(async () => clearButton?.click())
-    expect(mocks.navigation.router.replace).toHaveBeenCalledWith(
-      expect.stringContaining('status=all'),
-      { scroll: false },
-    )
+  it('活跃端点失败时明确报错而非伪装空结果', async () => {
+    mocks.navigation.params = new URLSearchParams('tab=traces&status=running')
+    mocks.listActiveTraces.mockRejectedValue({ status: 503 })
+    const container = await mountPanel()
+
+    expect(container.textContent).toContain('执行记录暂不可用')
+    expect(container.textContent).not.toContain('当前筛选条件下无匹配记录')
   })
 
   it('默认列表与 CSV 导出排除历史 running 并解释其状态未确认', async () => {
