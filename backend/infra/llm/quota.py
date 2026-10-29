@@ -1053,11 +1053,16 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    # 账本行锁序必须与 reserve（user→tenant、day→month）一致：
+                    # 本查询无 ORDER BY 时按索引返回 tenant 在前，与 reserve
+                    # 互持行锁 → AB-BA 死锁（2026-10-29 生产实测 21 次）
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
                                    period_start, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
+                            ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
                             FOR UPDATE""",
                         (reservation.reservation_id,),
                     )
@@ -1107,11 +1112,15 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    # 同 settle：账本行锁序必须与 reserve（user→tenant、day→month）
+                    # 一致，乱序会与 reserve 的 upsert 互锁（AB-BA 死锁）
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
                                    period_start, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
+                            ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
                             FOR UPDATE""",
                         (reservation.reservation_id,),
                     )
@@ -1207,11 +1216,14 @@ class PostgresQuotaStore:
                     )
                     ids = [row[0] for row in cur.fetchall()]
                     for reservation_pk in ids:
+                        # 同 settle：锁序与 reserve 一致，避免互锁
                         cur.execute(
                             f"""SELECT scope_type, scope_id, period_type,
                                        period_start, reserved_cny
                                 FROM {self._reservations}
                                 WHERE id = %s AND status = 'reserved'
+                                ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
+                                         CASE period_type WHEN 'day' THEN 0 ELSE 1 END
                                 FOR UPDATE""",
                             (reservation_pk,),
                         )

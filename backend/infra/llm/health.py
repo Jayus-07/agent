@@ -341,17 +341,16 @@ def _probe_chat(model_name: str) -> None:
 def _probe_embedding(model_name: str) -> None:
     """单条短文本 embedding 探测。
 
-    按专项绑定构建**一次性客户端**，不动全局单例 —— 探测动作绝不能把
-    线上正在用的 embedding 实例热切换掉。
+    用 registered_binding 按模型从注册表派生**一次性客户端**，不动全局
+    单例 —— 探测动作绝不能把线上正在用的 embedding 实例热切换掉。
+    派生绑定（而非角色绑定）使任意已登记 embedding 模型都可探测：
+    原实现拒绝非绑定模型（RuntimeError→degraded），定时扫描把所有
+    非绑定 embedding 模型误报为 degraded。
     """
     from backend.infra.llm import credentials as credentials_mod
     from backend.infra.llm import specialized as specialized_mod
 
-    binding = specialized_mod.resolve_binding("embedding")
-    if binding is None or binding.model_name != model_name:
-        raise RuntimeError(
-            f"embedding 角色当前绑定不是 {model_name}，仅支持探测当前绑定模型"
-        )
+    binding = specialized_mod.registered_binding("embedding", model_name)
     creds = credentials_mod.resolve_credentials(
         binding.provider_id, model_name=binding.model_name)
     if not creds.api_key:

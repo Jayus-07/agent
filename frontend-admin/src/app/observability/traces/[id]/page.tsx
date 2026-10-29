@@ -182,6 +182,8 @@ export default function TraceDetailPage() {
   const errorStepId = safeRuntimeLabel(err.error_node, "");
   const errorCode = safeDiagnosticCode(err.code);
   const hasErrorCode = typeof err.code === "string" && err.code.trim().length > 0;
+  const errorMessage = typeof err.message === "string" ? err.message.trim() : "";
+  const errorClass = typeof err.class === "string" ? err.class.trim() : "";
 
   // 主 Trace 与远端子 Trace 共用一条时间线；子 Trace Span 会映射到其工具调用下。
   const childSpans = mergeChildTraceSpans(spans, children);
@@ -295,7 +297,7 @@ export default function TraceDetailPage() {
               <h2 className="text-sm font-semibold text-slate-700 mb-3">一、业务结果</h2>
               <div className="space-y-3">
                 <TraceOutcomePanel trace={trace} />
-                <InputOutputPanel question={trace.question} answer={trace.answer_preview} error={trace.error} />
+                <InputOutputPanel question={trace.question} answer={trace.answer_preview} answerLen={trace.answer_len} error={trace.error} />
               </div>
             </section>
 
@@ -384,7 +386,12 @@ export default function TraceDetailPage() {
                   <div className="flex items-start justify-between">
                     <div>
                       <p className="font-semibold text-red-700">{errorCode ? `错误码：${errorCode}` : hasErrorCode ? "错误码文本已隐藏" : "错误码：未采集"}</p>
-                      <p className="text-sm text-red-600 mt-1">错误消息已隐藏；请通过受控服务端日志排查。</p>
+                      {errorMessage ? (
+                        <p className="text-sm text-red-600 mt-1 whitespace-pre-wrap break-words">{errorMessage}</p>
+                      ) : (
+                        <p className="text-sm text-red-600 mt-1">错误消息未采集；请结合下方失败步骤与受控服务端日志排查。</p>
+                      )}
+                      {errorClass && <p className="text-xs text-red-500 mt-1">错误类别：{errorClass}</p>}
                     </div>
                     <span className="text-xs text-red-400 font-mono">{formatTime(trace.timestamp)}</span>
                   </div>

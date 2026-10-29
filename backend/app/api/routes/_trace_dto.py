@@ -241,6 +241,45 @@ def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
     return dto
 
 
+def _derive_trace_error(spans: list, stored_error) -> dict:
+    """从失败 span 聚合派生规范化 error（读取层兜底，不改存储与采集链）。
+
+    数据实证（2026-10-30）：错误 trace 顶层 error 常为 {}、span.errors 为 []，
+    真正的错误码/消息在失败 span 的 metrics.error_code / metrics.error_class /
+    metrics.error 与 events[].message 中——无人聚合导致前端恒显「错误码未采集」。
+    这里取第一个失败 span 聚合；存量顶层 error 已有的键优先，保持既有口径。
+    """
+    base = dict(stored_error) if isinstance(stored_error, dict) else {}
+    for span in spans or []:
+        get = lambda k, d=None: span.get(k, d) if isinstance(span, dict) else getattr(span, k, d)
+        if get("status", "") != "error":
+            continue
+        metrics = get("metrics", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+        message = str(metrics.get("error") or "")
+        if not message:
+            for ev in get("events", []) or []:
+                ev_get = lambda k, d=None: ev.get(k, d) if isinstance(ev, dict) else getattr(ev, k, d)
+                if ev_get("level", "") == "error" and ev_get("message", ""):
+                    message = str(ev_get("message"))
+                    break
+        derived = {
+            "code": str(metrics.get("error_code") or "") or str(base.get("code") or ""),
+            "class": str(metrics.get("error_class") or "") or str(base.get("class") or ""),
+            # 错误消息截断到 200 字：与 answer_preview 同级的展示字段，防止异常
+            # 文本（可能内嵌工具参数）撑爆列表/详情
+            "message": (message or str(base.get("message") or ""))[:200],
+            "error_node": str(get("name", "") or "") or str(base.get("error_node") or ""),
+            "retry_count": metrics.get("retries", metrics.get("retry_count")),
+        }
+        if derived["retry_count"] is None:
+            derived["retry_count"] = base.get("retry_count")
+        # 存量顶层 error 的非空键优先（不覆盖既有采集口径）
+        return {**derived, **{k: v for k, v in base.items() if v not in (None, "")}}
+    return base
+
+
 def to_trace_dto(t, detail_level: str | None = None) -> dict:
     """TraceRecord / dict → frontend TraceRecord DTO."""
     get = lambda k, d=None: t.get(k, d) if isinstance(t, dict) else getattr(t, k, d)
@@ -285,7 +324,7 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         # 记账本位币主口径（Billing V2）：record.cost_cny 权威，usage dict 兜底；
         # 存量 stored trace 无该值 → None，前端显示 —（混算 cost_usd 不再展示）
         "cost_cny": get("cost_cny") or (get("usage", {}) or {}).get("cost_cny"),
-        "error": get("error", {}),
+        "error": _derive_trace_error(all_spans, get("error", {})),
         "metadata": get("metadata", {}),
         "status": stored_status,
         "workflow_name": get("workflow_name", ""),
@@ -326,7 +365,7 @@ def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
         # 本位币口径（2026-10-01）：新写入 trace 的 usage 带精确 cost_cny；
         # 存量 stored trace 无该值 → None，前端显示 —（混算 cost_usd 不再展示）
         "cost_cny": (d.get("usage", {}) or {}).get("cost_cny"),
-        "error": d.get("error", {}),
+        "error": _derive_trace_error(d.get("spans", []) or [], d.get("error", {})),
         "metadata": d.get("metadata", {}),
         "status": d.get("status", "success"),
         "workflow_name": d.get("workflow_name", ""),
