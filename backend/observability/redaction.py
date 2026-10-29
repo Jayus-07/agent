@@ -65,6 +65,9 @@ def redact_trace_dto(dto: dict, level: str | None = None) -> dict:
         redacted["answer_preview"] = mask_text(redacted.get("answer_preview", ""))
         redacted["metadata"] = _mask_dict(redacted.get("metadata", {}))
         redacted["tags"] = _mask_dict(redacted.get("tags", {}))
+        # 派生 error（2026-10-30 错误诊断链路）：message 可能内嵌工具参数/业务
+        # 数据，masked 级别与 question 同口径做 PII 打码
+        redacted["error"] = _mask_dict(redacted.get("error", {}))
 
         for span in redacted.get("spans", []):
             span["input"] = _mask_dict(span.get("input"))
@@ -84,6 +87,10 @@ def redact_trace_dto(dto: dict, level: str | None = None) -> dict:
             if "llm_call" in span:
                 span["llm_call"]["prompt_text"] = ""
                 span["llm_call"]["response_text"] = ""
+        # summary 级别只保留错误元数据（code/class/node），剥离消息原文
+        summary_error = redacted.get("error")
+        if isinstance(summary_error, dict):
+            summary_error["message"] = ""
 
     return redacted
 
