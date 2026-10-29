@@ -328,6 +328,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "120_tool_semantic_contract.sql": "memory",
     # AI 失败分析（决策 #20）：聚类统计 + LLM 建议落库，只建议不生效。
     "121_tool_failure_analysis.sql": "memory",
+    # 任务级受控结果引用（决策 #25）：大结果 offload 落库 + 租户校验 + 24h 失效。
+    "122_task_result_refs.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

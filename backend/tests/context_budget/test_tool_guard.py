@@ -26,6 +26,9 @@ def _small_budget(monkeypatch):
     monkeypatch.setattr(config, "CONTEXT_BUDGET_ENABLED", True)
     monkeypatch.setattr(config, "TOOL_INLINE_MAX_TOKENS", 100)
     monkeypatch.setattr(config, "TOOL_PREVIEW_MAX_TOKENS", 30)
+    # 决策 #25：结果引用 offload 是 L1 之外的正交特性，本文件只测 L1
+    # Guard 语义——统一置 0（永不 offload），保持各用例原意图。
+    monkeypatch.setattr(config.settings, "RESULT_REF_THRESHOLD_BYTES", 0)
 
 
 def _big_text() -> str:

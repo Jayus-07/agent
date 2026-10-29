@@ -307,17 +307,31 @@ def skill_executor_node(state: dict) -> dict:
                 )
                 step_results["direct_0"] = pre_step
                 if pre_step["status"] == "success" and pre_step.get("output"):
+                    # 决策 #25 解引用注入点：前置步骤输出是受控引用对象时
+                    # 先解回整包（保持既有整包数据流；解引用失败显式留痕
+                    # 为 __result_ref_error__，由下游消费方按失败处理）
+                    from backend.orchestration.result_refs import (
+                        identity_from_state,
+                        resolve_previous_outputs,
+                    )
+                    _prev_identity = identity_from_state(state)
+                    prev_raw = resolve_previous_outputs(
+                        {"direct_0": pre_step["output"]},
+                        tenant_id=_prev_identity["tenant_id"],
+                        user_id=_prev_identity["user_id"],
+                    )
                     # L3 微压缩：与 supervisor Send 注入同语义（单条超预算同样降级）
                     from backend.context_budget.micro_compactor import compact_previous_outputs
-                    state["previous_outputs"] = compact_previous_outputs({
-                        "direct_0": pre_step["output"],
-                    }, meta={
-                        "direct_0": {
-                            "step_id": "direct_0",
-                            "tool": pre_cap,
-                            "status": pre_step["status"],
+                    state["previous_outputs"] = compact_previous_outputs(
+                        prev_raw,
+                        meta={
+                            "direct_0": {
+                                "step_id": "direct_0",
+                                "tool": pre_cap,
+                                "status": pre_step["status"],
+                            },
                         },
-                    })
+                    )
                 else:
                     logger.warning(
                         f"[SkillExecutor] 前置步骤 {pre_cap} 未产出数据，"
@@ -379,6 +393,11 @@ def _coerce_final_answer(step: dict) -> str:
     if out is None or out == "":
         return ""
     from backend.agents.reporter.reporter import render_result_for_user
+
+    # 决策 #25：direct 单步大结果被 offload 成引用对象时，最终答案基于
+    # 摘要渲染（引用对象本身会被 render_result_for_user 判为"无法展示"）
+    from backend.orchestration.result_refs import output_for_context
+    out = output_for_context(out)
 
     return render_result_for_user(
         step.get("description", "查询结果"),
