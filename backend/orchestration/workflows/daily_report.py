@@ -118,7 +118,8 @@ class DailyReport:
         result = await call_rag({
             "question": "日报模板 章节结构 异常判断标准",
             "kb_id": "analytics",
-            "top_k": 3,
+            # search_knowledge_tool 契约只声明 question/kb_id：契约外参数
+            # （如 top_k）会被参数校验拒绝，导致本步骤每次运行必失败
         })
         return {"template": result.get("answer", result)}
 
