@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Clock, RefreshCw, Check, X, Play } from 'lucide-react'
+import { Clock, RefreshCw, Check, X, Play, Zap, Power } from 'lucide-react'
 import { clsx } from 'clsx'
 import { fetchRaw } from '@/api/client'
 import EmptyState from '@/components/shared/EmptyState'
@@ -14,6 +14,35 @@ interface Schedule {
   next_run_time?: string | null
 }
 
+// 用户自动化（决策 #27）：跨租户总览 + 最近失败 + 停用开关
+interface UserAutomation {
+  id: string
+  user_id: string
+  tenant_id: string
+  name: string
+  trigger_type: string
+  cron_expr: string
+  enabled: boolean
+  last_status: string
+  last_run_at?: string | null
+}
+
+interface AutomationOverview {
+  total: number
+  enabled: number
+  by_trigger: { cron: number; webhook: number }
+  recent_failures: Array<{
+    event_id: number
+    automation_id: string
+    automation_name: string
+    tenant_id: string
+    source: string
+    detail: string
+    created_at: string | null
+  }>
+  automations: UserAutomation[]
+}
+
 export default function SchedulesPage() {
   const [schedules, setSchedules] = useState<Schedule[]>([])
   const [loading, setLoading] = useState(true)
@@ -23,6 +52,9 @@ export default function SchedulesPage() {
   const [saving, setSaving] = useState(false)
   const [running, setRunning] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [overview, setOverview] = useState<AutomationOverview | null>(null)
+  const [overviewLoading, setOverviewLoading] = useState(true)
+  const [toggling, setToggling] = useState<string | null>(null)
 
   const WORKFLOW_LABELS: Record<string, string> = {
     daily_report: '经营日报',
@@ -43,7 +75,37 @@ export default function SchedulesPage() {
     }
   }
 
-  useEffect(() => { loadSchedules() }, [])
+  async function loadOverview() {
+    setOverviewLoading(true)
+    try {
+      const res = await fetchRaw('/api/admin/automations/overview')
+      if (res.ok) setOverview(await res.json())
+    } catch {
+      // 总览加载失败不打断主页面（非管理员/旧后端时静默）
+    } finally {
+      setOverviewLoading(false)
+    }
+  }
+
+  useEffect(() => { loadSchedules(); loadOverview() }, [])
+
+  async function toggleAutomation(a: UserAutomation) {
+    if (!confirm(`确认${a.enabled ? '停用' : '启用'}「${a.name}」？`)) return
+    setToggling(a.id)
+    try {
+      const res = await fetchRaw(`/api/admin/automations/${a.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !a.enabled }),
+      })
+      if (!res.ok) throw new Error('操作失败')
+      await loadOverview()
+    } catch (e) {
+      setMsg({ type: 'error', text: (e as Error).message })
+    } finally {
+      setToggling(null)
+    }
+  }
 
   function startEdit(s: Schedule) {
     const match = s.trigger.match(/daily (\d{2}):(\d{2})/)
@@ -223,6 +285,111 @@ export default function SchedulesPage() {
             actionLabel="返回管理端首页"
           />
         )}
+
+        {/* ── 用户自动化（决策 #27）：总览 + 最近失败 + 停用开关 ── */}
+        <div className="mt-10">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-sm font-semibold text-text-primary flex items-center gap-1.5">
+                <Zap size={14} className="text-accent" /> 用户自动化
+              </h2>
+              <p className="text-[10px] text-text-muted mt-0.5">
+                用户级 cron / Webhook 自动任务（复用既有执行链；写操作仍走确认门）
+              </p>
+            </div>
+            <button
+              onClick={loadOverview}
+              className="flex items-center gap-1 text-[10px] text-text-muted hover:text-text-primary"
+            >
+              <RefreshCw size={11} /> 刷新
+            </button>
+          </div>
+
+          {overviewLoading && <p className="text-xs text-text-muted py-2">加载中...</p>}
+
+          {!overviewLoading && overview && (
+            <>
+              <div className="grid grid-cols-4 gap-2 mb-3">
+                <div className="bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
+                  <p className="text-[10px] text-text-muted">总数</p>
+                  <p className="text-sm font-semibold text-text-primary tabular-nums">{overview.total}</p>
+                </div>
+                <div className="bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
+                  <p className="text-[10px] text-text-muted">启用中</p>
+                  <p className="text-sm font-semibold text-emerald-600 tabular-nums">{overview.enabled}</p>
+                </div>
+                <div className="bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
+                  <p className="text-[10px] text-text-muted">cron / webhook</p>
+                  <p className="text-sm font-semibold text-text-primary tabular-nums">
+                    {overview.by_trigger.cron} / {overview.by_trigger.webhook}
+                  </p>
+                </div>
+                <div className="bg-surface-base rounded-lg border border-border-subtle px-3 py-2">
+                  <p className="text-[10px] text-text-muted">最近失败</p>
+                  <p className={clsx('text-sm font-semibold tabular-nums',
+                    overview.recent_failures.length > 0 ? 'text-red-600' : 'text-text-secondary')}>
+                    {overview.recent_failures.length}
+                  </p>
+                </div>
+              </div>
+
+              {overview.recent_failures.length > 0 && (
+                <div className="bg-surface-base rounded-lg border border-border-subtle p-3 mb-3">
+                  <p className="text-[10px] text-text-muted mb-1.5">最近失败事件</p>
+                  <div className="space-y-1">
+                    {overview.recent_failures.slice(0, 5).map(f => (
+                      <div key={f.event_id} className="text-[10px] text-text-secondary flex items-start gap-2">
+                        <span className="text-red-500 shrink-0">✕</span>
+                        <span className="truncate" title={f.detail}>
+                          {f.automation_name || f.automation_id}
+                          <span className="text-text-muted">（{f.source}，{f.tenant_id}）</span>
+                          {f.detail ? ` — ${f.detail}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {overview.automations.map(a => (
+                  <div key={a.id} className="bg-surface-base rounded-lg border border-border-subtle px-3 py-2 flex items-center justify-between">
+                    <div className="min-w-0">
+                      <p className="text-xs text-text-primary truncate">
+                        {a.name}
+                        <span className="text-[10px] text-text-muted ml-2">
+                          {a.trigger_type === 'cron' ? `cron ${a.cron_expr}` : 'webhook'}
+                          <span className="ml-1.5">· {a.tenant_id} / {a.user_id}</span>
+                        </span>
+                      </p>
+                      <p className="text-[10px] text-text-muted">
+                        最近: {a.last_status || '—'}
+                        {a.last_run_at ? ` @ ${new Date(a.last_run_at).toLocaleString('zh-CN')}` : ''}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => toggleAutomation(a)}
+                      disabled={toggling === a.id}
+                      className={clsx(
+                        'flex items-center gap-1 px-2 py-1 rounded-md text-[10px] shrink-0 disabled:opacity-50',
+                        a.enabled
+                          ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20'
+                          : 'bg-zinc-100 text-zinc-500 hover:bg-zinc-200'
+                      )}
+                      title={a.enabled ? '停用该自动任务' : '启用该自动任务'}
+                    >
+                      <Power size={10} />
+                      {a.enabled ? '启用中' : '已停用'}
+                    </button>
+                  </div>
+                ))}
+                {overview.automations.length === 0 && (
+                  <p className="text-[10px] text-text-muted py-2">暂无用户自动化任务</p>
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )
