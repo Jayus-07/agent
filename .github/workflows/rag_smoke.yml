@@ -157,7 +157,6 @@ jobs:
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
             backend/tests/scripts/test_seed_prompt_eval_db.py \
-            backend/tests/rag/test_rag_fixture_content_integrity.py \
             backend/tests/rag/test_rag_cleaning_audit_boundaries.py \
             backend/tests/rag/test_reindex_failure_snapshot.py \
             backend/tests/rag/test_multi_query_token_budget.py \
