@@ -80,7 +80,18 @@ class BusinessAnalysisSkill(BaseSkill):
         step_results[step_id] = sr
 
         # 1. 从前置步骤获取 SQLResult
-        previous_outputs: dict = state.get("previous_outputs", {})
+        # 决策 #25：前置输出是受控引用对象时先解回整包（解引用失败以
+        # __result_ref_error__ 显式留痕，下方 SQLResult 解析按失败处理）
+        from backend.orchestration.result_refs import (
+            identity_from_state,
+            resolve_previous_outputs,
+        )
+        _identity = identity_from_state(state)
+        previous_outputs: dict = resolve_previous_outputs(
+            state.get("previous_outputs", {}),
+            tenant_id=_identity["tenant_id"],
+            user_id=_identity["user_id"],
+        )
         if not previous_outputs:
             sr["status"] = "failed"
             sr["error"] = "business.analyze 缺少前置 sql.query 的输出（previous_outputs 为空）"

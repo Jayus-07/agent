@@ -22,6 +22,9 @@ from typing import Any
 
 from backend.shared.logger import logger
 
+# 决策 #25：受控结果引用识别（引用对象在 call_skill 返回边界解回整包）
+from backend.orchestration.result_refs import is_result_ref
+
 # BaseSkill 治理路径写回的失败语义字段（skills/base.py:548-630）。
 # SkillStepFailure.step_result 只透传这些键，消费方（WorkflowExecutor
 # 留痕 / trace metrics / 测试断言）按存在性读取。
@@ -132,6 +135,20 @@ async def call_skill(skill_name: str, capability: str, params: dict) -> dict:
     status = sr.get("status")
     if status == "success":
         output = sr.get("output", {})
+        # 决策 #25 解引用注入点：workflow step 是既有消费方，skill 输出为
+        # 受控引用对象时在此解回整包（保持 step 代码拿整包的既有契约；
+        # 身份从已 bind 的执行线程 ContextVar 读取）。解引用失败显式留痕
+        # __result_ref_error__，由 step 逻辑按失败处理，不静默回空。
+        if is_result_ref(output):
+            from backend.orchestration.result_refs import (
+                identity_from_state, resolve_previous_outputs,
+            )
+            identity = identity_from_state(None)
+            output = resolve_previous_outputs(
+                {"_step": output},
+                tenant_id=identity["tenant_id"],
+                user_id=identity["user_id"],
+            ).get("_step", output)
         if not output:
             # 空 [] / {} / "" 是合法业务结果（如 0 行查询），不是失败；
             # 只留观测痕迹，不做任何语义改写。
