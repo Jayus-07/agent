@@ -4,6 +4,9 @@
 # 升级依赖流程: 修改 pyproject.toml → pip install -e ".[dev]" → 重新生成此文件 → 跑全量测试。
 # 注意: 包含 torch 等大型依赖（sentence-transformers 所需）；若部署环境无需本地嵌入模型，
 #       可按需裁剪后另存为 requirements-lock-slim.txt。
+# 2026-10-29 定向补入 opencv-python/pyclipper/rapidocr-onnxruntime（pyproject 已声明
+#       rapidocr-onnxruntime>=1.3 但 lock 遗漏，05bde0e 的混合 PDF fixture 在 CI 离线
+#       preflight 需要 OCR 能力）；版本为本机实装验证值，全量 relock 待依赖升级专项。
 absl-py==2.4.0
 aiofile==3.9.0
 aiofiles==25.1.0
@@ -177,6 +180,7 @@ oauthlib==3.3.1
 olefile==0.47
 ollama==0.6.2
 onnxruntime==1.23.2
+opencv-python==5.0.0.93
 openai==2.36.0
 openapi-pydantic==0.5.1
 openpyxl==3.1.5
@@ -203,6 +207,7 @@ pgvector==0.4.2
 phrasetree==0.0.9
 pillow==12.2.0
 pip==25.1.1
+pyclipper==1.4.0
 platformdirs==4.10.0
 playwright==1.61.0
 playwright-stealth==2.0.3
@@ -260,6 +265,7 @@ pywin32-ctypes==0.2.3
 PyYAML==6.0.3
 rank-bm25==0.2.2
 RapidFuzz==3.14.5
+rapidocr-onnxruntime==1.4.4
 referencing==0.37.0
 regex==2026.5.9
 reportlab==5.0.0
