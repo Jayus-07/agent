@@ -107,7 +107,7 @@ jobs:
           backend/services/task_service.py
 
       - name: Run free E0 asset preflight
-        run: python -m backend.evaluation.preflight --module rag --selection pr_smoke
+        run: python -m backend.evaluation.preflight --module rag --selection desktop_upload_smoke
 
       - name: Run deterministic evaluation V2 contracts
         run: >-

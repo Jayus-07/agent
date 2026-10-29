@@ -123,6 +123,16 @@ jobs:
           EVAL_SELECTION: ${{ inputs.selection || 'desktop_upload_full' }}
         run: python -m backend.evaluation.preflight --module rag --selection "$EVAL_SELECTION"
 
+      - name: Baseline fixture offline integrity (28 docs, OCR included)
+        # 重资产资产完整性校验（全量解析 27 份 baseline fixture，含 500p
+        # PDF 与 6 份需 OCR 的混合 PDF）：05bde0e 扩容后单用例远超 PR
+        # preflight 的 300s 用例时限，归宿在按需回归而非 PR 门禁。
+        # PR 阶段的清单/哈希一致性由上方 E0 preflight 覆盖。
+        run: >-
+          python -m pytest
+          backend/tests/rag/test_rag_fixture_content_integrity.py
+          -q --no-cov --timeout=1800
+
       - name: Trim corpora to evaluation scope
         run: |
           # 本次 RAG fixture 源位于 backend/evaluation/fixtures/rag_eval_kb。

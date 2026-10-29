@@ -78,7 +78,8 @@ def test_production_timeout_consumes_shared_remaining_budget(monkeypatch, remain
     from backend.rag.retrieval import multi_query as mq
 
     assert rag.RAG_MULTI_QUERY_REWRITE_TIMEOUT_MS == 6000
-    assert rag.RAG_RETRIEVAL_DEADLINE_MS == 8000
+    # ee8805f：检索时限 8s→20s 对齐 GPU 重排实测（迟到丢弃曾挤掉精确命中行）。
+    assert rag.RAG_RETRIEVAL_DEADLINE_MS == 20000
     waits = []
 
     class RecordingFuture(Future):
