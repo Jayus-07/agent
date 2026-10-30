@@ -35,7 +35,16 @@ _REC_PAYLOAD = {
 def _client():
     app = FastAPI()
     app.include_router(router)
-    return TestClient(app)
+    client = TestClient(app)
+    # PUT /weights 走 require_admin_user（身份依赖先于 body 校验），
+    # 网关验签注入的 admin 身份头与其他路由契约测试同口径。
+    client.headers.update({
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "1",
+        "X-User-Roles": "admin",
+        "X-Tenant-Id": "tenant-a",
+    })
+    return client
 
 
 class TestRecommendations:

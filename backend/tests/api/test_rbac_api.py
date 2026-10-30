@@ -162,6 +162,16 @@ class _FakeRbacSession:
             },
         ]
         self.session_counts = {1: 2, 2: 1, 3: 0, 4: 0, 5: 0}
+        self.departments = [
+            {"code": "运营", "name": "运营部", "tenant_id": "tenant-a",
+             "status": 1, "department_type": "general", "manager_user_id": None},
+            {"code": "客服", "name": "客服部", "tenant_id": "tenant-a",
+             "status": 1, "department_type": "customer_service",
+             "manager_user_id": None},
+            {"code": "客服", "name": "租户乙客服部", "tenant_id": "tenant-b",
+             "status": 1, "department_type": "customer_service",
+             "manager_user_id": None},
+        ]
         self.sessions = [
             {"id": "sid-2", "user_id": 2, "revoked_at": None},
         ]
@@ -184,6 +194,7 @@ class _FakeRbacSession:
         return {
             "users": copy.deepcopy(self.users),
             "agents": copy.deepcopy(self.agents),
+            "departments": copy.deepcopy(self.departments),
             "sessions": copy.deepcopy(self.sessions),
             "refresh_tokens": copy.deepcopy(self.refresh_tokens),
             "audits": copy.deepcopy(self.audits),
@@ -286,6 +297,7 @@ class _FakeRbacSession:
                     "user_id": user["id"],
                     "username": user["username"],
                     "real_name": user["real_name"],
+                    "email": user.get("email", ""),
                     "dept": user["dept"],
                     "platform_role": user["role"],
                     "status": user["status"],
@@ -299,6 +311,84 @@ class _FakeRbacSession:
                 })
             return _FakeResult(rows=rows)
 
+        if "from auth.departments" in normalized and "select" in normalized:
+            tenant_id = params.get("tenant_id")
+            candidates = [
+                d for d in self.departments
+                if tenant_id is None or d["tenant_id"] == tenant_id
+            ]
+            if "manager_user_id = :user_id" in normalized:
+                candidates = [
+                    d for d in candidates
+                    if d["manager_user_id"] == params.get("user_id")
+                    and d["status"] == 1
+                ]
+                return _FakeResult(rows=[dict(d) for d in candidates])
+            if "join auth.users u" in normalized:
+                # 部门主管授权范围：主管账号须在职且 dept 指回本部门
+                managers = {
+                    u["id"] for u in self.users
+                    if u["status"] == 1
+                }
+                rows = [
+                    {"code": d["code"], "name": d["name"]}
+                    for d in candidates
+                    if d["status"] == 1
+                    and d["manager_user_id"] in managers
+                ]
+                return _FakeResult(rows=rows)
+            if "department_type = 'customer_service'" in normalized:
+                candidates = [
+                    d for d in candidates
+                    if d["department_type"] == "customer_service"
+                    and d["code"] == params.get("code")
+                ]
+                return _FakeResult(rows=[dict(d) for d in candidates])
+            if "code = :code" in normalized:
+                candidates = [
+                    d for d in candidates
+                    if d["code"] == params.get("code") and d["status"] == 1
+                ]
+                return _FakeResult(rows=[dict(d) for d in candidates])
+            raise AssertionError(f"测试替身未覆盖部门 SQL: {sql}")
+
+        if ("from information_schema.tables" in normalized
+                and "table_name = 'departments'" in normalized):
+            # 041 部门主数据在测试环境恒可用
+            return _FakeResult(scalar_value=True)
+
+        if ("from auth.users u" in normalized
+                and "join auth.departments d" in normalized):
+            # PATCH customer-service/team 的目标用户校验：
+            # 本租户 + 在职 + 所属部门为启用客服部门
+            user = next(
+                (item for item in self.users
+                 if item["id"] == params.get("user_id")
+                 and item["tenant_id"] == params.get("tenant_id")
+                 and item["status"] == 1),
+                None,
+            )
+            dept = next(
+                (d for d in self.departments
+                 if user is not None
+                 and d["tenant_id"] == user["tenant_id"]
+                 and d["code"] == user["dept"]
+                 and d["status"] == 1
+                 and d["department_type"] == "customer_service"),
+                None,
+            )
+            if user is None or dept is None:
+                return _FakeResult()
+            return _FakeResult(rows=[{
+                "id": user["id"],
+                "username": user["username"],
+                "real_name": user["real_name"],
+                "email": user.get("email", ""),
+                "dept": user["dept"],
+                "status": user["status"],
+                "version": user["version"],
+            }])
+
         if "from customer_service.cs_agents" in normalized and "select" in normalized:
             agent = next(
                 (item for item in self.agents
@@ -309,12 +399,14 @@ class _FakeRbacSession:
             return _FakeResult(rows=[dict(agent)] if agent else [])
 
         if normalized.startswith("update auth.users"):
-            user = next(item for item in self.users if item["id"] == params["uid"])
+            uid = params.get("uid", params.get("user_id"))
+            user = next(item for item in self.users if item["id"] == uid)
             if self.force_version_conflict:
                 return _FakeResult()
             if "tenant_id" in params and user["tenant_id"] != params["tenant_id"]:
                 return _FakeResult()
-            if "expected_version" in params and user["version"] != params["expected_version"]:
+            version_param = params.get("expected_version", params.get("version"))
+            if version_param is not None and user["version"] != version_param:
                 return _FakeResult()
             for key in ("role", "status", "dept", "real_name", "email"):
                 if key in params:
@@ -345,7 +437,8 @@ class _FakeRbacSession:
                 if item["agent_id"] == params["agent_id"]
                 and item["tenant_id"] == params["tenant_id"]
             )
-            for key in ("role", "max_conversations", "enabled", "accepting"):
+            for key in ("role", "max_conversations", "enabled", "accepting",
+                        "display_name"):
                 if key in params:
                     agent[key] = params[key]
             return _FakeResult(rows=[dict(agent)])
@@ -367,15 +460,16 @@ class _FakeRbacSession:
         if normalized.startswith("insert into auth.rbac_audits"):
             if self.fail_on_audit:
                 raise RuntimeError("审计写入失败")
+            # 客服团队端点把 action/result 写成 SQL 字面量，params 里可能没有
             self.audits.append({
                 "id": len(self.audits) + 1,
                 "tenant_id": params["tenant_id"],
                 "actor_user_id": params["actor_user_id"],
                 "target_user_id": params["target_user_id"],
-                "action": params["action"],
+                "action": params.get("action", "user.update"),
                 "before_state": params["before_state"],
                 "after_state": params["after_state"],
-                "result": params["result"],
+                "result": params.get("result", "success"),
                 "created_at": datetime.now(timezone.utc),
             })
             return _FakeResult()
@@ -390,6 +484,7 @@ class _FakeRbacSession:
         state = self._snapshot
         self.users = copy.deepcopy(state["users"])
         self.agents = copy.deepcopy(state["agents"])
+        self.departments = copy.deepcopy(state["departments"])
         self.sessions = copy.deepcopy(state["sessions"])
         self.refresh_tokens = copy.deepcopy(state["refresh_tokens"])
         self.audits = copy.deepcopy(state["audits"])
@@ -459,9 +554,10 @@ def test_admin_user_list_returns_paginated_safe_fields(monkeypatch):
     assert body["pageSize"] == 2
     assert body["total"] == 1
     assert body["items"][0]["username"] == "agent-user"
+    # 9d7c582 起 csAgent 拆到 GET /customer-service/team，平台用户列表改带 email
     assert set(body["items"][0]) == {
-        "userId", "username", "realName", "dept", "platformRole", "status",
-        "version", "sessionCount", "csAgent",
+        "userId", "username", "realName", "email", "dept", "platformRole",
+        "status", "version", "sessionCount",
     }
     assert "password_hash" not in response.text
 
@@ -611,7 +707,8 @@ def test_concurrent_admin_conflict_is_serialized_and_mapped_to_409(monkeypatch):
     assert session.committed is False
 
 
-def test_cs_profile_ignores_browser_agent_id_and_binds_target_user(monkeypatch):
+def test_users_endpoint_rejects_cs_profile_fields(monkeypatch):
+    """9d7c582 起客服档案与平台 RBAC 分离：users 更新拒绝一切客服档案字段。"""
     session = _FakeRbacSession()
     client = _client(monkeypatch, session)
 
@@ -624,13 +721,20 @@ def test_cs_profile_ignores_browser_agent_id_and_binds_target_user(monkeypatch):
             "maxConversations": 12,
         },
     )
-    assert response.status_code == 200, response.text
-    victim = next(item for item in session.agents
-                  if item["agent_id"] == "agent-victim")
-    assert victim["auth_user_id"] == "99"
-    target = [item for item in session.agents if item["auth_user_id"] == "2"]
-    assert len(target) == 1
-    assert target[0]["role"] == "agent"
+    assert response.status_code == 400
+    assert "客服档案" in response.json()["detail"]
+    # 浏览器提供的 agentId 不能借任何入口绑定他人档案
+    session_team = _FakeRbacSession()
+    client_team = _client(monkeypatch, session_team)
+    response_team = client_team.patch(
+        "/api/sys/rbac/customer-service/team/2",
+        json={"version": 0, "csRole": "agent", "agentId": "agent-victim"},
+    )
+    assert response_team.status_code == 400
+    assert "只接受客服档案字段" in response_team.json()["detail"]
+    assert all(item["agent_id"] != "agent-victim" or
+               item["auth_user_id"] == "99"
+               for item in session_team.agents)
 
 
 def test_cs_profile_insert_uses_stable_display_name(monkeypatch):
@@ -638,7 +742,7 @@ def test_cs_profile_insert_uses_stable_display_name(monkeypatch):
     client = _client(monkeypatch, session)
 
     response = client.patch(
-        "/api/sys/rbac/users/4",
+        "/api/sys/rbac/customer-service/team/4",
         json={"version": 0, "csRole": "agent"},
     )
 
@@ -653,7 +757,7 @@ def test_cs_role_change_revokes_access_and_refresh_authority(monkeypatch, body):
     client = _client(monkeypatch, session)
 
     response = client.patch(
-        "/api/sys/rbac/users/2",
+        "/api/sys/rbac/customer-service/team/2",
         json={"version": 0, **body},
     )
 
@@ -672,13 +776,14 @@ def test_cs_role_change_revokes_access_and_refresh_authority(monkeypatch, body):
         {"version": 0, "maxConversations": 20},
     ],
 )
-def test_operational_cs_changes_do_not_revoke_session_authority(monkeypatch, body):
+def test_operational_cs_changes_do_not_revoke_session_authority(
+        monkeypatch, body):
     """运营参数若误触发吊销，客服停止接单会造成无意义下线。"""
     session = _FakeRbacSession()
     client = _client(monkeypatch, session)
 
     response = client.patch(
-        "/api/sys/rbac/users/2",
+        "/api/sys/rbac/customer-service/team/2",
         json=body,
     )
 
@@ -924,19 +1029,13 @@ def test_update_rolls_back_when_audit_write_fails(monkeypatch):
 
 
 def test_update_writes_complete_audit_record(monkeypatch):
+    """平台角色与客服档案分离后，两类变更各留一条完整审计。"""
     session = _FakeRbacSession()
     client = _client(monkeypatch, session)
 
     response = client.patch(
         "/api/sys/rbac/users/2",
-        json={
-            "version": 0,
-            "platformRole": "editor",
-            "csRole": "supervisor",
-            "maxConversations": 20,
-            "enabled": False,
-            "accepting": False,
-        },
+        json={"version": 0, "platformRole": "editor"},
     )
     assert response.status_code == 200, response.text
     assert session.committed is True
@@ -948,6 +1047,19 @@ def test_update_writes_complete_audit_record(monkeypatch):
     assert record["targetUserId"] == 2
     assert record["oldPlatformRole"] == "viewer"
     assert record["newPlatformRole"] == "editor"
-    assert record["csChanges"]["role"] == "supervisor"
     assert record["result"] == "success"
     assert record["createdAt"]
+
+    # 客服角色变更走客服团队接口，同样落审计（after_state 带 csChanges）
+    team_response = client.patch(
+        "/api/sys/rbac/customer-service/team/2",
+        json={"version": 1, "csRole": "supervisor"},
+    )
+    assert team_response.status_code == 200, team_response.text
+
+    audit_after = client.get("/api/sys/rbac/audit?page=1&page_size=50")
+    assert audit_after.status_code == 200
+    cs_record = audit_after.json()["items"][0]
+    assert cs_record["targetUserId"] == 2
+    assert cs_record["csChanges"]["role"] == "supervisor"
+    assert cs_record["result"] == "success"

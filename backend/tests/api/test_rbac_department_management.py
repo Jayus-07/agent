@@ -39,11 +39,14 @@ class _DepartmentSession:
         now = datetime(2026, 10, 21, tzinfo=timezone.utc)
         self.departments = [
             {"tenant_id": "tenant-a", "code": "alpha", "name": "研发部",
-             "status": 1, "version": 0, "updated_at": now},
+             "status": 1, "version": 0, "updated_at": now,
+             "department_type": "general", "manager_user_id": None},
             {"tenant_id": "tenant-a", "code": "paused", "name": "停用部门",
-             "status": 0, "version": 2, "updated_at": now},
+             "status": 0, "version": 2, "updated_at": now,
+             "department_type": "general", "manager_user_id": None},
             {"tenant_id": "tenant-b", "code": "foreign", "name": "租户乙部门",
-             "status": 1, "version": 0, "updated_at": now},
+             "status": 1, "version": 0, "updated_at": now,
+             "department_type": "general", "manager_user_id": None},
         ]
         self.users = [
             {"tenant_id": "tenant-a", "dept": "alpha"},
@@ -53,27 +56,54 @@ class _DepartmentSession:
         self.committed = False
         self.rolled_back = False
 
+    def _department_row(self, department):
+        row = dict(department)
+        row["member_count"] = sum(
+            user["tenant_id"] == department["tenant_id"]
+            and user["dept"] == department["code"]
+            for user in self.users
+        )
+        row.setdefault("manager_username", None)
+        row.setdefault("manager_real_name", None)
+        return row
+
     async def execute(self, statement, params=None):
         sql = " ".join(str(statement).lower().split())
         params = params or {}
         if "information_schema.tables" in sql:
             return _Result(scalar=True)
         if "from auth.departments d" in sql:
+            if ("d.code = :code" in sql
+                    and ("for update of d" in sql
+                         or "m.username as manager_username" in sql)):
+                # 单部门行读（_change_department 前后各一次）：不过滤停用部门
+                department = next((
+                    item for item in self.departments
+                    if item["tenant_id"] == params["tenant_id"]
+                    and item["code"] == params["code"]
+                ), None)
+                return _Result(
+                    rows=[self._department_row(department)]
+                    if department else [])
             rows = []
             for department in self.departments:
                 if department["tenant_id"] != params["tenant_id"]:
                     continue
                 if not params.get("include_inactive") and department["status"] != 1:
                     continue
-                row = dict(department)
-                row["member_count"] = sum(
-                    user["tenant_id"] == department["tenant_id"]
-                    and user["dept"] == department["code"]
-                    for user in self.users
-                )
-                rows.append(row)
+                rows.append(self._department_row(department))
             rows.sort(key=lambda row: (-row["status"], row["name"], row["code"]))
             return _Result(rows=rows)
+        if "select 1 from auth.departments" in sql and "code <> :code" in sql:
+            # 同租户唯一启用客服部门校验
+            exists = any(
+                item["tenant_id"] == params["tenant_id"]
+                and item["code"] != params["code"]
+                and item["status"] == 1
+                and item["department_type"] == "customer_service"
+                for item in self.departments
+            )
+            return _Result(rows=[{"?column?": 1}] if exists else [])
         if sql.startswith("select 1 from auth.departments"):
             exists = any(
                 item["tenant_id"] == params["tenant_id"]
@@ -81,13 +111,8 @@ class _DepartmentSession:
                 for item in self.departments
             )
             return _Result(rows=[{"?column?": 1}] if exists else [])
-        if sql.startswith("select code, name, status, version, updated_at from auth.departments"):
-            department = next((
-                item for item in self.departments
-                if item["tenant_id"] == params["tenant_id"]
-                and item["code"] == params["code"]
-            ), None)
-            return _Result(rows=[dict(department)] if department else [])
+        if sql.startswith("select 1 from customer_service.cs_agents"):
+            return _Result()
         if sql.startswith("select count(*) from auth.users"):
             count = sum(
                 user["tenant_id"] == params["tenant_id"]
@@ -95,11 +120,20 @@ class _DepartmentSession:
                 for user in self.users
             )
             return _Result(scalar=count)
+        if sql.startswith("select id from auth.users"):
+            exists = any(
+                item["tenant_id"] == params["tenant_id"]
+                and item["dept"] == params["code"]
+                for item in self.users
+            )
+            return _Result(rows=[{"id": 1}] if exists else [])
         if sql.startswith("insert into auth.departments"):
             row = {
                 "tenant_id": params["tenant_id"], "code": params["code"],
                 "name": params["name"], "status": 1, "version": 0,
                 "updated_at": datetime.now(timezone.utc),
+                "department_type": params.get("department_type", "general"),
+                "manager_user_id": params.get("manager_user_id"),
             }
             self.departments.append(row)
             return _Result(rows=[dict(row)])
@@ -114,6 +148,8 @@ class _DepartmentSession:
                 return _Result()
             department.update({
                 "name": params["name"], "status": params["status"],
+                "department_type": params["department_type"],
+                "manager_user_id": params["manager_user_id"],
                 "version": department["version"] + 1,
                 "updated_at": datetime.now(timezone.utc),
             })

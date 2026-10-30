@@ -2,19 +2,22 @@
 
 契约：``backend/app/api/routes/travel.py`` **全部端点要求已认证身份**
 （``require_identity`` → 未认证 401）。此前用宽容 ``resolve_identity``：
-未登录请求按 ``guest`` 放行、``user_id=""`` 落库——偏好读写与反馈写进
-空账号、规划可被匿名调用。
+未登录请求按 ``guest`` 放行、``user_id=""`` 落库——反馈写进空账号、
+推荐可被匿名调用。
 
 为什么是纵深防御而非唯一闸门：网关 APISIX 的 ``/api/*`` 兜底路由已挂
 ``gateway-auth``（``GATEWAY_AUTH_MODE=enforce``），未认证请求在网关层即
 401；本层拦的是**绕过网关直连后端**的通道。两层互补，故本用例刻意只挂
 travel router 的最小 app（不带全局中间件），单独验证本层。
 
+V1 规划/偏好端点已退役（``_retired_v1_router`` 不再挂载，见
+tests/travel_v2/test_legacy_persistence_retired.py 守卫），其身份契约
+随端点移除；V2 规划流（唯一现行规划入口）的 401 边界由本文件续守。
+
 覆盖：
-  1. 六个端点无身份头 → 401
+  1. 现行端点无身份头 → 401
   2. 网关 guest 模式注入的 ``anonymous`` 占位身份同样 401（不是真实用户）
-  3. 已认证请求不落 401 分支（/recommend 真跑；/plan、/preferences 打桩）
-  4. 未认证请求不消费请求体（/plan 鉴权先于 body 解析 → 非法 body 也 401 而非 422）
+  3. 已认证请求不落 401 分支（/recommend 真跑）
 
 不覆盖：X-API-Key 门禁（``backend/app/api/middleware/auth.py`` 职责，
 另有测试）。
@@ -32,13 +35,10 @@ _AUTH = {"X-User-Id": "15", "X-User-Name": "Mint", "X-Auth-Type": "jwt"}
 # 网关 guest 模式（GATEWAY_AUTH_MODE=guest）注入的占位身份
 _GUEST = {"X-User-Id": "anonymous", "X-Auth-Type": "anonymous"}
 
-# (method, path, json body) —— body=None 表示无请求体
+# (method, path, json body) —— body=None 表示无请求体；只含现行 router 端点
 _ENDPOINTS: list[tuple[str, str, dict | None]] = [
-    ("POST", "/travel/plan", {"message": "杭州2天"}),
     ("POST", "/travel/export/ics", {"itinerary": {}}),
     ("POST", "/travel/feedback", {"vote": "positive"}),
-    ("GET", "/travel/preferences", None),
-    ("PUT", "/travel/preferences", {"origin": "福州"}),
     ("GET", "/travel/recommend", None),
 ]
 
@@ -78,38 +78,18 @@ def test_authenticated_recommend_ok() -> None:
     assert "recommendations" in r.json()
 
 
-def test_authenticated_plan_passes_auth(monkeypatch: pytest.MonkeyPatch) -> None:
-    """/plan 通过鉴权后即进入域图；域图打桩（本用例只验鉴权边界）。
+def test_v2_plan_stream_unauthenticated_is_401() -> None:
+    """V2 规划流（唯一现行规划入口）未认证 → 401。
 
-    桩抛异常 → 端点走既有降级返回 status="failed"，证明请求已越过鉴权门。
+    与 V1 同源 fail-closed：``travel_v2_plan_stream`` 先过
+    ``require_identity`` 再解析/执行，SSE 建立前即拦截。
     """
-    def _stub_graph():
-        raise RuntimeError("stub: 域图执行不在本用例范围")
-
-    monkeypatch.setattr("backend.travel.graph_builder.get_travel_graph",
-                        _stub_graph)
-    r = _client().post("/travel/plan", json={"message": "杭州2天"},
-                       headers=_AUTH)
-    assert r.status_code == 200
-    assert r.json()["status"] == "failed"
+    r = _client().post("/travel/v2/plan/stream", json={"message": "杭州2天"})
+    assert r.status_code == 401
 
 
-def test_authenticated_preferences_not_blocked(
-        monkeypatch: pytest.MonkeyPatch) -> None:
-    """已认证 → /preferences GET 不被鉴权门拦截（存储层打桩）。"""
-    monkeypatch.setattr("backend.tools.travel.preferences.get_preferences",
-                        lambda user_id: {"user_id": user_id, "preferences": []})
-    r = _client().get("/travel/preferences", headers=_AUTH)
-    assert r.status_code == 200
-    assert r.json()["user_id"] == "15"
-
-
-def test_plan_rejects_before_body_parsing() -> None:
-    """鉴权先于 body 解析：未认证 + 非法 body → 401（而非 422）。
-
-    fail-closed 语义——未认证请求不消费请求体，也避免用解析错误回显
-    服务端行为差异。
-    """
-    r = _client().post("/travel/plan", content=b"not-json",
-                       headers={"Content-Type": "application/json"})
+def test_v2_plan_stream_anonymous_placeholder_is_401() -> None:
+    """网关 guest 注入的 ``anonymous`` 占位身份对 V2 规划流同样 401。"""
+    r = _client().post("/travel/v2/plan/stream", json={"message": "杭州2天"},
+                       headers=_GUEST)
     assert r.status_code == 401

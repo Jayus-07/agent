@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
-"""旅游 REST/SSE 请求 Trace 测试。"""
+"""旅游规划流请求 Trace 测试。
+
+V1 REST/Stream 端点已退役（``_retired_v1_router`` 不挂载）；V2 规划流
+（``travel_v2_plan_stream``）与 V1 共用 ``_travel_plan_stream_impl`` 的
+trace 生命周期（start → worker 内绑定 → ``_finish_travel_trace`` 收口），
+本文件因此只对 V2 入口验证同一组契约。
+"""
 
 from types import SimpleNamespace
 
@@ -21,7 +27,7 @@ def _request():
 
 
 @pytest.mark.asyncio
-async def test_travel_plan_rest_creates_and_finishes_trace(monkeypatch):
+async def test_travel_plan_stream_creates_and_finishes_trace(monkeypatch):
     captured = []
 
     class FakeGraph:
@@ -55,15 +61,16 @@ async def test_travel_plan_rest_creates_and_finishes_trace(monkeypatch):
 
     monkeypatch.setattr(trace_collector, "finish", capture_finish)
 
-    result = await travel.travel_plan(_request())
+    response = await travel.travel_v2_plan_stream(_request())
+    chunks = [chunk async for chunk in response.body_iterator]
 
-    assert result["status"] == "success"
+    assert chunks
     assert len(captured) == 1
     assert captured[0].workflow_name == "agent"
     assert captured[0].tags["travel_status"] == "success"
     assert captured[0].tags["travel_run_id"].startswith("travel-")
     assert captured[0].tags["travel_destination"] == "杭州"
-    assert captured[0].metadata["travel_semantics"]["conversation_id"] == "c-1"
+    assert captured[0].metadata["travel_semantics"]["conversation_id"] == "travel-v2:c-1"
     assert "planning_mode" in captured[0].metadata["travel_semantics"]
     assert captured[0].tags["travel_tool_call_count"] == "1"
     tool_call = captured[0].metadata["travel_tool_calls"][0]
@@ -99,7 +106,7 @@ async def test_travel_plan_stream_binds_trace_inside_worker(monkeypatch):
         lambda _state: {"status": "success", "final_answer": "ok", "itinerary": None},
     )
 
-    response = await travel.travel_plan_stream(_request())
+    response = await travel.travel_v2_plan_stream(_request())
     chunks = []
     async for chunk in response.body_iterator:
         chunks.append(chunk)
