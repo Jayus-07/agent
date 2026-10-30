@@ -109,3 +109,37 @@ Run 41120872440（main = #146 后）。**api/rag/backend-root 三 job 从未启�
 2. **misc 真回归候选**：inventory notification 10 例（策略匹配语义）单跑即绿还是真漂移需在干净环境确认；kafka 测试补模块或 skipif 标注；skills 报错文案 3 例对齐新格式。
 3. **travel/travelv2/cs/prompts/evaluation/repo-tests 定性**：逐个单跑→xdist 对比，真失败修复（同 api 批方法论）。
 4. 每周例行跑失败数曲线：v2 起 tools-security-obs/sql-infra/api 三 suite 应稳定为 0，作为回归门禁观测点。
+
+---
+
+# 交接（2026-10-31，供下一会话续工）
+
+## 工作树与环境
+
+- **续工工作树**：`D:/Program Files/workplace/agent-wt-ci-debt2`（任务专用，保留）。当前分支 `fix/ci-debt-worker-isolation` 已合并（=main），续工时从这里 `git fetch && git checkout -b fix/ci-debt-<批次名> origin/main` 开新分支。
+- `.env` 已从主仓库复制（gitignore，测试连库必需）。
+- 主仓库 `D:/Program Files/workplace/agent`（main）供 rebuild/部署，`tmp/*` 有历史未提交删除不要动；`agent-wt-ci-debt` 旧工作树已清理。
+- 本地资产：`d:/tmp/ci-debt/`（基线 v1/v2 失败清单、orchestration/automations 本地跑输出、探针日志）——可能被清理，权威失败清单以 GitHub artifacts 为准（`gh run download <run_id> -n failures-<suite>`）。
+- 本地验证命令模板：`D:/Python/python.exe -m pytest backend/tests/<dir> --timeout=150 -n 4 --dist loadfile -q --no-cov`（本机 D:/Python 已装 pytest-timeout，**必带 timeout**）；本机 PG 5433（主栈容器），CI 是 5432。
+
+## 坑位（本会话实证，勿重走）
+
+1. **本地共享栈 worker 干扰**：主栈 celery worker 容器（agent-agent-worker-1 等）会拾取共享 Redis 里测试任务真执行 → tasks_api/automations 各 1 例偶发失败、automations 全文件跑 9 分钟。单跑失败先判断是否此噪音（CI 无 worker）。**不是产品 bug，不要修 main**。
+2. **squash 合并竞态**：push 后立即 REST PUT merge 会拿到旧 head（#144 的 env 修复因此漏合一次，#145 补的）。合并前先 `gh pr view <n> --json headRefOid` 核对。
+3. **gh/网络抖动频繁**：TLS handshake timeout / 502 / EOF 是常态，重试即可；同分支第二个 PR（如 #144、#146）会报 "no checks reported" 且可能报 merge conflicts（与已 squash 的同区改动冲突）——本地 merge origin/main 解冲突后 push 再合。
+4. **同分支先后 PR**：#140/#141 同分支（fix/ci-debt-demo-db），#140 squash 合并后 #141 必然冲突——要么每 PR 独立分支，要么按 #141 的处理流程解决。
+5. **主栈红线**：不动 agent_readonly 角色密码、不动主栈数据；本地跑需要只读角色的测试用 `.env` 里已有配置。
+6. **测试资产漂移是主旋律**：本会话 59+15+5 例失败里无一需要"修产品 bug"（除 reporter sql_empty 一处真回归）；先 `git log -S` 找引入提交定性，再决定改测试还是改实现。
+
+## 恢复步骤
+
+1. `cd /d/Program Files/workplace/agent-wt-ci-debt2 && git fetch && git checkout -b fix/ci-debt-<批次> origin/main`
+2. 按上面 TASK.md「剩余计划」顺序开工（专项三 A 隔离最优先）。
+3. 每修一批：本地对应文件跑绿 → PR 合 main → `HTTPS_PROXY=http://127.0.0.1:7897 gh workflow run full_regression.yml -f suites=<name>` 验证 → 台账 +1 行。
+4. 修 backend 产品代码时：主仓库 `git pull` 后 `echo y | ./devctl.bat rebuild`（Git Bash 管道喂 y），确认容器 healthy。
+
+## 当前进度锚点
+
+- main 含全部修复（≥ a7a5471/#149 后的 commit）。
+- v2 分 suite 失败数见上方对比表；剩余 61 例清单：`/d/tmp/ci-debt/v2full/`（8 suite）+ orchestration 7 例见 `/d/tmp/ci-debt/v2/failures-orch4/`。
+- 全量 run 41120872440 的 api/rag/backend-root 三 job 被取消（未启动），需补取。
