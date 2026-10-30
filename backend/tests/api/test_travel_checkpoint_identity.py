@@ -1,5 +1,10 @@
-"""独立旅游入口使用可信身份隔离 checkpoint。"""
-import json
+"""独立旅游入口使用可信身份隔离 checkpoint。
+
+V1 REST 规划端点已退役；V2 规划流（唯一现行入口）用
+``travel-v2:{conversation_id}`` 独立会话命名空间执行，身份隔离语义由
+``_build_invoke_config`` 的 ``travel:{tenant}:{user}:{conv}`` 命名空间
+保证——两个用户同 conversation 不共享 thread。
+"""
 from types import SimpleNamespace
 
 import pytest
@@ -8,8 +13,7 @@ from backend.app.api.routes import travel
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("stream", [False, True])
-async def test_two_users_same_conversation_get_distinct_threads(monkeypatch, stream):
+async def test_two_users_same_conversation_get_distinct_threads(monkeypatch):
     configs = []
 
     class Graph:
@@ -30,14 +34,13 @@ async def test_two_users_same_conversation_get_distinct_threads(monkeypatch, str
     monkeypatch.setattr(travel, "require_identity", lambda request: request.identity)
     for uid in ("alice", "bob"):
         request = SimpleNamespace(identity=SimpleNamespace(user_id=uid, tenant_id="tenant"))
-        if stream:
-            response = await travel.travel_plan_stream(request)
-            frames = [chunk async for chunk in response.body_iterator]
-            assert any('event: done' in chunk for chunk in frames)
-        else:
-            result = await travel.travel_plan(request)
-            assert result["status"] == "answered"
-    assert configs == ["travel:tenant:alice:same", "travel:tenant:bob:same"]
+        response = await travel.travel_v2_plan_stream(request)
+        frames = [chunk async for chunk in response.body_iterator]
+        assert any('event: done' in chunk for chunk in frames)
+    assert configs == [
+        "travel:tenant:alice:travel-v2:same",
+        "travel:tenant:bob:travel-v2:same",
+    ]
 
 
 def test_user_identity_still_scopes_thread_without_tenant():

@@ -99,6 +99,7 @@ def test_returns_owner_scoped_safe_snapshot_and_masks_pii(
             "action_type": "refund",
             "masked_target": "订单尾号 ****8000",
             "summary": "将退款退到订单尾号 ****8000",
+            "reason": "",
             "expires_at": expires_at,
             "state": "pending",
     }

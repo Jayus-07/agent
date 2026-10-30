@@ -420,6 +420,17 @@ def tenant_session_user():
     target_name = f"target-{suffix}"
     with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
         with conn.cursor() as cur:
+            # 9d7c582 起客服档案走 PATCH /customer-service/team/{id}，
+            # 前置校验要求用户属于本租户启用的客服部门（041 只预置 default 租户）
+            cur.execute(
+                "SELECT 1 FROM auth.departments "
+                "WHERE tenant_id = 'tenant-b' AND code = 'customer'")
+            dept_existed = cur.fetchone() is not None
+            if not dept_existed:
+                cur.execute(
+                    "INSERT INTO auth.departments "
+                    "(tenant_id, code, name, department_type) "
+                    "VALUES ('tenant-b', 'customer', '客服部', 'customer_service')")
             cur.execute(
                 "INSERT INTO auth.users "
                 "(username, password_hash, real_name, role, tenant_id) "
@@ -429,8 +440,9 @@ def tenant_session_user():
             actor_id = cur.fetchone()[0]
             cur.execute(
                 "INSERT INTO auth.users "
-                "(username, password_hash, real_name, role, tenant_id) "
-                "VALUES (%s, %s, '目标客服', 'viewer', 'tenant-b') RETURNING id",
+                "(username, password_hash, real_name, role, tenant_id, dept) "
+                "VALUES (%s, %s, '目标客服', 'viewer', 'tenant-b', 'customer') "
+                "RETURNING id",
                 (target_name, hash_password("pw-target")),
             )
             target_id = cur.fetchone()[0]
@@ -460,6 +472,10 @@ def tenant_session_user():
                 "DELETE FROM auth.users WHERE id IN (%s, %s)",
                 (actor_id, target_id),
             )
+            if not dept_existed:
+                cur.execute(
+                    "DELETE FROM auth.departments "
+                    "WHERE tenant_id = 'tenant-b' AND code = 'customer'")
         conn.commit()
 
 
@@ -488,8 +504,9 @@ def test_cs_role_change_revokes_real_access_gate_and_refresh_family(
     )
     assert live_before.status_code == 200
 
+    # 9d7c582 起客服角色变更走客服团队接口（users 更新已拒绝客服档案字段）
     update_response = client.patch(
-        f"/api/sys/rbac/users/{target['id']}",
+        f"/api/sys/rbac/customer-service/team/{target['id']}",
         json={"version": 0, "csRole": "supervisor"},
         headers={
             "X-Auth-Type": "jwt",

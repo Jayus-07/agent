@@ -160,7 +160,8 @@ def test_user_lifecycle_end_to_end(monkeypatch):
         d = detail.json()
         assert d["email"] == "p6@example.com"
         assert d["platformRoles"] == ["viewer"]
-        assert d["csRoles"] == []
+        # 9d7c582 起客服档案拆到 /customer-service/team，平台详情不再带 csRoles
+        assert "csRoles" not in d
         assert d["mustChangePassword"] is True
         assert d["activeSessionCount"] == 0
 
