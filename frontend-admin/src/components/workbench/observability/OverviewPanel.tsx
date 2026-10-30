@@ -383,7 +383,7 @@ export default function OverviewPanel() {
         <ul className="mt-2 list-disc space-y-1 pl-5">
           <li>Run 级待审批状态未随 Trace 返回；不会把运行中当作待审批。</li>
           <li>降级计数只认明确的 <code>metadata.business_outcome=degraded</code>；当前成功记录没有覆盖完整的降级观测率。</li>
-          <li>Span DTO 无 HTTP status code；详情页不展示 HTTP 响应口径。</li>
+          <li>Span DTO 已含 <code>llm_call.http_status</code> 字段，但采集链尚无写入点（失败 attempt 的 HTTP 状态仅落在 llm_usage 的 finish_reason）；HTTP 全链路拆分（DNS/连接/TTFB）仍无采集。</li>
           <li>TraceStore 留存上限为 {stats?.retention_limit ?? 5000} 条；统计仅覆盖这批留存记录中的授权数据。</li>
         </ul>
       </section>

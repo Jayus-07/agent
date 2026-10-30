@@ -111,6 +111,8 @@ export interface Span {
     cost_usd: number;
     /** 记账本位币（CNY）：唯一展示主口径（2026-10-07） */
     cost_cny?: number;
+    /** HTTP 响应状态（metrics.http_status；采集链当前无写入点，默认 null） */
+    http_status?: number | null;
   };
   /** 网络耗时拆分（type=http 或含 HTTP 调用时有值） */
   http_breakdown?: {

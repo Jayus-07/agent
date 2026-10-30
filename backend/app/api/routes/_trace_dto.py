@@ -231,6 +231,9 @@ def to_span_dto(s, all_spans: list, total_ms: int) -> dict:
             "cost_usd": m.get("cost_usd", 0) if isinstance(m, dict) else 0,
             # 记账本位币主口径（Billing V2，2026-10-07）
             "cost_cny": m.get("cost_cny") if isinstance(m, dict) else None,
+            # HTTP 响应状态（metrics.http_status；当前采集链无写入点，默认 null，
+            # reranker 等已采集 HTTP 维度的 span 后续点亮，2026-10-31）
+            "http_status": m.get("http_status") if isinstance(m, dict) else None,
             # 文本回退链：prompt/question/query（路由 LLM 的 input 用 query 键）、
             # response/metrics.completion_text（chain 层截断写入）
             "prompt_text": ((inp.get("prompt") or inp.get("question") or inp.get("query") or "")
