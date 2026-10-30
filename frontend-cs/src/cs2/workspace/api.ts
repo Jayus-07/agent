@@ -1,0 +1,131 @@
+// cs-workstation-v2 P1：坐席工作台 API（复用 @/api/client，路径经 BFF）。
+import { request } from '@/api/client'
+
+export interface HandoffQueueItem {
+  conversation_id: string
+  user_id: string
+  handoff_state: string
+  handoff_id: string
+  trigger_type: string
+  trigger_reason: string | null
+  updated_at: string
+  last_message_preview: string | null
+}
+
+export interface HandoffQueueResponse {
+  items: HandoffQueueItem[]
+  total: number
+}
+
+export interface MessageDTO {
+  message_id: string
+  sender_type: string
+  content: string
+  content_type: string
+  intent_domain?: string | null
+  intent_name?: string | null
+  confidence?: number | null
+  trace_id?: string | null
+  created_at: string
+}
+
+export interface ConversationDetail {
+  conversation_id: string
+  user_id: string
+  conversation_status: string
+  handling_mode: string
+  priority: string
+  channel: string
+  summary: string | null
+  context_summary: string | null
+  trace_count: number
+  last_trace_id: string | null
+  created_at: string
+  last_activity_at: string
+  messages: MessageDTO[]
+}
+
+export interface HandoffMessagesResponse {
+  conversation_id: string
+  handoff_state: string
+  last_id: number
+  messages: MessageDTO[]
+  agent_typing: boolean
+  handoff_meta?: {
+    handoff_id: string
+    handoff_state: string
+    total_deadline_at: string | null
+    queue_position: number
+  } | null
+}
+
+export interface ConversationEvent {
+  seq: number
+  event_id: string
+  type: string
+  payload: Record<string, unknown>
+  ts: string
+}
+
+export async function getHandoffQueue(states?: string): Promise<HandoffQueueResponse> {
+  const q = states ? `?states=${encodeURIComponent(states)}` : ''
+  return request(`/api/cs/conversations/handoff/queue${q}`)
+}
+
+export async function getConversationDetail(conversationId: string): Promise<ConversationDetail> {
+  return request(`/api/cs/conversations/${conversationId}`)
+}
+
+export async function getHandoffMessages(
+  conversationId: string,
+  sinceId = 0,
+  limit = 200,
+): Promise<HandoffMessagesResponse> {
+  return request(`/api/cs/conversations/${conversationId}/messages?since_id=${sinceId}&limit=${limit}`)
+}
+
+/** 断线补发：只返回 seq > after_seq 的已持久化事件（升序） */
+export async function getConversationEvents(
+  conversationId: string,
+  afterSeq = 0,
+  limit = 200,
+): Promise<{ conversation_id: string; after_seq: number; events: ConversationEvent[] }> {
+  return request(`/api/cs/conversations/${conversationId}/events?after_seq=${afterSeq}&limit=${limit}`)
+}
+
+export async function claimConversation(conversationId: string): Promise<{
+  conversation_id: string
+  handoff_state: string
+  agent_id: string
+  already_claimed: boolean
+}> {
+  return request(`/api/cs/conversations/${conversationId}/claim`, {
+    method: 'POST',
+    body: JSON.stringify({ agent_id: '' }),
+  })
+}
+
+export async function closeConversation(conversationId: string): Promise<{
+  conversation_id: string
+  handoff_state: string
+  closed_by: string
+}> {
+  return request(`/api/cs/conversations/${conversationId}/close`, {
+    method: 'POST',
+    body: JSON.stringify({ agent_id: '' }),
+  })
+}
+
+export async function sendAgentMessage(
+  conversationId: string,
+  content: string,
+): Promise<{ message_id: string; sender_type: string; content: string; created_at: string }> {
+  return request(`/api/cs/conversations/${conversationId}/agent-messages`, {
+    method: 'POST',
+    body: JSON.stringify({ agent_id: '', content }),
+  })
+}
+
+export async function issueWsTicket(): Promise<{ ticket: string; ws_path: string; ttl: number }> {
+  return request('/api/cs/conversations/agent/ws-ticket', { method: 'POST' })
+}
