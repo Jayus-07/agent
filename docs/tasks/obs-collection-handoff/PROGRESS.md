@@ -40,17 +40,41 @@
 
 ## P2 实施记录
 
-- [ ] `_trace_dto.py`：`to_trace_dto`/`stored_dict_to_dto` 透出 `workflow_kind`
-- [ ] `runKind.ts`：优先消费 DTO `workflow_kind`，workflow_name 映射保留为兜底；测试更新
-- [ ] `/traces/stats` 增加 domain 维度（复用 classify_trace_source 单一事实源）
-- [ ] `OverviewPanel.tsx` 业务域分布切服务端口径，删除样本聚合标注
-- [ ] `dev-svc.bat`：修注释漂移 + rebuild 增加 admin/web；实测一次生效
+- [x] `_trace_dto.py`：`to_trace_dto`/`stored_dict_to_dto` 透出 `workflow_kind`
+- [x] `runKind.ts`：优先消费 DTO `workflow_kind`（rag_query/knowledge_index 直接判定），
+      workflow_name 映射保留为存量兜底；新增 runKind.test.ts 6 用例
+- [x] `/traces/stats` 增加 `by_domain`（total/errors，classify_trace_source 单一事实源，
+      含 SOURCE_UNKNOWN「其他」桶）
+- [x] `OverviewPanel.tsx` 业务域分布切服务端口径，删除样本聚合标注；
+      `TRACE_SOURCE_LABELS` 补空串「其他」桶对齐
+- [x] `dev-svc.bat`：修注释漂移（admin/web 已是容器化镜像非 next dev）+
+      新增 `rebuild_frontend`（build + up -d frontend-admin frontend + 健康等待）
+
+验证证据（2026-10-30）：
+- 前端：vitest 全量 **576 passed (83 files)**；`tsc --noEmit` **rc=0**
+  （OverviewPanel.test.tsx 重写 6 用例：by_domain 服务端口径/运行中卡 Link/模型健康卡
+  三态/最近错误/失败态；runKind.test.ts 新增）
+- 后端定向：`tests/test_trace_fixes.py tests/api/test_observability_tool_filter.py
+  tests/api/test_observability_trace_children.py tests/api/test_observability_trace_paging.py
+  tests/observability/test_trace_source.py tests/observability/test_trace_error_derivation.py`
+  → **57 passed, 2 failed**；2 failed
+  （test_observability_trace_children 的 get_trace 签名不匹配）经主仓库 main 对照
+  **同样失败**，为其他会话 authz 改动的既有失败，非本任务引入，不改动。
 
 ## P3 实施记录
 
-- [ ] 总览运行中卡改 Link 跳 `status=running`
-- [ ] 模型健康卡接 llm_model_health（复用既有 health API，无新造假端点）
-- [ ] 保真度差异清单逐项核对（结论表在完成后回填）
+- [x] 总览运行中卡改 Link 跳 `status=running`（"授权活跃端点实时计数"→"点击进入运行中筛选"）
+- [x] 模型健康卡接 `GET /sys/model-health`（复用既有探测缓存端点 + 前端既有
+      listModelHealth/healthStatusLabel，无新造假端点；读取失败如实显示"未采集"）
+- [ ] 保真度差异清单逐项核对（P4 前回填下表）
+
+| 差异项 | 结论 |
+| --- | --- |
+| 总览缺模型健康卡 | 已对齐（/sys/model-health 探测缓存，beat 周期，本页不在线探测） |
+| 运行中卡不可点击 | 已对齐（Link → status=running 筛选） |
+| HTTP 拆分依赖 span.http_breakdown | 有意偏离：主图无该采集维度，前端空值如实显示"未采集"，不在本任务伪造数据 |
+| compare 对比页旧样式 | 有意偏离：非本任务范围，待对比页重构任务承接 |
+| 列表 DTO 未下发 workflow_kind | 已对齐（P2 透出，本行从"后端契约缺口"披露块移除） |
 
 ## P4 验证记录
 

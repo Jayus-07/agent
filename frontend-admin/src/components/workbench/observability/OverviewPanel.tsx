@@ -5,8 +5,10 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { RefreshCw } from 'lucide-react'
 import { getTraceStats, listTracesPage, listActiveTraces, type AuthorizedTraceStats } from '@/api/observability'
+import { listModelHealth } from '@/api/modelConfig'
 import type { TraceRecord } from '@/types/trace'
-import { formatCost, formatRelative } from '@/types/trace'
+import { formatCost, formatRelative, TRACE_SOURCE_LABELS } from '@/types/trace'
+import { healthStatusLabel, type ModelHealth } from '@/types/modelConfig'
 import {
   filterRuntimeRecords,
   getRunStatusLabel,
@@ -15,15 +17,19 @@ import {
   summarizeRuntimeSample,
   type RuntimeWindow,
 } from '@/lib/observability/runtimeStatus'
-import { deriveDomainLabel } from '@/lib/observability/runKind'
+
+/** 模型健康行：/sys/model-health items 附带 modelName/provider（类型镜像收窄） */
+type ModelHealthRow = ModelHealth & { modelName: string; provider: string; modelKind?: string }
 
 /**
  * 运行总览（2026-10-30 按模拟页重构，不复用旧 RuntimeOverview）。
  *
  * 保留的不可消失契约：stats 授权口径与双时间戳、10 项终态全部可点击进入筛选、
- * running 实时计数来自授权活跃端点（不以历史样本推断）、失败全屏态与过期标记、
- * 「后端契约缺口」披露块。新增：业务域分布（基于最近 200 条授权样本聚合，
- * 服务端 stats 尚无 domain 维度——口径已在面板标注，pushdown 任务补齐后切换）。
+ * running 实时计数来自授权活跃端点（不以历史样本推断）且可点击进入筛选、
+ * 失败全屏态与过期标记、「后端契约缺口」披露块。
+ * 2026-10-30 遗留收尾：业务域分布切换到服务端 stats.by_domain（classify_trace_source
+ * 单一事实源），删除 200 条样本聚合口径；新增模型健康卡（复用 /sys/model-health
+ * 探测缓存，不在线探测）。
  */
 
 const WINDOWS: RuntimeWindow[] = ['15m', '1h', '6h', '24h']
@@ -56,6 +62,7 @@ export default function OverviewPanel() {
   const [traces, setTraces] = useState<TraceRecord[]>([])
   const [stats, setStats] = useState<AuthorizedTraceStats | null>(null)
   const [activeCount, setActiveCount] = useState<number | null>(null)
+  const [modelHealth, setModelHealth] = useState<ModelHealthRow[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [lastFetchedAt, setLastFetchedAt] = useState<string | null>(null)
@@ -71,7 +78,7 @@ export default function OverviewPanel() {
     try {
       const until = new Date()
       const since = new Date(until.getTime() - WINDOW_HOURS[range] * 60 * 60_000)
-      const [result, authorizedStats, active] = await Promise.all([
+      const [result, authorizedStats, active, health] = await Promise.all([
         listTracesPage({
           limit: 200,
           offset: 0,
@@ -82,11 +89,14 @@ export default function OverviewPanel() {
         getTraceStats(WINDOW_HOURS[range]),
         // 运行中走授权活跃端点；失败时计数置 null，不用历史样本推断
         listActiveTraces().catch(() => null),
+        // 模型健康是只读探测缓存（beat 周期），失败不阻断总览
+        listModelHealth().then((r) => r.items as ModelHealthRow[]).catch(() => null),
       ])
       if (requestId !== requestSequence.current) return
       setTraces(result.traces)
       setStats(authorizedStats)
       setActiveCount(Array.isArray(active) ? active.length : null)
+      setModelHealth(Array.isArray(health) ? health : null)
       hasFetched.current = true
       setLastFetchedAt(new Date().toISOString())
       setLoadFailed(false)
@@ -127,17 +137,27 @@ export default function OverviewPanel() {
     [inWindow],
   )
   const domainRows = useMemo(() => {
-    const byDomain = new Map<string, { total: number; errors: number }>()
-    inWindow.forEach((t) => {
-      const key = deriveDomainLabel(t)
-      const row = byDomain.get(key) ?? { total: 0, errors: 0 }
-      row.total += 1
-      const st = getRunStatus(t)
-      if (st === 'error' || st === 'failed') row.errors += 1
-      byDomain.set(key, row)
-    })
-    return [...byDomain.entries()].sort((a, b) => b[1].total - a[1].total)
-  }, [inWindow])
+    // 服务端口径（P2 2026-10-30）：classify_trace_source 单一事实源，
+    // 含「其他」桶；不再用 200 条授权样本聚合
+    const by = stats?.by_domain
+    if (!by) return [] as Array<[string, { total: number; errors: number }]>
+    return Object.entries(by)
+      .filter(([, row]) => row.total > 0)
+      .sort((a, b) => b[1].total - a[1].total)
+  }, [stats])
+  const domainTotal = useMemo(
+    () => domainRows.reduce((sum, [, row]) => sum + row.total, 0),
+    [domainRows],
+  )
+  const healthSummary = useMemo(() => {
+    if (!modelHealth) return null
+    const failed = modelHealth.filter((r) => r.status !== 'healthy' && r.status !== 'slow')
+    return {
+      total: modelHealth.length,
+      healthy: modelHealth.filter((r) => r.status === 'healthy').length,
+      failed,
+    }
+  }, [modelHealth])
 
   const changeWindow = (next: RuntimeWindow) => {
     const params = new URLSearchParams(searchParams.toString())
@@ -219,11 +239,11 @@ export default function OverviewPanel() {
           <strong className="mt-2 block font-mono text-xl tabular-nums text-text-primary">{durationLabel(stats?.p50_duration_ms ?? null)} / {durationLabel(stats?.p95_duration_ms ?? null)}</strong>
           <span className="mt-1 block text-xs text-text-muted">授权留存记录中的已知终态</span>
         </div>
-        <div className="min-h-24 rounded-md border border-violet-200 bg-violet-50/60 px-4 py-3">
+        <Link href={statusFilterHref(range, 'running')} className="min-h-24 rounded-md border border-violet-200 bg-violet-50/60 px-4 py-3 hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">
           <span className="block text-sm text-violet-800">运行中（实时）</span>
           <strong className="mt-2 block font-mono text-2xl tabular-nums text-violet-900">{activeCount === null ? '未采集' : activeCount}</strong>
-          <span className="mt-1 block text-xs text-violet-700">授权活跃端点实时计数</span>
-        </div>
+          <span className="mt-1 block text-xs text-violet-700">点击进入运行中筛选</span>
+        </Link>
         <div className="min-h-24 rounded-md border border-border-subtle bg-white px-4 py-3">
           <span className="block text-sm text-text-secondary">样本费用（CNY）</span>
           <strong className="mt-2 block font-mono text-xl tabular-nums text-text-primary">{sampleSummary.costCny === null ? '未采集' : formatCost(sampleSummary.costCny)}</strong>
@@ -233,22 +253,25 @@ export default function OverviewPanel() {
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <section className="rounded-md border border-border-subtle bg-white p-4">
-          <h3 className="mb-2 text-[13px] font-medium text-text-primary">业务域分布（{RUNTIME_WINDOW_LABELS[range]} · 最近 200 条授权样本聚合）</h3>
+          <h3 className="mb-2 text-[13px] font-medium text-text-primary">业务域分布（{RUNTIME_WINDOW_LABELS[range]} · 服务端统计口径）</h3>
           {domainRows.length === 0 ? (
-            <p className="py-4 text-sm text-text-muted">当前时间范围没有可确认的终态记录。</p>
+            <p className="py-4 text-sm text-text-muted">当前时间范围没有已授权的记录。</p>
           ) : (
             <>
-              {domainRows.map(([domain, row]) => (
-                <div key={domain} className="mb-1.5 flex items-center gap-2" aria-label={`${domain} ${row.total} 条，错误 ${row.errors}`}>
-                  <span className="w-28 shrink-0 truncate text-xs text-text-secondary" title={domain}>{domain}</span>
-                  <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full rounded-full bg-violet-400" style={{ width: `${Math.max(2, (row.total / (inWindow.length || 1)) * 100)}%` }} />
+              {domainRows.map(([domain, row]) => {
+                const label = TRACE_SOURCE_LABELS[domain] ?? domain
+                return (
+                  <div key={domain || 'unknown'} className="mb-1.5 flex items-center gap-2" aria-label={`${label} ${row.total} 条，错误 ${row.errors}`}>
+                    <span className="w-28 shrink-0 truncate text-xs text-text-secondary" title={label}>{label}</span>
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-slate-100">
+                      <div className="h-full rounded-full bg-violet-400" style={{ width: `${Math.max(2, (row.total / (domainTotal || 1)) * 100)}%` }} />
+                    </div>
+                    <span className="w-10 text-right font-mono text-xs tabular-nums text-text-secondary">{row.total}</span>
+                    <span className={`w-16 text-right text-[11px] tabular-nums ${row.errors > 0 ? 'text-red-600' : 'text-text-muted'}`}>{row.errors} 错</span>
                   </div>
-                  <span className="w-10 text-right font-mono text-xs tabular-nums text-text-secondary">{row.total}</span>
-                  <span className={`w-16 text-right text-[11px] tabular-nums ${row.errors > 0 ? 'text-red-600' : 'text-text-muted'}`}>{row.errors} 错</span>
-                </div>
-              ))}
-              <p className="mt-2 text-[11px] text-text-muted">主图=1 个 LangGraph 企业助手图，域分支由 runtime_domain tag 区分；服务端 stats 尚无 domain 维度，本区块为样本聚合口径（pushdown 任务补齐后切换）。</p>
+                )
+              })}
+              <p className="mt-2 text-[11px] text-text-muted">口径与 <code>GET /api/observability/traces/stats</code> 的 by_domain 一致（classify_trace_source 单一事实源）；主图=1 个 LangGraph 企业助手图，域分支由 runtime_domain tag 区分。</p>
             </>
           )}
         </section>
@@ -270,6 +293,38 @@ export default function OverviewPanel() {
           })}
         </section>
       </div>
+
+      <section className="rounded-md border border-border-subtle bg-white p-4">
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-[13px] font-medium text-text-primary">模型健康（探测缓存 · beat 周期，本页不在线探测）</h3>
+          <Link href="/settings/models" className="text-xs font-medium text-accent underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent">在模型管理查看</Link>
+        </div>
+        {healthSummary === null ? (
+          <p className="py-2 text-sm text-text-muted">模型健康缓存未采集（读取失败或未授权）。</p>
+        ) : healthSummary.total === 0 ? (
+          <p className="py-2 text-sm text-text-muted">尚无探测记录（探测由 Celery beat 周期执行）。</p>
+        ) : (
+          <>
+            <p className="mb-2 text-xs text-text-secondary">
+              共 {healthSummary.total} 个已探测模型 · <span className="text-emerald-700">{healthSummary.healthy} 健康</span>
+              {healthSummary.failed.length > 0 ? <> · <span className="text-red-600">{healthSummary.failed.length} 异常</span></> : null}
+            </p>
+            {healthSummary.failed.slice(0, 5).map((r) => (
+              <div key={`${r.modelName}-${r.provider}`} className="mb-1 flex items-center gap-2 text-xs" aria-label={`${r.modelName} ${r.status}`}>
+                <span className="w-44 shrink-0 truncate font-mono text-text-primary" title={r.modelName}>{r.modelName}</span>
+                <span className="shrink-0 rounded border border-red-200 bg-red-50 px-1.5 py-0.5 text-[11px] text-red-700">{healthStatusLabel(r.status, r.probeMode)}</span>
+                <span className="min-w-0 flex-1 truncate text-text-muted">
+                  {r.consecutiveFailures > 0 ? `连续失败 ${r.consecutiveFailures} 次` : '最近探测异常'}
+                  {typeof r.lastLatencyMs === 'number' ? ` · ${r.lastLatencyMs}ms` : ''}
+                </span>
+              </div>
+            ))}
+            {healthSummary.failed.length > 5 && (
+              <p className="mt-1 text-[11px] text-text-muted">其余 {healthSummary.failed.length - 5} 个异常模型在模型管理页查看。</p>
+            )}
+          </>
+        )}
+      </section>
 
       {recentErrors.length > 0 && (
         <section className="rounded-md border border-red-200 bg-red-50/60 p-4">
@@ -326,7 +381,6 @@ export default function OverviewPanel() {
       <section className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
         <h3 className="font-semibold">后端契约缺口</h3>
         <ul className="mt-2 list-disc space-y-1 pl-5">
-          <li>列表 DTO 未下发 workflow_kind（执行类型徽标暂按 workflow_name 前端映射，pushdown 任务补齐后切换）。</li>
           <li>Run 级待审批状态未随 Trace 返回；不会把运行中当作待审批。</li>
           <li>降级计数只认明确的 <code>metadata.business_outcome=degraded</code>；当前成功记录没有覆盖完整的降级观测率。</li>
           <li>Span DTO 无 HTTP status code；详情页不展示 HTTP 响应口径。</li>

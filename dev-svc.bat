@@ -9,12 +9,17 @@ setlocal enabledelayedexpansion
 ::   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|web^|all] [/y]
 ::
 ::   backend = docker compose "app" service   127.0.0.1:8000  (/health)
-::   admin   = frontend-admin  next dev       :3200           (/login)
-::   web     = frontend        next dev       :3100           (/login)
+::   admin   = frontend-admin container       :3200           (/login)
+::             mirrored production image (node server.js, NO bind mount)
+::   web     = frontend container             :3100           (/login)
+::             mirrored production image (node server.js, NO bind mount)
 ::   /y      = skip the confirmation prompt of stop/restart/rebuild
 ::   no arg  = print status
-::   rebuild = backend only: compose build + up -d all backend services
-::             - the ONLY way code / .env changes reach the containers
+::   rebuild = compose build + up -d all backend services AND the
+::             containerized frontends (frontend-admin / frontend):
+::             the ONLY way code / .env changes reach the containers
+::             (2026-10-30 fix: rebuild used to be backend-only while
+::             admin/web had already moved to mirrored images)
 ::
 :: Conventions kept from start_frontend*.bat:
 ::   * next dev always boots from an EMPTY distDir (NEXT_DIST_DIR);
@@ -120,10 +125,15 @@ call :do_status
 exit /b 0
 
 :do_rebuild
-:: rebuild = backend only. Frontends are "next dev" processes, nothing to build.
+:: rebuild = backend images + containerized frontends. frontend-admin /
+:: frontend run mirrored production images (node server.js, no source
+:: bind mount): frontend code changes reach :3200/:3100 ONLY via this
+:: path. frontend-cs still has a "next dev" fallback and stays out of
+:: scope here (its container is covered by its own compose workflow).
 call :confirm rebuild
 if errorlevel 1 exit /b 0
 call :rebuild_backend
+call :rebuild_frontend
 call :do_status
 exit /b 0
 
@@ -267,6 +277,31 @@ exit /b 0
 set "RC=%ERRORLEVEL%"
 popd
 echo   [ERROR] docker compose rebuild failed, rc=%RC%
+exit /b 1
+
+:: =====================================================================
+:: frontend rebuild - build + recreate the containerized frontends.
+:: frontend-admin / frontend have NO source bind mount: a plain restart
+:: reuses the old image, so frontend code changes take effect ONLY here.
+:: =====================================================================
+:rebuild_frontend
+set "FRONTEND_SERVICES=frontend-admin frontend"
+echo   [frontend] docker compose build %FRONTEND_SERVICES% ...
+pushd "%ROOT%"
+docker compose build %FRONTEND_SERVICES%
+if errorlevel 1 goto rebuild_fe_fail
+echo   [frontend] docker compose up -d %FRONTEND_SERVICES% ...
+docker compose up -d %FRONTEND_SERVICES%
+if errorlevel 1 goto rebuild_fe_fail
+popd
+call :wait_http "http://127.0.0.1:%ADMIN_PORT%/login" frontend-admin
+call :wait_http "http://127.0.0.1:%WEB_PORT%/login" frontend
+exit /b 0
+
+:rebuild_fe_fail
+set "RC=%ERRORLEVEL%"
+popd
+echo   [ERROR] docker compose frontend rebuild failed, rc=%RC%
 exit /b 1
 
 :: =====================================================================
@@ -450,10 +485,11 @@ echo.
 echo   dev-svc.bat [status^|start^|stop^|restart^|rebuild] [backend^|admin^|cs^|web^|all] [/y]
 echo.
 echo   backend = docker compose app service   127.0.0.1:8000
-echo   admin   = frontend-admin next dev      :3200
+echo   admin   = frontend-admin container     :3200
 echo   cs      = frontend-cs next dev         :3300
-echo   web     = frontend next dev            :3100
-echo   rebuild = backend only: build images + up -d all backend services.
+echo   web     = frontend container           :3100
+echo   rebuild = build images + up -d all backend services AND the
+echo             containerized frontends (frontend-admin / frontend).
 echo             Code or .env changes take effect ONLY via rebuild,
 echo             plain restart reuses old image and old env vars.
 exit /b 1
