@@ -22,7 +22,8 @@ def test_local_inference_keeps_usage_without_cloud_cash_or_fake_price(monkeypatc
     assert result.cost_status == "estimated"
 
 
-def test_local_call_limit_still_enforced_and_no_cloud_reservation(monkeypatch):
+def test_local_call_no_cloud_reservation_and_calls_still_counted(monkeypatch):
+    """本地调用不预占云端账单；max_calls 自 231675e 起只记账不拒绝。"""
     monkeypatch.setattr(models, "lookup_model_entry", lambda name: {"name": name})
     monkeypatch.setattr(models, "get_model_billing", lambda name: "local")
     quota = SimpleNamespace(reserve=lambda **k: pytest.fail("本地调用不应预占云端账单"))
@@ -31,8 +32,10 @@ def test_local_call_limit_still_enforced_and_no_cloud_reservation(monkeypatch):
         user_id="u", tenant_id="t",
     )
     assert state.reserve("primary", model_name="local-model", component="embedding") is None
-    with pytest.raises(budget.RequestBudgetExceeded):
-        state.reserve("primary", model_name="local-model", component="embedding")
+    # 超过 max_calls 不再拒绝（231675e：调用数只用于用量观测），
+    # 但仍要如实记账，云端账单桩同样不得被触碰。
+    assert state.reserve("primary", model_name="local-model", component="embedding") is None
+    assert state.calls == 2
 
 
 def test_unknown_provider_still_requires_cloud_price(monkeypatch):

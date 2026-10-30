@@ -155,9 +155,22 @@ class TestAuthorizationContext:
         assert admin.data_scope == "all"
         assert editor.data_scope == "department"
 
-    def test_context_is_pure_no_io(self):
-        """构建为纯内存计算（性能红线：权限处理毫秒级、无 DB 查询）。"""
+    def test_context_is_pure_no_io(self, monkeypatch):
+        """授权计算为纯内存计算（性能红线：无二次 IO/重计算）。
+
+        KB 目录已 DB 化（get_knowledge_bases 走 store 查询，属目录层
+        性能域，有独立缓存策略），不在此测量内：monkeypatch 注册表为
+        非 bootstrap 对象使 get_knowledge_bases 走内存快路径后计时。
+        阈值 1s 拦的是「授权计算本身混入 IO/重计算」。
+        """
         import time
+        from backend.config import knowledge_base as kb_cfg
+
+        monkeypatch.setattr(
+            kb_cfg, "KNOWLEDGE_BASES",
+            {"policy_general": {"audience": "employee"},
+             "policy_hr": {"audience": "employee"}},
+        )
         p = Principal(user_id="u-1", subject_type="employee", department="hr",
                       roles=("editor",), authenticated=True)
         t0 = time.perf_counter()

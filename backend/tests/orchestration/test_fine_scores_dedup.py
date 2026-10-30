@@ -26,7 +26,10 @@ def _fake_router_with_vector(decision) -> HierarchicalRouter:
     VectorRouter，测试环境无 embedding 供应商 Key 必然初始化失败 →
     降级地板分），旧写法 monkeypatch get_router 不在调用路径上——
     改为构造参数注入假 vector（只 mock 外部边界，不触真 DB）。
+    decision 需带 routing_meta（_fine_scores 读取 score_type）。
     """
+    if not hasattr(decision, "routing_meta"):
+        decision.routing_meta = None
     return HierarchicalRouter(
         vector_router=SimpleNamespace(route=lambda q, top_k=8: decision),
     )

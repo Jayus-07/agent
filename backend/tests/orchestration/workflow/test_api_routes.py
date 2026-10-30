@@ -68,6 +68,15 @@ def app_with_workflows(monkeypatch, tmp_path, fresh_registry, patched_trace_coll
 
     app = FastAPI()
     app.include_router(workflows_route.router)
+    # workflow 路由现挂 require_admin_user（敏感端点统一依赖）；本文件只测
+    # workflow API 行为，身份按外部边界 mock（与 test_tasks_api 同口径）。
+    from backend.app.api.deps import OperatorIdentity
+
+    async def _fake_operator(_request):
+        return OperatorIdentity(role="admin", actor="user:1")
+
+    monkeypatch.setattr(
+        "backend.app.api.deps.resolve_operator_role", _fake_operator)
 
     return app, store
 

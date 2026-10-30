@@ -439,8 +439,9 @@ def test_frontend_does_not_redeclare_subflow_attribution():
     判据来源是注册表（有新子流域图，本用例自动覆盖），不是这里再列一份名单——
     再列一份名单本身就是同一个病。
 
-    若某天确有正当用途（如深链到某个子流域图），请在该用例里显式加豁免并写明
-    理由，不要直接把用例删掉：删掉等于把「展示层自己发明归属名」的口子重新打开。
+    若某天确有正当用途（如深链到某个子流域图），在该行行尾加
+    ``subflow-literal-exempt: <理由>`` 标记显式豁免（可 grep 审计），
+    不要直接把用例删掉：删掉等于把「展示层自己发明归属名」的口子重新打开。
     """
     subflow_modes = sorted(
         g.name for g in domain_graph_registry.get_all().values() if g.subflow
@@ -458,6 +459,8 @@ def test_frontend_does_not_redeclare_subflow_attribution():
                 continue  # 测试夹具里出现字面量属正常
             text = path.read_text(encoding="utf-8", errors="ignore")
             for lineno, line in enumerate(text.splitlines(), 1):
+                if "subflow-literal-exempt:" in line:
+                    continue  # 显式豁免（理由见行尾标记）
                 for mode in subflow_modes:
                     if mode in line:
                         hits.append(f"{path.relative_to(repo_root)}:{lineno} → {mode}")

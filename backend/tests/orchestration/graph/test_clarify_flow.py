@@ -423,9 +423,16 @@ class TestReporterClarify:
 
 
 def _sql_empty_step() -> dict:
-    """SQL 业务性空结果（查不到）：status=success 但输出是标准空话术。"""
+    """SQL 业务性空结果（查不到）：success + 结构化空 rows。
+
+    形态对齐现行 SQLSkill：空结果 output 是 SQLResult dict
+    （rows=[] / is_empty=True），不再产出「未找到相关信息」字符串话术。
+    """
     return {"step_id": "1", "capability": "sql.query", "status": "success",
-            "output": "未找到相关信息", "error": ""}
+            "output": {"rows": [], "columns": [], "row_count": 0,
+                       "is_empty": True},
+            "row_count": 0, "is_empty": True,
+            "error": ""}
 
 
 class TestReporterSqlEmptyClarify:
@@ -448,7 +455,10 @@ class TestReporterSqlEmptyClarify:
             "domain_hint": "", "session_id": "s1",
             "step_results": {"1": _sql_empty_step()},
         })
-        assert "抱歉" in out["final_answer"]
+        # #25 后空结果正文为「## 查询未完成」明细汇总（不再是「## 抱歉」），
+        # 定向追问卡照常附带（_refusal_clarify_marker 已扩展该形态）。
+        assert "查询未完成" in out["final_answer"]
+        assert "没有符合条件的数据" in out["final_answer"]
         assert out["_clarify"]["source"] == "refusal_sql_empty"
         assert out["_clarify"]["options"]
 

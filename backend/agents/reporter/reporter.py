@@ -153,8 +153,17 @@ def _log_unanswered(answer: str, state: dict) -> None:
 
     只登记业务性拒答（「## 抱歉」模板且非技术故障）——服务不可用是
     故障不是知识缺口，归 trace/metrics，不进知识运营清单。
+    #25 结果引用改造后，SQL 业务性空结果统一渲染为「## 查询未完成」
+    汇总（不再以「## 抱歉」开头）；该形态下只要存在业务性空 SQL 且
+    无任何可行动失败（权限/审批/技术故障），仍是知识缺口，照常登记。
     """
-    if not answer.startswith("## 抱歉") or "服务暂时不可用" in answer:
+    refusal = answer.startswith("## 抱歉") and "服务暂时不可用" not in answer
+    sql_empty_summary = (
+        answer.startswith("## 查询未完成")
+        and _sql_empty_hit(state)
+        and not _has_actionable_failure(state)
+    )
+    if not (refusal or sql_empty_summary):
         return
     try:
         from backend.observability.unanswered import record_unanswered_question
@@ -176,9 +185,20 @@ def _refusal_clarify_marker(answer: str, state: dict) -> dict | None:
     判定口径：generate_final_answer 的"无有效输出"分支固定以「## 抱歉」开头，
     技术性错误（服务暂时不可用）同走该分支但不属于拒答，须排除——
     两者都是本模块自有模板，前缀匹配是模块内稳定契约。
+    #25 结果引用改造后，SQL 业务性空结果统一渲染为「## 查询未完成」汇总；
+    该形态若属纯业务性空（有业务空 SQL 且无可行动失败），仍属拒答追问
+    范畴（定向槽位追问），技术性失败照旧不追问。
     延迟导入 clarify_content（调用期取开关/守卫，便于测试替换）。
     """
-    if not answer.startswith("## 抱歉") or "服务暂时不可用" in answer:
+    refusal_template = (
+        answer.startswith("## 抱歉") and "服务暂时不可用" not in answer
+    )
+    sql_empty_summary = (
+        answer.startswith("## 查询未完成")
+        and _sql_empty_hit(state)
+        and not _has_actionable_failure(state)
+    )
+    if not (refusal_template or sql_empty_summary):
         return None
 
     try:
