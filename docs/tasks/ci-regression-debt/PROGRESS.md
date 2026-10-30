@@ -79,3 +79,33 @@
 1. orchestration run 41119049979 结果 → B 组 7 例与偶发（market_research 降级）定性收口。
 2. 隔离第二批：router_understanding 共享状态定位（cs_context KeyError 的全局单例污染源）。
 3. 全量 dispatch（不带 suites 参数）取基线 v2 全景，核对每周失败数下降曲线。
+
+## 2026-10-31 凌晨：全量基线 v2（部分）
+
+Run 41120872440（main = #146 后）。**api/rag/backend-root 三 job 从未启动即 cancelled**（疑 runner 并发/额度，started_at 为空）——api 两次 dispatch 已实证 0 失败，rag 已实证能跑完；三 suite 下周例行跑或手动 dispatch 补取。
+
+### 分 suite 现状（基线 v1 → v2）
+
+| suite | v1 | v2 | 剩余失败构成 |
+|---|---|---|---|
+| api | 杀 | **0**（两次 dispatch 实证） | — |
+| tools-security-obs | 16 | **0** | — |
+| sql-infra | 14 | **0** | — |
+| orchestration | 24 | **7** | B 组 router_understanding/cs_context 6 例 + selection 端到端 1 例，全部 xdist 顺序敏感（单跑全过） |
+| misc | 22 | 22 | inventory 10（xdist 竞争，隔离第二批）+ kafka 模块缺失 2 + skills 报错文案 3 + domain/audit 真回归候选 4 + 其他环境 3 |
+| travel | 13 | 13 | booking 并发/幂等（xdist）+ provider 契约 + decision audit |
+| services-travelv2 | 10 | 10 | 待定性 |
+| customer_service | 4 | 4 | 幂等竞争/状态时序 |
+| prompts-context | 2 | 2 | 待定性 |
+| evaluation | 2 | 2 | 待定性 |
+| repo-tests | 1 | 1 | 待定性 |
+| rag / backend-root | 杀/0 | cancelled 未跑 | 例行补取 |
+
+**净改善：108 → 61（-47），其中三 suite 清零。**
+
+### 下一步（优先级序）
+
+1. **隔离第二批**：xdist 竞争是剩余失败的最大公约数（misc inventory 10 + orchestration 7 + travel booking 6 + cs 4）——B 组 cs_context 的全局单例污染源定位是钥匙（router_node/understanding 链路的模块级状态）。
+2. **misc 真回归候选**：inventory notification 10 例（策略匹配语义）单跑即绿还是真漂移需在干净环境确认；kafka 测试补模块或 skipif 标注；skills 报错文案 3 例对齐新格式。
+3. **travel/travelv2/cs/prompts/evaluation/repo-tests 定性**：逐个单跑→xdist 对比，真失败修复（同 api 批方法论）。
+4. 每周例行跑失败数曲线：v2 起 tools-security-obs/sql-infra/api 三 suite 应稳定为 0，作为回归门禁观测点。
