@@ -57,6 +57,13 @@ jobs:
       # CI 只建 *_test 库，不显式指向会 13 例 connection 失败（run 41114061156 实证）
       WORKFLOW_DB_PGDATABASE: agent_memory_test
       BUSINESS_PGDATABASE: agent_business_test
+      # inventory 存储（INVENTORY_DB_PG_CONFIG 默认 agent_business）——
+      # CI 显式建了无后缀 agent_business 兼容库（004 迁移），不显式指向
+      # *_test 会让 inventory 测试表落进真实兼容库且 drop_pgtest_tables
+      # （按 BUSINESS/WORKFLOW/INVENTORY 配置扫描）覆盖不到：同 worker
+      # 前序用例的 notification_policies 行毒死后续用例（test_notification
+      # 10 例互踩，v2 run 41120872440 实证）
+      INVENTORY_DB_PGDATABASE: agent_business_test
       VECTOR_PGDATABASE: agent_memory_test
       RAG_STORES_PGDATABASE: agent_memory_test
       DOC_REGISTRY_PGDATABASE: agent_memory_test
