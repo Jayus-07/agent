@@ -45,3 +45,37 @@
 3. 专项二：demo 库环境补齐——`DC_DATABASE_URL` 默认 `localhost:5432/demo`（backend/config/data_collection.py:29），CI workflow「Initialize isolated databases」步加 CREATE DATABASE demo + 初始化（预期消化 data_collection 12 例 + sql-infra 部分用例）。
 4. 专项三：并发敏感（orchestration/travel/customer_service ~41 + misc inventory 10 + automations scan）。
 5. rag 基线补取。
+
+## 2026-10-30 晚：CI 验证收官 + 隔离基建第一批
+
+### CI 实证收敛（main 分 suite 失败数，基线 v1 → 当前）
+
+| suite | 基线 v1 | 当前 CI 实证 | 修复手段 |
+|---|---|---|---|
+| api | （被杀无清单） | **0**（两次 dispatch job success） | #139 测试资产对齐 59 例 |
+| tools-security-obs | 16 | **0**（run 41114061156） | #140 demo 库（12）+ #144 no_io 口径（1）+ 3 例随基线自然消化 |
+| sql-infra | 14 | **0**（run 41114061156） | #141 只读角色（12）+ #144 fallback/billing（2） |
+| orchestration | 24 | 见下方 in-flight | #144 真失败 15 例 + #145 env 13 例 + B 组 7 例隔离待定 |
+| misc | 22 | 部分随环境修复消化 | inventory 10 例 xdist 竞争 → #145 隔离基建 |
+| 其余 7 suite | 25 合计 | 0（各 dispatch 均 success） | — |
+| rag | （两轮被杀） | 首次跑完 => success（run 41093726731 起） | 挂死未复现，基线自然取得 |
+
+- #145（WORKFLOW_DB_PGDATABASE + pgtest worker 隔离 + automations tenant 后缀）合入后的 orchestration 验证 run 41119049979 进行中。
+- #144 squash 合并竞态记录：REST PUT merge 在 push 后立即调用会拿到旧 head（e57c3e6 未进 33335d5），导致 env 修复漏合一次——续工时合并 PR 前先 `gh pr view --json headRefOid` 核对。
+
+### 隔离基建第一批（#145）
+
+- `worker_scoped_prefix()`：pgtest 表名按 `PYTEST_XDIST_WORKER` 分名，DROP 收窄本 worker（修 CREATE TYPE pg_type 冲突 + teardown 互删）。
+- automations 测试租户/用户带 worker 后缀（共享真实表 `ai.user_automations`）。
+- B 组遗留：router_understanding/cs_context 7 例 xdist 顺序敏感（单跑全过），待第二批隔离排查。
+
+### 主栈部署验证
+
+- main = 33335d5+#145 后 `devctl.bat rebuild` 完成，全部容器 healthy（reporter.py 改动随 #144 进容器）。
+- chat 链路 sql_empty 追问功能的容器级 E2E 未单独执行（单测 43+20 passed 覆盖行为）；如需 E2E 验证另行安排。
+
+### 下一步
+
+1. orchestration run 41119049979 结果 → B 组 7 例与偶发（market_research 降级）定性收口。
+2. 隔离第二批：router_understanding 共享状态定位（cs_context KeyError 的全局单例污染源）。
+3. 全量 dispatch（不带 suites 参数）取基线 v2 全景，核对每周失败数下降曲线。
