@@ -12,12 +12,19 @@ from backend.orchestration.graph.router_node import router_node
 
 @pytest.fixture()
 def cs_forced_env(monkeypatch):
-    """CS_ENABLED=true + 域检测恒命中 + CS Router 返回固定动作路由。"""
-    import backend.config.customer_service as cs_config
+    """CS_ENABLED=true + 域检测恒命中 + CS Router 返回固定动作路由。
+
+    M16 后 CS 总闸的唯一判定源是 sys_config（DB 覆盖 → env 兜底 → 注册表
+    缺省 false）；CI 无 .env，env 兜底不存在，必须经 _values 强制开启，
+    否则 try_cs_prefilter 恒降级主路由（此前 patch config.CS_ENABLED 无
+    消费方，属漂移残留已删）。setitem 保证 teardown 恢复原值，不向同
+    worker 的后续测试泄漏。
+    """
     from backend.customer_service.router import domain_detector
     from backend.customer_service.router import cs_router
+    from backend.services import sys_config
 
-    monkeypatch.setattr(cs_config, "CS_ENABLED", True)
+    monkeypatch.setitem(sys_config._values, "CS_ENABLED", "true")
 
     class _FakeDetection:
         is_cs = True
@@ -41,7 +48,6 @@ def cs_forced_env(monkeypatch):
             return fixed
 
     monkeypatch.setattr(cs_router, "get_cs_router", lambda: _FakeCSTRouter())
-    return cs_config
 
 
 class TestRouterUnderstandingWiring:

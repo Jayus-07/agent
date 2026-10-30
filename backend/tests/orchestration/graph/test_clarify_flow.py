@@ -290,6 +290,11 @@ def test_router_weak_hit_short_circuits_to_clarify(monkeypatch):
     from backend.orchestration.graph.travel_prefilter import try_travel_prefilter
 
     monkeypatch.setattr(clarify_content, "REFUSAL_CLARIFY_ENABLED", True)
+    # 末行真实断言 travel prefilter 命中；M16 后总闸唯一判定源是 sys_config
+    # （CI 无 .env 时 env 兜底不存在、注册表缺省 false），经 setitem 强制
+    # 开启，teardown 恢复原值，不向同 worker 后续测试泄漏。
+    from backend.services import sys_config
+    monkeypatch.setitem(sys_config._values, "TRAVEL_ENABLED", "true")
 
     class _FreshCache:
         """隔离守卫缓存：Redis 是跨进程持久的，同 session 重跑会误判已追问。"""

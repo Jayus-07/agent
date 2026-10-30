@@ -400,5 +400,8 @@ def test_api_end_to_end_task_reaches_success(monkeypatch, tmp_path):
             f"真实链路未达 success: {detail}")
         assert detail["verdict"] == "go"
         # 无重复提交：同一 task 恰好一行
-        rows = client.get("/selection-decision/tasks").json()["tasks"]
+        # （router 级 resolve_operator_role 对 GET 同样生效，本地 .env 有
+        # ALLOW_UNAUTHENTICATED 豁免、CI 无则 503——与 POST 同口径带头）
+        rows = client.get(
+            "/selection-decision/tasks", headers=_auth).json()["tasks"]
         assert sum(1 for r in rows if r["id"] == task_id) == 1

@@ -29,7 +29,11 @@ import sys
 import psycopg2
 import pytest
 
-from backend.config.database import BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG
+from backend.config.database import (
+    BUSINESS_DB_CONFIG,
+    INVENTORY_DB_PG_CONFIG,
+    WORKFLOW_DB_PG_CONFIG,
+)
 
 TEST_TABLE_PREFIX = "pgtest_biz_"
 
@@ -120,8 +124,13 @@ def set_pg_test_env(monkeypatch):
 
 
 def drop_pgtest_tables() -> int:
-    """删除两库中本 worker 的 pgtest_% 测试表，返回删除数量。
+    """删除本 worker 的 pgtest_% 测试表，返回删除数量。
 
+    遍历库必须覆盖全部建测试表的存储配置：INVENTORY_DB_PG_CONFIG 有独立
+    的库名 env（INVENTORY_DB_PGDATABASE，CI 未设时默认 agent_business），
+    与 BUSINESS_DB_CONFIG 可能不同库——漏掉会让 inventory 的 pgtest 表
+    永远清不掉，同 worker 前序用例的策略行毒死后续用例（CI misc suite
+    test_notification 10 例互踩实证，v2 run 41120872440）。
     模式按 worker 后缀收窄（xdist 下不得删别的工作进程正在用的表）；
     单进程时与原宽匹配语义一致。连接失败静默跳过。
     """
@@ -129,7 +138,7 @@ def drop_pgtest_tables() -> int:
     # LIKE 模式里下划线是通配符，须转义；worker 名（gw0 等）无特殊字符
     like_pattern = prefix.replace("_", r"\_") + "%"
     dropped = 0
-    for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG):
+    for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG, INVENTORY_DB_PG_CONFIG):
         try:
             conn = psycopg2.connect(**cfg, connect_timeout=2)
         except Exception:
@@ -159,7 +168,7 @@ def drop_pgtest_tables() -> int:
 def drop_all_pgtest_tables() -> int:
     """宽匹配清理全部 pgtest_% 残留（跨 worker/历史遗留；仅供手动调用）。"""
     dropped = 0
-    for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG):
+    for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG, INVENTORY_DB_PG_CONFIG):
         try:
             conn = psycopg2.connect(**cfg, connect_timeout=2)
         except Exception:
