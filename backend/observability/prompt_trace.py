@@ -14,6 +14,13 @@ def record_prompt_version(key: str, version: int | None, source: str) -> None:
 
     线程安全：trace_collector.current() 基于 contextvars，
     写入 metadata 时 trace 仅在当前协程可见。
+
+    兼容两种在场形态（2026-10-30 修复：runner 请求开始时经
+    current_versions() 写入 {key: version} map 快照，旧实现按 list 迭代
+    导致 str.get 抛 AttributeError 被静默吞掉——workflow trace 上
+    render_sync 的精确版本记录从未生效）：
+    - map（runner 快照）：按 key 原地更新版本值；
+    - list（render 记录）：同 key 更新、新 key 追加（原语义）。
     """
     try:
         from backend.observability.tracer import trace_collector
@@ -22,7 +29,12 @@ def record_prompt_version(key: str, version: int | None, source: str) -> None:
         if trace is None:
             return
 
-        versions = trace.metadata.get("prompt_versions", [])
+        current = trace.metadata.get("prompt_versions")
+        if isinstance(current, dict):
+            current[key] = version
+            return
+
+        versions = current if isinstance(current, list) else []
         entry = {"key": key, "version": version, "source": source}
 
         for existing in versions:

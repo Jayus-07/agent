@@ -328,6 +328,10 @@ def to_trace_dto(t, detail_level: str | None = None) -> dict:
         "metadata": get("metadata", {}),
         "status": stored_status,
         "workflow_name": get("workflow_name", ""),
+        # 用途分类（WorkflowKind 枚举值：rag_query/knowledge_index/
+        # langgraph_workflow/other）。2026-10-30 管理端遗留收尾：列表/详情
+        # 统一下发，前端 runKind 优先消费，workflow_name 映射仅作存量兜底。
+        "workflow_kind": get("workflow_kind", ""),
         "root_span_id": get("root_span_id", ""),
         "spans": [to_span_dto(s, all_spans, total_ms) for s in all_spans],
         "sla": {"threshold_ms": sla_ms, "breached": total_ms > 0 and total_ms > sla_ms},
@@ -369,6 +373,8 @@ def stored_dict_to_dto(d: dict, detail_level: str | None = None) -> dict:
         "metadata": d.get("metadata", {}),
         "status": d.get("status", "success"),
         "workflow_name": d.get("workflow_name", ""),
+        # 与 to_trace_dto 同口径：workflow_kind 随列表 DTO 下发
+        "workflow_kind": d.get("workflow_kind", ""),
         "root_span_id": d.get("root_span_id", ""),
         "spans": [],
         "sla": {"threshold_ms": sla_ms, "breached": duration > 0 and duration > sla_ms},

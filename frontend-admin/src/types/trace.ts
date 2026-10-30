@@ -153,6 +153,9 @@ export interface TraceRecord {
   spans: Span[];
   /** 工作流名称（如 "rag_agent", "multi_agent_compare"） */
   workflow_name?: string;
+  /** 用途分类（后端 WorkflowKind 枚举值：rag_query / knowledge_index /
+   *  langgraph_workflow / other）。2026-10-30 列表 DTO 已下发，runKind 优先消费 */
+  workflow_kind?: string;
   /** 工作流版本 */
   workflow_version?: number;
   /** 根 span ID */
@@ -286,11 +289,13 @@ export interface TraceFilter {
 }
 
 /** 来源三分类显示名（2026-10-08 #12，与后端 trace_source.SOURCE_LABELS 同口径；
- *  先只做三个，selection_funnel/rag 等未归类来源不进下拉） */
+ *  2026-10-30 补空串「其他」桶对齐 stats.by_domain，selection_funnel/rag
+ *  等未归类来源归入其他） */
 export const TRACE_SOURCE_LABELS: Record<string, string> = {
   travel: "旅游域",
   cs: "客服",
   ai_assistant: "AI 助手",
+  "": "其他",
 };
 
 // ── Span type 枚举 ───────────────────────────────────

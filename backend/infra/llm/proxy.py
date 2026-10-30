@@ -40,6 +40,10 @@ from backend.core.tool_runtime.deadline import (
     provider_deadline_kwargs,
 )
 from backend.infra.llm.factory import get_llm_factory
+from backend.observability.llm_call_span import (
+    note_prompt_snapshot,
+    note_response_chunk,
+)
 from backend.infra.llm.models import (
     canonical_model_id,
     compute_cost_usd,
@@ -882,6 +886,7 @@ def _call_with_resilience(attr, *args, **kwargs):
     from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
     last_err: BaseException | None = None
+    note_prompt_snapshot(args)
     model_name, role, provider = _resilience_call_identity()
     _notify_call_diagnostic(
         "call_identity", model=model_name, role=role, provider=provider,
@@ -1014,6 +1019,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     )
 
     last_err: BaseException | None = None
+    note_prompt_snapshot(args)
     model_name, role, provider = _resilience_call_identity()
     breaker = _breaker_for_resolved_model(model_name, role, provider)
     max_retries = _role_max_retries(role)
@@ -1775,6 +1781,16 @@ def _record_tokens(
         _accumulate_turn_usage(model, p, c, t, cached, reasoning, cost,
                                provider=provider_resolved)
 
+        # 统一 llm_call span 出口（2026-10-30）：与上面 llm_usage 行同源同值，
+        # 一个成功调用 = 恰一行 usage + 恰一个 span，不双计（口径见模块注释）。
+        from backend.observability.llm_call_span import record_llm_call_span
+
+        record_llm_call_span(
+            metrics=dict(_last_call_meta_var.get() or {}),
+            result=result,
+            duration_ms=duration_ms or 0.0,
+        )
+
         # Token 看板明细落库（每调用一行，软失败不影响主链路）
         usage_ledger_written = False
         try:
@@ -2003,6 +2019,16 @@ def _settle_estimated_stream_usage(
             "binding_source": "estimated",
             "duration_ms": round(duration_ms, 1) if duration_ms is not None else 0.0,
         })
+
+        # 估算结算行同样出 llm_call span（usage_source=estimated 标注来源；
+        # StreamTextMeter 不缓存文本，response 快照如实留空）
+        from backend.observability.llm_call_span import record_llm_call_span
+
+        record_llm_call_span(
+            metrics=dict(_last_call_meta_var.get() or {}),
+            result=None,
+            duration_ms=duration_ms or 0.0,
+        )
 
         # llm_usage 明细落库（estimated 行：聚合口径与供应商 diff 的锚点）
         try:
@@ -3014,6 +3040,7 @@ class _LLMProxy:
                     args = await _apreflight_context(
                         args, kwargs, call_method=name,
                     )
+                    note_prompt_snapshot(args)
                     reserve_model_call(
                         "primary", model_name=get_active_model_name(),
                     )
@@ -3032,6 +3059,8 @@ class _LLMProxy:
                                 usage_chunk = chunk
                             # 估算兜底计量：统计原始 chunk 文本（_wrap_result 会剥 think）
                             meter.add(extract_chunk_text(chunk))
+                            # llm_call span 的 response 快照（有界累积）
+                            note_response_chunk(extract_chunk_text(chunk))
                             yield _wrap_result(chunk, strip=False)
                     except Exception as e:
                         # 超长输入不重试不降级：稳定错误码透传（astream 无韧性链，
@@ -3084,6 +3113,7 @@ class _LLMProxy:
                     if ctx is not None:
                         set_current_resolved_model(ctx)
                     args = _preflight_context(args, kwargs, call_method=name)
+                    note_prompt_snapshot(args)
                     _t0 = time.monotonic()
                     usage_chunk = None
                     yielded_content = False
@@ -3117,6 +3147,8 @@ class _LLMProxy:
                                     if extract_chunk_text(wrapped):
                                         yielded_content = True
                                     meter.add(extract_chunk_text(chunk))
+                                    # llm_call span 的 response 快照（有界累积）
+                                    note_response_chunk(extract_chunk_text(chunk))
                                     yield wrapped
                                 _record_stream_attempt(
                                     attempt,

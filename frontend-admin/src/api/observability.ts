@@ -116,6 +116,9 @@ export interface AuthorizedTraceStats {
   error_count: number;
   total_cost_usd: number;
   sources: { travel: number; cs: number; ai_assistant: number };
+  /** 业务域分布（2026-10-30 P2 收尾）：classify_trace_source 单一事实源，
+   *  含空串「其他」桶；errors 只认 error/failed 终态 */
+  by_domain: Record<string, { total: number; errors: number }>;
   window_hours: number;
   records_considered: number;
   retention_limit: number;

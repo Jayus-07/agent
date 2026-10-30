@@ -121,6 +121,7 @@ from backend.observability.trace_source import (  # noqa: E402
     SOURCE_AI_ASSISTANT,
     SOURCE_CS,
     SOURCE_TRAVEL,
+    SOURCE_UNKNOWN,
     classify_trace_source,
 )
 
@@ -421,12 +422,25 @@ async def trace_stats(
         for _status, row in listable
     )
     sources = {SOURCE_TRAVEL: 0, SOURCE_CS: 0, SOURCE_AI_ASSISTANT: 0}
-    for _status, row in listable:
+    # 业务域分布（2026-10-30 管理端遗留收尾）：与 sources 同源
+    # （classify_trace_source 单一事实源），补「其他」桶 + 每域错误计数，
+    # 总览面板不再用 200 条样本聚合口径。
+    by_domain: dict[str, dict[str, int]] = {
+        SOURCE_TRAVEL: {"total": 0, "errors": 0},
+        SOURCE_CS: {"total": 0, "errors": 0},
+        SOURCE_AI_ASSISTANT: {"total": 0, "errors": 0},
+        SOURCE_UNKNOWN: {"total": 0, "errors": 0},
+    }
+    for status, row in listable:
         source = classify_trace_source(
             _trace_value(row, "workflow_name", ""), _trace_tags(row),
         )
         if source in sources:
             sources[source] += 1
+        domain_row = by_domain.setdefault(source, {"total": 0, "errors": 0})
+        domain_row["total"] += 1
+        if status in ("error", "failed"):
+            domain_row["errors"] += 1
     return {
         # 保留旧字段以兼容旧面板消费者；total_24h 名称在 hours != 24 时仅作兼容字段。
         "total_24h": len(listable),
@@ -440,6 +454,8 @@ async def trace_stats(
         "error_count": error_count,
         "total_cost_usd": round(total_cost_usd, 6),
         "sources": sources,
+        # 业务域分布（含 SOURCE_UNKNOWN「其他」桶；errors 只认 error/failed 终态）
+        "by_domain": by_domain,
         "window_hours": hours,
         "records_considered": len(rows),
         "retention_limit": TRACE_RETENTION_LIMIT,

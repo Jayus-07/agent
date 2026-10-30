@@ -1,11 +1,12 @@
 import { TRACE_SOURCE_LABELS, type TraceRecord } from "@/types/trace";
 
 /**
- * 运行对象类型 / 域展示口径（2026-10-30 管理端重构）。
+ * 运行对象类型 / 域展示口径（2026-10-30 管理端重构 + P2 遗留收尾）。
  *
- * 列表 DTO 尚未下发 workflow_kind（TraceRecord 已有该字段、接口未透出，
- * 由 pushdown 任务补齐），此处先按 workflow_name 字面量做**唯一**前端映射；
- * DTO 补字段后此文件只保留域文案，不再做 kind 推断。禁止在其他文件复制映射。
+ * 列表 DTO 已下发 workflow_kind（后端 WorkflowKind 枚举值）：
+ * rag_query / knowledge_index 两类由 DTO 字段直接判定；langgraph_workflow
+ * 内部的 agent/圆桌/定时任务细分与存量数据兜底仍按 workflow_name 字面量
+ * 映射（唯一映射点，禁止在其他文件复制）。
  */
 export type RunKindKey = "agent" | "rag" | "index" | "wf" | "probe";
 
@@ -24,7 +25,14 @@ const KIND_RULES: Array<{ match: RegExp; key: RunKindKey; label: string }> = [
   { match: /^agent$/, key: "agent", label: "Agent 图" },
 ];
 
-export function deriveRunKind(t: Pick<TraceRecord, "workflow_name">): RunKindInfo {
+export function deriveRunKind(
+  t: Pick<TraceRecord, "workflow_kind" | "workflow_name">,
+): RunKindInfo {
+  // DTO 字段优先（P2 2026-10-30）：粗粒度 kind 可唯一确定的直接判定
+  const kind = (t.workflow_kind || "").trim();
+  if (kind === "rag_query") return { key: "rag", label: "RAG 链" };
+  if (kind === "knowledge_index") return { key: "index", label: "索引流水线" };
+  // langgraph_workflow / other / 空（存量数据）→ 名称映射兜底
   const wf = (t.workflow_name || "").trim();
   for (const rule of KIND_RULES) {
     if (rule.match.test(wf)) return { key: rule.key, label: rule.label };
@@ -33,7 +41,9 @@ export function deriveRunKind(t: Pick<TraceRecord, "workflow_name">): RunKindInf
 }
 
 /** 域口径单一事实源仍是后端 classify_trace_source（DTO source）；此处只做展示文案。 */
-export function deriveDomainLabel(t: Pick<TraceRecord, "source" | "workflow_name">): string {
+export function deriveDomainLabel(
+  t: Pick<TraceRecord, "source" | "workflow_name">,
+): string {
   if (/^admin-probe/.test((t.workflow_name || "").trim())) return "探测流量";
   const source = t.source || "";
   if (source && TRACE_SOURCE_LABELS[source]) return TRACE_SOURCE_LABELS[source];
