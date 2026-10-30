@@ -117,5 +117,27 @@
 
 下一步：阶段 4（vitest 全量 + tsc + 定向 pytest 汇总 + PR 合并）。
 
+## 2026-10-31 阶段 4：验证与交付
+
+- [x] frontend-admin vitest 全量 **581 passed (83 files)**（main 基线 576 + 本任务新增）；
+      `tsc --noEmit` **rc=0**（阶段 3 末实测）。
+- [x] 后端定向汇总（9 个文件：test_trace_fixes / test_fallback_usage / test_llm_call_span /
+      test_prompt_trace_coverage / test_prompt_version_trace / test_llm_span_fields /
+      test_llm_stream_sink / test_trace_token_provenance / test_llm_usage_component）→
+      **87 passed, 1 failed**；唯一 failed = test_resilience_records_each_failed_attempt
+      （main@12bdef8 实跑对照一致：`_handle_terminal_failure` 新签名与测试 stub 漂移，
+      既有基线债务归属 CI 基线会话）。事实 10/11 基线（26+33 passed）全部覆盖且通过。
+- [x] rebuild：阶段 3 末已 build+up app/frontend-admin（worktree 代码）健康 200；
+      frontend（:3100）本任务无改动未重建。
+- [x] 浏览器实测：详情页 Prompt 版本「62 个」/ compare 双栏差异高亮 / 总览披露块新文案（阶段 1/3 证据）。
+- [x] 临时实测账号 obs_legacy_fixups 删除（DELETE 1；与 obs_handoff_viewer 复核 count=0）。
+- [x] PR：https://github.com/Jayus-07/agent/pull/142（描述引用派单第三节根因证据）。
+      CI 首轮全绿：RAG Smoke preflight / admin-observability-auth / frontend-admin-functional /
+      frontend-admin-security / scan / Detect RAG changes 全 pass（real API smoke 按预期 skipping）。
+- [x] rag_smoke 定向清单评估：不新增链路环节（展示兼容 + 观测字段透出 + 运维脚本防护），
+      无需新增 smoke 条目（与派单预判一致）。
+- 遗留：trace_children 2 个既有失败修复 PAUSED（等用户确认归属后另起任务或并入 CI 基线会话）。
+
+
 
 

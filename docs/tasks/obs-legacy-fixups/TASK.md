@@ -3,7 +3,7 @@
 - worktree: `D:/Program Files/workplace/agent-wt-obs-legacy`
 - branch: `feat/obs-legacy-fixups`（自 main@12bdef8）
 - 派单: `D:/tmp/obs-legacy-fixups-PLAN.md`（obs-collection-handoff 收尾会话产出）
-- 状态: IN_PROGRESS
+- 状态: COMPLETED（PR #142 待合并）
 
 ## 目标
 
