@@ -43,8 +43,9 @@
 
 ## 阶段
 
-- [ ] 阶段 0：开工（worktree / 分支 / 任务文件 / .env / 并发冻结确认）
-- [ ] 阶段 1：详情页 Prompt 版本兼容 + RAG trace kind 对齐 + 账号清理
-- [ ] 阶段 2：dev-svc.bat 项目名防护 + trace_children 测试修复（先协调）
-- [ ] 阶段 3：compare 对比页重构 + Span HTTP status 下发
-- [ ] 阶段 4：验证与交付（vitest 全量 / tsc / 定向 pytest / rebuild / PR）
+- [x] 阶段 0：开工（worktree / 分支 / 任务文件 / .env / 并发冻结确认）
+- [x] 阶段 1：详情页 Prompt 版本兼容 + RAG trace kind 对齐 + 账号清理
+- [x] 阶段 2：dev-svc.bat 项目名防护；trace_children 测试修复经归属协调确认
+      已被 ci-debt 会话 PR #139 覆盖（main 实跑 2 passed），按派单「从计划删除本项」关闭
+- [x] 阶段 3：compare 对比页重构 + Span HTTP status 下发
+- [x] 阶段 4：验证与交付（vitest 全量 / tsc / 定向 pytest / rebuild / PR #142 合并 0b81777）
