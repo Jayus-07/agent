@@ -82,4 +82,40 @@
 
 下一步：阶段 3（compare 对比页重构 + Span HTTP status 下发）。
 
+## 2026-10-31 阶段 3：compare 对比页重构 + Span HTTP status 下发
+
+- [x] compare 页重写（frontend-admin .../traces/compare/page.tsx）：单表矩阵 → 详情页
+      同款 slate 风格双栏卡片（runKind 徽标 / 状态 / 耗时 / Token / 费用 / 模型 /
+      错误摘要 + 双 SpanGantt 实例 + 空 span 采集链未覆盖提示）；恰两条可读时对
+      耗时/Token/费用做差异高亮（高=amber、低=emerald，含单位差值文案）。
+      **参数契约偏差说明**：派单写 `?left=&right=`，实际既有契约为 `?ids=`（2–4 条，
+      入口 TraceListPanel「对比 N 条」）——按最小改动保留 `?ids=`，不改调用方。
+- [x] page.test.tsx 重写 4 用例：少于 2 条引导 / 双栏渲染+下钻+SpanGantt 实例 /
+      差异高亮双向差值 / 空值未采集；SpanGantt 以 testid mock。
+- [x] `_failed_attempt_http_status()`（backend/infra/llm/proxy.py）：openai/httpx
+      风格 `.status_code` + requests 风格 `.response.status_code` 兼容提取，
+      仅 int 拼接；`_record_failed_attempt` 失败行 finish_reason 变为
+      `error:<Type>:<status>`（无状态保持原形），usage 行 schema 不动。
+- [x] `to_span_dto` llm_call 增 `http_status`（读 metrics.http_status，默认 null）；
+      前端 types/trace.ts llm_call 同步类型。
+- [x] 总览披露块「Span DTO 无 HTTP status code」收缩为实际剩余缺口
+      （字段已有、采集链无写入点 + 失败行仅落 llm_usage finish_reason + 全链路拆分无采集）。
+
+### 验证证据（2026-10-31）
+
+- 后端：`tests/infra/test_fallback_usage.py + tests/test_trace_fixes.py` →
+  **28 passed, 1 failed**；1 failed（test_resilience_records_each_failed_attempt）
+  与 main@12bdef8 实跑对照一致（`_handle_terminal_failure` 新签名与测试 stub 漂移），
+  既有基线债务，非本任务引入；新增 3 个 HTTP status 用例 + 2 个 DTO http_status 用例全过。
+- 前端：compare 4 passed + OverviewPanel 6 passed；`tsc --noEmit` **rc=0**。
+- rebuild app + frontend-admin（worktree 代码，COMPOSE_PROJECT_NAME=agent）后健康 200。
+- 浏览器实测（IAB super admin）：
+  - compare `?ids=e036c6dae4cc,70de9cbf7501`：双栏徽标（工作流/RAG 链）+ 差异高亮
+    `耗时 −4.01 s` / `耗时 +4.01 s` + Token/费用/模型空值如实「未采集」+
+    双 SpanGantt（含未埋点黑洞段）✅
+  - 总览 tab=overview 披露块：文案已按新口径展示（含 code 标记 llm_call.http_status）✅
+
+下一步：阶段 4（vitest 全量 + tsc + 定向 pytest 汇总 + PR 合并）。
+
+
 

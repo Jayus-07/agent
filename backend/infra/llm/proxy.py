@@ -1401,6 +1401,19 @@ def _usage_component() -> str:
     return "llm"
 
 
+def _failed_attempt_http_status(err: BaseException) -> int | None:
+    """提取失败 attempt 的 HTTP 状态码（requests/httpx/openai 兼容），无则 None。
+
+    openai.APIStatusError / httpx.HTTPStatusError 带 status_code 属性；
+    requests.HTTPError 经 .response.status_code 暴露。仅接受 int，
+    避免把字符串/非状态码属性误拼进 finish_reason。
+    """
+    status = getattr(err, "status_code", None)
+    if not isinstance(status, int):
+        status = getattr(getattr(err, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def _record_failed_attempt(
     model_name: str, err: BaseException,
     decision: str = "primary", duration_ms: float = 0.0,
@@ -1421,6 +1434,12 @@ def _record_failed_attempt(
         from backend.infra.llm.pricing import COST_STATUS_UNPRICED
 
         error_type = classify_model_error(err)
+        # HTTP 状态拼入 finish_reason（如 error:APIConnectionError:429）：
+        # 失败 attempt 无 span，这是 HTTP 响应口径唯一可归因的落点。
+        http_status = _failed_attempt_http_status(err)
+        finish_reason = f"error:{type(err).__name__}"
+        if http_status is not None:
+            finish_reason = f"{finish_reason}:{http_status}"
         try:
             from backend.observability.llm_usage_store import (
                 current_usage_attribution,
@@ -1456,7 +1475,7 @@ def _record_failed_attempt(
                 "requested_model": "",
                 "upstream_model_id": "",
                 "binding_source": "failed_attempt",
-                "finish_reason": f"error:{type(err).__name__}",
+                "finish_reason": finish_reason,
                 "decision": decision,
                 "duration_ms": round(duration_ms, 1),
                 "run_id": attribution["run_id"],

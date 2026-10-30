@@ -322,6 +322,34 @@ class TestSerializeInternalAttrs:
 
 
 # =====================================================
+# 5b. llm_call DTO 透出 http_status（obs-legacy-fixups 阶段 3）
+# =====================================================
+
+class TestLlmCallDtoHttpStatus:
+    def _dto(self, http_status):
+        from backend.app.api.routes.observability import _to_trace_dto
+        from backend.observability.tracer import Span
+
+        rec = TraceRecord(id="thttp", question="q", duration_ms=100)
+        sp = Span(span_id="s1", parent_id=None, name="LLM 调用", type="llm_call")
+        if http_status is not None:
+            sp.metrics["http_status"] = http_status
+        rec.spans.append(sp)
+        return _to_trace_dto(rec)
+
+    def test_http_status_exposed_when_collected(self):
+        dto = self._dto(429)
+        llm_span = next(s for s in dto["spans"] if s["type"] == "llm_call")
+        assert llm_span["llm_call"]["http_status"] == 429
+
+    def test_http_status_defaults_null_when_absent(self):
+        """采集链尚无写入点 → 默认 null（不伪造 0）。"""
+        dto = self._dto(None)
+        llm_span = next(s for s in dto["spans"] if s["type"] == "llm_call")
+        assert llm_span["llm_call"]["http_status"] is None
+
+
+# =====================================================
 # 6. RAGChain._start() workflow 语义：独立链 rag_query，嵌入链不改父 kind
 # =====================================================
 
