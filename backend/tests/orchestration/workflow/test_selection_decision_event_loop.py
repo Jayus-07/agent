@@ -373,14 +373,25 @@ def test_api_end_to_end_task_reaches_success(monkeypatch, tmp_path):
         "finance": {"sell_price": 129.0, "unit_cost": 45.0},
         "panel_size": 3,
     }
+    # router 级 Depends(resolve_operator_role) 在 import 时绑定原函数，
+    # 函数体内的 monkeypatch 拦不到；身份走网关头通道（与其他路由契约
+    # 测试同口径）。CI 无 .env 的内部令牌配置，缺头会 503。
+    _auth = {
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "1",
+        "X-User-Roles": "admin",
+        "X-Tenant-Id": "tenant-a",
+    }
     with TestClient(app) as client:
-        resp = client.post("/selection-decision/tasks", json=payload)
+        resp = client.post("/selection-decision/tasks", json=payload,
+                           headers=_auth)
         assert resp.status_code == 200
         task_id = resp.json()["task_id"]
 
         detail = None
         for _ in range(100):  # 最多 10s 轮询
-            detail = client.get(f"/selection-decision/tasks/{task_id}").json()
+            detail = client.get(
+                f"/selection-decision/tasks/{task_id}", headers=_auth).json()
             if detail["status"] != "running":
                 break
             time.sleep(0.1)
