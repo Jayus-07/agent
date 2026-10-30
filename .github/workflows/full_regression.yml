@@ -111,8 +111,14 @@ jobs:
           # （rag_smoke preflight 同款坑位注释）。
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres \
             -c 'CREATE DATABASE agent_business' \
-            -c 'CREATE DATABASE agent_business_test'
+            -c 'CREATE DATABASE agent_business_test' \
+            -c 'CREATE DATABASE demo'
           python scripts/init_db.py --host localhost --port 5432 --user postgres
+          # demo 库给 data_collection 的写库探针用（DC_DATABASE_URL 默认
+          # postgresql://postgres@localhost:5432/demo）；pandas.to_sql
+          # 自建测试表，无需跑业务迁移。CI 与本地统一都显式建库，
+          # 否则 12 个 data_collection 集成用例以 partial（写入 0 条）
+          # 失败——基线 v1（run 40948443665）实证。
 
       - name: Suite pytest
         if: env.SKIP_SUITE != 'true'
