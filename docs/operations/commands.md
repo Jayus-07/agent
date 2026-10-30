@@ -93,7 +93,7 @@ npm test -- <测试文件>
 npx tsc --noEmit
 ~~~
 
-前端测试和类型检查按改动目录选择；`frontend-mp/` 使用自己的 Taro 构建脚本，不套用上述 Vitest 命令。
+前端测试和类型检查按改动目录选择（`frontend/`、`frontend-admin/`、`frontend-cs/`）。
 
 ## RAG 与 SQL 评测
 
