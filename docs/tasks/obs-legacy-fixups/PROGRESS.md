@@ -53,3 +53,33 @@
 
 下一步：阶段 2（dev-svc.bat 项目名防护 + trace_children 测试修复先协调）。
 
+## 2026-10-31 阶段 2：dev-svc.bat 项目名防护（完成）+ trace_children 测试修复（PAUSED 待协调）
+
+- [x] `dev-svc.bat`：COMPOSE_FILE 探测块后新增项目名防护——`COMPOSE_PROJECT_NAME`
+      未定义且 ROOT 目录名 ≠ agent 时 set 为 agent 并 echo 一行 ASCII 提示；
+      调用方已导出时不覆盖（`if not defined` 保证）。头部注释补记
+      「Git Bash 用 -y 不用 /y（/y 被 MSYS 路径转换吞掉，cmd.exe /c 亦然）」。
+- [x] `docs/operations/commands.md`「本地服务」节同步一句（防护行为 + -y 提醒）。
+- [PAUSED] `tests/api/test_observability_trace_children.py` 2 个既有失败：按派单需
+      用户确认归属后再修。**协调现状实查**（2026-10-31）：agent-wt-cibase
+      （55b8e35，修 ragas/compare_runs/RBAC）与 agent-wt-ci-debt（d5fe5cb，api suite
+      59 例批 1-3）的已提交范围与未提交工作区均**未覆盖**该文件；两分支均未合并 main。
+      若确认归本任务，修法：测试改为 TestClient 或构造 Request/identity stub
+      （get_trace 现签名 `(trace_id, request, _reader)`）。
+
+### 验证证据（2026-10-31）
+
+- 场景 a（worktree 内，未设 COMPOSE_PROJECT_NAME，PowerShell 调 .bat）：
+  `dev-svc.bat status` 首行输出
+  `[dev-svc] ROOT dir "agent-wt-obs-legacy" differs from agent - pinning COMPOSE_PROJECT_NAME=agent to reuse the shared stack` ✅
+- 场景 b（预设 `$env:COMPOSE_PROJECT_NAME="agent"`）：无 pinning 提示（不重复覆盖）✅
+- 场景 c（rebuild 实测）：worktree 内 `dev-svc.bat rebuild all -y` 全流程完成，
+  后端 11 服务 + frontend-admin/frontend 重建，backend healthy、双前端 ready，
+  抽查 agent-app/frontend-admin/beat 容器 label `com.docker.compose.project=agent` ✅（无平行项目）。
+- 过程注记：skill 记录的 Git Bash 调 cmd.exe 通法（`/c/Windows/System32/cmd.exe /c "..."`）
+  在本机当前环境下 /c 仍被吞（cmd 停在交互提示符）；改用 PowerShell 直接调用 .bat
+  （参数不经 MSYS 转换）一次通过。已如实记录，不改 skill 结论在其他机器的适用性。
+
+下一步：阶段 3（compare 对比页重构 + Span HTTP status 下发）。
+
+
