@@ -38,9 +38,25 @@ class CustomerOrderDTO(BaseModel):
     product_summary: str = ""
 
 
+class WalletLedgerEntryDTO(BaseModel):
+    direction: str
+    amount: float
+    balance_after: Optional[float] = None
+    kind: str
+    memo: str = ""
+    created_at: Optional[str] = None
+
+
+class WalletDTO(BaseModel):
+    balance: float
+    currency: str = "CNY"
+    ledger: list[WalletLedgerEntryDTO] = []
+
+
 class CustomerContextResponse(BaseModel):
     customer: CustomerProfileDTO
     orders: list[CustomerOrderDTO]
+    balance: Optional[WalletDTO] = None
     demo_mode: bool
     mock_data: bool = False
     profile_unavailable: bool = False
@@ -126,9 +142,40 @@ def get_my_customer_context(
             detail="客户资料和订单暂时无法读取",
         ) from exc
 
+    # P2：钱包余额只读（资金闭环演示底座）；不可用时保持 None，不影响档案
+    balance: WalletDTO | None = None
+    try:
+        from backend.customer_service.service.demo_mode import resolve_user_id
+        from backend.customer_service.service.mall_service import MallService
+
+        wallet = MallService().get_wallet(
+            resolve_user_id(identity.user_id), identity.tenant_id,
+        )
+        balance = WalletDTO(
+            balance=float(wallet.get("balance") or 0),
+            currency=str(wallet.get("currency") or "CNY"),
+            ledger=[
+                WalletLedgerEntryDTO(
+                    direction=str(entry.get("direction") or "in"),
+                    amount=float(entry.get("amount") or 0),
+                    balance_after=(
+                        float(entry["balance_after"])
+                        if entry.get("balance_after") is not None else None
+                    ),
+                    kind=str(entry.get("kind") or ""),
+                    memo=str(entry.get("memo") or ""),
+                    created_at=_as_text(entry.get("created_at")),
+                )
+                for entry in (wallet.get("ledger") or [])[:5]
+            ],
+        )
+    except Exception:  # noqa: BLE001 — 余额非关键路径，失败不阻断档案
+        balance = None
+
     return CustomerContextResponse(
         customer=customer,
         orders=[_order_dto(order) for order in orders],
+        balance=balance,
         demo_mode=is_demo_mode(),
         mock_data=_uses_mock_business_gateway(),
         profile_unavailable=profile_unavailable,

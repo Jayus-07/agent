@@ -38,6 +38,11 @@ const cs2Api = vi.hoisted(() => ({
   })),
   newSessionId: vi.fn(() => 'sess-xyz'),
   ORDER_STATUS_ZH: { paid: '待发货' },
+  fetchPendingSnapshot: vi.fn(async () => null),
+  confirmAction: vi.fn(async () => ({ status: 'success', answer: '' })),
+  updateRefundReason: vi.fn(async () => {}),
+  listRefundRequests: vi.fn(async () => []),
+  listMyTickets: vi.fn(async () => []),
 }))
 
 vi.mock('@/api/chat', () => chatApi)

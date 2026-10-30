@@ -1,6 +1,10 @@
-# business-service 客服业务契约（v1.0）
+# business-service 客服业务契约（v1.1）
 
-> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单，内存保存售后申请，进程重启后会清空 Mock 申请；不执行资金退款。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请与商城钱包账本，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+
+## 变更记录
+
+- v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
 
 ## 通用约定
 
@@ -72,6 +76,30 @@
 ```
 
 仅 `pending_review` / `reviewing` 申请可改原因；修改须经客服提案与用户确认。已审核、撤销或不存在的申请返回 409/404。`operation_id` 重放返回原结果。
+
+## 商城钱包账本（v1.1）
+
+钱包为演示资金账本，余额与流水均以服务端 Decimal 记账（响应序列化为两位小数）。每个用户首访懒初始化：余额 `MOCK_WALLET_INITIAL_BALANCE`（默认 5000.00）+ 一条 `topup` 初始入账流水。
+
+### GET `/business/wallet?user_id={id}&tenant_id={id}`
+
+返回 `data.wallet`：`balance`、`currency`（CNY）、`updated_at`、`ledger[]`（最近 5 条，`id`、`direction`（`in`/`out`）、`amount`、`balance_after`、`kind`（`topup`/`pay`/`cancel_refund`）、`ref_no`、`memo`、`created_at`）。
+
+### POST `/business/wallet/topup`
+
+请求体 `{user_id, tenant_id, amount(0,50000], memo?, operation_key}`。充值入账（`kind=topup`）；`operation_key` 幂等，重放返回原余额快照。
+
+### POST `/business/orders`
+
+请求体 `{user_id, tenant_id, items:[{product_id, product_name, quantity, price}], operation_key}`。服务端按 `price×quantity` 计算总额（不信任调用方总额），生成 `pending`/`unpaid` 订单；`operation_key` 幂等。
+
+### POST `/business/orders/{order_no}/pay`
+
+请求体 `{user_id, tenant_id, expected_amount, operation_key}`。订单状态机 `pending→paid`、`payment_status→paid`，余额扣款（`kind=pay` 流水）。订单不可支付、事实不符返回 409；余额不足返回 409 `insufficient wallet balance`。
+
+### POST `/business/orders/{order_no}/cancel`
+
+请求体 `{user_id, tenant_id, expected_status, expected_amount, reason?, operation_key}`。取消资格：`pending`（未付款直接取消，无资金变动）与 `paid`（已支付取消，全额退回钱包，`kind=cancel_refund` 入账流水，`payment_status→refunded`）。其余状态、事实不符、越权返回 409/404。
 
 ## 错误语义
 

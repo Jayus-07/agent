@@ -19,6 +19,7 @@ _INTENT_SERVICE_MAP = {
     "t_logistics": "logistics",
     "t_ticket_status": "ticket",  # 批次C：工单进度
     "t_refund_status": "refund_status",
+    "t_balance_query": "balance",  # P2 商城域：余额+最近流水
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -429,6 +430,28 @@ def _dispatch_service(
 ) -> str:
     """根据 intent 分发到对应的 Service。"""
     service_type = _INTENT_SERVICE_MAP.get(intent, "order")
+
+    if service_type == "balance":
+        from backend.customer_service.service.mall_service import MallService
+
+        try:
+            wallet = MallService().get_wallet(user_id, tenant_id)
+        except Exception:  # noqa: BLE001 — 查询失败礼貌降级，不打断会话
+            return "余额查询服务暂时不可用，请稍后再试。"
+        ledger = wallet.get("ledger") or []
+        balance = float(wallet.get("balance") or 0)
+        lines = [f"当前账户余额：¥{balance:.2f}。"]
+        if ledger:
+            recent = ledger[0]
+            direction = "入账" if recent.get("direction") == "in" else "支出"
+            lines.append(
+                f"最近一笔流水：{recent.get('memo') or '资金变动'} "
+                f"（{direction} ¥{float(recent.get('amount') or 0):.2f}）。",
+            )
+        lines.append("退款审核通过后，货款将自动退回该余额。")
+        return _QueryServiceResponse("\n".join(lines), {
+            "balance": {"balance": balance, "currency": wallet.get("currency", "CNY")},
+        })
 
     if service_type == "refund_status":
         from backend.customer_service.errors import (

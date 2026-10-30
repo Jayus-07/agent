@@ -171,10 +171,14 @@ def test_mock_refund_create_update_review_and_tenant_scope(business_client):
     assert reviewed["status_display"] == "审核中"
 
     concurrent_user = "customer-parallel"
-    concurrent_order = business_client.get(
-        "/business/orders", params={"user_id": concurrent_user},
-        headers=_HEADERS,
-    ).json()["data"]["orders"][0]
+    # P2 种子扩容后首单是 pending（不可退），显式选可退的 paid 单
+    concurrent_order = next(
+        item for item in business_client.get(
+            "/business/orders", params={"user_id": concurrent_user},
+            headers=_HEADERS,
+        ).json()["data"]["orders"]
+        if item["status"] == "paid"
+    )
     concurrent_payload = _create_payload(
         concurrent_order, user_id=concurrent_user, tenant_id=tenant_id,
     )
@@ -443,9 +447,13 @@ def test_http_write_response_loss_enters_verifying_without_false_success(
 
     monkeypatch.setattr(http_client, "request_json_sync", lose_post_response)
 
-    order = business_client.get(
-        "/business/orders", params={"user_id": user_id}, headers=_HEADERS,
-    ).json()["data"]["orders"][0]
+    # P2 种子扩容后首单是 pending（不可退），显式选可退的 paid 单
+    order = next(
+        item for item in business_client.get(
+            "/business/orders", params={"user_id": user_id}, headers=_HEADERS,
+        ).json()["data"]["orders"]
+        if item["status"] == "paid"
+    )
     proposal = RefundService().build_refund_proposal(
         user_id, order["order_no"], "商品破损",
     )
@@ -468,3 +476,130 @@ def test_http_write_response_loss_enters_verifying_without_false_success(
     ).json()["data"]["requests"]
     assert len(requests) == 1
     assert requests[0]["status"] == "pending_review"
+
+
+def test_mock_wallet_pay_create_cancel_contract(business_client):
+    """P2 商城 Mock 账本契约：创建→支付（扣款）→取消（回款）资金闭环全通。"""
+    user_id = "customer-wallet"
+    tenant_id = "tenant-a"
+    headers = _HEADERS
+
+    wallet = business_client.get(
+        "/business/wallet",
+        params={"user_id": user_id, "tenant_id": tenant_id}, headers=headers,
+    ).json()["data"]["wallet"]
+    assert wallet["balance"] == 5000.0
+    assert wallet["ledger"][0]["kind"] == "topup"
+    assert wallet["ledger"][0]["balance_after"] == 5000.0
+
+    create_payload = {
+        "user_id": user_id, "tenant_id": tenant_id,
+        "items": [{
+            "product_id": "99101", "product_name": "蓝牙降噪耳机 Pro",
+            "quantity": 1, "price": 299.0,
+        }],
+        "operation_key": "op-create-1",
+    }
+    created = business_client.post(
+        "/business/orders", json=create_payload, headers=headers,
+    ).json()["data"]["order"]
+    assert created["status"] == "pending"
+    assert created["payment_status"] == "unpaid"
+    assert created["total_amount"] == 299.0
+
+    replay = business_client.post(
+        "/business/orders", json=create_payload, headers=headers,
+    ).json()["data"]["order"]
+    assert replay["order_no"] == created["order_no"]
+
+    pay = business_client.post(
+        f"/business/orders/{created['order_no']}/pay",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "expected_amount": 299.0, "operation_key": "op-pay-1",
+        },
+        headers=headers,
+    ).json()
+    assert pay["data"]["order"]["status"] == "paid"
+    assert pay["data"]["order"]["payment_status"] == "paid"
+    assert pay["data"]["wallet"]["balance"] == 4701.0
+    assert pay["data"]["wallet"]["ledger"][0]["direction"] == "out"
+    assert pay["data"]["wallet"]["ledger"][0]["kind"] == "pay"
+
+    replay_pay = business_client.post(
+        f"/business/orders/{created['order_no']}/pay",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "expected_amount": 299.0, "operation_key": "op-pay-1",
+        },
+        headers=headers,
+    ).json()
+    assert replay_pay["data"]["wallet"]["balance"] == 4701.0
+
+    # 余额不足拦截
+    big = business_client.post(
+        "/business/orders",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "items": [{
+                "product_id": "x", "product_name": "人体工学椅",
+                "quantity": 3, "price": 2399.0,
+            }],
+            "operation_key": "op-create-2",
+        },
+        headers=headers,
+    ).json()["data"]["order"]
+    insufficient = business_client.post(
+        f"/business/orders/{big['order_no']}/pay",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "expected_amount": big["total_amount"], "operation_key": "op-pay-2",
+        },
+        headers=headers,
+    )
+    assert insufficient.status_code == 409
+    assert insufficient.json()["message"] == "insufficient wallet balance"
+
+    # 取消已支付订单 → 退款回钱包
+    cancel = business_client.post(
+        f"/business/orders/{created['order_no']}/cancel",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "expected_status": "paid", "expected_amount": 299.0,
+            "reason": "不想要了", "operation_key": "op-cancel-1",
+        },
+        headers=headers,
+    ).json()
+    assert cancel["data"]["order"]["status"] == "cancelled"
+    assert cancel["data"]["order"]["payment_status"] == "refunded"
+    assert cancel["data"]["wallet"]["balance"] == 5000.0
+    assert cancel["data"]["wallet"]["ledger"][0]["kind"] == "cancel_refund"
+
+    # 已发货订单不可取消
+    shipped = next(
+        item for item in business_client.get(
+            "/business/orders", params={"user_id": user_id}, headers=headers,
+        ).json()["data"]["orders"]
+        if item["status"] == "shipped"
+    )
+    not_cancellable = business_client.post(
+        f"/business/orders/{shipped['order_no']}/cancel",
+        json={
+            "user_id": user_id, "tenant_id": tenant_id,
+            "expected_status": "shipped", "expected_amount": shipped["total_amount"],
+            "operation_key": "op-cancel-2",
+        },
+        headers=headers,
+    )
+    assert not_cancellable.status_code == 409
+
+    # 越权：他人订单 404，不泄漏存在性
+    foreign = business_client.post(
+        f"/business/orders/{created['order_no']}/pay",
+        json={
+            "user_id": "someone-else", "tenant_id": tenant_id,
+            "expected_amount": 299.0, "operation_key": "op-pay-3",
+        },
+        headers=headers,
+    )
+    assert foreign.status_code == 404

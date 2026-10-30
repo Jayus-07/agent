@@ -26,11 +26,12 @@ _INTENT_ACTION_MAP = {
     "as_exchange": "exchange",
     "a_address":   "address",
     "a_password":  "password",
+    "t_order_cancel": "order_cancel",
 }
 
 # 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
-_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange"})
+_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange", "t_order_cancel"})
 
 _ACTION_TYPE_LABELS = {
     "refund_request": "退款申请",
@@ -38,6 +39,7 @@ _ACTION_TYPE_LABELS = {
     "exchange_request": "换货申请",
     "address_update": "地址修改",
     "password_reset": "密码重置",
+    "order_cancel": "取消订单",
 }
 
 # 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
@@ -582,6 +584,16 @@ def _build_proposal(
         order_id = _resolve_order_id(cs_route, user_message)
         reason = cs_route.get("metadata", {}).get("reason", "")
         return get_refund_service().build_refund_proposal(user_id, order_id, reason)
+
+    if action_type == "order_cancel":
+        from backend.customer_service.service.cancel_order_service import (
+            get_cancel_order_service,
+        )
+        order_id = _resolve_order_id(cs_route, user_message)
+        reason = cs_route.get("metadata", {}).get("reason", "")
+        return get_cancel_order_service().build_cancel_order_proposal(
+            user_id, order_id, reason,
+        )
 
     if action_type == "return":
         from backend.customer_service.service.after_sales_service import get_after_sales_service

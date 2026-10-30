@@ -11,6 +11,8 @@ FINE_INTENTS: dict[str, str] = {
     "k_faq": "常见问题",
     # TRANSACTION
     "t_order_status": "订单状态查询",
+    "t_order_cancel": "取消订单",
+    "t_balance_query": "余额查询",
     "t_logistics": "物流查询",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
@@ -72,6 +74,18 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     # TRANSACTION → business_query (Phase 3)
     "t_order_status": IntentProfile(
         intent="t_order_status", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq"],
+    ),
+    # P2 商城域：已支付订单取消走提案-确认（高风险）；余额为只读查询
+    "t_order_cancel": IntentProfile(
+        intent="t_order_cancel", domain=CSDomain.AFTER_SALES,
+        requires_auth=True, requires_action=True, risk_level="high",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_aftersales"],
+    ),
+    "t_balance_query": IntentProfile(
+        intent="t_balance_query", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
     ),

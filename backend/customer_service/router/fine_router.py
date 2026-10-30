@@ -31,6 +31,8 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         "t_refund_status": [
             "申请审核", "退款申请进度", "退款申请状态", "审核到哪",
         ],
+        # P2 商城域：余额/到账查询（vocab 出域豁免词表已含「余额」，域内命中）
+        "t_balance_query": ["余额", "钱包", "到账", "退回哪里", "账户还有多少钱"],
     },
     # 缺陷6（2026-09-23）：AFTER_SALES 域此前只能落 DOMAIN_DEFAULT_INTENT
     # （as_refund），「我要退货」被当成退款 —— 动作类型错了，确认卡与后续
@@ -41,6 +43,10 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         ],
         "t_refund_status": [
             "申请审核", "退款申请进度", "退款申请状态", "审核到哪",
+        ],
+        # P2：取消订单（显式短语，避免「取消」误伤确认卡的取消语义）
+        "t_order_cancel": [
+            "取消订单", "我要取消", "退掉订单", "把订单取消", "订单不要了",
         ],
         "as_return": ["退货", "退换", "return"],
         "as_exchange": ["换货", "exchange"],

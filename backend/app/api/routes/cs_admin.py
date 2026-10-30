@@ -1131,6 +1131,96 @@ async def get_conversation_pending_proposal(
     }
 
 
+@router.get("/{conversation_id}/customer-context")
+async def get_conversation_customer_context(
+    conversation_id: str, request: Request,
+) -> dict:
+    """坐席侧客户360 数据（cs-workstation-v2 P2）：档案 + 近期订单 + 余额（只读）。
+
+    可见性与 pending-proposal 快照同闸（supervisor/admin 本租户全量、
+    agent 仅当前认领会话）；全部字段只读，不含敏感支付信息。
+    """
+    try:
+        conv = await _load_conversation_access_row(conversation_id)
+        if conv is None:
+            raise HTTPException(404, detail="Conversation not found")
+        await _ensure_pending_proposal_access(
+            request, conv.tenant_id, assigned_agent_id=conv.assigned_agent_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] customer-context access check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+    from datetime import date, datetime
+
+    from backend.customer_service.errors import AccountNotFoundError, DatabaseError
+    from backend.customer_service.service.account_service import get_account_service
+    from backend.customer_service.service.demo_mode import resolve_user_id
+    from backend.customer_service.service.mall_service import MallError, MallService
+    from backend.customer_service.service.order_service import get_order_service
+
+    def _as_text(value: object) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        return str(value)
+
+    business_user = resolve_user_id(conv.user_id)
+    try:
+        account = get_account_service().query_account(business_user)
+        customer = {
+            "display_name": account.name or str(conv.user_id),
+            "level": account.level,
+            "register_time": account.register_time,
+        }
+    except (AccountNotFoundError, DatabaseError):
+        customer = {"display_name": str(conv.user_id), "level": None, "register_time": None}
+
+    try:
+        orders = get_order_service().list_recent_orders_with_products(
+            business_user, limit=8,
+        )
+    except Exception as e:  # noqa: BLE001 — 订单库不可用时仍返回档案与余额
+        logger.warning(f"[CSAdmin] customer-context orders unavailable: {e}")
+        orders = []
+
+    balance = None
+    try:
+        wallet = MallService().get_wallet(business_user, conv.tenant_id or "")
+        balance = {
+            "balance": float(wallet.get("balance") or 0),
+            "currency": str(wallet.get("currency") or "CNY"),
+        }
+    except (MallError, Exception) as e:  # noqa: BLE001 — 余额非关键路径
+        logger.warning(f"[CSAdmin] customer-context balance unavailable: {e}")
+
+    return {
+        "customer": customer,
+        "orders": [
+            {
+                "order_no": str(o.get("order_no") or o.get("id") or ""),
+                "total_amount": (
+                    float(o["total_amount"])
+                    if o.get("total_amount") is not None else None
+                ),
+                "status": str(o.get("status") or "unknown"),
+                "payment_status": (
+                    str(o["payment_status"]) if o.get("payment_status") else None
+                ),
+                "created_at": _as_text(o.get("created_at")),
+                "product_summary": str(
+                    o.get("product_names") or o.get("item_summary") or ""
+                ),
+            }
+            for o in orders
+        ],
+        "balance": balance,
+    }
+
+
 @router.get("/{conversation_id}", response_model=ConversationDetail)
 async def get_conversation(conversation_id: str, request: Request):
     """Conversation detail with ordered messages.

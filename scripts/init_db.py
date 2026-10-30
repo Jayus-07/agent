@@ -334,6 +334,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "123_user_automations.sql": "memory",
     # 运行中任务的多轮计划修订（决策 #29）。
     "124_plan_revisions.sql": "memory",
+    # 商城演示钱包账本（cs-workstation-v2 P2）：余额 + 流水（agent_business 库）。
+    "125_mall_wallet.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
