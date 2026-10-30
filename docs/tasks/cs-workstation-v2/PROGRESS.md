@@ -10,7 +10,7 @@
 | 期 | 主题 | 状态 | 分支 / PR | 证据 | 更新时间 |
 |---|---|---|---|---|---|
 | P0 | 脚手架与基线（cs2 命名空间/路由壳/pending 快照） | 已完成 | feat/cs-v2-p0 → PR #147（merge 4b80207） | 详见下方日志 2026-10-31（五） | 2026-10-31 |
-| P1 | 会话基础链路（双端对话/WS/时间线） | 计划中 | - | - | - |
+| P1 | 会话基础链路（双端对话/WS/时间线） | 已完成 | feat/cs-v2-p1 → PR #151（merge b236a62） | 详见下方日志 2026-10-31（六） | 2026-10-31 |
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 计划中 | - | - | - |
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 计划中 | - | - | - |
 | P4 | 快捷回复+AI Copilot | 计划中 | - | - | - |
@@ -67,3 +67,14 @@
 - **基线核对回写**：迁移实况最新 099（双 082），新迁移自 100+ 顺延，TASK.md 第 4/5/6 节已更正。
 - **环境备注**：worktree .env 已从主仓库拷贝（compose 需要）；frontend-cs 不在共享栈容器口径内（devctl rebuild 只重建 frontend-admin/frontend），其验证以 vitest/tsc/生产构建为准。
 - **交付记录**：用户确认后按路径限定分两笔提交（545f042 任务基线文档、69356cf P0 代码），PR #147 CI 全绿（scan / RAG Smoke / RAG 变更检测）后合并 main（merge commit 4b80207）。下一期 P1 自 origin/main@4b80207 起新分支 feat/cs-v2-p1。
+
+### 2026-10-31（六）—— P1 实现完成并合入
+
+- **分支**：feat/cs-v2-p1（自 origin/main@ac68c3d；用户已授权「按任务计划持续实施」，每期走 提交→PR→CI→合并→回填 流程，不再逐期询问）。
+- **用户端** /customer-service-v2：客服整页（会话下拉/欢迎态/四类气泡/满意度卡/右栏客户资料与最近订单）；SSE 全事件消费（复用 /api/chat/customer-service/stream 的续播+中止契约）；live 时间线 + 打字机逐字 + 停止按钮；纯函数归约器 chatReducer.ts。
+- **坐席端** /cs2/workspace：三栏工作台（双 Tab/认领/消息流/右栏会话信息+Trace 入口）；cs2 自有 WS 封装 useAgentSocket（ticket 鉴权、退避重连换新 ticket、重连对账 = 队列全量 + 选中会话按 seq 游标补发 /{id}/events、降级轮询 5s）；回复/认领/关闭走既有 API。后端零改动。
+- **测试证据**：定向 frontend 22 + frontend-cs 15 全绿（SSE 全事件断言、WS 生命周期 4 例、工作台交互 4 例、no-legacy 守卫）；全量 T0：frontend 84 files/688 passed、frontend-cs 40 files/297 passed；tsc 无新增错误（frontend 存量 16 例同 P0）；双端生产构建通过。
+- **重建与冒烟**：frontend 容器重建 healthy，/customer-service-v2、/mall、/my-orders、/customer-service、/ 均 200；frontend-cs 临时生产起服（错位端口 3399）/cs2/workspace 与旧 /cs/handoff 均 200，验证后已停。
+- **交付记录**：commit 7ec63d6 → PR #151 CI 全绿 → merge b236a62。
+- **实施中发现并修复**：①WorkbenchPage 挂载漏拉队列（测试抓出）；②选中会话竞态——selectedRef 原在渲染时同步，fetch 回调可能先于 React 提交执行导致守卫误丢响应，改为选择时同步置位；③P1 期间发现「会话已由其他坐席认领」等并发语义依赖既有 409，UI 下轮队列刷新自然收敛。
+- **遗留**：转人工四态横幅+倒计时（P3）；接管后用户输入直达坐席（P3）；确认卡/候选点选完整交互（P2，clarification 事件已可消费并有基础点选）；客户360（P2）与 pending 快照消费（P0 API 已就绪）。
