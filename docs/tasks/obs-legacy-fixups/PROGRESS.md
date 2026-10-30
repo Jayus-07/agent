@@ -60,12 +60,21 @@
       调用方已导出时不覆盖（`if not defined` 保证）。头部注释补记
       「Git Bash 用 -y 不用 /y（/y 被 MSYS 路径转换吞掉，cmd.exe /c 亦然）」。
 - [x] `docs/operations/commands.md`「本地服务」节同步一句（防护行为 + -y 提醒）。
-- [PAUSED] `tests/api/test_observability_trace_children.py` 2 个既有失败：按派单需
+- [x] `tests/api/test_observability_trace_children.py` 2 个既有失败：按派单需
       用户确认归属后再修。**协调现状实查**（2026-10-31）：agent-wt-cibase
       （55b8e35，修 ragas/compare_runs/RBAC）与 agent-wt-ci-debt（d5fe5cb，api suite
       59 例批 1-3）的已提交范围与未提交工作区均**未覆盖**该文件；两分支均未合并 main。
       若确认归本任务，修法：测试改为 TestClient 或构造 Request/identity stub
       （get_trace 现签名 `(trace_id, request, _reader)`）。
+      **→ 已关闭（2026-10-31 归属协调结论）**：用户指派本会话处理后复核发现，
+      ci-debt 会话在 obs-legacy-fixups 执行期间合并了 PR #139（838dfa3，批 1-3），
+      其中即含本文件打桩点迁移（+40/-7）。审查结论：修法与派单建议的 identity
+      stub 路线一致且断言不降反升（list_children stub 增 tenant_id 下推断言、
+      新增跨租户子 trace 不可见行）；main@0b81777 实跑 `pytest
+      tests/api/test_observability_trace_children.py -q --no-cov` → **2 passed**；
+      12bdef8 对照仍 2 failed（`get_trace() missing 1 required positional argument`），
+      确认失败已被 #139 消除。按派单「若已被对方覆盖，从计划删除本项」关闭，
+      本会话零代码改动。
 
 ### 验证证据（2026-10-31）
 
@@ -137,6 +146,9 @@
 - [x] rag_smoke 定向清单评估：不新增链路环节（展示兼容 + 观测字段透出 + 运维脚本防护），
       无需新增 smoke 条目（与派单预判一致）。
 - 遗留：trace_children 2 个既有失败修复 PAUSED（等用户确认归属后另起任务或并入 CI 基线会话）。
+  → 2026-10-31 后续：已被 PR #139 覆盖修复并合入 main，实跑验证 2 passed，本项关闭（见阶段 2 记录）。
+  main 剩余已知既有失败：test_chain.py 7 例（拒答文案断言漂移）+
+  test_fallback_usage 1 例（_handle_terminal_failure 签名 stub 漂移），归属 CI 基线会话。
 
 
 
