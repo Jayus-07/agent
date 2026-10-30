@@ -66,6 +66,13 @@ class InventoryAnalyzer(BaseAgentSkill):
 
         try:
             system_prompt = prompt_service.get_template_sync("capability.inventory_analyzer")
+            # get_template_sync 不落版本记录（见 service.record_template_usage_sync
+            # 契约）：daily_report trace 此前 prompt_versions 恒空的根因，这里
+            # 显式补记一次（record_prompt_version 按 key 幂等，不会重复）
+            try:
+                prompt_service.record_template_usage_sync("capability.inventory_analyzer")
+            except Exception:
+                logger.debug("[inventory_analyzer] prompt 版本记录失败", exc_info=True)
             content = await self._call_llm(
                 prompt=user_prompt,
                 system=system_prompt,
