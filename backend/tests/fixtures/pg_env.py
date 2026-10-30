@@ -23,6 +23,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 
 import psycopg2
@@ -31,6 +32,18 @@ import pytest
 from backend.config.database import BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG
 
 TEST_TABLE_PREFIX = "pgtest_biz_"
+
+
+def worker_scoped_prefix() -> str:
+    """当前 xdist worker 的表名前缀；单进程（无 PYTEST_XDIST_WORKER）用裸前缀。
+
+    xdist 下各 worker 独立建删同名 pgtest 表会互踩：CREATE TYPE 撞
+    pg_type_typname_nsp_index（同 schema 同名类型，实测 orchestration
+    setup error），teardown 宽 DROP 还会删掉别的工作进程正在用的表。
+    表名带 worker 后缀后互不干扰；DROP 模式同步收窄到本 worker。
+    """
+    worker = os.getenv("PYTEST_XDIST_WORKER", "")
+    return f"{TEST_TABLE_PREFIX}{worker}_" if worker else TEST_TABLE_PREFIX
 
 # 表名常量在模块导入时烘焙的存储模块（setenv 后必须重载才生效）。
 # 其余（trace/analytics/llm_usage/chunk/keyword/op_log/doc_registry/persistence_pg/
@@ -90,23 +103,61 @@ def _reset_singletons():
 
 def set_pg_test_env(monkeypatch):
     """设置全部表名 env（monkeypatch 负责 teardown 还原）+ 重载存储模块。"""
-    monkeypatch.setenv("WORKFLOW_DB_PG_TABLE", f"{TEST_TABLE_PREFIX}workflow_runs")
-    monkeypatch.setenv("INVENTORY_DB_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("SELECTION_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("SELECTION_DECISION_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("MARKET_RESEARCH_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("COMPETITOR_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("FEEDBACK_PG_TABLE", f"{TEST_TABLE_PREFIX}feedback")
-    monkeypatch.setenv("OBS_DB_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("RAG_STORES_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
-    monkeypatch.setenv("DOC_REGISTRY_PG_TABLE", f"{TEST_TABLE_PREFIX}doc_registry")
-    monkeypatch.setenv("VECTOR_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
+    prefix = worker_scoped_prefix()
+    monkeypatch.setenv("WORKFLOW_DB_PG_TABLE", f"{prefix}workflow_runs")
+    monkeypatch.setenv("INVENTORY_DB_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("SELECTION_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("SELECTION_DECISION_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("MARKET_RESEARCH_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("COMPETITOR_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("FEEDBACK_PG_TABLE", f"{prefix}feedback")
+    monkeypatch.setenv("OBS_DB_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("RAG_STORES_PG_TABLE_PREFIX", prefix)
+    monkeypatch.setenv("DOC_REGISTRY_PG_TABLE", f"{prefix}doc_registry")
+    monkeypatch.setenv("VECTOR_PG_TABLE_PREFIX", prefix)
     _pop_store_modules()
     _reset_singletons()
 
 
 def drop_pgtest_tables() -> int:
-    """删除两库中所有 pgtest_% 测试表，返回删除数量。连接失败静默跳过。"""
+    """删除两库中本 worker 的 pgtest_% 测试表，返回删除数量。
+
+    模式按 worker 后缀收窄（xdist 下不得删别的工作进程正在用的表）；
+    单进程时与原宽匹配语义一致。连接失败静默跳过。
+    """
+    prefix = worker_scoped_prefix()
+    # LIKE 模式里下划线是通配符，须转义；worker 名（gw0 等）无特殊字符
+    like_pattern = prefix.replace("_", r"\_") + "%"
+    dropped = 0
+    for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG):
+        try:
+            conn = psycopg2.connect(**cfg, connect_timeout=2)
+        except Exception:
+            continue
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT tablename FROM pg_tables "
+                "WHERE schemaname='public' AND tablename LIKE %s",
+                (like_pattern,),
+            )
+            tables = [r[0] for r in cur.fetchall()]
+            for t in tables:
+                cur.execute(f'DROP TABLE IF EXISTS "{t}" CASCADE')
+            conn.commit()
+            dropped += len(tables)
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        finally:
+            conn.close()
+    return dropped
+
+
+def drop_all_pgtest_tables() -> int:
+    """宽匹配清理全部 pgtest_% 残留（跨 worker/历史遗留；仅供手动调用）。"""
     dropped = 0
     for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG):
         try:

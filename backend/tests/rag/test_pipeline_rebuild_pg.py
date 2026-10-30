@@ -20,7 +20,7 @@ from backend.config.database import VECTOR_PG_CONFIG
 from backend.rag.pipeline import RAGPipeline
 from backend.rag.vectorstore import pgvector_store as pvs_mod
 from backend.rag.vectorstore.pgvector_store import EMBEDDING_DIM, PgVectorKnowledgeStore
-from backend.tests.fixtures.pg_env import TEST_TABLE_PREFIX, drop_pgtest_tables
+from backend.tests.fixtures.pg_env import drop_pgtest_tables, worker_scoped_prefix
 
 
 def _pg_alive() -> bool:
@@ -57,11 +57,13 @@ def _pg_iso(monkeypatch):
 
     表名在 store __init__ 逐实例读 env，无需重载模块；但模块级 _DDL_DONE
     缓存了建表标记，清表后必须同步 discard，否则后续用例跳过 DDL 直查报错。
+    前缀带 xdist worker 后缀（与 pg_clean_tables 同机制），xdist 下互不互踩。
     """
-    monkeypatch.setenv("VECTOR_PG_TABLE_PREFIX", TEST_TABLE_PREFIX)
+    prefix = worker_scoped_prefix()
+    monkeypatch.setenv("VECTOR_PG_TABLE_PREFIX", prefix)
     yield
-    pvs_mod._DDL_DONE.discard(TEST_TABLE_PREFIX + "rag_vectors")
-    pvs_mod._META_DDL_DONE.discard(TEST_TABLE_PREFIX + "rag_index_meta")
+    pvs_mod._DDL_DONE.discard(prefix + "rag_vectors")
+    pvs_mod._META_DDL_DONE.discard(prefix + "rag_index_meta")
     drop_pgtest_tables()
 
 
