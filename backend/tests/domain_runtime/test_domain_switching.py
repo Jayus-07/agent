@@ -53,10 +53,13 @@ def _no_cs_router_cache():
 
 @pytest.fixture
 def domain_flags(monkeypatch):
-    import backend.config.customer_service as cc
-    import backend.config.travel as tc
-    monkeypatch.setattr(cc, "CS_ENABLED", True)
-    monkeypatch.setattr(tc, "TRAVEL_ENABLED", True)
+    # M16 后 CS/TRAVEL 总闸唯一判定源是 sys_config（DB 覆盖 → env 兜底 →
+    # 注册表缺省 false）；CI 无 .env 必须经 _values 强制开启，否则 CS 兜底
+    # 与 travel prefilter 恒降级、route_mode 落主路由 direct。setitem 保证
+    # teardown 恢复原值，不泄漏同 worker 后续测试。
+    from backend.services import sys_config
+    monkeypatch.setitem(sys_config._values, "CS_ENABLED", "true")
+    monkeypatch.setitem(sys_config._values, "TRAVEL_ENABLED", "true")
 
 
 def _cs_active_state(question: str, session_id: str = "s-switch") -> dict:

@@ -40,15 +40,31 @@ class TestCsPendingStrongBinding:
         assert ph._PENDING_STATES == frozenset(
             {"pending", "pending_confirmation"})
 
-    def test_need_info_pending_never_treated_as_confirmation(self):
-        """need_info 型 pending（等订单号）不吃确认词：转发 action expert
-        补槽，而不是把「确认」当确认（缺陷6.3 回归）。"""
+    def test_need_info_pending_never_treated_as_confirmation(self, monkeypatch):
+        """need_info 型 pending（等订单号）不吃确认词：明确槽位回答转发
+        action expert 补槽，确认词本身落追问（缺陷6.3 回归）。
+
+        权威 Handoff 前置读取（6f12d46 起）要求 tenant/conversation 键，
+        缺失 fail-closed 去 cs_reporter——mock 掉 PG 读取隔离 DB。need_info
+        契约（多轮确认收敛）：_looks_like_need_info_slot_answer 只认明确的
+        订单选择/标识；「确认」词在 need_info 分支不消费，落追问。
+        """
+        monkeypatch.setattr(ph, "_read_authoritative_handoff",
+                            lambda pending_action, state: None)
         state = {
             "pending_action": {"status": "need_info"},
             "confirmation_state": "pending",
+            "tenant_id": "t-test",
+            "conversation_id": "conv-need-info",
+            "user_message": "DEMO-1002",
         }
         command = ph.cs_pending_handler_node(state)
         assert command.goto == "cs_action_expert"
+
+        # 确认词不触发确认执行、也不进补槽：need_info 下落追问
+        state_confirm = {**state, "user_message": "确认"}
+        command_confirm = ph.cs_pending_handler_node(state_confirm)
+        assert command_confirm.goto == "cs_reporter"
 
     def test_terminal_outcome_reasons_cover_terminal_set(self):
         """终态五值（expired/duplicate/success/failed/cancelled）各有固定

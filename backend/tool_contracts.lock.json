@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generated_at": "2026-10-10T18:19:05+08:00",
-  "git_sha": "098632a",
+  "generated_at": "2026-10-31T06:42:33+08:00",
+  "git_sha": "23b1210",
   "tool_count": 40,
   "tools": {
     "calculate_tool": {
@@ -1133,8 +1133,10 @@
     },
     "memory_forget_tool": {
       "module": "backend/tools/memory.py",
-      "display_name": "",
-      "data_source": null,
+      "display_name": "记忆删除",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "067fd1df512dfb21",
       "args_schema": {
         "memory_id": {

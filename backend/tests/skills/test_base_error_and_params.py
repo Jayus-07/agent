@@ -102,13 +102,17 @@ class TestParamValidation:
     }
 
     def test_missing_required_fails_fast(self):
-        """缺必填参数：Tool 一次都不被调用，直接落 failed"""
+        """缺必填参数：Tool 一次都不被调用，直接落 failed。
+
+        校验实现已收敛到 Governance Runtime 的 JSON Schema 校验器
+        （b6b7973），文案带路径前缀：「参数校验失败: $: 缺少必填字段 url」。
+        """
         tool = _CountingTool()
         out = _run(tool, schema=self.SCHEMA, params={"count": 1})
         sr = out["step_results"]["step_1"]
         assert sr["status"] == "failed"
         assert sr["error_type"] == "invalid_param"
-        assert "缺少必填参数 url" in sr["error"]
+        assert "缺少必填字段 url" in sr["error"]
         assert tool.calls == 0
 
     def test_wrong_type_rejected(self):
@@ -118,7 +122,9 @@ class TestParamValidation:
         sr = out["step_results"]["step_1"]
         assert sr["status"] == "failed"
         assert sr["error_type"] == "invalid_param"
-        assert "类型应为 int" in sr["error"]
+        # legacy 声明 type:int 由 legacy_params_to_schema 归一为 integer，
+        # JSON Schema 校验文案是「类型应为 ['integer']，实际为 str」
+        assert "类型应为 ['integer']" in sr["error"]
         assert tool.calls == 0
 
     def test_bool_rejected_for_int(self):
@@ -144,12 +150,21 @@ class TestParamValidation:
         assert tool.calls == 1
         assert tool.seen_params == {"url": "https://x.com", "count": 3, "mode": "fast"}
 
-    def test_undeclared_keys_not_blocked(self):
-        """未声明的键不拦（交由 Tool 签名兜底），旧式字符串声明跳过"""
+    def test_undeclared_keys_blocked_by_strict_root(self):
+        """未声明键被根 schema additionalProperties=False 拦截。
+
+        b6b7973 把校验收敛到 Governance Runtime：根参数 additionalProperties
+        恒为 False（FC/LLM 注入面收紧，防模型塞未声明参数）。旧式字符串声明
+        本身仍作为 string property 参与校验（extra 值合法通过）。
+        """
         tool = _CountingTool()
         out = _run(tool, schema={"extra": "自由参数（旧式声明）"},
                    params={"extra": "任意值", "other": 1})
-        assert out["step_results"]["step_1"]["status"] == "success"
+        sr = out["step_results"]["step_1"]
+        assert sr["status"] == "failed"
+        assert sr["error_type"] == "invalid_param"
+        assert "不允许未声明参数 other" in sr["error"]
+        assert tool.calls == 0
 
 
 class TestSelectToolHook:
