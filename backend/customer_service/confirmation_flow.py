@@ -205,6 +205,27 @@ def _execute_confirmed_action(
             )
             refund_request_written = True
             return action_record.to_dict()
+    elif action_type == "order_cancel":
+        # P2 取消订单：真实资金副作用（退款回钱包），与退款同级身份闸 +
+        # 幂等边界（run_idempotent_side_effect 保证重复确认只退一次款）。
+        from backend.customer_service.errors import OrderNotEligibleError
+
+        if not confirmation_id or not user_id or not tenant_id or not session_id:
+            raise OrderNotEligibleError("取消订单缺少可信确认上下文")
+
+        def execute() -> dict:
+            from backend.customer_service.service.cancel_order_service import (
+                get_cancel_order_service,
+            )
+
+            action_record = get_cancel_order_service().execute_confirmed_cancel(
+                pending_action,
+                confirmation_id=confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                conversation_id=session_id,
+            )
+            return action_record.to_dict()
     else:
         def execute() -> dict:
             return _simulate_execute(pending_action).to_dict()
@@ -325,7 +346,12 @@ def _handle_confirm(
                     "request_id", "",
                 ))
                 if action_type == "refund_request"
-                else f"simulated execution, action_id={record.get('action_id', '')}"
+                else (
+                    "order cancelled; funds refunded to wallet; order_no="
+                    + str(record.get("target_id", ""))
+                    if action_type == "order_cancel"
+                    else f"simulated execution, action_id={record.get('action_id', '')}"
+                )
             ),
             # agent_actions.conversation_id NOT NULL + FK（006）：审计落库
             # 必须带会话归属——session_id 即 conversations.conversation_id
@@ -353,6 +379,14 @@ def _handle_confirm(
                     f"**申请编号:** `{request_no}`\n"
                     "当前仅登记了申请，尚未退款；审核结果会通过客服会话通知。"
                 )
+        elif action_type == "order_cancel":
+            wallet = (record.get("data") or {}).get("wallet") or {}
+            answer = (
+                "✅ 订单已取消。\n\n"
+                f"**订单号:** `{record.get('target_id', '')}`\n"
+                f"**货款已退回账户余额:** ¥{float(wallet.get('balance') or 0):.2f}\n"
+                "可在「资金流水」查看退款入账记录。"
+            )
         else:
             answer = (
                 f"✅ 操作已提交成功！\n\n"

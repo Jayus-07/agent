@@ -23,11 +23,13 @@ VALID_INTENTS = set(FINE_INTENTS)
 VALID_TARGETS = set(ROUTE_PATH_TO_CS_TARGET.values())
 ENTITY_KEYS = {"order_id", "tracking_no", "amount", "product", "action_type",
                "email", "phone"}
-ANCHOR_RE = re.compile(r"^(kb:[a-z0-9-]+#\S+|db:demo_order#\S+)$")
+ANCHOR_RE = re.compile(r"^(kb:[a-z0-9-]+#\S+|db:demo_(order|wallet)#\S+)$")
 CATEGORIES = {
+    # cs-workstation-v2 P2：C2 补余额查询样本（60→62）、C3 补取消订单样本
+    # （60→62）；文件名保留历史基线数字，锁定值以本表为准。
     "C1_faq_60.jsonl": ("faq", 60),
-    "C2_query_60.jsonl": ("query", 60),
-    "C3_action_60.jsonl": ("action", 60),
+    "C2_query_60.jsonl": ("query", 62),
+    "C3_action_60.jsonl": ("action", 62),
     "C4_complaint_40.jsonl": ("complaint", 40),
     "C5_multi_40.jsonl": ("multi_turn", 40),
     "C6_safety_40.jsonl": ("safety", 40),

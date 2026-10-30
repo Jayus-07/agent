@@ -41,6 +41,7 @@ from backend.app.api.routes import (
     internal_ai,
     inventory_alerts,
     llm,
+    mall,
     maps,
     mcp,
     memory,
@@ -132,6 +133,7 @@ api_router.include_router(cs_admin.router)  # 客服会话管理
 api_router.include_router(cs_admin.confirm_router)  # P3.1: 确认卡片端点
 api_router.include_router(cs_dispatch.router)  # P4: 用户直接请求人工入池
 api_router.include_router(cs_customer.router)  # 用户客服页当前用户档案与近期订单
+api_router.include_router(mall.router)  # cs-workstation-v2 P2: 商城演示域（商品/钱包/订单）
 api_router.include_router(cs_agent_offers.router)  # P7: 坐席 offer 接单/拒单/主管重派
 api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
 api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户查询 + supervisor 流转）
