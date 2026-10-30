@@ -37,6 +37,20 @@ function fmtMs(ms: number): string {
   return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`;
 }
 
+/**
+ * Prompt 版本快照两形态兼容：runner 写入 {key: version} map 快照，部分链路写 list。
+ * map 按 key 数计数、list 按元素数计数；两者皆空/缺省如实显示「未采集」。
+ */
+function promptVersionsLabel(metadata: Record<string, unknown> | undefined): string {
+  const pv = metadata?.prompt_versions;
+  if (Array.isArray(pv)) return pv.length > 0 ? `${pv.length} 个` : "未采集";
+  if (pv && typeof pv === "object") {
+    const count = Object.keys(pv as Record<string, unknown>).length;
+    return count > 0 ? `${count} 个` : "未采集";
+  }
+  return "未采集";
+}
+
 export default function TraceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -311,7 +325,7 @@ export default function TraceDetailPage() {
                 <div className="flex justify-between"><span className="text-slate-500">模型（main）</span><span className="font-mono text-xs">{trace.model?.name || "未采集"}</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">Provider</span><span className="font-mono text-xs">{trace.model?.provider || "未采集"}</span></div>
                 <div className="flex justify-between"><span className="text-slate-500">总耗时</span><span className="font-mono">{trace.duration_ms > 0 ? fmtMs(trace.duration_ms) : "未采集"}</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Prompt 版本</span><span className="font-mono text-xs">{Array.isArray(trace.metadata?.prompt_versions) && trace.metadata.prompt_versions.length > 0 ? `${trace.metadata.prompt_versions.length} 个` : "未采集"}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Prompt 版本</span><span className="font-mono text-xs">{promptVersionsLabel(trace.metadata)}</span></div>
               </div>
               {trace.sla && (
                 <div className={`mt-3 rounded-lg px-3 py-2 text-xs font-semibold ${isFailure ? "bg-slate-100 text-slate-500" : trace.sla.breached ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"}`}>

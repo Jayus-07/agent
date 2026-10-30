@@ -83,6 +83,17 @@ async function mountDetail(): Promise<HTMLDivElement> {
   return container
 }
 
+/** 概要侧卡「Prompt 版本」行文本（行内 flex 布局，label 前缀 + 值）。 */
+async function mountWithMetadata(metadata: Record<string, unknown>): Promise<string | undefined> {
+  const t = errorTrace() as unknown as Record<string, unknown>
+  t.metadata = metadata
+  mocks.getTraceDetail.mockResolvedValue(t)
+  const container = await mountDetail()
+  return Array.from(container.querySelectorAll('div.flex.justify-between'))
+    .find((el) => el.textContent?.startsWith('Prompt 版本'))
+    ?.textContent
+}
+
 describe('Trace 详情页（四问布局重构版）', () => {
   it('展示问题、结果、错误码与错误消息，失败运行 SLA 显示未参与判定', async () => {
     mocks.getTraceDetail.mockResolvedValue(errorTrace())
@@ -95,6 +106,22 @@ describe('Trace 详情页（四问布局重构版）', () => {
     expect(container.textContent).toContain('SLA 未参与判定')
     // 未埋点黑洞可见
     expect(container.textContent).toContain('未埋点黑洞')
+    // metadata 缺 prompt_versions → 如实「未采集」
+    expect(Array.from(container.querySelectorAll('div.flex.justify-between'))
+      .find((el) => el.textContent?.startsWith('Prompt 版本'))?.textContent).toBe('Prompt 版本未采集')
+  })
+
+  it('Prompt 版本兼容 map 快照形态（按 key 数展示）', async () => {
+    expect(await mountWithMetadata({ prompt_versions: { 'rag.qa': 3, 'rag.contextualize': 1 } })).toBe('Prompt 版本2 个')
+  })
+
+  it('Prompt 版本兼容 list 形态（按元素数展示）', async () => {
+    expect(await mountWithMetadata({ prompt_versions: [{ key: 'rag.qa', version: 3 }] })).toBe('Prompt 版本1 个')
+  })
+
+  it('Prompt 版本空 map / 空 list 如实显示未采集', async () => {
+    expect(await mountWithMetadata({ prompt_versions: {} })).toBe('Prompt 版本未采集')
+    expect(await mountWithMetadata({ prompt_versions: [] })).toBe('Prompt 版本未采集')
   })
 
   it('「加入候选评测集」调用 intake 端点一次并展示待审核回执', async () => {

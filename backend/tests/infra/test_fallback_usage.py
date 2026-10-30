@@ -5,6 +5,7 @@ fallback（换模型）可区分；fallback 接管成功也有计数。
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -115,3 +116,44 @@ def test_resilience_records_each_failed_attempt(capture_store, monkeypatch):
         proxy_mod._call_with_resilience(lambda *a, **k: "ok")
     decisions = [e["decision"] for e in capture_store.events]
     assert decisions == ["primary", "retry"]
+
+
+# ── 失败行 finish_reason 携带 HTTP 状态（obs-legacy-fixups 阶段 3）──────
+
+class _StatusAttrError(RuntimeError):
+    """openai.APIStatusError / httpx.HTTPStatusError 风格：异常自身带 status_code。"""
+
+    def __init__(self, status):
+        super().__init__("boom provider")
+        self.status_code = status
+
+
+class _ResponseAttrError(RuntimeError):
+    """requests.HTTPError 风格：status_code 挂在 .response 上。"""
+
+    def __init__(self, status):
+        super().__init__("boom provider")
+        self.response = SimpleNamespace(status_code=status)
+
+
+def test_failed_attempt_finish_reason_carries_http_status(capture_store):
+    """异常带 int status_code → finish_reason 追加 HTTP 状态（error:<Type>:429）。"""
+    err = _StatusAttrError(429)
+    proxy_mod._record_failed_attempt("doubao-seed-2.0-mini", err)
+    assert capture_store.events[0]["finish_reason"] == (
+        f"error:{type(err).__name__}:429")
+
+
+def test_failed_attempt_finish_reason_from_response_attr(capture_store):
+    """requests 风格（.response.status_code）同样拼入。"""
+    err = _ResponseAttrError(503)
+    proxy_mod._record_failed_attempt("doubao-seed-2.0-mini", err)
+    assert capture_store.events[0]["finish_reason"] == (
+        f"error:{type(err).__name__}:503")
+
+
+def test_failed_attempt_finish_reason_no_status_for_non_int(capture_store):
+    """status_code 非 int（如字符串/缺失）→ 不拼接，保持 error:<Type> 原形。"""
+    err = _StatusAttrError("429")
+    proxy_mod._record_failed_attempt("doubao-seed-2.0-mini", err)
+    assert capture_store.events[0]["finish_reason"] == f"error:{type(err).__name__}"

@@ -846,13 +846,18 @@ class RAGChain:
             _scope_root_var.set("rag_skill")
             logger.info(f"[RAGChain] 嵌入模式（父 trace={prev.id[:8]}）: {question[:60]}...")
         else:
-            from backend.observability.tracer import get_external_parent_trace_id
+            from backend.observability.tracer import (
+                WorkflowKind,
+                get_external_parent_trace_id,
+            )
 
             trace = trace_collector.start(
                 question,
                 session_id,
                 parent_trace_id=get_external_parent_trace_id(),
                 trace_id=external_child_id,
+                workflow_name="rag_agent",
+                workflow_kind=WorkflowKind.RAG_QUERY.value,
             )
             trace._rag_embedded = False
             trace.sla_threshold_ms = 30000

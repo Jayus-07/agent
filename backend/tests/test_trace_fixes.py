@@ -319,3 +319,83 @@ class TestSerializeInternalAttrs:
         d = _serialize_trace(rec)
         assert "_t0" not in d["spans"][0]
         assert d["spans"][0]["span_id"] == "s"
+
+
+# =====================================================
+# 5b. llm_call DTO 透出 http_status（obs-legacy-fixups 阶段 3）
+# =====================================================
+
+class TestLlmCallDtoHttpStatus:
+    def _dto(self, http_status):
+        from backend.app.api.routes.observability import _to_trace_dto
+        from backend.observability.tracer import Span
+
+        rec = TraceRecord(id="thttp", question="q", duration_ms=100)
+        sp = Span(span_id="s1", parent_id=None, name="LLM 调用", type="llm_call")
+        if http_status is not None:
+            sp.metrics["http_status"] = http_status
+        rec.spans.append(sp)
+        return _to_trace_dto(rec)
+
+    def test_http_status_exposed_when_collected(self):
+        dto = self._dto(429)
+        llm_span = next(s for s in dto["spans"] if s["type"] == "llm_call")
+        assert llm_span["llm_call"]["http_status"] == 429
+
+    def test_http_status_defaults_null_when_absent(self):
+        """采集链尚无写入点 → 默认 null（不伪造 0）。"""
+        dto = self._dto(None)
+        llm_span = next(s for s in dto["spans"] if s["type"] == "llm_call")
+        assert llm_span["llm_call"]["http_status"] is None
+
+
+# =====================================================
+# 6. RAGChain._start() workflow 语义：独立链 rag_query，嵌入链不改父 kind
+# =====================================================
+
+class TestRagChainWorkflowKind:
+    """独立 RAG 链此前未显式传 workflow_name/kind → kind 落 OTHER，
+    按 kind 过滤/统计的下游漏 RAG；嵌入父 trace 的 rag_skill 分支不受影响。"""
+
+    def _stub_chain(self):
+        from backend.rag.chain import RAGChain
+
+        chain = RAGChain.__new__(RAGChain)
+        chain._runtime_prompt_keys = []
+        return chain
+
+    def test_standalone_chain_marks_rag_query(self, monkeypatch):
+        from backend.observability import tracer as tracer_mod
+
+        collector = TraceCollector()
+        monkeypatch.setattr(tracer_mod, "trace_collector", collector)
+        chain = self._stub_chain()
+        monkeypatch.setattr(chain, "_record_runtime_prompt_usage", lambda: None)
+
+        trace, _t0 = chain._start("测试问题", "sess-kind")
+        try:
+            assert trace.workflow_name == "rag_agent"
+            assert trace.workflow_kind == "rag_query"
+            assert trace._rag_embedded is False
+        finally:
+            collector.finish(trace, "答案", 10, "m")
+
+    def test_embedded_mode_keeps_parent_kind(self, monkeypatch):
+        """嵌入父 trace 分支不创建子 trace、不改写父 workflow_kind。"""
+        from backend.observability import tracer as tracer_mod
+
+        collector = TraceCollector()
+        monkeypatch.setattr(tracer_mod, "trace_collector", collector)
+        parent = collector.start("外层主图任务", workflow_kind="langgraph_workflow")
+        chain = self._stub_chain()
+        monkeypatch.setattr(chain, "_record_runtime_prompt_usage", lambda: None)
+
+        try:
+            trace, _t0 = chain._start("内嵌问题", "sess-embed")
+            assert trace is parent
+            assert trace._rag_embedded is True
+            assert trace.workflow_kind == "langgraph_workflow"
+            assert "rag_skill" in [s.span_id for s in parent.spans]
+        finally:
+            tracer_mod._scope_root_var.set(None)
+            collector.finish(parent, "答案", 10, "m")

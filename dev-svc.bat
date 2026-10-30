@@ -14,6 +14,8 @@ setlocal enabledelayedexpansion
 ::   web     = frontend container             :3100           (/login)
 ::             mirrored production image (node server.js, NO bind mount)
 ::   /y      = skip the confirmation prompt of stop/restart/rebuild
+::             (Git Bash / MSYS eats "/y" as a path conversion; cmd.exe /c
+::              swallows it too - use "-y" here, or route via PowerShell)
 ::   no arg  = print status
 ::   rebuild = compose build + up -d all backend services AND the
 ::             containerized frontends (frontend-admin / frontend):
@@ -54,6 +56,21 @@ if not defined COMPOSE_FILE (
             set "COMPOSE_FILE=%ROOT%\docker-compose.yml;%%~fD\prod-4c8g\docker-compose.local.yml"
             set "COMPOSE_PATH_SEPARATOR=;"
         )
+    )
+)
+
+:: ---- compose project name guard (shared stack = project "agent") ----
+:: Compose derives the project name from the ROOT directory name. Running
+:: this script from a worktree whose directory name differs (e.g. a Git
+:: worktree under agent-wt-*) would otherwise build a PARALLEL compose
+:: project: duplicate images and port-bind fights against the shared
+:: stack. Pin the project name unless the caller already exported
+:: COMPOSE_PROJECT_NAME (then respect the caller's choice).
+if not defined COMPOSE_PROJECT_NAME (
+    for %%I in ("%ROOT%") do set "ROOT_NAME=%%~nxI"
+    if /i not "!ROOT_NAME!"=="agent" (
+        set "COMPOSE_PROJECT_NAME=agent"
+        echo   [dev-svc] ROOT dir "!ROOT_NAME!" differs from agent - pinning COMPOSE_PROJECT_NAME=agent to reuse the shared stack
     )
 )
 
