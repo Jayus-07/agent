@@ -64,3 +64,20 @@ class TestInventoryAnalyzerPromptVersion:
         versions = trace.metadata["prompt_versions"]
         assert len(versions) == 1
         assert versions[0]["version"] == 2
+
+    def test_runner_map_snapshot_updated_in_place(self, _fresh_tracer):
+        """runner 的 {key: version} map 快照在场时原地更新，不抛错不覆盖丢数据。
+
+        回归根因：旧实现按 list 迭代 map（str.get 抛 AttributeError 被
+        静默吞掉），workflow trace 上 render_sync 的精确记录从未生效。
+        """
+        from backend.observability.prompt_trace import record_prompt_version
+
+        trace = _fresh_tracer.start("q", workflow_name="daily_report")
+        trace.metadata["prompt_versions"] = {"rag.qa": 17, "general_chat.system": 3}
+        record_prompt_version("capability.inventory_analyzer", None, "default")
+        record_prompt_version("general_chat.system", 4, "db")
+        snapshot = trace.metadata["prompt_versions"]
+        assert snapshot["capability.inventory_analyzer"] is None
+        assert snapshot["general_chat.system"] == 4
+        assert snapshot["rag.qa"] == 17

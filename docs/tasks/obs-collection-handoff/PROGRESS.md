@@ -78,7 +78,60 @@
 
 ## P4 验证记录
 
-- [ ] vitest 全绿 + tsc --noEmit 通过（frontend-admin）
-- [ ] 后端定向 pytest 全绿
-- [ ] compose 重建 frontend-admin + backend，浏览器实测四页与详情
-- [ ] PR 合并 main（描述引用根因证据）
+### 部署（worktree → 主栈，COMPOSE_PROJECT_NAME=agent）
+
+- 前端：`compose build frontend-admin frontend` + `up -d` → agent-frontend-admin-1 /
+  agent-frontend-1 healthy；容器内构建产物含「服务端统计口径」（新代码版本锚点）
+- 后端：`compose build app 等 9 服务` + `up -d` → app/worker/beat healthy；
+  容器内验证 by_domain(3)/workflow_kind(3)/record_llm_call_span(4)/llm_call_span.py 存在
+- dev-svc.bat 实测：worktree 内 `COMPOSE_PROJECT_NAME=agent dev-svc.bat rebuild /y`
+  → backend rebuild + **frontend rebuild（新增 rebuild_frontend 动作）** 全部执行，
+  两前端健康检查 ready，最终 status 全 UP
+- ⚠️ 发现并记录的坑（不属本任务修复范围）：dev-svc.bat 未设置 COMPOSE_PROJECT_NAME，
+  在非 `agent` 目录名的 worktree 里直接跑会构建出平行项目名的镜像/容器——
+  本次以 COMPOSE_PROJECT_NAME=agent 环境变量规避；主仓库目录名=agent 不受影响。
+
+### 浏览器实测（admin :3200，obs_handoff_viewer/admin 测试账号）
+
+| 页面 | 结果 | DOM 证据 |
+| --- | --- | --- |
+| 总览 tab=overview | PASS | 「业务域分布（近 24 小时 · 服务端统计口径）」+ 数据行「其他 25 条，错误 10」；运行中卡为 Link（href=...status=running）；「模型健康」卡：18 个已探测模型 · 10 健康 · 8 异常，列出 deepseek-v4-flash 异常行；终态分布 9 项全部 Link |
+| 执行记录 tab=traces | PASS | 列表渲染错误筛选结果；运行对象徽标（工作流/平台工作流）按 runKind 渲染 |
+| 详情页 /traces/{id} | PASS | 四问布局（①错在哪 ②慢在哪·Span 甘特 ③答了什么）；存量 trace 空值如实显示「本次 Trace 未记录 LLM 调用」「错误码：未采集」 |
+| 网关安全 tab=gateway | PASS | Prometheus 未启动（profile 储备）时显式降级文案，不伪造空统计 |
+| Token 用量 tab=tokens | PASS | 按组件×模型用量表 + 调用明细入口 |
+
+### API 硬验证（带授权 token）
+
+- `GET /api/observability/traces?limit=5` → 每行含 `workflow_kind`
+  （main=langgraph_workflow；daily_report/rag_agent/inventory_alert=other）
+- `GET /api/observability/traces/stats?hours=24` → `by_domain`：
+  `{"": {total:25, errors:10}, ai_assistant: 0, cs: 0, travel: 0}`——与总览页渲染一致
+
+### P1 实机闭环验证（触发真实寒暄请求）
+
+- `POST /api/chat/agent`（网关链路，走 general_chat 直连主 LLM）→ 200
+- 新 trace（7bf629876f5a）spans = `["workflow","workflow","workflow","retrieval",
+  "retrieval","embedding","retrieval","tool_call","tool_call","llm_call","agent"]`
+  ——**llm_call span 出现**（修复前 28 条 agent trace 恒为 0）
+- span 指标：model_name=doubao-seed-2.0-mini，prompt_tokens=169，
+  total_tokens=221，cost_cny=0.000138，duration_ms_call=1317.1，
+  token_source=proxy_span；input.prompt/response 输出快照齐全
+- 一个成功调用 = 1 行 llm_usage + 1 个 llm_call span（不双计）
+- prompt_versions：`metadata.prompt_versions["general_chat.system"]=3`（精确记录生效）
+
+### 实测中发现并修复的缺陷（第三提交）
+
+- `record_prompt_version` 与 runner 的 `{key: version}` map 快照冲突：
+  旧实现按 list 迭代 dict（str.get 抛 AttributeError 被静默吞掉），
+  workflow trace 上 render_sync 的精确版本记录从未生效——修复为兼容
+  map（原地更新）/list（同 key 更新、新 key 追加）两种形态，补回归测试。
+
+### 最终测试汇总
+
+- frontend-admin：vitest 全量 **576 passed (83 files)**，`tsc --noEmit` **rc=0**
+- backend 定向：P1 新增 26 passed（含 map 兼容回归）+ P2 相关 57 passed
+  （2 failed 为 main 既有失败，主仓库对照确认）；proxy/tracer 既有回归 33 passed
+- 测试账号清理说明：`auth.users` 新增 obs_handoff_viewer（admin，tenant default）
+  为本任务实测专用，PR 合并后可删除或由运维保留
+
