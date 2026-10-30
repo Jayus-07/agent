@@ -538,6 +538,69 @@ def _assert_current_agent(
         raise HTTPException(409, detail="会话已由其他坐席认领")
 
 
+async def _load_conversation_access_row(conversation_id: str):
+    """读取会话归属三元组（user_id / tenant_id / assigned_agent_id），无行返回 None。"""
+    from sqlalchemy import select
+
+    from backend.customer_service.models.conversation import CSConversation
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db:
+        return (
+            await db.execute(
+                select(
+                    CSConversation.user_id,
+                    CSConversation.tenant_id,
+                    CSConversation.assigned_agent_id,
+                )
+                .where(CSConversation.conversation_id == conversation_id)
+                .limit(1)
+            )
+        ).first()
+
+
+async def _ensure_pending_proposal_access(
+    request: Request,
+    conv_tenant_id: str | None,
+    assigned_agent_id: str | None,
+) -> None:
+    """坐席侧待确认提案快照的可见性闸（cs-workstation-v2 P0）。
+
+    任务契约只开放两档：supervisor/admin 看本租户全部会话；所属坐席
+    （当前认领人）看自己的会话。api-key 服务通道放行（BFF 信任边界，
+    与 _ensure_conversation_access 同语义）。普通用户的待确认快照走
+    /my/{id}/pending，不得经由本端点读取他人会话。
+    """
+    if _is_service_channel(request):
+        return
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    if not ident.authenticated:
+        raise HTTPException(401, detail="未认证：请登录后访问坐席工作台")
+    if not ident.tenant_id:
+        raise HTTPException(403, detail="缺少可信租户身份")
+    if conv_tenant_id and ident.tenant_id != conv_tenant_id:
+        raise HTTPException(403, detail="无权访问其他租户的会话")
+    if {"admin", "supervisor"} & set(ident.roles):
+        return
+    if "agent" in ident.roles and assigned_agent_id:
+        try:
+            agent_id = await _lookup_bound_agent_id(
+                tenant_id=ident.tenant_id, user_id=ident.user_id
+            )
+        except Exception as exc:
+            # 反查失败按「非当前坐席」处理，不让 DB 抖动放大成 500
+            logger.warning(
+                "[CSAdmin] resolve agent identity for pending snapshot failed: %s", exc,
+            )
+            agent_id = None
+        if agent_id and str(agent_id) == str(assigned_agent_id):
+            return
+    raise HTTPException(403, detail="仅主管或会话所属坐席可查看待确认提案")
+
+
 async def _proxy_to_java(path: str) -> dict:
     """代理请求到 business-service（cutover 后的读源）"""
     from backend.infra.http.business_client import BusinessServiceError, get_json
@@ -969,6 +1032,99 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
             "reason": str(
                 ((pending.get("after_state") or {}).get("reason") or "")
             ),
+            "expires_at": expires_at,
+            "state": state,
+        },
+    }
+
+
+@router.get("/{conversation_id}/pending-proposal")
+async def get_conversation_pending_proposal(
+    conversation_id: str, request: Request,
+) -> dict:
+    """坐席侧会话级待确认提案只读快照（cs-workstation-v2 P0）。
+
+    与用户侧 /my/{id}/pending 同源：load_authoritative 唯一事实源、人工
+    接管暂停态、过期判定同口径；差别只在可见性（supervisor / 所属坐席，
+    见 _ensure_pending_proposal_access）。只读端点：不认领、不消费、
+    不改状态 —— 执行仍只走用户确认链路。
+    """
+    try:
+        conv = await _load_conversation_access_row(conversation_id)
+        if conv is None:
+            raise HTTPException(404, detail="Conversation not found")
+        await _ensure_pending_proposal_access(
+            request, conv.tenant_id, assigned_agent_id=conv.assigned_agent_id,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] pending-proposal access check failed: {e}")
+        raise HTTPException(503, detail="Database unavailable")
+
+    from backend.customer_service.confirmation_store import (
+        StoreWriteError,
+        get_confirmation_store,
+    )
+
+    try:
+        pending = get_confirmation_store().load_authoritative(
+            conv.user_id, conversation_id, conv.tenant_id or "",
+        )
+    except StoreWriteError as exc:
+        raise HTTPException(503, detail="待确认状态暂不可核验，请稍后重试") from exc
+    if pending is None:
+        return {"pending_action": None}
+
+    from datetime import datetime, timezone
+
+    from backend.shared.pii_mask import mask_pii
+
+    raw_target = str(pending.get("target_id") or "").strip()
+    # 坐席保留完整单号用于关联订单上下文，但手机号等个人信息仍走统一脱敏
+    summary, _ = mask_pii(str(pending.get("proposal_text") or "待确认的业务操作"))
+
+    expires_at = pending.get("expires_at")
+    if hasattr(expires_at, "isoformat"):
+        expires_at = expires_at.isoformat()
+    expires_at = str(expires_at) if expires_at else None
+    expired = False
+    if expires_at:
+        try:
+            expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            expired = expiry <= datetime.now(timezone.utc)
+        except ValueError:
+            # 不可解析的过期时间按失效处理（与用户侧同口径）
+            expired = True
+
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        handoff = load_active_handoff_sync(
+            conv.tenant_id or "", conversation_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+
+    handoff_state = str((handoff or {}).get("handoff_state") or "")
+    if handoff_state in {
+        "handoff_requested", "waiting_human", "agent_offered", "human_active",
+    }:
+        state = "paused_handoff"
+    else:
+        state = "expired" if expired else "pending"
+
+    return {
+        "pending_action": {
+            "proposal_id": str(pending.get("proposal_id") or pending.get("action_id") or ""),
+            "version": int(pending.get("version") or pending.get("proposal_version") or 1),
+            "action_type": str(pending.get("action_type") or "unknown"),
+            "target_type": str(pending.get("target_type") or "unknown"),
+            "target_id": raw_target,
+            "summary": summary,
+            "reason": str(((pending.get("after_state") or {}).get("reason") or "")),
             "expires_at": expires_at,
             "state": state,
         },

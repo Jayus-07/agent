@@ -32,6 +32,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const isTaskMode = pathname === '/agent'
   // 登录页独立呈现：不渲染全局侧边栏（AuthGate 同样对其放行）
   const isLoginPage = pathname.startsWith('/login')
+  // cs-workstation-v2：/cs2/* 使用新工作台壳（app/cs2/layout.tsx），Phase 8 前
+  // 新旧并行 —— 旧 /cs/* 页面不受影响。
+  const isCs2Workstation = pathname.startsWith('/cs2')
 
   return (
     <html lang="zh-CN">
@@ -42,7 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="h-full flex bg-surface-root">
         <QueryClientProvider client={queryClient}>
           <AuthGate>
-            {!isTaskMode && !isLoginPage && (
+            {!isTaskMode && !isLoginPage && !isCs2Workstation && (
               <Sidebar collapsed={!sidebarOpen} onToggle={() => setSidebarOpen((v) => !v)} />
             )}
             <main className="flex-1 flex flex-col min-w-0">

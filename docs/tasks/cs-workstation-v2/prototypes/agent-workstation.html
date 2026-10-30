@@ -1,0 +1,1607 @@
+<div id="cs-mock">
+  <div class="cs-app">
+    <aside class="cs-side">
+      <div class="cs-brand"><span class="cs-logo">◆</span><span class="bt">客服工作台</span><span class="cs-ver">设计稿</span></div>
+      <nav class="cs-nav" aria-label="客服端导航">
+        <button class="cs-navi active" data-view="workspace" type="button"><i data-lucide="layout-dashboard" aria-hidden="true"></i><span class="lbl">统一工作台</span></button>
+        <button class="cs-navi" data-view="convs" type="button"><i data-lucide="messages-square" aria-hidden="true"></i><span class="lbl">会话管理</span></button>
+        <button class="cs-navi" data-view="tickets" type="button"><i data-lucide="ticket-check" aria-hidden="true"></i><span class="lbl">工单管理</span></button>
+        <button class="cs-navi" data-view="qa" type="button"><i data-lucide="clipboard-check" aria-hidden="true"></i><span class="lbl">质检中心</span></button>
+        <button class="cs-navi" data-view="dashboard" data-mincs="supervisor" type="button"><i data-lucide="bar-chart-3" aria-hidden="true"></i><span class="lbl">数据看板</span></button>
+        <button class="cs-navi" data-view="refund" data-mincs="supervisor" type="button"><i data-lucide="receipt" aria-hidden="true"></i><span class="lbl">退款审核</span></button>
+        <button class="cs-navi" data-view="knowledge" type="button"><i data-lucide="book-open" aria-hidden="true"></i><span class="lbl">知识助手</span></button>
+      </nav>
+      <div class="cs-sidefoot"><div class="cs-seg cs-segsm" id="persp-seg" role="group" aria-label="角色视角"><button type="button" data-p="supervisor" class="active">supervisor</button><button type="button" data-p="agent">agent</button></div><span class="cs-hint">视角切换 · P0–P7 目标态</span></div>
+    </aside>
+
+    <div class="cs-main">
+      <header class="cs-topbar">
+        <div class="cs-tbtitle" id="tb-title">统一坐席工作台</div>
+        <div class="cs-tbright">
+          <span class="cs-wstag" data-tooltip="WebSocket 已连接；断线将指数退避重连并降级 2s 轮询（现有能力演示）"><span class="cs-wsdot"></span>WS</span>
+          <div class="cs-bellwrap">
+            <button class="cs-iconbtn" id="bell" type="button" aria-label="通知" data-tooltip="SLA 告警 1 · 转接请求 1"><i data-lucide="bell" aria-hidden="true"></i><span class="cs-belldot">2</span></button>
+            <div class="cs-apop" id="notif-pop" hidden>
+              <div class="cs-nt"><span class="cs-dot red"></span><div><b>SLA 告警</b>会话 #1013 P0 等待超时，已升级至主管<button class="abtn sm" data-nt="queue" type="button">去处理</button></div></div>
+              <div class="cs-nt"><span class="cs-dot blue"></span><div><b>转接请求</b>李四 请求将会话 #1008 转接给你<button class="abtn sm" data-nt="ws" type="button">查看</button></div></div>
+            </div>
+          </div>
+          <label class="cs-stwrap">状态
+            <select class="asel" id="agent-status" aria-label="坐席状态"><option>在线</option><option>忙碌</option><option>小休</option><option>离线</option></select>
+          </label>
+          <label class="cs-tk"><input type="checkbox" id="accept-switch" checked><span class="cs-tkui"></span>接单</label>
+          <span class="abdg indigo" id="role-chip" data-tooltip="客服域角色 cs_agents.role：登录时并入 JWT roles claim → 网关 X-User-Roles，客户端不可伪造">supervisor</span>
+          <div class="cs-avatar" aria-label="当前坐席 张三">张</div>
+        </div>
+      </header>
+
+      <div class="cs-views">
+        <!-- 统一坐席工作台 -->
+        <section class="cs-view active" data-view="workspace">
+          <div class="cs-ws">
+            <div class="cs-collist">
+              <div class="cs-listtabs" role="tablist" aria-label="会话列表">
+                <button class="lt active" data-lt="mine" type="button">我的会话 <b id="cnt-mine">7</b></button>
+                <button class="lt" data-lt="queue" type="button">待接入 <b id="cnt-queue">2</b></button>
+              </div>
+              <div class="cs-listbody" id="conv-list">
+                <div id="mine-list">
+                  <div class="cs-crow sel" data-conv="c1">
+                    <div class="cs-crowtop"><b>访客 #1024</b><span class="abdg indigo">退款申请</span><span class="cs-crowtime">12:41</span></div>
+                    <div class="cs-crowsub"><span>对的，帮我退了吧</span><span class="cs-unread">2</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c2">
+                    <div class="cs-crowtop"><b>访客 #1019</b><span class="abdg blue">物流查询</span><span class="cs-crowtime">12:37</span></div>
+                    <div class="cs-crowsub"><span>好的谢谢</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c3">
+                    <div class="cs-crowtop"><b>访客 #1017</b><span class="abdg red">投诉</span><span class="cs-crowtime">12:30</span></div>
+                    <div class="cs-crowsub"><span>快点吧，没耐心了</span><span class="cs-unread">1</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c4">
+                    <div class="cs-crowtop"><b>访客 #1010</b><span class="abdg">换货申请</span><span class="cs-crowtime">12:02</span></div>
+                    <div class="cs-crowsub"><span>好的，已经寄出了</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c5">
+                    <div class="cs-crowtop"><b>访客 #1008</b><span class="abdg ok">发票咨询</span><span class="cs-crowtime">11:47</span></div>
+                    <div class="cs-crowsub"><span>谢谢！AI 独立解决</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c6">
+                    <div class="cs-crowtop"><b>访客 #1006</b><span class="abdg indigo">退款申请</span><span class="cs-crowtime">11:30</span></div>
+                    <div class="cs-crowsub"><span>#10023（澄清后锁定）</span></div>
+                  </div>
+                  <div class="cs-crow" data-conv="c7">
+                    <div class="cs-crowtop"><b>访客 #9999</b><span class="abdg red">能力边界</span><span class="cs-crowtime">11:12</span></div>
+                    <div class="cs-crowsub"><span>取消订单 / 价保 / 多语言…</span></div>
+                  </div>
+                </div>
+                <div id="queue-list" hidden>
+                  <div class="cs-crow" data-q="q1">
+                    <div class="cs-crowtop"><b>访客 #1016</b><span class="abdg indigo">退款咨询</span><span class="cs-crowtime">等待 01:24</span></div>
+                    <div class="cs-crowsub"><span class="abdg warn">SLA 01:36</span><button class="abtn sm primary claim" type="button">认领</button></div>
+                  </div>
+                  <div class="cs-crow" data-q="q2">
+                    <div class="cs-crowtop"><b>访客 #1013</b><span class="abdg blue">物流咨询</span><span class="cs-crowtime">等待 04:58</span></div>
+                    <div class="cs-crowsub"><span class="abdg red">SLA 已超时</span><button class="abtn sm primary claim" type="button">认领</button></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="cs-colchat">
+              <div class="cs-chathead">
+                <b id="ch-name">访客 #1024</b>
+                <span class="abdg indigo" id="ch-intent">退款申请</span>
+                <div class="cs-chmeta"><span class="abdg ok" id="ch-state">人工处理中</span><span class="cs-sla" id="ch-sla">SLA 04:24</span></div>
+              </div>
+              <div class="cs-chatbody" id="chat-body"></div>
+              <div class="cs-composer">
+                <div class="cs-ctools">
+                  <button class="cs-tbtn" id="btn-canned" type="button" aria-expanded="false"><i data-lucide="zap" aria-hidden="true"></i>快捷回复</button>
+                  <button class="cs-tbtn" id="btn-ai" type="button"><i data-lucide="sparkles" aria-hidden="true"></i>AI建议 <b>2</b></button>
+                  <button class="cs-tbtn" id="btn-transfer" type="button"><i data-lucide="arrow-right-left" aria-hidden="true"></i>转接</button>
+                  <button class="cs-tbtn" id="btn-more" type="button"><i data-lucide="more-horizontal" aria-hidden="true"></i></button>
+                </div>
+                <div class="cs-canned" id="canned-pop" hidden>
+                  <input class="asel" id="canned-search" type="text" placeholder="搜索话术…" aria-label="搜索话术">
+                  <div id="canned-list"></div>
+                </div>
+                <div class="cs-moremenu" id="more-pop" hidden>
+                  <button class="cn-item" data-more="ordercard" type="button"><b>发送订单卡片</b></button>
+                  <button class="cn-item" data-more="note" type="button"><b>添加内部备注</b></button>
+                  <button class="cn-item" data-more="ticket" type="button"><b>转为工单</b></button>
+                  <button class="cn-item" data-more="close" type="button"><b>关闭会话</b></button>
+                </div>
+                <div class="cs-cinput">
+                  <textarea id="c-input" rows="2" placeholder="输入回复…（Enter 发送，Shift+Enter 换行）" aria-label="回复输入框"></textarea>
+                  <button class="abtn primary" id="btn-send" type="button">发送</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="cs-colctx">
+              <div class="cs-ctxtabs" role="tablist" aria-label="上下文面板">
+                <button class="ctx-t active" data-ct="customer" type="button">客户360</button>
+                <button class="ctx-t" data-ct="info" type="button">会话信息</button>
+                <button class="ctx-t" data-ct="ai" type="button">AI助手</button>
+              </div>
+              <div class="cs-ctxbody" id="ctx-body"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 会话管理 -->
+        <section class="cs-view cs-page cs-pagefix" data-view="convs">
+          <div class="cs-pagehead"><h2>会话管理</h2><span class="abdg">全租户会话 · supervisor 视角</span></div>
+          <div class="cs-chiprow">
+            <span class="abdg">今日会话 96</span><span class="abdg ok">AI 独立解决 62%</span><span class="abdg blue">转人工 31%</span><span class="abdg warn">排队中 2</span>
+          </div>
+          <div class="cs-filterrow">
+            <input class="asel" id="cv-search" type="text" placeholder="搜索会话号 / 关键词" aria-label="搜索会话">
+            <select class="asel" id="cv-state" aria-label="状态筛选"><option value="">全部状态</option><option value="human_active">human_active</option><option value="waiting_human">waiting_human</option><option value="closed">closed</option></select>
+            <select class="asel" id="cv-intent" aria-label="意图筛选"><option value="">全部意图</option><option>退款申请</option><option>物流查询</option><option>投诉</option><option>换货申请</option><option>退货</option><option>物流咨询</option><option>发票咨询</option><option>退款</option></select>
+          </div>
+          <div class="cs-split">
+            <div class="cs-splitlist">
+              <table class="atbl">
+                <thead><tr><th>会话</th><th>坐席</th><th>意图</th><th>状态</th><th>最近时间</th><th>CSAT</th></tr></thead>
+                <tbody id="cv-rows"></tbody>
+              </table>
+            </div>
+            <div class="cs-splitdetail" id="cv-detail"><div class="cs-dempty">← 点击左侧会话查看详情</div></div>
+          </div>
+        </section>
+
+        <!-- 工单管理 -->
+        <section class="cs-view cs-page cs-pagefix" data-view="tickets">
+          <div class="cs-pagehead"><h2>工单管理</h2><span class="abdg">投诉 / 转人工 / 咨询 / 报修 · P5 接入 SLA 升级</span></div>
+          <div class="cs-chiprow">
+            <span class="abdg">今日新建 8</span><span class="abdg blue">处理中 3</span><span class="abdg warn">待用户响应 1</span><span class="abdg red">升级中 1</span>
+          </div>
+          <div class="cs-filterrow">
+            <input class="asel" id="tk-search" type="text" placeholder="搜索工单号 / 主题" aria-label="搜索工单">
+            <select class="asel" id="tk-status" aria-label="工单状态筛选"><option value="">全部状态</option><option value="processing">processing</option><option value="pending_user">pending_user</option><option value="resolved">resolved</option><option value="closed">closed</option></select>
+            <select class="asel" id="tk-type" aria-label="工单类型筛选"><option value="">全部类型</option><option>投诉</option><option>转人工</option><option>咨询</option><option>报修</option></select>
+          </div>
+          <div class="cs-split">
+            <div class="cs-splitlist">
+              <table class="atbl">
+                <thead><tr><th>工单号</th><th>类型</th><th>主题</th><th>状态</th><th>SLA</th><th>升级</th><th>处理人</th><th>创建时间</th></tr></thead>
+                <tbody id="tk-rows"></tbody>
+              </table>
+            </div>
+            <div class="cs-splitdetail" id="tk-detail"><div class="cs-dempty">← 点击左侧工单查看详情</div></div>
+          </div>
+        </section>
+
+        <!-- 退款审核（P4.5） -->
+        <section class="cs-view cs-page cs-pagefix" data-view="refund">
+          <div class="cs-pagehead"><h2>退款审核</h2><span class="abdg">P4.5 · supervisor · 审核动作全程审计（audit_logs）</span></div>
+          <div class="cs-chiprow">
+            <span class="abdg warn">待审核 2</span><span class="abdg ok">今日通过 5</span><span class="abdg red">今日驳回 1</span><span class="abdg blue">平均审核时长 18m</span>
+          </div>
+          <div class="cs-filterrow">
+            <input class="asel" id="rf-search" type="text" placeholder="搜索申请编号 / 订单号" aria-label="搜索退款申请">
+            <select class="asel" id="rf-status" aria-label="审核状态筛选"><option value="">全部状态</option><option value="pending_review">pending_review</option><option value="approved">approved</option><option value="rejected">rejected</option></select>
+          </div>
+          <div class="cs-split">
+            <div class="cs-splitlist">
+              <table class="atbl">
+                <thead><tr><th>申请编号</th><th>订单（脱敏）</th><th>用户</th><th>金额</th><th>状态</th><th>提交时间</th></tr></thead>
+                <tbody id="rf-rows"></tbody>
+              </table>
+            </div>
+            <div class="cs-splitdetail" id="rf-detail"><div class="cs-dempty">← 点击左侧申请查看详情</div></div>
+          </div>
+        </section>
+
+        <!-- 质检中心 -->
+        <section class="cs-view cs-page" data-view="qa">
+          <div class="cs-pagehead"><h2>质检中心</h2><span class="abdg">agent：我的任务 · supervisor：全部与终审</span></div>
+          <div class="cs-ptabs" role="tablist" aria-label="质检中心">
+            <button class="ptab active" data-pt="tasks" type="button">抽检任务</button>
+            <button class="ptab" data-pt="appeal" type="button">申诉处理</button>
+            <button class="ptab" data-pt="report" type="button">质检日报</button>
+          </div>
+          <div id="qa-panel-tasks">
+            <table class="atbl">
+              <thead><tr><th>会话</th><th>坐席</th><th>抽样批次</th><th>状态</th><th>得分 / 结论</th></tr></thead>
+              <tbody>
+                <tr class="task-row" data-task="t1"><td>#1024</td><td>张三</td><td>10-30</td><td class="t-status"><span class="abdg warn">待评分</span></td><td>—</td></tr>
+                <tr class="task-row" data-task="t2"><td>#0992</td><td>李四</td><td>10-30</td><td class="t-status"><span class="abdg ok">已评分</span></td><td>92 · 合格</td></tr>
+                <tr class="task-row" data-task="t3"><td>#0988</td><td>王五</td><td>10-29</td><td class="t-status"><span class="abdg ok">已评分</span></td><td>71 · 不合格</td></tr>
+              </tbody>
+            </table>
+            <div class="cs-qaform">
+              <div class="cs-qahead"><h3 id="qf-title">评分：会话 #1024 · 张三</h3><button class="abtn sm ghost" id="qa-aiprefill" type="button"><i data-lucide="sparkles" aria-hidden="true"></i>AI 预填建议</button></div>
+              <div class="cs-dim"><span>服务规范</span><input type="range" min="0" max="25" value="22" id="r1" aria-label="服务规范得分"><b id="v1" class="cs-num">22</b><span class="cs-dimmax">/25</span></div>
+              <div class="cs-dim"><span>准确性</span><input type="range" min="0" max="25" value="24" id="r2" aria-label="准确性得分"><b id="v2" class="cs-num">24</b><span class="cs-dimmax">/25</span></div>
+              <div class="cs-dim"><span>合规</span><input type="range" min="0" max="25" value="22" id="r3" aria-label="合规得分"><b id="v3" class="cs-num">22</b><span class="cs-dimmax">/25</span></div>
+              <div class="cs-dim"><span>处理时效</span><input type="range" min="0" max="25" value="18" id="r4" aria-label="处理时效得分"><b id="v4" class="cs-num">18</b><span class="cs-dimmax">/25</span></div>
+              <div class="cs-dim cs-total"><span>合计</span><b id="v-total" class="cs-num">86</b><span class="cs-dimmax">/100</span></div>
+              <div class="cs-verdict" role="radiogroup" aria-label="结论">
+                <label class="cs-tk"><input type="radio" name="verd" value="合格" checked><span class="cs-tkui cs-radio"></span>合格</label>
+                <label class="cs-tk"><input type="radio" name="verd" value="不合格"><span class="cs-tkui cs-radio"></span>不合格</label>
+              </div>
+              <textarea class="cs-reason" id="qa-note" placeholder="评语：扣分原因、改进建议…" aria-label="评语"></textarea>
+              <div class="cs-mfoot"><button class="abtn" type="button">保存草稿</button><button class="abtn primary" id="qa-submit" type="button">提交评分</button></div>
+            </div>
+          </div>
+          <div id="qa-panel-appeal" hidden>
+            <table class="atbl">
+              <thead><tr><th>评分</th><th>会话</th><th>申诉人</th><th>申诉理由</th><th>状态</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr><td>#88</td><td>#1024</td><td>张三</td><td>已提前告知物流延迟，处理仍在时效内</td><td class="ap-status"><span class="abdg warn">申诉中</span></td><td><button class="abtn sm" data-act="keep" type="button">维持</button> <button class="abtn sm" data-act="change" type="button">改判</button></td></tr>
+                <tr><td>#76</td><td>#0955</td><td>李四</td><td>已按 SOP 发送退货地址</td><td class="ap-status"><span class="abdg ok">已维持</span></td><td>—</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="qa-panel-report" hidden>
+            <table class="atbl">
+              <thead><tr><th>日期</th><th>抽检数</th><th>合格率</th><th>主要扣分项</th><th>申诉</th></tr></thead>
+              <tbody>
+                <tr><td>10-30</td><td>12</td><td class="cs-num">91.7%</td><td>响应超时（3）</td><td>1</td></tr>
+                <tr><td>10-29</td><td>12</td><td class="cs-num">90.0%</td><td>话术不规范（4）</td><td>0</td></tr>
+                <tr><td>10-28</td><td>10</td><td class="cs-num">92.0%</td><td>响应超时（2）</td><td>0</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 数据看板 -->
+        <section class="cs-view cs-page" data-view="dashboard">
+          <div class="cs-pagehead"><h2>数据看板</h2>
+            <div class="cs-seg" role="group" aria-label="时间范围">
+              <button type="button" data-r="today" class="active">今日</button><button type="button" data-r="d7">近7日</button><button type="button" data-r="d30">近30日</button>
+            </div>
+            <span class="abdg">30s 轮询（设计稿为静态示意）</span>
+          </div>
+          <div class="cs-statgrid">
+            <div class="cs-stat"><div class="lb">排队中</div><div class="v cs-num" id="ds1">2</div><div class="d" id="dsd1">实时</div></div>
+            <div class="cs-stat"><div class="lb">进行中</div><div class="v cs-num" id="ds2">18</div><div class="d" id="dsd2">较昨日 -2</div></div>
+            <div class="cs-stat"><div class="lb">接待量</div><div class="v cs-num" id="ds3">96</div><div class="d good" id="dsd3">+8%</div></div>
+            <div class="cs-stat"><div class="lb">转人工率</div><div class="v cs-num" id="ds4">31%</div><div class="d good" id="dsd4">-4pp</div></div>
+            <div class="cs-stat"><div class="lb">平均首响</div><div class="v cs-num" id="ds5">42s</div><div class="d good" id="dsd5">-8s</div></div>
+            <div class="cs-stat"><div class="lb">CSAT</div><div class="v cs-num" id="ds6">4.6</div><div class="d good" id="dsd6">+0.1</div></div>
+          </div>
+          <div class="cs-dashgrid">
+            <div class="cs-barswrap">
+              <div class="cs-legend"><b>近 7 日接待量</b><span><span class="cs-sw s1"></span>接待量</span><span><span class="cs-sw s2"></span>转人工</span></div>
+              <div class="cs-bars">
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:79px" data-tooltip="10-25 接待量 72"></div><div class="cs-b s2" style="height:28px" data-tooltip="10-25 转人工 25"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:89px" data-tooltip="10-26 接待量 81"></div><div class="cs-b s2" style="height:25px" data-tooltip="10-26 转人工 23"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:72px" data-tooltip="10-27 接待量 65"></div><div class="cs-b s2" style="height:24px" data-tooltip="10-27 转人工 22"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:99px" data-tooltip="10-28 接待量 90"></div><div class="cs-b s2" style="height:33px" data-tooltip="10-28 转人工 30"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:86px" data-tooltip="10-29 接待量 78"></div><div class="cs-b s2" style="height:29px" data-tooltip="10-29 转人工 26"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:105px" data-tooltip="10-30 接待量 96"></div><div class="cs-b s2" style="height:33px" data-tooltip="10-30 转人工 30"></div></div>
+                <div class="cs-bgroup"><div class="cs-b s1" style="height:97px" data-tooltip="10-31 接待量 88"></div><div class="cs-b s2" style="height:30px" data-tooltip="10-31 转人工 27"></div></div>
+              </div>
+              <div class="cs-blabels"><span>10-25</span><span>10-26</span><span>10-27</span><span>10-28</span><span>10-29</span><span>10-30</span><span>10-31</span></div>
+            </div>
+            <div class="cs-barswrap">
+              <div class="cs-legend"><b>意图分布（近7日）</b></div>
+              <div class="cs-ibar"><span class="in">退款/退货</span><div class="ib"><i style="width:86%"></i></div><span class="iv cs-num">26%</span></div>
+              <div class="cs-ibar"><span class="in">物流查询</span><div class="ib"><i style="width:72%"></i></div><span class="iv cs-num">22%</span></div>
+              <div class="cs-ibar"><span class="in">产品咨询</span><div class="ib"><i style="width:48%"></i></div><span class="iv cs-num">15%</span></div>
+              <div class="cs-ibar"><span class="in">账号/发票</span><div class="ib"><i style="width:36%"></i></div><span class="iv cs-num">11%</span></div>
+              <div class="cs-ibar"><span class="in">投诉</span><div class="ib"><i style="width:30%"></i></div><span class="iv cs-num">9%</span></div>
+              <div class="cs-ibar"><span class="in">其他</span><div class="ib"><i style="width:57%"></i></div><span class="iv cs-num">17%</span></div>
+            </div>
+          </div>
+          <div>
+            <table class="atbl">
+              <thead><tr><th>坐席</th><th>接待量</th><th>平均首响</th><th>AHT</th><th>CSAT</th><th>质检分</th><th>当前状态</th></tr></thead>
+              <tbody>
+                <tr><td>张三</td><td class="cs-num">32</td><td class="cs-num">38s</td><td class="cs-num">6m12s</td><td class="cs-num">4.7</td><td class="cs-num">92</td><td><span class="abdg ok">在线</span></td></tr>
+                <tr><td>李四</td><td class="cs-num">28</td><td class="cs-num">45s</td><td class="cs-num">7m03s</td><td class="cs-num">4.5</td><td class="cs-num">88</td><td><span class="abdg blue">忙碌</span></td></tr>
+                <tr><td>王五</td><td class="cs-num">21</td><td class="cs-num">51s</td><td class="cs-num">8m40s</td><td class="cs-num">4.8</td><td class="cs-num">85</td><td><span class="abdg warn">小休</span></td></tr>
+                <tr><td>赵六</td><td class="cs-num">15</td><td class="cs-num">62s</td><td class="cs-num">9m11s</td><td class="cs-num">4.3</td><td class="cs-num">79</td><td><span class="abdg">离线</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- 知识助手 -->
+        <section class="cs-view cs-page" data-view="knowledge">
+          <div class="cs-pagehead"><h2>知识助手</h2><span class="abdg">拒答 / 低置信 → FAQ 草稿 → 管理端审核</span></div>
+          <div class="cs-ptabs" role="tablist" aria-label="知识助手">
+            <button class="ktab active" data-kt="unsolved" type="button">未解决问题</button>
+            <button class="ktab" data-kt="canned" type="button">话术管理</button>
+            <button class="ktab" data-kt="search" type="button">知识检索</button>
+            <button class="ktab" data-kt="gaps" type="button">能力差距</button>
+          </div>
+          <div id="k-panel-unsolved">
+            <table class="atbl">
+              <thead><tr><th>查询原文</th><th>命中（7日）</th><th>最近时间</th><th>来源</th><th>操作</th></tr></thead>
+              <tbody>
+                <tr class="ku-row" data-ku="0"><td>发票怎么开</td><td class="cs-num">23</td><td>今天 10:12</td><td><span class="abdg red">拒答</span></td><td><button class="abtn sm primary gen-btn" type="button">生成FAQ草稿</button></td></tr>
+                <tr class="cs-kud" id="kud-0" hidden><td colspan="5">原始查询聚合：发票怎么开 ×12 · 怎么开发票 ×7 · 电子发票在哪获取 ×4 —— 建议补充至 cs_faq</td></tr>
+                <tr class="ku-row" data-ku="1"><td>运费险怎么使用</td><td class="cs-num">17</td><td>昨天 18:40</td><td><span class="abdg warn">低置信</span></td><td><button class="abtn sm primary gen-btn" type="button">生成FAQ草稿</button></td></tr>
+                <tr class="cs-kud" id="kud-1" hidden><td colspan="5">原始查询聚合：运费险怎么用 ×9 · 运费险理赔流程 ×5 · 退货运费谁出 ×3 —— 建议补充至 cs_faq</td></tr>
+                <tr class="ku-row" data-ku="2"><td>可以发顺丰吗</td><td class="cs-num">9</td><td>10-29</td><td><span class="abdg red">拒答</span></td><td><button class="abtn sm primary gen-btn" type="button">生成FAQ草稿</button></td></tr>
+                <tr class="cs-kud" id="kud-2" hidden><td colspan="5">原始查询聚合：可以发顺丰吗 ×5 · 能指定快递吗 ×4 —— 建议补充至 cs_policy</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div id="k-panel-canned" hidden>
+            <div class="cs-ksub">
+              <button class="ptab active" data-ks="personal" type="button">个人话术（6）</button>
+              <button class="ptab" data-ks="team" type="button">团队话术（12）</button>
+              <button class="abtn sm primary" style="margin-left:auto" type="button" id="btn-add-canned">新增话术</button>
+            </div>
+            <div id="k-canned-personal">
+              <table class="atbl">
+                <thead><tr><th>标题</th><th>内容</th><th>标签</th><th>启用</th><th>操作</th></tr></thead>
+                <tbody id="kc-personal-body">
+                  <tr><td>开场问候</td><td>您好，很高兴为您服务，请问有什么可以帮您？</td><td><span class="abdg">通用</span></td><td><label class="cs-tk"><input type="checkbox" checked><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td></tr>
+                  <tr><td>退款时效</td><td>您的退款申请已提交，预计 1-3 个工作日内原路退回…</td><td><span class="abdg">售后</span></td><td><label class="cs-tk"><input type="checkbox" checked><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td></tr>
+                  <tr><td>催单安抚</td><td>非常理解您的心情，我马上为您催办…</td><td><span class="abdg">物流</span></td><td><label class="cs-tk"><input type="checkbox"><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div id="k-canned-team" hidden>
+              <table class="atbl">
+                <thead><tr><th>标题</th><th>内容</th><th>标签</th><th>启用</th><th>操作</th></tr></thead>
+                <tbody>
+                  <tr><td>退货流程说明</td><td>退货请按以下步骤操作：我的订单 → 申请售后…</td><td><span class="abdg">售后</span></td><td><label class="cs-tk"><input type="checkbox" checked><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td></tr>
+                  <tr><td>发票指引</td><td>电子发票将在订单完成后 24 小时内发送至下单邮箱…</td><td><span class="abdg">通用</span></td><td><label class="cs-tk"><input type="checkbox" checked><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="k-panel-search" hidden>
+            <div class="cs-ksearch"><input class="asel" id="k-search" type="text" placeholder="检索客服知识库（cs_policy / cs_faq / cs_product…）" aria-label="知识检索"><button class="abtn primary" id="k-go" type="button">检索</button></div>
+            <div id="k-results" hidden>
+              <div class="cs-kcard"><b>cs_policy · 退款政策 v2.3</b><p>未收货订单支持全额退款，无需承担往返运费；退款将在审核通过后 1-3 个工作日内原路退回…</p><span class="abdg ok">可回答 · 置信 0.91</span></div>
+              <div class="cs-kcard"><b>cs_faq · 发票指引</b><p>电子发票将在订单完成后 24 小时内自动发送至下单邮箱，可在订单详情页重新获取…</p><span class="abdg ok">可回答 · 置信 0.88</span></div>
+            </div>
+          </div>
+          <div id="k-panel-gaps" hidden>
+            <div class="cs-pagehead" style="margin-bottom:10px"><span class="abdg">用户可能问、但当前系统未覆盖的诉求 · 真实行为 = 低置信兜底 → 转人工 → P7 沉淀</span></div>
+            <table class="atbl">
+              <thead><tr><th>用户可能问</th><th>当前行为</th><th>缺失能力</th><th>建议优先级</th></tr></thead>
+              <tbody>
+                <tr><td>未发货的订单直接取消</td><td>拒答 / 兜底转人工</td><td>取消意图 + 取消 Tool（提案-确认）</td><td><span class="abdg warn">近期</span></td></tr>
+                <tr><td>买完降价了，退差价（价保）</td><td>仅能答政策条文</td><td>比价 Tool + 部分退款</td><td><span class="abdg warn">近期</span></td></tr>
+                <tr><td>注销账号 / 删除我的数据</td><td>无流程</td><td>合规注销流程（红线级）</td><td><span class="abdg red">合规</span></td></tr>
+                <tr><td>催发货 / 催派送</td><td>仅能查预计送达</td><td>催办动作 + 商家协同</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>优惠券能不能叠加 / 为什么没优惠</td><td>知识答不了账户级事实</td><td>券校验 Tool（账户数据）</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>积分怎么用 / 等级权益</td><td>无意图</td><td>积分/会员查询 Tool</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>支付失败 / 重复扣款</td><td>无意图</td><td>支付域查询 + 退款联动</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>在途包裹改地址</td><td>仅账户默认地址</td><td>物流商改址 API</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>帮我开票 / 修改发票抬头</td><td>仅 FAQ 答复</td><td>开票 Tool + 抬头子表</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>（发送破损照片）你看下</td><td>消息拒收（仅文本）</td><td>消息多模态（前端 + 模型）</td><td><span class="abdg blue">中期</span></td></tr>
+                <tr><td>上门取件 / 安装服务预约</td><td>无</td><td>预约类 Tool</td><td><span class="abdg">远期</span></td></tr>
+                <tr><td>什么时候有货 / 到货提醒我</td><td>无</td><td>库存查询 + 订阅通知</td><td><span class="abdg">远期</span></td></tr>
+                <tr><td>送老人什么杯子好（导购）</td><td>RAG 只答事实</td><td>个性化推荐 Skill</td><td><span class="abdg">远期</span></td></tr>
+                <tr><td>英文 / 其他语言咨询</td><td>低置信兜底</td><td>多语言意图 + 语料</td><td><span class="abdg">远期</span></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <!-- 转接弹窗 -->
+  <div class="cs-amask" id="transfer-mask" hidden>
+    <div class="cs-amodal" role="dialog" aria-modal="true" aria-labelledby="tf-title">
+      <h3 id="tf-title">转接会话</h3>
+      <div class="cs-tfmode" role="radiogroup" aria-label="转接方式">
+        <label class="cs-agentopt sel"><input type="radio" name="tfmode" value="agent" checked> 指定坐席</label>
+        <label class="cs-agentopt"><input type="radio" name="tfmode" value="group"> 转技能组</label>
+      </div>
+      <div id="tf-agents">
+        <label class="cs-agentopt sel"><input type="radio" name="tfagent" value="李四" checked> <b>李四</b> <span class="abdg ok">在线</span><span class="cs-load">接待 2/5 · 售后</span></label>
+        <label class="cs-agentopt"><input type="radio" name="tfagent" value="王五"> <b>王五</b> <span class="abdg ok">在线</span><span class="cs-load">接待 0/5 · 售后/物流</span></label>
+        <label class="cs-agentopt cs-dimopt"><input type="radio" name="tfagent" value="赵六" disabled> <b>赵六</b> <span class="abdg warn">小休</span><span class="cs-load">不可转接</span></label>
+      </div>
+      <div id="tf-groups" hidden>
+        <select class="asel" id="tf-group-sel" style="width:100%" aria-label="目标技能组"><option>售后组（空闲 2）</option><option>物流组（空闲 3）</option><option>综合组（空闲 5）</option></select>
+      </div>
+      <textarea class="cs-reason" id="tf-reason" placeholder="转接原因（必填）：请说明已处理进展与待办" aria-label="转接原因"></textarea>
+      <div class="cs-mfoot"><button class="abtn" id="tf-cancel" type="button">取消</button><button class="abtn primary" id="tf-submit" type="button" disabled>发起转接</button></div>
+    </div>
+  </div>
+
+  <!-- 新增话术弹窗 -->
+  <div class="cs-amask" id="canned-mask" hidden>
+    <div class="cs-amodal" role="dialog" aria-modal="true" aria-labelledby="cm-title">
+      <h3 id="cm-title">新增话术</h3>
+      <div class="cs-cmrow"><span class="cs-cmlb">范围</span>
+        <select class="asel" id="cm-scope" aria-label="话术范围"><option value="personal">个人话术</option><option value="team">团队话术（需 supervisor）</option></select>
+      </div>
+      <div class="cs-cmrow"><span class="cs-cmlb">标题</span><input class="asel" id="cm-title-input" type="text" placeholder="如：退款时效说明" aria-label="话术标题"></div>
+      <div class="cs-cmrow"><span class="cs-cmlb">标签</span><input class="asel" id="cm-tags" type="text" placeholder="通用 / 售后 / 物流" aria-label="话术标签"></div>
+      <textarea class="cs-reason" id="cm-content" placeholder="话术内容…" aria-label="话术内容"></textarea>
+      <div class="cs-mfoot"><button class="abtn" id="cm-cancel" type="button">取消</button><button class="abtn primary" id="cm-submit" type="button">保存</button></div>
+    </div>
+  </div>
+
+  <div class="cs-atoast" id="toast" role="status" aria-live="polite"></div>
+</div>
+
+<style>
+#cs-mock{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;font-size:13.5px;
+  --cs-bg:light-dark(#f2f4f7,#14161a);
+  --cs-panel:light-dark(#ffffff,#1e2127);
+  --cs-panel2:light-dark(#f6f7f9,#262a32);
+  --cs-border:light-dark(#e3e6ec,#333945);
+  --cs-bordersoft:light-dark(#edeff3,#2a2f38);
+  --cs-text:light-dark(#1a2230,#e6e8ec);
+  --cs-text2:light-dark(#66707f,#9aa3b0);
+  --cs-primary:light-dark(#4f46e5,#818cf8);
+  --cs-primarysoft:light-dark(#eef0ff,#2c2f55);
+  --cs-onprimary:light-dark(#ffffff,#14161a);
+  --cs-green:light-dark(#15a34a,#4ade80);
+  --cs-greensoft:light-dark(#e6f6ec,#15321f);
+  --cs-amber:light-dark(#d97706,#fbbf24);
+  --cs-ambersoft:light-dark(#fdf3e0,#3a2c12);
+  --cs-red:light-dark(#dc2626,#f87171);
+  --cs-redsoft:light-dark(#fdeaea,#3a1d1d);
+  --cs-blue:light-dark(#2563eb,#60a5fa);
+  --cs-bluesoft:light-dark(#e8f0fe,#1e2f4d);
+  --cs-s2:light-dark(#f59e0b,#fbbf24);
+  --cs-track:light-dark(#d6dae2,#3a4150);
+}
+#cs-mock *{box-sizing:border-box}
+#cs-mock [hidden]{display:none!important}
+#cs-mock .cs-app{position:relative;display:flex;height:720px;background:var(--cs-bg);border:1px solid var(--cs-border);border-radius:12px;overflow:hidden;box-shadow:0 1px 3px light-dark(rgba(16,24,40,.08),rgba(0,0,0,.5))}
+#cs-mock h2,#cs-mock h3,#cs-mock h4{font-weight:500}
+#cs-mock b{font-weight:500}
+
+/* 侧栏 */
+#cs-mock .cs-side{width:212px;flex:none;background:var(--cs-panel);border-right:1px solid var(--cs-border);display:flex;flex-direction:column;padding:12px 10px}
+#cs-mock .cs-brand{display:flex;align-items:center;gap:8px;padding:2px 8px 12px}
+#cs-mock .cs-logo{width:26px;height:26px;border-radius:8px;background:var(--cs-primary);color:var(--cs-onprimary);display:grid;place-items:center;font-size:13px;flex:none}
+#cs-mock .cs-ver{margin-left:auto;font-size:11px;color:var(--cs-text2);border:1px solid var(--cs-border);padding:1px 7px;border-radius:99px}
+#cs-mock .cs-navi{display:flex;align-items:center;gap:9px;width:100%;padding:8px 10px;margin-bottom:2px;border:none;border-radius:8px;background:transparent;color:var(--cs-text2);font:inherit;cursor:pointer;text-align:left}
+#cs-mock .cs-navi:hover{background:var(--cs-panel2);color:var(--cs-text)}
+#cs-mock .cs-navi.active{background:var(--cs-primarysoft);color:var(--cs-primary)}
+#cs-mock .cs-navi svg{width:16px;height:16px;flex:none}
+#cs-mock .cs-sidefoot{margin-top:auto;padding:8px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+#cs-mock .cs-hint{font-size:11px;color:var(--cs-text2)}
+
+/* 顶栏 */
+#cs-mock .cs-main{flex:1;display:flex;flex-direction:column;min-width:0}
+#cs-mock .cs-topbar{height:52px;flex:none;background:var(--cs-panel);border-bottom:1px solid var(--cs-border);display:flex;align-items:center;padding:0 16px;gap:12px}
+#cs-mock .cs-tbtitle{font-weight:500}
+#cs-mock .cs-tbright{margin-left:auto;display:flex;align-items:center;gap:14px}
+#cs-mock .cs-stwrap{font-size:12.5px;color:var(--cs-text2);display:flex;align-items:center;gap:6px}
+#cs-mock .asel{height:30px;border:1px solid var(--cs-border);border-radius:8px;background:var(--cs-panel);color:var(--cs-text);font:inherit;padding:0 8px}
+#cs-mock .cs-avatar{width:30px;height:30px;border-radius:50%;background:var(--cs-primary);color:var(--cs-onprimary);display:grid;place-items:center;font-size:12.5px}
+#cs-mock .cs-bellwrap{position:relative}
+#cs-mock .cs-iconbtn{position:relative;width:30px;height:30px;border:1px solid var(--cs-border);border-radius:8px;background:var(--cs-panel);color:var(--cs-text2);display:grid;place-items:center;cursor:pointer}
+#cs-mock .cs-iconbtn:hover{color:var(--cs-text);background:var(--cs-panel2)}
+#cs-mock .cs-belldot{position:absolute;top:-6px;right:-6px;background:var(--cs-red);color:#fff;font-size:10px;line-height:1;padding:2px 4px;border-radius:99px}
+
+/* 开关 */
+#cs-mock .cs-tk{display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:12.5px;color:var(--cs-text2);position:relative}
+#cs-mock .cs-tk input{position:absolute;opacity:0;width:1px;height:1px}
+#cs-mock .cs-tkui{width:30px;height:17px;border-radius:9px;background:var(--cs-track);position:relative;transition:background .15s;flex:none}
+#cs-mock .cs-tkui::after{content:'';position:absolute;top:2px;left:2px;width:13px;height:13px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:left .15s}
+#cs-mock .cs-tk input:checked+.cs-tkui{background:var(--cs-green)}
+#cs-mock .cs-tk input:checked+.cs-tkui::after{left:15px}
+#cs-mock .cs-tk input:focus-visible+.cs-tkui{outline:2px solid var(--cs-primary);outline-offset:2px}
+#cs-mock .cs-tk .cs-radio{border-radius:50%}
+#cs-mock .cs-tk input:checked+.cs-tkui.cs-radio{background:var(--cs-primary)}
+
+/* 通用控件 */
+#cs-mock .abtn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--cs-border);background:var(--cs-panel);color:var(--cs-text);border-radius:8px;padding:5px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+#cs-mock .abtn:hover{background:var(--cs-panel2)}
+#cs-mock .abtn.primary{background:var(--cs-primary);border-color:var(--cs-primary);color:var(--cs-onprimary)}
+#cs-mock .abtn.primary:hover{opacity:.92;background:var(--cs-primary)}
+#cs-mock .abtn.ghost{border-color:transparent;background:transparent;color:var(--cs-text2)}
+#cs-mock .abtn.ghost:hover{background:var(--cs-panel2);color:var(--cs-text)}
+#cs-mock .abtn.sm{padding:3px 9px;font-size:12px}
+#cs-mock .abtn:disabled{opacity:.45;cursor:not-allowed}
+#cs-mock .abdg{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;padding:2px 8px;border-radius:99px;background:var(--cs-panel2);color:var(--cs-text2);white-space:nowrap}
+#cs-mock .abdg.indigo{background:var(--cs-primarysoft);color:var(--cs-primary)}
+#cs-mock .abdg.ok{background:var(--cs-greensoft);color:var(--cs-green)}
+#cs-mock .abdg.warn{background:var(--cs-ambersoft);color:var(--cs-amber)}
+#cs-mock .abdg.red{background:var(--cs-redsoft);color:var(--cs-red)}
+#cs-mock .abdg.blue{background:var(--cs-bluesoft);color:var(--cs-blue)}
+#cs-mock .cs-num{font-variant-numeric:tabular-nums}
+
+/* 弹层 */
+#cs-mock .cs-apop{position:absolute;top:38px;right:0;width:300px;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;box-shadow:0 10px 28px light-dark(rgba(16,24,40,.16),rgba(0,0,0,.55));padding:8px;z-index:40}
+#cs-mock .cs-nt{display:flex;gap:8px;padding:9px;border-radius:8px;font-size:12.5px;color:var(--cs-text2)}
+#cs-mock .cs-nt:hover{background:var(--cs-panel2)}
+#cs-mock .cs-nt b{display:block;color:var(--cs-text);margin-bottom:3px}
+#cs-mock .cs-nt .abtn{margin-top:6px}
+#cs-mock .cs-dot{width:8px;height:8px;border-radius:50%;margin-top:5px;flex:none}
+#cs-mock .cs-dot.red{background:var(--cs-red)}
+#cs-mock .cs-dot.blue{background:var(--cs-blue)}
+
+/* 视图容器 */
+#cs-mock .cs-views{flex:1;min-height:0;position:relative}
+#cs-mock .cs-view{position:absolute;inset:0;display:none}
+#cs-mock .cs-view.active{display:flex}
+#cs-mock .cs-page{flex-direction:column;overflow:auto;padding:18px 20px;gap:14px}
+#cs-mock .cs-pagefix{overflow:hidden}
+#cs-mock .cs-pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+#cs-mock .cs-pagehead h2{margin:0;font-size:16px}
+#cs-mock .cs-chiprow,#cs-mock .cs-filterrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+#cs-mock .cs-filterrow .asel{height:32px}
+#cs-mock .cs-filterrow input.asel{flex:1;min-width:180px}
+#cs-mock .cs-ptabs{display:flex;gap:2px;border-bottom:1px solid var(--cs-border)}
+#cs-mock .ptab{padding:8px 14px;font:inherit;border:none;background:transparent;color:var(--cs-text2);cursor:pointer;border-bottom:2px solid transparent;font-size:13px}
+#cs-mock .ptab.active{color:var(--cs-primary);border-bottom-color:var(--cs-primary)}
+#cs-mock .cs-dempty{margin:auto;text-align:center;color:var(--cs-text2);font-size:12.5px;padding:20px}
+
+/* 会话/工单详情分栏 */
+#cs-mock .cs-split{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:14px}
+#cs-mock .cs-splitlist{min-height:0;overflow:auto}
+#cs-mock .cs-splitdetail{min-height:0;overflow:auto;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;padding:14px}
+#cs-mock .cs-dhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px}
+#cs-mock .cs-dsec{margin-bottom:14px}
+#cs-mock .cs-dsec h4{margin:0 0 8px;font-size:12px;color:var(--cs-text2)}
+#cs-mock .cs-dsec h4 b{color:var(--cs-text);margin-left:6px}
+#cs-mock .cs-replay{background:var(--cs-panel2);border-radius:9px;padding:10px;max-height:190px;overflow:auto;display:flex;flex-direction:column;gap:8px}
+#cs-mock .cs-tl{list-style:none;margin:0;padding:0}
+#cs-mock .cs-tl li{position:relative;padding:0 0 12px 18px;font-size:12.5px;color:var(--cs-text2);line-height:1.5}
+#cs-mock .cs-tl li::before{content:'';position:absolute;left:4px;top:5px;width:8px;height:8px;border-radius:50%;background:var(--cs-primary)}
+#cs-mock .cs-tl li::after{content:'';position:absolute;left:7.5px;top:16px;bottom:0;width:1px;background:var(--cs-border)}
+#cs-mock .cs-tl li:last-child{padding-bottom:2px}
+#cs-mock .cs-tl li:last-child::after{display:none}
+#cs-mock .cs-tl li b{color:var(--cs-text);font-weight:500;margin-right:6px;font-variant-numeric:tabular-nums}
+#cs-mock .cs-trace{display:flex;align-items:center;gap:8px;margin-bottom:7px;font-size:12px}
+#cs-mock .cs-trace .tn{width:148px;color:var(--cs-text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:none}
+#cs-mock .cs-trace .tb{flex:1;height:8px;border-radius:4px;background:var(--cs-track);overflow:hidden}
+#cs-mock .cs-trace .tb i{display:block;height:100%;border-radius:4px;background:var(--cs-primary)}
+#cs-mock .cs-trace .tms{width:56px;text-align:right;color:var(--cs-text2);font-variant-numeric:tabular-nums;flex:none}
+#cs-mock .cs-dacts{display:flex;gap:8px;flex-wrap:wrap;padding-top:4px;border-top:1px dashed var(--cs-bordersoft)}
+@media (max-width:1100px){#cs-mock .cs-split{grid-template-columns:1fr;grid-template-rows:minmax(180px,1fr) minmax(180px,1fr)}}
+
+/* 工作台三栏 */
+#cs-mock .cs-ws{flex:1;display:grid;grid-template-columns:264px minmax(0,1fr) 316px;min-height:0;width:100%}
+#cs-mock .cs-collist{background:var(--cs-panel);border-right:1px solid var(--cs-border);display:flex;flex-direction:column;min-height:0}
+#cs-mock .cs-listtabs{display:flex;border-bottom:1px solid var(--cs-border);flex:none}
+#cs-mock .lt{flex:1;border:none;background:transparent;font:inherit;font-size:13px;padding:10px 6px;color:var(--cs-text2);cursor:pointer;border-bottom:2px solid transparent}
+#cs-mock .lt.active{color:var(--cs-primary);border-bottom-color:var(--cs-primary)}
+#cs-mock .cs-listbody{overflow:auto;flex:1;padding:6px}
+#cs-mock .cs-crow{padding:10px;border-radius:9px;cursor:pointer;display:flex;flex-direction:column;gap:5px;border:1px solid transparent;margin-bottom:2px}
+#cs-mock .cs-crow:hover{background:var(--cs-panel2)}
+#cs-mock .cs-crow.sel{background:var(--cs-primarysoft);border-color:light-dark(#dcdcf5,#3d4066)}
+#cs-mock .cs-crowtop{display:flex;align-items:center;gap:6px;min-width:0}
+#cs-mock .cs-crowtop b{white-space:nowrap}
+#cs-mock .cs-crowtime{margin-left:auto;font-size:11.5px;color:var(--cs-text2);white-space:nowrap}
+#cs-mock .cs-crowsub{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--cs-text2);min-width:0}
+#cs-mock .cs-crowsub>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#cs-mock .cs-unread{margin-left:auto;width:16px;height:16px;border-radius:50%;background:var(--cs-red);color:#fff;font-size:10px;display:grid;place-items:center;flex:none}
+#cs-mock .cs-crowsub .claim{margin-left:auto}
+
+/* 聊天中栏 */
+#cs-mock .cs-colchat{display:flex;flex-direction:column;min-width:0;min-height:0}
+#cs-mock .cs-chathead{height:48px;flex:none;background:var(--cs-panel);border-bottom:1px solid var(--cs-border);display:flex;align-items:center;gap:8px;padding:0 14px}
+#cs-mock .cs-chmeta{margin-left:auto;display:flex;align-items:center;gap:10px}
+#cs-mock .cs-sla{font-size:11.5px;color:var(--cs-text2);font-variant-numeric:tabular-nums}
+#cs-mock .cs-sla.warn{color:var(--cs-amber)}
+#cs-mock .cs-sla.red{color:var(--cs-red)}
+#cs-mock .cs-chatbody{flex:1;overflow:auto;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+#cs-mock .cs-m{max-width:74%;display:flex;flex-direction:column;gap:3px}
+#cs-mock .m-user,#cs-mock .m-bot,#cs-mock .m-sys{align-self:flex-start}
+#cs-mock .m-agent{align-self:flex-end}
+#cs-mock .m-sys{align-self:center;max-width:88%}
+#cs-mock .cs-mb{padding:8px 12px;border-radius:12px;line-height:1.55;background:var(--cs-panel);border:1px solid var(--cs-border)}
+#cs-mock .m-agent .cs-mb{background:var(--cs-primarysoft);border-color:transparent}
+#cs-mock .m-bot .cs-mb{background:var(--cs-panel2);border-color:var(--cs-bordersoft)}
+#cs-mock .m-sys .cs-mb{background:transparent;border:1px dashed var(--cs-border);color:var(--cs-text2);font-size:12px;padding:5px 12px;border-radius:99px}
+#cs-mock .cs-mwho{font-size:11px;color:var(--cs-text2);display:flex;gap:6px;align-items:center}
+#cs-mock .m-agent .cs-mwho{justify-content:flex-end}
+#cs-mock .cs-typing{font-size:12px;color:var(--cs-text2);align-self:flex-start;padding:2px 4px}
+#cs-mock .cs-tdots i{display:inline-block;width:4px;height:4px;border-radius:50%;background:var(--cs-text2);margin-left:3px;animation:cstb 1s infinite}
+#cs-mock .cs-tdots i:nth-child(2){animation-delay:.15s}
+#cs-mock .cs-tdots i:nth-child(3){animation-delay:.3s}
+@keyframes cstb{0%,60%,100%{opacity:.3}30%{opacity:1}}
+@media (prefers-reduced-motion:reduce){#cs-mock .cs-tdots i{animation:none}#cs-mock .cs-aidot{animation:none}}
+#cs-mock .cs-aidiv{align-self:center;font-size:11px;color:var(--cs-text2);background:var(--cs-panel2);border:1px dashed var(--cs-border);border-radius:99px;padding:3px 12px;text-align:center;max-width:95%}
+#cs-mock .cs-aikv{font-size:12.5px;line-height:1.65;background:var(--cs-panel2);border-radius:9px;padding:9px 11px}
+#cs-mock .cs-segsm button{padding:3px 10px;font-size:11.5px}
+#cs-mock .cs-wstag{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;color:var(--cs-text2)}
+#cs-mock .cs-wsdot{width:7px;height:7px;border-radius:50%;background:var(--cs-green)}
+#cs-mock .cs-csatcard{align-self:center;width:min(320px,92%);background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:12px;padding:10px 12px;font-size:12.5px}
+#cs-mock .cs-csatcard .ph{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+#cs-mock .cs-stars{display:flex;gap:2px}
+#cs-mock .cs-star{border:none;background:transparent;font-size:22px;line-height:1;color:var(--cs-track);cursor:pointer;padding:0 3px}
+#cs-mock .cs-star.on{color:var(--cs-s2)}
+#cs-mock .cs-star:disabled{cursor:default}
+#cs-mock .cs-moremenu{position:absolute;bottom:calc(100% + 6px);right:12px;width:190px;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;box-shadow:0 10px 28px light-dark(rgba(16,24,40,.16),rgba(0,0,0,.55));padding:6px;z-index:30;display:flex;flex-direction:column;gap:3px}
+#cs-mock .cs-moremenu .cn-item{border:none;background:transparent;padding:7px 9px}
+#cs-mock .cs-gaps{margin-top:7px;font-size:11.5px;color:var(--cs-text2);border-top:1px dashed var(--cs-bordersoft);padding-top:6px;line-height:1.5}
+
+/* 提案卡片 */
+#cs-mock .cs-propcard{align-self:center;width:min(340px,92%);background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:12px;padding:10px 12px;font-size:12.5px}
+#cs-mock .cs-propcard .ph{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+#cs-mock .cs-propcard .kv2{display:flex;justify-content:space-between;padding:3px 0;color:var(--cs-text2)}
+#cs-mock .cs-propcard .kv2 span:last-child{color:var(--cs-text)}
+#cs-mock .cs-propcard .abtn{margin-top:6px}
+
+/* 输入区 */
+#cs-mock .cs-composer{background:var(--cs-panel);border-top:1px solid var(--cs-border);padding:8px 12px 12px;position:relative;flex:none}
+#cs-mock .cs-ctools{display:flex;gap:6px;margin-bottom:8px}
+#cs-mock .cs-tbtn{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--cs-border);background:transparent;color:var(--cs-text2);font-size:12px;border-radius:8px;padding:4px 9px;cursor:pointer;font-family:inherit}
+#cs-mock .cs-tbtn:hover{color:var(--cs-text);background:var(--cs-panel2)}
+#cs-mock .cs-tbtn b{color:var(--cs-primary)}
+#cs-mock .cs-tbtn svg{width:13px;height:13px}
+#cs-mock .cs-canned{position:absolute;bottom:calc(100% + 6px);left:12px;width:340px;max-height:280px;overflow:auto;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;box-shadow:0 10px 28px light-dark(rgba(16,24,40,.16),rgba(0,0,0,.55));padding:8px;z-index:30;display:flex;flex-direction:column;gap:6px}
+#cs-mock .cn-item{display:flex;align-items:center;gap:8px;width:100%;text-align:left;border:1px solid var(--cs-bordersoft);background:var(--cs-panel2);border-radius:8px;padding:8px 10px;cursor:pointer;font:inherit;font-size:12.5px;color:var(--cs-text)}
+#cs-mock .cn-item:hover{border-color:var(--cs-primary)}
+#cs-mock .cn-item span:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--cs-text2)}
+#cs-mock .cn-empty{padding:12px;text-align:center;color:var(--cs-text2);font-size:12px}
+#cs-mock .cs-cinput{display:flex;gap:8px;align-items:flex-end}
+#cs-mock .cs-cinput textarea{flex:1;resize:none;border:1px solid var(--cs-border);border-radius:10px;background:var(--cs-panel2);color:var(--cs-text);font:inherit;padding:9px 11px;min-height:54px;outline:none;font-size:16px}
+#cs-mock .cs-cinput textarea:focus{border-color:var(--cs-primary)}
+#cs-mock .cs-cinput .abtn{min-height:54px}
+
+/* 右栏上下文 */
+#cs-mock .cs-colctx{background:var(--cs-panel);border-left:1px solid var(--cs-border);display:flex;flex-direction:column;min-height:0}
+#cs-mock .cs-ctxtabs{display:flex;border-bottom:1px solid var(--cs-border);flex:none}
+#cs-mock .ctx-t{flex:1;padding:10px 4px;font:inherit;font-size:12.5px;border:none;background:transparent;color:var(--cs-text2);cursor:pointer;border-bottom:2px solid transparent}
+#cs-mock .ctx-t.active{color:var(--cs-primary);border-bottom-color:var(--cs-primary)}
+#cs-mock .cs-ctxbody{flex:1;overflow:auto;padding:12px}
+#cs-mock .cs-ctxsec{margin-bottom:16px}
+#cs-mock .cs-ctxsec h4{margin:0 0 8px;font-size:12px;color:var(--cs-text2)}
+#cs-mock .cs-kv{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed var(--cs-bordersoft);font-size:12.5px}
+#cs-mock .cs-kv b{color:var(--cs-text2);font-weight:400;flex:none}
+#cs-mock .cs-kv span{text-align:right;min-width:0}
+#cs-mock .cs-orderrow{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--cs-bordersoft);border-radius:9px;margin-bottom:6px;font-size:12.5px}
+#cs-mock .cs-orderrow .go{margin-left:auto;color:var(--cs-text2)}
+#cs-mock .cs-tagrow{display:flex;gap:6px;flex-wrap:wrap}
+#cs-mock .cs-aicard{border:1px solid var(--cs-bordersoft);border-radius:10px;padding:10px;margin-bottom:8px;background:var(--cs-panel2)}
+#cs-mock .cs-aicard.cs-alert{border-color:var(--cs-red)}
+#cs-mock .cs-aicard p{margin:0 0 8px;line-height:1.55;font-size:12.5px}
+#cs-mock .cs-aiact{display:flex;gap:6px;flex-wrap:wrap}
+#cs-mock .cs-aisrc{font-size:11px;color:var(--cs-text2);margin-top:7px}
+#cs-mock .cs-aihead{display:flex;align-items:center;gap:7px;margin-bottom:10px;font-size:12px;color:var(--cs-text2)}
+#cs-mock .cs-aidot{width:7px;height:7px;border-radius:50%;background:var(--cs-green);animation:cspulse 1.6s infinite}
+@keyframes cspulse{0%,100%{opacity:1}50%{opacity:.35}}
+#cs-mock .cs-aipending{font-size:12px;color:var(--cs-text2);padding:8px 10px;border:1px dashed var(--cs-border);border-radius:9px;margin-bottom:8px}
+#cs-mock .cs-sop{list-style:none;margin:0;padding:0;font-size:12.5px}
+#cs-mock .cs-sop li{display:flex;align-items:center;gap:8px;padding:5px 0;color:var(--cs-text2)}
+#cs-mock .cs-sop li.cur{color:var(--cs-text)}
+#cs-mock .cs-sopdot{width:16px;height:16px;border-radius:50%;display:grid;place-items:center;font-size:10px;flex:none;border:1px solid var(--cs-border)}
+#cs-mock .cs-sop li.done .cs-sopdot{background:var(--cs-greensoft);color:var(--cs-green);border-color:transparent}
+#cs-mock .cs-sop li.cur .cs-sopdot{background:var(--cs-primarysoft);color:var(--cs-primary);border-color:transparent}
+
+/* 表格 */
+#cs-mock .atbl{width:100%;border-collapse:collapse;font-size:12.5px;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px}
+#cs-mock .atbl th{text-align:left;color:var(--cs-text2);font-weight:400;padding:9px 12px;border-bottom:1px solid var(--cs-border);white-space:nowrap}
+#cs-mock .atbl td{padding:10px 12px;border-bottom:1px solid var(--cs-bordersoft);vertical-align:middle}
+#cs-mock .atbl tr:last-child td{border-bottom:none}
+#cs-mock .atbl tbody tr:hover td{background:var(--cs-panel2)}
+#cs-mock .task-row,#cs-mock .cv-row,#cs-mock .tk-row,#cs-mock .ku-row{cursor:pointer}
+#cs-mock .task-row.sel td,#cs-mock .cv-row.sel td,#cs-mock .tk-row.sel td{background:var(--cs-primarysoft)}
+#cs-mock .cs-kud td{background:var(--cs-panel2);font-size:12px;color:var(--cs-text2)}
+#cs-mock .cs-kud:hover td{background:var(--cs-panel2)}
+
+/* 质检表单 */
+#cs-mock .cs-qaform{background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;padding:14px 16px;max-width:560px}
+#cs-mock .cs-qahead{display:flex;align-items:center;gap:10px;margin-bottom:12px}
+#cs-mock .cs-qahead h3{margin:0;font-size:14px}
+#cs-mock .cs-dim{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:12.5px}
+#cs-mock .cs-dim>span:first-child{width:64px;color:var(--cs-text2);flex:none}
+#cs-mock .cs-dim input[type=range]{flex:1;accent-color:var(--cs-primary);min-width:120px}
+#cs-mock .cs-dim b{width:24px;text-align:right}
+#cs-mock .cs-dimmax{color:var(--cs-text2);font-size:11.5px}
+#cs-mock .cs-total{border-top:1px dashed var(--cs-bordersoft);margin-top:4px;padding-top:10px}
+#cs-mock .cs-total b{font-size:15px;color:var(--cs-primary)}
+#cs-mock .cs-verdict{display:flex;gap:18px;padding:8px 0}
+#cs-mock .cs-reason{width:100%;border:1px solid var(--cs-border);border-radius:9px;background:var(--cs-panel2);color:var(--cs-text);font:inherit;padding:8px 10px;min-height:56px;resize:vertical}
+#cs-mock .cs-mfoot{display:flex;justify-content:flex-end;gap:8px;margin-top:12px}
+
+/* 看板 */
+#cs-mock .cs-seg{display:inline-flex;border:1px solid var(--cs-border);border-radius:9px;overflow:hidden}
+#cs-mock .cs-seg button{border:none;background:transparent;color:var(--cs-text2);font:inherit;font-size:12.5px;padding:5px 14px;cursor:pointer}
+#cs-mock .cs-seg button.active{background:var(--cs-primarysoft);color:var(--cs-primary)}
+#cs-mock .cs-statgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px}
+#cs-mock .cs-stat{background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;padding:12px}
+#cs-mock .cs-stat .lb{font-size:12px;color:var(--cs-text2)}
+#cs-mock .cs-stat .v{font-size:20px;margin-top:2px}
+#cs-mock .cs-stat .d{font-size:11.5px;margin-top:3px;color:var(--cs-text2)}
+#cs-mock .cs-stat .d.good{color:var(--cs-green)}
+#cs-mock .cs-stat .d.bad{color:var(--cs-red)}
+#cs-mock .cs-dashgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px}
+#cs-mock .cs-barswrap{background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;padding:14px}
+#cs-mock .cs-legend{display:flex;gap:16px;align-items:center;font-size:12px;color:var(--cs-text2);margin-bottom:10px}
+#cs-mock .cs-sw{width:10px;height:10px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+#cs-mock .cs-sw.s1{background:var(--cs-primary)}
+#cs-mock .cs-sw.s2{background:var(--cs-s2)}
+#cs-mock .cs-bars{display:flex;align-items:flex-end;gap:14px;height:150px;padding:0 6px}
+#cs-mock .cs-bgroup{flex:1;display:flex;align-items:flex-end;justify-content:center;gap:4px;height:100%}
+#cs-mock .cs-b{width:16px;border-radius:4px 4px 0 0}
+#cs-mock .cs-b.s1{background:var(--cs-primary)}
+#cs-mock .cs-b.s2{background:var(--cs-s2);opacity:.85}
+#cs-mock .cs-blabels{display:flex;gap:14px;padding:6px 6px 0}
+#cs-mock .cs-blabels span{flex:1;text-align:center;font-size:11.5px;color:var(--cs-text2)}
+#cs-mock .cs-ibar{display:flex;align-items:center;gap:10px;font-size:12.5px;margin-bottom:9px}
+#cs-mock .cs-ibar .in{width:110px;color:var(--cs-text2);text-align:right;flex:none}
+#cs-mock .cs-ibar .ib{flex:1;height:10px;border-radius:5px;background:var(--cs-track);overflow:hidden}
+#cs-mock .cs-ibar .ib i{display:block;height:100%;background:var(--cs-primary);border-radius:5px}
+#cs-mock .cs-ibar .iv{width:40px;font-variant-numeric:tabular-nums}
+
+/* 知识助手 */
+#cs-mock .cs-ksub{display:flex;gap:2px;align-items:center;margin-bottom:10px}
+#cs-mock .cs-ksearch{display:flex;gap:8px;margin-bottom:12px}
+#cs-mock .cs-ksearch .asel{flex:1;height:36px}
+#cs-mock .cs-kcard{background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:10px;padding:12px;margin-bottom:8px}
+#cs-mock .cs-kcard p{margin:6px 0 8px;font-size:12.5px;line-height:1.6;color:var(--cs-text2)}
+
+/* 弹窗与提示 */
+#cs-mock .cs-amask{position:absolute;inset:0;background:light-dark(rgba(15,23,42,.35),rgba(0,0,0,.55));display:grid;place-items:center;z-index:60}
+#cs-mock .cs-amodal{width:440px;max-width:calc(100% - 32px);max-height:calc(100% - 32px);overflow:auto;background:var(--cs-panel);border:1px solid var(--cs-border);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.3);padding:16px}
+#cs-mock .cs-amodal h3{margin:0 0 12px;font-size:14.5px}
+#cs-mock .cs-tfmode{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+#cs-mock .cs-agentopt{display:flex;align-items:center;gap:9px;border:1px solid var(--cs-border);border-radius:10px;padding:9px 12px;margin-bottom:8px;cursor:pointer;font-size:13px}
+#cs-mock .cs-agentopt input{accent-color:var(--cs-primary)}
+#cs-mock .cs-agentopt.sel{border-color:var(--cs-primary);background:var(--cs-primarysoft)}
+#cs-mock .cs-agentopt.cs-dimopt{opacity:.5;cursor:not-allowed}
+#cs-mock .cs-load{margin-left:auto;font-size:11.5px;color:var(--cs-text2)}
+#cs-mock .cs-cmrow{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+#cs-mock .cs-cmlb{width:40px;font-size:12.5px;color:var(--cs-text2);flex:none}
+#cs-mock .cs-cmrow .asel{flex:1}
+#cs-mock .cs-atoast{position:absolute;left:50%;bottom:22px;transform:translateX(-50%);background:light-dark(#111827,#e6e8ec);color:light-dark(#ffffff,#111827);padding:8px 14px;border-radius:99px;font-size:12.5px;z-index:80;opacity:0;transition:opacity .2s;pointer-events:none;max-width:80%}
+#cs-mock .cs-atoast.show{opacity:1}
+
+/* 响应式 */
+@media (max-width:1180px){#cs-mock .cs-ws{grid-template-columns:240px minmax(0,1fr)}#cs-mock .cs-colctx{display:none}}
+@media (max-width:920px){#cs-mock .cs-side{width:54px;padding:12px 6px}#cs-mock .cs-side .lbl,#cs-mock .cs-brand .bt,#cs-mock .cs-ver,#cs-mock .cs-sidefoot{display:none}#cs-mock .cs-navi{justify-content:center;padding:9px 0}#cs-mock .cs-brand{justify-content:center;padding-left:0;padding-right:0}}
+</style>
+
+<script>
+(function () {
+  var root = document.getElementById('cs-mock');
+  function $(id) { return document.getElementById(id); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function icons() { if (window.lucide) window.lucide.createIcons({ attrs: { width: 16, height: 16 } }); }
+
+  var CONVS = {
+    c1: { name: '访客 #1024', intent: '退款申请', stateLabel: '人工处理中', sla: 264,
+      assist: { intent: ['as_refund · 退款申请', '0.94'], mood: ['焦虑', 'warn'],
+        replies: [
+          { t: '您的退款申请已提交，预计 1-3 个工作日内原路退回，请留意到账通知。', src: '话术 · 退款时效' },
+          { t: '根据退款政策，未收货订单支持全额退款，无需承担往返运费。', src: '知识 · cs_policy · 退款政策 v2.3' }],
+        kbs: [{ title: '退款政策 v2.3', kb: 'cs_policy', conf: '0.91', ex: '未收货订单支持全额退款，审核通过后 1-3 个工作日原路退回；运费险订单来回运费由平台承担。' }],
+        sop: [['确认订单归属', 'done'], ['发起退款提案', 'cur'], ['用户确认', 'todo'], ['幂等执行', 'todo']],
+        follow: '已为用户提交退款提案，建议补充说明到账时间并提醒保留退款凭证。' },
+      ctx: { member: '黄金会员', since: '2024-03-12 注册', tags: ['高价值', '易敏感'],
+        orders: [['#10023', '保温杯 500ml', '已发货', 'warn'], ['#9987', '陶瓷马克杯', '已完成', 'ok'], ['#9901', '杯盖配件', '售后中', 'red']],
+        intent: 'as_refund · 退款申请', ctxOrder: '#10023（会话级订单上下文）', trace: '11 spans · 2 次工具调用', balance: '¥1,280.00（P8 只读预演）', pendingView: '#TP-88 · 退款 ¥59.00（等待用户确认）',
+        aiSummary: 'AI 阶段（2 轮）：查询订单 #10023 物流（运输中）→ 匹配全额退款政策 → 发起退款提案 #TP-88；用户确认金额后要求人工跟进，提案待用户端确认。' },
+      msgs: [['user', '你好，我上周买的保温杯到现在还没收到，而且我现在不想要了，能退款吗？'],
+        ['bot', '已为您查询订单 #10023，物流显示【运输中】。如需退款，我可以为您发起退款申请。'],
+        ['div', '── 以上为 AI 阶段（转人工前），接管后完整可见 ──'],
+        ['sys', '用户点击 [转人工]，会话进入人工队列'],
+        ['agent', '您好，我是人工客服小张。订单 #10023 是您 10-28 下单的保温杯，对吗？'],
+        ['user', '对的，帮我退了吧'],
+        ['agent', '好的，我已为您发起退款提案，请稍候在对话框确认。'],
+        ['card', '', { id: '#TP-88', order: '#10023', amt: '¥59.00', state: '等待用户确认' }],
+        ['typing']] },
+    c2: { name: '访客 #1019', intent: '物流查询', stateLabel: '人工处理中', sla: 680,
+      assist: { intent: ['t_logistics · 物流查询', '0.97'], mood: ['平和', 'ok'],
+        replies: [{ t: '包裹正在派送途中，请留意快递员电话，我们会持续为您跟进。', src: '话术 · 物流安抚' }],
+        kbs: [{ title: '物流时效说明', kb: 'cs_faq', conf: '0.88', ex: '同城 1-2 日达，跨省 2-4 日达；遇恶劣天气时效顺延，可在订单页实时查看轨迹。' }],
+        sop: [['查询物流轨迹', 'done'], ['告知预计送达', 'cur'], ['询问其他需求', 'todo']],
+        follow: '可主动询问用户是否需要到货提醒或催派服务。' },
+      ctx: { member: '普通会员', since: '2025-06-02 注册', tags: ['价格敏感'],
+        orders: [['#10045', '玻璃水杯', '运输中', 'warn'], ['#9764', '咖啡滤网', '已完成', 'ok']],
+        intent: 't_logistics · 物流查询', ctxOrder: 'SF1380000123', trace: '7 spans · 1 次工具调用', balance: '¥310.50（P8 只读预演）',
+        aiSummary: 'AI 阶段（1 轮）：经 business-service 查询运单 SF1380000123 轨迹（运输中，预计今日 20:00 前送达），已答复；转人工后建议主动告知送达时间。' },
+      msgs: [['user', '单号 SF1380000123 到哪了？'],
+        ['bot', '已为您查询物流轨迹：10-30 08:12 已离开杭州转运中心，预计今日 20:00 前送达。'],
+        ['div', '── 以上为 AI 阶段（转人工前），接管后完整可见 ──'],
+        ['agent', '包裹已在派送途中，请留意快递员电话，还有其他需要帮忙的吗？'],
+        ['user', '好的谢谢']] },
+    c3: { name: '访客 #1017', intent: '投诉', stateLabel: '人工处理中', sla: 130,
+      assist: { intent: ['c_complaint · 投诉', '0.96'], mood: ['愤怒', 'red'],
+        replies: [
+          { t: '非常抱歉给您带来不好的体验，我已为您登记加急处理，30 分钟内同步处理进度。', src: '话术 · 投诉安抚' },
+          { t: '检测到强烈不满情绪，建议通知主管关注该会话。', src: '系统 · 情绪预警', alert: true }],
+        kbs: [{ title: '投诉处理 SOP', kb: 'cs_scripts', conf: '0.85', ex: '先安抚后处理：致歉 → 复述问题 → 给出时限 → 同步工单号；重大投诉 15 分钟内上报主管。' }],
+        sop: [['安抚情绪', 'cur'], ['登记工单', 'todo'], ['同步处理进度', 'todo']],
+        follow: '建议同步工单 T-2026-0102 的处理进度，必要时通知主管介入。' },
+      ctx: { member: '白银会员', since: '2023-11-20 注册', tags: ['二次投诉'],
+        orders: [['#9871', '儿童水壶', '退货中', 'red']],
+        intent: 'c_complaint · 投诉', ctxOrder: '#9871', trace: '9 spans · 1 张工单', balance: '¥86.00（P8 只读预演）',
+        aiSummary: 'AI 阶段：识别强烈不满，按投诉 SOP 创建工单 T-2026-0102（P1）并完成首轮安抚；属二次投诉，建议主管关注。' },
+      msgs: [['user', '你们退换货太慢了！都 5 天了还没处理，我要投诉！'],
+        ['sys', '情绪预警：检测到强烈不满，已提示坐席注意安抚'],
+        ['div', '── 以上为 AI 阶段（转人工前），接管后完整可见 ──'],
+        ['agent', '非常抱歉给您带来不好的体验，我马上为您加急处理，稍后同步处理进度，可以吗？'],
+        ['user', '快点吧，没耐心了']] },
+    c4: { name: '访客 #1010', intent: '换货申请', stateLabel: '人工处理中', sla: 900,
+      assist: { intent: ['as_exchange · 换货申请', '0.93'], mood: ['平和', 'ok'],
+        replies: [{ t: '您的换货申请已登记，新商品将在收到退货后 48 小时内发出。', src: '话术 · 售后时效' }],
+        kbs: [{ title: '换货流程说明', kb: 'cs_aftersales', conf: '0.90', ex: '用户寄回商品并上传运单号后，仓库 24 小时内验收，新件 48 小时内发出。' }],
+        sop: [['登记换货申请', 'done'], ['告知寄回地址', 'cur'], ['跟进新件发出', 'todo']],
+        follow: '可提醒用户寄回后上传运单号，便于跟进验收进度。' },
+      ctx: { member: '普通会员', since: '2025-01-15 注册', tags: [],
+        orders: [['#9955', '便携水杯', '换货中', 'warn']],
+        intent: 'as_exchange · 换货申请', ctxOrder: '#9955', trace: '6 spans · 1 次确认', balance: '¥450.00（P8 只读预演）',
+        aiSummary: 'AI 阶段：登记换货申请（商品瑕疵），告知寄回地址；等待用户上传运单号。' },
+      msgs: [['user', '杯子盖子有裂痕，能换一个吗'],
+        ['div', '── 用户消息由 AI 阶段接收，接管后完整可见 ──'],
+        ['agent', '可以的，已为您登记换货申请，请将商品寄回以下地址…'],
+        ['user', '好的，已经寄出了']] },
+    c5: { name: '访客 #1008', intent: '发票咨询', stateLabel: 'AI 已解决 · 待评价', sla: null,
+      assist: { intent: ['k_faq · 发票咨询', '0.93'], mood: ['平和', 'ok'],
+        replies: [{ t: '感谢您的肯定！如后续有其他问题欢迎随时联系我们。', src: '话术 · 结束语' }],
+        kbs: [{ title: '发票指引', kb: 'cs_faq', conf: '0.93', ex: '电子发票将在订单完成后 24 小时内自动发送至下单邮箱，可在订单详情页重新获取。' }],
+        sop: [['FAQ 精准层直答', 'done'], ['邀请评价', 'cur']],
+        follow: '' },
+      ctx: { member: '普通会员', since: '2025-08-11 注册', tags: [],
+        orders: [['#9811', '随行杯', '已完成', 'ok']],
+        intent: 'k_faq · 发票咨询', ctxOrder: '—', trace: '3 spans · 0 次工具调用',
+        aiSummary: 'AI 全程独立解决：FAQ 精准层命中「发票指引」直接答复，无转人工、无写操作；已邀请用户评价（CSAT 计入统计）。' },
+      msgs: [['user', '你们的发票怎么开？'],
+        ['bot', '电子发票将在订单完成后 24 小时内自动发送至您的下单邮箱；也可以在「订单详情 → 开发票」重新获取。'],
+        ['user', '好的，收到了，谢谢！'],
+        ['bot', '很高兴帮到您～方便的话请对本服务评价一下：'],
+        ['csat', '']] },
+    c6: { name: '访客 #1006', intent: '退款申请', stateLabel: 'AI 处理中', sla: 600,
+      assist: { intent: ['as_refund · 退款申请', '0.95'], mood: ['平和', 'ok'],
+        replies: [{ t: '已为您锁定订单 #10023，请在退款提案中确认金额。', src: 'AI · 槽位澄清' }],
+        kbs: [{ title: '退款政策 v2.3', kb: 'cs_policy', conf: '0.91', ex: '未收货订单支持全额退款，审核通过后 1-3 个工作日原路退回。' }],
+        sop: [['订单歧义澄清', 'done'], ['发起退款提案', 'cur'], ['用户确认', 'todo'], ['幂等执行', 'todo']],
+        follow: '建议确认用户是否还需要修改默认收货地址。' },
+      ctx: { member: '黄金会员', since: '2023-05-30 注册', tags: ['多单用户'],
+        orders: [['#10023', '保温杯 500ml', '已发货', 'warn'], ['#9901', '杯盖配件', '已发货', 'warn']],
+        intent: 'as_refund · 退款申请', ctxOrder: '#10023（澄清后锁定）', trace: '8 spans · 3 次工具调用',
+        aiSummary: 'AI 阶段：用户仅说「要退款」，存在两笔可退订单，AI 槽位澄清后锁定 #10023 并发起退款提案；另生成地址修改提案待确认；手机号已按 PII 守卫脱敏。' },
+      msgs: [['user', '我要退款'],
+        ['bot', '查询到您有两笔进行中的订单：#10023 保温杯（¥59.00）和 #9901 杯盖（¥19.00）。请问要退哪一笔？'],
+        ['user', '#10023'],
+        ['bot', '好的，已为您锁定订单 #10023 并发起退款提案，请在确认卡上确认金额。'],
+        ['card', '', { id: '#TP-91', order: '#10023', amt: '¥59.00', state: '等待用户确认' }],
+        ['user', '顺便把我默认收货地址改成上海市浦东新区张江路 88 号，收件人李雷，电话 138****8000'],
+        ['sys', 'PII 守卫：手机号已脱敏存储与展示'],
+        ['bot', '已生成地址修改提案，请一并确认。'],
+        ['card', '', { id: '#AD-17', order: '默认收货地址', amt: '上海市浦东新区张江路 88 号（李雷）', state: '等待用户确认' }]] },
+    c7: { name: '访客 #9999', intent: '能力边界演示', stateLabel: 'AI 兜底 · 建议转人工', sla: 480,
+      assist: { intent: ['超范围请求 · 无意图', '—'], mood: ['平和', 'ok'],
+        replies: [{ t: '以上诉求均超出当前 23 个意图与工具清单；真实系统行为为低置信兜底并建议转人工。', src: '演示 · 能力边界' }],
+        kbs: [], sop: [['识别超范围请求', 'done'], ['兜底回复 + 建议转人工', 'cur']],
+        follow: '' },
+      ctx: { member: '—', since: '—', tags: ['边界测试'], orders: [], intent: '多个意图缺失', ctxOrder: '—', trace: 'understanding.fallback ×4',
+        aiSummary: '演示会话：聚合用户常问但当前系统未覆盖的诉求（取消订单 / 价保 / 图片消息 / 多语言 / 开票实操）。真实系统行为：低置信兜底 → 建议转人工；详见知识助手「能力差距」清单。' },
+      msgs: [['user', '这个订单还没发货，我不想等了，直接帮我取消吧'],
+        ['gap', '抱歉，「订单取消」暂未支持：当前仅覆盖退款/退货流程，无取消意图与工具，无法直接办理。已为您转接人工。', { need: '新增 t_order_cancel 意图 + 订单取消 Tool（写操作需走提案-确认-幂等）' }],
+        ['user', '我上周买完就降价了 20 块，能退差价吗？'],
+        ['gap', '价保申请暂未支持：知识库只能回答价保政策条文，缺少订单比价与差价退款工具。', { need: '新增 as_price_match 意图 + 比价 Tool + 部分退款（退差价）能力' }],
+        ['user', '（发送了一张商品破损照片）你看下这个坏了'],
+        ['sys', '消息类型守卫：当前会话仅支持文本消息，图片/文件已拒收并提示用户'],
+        ['user', 'Where is my order?? I ordered 5 days ago!'],
+        ['gap', '多语言暂未支持：意图识别与知识库均为中文语料，英文请求将落入低置信兜底。', { need: '意图层多语言检测 + 知识库多语言语料与回复生成' }],
+        ['user', '帮我开一张电子专票，抬头是公司名称'],
+        ['gap', '开票目前仅为 FAQ 答复，暂无开票动作工具，发票抬头管理也未支持。', { need: '对接开票服务的写操作 Tool + 发票抬头子表与确认流程' }],
+        ['sys', '兜底策略：连续未支持请求 → 建议转人工（h_handoff），并按 P7 沉淀为未解决问题']] }
+  };
+
+  var S = { view: 'workspace', conv: 'c1', ctx: 'customer', lt: 'mine', qaTask: 't1', persp: 'supervisor' };
+  try {
+    var st = window.zcode && window.zcode.widgetState && window.zcode.widgetState.privateContent;
+    if (st) { if (st.view) S.view = st.view; if (st.conv && CONVS[st.conv]) S.conv = st.conv; if (st.ctx) S.ctx = st.ctx; if (st.persp) S.persp = st.persp; }
+  } catch (e) {}
+  function save() { try { window.zcode && window.zcode.setWidgetState && window.zcode.setWidgetState({ privateContent: { view: S.view, conv: S.conv, ctx: S.ctx, persp: S.persp } }); } catch (e) {} }
+
+  var tT;
+  function toast(m) { var t = $('toast'); t.textContent = m; t.classList.add('show'); clearTimeout(tT); tT = setTimeout(function () { t.classList.remove('show'); }, 2400); }
+
+  /* 视图切换 */
+  var TITLES = { workspace: '统一坐席工作台', convs: '会话管理', tickets: '工单管理', refund: '退款审核', qa: '质检中心', dashboard: '数据看板', knowledge: '知识助手' };
+  function showView(v) {
+    S.view = v;
+    root.querySelectorAll('.cs-view').forEach(function (el) { el.classList.toggle('active', el.dataset.view === v); });
+    root.querySelectorAll('.cs-navi').forEach(function (b) {
+      var on = b.dataset.view === v; b.classList.toggle('active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    $('tb-title').textContent = TITLES[v] || v;
+    icons(); save();
+  }
+  root.querySelectorAll('.cs-navi').forEach(function (b) { b.addEventListener('click', function () { showView(b.dataset.view); }); });
+
+  /* 左栏会话列表 */
+  root.querySelectorAll('.lt').forEach(function (b) {
+    b.addEventListener('click', function () {
+      S.lt = b.dataset.lt;
+      root.querySelectorAll('.lt').forEach(function (x) { x.classList.toggle('active', x === b); });
+      $('mine-list').hidden = S.lt !== 'mine';
+      $('queue-list').hidden = S.lt !== 'queue';
+    });
+  });
+  function updateCounts() {
+    $('cnt-mine').textContent = root.querySelectorAll('#mine-list .cs-crow').length;
+    $('cnt-queue').textContent = root.querySelectorAll('#queue-list .cs-crow').length;
+  }
+  function claimRow(btn) {
+    var row = btn.closest('.cs-crow'); var id = 'q' + row.dataset.q;
+    if (!CONVS[id]) {
+      CONVS[id] = { name: row.querySelector('b').textContent, intent: row.querySelector('.abdg').textContent, stateLabel: '人工处理中', sla: 360,
+        assist: { intent: ['—', '—'], mood: ['—', ''], replies: [{ t: '您好，很高兴为您服务，请描述一下您遇到的问题。', src: '话术 · 开场问候' }], kbs: [], sop: [['了解诉求', 'cur']], follow: '' },
+        ctx: { member: '普通会员', since: '—', tags: [], orders: [], intent: '—', ctxOrder: '—', trace: '—', aiSummary: '—', balance: '—' },
+        msgs: [['user', '（演示）该会话由待接入队列认领而来。']] };
+    }
+    row.dataset.conv = id; delete row.dataset.q;
+    var c = btn.closest('.cs-crowsub').querySelector('.claim'); if (c) c.remove();
+    $('mine-list').appendChild(row);
+    updateCounts();
+    root.querySelector('.lt[data-lt="mine"]').click();
+    toast(row.querySelector('b').textContent + ' 已认领（演示）');
+  }
+  $('conv-list').addEventListener('click', function (e) {
+    var claim = e.target.closest('.claim');
+    if (claim) { claimRow(claim); return; }
+    var row = e.target.closest('.cs-crow');
+    if (!row || !row.dataset.conv) return;
+    S.conv = row.dataset.conv;
+    root.querySelectorAll('#conv-list .cs-crow').forEach(function (r) { r.classList.toggle('sel', r === row); });
+    renderChat(); renderCtx(); save();
+  });
+
+  /* 聊天 */
+  function fmt(s) { s = Math.max(0, s | 0); var m = Math.floor(s / 60), ss = s % 60; return (m < 10 ? '0' : '') + m + ':' + (ss < 10 ? '0' : '') + ss; }
+  function renderSla() {
+    var c = CONVS[S.conv], el = $('ch-sla');
+    if (typeof c.sla !== 'number') { el.textContent = '—'; el.className = 'cs-sla'; return; }
+    var txt, cls;
+    if (c.sla <= 0) { txt = 'SLA 已超时'; cls = 'red'; }
+    else if (c.sla <= 120) { txt = 'SLA ' + fmt(c.sla); cls = 'red'; }
+    else if (c.sla <= 300) { txt = 'SLA ' + fmt(c.sla); cls = 'warn'; }
+    else { txt = 'SLA ' + fmt(c.sla); cls = ''; }
+    el.textContent = txt; el.className = 'cs-sla ' + cls;
+    var cs = $('ctx-sla'); if (cs) cs.textContent = txt;
+  }
+  function renderChat() {
+    var c = CONVS[S.conv];
+    $('ch-name').textContent = c.name;
+    $('ch-intent').textContent = c.intent;
+    $('ch-state').textContent = c.closed ? '已关闭' : c.stateLabel;
+    renderSla();
+    var b = $('chat-body'); b.innerHTML = '';
+    c.msgs.forEach(function (m) {
+      if (m[0] === 'div') {
+        var dv = document.createElement('div'); dv.className = 'cs-aidiv'; dv.textContent = m[1];
+        b.appendChild(dv); return;
+      }
+      if (m[0] === 'gap') {
+        var wg = document.createElement('div');
+        wg.className = 'cs-m m-bot';
+        wg.innerHTML = '<div class="cs-mwho"><span class="abdg red">未支持</span> 机器人</div><div class="cs-mb">' + esc(m[1])
+          + (m[2] ? '<div class="cs-gaps">需要：' + esc(m[2].need) + '</div>' : '') + '</div>';
+        b.appendChild(wg); return;
+      }
+      if (m[0] === 'typing') {
+        var d = document.createElement('div'); d.className = 'cs-typing';
+        d.innerHTML = '对方正在输入<span class="cs-tdots"><i></i><i></i><i></i></span>';
+        b.appendChild(d); return;
+      }
+      if (m[0] === 'card') {
+        var p = m[2];
+        var stCls = p.state === '等待用户确认' ? 'warn' : (p.state.indexOf('执行中') > -1 ? 'blue' : 'ok');
+        var isAddr = p.order.indexOf('地址') > -1;
+        var w = document.createElement('div');
+        w.className = 'cs-propcard';
+        w.innerHTML = '<div class="ph"><b>' + (isAddr ? '地址修改提案 ' : '退款提案 ') + p.id + '</b><span class="abdg ' + stCls + '">' + p.state + '</span></div>'
+          + '<div class="kv2"><span>对象</span><span>' + p.order + '</span></div>'
+          + '<div class="kv2"><span>' + (isAddr ? '新地址' : '金额') + '</span><span>' + p.amt + '</span></div>'
+          + '<div class="kv2"><span>方式</span><span>' + (isAddr ? '确认后调用账户服务' : '原路退回') + '</span></div>'
+          + '<div class="cs-aiact" style="margin-top:6px">'
+          + (p.state === '等待用户确认' ? '<button class="abtn sm primary" data-propconfirm="' + p.id + '" type="button">模拟用户端确认</button>' : '')
+          + '<button class="abtn sm" data-prop type="button">详情</button></div>';
+        b.appendChild(w); return;
+      }
+      if (m[0] === 'csat') {
+        var w3 = document.createElement('div');
+        w3.className = 'cs-csatcard';
+        w3.innerHTML = '<div class="ph"><b>满意度评价</b>' + (m[2] ? '<span class="abdg ok">已评价 ' + m[2] + '★</span>' : '<span class="abdg">待评价</span>') + '</div>'
+          + '<div class="cs-stars" role="group" aria-label="满意度星级">'
+          + [1, 2, 3, 4, 5].map(function (n) {
+              return '<button type="button" class="cs-star' + (m[2] && n <= m[2] ? ' on' : '') + '" data-star="' + n + '"' + (m[2] ? ' disabled' : '') + ' aria-label="' + n + ' 星">★</button>';
+            }).join('') + '</div>'
+          + '<div class="cs-aisrc">用户侧组件（CSSatisfactionCard）· 1-5 星计入 CSAT 统计</div>';
+        b.appendChild(w3); return;
+      }
+      var w2 = document.createElement('div');
+      w2.className = 'cs-m m-' + (m[0] === 'user' ? 'user' : m[0] === 'agent' ? 'agent' : m[0] === 'bot' ? 'bot' : 'sys');
+      var who = m[0] === 'user' ? '访客' : m[0] === 'agent' ? '坐席 · 我' : m[0] === 'bot' ? '<span class="abdg">机器人</span>' : '系统';
+      w2.innerHTML = m[0] === 'sys' ? '<div class="cs-mb">' + esc(m[1]) + '</div>'
+        : '<div class="cs-mwho">' + who + '</div><div class="cs-mb">' + esc(m[1]) + '</div>';
+      b.appendChild(w2);
+    });
+    b.scrollTop = b.scrollHeight;
+    applyComposer();
+  }
+  $('chat-body').addEventListener('click', function (e) {
+    var pc = e.target.closest('[data-propconfirm]');
+    if (pc) {
+      var pid = pc.dataset.propconfirm, cvId = S.conv;
+      var card = CONVS[cvId].msgs.find(function (m) { return m[0] === 'card' && m[2].id === pid; });
+      if (card && card[2].state === '等待用户确认') {
+        card[2].state = '已确认 · 执行中'; renderChat();
+        setTimeout(function () {
+          card[2].state = '执行成功（幂等）';
+          if (S.conv === cvId) renderChat();
+          toast('提案 ' + pid + ' 幂等执行完成：重复确认不会重复生效');
+        }, 1300);
+      }
+      return;
+    }
+    var st = e.target.closest('[data-star]');
+    if (st) {
+      var n = +st.dataset.star;
+      var c = CONVS[S.conv].msgs.find(function (m) { return m[0] === 'csat' && !m[2]; });
+      if (c) { c[2] = n; renderChat(); toast('用户评价 ' + n + ' 星，会话关闭并计入 CSAT 统计（演示）'); }
+      return;
+    }
+    if (e.target.closest('[data-prop]')) toast('演示：提案详情（金额、原因、政策版本；执行前重查归属与状态）');
+  });
+  function aiReact() {
+    var cv = CONVS[S.conv]; if (!cv.assist || !cv.assist.follow) return;
+    cv.aiPending = true; if (S.ctx === 'ai') renderCtx();
+    setTimeout(function () {
+      cv.aiPending = false;
+      cv.assist.replies.unshift({ t: cv.assist.follow, src: 'AI · 会话分析', fresh: true });
+      if (S.ctx === 'ai') renderCtx();
+    }, 1400);
+  }
+  function sendMsg() {
+    var t = $('c-input').value.trim(); if (!t) return;
+    CONVS[S.conv].msgs.push(['agent', t]);
+    $('c-input').value = ''; renderChat(); aiReact();
+  }
+  $('btn-send').addEventListener('click', sendMsg);
+  $('c-input').addEventListener('keydown', function (e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(); } });
+  function applyComposer() {
+    var cv = CONVS[S.conv], dis = !!cv.closed;
+    $('c-input').disabled = dis; $('btn-send').disabled = dis;
+    $('c-input').placeholder = dis ? '会话已关闭（用户侧将收到满意度评价邀请）' : '输入回复…（Enter 发送，Shift+Enter 换行）';
+  }
+  function closeConv() {
+    var cv = CONVS[S.conv];
+    if (cv.closed) { toast('该会话已关闭'); return; }
+    cv.closed = true;
+    cv.msgs.push(['sys', '坐席已关闭会话，已向用户发送满意度评价邀请']);
+    renderChat();
+    toast('会话已关闭，评价邀请已发送（演示）');
+  }
+
+  /* 快捷回复 */
+  var CANNED = [
+    ['开场问候', '您好，很高兴为您服务，请问有什么可以帮您？', '通用'],
+    ['查询订单', '麻烦稍等，我马上为您查询订单状态。', '通用'],
+    ['退款时效', '您的退款申请已提交，预计 1-3 个工作日内原路退回，请留意到账通知。', '售后'],
+    ['物流安抚', '包裹正在派送途中，请留意快递员电话，我们会持续为您跟进。', '物流'],
+    ['结束语', '感谢您的耐心等待，祝您生活愉快！', '通用']];
+  function renderCanned(q) {
+    var list = CANNED.filter(function (c) { return !q || (c[0] + c[1] + c[2]).toLowerCase().indexOf(q.toLowerCase()) > -1; });
+    $('canned-list').innerHTML = list.length
+      ? list.map(function (c) { return '<button type="button" class="cn-item" data-c="' + esc(c[1]) + '"><b>' + esc(c[0]) + '</b><span>' + esc(c[1]) + '</span><span class="abdg">' + c[2] + '</span></button>'; }).join('')
+      : '<div class="cn-empty">无匹配话术</div>';
+  }
+  function toggleCanned(show) {
+    $('canned-pop').hidden = !show;
+    $('btn-canned').setAttribute('aria-expanded', show ? 'true' : 'false');
+    if (show) { renderCanned(''); $('canned-search').value = ''; $('canned-search').focus(); }
+  }
+  $('btn-canned').addEventListener('click', function () { toggleCanned($('canned-pop').hidden); });
+  $('canned-search').addEventListener('input', function () { renderCanned(this.value); });
+  $('canned-list').addEventListener('click', function (e) {
+    var it = e.target.closest('.cn-item'); if (!it) return;
+    var v = $('c-input');
+    v.value = v.value ? v.value.replace(/\s*$/, '') + '\n' + it.dataset.c : it.dataset.c;
+    toggleCanned(false); v.focus();
+  });
+
+  /* 右栏上下文 */
+  root.querySelectorAll('.ctx-t').forEach(function (b) {
+    b.addEventListener('click', function () {
+      S.ctx = b.dataset.ct;
+      root.querySelectorAll('.ctx-t').forEach(function (x) { x.classList.toggle('active', x === b); });
+      renderCtx(); save();
+    });
+  });
+  function saveAsCanned(title, text) {
+    CANNED.push([title, text, 'AI']);
+    toast('已存为个人话术「' + title + '」，快捷回复中可用');
+  }
+  function renderCtx() {
+    var cv = CONVS[S.conv], c = cv.ctx, h = '';
+    if (S.ctx === 'customer') {
+      h += '<div class="cs-ctxsec"><h4>会员信息</h4><div class="cs-kv"><b>等级</b><span>' + c.member + '</span></div><div class="cs-kv"><b>注册</b><span>' + c.since + '</span></div><div class="cs-kv"><b>账户余额</b><span>' + (c.balance || '—') + '</span></div></div>';
+      h += '<div class="cs-ctxsec"><h4>近期订单</h4>' + c.orders.map(function (o) {
+        return '<div class="cs-orderrow"><span>' + o[0] + '</span><span>' + o[1] + '</span><span class="abdg ' + o[3] + '">' + o[2] + '</span><i data-lucide="chevron-right" class="go" aria-hidden="true"></i></div>';
+      }).join('') + '</div>';
+      h += '<div class="cs-ctxsec"><h4>标签</h4><div class="cs-tagrow">' + (c.tags.length ? c.tags.map(function (t) { return '<span class="abdg indigo">' + t + '</span>'; }).join('') : '<span class="abdg">暂无</span>') + '</div></div>';
+    } else if (S.ctx === 'info') {
+      h += '<div class="cs-ctxsec"><h4>会话状态</h4><div class="cs-kv"><b>意图</b><span>' + c.intent + '</span></div><div class="cs-kv"><b>状态</b><span>' + cv.stateLabel + '</span></div><div class="cs-kv"><b>SLA</b><span id="ctx-sla">' + $('ch-sla').textContent + '</span></div></div>';
+      h += '<div class="cs-ctxsec"><h4>会话上下文</h4><div class="cs-kv"><b>订单上下文</b><span>' + c.ctxOrder + '</span></div></div>';
+      h += '<div class="cs-ctxsec"><h4>用户待确认提案（P0 可见性）</h4><div class="cs-kv"><b>pending</b><span>' + (c.pendingView || '—') + '</span></div></div>';
+      h += '<div class="cs-ctxsec"><h4>AI 阶段摘要（接管上下文）</h4><div class="cs-aikv">' + esc(c.aiSummary || '—') + '</div></div>';
+      h += '<div class="cs-ctxsec"><h4>链路 Trace</h4><div class="cs-kv"><b>本次会话</b><span>' + c.trace + '</span></div><button class="abtn sm" id="btn-trace" type="button">打开 Trace 详情</button></div>';
+    } else {
+      var a = cv.assist || { intent: ['—', '—'], mood: ['—', ''], replies: [], kbs: [], sop: [] };
+      h += '<div class="cs-ctxsec"><div class="cs-aihead"><span class="cs-aidot"></span>AI 实时辅助 · 监听中</div>'
+        + '<div class="cs-kv"><b>意图识别</b><span>' + a.intent[0] + ' <span class="abdg indigo">' + a.intent[1] + '</span></span></div>'
+        + '<div class="cs-kv"><b>情绪检测</b><span>' + (a.mood[1] ? '<span class="abdg ' + a.mood[1] + '">' + a.mood[0] + '</span>' : a.mood[0]) + '</span></div></div>';
+      h += '<div class="cs-ctxsec"><h4>AI 推荐回复</h4>' + (cv.aiPending ? '<div class="cs-aipending">AI 正在分析最新消息…</div>' : '')
+        + a.replies.map(function (r, i) {
+          var fresh = r.fresh ? '<span class="abdg red">新</span> ' : '';
+          if (r.fresh) r.fresh = false;
+          return '<div class="cs-aicard' + (r.alert ? ' cs-alert' : '') + '"><p>' + fresh + esc(r.t) + '</p>'
+            + (r.alert ? '' : '<div class="cs-aiact"><button class="abtn sm primary" data-adopt="' + i + '" type="button">采用</button><button class="abtn sm" data-saver="' + i + '" type="button">存为话术</button></div>')
+            + (r.src ? '<div class="cs-aisrc">来源：' + r.src + '</div>' : '') + '</div>';
+        }).join('') + '</div>';
+      h += '<div class="cs-ctxsec"><h4>知识推荐</h4>' + (a.kbs.length ? a.kbs.map(function (k, i) {
+        return '<div class="cs-aicard"><p><b>' + esc(k.title) + '</b> <span class="abdg">' + k.kb + '</span> <span class="abdg ok">置信 ' + k.conf + '</span></p><p>' + esc(k.ex) + '</p>'
+          + '<div class="cs-aiact"><button class="abtn sm primary" data-quote="' + i + '" type="button">引用回复</button><button class="abtn sm" data-savek="' + i + '" type="button">存为话术</button></div></div>';
+      }).join('') : '<div class="cs-aisrc">暂无命中知识</div>') + '</div>';
+      if (a.sop && a.sop.length) {
+        h += '<div class="cs-ctxsec"><h4>SOP 下一步</h4><ul class="cs-sop">' + a.sop.map(function (s) {
+          var dot = s[1] === 'done' ? '✓' : s[1] === 'cur' ? '•' : '';
+          return '<li class="' + s[1] + '"><span class="cs-sopdot">' + dot + '</span>' + s[0] + '</li>';
+        }).join('') + '</ul></div>';
+      }
+      var o = c.orders[0];
+      h += '<div class="cs-ctxsec"><h4>订单速览</h4>' + (o ? '<div class="cs-orderrow"><span>' + o[0] + '</span><span>' + o[1] + '</span><span class="abdg ' + o[3] + '">' + o[2] + '</span></div>' : '<div class="cs-kv"><b>—</b><span>无订单</span></div>') + '</div>';
+    }
+    $('ctx-body').innerHTML = h;
+    var bt = $('btn-trace'); if (bt) bt.addEventListener('click', function () { toast('演示：跳转会话详情页查看 Trace'); });
+    root.querySelectorAll('[data-adopt]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var a = CONVS[S.conv].assist; if (!a) return;
+        $('c-input').value = a.replies[+btn.dataset.adopt].t; $('c-input').focus();
+        toast('已采用 AI 建议，可编辑后发送');
+      });
+    });
+    root.querySelectorAll('[data-saver]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var a = CONVS[S.conv].assist, r = a.replies[+btn.dataset.saver];
+        saveAsCanned('AI·' + r.t.slice(0, 6), r.t);
+      });
+    });
+    root.querySelectorAll('[data-quote]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var a = CONVS[S.conv].assist, k = a.kbs[+btn.dataset.quote], v = $('c-input');
+        v.value = (v.value ? v.value.replace(/\s*$/, '') + '\n' : '') + '「' + k.ex + '」—— 来源：' + k.kb + ' · ' + k.title;
+        v.focus();
+        toast('已引用知识原文，建议编辑后发送');
+      });
+    });
+    root.querySelectorAll('[data-savek]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var a = CONVS[S.conv].assist, k = a.kbs[+btn.dataset.savek];
+        saveAsCanned(k.title, k.ex);
+      });
+    });
+    icons();
+  }
+  $('btn-ai').addEventListener('click', function () { root.querySelector('.ctx-t[data-ct="ai"]').click(); });
+  function toggleMore(show) { $('more-pop').hidden = !show; }
+  $('btn-more').addEventListener('click', function (e) { e.stopPropagation(); toggleMore($('more-pop').hidden); });
+  root.querySelectorAll('[data-more]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      toggleMore(false);
+      var k = b.dataset.more;
+      if (k === 'close') { closeConv(); return; }
+      toast({ ordercard: '演示：选择客户近期订单生成卡片消息', note: '内部备注仅坐席可见，不发送给用户', ticket: '已创建关联工单并绑定本会话' }[k]);
+    });
+  });
+
+  /* 通知 */
+  $('bell').addEventListener('click', function (e) { e.stopPropagation(); $('notif-pop').hidden = !$('notif-pop').hidden; });
+  root.querySelectorAll('[data-nt]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      $('notif-pop').hidden = true;
+      showView('workspace');
+      root.querySelector('.lt[data-lt="queue"]').click();
+      toast(b.dataset.nt === 'queue' ? '演示：定位到超时会话 #1013' : '演示：查看转接请求');
+    });
+  });
+  document.addEventListener('click', function (e) {
+    if (!$('notif-pop').hidden && !e.target.closest('.cs-bellwrap')) $('notif-pop').hidden = true;
+    if (!$('canned-pop').hidden && !e.target.closest('.cs-canned') && !e.target.closest('#btn-canned')) toggleCanned(false);
+    if (!$('more-pop').hidden && !e.target.closest('.cs-moremenu') && !e.target.closest('#btn-more')) toggleMore(false);
+  });
+
+  /* 状态与接单 */
+  $('agent-status').addEventListener('change', function () { toast('坐席状态：' + this.value + '（P1 落地后同步派单过滤）'); });
+  $('accept-switch').addEventListener('change', function () { toast(this.checked ? '已开启接单' : '已暂停接单（演示）'); });
+
+  /* 角色视角（RBAC 演示）：csRole=agent/supervisor 双角色，显隐仅 UI 层，真实判定在后端 403 兜底 */
+  function applyPersp() {
+    var sup = S.persp !== 'agent';
+    root.querySelectorAll('#persp-seg button').forEach(function (x) { x.classList.toggle('active', x.dataset.p === S.persp); });
+    $('role-chip').textContent = sup ? 'supervisor' : 'agent';
+    var navDash = root.querySelector('.cs-navi[data-view="dashboard"]'); if (navDash) navDash.hidden = !sup;
+    var navRf = root.querySelector('.cs-navi[data-view="refund"]'); if (navRf) navRf.hidden = !sup;
+    if (!sup && S.view === 'refund') showView('workspace');
+    var apTab = root.querySelector('.ptab[data-pt="appeal"]'); if (apTab) apTab.hidden = !sup;
+    if (!sup && !$('qa-panel-appeal').hidden) root.querySelector('.ptab[data-pt="tasks"]').click();
+    root.querySelectorAll('.task-row').forEach(function (r) {
+      var d = TQ[r.dataset.task]; if (d) r.hidden = !sup && d.agent !== '张三';
+    });
+    var kt = root.querySelector('.ptab[data-ks="team"]'); if (kt) kt.hidden = !sup;
+    if (!sup && !$('k-canned-team').hidden) root.querySelector('.ptab[data-ks="personal"]').click();
+    if (!sup && S.view === 'dashboard') showView('workspace');
+  }
+  root.querySelectorAll('#persp-seg button').forEach(function (b) {
+    b.addEventListener('click', function () { S.persp = b.dataset.p; applyPersp(); save(); });
+  });
+
+  /* 转接弹窗 */
+  function refreshTf() {
+    var mode = root.querySelector('input[name=tfmode]:checked').value;
+    $('tf-agents').hidden = mode !== 'agent';
+    $('tf-groups').hidden = mode !== 'group';
+    var has = mode === 'agent' ? !!root.querySelector('input[name=tfagent]:checked') : true;
+    var reason = $('tf-reason').value.trim().length > 0;
+    $('tf-submit').disabled = !(has && reason);
+  }
+  $('btn-transfer').addEventListener('click', function () {
+    $('tf-title').textContent = '转接会话 ' + (CONVS[S.conv] ? CONVS[S.conv].name.replace('访客 ', '#') : '');
+    $('transfer-mask').hidden = false; $('tf-reason').value = ''; refreshTf();
+  });
+  root.querySelectorAll('input[name=tfmode],input[name=tfagent]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      root.querySelectorAll('.cs-agentopt').forEach(function (l) {
+        l.classList.toggle('sel', l.contains(root.querySelector('input[name=tfmode]:checked')) || l.contains(root.querySelector('input[name=tfagent]:checked')));
+      });
+      refreshTf();
+    });
+  });
+  $('tf-reason').addEventListener('input', refreshTf);
+  $('tf-cancel').addEventListener('click', function () { $('transfer-mask').hidden = true; });
+  $('transfer-mask').addEventListener('click', function (e) { if (e.target === $('transfer-mask')) $('transfer-mask').hidden = true; });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('transfer-mask').hidden) $('transfer-mask').hidden = true; });
+  $('tf-submit').addEventListener('click', function () {
+    var mode = root.querySelector('input[name=tfmode]:checked').value;
+    var target = mode === 'agent' ? root.querySelector('input[name=tfagent]:checked').value : $('tf-group-sel').value;
+    var cvId = S.conv;
+    CONVS[cvId].msgs.push(['sys', '坐席发起转接 → ' + target + '，等待对方接受（演示）']);
+    $('transfer-mask').hidden = true;
+    renderChat();
+    toast('转接请求已发送 → ' + target);
+    setTimeout(function () {
+      var cv = CONVS[cvId]; if (!cv || cv.closed) return;
+      cv.msgs.push(['sys', target + ' 已接受转接，会话已移交（演示：对方拒单或 offer 超时将回退原坐席）']);
+      if (S.conv === cvId) renderChat();
+    }, 1800);
+  });
+
+  /* ===== 会话管理 ===== */
+  var CVIEWS = [
+    { id: '#1024', agent: '张三', state: 'human_active', intent: '退款申请', time: '今天 12:41', src: 'c1', csat: null,
+      events: [['12:00', 'AI 接管，机器人应答 2 轮'], ['12:05', '用户点击转人工（handoff_requested）'], ['12:06', '派单：技能组「售后」→ 张三 认领'], ['12:07', '进入 human_active，人工处理中']],
+      traces: [['supervisor.route', '320ms', 26], ['knowledge.rag', '1.2s', 72], ['refund.proposal', '890ms', 54], ['reporter.compose', '210ms', 16]] },
+    { id: '#1019', agent: '张三', state: 'human_active', intent: '物流查询', time: '今天 12:37', src: 'c2', csat: null,
+      events: [['12:30', 'AI 接管，命中物流查询工具'], ['12:33', '查询物流轨迹成功（business-service）'], ['12:35', '用户转人工 → 张三 认领']],
+      traces: [['query.logistics', '640ms', 34], ['logistics.trace', '480ms', 26], ['reporter.compose', '190ms', 14]] },
+    { id: '#1017', agent: '张三', state: 'human_active', intent: '投诉', time: '今天 12:30', src: 'c3', csat: null,
+      events: [['12:28', 'AI 检测到投诉意图'], ['12:29', '自动创建工单 T-2026-0102（P1）'], ['12:30', '转人工 → 张三 认领']],
+      traces: [['complaint.detect', '210ms', 14], ['ticket.create', '760ms', 44], ['handoff.dispatch', '180ms', 12]] },
+    { id: '#1008', agent: '王五', state: 'waiting_human', intent: '物流咨询', time: '今天 12:12', src: null, csat: null,
+      chat: [['user', '我的包裹三天了还在原地，什么情况？'], ['bot', '抱歉，暂未能准确理解您的问题，已为您转接人工客服。'], ['sys', '进入 waiting_human 排队，等待坐席认领']],
+      events: [['12:10', 'AI 应答未命中，建议转人工'], ['12:11', '进入 waiting_human 排队'], ['12:12', '派单 offer 已发给 王五（等待接受）']],
+      traces: [['understanding.fallback', '2.1s', 84], ['handoff.dispatch', '140ms', 12]] },
+    { id: '#1005', agent: '李四', state: 'human_active', intent: '退货', time: '今天 11:58', src: null, csat: null,
+      chat: [['user', '尺码不合适，想退货'], ['agent', '好的，已为您登记退货申请，请寄回后上传运单号。'], ['user', '已经寄出了']],
+      events: [['11:50', 'AI 引导收集退货原因'], ['11:55', '生成退货提案，用户确认'], ['11:58', '转人工 → 李四 跟进寄回']],
+      traces: [['action.proposal', '1.1s', 62], ['confirmation.claim', '95ms', 8]] },
+    { id: '#0998', agent: '王五', state: 'closed', intent: '发票咨询', time: '昨天 16:20', src: null, csat: 5,
+      chat: [['user', '发票怎么开？'], ['bot', '电子发票将在订单完成后 24 小时内发送至您的下单邮箱，请注意查收。'], ['sys', '用户评价 5 星，会话关闭']],
+      events: [['16:10', 'AI 命中 FAQ 精准层直接回答'], ['16:12', '用户确认解决，会话关闭']],
+      traces: [['faq.exact', '90ms', 10]] },
+    { id: '#0992', agent: '李四', state: 'closed', intent: '退款', time: '昨天 14:02', src: null, csat: 4,
+      chat: [['user', '申请退款，商品有质量问题'], ['agent', '已核实质量问题，退款将全额原路退回。'], ['sys', '用户评价 4 星，会话关闭']],
+      events: [['13:50', 'AI 收集退款原因（质量问题）'], ['13:56', '退款提案确认，幂等执行成功'], ['14:02', '会话关闭']],
+      traces: [['refund.execute', '980ms', 52], ['payment.mock', '120ms', 10]] }
+  ];
+  var STC = { human_active: 'blue', waiting_human: 'warn', handoff_requested: 'warn', ai_active: '', closed: '' };
+  function cvStateBadge(s) { return '<span class="abdg ' + (STC[s] || '') + '">' + s + '</span>'; }
+  function cvChat(v) {
+    if (v.src) { return CONVS[v.src].msgs.filter(function (m) { return m[0] !== 'typing' && m[0] !== 'card'; }).slice(-4); }
+    return v.chat;
+  }
+  function renderCvRows() {
+    $('cv-rows').innerHTML = CVIEWS.map(function (v, i) {
+      return '<tr class="cv-row" data-cvi="' + i + '"><td><b>' + v.id + '</b></td><td>' + v.agent + '</td><td>' + v.intent + '</td><td>' + cvStateBadge(v.state) + '</td><td>' + v.time + '</td><td>' + (v.csat ? '<span class="abdg ok">' + v.csat + '★</span>' : '—') + '</td></tr>';
+    }).join('');
+    applyCvFilter();
+  }
+  function applyCvFilter() {
+    var q = $('cv-search').value.trim().toLowerCase(), st = $('cv-state').value, it = $('cv-intent').value;
+    root.querySelectorAll('.cv-row').forEach(function (r) {
+      var v = CVIEWS[+r.dataset.cvi];
+      var ok = (!q || (v.id + v.agent + v.intent).toLowerCase().indexOf(q) > -1) && (!st || v.state === st) && (!it || v.intent === it);
+      r.hidden = !ok;
+    });
+  }
+  ['cv-search', 'cv-state', 'cv-intent'].forEach(function (id) { $(id).addEventListener('input', applyCvFilter); $(id).addEventListener('change', applyCvFilter); });
+  $('cv-rows').addEventListener('click', function (e) {
+    var r = e.target.closest('.cv-row'); if (!r) return;
+    root.querySelectorAll('.cv-row').forEach(function (x) { x.classList.toggle('sel', x === r); });
+    renderCvDetail(+r.dataset.cvi);
+  });
+  function renderCvDetail(i) {
+    var v = CVIEWS[i];
+    var h = '<div class="cs-dhead"><b style="font-size:14px">会话 ' + v.id + '</b>' + cvStateBadge(v.state) + '<span class="abdg">' + v.intent + '</span><span class="abdg">坐席 ' + v.agent + '</span>' + (v.csat ? '<span class="abdg ok">CSAT ' + v.csat + '★</span>' : '') + '<span class="cs-crowtime" style="margin-left:auto">' + v.time + '</span></div>';
+    h += '<div class="cs-dsec"><h4>消息回放</h4><div class="cs-replay">' + cvChat(v).map(function (m) {
+      if (m[0] === 'sys') return '<div class="cs-m m-sys"><div class="cs-mb">' + esc(m[1]) + '</div></div>';
+      var who = m[0] === 'user' ? '访客' : m[0] === 'agent' ? '坐席' : '机器人';
+      return '<div class="cs-m m-' + m[0] + '"><div class="cs-mwho">' + who + '</div><div class="cs-mb">' + esc(m[1]) + '</div></div>';
+    }).join('') + '</div></div>';
+    h += '<div class="cs-dsec"><h4>状态时间线</h4><ul class="cs-tl">' + v.events.map(function (e2) { return '<li><b>' + e2[0] + '</b>' + esc(e2[1]) + '</li>'; }).join('') + '</ul></div>';
+    h += '<div class="cs-dsec"><h4>链路 Trace</h4>' + v.traces.map(function (t) {
+      return '<div class="cs-trace"><span class="tn">' + t[0] + '</span><div class="tb"><i style="width:' + t[2] + '%"></i></div><span class="tms">' + t[1] + '</span></div>';
+    }).join('') + '</div>';
+    if (v.state !== 'closed') {
+      h += '<div class="cs-dacts"><button class="abtn sm" data-cvact="reassign" type="button">主管重派</button><button class="abtn sm" data-cvact="adopt" type="button">强制接管</button><button class="abtn sm" data-cvact="close" type="button">关闭会话</button></div>';
+    } else {
+      h += '<div class="cs-dacts"><span class="abdg">会话已关闭 · 已归档</span></div>';
+    }
+    $('cv-detail').innerHTML = h;
+    root.querySelectorAll('[data-cvact]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        toast('演示：' + { reassign: '主管重派', adopt: '强制接管（服务端状态机校验）', close: '关闭会话' }[b.dataset.cvact] + ' → ' + v.id);
+      });
+    });
+  }
+
+  /* ===== 工单管理 ===== */
+  var TKS = [
+    { id: 'T-2026-0102', type: '投诉', title: '退换货处理超时投诉', conv: '#1017', status: 'processing', sla: '3h20m', slaCls: 'warn', esc: 1, owner: '张三', time: '今天 12:31',
+      records: [['12:31', '投诉检测自动建单（P1，SLA 30min）'], ['12:32', '张三 受理'], ['12:35', '安抚话术已发送，承诺 30 分钟内同步进度'], ['12:40', 'SLA 剩余 50%，触发预警']] },
+    { id: 'T-2026-0101', type: '转人工', title: '退款申请人工协助', conv: '#1024', status: 'processing', sla: '4h02m', slaCls: '', esc: 0, owner: '张三', time: '今天 12:41',
+      records: [['12:41', '用户转人工自动建单'], ['12:41', '张三 认领并受理'], ['12:45', '退款提案 #TP-88 已创建，等待用户确认']] },
+    { id: 'T-2026-0100', type: '报修', title: '杯盖配件质量问题', conv: '#0990', status: 'pending_user', sla: '21h40m', slaCls: '', esc: 0, owner: '王五', time: '昨天 18:20',
+      records: [['18:20', '用户报修，创建工单'], ['18:25', '王五 受理，请求用户补充照片'], ['18:30', '等待用户上传凭证（pending_user）']] },
+    { id: 'T-2026-0099', type: '咨询', title: '发票开具咨询', conv: '#0988', status: 'resolved', sla: '达成', slaCls: 'ok', esc: 0, owner: '李四', time: '昨天 15:02',
+      records: [['15:02', '咨询类工单创建'], ['15:05', '李四 解答并确认解决'], ['15:06', '标记 resolved']] },
+    { id: 'T-2026-0098', type: '投诉', title: '物流损坏投诉', conv: '#0955', status: 'closed', sla: '已超时', slaCls: 'red', esc: 2, owner: '李四', time: '10-28 09:12',
+      records: [['09:12', '投诉建单（P0）'], ['09:20', 'SLA 超时，自动升级至主管 ×1'], ['10:26', '二次升级，主管介入'], ['10-29 11:00', '赔付完成，工单关闭']] }
+  ];
+  var TKC = { processing: 'blue', pending_user: 'warn', resolved: 'ok', closed: '', open: 'warn' };
+  function tkStatusBadge(s) { return '<span class="abdg ' + (TKC[s] || '') + '">' + s + '</span>'; }
+  function renderTkRows() {
+    $('tk-rows').innerHTML = TKS.map(function (t, i) {
+      return '<tr class="tk-row" data-tki="' + i + '"><td><b>' + t.id + '</b></td><td><span class="abdg ' + (t.type === '投诉' ? 'red' : t.type === '报修' ? 'warn' : '') + '">' + t.type + '</span></td><td>' + t.title + '</td><td class="tk-st">' + tkStatusBadge(t.status) + '</td><td><span class="abdg ' + t.slaCls + '">' + t.sla + '</span></td><td>' + (t.esc ? '<span class="abdg red">×' + t.esc + '</span>' : '—') + '</td><td>' + t.owner + '</td><td>' + t.time + '</td></tr>';
+    }).join('');
+    applyTkFilter();
+  }
+  function applyTkFilter() {
+    var q = $('tk-search').value.trim().toLowerCase(), st = $('tk-status').value, tp = $('tk-type').value;
+    root.querySelectorAll('.tk-row').forEach(function (r) {
+      var t = TKS[+r.dataset.tki];
+      var ok = (!q || (t.id + t.title + t.owner).toLowerCase().indexOf(q) > -1) && (!st || t.status === st) && (!tp || t.type === tp);
+      r.hidden = !ok;
+    });
+  }
+  ['tk-search', 'tk-status', 'tk-type'].forEach(function (id) { $(id).addEventListener('input', applyTkFilter); $(id).addEventListener('change', applyTkFilter); });
+  $('tk-rows').addEventListener('click', function (e) {
+    var r = e.target.closest('.tk-row'); if (!r) return;
+    root.querySelectorAll('.tk-row').forEach(function (x) { x.classList.toggle('sel', x === r); });
+    renderTkDetail(+r.dataset.tki);
+  });
+  function renderTkDetail(i) {
+    var t = TKS[i];
+    var h = '<div class="cs-dhead"><b style="font-size:14px">' + t.id + '</b><span class="abdg ' + (t.type === '投诉' ? 'red' : '') + '">' + t.type + '</span>' + tkStatusBadge(t.status) + (t.esc ? '<span class="abdg red">已升级 ×' + t.esc + '</span>' : '') + '</div>';
+    h += '<div class="cs-dsec"><h4>工单信息</h4>'
+      + '<div class="cs-kv"><b>主题</b><span>' + t.title + '</span></div>'
+      + '<div class="cs-kv"><b>关联会话</b><span>' + t.conv + '</span></div>'
+      + '<div class="cs-kv"><b>处理人</b><span>' + t.owner + '</span></div>'
+      + '<div class="cs-kv"><b>SLA</b><span>' + t.sla + '</span></div>'
+      + '<div class="cs-kv"><b>创建时间</b><span>' + t.time + '</span></div></div>';
+    h += '<div class="cs-dsec"><h4>处理记录</h4><ul class="cs-tl">' + t.records.map(function (r) { return '<li><b>' + r[0] + '</b>' + esc(r[1]) + '</li>'; }).join('') + '</ul></div>';
+    h += '<div class="cs-dacts"><button class="abtn sm" data-tkact="accept" type="button">受理</button><button class="abtn sm" data-tkact="transfer" type="button">转派</button><button class="abtn sm" data-tkact="escalate" type="button">升级 SLA</button><button class="abtn sm" data-tkact="resolve" type="button">标记解决</button><button class="abtn sm" data-tkact="close" type="button">关闭</button></div>';
+    $('tk-detail').innerHTML = h;
+    root.querySelectorAll('[data-tkact]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var act = b.dataset.tkact;
+        if (act === 'accept') { t.status = 'processing'; toast(t.id + ' 已受理'); }
+        else if (act === 'resolve') { t.status = 'resolved'; t.sla = '达成'; t.slaCls = 'ok'; toast(t.id + ' 已标记解决'); }
+        else if (act === 'close') { t.status = 'closed'; toast(t.id + ' 已关闭'); }
+        else if (act === 'escalate') { t.esc += 1; toast(t.id + ' 已升级至主管并通知（P5）'); }
+        else { toast(t.id + ' 转派（演示）'); return; }
+        renderTkRows(); renderTkDetail(i);
+      });
+    });
+  }
+
+  /* ===== 退款审核（P4.5） ===== */
+  var RFS = [
+    { id: 'RF-2026-1031-001', order: '#100***23', user: '访客 #1024', amt: '¥59.00', st: 'pending_review', time: '今天 12:45',
+      detail: { order: '#10023 · 保温杯 500ml', reason: '商品破损（用户修改，提案 v2）', policy: 'refund-policy-v1', proposal: '#TP-88 · 确认于 12:44（幂等键已校验）', ctx: '会话 #1024 · AI 阶段 2 轮后转人工' } },
+    { id: 'RF-2026-1031-002', order: '#095***55', user: '访客 #1005', amt: '¥129.00', st: 'pending_review', time: '今天 12:20',
+      detail: { order: '#0955 · 针织毛衣', reason: '尺码不合适', policy: 'refund-policy-v1', proposal: '#TP-76 · 确认于 12:19（幂等键已校验）', ctx: '会话 #1005 · 人工处理中' } },
+    { id: 'RF-2026-1030-014', order: '#099***92', user: '访客 #0992', amt: '¥92.00', st: 'approved', time: '昨天 16:02',
+      detail: { order: '#0992 · 陶瓷马克杯', reason: '与描述不符', policy: 'refund-policy-v1', proposal: '#TP-64 · 确认于 16:00', ctx: '会话 #0992 · 已关闭', note: '审核意见：凭证齐全，符合 7 天无理由（李四 10-30 16:10）' } },
+    { id: 'RF-2026-1030-009', order: '#098***88', user: '访客 #0988', amt: '¥45.00', st: 'rejected', time: '昨天 11:40',
+      detail: { order: '#0988 · 杯盖配件', reason: '不想要了', policy: 'refund-policy-v1', proposal: '#TP-61 · 确认于 11:38', ctx: '会话 #0988 · 已关闭', note: '审核意见：超过 7 天窗口且已使用，驳回（张三 10-30 11:52）' } }
+  ];
+  var RFST = { pending_review: ['warn', 'pending_review'], approved: ['ok', 'approved'], rejected: ['red', 'rejected'] };
+  function renderRfRows() {
+    $('rf-rows').innerHTML = RFS.map(function (r, i) {
+      return '<tr class="rf-row" data-rfi="' + i + '"><td><b>' + r.id + '</b></td><td>' + r.order + '</td><td>' + r.user + '</td><td>' + r.amt + '</td><td><span class="abdg ' + RFST[r.st][0] + '">' + r.st + '</span></td><td>' + r.time + '</td></tr>';
+    }).join('');
+    applyRfFilter();
+  }
+  function applyRfFilter() {
+    var q = $('rf-search').value.trim().toLowerCase(), st = $('rf-status').value;
+    root.querySelectorAll('.rf-row').forEach(function (r) {
+      var v = RFS[+r.dataset.rfi];
+      var ok = (!q || (v.id + v.order + v.user).toLowerCase().indexOf(q) > -1) && (!st || v.st === st);
+      r.hidden = !ok;
+    });
+  }
+  ['rf-search', 'rf-status'].forEach(function (id) { $(id).addEventListener('input', applyRfFilter); $(id).addEventListener('change', applyRfFilter); });
+  $('rf-rows').addEventListener('click', function (e) {
+    var r = e.target.closest('.rf-row'); if (!r) return;
+    root.querySelectorAll('.rf-row').forEach(function (x) { x.classList.toggle('sel', x === r); });
+    renderRfDetail(+r.dataset.rfi);
+  });
+  function renderRfDetail(i) {
+    var r = RFS[i], d = r.detail;
+    var h = '<div class="cs-dhead"><b style="font-size:14px">' + r.id + '</b><span class="abdg ' + RFST[r.st][0] + '">' + r.st + '</span><span class="abdg">' + r.amt + '</span><span class="cs-crowtime" style="margin-left:auto">' + r.time + '</span></div>'
+      + '<div class="cs-dsec"><h4>申请信息</h4>'
+      + '<div class="cs-kv"><b>订单</b><span>' + d.order + '</span></div>'
+      + '<div class="cs-kv"><b>申请人</b><span>' + r.user + '</span></div>'
+      + '<div class="cs-kv"><b>退款原因</b><span>' + esc(d.reason) + '</span></div>'
+      + '<div class="cs-kv"><b>政策版本</b><span>' + d.policy + '</span></div>'
+      + '<div class="cs-kv"><b>提案 / 幂等</b><span>' + esc(d.proposal) + '</span></div>'
+      + '<div class="cs-kv"><b>会话上下文</b><span>' + esc(d.ctx) + '</span></div></div>'
+      + (d.note ? '<div class="cs-dsec"><h4>审核记录</h4><div class="cs-aikv">' + esc(d.note) + '</div></div>' : '');
+    if (r.st === 'pending_review') {
+      h += '<div class="cs-dsec"><h4>审核意见（必填，落 audit_logs）</h4><textarea class="cs-reason" id="rf-note" placeholder="审核意见：通过依据或驳回理由"></textarea>'
+        + '<div class="cs-dacts"><button class="abtn sm primary" id="rf-approve" type="button" disabled>通过退款</button><button class="abtn sm" id="rf-reject" type="button" disabled>驳回</button></div></div>';
+    } else {
+      h += '<div class="cs-dacts"><span class="abdg">终态（' + (r.st === 'approved' ? '已通过' : '已驳回') + '）· 状态机不可回退</span></div>';
+    }
+    $('rf-detail').innerHTML = h;
+    if (r.st !== 'pending_review') return;
+    var noteEl = $('rf-note');
+    function refreshRf() { var ok = noteEl.value.trim().length > 0; $('rf-approve').disabled = !ok; $('rf-reject').disabled = !ok; }
+    noteEl.addEventListener('input', refreshRf);
+    function actRf(newSt, label) {
+      r.st = newSt;
+      r.detail.note = '审核意见：' + noteEl.value.trim() + '（张三 10-31 ' + new Date().toTimeString().slice(0, 5) + '）';
+      renderRfRows(); renderRfDetail(i);
+      toast(label + '已写入 audit_logs，用户侧已通知（演示）');
+    }
+    $('rf-approve').addEventListener('click', function () { actRf('approved', '审核通过'); });
+    $('rf-reject').addEventListener('click', function () { actRf('rejected', '审核驳回'); });
+  }
+
+  /* ===== 质检中心 ===== */
+  var TQ = {
+    t1: { n: '#1024', agent: '张三', dims: [22, 24, 22, 18], verd: '合格', note: '', done: false },
+    t2: { n: '#0992', agent: '李四', dims: [24, 23, 24, 21], verd: '合格', note: '流程完整，安抚到位', done: true },
+    t3: { n: '#0988', agent: '王五', dims: [15, 20, 18, 18], verd: '不合格', note: '两次响应超时且未安抚', done: true }
+  };
+  function updTotal() { var t = 0; for (var i = 1; i <= 4; i++) t += +$('r' + i).value; $('v-total').textContent = t; return t; }
+  function loadTask(id) {
+    S.qaTask = id; var d = TQ[id];
+    root.querySelectorAll('.task-row').forEach(function (r) { r.classList.toggle('sel', r.dataset.task === id); });
+    for (var i = 1; i <= 4; i++) { $('r' + i).value = d.dims[i - 1]; $('v' + i).textContent = d.dims[i - 1]; }
+    updTotal();
+    root.querySelector('input[name=verd][value="' + d.verd + '"]').checked = true;
+    $('qa-note').value = d.note;
+    var dis = d.done;
+    ['r1', 'r2', 'r3', 'r4', 'qa-note'].forEach(function (x) { $(x).disabled = dis; });
+    root.querySelectorAll('input[name=verd]').forEach(function (x) { x.disabled = dis; });
+    $('qa-submit').disabled = dis; $('qa-aiprefill').disabled = dis;
+    $('qf-title').textContent = '评分：会话 ' + d.n + ' · ' + d.agent + (d.done ? '（已提交）' : '');
+  }
+  [1, 2, 3, 4].forEach(function (i) {
+    $('r' + i).addEventListener('input', function () { $('v' + i).textContent = this.value; updTotal(); });
+  });
+  root.querySelectorAll('.task-row').forEach(function (r) { r.addEventListener('click', function () { loadTask(r.dataset.task); }); });
+  $('qa-aiprefill').addEventListener('click', function () {
+    var d = TQ[S.qaTask]; if (d.done) return;
+    var sugg = [20, 22, 21, 17];
+    for (var i = 1; i <= 4; i++) { $('r' + i).value = sugg[i - 1]; $('v' + i).textContent = sugg[i - 1]; }
+    updTotal();
+    root.querySelector('input[name=verd][value="合格"]').checked = true;
+    $('qa-note').value = '（AI 预填建议 · source=ai，请人工终审）主要扣分：处理时效偏长。';
+    toast('AI 预填完成（80 分 · 合格），请人工终审');
+  });
+  $('qa-submit').addEventListener('click', function () {
+    var d = TQ[S.qaTask];
+    d.done = true;
+    d.dims = [1, 2, 3, 4].map(function (i) { return +$('r' + i).value; });
+    d.verd = root.querySelector('input[name=verd]:checked').value;
+    d.note = $('qa-note').value;
+    var total = d.dims.reduce(function (a, b) { return a + b; }, 0);
+    var row = root.querySelector('.task-row[data-task="' + S.qaTask + '"]');
+    row.querySelector('.t-status').innerHTML = '<span class="abdg ' + (d.verd === '合格' ? 'ok' : 'red') + '">已评分</span>';
+    row.cells[4].textContent = total + ' · ' + d.verd;
+    loadTask(S.qaTask);
+    toast('评分已提交：' + total + ' · ' + d.verd);
+  });
+  root.querySelectorAll('.ptab[data-pt]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.querySelectorAll('.ptab[data-pt]').forEach(function (x) { x.classList.toggle('active', x === b); });
+      ['tasks', 'appeal', 'report'].forEach(function (p) { $('qa-panel-' + p).hidden = p !== b.dataset.pt; });
+    });
+  });
+  root.querySelectorAll('[data-act]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var row = b.closest('tr');
+      row.querySelector('.ap-status').innerHTML = '<span class="abdg ' + (b.dataset.act === 'keep' ? 'ok' : 'blue') + '">' + (b.dataset.act === 'keep' ? '已维持' : '已改判') + '</span>';
+      row.querySelectorAll('[data-act]').forEach(function (x) { x.disabled = true; });
+      toast('申诉已' + (b.dataset.act === 'keep' ? '维持' : '改判') + '（演示）');
+    });
+  });
+
+  /* ===== 数据看板 ===== */
+  var DASH = {
+    today: { v: ['2', '18', '96', '31%', '42s', '4.6'], d: [['实时', ''], ['较昨日 -2', 'good'], ['+8%', 'good'], ['-4pp', 'good'], ['-8s', 'good'], ['+0.1', 'good']] },
+    d7: { v: ['6', '52', '612', '29%', '45s', '4.5'], d: [['日均值', ''], ['较上期 +3', 'good'], ['+3%', 'good'], ['-2pp', 'good'], ['-3s', 'good'], ['持平', '']] },
+    d30: { v: ['9', '61', '2450', '33%', '51s', '4.4'], d: [['日均', ''], ['较上期 +9', 'bad'], ['+12%', 'good'], ['+2pp', 'bad'], ['+6s', 'bad'], ['-0.1', 'bad']] }
+  };
+  root.querySelectorAll('.cs-seg button').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.querySelectorAll('.cs-seg button').forEach(function (x) { x.classList.toggle('active', x === b); });
+      var d = DASH[b.dataset.r];
+      for (var i = 1; i <= 6; i++) {
+        $('ds' + i).textContent = d.v[i - 1];
+        var de = $('dsd' + i); de.textContent = d.d[i - 1][0]; de.className = 'd ' + d.d[i - 1][1];
+      }
+    });
+  });
+
+  /* ===== 知识助手 ===== */
+  root.querySelectorAll('.ktab').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.querySelectorAll('.ktab').forEach(function (x) { x.classList.toggle('active', x === b); });
+      ['unsolved', 'canned', 'search', 'gaps'].forEach(function (p) { $('k-panel-' + p).hidden = p !== b.dataset.kt; });
+    });
+  });
+  root.querySelectorAll('.ku-row').forEach(function (r) {
+    r.addEventListener('click', function (e) {
+      if (e.target.closest('.gen-btn')) return;
+      var d = $('kud-' + r.dataset.ku); d.hidden = !d.hidden;
+    });
+  });
+  root.querySelectorAll('.gen-btn').forEach(function (b) {
+    b.addEventListener('click', function () { b.disabled = true; b.textContent = '已生成草稿 ✓'; toast('已生成 FAQ 草稿并送管理端审核（演示）'); });
+  });
+  root.querySelectorAll('.ptab[data-ks]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.querySelectorAll('.ptab[data-ks]').forEach(function (x) { x.classList.toggle('active', x === b); });
+      $('k-canned-personal').hidden = b.dataset.ks !== 'personal';
+      $('k-canned-team').hidden = b.dataset.ks !== 'team';
+    });
+  });
+  $('btn-add-canned').addEventListener('click', function () {
+    $('cm-title-input').value = ''; $('cm-content').value = ''; $('cm-tags').value = '';
+    $('canned-mask').hidden = false; $('cm-title-input').focus();
+  });
+  $('cm-cancel').addEventListener('click', function () { $('canned-mask').hidden = true; });
+  $('canned-mask').addEventListener('click', function (e) { if (e.target === $('canned-mask')) $('canned-mask').hidden = true; });
+  $('cm-submit').addEventListener('click', function () {
+    var ti = $('cm-title-input').value.trim(), co = $('cm-content').value.trim(), tg = $('cm-tags').value.trim() || '通用', sc = $('cm-scope').value;
+    if (!ti || !co) { toast('标题与内容为必填'); return; }
+    var tr = document.createElement('tr');
+    tr.innerHTML = '<td>' + esc(ti) + '</td><td>' + esc(co) + '</td><td><span class="abdg">' + esc(tg) + '</span></td><td><label class="cs-tk"><input type="checkbox" checked><span class="cs-tkui"></span></label></td><td><button class="abtn sm ghost" type="button">编辑</button></td>';
+    if (sc === 'personal') { $('kc-personal-body').appendChild(tr); toast('个人话术已新增（演示）'); }
+    else { toast('团队话术已提交，待 supervisor 审核后生效（演示）'); }
+    CANNED.push([ti, co, tg]);
+    $('canned-mask').hidden = true;
+  });
+  $('k-go').addEventListener('click', function () {
+    if ($('k-search').value.trim()) { $('k-results').hidden = false; } else { toast('请输入检索关键词'); }
+  });
+
+  /* SLA 心跳 */
+  setInterval(function () { var c = CONVS[S.conv]; if (c && typeof c.sla === 'number') { c.sla--; renderSla(); } }, 1000);
+
+  /* 初始化 */
+  showView(S.view);
+  root.querySelectorAll('#conv-list .cs-crow').forEach(function (r) { r.classList.toggle('sel', r.dataset.conv === S.conv); });
+  renderChat(); renderCtx(); updateCounts();
+  loadTask('t1'); renderCvRows(); renderTkRows(); applyPersp();
+  icons();
+})();
+</script>
+</div>
