@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -33,10 +34,15 @@ from backend.services import automations
 
 pytestmark = pytest.mark.pg
 
-TENANT = "e2e-automations-tenant"
-TENANT_B = "e2e-automations-tenant-b"
-USER_A = "u-automations-a"
-USER_B = "u-automations-b"
+# 租户/用户带 xdist worker 后缀：ai.user_automations 是共享真实表
+# （实现固定表名，不走 pgtest 前缀），worker 间用独立命名空间互不清理对方数据。
+_XW = os.getenv("PYTEST_XDIST_WORKER", "")
+_XS = f"-{_XW}" if _XW else ""
+
+TENANT = f"e2e-automations-tenant{_XS}"
+TENANT_B = f"e2e-automations-tenant-b{_XS}"
+USER_A = f"u-automations-a{_XS}"
+USER_B = f"u-automations-b{_XS}"
 
 USER_HEADERS = {
     "X-Auth-Type": "jwt",
