@@ -27,12 +27,13 @@ Trace
 - `rerank`
 - `sql`
 - `tool` / `tool_call`
-- `skill`
-- `planner`
-- `reporter`
 - `memory`
 - `agent`
 - `http`
+
+强约束以 `backend/observability/tracer.py` 的 `SpanKind` 枚举为准；`type` 为自由字符串
+仅做历史数据兼容。Planner/Reporter 等编排步骤现为 `type="agent"` 的具名 span
+（如「Planner 拆解」「Reporter 汇总」），不再是独立 type。
 
 ## Tool 调用记录（必填）
 
@@ -75,7 +76,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - `has_tool` 下钻在留存上限内批量读取完整 Trace 和 Span，避免逐条查询造成 N+1 数据库访问。
 - 列表和统计均复用唯一 TraceStore。当前 TraceStore 最多保留 5,000 条；统计响应返回 `records_considered`、`retention_limit` 与 `observed_at`，仅代表该留存范围内的授权结果，不代表全量历史。
 - 管理端运行总览最近记录表兼容最多展示 200 条样本；统计由 `GET /api/observability/traces/stats` 在服务端按当前身份和租户范围聚合。样本行数不能作为全量统计口径。
-- CSV 导出只覆盖当前服务端分页返回的安全字段，不包含 Trace 输入/响应正文或 Session 标识。
+- 列表页 CSV 导出已随 2026-10-30 管理端工作台重构移除；服务端全量导出为后续规划，落地前不得宣称存在导出能力。
 
 ### 子 Trace（children_ids）
 

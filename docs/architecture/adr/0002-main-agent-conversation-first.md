@@ -2,7 +2,7 @@
 
 | 项目 | 决策 |
 | --- | --- |
-| 状态 | **Accepted（目标架构已确认，代码未实施/未验收）** |
+| 状态 | **Accepted（目标架构已确认；入口身份契约部分已实施——产品身份字段与产品专属路由已落地（358d957，2026-10-14）、Router 按 product_id 分诊（含 agent 域 knowledge 兜底）；Conversation-first 完整目标与三批次验收仍未完成）** |
 | 日期 | 2026-10-12 |
 | 适用范围 | `/agent` 企业主助手及其与独立 Travel/Customer Service 产品的边界 |
 | 不适用范围 | 旅游、客服内部对话与业务状态机的重做 |
@@ -26,14 +26,14 @@
 7. **真实结果优先于自然语言**：复用已有 Runtime/Tool/Error 契约与 Reporter。区分正常回答、无证据、空结果、拒绝、待确认、部分成功、超时、服务故障、取消；业务事实必须受证据/授权约束，写操作遵守确认、幂等、状态回查。SSE `delta`、`done.answer`、`answer_source`、History、Memory、Trace 的最终语义不得分叉。
 8. **成本与可靠性约束**：普通问题不默认触发 Embedding、SQL、Tool、Planner/Supervisor 或额外的回答评审 LLM；只有必要时使用受治理的模型仲裁。沿用 PromptService 版本、统一 LLMProxy 预算计费、执行治理、观测和失败降级机制。
 
-## 服务端入口身份契约（目标，待实施）
+## 服务端入口身份契约（核心已实施：产品身份字段与产品专属路由；主机声明/网关验签路径仍未实施）
 
-- **唯一事实源**：产品身份由服务端从已注册的入口配置派生：使用服务端绑定的产品专属路由；确需按主机区分时，只接受可信反向代理校验并重写、且命中服务端 allowlist 的主机名。多个产品共用路由时，使用认证网关验签后的产品声明，并由服务端 allowlist 映射为产品 ID；网关须先清除同名客户端头，再写入已验证值。当前主助手与客服 UI 共用 `POST /chat/stream`，所以仅靠 URL 或请求体 `domain_hint` 不能区分产品；在可信声明接通前，不能把客户端 hint 升格为产品身份。
+- **唯一事实源**：产品身份由服务端从已注册的入口配置派生：使用服务端绑定的产品专属路由；确需按主机区分时，只接受可信反向代理校验并重写、且命中服务端 allowlist 的主机名。多个产品共用路由时，使用认证网关验签后的产品声明，并由服务端 allowlist 映射为产品 ID；网关须先清除同名客户端头，再写入已验证值。主助手与客服已使用产品专属路由（`/chat/agent/*`、`/chat/customer-service/*`），请求体 `domain_hint` 不参与产品身份判定；按主机区分产品与网关验签声明路径仍未实施。
 - **失败关闭**：产品专属入口没有可信且唯一的产品身份时，拒绝该产品专属请求；通用 `/agent` 只能进入其服务端配置的通用能力范围。`product_id`、`domain_hint`、`session_id`、`tool_name`、`capability` 和 Planner 输出中的同名字段，无论来自 body 还是未验证 header，都不能声明产品身份或授权。`domain_hint` 只保留为兼容路由/体验提示。
 - **Runtime 传播**：入口解析一次，将已验证的 `product_id`、身份来源和主体上下文写入不可由模型覆盖的 Runtime `RequestContext`，显式传播至 Graph/Planner 状态、异步任务和 checkpoint-safe 上下文；缺少身份时不得在下游补默认的宽权限产品。Trace 记录解析后的产品 ID 与来源类别，供审计核对，不记录凭据。
 - **会话逻辑隔离与存量兼容**：授权作用域仍由 `(product_id, tenant_id, user_id, client_conversation_id)` 决定，但物理存储键要服从现有事实源。主助手历史与画像沿用原始可信 user/session key，并只允许 `/memory/agent/*` 访问；客服会话继续使用独立的 `customer_service.conversations/messages` 表与原 conversation ID。产品路由、租户/用户归属校验和分离的事实源共同阻止跨产品读取；不得为了命名空间前缀让已归属的存量历史变成不可见，也不得复制一套客服历史存储。
 - **强制校验点**：产品范围先参与能力候选发现，再由 Router/Planner 只在裁剪后的能力集合中选路；Tool 执行器及 MCP 入口必须在实际调用前再次按同一服务端上下文校验，不能依赖 UI 隐藏、Prompt 或 Router 结果。RAG、SQL、Workflow 和其他数据访问还须独立执行现有租户、资源、部门及操作权限校验；产品身份不能替代这些授权。
-- **当前实现边界**：当前 [identity.py](../../../backend/app/api/identity.py) 解析用户/租户身份，[request_context.py](../../../backend/core/request_context.py) 的 `RequestContext` 尚无可信产品身份字段；[chat.py](../../../backend/app/api/routes/chat.py) 将请求体 `domain_hint` 传入 Runtime。以上内容是未来入口隔离的实施契约，不表示源码已经具备产品身份派生或隔离能力。
+- **当前实现边界（2026-10-30 更新）**：[identity.py](../../../backend/app/api/identity.py) 解析用户/租户身份，并提供 `require_product_identity` 产品身份校验；[request_context.py](../../../backend/core/request_context.py) 的 `RequestContext` 已含可信 `product_id` 字段（默认 `internal`）与 `set_product_context()`；[chat.py](../../../backend/app/api/routes/chat.py) 产品身份来自服务端静态注册路由，请求体的 `user_id`/`domain_hint`/`product_id` 均不参与身份判定。产品专属路由（如 `/chat/agent`、`/chat/agent/stream`）已存在；[domain_router.py](../../../backend/orchestration/router/domain_router.py) 已按 `product_id` 做产品范围分诊（含 agent 域 unknown 时的 knowledge 兜底）。以上落地了"服务端入口身份契约"的核心派生链，但 Conversation-first 完整目标（Batch 1–3 验收）仍未完成，验收门槛全部 NOT VERIFIED。
 
 ## 边界和取舍
 

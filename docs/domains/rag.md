@@ -9,8 +9,8 @@
 ## 约束与错误边界
 
 MultiQuery 改写使用 `multi_query` 角色、temperature=0、3 条查询和至少 1024
-输出 tokens；默认子预算 6000ms，取角色策略与共享 8000ms 检索 deadline
-剩余量的最小值。生产与评测使用同一口径，评测直接调用 retriever 时也绑定
+输出 tokens；默认子预算 6000ms，取角色策略与共享检索 deadline（`RAG_RETRIEVAL_DEADLINE_MS`，
+当前默认 20000ms）剩余量的最小值。生产与评测使用同一口径，评测直接调用 retriever 时也绑定
 该 deadline。达到输出上限回退原问题，查询不足标记 `rewrite_truncated`，
 不计为完整改写成功。Trace 记录终止原因、用量、有效上限、耗时、查询数与
 Prompt 模板 Hash/版本/来源；多查询重排诊断只复制候选 ID、文件名和分数，

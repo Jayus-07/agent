@@ -33,7 +33,7 @@ StepTimeline/FlameGraph/GraphTopology 等区块组件；运行总览/网关安�
 详情页旧区块：LangGraph 拓扑、火焰图、StepTimeline 列表、HTTP 独立区块、
 MultiQuery/忠实度/META 独立卡（忠实度等数据在 Span 展开指标中可见）。
 
-### 下一 PR（未做）
+### 下一 PR（已由 PR-2 完成并合并 #135，详见 PROGRESS.md）
 
 - RuntimeOverview 重写（10 状态卡、时间窗联动、最近运行表、契约缺口披露块、业务域分布——需后端 domain 聚合或前端样本口径标注）
 - GatewayPanel 重写（汇总/趋势/原因分布/would_deny 接 Prometheus + 访问审计明细表接 ai.gateway_access_logs）
