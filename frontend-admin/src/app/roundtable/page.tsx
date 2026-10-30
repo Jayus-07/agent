@@ -28,12 +28,13 @@ import { atLeast } from '@/lib/auth'
 
 type Phase = 'idle' | 'running' | 'done' | 'stopped' | 'error'
 
-/** 域 → 头像配色（与 /agents 页关系指南同款浅底深字风格） */
+/** 域 → 头像配色（与 /agents 页关系指南同款浅底深字风格）
+ *  键仅为渲染辅助（头像底色），不做域归属判断——归属以 GET /agents 为准 */
 const AVATAR_CLASS: Record<string, string> = {
   travel: 'bg-blue-50 text-blue-700',
   customer_service: 'bg-emerald-50 text-emerald-700',
-  travel_commerce: 'bg-amber-50 text-amber-700',
-  travel_booking: 'bg-rose-50 text-rose-700',
+  travel_commerce: 'bg-amber-50 text-amber-700', // subflow-literal-exempt: 纯 UI 配色映射，非归属声明
+  travel_booking: 'bg-rose-50 text-rose-700', // subflow-literal-exempt: 纯 UI 配色映射，非归属声明
   selection_funnel: 'bg-violet-50 text-violet-700',
 }
 

@@ -289,7 +289,16 @@ def test_api_end_to_end_task_reaches_success(monkeypatch, tmp_path):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
+    from backend.app.api.deps import OperatorIdentity
     from backend.selection_decision.store import SelectionDecisionStore
+
+    # selection_decision 路由现挂 require_editor_user；本用例测 workflow
+    # 全链，身份按外部边界 mock（与 test_api_routes 同口径）。
+    async def _fake_operator(_request):
+        return OperatorIdentity(role="admin", actor="user:1")
+
+    monkeypatch.setattr(
+        "backend.app.api.deps.resolve_operator_role", _fake_operator)
 
     # workflow 侧桩（同 smoke 测试的 patched 模式）
     fake_llm_payload = {

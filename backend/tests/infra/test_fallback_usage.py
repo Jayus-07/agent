@@ -100,7 +100,7 @@ def test_resilience_records_each_failed_attempt(capture_store, monkeypatch):
     monkeypatch.setattr(proxy_mod, "LLM_MAX_RETRIES", 1)
     monkeypatch.setattr(proxy_mod, "_is_transient", lambda e: True)
     monkeypatch.setattr(proxy_mod, "_handle_terminal_failure",
-                        lambda e, args, kwargs: (_ for _ in ()).throw(e))
+                        lambda e, args, kwargs, **_kw: (_ for _ in ()).throw(e))
     monkeypatch.setattr(proxy_mod, "_notify_degradation", lambda *a, **k: None)
     import backend.infra.circuit_breaker as cb
 
