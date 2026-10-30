@@ -9,7 +9,7 @@
 
 | 期 | 主题 | 状态 | 分支 / PR | 证据 | 更新时间 |
 |---|---|---|---|---|---|
-| P0 | 脚手架与基线（cs2 命名空间/路由壳/pending 快照） | 待验收 | feat/cs-v2-p0（自 main@33335d5，未提交，等用户确认） | 详见下方日志 2026-10-31（五） | 2026-10-31 |
+| P0 | 脚手架与基线（cs2 命名空间/路由壳/pending 快照） | 已完成 | feat/cs-v2-p0 → PR #147（merge 4b80207） | 详见下方日志 2026-10-31（五） | 2026-10-31 |
 | P1 | 会话基础链路（双端对话/WS/时间线） | 计划中 | - | - | - |
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 计划中 | - | - | - |
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 计划中 | - | - | - |
@@ -66,4 +66,4 @@
 - **重建与健康**：共享主栈以本 worktree 代码重建（COMPOSE_PROJECT_NAME=agent，app+11 后端服务+frontend 重建；frontend-admin 未受影响未动）；全部 healthy；HTTP 冒烟：/health、:8081/health、:3100/login、:3200/login 均 200；新端点未认证 401（挂载+闸生效）；新路由 /customer-service-v2、/mall、/my-orders 200；旧路由 /customer-service、/ 200 零回归。frontend-cs `npm run build` 成功，7 条 /cs2/* 路由与旧 /cs/* 并行产出。
 - **基线核对回写**：迁移实况最新 099（双 082），新迁移自 100+ 顺延，TASK.md 第 4/5/6 节已更正。
 - **环境备注**：worktree .env 已从主仓库拷贝（compose 需要）；frontend-cs 不在共享栈容器口径内（devctl rebuild 只重建 frontend-admin/frontend），其验证以 vitest/tsc/生产构建为准。
-- **待办**：用户确认后提交（基线 docs/tasks + prototypes 先行提交 + P0 代码提交）→ PR 合并 main → 回填本表为已完成。
+- **交付记录**：用户确认后按路径限定分两笔提交（545f042 任务基线文档、69356cf P0 代码），PR #147 CI 全绿（scan / RAG Smoke / RAG 变更检测）后合并 main（merge commit 4b80207）。下一期 P1 自 origin/main@4b80207 起新分支 feat/cs-v2-p1。
