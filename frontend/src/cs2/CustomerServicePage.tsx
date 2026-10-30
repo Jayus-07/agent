@@ -24,6 +24,9 @@ import {
   type MyConversationItem,
 } from './cs2Api'
 import { newConversationDraft, type Cs2ConversationDraft, type Cs2Message } from './types'
+import SiteNav from '@/mall/SiteNav'
+import ConfirmCard from './ConfirmCard'
+import FoldCards from './FoldCards'
 
 const QUICK_ENTRIES = [
   { icon: '📦', title: '查询订单', hint: 'DEMO-1001 的订单状态', text: '帮我查一下 DEMO-1001 的订单状态' },
@@ -60,6 +63,7 @@ export default function CustomerServicePage() {
   const [revealing, setRevealing] = useState(false)
   const [customerCtx, setCustomerCtx] = useState<CustomerContext | null>(null)
   const [handoffState, setHandoffState] = useState<string>('none')
+  const [foldKey, setFoldKey] = useState(0)
 
   const abortRef = useRef<AbortController | null>(null)
   const typerRef = useRef<ReturnType<typeof createTyper> | null>(null)
@@ -83,6 +87,12 @@ export default function CustomerServicePage() {
 
   useEffect(() => {
     let cancelled = false
+    // P2：从商城页「咨询客服/申请退款」跳转预填输入框
+    const prefill = window.sessionStorage.getItem('cs2-prefill')
+    if (prefill) {
+      window.sessionStorage.removeItem('cs2-prefill')
+      setInput(prefill)
+    }
     fetchMyConversations(10)
       .then((items) => {
         if (cancelled) return
@@ -277,7 +287,8 @@ export default function CustomerServicePage() {
   )
 
   return (
-    <div className="flex h-screen w-full flex-col bg-slate-100">
+    <div className="flex h-screen flex-col bg-slate-100">
+      <SiteNav />
       <div className="flex min-h-0 flex-1">
         <div className="flex min-w-0 flex-1 flex-col">
           {/* 会话头 */}
@@ -396,8 +407,29 @@ export default function CustomerServicePage() {
               </div>
             )}
 
+            {/* 确认卡（P2：退款/取消两类，有效期倒计时 + 修改原因 + 幂等确认） */}
+            {draft.id !== 'new' && !busy && (
+              <ConfirmCard
+                conversationId={draft.id}
+                onReceipt={(text) => {
+                  patchDraft((d) => {
+                    d.messages.push({
+                      id: makeId(),
+                      role: 'system',
+                      content: text,
+                      createdAt: Date.now(),
+                    })
+                  })
+                  setFoldKey((k) => k + 1)
+                }}
+              />
+            )}
+
             {/* 满意度卡 */}
             {showCsat && <SatisfactionCard onRate={rate} />}
+
+            {/* 折叠卡：我的退款申请 / 我的工单 */}
+            {draft.id !== 'new' && <FoldCards refreshKey={foldKey} />}
 
             {/* 转人工横幅（P1 最小态：requested/waiting；四态倒计时 P3） */}
             {handoffState !== 'none' && handoffState !== 'closed' && (
@@ -463,6 +495,55 @@ export default function CustomerServicePage() {
                     </div>
                   </div>
                 </div>
+                {/* P2 资金闭环：余额 + 充值 + 最近流水（只读快照） */}
+                {customerCtx.balance && (
+                  <div className="mt-2.5 flex items-center justify-between gap-2 rounded-xl bg-indigo-50 px-2.5 py-2">
+                    <div>
+                      <span className="text-[11px] text-slate-500">账户余额</span>
+                      <br />
+                      <b className="text-[15px] text-indigo-600">
+                        ¥{Number(customerCtx.balance.balance).toFixed(2)}
+                      </b>
+                    </div>
+                    <button
+                      type="button"
+                      className="rounded-lg bg-indigo-600 px-2 py-1 text-[11px] text-white hover:opacity-90"
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            const { topUp } = await import('@/mall/api')
+                            const wallet = await topUp(1000)
+                            setCustomerCtx({
+                              ...customerCtx,
+                              balance: {
+                                balance: wallet.balance,
+                                currency: wallet.currency,
+                                ledger: wallet.ledger,
+                              },
+                            })
+                          } catch {
+                            /* 充值失败不打断会话 */
+                          }
+                        })()
+                      }}
+                    >
+                      充值 ¥1,000
+                    </button>
+                  </div>
+                )}
+                {customerCtx.balance && customerCtx.balance.ledger.length > 0 && (
+                  <div className="mt-1.5 text-[11px] text-slate-500">
+                    资金流水（最近 {customerCtx.balance.ledger.length} 笔）
+                    {customerCtx.balance.ledger.map((l, i) => (
+                      <div key={i} className="flex items-center justify-between gap-2 border-b border-dashed border-slate-100 py-0.5 last:border-b-0">
+                        <span className="min-w-0 truncate text-slate-600">{l.memo || l.kind}</span>
+                        <b className={l.direction === 'in' ? 'text-emerald-600' : 'text-slate-700'}>
+                          {l.direction === 'in' ? '+' : '−'}¥{Number(l.amount).toFixed(2)}
+                        </b>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="mt-2.5">
                   <div className="mb-1 text-[11.5px] text-slate-500">最近订单</div>
                   {customerCtx.orders.map((o) => (

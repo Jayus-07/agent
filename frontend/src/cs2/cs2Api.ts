@@ -40,6 +40,21 @@ export interface HandoffMessagesResponse {
   } | null
 }
 
+export interface WalletLedgerEntryDTO {
+  direction: 'in' | 'out' | string
+  amount: number
+  balance_after?: number | null
+  kind: string
+  memo?: string
+  created_at?: string | null
+}
+
+export interface WalletDTO {
+  balance: number
+  currency: string
+  ledger: WalletLedgerEntryDTO[]
+}
+
 export interface CustomerContext {
   customer: {
     display_name: string
@@ -56,6 +71,7 @@ export interface CustomerContext {
     created_at?: string | null
     product_summary: string
   }>
+  balance?: WalletDTO | null
   demo_mode: boolean
   mock_data: boolean
   profile_unavailable: boolean
@@ -109,4 +125,98 @@ export const ORDER_STATUS_ZH: Record<string, string> = {
   completed: '已完成',
   cancelled: '已取消',
   refunded: '已退款',
+}
+
+// ── P2：确认卡 / 折叠卡 ─────────────────────────────────────
+
+export interface PendingSnapshot {
+  proposal_id: string
+  version: number
+  action_type: string
+  masked_target: string
+  summary: string
+  reason: string
+  expires_at: string | null
+  state: 'pending' | 'paused_handoff' | 'expired' | string
+}
+
+export async function fetchPendingSnapshot(
+  conversationId: string,
+): Promise<PendingSnapshot | null> {
+  const data = await request<{ pending_action: PendingSnapshot | null }>(
+    `/api/cs/conversations/my/${conversationId}/pending`,
+  )
+  return data.pending_action ?? null
+}
+
+export interface ConfirmOutcome {
+  status: 'success' | 'failed' | 'cancelled' | 'expired' | 'duplicate' | string
+  answer: string
+}
+
+export async function confirmAction(
+  conversationId: string,
+  decision: 'confirm' | 'cancel',
+  proposalId: string,
+  expectedVersion: number,
+): Promise<ConfirmOutcome> {
+  return request('/api/cs/confirm', {
+    method: 'POST',
+    body: JSON.stringify({
+      session_id: conversationId,
+      decision,
+      proposal_id: proposalId,
+      expected_version: expectedVersion,
+      client_action_id: crypto.randomUUID(),
+    }),
+  })
+}
+
+export async function updateRefundReason(
+  conversationId: string,
+  proposalId: string,
+  expectedVersion: number,
+  reason: string,
+): Promise<void> {
+  await request(`/api/cs/conversations/my/${conversationId}/refund-draft`, {
+    method: 'PATCH',
+    body: JSON.stringify({ proposal_id: proposalId, expected_version: expectedVersion, reason }),
+  })
+}
+
+export interface RefundRequestRow {
+  request_id: string
+  request_no: string
+  order_no: string
+  amount: number
+  status: string
+  status_display: string
+  created_at: string
+}
+
+export async function listRefundRequests(limit = 10): Promise<RefundRequestRow[]> {
+  const data = await request<{ requests: RefundRequestRow[] }>(
+    `/api/cs/refund-requests?limit=${limit}`,
+  )
+  return data.requests ?? []
+}
+
+export interface TicketRow {
+  ticket_no?: string
+  ticket_id?: string
+  subject?: string
+  title?: string
+  status?: string
+  status_display?: string
+}
+
+export async function listMyTickets(limit = 10): Promise<TicketRow[]> {
+  try {
+    const data = await request<{ tickets?: TicketRow[]; items?: TicketRow[] }>(
+      `/api/cs/tickets?limit=${limit}`,
+    )
+    return data.tickets ?? data.items ?? []
+  } catch {
+    return []
+  }
 }

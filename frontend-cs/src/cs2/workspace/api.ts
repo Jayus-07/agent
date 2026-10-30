@@ -129,3 +129,45 @@ export async function sendAgentMessage(
 export async function issueWsTicket(): Promise<{ ticket: string; ws_path: string; ttl: number }> {
   return request('/api/cs/conversations/agent/ws-ticket', { method: 'POST' })
 }
+
+// ── P2：待确认提案快照 + 客户360 ────────────────────────────
+
+export interface PendingProposal {
+  proposal_id: string
+  version: number
+  action_type: string
+  target_type: string
+  target_id: string
+  summary: string
+  reason: string
+  expires_at: string | null
+  state: 'pending' | 'paused_handoff' | 'expired' | string
+}
+
+export async function getPendingProposal(
+  conversationId: string,
+): Promise<PendingProposal | null> {
+  const data = await request<{ pending_action: PendingProposal | null }>(
+    `/api/cs/conversations/${conversationId}/pending-proposal`,
+  )
+  return data.pending_action ?? null
+}
+
+export interface ConversationCustomerContext {
+  customer: { display_name: string; level?: string | null; register_time?: string | null }
+  orders: Array<{
+    order_no: string
+    total_amount: number | null
+    status: string
+    payment_status: string | null
+    created_at: string | null
+    product_summary: string
+  }>
+  balance: { balance: number; currency: string } | null
+}
+
+export async function getConversationCustomerContext(
+  conversationId: string,
+): Promise<ConversationCustomerContext> {
+  return request(`/api/cs/conversations/${conversationId}/customer-context`)
+}

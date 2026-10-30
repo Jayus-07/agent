@@ -9,14 +9,18 @@ import Link from 'next/link'
 import {
   claimConversation,
   closeConversation,
+  getConversationCustomerContext,
   getConversationDetail,
   getConversationEvents,
   getHandoffMessages,
   getHandoffQueue,
+  getPendingProposal,
   sendAgentMessage,
+  type ConversationCustomerContext,
   type ConversationDetail,
   type HandoffQueueItem,
   type MessageDTO,
+  type PendingProposal,
 } from './api'
 import { useAgentSocket } from './useAgentSocket'
 
@@ -58,6 +62,8 @@ export default function WorkbenchPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detail, setDetail] = useState<ConversationDetail | null>(null)
   const [messages, setMessages] = useState<MessageDTO[]>([])
+  const [pendingProposal, setPendingProposal] = useState<PendingProposal | null>(null)
+  const [customerCtx, setCustomerCtx] = useState<ConversationCustomerContext | null>(null)
   const [handoffState, setHandoffState] = useState<string>('none')
   const [input, setInput] = useState('')
   const [contextTab, setContextTab] = useState<'customer' | 'info' | 'ai'>('info')
@@ -104,6 +110,17 @@ export default function WorkbenchPage() {
         appendMessages(res.messages ?? [])
       })
       .catch(() => {})
+    // P2：待确认提案快照 + 客户360（均为只读，失败静默）
+    getPendingProposal(conversationId)
+      .then((snap) => {
+        if (selectedRef.current === conversationId) setPendingProposal(snap)
+      })
+      .catch(() => {})
+    getConversationCustomerContext(conversationId)
+      .then((ctx) => {
+        if (selectedRef.current === conversationId) setCustomerCtx(ctx)
+      })
+      .catch(() => {})
   }, [appendMessages])
 
   // 挂载即拉队列；之后由轮询与 WS 事件驱动刷新
@@ -121,6 +138,11 @@ export default function WorkbenchPage() {
           .then((res) => {
             appendMessages(res.messages ?? [])
             setHandoffState(res.handoff_state ?? 'none')
+          })
+          .catch(() => {})
+        getPendingProposal(cid)
+          .then((snap) => {
+            if (selectedRef.current === cid) setPendingProposal(snap)
           })
           .catch(() => {})
       }
@@ -373,6 +395,8 @@ export default function WorkbenchPage() {
               {messages.map((m) => (
                 <AgentBubble key={m.message_id} message={m} />
               ))}
+              {/* P2：用户待确认提案卡（等待确认 → 执行中/成功由后续事件联动） */}
+              {pendingProposal && <ProposalCard proposal={pendingProposal} />}
               {showUserTyping && (
                 <div className="self-start px-1 text-xs text-slate-400">
                   对方正在输入
@@ -455,11 +479,16 @@ export default function WorkbenchPage() {
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-3">
           {contextTab === 'info' ? (
-            <ContextInfo detail={detail} handoffState={handoffState} intent={lastIntent} />
+            <ContextInfo
+              detail={detail}
+              handoffState={handoffState}
+              intent={lastIntent}
+              pendingProposal={pendingProposal}
+            />
+          ) : contextTab === 'customer' ? (
+            <Customer360 ctx={customerCtx} />
           ) : (
-            <p className="p-2 text-xs text-slate-400">
-              {contextTab === 'customer' ? '客户360 随 P2 落地（会员/余额/近期订单/标签）。' : 'AI 助手面板随 P4 落地（意图/情绪/推荐/知识/SOP）。'}
-            </p>
+            <p className="p-2 text-xs text-slate-400">AI 助手面板随 P4 落地（意图/情绪/推荐/知识/SOP）。</p>
           )}
         </div>
       </div>
@@ -471,10 +500,12 @@ function ContextInfo({
   detail,
   handoffState,
   intent,
+  pendingProposal,
 }: {
   detail: ConversationDetail | null
   handoffState: string
   intent: string | null
+  pendingProposal: PendingProposal | null
 }) {
   if (!detail) {
     return <p className="p-2 text-xs text-slate-400">选择会话后展示会话信息。</p>
@@ -490,8 +521,11 @@ function ContextInfo({
       </section>
       <section>
         <h4 className="mb-2 text-xs text-slate-500">会话上下文</h4>
-        <Kv k="订单上下文" v="—（P2 接订单检索）" />
-        <Kv k="用户待确认提案" v="—（P2 接 pending 快照）" />
+        <Kv k="订单上下文" v={pendingProposal ? `${pendingProposal.target_type}:${pendingProposal.target_id}` : '—'} />
+        <Kv
+          k="用户待确认提案"
+          v={pendingProposal ? `${pendingProposal.summary.slice(0, 22)}（v${pendingProposal.version}）` : '—'}
+        />
       </section>
       <section>
         <h4 className="mb-2 text-xs text-slate-500">AI 阶段摘要（接管上下文）</h4>
@@ -512,6 +546,90 @@ function ContextInfo({
         ) : (
           <Kv k="最近 Trace" v="—" />
         )}
+      </section>
+    </div>
+  )
+}
+
+const PROPOSAL_STATE_BADGE: Record<string, string> = {
+  pending: 'bg-amber-50 text-amber-600',
+  paused_handoff: 'bg-blue-50 text-blue-600',
+  expired: 'bg-red-50 text-red-500',
+}
+const PROPOSAL_STATE_ZH: Record<string, string> = {
+  pending: '等待用户确认',
+  paused_handoff: '人工接管中（暂停）',
+  expired: '已过期',
+}
+
+function ProposalCard({ proposal }: { proposal: PendingProposal }) {
+  const badge = PROPOSAL_STATE_BADGE[proposal.state] ?? 'bg-slate-100 text-slate-500'
+  const stateZh = PROPOSAL_STATE_ZH[proposal.state] ?? proposal.state
+  return (
+    <div className="mx-auto w-full max-w-sm rounded-xl border border-slate-200 bg-white p-3 text-xs">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <b className="text-slate-900">用户待确认提案</b>
+        <span className={`rounded-full px-2 py-0.5 text-[10.5px] ${badge}`}>{stateZh}</span>
+        <span className="ml-auto text-[10.5px] text-slate-400">v{proposal.version}</span>
+      </div>
+      <Kv k="内容" v={proposal.summary} />
+      <Kv k="对象" v={`${proposal.target_type} · ${proposal.target_id}`} />
+      {proposal.reason && <Kv k="原因" v={proposal.reason} />}
+      {proposal.expires_at && (
+        <Kv k="有效期至" v={proposal.expires_at.slice(5, 16).replace('T', ' ')} />
+      )}
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-slate-400">
+        执行以用户确认为准（幂等）；接手会话后可结合提案内容回应用户。
+      </p>
+    </div>
+  )
+}
+
+function Customer360({ ctx }: { ctx: ConversationCustomerContext | null }) {
+  if (!ctx) {
+    return <p className="p-2 text-xs text-slate-400">选择会话后展示客户 360 视图。</p>
+  }
+  return (
+    <div className="flex flex-col gap-4">
+      <section>
+        <h4 className="mb-2 text-xs text-slate-500">会员信息</h4>
+        <div className="mb-1.5 flex items-center gap-2">
+          <span className="grid h-8 w-8 place-items-center rounded-full bg-indigo-50 text-sm text-indigo-600">
+            {ctx.customer.display_name.slice(0, 1)}
+          </span>
+          <div>
+            <b className="text-xs text-slate-900">{ctx.customer.display_name}</b>
+            <div className="text-[11px] text-slate-500">
+              {ctx.customer.level ?? '普通会员'}
+              {ctx.customer.register_time ? ` · 注册 ${ctx.customer.register_time.slice(0, 10)}` : ''}
+            </div>
+          </div>
+        </div>
+        <Kv k="账户余额（只读）" v={ctx.balance ? `¥${ctx.balance.balance.toFixed(2)}` : '—'} />
+      </section>
+      <section>
+        <h4 className="mb-2 text-xs text-slate-500">近期订单</h4>
+        {ctx.orders.length === 0 && <p className="text-[11px] text-slate-400">暂无订单。</p>}
+        {ctx.orders.map((o) => (
+          <div key={o.order_no} className="mb-1.5 flex items-center gap-2 rounded-lg border border-slate-100 px-2.5 py-2 text-xs">
+            <div className="min-w-0 flex-1">
+              <b className="block text-slate-900">{o.order_no}</b>
+              <span className="block truncate text-[11px] text-slate-500">{o.product_summary}</span>
+            </div>
+            <div className="text-right">
+              <div className="text-slate-700">
+                {o.total_amount != null ? `¥${o.total_amount.toFixed(2)}` : ''}
+              </div>
+              <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10.5px] text-slate-500">
+                {o.status}
+              </span>
+            </div>
+          </div>
+        ))}
+      </section>
+      <section>
+        <h4 className="mb-2 text-xs text-slate-500">标签</h4>
+        <p className="text-[11px] text-slate-400">标签体系随 P7 知识/画像落地。</p>
       </section>
     </div>
   )
