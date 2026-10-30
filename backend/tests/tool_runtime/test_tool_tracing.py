@@ -126,7 +126,10 @@ async def test_admin_errors_reads_failure_from_span_metrics(monkeypatch):
             error_message="地图服务不可用",
         ),
     )
-    monkeypatch.setattr(admin_tools, "require_admin_user", lambda _request: _noop())
+    # rbac 分离后守卫名 require_admin_user → require_editor_user（实现内
+    # 模块级引用）；patch 旧名等于没拦，真实守卫会拿 request=None 直接
+    # AttributeError（'NoneType' object has no attribute 'headers'）
+    monkeypatch.setattr(admin_tools, "require_editor_user", lambda _request: _noop())
     monkeypatch.setattr(tracer.trace_collector, "list", lambda *_args, **_kwargs: [trace])
 
     result = await admin_tools.tool_errors(

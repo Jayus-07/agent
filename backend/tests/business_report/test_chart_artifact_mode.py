@@ -58,6 +58,12 @@ def test_report_files_endpoint_serves_and_blocks(tmp_path, monkeypatch):
 
     from backend.app.server import app
 
+    # API-Key 中间件 fail-closed（CI 无 .env：API_KEY 空 → 归一化后落出
+    # skip 白名单的路径一律 503，本地 .env 有配置才是 401）。测试锁定的是
+    # 「穿越请求不得落进文件服务」，进程内注入测试 key 使拒绝路径稳定为
+    # 401，消除本地/CI 配置差异；/report-files/* 在 skip 白名单内不受影响。
+    monkeypatch.setattr("backend.app.api.middleware.auth.API_KEY", "test-key")
+
     client = TestClient(app)
     # app 内路径无 /api 前缀（APISIX rewrite /api/* → /*）
     resp = client.get("/report-files/chart_abcd1234.png")

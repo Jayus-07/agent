@@ -89,8 +89,17 @@ class TestErrorMapper:
         assert status is ToolStatus.TIMEOUT and retryable is False
 
     def test_permission_error_no_retry(self):
-        status, retryable = self._map(PermissionError("权限不足，拒绝访问"))
+        # 账号无权按消息文本判定（7e64152 起类型判定优先给文件系统
+        # PermissionError，文本路径才表达鉴权语义）；不可重试
+        status, retryable = self._map(RuntimeError("权限不足，拒绝访问"))
         assert status is ToolStatus.UNAUTHORIZED and retryable is False
+
+    def test_fs_permission_error_is_infra_not_unauthorized(self):
+        """文件系统 Errno 13 是基础设施故障（7e64152）：类型判定优先，
+        不得因消息含 permission/权限 被误标成账号无权误导排障。"""
+        status, retryable = self._map(PermissionError(
+            "[Errno 13] Permission denied: '/data/readonly/snapshot.png'"))
+        assert status is ToolStatus.UNAVAILABLE and retryable is False
 
     def test_original_message_kept(self):
         c = map_exception(ValueError("原始堆栈细节 should stay"))
