@@ -53,6 +53,9 @@ jobs:
       PGUSER: postgres
       PGPASSWORD: postgres
       MEMORY_PGDATABASE: agent_memory_test
+      # workflow runs 表（WORKFLOW_DB_PG_CONFIG 默认 agent_memory）——
+      # CI 只建 *_test 库，不显式指向会 13 例 connection 失败（run 41114061156 实证）
+      WORKFLOW_DB_PGDATABASE: agent_memory_test
       BUSINESS_PGDATABASE: agent_business_test
       VECTOR_PGDATABASE: agent_memory_test
       RAG_STORES_PGDATABASE: agent_memory_test
