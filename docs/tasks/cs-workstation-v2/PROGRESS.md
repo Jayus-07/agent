@@ -14,7 +14,7 @@
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 已完成 | feat/cs-v2-p2 → PR #155（merge 99c62ea）+ 修复 #156（2945f5b） | 详见下方日志 2026-10-31（七） | 2026-10-31 |
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 已完成 | feat/cs-v2-p3 → PR #164（merge f600be6，三笔 36f40b9/ba87f00/0fc3626） | 详见下方日志 2026-10-31（九）（十） | 2026-10-31 |
 | P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
-| P5 | 退款审核闭环 | 计划中 | - | - | - |
+| P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
 | P6 | 质检中心 | 计划中 | - | - | - |
 | P7 | 看板+知识助手 | 计划中 | - | - | - |
 | P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
@@ -174,3 +174,17 @@
 - **实测排障三条**：①本机 .env 缺 CS_REFUND_REQUEST_MODE=http（默认 disabled，审核通道 503）——已补（gitignore 本机配置，部署清单需含此项，Phase 8 连带核对）；②audit_logs.actor_type CHECK（ai/human/system）——'agent' 非法，人工动作用 'human'；③产品身份规则拒绝 default 租户查退款（防共享租户），实测用 tenant-demo。
 - **环境恢复**：p5t- 临时坐席删除；cs_wire_e2e 恢复 enabled=f；实测审计行按规保留（真实操作留痕）。
 - **遗留**：用户端「站内通知」以折叠卡状态联动+轮询交付（用户侧通知中心基建未建，Phase 8 复核 TASK 矩阵口径）。
+
+### 2026-10-31（十四）—— P5 交付收官：PR #169 一轮 CI 全绿合并 + 矩阵行核验
+
+- **交付记录**：持续任务模式按授权直接提交——8a47350（后端：Mock review 端点/service 封装/sandbox 审核/cs_refund_review 路由/审计/用户端分流/cs_role + TASK/PROGRESS 回写）、61b67c1（前端：RefundsPage/nav 角色过滤/用户端折叠卡联动）→ **PR #169 CI 一轮 8 checks 显式逐项确认**（7 pass + RAG Smoke Evaluation skipping 预期；迁移守卫无新迁移未触发）→ merge 6232023。GitHub 网络间歇持续（fetch/push 探测窗口重试完成）。
+- **P5 矩阵行核验（代码+测试+全链实测级；浏览器级留 Phase 8 终验）**：
+  - 退款审核队列+搜索/状态筛选 ✅（Mock review-queue 租户级 + RefundsPage 状态 chips，page.test 3 例）
+  - 详情（原因/政策版本/会话上下文）✅（RefundsPage 详情卡：金额/订单/原因/政策版本/用户/时间）
+  - **意见必填** ✅（前后端双闸：Pydantic validator + Mock 422 + 前端按钮 disabled，page.test + T2）
+  - 通过/驳回 ✅（http 全链实测：approved 回款 4642→5000 kind=refund 流水；rejected 不回款）
+  - **终态不可回退** ✅（Mock 终态锁 409 + RefundReviewConflictError + 前端终态卡片）
+  - 审计 ✅（audit_logs refund_review|human|cs_wire_e2e|success 真库行）
+  - 用户端折叠卡状态联动 ✅（分流后实时可见 approved + 30s 轮询；「编号不代表已退款」提示保留）
+  - 站内通知 ⚠️ 以折叠卡联动+轮询交付（用户侧通知中心基建未建，Phase 8 复核）
+- **下一期**：P6 质检中心，自 origin/main@6232023 起新分支 feat/cs-v2-p6。
