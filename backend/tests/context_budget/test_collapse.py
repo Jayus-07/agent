@@ -136,7 +136,12 @@ class TestL4InPreflight:
         # 滞回深度（keep 4→1 逐档下探）由 po/rag 相对占比决定——
         # 2026-09-23 STOP D 标定系数修正后大 po/rag 夹具会合法折多次，
         # 滞回逐档行为另有 test_l4_hysteresis_tightens_keep_turns 专项覆盖。
-        assert len(prepared.folds) >= 1
+        # 断言消息携带 used/budget：CI-only 失败时可直接分辨
+        # 「预算口径漂移（比值未达 0.80）」与「折叠执行异常」。
+        assert len(prepared.folds) >= 1, (
+            f"L4 未触发：used={prepared.usage.used_tokens} "
+            f"budget={prepared.usage.input_budget} "
+            f"overflow={prepared.usage.overflow}")
         fold = prepared.folds[0]
         assert fold["reversible"] is True
         # 15 vs 16：轮边界按 user 消息切分，夹具字数变化会使首折少含 1 条
