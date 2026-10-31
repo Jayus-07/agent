@@ -15,7 +15,7 @@
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 已完成 | feat/cs-v2-p3 → PR #164（merge f600be6，三笔 36f40b9/ba87f00/0fc3626） | 详见下方日志 2026-10-31（九）（十） | 2026-10-31 |
 | P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
 | P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
-| P6 | 质检中心 | 待验收（代码完成+全链实测通过，PR 待建，见日志（十六）） | feat/cs-v2-p6（@de16926 起，未提交） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
+| P6 | 质检中心 | 已完成 | feat/cs-v2-p6 → PR #173（merge 15706c3，两笔 1547068/8c1c6fa） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
 | P7 | 看板+知识助手 | 计划中 | - | - | - |
 | P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
 
@@ -218,3 +218,14 @@
 - **实测排障三条（回写供后续）**：①直连 :8000 需 X-API-Key（全局门禁）+ X-Auth-Type: jwt 过 require_agent 通道校验（api-key 通道被拒，与设计一致）；②Git Bash curl -d 中文会以 GBK 编码发出致 422/400 假象——实测换 Python urllib UTF-8（T2 TestClient 无此问题）；③测试 fixture 清理的 LIKE 模式曾用 `p6t-%` 前缀匹配不到 `tenant-p6t` 租户行（UniqueViolation 实证），已改包含匹配 `%p6t%`。
 - **环境恢复**：p6t-/p6v- 实测与测试数据全清（leftover=0）；qa_daily_reports 实测行删除；audit_logs 实测行按规保留（真实操作留痕）。
 - **待办（交付工序）**：提交（后端/前端两笔，双重路径限定）→ PR → CI 显式逐项确认全绿 → 合并 → docs 回填 PR（对齐 P5 #169/#170 模式）→ 本表 P6=已完成 + TASK 矩阵 P6 行核验回写。
+
+### 2026-10-31（十七）—— P6 交付收官：PR #173 一轮 CI 全绿合并 + 矩阵行核验
+
+- **交付记录**：持续任务模式按授权直接提交——1547068（后端：迁移 128/模型/qa_sampling/Celery+beat+队列登记/cs_qa 路由/日报 qa_sampling 段/T2 + TASK/PROGRESS 回写）、8c1c6fa（前端：/cs2/qa 页面 + page.test + api.ts）→ **PR #173 CI 一轮 8 checks 显式逐项确认**（7 pass + RAG Smoke Evaluation skipping 非 RAG PR 预期；迁移守卫因创建即登记未触发）→ merge **15706c3**。GitHub 直连间歇持续（fetch 多轮 25s 重试窗口成功）。
+- **P6 矩阵行核验（代码+测试+全链实测级；浏览器级留 Phase 8 终验）**：
+  - 抽检任务（选中加载/AI 预填建议/拖分实时合计/提交改状态）✅（page.test 3 例 + REST 实测：评分 88 分 source ai→human、status pending→scored、scored_by 落库）
+  - 申诉（维持/改判）✅（REST 全链：agent 申诉中文无损→supervisor 改判 92/pass 展示口径切终审；维持路径 T2 覆盖；终态锁定 409）
+  - 质检日报表（含人工抽检数据）✅（/cs/qa/report 实测 + beat 口径 generate_daily_report qa_sampling 段实测：sampled=1/scored=1/pass_rate=1.0/appeals=1/top_deduction）
+  - AI 预填 source=ai、人工终审 ✅（抽样实测 source=ai + ai_prefill JSONB 扣分正确；提交评分转 source=human；前端预填按钮提示「请人工终审」）
+  - 视角切换 ✅（agent 仅本人任务 scope=self + 申诉/日报 Tab 隐藏 page.test；supervisor 全部与终审）
+- **下一期**：P7 看板+知识助手，自 origin/main@15706c3 起新分支 feat/cs-v2-p7（依赖 P3 状态数据；运营聚合+坐席绩效 API；未解决问题聚合+FAQ 草稿进既有审核流；涉知识链路同步 rag_smoke 清单）。
