@@ -25,19 +25,12 @@ _PREFIX = "p3t-"
 
 
 def _pg():
-    env = {}
-    for line in open(".env", encoding="utf-8"):
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    return psycopg2.connect(
-        host=env.get("PGHOST", "localhost"),
-        port=int(env.get("PGPORT", "5433")),
-        dbname=env.get("PGDATABASE", "agent_memory"),
-        user=env.get("PGUSER", "postgres"),
-        password=env.get("PGPASSWORD", ""),
-    )
+    # 统一走 config 层连接配置（与 test_cs_sla_graded / test_p5 同口径）：
+    # 自行 open(".env") 解析在 CI 无 .env 文件时 FileNotFoundError
+    # （v14 run 41249581757 实证全文件 errors）。
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    return psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
 
 
 def _cleanup():
