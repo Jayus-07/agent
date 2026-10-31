@@ -202,6 +202,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # 客服坐席状态/SLA 分级列（cs-workstation-v2 P3，customer_service schema）：
     # 非 RAG 业务迁移——漏登记会让迁移守卫把 PR 免费预检判死（PR #164 实证）
     "backend/sql/migrations/126_cs_agent_status_sla.sql",
+    # 坐席快捷回复话术表（cs-workstation-v2 P4，customer_service schema）
+    "backend/sql/migrations/127_cs_canned_responses.sql",
 })
 
 

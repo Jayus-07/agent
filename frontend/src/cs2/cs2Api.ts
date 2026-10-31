@@ -217,19 +217,20 @@ export async function updateRefundReason(
 
 export interface RefundRequestRow {
   request_id: string
-  request_no: string
-  order_no: string
-  amount: number
+  request_no?: string | null
+  order_no?: string | null
+  amount?: string | number | null
   status: string
-  status_display: string
-  created_at: string
+  status_display?: string | null
+  created_at?: string | null
 }
 
 export async function listRefundRequests(limit = 10): Promise<RefundRequestRow[]> {
-  const data = await request<{ requests: RefundRequestRow[] }>(
+  // P5：后端统一返回 {items,total}（此前误解析 {requests} 恒为空）
+  const data = await request<{ items: RefundRequestRow[] }>(
     `/api/cs/refund-requests?limit=${limit}`,
   )
-  return data.requests ?? []
+  return data.items ?? []
 }
 
 export interface TicketRow {

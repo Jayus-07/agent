@@ -339,7 +339,12 @@ def reset_mock_state() -> None:
 
 
 def set_refund_status_for_test(request_id: str, status: str) -> None:
-    """模拟订单系统人工审核结果；只供测试驱动，不开放 HTTP 管理端点。"""
+    """模拟订单系统人工审核结果；只供测试驱动，不开放 HTTP 管理端点。
+
+    P5 起生产状态推进走 ``POST /business/refund-requests/{id}/review``
+    （终态锁 + 审核记录 + approved 钱包回款）；本函数不记审核、不入账，
+    仅供既有测试驱动状态，勿在新代码中使用。
+    """
     if status not in {"reviewing", "approved", "rejected", "cancelled"}:
         raise ValueError("unsupported test status")
     with _STATE_LOCK:
@@ -748,3 +753,114 @@ def update_refund_reason(
         snapshot = dict(request)
         _OPERATIONS[key] = {"payload": operation_payload, "request": snapshot}
         return _ok({"request": _refund_view(snapshot)})
+
+
+# ── cs-workstation-v2 P5：退款审核（正式状态推进，替代测试钩子） ────
+
+_REFUND_REVIEW_DISPLAY = {
+    "approved": "审核通过，退款已退回钱包",
+    "rejected": "审核未通过",
+}
+
+
+class RefundReviewInput(BaseModel):
+    decision: str = Field(pattern="^(approved|rejected)$")
+    reviewer_id: str = Field(min_length=1, max_length=64)
+    opinion: str = Field(min_length=1, max_length=500)
+    operation_id: str  # UUID 幂等键
+
+
+@app.get("/business/refunds/review-queue")
+def refund_review_queue(
+    tenant_id: str = Query(min_length=1),
+    status: str | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    x_internal_token: str | None = Header(default=None),
+):
+    """运营审核队列：按租户列出退款申请（supervisor 视角，不限 user）。"""
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        rows = []
+        for item in _REFUND_REQUESTS.values():
+            if item["tenant_id"] != tenant_id.strip():
+                continue
+            if status is not None and item["status"] != status:
+                continue
+            # 运营/用户侧查询需要归属字段；_refund_view 的对外契约不含它们
+            view = _refund_view(item)
+            view["user_id"] = item["user_id"]
+            view["tenant_id"] = item["tenant_id"]
+            view["conversation_id"] = item["conversation_id"]
+            rows.append(view)
+    rows.sort(key=lambda item: item["created_at"])
+    rows = rows[:limit]
+    return _ok({"requests": rows, "total": len(rows)})
+
+
+@app.post("/business/refund-requests/{request_id}/review")
+def review_refund_request(
+    request_id: str,
+    payload: RefundReviewInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """审核终态推进：approved 回款钱包；终态不可回退；operation_id 幂等。"""
+    _check_token(x_internal_token)
+    try:
+        operation_id = str(uuid.UUID(payload.operation_id))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(status_code=422, detail="operation_id must be a UUID") from None
+    opinion = payload.opinion.strip()
+    if not opinion:
+        raise HTTPException(status_code=422, detail="opinion is required")
+
+    operation_payload = {
+        "decision": payload.decision,
+        "reviewer_id": payload.reviewer_id.strip(),
+        "opinion": opinion,
+    }
+    with _STATE_LOCK:
+        request = next(
+            (item for item in _REFUND_REQUESTS.values()
+             if item["request_id"] == request_id),
+            None,
+        )
+        if request is None:
+            raise HTTPException(status_code=404, detail="refund request not found")
+
+        operation_key = ("refund-review", request_id, operation_id)
+        prior_operation = _OPERATIONS.get(operation_key)
+        if prior_operation is not None:
+            if prior_operation["payload"] != operation_payload:
+                raise HTTPException(status_code=409, detail="operation payload conflict")
+            return _ok({"request": _refund_view(request)})
+
+        if request["status"] in {"approved", "rejected", "cancelled"}:
+            raise HTTPException(
+                status_code=409,
+                detail=f"refund request already in final state: {request['status']}",
+            )
+
+        request["status"] = payload.decision
+        request["status_display"] = _REFUND_REVIEW_DISPLAY[payload.decision]
+        request["review"] = {
+            "reviewer_id": payload.reviewer_id.strip(),
+            "opinion": opinion,
+            "decision": payload.decision,
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        }
+        request["updated_at"] = datetime.now(timezone.utc).isoformat()
+        _OPERATIONS[operation_key] = {"payload": dict(operation_payload)}
+
+        if payload.decision == "approved":
+            # 审核通过 = 订单系统执行退款回款（对齐取消订单的 cancel_refund 语义）；
+            # 钱包归属退款申请人（user/tenant），与审核人无关
+            wallet = _wallet_for(request["user_id"], request["tenant_id"])
+            _wallet_append(
+                wallet,
+                direction="in",
+                amount=Decimal(str(request["amount"])).quantize(Decimal("0.01")),
+                kind="refund",
+                ref_no=request["request_no"],
+                memo=f"退款审核通过 {request['order_no']}（{request['request_no']}）",
+            )
+        return _ok({"request": _refund_view(request)})

@@ -10,6 +10,7 @@ import {
   acceptOffer,
   claimConversation,
   closeConversation,
+  createCanned,
   declineOffer,
   getConversationCustomerContext,
   getConversationDetail,
@@ -29,6 +30,9 @@ import {
 import { useAgentSocket } from './useAgentSocket'
 import { AgentStatusBar, NotificationCenter, type NoticeItem } from './AgentTopBar'
 import TransferDialog from './TransferDialog'
+import CannedReplyPanel from './CannedReplyPanel'
+import AssistantPanel from './AssistantPanel'
+import type { AssistSnapshot } from './assistTypes'
 
 interface MineEntry {
   conversationId: string
@@ -76,10 +80,13 @@ export default function WorkbenchPage() {
   const [notices, setNotices] = useState<NoticeItem[]>([])
   const [offers, setOffers] = useState<OfferItem[]>([])
   const [transferOpen, setTransferOpen] = useState(false)
+  const [cannedOpen, setCannedOpen] = useState(false)
+  const [assist, setAssist] = useState<AssistSnapshot | null>(null)
   const [userTypingAt, setUserTypingAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const lastIdRef = useRef(0)
   const selectedRef = useRef<string | null>(null)
+  const inputRef = useRef<HTMLTextAreaElement | null>(null)
 
   const refreshQueue = useCallback(() => {
     getHandoffQueue()
@@ -240,6 +247,22 @@ export default function WorkbenchPage() {
         refreshQueue()
         return
       }
+      // P4：AI 辅助推荐（瞬态事件，只对选中会话刷新面板快照）
+      if (evt.type === 'assist.suggestion') {
+        if (cid && cid === selectedRef.current) {
+          setAssist({
+            conversationId: cid,
+            trigger: String(evt.payload.trigger ?? 'message'),
+            intent: (evt.payload.intent as AssistSnapshot['intent']) ?? null,
+            emotion: (evt.payload.emotion as AssistSnapshot['emotion']) ?? null,
+            sop: (evt.payload.sop as AssistSnapshot['sop']) ?? [],
+            suggestions:
+              (evt.payload.suggestions as AssistSnapshot['suggestions']) ?? [],
+            at: Date.now(),
+          })
+        }
+        return
+      }
       if (evt.type === 'conversation.closed') {
         if (cid === selectedRef.current) setHandoffState('closed')
         refreshQueue()
@@ -286,6 +309,9 @@ export default function WorkbenchPage() {
       setMessages([])
       setDetail(null)
       lastIdRef.current = 0
+      // P4：切换会话不显示上一个会话的 AI 推荐与话术弹层
+      setAssist(null)
+      setCannedOpen(false)
       if (entry) {
         setMine((prev) => prev.map((m) => (m.conversationId === conversationId ? { ...m, unread: 0 } : m)))
       }
@@ -392,6 +418,37 @@ export default function WorkbenchPage() {
     }
     return null
   }, [messages])
+
+  // ── P4：快捷回复 / AI 助手动作 ──────────────────────────
+  const insertIntoInput = useCallback((content: string) => {
+    setInput((prev) => (prev.trim() ? `${prev.replace(/\s*$/, '')}\n${content}` : content))
+    inputRef.current?.focus()
+  }, [])
+
+  const adoptSuggestion = useCallback((text: string) => {
+    setInput(text)
+    inputRef.current?.focus()
+  }, [])
+
+  const quoteSuggestion = useCallback((text: string, source: string) => {
+    const quote = `「${text}」—— 来源：${source}`
+    setInput((prev) => (prev.trim() ? `${prev.replace(/\s*$/, '')}\n${quote}` : quote))
+    inputRef.current?.focus()
+  }, [])
+
+  const saveSuggestionAsCanned = useCallback(
+    (text: string, _source: string) => {
+      const title = `AI·${text.replace(/\s+/g, '').slice(0, 6)}`
+      createCanned({ title, content: text, category: 'AI', scope: 'personal' })
+        .then(() => {
+          pushNotice({ level: 'info', text: `已存为个人话术「${title}」，快捷回复中可用` })
+        })
+        .catch(() => {
+          pushNotice({ level: 'warn', text: '存为话术失败，请重试' })
+        })
+    },
+    [pushNotice],
+  )
 
   const closed = handoffState === 'closed'
   const showUserTyping = Date.now() - userTypingAt < 3_000
@@ -534,10 +591,24 @@ export default function WorkbenchPage() {
                 </div>
               )}
             </div>
-            <div className="flex-none border-t border-slate-200 bg-white px-3 pb-3 pt-2">
+            <div className="relative flex-none border-t border-slate-200 bg-white px-3 pb-3 pt-2">
               <div className="mb-2 flex gap-1.5">
-                <ToolChip label="快捷回复（P4）" />
-                <ToolChip label="AI 建议（P4）" />
+                <button
+                  type="button"
+                  aria-expanded={cannedOpen}
+                  className={`rounded-lg border px-2.5 py-1 text-xs ${cannedOpen ? 'border-indigo-300 bg-indigo-50 text-indigo-600' : 'border-slate-200 text-slate-600 hover:bg-slate-50'}`}
+                  onClick={() => setCannedOpen((v) => !v)}
+                >
+                  快捷回复
+                </button>
+                <button
+                  type="button"
+                  className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                  onClick={() => setContextTab('ai')}
+                  title="在右栏查看 AI 推荐"
+                >
+                  AI 建议
+                </button>
                 {!closed && (
                   <button
                     type="button"
@@ -556,8 +627,14 @@ export default function WorkbenchPage() {
                   关闭会话
                 </button>
               </div>
+              <CannedReplyPanel
+                open={cannedOpen}
+                onClose={() => setCannedOpen(false)}
+                onInsert={insertIntoInput}
+              />
               <div className="flex items-end gap-2">
                 <textarea
+                  ref={inputRef}
                   className="min-h-14 flex-1 resize-none rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-base text-slate-900 outline-none focus:border-indigo-500 disabled:opacity-60"
                   rows={2}
                   placeholder={closed ? '会话已关闭（用户侧将收到满意度评价邀请）' : '输入回复…（Enter 发送，Shift+Enter 换行）'}
@@ -622,7 +699,13 @@ export default function WorkbenchPage() {
           ) : contextTab === 'customer' ? (
             <Customer360 ctx={customerCtx} />
           ) : (
-            <p className="p-2 text-xs text-slate-400">AI 助手面板随 P4 落地（意图/情绪/推荐/知识/SOP）。</p>
+            <AssistantPanel
+              assist={assist}
+              selected={!!selectedId && !closed}
+              onAdopt={adoptSuggestion}
+              onQuote={quoteSuggestion}
+              onSaveCanned={saveSuggestionAsCanned}
+            />
           )}
         </div>
       </div>
@@ -793,14 +876,6 @@ function Kv({ k, v }: { k: string; v: string }) {
       <b className="flex-none font-normal text-slate-500">{k}</b>
       <span className="min-w-0 truncate text-right text-slate-800">{v}</span>
     </div>
-  )
-}
-
-function ToolChip({ label }: { label: string }) {
-  return (
-    <span className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-400" title="后续期次落地">
-      {label}
-    </span>
   )
 }
 

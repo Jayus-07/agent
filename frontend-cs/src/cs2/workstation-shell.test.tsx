@@ -3,8 +3,15 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
 const nav = vi.hoisted(() => ({ pathname: '/cs2/workspace' }))
+const api = vi.hoisted(() => ({
+  getMyStatus: vi.fn(async () => ({
+    agent_id: 'a1', status: 'online', accepting: true,
+    presence_online: true, cs_role: 'agent',
+  })),
+}))
 
 vi.mock('next/navigation', () => ({ usePathname: () => nav.pathname }))
+vi.mock('./workspace/api', () => api)
 
 import WorkstationShell from './WorkstationShell'
 
@@ -31,8 +38,32 @@ function mount() {
 }
 
 describe('WorkstationShell（/cs2 新壳）', () => {
-  it('渲染七个导航项且当前路由高亮', () => {
+  it('agent 角色隐藏 supervisorOnly 项（退款审核/看板），其余高亮', async () => {
+    api.getMyStatus.mockResolvedValueOnce({
+      agent_id: 'a1', status: 'online', accepting: true,
+      presence_online: true, cs_role: 'agent',
+    })
     const container = mount()
+    await act(async () => {})
+    const links = Array.from(container.querySelectorAll('nav a'))
+    expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      '/cs2/workspace',
+      '/cs2/conversations',
+      '/cs2/tickets',
+      '/cs2/qa',
+      '/cs2/knowledge',
+    ])
+    const active = container.querySelector('a[aria-current="page"]')
+    expect(active?.getAttribute('href')).toBe('/cs2/workspace')
+  })
+
+  it('supervisor 角色显示全部七项', async () => {
+    api.getMyStatus.mockResolvedValueOnce({
+      agent_id: 'a1', status: 'online', accepting: true,
+      presence_online: true, cs_role: 'supervisor',
+    })
+    const container = mount()
+    await act(async () => {})
     const links = Array.from(container.querySelectorAll('nav a'))
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
       '/cs2/workspace',
@@ -43,8 +74,6 @@ describe('WorkstationShell（/cs2 新壳）', () => {
       '/cs2/dashboard',
       '/cs2/knowledge',
     ])
-    const active = container.querySelector('a[aria-current="page"]')
-    expect(active?.getAttribute('href')).toBe('/cs2/workspace')
   })
 
   it('children 渲染在内容区', () => {

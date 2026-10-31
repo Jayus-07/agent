@@ -2,16 +2,37 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { useEffect, useState } from 'react'
 import { CS2_NAV_ITEMS } from './nav'
+import { getMyStatus, type AgentStatusView } from './workspace/api'
 
 // cs-workstation-v2 P0 新工作台壳：独立于旧 components/layout/Sidebar，
 // Phase 8 切换 /cs/workspace 后旧壳整体退役。
+// P5：nav 按 cs_role 过滤 supervisorOnly 项（退款审核/看板对 agent 隐藏）；
+// 角色未加载前不显示受限入口（安全默认）。
 export default function WorkstationShell({
   children,
 }: {
   children: React.ReactNode
 }) {
   const pathname = usePathname()
+  const [role, setRole] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getMyStatus()
+      .then((status: AgentStatusView) => {
+        if (!cancelled) setRole(String(status.cs_role ?? 'agent'))
+      })
+      .catch(() => {
+        if (!cancelled) setRole('agent')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const isSupervisor = role === 'supervisor' || role === 'admin'
 
   return (
     <div className="flex h-screen w-full bg-slate-50">
@@ -24,6 +45,7 @@ export default function WorkstationShell({
         </div>
         <nav className="flex-1 space-y-1 px-2" aria-label="坐席工作台导航">
           {CS2_NAV_ITEMS.map((item) => {
+            if (item.supervisorOnly && !isSupervisor) return null
             const active =
               pathname === item.href || pathname.startsWith(`${item.href}/`)
             return (

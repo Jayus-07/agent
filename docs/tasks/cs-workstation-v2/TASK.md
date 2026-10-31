@@ -192,6 +192,8 @@
 
 ### P4 快捷回复+AI Copilot
 
+> **2026-10-31 执行回写（以仓库现状为准）**：①`assist.suggestion` 瞬态事件链路为既有基建（批次A：knowledge/snippet/order 三路），P4 增量为面板字段——`intent`（取最近一条带意图消息，中文映射 FINE_INTENTS+置信）、`emotion`（关键词规则 alert/warn/ok，alert 追加情绪预警卡）、`sop`（24 意图静态模板+默认，可配置化留 P7+）、触发矩阵扩 `human_agent→followup`；②话术表迁移 127（personal/team 两级 CHECK），团队写仅 supervisor；③「更多菜单」（订单卡片/内部备注/转为工单）**顺延 P5+**——三者无后端能力支撑（messages 无 internal 类型、工单无创建 API、无卡片消息体），不做假按钮，Phase 8 复核该矩阵行口径；④瞬态 assist 事件在无坐席 WS 连接时不广播（`_persist_and_broadcast` 的 `_connections` 短路，合理设计）——实测须先建立 WS 连接。
+
 - 后端：`cs_canned_responses`（个人/团队，迁移）；CRUD 权限（个人读写、团队读全员写 supervisor）；`assist.*` 结构化事件（意图/情绪/推荐/知识/SOP/跟进）。
 - 坐席端：快捷回复面板（搜索/插入）；AI 助手面板五块；更多菜单；存为话术闭环（AI 建议→个人话术→面板可搜）。
 - 测试：T2 话术权限矩阵（个人/团队/跨租户）+ assist 事件契约（只追加）；T1 面板交互。
@@ -204,6 +206,8 @@
 - 用户端：折叠卡状态联动（等待人工审核→已退款/已驳回）+ 站内通知。
 - 测试：T2 审核权限（仅 supervisor）/状态机不可回退/审计断言/与幂等交互；T3 提交→通过 与 提交→驳回 双路径。
 - 验收：审核在 UI 闭环；用户可见状态变化。
+
+> **2026-10-31 执行回写**：①http 模式审核经 Mock `POST /business/refund-requests/{id}/review`（终态锁+approved 自动回款钱包 kind=refund）；审核队列为 `GET /business/refunds/review-queue`（租户级，扩展视图含归属字段）；②sandbox 模式审核走 cs_case（案件 resolved+review 记录），投影以 review 决定为用户可见状态；③审计 actor_type 取 'human'（表 CHECK 限 ai/human/system）；④**部署配置项：CS_REFUND_REQUEST_MODE=http 必须与 CS_BUSINESS_GATEWAY_MODE 同启**（默认 disabled）；⑤用户端「站内通知」以折叠卡状态联动+30s 轮询交付，用户侧通知中心基建留 Phase 8 复核。
 
 ### P6 质检中心
 

@@ -183,6 +183,7 @@ export interface AgentStatusView {
   accepting: boolean
   skill?: string
   presence_online: boolean
+  cs_role?: string | null
 }
 
 export async function getMyStatus(): Promise<AgentStatusView> {
@@ -250,5 +251,96 @@ export async function declineOffer(
   return request(`/api/cs/agents/me/offers/${handoffId}/decline`, {
     method: 'POST',
     body: JSON.stringify({ offer_version: offerVersion }),
+  })
+}
+
+// ── P4：快捷回复话术（个人/团队） ───────────────────────────
+
+export type CannedScope = 'personal' | 'team'
+
+export interface CannedItem {
+  id: number
+  scope: CannedScope | string
+  owner_agent_id: string | null
+  title: string
+  content: string
+  category: string
+  enabled: boolean
+  updated_at: string | null
+}
+
+export interface CannedMutationResult {
+  id: number
+  scope: string
+  title: string
+  content: string
+  category: string
+  enabled: boolean
+}
+
+export async function listCanned(): Promise<CannedItem[]> {
+  const data = await request<{ items: CannedItem[] }>('/api/cs/canned-responses')
+  return data.items ?? []
+}
+
+export async function createCanned(body: {
+  title: string
+  content: string
+  category?: string
+  scope: CannedScope
+}): Promise<CannedMutationResult> {
+  return request('/api/cs/canned-responses', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function updateCanned(
+  id: number,
+  body: { title?: string; content?: string; category?: string; enabled?: boolean },
+): Promise<CannedMutationResult> {
+  return request(`/api/cs/canned-responses/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteCanned(id: number): Promise<void> {
+  await request(`/api/cs/canned-responses/${id}`, { method: 'DELETE' })
+}
+
+// ── P5：退款审核（supervisor） ─────────────────────────────
+
+export interface RefundQueueItem {
+  request_id: string
+  request_no?: string | null
+  status: string
+  status_display?: string | null
+  order_no?: string | null
+  amount?: string | number | null
+  reason?: string | null
+  policy_version?: string | null
+  user_id?: string | null
+  conversation_id?: string | null
+  review?: { decision: string; opinion: string; reviewer_id: string; reviewed_at?: string } | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export async function listRefundQueue(
+  status?: string,
+): Promise<{ items: RefundQueueItem[]; total: number; mode: string }> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request(`/api/cs/refunds/review-queue${q}`)
+}
+
+export async function reviewRefund(
+  requestId: string,
+  decision: 'approved' | 'rejected',
+  opinion: string,
+): Promise<{ request_id: string; status: string; status_display?: string | null }> {
+  return request(`/api/cs/refunds/${requestId}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, opinion }),
   })
 }

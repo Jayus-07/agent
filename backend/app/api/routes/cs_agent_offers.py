@@ -430,6 +430,8 @@ async def get_my_status(context: AgentContext = Depends(require_agent)):
         "accepting": bool(row.accepting),
         "skill": row.skill,
         "presence_online": online,
+        # P5：视角过滤（nav 按 supervisor 隐藏退款审核/看板等入口）
+        "cs_role": context.cs_role,
     }
 
 
