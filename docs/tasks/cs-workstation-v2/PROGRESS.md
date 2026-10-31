@@ -139,3 +139,16 @@
   - 用户端 4 态横幅+倒计时+排队位 ✅（CustomerServicePage + sla/transfer 事件链路实测）；接管后输入直达坐席 ✅（实测⑤：POST /my/{id}/messages 落库+message.created 广播帧；T2 AI 态 409/跨用户 403）
   - **未完成项（有意顺延）**：顶栏接单开关 UI（accepting 列沿用既有，P4 补）；`POST /my/{id}/messages` 幂等键（P4 可补）
 - **遗留提醒**：主栈停机待恢复 + 按合并后 main 重建；下一期 P4 自 origin/main@f600be6 起新分支 feat/cs-v2-p4。
+
+### 2026-10-31（十一）—— P4 快捷回复+AI Copilot 实现完成并实测通过（持续任务模式）
+
+- **授权模式**：用户授权「下一步作为持续任务实施」——自本期起每期走 实现→测试→重建实测→提交→PR→CI→合并→回填 完整流程，不再逐期询问提交。
+- **分支**：feat/cs-v2-p4（自 origin/main@39dce2f）。宿主机中途再次抖动（GitHub 直连间歇不可达，探测窗口重试成功）；Docker Desktop 已随会话恢复（本会话启动）。
+- **后端**：①迁移 127 `cs_canned_responses`（个人/团队两级，CHECK 约束 personal 必有 owner；注册 init_db + 迁移守卫 NON_AI 登记——**创建即登记**，吸取 PR #164 教训）；②模型 `models/canned.py`；③路由 `cs_canned.py`：GET（本人 personal+全部 team）/POST（team 仅 supervisor）/PATCH/DELETE（team supervisor、personal 本人、他人 personal 404 口径一致），Pydantic validator 拦空白串；④`agent_assist.py` 增强：触发矩阵扩 `human_agent→followup`（坐席发送后给跟进建议，前端标「新」）；payload 增面板字段 `intent`（**语义修正：取最近一条带意图的消息**——原实现取最新行，人工直发消息恒 None）/`emotion`（极简关键词规则：strong→alert 追加 emotion_alert 卡片、mild→warn、默认 ok；零 LLM 依赖）/`sop`（24 意图静态运营模板+默认模板，注释声明 P4 MVP 可配置化）。
+- **前端（frontend-cs）**：api.ts +5 函数（canned CRUD）；`CannedReplyPanel`（搜索/分类 chips/点击插入换行追加/个人·团队·停用徽章）；`AssistantPanel`（右栏五块：监听呼吸灯/意图徽章+置信/情绪徽章/推荐卡采用·存为话术/知识引用回复·存为话术/SOP 列表，alert 卡红边无动作、followup 首卡「新」）；`assistTypes.ts`；WorkbenchPage 集成：`assist.suggestion` 事件消费（仅选中会话、切换清空）、快捷回复按钮开弹层、「AI 建议」切右栏 ai Tab、P1 的 ToolChip 占位移除。
+- **范围决策（删除原则）**：原型「更多菜单」（发送订单卡片/内部备注/转为工单）**顺延**——三者均无后端能力支撑（messages 无 internal 类型、工单无创建 API、订单卡片无消息体），不做假按钮；关闭会话保留独立按钮。TASK 第 3.1 节该行待 Phase 8 复核口径。
+- **测试证据（均实际执行）**：后端新 T2 20 passed（canned 权限矩阵 9 真库 5433 + assist 契约 11 纯逻辑）；既有 `test_agent_assist` 16 passed（4 例按 P4 行为变更同步更新：human_agent 触发合法化、_assist_task 双参签名）；frontend-cs workspace 20 passed、全量 30 files/**309 passed**；frontend 全量 **688 passed**；双端 tsc 0 新增错误；双端生产构建通过。
+- **实测（重建后，全部通过）**：①canned CRUD REST：POST personal 201（owner 归属正确）/POST team by agent 403/by supervisor 201/GET 列表只见本人 personal+全部 team；②**assist.suggestion WS 帧全字段**：容器内以 websockets 客户端建立坐席连接（ticket 鉴权）→ 用户发消息 → 坐席收到帧 `{trigger: message, intent: {投诉, 0.91}, emotion: {平和, ok}, sop: 投诉模板三步, suggestions: []（本机知识库空，预期静默）}`，瞬态 `seq: null` 契约正确；③订单速览路径经 exec 直调验证（返回 order_summary）。
+- **实测排障记录（三条环境/设计事实，回写供后续）**：①瞬态事件广播在 `if not self._connections: return` 处短路——**无坐席 WS 连接时 assist 不广播**（合理设计：persist=False 无补发源），实测必须先建立真实 WS 连接；②坐席无 Redis presence 心跳时 `human_active_recovered (agent_offline_recovery)` 会把会话还给 AI（handling_mode=ai + 清 assigned）——**人工态种数据三件套缺一不可**：handoff human_active + conversations.handling_mode='human' + 坐席 presence 心跳；③message_id 为 UUID 字符串（非自增数字）。
+- **环境恢复**：p4v-/p4t- 实测数据清零（leftover=0）；实测 canned 行删除；uitest_user/cs_wire_e2e 恢复 enabled=f/accepting=f/status=online。
+- **顺延项汇总**：P3 带来（接单开关 UI、messages 幂等键）+ 本期（更多菜单三功能，依赖 internal 消息类型与工单创建 API，建议 P5+）。

@@ -192,6 +192,8 @@
 
 ### P4 快捷回复+AI Copilot
 
+> **2026-10-31 执行回写（以仓库现状为准）**：①`assist.suggestion` 瞬态事件链路为既有基建（批次A：knowledge/snippet/order 三路），P4 增量为面板字段——`intent`（取最近一条带意图消息，中文映射 FINE_INTENTS+置信）、`emotion`（关键词规则 alert/warn/ok，alert 追加情绪预警卡）、`sop`（24 意图静态模板+默认，可配置化留 P7+）、触发矩阵扩 `human_agent→followup`；②话术表迁移 127（personal/team 两级 CHECK），团队写仅 supervisor；③「更多菜单」（订单卡片/内部备注/转为工单）**顺延 P5+**——三者无后端能力支撑（messages 无 internal 类型、工单无创建 API、无卡片消息体），不做假按钮，Phase 8 复核该矩阵行口径；④瞬态 assist 事件在无坐席 WS 连接时不广播（`_persist_and_broadcast` 的 `_connections` 短路，合理设计）——实测须先建立 WS 连接。
+
 - 后端：`cs_canned_responses`（个人/团队，迁移）；CRUD 权限（个人读写、团队读全员写 supervisor）；`assist.*` 结构化事件（意图/情绪/推荐/知识/SOP/跟进）。
 - 坐席端：快捷回复面板（搜索/插入）；AI 助手面板五块；更多菜单；存为话术闭环（AI 建议→个人话术→面板可搜）。
 - 测试：T2 话术权限矩阵（个人/团队/跨租户）+ assist 事件契约（只追加）；T1 面板交互。
