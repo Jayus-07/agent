@@ -79,7 +79,11 @@ def anon_client() -> TestClient:
     ("/sys/providers/model-catalog", DRAFT),
     ("/sys/providers/custom/model-catalog", None),
 ])
-def test_catalog_rejects_unauthenticated(anon_client, path, payload):
+def test_catalog_rejects_unauthenticated(anon_client, path, payload, monkeypatch):
+    # 44d2e53 fail-closed：CI 无 AI_INTERNAL_TOKEN 时无头请求先撞 503，
+    # 注入测试令牌锁定身份层 401/403 语义。
+    from backend.config import messaging
+    monkeypatch.setattr(messaging, "AI_INTERNAL_TOKEN", "ci-internal-token")
     resp = (anon_client.post(path) if payload is None
             else anon_client.post(path, json=payload))
     assert resp.status_code in (401, 403)

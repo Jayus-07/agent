@@ -78,7 +78,10 @@ def _make_legacy_refresh(user_id: int) -> str:
 
 
 @pytest.mark.parametrize("endpoint", ["/api/auth/refresh"])
-def test_refresh_and_login_carry_latest_db_identity(client, endpoint):
+def test_refresh_and_login_carry_latest_db_identity(client, monkeypatch, endpoint):
+    # refresh 端点轮换 access token 时 issue_access_token 读 JWT_SECRET
+    # env（>=32B）；CI 无 .env 时进程内注入测试密钥（缺失会 500）。
+    monkeypatch.setenv("JWT_SECRET", "ci-test-jwt-secret-0123456789abcdef")
     _require_pg()
     prefix = f"rfr{uuid.uuid4().hex[:8]}"
     username = f"{prefix}a"

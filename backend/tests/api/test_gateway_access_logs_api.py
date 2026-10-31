@@ -44,8 +44,14 @@ def test_access_logs_rejects_viewer(client):
     assert r.status_code == 403
 
 
-def test_access_logs_rejects_service_key_channel(client):
-    """无身份头 = 服务级 API Key 通道（该 Key 下发到浏览器）→ 不得读审计。"""
+def test_access_logs_rejects_service_key_channel(client, monkeypatch):
+    """无身份头 = 服务级 API Key 通道（该 Key 下发到浏览器）→ 不得读审计。
+
+    44d2e53 起 internal token 未配置时 fail-closed 503 挡在身份层之前——
+    显式豁免（仅测试进程）放行无头请求，锁定 service 身份 403 语义。
+    """
+    from backend.app.api import deps
+    monkeypatch.setattr(deps, "ALLOW_UNAUTHENTICATED", True)
     r = client.get("/observability/gateway-access-logs?hours=6")
     assert r.status_code == 403
 
