@@ -72,6 +72,10 @@ class CSAgent(CSBase):
     auth_user_id = Column(String(64), nullable=True)
     enabled = Column(Boolean, nullable=False, default=True)
     accepting = Column(Boolean, nullable=False, default=True)
+    status = Column(
+        String(16), nullable=False, default="online", server_default="online",
+        comment="工作状态 online|busy|away|offline（126）；派单排除 away/offline",
+    )
     last_assigned_at = Column(DateTime(timezone=True), nullable=True)
     version = Column(Integer, nullable=False, default=0)
     max_conversations = Column(BigInteger, nullable=False, default=10)

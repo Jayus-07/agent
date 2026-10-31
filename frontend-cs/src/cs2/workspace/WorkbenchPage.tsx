@@ -7,22 +7,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import {
+  acceptOffer,
   claimConversation,
   closeConversation,
+  declineOffer,
   getConversationCustomerContext,
   getConversationDetail,
   getConversationEvents,
   getHandoffMessages,
   getHandoffQueue,
   getPendingProposal,
+  listMyOffers,
   sendAgentMessage,
   type ConversationCustomerContext,
   type ConversationDetail,
   type HandoffQueueItem,
   type MessageDTO,
+  type OfferItem,
   type PendingProposal,
 } from './api'
 import { useAgentSocket } from './useAgentSocket'
+import { AgentStatusBar, NotificationCenter, type NoticeItem } from './AgentTopBar'
+import TransferDialog from './TransferDialog'
 
 interface MineEntry {
   conversationId: string
@@ -67,6 +73,9 @@ export default function WorkbenchPage() {
   const [handoffState, setHandoffState] = useState<string>('none')
   const [input, setInput] = useState('')
   const [contextTab, setContextTab] = useState<'customer' | 'info' | 'ai'>('info')
+  const [notices, setNotices] = useState<NoticeItem[]>([])
+  const [offers, setOffers] = useState<OfferItem[]>([])
+  const [transferOpen, setTransferOpen] = useState(false)
   const [userTypingAt, setUserTypingAt] = useState(0)
   const [now, setNow] = useState(() => Date.now())
   const lastIdRef = useRef(0)
@@ -123,10 +132,21 @@ export default function WorkbenchPage() {
       .catch(() => {})
   }, [appendMessages])
 
+  const pushNotice = useCallback((n: Omit<NoticeItem, 'id' | 'at'>) => {
+    setNotices((prev) => [{ ...n, id: crypto.randomUUID(), at: Date.now() }, ...prev].slice(0, 30))
+  }, [])
+
+  const refreshOffers = useCallback(() => {
+    listMyOffers()
+      .then(setOffers)
+      .catch(() => {})
+  }, [])
+
   // 挂载即拉队列；之后由轮询与 WS 事件驱动刷新
   useEffect(() => {
     refreshQueue()
-  }, [refreshQueue])
+    refreshOffers()
+  }, [refreshQueue, refreshOffers])
 
   // 降级轮询：WS 断开时 3s 拉选中会话增量 + 5s 拉队列；连接正常时 20s 对账
   useEffect(() => {
@@ -178,6 +198,44 @@ export default function WorkbenchPage() {
         refreshQueue()
         return
       }
+      // P3：定向 offer 到达 → 提示 + 刷新我的 offer 列表
+      if (evt.type === 'conversation.offered') {
+        pushNotice({
+          level: 'info',
+          text: '收到新的接入邀请（offer），请尽快接单',
+          conversationId: cid,
+        })
+        refreshOffers()
+        return
+      }
+      if (evt.type === 'conversation.offer_declined' || evt.type === 'conversation.offer_expired') {
+        refreshOffers()
+        refreshQueue()
+        return
+      }
+      // P3：SLA 分级告警 / 坐席间转接请求 → 通知中心
+      if (evt.type === 'sla.warning' || evt.type === 'sla.breach') {
+        const level = evt.type === 'sla.breach' ? 'breach' : 'warn'
+        pushNotice({
+          level,
+          text:
+            evt.type === 'sla.breach'
+              ? `SLA 已超时：会话等待超限，请优先处理${evt.payload.ticket_id ? `（留言工单 ${evt.payload.ticket_id}）` : ''}`
+              : 'SLA 预警：会话等待即将超时',
+          conversationId: cid,
+        })
+        return
+      }
+      if (evt.type === 'conversation.transfer_requested') {
+        const from = String(evt.payload.from_agent_id ?? '')
+        const to = String(evt.payload.to_agent_id ?? '')
+        pushNotice({
+          level: 'info',
+          text: `转接请求：${from} → ${to}`,
+          conversationId: cid,
+        })
+        return
+      }
       if (evt.type === 'conversation.claimed') {
         refreshQueue()
         return
@@ -187,7 +245,7 @@ export default function WorkbenchPage() {
         refreshQueue()
       }
     },
-    [appendMessages, refreshQueue],
+    [appendMessages, refreshQueue, refreshOffers, pushNotice],
   )
 
   // 重连对账：队列全量 + 选中会话按 seq 游标补发（>lastSeq 的持久化事件）
@@ -278,6 +336,35 @@ export default function WorkbenchPage() {
     }
   }, [refreshQueue])
 
+  const doAcceptOffer = useCallback(
+    async (offer: OfferItem) => {
+      try {
+        await acceptOffer(offer.handoff_id, offer.assignment_version)
+        setOffers((prev) => prev.filter((o) => o.handoff_id !== offer.handoff_id))
+        setTab('mine')
+        selectConversation(offer.conversation_id)
+        refreshQueue()
+      } catch {
+        pushNotice({ level: 'warn', text: '接单失败：offer 可能已超时或被处理', conversationId: offer.conversation_id })
+        refreshOffers()
+      }
+    },
+    [pushNotice, refreshOffers, refreshQueue, selectConversation],
+  )
+
+  const doDeclineOffer = useCallback(
+    async (offer: OfferItem) => {
+      try {
+        await declineOffer(offer.handoff_id, offer.assignment_version)
+      } catch {
+        /* 拒单失败静默：offer 超时回收会自然收敛 */
+      }
+      setOffers((prev) => prev.filter((o) => o.handoff_id !== offer.handoff_id))
+      refreshQueue()
+    },
+    [refreshQueue],
+  )
+
   const send = useCallback(async () => {
     const cid = selectedRef.current
     const content = input.trim()
@@ -313,6 +400,36 @@ export default function WorkbenchPage() {
     <div className="grid h-full min-h-0 grid-cols-[260px_minmax(0,1fr)_300px]">
       {/* 左栏 */}
       <div className="flex min-h-0 flex-col border-r border-slate-200 bg-white">
+        {/* P3：我的待接单（定向 offer）——接单即进入我的会话 */}
+        {offers.length > 0 && (
+          <div className="flex-none border-b border-amber-200 bg-amber-50 p-2">
+            {offers.map((o) => (
+              <div key={o.handoff_id} className="mb-1.5 rounded-lg border border-amber-300 bg-white p-2 text-xs last:mb-0">
+                <b className="text-slate-900">新接入邀请</b>
+                <span className="ml-1.5 text-slate-500">
+                  会话 {o.conversation_id.slice(0, 10)}…
+                  {o.offer_expires_at && ` · ${Math.max(0, Math.ceil((Date.parse(o.offer_expires_at) - now) / 1000))}s 后过期`}
+                </span>
+                <div className="mt-1.5 flex gap-2">
+                  <button
+                    type="button"
+                    className="rounded-lg bg-indigo-600 px-2.5 py-1 text-[11px] text-white hover:opacity-90"
+                    onClick={() => void doAcceptOffer(o)}
+                  >
+                    接单
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] text-slate-600 hover:bg-slate-50"
+                    onClick={() => void doDeclineOffer(o)}
+                  >
+                    拒单
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex flex-none border-b border-slate-200" role="tablist" aria-label="会话列表">
           {(
             [
@@ -370,9 +487,18 @@ export default function WorkbenchPage() {
               ))
             ))}
         </div>
-        <div className="flex flex-none items-center gap-1.5 px-3 py-2 text-[11px] text-slate-400">
+        <div className="flex flex-none items-center gap-2 px-3 py-2 text-[11px] text-slate-400">
           <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-emerald-500' : 'bg-amber-400'}`} aria-hidden />
           {connected ? '实时推送已连接' : '连接中断 · 轮询降级中'}
+          <span className="ml-auto" />
+          <AgentStatusBar onNotice={pushNotice} />
+          <NotificationCenter
+            notices={notices}
+            onLocate={(cid) => {
+              setTab('mine')
+              selectConversation(cid)
+            }}
+          />
         </div>
       </div>
 
@@ -412,7 +538,15 @@ export default function WorkbenchPage() {
               <div className="mb-2 flex gap-1.5">
                 <ToolChip label="快捷回复（P4）" />
                 <ToolChip label="AI 建议（P4）" />
-                <ToolChip label="转接（P3）" />
+                {!closed && (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                    onClick={() => setTransferOpen(true)}
+                  >
+                    转接
+                  </button>
+                )}
                 <button
                   type="button"
                   className="ml-auto rounded-lg border border-slate-200 px-2.5 py-1 text-xs text-slate-500 hover:bg-slate-50 disabled:opacity-45"
@@ -492,6 +626,24 @@ export default function WorkbenchPage() {
           )}
         </div>
       </div>
+
+      {/* P3：转接弹窗 */}
+      {transferOpen && selectedId && (
+        <TransferDialog
+          conversationId={selectedId}
+          onClose={() => setTransferOpen(false)}
+          onDone={(result) => {
+            setTransferOpen(false)
+            pushNotice({
+              level: 'info',
+              text: `已发起转接 → ${result.to_agent_id}（对方接单前可从队列重新认领）`,
+              conversationId: result.conversation_id,
+            })
+            setHandoffState('agent_offered')
+            refreshQueue()
+          }}
+        />
+      )}
     </div>
   )
 }

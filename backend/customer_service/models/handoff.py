@@ -107,6 +107,10 @@ class CSHandoff(CSBase):
     attempt_count = Column(Integer, nullable=False, default=0)
     idempotency_key = Column(String(128), nullable=True)
     total_deadline_at = Column(DateTime(timezone=True), nullable=True)
+    sla_level = Column(
+        String(16), nullable=True,
+        comment="SLA 分级标记 warning|breach（126），由超时扫描幂等写入",
+    )
     offered_at = Column(DateTime(timezone=True), nullable=True)
     offer_expires_at = Column(DateTime(timezone=True), nullable=True)
     closed_reason = Column(Text, nullable=True)

@@ -171,3 +171,84 @@ export async function getConversationCustomerContext(
 ): Promise<ConversationCustomerContext> {
   return request(`/api/cs/conversations/${conversationId}/customer-context`)
 }
+
+// ── P3：坐席状态 / 转接 / offer ─────────────────────────────
+
+export type AgentWorkStatus = 'online' | 'busy' | 'away' | 'offline'
+
+export interface AgentStatusView {
+  agent_id: string
+  display_name?: string
+  status: AgentWorkStatus | string
+  accepting: boolean
+  skill?: string
+  presence_online: boolean
+}
+
+export async function getMyStatus(): Promise<AgentStatusView> {
+  return request('/api/cs/agents/me/status')
+}
+
+export async function updateMyStatus(
+  status: AgentWorkStatus,
+): Promise<AgentStatusView> {
+  return request('/api/cs/agents/me/status', {
+    method: 'PUT',
+    body: JSON.stringify({ status }),
+  })
+}
+
+export interface TransferResult {
+  conversation_id: string
+  handoff_state: string
+  from_agent_id: string
+  to_agent_id: string
+}
+
+export async function transferConversation(
+  conversationId: string,
+  targetAgentId: string,
+  reason: string,
+): Promise<TransferResult> {
+  return request(`/api/cs/conversations/${conversationId}/transfer`, {
+    method: 'POST',
+    body: JSON.stringify({ target_agent_id: targetAgentId, reason }),
+  })
+}
+
+export interface OfferItem {
+  handoff_id: string
+  conversation_id: string
+  user_id: string
+  handoff_state: string
+  assignment_version: number
+  attempt_count: number
+  priority?: number
+  offered_at?: string
+  offer_expires_at?: string
+}
+
+export async function listMyOffers(): Promise<OfferItem[]> {
+  const data = await request<{ items: OfferItem[] }>('/api/cs/agents/me/offers')
+  return data.items ?? []
+}
+
+export async function acceptOffer(
+  handoffId: string,
+  offerVersion?: number,
+): Promise<{ conversation_id: string; handoff_state: string }> {
+  return request(`/api/cs/agents/me/offers/${handoffId}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ offer_version: offerVersion }),
+  })
+}
+
+export async function declineOffer(
+  handoffId: string,
+  offerVersion?: number,
+): Promise<{ conversation_id: string; handoff_state: string }> {
+  return request(`/api/cs/agents/me/offers/${handoffId}/decline`, {
+    method: 'POST',
+    body: JSON.stringify({ offer_version: offerVersion }),
+  })
+}

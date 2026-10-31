@@ -182,6 +182,8 @@
 
 ### P3 转人工与坐席运营
 
+> **2026-10-31 执行回写（以仓库现状为准）**：①转接实现复用 `offers.reassign_handoff`，目标**拒单/offer 超时回退 `waiting_human` 队列**（原坐席可在队列再次认领），非本节原拟的「回退原坐席」——定向回退需侵入 decline 路径，成本高于收益，如需再立项；②SLA 分级职责拆分：**warning（50% 窗口）由 `maintenance.scan_handoff_timeouts` 扫描发出（Redis SETNX 幂等）**，**breach 由 reaper 关闭路径发出**（TOTAL_DEADLINE 关闭即置 sla_level=breach + sla.breach 事件）——dispatcher 每秒扫描必先于 beat 扫描关闭超时工单，maintenance 发 breach 在现网是死代码；③坐席状态落地为 `cs_agents.status`（126 迁移，online/busy/away/offline），派单过滤排除 away/offline；「接单开关」沿用既有 `accepting` 列（顶栏 UI 可 P4 补）；④用户→坐席消息通道 = `POST /cs/conversations/my/{id}/messages`（人工态放行，广播 message.created 与图 turn 同构）。
+
 - 后端：cs_agents.status+过滤+事件；转接状态机（human_active→transfer_requested→复用 offer→回退）+迁移；用户→坐席消息通道；SLA warning/breach（幂等，CS_HANDOFF_TIMEOUT 联动）+升级标记。
 - 坐席端：人工接入页（队列/认领/offer/回复/关闭/主管重派、WS 重连降级）；转接弹窗；状态切换；通知中心；会话管理详情（回放/时间线/Trace/重派/接管/关闭）；工单管理。
 - 用户端：转人工 4 态+倒计时；接管后输入直达坐席。

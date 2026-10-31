@@ -16,12 +16,15 @@ import {
 import {
   fetchCustomerContext,
   fetchMyConversations,
+  fetchMyMessages,
   newSessionId,
+  postMyMessage,
   requestHandoff,
   submitRating,
   ORDER_STATUS_ZH,
   type CustomerContext,
   type MyConversationItem,
+  type MyMessageRow,
 } from './cs2Api'
 import { newConversationDraft, type Cs2ConversationDraft, type Cs2Message } from './types'
 import SiteNav from '@/mall/SiteNav'
@@ -63,7 +66,16 @@ export default function CustomerServicePage() {
   const [revealing, setRevealing] = useState(false)
   const [customerCtx, setCustomerCtx] = useState<CustomerContext | null>(null)
   const [handoffState, setHandoffState] = useState<string>('none')
+  const [handoffMeta, setHandoffMeta] = useState<{
+    total_deadline_at: string | null
+    queue_position: number
+  } | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const [foldKey, setFoldKey] = useState(0)
+
+  const handoffStateRef = useRef(handoffState)
+  handoffStateRef.current = handoffState
+  const pollSeenRef = useRef(new Set<string>())
 
   const abortRef = useRef<AbortController | null>(null)
   const typerRef = useRef<ReturnType<typeof createTyper> | null>(null)
@@ -205,10 +217,35 @@ export default function CustomerServicePage() {
     (text: string) => {
       const t = text.trim()
       if (!t || busy) return
+      // P3：人工服务态消息直达坐席（不进 AI 图），其余走 SSE 聊天流
+      if (['waiting_human', 'agent_offered', 'human_active'].includes(handoffStateRef.current)) {
+        const id = draftRef.current.id
+        if (id === 'new') return
+        setInput('')
+        patchDraft((d) => {
+          d.messages.push({
+            id: makeId(),
+            role: 'user',
+            content: t,
+            createdAt: Date.now(),
+          })
+        })
+        void postMyMessage(id, t).catch(() => {
+          patchDraft((d) => {
+            d.messages.push({
+              id: makeId(),
+              role: 'system',
+              content: '消息发送失败，请稍后重试。',
+              createdAt: Date.now(),
+            })
+          })
+        })
+        return
+      }
       setInput('')
       void runTurn(t)
     },
-    [busy, runTurn],
+    [busy, patchDraft, runTurn],
   )
 
   const stop = useCallback(() => {
@@ -232,7 +269,12 @@ export default function CustomerServicePage() {
 
   const selectSession = useCallback((id: string) => {
     const found = sessions.find((s) => s.id === id)
-    if (found) setDraft({ ...found, messages: found.messages.map((m) => ({ ...m })) })
+    if (found) {
+      pollSeenRef.current = new Set(found.messages.map((m) => m.id))
+      setDraft({ ...found, messages: found.messages.map((m) => ({ ...m })) })
+      setHandoffState('none')
+      setHandoffMeta(null)
+    }
   }, [sessions])
 
   const startNewSession = useCallback(() => {
@@ -241,6 +283,7 @@ export default function CustomerServicePage() {
     setRevealing(false)
     setDraft(newConversationDraft())
     setHandoffState('none')
+    setHandoffMeta(null)
   }, [])
 
   const requestHuman = useCallback(async () => {
@@ -250,9 +293,59 @@ export default function CustomerServicePage() {
       const res = await requestHandoff(id)
       setHandoffState(res.handoff_state ?? 'requested')
     } catch {
-      /* 转人工失败不打断对话，P3 完整四态横幅再细化 */
+      /* 转人工失败不打断对话 */
     }
   }, [])
+
+  // P3：人工服务态轮询——handoff 元信息（4 态/倒计时/排队位）+ 坐席消息增量
+  useEffect(() => {
+    const conversationId = draft.id
+    if (conversationId === 'new') return
+    if (!['handoff_requested', 'waiting_human', 'agent_offered', 'human_active'].includes(handoffState)) {
+      return
+    }
+    let cancelled = false
+    const poll = async () => {
+      try {
+        const res = await fetchMyMessages(conversationId, 0, 50)
+        if (cancelled) return
+        setHandoffState(res.handoff_state ?? 'none')
+        if (res.handoff_meta) {
+          setHandoffMeta({
+            total_deadline_at: res.handoff_meta.total_deadline_at,
+            queue_position: res.handoff_meta.queue_position,
+          })
+        }
+        const incoming = (res.messages ?? []).filter(
+          (m: MyMessageRow) => !pollSeenRef.current.has(m.message_id),
+        )
+        for (const m of incoming) pollSeenRef.current.add(m.message_id)
+        const agentMsgs = incoming
+          .filter((m) => m.sender_type === 'human_agent' || m.sender_type === 'system')
+          .map((m) => ({
+            id: m.message_id,
+            role: (m.sender_type === 'human_agent' ? 'agent' : 'system') as 'agent' | 'system',
+            content: m.content,
+            createdAt: Date.parse(m.created_at) || Date.now(),
+          }))
+        if (agentMsgs.length) {
+          patchDraft((d) => {
+            d.messages.push(...agentMsgs)
+          })
+        }
+      } catch {
+        /* 轮询失败静默，下一轮重试 */
+      }
+    }
+    void poll()
+    const timer = setInterval(poll, 3000)
+    const clock = setInterval(() => setNow(Date.now()), 1000)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      clearInterval(clock)
+    }
+  }, [draft.id, handoffState, patchDraft])
 
   const rate = useCallback(
     async (star: number, note: string) => {
@@ -431,10 +524,40 @@ export default function CustomerServicePage() {
             {/* 折叠卡：我的退款申请 / 我的工单 */}
             {draft.id !== 'new' && <FoldCards refreshKey={foldKey} />}
 
-            {/* 转人工横幅（P1 最小态：requested/waiting；四态倒计时 P3） */}
-            {handoffState !== 'none' && handoffState !== 'closed' && (
-              <div className="mx-auto w-full max-w-md rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-600">
-                正在为您转接人工客服…
+            {/* 转人工 4 态横幅（P3）：requested/waiting（倒计时+排队位）/
+                offered / active（接管后可继续输入）/ closed */}
+            {['handoff_requested', 'waiting_human', 'agent_offered', 'human_active'].includes(handoffState) && (
+              <div
+                className={`mx-auto w-full max-w-md rounded-lg px-3 py-2 text-xs ${
+                  handoffState === 'human_active'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : handoffState === 'agent_offered'
+                      ? 'bg-blue-50 text-blue-600'
+                      : 'bg-amber-50 text-amber-600'
+                }`}
+              >
+                {handoffState === 'handoff_requested' && '正在请求转接人工客服…'}
+                {handoffState === 'agent_offered' && '已为您指派人工客服，正在等待其接单…'}
+                {handoffState === 'waiting_human' && '等待人工客服接入…'}
+                {handoffState === 'human_active' && '人工客服已接入，请直接输入您的问题'}
+                {(handoffState === 'waiting_human' || handoffState === 'handoff_requested') && (
+                  <span className="ml-1.5 inline-flex animate-pulse">•••</span>
+                )}
+                {handoffState === 'waiting_human' && handoffMeta?.total_deadline_at && (
+                  <div className="mt-1">
+                    ⏳ 剩余 {formatCountdown(handoffMeta.total_deadline_at, now)}
+                    {typeof handoffMeta.queue_position === 'number' &&
+                      ` · 前面 ${handoffMeta.queue_position} 位等待`}
+                  </div>
+                )}
+                {handoffState === 'human_active' && (
+                  <div className="mt-1">消息将直达为您服务的人工客服</div>
+                )}
+              </div>
+            )}
+            {handoffState === 'closed' && (
+              <div className="mx-auto w-full max-w-md rounded-lg bg-slate-100 px-3 py-2 text-xs text-slate-500">
+                人工服务已结束，AI 客服继续为您服务。
               </div>
             )}
           </div>
@@ -573,6 +696,15 @@ export default function CustomerServicePage() {
       </div>
     </div>
   )
+}
+
+function formatCountdown(deadlineIso: string, now: number): string {
+  const ts = Date.parse(deadlineIso)
+  if (!Number.isFinite(ts)) return '--:--'
+  const s = Math.max(0, Math.floor((ts - now) / 1000))
+  const m = Math.floor(s / 60)
+  const ss = s % 60
+  return `${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
 }
 
 function MessageBubble({ message }: { message: Cs2Message }) {

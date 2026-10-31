@@ -23,6 +23,7 @@ API-Key 通道没有「按坐席/租户绑定的可信映射」，因此与 WS t
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
@@ -341,3 +342,240 @@ def _action_response(result: offers_service.OfferActionResult) -> OfferActionRes
         assignment_version=result.assignment_version,
         offer_expires_at=_iso(result.offer_expires_at),
     )
+
+
+@router.get("/cs/agents")
+async def list_tenant_agents(context: AgentContext = Depends(require_agent)):
+    """本租户启用坐席清单（P3）：转接弹窗的目标选择数据源。
+
+    含工作状态与技能组（不在线/小休的坐席由前端置灰）；不含负载细节
+    （busy_agent_ids 属 dispatcher 内部口径，前端以 offer/认领结果为准）。
+    """
+    from sqlalchemy import select
+
+    from backend.customer_service.models.agent import CSAgent
+
+    try:
+        async with AsyncSessionLocal() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        CSAgent.agent_id,
+                        CSAgent.display_name,
+                        CSAgent.role,
+                        CSAgent.skill,
+                        CSAgent.status,
+                        CSAgent.accepting,
+                    )
+                    .where(
+                        CSAgent.tenant_id == context.tenant_id,
+                        CSAgent.enabled.is_(True),
+                    )
+                    .order_by(CSAgent.agent_id.asc())
+                )
+            ).all()
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
+    return {
+        "agents": [
+            {
+                "agent_id": r.agent_id,
+                "display_name": r.display_name,
+                "role": r.role,
+                "skill": r.skill,
+                "status": r.status,
+                "accepting": bool(r.accepting),
+                "transferable": (r.status or "online") in ("online", "busy"),
+            }
+            for r in rows
+        ],
+    }
+
+
+# ── cs-workstation-v2 P3：坐席工作状态 + 坐席间转接 ──────────────
+
+_AGENT_STATUSES = ("online", "busy", "away", "offline")
+
+
+class AgentStatusBody(BaseModel):
+    status: str
+
+
+class TransferBody(BaseModel):
+    target_agent_id: str
+    reason: str
+
+
+@router.get("/cs/agents/me/status")
+async def get_my_status(context: AgentContext = Depends(require_agent)):
+    """本人工作状态（P3）：DB 持久状态 + Redis presence 在线判定。"""
+    try:
+        async with AsyncSessionLocal() as session:
+            row = await repository.find_agent(
+                session, tenant_id=context.tenant_id, agent_id=context.agent_id,
+            )
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
+    if row is None:
+        raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
+    from backend.customer_service.dispatch.presence import online_agent_ids
+
+    online = bool(await online_agent_ids(
+        tenant_id=context.tenant_id, agent_ids=[context.agent_id],
+    ))
+    return {
+        "agent_id": context.agent_id,
+        "display_name": row.display_name,
+        "status": row.status,
+        "accepting": bool(row.accepting),
+        "skill": row.skill,
+        "presence_online": online,
+    }
+
+
+@router.put("/cs/agents/me/status")
+async def update_my_status(
+    body: AgentStatusBody,
+    context: AgentContext = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """切换工作状态（持久）：away/offline 不参与派单（dispatch 过滤）。
+
+    事件 agent.status_changed 为瞬态广播（不落库不占 seq）：在线坐席实时
+    感知，离线坐席重连后经 GET /status 对账。
+    """
+    status = (body.status or "").strip().lower()
+    if status not in _AGENT_STATUSES:
+        raise HTTPException(422, detail="status 必须为 online/busy/away/offline")
+    try:
+        async with session.begin():
+            row = await repository.find_agent_for_update(
+                session, tenant_id=context.tenant_id, agent_id=context.agent_id,
+            )
+            if row is None:
+                raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
+            previous = row.status
+            row.status = status
+            from backend.customer_service.realtime import get_agent_hub
+
+            get_agent_hub().publish(
+                "agent.status_changed",
+                persist=False,
+                agent_id=context.agent_id,
+                tenant_id=context.tenant_id,
+                previous_status=str(previous or ""),
+                status=status,
+            )
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
+    return {
+        "agent_id": context.agent_id,
+        "status": status,
+        "accepting": bool(row.accepting),
+    }
+
+
+@router.post("/cs/conversations/{conversation_id}/transfer")
+async def transfer_conversation(
+    conversation_id: str,
+    body: TransferBody,
+    context: AgentContext = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """坐席把**自己名下**的会话转接给指定坐席（P3）。
+
+    - 仅会话当前认领坐席可发起（403）；
+    - 目标必须为本租户启用坐席且工作状态 online/busy（小休/离线不可转，422）；
+    - 复用 reassign_handoff：解除当前分配 → 定向 offer（assignment_version+1、
+      重试预算重计、offer 超时语义不变）；目标拒单/offer 超时后工单回到
+      waiting_human 队列（原坐席可在队列再次认领）；
+    - 事件：conversation.reassigned + 定向 conversation.offered（reassign
+      内建）+ conversation.transfer_requested（审计/通知中心）。
+    """
+    target = (body.target_agent_id or "").strip()
+    reason = (body.reason or "").strip()
+    if not target:
+        raise HTTPException(422, detail="target_agent_id 必填")
+    if len(reason) < 1:
+        raise HTTPException(422, detail="转接原因必填")
+    if target == context.agent_id:
+        raise HTTPException(422, detail="不能转接给自己")
+
+    from sqlalchemy import select
+
+    from backend.customer_service.dispatch.outbox import append_event
+    from backend.customer_service.models.agent import CSAgent
+    from backend.customer_service.models.handoff import CSHandoff
+
+    try:
+        async with session.begin():
+            target_row = (
+                await session.execute(
+                    select(CSAgent).where(
+                        CSAgent.tenant_id == context.tenant_id,
+                        CSAgent.agent_id == target,
+                        CSAgent.enabled.is_(True),
+                    )
+                )
+            ).scalar_one_or_none()
+            if target_row is None:
+                raise HTTPException(422, detail="目标坐席不存在或未启用")
+            if (target_row.status or "online") in ("away", "offline"):
+                raise HTTPException(
+                    422, detail="目标坐席处于小休/离线状态，暂不可转接",
+                )
+            handoff = (
+                await session.execute(
+                    select(CSHandoff).where(
+                        CSHandoff.tenant_id == context.tenant_id,
+                        CSHandoff.conversation_id == conversation_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if handoff is None:
+                raise HTTPException(404, detail="会话无进行中的人工工单")
+            if str(handoff.assigned_agent_id or "") != context.agent_id:
+                raise HTTPException(403, detail="仅会话当前认领坐席可发起转接")
+            if handoff.handoff_state not in ("human_active", "agent_offered"):
+                raise HTTPException(
+                    409,
+                    detail=f"当前状态 {handoff.handoff_state} 不允许转接",
+                )
+            result = await offers_service.reassign_handoff(
+                session,
+                tenant_id=context.tenant_id,
+                supervisor_agent_id=context.agent_id,
+                handoff_id=handoff.handoff_id,
+                target_agent_id=target,
+                reason=reason,
+            )
+            append_event(
+                session,
+                tenant_id=context.tenant_id,
+                conversation_id=conversation_id,
+                type="conversation.transfer_requested",
+                payload={
+                    "conversation_id": conversation_id,
+                    "from_agent_id": context.agent_id,
+                    "to_agent_id": target,
+                    "reason": reason[:200],
+                },
+                handoff_id=handoff.handoff_id,
+                target_agent_id=target,
+                actor_user_id=context.user_id,
+                now=datetime.now(timezone.utc),
+            )
+    except OfferNotFound as exc:
+        raise HTTPException(404, detail=str(exc)) from exc
+    except ReassignForbidden as exc:
+        raise HTTPException(403, detail=str(exc)) from exc
+    except ReassignConflict as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
+    except MemoryDatabaseUnavailable as exc:
+        raise HTTPException(503, detail="Database unavailable") from exc
+    return {
+        "conversation_id": conversation_id,
+        "handoff_state": result.handoff_state,
+        "from_agent_id": context.agent_id,
+        "to_agent_id": target,
+    }

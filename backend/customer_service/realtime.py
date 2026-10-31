@@ -264,6 +264,33 @@ class AgentHub:
             return False
         return stored is not False
 
+    @staticmethod
+    def sla_key(handoff_id: str, level: str) -> str:
+        return f"cs:sla:{quote(str(handoff_id), safe='')}:{quote(str(level), safe='')}"
+
+    def mark_sla_alert_once(
+        self, *, handoff_id: str, level: str, ttl_seconds: int,
+    ) -> bool:
+        """SLA 告警幂等闸（P3）：SETNX 成功 = 首次触发应发事件。
+
+        同步 Redis 客户端（与 refresh_presence 同通道）；
+        Redis 不可用时 fail-open（返回 True，告警照发——重复告警优于漏报）。
+        """
+        redis_client = self._redis()
+        if redis_client is None:
+            return True
+        try:
+            stored = redis_client.set(
+                self.sla_key(handoff_id, level),
+                "1",
+                nx=True,
+                ex=int(ttl_seconds),
+            )
+        except Exception:
+            logger.warning("[AgentHub] sla dedup mark failed", exc_info=True)
+            return True
+        return bool(stored)
+
     # ── publish ──────────────────────────────────────────────
 
     def publish(

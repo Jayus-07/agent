@@ -222,6 +222,11 @@ async def _close_handoff(
 
     previous_agent_id = handoff.assigned_agent_id
     handoff.handoff_state = "closed"
+    # P3 SLA 分级：总等待期到点的关闭即 breach（与 warning 的扫描告警
+    # 同一套 sla_level 口径；通知中心据事件展示升级告警）。
+    sla_breach = reason == REASON_TOTAL_DEADLINE
+    if sla_breach:
+        handoff.sla_level = "breach"
     ticket_id: str | None = None
     request_summary = ""
     if reason == REASON_TOTAL_DEADLINE:
@@ -321,11 +326,29 @@ async def _close_handoff(
             "released_agent_ids": released_agents,
             "attempt_count": int(handoff.attempt_count or 0),
             "ticket_id": ticket_id,
+            "sla_level": "breach" if sla_breach else None,
         },
         handoff_id=handoff.handoff_id,
         actor_user_id="cs_reaper",
         now=now,
     )
+    if sla_breach:
+        outbox.append_event(
+            session,
+            tenant_id=tenant_id,
+            conversation_id=handoff.conversation_id,
+            type="sla.breach",
+            payload={
+                "conversation_id": handoff.conversation_id,
+                "handoff_id": handoff.handoff_id,
+                "level": "breach",
+                "closed_reason": str(handoff.closed_reason or ""),
+                "ticket_id": ticket_id,
+            },
+            handoff_id=handoff.handoff_id,
+            actor_user_id="cs_reaper",
+            now=now,
+        )
 
 
 async def _release_offer(

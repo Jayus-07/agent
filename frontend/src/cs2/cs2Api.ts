@@ -92,8 +92,11 @@ export async function fetchMyConversations(limit = 10): Promise<MyConversationIt
 export async function fetchMyMessages(
   conversationId: string,
   sinceId = 0,
+  limit = 100,
 ): Promise<HandoffMessagesResponse> {
-  return request(`/api/cs/conversations/my/${conversationId}/messages?since_id=${sinceId}`)
+  return request(
+    `/api/cs/conversations/my/${conversationId}/messages?since_id=${sinceId}&limit=${limit}`,
+  )
 }
 
 export async function requestHandoff(conversationId: string): Promise<{ handoff_state: string }> {
@@ -101,6 +104,34 @@ export async function requestHandoff(conversationId: string): Promise<{ handoff_
     method: 'POST',
     headers: { 'Idempotency-Key': nanoid(21) },
   })
+}
+
+// ── P3：人工服务态消息通道 ─────────────────────────────────
+
+/** 转人工后（waiting/agent_offered/human_active）用户消息直达坐席 */
+export async function postMyMessage(
+  conversationId: string,
+  content: string,
+): Promise<{ message_id: string; handoff_state: string }> {
+  return request(`/api/cs/conversations/my/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content }),
+  })
+}
+
+export interface MyMessageRow {
+  message_id: string
+  sender_type: string
+  content: string
+  content_type: string
+  created_at: string
+}
+
+export interface MyHandoffMeta {
+  handoff_id: string
+  handoff_state: string
+  total_deadline_at: string | null
+  queue_position: number
 }
 
 export async function submitRating(
