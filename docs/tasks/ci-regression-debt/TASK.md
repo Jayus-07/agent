@@ -1,8 +1,8 @@
 # CI 全量回归暗债清偿
 
 > 任务 ID：ci-regression-debt
-> 创建：2026-10-30；最近交接：2026-10-31（第二批会话）
-> 状态：IN_PROGRESS（v2 的 61 例已全部定性并修复；等待全量基线 v3 实证）
+> 创建：2026-10-30；最近交接：2026-10-31（第二批会话收官）
+> 状态：IN_PROGRESS（v4：12/13 suite 全绿，唯一残余 services-travelv2 3 例——模型注册表共享状态家族，见「剩余计划」）
 
 ## 目标
 
@@ -12,7 +12,8 @@
 
 - 基线 v1（run 40948443665，2026-10-29）：108 失败。
 - **基线 v2（run 41120872440，2026-10-31 凌晨）：61 失败（净减 47），api / tools-security-obs / sql-infra / orchestration（dispatch 复验）清零**。
-- 本会话（2026-10-31 晚）把 v2 剩余 61 例全部定性并修复（PR #153/#154/#158），等待全量 v3（run 41151145995）实证。
+- 本会话（2026-10-31 晚）把 v2 剩余 61 例全部定性并修复（PR #153/#154/#158），全量 v3（run 41151145995）实证：**20 失败，misc / orchestration / evaluation / tools-security-obs 清零，Regression summary 修复生效**。
+- 批四（PR #160）消化 v3 残余 13 例，**验证 run 41205470228（全 matrix 实跑）：12/13 suite 全绿 + Regression summary 绿，唯一残余 services-travelv2 3 例**。
 
 各 suite 明细与逐批实证见 [PROGRESS.md](PROGRESS.md)。
 
@@ -31,21 +32,32 @@
 | repo-tests | 1 | a9184e4 同 request_id 重启流 409（stream_registry 进程级单例跨用例存活） | #158 |
 | （workflow） | — | Regression summary 恒红：toJSON(needs.*) 单依赖序列化为数组（全部历史 run 实证） | #158 |
 
+## 剩余计划（唯一残余，下一会话）
+
+**services-travelv2 3 例（run 41205470228 清单，模型注册表共享状态家族）**：
+
+- `memory/test_memory_supersede_atomicity.py::test_b69_supersede_rollback_keeps_old_active`
+- `memory/test_stop_e_summary_contract.py::test_end_turn_schedules_summarize_without_awaiting`
+- `services/test_model_config_persistence.py::test_create_provider_without_probe_saves_directly`
+
+根因方向：`configure_specialized` 抛 `ModelConfigConflict: 已有向量时不能通过旧专项接口切换嵌入配置`——mock 会话夹具的 canned 数据与角色绑定预检/确认/重建新流程错位（模型治理域，cs-workstation-v2 P2 #157 面）。注意 `specialized_model_config` 2 例在本轮已过（同家族、DB 状态敏感），定性时以 CI 忠实环境为准。方法照旧：单跑 → xdist → CI 模拟 env 三步。
+
 ## 验收
 
-- 每周 Full Regression step summary 失败数逐周下降至 0（v1 108 → v2 61 → v3 待证）。
-- Regression summary 表格修复后，suite 全绿时 run 才能真正变绿。
+- 每周 Full Regression step summary 失败数逐周下降至 0（**v1 108 → v2 61 → v3 20 → v4 3**）。
+- ~~Regression summary 表格修复后，suite 全绿时 run 才能真正变绿~~（已达成：run 41205470228 全绿 suite 下 summary 绿）。
 - 台账与 PR 描述如实记录；容器级部署验证 UNVERIFIED 必须显式标注。
 
 ## 纪律
 
 - 所有改动一律走 PR 合 main；提交用 `git add -A -- <paths>` + `git commit -m "..." -- <paths>` 双重路径限定。
 - 不扩大 mock、不删断言、不 skip/xfail 掩盖失败；未实际执行的验证不得报通过。
-- 本会话三批全部为测试资产 + CI workflow 改动，未动产品代码，无需 rebuild。
+- 本会话四批全部为测试资产 + CI workflow 改动，未动产品代码，无需 rebuild。
 - 数据文件（suite 声明 candidate.1 vs manifest candidate.4）的不一致属 DATA-01 数据链流程，未在本任务扩范围（测试注释已标注）。
+- 并行会话协同边界：sql-infra 授权回收（#160）是对 #157 引入越权的守卫响应；125 分类补登记同理。模型注册表测试家族的修复涉及对方领域，动手前先核对 #157 之后的演进。
 
 ## 关联
 
 - 前序：PR #126–#132、#136、#139–#145、#149、#150（任务文档）。
-- 本会话已合 PR：#153（orchestration 7 + inventory 10）、#154（misc 12 + lock 补 kafka-python）、#158（第三批 22 例 + summary）。
+- 本会话已合 PR：#153（orchestration 7 + inventory 10）、#154（misc 12 + lock 补 kafka-python）、#158（第三批 22 例 + summary）、#159（台账）、#160（批四 13 例 + 125 登记 + wallet REVOKE）。
 - 本任务文档：[PROGRESS.md](PROGRESS.md)（含 v1→v2→v3 曲线、实证数据、坑位记录）。
