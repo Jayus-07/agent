@@ -586,9 +586,13 @@ class TestActionExpert:
         mock_store = MagicMock()
         mock_store_fn.return_value = mock_store
 
+        # 290d2b7 起 refund_request 走专用真实链路（confirmation_flow →
+        # refund_service，要求可信身份与业务模式启用，缺失 fail-closed），
+        # 不再消费 _simulate_execute；本用例测的是「pending confirmation
+        # 确认后执行」消费链，用模拟类动作（address_update）保持原意。
         pending_action = {
-            "action_type": "refund_request",
-            "proposal_text": "退款确认",
+            "action_type": "address_update",
+            "proposal_text": "修改地址确认",
             "target_type": "order",
             "target_id": "ORD-001",
             "risk_level": "high",

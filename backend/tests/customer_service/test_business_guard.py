@@ -365,7 +365,14 @@ async def test_d17_expired_allows_reissue():
 
 
 async def test_d18_refund_request_reissue_follows_case_state(monkeypatch):
-    """申请登记成功不永久阻断；活跃案件由客服事实源单独拦截。"""
+    """申请登记成功不永久阻断；活跃案件由客服事实源单独拦截。
+
+    store 契约（STOP D 起）：每 (user, session) 一条当前确认行，同会话
+    save 整行覆盖（need_info 升级/reask 语义）——测试期同会话连续登记
+    不同 action_id 会互相覆盖，无法构造多行。终态重发策略（§38/D18）：
+    TERMINAL_BLOCKED_ACTIONS 为空，return_request 在 success 后允许再次
+    发起（不同会话 INSERT 新行，守卫按业务维度查 ACTIVE 放行）。
+    """
     async def no_active_case(*_args, **_kwargs):
         return None
 
@@ -374,17 +381,15 @@ async def test_d18_refund_request_reissue_follows_case_state(monkeypatch):
         no_active_case,
     )
     user = _PREFIX + "d18"
-    session = user + "-conv"
-    _save_threaded(user, session, _pending(action_id="conf-A"))
+    _save_threaded(user, user + "-conv-1", _pending(action_id="conf-A",
+                                                    action_type="return_request"))
     _set_state("conf-A", "success")
-    _save_threaded(user, session, _pending(action_id="conf-B"))
-    # return_request success 后依旧允许再次发起。
-    _save_threaded(user, session, _pending(action_id="conf-C",
-                                           action_type="return_request"))
-    _set_state("conf-C", "success")
-    _save_threaded(user, session, _pending(action_id="conf-D",
-                                           action_type="return_request"))
-    assert len([r for r in _db_rows(user) if r["state"] == "success"]) == 2
+    # return_request success 后依旧允许再次发起（跨会话新 INSERT）
+    _save_threaded(user, user + "-conv-2", _pending(action_id="conf-B",
+                                                    action_type="return_request"))
+    rows = _db_rows(user)
+    assert len([r for r in rows if r["state"] == "success"]) == 1
+    assert len([r for r in rows if r["state"] == "pending"]) == 1
 
 
 async def test_d19_proposal_upgrade_atomic_fingerprint():

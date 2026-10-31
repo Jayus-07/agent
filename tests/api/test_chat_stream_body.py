@@ -51,11 +51,16 @@ class TestChatStreamBody:
         assert "event: meta" in body or "event: error" in body
 
     def test_ascii_question_accepted(self, client):
-        """ASCII payload 应该正常。"""
+        """ASCII payload 应该正常。
+
+        a9184e4 起同 request_id 重启流返回 409（stream_registry 是进程级
+        单例，跨用例存活）——本文件前序用例已注册 "r1"，这里必须用独立 id。
+        """
         with patch("backend.app.api.routes.chat._active_stops", {}):
             resp = client.post(
                 "/chat/stream",
-                json={"question": "test", "session_id": "t1", "request_id": "r1"},
+                json={"question": "test", "session_id": "t1",
+                      "request_id": "r1-ascii"},
             )
         assert resp.status_code == 200
 
