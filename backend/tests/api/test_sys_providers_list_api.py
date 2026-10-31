@@ -91,8 +91,14 @@ def _db_snapshot() -> registry_store.RegistrySnapshot:
 # ── 限制 1：JWT 用户身份（B3 起读端点放宽，service 身份仍拒）────────────
 
 
-def test_requires_jwt_user():
-    """不覆盖鉴权依赖 → 走真实 `require_user_actor`（无 JWT 应被拒）。"""
+def test_requires_jwt_user(monkeypatch):
+    """不覆盖鉴权依赖 → 走真实 `require_user_actor`（无 JWT 应被拒）。
+
+    44d2e53 起 internal token 通道 fail-closed：未配置 AI_INTERNAL_TOKEN 时
+    无头请求先撞 503 而非身份层 401/403——注入测试令牌锁定 401 语义。
+    """
+    from backend.config import messaging
+    monkeypatch.setattr(messaging, "AI_INTERNAL_TOKEN", "ci-internal-token")
     a = FastAPI()
     a.include_router(sys_providers.router)
     assert TestClient(a).get("/sys/providers").status_code in (401, 403)

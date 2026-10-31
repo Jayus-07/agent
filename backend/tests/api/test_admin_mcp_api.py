@@ -33,7 +33,11 @@ def client():
 
 
 class TestPermissionGates:
-    def test_overview_rejects_missing_identity(self, client):
+    def test_overview_rejects_missing_identity(self, client, monkeypatch):
+        # 44d2e53 起 internal token 未配置时 fail-closed 503 挡在身份层
+        # 之前——显式豁免（仅测试进程）放行无头请求，锁定 403 语义。
+        from backend.app.api import deps
+        monkeypatch.setattr(deps, "ALLOW_UNAUTHENTICATED", True)
         r = client.get("/admin/mcp/overview")
         assert r.status_code == 403
 
@@ -51,7 +55,9 @@ class TestPermissionGates:
         r = client.get("/admin/mcp/connections", headers=VIEWER_HEADERS)
         assert r.status_code == 403
 
-    def test_connection_detail_rejects_anonymous(self, client):
+    def test_connection_detail_rejects_anonymous(self, client, monkeypatch):
+        from backend.app.api import deps
+        monkeypatch.setattr(deps, "ALLOW_UNAUTHENTICATED", True)
         r = client.get("/admin/mcp/connections/mcp_conn_x")
         assert r.status_code == 403
 
@@ -60,7 +66,9 @@ class TestPermissionGates:
                         json={"product_key": "agent"})
         assert r.status_code == 403
 
-    def test_test_invoke_rejects_anonymous(self, client):
+    def test_test_invoke_rejects_anonymous(self, client, monkeypatch):
+        from backend.app.api import deps
+        monkeypatch.setattr(deps, "ALLOW_UNAUTHENTICATED", True)
         r = client.post("/admin/mcp/tools/1/test-invoke",
                         json={"arguments": {}})
         assert r.status_code == 403

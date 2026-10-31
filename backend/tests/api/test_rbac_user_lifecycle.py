@@ -108,6 +108,9 @@ def _psql_row(sql: str, params: dict):
 
 
 def test_user_lifecycle_end_to_end(monkeypatch):
+    # issue/verify_access_token 读 JWT_SECRET env（>=32B）；CI 无 .env 时
+    # 进程内注入测试密钥，本地与 .env 同语义覆盖。
+    monkeypatch.setenv("JWT_SECRET", "ci-test-jwt-secret-0123456789abcdef")
     client = _client(monkeypatch)
     prefix = f"p6lc{uuid.uuid4().hex[:8]}"
     username = f"{prefix}a"

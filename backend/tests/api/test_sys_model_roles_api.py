@@ -66,7 +66,11 @@ def _a_registered_qwen_model() -> str:
 # ── 限制：admin only ────────────────────────────────────────────────────
 
 
-def test_requires_admin():
+def test_requires_admin(monkeypatch):
+    # 44d2e53 fail-closed：CI 无 AI_INTERNAL_TOKEN 时无头请求先撞 503，
+    # 注入测试令牌锁定身份层 401/403 语义。
+    from backend.config import messaging
+    monkeypatch.setattr(messaging, "AI_INTERNAL_TOKEN", "ci-internal-token")
     a = FastAPI()
     a.include_router(sys_model_roles.router)
     assert TestClient(a).get("/sys/model-roles").status_code in (401, 403)
