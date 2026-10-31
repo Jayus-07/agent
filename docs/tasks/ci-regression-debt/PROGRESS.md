@@ -201,3 +201,36 @@ Run 41120872440（main = #146 后）。**api/rag/backend-root 三 job 从未启�
 - v2 61 例定性总表见 [TASK.md](TASK.md)；三批 PR：#153 / #154 / #158。
 - 全量 v3：run 41151145995（2026-10-31T00:37Z dispatch，无参数全量）。
 - 本地资产：`/d/tmp/ci-debt/`（v2orch、v3misc、orch_ci_v2.log、travel_xdist_fix1.txt、cs_xdist1.txt、pc_xdist1.txt、batch3_regress.txt 等）。
+
+## v3 实证 + 批四（PR #160）+ v4 收敛（2026-10-31 深夜）
+
+### 全量 v3（run 41151145995，main = #158 后）
+
+- **20 失败 / 12+1 jobs**：misc、orchestration、evaluation、tools-security-obs 清零；Regression summary 首次变绿（修复生效）。
+- 残余定性：travel 4（d2_two_hop 2 + provider_contracts 2，域门/Key 门 CI 缺省关）、sql-infra 1（#157 的 schema 级 GRANT 把 125 新表授给 agent_readonly，守卫按设计拦）、repo-tests 1（125 漏 rag_smoke 分类登记）、collapse 1 + p5 1（CI-only，本轮 dispatch 已过——间歇性）、services-travelv2 10（probe 8 + memory 2）、api/rag/backend-root 又被取消（runner 并发，老问题）。
+
+### 批四 PR #160（13 例）
+
+- provider_probe 8：url_guard SSRF 预检真 DNS 解析测试域名 → catalog 契约用例替身 assert_url_allowed（**仅 test_catalog_* 且排除 rejects_private**——第一版全局 autouse 误伤 3 个 SSRF 行为用例，'pass'=='fail' 实证后收窄）。
+- d2_two_hop 2：TRAVEL_BOOKING_ENABLED=false 本地模拟与 CI 失败逐行一致 → autouse 开闸（booking 判定源 = config 模块属性，evaluation runner 同口径）。
+- provider_contracts 2：merchant 门 `MAP.is_amap_configured()`（CI 无 AMAP_KEY）、train 门 `MCP_CFG.is_train_mcp_enabled()`（不是 train_mod.TRAIN_MCP_ENABLED——patch 错位置报 AttributeError 才发现）。
+- repo-tests 1：125_mall_wallet.sql 只登记了 init_db.py、漏 rag_smoke filter（#157 单边登记；守卫测试在 tests/ 根目录而非 backend/tests/）。
+- sql-infra 1：CI init 的 schema 级 GRANT 在 init_db 之后执行 → 125 新 wallet 表被一并授权 → 守卫 fail-fast（**全量回归当门禁抓到并行会话的越权授权**）。修：CI init 显式 REVOKE（未纳管 fail-closed）。
+
+### 验证 run 41205470228（#160 合并后，全 matrix 实跑）
+
+- **12/13 suite 全绿 + Regression summary 绿**；唯一残余 services-travelv2 3 例（memory 2 + model_config_persistence 1，模型注册表共享状态家族，specialized 2 例本轮已过）。
+- **收敛曲线：v1 108 → v2 61 → v3 20 → v4 3。**
+
+### 本会话新增坑位（续）
+
+13. **`git checkout -b <branch> origin/main` 前必须核对 fetch 是否真成功**：本会话台账分支创建时 fetch 网络抖动失败（tail -1 吞了报错），origin/main 停在旧点，checkout 把工作树**静默回退**——#158 全部修复（booking 锁、删除的文件、V2 迁移）在本地消失，批四编辑叠在旧树上跑出 7 个幻影失败（已删文件复活）。恢复：stash 编辑 → 核对 `git log --oneline -1 origin/main` → 重开分支 → stash pop。**分支创建后第一件事：`git log --oneline -1` 确认 parent 是预期 commit。**
+14. **门替身要打在真正的判定函数上**：patch 旧属性名（train_mod.TRAIN_MCP_ENABLED 不存在）会直接 AttributeError 暴露；而 patch 全局 autouse 会误伤专门测守卫行为的用例（provider_probe 的 SSRF 用例）——用测试名条件收窄 + 显式排除名单。
+15. **守卫测试可能在 tests/ 根目录而非 backend/tests/**（repo-tests suite）：找测试文件先 `find . -name` 别假设目录。
+16. **并行会话的连带义务是双向的**：#157 加迁移只登记了 init_db 漏了 rag_smoke filter；加 finance 表触发了只读授权越权守卫。全量回归是抓这类跨会话漂移的唯一网——这正本任务存在的意义。
+
+### 下一会话
+
+- 唯一残余：services-travelv2 3 例（TASK.md「剩余计划」有根因方向），修完即 0。
+- p5 / collapse 已间歇性转绿，无需再修；若未来复发按坑位 7 的 CI 模拟方法重定性。
+- 每周例行跑：v4 起除 travelv2 外应稳定全绿。
