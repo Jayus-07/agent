@@ -1,7 +1,8 @@
-"""test_cs_runner_v2.py — CS 评测集 v2（300 条）离线 CI 门禁。
+"""test_cs_runner_v2.py — CS 评测集 v2（304 条）离线 CI 门禁。
 
 门禁口径（P0 评测集设计稿 §5）：六类 jsonl 任一条 schema/枚举/id 非法即失败；
 经 runner offline sanity（不调 LLM，CI 常驻）。
+cs-workstation-v2 P2：C2/C3 各补 2 条（余额查询/取消订单），锁定量 300→304。
 """
 import json
 from pathlib import Path
@@ -37,15 +38,15 @@ def _load_cases() -> list[TestCase]:
     return cases
 
 
-def test_cs_v2_total_is_locked_300():
+def test_cs_v2_total_is_locked():
     cases = _load_cases()
-    assert len(cases) == 300, f"锁定量 300，实际 {len(cases)}"
+    assert len(cases) == 304, f"锁定量 304，实际 {len(cases)}"
 
 
 def test_cs_v2_offline_sanity_all_pass():
     cases = _load_cases()
     results = _run_cs(cases, live=False)
-    assert len(results) == 300
+    assert len(results) == 304
     failures = [r for r in results if r.status != "pass"]
     assert not failures, (
         f"离线校验失败 {len(failures)} 条，前 3 条: "
