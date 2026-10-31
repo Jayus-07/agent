@@ -273,7 +273,7 @@ class TestHumanActiveRecoveryRealPG:
 
             # 本机 dispatcher 可能在本次调用前先恢复同一条工单；以 PG
             # 的最终状态/版本/outbox 为准，验证多实例竞争下恰好一次生效。
-            _run(_do_recovery())
+            reap = _run(_do_recovery())
             cur.execute(
                 "SELECT handoff_state, assigned_agent_id, assignment_version,"
                 " total_deadline_at IS NOT NULL"
@@ -281,7 +281,11 @@ class TestHumanActiveRecoveryRealPG:
                 (handoff_id,),
             )
             state, assigned, version, has_deadline = cur.fetchone()
-            assert state == "waiting_human"
+            # 断言消息携带 reaper 分流计数：CI-only 失败时可直接区分
+            # 「候选未预读（scanned=0）」与「锁内 CAS/grace 竞争跳过（contended）」
+            assert state == "waiting_human", (
+                f"reap 未恢复：scanned={reap.scanned} contended={reap.contended} "
+                f"recovered={reap.recovered} released={reap.released}")
             assert assigned is None
             assert version == 2  # 1 → 2
             assert has_deadline is True  # deadline 已顺延

@@ -195,12 +195,13 @@ class TestMaintenanceScans:
     def test_handoff_scan_normal_path(self):
         from backend.customer_service import maintenance
 
+        # 36f40b9 起 run_sync 契约为 (alerts, closed) 二元组，count=len(closed)
         with patch(
             "backend.customer_service._db_loop.run_sync",
-            return_value=[{
+            return_value=([], [{
                 "handoff_id": "h-1", "user_id": "u1",
                 "conversation_id": "conv-1", "handoff_state": "waiting_human",
-            }],
+            }]),
         ) as mock_run:
             result = maintenance.scan_handoff_timeouts()
 
