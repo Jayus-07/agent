@@ -252,3 +252,58 @@ export async function declineOffer(
     body: JSON.stringify({ offer_version: offerVersion }),
   })
 }
+
+// ── P4：快捷回复话术（个人/团队） ───────────────────────────
+
+export type CannedScope = 'personal' | 'team'
+
+export interface CannedItem {
+  id: number
+  scope: CannedScope | string
+  owner_agent_id: string | null
+  title: string
+  content: string
+  category: string
+  enabled: boolean
+  updated_at: string | null
+}
+
+export interface CannedMutationResult {
+  id: number
+  scope: string
+  title: string
+  content: string
+  category: string
+  enabled: boolean
+}
+
+export async function listCanned(): Promise<CannedItem[]> {
+  const data = await request<{ items: CannedItem[] }>('/api/cs/canned-responses')
+  return data.items ?? []
+}
+
+export async function createCanned(body: {
+  title: string
+  content: string
+  category?: string
+  scope: CannedScope
+}): Promise<CannedMutationResult> {
+  return request('/api/cs/canned-responses', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function updateCanned(
+  id: number,
+  body: { title?: string; content?: string; category?: string; enabled?: boolean },
+): Promise<CannedMutationResult> {
+  return request(`/api/cs/canned-responses/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function deleteCanned(id: number): Promise<void> {
+  await request(`/api/cs/canned-responses/${id}`, { method: 'DELETE' })
+}
