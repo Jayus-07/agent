@@ -207,6 +207,8 @@
 - 测试：T2 审核权限（仅 supervisor）/状态机不可回退/审计断言/与幂等交互；T3 提交→通过 与 提交→驳回 双路径。
 - 验收：审核在 UI 闭环；用户可见状态变化。
 
+> **2026-10-31 执行回写**：①http 模式审核经 Mock `POST /business/refund-requests/{id}/review`（终态锁+approved 自动回款钱包 kind=refund）；审核队列为 `GET /business/refunds/review-queue`（租户级，扩展视图含归属字段）；②sandbox 模式审核走 cs_case（案件 resolved+review 记录），投影以 review 决定为用户可见状态；③审计 actor_type 取 'human'（表 CHECK 限 ai/human/system）；④**部署配置项：CS_REFUND_REQUEST_MODE=http 必须与 CS_BUSINESS_GATEWAY_MODE 同启**（默认 disabled）；⑤用户端「站内通知」以折叠卡状态联动+30s 轮询交付，用户侧通知中心基建留 Phase 8 复核。
+
 ### P6 质检中心
 
 - 后端：cs_qa_scores（迁移）+每日抽样 Celery（参数化 N）+评分/申诉/终审 API+AI 预填（source=ai，人工终审）。

@@ -45,6 +45,16 @@ export default function FoldCards({ refreshKey = 0 }: { refreshKey?: number }) {
     }
   }, [refreshKey])
 
+  // P5：审核结果异步产生——30s 轻量轮询让「已通过/已驳回」状态可见
+  useEffect(() => {
+    const timer = setInterval(() => {
+      listRefundRequests(10)
+        .then((rows) => setRefunds(rows))
+        .catch(() => {})
+    }, 30_000)
+    return () => clearInterval(timer)
+  }, [])
+
   if (refunds?.length === 0 && tickets?.length === 0) return null
 
   return (

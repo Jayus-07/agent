@@ -656,6 +656,81 @@ class RefundService:
 
         return len(result.rows) > 0
 
+    # ── cs-workstation-v2 P5：supervisor 审核（http 模式正式状态推进） ──
+
+    @staticmethod
+    def _review_mode() -> str:
+        """审核能力模式：仅 http 网关支持正式推进；sandbox 走 cs_case 本地路径。"""
+        from backend.config import customer_service as cfg
+
+        gateway = str(getattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "")).lower()
+        refund_mode = str(getattr(cfg, "CS_REFUND_REQUEST_MODE", "")).lower()
+        if gateway == "http" and refund_mode == "http":
+            return "http"
+        if gateway == "sandbox" and refund_mode == "sandbox":
+            return "sandbox"
+        return "disabled"
+
+    def list_review_queue(
+        self, *, tenant_id: str, status: str | None = None, limit: int = 50,
+    ) -> list[dict]:
+        """supervisor 审核队列：读 business-service 租户级申请列表。"""
+        from backend.infra.http.business_client import BusinessServiceError, get_json_sync
+
+        try:
+            params: dict = {"tenant_id": tenant_id, "limit": limit}
+            if status:
+                params["status"] = status
+            response = get_json_sync("/business/refunds/review-queue", params=params)
+        except BusinessServiceError as exc:
+            raise DatabaseError("审核队列暂不可用，请稍后重试") from exc
+        data = response.get("data") if isinstance(response, dict) else {}
+        return list((data or {}).get("requests") or [])
+
+    def review_refund_request(
+        self,
+        *,
+        request_id: str,
+        decision: str,
+        opinion: str,
+        reviewer_id: str,
+    ) -> dict:
+        """审核终态推进：approved 由订单系统回款钱包；终态不可回退。
+
+        operation_id 由服务端生成 UUID——重复提交同一申请在 Mock 侧因终态
+        锁返回 409（前端按钮终态置灰，不做跨请求幂等合并）。
+        """
+        import uuid as _uuid
+
+        from backend.customer_service.errors import RefundReviewConflictError
+        from backend.infra.http.business_client import BusinessServiceError, post_json_sync
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        try:
+            response = post_json_sync(
+                f"/business/refund-requests/{request_id}/review",
+                json_body={
+                    "decision": decision,
+                    "opinion": opinion.strip(),
+                    "reviewer_id": reviewer_id,
+                    "operation_id": str(_uuid.uuid4()),
+                },
+            )
+        except BusinessServiceError as exc:
+            if exc.status_code == 0 or exc.status_code >= 500:
+                raise SideEffectOutcomeUnknown(
+                    "退款审核结果未能确认，请勿重复提交，先刷新查看当前状态",
+                ) from exc
+            if exc.status_code == 404:
+                raise RefundRequestUnavailableError(
+                    "退款申请不存在或已被清理",
+                ) from exc
+            if exc.status_code == 409:
+                raise RefundReviewConflictError() from exc
+            raise DatabaseError("退款审核提交失败，请稍后重试") from exc
+        data = response.get("data") if isinstance(response, dict) else {}
+        return dict((data or {}).get("request") or {})
+
 
 _service_instance: RefundService | None = None
 _service_lock = threading.Lock()

@@ -183,6 +183,7 @@ export interface AgentStatusView {
   accepting: boolean
   skill?: string
   presence_online: boolean
+  cs_role?: string | null
 }
 
 export async function getMyStatus(): Promise<AgentStatusView> {
@@ -306,4 +307,40 @@ export async function updateCanned(
 
 export async function deleteCanned(id: number): Promise<void> {
   await request(`/api/cs/canned-responses/${id}`, { method: 'DELETE' })
+}
+
+// ── P5：退款审核（supervisor） ─────────────────────────────
+
+export interface RefundQueueItem {
+  request_id: string
+  request_no?: string | null
+  status: string
+  status_display?: string | null
+  order_no?: string | null
+  amount?: string | number | null
+  reason?: string | null
+  policy_version?: string | null
+  user_id?: string | null
+  conversation_id?: string | null
+  review?: { decision: string; opinion: string; reviewer_id: string; reviewed_at?: string } | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export async function listRefundQueue(
+  status?: string,
+): Promise<{ items: RefundQueueItem[]; total: number; mode: string }> {
+  const q = status ? `?status=${encodeURIComponent(status)}` : ''
+  return request(`/api/cs/refunds/review-queue${q}`)
+}
+
+export async function reviewRefund(
+  requestId: string,
+  decision: 'approved' | 'rejected',
+  opinion: string,
+): Promise<{ request_id: string; status: string; status_display?: string | null }> {
+  return request(`/api/cs/refunds/${requestId}/review`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, opinion }),
+  })
 }

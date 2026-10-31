@@ -73,6 +73,8 @@ def _refund_request_view(case: Any) -> dict | None:
     request = context.get("refund_request")
     if not isinstance(request, dict):
         return None
+    # P5：人工审核结果优先（approved/rejected 是用户可见终态）
+    review = request.get("review") if isinstance(request.get("review"), dict) else None
     state_to_status = {
         "open": "pending_review",
         "waiting_user": "needs_user",
@@ -81,13 +83,25 @@ def _refund_request_view(case: Any) -> dict | None:
         "closed": "closed",
     }
     order_no = str(request.get("order_no") or "")
+    if review:
+        status = str(review.get("decision") or "")
+        status_display = (
+            "审核通过，退款已退回钱包" if status == "approved" else "审核未通过"
+        )
+    else:
+        status = state_to_status.get(case.status, "unknown")
+        status_display = "等待人工审核"
     return {
         "request_id": str(case.case_id),
-        "status": state_to_status.get(case.status, "unknown"),
+        "request_no": f"RA-{str(case.case_id).replace('-', '')[:12].upper()}",
+        "status": status,
+        "status_display": status_display,
         "case_status": str(case.status),
+        "order_no": order_no,
         "order_display": f"订单尾号 ****{order_no[-4:]}" if order_no else "订单",
         "amount": str(request.get("amount") or ""),
         "policy_version": str(request.get("policy_version") or ""),
+        "review": review,
         "created_at": case.created_at.isoformat() if case.created_at else None,
         "updated_at": case.updated_at.isoformat() if case.updated_at else None,
     }
@@ -514,6 +528,101 @@ class CSCaseService:
                 if view is not None:
                     result.append(view)
             return result
+
+    # ── cs-workstation-v2 P5：sandbox 模式 supervisor 审核 ──────
+
+    async def async_list_review_queue(
+        self, *, tenant_id: str, status: str | None = None, limit: int = 50,
+    ) -> list[dict]:
+        """supervisor 审核队列：本租户全部退款申请（不限 user）。"""
+        from backend.customer_service.models.case import CSCase
+        from backend.memory.database import AsyncSessionLocal
+
+        if not tenant_id or tenant_id == "default":
+            raise BusinessRuleError(
+                "审核队列缺少可信租户身份",
+                user_message="身份信息暂不可核验，无法查询审核队列。",
+            )
+        async with AsyncSessionLocal() as db:
+            stmt = (
+                select(CSCase)
+                .where(
+                    CSCase.tenant_id == tenant_id,
+                    CSCase.case_type == "refund",
+                    CSCase.related_confirmation_id.is_not(None),
+                )
+                .order_by(CSCase.created_at.asc())
+                .limit(max(1, min(int(limit), 200)))
+            )
+            rows = (await db.execute(stmt)).scalars().all()
+            result = []
+            for case in rows:
+                view = _refund_request_view(case)
+                if view is None:
+                    continue
+                if status and view.get("status") != status:
+                    continue
+                result.append(view)
+            return result
+
+    async def async_review_refund_request(
+        self,
+        request_id: str,
+        *,
+        tenant_id: str,
+        decision: str,
+        opinion: str,
+        reviewer_id: str,
+    ) -> dict:
+        """sandbox 审核：推进案件状态并落审核记录（本地事实源，无资金动作）。"""
+        from datetime import datetime, timezone as _tz
+
+        from backend.customer_service.errors import RefundReviewConflictError
+        from backend.customer_service.models.case import CSCase
+        from backend.memory.database import AsyncSessionLocal
+        from sqlalchemy import select as _select
+
+        try:
+            stable_id = str(uuid.UUID(str(request_id)))
+        except (ValueError, TypeError, AttributeError):
+            raise BusinessRuleError(
+                "退款申请 ID 无效", user_message="退款申请不存在。",
+            ) from None
+        async with AsyncSessionLocal() as db:
+            case = (
+                await db.execute(
+                    _select(CSCase).where(
+                        CSCase.case_id == stable_id,
+                        CSCase.tenant_id == tenant_id,
+                        CSCase.case_type == "refund",
+                        CSCase.related_confirmation_id == stable_id,
+                    ).limit(1)
+                )
+            ).scalar_one_or_none()
+            request = (
+                (case.context or {}).get("refund_request")
+                if case is not None else None
+            )
+            if case is None or not isinstance(request, dict):
+                raise BusinessRuleError(
+                    "退款申请不存在", user_message="退款申请不存在或已被清理。",
+                )
+            if isinstance(request.get("review"), dict):
+                raise RefundReviewConflictError()
+
+            context = dict(case.context or {})
+            request["review"] = {
+                "reviewer_id": reviewer_id,
+                "opinion": opinion.strip(),
+                "decision": decision,
+                "reviewed_at": datetime.now(_tz.utc).isoformat(),
+            }
+            context["refund_request"] = request
+            case.context = context
+            case.status = "resolved"
+            case.updated_at = datetime.now(_tz.utc)
+            await db.commit()
+            return _refund_request_view(case) or {}
 
     @staticmethod
     async def _load_refund_case(

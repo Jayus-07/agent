@@ -163,3 +163,14 @@
   - 话术权限矩阵 ✅（个人读写/他人 404/team 读全员写 supervisor 403/跨租户 404——T2 真库 9 例）
 - **顺延项（累计）**：顶栏接单开关 UI、`POST /my/{id}/messages` 幂等键、更多菜单三功能（建议 P5+ 一并立项）。
 - **下一期**：P5 退款审核闭环，自 origin/main@2677af9 起新分支 feat/cs-v2-p5（依赖 P2 提案链路；business-service 正式状态推进替代测试钩子）。
+
+### 2026-10-31（十三）—— P5 退款审核闭环实现完成并全链实测通过
+
+- **分支**：feat/cs-v2-p5（自 origin/main@2f57691）。持续任务模式第三期。
+- **后端**：①Mock 新增正式审核端点 `POST /business/refund-requests/{id}/review`（意见必填/终态锁 409/operation_id 幂等重放/**approved 自动回款钱包**（kind=refund，对齐 cancel_refund 语义））+ `GET /business/refunds/review-queue`（租户级运营队列，扩展视图含 user_id/tenant_id/conversation_id——对外 _refund_view 仍不含归属字段）；测试钩子 `set_refund_status_for_test` 加注降级为仅供测试；②`RefundService.list_review_queue/review_refund_request`（封套 data 层解包、409→RefundReviewConflictError 新异常、写结果未知→SideEffectOutcomeUnknown）；③sandbox 路径：case_service 队列/审核（案件 resolved + context.refund_request.review）+ 投影补 request_no/order_no/status_display/review（审核结果优先为用户可见终态）；④新路由 `cs_refund_review.py`：队列+审核（supervisor 双闸）+ **audit_logs 留痕**（actor_type=human——CHECK 约束 ai/human/system，实测抓出）；⑤用户端 GET /cs/refund-requests 双模式分流（http=Mock 事实源按 user 过滤，修 P2 遗留的形状不匹配）；⑥GET /cs/agents/me/status 增 cs_role（nav 视角过滤数据源）。
+- **前端**：frontend-cs RefundsPage 完整替换占位（状态筛选/详情含政策版本与「编号不代表已退款」提示/意见必填/通过·驳回/终态锁显示审核记录）；WorkstationShell nav 按 cs_role 过滤 supervisorOnly（角色未知不显示，安全默认）；frontend cs2Api 折叠卡解析修复（{items}）+ FoldCards 30s 轮询审核结果联动。
+- **测试证据（均实际执行）**：后端 13 passed（Mock review 7：回款/终态锁/幂等重放/队列过滤 + 路由 6：supervisor 闸/意见必填/409·404·未知映射/真库审计行/分流跨用户过滤）；frontend-cs 全量 43 files/**313 passed**（含 refunds-page 3 例 + workstation-shell 按行为变更更新为 3 例）；frontend 全量 **688 passed**；双端 tsc 0 新增；双端生产构建通过。
+- **重建实测（http 全链，全部通过）**：下单→支付（余额扣款）→登记退款申请→supervisor 队列可见→审核通过（意见中文无损）→**钱包回款 4642.00→5000.00（+358，kind=refund 流水）**→终态锁 409→agent 403/意见空白 422→**用户端折叠卡数据源实时可见 approved**（含 status_display）；audit_logs 落 refund_review|human|cs_wire_e2e|success。
+- **实测排障三条**：①本机 .env 缺 CS_REFUND_REQUEST_MODE=http（默认 disabled，审核通道 503）——已补（gitignore 本机配置，部署清单需含此项，Phase 8 连带核对）；②audit_logs.actor_type CHECK（ai/human/system）——'agent' 非法，人工动作用 'human'；③产品身份规则拒绝 default 租户查退款（防共享租户），实测用 tenant-demo。
+- **环境恢复**：p5t- 临时坐席删除；cs_wire_e2e 恢复 enabled=f；实测审计行按规保留（真实操作留痕）。
+- **遗留**：用户端「站内通知」以折叠卡状态联动+轮询交付（用户侧通知中心基建未建，Phase 8 复核 TASK 矩阵口径）。
