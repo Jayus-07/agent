@@ -238,3 +238,60 @@ Run 41120872440（main = #146 后）。**api/rag/backend-root 三 job 从未启�
 ## 交接定稿（2026-10-31 深夜）
 
 残余 3 例的完整交接（总计划/进度锚点/工作树/测试/验收五节）已写入 [TASK.md](TASK.md) 文末「交接」章节，下一会话直接按该章节执行；本文件坑位 1–16 为配套避坑索引。
+
+---
+
+# 第三批会话（2026-10-31 深夜 ~ 2026-11-01）：批五~批十二，services-travelv2/api/cs/prompts 清零，backend-root 首曝移交
+
+> 会话经历两次意外中断（关机/会话退出），三次接力完成。工作树一度被外部清理（非本会话操作），从 origin/main 重建后无实质损失（成果全部以 PR 形式固化）。
+
+## 分批实证（run 号即证据）
+
+### 批五 #168：api 13 例（v5 首曝）
+
+- **v5（run 41211617846，#163 后首个真实全量）暴露 api 13 例**。定性：44d2e53 起 internal token 通道 fail-closed，CI 无 AI_INTERNAL_TOKEN → 无头请求先撞 503。修：按断言形态分流注入（6 例 `messaging.AI_INTERNAL_TOKEN`→401；5 例 `deps.ALLOW_UNAUTHENTICATED`→service 身份→enforce 403）+ 2 例 JWT_SECRET setenv。
+- **重大定性修正**：v4 run 41205470228 的 api job 仅 16 秒——**gate skip 假象**，v4 并非「全 matrix 实跑」；api 自 #139 后从未真实全量实跑，v5 是漂移首曝（坑位 17）。
+- 对照实验：284ef58（pre-#163）dispatch api 同样挂死 → api 问题与 #163 的 SECRETS_ENCRYPTION_KEY 无关。
+- 验证：CI 模拟 env 11 passed；7 文件 90 passed。
+
+### 批六 #171 + 批七 #172：cs 3 例 + prompts 1 例
+
+- maintenance（v6 新面孔）：36f40b9 起 `run_sync` 契约改 `(alerts, closed)` 二元组，mock 桩停在旧单 list——契约漂移。
+- **p5 根因实锤**（批六诊断断言 `scanned=0 contended=1` 一锤定音）：`config/redis.py` 的 **REDIS_ENABLED 缺省 false** → CI `get_redis()` 走静默 None 分支（无日志，解释零 warning 死角）→ presence fail-closed → reaper 放弃恢复。修：workflow 补 `REDIS_ENABLED=true`。**p5 的「间歇性竞争」定性推翻——真实全量中 100% 失败，是确定性环境缺失**。
+- collapse（v9 诊断 `ratio=0.846 达标但 folds=0`）：CI 缺省 `LLM_CONTEXT_LENGTH=4096`（本地 .env 8192）→ budget=3072 → po/rag 占满后 **L2 先行裁剪吃掉折叠候选**（user 轮数 ≤ keep）。本地 4096 口径首次复现。修：用例锁定 8192 口径；**patch 目标必须是 `backend.config.llm` 子模块属性**（token_counter 函数内 from-import；patch config 包 re-export 绑定无效——坑位 19）。
+- v9：cs 全绿；v10：prompts 绿。
+
+### 批九 #176：诊断资产改造
+
+v10 实证 cs「1518 passed 0 failed 但 2 errors」时 failures 清单为空（`-rf` 不列 error）且 pytest_out.txt 不在 artifact——**诊断无门**。修：`-rf`→`-ra` + artifact 补 pytest_out.txt。
+
+### 批十 #179 / 批十一 #180：sla_graded 两层
+
+- v11（`-ra` 首航）直接定位：`_pg()` 自行 `open(".env")` → CI 无 .env 文件 FileNotFoundError（批七 Redis 打通前降级路径掩盖）。修：MEMORY_DB_CONFIG 口径。
+- 批十修通后 v12 暴露下一层：`close_stale` 按 `updated_at < cutoff` 关闭，`_seed` 只置 created_at → CI 无主栈 reaper 时 breach 行无人关闭；**本地绿是主栈 maintenance worker 并行兜底掩盖的**（docstring 自述）。修：_seed 补 updated_at 置 stale。
+- v13：cs **success，清单空**。
+
+### 批十二 #181：api 第二个 .env 依赖文件
+
+v14 全量（11/13 绿）中 `-ra` 新清单暴露 `test_cs_agent_status_transfer.py` 全文件 FileNotFoundError——批十同款，已修（本地 10 passed）。api 定向确认在途。
+
+### v14 首曝：backend-root 54 例（移交批十三）
+
+该 suite v5/v6 均被 runner 杀掉**从未真实跑完**，v14 首次出完整失败清单。定性方向按文件分组写入 [TASK.md](TASK.md) 交接第三节（.env 依赖类 / REDIS 连带 / anti_ban 配额泄漏 / 逐例资产漂移 / pgtest 竞争）。
+
+## 坑位（17–21，续接 1–16）
+
+17. **gate skip 的秒级 success 勿当全量证据**：dispatch 定向 run 里未选中 suite 的 job 也显示 success（Suite pytest skipped），job 时长是识别标志（秒级=skip）。v4「12/13 全绿」实为 1 个 suite 真跑——「间歇性转绿」类定性若基于此全部作废，重看真实全量。
+18. **诊断断言是 CI-only 疑难的高效武器**：对静默 continue / 触发判定类失败，先给断言消息携带分流数据（ReapResult 计数、used/budget/ratio），一次 dispatch 拿决定性证据再修——p5、collapse 两案各一次实验闭环，避免盲猜循环。注意属性名要对照 dataclass 定义（overflow 翻车一次）。
+19. **from-import 的 patch 目标是子模块属性**：`from backend.config.llm import X` 在函数内执行读的是 `config.llm.X` 原模块属性；patch `backend.config` 包的 re-export 绑定无效。坑位 9 的变体，patch 前先看实现在读哪个命名空间。
+20. **本地环境红利清单**（本地绿 ≠ CI 绿的系统性原因）：REDIS_ENABLED=true（主栈 Redis）、LLM_CONTEXT_LENGTH=8192、JWT_SECRET/AI_INTERNAL_TOKEN/SECRETS_ENCRYPTION_KEY（.env）、主栈 maintenance/dispatcher worker（reaper 兜底）、MEMORY_DB_CONFIG 指向真实库。CI 模拟 env（坑位 7）必须显式清空这些键。
+21. **api/rag/backend-root 挂死形态**：Suite pytest 步骤 ~50min 无输出被 job 上限杀（v6/v10 两轮三 job 同挂，v5/v14 快败完成）——runner 层非确定性，pytest 输出重定向后无实时日志；批九已补 pytest_out.txt 进 artifact，被杀后如有部分输出可查。处置：重 dispatch（抽签），不阻塞其他 suite 结论。
+
+## 收敛曲线（真实全量口径）
+
+v1 108 → v2 61 → v3 20 → v4（skip 假象，实际仅 travelv2 3）→ **v5 15**（api 13 首曝 + p5/collapse）→ v6 4（api/rag/backend-root 挂死）→ v9 2 → v10 2 errors → v12 1 → v13 cs 0 → **v14 54+api（backend-root 首曝）**。修复节奏：#163/#168/#171/#172/#174/#176/#179/#180/#181。
+
+## 下一会话
+
+- api 定向确认（#181 后）→ backend-root 54 例（批十三，TASK.md 交接第三节有分组预判）→ 全量收官 COMPLETED。
+- p5/collapse 类已绝杀：REDIS/口径根修后无残余；若未来复发按坑位 18 加诊断断言。
