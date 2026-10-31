@@ -51,6 +51,11 @@ class TestAmapMerchantContract:
 
         # 根 conftest 离线纪律关了 AMAP_ENABLED（autouse），用例级恢复（LIFO 生效）
         monkeypatch.setattr(map_cfg, "AMAP_ENABLED", True)
+        # 工具门是 MAP.is_amap_configured()（AMAP_ENABLED and AMAP_KEY）：
+        # CI 无 .env 时无 AMAP_KEY，not_configured 会抢在 place_text 替身
+        # 之前返回 failed（v3 run 41151145995 实证）——本用例测封套契约，
+        # 配置面一并替身
+        monkeypatch.setattr(map_cfg, "is_amap_configured", lambda: True)
 
         # rec 形态 = amap.normalize_merchant 输出（place_text 的真实返回条目）
         rec = {
@@ -105,6 +110,13 @@ class TestTrainEnvelopeContract:
             captured["tool"] = upstream_tool
             return payload
 
+        # CI 无 .env：TRAIN_MCP_ENABLED 缺省 false，is_train_mcp_enabled()
+        # 在 call_tool 替身之前就返回 not_configured（v3 run 41151145995
+        # 实证）——本用例锁 success 封套契约，启用门一并替身（禁用分支由
+        # test_disabled_is_not_configured_envelope 专项覆盖）
+        from backend.config import mcp as mcp_cfg
+
+        monkeypatch.setattr(mcp_cfg, "is_train_mcp_enabled", lambda: True)
         monkeypatch.setattr(train_mod, "call_tool", fake_call_tool)
         raw = train_mod.travel_train_search_tool.invoke(
             {"from_station": "福州", "to_station": "厦门北", "date": "2026-10-20"})

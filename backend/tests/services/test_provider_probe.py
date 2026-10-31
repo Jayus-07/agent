@@ -126,10 +126,22 @@ def _patch_httpx(monkeypatch, response: _FakeResponse) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clear_catalog_state(monkeypatch):
-    """缓存与调用计数逐个用例清零 —— 否则本文件会互相污染（顺序敏感）。"""
+def _clear_catalog_state(monkeypatch, request):
+    """缓存与调用计数逐个用例清零 —— 否则本文件会互相污染（顺序敏感）。
+
+    test_catalog_* 同时摘掉 url_guard 的 SSRF 预检（外部 DNS/网络边界）：
+    出站 httpx 已被 _patch_httpx 替身接管，但守卫的 getaddrinfo 预检仍会
+    真解析测试域名（api.example.com 不可解析 → reason=blocked，v3 run
+    41151145995 的 services-travelv2 8 例实证）。catalog 用例测的是清单
+    解析契约；SSRF 拦截行为由 test_l0_*/test_catalog_rejects_private_*
+    专项用例持真实守卫覆盖，故不全局替换。
+    """
     _catalog_calls["n"] = 0
     P.reset_catalog_cache_for_tests()
+    # rejects_private 专项用例断言的就是守卫拦截行为，须持真实守卫
+    if (request.node.name.startswith("test_catalog_")
+            and "rejects_private" not in request.node.name):
+        monkeypatch.setattr(P, "assert_url_allowed", lambda *a, **k: None)
     yield
     P.reset_catalog_cache_for_tests()
 
