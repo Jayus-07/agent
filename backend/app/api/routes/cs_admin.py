@@ -935,6 +935,116 @@ async def list_my_conversations(
         raise HTTPException(503, detail="Database unavailable")
 
 
+class MyMessageBody(BaseModel):
+    content: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/my/{conversation_id}/messages")
+async def post_my_message(
+    conversation_id: str, request: Request, body: MyMessageBody,
+) -> dict:
+    """用户在人工服务态直接发消息给坐席（cs-workstation-v2 P3）。
+
+    目标态变更：此前人工接管后用户输入被图内拦截（排队话术作答），
+    现放开为「转人工后（waiting_human/agent_offered/human_active）消息
+    直达坐席」——落库 sender_type=user 并广播 message.created（与图 turn
+    同契约，坐席 WS / 消息轮询均可消费）。AI 态（ai_active/none）不走
+    本端点，仍走正常聊天流；已关闭会话 409。
+    """
+    await _ensure_my_conversation(request, conversation_id)
+
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    user_id = (getattr(ident, "user_id", "") or "").strip()
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not user_id or not getattr(ident, "authenticated", False):
+        raise HTTPException(401, detail="未认证：请登录后发送消息")
+    if not tenant_id:
+        raise HTTPException(403, detail="发送消息需要有效租户身份")
+
+    content = body.content.strip()
+    if not content:
+        raise HTTPException(422, detail="消息内容不能为空")
+
+    from datetime import datetime, timezone
+
+    from backend.customer_service.handoff.lifecycle import load_active_handoff_sync
+
+    try:
+        handoff = load_active_handoff_sync(
+            tenant_id, conversation_id, raise_on_error=True,
+        )
+    except Exception as exc:
+        raise HTTPException(503, detail="人工服务状态暂不可核验，请稍后重试") from exc
+    handoff_state = str((handoff or {}).get("handoff_state") or "none")
+    if handoff_state in ("none", "ai_active", "closed"):
+        raise HTTPException(
+            409,
+            detail="当前为 AI 服务态，请直接在对话中发送消息；已结束会话不可再发送",
+        )
+
+    from backend.customer_service.realtime import get_agent_hub
+
+    now = datetime.now(timezone.utc)
+    try:
+        message_id = await _async_save_my_message(
+            conversation_id, user_id, tenant_id, content, now,
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"[CSAdmin] post_my_message persist failed: {e}")
+        raise HTTPException(503, detail="消息发送失败，请稍后重试") from e
+
+    # 与 conversation_store._msg_payload 同构：坐席 WS/轮询零改动消费
+    get_agent_hub().publish(
+        "message.created",
+        persist=True,
+        conversation_id=conversation_id,
+        tenant_id=tenant_id,
+        last_id=int(message_id) if str(message_id).isdigit() else None,
+        message={
+            "message_id": str(message_id),
+            "sender_type": "user",
+            "content": content,
+            "content_type": "text",
+            "created_at": now.isoformat(),
+        },
+    )
+    return {
+        "message_id": str(message_id),
+        "handoff_state": handoff_state,
+        "created_at": now.isoformat(),
+    }
+
+
+async def _async_save_my_message(
+    conversation_id: str, user_id: str, tenant_id: str, content: str, now,
+) -> str:
+    from sqlalchemy import select
+
+    from backend.customer_service.managers.message_manager import MessageManager
+    from backend.customer_service.models.handoff import CSHandoff
+    from backend.memory.database import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as db, db.begin():
+        handoff = (
+            await db.execute(
+                select(CSHandoff).where(
+                    CSHandoff.tenant_id == tenant_id,
+                    CSHandoff.conversation_id == conversation_id,
+                )
+            )
+        ).scalar_one_or_none()
+        # 归属二次校验：handoff.user_id 必须与当前用户一致（防跨用户投递）
+        if handoff is not None and str(handoff.user_id) != str(user_id):
+            raise HTTPException(403, detail="无权向该会话发送消息")
+        mgr = MessageManager(db)
+        msg = await mgr.save_user_message(conversation_id, content)
+        return msg.id
+
+
 @router.get("/my/{conversation_id}/pending")
 async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
     """读取当前用户会话的权威待确认快照，仅投影 UI 确认所需的安全字段。"""

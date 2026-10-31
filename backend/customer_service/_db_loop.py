@@ -28,3 +28,8 @@ def run_sync(coro):
     """从 sync 上下文提交协程到后台 loop 并阻塞等待结果。"""
     future = asyncio.run_coroutine_threadsafe(coro, _loop)
     return future.result(timeout=10)
+
+
+def get_loop() -> asyncio.AbstractEventLoop:
+    """后台 loop 引用（maintenance 广播跳板用，勿对其 run_until_complete）。"""
+    return _loop

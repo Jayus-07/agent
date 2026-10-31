@@ -367,6 +367,34 @@ async def find_agent_role(
     return result.scalar_one_or_none()
 
 
+async def find_agent(
+    session: AsyncSession, *, tenant_id: str, agent_id: str
+) -> CSAgent | None:
+    """按租户与坐席 ID 读坐席行（P3 状态/转接校验用，不加锁）。"""
+    result = await session.execute(
+        select(CSAgent).where(
+            CSAgent.tenant_id == tenant_id,
+            CSAgent.agent_id == agent_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def find_agent_for_update(
+    session: AsyncSession, *, tenant_id: str, agent_id: str
+) -> CSAgent | None:
+    """同 find_agent，但加行锁（P3 状态写路径）。"""
+    result = await session.execute(
+        select(CSAgent)
+        .where(
+            CSAgent.tenant_id == tenant_id,
+            CSAgent.agent_id == agent_id,
+        )
+        .with_for_update()
+    )
+    return result.scalar_one_or_none()
+
+
 async def lock_dispatchable_handoff(
     session: AsyncSession,
     *,
@@ -385,7 +413,11 @@ async def lock_dispatchable_handoff(
 async def list_accepting_agent_ids(
     session: AsyncSession, *, tenant_id: str
 ) -> list[str]:
-    """本租户「启用 + 可接单 + 可分配」的坐席 ID（在线性由 Redis 判定）。"""
+    """本租户「启用 + 可接单 + 可分配」的坐席 ID（在线性由 Redis 判定）。
+
+    P3：工作状态 away/offline 不参与派单（小休/离线不接新单）；busy 为
+    人工「忙碌」标记，仍可派单（与 Redis 自动置忙的满载语义区分）。
+    """
     result = await session.execute(
         select(CSAgent.agent_id)
         .where(
@@ -393,6 +425,7 @@ async def list_accepting_agent_ids(
             CSAgent.enabled.is_(True),
             CSAgent.available.is_(True),
             CSAgent.accepting.is_(True),
+            CSAgent.status.notin_(("away", "offline")),
         )
         .order_by(CSAgent.agent_id.asc())
     )
