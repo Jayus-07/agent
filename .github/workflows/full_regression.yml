@@ -173,7 +173,10 @@ jobs:
           fi
           echo "suite=$SUITE paths=$PATHS"
           RC=0
-          python -m pytest $PATHS -q --no-cov -rf --timeout=150 \
+          # -ra：failed 与 errors（fixture setup/teardown）都进 short
+          # summary——v10 run 41242501663 实证 cs 出现「1518 passed 0 failed
+          # 但 2 errors」时 -rf 的清单为空，诊断无门
+          python -m pytest $PATHS -q --no-cov -ra --timeout=150 \
             -n 4 --dist loadfile -p no:cacheprovider \
             > pytest_out.txt 2>&1 || RC=$?
           # 失败明细独立成文件（artifact 留档）
@@ -196,7 +199,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: failures-${{ matrix.suite.name }}
-          path: failures_*.txt
+          path: |
+            failures_*.txt
+            pytest_out.txt
           if-no-files-found: ignore
 
   summary:
