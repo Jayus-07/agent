@@ -141,7 +141,7 @@ class TestL4InPreflight:
         assert len(prepared.folds) >= 1, (
             f"L4 未触发：used={prepared.usage.used_tokens} "
             f"budget={prepared.usage.input_budget} "
-            f"overflow={prepared.usage.overflow}")
+            f"ratio={prepared.usage.usage_ratio}")
         fold = prepared.folds[0]
         assert fold["reversible"] is True
         # 15 vs 16：轮边界按 user 消息切分，夹具字数变化会使首折少含 1 条
