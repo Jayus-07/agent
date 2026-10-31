@@ -2,7 +2,7 @@
 
 > 任务 ID：ci-regression-debt
 > 创建：2026-10-30；最近交接：2026-10-31（第二批会话收官）
-> 状态：IN_PROGRESS（v4：12/13 suite 全绿，唯一残余 services-travelv2 3 例——模型注册表共享状态家族，见「剩余计划」）
+> 状态：IN_PROGRESS（v4：12/13 suite 全绿；唯一残余 services-travelv2 3 例已整理成文——**续工直接按文末「交接」章节执行**）
 
 ## 目标
 
@@ -41,6 +41,51 @@
 - `services/test_model_config_persistence.py::test_create_provider_without_probe_saves_directly`
 
 根因方向：`configure_specialized` 抛 `ModelConfigConflict: 已有向量时不能通过旧专项接口切换嵌入配置`——mock 会话夹具的 canned 数据与角色绑定预检/确认/重建新流程错位（模型治理域，cs-workstation-v2 P2 #157 面）。注意 `specialized_model_config` 2 例在本轮已过（同家族、DB 状态敏感），定性时以 CI 忠实环境为准。方法照旧：单跑 → xdist → CI 模拟 env 三步。
+
+---
+
+# 交接（2026-10-31 深夜，供下一会话按此续工）
+
+## 一、总计划
+
+任务目标只剩最后一跳：**清零 services-travelv2 的 3 例残余 → 全量 run 13 suite + Regression summary 全绿 → 任务 COMPLETED**。
+
+工作循环（本任务四批验证有效的四步法，顺序不可逆）：
+
+1. **定性**：单跑失败文件 → xdist 对照 → CI 模拟 env 复现；`git log -S` 找引入提交，判「测试资产漂移 vs 实现回退」。本任务 108+ 例失败中仅 1 处需修实现（reporter sql_empty），其余全是漂移——先怀疑测试侧。
+2. **修复**：对齐新契约或修 fixture 数据；断言不放宽、mock 不扩大、不 skip/xfail 掩盖；涉及并行会话领域（模型治理）先核对对方演进再动手。
+3. **验证**：本地对应目录 xdist 跑绿 → PR 合 main → dispatch `suites=services-travelv2` 实证 → 台账 +1 行。
+4. **收官**：dispatch 无参数全量 → 13 suite + Regression summary 全绿 → TASK.md 状态改 COMPLETED，PROGRESS.md 记最终曲线（v1 108 → 0）。
+
+## 二、进度锚点
+
+- main = f32b37b（#161 台账收官）。本任务已合 PR：#153（orchestration 7 + inventory 10）、#154（misc 12 + lock 补 kafka-python）、#158（22 例 + summary 表格）、#159/#161（台账）、#160（批四 13 例 + 125 登记 + wallet REVOKE）。
+- 收敛曲线：**v1 108（run 40948443665）→ v2 61（41120872440）→ v3 20（41151145995）→ v4 3（41205470228，12/13 suite 全绿 + summary 绿）**。
+- v4 唯一失败 suite：services-travelv2，失败清单 `/d/tmp/ci-debt/v4travelv2/`。
+- 历史坑位 1–16 在 [PROGRESS.md](PROGRESS.md)（重点：6 资产漂移是主旋律、7 CI env 差异先于 xdist 猜测、13 分支 parent 核对）。
+
+## 三、工作树与环境
+
+- 续工工作树：`D:/Program Files/workplace/agent-wt-ci-debt2`（任务专用，保留）。
+- 开工序列：`cd "/d/Program Files/workplace/agent-wt-ci-debt2" && git fetch && git log --oneline -1 origin/main && git checkout -b fix/ci-debt-model-registry origin/main`——**分支建好后立刻核对 parent commit 是预期值**（坑位 13：fetch 静默失败 → checkout 静默回退工作树，本会话实证一次）。
+- `.env` 已在（gitignore，测试连库必需）；本地资产 `/d/tmp/ci-debt/`（可能被清理，权威清单以 GitHub artifacts 为准）；网络走代理 `HTTPS_PROXY=http://127.0.0.1:7897`，gh/git 抖动重试即可。
+- 本残余预计纯测试改动，无需 rebuild；若定性需修产品代码，主仓库 `D:/Program Files/workplace/agent`（main）`git pull` 后 `echo y | ./devctl.bat rebuild` 并确认容器 healthy。
+
+## 四、测试
+
+- 单跑定性（**PGHOST 必须 127.0.0.1**，坑位 8：localhost 每连 ~5s）：
+  `PGHOST=127.0.0.1 D:/Python/python.exe -m pytest backend/tests/memory/test_memory_supersede_atomicity.py backend/tests/services/test_model_config_persistence.py --timeout=150 -q --no-cov --tb=short`
+- 套件回归（预期残余恰好 3 例、其余全绿；多出失败先按坑位 13 查工作树是否回退）：
+  `PGHOST=127.0.0.1 D:/Python/python.exe -m pytest backend/tests/services backend/tests/memory -n 4 --dist loadfile --timeout=150 -q --no-cov`
+- CI 实证：`HTTPS_PROXY=http://127.0.0.1:7897 gh workflow run full_regression.yml -f suites=services-travelv2`；失败清单 `gh run download <run_id> -n failures-services-travelv2`（gh 需在 git 仓库内执行，坑位 12）。
+- 关键代码/测试文件：`backend/services/model_config.py`（`configure_specialized` ~1051 行的 ModelConfigConflict 抛出点）、`backend/tests/services/test_specialized_model_config.py`（`_session_stream` 假 session 模式——三例残余同款夹具）、`backend/tests/memory/test_memory_supersede_atomicity.py`、`backend/tests/memory/test_stop_e_summary_contract.py`、`backend/tests/services/test_model_config_persistence.py`。领域参考 [model-provider-runtime.md](../../governance/model-provider-runtime.md)。
+
+## 五、验收
+
+- [ ] dispatch `suites=services-travelv2` → pytest success（failures 清单为空）。
+- [ ] dispatch 无参数全量 → **13 suite 全绿 + Regression summary 绿**（v1 108 → 0 收官）。
+- [ ] TASK.md 状态改 COMPLETED，PROGRESS.md 回填最终曲线与收官 PR 号。
+- [ ] 全程不扩大 mock、不删断言、不 skip/xfail；若定性为产品 bug（预检流程误伤合法路径），先报告再修实现并带回归测试；涉及 #157/模型治理域的改动在 PR 描述中显式标注协同边界。
 
 ## 验收
 
