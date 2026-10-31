@@ -100,11 +100,11 @@ def _seed(conversation_id: str, *, state: str, age_seconds: float) -> str:
             "INSERT INTO customer_service.handoffs"
             " (handoff_id, conversation_id, user_id, tenant_id, handoff_state,"
             "  trigger_type, priority, assignment_version, attempt_count,"
-            "  created_at, total_deadline_at)"
+            "  created_at, updated_at, total_deadline_at)"
             " VALUES (%s, %s, 'user-sla', %s, %s, 'manual', 50, 0, 0, %s,"
-            "  %s + make_interval(secs => %s))",
+            "  %s, %s + make_interval(secs => %s))",
             (handoff_id, conversation_id, TENANT, state, created_at,
-             created_at, float(CS_HANDOFF_TIMEOUT_SECONDS)),
+             created_at, created_at, float(CS_HANDOFF_TIMEOUT_SECONDS)),
         )
         conn.commit()
     return handoff_id
