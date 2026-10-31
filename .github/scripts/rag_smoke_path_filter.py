@@ -199,6 +199,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # init_db.py 已同步登记为 business——漏登记会让迁移守卫把 PR 免费预检判死
     # （v3 run 41151145995 repo-tests 实证）
     "backend/sql/migrations/125_mall_wallet.sql",
+    # 客服坐席状态/SLA 分级列（cs-workstation-v2 P3，customer_service schema）：
+    # 非 RAG 业务迁移——漏登记会让迁移守卫把 PR 免费预检判死（PR #164 实证）
+    "backend/sql/migrations/126_cs_agent_status_sla.sql",
 })
 
 
