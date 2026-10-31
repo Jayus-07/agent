@@ -204,6 +204,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/126_cs_agent_status_sla.sql",
     # 坐席快捷回复话术表（cs-workstation-v2 P4，customer_service schema）
     "backend/sql/migrations/127_cs_canned_responses.sql",
+    # 质检抽检评分表（cs-workstation-v2 P6，customer_service schema）：
+    # 非 RAG 业务迁移，创建即登记（吸取 PR #164 漏登记教训）
+    "backend/sql/migrations/128_cs_qa_scores.sql",
 })
 
 

@@ -340,6 +340,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "126_cs_agent_status_sla.sql": "memory",
     # 坐席快捷回复话术（cs-workstation-v2 P4）：个人/团队两级。
     "127_cs_canned_responses.sql": "memory",
+    # 质检中心抽检评分（cs-workstation-v2 P6）：抽样/AI 预填/申诉状态机。
+    "128_cs_qa_scores.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

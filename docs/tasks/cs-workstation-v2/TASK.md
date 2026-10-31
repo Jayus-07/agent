@@ -216,6 +216,8 @@
 - 测试：T2 抽样去重/评分申诉状态机/权限（agent 仅本人）/租户隔离。
 - 验收：抽检→评分→申诉→终审全流程；日报含人工抽检数据。
 
+> **2026-10-31 执行回写**：①抽样数据面：**conversations 无 'closed' 状态**（CHECK 限 open/pending/resolved/snoozed）且关闭时 `assigned_agent_id` 被清空——关闭事实与被检坐席一律取 `handoffs`（handoff_state='closed' + closed_at 窗口 + assigned_agent_id），qa_report.py 日报里 `conversation_status='closed'` 过滤实为恒空存量口径（未改）；②beat 编排：抽样 `cs.qa_daily_sampling` **06:05 UTC 先于日报 06:10**（batch_date=昨日），保证当日日报 qa_sampling 段聚合到本批次；抽样量 `CS_QA_SAMPLE_SIZE`（默认 10/租户），UNIQUE(tenant_id, conversation_id) + ON CONFLICT DO NOTHING 幂等去重；③AI 预填为**零 LLM 确定性启发式**（满意度/首响/转接尝试/SLA 超时四维扣分，权重偏严可给出 fail 建议），落 `ai_prefill` JSONB（source=ai），人工提交评分转 source=human；④状态机：评分 pending→draft→scored（scored 锁定，改判仅走申诉终审）、申诉 none→appealing→upheld|overturned（终态锁定，改判写 final_score/final_verdict，展示口径 COALESCE 切终审）；⑤权限：agent 列表/操作仅本人任务（他人任务 404 防枚举，与 canned 口径一致），申诉仅被检坐席本人（supervisor 可见但代申诉 403），终审/日报仅 supervisor；评分+申诉+终审 audit_logs 留痕（actor_type='human'）。
+
 ### P7 看板+知识助手
 
 - 后端：运营聚合+坐席绩效 API（首响/AHT/CSAT/质检分/状态）；未解决问题聚合+FAQ 草稿进既有管理端审核流；涉知识链路同步 `.github/workflows/rag_smoke.yml`。

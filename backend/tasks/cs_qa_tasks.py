@@ -49,6 +49,45 @@ def cs_qa_daily_report(self) -> dict:
 
 @celery_app.task(
     bind=True,
+    name="cs.qa_daily_sampling",
+    acks_late=True,
+    autoretry_for=(RuntimeError,),
+    retry_backoff=CELERY_RETRY_BACKOFF,
+    retry_backoff_max=CELERY_RETRY_BACKOFF_MAX,
+    retry_jitter=True,
+    max_retries=3,
+)
+def cs_qa_daily_sampling(self) -> dict:
+    """每日抽检抽样（cs-workstation-v2 P6）：昨日已关闭会话 → cs_qa_scores。
+
+    抽样量参数化（CS_QA_SAMPLE_SIZE，默认 10/租户）；UNIQUE 去重重跑幂等，
+    失败显式抛错重试（抽检缺失会让质检日报失真），最多重试 3 次。
+    """
+    import os
+
+    from backend.customer_service.qa_sampling import run_daily_sampling
+
+    raw = os.environ.get("CS_QA_SAMPLE_SIZE")
+    sample_size = int(raw) if raw and raw.isdigit() else None
+    result = run_daily_sampling(sample_size=sample_size)
+    if not result.get("ok"):
+        logger.error(
+            "[CSQATask] 抽样失败: %s", result.get("error"),
+        )
+        raise RuntimeError(f"QA daily sampling failed: {result.get('error')}")
+    logger.info(
+        "[CSQATask] 抽样完成 batch=%s sampled=%s",
+        result.get("batch_date"), result.get("sampled"),
+    )
+    return {
+        "batch_date": result.get("batch_date"),
+        "sampled": result.get("sampled"),
+        "by_tenant": result.get("by_tenant"),
+    }
+
+
+@celery_app.task(
+    bind=True,
     name="cs.faq.gap_review",
     acks_late=True,
     autoretry_for=(RuntimeError,),

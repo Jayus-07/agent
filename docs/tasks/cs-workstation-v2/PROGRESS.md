@@ -15,7 +15,7 @@
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 已完成 | feat/cs-v2-p3 → PR #164（merge f600be6，三笔 36f40b9/ba87f00/0fc3626） | 详见下方日志 2026-10-31（九）（十） | 2026-10-31 |
 | P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
 | P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
-| P6 | 质检中心 | 计划中 | - | - | - |
+| P6 | 质检中心 | 待验收（代码完成+全链实测通过，PR 待建，见日志（十六）） | feat/cs-v2-p6（@de16926 起，未提交） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
 | P7 | 看板+知识助手 | 计划中 | - | - | - |
 | P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
 
@@ -188,3 +188,33 @@
   - 用户端折叠卡状态联动 ✅（分流后实时可见 approved + 30s 轮询；「编号不代表已退款」提示保留）
   - 站内通知 ⚠️ 以折叠卡联动+轮询交付（用户侧通知中心基建未建，Phase 8 复核）
 - **下一期**：P6 质检中心，自 origin/main@6232023 起新分支 feat/cs-v2-p6。
+
+### 2026-10-31（十五）—— P3/P4/P5 三期连发收官；P6 起步交接（用户指令换会话）
+
+- **本会话成果（持续任务模式）**：P3 交付（PR #164/#165）、P4 交付（PR #166/#167）、P5 交付（PR #169/#170）——每期均走 实现→测试→重建实测→提交→PR→CI 显式全绿→合并→回填 完整流程。main 推进至 **de16926**。
+- **交接事件**：P6 分支刚建、Explore 现状调查刚发起时，用户指令「换一个会话处理，写好计划」。P6 **零代码改动**，无未提交实现。
+- **工作树现场**：`D:\Program Files\workplacegent-cs-v2`，分支 **feat/cs-v2-p6**（自 origin/main@de16926，工作区干净）；无残留容器/端口占用（主栈在跑但均为正常共享栈服务）。
+- **环境现场**：①Docker Desktop 本会话已启动，主栈 8 容器 healthy——app/business-mock/frontend 跑的是 **P5 代码**（P5 交付时重建；P6 合并前需按当期 main 重建 app + business-mock(如动 Mock) + frontend）；②worktree `.env` 已补 `CS_REFUND_REQUEST_MODE=http`（P5 实测所需，本机 gitignore 配置，与主仓库 .env **不再一致**——续工会话若需 compose 全量对齐先 diff）；③坐席测试账号已恢复原值（uitest_user/cs_wire_e2e enabled=f）；④GitHub 直连**间歇不可达**贯穿全程——push/fetch/PR 用「curl 探测 200 即操作 + 20-25s 间隔重试」窗口模式。
+- **P6 启动清单（按序）**：
+  1. 调查现状：`backend/customer_service/qa_report.py`（日报聚合与消费）、`backend/tasks/cs_qa_tasks.py`（既有 Celery/beat 口径）、可抽样数据面（conversations/handoffs closed 行、rating 列）、cs_ops.py 与 cs_tickets.py PATCH 的 supervisor 闸样例；
+  2. 迁移 **128**（cs_qa_scores：会话/坐席/维度分/AI 预填 source/申诉状态机/终审）——**创建即登记** init_db + 迁移守卫（.github/scripts/rag_smoke_path_filter.py，非 RAG 归 NON_AI）；
+  3. 每日抽样 Celery（参数化 N，复用既有 beat 队列口径）+ 评分/申诉/终审 API（agent 仅本人、supervisor 终审、租户隔离）；
+  4. 前端 /cs2/qa 替换占位（抽检任务选中加载/AI 预填/拖分实时合计/提交改状态；申诉维持·改判；日报）；
+  5. 测试 → 重建实测（抽样→评分→申诉→终审全流程 + 日报含人工抽检数据）→ 提交（后端/前端两笔）→ PR → CI → 合并 → 回填。
+- **P6 测试口径**：T2 抽样去重/评分申诉状态机（不可回退）/权限（agent 仅本人、终审 supervisor）/租户隔离；真库 5433（迁移 128 先 db-migrate——**db-migrate 是独立镜像**，需 build 后 run）；前端 page.test 对齐 P5 的 refunds-page 模式。
+- **P6 验收口径（矩阵 3.1 质检中心行）**：抽检任务（选中加载/AI 预填建议/拖分实时合计/提交改状态）+ 申诉（维持/改判）+ 质检日报表（含人工抽检数据）；AI 预填 source=ai 人工终审。
+- **累计顺延项（P7/P8 前复核）**：顶栏接单开关 UI、`POST /my/{id}/messages` 幂等键、更多菜单三功能（依赖 internal 消息类型与工单创建 API）、用户端站内通知（当前为折叠卡联动+30s 轮询）。
+
+### 2026-10-31（十六）—— P6 质检中心实现完成并全链实测通过（持续任务模式）
+
+- **分支**：feat/cs-v2-p6（自 origin/main@de16926，交接日志（十五）现场核对一致）。
+- **后端**：①迁移 128 `cs_qa_scores`（四维评分/状态机/AI 预填 JSONB/申诉终审字段，UNIQUE(tenant_id, conversation_id) 抽样去重事实源；创建即登记 init_db + 迁移守卫 NON_AI——`classify_migration` 本地验证 non_ai）；②模型 `models/qa.py`；③`qa_sampling.py`：每日抽样（**口径修正：conversations 无 'closed' 状态且关闭清空 assigned_agent_id，主表= closed handoffs**，见 TASK 回写）+ AI 预填（零 LLM 确定性启发式：满意度/首响/转接尝试/SLA 超时四维扣分）；④Celery `cs.qa_daily_sampling`（beat 06:05 UTC 先于日报 06:10，`CS_QA_SAMPLE_SIZE` 参数化，queue_router report 队列显式登记）；⑤路由 `cs_qa.py` 六端点（列表 scope=self|all、评分 draft/submit、AI 预填幂等、申诉、终审、日报），评分/申诉/终审 audit_logs 留痕（actor_type=human）；⑥qa_report 日报新增 `qa_sampling` 段（抽检数/已评分/合格率/均分/申诉，改判以终审分口径）。
+- **前端**：`/cs2/qa` 替换占位（三 Tab：抽检任务全角色/申诉处理与质检日报 supervisor 可见性对齐 P5 nav 口径）；四维拖分实时合计 /100、AI 预填建议按钮（应用后提示「请人工终审」）、保存草稿/提交评分、被检坐席本人申诉表单、终审维持/改判面板（改判终审分+结论+意见必填）、日报表（日期/抽检数/合格率/平均分/主要扣分项/申诉）；api.ts +9 类型与函数。
+- **测试证据（均实际执行）**：
+  - 后端新 T2 `test_cs_qa_api.py` **10 passed**（真库 5433，p6t- 前缀用后即清：预填纯函数扣分口径×2、抽样去重+AI 预填创建、评分状态机 draft→scored→锁定 409+越界 422、评分权限（他人 404 防枚举/supervisor 任意）、申诉状态机+权限全路径、跨租户 404、列表 scope、AI 预填幂等、日报聚合正确性（含 _collect_metrics qa_sampling 段））。
+  - 相邻回归：test_worker_topology + test_task_queue_router + test_qa_report **43 passed / 2 failed**——2 失败（test_case_h_metadata_shadow_route、test_case_l_agent_recovery）经 git 核证为 **main 存量债务**（`tasks.execute_metadata_shadow` 实现已随 20b8aa9 删除、测试未更新；与本任务零交集，git grep HEAD 仅测试文件自引用）。
+  - 前端：`/cs2/qa/page.test.tsx` **6 passed**（角色 Tab 可见性/选中加载/AI 预填/拖分合计/提交改状态/表单锁定/申诉发起/终审改判/日报）；frontend-cs 全量 **44 files/319 passed**、frontend 全量 **84 files/688 passed**；frontend-cs tsc **0 错误**、frontend tsc 存量 16 例基线（本任务 frontend 零改动）；双端生产构建通过（/cs2/qa 路由产出 5.6 kB）。
+- **重建实测（15 容器 healthy；全部通过）**：①`devctl.bat rebuild` 重建全部 backend+frontend；②db-migrate 幂等 rc=0（128 skipped 已应用记录一致）；③**Celery 全链**：send_task('cs.qa_daily_sampling') 经 broker 由 report-worker 消费成功（默认昨日批次 sampled=0 符合窗口口径）；④抽样实测：今日批次 sampled=1（tenant-demo），任务行 source=ai/status=pending/ai_prefill 扣分正确（rating 2→service 10、120s→timeliness 20）；抽样复跑 sampled=0（去重幂等）；⑤REST 全链 10 项：supervisor 评分 88 分（source→human/scored_by 落库）→ agent 列表仅本人（scope=self）→ agent 申诉（中文无损）→ 重复申诉 409 → agent 终审 403 → supervisor 改判 92/pass（展示口径切终审分）→ 终态再终审/再评分 409 → agent 日报 403 → supervisor 日报（sampled=1/scored=1/pass_rate=1.0/avg=92/appeals=1/top_deduction=服务规范（1））→ 未认证 401 → 跨租户 404；⑥beat 口径日报 `generate_daily_report` qa_sampling 段含人工抽检数据；⑦审计链 qa_score_submit→qa_appeal_request→qa_appeal_decide 全落（actor_type=human）；⑧frontend-cs 临时起服（3399）冒烟 /cs2/qa、/cs2/workspace、旧 /cs/handoff 全 200。
+- **实测排障三条（回写供后续）**：①直连 :8000 需 X-API-Key（全局门禁）+ X-Auth-Type: jwt 过 require_agent 通道校验（api-key 通道被拒，与设计一致）；②Git Bash curl -d 中文会以 GBK 编码发出致 422/400 假象——实测换 Python urllib UTF-8（T2 TestClient 无此问题）；③测试 fixture 清理的 LIKE 模式曾用 `p6t-%` 前缀匹配不到 `tenant-p6t` 租户行（UniqueViolation 实证），已改包含匹配 `%p6t%`。
+- **环境恢复**：p6t-/p6v- 实测与测试数据全清（leftover=0）；qa_daily_reports 实测行删除；audit_logs 实测行按规保留（真实操作留痕）。
+- **待办（交付工序）**：提交（后端/前端两笔，双重路径限定）→ PR → CI 显式逐项确认全绿 → 合并 → docs 回填 PR（对齐 P5 #169/#170 模式）→ 本表 P6=已完成 + TASK 矩阵 P6 行核验回写。

@@ -100,6 +100,8 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "cs.confirmation_expiry_scan": ("maintenance", "beat_binding"),
     "cs.event_outbox_compensation": ("maintenance", "beat_binding"),
     "cs.qa_daily_report": ("report", "beat_binding"),
+    # cs-workstation-v2 P6：质检每日抽样（先于日报跑，同属 report workload）。
+    "cs.qa_daily_sampling": ("report", "beat_binding"),
     "cs.faq.gap_review": ("report", "beat_binding"),
     "memory.daily_decay": ("maintenance", "beat_binding"),
     "memory.extraction_recovery": ("maintenance", "beat_binding"),
