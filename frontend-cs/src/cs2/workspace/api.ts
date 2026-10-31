@@ -467,3 +467,94 @@ export interface QaReportRow {
 export async function getQaReport(days = 7): Promise<{ items: QaReportRow[] }> {
   return request(`/api/cs/qa/report?days=${days}`)
 }
+
+// ── cs-workstation-v2 P7：数据看板 + 知识助手 ──────────────────
+
+export type DashboardRange = 'today' | 'd7' | 'd30'
+
+export interface DashboardCards {
+  queue_waiting: number
+  in_progress: number
+  received: { value: number; delta_pct: number | null }
+  handoff_rate: { value: number | null; delta_pp: number | null }
+  avg_first_reply_s: { value: number | null; delta_s: number | null }
+  csat: { value: number | null; delta: number | null }
+}
+
+export interface DashboardTrendPoint {
+  date: string
+  received: number
+  human: number
+}
+
+export interface DashboardIntent {
+  intent: string
+  count: number
+  pct: number
+}
+
+export interface DashboardAgentRow {
+  agent_id: string
+  display_name: string
+  status: string
+  handled: number
+  avg_first_reply_s: number | null
+  aht_s: number | null
+  csat: number | null
+  qa_score: number | null
+}
+
+export interface DashboardView {
+  scope: 'self' | 'all'
+  range: DashboardRange
+  cards: DashboardCards
+  trend: DashboardTrendPoint[]
+  intents: DashboardIntent[]
+  agents: DashboardAgentRow[]
+  generated_at: string
+}
+
+export async function getDashboard(
+  range: DashboardRange,
+): Promise<DashboardView> {
+  return request(`/api/cs/dashboard?range=${range}`)
+}
+
+export interface UnresolvedItem {
+  question: string
+  variants: Record<string, number>
+  hits: number
+  last_seen: string | null
+  source: string
+  source_display: string
+}
+
+export async function listUnresolved(days = 7): Promise<{
+  items: UnresolvedItem[]
+  total: number
+}> {
+  return request(`/api/cs/knowledge/unresolved?days=${days}`)
+}
+
+export async function createFaqDraft(
+  question: string,
+  variants: string[],
+): Promise<{ faq_id: number; faq_key: string; status: string }> {
+  return request('/api/cs/knowledge/faq-draft', {
+    method: 'POST',
+    body: JSON.stringify({ question, variants }),
+  })
+}
+
+export interface KnowledgeSearchItem {
+  question: string
+  answer: string
+  score: number
+  matched: boolean
+}
+
+export async function knowledgeSearch(
+  q: string,
+): Promise<{ items: KnowledgeSearchItem[]; query: string }> {
+  return request(`/api/cs/knowledge/search?q=${encodeURIComponent(q)}`)
+}
