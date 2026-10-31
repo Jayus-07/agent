@@ -16,7 +16,7 @@
 | P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
 | P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
 | P6 | 质检中心 | 已完成 | feat/cs-v2-p6 → PR #173（merge 15706c3，两笔 1547068/8c1c6fa） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
-| P7 | 看板+知识助手 | 计划中 | - | - | - |
+| P7 | 看板+知识助手 | 待验收（代码完成+全链实测通过，PR 待建，见日志（十八）） | feat/cs-v2-p7（@37f879f 起，未提交） | 详见下方日志 2026-10-31（十八） | 2026-10-31 |
 | P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
 
 状态取值：计划中 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
@@ -229,3 +229,18 @@
   - AI 预填 source=ai、人工终审 ✅（抽样实测 source=ai + ai_prefill JSONB 扣分正确；提交评分转 source=human；前端预填按钮提示「请人工终审」）
   - 视角切换 ✅（agent 仅本人任务 scope=self + 申诉/日报 Tab 隐藏 page.test；supervisor 全部与终审）
 - **下一期**：P7 看板+知识助手，自 origin/main@15706c3 起新分支 feat/cs-v2-p7（依赖 P3 状态数据；运营聚合+坐席绩效 API；未解决问题聚合+FAQ 草稿进既有审核流；涉知识链路同步 rag_smoke 清单）。
+
+### 2026-10-31（十八）—— P7 看板+知识助手实现完成并全链实测通过（持续任务模式）
+
+- **分支**：feat/cs-v2-p7（自 origin/main@37f879f，含 #173/#175 P6 与并行 #171/#172 CI 债务）。
+- **后端**：①`cs_dashboard.py`：GET /cs/dashboard（range=today|d7|d30）——六卡（排队中/进行中=共享队列实时；接待量/转人工率/平均首响/CSAT=窗口聚合+对比前一等长窗口涨跌）、近7日接待/转人工双序列、意图分布 Top8（messages join conversations 收口租户/坐席）、坐席绩效表（接待量/首响/AHT/CSAT/质检分 P6 终审口径/当前状态）；**会话归属一律经 handoffs 判定**（conversations.assigned_agent_id 关闭即清空）；scope=all|self 双静态 SQL 无字符串拼接；②`cs_knowledge.py`：GET /cs/knowledge/unresolved（ai.unanswered_questions 按 question_hash 聚类+变体分布，7 日窗口，租户过滤）、POST /cs/knowledge/faq-draft（FAQStore.upsert_faq status=draft，faq_key 幂等，不进线上）、GET /cs/knowledge/search（FAQ 只读命中+置信）；③`faq.py` 新增 `FAQStore.search()`（精确 1.0 + bigram Jaccard 模糊，零台账零 hit 计数——与 match() 落账语义分离）；④话术管理复用 P4 canned CRUD 零后端改动；⑤注册 router（+2）。
+- **前端**：`/cs2/dashboard`（范围切换联动六卡涨跌/CSS 双柱趋势/意图横条/绩效表，supervisor 全量·agent 个人徽章）；`/cs2/knowledge`（四 Tab：未解决[展开变体聚合+生成FAQ草稿]、话术管理[个人/团队 Tab+新增弹窗+启用开关]、知识检索[结果+置信徽章]、能力差距[静态候选池=TASK 第 11 节]）；api.ts +12 类型与函数。
+- **测试证据（均实际执行）**：
+  - 后端新 T2 `test_cs_dashboard_knowledge.py` **6 passed**（真库 5433，p7t- 用后即清：supervisor 聚合与构造数据逐值比对、agent scope=self 仅本人、跨租户 0 串数+他租户视角独立、未解决聚类（**精确哈希粒度**）、FAQ 草稿幂等且 match 不出、检索精确 1.0+零台账断言）。
+  - FAQ/知识既有回归：test_cs_faq + test_cs_faq_gap_review + test_knowledge_service **41 passed**。
+  - 前端：dashboard/page.test **3 passed** + knowledge/page.test **4 passed**；frontend-cs 全量 **46 files/326 passed**；tsc **0 错误**；生产构建通过（/cs2/dashboard 3.47kB、/cs2/knowledge 5.12kB 产出）。
+- **重建实测（17 容器 healthy；全部通过）**：①devctl rebuild；②openapi 反查 4 新端点全挂载；③REST 全链（种子数值逐项比对）：supervisor 看板（received=3/handoff_rate=1.0/首响 70s/CSAT 3.0/意图 退款2·物流1/绩效 A=2·90s·900s·3.0·88·online、B=1·30s·300s·busy）→ agent 看板（scope=self、received=2、绩效仅本人）→ 未解决聚合（2 簇、hits/来源/变体正确）→ FAQ 草稿（draft 落库+幂等 faq_id 一致+match 不出）→ 检索（精确 1.0 matched、模糊 0.857、**台账 1382 不变零写入**）→ 未认证 401；④frontend-cs 临时起服（3399）冒烟 /cs2/dashboard、/cs2/knowledge、/cs2/qa、旧 /cs/handoff 全 200。
+- **实测排障两条（回写 TASK 第 5 节）**：①`avg(expr FILTER (WHERE ...))` 为语法错（FILTER 必须在聚合闭括号后）——asyncpg 报 syntax error at FILTER，count(*) 无参数括号侥幸正确，二分定位 30 分钟；②faq_key 经 normalize_question 剥标点（`p7v-发票` → `p7v发票`），按原始串查行会扑空。
+- **rag_smoke 判断**：P7 知识链路属客服域 cs_faq（faq.py 在 customer_service/），未触及 RAG 索引/检索链路，rag_smoke.yml 无需同步（TASK 回写）。
+- **环境恢复**：p7t-/p7v- 实测与测试数据全清（leftover=0）；临时探针脚本（D:\tmp\p7_*.py）随实测完成删除。
+- **待办（交付工序）**：提交（后端/前端两笔）→ PR → CI 显式逐项确认全绿 → 合并 → docs 回填 PR → 本表 P7=已完成 + 矩阵行核验回写。

@@ -385,6 +385,45 @@ class FAQStore:
             for e, s in scored[:k]
         ]
 
+    def search(self, question: str, k: int = 5,
+               min_score: float = 0.30) -> list[dict]:
+        """坐席知识检索（P7）：只读命中清单（精确+模糊），零台账零 hit 计数。
+
+        与 match()（问答主链，会落台账）和 match_candidates()（拒答自救，
+        精确命中返回空）的差异：本方法是坐席主动查询视图——精确命中
+        score=1.0 一并列出，任何路径都不写 cs_faq_query_log。
+        """
+        if not question or not question.strip():
+            return []
+        index, entries = self._get_index()
+        norm = normalize_question(question)
+        results: list[dict] = []
+        exact = index.get(norm)
+        if exact is not None:
+            results.append({
+                "question": exact.question,
+                "answer": exact.answer,
+                "score": 1.0,
+                "matched": True,
+            })
+        q_bigrams = _bigrams(question)
+        scored: list[tuple[FAQEntry, float]] = []
+        for entry, e_bigrams in entries:
+            if exact is not None and entry.faq_id == exact.faq_id:
+                continue
+            s = match_score(q_bigrams, e_bigrams)
+            if s >= min_score:
+                scored.append((entry, s))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        for entry, s in scored[: max(0, k - len(results))]:
+            results.append({
+                "question": entry.question,
+                "answer": entry.answer,
+                "score": round(s, 4),
+                "matched": False,
+            })
+        return results
+
 
 _store: FAQStore | None = None
 

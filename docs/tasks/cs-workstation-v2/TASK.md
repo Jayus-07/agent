@@ -225,6 +225,8 @@
 - 测试：T2 聚合正确性（构造数据比对）+租户隔离+agent 仅本人绩效。
 - 验收：看板数值与 DB 抽查一致；拒答问题→FAQ 草稿→管理端审核可走通。
 
+> **2026-10-31 执行回写**：①看板归属口径：**会话归属一律经 handoffs 判定**（conversations.assigned_agent_id 关闭即清空）；转人工量=handoffs 行数（conversations.handling_mode 关闭归位 ai 会失真）；意图分布 messages 无租户列，join conversations 收口租户/坐席；②六卡中「排队中/进行中」为共享队列实时快照（两视角一致，无涨跌）；其余四卡窗口聚合 + 对比前一等长窗口；③知识助手数据面：未解决聚合 = `ai.unanswered_questions`（070 迁移，有租户+question_hash 聚类；**聚类粒度=归一化问题精确哈希，不做语义归并**）；原型「低置信」徽章对应真实类别 `sql_empty`（显示「查询空结果」）；④FAQ 草稿 = `FAQStore.upsert_faq(status='draft')`（faq_key=归一化哈希幂等，草稿不进线上 `load_published`），**faq_key 会剥标点**（`p7v-发票` → `p7v发票`）；管理端 cs_faq 审核 UI 现状未建，草稿由 gap_review 台账消费——「管理端审核可走通」验收口径=草稿落库且不影响线上，UI 顺延 Phase 8 复核；⑤知识检索 = FAQStore 新增只读 `search()`（精确 1.0 + bigram Jaccard，零台账零 hit 计数）；⑥话术管理复用 P4 canned CRUD 零后端改动；⑦rag_smoke.yml **无需同步**——P7 知识链路属客服域 cs_faq（faq.py 在 customer_service），未触及 RAG 索引/检索链路；⑧SQL 教训：`avg(expr FILTER (WHERE ...))` 是语法错——FILTER 必须在聚合函数闭括号之后（`avg(expr) FILTER (...)`，实测排障 30 分钟）。
+
 ### P8 切换与清理
 
 - 路由切换：frontend-cs `/cs/*` 指向 cs2 页面并删除旧页；frontend `/customer-service` 指向新页并删除旧 `components/cs/*` 与旧抽屉。
