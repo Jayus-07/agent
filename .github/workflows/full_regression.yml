@@ -71,6 +71,11 @@ jobs:
       # SQL executor 池的只读角色（与上方 Initialize 步骤的 ALTER ROLE/GRANT 配套）
       PG_READONLY_USER: agent_readonly
       PG_READONLY_PASSWORD: pg_readonly_ci
+      # 出站凭据加密主密钥：CI 无 .env，create_provider 等真实加密路径
+      # fail-closed（SecretKeyMissing，v4 run 41205470228 实证）。固定测试
+      # 值（32 字节 urlsafe-base64），与 PGPASSWORD 同级仅用于测试链路。
+      # fail-closed 行为本身由 tests/infra/test_shared_crypto.py delenv 覆盖。
+      SECRETS_ENCRYPTION_KEY: Y2ktdGVzdC1rZXktMDEyMzQ1Njc4OWFiY2RlZmdoaWo=
     strategy:
       fail-fast: false
       matrix:
@@ -143,7 +148,12 @@ jobs:
             "GRANT CONNECT ON DATABASE agent_business_test TO agent_readonly;
              GRANT USAGE ON SCHEMA product, \"order\", inventory, customer, crawler, finance, ai TO agent_readonly;
              GRANT SELECT ON ALL TABLES IN SCHEMA product, \"order\", inventory, customer, crawler, finance TO agent_readonly;
-             GRANT SELECT ON ai.agent_tasks, ai.agent_trace TO agent_readonly;"
+             GRANT SELECT ON ai.agent_tasks, ai.agent_trace TO agent_readonly;
+             REVOKE SELECT ON finance.wallet_balances, finance.wallet_ledger FROM agent_readonly;"
+          # 末行 REVOKE：schema 级 GRANT 会把 init_db 之后新建的业务表一并授给
+          # 只读角色（125_mall_wallet 的 wallet 两表实证，v3 run 41151145995
+          # test_readonly_grants_equal_declared_tables 越权告警）。新业务表
+          # 默认不纳管（fail-closed）；确需只读访问时在 083 口径显式登记。
 
       - name: Suite pytest
         if: env.SKIP_SUITE != 'true'

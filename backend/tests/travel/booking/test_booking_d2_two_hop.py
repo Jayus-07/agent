@@ -14,12 +14,29 @@
 """
 from __future__ import annotations
 
+import pytest
+
 from backend.orchestration.context.routing_context import (
     assemble_routing_context,
 )
 from backend.travel.booking.graph_node import travel_booking_graph_node
 
 _TENANT, _USER, _SESSION = "t-d2", "u-d2", "sess-d2-two-hop"
+
+
+@pytest.fixture(autouse=True)
+def _booking_gate_on(monkeypatch):
+    """打开预订域总闸。
+
+    CI 无 .env：TRAVEL_BOOKING_ENABLED 走注册表/env 缺省 false，域门关闭
+    时挂起写不进、路由 pending 解析不接（回落 L1 clarify），两跳链路无从
+    建立——TRAVEL_BOOKING_ENABLED=false 本地模拟与 v3 run 41151145995 的
+    两例失败逐行一致。booking 判定源是 config 模块属性（evaluation
+    runner 同口径 patch），本文件无 PG/Provider 依赖，开闸即可。
+    """
+    from backend.config import travel_booking as bcfg
+
+    monkeypatch.setattr(bcfg, "TRAVEL_BOOKING_ENABLED", True)
 
 
 def _state(question: str) -> dict:

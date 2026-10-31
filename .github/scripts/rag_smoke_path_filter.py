@@ -195,6 +195,10 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/122_task_result_refs.sql",
     "backend/sql/migrations/123_user_automations.sql",
     "backend/sql/migrations/124_plan_revisions.sql",
+    # 商城演示钱包账本（cs-workstation-v2 P2，finance schema）：非 RAG 业务迁移，
+    # init_db.py 已同步登记为 business——漏登记会让迁移守卫把 PR 免费预检判死
+    # （v3 run 41151145995 repo-tests 实证）
+    "backend/sql/migrations/125_mall_wallet.sql",
 })
 
 

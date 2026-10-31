@@ -143,3 +143,98 @@ Run 41120872440（main = #146 后）。**api/rag/backend-root 三 job 从未启�
 - main 含全部修复（≥ a7a5471/#149 后的 commit）。
 - v2 分 suite 失败数见上方对比表；剩余 61 例清单：`/d/tmp/ci-debt/v2full/`（8 suite）+ orchestration 7 例见 `/d/tmp/ci-debt/v2/failures-orch4/`。
 - 全量 run 41120872440 的 api/rag/backend-root 三 job 被取消（未启动），需补取。
+
+---
+
+# 第二批会话（2026-10-31 晚）：v2 剩余 61 例全部定性修复
+
+## 分批实证
+
+### 批一 PR #153（orchestration 7 + misc inventory 10）
+
+- **orchestration 7 例定性推翻「xdist 顺序敏感」**：本地全目录 xdist 1071 passed 复现不了。真因 = **CI 环境差异下的测试资产漂移**：
+  1. CI 无 .env，`CS_ENABLED`/`TRAVEL_ENABLED` 走 sys_config 注册表缺省 **false** → `try_cs_prefilter`/`try_travel_prefilter` 恒降级（KeyError cs_context / route_mode=plan）。原 fixture patch `config.CS_ENABLED` 在 M16 后**无消费方**（漂移残留）。修：`monkeypatch.setitem(sys_config._values, ...)` 锁唯一判定源。
+  2. selection 端到端 1 例真实异常是 **KeyError: 'tasks'**（交接文档记的 "assert 503 == 200" 是笔误）：`GET /selection-decision/tasks` 未带头 → router 级 `resolve_operator_role` → `require_internal_token` fail-closed 503 → error 壳无 tasks 键。修：与 POST 同口径补 `_auth` 头。
+- **inventory 10 例**：CI 建有无后缀 `agent_business` 兼容库（004 迁移）且 env 未设 `INVENTORY_DB_PGDATABASE` → inventory 测试表落进该库，`drop_pgtest_tables` 只扫 BUSINESS/WORKFLOW 配置**永远清不掉** → 同 worker 前序用例行毒死后续。修：workflow env 补 `INVENTORY_DB_PGDATABASE=agent_business_test`（#145 同款）+ pg_env drop 列表补 `INVENTORY_DB_PG_CONFIG`（跨库清理行为验证 PASS）。**CI 实证：run 41138708986 orchestration/misc 清零（inventory 10 例不再出现）**。
+
+### 批二 PR #154（misc 12）
+
+- business_report 1：`/report-files/*` 在 API-Key skip 白名单内 200；穿越路径落出白名单 → CI 无 .env 时 fail-closed 503（本地 401）。测试进程内注入 API_KEY，**断言不放宽**。
+- kafka 2：kafka-python pyproject 已声明但 **requirements-lock.txt 遗漏**（CI 安装源是 lock）。按 2026-10-29 opencv-python 先例定向补入 2.0.2。**CI 实证：run 41142354024 pytest misc success（misc 22→0）**。
+- skills 3：b6b7973 校验收敛到 Governance Runtime JSON Schema（文案带路径、int→integer、根 additionalProperties=False 拦未声明键）——对齐新契约；`test_undeclared_keys_not_blocked` → `test_undeclared_keys_blocked_by_strict_root`。
+- tool_runtime 3：7e64152 文件系统 PermissionError 类型判定优先（infra_error），账号无权走文本路径——拆两用例分别锁定；tool lock 生成器再生成补 memory_forget_tool 中文名；admin_tools 守卫名 require_admin_user → require_editor_user（rbac 分离）同步打桩点。
+- domain_runtime 2：domain_flags fixture M16 同款漂移改 sys_config setitem；d18 前置 Handoff 读取（6f12d46）要求 tenant/conversation 键 + mock PG。
+
+### 批三 PR #158（travel 13 + cs 4 + prompts/evaluation/repo-tests 5 + summary）
+
+- decision_audit 4：**b73ed86 起 V1 决策留痕退役**（`_ensure_table` 恒 False），record/list 仅被 `_retired_v1_router`（无处挂载）调用——整链死代码，按 #139 先例删除测试文件。
+- booking 5：四表共享 travel schema + ledger 表名固定，xdist worker 间 TRUNCATE/DROP 互踩（in_doubt 实证）。conftest **会话级 advisory lock 跨 worker 串行化**（修复前 xdist 5 failed → 后 48 passed）。
+- event_stream 1：V1 端点 404 → 迁 `/travel/v2/plan/stream`。
+- cs d18：**store 现契约 = 每 (user, session) 一条当前确认**（save 整行覆盖，STOP D 升级语义）——原四 action_id 构造下 C 的保存复用覆盖 B 的行、D 被拦（DB 行级实证，conf-B 行落库后变 return_request）。重写为跨会话重发（TERMINAL_BLOCKED_ACTIONS 空集，success 后放行）。
+- cs cs_experts：290d2b7 起 refund_request 走专用真实链路（fail-closed），不再消费 `_simulate_execute`——用例改 address_update 保持意图。
+- cs p5：本地 xdist 1495 passed 未复现（CI runner 时序竞争）——**留 v3 观察**。
+- context_budget auto_compact：fixture 12 轮太短，重建后固定 policy 开销反超压缩收益（275 vs 251）→ 30 轮。
+- evaluation 2：37ae046 temperature 0.1→0；8a97a63 数据集版本 candidate.4（loader 对齐 manifest；suite 文件冻结声明 candidate.1 是另一事实源，升版属 DATA-01 流程，未扩范围）。
+- repo-tests 1：a9184e4 同 request_id 重启流 409（stream_registry 进程级单例跨用例存活）→ ASCII 用例独立 id。
+- **workflow Regression summary 恒红**（全部历史 run 实证，含全量 v2）：`toJSON(needs.*)` 单依赖时序列化为数组 → 形状兼容修复。**此修复是「suite 全绿 = run 绿」验收的前提**。
+- 本地总回归：五目录 xdist **3570 passed**。
+
+## 本会话新坑位（勿重走）
+
+7. **CI 环境差异优先于 xdist 猜测**：v2 的「xdist 顺序敏感」预判大半是错的——本地复现不了时先 diff CI workflow env 与本地 .env（域开关、认证豁免、INVENTORY 库名），再谈共享状态。模拟 CI env 方法：命令行显式设 `CS_ENABLED=false TRAVEL_ENABLED=false ALLOW_UNAUTHENTICATED= AI_INTERNAL_TOKEN= pytest ...`（load_dotenv 不覆盖已有 env）。
+8. **本地 PGHOST 必须用 127.0.0.1**：localhost 先试 ::1 被拒再回退 IPv4，psycopg 每次连接恒 ~5s，booking 类高频连库测试直接超时。`PGHOST=127.0.0.1` 连接 0.05s。
+9. **fixture patch 目标要对准唯一判定源**：M16 后域开关走 sys_config（`_values` dict），patch config 模块属性无效；业务守卫改过名（require_admin_user → require_editor_user）后 patch 旧名等于没拦——**每次 patch 前先确认实现在读哪个名字**。
+10. **测试构造前先读 store 语义**：cs confirmation 是「每会话一条当前确认」（save 覆盖），按多行构造必翻车——DB 行级实证比源码推理快。
+11. **advisory lock 串行化是共享表 xdist 互踩的通用解**：store schema/env 硬编码无法 per-worker 建表时，fixture 持会话级 advisory lock，setup/teardown 与用例体的互踩窗口被锁消除（booking 实证）。
+12. **gh 需要 git 仓库上下文**：`gh run download` 在 /d/tmp 下报 "not a git repository"，必须在 worktree 内执行；artifact 与 CI 日志的 FAILED 行可能不同（artifact=断言行，summary=最终异常类型），以 CI 日志 short summary 为准。
+
+## 恢复步骤（下一会话）
+
+1. `cd /d/Program Files/workplace/agent-wt-ci-debt2 && git fetch && git checkout -b fix/ci-debt-<批次> origin/main`。
+2. **核对全量 v3（run 41151145995）结果**：预期全部 suite 0 失败（p5 1 例与 provider_contracts 2 例、collapse 1 例属低概率时序竞争，若复现按本文件坑位 7 的方法重定性）。
+3. 若 v3 有残余：按批三方法（单跑→xdist→CI 模拟 env 三步定性）继续。
+4. 每周例行跑失败数曲线观测：v3 起全部 suite 应稳定 0。
+
+## 当前进度锚点
+
+- main 含全部修复（≥ d658387/#158 后的 commit）。
+- v2 61 例定性总表见 [TASK.md](TASK.md)；三批 PR：#153 / #154 / #158。
+- 全量 v3：run 41151145995（2026-10-31T00:37Z dispatch，无参数全量）。
+- 本地资产：`/d/tmp/ci-debt/`（v2orch、v3misc、orch_ci_v2.log、travel_xdist_fix1.txt、cs_xdist1.txt、pc_xdist1.txt、batch3_regress.txt 等）。
+
+## v3 实证 + 批四（PR #160）+ v4 收敛（2026-10-31 深夜）
+
+### 全量 v3（run 41151145995，main = #158 后）
+
+- **20 失败 / 12+1 jobs**：misc、orchestration、evaluation、tools-security-obs 清零；Regression summary 首次变绿（修复生效）。
+- 残余定性：travel 4（d2_two_hop 2 + provider_contracts 2，域门/Key 门 CI 缺省关）、sql-infra 1（#157 的 schema 级 GRANT 把 125 新表授给 agent_readonly，守卫按设计拦）、repo-tests 1（125 漏 rag_smoke 分类登记）、collapse 1 + p5 1（CI-only，本轮 dispatch 已过——间歇性）、services-travelv2 10（probe 8 + memory 2）、api/rag/backend-root 又被取消（runner 并发，老问题）。
+
+### 批四 PR #160（13 例）
+
+- provider_probe 8：url_guard SSRF 预检真 DNS 解析测试域名 → catalog 契约用例替身 assert_url_allowed（**仅 test_catalog_* 且排除 rejects_private**——第一版全局 autouse 误伤 3 个 SSRF 行为用例，'pass'=='fail' 实证后收窄）。
+- d2_two_hop 2：TRAVEL_BOOKING_ENABLED=false 本地模拟与 CI 失败逐行一致 → autouse 开闸（booking 判定源 = config 模块属性，evaluation runner 同口径）。
+- provider_contracts 2：merchant 门 `MAP.is_amap_configured()`（CI 无 AMAP_KEY）、train 门 `MCP_CFG.is_train_mcp_enabled()`（不是 train_mod.TRAIN_MCP_ENABLED——patch 错位置报 AttributeError 才发现）。
+- repo-tests 1：125_mall_wallet.sql 只登记了 init_db.py、漏 rag_smoke filter（#157 单边登记；守卫测试在 tests/ 根目录而非 backend/tests/）。
+- sql-infra 1：CI init 的 schema 级 GRANT 在 init_db 之后执行 → 125 新 wallet 表被一并授权 → 守卫 fail-fast（**全量回归当门禁抓到并行会话的越权授权**）。修：CI init 显式 REVOKE（未纳管 fail-closed）。
+
+### 验证 run 41205470228（#160 合并后，全 matrix 实跑）
+
+- **12/13 suite 全绿 + Regression summary 绿**；唯一残余 services-travelv2 3 例（memory 2 + model_config_persistence 1，模型注册表共享状态家族，specialized 2 例本轮已过）。
+- **收敛曲线：v1 108 → v2 61 → v3 20 → v4 3。**
+
+### 本会话新增坑位（续）
+
+13. **`git checkout -b <branch> origin/main` 前必须核对 fetch 是否真成功**：本会话台账分支创建时 fetch 网络抖动失败（tail -1 吞了报错），origin/main 停在旧点，checkout 把工作树**静默回退**——#158 全部修复（booking 锁、删除的文件、V2 迁移）在本地消失，批四编辑叠在旧树上跑出 7 个幻影失败（已删文件复活）。恢复：stash 编辑 → 核对 `git log --oneline -1 origin/main` → 重开分支 → stash pop。**分支创建后第一件事：`git log --oneline -1` 确认 parent 是预期 commit。**
+14. **门替身要打在真正的判定函数上**：patch 旧属性名（train_mod.TRAIN_MCP_ENABLED 不存在）会直接 AttributeError 暴露；而 patch 全局 autouse 会误伤专门测守卫行为的用例（provider_probe 的 SSRF 用例）——用测试名条件收窄 + 显式排除名单。
+15. **守卫测试可能在 tests/ 根目录而非 backend/tests/**（repo-tests suite）：找测试文件先 `find . -name` 别假设目录。
+16. **并行会话的连带义务是双向的**：#157 加迁移只登记了 init_db 漏了 rag_smoke filter；加 finance 表触发了只读授权越权守卫。全量回归是抓这类跨会话漂移的唯一网——这正本任务存在的意义。
+
+### 下一会话
+
+- 唯一残余：services-travelv2 3 例（TASK.md「剩余计划」有根因方向），修完即 0。
+- p5 / collapse 已间歇性转绿，无需再修；若未来复发按坑位 7 的 CI 模拟方法重定性。
+- 每周例行跑：v4 起除 travelv2 外应稳定全绿。
+
+## 交接定稿（2026-10-31 深夜）
+
+残余 3 例的完整交接（总计划/进度锚点/工作树/测试/验收五节）已写入 [TASK.md](TASK.md) 文末「交接」章节，下一会话直接按该章节执行；本文件坑位 1–16 为配套避坑索引。

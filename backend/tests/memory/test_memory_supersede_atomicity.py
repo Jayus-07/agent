@@ -36,10 +36,11 @@ async def _env():
     await cleanup_memory_prefix(_PREFIX)
 
 
-def _fact(value: str) -> MemoryFact:
+def _fact(value: str, source_message_id: int | None = None) -> MemoryFact:
     return MemoryFact(fact_type="user_fact", content=f"主模型是 {value}",
                       memory_key="project.main_llm", structured_value=value,
-                      origin="inferred", confidence_score=0.8)
+                      origin="inferred", confidence_score=0.8,
+                      source_message_id=source_message_id)
 
 
 async def _active_count(user: str = _USER) -> int:
@@ -88,7 +89,12 @@ async def test_b69_supersede_rollback_keeps_old_active():
     async with AsyncSessionLocal() as db:
         l3 = LongTermMemory(MemoryRepository(db))
         l3._embedding_model = ScriptedEmbedding()
-        r1 = await l3.store_with_resolution(_fact("deepseek"), _USER, _SESSION, "default")
+        # stale_source_event 语义（3679821）：来源不明按旧事件挡住——
+        # 不带来源事件 id 的写入会被 BLOCKED_STALE_EVENT 拦在 supersede
+        # 之前；本用例验证的是 supersede 原子性，须走真实聊天链路的
+        # 带事件 id 写入形态（递增 message id）。
+        r1 = await l3.store_with_resolution(_fact("deepseek", source_message_id=1),
+                                            _USER, _SESSION, "default")
         await db.commit()
     assert r1.outcome == StoreOutcome.INSERTED
 
@@ -103,7 +109,8 @@ async def test_b69_supersede_rollback_keeps_old_active():
                 raise RuntimeError("simulated insert failure")
 
             repo.insert = boom  # 仅注入本事务的 insert 失败
-            await l3.store_with_resolution(_fact("doubao"), _USER, _SESSION, "default")
+            await l3.store_with_resolution(_fact("doubao", source_message_id=2),
+                                           _USER, _SESSION, "default")
             # 未到 commit 即抛出 → with 退出触发隐式 rollback
 
     async with AsyncSessionLocal() as db:
