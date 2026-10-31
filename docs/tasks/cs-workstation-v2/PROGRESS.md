@@ -12,7 +12,7 @@
 | P0 | 脚手架与基线（cs2 命名空间/路由壳/pending 快照） | 已完成 | feat/cs-v2-p0 → PR #147（merge 4b80207） | 详见下方日志 2026-10-31（五） | 2026-10-31 |
 | P1 | 会话基础链路（双端对话/WS/时间线） | 已完成 | feat/cs-v2-p1 → PR #151（merge b236a62） | 详见下方日志 2026-10-31（六） | 2026-10-31 |
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 已完成 | feat/cs-v2-p2 → PR #155（merge 99c62ea）+ 修复 #156（2945f5b） | 详见下方日志 2026-10-31（七） | 2026-10-31 |
-| P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 待验收（实现+验证完成，实测抓到 1 个生产缺陷已修复，待用户确认提交，见日志 2026-10-31（九）） | feat/cs-v2-p3（未提交） | 见下方日志 | 2026-10-31 |
+| P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 已完成 | feat/cs-v2-p3 → PR #164（merge f600be6，三笔 36f40b9/ba87f00/0fc3626） | 详见下方日志 2026-10-31（九）（十） | 2026-10-31 |
 | P4 | 快捷回复+AI Copilot | 计划中 | - | - | - |
 | P5 | 退款审核闭环 | 计划中 | - | - | - |
 | P6 | 质检中心 | 计划中 | - | - | - |
@@ -125,3 +125,17 @@
 - **实测口径备忘（非缺陷）**：①`close_stale` 以 **updated_at**（非 created_at）为超时基准——裸 SQL 种数据必须同步刷新 updated_at，否则被提前兜底关闭；②cs_wire_e2e 有 18 条 9 月 e2e 残留 `accepted` assignment 挂账，容量谓词判满载致 no_candidate（已置 released 清理）；③手动 `docker exec python` 进程模型与 prefork 子进程不同，诊断以常驻容器日志 + exec 内复刻事务为准。
 - **环境恢复**：p3v- 实测数据全清（0 残留）；uitest_user/cs_wire_e2e 恢复原值（status=online/enabled=f/accepting=f）；next-env.d.ts 构建副产物已还原。
 - **待办（工序③④）**：向用户出示 diff+证据 → 确认后提交（两笔：后端/前端，双重路径限定）→ PR → CI → 合并 → 回填 P3=已完成；P3 矩阵行逐项核验。
+
+### 2026-10-31（十）—— P3 交付收官：PR #164 合并 main + 矩阵行核验（工序③④完成）
+
+- **交付记录**：用户确认后按双重路径限定三笔提交——36f40b9（后端：迁移 126/模型/dispatch/maintenance/realtime/路由/T2×2 + SLA 广播缺陷修复）、ba87f00（前端：双端 P3 组件与页面 + TASK/PROGRESS 回写）、0fc3626（迁移守卫登记）→ **PR #164 CI 二轮全绿后合并**（merge f600be6）。
+- **CI 首轮失败与修复**：Detect RAG changes/RAG Smoke 失败——#159–#161 新增迁移登记守卫要求新迁移归类，迁移 126 创建早于守卫合入未登记。修复：126（客服域字段，非 RAG/费用）登记 `NON_AI_MIGRATION_ENTRIES`（本地 `classify_migration` 验证 non_ai 后提交）。二轮 7 checks 显式逐项确认：6 pass + RAG Smoke Evaluation skipping（非 RAG PR 预期跳过），无 pending/fail 后才执行 merge（吸取 P2 #155 教训）。
+- **意外关机续工记录**：交付中途宿主机意外断电重启——两笔已落盘提交零损失（git log 核对 36f40b9/ba87f00 完好、工作区干净）；Docker Desktop 未随开机自启，**主栈当前停机**，待启动后建议按 main@f600be6 重建（下会话或用户处理，未验证项不作声称）；GitHub 直连抖动（fetch 成功→push 失败→恢复），代理未参与。
+- **工序④矩阵行核验（代码+测试+事件链路级；浏览器级逐项打勾按 TASK 第 8 节留 Phase 8 终验）**：
+  - 顶栏·状态四态切换持久 ✅（实测①：PUT/GET/DB 三方一致）；away/offline 不接新 offer ✅（实测②：accepting 候选过滤 + 常驻 dispatcher 派 offer 给 online 坐席）
+  - 顶栏·通知（SLA/转接/offer）✅（实测④事件落库+Redis 广播帧；AgentTopBar 通知中心消费，vitest 覆盖）
+  - 转接弹窗 ✅（T2：原因必填 422/目标 away 422/非本人 403/成功路径事件三连；TransferDialog 原因必填+不可转置灰）；拒单/超时回退 = 既有 reassign 语义回退 waiting_human 队列（TASK 第 5 节回写口径）
+  - 会话管理 ✅（ConversationsAdminPage：筛选/回放/强制接管/重派/关闭，复用既有 admin API）；工单管理 ✅（TicketsAdminPage：受理/解决/关闭实时联动，复用既有工单流转）
+  - 用户端 4 态横幅+倒计时+排队位 ✅（CustomerServicePage + sla/transfer 事件链路实测）；接管后输入直达坐席 ✅（实测⑤：POST /my/{id}/messages 落库+message.created 广播帧；T2 AI 态 409/跨用户 403）
+  - **未完成项（有意顺延）**：顶栏接单开关 UI（accepting 列沿用既有，P4 补）；`POST /my/{id}/messages` 幂等键（P4 可补）
+- **遗留提醒**：主栈停机待恢复 + 按合并后 main 重建；下一期 P4 自 origin/main@f600be6 起新分支 feat/cs-v2-p4。
