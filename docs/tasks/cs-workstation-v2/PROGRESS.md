@@ -16,7 +16,7 @@
 | P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
 | P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
 | P6 | 质检中心 | 已完成 | feat/cs-v2-p6 → PR #173（merge 15706c3，两笔 1547068/8c1c6fa） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
-| P7 | 看板+知识助手 | 待验收（代码完成+全链实测通过，PR 待建，见日志（十八）） | feat/cs-v2-p7（@37f879f 起，未提交） | 详见下方日志 2026-10-31（十八） | 2026-10-31 |
+| P7 | 看板+知识助手 | 已完成 | feat/cs-v2-p7 → PR #177（merge bbc2d32，两笔 58bcb52/818d6b7） | 详见下方日志 2026-10-31（十八）（十九） | 2026-10-31 |
 | P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
 
 状态取值：计划中 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
@@ -244,3 +244,18 @@
 - **rag_smoke 判断**：P7 知识链路属客服域 cs_faq（faq.py 在 customer_service/），未触及 RAG 索引/检索链路，rag_smoke.yml 无需同步（TASK 回写）。
 - **环境恢复**：p7t-/p7v- 实测与测试数据全清（leftover=0）；临时探针脚本（D:\tmp\p7_*.py）随实测完成删除。
 - **待办（交付工序）**：提交（后端/前端两笔）→ PR → CI 显式逐项确认全绿 → 合并 → docs 回填 PR → 本表 P7=已完成 + 矩阵行核验回写。
+
+### 2026-10-31（十九）—— P7 交付收官：PR #177 一轮 CI 全绿合并 + 矩阵行核验（意外退出后续工完成）
+
+- **交付记录**：持续任务模式按授权直接提交——58bcb52（后端：cs_dashboard/cs_knowledge 路由+FAQStore.search+注册+T2 + TASK/PROGRESS 回写）、818d6b7（前端：/cs2/dashboard + /cs2/knowledge + page.test×2 + api.ts）→ **PR #177 CI 一轮 8 checks 显式逐项确认**（5 pass + RAG Smoke Evaluation/preflight skipping 非 RAG PR 预期）→ merge **bbc2d32**。合并后宿主机意外退出，重开会话核对现场（工作区干净、两笔提交完好、gh 确认 state=MERGED）后 fetch 恢复续工，零损失。
+- **P7 矩阵行核验（代码+测试+全链实测级；浏览器级留 Phase 8 终验）**：
+  - 数据看板（今日/近7日/近30日切换，六卡数值+涨跌联动）✅（REST 种子逐值比对：received=3/首响 70s/CSAT 3.0/涨跌字段齐；page.test 切换重拉）
+  - 近7日接待/转人工对比 ✅（trend 双序列实测 3/3）
+  - 意图分布 ✅（退款 2/物流 1，租户+坐席归属收口）
+  - 坐席绩效表（含质检分/当前状态）✅（A=88 分·online、B=busy；agent 仅本人一行 scope=self）
+  - 知识助手·未解决问题（点行展开原始查询聚合、生成 FAQ 草稿）✅（2 簇 hits/变体/来源正确；草稿 draft 落库+幂等+match 不出）
+  - 话术管理（个人/团队 Tab、新增弹窗真实加行、启用开关）✅（复用 P4 canned CRUD，page.test 覆盖）
+  - 知识检索（结果+置信）✅（精确 1.0 matched、模糊 0.857、台账零写入断言）
+  - 能力差距清单 ✅（静态候选池=TASK 第 11 节，与原型一致）
+  - rag_smoke.yml 同步：无需（P7 知识链路属客服域 cs_faq，未触及 RAG 链路，TASK 第 5 节已回写口径）
+- **下一期**：P8 切换与清理（最终期），自 origin/main@bbc2d32 起新分支 feat/cs-v2-p8——路由切换（/cs2→/cs、/customer-service-v2→/customer-service）、删除旧 CS 组件/页面、旧契约→替代→覆盖证据映射、文档同步（customer-service.md/frontend-guide.md/cross-cutting-contracts.md/commands.md）、原型矩阵 3.1/3.2 逐项终验、累计顺延项复核（顶栏接单开关 UI、messages 幂等键、更多菜单三功能、用户端站内通知）。
