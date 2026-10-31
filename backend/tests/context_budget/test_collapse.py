@@ -126,7 +126,17 @@ class TestL4InPreflight:
         prepared = m.prepare_llm_context(messages=msgs)
         assert prepared.folds == []
 
-    def test_collapse_triggers_above_threshold(self):
+    def test_collapse_triggers_above_threshold(self, monkeypatch):
+        # 夹具量级按 LLM_CONTEXT_LENGTH=8192 口径设计（注释见 _long_context：
+        # po/rag 抬过 80% 触发线、12 轮存活 L2）。CI 无 .env 时该配置缺省
+        # 4096 → budget=3072，po/rag 先占满预算、L2 先行裁剪吃掉折叠候选
+        # （user 轮数 ≤ keep → fold_messages 无物可折，v9 run 实证
+        # used=2600 budget=3072 ratio=0.846 但 folds=0）——锁定与夹具
+        # 设计一致的窗口口径，测试意图在 CI 与本地同构。
+        # patch 目标是 backend.config.llm（token_counter 函数内
+        # from-import 读子模块属性；patch config 包 re-export 绑定无效）。
+        from backend.config import llm as llm_config
+        monkeypatch.setattr(llm_config, "LLM_CONTEXT_LENGTH", 8192)
         m = ContextBudgetManager()
         msgs, po, rag = self._long_context()
         prepared = m.prepare_llm_context(messages=msgs, previous_outputs=po,
