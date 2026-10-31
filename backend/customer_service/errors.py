@@ -163,6 +163,17 @@ class RefundRequestUnavailableError(BusinessRuleError):
         )
 
 
+class RefundReviewConflictError(BusinessRuleError):
+    """退款申请已处于终态（或审核操作冲突），不可再次审核。"""
+
+    def __init__(self, message: str = "退款申请已被审核或已撤销", **kw):
+        super().__init__(
+            message,
+            user_message="该退款申请已完成审核或已撤销，无法重复审核。",
+            **kw,
+        )
+
+
 class RefundRequestConflictError(BusinessRuleError):
     """退款案件已存在且与当前确认请求不一致。"""
 

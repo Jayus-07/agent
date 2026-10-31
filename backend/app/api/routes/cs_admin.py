@@ -299,7 +299,11 @@ async def update_my_refund_draft(
 
 @confirm_router.get("/refund-requests")
 async def list_my_refund_requests(request: Request, limit: int = Query(20, ge=1, le=100)) -> dict:
-    """查询登录用户本人、当前租户的退款申请。"""
+    """查询登录用户本人、当前租户的退款申请。
+
+    P5 双模式分流：http 网关 = business-service 为事实源（审核结果实时可见）；
+    sandbox = 本地 cs_case 案件投影。
+    """
     from backend.app.api.identity import resolve_identity
 
     ident = resolve_identity(request)
@@ -309,6 +313,19 @@ async def list_my_refund_requests(request: Request, limit: int = Query(20, ge=1,
         raise HTTPException(401, detail="查询退款申请需要已认证用户身份")
     if not tenant_id or tenant_id == "default":
         raise HTTPException(403, detail="查询退款申请需要有效租户身份")
+    from backend.customer_service.service.refund_service import get_refund_service
+
+    if get_refund_service()._review_mode() == "http":
+        try:
+            rows = get_refund_service().list_review_queue(
+                tenant_id=tenant_id, limit=limit,
+            )
+        except Exception as exc:
+            logger.warning("[CSAdmin] list refund requests (http) failed", exc_info=True)
+            raise HTTPException(503, detail="退款申请状态暂不可用") from exc
+        items = [row for row in rows if str(row.get("user_id") or "") == user_id]
+        return {"items": items, "total": len(items)}
+
     from backend.customer_service.case.service import get_case_service
     try:
         items = await get_case_service().async_list_refund_requests(
@@ -332,6 +349,24 @@ async def get_my_refund_request(request: Request, request_id: str) -> dict:
         raise HTTPException(401, detail="查询退款申请需要已认证用户身份")
     if not tenant_id or tenant_id == "default":
         raise HTTPException(403, detail="查询退款申请需要有效租户身份")
+    from backend.customer_service.service.refund_service import get_refund_service
+
+    if get_refund_service()._review_mode() == "http":
+        try:
+            rows = get_refund_service().list_review_queue(
+                tenant_id=tenant_id, limit=200,
+            )
+        except Exception as exc:
+            logger.warning("[CSAdmin] get refund request (http) failed", exc_info=True)
+            raise HTTPException(503, detail="退款申请状态暂不可用") from exc
+        for row in rows:
+            if (
+                str(row.get("request_id") or "") == request_id
+                and str(row.get("user_id") or "") == user_id
+            ):
+                return row
+        raise HTTPException(404, detail="未找到本人退款申请")
+
     from backend.customer_service.case.service import get_case_service
     try:
         item = await get_case_service().async_get_refund_request(
