@@ -3,6 +3,7 @@
 tracer.py 这类纯逻辑模块不需要 DB/Redis mock；将来 P0.2/P0.3 的测试
 如果需要 PostgreSQL/Chroma，请在这里加 session 级 fixture。
 """
+import atexit
 import os
 import sys
 import tempfile
@@ -103,6 +104,75 @@ def pytest_collection_modifyitems(config, items):
 # 必须在 backend.config 导入前执行：config/database.py 的 load_dotenv()
 # 不覆盖已有环境变量，此处预设值会胜过 .env 的 RAG_DATA_DIR。
 # 逃逸口：RAG_EVAL_NO_ISOLATION=1 时使用真实 data/（调试工作区索引用）。
+def _rmtree_drop_readonly(path) -> bool:
+    """删除目录树，逐文件去只读位后删。
+
+    Windows 上 copy2 复制的 data/ 文件可能保留只读属性，而
+    shutil.rmtree 的 onerror 会把这类 PermissionError 吞掉，表现为
+    「删了一半、剩下的静默残留」。故先 os.chmod(S_IWRITE) 再 remove。
+    """
+    import stat
+
+    for root, dirs, files in os.walk(path, topdown=False, onerror=lambda e: None):
+        for name in files:
+            fp = os.path.join(root, name)
+            try:
+                os.chmod(fp, stat.S_IWRITE)
+                os.remove(fp)
+            except OSError:
+                pass
+        for name in dirs:
+            try:
+                os.rmdir(os.path.join(root, name))
+            except OSError:
+                pass
+    try:
+        os.rmdir(path)
+        return True
+    except OSError:
+        return False
+
+
+def _sweep_stale_test_dirs(min_age_sec: int = 1800) -> None:
+    """清理历史遗留的 agent_test_data_*（进程被 kill/崩溃时 atexit 不执行）。
+
+    双闸门，两个都通过才删：
+      1) 目录 mtime 早于 min_age_sec —— 排除并发会话正在初始化的目录；
+      2) rename 探测成功 —— 排除仍持有句柄的并发 pytest 长任务。
+    任一不满足即跳过：宁可留垃圾，也不能误删别的会话正在用的隔离目录。
+
+    注意：这里不能用「24 小时」之类的大窗口。一次 pytest 生命周期只有
+    10~20 分钟，跑完目录就是死垃圾但 mtime 依然很新；窗口开太大等于
+    永远不回收（实测 206 个残留目录全部落在 24 小时内，仍占用 865 MB）。
+    """
+    import glob
+    import time
+
+    base = tempfile.gettempdir()
+    now = time.time()
+    swept = skipped = 0
+    for d in glob.glob(os.path.join(base, "agent_test_data_*")):
+        try:
+            if now - os.path.getmtime(d) < min_age_sec:
+                skipped += 1
+                continue
+            if d.endswith(".reclaim"):
+                # 上一轮已改名但删除失败留下的，直接重试，别再改名
+                reclaim = d
+            else:
+                reclaim = d + ".reclaim"
+                os.rename(d, reclaim)  # 有进程持句柄时抛 OSError
+        except OSError:
+            skipped += 1
+            continue
+        if _rmtree_drop_readonly(reclaim):
+            swept += 1
+        else:
+            skipped += 1
+    if swept or skipped:
+        print(f"[conftest] 历史测试数据目录清理: 删除 {swept}，跳过 {skipped}")
+
+
 def _prepare_isolated_data_dir() -> None:
     if os.getenv("RAG_EVAL_NO_ISOLATION") == "1":
         print("[conftest] 数据目录隔离已禁用（RAG_EVAL_NO_ISOLATION=1），使用真实 data/")
@@ -126,7 +196,14 @@ def _prepare_isolated_data_dir() -> None:
             f"（如需调试工作区索引请设 RAG_EVAL_NO_ISOLATION=1）: {e}"
         ) from e
 
+    # 先回收上一轮残留：进程被 kill / 崩溃时，下面注册的 atexit 不会执行，
+    # 残留会一直堆到磁盘（实测单次快照 43 MB，206 次残留 = 865 MB）。
+    _sweep_stale_test_dirs()
+
     tmp_root = tempfile.mkdtemp(prefix="agent_test_data_")
+    # 必须紧跟 mkdtemp 注册，不能放到复制循环之后：紧接着的循环在
+    # data/docs/ 缺文件时会 raise RuntimeError，注册晚一步就留下半成品快照。
+    atexit.register(_rmtree_drop_readonly, tmp_root)
     copied = 0
     for rel in tracked:
         # git 路径带 data/ 前缀，而 tmp_root 本身就是 RAG_DATA_DIR（data 根）
