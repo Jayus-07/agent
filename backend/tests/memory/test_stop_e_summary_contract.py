@@ -136,8 +136,11 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
 
     scheduled = []
 
-    def _capture(coro):
-        scheduled.append(coro)
+    # end_turn 现经 spawn_background_task（create_task + 持引用）调度后台任务；
+    # 替身捕获 (coro, name) 而不启动——与旧版 patch asyncio.ensure_future
+    # 同语义：调度被记录、任务体不被本协程 await。
+    def _capture(coro, *, name=None):
+        scheduled.append((coro, name))
         return None
 
     async def _dispatch(job_id):
@@ -148,7 +151,8 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
     svc._sessions = {}
     monkeypatch.setattr(service_mod, "AsyncSessionLocal", lambda: _FakeCtx())
     monkeypatch.setattr(service_mod, "SessionRepository", lambda db: _FakeSRepo())
-    monkeypatch.setattr(service_mod.asyncio, "ensure_future", _capture)
+    from backend.infra import async_utils
+    monkeypatch.setattr(async_utils, "spawn_background_task", _capture)
     monkeypatch.setattr(extraction_tasks, "dispatch_memory_extraction", _dispatch)
 
     await svc.end_turn("no-block", "q", "a", user_id=_USER)
@@ -160,12 +164,21 @@ async def test_end_turn_schedules_summarize_without_awaiting(monkeypatch):
     assert len(jobs) == 1
     assert jobs[0].source_message_id == 101
     assert jobs[0].assistant_message_id == 102
+
+    summary_coros = [coro for coro, name in scheduled
+                     if name and name.startswith("l2-summary-")]
+    dispatch_coros = [coro for coro, name in scheduled
+                      if name and name.startswith("l3-dispatch-")]
+    assert len(summary_coros) == 1, "进程内只调度一次摘要"
+    assert len(dispatch_coros) == 1, "L3 投递由已提交 outbox 的 job ID 驱动"
+
+    # 驱动投递任务体（内部延迟 import 到打桩后的 dispatch_memory_extraction）
+    await dispatch_coros[0]
     dispatch_index = next(i for i, event in enumerate(executed)
                           if event.startswith("dispatch:"))
     assert executed.index("commit") < dispatch_index
     assert executed[dispatch_index] == f"dispatch:{jobs[0].id}"
-    assert len(scheduled) == 1, "进程内只调度摘要；L3 由已提交 outbox 投递"
-    for coro in scheduled:
+    for coro in summary_coros:
         coro.close()
 
 
