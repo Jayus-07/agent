@@ -12,7 +12,7 @@
 | P0 | 脚手架与基线（cs2 命名空间/路由壳/pending 快照） | 已完成 | feat/cs-v2-p0 → PR #147（merge 4b80207） | 详见下方日志 2026-10-31（五） | 2026-10-31 |
 | P1 | 会话基础链路（双端对话/WS/时间线） | 已完成 | feat/cs-v2-p1 → PR #151（merge b236a62） | 详见下方日志 2026-10-31（六） | 2026-10-31 |
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 已完成 | feat/cs-v2-p2 → PR #155（merge 99c62ea）+ 修复 #156（2945f5b） | 详见下方日志 2026-10-31（七） | 2026-10-31 |
-| P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 计划中 | - | - | - |
+| P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 待验收（实现+验证完成，实测抓到 1 个生产缺陷已修复，待用户确认提交，见日志 2026-10-31（九）） | feat/cs-v2-p3（未提交） | 见下方日志 | 2026-10-31 |
 | P4 | 快捷回复+AI Copilot | 计划中 | - | - | - |
 | P5 | 退款审核闭环 | 计划中 | - | - | - |
 | P6 | 质检中心 | 计划中 | - | - | - |
@@ -90,3 +90,38 @@
 - **交付失误记录**：PR #155 在 3 个 check 尚未通过时被我合并（watch 提前退出后未确认全绿即执行 merge）——其中评测集总量锁定量断言（300）未随补样同步为真实失败，跟进 PR #156 修复（300→304，本地 304 条离线 sanity 全过）；另 2 个（Detect RAG changes/RAG Smoke）为 merge 后上下文丢失的 workflow 基础设施问题，#156 的 CI 全绿反证。教训已吸取：merge 前必须显式确认全部 check 结论。
 - **交付记录**：92fb3fc（后端）+ d1f6031（前端）→ PR #155（merge 99c62ea）→ 修复 7a0aa35 → PR #156（merge 2945f5b）。
 - **环境备注**：迁移基线已推进至 125（并行会话持续追加，后续期次动手前重新核对）；共享栈运行 http 网关模式（BUSINESS_SERVICE_URL=business-mock:8081），mall 资金走 Mock 账本；frontend-cs 仍不在容器栈（验证以 vitest/tsc/build 为准）。
+
+### 2026-10-31（八）—— P3 实现完成，验证中途按用户指令交接（PAUSED）
+
+- **会话事件**：P3 主体实现过程中用户要求在本可交接点停下，交接另一会话续工。以下为完整交接现场。
+- **工作树**：`D:\Program Files\workplace\agent-cs-v2`，分支 `feat/cs-v2-p3`（自 origin/main@3918188 建分支，**改动全部未提交**），基点后 main 仅前移一格（d658387，#158 CI 债务，与改动文件无冲突）。
+- **未提交改动**（`git status` 口径）：
+  - 新增：`backend/sql/migrations/126_cs_agent_status_sla.sql`、`backend/tests/api/test_cs_agent_status_transfer.py`、`backend/tests/customer_service/test_cs_sla_graded.py`、`frontend-cs/src/cs2/workspace/AgentTopBar.tsx`、`frontend-cs/src/cs2/workspace/TransferDialog.tsx`、`frontend-cs/src/cs2/ConversationsAdminPage.tsx`、`frontend-cs/src/cs2/TicketsAdminPage.tsx`
+  - 修改：`backend/customer_service/maintenance.py`（SLA warning 扫描+幂等）、`backend/customer_service/realtime.py`（mark_sla_alert_once）、`backend/customer_service/handoff/dispatch/repository.py`（派单过滤 away/offline + find_agent[_for_update]）、`backend/customer_service/handoff/dispatch/reaper.py`（关闭即 breach + sla.breach 事件）、`backend/customer_service/models/agent.py|handoff.py`（status/sla_level 列）、`backend/app/api/routes/cs_agent_offers.py`（状态 GET/PUT、转接 POST、坐席清单 GET）、`backend/app/api/routes/cs_admin.py`（POST /my/{id}/messages）、`scripts/init_db.py`（126 注册）、`frontend-cs/src/cs2/workspace/api.ts|WorkbenchPage.tsx|workbench-page.test.tsx`、`frontend/src/cs2/cs2Api.ts|CustomerServicePage.tsx`
+- **P3 后端已实现**：①迁移 126（cs_agents.status 四态 CHECK + handoffs.sla_level，已注册 init_db.py，**已手动应用到本机 5433 库**——测试需要；容器 db-migrate 重跑幂等）；②派单过滤排除 away/offline（busy 仍派单）；③SLA 分级：warning（50% 窗口）由 maintenance 扫描（Redis SETNX 幂等 fail-open），**breach 由 reaper 关闭路径发出**（职责拆分，原因见 TASK.md 回写）；④API：GET/PUT /cs/agents/me/status（+agent.status_changed 瞬态事件）、POST /cs/conversations/{id}/transfer（本人会话 + 目标 online/busy 校验 + 复用 reassign_handoff + transfer_requested 事件落库）、GET /cs/agents（转接目标清单）、POST /cs/conversations/my/{id}/messages（用户→坐席消息：人工态放行、AI/关闭态 409、跨用户 403、message.created 广播与图 turn 同构）。
+- **P3 前端已实现**：坐席端（AgentTopBar 状态切换+通知中心、TransferDialog 目标选择+原因必填、WorkbenchPage 集成 offer 接单条/通知消费 sla.*/offer/转接/状态事件、ConversationsAdminPage 会话管理=筛选+详情回放+强制接管/重派/关闭、TicketsAdminPage 工单管理=筛选+受理/解决/关闭流转）；用户端（转人工 4 态横幅+deadline 倒计时+排队位、人工态 3s 轮询拉坐席消息与 handoff_meta、**接管后用户可继续输入直达坐席**——AI 态仍走 SSE 流）。
+- **测试证据（均实际执行）**：新 T2 `test_cs_agent_status_transfer.py` 8 例 + `test_cs_sla_graded.py` 2 例 = **12 passed**（真库集成 5433，p3t- 前缀行用后即清；Redis SETNX 幂等闸真实验证）；既有回归（dispatch/offers/pending/idor）**57 passed**；frontend-cs cs2 定向 **15 passed**、frontend cs2+mall 定向 **25 passed**（no-legacy 守卫含 P3 新文件全过）；frontend-cs tsc **0 错**、frontend tsc 仅存量 16 错（bff-proxy/store-chat，新文件 0 错）。
+- **未完成（接手工序，按序）**：
+  1. 双端全量 vitest（T0 冒烟）+ 双端生产构建；
+  2. `COMPOSE_PROJECT_NAME=agent` 重建 app + frontend（迁移 126 经 db-migrate 幂等落库）+ 新旧路由冒烟 + **实测**：状态切换持久、away 坐席不被派单（需两坐席环境）、转接 A→B、SLA warning 横幅（可用 handoffs 行 created_at 回拨 60s 触发）、接管后用户输入→坐席 WS 收到；
+  3. 向用户出示 diff+测试证据，确认后提交（建议两笔：后端/前端，双重路径限定）→ PR → CI → 合并 → 回填本表 P3=已完成；
+  4. P3 矩阵行核验（顶栏状态/接单开关=accepting 未做 UI（可 P4 补）、通知铃铛、转接弹窗、会话管理、工单管理、用户端 4 态+倒计时+接管后输入）。
+- **交接风险提示**：①测试假 hub stub（_quiet_hub fixture）规避了测试进程 closed-loop 噪音——生产路径未验证广播，重建实测覆盖；②SLA warning 依赖 Redis 可用（fail-open 重复告警优于漏报）；③主栈 reaper 与 maintenance 并行竞争超时行——breach 归 reaper 后已无竞态断言；④worktree 的 .env 与主仓库同步过（P2 时拷贝），若主仓库 .env 变过需重新核对；⑤`POST /my/{id}/messages` 的 `Idempotency-Key` 未做（重复提交会重复落库）——可接受（发送按钮 disabled），如需强幂等 P4 补。
+- **交接备忘**：接手会话先 `git status` 核对上述清单，然后读 TASK.md 第 5 节 P3 与本日志，按「未完成」顺序续工；每步验证后推进，不得跳过重建实测直接提 PR。
+
+### 2026-10-31（九）—— P3 续工：工序①②完成，实测抓到并修复 SLA warning 事件丢失缺陷
+
+- **续工核对**：worktree 现场 `git status` 与日志（八）一致；fetch 后 origin/main 前移 3 提交（#159/#160/#161，ci-regression-debt），改动文件与本任务零重叠，无需变基。
+- **工序① 双端全量 vitest + 生产构建（均实际执行）**：frontend-cs 40 files/297 passed；frontend 84 files/688 passed；后端新 T2 复跑 12 passed；双端 `npm run build` 成功（frontend-cs 产出全部 /cs2/* 路由，frontend 产出 /customer-service-v2、/mall、/my-orders，旧路由并行）。
+- **工序② 重建 + 冒烟 + 五项实测（全部通过）**：
+  - 重建口径修正：**各后端服务是独立镜像**（agent-cs-dispatcher、agent-maintenance-worker 各自 build），只 build app 不更新 worker——本会话按 P0 口径重建全部 backend 服务镜像 + frontend，8 容器（app/worker×4/cs-dispatcher/beat/frontend）healthy；db-migrate 幂等 rc=0（126 已应用）；worktree .env 与主仓库 diff 一致。
+  - 冒烟：app /health 200；openapi.json 反查 4 个新端点全部挂载（GET/PUT /cs/agents/me/status、POST transfer、POST my messages），未认证 401 闸生效；frontend :3100 新旧 6 路由全 200。
+  - 实测①状态持久：PUT away → GET → DB 三方一致（网关头 X-User-Id/X-Tenant-Id + X-API-Key 模拟，坐席 offer 端点拒绝 api-key 通道与设计一致）。
+  - 实测②away 不派单：A=uitest_user(away)+presence 心跳、B=cs_wire_e2e(online)+心跳 → `list_accepting_agent_ids` 仅返回 B（P3 status 过滤生效），**常驻 dispatcher 自动派 offer 给 B**（agent_offered + conversation.offered 落库）。
+  - 实测③转接 A→B：A 发起 transfer → 200 agent_offered + 事件三连（transfer_requested/reassigned/offered）落库 → B accept → human_active（assignment_version 1→2）。
+  - 实测④SLA 分级：回拨 created_at 落 60-120s 窗口，beat 扫描触发 warning；reaper 在 total_deadline 关闭发 breach + 自动转留言工单（GD-20261031-6AFA）；sla.warning(seq 2940)/sla.breach(seq 2939) 事件落库 + Redis cs:events 广播帧均验证。
+  - 实测⑤接管后输入：human_active 会话用户 POST /my/{id}/messages → 200 落库（sender_type=user，中文无损）+ message.created 事件落库 + Redis 广播帧（seq 2951，含完整消息体，坐席 WS 通道可达）。
+- **实测抓到并修复 1 个生产缺陷（P3 新增）**：maintenance-worker（Celery prefork 进程）从未调用 `bind_loop` → `AgentHub._main_loop=None` → `publish()` 静默丢弃 → **SLA warning 事件现网永不落库、永不广播**（DB sla_level 落、通知中心收不到；T2 测试 _quiet_hub stub 恰好遮蔽此路径）。修复：`_db_loop` 暴露 `get_loop()`，`maintenance.scan_handoff_timeouts` 广播前 `bind_loop(后台 loop, start_subscriber=False)`（与 cs_dispatcher.bind_hub_loop 同模式，幂等赋值；广播经 Redis 由 app 进程订阅转推）。修复后实测 warning 事件落库+广播帧齐备；`test_cs_sla_graded` 复跑 2 passed 无回归；T2 全量 12 passed 复确认。
+- **实测口径备忘（非缺陷）**：①`close_stale` 以 **updated_at**（非 created_at）为超时基准——裸 SQL 种数据必须同步刷新 updated_at，否则被提前兜底关闭；②cs_wire_e2e 有 18 条 9 月 e2e 残留 `accepted` assignment 挂账，容量谓词判满载致 no_candidate（已置 released 清理）；③手动 `docker exec python` 进程模型与 prefork 子进程不同，诊断以常驻容器日志 + exec 内复刻事务为准。
+- **环境恢复**：p3v- 实测数据全清（0 残留）；uitest_user/cs_wire_e2e 恢复原值（status=online/enabled=f/accepting=f）；next-env.d.ts 构建副产物已还原。
+- **待办（工序③④）**：向用户出示 diff+证据 → 确认后提交（两笔：后端/前端，双重路径限定）→ PR → CI → 合并 → 回填 P3=已完成；P3 矩阵行逐项核验。

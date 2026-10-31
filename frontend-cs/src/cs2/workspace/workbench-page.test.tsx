@@ -36,6 +36,24 @@ const api = vi.hoisted(() => ({
     message_id: '9', sender_type: 'human_agent', content, created_at: '2026-10-31T10:06:00Z',
   })),
   issueWsTicket: vi.fn(async () => ({ ticket: 't', ws_path: '/ws/cs/agent', ttl: 60 })),
+  getPendingProposal: vi.fn(async () => null),
+  getConversationCustomerContext: vi.fn(async () => ({
+    customer: { display_name: '演示用户' }, orders: [], balance: null,
+  })),
+  // P3 新导出（顶栏状态/通知与 offer 接单条依赖）
+  getMyStatus: vi.fn(async () => ({
+    agent_id: 'a1', status: 'online', accepting: true, presence_online: true,
+  })),
+  updateMyStatus: vi.fn(async (status: string) => ({
+    agent_id: 'a1', status, accepting: true, presence_online: true,
+  })),
+  listMyOffers: vi.fn(async () => []),
+  acceptOffer: vi.fn(async () => ({ conversation_id: 'conv-q1', handoff_state: 'human_active' })),
+  declineOffer: vi.fn(async () => ({ conversation_id: 'conv-q1', handoff_state: 'waiting_human' })),
+  transferConversation: vi.fn(async () => ({
+    conversation_id: 'conv-q1', handoff_state: 'agent_offered',
+    from_agent_id: 'a1', to_agent_id: 'a2',
+  })),
 }))
 
 vi.mock('./api', () => api)

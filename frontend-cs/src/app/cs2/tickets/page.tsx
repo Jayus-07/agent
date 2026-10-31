@@ -1,11 +1,6 @@
-import PagePlaceholder from '@/cs2/PagePlaceholder'
+import TicketsAdminPage from '@/cs2/TicketsAdminPage'
 
+// cs-workstation-v2 P3：/cs2/tickets 工单管理（替换 P0 占位壳）。
 export default function Cs2TicketsPage() {
-  return (
-    <PagePlaceholder
-      title="工单管理"
-      phase="P3"
-      description="工单筛选与处理记录时间线；受理/转派/升级 SLA/标记解决/关闭实时联动列表。"
-    />
-  )
+  return <TicketsAdminPage />
 }
