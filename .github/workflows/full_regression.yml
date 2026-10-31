@@ -196,6 +196,10 @@ jobs:
           python - <<'PY'
           import json, os
           needs = json.loads(os.environ["NEEDS"])
+          # toJSON(needs.*) 在只有一个 need 时序列化为数组而非对象
+          # （全量/分 suite dispatch 均触发，Regression summary 因此恒红）
+          if isinstance(needs, list):
+              needs = {job.get("name", "?"): job for job in needs}
           lines = ["## 全量回归 suite 终态", "", "| suite | 结论 |", "|---|---|"]
           for name, job in sorted(needs.items()):
               result = job.get("result", "?")

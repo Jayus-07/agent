@@ -318,7 +318,10 @@ def _outcome(summary_text: str) -> SummaryOutcome:
 
 class TestPrepareL5Trigger:
     def _msgs(self):
-        return [SystemMessage(content="系统指令")] + _history(12)
+        # 30 轮：重建后 = policy SystemMessage + 摘要 + 最近 4 轮，固定
+        # policy 文本开销占比必须远小于被压缩掉的历史，L5 收益才可断言
+        #（12 轮时重建后用量反而高于原始，断言翻覆，见台账漂移记录）
+        return [SystemMessage(content="系统指令")] + _history(30)
 
     def _ratio(self, msgs, manager):
         u = manager.calculate_usage(messages=msgs)
@@ -356,7 +359,7 @@ class TestPrepareL5Trigger:
         # 最近 4 轮保留
         assert sum(isinstance(x, HumanMessage) for x in prepared.messages) == 4
         # 红线：prepare 不改调用方持有的原始列表
-        assert len(msgs) == 25
+        assert len(msgs) == 61
 
     def test_below_threshold_not_triggered(self, _l5_env, monkeypatch):
         m = _l5_env

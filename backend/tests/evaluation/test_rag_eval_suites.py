@@ -29,8 +29,9 @@ def test_canonical_loader_returns_the_24_case_candidate_dataset():
     cases = load_dataset("rag")
 
     assert len(cases) == 24
+    # candidate.4：DATA-01 链 1.0.3（8a97a63，018/019/021 题面来源文件纠正）
     assert {case.metadata["dataset_version"] for case in cases} == {
-        "6.0.0-desktop-candidate.1"
+        "6.0.0-desktop-candidate.4"
     }
 
 
@@ -44,6 +45,9 @@ def test_suites_declare_required_scope_fields():
         )
         assert data["kb_id"] == "rag_eval_kb"
         assert data["fixture_set"] == "baseline"
+        # suite 文件的 dataset_version 是冻结声明（现值 candidate.1）；
+        # loader 实际版本以 manifest 为权威（candidate.4，8a97a63）——
+        # 两者分属不同事实源，suite 文件升版属 DATA-01 数据链流程
         assert data["dataset_version"] == "6.0.0-desktop-candidate.1"
         assert len(data["case_ids"]) == case_count
         assert data["min_samples"] == case_count

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 _LEDGER_DDL = """
-CREATE TABLE IF NOT EXISTS {table} (
+CREATE TABLE IF NOT EXISTS travel.bt_ledger_test (
     tenant_id varchar(64) NOT NULL,
     actor_id varchar(64) NOT NULL,
     operation varchar(64) NOT NULL,
@@ -40,6 +40,14 @@ CREATE TABLE IF NOT EXISTS {table} (
 _LEDGER_TABLE = "travel.bt_ledger_test"
 _MIGRATION = Path(__file__).resolve().parents[3] / "sql" / "migrations" / "052_travel_booking.sql"
 
+# 跨 xdist worker 的 booking 串行锁（会话级 advisory lock）。
+# booking 四表在共享 travel schema（store._SCHEMA 硬编码）且 ledger 表名固定，
+# 无 worker 后缀可用——worker B 的 setup TRUNCATE / teardown DROP 会清掉
+# worker A 用例正在写的数据（xdist 下 in_doubt/幂等判定异常实证）。
+# 用例执行期由本 fixture 持锁，其余 worker 的 setup 抢不到锁即阻塞等待，
+# 互踩窗口（TRUNCATE vs 用例 SQL）被完全消除；会话断开锁自动释放。
+_LOCK_KEY = "ci_travel_booking_tests"
+
 
 def _factory():
     from backend.config.database import MEMORY_DB_CONFIG
@@ -48,22 +56,25 @@ def _factory():
     import psycopg
 
     return psycopg.connect(
-        f"postgresql://{c['user']}:{c['password']}"
-        f"@{c['host']}:{c['port']}/{c['dbname']}")
+        host=c["host"], port=c["port"], user=c["user"],
+        password=c["password"], dbname=c["dbname"], connect_timeout=5)
 
 
 @pytest.fixture()
 def booking_env(monkeypatch):
-    """建表 + TRUNCATE + config 打桩；PG 不可达 skip。"""
+    """跨 worker 串行 + 建表 + TRUNCATE + config 打桩；PG 不可达 skip。"""
     pytest.importorskip("psycopg")
     try:
+        lock_conn = _factory()
+        with lock_conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(hashtext(%s))", (_LOCK_KEY,))
         with _factory() as conn, conn.cursor() as cur:
             cur.execute(_MIGRATION.read_text(encoding="utf-8"))
-            cur.execute(_LEDGER_DDL.format(table=_LEDGER_TABLE))
+            cur.execute(_LEDGER_DDL)
             cur.execute(
                 "TRUNCATE travel.booking_orders, travel.booking_quotes, "
                 "travel.booking_webhook_inbox, travel.booking_events RESTART IDENTITY CASCADE")
-            cur.execute(f"DELETE FROM {_LEDGER_TABLE}")
+            cur.execute("DELETE FROM travel.bt_ledger_test")
             conn.commit()
     except Exception as e:  # noqa: BLE001
         pytest.skip(f"PG 不可达，跳过 booking 测试: {e}")
@@ -83,12 +94,21 @@ def booking_env(monkeypatch):
         ("fake-commerce.example.com",))
     yield cfg
 
-    with _factory() as conn, conn.cursor() as cur:
-        cur.execute(
-            "TRUNCATE travel.booking_orders, travel.booking_quotes, "
-            "travel.booking_webhook_inbox, travel.booking_events RESTART IDENTITY CASCADE")
-        cur.execute(f"DROP TABLE IF EXISTS {_LEDGER_TABLE}")
-        conn.commit()
+    try:
+        with _factory() as conn, conn.cursor() as cur:
+            cur.execute(
+                "TRUNCATE travel.booking_orders, travel.booking_quotes, "
+                "travel.booking_webhook_inbox, travel.booking_events RESTART IDENTITY CASCADE")
+            cur.execute("DROP TABLE IF EXISTS travel.bt_ledger_test")
+            conn.commit()
+    finally:
+        # 会话级锁须在持锁连接上释放；连接已断时锁随会话自动消失
+        try:
+            with lock_conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_unlock(hashtext(%s))", (_LOCK_KEY,))
+            lock_conn.close()
+        except Exception:  # noqa: BLE001 — 锁随会话终止兜底
+            pass
 
 
 @pytest.fixture()

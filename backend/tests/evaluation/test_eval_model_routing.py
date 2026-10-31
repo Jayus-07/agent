@@ -88,7 +88,8 @@ def test_cloud_eval_generation_uses_the_bound_provider(monkeypatch):
     result = generation.generate_answer("问题", ["上下文"], allow_cloud=True)
 
     assert result == "来自角色绑定的云端模型"
-    assert seen_bindings == [("eval_gen", 0.1)]
+    # 37ae046 起评测生成 temperature=0（0.1 采样致跨轮次答案抖动）
+    assert seen_bindings == [("eval_gen", 0.0)]
 
 
 def test_cloud_eval_generation_checks_input_price_tier_before_provider(monkeypatch):
