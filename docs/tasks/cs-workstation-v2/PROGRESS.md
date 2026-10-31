@@ -13,7 +13,7 @@
 | P1 | 会话基础链路（双端对话/WS/时间线） | 已完成 | feat/cs-v2-p1 → PR #151（merge b236a62） | 详见下方日志 2026-10-31（六） | 2026-10-31 |
 | P2 | 交易与提案（商城三页+资金闭环+确认卡+取消订单+余额） | 已完成 | feat/cs-v2-p2 → PR #155（merge 99c62ea）+ 修复 #156（2945f5b） | 详见下方日志 2026-10-31（七） | 2026-10-31 |
 | P3 | 转人工与坐席运营（接入页/状态/转接/SLA/接管后输入） | 已完成 | feat/cs-v2-p3 → PR #164（merge f600be6，三笔 36f40b9/ba87f00/0fc3626） | 详见下方日志 2026-10-31（九）（十） | 2026-10-31 |
-| P4 | 快捷回复+AI Copilot | 计划中 | - | - | - |
+| P4 | 快捷回复+AI Copilot | 已完成 | feat/cs-v2-p4 → PR #166（merge 2677af9，两笔 07e6027/2b00362） | 详见下方日志 2026-10-31（十一）（十二） | 2026-10-31 |
 | P5 | 退款审核闭环 | 计划中 | - | - | - |
 | P6 | 质检中心 | 计划中 | - | - | - |
 | P7 | 看板+知识助手 | 计划中 | - | - | - |
@@ -152,3 +152,14 @@
 - **实测排障记录（三条环境/设计事实，回写供后续）**：①瞬态事件广播在 `if not self._connections: return` 处短路——**无坐席 WS 连接时 assist 不广播**（合理设计：persist=False 无补发源），实测必须先建立真实 WS 连接；②坐席无 Redis presence 心跳时 `human_active_recovered (agent_offline_recovery)` 会把会话还给 AI（handling_mode=ai + 清 assigned）——**人工态种数据三件套缺一不可**：handoff human_active + conversations.handling_mode='human' + 坐席 presence 心跳；③message_id 为 UUID 字符串（非自增数字）。
 - **环境恢复**：p4v-/p4t- 实测数据清零（leftover=0）；实测 canned 行删除；uitest_user/cs_wire_e2e 恢复 enabled=f/accepting=f/status=online。
 - **顺延项汇总**：P3 带来（接单开关 UI、messages 幂等键）+ 本期（更多菜单三功能，依赖 internal 消息类型与工单创建 API，建议 P5+）。
+
+### 2026-10-31（十二）—— P4 交付收官：PR #166 一轮 CI 全绿合并 + 矩阵行核验
+
+- **交付记录**：持续任务模式下按授权直接提交——07e6027（后端：迁移 127/模型/canned CRUD/agent_assist 增强/测试×2 + TASK/PROGRESS 回写）、2b00362（前端：三组件 + WorkbenchPage 集成 + 测试）→ **PR #166 CI 一轮 8 checks 显式逐项确认**（7 pass + RAG Smoke Evaluation skipping 预期，迁移守卫因创建即登记未触发）→ merge 2677af9。GitHub 网络间歇不可达贯穿全程（push/PR/fetch 均以探测窗口重试完成）。
+- **P4 矩阵行核验（代码+测试+事件链路级；浏览器级留 Phase 8 终验）**：
+  - 输入区·快捷回复 ✅（面板搜索/分类过滤/点击插入/个人团队徽章/禁用置灰——canned-reply-panel.test 5 例 + REST CRUD 实测；「存为话术后可搜到」闭环=createCanned→listCanned 同表）
+  - 输入区·AI 建议 ✅（采用填输入框/跟进建议流 followup 首卡「新」——assistant-panel.test + T2 触发矩阵）；「更多」菜单 ❌ 顺延 P5+（TASK 第 5 节回写：无后端能力支撑不做假按钮）
+  - 右栏·AI 助手 ✅（监听呼吸灯/意图+置信/情绪检测/推荐回复采用·存为话术/知识引用·存为话术/订单速览（order_summary 路径）/SOP 下一步——WS 帧实测全字段 + 5 例组件测试）
+  - 话术权限矩阵 ✅（个人读写/他人 404/team 读全员写 supervisor 403/跨租户 404——T2 真库 9 例）
+- **顺延项（累计）**：顶栏接单开关 UI、`POST /my/{id}/messages` 幂等键、更多菜单三功能（建议 P5+ 一并立项）。
+- **下一期**：P5 退款审核闭环，自 origin/main@2677af9 起新分支 feat/cs-v2-p5（依赖 P2 提案链路；business-service 正式状态推进替代测试钩子）。
