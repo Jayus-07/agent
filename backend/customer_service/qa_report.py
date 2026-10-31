@@ -10,6 +10,8 @@
   top_intents     用户消息意图 Top10（messages.role='user'，含空值排除）
   agents          坐席维度：承接会话数 / 其服务会话满意度均分
   tickets         新增量 / 按类型分布 / 超 48h 未关闭数（依赖批次C）
+  qa_sampling     质检抽检（P6）：抽检数 / 已评分 / 合格率 / 均分 / 申诉数
+                  （cs_qa_scores 按 batch_date 聚合，含人工抽检数据）
 
 模式：与 maintenance.py 同款 —— 核心逻辑在本模块（可测试），Celery 薄壳
 （tasks/cs_qa_tasks.py）只做注册包装。DB 不可用时报表失败显式暴露（ok=False），
@@ -196,6 +198,38 @@ async def _collect_metrics(report_date: date, tenant_id: str) -> dict[str, Any]:
             "open_total": int(row["open_total"] or 0),
             "stale_over_48h": int(row["stale_48h"] or 0),
             "by_type": {r[0]: int(r[1]) for r in rows},
+        }
+
+        # ── 质检抽检（cs-workstation-v2 P6）：cs_qa_scores 按批次聚合，
+        #    含 AI 预填 + 人工评分抽检数据；改判以终审分/结论为准 ──
+        row = (
+            await db.execute(text("""
+                SELECT count(*)                                                AS sampled,
+                       count(*) FILTER (WHERE status = 'scored')               AS scored,
+                       count(*) FILTER (WHERE COALESCE(final_score, total_score)
+                                          IS NOT NULL
+                                          AND COALESCE(final_verdict, verdict)
+                                              = 'pass')                        AS pass_count,
+                       round(avg(COALESCE(final_score, total_score))::numeric, 1)
+                                                                              AS avg_score,
+                       count(*) FILTER (WHERE appeal_status <> 'none')        AS appeals
+                FROM customer_service.cs_qa_scores
+                WHERE tenant_id = :tenant
+                  AND batch_date >= :start AND batch_date < :end
+            """), {"tenant": tenant_id, "start": start, "end": end})
+        ).mappings().one()
+        sampled = int(row["sampled"] or 0)
+        scored = int(row["scored"] or 0)
+        pass_count = int(row["pass_count"] or 0)
+        metrics["qa_sampling"] = {
+            "sampled": sampled,
+            "scored": scored,
+            "pass_count": pass_count,
+            "pass_rate": round(pass_count / scored, 4) if scored else None,
+            "avg_score": (
+                float(row["avg_score"]) if row["avg_score"] is not None else None
+            ),
+            "appeals": int(row["appeals"] or 0),
         }
 
         # ── FAQ 双轨周聚合（C5/G，2026-10-04）──

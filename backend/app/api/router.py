@@ -30,6 +30,7 @@ from backend.app.api.routes import (
     cs_agent_offers,
     cs_agent_ws,
     cs_canned,
+    cs_qa,
     cs_refund_review,
     cs_dispatch,
     cs_customer,
@@ -139,6 +140,7 @@ api_router.include_router(mall.router)  # cs-workstation-v2 P2: 商城演示域�
 api_router.include_router(cs_agent_offers.router)  # P7: 坐席 offer 接单/拒单/主管重派
 api_router.include_router(cs_canned.router)  # cs-workstation-v2 P4: 快捷回复话术（个人/团队）
 api_router.include_router(cs_refund_review.router)  # cs-workstation-v2 P5: 退款审核（supervisor）
+api_router.include_router(cs_qa.router)  # cs-workstation-v2 P6: 质检中心（抽检/评分/申诉/日报）
 api_router.include_router(cs_ops.router)  # P8: 派单运营统计（admin）
 api_router.include_router(cs_tickets.router)  # 批次C: 统一工单（用户查询 + supervisor 流转）
 api_router.include_router(cs_agent_ws.router)  # 坐席 WS 实时推送（ticket 鉴权，不走 X-API-Key）

@@ -136,6 +136,14 @@ celery_app.conf.update(
             "schedule": crontab(hour=6, minute=10),
             "options": {"queue": beat_queue("cs.qa_daily_report")},
         },
+        # cs-workstation-v2 P6：质检每日抽样。06:05 UTC（先于 06:10 日报，
+        # 保证日报 qa_sampling 段聚合到本批次）；昨日已关闭会话 →
+        # cs_qa_scores，UNIQUE 去重重跑幂等，抽样量 CS_QA_SAMPLE_SIZE。
+        "cs-qa-daily-sampling": {
+            "task": "cs.qa_daily_sampling",
+            "schedule": crontab(hour=6, minute=5),
+            "options": {"queue": beat_queue("cs.qa_daily_sampling")},
+        },
         # A8a（2026-10-05）：FAQ 缺口周检。每周一 06:25 UTC（日报后）
         # 只读清单 + JSON 归档（缺口闭环台账输入，C6/A8 验收）。
         "cs-faq-gap-review": {
