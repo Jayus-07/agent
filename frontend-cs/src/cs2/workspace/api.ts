@@ -344,3 +344,126 @@ export async function reviewRefund(
     body: JSON.stringify({ decision, opinion }),
   })
 }
+
+// ── cs-workstation-v2 P6：质检中心 ─────────────────────────────
+
+export type QaDimKey = 'service' | 'accuracy' | 'compliance' | 'timeliness'
+
+export interface QaScores {
+  service: number | null
+  accuracy: number | null
+  compliance: number | null
+  timeliness: number | null
+}
+
+export interface QaAiPrefill {
+  scores: Record<QaDimKey, number>
+  total: number
+  verdict: 'pass' | 'fail'
+  note: string
+}
+
+export interface QaTask {
+  id: number
+  conversation_id: string
+  agent_id: string
+  batch_date: string | null
+  source: 'ai' | 'human'
+  status: 'pending' | 'draft' | 'scored'
+  scores: QaScores
+  total_score: number | null
+  verdict: 'pass' | 'fail' | null
+  note: string | null
+  ai_prefill: QaAiPrefill | null
+  scored_by: string | null
+  scored_at: string | null
+  appeal_status: 'none' | 'appealing' | 'upheld' | 'overturned'
+  appeal_reason: string | null
+  appeal_requested_by: string | null
+  appeal_decision: 'upheld' | 'overturned' | null
+  appeal_opinion: string | null
+  final_score: number | null
+  final_verdict: 'pass' | 'fail' | null
+  created_at: string | null
+}
+
+export interface QaScoreInput {
+  service: number
+  accuracy: number
+  compliance: number
+  timeliness: number
+  verdict: 'pass' | 'fail'
+  note?: string
+  draft?: boolean
+}
+
+export interface QaAppealInput {
+  reason: string
+}
+
+export async function listQaTasks(params?: {
+  status?: string
+  appeal?: string
+}): Promise<{ items: QaTask[]; total: number; scope: 'self' | 'all' }> {
+  const search = new URLSearchParams()
+  if (params?.status) search.set('status', params.status)
+  if (params?.appeal) search.set('appeal', params.appeal)
+  const qs = search.toString()
+  return request(`/api/cs/qa/tasks${qs ? `?${qs}` : ''}`)
+}
+
+export async function submitQaScore(
+  taskId: number,
+  body: QaScoreInput,
+): Promise<{ task: QaTask }> {
+  return request(`/api/cs/qa/tasks/${taskId}/score`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export async function requestQaAiPrefill(
+  taskId: number,
+): Promise<{ task: QaTask }> {
+  return request(`/api/cs/qa/tasks/${taskId}/ai-prefill`, { method: 'POST' })
+}
+
+export async function appealQaScore(
+  taskId: number,
+  reason: string,
+): Promise<{ task: QaTask }> {
+  return request(`/api/cs/qa/tasks/${taskId}/appeal`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  })
+}
+
+export async function decideQaAppeal(
+  taskId: number,
+  body: {
+    decision: 'upheld' | 'overturned'
+    opinion: string
+    final_score?: number
+    final_verdict?: 'pass' | 'fail'
+  },
+): Promise<{ task: QaTask }> {
+  return request(`/api/cs/qa/tasks/${taskId}/appeal/decision`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  })
+}
+
+export interface QaReportRow {
+  batch_date: string
+  sampled: number
+  scored: number
+  pass_count: number
+  pass_rate: number | null
+  avg_score: number | null
+  appeals: number
+  top_deduction: string | null
+}
+
+export async function getQaReport(days = 7): Promise<{ items: QaReportRow[] }> {
+  return request(`/api/cs/qa/report?days=${days}`)
+}
