@@ -58,10 +58,13 @@ def test_skip_irrelevant_event(enabled):
 
 
 def test_skip_non_user_message(enabled):
+    # P4 起 human_agent（坐席消息）触发跟进建议；bot/assistant 仍跳过
     aa.maybe_schedule_assist(
         "message.created",
         {"conversation_id": "c1", "message": {"sender_type": "human_agent"}},
     )
+    assert "c1" in agent_assist._inflight
+    agent_assist._inflight.discard("c1")
     aa.maybe_schedule_assist(
         "message.created",
         {"conversation_id": "c1", "message": {"sender_type": "assistant"}},
@@ -285,7 +288,7 @@ async def test_assist_task_publishes(enabled):
     with patch.object(aa, "_load_conversation_context", _ctx), \
          patch.object(aa, "_generate_suggestions_sync", _gen), \
          patch("backend.customer_service.realtime.get_agent_hub", lambda: hub):
-        await aa._assist_task("conv-1")
+        await aa._assist_task("conv-1", "claimed")
 
     assert len(hub.published) == 1
     event_type, persist, payload = hub.published[0]
@@ -302,7 +305,7 @@ async def test_assist_task_silent_on_failure(enabled):
         raise RuntimeError("db down")
 
     with patch.object(aa, "_load_conversation_context", _boom):
-        await aa._assist_task("conv-err")  # 不应抛出
+        await aa._assist_task("conv-err", "message")  # 不应抛出
     assert "conv-err" not in agent_assist._inflight
 
 
@@ -313,5 +316,5 @@ async def test_assist_task_skips_ai_conversation(enabled):
     hub = _Hub()
     with patch.object(aa, "_load_conversation_context", _ctx), \
          patch("backend.customer_service.realtime.get_agent_hub", lambda: hub):
-        await aa._assist_task("conv-ai")
+        await aa._assist_task("conv-ai", "message")
     assert not hub.published

@@ -54,6 +54,17 @@ const api = vi.hoisted(() => ({
     conversation_id: 'conv-q1', handoff_state: 'agent_offered',
     from_agent_id: 'a1', to_agent_id: 'a2',
   })),
+  // P4 新导出（快捷回复面板 / AI 助手存为话术依赖）
+  listCanned: vi.fn(async () => [
+    { id: 1, scope: 'personal', owner_agent_id: 'a1', title: '开场问候', content: '您好，很高兴为您服务', category: '通用', enabled: true, updated_at: null },
+    { id: 2, scope: 'team', owner_agent_id: null, title: '退款时效', content: '退款 1-3 个工作日到账', category: '售后', enabled: true, updated_at: null },
+    { id: 3, scope: 'personal', owner_agent_id: 'a1', title: '停用话术', content: '旧内容', category: '通用', enabled: false, updated_at: null },
+  ]),
+  createCanned: vi.fn(async (body: { title: string }) => ({
+    id: 9, scope: 'personal', title: body.title, content: 'x', category: 'AI', enabled: true,
+  })),
+  updateCanned: vi.fn(async () => ({ id: 1, scope: 'personal', title: 't', content: 'c', category: '通用', enabled: true })),
+  deleteCanned: vi.fn(async () => undefined),
 }))
 
 vi.mock('./api', () => api)
@@ -163,5 +174,75 @@ describe('WorkbenchPage（/cs2/workspace）', () => {
     expect(api.closeConversation).toHaveBeenCalledWith('conv-q1')
     const textarea = c.querySelector('textarea[aria-label="回复输入框"]') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(true)
+  })
+
+  it('P4：快捷回复面板搜索/插入，禁用话术不可点', async () => {
+    const c = await mount()
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))
+    await act(async () => {
+      queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
+    await act(async () => {
+      claim?.click()
+    })
+    await act(async () => {})
+    expect(api.listCanned).not.toHaveBeenCalled()
+
+    const cannedBtn = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '快捷回复')
+    expect(cannedBtn).toBeDefined()
+    await act(async () => {
+      cannedBtn?.click()
+    })
+    await act(async () => {})
+    expect(api.listCanned).toHaveBeenCalledTimes(1)
+    const panel = c.querySelector('[aria-label="快捷回复面板"]')
+    expect(panel).not.toBeNull()
+    expect(panel?.textContent).toContain('开场问候')
+    expect(panel?.textContent).toContain('退款时效')
+
+    // 禁用行不可点击（disabled）
+    const disabledBtn = Array.from(panel!.querySelectorAll('button')).find((b) => b.textContent?.includes('停用话术')) as HTMLButtonElement
+    expect(disabledBtn.disabled).toBe(true)
+
+    // 搜索过滤
+    const search = panel!.querySelector('input[aria-label="搜索话术"]') as HTMLInputElement
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(search, '退款')
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(panel?.textContent).toContain('退款时效')
+    expect(panel?.textContent).not.toContain('开场问候')
+
+    // 点击条目插入输入框并关闭面板
+    const item = Array.from(panel!.querySelectorAll('button')).find((b) => b.textContent?.includes('退款时效'))
+    await act(async () => {
+      item?.click()
+    })
+    await act(async () => {})
+    const textarea = c.querySelector('textarea[aria-label="回复输入框"]') as HTMLTextAreaElement
+    expect(textarea.value).toBe('退款 1-3 个工作日到账')
+    expect(c.querySelector('[aria-label="快捷回复面板"]')).toBeNull()
+  })
+
+  it('P4：AI 建议按钮切到右栏 AI 助手 Tab', async () => {
+    const c = await mount()
+    const queueTab = Array.from(c.querySelectorAll('[role="tab"]')).find((b) => b.textContent?.includes('待接入'))
+    await act(async () => {
+      queueTab?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    const claim = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === '认领')
+    await act(async () => {
+      claim?.click()
+    })
+    await act(async () => {})
+    const aiBtn = Array.from(c.querySelectorAll('button')).find((b) => b.textContent === 'AI 建议')
+    await act(async () => {
+      aiBtn?.click()
+    })
+    expect(c.textContent).toContain('AI 实时辅助 · 监听中')
+    expect(c.textContent).toContain('意图识别')
+    expect(c.textContent).toContain('AI 正在分析最新消息')
   })
 })

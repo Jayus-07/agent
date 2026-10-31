@@ -338,6 +338,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "125_mall_wallet.sql": "business",
     # 坐席工作状态 + handoff SLA 分级标记（cs-workstation-v2 P3）。
     "126_cs_agent_status_sla.sql": "memory",
+    # 坐席快捷回复话术（cs-workstation-v2 P4）：个人/团队两级。
+    "127_cs_canned_responses.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
