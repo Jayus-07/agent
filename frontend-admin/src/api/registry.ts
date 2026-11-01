@@ -49,6 +49,8 @@ export interface CapabilityRow {
   name: string
   skill: string
   routed: boolean
+  /** 负责人团队（manifest owner 字段，治理对账） */
+  owner: string
   rule_keywords: string[]
   examples: string[]
   /** routed:false 时的不对用户开放原因 */

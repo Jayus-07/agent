@@ -20,7 +20,7 @@ async def list_capabilities():
 
     返回:
       count           — capability 总数（含 routed:false 的内部能力）
-      capabilities    — [{name, skill, routed, rule_keywords, examples, reason, registered}]
+      capabilities    — [{name, skill, routed, owner, rule_keywords, examples, reason, registered}]
       workflows       — [{name, examples}]（manifest 声明的 workflow，examples 供向量路由）
       skills          — [{name, description, capabilities}]（Skill 注册表现状）
       routed_count    — 参与用户问题路由的 capability 数
@@ -37,6 +37,7 @@ async def list_capabilities():
             "name": c.name,
             "skill": c.skill,
             "routed": c.routed,
+            "owner": c.owner,
             "rule_keywords": list(c.rule_keywords),
             "examples": list(c.examples),
             "reason": c.reason,

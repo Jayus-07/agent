@@ -197,13 +197,15 @@ class TestNamingConvention:
             "version": 1,
             "domains": [
                 {"name": "knowledge", "description": "知识检索",
-                 "examples": ["例一", "例二"], "keywords": ["制度"]},
+                 "examples": ["例一", "例二"], "keywords": ["制度"],
+                 "owner": "platform-team"},
             ],
             "capabilities": [
                 {"name": "x.y", "skill": "s", "routed": True, "examples": ["a", "b"],
                  "domain": "knowledge", "description": "测试能力",
                  "params_schema": {"question": {"type": "string", "required": True}},
-                 "planner_examples": [{"question": "a"}]}
+                 "planner_examples": [{"question": "a"}],
+                 "owner": "platform-team"}
             ],
             "workflows": [{"name": "bad.name", "examples": ["a"]}],
         }

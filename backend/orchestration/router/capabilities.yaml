@@ -55,11 +55,17 @@
 #   risk_level        LOW / MEDIUM / HIGH —— HIGH 永不进 Fast Path，
 #                     执行期另有 Tool 层审批门（security/tool_approval）
 #   fast_path_enabled 细路由 Fast Path 白名单（还需 top1/margin 双阈值 + LOW 风险）
+#
+# owner（治理对账字段，manifest fail-fast 校验）：
+#   domains 与 capabilities 每条必填，缺失/空白启动即炸；/capabilities API
+#   与管理端 /skills 页展示。当前全部为统一占位 platform-team（2026-11-01
+#   用户授权），**待按团队实况替换**（替换走独立小 PR，逐条改成实际负责团队）。
 
 version: 1
 
 domains:
   - name: knowledge
+    owner: platform-team
     description: 企业知识与公开信息检索：制度、政策、文档、FAQ、知识库问答、外部资料搜索
     examples:
       - 公司年假规定是什么
@@ -99,6 +105,7 @@ domains:
       - "SOP"
 
   - name: data
+    owner: platform-team
     description: 数据查询与统计：数据库查询、指标、明细数据、数据导出与采集
     examples:
       - 查询最近 30 天销售额
@@ -125,6 +132,7 @@ domains:
       - 导出
 
   - name: business
+    owner: platform-team
     description: 业务分析：经营分析、销量趋势、竞品与比价分析、库存原因分析
     examples:
       - 分析 SKU001 为什么销量下降
@@ -145,6 +153,7 @@ domains:
       - 经营
 
   - name: report
+    owner: platform-team
     description: 报告生成：经营报告、销售周报月报、分析报告、总结汇报
     examples:
       - 生成本月经营分析报告
@@ -165,6 +174,7 @@ domains:
       - 生成.*?报告
 
   - name: customer_service
+    owner: platform-team
     description: 客服售后：订单查询、物流、退款退货申请、投诉、人工客服（域图承载）
     examples:
       - 查一下我的订单物流
@@ -185,6 +195,7 @@ domains:
       - 发货
 
   - name: travel
+    owner: platform-team
     description: 旅游出行：行程规划、景点检索、天气路线地图（域图承载）
     examples:
       - 规划福州 2 天的行程
@@ -201,6 +212,7 @@ domains:
       - 行程
 
   - name: selection_funnel
+    owner: platform-team
     description: 智能选品：品类评估、选品漏斗、上不上架决策（域图承载）
     examples:
       - 给宠物零食做一次智能选品
@@ -209,6 +221,7 @@ domains:
       - 选品
 
   - name: communication
+    owner: platform-team
     description: 邮件通信：发送邮件、搜索邮件、读邮件
     examples:
       - 发送邮件给运营
@@ -221,6 +234,7 @@ domains:
       - 收件人
 
   - name: general
+    owner: platform-team
     description: 普通寒暄与闲聊，不需要任何工具的请求
     examples:
       - 你好
@@ -237,6 +251,7 @@ domains:
   # mcp.<slug>，由 mcp_registry 快照派生并挂本域；本文件不逐个登记
   # 动态工具。examples 是域心文本（非路由示例），保持通用检索语义。
   - name: mcp
+    owner: platform-team
     description: 外部系统接入的扩展工具能力（MCP 动态注册，按审核与授权开放）
     examples:
       - 用外部工具查一下这个数据
@@ -248,6 +263,7 @@ domains:
 
 capabilities:
   - name: sql.query
+    owner: platform-team
     skill: sql
     description: 查询 PostgreSQL 数据库并返回结构化 SQLResult（行/列/耗时）
     params_schema:
@@ -319,6 +335,7 @@ capabilities:
       - 销售额最高的 5 个商品
 
   - name: rag.search
+    owner: platform-team
     skill: rag
     description: 从跨境电商知识库中检索 SOP/规范/FAQ/Listing指南等非结构化内容
     params_schema:
@@ -386,6 +403,7 @@ capabilities:
       - 转正答辩和社保公积金的规定
 
   - name: business.analyze
+    owner: platform-team
     skill: business_analysis
     description: 对 SQL 查询结果进行业务分析，结合 RAG 知识库中的业务规则，生成风险洞察和行动建议。依赖前置 sql.query 步骤的 SQLResult。
     params_schema:
@@ -414,6 +432,7 @@ capabilities:
       - 各渠道的转化率表现怎么样
 
   - name: report.generate
+    owner: platform-team
     skill: report
     description: 生成结构化 Markdown 报告（含图表），基于数据库中的实时数据。必须有前序步骤提供数据后再调用。
     params_schema:
@@ -454,6 +473,7 @@ capabilities:
       - 帮我写一份库存盘点报告
 
   - name: email.send
+    owner: platform-team
     skill: email
     description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
     params_schema:
@@ -545,6 +565,7 @@ capabilities:
   # 批次1 Agently Mail 扩展：读能力需 EMAIL_ENGINE=agently 且完成 OAuth；
   # 未安装 CLI 时工具层返回不可用提示，不炸路由
   - name: email.search
+    owner: platform-team
     skill: email
     description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
     params_schema:
@@ -630,6 +651,7 @@ capabilities:
       - 找找关于合同续签的邮件
 
   - name: email.read
+    owner: platform-team
     skill: email
     description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
     params_schema:
@@ -716,6 +738,7 @@ capabilities:
 
   # 内部能力：watch 长轮询不适合对话内触发，供通知闭环/automation 消费
   - name: email.watch
+    owner: platform-team
     skill: email
     description: 邮件能力：发送邮件（SMTP 或 Agently 引擎）；搜索、读取、监听 Agently 邮箱（EMAIL_ENGINE=agently 且完成 OAuth 后可用）。发送必须在报告/数据生成完成后再调用（依赖前序步骤的输出）。
     params_schema:
@@ -795,6 +818,7 @@ capabilities:
     reason: 新邮件监听为长轮询阻塞操作，仅通知闭环与 automation 内部使用
 
   - name: data.export
+    owner: platform-team
     skill: data_export
     description: 查询数据库并导出结果为 CSV 文件（UTF-8 BOM，Excel 可直接打开）。适用场景：导出报表、数据明细给业务团队。
     params_schema:
@@ -831,6 +855,7 @@ capabilities:
       - 把上个月的订单导出成 Excel
 
   - name: web.search
+    owner: platform-team
     skill: web_search
     description: 搜索外部网页并提供来源链接。用户明确要求联网搜索公开资料时使用，也可补充内部知识库未覆盖的最新信息（市场动态、竞品信息、行业趋势等）。
     params_schema:
@@ -862,6 +887,7 @@ capabilities:
       - 搜一下这个品牌最近有什么新动作
 
   - name: web.crawl
+    owner: platform-team
     skill: web_crawl
     description: 抓取指定网页的正文内容，输出干净 Markdown。用于获取竞品页面详情、行业资讯全文、平台政策原文。建议先通过 web.search 发现目标链接后再调用本能力。
     params_schema:
@@ -897,6 +923,7 @@ capabilities:
       - 帮我抓取这个页面的价格信息
 
   - name: data.collect
+    owner: platform-team
     skill: data_collection
     description: 从外部数据源采集电商业务数据（商品/订单/店铺/库存/供应商），经 Pandas 清洗分析后写入数据库。支持本地文件和 HTTP API 两种数据源。
     params_schema:
@@ -965,6 +992,7 @@ capabilities:
   # 仅覆盖「候选地点检索」这一无状态能力；完整行程规划走旅游域图，
   # 不经主 Router（见 orchestration/graph/travel_prefilter.py）
   - name: travel.poi_search
+    owner: platform-team
     skill: travel_poi
     description: 检索旅行目的地城市（当前支持：福州、厦门、杭州）的候选兴趣点（POI），返回含营业时段、坐标、票价、建议停留时长的结构化列表。适用于行程规划前的候选池获取，或选址/周边分析中的地点摸底。注意：返回的是候选池，不含排程、通勤与时间可行性校验。
     params_schema:
@@ -1014,6 +1042,7 @@ capabilities:
       - 杭州有什么值得逛的博物馆
 
   - name: map.lookup
+    owner: platform-team
     skill: map_lookup
     description: 查询地理位置类事实：天气、地址与坐标互转、地点检索、路线规划与耗时、导航调起链接、静态地图图片、行政区划、街景。适用于「福州现在天气怎么样」「三坊七巷在哪」「从这里到机场要多久」「把这个地方画出来」这类问题。注意：本能力只回答事实查询，不做行程安排（排期请用旅行域能力）；坐标入参统一为「纬度,经度」；街景需企业开发者权限，未开通会返回明确指引。
     params_schema:
@@ -1135,6 +1164,7 @@ capabilities:
   # LLM Router 会拒绝它（tool_selector.py 注释已承认该漂移）。manifest 化
   # 后正式纳入路由，规则强信号依旧优先生效。
   - name: competitor.analyze
+    owner: platform-team
     skill: competitor_analysis
     description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
     params_schema:
@@ -1225,6 +1255,7 @@ capabilities:
   # 内部能力：不参与用户问题路由。用户侧「巡检/监控」类提问由
   # competitor.analyze 的 examples 承接，再经 action=watch 分发。
   - name: competitor.watch
+    owner: platform-team
     skill: competitor_analysis
     description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
     params_schema:
@@ -1286,6 +1317,7 @@ capabilities:
     reason: 竞品巡检为全量扫描 + 快照写入，不参与用户问题路由：用户侧「巡检/监控」类提问由 competitor.analyze 承接并经 action=watch 分发（selection_decision workflow 直接读 store，不经过本能力）
 
   - name: competitor.history
+    owner: platform-team
     skill: competitor_analysis
     description: 竞品分析：抓取竞品商品页/官网，抽取价格、促销、评价数等结构化信息，存为快照并与历史对比（识别涨价/降价）。支持监控列表管理与价格历史查询。适合'分析这个竞品链接'、'查这个商品页的价格促销信息'、'巡检所有监控的竞品'等请求。注意：仅处理有明确竞品 URL（或已监控项）的页面级分析；不提供 URL 的经营决策咨询（如'竞品降价了要不要跟'）应选业务分析。
     params_schema:

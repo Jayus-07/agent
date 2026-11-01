@@ -17,6 +17,8 @@ test_registry_consistency.py 做双向守护（manifest ↔ skills/registry）�
   - routed: false → reason 必填（说不清为什么不对用户开放就别注册）
   - workflow 名须形如 ^[a-z][a-z0-9_]*$（纯蛇形，不带点；带点是 capability 的
     命名空间）→ workflow 至少需 1 条 examples
+  - capabilities 与 domains 每条 owner 必填（非空字符串，空白即炸）——
+    能力/域的负责人团队（治理对账字段，业界 owner/sponsor 模式）
 """
 from __future__ import annotations
 
@@ -54,6 +56,9 @@ class DomainDecl:
     description: str
     examples: tuple[str, ...]
     keywords: tuple[str, ...]
+    # owner：域负责人团队（治理对账字段）。dataclass 默认空串仅为构造兼容，
+    # 静态 yaml 清单经 load_manifest 校验必非空。
+    owner: str = ""
 
 
 @dataclass(frozen=True)
@@ -80,6 +85,9 @@ class CapabilityDecl:
     # rule_keywords 参与向量召回分数校准（score_calibration.py）。
     # 默认 False —— 未显式 opt-in 的能力（RAG/travel 等）行为零变化。
     calibrate_signals: bool = False
+    # owner：能力负责人团队（治理对账字段）。MCP 动态能力不经静态校验，
+    # 默认空串由能力中心治理归属承接。
+    owner: str = ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +221,11 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         if name in seen:
             raise ManifestError(f"{where}: 域名重复: {name}")
         seen[name] = "domain"
+        owner = str(item.get("owner", "")).strip()
+        if not owner:
+            raise ManifestError(
+                f"{where} ({name}): owner 必填（域负责人团队，治理对账字段）"
+            )
         description = str(item.get("description", "")).strip()
         if not description:
             raise ManifestError(f"{where} ({name}): description 必填（embedding 域心文本）")
@@ -224,7 +237,10 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         if len(set(examples)) != len(examples):
             raise ManifestError(f"{where} ({name}): examples 有重复")
         keywords = tuple(str(k).strip() for k in (item.get("keywords") or []) if str(k).strip())
-        domains.append(DomainDecl(name=name, description=description, examples=examples, keywords=keywords))
+        domains.append(DomainDecl(
+            name=name, description=description, examples=examples,
+            keywords=keywords, owner=owner,
+        ))
 
     if not domains:
         raise ManifestError("manifest 未声明任何 domain（分层路由需要 domains 段）")
@@ -244,6 +260,12 @@ def load_manifest(path: str | None = None) -> RouterManifest:
         skill = str(item.get("skill", "")).strip()
         if not skill:
             raise ManifestError(f"{where} ({name}): skill 字段必填（供一致性测试对账）")
+
+        owner = str(item.get("owner", "")).strip()
+        if not owner:
+            raise ManifestError(
+                f"{where} ({name}): owner 必填（能力负责人团队，治理对账字段）"
+            )
 
         description = str(item.get("description", "")).strip()
         if not description:
@@ -320,6 +342,7 @@ def load_manifest(path: str | None = None) -> RouterManifest:
                 risk_level=risk,
                 fast_path_enabled=fast_path,
                 calibrate_signals=bool(item.get("calibrate_signals", False)),
+                owner=owner,
             )
         )
 
