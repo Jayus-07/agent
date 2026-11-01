@@ -39,3 +39,4 @@
 - 定向测试入口：backend/tests/customer_service/，权限和 API 变化还需选择 backend/tests/api/ 中对应用例。
 - 不复制客服知识库文档作为系统架构规范。
 - 评测集由 `backend/evaluation/datasets/cs/` 与其 validator 管理，类别和样本数以数据清单与校验器为准。
+- 决策层路由（2026-11-02 cs-evaluation-upgrade P3 词表扩圈）：ACCOUNT 域细分规则、t_logistics/t_delivery_estimate 细分词表、自然表达 patterns（订单状态/DEMO 单号/售后自然动作/地址密码/投诉/人工坐席/余额/取消订单）已入 `vocab.py::_CS_DOMAIN_RULES` 与 `fine_router._RULE_INTENT_MAP`；任何词表改动必须经 cs-gate 三份 golden 回放（test_cs_eval_gate）与决策层回放门禁（test_cs_decision_replay，锁版 v2.2 口径）双重护航，零回归才可合并。

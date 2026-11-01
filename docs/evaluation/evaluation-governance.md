@@ -50,6 +50,7 @@ T0–T3 的选择继续由 [测试策略](../development/testing-guide.md) 决�
 
 - **报告时间**：面向人的报告和控制台摘要显示上海时间，精确到秒；机器字段 `timestamp` 使用带时区的 ISO 8601 UTC，另提供 `timestamp_shanghai` 便于读取。
 1. **收录**：新增样本来自已修复回归、人工标注、生产脱敏失败案例或明确对抗集；有稳定 id、人工责任人、版本和质量审查。生产 Trace 详情页可一键收录候选（`POST /v2/intake/from-trace`，admin 权限、Trace 可见性校验、自动脱敏后以 `privacy_status=redacted` 进入既有候选审核流）；另存旧通道 `/dataset-candidates/from-trace`（见 dataset-management 文档）。
+   - **坏例回流 SOP（2026-11-02 cs-evaluation-upgrade P5 实证）**：`ai.unanswered_questions`（rag_miss/sql_empty）是持久化坏例池，但 `intake/from-trace` 只认进程内 trace collector 最近 200 条——跨重启的历史坏例无法经 trace 入口回流。周度评审路径：拉取高频未解决问题 → `POST /v2/candidates`（`source_kind=manual`，metadata.source=unanswered_question）建候选 → 管理端审核 approve/reject → 数据集版本发布。链路已用真实坏例验证可达（manual candidate → review reject 留痕）。平台改进建议：持久化 intake by unanswered_questions id（见 cs-evaluation-upgrade PROGRESS 遗留）。
 2. **运行**：记录 `commit_sha`、数据集 hash、suite、模型/Prompt、路由策略、Provider、fixture_set、环境与 runner，以及 Trace/run_id、成本和持续时间。
 3. **裁决**：必需指标/有效样本/安全断言缺失按 `INVALID/FAIL` 的实际含义判决；不能把 LLM 调用失败归类模型质量不合格。
 4. **回归**：与同数据集/同规则基线比较并输出变化，发生阈值/算法/模型变化时说明不可直接对比的原因。
