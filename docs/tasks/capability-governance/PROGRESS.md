@@ -31,6 +31,21 @@
 
 ## 日志
 
+### 2026-11-01（四）—— 收尾销账：owner 归属确认 + G5 翻正连带项移交（执行会话续）
+
+- **owner 归属确认**（用户答复「团队目前没有区分多团队」）：单一平台团队，
+  `platform-team` 即**实际归属**而非占位——27 条值不变，capabilities.yaml
+  头部标注由「待按团队实况替换」改为现状声明（多团队化时再按域拆分）。
+  主图（企业助手）覆盖说明：capabilities.yaml 即主图能力清单，17 条
+  capability + 10 个域（含三个域图域）均已带 owner；MCP 动态能力不经
+  yaml，归属由能力中心审核/授权治理承接（单团队下无影响）。
+- **G5 翻正连带项移交 travel-v2**：写入
+  `docs/tasks/travel-v2-production/TASK.md` 阶段四「接线与数据源」E5——
+  数据面（意图级打点）落地时连带改 `travel_inventory.py`（聚合 SQL 照抄
+  cs_inventory 模式）+ 翻 `stats_available` + 测试改数值比对；协议形状
+  不变，聚合不到的维度保持 null。capability-governance 侧遗留清单同步
+  销账。
+
 ### 2026-11-01（三）—— G2–G6 实施与合入 + 任务关闭（执行会话续）
 
 逐期交付（全部独立 PR + CI 显式逐项全绿后合并；skipping 项核对均为非 RAG 变更预期，paths 过滤未触发的 workflow 亦核对属预期）：
@@ -51,7 +66,7 @@
 7. 零迁移（全程未新增 DB migration）；主链路冒烟每期重建后 :8000/:9080/:3200/:3100 全 200，终验见下方终验记录 ✅
 
 **遗留与移交**：
-- owner 占位 `platform-team` 待按团队实况替换（独立小 PR，yaml 头部已标注）；
+- owner 归属已确认（日志（四））：单一平台团队，`platform-team` 即实际归属（非占位）；未来多团队化时按域拆分（独立小 PR，yaml 头部标注同步改为现状声明）；
 - G4/G6 的管理端前端面板为数据表/汇总卡级 MVP，可视化增强（图表/下钻）未在本任务范围；
 - travel-v2 数据面补齐后：G5 适配器翻正 `stats_available` + G5 协议未变；
 - live overview derive_errors 曾见 8 条 govtest 孤儿快照——经 DB 时间戳核实为**并行会话活跃测试数据**（07:18 UTC 创建），非本任务产物，未清理（共享库他人活跃测试）；如后续仍在需该会话自行清理；

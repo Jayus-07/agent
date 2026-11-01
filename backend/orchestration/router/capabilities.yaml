@@ -58,8 +58,9 @@
 #
 # owner（治理对账字段，manifest fail-fast 校验）：
 #   domains 与 capabilities 每条必填，缺失/空白启动即炸；/capabilities API
-#   与管理端 /skills 页展示。当前全部为统一占位 platform-team（2026-11-01
-#   用户授权），**待按团队实况替换**（替换走独立小 PR，逐条改成实际负责团队）。
+#   与管理端 /skills 页展示。2026-11-01 用户确认：当前为单一平台团队，
+#   统一归属 platform-team 即实际归属（非占位）；未来多团队化时按域
+#   拆分（独立小 PR 逐条改成实际负责团队）。
 
 version: 1
 
