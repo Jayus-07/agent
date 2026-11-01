@@ -27,11 +27,18 @@ def _stale(col: str) -> str:
     return f"{col} < now() - interval '{STALE_MINUTES} minutes'"
 
 
-def cleanup_residue() -> dict[str, int]:
+def cleanup_residue(stale_only: bool = True) -> dict[str, int]:
     """清扫历史崩溃残留，返回各表处理行数。连接失败向上抛，由调用方定策略。
 
     model_price 是 append-only 治理表（触发器 reject_model_price_mutation
     只允许关闭 effective_to、禁止删行），残留价格行按治理规则软关而非删除。
+
+    stale_only=False 供 CI 隔离库的 migration_worker 套件使用：迁移验收的
+    重建任务占全局重建锁（biz_id='global'），上一轮 dispatch 的未终态任务
+    不满 stale 阈值会让本轮全部撞 ModelConfigConflict（v26 run 41354669257
+    实证）——CI 无并行会话，tenant_id='migration-test' 是测试专属租户，
+    未终态即残留，可安全收口；本地共享栈维持 stale 保护（并行会话活跃
+    窗口内不可动他人任务）。
     """
     from backend.services import task_service
 
@@ -40,6 +47,7 @@ def cleanup_residue() -> dict[str, int]:
     # 本地主栈库有运行栈建的表，不暴露）
     task_service.ensure_schema()
     deleted: dict[str, int] = {}
+    stale_pred = f"AND {_stale('created_at')}" if stale_only else ""
     with task_service._conn() as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM llm_provider_credentials WHERE provider_id LIKE %s "
@@ -63,7 +71,7 @@ def cleanup_residue() -> dict[str, int]:
         deleted["model_price"] = cur.rowcount
         cur.execute(
             "DELETE FROM tasks WHERE tenant_id = 'migration-test' "
-            f"AND {_stale('created_at')}")
+            + (f"AND {_stale('created_at')}" if stale_only else ""))
         deleted["tasks"] = cur.rowcount
         # 未终态的测试重建任务会占住全局重建锁（biz_id='global'，后续
         # submit_rebuild 全部 ModelConfigConflict），按测试自身的恢复模式
@@ -72,8 +80,7 @@ def cleanup_residue() -> dict[str, int]:
         cur.execute(
             "UPDATE tasks SET status='FAILED', execution_id='', lease_expires_at=NULL "
             "WHERE tenant_id = 'migration-test' AND status NOT IN "
-            "('SUCCESS', 'FAILED', 'CANCELLED') "
-            f"AND {_stale('created_at')}")
+            "('SUCCESS', 'FAILED', 'CANCELLED')" + (f" AND {_stale('created_at')}" if stale_only else ""))
         deleted["stuck_tasks"] = cur.rowcount
     return deleted
 
