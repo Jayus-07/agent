@@ -906,6 +906,12 @@ class TestMultiToolReplenishmentPath:
                     {"sku": "SKU-1", "quantity": 1, "based_on_sold": 1})
         finally:
             set_product_context("internal", "internal_call")
+            # 清理顺序：先 grants 再 bundle——bundle 被 grants 引用时直接
+            # DELETE 会撞 FK、异常中断后续 connection 清理，留下「bundle+
+            # grants 在、连接已删」的悬空组合毒掉并行 suite 的 consistency
+            # 对账（v25 run 41353036477 dynamic_registry FAIL 实证）。
+            _db_exec("DELETE FROM ai.capability_bundle_grants WHERE bundle_id = %(b)s",
+                     {"b": bundle_id})
             _db_exec("DELETE FROM ai.capability_bundles WHERE id = %(b)s",
                      {"b": bundle_id})
             _db_exec("DELETE FROM ai.mcp_connections WHERE id = %(c)s",

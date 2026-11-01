@@ -254,7 +254,10 @@ def test_late_multi_query_usage_settles_original_reservation_once(
     assert late.metrics["reservation_id"] == "reservation-late-1"
     assert late.metrics["usage_ledger_status"] == "written"
     assert late.metrics["settlement_status"] == expected_settlement
-    assert late.metrics["budget_reserve_ms"] >= 15
+    # 下限语义 = 预留走了真实 Redis 链路（非缓存直返）。原经验值 15ms 按
+    # 本机栈耗时标定，CI 的 redis service 往返更快（v25 run 41353036477
+    # 实测 14.3）——5ms 仍足以区分真实链路与 0.x ms 的内存直返
+    assert late.metrics["budget_reserve_ms"] >= 5
     assert late.metrics["provider_call_ms"] >= 300
     assert isinstance(late.metrics["price_preflight_ms"], (int, float))
     assert "synthetic original query" not in str(main.metrics)
