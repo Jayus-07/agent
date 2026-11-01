@@ -95,6 +95,112 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(skip)
 
 
+# ── xdist worker 诊断资产（PYTEST_XDIAG=1 显式开启，2026-11-01 批十五）──
+# 背景：rag/api/backend-root 全量 xdist 出现 worker 进程消失（xdist 报
+# "node down: Not properly terminated"——通道 EOF 且无 Python 异常）与
+# 150min job 被杀。已实证的机制链：
+#   1) pytest.ini 全局 timeout_method = thread，Windows 与 CI（Linux）一致；
+#   2) thread 法对卡在 C 层/锁上的用例无法中断，watchdog（pytest_timeout.
+#      timeout_timer）兜底 dump 栈后 os._exit(1) 整个进程——但 execnet 的
+#      writer 线程先被杀，栈输出来不及写进管道，主进程只见 EOF；
+#   3) 用例执行外的阶段（collection/import、GIL 死锁）没有任何 watchdog。
+# 三类症状此前全部无现场。诊断三件套（全部写独立文件，不依赖 stdout）：
+#   a) patch pytest_timeout 的 watchdog：os._exit / fail 前用 faulthandler
+#      同步把全线程栈落到 fd（C 层实现，os._exit 前必然写完）；
+#   b) faulthandler.dump_traceback_later 心跳（原生 C watchdog，不需要
+#      GIL）：每 300s 落一次全线程栈——GIL 死锁、collection 卡死两类
+#      「pytest-timeout 够不着」的停摆由此留现场（栈不变 + 无新 START 即卡点）；
+#   c) 用例级 START/DONE 打点：crash 后文件尾部 = 正在跑的用例。
+def _xdist_diag_paths():
+    """诊断文件句柄 (stacks, tests)；未开启诊断时返回 (None, None)。"""
+    if os.environ.get("PYTEST_XDIAG") != "1":
+        return None, None
+    import faulthandler
+
+    outdir = Path(os.environ.get("PYTEST_XDIAG_DIR") or "tmp_xdiag")
+    outdir.mkdir(parents=True, exist_ok=True)
+    tag = os.environ.get("PYTEST_XDIST_WORKER") or f"main{os.getpid()}"
+
+    stacks_path = outdir / f"diag_{tag}.stacks"
+    # fd 直写（buffering=0）：os._exit / GIL 死锁时已写入的内容不丢
+    stacks_fh = open(stacks_path, "ab", buffering=0)
+    faulthandler.enable(stacks_fh)  # 原生崩溃（段错误）现场
+    # 心跳：300s 一拍。正常轮每 worker 只多 ~30 条快照；停摆时最后一条
+    # 心跳的栈即卡点。cancel 见 pytest_unconfigure。
+    faulthandler.dump_traceback_later(300, repeat=True, file=stacks_fh)
+
+    tests_fh = open(outdir / f"diag_{tag}.tests", "a", buffering=1, encoding="utf-8")
+    return stacks_fh, tests_fh
+
+
+_DIAG_STACKS, _DIAG_TESTS = None, None  # 在 pytest_configure 赋值（hook 前生效）
+
+
+def pytest_configure(config):
+    """worker 进程入口：初始化诊断（PYTEST_XDIAG=1 时）。"""
+    global _DIAG_STACKS, _DIAG_TESTS
+    try:
+        _DIAG_STACKS, _DIAG_TESTS = _xdist_diag_paths()
+    except Exception as e:  # noqa: BLE001 — 诊断初始化失败绝不能挡跑测
+        print(f"[xdist-diag] 初始化失败，诊断关闭: {type(e).__name__}: {e}")
+        _DIAG_STACKS, _DIAG_TESTS = None, None
+
+
+def pytest_unconfigure(config):
+    """会话结束：停心跳，避免 watchdog 线程带病退出。"""
+    import faulthandler
+
+    if _DIAG_STACKS is not None:
+        faulthandler.cancel_dump_traceback_later()
+
+
+def pytest_runtest_logstart(nodeid, location):
+    if _DIAG_TESTS is not None:
+        _DIAG_TESTS.write(f"START {nodeid}\n")
+
+
+def pytest_runtest_logfinish(nodeid, location):
+    if _DIAG_TESTS is not None:
+        _DIAG_TESTS.write(f"DONE {nodeid}\n")
+
+
+def pytest_sessionstart(session):
+    """给 pytest_timeout 的兜底杀进程补上「栈先落盘」。
+
+    patch 必须发生在任何 threading.Timer 创建之前（pytest_configure 之后的
+    用例期才 set_timer，模块属性运行时查找，patch 全局生效）。
+    """
+    if _DIAG_STACKS is None:
+        return
+    try:
+        import pytest_timeout
+    except ImportError:
+        return
+    import faulthandler
+
+    def _dump_mark(reason: str) -> None:
+        fh = open(_DIAG_STACKS.name, "ab", buffering=0)
+        try:
+            fh.write(f"\n===== {reason} =====\n".encode())
+            faulthandler.dump_traceback(file=fh, all_threads=True)
+        finally:
+            fh.close()
+
+    _orig_timer = pytest_timeout.timeout_timer
+    _orig_sigalrm = pytest_timeout.timeout_sigalrm
+
+    def _patched_timer(item, settings):
+        _dump_mark("pytest-timeout watchdog 触发（thread 法，随后 os._exit）")
+        _orig_timer(item, settings)
+
+    def _patched_sigalrm(item, settings):
+        _dump_mark("pytest-timeout watchdog 触发（signal 法）")
+        _orig_sigalrm(item, settings)
+
+    pytest_timeout.timeout_timer = _patched_timer
+    pytest_timeout.timeout_sigalrm = _patched_sigalrm
+
+
 # ── 数据目录隔离（治理 C，2026-09-13）────────────────────────────
 # 在任何 backend 模块导入前，把 RAG_DATA_DIR 重定向到临时目录，并从 git
 # 跟踪的 data/ 文件重建"仓库快照"。此前 golden 评测跑在真实工作区索引上，

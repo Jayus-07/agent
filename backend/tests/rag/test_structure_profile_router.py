@@ -140,7 +140,7 @@ def test_decision_record_complete_for_complete_doc():
     assert isinstance(strategy, StructureChunkStrategy)
     d = decision.as_dict()
     assert d["strategy"] == "StructureChunkStrategy"
-    assert d["strategy_version"] == "v2"  # StructureChunkStrategy 策略版本，非路由版本
+    assert d["strategy_version"] == "v3"  # StructureChunkStrategy 策略版本（1458070 升 v3），非路由版本
     assert d["degrade_reason"] == "signal_sections"
     assert d["degrade_reason"] == "signal_sections"  # v3：直判信号即决策原因
     assert "section_count" in d["signals"]

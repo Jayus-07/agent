@@ -466,3 +466,6 @@ tmp/
 backend/.mimosa/
 frontend-admin/.mimosa/
 frontend/.mimosa/
+
+# xdist worker 诊断资产（PYTEST_XDIAG=1 时生成）
+tmp_xdiag/
