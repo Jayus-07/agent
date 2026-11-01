@@ -234,7 +234,9 @@ def test_pg_needs_review_lifecycle_and_sweep(_pg_cleanup):
     assert all(hold == 0 for hold in old_holds), "旧周期占额必须被释放"
     summary = store.reconciliation_summary()
     assert summary["pending_count"] >= 2
-    queue = store.list_pending_review()
+    # 共享权威库存量 needs_review 已 100+（最老优先截断会把测试新行挤出
+    # 默认 100 条窗口）——limit 拉满到 API 上限
+    queue = store.list_pending_review(limit=500)
     reasons = {item["review_reason"] for item in queue}
     assert "stream_usage_missing" in reasons
     assert any("stale_sweep" in item["review_reason"] for item in queue)
@@ -265,7 +267,8 @@ def test_pg_held_cny_deduped_per_reservation(_pg_cleanup):
     assert physical_rows >= 2, "前提：同一预占单存在多条物理行（扇出才可复现放大）"
 
     summary = store.reconciliation_summary()
-    queue = [item for item in store.list_pending_review()
+    # 同上：共享权威库存量截断防御，limit 拉满
+    queue = [item for item in store.list_pending_review(limit=500)
              if item["reservation_id"] == reservation.reservation_id]
     assert len(queue) == 1
     per_reservation = Decimal(queue[0]["reserved_cny"])
