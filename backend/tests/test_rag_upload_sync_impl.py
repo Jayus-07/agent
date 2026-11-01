@@ -540,7 +540,9 @@ def client(monkeypatch):
     import backend.config.rag as rag_cfg
 
     monkeypatch.setattr(ru, "require_rag_ready", lambda: None)
-    monkeypatch.setattr(kb_cfg, "validate_kb_dept", lambda kb, dept: True)
+    # 45cdbdd 起 validate_kb_dept 增加租户/部门状态可选参，stub 按新签名对齐
+    monkeypatch.setattr(kb_cfg, "validate_kb_dept",
+                        lambda kb, dept, tenant_id="", active_departments=None: True)
     monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 50)
 
     captured = {}
@@ -613,7 +615,8 @@ class TestUploadEndpoint:
     def test_invalid_kb_dept_rejected_before_upload(self, client, monkeypatch):
         tc, captured = client
         import backend.config.knowledge_base as kb_cfg
-        monkeypatch.setattr(kb_cfg, "validate_kb_dept", lambda kb, dept: False)
+        monkeypatch.setattr(kb_cfg, "validate_kb_dept",
+                            lambda kb, dept, tenant_id="", active_departments=None: False)
         resp = tc.post("/upload",
                        files={"file": ("ok.md", b"# hi", "text/markdown")},
                        data={"kb_id": "bad_kb", "department": "nope"})

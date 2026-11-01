@@ -1,9 +1,9 @@
 {
   "version": 1,
-  "generated_at": "2026-10-10T03:36:13+08:00",
-  "git_sha": "d177694",
+  "generated_at": "2026-11-01T09:56:31+08:00",
+  "git_sha": "a378674",
   "source": "postgres://agent_memory.prompts",
-  "prompt_count": 57,
+  "prompt_count": 62,
   "prompts": {
     "business_report.polish": {
       "active_version": 1,
@@ -91,9 +91,9 @@
       "change_kind": null
     },
     "general_chat.system": {
-      "active_version": 1,
-      "template_hash": "5e0dc5c566b2f66a",
-      "change_kind": null
+      "active_version": 3,
+      "template_hash": "69464c6c208d26b2",
+      "change_kind": "patch"
     },
     "market_research.analyzer": {
       "active_version": 1,
@@ -130,6 +130,11 @@
       "template_hash": "5a60f45502773532",
       "change_kind": null
     },
+    "plan.revision": {
+      "active_version": 1,
+      "template_hash": "a04bcf937cbf3ae2",
+      "change_kind": null
+    },
     "rag.contextualize": {
       "active_version": 1,
       "template_hash": "bdaf4092e261e77d",
@@ -141,9 +146,9 @@
       "change_kind": null
     },
     "rag.evidence_gate.self_correction": {
-      "active_version": 1,
-      "template_hash": "5be25a5633a9cdfa",
-      "change_kind": null
+      "active_version": 2,
+      "template_hash": "546a09e6d0c2344b",
+      "change_kind": "minor"
     },
     "rag.guardrails.judge": {
       "active_version": 1,
@@ -206,9 +211,9 @@
       "change_kind": null
     },
     "rag.qa": {
-      "active_version": 13,
-      "template_hash": "cf9c0cd846cc447d",
-      "change_kind": null
+      "active_version": 17,
+      "template_hash": "644aa07dea140651",
+      "change_kind": "patch"
     },
     "reporter.summary": {
       "active_version": 1,
@@ -265,6 +270,16 @@
       "template_hash": "88c93d6fb4c27426",
       "change_kind": null
     },
+    "tool.failure_analysis": {
+      "active_version": 1,
+      "template_hash": "724c4ba59383aa03",
+      "change_kind": null
+    },
+    "tool.semantic_suggest": {
+      "active_version": 1,
+      "template_hash": "88d58934aec3181b",
+      "change_kind": null
+    },
     "travel.clarification_renderer": {
       "active_version": 1,
       "template_hash": "42c13c1556e3b801",
@@ -273,6 +288,11 @@
     "travel.llm_intent": {
       "active_version": 1,
       "template_hash": "b81fa5bd345922fa",
+      "change_kind": null
+    },
+    "travel.planning_agent": {
+      "active_version": 1,
+      "template_hash": "0a48a3ff464d607d",
       "change_kind": null
     },
     "travel.reporter": {
@@ -288,6 +308,11 @@
     "travel.turn_decision": {
       "active_version": 1,
       "template_hash": "41a03d0b032327e8",
+      "change_kind": null
+    },
+    "travel.v2.trip_ai_edit": {
+      "active_version": 1,
+      "template_hash": "31258698dbf3863e",
       "change_kind": null
     }
   }

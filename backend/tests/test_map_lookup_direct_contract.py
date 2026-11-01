@@ -43,8 +43,11 @@ class TestMapLookupDirectContract:
         from backend.config import map as map_cfg
         from backend.infra.lbs import api as lbs_api
 
-        # 覆盖 conftest 的 LBS 切断（fixture 注释明确允许），HTTP 边缘给罐头响应
+        # 覆盖 conftest 的 LBS 切断（fixture 注释明确允许），HTTP 边缘给罐头响应。
+        # is_configured = ENABLED and KEY（CI 无 .env 缺 Key → not_configured
+        # 封套，v14 run 41249581757 实证），与 #160 provider_contracts 同款对齐
         monkeypatch.setattr(map_cfg, "TENCENT_LBS_ENABLED", True)
+        monkeypatch.setattr(map_cfg, "TENCENT_LBS_KEY", "ci-test-key")
         monkeypatch.setattr(
             lbs_api, "geocode",
             lambda address, region=None: {
@@ -94,6 +97,7 @@ class TestMapLookupDirectContract:
         from backend.infra.lbs import api as lbs_api
 
         monkeypatch.setattr(map_cfg, "TENCENT_LBS_ENABLED", True)
+        monkeypatch.setattr(map_cfg, "TENCENT_LBS_KEY", "ci-test-key")
         monkeypatch.setattr(lbs_api, "geocode", lambda address, region=None: None)
 
         out = asyncio.run(MapLookupSkill().execute(

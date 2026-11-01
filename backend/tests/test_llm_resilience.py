@@ -102,9 +102,11 @@ class TestCircuitBreakerFallback:
             def invoke(self, *a, **kw):
                 return "fallback-model-answer"
 
+        # 79b4bbc 起 fallback 分支有输入价格档位预检（payload None 即拒），
+        # 调用形态对齐生产（attr=方法名 + 消息入参），空参 callable 桩会撞防呆
         with patch("backend.infra.circuit_breaker.llm_circuit_breaker", cb), \
              patch.object(proxy, "_get_fallback_llm", return_value=FakeFallback()):
-            result = proxy._call_with_resilience(lambda: "never-called")
+            result = proxy._call_with_resilience("invoke", "退款审核需要多久？")
         assert result == "fallback-model-answer"
 
     @pytest.mark.asyncio

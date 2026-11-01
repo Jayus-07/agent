@@ -352,8 +352,12 @@ async def require_super_admin_user(request: Request):
             "AUTHZ_DENIED", category="PRICE_SUPER_ADMIN_REQUIRED",
             detail={"actor": getattr(ident, "actor", ""), "role": role},
         )
-    except Exception:  # noqa: BLE001 — 审计失败不得改变拒绝语义
-        pass
+    except Exception as exc:  # noqa: BLE001 — 审计失败不得改变拒绝语义
+        # 请求不能被审计故障带崩（fail-open），但拒绝留痕必须可查（P3-3 守卫）
+        logger.warning(
+            "[Authz] 记录 AUTHZ_DENIED 安全事件失败（拒绝动作照常执行）: %s: %s",
+            type(exc).__name__, exc,
+        )
     from fastapi import HTTPException
 
     raise HTTPException(

@@ -24,43 +24,53 @@ def _doc(doc_id: str, source: str, keywords: str = "") -> Document:
 
 
 class TestStage1GateInfo:
-    def test_keyword_empty_similarity_top_retained(self):
-        """keywords 为空的相似度 Top 文档必须保留，且走 similarity_top 理由。"""
+    """50941f5 起关键词门控直通（P0-2 治理）：候选全保留，排除链退役。
+
+    旧「关键词 ∩ doc_keywords 硬过滤」语义整体退役，本组锁定直通契约：
+    gate_info 契约形状（kept/excluded/reason）必须与实现保持兼容。
+    """
+
+    def test_candidates_all_retained_regardless_of_keywords(self):
+        """无关键词/零交集文档不再被驱逐——硬门控根除回归守卫。"""
         docs = [
             _doc("d1", "物流SOP.docx", '["跨境", "运输"]'),
-            _doc("d2", "数字陷阱.md", ""),  # 相似度 Top-2，无关键词
+            _doc("d2", "数字陷阱.md", ""),  # 无关键词，旧实现靠相似度兜底
             _doc("d3", "采购合同.md", '["合同", "采购"]'),
+            _doc("d4", "技术手册.pdf", ""),  # 旧实现会被排除的第 4 篇
         ]
         ids, info = ChunkLevelRetriever._filter_docs_by_keywords("跨境运输有哪些方式", docs)
-        assert "d2" in ids
-        assert info["kept"] and "数字陷阱.md" in info["kept"]
-        assert "数字陷阱.md" not in [e["doc"] for e in info["excluded"]]
+        assert ids == ["d1", "d2", "d3", "d4"]
+        assert info["kept"] == ["d1", "d2", "d3", "d4"]
+        assert info["excluded"] == []
 
-    def test_excluded_docs_have_reason(self):
-        """既无关键词命中又不在相似度兜底名额内的文档必须记录排除理由。"""
-        docs = [
-            _doc("d1", "物流SOP.docx", '["跨境", "运输"]'),
-            _doc("d2", "数字陷阱.md", '["跨境", "运输"]'),
-            _doc("d3", "采购合同.md", '["合同", "采购"]'),
-            _doc("d4", "技术手册.pdf", ""),  # 相似度第 4，无关键词 → 应被排除
-        ]
-        ids, info = ChunkLevelRetriever._filter_docs_by_keywords("跨境运输有哪些方式", docs)
-        assert "d4" not in ids
-        excluded = {e["doc"]: e["reason"] for e in info["excluded"]}
-        assert excluded.get("技术手册.pdf") == "no_keyword_match_and_below_similarity_top"
-
-    def test_no_query_keywords_returns_all(self):
+    def test_gate_info_contract_shape(self):
+        """gate_info 契约字段保留：candidates 计数 + reason 标记直通口径。"""
         docs = [_doc("d1", "a.pdf"), _doc("d2", "b.md")]
         ids, info = ChunkLevelRetriever._filter_docs_by_keywords("？？？", docs)
         assert set(ids) == {"d1", "d2"}
-        assert info["reason"] == "no_query_keywords"
+        assert info["candidates"] == 2
+        assert info["reason"] == "keyword_gate_removed_p0_2"
+        # 已退役字段显式置空，供 Trace 消费方兼容
+        assert info["keyword_matched"] is None
+        assert info["similarity_fallback"] == 0
 
 
 # ==================== 2. Adaptive 扩展契约 ====================
 
+import pytest  # noqa: E402
 from langchain_core.retrievers import BaseRetriever  # noqa: E402
 from langchain_core.callbacks import CallbackManagerForRetrieverRun  # noqa: E402
 from typing import List  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _bypass_review_visibility(monkeypatch):
+    """AdaptiveRetriever 出口过审核可见性过滤（fake chunk 未登记 doc_registry，
+    CI 空库 fail-closed → 空结果，v14 run 41249581757）。本组锁扩展契约，
+    审核语义由 review_filter 自有测试覆盖——透传该出口。"""
+    import backend.rag.retrieval.review_filter as rf
+
+    monkeypatch.setattr(rf, "apply_review_visibility", lambda docs, **kw: docs)
 
 
 class _FakeBaseRetriever(BaseRetriever):

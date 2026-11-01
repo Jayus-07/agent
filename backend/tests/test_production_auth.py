@@ -55,6 +55,8 @@ class TestProductionAuthFailFast:
             ENVIRONMENT="production",
             ALLOW_UNAUTHENTICATED="false",
             API_KEY="a" * 32,
+            # LLM_BUDGET_MODE 显式声明是生产校验新契约（本地 .env 红利掩盖过）
+            LLM_BUDGET_MODE="off",
             PGHOST="localhost", PGPORT="5432", PGUSER="u", PGPASSWORD="pw",
         )
         warnings = validate_startup_settings()
@@ -87,6 +89,7 @@ class TestProductionAuthFailFast:
             ALLOW_UNAUTHENTICATED="false",
             API_KEY="a" * 32,
             IDENTITY_SOURCE="header",
+            LLM_BUDGET_MODE="off",
             PGHOST="localhost", PGPORT="5432", PGUSER="u", PGPASSWORD="pw",
         )
         warnings = validate_startup_settings()

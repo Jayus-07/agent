@@ -46,17 +46,6 @@ def test_case_b_initial_rag_index_route():
     assert route.physical_queue == "rag_index"
 
 
-def test_case_h_metadata_shadow_route():
-    """Case H：metadata shadow → rag_metadata_shadow（独立 worker 不回归）。"""
-    route = resolve_for_celery_task("tasks.execute_metadata_shadow")
-    assert route.workload_class == "metadata_shadow"
-    assert route.physical_queue == "rag_metadata_shadow"
-    # 队列名必须仍来自既有 env 配置源（不另起字符串）
-    from backend.config.tasks import CELERY_METADATA_SHADOW_QUEUE
-
-    assert route.physical_queue == CELERY_METADATA_SHADOW_QUEUE
-
-
 def test_resolve_for_task_uses_workflow_alias():
     """resolve_for_task 读 workflow（=graph_name 别名），不读 queue 快照。"""
     record = SimpleNamespace(workflow="rag_index", queue="agent")

@@ -26,8 +26,12 @@ import psycopg2.extras
 import pytest
 
 from backend.config.database import BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG
+from backend.tests.fixtures.pg_env import _pop_store_modules, worker_scoped_prefix
 
-PG_PREFIX = "pgtest_biz_"
+# v14 run 41249581757：固定 pgtest_biz_ 前缀（无 worker 段）在全根文件
+# xdist 4 worker 下与其他 store 测试跨 worker 触发表竞争 → UndefinedTable。
+# 对齐 pg_iso_env 口径：前缀带 worker 段，setenv 后 pop 烘焙模块强制重载。
+PG_PREFIX = worker_scoped_prefix()
 PG_WF_TABLE = f"{PG_PREFIX}workflow_runs"
 PG_FB_TABLE = f"{PG_PREFIX}feedback"
 
@@ -82,6 +86,8 @@ def _drop_tables(cfg: dict, tables: list[str]):
 
 def _reset_singletons(monkeypatch):
     """重置全部工厂单例（缓存实例不会因删表而重建，见 Batch A/B 测试注释）。"""
+    # 表名常量在 store_pg 模块导入时烘焙，setenv 后必须 pop 强制重载
+    _pop_store_modules()
     import backend.competitor.store as comp_mod
     import backend.market_research.store as mr_mod
     import backend.orchestration.inventory.store as inv_mod

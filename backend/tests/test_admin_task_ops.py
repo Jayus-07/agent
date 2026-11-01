@@ -146,7 +146,10 @@ class TestQueuesEndpoint:
             pass
 
         resp = await mod.admin_task_queues(_Req())
-        assert len(resp["queues"]) == 5
+        # 20b8aa9 影子链物理删除后四队列拓扑（agent/rag_index/report/maintenance）
+        assert len(resp["queues"]) == 4
+        assert {q["logical"] for q in resp["queues"]} == {
+            "agent", "rag_index", "report", "maintenance"}
         assert all(q["waiting"] is None for q in resp["queues"])
         assert "physical" in resp["queues"][0]
 

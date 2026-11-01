@@ -2,7 +2,7 @@
 
 断言口径：
 1. 正常态：八段齐全、overall=PASS、counts 与代码权威值同源
-   （skill=12 / capability=17 / tool=39 口径与 lock/README 一致）。
+   （skill=12 / capability=17 / tool=40 口径与 lock/README 一致）。
 2. 破坏态：mock 一个未注册 capability / 篡改 lock → 对应段 FAIL、
    overall=FAIL、failed_sections 点名——报告必须「看得见漂移」。
 3. 鉴权：require_admin_user 被调用（403 路径不在此测，见 deps 既有测试）。
@@ -36,15 +36,16 @@ class TestConsistencyReport:
     async def test_normal_state_passes(self):
         report = await _report()
         names = [s["name"] for s in report["sections"]]
+        # f897f9f（Batch 3-3）新增动态注册表对账段，八段齐
         assert names == [
             "agents", "skills", "capabilities", "tools",
-            "workflows", "mcp", "tool_contract_lock",
+            "workflows", "mcp", "tool_contract_lock", "dynamic_registry",
         ]
-        # 权威口径（tool_contracts.lock.json）：Skill 12 / capability 17 / Tool 39
+        # 权威口径（tool_contracts.lock.json）：Skill 12 / capability 17 / Tool 40
         by_name = {s["name"]: s for s in report["sections"]}
         assert by_name["skills"]["counts"]["skills"] == 12
         assert by_name["capabilities"]["counts"]["capabilities"] == 17
-        assert by_name["tools"]["counts"]["loaded"] == 39
+        assert by_name["tools"]["counts"]["loaded"] == 40
         assert by_name["tools"]["counts"]["not_loaded"] == 0
         assert by_name["tools"]["counts"]["phantom"] == 0
         assert report["overall"] == "PASS", report["failed_sections"]
