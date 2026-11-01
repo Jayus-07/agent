@@ -104,11 +104,17 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
 
             answer = (final_state.get("final_answer") or "").strip()
             expert_history = final_state.get("expert_history") or []
-            # expert_history 元素为 {node, ...} dict 或节点名字符串，两种都兼容
-            visited = {
-                (e.get("node") if isinstance(e, dict) else str(e))
-                for e in expert_history
-            }
+            # 现图契约（experts/base.py）条目为 {"expert": ...}；旧版 {"node": ...}
+            # 与纯节点名字符串保持兼容，取不到名字的条目跳过（路由断言不允许
+            # 把 None 计入 visited，否则期望专家永远"未命中"）
+            visited = set()
+            for entry in expert_history:
+                if isinstance(entry, dict):
+                    expert_name = entry.get("expert") or entry.get("node")
+                    if expert_name:
+                        visited.add(expert_name)
+                elif entry:
+                    visited.add(str(entry))
             expected_expert = _TARGET_TO_EXPERT.get(exp.get("target", ""), "")
 
             actual = {
