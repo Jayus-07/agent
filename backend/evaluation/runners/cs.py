@@ -9,6 +9,7 @@ offline 模式：只做数据集结构 sanity（不调 graph），CI 无 LLM Key
 live 模式：逐条 invoke CS Graph（thread_id 按 case id 隔离）。
 """
 import time
+import uuid
 
 from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
@@ -17,6 +18,7 @@ from backend.shared.logger import logger
 # cs_target（Router 预过滤产物）→ CS Graph expert 节点名
 # 单一事实源在 customer_service/graph_state.py（cs_graph_node 同用此映射）
 from backend.customer_service.graph_state import CS_TARGET_TO_EXPERT as _TARGET_TO_EXPERT
+from backend.customer_service.graph_state import EXPERT_NAME_TO_NODE as _EXPERT_NAME_TO_NODE
 from backend.customer_service.router.intents import FINE_INTENTS as _FINE_INTENTS
 
 _VALID_TARGETS = set(_TARGET_TO_EXPERT)
@@ -76,10 +78,25 @@ def _run_offline_sanity(cases: list[TestCase]) -> list[EvalResult]:
 
 
 def _run_live(cases: list[TestCase]) -> list[EvalResult]:
-    """逐条 invoke CS Graph，评估路由与应答。"""
+    """逐条 invoke CS Graph，评估路由与应答。
+
+    路由接线对齐生产：先经 CSRouter.route（规则层，P1-P3 门禁验证的
+    同一入口）产出 cs_route 再喂图——生产链路（orchestration cs_prefilter）
+    即由该结果驱动 supervisor L1；直接传空 dict 会旁路决策层，supervisor
+    全靠 L3 LLM/L6 兜底重路由（b0r2 实测 expert_match 掉到 10%）。
+    会话指代消解与 CSUnderstanding LLM 增补属会话软层，单轮评测样本不
+    消费，不在此复刻。
+    """
     from backend.customer_service.graph_builder import get_cs_graph
     from backend.customer_service.graph_state import new_cs_graph_input
+    from backend.customer_service.router.cs_router import get_cs_router
     from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
+
+    # run 级隔离 token：thread_id/conversation_id 必须区分不同 run——
+    # 固定 eval-cs-{case.id} 会让下一次 run 续上上一次的 checkpointer
+    # 会话状态（b0r3 实测：complaint pending 补槽路径直接接管，45ms
+    # 返回、expert_history 为空），且工单/投诉单按会话幂等去重也失真。
+    run_token = uuid.uuid4().hex[:12]
 
     graph = get_cs_graph()
     results: list[EvalResult] = []
@@ -87,28 +104,41 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
         t0 = time.time()
         exp = case.expected
         try:
-            # thread_id 按 case 隔离，避免评测样本间状态串扰
+            # thread_id 按 run+case 隔离，避免评测样本间与跨 run 状态串扰
             config = {
                 "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
-                "configurable": {"thread_id": f"eval-cs-{case.id}"},
+                "configurable": {"thread_id": f"eval-cs-{run_token}-{case.id}"},
             }
             cs_input = new_cs_graph_input(
                 user_message=case.question,
                 user_id="eval_bot",
-                session_id="cs_eval",
-                conversation_id=f"eval-cs-{case.id}",
-                cs_route={},
+                # session 必须 case 级隔离：confirmation/handoff store 按
+                # (user_id, session_id) 键控——session 仅 run 级时，同一 run
+                # 内先跑 case 的动作提案 pending 态仍会拦住后续 case
+                # （b0r3/r4/r5 三轮实测），而评测每条 case 即独立单轮会话
+                session_id=f"cs_eval_{run_token}-{case.id}",
+                conversation_id=f"eval-cs-{run_token}-{case.id}",
+                cs_route=get_cs_router().route(case.question).model_dump(),
             )
             final_state = graph.invoke(cs_input, config=config)
             duration_ms = int((time.time() - t0) * 1000)
 
             answer = (final_state.get("final_answer") or "").strip()
             expert_history = final_state.get("expert_history") or []
-            # expert_history 元素为 {node, ...} dict 或节点名字符串，两种都兼容
-            visited = {
-                (e.get("node") if isinstance(e, dict) else str(e))
-                for e in expert_history
-            }
+            # 现图契约（experts/base.py）条目为 {"expert": ...}；旧版 {"node": ...}
+            # 与纯节点名字符串保持兼容，取不到名字的条目跳过（路由断言不允许
+            # 把 None 计入 visited，否则期望专家永远"未命中"）。
+            # 条目值是 expert 语义短名（knowledge/query/...），断言期望的是图
+            # 节点名（cs_knowledge_expert/...），统一经权威映射表归一后再比对。
+            visited = set()
+            for entry in expert_history:
+                if isinstance(entry, dict):
+                    expert_name = entry.get("expert") or entry.get("node")
+                else:
+                    expert_name = entry
+                if not expert_name:
+                    continue
+                visited.add(_EXPERT_NAME_TO_NODE.get(str(expert_name), str(expert_name)))
             expected_expert = _TARGET_TO_EXPERT.get(exp.get("target", ""), "")
 
             actual = {
