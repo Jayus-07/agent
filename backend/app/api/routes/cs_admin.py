@@ -1031,12 +1031,29 @@ async def post_my_message(
 
     def _persist_and_notify() -> dict:
         """幂等副作用（线程池内执行）：落库经 cs-db loop 桥（AsyncSessionLocal
-        按 loop 注册引擎，跨 loop 安全），广播为线程安全 fire-and-forget。"""
-        message_id = run_sync(
-            _async_save_my_message(
-                conversation_id, user_id, tenant_id, content, now,
+        按 loop 注册引擎，跨 loop 安全），广播为线程安全 fire-and-forget。
+
+        桥超时（10s）≠ 副作用未发生——协程可能仍在途并最终提交。映射为
+        SideEffectOutcomeUnknown 让 executor 落 UNCERTAIN 保守阻断同键重执
+        （普通 FAILED 会放行重试 → 与在途协程各插一行，重复消息）；同时
+        cancel_on_timeout 中止在途协程、尽快归还连接。与 executor 的
+        crash-window「终态未知禁止自动重试」同一保守语义。
+        """
+        import concurrent.futures
+
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        try:
+            message_id = run_sync(
+                _async_save_my_message(
+                    conversation_id, user_id, tenant_id, content, now,
+                ),
+                cancel_on_timeout=True,
             )
-        )
+        except concurrent.futures.TimeoutError as exc:
+            raise SideEffectOutcomeUnknown(
+                "消息落库桥超时，副作用终态未知"
+            ) from exc
         # 与 conversation_store._msg_payload 同构：坐席 WS/轮询零改动消费
         get_agent_hub().publish(
             "message.created",
