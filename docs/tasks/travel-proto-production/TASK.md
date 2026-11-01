@@ -103,14 +103,45 @@
 | 阶段 | 内容 | 主要涉及 | 验收 |
 |---|---|---|---|
 | **D0 侦察定稿** | 把 §2 矩阵逐项核到「原型 DOM/CSS 区块 ↔ 真实组件/函数」粒度，产出执行清单（每项：原型锚点选择器/真实文件/改动类型/预估规模）；§5 决策点逐条找用户拍板；更新本 TASK.md §2 为 v1 | 原型 8124 服务 + IAB；真实组件通读 | 矩阵 v1 落 PROGRESS；决策点全部有结论 |
+| **T1 12306 迁管理端能力中心**（用户已决策选项 b；可与 P1 并行，见 §7 方案） | 正式连接登记（12306，private 内网）→ discover → approve 两工具 → agent 授权；`live_search_service` 车次/票价查询改走动态 capability（静态直连保留为回退）；三态+撤销 fail-closed 测试；清理 govtest 残留 | admin_mcp 运行态操作、live_search_service、新动态 provider 模块、rag_smoke 登记 | 治理视图与运行态一致；撤销授权后如实拒绝；运行态车次 Tab/域图 query_train 均走动态通道 |
 | **P1 设计令牌与全局骨架** | Tailwind theme 扩展（色彩/圆角/间距/字号/阴影令牌，对照原型 CSS 变量）；TravelTopBar 胶囊导航/头像钮；TravelBottomNav 四项；头像抽屉组件 | tailwind.config、TravelV2Frame、新 Drawer | 令牌落地后现有页面零回归（408+tsc）；导航/抽屉按原型点测 |
 | **P2 首页复刻** | Hero（输入卡+胶囊+照片右图+渐变）+快捷查询内嵌面板+模板照片卡+最近行程照片卡+空态 | TravelHome.tsx 重构 | 原型首页对照点测（桌面+移动）；H1-H7 全勾 |
 | **P3 工作台功能块** | 概览卡统计块（W2）+天数条 segment+行内加天（W3）+详情卡/候选卡形态（W4/W5/W7） | TravelV2TripWorkspace、TravelSearchPanel | 原型工作台对照点测；W1-W7 全勾 |
-| **P4 生成流进工作台**（最重，可再拆 2-3 个 PR） | 首页输入/模板/胶囊 → 携 prompt 进工作台生成态：中列生成面板（草稿卡）+右列助手对话伴随（澄清/过程行/tool.card）；保存落 v1 后无缝切编辑态；chat 页按 §5 决策点 5 处置 | TravelChatPage 生成逻辑迁移、TravelV2TripConversation 扩展、新 WorkbenchGeneratePanel | 原型生成全流程对照点测（三轮澄清→生成→保存→编辑）；会话关联/写状态红线不破 |
+| **P4 生成流进工作台**（最重，可再拆 2-3 个 PR） | 首页输入/模板/胶囊 → 携 prompt 进工作台生成态：中列生成面板（草稿卡）+右列助手对话伴随（澄清/过程行/tool.card）；保存落 v1 后无缝切编辑态；chat 页废弃重定向（§5 决策点 5 已确认） | TravelChatPage 生成逻辑迁移、TravelV2TripConversation 扩展、新 WorkbenchGeneratePanel | 原型生成全流程对照点测（三轮澄清→生成→保存→编辑）；会话关联/写状态红线不破 |
 | **P5 历史/列表/地图形态** | 历史时间线抽屉形态（W9）+templates/itineraries 列表页（L1/L2）+地图细节（W14 多源回退/琥珀标记） | HistoryPanel、两列表页、TravelV2Map | 原型对照点测；L1-L3/W9/W14 全勾 |
 | **P6 总验收** | 原型逐场景浏览器点测（全页面）；移动端断点；408+tsc；`devctl.bat rebuild` 运行态全链；PROGRESS 回填 F 清单 | — | 用户逐页验收 |
 
-> P1/P2 先行可独立交付价值（首页焕新不依赖 P4）；P4 是体验重构核心，安排在骨架稳定后。
+> P1/P2 先行可独立交付价值（首页焕新不依赖 P4）；P4 是体验重构核心，安排在骨架稳定后；**T1 独立于前端阶段，随时可插队执行**（后端+治理变更，与前端重构无文件交集）。
+
+## 4b. 12306 通道迁移方案（T1 详细设计，用户已决策选项 b）
+
+**目标**：车次/票价查询从「静态 Tool 直连通道」迁移到管理端能力中心动态 capability 通道，与 rollinggo 同构治理（登记→审批→授权→撤销全在管理端可见可操作）。
+
+**已验证前提**（2026-11-01 实证）：
+- mcp-12306 为共享栈正式服务（compose 定义，healthy）；上游 drfccv/mcp-server-12306，Streamable HTTP。
+- 上会话治理测试已验证 12306 走能力中心全链可通（审批+授权后 test-invoke 真实车次 217 趟；disable 后 409 fail-closed）。
+- 上游响应契约已在 tools/travel/train.py docstring 固化（2026-10-02 实测，解析规则勿凭文档改）：成功 `{"success":true,"count":N,"trains":[...]}`；真无直达 `{"success":false,"error":"未找到该线路的余票","count":0,"trains":[]}`；坏站名 `{"success":false,"error":"车站名称无效","suggestions":[...],"hint":...}`；坏日期 `{"success":false,"errors":[...]}`——四种业务失败**结构可区分**。
+
+**通道设计（消费方零改动）**：所有调用方（TravelSearchPanel 车次 Tab、域图 auxiliary query_train、planning_agent 票价补全）唯一入口是 `live_search_service.search_trains / search_train_price`。在这两个函数内做通道选择：
+1. **动态优先**：`mcp_store.get_runtime("mcp.12306__query_tickets")` 在场（连接启用+工具 approved）→ 走动态通道——新增轻量 provider（参照 rollinggo_mcp.py 模式）：经 mcp_registry 快照解析连接，调 `_McpDynamicToolAdapter.invoke`（复用治理执行核心：运行时在场检查/SSRF/写面强一致——本两工具均 read），响应按 train.py 固化契约解析为现役 data 形态；业务失败结构原样保留（「真无直达」≠错误）。
+2. **静态回退**：动态不在场且 `TRAIN_MCP_ENABLED=true` → 现役静态直连通道原样保留。
+3. **如实关停**：两者皆不可用 → 「未启用」如实（不伪造）。
+- 链账/日志标注实际通道（mcp_dynamic / static_direct），可观测。
+- **静态 ToolSpec（travel.train.search/travel_train_price_tool）保留**——它们是平台能力声明与治理身份，换的只是数据源通道；授权产品口径 = agent（同 rollinggo，勿扩 travel 产品键）。
+
+**管理端登记步骤（运行态操作，流程与 rollinggo #205 同）**：
+1. POST /admin/mcp/connections：name=`12306`、base_url=`http://mcp-12306:8000/mcp`、transport=streamable_http、auth_type=none、network_scope=**private**（内网服务名；govtest 连接参数即此，可直接复用）。
+2. discover → 枚举 query-tickets / query-ticket-price（还有其他工具按实际枚举处理）。
+3. approve 两个工具：read / R1 / 无确认（治理参数照 rollinggo searchHotels 的已批准形态；domain 未分类——agent 授权为运行时唯一 travel 场景口径）。
+4. POST grants product_key=agent；**授权闭环黄金证据**：授权后 test-invoke（product_key=agent）真实车次 → revoke 后 `product_capability_denied` → regrant 恢复。
+5. 清理：`12306-govtest` 残留连接处理——disabled 且有已审批工具引用保护（DELETE 409），保留 disabled 态或待引用解除后删除（治理卫生，随手项）。
+
+**测试与验收**：
+- 三态单测：动态在场（注入快照+mock invoke，回放 train.py 四种契约）→ 走动态；动态不在场 + TRAIN_MCP_ENABLED=true → 走静态；两者皆无 → disabled。
+- fail-closed：revoke 授权后动态通道如实拒绝（不回退静态直连**绕过治理**——回退仅限「动态从未配置」，撤销≠回退）。
+- 集成：真 PG 门控（TRAVEL_V2_TEST_POSTGRES=1）/ rag_smoke 定向清单登记。
+- 运行态验收：管理端治理视图（连接 enabled、两工具 approved、agent 授权）与运行态一致；车次 Tab 与域图 query_train 实际走动态通道（链账/日志证据）；撤销→拒绝→恢复全链点测。
+- 已知边界：上游无 SLA（非官方聚合），失败如实「查不了」；开关 TRAIN_MCP_ENABLED 语义收窄为「静态回退通道开关」。
 
 ## 5. 决策点状态（2026-11-01 用户回复后更新；✅=已定，⏳=仍待确认）
 
@@ -119,11 +150,10 @@
 3. ⏳ **Hero/模板/行程照片源**：原型用 Unsplash 外链（生产出网依赖+版权属 Unsplash 协议）。→ 推荐先按原样接（快），后续可换本地素材池/高德静态图；或你提供指定图库。
 4. ⏳ **「我的」抽屉**：原型含「账号设置」导航与「换形象」彩蛋。真实平台账号页现状？（旅游域内无账号页）→ 推荐抽屉只放「旅游首页/旅行灵感/我的行程」三项+用户名展示，「账号设置」置灰或跳平台统一账号页（若有）。
 5. ✅ **chat 独立页（/travel/chat）不要**（用户 2026-11-01 确认）：生成流全部迁入工作台；`/travel/chat` 改造为重定向进工作台生成态（旧链接兼容），不再保留独立生成页。P4 执行时同步删除 TravelChatPage 生成路径与相关测试迁移。
-6. ✅ **车次 Tab 维持现状可用态**（用户质疑后事实修正，2026-11-01）：
-   - **事实修正**：本机 `TRAIN_MCP_ENABLED=true` 已显式开启，mcp-12306 是共享栈正式服务（healthy），运行态验证福州→厦门真实车次返回正常——**车次 Tab 当前就是可用态**，不存在「默认关」。此前计划里写「维持默认关」是把代码默认值误当运行态，已修正。
+6. ✅ **车次 Tab：12306 迁管理端能力中心（用户已决策选项 b）**：
+   - **事实修正（2026-11-01）**：本机 `TRAIN_MCP_ENABLED=true` 已显式开启，mcp-12306 是共享栈正式服务（healthy），运行态验证福州→厦门真实车次返回正常——**车次 Tab 当前就是可用态**，不存在「默认关」。此前计划里写「维持默认关」是把代码默认值误当运行态，已修正。
    - **「灰度」的真实含义与依据**（tools/travel/train.py docstring）：12306 没有官方开放 API，上游 drfccv/mcp-server-12306 是**非官方聚合、无 SLA、仅供学习研究**——开关默认 False 是「新部署不自动开、由部署者显式决定」的部署策略，不是本机现状；关闭时如实「未启用」、失败时如实「查不了」（不伪造），主链不受影响。
-   - **管理端 MCP 配置现状**：12306 走的是**静态 Tool 直连通道**（`travel.train.search` ToolSpec 静态注册 → 容器内直连 mcp-12306:8000，env 开关控制），**不经管理端能力中心**；管理端库里只有上会话治理测试残留 `12306-govtest`（disabled），无正式连接。
-   - **可选子项（用户定）**：(a) 维持静态通道现状（推荐，零改动）；(b) 把 12306 正式登记进管理端能力中心、车次查询改走动态 capability（治理统一，复用 rollinggo 已验证流程，但属通道迁移有测试连带）；(c) 禁用/清理 `12306-govtest` 残留连接（治理卫生，可并入任意阶段顺手做）。
+   - **用户决策**：把 12306 正式登记进管理端能力中心、车次/票价查询改走动态 capability——详细方案见 §4b（T1 阶段）；(c) 清理 `12306-govtest` 残留并入 T1 顺手做。
 
 ## 6. 纪律与环境（承接仓库 AGENTS.md）
 
