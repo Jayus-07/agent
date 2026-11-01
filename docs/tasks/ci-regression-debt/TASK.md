@@ -189,3 +189,23 @@ v14 首曝（v5/v6 该 suite 均被 runner 杀掉从未跑完）。pytest_out.tx
 - [ ] api 全绿（从全量取，#190 后 timeout 不再杀）
 - [ ] 全量 dispatch → 13 suite + summary 全绿 → TASK.md COMPLETED
 - [ ] 曲线补记：v16 1+3 cancelled（travel 1 + 三长 suite 超时）→ v17 → 0
+
+---
+
+# 交接（2026-11-01 第四批会话续：批十四完成 + 两长套疑难移交批十五）
+
+## 一、本批新增已合 PR
+
+| PR | 内容 | 实证 |
+|---|---|---|
+| #197（4a253de） | **批十四：backend-root xdist 全量新暴露 11 例清偿**（前端守卫 2：cs2/types.ts 迁移；mcp 5：kb 目录持久化迁移后用「显式替换注册表」口子走静态基线；budget 2：list_pending_review 截断防御 limit=500；task_resume 1：补漏 enqueue_stub） | backend/tests/test_*.py 全根 xdist 2279 passed；api 898 passed |
+
+## 二、剩余疑难（批十五清单，全部有复现证据）
+
+1. **rag worker crash（最高优先）**：xdist worker 进程异常终止（`node down: Not properly terminated`），96% 位置、间歇、可多 worker 连环（本地 b14_rag2 gw3+gw0 连 down，pytest_sessionfinish 收尾 hook 都被波及无 summary）；CI v17/v18 同位复现（96% gw3/gw2 down）。**#194（tracer_subscribe 死锁）只修了其一**，本地 3 文件组合稳定但全量组合仍有第二死因。已排除：Windows WER 无 python 崩溃记录（os._exit 型退出）、faulthandler 无栈输出。候选方向：chroma/faiss/onnx 等原生库段错误（rag 尾部大量 embedding/index 测试）、psycopg2 多线程连接、其余异步线程。手段建议：`-n 1` 单 worker 复现（pytest-timeout 可杀）+ 分段 bisect + `faulthandler.enable()` 注入 conftest。
+2. **api/backend-root CI 零输出 hang**：v17/v18 两轮 150min 上限被杀且 pytest_out.txt **0 字节**（收集期嫌疑——进度点都未产生；本地同 suite 全绿 4-5 分钟无法复现）。手段建议：workflow Suite pytest 步骤前置 `--collect-only -q` 诊断轮（区分收集 vs 执行期），或按文件分批 flush。注意与坑位 22 区分：0 字节 + 150min = 收集期卡死嫌疑，非缓冲假象（150min 输出量远超缓冲）。
+3. **test_sources_request_scope 3 例**（本地段跑 b14_seg2.txt 发现红）——CI 对齐后按四步法定性。
+
+## 三、收敛现状
+
+v18（41278306848，HEAD 2bf930b）：11/13 suite success（含 misc/orchestration/cs/prompts/travelv2/evaluation/repo-tests/sql-infra/tools-security-obs/evaluation）；rag/backend-root/api 三 job 150min 被杀。批十四修复（#197）在 v19 起生效。**v19 起唯一未知数 = 三长套的 hang**，10 个短套已稳定全绿。

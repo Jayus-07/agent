@@ -338,3 +338,28 @@ v14 run 41249581757 该 suite 首次真实跑完暴露 54 例。本地单进程�
 ## 收敛曲线（真实口径更新）
 
 v1 108 → v2 61 → v3 20 → v5 15（api 13 首曝 + p5/collapse）→ v14 54+api（backend-root 首曝）→ **v16 10 绿 + travel 1 + 三长 suite 超时杀**（timeout 修正 #190）→ v17（travel slot 修正 #191；rag/backend-root/api 首次进入全量真跑窗口）→ 批十四收官。
+
+## 第四批会话续（2026-11-01 下午）：批十四 11 例清偿 + 三长套疑难定性
+
+### 批十四 PR #197（backend-root xdist 全量新暴露 11 例 → 0）
+
+批十三修复让根文件集首次真跑到尾，本地 xdist 新暴露 11 例（/d/tmp/ci-debt/b14_br_local.txt）。分组定性（全部有引入提交或探针证据）：
+
+- **前端守卫 2**：2aaab3c（cs2 P8 路由切换）删除 `frontend/src/components/cs/` 全量，节点名映射载体迁至 `frontend/src/cs2/types.ts`——`_CS_ID_FILES` 更新，守卫意图（前端写死节点名 ⊆ 后端节点集）与 stale 名单完整保留。
+- **mcp 5**：`get_knowledge_bases()` 已迁持久化目录（36213ea 引入 DB 表 + 实现留「显式替换注册表」口子：`KNOWLEDGE_BASES is not _BOOTSTRAP_KNOWLEDGE_BASES` 时直用静态表）。本地主栈库 kb 目录只 seed 了 policy_general/travel 两条 → FakeRegistry 的 d2（kb_id=policy_hr）被 kb_scope 过滤 → get_stats doc_count 2→1、admin_sees_restricted {'d1'}、kb 可见性集合缩水。修：测试显式替换 KNOWLEDGE_BASES 为静态基线 dict（绕 DB）。
+- **budget 2**：探针实证 `mark_needs_review` 后库中 4 物理行全 needs_review/reason 正确，但 `list_pending_review(limit=100)` **最老优先截断**把测试新行挤出窗口——共享权威库（MEMORY_DB_CONFIG 主栈库）needs_review 存量 100+（summary pending_count=119）。修：limit=500（API 上限）。**本地库脏数据毒死测试的新形态**（坑位 20 的反例：本地红利变本地毒药）。
+- **task_resume 1**：`test_resume_then_worker_kill_then_takeover` 是全文件唯一漏挂 `enqueue_stub` 的 resume 用例——resume 真派发进共享栈 broker，本地 celery worker 拾取置 RUNNING（坑位 1 家族，CI 无 worker 时绿）。修：补挂桩。
+
+### 三长套疑难（移交批十五）
+
+- **rag worker crash**：v18（含 #194）rag 仍 96% gw3 down；本地 #194 后全量重跑（b14_rag2.txt）gw3+gw0 连环 down 且 `pytest_sessionfinish` 抛 OSError 无 summary。#194 已根除 tracer_subscribe 死锁（3 文件组合 3 轮稳定），全量组合另有第二死因。尾部 11 文件、148-165 段单独 xdist 均不复现——需全量组合。
+- **api/backend-root CI 零输出 hang**：v17/v18 两轮 150min 0 字节（收集期卡死嫌疑）；本地 api 898 passed 4 分钟、backend-root 2279 passed 4.8 分钟均无 hang。CI 特有（Redis service/隔离库/网络 DNS 差异候选）。
+- 顺带发现：`test_sources_request_scope` 3 例本地红（b14_seg2.txt）——待 CI 对齐定性。
+
+### 坑位（25，续接）
+
+25. **「本地库脏数据」与「本地环境红利」是同一枚硬币两面**：共享权威库（MEMORY_DB_CONFIG 指向主栈）的存量行既可能掩盖失败（红利）也可能毒死测试（budget 截断 119 条存量挤掉新行）。涉及全量列表类断言的测试一律用差值/自足口径或 limit 上限拉满。
+
+### 收敛曲线（真实口径）
+
+v1 108 → v2 61 → v3 20 → v5 15 → v14 54+api（backend-root 首曝）→ v16 10 绿 + travel 1 + 三长套 50min 杀 → v17/v18 三长套 150min 杀（rag crash 实锤 + api/br 零输出 hang）→ 批十五收官（短套 10/13 已稳定全绿）。
