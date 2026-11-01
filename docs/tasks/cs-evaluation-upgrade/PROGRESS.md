@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P4 已完成合入，P5 机制闭环已验证并文档化（长期运营）；P4 live 跑批预算待用户拍板**
+- 当前状态：**P1–P5 已完成；运营收尾阶段 P6–P8 已立项（TASK §10）——P6 live 跑批预算 10 元用户已拍板，下一会话从 P6 开工**
 
 ## 阶段状态总表
 
@@ -12,10 +12,11 @@
 | P1 | 离线回放 runner 入 CI + v2/ 分片定案 | **已完成**（2026-11-02） | feat/cs-eval-p1 / [PR #223](https://github.com/Jayus-07/agent/pull/223)（merged 63df24b） | 见日志 2026-11-02（一） |
 | P2 | 数据集修订三类口径 + 升 v2.1 | **已完成**（2026-11-02） | feat/cs-eval-p2 / [PR #228](https://github.com/Jayus-07/agent/pull/228)（merged a729f3c） | 见日志 2026-11-02（二） |
 | P3 | 词表/规则能力补强（cs-gate 护航） | **已完成**（2026-11-02，含候选 4 条收编升 v2.2） | feat/cs-eval-p3 / [PR #229](https://github.com/Jayus-07/agent/pull/229)（merged b770788） | 见日志 2026-11-02（三） |
-| P2 | 数据集修订三类口径 + 升 v2.1 | 待实施（依赖 P1） | — | — |
-| P3 | 词表/规则能力补强（cs-gate 护航） | 待实施（依赖 P1） | — | — |
 | P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | **已完成（offline）**（2026-11-02） | 纯运营操作无代码分支；见日志 2026-11-02（四） | run 1a2ae7da：324/324 pass |
 | P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
+| P6 | P4 live 跑批执行（**预算 10 元，用户 2026-11-02 拍板**）+ 管理端发起/历史核实收口 | 待实施（可开工） | 运营执行 + PROGRESS 回填 | TASK §10 P6 |
+| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | 待实施 | feat/cs-eval-p7（计划） | TASK §10 P7 |
+| P8 | 持久化 intake（unanswered_questions → 候选） | 待实施 | feat/cs-eval-p8（计划） | TASK §10 P8 |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -31,6 +32,12 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（五）—— 用户拍板与运营收尾立项（P6–P8，TASK §10）
+
+- **用户拍板**：①P4 live 跑批预算 **10 元**批准执行；②要求补评测平台 case 删除/归档能力（清理 P4 竞态约 400 个重复 approved case）；③要求补持久化 intake（unanswered_questions → 候选）；④询问管理端发起/历史展示与「做完可否上线运营」。
+- **核实结论**：管理端 RunsTab 已有「发起评测」表单（仅 super_admin）与运行列表/环境指纹卡——发起与历史展示 UI 均存在（RunsTab.tsx:124-184）；上线口径见 TASK §10 引言（P6–P8 完成 = 评测运营线可上线运营受控试用；全量公开投产另需压测/渗透/资金决策）。
+- **立项**：TASK §10 落稿 P6（live 跑批护栏步骤）/P7（case 归档端点）/P8（持久化 intake）+ 上线运营巡检清单；下一会话从 P6 开工。
 
 ### 2026-11-02（四）—— P4 落地（管理端评测中心 offline 接线）+ P5 机制闭环验证
 
