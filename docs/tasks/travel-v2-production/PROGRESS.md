@@ -182,3 +182,80 @@
 
 - §8 全局验收清单**全部勾选**（见上）。残留复核：`travel_commerce` 仅剩 test_domain_semantic_consistency.py:449 负向守护断言；`travel_booking` 均为白名单面（booking 包本体/REST/recovery/052/env/新 Skill 名/负向断言）。
 - PR：7 笔提交（D/B/U 三系列 5 笔 + AMAP 样本 1 笔 + 本文档）走单 PR 合并，CI 首跑覆盖 rag_smoke 新增 4 测试路径（hotel_search_service/amap_poi_provider/lodging_expert/tool_governance）。
+
+---
+
+# 投产施工 P1–P5 执行记录（feat/travel-proto-alignment 系，2026-11-01）
+
+> Worktree `agent-wt-travel-proto`；每阶段独立 commit + 独立 PR，全部已合并 main。
+> 阶段 PR：P1 #205（1c1f73f）→ P2 #208（946fe04）→ P3 #209（0b41502）→ P4 #210（c140367）；
+> 验收发现修复：#212（reporter 住宿段 c7d07fc）、#213（auto-optimize 传参 6ff82f7）、#214（selection_id 生成 cd0ea2d）。
+
+## P1 rollinggo live 接线（#205，后端）
+
+- **管理端治理全链**：新建正式连接 `rollinggo`（https://mcp.rollinggo.cn/mcp，static_bearer/public，凭据经管理端加密入库，零入代码/文档/日志）→ discover 3 工具 → searchHotels 审批（read/R1/无确认，domain 未分类——agent 产品为运行时唯一 travel 场景授权口径，任务纪律未扩 GrantRequest.product_key）→ agent 授权。**授权闭环黄金证据**：授权后 product_key=agent test-invoke 真实成功（上海酒店 code=2000）。
+- **live 适配器**（rollinggo_mcp.py）：经 mcp_registry 快照 + mcp_dynamic 统一执行核心出网（零第二套 MCP 路径）；价格按总价契约诚实映射（message 显式总价优先，兜底每晚价×晚数）；未报价过滤；多间房/携儿童无法如实表达显式拒绝；运行时不在场=disabled 绝不回退 fake。
+- **真实样本 fixture**：授权链路录制 searchHotels 真实返回（去 nextPageToken 脱敏；酒店名称/价格/地址/坐标为公开商业事实保留）。
+- **测试**：适配器契约 8 用例 + 三态断言同步两处 + live 冒烟（TRAVEL_ROLLINGGO_LIVE_SMOKE 门控真实出网）；rag_smoke 定向清单登记。
+- **运行态验证**：rebuild 后 app 容器内 search_hotel_offers → status=success / source=rollinggo:mcp / 10 offers（真实报价）。
+- 清理：临时 admin 账号停用+logout 吊销；含凭据临时文件删除；`rollinggo` 连接保留（正式接线）。
+
+## P2 F18 card 事件通道（#208，后端+前端）
+
+- 后端：`travel/core/cards.py` ToolCardPayload 契约（类目白名单 train/hotel/food/poi、条目≤8、缺失不补造）+ `run_checked` 成功路径单一接线点（白名单类目+preview 非空才发卡；失败/空不发）。契约测试 8 用例。
+- 前端：`tool.card` 事件类型 + parseTravelToolCard（形状不符返回 null）+ ToolCardBlock 共享渲染（复用 V1 ToolPreviewBody）；TravelChatPage 按 turn 收集内嵌渲染、动作直通聊天管线；TravelV2TripConversation 只读问答轮收卡、动作直通 ai-edit 既有写路径。
+
+## P3 前端小项（#209）
+
+- **F04**：工作台双 header「自动优选」入口 + AutoOptimizePanel 建议确认卡；批量选入=既有单条 selection 端点逐条幂等（expected_revision 链式推进）；后端建议行与搜索 Tab 同源同构（补齐全套选入快照字段）。
+- **F02**：TravelChatPage loading 气泡接 ToolProcessRows 折叠行。
+- **F05**：详情卡「查看备选地点」内联候选 + 二次确认替换 + 既有 applyEdit(replace_place) 单一写路径（V1 CandidatesPanel 为已退役 V1 端点耦合件，不引入）。
+
+## P4 F17 目标态布局（#210）
+
+- 工作台三列重排：行程时间轴（左）→ 地图列（中：概览卡 + 天数条叠地图上方）→ AI 助手（右列）；grid order 重排、现有 V2 组件本体零改动；移动端不受影响。
+
+## P5 验收（运行态逐场景点测 + 对账）
+
+- **重建**：共享栈从本 worktree rebuild 4 次（每轮修复后），全容器 healthy；验证一律 `PGHOST=127.0.0.1`。
+- **逐场景点测（:9080 网关，临时账号 P5_JWT，走真实 JWT 链路）**：
+  - 场景1 三轮澄清 **PASS**：needs_clarification + 3 个结构化选项（规划厦门/杭州/福州）。
+  - 场景2 生成含住宿档位 **PASS**（修复 #212 后）：带日期消息 → 3 天行程 + 「## 住宿建议」段（如家商旅 ¥206/晚 等，`rollinggo:mcp` live 真实数据）；无日期时住宿查询如实 skipped（无段），符合契约。
+  - 场景3 模板复制 **PASS**（xiamen-sea → trip f83e3e85…）。
+  - 场景4 自动优选+批量选入 **PASS**（修复 #213/#214 后）：destination=厦门、3 餐饮（amap）+3 住宿（rollinggo:mcp ¥184/晚起）；selections/meals 选入 saved=True revision 1→2。
+  - 场景5 预订确认门 fake 全链 **PASS**：quote（554.01 CNY awaiting_confirmation）→ confirm（booked, provider_order=fbk-native-0001）→ status（booked, order_id=bo_5b63…）。
+  - 场景6 时区警告 **PASS**：travelV2PlannerAdapter 单测断言未确认时区 → UTC 占位 + `timezone_unconfirmed` issue（test:83-94）；工作台消费区块已有。
+  - 场景7 live 酒店报价 **PASS**：场景2/4 住宿建议均为 rollinggo:mcp 真实报价（P1 运行态验证同源）。
+- **验收发现并修复的 3 个真实缺口**（各自独立 PR）：
+  1. #212：lodging 专家执行但 reporter 无住宿段——原型「住宿建议」语义未达用户面；补 `_render_lodging_picks`。
+  2. #213：auto-optimize 端点把行程行当 TripDocument 传 → destination 恒空、建议恒空（U3 仅 service 级测试）；改传 document + 真 PG API 级回归。
+  3. #214：餐饮建议 selection_id=None（live_search 行不带该字段）→ 无法选入；缺失时按搜索 Tab 同一 stable_selection_id 规则生成。
+- **F18 tool.card 运行态**：生成流（场景1/2）未触发对话查询类目，事件通道由契约测试（8 用例）承载；对话查询触发时事件经既有 SSE 通道自动到端（seq/run_id 注入复用）。
+- **F14 预订写面**：如实 BLOCKED——rollinggo 预订/库存写操作未接（fail-closed），预订确认门走 fake（上游权限，联系人 york.lu@dida.com）；确认门机制本身运行态全链已验证（场景5）。
+- **治理面一致性**：`rollinggo` 连接 enabled + searchHotels approved + agent 授权存续（正式接线态）；12306-govtest/rollinggo-govtest 两条 govtest 连接保持 disabled；MCP 治理视图与运行态一致。
+- 清理：P5 临时账号停用+logout 吊销；测试行程归档（保留审计）；凭据临时文件全部删除。
+
+## F01-F19 对账矩阵（投产施工后终态）
+
+| # | 功能 | 终态 | 证据 |
+|---|---|---|---|
+| F01 | 三轮槽位澄清（结构化选项） | ✅ | C2（#187）+ 运行态场景1 PASS |
+| F02 | 气泡内工具过程行折叠 | ✅ | P3（#209）ToolProcessRows 接入 V2 |
+| F03 | 两段式草稿预览保存 | ✅ | C1（#187） |
+| F04 | 自动优选+批量选入 | ✅ | P3（#209）+ 修复 #213/#214 + 运行态场景4 PASS |
+| F05 | 卡片内联备选+二次确认替换 | ✅ | P3（#209）replace_place 直通 |
+| F06 | 查询三 Tab | ✅ | 已对齐（既有） |
+| F07 | 预订确认门 | ✅ | 机制既有 + P5 场景5 fake 全链 PASS |
+| F08 | 版本历史/恢复/ICS/分享 | ✅ | 已对齐（既有） |
+| F09 | 写状态三态/幂重试/CAS | ✅ | 已对齐（既有） |
+| F10 | 模板目录/复制 | ✅ | 种子（#187）+ P5 场景3 PASS |
+| F11 | 天气-行程联动 | ✅ | 已对齐（既有） |
+| F12 | 地图 | ✅ | 已对齐（既有） |
+| F13 | POI 实时数据 | ✅ | AmapPOIProvider（#201） |
+| F14 | 酒店 rollinggo 直连 | ⚠️ 搜索/查价 ✅；**预订写面 BLOCKED** | P1（#205）搜索/查价 live 全链 PASS（运行态场景2/4/7 真实报价）；预订写操作未接（fail-closed，上游权限 york.lu@dida.com） |
+| F15 | 会话关联/通知条 | ✅ | 已对齐（既有） |
+| F16 | 动态增删天 | ✅ | 已对齐（既有） |
+| F17 | 目标态布局 | ✅ | P4（#210）三列重排+概览卡+天数条叠地图 |
+| F18 | SSE card 结构化事件 | ✅ | P2（#208）tool.card 通道 + 契约测试 8 用例 |
+| F19 | 时区未确认警告条 | ✅ | adapter 单测断言 + 工作台消费（P5 核对） |
+
