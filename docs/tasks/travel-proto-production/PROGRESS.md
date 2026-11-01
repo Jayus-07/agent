@@ -187,9 +187,27 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - `vitest run src/components/travel src/api` → **413 passed**（408 基线 + 5 新增，零回归）；`tsc --noEmit` → **16 错 = main 基线**（travel/MobileAssistantDrawer 相关零错误）。
 - rebuild 运行态点测（:3100，移动视口 390×844 + 桌面 1280）：登录→/travel→BottomNav「我的」点击→抽屉滑出（截图留痕）→导航四项/用户名/换形象提示与原型抽屉形态一致；桌面 TopBar 头像钮开同一抽屉。验证账号用后即停（status=0+会话吊销），凭据临时文件已删。
 
+## P3 执行记录（2026-11-02，分支 feat/travel-proto-p3-workbench）
+
+### 范围修正（侦察实证）
+
+- **W3「尾部＋增加一天」为 v0/v1 误读**：原型天数条（renderDayChips）只渲染天 chip，「＋添加一天」仅存在于编辑面板（ed-view data-day='add'）——与真实端现状一致。原型与真实的 chip 差异只在**主题显示**（`第 N 天 · 主题`）。按原型事实源收窄：本阶段只补 chip 主题，不发明行内加天。
+- **W7/W11 实测已对齐，零改动**：车次候选卡已有 verificationLabel（可能延迟徽标）+ seatSummary/fareSummary/来源/观测时间；通知条「原始对话关联未验证」文案即验证失败变体。
+
+### 改动
+
+- 新增 `travelOverview.ts`：`buildTripOverview(trip)` 六行取数单一事实源（天数主题=days[].title / 安排=Σitems / 预算·节奏=budget+paceLabel / 预估花费=totals.estimated_cost 标注「未核验」/ 天气=契约位如实占位（当前无实时预报源，不伪造——红线 5）/ 住宿=lodgings[0] 或引导语）；`paceLabel` 从 Workspace 收口至此。
+- `TravelV2TripWorkspace.tsx`：桌面概览卡替换为六行统计块（dl/dt/dd 语义结构）；桌面+移动两处天数 chip 补主题显示（truncate 防溢出）。
+
+### 验证
+
+- 新增 `travelOverview.test.ts` 8 用例（六行顺序/主题 join/求和/预算与花费 null 分支/契约位/住宿两态/paceLabel 三档）。
+- `vitest run src/components/travel src/api` → **421 passed**（413 + 8，零回归）；`tsc --noEmit` → **16 错 = main 基线**。
+- rebuild 运行态点测（模板复制行程：湖山人文/龙井茶乡 两天各 4 项）：六行统计实测 `2 天 · 湖山人文 + 龙井茶乡`/`8 个（跨 2 天）`/`¥4,000 · 轻松`/`¥1,280（未核验）`/契约位/引导语全对；chip 显示主题；截图留痕。验证账号（含孤儿 1330）用后即停，临时文件已删。
+
 ### 下一步
 
-- P3 工作台功能块：W2 概览统计块（六行，取数口径设计）+ W3 天数条 segment+行内加天 + W7/W11 校对。
+- P4 生成流迁工作台（最重，拆 2-3 PR）：首页输入/模板/胶囊 → 工作台生成态（中列生成面板+右列对话伴随）+ chat 页废弃重定向（决策 5）。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
