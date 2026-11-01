@@ -52,6 +52,14 @@
 - E2（F13）：AmapPOIProvider + 链账（env 凭据）。
 - E3（F17）：工作台目标态布局改造。
 - E4（F14）：rollinggo——**BLOCKED**（外部权限）。
+- E5（连带项，来自 capability-governance G5 交接）：本阶段若落意图级打点
+  （travel intent 进入可聚合数据面），连带翻正域清单目录统计——
+  `backend/app/api/routes/travel_inventory.py` 加聚合 SQL（照抄
+  `cs_inventory.py` 的 _INTENT_STATS_SQL 模式）+ `stats_available` 翻 True +
+  更新 stats_note；测试把降级断言改数值比对（照
+  `test_cs_capabilities_inventory.py` 构造比对模式）；协议形状不变，
+  聚合不到的维度保持 null（协议语义=该维度无数据）。当前该端点为
+  静态清单 + 诚实降级标注（capability-governance PR #204）。
 
 ## 3. 提交纪律
 
