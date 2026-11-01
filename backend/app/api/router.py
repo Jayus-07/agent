@@ -77,6 +77,7 @@ from backend.app.api.routes import (
     sys_providers,
     tasks,
     travel,
+    travel_inventory,
     workflows,
 )
 from backend.app.api.routes.health import router as health_router
@@ -165,6 +166,7 @@ api_router.include_router(agent_chat_tasks.router)
 api_router.include_router(admin_tasks.router)  # 管理端任务中心（管理员闸 + 操作审计）
 api_router.include_router(maps.router)  # 腾讯位置服务代理（前端调 /api/map/*，Key 不出后端）
 api_router.include_router(travel.router)  # 旅游域 REST：plan/ICS导出/反馈/偏好/推荐（2026-09-22）
+api_router.include_router(travel_inventory.router)  # capability-governance G5: 旅游域意图目录（静态清单+统计降级标注）
 api_router.include_router(travel_v2_router)  # 旅游 V2：独立 Trip/Revision/Template 数据接口
 api_router.include_router(question_ledger.router)  # 线上问题台账（候选评测集供给侧，2026-10-08 #13）
 api_router.include_router(report_files.router)  # 报告图表 artifact 只读服务（图表落盘改造配套）

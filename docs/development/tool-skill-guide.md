@@ -50,6 +50,32 @@
   只读测试调用）。写操作工具不能通过测试调用裸测，必须走真实业务链的
   确认/审批/幂等机制。
 
+## 域清单协议（domain capability inventory，G5）
+
+域图域（customer_service / travel / 未来新域）对外提供**意图级能力目录**的统一形状，
+供运营视图与治理对账消费；主图不走本协议——主图 capability 清单即主图目录
+（`GET /capabilities`，B13 形状），两者映射为「主图条目 = capability，域条目 = 意图」。
+
+约定（新域照抄，禁止私搭平行形状）：
+
+- 端点：`GET /<domain>/capabilities/inventory?range=today|d7|d30`，全部只读。
+- 响应形状：`{domain, range, total, stats_available, intents:[{intent,
+  description, stats:{calls, handoff_rate, unresolved}}], totals?}`；
+  `range` 非法值回退 `d7`（静态清单无窗口语义时可整段降级）。
+- **意图清单与描述是代码唯一事实源**：与意图枚举/路由定义同文件声明
+  （参照 `backend/travel/core/intent.py::INTENT_DESCRIPTIONS`），禁止
+  端点内手写第二份清单或从前端透传。
+- **权限**：跨坐席运营视图 ≥ supervisor 口径（cs 域为 supervisor-only，
+  `AgentContext.is_supervisor` 判定；无运营角色的域对齐该域 REST 只读
+  身份闸）；租户闸必须收口——统计 join 不得跨租户。
+- **统计诚实降级**：域无数据面（无意图打点/dashboard）时
+  `stats_available: false` + `stats_note` 说明，`calls=0 / handoff_rate=null /
+  unresolved=0`——不伪造数值、不假装有统计。补齐数据面后翻正
+  `stats_available` 并保持形状不变（契约只追加）。
+- 参照实现：cs 域 `backend/app/api/routes/cs_inventory.py`（运行时统计，
+  G4）、travel 域 `backend/app/api/routes/travel_inventory.py`（静态清单 +
+  降级标注，G5）；管理端 `/capability-inventory` 页消费。
+
 ## Tool 与 Skill 输出契约
 
 每个 Skill 都要显式声明 `text` 或 `structured` 输出类型，并与其实际 Tool 结果保持一致：
