@@ -1044,6 +1044,7 @@ capabilities:
   # 收编重构 U4（2026-11-01）：旅游域无状态查询/报价能力开放给主图编排面
   - name: travel.food_search
     skill: travel_food
+    owner: platform-team
     description: 检索城市餐饮商户候选（高德），返回名称、评分、营业状态、人均与坐标的结构化列表。适用于「帮我找今晚吃饭的地方」「这家附近有什么馆子」这类餐饮候选查询。注意：返回的是候选池，偏好过滤（不辣/清淡）在旅游域 Dining Scout 编排内做；本能力不做位次安排，也不做预订。
     params_schema:
       city:
@@ -1073,6 +1074,7 @@ capabilities:
 
   - name: travel.hotel_search
     skill: travel_hotel
+    owner: platform-team
     description: 检索城市住宿库存与报价（off/fake/live 三态数据源），返回候选名称、总价、币种、可订状态与报价指纹。适用于「帮我找厦门 500 以内的酒店」这类住宿比价查询。注意：报价是查询时点快照、随时可能变化；实际预订必须走预订确认门显式确认，本能力只查不订；数据源未启用时如实返回不可用，不会展示模拟库存。
     params_schema:
       city:
@@ -1116,6 +1118,7 @@ capabilities:
 
   - name: travel.booking_quote
     skill: travel_booking_quote
+    owner: platform-team
     description: 创建预订报价（不执行预订）：按确定性搜索参数重搜并锁定 offer，返回确认卡（金额、币种、截止时间、幂等标识）。仅在用户明确表达预订意图后使用；报价只是待确认快照，实际下单必须由用户经预订确认门显式确认。数据源未开通时如实拒绝，不产生任何报价。
     params_schema:
       commerce_type:
