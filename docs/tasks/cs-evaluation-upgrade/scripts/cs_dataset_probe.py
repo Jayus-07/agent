@@ -12,13 +12,14 @@
 
 2026-11-01 基线：intent 40.6% / target 52.8% / risk 63.4%（逐类目见 TASK §1.1）。
 2026-11-02（P1 核对修正）：TARGET_MAP 的 human_handoff 由 cs_human 改为 cs_handoff
-（数据集 target 值域实为 cs_handoff，17 条 handoff 用例此前被系统性误判 miss）；
-修正后基线 intent 40.6% / target 57.2% / risk 63.4%，即门禁
-backend/tests/customer_service/test_cs_decision_replay.py 的锁定基线。
-v2/ 分片 2026-11-02 治理定案改名 v2.deprecated/（与锁版 300 条逐字段一致 +
-4 条未收编候选，详见 datasets/README.md）。
-P1 已将本脚本固化为 pytest 门禁（backend/tests/customer_service/
-test_cs_decision_replay.py），阈值防退化：intent≥0.40 / target≥0.56 / risk≥0.60。
+（数据集 target 值域实为 cs_handoff，17 条 handoff 用例此前被系统性误判 miss）。
+2026-11-02（P2 数据集升 v2.1）：修订 faq k_policy/k_faq 标注口径（规则层 k_policy=
+显式政策词命中、k_faq=设计内兜底）+ 22 条 intent→target 映射矛盾，依据见 manifest
+notes；v2.1 全量回放 intent 53.4% / target 60.0% / risk 63.4%（320 口径）。
+门禁（backend/tests/customer_service/test_cs_decision_replay.py）口径：
+multi_turn 整类与 safety 的 risk 维度离线 skip，基线 intent 56.8%（159/280）/
+target 62.9%（176/280）/ risk 72.5%（174/240），阈值防退化
+intent≥0.55 / target≥0.61 / risk≥0.71。
 """
 import json
 import sys
