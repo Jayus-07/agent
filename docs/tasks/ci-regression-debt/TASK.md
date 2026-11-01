@@ -1,8 +1,9 @@
 # CI 全量回归暗债清偿
 
 > 任务 ID：ci-regression-debt
-> 创建：2026-10-30；最近交接：2026-11-01（第四批会话，批十三 + 定性修正两处）
-> 状态：IN_PROGRESS（**批十三 backend-root 54 例已清偿合入 #188；v16 全量 10/13 绿，travel 已二连修（#190/#191）；剩余：rag 批首曝清偿 + backend-root/api 全绿基线确认——续工直接按文末「交接（2026-11-01 第四批）」章节执行**）
+> 创建：2026-10-30；收官：2026-11-02（批十五会话，五~八波 + 四波诊断轮）
+> 状态：COMPLETED（**v28 run 41358679667 = run success：13/13 suite 全绿 + Regression summary 绿，收敛曲线 v1 108 → 0**。三长套疑难全部根除：rag worker crash（pytest-timeout thread watchdog os._exit，根因链见 PROGRESS 批十五）、api/backend-root hang（#197 task_resume 真派发 + #231 长书预算 + 诊断资产）、跨 worker 共享状态家族（redis 分片/ContextVar 预算/信号量闭包绑定）。批十五 PR：#225/#231/#233/#234/#237/#239/#242/#243/#245/#247/#248。）
+
 
 ## 目标
 
@@ -184,11 +185,12 @@ v14 首曝（v5/v6 该 suite 均被 runner 杀掉从未跑完）。pytest_out.tx
 ## 四、验收（更新）
 
 - [x] backend-root 清零（批十三 #188；CI 全绿基线待 v17/v18 确认）
-- [ ] rag 清零（批十四：tracer_subscribe hang 定性修复 + CI 失败清单清偿）
-- [ ] travel 定向/全量绿（#190+#191 后）
-- [ ] api 全绿（从全量取，#190 后 timeout 不再杀）
-- [ ] 全量 dispatch → 13 suite + summary 全绿 → TASK.md COMPLETED
-- [ ] 曲线补记：v16 1+3 cancelled（travel 1 + 三长 suite 超时）→ v17 → 0
+- [x] rag 清零（批十四 #194 tracer_subscribe hang + 批十五 #225 node down 根因 + #231/#234/#237/#245 首曝清偿；v23 起 rag 稳定全绿）
+- [x] travel 定向/全量绿（#190+#191+#247 bulkhead 闭包绑定；v23 起稳定全绿）
+- [x] api 全绿（v23 起；#197 后 150min hang 消失，v25 起稳定全绿）
+- [x] backend-root 全绿（v23 起；#247 checkpointer 单例化后稳定）
+- [x] 全量 dispatch → 13 suite + summary 全绿 → **COMPLETED（v28 run 41358679667 = run success）**
+- [x] 曲线补记：v16 1+3 cancelled → v17/v18 三长套 150min 杀 → v19 9+130 首曝 → v20 9+13 → v21 12+3 → v22 12+4 → v23 12+2 → v24 12+1 → v25 12+3 → v26 10+3 → v27 11+2 → **v28 13/13 全绿**
 
 ---
 
@@ -209,3 +211,41 @@ v14 首曝（v5/v6 该 suite 均被 runner 杀掉从未跑完）。pytest_out.tx
 ## 三、收敛现状
 
 v18（41278306848，HEAD 2bf930b）：11/13 suite success（含 misc/orchestration/cs/prompts/travelv2/evaluation/repo-tests/sql-infra/tools-security-obs/evaluation）；rag/backend-root/api 三 job 150min 被杀。批十四修复（#197）在 v19 起生效。**v19 起唯一未知数 = 三长套的 hang**，10 个短套已稳定全绿。
+
+---
+
+# 收官（2026-11-02 批十五会话：三长套根除 + 全绿 COMPLETED）
+
+## 一、批十五已合 PR（时序即依赖）
+
+| PR | 内容 |
+|---|---|
+| #225 | rag 96% node down **根因清偿**：pytest.ini 全局 timeout_method=thread → watchdog 对卡死重用例 os._exit(1) 整进程（栈输出来不及写管道 → xdist 只见 EOF）；卡死点=integrity 用例 28 文档全链（progit 501p find_tables/coverage_audit + 157 页 OCR）。修：长书 UF-14-01/02 显式移出 + OCR 预算 500 + timeout(900)；附 xdist 诊断三件套（watchdog 栈落盘/心跳/START-DONE 打点）+ workflow -u + collect-only 探针 |
+| #231 | v19 首曝 130 例清偿（rag 74F+6E / api 34E / br 7F / misc 5F / travel 2F；含 scorer NLI_USE_LLM=false UnboundLocalError 真产品修复、chunking table_row 字面量违规、6 文件 .env 依赖收口、map_lookup ContextVar 预算重置） |
+| #233 | v20 残余 13 例（专用 PGDATABASE 键族显式化——SELECTION 等 5 键掉兼容库第四次家族复发；residue guard 先 ensure_schema；lineage chunk_store 重建；query_router 审核可见性层 stub；cs fine_router 对齐 af32718；sse_resume finish 竞态） |
+| #234 | residue guard 模型行 name 唯一化（跨 worker 撞 llm_models_pkey） |
+| #237 | redis 分片（fixtures/redis_test.py，flushdb 跨 worker 互删——heartbeat 恒红真根因）+ usage 单例重置建表（metered 分表）+ **consistency 对账前刷新快照**（真产品改进） |
+| #239 | consistency 快照刷新纳入 DB 不可用 stub 口径 |
+| #242 | HB-DEBUG 补键空间全貌（token_exists/ttl/all_keys） |
+| #243 | consistency 补齐 bundle_store 快照刷新 + e2e 清理顺序 + budget_reserve 下限 15→5 |
+| #245 | e2e grants 表名修正（ai.product_bundle_grants）+ 模块收尾兜底清孤儿 bundle + cleanup_residue stale_only 参数（CI 收口重建锁残留）+ **travel bulkhead 闭包绑定**（done_callback 运行时查模块属性向外来信号量 release——真产品一行） |
+| #247 | **build_task_checkpointer 单例化**（每调用新建 ConnectionPool 泄漏至 PG 连接耗尽，三 worker 同卡 setup 被 watchdog 杀 → xdist INTERNALERROR——真产品缺陷）+ 治理测试共享残留兜底 |
+| #248 | 本收官文档 |
+
+## 二、三长套根因终版（推翻/确认记录）
+
+- **rag node down** = pytest-timeout thread watchdog os._exit（非死锁/段错误）；卡死点=integrity 重用例的纯 Python 分钟级链路 + OCR。#194 修的是「GIL 死锁」形态，#225 修的是「watchdog 兜底杀」形态——同文件两代卡点。
+- **api/backend-root 150min hang** = v17/v18 时代的 task_resume 真派发卡死（#197 已修，v19 起消失）+ v27 的 checkpointer 池泄漏（#247 修）。0 字节 = 全缓冲（workflow 已 -u 根治可见性）。
+- **跨 worker 共享状态三家族**（xdist 全量的结构性竞争）：Redis db 共享 flushdb 互删（#237 分片）、ContextVar/模块级单例跨用例残留（#231 预算重置/#245 信号量闭包）、共享 memory 库的跨 suite 治理数据（#233 键族显式化/#243 快照刷新/#247 残留兜底）。
+
+## 三、诊断资产（保留，后续复用）
+
+- conftest 诊断三件套（PYTEST_XDIAG=1 opt-in）：watchdog os._exit 前栈落盘、faulthandler 心跳（GIL 死锁/收集期卡死兜底）、START/DONE 打点——v19/v27 两轮的卡死定位全靠它。
+- workflow：python -u（0 字节根治）、collect-only 收集期探针、xdiag artifact。
+- HB-DEBUG / renew_stats / 诊断断言模式（坑位 18）：v24/v25/v26/v27 各一次 dispatch 拿决定性证据。
+
+## 四、任务完结
+
+- **v28 run 41358679667：13/13 suite success + Regression summary 绿，run success。**
+- 曲线：v1 108 → v2 61 → v3 20 → v5 15 → v14 54+ → v19 130（首曝清空后）→ v20 13 → v21 3 → v22 4 → v23 2 → v24 1 → v25 3 → v26 3 → v27 2 → **v28 0**。
+- 未竟事项（移交产品域，非 CI 债）：progit_en_501p 全预算 OCR 下仍有 4 个 PDF 解析硬异常（纯图页无文本产出/source_text 审计缺口）——见 #225 PR 描述。
