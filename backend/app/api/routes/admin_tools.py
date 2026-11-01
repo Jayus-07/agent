@@ -1184,4 +1184,107 @@ async def list_failure_analyses(request: Request, limit: int = 10):
         raise _HTTP(503, f"失败分析查询失败: {e}")
 
 
+# G6 按域成本归因（capability-governance）：llm_usage ⋈ trace_summary。
+# join 伙伴是 013 迁移同源的 trace_summary（有 workflow_name），**不是**
+# 020 的 ai.trace_records（新链路，实测与 llm_usage.trace_id 零相交——
+# 2026-11-01 覆盖率验证，见任务 PROGRESS）。零 schema 改动，纯只读 join。
+_USAGE_BY_DOMAIN_SQL = """
+    SELECT t.workflow_name                                   AS domain_key,
+           count(*)                                          AS usage_rows,
+           sum(u.total_tokens)                               AS total_tokens,
+           sum(u.cost_usd)                                   AS cost_usd,
+           count(*) FILTER (WHERE u.component = 'llm')       AS llm_calls,
+           count(*) FILTER (WHERE u.component = 'embedding') AS embedding_calls,
+           count(*) FILTER (WHERE u.component = 'rerank')    AS rerank_calls
+    FROM public.llm_usage u
+    JOIN trace_summary t ON t.trace_id = u.trace_id
+    WHERE u.trace_id <> ''
+      AND u.created_at >= %(start)s AND u.created_at < %(end)s
+    GROUP BY t.workflow_name
+    ORDER BY cost_usd DESC
+"""
+
+_USAGE_COVERAGE_SQL = """
+    SELECT count(*)                                                       AS total_rows,
+           count(*) FILTER (WHERE u.trace_id <> '')                       AS with_trace_id,
+           count(*) FILTER (WHERE t.trace_id IS NOT NULL)                 AS joined_rows,
+           round(sum(u.cost_usd)::numeric, 6)                             AS total_cost_usd,
+           round(sum(u.cost_usd) FILTER (WHERE t.trace_id IS NOT NULL)
+                 ::numeric, 6)                                            AS joined_cost_usd
+    FROM public.llm_usage u
+    LEFT JOIN trace_summary t ON t.trace_id = u.trace_id
+    WHERE u.created_at >= %(start)s AND u.created_at < %(end)s
+"""
+
+
+@router.get("/usage-by-domain")
+async def usage_by_domain(request: Request, days: int = 7):
+    """LLM 成本按域（workflow_name）归因报表（G6，只读 join 报表）。
+
+    零 schema 改动：llm_usage（013）⋈ trace_summary（013 同源，带
+    workflow_name）。join 覆盖率在响应 coverage 段显式披露（未命中行
+    多为无 workflow 上下文的 embedding/rerank 批任务），不伪造 100%。
+    """
+    await require_editor_user(request)
+    from datetime import datetime, timedelta, timezone
+
+    days = max(1, min(days, 90))
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(days=days)
+    # llm_usage.created_at 是 TEXT（ISO8601 UTC，013 设计为字典序过滤）——
+    # 传 ISO 字符串而非 datetime 对象
+    params = {"start": start.isoformat(), "end": end.isoformat()}
+
+    def _read() -> dict[str, Any]:
+        from backend.config.database import OBS_DB_PG_CONFIG
+        from backend.infra.db import engine_for
+
+        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(_USAGE_BY_DOMAIN_SQL, params)
+                cols = [d[0] for d in cur.description]
+                domains = [dict(zip(cols, row)) for row in cur.fetchall()]
+                cur.execute(_USAGE_COVERAGE_SQL, params)
+                ccols = [d[0] for d in cur.description]
+                coverage = dict(zip(ccols, cur.fetchone()))
+
+        def _num(v):
+            return round(float(v), 6) if v is not None else 0.0
+
+        joined = int(coverage.get("joined_rows") or 0)
+        total = int(coverage.get("total_rows") or 0)
+        return {
+            "scope": "db-join",
+            "window_days": days,
+            "coverage": {
+                "total_usage_rows": total,
+                "with_trace_id": int(coverage.get("with_trace_id") or 0),
+                "joined_rows": joined,
+                "coverage_ratio": round(joined / total, 4) if total else None,
+                "total_cost_usd": _num(coverage.get("total_cost_usd")),
+                "joined_cost_usd": _num(coverage.get("joined_cost_usd")),
+                "join_partner": "trace_summary (migration 013, workflow_name)",
+            },
+            "domains": [
+                {
+                    "domain_key": d["domain_key"] or "(null)",
+                    "usage_rows": int(d["usage_rows"]),
+                    "total_tokens": int(d["total_tokens"] or 0),
+                    "cost_usd": _num(d["cost_usd"]),
+                    "by_component": {
+                        "llm": int(d["llm_calls"]),
+                        "embedding": int(d["embedding_calls"]),
+                        "rerank": int(d["rerank_calls"]),
+                    },
+                }
+                for d in domains
+            ],
+        }
+
+    try:
+        return await asyncio.to_thread(_read)
+    except Exception as e:  # noqa: BLE001 — 只读报表软失败转 503
+        raise _HTTP(503, f"按域用量查询失败: {e}")
+
+
 __all__ = ["router"]
