@@ -12,10 +12,12 @@ import json
 from typing import Any
 
 from backend.config import map as map_config
+from backend.config import mcp as MCP_CFG
 from backend.shared.logger import logger
 from backend.tools.map.merchant import map_merchant_search_tool
 from backend.tools.map.place import map_place_search_tool
 from backend.tools.search.zhihu import global_search_tool, zhihu_search_tool
+from backend.tools.travel import train_dynamic
 from backend.tools.travel.train import (
     _localize_seats,
     travel_train_price_tool,
@@ -39,7 +41,7 @@ def _search_error_category(status: Any = None, message: str = "") -> str:
         "timeout", "timed out", "connection timeout", "超时",
     )):
         return "network_timeout"
-    if "未启用" in message or "disabled" in text:
+    if "未启用" in message or "未生效" in message or "disabled" in text:
         return "disabled"
     if value == "unavailable" or value == "rate_limited" or any(token in text for token in (
         "配额", "限流", "未配置", "不可用",
@@ -175,16 +177,41 @@ def search_hotels(city: str) -> dict[str, Any]:
 
 def search_trains(*, from_station: str, to_station: str,
                   travel_date: str, limit: int = 6) -> dict[str, Any]:
-    """调用 12306 MCP Tool，返回车次数据，不把失败映射成空车次。"""
-    raw = _invoke(
-        travel_train_search_tool, "travel_train_search_tool",
-        capability="travel.train.search", agent="planning",
-        from_station=from_station,
-        to_station=to_station,
-        date=travel_date,
-        limit=limit,
-    )
-    return _decode_success(raw, "travel_train_search_tool")
+    """调用 12306 MCP Tool，返回车次数据，不把失败映射成空车次。
+
+    通道选择（T1）：动态 capability 在场优先 → 动态从未配置时按
+    TRAIN_MCP_ENABLED 回退静态直连 → 皆无如实「未启用」。已登记但未生效
+    （未审批/已撤销/漂移）fail-closed 拒绝，不回退静态绕过治理。
+    """
+    capability = train_dynamic.train_search_capability()
+    state, reason = train_dynamic.train_channel(capability)
+    if state == train_dynamic.CHANNEL_DYNAMIC:
+        logger.info("[LiveSearch] train channel=mcp_dynamic capability=%s",
+                    capability)
+        raw = _invoke(
+            train_dynamic.TrainDynamicSearchChannel(),
+            "travel_train_search_tool",
+            capability="travel.train.search", agent="planning",
+            from_station=from_station,
+            to_station=to_station,
+            date=travel_date,
+            limit=limit,
+        )
+        return _decode_success(raw, "travel_train_search_tool")
+    if state == train_dynamic.CHANNEL_CONFIGURED_INACTIVE:
+        raise LiveSearchError(reason, category="disabled")
+    if MCP_CFG.is_train_mcp_enabled():
+        logger.info("[LiveSearch] train channel=static_direct")
+        raw = _invoke(
+            travel_train_search_tool, "travel_train_search_tool",
+            capability="travel.train.search", agent="planning",
+            from_station=from_station,
+            to_station=to_station,
+            date=travel_date,
+            limit=limit,
+        )
+        return _decode_success(raw, "travel_train_search_tool")
+    raise LiveSearchError("12306 车票查询未启用", category="disabled")
 
 
 def search_places(*, keyword: str, city: str,
@@ -205,16 +232,40 @@ def search_places(*, keyword: str, city: str,
 def search_train_price(*, from_station: str, to_station: str,
                        travel_date: str, train_code: str) -> dict[str, Any]:
     """调用 12306 票价 MCP Tool（单车次）。失败上抛 LiveSearchError，
-    由调用方按行降级——票价缺行只影响展示，不影响车票数据本体。"""
-    raw = _invoke(
-        travel_train_price_tool, "travel_train_price_tool",
-        capability="travel.train.search", agent="planning",
-        from_station=from_station,
-        to_station=to_station,
-        train_date=travel_date,
-        train_code=train_code,
-    )
-    return _decode_success(raw, "travel_train_price_tool")
+    由调用方按行降级——票价缺行只影响展示，不影响车票数据本体。
+
+    通道选择与 search_trains 同口径（动态优先 → fail-closed → 静态回退 →
+    如实关停），按票价 capability 独立判定。
+    """
+    capability = train_dynamic.train_price_capability()
+    state, reason = train_dynamic.train_channel(capability)
+    if state == train_dynamic.CHANNEL_DYNAMIC:
+        logger.info("[LiveSearch] train_price channel=mcp_dynamic capability=%s",
+                    capability)
+        raw = _invoke(
+            train_dynamic.TrainDynamicPriceChannel(),
+            "travel_train_price_tool",
+            capability="travel.train.search", agent="planning",
+            from_station=from_station,
+            to_station=to_station,
+            train_date=travel_date,
+            train_code=train_code,
+        )
+        return _decode_success(raw, "travel_train_price_tool")
+    if state == train_dynamic.CHANNEL_CONFIGURED_INACTIVE:
+        raise LiveSearchError(reason, category="disabled")
+    if MCP_CFG.is_train_mcp_enabled():
+        logger.info("[LiveSearch] train_price channel=static_direct")
+        raw = _invoke(
+            travel_train_price_tool, "travel_train_price_tool",
+            capability="travel.train.search", agent="planning",
+            from_station=from_station,
+            to_station=to_station,
+            train_date=travel_date,
+            train_code=train_code,
+        )
+        return _decode_success(raw, "travel_train_price_tool")
+    raise LiveSearchError("12306 票价查询未启用", category="disabled")
 
 
 def train_price_preview(data: dict[str, Any]) -> dict[str, Any]:
