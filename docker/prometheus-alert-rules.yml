@@ -607,6 +607,41 @@ groups:
           summary: "Tool 失败率超过 10%（10 分钟窗口）"
           description: "失败含 timeout/unavailable/rate_limited/failed 四态。按 tool/domain 标签定位失败 Tool（Grafana 03 页排名表），再进管理端 Trace 按时间窗过滤；供应商侧故障看 05 页 LLM 维度。治理层重试已内置，持续超阈值先查外部依赖连通性"
 
+      # G2 治理对账（capability-governance）：未注册调用 = 路由漂移/漏登记，
+      # 出现即为异常（正常链路 capability 全部来自 manifest/lock/MCP 动态注册）。
+      - alert: ToolUnregisteredCallDetected
+        expr: increase(agent_tool_unregistered_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "出现未注册 Tool 调用（治理对账漂移信号）"
+          description: "未注册 = 策略注册表与 MCP 动态快照均无该 tool_key，运行时按 DEFAULT_POLICY 兜底继续执行（不拒绝）。按 tool/domain 标签定位调用来源：新工具漏登记走登记流程补策略；路由漂移核对 capabilities.yaml 与 Skill 注册表（管理端 /skills 对账列）；探针/测试流量（probe./test. 前缀）不计入本指标"
+
+      # 失败率环比突增（相对基线）：当前 10m 失败率 > 2× 上一小时基线，
+      # 且当前失败率绝对值 >2%、有最低流量——抓早期劣化（绝对阈值
+      # ToolFailureSpike 之前），基线为 0 的全新失败同样只要求 >2% 起报。
+      - alert: ToolFailureRateSuddenJump
+        expr: |
+          (
+            sum(rate(agent_tool_failure_total[10m]))
+              / clamp_min(sum(rate(agent_tool_calls_total[10m])), 0.001)
+          ) > 2 * (
+            sum(rate(agent_tool_failure_total[1h] offset 10m))
+              / clamp_min(sum(rate(agent_tool_calls_total[1h] offset 10m)), 0.001)
+          )
+          and (
+            sum(rate(agent_tool_failure_total[10m]))
+              / clamp_min(sum(rate(agent_tool_calls_total[10m])), 0.001)
+          ) > 0.02
+          and sum(rate(agent_tool_calls_total[10m])) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool 失败率环比突增（>2× 上一小时基线且当前 >2%）"
+          description: "与 ToolFailureSpike（绝对阈值 10%）互补，抓高位前的早期劣化。按 tool/domain 标签对比突增前后窗口的失败构成（管理端 /admin/tools/stats top_failed_tools + top_error_classes），先看 error_class 是否集中（传输类=依赖故障，执行类=代码/配置变更）；灰度/发布窗口内出现优先回滚最近变更"
+
       - alert: ToolTimeoutSpike
         expr: |
           sum(rate(agent_tool_timeout_total[10m]))

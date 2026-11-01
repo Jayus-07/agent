@@ -143,5 +143,20 @@ def record_circuit_open(tool: str) -> None:
     _record("agent_tool_circuit_open_total", {"tool": tool})
 
 
+def record_tool_unregistered(tool: str, domain: str = "") -> None:
+    """未注册 tool_key 调用计数（G2 治理对账）。
+
+    「未注册」= 策略注册表与 MCP 动态快照均无该 key（is_registered 为
+    False，get_policy 已兜底 DEFAULT_POLICY 继续执行——不拒绝，只记账）。
+    正常链路的 capability 全部来自 manifest 声明 / lock 契约 / MCP 动态
+    注册，出现未注册调用 = 路由漂移或新工具漏登记（告警规则
+    ToolUnregisteredCallDetected）。探针/测试流量不计，与
+    record_tool_result 的生产口径一致。
+    """
+    if tool.startswith(_NON_PRODUCT_KEY_PREFIXES):
+        return
+    _record("agent_tool_unregistered_total", {"tool": tool, "domain": domain})
+
+
 def record_request_degraded(domain: str = "workflow") -> None:
     _record("agent_request_degraded_total", {"domain": domain})
