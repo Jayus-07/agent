@@ -41,11 +41,14 @@ def test_provider_bulkhead_rejects_fifth_call_without_queuing(monkeypatch):
             thread = threading.Thread(target=run, args=(i,))
             threads.append(thread)
             thread.start()
-        assert all(event.wait(1) for event in started)
+        # 等待窗口只覆盖线程调度（2 核 runner 慢时 1s 内可能起不来，
+        # v16 run 41264049361 实证）；拒绝本身是同步即时的（acquire
+        # blocking=False），语义断言在 fifth_result == ["rejected"]
+        assert all(event.wait(5) for event in started)
         thread = threading.Thread(target=fifth)
         threads.append(thread)
         thread.start()
-        assert fifth_finished.wait(0.3)
+        assert fifth_finished.wait(5)
         assert fifth_result == ["rejected"]
     finally:
         release.set()
