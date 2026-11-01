@@ -56,10 +56,10 @@
 | 前置任务 travel-v2-production | P1–P5：rollinggo live 接线、F18 card、F04/F02/F05、F17 布局+原型对齐、跳转型预订、验收 7 场景 | ✅ 全部合并 | #205/#208/#209/#210/#212/#213/#214/#217/#219/#220 |
 | 计划定稿 | 原型生产化 TASK/PROGRESS + 差距矩阵 v0 + 决策点 | ✅ 合并 | #222/#224 |
 | **T1 12306 迁管理端能力中心**（用户已决策 b） | 正式连接 `12306` 登记（private 内网）→ discover → approve query-tickets/query-ticket-price → agent 授权（黄金证据）；live_search_service 车次/票价查询加动态通道（动态在场优先→静态直连回退→disabled 如实）；三态/撤销 fail-closed/契约回放测试；govtest 残留清理；rag_smoke 登记 | ✅ 代码+治理+运行态验收完成（2026-11-02），待提交 PR | 分支 `feat/travel-12306-dynamic-capability`（见下「T1 执行记录」） |
-| **D0 侦察定稿** | 差距矩阵到锚点级（决策点 1/2/3/4 已于 2026-11-02 定稿，见 TASK §5）；TASK §2 升 v1 | ⬜ 待开工（T1 合并后） | 矩阵 v1 落 PROGRESS |
+| **D0 侦察定稿** | 差距矩阵到锚点级（决策点 1/2/3/4 已于 2026-11-02 定稿，见 TASK §5）；TASK §2 升 v1 | ✅ 完成（2026-11-02，见下「D0 侦察记录」） | 矩阵 v1 入 TASK §2 |
 | P1 设计令牌与全局骨架 | Tailwind 令牌 + TopBar 胶囊/头像钮 + BottomNav 四项 + 头像抽屉 | ⬜ | PR + 原型点测 |
-| P2 首页复刻 | Hero/快捷查询/模板照片卡/最近行程照片卡/空态 | ⬜ | PR + H1-H7 全勾 |
-| P3 工作台功能块 | 概览卡统计块/天数条 segment+行内加天/候选卡形态 | ⬜ | PR + W1-W7 全勾 |
+| P2 首页对照校对（v1 降级） | H1-H7 逐屏对照原型点测，只修真差异（#220 已落 Hero/胶囊/照片卡等全量） | ⬜ | 校对清单 + H1-H7 全勾 |
+| P3 工作台功能块 | 概览统计块（W2 新建）/天数条 segment+行内加天（W3）/候选卡形态校对（W7）/通知条措辞（W11） | ⬜ | PR + W2/W3 全勾 |
 | P4 生成流进工作台（最重） | 首页输入→工作台生成态（中列生成面板+右列对话伴随）；chat 页废弃重定向（决策 5 已定） | ⬜ | 2-3 个 PR + 全流程点测 |
 | P5 历史/列表/地图形态 | 历史时间线/两列表页/地图多源回退 | ⬜ | PR + L/W9/W14 全勾 |
 | P6 总验收 | 原型全页面点测 + 移动端 + 408/tsc + rebuild 全链 | ⬜ | 用户逐页验收 |
@@ -145,9 +145,33 @@
 - **决策点 1/2/3/4 已定稿**（2026-11-02 用户确认推荐项，TASK §5 已更新）：悬浮窗不落生产、撤销保留真实语义、照片先用 Unsplash、抽屉三项导航。D0 剩余范围 = 差距矩阵到锚点级 + TASK §2 升 v1。
 - 验证方式备忘：容器内裸进程无快照，service 级验证前需 `asyncio.run(mcp_store.refresh())`（app 进程有 15s 轮询不受影响）；真实上游车次条目键为 `train_no`（无 `train_code`），取码逻辑用 `train_code or train_no`。
 
+### D0 侦察记录（2026-11-02 完成，分支 docs/travel-proto-d0-matrix）
+
+### v1 头号发现：v0 矩阵的首页/列表页判定已过时
+
+v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两列表页标为「新功能/形态对齐」，但 **#220（travel-proto-alignment）在 v0 侦察之后才合并**，且原型第 13–18 轮本身就是「向真实平台对齐」——两者已双向收敛。v1 逐项实测（原型 242KB 锚点提取 + 真实组件代码核对）结论：
+
+- **已对齐（占多数）**：G2/G4、H1–H7 全部、W1/W4–W14、L1–L3——真实侧锚点全部核实（TravelV2Frame.tsx 四件套、TravelHome.tsx Hero+照片+胶囊、itineraries 红色删除钮+弹窗、TravelTemplateCatalog、TravelV2Map 琥珀标记+图例、HistoryPanel 恢复语义 :106）。
+- **真差距（剩余新建量）**：
+  1. **F1 生成流迁工作台**（P4，最重，L）——chat 页生成 → 工作台内生成+对话伴随（决策 5 含 chat 废弃重定向）；
+  2. **W2 概览统计块**（P3，M）——现仅单行 brief，原型六行统计（天气/花费取数口径需设计）；
+  3. **W3 天数条形态**（P3，S-M）——现为横向滚动日期卡，原型 segment 药丸+行内「＋增加一天」；
+  4. **G3「我的」按钮接抽屉**（P1，S）——现跳 /settings，原型/决策 4=开抽屉；
+  5. **G1 令牌微调**（P1，S）——色彩已同源 #2878f5 体系，补 Tailwind theme 高频值+工作台视觉校对。
+- **新增排除项**：W14 三源 CDN 回退（原型单文件演示设施；真实 npm leaflet 打包无此需求）。
+- **风险提示**：G4 头像抽屉=共享布局组件 MobileAssistantDrawer（layout/，其他域在用），P1 改动前必须查消费面；travelTheme.ts 青绿体系属行程概念页内部，与原型的蓝体系不冲突，不要误改。
+
+### 设计令牌基础（P1 输入）
+
+原型 CSS 实测：无 CSS 变量（扁平 tp-* class，~1245 规则块）；高频值 = 主蓝 #2878f5、深墨 #263b55/#344b66、软底 #f4f8fd、描边 #e4ebf3、圆角 12px/胶囊 9999/8px、字号 11px 基准（38/32px 标题档）。真实 Frame/Home 已用同色系——P1 做增量收口，不建第二套主题。
+
+### 点测基建备忘
+
+原型锚点：data-test 19 个（opt/book/tz/convbad/ics/dayops/gen/edit/leg/train/food/hotel/detail/reorder/add/rain/tzoff/undo/editcard）+ 页面容器 id（tp-pg-home/ws/its/tpl）+ 关键函数（renderOv/dayChipHTML/checkpointTrip/setupMap/downloadRevisionICS 等）。坑清单 HANDOFF §2/§7 必读（可见性置真、锁 tab.id、轮询断言、`:where(#travel-platform-proto) button` 特异性）。
+
 ### 下一步
 
-- PR #232 CI 过后用户确认合并 → D0 侦察定稿（矩阵锚点级）→ P1–P6。
+- P1 设计令牌与全局骨架（G1 令牌增量 + G3 我的接抽屉）→ P3 工作台功能块（W2/W3）→ P4 生成流迁移（最重）→ P2/P5 校对类穿插 → P6 总验收。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
