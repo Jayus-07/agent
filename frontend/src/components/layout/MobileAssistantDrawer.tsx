@@ -32,6 +32,9 @@ type AvatarPresetId = (typeof AVATAR_PRESETS)[number]['id']
 
 const AVATAR_EVENT = 'assistant-avatar-preset-change'
 
+/** 外部打开抽屉的全局信号（如手机底导「我的」按钮）；模块级导出供派发方引用。 */
+export const ASSISTANT_DRAWER_OPEN_EVENT = 'assistant-drawer-open'
+
 function isAvatarPresetId(value: string | null): value is AvatarPresetId {
   return AVATAR_PRESETS.some((preset) => preset.id === value)
 }
@@ -39,10 +42,12 @@ function isAvatarPresetId(value: string | null): value is AvatarPresetId {
 interface MobileAssistantDrawerProps {
   /** 仅由支持会话历史的页面注入；选中历史后关闭侧栏。 */
   historyContent?: (onSelectSession: () => void) => ReactNode
+  /** 自定义导航区（缺省 = 返回门户/记忆）。interactive 跟随抽屉开合（焦点管理），链接点击后调 close。 */
+  navContent?: (close: () => void, interactive: boolean) => ReactNode
 }
 
 /** 三个助手页面共用的手机端个人侧栏。 */
-export default function MobileAssistantDrawer({ historyContent }: MobileAssistantDrawerProps) {
+export default function MobileAssistantDrawer({ historyContent, navContent }: MobileAssistantDrawerProps) {
   const [open, setOpen] = useState(false)
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false)
   const [username, setUsername] = useState('已登录用户')
@@ -91,12 +96,15 @@ export default function MobileAssistantDrawer({ historyContent }: MobileAssistan
         setAvatarPresetId(presetId)
       }
     }
+    const handleOpen = () => setOpen(true)
     window.addEventListener('storage', handleStorage)
     window.addEventListener(AVATAR_EVENT, handleAvatarChange)
+    window.addEventListener(ASSISTANT_DRAWER_OPEN_EVENT, handleOpen)
 
     return () => {
       window.removeEventListener('storage', handleStorage)
       window.removeEventListener(AVATAR_EVENT, handleAvatarChange)
+      window.removeEventListener(ASSISTANT_DRAWER_OPEN_EVENT, handleOpen)
     }
   }, [])
 
@@ -237,26 +245,30 @@ export default function MobileAssistantDrawer({ historyContent }: MobileAssistan
                 aria-label="个人导航"
                 className={`space-y-1 ${historyContent ? 'shrink-0 py-3' : 'flex-1 py-5'}`}
               >
-                <Link
-                  href="/"
-                  onClick={close}
-                  tabIndex={open ? 0 : -1}
-                  className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-primary
-                    transition-colors hover:bg-accent/5 hover:text-accent"
-                >
-                  <House size={18} className="text-text-muted" aria-hidden />
-                  返回门户
-                </Link>
-                <Link
-                  href="/settings#profile-memory"
-                  onClick={close}
-                  tabIndex={open ? 0 : -1}
-                  className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-primary
-                    transition-colors hover:bg-accent/5 hover:text-accent"
-                >
-                  <Brain size={18} className="text-text-muted" aria-hidden />
-                  记忆
-                </Link>
+                {navContent ? navContent(close, open) : (
+                  <>
+                    <Link
+                      href="/"
+                      onClick={close}
+                      tabIndex={open ? 0 : -1}
+                      className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-primary
+                        transition-colors hover:bg-accent/5 hover:text-accent"
+                    >
+                      <House size={18} className="text-text-muted" aria-hidden />
+                      返回门户
+                    </Link>
+                    <Link
+                      href="/settings#profile-memory"
+                      onClick={close}
+                      tabIndex={open ? 0 : -1}
+                      className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-primary
+                        transition-colors hover:bg-accent/5 hover:text-accent"
+                    >
+                      <Brain size={18} className="text-text-muted" aria-hidden />
+                      记忆
+                    </Link>
+                  </>
+                )}
               </nav>
             </div>
           </aside>

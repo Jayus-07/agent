@@ -2,10 +2,33 @@
 
 import type { ReactNode } from 'react'
 import Link from 'next/link'
-import { CalendarDays, CircleUserRound, Compass, Info, Plane, Sparkles } from 'lucide-react'
-import MobileAssistantDrawer from '@/components/layout/MobileAssistantDrawer'
+import { CalendarDays, CircleUserRound, Compass, Info, Plane, Settings, Sparkles } from 'lucide-react'
+import MobileAssistantDrawer, { ASSISTANT_DRAWER_OPEN_EVENT } from '@/components/layout/MobileAssistantDrawer'
 
 export type TravelNavItem = 'home' | 'discover' | 'trips' | 'me'
+
+/** 抽屉导航三项（决策 4：旅游首页/旅行灵感/我的行程 + 账号设置跳平台统一账号页）。 */
+function travelDrawerNav(close: () => void, interactive: boolean): ReactNode {
+  const items = [
+    { href: '/travel', label: '旅游首页', Icon: Plane },
+    { href: '/travel/templates', label: '旅行灵感', Icon: Sparkles },
+    { href: '/travel/itineraries', label: '我的行程', Icon: CalendarDays },
+    { href: '/settings', label: '账号设置', Icon: Settings },
+  ]
+  return items.map(({ href, label, Icon }) => (
+    <Link
+      key={href}
+      href={href}
+      onClick={close}
+      tabIndex={interactive ? 0 : -1}
+      className="flex min-h-11 items-center gap-3 rounded-xl px-3 text-sm font-medium text-text-primary
+        transition-colors hover:bg-accent/5 hover:text-accent"
+    >
+      <Icon size={18} className="text-text-muted" aria-hidden />
+      {label}
+    </Link>
+  ))
+}
 
 export function TravelTopBar({ active = 'home' }: { active?: TravelNavItem }) {
   return (
@@ -24,7 +47,7 @@ export function TravelTopBar({ active = 'home' }: { active?: TravelNavItem }) {
         <Link aria-current={active === 'discover' ? 'page' : undefined} href="/travel/templates" className={`rounded-full px-4 py-2 text-sm transition motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5] ${active === 'discover' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>旅行灵感</Link>
         <Link aria-current={active === 'trips' ? 'page' : undefined} href="/travel/itineraries" className={`rounded-full px-4 py-2 text-sm transition motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5] ${active === 'trips' ? 'bg-[#eaf2ff] font-semibold text-[#236bd5]' : 'text-[#65758b] hover:bg-white'}`}>我的行程</Link>
       </nav>
-      <MobileAssistantDrawer />
+      <MobileAssistantDrawer navContent={travelDrawerNav} />
     </header>
   )
 }
@@ -43,7 +66,6 @@ export function TravelBottomNav({ active }: { active: TravelNavItem }) {
     { key: 'home' as const, label: '首页', href: '/travel', icon: Compass },
     { key: 'discover' as const, label: '发现', href: '/travel/discover', icon: Sparkles },
     { key: 'trips' as const, label: '行程', href: '/travel/itineraries', icon: CalendarDays },
-    { key: 'me' as const, label: '我的', href: '/settings', icon: CircleUserRound },
   ]
   return (
     <nav aria-label="手机导航" className="fixed inset-x-0 bottom-0 z-30 grid h-[68px] grid-cols-4 border-t border-[#e7edf5] bg-white/95 px-2 pb-[env(safe-area-inset-bottom)] shadow-[0_-6px_22px_rgba(30,64,110,.06)] backdrop-blur md:hidden">
@@ -53,6 +75,16 @@ export function TravelBottomNav({ active }: { active: TravelNavItem }) {
           {label}
         </Link>
       ))}
+      {/* 「我的」不开页面，派发全局信号打开个人侧栏抽屉（原型/决策 4 语义） */}
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new CustomEvent(ASSISTANT_DRAWER_OPEN_EVENT))}
+        aria-label="打开个人侧栏"
+        className={`flex min-w-0 flex-col items-center justify-center gap-1 rounded-xl text-[10px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#2878f5] ${active === 'me' ? 'font-semibold text-[#2878f5]' : 'text-[#8895a6]'}`}
+      >
+        <CircleUserRound size={19} strokeWidth={active === 'me' ? 2.5 : 1.8} aria-hidden />
+        我的
+      </button>
     </nav>
   )
 }
