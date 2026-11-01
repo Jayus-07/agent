@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P5 已完成；运营收尾阶段 P6–P8 已立项（TASK §10）——P6 live 跑批预算 10 元用户已拍板，下一会话从 P6 开工**
+- 当前状态：**P1–P6 已完成；下一会话从 P7（case 归档端点）开工——P7/P8 为运营收尾最后两项（TASK §10）**
 
 ## 阶段状态总表
 
@@ -14,8 +14,8 @@
 | P3 | 词表/规则能力补强（cs-gate 护航） | **已完成**（2026-11-02，含候选 4 条收编升 v2.2） | feat/cs-eval-p3 / [PR #229](https://github.com/Jayus-07/agent/pull/229)（merged b770788） | 见日志 2026-11-02（三） |
 | P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | **已完成（offline）**（2026-11-02） | 纯运营操作无代码分支；见日志 2026-11-02（四） | run 1a2ae7da：324/324 pass |
 | P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
-| P6 | P4 live 跑批执行（**预算 10 元，用户 2026-11-02 拍板**）+ 管理端发起/历史核实收口 | 待实施（可开工） | 运营执行 + PROGRESS 回填 | TASK §10 P6 |
-| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | 待实施 | feat/cs-eval-p7（计划） | TASK §10 P7 |
+| P6 | P6 live 跑批（预算 10 元）+ live 通道核实收口 | **已完成（部分验收缺口移交）**（2026-11-02） | feat/cs-eval-p6 / [PR #244](https://github.com/Jayus-07/agent/pull/244)（merged）+ 运营执行 | 324 条全量 197/324（v1 9/20 与离线一致、CS2 188/304=61.8%）；成本 ≈1.05 元；见日志 2026-11-02（六） |
+| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | 待实施（下一会话开工） | feat/cs-eval-p7（计划） | TASK §10 P7 |
 | P8 | 持久化 intake（unanswered_questions → 候选） | 待实施 | feat/cs-eval-p8（计划） | TASK §10 P8 |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
@@ -24,7 +24,8 @@
 
 ## 环境
 
-- Worktree：`D:\Program Files\workplace\agent-gov`（复用；P3 收尾时停靠 docs/cs-eval-p2p3-progress，新分支自最新 origin/main）
+- Worktree：`D:\Program Files\workplace\agent-gov`（复用；P6 收尾停靠 docs/cs-eval-p6-wrapup，新分支自最新 origin/main）
+- P6 宿主跑批环境三件套（NO_PROXY / 注册表刷新 / 8088 模型服务）与包装脚本说明见日志 2026-11-02（六）
 - 基线时点：origin/main@b770788（P3 合并后；并行会话 travel-v2/ci-debt 持续推进，开工时先 fetch 对齐）
 - 测试解释器：`D:\Program Files\workplace\agent\.venv\Scripts\python.exe`（worktree 无 .venv，需从主仓库拷 .env）；真库 5433
 - frontend-admin node_modules：junction 复用主仓库（如涉评测中心前端改动）
@@ -32,6 +33,33 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（六）—— P6 落地：live 跑批 324 条全量 + runner live 契约四处修复（PR #244）
+
+- **P6① 通道核实结论（推翻立项预设）**：v2 平台对非 rag 模块**硬编码 live=False**（`evaluation_v2/runner.py:414`，注释「禁止通过 live 模式触发模型或外部服务」；cs ∈ `CONTRACT_ONLY_RUNNER_MODULES`，快照 environment 校验强制 contract_only 一致）；`evaluation_mode`（semantic/ragas/self+ragas）非 rag 只存快照不消费——**管理端/`POST /v2/runs` 发不起 cs live run，P4 的 324/324 offline run 即 `_run_offline_sanity` 结构校验**。live 唯一现成通道 = legacy CLI `python -m backend.evaluation cs --live`（本次采用，零平台代码改动）。
+- **runner live 契约四处缺陷（全部经 live 实测暴露、[PR #244](https://github.com/Jayus-07/agent/pull/244) 修复合入 main，5 commits，CI 7/7 绿）**：
+  1. `_run_live` 读 expert_history 按 `{"node": ...}`，现图契约（experts/base.py）是 `{"expert": ...}`——路由断言全废（b0 实测 0/20「实际命中 [None]」）；
+  2. history 条目值是语义短名（knowledge/query/...），断言期望图节点名——经 `EXPERT_NAME_TO_NODE` 权威映射归一（b0r 实测 visited 只见 'knowledge'）；
+  3. runner 传 `cs_route={}` 旁路生产决策层——supervisor 全靠 L3 LLM/L6 知识兜底重路由，expert_match 掉到 10%（b0r2）；修为 `get_cs_router().route(q).model_dump()` 生产 prefilter 口径；
+  4. thread_id/session_id 固定值跨 run/跨 case 污染——checkpointer 续上上次 pending 投诉单（b0r3，45ms 接管）、confirmation store 按 (user_id,session_id) 键控使同 run 先跑 case 的动作提案拦住后续全部样本（b0r4/r5，47-102ms 秒回）；修为 run token + case 级隔离。
+  - 回归测试：`backend/tests/customer_service/test_cs_eval_runner_live.py` 6 例（三种历史形态归一/cs_route 接线断言/错路由仍 fail）+ `test_cs_runner_v2` 相邻回归，**8/8 绿**。
+- **宿主执行三件套（live CLI 在宿主跑通的前置，均一次性实证）**：①启动宿主本地模型服务（`dev-local-models.bat`→scripts/local_models.ps1，端口 8088——rag-service 的 bge-m3 embedding binding 指向 host.docker.internal:8088，挂了会让知识链路 500）；②`NO_PROXY="*"`（宿主 Windows 系统代理被 httpx/requests 自动拾取且 TLS 被掐，EOF violation；容器不受影响）；③执行前 `refresh_registry()`（容器由服务启动时刷新，宿主 CLI 缺刷会把 DB 登记的 custom-* 模型误落到 ollama 兜底 502）。三件已封装 `d:/tmp/cs-live/run_eval.py` 包装脚本（刷新+LLM 冒烟门+转发 CLI；**不入库，若复用先提炼**）。
+- **跑批执行与结果（llm_usage 对账）**：
+  - v1 前 20 条（cs_live_b0 selection）：**9/20 = 45%**，与离线回放**逐条一致**（同一 miss 清单：CS-002/007/009/011/012/013/014/015/016/018/020，均为规则层与 v1 老标注的真实分歧，非 runner 缺陷）；
+  - CS2 304 条（b1-b4 selection 80/80/80/64）：**188/304 = 61.8%**——faq 88.3% / complaint 85.0% / query 72.6% / safety 57.5% / **action 38.7%** / multi_turn 22.5%（结构性：runner 单轮执行，逐轮重放待 runner v2.1，与 P2 口径一致）；
+  - action 缺口的主体是「低置信度→放行知识兜底」生产行为（离线回放看不到的真实 live 信号）+ P3 词表（t_logistics 等）与 P2 修订（C1-039/045 类 k_faq）的边界张力——**需产品/规则层决策，不在本任务内改**；
+  - 成本：全时段 llm_usage 合计 **$0.1454 ≈ 1.05 元**（10 元预算内；批窗口 250 次 LLM/55,285 tokens=$0.1374；超 8 元中止线未触发）。
+- **抽查 12 条（P6④）**：断言机制生效（路由/must_contain 与 per_case 报告、日志、llm_usage 一致）；发现**「系统繁忙」兜底应答 101/304**——根因是 rag-service 的 cs_faq KB **BM25 索引缺失**（runtime 只读索引不可用，基建缺口非 runner 缺陷），知识应答质量被拉低但路由断言不受影响。
+- **验收口径**：①花费 ≤10 元 + llm_usage 对账 **达成**；②基线数字与 live 抽查一致 **达成**（v1 20 条与离线逐条吻合）；③「管理端可见 live run」**不达成**（legacy run 不进 v2 runs 列表——v2 平台非 rag live 接线缺口）；④allowed/forbidden_facts live 断言**不可达**（full_path 模式无调用方）。
+- **移交清单（按优先级，含根因）**：
+  1. **v2 平台非 rag live 通道**：要么接线（`_execute_non_rag_run` 放开 live + 快照语义扩展 + 管理端 UI 同步），要么明确 contract_only 为终态并在管理端对非 rag 隐藏评测方式选项（当前 UI 可选 semantic 等但不生效，误导）；
+  2. **full_path 断言接线**：`_run_cs(mode="full_path")`（唯一消费 must_not_contain/forbidden_facts/clarify 断言的 live 路径）在 legacy/v2 均无调用方——加开关或降口径；
+  3. **rag-service cs_faq BM25 索引补建**（「系统繁忙」101/304 的根因，`index/import_fixture`）；
+  4. **multi_turn 逐轮重放**（runner v2.1，P2 口径的 live 层兑现）；
+  5. **action 38.7% 缺口决策**（低置信度知识兜底 vs 数据集期望，涉及 P3 词表/P2 修订边界，需拍板）；
+  6. **副作用清理**：`customer_service.tickets` eval_bot 名下 **60 条**工单（COMPLAINT-*/HANDOFF-* 前缀）、confirmation store eval 残留（地址修改 pending）、checkpointer `eval-cs-*` 线程——并入投产检查清单第 5 项；
+  7. 批次证据：`D:\tmp\cs-live\`（b0/b0r*/b1-b4 日志、批次 jsonl、时间窗）+ worktree `data/eval_runs/cs-live-1102-*`（报告落盘，data/ 已 gitignore）。
+- **运行态残留说明**：本次未动共享容器（app/rag-service 为并行会话 agent-wt-travel-proto worktree 构建，其 customer_service 代码不含 P3 词表——已在宿主进程以最新 main 代码执行图，无版本混淆）；宿主 8088 模型服务已启动属共享栈依赖修复（增量动作）。
 
 ### 2026-11-02（五）—— 用户拍板与运营收尾立项（P6–P8，TASK §10）
 

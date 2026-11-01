@@ -142,11 +142,11 @@
 
 ## 8. 会话交接（启动清单）
 
-> P1–P5 已全部完成（PROGRESS 2026-11-02 各条）。**下一会话从 §10 运营收尾 P6 开始**，启动步骤：
+> P1–P5 + P6 已完成（PROGRESS 2026-11-02 各条）。**下一会话从 §10 运营收尾 P7 开始**，启动步骤：
 
-1. 核对：`git -C "D:\Program Files\workplace\agent-gov" fetch && git log --oneline -3 origin/main`；worktree 停靠 docs/cs-eval-p4p5-wrapup（已合并、干净），切新分支自 origin/main（P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8`；P6 为运营执行 + PROGRESS 回填走 docs PR）
-2. 通读本 TASK（重点 §10）+ PROGRESS.md 最新日志；P4 的身份链与治理链经验在 PROGRESS 2026-11-02（四）——JWT 签发 + agent-auth-redis 会话键 + X-API-Key，经 :9080 网关
-3. P6 开工：先核实 cs live 的 evaluation_mode 路由 → 20 条小批实测成本 → ≤10 元分批全量 → 抽查对账；P7/P8 按 §10 细则独立 PR
+1. 核对：`git -C "D:\Program Files\workplace\agent-gov" fetch && git log --oneline -3 origin/main`；worktree 停靠 docs/cs-eval-p6-wrapup（已合并、干净），切新分支自 origin/main（P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8`，独立 PR）
+2. 通读本 TASK（重点 §10 P7/P8 细则）+ PROGRESS.md 最新日志（P6 结论与环境经验全在 2026-11-02（六）：live 通道口径、宿主执行三件套 NO_PROXY/注册表刷新/8088 模型服务、runner 契约修复 PR #244）
+3. P7 开工：case 归档端点按 §10 细则实现 → API 测试 → diff → PR → CI 逐项核对 → 合并 → 清理约 400 重复 case → 复核管理端；随后 P8 同流程
 4. 暂停时按仓库规范记录 PAUSED 现场（HEAD/未提交/测试证据/下一步）；已合并历史分支可清理但非必须——勿动其他会话分支
 
 ## 9. 决策点与风险
@@ -170,12 +170,11 @@
 | P7 | 评测平台 case 归档端点（处理 P4 竞态产生的约 400 个重复 approved case 残留） | 1 天 | 无 |
 | P8 | 持久化 intake（unanswered_questions → 候选，替代只认内存 trace 窗口的 from-trace） | 1 天 | 无 |
 
-### P6 live 跑批（预算护栏优先）
+### P6 live 跑批（预算护栏优先）——已完成（2026-11-02，详见 PROGRESS 2026-11-02（六））
 
-- 已核实（2026-11-02）：管理端 `frontend-admin /evaluations/center` RunsTab 有「发起评测」表单（数据集/评测方式/被测配置，**仅 super_admin 可见可发起**）与运行列表（来源/方式/进度）+ 环境指纹卡——**发起与历史展示均已有 UI**，live 跑批可直接管理端发起或 API `POST /v2/runs`。
-- 步骤：①核实 cs 的 live `evaluation_mode` 取值（`EvalRunCreate` 枚举为 offline/semantic/ragas/self+ragas，**无单独 self**——先查 `create_eval_run` 对非 rag 模块在各 mode 下的 runner 路由，确认 cs live 实际消费哪个 mode 与 `_run_cs(live=True)` 的衔接）；②先跑 **20 条小批**（suite case_selection 截取或临时 suite）实测单条 token/费用（查 `llm_usage` 按请求过滤），推算全量成本；③全量 ≤10 元分批执行，**每批后核对累计费用，超 8 元即中止复盘**；④run 完成后抽查 ≥10 条结果与 DB/管理端一致，验证 allowed_facts/forbidden_facts live 断言生效（TASK §4 P4 验收项）。
-- 测试：无新代码（运营执行）；结果抽查留档 PROGRESS。
-- 验收：管理端可见 live run 与结果；实际花费 ≤10 元且有 llm_usage 对账；基线数字与 live 抽查一致。
+- **执行结论**：v2 平台对非 rag 模块硬编码 `live=False`（contract_only，`evaluation_v2/runner.py:414`，`capabilities.py` 登记口径），`evaluation_mode` 非 rag 只存快照不消费——**管理端发不起 cs live，live 唯一通道 = legacy CLI**（`python -m backend.evaluation cs --live`）。324 条全量已跑完：v1 20 条 9/20（与离线回放逐条一致）、CS2 304 条 188/304=61.8%；成本 ≈1.05 元（预算 10 元内）。runner 四处 live 契约缺陷经 [PR #244](https://github.com/Jayus-07/agent/pull/244) 修复合入（5 commits）。
+- **验收口径（部分达成，缺口已移交）**：①「管理端可见 live run」不达成——legacy run 不进 v2 runs 列表，属 v2 平台非 rag live 接线缺口（移交项 §10.1）；②花费 ≤10 元 + llm_usage 对账达成；③基线一致达成（live 与离线回放逐条吻合）。④allowed/forbidden_facts live 断言**不可达**（full_path 模式无调用方，移交项 §10.2）。
+- 移交项清单（按优先级）见 PROGRESS 2026-11-02（六）末尾。
 
 ### P7 case 归档端点
 
@@ -200,7 +199,7 @@
 
 ### 阶段执行约定（沿用 §5/§8）
 
-- Worktree：`D:\Program Files\workplace\agent-gov` 复用（停靠 docs/cs-eval-p4p5-wrapup 已合并、干净；新分支自最新 main）。分支：P6 运营可无分支（PROGRESS 回填走 docs PR）；P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8` 独立 PR。
+- Worktree：`D:\Program Files\workplace\agent-gov` 复用（停靠 docs/cs-eval-p6-wrapup 已合并、干净；新分支自最新 main）。分支：P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8` 独立 PR。
 - 身份链（P4 已验证）：user:279（local_super_admin）JWT 签发 + **agent-auth-redis** 容器会话键（非宿主 6379）+ `X-API-Key` 头，经 :9080 网关；一次性脚本放 d:/tmp 不入库，若需复用则先提炼入库再使用。
 - 顺序：P6（运营先行，验证 live 链路与花费）→ P7 → P8；三项互不依赖可并行会话分派。
 - 合并前显式逐项确认全部 CI 结论；PROGRESS 每项完成后回填。
