@@ -30,7 +30,7 @@ flowchart TB
 
     subgraph AIRT["AI Runtime（LangGraph）"]
         MAIN["主图：router → direct / workflow / plan 支线"]
-        DOM["业务域图<br/>客服 / 旅游（planning · booking）/ 选品漏斗"]
+        DOM["业务域图<br/>客服 / 旅游（planning）/ 选品漏斗"]
     end
 
     subgraph CAPL["能力层 Capability / Skill"]
@@ -146,18 +146,17 @@ flowchart TB
 |---|---|---|
 | 客服 | `CS_ENABLED` | 域主 Agent + 5 子 Agent（knowledge / query / action / complaint / handoff） |
 | 旅游 | `TRAVEL_ENABLED` | slot_filler + 子 Agent + validator / repair 四轴校验 |
-| 旅游预订 | `TRAVEL_BOOKING_ENABLED` | 预订事务 + 幂等账本复用 |
 | 选品漏斗 | `SELECTION_FUNNEL_ENABLED` | 线性漏斗域图 |
 
-> 2026-11-01 收编重构：原「旅游商务」域图（`travel_commerce`，酒店/机票库存查询）壳已删除，实现收编进旅游域数据源层（`backend/travel/providers_support/commerce/`），不再作为域图注册。
+> 2026-11-01 收编重构：原「旅游商务」「旅游预订」两域图壳已删除。商务实现收编进旅游域数据源层（`backend/travel/providers_support/commerce/`）；预订事务机制保留在 `backend/travel/booking/`，对外改为 travel_v2 REST 确认门（`/api/travel/v2/trips/{id}/bookings/*`），`TRAVEL_BOOKING_PROVIDER` 控制其数据源（off/fake/live）。
 
-进入域图有两条独立通路：**全局预过滤**（未带页面锁域时按 客服 → 旅游 → 选品 → 预订 顺序判定，命中且总闸开启后按域入口模式分派）与**页面锁域**（前端在每条消息上带 `domain_hint`，锁定本页负责的域）。
+进入域图有两条独立通路：**全局预过滤**（未带页面锁域时按 客服 → 旅游 → 选品 顺序判定，命中且总闸开启后按域入口模式分派）与**页面锁域**（前端在每条消息上带 `domain_hint`，锁定本页负责的域）。
 
 ### 主聊天页与旅游专属页的实际分工
 
 `/agent` 每条消息带 `domain_hint=main`，该锁域**无条件生效**：命中旅游 / 选品 / 预订强信号即直接产 `handoff` 引导卡并带参跳专属页，**不再经过**全局预过滤，也不读域入口模式（`router_node.py` 中 `main_forced` 与域预过滤是互斥分支）；SQL / RAG / 计划支线、`general_chat` 与客服引导不受此锁影响。**故 `/agent` 不生成行程**，行程在 `/travel` 生成 —— 表单与页内对话都走旅游域自身的 `/api/travel/plan(/stream)` 端点（只读改单走只读图）。
 
-> 由此带来一个容易误读的后果：**旅游 / 选品 / 预订这 3 个开关在 `/agent` 这一页走不到**（请求在锁域分支就被截成引导卡了），但它们仍是其他入口的总闸，并非常量或废弃项。**客服不同**：`CS_ENABLED` 对应的兜底预过滤不在该互斥分支内，`/agent` 同样会读它。
+> 由此带来一个容易误读的后果：**旅游 / 选品这 2 个开关在 `/agent` 这一页走不到**（请求在锁域分支就被截成引导卡了），但它们仍是其他入口的总闸，并非常量或废弃项。**客服不同**：`CS_ENABLED` 对应的兜底预过滤不在该互斥分支内，`/agent` 同样会读它。预订不走域图（收编后为 travel_v2 REST 确认门），预订强信号在锁域下同样产引导卡送旅游页。
 
 域入口模式（`*_GLOBAL_ENTRY_MODE`，代码默认 `execute`）只作用于**全局预过滤这条通路**：`execute` 进域图执行，`guide` 同样产引导卡送专属页；对已被 `/agent` 锁域拦下的请求无效。锁域判定见 `backend/orchestration/graph/routing/lock_domain.py`，模式定义见 `backend/services/sys_config.py`，细节见 [ai-runtime.md](docs/architecture/ai-runtime.md)。
 

@@ -41,9 +41,10 @@ class TestSpecIntegrity:
         unknown = declared - ALL_ACTORS
         assert not unknown, f"白名单引用了未定义 actor：{unknown}"
 
-    def test_agent_specs_cover_canonical_seven(self):
+    def test_agent_specs_cover_canonical_actors(self):
+        # 2026-11-01 收编重构：canonical 7→8（新增 lodging 住宿专家）
         assert set(AGENT_SPECS) == set(CANONICAL_AGENTS)
-        assert len(CANONICAL_AGENTS) == 7
+        assert len(CANONICAL_AGENTS) == 8
 
 
 class TestTransactionGovernance:

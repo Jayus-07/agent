@@ -26,11 +26,6 @@ _E2E_FAULT_NAMES = {
     "approval_pending", "executor_no_candidates", "executor_skill_not_found",
     "sqlresult_rendered", "executor_step_failed",
 }
-_TRAVEL_BOOKING_EXPECTED_FIELDS = {
-    "status", "result", "final", "create", "order", "create_delta",
-    "logical", "logical_orders", "blind_retry", "resend", "duplicate_dedup",
-    "no_regression", "quarantined", "rejected",
-}
 
 
 def validate_dataset_domain(domain: str) -> str:
@@ -69,8 +64,6 @@ def validate_non_rag_case(
         _validate_e2e_expected(expected)
     elif normalized == "travel-provider":
         _validate_travel_provider_expected(expected)
-    elif normalized == "travel-booking":
-        _validate_travel_booking_expected(expected)
     else:  # ModuleKind 扩展时必须显式定义 Golden 校验契约
         raise ValueError(f"评测模块 {normalized} 尚未适配 V2 Golden 契约")
 
@@ -291,22 +284,6 @@ def _validate_travel_provider_expected(expected: dict[str, Any]) -> None:
         freshness = expected["freshness"]
         if not isinstance(freshness, str) or freshness not in {"fresh", "stale", "cached", "unknown"}:
             raise ValueError("expected.freshness 未登记")
-
-
-def _validate_travel_booking_expected(expected: dict[str, Any]) -> None:
-    if set(expected) - _TRAVEL_BOOKING_EXPECTED_FIELDS or not expected:
-        raise ValueError("旅游预订 Golden 字段为空或包含未登记字段")
-    for field in {"status", "result", "final"} & expected.keys():
-        if not isinstance(expected[field], str) or not expected[field].strip():
-            raise ValueError(f"expected.{field} 必须是非空字符串")
-    if "status" in expected and expected["status"] not in {"booked", "expired", "in_doubt"}:
-        raise ValueError("expected.status 未登记")
-    for field in {"create", "order", "create_delta", "logical", "logical_orders", "blind_retry", "resend"} & expected.keys():
-        if isinstance(expected[field], bool) or not isinstance(expected[field], int) or expected[field] < 0:
-            raise ValueError(f"expected.{field} 必须是非负整数")
-    for field in {"duplicate_dedup", "no_regression", "quarantined", "rejected"} & expected.keys():
-        if not isinstance(expected[field], bool):
-            raise ValueError(f"expected.{field} 必须是布尔值")
 
 
 def _case_query(case_input: Any, *, allow_turns: bool) -> str:

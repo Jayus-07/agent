@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from backend.travel.core.agent_base import (
     AGENT_ASSISTANT,
     AGENT_COMMERCE,
+    AGENT_LODGING,
     AGENT_PLANNING,
     AGENT_REQUIREMENT,
     AGENT_RESEARCH,
@@ -97,6 +98,34 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
         requires_confirmation=False,
         allowed_agents=(AGENT_REQUIREMENT, AGENT_ASSISTANT, AGENT_COMMERCE),
         note="travel/memory/ 模块对外入口",
+    ),
+    ToolSpec(
+        name="travel.hotel.search",
+        capability=("hotel", "search"),
+        side_effect=SideEffect.READ,
+        requires_confirmation=False,
+        allowed_agents=(AGENT_LODGING, AGENT_ASSISTANT),
+        note="住宿档位/库存检索（收编件 hotel_search_service：off/fake/live 三态；"
+             "live 供应商未接入恒 disabled 如实披露）；预订动作走 travel.hotel.book 确认门",
+    ),
+    ToolSpec(
+        name="travel.food.search",
+        capability=("food", "search"),
+        side_effect=SideEffect.READ,
+        requires_confirmation=False,
+        allowed_agents=(AGENT_RESEARCH, AGENT_ASSISTANT),
+        note="餐饮商户检索（高德，U4 Skill travel.food_search 的治理面）；"
+             "偏好过滤在 Dining Scout 编排（auxiliary + L3 记忆），Tool 只搬运事实",
+    ),
+    ToolSpec(
+        name="travel.booking.quote",
+        capability=("booking", "quote"),
+        side_effect=SideEffect.WRITE,
+        requires_confirmation=False,
+        allowed_agents=(AGENT_ASSISTANT,),
+        note="预订报价（U4 Skill travel.booking_quote 的治理面）：落 Quote+待确认"
+             "订单（TTL/指纹），绝不执行预订；执行必须走确认门（requires_confirmation "
+             "语义由 travel_v2 REST confirm 端点承载）",
     ),
     # —— COMPUTE：纯计算面 ——
     ToolSpec(

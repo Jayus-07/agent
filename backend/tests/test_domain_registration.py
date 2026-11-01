@@ -34,7 +34,7 @@ def test_domain_modules_list_resolves():
 
     from backend.domains import _DOMAIN_MODULES
 
-    assert len(_DOMAIN_MODULES) == 4
+    assert len(_DOMAIN_MODULES) == 3
     for name in _DOMAIN_MODULES:
         assert importlib.util.find_spec(name) is not None, f"模块不存在: {name}"
 
@@ -52,5 +52,4 @@ def test_build_graph_registers_all_domains():
     names = set(domain_graph_registry.get_all())
     assert names == {
         "travel", "customer_service", "selection_funnel",
-        "travel_booking",
     }

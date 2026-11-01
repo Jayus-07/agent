@@ -38,13 +38,9 @@ def test_real_domains_register_runtime_descriptors():
 
 
 def test_subflow_runtime_descriptors_are_registered():
-    # 2026-11-01 收编重构：商务子流随域图壳删除，只剩 booking。
-    booking = domain_graph_registry.get("travel_booking")
-
-    assert booking is not None
-    assert booking.domain == "travel"
-    assert booking.subflow == "booking"
-    assert booking.runtime_type is RuntimeType.WORKFLOW
+    # 2026-11-01 收编重构：商务/预订子流随域图壳删除，注册表已无子流域图；
+    # 子流派生机制的通用回归由 registry_overview 的合成探针子流承担。
+    assert domain_graph_registry.get("travel_booking") is None
 
 
 def test_registry_derives_runtime_views_for_real_and_new_domains():
@@ -55,7 +51,7 @@ def test_registry_derives_runtime_views_for_real_and_new_domains():
     assert target_view["customer_service"].type is RuntimeType.AGENT
     assert target_view["travel"].id == "travel"
     assert target_view["travel"].subflow == "planning"
-    assert target_view["travel_booking"].subflow == "booking"
+    assert "travel_booking" not in target_view
     assert family_view["selection_funnel"] is RuntimeType.WORKFLOW
     assert entry_view["travel"] == ("execute", "guide")
 

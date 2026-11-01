@@ -53,7 +53,6 @@ class TestDomainRouter:
             ({"route_mode": "customer_service"}, "customer_service", None),
             ({"route_mode": "travel"}, "travel", "planning"),
             ({"route_mode": "selection_funnel"}, "selection_funnel", "funnel"),
-            ({"route_mode": "travel_booking"}, "travel", "booking"),
         ],
     )
     def test_prefilter_update_normalizes_domain(self, update, domain, subflow):
@@ -199,13 +198,15 @@ class TestExecutionModeResolver:
         )
         assert decision.mode == expected
 
-    def test_travel_subflow_maps_to_legacy_domain_graph_mode(self):
+    def test_stale_subflow_falls_back_to_parent_domain_graph(self):
+        """收编重构（2026-11-01）：booking/commerce 子流域图壳删除后，存量
+        路由上下文里的子流标签回落父域图（travel）——不丢请求、不 404。"""
         decision = self.resolver.resolve(
             self.domain("travel", source="prefilter", subflow="booking"),
             self.capability(None),
         )
         assert decision.mode == "domain_graph"
-        assert decision.target == "travel_booking"
+        assert decision.target == "travel"
 
     def test_workflow_override_wins_and_validates_registry(self):
         decision = self.resolver.resolve(

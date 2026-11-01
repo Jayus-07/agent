@@ -81,7 +81,6 @@ def booking_env(monkeypatch):
 
     from backend.config import travel_booking as cfg
 
-    monkeypatch.setattr(cfg, "TRAVEL_BOOKING_ENABLED", True)
     monkeypatch.setattr(cfg, "TRAVEL_BOOKING_PROVIDER", "fake_booking_native")
     monkeypatch.setattr(cfg, "TRAVEL_BOOKING_QUOTE_TTL_SECONDS", 900)
     # booking 的 Quote/复核复用收编件确定性搜索 → 搜索需 fake 模式

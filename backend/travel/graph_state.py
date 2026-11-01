@@ -27,6 +27,7 @@ TRAVEL_SUPERVISOR = "travel_supervisor"
 TRAVEL_POI_EXPERT = "travel_poi_expert"
 TRAVEL_TRANSIT_EXPERT = "travel_transit_expert"
 TRAVEL_WEATHER_EXPERT = "travel_weather_expert"
+TRAVEL_LODGING_EXPERT = "travel_lodging_expert"
 TRAVEL_BUDGET_EXPERT = "travel_budget_expert"
 TRAVEL_RISK_EXPERT = "travel_risk_expert"
 TRAVEL_VALIDATOR = "travel_validator"
@@ -40,6 +41,7 @@ EXPERT_TO_NODE: dict[str, str] = {
     "poi": TRAVEL_POI_EXPERT,
     "transit": TRAVEL_TRANSIT_EXPERT,
     "weather": TRAVEL_WEATHER_EXPERT,
+    "lodging": TRAVEL_LODGING_EXPERT,
     "budget": TRAVEL_BUDGET_EXPERT,
     "risk": TRAVEL_RISK_EXPERT,
 }
@@ -116,6 +118,11 @@ class TravelGraphState(TypedDict, total=False):
     # === 规划产物 ===
     candidates: list[dict]
     day_plan: list[list[str]]
+    # 住宿候选（收编重构 U2，lodging 专家写）：nightly_price/tier/
+    # booking_status=not_booked；reporter 渲染「住宿建议」段；预订走
+    # travel_v2 REST 确认门（图内不挂预订节点）。
+    lodging_options: list[dict]
+    lodging_disclosure: str
     # must_go 三态契约（STOP I1）：poi 专家解析出的「候选池确认没有」的
     # 点名地点——如实披露与金标 Q2 的数据源，validator coverage 仍以
     # brief.must_go × 行程为准（此处只承载「数据层不存在」这一事实）。

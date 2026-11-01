@@ -36,11 +36,12 @@ _FRONTEND_MODAL = (
 def test_module_kinds_is_the_literal_itself():
     """运行期视图必须就是 Literal 本体，不是另一份手写清单。
 
-    2026-11-01 收编重构：travel-commerce 探针随原商务域图壳退役（8 个）。
+    2026-11-01 收编重构：travel-commerce / travel-booking 探针随两域图壳
+    退役（7 个）。
     """
     assert MODULE_KINDS == (
         "planner", "rag", "cs", "sql", "e2e",
-        "travel", "travel-provider", "travel-booking",
+        "travel", "travel-provider",
     )
     assert len(set(MODULE_KINDS)) == len(MODULE_KINDS), "ModuleKind 里有重复项"
 

@@ -462,11 +462,11 @@ def main() -> int:
         p3_pg_down_before_task_terminal(token)
         p4_adjudication_across_pg_down()
         print("== P5 booking CAS 中 PG down：BLOCKED_IN_THIS_TOPOLOGY ==")
-        print("  本拓扑 env 未注入 TRAVEL_BOOKING_ENABLED（不为此临时改共享栈）；"
-              "该场景的事务原子性语义已由 STOP L 离线探针 B 系列 100% 钉死"
+        print("  本拓扑 env 未注入 TRAVEL_BOOKING_PROVIDER（不为此临时改共享栈）；"
+              "该场景的事务原子性语义已由预订事务离线探针 100% 钉死"
               "（价格/库存复核 + 幂等账本 + 状态机 CAS 同事务），外部可用时补实机")
         RESULTS["P5_booking_cas_pg_down"] = False  # 如实：非 PASS
-        DETAILS["P5"] = {"blocked": "TRAVEL_BOOKING_ENABLED 未注入共享容器"}
+        DETAILS["P5"] = {"blocked": "TRAVEL_BOOKING_PROVIDER 未注入共享容器"}
         p6_recovery_convergence(token)
     if args.scenario in ("all", "kill20"):
         kill20(token, rounds=args.kill_rounds)

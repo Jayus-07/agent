@@ -10,10 +10,9 @@ from backend.orchestration.router.hierarchical import (
 from backend.orchestration.router.models import CapabilityDecision
 
 
-# 2026-11-01 收编重构：原商务域图壳删除，别名随之移除
-_DOMAIN_ALIASES = {
-    "travel_booking": "travel",
-}
+# 2026-11-01 收编重构：原商务/预订两域图壳删除，域别名清空（表保留为
+# 未来的域改名映射位；空表 = 恒用原名）。
+_DOMAIN_ALIASES: dict[str, str] = {}
 
 
 class CapabilityRouter:

@@ -135,7 +135,8 @@ class ConversationContext:
 
     # ── 交易挂起（Phase 5 / D2 两跳断修复，2026-09-30）──
     # 预订子图**澄清期**的结构化挂起：本轮在等哪些参数、已收到什么。
-    #（2026-11-01 收编重构：原商务查询子图壳已删除，只剩预订域。）
+    #（2026-11-01 收编重构：预订域图壳已删，字段保留兼容存量会话数据，
+    #  新链路不再写入；预订改走 travel_v2 REST 确认门。）
     #
     # 为什么必须跨轮存：预订子图无 checkpointer（订单/报价事实全在 PG，
     # 「图状态不承载业务事实」是既有纪律），但**澄清期的参数不在 PG** ——
@@ -144,7 +145,7 @@ class ConversationContext:
     # 信号，prefilter/ContinuationResolver 都不命中 → 掉域，用户被迫重说。
     #
     # 结构（只存结构化槽位，不存模型生成内容）：
-    #   route_mode:    travel_booking（回哪个子图）
+    #   route_mode:    预订子图（历史值；域图壳删除后不再新增）
     #   kind:          hotel | flight
     #   missing_slots: 当前仍缺的必填槽位名
     #   collected:     已收到的槽位（值已 ISO 化，可直接并入 search_params）

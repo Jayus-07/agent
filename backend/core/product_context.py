@@ -171,16 +171,15 @@ def _static_bundle_granted(product_id: str, capability: str) -> bool | None:
 # 依据（PR #115 审计修复，覆盖 Batch 2「白名单优先于黑名单」的旧语义）。
 # 说明：cs 域静态能力历史命名为 cs.*（root=cs），customer_service 为
 # 规范 root，两者都在 agent 禁行集合内。
-# 2026-11-01 收编重构：commerce 能力根随原商务域图壳删除
-# （平台已无 commerce.* 能力，hotel/flight 检索归 travel.*）。
+# 2026-11-01 收编重构：commerce/booking 能力根随两域图壳删除
+# （平台已无 commerce.*/booking.* 能力；预订走 travel_v2 REST 确认门）。
 _DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
     "agent": frozenset({
-        "travel", "travel_booking",
-        "customer_service", "cs", "selection_funnel",
-        "booking"}),
+        "travel",
+        "customer_service", "cs", "selection_funnel"}),
     "customer_service": frozenset({
-        "travel", "travel_booking",
-        "selection_funnel", "booking"}),
+        "travel",
+        "selection_funnel"}),
 }
 
 
@@ -194,7 +193,7 @@ def domain_exclusive_forbidden_roots(product_id: str) -> frozenset[str]:
 _BUNDLE_DOMAIN_EXCLUSIVE_ROOTS: dict[str, frozenset[str]] = {
     "travel": frozenset({"travel"}),
     "cs": frozenset({"customer_service", "cs"}),
-    "selection": frozenset({"selection_funnel", "booking"}),
+    "selection": frozenset({"selection_funnel"}),
 }
 
 # 管理端业务域标签词汇表（工具治理 governance.domain / 能力包 domain
@@ -282,9 +281,9 @@ def product_allows_workflow(product_id: str, workflow_name: str) -> bool:
         return False
     name = str(workflow_name or "").strip().lower()
     if product.product_id == "agent":
-        return not any(token in name for token in ("travel", "customer_service", "selection", "booking"))
+        return not any(token in name for token in ("travel", "customer_service", "selection"))
     if product.product_id == "customer_service":
-        return not any(token in name for token in ("travel", "selection", "booking"))
+        return not any(token in name for token in ("travel", "selection"))
     return False
 
 

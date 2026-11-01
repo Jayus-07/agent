@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from backend.shared.logger import logger
 
 # 入口域锁 hint 集合（CSDrawer 每条消息带 domain_hint=customer_service）
@@ -26,6 +28,13 @@ def is_cs_forced(state: dict) -> bool:
 # AI 助手页（主聊天 /agent）锁域 hint 集合：前端 useChat 每条消息带
 # domain_hint=main（与 CS 抽屉带 customer_service 同机制、互斥取值）
 MAIN_HINTS = ("main", "agent")
+
+# 预订交易信号词（原 booking_prefilter._RE_BOOKING 同源词表；优先级与
+# 原 prefilter 一致——CS 售后/行程信号在场时不抢）
+_RE_BOOKING_SIGNAL = re.compile(
+    r"确认预订|预订(?:一下|[一二三两几]?[间张个条])?"
+    r"|(?:帮我|给我|我想|我要|打算)?订(?:一间|一张|一个|一下|个)"
+    r"|我的预订|预订状态|下单预订")
 
 
 def is_main_forced(state: dict) -> bool:
@@ -54,16 +63,19 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
         from backend.orchestration.graph.selection_funnel_prefilter import (
             is_selection_funnel_request,
         )
-        from backend.orchestration.graph.booking_prefilter import is_booking_request
         from backend.travel.providers_support.commerce.extract import (
             detect_commerce_intent,
         )
 
-        if is_travel_request(query):
+        # 预订交易信号（原 booking_prefilter 词表的最小残留——域图壳已删，
+        # 信号只用于引导卡：预订动作仍归旅游页的 travel_v2 确认门）
+        if _RE_BOOKING_SIGNAL.search(query):
+            target = "travel"
+        elif is_travel_request(query):
             target = "travel"
         elif is_selection_funnel_request(query):
             target = "selection_funnel"
-        elif is_booking_request(query) or detect_commerce_intent(query):
+        elif detect_commerce_intent(query):
             target = "travel"
     except Exception as e:
         logger.debug(f"[LockDomain] main 锁域强信号判定失败，按无信号处理: {e}")

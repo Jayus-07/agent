@@ -1,6 +1,8 @@
-"""config/travel_booking.py — Travel Booking 配置（STOP L1）
+"""config/travel_booking.py — Booking 事务配置（收编重构后仅剩事务机制开关）
 
-与 commerce 配置同策略：默认全关（off），由根 .env 决定实际取值。
+2026-11-01 收编重构：原域总开关 TRAVEL_BOOKING_ENABLED 随域图壳退役，
+TRAVEL_BOOKING_PROVIDER 成为唯一开关（off | fake_booking_* | <real>），
+控制 BookingExecutor 的 provider 选型——off 时 REST 端点如实拒绝。
 
 Provider 选型对应 shared/provider_idempotency.py 集中 registry 的三种
 fake profile（Model A/B/C）；真实供应商当前不存在——配置为真实供应商名
@@ -12,13 +14,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-
-def _env_flag(name: str, default: str = "false") -> bool:
-    return os.getenv(name, default).strip().lower() in ("1", "true", "yes")
-
-
-# 域总开关（prefilter 与域图执行双闸）
-TRAVEL_BOOKING_ENABLED = _env_flag("TRAVEL_BOOKING_ENABLED")
 
 # Booking Provider：off | fake_booking_native | fake_booking_clientref |
 #                   fake_booking_bare | <real>（未登记即 fail-closed）
@@ -39,10 +34,6 @@ TRAVEL_BOOKING_RECOVERY_BATCH = int(
 # 单次搜索返回 offer 数上限（复用 commerce 同名语义）
 TRAVEL_BOOKING_MAX_ORDERS_REPORT = int(
     os.getenv("TRAVEL_BOOKING_MAX_ORDERS_REPORT", "5"))
-
-
-def is_booking_enabled() -> bool:
-    return TRAVEL_BOOKING_ENABLED
 
 
 def provider_name() -> str:

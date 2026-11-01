@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# 7 个 Agent 的规范名（v3 冻结）。白名单与守护测试以此为准。
+# Agent 的规范名（v3 冻结 7 个 + 2026-11-01 收编重构新增 lodging；白名单
+# 与守护测试以此为准）。
 AGENT_SUPERVISOR = "supervisor"
 AGENT_REQUIREMENT = "requirement"
 AGENT_RESEARCH = "research"
@@ -16,6 +17,7 @@ AGENT_PLANNING = "planning"
 AGENT_OPTIMIZATION = "optimization"
 AGENT_COMMERCE = "commerce"
 AGENT_ASSISTANT = "assistant"
+AGENT_LODGING = "lodging"
 
 CANONICAL_AGENTS: tuple[str, ...] = (
     AGENT_SUPERVISOR,
@@ -25,6 +27,7 @@ CANONICAL_AGENTS: tuple[str, ...] = (
     AGENT_OPTIMIZATION,
     AGENT_COMMERCE,
     AGENT_ASSISTANT,
+    AGENT_LODGING,
 )
 
 
@@ -81,5 +84,11 @@ AGENT_SPECS: dict[str, AgentSpec] = {
         description="QUERY 行程问答：只引 state/RAG 事实，禁编造",
         timeout_s=8.0,
         degradation="失败→模板直答",
+    ),
+    AGENT_LODGING: AgentSpec(
+        name=AGENT_LODGING,
+        description="住宿档位与库存：按预算档位/行程位置匹配住宿候选（只查不订，预订走确认门）",
+        timeout_s=10.0,
+        degradation="数据源 off/失败→如实披露，不出住宿候选，不阻塞预算（住宿成本按未知计）",
     ),
 }

@@ -34,6 +34,7 @@ from langgraph.graph import END, START, StateGraph
 from backend.shared.logger import logger
 from backend.travel.auxiliary_tasks import auxiliary_tasks_node
 from backend.travel.experts.budget import budget_expert_node
+from backend.travel.experts.lodging import lodging_expert_node
 from backend.travel.experts.poi import poi_expert_node
 from backend.travel.experts.risk import risk_expert_node
 from backend.travel.experts.transit import transit_expert_node
@@ -46,6 +47,7 @@ from backend.travel.graph_state import (
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
+    TRAVEL_LODGING_EXPERT,
     TRAVEL_SLOT_FILLER,
     TRAVEL_SUPERVISOR,
     TRAVEL_TRANSIT_EXPERT,
@@ -121,7 +123,8 @@ def _evented_node(node_name: str, node_fn):
 # 回到调度器的节点（supervisor 是唯一的汇聚点）
 _BACK_TO_SUPERVISOR = (
     TRAVEL_POI_EXPERT, TRAVEL_TRANSIT_EXPERT, TRAVEL_WEATHER_EXPERT,
-    TRAVEL_BUDGET_EXPERT, TRAVEL_RISK_EXPERT, TRAVEL_VALIDATOR, TRAVEL_REPAIR,
+    TRAVEL_LODGING_EXPERT, TRAVEL_BUDGET_EXPERT, TRAVEL_RISK_EXPERT,
+    TRAVEL_VALIDATOR, TRAVEL_REPAIR,
     TRAVEL_PARTIAL_REPLAN,
     TRAVEL_AUXILIARY_TASKS,
 )
@@ -141,6 +144,8 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         TRAVEL_TRANSIT_EXPERT, transit_expert_node))
     wf.add_node(TRAVEL_WEATHER_EXPERT, _evented_node(
         TRAVEL_WEATHER_EXPERT, weather_expert_node))
+    wf.add_node(TRAVEL_LODGING_EXPERT, _evented_node(
+        TRAVEL_LODGING_EXPERT, lodging_expert_node))
     wf.add_node(TRAVEL_BUDGET_EXPERT, _evented_node(
         TRAVEL_BUDGET_EXPERT, budget_expert_node))
     wf.add_node(TRAVEL_RISK_EXPERT, _evented_node(
@@ -169,7 +174,7 @@ def build_travel_graph(checkpointer: Any = None) -> Any:
         compile_kwargs["checkpointer"] = checkpointer
 
     graph = wf.compile(**compile_kwargs)
-    logger.info("[TravelGraph] 编译完成（12 节点，checkpointer=%s）",
+    logger.info("[TravelGraph] 编译完成（13 节点，checkpointer=%s）",
                 "on" if checkpointer else "off")
     return graph
 

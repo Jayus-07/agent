@@ -494,20 +494,7 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
         logger.warning(f"[RouterNode] 选品预过滤失败，回退到主 Router: {e}")
 
     # ── 预订域预过滤（STOP L9）：选品与商务之间加法插入 ──
-    # 「订/预订」是交易意图，先于商务承接（L0 §20 冻结触碰：既有四域
-    # 两两顺序不变，仅新增一域；CS 售后/行程信号已在词表让路）。
-    # 2026-11-01 收编重构：原「商务预过滤（STOP K6）」随原商务域图
-    # 域图壳一并删除——找酒店/查机票类诉求归旅游域 lodging/intercity。
-    try:
-        from backend.orchestration.graph.booking_prefilter import (
-            try_booking_prefilter,
-        )
-        booking_update = try_booking_prefilter(query, state)
-        if booking_update is not None:
-            result = _finish_prefilter_hit(state, query, booking_update)
-            if result is not None:
-                return result
-    except Exception as e:
-        logger.warning(f"[RouterNode] 预订预过滤失败，回退到主 Router: {e}")
+    # 2026-11-01 收编重构：预订/商务两域 prefilter 均随域图壳删除——
+    # 找酒店/查机票归旅游域 lodging/intercity；预订走 travel_v2 REST 确认门。
 
     return None

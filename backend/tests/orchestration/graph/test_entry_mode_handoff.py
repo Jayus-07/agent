@@ -48,8 +48,7 @@ def _domain_update(route_mode: str, **extra) -> dict:
 
 
 def test_default_verdict_is_execute_for_all_domains():
-    for mode in ("travel", "travel_booking",
-                 "customer_service", "selection_funnel"):
+    for mode in ("travel", "customer_service", "selection_funnel"):
         assert entry_mode_verdict("帮我规划福州3天行程", _domain_update(mode)) == "execute"
 
 
@@ -67,8 +66,6 @@ def test_guide_mode_travel_planning_guides(monkeypatch):
     update = _domain_update("travel")
     assert entry_mode_verdict("帮我规划杭州3天行程", update) == "guide"
     assert entry_mode_verdict("带爸妈福州玩2天", update) == "guide"
-    # 预订/商务同属旅游族，共用同一开关
-    assert entry_mode_verdict("帮我订一间福州的酒店", _domain_update("travel_booking")) == "guide"
 
 
 def test_guide_mode_travel_one_shot_passthrough(monkeypatch):

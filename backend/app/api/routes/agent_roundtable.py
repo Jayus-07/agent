@@ -70,14 +70,6 @@ _PERSONAS: dict[str, dict[str, Any]] = {
             "退改签政策与售后风险，常引用服务数据和历史工单经验提醒大家避坑。"
         ),
     },
-    "travel_booking": {
-        "display_name": "预订管家",
-        "fallback_label": "旅游预订",
-        "persona": (
-            "你是圆桌中的「预订管家」，谨慎靠谱，专注订单流程、支付安全与"
-            "履约风险，习惯提醒关键时间节点和取消政策。"
-        ),
-    },
     "selection_funnel": {
         "display_name": "选品分析师",
         "fallback_label": "智能选品",
@@ -95,7 +87,6 @@ _READONLY_CAPABILITIES = frozenset({
 _DOMAIN_TOOLS: dict[str, tuple[str, ...]] = {
     "travel": ("travel.poi_search", "map.lookup", "web.search"),
     "customer_service": ("rag.search", "sql.query", "web.search"),
-    "travel_booking": ("sql.query", "web.search"),
     "selection_funnel": ("web.search", "sql.query", "rag.search"),
 }
 

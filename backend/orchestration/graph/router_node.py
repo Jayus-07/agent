@@ -31,7 +31,6 @@ from backend.orchestration.graph.routing import (
     is_main_forced,
     main_forced_handoff_update,
     run_domain_prefilters,
-    try_booking_pending,
     try_travel_pending,
 )
 from backend.orchestration.router import get_routing_engine
@@ -139,15 +138,8 @@ def router_node(state: dict) -> dict:
                     state, _mark_route_from_update(state, pending_update), query,
                     existing_override=pending_update,
                 )
-            # 交易挂起续填（Phase 5 / D2）：预订/比价子图澄清期，用户答纯槽位值
-            # （「10月3日」）——两子图无 checkpointer，不拦就掉域。命中条件与
-            # 异常语义见 routing/continuation.py::try_booking_pending
-            booking_pending = try_booking_pending(query, routing_context)
-            if booking_pending is not None:
-                return _with_router_decisions(
-                    state, _mark_route_from_update(state, booking_pending), query,
-                    existing_override=booking_pending,
-                )
+            # 2026-11-01 收编重构：预订域图壳删除，交易挂起续填入口随之退役
+            #（原 try_booking_pending 段；预订走 travel_v2 REST 确认门）。
             # 延续命中 → 直接回活跃域（travel/cs/selection 有状态域图）
             cont_update = _try_continuation(state, query, routing_context)
             if cont_update is not None:

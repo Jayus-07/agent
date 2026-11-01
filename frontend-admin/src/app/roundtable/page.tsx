@@ -33,7 +33,6 @@ type Phase = 'idle' | 'running' | 'done' | 'stopped' | 'error'
 const AVATAR_CLASS: Record<string, string> = {
   travel: 'bg-blue-50 text-blue-700',
   customer_service: 'bg-emerald-50 text-emerald-700',
-  travel_booking: 'bg-rose-50 text-rose-700', // subflow-literal-exempt: 纯 UI 配色映射，非归属声明
   selection_funnel: 'bg-violet-50 text-violet-700',
 }
 

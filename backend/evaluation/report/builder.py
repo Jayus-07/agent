@@ -92,7 +92,6 @@ MODULE_LABELS: dict[str, str] = {
     "cs": "客服域",
     "travel": "旅游规划",
     "travel-provider": "旅游 Provider 探针",
-    "travel-booking": "旅游预订",
 }
 
 # ============ 指标分层分类（双轨架构） ============

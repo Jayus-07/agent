@@ -26,8 +26,8 @@
 | 资产 | 权威事实源 | 状态与边界 |
 | --- | --- | --- |
 | 测试知识库（KB） | [`backend/config/knowledge_base.py`](../../backend/config/knowledge_base.py) | ✅ 已实现：`rag_eval_kb`、`cs_eval_kb`、`travel_eval_kb` 注册为 `audience=test`；旧 `rag_test_kb`、`rag_100_docs` 为 deprecated 兼容别名（`alias_for=rag_eval_kb`）。测试 KB 不是测试数据库实例。 |
-| 评测模块 | [`backend/evaluation/models.py`](../../backend/evaluation/models.py) 的 `MODULE_KINDS` | ✅ 已实现：`planner, rag, cs, sql, e2e, travel, travel-provider, travel-booking`（2026-11-01 收编重构后；`travel-commerce` 探针随原商务域图壳退役）。模块不与向量 KB 一一绑定。 |
-| Golden / Suite / Fixture | [`backend/evaluation/datasets/`](../../backend/evaluation/datasets/)、[`backend/evaluation/fixtures/`](../../backend/evaluation/fixtures/)、`data/docs/` | ✅ RAG 已实现（manifest/hash/suites）；❌ `travel-booking` 仅 `cases.jsonl` 无 manifest 锁版（evaluation-governance 已登记的资产缺口）。 |
+| 评测模块 | [`backend/evaluation/models.py`](../../backend/evaluation/models.py) 的 `MODULE_KINDS` | ✅ 已实现：`planner, rag, cs, sql, e2e, travel, travel-provider`（2026-11-01 收编重构后；`travel-commerce`/`travel-booking` 探针随两域图壳退役）。模块不与向量 KB 一一绑定。 |
+| Golden / Suite / Fixture | [`backend/evaluation/datasets/`](../../backend/evaluation/datasets/)、[`backend/evaluation/fixtures/`](../../backend/evaluation/fixtures/)、`data/docs/` | ✅ RAG 已实现（manifest/hash/suites）；❌ `travel-provider` 仅 `cases.jsonl` 无 manifest 锁版（evaluation-governance 已登记的资产缺口）。 |
 | CI 数据库/向量索引 | GitHub Actions 临时 PostgreSQL/pgvector + 迁移 + 既有入库器 | ✅ 已实现：每次运行隔离重建（`rag_regression.yml`/`rag_smoke.yml` 全套 DB env + 兼容库预建）；实现细节见 §4。 |
 
 ### 2.1 超级管理员测试库权限（✅ 已实现）

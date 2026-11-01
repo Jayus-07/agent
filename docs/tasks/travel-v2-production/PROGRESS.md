@@ -87,3 +87,14 @@
 
 - B 系列：booking 删壳 + travel_v2 REST 三段端点（quote/confirm/status）+ 联动清理。
 - U1-U4 依次；U5 rollinggo BLOCKED（联系人 york.lu@dida.com）。
+
+## B 系列（booking 收编为预订子智能体 REST 化）——代码完成，验证中
+
+1. **删壳（§4.1）**：booking 包 register/graph_builder/graph_node/graph_state 删除（事务机制 12 文件原样保留）；domains 注册 3 域；booking_prefilter/booking_pending_resolver/try_booking_pending（continuation+router_node 接线点）全退役；roundtable 预订人设/工具箱、capability 别名清空、KNOWN_DOMAINS、product_context 禁行根（travel_booking/booking 根）、TRAVEL_BOOKING_ENABLED 域开关与 is_booking_enabled、BOOKING_PENDING_RESUME_ENABLED（无消费方）删除；lock_domain 预订信号改内联同源词表（引导卡语义保留）。
+2. **REST 化（§4.2）**：新增 `travel_v2/api/bookings.py`（POST quote / POST confirm / GET status，挂 /travel/v2/trips/{trip_id}/bookings/*）+ `travel_v2/models/booking.py`（请求模型 extra=forbid）；鉴权=网关身份 + 行程属主 fail-closed（TripService 属主校验，越权 404 不泄露存在性）+ booking/authorization 订单归属二次校验；provider off → quote/confirm 均 503 如实拒绝（不给无法执行的确认卡）；IN_DOUBT 话术走 reporter 白名单。router.py 挂载。
+3. **联动（§4.4）**：evaluation ModuleKind 7（travel-booking 探针退役）+ builtin/release_gate/builder/cli/domain_contracts/runner/datasets/e2e 脚本删除；测试断言（domain_registration 全集=3、registry_overview 子流清零、runtime_registry、semantic_consistency _SUBFLOW_GRAPHS 空、router guard、entry_mode、legacy_route_writer 守卫清单收窄）；frontend-admin 三件；README/.env.example/evaluation-governance/evaluation-v2-api/ci-evaluation-environment；celery include 与 recovery beat 保留（052 四表与 rag_smoke 白名单不动）。
+   - **对计划的偏离记录**：§4.4 原列「d2_two_hop 保留」——其实际依赖（graph_node/booking_pending_resolver/router 接线）全部是被删的聊天壳组件，语义不可保留；该文件随壳退役，其保护由 test_booking_rest_routes.py（REST 三段）与存活的 travel_pending 两跳测试承接。
+4. **测试**：新增 `tests/travel/booking/test_booking_rest_routes.py`（三段正向 + 跨用户/跨行程 404 + 未认证 401 + provider off 503 + 参数 422；真 PG 门控 + 测试 ledger 隔离）。
+
+### B 系列验证证据
+- REST 路由测试 7 用例：首跑 1 failed（provider off 用例暴露 quote 未前置检查 provider 状态——修复：quote 入口加 off 前置拒绝）→ 复跑相关 3 用例 passed；全套后台复验中。
