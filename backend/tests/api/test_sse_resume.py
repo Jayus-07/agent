@@ -372,4 +372,10 @@ def test_slow_consumer_union_complete_via_registry():
     live_seqs = asyncio.run(scenario())
     # 「断开前已收」∪「resume 后 live」= 1..9 连续无洞（meta 后 delta 4-8 + done 9）
     assert sorted([1, 2, 3] + live_seqs) == list(range(1, 10))
+    # done 事件先入队、finish() 在同线程后落——消费者拿到 done 时 status
+    # 可能还是 live（CI 调度窗口，v20 run 41340426306 实证）；bounded 等
+    # finish 落盘，事件序断言不变
+    _deadline = time.time() + 5
+    while rec.status != "finished" and time.time() < _deadline:
+        time.sleep(0.01)
     assert live_seqs[-1] == 9 and rec.status == "finished"

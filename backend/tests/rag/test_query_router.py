@@ -180,6 +180,13 @@ def _disable_enhanced_path(monkeypatch):
     """集成测试走 fallback hybrid 逻辑（禁用 enhanced 路由）。"""
     monkeypatch.setattr("backend.config.rag.ADAPTIVE_THRESHOLD_ENABLED", False)
     monkeypatch.setattr("backend.config.rag.CONFIDENCE_AGGREGATOR_ENABLED", False)
+    # 3695b06 起 hybrid 出口接审核可见性正交层：stub doc 不在 doc_registry，
+    # 正向校验 fail-closed 全剔（CI 空 registry 必现；本地 registry 查询态
+    # 差异偶尔放行）。本文件测 RRF/路由语义，可见性层直通。hybrid 在函数
+    # 内 from-import（坑位 19），须 patch 源模块属性。
+    monkeypatch.setattr(
+        "backend.rag.retrieval.review_filter.apply_review_visibility",
+        lambda docs, **k: docs)
 
 
 class TestHybridWeightedRRF:

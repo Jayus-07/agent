@@ -64,6 +64,16 @@ jobs:
       # 前序用例的 notification_policies 行毒死后续用例（test_notification
       # 10 例互踩，v2 run 41120872440 实证）
       INVENTORY_DB_PGDATABASE: agent_business_test
+      # 专用键族全部显式指向 *_test（批一同款家族收口）：缺省值全是无后缀
+      # agent_business 兼容库——不显式设置时 store 单例与测试用例分属两库
+      # （单例的 _init_db 重建与用例的 CREATE TRIGGER 打在不同库），xdist
+      # 下 UndefinedTable（SELECTION_DECISION v20 run 41340426306 gw2 实
+      # 证）；drop_pgtest_tables 按配置库扫描，兼容库不在清单则永不清。
+      SELECTION_PGDATABASE: agent_business_test
+      SELECTION_DECISION_PGDATABASE: agent_business_test
+      MARKET_RESEARCH_PGDATABASE: agent_business_test
+      COMPETITOR_PGDATABASE: agent_business_test
+      FEEDBACK_PGDATABASE: agent_business_test
       VECTOR_PGDATABASE: agent_memory_test
       RAG_STORES_PGDATABASE: agent_memory_test
       DOC_REGISTRY_PGDATABASE: agent_memory_test
