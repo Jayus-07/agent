@@ -77,7 +77,11 @@ def _mode_reason(mode: str) -> str:
 
 
 def _resolve_hotel_provider():
-    """mode → Hotel Provider 实例；不可用返回 (None, reason)。"""
+    """mode → Hotel Provider 实例；不可用返回 (None, reason)。
+
+    live 走 rollinggo MCP 通道（能力中心动态 capability，经 mcp_registry
+    快照解析）；运行时不在场 = 如实 disabled，绝不回退 fake（§29）。
+    """
     from backend.config.travel_offer_search import provider_mode
 
     mode = provider_mode()
@@ -86,6 +90,11 @@ def _resolve_hotel_provider():
             FakeHotelSearchProvider,
         )
         return FakeHotelSearchProvider(), ""
+    if mode == "live":
+        from backend.providers.travel.live.rollinggo_mcp import (
+            resolve_live_hotel_provider,
+        )
+        return resolve_live_hotel_provider()
     return None, _mode_reason(mode)
 
 

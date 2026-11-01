@@ -49,6 +49,8 @@ def daily_budget(provider: str) -> int:
     # 加一行；未登记 = 不限，保持「未知 provider 零行为变化」）
     commerce_budget_env = {
         "fake:commerce": "TRAVEL_PROVIDER_FAKE_COMMERCE_DAILY_BUDGET",
+        # rollinggo live 酒店搜索（2026-11-01 P1 接线；0 = 不限）
+        "rollinggo:mcp": "TRAVEL_PROVIDER_ROLLINGGO_MCP_DAILY_BUDGET",
     }
     env_name = commerce_budget_env.get(provider)
     if env_name:

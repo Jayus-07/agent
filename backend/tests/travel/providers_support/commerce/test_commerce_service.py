@@ -44,12 +44,19 @@ def test_mode_off_returns_disabled_not_fake(fake_mode, monkeypatch):
     assert r.offers == []
 
 
-def test_mode_live_disabled_without_real_provider(fake_mode, monkeypatch):
-    """live 未实现 = DISABLED（如实原因），绝不回退 fake 冒充（§29）。"""
+def test_mode_live_disabled_without_runtime(fake_mode, monkeypatch):
+    """live 但 MCP 运行时不在场 = DISABLED（如实原因），绝不回退 fake（§29）。
+
+    2026-11-01 P1：live 酒店侧已接 rollinggo MCP 通道（运行时在场的成功
+    路径见 tests/travel/test_rollinggo_hotel_provider.py）。
+    """
+    from backend.infra.mcp_registry import store as mcp_store
+
+    mcp_store.reset_for_tests()
     monkeypatch.setattr(fake_mode, "TRAVEL_COMMERCE_PROVIDER_MODE", "live")
     r = svc.search_hotels(_hotel_req())
     assert r.status == "disabled"
-    assert "未接入" in r.reason
+    assert "未在 MCP 运行时生效" in r.reason
 
 
 # =============================================

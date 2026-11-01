@@ -10,9 +10,9 @@
   fake  显式测试模式。FakeHotel/FakeFlight 适配器供测试/评测/链路验收，
         输出强制 source=fake:commerce 且渲染层披露「测试数据」——
         **严禁作为生产验收**（任务书 §28）。
-  live  真实供应商。当前无任何 Hotel/Flight Provider 凭据与适配器实现
-        ——选 live 一律 DISABLED（reason=未接入），
-        **绝不回退 fake 充数**（§29 严禁伪造）。
+  live  真实供应商。酒店侧 2026-11-01 起接 rollinggo MCP 通道（能力中心
+        动态 capability，经 mcp_registry 快照；运行时不在场 = disabled，
+        **绝不回退 fake 充数**，§29）；机票侧仍无适配器，恒 DISABLED。
 
 环境变量沿用 TRAVEL_COMMERCE_* 历史名（.env 兼容，不做迁移）。
 """
@@ -45,6 +45,11 @@ TRAVEL_COMMERCE_MAX_OFFERS = int(os.getenv("TRAVEL_COMMERCE_MAX_OFFERS", "10"))
 # 日期窗校验：入住日期不得早于今天；check_out 不得晚于 today + horizon
 TRAVEL_COMMERCE_DATE_HORIZON_DAYS = int(
     os.getenv("TRAVEL_COMMERCE_DATE_HORIZON_DAYS", "365"))
+
+# live 酒店数据源的 MCP capability（能力中心连接名 rollinggo × 工具
+# searchHotels 的标准 slug；连接改名需同步管理端与本值）
+TRAVEL_ROLLINGGO_HOTEL_CAPABILITY = os.getenv(
+    "TRAVEL_ROLLINGGO_HOTEL_CAPABILITY", "mcp.rollinggo__searchhotels").strip()
 
 
 def provider_mode() -> str:
