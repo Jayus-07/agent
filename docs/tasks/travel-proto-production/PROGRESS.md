@@ -56,7 +56,7 @@
 | 前置任务 travel-v2-production | P1–P5：rollinggo live 接线、F18 card、F04/F02/F05、F17 布局+原型对齐、跳转型预订、验收 7 场景 | ✅ 全部合并 | #205/#208/#209/#210/#212/#213/#214/#217/#219/#220 |
 | 计划定稿 | 原型生产化 TASK/PROGRESS + 差距矩阵 v0 + 决策点 | ✅ 合并 | #222/#224 |
 | **T1 12306 迁管理端能力中心**（用户已决策 b） | 正式连接 `12306` 登记（private 内网）→ discover → approve query-tickets/query-ticket-price → agent 授权（黄金证据）；live_search_service 车次/票价查询加动态通道（动态在场优先→静态直连回退→disabled 如实）；三态/撤销 fail-closed/契约回放测试；govtest 残留清理；rag_smoke 登记 | ✅ 代码+治理+运行态验收完成（2026-11-02），待提交 PR | 分支 `feat/travel-12306-dynamic-capability`（见下「T1 执行记录」） |
-| **D0 侦察定稿** | 差距矩阵到锚点级；决策点 1/2/3/4 问询定稿；TASK §2 升 v1 | ⬜ 待开工 | 矩阵 v1 落 PROGRESS |
+| **D0 侦察定稿** | 差距矩阵到锚点级（决策点 1/2/3/4 已于 2026-11-02 定稿，见 TASK §5）；TASK §2 升 v1 | ⬜ 待开工（T1 合并后） | 矩阵 v1 落 PROGRESS |
 | P1 设计令牌与全局骨架 | Tailwind 令牌 + TopBar 胶囊/头像钮 + BottomNav 四项 + 头像抽屉 | ⬜ | PR + 原型点测 |
 | P2 首页复刻 | Hero/快捷查询/模板照片卡/最近行程照片卡/空态 | ⬜ | PR + H1-H7 全勾 |
 | P3 工作台功能块 | 概览卡统计块/天数条 segment+行内加天/候选卡形态 | ⬜ | PR + W1-W7 全勾 |
@@ -138,10 +138,16 @@
 - `12306-govtest` 残留：保留 disabled 态——DELETE 引用保护要求清空全部工具行（无工具删除 API），不做共享治理库 DB 手术（TASK §4b 允许口径）。probe-rest×3 残留未动（非 T1 范围，顺手项待定）。
 - 管理端 Idempotency-Key 为治理写操作硬要求（run_authenticated_mutation），脚本化操作需带该头。
 
+### 提交与运行态收口（2026-11-02 用户确认后）
+
+- **PR #232**：`feat/travel-12306-dynamic-capability` → main（c038cb4 feat + 8471ded docs）；**合并待用户确认**（CI 过后合）。
+- **TRAIN_MCP_ENABLED 已翻转 false**（主仓库与 worktree .env 同步，用户确认）：语义收窄为「静态回退通道开关」落地。rebuild 后容器内验证：动态通道照常服务（车次 `channel=mcp_dynamic` 6 趟 D3333 06:43 席别中文化；票价 `channel=mcp_dynamic` D3333 二等座 100.0/一等座 160.0 真实票价）——所有 runtime 缺席状态今后一律如实拒绝，彻底 fail-closed。
+- **决策点 1/2/3/4 已定稿**（2026-11-02 用户确认推荐项，TASK §5 已更新）：悬浮窗不落生产、撤销保留真实语义、照片先用 Unsplash、抽屉三项导航。D0 剩余范围 = 差距矩阵到锚点级 + TASK §2 升 v1。
+- 验证方式备忘：容器内裸进程无快照，service 级验证前需 `asyncio.run(mcp_store.refresh())`（app 进程有 15s 轮询不受影响）；真实上游车次条目键为 `train_no`（无 `train_code`），取码逻辑用 `train_code or train_no`。
+
 ### 下一步
 
-- 用户确认后提交本分支（PR 合并 main；提交双路径限定）。
-- D0 侦察定稿（顺带问决策点 1/2/3/4）→ P1–P6。
+- PR #232 CI 过后用户确认合并 → D0 侦察定稿（矩阵锚点级）→ P1–P6。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
