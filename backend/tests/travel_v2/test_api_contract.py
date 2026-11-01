@@ -14,6 +14,7 @@ from backend.travel_v2.services.trip_service import (
     TripNotFound,
     TripService,
 )
+from backend.travel_v2.services.trip_write_validator import TripWriteConflictError
 
 
 def _client() -> TestClient:
@@ -80,6 +81,34 @@ def test_create_persistence_failure_is_503_without_saved_success(monkeypatch):
         }
     }
     assert "saved" not in response.json()
+
+
+def test_create_schedule_conflict_returns_readable_message(monkeypatch):
+    """排程冲突的 422 必须透传可读原因（detail 用 str）。
+
+    dict detail（code/conflicts）会被全局 HTTPException 处理器压平成通用
+    INVALID_PARAM 文案；真实生成首个排程冲突时（2026-11-02）用户只能看到
+    「请求参数有误」，无法据此回对话调整。
+    """
+    message = "杭州西湖风景名胜区-柳浪闻莺 与 杭州奥体博览城 的时间或路程安排冲突"
+
+    def conflict_create(self, **_kwargs):
+        raise TripWriteConflictError("SCHEDULE_OVERLAP", message, ("item-1", "item-2"))
+
+    monkeypatch.setattr(TripService, "create_trip", conflict_create)
+    response = _client().post(
+        "/travel/v2/trips",
+        headers={
+            "X-User-Id": "user-a",
+            "X-Auth-Type": "jwt",
+            "X-Tenant-Id": "tenant-a",
+            "Idempotency-Key": "conflict-test-key",
+        },
+        json={"title": "杭州一日", "document": valid_document()},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == message
 
 
 def test_trip_read_uses_authenticated_owner_and_returns_arrangements(monkeypatch):

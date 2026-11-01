@@ -64,10 +64,10 @@ def _error(exc: Exception) -> HTTPException:
             "message": "行程没有保存，请稍后重试",
         })
     if isinstance(exc, TripWriteConflictError):
-        return HTTPException(status_code=422, detail={
-            "code": "TRIP_WRITE_CONFLICT",
-            "conflicts": [exc.conflict],
-        })
+        # detail 用字符串消息：全局 HTTPException 处理器透传 str detail，而
+        # dict detail（结构化 conflicts）会被压平成通用 INVALID_PARAM 文案，
+        # 用户看不到冲突原因（2026-11-02 真实生成首个排程冲突时暴露）。
+        return HTTPException(status_code=422, detail=str(exc))
     if isinstance(exc, ValueError):
         return HTTPException(status_code=422, detail={"code": "INVALID_TRIP_COMMAND", "message": str(exc)})
     raise exc

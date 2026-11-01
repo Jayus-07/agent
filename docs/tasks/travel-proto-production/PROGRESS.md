@@ -205,9 +205,29 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - `vitest run src/components/travel src/api` → **421 passed**（413 + 8，零回归）；`tsc --noEmit` → **16 错 = main 基线**。
 - rebuild 运行态点测（模板复制行程：湖山人文/龙井茶乡 两天各 4 项）：六行统计实测 `2 天 · 湖山人文 + 龙井茶乡`/`8 个（跨 2 天）`/`¥4,000 · 轻松`/`¥1,280（未核验）`/契约位/引导语全对；chip 显示主题；截图留痕。验证账号（含孤儿 1330）用后即停，临时文件已删。
 
+## P4a 执行记录（2026-11-02，分支 feat/travel-proto-p4a-generate-panel）
+
+### 改动（生成流引擎抽取 + 工作台生成态）
+
+- 新增 `useTravelPlanGeneration.ts`：V2 生成流引擎 hook（从 TravelChatPage 无行程分支逐行抽出）——SSE 消费/过程行/tool.card/澄清选项/草稿两段式/幂等保存（UNKNOWN 同请求重试）/决策令牌。**红线零复制**：写状态机与 SSE 契约只有一份实现。
+- `TravelChatPage.tsx` 重构为消费该 hook：恢复流程/会话关联/时区披露等页面态留在页面，行为零变化——**既有 10/10 测试未改一行全过**（抽取忠实性的回归网）。
+- 新增 `TravelWorkbenchGenerate.tsx` + 路由 `/travel/itineraries/new`（query: prompt/conversation_id）：三列生成态工作台——左列草稿概览+天数 chip+草稿地图（TravelV2Map 复用）、中列生成面板（过程行+逐日草稿卡+保存/再调整+写状态条）、右列助手对话全程伴随。保存经服务端确认后 `router.replace` 进正式工作台编辑态。
+- **后端一行修复**（P4 迁移暴露的错误契约缺口）：`travel_v2/api/trips.py` `_error` 对 `TripWriteConflictError` 的 detail 从 dict 改为 `str(exc)`——全局 HTTPException 处理器会压平 dict detail 成通用「请求参数有误」，用户看不到冲突原因；str detail 被透传为可读冲突消息。契约测试钉住（test_create_schedule_conflict_returns_readable_message）。
+
+### 验证
+
+- 前端：新增 2 用例（空态骨架+initialPrompt 直达、SSE→草稿→保存→replace 断言）；`vitest run src/components/travel src/api` → **423 passed**；`tsc` → **16 错基线**。后端：契约+ai-edit+document 63 passed。
+- rebuild 真机点测（4+ 轮真实链路）：prompt 直达生成态 → 真实 SSE 生成（过程行/工具过程）→ 逐日草稿卡+草稿地图+chip → 保存 → **服务端 SCHEDULE_OVERLAP 冲突如实拒绝且消息可读**（修复验证）→ 再调整撤下 → 对话继续 → 重生成 → 苏州轮触发结构化澄清（需要补充信息）。多轮全程会话稳定，两段式守卫（未确认不落库）全程成立。
+- 点测环境备忘：IAB 的 rAF 被挂起（visibility=visible 仍不触发），`nextPaint` 依赖 rAF 的写状态两段式在自动化测试里会停在 VALIDATING——垫片 `window.requestAnimationFrame = setTimeout` 后恢复正常；真实浏览器不受影响（chat 页同款 nextPaint 此前已真实浏览器验收）。
+
+### 已知发现（如实，待后续任务）
+
+- **planner 生成排程反复触发服务端 SCHEDULE_OVERLAP**：真实 LLM 多次生成「柳浪闻莺 → 奥体博览城」相邻安排但未预留 27 分钟车程缓冲，服务端硬校验如实拒绝。这是 planner 提示词与写校验器的对齐缺口（生成面不知道校验面的硬约束），非 P4a 前端缺陷；频繁命中会影响生成流可用性，建议 planner 提示词补「相邻地点衔接时间 ≥ 路程耗时」约束（涉及规划链提示词与评测治理，独立任务）。
+- 无冲突草稿的「保存→跳工作台」真机路径本轮未走到（每次生成均命中冲突/澄清）；该路径由新增单测的 replace 断言覆盖，P6 总验收复验。
+
 ### 下一步
 
-- P4 生成流迁工作台（最重，拆 2-3 PR）：首页输入/模板/胶囊 → 工作台生成态（中列生成面板+右列对话伴随）+ chat 页废弃重定向（决策 5）。
+- P4b：首页输入卡/模板卡/胶囊改指 `/travel/itineraries/new`；`/travel/chat` 废弃重定向（决策 5）；TravelChatPage 生成路径删除与测试迁移。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
