@@ -1,4 +1,4 @@
-# 评测数据集盘点（2026-10-21 更新）
+# 评测数据集盘点（2026-11-02 更新）
 
 > 位置：`backend/evaluation/datasets/`。加载入口统一为 `backend/evaluation/dataset/loader.py::load_dataset(module, selection)`。
 > 优先级：`selection`（suites/）→ `{module}/cases.jsonl`（V3 canonical）→ `{module}/` 目录分片 → 顶层 `{module}_v2.json` / `{module}_test_kb.json` / `{module}.json`。文件名含 `.deprecated.` 一律跳过。
@@ -9,7 +9,7 @@
 |------|-----------|------|------|----------|------|
 | rag | `rag/cases.jsonl` | 24 | 6.0.0-desktop-candidate.1 | `load_dataset('rag')` | `desktop_upload_smoke`(8) / `desktop_upload_full`(24)，对应 `rag_eval_kb` 的 28 份上传样本 |
 | planner | `planner/cases.jsonl` | 20 | v1.0 | `load_dataset('planner')` | 2026-09-15 由顶层 planner.json 迁入 V3，内容逐条一致 |
-| cs | `cs/cases.jsonl` | 20 | v1.0 | `load_dataset('cs')` | ID 体系 CS-001~020；manifest 2026-09-15 补齐 |
+| cs | `cs/cases.jsonl` | 324 | v2.2 | `load_dataset('cs')` | 2026-09-19 锁版 320 条（20 v1 + 300 cs-v2）；2026-11-02 P2 修订升 v2.1（faq 标注口径同源化 + intent→target 映射矛盾修复）、P3 收编 4 条候选（t_balance_query×2 / t_order_cancel×2，词表扩圈后回放全绿）升 v2.2。依据见 manifest notes。消费：决策层回放门禁 `backend/tests/customer_service/test_cs_decision_replay.py`（离线口径 284/244，multi_turn 与 safety-risk 显式 skip）+ 词表门禁 `cs/gate/`（test_cs_eval_gate）；管理端评测中心接线见 cs-evaluation-upgrade P4 |
 | sql | `sql/cases.jsonl` | 15 | v1.0 | `load_dataset('sql')` | 含 S014~S017 安全用例 |
 | e2e | `e2e/cases.jsonl` | 25 | v1.0 | `load_dataset('e2e')` | manifest case_count 2026-09-15 由 13 校正为 25 |
 | planner_params | `planner_params.json` | 8 | v1.0 | `backend/tests/evaluation/test_planner_params.py` 直读 | live 模式（真实 LLM）参数填充集，路径被测试硬引用，**勿移动** |
@@ -20,6 +20,7 @@
 - `rag_test_kb.json`（v4.0，103 条）：迁移期兼容数据；知识库注册源为 `backend/config/knowledge_base.py` 中的旧 KB `rag_test_kb`，仍被部分检索/indexer 测试引用。新的 RAG 评测使用 `rag/cases.jsonl` 和 `rag_eval_kb` fixture。
 - `rag.v1.deprecated.json` / `rag_v2.deprecated.json`：历史存档，loader 自动跳过。
 - `cs.v1.deprecated.json`：旧 cs 集（ID CS001~020），与新集零交集，2026-09-15 标记弃用。
+- `cs/v2.deprecated/`：cs-v2 生成中间分片归档（2026-11-02 治理定案，由 `cs/v2/` 改名）。304 条 = 与锁版逐字段一致的 300 条 + 4 条候选（t_balance_query×2 / t_order_cancel×2；P2 评审规则层无覆盖暂不收编，P3 词表扩圈后回放全绿并已按锁版流程收编进 v2.2，本目录仅存历史归档）。锁版 `cs/cases.jsonl` 是唯一事实源，分片不再维护；后续增补一律走锁版升版流程（升版本号 + 重算 sha256）。
 - `planner.v1.deprecated.json`：迁移前的顶层 planner.json 原件留档。
 - `GROUND_TRUTH_ENRICHMENT_PLAN.md`：数据集增强计划文档（历史）。
 

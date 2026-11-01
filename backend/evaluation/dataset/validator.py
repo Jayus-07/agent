@@ -10,7 +10,7 @@ _VALID_QUERY_TYPES = {
 }
 _VALID_TIERS = {"smoke", "core", "hard", "regression", ""}
 _VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", "",
-                  # cs-v2 锁版（2026-09-19）：来源枚举见 datasets/cs/v2 生成器
+                  # cs-v2 锁版（2026-09-19）：生成器归档见 datasets/cs/v2.deprecated
                   "demo-kb", "demo-order", "synthetic", "mapping-review"}
 
 

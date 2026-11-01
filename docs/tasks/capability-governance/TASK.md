@@ -4,7 +4,7 @@
 - 来源：cs-workstation-v2 独立审查（REVIEW.md §7/§8）+ 2026-11-01 治理对话决策——业界实践对照后确定五项优化，按「平台小改先行 → 客服试点 → 协议化 → 报表验证」排期
 - Worktree：`D:\Program Files\workplace\agent-gov`（**新建**，自 main 创建；命令见 §8。cs-v2 的 agent-cs-v2 worktree 停靠 standby/origin-main，本任务不复用不清理）
 - 分支策略：每期独立分支 `feat/cap-gov-gN`（自最新 main），独立 PR 合并 main；**合并前显式逐项确认全部 CI 结论**
-- 状态：**G1–G6 已全部完成并合入 main（任务关闭，2026-11-01）**——PR #198/#200/#202/#203/#204/#207；收官台账与总验收七条核对见同目录 PROGRESS.md 日志 2026-11-01（三）。owner 统一占位 `platform-team` 待按团队实况替换（独立小 PR）
+- 状态：**G1–G6 已全部完成并合入 main（任务关闭，2026-11-01）**——PR #198/#200/#202/#203/#204/#207；收官台账与总验收七条核对见同目录 PROGRESS.md 日志 2026-11-01（三）。owner 归属已确认：单一平台团队，`platform-team` 即实际归属（非占位，2026-11-01 用户确认，见 PROGRESS 日志（四））
 
 ---
 

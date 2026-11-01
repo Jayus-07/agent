@@ -57,7 +57,15 @@ interface LodgingPick {
   booking_status: string
   source: string | null
   observed_at: string | null
+  deep_link: string | null
   reason: string
+}
+
+/** 跳转型预订链接：仅透传后端 deeplink 白名单门放行的 https 链接（双保险）。 */
+function bookableLink(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const link = value.trim()
+  return link.startsWith('https://') ? link : null
 }
 
 function merchantSnapshot(pick: MerchantPickFields): MerchantSnapshotV2 {
@@ -144,6 +152,7 @@ function parseLodgingPick(row: Record<string, unknown>): LodgingPick | null {
     booking_status: stringOrNull(row.booking_status) ?? 'not_booked',
     source: stringOrNull(row.source),
     observed_at: stringOrNull(row.observed_at),
+    deep_link: bookableLink(row.deep_link),
     reason: stringOrNull(row.reason) ?? '',
   }
 }
@@ -325,13 +334,20 @@ export default function AutoOptimizePanel({
       {lodgings.length > 0 && <div>
         <p className="font-semibold text-[#2b405b]">住宿建议（价格升序 · 只作参考，预订走确认门）</p>
         <ul className="mt-1.5 space-y-1.5">
-          {lodgings.map((pick) => <li key={pick.selection_id} className="rounded-lg border border-[#e2ecf7] bg-white p-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0"><p className="truncate font-semibold text-[#2b405b]">{pick.name}</p><p className="mt-0.5 truncate text-[10px] text-[#7d8ea3]">{pick.reason}{pick.nightly_price_cny != null ? ` · ¥${pick.nightly_price_cny}/晚` : ''}{pick.tier ? ` · ${pick.tier} 档` : ''}{pick.availability ? ` · ${pick.availability}` : ''}</p></div>
-              {applied.includes(pick.selection_id) ? <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-medium text-emerald-700">已选入</span> : null}
-            </div>
-          </li>)}
+          {lodgings.map((pick) => {
+            const bookingLink = bookableLink(pick.deep_link)
+            return <li key={pick.selection_id} className="rounded-lg border border-[#e2ecf7] bg-white p-2.5">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0"><p className="truncate font-semibold text-[#2b405b]">{pick.name}</p><p className="mt-0.5 truncate text-[10px] text-[#7d8ea3]">{pick.reason}{pick.nightly_price_cny != null ? ` · ¥${pick.nightly_price_cny}/晚` : ''}{pick.tier ? ` · ${pick.tier} 档` : ''}{pick.availability ? ` · ${pick.availability}` : ''}</p></div>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {bookingLink && <a href={bookingLink} target="_blank" rel="noopener noreferrer" aria-label={`跳转供应商官方页面预订${pick.name}`} className="inline-flex min-h-8 items-center rounded-lg bg-[#087b73] px-2.5 text-[10px] font-medium text-white hover:bg-[#06655f]">去预订</a>}
+                  {applied.includes(pick.selection_id) ? <span className="rounded-full bg-emerald-50 px-2 py-1 text-[9px] font-medium text-emerald-700">已选入</span> : null}
+                </div>
+              </div>
+            </li>
+          })}
         </ul>
+        {lodgings.some((pick) => bookableLink(pick.deep_link)) && <p className="mt-1.5 text-[10px] leading-4 text-[#8493a6]">「去预订」跳转供应商官方页面完成下单，由你自行操作；平台不代订、不记录订单状态。</p>}
       </div>}
       {result.disclosures.length > 0 && <ul className="space-y-1 text-[10px] leading-4 text-amber-800">{result.disclosures.map((item, index) => <li key={index}>{item}</li>)}</ul>}
       <p className="text-[10px] text-[#8493a6]">{result.apply_hint}</p>

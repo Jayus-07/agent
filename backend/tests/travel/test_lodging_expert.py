@@ -173,10 +173,11 @@ def test_reporter_renders_lodging_suggestions_section():
         "lodging_options": [
             {"selection_id": "ho:1", "name": "海景酒店", "tier": "mid",
              "nightly_price_cny": 388.0, "availability": "available",
-             "address": "环岛路 1 号"},
+             "address": "环岛路 1 号",
+             "deep_link": "https://rollinggo.cn/pages/hotel/detail/index?id=1"},
             {"selection_id": "ho:2", "name": "青旅", "tier": "low",
              "nightly_price_cny": 120.0, "availability": "limited",
-             "address": None},
+             "address": None, "deep_link": None},
         ],
         "lodging_disclosure": "测试数据披露",
     }
@@ -185,7 +186,9 @@ def test_reporter_renders_lodging_suggestions_section():
     assert "## 住宿建议" in text
     assert "海景酒店" in text and "¥388/晚" in text and "舒适档" in text
     assert "青旅" in text and "¥120/晚" in text and "经济档" in text and "房量紧张" in text
-    assert "确认门" in text  # 预订指向确认门（只查不订语义）
+    # 跳转型预订：有 deep_link 的候选渲染「去预订」链接（白名单门后的 URL 原样透传）
+    assert "[去预订](https://rollinggo.cn/pages/hotel/detail/index?id=1)" in text
+    assert "平台不代订" in text  # 跳转型预订如实披露
 
 
 def test_reporter_lodging_section_absent_without_options():
