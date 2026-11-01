@@ -158,3 +158,38 @@ def test_lodging_expert_without_brief_is_noop():
 
     update = lodging_expert_node({"user_message": "x", "notes": []})
     assert update["expert_history"][-1]["expert"] == "lodging"
+
+
+# =============================================
+# F 住宿档位（P5 验收补缺）：reporter 渲染住宿建议段
+# =============================================
+
+
+def test_reporter_renders_lodging_suggestions_section():
+    """lodging_options 进行程单正文（原型「住宿建议：×× ¥388/晚」语义）。"""
+    from backend.travel.reporter import _render_lodging_picks
+
+    state = {
+        "lodging_options": [
+            {"selection_id": "ho:1", "name": "海景酒店", "tier": "mid",
+             "nightly_price_cny": 388.0, "availability": "available",
+             "address": "环岛路 1 号"},
+            {"selection_id": "ho:2", "name": "青旅", "tier": "low",
+             "nightly_price_cny": 120.0, "availability": "limited",
+             "address": None},
+        ],
+        "lodging_disclosure": "测试数据披露",
+    }
+    lines = _render_lodging_picks(state)
+    text = "\n".join(lines)
+    assert "## 住宿建议" in text
+    assert "海景酒店" in text and "¥388/晚" in text and "舒适档" in text
+    assert "青旅" in text and "¥120/晚" in text and "经济档" in text and "房量紧张" in text
+    assert "确认门" in text  # 预订指向确认门（只查不订语义）
+
+
+def test_reporter_lodging_section_absent_without_options():
+    from backend.travel.reporter import _render_lodging_picks
+
+    assert _render_lodging_picks({}) == []
+    assert _render_lodging_picks({"lodging_options": []}) == []

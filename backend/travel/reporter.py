@@ -755,6 +755,48 @@ def _render_food_picks(state: dict) -> list[str]:
     return lines
 
 
+def _render_lodging_picks(state: dict) -> list[str]:
+    """「住宿建议」段（ lodging 专家产出，2026-11-01 F 档位语义）。
+
+    原型语义「住宿建议：东百坊巷 ¥388/晚」：候选名 + 档位带 + 每晚价
+    （CNY 换算值，来源见 lodging_disclosure）；只列检索返回的事实字段，
+    缺的不补造。无候选/数据源未启用时整段不渲染（disabled 语义由
+    lodging_disclosure 走「需要你确认」披露，不在这里伪造空段）。
+    """
+    options = state.get("lodging_options") or []
+    if not options:
+        return []
+    lines = ["## 住宿建议", ""]
+    lines.append("> 实时库存与价格快照，随时可能变化；预订请走行程确认门复核。")
+    lines.append("")
+    tier_labels = {"low": "经济", "mid": "舒适", "high": "高档"}
+    for o in options[:3]:
+        if not isinstance(o, dict):
+            continue
+        name = str(o.get("name") or "").strip()
+        if not name:
+            continue
+        extras = []
+        tier = o.get("tier")
+        if tier:
+            extras.append(f"{tier_labels.get(str(tier), str(tier))}档")
+        nightly = o.get("nightly_price_cny")
+        if nightly is not None:
+            extras.append(f"¥{nightly:.0f}/晚")
+        availability = o.get("availability")
+        if availability and availability != "unknown":
+            availability_labels = {
+                "available": "可订", "limited": "房量紧张", "sold_out": "已满房",
+            }
+            extras.append(availability_labels.get(str(availability), str(availability)))
+        if o.get("address"):
+            extras.append(str(o["address"]))
+        tail = f"（{' · '.join(extras)}）" if extras else ""
+        lines.append(f"- **{name}**{tail}")
+    lines.append("")
+    return lines
+
+
 def _render_itinerary(state: dict, itinerary) -> str:
     brief = itinerary.brief
     report = load_validation(state)
@@ -787,9 +829,10 @@ def _render_itinerary(state: dict, itinerary) -> str:
     # 主因。说明文本只讲「为什么」与「要注意」，逐时安排看行程卡。
     # 「为什么选它」等逐条说明已由中栏行程卡展示（reason/note 字段）。
 
-    # ── 规划依据 + 美食推荐（2026-10-03）：「为什么这样排/为什么选这些」──
+    # ── 规划依据 + 美食推荐 + 住宿建议（2026-10-03 / 住宿档位 2026-11-01）──
     lines += _render_rationale(state, itinerary)
     lines += _render_food_picks(state)
+    lines += _render_lodging_picks(state)
 
     # ── 费用拆分（M2 验收反馈）：接通可核验费用来源前整节不渲染——
     # 一节「暂无数据」对用户是噪音；预算协商（M3）接真实费用后恢复。
