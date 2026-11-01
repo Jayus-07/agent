@@ -47,49 +47,74 @@
 
 ---
 
-# 总计划全景（2026-11-01 用户决策选项 (b) 后定稿——执行会话以此为准）
+# 总计划全景（2026-11-02 持续实施后接力更新——下一会话以此为准）
 
 ## 一、总计划与进度
 
 | 阶段 | 内容 | 状态 | 产出/PR |
 |---|---|---|---|
-| 前置任务 travel-v2-production | P1–P5：rollinggo live 接线、F18 card、F04/F02/F05、F17 布局+原型对齐、跳转型预订、验收 7 场景 | ✅ 全部合并 | #205/#208/#209/#210/#212/#213/#214/#217/#219/#220 |
-| 计划定稿 | 原型生产化 TASK/PROGRESS + 差距矩阵 v0 + 决策点 | ✅ 合并 | #222/#224 |
-| **T1 12306 迁管理端能力中心**（用户已决策 b） | 正式连接 `12306` 登记（private 内网）→ discover → approve query-tickets/query-ticket-price → agent 授权（黄金证据）；live_search_service 车次/票价查询加动态通道（动态在场优先→静态直连回退→disabled 如实）；三态/撤销 fail-closed/契约回放测试；govtest 残留清理；rag_smoke 登记 | ✅ 代码+治理+运行态验收完成（2026-11-02），待提交 PR | 分支 `feat/travel-12306-dynamic-capability`（见下「T1 执行记录」） |
-| **D0 侦察定稿** | 差距矩阵到锚点级（决策点 1/2/3/4 已于 2026-11-02 定稿，见 TASK §5）；TASK §2 升 v1 | ✅ 完成（2026-11-02，见下「D0 侦察记录」） | 矩阵 v1 入 TASK §2 |
-| P1 设计令牌与全局骨架 | Tailwind 令牌 + TopBar 胶囊/头像钮 + BottomNav 四项 + 头像抽屉 | ⬜ | PR + 原型点测 |
-| P2 首页对照校对（v1 降级） | H1-H7 逐屏对照原型点测，只修真差异（#220 已落 Hero/胶囊/照片卡等全量） | ⬜ | 校对清单 + H1-H7 全勾 |
-| P3 工作台功能块 | 概览统计块（W2 新建）/天数条 segment+行内加天（W3）/候选卡形态校对（W7）/通知条措辞（W11） | ⬜ | PR + W2/W3 全勾 |
-| P4 生成流进工作台（最重） | 首页输入→工作台生成态（中列生成面板+右列对话伴随）；chat 页废弃重定向（决策 5 已定） | ⬜ | 2-3 个 PR + 全流程点测 |
-| P5 历史/列表/地图形态 | 历史时间线/两列表页/地图多源回退 | ⬜ | PR + L/W9/W14 全勾 |
-| P6 总验收 | 原型全页面点测 + 移动端 + 408/tsc + rebuild 全链 | ⬜ | 用户逐页验收 |
+| 前置任务 travel-v2-production | P1–P5：rollinggo live 接线、F18 card、F04/F02/F05、F17 布局+原型对齐、跳转型预订 | ✅ 全部合并 | #205–#220 |
+| 计划定稿 + D0 侦察定稿 | 差距矩阵 v1（锚点级，#220 后重核：首页/列表页/骨架大半已对齐）+ 决策点 1–6 全定稿 | ✅ 合并 | #222/#224/#235 |
+| **T1 12306 迁管理端能力中心** | 动态 capability 通道（动态在场优先→撤销 fail-closed→静态回退→disabled 如实）+ 治理登记/黄金证据 + `TRAIN_MCP_ENABLED` 收窄 false | ✅ 合并 | #232 |
+| **P1 全局骨架** | 底导「我的」接抽屉（共享组件向后兼容扩展）+ 旅游导航插槽（决策 4）；G1 令牌决策=按 travelTheme 增量收口不建第二套表 | ✅ 合并 | #236 |
+| **P3 工作台功能块** | W2 概览统计块（六行，travelOverview 单一事实源）+ W3 天数 chip 主题；W7/W11 实测已对齐零改动 | ✅ 合并 | #240 |
+| **P4a 生成流引擎抽取 + 工作台生成态** | `useTravelPlanGeneration` 单一实现 + `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 后端冲突消息可读性修复 | ✅ 合并 | #246 |
+| **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch` 已建） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test 或新 hook 级测试，其余随组件退役 | ⬜ 待开工 | PR + 决策 5 收口 |
+| **T2 planner 排程约束对齐**（新立项，后端+提示词+评测） | 见下「T2 专项分析」 | ⬜ 待开工 | PR + 评测连带 |
+| P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ⬜ | 校对清单 |
+| P5 历史/列表/地图形态校对 | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正、W15 断点点测 | ⬜ | PR + L/W9/W14 全勾 |
+| P6 总验收 | 原型全页面点测 + rebuild 全链（含生成→保存→跳转全链复验）+ 用户逐页验收 | ⬜ | 用户验收 |
 
-**建议执行顺序**：T1（后端独立、随时插队）→ D0 → P1 → P2 → P3 → P4 → P5 → P6；D0 期间一并问掉决策点 1/2/3/4。
+**建议执行顺序**：P4b（前端最小收口决策 5）→ T2（planner 对齐，见下）→ P2/P5（校对类可穿插）→ P6（总验收，依赖 T2 落地后生成链路可用）。
+
+### T2 专项分析：planner 排程约束对齐（下一会话从这里侦察开工）
+
+**现象**（P4a 真机 4+ 轮实证）：真实 LLM 多次生成「柳浪闻莺（09:00+120min）→ 奥体博览城（11:00 开始）」相邻安排，两站车程 27 分钟（planner 已调路线 API 拿到 `duration_min=27` 写进 legs）但排程未预留衔接时间 → 服务端 `trip_write_validator` 的 `SCHEDULE_OVERLAP` 硬校验如实拒绝（422，消息已可读）。用户无论怎么重试保存都会失败，只能反复「再调整」——生成流可用性实际受损。
+
+**根因**：生成面（规划链提示词）不知道校验面的硬约束——validator 是创建/编辑的硬门，planner 无对应指令。
+
+**下一会话侦察与施工顺序**（马斯克五步，先读后改）：
+1. 读 `backend/travel_v2/services/trip_write_validator.py` 的 SCHEDULE_OVERLAP 精确判定（overlap 定义、缓冲口径、其它冲突码），把规则**原样**翻译成提示词约束——不是发明新规则，是同步既有规则。
+2. 定位规划链提示词（`backend/prompts/` 或 travel 域 planner 的 prompt 注册处）与版本治理方式（`docs/prompt/architecture.md`——改动走 prompt 发布/回滚链路，不硬编码）。
+3. 提示词补约束（方向，勿直接照抄）：「相邻地点的下一站 `start_time` ≥ 上一站 `start_time + duration_min + leg.duration_min`（车程缓冲）；无法满足时压缩景点数而不是压缩衔接时间」+ 一个正反例。
+4. 评测连带（AGENTS.md 第 8 条）：规划链评测/golden 增加排程可行性断言（生成结果相邻衔接 ≥ leg duration），防回归；改 prompt 常量 → 同步守卫断言。
+5. 验收：不同城市真实生成 ≥3 次全部通过服务端创建（无 422 冲突）；P4a 生成态真机「保存→跳工作台」全链走通（P4a 未走到的最后一段）。
+
+**边界**：不改 validator（校验器是对的）；不动前端；若 prompt 约束不足（LLM 不稳定遵守），备选方案 = 保存前服务端把冲突以 pending_resolution 语义回给生成流做一次自动修复重排——仅在 prompt 方案实测不稳后评估，避免过度设计。
 
 ## 二、工作树与环境
 
-- **Worktree**：`D:\Program Files\workplace\agent-wt-travel-proto`（分支从最新 main 建，每阶段独立分支+PR）；`frontend/node_modules` = Junction 指主仓库（已建，vitest 直接可跑）。
-- **共享栈**：devctl.bat rebuild /y（PowerShell 调用，Git Bash 里 cmd /c 会被路径转换吞掉）；全容器健康基线含 mcp-12306（healthy）与 rollinggo 连接（connected）。
-- **PG**：一律显式 `PGHOST=127.0.0.1`（端口 5433，.env 的 localhost 先解析 IPv6 空耗——根因见 travel-v2-production PROGRESS §1）。
-- **本机已开的 live 开关**（勿回退）：`TRAVEL_COMMERCE_PROVIDER_MODE=live` + `TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS=rollinggo.cn`（主仓库与 worktree .env 均已配）+ `TRAIN_MCP_ENABLED=true`（T1 后语义收窄为静态回退通道开关）。
-- **凭据纪律**：rollinggo/12306/AMAP 凭据只走管理端加密入库或 env，不入库不入文档不入日志；临时 admin 账号用完必清理（注册→提权→用→停用+logout，流程见 travel-v2-production PROGRESS §4）。
+- **Worktree**：`D:\Program Files\workplace\agent-wt-travel-proto`（每阶段独立分支从最新 origin/main 建，独立 PR；当前 P4b 分支已建）。`frontend/node_modules` = Junction 指主仓库（vitest 直接可跑）。
+- **共享栈**：`devctl.bat rebuild /y`（PowerShell 调用；`start/restart` 不换代码不换 .env）；改后端唯一生效路径 = rebuild。
+- **PG**：一律显式 `127.0.0.1:5433`（5432 是宿主机另一套 PG，勿连）。
+- **live 开关现状**：`TRAVEL_COMMERCE_PROVIDER_MODE=live` + `TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS=rollinggo.cn`（保持）；**`TRAIN_MCP_ENABLED=false`（T1 已收窄，动态通道在场优先，勿改回 true——改回会让撤销/停用静默回退静态直连）**。两份 .env（主仓库+worktree）均已同步。
+- **治理运行态**：连接 rollinggo（agent 授权）+ 12306（两工具 approved+agent 授权，capability `mcp.t12306__query_tickets`/`_query_ticket_price`）；`12306-govtest` 与 probe-rest×3 为 disabled 残留（保留态，勿动）。
+- **凭据纪律**：临时账号用完即停用+吊销（本任务已形成脚本化流程：注册→提权（仅治理操作需要）→用→UPDATE status=0+吊销 sessions+删 refresh_tokens）；凭据不落盘不入文档。
+- **网络坑**：github.com:443 间歇不可达（api.github.com 走 gh 正常）——push/fetch 带重试循环即可；管理端 API 全路由要 `X-API-Key`（主仓库 .env），治理写操作还要 `Idempotency-Key` 头。
 
 ## 三、测试纪律（各阶段底线）
 
-- 前端：`vitest run src/components/travel src/api`（当前基线 **408 passed**，每阶段零删断言、只增不劣化）+ `tsc --noEmit`（**16 错 = main 既有基线**，非 travel 面）。
-- 后端（仅 T1 触及）：三态/fail-closed/契约回放单测 + 真 PG 门控（`TRAVEL_V2_TEST_POSTGRES=1 PGHOST=127.0.0.1`）集成 + rag_smoke 定向清单登记（AGENTS.md 第 8 条连带）。
-- 不跑全量 pytest；跑测前查并发 pytest（`Get-CimInstance Win32_Process` 过滤）。
-- 原型对照点测：8124 静态服务 + IAB，HANDOFF §2 坑清单必读（可见性置真、锁 tab.id、轮询断言非固定 sleep、data-test 锚点驱动）。
+- 前端：`cd frontend && ./node_modules/.bin/vitest run src/components/travel src/api` → **当前基线 423 passed**（每阶段只增不劣化、零删断言）；`./node_modules/.bin/tsc --noEmit` → **16 错 = main 既有基线**（travel 面零错误）。
+- 后端：按风险最小充分（本次 T2 触及提示词+评测；trip 契约测试在 `backend/tests/travel_v2/test_api_contract.py`）；跑测前查并发 pytest（Pitfalls §三）。
+- 浏览器点测（IAB）：**rAF 在 IAB 被挂起**——依赖 `nextPaint` 的写状态两段式会停在 VALIDATING，先垫片 `window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16)` 再驱动流程；React 受控输入用 Playwright `fill()`（原生 value 赋值无效）；轮询断言非固定 sleep。
+- 不跑全量 pytest/全量回归；提交前查并发会话。
 
-## 四、验收总清单（P6 收口）
+## 四、验收总清单（P6 收口，T2 落地后执行）
 
-1. 原型逐页面浏览器点测全 PASS（首页/工作台/生成流/模板/我的行程/编辑面板/历史/确认门/优选/查询四 Tab）；
+1. 原型逐页面浏览器点测全 PASS（首页/生成态/工作台/模板/我的行程/编辑面板/历史/确认门/优选/查询四 Tab）；
 2. 差距矩阵 v1 全项勾选回填 PROGRESS（排除项显式标注）；
-3. 前端基线全绿 + tsc 零新增；后端 T1 测试全绿 + rag_smoke CI 过；
-4. `devctl.bat rebuild` 后运行态全链：登录→首页→生成→保存→编辑→查询→优选→预订跳转/确认门→历史/ICS/分享，管理端治理视图（rollinggo+12306 两连接）与运行态一致；
-5. 移动端断点核对；已知边界如实标注（API 闭环预订 BLOCKED/机票契约位/notice-event 契约位）。
+3. 前端 423+tsc 基线全绿；后端触及面测试全绿 + rag_smoke CI 过；
+4. `devctl.bat rebuild` 后运行态全链：登录→首页→**输入直达生成态→真实生成→保存成功→自动进工作台**（T2 验收的关键一段）→编辑→查询→优选→预订跳转/确认门→历史/ICS/分享；管理端治理视图（rollinggo+12306）与运行态一致；
+5. `/travel/chat` 旧链接重定向兼容核对（带 trip_id 与带 prompt 两种）；
+6. 移动端断点核对；已知边界如实标注（API 闭环预订 BLOCKED/机票契约位/天气契约位/notice-event 契约位）。
 
 ## 五、已知信息（执行会话开工前通读）
+
+- **各阶段执行记录见本文件下方**（T1/P1/P3/P4a 四节，含全部坑与决策）；差距矩阵 v1 在 TASK §2；方案细节在 TASK §4/§4b；决策定稿在 TASK §5。
+- **D0 头号发现**：#220 已把首页/列表页/骨架与原型双向对齐——校对类阶段（P2/P5）预期改动很小，先逐屏点测只修真差异。
+- **P4a 关键决策**：生成引擎单例（hook）——P4b 删 TravelChatPage 时生成语义的回归网 = TravelWorkbenchGenerate.test + 迁移用例，勿在两处维护两份生成逻辑。
+- 历史事故避坑（多会话并行/提交双路径限定/容器归属）：`.zcode/skills/agent-repo-pitfalls/SKILL.md` 必读。
+- 原型点测：HANDOFF §2 坑清单 + data-test 锚点；`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html`（8124 静态服务）。
 
 ## T1 执行记录（2026-11-02，会话续工完成）
 

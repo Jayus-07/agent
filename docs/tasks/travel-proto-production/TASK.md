@@ -1,6 +1,6 @@
 # TASK: 旅游平台原型生产化（travel-proto-production）——原型功能全集复刻进真实前端
 
-> 创建：2026-11-01 · 状态：**执行中（T1 已合并 #232；D0 已定稿，下一阶段 P1）**
+> 创建：2026-11-01 · 状态：**执行中（T1/D0/P1/P3/P4a 已合并；下一阶段 P4b → T2 → P2/P5 → P6，接力计划见 PROGRESS「总计划全景」）**
 > 用户需求原话（2026-11-01）：「现在的生产旅游平台不是用我的原型图，需要把原型图完全复刻到生产环境……首页点和 AI 聊聊跳转的原型图页面，相当于原型图出来用户系统外，全替换原来生产的旅游平台」；补充：「原型图不只布局，还有很多功能是原来旅游平台没有的。目前原型图是可以模拟生产，只是差后端真实数据」。
 
 ## 0. 需求解读（执行会话开工前与用户复核一遍）
@@ -106,11 +106,13 @@
 |---|---|---|---|
 | **D0 侦察定稿** | 把 §2 矩阵逐项核到「原型 DOM/CSS 区块 ↔ 真实组件/函数」粒度，产出执行清单（每项：原型锚点选择器/真实文件/改动类型/预估规模）；§5 决策点逐条找用户拍板；更新本 TASK.md §2 为 v1 | 原型 8124 服务 + IAB；真实组件通读 | 矩阵 v1 落 PROGRESS；决策点全部有结论 |
 | **T1 12306 迁管理端能力中心**（用户已决策选项 b；可与 P1 并行，见 §7 方案） | 正式连接登记（12306，private 内网）→ discover → approve 两工具 → agent 授权；`live_search_service` 车次/票价查询改走动态 capability（静态直连保留为回退）；三态+撤销 fail-closed 测试；清理 govtest 残留 | admin_mcp 运行态操作、live_search_service、新动态 provider 模块、rag_smoke 登记 | 治理视图与运行态一致；撤销授权后如实拒绝；运行态车次 Tab/域图 query_train 均走动态通道 |
-| **P1 设计令牌与全局骨架** | Tailwind theme 扩展（色彩/圆角/间距/字号/阴影令牌，对照原型 CSS 变量）；TravelTopBar 胶囊导航/头像钮；TravelBottomNav 四项；头像抽屉组件 | tailwind.config、TravelV2Frame、新 Drawer | 令牌落地后现有页面零回归（408+tsc）；导航/抽屉按原型点测 |
+| **P1 全局骨架**（v1 收窄后实作） | 底导「我的」接抽屉 + 旅游导航插槽（决策 4）；G1 决策=色彩已同源，不建第二套 Tailwind 令牌表（P3/P5 校对按 travelTheme.ts 增量收口） | MobileAssistantDrawer（共享组件）、TravelV2Frame | ✅ 合并 #236；vitest 423/tsc 基线；双端抽屉点测 |
 | **P2 首页对照校对**（v1 降级：#220 已落全量） | H1-H7 逐屏对照原型点测，只修真差异 | TravelHome.tsx 校对 | 原型首页对照点测（桌面+移动）；H1-H7 全勾 |
-| **P3 工作台功能块** | 概览卡统计块（W2）+天数条 segment+行内加天（W3）+详情卡/候选卡形态（W4/W5/W7） | TravelV2TripWorkspace、TravelSearchPanel | 原型工作台对照点测；W1-W7 全勾 |
-| **P4 生成流进工作台**（最重，可再拆 2-3 个 PR） | 首页输入/模板/胶囊 → 携 prompt 进工作台生成态：中列生成面板（草稿卡）+右列助手对话伴随（澄清/过程行/tool.card）；保存落 v1 后无缝切编辑态；chat 页废弃重定向（§5 决策点 5 已确认） | TravelChatPage 生成逻辑迁移、TravelV2TripConversation 扩展、新 WorkbenchGeneratePanel | 原型生成全流程对照点测（三轮澄清→生成→保存→编辑）；会话关联/写状态红线不破 |
-| **P5 历史/列表/地图形态** | 历史时间线抽屉形态（W9）+templates/itineraries 列表页（L1/L2）+地图细节（W14 多源回退/琥珀标记） | HistoryPanel、两列表页、TravelV2Map | 原型对照点测；L1-L3/W9/W14 全勾 |
+| **P3 工作台功能块** | W2 概览统计块（travelOverview 六行单一事实源）+ W3 天数 chip 主题（行内加天=原型误读已修正）；W7/W11 实测已对齐零改动 | TravelV2TripWorkspace、travelOverview | ✅ 合并 #240；W2 六行+chip 主题真机点测 |
+| **P4a 生成流引擎 + 工作台生成态** | useTravelPlanGeneration 单一实现（ChatPage 10/10 回归）+ `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 保存 replace 进工作台；后端冲突消息可读性修复 | TravelChatPage/新 hook/新视图/trips.py | ✅ 合并 #246；真机 4+ 轮链路点测 |
+| **P4b 入口切换 + chat 废弃** | 首页输入卡/胶囊改指 `/travel/itineraries/new`；`/travel/chat` 服务端重定向（trip_id→工作台，prompt→生成态，旧链接兼容）；删 TravelChatPage（工作台已内嵌对话，移动端「对话」钮改指工作台）；测试迁移（UNKNOWN 重试/决策令牌/澄清断言迁 WorkbenchGenerate/hook 级） | TravelHome/app/travel/chat/删 TravelChatPage | PR + 决策 5 收口 + 旧链接兼容核对 |
+| **T2 planner 排程约束对齐**（2026-11-02 立项） | 真实生成反复触发服务端 SCHEDULE_OVERLAP（planner 已拿车程 27min 但排程不留衔接缓冲）：读 validator 精确规则 → 规划链提示词同步该硬约束（走 prompt 发布治理）→ 评测加排程可行性断言（AGENTS.md 第 8 条连带）→ 验收=不同城市生成 ≥3 次全过创建 + P4a 生成态保存→跳转全链走通 | 规划链 prompt/评测资产（validator 只读不动） | PR + 评测连带 + 真机验收 |
+| **P5 历史/列表/地图形态校对** | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正（CDN 回退已排除）、W15 断点点测 | HistoryPanel/TemplateCatalog/TravelV2Map | PR + L/W9/W14 全勾 |
 | **P6 总验收** | 原型逐场景浏览器点测（全页面）；移动端断点；408+tsc；`devctl.bat rebuild` 运行态全链；PROGRESS 回填 F 清单 | — | 用户逐页验收 |
 
 > P1/P2 先行可独立交付价值（首页焕新不依赖 P4）；P4 是体验重构核心，安排在骨架稳定后；**T1 独立于前端阶段，随时可插队执行**（后端+治理变更，与前端重构无文件交集）。
