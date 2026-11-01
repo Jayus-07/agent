@@ -6,6 +6,15 @@ import pytest
 from backend.providers.travel.live import resilience
 
 
+@pytest.fixture(autouse=True)
+def _fresh_provider_slots(monkeypatch):
+    """v16/v17 run 实证：同 worker 前序用例的 loader hang 3s 内 slot 释放晚于
+    本用例开始（BoundedSemaphore 模块级共享）→ 4 线程只有 3 个拿到槽。
+    本文件用例各自从满容量开始（容量语义不变，只隔离前序泄漏）。"""
+    monkeypatch.setattr(resilience, "_provider_slots",
+                        threading.BoundedSemaphore(4))
+
+
 def test_single_flight_reclaims_unique_key_locks():
     flight = resilience._SingleFlight()
     for i in range(1000):
