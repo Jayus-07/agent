@@ -97,4 +97,46 @@
 4. **测试**：新增 `tests/travel/booking/test_booking_rest_routes.py`（三段正向 + 跨用户/跨行程 404 + 未认证 401 + provider off 503 + 参数 422；真 PG 门控 + 测试 ledger 隔离）。
 
 ### B 系列验证证据
-- REST 路由测试 7 用例：首跑 1 failed（provider off 用例暴露 quote 未前置检查 provider 状态——修复：quote 入口加 off 前置拒绝）→ 复跑相关 3 用例 passed；全套后台复验中。
+- REST 路由测试 7 用例：首跑 1 failed（provider off 用例暴露 quote 未前置检查 provider 状态——修复：quote 入口加 off 前置拒绝）→ 复跑相关 3 用例 passed。
+
+## U 系列（架构统一 + 数据源接入）——代码与测试完成
+
+1. **U1 数据源层**：AmapPOIProvider（高德景点类目 110000|140000；评分/营业时间实回、unverified 标注、票价/时长不推断）+ 链账 `poi.search=("amap_live","seed")` + `assemble_poi_provider()` 链式装配接入 `travel_poi_search_tool`（同名/300m 去重并入，失败软降级留痕）；`travel.hotel.search` ToolSpec（READ，AGENT_LODGING）。
+2. **U2 图节点**：`travel_lodging_expert`（weather 后 budget 前，域图 12→13 节点）+ `lodging_service`（CNY 单价换算/档位带/三态直通）+ auxiliary 扩展 `query_food`（高德商户 + L3 记忆饮食偏好确定性过滤）与返程衔接校验（车次 vs 末日末项结束时刻，只标注不改单）；canonical agents 7→8；turn_decision 契约与默认 prompt 同步。
+3. **U3 V2 服务**：`POST /travel/v2/trips/{id}/auto-optimize`（只读编排：餐饮评分降序/住宿价格升序 top3 + 逐类软失败披露 + apply_hint；零写入）+ `BookingConfirmGate.tsx`（两段式确认卡：报价→确认→状态；取消/失败如实）挂 `TravelSearchPanel` 酒店卡 + travelV2 API 客户端六函数。
+4. **U4 Skill 层**：`travel.food_search` / `travel.hotel_search` / `travel.booking_quote` 三 Skill（Tool 层 food/hotel/booking 包装 + capabilities.yaml + spec 治理面 travel.booking.quote WRITE）；skills 注册守护与 output_type 清单同步；rag_smoke 定向清单 +4 测试。
+5. **U5 rollinggo**：BLOCKED（上游库存权限，联系人 york.lu@dida.com）；能力账 hotel/flight.search 注记滚动更新，fake 契约不变。
+
+### U 系列验证证据
+- U1/U2 契约：`pytest tests/travel/test_amap_poi_provider.py test_lodging_expert.py` → 15 passed + 1 skipped（live 冒烟 env 门控）。
+- 结构回归：test_travel_graph（stage 链 weather→lodging→budget）/FROZEN_ORDER/canonical agents/agent_inventory 全绿（18+163 passed 一轮修复后）。
+- U4：`pytest backend/tests/skills test_layer_consistency.py` → 112 passed；capabilities 注册 `travel.food_search/hotel_search/booking_quote` 三键确认。
+- U3：auto-optimize 3 passed；前端 `vitest run src/components/travel src/api` → **405 passed**；`tsc --noEmit` 16 错误=main 既有基线（零新增）。
+- 收官合并验证：`pytest travel graph/governance/lodging/amap/hotel_search/auto_optimize/booking REST` → **87 passed, 1 skipped**（含真 PG 上 quote→confirm→status 假全链）。
+
+## 阻塞 / 移交下一会话（2026-11-01 用户指令：剩余工作交接）
+
+### 工作树与分支
+- Worktree：`D:\Program Files\workplace\agent-wt-travel-consolidation`；分支 `feat/travel-domain-consolidation`；HEAD=三笔收编提交（cc6a707 D 系列 → 6f37d03 B 系列 → e1a0f32 U 系列），基线 origin/main@262e839（PR #187 合并后）。**未合并 main**——待用户确认后走 PR（建议三笔一起一个 PR，标题「travel 收编重构：commerce/booking 域图壳删除 + 架构统一 + 真实数据契约测试」）。
+- `.env` 已从主仓库拷贝（含 AMAP_KEY，不入库）；`frontend/node_modules` 为指向主仓库的 Junction（只读复用，前端测试直接可跑）。
+- 原型服务器 `python -m http.server 8124`（pid 16916，另一会话 8:28 起的）仍在跑——用完请停。
+
+### 剩余工作（按优先级）
+1. **booking lifecycle 慢套复验**：`pytest backend/tests/travel/booking/test_booking_lifecycle.py test_booking_state_and_identity.py test_stop_e_manual_resolve_ledger.py`（真 PG + advisory 锁；本会话两次因与其他会话并发测试抢 `ci_travel_booking_tests` 锁超时，未取得最终绿——REST 三段已独立绿，lifecycle 预期不受收编影响但需实证）。
+2. **收编分支重建本机服务验证**（AGENTS.md 纪律）：`devctl.bat rebuild` 需用包含本分支代码的目录重建——当前共享栈仍跑旧代码；重建后 `/health` 应无 `travel_commerce` 组件、`/agents` 应无两张子流图。并行会话占用共享栈时先协调。
+3. **真实高德样本录制**：BLOCKED-IN-ENV——本沙箱 httpx 0.28.1 对 restapi.amap.com TLS EOF（urllib 正常，传输层问题非本任务引入）。在正常网络环境跑 `TRAVEL_AMAP_LIVE_SMOKE=1 pytest backend/tests/travel/test_amap_poi_provider.py::test_live_amap_search_record_shape` 录制样本→脱敏入库为 fixture。
+4. **PR 合并**：CI 起来后核对 rag_smoke 新增四测试在 CI 通过；合并后删除 `travel-platform-proto` 之外的临时进程、fast-forward 主仓库本地 main（当前本地 main@0d848a6 含未推送的 59bcde9，已随 PR #187 落库）。
+5. **§8 收尾项**：travel_commerce 残留仅剩 055 迁移注释（历史不可改）与任务文档自身（合理）；travel_booking 残留均为白名单面（booking 包/REST/052/recovery/env/负向断言）。
+
+### 总计划与验收对照（DOMAIN-CONSOLIDATION-PLAN.md §8）
+- [x] travel_commerce/travel_booking 域图注册/预滤器/续填/圆桌/评测零残留（grep 核对，例外=迁移历史注释+任务文档）
+- [x] travel 域图 12+1（lodging）节点，stage_targets 结构回归通过（13 节点）
+- [x] 契约测试矩阵 §6 主要行落位（POI/Amap 15+1、Lodging 10+6、Booking REST 7、AutoOpt 3、Skills 112；Dining/Intercity 由 auxiliary 用例承接；真实样本录制 BLOCKED-IN-ENV 移交）
+- [x] 原型场景抽样：三轮澄清 PASS / 生成含住宿档位 PASS / 工作台+自动优选+时区警告 PASS / 酒店 rollinggo:mcp 披露 PASS；food 偏好过滤与返程车次由单测承接（原型交互点测未逐一走完）
+- [x] V2 API 行为回归（前端 405 全绿 + travel_v2 定向）+ booking REST 三段集成（真 PG 假全链）
+- [ ] booking lifecycle 慢套最终绿（移交 1）
+- [ ] 本机重建健康验证（移交 2）
+
+### 其他会话并行事实（下一会话开工前重读）
+- 本会话期间另一会话在主仓库跑 rag 全套与 booking reconciliation 测试（共享 dev PG 5433 + booking advisory 锁）——booking 慢套复验前先确认无并发 pytest。
+- 本地主仓库 main@0d848a6 落后远端且 59bcde9 已随 PR #187 落库——合并后主仓库需 fast-forward 对齐（涉及主 worktree，属用户操作）。
