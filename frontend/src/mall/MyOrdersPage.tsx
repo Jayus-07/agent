@@ -74,7 +74,7 @@ function MyOrdersInner() {
       ? `我要为订单 ${orderNo} 申请退款`
       : `我想咨询订单 ${orderNo} 的情况`
     window.sessionStorage.setItem('cs2-prefill', text)
-    router.push('/customer-service-v2')
+    router.push('/customer-service')
   }
 
   const doPay = async (order: MallOrder) => {

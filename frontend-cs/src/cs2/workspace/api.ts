@@ -199,6 +199,16 @@ export async function updateMyStatus(
   })
 }
 
+// P8 接单开关：accepting=false 后派单过滤不再派新 offer（服务端实时查库生效）
+export async function updateMyAccepting(
+  accepting: boolean,
+): Promise<AgentStatusView> {
+  return request('/api/cs/agents/me/status', {
+    method: 'PUT',
+    body: JSON.stringify({ accepting }),
+  })
+}
+
 export interface TransferResult {
   conversation_id: string
   handoff_state: string

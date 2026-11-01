@@ -33,7 +33,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock('@/cs2/workspace/api', () => api)
 
-import Cs2RefundsPage from '@/app/cs2/refunds/page'
+import Cs2RefundsPage from '@/app/cs/refunds/page'
 
 beforeAll(() => {
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

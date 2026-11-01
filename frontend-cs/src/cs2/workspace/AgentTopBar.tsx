@@ -1,9 +1,11 @@
 'use client'
 
 // cs-workstation-v2 P3：工作台顶栏 —— 坐席状态切换（持久）+ 通知中心（铃铛）。
+// P8：接单开关（accepting，关=不派新单，即时生效）。
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   getMyStatus,
+  updateMyAccepting,
   updateMyStatus,
   type AgentStatusView,
   type AgentWorkStatus,
@@ -51,19 +53,47 @@ export function AgentStatusBar({ onNotice }: { onNotice: (n: NoticeItem) => void
     }
   }
 
+  const toggleAccepting = async () => {
+    if (!view) return
+    setSaving(true)
+    try {
+      setView(await updateMyAccepting(!view.accepting))
+    } catch {
+      onNotice({ id: crypto.randomUUID(), level: 'warn', text: '接单开关切换失败，请重试', at: Date.now() })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
-    <select
-      className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 disabled:opacity-50"
-      aria-label="坐席状态"
-      disabled={saving}
-      value={view?.status ?? ''}
-      onChange={(e) => void change(e.target.value as AgentWorkStatus)}
-    >
-      {!view && <option value="">…</option>}
-      {(['online', 'busy', 'away', 'offline'] as const).map((s) => (
-        <option key={s} value={s}>{STATUS_ZH[s]}</option>
-      ))}
-    </select>
+    <div className="flex items-center gap-1.5">
+      <select
+        className="h-7 rounded-lg border border-slate-200 bg-white px-2 text-xs text-slate-700 disabled:opacity-50"
+        aria-label="坐席状态"
+        disabled={saving}
+        value={view?.status ?? ''}
+        onChange={(e) => void change(e.target.value as AgentWorkStatus)}
+      >
+        {!view && <option value="">…</option>}
+        {(['online', 'busy', 'away', 'offline'] as const).map((s) => (
+          <option key={s} value={s}>{STATUS_ZH[s]}</option>
+        ))}
+      </select>
+      <button
+        type="button"
+        aria-pressed={view?.accepting ?? false}
+        aria-label={`接单开关（当前${view?.accepting ? '开' : '关'}）`}
+        disabled={saving || !view}
+        onClick={() => void toggleAccepting()}
+        className={`h-7 rounded-lg border px-2 text-xs font-medium disabled:opacity-50 ${
+          view?.accepting
+            ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+            : 'border-slate-200 bg-slate-100 text-slate-500 hover:bg-slate-200'
+        }`}
+      >
+        接单{view?.accepting ? '开' : '关'}
+      </button>
+    </div>
   )
 }
 

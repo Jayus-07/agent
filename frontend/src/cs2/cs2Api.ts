@@ -108,13 +108,15 @@ export async function requestHandoff(conversationId: string): Promise<{ handoff_
 
 // ── P3：人工服务态消息通道 ─────────────────────────────────
 
-/** 转人工后（waiting/agent_offered/human_active）用户消息直达坐席 */
+/** 转人工后（waiting/agent_offered/human_active）用户消息直达坐席。
+ * P8：后端收口全局幂等，Idempotency-Key 必填（同键同内容重放返回首次结果）。 */
 export async function postMyMessage(
   conversationId: string,
   content: string,
 ): Promise<{ message_id: string; handoff_state: string }> {
   return request(`/api/cs/conversations/my/${conversationId}/messages`, {
     method: 'POST',
+    headers: { 'Idempotency-Key': nanoid(21) },
     body: JSON.stringify({ content }),
   })
 }

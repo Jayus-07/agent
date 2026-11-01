@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
-const nav = vi.hoisted(() => ({ pathname: '/cs2/workspace' }))
+const nav = vi.hoisted(() => ({ pathname: '/cs/workspace' }))
 const api = vi.hoisted(() => ({
   getMyStatus: vi.fn(async () => ({
     agent_id: 'a1', status: 'online', accepting: true,
@@ -37,7 +37,7 @@ function mount() {
   return container
 }
 
-describe('WorkstationShell（/cs2 新壳）', () => {
+describe('WorkstationShell（/cs 工作台壳，P8 切换）', () => {
   it('agent 角色隐藏 supervisorOnly 项（退款审核/看板），其余高亮', async () => {
     api.getMyStatus.mockResolvedValueOnce({
       agent_id: 'a1', status: 'online', accepting: true,
@@ -47,14 +47,14 @@ describe('WorkstationShell（/cs2 新壳）', () => {
     await act(async () => {})
     const links = Array.from(container.querySelectorAll('nav a'))
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/cs2/workspace',
-      '/cs2/conversations',
-      '/cs2/tickets',
-      '/cs2/qa',
-      '/cs2/knowledge',
+      '/cs/workspace',
+      '/cs/conversations',
+      '/cs/tickets',
+      '/cs/qa',
+      '/cs/knowledge',
     ])
     const active = container.querySelector('a[aria-current="page"]')
-    expect(active?.getAttribute('href')).toBe('/cs2/workspace')
+    expect(active?.getAttribute('href')).toBe('/cs/workspace')
   })
 
   it('supervisor 角色显示全部七项', async () => {
@@ -66,13 +66,13 @@ describe('WorkstationShell（/cs2 新壳）', () => {
     await act(async () => {})
     const links = Array.from(container.querySelectorAll('nav a'))
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/cs2/workspace',
-      '/cs2/conversations',
-      '/cs2/tickets',
-      '/cs2/refunds',
-      '/cs2/qa',
-      '/cs2/dashboard',
-      '/cs2/knowledge',
+      '/cs/workspace',
+      '/cs/conversations',
+      '/cs/tickets',
+      '/cs/refunds',
+      '/cs/qa',
+      '/cs/dashboard',
+      '/cs/knowledge',
     ])
   })
 

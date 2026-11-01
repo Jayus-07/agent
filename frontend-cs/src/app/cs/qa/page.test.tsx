@@ -140,7 +140,7 @@ function baseTasks() {
 
 vi.mock('@/cs2/workspace/api', () => api)
 
-import Cs2QaPage from '@/app/cs2/qa/page'
+import Cs2QaPage from '@/app/cs/qa/page'
 
 beforeAll(() => {
   ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

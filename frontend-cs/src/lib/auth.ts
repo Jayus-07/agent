@@ -234,7 +234,7 @@ export async function logout(queryClient?: QueryClientLike): Promise<void> {
         /* cache 清理不是跳转失败的理由 */
       }
     }
-    // csAgentWs 监听此事件，立即关闭连接并阻止退避重连。
+    // 各 WS 消费方（如 cs2 useAgentSocket）监听此事件：立即关闭连接并阻止退避重连。
     if (isBrowser()) window.dispatchEvent(new Event("agent:logout"));
   }
 }

@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { CS2_NAV_ITEMS } from './nav'
 
-describe('cs2 导航配置', () => {
+describe('cs 导航配置（P8 切换后路由）', () => {
   it('覆盖原型侧栏的全部七个视图', () => {
     expect(CS2_NAV_ITEMS.map((item) => item.href)).toEqual([
-      '/cs2/workspace',
-      '/cs2/conversations',
-      '/cs2/tickets',
-      '/cs2/refunds',
-      '/cs2/qa',
-      '/cs2/dashboard',
-      '/cs2/knowledge',
+      '/cs/workspace',
+      '/cs/conversations',
+      '/cs/tickets',
+      '/cs/refunds',
+      '/cs/qa',
+      '/cs/dashboard',
+      '/cs/knowledge',
     ])
   })
 
@@ -18,6 +18,6 @@ describe('cs2 导航配置', () => {
     const supervisorOnly = CS2_NAV_ITEMS
       .filter((item) => item.supervisorOnly)
       .map((item) => item.href)
-    expect(supervisorOnly).toEqual(['/cs2/refunds', '/cs2/dashboard'])
+    expect(supervisorOnly).toEqual(['/cs/refunds', '/cs/dashboard'])
   })
 })
