@@ -24,10 +24,19 @@
   count+trains 键），按此拆「查不到」与「参数错」，不做文本匹配。
   上游 MCP 协议层失败（连接/超时/isError）由客户端抛 McpClientError，
   归「查不了」。
+
+通道（T1，2026-11-02 起）：
+  - 静态直连（本文件两个 @tool，channel=static_direct）：经
+    ``infra/mcp_client.call_tool`` 出网，``TRAIN_MCP_ENABLED`` 开关控制；
+  - 动态 capability（``train_dynamic.py``，channel=mcp_dynamic）：走管理端
+    能力中心的治理执行核心。两条通道共用本文件的封套解析函数——上游
+    契约只有一份事实源，通道切换不改变业务数据形态（仅在 data 里标注
+    实际通道，供链账/排障）。
 """
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from langchain_core.tools import tool
 
@@ -87,6 +96,126 @@ def _classify_failure(payload: dict) -> str:
     return "bad_request"
 
 
+CHANNEL_STATIC_DIRECT = "static_direct"
+CHANNEL_MCP_DYNAMIC = "mcp_dynamic"
+
+
+def search_envelope_from_payload(
+    payload: Any,
+    *,
+    from_station: str,
+    to_station: str,
+    date: str,
+    limit: int,
+    channel: str,
+) -> str:
+    """上游 query-tickets 响应 → 统一封套（静态/动态通道共用的唯一解析）。
+
+    解析规则即模块头实测形态表：结构化区分「查不到」（成功封套+空列表）
+    与「参数错」（失败封套+纠错线索），未知形态显式失败不猜测。
+    """
+    if not isinstance(payload, dict) or "success" not in payload:
+        return tool_error_result("12306 返回了无法识别的结构",
+                                 payload=str(payload)[:300])
+
+    queried_at = datetime.now().astimezone().isoformat(timespec="seconds")
+
+    if payload.get("success"):
+        trains = list(payload.get("trains") or [])
+        trains.sort(key=lambda t: str(t.get("start_time", "")))
+        trains = trains[:limit]
+        normalized_trains = []
+        for item in trains:
+            if not isinstance(item, dict):
+                return tool_error_result("12306 返回了无法识别的车次结构")
+            train = dict(item)
+            train["seats"] = _localize_seats(train.get("seats") or {})
+            train["source"] = "12306"
+            train["updated_at"] = queried_at
+            normalized_trains.append(train)
+        return tool_success_result({
+            "from_station": payload.get("from_station", from_station),
+            "to_station": payload.get("to_station", to_station),
+            "date": payload.get("train_date", date),
+            "count": len(trains),
+            "total_matched": payload.get("count"),
+            "trains": normalized_trains,
+            "source": "12306",
+            "channel": channel,
+            "queried_at": queried_at,
+        })
+
+    failure = _classify_failure(payload)
+    if failure == "no_result":
+        # 「查不到」是确定的业务答案：成功封套 + 空列表 + 建议
+        return tool_success_result({
+            "from_station": from_station,
+            "to_station": to_station,
+            "date": date,
+            "count": 0,
+            "trains": [],
+            "note": payload.get("error") or "未找到该线路的余票",
+            "suggestion": "两站间无直达车次，可考虑中转方案",
+            "source": "12306",
+            "channel": channel,
+            "queried_at": queried_at,
+        })
+    # 「查不了」：站名/日期等参数问题，原样带上游纠错线索
+    return tool_error_result(
+        f"12306 查询参数有误：{payload.get('error') or payload.get('errors')}",
+        hint=payload.get("hint", ""),
+        suggestions=payload.get("suggestions") or [],
+    )
+
+
+def price_envelope_from_payload(
+    payload: Any,
+    *,
+    from_station: str,
+    to_station: str,
+    train_date: str,
+    train_code: str,
+    channel: str,
+) -> str:
+    """上游 query-ticket-price 响应 → 统一封套（静态/动态通道共用）。"""
+    if not isinstance(payload, dict):
+        return tool_error_result("12306 票价返回了无法识别的结构",
+                                 payload=str(payload)[:300])
+    price_train_code = str(payload.get("train_code") or train_code)
+    prices = payload.get("prices")
+    # 上游文档形态是 data[]，本地适配层也兼容已观测到的单车次扁平形态。
+    # query-ticket-price 已传 train_code 时优先选择同车次，避免误展示别的车次。
+    if not isinstance(prices, dict):
+        records = payload.get("data")
+        if isinstance(records, list):
+            candidates = [item for item in records if isinstance(item, dict)]
+            record = next(
+                (item for item in candidates
+                 if str(item.get("train_code") or "") == train_code),
+                candidates[0] if len(candidates) == 1 else None,
+            )
+            if record is not None:
+                prices = record.get("prices")
+                price_train_code = str(record.get("train_code") or train_code)
+    if not isinstance(prices, dict) or not prices:
+        return tool_error_result(
+            f"12306 未返回车次 {train_code} 的票价，不展示参考金额",
+            payload=str(payload)[:300],
+        )
+
+    queried_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    return tool_success_result({
+        "from_station": from_station,
+        "to_station": to_station,
+        "date": train_date,
+        "train_code": price_train_code,
+        "prices": prices,
+        "source": "12306",
+        "channel": channel,
+        "queried_at": queried_at,
+    })
+
+
 @tool
 def travel_train_search_tool(
     from_station: str,
@@ -140,55 +269,13 @@ def travel_train_search_tool(
         logger.warning("[TrainTool] 未预期异常: %s", e)
         return tool_error_result(f"12306 查询异常: {e}")
 
-    if not isinstance(payload, dict) or "success" not in payload:
-        return tool_error_result("12306 返回了无法识别的结构",
-                                 payload=str(payload)[:300])
-
-    queried_at = datetime.now().astimezone().isoformat(timespec="seconds")
-
-    if payload.get("success"):
-        trains = list(payload.get("trains") or [])
-        trains.sort(key=lambda t: str(t.get("start_time", "")))
-        trains = trains[:limit]
-        normalized_trains = []
-        for item in trains:
-            if not isinstance(item, dict):
-                return tool_error_result("12306 返回了无法识别的车次结构")
-            train = dict(item)
-            train["seats"] = _localize_seats(train.get("seats") or {})
-            train["source"] = "12306"
-            train["updated_at"] = queried_at
-            normalized_trains.append(train)
-        return tool_success_result({
-            "from_station": payload.get("from_station", from_station),
-            "to_station": payload.get("to_station", to_station),
-            "date": payload.get("train_date", normalized_date),
-            "count": len(trains),
-            "total_matched": payload.get("count"),
-            "trains": normalized_trains,
-            "source": "12306",
-            "queried_at": queried_at,
-        })
-
-    failure = _classify_failure(payload)
-    if failure == "no_result":
-        # 「查不到」是确定的业务答案：成功封套 + 空列表 + 建议
-        return tool_success_result({
-            "from_station": from_station,
-            "to_station": to_station,
-            "date": normalized_date,
-            "count": 0,
-            "trains": [],
-            "note": payload.get("error") or "未找到该线路的余票",
-            "suggestion": "两站间无直达车次，可考虑中转方案",
-            "source": "12306",
-            "queried_at": queried_at,
-        })
-    # 「查不了」：站名/日期等参数问题，原样带上游纠错线索
-    return tool_error_result(
-        f"12306 查询参数有误：{payload.get('error') or payload.get('errors')}",
-        hint=payload.get("hint", ""),
-        suggestions=payload.get("suggestions") or [],
+    return search_envelope_from_payload(
+        payload,
+        from_station=from_station,
+        to_station=to_station,
+        date=normalized_date,
+        limit=limit,
+        channel=CHANNEL_STATIC_DIRECT,
     )
 
 
@@ -240,41 +327,14 @@ def travel_train_price_tool(
         logger.warning("[TrainPriceTool] 未预期异常: %s", e)
         return tool_error_result(f"12306 票价查询异常: {e}")
 
-    if not isinstance(payload, dict):
-        return tool_error_result("12306 票价返回了无法识别的结构",
-                                 payload=str(payload)[:300])
-    price_train_code = str(payload.get("train_code") or train_code)
-    prices = payload.get("prices")
-    # 上游文档形态是 data[]，本地适配层也兼容已观测到的单车次扁平形态。
-    # query-ticket-price 已传 train_code 时优先选择同车次，避免误展示别的车次。
-    if not isinstance(prices, dict):
-        records = payload.get("data")
-        if isinstance(records, list):
-            candidates = [item for item in records if isinstance(item, dict)]
-            record = next(
-                (item for item in candidates
-                 if str(item.get("train_code") or "") == train_code),
-                candidates[0] if len(candidates) == 1 else None,
-            )
-            if record is not None:
-                prices = record.get("prices")
-                price_train_code = str(record.get("train_code") or train_code)
-    if not isinstance(prices, dict) or not prices:
-        return tool_error_result(
-            f"12306 未返回车次 {train_code} 的票价，不展示参考金额",
-            payload=str(payload)[:300],
-        )
-
-    queried_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    return tool_success_result({
-        "from_station": from_station,
-        "to_station": to_station,
-        "date": normalized_date,
-        "train_code": price_train_code,
-        "prices": prices,
-        "source": "12306",
-        "queried_at": queried_at,
-    })
+    return price_envelope_from_payload(
+        payload,
+        from_station=from_station,
+        to_station=to_station,
+        train_date=normalized_date,
+        train_code=train_code,
+        channel=CHANNEL_STATIC_DIRECT,
+    )
 
 
 # ==================== Tool Registry 自动注册 ====================
