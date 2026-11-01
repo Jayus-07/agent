@@ -1,8 +1,12 @@
-"""STOP K Availability Truth 语义矩阵（K4：G5/G8/G15/G10，任务书 §九逐行）。
+"""收编件 Availability Truth 语义矩阵（迁自
+tests/travel/commerce/test_commerce_availability.py，2026-11-01 收编重构；
+G5/G8/G15/G10，任务书 §九逐行）。
 
 核心红线（结构性保证 + 测试钉死）：
   Provider TIMEOUT ≠ 没有酒店；Provider ERROR ≠ 航班售罄；
   stale ≠ 实时价；unknown 税 ≠ 含税 0；unknown 库存 ≠ 有房。
+
+渲染层文案断言随原 reporter 壳退役，结局语义断言全部保留。
 """
 from __future__ import annotations
 
@@ -19,10 +23,9 @@ from backend.providers.travel.live.fake_commerce import (
     seed_stale_cache,
 )
 from backend.providers.travel.live.result import Freshness, ProviderStatus
-from backend.travel.commerce import service as svc
-from backend.travel.commerce.models import Availability
-from backend.travel.commerce.reporter import render
-from backend.travel.commerce.request import (
+from backend.travel.providers_support.commerce import offer_search as svc
+from backend.travel.providers_support.commerce.models import Availability
+from backend.travel.providers_support.commerce.request import (
     FlightSearchRequest,
     HotelSearchRequest,
 )
@@ -70,9 +73,6 @@ def test_empty_result_is_success_semantics_not_failure(fake_mode, monkeypatch):
     _patch_hotel(monkeypatch, {"type": "empty"})
     r = svc.search_hotels(_hotel_req())
     assert r.status == "empty" and r.offers == []
-    text = render(r)
-    assert "没有找到符合条件的酒店" in text
-    assert "暂时无法获得" not in text
 
 
 def test_not_found_negative_cached_and_replays(monkeypatch, fake_mode):
@@ -109,27 +109,14 @@ def test_failures_produce_zero_offers(fake_mode, monkeypatch, scenario,
     assert r.freshness != Freshness.LIVE or r.offers == []
 
 
-def test_timeout_is_not_sold_out(fake_mode, monkeypatch):
+def test_timeout_is_distinct_from_empty(fake_mode, monkeypatch):
+    """timeout 与 empty 是不同结局（TIMEOUT ≠ 没有酒店，§九）。"""
     _patch_hotel(monkeypatch, {"type": "timeout_fast"})
-    text = render(svc.search_hotels(_hotel_req()))
-    assert "已订满" not in text
-    assert "售罄" not in text
-    assert "暂时无法获得" in text
-    assert "编造" in text  # 如实披露立场
-
-
-def test_rate_limited_is_not_not_found(fake_mode, monkeypatch):
-    _patch_hotel(monkeypatch, {"type": "rate_limited"})
-    text = render(svc.search_hotels(_hotel_req()))
-    assert "没有找到" not in text
-    assert "稍后再试" in text
-
-
-def test_unavailable_discloses_honestly(fake_mode, monkeypatch):
-    _patch_hotel(monkeypatch, {"type": "unavailable"})
-    text = render(svc.search_hotels(_hotel_req()))
-    assert "暂时不可用" in text
-    assert "已如实停止" in text
+    r_timeout = svc.search_hotels(_hotel_req())
+    assert r_timeout.status == "timeout"
+    _patch_hotel(monkeypatch, {"type": "empty"})
+    r_empty = svc.search_hotels(_hotel_req())
+    assert r_empty.status == "empty"
 
 
 # =============================================
@@ -166,24 +153,20 @@ def test_flight_invalid_price_rejected(fake_mode, monkeypatch):
 # =============================================
 
 
-def test_tax_unknown_rendered_as_unknown_not_zero(fake_mode, monkeypatch):
+def test_tax_unknown_stays_none_not_zero(fake_mode, monkeypatch):
     _patch_hotel(monkeypatch, {"type": "tax_unknown"})
     r = svc.search_hotels(_hotel_req())
     assert r.status == "success"
     assert r.offers[0].price_snapshot.taxes is None
-    text = render(r)
-    assert "未知" in text
-    assert "含税 0" not in text and "含税0" not in text
 
 
 def test_sold_out_only_when_provider_declares(fake_mode, monkeypatch):
-    """「已订满」只能来自 Provider 明确 sold_out 数据。"""
+    """sold_out 只能来自 Provider 明确数据（失败结局结构性不可达）。"""
     _patch_hotel(monkeypatch, {"type": "sold_out"})
     r = svc.search_hotels(_hotel_req())
     assert r.status == "success"
     assert all(o.availability.status == Availability.SOLD_OUT
                for o in r.offers)
-    assert "已订满" in render(r)
 
 
 def test_unknown_availability_never_shown_as_available(fake_mode, monkeypatch):
@@ -192,9 +175,6 @@ def test_unknown_availability_never_shown_as_available(fake_mode, monkeypatch):
     assert r.status == "success"
     assert all(o.availability.status == Availability.UNKNOWN
                for o in r.offers)
-    text = render(r)
-    assert "供应商未提供库存信息" in text
-    assert "可预订" not in text
 
 
 def test_currency_preserved_no_implicit_conversion(fake_mode, monkeypatch):
@@ -203,8 +183,6 @@ def test_currency_preserved_no_implicit_conversion(fake_mode, monkeypatch):
     r = svc.search_hotels(_hotel_req())  # 大阪 → JPY（fake 币种表）
     assert r.status == "success"
     assert all(o.price_snapshot.amount.currency == "JPY" for o in r.offers)
-    assert "JPY" in render(r)
-    assert "≈" not in render(r)  # 无换算符号 = 无隐式换算
 
 
 # =============================================
@@ -232,15 +210,6 @@ def test_stale_fallback_marks_stale_not_live(fake_mode, monkeypatch):
                for o in r.offers)
 
 
-def test_stale_render_discloses_non_live(fake_mode, monkeypatch):
-    _seed_stale_hotel(_hotel_req())
-    _patch_hotel(monkeypatch, {"type": "timeout_fast"})
-    text = render(svc.search_hotels(_hotel_req()))
-    assert "过期缓存" in text
-    assert "非实时" in text
-    assert "实时价格：" not in text.split("快照")[0]
-
-
 def test_flight_stale_fallback(fake_mode, monkeypatch):
     from backend.providers.travel.live.fake_commerce import seed_stale_cache
 
@@ -253,7 +222,6 @@ def test_flight_stale_fallback(fake_mode, monkeypatch):
     _patch_flight(monkeypatch, {"type": "timeout_fast"})
     r = svc.search_flights(req)
     assert r.status == "success" and r.freshness == Freshness.STALE
-    assert "非实时" in render(r)
 
 
 # =============================================
@@ -272,5 +240,3 @@ def test_quota_budget_exhausted_is_rate_limited_not_sold_out(
     r = svc.search_hotels(_hotel_req())
     assert r.status == "rate_limited"
     assert r.offers == []
-    text = render(r)
-    assert "已订满" not in text and "售罄" not in text

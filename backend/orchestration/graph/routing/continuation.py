@@ -109,9 +109,10 @@ def try_travel_pending(query: str, routing_context: dict) -> dict | None:
 def try_booking_pending(query: str, routing_context: dict) -> dict | None:
     """交易挂起续填 Resolver（Phase 5 / D2，与 try_travel_pending 并列）。
 
-    活跃域为 travel_booking / travel_commerce 且存在结构化 booking_intent
-    挂起时，判定纯槽位值回答（「10月3日」「大阪」）能否补上缺失参数——
-    能则短路回原子图（子图 resolver 走续填档），否则交回正常路由。
+    活跃域为 travel_booking 且存在结构化 booking_intent 挂起时，判定纯
+    槽位值回答（「10月3日」「大阪」）能否补上缺失参数——能则短路回原子图
+    （子图 resolver 走续填档），否则交回正常路由。
+    （2026-11-01 收编重构：商务域续填随其域图壳删除，只剩预订域。）
     命中条件与异常语义见 booking_pending_resolver 模块 docstring；
     客服强信号在其内部放行。异常软失败返回 None（走正常路由）。
     """

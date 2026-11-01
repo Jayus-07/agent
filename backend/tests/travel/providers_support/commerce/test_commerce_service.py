@@ -1,5 +1,8 @@
-"""STOP K Service 层测试（K2-K6：G14 缓存键 / G17 replay / 排序确定性 /
-指纹去重 / 截断披露 / provider factory 三态）。
+"""收编件 Service 层测试（迁自 tests/travel/commerce/test_commerce_service.py，
+2026-11-01 收编重构；G14 缓存键 / G17 replay / 排序确定性 / 指纹去重 /
+截断披露 / provider factory 三态）。
+
+原 health 组件与渲染 tail 断言随域图壳退役，其余口径不变。
 """
 from __future__ import annotations
 
@@ -11,8 +14,8 @@ from backend.providers.travel.live.fake_commerce import (
     FakeHotelSearchProvider,
 )
 from backend.providers.travel.live.result import Freshness, ProviderStatus
-from backend.travel.commerce import service as svc
-from backend.travel.commerce.request import (
+from backend.travel.providers_support.commerce import offer_search as svc
+from backend.travel.providers_support.commerce.request import (
     FlightSearchRequest,
     HotelSearchRequest,
 )
@@ -47,14 +50,6 @@ def test_mode_live_disabled_without_real_provider(fake_mode, monkeypatch):
     r = svc.search_hotels(_hotel_req())
     assert r.status == "disabled"
     assert "未接入" in r.reason
-    text = svc_report(r)
-    assert "测试数据" not in text
-
-
-def svc_report(r):
-    from backend.travel.commerce.reporter import render
-
-    return render(r)
 
 
 # =============================================
@@ -153,9 +148,11 @@ def _hotel_order() -> list:
     provider = FakeHotelSearchProvider({"type": "success"})
     req = _hotel_req()
     r1 = provider.search_hotels(req.city, req.check_in, req.check_out)
-    # 直接调 service 的排序入口（绕缓存影响，连续两次排序同一输入）
-    from backend.travel.commerce.normalize import normalize_hotel_offers
-    from backend.travel.commerce.ranking import sort_hotels
+    # 直接调排序入口（绕缓存影响，连续两次排序同一输入）
+    from backend.travel.providers_support.commerce.normalize import (
+        normalize_hotel_offers,
+    )
+    from backend.travel.providers_support.commerce.ranking import sort_hotels
 
     outcome = normalize_hotel_offers(
         r1.data, request_check_in=req.check_in,
@@ -172,13 +169,11 @@ def _hotel_order() -> list:
 
 
 def test_truncation_disclosed(fake_mode, monkeypatch):
-    """超上限截断必须披露条数（渲染 tail）。"""
+    """超上限截断：offers 只留上限条数，truncated 记录被省略条数。"""
     monkeypatch.setattr(fake_mode, "TRAVEL_COMMERCE_MAX_OFFERS", 1)
     r = svc.search_hotels(_hotel_req())
     assert r.status == "success" and len(r.offers) == 1
     assert r.truncated == 1
-    text = svc_report(r)
-    assert "已省略" in text and "1 条" in text
 
 
 # =============================================
@@ -193,7 +188,9 @@ def test_fingerprint_distinguishes_rate_plans(fake_mode):
     r = provider.search_hotels(req.city, req.check_in, req.check_out)
     fps = {rec.provider_offer_id for rec in r.data}
     assert len(fps) == 2  # 两条不同 rate
-    from backend.travel.commerce.normalize import normalize_hotel_offers
+    from backend.travel.providers_support.commerce.normalize import (
+        normalize_hotel_offers,
+    )
 
     outcome = normalize_hotel_offers(
         r.data, request_check_in=req.check_in,
@@ -206,9 +203,12 @@ def test_fingerprint_distinguishes_rate_plans(fake_mode):
 
 def test_fingerprint_distinguishes_connection_vs_direct(fake_mode):
     """直飞 vs 中转指纹必不同（段集合参与指纹）；中转 stops 确定性推导。"""
-    from backend.travel.commerce.identity import flight_fingerprint
-    from backend.travel.commerce.normalize import normalize_flight_offers
-    from backend.providers.travel.live.result import Freshness
+    from backend.travel.providers_support.commerce.identity import (
+        flight_fingerprint,
+    )
+    from backend.travel.providers_support.commerce.normalize import (
+        normalize_flight_offers,
+    )
 
     direct = flight_fingerprint(provider="p", provider_offer_id=None,
                                 segment_keys=["FA:001:2026-10-03T08:30"],
@@ -232,23 +232,8 @@ def test_fingerprint_distinguishes_connection_vs_direct(fake_mode):
 
 
 # =============================================
-# Health / capabilities 台账（G25 / 冻结触碰证明）
+# 能力台账 / 超时预算 / TTL / quota env（冻结触碰证明）
 # =============================================
-
-
-def test_health_off_by_default():
-    from backend.travel.commerce.health import commerce_health
-
-    h = commerce_health()
-    assert h in ({"hotel": "disabled", "flight": "disabled"},
-                 {"hotel": "degraded", "flight": "degraded"},
-                 {"hotel": "healthy", "flight": "healthy"})
-
-
-def test_health_fake_is_healthy(fake_mode):
-    from backend.travel.commerce.health import commerce_health
-
-    assert commerce_health() == {"hotel": "healthy", "flight": "healthy"}
 
 
 def test_capability_ledger_declares_fake_only():

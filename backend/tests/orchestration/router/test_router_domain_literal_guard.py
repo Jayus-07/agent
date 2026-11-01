@@ -17,7 +17,6 @@ _REGISTERED_DOMAIN_KEYS = {
     "customer_service",
     "travel",
     "travel_booking",
-    "travel_commerce",
     "selection_funnel",
 }
 

@@ -1,4 +1,5 @@
-"""travel/commerce/normalize.py — Provider Record → 领域模型的 fail-closed 门（STOP K4，G10）
+"""travel/providers_support/commerce/normalize.py — Provider Record → 领域模型的 fail-closed 门
+（收编自原 travel/commerce/normalize.py，STOP K4，G10）
 
 **脏数据不穿透**：每条 Record 过三道门——金额门（Decimal 化 + 非法拒绝）、
 枚举门（availability/tax_inclusion 非法值拒绝）、模型门（Pydantic strict
@@ -25,13 +26,13 @@ from backend.providers.travel.live.commerce_contracts import (
     HotelOfferRecord,
 )
 from backend.providers.travel.live.result import Freshness
-from backend.travel.commerce import deeplink
-from backend.travel.commerce.identity import (
+from backend.travel.providers_support.commerce import deeplink
+from backend.travel.providers_support.commerce.identity import (
     flight_fingerprint,
     hotel_fingerprint,
     snapshot_id,
 )
-from backend.travel.commerce.models import (
+from backend.travel.providers_support.commerce.models import (
     Availability,
     AvailabilityObservation,
     FlightOffer,

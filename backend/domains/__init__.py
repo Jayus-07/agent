@@ -12,10 +12,11 @@ import importlib
 import sys
 
 # 域图注册模块清单（import 即注册；包级触发与显式入口共用，单一事实源）
+# 2026-11-01 收编重构：原商务域图壳删除，实现收编进旅游域
+# （providers_support/commerce 数据源层 + booking 预订子智能体）。
 _DOMAIN_MODULES = (
     "backend.customer_service.register",
     "backend.travel.register",
-    "backend.travel.commerce.register",   # 旅游商务域（STOP K，默认关，TRAVEL_COMMERCE_ENABLED）
     "backend.travel.booking.register",    # 旅游预订域（STOP L，默认关，TRAVEL_BOOKING_ENABLED）
     "backend.selection_funnel.register",  # 智能选品漏斗域（默认关，SELECTION_FUNNEL_ENABLED）
 )

@@ -278,8 +278,8 @@ def _ledger_key(tenant_id: str, user_id: str, merchant_order_id: str) -> str:
 
 def _resolve_offer(commerce_type: str, search_params: dict, selection: dict):
     """确定性重搜 + 精确选中（index 1 起按排序位；或 offer_fingerprint）。"""
-    from backend.travel.commerce import service as commerce_service
-    from backend.travel.commerce.request import (
+    from backend.travel.providers_support.commerce import offer_search as commerce_service
+    from backend.travel.providers_support.commerce.request import (
         FlightSearchRequest,
         HotelSearchRequest,
     )

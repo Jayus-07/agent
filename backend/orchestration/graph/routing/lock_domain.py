@@ -43,10 +43,10 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
     """AI 助手锁域下的强信号引导卡：命中返回 handoff 路由更新，否则 None。
 
     优先级与全局 prefilter 一致（旅游 > 选品 > 预订/商务）；预订/商务
-    归旅游族（commerce 为旅游子流），一并引导去旅游页。纯判定零副作用
-    ——不复用 run_domain_prefilters：其命中路径会经 _finish_prefilter_hit
-    回写路由上下文，与 handoff 语义「域并未真正开始」冲突（见
-    handoff_update_for docstring）。
+    归旅游族（commerce 已收编为旅游域数据源层，意图判定复用其 extract），
+    一并引导去旅游页。纯判定零副作用——不复用 run_domain_prefilters：
+    其命中路径会经 _finish_prefilter_hit 回写路由上下文，与 handoff 语义
+    「域并未真正开始」冲突（见 handoff_update_for docstring）。
     """
     target: str | None = None
     try:
@@ -55,13 +55,15 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
             is_selection_funnel_request,
         )
         from backend.orchestration.graph.booking_prefilter import is_booking_request
-        from backend.orchestration.graph.commerce_prefilter import is_commerce_request
+        from backend.travel.providers_support.commerce.extract import (
+            detect_commerce_intent,
+        )
 
         if is_travel_request(query):
             target = "travel"
         elif is_selection_funnel_request(query):
             target = "selection_funnel"
-        elif is_booking_request(query) or is_commerce_request(query):
+        elif is_booking_request(query) or detect_commerce_intent(query):
             target = "travel"
     except Exception as e:
         logger.debug(f"[LockDomain] main 锁域强信号判定失败，按无信号处理: {e}")

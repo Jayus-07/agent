@@ -1,4 +1,5 @@
-"""travel/commerce/cities.py — Commerce 城市表（verified static mapping）
+"""travel/providers_support/commerce/cities.py — 城市表（verified static mapping）
+（收编自原 travel/commerce/cities.py）
 
 任务书 §八：城市/机场解析只能来自 Provider 或 **verified static mapping**，
 禁止 LLM 造。本表是后者：静态、可枚举、可单测；未收录城市 → 澄清追问
@@ -12,7 +13,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 
-# Commerce 扩展城市（spec 示例场景 + 国内主要城市；静态维护，新增加进来）
+# 扩展城市（spec 示例场景 + 国内主要城市；静态维护，新增加进来）
 _COMMERCE_CITIES: tuple[str, ...] = (
     "大阪", "东京", "京都", "奈良", "名古屋", "冲绳", "札幌", "福冈",
     "北京", "上海", "广州", "深圳", "成都", "重庆", "西安", "南京",
@@ -22,7 +23,7 @@ _COMMERCE_CITIES: tuple[str, ...] = (
 
 @lru_cache(maxsize=1)
 def known_cities() -> frozenset[str]:
-    """seed 城市 ∪ commerce 静态表（去重）。"""
+    """seed 城市 ∪ 静态表（去重）。"""
     from backend.tools.travel import poi_seed
 
     return frozenset(poi_seed.all_cities()) | frozenset(_COMMERCE_CITIES)

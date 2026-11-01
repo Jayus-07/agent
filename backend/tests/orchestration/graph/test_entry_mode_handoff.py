@@ -48,7 +48,7 @@ def _domain_update(route_mode: str, **extra) -> dict:
 
 
 def test_default_verdict_is_execute_for_all_domains():
-    for mode in ("travel", "travel_booking", "travel_commerce",
+    for mode in ("travel", "travel_booking",
                  "customer_service", "selection_funnel"):
         assert entry_mode_verdict("帮我规划福州3天行程", _domain_update(mode)) == "execute"
 

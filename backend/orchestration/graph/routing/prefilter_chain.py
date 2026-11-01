@@ -31,7 +31,7 @@ from backend.orchestration.router.projection import route_update_for_mode
 #
 # 【派生，零手写】本表内容 = 注册表现有域图（谁注册就登记谁），由
 # domain_graph_registry.route_mode_to_active_domain() 现算，不再手工维护。
-# 历史教训（Phase 5 / D2 G1）：手写期漏了 travel_booking / travel_commerce →
+# 历史教训（Phase 5 / D2 G1）：手写期漏了预订/商务两域 →
 # prefilter 命中取 domain=None → mark_domain_turn 早退 → active_domain 永不写 →
 # 下一轮「10月3日」这类纯槽位值回答既拉不回也无人续填（两跳断片）。
 # 派生后「漏登记」在结构上不可能发生；活视图保证不因注册时序而拿到空表。
@@ -496,6 +496,8 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
     # ── 预订域预过滤（STOP L9）：选品与商务之间加法插入 ──
     # 「订/预订」是交易意图，先于商务承接（L0 §20 冻结触碰：既有四域
     # 两两顺序不变，仅新增一域；CS 售后/行程信号已在词表让路）。
+    # 2026-11-01 收编重构：原「商务预过滤（STOP K6）」随原商务域图
+    # 域图壳一并删除——找酒店/查机票类诉求归旅游域 lodging/intercity。
     try:
         from backend.orchestration.graph.booking_prefilter import (
             try_booking_prefilter,
@@ -507,21 +509,5 @@ def run_domain_prefilters(query: str, state: dict) -> dict | None:
                 return result
     except Exception as e:
         logger.warning(f"[RouterNode] 预订预过滤失败，回退到主 Router: {e}")
-
-    # ── 商务预过滤（STOP K6）：纯正则，旅游/选品之后 ──
-    # 「找酒店/查机票」类纯库存查询短路进 commerce 域图；行程信号词
-    # （酒店推荐/住宿推荐/行程/攻略）已由旅游 prefilter 先行承接或在
-    # extract 内让路——优先级：客服 > 旅游 > 选品 > 商务（STOPK0 §1）。
-    try:
-        from backend.orchestration.graph.commerce_prefilter import (
-            try_commerce_prefilter,
-        )
-        commerce_update = try_commerce_prefilter(query, state)
-        if commerce_update is not None:
-            result = _finish_prefilter_hit(state, query, commerce_update)
-            if result is not None:
-                return result
-    except Exception as e:
-        logger.warning(f"[RouterNode] 商务预过滤失败，回退到主 Router: {e}")
 
     return None

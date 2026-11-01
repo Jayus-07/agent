@@ -55,5 +55,35 @@
 ## 阻塞 / 下一步
 
 - 阶段二（SSE card 通道 + AmapPOIProvider）与阶段三（rollinggo，BLOCKED）见 TASK.md §2。
-- 用户确认后提交：`git add -A -- backend/sql/migrations/129_travel_v2_template_seed.sql scripts/init_db.py backend/tests/travel_v2/ .github/scripts/rag_smoke_path_filter.py frontend/src/components/travel/v2/ docs/tasks/travel-v2-production/` + 双路径限定 commit（2026-11-01 用户已确认提交合并；下一会话执行）。
+- ~~用户确认后提交~~ → **已于 2026-11-01 提交并经 PR #187 合并 main**（含种子迁移 125→129 改号、C1/C2、四份文档；顺带落库了本地 main 独有的 conftest 快照回收修复 59bcde9）。
 - 提醒： rollinggo/和风 key 在用户桌面 `tool mcp.txt` 明文存放，用后删除、勿入库。
+
+---
+
+# 收编重构进度（feat/travel-domain-consolidation，执行会话续写）
+
+> 2026-11-01 开工 · Worktree `agent-wt-travel-consolidation` · 分支 `feat/travel-domain-consolidation` · 基线 origin/main（PR #187 合并后）。
+> 执行依据：同目录 DOMAIN-CONSOLIDATION-PLAN.md v2（§7 顺序：D → B → U1-U5）。
+
+## 前置（已完成）
+
+- seed worktree 在途改动处理（用户确认方案 A）：改号 125→129 + init_db/rag_smoke_path_filter 登记 + 定向测试（16 passed+1 skipped；迁移守卫 12 passed）→ 3 笔双路径限定提交 → rebase origin/main（解 init_db/路径过滤两处登记冲突）→ PR #187 全检查通过合并。
+- 发现并随 PR 落库：本地 main@0d848a6（conftest 快照回收修复）从未推送远端，rebase 时作为 59bcde9 携带，PR 描述已标注。
+
+## D 系列（commerce 收编删壳）——已完成
+
+1. **收割（§3.1）**：8 个实现文件（request/extract/models/ranking/identity/cities/deeplink/normalize）git rm + Write 重建至 `backend/travel/providers_support/commerce/`（内部 import 与路径头同步）；新增 `offer_search.py`（从原 service.py 抽取确定性重搜编排，去 telemetry 壳依赖）；新增 `backend/travel_v2/services/hotel_search_service.py`（三态封装 + fail-closed + Decimal 字符串契约）。booking 三处 import 改向（graph_builder×2 过渡、service._resolve_offer、revalidate）；`providers/travel/live/fake_commerce.py` config import 改向。
+2. **配置**：`config/travel_commerce.py` → `config/travel_offer_search.py`（TRAVEL_COMMERCE_ENABLED 域开关与无消费方的 EMPTY_TTL 退役；TRAVEL_COMMERCE_* 环境变量名保留兼容 .env）。
+3. **删壳（§3.2）**：commerce 包余下 10 文件全删（register/graph_builder/graph_node/graph_node_render/graph_state/service/health/reporter/telemetry/__init__）；domains 注册行删除。
+4. **联动（§3.3）**：commerce_prefilter 整删 + prefilter_chain 链项移除；continuation/booking_pending_resolver 移除 commerce 续填（booking 保留）；capability_router 别名、llm_context KNOWN_DOMAINS、product_context 禁行根、health 组件、roundtable 人设/工具箱；evaluation 侧 models MODULE_KINDS/PROBE_MODULES/builtin/release_gate/builder/capabilities/cli/domain_contracts + 删 runners/travel_commerce.py、datasets/travel-commerce/、scripts/e2e_travel_commerce.py；frontend-admin 三件（roundtable 配色/AddToEvalModal/domain-attribution.test）；README + evaluation-governance + evaluation-v2-api + ci-evaluation-environment。**计划外发现**：lock_domain.py 引用已删的 is_commerce_request → 改引收编件 detect_commerce_intent（信号面等价）。
+5. **测试（§3.4）**：旧 tests/travel/commerce/ 7 文件处置——语义回归迁移至 `backend/tests/travel/providers_support/commerce/`（conftest/contracts/deeplink/service/availability 全量口径 + routing 的意图判定段抽为 test_commerce_extract.py；reporter/routing 图测随壳退役），registry/router/semantic/entry_mode/module_kind/golden_contracts/dataset_governance 断言同步；新增 `tests/travel_v2/test_hotel_search_service.py`（三态/fail-closed/参数绑定）。
+   - **对计划的偏离记录**：计划写「删 7 文件」+「hotel_search_service 单测」，执行时按 §6 契约矩阵「normalize 三道门断言（收编件）必须存活」要求迁移保留了实现层语义测试（5 迁 2 删），避免删除仍存活的 fail-closed 回归面。
+
+### D 系列验证证据
+- `pytest backend/tests/travel/providers_support/commerce/ backend/tests/travel_v2/test_hotel_search_service.py backend/tests/test_domain_registration.py backend/tests/orchestration/{test_runtime_registry,test_domain_semantic_consistency,context/test_booking_pending_resolver,router/,graph/test_entry_mode_handoff}.py backend/tests/evaluation/test_module_kind_single_source.py backend/tests/evaluation_v2/test_module_golden_contracts.py` → **326 passed**（修复 2 处后：注册数 5→4、hotel_search 结局白名单漏 success/empty）。
+- py_compile 收编件/新配置/booking 消费点全过。
+
+## 进行中 / 下一步
+
+- B 系列：booking 删壳 + travel_v2 REST 三段端点（quote/confirm/status）+ 联动清理。
+- U1-U4 依次；U5 rollinggo BLOCKED（联系人 york.lu@dida.com）。

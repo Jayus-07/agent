@@ -1,4 +1,5 @@
-"""STOP K Deep Link 安全校验（K5：G18，任务书 §十二全矩阵）。
+"""收编件 Deep Link 安全校验（迁自 tests/travel/commerce/test_commerce_deeplink.py，
+2026-11-01 收编重构；G18 任务书 §十二全矩阵）。
 
 fail-closed：白名单空 = 全拒；任何拒绝都不得把链接透给用户。
 """
@@ -6,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.travel.commerce import deeplink
+from backend.travel.providers_support.commerce import deeplink
 
 ALLOW = ("fake-commerce.example.com",)
 

@@ -10,9 +10,9 @@ from backend.orchestration.router.hierarchical import (
 from backend.orchestration.router.models import CapabilityDecision
 
 
+# 2026-11-01 收编重构：原商务域图壳删除，别名随之移除
 _DOMAIN_ALIASES = {
     "travel_booking": "travel",
-    "travel_commerce": "travel",
 }
 
 

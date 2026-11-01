@@ -167,7 +167,7 @@ class FakeHotelSearchProvider:
         self._scenario = scenario or {}
 
     def is_enabled(self) -> bool:
-        from backend.config.travel_commerce import provider_mode
+        from backend.config.travel_offer_search import provider_mode
 
         return provider_mode() == "fake"
 
@@ -309,7 +309,7 @@ class FakeFlightSearchProvider:
         self._scenario = scenario or {}
 
     def is_enabled(self) -> bool:
-        from backend.config.travel_commerce import provider_mode
+        from backend.config.travel_offer_search import provider_mode
 
         return provider_mode() == "fake"
 

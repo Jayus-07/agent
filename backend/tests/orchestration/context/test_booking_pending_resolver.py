@@ -4,9 +4,10 @@
 
 场景映射（Phase 5 审计报告 §六 Commit A ⑤）：
   两跳回归    反问「哪天入住？」→ 用户答「10月3日」→ 续填回子图
-  G1 守护     _ROUTE_MODE_DOMAIN 补登 travel_booking / travel_commerce
+  G1 守护     _ROUTE_MODE_DOMAIN 补登 travel_booking（收编重构后只剩预订域）
   放行边界    CS 强信号 / 无挂起 / 无活跃交易域 / 域开关关 / 长句 / 无关短句
-  同源纪律    命中判定复用 commerce/extract.merge_slot_values（无第二套抽取）
+  同源纪律    命中判定复用 providers_support/commerce extract 的
+              merge_slot_values（无第二套抽取）
 """
 from __future__ import annotations
 
@@ -19,17 +20,15 @@ from backend.orchestration.context.booking_pending_resolver import (
 
 @pytest.fixture(autouse=True)
 def _force_enabled(monkeypatch):
-    """把两类开关钉成「开」，使本套用例不受本机 .env 影响（确定性）。
+    """把开关钉成「开」，使本套用例不受本机 .env 影响（确定性）。
 
-    覆盖 resolver 的两个门：全局续填开关 + 对应交易域总开关。
+    覆盖 resolver 的两个门：全局续填开关 + 预订域总开关。
     """
     import backend.config.travel as T
     import backend.config.travel_booking as B
-    import backend.config.travel_commerce as C
 
     monkeypatch.setattr(T, "BOOKING_PENDING_RESUME_ENABLED", True)
     monkeypatch.setattr(B, "is_booking_enabled", lambda: True)
-    monkeypatch.setattr(C, "is_commerce_enabled", lambda: True)
 
 
 def _routing(active_domain="travel_booking", route_mode="travel_booking",
@@ -87,13 +86,13 @@ class TestTwoHopResume:
                      collected={"origin": "东京", "destination": "大阪"}))
         assert update is not None and update["route_mode"] == "travel_booking"
 
-    def test_commerce_domain_resumes_to_commerce(self):
-        """比价域挂起 → 回到 travel_commerce（不回 booking）。"""
+    def test_commerce_domain_no_longer_intercepts(self):
+        """收编重构：商务域壳已删，其残留挂起态不再被本 Resolver 拦截。"""
         update = resolve_booking_pending(
             "10月3日",
-            _routing(active_domain="travel_commerce",
-                     route_mode="travel_commerce"))
-        assert update is not None and update["route_mode"] == "travel_commerce"
+            _routing(active_domain="retired_commerce_domain",
+                     route_mode="retired_commerce_domain"))
+        assert update is None
 
     def test_no_new_slot_does_not_resume(self):
         """换了城市但仍缺日期 → 缺失数量不减 → 不拦（交回 prefilter）。"""
@@ -148,7 +147,7 @@ class TestGuardConditions:
 
 
 class TestG1RouteModeDomainMap:
-    """G1 守护：交易两域必须登记，否则 prefilter 命中不回写 active_domain。"""
+    """G1 守护：预订域必须登记，否则 prefilter 命中不回写 active_domain。"""
 
     def test_transaction_domains_registered(self):
         from backend.orchestration.graph.routing.prefilter_chain import (
@@ -156,7 +155,6 @@ class TestG1RouteModeDomainMap:
         )
 
         assert _ROUTE_MODE_DOMAIN.get("travel_booking") == "travel_booking"
-        assert _ROUTE_MODE_DOMAIN.get("travel_commerce") == "travel_commerce"
 
     def test_routing_package_exports_wrapper(self):
         from backend.orchestration.graph.routing import try_booking_pending

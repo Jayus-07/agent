@@ -54,7 +54,6 @@ class TestDomainRouter:
             ({"route_mode": "travel"}, "travel", "planning"),
             ({"route_mode": "selection_funnel"}, "selection_funnel", "funnel"),
             ({"route_mode": "travel_booking"}, "travel", "booking"),
-            ({"route_mode": "travel_commerce"}, "travel", "commerce"),
         ],
     )
     def test_prefilter_update_normalizes_domain(self, update, domain, subflow):

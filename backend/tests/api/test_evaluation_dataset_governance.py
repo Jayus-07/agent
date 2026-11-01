@@ -144,11 +144,12 @@ def test_catalog_filters_special_and_tags_probe_datasets(governance):
     (sql_v2_root / "manifest.json").write_text(
         json.dumps({"version": "2.0", "case_count": 1}), encoding="utf-8"
     )
-    # travel-commerce：探针模块（MODULE_KINDS 内），应在列表中且 kind=probe
-    probe_root = module.DATASET_DIR / "travel-commerce"
+    # travel-booking：探针模块（MODULE_KINDS 内），应在列表中且 kind=probe
+    # （2026-11-01 收编重构：travel-commerce 探针随域图壳退役，不再造册）
+    probe_root = module.DATASET_DIR / "travel-booking"
     probe_root.mkdir()
     (probe_root / "cases.jsonl").write_text(
-        json.dumps({"id": "TC-001", "question": "q", "module": "travel-commerce"}, ensure_ascii=False) + "\n",
+        json.dumps({"id": "TB-001", "question": "q", "module": "travel-booking"}, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 
@@ -156,7 +157,8 @@ def test_catalog_filters_special_and_tags_probe_datasets(governance):
     listed = {item["module"]: item for item in body["items"]}
 
     assert "sql_v2" not in listed
-    assert listed["travel-commerce"]["kind"] == "probe"
+    assert "travel-commerce" not in listed
+    assert listed["travel-booking"]["kind"] == "probe"
     assert listed["rag"]["kind"] == "core"
     # 显式点名专项集仍可查（治理可见性不丢）
     single = client.get("/api/evaluation/datasets", params={"module": "sql_v2"})

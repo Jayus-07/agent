@@ -82,7 +82,6 @@ def build_parser() -> argparse.ArgumentParser:
              "--live 走真实图；runner 注册于 runners/cs.py）；"
              "travel=旅游规划质量金标（STOP I5）；"
              "travel-provider=Provider 层探针（STOP J9）；"
-             "travel-commerce=Commerce 金标探针（STOP K7）；"
              "travel-booking=Booking 事务探针（STOP L8）",
     )
     parser.add_argument(

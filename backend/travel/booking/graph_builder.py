@@ -88,10 +88,10 @@ def _search_params(kind: str, collected: dict) -> dict:
 def _resume_booking(kind: str, message: str, pending: dict) -> dict:
     """挂起在场时的续填：合并槽位 → 齐备转 new 流 / 仍缺继续追问。
 
-    合并与缺失判定复用 commerce/extract 的共享实现（与比价子图同源），
+    合并与缺失判定复用 providers_support/commerce/extract 的共享实现，
     本函数只做「booking 侧结果形态」的组装。
     """
-    from backend.travel.commerce.extract import (
+    from backend.travel.providers_support.commerce.extract import (
         merge_slot_values,
         missing_slots_clarification,
     )
@@ -123,7 +123,7 @@ def _resume_booking(kind: str, message: str, pending: dict) -> dict:
 
 
 def booking_resolver_node(state: dict) -> dict:
-    from backend.travel.commerce.extract import (
+    from backend.travel.providers_support.commerce.extract import (
         REQUIRED_SLOTS_BY_KIND,
         detect_commerce_intent,
         merge_slot_values,

@@ -38,15 +38,12 @@ def test_real_domains_register_runtime_descriptors():
 
 
 def test_subflow_runtime_descriptors_are_registered():
-    commerce = domain_graph_registry.get("travel_commerce")
+    # 2026-11-01 收编重构：商务子流随域图壳删除，只剩 booking。
     booking = domain_graph_registry.get("travel_booking")
 
-    assert commerce is not None
     assert booking is not None
-    assert commerce.domain == booking.domain == "travel"
-    assert commerce.subflow == "commerce"
+    assert booking.domain == "travel"
     assert booking.subflow == "booking"
-    assert commerce.runtime_type is RuntimeType.WORKFLOW
     assert booking.runtime_type is RuntimeType.WORKFLOW
 
 

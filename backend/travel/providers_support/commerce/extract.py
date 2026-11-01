@@ -1,8 +1,10 @@
-"""travel/commerce/extract.py — 商务意图识别与槽位抽取（STOP K6 接线层）
+"""travel/providers_support/commerce/extract.py — 商务意图识别与槽位抽取
+（收编自原 travel/commerce/extract.py）
 
 **纯规则零 LLM**（K0 §7 决策 5：LLM 不得进入事实链，意图识别用正则）。
-prefilter（orchestration 侧路由判定）与域图 slot_filler（参数抽取）共用
-本模块的同一套函数——两处判定必然一致，不会分叉。
+原 prefilter 与域图 slot_filler 共用本模块的同一套函数以保证判定一致；
+域图壳删除后，本模块继续作为确定性意图/槽位工具被 booking 历史语义与
+后续 V2 服务复用。
 
 意图边界（K0 §1 优先级口径）：
   - 「酒店推荐/住宿推荐/住哪」是**旅游规划信号**（travel_prefilter 已含），
@@ -79,14 +81,14 @@ def detect_commerce_intent(message: str) -> str | None:
 
 
 def _city_present(message: str) -> bool:
-    from backend.travel.commerce.cities import find_city
+    from backend.travel.providers_support.commerce.cities import find_city
 
     return find_city(message) is not None
 
 
 def extract_hotel_params(message: str, today: date | None = None) -> dict:
     """酒店槽位抽取（确定性；缺失槽位不出现在结果里——读方用 .get()）。"""
-    from backend.travel.commerce.cities import find_city
+    from backend.travel.providers_support.commerce.cities import find_city
 
     today = today or date.today()
     params: dict = {}
@@ -125,7 +127,7 @@ def extract_flight_params(message: str, today: date | None = None) -> dict:
     基于 known city 表 + 方向词：按出现顺序取前两个城市，方向词把两者
     串起来才认定航线（「东京到大阪」）；裸城市无方向词 → 缺槽追问。
     """
-    from backend.travel.commerce.cities import find_cities
+    from backend.travel.providers_support.commerce.cities import find_cities
 
     today = today or date.today()
     params: dict = {}
@@ -192,7 +194,7 @@ def _extract_single_date(message: str, today: date) -> date | None:
 
 
 def extract_single_date(message: str, today: date | None = None) -> date | None:
-    """单日期抽取（公开入口，Phase 5 / D2 跨轮续填用）。
+    """单日期抽取（公开入口，跨轮续填用）。
 
     **不是新实现**——薄包装模块内 ``_extract_single_date``（与机票出发日
     抽取同一份正则与补年规则），避免续填路径另写一套日期解析而与主抽取
@@ -261,6 +263,5 @@ def merge_slot_values(kind: str, message: str,
 
 def missing_slots_clarification(missing: list[str],
                                 prefix: str = "预订还需要：") -> str:
-    """缺槽追问文案（预订侧用；比价侧走 graph_node_render.build_clarification）。"""
+    """缺槽追问文案（预订侧用）。"""
     return prefix + "、".join(SLOT_LABELS.get(m, m) for m in missing) + "。"
-

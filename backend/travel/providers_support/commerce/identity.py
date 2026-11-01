@@ -1,4 +1,5 @@
-"""travel/commerce/identity.py — Offer 指纹与快照 id（STOP K1，任务书 §十五）
+"""travel/providers_support/commerce/identity.py — Offer 指纹与快照 id
+（收编自原 travel/commerce/identity.py，任务书 §十五）
 
 跨进程稳定标识：**sha256，禁止 Python ``hash()``**（进程间 PYTHONHASHSEED
 随机化，跨进程必不稳定）。字段拼接用 ``|`` 分隔 + 全字段空串归一，防止

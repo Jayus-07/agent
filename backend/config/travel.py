@@ -358,9 +358,9 @@ TRAVEL_PENDING_RESUME_ENABLED = os.getenv("TRAVEL_PENDING_RESUME_ENABLED", "true
 # =============================================
 # 交易挂起续填（Phase 5 / D2 两跳断修复，2026-09-30）
 # =============================================
-# 预订（travel_booking）/ 比价（travel_commerce）两子图**无 checkpointer**，
+# 预订子图（booking）**无 checkpointer**，
 # 澄清期参数不在 PG —— 用户被问「哪天入住？」后答「10月3日」会掉域。
-# 开启后，活跃域为交易两域且存在结构化 booking_intent 挂起时，由
+# 开启后，活跃域为预订域且存在结构化 booking_intent 挂起时，由
 # BookingPendingResolver 判定本句是否补上缺失槽位并短路回子图（子图是
 # 唯一抽取点，本层只判「是否命中」）。判定纯规则零 LLM，抽取复用
 # commerce/extract 的 merge_slot_values（与 prefilter 同源）。

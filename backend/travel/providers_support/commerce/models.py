@@ -1,4 +1,5 @@
-"""travel/commerce/models.py — Commerce 领域契约（STOP K1，任务书 §六）
+"""travel/providers_support/commerce/models.py — 领域契约
+（收编自原 travel/commerce/models.py，任务书 §六）
 
 **Money 禁止 float（G4）**：Decimal 贯穿全链；JSON 序列化（model_dump
 mode="json"）落字符串，LangGraph state / SSE 均无精度损耗。
@@ -14,7 +15,7 @@ mode="json"）落字符串，LangGraph state / SSE 均无精度损耗。
 多字段/少字段/非法值一律抛 ValidationError，由服务层映射 INVALID_RESPONSE，
 脏数据不穿透到渲染。
 
-本层字段命名面向业务消费（reporter/API），与 Provider 侧
+本层字段命名面向业务消费（调用方/API），与 Provider 侧
 commerce_contracts.Record 一一对应；Record → 模型的转换在 normalize.py。
 """
 from __future__ import annotations

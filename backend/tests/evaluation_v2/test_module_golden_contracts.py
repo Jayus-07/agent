@@ -191,7 +191,6 @@ def test_registered_non_rag_fixture_expected_contracts_remain_compatible():
         "e2e": "e2e/cases.jsonl",
         "travel": "travel/cases.jsonl",
         "travel-provider": "travel-provider/cases.jsonl",
-        "travel-commerce": "travel-commerce/cases.jsonl",
         "travel-booking": "travel-booking/cases.jsonl",
     }
     for module, relative_path in fixtures.items():

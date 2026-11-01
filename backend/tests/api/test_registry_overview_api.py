@@ -97,16 +97,15 @@ def test_agents_attribution_contract_values_locked(client):
         for a in client.get("/agents").json()["agents"]
         if a["kind"] == "domain_graph"
     }
-    assert nodes["travel_commerce"]["domain"] == "travel"
-    assert nodes["travel_commerce"]["subflow"] == "commerce"
+    # 2026-11-01 收编重构：商务子流随域图壳删除，只剩 booking 子流。
     assert nodes["travel_booking"]["domain"] == "travel"
     assert nodes["travel_booking"]["subflow"] == "booking"
     assert nodes["travel"]["domain"] is None
     assert nodes["customer_service"]["domain"] is None
     assert nodes["selection_funnel"]["domain"] is None
-    # 当前恰有 2 张子流域图
+    # 当前恰有 1 张子流域图
     assert sorted(a["route_mode"] for a in nodes.values() if a["domain"]) == [
-        "travel_booking", "travel_commerce",
+        "travel_booking",
     ]
 
 

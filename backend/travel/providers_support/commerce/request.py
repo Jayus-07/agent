@@ -1,4 +1,5 @@
-"""travel/commerce/request.py — 搜索请求与确定性校验（STOP K1，任务书 §七/§八）
+"""travel/providers_support/commerce/request.py — 搜索请求与确定性校验
+（收编自原 travel/commerce/request.py，任务书 §七/§八）
 
 **全部校验确定性**（G11/G12）：晚数 = check_out - check_in 由代码计算，
 绝不让模型算；日期非法/过去日期/退房≤入住/rooms<1/origin==destination
@@ -111,6 +112,6 @@ class FlightSearchRequest(BaseModel):
 
 def horizon_limit() -> date:
     """可查询的最远日期（配置口径，供澄清话术引用）。"""
-    from backend.config.travel_commerce import TRAVEL_COMMERCE_DATE_HORIZON_DAYS
+    from backend.config.travel_offer_search import TRAVEL_COMMERCE_DATE_HORIZON_DAYS
 
     return date.today() + timedelta(days=TRAVEL_COMMERCE_DATE_HORIZON_DAYS)

@@ -634,17 +634,17 @@ def _aggregate_t(violations: dict) -> dict:
 
 def _run_travel_booking(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     # config 打桩（config 在 import 时固化，测 env 无效）：
-    # booking 全开 + commerce fake 模式（Quote/复核的确定性搜索依赖）
+    # booking 全开 + 搜索 fake 模式（Quote/复核的确定性搜索依赖）
+    # （2026-11-01：config.travel_commerce 收编改名 travel_offer_search，
+    #   TRAVEL_COMMERCE_ENABLED 域开关随域图壳退役）
     from backend.config import travel_booking as bcfg
-    from backend.config import travel_commerce as ccfg
+    from backend.config import travel_offer_search as ccfg
 
     _orig = (bcfg.TRAVEL_BOOKING_ENABLED, bcfg.TRAVEL_BOOKING_PROVIDER,
-             ccfg.TRAVEL_COMMERCE_ENABLED,
              ccfg.TRAVEL_COMMERCE_PROVIDER_MODE,
              ccfg.TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS)
     bcfg.TRAVEL_BOOKING_ENABLED = True
     bcfg.TRAVEL_BOOKING_PROVIDER = "fake_booking_native"
-    ccfg.TRAVEL_COMMERCE_ENABLED = True
     ccfg.TRAVEL_COMMERCE_PROVIDER_MODE = "fake"
     ccfg.TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS = ("fake-commerce.example.com",)
     _create_ledger()
@@ -684,7 +684,7 @@ def _run_travel_booking(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     finally:
         _drop_ledger()
         (bcfg.TRAVEL_BOOKING_ENABLED, bcfg.TRAVEL_BOOKING_PROVIDER,
-         ccfg.TRAVEL_COMMERCE_ENABLED, ccfg.TRAVEL_COMMERCE_PROVIDER_MODE,
+         ccfg.TRAVEL_COMMERCE_PROVIDER_MODE,
          ccfg.TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS) = _orig
     t_metrics = _aggregate_t(violations)
     for r in results:

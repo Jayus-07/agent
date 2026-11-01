@@ -60,7 +60,7 @@ def _read_pending(state: dict, conversation_id: str) -> dict:
             state.get("tenant_id") or "", state.get("user_id") or "",
             conversation_id)
         intent = (snap.booking_intent if snap else None) or {}
-        # 只接本域挂起：比价挂起（travel_commerce）不由预订子图消费
+        # 只接本域挂起：比价挂起（原商务子图，已收编删除）不由预订子图消费
         return intent if intent.get("route_mode") == _DOMAIN else {}
     except Exception:
         logger.debug("[travel_booking_graph_node] 挂起读取失败（软降级）",

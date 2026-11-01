@@ -1,6 +1,7 @@
-"""tests/travel/commerce/conftest.py — Commerce 测试隔离（STOP K）
+"""tests/travel/providers_support/commerce/conftest.py — 收编件测试隔离
+（迁自 tests/travel/commerce/conftest.py，2026-11-01 收编重构）
 
-两条隔离（沿 STOP J 测试纪律；本文件为 commerce 子包自有 conftest，
+两条隔离（沿 STOP J 测试纪律；本文件为收编件子包自有 conftest，
 **不修改父级 conftest.py**——父级 fixture 依然按 pytest 层级可用）：
 
 1. Provider 共享缓存换进程内空实例（生产 backend 是 Redis/TwoTierCache，
@@ -19,7 +20,7 @@ import pytest
 
 @pytest.fixture
 def isolated_provider_cache(monkeypatch):
-    """Provider 共享缓存 → 进程内空实例（STOP J 同款隔离，commerce 复制）。"""
+    """Provider 共享缓存 → 进程内空实例（STOP J 同款隔离）。"""
     from backend.infra.cache.backend import InMemoryCache
     from backend.providers.travel.live import cache as pcache
 
@@ -40,10 +41,9 @@ def reset_quota_counters():
 
 @pytest.fixture
 def fake_mode(monkeypatch, isolated_provider_cache):
-    """mode=fake + 白名单 + 域开关全开（commerce 全链路测试基座）。"""
-    from backend.config import travel_commerce as cfg
+    """mode=fake + 白名单（搜索全链路测试基座）。"""
+    from backend.config import travel_offer_search as cfg
 
-    monkeypatch.setattr(cfg, "TRAVEL_COMMERCE_ENABLED", True)
     monkeypatch.setattr(cfg, "TRAVEL_COMMERCE_PROVIDER_MODE", "fake")
     monkeypatch.setattr(
         cfg, "TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS",
@@ -54,10 +54,9 @@ def fake_mode(monkeypatch, isolated_provider_cache):
 
 @pytest.fixture
 def off_mode(monkeypatch, isolated_provider_cache):
-    """mode=off（默认态）：prefilter 不命中、service disabled。"""
-    from backend.config import travel_commerce as cfg
+    """mode=off（默认态）：service disabled。"""
+    from backend.config import travel_offer_search as cfg
 
-    monkeypatch.setattr(cfg, "TRAVEL_COMMERCE_ENABLED", False)
     monkeypatch.setattr(cfg, "TRAVEL_COMMERCE_PROVIDER_MODE", "off")
     return cfg
 

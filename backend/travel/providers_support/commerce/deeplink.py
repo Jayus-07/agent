@@ -1,6 +1,7 @@
-"""travel/commerce/deeplink.py — Booking Deep Link 安全校验（STOP K1/K5，任务书 §十二/G18）
+"""travel/providers_support/commerce/deeplink.py — Booking Deep Link 安全校验
+（收编自原 travel/commerce/deeplink.py，G18）
 
-STOP K 只到 Deep Link，不下单。**fail-closed**：白名单未配置 = 全拒；
+只到 Deep Link，不下单。**fail-closed**：白名单未配置 = 全拒；
 任何校验不过 → deep_link=None（绝不上报「不可用链接」给用户，更不拼假地址）。
 
 清单（§十二全项）：https only；host 白名单；长度限制；禁 javascript:/data:/
@@ -86,7 +87,7 @@ def validate_deeplink(
 
 
 def _max_len() -> int:
-    from backend.config.travel_commerce import TRAVEL_COMMERCE_DEEPLINK_MAX_LEN
+    from backend.config.travel_offer_search import TRAVEL_COMMERCE_DEEPLINK_MAX_LEN
 
     return TRAVEL_COMMERCE_DEEPLINK_MAX_LEN
 

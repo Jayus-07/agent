@@ -1,37 +1,43 @@
-"""travel/commerce/service.py — Commerce 编排服务（STOP K2-K6 核心）
+"""travel/providers_support/commerce/offer_search.py — 确定性重搜编排
+（收编自原 travel/commerce/service.py；Booking Executor 的报价/复核与
+travel.hotel.search 数据源共用的唯一搜索管道）
 
-流程（K0 §7 定稿，LLM 零参与事实链）：
+流程（原 K0 §7 定稿，LLM 零参与事实链）：
 
     request（已确定性校验） → Provider factory（mode 三态）
-      → adapter（Provider 层执行流：cache/quota/timeout/遥测）
+      → adapter（Provider 层执行流：cache/quota/timeout）
       → ProviderResult[list[Record]]
       → normalize fail-closed 门（脏数据拒收 → INVALID_RESPONSE）
-      → 确定性排序 → 截断披露 → CommerceResult（reporter 渲染的唯一输入）
+      → 确定性排序 → 截断披露 → CommerceResult
 
-**结局语义矩阵见 K0 §9**（实现与测试的唯一口径）：
+**结局语义矩阵（原 K0 §9，实现与测试的唯一口径）**：
   全部记录被拒 ≠ 空结果（前者 INVALID_RESPONSE，后者 SUCCESS+[]）；
   非 SUCCESS 结局不产生任何 offer（失败结构性不可能映射为 sold_out）。
+
+同参数同排序 = **确定性重搜**：Booking revalidate 按 offer_fingerprint
+精确匹配复核，价格/库存变化即时暴露（不吞不猜）。
 """
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import date
 
 from backend.providers.travel.live.commerce_contracts import (
     FlightOfferRecord,
     HotelOfferRecord,
 )
 from backend.providers.travel.live.result import Freshness, ProviderResult, ProviderStatus
-from backend.travel.commerce import telemetry
-from backend.travel.commerce.normalize import (
+from backend.travel.providers_support.commerce.normalize import (
     normalize_flight_offers,
     normalize_hotel_offers,
 )
-from backend.travel.commerce.ranking import sort_flights, sort_hotels
-from backend.travel.commerce.request import FlightSearchRequest, HotelSearchRequest
+from backend.travel.providers_support.commerce.ranking import sort_flights, sort_hotels
+from backend.travel.providers_support.commerce.request import (
+    FlightSearchRequest,
+    HotelSearchRequest,
+)
 
-# 允许对外呈现的 provider 结果状态（渲染话术映射在 reporter）
+# 允许对外呈现的 provider 结果状态（渲染话术映射在调用方）
 _PRESENTABLE_FAILURE = {
     ProviderStatus.NOT_FOUND: "not_found",
     ProviderStatus.TIMEOUT: "timeout",
@@ -45,8 +51,8 @@ _PRESENTABLE_FAILURE = {
 
 @dataclass
 class CommerceResult:
-    """一次商务搜索的完整结局（reporter 的唯一输入；可 JSON 序列化前经
-    model_dump——本对象仅进程内传递，不进 LangGraph state 原样存储）。"""
+    """一次商务搜索的完整结局（可 JSON 序列化前经 model_dump——本对象仅
+    进程内传递，不进 LangGraph state 原样存储）。"""
 
     commerce_type: str                    # hotel | flight
     status: str                           # success | empty | <PRESENTABLE_FAILURE 值>
@@ -72,7 +78,7 @@ def _mode_reason(mode: str) -> str:
 
 def _resolve_hotel_provider():
     """mode → Hotel Provider 实例；不可用返回 (None, reason)。"""
-    from backend.config.travel_commerce import provider_mode
+    from backend.config.travel_offer_search import provider_mode
 
     mode = provider_mode()
     if mode == "fake":
@@ -84,7 +90,7 @@ def _resolve_hotel_provider():
 
 
 def _resolve_flight_provider():
-    from backend.config.travel_commerce import provider_mode
+    from backend.config.travel_offer_search import provider_mode
 
     mode = provider_mode()
     if mode == "fake":
@@ -99,12 +105,9 @@ def search_hotels(request: HotelSearchRequest) -> CommerceResult:
     """酒店搜索（§七）。provider 缺失 → disabled（不伪造）。"""
     provider, reason = _resolve_hotel_provider()
     if provider is None:
-        telemetry.record_request("hotel", "-", "disabled", 0)
-        telemetry.record_fallback("hotel", "-", "disabled")
         return CommerceResult(commerce_type="hotel", status="disabled",
                               provider="-", reason=reason)
 
-    t0 = time.monotonic()
     result = provider.search_hotels(
         request.city, request.check_in, request.check_out,
         adults=request.adults, children=request.children,
@@ -119,12 +122,9 @@ def search_flights(request: FlightSearchRequest) -> CommerceResult:
     """机票搜索（§八，one-way 必持；round-trip 走 Provider 支持声明）。"""
     provider, reason = _resolve_flight_provider()
     if provider is None:
-        telemetry.record_request("flight", "-", "disabled", 0)
-        telemetry.record_fallback("flight", "-", "disabled")
         return CommerceResult(commerce_type="flight", status="disabled",
                               provider="-", reason=reason)
 
-    t0 = time.monotonic()
     result = provider.search_flights(
         request.origin, request.destination, request.departure_date,
         return_date=request.return_date, adults=request.adults,
@@ -159,18 +159,12 @@ def _normalize_flight_factory(request: FlightSearchRequest):
 
 def _finalize(result: ProviderResult, *, commerce_type: str,
               normalizer, sorter) -> CommerceResult:
-    """ProviderResult → CommerceResult（语义矩阵落地点，K0 §9 逐行）。"""
+    """ProviderResult → CommerceResult（语义矩阵落地点，原 K0 §9 逐行）。"""
     latency = result.latency_ms
     provider = result.provider or "-"
 
     if not result.ok:
         status = _PRESENTABLE_FAILURE.get(result.status, "unavailable")
-        telemetry.record_request(commerce_type, provider, status, latency)
-        if result.freshness == Freshness.STALE:
-            telemetry.record_fallback(commerce_type, provider, "stale")
-        telemetry.event("travel.commerce.request", commerce_type=commerce_type,
-                        provider=provider, status=status,
-                        underlying=result.status.value)
         return CommerceResult(
             commerce_type=commerce_type, status=status, provider=provider,
             freshness=result.freshness, latency_ms=latency,
@@ -182,18 +176,8 @@ def _finalize(result: ProviderResult, *, commerce_type: str,
     hosts = _deeplink_hosts()
     outcome = normalizer(records, observed_at, result.freshness, hosts)
 
-    for key, n in outcome.deeplink_stats.items():
-        if n:
-            telemetry.record_deeplink(commerce_type, key, n)
-
     # 全部记录被拒 = INVALID_RESPONSE（供应商给了非法响应，不是「无结果」）
     if records and not outcome.valids:
-        telemetry.record_request(commerce_type, provider,
-                                 "invalid_response", latency)
-        telemetry.record_rejects(commerce_type, provider, len(outcome.rejects))
-        telemetry.event("travel.commerce.all_rejected",
-                        commerce_type=commerce_type, provider=provider,
-                        reject_count=len(outcome.rejects))
         return CommerceResult(
             commerce_type=commerce_type, status="invalid_response",
             provider=provider, freshness=result.freshness,
@@ -203,8 +187,6 @@ def _finalize(result: ProviderResult, *, commerce_type: str,
 
     if not outcome.valids:
         # SUCCESS + []（records 为空）：正常「无搜索结果」
-        telemetry.record_request(commerce_type, provider, "empty", latency)
-        telemetry.record_empty(commerce_type, provider, "empty")
         return CommerceResult(
             commerce_type=commerce_type, status="empty", provider=provider,
             freshness=result.freshness, latency_ms=latency,
@@ -214,15 +196,6 @@ def _finalize(result: ProviderResult, *, commerce_type: str,
     max_offers = _max_offers()
     truncated = max(0, len(valids) - max_offers)
     valids = valids[:max_offers]
-
-    telemetry.record_request(commerce_type, provider, "success", latency)
-    telemetry.record_offers(commerce_type, provider, len(valids))
-    if outcome.rejects:
-        telemetry.record_rejects(commerce_type, provider, len(outcome.rejects))
-    telemetry.record_snapshots(commerce_type, len(valids))
-    telemetry.event("travel.commerce.request", commerce_type=commerce_type,
-                    provider=provider, status="success",
-                    offer_count=len(valids), freshness=result.freshness.value)
 
     return CommerceResult(
         commerce_type=commerce_type,
@@ -237,7 +210,7 @@ def _finalize(result: ProviderResult, *, commerce_type: str,
 
 
 def _deeplink_hosts() -> tuple[str, ...]:
-    from backend.config.travel_commerce import (
+    from backend.config.travel_offer_search import (
         TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS,
     )
 
@@ -245,6 +218,6 @@ def _deeplink_hosts() -> tuple[str, ...]:
 
 
 def _max_offers() -> int:
-    from backend.config.travel_commerce import TRAVEL_COMMERCE_MAX_OFFERS
+    from backend.config.travel_offer_search import TRAVEL_COMMERCE_MAX_OFFERS
 
     return max(1, TRAVEL_COMMERCE_MAX_OFFERS)

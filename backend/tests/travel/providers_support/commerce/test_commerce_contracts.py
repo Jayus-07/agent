@@ -1,6 +1,7 @@
-"""STOP K 契约测试（K1：G3/G4/G8/G13）
+"""收编件契约测试（迁自 tests/travel/commerce/test_commerce_contracts.py，
+2026-11-01 收编重构；红线不变：G3/G4/G8/G13）
 
-红线钉死：Money Decimal（NaN/Infinity/负/精度/币种）、taxes unknown≠0、
+Money Decimal（NaN/Infinity/负/精度/币种）、taxes unknown≠0、
 availability 枚举语义、fingerprint 跨进程稳定（禁 Python hash）、
 模型 forbid 补齐（字段不存在必须 None，extra 拒绝）。
 """
@@ -15,12 +16,12 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-from backend.travel.commerce.identity import (
+from backend.travel.providers_support.commerce.identity import (
     flight_fingerprint,
     hotel_fingerprint,
     snapshot_id,
 )
-from backend.travel.commerce.models import (
+from backend.travel.providers_support.commerce.models import (
     Availability,
     FlightOffer,
     FlightSegment,
@@ -193,7 +194,8 @@ def test_flight_offer_rejects_unconnected_segments():
 def test_fingerprint_stable_across_processes():
     """子进程重算指纹必须一致（Python hash 跨进程随机化被禁用）。"""
     code = (
-        "from backend.travel.commerce.identity import hotel_fingerprint;"
+        "from backend.travel.providers_support.commerce.identity "
+        "import hotel_fingerprint;"
         "print(hotel_fingerprint(provider='fake:commerce',"
         "property_id='p1', rate_identifier='offer:r1',"
         "check_in='2026-10-03', check_out='2026-10-05',"
@@ -215,7 +217,7 @@ def test_fingerprint_stable_across_processes():
 def _repo_root() -> str:
     from pathlib import Path
 
-    return str(Path(__file__).resolve().parents[4])
+    return str(Path(__file__).resolve().parents[5])
 
 
 def test_different_rate_plans_never_merge():
@@ -261,7 +263,9 @@ def test_snapshot_id_deterministic_and_traceable():
 
 
 def test_hotel_request_validation_matrix():
-    from backend.travel.commerce.request import HotelSearchRequest
+    from backend.travel.providers_support.commerce.request import (
+        HotelSearchRequest,
+    )
 
     today = date.today()
     far = today + timedelta(days=45)
@@ -289,7 +293,9 @@ def test_hotel_request_validation_matrix():
 
 
 def test_flight_request_validation_matrix():
-    from backend.travel.commerce.request import FlightSearchRequest
+    from backend.travel.providers_support.commerce.request import (
+        FlightSearchRequest,
+    )
 
     with pytest.raises(ValidationError):
         FlightSearchRequest(origin="东京", destination="东京",

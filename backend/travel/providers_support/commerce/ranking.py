@@ -1,7 +1,8 @@
-"""travel/commerce/ranking.py — 确定性排序（STOP K1，任务书 §十七）
+"""travel/providers_support/commerce/ranking.py — 确定性排序
+（收编自原 travel/commerce/ranking.py，任务书 §十七）
 
 **只做可计算规则的确定性排序**，禁止任何「最值得/性价比最高/最佳/最推荐」
-式的主观断言（渲染话术由 reporter 白名单承载：只描述排序键本身）。
+式的主观断言（渲染话术由调用方白名单承载：只描述排序键本身）。
 
 排序键（白名单）：price（价格升序）/ duration（总时长升序，仅 flight）/
 stops（中转数升序，仅 flight）。全部稳定排序 + fingerprint 终序兜底——

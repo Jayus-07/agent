@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 
 import { orderDomainGraphs, subflowAttribution } from './domain-attribution'
 
+// 2026-11-01 收编重构：travel_commerce 子流随域图壳删除；
+// 排序/归属逻辑本身是通用机制，用例改用现存子流（booking）与假想名。
+
 describe('subflowAttribution', () => {
   it('子流图：拼「父域标签 · 子流 子流」', () => {
     expect(
-      subflowAttribution({ domain: 'travel', domain_label: '旅游规划图执行', subflow: 'commerce' }),
-    ).toBe('旅游规划图执行 · commerce 子流')
+      subflowAttribution({ domain: 'travel', domain_label: '旅游规划图执行', subflow: 'booking' }),
+    ).toBe('旅游规划图执行 · booking 子流')
   })
 
   it('缺父域标签时回退到父域 route_mode', () => {
@@ -33,11 +36,10 @@ describe('orderDomainGraphs', () => {
 
   it('子流紧跟自己的父域（父域在前）', () => {
     const ordered = orderDomainGraphs([
-      graph('travel_commerce', 'travel'),
-      graph('travel', null),
       graph('travel_booking', 'travel'),
+      graph('travel', null),
     ])
-    expect(ordered.map((n) => n.route_mode)).toEqual(['travel', 'travel_commerce', 'travel_booking'])
+    expect(ordered.map((n) => n.route_mode)).toEqual(['travel', 'travel_booking'])
   })
 
   it('多个父域各自成组，保持后端给的相对顺序', () => {
@@ -52,7 +54,6 @@ describe('orderDomainGraphs', () => {
   it('长度恒等：不丢节点、不重复', () => {
     const input = [
       graph('customer_service', null),
-      graph('travel_commerce', 'travel'),
       graph('travel', null),
       graph('travel_c_not_exist', 'travel'),
       graph('travel_booking', 'travel'),
@@ -64,10 +65,10 @@ describe('orderDomainGraphs', () => {
 
   it('父域不在列表里的子流兜底追加到末尾（宁可排得难看，也不能消失）', () => {
     const ordered = orderDomainGraphs([
-      graph('travel_commerce', 'travel'),
+      graph('travel_booking', 'travel'),
       graph('orphan_sub', 'not_in_list'),
     ])
-    expect(ordered.map((n) => n.route_mode)).toEqual(['travel_commerce', 'orphan_sub'])
+    expect(ordered.map((n) => n.route_mode)).toEqual(['travel_booking', 'orphan_sub'])
   })
 
   it('没有子流时原样返回（顶级域之间不重排）', () => {

@@ -50,9 +50,9 @@
 
 非 RAG manifest 使用 `schema_version: "evaluation-v2/1.0"`，并声明登记的 `module`、目标 `dataset_key`、名称和版本。用例可用 `question`，或用 `input` 保存结构化输入；客服输入支持 `input.turns`，保留多轮消息，`input.query` 必须与最后一条 user 消息一致。用例可以省略 `module`；如提供，必须与 manifest 模块相同。CSV 结构化字段使用 JSON 单元格。
 
-`sql`、`cs`、`planner`、`e2e`、`travel`、`travel-provider`、`travel-commerce`、`travel-booking` 已有离线 Expected 结构校验，可创建待审核候选并发布相应 Golden；审核和发布均拒绝知识库证据锚点。SQL 只复用旧 Runner 的离线白名单和安全校验，不执行查询。RAG 继续执行当前文档与原文证据核验。
+`sql`、`cs`、`planner`、`e2e`、`travel`、`travel-provider`、`travel-booking` 已有离线 Expected 结构校验，可创建待审核候选并发布相应 Golden；审核和发布均拒绝知识库证据锚点。SQL 只复用旧 Runner 的离线白名单和安全校验，不执行查询。RAG 继续执行当前文档与原文证据核验。（2026-11-01 收编重构：`travel-commerce` 随原商务域图壳退役。）
 
-Suite/Run 按服务端登记的 Runner 能力接受模块，客户端声明 `module` 不会授权或触发业务执行。RAG 使用受控检索 Runner；`travel`、`travel-provider`、`travel-commerce` 复用现有离线质量 Runner 和 fake Provider。`sql`、`cs`、`e2e` 当前只运行离线契约检查，Run 快照固定 `execution_semantics="contract_only"`，最终 Gate 必须是 `INVALID`（`runner_semantics_not_quality_evaluation`），不能形成质量 PASS/FAIL，也不能进行人工质量评分。`planner` 与 `travel-booking` 尚未接入 V2 Runner，不能创建 Suite/Run。旧 Golden 可导入并不等于对应模块已具备质量评测能力。
+Suite/Run 按服务端登记的 Runner 能力接受模块，客户端声明 `module` 不会授权或触发业务执行。RAG 使用受控检索 Runner；`travel`、`travel-provider` 复用现有离线质量 Runner 和 fake Provider。`sql`、`cs`、`e2e` 当前只运行离线契约检查，Run 快照固定 `execution_semantics="contract_only"`，最终 Gate 必须是 `INVALID`（`runner_semantics_not_quality_evaluation`），不能形成质量 PASS/FAIL，也不能进行人工质量评分。`planner` 与 `travel-booking` 尚未接入 V2 Runner，不能创建 Suite/Run。旧 Golden 可导入并不等于对应模块已具备质量评测能力。
 
 ## 错误语义
 
@@ -66,7 +66,7 @@ V2 Run、逐例结果、异步任务适配、取消/显式重试、Experiment �
 
 修订候选审核通过后，API 返回 `promoted_case_revision`。若其他候选已基于同一 revision 先行通过，旧候选的基础 revision 校验会失败并返回 409；发布 v2 时可引用新 revision，已发布 v1 的 manifest、hash 和既有 Run 引用保持原值。管理端只展示每个 Case 当前最新的已审核 revision，避免误把旧 revision 重新发布。
 
-Runner 是受控兼容适配，不代表目标态全部能力已经完成：当前只允许可信 `default` tenant 的 `super_admin` 创建运行。RAG 支持 deterministic `answer_quality`、evidence `evidence_quality` 和独立留痕的 Human Rubric；`travel`、`travel-provider`、`travel-commerce` 使用现有离线质量 Runner，不调用模型或真实 Provider。`sql`、`cs`、`e2e` 只做输入/Expected 契约检查，Gate 固定 `INVALID`，且禁止人工质量复核；这三个模块不能用于评估业务质量。`planner`、`travel-booking` 尚未接入 V2 Runner。LLM Judge、Judge 与人工一致率/分歧分析、完整逐题 Token/费用归因、直接 CI 发布审批尚未迁移。RAG 费用未由旧 Runner 归因时明确标记 `not_reported_by_legacy_runner`，不显示为零；离线非 RAG Runner 标记 `not_applicable_no_model_call`。其余 tenant 的运行创建会返回 403；现有旧任务存储与报告仍按单租户适配，不得据此宣称完成多租户运行迁移。
+Runner 是受控兼容适配，不代表目标态全部能力已经完成：当前只允许可信 `default` tenant 的 `super_admin` 创建运行。RAG 支持 deterministic `answer_quality`、evidence `evidence_quality` 和独立留痕的 Human Rubric；`travel`、`travel-provider` 使用现有离线质量 Runner，不调用模型或真实 Provider。`sql`、`cs`、`e2e` 只做输入/Expected 契约检查，Gate 固定 `INVALID`，且禁止人工质量复核；这三个模块不能用于评估业务质量。`planner`、`travel-booking` 尚未接入 V2 Runner。LLM Judge、Judge 与人工一致率/分歧分析、完整逐题 Token/费用归因、直接 CI 发布审批尚未迁移。RAG 费用未由旧 Runner 归因时明确标记 `not_reported_by_legacy_runner`，不显示为零；离线非 RAG Runner 标记 `not_applicable_no_model_call`。其余 tenant 的运行创建会返回 403；现有旧任务存储与报告仍按单租户适配，不得据此宣称完成多租户运行迁移。
 
 Run 的 `snapshot_json.environment` 固定 runner、Suite/Golden/Corpus 哈希、评分器定义、Prompt 版本和 RAG 检索运行环境；`env_hash` 对整个摘要做内容哈希。运行环境只保留模式、模型/供应商标识、策略和本地模型路径指纹，不保存凭据、URL 或机器绝对路径。Worker 启动及逐例边界复核运行环境，漂移或缺少新快照时失败并写入 `INVALID` Gate；旧 Run 详情可读，但缺环境指纹的旧 queued/failed Run 不会按新配置继续执行。
 
