@@ -27,6 +27,15 @@ from backend.tests.rag.test_embedding_migration import data  # noqa: F401
 @pytest.fixture
 def worker_env(data):
     stores, _ = data
+    # llm_usage 表：OBS_DB_PG_TABLE_PREFIX 前缀重定向下单例可能持有旧表名
+    # （pop 重载后外层单例仍指旧实例），且 CI 隔离库无人建表（本地主栈表
+    # 由运行栈建，写入裸名恒存在——v22 run 41344790496 gw1 实证写入
+    # pgtest_biz_gw1_llm_usage UndefinedTable、查询裸表恒 None）。重置
+    # 单例按当前 env 重建 + 幂等建表。
+    from backend.observability import llm_usage_store as _lus
+
+    _lus._llm_usage_store = None
+    _lus.get_llm_usage_store()._init_db()
     # 跨进程自愈：上次硬杀崩溃的残留（劫持的绑定/死端口供应商）会让运行栈
     # embedding 全挂，且不能在坏状态上叠测。fresh 残留属并行活跃会话，守卫
     # 自带时间阈值不会误杀；孤儿绑定说明上次清理被打断，fail-fast 交人工。

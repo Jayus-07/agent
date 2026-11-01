@@ -68,11 +68,10 @@ def redis_client():
 
 
 def _redis_test_url(url: str) -> str:
-    """REDIS_URL 换 db15 + host 钉死 127.0.0.1（消 DNS 双栈轮换）。"""
-    base = url.rsplit("/", 1)[0]
-    if "@localhost:" in base:
-        base = base.replace("@localhost:", "@127.0.0.1:")
-    return base + "/15"
+    """REDIS_URL 换专用测试库（xdist worker 分片）+ host 钉死 127.0.0.1。"""
+    from backend.tests.fixtures.redis_test import redis_test_db_url
+
+    return redis_test_db_url(url)
 
 
 @pytest.fixture(autouse=True)
@@ -430,7 +429,7 @@ def test_index_runtime_budget_exhausted_marks_failed(pg, admission_env,
 
 
 # ── heartbeat 顺带续 admission token TTL ─────────────────────
-def test_heartbeat_renews_admission_token(pg, admission_env):
+def test_heartbeat_renews_admission_token(pg, admission_env, monkeypatch):
     # token_ttl 8s（原 2s）：CI 4 worker CPU/DB 竞争下心跳线程首轮
     # renew_lease(DB)+renew_admission(Redis) 双跳可能超 2s——token 在首轮
     # 续上前过期被清（v19 run 41329142940 HB-DEBUG 实证：raw=[] +
@@ -455,6 +454,36 @@ def test_heartbeat_renews_admission_token(pg, admission_env):
     d = controller.acquire_for_execution(
         task_id, owner_execution_id=lease_id, record=pg.get_task(task_id))
     assert d.allowed
+
+    # renew 链路计数（诊断断言）：v21/v22 两轮 HB-DEBUG 显示 token 恒 MISSING
+    # 而心跳线程 lost=False——lease renew 与 admission renew 的成败分布缺失，
+    # 无法区分「DB renew 恒异常（admission 永不执行）」与「admission renew
+    # 恒 False」。从模块属性包裹（lease_heartbeat._loop 为函数内 from-import，
+    # 坑位 19，运行时查源模块属性）
+    from backend.services import task_service as _ts
+    from backend.tasks import admission as _adm
+    renew_stats = {"lease_ok": 0, "lease_fail": 0, "lease_err": 0,
+                   "adm_true": 0, "adm_false": 0}
+    _orig_renew_lease = _ts.renew_lease
+
+    def _wrap_renew_lease(*a, **k):
+        try:
+            ok = _orig_renew_lease(*a, **k)
+            renew_stats["lease_ok" if ok else "lease_fail"] += 1
+            return ok
+        except Exception:
+            renew_stats["lease_err"] += 1
+            raise
+
+    _orig_adm_renew = _adm.renew_for_execution
+
+    def _wrap_adm_renew(*a, **k):
+        ok = _orig_adm_renew(*a, **k)
+        renew_stats["adm_true" if ok else "adm_false"] += 1
+        return ok
+
+    monkeypatch.setattr(_ts, "renew_lease", _wrap_renew_lease)
+    monkeypatch.setattr(_adm, "renew_for_execution", _wrap_adm_renew)
     # 复用测试 db15 的同一连接参数（host 钉死 127.0.0.1）
     client = redis_lib.Redis.from_url(_redis_test_url(REDIS_URL),
                                       decode_responses=True)
@@ -470,7 +499,7 @@ def test_heartbeat_renews_admission_token(pg, admission_env):
     assert controller.renew_for_execution(task_id, lease_id), \
         "手动 renew 必须成功（lease 活跃 + owner 匹配）"
 
-    hb = LeaseHeartbeat(task_id, lease_id, interval_s=0.3, ttl_s=2)
+    hb = LeaseHeartbeat(task_id, lease_id, interval_s=0.3, ttl_s=8)
     hb.start()
     time.sleep(2.5)  # 手动那轮的 score(+2) 在 2s 时过期；此后仍活跃 = hb 在续
     hb.stop()
@@ -484,7 +513,8 @@ def test_heartbeat_renews_admission_token(pg, admission_env):
           "scope_active=", store.scope_active("global"),
           "token_owner=", (store.get_token(task_id) or {}).get(
               "owner_execution_id", "MISSING"),
-          "expected_owner=", lease_id)
+          "expected_owner=", lease_id,
+          "renew_stats=", renew_stats)
     assert not hb.lost
     assert store.scope_active("global") == 1, "heartbeat 必须顺带续 token"
     controller.release_for_execution(task_id, lease_id, reason="success")

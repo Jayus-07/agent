@@ -247,6 +247,17 @@ async def _check_dynamic_registry() -> dict:
     issues: list[str] = []
     counts: dict = {}
     try:
+        # 对账前刷新运行时快照：快照是进程内缓存，别的进程（并行测试
+        # suite / 其他 worker）写入的连接与 bundle 不刷新就会把活数据
+        # 误判成悬空授权（v22 run 41344790496 诊断断言实证：bundle
+        # 补货分析包 三工具全报「未生效」，实为并行 suite 用例窗口内的
+        # 正常数据）。失败回落进程内快照（外层 except 兜底）。
+        from backend.infra.mcp_registry import store as mcp_store
+
+        try:
+            await mcp_store.refresh()
+        except Exception as refresh_err:  # noqa: BLE001
+            issues.append(f"动态注册表快照刷新失败（按进程内快照对账）: {refresh_err}")
         _check_dynamic_registry_sync(issues, counts)
         await _check_dynamic_registry_db(issues, counts)
     except Exception as e:  # noqa: BLE001 — 对账失败不炸整份报告

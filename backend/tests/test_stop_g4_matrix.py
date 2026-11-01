@@ -43,12 +43,12 @@ def redis_client():
         import redis as redis_lib
 
         from backend.config.redis import REDIS_URL
+        from backend.tests.fixtures.redis_test import redis_test_db_url
 
-        base = REDIS_URL.rsplit("/", 1)[0]
-        if "@localhost:" in base:
-            base = base.replace("@localhost:", "@127.0.0.1:")
+        # flushdb 是整库操作，xdist 多 worker 共库会互删并行用例的键
+        # （helper docstring 有完整机制）——db 号按 worker 分片
         client = redis_lib.Redis.from_url(
-            base + "/15", decode_responses=True,
+            redis_test_db_url(REDIS_URL), decode_responses=True,
             socket_timeout=3, socket_connect_timeout=3)
         client.ping()
     except Exception as e:  # noqa: BLE001
