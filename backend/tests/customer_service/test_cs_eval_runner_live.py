@@ -33,23 +33,41 @@ class _FakeGraph:
 
 
 @pytest.mark.parametrize(
-    ("expert_history", "desc"),
+    ("expert_history", "expected_visited", "desc"),
     [
-        ([{"expert": "cs_action_expert", "status": "success", "response_draft": ""}], "现行 expert dict"),
-        ([{"node": "cs_action_expert"}], "旧版 node dict"),
-        (["cs_action_expert"], "纯节点名字符串"),
+        (
+            [{"expert": "action", "status": "success", "response_draft": ""}],
+            ["cs_action_expert"],
+            "现行 expert dict（语义短名归一为节点名）",
+        ),
+        (
+            [{"node": "cs_action_expert"}],
+            ["cs_action_expert"],
+            "旧版 node dict（节点名原样透传）",
+        ),
+        (
+            ["action"],
+            ["cs_action_expert"],
+            "纯短名字符串",
+        ),
+        (
+            ["cs_action_expert"],
+            ["cs_action_expert"],
+            "纯节点名字符串",
+        ),
         (
             [
-                {"expert": "cs_knowledge_expert", "status": "success"},
-                {"expert": "cs_action_expert", "status": "success"},
+                {"expert": "knowledge", "status": "success"},
+                {"expert": "action", "status": "success"},
                 {},
                 None,
             ],
+            ["cs_action_expert", "cs_knowledge_expert"],
             "多专家 + 空/None 条目不炸不误判",
         ),
     ],
 )
-def test_run_live_expert_history_forms(expert_history, desc, monkeypatch):
+def test_run_live_expert_history_forms(expert_history, expected_visited, desc, monkeypatch):
     monkeypatch.setattr(
         "backend.customer_service.graph_builder.get_cs_graph",
         lambda: _FakeGraph({
@@ -66,15 +84,7 @@ def test_run_live_expert_history_forms(expert_history, desc, monkeypatch):
     result = results[0]
     assert result.metrics["expert_match"] == 1.0, desc
     assert result.status == "pass", (desc, result.error_msg)
-    assert "cs_action_expert" in result.actual["visited_experts"], desc
-    if desc == "多专家 + 空/None 条目不炸不误判":
-        # 空 dict/None 条目不得以 None 形态混入 visited
-        assert None not in result.actual["visited_experts"], desc
-        assert result.actual["visited_experts"] == [
-            "cs_action_expert", "cs_knowledge_expert",
-        ]
-    else:
-        assert result.actual["visited_experts"] == ["cs_action_expert"]
+    assert result.actual["visited_experts"] == sorted(expected_visited), desc
 
 
 def test_run_live_route_mismatch_still_fails(monkeypatch):
@@ -83,7 +93,7 @@ def test_run_live_route_mismatch_still_fails(monkeypatch):
         "backend.customer_service.graph_builder.get_cs_graph",
         lambda: _FakeGraph({
             "final_answer": "已为你提交退款申请，请稍候。",
-            "expert_history": [{"expert": "cs_knowledge_expert", "status": "success"}],
+            "expert_history": [{"expert": "knowledge", "status": "success"}],
             "handoff_state": "",
             "conversation_status": "resolved",
         }),

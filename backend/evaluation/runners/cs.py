@@ -17,6 +17,7 @@ from backend.shared.logger import logger
 # cs_target（Router 预过滤产物）→ CS Graph expert 节点名
 # 单一事实源在 customer_service/graph_state.py（cs_graph_node 同用此映射）
 from backend.customer_service.graph_state import CS_TARGET_TO_EXPERT as _TARGET_TO_EXPERT
+from backend.customer_service.graph_state import EXPERT_NAME_TO_NODE as _EXPERT_NAME_TO_NODE
 from backend.customer_service.router.intents import FINE_INTENTS as _FINE_INTENTS
 
 _VALID_TARGETS = set(_TARGET_TO_EXPERT)
@@ -106,15 +107,18 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
             expert_history = final_state.get("expert_history") or []
             # 现图契约（experts/base.py）条目为 {"expert": ...}；旧版 {"node": ...}
             # 与纯节点名字符串保持兼容，取不到名字的条目跳过（路由断言不允许
-            # 把 None 计入 visited，否则期望专家永远"未命中"）
+            # 把 None 计入 visited，否则期望专家永远"未命中"）。
+            # 条目值是 expert 语义短名（knowledge/query/...），断言期望的是图
+            # 节点名（cs_knowledge_expert/...），统一经权威映射表归一后再比对。
             visited = set()
             for entry in expert_history:
                 if isinstance(entry, dict):
                     expert_name = entry.get("expert") or entry.get("node")
-                    if expert_name:
-                        visited.add(expert_name)
-                elif entry:
-                    visited.add(str(entry))
+                else:
+                    expert_name = entry
+                if not expert_name:
+                    continue
+                visited.add(_EXPERT_NAME_TO_NODE.get(str(expert_name), str(expert_name)))
             expected_expert = _TARGET_TO_EXPERT.get(exp.get("target", ""), "")
 
             actual = {
