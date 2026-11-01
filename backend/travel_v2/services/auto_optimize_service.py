@@ -113,6 +113,9 @@ def _top_lodging(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "booking_status": o.get("booking_status"),
             "source": o.get("source"),
             "observed_at": o.get("observed_at"),
+            # 跳转型预订：供应商官方下单页链接（已过 deeplink 白名单门，
+            # 未配置白名单时为 None）；前端透出「去预订」，平台不代订。
+            "deep_link": o.get("deep_link"),
             "reason": "价格最低" if o.get("nightly_price_cny") else "价格未知",
         }
         for o in ranked[:_TOP_N]

@@ -52,7 +52,8 @@ def test_suggestions_structure_snapshot(monkeypatch):
                 {"selection_id": "ho:1", "merchant_id": "P1", "name": "海景酒店",
                  "nightly_price_cny": 388.0, "tier": "mid",
                  "availability": "available", "booking_status": "not_booked",
-                 "source": "rollinggo:mcp", "observed_at": "2026-11-01T08:00:00+00:00"},
+                 "source": "rollinggo:mcp", "observed_at": "2026-11-01T08:00:00+00:00",
+                 "deep_link": "https://rollinggo.cn/pages/hotel/detail/index?id=1"},
                 {"selection_id": "ho:2", "name": "青旅",
                  "nightly_price_cny": 120.0, "tier": "low",
                  "availability": "limited", "booking_status": "not_booked",
@@ -77,6 +78,8 @@ def test_suggestions_structure_snapshot(monkeypatch):
     assert all(l["booking_status"] == "not_booked" for l in lodgings)
     assert lodgings[1]["merchant_id"] == "P1"
     assert lodgings[1]["source"] == "rollinggo:mcp"
+    # 跳转型预订：deep_link 原样透传（前端「去预订」按钮的数据源）
+    assert lodgings[1]["deep_link"] == "https://rollinggo.cn/pages/hotel/detail/index?id=1"
     assert lodgings[1]["check_in"] is None or isinstance(lodgings[1]["check_in"], str)
     # 建议不是已选：apply 语义提示 + 零写入字段
     assert "selections" in out["apply_hint"]

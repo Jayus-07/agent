@@ -77,7 +77,9 @@ describe('自动优选建议确认卡（F04）', () => {
             check_out: '2026-12-03', nights: 2, price_total: '240', currency: 'CNY',
             nightly_price_cny: 120, tier: 'low', availability: 'limited',
             booking_status: 'not_booked', source: 'rollinggo:mcp',
-            observed_at: '2026-11-01T08:00:00+00:00', reason: '价格最低' },
+            observed_at: '2026-11-01T08:00:00+00:00',
+            deep_link: 'https://rollinggo.cn/pages/hotel/detail/index?id=2',
+            reason: '价格最低' },
         ],
       },
       disclosures: ['商户评分来自高德，可能随时间变化。'],
@@ -113,6 +115,14 @@ describe('自动优选建议确认卡（F04）', () => {
     expect(container.textContent).toContain('青旅')
     expect(container.textContent).toContain('商户评分来自高德，可能随时间变化。')
     expect(container.textContent).toContain('逐条选入（逐条幂等）')
+
+    // 跳转型预订：有 deep_link 的住宿建议渲染「去预订」链接（新窗口）+ 如实披露
+    const bookLink = container.querySelector('a[aria-label="跳转供应商官方页面预订青旅"]')
+    expect(bookLink).not.toBeNull()
+    expect(bookLink?.getAttribute('href')).toBe('https://rollinggo.cn/pages/hotel/detail/index?id=2')
+    expect(bookLink?.getAttribute('target')).toBe('_blank')
+    expect(bookLink?.getAttribute('rel')).toContain('noopener')
+    expect(container.textContent).toContain('平台不代订、不记录订单状态')
 
     const applyButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '确认并逐条选入')!
     await act(async () => {

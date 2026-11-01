@@ -762,12 +762,16 @@ def _render_lodging_picks(state: dict) -> list[str]:
     （CNY 换算值，来源见 lodging_disclosure）；只列检索返回的事实字段，
     缺的不补造。无候选/数据源未启用时整段不渲染（disabled 语义由
     lodging_disclosure 走「需要你确认」披露，不在这里伪造空段）。
+
+    跳转型预订（2026-11-01 用户决策）：Provider 给了 booking_deep_link
+    （已过 deeplink 白名单门）时渲染「去预订」链接——用户跳转供应商官方
+    页面自行完成下单，平台不代订、不产生订单回执，如实披露。
     """
     options = state.get("lodging_options") or []
     if not options:
         return []
     lines = ["## 住宿建议", ""]
-    lines.append("> 实时库存与价格快照，随时可能变化；预订请走行程确认门复核。")
+    lines.append("> 实时库存与价格快照，随时可能变化；预订请以确认门复核结果为准。")
     lines.append("")
     tier_labels = {"low": "经济", "mid": "舒适", "high": "高档"}
     for o in options[:3]:
@@ -792,7 +796,16 @@ def _render_lodging_picks(state: dict) -> list[str]:
         if o.get("address"):
             extras.append(str(o["address"]))
         tail = f"（{' · '.join(extras)}）" if extras else ""
-        lines.append(f"- **{name}**{tail}")
+        link = str(o.get("deep_link") or "").strip()
+        # deep_link 已过收编件 deeplink 白名单门（未配置白名单时为 None）；
+        # 这里只透传供应商官方链接，不做任何 URL 构造或改写。
+        booking = f" · [去预订]({link})" if link else ""
+        lines.append(f"- **{name}**{tail}{booking}")
+    has_link = any(
+        isinstance(o, dict) and o.get("deep_link") for o in options[:3])
+    if has_link:
+        lines.append("")
+        lines.append("> 「去预订」跳转供应商官方页面完成下单，由你自行操作；平台不代订、不记录订单状态。")
     lines.append("")
     return lines
 
