@@ -28,8 +28,8 @@ _SQLVIZ_FILES = (
     "frontend-cs/src/components/chat/SqlViz.tsx",
 )
 _CS_ID_FILES = (
-    "frontend/src/components/cs/constants.ts",
-    "frontend/src/store/csChat.ts",
+    # 2aaab3c（cs2 P8）删除旧 components/cs 全量后，节点名映射迁至 cs2 工作台
+    "frontend/src/cs2/types.ts",
 )
 
 
