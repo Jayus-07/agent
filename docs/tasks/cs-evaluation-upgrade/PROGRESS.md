@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P3 已完成合入，P4（offline）待实施、P5 机制待建；P4 live 跑批预算待用户拍板**
+- 当前状态：**P1–P4 已完成合入，P5 机制闭环已验证并文档化（长期运营）；P4 live 跑批预算待用户拍板**
 
 ## 阶段状态总表
 
@@ -14,8 +14,8 @@
 | P3 | 词表/规则能力补强（cs-gate 护航） | **已完成**（2026-11-02，含候选 4 条收编升 v2.2） | feat/cs-eval-p3 / [PR #229](https://github.com/Jayus-07/agent/pull/229)（merged b770788） | 见日志 2026-11-02（三） |
 | P2 | 数据集修订三类口径 + 升 v2.1 | 待实施（依赖 P1） | — | — |
 | P3 | 词表/规则能力补强（cs-gate 护航） | 待实施（依赖 P1） | — | — |
-| P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | 待实施 | — | — |
-| P5 | 坏例回流运营闭环 | 长期 | — | — |
+| P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | **已完成（offline）**（2026-11-02） | 纯运营操作无代码分支；见日志 2026-11-02（四） | run 1a2ae7da：324/324 pass |
+| P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -31,6 +31,19 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（四）—— P4 落地（管理端评测中心 offline 接线）+ P5 机制闭环验证
+
+- **P4（纯运营操作，无代码改动）**：cs 数据集经 evaluation_v2 治理 API 注册并入管理端——
+  - dataset `cs_locked_v2_2`（domain=cs，tenant=default，owner=user:279 沿用现有 rag 数据集口径）；
+  - 锁版 v2.2 全量 324 条经导入（非 RAG 通道：manifest schema `evaluation-v2/1.0`、单批 ≤100 分 4 批、case 字段白名单转换——turns 入 input、category/schema_version 入 metadata）→ 逐条 review approve（approve 需回填 expected=proposed_facts[0]）→ dataset version **v1.0.0 发布（324 items）** → suite `cs_locked_v2_2_full`（复用已发布 deterministic evaluator，binding=answer_quality）→ suite version 发布；
+  - **offline 基线 run：run_id `1a2ae7da-e1ed-5bd1-a755-62b2cc0222cb`，324/324 completed、324 passed（100%）**，管理端 runs 列表可见；
+  - 身份链：JWT 签发（local_super_admin/user:279）+ auth-redis 会话键（注意：网关会话闸查的是独立容器 `agent-auth-redis`，非宿主 6379 主 Redis）+ `X-API-Key` 服务身份头，全程经 :9080 网关生产口径。
+- **P4 过程波折（如实记录）**：脚本重跑竞态导致同批用例被导入 4 次（候选层去重靠防重查询，竞态窗口在「in_review=0」瞬间）；approved 的重复 case 无 DELETE 端点可清——发布时按锁版原 id（payload.source_ref.case_id）去重只选 324 条唯一 case 进 version，重复 case 留在 case 池不可见（**遗留：评测平台缺 case 删除/归档端点，建议平台补齐**）。共享栈期间被并行会话 rebuild 两次（按纪律只读等待恢复，数据无损失）。
+- **P5（机制闭环，复用既有通道零新代码）**：`ai.unanswered_questions`（当前 29 条：rag_miss 20 + sql_empty 9，均为测试残留）→ 评审 → 增补数据集的回流链路验证可达：真实坏例 question 经 `POST /v2/candidates`（source_kind=manual）→ review reject 留痕（201/200）。
+  - **设计缺口（移交）**：`intake/from-trace` 只认进程内 trace collector 最近 200 条，跨重启的历史坏例无法经 trace 入口回流——持久化坏例走 manual candidate 通道（SOP 已写入 evaluation-governance.md §5 收录段）；建议平台补「intake by unanswered_questions id」。
+  - 周度评审 SOP 已文档化（evaluation-governance.md）；当前坏例池为测试残留（与投产检查清单第 5 项关联）。
+- **任务计划总收口**：P1–P4 完成、P5 机制闭环；TASK §7 总验收矩阵见最终汇报。**P4 live 跑批（324 条 × 真实 LLM）预算与频次仍待用户拍板。**
 
 ### 2026-11-02（三）—— P3 落地：词表/规则扩圈 + 候选收编升 v2.2
 
