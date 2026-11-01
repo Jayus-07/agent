@@ -96,6 +96,18 @@ describe('V2 旅游规划对话', () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
 
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('草稿已生成')
+    expect(container.textContent).toContain('西湖')
+    expect(container.textContent).toContain('行程草稿 · 待确认保存')
+    const savedUrlBefore = new URL(window.location.href)
+    expect(savedUrlBefore.searchParams.get('trip_id')).toBeNull()
+    const saveButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存为正式行程')!
+    await act(async () => {
+      saveButton.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
     expect(mocks.createTrip).toHaveBeenCalledOnce()
     const savedUrl = new URL(window.location.href)
     expect(savedUrl.searchParams.get('trip_id')).toBe('v2-trip-123')
@@ -106,14 +118,14 @@ describe('V2 旅游规划对话', () => {
     const savedMessage = mocks.setMessages.mock.calls
       .map(([update]) => typeof update === 'function' ? update([]) : update)
       .flat()
-      .find((message: { text?: string }) => message.text?.includes('行程已自动保存'))
+      .find((message: { text?: string }) => message.text?.includes('行程已保存到 V2'))
     expect(savedMessage).toBeTruthy()
     expect(container.querySelector('a[href^="/travel/itineraries/v2-trip-123?conversation_id="]')).not.toBeNull()
     expect(mocks.saveTrip).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
 
-  it('创建 Trip 响应丢失时保持 UNKNOWN，安全重试复用原键和完全相同 payload', async () => {
+  it('草稿创建回执丢失时保持 UNKNOWN，安全重试复用原键和完全相同 payload', async () => {
     mocks.createTrip
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockImplementationOnce(async (input: { title: string; document: { schema_version: number; days: unknown[] } }) => ({
@@ -131,6 +143,12 @@ describe('V2 旅游规划对话', () => {
       container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
+    expect(mocks.createTrip).not.toHaveBeenCalled()
+    const saveButton = [...container.querySelectorAll('button')].find((button) => button.textContent === '保存为正式行程')!
+    await act(async () => {
+      saveButton.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
 
     expect(container.textContent).toContain('状态待核实')
     expect(container.textContent).toContain('服务端可能已经完成操作')
@@ -146,7 +164,54 @@ describe('V2 旅游规划对话', () => {
     expect(mocks.createTrip.mock.calls[1]).toEqual(originalRequest)
     expect(new URL(window.location.href).searchParams.get('trip_id')).toBe('v2-trip-replayed')
     expect(container.querySelector('a[href^="/travel/itineraries/v2-trip-replayed?conversation_id="]')).not.toBeNull()
-    expect(container.textContent).toContain('行程已自动保存')
+    expect(container.textContent).toContain('行程已保存到 V2')
+    await act(async () => root.unmount())
+  })
+
+  it('澄清结果渲染结构化选项，点击选项以该内容继续对话', async () => {
+    // 第一次调用返回澄清；第二次回落到 beforeEach 的 plan generator（点击选项后进草稿预览）
+    mocks.stream.mockImplementationOnce(async function* () {
+      yield {
+        event: 'done',
+        data: {
+          status: 'needs_clarification',
+          result: {
+            status: 'needs_clarification',
+            result_kind: 'clarification',
+            final_answer: '想去几天？',
+            clarification: '想去几天？',
+            clarification_options: [
+              { label: '两天', days: 2, message: '两天行程' },
+              { label: '三天', days: 3, message: '三天行程' },
+            ],
+          },
+        },
+      }
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialPrompt: '帮我安排行程' }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(container.textContent).toContain('需要补充信息')
+    const optionTwo = [...container.querySelectorAll('button')].find((button) => button.textContent === '两天')!
+    expect(optionTwo).toBeTruthy()
+    await act(async () => {
+      optionTwo.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    // 选项点击即以该内容发送；第二次 stream 调用走默认 plan 分支进入草稿预览
+    expect(mocks.setMessages.mock.calls.some(([update]) => {
+      const next = typeof update === 'function' ? update(mocks.messages) : update
+      return next.some((message: { role?: string; text?: string }) => message.role === 'user' && message.text === '两天')
+    })).toBe(true)
+    expect(container.textContent).toContain('草稿已生成')
     await act(async () => root.unmount())
   })
 

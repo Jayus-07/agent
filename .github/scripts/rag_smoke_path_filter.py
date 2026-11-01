@@ -207,6 +207,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # 质检抽检评分表（cs-workstation-v2 P6，customer_service schema）：
     # 非 RAG 业务迁移，创建即登记（吸取 PR #164 漏登记教训）
     "backend/sql/migrations/128_cs_qa_scores.sql",
+    # 旅游 V2 精选模板种子（纯数据注入，无模型调用；原编号 125 冲突顺延 129）
+    "backend/sql/migrations/129_travel_v2_template_seed.sql",
 })
 
 

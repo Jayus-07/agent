@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { nanoid } from 'nanoid'
 import { ArrowLeft, ArrowRight, CalendarDays, CircleAlert, LoaderCircle, MapPin, Send, Sparkles } from 'lucide-react'
-import { streamTravelPlanV2, type TravelStreamEvent } from '@/api/travel'
+import { streamTravelPlanV2, type TravelClarificationOption, type TravelStreamEvent } from '@/api/travel'
 import {
   createTravelV2IdempotencyKey,
   createTravelTripV2,
@@ -55,6 +55,9 @@ function visibleTravelMessage(text: string): string {
 
 type PendingTravelPlanWrite = { key: string; input: CreateTravelTripV2; runId: string; replyText: string }
 
+/** 原型 A5 语义：SSE 完成后先出逐日草稿预览，用户确认才落正式行程（v1）。 */
+type DraftPlanPreview = { runId: string; replyText: string; input: CreateTravelTripV2 }
+
 export default function TravelChatPage({ initialPrompt = '', initialConversationId = '', initialTripId = '' }: { initialPrompt?: string; initialConversationId?: string; initialTripId?: string }) {
   const [conversationId, setConversationId] = useState(() => initialConversationId || (initialTripId
     ? defaultTravelV2ConversationId(initialTripId) : `travel-${nanoid(18)}`))
@@ -67,6 +70,8 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   const [loading, setLoading] = useState(false)
   const [process, setProcess] = useState<TravelProcessState | null>(null)
   const [error, setError] = useState('')
+  const [draftPlan, setDraftPlan] = useState<DraftPlanPreview | null>(null)
+  const [clarifyOptions, setClarifyOptions] = useState<{ runId: string; options: TravelClarificationOption[] } | null>(null)
   const [trip, setTrip] = useState<TravelTripV2 | null>(null)
   const tripRef = useRef<TravelTripV2 | null>(null)
   tripRef.current = trip
@@ -137,12 +142,13 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
         : ''
       setWriteFeedback({ status: 'SAVED', message: `服务端已确认保存到 v${savedTrip.revision}.${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}` })
       if (!conversationChanged) {
-        setMessages((currentMessages) => [...currentMessages, {
+        setMessages((current) => [...current, {
           id: `${intent.runId}:assistant`, conversationId, turnId: intent.runId,
-          role: 'assistant', text: `${intent.replyText}\n\n行程已自动保存到 V2 · v${savedTrip.revision}。${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}`,
-          tag: '行程已自动保存', tone: 'ok',
+          role: 'assistant', text: `${intent.replyText}\n\n行程已保存到 V2 · v${savedTrip.revision}。${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}`,
+          tag: '行程已保存', tone: 'ok',
         }])
       }
+      setDraftPlan(null)
       return true
     } catch (cause) {
       const status = classifyTravelWriteError(cause)
@@ -160,6 +166,30 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
     return persistPlanWrite(intent)
   }, [persistPlanWrite, writeFeedback?.status])
 
+  /** 草稿确认保存：首次点击生成幂等键；UNKNOWN 后走「同一请求安全重试」，不得另起请求。 */
+  const saveDraftPlan = useCallback(async () => {
+    if (!draftPlan || planWriteLockRef.current || writeFeedback?.status === 'UNKNOWN') return
+    const intent: PendingTravelPlanWrite = {
+      key: createTravelV2IdempotencyKey(),
+      input: draftPlan.input,
+      runId: draftPlan.runId,
+      replyText: draftPlan.replyText,
+    }
+    pendingPlanWriteRef.current = intent
+    await persistPlanWrite(intent)
+  }, [draftPlan, persistPlanWrite, writeFeedback?.status])
+
+  /** 撤下草稿：不落库，保留对话继续调整（再次生成会覆盖草稿）。 */
+  const discardDraftPlan = useCallback(() => {
+    if (planWriteLockRef.current) return
+    setDraftPlan(null)
+    setMessages((current) => [...current, {
+      id: `draft-discard-${Date.now()}`, conversationId, turnId: `draft-discard-${Date.now()}`,
+      role: 'assistant', text: '草稿已撤下，没有保存。继续告诉我你的调整想法，我会重新生成。',
+      tag: '草稿未保存', tone: 'warn',
+    }])
+  }, [conversationId, setMessages])
+
   const sendText = useCallback(async (raw: string) => {
     const text = raw.trim()
     if (!text || trip || loading || !tripAssociationReady || !conversationReady || pendingPlanWriteRef.current) return
@@ -170,6 +200,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
     setLoading(true)
     setError('')
     setWriteFeedback(null)
+    setClarifyOptions(null)
     setDraft('')
     setProcess(initialTravelProcess(clientRunId))
     setMessages((current) => [...current, {
@@ -197,24 +228,31 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       const responseDecisionToken = pendingDecisionTokenFromResponse(response)
       let tag = '旅游问答'
       const tone: TravelConversationMessage['tone'] = 'ok'
-      if (outcome.kind === 'clarification') tag = '需要补充信息'
+      if (outcome.kind === 'clarification') {
+        tag = '需要补充信息'
+        // 原型 F01：后端已产出结构化澄清选项，V2 对话直接渲染成可点选项
+        const options = Array.isArray(response.clarification_options) ? response.clarification_options : []
+        setClarifyOptions(options.length ? { runId: clientRunId, options } : null)
+      }
       if (outcome.kind === 'plan' && response.itinerary) {
         if (associatedTripId) {
           throw new Error('关联的 V2 行程无法读取，本次规划结果没有保存。请刷新后重试。')
         }
+        // 原型 F03：先生成草稿预览，用户确认后才创建正式行程（不再自动保存）
         const document = itineraryToTripDocumentV2(response.itinerary)
-        const intent: PendingTravelPlanWrite = {
-          key: createTravelV2IdempotencyKey(),
+        setDraftPlan({
+          runId: clientRunId,
+          replyText,
           input: {
             title: `${document.brief.destination} ${document.brief.day_count} 天行程`,
             document,
             conversation_id: conversationId,
           },
-          runId: clientRunId,
-          replyText,
-        }
-        pendingPlanWriteRef.current = intent
-        await persistPlanWrite(intent)
+        })
+        setMessages((current) => [...current, {
+          id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
+          role: 'assistant', text: replyText, tag: '行程草稿 · 待确认保存', tone,
+        }])
         return
       }
       setMessages((current) => [...current, {
@@ -369,7 +407,17 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
           <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6" aria-live="polite">
             {orderedMessages.length === 0 && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs leading-6 text-[#405875] md:max-w-[76%] md:text-sm">你好，我可以和你一起规划旅行。告诉我目的地、同行人数、预算和喜欢的节奏；也可以直接问景点、天气或交通。<div className="mt-3 flex flex-wrap gap-2">{SUGGESTIONS.map((suggestion) => <button key={suggestion} type="button" onClick={() => setDraft(suggestion)} className="rounded-full border border-[#dce8f7] bg-white px-3 py-1.5 text-[10px] text-[#587494] transition hover:border-[#9cc2f4] hover:text-[#2878f5]">{suggestion}</button>)}</div></div></div>}
             {orderedMessages.map((message) => <div key={message.id} className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{visibleTravelMessage(message.text)}</div></div>)}
+            {clarifyOptions && !loading && <div className="flex flex-wrap gap-2 pl-11" aria-label="槽位澄清选项">{clarifyOptions.options.map((option) => <button key={option.label} type="button" disabled={loading} onClick={() => void sendText(option.label)} className="rounded-full border border-[#a9c9f7] bg-[#eaf2ff] px-3 py-1.5 text-[11px] font-medium text-[#1f62c9] transition hover:bg-[#d9e9ff] disabled:opacity-50">{option.label}</button>)}</div>}
             {loading && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[9px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{name}</span>)}</div>}</div></div>}
+            {draftPlan && <section aria-label="行程草稿预览" className="rounded-2xl border border-[#cfe0f5] bg-[#f6faff] p-3">
+              <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-[#263c57]">草稿已生成 · 确认后保存为正式行程</p><span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-medium text-[#6380a0]">草稿 · 未保存</span></div>
+              <p className="mt-1 text-[10px] leading-4 text-[#8493a6]">{draftPlan.input.document.brief.destination} · {draftPlan.input.document.brief.day_count} 天 · {draftPlan.input.document.brief.travelers.adults + draftPlan.input.document.brief.travelers.children} 人 · 节奏 {draftPlan.input.document.brief.pace === 'relaxed' ? '轻松' : draftPlan.input.document.brief.pace === 'intense' ? '紧凑' : '均衡'}</p>
+              <div className="mt-2 space-y-2">{draftPlan.input.document.days.map((day, index) => <div key={day.day_id} className="rounded-xl border border-[#e2ecf7] bg-white p-2.5"><p className="text-[11px] font-semibold text-[#2b405b]">第 {index + 1} 天 · {day.title || '行程安排'}</p><ul className="mt-1.5 space-y-1">{day.items.map((item) => <li key={item.item_id} className="flex items-baseline gap-2 text-[10px] leading-4 text-[#526984]"><span className="shrink-0 text-[#8190a3]">{item.start_time || '时间待定'}</span><span className="truncate">{item.title}</span><span className="shrink-0 text-[#93a0b1]">{item.duration_min} 分钟</span></li>)}</ul></div>)}</div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={() => void saveDraftPlan()} disabled={writeFeedback?.status === 'VALIDATING' || writeFeedback?.status === 'SAVING' || writeFeedback?.status === 'UNKNOWN'} className="min-h-10 rounded-xl bg-[#2878f5] px-4 text-xs font-semibold text-white transition hover:bg-[#1769e9] disabled:cursor-not-allowed disabled:opacity-60">保存为正式行程</button>
+                <button type="button" onClick={discardDraftPlan} disabled={writeFeedback?.status === 'VALIDATING' || writeFeedback?.status === 'SAVING'} className="min-h-10 rounded-xl border border-[#dce6f1] bg-white px-4 text-xs font-medium text-[#5b718d] transition hover:border-[#b9d3fa] hover:text-[#2878f5] disabled:opacity-60">继续调整</button>
+              </div>
+            </section>}
             {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-[10px] leading-5 text-rose-800"><CircleAlert size={14} className="mt-0.5 shrink-0" aria-hidden />{error}</div>}
             {writeFeedback && <div role={travelWriteStatusRole(writeFeedback.status)} className={`rounded-xl border px-3 py-2.5 text-sm leading-5 ${travelWriteStatusTone(writeFeedback.status)}`}>
               <p><span className="mr-1.5 font-semibold">{travelWriteStatusLabel(writeFeedback.status)}</span>{writeFeedback.message}</p>
