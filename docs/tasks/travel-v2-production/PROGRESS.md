@@ -134,9 +134,51 @@
 - [x] 契约测试矩阵 §6 主要行落位（POI/Amap 15+1、Lodging 10+6、Booking REST 7、AutoOpt 3、Skills 112；Dining/Intercity 由 auxiliary 用例承接；真实样本录制 BLOCKED-IN-ENV 移交）
 - [x] 原型场景抽样：三轮澄清 PASS / 生成含住宿档位 PASS / 工作台+自动优选+时区警告 PASS / 酒店 rollinggo:mcp 披露 PASS；food 偏好过滤与返程车次由单测承接（原型交互点测未逐一走完）
 - [x] V2 API 行为回归（前端 405 全绿 + travel_v2 定向）+ booking REST 三段集成（真 PG 假全链）
-- [ ] booking lifecycle 慢套最终绿（移交 1）
-- [ ] 本机重建健康验证（移交 2）
+- [x] booking lifecycle 慢套最终绿（收尾会话 2026-11-01：34 passed，见下）
+- [x] 本机重建健康验证（收尾会话 2026-11-01：三项全过，见下）
 
 ### 其他会话并行事实（下一会话开工前重读）
 - 本会话期间另一会话在主仓库跑 rag 全套与 booking reconciliation 测试（共享 dev PG 5433 + booking advisory 锁）——booking 慢套复验前先确认无并发 pytest。
 - 本地主仓库 main@0d848a6 落后远端且 59bcde9 已随 PR #187 落库——合并后主仓库需 fast-forward 对齐（涉及主 worktree，属用户操作）。
+
+---
+
+# 收尾会话执行记录（feat/travel-domain-consolidation，2026-11-01 续工）
+
+> HEAD 起点 69381be（五笔收编提交），收尾新增 1 笔（207552c AMAP 样本）+ 本文档提交，共 7 笔走一个 PR。
+
+## 1. booking lifecycle 慢套复验——34 passed，附带定位测试环境根因
+
+- `pytest backend/tests/travel/booking/test_stop_e_manual_resolve_ledger.py` → **2 passed in 3.64s**；
+  `pytest backend/tests/travel/booking/test_booking_lifecycle.py backend/tests/travel/booking/test_booking_state_and_identity.py` → **32 passed in 23.78s**（真 PG 5433 + advisory 锁 ci_travel_booking_tests 正常持有）。
+- **根因（重要，影响所有宿主机直连 PG 的测试）**：`.env` 的 `PGHOST=localhost`，Windows 下 localhost 先解析 IPv6 `::1`，而 Docker Desktop 端口映射只绑 `127.0.0.1:5433`——`::1:5433` 被拒绝前还有约 2s 延迟（本机代理客户端 TUN 干扰），psycopg 每次 connect 都先在 `::1` 上空耗，33 用例累计 65 分钟且部分连接直接挂到 pytest-timeout。**规避：跑测试时 shell 设 `PGHOST=127.0.0.1`**（load_dotenv 不覆盖已存在环境变量，零代码改动）。修复前后对比：同文件从 150s 超时挂死 → 3.64s 全绿。
+- 另发现：早前记录的「并发抢锁超时」之外，本套真正的耗时大头是上述连接空耗。
+
+## 2. 本机重建健康验证（devctl.bat rebuild @ 收编 worktree）——三项全过
+
+- rebuild 后全容器 healthy（app/worker/frontend/frontend-admin 均以本分支代码重建）。
+- `/health`：status=ok，**无 travel_commerce / travel_booking 组件**（仅合法的 travel_providers）。
+- `GET /agents`（:8000 直连 + :9080 网关双路）：**无子流域图**——domain_graph=3（travel/customer_service/selection_funnel，subflow 全 null）；响应中 travel_booking 字样唯一出现处是新 Skill `travel_booking_quote_skill`（U4 合法面）。
+- 网关链路 count=27（orchestration 8 / skill 16 / domain_graph 3）。
+
+## 3. AMAP 真实样本录制入库——BLOCKED-IN-ENV 解除（提交 207552c）
+
+- **上会话 TLS EOF 根因查明（非沙箱、非代码问题）**：Windows 下 httpx `trust_env=True` 经 `urllib.request.getproxies()` 拾取**注册表代理**（127.0.0.1:7897），并把 https 流量代理解析为 `https://` scheme——对代理端口做 TLS 握手，代理非 TLS 服务 → `EOF occurred in violation of protocol`，100% 复现。`trust_env=False` / 显式 `http://` 代理 / `NO_PROXY=restapi.amap.com` 全部正常。控制变量实验（同进程交替 trust_env）与多轮探针（d:/tmp/probe_amap*.py）已闭环。
+- `test_amap_poi_provider.py` 修复两处隔离回退：live 用例恢复 env 真 key（autouse `_quarantine_env` 会打桩假 key——上会话从未到达的失败层）；patch `httpx._utils.getproxies`（from-import 绑定处）强制直连。
+- **真实样本已替换 schema 构造样本**：`_AMAP_RECORD` = 2026-11-01 厦门「景点」检索首条真实返回（筼筜湖，normalize_merchant 原样输出；公开 POI 事实，无凭据/个人敏感字段，tel 为空）。
+- `TRAVEL_AMAP_LIVE_SMOKE=1 pytest backend/tests/travel/test_amap_poi_provider.py` → **7 passed**（含 live 真实调用）。
+
+## 4. MCP 管理端治理配置测试（a–e 逐项，全部走通 + 测试产物已清理）
+
+前置：注册临时账号 mcp_gov_tvsi1w → DB 提权 admin → JWT（用后已停用+logout 吊销）；走 :9080 网关 enforce 链路。API 响应原始证据存 d:/tmp/mcp_gov_evidence_{a,b,c,d}.json（凭据零入库零文档）。
+
+- **a) 登记/查看**：POST /admin/mcp/connections 登记 `12306-govtest`（http://mcp-12306:8000/mcp，streamable_http/private）→ status=connected；discover 枚举 7 工具（query-tickets/query-transfer/search_stations 等），动态 capability 以 `mcp.<conn_slug>__<tool>` 形态出现（`mcp.t12306_govtest__query_tickets`——数字开头 slug 自动加 t 前缀）；review approve 后 status=approved，overview `active_tools` 7 项全生效。
+- **b) 授权流**：`GrantRequest.product_key="travel"` → **422 INVALID_PARAM**（模型 Literal 白名单仅 `["agent","customer_service"]`——**travel 产品键扩展是待用户决策的公共契约变更，未擅自扩**）；agent 口径授权成功（granted=true, granted_by=user:1318）；对账：工具详情 grants 视图 + overview grant_count + `GET /capabilities`（count=20/routed=17/skills=15/unregistered=[]零漂移）。**授权闭环黄金证据**：授权后 agent 身份 test-invoke 成功 → revoke 后同身份返回 `product_capability_denied`「当前产品入口不可执行该能力」→ regrant 恢复。
+- **c) 12306 灰度闭环**：开启+审批+授权后 test-invoke（product_key=agent）返回**真实车次**：福州→厦门 2026-11-10 共 217 趟（D3333 06:43→08:20 二等座有票等，含余票字段）；disable 连接后再查返回 **409「工具未在运行时生效（连接启用=False），无法测试」**——fail-closed 如实披露，无任何模拟数据；参数校验先于出网（缺必填字段 → invalid_param）。
+- **d) rollinggo（事实修正）**：登记 https://mcp.rollinggo.cn/mcp（static_bearer/public）→ status=connected；连接 test ok=true 枚举 3 工具（searchHotels/getHotelDetail/getHotelSearchTags）；searchHotels 审批+授权后**真实调用成功**（originQuery/place/placeType 构参）：code=2000「酒店搜索成功」，返回上海真实酒店报价（上海裕景大饭店 4 星，570 CNY/晚 hasPrice=true）。**上会话「库存权限未开通 BLOCKED」对搜索/查价面不成立**——BLOCKED 结论需向上游（york.lu@dida.com）确认的面收窄为**预订写操作面**（管理端 test-invoke 仅限 read，写面必须走真实业务链路确认门，本轮未触碰）。结束态：连接 disable 保持 BLOCKED 面关闭。
+- **e) 留痕与清理**：授权全部 revoke（DB 回查 revoked=t）、两条 govtest 连接 disabled（12306 恢复「已接默认关」语义）、测试账号 status=0、会话 logout 吊销、本地 token 文件已删除。已知清理边界：govtest 连接因存在已审批工具被引用保护（DELETE 409）而保留（disabled 态），后续正式启用时直接改名/替换即可。
+
+## 5. 收尾结论
+
+- §8 全局验收清单**全部勾选**（见上）。残留复核：`travel_commerce` 仅剩 test_domain_semantic_consistency.py:449 负向守护断言；`travel_booking` 均为白名单面（booking 包本体/REST/recovery/052/env/新 Skill 名/负向断言）。
+- PR：7 笔提交（D/B/U 三系列 5 笔 + AMAP 样本 1 笔 + 本文档）走单 PR 合并，CI 首跑覆盖 rag_smoke 新增 4 测试路径（hotel_search_service/amap_poi_provider/lodging_expert/tool_governance）。
