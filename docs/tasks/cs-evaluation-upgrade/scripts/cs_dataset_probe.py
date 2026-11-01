@@ -11,8 +11,14 @@
       docs/tasks/cs-evaluation-upgrade/scripts/cs_dataset_probe.py
 
 2026-11-01 基线：intent 40.6% / target 52.8% / risk 63.4%（逐类目见 TASK §1.1）。
-P1 将本脚本固化为 pytest 门禁（backend/tests/customer_service/
-test_cs_decision_replay.py），阈值防退化：intent≥0.40 / target≥0.52 / risk≥0.60。
+2026-11-02（P1 核对修正）：TARGET_MAP 的 human_handoff 由 cs_human 改为 cs_handoff
+（数据集 target 值域实为 cs_handoff，17 条 handoff 用例此前被系统性误判 miss）；
+修正后基线 intent 40.6% / target 57.2% / risk 63.4%，即门禁
+backend/tests/customer_service/test_cs_decision_replay.py 的锁定基线。
+v2/ 分片 2026-11-02 治理定案改名 v2.deprecated/（与锁版 300 条逐字段一致 +
+4 条未收编候选，详见 datasets/README.md）。
+P1 已将本脚本固化为 pytest 门禁（backend/tests/customer_service/
+test_cs_decision_replay.py），阈值防退化：intent≥0.40 / target≥0.56 / risk≥0.60。
 """
 import json
 import sys
@@ -28,9 +34,9 @@ DS = REPO / "backend" / "evaluation" / "datasets" / "cs"
 cases = [json.loads(l) for l in (DS / "cases.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
 print(f"cases.jsonl (locked): {len(cases)}")
 
-# v2/ 修订分片与锁版的差异盘点（治理悬空项，P1 定案）
+# v2.deprecated/ 生成中间分片归档与锁版的差异盘点（2026-11-02 定案改名）
 v2_ids = set()
-for f in sorted((DS / "v2").glob("*.jsonl")):
+for f in sorted((DS / "v2.deprecated").glob("*.jsonl")):
     for line in f.read_text(encoding="utf-8").splitlines():
         if line.strip():
             v2_ids.add(json.loads(line)["id"])
@@ -44,7 +50,7 @@ TARGET_MAP = {
     "business_query": "cs_business_query",
     "business_action": "cs_business_action",
     "complaint_flow": "cs_complaint",
-    "human_handoff": "cs_human",
+    "human_handoff": "cs_handoff",  # 2026-11-02 修正（原 cs_human，数据集值域为 cs_handoff）
 }
 
 by_cat = defaultdict(lambda: Counter())
