@@ -37,12 +37,15 @@ def _factory_of():
     """与 booking conftest 同约定：返回连接工厂（`_factory_of()()` 得连接）。"""
     def _connect():
         import psycopg
-        from backend.config.database import MEMORY_DB_CONFIG
+        from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
 
         c = MEMORY_DB_CONFIG
+        # connect_timeout 对齐生产 _default_memory_connection：vpnkit 半开时
+        # 无超时握手会在 select 上无限挂等（pytest.ini 记载的病态）。
         return psycopg.connect(
             f"postgresql://{c['user']}:{c['password']}"
-            f"@{c['host']}:{c['port']}/{c['dbname']}")
+            f"@{c['host']}:{c['port']}/{c['dbname']}",
+            connect_timeout=DB_CONNECT_TIMEOUT)
     return _connect
 
 

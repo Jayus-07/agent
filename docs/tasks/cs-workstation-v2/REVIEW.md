@@ -140,3 +140,20 @@ cs-workstation-v2 九期（P0–P8）交付与 TASK 总计划相符，交付台�
 - 前端：frontend-cs vitest **324 passed**（+1 新守卫）/ tsc **0 错**；frontend vitest **654 passed** / tsc 16 错=存量基线；双端 `npm run build` 通过。
 - 部署：worktree（rebase 后）`docker compose build + up -d` 重建全部 backend 服务 + frontend/frontend-admin（`devctl.bat rebuild` 在 Git Bash 管道下因确认提示读不到输入而静默退出——零输出零效果，本次以等价 compose 原命令复刻；该坑已在本节留档）；容器内 grep 验证修复标记在位（app/worker ×3）；db-migrate rc=0（含上游新增 129 迁移）；app /health、frontend /、frontend-admin /login、mock /health、网关 :9080 全 200，全部容器 healthy（business-mock 探针曾在宿主高负载下间歇超时，服务本体始终 200，随后自愈）。
 - 环境备注：验证期间并行会话在跑 20 文件 pytest 批次并从主仓库重建过共享栈（容器一度为其构建产物、不含本修复）——已按冻结纪律避让其窗口、将本分支 rebase 至其后的 origin/main 再重建，未发生相互覆盖。
+
+### 8. 治理面复查（2026-11-01，用户指令「处理遗留 + 检查治理测试与文档」）
+
+**文档结论（6 份逐一核对，均无需更新）**：`idempotency-runbook.md`（账本状态机与人工裁决流程未变，其"failed+UNCERTAIN 双形态自动分流"不变量正是 R1 依赖的原语）、`failure-degradation.md`（§写操作 48/67 行早已规定"写后超时=UNKNOWN/IN_DOUBT 不盲重试"，R1 使 messages 端点**符合**该既有规定）、`testing-guide.md`（策略层，无端点清单）、`llm-budget-billing.md` / `authorization-standard.md`（通用原则，未触及）、`customer-service.md`（域级表述已足够，超时细节在 cross-cutting-contracts 已于 PR #189 补）。`run_sync` 全仓 15 个调用文件逐一核对均为单参形态，新签名完全向后兼容。
+
+**测试结论（治理面全量跑通，发现并修复 2 类测试基建缺口）**：
+
+| 测试 | 结果 |
+|---|---|
+| test_stop_e_verifying_reconciliation（UNCERTAIN 分流不变量） | **16 passed**（修复前挂死，见下） |
+| test_side_effect_idempotency / test_email_durable_idempotency / travel booking test_stop_e_manual_resolve_ledger | 27 / 6 / 2 passed |
+| confirmation 三件套（repo/store/flow） | 20 / 13 / 59 passed |
+| test_case_service / test_cs_refund_review_api / test_cs_qa_api / test_cs_sla_graded / test_cs_admin_api | 9 / 6 / 10 / 2 / **32** passed |
+
+- **缺口一（测试面同源缺陷 ×4）**：`test_stop_e_verifying_reconciliation` 等四个测试文件的本地 psycopg 连接工厂**漏配 `connect_timeout`**——与 P8 修复的生产 `_default_memory_connection` 完全同类：vpnkit 半开连接病态（pytest.ini 2026-10-09 记载）下握手 select 无限挂等 → 300s 用例硬超时转储、扰乱整批运行（本次实证两次）。已对齐生产模式补 `connect_timeout=DB_CONNECT_TIMEOUT`（test_email_durable_idempotency / test_stop_e_verifying_reconciliation / test_side_effect_idempotency / travel booking test_stop_e_manual_resolve_ledger），修复后 stop_e 从挂死转为全绿。
+- **缺口二（测试环境耦合 ×1）**：`test_cs_admin_api::TestMyRefundRequests::test_list_uses_authenticated_user_and_tenant_scope` 被**本机 .env 的 http 双开关劫持**——用例桩掉 case service（sandbox 意图），但 `CS_REFUND_REQUEST_MODE=http` + `BUSINESS_SERVICE_URL=http://business-mock:8081`（容器网络主机名，宿主测试进程不可达）使其走进 http 分支 → 连接失败映射 502 → 503，本地确定性失败而 CI（无 .env）绿。已在用例内 monkeypatch 双开关为 sandbox（与用例意图一致，CI 行为不变）。
+- 管理端（frontend-admin）治理测试与本批改动零耦合（grep 证实）；管理端文档无需更新。

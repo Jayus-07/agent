@@ -83,7 +83,11 @@ def _dsn() -> str:
 
 
 def _factory():
-    return psycopg.connect(_dsn())
+    from backend.config.database import DB_CONNECT_TIMEOUT
+
+    # connect_timeout 对齐生产 _default_memory_connection：vpnkit 半开时
+    # 无超时握手会在 select 上无限挂等（pytest.ini 记载的病态）。
+    return psycopg.connect(_dsn(), connect_timeout=DB_CONNECT_TIMEOUT)
 
 
 def test_default_memory_ledger_connection_uses_configured_timeout(monkeypatch):

@@ -344,6 +344,17 @@ class TestMyRefundRequests:
                 source="header", roles=(), tenant_id="tenant-1",
             ),
         )
+        # 钉住审核模式：本用例桩掉 case service（sandbox 路径），不能被本机
+        # .env 的 http 双开关劫持到真实 business-service（宿主进程不可达其
+        # 容器网络主机名，连接失败被映射 502 → 503，且 CI 无 .env 本就 sandbox）。
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_REFUND_REQUEST_MODE",
+            "sandbox", raising=False,
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE",
+            "sandbox", raising=False,
+        )
         received = {}
 
         class _CaseService:
