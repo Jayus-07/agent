@@ -26,7 +26,9 @@ from __future__ import annotations
 PROVIDER_CHAINS: dict[str, tuple[str, ...]] = {
     "weather.forecast": ("tencent", "qweather"),
     "maps.route": ("tencent_live", "local_estimate"),
-    "poi.search": ("seed",),
+    # 2026-11-01 收编重构 U1：AmapPOIProvider 就绪，poi 链首改为高德景点
+    # 类目源（评分/营业时间实回），seed 降级为链尾（离线兜底）。
+    "poi.search": ("amap_live", "seed"),
     "price.quotes": ("fake_commerce",),
 }
 
@@ -35,7 +37,7 @@ _DECLARATION_ONLY = frozenset({"seed", "local_estimate", "fake_commerce", "tence
 
 
 def _is_configured(name: str) -> bool:
-    """链成员是否配置可用（qweather/tencent 查真实配置；占位成员恒 True）。"""
+    """链成员是否配置可用（qweather/tencent/amap 查真实配置；占位成员恒 True）。"""
     if name == "qweather":
         from backend.config.map import is_qweather_configured
 
@@ -44,9 +46,31 @@ def _is_configured(name: str) -> bool:
         from backend.config.map import is_configured
 
         return is_configured()
+    if name == "amap_live":
+        from backend.config.map import is_amap_configured
+
+        return is_amap_configured()
     if name in _DECLARATION_ONLY:
         return True
     raise KeyError(f"ProviderRouter: 链账中的未知 provider: {name}")
+
+
+def assemble_poi_provider():
+    """poi 链装配（链账 poi.search 单一事实源）：
+
+    - 链首 amap_live 配置可用（AMAP_KEY）→ FallbackPOIProvider(高德, 种子)；
+    - 未配置 → 裸种子（离线可用，行为与旧版一致，不伪造 live）。
+    """
+    from backend.providers.travel.poi import (
+        AmapPOIProvider,
+        FallbackPOIProvider,
+        SeedPOIProvider,
+    )
+
+    chain = PROVIDER_CHAINS["poi.search"]
+    if _is_configured(chain[0]):
+        return FallbackPOIProvider(AmapPOIProvider(), SeedPOIProvider())
+    return SeedPOIProvider()
 
 
 def _provider_instance(name: str):

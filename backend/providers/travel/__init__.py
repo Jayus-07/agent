@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 from backend.providers.travel.poi import (
+    AmapPOIProvider,
+    FallbackPOIProvider,
     POIProvider,
     SeedPOIProvider,
     TencentPOIProvider,

@@ -35,11 +35,13 @@ _PROVIDER_CAPABILITIES: tuple[ProviderCapability, ...] = (
                        "继续 unknown/unverified，不硬凑"),
     ProviderCapability("hotel.search", True, "fake:commerce",
                        "STOP K 落地：契约+执行流+Fake 适配器（mode=fake，"
-                       "显式测试数据源）；live 适配器未实现——无真实供应商"
-                       "凭据，BLOCKED_BY_EXTERNAL_PROVIDER，mode=live 恒 "
-                       "DISABLED，绝不以 fake 冒充生产（STOPK0 §13）"),
+                       "显式测试数据源）；live 适配器未实现——真实供应商为 "
+                       "rollinggo MCP（库存权限待上游开通，联系人 york.lu@"
+                       "dida.com），BLOCKED_BY_EXTERNAL_PROVIDER，mode=live "
+                       "恒 DISABLED，绝不以 fake 冒充生产（STOPK0 §13）"),
     ProviderCapability("flight.search", True, "fake:commerce",
-                       "同 hotel.search：fake-only，live 待真实供应商"),
+                       "同 hotel.search：fake-only，live 待 rollinggo "
+                       "/mcp/flight 接入（BLOCKED 权限）"),
 )
 
 
