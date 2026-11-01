@@ -169,9 +169,27 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 
 原型锚点：data-test 19 个（opt/book/tz/convbad/ics/dayops/gen/edit/leg/train/food/hotel/detail/reorder/add/rain/tzoff/undo/editcard）+ 页面容器 id（tp-pg-home/ws/its/tpl）+ 关键函数（renderOv/dayChipHTML/checkpointTrip/setupMap/downloadRevisionICS 等）。坑清单 HANDOFF §2/§7 必读（可见性置真、锁 tab.id、轮询断言、`:where(#travel-platform-proto) button` 特异性）。
 
+## P1 执行记录（2026-11-02，分支 feat/travel-proto-p1-tokens-nav）
+
+### 改动（v1 范围：G3 我的接抽屉 + G4 旅游导航插槽；G1 令牌按 D0 结论走增量收口）
+
+- `components/layout/MobileAssistantDrawer.tsx`（共享组件，向后兼容扩展）：
+  - 导出 `ASSISTANT_DRAWER_OPEN_EVENT` 全局开门信号（复用文件内 AVATAR_EVENT 的 CustomEvent 惯例），外部（底导「我的」）可开抽屉；
+  - 新增可选 `navContent(close, interactive)` 插槽：缺省导航（返回门户/记忆）不变，chat 页等既有消费面零影响；interactive 跟随抽屉开合做焦点管理（沿用既有 tabIndex 约定）。
+- `components/travel/v2/TravelV2Frame.tsx`：
+  - TravelTopBar 传 `navContent=travelDrawerNav`：旅游首页/旅行灵感/我的行程 + 账号设置→/settings（决策 4 定稿口径）；
+  - TravelBottomNav「我的」从 `/settings` 链接改为派发开门信号的按钮（原型/决策 4 语义），四项布局不变。
+- **G1 令牌决策**：不建第二套 Tailwind 令牌表——D0 实测原型高频值与真实 Frame/Home 内联色值已同源（#2878f5 体系），无消费者的死配置违反删除原则；后续 P3/P5 校对产生的新值按既有 `travelTheme.ts` 增量模式收口。
+
+### 验证
+
+- 新增 `TravelV2Frame.test.tsx` 5 用例：BottomNav 四项布局（三链接+我的按钮）、点击派发开门信号、抽屉导航四项断言、关闭后 tabIndex 焦点管理、**默认导航回归**（无 navContent 时保持返回门户/记忆——chat 消费面保护）。
+- `vitest run src/components/travel src/api` → **413 passed**（408 基线 + 5 新增，零回归）；`tsc --noEmit` → **16 错 = main 基线**（travel/MobileAssistantDrawer 相关零错误）。
+- rebuild 运行态点测（:3100，移动视口 390×844 + 桌面 1280）：登录→/travel→BottomNav「我的」点击→抽屉滑出（截图留痕）→导航四项/用户名/换形象提示与原型抽屉形态一致；桌面 TopBar 头像钮开同一抽屉。验证账号用后即停（status=0+会话吊销），凭据临时文件已删。
+
 ### 下一步
 
-- P1 设计令牌与全局骨架（G1 令牌增量 + G3 我的接抽屉）→ P3 工作台功能块（W2/W3）→ P4 生成流迁移（最重）→ P2/P5 校对类穿插 → P6 总验收。
+- P3 工作台功能块：W2 概览统计块（六行，取数口径设计）+ W3 天数条 segment+行内加天 + W7/W11 校对。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
