@@ -17,7 +17,7 @@
 | P5 | 退款审核闭环 | 已完成 | feat/cs-v2-p5 → PR #169（merge 6232023，两笔 8a47350/61b67c1） | 详见下方日志 2026-10-31（十三）（十四） | 2026-10-31 |
 | P6 | 质检中心 | 已完成 | feat/cs-v2-p6 → PR #173（merge 15706c3，两笔 1547068/8c1c6fa） | 详见下方日志 2026-10-31（十六） | 2026-10-31 |
 | P7 | 看板+知识助手 | 已完成 | feat/cs-v2-p7 → PR #177（merge bbc2d32，两笔 58bcb52/818d6b7） | 详见下方日志 2026-10-31（十八）（十九） | 2026-10-31 |
-| P8 | 切换与清理（路由切换/删旧/矩阵终验） | 计划中 | - | - | - |
+| P8 | 切换与清理（路由切换/删旧/矩阵终验） | 待验收 | feat/cs-v2-p8 | 详见下方日志 2026-11-01（二十） | 2026-11-01 |
 
 状态取值：计划中 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -259,3 +259,34 @@
   - 能力差距清单 ✅（静态候选池=TASK 第 11 节，与原型一致）
   - rag_smoke.yml 同步：无需（P7 知识链路属客服域 cs_faq，未触及 RAG 链路，TASK 第 5 节已回写口径）
 - **下一期**：P8 切换与清理（最终期），自 origin/main@bbc2d32 起新分支 feat/cs-v2-p8——路由切换（/cs2→/cs、/customer-service-v2→/customer-service）、删除旧 CS 组件/页面、旧契约→替代→覆盖证据映射、文档同步（customer-service.md/frontend-guide.md/cross-cutting-contracts.md/commands.md）、原型矩阵 3.1/3.2 逐项终验、累计顺延项复核（顶栏接单开关 UI、messages 幂等键、更多菜单三功能、用户端站内通知）。
+
+### 2026-11-01（二十）—— P8 切换与清理实现完成，全链验证通过（最终期）
+
+- **分支**：feat/cs-v2-p8（自 origin/main@791c667 = P7 回填后 main）。用户决策（开工确认）：顶栏接单开关 UI 与 messages 幂等键两项**补齐**（P8 因此含少量后端改动），更多菜单三功能维持降级、站内通知与 cs_faq 审核 UI 口径复核为已交付。
+- **工序① 盘点（旧契约→替代→覆盖证据映射）**：
+  - frontend：`components/cs/*`（16 文件）→ `src/cs2/`（CustomerServicePage/ConfirmCard/FoldCards/chatReducer/cs2Api，P1-P5 page.test + T2 全链）；`useCSChat`/`useCSHandoffSync`/`store/csChat` → cs2 页面 SSE 全事件 + 轮询；`api/cs.ts`（含 surface 契约测试）→ `cs2/cs2Api.ts`；旧页 `app/customer-service/page.tsx` → cs2 重建页。
+  - frontend-cs：旧 `app/cs/*` 五页（page/handoff/conversations×2/tickets/stats）→ `app/cs/*` 七视图（P1-P7 page.test）；`AgentAssistPanel` → cs2 AssistantPanel（P4）；`api/cs.ts` + `lib/csAgentWs.ts`（auth.test WS 联动块随删，auth 基建用例保留）→ `cs2/workspace/api.ts` + `useAgentSocket`（P1）。
+  - 外围：e2e/scripts/.github/评测环境对旧资产**零引用**；docs 现行文档无旧路由引用；frontend mall 三处跳转 `/customer-service-v2` 同步改 `/customer-service`；TravelChatDrawer 仅注释提及（已顺手更新）。
+- **工序② frontend-cs 切换**：`app/cs2/*` 七路由 git mv → `app/cs/*`（保留历史）；nav.ts href + nav.test + workstation-shell.test + 4 个 page.test import 路径同步；root layout `isCs2Workstation` → `/cs` 前缀；旧 `app/cs/*` 与 `AgentAssistPanel`/`api/cs.ts`/`lib/csAgentWs.ts` 删除；守卫改写为「命名空间零引用 + 旧文件物理清除」双断言；旧 navConfig.NAV 五项更新为新七视图（Sidebar/NavGroup/TaskSidebar 孤儿群不删，TASK 第 11 节 P9 候选）。
+- **工序③ frontend 切换**：`/customer-service` 重写为挂 cs2 重建页；删除 `app/customer-service-v2`、`components/cs/*`、hooks×3、store×2、`api/cs.ts`+test；root layout isStandalone 去 v2 行；`postMyMessage` 接入 `Idempotency-Key: nanoid(21)`（与 requestHandoff 同款）；双端 no-legacy 守卫更新。
+- **工序④ 顺延项补齐（后端小改动，用户确认）**：
+  - 接单开关：`PUT /cs/agents/me/status` body 扩可选 `accepting`（status/accepting 至少一项，空 body 422；accepting 单独更新不发事件——派单过滤实时查库）；AgentTopBar 加开关按钮（aria-pressed + 接单开/关态样式）。
+  - 幂等键：`POST /my/{id}/messages` 收口 `run_authenticated_mutation`（operation=cs_my_message_send，callback 经 `_db_loop.run_sync` 落库 + publish 线程安全广播；Redis claim 放 run_in_threadpool 防阻塞事件循环）；归属/状态闸保持在幂等边界外；前端必填头。
+  - **连带修复既有基建缺陷**：`backend/shared/idempotency.py` `_default_memory_connection`（psycopg3 幂等结果仓储）漏配 `connect_timeout`——Windows 本机 host=localhost 解析出不可达 ::1 被静默丢弃时，每次连接拖满 ~130s TCP 重试窗口（探针实测），幂等 lease（60s）必过期致 503；对齐同文件 `_default_memory_ledger_connection` 先例补 `connect_timeout=DB_CONNECT_TIMEOUT`（默认 5s，探针复核 130s→5.3s，容器单 A 记录环境零影响）。排障探针 4 份（D:/tmp）已删。
+- **工序⑤ 文档四件**：`customer-service.md`（入口链路重写：双端路由/坐席七视图/实时层/资金闭环现状）；`frontend-guide.md`（补客服双端命名空间与守卫现状段）；`cross-cutting-contracts.md`（第 1 节追加客服实时事件契约：agent.status_changed/transfer_*/sla.warning|breach/assist.suggestion + messages 幂等语义）；`commands.md` 核对无需改（通用描述仍准确）。
+- **测试证据（均实际执行）**：
+  - 后端 T2：`test_cs_agent_status_transfer.py` **16 passed**（真库 5433，新增 accepting×3 + 幂等×3：无键 400/同键重放同 message_id/同键冲突 409；既有 13 例含 PUT status 补头复用）。
+  - 双端 T0 全量 vitest：frontend **76 files/654 passed**、frontend-cs **45 files/323 passed**（首轮各 1 例失败为 surface 契约清单含已删 api/cs 域——按「删模块→删测试清单」连带更新后复跑全绿）。
+  - tsc：frontend-cs **0 错误**；frontend 16 错 = 存量基线（bff-proxy 14 + store/chat 2，P0 起不变），本任务文件零新增。
+  - 双端生产构建通过：frontend-cs 产出 `/cs/*` 七视图（零 cs2 残留）；frontend 产出 `/customer-service`（13.5kB cs2 重建页）、`/mall`、`/my-orders`（零 v2 残留）。
+  - grep 断言：双端守卫测试（零引用 + 旧文件不存在）全绿 + 全仓 grep 无旧组件/旧路由引用残留。
+- **重建与健康**：worktree 代码 `devctl.bat rebuild` 全部 backend 服务 + frontend 重建（**执行纪律教训**：首次 rebuild 因 Bash cwd 重置在主目录误跑——主目录=main@791c667 与 P8 基点同代码，等效无害；即以 worktree 重跑为准），backend healthy + db-migrate rc=0 幂等；frontend :3100 healthy。
+- **REST 实测（重建后真栈，11/11 PASS）**：接单开关——PUT accepting=false 200 + status 保持 online、DB 持久 (False,'online')、status+accepting 组合 200、空 body 422、GET 回读一致；幂等键——首发送 200、同键同内容重放返回同 message_id、messages 表仅 1 行、同键不同内容 409（全局幂等冲突收口）、无键 400。p8t-/p8v- 假数据全清。
+- **浏览器级矩阵终验（browser-use；网关链路修复后）**：
+  - 环境修复：agent-apisix 为孤儿容器（挂载指向已删除的 codex worktree 路径，OCI 启动失败）——docker rm 后按主干 compose 重新拉起（:9080 → 200，devctl start 语义内的标准组件恢复）；frontend-cs 临时起服 :3399 需带 API_KEY（BFF 服务端注入），以临时 .env.local 提供（验证后删除）。
+  - 用户端 :3100（demo_fuzhou 真实登录链路）：/customer-service 欢迎态（AI 徽章/免责语/演示沙盒标记/4 快捷入口/转人工无消息禁用）、站点导航三链接（href 已切 /customer-service）+ 购物车徽章、对话主链路（发送→用户气泡→AI 打字机+「AI 客服·由人工智能生成」标签→live 时间线→发送键变停止→终态固化→满意度卡星级/备注/暂不评价）、/mall（分类 chips/商品卡品牌 SKU 价格库存/缺货置灰）、/my-orders（余额 ¥5000/充值/资金流水/六状态 Tab/去支付·取消·物流·退款·咨询操作）。
+  - 坐席端 :3399（演示主管真实 JWT，cs_agents.role 并入 roles）：/cs/workspace 三栏（双 Tab 队列+待接入 15、**顶栏状态四态下拉 + P8 接单开关 [pressed] + 通知铃铛**、上下文面板三 Tab、WS 降级轮询提示）；/cs/{refunds,qa,dashboard,knowledge,conversations,tickets} 六页全部渲染（各自 heading 正确、无重定向）；旧 /cs/handoff 与 /cs2/workspace 均 404。
+  - 路由冒烟：frontend /customer-service、/mall、/my-orders、/ 均 200，/customer-service-v2 404（不加 redirect）；frontend-admin :3200 /login 200（零回归）。
+- **矩阵核验口径**：3.1/3.2 逐行打勾见 TASK 第 3 节终验记录——P3-P7 各期已留代码/链路级核验（各期日志），P8 补浏览器级渲染证据（如上）；「输入区·更多」行按 P4 决策标注降级交付；资金/审核闭环写路径引用 P5 日志（十三）实测证据（P8 对该链路零代码改动，P8 浏览器级验证了读路径：余额/流水/订单/商品渲染）。
+- **已知数据面说明（非 P8 缺陷）**：浏览器登录用户 demo_fuzhou(872) 与演示客户 99001 的订单映射未生效（AI 回复「未查询到订单 DEMO-1001」）——演示沙盒映射属 P2 业务数据面，非 P8 路由/组件范围；右栏客户资料在网关修复前加载中，修复后页面正常渲染。
+- **待办（交付工序）**：提交（后端/前端/文档分笔，双重路径限定）→ PR → CI 显式逐项确认全绿 → 合并 → 本表 P8=已完成 + 任务关闭。
