@@ -3,7 +3,7 @@
 from typing import Any
 
 SUPPORTED_RUNNER_MODULES = frozenset({
-    "rag", "sql", "cs", "e2e", "travel", "travel-provider", "travel-commerce",
+    "rag", "sql", "cs", "e2e", "travel", "travel-provider",
 })
 CONTRACT_ONLY_RUNNER_MODULES = frozenset({"sql", "cs", "e2e"})
 QUALITY_RUNNER_MODULES = frozenset(SUPPORTED_RUNNER_MODULES - CONTRACT_ONLY_RUNNER_MODULES - {"rag"})

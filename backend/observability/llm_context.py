@@ -36,7 +36,7 @@ _attribution_var: ContextVar[LLMAttribution | None] = ContextVar(
 
 #: 已知业务域白名单（管理端 group_by 维度口径；域图注册键）
 KNOWN_DOMAINS = frozenset({
-    "customer_service", "travel", "travel_commerce", "travel_booking",
+    "customer_service", "travel",
     "selection_funnel", "workflow", "general",
 })
 

@@ -6,16 +6,16 @@
   库存售罄/offer 消失 → 停止执行（create=0）；
   无法复核（provider 不可用）→ 禁止假定仍 AVAILABLE → 停止执行并如实披露。
 
-复核 = 复用 STOP K commerce service 的**确定性重搜**（同参数同结果，
-缓存吸收，G2 复用面），按 offer_fingerprint 精确匹配原 offer。
+复核 = 复用 providers_support/commerce offer_search 的**确定性重搜**
+（同参数同结果，缓存吸收，G2 复用面），按 offer_fingerprint 精确匹配原 offer。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
 
-from backend.travel.commerce import service as commerce_service
-from backend.travel.commerce.request import (
+from backend.travel.providers_support.commerce import offer_search as commerce_service
+from backend.travel.providers_support.commerce.request import (
     FlightSearchRequest,
     HotelSearchRequest,
 )

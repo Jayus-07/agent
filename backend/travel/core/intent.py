@@ -79,7 +79,10 @@ class TravelAdditionalTask(_StrictDecisionModel):
         min_length=1, max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]*$",
     )
-    type: Literal["query_train", "query_weather", "query_poi", "query_hotel"]
+    # query_food（收编重构 U2，Dining Scout）：餐饮上下文推荐（高德商户 +
+    # L3 偏好过滤），只查不订——选入走既有 selections/meals 端点。
+    type: Literal["query_train", "query_weather", "query_poi", "query_hotel",
+                  "query_food"]
     params: TravelTaskParams = Field(default_factory=TravelTaskParams)
 
 

@@ -27,5 +27,5 @@ ENTRY_ACTION_MAPPING: dict[str, SupervisorAction] = {
     "pending_resolver: cancel": SupervisorAction.CANCEL,
     "continuation_resolver: 继续未完成 run": SupervisorAction.MODIFY,
 }
-# Phase 5 追加：booking_prefilter 命中 → BOOK（flag 控制）。
+# Phase 5 追加：预订 prefilter 命中 → BOOK（flag 控制；域图壳已删，仅历史语义）。
 # Phase 6 追加：QUERY 问答入口 → QUERY。

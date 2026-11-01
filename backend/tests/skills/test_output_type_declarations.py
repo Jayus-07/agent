@@ -34,7 +34,9 @@ _ENVELOPE_MARKERS = re.compile(
 
 SKILL_NAMES = {"rag", "report", "email", "data_export", "web_search",
                "web_crawl", "data_collection", "business_analysis",
-               "competitor_analysis", "travel_poi", "sql", "map_lookup"}
+               "competitor_analysis", "travel_poi", "sql", "map_lookup",
+               # 收编重构 U4（2026-11-01）：旅游域三个无状态能力 Skill
+               "travel_food", "travel_hotel", "travel_booking_quote"}
 
 
 def _all_skills():
@@ -44,7 +46,7 @@ def _all_skills():
 class TestExplicitDeclarations:
     """M1：禁止隐式默认——每个 Skill 类必须自带 output_type 声明。"""
 
-    def test_all_twelve_skills_registered(self):
+    def test_all_skills_registered(self):
         assert set(_all_skills()) == SKILL_NAMES
 
     @pytest.mark.parametrize("skill_name", sorted(SKILL_NAMES))

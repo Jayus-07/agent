@@ -81,13 +81,12 @@ def booking_env(monkeypatch):
 
     from backend.config import travel_booking as cfg
 
-    monkeypatch.setattr(cfg, "TRAVEL_BOOKING_ENABLED", True)
     monkeypatch.setattr(cfg, "TRAVEL_BOOKING_PROVIDER", "fake_booking_native")
     monkeypatch.setattr(cfg, "TRAVEL_BOOKING_QUOTE_TTL_SECONDS", 900)
-    # booking 的 Quote/复核复用 commerce 确定性搜索 → commerce 需 fake 模式
-    from backend.config import travel_commerce as ccfg
+    # booking 的 Quote/复核复用收编件确定性搜索 → 搜索需 fake 模式
+    # （2026-11-01 收编重构：原商务配置模块改名 travel_offer_search）
+    from backend.config import travel_offer_search as ccfg
 
-    monkeypatch.setattr(ccfg, "TRAVEL_COMMERCE_ENABLED", True)
     monkeypatch.setattr(ccfg, "TRAVEL_COMMERCE_PROVIDER_MODE", "fake")
     monkeypatch.setattr(
         ccfg, "TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS",

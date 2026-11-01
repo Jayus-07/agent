@@ -1,9 +1,45 @@
 {
   "version": 1,
-  "generated_at": "2026-10-31T06:42:33+08:00",
-  "git_sha": "23b1210",
-  "tool_count": 40,
+  "generated_at": "2026-11-01T15:46:20+08:00",
+  "git_sha": "5615088",
+  "tool_count": 43,
   "tools": {
+    "booking_quote_tool": {
+      "module": "backend/tools/travel/booking.py",
+      "display_name": "",
+      "data_source": null,
+      "description_hash": "5623dff71e6f913e",
+      "args_schema": {
+        "commerce_type": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "search_params": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "selection": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        }
+      },
+      "capabilities": [
+        "travel.booking_quote"
+      ],
+      "output_types": {
+        "travel.booking_quote": "structured"
+      },
+      "content_hash": "6ea3c1975fadc143"
+    },
     "calculate_tool": {
       "module": "backend/tools/calculator.py",
       "display_name": "数学计算",
@@ -299,6 +335,35 @@
       },
       "content_hash": "9c4c56175e0189f2"
     },
+    "food_search_tool": {
+      "module": "backend/tools/travel/food.py",
+      "display_name": "",
+      "data_source": null,
+      "description_hash": "583d05fbdc41d180",
+      "args_schema": {
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "limit": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 10
+        }
+      },
+      "capabilities": [
+        "travel.food_search"
+      ],
+      "output_types": {
+        "travel.food_search": "structured"
+      },
+      "content_hash": "22b573bc60509b2b"
+    },
     "generate_report_tool": {
       "module": "backend/tools/report.py",
       "display_name": "报告生成",
@@ -373,6 +438,56 @@
       "capabilities": [],
       "output_types": {},
       "content_hash": "93d1a21dbb92935b"
+    },
+    "hotel_search_tool": {
+      "module": "backend/tools/travel/hotel.py",
+      "display_name": "",
+      "data_source": null,
+      "description_hash": "d9ea02fc24f292ce",
+      "args_schema": {
+        "adults": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 2
+        },
+        "check_in": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "check_out": {
+          "schema": {
+            "type": "string"
+          },
+          "required": false,
+          "default": ""
+        },
+        "city": {
+          "schema": {
+            "type": "string"
+          },
+          "required": true,
+          "default": "__unset__"
+        },
+        "rooms": {
+          "schema": {
+            "type": "integer"
+          },
+          "required": false,
+          "default": 1
+        }
+      },
+      "capabilities": [
+        "travel.hotel_search"
+      ],
+      "output_types": {
+        "travel.hotel_search": "structured"
+      },
+      "content_hash": "b8d5414602e9282b"
     },
     "map_coord_convert_tool": {
       "module": "backend/tools/map/geo.py",

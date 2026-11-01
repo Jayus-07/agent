@@ -167,10 +167,76 @@ def _execute_train(
     }
     if date_defaulted and record["status"] == "success":
         record["message"] = "未指定日期，已按明天查询。"
+    if data is not None:
+        _annotate_return_connection(task, state, update, record, data)
     if data is None:
         _append_policy_records(
             update, state, "travel_train_search_tool", PROVIDER_12306, outcome)
     return record
+
+
+def _annotate_return_connection(
+    task: TravelAdditionalTask,
+    state: dict[str, Any],
+    update: dict[str, Any],
+    record: dict[str, Any],
+    data: dict[str, Any],
+) -> None:
+    """返程衔接校验（收编重构 U2，Intercity Scout）：查询日 == 行程末日时，
+    比对「行程末日最后一项的结束时刻」与「车次发车时刻」，给出确定性衔接
+    标注——不拦截不改单，只让用户看到哪几班车赶得上。"""
+    brief = state.get("brief") or {}
+    itinerary = state.get("itinerary") or {}
+    if not isinstance(brief, dict) or not isinstance(itinerary, dict):
+        return
+    start = brief.get("start_date") or ""
+    days = int(brief.get("days") or 0)
+    if not start or days <= 0:
+        return
+    try:
+        last_day = (date.fromisoformat(str(start)[:10])
+                    + timedelta(days=days - 1)).isoformat()
+    except ValueError:
+        return
+    travel_date = str(data.get("date") or task.params.travel_date or "")[:10]
+    if travel_date != last_day:
+        return
+    last_day_items = ((itinerary.get("days") or [{}])[-1]
+                      .get("items") if isinstance(itinerary.get("days"), list) else None) or []
+    latest_end = ""
+    for item in last_day_items:
+        if not isinstance(item, dict):
+            continue
+        end = str(item.get("end_time") or item.get("start_time") or "")
+        if end > latest_end:
+            latest_end = end
+    if not latest_end:
+        return
+    trains = data.get("trains") or []
+    feasible, infeasible = [], []
+    for train in trains:
+        if not isinstance(train, dict):
+            continue
+        departure = str(train.get("start_time") or train.get("departure_time") or "")
+        if not departure:
+            continue
+        (feasible if departure >= latest_end else infeasible).append(
+            str(train.get("train_no") or train.get("train_code") or ""))
+    if feasible or infeasible:
+        record["connection_check"] = {
+            "last_day": last_day,
+            "latest_item_end": latest_end,
+            "feasible_trains": feasible,
+            "infeasible_trains": infeasible,
+        }
+        if infeasible and not feasible:
+            update["notes"].append(
+                f"返程车次均早于行程末日最后安排（{latest_end}）结束，"
+                "可能赶不上；建议调整末日安排或改选更晚车次")
+        elif infeasible:
+            update["notes"].append(
+                f"部分返程车次早于末日最后安排（{latest_end}）结束，"
+                "已标注衔接可行性")
 
 
 def _execute_weather(
@@ -269,6 +335,120 @@ def _execute_place(
     return record
 
 
+def _execute_food(
+    task: TravelAdditionalTask,
+    state: dict[str, Any],
+    update: dict[str, Any],
+) -> dict:
+    """Dining Scout（收编重构 U2）：高德商户检索 + L3 偏好过滤。
+
+    偏好来自 travel.memory.search（用户长期记忆，如「不辣/清淡」），
+    确定性关键词过滤（商户名/类目命中忌口词即剔除）——不做语义推断，
+    过滤与否全部留痕。选入建议走既有 selections/meals 端点（本节点不写）。
+    """
+    params = task.params
+    brief = state.get("brief") or {}
+    city = (params.city or params.destination
+            or (brief.get("destination") if isinstance(brief, dict) else "")
+            or "").strip()
+    if not city:
+        return _task_record(
+            task, status="needs_clarification", data_status="missing_inputs",
+            message="查美食需要知道城市。",
+            missing_fields=["city"],
+        )
+
+    from backend.travel.services import live_search_service
+
+    tool = "map_merchant_search_tool"
+
+    def _summary(data: dict) -> dict:
+        return live_search_service.merchant_preview(data, "food")
+
+    data, outcome, record = _run_checked_task(
+        task, tool=tool, agent="research", provider=PROVIDER_AMAP,
+        call=lambda: live_search_service.search_food(city),
+        summarize=_summary,
+    )
+    if data is None:
+        _append_policy_records(update, state, tool, PROVIDER_AMAP, outcome)
+        return record
+
+    prefs, pref_note = _dietary_preferences_from_memory()
+    if prefs:
+        kept, dropped = _filter_by_dietary(data.get("merchants") or [], prefs)
+        data["merchants"] = kept
+        record["result_count"] = len(kept)
+        record["preference_filter"] = {
+            "preferences": prefs, "dropped": dropped}
+        record["message"] = (
+            f"已按你的饮食偏好（{'、'.join(prefs)}）过滤 {dropped} 家商户")
+        update["notes"].append(
+            f"美食推荐已按记忆中的饮食偏好（{'、'.join(prefs)}）过滤")
+    elif pref_note:
+        update["notes"].append(pref_note)
+    return record
+
+
+# 忌口/偏好词 → 商户名/类目的命中排除词（确定性词表；不覆盖语义变体，
+# 未覆盖的偏好只留痕不过滤——宁多推荐不误删）
+_DIETARY_EXCLUDES: dict[str, tuple[str, ...]] = {
+    "不辣": ("辣", "川菜", "湘菜", "火锅", "麻辣"),
+    "不吃辣": ("辣", "川菜", "湘菜", "火锅", "麻辣"),
+    "忌辣": ("辣", "川菜", "湘菜", "火锅", "麻辣"),
+    "清淡": ("辣", "火锅", "麻辣", "烧烤", "油炸"),
+    "素食": ("烤肉", "烧烤", "火锅", "牛", "羊", "猪"),
+}
+_PREFERENCE_QUERY = "饮食偏好 忌口 口味 不辣 清淡 素食"
+
+
+def _dietary_preferences_from_memory() -> tuple[list[str], str]:
+    """从 L3 记忆提取显式饮食偏好（软失败：无记忆/检索失败 = 无偏好）。"""
+    try:
+        from backend.tools.memory import memory_search_tool
+
+        raw = memory_search_tool.invoke({"query": _PREFERENCE_QUERY, "top_k": 5})
+        text = str(raw)
+        if not text.strip():
+            return [], ""
+        import json as _json
+
+        try:
+            payload = _json.loads(text)
+            hits = payload.get("results") or payload.get("data") or []
+        except ValueError:
+            hits = []
+        blob = text if not hits else _json.dumps(hits, ensure_ascii=False)
+        found: list[str] = []
+        for pref in _DIETARY_EXCLUDES:
+            if pref in blob and pref not in found:
+                found.append(pref)
+        return found, ""
+    except Exception as e:  # noqa: BLE001 — 偏好检索失败不影响美食推荐主链
+        logger.debug("[TravelAuxiliaryTasks] 饮食偏好检索失败: %s", e)
+        return [], "饮食偏好记忆不可用，本次未做偏好过滤"
+
+
+def _filter_by_dietary(
+    merchants: list, prefs: list[str],
+) -> tuple[list, int]:
+    """确定性偏好过滤：商户名/类目命中排除词即剔除。"""
+    excludes: list[str] = []
+    for pref in prefs:
+        excludes.extend(_DIETARY_EXCLUDES.get(pref, ()))
+    kept, dropped = [], 0
+    for merchant in merchants:
+        if not isinstance(merchant, dict):
+            continue
+        text = (str(merchant.get("name") or "") + " "
+                + str(merchant.get("category") or ""))
+        if any(token in text for token in excludes):
+            dropped += 1
+            continue
+        kept.append(merchant)
+    return kept, dropped
+
+
 def auxiliary_tasks_node(state: dict) -> dict:
     """最多执行四个经契约校验、每种类型至多一次的可选实时查询。"""
     raw_tasks = (
@@ -332,6 +512,8 @@ def auxiliary_tasks_node(state: dict) -> dict:
             record = _execute_weather(task, state, update)
         elif task.type in {"query_poi", "query_hotel"}:
             record = _execute_place(task, state, update)
+        elif task.type == "query_food":
+            record = _execute_food(task, state, update)
         else:  # Pydantic Literal 已拦截；保留 fail-closed 分支
             record = _task_record(
                 task, status="rejected", data_status="unsupported",

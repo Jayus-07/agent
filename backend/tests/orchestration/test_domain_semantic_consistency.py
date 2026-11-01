@@ -15,7 +15,7 @@
 
 三层语义**刻意不同**，不是漂移：
   - 回写层记**物理域图名**（续轮要精确重入子图，记 travel 会重入规划图）；
-  - 决策层记**顶级域**（供能力路由/展示，travel_booking → travel）；
+  - 决策层记**顶级域**（供能力路由/展示，子流域图归一父域）；
   - 执行层把两者合起来选图（子流查注册表归属，不再 ``f"travel_{subflow}"`` 拼接）。
 
 唯一保留的手写项是 ``_NON_GRAPH_ROUTE_MODES`` 里的 ``general_chat``：有路由模式
@@ -24,8 +24,8 @@
 
 注册表上三个语义**必须分清**（混用即漂移）：
   - ``domain``：归属——谁属于谁（唯一事实源，2026-09-30 新增）；
-  - ``subflow``：**独立生命周期子流**标签（STOP E §6.2 冻结口径，只给
-    commerce/booking；顶级域图必须为空）；
+  - ``subflow``：**独立生命周期子流**标签（STOP E §6.2 冻结口径，2026-11-01
+    收编重构后当前已无实注册子流；顶级域图必须为空）；
   - ``decision_subflow``：顶级域**自身的活动标签**（travel→planning），
     仅用于决策层 subflow 展示位，``None`` 时回退 ``subflow``。
 
@@ -56,18 +56,14 @@ from backend.orchestration.router.execution_mode import (
 )
 
 # 三个顶级业务域（STOP E 口径）；子流域图 → (顶级域, subflow) 的期望归一。
+# 2026-11-01 收编重构：booking/commerce 子流域图壳删除，实注册子流清零。
 _TOP_LEVEL_DOMAINS = {"customer_service", "travel", "selection_funnel"}
-_SUBFLOW_GRAPHS = {
-    "travel_commerce": ("travel", "commerce"),
-    "travel_booking": ("travel", "booking"),
-}
+_SUBFLOW_GRAPHS: dict[str, tuple[str, str]] = {}
 # 决策层 subflow 展示位的**契约值**（trace/管理端展示口径，改这里=改对外展示）。
 _EXPECTED_DECISION_SUBFLOW = {
     "customer_service": None,
     "travel": "planning",
     "selection_funnel": "funnel",
-    "travel_booking": "booking",
-    "travel_commerce": "commerce",
     "general_chat": None,
 }
 
@@ -104,7 +100,7 @@ def test_top_level_graphs_project_to_themselves():
     """顶级域图：归一的顶级域必须是自身；归属判据是 ``domain is None``。
 
     同时钉住 STOP E §6.2 的**冻结口径**：顶级域图的 ``subflow`` 必须为空——
-    ``subflow`` 只表示「独立生命周期的子流」（commerce/booking），不承载顶级域
+    ``subflow`` 只表示「独立生命周期的子流」（机制保留；当前实注册为空），不承载顶级域
     自身的活动标签（那由 ``decision_subflow`` 表达）。若有人把 travel 的
     planning 标签塞进 ``subflow``，本例如红。
     """
@@ -126,7 +122,7 @@ def test_decision_subflow_slot_is_derived_from_graph_metadata():
     """决策层的 subflow 展示位取自注册表声明，并锁定其**契约值**（非重算式）。
 
     travel/selection_funnel 是顶级域但各有活动标签（planning/funnel），由
-    ``decision_subflow`` 承载；booking/commerce 是子流，回退 ``subflow``。
+    ``decision_subflow`` 承载；子流图回退 ``subflow``。
 
     期望值刻意写成**字面量**：若改写成 ``graph.decision_subflow or graph.subflow``
     去比对 ``_PREFILTER_DOMAIN_MAP``，两边同源，改了注册表会一起变——恒真断言，
@@ -393,11 +389,11 @@ def test_subflow_lookup_is_ownership_driven():
     """执行层选图只看注册表归属：非子流标签 / 错域 / 空值都必须查不到。
 
     关键回归：travel 自身的活动标签是 ``planning``，它**不是**子流图——
-    旧实现 ``f"travel_{subflow}"`` 只在 subflow ∈ {booking, commerce} 时才拼接，
-    靠硬编码集合兜住；派生后由归属事实保证，本例钉住该性质。
+    旧实现 ``f"travel_{subflow}"`` 靠硬编码集合兜住；派生后由归属事实保证。
+    2026-11-01 收编重构：booking/commerce 子流域图壳删除，历史标签一律查不到。
     """
-    assert domain_graph_registry.find_subflow_graph("travel", "booking") == "travel_booking"
-    assert domain_graph_registry.find_subflow_graph("travel", "commerce") == "travel_commerce"
+    assert domain_graph_registry.find_subflow_graph("travel", "booking") is None
+    assert domain_graph_registry.find_subflow_graph("travel", "commerce") is None
     assert domain_graph_registry.find_subflow_graph("travel", "planning") is None
     assert domain_graph_registry.find_subflow_graph("customer_service", None) is None
     assert domain_graph_registry.find_subflow_graph("travel", "") is None
@@ -446,7 +442,11 @@ def test_frontend_does_not_redeclare_subflow_attribution():
     subflow_modes = sorted(
         g.name for g in domain_graph_registry.get_all().values() if g.subflow
     )
-    assert subflow_modes, "前置条件：注册表里应至少有一张子流域图"
+    # 2026-11-01 收编重构：booking/commerce 子流域图壳删除，实注册子流清零。
+    # 守护不因此失效：无实注册子流时改扫**已退役**的 route_mode 字面量，
+    # 防止展示层重新发明归属名；未来新注册子流时自动回到派生口径。
+    if not subflow_modes:
+        subflow_modes = ["travel_booking", "travel_commerce"]
 
     repo_root = Path(__file__).resolve().parents[3]
     hits: list[str] = []

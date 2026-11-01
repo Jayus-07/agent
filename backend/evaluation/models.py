@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal, Protocol, Callable, get_args
 from pydantic import BaseModel, Field
 
-ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-provider", "travel-commerce", "travel-booking"]
+ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-provider"]
 
 # 模块清单的唯一事实源就是上面的 Literal——这里只是它的运行期视图。
 # 历史上「有哪些模块」被手写 5 份（CLI choices / service 的 all 清单 / MODULE_LABELS /
@@ -16,15 +16,16 @@ ModuleKind = Literal["planner", "rag", "cs", "sql", "e2e", "travel", "travel-pro
 MODULE_KINDS: tuple[ModuleKind, ...] = get_args(ModuleKind)
 
 # 探针模块：需 --live 连真实数据源才有意义，离线跑不出有效结论（目录页据此打 probe 标签）。
+# 2026-11-01 收编重构：travel-commerce / travel-booking 探针随两域图壳退役。
 PROBE_MODULES: frozenset[str] = frozenset(
-    {"travel-provider", "travel-commerce", "travel-booking"}
+    {"travel-provider"}
 )
 
 # `all` 默认跑的模块集：可离线完成的常规质量评测。
 # 显式排除项各带理由，且以「差集」形式表达——新模块默认进来，
 # 若要排除必须在这里写清楚为什么（避免又一次静默的口径漂移）：
 #   - cs：结构 sanity 锁版校验，语义与质量评测不同，单独跑
-#   - travel 三探针：见 PROBE_MODULES
+#   - travel-provider 探针：见 PROBE_MODULES
 ALL_EXCLUDED_MODULES: frozenset[str] = frozenset({"cs", *PROBE_MODULES})
 ALL_RUN_MODULES: tuple[ModuleKind, ...] = tuple(
     m for m in MODULE_KINDS if m not in ALL_EXCLUDED_MODULES

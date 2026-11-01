@@ -12,9 +12,8 @@ _PRODUCTION_FILES = (
     Path(__file__).resolve().parents[3] / "orchestration" / "graph" / "cs_prefilter.py",
     Path(__file__).resolve().parents[3] / "orchestration" / "graph" / "travel_prefilter.py",
     Path(__file__).resolve().parents[3] / "orchestration" / "graph" / "selection_funnel_prefilter.py",
-    Path(__file__).resolve().parents[3] / "orchestration" / "graph" / "booking_prefilter.py",
-    Path(__file__).resolve().parents[3] / "orchestration" / "graph" / "commerce_prefilter.py",
-    Path(__file__).resolve().parents[3] / "orchestration" / "context" / "booking_pending_resolver.py",
+    # 2026-11-01 收编重构：booking/commerce prefilter 与 booking_pending_resolver
+    # 随域图壳删除，守卫清单同步收窄。
     Path(__file__).resolve().parents[3] / "orchestration" / "context" / "travel_pending_resolver.py",
 )
 

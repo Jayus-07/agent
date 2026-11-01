@@ -107,7 +107,8 @@ _SWITCHES: dict[str, dict[str, Any]] = {
     # ── 多域隔离收官 M2（2026-10-06）：域入口模式 ────────────────
     # 只在域总闸开启且 prefilter 命中后生效：execute = 照旧进域图（默认，
     # 行为零变化）；guide = 产 handoff 引导卡送专属页，AI 助手不执行域规划。
-    # 旅游开关覆盖 travel/travel_booking/travel_commerce 三域图（同属旅游页）。
+    # 旅游开关覆盖 travel 域图（同属旅游页；2026-11-01 收编重构后
+    # 商务/预订域图壳均已删除，不再单独列名）。
     "CS_GLOBAL_ENTRY_MODE": {
         "allowed": ("execute", "guide"),
         "default": "execute",

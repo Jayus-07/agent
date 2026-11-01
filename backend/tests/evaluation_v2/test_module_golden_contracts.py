@@ -21,9 +21,12 @@ def _manifest(module: str) -> dict:
 
 
 def test_dataset_domain_comes_from_registered_module_kind():
-    assert validate_dataset_domain("travel-booking") == "travel-booking"
+    # 2026-11-01 收编重构：travel-booking 探针随域图壳退役，不再是合法数据集域
+    with pytest.raises(ValueError, match="评测模块登记值"):
+        validate_dataset_domain("travel-booking")
     with pytest.raises(ValueError, match="评测模块登记值"):
         validate_dataset_domain("customer_service")
+    assert validate_dataset_domain("travel") == "travel"
 
 
 def test_sql_golden_reuses_existing_offline_validator_without_query_execution():
@@ -191,8 +194,6 @@ def test_registered_non_rag_fixture_expected_contracts_remain_compatible():
         "e2e": "e2e/cases.jsonl",
         "travel": "travel/cases.jsonl",
         "travel-provider": "travel-provider/cases.jsonl",
-        "travel-commerce": "travel-commerce/cases.jsonl",
-        "travel-booking": "travel-booking/cases.jsonl",
     }
     for module, relative_path in fixtures.items():
         rows = [

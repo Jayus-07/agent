@@ -157,15 +157,59 @@ def travel_poi_search_tool(
         must_go=_split(must_go),
         limit=limit,
     )
+    # 链账 poi.search=("amap_live","seed")（2026-11-01 U1）：高德景点类目
+    # 源在种子池之上并入（评分/营业时间实回、unverified 标注）；高德失败
+    # 或未配置 → 纯种子（既有行为），不伪造 live。
+    amap_notes = _merge_amap_candidates(
+        city, pois, _split(preferences), limit)
     if not pois:
         known = "、".join(poi_seed.all_cities())
         return tool_error_result(
             f"未找到城市「{city}」的 POI 数据", known_cities=known,
+            **({"notes": amap_notes} if amap_notes else {}),
         )
     return tool_success_result(
         {"city": pois[0].city, "count": len(pois),
          "pois": [p.model_dump() for p in pois]},
+        **({"notes": amap_notes} if amap_notes else {}),
     )
+
+
+def _merge_amap_candidates(
+    city: str, pois: list, preferences: list[str], limit: int,
+) -> list[str]:
+    """高德景点类目候选并入种子池（同名含坐标 300m 内视为同一处）。
+
+    失败只留痕不抛（soft-fail）：检索不可用损失评分增强，不损失候选。
+    """
+    from backend.providers.travel.live.router import assemble_poi_provider
+
+    provider = assemble_poi_provider()
+    if getattr(provider, "chain", ("", ""))[0] != "amap:live":
+        return []  # 未配置 AMAP_KEY → 裸种子（无 notes，不提示假增强）
+    try:
+        amap_pois = provider._primary.search(city, preferences=preferences,
+                                             limit=limit)
+    except Exception as e:  # noqa: BLE001 — 增强失败不阻断工具
+        return [f"高德景点检索失败，已回退种子候选（{type(e).__name__}）"]
+    if not amap_pois:
+        return []
+    existing = {(p.name, round(p.lat, 3), round(p.lng, 3)) for p in pois}
+    merged = 0
+    for a in amap_pois:
+        dup = any(
+            a.name in name or name in a.name
+            for name, _, _ in existing
+        )
+        if dup:
+            continue
+        existing.add((a.name, round(a.lat, 3), round(a.lng, 3)))
+        pois.append(a)
+        merged += 1
+        if len(pois) >= limit:
+            break
+    return [f"已并入 {merged} 条高德景点候选（评分/营业时间未经核实）"] \
+        if merged else []
 
 
 # ==================== Tool Registry 自动注册 ====================

@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from backend.shared.logger import logger
 
 # 入口域锁 hint 集合（CSDrawer 每条消息带 domain_hint=customer_service）
@@ -27,6 +29,13 @@ def is_cs_forced(state: dict) -> bool:
 # domain_hint=main（与 CS 抽屉带 customer_service 同机制、互斥取值）
 MAIN_HINTS = ("main", "agent")
 
+# 预订交易信号词（原 booking_prefilter._RE_BOOKING 同源词表；优先级与
+# 原 prefilter 一致——CS 售后/行程信号在场时不抢）
+_RE_BOOKING_SIGNAL = re.compile(
+    r"确认预订|预订(?:一下|[一二三两几]?[间张个条])?"
+    r"|(?:帮我|给我|我想|我要|打算)?订(?:一间|一张|一个|一下|个)"
+    r"|我的预订|预订状态|下单预订")
+
 
 def is_main_forced(state: dict) -> bool:
     """AI 助手页锁域判定（2026-10-08 产品拍板：隔离+引导卡）。
@@ -43,10 +52,10 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
     """AI 助手锁域下的强信号引导卡：命中返回 handoff 路由更新，否则 None。
 
     优先级与全局 prefilter 一致（旅游 > 选品 > 预订/商务）；预订/商务
-    归旅游族（commerce 为旅游子流），一并引导去旅游页。纯判定零副作用
-    ——不复用 run_domain_prefilters：其命中路径会经 _finish_prefilter_hit
-    回写路由上下文，与 handoff 语义「域并未真正开始」冲突（见
-    handoff_update_for docstring）。
+    归旅游族（commerce 已收编为旅游域数据源层，意图判定复用其 extract），
+    一并引导去旅游页。纯判定零副作用——不复用 run_domain_prefilters：
+    其命中路径会经 _finish_prefilter_hit 回写路由上下文，与 handoff 语义
+    「域并未真正开始」冲突（见 handoff_update_for docstring）。
     """
     target: str | None = None
     try:
@@ -54,14 +63,19 @@ def main_forced_handoff_update(query: str, state: dict) -> dict | None:
         from backend.orchestration.graph.selection_funnel_prefilter import (
             is_selection_funnel_request,
         )
-        from backend.orchestration.graph.booking_prefilter import is_booking_request
-        from backend.orchestration.graph.commerce_prefilter import is_commerce_request
+        from backend.travel.providers_support.commerce.extract import (
+            detect_commerce_intent,
+        )
 
-        if is_travel_request(query):
+        # 预订交易信号（原 booking_prefilter 词表的最小残留——域图壳已删，
+        # 信号只用于引导卡：预订动作仍归旅游页的 travel_v2 确认门）
+        if _RE_BOOKING_SIGNAL.search(query):
+            target = "travel"
+        elif is_travel_request(query):
             target = "travel"
         elif is_selection_funnel_request(query):
             target = "selection_funnel"
-        elif is_booking_request(query) or is_commerce_request(query):
+        elif detect_commerce_intent(query):
             target = "travel"
     except Exception as e:
         logger.debug(f"[LockDomain] main 锁域强信号判定失败，按无信号处理: {e}")

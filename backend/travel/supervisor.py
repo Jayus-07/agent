@@ -38,6 +38,7 @@ from backend.travel.graph_state import (
     TRAVEL_REPAIR,
     TRAVEL_REPORTER,
     TRAVEL_RISK_EXPERT,
+    TRAVEL_LODGING_EXPERT,
     TRAVEL_SUPERVISOR,
     TRAVEL_TRANSIT_EXPERT,
     TRAVEL_VALIDATOR,
@@ -54,6 +55,7 @@ class TravelStage(str, Enum):
     POI = "poi"
     TRANSIT = "transit"
     WEATHER = "weather"
+    LODGING = "lodging"
     BUDGET = "budget"
     RISK = "risk"
     VALIDATE = "validate"
@@ -68,6 +70,7 @@ _STAGE_TO_NODE: dict[TravelStage, str] = {
     TravelStage.POI: TRAVEL_POI_EXPERT,
     TravelStage.TRANSIT: TRAVEL_TRANSIT_EXPERT,
     TravelStage.WEATHER: TRAVEL_WEATHER_EXPERT,
+    TravelStage.LODGING: TRAVEL_LODGING_EXPERT,
     TravelStage.BUDGET: TRAVEL_BUDGET_EXPERT,
     TravelStage.RISK: TRAVEL_RISK_EXPERT,
     TravelStage.VALIDATE: TRAVEL_VALIDATOR,
@@ -82,6 +85,7 @@ _STAGE_TO_EXPERT: dict[TravelStage, str] = {
     TravelStage.POI: "poi",
     TravelStage.TRANSIT: "transit",
     TravelStage.WEATHER: "weather",
+    TravelStage.LODGING: "lodging",
     TravelStage.BUDGET: "budget",
     TravelStage.RISK: "risk",
 }
@@ -92,6 +96,7 @@ _STAGE_TO_ACTION: dict[TravelStage, str] = {
     TravelStage.POI: "run_poi",
     TravelStage.TRANSIT: "run_transit",
     TravelStage.WEATHER: "run_weather",
+    TravelStage.LODGING: "run_lodging",
     TravelStage.BUDGET: "run_budget",
     TravelStage.RISK: "run_risk",
     TravelStage.VALIDATE: "run_validation",
@@ -174,6 +179,7 @@ def decide(state: dict) -> TravelDecision:
         tasks = (state.get("turn_decision") or {}).get("additional_tasks") or []
         allowed_task_types = {
             "query_train", "query_weather", "query_poi", "query_hotel",
+            "query_food",
         }
         if (intent not in allowed_intents
                 or any(not isinstance(task, dict)
@@ -283,6 +289,11 @@ def decide(state: dict) -> TravelDecision:
 
     if "weather" not in done:
         return TravelDecision(TravelStage.WEATHER, "排程完成，按出行日期核查天气")
+
+    # 住宿档位（收编重构 U2）：weather 后、budget 前——预算核算依赖住宿
+    # 成本项；失败软降级（lodging 专家自身如实披露），不阻断预算。
+    if "lodging" not in done:
+        return TravelDecision(TravelStage.LODGING, "行程已排定，检索住宿档位与库存")
 
     if "budget" not in done:
         return TravelDecision(TravelStage.BUDGET, "行程已排定，核算费用")

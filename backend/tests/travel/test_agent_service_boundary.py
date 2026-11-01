@@ -129,9 +129,10 @@ class TestServiceDependencyDirection:
                 )
 
     def test_provider_touchpoints_only_in_services(self):
-        # 全域 Provider 直连点唯一性：travel/ 下（除 service 与冻结交易域）
-        # 不允许出现 providers import
-        allowed_prefixes = ("services", "booking", "commerce", "models")
+        # 全域 Provider 直连点唯一性：travel/ 下（除 service、收编数据源层
+        # providers_support/ 与冻结预订域）不允许出现 providers import
+        allowed_prefixes = ("services", "booking", "commerce",
+                            "providers_support", "models")
         offenders: list[str] = []
         for path in TRAVEL_DIR.rglob("*.py"):
             rel = path.relative_to(TRAVEL_DIR).as_posix()
@@ -191,7 +192,7 @@ class TestRuntimeFrozen:
 
         assert {s.value for s in TravelExpertStatus} == {"success", "failed", "skipped"}
         assert {t.value for t in TravelExpertType} == {
-            "poi", "transit", "weather", "budget", "risk",
+            "poi", "transit", "weather", "lodging", "budget", "risk",
         }
 
     def test_expert_history_shape_frozen(self):
@@ -229,6 +230,8 @@ class TestNodeRegistrationOrder:
         "TRAVEL_POI_EXPERT",
         "TRAVEL_TRANSIT_EXPERT",
         "TRAVEL_WEATHER_EXPERT",
+        # lodging（2026-11-01 收编重构 U2）：weather 后 budget 前
+        "TRAVEL_LODGING_EXPERT",
         "TRAVEL_BUDGET_EXPERT",
         "TRAVEL_RISK_EXPERT",
         "TRAVEL_VALIDATOR",

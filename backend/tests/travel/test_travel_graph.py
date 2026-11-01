@@ -83,6 +83,11 @@ class TestSupervisorDecide:
         assert decide(state).stage is TravelStage.WEATHER
 
         state["expert_history"] = state["expert_history"] + [{"expert": "weather"}]
+        # lodging（2026-11-01 收编重构 U2）：weather 后、budget 前——预算
+        # 依赖住宿档位成本项
+        assert decide(state).stage is TravelStage.LODGING
+
+        state["expert_history"] = state["expert_history"] + [{"expert": "lodging"}]
         assert decide(state).stage is TravelStage.BUDGET
 
         state["expert_history"] = state["expert_history"] + [{"expert": "budget"}]
@@ -93,7 +98,7 @@ class TestSupervisorDecide:
 
     def test_passed_validation_goes_to_report(self):
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=save_validation(ValidationReport()),
@@ -106,7 +111,7 @@ class TestSupervisorDecide:
         report = ValidationReport(violations=[Violation(
             code="TIME_CLOSED", level=LEVEL_ERROR, message="x")])
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=save_validation(report),
@@ -118,7 +123,7 @@ class TestSupervisorDecide:
         report = ValidationReport(violations=[Violation(
             code="TIME_CLOSED", level=LEVEL_ERROR, message="x")])
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=save_validation(report),
@@ -135,7 +140,7 @@ class TestSupervisorDecide:
     def test_cleared_validation_revalidates(self):
         """修复节点清空 validation 后必须回到 VALIDATE，否则会把坏行程报成好行程。"""
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=None,
@@ -174,7 +179,7 @@ class TestSupervisorDecide:
         report = ValidationReport(violations=[Violation(
             code="PACE_TOO_INTENSE", level=LEVEL_ERROR, message="x")])
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=save_validation(report),
@@ -195,7 +200,7 @@ class TestSupervisorDecide:
             code="TIME_CLOSED", level=LEVEL_DECISION_REQUIRED, message="x",
             detail={"poi_id": "must", "required": True})])
         state = _state(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
             validation=save_validation(report),
@@ -216,7 +221,7 @@ class TestSupervisorDecide:
     def test_decision_action_follows_routing(self):
         """decide 的实际产出也带 action：通过 → finish_report，修复 → run_repair。"""
         base = dict(
-            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "budget", "risk")],
+            expert_history=[{"expert": e} for e in ("poi", "transit", "weather", "lodging", "budget", "risk")],
             candidates=[{"poi_id": "a"}],
             itinerary=save_itinerary(_empty_itinerary()),
         )

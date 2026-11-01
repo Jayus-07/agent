@@ -21,6 +21,9 @@ from backend.skills.data_collection.skill import DataCollectionSkill
 from backend.skills.business_analysis.skill import BusinessAnalysisSkill
 from backend.skills.competitor_analysis.skill import CompetitorAnalysisSkill
 from backend.skills.travel_poi.skill import TravelPoiSkill
+from backend.skills.travel_food.skill import FoodSearchSkill
+from backend.skills.travel_hotel.skill import HotelSearchSkill
+from backend.skills.travel_booking_quote.skill import BookingQuoteSkill
 from backend.skills.map.skill import MapLookupSkill
 # mcp_dynamic 只注册统一执行节点（mcp_dynamic_skill），不进入静态
 # _instances/_registry——动态 capability 的映射在 capability_registry
@@ -40,6 +43,9 @@ _instances: list = [
     BusinessAnalysisSkill(),
     CompetitorAnalysisSkill(),
     TravelPoiSkill(),
+    FoodSearchSkill(),
+    HotelSearchSkill(),
+    BookingQuoteSkill(),
     MapLookupSkill(),
 ]
 

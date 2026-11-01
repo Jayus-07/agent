@@ -219,8 +219,6 @@ MODULE_GATE_POLICIES: dict[str, ModuleGatePolicy] = {
     "cs": _PASS_RATE_ONLY("cs"),
     "travel": _PASS_RATE_ONLY("travel"),
     "travel-provider": _PASS_RATE_ONLY("travel-provider"),
-    "travel-commerce": _PASS_RATE_ONLY("travel-commerce"),
-    "travel-booking": _PASS_RATE_ONLY("travel-booking"),
     "e2e": _PASS_RATE_ONLY("e2e"),
 }
 

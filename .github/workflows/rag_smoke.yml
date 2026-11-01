@@ -183,6 +183,10 @@ jobs:
             backend/tests/api/test_rag_server_internal_token.py \
             backend/tests/test_rag_remote_mode.py \
             backend/tests/prompts/ \
+            backend/tests/travel_v2/test_hotel_search_service.py \
+            backend/tests/travel/test_amap_poi_provider.py \
+            backend/tests/travel/test_lodging_expert.py \
+            backend/tests/travel/test_tool_governance.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

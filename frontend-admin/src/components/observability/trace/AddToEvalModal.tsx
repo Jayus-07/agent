@@ -20,8 +20,6 @@ const MODULES = [
   "e2e",
   "travel",
   "travel-provider",
-  "travel-commerce",
-  "travel-booking",
 ] as const;
 
 export default function AddToEvalModal({ traceId, question, onClose }: Props) {

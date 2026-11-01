@@ -474,6 +474,73 @@ export function selectTravelTrainV2(tripId: string, input: {
   return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/selections/intercity-trains`, input, key);
 }
 
+// ── 预订确认门（收编重构 §4.2：quote → confirm → status 三段） ─────────
+
+export interface TravelBookingQuoteResultV2 {
+  status: 'awaiting_confirmation';
+  trip_id: string;
+  booking_intent_id: string;
+  order_id: string;
+  quote_id: string;
+  amount: string;
+  currency: string;
+  tax_inclusion?: string;
+  availability?: string;
+  internal_expires_at: string | null;
+  provider_expires_at: string | null;
+  message: string;
+}
+
+export interface TravelBookingConfirmResultV2 {
+  result: string;
+  trip_id: string;
+  booking_intent_id: string;
+  order: Record<string, unknown>;
+  detail: string;
+  message: string;
+  new_quote?: { quote_id: string; amount: string; currency: string };
+}
+
+export interface TravelBookingStatusResultV2 {
+  status: string;
+  order: Record<string, unknown> | null;
+  events?: unknown[];
+  message: string;
+}
+
+export function createTravelBookingQuoteV2(tripId: string, input: {
+  commerce_type: 'hotel' | 'flight';
+  search_params: Record<string, unknown>;
+  selection?: Record<string, unknown>;
+}): Promise<TravelBookingQuoteResultV2> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/bookings/quote`, input);
+}
+
+export function confirmTravelBookingV2(tripId: string, bookingIntentId: string): Promise<TravelBookingConfirmResultV2> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/bookings/${encodeURIComponent(bookingIntentId)}/confirm`, {});
+}
+
+export function fetchTravelBookingStatusV2(tripId: string, bookingIntentId: string): Promise<TravelBookingStatusResultV2> {
+  return request(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/bookings/${encodeURIComponent(bookingIntentId)}`);
+}
+
+// ── 自动优选（收编重构 U3：只读编排，选入走既有 selections 端点） ────────
+
+export interface TravelAutoOptimizeResultV2 {
+  trip_id: string;
+  destination: string;
+  suggestions: {
+    meals: Array<Record<string, unknown>>;
+    lodgings: Array<Record<string, unknown>>;
+  };
+  disclosures: string[];
+  apply_hint: string;
+}
+
+export function autoOptimizeTravelTripV2(tripId: string): Promise<TravelAutoOptimizeResultV2> {
+  return post(`/api/travel/v2/trips/${encodeURIComponent(tripId)}/auto-optimize`, {});
+}
+
 export function restoreTravelTripV2(tripId: string, input: {
   expected_revision: number; target_revision: number;
 }, key = idempotencyKey()): Promise<{ saved: true; trip_id: string; revision: number; document: TripDocumentV2 }> {

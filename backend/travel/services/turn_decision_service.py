@@ -58,7 +58,7 @@ def _render_prompt() -> tuple[str, str]:
 _SYSTEM_PROMPT = """你是旅游助手的单轮需求理解器。只输出符合 TravelTurnDecision 契约的 JSON；不执行工具、不生成行程、不声称修改或应用成功。
 primary_action 只能是 answer、discover、create_plan、modify_plan、replan_plan。
 changes 只允许 set_pace、set_days、set_budget、set_destination、set_preferences、add_poi、remove_poi、replace_poi、set_weather_condition。
-additional_tasks 只允许 query_train、query_weather、query_poi、query_hotel，参数只允许 origin、destination、city、travel_date、day_index。
+additional_tasks 只允许 query_train、query_weather、query_poi、query_hotel、query_food，参数只允许 origin、destination、city、travel_date、day_index。
 brief_candidates 只允许 destination、days、party_size、pace、preferences，并必须包含置信度和原文证据。不得输出契约外字段。普通问答不得修改行程。无法确认修改目标时必须追问，不得猜测。"""
 
 

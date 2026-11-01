@@ -206,6 +206,14 @@ def _rule_additional_tasks(message: str, fresh: TravelBrief,
                 city=destination, travel_date=date_text,
             ).model_dump(mode="json"),
         })
+    if re.search(r"吃饭|吃什么|餐厅|餐馆|美食|馆子|晚餐|午餐|早餐|下馆子", message):
+        tasks.append({
+            "task_id": "food-1",
+            "type": "query_food",
+            "params": TravelTaskParams(
+                city=destination,
+            ).model_dump(mode="json"),
+        })
     return tasks
 
 
