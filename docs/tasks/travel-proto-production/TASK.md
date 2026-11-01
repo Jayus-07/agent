@@ -123,7 +123,8 @@
 - 上游响应契约已在 tools/travel/train.py docstring 固化（2026-10-02 实测，解析规则勿凭文档改）：成功 `{"success":true,"count":N,"trains":[...]}`；真无直达 `{"success":false,"error":"未找到该线路的余票","count":0,"trains":[]}`；坏站名 `{"success":false,"error":"车站名称无效","suggestions":[...],"hint":...}`；坏日期 `{"success":false,"errors":[...]}`——四种业务失败**结构可区分**。
 
 **通道设计（消费方零改动）**：所有调用方（TravelSearchPanel 车次 Tab、域图 auxiliary query_train、planning_agent 票价补全）唯一入口是 `live_search_service.search_trains / search_train_price`。在这两个函数内做通道选择：
-1. **动态优先**：`mcp_store.get_runtime("mcp.12306__query_tickets")` 在场（连接启用+工具 approved）→ 走动态通道——新增轻量 provider（参照 rollinggo_mcp.py 模式）：经 mcp_registry 快照解析连接，调 `_McpDynamicToolAdapter.invoke`（复用治理执行核心：运行时在场检查/SSRF/写面强一致——本两工具均 read），响应按 train.py 固化契约解析为现役 data 形态；业务失败结构原样保留（「真无直达」≠错误）。
+1. **动态优先**：`mcp_store.get_runtime("mcp.t12306__query_tickets")` 在场（连接启用+工具 approved）→ 走动态通道——新增轻量 provider（参照 rollinggo_mcp.py 模式）：经 mcp_registry 快照解析连接，调 `_McpDynamicToolAdapter.invoke`（复用治理执行核心：运行时在场检查/SSRF/写面强一致——本两工具均 read），响应按 train.py 固化契约解析为现役 data 形态；业务失败结构原样保留（「真无直达」≠错误）。
+   - slug 口径（2026-11-02 实测确认）：连接名 `12306` 数字开头，slugify 自动加 t 前缀 → capability 实为 `mcp.t12306__query_tickets` / `mcp.t12306__query_ticket_price`（specs.slugify；计划初稿写 `mcp.12306__*` 有误，已修正）。
 2. **静态回退**：动态不在场且 `TRAIN_MCP_ENABLED=true` → 现役静态直连通道原样保留。
 3. **如实关停**：两者皆不可用 → 「未启用」如实（不伪造）。
 - 链账/日志标注实际通道（mcp_dynamic / static_direct），可观测。
