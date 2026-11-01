@@ -6,7 +6,7 @@
 
 - API 的入口必须声明可信身份、输入/输出 DTO、资源级权限、租户、幂等/版本约束和错误语义；422/401/403/404/409 与业务失败需真实区分。所有 UI（`frontend`、`frontend-admin`、`frontend-cs`）消费同一已发布接口契约，不能用前端成功 toast 掩盖后端失败。
 - SSE 的开始、增量、工具进度、终态和断线重放以 [Frozen Contracts](../architecture/Frozen-Contracts.md) 及现有 `event_schema.py` 为准；不得随意加字段后只更新一个前端。消费端执行有序去重，断流后按真实可恢复范围提示，不将残缺答案标为成功。
-- 客服实时事件（WS `cs:events` 封套 `{type,event_id,seq,ts}`，seq 游标补发）**只追加不破坏**：既有 message.created/agent_offered/handoff 状态事件之上，cs-workstation-v2 追加 `agent.status_changed`（瞬态不落库）、`conversation.transfer_requested/reassigned/offered`、`sla.warning`/`sla.breach`（幂等，SETNX/终态一次性）、`assist.suggestion`（瞬态）；人工接管后的用户消息经 `POST /cs/conversations/my/{id}/messages` 产生与图 turn 同构的 `message.created`，写通道收口全局幂等（Idempotency-Key 必填，同键同内容重放返回首次结果）。
+- 客服实时事件（WS `cs:events` 封套 `{type,event_id,seq,ts}`，seq 游标补发）**只追加不破坏**：既有 message.created/agent_offered/handoff 状态事件之上，cs-workstation-v2 追加 `agent.status_changed`（瞬态不落库）、`conversation.transfer_requested/reassigned/offered`、`sla.warning`/`sla.breach`（幂等，SETNX/终态一次性）、`assist.suggestion`（瞬态）；人工接管后的用户消息经 `POST /cs/conversations/my/{id}/messages` 产生与图 turn 同构的 `message.created`，写通道收口全局幂等（Idempotency-Key 必填，同键同内容重放返回首次结果；落库桥超时按「副作用终态未知」保守阻断同键重执并取消在途协程，不得以普通失败放行重试造成重复落库）。
 - 普通问答不得产生隐式写入；命中“修改/退款/预订”先区分草案与正式操作。对于使用自动保存的 V2 正式行程，以领域修订版 CAS 校验成功后生效且可恢复；不能把历史 V1 Active/Draft 生命周期套到 V2。
 - 前端可显示 Tool 进度、来源、失败限制、局部差异、确认按钮；但前端不是授权、状态或版本权威。后台任务的运行中、部分成功、失败、等待确认须与服务端一致。
 
