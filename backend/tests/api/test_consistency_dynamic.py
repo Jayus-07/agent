@@ -81,6 +81,12 @@ class TestDynamicRegistrySection:
         monkeypatch.setattr(
             consistency, "_check_dynamic_registry_db",
             lambda *a, **kw: _boom())
+        # 对账前的快照刷新同为 DB 读取路径（consistency.py 对账前 await
+        # mcp_store.refresh()），DB 不可用语义下一并 stub——否则 CI 空 DB
+        # 上刷新成功会覆盖 _inject_mcp 的进程内注入态（v23 run
+        # 41349962918 runtime_tools 0==1 实证）。
+        monkeypatch.setattr(
+            "backend.infra.mcp_registry.store.refresh", _boom)
 
         import asyncio
 
