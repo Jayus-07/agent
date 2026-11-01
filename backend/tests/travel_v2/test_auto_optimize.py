@@ -106,3 +106,66 @@ def test_no_destination_or_dates_skips_not_fails():
     out = svc.build_optimization_suggestions(doc, "t", "u")
     assert out["destination"] == ""
     assert out["suggestions"]["meals"] == []
+
+
+# =============================================
+# API 级回归（P5 运行态点测发现：端点曾把 trip 行当 document 传，
+# destination 恒空 → 建议全空；真 PG 门控，锁定「传 document」语义）
+# =============================================
+
+
+def test_api_auto_optimize_passes_document_not_trip_row(monkeypatch):
+    import os
+    import uuid
+
+    os.environ.setdefault("TRAVEL_V2_TEST_POSTGRES", "")
+    if os.getenv("TRAVEL_V2_TEST_POSTGRES") != "1":
+        import pytest
+
+        pytest.skip("requires TRAVEL_V2_TEST_POSTGRES=1")
+
+    from backend.tests.travel_v2.test_trip_document import valid_document
+    from backend.travel.services import lodging_service
+    from backend.travel.services import live_search_service
+    from backend.travel_v2.api.router import router
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(
+        live_search_service, "search_food",
+        lambda city: {"status": "success", "source": "amap",
+                      "merchants": [{"selection_id": "amap:x", "name": "测试餐厅",
+                                     "rating": 4.5, "source": "amap"}]},
+        raising=False)
+    monkeypatch.setattr(
+        lodging_service, "search_lodging",
+        lambda *, destination, check_in, check_out: {
+            "status": "success", "options": [], "disclosure": ""},
+        raising=False)
+
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+    owner = f"owner-{uuid.uuid4().hex[:12]}"
+    tenant = f"tenant-{uuid.uuid4().hex[:12]}"
+    headers = {"X-User-Id": owner, "X-Auth-Type": "jwt",
+               "X-Tenant-Id": tenant}
+    created = client.post(
+        "/travel/v2/trips",
+        json={"title": "优选回归", "document": valid_document(),
+              "conversation_id": f"travel-{uuid.uuid4().hex}"},
+        headers={**headers, "Idempotency-Key": f"opt-api-{uuid.uuid4().hex}"},
+    )
+    assert created.status_code == 201, created.text
+    trip = created.json()
+
+    response = client.post(
+        f"/travel/v2/trips/{trip['trip_id']}/auto-optimize",
+        json={}, headers=headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    # 修复断言：destination 取自 document.brief（曾恒 ""）
+    assert payload["destination"] == "杭州"
+    assert payload["trip_id"] == trip["trip_id"]
+    assert payload["suggestions"]["meals"], "有餐饮数据源时建议不得为空"
+
