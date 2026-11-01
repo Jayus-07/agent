@@ -9,6 +9,7 @@ offline 模式：只做数据集结构 sanity（不调 graph），CI 无 LLM Key
 live 模式：逐条 invoke CS Graph（thread_id 按 case id 隔离）。
 """
 import time
+import uuid
 
 from backend.evaluation.models import EvalResult, TestCase
 from backend.evaluation.registry import register_runner
@@ -91,22 +92,28 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
     from backend.customer_service.router.cs_router import get_cs_router
     from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
 
+    # run 级隔离 token：thread_id/conversation_id 必须区分不同 run——
+    # 固定 eval-cs-{case.id} 会让下一次 run 续上上一次的 checkpointer
+    # 会话状态（b0r3 实测：complaint pending 补槽路径直接接管，45ms
+    # 返回、expert_history 为空），且工单/投诉单按会话幂等去重也失真。
+    run_token = uuid.uuid4().hex[:12]
+
     graph = get_cs_graph()
     results: list[EvalResult] = []
     for case in cases:
         t0 = time.time()
         exp = case.expected
         try:
-            # thread_id 按 case 隔离，避免评测样本间状态串扰
+            # thread_id 按 run+case 隔离，避免评测样本间与跨 run 状态串扰
             config = {
                 "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
-                "configurable": {"thread_id": f"eval-cs-{case.id}"},
+                "configurable": {"thread_id": f"eval-cs-{run_token}-{case.id}"},
             }
             cs_input = new_cs_graph_input(
                 user_message=case.question,
                 user_id="eval_bot",
                 session_id="cs_eval",
-                conversation_id=f"eval-cs-{case.id}",
+                conversation_id=f"eval-cs-{run_token}-{case.id}",
                 cs_route=get_cs_router().route(case.question).model_dump(),
             )
             final_state = graph.invoke(cs_input, config=config)
