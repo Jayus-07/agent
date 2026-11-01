@@ -59,6 +59,14 @@ def _db_one(sql: str, params: dict | None = None):
 
 @pytest.fixture(autouse=True)
 def _clean():
+    # 共享 memory 库的跨 suite 测试残留兜底（坑位 25）：mcp_dynamic_e2e
+    # 的「补货分析包」bundle 在历史轮失败路径曾残留（v25/v26 的 grants
+    # DELETE 表名笔误中断 finally），治理快照的 bundle_count 绝对断言
+    # 会把它计入（v27 run 41356804173 1==1 and 2==1 实证）。两处已修
+    # 清理，此处幂等清扫残留。
+    _db_exec("DELETE FROM ai.product_bundle_grants WHERE bundle_id IN "
+             "(SELECT id FROM ai.capability_bundles WHERE name = '补货分析包')")
+    _db_exec("DELETE FROM ai.capability_bundles WHERE name = '补货分析包'")
     _db_exec("DELETE FROM ai.governance_releases WHERE tenant_id = ANY(%(t)s)",
              {"t": [TENANT, OTHER_TENANT]})
     _db_exec("DELETE FROM ai.mcp_connections WHERE tenant_id = ANY(%(t)s)",
@@ -66,6 +74,9 @@ def _clean():
     _db_exec("DELETE FROM ai.capability_bundles WHERE name LIKE %(p)s",
              {"p": "rel-%"})
     yield
+    _db_exec("DELETE FROM ai.product_bundle_grants WHERE bundle_id IN "
+             "(SELECT id FROM ai.capability_bundles WHERE name = '补货分析包')")
+    _db_exec("DELETE FROM ai.capability_bundles WHERE name = '补货分析包'")
     _db_exec("DELETE FROM ai.governance_releases WHERE tenant_id = ANY(%(t)s)",
              {"t": [TENANT, OTHER_TENANT]})
     _db_exec("DELETE FROM ai.mcp_connections WHERE tenant_id = ANY(%(t)s)",
