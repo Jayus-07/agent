@@ -16,8 +16,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const isTravelMode = pathname === '/travel' || pathname.startsWith('/travel/')
   const isTaskMode = pathname === '/agent' || isTravelMode
   // 门户、登录/注册和用户智能客服页使用独立布局。
-  // cs-workstation-v2 P8：/customer-service 已指向 cs2 重建页，旧过渡路由
-  // /customer-service-v2 与商城两页（/mall、/my-orders）为独立页。
+  // cs-workstation-v2 P8：/customer-service 指向 cs2 重建页（旧过渡路由
+  // /customer-service-v2 已删除），商城两页（/mall、/my-orders）为独立页。
   const isStandalone =
     pathname === '/login' ||
     pathname === '/register' ||

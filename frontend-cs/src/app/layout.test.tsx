@@ -15,4 +15,10 @@ describe("RootLayout QueryClient 边界", () => {
     expect(sidebarStart).toBeGreaterThan(providerStart);
     expect(sidebarStart).toBeLessThan(providerEnd);
   });
+
+  it("工作台判定为段级匹配（/cs 或 /cs/ 子路径），防止未来同前缀路由误入工作台布局", () => {
+    const source = readFileSync(resolve(process.cwd(), "src/app/layout.tsx"), "utf8");
+    expect(source).toContain("pathname === '/cs' || pathname.startsWith('/cs/')");
+    expect(source).not.toContain("pathname.startsWith('/cs')");
+  });
 });
