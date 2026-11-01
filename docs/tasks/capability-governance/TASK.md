@@ -4,7 +4,7 @@
 - 来源：cs-workstation-v2 独立审查（REVIEW.md §7/§8）+ 2026-11-01 治理对话决策——业界实践对照后确定五项优化，按「平台小改先行 → 客服试点 → 协议化 → 报表验证」排期
 - Worktree：`D:\Program Files\workplace\agent-gov`（**新建**，自 main 创建；命令见 §8。cs-v2 的 agent-cs-v2 worktree 停靠 standby/origin-main，本任务不复用不清理）
 - 分支策略：每期独立分支 `feat/cap-gov-gN`（自最新 main），独立 PR 合并 main；**合并前显式逐项确认全部 CI 结论**
-- 状态：**计划已落稿，等待执行会话接手**（启动清单见 §8）
+- 状态：**G1–G6 已全部完成并合入 main（任务关闭，2026-11-01）**——PR #198/#200/#202/#203/#204/#207；收官台账与总验收七条核对见同目录 PROGRESS.md 日志 2026-11-01（三）。owner 统一占位 `platform-team` 待按团队实况替换（独立小 PR）
 
 ---
 
@@ -54,6 +54,7 @@
 - `/admin/mcp`：`admin_mcp.py`（:52 prefix，**全部端点 require_admin_user + 写操作 Idempotency-Key**，:19 注释）；GET 端点 :573 overview / :594 connections / :1323 tools / :1940 health / :2010 export；live overview：loaded=true、connection_count=3、active_tools=0、grant_count=0、derive_errors=[]；动态 skill 注册表 `backend/skills/mcp_dynamic/`；
 - 客服档案：`rbac.py:1150` GET `/sys/rbac/customer-service/team`（**require_rbac_admin 门禁**，注意前缀无 /api；管理端 BFF 剥 /api）、:1235 PATCH；管理端 `frontend-admin/src/api/rbac.ts:251/266` + settings/access 页消费；
 - 归因数据面：`ai.trace_records`（020 迁移）**有 workflow_name 列** + data JSONB；`llm_usage`（013 迁移）有 trace_id/tenant/component（llm|embedding|rerank）/model/cost_usd，**无 capability 列** → 按域归因 = `llm_usage ⋈ trace_records ON trace_id GROUP BY workflow_name`，零 schema 改动；
+  **⚠️ G6 执行修正（2026-11-01 实测）**：llm_usage.trace_id 与 ai.trace_records **零相交**（020 新链路不同源）；正确 join 伙伴是 **`trace_summary`**（013 同源带 workflow_name，35483 行命中 / 45.7%，llm 成本口径覆盖 72%）——G6 已按此实现并留档 PROGRESS；
 - P7 数据面（G4 数据源）：意图分布 = messages join conversations 收口租户（`cs_dashboard.py` 可复用 SQL）；未解决 = `ai.unanswered_questions`（070 迁移，question_hash 聚类）；客服域意图清单 = `backend/customer_service/router/intents.py`（24 意图）+ fine_router；
 - 管理端页面：/skills /tools /mcp /approvals /cost-governance /settings-access 等已存在；frontend-design-standard 约束新页。
 
