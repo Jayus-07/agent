@@ -455,3 +455,62 @@ def test_my_message_idempotency_conflict(db, messages_client, monkeypatch):
     )
     assert conflict.status_code == 409
     assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+
+def test_my_message_bridge_timeout_blocks_same_key_retry(db, messages_client, monkeypatch):
+    """cs-v2 审查 R1：落库桥超时≠副作用未发生——「已落库但调用方超时」时
+    同键重试必须被 UNCERTAIN 保守阻断（普通 FAILED 会放行重执 → 与在途
+    协程各插一行，重复消息）。"""
+    import concurrent.futures
+
+    import backend.customer_service._db_loop as db_loop_mod
+    import backend.customer_service.handoff.lifecycle as lifecycle_mod
+
+    conversation_id = _PREFIX + uuid.uuid4().hex[:10]
+    _seed_conversation(conversation_id, "p3t-auth-user")
+    _seed_handoff(conversation_id, "p3t-auth-user", state="human_active")
+    monkeypatch.setattr(
+        lifecycle_mod, "load_active_handoff_sync",
+        lambda tenant_id, conversation_id, **kw: {"handoff_state": "human_active"},
+    )
+
+    real_run_sync = db_loop_mod.run_sync
+
+    def _committed_but_timeout(coro, *args, **kwargs):
+        # 生产超时形态的最小模拟：协程实际执行完成（副作用已落库），
+        # 调用方却按超时处理。
+        real_run_sync(coro)
+        raise concurrent.futures.TimeoutError()
+
+    monkeypatch.setattr(db_loop_mod, "run_sync", _committed_but_timeout)
+
+    idem_key = uuid.uuid4().hex
+    payload = {"content": "桥超时后同键重试"}
+    first = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json=payload,
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert first.status_code == 503, first.text
+
+    retry = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json=payload,
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert retry.status_code == 503, retry.text
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM customer_service.messages"
+            " WHERE conversation_id = %s AND sender_type = 'user'",
+            (conversation_id,),
+        )
+        assert cur.fetchone()[0] == 1
+        # 本测试自清幂等记录（db fixture 不覆盖 ai.idempotency_records）
+        cur.execute(
+            "DELETE FROM ai.idempotency_records"
+            " WHERE tenant_id = %s AND operation = 'cs_my_message_send'"
+            "   AND client_key = %s",
+            (TENANT, idem_key),
+        )
+        conn.commit()
