@@ -344,8 +344,10 @@ class TestBudgetSegments:
         dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)
         allow, tool_budget, decision, reason = dl.check_tool_execution(60_000)
         assert allow is True and decision == "allow"
-        # 25s workflow − 5s reserve − 250ms margin
-        assert tool_budget == pytest.approx(25_000 - 5_000 - 250)
+        # 25s workflow − 5s reserve − 250ms margin；abs=0.1 给「dl 构造到
+        # check 之间 time.monotonic 流逝」的调度噪声留量（CI 4 worker 下
+        # 实测 ~20ms，v19 run 41329142940 rel=1e-6 容差 0.01975 被擦线击穿）
+        assert tool_budget == pytest.approx(25_000 - 5_000 - 250, abs=0.1)
 
     def test_tool_budget_capped_by_policy_when_smaller(self):
         dl = RequestDeadline(total_budget_ms=30_000, workflow_budget_ms=25_000)

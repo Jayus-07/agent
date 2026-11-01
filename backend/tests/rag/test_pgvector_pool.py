@@ -58,6 +58,10 @@ def _store_with_pool(pool):
     store.embedding_function = SimpleNamespace(
         embed_query=lambda query: np.zeros(3, dtype=np.float32).tolist()
     )
+    # 本文件只验连接池/事务语义；d886f7c 起的索引身份守卫（FakeCursor 无
+    # fetchone 会走「元数据暂不可校验」fail-closed）由 test_index_embedding_guard
+    # 专门覆盖，这里短路避免喧宾夺主
+    store._check_index_compat = lambda conn, identity=None: None
     return store
 
 

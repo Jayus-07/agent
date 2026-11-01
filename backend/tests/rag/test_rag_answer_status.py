@@ -61,7 +61,7 @@ def test_build_rejection_response_carries_permission_filtered():
     msg, info = build_rejection_response(decision, "retrieval", permission_filtered=2)
     assert info.permission_filtered == 2
     assert info.to_dict()["permission_filtered"] == 2
-    assert msg == "知识库暂无相关资料。"
+    assert msg == "知识库中未找到与该问题相关的内容。"  # 6780d1c NO_EVIDENCE 话术
 
 
 # ── 工具出口 RAGMETA 标记 ───────────────────────────────────

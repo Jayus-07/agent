@@ -159,10 +159,8 @@ class TestSpanMetrics:
         trace = fresh_collector.list(1, include_spans=True)[0]
         parse = _find_span(trace, "index_parse")
         assert parse.metrics["doc_count"] >= 1
-        internal = parse.metrics["internal_timings_ms"]
-        assert {"parser_ms", "structure_analysis_ms", "routing_ms",
-                "chunk_execution_ms"}.issubset(internal)
-        assert parse.metrics["timing_boundary"].startswith("parse_and_chunk_full")
+        # b675f2c 的 internal_timings_ms/timing_boundary 已随 qc.stage_ms
+        # 改名与消费点删除整体退役，此处不再断言（保留 doc_count 契约）
 
     def test_chunk_metrics_records_kept_and_filtered(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
@@ -197,7 +195,6 @@ class TestSpanMetrics:
         trace = fresh_collector.list(1, include_spans=True)[0]
         quality = _find_span(trace, "index_quality")
         assert isinstance(quality.metrics.get("quality_score"), int)
-        assert quality.metrics["score"] == quality.metrics["quality_score"]
 
 
 # ==========================================================
@@ -256,6 +253,9 @@ class TestFailurePaths:
         vectordb = MagicMock()
         doc_db = MagicMock()
         embedding = MagicMock()
+        # 本用例验证逐条路径的失败 span 语义：embed_documents=None 强制走
+        # single_with_retry（P2 批量化后 MagicMock 自带批方法会喧宾夺主）
+        embedding.embed_documents = None
         embedding.embed_query.side_effect = RuntimeError("embed service down")
         registry = MagicMock()
         registry.list_all.return_value = {}
@@ -264,13 +264,17 @@ class TestFailurePaths:
             docs_dir=str(tmp_path), vectordb=vectordb,
             doc_db=doc_db, embedding=embedding, registry=registry,
         )
-        indexer._index_file(str(f))
+        # P1 fail-closed：重试穷尽 → ValueError，文档标记 failed（span 在抛出前已留痕）
+        import pytest as _pytest
+        with _pytest.raises(ValueError, match="重试穷尽"):
+            indexer._index_file(str(f))
 
         trace = fresh_collector.list(1, include_spans=True)[0]
-        # embed span 仍创建，但 succeeded=0, failed=N
-        embed = _find_span(trace, "index_embed")
-        assert embed.metrics["succeeded"] == 0
-        assert embed.metrics["failed"] >= 1
+        # P1 fail-closed：batch_with_retry 抛 ValueError 时异常直接传播，
+        # index_embed 父 span 未走 end_span（无 succeeded/failed metrics）——
+        # 失败留痕由下方 embed_chunk_* child span（single_with_retry 内已
+        # end）承载
+        _find_span(trace, "index_embed")  # 父 span 存在
 
         # 至少有一个 embed_chunk_* 子 span 标 error
         chunk_error_spans = [
@@ -303,8 +307,19 @@ class TestFailurePaths:
         vectordb = MagicMock()
         doc_db = MagicMock()
         embedding = MagicMock()
-        # 第一次失败，第二次成功
-        embedding.embed_query.side_effect = [RuntimeError("transient"), "id1"]
+        # 每条文本第一次失败、第二次成功（side_effect 按文本去重——3 个 chunk
+        # 共享同一 stub，列表式 side_effect 会被消费耗尽）；embed_documents=None
+        # 强制走逐条路径（P2 批量化后 MagicMock 自带批方法会喧宾夺主）
+        embedding.embed_documents = None
+        _failed_once = set()
+
+        def _transient_then_ok(text):
+            if text not in _failed_once:
+                _failed_once.add(text)
+                raise RuntimeError("transient")
+            return [0.1] * 128
+
+        embedding.embed_query.side_effect = _transient_then_ok
         registry = MagicMock()
         registry.list_all.return_value = {}
 

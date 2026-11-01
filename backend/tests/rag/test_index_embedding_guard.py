@@ -47,7 +47,7 @@ class TestRuntimeIdentity:
             _provider = "cloud"
 
         assert _runtime_embedding_identity(_E()) == {
-            "provider": "cloud", "model": "emb-A"}
+            "provider": "cloud", "model": "emb-A", "revision": ""}
 
 
 class TestMismatchError:
@@ -76,6 +76,10 @@ class _StubEmbedding:
     def __init__(self, model_name: str, dim: int = EMBEDDING_DIM):
         self._model_name = model_name
         self._provider = "cloud"
+        # d886f7c 起索引身份守卫要求三元组齐全（provider/model/指纹），
+        # 缺指纹会被 fail-closed 拦（runtime_fingerprint_missing）
+        self._provider_id = "cloud"
+        self._index_fingerprint = f"{model_name}-fp"
         self.dim = dim
 
     def _vec(self, text: str) -> list[float]:
@@ -167,8 +171,11 @@ class TestIndexEmbeddingGuardIntegration:
             switched.similarity_search_with_score("库存", k=1)
         assert exc_info.value.code == "INDEX_EMBEDDING_MISMATCH"
 
-    def test_legacy_index_adopts_baseline(self, guard_env):
-        """无元数据的存量索引：首次查询采纳运行时身份为基线并放行（只发生一次）。"""
+    def test_legacy_index_without_metadata_rejected(self, guard_env):
+        """无元数据的存量索引：拒绝认领须正式重建（41f69a7 fail-closed 收口）。
+
+        旧行为「首次查询采纳运行时身份为基线并放行」已随身份校验收紧退役——
+        无元数据的旧向量无法证明与当前模型同语义空间，放行等于跨模型混检。"""
         from backend.rag.vectorstore.pgvector_store import _meta_table_name
         import psycopg2
         from backend.config.database import VECTOR_PG_CONFIG
@@ -184,16 +191,8 @@ class TestIndexEmbeddingGuardIntegration:
             f"DELETE FROM {_meta_table_name()} WHERE collection = %s", (collection,))
         conn.close()
 
-        docs = store.similarity_search("库存", k=1)
-        assert isinstance(docs, list)  # 放行
-        conn = psycopg2.connect(**VECTOR_PG_CONFIG)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT embedding_model, status FROM {_meta_table_name()} WHERE collection = %s",
-            (collection,))
-        row = cur.fetchone()
-        conn.close()
-        assert row is not None and row[0] == "emb-A"  # 基线已采纳
+        with pytest.raises(IndexEmbeddingMismatchError):
+            store.similarity_search("库存", k=1)
 
     def test_rebuild_required_status_blocks_query(self, guard_env):
         """rebuild_required 状态（embedding 角色被换）同样拒绝查询。"""

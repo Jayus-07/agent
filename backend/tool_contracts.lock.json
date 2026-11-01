@@ -1,13 +1,15 @@
 {
   "version": 1,
-  "generated_at": "2026-11-01T15:46:20+08:00",
-  "git_sha": "5615088",
+  "generated_at": "2026-11-02T02:39:25+08:00",
+  "git_sha": "05e656e",
   "tool_count": 43,
   "tools": {
     "booking_quote_tool": {
       "module": "backend/tools/travel/booking.py",
-      "display_name": "",
-      "data_source": null,
+      "display_name": "预订报价",
+      "data_source": {
+        "type": "internal"
+      },
       "description_hash": "5623dff71e6f913e",
       "args_schema": {
         "commerce_type": {
@@ -337,8 +339,11 @@
     },
     "food_search_tool": {
       "module": "backend/tools/travel/food.py",
-      "display_name": "",
-      "data_source": null,
+      "display_name": "餐饮搜索",
+      "data_source": {
+        "type": "rest",
+        "provider": "高德"
+      },
       "description_hash": "583d05fbdc41d180",
       "args_schema": {
         "city": {
@@ -441,8 +446,13 @@
     },
     "hotel_search_tool": {
       "module": "backend/tools/travel/hotel.py",
-      "display_name": "",
-      "data_source": null,
+      "display_name": "酒店搜索",
+      "data_source": {
+        "type": "mcp",
+        "provider": "RollingGo",
+        "upstream_tool": "mcp.rollinggo__searchhotels",
+        "switch_env": "TRAVEL_COMMERCE_PROVIDER_MODE"
+      },
       "description_hash": "d9ea02fc24f292ce",
       "args_schema": {
         "adults": {

@@ -29,7 +29,10 @@ def test_chains_nonempty_and_names_known():
         for name in chain:
             # 每个成员名都必须可解析（占位成员恒可解析；真实成员查配置）
             assert _is_configured(name) in (True, False)
-            assert name in _DECLARATION_ONLY or name in ("tencent", "qweather")
+            # 已知名单：占位成员 + weather 真实成员（tencent/qweather）
+            # + poi 真实链首（amap_live，AMAP_KEY 配置门，router 有专门分支）
+            assert name in _DECLARATION_ONLY or name in (
+                "tencent", "qweather", "amap_live")
 
 
 def test_weather_chain_declared_primary_first():

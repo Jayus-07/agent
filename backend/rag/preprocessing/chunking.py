@@ -3325,7 +3325,7 @@ def coverage_audit(ast: DocumentAST, chunks: List[Document],
                     index if index < header_count
                     else row_start + index - header_count
                 )
-                row_key = (table_id, source_index, "table_row", is_masked)
+                row_key = (table_id, source_index, CHUNK_TYPE_TABLE_ROW, is_masked)
                 row_leaf_bodies.setdefault(row_key, []).append(
                     _normalize(chunk.page_content, mask_pii=is_masked)
                 )

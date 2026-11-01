@@ -39,6 +39,9 @@ class _FakeEmbedding:
     """确定性假嵌入：维度与 DDL 一致，避免加载真实模型。"""
 
     model_name = "fake-rebuild-test"
+    # d886f7c 起索引身份守卫要求三元组齐全，缺指纹被 fail-closed 拦
+    _provider_id = "cloud"
+    _index_fingerprint = "fake-rebuild-test-fp"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         import hashlib

@@ -30,7 +30,8 @@ def test_build_person_index_is_called_before_chain_creation(monkeypatch):
             self.person_index = kwargs["person_index"]
 
     monkeypatch.setattr(pipeline_module, "RAGChain", FakeChain)
-    monkeypatch.setattr(pipeline_module, "BM25Store", lambda: pipeline.bm25_store)
+    # BM25Store 现构造签名带 index_dir，stub 接受 *args
+    monkeypatch.setattr(pipeline_module, "BM25Store", lambda *a, **k: pipeline.bm25_store)
     monkeypatch.setattr(pipeline_module, "CustomRetriever", lambda _: None)
 
     pipeline._init_retrievers()

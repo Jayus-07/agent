@@ -430,6 +430,11 @@ class TestSelectionDecisionStore:
         # 先让 store _init_db 建表，再挂触发器（触发器依赖表存在）
         from backend.selection_decision.store import get_selection_decision_store
         store = get_selection_decision_store()
+        # clean_tables setup 会 drop 本 worker 的测试表，而单例的 _init_db
+        # 只在构造时跑过一次（IF NOT EXISTS 幂等）——CI 同 worker 前序用例
+        # 已建单例时本用例会在已 drop 的表上挂触发器/写入 UndefinedTable
+        # （v19 run 41329142940 gw2 实证）。显式重建被 drop 的表。
+        store._init_db()
 
         conn = psycopg2.connect(**BUSINESS_DB_CONFIG)
         try:

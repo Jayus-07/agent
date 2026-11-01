@@ -41,11 +41,13 @@ class TestConsistencyReport:
             "agents", "skills", "capabilities", "tools",
             "workflows", "mcp", "tool_contract_lock", "dynamic_registry",
         ]
-        # 权威口径（tool_contracts.lock.json）：Skill 12 / capability 17 / Tool 40
+        # 权威口径（tool_contracts.lock.json）。各会话合法新增后随 lock 重新
+        # 生成同步：Skill 12→15（travel booking_quote/food/hotel 等）、
+        # capability 17→20、Tool 40→43（lock tool_count=43）
         by_name = {s["name"]: s for s in report["sections"]}
-        assert by_name["skills"]["counts"]["skills"] == 12
-        assert by_name["capabilities"]["counts"]["capabilities"] == 17
-        assert by_name["tools"]["counts"]["loaded"] == 40
+        assert by_name["skills"]["counts"]["skills"] == 15
+        assert by_name["capabilities"]["counts"]["capabilities"] == 20
+        assert by_name["tools"]["counts"]["loaded"] == 43
         assert by_name["tools"]["counts"]["not_loaded"] == 0
         assert by_name["tools"]["counts"]["phantom"] == 0
         assert report["overall"] == "PASS", report["failed_sections"]

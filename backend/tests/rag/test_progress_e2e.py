@@ -69,7 +69,8 @@ def _build_indexer(tmp_path, file_path):
     doc_db.add_texts.return_value = ["d1"]
 
     embedding = MagicMock()
-    embedding.embed_query.return_value = "fake-vector-id"
+    embedding.embed_query.return_value = [0.1] * 128
+    embedding.embed_documents.side_effect = lambda texts: [[0.1] * 128 for _ in texts]
 
     registry = MagicMock()
     registry.list_all.return_value = {}
@@ -284,7 +285,8 @@ class TestSSEStreamE2E:
         doc_db = MagicMock()
         doc_db.add_texts.return_value = ["d1"]
         embedding = MagicMock()
-        embedding.embed_query.return_value = "fake"
+        embedding.embed_query.return_value = [0.1] * 128
+        embedding.embed_documents.side_effect = lambda texts: [[0.1] * 128 for _ in texts]
         registry = MagicMock()
         registry.list_all.return_value = {}
 
@@ -398,7 +400,10 @@ class TestFullBackgroundTaskE2E:
                         doc_db = MagicMock()
                         doc_db.add_texts.return_value = ["d1"]
                         embedding = MagicMock()
-                        embedding.embed_query.return_value = "fake"
+                        embedding.embed_query.return_value = [0.1] * 128
+                        # 批量路径（P2）对 embed_documents 形状硬校验，MagicMock
+                        # 裸属性被拒 → 重试穷尽 fail-closed → 序列缺 embedding/writing
+                        embedding.embed_documents.side_effect = lambda texts: [[0.1] * 128 for _ in texts]
                         registry = MagicMock()
                         registry.list_all.return_value = {}
 
