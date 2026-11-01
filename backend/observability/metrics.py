@@ -897,6 +897,12 @@ agent_tool_error_class_total = Counter(
     "success 不计）",
     labelnames=("tool", "domain", "error_class"),
 )
+agent_tool_unregistered_total = Counter(
+    "agent_tool_unregistered_total",
+    "未注册 tool_key 调用次数（策略注册表与 MCP 动态快照均无该 key，"
+    "get_policy 走 DEFAULT_POLICY 兜底；探针/测试流量不计）——治理对账漂移信号",
+    labelnames=("tool", "domain"),
+)
 # 旅游域 Failure Policy 结局指标（2026-10-07 Tool 失败降级改造）：调用/失败/
 # 重试/熔断由 agent_tool_* 族按 domain=travel 覆盖，这里只补工作流结局维度。
 # 标签全部受控词表（tool 名 / provider 常量），禁 conversation_id 等高基数。

@@ -29,13 +29,14 @@ from backend.shared.logger import logger
 from backend.core.tool_runtime.metrics import (
     record_circuit_open,
     record_tool_result,
+    record_tool_unregistered,
 )
 from backend.core.tool_runtime.models import (
     OperationType,
     ToolResult,
     ToolStatus,
 )
-from backend.core.tool_runtime.policy import DEFAULT_POLICY, get_policy
+from backend.core.tool_runtime.policy import DEFAULT_POLICY, get_policy, is_registered
 from backend.core.tool_runtime.retry import should_retry, sleep_before_retry
 from backend.core.tool_runtime.tracing import finish_tool_span, start_tool_span
 
@@ -124,6 +125,13 @@ class SafeToolExecutor:
             pol = pol.for_write()
 
         domain = domain or tool_key.split(".", 1)[0]
+
+        # G2 治理对账：未注册 tool_key（get_policy 已兜底 DEFAULT_POLICY 继续
+        # 执行——不拒绝，只记账）。正常链路的 capability 全部来自 manifest /
+        # lock / MCP 动态注册，出现未注册调用 = 路由漂移或漏登记，告警规则
+        # ToolUnregisteredCallDetected 消费该指标。探针/测试前缀在记账函数内过滤。
+        if not is_registered(tool_key):
+            record_tool_unregistered(tool_key, domain)
 
         def _emit(event: str, info: dict | None = None) -> None:
             if on_event is not None:

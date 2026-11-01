@@ -8,6 +8,7 @@
 | --- | --- |
 | Python 指标定义与埋点 | `backend/observability/metrics.py`、对应业务模块 |
 | Prometheus 抓取和记录/告警规则 | `docker/prometheus.yml`、`docker/prometheus-alert-rules.yml` |
+| 告警规则触发验证（promtool unit test，可复现） | `docker/prometheus-alert-rules.test.yml` |
 | Dashboard Git 资产 | `docker/grafana/provisioning/dashboards/` |
 | 自动生成工具 | `docker/grafana/gen_dashboards.py` |
 | Grafana 连接/Provisioning | `docker/grafana/provisioning/datasources/`、`dashboards.yml` |
