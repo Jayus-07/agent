@@ -142,10 +142,12 @@
 
 ## 8. 会话交接（启动清单）
 
-1. 核对：`git -C "D:\Program Files\workplace\agent-gov" fetch && git log --oneline -3 origin/main`；worktree 当前停靠 `docs/cap-gov-owner-confirm`（已合并，切新分支 `feat/cs-eval-p1` 自 origin/main）；工作树干净（上一会话收尾时确认）
-2. 通读本 TASK + PROGRESS.md；探针脚本 `scripts/cs_dataset_probe.py` 先跑一遍复现基线（数字应与 §1.1 一致，偏差 >2% 先查数据集/链路是否被并行会话改动）
-3. P1 开工：探针 → pytest 门禁 + v2/ 分片定案 + README 补行；每期按 §5 流程
-4. 暂停时按仓库规范记录 PAUSED 现场（HEAD/未提交/测试证据/下一步）；本地已合并分支（feat/cap-gov-g1~g6、docs/cap-gov-* 共 9 个）可清理但非必须——下会话自行决定，勿动其他会话分支（chain/codex/*/docs/ci-debt-* 等）
+> P1–P5 已全部完成（PROGRESS 2026-11-02 各条）。**下一会话从 §10 运营收尾 P6 开始**，启动步骤：
+
+1. 核对：`git -C "D:\Program Files\workplace\agent-gov" fetch && git log --oneline -3 origin/main`；worktree 停靠 docs/cs-eval-p4p5-wrapup（已合并、干净），切新分支自 origin/main（P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8`；P6 为运营执行 + PROGRESS 回填走 docs PR）
+2. 通读本 TASK（重点 §10）+ PROGRESS.md 最新日志；P4 的身份链与治理链经验在 PROGRESS 2026-11-02（四）——JWT 签发 + agent-auth-redis 会话键 + X-API-Key，经 :9080 网关
+3. P6 开工：先核实 cs live 的 evaluation_mode 路由 → 20 条小批实测成本 → ≤10 元分批全量 → 抽查对账；P7/P8 按 §10 细则独立 PR
+4. 暂停时按仓库规范记录 PAUSED 现场（HEAD/未提交/测试证据/下一步）；已合并历史分支可清理但非必须——勿动其他会话分支
 
 ## 9. 决策点与风险
 
@@ -156,3 +158,49 @@
 | 规则层改动的回归风险 | 全部经 cs-gate fail-closed 门回放护航；不通过即拒绝写盘（机制已存在） |
 | 并行会话干扰 | travel-v2/ci-debt 在途：动共享容器/库前核查归属；评测平台表写入前确认无他人同域数据集操作 |
 | 基线漂移 | P1 门禁阈值防退化；并行会话若改路由链路导致基线变化，以「阈值更新 + 依据」走 PR 而非静默放宽 |
+
+## 10. 运营收尾阶段（P6–P8，2026-11-02 用户拍板立项）
+
+> 背景：P1–P5 已完成（见 PROGRESS 2026-11-02 各条）。用户当日拍板三件事 + 询问上线运营缺口。
+> **结论口径：本阶段 P6–P8 完成 = 评测运营线可上线运营（受控试用）；全量公开投产仍差容量压测、安全渗透测试、资金真实后端范围决策（均不在本任务范围，见客服域投产检查清单）。**
+
+| 项 | 内容 | 成本 | 依赖 |
+|---|---|---|---|
+| P6 | P4 live 跑批执行（**预算 10 元，用户 2026-11-02 拍板**）+ 管理端发起/历史展示核实收口 | 半天 | 无 |
+| P7 | 评测平台 case 归档端点（处理 P4 竞态产生的约 400 个重复 approved case 残留） | 1 天 | 无 |
+| P8 | 持久化 intake（unanswered_questions → 候选，替代只认内存 trace 窗口的 from-trace） | 1 天 | 无 |
+
+### P6 live 跑批（预算护栏优先）
+
+- 已核实（2026-11-02）：管理端 `frontend-admin /evaluations/center` RunsTab 有「发起评测」表单（数据集/评测方式/被测配置，**仅 super_admin 可见可发起**）与运行列表（来源/方式/进度）+ 环境指纹卡——**发起与历史展示均已有 UI**，live 跑批可直接管理端发起或 API `POST /v2/runs`。
+- 步骤：①核实 cs 的 live `evaluation_mode` 取值（`EvalRunCreate` 枚举为 offline/semantic/ragas/self+ragas，**无单独 self**——先查 `create_eval_run` 对非 rag 模块在各 mode 下的 runner 路由，确认 cs live 实际消费哪个 mode 与 `_run_cs(live=True)` 的衔接）；②先跑 **20 条小批**（suite case_selection 截取或临时 suite）实测单条 token/费用（查 `llm_usage` 按请求过滤），推算全量成本；③全量 ≤10 元分批执行，**每批后核对累计费用，超 8 元即中止复盘**；④run 完成后抽查 ≥10 条结果与 DB/管理端一致，验证 allowed_facts/forbidden_facts live 断言生效（TASK §4 P4 验收项）。
+- 测试：无新代码（运营执行）；结果抽查留档 PROGRESS。
+- 验收：管理端可见 live run 与结果；实际花费 ≤10 元且有 llm_usage 对账；基线数字与 live 抽查一致。
+
+### P7 case 归档端点
+
+- 背景：评测平台无 case DELETE/归档端点；P4 脚本重跑竞态产生约 400 个重复 approved case（内容重复、不可见于已发布 version，但占据 case 池与审计面）。
+- 改动：`POST /v2/cases/{case_id}/archive`（软归档，`eval_cases.lifecycle_status` 置 archived 值——先核对该列 CHECK 约束值域）；repository 层 + 路由 + 权限（admin）+ 审计事件（复用 `_record_audit`，action=`case.archived`）；**已进入 published dataset version 的 case 拒绝归档**（保护锁版引用）；幂等（重复归档 200/409 明确化）。
+- 测试：API 测试（归档成功/重复归档/权限拒绝/已发布引用拒绝/审计写入断言，放 backend/tests/evaluation 或 evaluation_v2 对应文件）；评测平台契约回归（evaluation-v2 workflow 消费面）。
+- 执行：对 P4 重复 case 清单（按 payload 的 source_ref.case_id 分组，非最新 revision 的多余 case_id）逐个归档；管理端 case 池复核无残留可见。
+- 验收：CI 显式全绿；归档后列表不可见；审计留痕；PROGRESS 回填。
+
+### P8 持久化 intake
+
+- 背景：`POST /v2/intake/from-trace` 只认进程内 trace collector 最近 200 条——`ai.unanswered_questions`（当前 29 条，均为测试残留）等持久化坏例跨重启无法经 trace 入口回流；现走 manual candidate 通道（SOP 已入 evaluation-governance.md §5）。
+- 改动：`POST /v2/intake/from-unanswered`（body：`entry_id` + `idempotency_key`）——读 `ai.unanswered_questions` 行（question/detail）→ 复用 `sanitize_candidate_payload` → `create_candidate`（source_kind 用现有枚举，metadata.source=unanswered_question、source_ref.origin=entry id）→ 幂等（idempotency_key + `count_duplicate_queries` 查重提示）；admin 权限；可选批量参数（`--limit` 按 question_hash 聚合 Top N）不做也行（最小充分，SOP 循环调用单条即可）。
+- 测试：API 测试（创建成功/404/幂等重放/脱敏断言）；契约回归。
+- 执行：真实坏例一条走通 intake → review → （approve 则进数据集下一 version 或 reject 留痕）；更新 evaluation-governance.md 收录段（替换 manual 通道口径）。
+- 验收：CI 全绿；SOP 与实现一致；PROGRESS 回填。
+
+### 上线运营巡检（P8 验收时一并核对）
+
+- 客服域投产检查清单（PROGRESS 末尾）逐项刷新状态：frontend-cs 生产构建验证（纯验证动作）、渠道决策落档（customer-service.md 渠道段——真实渠道=web 已确认待落档）、资金开关记录（保持 disabled 即不阻塞 web 首期）、共享库测试残留清理（govtest/p7v- 前缀数据确认非活跃后清）。
+- 压测与安全渗透：公开全量投产前必做，不阻塞受控试用——挂账即可。
+
+### 阶段执行约定（沿用 §5/§8）
+
+- Worktree：`D:\Program Files\workplace\agent-gov` 复用（停靠 docs/cs-eval-p4p5-wrapup 已合并、干净；新分支自最新 main）。分支：P6 运营可无分支（PROGRESS 回填走 docs PR）；P7=`feat/cs-eval-p7`、P8=`feat/cs-eval-p8` 独立 PR。
+- 身份链（P4 已验证）：user:279（local_super_admin）JWT 签发 + **agent-auth-redis** 容器会话键（非宿主 6379）+ `X-API-Key` 头，经 :9080 网关；一次性脚本放 d:/tmp 不入库，若需复用则先提炼入库再使用。
+- 顺序：P6（运营先行，验证 live 链路与花费）→ P7 → P8；三项互不依赖可并行会话分派。
+- 合并前显式逐项确认全部 CI 结论；PROGRESS 每项完成后回填。
