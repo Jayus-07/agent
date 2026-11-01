@@ -48,6 +48,10 @@ def test_runtime_mode_never_builds_bm25(monkeypatch):
     pipeline.doc_db = object()
 
     class ReadOnlyBM25Store:
+        # BM25Store 现构造签名带 index_dir（BM25Store(index_dir)），stub 接受 *args
+        def __init__(self, *args, **kwargs):
+            pass
+
         def load(self, k):
             return None
 
@@ -155,7 +159,7 @@ class TestReadOnlySnapshotSelfHeal:
             {"get": lambda self: {
                 "ids": ["c1"], "documents": ["text"], "metadatas": [{}]}},
         )()
-        monkeypatch.setattr(module, "BM25Store", lambda: store)
+        monkeypatch.setattr(module, "BM25Store", lambda *a, **k: store)
         mismatch = {"v": True}
         store.mismatch = mismatch
         monkeypatch.setattr(
@@ -254,7 +258,7 @@ class TestColdStartEmptyKB:
             "Vector", (),
             {"get": lambda self: {"ids": [], "documents": [], "metadatas": []}},
         )()
-        monkeypatch.setattr(module, "BM25Store", lambda: store)
+        monkeypatch.setattr(module, "BM25Store", lambda *a, **k: store)
         return pipeline
 
     def test_empty_vectors_and_empty_snapshot_boots_with_empty_index(

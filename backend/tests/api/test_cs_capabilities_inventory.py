@@ -26,19 +26,10 @@ _PREFIX = "p9g-"
 
 
 def _pg():
-    env = {}
-    for line in open(".env", encoding="utf-8"):
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
-    return psycopg2.connect(
-        host=env.get("PGHOST", "localhost"),
-        port=int(env.get("PGPORT", "5433")),
-        dbname=env.get("PGDATABASE", "agent_memory"),
-        user=env.get("PGUSER", "postgres"),
-        password=env.get("PGPASSWORD", ""),
-    )
+    # CI 无 .env（批十/十二同款 .env 文件依赖）：统一 MEMORY_DB_CONFIG 口径
+    from backend.config.database import MEMORY_DB_CONFIG
+
+    return psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=2)
 
 
 def _cleanup():

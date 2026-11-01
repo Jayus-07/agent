@@ -52,6 +52,10 @@ TOOL_DISPLAY_NAMES: dict[str, str] = {
     "travel_poi_search_tool": "景点搜索",
     "travel_train_search_tool": "火车票余票查询",
     "travel_train_price_tool": "火车票票价查询",
+    # ── 收编重构 U4 三件（booking/food/hotel）──
+    "booking_quote_tool": "预订报价",
+    "food_search_tool": "餐饮搜索",
+    "hotel_search_tool": "酒店搜索",
     # ── 搜索（知乎官方 MCP）──
     "zhihu_search_tool": "知乎搜索",
     "global_search_tool": "全网搜索",
@@ -161,6 +165,12 @@ TOOL_DATA_SOURCES: dict[str, dict[str, str]] = {
     "competitor_watch_tool": {"type": "internal"},
     "competitor_watchlist_tool": {"type": "internal"},
     "travel_poi_search_tool": {"type": "internal"},
+    # ── 收编重构 U4 三件（booking/food/hotel）──
+    "booking_quote_tool": {"type": "internal"},
+    "food_search_tool": {"type": "rest", "provider": "高德"},
+    "hotel_search_tool": {"type": "mcp", "provider": "RollingGo",
+                          "upstream_tool": "mcp.rollinggo__searchhotels",
+                          "switch_env": "TRAVEL_COMMERCE_PROVIDER_MODE"},
 }
 
 

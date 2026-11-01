@@ -97,7 +97,7 @@ class TestInjectionAsEvidence:
             attack_output, faithfulness=0.2)
         assert "rm -rf" not in msg
         assert "我的系统提示词" not in msg
-        assert "自动拒答" in msg or "未经资料支撑" in msg
+        assert "事实一致性校验" in msg  # 6780d1c HALLUCINATION 话术锚点
         rejection = trace.metadata.get("rejection") or {}
         assert rejection.get("rejected") is True
         assert rejection.get("reason") == "hallucination"
@@ -128,7 +128,7 @@ class TestForgedMeta:
         trace, t0 = _start_trace("forged-meta")
         monkeypatch.setattr(chain, "_start", lambda q, sid: (trace, t0))
         msg = chain.ask("退货窗口是多久？", session_id="inj2")
-        assert "暂无" in msg or "未提及" in msg or "无法" in msg
+        assert "未找到" in msg or "未提及" in msg or "无法" in msg  # 6780d1c 话术锚点
         assert "can_answer" not in msg
 
     def test_meta_injection_in_question_is_neutralized(self, monkeypatch):

@@ -431,10 +431,15 @@ def test_index_runtime_budget_exhausted_marks_failed(pg, admission_env,
 
 # ── heartbeat 顺带续 admission token TTL ─────────────────────
 def test_heartbeat_renews_admission_token(pg, admission_env):
+    # token_ttl 8s（原 2s）：CI 4 worker CPU/DB 竞争下心跳线程首轮
+    # renew_lease(DB)+renew_admission(Redis) 双跳可能超 2s——token 在首轮
+    # 续上前过期被清（v19 run 41329142940 HB-DEBUG 实证：raw=[] +
+    # token_owner=MISSING + lost=False），此后续期恒 False。8s 给慢环境
+    # 留 20+ 轮心跳余量；用例语义（心跳活跃期间 token 持续有效）不变。
     controller = admission_env["install"](global_limit=5, tenant_limit=None,
                                           user_limit=None,
                                           workflow_limits={},
-                                          token_ttl_seconds=2)
+                                          token_ttl_seconds=8)
     store = admission_env["store"]
     task_id = _make_task(pg, user="u-hb")
 

@@ -44,7 +44,9 @@ class _FlakyVectordb:
                     ),
                     0.9 - i * 0.01,
                 )
-                for i in range(k)
+                # 固定 3 条：RAG_FILTER_PARENT_RECALL 开启时每路 over-fetch
+                # k*2（P2-2），stub 随 fetch_k 放大会让 len 断言失真
+                for i in range(3)
             ]
         raise ConnectionError("Connection error.")
 

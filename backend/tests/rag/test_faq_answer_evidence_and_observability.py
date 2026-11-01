@@ -124,7 +124,10 @@ def test_custom_retriever_keeps_parent_when_filter_disabled(monkeypatch):
 
     monkeypatch.setattr(rag_cfg, "RAG_FILTER_PARENT_RECALL", False)
     parent = Document(page_content="问题列表", metadata={"chunk_id": "p1",
-                                                        "granularity": "parent"})
+                                                        "granularity": "parent",
+                                                        # ReviewFilter 对缺 doc_id
+                                                        # 结果 fail-closed（对客不可见）
+                                                        "doc_id": "d1"})
     db = _FakeVectorDB([(parent, 0.98)])
     out = CustomRetriever(db).retrieve("q", k=2)
     assert [d.metadata["chunk_id"] for d in out] == ["p1"]

@@ -31,7 +31,11 @@ def worker_env(data):
     # embedding 全挂，且不能在坏状态上叠测。fresh 残留属并行活跃会话，守卫
     # 自带时间阈值不会误杀；孤儿绑定说明上次清理被打断，fail-fast 交人工。
     orphan = orphan_binding_warning()
-    if orphan:
+    # 「缺少 embedding 角色行」在 CI 隔离库（无运行栈写入）是正常初始态：
+    # 本 fixture 会 INSERT 绑定并在 finally 恢复（old_role=None 路径），
+    # 不是崩溃残留——残留的形态是「绑定指向不存在/测试残留的模型」。
+    # v19 run 41329142940 CI 库无 seed 行 6 例被误拦实证。
+    if orphan and "缺少 embedding 角色行" not in orphan:
         pytest.fail(f"embedding 绑定处于残留状态，先人工修复再跑本验收：{orphan}")
     cleanup_residue()
     state = SimpleNamespace(items=0, fail_after=None)

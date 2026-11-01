@@ -15,6 +15,9 @@ from backend.rag.guardrails.nli_llm import LLMVerdict
 
 
 def _patch_pipeline(monkeypatch, verdict):
+    # CI 无 .env 时 NLI_USE_LLM 缺省 false（唯一校验路径关闭，check_faithfulness
+    # 如实返回 enabled=False）；本组用例验证 LLM-Judge 行为本身，须显式开闸
+    monkeypatch.setattr(scorer, "NLI_USE_LLM", True)
     monkeypatch.setattr(scorer, "extract_claims",
                         lambda a: ["claim1", "claim2", "claim3"])
     monkeypatch.setattr(scorer, "filter_claims", lambda c: (c, []))

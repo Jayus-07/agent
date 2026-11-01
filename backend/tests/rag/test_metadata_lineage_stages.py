@@ -51,7 +51,8 @@ def test_question_generation_has_its_own_role_and_step(monkeypatch):
     recorder = ProcessingRunRecorder(context, repository)
     stage = MetadataStage(registry=None, embedding=None, department="qa")
 
-    questions, usage = asyncio.run(
+    # 契约扩为三元组：(questions, usage, generation_meta)
+    questions, usage, _generation_meta = asyncio.run(
         stage._generate_questions_with_lineage(
             ["正文一", "正文二"], "policy", recorder,
         )

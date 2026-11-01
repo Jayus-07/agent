@@ -62,6 +62,11 @@ def _make_tracked(inner=None, *, model="qwen3.7-text-embedding", provider="cloud
     tracked._config_signature = _TEST_SIGNATURE
     tracked._model_name = model
     tracked._provider = provider
+    # d886f7c（统一模型切换预检）起的构造器新字段：_refresh_if_changed 与
+    # 指纹/预算路径直接读这些属性，stub 必须补齐
+    tracked._fixed_binding = None
+    tracked._provider_id = provider
+    tracked._index_fingerprint = ""
     tracked.embed_batch_size = 10
     if not keep_record:
         tracked._record = lambda *a, **k: None  # type: ignore[assignment]

@@ -170,6 +170,11 @@ def test_remote_review_routes_delegate_to_rag_service(monkeypatch, route_name, a
         def can_manage_row(self, _doc):
             return True, ""
 
+        # 45cdbdd（租户隔离收口）起 approve/reject 的审计路径读
+        # authz.principal.user_id/tenant_id，stub 需带身份
+        from types import SimpleNamespace as _NS
+        principal = _NS(user_id="tester", tenant_id="tenant-p7r", department="")
+
     class _Registry:
         def get_by_doc_id(self, _doc_id):
             return {"doc_id": _doc_id, "status": "pending_review"}

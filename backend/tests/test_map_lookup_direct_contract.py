@@ -19,6 +19,24 @@ import pytest
 from backend.skills.map.skill import MapLookupSkill
 
 
+@pytest.fixture(autouse=True)
+def _reset_tool_budget():
+    """清主线程 ContextVar 残留的请求级 Tool 预算（坑位 23 家族）。
+
+    RequestContext.bind() 绑定 RequestToolBudget 后主线程裸跑的用例共享
+    同一 context——CI 全量中前序文件（test_llm_*/test_error_protocol 等用
+    真 trace bind）的预算残留会让本文件第 4 个参数化用例起触发
+    per_capability_limit=3 的 tool_call_budget_exhausted（v19 run
+    41329142940 实证，本地单跑无 bind 不可复现）。
+    """
+    from backend.core.tool_governance.budget import reset_tool_budget
+
+    reset_tool_budget()
+    yield
+    reset_tool_budget()
+
+
+
 def _state(step_id="step_map", capability="map.lookup", params=None):
     return {
         "current_step_id": step_id,

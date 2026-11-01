@@ -220,6 +220,13 @@ def check_faithfulness(
 
     # 3. NLI 验证（2026-08-11：支持 LLM-as-Judge 整体评估，2026-08-12）
     # 注意：NLI_USE_LLM 从 backend.config 导入（确保 load_dotenv 已触发）
+    if not NLI_USE_LLM:
+        # mDeBERTa 路径移除后 LLM-Judge 是唯一校验路径；开关关闭（CI 缺省
+        # false）= 校验未启用，如实上报 enabled=False 交调用方走跳过语义。
+        # 不得带着未定义的 nli_results 掉进下方 UnboundLocalError
+        # （v19 run 41329142940 CI 缺省口径 3 例实证）。
+        logger.info("[Faithfulness] NLI_USE_LLM=false，校验未启用，跳过")
+        return FaithfulnessResult(enabled=False)
     if NLI_USE_LLM:
         # 路径 A: LLM-as-Judge（整体评估，1 次调用，5-10s）
         verdict = evaluate_with_llm(answer, context_docs)
@@ -264,10 +271,11 @@ def check_faithfulness(
     # unsupported_claims 构成时恒为 0 —— 判官给 0.95 但列了 1 条
     # unsupported 也会被算成 0.00 触发 hallucination 误拒答
     # （MiniMax 切换后实测暴露；qwen 时代 unsupported 常为空未触发）。
-    if NLI_USE_LLM:
-        score = verdict.score
-    else:
-        score = supported / len(nli_results) if nli_results else 1.0
+    # f18 口径：LLM-Judge 已是唯一路径（上方 NLI_USE_LLM=false 已提前返回），
+    # 直接用判官对整体支撑度的 0-1 评估，不走 supported/len(nli_results)
+    # ——旧公式在 nli_results 仅由 unsupported_claims 构成时恒为 0，
+    # 判官给 0.95 但列了 1 条 unsupported 也会被算成 0.00 触发误拒答。
+    score = verdict.score
 
     # P2: 50% 阈值保护 — NLI 误判保护
     # 当 unsupported 比例超过阈值（默认 50%）时，跳过 rewrite，保留原答案

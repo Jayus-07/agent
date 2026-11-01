@@ -66,8 +66,10 @@ def test_legal_chunks_keep_one_article_boundary_and_complete_coverage():
     leaves = [chunk for chunk in chunks if chunk.metadata["granularity"] == "leaf"]
 
     assert len(leaves) == 3
+    # 1458070 起 section_title 携带条文主题词（与 StructureAnalyzer 拆分
+    # 行为同口径，见上方 test_structure_analyzer_splits_inline_policy_clauses）
     assert [chunk.metadata["section_title"] for chunk in leaves] == [
-        "第一条", "第二条", "第三条",
+        "第一条 适用范围", "第二条 管理原则", "第三条 施行日期",
     ]
     assert coverage_audit(normalized, chunks)["uncovered_count"] == 0
     assert audit_legal_chunk_boundaries(

@@ -198,8 +198,11 @@ class TestHybridWeightedRRF:
         assert merged[0].metadata["chunk_id"] == "cb", \
             "exact_id 加权后 BM25 命中文档应排第一"
         scores = {d.metadata["chunk_id"]: d.metadata["rrf_score"] for d in merged}
-        assert scores["cb"] == pytest.approx(1.5 / (60 + 1), abs=1e-4)
-        assert scores["cv"] == pytest.approx(0.85 / (60 + 1), abs=1e-4)
+        # 0095621：标识符加成基准 = 最强单路第 1 名等效分 max(vw,bw,1)/rrf_k，
+        # bm25_doc 原文含标识符 token → cb 额外拿 1.5/60 加成
+        assert scores["cb"] == pytest.approx(
+            1.5 / (60 + 1) + 1.5 / 60, abs=1e-4), scores
+        assert scores["cv"] == pytest.approx(0.85 / (60 + 1), abs=1e-4), scores
 
     def test_kill_switch_keeps_neutral_rrf_balance(self, monkeypatch):
         """kill-switch 关闭：中性权重下同 rank 双侧命中 RRF 分数相等
@@ -219,8 +222,11 @@ class TestHybridWeightedRRF:
 
         merged = hybrid_retrieve("报销单编号 XC-HT-2025-041 的上限是多少", v, b, k=5)
         scores = {d.metadata["chunk_id"]: d.metadata["rrf_score"] for d in merged}
-        assert scores["cv"] == pytest.approx(scores["cb"])
-        assert scores["cv"] == pytest.approx(1 / (60 + 1), abs=1e-4)
+        # kill-switch 只关路由加权（vw=bw=1.0）；0095621 起标识符加成是
+        # 融合层特性、不受路由开关管辖——cb 原文含 token 仍拿 1/60 加成，
+        # 两侧不再相等（该差异正是加成的预期效果）
+        assert scores["cv"] == pytest.approx(1 / (60 + 1), abs=1e-4), scores
+        assert scores["cb"] == pytest.approx(1 / (60 + 1) + 1.0 / 60, abs=1e-4), scores
 
     def test_metrics_and_trace_carry_query_type(self):
         """可观测：span metrics 带 query_type，trace 事件带 query_route。"""
