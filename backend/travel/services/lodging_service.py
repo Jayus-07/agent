@@ -84,6 +84,7 @@ def search_lodging(
             continue
         options.append({
             "selection_id": offer["selection_id"],
+            "merchant_id": offer["property_id"],
             "name": offer["property_name"],
             "city": offer["city"],
             "address": offer["address"],
@@ -100,6 +101,9 @@ def search_lodging(
             "rating": None,
             "booking_status": "not_booked",
             "deep_link": offer["booking_deep_link"],
+            # 溯源与观测时点（自动优选建议 → 前端选入快照构参用；缺失不补）
+            "source": offer.get("provider") or out.get("source") or "-",
+            "observed_at": offer.get("price_observed_at"),
         })
     options.sort(
         key=lambda o: (o["nightly_price_cny"] is None,

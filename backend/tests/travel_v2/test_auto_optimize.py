@@ -32,12 +32,16 @@ def test_suggestions_structure_snapshot(monkeypatch):
             "status": "success", "source": "amap",
             "disclosure": "商户评分来自高德",
             "merchants": [
-                {"selection_id": "amap:a", "name": "临家闽南菜", "rating": 4.7,
-                 "avg_cost_cny": 80, "address": "思明区"},
+                {"selection_id": "amap:a", "merchant_id": "B001", "name": "临家闽南菜",
+                 "rating": 4.7, "avg_cost_cny": 80, "address": "思明区",
+                 "lat": 24.48, "lng": 118.12, "source": "amap",
+                 "queried_at": "2026-11-01T08:00:00+00:00"},
                 {"selection_id": "amap:b", "name": "无名小店", "rating": None,
                  "avg_cost_cny": None, "address": ""},
-                {"selection_id": "amap:c", "name": "乌糖沙茶面", "rating": 4.5,
-                 "avg_cost_cny": 30, "address": "思明区"},
+                {"selection_id": "amap:c", "merchant_id": "B003", "name": "乌糖沙茶面",
+                 "rating": 4.5, "avg_cost_cny": 30, "address": "思明区",
+                 "lat": 24.47, "lng": 118.10, "source": "amap",
+                 "queried_at": "2026-11-01T08:00:00+00:00"},
             ],
         })
     monkeypatch.setattr(
@@ -45,12 +49,14 @@ def test_suggestions_structure_snapshot(monkeypatch):
         lambda *, destination, check_in, check_out: {
             "status": "success", "disclosure": "测试数据披露",
             "options": [
-                {"selection_id": "ho:1", "name": "海景酒店",
+                {"selection_id": "ho:1", "merchant_id": "P1", "name": "海景酒店",
                  "nightly_price_cny": 388.0, "tier": "mid",
-                 "availability": "available", "booking_status": "not_booked"},
+                 "availability": "available", "booking_status": "not_booked",
+                 "source": "rollinggo:mcp", "observed_at": "2026-11-01T08:00:00+00:00"},
                 {"selection_id": "ho:2", "name": "青旅",
                  "nightly_price_cny": 120.0, "tier": "low",
-                 "availability": "limited", "booking_status": "not_booked"},
+                 "availability": "limited", "booking_status": "not_booked",
+                 "source": "fake:commerce", "observed_at": "2026-11-01T08:00:00+00:00"},
             ],
         })
 
@@ -61,9 +67,17 @@ def test_suggestions_structure_snapshot(monkeypatch):
     meals = out["suggestions"]["meals"]
     assert [m["name"] for m in meals] == ["临家闽南菜", "乌糖沙茶面", "无名小店"]
     assert meals[0]["reason"] == "评分最高"
+    # F04 选入快照契约：建议行自带构 MerchantSnapshotV2 的全套字段（缺失不补）
+    assert meals[0]["merchant_id"] == "B001"
+    assert meals[0]["source"] == "amap"
+    assert meals[0]["observed_at"] == "2026-11-01T08:00:00+00:00"
+    assert (meals[0]["lat"] is None) == (meals[0]["lng"] is None)
     lodgings = out["suggestions"]["lodgings"]
     assert [l["name"] for l in lodgings] == ["青旅", "海景酒店"]
     assert all(l["booking_status"] == "not_booked" for l in lodgings)
+    assert lodgings[1]["merchant_id"] == "P1"
+    assert lodgings[1]["source"] == "rollinggo:mcp"
+    assert lodgings[1]["check_in"] is None or isinstance(lodgings[1]["check_in"], str)
     # 建议不是已选：apply 语义提示 + 零写入字段
     assert "selections" in out["apply_hint"]
     assert set(out["suggestions"].keys()) == {"meals", "lodgings"}
