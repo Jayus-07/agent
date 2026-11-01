@@ -363,3 +363,32 @@ v1 108 → v2 61 → v3 20 → v5 15（api 13 首曝 + p5/collapse）→ v14 54+
 ### 收敛曲线（真实口径）
 
 v1 108 → v2 61 → v3 20 → v5 15 → v14 54+api（backend-root 首曝）→ v16 10 绿 + travel 1 + 三长套 50min 杀 → v17/v18 三长套 150min 杀（rag crash 实锤 + api/br 零输出 hang）→ 批十五收官（短套 10/13 已稳定全绿）。
+
+---
+
+# 批十五会话（2026-11-01 晚 ~ 2026-11-02）：三长套根除 + 全绿 COMPLETED
+
+## 收敛曲线（最终版，真实全量口径）
+
+**v1 108（run 40948443665）→ v2 61 → v3 20 → v5 15 → v14 54+（backend-root 首曝）→ v19 130（三长套首跑完首曝）→ v20 13 → v21 3 → v22 4 → v23 2 → v24 1 → v25 3 → v26 3 → v27 2 → v28 0（run 41358679667 = run success，13/13 + summary 绿）。**
+
+修复节奏 PR：#225/#231/#233/#234/#237/#239/#242/#243/#245/#247（内容见 TASK.md 收官章节表）。
+
+## 坑位（26–30，续接 1–25）
+
+26. **pytest.ini 的 timeout_method=thread 是「超时=杀整进程」语义**：thread watchdog 对卡在纯 Python 重计算的用例兜底 os._exit(1)，execnet writer 线程先死、栈输出来不及进管道——xdist 只见 EOF（node down: Not properly terminated）。诊断三件套（PYTEST_XDIAG=1）是这类「无现场崩溃」的唯一破案手段：watchdog os._exit 前的 faulthandler 同步栈落盘 + 心跳（覆盖 GIL 死锁/收集期卡死两类 timeout 够不着的停摆）+ START/DONE 打点。
+27. **重用例必须有如实的 per-test 预算**：全局 150/300s 是按常规用例标定的；分钟级固有成本（大文档全链 parse/OCR）要么显式排除（UF-15-01 先例：排除名单 assert 防漂移）要么 @pytest.mark.timeout 如实标注（非 skip、断言不减）。「本地能过」不代表 CI 能过——本地 .env 的 OCR 缓存/大预算/运行栈建表全是红利（坑位 20/25 反复变体）。
+28. **xdist 下所有「整库/整进程级清理」必须按 worker 分片**：flushdb 跨 worker 互删（heartbeat 三轮恒红真根因）；db 号 15-idx 分片后互不可见。同类：drop_pgtest_tables 的库清单必须覆盖全部「表名烘焙自 worker_scoped_prefix」的存储配置（专用 PGDATABASE 键族漏一个就掉兼容库永不清）。
+29. **模块级可变对象（信号量/单例/快照）的回调闭包要绑定创建时实例**：done_callback 运行时查模块属性，测试隔离换新对象后旧调用向外来的新对象 release（BoundedSemaphore released too many times）；进程内快照（mcp/bundle store）跨进程失真——对账类读路径先 refresh 再读（产品正确性改进，非测试妥协）。
+30. **「每用例一池」的连接泄漏会以多点同时卡 DDL 的形态爆发**：build_task_checkpointer 无单例 → backend-root 全量泄漏至 PG max_connections 耗尽 → 三 worker 同卡 setup() 150s 被 watchdog 杀 → node down 连环 → xdist loadscope INTERNALERROR（gw6 KeyError）。共享资源获取一律惰性单例 + 锁。
+
+## 诊断方法论沉淀（本轮实证有效）
+
+- **一轮全量 = 一份决定性证据**：诊断断言/打点先行（坑位 18），v24 键空间、v25 悬空明细、v27 三份卡死栈，每轮 dispatch 都换来根因闭环，没有一轮盲修。
+- **local-vs-CI 差异优先穷举环境面**（坑位 7/20/25 持续有效）：.env 红利（OCR 缓存/预算/表）、专用库键缺省、运行栈建表、worker 分片——本地复现不了时先 diff 环境，再谈时序。
+- **间歇红的三个高频源**：跨 worker 共享状态（flushdb/ContextVar/信号量/快照）、上一轮 dispatch 的库残留（stale 阈值保护挡住 CI 自愈）、经验耗时下限（本机标定值在 CI 擦线）。
+
+## 移交产品域（非 CI 债）
+
+- progit_en_501p 全预算 OCR 下仍有 4 个 PDF 解析硬异常（纯图页无文本产出 / parser_pdf_source_text_audit_gap / pdf_page_coverage）——修 PDF 解析器属产品课题（#225 PR 描述有详单）。
+- capability-governance 的 govtest 残留行创建方未补清理（本会话已手工清本地主栈库 2 连接 + 10 工具行；若治理测试还会产生同款残留需在该测试补 finally）。
