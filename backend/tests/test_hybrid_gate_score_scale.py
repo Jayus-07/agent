@@ -28,9 +28,11 @@ class _StubDecision:
 def _make_docs(score_field, score_value, n=3):
     from langchain_core.documents import Document
 
+    # 1b3517d 起实体覆盖校验入 Gate：文档内容必须携带查询实体，否则
+    # no_evidence 先于分数阈值生效——本文件只锁分数量纲语义，正文补实体
     return [
         Document(
-            page_content=f"内容{i}",
+            page_content=f"退款审核第{i}条说明：审核时间为三个工作日",
             metadata={"chunk_id": f"c{i}", "rrf_score": 0.016,
                       **({score_field: score_value} if score_field else {})},
         )

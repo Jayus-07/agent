@@ -160,7 +160,8 @@ class TestFinalizeLlmRejection:
                 _cfg_mod.SELF_CORRECTION_ENABLED = orig
 
             assert msg is not None
-            assert "暂无" in msg or "未提及" in msg
+            # 2026-10-25 拒答话术用户语言化：NO_EVIDENCE 走 REJECT_MESSAGES
+            assert "未找到" in msg or "暂无" in msg or "未提及" in msg
             assert info is not None
             assert info.get("rejected") is True
             assert info.get("reason") == "no_evidence"

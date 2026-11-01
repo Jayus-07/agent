@@ -25,6 +25,20 @@ def _db_reachable() -> bool:
     return derive_snapshot() is not None
 
 
+def _db_has_published_prompts() -> bool:
+    """lock↔DB 一致性断言的前提：发布库可达**且存在已登记 prompt**。
+
+    CI 隔离库可建表（迁移）但无发布数据——derive_snapshot 返回空
+    snapshot 而非 None，旧「DB 不可达」skipif 失效（v14 run
+    41249581757 两例误入实跑，54 例首曝之一）。
+    """
+    if not _db_reachable():
+        return False
+    from backend.scripts.gen_prompt_contract_lock import derive_snapshot
+
+    return bool(derive_snapshot().get("prompts"))
+
+
 class TestLockStructure:
     def test_lock_file_exists_and_wellformed(self):
         assert LOCK_PATH.exists(), (
@@ -40,7 +54,8 @@ class TestLockStructure:
             assert len(entry["template_hash"]) == 16
 
 
-@pytest.mark.skipif(not _db_reachable(), reason="agent_memory PG 不可达（CI 环境）")
+@pytest.mark.skipif(not _db_has_published_prompts(),
+                    reason="agent_memory PG 无 prompt 发布数据（CI 隔离库）")
 class TestLockInSyncWithDb:
     def test_lock_matches_db(self):
         from backend.scripts.gen_prompt_contract_lock import check, derive_snapshot

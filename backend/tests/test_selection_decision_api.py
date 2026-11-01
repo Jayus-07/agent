@@ -42,7 +42,15 @@ def client(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.include_router(sd_routes.router)
-    return TestClient(app)
+    client = TestClient(app)
+    # resolve_operator_role 双通道（44d2e53 fail-closed）：CI 无 AI_INTERNAL_TOKEN
+    # 时无头请求先撞 503，按网关语义统一带通道 a 身份头（rag_upload_sync 同款）
+    client.headers.update({
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "u_op",
+        "X-User-Roles": "admin",
+    })
+    return client
 
 
 def test_post_task_creates_running_task(client):
@@ -87,7 +95,13 @@ def test_post_task_400_when_watchlist_empty(monkeypatch, tmp_path):
 
     app = FastAPI()
     app.include_router(sd_routes.router)
-    resp = TestClient(app).post("/selection-decision/tasks", json=VALID_PAYLOAD)
+    tc = TestClient(app)
+    tc.headers.update({
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "u_op",
+        "X-User-Roles": "admin",
+    })
+    resp = tc.post("/selection-decision/tasks", json=VALID_PAYLOAD)
     assert resp.status_code == 400
     assert "watchlist" in resp.json()["detail"]
     assert store.list() == []  # 未创建任务行

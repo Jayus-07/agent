@@ -158,8 +158,9 @@ class TestConfirmationRetryLimit:
 
         pending = {"proposal_text": "退款 100 元", "retry_count": 0,
                    "expires_at": "2099-01-01T00:00:00+00:00"}
-        # P1 重构后签名收敛为 4 参（state dict 由图内快照承载，不再透传）
-        cmd = _process_pending(pending, "随便说点什么", "u_retry", "s1")
+        # 签名回调为 5 参：tenant/turn 分类从图内 state 快照读取
+        cmd = _process_pending(pending, "随便说点什么", "u_retry", "s1",
+                               _cs_state())
         assert cmd.goto == "cs_reporter"
         assert "重新追问" in cmd.update["supervisor_decision"]["reason"]
 
@@ -173,7 +174,8 @@ class TestConfirmationRetryLimit:
                    "retry_count": CS_MAX_CONFIRMATION_RETRIES,
                    "expires_at": "2099-01-01T00:00:00+00:00"}
         store.save("u_retry", "s1", pending)
-        cmd = _process_pending(pending, "随便说点什么", "u_retry", "s1")
+        cmd = _process_pending(pending, "随便说点什么", "u_retry", "s1",
+                               _cs_state())
         # 超限 → 按过期处理（清 store）
         assert store.load("u_retry", "s1") is None
         assert cmd.goto == "cs_reporter"

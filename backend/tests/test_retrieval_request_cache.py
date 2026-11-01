@@ -23,6 +23,13 @@ def _isolate_context(monkeypatch):
 
     clear_context()
     monkeypatch.setattr(cfg, "ADAPTIVE_RETRIEVAL_ENABLED", False, raising=False)
+    # 审核可见性出口对未登记 doc_id fail-closed（CI 空库实证 v14 run
+    # 41249581757）。本文件主题是缓存隔离，fake 文档不落 registry——
+    # 透传该出口，审核语义由 review_filter 自有测试覆盖。
+    import backend.rag.retrieval.review_filter as rf
+
+    monkeypatch.setattr(rf, "apply_review_visibility",
+                        lambda docs, **kw: docs)
     yield
     clear_context()
 

@@ -71,6 +71,8 @@ class TestJWTEmission:
         """伪造/过期/坏 token → JWT_INVALID 事件（category 区分原因）。"""
         from backend.security import local_jwt
 
+        # 44d2e53 fail-closed：CI 无 .env，JWT 通道先撞密钥校验
+        monkeypatch.setenv("JWT_SECRET", "ci-test-secret-0123456789abcdef0123456789")
         recorded: list[tuple] = []
 
         def fake_record(event_type, *, category="", detail=None, **kw):
@@ -92,6 +94,8 @@ class TestJWTEmission:
     def test_valid_token_no_event(self, monkeypatch):
         from backend.security import local_jwt
 
+        # 44d2e53 fail-closed：CI 无 .env，issue/verify 依赖 JWT_SECRET
+        monkeypatch.setenv("JWT_SECRET", "ci-test-secret-0123456789abcdef0123456789")
         recorded: list = []
 
         def fake_record(event_type, **kw):
