@@ -103,8 +103,8 @@ class TestExistingEvaluationFrameworkIntact:
         from backend.evaluation.dataset import load_dataset
 
         cases = load_dataset("cs")
-        # v2.0 锁版（2026-09-19）：20 条 v1 平移 + 300 条 cs-v2 = 320
-        assert len(cases) == 320
+        # v2.2（2026-11-02 P3）：20 条 v1 平移 + 300 条 cs-v2 + P3 收编候选 4 条
+        assert len(cases) == 324
         assert all(c.module == "cs" for c in cases)
 
     def test_validate_dataset_accepts_cs(self):

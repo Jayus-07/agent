@@ -8,14 +8,23 @@ from __future__ import annotations
 
 from backend.customer_service.router.types import CSDomain
 
-# ── 规则意图映射（K / C / H 域用）──
+# ── 规则意图映射（K / C / H 域用；TRANSACTION/AFTER_SALES/ACCOUNT 批次补齐）──
 _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
     "KNOWLEDGE": {
-        "k_policy": ["政策", "退货政策", "保修", "条款", "退换条件"],
+        # P3（cs-evaluation-upgrade 2026-11-02）：去裸「保修」——与 k_warranty
+        # 的「保修期」单命中时按 dict 序被 k_policy 抢走（「商品保修期是多久」
+        # 误判 k_policy）；显式「保修政策」类问句仍由「政策」命中。
+        "k_policy": ["政策", "退货政策", "条款", "退换条件"],
         "k_product": ["产品", "规格", "参数", "怎么用", "使用说明"],
         "k_promotion": ["活动", "优惠", "促销", "满减", "优惠券", "折扣"],
         "k_warranty": ["保修期", "延保", "保修卡", "保修范围"],
         "k_faq": ["营业时间", "支付方式", "发票", "配送范围"],
+        # P3：配送时效问句（coarse delivery_policy 通道送 KNOWLEDGE 域，
+        # 此前 fine 无细分词表落 k_faq 兜底）
+        "t_delivery_estimate": [
+            "什么时候能发货", "多久能到", "几天到", "多久发货",
+            "几天能到", "多久能送到", "几号能送到",
+        ],
     },
     "COMPLAINT": {
         "c_complaint": ["投诉", "举报", "不满意", "差评", "说法", "维权"],
@@ -33,6 +42,11 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         ],
         # P2 商城域：余额/到账查询（vocab 出域豁免词表已含「余额」，域内命中）
         "t_balance_query": ["余额", "钱包", "到账", "退回哪里", "账户还有多少钱"],
+        # P3（cs-evaluation-upgrade 2026-11-02）：物流/时效细分——此前
+        # TRANSACTION 只有工单/退款进度/余额词表，「订单 X 的物流到哪了」
+        # 全部落域默认 t_order_status
+        "t_logistics": ["物流", "快递", "包裹", "配送"],
+        "t_delivery_estimate": ["多久能到", "几天能到", "几号能送到", "多久送到"],
     },
     # 缺陷6（2026-09-23）：AFTER_SALES 域此前只能落 DOMAIN_DEFAULT_INTENT
     # （as_refund），「我要退货」被当成退款 —— 动作类型错了，确认卡与后续
@@ -49,10 +63,22 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
             "取消订单", "我要取消", "退掉订单", "把订单取消", "订单不要了",
         ],
         "as_return": ["退货", "退换", "return"],
-        "as_exchange": ["换货", "exchange"],
-        "as_repair": ["维修", "报修", "送修", "返修"],
-        "as_quality_issue": ["质量问题", "破损", "瑕疵", "裂痕", "进水"],
+        "as_exchange": ["换货", "exchange", "换个", "换成"],
+        "as_repair": ["维修", "报修", "送修", "返修", "修一下"],
+        "as_quality_issue": [
+            "质量问题", "破损", "瑕疵", "裂痕", "进水",
+            # P3：自然表达质量诉求（「屏幕有点划痕」「质量有问题」「收到是坏的」）
+            "划痕", "质量有问题", "是坏的",
+        ],
         "as_refund": ["退款", "退钱", "refund"],
+    },
+    # P3（cs-evaluation-upgrade 2026-11-02）：ACCOUNT 域此前无细分规则，
+    # 地址/密码诉求全部落域默认 a_login_issue（动作类型错，确认卡与后续
+    # 执行全偏——同缺陷 6 的 AFTER_SALES 教训）
+    "ACCOUNT": {
+        "a_address": ["收货地址", "地址", "手机号", "换绑"],
+        "a_password": ["密码", "重置"],
+        "a_login_issue": ["登录", "验证码"],
     },
 }
 

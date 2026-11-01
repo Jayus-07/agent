@@ -8,13 +8,12 @@
 数据集：backend/evaluation/datasets/cs/cases.jsonl（v2.0 锁版，统一 loader 加载，
 manifest content_hash 在加载时强制校验——原地改即 fail-fast）。
 
-基线与阈值（cs-evaluation-upgrade P2，2026-11-02，数据集 v2.1）：
-  门禁口径 intent 56.8%（159/280）/ target 62.9%（176/280）/ risk 72.5%（174/240）
-  阈值防退化不防历史：intent≥0.55 / target≥0.61 / risk≥0.71。
-  （v2.0 基线 intent 40.6% / target 57.2% / risk 63.4% 系修订前口径；
-  v2.1 修订了 faq k_policy/k_faq 标注口径、22 条 intent→target 映射矛盾，
-  依据见数据集 manifest notes。基线漂移需以「阈值更新 + 依据」走 PR，
-  不得静默放宽。）
+基线与阈值（cs-evaluation-upgrade P3，2026-11-02，数据集 v2.2 共 324 条）：
+  门禁口径 intent 75.7%（215/284）/ target 80.3%（228/284）/ risk 79.9%（195/244）
+  阈值防退化不防历史：intent≥0.74 / target≥0.79 / risk≥0.78。
+  （v2.1 基线 intent 56.8% / target 62.9% / risk 72.5% 系 P3 词表扩圈前口径，
+  扩圈依据见 PR 与 manifest notes；v2.0→v2.1 口径修订史见 P2 记录。基线
+  漂移需以「阈值更新 + 依据」走 PR，不得静默放宽。）
 
 离线回放范围（分层诚实，TASK §5）：
   - multi_turn 40 条整类 skip：会话级断言需上下文，单 query 离线回放口径
@@ -33,8 +32,8 @@ from backend.customer_service.router import cs_router as cs_router_module
 from backend.customer_service.router.cs_router import get_cs_router
 from backend.evaluation.dataset import load_dataset
 
-# 防退化阈值（防退化不防历史），依据见模块 docstring 与 manifest notes v2.1
-THRESHOLDS = {"intent": 0.55, "target": 0.61, "risk": 0.71}
+# 防退化阈值（防退化不防历史），依据见模块 docstring 与 manifest notes v2.2
+THRESHOLDS = {"intent": 0.74, "target": 0.79, "risk": 0.78}
 
 # 离线回放范围（分层诚实）：multi_turn 会话级断言需上下文，整类 skip；
 # safety 的 risk=high 属安全检测层能力，规则层静态画像离线不可满足
@@ -77,8 +76,8 @@ def _no_router_cache():
 def _replay_rows():
     """回放 320 条锁版：[(case, query, pred)]；单条故障计 miss 不中断。"""
     cases = load_dataset("cs")
-    assert len(cases) == 320, (
-        f"锁版 320 条，实际加载 {len(cases)}——数据集/manifest 漂移，"
+    assert len(cases) == 324, (
+        f"锁版 324 条，实际加载 {len(cases)}——数据集/manifest 漂移，"
         "先核对 content_hash 与 case_count 再看门禁"
     )
     router = get_cs_router()
@@ -191,5 +190,5 @@ class TestReplayCoverage:
         )
         it_total, _, _, _ = _hit_stats(replay_rows, "intent")
         rk_total, _, _, _ = _hit_stats(replay_rows, "risk")
-        assert it_total == 280, f"intent/target 门禁分母 {it_total} ≠ 280（320−multi_turn）"
-        assert rk_total == 240, f"risk 门禁分母 {rk_total} ≠ 240（320−multi_turn−safety）"
+        assert it_total == 284, f"intent/target 门禁分母 {it_total} ≠ 284（324−multi_turn）"
+        assert rk_total == 244, f"risk 门禁分母 {rk_total} ≠ 244（324−multi_turn−safety）"
