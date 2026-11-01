@@ -77,9 +77,18 @@ def _run_offline_sanity(cases: list[TestCase]) -> list[EvalResult]:
 
 
 def _run_live(cases: list[TestCase]) -> list[EvalResult]:
-    """逐条 invoke CS Graph，评估路由与应答。"""
+    """逐条 invoke CS Graph，评估路由与应答。
+
+    路由接线对齐生产：先经 CSRouter.route（规则层，P1-P3 门禁验证的
+    同一入口）产出 cs_route 再喂图——生产链路（orchestration cs_prefilter）
+    即由该结果驱动 supervisor L1；直接传空 dict 会旁路决策层，supervisor
+    全靠 L3 LLM/L6 兜底重路由（b0r2 实测 expert_match 掉到 10%）。
+    会话指代消解与 CSUnderstanding LLM 增补属会话软层，单轮评测样本不
+    消费，不在此复刻。
+    """
     from backend.customer_service.graph_builder import get_cs_graph
     from backend.customer_service.graph_state import new_cs_graph_input
+    from backend.customer_service.router.cs_router import get_cs_router
     from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
 
     graph = get_cs_graph()
@@ -98,7 +107,7 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
                 user_id="eval_bot",
                 session_id="cs_eval",
                 conversation_id=f"eval-cs-{case.id}",
-                cs_route={},
+                cs_route=get_cs_router().route(case.question).model_dump(),
             )
             final_state = graph.invoke(cs_input, config=config)
             duration_ms = int((time.time() - t0) * 1000)
