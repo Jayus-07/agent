@@ -63,6 +63,8 @@ docker compose --env-file .env.production up -d app rag-service mcp-service agen
 
 `RUNTIME_ENV_FILE` 默认是 .env.production；只有本机演练才可显式指向 .env。生产层用 !override 替换根服务 env_file，避免误读开发凭据。前端端口默认仅绑定 127.0.0.1:3100/3200/3300，由已有 HTTPS 入口反向代理；本配置不自动扩大公网暴露。
 
+客服业务/退款通道开关 `CS_BUSINESS_GATEWAY_MODE` 与 `CS_REFUND_REQUEST_MODE` 默认 disabled（退款写入默认关闭，见 docs/domains/customer-service.md），env.production 未显式配置即保持关闭，属安全默认。如需启用客服资金链路（退款审核闭环、商城订单/物流契约），两个开关必须同启为 `http` 且 business-service 可达：compose 已定义 `business-mock`（docker-compose.4c8g.yml，演示/联调事实源，重启清空内存态），但不在上方启动清单内——启用时须将其加入 build 与 up -d 列表；生产收单/真实支付属商城域另立项，不得把 mock 当生产支付。
+
 模型供应商需由管理端登记为可从生产服务器访问的外部地址。host.docker.internal:8088 是本机联调地址，不能直接视为生产模型地址。登记/切换模型继续经过预检、身份围栏和重建确认。
 
 ## 本机演练与恢复

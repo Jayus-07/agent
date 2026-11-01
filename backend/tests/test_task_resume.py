@@ -185,14 +185,15 @@ def test_resume_concurrent_two_clients_single_enqueue(pg, abc3, enqueue_stub):
 # resume 后 Worker 被 kill → 接管续跑 → SUCCESS
 # ═══════════════════════════════════════════════════
 
-def test_resume_then_worker_kill_then_takeover(pg, abc3):
+def test_resume_then_worker_kill_then_takeover(pg, abc3, enqueue_stub):
     graph, calls = abc3
     record = TaskManager.create(f"9002{uuid.uuid4().int % (10 ** 12):012d}", "kill 恢复")
     _pause_to_b(pg, graph, calls, record)
 
     from backend.tasks import task_manager
 
-    monkey_enq = record  # resume 需真实入队语义，这里桩掉 broker 后手动接管
+    # resume 派发桩掉 broker：本地共享栈 celery worker 会拾取真任务置
+    # RUNNING（坑位 1 家族）；本用例断言状态机 + 租约接管，不经 broker
     record = task_manager.resume_task(record.id)
     assert pg_status(pg, record.id) == TaskStatus.PENDING
 

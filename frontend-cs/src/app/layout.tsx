@@ -34,7 +34,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const isLoginPage = pathname.startsWith('/login')
   // cs-workstation-v2 P8：/cs/* 坐席工作台（原 /cs2/*，切换后旧 /cs 页面已删除）
   // 统一使用新工作台壳（app/cs/layout.tsx），不叠加旧控制台 Sidebar。
-  const isWorkstation = pathname.startsWith('/cs')
+  // 段级匹配：/cs 自身或 /cs/ 子路径，避免未来 /cs 前缀的非工作台路由误判。
+  const isWorkstation = pathname === '/cs' || pathname.startsWith('/cs/')
 
   return (
     <html lang="zh-CN">

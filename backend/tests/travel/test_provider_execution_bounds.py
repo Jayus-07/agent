@@ -6,6 +6,15 @@ import pytest
 from backend.providers.travel.live import resilience
 
 
+@pytest.fixture(autouse=True)
+def _fresh_provider_slots(monkeypatch):
+    """v16/v17 run 实证：同 worker 前序用例的 loader hang 3s 内 slot 释放晚于
+    本用例开始（BoundedSemaphore 模块级共享）→ 4 线程只有 3 个拿到槽。
+    本文件用例各自从满容量开始（容量语义不变，只隔离前序泄漏）。"""
+    monkeypatch.setattr(resilience, "_provider_slots",
+                        threading.BoundedSemaphore(4))
+
+
 def test_single_flight_reclaims_unique_key_locks():
     flight = resilience._SingleFlight()
     for i in range(1000):
@@ -41,11 +50,14 @@ def test_provider_bulkhead_rejects_fifth_call_without_queuing(monkeypatch):
             thread = threading.Thread(target=run, args=(i,))
             threads.append(thread)
             thread.start()
-        assert all(event.wait(1) for event in started)
+        # 等待窗口只覆盖线程调度（2 核 runner 慢时 1s 内可能起不来，
+        # v16 run 41264049361 实证）；拒绝本身是同步即时的（acquire
+        # blocking=False），语义断言在 fifth_result == ["rejected"]
+        assert all(event.wait(5) for event in started)
         thread = threading.Thread(target=fifth)
         threads.append(thread)
         thread.start()
-        assert fifth_finished.wait(0.3)
+        assert fifth_finished.wait(5)
         assert fifth_result == ["rejected"]
     finally:
         release.set()

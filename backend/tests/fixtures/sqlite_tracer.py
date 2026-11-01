@@ -99,6 +99,15 @@ def fresh_collector(request, monkeypatch):
     # 注：Redis 通道的隔离由 conftest 的 _trace_writer_local_only 统一负责
     # （全局禁用 _use_redis + 每条用例前排空本地队列），此处无需重复处理。
 
+    # 停掉写队列 worker：它可能捕获了前序用例的 pgtest store，在本用例
+    # teardown DROP 表期间仍持锁写入 —— PQexec 等 PG 锁期间持 GIL，整个
+    # 测试进程死锁（pytest-timeout/faulthandler 全部失效；CI 表现为
+    # xdist worker 无响应被杀，v16/v17 rag 96%、本地 b14 复现）。
+    # 本用例写入走上方同步 enqueue，异步通道不再引用任何 pgtest 表；
+    # 单例置 None，后续 flush()/get_trace_write_queue() 重建干净实例。
+    tw_mod.get_trace_write_queue().shutdown()
+    tw_mod._trace_write_queue = None
+
     yield new_collector
 
     drop_pgtest_tables()

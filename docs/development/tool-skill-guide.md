@@ -20,7 +20,7 @@
 1. 先查找现有 Skill、Tool、Domain Graph、Workflow 与契约，确认没有重复能力。
 2. Tool 保持原子职责，定义明确参数与结果，按现有方式注册；不要把 Tool 放在 Skill 目录，也不要从编排代码绕过 Tool 执行入口。
 3. Skill 复用 BaseSkill 和当前能力执行适配器。修改参数、输出类型或 Capability 时，同步核对调用方和实际校验逻辑。
-4. Capability 及其风险、操作、参数 Schema 和确认策略维护在现有 manifest；派生注册表和 lock 文件通过仓库生成器更新。
+4. Capability 及其风险、操作、参数 Schema、确认策略与负责人维护在现有 manifest；`owner`（负责人团队）在 domains 与 capabilities 每条必填，缺失或空白启动即炸（manifest fail-fast），经 `/capabilities` 与管理端 /skills 页「负责人」列对账展示。派生注册表和 lock 文件通过仓库生成器更新。
 5. Workflow 复用现有 workflow registry；Domain Graph 使用现有 Domain Registry 并遵守 Router 预过滤接线；不要在主图 builder 手写自动发现节点。
 6. 平台 MCP Server 在 mcp_servers/servers/ 实现并由 register_all() 登记，启动入口见 backend/app/server.py；参数 Schema 从 Tool 派生，适配器见 mcp_servers/schema_adapter.py。外部 MCP 消费走 backend/infra/mcp_client.py。两条通路都复用既有 Tool、鉴权和错误契约，不创建第二套 Tool 注册表。
 7. 为新增或变化的失败、拒绝、降级和输出行为添加针对性断言，选择范围见 testing-guide.md。

@@ -270,6 +270,9 @@ class TestCapabilityManifest:
             "examples": ["例一", "例二"], "keywords": ["制度"],
         }
         good_cap["domain"] = "knowledge"
+        # G1 治理对账字段：owner 必填，fixture 同步声明
+        good_cap["owner"] = "platform-team"
+        good_domain["owner"] = "platform-team"
 
         duplicate = {"version": 1, "domains": [good_domain],
                      "capabilities": [good_cap, dict(good_cap)]}
@@ -289,8 +292,40 @@ class TestCapabilityManifest:
         with pytest.raises(ManifestError, match="reason"):
             load_manifest(write(unreasoned, "no_reason.yaml"))
 
+        # G1：owner 缺失/空白 → 启动拒绝（capabilities 与 domains 两侧）
+        no_owner_cap = {"version": 1, "domains": [good_domain],
+                        "capabilities": [dict(good_cap, owner="")]}
+        with pytest.raises(ManifestError, match="owner"):
+            load_manifest(write(no_owner_cap, "no_owner_cap.yaml"))
+
+        no_owner_domain = {
+            "version": 1,
+            "domains": [dict(good_domain, owner="  ")],
+            "capabilities": [good_cap],
+        }
+        with pytest.raises(ManifestError, match="owner"):
+            load_manifest(write(no_owner_domain, "no_owner_domain.yaml"))
+
     def test_missing_manifest_raises(self, tmp_path):
         from backend.orchestration.router.manifest import ManifestError, load_manifest
 
         with pytest.raises(ManifestError):
             load_manifest(str(tmp_path / "nope.yaml"))
+
+
+# ==================== 5. owner 治理字段（G1 capability-governance） ====================
+
+class TestManifestOwnership:
+    def test_every_capability_and_domain_declares_owner(self):
+        """capabilities + domains 每条 owner 非空（manifest fail-fast + 对账双保险）。
+
+        yaml 侧由 load_manifest 启动拒绝，本断言守 CI 侧对账：
+        新增条目漏写 owner 时 registry 层先红，不必等启动炸。
+        """
+        from backend.orchestration.router.manifest import load_manifest
+
+        m = load_manifest()
+        empty_caps = [c.name for c in m.capabilities if not c.owner.strip()]
+        assert not empty_caps, f"capability 缺 owner: {empty_caps}"
+        empty_domains = [d.name for d in m.domains if not d.owner.strip()]
+        assert not empty_domains, f"domain 缺 owner: {empty_domains}"

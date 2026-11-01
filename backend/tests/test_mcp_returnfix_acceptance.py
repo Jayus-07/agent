@@ -81,6 +81,14 @@ class FakeRegistry:
 def fake_registry(monkeypatch):
     monkeypatch.setattr(doc_registry_module, "DocumentRegistry", FakeRegistry)
     FakeRegistry.last_kwargs = {}
+    # get_knowledge_bases 已迁持久化目录（DB 表）；测试用实现预留的
+    # 「显式替换注册表」口子（KNOWLEDGE_BASES is not _BOOTSTRAP → 直用
+    # 静态基线），否则 kb_scope 随本地库 seed 内容漂移（policy_hr 等
+    # 未登记 kb 的文档被过滤，v16 backend-root 5 例首曝）
+    import backend.config.knowledge_base as kb_cfg
+
+    monkeypatch.setattr(kb_cfg, "KNOWLEDGE_BASES",
+                        dict(kb_cfg._BOOTSTRAP_KNOWLEDGE_BASES))
     return FakeRegistry
 
 
@@ -381,8 +389,13 @@ class TestRagToolIdentityPlumbing:
         assert pipeline_spy["tenant_id"] == "t9"
         assert pipeline_spy["user_id"] == "adm1"
 
-    def test_admin_vs_plain_user_kb_visibility(self):
+    def test_admin_vs_plain_user_kb_visibility(self, monkeypatch):
         """admin 跨部门可见全部非 test 库；普通员工（无部门）只见 "all" 库。"""
+        # kb 目录走静态基线（同 fake_registry）：隔离本地库 seed 漂移
+        import backend.config.knowledge_base as kb_cfg
+
+        monkeypatch.setattr(kb_cfg, "KNOWLEDGE_BASES",
+                            dict(kb_cfg._BOOTSTRAP_KNOWLEDGE_BASES))
         from backend.config.knowledge_base import KNOWLEDGE_BASES
         from backend.rag.authz import retrieval_authorized_kbs
 

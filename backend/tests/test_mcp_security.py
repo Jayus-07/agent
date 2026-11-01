@@ -126,6 +126,11 @@ def fake_registry(monkeypatch):
     monkeypatch.setattr("backend.rag.indexing.doc_registry.DocumentRegistry",
                         FakeRegistry)
     FakeRegistry.last_kwargs = {}
+    # 同 mcp_returnfix：kb 目录走静态基线，隔离本地库 seed 漂移
+    import backend.config.knowledge_base as kb_cfg
+
+    monkeypatch.setattr(kb_cfg, "KNOWLEDGE_BASES",
+                        dict(kb_cfg._BOOTSTRAP_KNOWLEDGE_BASES))
     return FakeRegistry
 
 
