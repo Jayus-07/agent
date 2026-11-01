@@ -185,6 +185,7 @@ jobs:
             backend/tests/prompts/ \
             backend/tests/travel_v2/test_hotel_search_service.py \
             backend/tests/travel/test_rollinggo_hotel_provider.py \
+            backend/tests/travel/test_train_dynamic_channel.py \
             backend/tests/travel/test_amap_poi_provider.py \
             backend/tests/travel/test_lodging_expert.py \
             backend/tests/travel/test_tool_governance.py \

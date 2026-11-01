@@ -505,6 +505,7 @@ def _reset_request_scoped_state() -> None:
     from backend.infra.llm import proxy
     from backend.infra.llm.budget import clear_request_budget
     from backend.infra.llm.resolved_model import reset_current_resolved_model
+    from backend.core.tool_governance.budget import reset_tool_budget
     from backend.observability import tracer as tracer_module
     from backend.rag.context import clear_context
     from backend.shared.logger import clear_log_context
@@ -523,6 +524,10 @@ def _reset_request_scoped_state() -> None:
     proxy.reset_turn_usage()
     reset_current_resolved_model()
     clear_request_budget()
+    # 治理工具调用预算与 LLM 预算同源泄漏面：trace 请求上下文绑定的
+    # RequestToolBudget（per-capability 限 3）不复位会串到同 worker 后续
+    # 用例（实测 CI 定向清单车次用例第 4 次调用起全撞预算墙）
+    reset_tool_budget()
     collector = tracer_module.trace_collector
     clear_for_test = getattr(collector, "clear_for_test", None)
     if callable(clear_for_test):
