@@ -1,6 +1,6 @@
 'use client'
 
-// cs-workstation-v2 P1：用户端智能客服整页（/customer-service-v2）。
+// cs-workstation-v2 P1：用户端智能客服整页（P8 切换后挂 /customer-service）。
 // 目标态对照 docs/tasks/cs-workstation-v2/prototypes/user-portal.html 的客服视图；
 // 聊天链路复用既有 SSE 契约（/api/chat/customer-service/stream，含断线续播与中止）。
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'

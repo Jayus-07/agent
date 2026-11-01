@@ -56,7 +56,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock('@/cs2/workspace/api', () => api)
 
-import Cs2DashboardPage from '@/app/cs2/dashboard/page'
+import Cs2DashboardPage from '@/app/cs/dashboard/page'
 
 beforeAll(() => {
   ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true

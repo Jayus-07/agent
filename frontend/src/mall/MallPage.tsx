@@ -186,7 +186,7 @@ export default function MallPage() {
                 className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
                 onClick={() => {
                   window.sessionStorage.setItem('cs2-prefill', `我想咨询一下「${detail.product_name}」（SKU ${detail.sku}）`)
-                  router.push('/customer-service-v2')
+                  router.push('/customer-service')
                 }}
               >
                 咨询客服

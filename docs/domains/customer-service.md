@@ -5,7 +5,9 @@
 - Domain Graph 在 backend/customer_service/register.py 注册，适配器为 backend/orchestration/graph/cs_graph_node.py。
 - 子图由 backend/customer_service/graph_builder.py 构建，包含状态加载、待确认处理、Supervisor、业务专家和 Reporter。
 - 会话状态流转、工单、确认和派单分别维护在 backend/customer_service/；管理端 API 集中于 backend/app/api/routes/ 中的客服路由模块。
-- 用户端智能客服独立页为 `/customer-service`，复用 `CSDrawer` 的会话、确认、转人工及工单逻辑；`GET /api/cs/customer-context` 使用可信当前身份读取账户和近期订单，不接受客户端指定用户。
+- 用户端智能客服整页为 `/customer-service`（cs-workstation-v2 重建版，组件在 `frontend/src/cs2/`，P8 已删除旧 `components/cs/*` 抽屉树）：AI 会话流（SSE 全事件、确认卡、候选点选）、转人工 4 态横幅、人工接管后用户可继续输入（`POST /cs/conversations/my/{id}/messages`，Idempotency-Key 必填）、退款/工单折叠卡、商城三页 `/mall`、`/my-orders` 与资金闭环（Mock 账本，余额/流水/支付/回款）。
+- 坐席工作台在 frontend-cs（:3300）`/cs/*` 七视图（P8 由 `/cs2/*` 切换，组件命名空间 `src/cs2/` 保留）：`/cs/workspace`（三栏工作台：双 Tab 认领、快捷回复、AI Copilot、接单开关）、`/cs/conversations`（会话管理：回放/重派/强制接管/关闭）、`/cs/tickets`（工单流转）、`/cs/refunds`（退款审核，supervisor：队列/意见必填/通过回款/驳回/终态锁/审计）、`/cs/qa`（质检：抽检/AI 预填/评分/申诉终审/日报）、`/cs/dashboard`（六卡看板+绩效，supervisor 全量）、`/cs/knowledge`（未解决聚合/话术/FAQ 草稿/检索）。
+- 坐席工作台实时层：WS `useAgentSocket`（ticket 鉴权、seq 游标补发、降级轮询）；坐席状态四态（`cs_agents.status`，away/offline 不派单）与接单开关（`accepting`）即时生效；坐席间转接复用 offer 状态机（拒单/超时回退 waiting_human 队列）；SLA warning/breach 分级事件幂等。
 - 侧栏订单复用 `AccountService` 与 `OrderService`；演示沙盒开启时仍由客服业务层映射到演示客户，页面明确标记演示数据。
 
 ## 领域职责与安全边界

@@ -75,7 +75,7 @@ async function mount() {
   return container
 }
 
-describe('CustomerServicePage（/customer-service-v2）', () => {
+describe('CustomerServicePage（/customer-service，P8 切换）', () => {
   it('欢迎态：AI 徽章/免责语/演示标记/四个快捷入口/转人工禁用', async () => {
     const c = await mount()
     expect(c.textContent).toContain('AI 智能客服')

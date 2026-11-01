@@ -1001,9 +1001,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
         )}
 
         {/* 抽屉面板（不盖遮罩：改完要能立刻看到左侧行程更新）。
-            面板常挂载（与 components/cs/CSDrawer.tsx 同款）：收起靠 translate-x-full
+            面板常挂载：收起靠 translate-x-full
             滑出，动画不断、对话记录也不随开关丢失。
-            已知取舍：收起态的面板控件仍可被 Tab 聚焦（与 CSDrawer 同一处欠账，
+            已知取舍：收起态的面板控件仍可被 Tab 聚焦（同类欠账，
             若要根治需给整块加 inert/条件挂载，会牺牲滑出动画，留作统一整改）。 */}
         <div
           className={`fixed right-0 top-0 z-50 flex h-full w-[440px] max-sm:w-full flex-col

@@ -985,6 +985,10 @@ async def post_my_message(
     直达坐席」——落库 sender_type=user 并广播 message.created（与图 turn
     同契约，坐席 WS / 消息轮询均可消费）。AI 态（ai_active/none）不走
     本端点，仍走正常聊天流；已关闭会话 409。
+
+    P8：写副作用收口全局幂等（Idempotency-Key 必填）——同键同内容重放
+    返回首次结果（不重复落库/广播），同键不同内容 409。归属/状态闸在
+    幂等边界外（安全语义优先：重放窗口内会话状态已变更的按新状态拒绝）。
     """
     await _ensure_my_conversation(request, conversation_id)
 
@@ -1019,39 +1023,57 @@ async def post_my_message(
             detail="当前为 AI 服务态，请直接在对话中发送消息；已结束会话不可再发送",
         )
 
+    from backend.app.api.deps import run_authenticated_mutation
+    from backend.customer_service._db_loop import run_sync
     from backend.customer_service.realtime import get_agent_hub
 
     now = datetime.now(timezone.utc)
+
+    def _persist_and_notify() -> dict:
+        """幂等副作用（线程池内执行）：落库经 cs-db loop 桥（AsyncSessionLocal
+        按 loop 注册引擎，跨 loop 安全），广播为线程安全 fire-and-forget。"""
+        message_id = run_sync(
+            _async_save_my_message(
+                conversation_id, user_id, tenant_id, content, now,
+            )
+        )
+        # 与 conversation_store._msg_payload 同构：坐席 WS/轮询零改动消费
+        get_agent_hub().publish(
+            "message.created",
+            persist=True,
+            conversation_id=conversation_id,
+            tenant_id=tenant_id,
+            last_id=int(message_id) if str(message_id).isdigit() else None,
+            message={
+                "message_id": str(message_id),
+                "sender_type": "user",
+                "content": content,
+                "content_type": "text",
+                "created_at": now.isoformat(),
+            },
+        )
+        return {
+            "message_id": str(message_id),
+            "handoff_state": handoff_state,
+            "created_at": now.isoformat(),
+        }
+
+    from starlette.concurrency import run_in_threadpool
+
     try:
-        message_id = await _async_save_my_message(
-            conversation_id, user_id, tenant_id, content, now,
+        # Redis claim/ping 为同步 IO，放线程池避免阻塞事件循环
+        return await run_in_threadpool(
+            run_authenticated_mutation,
+            request,
+            "cs_my_message_send",
+            {"conversation_id": conversation_id, "content": content},
+            _persist_and_notify,
         )
     except HTTPException:
         raise
     except Exception as e:
         logger.warning(f"[CSAdmin] post_my_message persist failed: {e}")
         raise HTTPException(503, detail="消息发送失败，请稍后重试") from e
-
-    # 与 conversation_store._msg_payload 同构：坐席 WS/轮询零改动消费
-    get_agent_hub().publish(
-        "message.created",
-        persist=True,
-        conversation_id=conversation_id,
-        tenant_id=tenant_id,
-        last_id=int(message_id) if str(message_id).isdigit() else None,
-        message={
-            "message_id": str(message_id),
-            "sender_type": "user",
-            "content": content,
-            "content_type": "text",
-            "created_at": now.isoformat(),
-        },
-    )
-    return {
-        "message_id": str(message_id),
-        "handoff_state": handoff_state,
-        "created_at": now.isoformat(),
-    }
 
 
 async def _async_save_my_message(

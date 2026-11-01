@@ -41,20 +41,20 @@
 
 | 路由 | 页面 | 角色 | 期次 |
 |---|---|---|---|
-| `/cs2/workspace` → Phase 8 切换为 `/cs/workspace` | 统一三栏坐席工作台 | agent+ | P1（骨架）→ P2/P3/P4（能力） |
-| `/cs2/conversations` | 会话管理（主管监控/回放/Trace/重派·接管·关闭） | agent+ | P1/P3 |
-| `/cs2/tickets` | 工单管理（受理/转派/升级/解决/关闭） | agent+ | P3 |
-| `/cs2/refunds` | 退款审核工作台 | supervisor | P5 |
-| `/cs2/qa` | 质检中心（抽检/评分/AI 预填/申诉/日报） | agent（我的）/ supervisor（全部） | P6 |
-| `/cs2/dashboard` | 数据看板（实时卡/趋势/意图分布/坐席绩效） | supervisor（全）/ agent（个人） | P7 |
-| `/cs2/knowledge` | 知识助手（未解决问题/话术管理/知识检索/能力差距） | agent+ | P7 |
-| 顶栏 | 通知中心（SLA/转接）、坐席状态（在线/忙碌/小休/离线）、接单开关、supervisor/agent 视角切换 | — | P1/P3 |
+| `/cs/workspace`（P8 切换，原 `/cs2/workspace`） | 统一三栏坐席工作台 | agent+ | P1（骨架）→ P2/P3/P4（能力） |
+| `/cs/conversations`（原 `/cs2/conversations`） | 会话管理（主管监控/回放/Trace/重派·接管·关闭） | agent+ | P1/P3 |
+| `/cs/tickets`（原 `/cs2/tickets`） | 工单管理（受理/转派/升级/解决/关闭） | agent+ | P3 |
+| `/cs/refunds`（原 `/cs2/refunds`） | 退款审核工作台 | supervisor | P5 |
+| `/cs/qa`（原 `/cs2/qa`） | 质检中心（抽检/评分/AI 预填/申诉/日报） | agent（我的）/ supervisor（全部） | P6 |
+| `/cs/dashboard`（原 `/cs2/dashboard`） | 数据看板（实时卡/趋势/意图分布/坐席绩效） | supervisor（全）/ agent（个人） | P7 |
+| `/cs/knowledge`（原 `/cs2/knowledge`） | 知识助手（未解决问题/话术管理/知识检索/能力差距） | agent+ | P7 |
+| 顶栏 | 通知中心（SLA/转接）、坐席状态（在线/忙碌/小休/离线）、接单开关（P8 补齐 UI）、supervisor/agent 视角切换 | — | P1/P3/P8 |
 
 ### 2.2 用户端（frontend，按 prototypes/user-portal.html）
 
 | 路由 | 页面 | 期次 |
 |---|---|---|
-| `/customer-service-v2` → Phase 8 切换为 `/customer-service` | 智能客服整页（左会话流 + 右客户资料/最近订单） | P1（骨架）→ P2/P3（能力） |
+| `/customer-service`（P8 切换，原 `/customer-service-v2`） | 智能客服整页（左会话流 + 右客户资料/最近订单） | P1（骨架）→ P2/P3（能力） |
 | `/mall` | 商品中心（分类/搜索/详情/购物车/立即购买/咨询客服预填） | P2 |
 | `/my-orders` | 我的订单（状态 Tab/去支付/取消/物流/退款预填/再次购买） | P2 |
 | 顶栏 | 购物车入口（数量徽章 + 结算弹窗） | P2 |
@@ -135,6 +135,16 @@
 | 我的订单 | 状态 Tab（含已退款）；**去支付（余额校验+扣款+流水）**；未付款直接取消；待发货取消走客服提案；物流轨迹弹窗（not_shipped 区分）；申请退款/咨询此订单预填；退款后状态流转 | P2 |
 | 资金闭环 | 余额 ¥5,000 起 + 充值 + 流水（支付 −/退款 +/充值 +）；余额不足拦截 | P2 |
 
+### 3.3 P8 终验记录（2026-11-01，最终验收）
+
+逐行核验口径：P1–P7 各期为代码/链路级核验（见 PROGRESS 各期日志），P8 补浏览器级渲染证据（browser-use 真实登录链路，证据见 PROGRESS 日志（二十））。
+
+**3.1 坐席端**：顶栏·状态四态切换 ✅（P3 实测①+P8 浏览器下拉）；顶栏·接单开关 ✅（**P8 补齐**：PUT accepting REST 11/11 + 浏览器 [pressed] 渲染）；顶栏·通知 ✅（P3 实测④事件落库+广播帧+P8 铃铛渲染）；视角切换 ✅（P5 nav 角色过滤 + P7 scope=self + P8 supervisor 全导航）；工作台·左栏 ✅（P8 浏览器双 Tab+待接入队列）；工作台·中栏 ✅（P8 浏览器三栏+消息区）；工作台·提案卡 ✅（P2）；快捷回复 ✅（P4 REST+组件测试）；AI 建议 ✅（P4 WS 帧实测）；输入区·转接 ✅（P3 实测③转接三竞态）；**输入区·更多 ⚠️ 降级交付**（P4 决策：订单卡片/内部备注/转工单无后端能力支撑不做假按钮，关闭会话独立按钮保留，矩阵口径复核记录于第 5 节 P4 回写③）；右栏·客户360 ✅（P2+P8 三 Tab 渲染）；右栏·会话信息 ✅（P1/P2）；右栏·AI 助手 ✅（P4 五块 WS 帧）；会话管理 ✅（P3+P8 渲染）；工单管理 ✅（P3+P8 渲染）；退款审核 ✅（P5 全链实测+P8 渲染）；质检中心 ✅（P6 全链实测+P8 渲染）；数据看板 ✅（P7 数值比对+P8 渲染）；知识助手 ✅（P7 聚合/草稿/检索实测+P8 渲染）。
+
+**3.2 用户端**：站点导航 ✅（P2+P8 浏览器，href 已切 /customer-service）；客服·会话 ✅（P8 浏览器下拉+新会话）；客服·欢迎态 ✅（P8 浏览器徽章/免责/沙盒/4 快捷入口/转人工禁用）；客服·消息流 ✅（P8 浏览器气泡/打字机/停止键）；客服·时间线 ✅（P8 浏览器 live→固化）；客服·确认卡 ✅（P2）；客服·候选点选 ✅（P2）；客服·转人工 4 态 ✅（P3 链路实测）；客服·接管后输入 ✅（P3 实测⑤+P8 幂等键 REST 11/11）；客服·满意度 ✅（P8 浏览器星级+备注+暂不评价）；客服·折叠卡 ✅（P2/P5 联动）；客服·资金应答 ✅（P2）；商品中心 ✅（P8 浏览器分类/商品卡/缺货置灰）；我的订单 ✅（P8 浏览器六态 Tab/余额/流水/操作）；资金闭环 ✅（P2/P5 实测证据，P8 链路零改动、读路径浏览器复核）。
+
+**总验收七条对照**：①矩阵逐项打勾如上（P8 浏览器级+响应证据齐备）；②零旧组件引用 grep 断言已入双端守卫测试；③backend T2 16 passed + 双端 vitest 全量 654/323 全绿 + 本 PR CI（合入时确认）；④资金闭环实测证据=P2 日志（七）+P5 日志（十三）；⑤审核闭环实测证据=P5 日志（十三）；⑥文档四件同步（commands.md 核对无需改）；⑦旧组件/页面删除+路由切换完成+主链路零回归（/agent、travel、RAG 前后端零改动+frontend-admin 冒烟 200+app /health 200）。
+
 ---
 
 ## 4. 总计划（重建分期）
@@ -149,7 +159,7 @@
 | P5 | 退款审核闭环 | 审核 API+审计+business-service 正式状态推进 | 坐席端 /cs2/refunds；用户端折叠卡状态联动+站内通知 | P2（提案链路） |
 | P6 | 质检中心 | cs_qa_scores+抽样+评分/申诉/终审+AI 预填 | 坐席端 /cs2/qa | P0 |
 | P7 | 看板+知识助手 | 聚合/绩效 API；未解决聚合+FAQ 草稿 | 坐席端 /cs2/dashboard、/cs2/knowledge | P3（状态数据） |
-| P8 | 切换与清理 | 无 | 路由切换（/cs2→/cs、/customer-service-v2→/customer-service）；删除旧 CS 组件/页面；文档同步；原型矩阵终验 | 全部 |
+| P8 | 切换与清理 | 少量（2026-11-01 用户决策补齐顺延项）：PUT /cs/agents/me/status 扩可选 accepting；POST /my/{id}/messages 收口全局幂等（Idempotency-Key 必填）；连带修复 idempotency `_default_memory_connection` 漏配 connect_timeout | 路由切换（/cs2→/cs、/customer-service-v2→/customer-service）；删除旧 CS 组件/页面；文档同步；原型矩阵终验 | 全部 |
 
 节奏：P0 → P1 → P2 → P3 →（P4/P5/P6 可并行）→ P7 → P8；每期独立分支+PR，合入后更新 PROGRESS.md。**任何一期合入前：旧路径冒烟（旧 handoff 页/旧客服页）+ 新页面验收，双绿才合**（防止主线断裂）。
 
@@ -234,6 +244,8 @@
 - 连带：`docs/domains/customer-service.md`、`frontend-guide.md`、`cross-cutting-contracts.md`（新事件）、`commands.md` 必要更新；评测集/rag_smoke 清单核对。
 - 验收：原型矩阵 3.1/3.2 逐项打勾；`grep` 断言新命名空间零旧组件引用；定向回归全绿；双端主链路（对话/退款/转人工/审核）实测通过。
 
+> **2026-11-01 执行回写（以仓库现状为准）**：①路由切换完成——frontend-cs `app/cs2/*` 七路由迁至 `app/cs/*`（git mv 保留历史），frontend `/customer-service` 直接挂 cs2 重建页，旧过渡路由 `/customer-service-v2` 删除不加 redirect；②删除范围（旧契约→替代→覆盖证据映射见 PROGRESS 日志（二十））——frontend：`components/cs/*`（16 文件）+ `useCSChat`/`useCSHandoffSync` + `store/csChat` + `api/cs.ts`（含测试）；frontend-cs：旧 `app/cs/*`（handoff/conversations/tickets/stats 五页）+ `AgentAssistPanel` + `api/cs.ts` + `lib/csAgentWs.ts`（auth.test 的 WS 联动用例随删，auth 基建用例保留）；③双端守卫测试改写为「命名空间零引用 + 旧文件物理清除」双断言（frontend `src/cs2/no-legacy-imports.test.ts` 扫描根改 `src/cs2`+`src/app/customer-service`，frontend-cs 扫描根改 `src/cs2`+`src/app/cs`）；④**组件命名空间 `src/cs2`、`src/mall` 保留原名不改**（路由层已切换，目录改名牵动全部 import 无功能收益）；⑤顺延项处理（用户 2026-11-01 决策）：顶栏接单开关 UI **补齐**（PUT /cs/agents/me/status 扩可选 accepting，AgentTopBar 加开关）、`POST /my/{id}/messages` 幂等键 **补齐**（收口 `run_authenticated_mutation` 全局幂等，Idempotency-Key 必填）——P8 因此含少量后端改动；更多菜单三功能维持降级交付（矩阵行标注，无后端能力不做假按钮）；用户端站内通知与 cs_faq 审核 UI 复核为已交付（折叠卡联动+30s 轮询；草稿落库走 gap_review 台账）；⑥**连带修复既有基建缺陷**：`backend/shared/idempotency.py` `_default_memory_connection`（psycopg3 幂等结果仓储）漏配 `connect_timeout`，Windows 本机 host=localhost 解析出不可达 ::1 时每次连接拖满 ~130s TCP 重试窗口、幂等 lease（60s）必过期——对齐同文件 `_default_memory_ledger_connection` 先例补 `connect_timeout=DB_CONNECT_TIMEOUT`（默认 5s）；⑦外围引用盘点：e2e/scripts/.github/评测环境对旧资产零引用；frontend mall 三处跳转 `/customer-service-v2` 同步改 `/customer-service`；frontend-cs 旧 navConfig.NAV 更新为新七视图（旧 Sidebar/NavGroup/TaskSidebar 为 /agent 任务模式遗留孤儿群，不在 P8 范围，顺延 P9 候选池）；⑧评测集/rag_smoke：P8 无知识链路变更，无需同步。
+
 ---
 
 ## 6. 技术约定（执行会话必须遵守）
@@ -279,7 +291,7 @@
 
 ## 11. 后续候选池（P9+，未排期）
 
-价保退差价（部分退款）、催发货（意图级）、账户注销（合规红线）、生产支付对接（商城域）、多语言、渠道接入与语音（用户指定不动）。
+价保退差价（部分退款）、催发货（意图级）、账户注销（合规红线）、生产支付对接（商城域）、多语言、渠道接入与语音（用户指定不动）；frontend-cs `/agent` 任务模式遗留孤儿群清理评估（`components/layout/Sidebar`/`NavGroup`/`navConfig` 消费链与 `components/chat`、`components/agent` 其余组件在 P8 后已无页面渲染场景，牵动 layout.test 等基建测试，需整体盘点后另行立项）。
 
 ## 12. 风险与对策
 

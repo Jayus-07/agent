@@ -1353,14 +1353,17 @@ def purge_expired_idempotency_records(
 
 def _default_memory_connection():
     import psycopg
-    from backend.config.database import MEMORY_DB_CONFIG
+    from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
 
     config = MEMORY_DB_CONFIG
     dsn = (
         f"postgresql://{config['user']}:{config['password']}"
         f"@{config['host']}:{config['port']}/{config['dbname']}"
     )
-    return psycopg.connect(dsn, autocommit=True)
+    # connect_timeout 对齐 _default_memory_ledger_connection：host 解析出多个
+    # 地址时（Windows 本机 ::1 不可达被静默丢弃）无超时会拖满 TCP 重试窗口
+    # （实测 130s/次），幂等 lease（60s）必在副作用完成前过期。
+    return psycopg.connect(dsn, autocommit=True, connect_timeout=DB_CONNECT_TIMEOUT)
 
 
 def _default_memory_ledger_connection():

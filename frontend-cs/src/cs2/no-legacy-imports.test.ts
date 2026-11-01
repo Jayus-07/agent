@@ -1,11 +1,11 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-// cs-workstation-v2 铁律：新命名空间（src/cs2/**、src/app/cs2/**）禁止 import
-// 旧 CS 业务组件/hook。此守卫从 P0 起持续生效，Phase 8 收编为 PR 检查。
+// cs-workstation-v2 铁律：工作台命名空间（src/cs2/**、src/app/cs/**）禁止 import
+// 旧 CS 业务组件/hook。P8 切换后旧资产应已物理删除（下方 not-exists 断言）。
 const FORBIDDEN_PATTERNS: Array<[RegExp, string]> = [
-  [/@\/app\/cs(?!2)[/'"]/, '旧 app/cs 页面组件'],
+  [/@\/app\/cs2[/'"]/, '过渡期路由 app/cs2（P8 已切换为 app/cs）'],
   [/@\/components\/agent/, '旧坐席业务组件 components/agent'],
   [/@\/components\/chat/, '旧聊天组件 components/chat'],
   [/csAgentWs/, '旧 CS WebSocket 封装 lib/csAgentWs'],
@@ -24,11 +24,11 @@ function collectFiles(dir: string, out: string[] = []): string[] {
   return out
 }
 
-const roots = ['src/cs2', 'src/app/cs2']
+const roots = ['src/cs2', 'src/app/cs']
 const files = roots.flatMap((root) => collectFiles(root))
 
-describe('cs2 命名空间零旧组件引用', () => {
-  it(`扫描 ${files.length} 个 cs2 源文件，禁止 import 旧 CS 业务代码`, () => {
+describe('工作台命名空间零旧组件引用（P8 切换守卫）', () => {
+  it(`扫描 ${files.length} 个 cs 源文件，禁止 import 旧 CS 业务代码`, () => {
     expect(files.length).toBeGreaterThan(0)
     const violations: string[] = []
     for (const file of files) {
@@ -38,5 +38,20 @@ describe('cs2 命名空间零旧组件引用', () => {
       }
     }
     expect(violations).toEqual([])
+  })
+
+  it('P8 删除的旧资产已物理清除', () => {
+    const removed: Array<[string, string]> = [
+      ['src/app/cs/handoff', '旧人工接入页 app/cs/handoff'],
+      ['src/app/cs/stats', '旧满意度统计页 app/cs/stats'],
+      ['src/app/cs2', '过渡期路由目录 app/cs2'],
+      ['src/api/cs.ts', '旧坐席 API 封装 api/cs.ts'],
+      ['src/lib/csAgentWs.ts', '旧 CS WebSocket 封装 lib/csAgentWs'],
+      ['src/components/agent/AgentAssistPanel.tsx', '旧坐席助手面板 AgentAssistPanel'],
+    ]
+    const leftover = removed
+      .filter(([rel]) => existsSync(join(process.cwd(), rel)))
+      .map(([, reason]) => reason)
+    expect(leftover).toEqual([])
   })
 })

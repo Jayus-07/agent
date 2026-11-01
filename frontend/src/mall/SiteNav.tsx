@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation'
 import { useCart } from './cart'
 
 const NAV_ITEMS: Array<{ href: string; label: string; mock?: boolean }> = [
-  { href: '/customer-service-v2', label: '智能客服' },
+  { href: '/customer-service', label: '智能客服' },
   { href: '/mall', label: '商品中心', mock: true },
   { href: '/my-orders', label: '我的订单', mock: true },
 ]

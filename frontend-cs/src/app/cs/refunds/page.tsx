@@ -1,6 +1,6 @@
 'use client'
 
-// cs-workstation-v2 P5：退款审核工作台（/cs2/refunds，supervisor 专属——
+// cs-workstation-v2 P5：退款审核工作台（/cs/refunds，supervisor 专属——
 // nav 已按角色隐藏；后端双重闸）。队列筛选 + 详情（原因/金额/政策版本）+
 // 意见必填 + 通过/驳回；终态锁定显示审核记录。
 import { useCallback, useEffect, useState } from 'react'

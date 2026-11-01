@@ -1,6 +1,6 @@
 'use client'
 
-// cs-workstation-v2 P6：质检中心（/cs2/qa）。
+// cs-workstation-v2 P6：质检中心（/cs/qa）。
 // 三 Tab 对齐原型 agent-workstation.html：
 //   抽检任务（全角色：agent=我的任务 / supervisor=全部）——选中加载、AI 预填
 //   建议（source=ai，请人工终审）、四维拖分实时合计 /100、保存草稿/提交评分

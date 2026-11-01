@@ -14,6 +14,8 @@
 
 **数据权威**：服务端决定登录身份、权限、租户、价格、账本、旅行正式行程 revision、客服状态和写操作最终结果。表单输入、AI 草案、本地缓存、前端 optimistic state 均不能自行判定持久成功。
 
+**客服双端现状（cs-workstation-v2 重建版，P8 已切换）**：用户端 `frontend/` 的客服整页挂 `/customer-service`、商城挂 `/mall`、`/my-orders`，页面组件在 `src/cs2/` 与 `src/mall/` 命名空间；坐席端 `frontend-cs/` 工作台挂 `/cs/*` 七视图（workspace/conversations/tickets/refunds/qa/dashboard/knowledge），页面组件在 `src/cs2/` 命名空间。旧 CS 资产（用户端 `components/cs/*`、`useCSChat`/`useCSHandoffSync`/`store/csChat`/`api/cs.ts`；坐席端旧 `app/cs` 页面、`AgentAssistPanel`、`api/cs.ts`、`lib/csAgentWs.ts`）已物理删除，双端 `no-legacy-imports.test.ts` 守卫「命名空间零引用 + 旧文件不存在」断言持续生效，重建命名空间禁止 import 旧 CS 业务组件。
+
 ## 2. REST / SSE / WS / 错误状态
 
 - 请求必须从客户端统一出口处理 `401/403/404/409/422/429/5xx` 与结构化业务 `failed/degraded/empty`；`HTTP 200` 不是业务成功。错误码及页面文案映射应集中，不直接把异常堆栈、密钥、provider raw body 展示给用户。

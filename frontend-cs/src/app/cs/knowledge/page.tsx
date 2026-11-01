@@ -1,6 +1,6 @@
 'use client'
 
-// cs-workstation-v2 P7：知识助手（/cs2/knowledge）。
+// cs-workstation-v2 P7：知识助手（/cs/knowledge）。
 // 对齐原型 agent-workstation.html 四 Tab：
 //   未解决问题（拒答/空结果聚合，点行展开原始查询变体，一键生成 FAQ 草稿
 //   → ai.cs_faq status=draft 进既有草稿→发布机制）；

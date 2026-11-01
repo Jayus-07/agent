@@ -21,7 +21,7 @@ const DOMAINS = [
   'approvals',
   'alerts',
   'chat',
-  'cs',
+  // 'cs' 已随 cs-workstation-v2 P8 删除（重建命名空间 src/cs2/workspace/api.ts 承接）
   'competitor',
   'evaluation',
   'feedback',

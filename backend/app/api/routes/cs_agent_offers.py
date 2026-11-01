@@ -398,7 +398,10 @@ _AGENT_STATUSES = ("online", "busy", "away", "offline")
 
 
 class AgentStatusBody(BaseModel):
-    status: str
+    # P8：status 与 accepting 至少一项（accepting 单独更新即「接单开关」，
+    # 兼容 P3 前端只传 status 的调用）
+    status: str | None = None
+    accepting: bool | None = None
 
 
 class TransferBody(BaseModel):
@@ -441,14 +444,18 @@ async def update_my_status(
     context: AgentContext = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """切换工作状态（持久）：away/offline 不参与派单（dispatch 过滤）。
+    """切换工作状态/接单开关（持久）：away/offline 与 accepting=false 均不参与派单。
 
     事件 agent.status_changed 为瞬态广播（不落库不占 seq）：在线坐席实时
-    感知，离线坐席重连后经 GET /status 对账。
+    感知，离线坐席重连后经 GET /status 对账。accepting 单独更新不发事件
+    （派单过滤实时查库，P8 接单开关语义：关=不派新单）。
     """
-    status = (body.status or "").strip().lower()
-    if status not in _AGENT_STATUSES:
-        raise HTTPException(422, detail="status 必须为 online/busy/away/offline")
+    if body.status is None and body.accepting is None:
+        raise HTTPException(422, detail="status 与 accepting 至少提供一项")
+    if body.status is not None:
+        status = (body.status or "").strip().lower()
+        if status not in _AGENT_STATUSES:
+            raise HTTPException(422, detail="status 必须为 online/busy/away/offline")
     try:
         async with session.begin():
             row = await repository.find_agent_for_update(
@@ -457,22 +464,25 @@ async def update_my_status(
             if row is None:
                 raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
             previous = row.status
-            row.status = status
-            from backend.customer_service.realtime import get_agent_hub
+            if body.status is not None:
+                row.status = status
+                from backend.customer_service.realtime import get_agent_hub
 
-            get_agent_hub().publish(
-                "agent.status_changed",
-                persist=False,
-                agent_id=context.agent_id,
-                tenant_id=context.tenant_id,
-                previous_status=str(previous or ""),
-                status=status,
-            )
+                get_agent_hub().publish(
+                    "agent.status_changed",
+                    persist=False,
+                    agent_id=context.agent_id,
+                    tenant_id=context.tenant_id,
+                    previous_status=str(previous or ""),
+                    status=status,
+                )
+            if body.accepting is not None:
+                row.accepting = bool(body.accepting)
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
     return {
         "agent_id": context.agent_id,
-        "status": status,
+        "status": str(row.status),
         "accepting": bool(row.accepting),
     }
 

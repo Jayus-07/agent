@@ -175,6 +175,42 @@ def test_status_rejects_invalid_value(db, offers_client):
     assert response.status_code == 422
 
 
+def test_status_rejects_empty_body(db, offers_client):
+    """P8 接单开关：status 与 accepting 至少一项。"""
+    response = offers_client.put("/cs/agents/me/status", json={})
+    assert response.status_code == 422
+
+
+def test_accepting_update_persists_without_status_change(db, offers_client):
+    """P8 接单开关：单独切 accepting，status 保持不变。"""
+    _seed_agent(_PREFIX + "agent-a", auth_user_id="p3t-auth-user", status="online")
+    response = offers_client.put(
+        "/cs/agents/me/status", json={"accepting": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["accepting"] is False
+    assert body["status"] == "online"
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, accepting FROM customer_service.cs_agents"
+            " WHERE agent_id = %s",
+            (_PREFIX + "agent-a",),
+        )
+        status, accepting = cur.fetchone()
+    assert status == "online" and accepting is False
+
+
+def test_status_and_accepting_update_together(db, offers_client):
+    _seed_agent(_PREFIX + "agent-a", auth_user_id="p3t-auth-user", status="online")
+    response = offers_client.put(
+        "/cs/agents/me/status", json={"status": "busy", "accepting": False},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "busy" and body["accepting"] is False
+
+
 def test_status_requires_bound_agent(db, offers_client):
     response = offers_client.put(
         "/cs/agents/me/status", json={"status": "online"},
@@ -292,6 +328,7 @@ def test_my_message_persists_in_human_states(db, messages_client, monkeypatch):
     response = messages_client.post(
         f"/cs/conversations/my/{conversation_id}/messages",
         json={"content": "补充一下订单号 DEMO-1001"},
+        headers={"Idempotency-Key": uuid.uuid4().hex},
     )
     assert response.status_code == 200, response.text
     assert response.json()["handoff_state"] == "waiting_human"
@@ -317,6 +354,7 @@ def test_my_message_rejected_in_ai_state(db, messages_client, monkeypatch):
     response = messages_client.post(
         f"/cs/conversations/my/{conversation_id}/messages",
         json={"content": "hi"},
+        headers={"Idempotency-Key": uuid.uuid4().hex},
     )
     assert response.status_code == 409
 
@@ -334,5 +372,86 @@ def test_my_message_rejects_cross_user(db, messages_client, monkeypatch):
     response = messages_client.post(
         f"/cs/conversations/my/{conversation_id}/messages",
         json={"content": "hi"},
+        headers={"Idempotency-Key": uuid.uuid4().hex},
     )
     assert response.status_code == 403
+
+
+def test_my_message_requires_idempotency_key(db, messages_client, monkeypatch):
+    """P8：写副作用收口全局幂等，缺 Idempotency-Key 400。"""
+    import backend.customer_service.handoff.lifecycle as lifecycle_mod
+
+    conversation_id = _PREFIX + uuid.uuid4().hex[:10]
+    _seed_conversation(conversation_id, "p3t-auth-user")
+    _seed_handoff(conversation_id, "p3t-auth-user", state="human_active")
+    monkeypatch.setattr(
+        lifecycle_mod, "load_active_handoff_sync",
+        lambda tenant_id, conversation_id, **kw: {"handoff_state": "human_active"},
+    )
+    response = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={"content": "hi"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "INVALID_PARAM"
+
+
+def test_my_message_idempotent_replay(db, messages_client, monkeypatch):
+    """P8：同键同内容重放返回首次 message_id，不重复落库。"""
+    import backend.customer_service.handoff.lifecycle as lifecycle_mod
+
+    conversation_id = _PREFIX + uuid.uuid4().hex[:10]
+    _seed_conversation(conversation_id, "p3t-auth-user")
+    _seed_handoff(conversation_id, "p3t-auth-user", state="human_active")
+    monkeypatch.setattr(
+        lifecycle_mod, "load_active_handoff_sync",
+        lambda tenant_id, conversation_id, **kw: {"handoff_state": "human_active"},
+    )
+    idem_key = uuid.uuid4().hex
+    first = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={"content": "网络超时重试场景"},
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert first.status_code == 200, first.text
+    replay = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={"content": "网络超时重试场景"},
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["message_id"] == first.json()["message_id"]
+    with _pg() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM customer_service.messages"
+            " WHERE conversation_id = %s AND sender_type = 'user'",
+            (conversation_id,),
+        )
+        assert cur.fetchone()[0] == 1
+
+
+def test_my_message_idempotency_conflict(db, messages_client, monkeypatch):
+    """P8：同键不同内容 409（内容指纹不一致，拒绝复用）。"""
+    import backend.customer_service.handoff.lifecycle as lifecycle_mod
+
+    conversation_id = _PREFIX + uuid.uuid4().hex[:10]
+    _seed_conversation(conversation_id, "p3t-auth-user")
+    _seed_handoff(conversation_id, "p3t-auth-user", state="human_active")
+    monkeypatch.setattr(
+        lifecycle_mod, "load_active_handoff_sync",
+        lambda tenant_id, conversation_id, **kw: {"handoff_state": "human_active"},
+    )
+    idem_key = uuid.uuid4().hex
+    first = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={"content": "第一条"},
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert first.status_code == 200, first.text
+    conflict = messages_client.post(
+        f"/cs/conversations/my/{conversation_id}/messages",
+        json={"content": "第二条"},
+        headers={"Idempotency-Key": idem_key},
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"]["code"] == "IDEMPOTENCY_CONFLICT"

@@ -1,6 +1,6 @@
 'use client'
 
-// cs-workstation-v2 P7：数据看板（/cs2/dashboard，supervisor 全量 / agent 个人）。
+// cs-workstation-v2 P7：数据看板（/cs/dashboard，supervisor 全量 / agent 个人）。
 // 对齐原型 agent-workstation.html：范围切换（今日/近7日/近30日）联动六卡
 // 涨跌；近 7 日接待/转人工双柱图；意图分布横条；坐席绩效表
 // （接待量/平均首响/AHT/CSAT/质检分/当前状态，agent 仅见本人一行）。
