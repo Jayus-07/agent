@@ -162,12 +162,19 @@ async def _resolve_agent_id(
 
 async def require_agent(
     request: Request,
+    *, allow_unbound_admin: bool = False,
 ) -> AgentContext:
-    """接单/拒单/我的 offer 的身份闸（独立短会话，不占用路由事务）。"""
+    """接单/拒单/我的 offer 的身份闸（独立短会话，不占用路由事务）。
+
+    ``allow_unbound_admin``：与 _resolve_agent_id 同语义——仅运营只读端点
+    （如意图目录 G4）允许平台 admin 无坐席档案时继续，其 supervisor 判定
+    由 AgentContext.is_supervisor 的平台管理员分支承接；接单类端点保持
+    默认 False 不变。
+    """
     try:
         async with AsyncSessionLocal() as session:
             agent_id, tenant_id, user_id, roles = await _resolve_agent_id(
-                request, session
+                request, session, allow_unbound_admin=allow_unbound_admin
             )
             cs_role = await repository.find_agent_role(
                 session, tenant_id=tenant_id, agent_id=agent_id

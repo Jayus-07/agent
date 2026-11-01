@@ -127,6 +127,7 @@ export const NAV: NavEntry[] = [
       { label: '预算策略', path: '/cost-governance/budgets', icon: <CircleDollarSign size={16} />, section: '模型与成本' },
       { label: 'Prompt 版本', path: '/prompts', icon: <FileCode size={16} /> },
       { label: '资产一致性检查', path: '/consistency', icon: <CheckCheck size={16} />, minRole: 'admin', section: '治理与发布' },
+      { label: '客服意图目录', path: '/capability-inventory', icon: <MessagesSquare size={16} />, minRole: 'admin', section: '治理与发布' },
       { label: '发布记录', path: '/releases', icon: <Rocket size={16} />, minRole: 'admin', section: '治理与发布' },
     ],
   },
