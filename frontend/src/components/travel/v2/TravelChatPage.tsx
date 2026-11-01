@@ -3,62 +3,26 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { nanoid } from 'nanoid'
 import { ArrowLeft, ArrowRight, CalendarDays, CircleAlert, LoaderCircle, MapPin, Send, Sparkles } from 'lucide-react'
-import { streamTravelPlanV2, parseTravelToolCard, type TravelClarificationOption, type TravelStreamEvent, type TravelToolCard } from '@/api/travel'
 import {
-  createTravelV2IdempotencyKey,
-  createTravelTripV2,
   fetchTravelTripV2,
   fetchTravelTripConversationV2,
   fetchTravelTripRevisionsV2,
-  type CreateTravelTripV2,
   type TravelTripV2,
 } from '@/api/travelV2'
-import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { useTravelConversation, type TravelConversationMessage } from '@/components/travel/useTravelConversation'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
-import { resolveTravelStreamOutcome } from './travelLiveRuntime'
 import { ToolCardBlock } from './ToolCardBlock'
 import TravelV2TripConversation from './TravelV2TripConversation'
 import { defaultTravelV2ConversationId, getTravelV2TripAssociation, setTravelV2TripAssociation, travelV2TripIdsMatch, travelV2WorkspaceHref, travelV2WorkspaceRestoreHref } from './travelV2Conversation'
-import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
+import { useTravelPlanGeneration, visibleTravelMessage } from './useTravelPlanGeneration'
 import {
-  classifyTravelWriteError,
-  isConfirmedCreatedTravelTrip,
-  nextPaint,
-  travelWriteErrorMessage,
   travelWriteStatusLabel,
   travelWriteStatusRole,
   travelWriteStatusTone,
-  type TravelWriteStatus,
 } from './travelV2WriteState'
 
 const SUGGESTIONS = ['推荐杭州适合慢游的景点', '帮我安排三天行程', '第二天想少走一点']
-const DECISION_TOKEN_MARKER = /\n\[\[travel-decision-token:([a-f0-9]{24})\]\]$/
-const DECISION_TOKEN_FIELD = 'decision_token'
-
-function pendingDecisionTokenFromMessages(messages: TravelConversationMessage[]): string | undefined {
-  const latestAssistant = [...messages].reverse().find((message) => message.role === 'assistant')
-  return latestAssistant?.text.match(DECISION_TOKEN_MARKER)?.[1]
-}
-
-function pendingDecisionTokenFromResponse(response: { travel_context?: { pending_decision?: { decision_token?: string } } }): string | undefined {
-  const token = response.travel_context?.pending_decision?.decision_token
-  return typeof token === 'string' && /^[a-f0-9]{24}$/.test(token) ? token : undefined
-}
-
-function withPendingDecisionToken(text: string, token?: string): string {
-  return token ? `${text}\n[[travel-decision-token:${token}]]` : text
-}
-
-function visibleTravelMessage(text: string): string {
-  return text.replace(DECISION_TOKEN_MARKER, '')
-}
-
-type PendingTravelPlanWrite = { key: string; input: CreateTravelTripV2; runId: string; replyText: string }
-
-/** 原型 A5 语义：SSE 完成后先出逐日草稿预览，用户确认才落正式行程（v1）。 */
-type DraftPlanPreview = { runId: string; replyText: string; input: CreateTravelTripV2 }
 
 export default function TravelChatPage({ initialPrompt = '', initialConversationId = '', initialTripId = '' }: { initialPrompt?: string; initialConversationId?: string; initialTripId?: string }) {
   const [conversationId, setConversationId] = useState(() => initialConversationId || (initialTripId
@@ -68,31 +32,15 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   const { messages, setMessages, syncError } = useTravelConversation(conversationId, {
     enabled: conversationReady,
   })
-  const [draft, setDraft] = useState(initialPrompt)
-  const [loading, setLoading] = useState(false)
-  const [process, setProcess] = useState<TravelProcessState | null>(null)
-  const [error, setError] = useState('')
-  const [draftPlan, setDraftPlan] = useState<DraftPlanPreview | null>(null)
-  const [clarifyOptions, setClarifyOptions] = useState<{ runId: string; options: TravelClarificationOption[] } | null>(null)
-  // F18：每轮对话的查询结果卡（tool.card 事件；SSE 会话内瞬时，历史消息不带卡）
-  const [turnCards, setTurnCards] = useState<{ runId: string; cards: TravelToolCard[] }[]>([])
   const [trip, setTrip] = useState<TravelTripV2 | null>(null)
   const tripRef = useRef<TravelTripV2 | null>(null)
   tripRef.current = trip
-  const pendingPlanWriteRef = useRef<PendingTravelPlanWrite | null>(null)
-  const planWriteLockRef = useRef(false)
-  const [writeFeedback, setWriteFeedback] = useState<{ status: TravelWriteStatus; message: string } | null>(null)
   const [tripLoadNotice, setTripLoadNotice] = useState('')
   const [conversationNotice, setConversationNotice] = useState('')
   const [tripAssociationReady, setTripAssociationReady] = useState(false)
   const [restoreAttempt, setRestoreAttempt] = useState(0)
   const [associatedTripId, setAssociatedTripId] = useState(initialTripId)
-  const abortRef = useRef<AbortController | null>(null)
   const orderedMessages = useMemo(() => messages, [messages])
-  const cardsForTurn = useCallback(
-    (turnId: string) => turnCards.find((entry) => entry.runId === turnId)?.cards ?? [],
-    [turnCards],
-  )
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -110,37 +58,29 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
     if (changed) window.history.replaceState(window.history.state, '', url.toString())
   }, [associatedTripId, conversationId, conversationReady])
 
-  const persistPlanWrite = useCallback(async (intent: PendingTravelPlanWrite): Promise<boolean> => {
-    if (planWriteLockRef.current) return false
-    planWriteLockRef.current = true
-    setWriteFeedback({ status: 'VALIDATING', message: '正在核对行程数据…' })
-    await nextPaint()
-    setWriteFeedback({ status: 'SAVING', message: '正在请求服务端校验并提交正式行程…' })
-    try {
-      const savedTrip = await createTravelTripV2(intent.input, intent.key)
-      if (!isConfirmedCreatedTravelTrip(savedTrip)) {
-        setWriteFeedback({ status: 'UNKNOWN', message: '创建回执尚不能证明正式行程已提交；不会显示已保存。请用同一请求安全重试。' })
-        return false
-      }
-
+  const generation = useTravelPlanGeneration({
+    conversationId,
+    messages,
+    setMessages,
+    canSend: !trip && tripAssociationReady && conversationReady,
+    initialDraft: initialPrompt,
+    // 保存成功（服务端确认）后的行程与会话状态迁移；返回附加披露文案
+    // （版本滞后保护 + 时区警告，随「行程已保存」消息展示）。
+    onTripCreated: (savedTrip, { conversationChanged, resolvedConversationId }) => {
       const current = tripRef.current
       if (!current || current.trip_id !== savedTrip.trip_id || current.revision < savedTrip.revision) {
         tripRef.current = savedTrip
         setTrip(savedTrip)
       }
-      pendingPlanWriteRef.current = null
       setTripLoadNotice('')
       setAssociatedTripId(savedTrip.trip_id)
       setTripAssociationReady(true)
-      const resolvedConversationId = savedTrip.conversation_id || conversationId
-      const conversationChanged = resolvedConversationId !== conversationId
       if (conversationChanged) {
         setConversationNotice('服务端恢复的会话与当前链接不同，已切换到该行程的原始会话。')
         setConversationId(resolvedConversationId)
       }
       setConversationReady(true)
       setTravelV2TripAssociation(resolvedConversationId, savedTrip.trip_id)
-      setError('')
       const latest = tripRef.current
       const currentNotice = latest && latest.trip_id === savedTrip.trip_id && latest.revision > savedTrip.revision
         ? ` 页面已有更新的 v${latest.revision}，已保留该版本。`
@@ -148,149 +88,23 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
       const timezoneNotice = savedTrip.document.health.issues.some((issue) => issue.code === 'timezone_unconfirmed')
         ? '目的地时区尚未确认；UTC 仅为格式占位，行程当地时间可能不准确。'
         : ''
-      setWriteFeedback({ status: 'SAVED', message: `服务端已确认保存到 v${savedTrip.revision}.${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}` })
-      if (!conversationChanged) {
-        setMessages((current) => [...current, {
-          id: `${intent.runId}:assistant`, conversationId, turnId: intent.runId,
-          role: 'assistant', text: `${intent.replyText}\n\n行程已保存到 V2 · v${savedTrip.revision}。${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}`,
-          tag: '行程已保存', tone: 'ok',
-        }])
-      }
-      setDraftPlan(null)
-      return true
-    } catch (cause) {
-      const status = classifyTravelWriteError(cause)
-      setWriteFeedback({ status, message: travelWriteErrorMessage(cause, status) })
-      if (status !== 'UNKNOWN') pendingPlanWriteRef.current = null
-      return false
-    } finally {
-      planWriteLockRef.current = false
-    }
-  }, [conversationId, setMessages])
-
-  const retryPendingPlanWrite = useCallback(async () => {
-    const intent = pendingPlanWriteRef.current
-    if (!intent || writeFeedback?.status !== 'UNKNOWN') return false
-    return persistPlanWrite(intent)
-  }, [persistPlanWrite, writeFeedback?.status])
-
-  /** 草稿确认保存：首次点击生成幂等键；UNKNOWN 后走「同一请求安全重试」，不得另起请求。 */
-  const saveDraftPlan = useCallback(async () => {
-    if (!draftPlan || planWriteLockRef.current || writeFeedback?.status === 'UNKNOWN') return
-    const intent: PendingTravelPlanWrite = {
-      key: createTravelV2IdempotencyKey(),
-      input: draftPlan.input,
-      runId: draftPlan.runId,
-      replyText: draftPlan.replyText,
-    }
-    pendingPlanWriteRef.current = intent
-    await persistPlanWrite(intent)
-  }, [draftPlan, persistPlanWrite, writeFeedback?.status])
-
-  /** 撤下草稿：不落库，保留对话继续调整（再次生成会覆盖草稿）。 */
-  const discardDraftPlan = useCallback(() => {
-    if (planWriteLockRef.current) return
-    setDraftPlan(null)
-    setMessages((current) => [...current, {
-      id: `draft-discard-${Date.now()}`, conversationId, turnId: `draft-discard-${Date.now()}`,
-      role: 'assistant', text: '草稿已撤下，没有保存。继续告诉我你的调整想法，我会重新生成。',
-      tag: '草稿未保存', tone: 'warn',
-    }])
-  }, [conversationId, setMessages])
-
-  const sendText = useCallback(async (raw: string) => {
-    const text = raw.trim()
-    if (!text || trip || loading || !tripAssociationReady || !conversationReady || pendingPlanWriteRef.current) return
-    const pendingDecisionToken = pendingDecisionTokenFromMessages(messages)
-    const clientRunId = `client-${Date.now()}-${nanoid(8)}`
-    const controller = new AbortController()
-    abortRef.current = controller
-    setLoading(true)
-    setError('')
-    setWriteFeedback(null)
-    setClarifyOptions(null)
-    setDraft('')
-    setProcess(initialTravelProcess(clientRunId))
-    setTurnCards((current) => [...current, { runId: clientRunId, cards: [] }])
-    setMessages((current) => [...current, {
-      id: `${clientRunId}:user`, conversationId, turnId: clientRunId, role: 'user', text,
-    }])
-    const events: TravelStreamEvent[] = []
-    try {
-      for await (const event of streamTravelPlanV2(text, conversationId, {
-        signal: controller.signal,
-        clientRunId,
-        mode: 'chat',
-        source: 'manual',
-        ...(pendingDecisionToken
-          ? { actionPayload: { [DECISION_TOKEN_FIELD]: pendingDecisionToken } }
-          : {}),
-      })) {
-        events.push(event)
-        if (event.event === 'tool.card') {
-          const card = parseTravelToolCard(event.data)
-          if (card) {
-            setTurnCards((current) => current.map((entry) => entry.runId === clientRunId
-              ? { ...entry, cards: [...entry.cards, card] }
-              : entry))
-          }
-        }
-        setProcess((current) => current ? reduceTravelStreamEvent(current, event) : current)
-      }
-      const outcome = resolveTravelStreamOutcome(events)
-      if (outcome.kind === 'failed') throw new Error(outcome.message)
-
-      const response = outcome.response
-      const replyText = response.final_answer?.trim() || '已收到，我可以继续帮你调整旅行安排。'
-      const responseDecisionToken = pendingDecisionTokenFromResponse(response)
-      let tag = '旅游问答'
-      const tone: TravelConversationMessage['tone'] = 'ok'
-      if (outcome.kind === 'clarification') {
-        tag = '需要补充信息'
-        // 原型 F01：后端已产出结构化澄清选项，V2 对话直接渲染成可点选项
-        const options = Array.isArray(response.clarification_options) ? response.clarification_options : []
-        setClarifyOptions(options.length ? { runId: clientRunId, options } : null)
-      }
-      if (outcome.kind === 'plan' && response.itinerary) {
-        if (associatedTripId) {
-          throw new Error('关联的 V2 行程无法读取，本次规划结果没有保存。请刷新后重试。')
-        }
-        // 原型 F03：先生成草稿预览，用户确认后才创建正式行程（不再自动保存）
-        const document = itineraryToTripDocumentV2(response.itinerary)
-        setDraftPlan({
-          runId: clientRunId,
-          replyText,
-          input: {
-            title: `${document.brief.destination} ${document.brief.day_count} 天行程`,
-            document,
-            conversation_id: conversationId,
-          },
-        })
-        setMessages((current) => [...current, {
-          id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
-          role: 'assistant', text: replyText, tag: '行程草稿 · 待确认保存', tone,
-        }])
-        return
-      }
-      setMessages((current) => [...current, {
-        id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
-        role: 'assistant', text: withPendingDecisionToken(replyText, responseDecisionToken), tag, tone,
-      }])
-    } catch (cause) {
-      if (controller.signal.aborted) return
-      const message = cause instanceof Error ? cause.message : '旅游服务暂时不可用，请稍后重试。'
-      setError(message)
-      setMessages((current) => [...current, {
-        id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
-        role: 'assistant',
-        text: withPendingDecisionToken(`这次请求没有完成：${message}`, pendingDecisionToken),
-        tag: '请求失败', tone: 'warn',
-      }])
-    } finally {
-      if (abortRef.current === controller) abortRef.current = null
-      setLoading(false)
-    }
-  }, [associatedTripId, conversationId, conversationReady, loading, messages, persistPlanWrite, setMessages, trip, tripAssociationReady])
+      return `${currentNotice}${timezoneNotice ? ` ${timezoneNotice}` : ''}`
+    },
+  })
+  const {
+    draft, setDraft,
+    loading, process, processLabel,
+    error,
+    draftPlan,
+    clarifyOptions,
+    cardsForTurn,
+    sendText,
+    saveDraftPlan,
+    discardDraftPlan,
+    writeFeedback,
+    retryPendingPlanWrite,
+    pendingPlanWriteRef,
+  } = generation
 
   useEffect(() => {
     let cancelled = false
@@ -344,18 +158,10 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
     return () => { cancelled = true }
   }, [initialTripId, restoreAttempt])
 
-  useEffect(() => () => abortRef.current?.abort(), [])
-
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     void sendText(draft)
   }
-
-  const processLabel = process ? travelProcessStatusLabel({
-    loading,
-    stopped: false,
-    status: process.status,
-  }) : ''
 
   const refreshAfterAIEdit = useCallback(async (savedRevision: number) => {
     if (!associatedTripId) throw new Error('当前会话没有关联正式行程。')
@@ -426,7 +232,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
             {orderedMessages.map((message) => <Fragment key={message.id}><div className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{visibleTravelMessage(message.text)}</div></div>{message.role === 'assistant' && cardsForTurn(message.turnId).length > 0 && <div className="pl-11"><ToolCardBlock cards={cardsForTurn(message.turnId)} onAsk={(text) => void sendText(text)} /></div>}</Fragment>)}
             {loading && cardsForTurn(process?.runId ?? '').length > 0 && <div className="pl-11"><ToolCardBlock cards={cardsForTurn(process?.runId ?? '')} onAsk={(text) => void sendText(text)} /></div>}
             {clarifyOptions && !loading && <div className="flex flex-wrap gap-2 pl-11" aria-label="槽位澄清选项">{clarifyOptions.options.map((option) => <button key={option.label} type="button" disabled={loading} onClick={() => void sendText(option.label)} className="rounded-full border border-[#a9c9f7] bg-[#eaf2ff] px-3 py-1.5 text-[11px] font-medium text-[#1f62c9] transition hover:bg-[#d9e9ff] disabled:opacity-50">{option.label}</button>)}</div>}
-            {loading && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[9px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{name}</span>)}</div>}{process && process.tools.length > 0 && <details open className="mt-2 rounded-xl border border-[#e4ebf3] bg-[#fbfdff] px-2.5 py-2 text-[9px] text-[#526984]"><summary className="cursor-pointer font-semibold">工具过程 · {process.tools.length} 项</summary><ul aria-label="Tool 与 Provider 状态" className="mt-1.5 space-y-1.5"><ToolProcessRows tools={process.tools.map((tool) => ({ ...tool, error: undefined }))} /></ul></details>}</div></div>}
+            {loading && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[9px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{name}</span>)}</div>}{process && process.tools.length > 0 && <details open className="mt-2 rounded-xl border border-[#e4ebf3] bg-[#fbfdff] px-2.5 py-2 text-[9px] text-[#526984]"><summary className="cursor-pointer font-semibold">工具过程 · {process.tools.length} 项</summary><ul aria-label="Tool 与 Provider 状态" className="mt-1.5 space-y-1.5"><ToolProcessRows tools={process.tools.map((tool) => ({ ...tool, error: undefined }))} /></ul></details>}</div></div>}
             {draftPlan && <section aria-label="行程草稿预览" className="rounded-2xl border border-[#cfe0f5] bg-[#f6faff] p-3">
               <div className="flex items-center justify-between gap-2"><p className="text-xs font-semibold text-[#263c57]">草稿已生成 · 确认后保存为正式行程</p><span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-medium text-[#6380a0]">草稿 · 未保存</span></div>
               <p className="mt-1 text-[10px] leading-4 text-[#8493a6]">{draftPlan.input.document.brief.destination} · {draftPlan.input.document.brief.day_count} 天 · {draftPlan.input.document.brief.travelers.adults + draftPlan.input.document.brief.travelers.children} 人 · 节奏 {draftPlan.input.document.brief.pace === 'relaxed' ? '轻松' : draftPlan.input.document.brief.pace === 'intense' ? '紧凑' : '均衡'}</p>
