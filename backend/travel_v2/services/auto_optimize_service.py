@@ -19,6 +19,13 @@ from backend.shared.logger import logger
 _TOP_N = 3
 
 
+def _now_iso() -> str:
+    """建议生成的观测时点（餐饮行缺 queried_at 时的兜底，绝不回填假历史）。"""
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _trip_dates(doc: dict[str, Any]) -> tuple[date | None, date | None]:
     brief = (doc or {}).get("brief") or {}
     try:
@@ -31,20 +38,32 @@ def _trip_dates(doc: dict[str, Any]) -> tuple[date | None, date | None]:
     return start, start + timedelta(days=days)
 
 
-def _top_food(merchants: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """评分降序取前 N（评分未知排后，不猜）。"""
+def _top_food(merchants: list[dict[str, Any]], queried_at: str) -> list[dict[str, Any]]:
+    """评分降序取前 N（评分未知排后，不猜）。
+
+    行字段与 V2 搜索 Tab（search_service._merchant_result）同构——建议行
+    自带 selection_id/merchant_id/坐标/来源/观测时点全套快照字段，前端
+    「选入」可直接构 MerchantSnapshotV2（逐条幂等），无需二次查询。
+    """
     ranked = sorted(
-        (m for m in merchants if isinstance(m, dict)),
+        (m for m in merchants if isinstance(m, dict) and m.get("name")),
         key=lambda m: (m.get("rating") is None,
                        -(m.get("rating") or 0.0)),
     )
     return [
         {
             "selection_id": m.get("selection_id"),
+            "merchant_id": m.get("merchant_id"),
             "name": m.get("name"),
             "rating": m.get("rating"),
             "avg_cost_cny": m.get("avg_cost_cny"),
             "address": m.get("address"),
+            "lat": m.get("lat"),
+            "lng": m.get("lng"),
+            "open_status": m.get("open_status"),
+            "open_time_today": m.get("open_time_today"),
+            "source": m.get("source") or "amap",
+            "observed_at": m.get("queried_at") or queried_at,
             "reason": "评分最高" if (m.get("rating") or 0) > 0 else "评分未知",
         }
         for m in ranked[:_TOP_N]
@@ -52,7 +71,11 @@ def _top_food(merchants: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _top_lodging(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """价格升序取前 N（单价未知排后）；带档位与可订状态，不改单。"""
+    """价格升序取前 N（单价未知排后）；带档位与可订状态，不改单。
+
+    字段直通 lodging_service.search_lodging options（含坐标/日期/总价/
+    来源/观测时点），前端选入可直构 LodgingArrangementV2 快照。
+    """
     ranked = sorted(
         (o for o in options if isinstance(o, dict)),
         key=lambda o: (o.get("nightly_price_cny") is None,
@@ -61,11 +84,23 @@ def _top_lodging(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "selection_id": o.get("selection_id"),
+            "merchant_id": o.get("merchant_id"),
             "name": o.get("name"),
+            "city": o.get("city"),
+            "address": o.get("address"),
+            "lat": o.get("lat"),
+            "lng": o.get("lng"),
+            "check_in": o.get("check_in"),
+            "check_out": o.get("check_out"),
+            "nights": o.get("nights"),
+            "price_total": o.get("price_total"),
+            "currency": o.get("currency"),
             "nightly_price_cny": o.get("nightly_price_cny"),
             "tier": o.get("tier"),
             "availability": o.get("availability"),
             "booking_status": o.get("booking_status"),
+            "source": o.get("source"),
+            "observed_at": o.get("observed_at"),
             "reason": "价格最低" if o.get("nightly_price_cny") else "价格未知",
         }
         for o in ranked[:_TOP_N]
@@ -84,11 +119,12 @@ def build_optimization_suggestions(
     start, end = _trip_dates(trip_doc)
     suggestions: dict[str, Any] = {}
     disclosures: list[str] = []
+    queried_at = _now_iso()
 
-    # 餐饮位（高德商户；评分/营业状态随时间变化，如实披露）
+    # 餐饮位（高德商户；与 V2 搜索 Tab 同一映射，行含完整选入快照字段）
     try:
         food = live_search_service.search_food(destination) if destination else {}
-        picks = _top_food(food.get("merchants") or [])
+        picks = _top_food(food.get("merchants") or [], queried_at)
         suggestions["meals"] = picks
         if food.get("disclosure"):
             disclosures.append(str(food["disclosure"]))
