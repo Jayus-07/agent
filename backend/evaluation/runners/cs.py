@@ -112,7 +112,10 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
             cs_input = new_cs_graph_input(
                 user_message=case.question,
                 user_id="eval_bot",
-                session_id="cs_eval",
+                # session 也必须 run 级隔离：pending 确认态按 user_id+session_id
+                # 键控（pending_handler），固定 session 会让先跑 case 的动作
+                # 提案拦住本 run 后续所有样本（b0r4 实测 47ms 秒回确认话术）
+                session_id=f"cs_eval_{run_token}",
                 conversation_id=f"eval-cs-{run_token}-{case.id}",
                 cs_route=get_cs_router().route(case.question).model_dump(),
             )
