@@ -155,6 +155,22 @@ NON_PLANNING_INTENTS: frozenset[str] = QUERY_INTENTS | frozenset({
     TravelIntent.OUT_OF_SCOPE.value,
 })
 
+# G5 域清单协议（capability-governance）：意图 → 运营目录描述。
+# 与枚举同文件声明（唯一事实源，禁止别处手抄意图清单）；inventory
+# 适配器从这里导出。统计列待 travel-v2 数据面（当前无 dashboard），
+# 适配器按协议降级为静态清单。
+INTENT_DESCRIPTIONS: dict[str, str] = {
+    TravelIntent.PLAN.value: "行程规划：按目的地/天数/偏好生成完整行程",
+    TravelIntent.MODIFY.value: "行程修改：对已有行程做局部调整或重排",
+    TravelIntent.SOCIAL.value: "寒暄与轻交互",
+    TravelIntent.META.value: "能力与帮助询问（我能做什么/怎么用）",
+    TravelIntent.QUERY_DYNAMIC.value: "实时状态查询：开门/票价/天气/余票等带日期现时问题",
+    TravelIntent.QUERY_STATIC.value: "背景与观点查询：好玩吗/值得去/怎么样",
+    TravelIntent.QUERY_TRANSIT.value: "交通车票查询：最快的车/高铁/怎么去（Tool 直出）",
+    TravelIntent.DISCOVER.value: "目的地发现：去哪玩/推荐个城市",
+    TravelIntent.OUT_OF_SCOPE.value: "非旅游域诉求：引导至对应业务入口",
+}
+
 # ── 0) OUT_OF_SCOPE：明确非旅游域诉求（M2 出域引导）──
 # 只收「强域信号」词，宁漏勿滥：漏了走既有链路只是答得普通，
 # 误判会把真行程诉求拦在门外。
