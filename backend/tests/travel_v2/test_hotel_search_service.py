@@ -71,15 +71,21 @@ def test_mode_fake_full_payload(fake_mode, monkeypatch):
     assert "测试数据" in out["disclosure"]  # fake 强制披露，禁冒充生产数据
 
 
-def test_mode_live_disabled_without_real_provider(fake_mode, monkeypatch):
-    """live 未接入 = disabled（如实），绝不回退 fake 冒充（§29）。"""
-    from backend.config import travel_offer_search as cfg
+def test_mode_live_disabled_without_runtime(monkeypatch):
+    """live 但 MCP 运行时不在场 = disabled（如实），绝不回退 fake 冒充（§29）。
 
+    2026-11-01 P1：live 已接 rollinggo MCP 通道（真实运行时在场的成功路径
+    见 tests/travel/test_rollinggo_hotel_provider.py 的注入回放与 live 冒烟）。
+    """
+    from backend.config import travel_offer_search as cfg
+    from backend.infra.mcp_registry import store as mcp_store
+
+    mcp_store.reset_for_tests()
     monkeypatch.setattr(cfg, "TRAVEL_COMMERCE_PROVIDER_MODE", "live")
     ci, co = _future()
     out = search_hotel_offers(city="大阪", check_in=ci, check_out=co)
     assert out["status"] == "disabled"
-    assert "未接入" in out["reason"]
+    assert "未在 MCP 运行时生效" in out["reason"]
 
 
 # =============================================
