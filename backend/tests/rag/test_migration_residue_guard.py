@@ -34,9 +34,14 @@ def _make_residue(cur, *, stale: bool, with_model: bool) -> str:
         (provider_id, provider_id, age),
     )
     if with_model:
+        # name 全库唯一（llm_models_pkey）：worker_env（另一 worker 的
+        # migration_worker 文件）同刻并行持有 'new'——本套件自带模型行
+        # 名字必须唯一化，否则 UNIQUE 撞名（v21 run 41343380610 gw2 实
+        # 证）。清理走 provider_id LIKE 'migration-test-%'，与 name 无关。
+        model_name = f"new-{uuid.uuid4().hex[:8]}"
         cur.execute(
             "INSERT INTO llm_models(name,provider_id,display_name,model_kind,created_at) "
-            "VALUES ('new',%s,'隔离嵌入模型','embedding',%s)", (provider_id, age))
+            "VALUES (%s,%s,'隔离嵌入模型','embedding',%s)", (model_name, provider_id, age))
         cur.execute(
             "INSERT INTO llm_provider_credentials(provider_id,key_cipher,key_fingerprint,key_last4,updated_at) "
             "VALUES (%s,%s,%s,%s,%s)",
