@@ -44,16 +44,29 @@ def _top_food(merchants: list[dict[str, Any]], queried_at: str) -> list[dict[str
     行字段与 V2 搜索 Tab（search_service._merchant_result）同构——建议行
     自带 selection_id/merchant_id/坐标/来源/观测时点全套快照字段，前端
     「选入」可直接构 MerchantSnapshotV2（逐条幂等），无需二次查询。
+    selection_id 缺失时按搜索 Tab 同一稳定规则生成（P5 运行态点测发现
+    live_search 行不带 selection_id，缺失会让建议无法选入）。
     """
+    from backend.travel_v2.services.search_service import stable_selection_id
+
     ranked = sorted(
         (m for m in merchants if isinstance(m, dict) and m.get("name")),
         key=lambda m: (m.get("rating") is None,
                        -(m.get("rating") or 0.0)),
     )
-    return [
-        {
-            "selection_id": m.get("selection_id"),
-            "merchant_id": m.get("merchant_id"),
+    rows: list[dict[str, Any]] = []
+    for m in ranked[:_TOP_N]:
+        source = str(m.get("source") or "amap")
+        selection_id = str(m.get("selection_id") or "").strip()
+        merchant_id = str(m.get("merchant_id") or m.get("id") or "").strip()
+        if not selection_id:
+            identity = merchant_id or "|".join((
+                str(m.get("name") or ""), str(m.get("address") or ""),
+                str(m.get("lat") or ""), str(m.get("lng") or "")))
+            selection_id = stable_selection_id("food", source, identity)
+        rows.append({
+            "selection_id": selection_id,
+            "merchant_id": merchant_id or selection_id,
             "name": m.get("name"),
             "rating": m.get("rating"),
             "avg_cost_cny": m.get("avg_cost_cny"),
@@ -62,12 +75,11 @@ def _top_food(merchants: list[dict[str, Any]], queried_at: str) -> list[dict[str
             "lng": m.get("lng"),
             "open_status": m.get("open_status"),
             "open_time_today": m.get("open_time_today"),
-            "source": m.get("source") or "amap",
+            "source": source,
             "observed_at": m.get("queried_at") or queried_at,
             "reason": "评分最高" if (m.get("rating") or 0) > 0 else "评分未知",
-        }
-        for m in ranked[:_TOP_N]
-    ]
+        })
+    return rows
 
 
 def _top_lodging(options: list[dict[str, Any]]) -> list[dict[str, Any]]:
