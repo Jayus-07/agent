@@ -67,6 +67,8 @@ docker compose --env-file .env.production up -d app rag-service mcp-service agen
 
 模型供应商需由管理端登记为可从生产服务器访问的外部地址。host.docker.internal:8088 是本机联调地址，不能直接视为生产模型地址。登记/切换模型继续经过预检、身份围栏和重建确认。
 
+MCP 能力中心出站白名单 `MCP_EGRESS_ALLOWLIST` 默认未配置即不启用（新建/编辑外部 MCP 连接只受 SSRF 防护约束，历史行为不变）。生产部署建议显式配置为逗号分隔的批准出口（精确 host 如 `mcp.example.com` 或后缀通配如 `*.trusted.io`，大小写不敏感）：配置后管理端新建/改址的连接 host 必须命中白名单，否则结构化 400 拒绝（防「影子服务器」双保险的第二层，第一层为既有 SSRF url_guard）；已批准存量连接的运行时出网不受影响。修改后需 `devctl rebuild` / 等价 compose 重建 app 生效。
+
 ## 本机演练与恢复
 
 Windows 的 devctl 在未指定 COMPOSE_FILE 时默认加载根 Compose 与共享资源层。已有前端容器时，start/stop 操作容器；没有容器时仍启动本机 Next dev，需要另行配置该前端的服务端 API_KEY/API_URL。4C8G验收与生产均使用上述前端容器，不依赖开发进程的凭据或内存占用。

@@ -223,6 +223,35 @@ def _validate_connection_url(base_url: str, network_scope: str) -> str:
         raise ValueError(f"MCP 地址被 SSRF 防护拦截: {exc}") from exc
 
 
+def _validate_egress_allowlist(base_url: str) -> None:
+    """G3 出口白名单：配置了 MCP_EGRESS_ALLOWLIST 时 host 必须命中。
+
+    防「影子服务器」双保险的第二层：SSRF 只拦私网/非 http（公网任意
+    host 放行），白名单把声明面收窄到部署方批准的出口。未配置不启用
+    （历史行为零变化）；模式支持精确 host 与 *.suffix 后缀通配。只在
+    连接声明面（create/update）前置，存量连接运行时出网不受影响。
+    """
+    from urllib.parse import urlparse
+
+    from backend.config.mcp import egress_allowlist
+
+    patterns = egress_allowlist()
+    if not patterns:
+        return
+    host = (urlparse(base_url).hostname or "").strip().lower()
+    for pat in patterns:
+        if pat.startswith("*."):
+            suffix = pat[1:]  # ".example.com"
+            if host.endswith(suffix):
+                return
+        elif host == pat:
+            return
+    raise ValueError(
+        f"MCP 出口白名单未放行该 host: {host or '(无法解析)'}"
+        f"（已配置 {len(patterns)} 条模式，见 MCP_EGRESS_ALLOWLIST）"
+    )
+
+
 # ── AI 语义契约（决策 #19）─────────────────────────────────────
 # 红线：进入 LLM prompt 的输入只有工具元数据（名称/描述/Schema/示例/
 # 连接名/操作类型），且全部经 _redact_urls 清洗；base_url 与任何凭据
@@ -610,6 +639,7 @@ async def create_connection(request: Request, body: ConnectionCreate):
     actor = _actor_of(operator)
     try:
         _validate_connection_url(body.base_url, body.network_scope)
+        _validate_egress_allowlist(body.base_url)
     except ValueError as exc:
         return _bad_request(str(exc))
     cred_reason = _embedded_credential_reason(body.base_url)
@@ -687,6 +717,8 @@ async def update_connection(request: Request, conn_id: str,
     if body.base_url is not None or body.network_scope is not None:
         try:
             _validate_connection_url(next_url, next_scope)
+            if body.base_url is not None:
+                _validate_egress_allowlist(next_url)
         except ValueError as exc:
             return _bad_request(str(exc))
 

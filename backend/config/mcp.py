@@ -68,3 +68,19 @@ ZHIHU_MCP_MIN_INTERVAL = float(os.getenv("ZHIHU_MCP_MIN_INTERVAL", "1.0"))
 def is_zhihu_mcp_enabled() -> bool:
     """外部知乎数据源是否参与（开关 + URL 与 Access Secret 非空）。"""
     return bool(ZHIHU_MCP_ENABLED and ZHIHU_MCP_BASE_URL and ZHIHU_MCP_API_KEY)
+
+
+# =============================================
+# MCP 能力中心出站白名单（G3 治理，capability-governance）
+# =============================================
+# 管理端新建/编辑外部 MCP 连接时，base_url 的 host 必须命中白名单
+# （逗号分隔：精确 host 或 *.suffix 后缀通配，大小写不敏感）。
+# **未配置 = 不启用**（行为与未引入本项前完全一致）；生产部署建议显式
+# 配置，注记见 部署/prod-4c8g/README.md。只作用于连接声明面（create/
+# update 前置校验）；已批准连接的运行时出网仍由 SSRF 防护（url_guard）
+# 与治理链约束，不做二次拦截。每次校验实时读 env（连接创建是低频
+# 管理操作，无需缓存；测试可 monkeypatch.setenv 直接生效）。
+def egress_allowlist() -> tuple[str, ...]:
+    """读取 MCP 出站白名单模式（空 tuple = 未启用）。"""
+    raw = os.getenv("MCP_EGRESS_ALLOWLIST", "")
+    return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
