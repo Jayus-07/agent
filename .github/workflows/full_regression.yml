@@ -82,6 +82,10 @@ jobs:
       # （v8 run 41238707884 诊断断言实证）。指向上方 redis service 容器。
       REDIS_ENABLED: "true"
       REDIS_URL: redis://localhost:6379/0
+      # xdist worker 诊断（栈落盘 + 用例打点，conftest 诊断三件套开关）：
+      # rag "node down" 与 api/backend-root 零输出 hang 的定位资产
+      PYTEST_XDIAG: "1"
+      PYTEST_XDIAG_DIR: xdiag
     strategy:
       fail-fast: false
       matrix:
@@ -173,10 +177,21 @@ jobs:
           fi
           echo "suite=$SUITE paths=$PATHS"
           RC=0
+          # 收集期探针（诊断轮，不挡执行）：v17/v18 两轮 api/backend-root
+          # 150min 被杀且 pytest_out.txt 0 字节，收集期 vs 执行期卡死无法
+          # 区分。--collect-only 只走 collection/import 路径，300s 被杀
+          # （收集卡死）即执行期清白，tail 即卡点模块；正常则 ~1min 内过。
+          timeout 300 python -u -m pytest $PATHS -q --no-cov --collect-only \
+            -n 4 --dist loadfile -p no:cacheprovider \
+            > collect_out.txt 2>&1 || echo "collect-only 探针 RC=$?（非零=收集期异常/卡死，诊断信号）"
+          tail -5 collect_out.txt
+          # -u 无缓冲：pytest_out.txt 实时落盘。全缓冲下进度点攒不满 8KB
+          # 缓冲、150min 被杀时 0 字节（v17/v18 api/backend-root 实证），
+          # 被杀前跑到了 96% 还是 0% 无从判断——-u 后进度与位置可见。
           # -ra：failed 与 errors（fixture setup/teardown）都进 short
           # summary——v10 run 41242501663 实证 cs 出现「1518 passed 0 failed
           # 但 2 errors」时 -rf 的清单为空，诊断无门
-          python -m pytest $PATHS -q --no-cov -ra --timeout=150 \
+          python -u -m pytest $PATHS -q --no-cov -ra --timeout=150 \
             -n 4 --dist loadfile -p no:cacheprovider \
             > pytest_out.txt 2>&1 || RC=$?
           # 失败明细独立成文件（artifact 留档）
@@ -202,6 +217,8 @@ jobs:
           path: |
             failures_*.txt
             pytest_out.txt
+            collect_out.txt
+            xdiag/
           if-no-files-found: ignore
 
   summary:

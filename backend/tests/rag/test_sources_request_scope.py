@@ -59,7 +59,8 @@ def _make_stub_pipeline(answer: str, sources: list):
     pipe._prepare_context = lambda *a, **k: set_context(
         RagRequestState(metadata_filter={}, intent_label="", query="stub"))
     pipe._check_resources = lambda: True
-    pipe._session_has_history = lambda session_id: False
+    # 13f93e4 起 _session_has_history 扩 user_id/tenant_id kwarg（请求身份保留）
+    pipe._session_has_history = lambda session_id, user_id="", tenant_id="": False
     pipe._check_answer_cache = lambda question, kb_id: None
     pipe._mark_session_seen = lambda session_id: None
 
