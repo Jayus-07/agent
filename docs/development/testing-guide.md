@@ -32,6 +32,38 @@ python -m pytest backend/tests/<受影响路径> -q --no-cov
 
 前端使用对应应用的 Vitest 脚本，并明确测试文件；类型变化可另运行 TypeScript 检查。按需读取该应用的 package.json 确认脚本。
 
+## CI 诊断资产与 Redis 测试库约定
+
+### PYTEST_XDIAG=1 诊断三件套（xdist 停摆定位）
+
+背景：全量回归 xdist（4 worker）出现过三类无现场停摆——worker 进程消失（xdist 报 `node down: Not properly terminated`）、150min job 被杀且 pytest 输出 0 字节、收集期（collection/import）卡死。pytest-timeout 的 thread 法对卡在 C 层/锁上的用例无法中断，watchdog 兜底 `os._exit` 时整进程消失、栈写不进管道，主进程只见通道 EOF。三类症状此前全部无现场。
+
+开关 `PYTEST_XDIAG=1`（CI [full_regression.yml](../../.github/workflows/full_regression.yml) 已常驻开启；实现见 [backend/tests/conftest.py](../../backend/tests/conftest.py) 的 xdist worker 诊断段），三个机制全部写独立文件、不依赖 stdout：
+
+| 机制 | 覆盖的停摆 | 产出 |
+| --- | --- | --- |
+| patch pytest_timeout watchdog：`os._exit`/fail 前用 faulthandler 同步落全线程栈（C 层写，`os._exit` 前必然写完） | 用例超时被兜底杀进程 | `diag_<worker>.stacks` 中 `===== pytest-timeout watchdog 触发 =====` 标记行 + 全线程栈 |
+| faulthandler.dump_traceback_later 每 300s 一拍心跳（原生 C watchdog，不需要 GIL） | GIL 死锁、收集期卡死等 pytest-timeout 够不着的停摆 | 连续多拍不变的栈快照即卡点（配合打点：无新 START + 栈不变） |
+| 用例级 START/DONE 打点（logstart/logfinish） | crash 后定位正在跑的用例 | `diag_<worker>.tests` 尾部有 START 无 DONE 的用例 |
+
+产出目录由 `PYTEST_XDIAG_DIR` 控制（CI 为 `xdiag/`，本地缺省 `tmp_xdiag/`）；每个 xdist worker（`gw0`–`gw3`）各一对文件，非 xdist 主进程 tag 为 `main<pid>`。CI 侧随 `failures-<suite>` artifact 一并上传；本地复现挂死时同样带开关跑：
+
+~~~bash
+PYTEST_XDIAG=1 PYTEST_XDIAG_DIR=/d/tmp/xdiag-local python -m pytest backend/tests/<路径> -q --no-cov --timeout=150
+~~~
+
+判读顺序：先看 `.tests` 尾部正在跑的用例，再看 `.stacks` 最后几拍栈是否变化；watchdog 标记行之后紧随的是被杀瞬间的全线程栈。
+
+### Redis 专用测试库的 worker 分片（flushdb 纪律）
+
+背景事故：v19–v22 轮 CI `test_heartbeat_renews_admission_token` 恒红——xdist 4 worker 共享同一 Redis db，某 worker 测试里的 `flushdb` 是整库操作，把并行 worker 心跳中的 admission 键一并清掉。
+
+约定（[backend/tests/fixtures/redis_test.py](../../backend/tests/fixtures/redis_test.py)）：
+
+- 测试内的 `flushdb` 必须先经 `redis_test_db_url(REDIS_URL)` 换算出本 worker 专用 db 号（`15 - gw 序号`，Redis 默认 16 库不越界），再对该连接整库清空；既有入口参考 `test_stop_g4_matrix.py`、`test_task_admission*.py`。
+- 禁止裸连固定 db（含 db15）后 flush；读写普通测试键不受限，只有「整库清空」必须走分片 db。
+- 连接 host 钉死 `127.0.0.1`：`localhost` 会在 `::1`/`127.0.0.1` 间轮换解析，偶发连到不同端点。
+
 ## 交付记录
 
 报告实际命令、通过/失败/跳过数量、耗时、未运行范围及原因。T0/T1/T2 的局部通过不等于全量或生产验收通过。
