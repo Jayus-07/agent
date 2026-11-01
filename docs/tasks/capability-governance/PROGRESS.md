@@ -8,8 +8,8 @@
 
 | 期 | 主题 | 状态 | 分支 / PR | 证据 |
 |---|---|---|---|---|
-| G1 | capabilities/domains 加 owner 字段（fail-fast + 对账 + 管理端列） | 计划中（阻塞点：owner 映射需用户输入） | — | — |
-| G2 | 运行时对账告警（未注册工具指标 + 失败率突增规则） | 计划中（先探明执行器现状） | — | — |
+| G1 | capabilities/domains 加 owner 字段（fail-fast + 对账 + 管理端列） | **已完成**（PR #198 合入 @180284c） | feat/cap-gov-g1 / #198 | 本文件日志 2026-11-01（二） |
+| G2 | 运行时对账告警（未注册工具指标 + 失败率突增规则） | 进行中（先探明执行器现状） | — | — |
 | G3 | MCP 出口白名单（connect 前置 allowlist + 部署注记） | 计划中（先探明连接流程） | — | — |
 | G4 | 客服意图目录试点（inventory 端点 + 管理端只读视图） | 计划中 | — | — |
 | G5 | 域清单协议化（tool-skill-guide 约定 + travel 适配器） | 计划中（依赖 G4） | — | — |
@@ -29,6 +29,26 @@
 - 环境坑与预案：TASK §2.4（devctl 静默失效 / Mimosa hook / GitHub 重试 / vpnkit connect_timeout / 冻结纪律）——开工必读
 
 ## 日志
+
+### 2026-11-01（二）—— G1 实施与合入（执行会话）
+
+- **owner 映射决策**：用户授权统一占位 `platform-team`（27 条全部），yaml 头部标注「待按团队实况替换」，替换走独立小 PR。
+- **交付**（PR #198，feat/cap-gov-g1 → main@180284c，10 文件 +125/-5）：
+  - capabilities.yaml：domains(10)+capabilities(17) 每条 `owner: platform-team` + 头部 owner 约定注释；
+  - manifest.py：DomainDecl/CapabilityDecl 加 owner 字段，`load_manifest()` 缺失/空白 fail-fast（与 yaml 同 PR 原子合入）；
+  - /capabilities 每条返回 owner；frontend-admin /skills 能力清单加「负责人」列；
+  - 测试：缺 owner 启动拒绝 ×2 + TestManifestOwnership 对账断言 + API owner 断言 + page.test 列断言；既有 manifest fixture（test_registry_consistency / test_layer_consistency）连带补 owner；
+  - 文档：tool-skill-guide.md 快速接入清单第 4 条落 owner 约定。
+- **验证记录**（全部实际执行）：
+  - G1 定向（test_registry_consistency + test_registry_overview_api）28 passed；
+  - 治理批四件套 37 passed（基线保持）；
+  - frontend-admin vitest 83 files / 582 passed（首跑基线，含新增 1 例）、tsc --noEmit 0 错；
+  - 容器 agent-app-1 / agent-frontend-admin-1 自 agent-gov worktree 重建（compose 等价原命令，非 devctl）healthy，容器内换血标记（yaml 27 / manifest 3 / api 1）全在位；
+  - live 直连 :8000 `GET /capabilities`：200，owner 17/17 非空，count=17/routed=14/skills=12 与基线一致零漂移；
+  - 主链路冒烟 :8000/health、:9080、:3200/login、:3100 全 200；
+  - CI 逐项核对：RAG Smoke (8 cases) / Detect RAG changes / admin-observability-auth / frontend-admin-functional / frontend-admin-security / scan 全 pass；skipping ×2（RAG Smoke Evaluation real API、preflight）= 非 RAG 变更预期跳过。
+- **环境备注**：worktree 无 .env → 从主仓库拷贝（真库 5433 指向正确）；frontend-admin node_modules 以 Windows junction 复用主仓库依赖（依赖输入未变）；测试窗口有并行会话 travel booking 定向 pytest（无 HTTP 依赖，零冲突）。
+- 待办：G2 探明执行器未注册工具行为与 stats 数据链；G3 探明 admin_mcp 连接流程。
 
 ### 2026-11-01（一）—— 计划落稿（审查会话产出）
 
