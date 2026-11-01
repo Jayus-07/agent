@@ -113,7 +113,7 @@
 
 ## 一、总计划（剩余一跳半）
 
-1. **api 定向确认**：#181（cs_agent_status_transfer 的 .env 依赖修复，本地 10 passed）合并后 dispatch `suites=api` 应绿（run 41252686538 跑批十二之前的 HEAD，勿引用）。
+1. **api 确认并入全量，勿单跑抽签**：#181（cs_agent_status_transfer 的 .env 依赖修复，本地 10 passed）已合并；但 api **单 suite dispatch 6/6 次全灭**（run 41252686538/41256263644 等，~40-56min 被 job 上限杀，坑位 21 的 runner 挂死形态在单跑下必现）——并发全量形态下 api 历次均正常出结论（v5 4 分钟、v14 正常）。处置：backend-root 清完后直接无参数全量 dispatch，api 结论从全量取。
 2. **backend-root 首曝 54 例清偿**（v14 run 41249581757 首次真实跑完暴露，清单 `gh run download 41249581757 -n failures-backend-root`；本地副本 `/d/tmp/ci-debt/v14full/`）。
 3. 全量 dispatch → 13 suite + summary 全绿 → COMPLETED。
 
