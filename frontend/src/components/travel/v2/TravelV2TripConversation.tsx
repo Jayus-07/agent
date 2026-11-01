@@ -17,11 +17,12 @@ import {
   type TravelAIEditStatusV2,
   type TravelTripV2,
 } from '@/api/travelV2'
-import { streamTravelPlanV2, type TravelStreamEvent } from '@/api/travel'
+import { streamTravelPlanV2, parseTravelToolCard, type TravelStreamEvent, type TravelToolCard } from '@/api/travel'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
 import type { TravelConversationMessage } from '@/components/travel/useTravelConversation'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
+import { ToolCardBlock } from './ToolCardBlock'
 import {
   buildTravelV2TripQuestionPrompt,
   parseTravelV2RestoreRevisionRequest,
@@ -80,6 +81,8 @@ export default function TravelV2TripConversation({
   const [working, setWorking] = useState(false)
   const [operation, setOperation] = useState<OperationView | null>(null)
   const [process, setProcess] = useState<TravelProcessState | null>(null)
+  // F18：只读问答轮的查询结果卡（tool.card 事件）；动作直通 ai-edit 既有写路径
+  const [qaCards, setQaCards] = useState<TravelToolCard[]>([])
   const [refreshPending, setRefreshPending] = useState<{ intent: OperationIntent; revision: number } | null>(null)
   const [refreshingTrip, setRefreshingTrip] = useState(false)
   const operationRef = useRef<OperationView | null>(null)
@@ -138,6 +141,7 @@ export default function TravelV2TripConversation({
       ? { ...current, status: 'processing', detail: '只读咨询' }
       : current)
     setProcess(initialTravelProcess(intent.turnId))
+    setQaCards([])
     const events: TravelStreamEvent[] = []
     try {
       const trip = tripRef.current
@@ -153,6 +157,10 @@ export default function TravelV2TripConversation({
         { signal: controller.signal, clientRunId: intent.turnId, mode: 'chat', source: 'manual' },
       )) {
         events.push(event)
+        if (event.event === 'tool.card') {
+          const card = parseTravelToolCard(event.data)
+          if (card) setQaCards((current) => [...current, card])
+        }
         if (mountedRef.current) setProcess((current) => current ? reduceTravelStreamEvent(current, event) : current)
       }
       const outcome = resolveTravelStreamOutcome(events)
@@ -414,6 +422,23 @@ export default function TravelV2TripConversation({
     }
   }, [answerReadOnly, conversationId, handleAuthoritativeStatus, loadPending, queryOperation, showUncertain, updateOperation])
 
+  /** 卡片动作直通 ai-edit 既有写路径（不建第二套提交）：把条目作为一条修改/编排请求提交。 */
+  const askThroughEdit = useCallback((text: string) => {
+    if (busyRef.current || operationRef.current || refreshPending) return
+    const turnId = `client-${Date.now()}-${nanoid(8)}`
+    const intent: OperationIntent = {
+      key: createTravelV2IdempotencyKey(),
+      expectedRevision: tripRef.current.revision,
+      userText: text,
+      turnId,
+    }
+    locallyStartedOperationKeysRef.current.add(intent.key)
+    setMessages((current) => [...current, {
+      id: `${turnId}:user`, conversationId, turnId, role: 'user', text,
+    }])
+    void submitIntent(intent)
+  }, [conversationId, refreshPending, setMessages, submitIntent])
+
   useEffect(() => {
     mountedRef.current = true
     return () => {
@@ -549,6 +574,7 @@ export default function TravelV2TripConversation({
           {process.tools.length > 0 && <ul aria-label="Tool 与 Provider 状态" className="space-y-1.5"><ToolProcessRows tools={process.tools.map((tool) => ({ ...tool, error: undefined }))} /></ul>}
         </div>
       </details>}
+      {qaCards.length > 0 && <div className="ml-9"><ToolCardBlock cards={qaCards} onAsk={askThroughEdit} /></div>}
       {operation && operation.status === 'pending_resolution' && operation.pending && <div className="ml-9 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] leading-5 text-amber-950">
         <p className="font-semibold">行程存在安排冲突</p>
         <p>{operation.conflictMessage || operation.pending.conflict_codes.join('、') || '服务端检测到时间冲突'} · 影响 {affectedItemNames(operation.pending.affected_item_ids, trip)}</p>

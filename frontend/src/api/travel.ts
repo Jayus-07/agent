@@ -477,6 +477,7 @@ export type TravelStreamEventName =
   | "stage.finished"
   | "tool.started"
   | "tool.result"
+  | "tool.card"
   | "run.finished"
   | "done"
   | "error"
@@ -485,6 +486,36 @@ export type TravelStreamEventName =
 export interface TravelStreamEvent {
   event: TravelStreamEventName
   data: Record<string, unknown>
+}
+
+/** F18 对话查询结果卡（tool.card 事件载荷；后端契约见 travel/core/cards.py）。 */
+export interface TravelToolCard {
+  kind: "train" | "hotel" | "food" | "poi"
+  title: string
+  items: Array<Record<string, unknown>>
+  provider: string
+  disclosure: string
+}
+
+/** 从 tool.card 事件数据解析卡片载荷；形状不符返回 null（不渲染脏数据）。 */
+export function parseTravelToolCard(data: Record<string, unknown>): TravelToolCard | null {
+  const card = data.card
+  if (!card || typeof card !== "object" || Array.isArray(card)) return null
+  const raw = card as Record<string, unknown>
+  const kind = raw.kind
+  if (kind !== "train" && kind !== "hotel" && kind !== "food" && kind !== "poi") return null
+  if (!Array.isArray(raw.items) || raw.items.length === 0) return null
+  const items = raw.items.filter(
+    (item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item),
+  )
+  if (items.length === 0) return null
+  return {
+    kind,
+    title: typeof raw.title === "string" ? raw.title : "",
+    items,
+    provider: typeof raw.provider === "string" ? raw.provider : "",
+    disclosure: typeof raw.disclosure === "string" ? raw.disclosure : "",
+  }
 }
 
 // ── 端点 ─────────────────────────────────────────────────────

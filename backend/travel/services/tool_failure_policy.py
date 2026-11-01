@@ -211,10 +211,39 @@ def run_checked(
             fields["summary_status"] = "unavailable"
     emit_travel_event(
         "tool.result", agent=agent, tool=tool, **call_fields, **fields)
+    _emit_result_card(fields, agent=agent, tool=tool, call_fields=call_fields)
     return value, ToolResult(
         status=ToolStatus.SUCCESS, tool_name=tool, latency_ms=duration_ms,
         data=value, criticality=dependency,
     )
+
+
+def _emit_result_card(fields: dict[str, Any], *, agent: str, tool: str,
+                      call_fields: dict[str, str]) -> None:
+    """对话查询成功且有 preview → 追加独立 ``tool.card`` 事件（F18）。
+
+    从 result_summary 派生（类目白名单 + 非空条目才发）；卡片构造失败
+    静默跳过（软失败）——卡片是展示增强，绝不影响查询本身的业务语义。
+    """
+    try:
+        from backend.travel.core.cards import card_from_summary, emit_tool_card
+
+        summary = {
+            "category": fields.get("category"),
+            "preview": fields.get("preview"),
+            "provider": fields.get("provider"),
+        }
+        payload = card_from_summary(summary, title="")
+        if payload is None:
+            return
+        emit_tool_card(
+            payload, agent=agent, tool=tool,
+            tool_call_id=call_fields.get("tool_call_id", ""),
+            task_id=call_fields.get("task_id", ""),
+        )
+    except Exception:  # noqa: BLE001 — 卡片是旁路增强，软失败
+        logger.debug("[TravelFailurePolicy] tool.card 发射失败: %s", tool,
+                     exc_info=True)
 
 
 def _resolve_failure(
