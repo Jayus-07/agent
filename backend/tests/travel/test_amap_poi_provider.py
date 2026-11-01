@@ -3,10 +3,15 @@
 
 形态（§6 矩阵 · POI Curator 行）：
 - 样本 fixture 按高德「搜索POI 2.0」归一化输出（infra/lbs/amap.normalize_merchant
-  的字段契约）构造——真实样本录制在当前执行环境不可用（httpx 0.28.1 对
-  restapi.amap.com TLS EOF，沙箱传输层问题，urllib 正常），已标注
-  BLOCKED-IN-ENV；live 冒烟用例由 TRAVEL_AMAP_LIVE_SMOKE=1 显式门控。
+  的字段契约）构造——2026-11-01 起替换为真实录制样本（来源与脱敏说明见
+  _AMAP_RECORD 注释）；live 冒烟用例由 TRAVEL_AMAP_LIVE_SMOKE=1 显式门控。
 - fail-closed：未配置 Key → 空候选（不伪造 live）；检索异常 → 链降级 seed。
+
+传输层排障备忘（2026-11-01 录制时）：Windows 下 httpx trust_env=True 经
+urllib.request.getproxies() 拾取注册表代理并解析为 https:// scheme，对
+代理端口做 TLS 握手 → 「EOF occurred in violation of protocol」。live 用例
+通过屏蔽 getproxies 保证直连，录制/复跑命令：
+  NO_PROXY=restapi.amap.com TRAVEL_AMAP_LIVE_SMOKE=1 pytest <本文件>::test_live_amap_search_record_shape
 """
 from __future__ import annotations
 
@@ -20,26 +25,29 @@ from backend.providers.travel.poi import (
     SeedPOIProvider,
 )
 
-# 高德 v5 place/text 归一化输出样本（normalize_merchant 契约字段；公开 POI
-# 事实，无敏感字段——与真实返回字段一一对应，见 infra/lbs/amap.py）
+# 高德 v5 place/text 归一化输出样本（normalize_merchant 契约字段）。
+# 2026-11-01 真实录制（厦门「景点」检索首条，normalize_merchant 输出原样
+# 入库）：字段为公开 POI 事实，无凭据/个人敏感信息；录制方式与当时的
+# 传输层排障见本文件 docstring。live 冒烟用例由 TRAVEL_AMAP_LIVE_SMOKE=1
+# 显式门控。
 _AMAP_RECORD = {
-    "id": "B0FFG9Z8O2",
-    "name": "鼓山",
-    "category": "风景名胜;风景名胜;国家级景点",
+    "id": "B02500V28J",
+    "name": "筼筜湖",
+    "category": "风景名胜;风景名胜相关;旅游景点",
     "typecode": "110000",
-    "rating": 4.4,
+    "rating": 4.6,
     "avg_cost_cny": None,
-    "open_time_today": "08:00-17:30",
-    "open_time_week": "08:00-17:30",
+    "open_time_today": "24小时营业",
+    "open_time_week": "周一至周日 00:00-24:00",
     "tel": "",
-    "business_area": "",
-    "address": "晋安区鼓山镇",
+    "business_area": "市政府大院",
+    "address": "筼筜街道湖滨中路白鹭洲站旁",
     "province": "福建省",
-    "city": "福州市",
-    "district": "晋安区",
-    "adcode": "350100",
-    "lat": 26.052,
-    "lng": 119.397,
+    "city": "厦门市",
+    "district": "思明区",
+    "adcode": "350203",
+    "lat": 24.475764,
+    "lng": 118.094224,
     "distance_m": None,
 }
 
@@ -57,14 +65,14 @@ def test_provider_maps_amap_record_to_poi_with_honest_annotations():
     provider = AmapPOIProvider()
     with patch("backend.infra.lbs.amap.place_text",
                return_value=[dict(_AMAP_RECORD)]):
-        pois = provider.search("福州", limit=5)
+        pois = provider.search("厦门", limit=5)
     assert len(pois) == 1
     poi = pois[0]
-    assert poi.name == "鼓山"
+    assert poi.name == "筼筜湖"
     assert poi.source == "amap:live"
     assert poi.verification_status == "unverified"   # 评分/营业时间未核实
     assert poi.location_status == "verified"          # 坐标是权威 LBS 事实
-    assert poi.rating == pytest.approx(4.4)
+    assert poi.rating == pytest.approx(4.6)
     assert poi.observed_at  # 观测时点必填（时效语义）
     assert any("营业时间" in tag for tag in poi.tags)
 
@@ -159,11 +167,25 @@ def test_poi_tool_merges_amap_candidates_with_note():
 
 @pytest.mark.skipif(
     __import__("os").getenv("TRAVEL_AMAP_LIVE_SMOKE") != "1",
-    reason="live 冒烟需显式选择（AMAP_KEY + 网络可用；当前执行环境 httpx"
-           " TLS 被沙箱拦截，真实样本录制 BLOCKED-IN-ENV）",
+    reason="live 冒烟需显式选择（AMAP_KEY + 网络可用；录制排障备忘见 docstring）",
 )
-def test_live_amap_search_record_shape():
-    """真实高德冒烟：字段契约 + 脱敏断言（不落库，仅结构核验）。"""
+def test_live_amap_search_record_shape(monkeypatch):
+    """真实高德冒烟：字段契约 + 脱敏断言（不落库，仅结构核验）。
+
+    两处隔离回退：
+    - _quarantine_env（autouse）给全文件打桩了假 key——live 用例恢复 env 真 key；
+    - Windows 注册表代理会被 httpx trust_env 拾取并对代理端口做 TLS 握手
+      （EOF）；httpx._utils 对 getproxies 是 from-import 绑定，必须 patch
+      该绑定处才能强制直连，跨平台确定性。
+    """
+    import os as _os
+
+    import backend.config.map as m
+
+    monkeypatch.setattr(m, "AMAP_KEY",
+                        _os.environ.get("AMAP_KEY", "").strip(), raising=False)
+    monkeypatch.setattr("httpx._utils.getproxies", lambda: {})
+
     provider = AmapPOIProvider()
     pois = provider.search("厦门", limit=3)
     assert pois, "live 检索应返回候选（网络/凭据由门控保证）"
