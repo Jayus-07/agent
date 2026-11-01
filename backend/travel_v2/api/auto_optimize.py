@@ -37,5 +37,9 @@ def auto_optimize(trip_id: str, request: Request):
         raise HTTPException(status_code=404, detail={
             "code": "NOT_FOUND", "message": "行程不存在",
         }) from None
-    return build_optimization_suggestions(
-        trip, tenant_id=tenant_id, owner_id=owner_id)
+    # service 契约收 TripDocument（brief/days），trip 行只是属主校验的载体；
+    # P5 运行态点测发现：直传 trip 行会让 destination 恒空（建议全空）。
+    suggestions = build_optimization_suggestions(
+        trip.get("document") or {}, tenant_id=tenant_id, owner_id=owner_id)
+    suggestions["trip_id"] = trip.get("trip_id") or trip_id
+    return suggestions
