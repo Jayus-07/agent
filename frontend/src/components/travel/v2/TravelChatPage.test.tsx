@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => ({
   conversationRequests: [] as Array<{ conversationId: string; enabled: boolean }>,
 }))
 
-vi.mock('@/api/travel', () => ({
+vi.mock('@/api/travel', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/api/travel')>()),
   streamTravelPlanV2: mocks.stream,
 }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
@@ -212,6 +213,53 @@ describe('V2 旅游规划对话', () => {
       return next.some((message: { role?: string; text?: string }) => message.role === 'user' && message.text === '两天')
     })).toBe(true)
     expect(container.textContent).toContain('草稿已生成')
+    await act(async () => root.unmount())
+  })
+
+  it('渲染 tool.card 查询结果卡，动作直通聊天管线', async () => {
+    // 第一轮：tool.card 事件 + 纯问答结果（无 itinerary → answer）
+    mocks.stream.mockImplementationOnce(async function* () {
+      yield {
+        event: 'tool.card',
+        data: {
+          card: {
+            kind: 'food', title: '', provider: 'amap', disclosure: '价格为查询时点快照',
+            items: [{ id: 'm-1', name: '厦门沙茶面', category: '闽菜', address: '中山路 1 号', rating: 4.5 }],
+          },
+        },
+      }
+      yield {
+        event: 'done',
+        data: { status: 'success', result: { status: 'success', final_answer: '找到几家本地餐馆。' } },
+      }
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => {
+      root.render(createElement(TravelChatPage, { initialPrompt: '今晚吃什么' }))
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector('form')?.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+
+    expect(container.textContent).toContain('餐饮推荐')
+    expect(container.textContent).toContain('厦门沙茶面')
+    expect(container.textContent).toContain('价格为查询时点快照')
+
+    // 卡片动作直通既有聊天管线：把条目作为新消息发送（第二轮 stream）
+    const askButton = [...container.querySelectorAll('button')].find((button) => button.textContent?.includes('帮我排进行程'))!
+    expect(askButton).toBeTruthy()
+    await act(async () => {
+      askButton.click()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(mocks.setMessages.mock.calls.some(([update]) => {
+      const next = typeof update === 'function' ? update(mocks.messages) : update
+      return next.some((message: { role?: string; text?: string }) => message.role === 'user' && message.text?.includes('厦门沙茶面'))
+    })).toBe(true)
+    expect(mocks.stream).toHaveBeenCalledTimes(2)
     await act(async () => root.unmount())
   })
 

@@ -1,9 +1,9 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { nanoid } from 'nanoid'
 import { ArrowLeft, ArrowRight, CalendarDays, CircleAlert, LoaderCircle, MapPin, Send, Sparkles } from 'lucide-react'
-import { streamTravelPlanV2, type TravelClarificationOption, type TravelStreamEvent } from '@/api/travel'
+import { streamTravelPlanV2, parseTravelToolCard, type TravelClarificationOption, type TravelStreamEvent, type TravelToolCard } from '@/api/travel'
 import {
   createTravelV2IdempotencyKey,
   createTravelTripV2,
@@ -17,6 +17,7 @@ import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel
 import { useTravelConversation, type TravelConversationMessage } from '@/components/travel/useTravelConversation'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
+import { ToolCardBlock } from './ToolCardBlock'
 import TravelV2TripConversation from './TravelV2TripConversation'
 import { defaultTravelV2ConversationId, getTravelV2TripAssociation, setTravelV2TripAssociation, travelV2TripIdsMatch, travelV2WorkspaceHref, travelV2WorkspaceRestoreHref } from './travelV2Conversation'
 import { itineraryToTripDocumentV2 } from './travelV2PlannerAdapter'
@@ -72,6 +73,8 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   const [error, setError] = useState('')
   const [draftPlan, setDraftPlan] = useState<DraftPlanPreview | null>(null)
   const [clarifyOptions, setClarifyOptions] = useState<{ runId: string; options: TravelClarificationOption[] } | null>(null)
+  // F18：每轮对话的查询结果卡（tool.card 事件；SSE 会话内瞬时，历史消息不带卡）
+  const [turnCards, setTurnCards] = useState<{ runId: string; cards: TravelToolCard[] }[]>([])
   const [trip, setTrip] = useState<TravelTripV2 | null>(null)
   const tripRef = useRef<TravelTripV2 | null>(null)
   tripRef.current = trip
@@ -85,6 +88,10 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
   const [associatedTripId, setAssociatedTripId] = useState(initialTripId)
   const abortRef = useRef<AbortController | null>(null)
   const orderedMessages = useMemo(() => messages, [messages])
+  const cardsForTurn = useCallback(
+    (turnId: string) => turnCards.find((entry) => entry.runId === turnId)?.cards ?? [],
+    [turnCards],
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -203,6 +210,7 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
     setClarifyOptions(null)
     setDraft('')
     setProcess(initialTravelProcess(clientRunId))
+    setTurnCards((current) => [...current, { runId: clientRunId, cards: [] }])
     setMessages((current) => [...current, {
       id: `${clientRunId}:user`, conversationId, turnId: clientRunId, role: 'user', text,
     }])
@@ -218,6 +226,14 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
           : {}),
       })) {
         events.push(event)
+        if (event.event === 'tool.card') {
+          const card = parseTravelToolCard(event.data)
+          if (card) {
+            setTurnCards((current) => current.map((entry) => entry.runId === clientRunId
+              ? { ...entry, cards: [...entry.cards, card] }
+              : entry))
+          }
+        }
         setProcess((current) => current ? reduceTravelStreamEvent(current, event) : current)
       }
       const outcome = resolveTravelStreamOutcome(events)
@@ -406,7 +422,8 @@ export default function TravelChatPage({ initialPrompt = '', initialConversation
         <section aria-label="旅行对话" className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_10px_34px_rgba(31,74,130,.06)] md:rounded-[24px]">
           <div className="flex-1 space-y-4 overflow-y-auto p-4 md:p-6" aria-live="polite">
             {orderedMessages.length === 0 && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs leading-6 text-[#405875] md:max-w-[76%] md:text-sm">你好，我可以和你一起规划旅行。告诉我目的地、同行人数、预算和喜欢的节奏；也可以直接问景点、天气或交通。<div className="mt-3 flex flex-wrap gap-2">{SUGGESTIONS.map((suggestion) => <button key={suggestion} type="button" onClick={() => setDraft(suggestion)} className="rounded-full border border-[#dce8f7] bg-white px-3 py-1.5 text-[10px] text-[#587494] transition hover:border-[#9cc2f4] hover:text-[#2878f5]">{suggestion}</button>)}</div></div></div>}
-            {orderedMessages.map((message) => <div key={message.id} className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{visibleTravelMessage(message.text)}</div></div>)}
+            {orderedMessages.map((message) => <Fragment key={message.id}><div className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : ''}`}>{message.role === 'assistant' && <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span>}<div className={`max-w-[88%] whitespace-pre-wrap rounded-2xl px-4 py-3 text-xs leading-6 md:max-w-[76%] md:text-sm ${message.role === 'user' ? 'rounded-tr-md bg-[#2878f5] text-white' : 'rounded-tl-md bg-[#f2f7fd] text-[#405875]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4882ca]'}`}>{message.tag}</span>}{visibleTravelMessage(message.text)}</div></div>{message.role === 'assistant' && cardsForTurn(message.turnId).length > 0 && <div className="pl-11"><ToolCardBlock cards={cardsForTurn(message.turnId)} onAsk={(text) => void sendText(text)} /></div>}</Fragment>)}
+            {loading && cardsForTurn(process?.runId ?? '').length > 0 && <div className="pl-11"><ToolCardBlock cards={cardsForTurn(process?.runId ?? '')} onAsk={(text) => void sendText(text)} /></div>}
             {clarifyOptions && !loading && <div className="flex flex-wrap gap-2 pl-11" aria-label="槽位澄清选项">{clarifyOptions.options.map((option) => <button key={option.label} type="button" disabled={loading} onClick={() => void sendText(option.label)} className="rounded-full border border-[#a9c9f7] bg-[#eaf2ff] px-3 py-1.5 text-[11px] font-medium text-[#1f62c9] transition hover:bg-[#d9e9ff] disabled:opacity-50">{option.label}</button>)}</div>}
             {loading && <div className="flex items-start gap-3"><span className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={16} aria-hidden /></span><div className="max-w-[88%] rounded-2xl rounded-tl-md bg-[#f2f7fd] px-4 py-3 text-xs text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={14} className="animate-spin text-[#2878f5]" aria-hidden />{processLabel || '正在连接旅游 Agent…'}</div>{process && Object.keys(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(process.stages).map(([name, stage]) => <span key={name} className={`rounded-full px-2 py-1 text-[9px] ${stage.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : stage.status === 'failed' ? 'bg-rose-50 text-rose-700' : 'bg-white text-[#6e8097]'}`}>{name}</span>)}</div>}</div></div>}
             {draftPlan && <section aria-label="行程草稿预览" className="rounded-2xl border border-[#cfe0f5] bg-[#f6faff] p-3">
