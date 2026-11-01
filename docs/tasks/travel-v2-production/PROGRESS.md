@@ -269,6 +269,13 @@
 
 ## rollinggo 预订能力核查（回应「好像有下单预订功能」）
 
+**用户决策（2026-11-01）：先落地「跳转型预订」**（PR #219 已合并）——透出 Provider 的 bookingUrl（已过 deeplink 白名单门），住宿建议（chat reporter 段 + 工作台自动优选面板）渲染「去预订」链接跳转 rollinggo 官方页面，用户自行完成下单；平台不代订、不产生订单回执，如实披露。确认门（fake 全链）保持不变，二者语义互补；平台内闭环预订待上游在 MCP 开放预订工具后切 provider。运行态验证：app 容器内 lodging options 10 条均带 rollinggo.cn 官方页链接，reporter 渲染 [去预订] + 披露，auto-optimize 透传 ✓。
+
 - 直连 MCP 端点（含探测 /mcp/flight、/mcp/order、/mcp/booking 等路径）：仅 3 个查询工具（searchHotels/getHotelDetail/getHotelSearchTags），**无预订/下单类工具**。
 - rollinggo 平台本身有预订业务（每条酒店结果的 bookingUrl 指向其 H5 下单页 rollinggo.cn），但不在 MCP 接入点上——「有预订功能」≠「MCP 可下单」。F14 平台内闭环预订仍 BLOCKED（需上游在 MCP 开放预订工具）；如需「跳转型预订」（透出 bookingUrl 引导用户自行完成），deeplink 白名单已配 rollinggo.cn（P1），属可选增强、需用户决策。
 
+## 接入状态（2026-11-01）
+
+- **本机共享栈（8080/9080 运行环境）= 已接入 live**：P1–P4 + 修复 #212/#213/#214/#217/#219 全部合并 main 并 rebuild 生效；`TRAVEL_COMMERCE_PROVIDER_MODE=live` + `TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS=rollinggo.cn` 已同时配置在 worktree 与**主仓库** .env（防从主仓库 rebuild 时回退 fake 的用户可见回归）。running 证据：场景2/4/7 真实报价、预订链接透出（容器内验证）。
+- **真实服务器（部署/prod-4c8g）= 未部署**：本任务范围为本机共享栈；上服务器需按 部署/prod-4c8g/README.md 流程执行（其 .env 需单独配置 live 开关与白名单，凭据走管理端登记）。
+- F14 终态：搜索/查价 live ✅；预订动作面 = 跳转型预订 ✅（平台不代订）+ 确认门机制 ✅（fake）；**API 闭环预订仍 BLOCKED**（上游 MCP 未开放写工具）。
