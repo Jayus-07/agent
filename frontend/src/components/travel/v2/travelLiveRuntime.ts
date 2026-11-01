@@ -36,7 +36,8 @@ export function resolveTravelStreamOutcome(events: TravelStreamEvent[]): TravelS
     return { kind: 'clarification', response }
   }
   if (response.itinerary) {
-    // V2 成功结果自动写入正式 Trip；V1 的 waiting_confirmation 不再拦截保存。
+    // 原型 F03 两段式：plan 结果交由 TravelChatPage 渲染草稿预览，用户确认后才创建正式 Trip；
+    // 保存动作与幂等键由页面持有，这里只负责把 SSE 结果归一为 plan。
     return { kind: 'plan', response }
   }
   return { kind: 'answer', response }
