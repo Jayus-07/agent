@@ -36,6 +36,13 @@ from backend.shared.logger import logger
 # 不受 MAIN_GRAPH_CHECKPOINTER_ENABLED 全局开关影响——任务恢复依赖持久化，必须开）
 _task_graph: Any = None
 _task_graph_lock = None
+# checkpointer 惰性单例：每次调用新建 ConnectionPool（无上限累积）在测试
+# 全量里会泄漏到 PG max_connections 耗尽——多 worker 同卡 setup() 的 DDL
+# 等待，150s 被 pytest-timeout watchdog 整进程 os._exit（v27 run
+# 41356804173 三 worker 栈实证，gw6 均为 down 后重派）。checkpoint 按
+# thread_id 隔离，共享单例不影响语义。
+_task_checkpointer: Any = None
+_task_checkpointer_lock = None
 
 
 class TaskCancelled(Exception):
@@ -57,26 +64,40 @@ def build_task_checkpointer() -> Any:
     （F3 演练 P3 实锤，2026-09-25）：此前的单条裸 psycopg 连接在 PG 重启后
     死亡且永不重建，worker 内所有后续任务一律 "the connection is closed"
     失败直至进程重启。
+
+    进程级单例（惰性 + 锁）：checkpoint 按 thread_id 隔离，共享不改变语义；
+    每调用新建池会把「每用例一池」的调用方泄漏成连接耗尽（见上）。
     """
-    from backend.config.database import MEMORY_DB_CONFIG
+    global _task_checkpointer, _task_checkpointer_lock
+    if _task_checkpointer is not None:
+        return _task_checkpointer
+    import threading
 
-    c = MEMORY_DB_CONFIG
-    from psycopg_pool import ConnectionPool
+    if _task_checkpointer_lock is None:
+        _task_checkpointer_lock = threading.Lock()
+    with _task_checkpointer_lock:
+        if _task_checkpointer is not None:
+            return _task_checkpointer
+        from backend.config.database import MEMORY_DB_CONFIG
 
-    pool = ConnectionPool(
-        kwargs={
-            "host": c["host"], "port": c["port"], "dbname": c["dbname"],
-            "user": c["user"], "password": c["password"],
-            "autocommit": True,
-        },
-        min_size=1, max_size=4, open=True,
-        check=ConnectionPool.check_connection,  # 借出前探活，坏连接自动重建
-    )
-    from langgraph.checkpoint.postgres import PostgresSaver
+        c = MEMORY_DB_CONFIG
+        from psycopg_pool import ConnectionPool
 
-    checkpointer = PostgresSaver(pool)
-    checkpointer.setup()  # 幂等建表
-    return checkpointer
+        pool = ConnectionPool(
+            kwargs={
+                "host": c["host"], "port": c["port"], "dbname": c["dbname"],
+                "user": c["user"], "password": c["password"],
+                "autocommit": True,
+            },
+            min_size=1, max_size=4, open=True,
+            check=ConnectionPool.check_connection,  # 借出前探活，坏连接自动重建
+        )
+        from langgraph.checkpoint.postgres import PostgresSaver
+
+        checkpointer = PostgresSaver(pool)
+        checkpointer.setup()  # 幂等建表
+        _task_checkpointer = checkpointer
+        return _task_checkpointer
 
 
 def build_task_graph() -> Any:
