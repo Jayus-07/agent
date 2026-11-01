@@ -295,3 +295,46 @@ v1 108 → v2 61 → v3 20 → v4（skip 假象，实际仅 travelv2 3）→ **v
 
 - api 定向确认（#181 后）→ backend-root 54 例（批十三，TASK.md 交接第三节有分组预判）→ 全量收官 COMPLETED。
 - p5/collapse 类已绝杀：REDIS/口径根修后无残余；若未来复发按坑位 18 加诊断断言。
+
+---
+
+# 第四批会话（2026-11-01）：批十三 backend-root 54 例清偿 + 两处定性修正
+
+## 分批实证
+
+### 批十三 PR #188（backend-root 54 例 → 0）
+
+v14 run 41249581757 该 suite 首次真实跑完暴露 54 例。本地单进程基线 25 例复现（/d/tmp/ci-debt/b13_local1.txt），其余 29 例 CI-only。分组与修法见 PR #188 描述。关键定性：
+
+- **deps.py:355 是真产品回退**（唯一一处修产品代码）：git log -S 实证 1748ae5（10-01）带 logger.warning 实现，17c7b56（10-17）重写价格守卫时回退成 except: pass——P3-3 守卫要求的「记录 AUTHZ_DENIED 安全事件失败」字符串缺失。恢复实现，主栈 rebuild 后端 healthy。
+- **drop_pgtest_tables 库列表漏 COMPETITOR_PG_CONFIG**（批一 inventory 10 例同款病根复发第三处）：CI 独立 competitor 库永不清 → anti_ban:state 计数跨用例累积（BudgetExhausted 提前抛）+ selection_trends 快照残留 + competitor 残留。本地绿 = COMPETITOR 库缺省与 BUSINESS 同库（.env 未设 COMPETITOR_PGDATABASE）——又一例「本地环境红利」。
+- **business_stores_pg 固定前缀 pgtest_biz_（无 worker 段）+ 自管 setenv 不 pop 烘焙模块**——#145 worker_scoped 机制的漏网文件；CI xdist 4 worker 下 UndefinedTable。迁 worker_scoped_prefix() + _pop_store_modules()。
+- v16 全量实证：misc/orchestration/cs/prompts/travelv2/evaluation/repo-tests/sql-infra/tools-security-obs **10 suite 全绿**（含批十三修复的 selection_decision_api 等文件所在的 misc 等）——backend-root/api 结论被 50min 上限截断（见下）。
+
+### 定性修正一：坑位 21「runner 挂死」推翻（PR #190）
+
+- v16 run 41264049361：rag/backend-root/api 三 job 50min 被 timeout-minutes: 50 杀。rag 的 pytest_out.txt（artifact 部分输出）跑到 **96%** 且含 ~15 F——不是挂死，是**修复后全绿路径时长超上限**。api/backend-root 0 字节 = stdout 全缓冲丢失（重定向文件无实时 flush），非「无输出挂死」。
+- v14 对照：api 快败 3.5min（13 例 error 短路）、backend-root 4.5min（54 例）——修复后全量真跑时长暴涨合理。
+- 处置：timeout-minutes 50→150（#190）。api「单跑 6/6 全灭」（第三批 a378674 结论）同因——并发/单跑差异不存在，只是快败 vs 真跑。
+- **顺带修正**：v5 rag「16 秒 success」是 gate skip 假象（坑位 17 同款误判），rag 全绿基线此前从未存在。
+
+### 定性修正二：travel bulkhead 两层（PR #190 窗口 + #191 slot 隔离）
+
+- v16：test_provider_bulkhead assert False → 第一层修等待窗口（1s/0.3s→5s，#190）。
+- v17：仍 assert False，pytest_out 决定性证据 = **4 线程仅 3 started + 3 条「超出 2.0s 预算」** → 进入用例时 `_provider_slots`（BoundedSemaphore(4) 模块级）已被同 worker 前序用例占 1 槽（loader hang 2-3s 内释放晚于本用例开始）。#191：autouse fixture 重置信号量（容量/拒绝语义不变）。
+
+## rag 批移交（批十四主体）
+
+- v16 rag 96% 被杀 + **本地 xdist 全量复现同形态**（/d/tmp/ci-debt/b14_rag_local.txt：96% 处 gw2 node down 后停摆，进程存活但输出冻结）。
+- 毒文件定位：`backend/tests/rag/test_tracer_subscribe.py`——文件内连跑到第 7/9 例 hang（位置漂移），单例单跑通过（40.75s 偏慢）；pytest-timeout thread 法杀不掉（GIL/原生层死锁嫌疑）。fixture=fresh_collector（sqlite_tracer.py，pgtest 前缀 PG trace store + 模块 rebind），嫌疑 = 与 trace_writer 异步队列（Redis Streams 模式，本地 Redis 可用）交互死锁。CI（Linux）96% 同位置挂——跨平台复现。
+- 顺带记录：test_vector_degraded_expansion 1 例本地红（待 CI 清单对齐）。
+
+## 坑位（22–24，续接）
+
+22. **0 字节 pytest_out.txt ≠ 挂死**：stdout 重定向全缓冲，进程被杀时缓冲丢失——进度判定要看 artifact 是否存在 + job 步骤号，别再当 runner 挂死定性。
+23. **模块级 BoundedSemaphore/线程池是 xdist 同 worker 跨用例共享状态**：前序用例的异步释放（done_callback/hang 线程）会毒死后续并发断言——并发容量类测试一律 fixture 重置（#191 模式）。
+24. **50min job 上限是快败时代定值**：修复 suite 失败后，全绿真跑时长可能暴涨数倍——清偿批次要同步核对 workflow timeout 与 suite 真实时长（#190 已提 150）。
+
+## 收敛曲线（真实口径更新）
+
+v1 108 → v2 61 → v3 20 → v5 15（api 13 首曝 + p5/collapse）→ v14 54+api（backend-root 首曝）→ **v16 10 绿 + travel 1 + 三长 suite 超时杀**（timeout 修正 #190）→ v17（travel slot 修正 #191；rag/backend-root/api 首次进入全量真跑窗口）→ 批十四收官。

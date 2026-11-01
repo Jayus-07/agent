@@ -1,8 +1,8 @@
 # CI 全量回归暗债清偿
 
 > 任务 ID：ci-regression-debt
-> 创建：2026-10-30；最近交接：2026-11-01（第三批会话，批五~批十二）
-> 状态：IN_PROGRESS（**12/13 suite 定向实证全绿**；api 修复待 v15 定向确认；backend-root 首曝 54 例已登记移交——**续工直接按文末「交接（2026-11-01）」章节执行**）
+> 创建：2026-10-30；最近交接：2026-11-01（第四批会话，批十三 + 定性修正两处）
+> 状态：IN_PROGRESS（**批十三 backend-root 54 例已清偿合入 #188；v16 全量 10/13 绿，travel 已二连修（#190/#191）；剩余：rag 批首曝清偿 + backend-root/api 全绿基线确认——续工直接按文末「交接（2026-11-01 第四批）」章节执行**）
 
 ## 目标
 
@@ -157,3 +157,35 @@ v14 首曝（v5/v6 该 suite 均被 runner 杀掉从未跑完）。pytest_out.tx
 - [ ] backend-root 清零（批十三）
 - [ ] 全量 dispatch → 13 suite + summary 全绿 → TASK.md COMPLETED
 - [ ] 曲线补记：v5 15 → v6/v10 挂死干扰 → v14 54（backend-root 首曝）→ 0
+
+---
+
+# 交接（2026-11-01 第四批会话：批十三完成 + 两处定性修正，供下一会话续工）
+
+## 一、本批已合 PR（勿重做）
+
+| PR | 内容 | 实证 |
+|---|---|---|
+| #188（b99c142） | **批十三：backend-root 首曝 54 例清偿**。真产品回退 1（deps.py:355 审计 except:pass 丢日志，17c7b56 回退了 1748ae5 的 P3-3 实现——已恢复 logger.warning）；隔离基建补口（drop_pgtest_tables 补 COMPETITOR_PG_CONFIG——CI 独立 competitor 库漏清 → anti_ban 4/trends 5/competitor 10 残留；business_stores_pg 迁 worker_scoped 前缀）；CI 环境差异 11（selection_decision_api 5 身份头/security_events 2 JWT/production_auth 2 LLM_BUDGET_MODE/map_lookup 2 TENCENT_LBS_KEY）；资产漂移 20+lock 重新生成 | 本地 20 文件单进程+xdist 双口径 421 passed；主栈 rebuild 后端 healthy |
+| #190（f45bcfd） | timeout-minutes 50→150 + travel bulkhead 等待窗口 1s/0.3s→5s | v17 起生效 |
+| #191（206ecc4） | travel bulkhead autouse fixture 重置 _provider_slots（v17 实证 4 线程仅 3 started——同 worker 前序用例 slot 释放晚于本用例开始，BoundedSemaphore(4) 模块级共享） | 本地 3 passed |
+
+## 二、重大定性修正（两处，推翻旧结论）
+
+1. **坑位 21「runner 层挂死」推翻**：v16 run 41264049361 rag 的 pytest_out.txt 跑到 **96%** 且含一批 F（gw2 node down 是被杀瞬间）；api/backend-root 0 字节输出是 **stdout 全缓冲被杀丢失**。真相 = **修复生效后全绿真实执行路径时长超 50min job 上限**（v14 api 快败 3.5min vs 修复后 >50min）——不是 runner 非确定性。api「单跑 6/6 挂死」（a378674）同因。timeout 150（#190）后该形态应消除。
+2. **v5 的 rag「success」是 gate skip 假象**（16 秒秒级 success，坑位 17 同款）——rag 从未有过真实全量通过基线；「rag 已实证能跑完」的旧记录不成立。
+
+## 三、剩余工作（批十四清单）
+
+1. **rag 批首曝清偿（主体）**：v16 rag 跑到 96% 被杀，部分输出含 ~15+ F；**本地复现同形态**（/d/tmp/ci-debt/b14_rag_local.txt——跑到 96% 后 hang + gw2 node down，本地进程未死但停摆）。本地已定位毒文件：`backend/tests/rag/test_tracer_subscribe.py`——文件内跑到第 7/9 例 hang（位置漂移），pytest-timeout thread 法杀不掉（GIL/原生层死锁嫌疑），单跑单例通过（40.75s 偏慢）、文件内连跑必挂——**fixture（fresh_collector，sqlite_tracer.py）与 trace_writer 异步队列（Redis Streams 模式）交互死锁嫌疑**，待深挖（trace_writer.py flush/_worker）。CI 同位置挂（v16/v17 两轮 96%+gw2 down）——跨平台复现，真问题。
+2. **v17 run 41268074891（timeout 150 首航，HEAD f45bcfd）**：misc/orchestration/cs/prompts/travelv2/evaluation/repo-tests/sql-infra/tools-security-obs 10 suite 绿；travel 红（#191 已修，v18 验证）；rag/backend-root/api 三 job 在 150min 内跑（04:00 前后出结论）——**先取 backend-root/api 结论（批十三验证）+ rag 失败清单**。
+3. travel bulkhead（#191）随 v18 验证；若 rag 清偿完 → 无参数全量 → 13 suite + summary 全绿 → COMPLETED。
+
+## 四、验收（更新）
+
+- [x] backend-root 清零（批十三 #188；CI 全绿基线待 v17/v18 确认）
+- [ ] rag 清零（批十四：tracer_subscribe hang 定性修复 + CI 失败清单清偿）
+- [ ] travel 定向/全量绿（#190+#191 后）
+- [ ] api 全绿（从全量取，#190 后 timeout 不再杀）
+- [ ] 全量 dispatch → 13 suite + summary 全绿 → TASK.md COMPLETED
+- [ ] 曲线补记：v16 1+3 cancelled（travel 1 + 三长 suite 超时）→ v17 → 0
