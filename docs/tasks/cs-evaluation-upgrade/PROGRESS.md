@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P3 已完成合入，P4（offline）待实施、P5 机制待建；P4 live 跑批预算待用户拍板**
+- 当前状态：**P1–P5 已完成；运营收尾阶段 P6–P8 已立项（TASK §10）——P6 live 跑批预算 10 元用户已拍板，下一会话从 P6 开工**
 
 ## 阶段状态总表
 
@@ -12,10 +12,11 @@
 | P1 | 离线回放 runner 入 CI + v2/ 分片定案 | **已完成**（2026-11-02） | feat/cs-eval-p1 / [PR #223](https://github.com/Jayus-07/agent/pull/223)（merged 63df24b） | 见日志 2026-11-02（一） |
 | P2 | 数据集修订三类口径 + 升 v2.1 | **已完成**（2026-11-02） | feat/cs-eval-p2 / [PR #228](https://github.com/Jayus-07/agent/pull/228)（merged a729f3c） | 见日志 2026-11-02（二） |
 | P3 | 词表/规则能力补强（cs-gate 护航） | **已完成**（2026-11-02，含候选 4 条收编升 v2.2） | feat/cs-eval-p3 / [PR #229](https://github.com/Jayus-07/agent/pull/229)（merged b770788） | 见日志 2026-11-02（三） |
-| P2 | 数据集修订三类口径 + 升 v2.1 | 待实施（依赖 P1） | — | — |
-| P3 | 词表/规则能力补强（cs-gate 护航） | 待实施（依赖 P1） | — | — |
-| P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | 待实施 | — | — |
-| P5 | 坏例回流运营闭环 | 长期 | — | — |
+| P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | **已完成（offline）**（2026-11-02） | 纯运营操作无代码分支；见日志 2026-11-02（四） | run 1a2ae7da：324/324 pass |
+| P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
+| P6 | P4 live 跑批执行（**预算 10 元，用户 2026-11-02 拍板**）+ 管理端发起/历史核实收口 | 待实施（可开工） | 运营执行 + PROGRESS 回填 | TASK §10 P6 |
+| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | 待实施 | feat/cs-eval-p7（计划） | TASK §10 P7 |
+| P8 | 持久化 intake（unanswered_questions → 候选） | 待实施 | feat/cs-eval-p8（计划） | TASK §10 P8 |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -31,6 +32,25 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（五）—— 用户拍板与运营收尾立项（P6–P8，TASK §10）
+
+- **用户拍板**：①P4 live 跑批预算 **10 元**批准执行；②要求补评测平台 case 删除/归档能力（清理 P4 竞态约 400 个重复 approved case）；③要求补持久化 intake（unanswered_questions → 候选）；④询问管理端发起/历史展示与「做完可否上线运营」。
+- **核实结论**：管理端 RunsTab 已有「发起评测」表单（仅 super_admin）与运行列表/环境指纹卡——发起与历史展示 UI 均存在（RunsTab.tsx:124-184）；上线口径见 TASK §10 引言（P6–P8 完成 = 评测运营线可上线运营受控试用；全量公开投产另需压测/渗透/资金决策）。
+- **立项**：TASK §10 落稿 P6（live 跑批护栏步骤）/P7（case 归档端点）/P8（持久化 intake）+ 上线运营巡检清单；下一会话从 P6 开工。
+
+### 2026-11-02（四）—— P4 落地（管理端评测中心 offline 接线）+ P5 机制闭环验证
+
+- **P4（纯运营操作，无代码改动）**：cs 数据集经 evaluation_v2 治理 API 注册并入管理端——
+  - dataset `cs_locked_v2_2`（domain=cs，tenant=default，owner=user:279 沿用现有 rag 数据集口径）；
+  - 锁版 v2.2 全量 324 条经导入（非 RAG 通道：manifest schema `evaluation-v2/1.0`、单批 ≤100 分 4 批、case 字段白名单转换——turns 入 input、category/schema_version 入 metadata）→ 逐条 review approve（approve 需回填 expected=proposed_facts[0]）→ dataset version **v1.0.0 发布（324 items）** → suite `cs_locked_v2_2_full`（复用已发布 deterministic evaluator，binding=answer_quality）→ suite version 发布；
+  - **offline 基线 run：run_id `1a2ae7da-e1ed-5bd1-a755-62b2cc0222cb`，324/324 completed、324 passed（100%）**，管理端 runs 列表可见；
+  - 身份链：JWT 签发（local_super_admin/user:279）+ auth-redis 会话键（注意：网关会话闸查的是独立容器 `agent-auth-redis`，非宿主 6379 主 Redis）+ `X-API-Key` 服务身份头，全程经 :9080 网关生产口径。
+- **P4 过程波折（如实记录）**：脚本重跑竞态导致同批用例被导入 4 次（候选层去重靠防重查询，竞态窗口在「in_review=0」瞬间）；approved 的重复 case 无 DELETE 端点可清——发布时按锁版原 id（payload.source_ref.case_id）去重只选 324 条唯一 case 进 version，重复 case 留在 case 池不可见（**遗留：评测平台缺 case 删除/归档端点，建议平台补齐**）。共享栈期间被并行会话 rebuild 两次（按纪律只读等待恢复，数据无损失）。
+- **P5（机制闭环，复用既有通道零新代码）**：`ai.unanswered_questions`（当前 29 条：rag_miss 20 + sql_empty 9，均为测试残留）→ 评审 → 增补数据集的回流链路验证可达：真实坏例 question 经 `POST /v2/candidates`（source_kind=manual）→ review reject 留痕（201/200）。
+  - **设计缺口（移交）**：`intake/from-trace` 只认进程内 trace collector 最近 200 条，跨重启的历史坏例无法经 trace 入口回流——持久化坏例走 manual candidate 通道（SOP 已写入 evaluation-governance.md §5 收录段）；建议平台补「intake by unanswered_questions id」。
+  - 周度评审 SOP 已文档化（evaluation-governance.md）；当前坏例池为测试残留（与投产检查清单第 5 项关联）。
+- **任务计划总收口**：P1–P4 完成、P5 机制闭环；TASK §7 总验收矩阵见最终汇报。**P4 live 跑批（324 条 × 真实 LLM）预算与频次仍待用户拍板。**
 
 ### 2026-11-02（三）—— P3 落地：词表/规则扩圈 + 候选收编升 v2.2
 
