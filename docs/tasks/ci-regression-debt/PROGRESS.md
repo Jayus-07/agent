@@ -285,7 +285,7 @@ v14 全量（11/13 绿）中 `-ra` 新清单暴露 `test_cs_agent_status_transfe
 18. **诊断断言是 CI-only 疑难的高效武器**：对静默 continue / 触发判定类失败，先给断言消息携带分流数据（ReapResult 计数、used/budget/ratio），一次 dispatch 拿决定性证据再修——p5、collapse 两案各一次实验闭环，避免盲猜循环。注意属性名要对照 dataclass 定义（overflow 翻车一次）。
 19. **from-import 的 patch 目标是子模块属性**：`from backend.config.llm import X` 在函数内执行读的是 `config.llm.X` 原模块属性；patch `backend.config` 包的 re-export 绑定无效。坑位 9 的变体，patch 前先看实现在读哪个命名空间。
 20. **本地环境红利清单**（本地绿 ≠ CI 绿的系统性原因）：REDIS_ENABLED=true（主栈 Redis）、LLM_CONTEXT_LENGTH=8192、JWT_SECRET/AI_INTERNAL_TOKEN/SECRETS_ENCRYPTION_KEY（.env）、主栈 maintenance/dispatcher worker（reaper 兜底）、MEMORY_DB_CONFIG 指向真实库。CI 模拟 env（坑位 7）必须显式清空这些键。
-21. **api/rag/backend-root 挂死形态**：Suite pytest 步骤 ~50min 无输出被 job 上限杀（v6/v10 两轮三 job 同挂，v5/v14 快败完成）——runner 层非确定性，pytest 输出重定向后无实时日志；批九已补 pytest_out.txt 进 artifact，被杀后如有部分输出可查。处置：重 dispatch（抽签），不阻塞其他 suite 结论。
+21. **api/rag/backend-root 挂死形态**：Suite pytest 步骤 ~50min 无输出被 job 上限杀（v6/v10 两轮三 job 同挂，v5/v14 快败完成）——runner 层非确定性，pytest 输出重定向后无实时日志；批九已补 pytest_out.txt 进 artifact，被杀后如有部分输出可查。处置：重 dispatch（抽签），不阻塞其他 suite 结论。**补充（本会话末）：api 单 suite dispatch 6/6 全灭（41218669882/41223958302/41229978807/41252686538/41256263644 等，40-56min 被杀）——单跑形态下必现，抽签无效；api 结论一律从无参数全量取（并发形态历次正常出结论）。**
 
 ## 收敛曲线（真实全量口径）
 
