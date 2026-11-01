@@ -154,6 +154,8 @@ def test_capabilities_shape(client):
     assert body["skills"], "Skill 注册表不应为空"
     for w in body["workflows"]:
         assert w["examples"], "workflow 至少 1 条 examples（manifest 校验口径）"
+    for c in body["capabilities"]:
+        assert c["owner"], f"{c['name']} 响应缺 owner（G1 治理对账字段）"
 
 
 def test_capabilities_routed_contract(client):

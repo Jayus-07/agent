@@ -179,3 +179,24 @@ describe('Skill 页面 Tool Discovery 档（决策 #18，B1）', () => {
     expect(document.body.textContent).toContain('产品范围允许')
   })
 })
+
+describe('Skill 页面能力清单 owner 负责人列（G1 治理）', () => {
+  it('能力清单表展示「负责人」列与 owner 值', async () => {
+    getCapabilities.mockResolvedValue({
+      count: 1,
+      routed_count: 1,
+      capabilities: [{
+        name: 'sql.query', skill: 'sql', routed: true, owner: 'platform-team',
+        rule_keywords: [], examples: [], reason: '', registered: true,
+      }],
+      workflows: [],
+      skills: [{ name: 'sql_skill', description: '', capabilities: ['sql.query'] }],
+    })
+
+    await renderPage()
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)) })
+
+    expect(document.body.textContent).toContain('负责人')
+    expect(document.body.textContent).toContain('platform-team')
+  })
+})

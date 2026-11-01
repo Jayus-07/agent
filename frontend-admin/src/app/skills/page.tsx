@@ -152,6 +152,7 @@ function CapabilitiesTab() {
                   <tr className="text-[11px] text-text-muted">
                     <th className="px-4 py-2 font-normal">Capability</th>
                     <th className="px-4 py-2 font-normal">Skill</th>
+                    <th className="px-4 py-2 font-normal">负责人</th>
                     <th className="px-4 py-2 font-normal">路由状态</th>
                     <th className="px-4 py-2 font-normal">规则关键词</th>
                     <th className="px-4 py-2 font-normal">向量路由样例</th>
@@ -163,6 +164,7 @@ function CapabilitiesTab() {
                     <tr key={c.name} className="border-t border-border-subtle align-top">
                       <td className="px-4 py-2.5"><code className="text-text-primary">{c.name}</code></td>
                       <td className="px-4 py-2.5 text-text-secondary">{c.skill}</td>
+                      <td className="px-4 py-2.5 text-text-secondary">{c.owner}</td>
                       <td className="px-4 py-2.5">
                         <RoutedBadge routed={c.routed} />
                         {!c.routed && c.reason && (
