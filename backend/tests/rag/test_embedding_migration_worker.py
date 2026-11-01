@@ -46,7 +46,11 @@ def worker_env(data):
     # v19 run 41329142940 CI 库无 seed 行 6 例被误拦实证。
     if orphan and "缺少 embedding 角色行" not in orphan:
         pytest.fail(f"embedding 绑定处于残留状态，先人工修复再跑本验收：{orphan}")
-    cleanup_residue()
+    # stale_only=False：CI 隔离库无并行会话，migration-test 租户的未终态
+    # 重建任务（占 biz_id='global' 全局锁）必为本套件上一轮残留——不限
+    # stale 收口，否则上一轮未收尾的任务让本轮撞 ModelConfigConflict
+    # （v26 run 41354669257 实证；本地共享栈由 guard 默认 stale 保护）。
+    cleanup_residue(stale_only=False)
     state = SimpleNamespace(items=0, fail_after=None)
 
     class Provider(BaseHTTPRequestHandler):

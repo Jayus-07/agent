@@ -140,7 +140,12 @@ def call_with_budget(operation: str, fn: Callable[[], T]) -> T:
         _provider_slots.release()
         raise
     # 不在超时出口释放：已运行的同步调用不可强杀。
-    future.add_done_callback(lambda _future: _provider_slots.release())
+    # _slots 以默认参数绑定本次 acquire 的信号量：callback 运行时查模块
+    # 属性会打到「后来者」（测试隔离用 monkeypatch 换新信号量时，本调用
+    # 的完成回调向外来的新 BoundedSemaphore release——计数虚高毒死后续
+    # 用例的 acquire，v26 run 41354669257 travel bulkhead 间歇实证）。
+    _slots = _provider_slots
+    future.add_done_callback(lambda _future, _slots=_slots: _slots.release())
     try:
         return future.result(timeout=budget)
     except _FutureTimeout:

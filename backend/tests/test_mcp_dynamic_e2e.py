@@ -103,7 +103,14 @@ def mock_ports():
     _, port_a = _start_uvicorn(_build_app_v1())
     _, port_b = _start_uvicorn(_build_app_v2())
     _, port_rest = _start_uvicorn(_build_rest_app())
-    return {"a": port_a, "b": port_b, "rest": port_rest}
+    yield {"a": port_a, "b": port_b, "rest": port_rest}
+    # 模块收尾兜底：清理历史轮残留的孤儿 bundle（name 固定可寻址；失败
+    # 路径中断 finally 时 grants/bundle 会留在共享 memory 库，毒掉并行
+    # suite 的 consistency 对账——v25/v26 run 实证）
+    _db_exec(
+        "DELETE FROM ai.product_bundle_grants WHERE bundle_id IN "
+        "(SELECT id FROM ai.capability_bundles WHERE name = '补货分析包')")
+    _db_exec("DELETE FROM ai.capability_bundles WHERE name = '补货分析包'")
 
 
 # ── DB 前置 ──────────────────────────────────────────────────
@@ -906,11 +913,13 @@ class TestMultiToolReplenishmentPath:
                     {"sku": "SKU-1", "quantity": 1, "based_on_sold": 1})
         finally:
             set_product_context("internal", "internal_call")
-            # 清理顺序：先 grants 再 bundle——bundle 被 grants 引用时直接
-            # DELETE 会撞 FK、异常中断后续 connection 清理，留下「bundle+
-            # grants 在、连接已删」的悬空组合毒掉并行 suite 的 consistency
-            # 对账（v25 run 41353036477 dynamic_registry FAIL 实证）。
-            _db_exec("DELETE FROM ai.capability_bundle_grants WHERE bundle_id = %(b)s",
+            # 清理顺序与表名（116 迁移）：先 product_bundle_grants 再
+            # bundles——bundle 被 grants 引用时（非 CASCADE 假设失效场景）
+            # DELETE 异常会中断后续 connection 清理，留下悬空组合毒掉并行
+            # suite 的 consistency 对账（v25/v26 run 实证）。表名以 116
+            # 迁移为准：ai.product_bundle_grants（曾误写 capability_ 前缀
+            # 直接 UndefinedTable 中断整个 finally）。
+            _db_exec("DELETE FROM ai.product_bundle_grants WHERE bundle_id = %(b)s",
                      {"b": bundle_id})
             _db_exec("DELETE FROM ai.capability_bundles WHERE id = %(b)s",
                      {"b": bundle_id})
