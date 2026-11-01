@@ -1,21 +1,21 @@
 {
-  "version": "2.0",
-  "case_count": 320,
-  "module": "cs",
-  "schema_description": "客服域评测 V3 canonical 合集：20 条 v1（CS-001~020，旧 schema 原样平移）+ 300 条 cs-v2（CS2-C1~C6，schema_version=cs-v2，六类分布 faf60/query60/action60/complaint40/multi_turn40/safety40）。",
-  "created": "2026-09-08",
-  "locked": "2026-09-19",
-  "distribution_v2": {
-    "faq": 60,
-    "query": 60,
-    "action": 60,
-    "complaint": 40,
-    "multi_turn": 40,
-    "safety": 40
-  },
-  "sha256": "dd6271284144090679e476299333b01e016bd56ba7bf74f3461487ec392db1cd",
-  "notes": "v2.0 锁版（P0 评审拍板 2026-09-19）：意图 20/20 覆盖（映射评审依据 INTENT_PROFILES：a_login_issue/c_feedback→cs_knowledge，h_supervisor→cs_handoff）；C4 子覆盖调整为 显式转人工(h_handoff)14+主管升级(h_supervisor)2+投诉建单(c_complaint)12+情绪升级(c_complaint)10+反馈(c_feedback)2；变更须升版本号并重算 sha256。",
-  "content_hash": "dd62712841440906",
-  "kb_id": "cs_eval_kb",
-  "kb_note": "模块评测库（audience=test，仅 super_admin 可见/可用）；评测本体零检索依赖，合成测试语料存此库，域图 live 消费接线为后续任务"
+ "version": "2.1",
+ "case_count": 320,
+ "module": "cs",
+ "schema_description": "客服域评测 V3 canonical 合集：20 条 v1（CS-001~020，旧 schema 原样平移）+ 300 条 cs-v2（CS2-C1~C6，schema_version=cs-v2，六类分布 faf60/query60/action60/complaint40/multi_turn40/safety40）。",
+ "created": "2026-09-08",
+ "locked": "2026-11-02",
+ "distribution_v2": {
+  "faq": 60,
+  "query": 60,
+  "action": 60,
+  "complaint": 40,
+  "multi_turn": 40,
+  "safety": 40
+ },
+ "sha256": "dd6271284144090679e476299333b01e016bd56ba7bf74f3461487ec392db1cd",
+ "notes": "v2.1 修订（cs-evaluation-upgrade P2，2026-11-02）：A1 faq 无显式政策词的政策咨询/拒答题 intent k_policy→k_faq（规则层 k_policy=显式政策词命中 fine_router._RULE_INTENT_MAP，k_faq=知识域设计内兜底且 KB 覆盖全知识域 intents.py P3.5；拒答由知识域证据门禁执行）；A2 含显式动作动词（申请/怎么退/再申请）的 faq 期望改动作意图（与 coarse action regex 设计口径同源）；A3 知识咨询语义被域词表截走的 7 条期望改 k_faq（断言=语义，fail 归 P3 域判定/词表边界）；A4 k_product/k_promotion 无显式词命中改兜底 k_faq；B intent→target 映射矛盾 22 条 target 对齐 INTENT_PROFILES 契约（safety 退款主题 4 条 intent=as_refund 保留、target 改 cs_business_action）。A1 补充：C1-039/040 物流异常知识问句同口径改 k_faq；A2 五条（C1-004/005/014/015/019）intent 改动作意图后 target 连带对齐 cs_business_action（消除新映射矛盾）。v2/ 生成中间分片已归档 v2.deprecated（与锁版 300 条逐字段一致）；4 条未收编候选（CS2-C2-061/062 t_balance_query、CS2-C3-061/062 t_order_cancel，规则层无覆盖）转 P3 验收样本，v2.2 再议收编。变更须升版本号并重算 sha256（content_hash）。",
+ "content_hash": "4c6849605fb55b4a",
+ "kb_id": "cs_eval_kb",
+ "kb_note": "模块评测库（audience=test，仅 super_admin 可见/可用）；评测本体零检索依赖，合成测试语料存此库，域图 live 消费接线为后续任务"
 }

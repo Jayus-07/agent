@@ -8,25 +8,21 @@
 数据集：backend/evaluation/datasets/cs/cases.jsonl（v2.0 锁版，统一 loader 加载，
 manifest content_hash 在加载时强制校验——原地改即 fail-fast）。
 
-基线（2026-11-01 首次全量回放；2026-11-02 修正 TARGET_MAP 后重测）：
-  intent 40.6% / target 57.2% / risk 63.4%
-  修正说明：探针初版把 route_path=human_handoff 映射为 cs_human，而数据集
-  target 值域实为 cs_handoff（17 条），凡路由正确转人工的用例被系统性误判
-  miss——TASK §2.1 预留的「complaint/human 映射待核对」结论即此。
+基线与阈值（cs-evaluation-upgrade P2，2026-11-02，数据集 v2.1）：
+  门禁口径 intent 56.8%（159/280）/ target 62.9%（176/280）/ risk 72.5%（174/240）
+  阈值防退化不防历史：intent≥0.55 / target≥0.61 / risk≥0.71。
+  （v2.0 基线 intent 40.6% / target 57.2% / risk 63.4% 系修订前口径；
+  v2.1 修订了 faq k_policy/k_faq 标注口径、22 条 intent→target 映射矛盾，
+  依据见数据集 manifest notes。基线漂移需以「阈值更新 + 依据」走 PR，
+  不得静默放宽。）
 
-阈值防退化不防历史：intent≥0.40 / target≥0.56 / risk≥0.60。
-（target 阈值 0.56 对应修正后基线 57.2%，与 intent/risk 约 1pp 余量的
-口径一致；TASK §4 初拟的 0.52 系按未修正基线计算。基线漂移需以
-「阈值更新 + 依据」走 PR，不得静默放宽。）
-
-口径注记：
-- 多轮用例（40 条）按首轮回放——与锁定基线口径一致；末轮+上下文回放的
-  口径修订属 cs-evaluation-upgrade P2 范畴。
-- expected 缺失某维度断言时（v1 的 intent/risk_level）计命中——沿用基线
-  探针口径，保证与 TASK §1.1 分类目数字可比。
-- LLM 依赖维度（allowed/forbidden_facts、must_contain 等 live 断言）离线
-  不执行；词表层回放由 cs-gate（test_cs_eval_gate）覆盖，本门禁只管
-  决策层路由。
+离线回放范围（分层诚实，TASK §5）：
+  - multi_turn 40 条整类 skip：会话级断言需上下文，单 query 离线回放口径
+    错位——转 live/graph 层消费（P4），skip 显式计数（TestReplayCoverage）。
+  - safety 类 risk 维度 skip：risk=high 期望属安全检测层（live）能力，规则层
+    risk 系 INTENT_PROFILES 静态画像映射，离线不可满足；intent/target 保留。
+  - LLM 依赖维度（allowed/forbidden_facts、must_contain 等 live 断言）离线
+    不执行；词表层回放由 cs-gate（test_cs_eval_gate）覆盖。
 """
 
 from collections import Counter, defaultdict
@@ -37,8 +33,13 @@ from backend.customer_service.router import cs_router as cs_router_module
 from backend.customer_service.router.cs_router import get_cs_router
 from backend.evaluation.dataset import load_dataset
 
-# 防退化阈值（防退化不防历史），依据见模块 docstring
-THRESHOLDS = {"intent": 0.40, "target": 0.56, "risk": 0.60}
+# 防退化阈值（防退化不防历史），依据见模块 docstring 与 manifest notes v2.1
+THRESHOLDS = {"intent": 0.55, "target": 0.61, "risk": 0.71}
+
+# 离线回放范围（分层诚实）：multi_turn 会话级断言需上下文，整类 skip；
+# safety 的 risk=high 属安全检测层能力，规则层静态画像离线不可满足
+_SKIP_CATEGORY_ALL = {"multi_turn"}
+_SKIP_CATEGORY_DIM = {"risk": {"safety"}}
 
 # CSRoutePath -> 数据集 expected.target 值域（锁版 v2.0）
 TARGET_MAP = {
@@ -105,16 +106,21 @@ def replay_rows():
 
 
 def _hit_stats(rows: list[dict], dim: str):
-    """按类目聚合单维度命中：返回 (total, hits, by_cat, misses)。"""
+    """按类目聚合单维度命中（含 skip 口径）：返回 (total, hits, by_cat, misses)。
+
+    expected 缺该维度断言（v1 的 intent/risk_level）计命中——基线口径。
+    """
+    skip_cats = _SKIP_CATEGORY_ALL | _SKIP_CATEGORY_DIM.get(dim, set())
     by_cat: dict[str, Counter] = defaultdict(Counter)
     misses = []
     for row in rows:
         case = row["case"]
+        cat = case.metadata.get("category", "v1")
+        if cat in skip_cats:
+            continue
         want = case.expected.get(_DIM_EXPECT_KEY[dim])
         got = row["pred"][dim]
-        # expected 缺该维度断言（v1 的 intent/risk_level）计命中——基线口径
         hit = True if want is None else got == want
-        cat = case.metadata.get("category", "v1")
         by_cat[cat]["n"] += 1
         by_cat[cat]["hit"] += hit
         if not hit:
@@ -169,3 +175,21 @@ class TestReplayCoverage:
 
         unmapped = [p.value for p in CSRoutePath if p.value not in TARGET_MAP]
         assert unmapped == [], f"CSRoutePath 新增值未映射 target：{unmapped}"
+
+    def test_offline_skip_scope_is_explicit(self, replay_rows):
+        """离线 skip 显式计数（防静默丢断言）：multi_turn 整类、safety 的 risk。
+
+        类目条数变化时此断言失败——提示同步审视 skip 口径与门禁分母，
+        而不是静默改变回放范围。
+        """
+        cats = Counter(r["case"].metadata.get("category", "v1") for r in replay_rows)
+        assert cats["multi_turn"] == 40, (
+            f"multi_turn 条数 {cats['multi_turn']} ≠ 40——离线 skip 口径需同步审视"
+        )
+        assert cats["safety"] == 40, (
+            f"safety 条数 {cats['safety']} ≠ 40——risk 维度 skip 口径需同步审视"
+        )
+        it_total, _, _, _ = _hit_stats(replay_rows, "intent")
+        rk_total, _, _, _ = _hit_stats(replay_rows, "risk")
+        assert it_total == 280, f"intent/target 门禁分母 {it_total} ≠ 280（320−multi_turn）"
+        assert rk_total == 240, f"risk 门禁分母 {rk_total} ≠ 240（320−multi_turn−safety）"
