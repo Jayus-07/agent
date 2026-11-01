@@ -506,6 +506,10 @@ def test_heartbeat_renews_admission_token(pg, admission_env, monkeypatch):
     time.sleep(0.1)
     dbg_key = store._prefix + "count:global"
     raw = client.zrange(dbg_key, 0, -1, withscores=True)
+    # 键空间全貌：v24 renew_stats 实证 lease_ok=8 全成功、adm_false=8 恒
+    # False（手动预热那轮却成功）——token 键在 CI 上消失但 lost 未置位，
+    # 打出 token/count 全部键与 TTL 区分「键不存在」与「键在但读取失败」
+    _tok_key = f"{store._prefix}token:{task_id}"
     print("HB-DEBUG: lost=", hb.lost,
           "key=", dbg_key,
           "raw=", raw,
@@ -514,7 +518,10 @@ def test_heartbeat_renews_admission_token(pg, admission_env, monkeypatch):
           "token_owner=", (store.get_token(task_id) or {}).get(
               "owner_execution_id", "MISSING"),
           "expected_owner=", lease_id,
-          "renew_stats=", renew_stats)
+          "renew_stats=", renew_stats,
+          "token_exists=", client.exists(_tok_key),
+          "token_ttl=", client.ttl(_tok_key),
+          "all_keys=", client.keys(f"{store._prefix}*"))
     assert not hb.lost
     assert store.scope_active("global") == 1, "heartbeat 必须顺带续 token"
     controller.release_for_execution(task_id, lease_id, reason="success")
