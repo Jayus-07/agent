@@ -88,11 +88,17 @@ class TestClassifyCascade:
         assert intent == "as_refund"
         assert "default_fallback" in reason
 
-    def test_account_falls_to_default(self):
+    def test_account_hits_password_rule(self):
+        """「修改密码」直命中 a_password 词表规则（af32718 P3 扩圈）。
+
+        旧行为：词表未覆盖 → default_fallback → a_login_issue；扩圈后
+        「修改密码」是 a_password 的直接规则命中（0.6，比 fallback 归因
+        更准），fallback 语义由 test_fallback_to_default 继续覆盖。
+        """
         fr = CSFineRouter()
         intent, conf, reason = fr.classify("修改密码", CSDomain.ACCOUNT)
-        assert intent == "a_login_issue"
-        assert "default_fallback" in reason
+        assert intent == "a_password"
+        assert "rule:" in reason and "a_password" in reason
 
     def test_fallback_to_default(self):
         fr = CSFineRouter()

@@ -50,6 +50,12 @@ def test_indexer_records_upload_model_lineage(tmp_path, monkeypatch):
         return dict(base_meta)
 
     monkeypatch.setattr(IncrementalIndexer, "_build_doc_metadata", _metadata_stub)
+    # chunk_store 是进程级单例（_init_db 仅构造期跑一次）；xdist 同 worker
+    # 前序文件（tracer/pg_env 类 fixture teardown 走 drop_pgtest_tables）
+    # 会 drop 掉本 worker 的 chunk_store 表——显式幂等重建（v19/v20 CI
+    # UndefinedTable gw2 实证，本地单跑不暴露）
+    from backend.rag.indexing.chunk_store import get_chunk_store
+    get_chunk_store()._init_db()
     repository = _FakeLineageRepository()
     indexer = IncrementalIndexer(
         str(tmp_path), vectordb, doc_db, embedding, registry,

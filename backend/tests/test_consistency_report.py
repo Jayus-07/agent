@@ -50,7 +50,14 @@ class TestConsistencyReport:
         assert by_name["tools"]["counts"]["loaded"] == 43
         assert by_name["tools"]["counts"]["not_loaded"] == 0
         assert by_name["tools"]["counts"]["phantom"] == 0
-        assert report["overall"] == "PASS", report["failed_sections"]
+        # 断言消息带全部段 issues+counts（诊断断言）：overall FAIL 只报段名
+        # 时一轮 dispatch 拿不到修复证据（v20 run 41340426306 dynamic_registry
+        # 段只给了段名，issues 明细丢失导致二次 dispatch）
+        _detail = [
+            (s["name"], s["status"], s.get("issues"), s.get("counts"))
+            for s in report["sections"] if s["status"] != "PASS"
+        ]
+        assert report["overall"] == "PASS", (_detail,)
         for section in report["sections"]:
             assert section["status"] == "PASS", (section["name"], section["issues"])
 

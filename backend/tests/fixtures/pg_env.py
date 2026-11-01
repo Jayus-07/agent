@@ -32,7 +32,11 @@ import pytest
 from backend.config.database import (
     BUSINESS_DB_CONFIG,
     COMPETITOR_PG_CONFIG,
+    FEEDBACK_PG_CONFIG,
     INVENTORY_DB_PG_CONFIG,
+    MARKET_RESEARCH_PG_CONFIG,
+    SELECTION_DECISION_PG_CONFIG,
+    SELECTION_PG_CONFIG,
     WORKFLOW_DB_PG_CONFIG,
 )
 
@@ -141,8 +145,13 @@ def drop_pgtest_tables() -> int:
     # LIKE 模式里下划线是通配符，须转义；worker 名（gw0 等）无特殊字符
     like_pattern = prefix.replace("_", r"\_") + "%"
     dropped = 0
+    # 库清单覆盖全部「表名烘焙自 worker_scoped_prefix 的存储配置」；缺省
+    # 库名不同的（INVENTORY/COMPETITOR/SELECTION*/MARKET_RESEARCH/FEEDBACK）
+    # 未显式 setenv 时掉进 agent_business 兼容库，漏扫会让 pgtest 表永不清。
     for cfg in (BUSINESS_DB_CONFIG, WORKFLOW_DB_PG_CONFIG, INVENTORY_DB_PG_CONFIG,
-                COMPETITOR_PG_CONFIG):
+                COMPETITOR_PG_CONFIG, SELECTION_PG_CONFIG,
+                SELECTION_DECISION_PG_CONFIG, MARKET_RESEARCH_PG_CONFIG,
+                FEEDBACK_PG_CONFIG):
         try:
             conn = psycopg2.connect(**cfg, connect_timeout=2)
         except Exception:

@@ -33,10 +33,14 @@ def cleanup_residue() -> dict[str, int]:
     model_price 是 append-only 治理表（触发器 reject_model_price_mutation
     只允许关闭 effective_to、禁止删行），残留价格行按治理规则软关而非删除。
     """
-    from backend.services.task_service import _conn
+    from backend.services import task_service
 
+    # tasks 表由 ensure_schema 幂等建——CI 隔离库无人触发建表时裸 DELETE
+    # 会 UndefinedTable（v20 run 41340426306 rag 6 例 ERROR 实证；
+    # 本地主栈库有运行栈建的表，不暴露）
+    task_service.ensure_schema()
     deleted: dict[str, int] = {}
-    with _conn() as conn, conn.cursor() as cur:
+    with task_service._conn() as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM llm_provider_credentials WHERE provider_id LIKE %s "
             f"AND {_stale('updated_at')}", (_PROVIDER_LIKE,))
