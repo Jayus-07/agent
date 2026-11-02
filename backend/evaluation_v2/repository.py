@@ -944,6 +944,32 @@ def create_candidate(
         return existing
 
 
+def find_candidate_by_source_origin(tenant_id: str, origin: str) -> dict[str, Any] | None:
+    """按 source_ref.origin 查既有候选（坏例回流幂等：同一持久化坏例只回流一次）。
+
+    与 idempotency_key 幂等互补：key 防同请求重放，origin 查重防跨请求/跨运营者
+    对同一条坏例重复 intake。仅取最新一条；无命中返回 None。
+    """
+    tenant_id = _tenant(tenant_id)
+    if not origin.strip():
+        return None
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT candidate_id, tenant_id, source_kind, payload_json, privacy_status,
+                   review_status, revision, duplicate_key, promoted_case_id,
+                   created_by, updated_by, created_at, updated_at
+            FROM evaluation_v2.eval_candidates
+            WHERE tenant_id = %s
+              AND payload_json->'source_ref'->>'origin' = %s
+            ORDER BY created_at DESC, candidate_id
+            LIMIT 1
+            """,
+            (tenant_id, origin),
+        )
+        return _dict(cur.fetchone()) or None
+
+
 def get_case_latest_revision(tenant_id: str, case_id: str) -> dict[str, Any]:
     """读取当前租户下已审核 Case 的最新修订，供人工创建新修订候选。"""
     tenant_id = _tenant(tenant_id)
