@@ -176,7 +176,7 @@
 - **验收口径（部分达成，缺口已移交）**：①「管理端可见 live run」不达成——legacy run 不进 v2 runs 列表，属 v2 平台非 rag live 接线缺口（移交项 §10.1）；②花费 ≤10 元 + llm_usage 对账达成；③基线一致达成（live 与离线回放逐条吻合）。④allowed/forbidden_facts live 断言**不可达**（full_path 模式无调用方，移交项 §10.2）。
 - 移交项清单（按优先级）见 PROGRESS 2026-11-02（六）末尾。
 
-### P7 case 归档端点
+### P7 case 归档端点——已完成（2026-11-02，详见 PROGRESS 2026-11-02（七））
 
 - 背景：评测平台无 case DELETE/归档端点；P4 脚本重跑竞态产生约 400 个重复 approved case（内容重复、不可见于已发布 version，但占据 case 池与审计面）。
 - 改动：`POST /v2/cases/{case_id}/archive`（软归档，`eval_cases.lifecycle_status` 置 archived 值——先核对该列 CHECK 约束值域）；repository 层 + 路由 + 权限（admin）+ 审计事件（复用 `_record_audit`，action=`case.archived`）；**已进入 published dataset version 的 case 拒绝归档**（保护锁版引用）；幂等（重复归档 200/409 明确化）。
