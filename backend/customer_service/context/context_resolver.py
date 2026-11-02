@@ -293,14 +293,21 @@ def resolve_explicit_order_route(query: str) -> ContextResolution | None:
     order_id = extract_explicit_order(query)
     if not order_id:
         return None
-    # 只救「原始路由落 knowledge 兜底」的纯实体查询；已能路由到业务域的
-    # 问句不改写——改写成查单会吞掉原意图（实测「订单 X 申请退款」被改写
-    # 后 as_refund 丢成 t_order_status，Q3 full_path live 复现）。
+    # 只救「纯查单语义」的显式实体问句；动作域意图不改写——改写成查单会
+    # 吞掉原意图（实测「订单 X 申请退款」被改写后 as_refund 丢成
+    # t_order_status，Q3 full_path live 复现）。
+    # 纯查单语义 = 原始路由落 knowledge 兜底（#270 前的缺陷9 主路径），或
+    # 已被判成 t_order_status 的状态查询（main run 41521140057 回归实证：
+    # 「请查一下订单 MO-…」被判 TRANSACTION/t_order_status，#270 一刀切
+    # 守卫把它打成 None，P0 查单主路径断裂）——两者与改写后「查询订单 X」
+    # 语义等价，改写不丢信息。动作域意图（退款/退货/取消等）维持 #270
+    # 口径返回 None，让原始 query 照常路由。
     from backend.customer_service.router.cs_router import get_cs_router
     from backend.customer_service.router.domain_detector import detect_cached
 
     raw_route = get_cs_router().route(query, detect_cached(query))
-    if raw_route.route_path.value != "knowledge_query":
+    if (raw_route.route_path.value != "knowledge_query"
+            and raw_route.intent != "t_order_status"):
         return None
     return ContextResolution(
         order_id=order_id,
