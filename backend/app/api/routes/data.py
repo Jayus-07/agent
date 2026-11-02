@@ -19,6 +19,11 @@ router = APIRouter(prefix="/data", tags=["数据"])
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 审计 P0-1（2026-11-03）：上传原先直接拼接 file.filename 且 await file.read()
+# 全量进内存，存在路径穿越与内存打满两个风险。与 rag_upload 同口径收紧。
+DATA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+DATA_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
 # 数据采集数据库连接池（单例，避免每次请求重新创建 Engine）
 _dc_engine = None
 _dc_engine_lock = threading.Lock()
@@ -46,14 +51,47 @@ def _get_dc_engine():
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     """上传 CSV/JSON 文件，返回字段识别和数据预览"""
-    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename else ""
+    # 审计 P0-1（2026-11-03）：filename 是客户端可控的 multipart 元数据。
+    # 拒绝携带路径分隔符、空名、隐藏名与 NUL 的文件名，不静默改名
+    # （穿越探测直接报错，避免被吞成一次"正常"上传）。
+    raw_name = str(file.filename or "")
+    normalized = raw_name.replace("\\", "/")
+    safe_name = os.path.basename(normalized)
+    if (not safe_name or safe_name != normalized
+            or safe_name.startswith(".") or "\x00" in safe_name):
+        return {"ok": False, "error": "非法文件名"}
+    ext = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
     if ext not in ("csv", "json"):
         return {"ok": False, "error": f"不支持的文件格式: .{ext}，请上传 CSV 或 JSON"}
 
-    # 保存文件
+    # 流式读取并强制大小上限，防止单请求把响应体全量读进内存
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(DATA_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > DATA_UPLOAD_MAX_BYTES:
+            return {
+                "ok": False,
+                "error": f"文件过大（上限 {DATA_UPLOAD_MAX_BYTES // (1024 * 1024)}MB）",
+            }
+        chunks.append(chunk)
+    content = b"".join(chunks)
+
+    # 保存文件：realpath 归一 + 包含校验双重防线（防御符号链接组件）。
+    # 文件名成分已在上一步收窄为 [^/\\]+ 且非隐藏名，这里再做归属断言。
     file_id = uuid.uuid4().hex[:8]
-    save_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
-    content = await file.read()
+    abs_upload_dir = os.path.realpath(UPLOAD_DIR)
+    stored_name = f"{file_id}_{safe_name}"
+    save_path = os.path.join(abs_upload_dir, stored_name)
+    save_path = os.path.realpath(os.path.normpath(save_path))
+    try:
+        if os.path.commonpath([abs_upload_dir, save_path]) != abs_upload_dir:
+            return {"ok": False, "error": "非法文件名"}
+    except ValueError:
+        return {"ok": False, "error": "非法文件名"}
 
     with open(save_path, "wb") as f:
         f.write(content)
@@ -72,12 +110,12 @@ async def upload_file(file: UploadFile = File(...)):
         total_rows = len(rows)
         preview = rows[:5]
 
-        logger.info(f"[Data Upload] {file.filename}: {total_rows} 行, {len(fields)} 字段")
+        logger.info(f"[Data Upload] {safe_name}: {total_rows} 行, {len(fields)} 字段")
 
         return {
             "ok": True,
             "file_id": file_id,
-            "filename": file.filename,
+            "filename": safe_name,
             "size_bytes": len(content),
             "total_rows": total_rows,
             "fields": [
