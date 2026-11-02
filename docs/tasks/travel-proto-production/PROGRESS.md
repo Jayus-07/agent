@@ -61,8 +61,8 @@
 | **P4a 生成流引擎抽取 + 工作台生成态** | `useTravelPlanGeneration` 单一实现 + `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 后端冲突消息可读性修复 | ✅ 合并 | #246 |
 | **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch`） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test，其余随组件退役 | ✅ 已合并 | #254 + 决策 5 收口 |
 | **T2 排程车程衔接修复**（后端确定性排程器） | 见下「T2 专项分析」 | ✅ 已合并 | #262，merge 7fc468f；三城保存全链通过 |
-| P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ⬜ | 校对清单 |
-| P5 历史/列表/地图形态校对 | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正、W15 断点点测 | ⬜ | PR + L/W9/W14 全勾 |
+| P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ✅ 对照完成，无需代码改动 | 见 P2/P5 续工记录 |
+| P5 历史/列表/地图形态校对 | W9/列表已点测；响应式与地图修复有未提交代码，输入框随消息增长仍被裁切、只读咨询失败待查 | **PAUSED，未验收** | 续工见 HANDOFF-P5.md，未开PR |
 | P6 总验收 | 原型全页面点测 + rebuild 全链（含生成→保存→跳转全链复验）+ 用户逐页验收 | ⬜ | 用户验收 |
 
 **建议执行顺序**：P4b（前端最小收口决策 5）→ T2（planner 对齐，见下）→ P2/P5（校对类可穿插）→ P6（总验收，依赖 T2 落地后生成链路可用）。
@@ -342,5 +342,29 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - 新测试已加入 rag_smoke 定向清单；依赖未变，无新增安装。
 - **运行态验收 PASS**：PowerShell `devctl.bat rebuild /y` 退出0，后端/worker/前端健康；镜像内已核对 checkInDate 透传，TRAIN_MCP_ENABLED=false。首页输入→生成态→真实SSE→保存201→自动正式工作台走通，trip_id=8ca00536-ac45-5fec-bedd-d37f80427d02；PG 127.0.0.1:5433 核对 brief.start_date=2026-11-20、interests=[自然,人文]、adults=2、children=0、pace=balanced（无亲子误识别）。
 - **真实酒店来源核对 PASS**：同一城市苏州两组日期 11/20–11/22（9条，来自本轮生成写入的新缓存）和11/24–11/26（10条，现场真实 MCP 调用），共19条 booking_deep_link 的 checkInDate/checkOutDate 与请求和报价日期全部相同。未修改供应商链接、未用 mock。
-- 当前状态：修复与本地/运行态验收 PASS，未提交、未开 PR；按仓库提交规则待用户确认。
+- **已合并 #263**：fix 3ca0e5d、docs 3fb5841，merge 775cf74；免费 CI 与 secret-scan 通过，自动 Code Review completed/no findings。
 - **P2 对照进展**：原型8124与真实3100桌面1280宽的Hero/文案/输入卡/胶囊/照片模板卡形态对照；快捷酒店面板就地展开；移动390×844首页无横向溢出、模板横滚和底导可见；新账号空态及首页输入直达生成态验证通过。真实目录当前3个模板，原型6个为演示数据差异，不补假数据。最近行程态和完整P5仍待后续校对，不标整阶段完成。
+## P2/P5 续工（2026-11-02，codex/travel-proto-p5-responsive）
+
+- 基点 main@775cf74（含 #263）；REUSE=现有 TravelV2TripConversation、父级 conversation 状态、地图与查询组件；FIX=窄屏对话不可达与中屏三列溢出；BUILD=无新增组件、依赖或独立会话；BLOCKED=无。
+- **P2 H1–H7 对照完成**：桌面1280宽与原型Hero/文案/照片/输入卡形态对照；酒店/美食/动车三个快捷面板均在首页内展开；胶囊链接与首页输入均直达生成态（前者沿用 #254 真机证据，后者本轮真实生成保存）；真实模板照片卡桌面三列、手机横滚；新账号空态→保存后最近行程卡（日期/版本/照片/归档入口）均核对。移动390×844无横向溢出。目录现有3个真实模板，原型6个为演示数据，不为数量对齐补假数据。本阶段零前端改动。
+- **P5 实测问题**：390宽工作台「对话」跳回自身、助手不可见；1024宽页面 scrollWidth=1156，三列最小宽度挤出助手。根因是助手被包含在仅桌面可见的三列容器，且三列在1024过早启用。
+- **运行态发现并继续修复**：首次响应式验收发现手机输入框底部837px落入固定底栏；根因是页面被应用父级flex布局压到视口高度，改为flex-none后页面按内容自然增高（实测1779px），输入框底部741px，顶栏与底栏均不遮挡。断点恢复还暴露隐藏地图的零尺寸初始化问题：补ResizeObserver，仅对非零尺寸 invalidateSize 并无动画 fitBounds，日期更新/卸载时 disconnect；不新增地图实例或加载路径。地图最终重建后已验证四断点2个标记均在可视范围；消息增加后的输入高度与只读咨询仍失败，见接力稿。
+- **最小修复**：同一助手实例在手机排到行程下方，顶栏对话使用原生页内锚点；目标可聚焦且预留sticky顶栏间距，无新增动画，减弱动态偏好下同样即时定位。821–1279使用两列（助手占整行），1280起维持三列；中屏页面正常纵向滚动，不缩小三列硬塞。沿用原型≤820单列与中屏两列方向，宽屏阈值按真实三列最小可用空间收口。
+- **T0/T1/T2**：新增入口回归修复前1 failed/26 passed，修复后 `vitest run src/components/travel src/api src/app/travel`：49文件、426 passed（21.44秒）。断言同页唯一助手、未发送草稿和服务端可信会话保留，以及地图隐藏恢复、最新点位重算、观察器释放；既有权限/UNKNOWN/恢复等测试未改且全过。tsc仍为既有16错（bff-proxy.test.ts/chat.test.ts），旅游面零新增；diff --check通过。
+- **收尾状态 PAUSED**：426个定向用例通过，最终PowerShell rebuild退出0且healthy；四断点无溢出/单助手/草稿/地图位置局部通过。但消息增加后输入框bottom=860px、子区617px超出约428px包装层；只读咨询返回暂不可用（ai-edits HTTP200不等于答复成功），PG revision仍1。P5未验收、未提交、未开PR；P6未完成。
+- **交接**：[HANDOFF-P5.md](HANDOFF-P5.md)包含总计划、工作树/HEAD/7个未提交文件、进度、测试、真实测量、剩余施工顺序和已知信息。用户要求本会话收尾，未再修复或测试。临时账号1334已停用，活动会话/refresh token均0；原型8124服务与7个验收标签页已清理，共享栈保持healthy。
+
+## P5 续工修复（2026-11-03，codex/travel-proto-p5-responsive）
+
+- **P5-A 输入框裁切修复**：根因是 Workspace 包裹 TravelV2TripConversation 的 `<div class="min-h-0 flex-1">` 缺 `flex flex-col`（block 容器使组件根的 flex-1/overflow-hidden 全部失效），消息增多后 section 被内容撑到 617px 溢出 aside 的 overflow-hidden 裁切区；初始消息少不溢出所以首轮验收未暴露。补 flex 列容器后实测：12 条消息时 form top=634/bottom=735 完整在 390×844 视口内且不与底栏重叠（修复前 812/860 落入底栏外）；布局契约断言进 TravelV2TripWorkspace.test.tsx（jsdom 不算布局，锁定 flex 高度约束链不被回归删除）。
+- **P5-B 只读咨询两层根因修复**（后端日志 trace 定位 + 容器内真实 checkpoint state 复现）：
+  1. 通道层 422：`POST /travel/v2/plan/stream` 的 `TravelPlanRequest.message` max_length=2000（V1 时代 bdc9d64 设定），而 V2 只读 prompt 拼入行程事实 JSON（前端 08c3b70 起设计预算 6500 字符+指令+问题）——实测两天行程 prompt 2206 字符必超限，只读通道从未通过过。放宽到 20000（对齐同文件 TravelConversationMessage.content 上限），V1/V2 共用模型仅放宽不改变既有合法请求。
+  2. 图执行层 IndexError：限长修复后暴露 `requirement_agent.extract_destination` 的「换目的地」剔除——当消息中上一轮目的地多位置重复出现（facts JSON 的 brief 与地点地址前缀）且候选全部是该城市时，剔除后成空列表取 [0] 崩溃。修法与同函数既有 `kept or candidates` 同款非空兜底（全部为上一轮目的地时视为重申保留）。
+  3. 前端 `answerReadOnly` catch 补 `console.error` 记录 cause（原先吞异常细节，只能靠后端日志反查）。
+- **P5-B 运行态验收**：真实账号→苏州生成→保存 201→工作台 390 发送「请确认行程天数和成人数量，只回答，不修改行程。」：plan/stream 返回 200 真实流式答复（不再"暂不可用"），PG 复核 Trip revision=1/status=active 未被改写。**已知边界**：图对 mode=chat 的既有意图路由会把只读 prompt 判为 plan 并返回整份行程报告（含天数人数信息）而非简短直接回答，并附带查询结果卡——属 chat 轮既有路由行为，本轮不改意图路由/提示词，留待后续评估。
+- **回归与类型**：backend `test_travel_turn_contract.py`（+限长回归，8 passed）、`test_intent.py`（+2 个 extract_destination 回归，68 passed）、关联方 `test_handoff_contract`+`test_stop1_acceptance`（27 passed）；py_compile 通过。前端 vitest 旅游面 49 文件 **427 passed**（基线 426+新增「只读流失败保留证据」回归）；tsc 仍 16 既有错误（bff-proxy/chat）零新增；diff --check 通过。
+- **断点复核（真实页面）**：390/820/1024/1280 唯一助手实例、草稿跨断点保留、无横向溢出；820 单列地图 790px 可见、1024 两列地图 464px、1280 三列地图 442px；390 终态截图确认输入框含草稿完整可见。
+- **验收环境坑**：IAB 渲染节流下 rAF 冻结使保存流程 `nextPaint()` 永不返回（VALIDATING 卡死、保存请求不发）——自动化环境现象非业务 bug，页面内注入 rAF→setTimeout 垫片后保存 201 正常；真实前台浏览器不受影响，业务代码未改。
+- **清理**：临时账号 13900001103（id=1335）status=0、会话全吊销、refresh_tokens=0、Redis 会话索引键清零；验收标签页已关。共享栈 rebuild 退出 0 healthy（backend/frontend 均含本轮全部修复，容器内已核对 max_length=20000）。
+- **P5 状态**：代码修复与验收完成，**待用户确认提交**（PR base main）；P6 未开始。
