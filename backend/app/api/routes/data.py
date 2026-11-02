@@ -10,8 +10,9 @@ api/routes/data.py — 数据接入 + 处理 + 资产 API
   GET  /assets              — 数据资产列表
 """
 import asyncio
-import os, csv, json, io, uuid, time, threading
-from fastapi import APIRouter, UploadFile, File, Form
+import os, csv, json, io, re, uuid, time, threading
+from fastapi import APIRouter, Depends, UploadFile, File, Form
+from backend.app.api.deps import OperatorIdentity, require_admin_user, require_editor_user
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/data", tags=["数据"])
@@ -44,15 +45,28 @@ def _get_dc_engine():
 
 
 @router.post("/upload")
-async def upload_file(file: UploadFile = File(...)):
-    """上传 CSV/JSON 文件，返回字段识别和数据预览"""
-    ext = file.filename.rsplit(".", 1)[-1].lower() if file.filename else ""
+async def upload_file(
+    file: UploadFile = File(...),
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """上传 CSV/JSON 文件，返回字段识别和数据预览（S3：admin 写权限）"""
+    # S4 审计修复：磁盘文件名完全由服务端生成——原始文件名只做展示用途。
+    # 历史实现把 file.filename 直接拼进保存路径，`../../x.csv` 可写出上传
+    # 根目录并在解析失败时被 os.remove 误删根目录外文件。
+    raw_name = os.path.basename(str(file.filename or "").replace("\\", "/"))
+    ext = raw_name.rsplit(".", 1)[-1].lower() if "." in raw_name else ""
     if ext not in ("csv", "json"):
         return {"ok": False, "error": f"不支持的文件格式: .{ext}，请上传 CSV 或 JSON"}
 
-    # 保存文件
+    # 保留展示名的安全字符（字母/数字/下划线/点/横线，含 Unicode 字母），
+    # 其余一律替换为下划线并限长；file_id 前缀保证磁盘名全局唯一。
+    safe_name = re.sub(r"[^\w.\-]+", "_", raw_name)[:80] or f"upload.{ext}"
     file_id = uuid.uuid4().hex[:8]
-    save_path = os.path.join(UPLOAD_DIR, f"{file_id}_{file.filename}")
+    save_path = os.path.join(UPLOAD_DIR, f"{file_id}_{safe_name}")
+    # 纵深防御：最终路径 resolve 后必须仍位于上传根目录内
+    _upload_root = os.path.realpath(UPLOAD_DIR)
+    if os.path.commonpath((_upload_root, os.path.realpath(save_path))) != _upload_root:
+        return {"ok": False, "error": "非法文件路径"}
     content = await file.read()
 
     with open(save_path, "wb") as f:
@@ -87,7 +101,11 @@ async def upload_file(file: UploadFile = File(...)):
             "preview": preview,
         }
     except Exception as e:
-        os.remove(save_path)
+        # 只清理本次由服务端路径创建的文件（S4：清理不得触碰根目录外文件）
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
         logger.error(f"[Data Upload] 解析失败: {e}")
         return {"ok": False, "error": f"文件解析失败: {str(e)}"}
 
@@ -125,13 +143,17 @@ _DATASETS = [
 
 
 @router.get("/datasets")
-async def list_datasets():
+async def list_datasets(operator: OperatorIdentity = Depends(require_editor_user)):
     """开源数据集列表"""
     return {"datasets": _DATASETS, "total": len(_DATASETS)}
 
 
 @router.post("/generate")
-async def generate_data(types: list[str] = ["products"], count: int = 1000):
+async def generate_data(
+    types: list[str] = ["products"],
+    count: int = 1000,
+    operator: OperatorIdentity = Depends(require_editor_user),
+):
     """模拟数据生成
 
     优先从 PostgreSQL stg_* 表读取；数据库不可用时回退到 Data Collection Center
@@ -206,7 +228,7 @@ assets_router = APIRouter(prefix="/assets", tags=["数据资产"])
 
 
 @assets_router.get("")
-async def list_assets():
+async def list_assets(operator: OperatorIdentity = Depends(require_editor_user)):
     """从 PostgreSQL stg_* 表查询数据资产"""
     try:
         import pandas as pd
@@ -243,7 +265,11 @@ _pipeline_jobs: dict = {}
 
 
 @router.post("/pipeline/run")
-async def run_pipeline(file_id: str = Form(...), steps: str = Form("detect,clean,dedup,convert")):
+async def run_pipeline(
+    file_id: str = Form(...),
+    steps: str = Form("detect,clean,dedup,convert"),
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
     """对已上传文件执行 Pandas 清洗 Pipeline"""
     import pandas as pd
 
@@ -306,7 +332,7 @@ async def run_pipeline(file_id: str = Form(...), steps: str = Form("detect,clean
 
 
 @router.get("/pipeline/history")
-async def pipeline_history():
+async def pipeline_history(operator: OperatorIdentity = Depends(require_editor_user)):
     """执行历史"""
     return {"jobs": list(_pipeline_jobs.values())[-20:]}
 
@@ -372,11 +398,15 @@ def _build_dcc_pipeline(enable_write: bool = False):
 async def trigger_collect(
     dataset: str = Form("products"),
     enable_write: bool = Form(False),
+    operator: OperatorIdentity = Depends(require_admin_user),
 ):
     """触发单次数据采集任务（Data Collection Center Pipeline）
 
     dataset 可选值: products | orders | shops | inventory | suppliers
-    返回完整的 CollectResult（含 parse/clean/analyze 各阶段统计）
+    返回完整的 CollectResult（含 parse/clean/analyze 各阶段统计）。
+
+    S3 审计修复：写 stg_* 表属管理操作——端点要求 admin 角色，客户端
+    enable_write 参数不再构成（也从未构成）授权依据。
     """
     task_config = _COLLECT_TASKS.get(dataset)
     if not task_config:
@@ -444,7 +474,10 @@ async def trigger_collect(
 
 
 @router.post("/collect/all")
-async def trigger_collect_all(enable_write: bool = Form(False)):
+async def trigger_collect_all(
+    enable_write: bool = Form(False),
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
     """批量采集全部 5 个数据集（Data Collection Center Pipeline）
 
     按 products → orders → shops → inventory → suppliers 顺序执行。
@@ -511,7 +544,7 @@ async def trigger_collect_all(enable_write: bool = Form(False)):
 
 
 @router.get("/collect/history")
-async def collect_history(limit: int = 20):
+async def collect_history(limit: int = 20, operator: OperatorIdentity = Depends(require_editor_user)):
     """采集任务执行历史"""
     jobs = sorted(
         _COLLECT_JOBS.values(),
