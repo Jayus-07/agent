@@ -40,3 +40,17 @@
 - T2 测试：test_admin_bundles_api.py 增 TestGrantTenantBoundary 4 例（登记端拒绝/授权端 409/错配行读快照默认拒绝/组合外键拒绝直插）；新增 test_mcp_probe_redirect.py 2 例（重定向目标零触达/正常端点可达）。
 - 验证：独立 PG（pgvector/pgvector:pg16，容器 agent-test-pg-w1，端口 55432，与主栈隔离）init_db rc=0（120 迁移含 130）；定向 pytest 12 passed（17.46s）；注册表既有回归 test_mcp_dynamic_e2e + test_mcp_health_monitor + test_consistency_dynamic 24 passed（48.27s）。
 - 未覆盖风险：本机共享栈未从该工作树重建（devctl rebuild 会进入前端构建，按 HANDOFF §5 需跨会话协调，标 UNVERIFIED）；生产代理/出口策略与 GitHub 环境保护仍属仓库外补证项；CI 全量在 PR 门禁后执行。测试容器 agent-test-pg-w1 保留待复核用。
+
+## 2026-11-03 W1 收官
+
+- PR #268 合并（merge 7316d32，含 S1 0665f2a / S2 138e9e0 / 迁移分类 eca993b）。首次门禁失败为迁移分类守卫按设计拦截（130 未登记 rag_smoke_path_filter），归入 NON_AI 后通过——守卫连带机制实证。
+- main 无参数全量 run 41508733152（HEAD 7316d32）：15/15 success。审计工作树与 W1 工作树已按"已合并+干净+资产核对"移除。
+
+## 2026-11-03 W2 批次实施完成（未提交，待确认）
+
+- 工作树 C:\Users\wh\.codex\worktrees\fix-data-api-boundaries\agent；分支 codex/fix-data-api-boundaries；基线 7316d32。
+- S3：/data/* 全部端点补服务端授权——读类（datasets/generate/assets/两类 history）挂 require_editor_user（对齐授权标准矩阵「数据读 = sql.read」），写类（upload/pipeline/run/collect/collect/all）挂 require_admin_user；客户端 enable_write 不再构成（也从未构成）授权依据。选择既有依赖，未新造权限码；stg_* 白名单表无租户列，数据范围以角色门禁+硬编码表白名单承载（如实记录）。网关角色闸未加（标准明言后端授权为权威，网关层属可选加固）。
+- S4：上传磁盘文件名完全服务端生成（file_id_ + 净化展示名，\w.- 白名单、限长 80），realpath commonpath 校验位于上传根目录内，解析失败仅清理本次文件；展示名保留原文返回前端。
+- T2 测试：新增 backend/tests/api/test_data_api_authorization.py 8 例（匿名拒绝/viewer 全拒/editor 读通写拒+enable_write 非授权依据/admin collect 正例不触写库/穿越文件名封在根内/反斜杠净化/失败清理不碰哨兵/非 CSV-JSON 拒绝）。UPLOAD_DIR monkeypatch 至 tmp，不污染仓库。
+- 验证：定向 pytest 8 passed（38.12s）；api_router 装配检查通过。generate/collect 走本地静态数据集回退路径，enable_write=False 不触库。
+- 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；前端 datasets 页对低角色用户将收到 403（frontend-admin 使用者为 admin，实际影响面预计为零，前端提示文案未改）。
