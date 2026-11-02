@@ -1646,3 +1646,62 @@ tool_specs:
   - name: web_crawl_tool
     params_schema: {type: object, additionalProperties: false, properties: {url: {type: string, minLength: 1}, mode: {type: string}}, required: [url]}
     governance: {version: 2, operation: read, risk_level: R0, confirmation_policy: none}
+
+  # U4 旅游工具实现同样必须登记治理契约，策略沿用对应能力。
+  - name: food_search_tool
+    params_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        city:
+          type: string
+        limit:
+          type: integer
+      required:
+      - city
+    governance:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
+  - name: hotel_search_tool
+    params_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        adults:
+          type: integer
+        check_in:
+          type: string
+        check_out:
+          type: string
+        city:
+          type: string
+        rooms:
+          type: integer
+      required:
+      - city
+    governance:
+      version: 2
+      operation: read
+      risk_level: R0
+      confirmation_policy: none
+  - name: booking_quote_tool
+    params_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        commerce_type:
+          type: string
+        search_params:
+          type: string
+        selection:
+          type: string
+      required:
+      - commerce_type
+      - search_params
+    governance:
+      version: 2
+      operation: create
+      risk_level: R1
+      confirmation_policy: none

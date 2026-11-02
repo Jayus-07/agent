@@ -26,7 +26,7 @@
    a. `full_regression.yml` misc suite 的 paths 追加 7 目录（现有 13 目录后追加 `backend/tests/agents backend/tests/eval backend/tests/router backend/tests/selection_decision backend/tests/selection_funnel backend/tests/tasks backend/tests/tool_governance`）；209 例体量约 2–4 分钟，无需新 suite。注释里记录盲区发现与收口（209 例 / 2026-11-02 对差实证）。
    b. 本地先跑一轮这 7 目录（xdist 口径）拿首曝预览，能修的先修。
    c. PR 合 main 后 dispatch `suites=misc` 定向一轮拿 CI 首曝清单，按四步法清偿（预期风险见 §测试）。
-   d. 清偿完 dispatch 无参数全量 → 14 job 全绿收官。
+   d. 清偿完 dispatch 无参数全量 → 15 job 全绿收官。
 3. **P1.5 · 两个防漏守卫**：
    a. **matrix 覆盖守卫**：full_regression.yml 加独立小 job（checkout + 对差脚本），断言 `backend/tests` 目录全集（排除 `__pycache__`/`fixtures`）⊆ matrix paths，非空即红。放 `needs: pytest-suite` 之前或并列均可，must fail 当新顶层目录漏登记。
    b. **flushdb 分片守卫**：新增测试文件（建议 `backend/tests/infra/test_redis_test_hygiene.py`，归 sql-infra suite）静态扫描 `backend/tests/**/*.py` 源码：断言出现 `Redis.from_url` 的文件集合 ⊆ 白名单（fixtures/redis_test.py + 五个已分片文件：test_task_admission.py / test_task_admission_runtime.py / test_stop_g4_matrix.py / test_distributed_gate.py / test_tool_stats_aggregation.py），出现 `flushdb` 的文件同理；集合式断言防新增漏网（坑位 31 的自动化）。
@@ -63,7 +63,7 @@
 
 - [ ] P0：scheduled 首跑结论与 v30 一致（13/13），或按四步法清偿后一致。
 - [ ] P1：misc suite 收口 7 目录；dispatch `suites=misc` 首曝清单清零（不 skip/xfail、不放宽断言、不扩大 mock）。
-- [ ] P1：dispatch 无参数全量 → **14 job（13 suite + summary）全绿**，用例口径含 209 例收口。
+- [ ] P1：dispatch 无参数全量 → **15 job（13 suite + summary + matrix-coverage）全绿**，用例口径含 209 例收口。
 - [ ] P1.5：两个守卫在位且验证过「会红」（临时注入假违例验证后还原）。
 - [ ] P2：三处文档更新合入，与 workflow/测试实态一致（文档标准：文档与代码冲突时以实态为准修正）。
 - [ ] 收官：TASK.md 状态改 COMPLETED，本目录 PROGRESS.md 回填曲线（首曝数 → 0）、run 号与坑位。
@@ -74,3 +74,17 @@
 - 诊断断言先行（坑位 18）：疑难先加断言/打点一轮 dispatch 拿证据，不盲修。
 - 边界（不动）：移交产品域两项（progit PDF 4 解析异常、govtest finally）；其他会话线（travel-proto-production、trace-* 任务）；rag_smoke 定向清单不扩（209 例进全量 matrix 即可，定向清单是 PR 门禁快口径）。
 - 未实际执行的验证不得报告为通过；暂停/取消按 AGENTS.md 长任务续工契约标记 PAUSED/BLOCKED/CANCELLED。
+
+## 七、持续实施计划（2026-11-02 核实后）
+
+持续目标已启用；保持当前工作树与分支，不重复开工或审计全仓。
+
+1. **证据复核与分类**：保存209例基线（189通过/20失败），逐组对照当前源码、契约与既有授权测试；分别确认夹具漂移、预期过期或产品缺陷。停止条件：20例都有根因与对应处理，不靠跳过或削弱断言。
+2. **最小修复**：先单跑选品API失败代表，复用现有可信用户夹具；再定位Router决策与治理missing_specs，不把现有行为直接当正确预期。若需产品改动，补相应测试并遵守安全审查、本机重建健康验收。
+3. **本地验收**：失败代表单跑→七目录209例四worker/loadfile→清除.env红利的CI环境模拟；同时检查权限边界回归。定向T0语法/diff和必要T1/T2，禁止默认全量本地回归。
+4. **守卫自查**：matrix覆盖精确读取实际suite paths；Redis静态扫描覆盖既定调用点；两者分别注入假违例、记录失败退出码、还原并通过，避免并发注入污染正常验收。
+5. **文档与本地交付**：同步三处现行文档，统一新增守卫后的15-job口径，回填实际数量与证据；最终Diff自查，给出明确提交范围和验证结果，依AGENTS.md第4条取得提交确认。
+6. **PR与CI**：确认后限定路径提交/push/建PR；遵守门禁与最多一次主动完整云端Review规则，不发送@codex review。核对PR head后按授权合并；main上dispatch misc，逐轮诊断清偿，保留失败清单和run号。
+7. **全量与收官**：无参数dispatch，13 suite+guard+summary共15 job全绿；核对scheduled首次运行（若尚未触发则保持待验收）；最终文档状态与证据同步，所需后续提交也走PR；全部验收后标COMPLETED。最后检查未提交、未合并及忽略资产，安全清理已合并工作树。
+
+**执行纪律**：本地通过不等于CI验收；首曝规模超出会话容量时按用户契约记录清单，未完成不得标完成。任务当前RUNNING；只有明确暂停指令才暂停持续目标。提交/合并确认是外部依赖，先完成所有可独立推进的本地工作。

@@ -1,6 +1,6 @@
 # CI 与评测环境运行规范
 
-> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-10-30（每周 Full Regression / PR #30 合入后状态刷新，main 基线 `2517e98`）；其它状态保留各自标注的核对日期。**
+> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-11-02（本次覆盖收口工作树基线 `84601db`；209 例本地与 CI 环境模拟通过，真实 CI 待验证）；其它状态保留各自标注的核对日期。**
 > **职责**：规定 CI 如何准备隔离数据库、DB API 模型绑定、评测语料和向量索引，以及 Secrets、费用与证据闭环。**不**复制测试分层（[testing-guide](../development/testing-guide.md)）、质量阈值与 Golden 规则（[evaluation-governance](../evaluation/evaluation-governance.md)）、计费公式（[llm-budget-billing](../governance/llm-budget-billing.md)）、RBAC 规则（[authorization-standard](../auth/authorization-standard.md)）或数据库 Schema（[DATABASE](../DATABASE.md)）。
 >
 > **实现状态图例**（本文所有条款按下表标注，状态不得凭文档存在认定）：
@@ -129,7 +129,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 | Embedding、Rerank 模型切换 | 必须 | 索引重建 + Golden 回归 | 每次运行强制索引重建；probe 维度三方校验失配即 BLOCKED；Golden 回归 dispatch selection=regression |
 | SQL Agent、Planner 修改 | 按风险运行 | 对应领域真实模型评测 | Runner 已有，CI workflow 未建（❌ 见 §5） |
 | 每日定时回归 | **付费 RAG Golden 不在 GitHub 定时运行** | 固定 Golden，监测质量 | 🚧 `rag_regression.yml` 仅 workflow_dispatch（无 schedule）；定时回归由管理端定时任务承担（配置入口：管理端） |
-| 每周全量回归（Full Regression） | 不需要 | 全量 pytest（约 12500 用例，13 suite matrix 分治，各自隔离 DB） | ✅ [`full_regression.yml`](../../.github/workflows/full_regression.yml) 每周一 03:00 UTC 定时运行 + workflow_dispatch（`suites` 参数按 suite 重跑）；失败即红但不属任何 PR 门禁，不挡合并 |
+| 每周全量回归（Full Regression） | 不需要 | 全量 pytest（13 suite matrix 分治，各自隔离 DB；目录全集由守卫检查，排除 fixtures/__pycache__；新增 209 例的 CI 实跑数量待验证） | ✅ [`full_regression.yml`](../../.github/workflows/full_regression.yml) 每周一 03:00 UTC 定时运行 + workflow_dispatch（`suites` 参数按 suite 重跑）；失败即红但不属任何 PR 门禁，不挡合并 |
 | 重要版本发布前 | 需要 | 受影响领域真实 API 和 E2E | 审核后 workflow_dispatch 按域运行；E2E 属发布门禁 |
 
 RAG Smoke 的 `workflow_dispatch` 提供 `multiquery` 布尔参数，默认 `true`（生产检索链默认启用，`false` 仅用于对照）；同一 `pr_smoke` 集会额外经过 MultiQuery 路径。PR 事件不会调用付费 API；main push 强制按生产口径启用 MultiQuery。
@@ -168,3 +168,6 @@ embedding 与 rerank 复用统一请求预算和预占账本；缓存命中不�
 - **实现状态是本文的一部分**：CI 代码/配置变化必须同 PR 更新 §2–§8 的状态标注与快照日期；状态只有四个合法值（✅/🚧/❌/⏳），禁止删除标注只留目标描述。
 - 纯文档 PR 只做 T0；不自动重跑付费模型或全量测试。
 - 交付必须列：PR URL、完整 HEAD SHA、变更文件、规范↔源码↔证据对应、实际 CI Run/Artifact、PASS/FAIL/SKIP、BLOCKED/UNVERIFIED，以及不能宣称的范围。未经明确批准不合并、不操作共享库、不配置或读取生产凭据。
+
+
+2026-11-02 覆盖收口施工快照：matrix 已纳入 agents/eval/router/selection_decision/selection_funnel/tasks/tool_governance。运行用例数以各 suite 的实际收集与结果为准，不将历史估算作为验收数字。诊断资产见 [testing-guide.md](../development/testing-guide.md)「CI 诊断资产与 Redis 测试库约定」。本次全量 CI 尚待执行。

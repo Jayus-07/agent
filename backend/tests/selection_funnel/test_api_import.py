@@ -12,13 +12,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+    from backend.app.api.deps import (
+        OperatorIdentity, require_editor_user, resolve_operator_role,
+    )
     from backend.app.api.routes.selection_funnel import router
     app = FastAPI()
     app.include_router(router)
     # 2026-09-24 STOP A：路由挂运营角色门禁；本文件只测导入契约，
     # 门禁行为由 tests/api/test_selection_routes_authz.py 覆盖
     app.dependency_overrides[resolve_operator_role] = lambda: OperatorIdentity(
+        role="editor", actor="user:test")
+    # 写接口通过独立依赖校验，业务测试显式提供已授权用户。
+    app.dependency_overrides[require_editor_user] = lambda: OperatorIdentity(
         role="editor", actor="user:test")
     return TestClient(app)
 

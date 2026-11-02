@@ -177,3 +177,19 @@ Playwright 的 Windows 默认浏览器目录是 `%LOCALAPPDATA%\ms-playwright`�
 4. 提供每类故障的回滚、阻断与恢复决策；不可执行时标 BLOCKED。
 5. 恢复后重新执行授权/失败路径和核心业务终态的定向回归。
 6. 重大事故有时间线与后续防复发测试，不把日志清空当解决方案。
+
+
+## CI 守护常用命令
+
+在仓库中执行，网络代理不通时先清除 HTTPS_PROXY。
+
+```powershell
+gh workflow run full_regression.yml
+gh workflow run full_regression.yml -f suites=misc
+gh run list --workflow=full_regression.yml --limit 5
+gh run watch <run_id>
+gh run download <run_id> -n failures-misc
+gh run list --workflow=full_regression.yml --event=schedule --limit 1
+```
+
+失败资产中的 PYTEST_XDIAG 三件套判读见 [testing-guide.md](../development/testing-guide.md)「CI 诊断资产与 Redis 测试库约定」。
