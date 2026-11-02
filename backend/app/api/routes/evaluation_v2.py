@@ -218,6 +218,11 @@ class TraceIntake(StrictModel):
     idempotency_key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,128}$")
 
 
+class UnansweredIntake(StrictModel):
+    entry_id: int = Field(ge=1)
+    idempotency_key: str = Field(pattern=r"^[A-Za-z0-9_-]{8,128}$")
+
+
 class EvidenceSearchCreate(StrictModel):
     snapshot_id: str = Field(min_length=8, max_length=160)
     query: str = Field(min_length=1, max_length=200)
@@ -884,6 +889,73 @@ async def intake_trace(
         "observed_answer": observed,
         "metadata": {"source": "production_trace", "ground_truth_verified": False},
         "source_ref": {"trace_id": body.trace_id},
+    })
+    try:
+        result = await asyncio.to_thread(
+            repository.create_candidate,
+            identity.tenant_id,
+            actor.actor,
+            source_kind="trace",
+            payload=candidate_payload,
+            idempotency_key=body.idempotency_key,
+            privacy_status="redacted",
+        )
+        return result
+    except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
+        _safe_error(exc)
+
+
+def _load_unanswered_entry(entry_id: int) -> dict[str, Any] | None:
+    """读持久化坏例行（ai.unanswered_questions，应用连接——与 admin_unanswered
+    同一查询通道；evaluation_v2 租户角色无 ai schema 权限，故不经 _transaction）。"""
+    from backend.config.database import OBS_DB_PG_CONFIG
+    from backend.infra.db import engine_for
+
+    with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, source, question, trace_id "
+            "FROM ai.unanswered_questions WHERE id = %s",
+            (entry_id,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {"id": row[0], "source": row[1], "question": row[2], "trace_id": row[3]}
+
+
+@router.post("/intake/from-unanswered", status_code=201)
+async def intake_unanswered(
+    body: UnansweredIntake,
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """持久化坏例回流（TASK §10 P8）：ai.unanswered_questions → 审核候选。
+
+    幂等三层：idempotency_key（create_candidate 原生，同 key 同内容重放返回
+    原候选）、source_ref.origin 查重（同一条坏例跨请求只回流一次，命中返回
+    200 + duplicate=true 不再创建）、审核层既有防重查询。"""
+    _role(actor, "admin")
+    entry = await asyncio.to_thread(_load_unanswered_entry, body.entry_id)
+    if entry is None:
+        raise HTTPException(404, "未答问题条目不存在")
+    question = str(entry["question"] or "").strip()
+    if not question:
+        raise HTTPException(422, "未答问题缺少可脱敏的用户问题")
+    origin = str(entry["id"])
+    existing = await asyncio.to_thread(
+        repository.find_candidate_by_source_origin, identity.tenant_id, origin)
+    if existing is not None:
+        return {**existing, "duplicate": True}
+    candidate_payload, _changed = sanitize_candidate_payload({
+        "input": {"query": question},
+        "observed_answer": "",
+        "metadata": {"source": "unanswered_question", "ground_truth_verified": False},
+        "source_ref": {
+            "origin": origin,
+            "origin_source": str(entry["source"] or ""),
+            "trace_id": str(entry.get("trace_id") or ""),
+        },
     })
     try:
         result = await asyncio.to_thread(
