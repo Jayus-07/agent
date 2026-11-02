@@ -1,8 +1,8 @@
 # PROGRESS — cs-public-launch（客服域公开投产实施）
 
 - 任务文件：同目录 TASK.md（唯一事实源）；计划由 2026-11-02 会话立项（承接 cs-evaluation-upgrade 收官）
-- 更新时间：2026-11-02
-- 当前状态：**Q1–Q4 已合并；Q5/Q6 报告已交付（PR 流程中）——两拍板项待用户**
+- 更新时间：2026-11-03
+- 当前状态：**Q1–Q6 全部完成并合并（#259/#260/#270/#273/#275/#278）；受控试用放量门槛达成；全量公开投产待两拍板项 + 主链路冒烟**
 
 ## 阶段状态总表
 
@@ -233,3 +233,10 @@
 - **Q6 资金入口全景**（共享栈运行态实测）：①退款申请 CS_REFUND_REQUEST_MODE 未设置=disabled ✓；②退款审核双开关未启=disabled ✓；③**order_cancel 无独立开关**且 gateway=http 下取消+退款链可达（终点 business-mock，幂等+身份闸在位）——真实后端接入前需补开关（挂账，用户拍板）；④/mall 演示商城 9/9 路由有鉴权；⑤CS_BUSINESS_GATEWAY_MODE=http 非资金开关。**当前全链路无真实资金通道**（全部指向 business-mock）。
 - **Q6 文档同步**：部署/prod-4c8g/README.md 修正「BUSINESS_GATEWAY 默认 disabled」旧描述（代码事实：默认 sandbox，disabled 非受支持值）。决策记录 Q6-FUNDS-DECISION.md：建议首期不开放真实资金动作（现状即满足），两个拍板项（首期范围、order_cancel 开关）待用户。
 - 交付物：Q5-SECURITY.md、Q6-FUNDS-DECISION.md、README 修正——docs/cs-prod-q5 与 docs/cs-prod-q6 两分支走 PR。
+
+### 2026-11-03（七）—— 任务收官
+
+- Q1–Q6 全部完成：Q1 #259、Q2 #260、Q3 #270（收口 #273）、Q4 #275、Q5+Q6 #278（docs/cs-prod-q5 分支因 push 事件持续未触发 CI 已关闭，内容并入 #278）。
+- 受控试用放量（Q1+Q2）门槛达成；全量公开投产待：①Q6 两拍板项（首期资金范围、order_cancel 开关）；②主链路真实冒烟零回归；③挂账项消化进度（Q3 剩余 action 11 例、full_path 路由 4 类发现、Q4 WS/写路径容量、Q5 四项缓解、Q1 :3200 部署协调）。
+- 并行会话协同记录：#274 合并时覆盖了本任务 PROGRESS 的 Q4 日志段（已在本任务分支恢复）；#279 演进了 Q3 的实体改写守卫（恢复纯查单改写、动作域维持不改写，真机回归验证）——Q3 报告中该条目以 #279 后的 main 实现为准。
+- HANDOFF.md 已被本收官日志取代为历史文件：现场（worktree/分支/HEAD/未提交）不再以它为准，以 Git 与本文件为准。
