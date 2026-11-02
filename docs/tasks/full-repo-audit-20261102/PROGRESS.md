@@ -69,3 +69,16 @@
 - 测试：test_negated_child_context.py +10 用例（8 类否定短语表驱动 + 转折保留 + 无桥接护栏）、test_schedule_travel_buffer.py +3 边界（离开早于窗口/窗口内放不下/放得下）。定向 31 passed。
 - 回归：午餐与儿童短语相关 9 个测试文件 213 passed（plan_diff/phase2_input_boundaries/requirement_agent_contract/turn_decision/weather_expert/p0_mvp/phase4_p1_batch/itinerary_adapter/trip_edit_operations）。
 - 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；rag_smoke 新增路径已按等效定向命令本地收集执行。
+
+## 2026-11-03 W3 收官后 main 全量两失败的根因归属（均与 W3 diff 无关）
+
+- run 41521140057（HEAD 36688c2）13/15 job 绿。两失败归属：
+- misc router：PR #270（cs-prod-q3，6884144）给 resolve_explicit_order_route 加「非 knowledge_query 一律不改写」守卫，「请查一下订单 MO-…」被判 TRANSACTION/t_order_status conf=0.63 → 返回 None → 既有断言失败。本地单跑稳定复现；1ff0a36（#270 合入前）同套件全绿；该文件在 1ff0a36..36688c2 区间仅出自 #270。修复裁决：方向 A 守卫精细化（纯状态查询仍改写，动作域维持不改写），另立分支。
+- backend-root：UnicodeDecodeError（fixture teardown 解码 0xbc）自 84% 起爆发，仅 CI 出现、本地同测试全绿、两 run 间 git 快照相同；单独重跑 run 41525770423 success。判定 CI 环境性 flake（runner ubuntu-latest→26 镜像迁移期漂移特征），留观察。
+
+## 2026-11-03 W4 批次实施完成（随本 PR 提交）
+
+- 工作树 fix-login-credential-safety；分支 codex/fix-login-credential-safety；基线 36688c2。范围：S6（三端开放重定向）+ S7（主站明文密码 localStorage）。
+- S6：三端 lib/auth.ts 各加 safeRedirectPath（同语义随端维护）：协议相对 //evil、外域绝对 URL、反斜杠变体 /\evil、路径中裸反斜杠回退默认页；同源路径原样放行。三端登录页 redirect 接入。
+- S7：主站删除 saveCredentials/getSavedCredentials，登录只 saveUsername；历史两代明文键（agent.saved_credentials 与 _v1）首次读取登录态时清除；注册回访 sessionStorage 一次性预填保留；勾选文案改「记住账号，下次自动填充」。
+- 验证：authCredentials.test 14 例 passed；主站全量 693 passed 零回归；admin 585 全绿（4 例全源码扫描测试在 node_modules junction 跨盘 IO 下超时，放宽超时单跑通过，非代码回归）；三端 tsc 改动文件零错误（主站 bff-proxy.test/chat.test 16 个基线类型债务非本次引入）；cs 端 tsc 零错误、vitest 本地缺依赖（主目录 node_modules 既有缺口）由 CI 覆盖。前端依赖复用主目录 junction，未重复安装。
