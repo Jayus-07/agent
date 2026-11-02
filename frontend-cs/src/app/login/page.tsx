@@ -22,13 +22,15 @@ import {
   consumeExpiredFlag,
   getSavedUsername,
   login,
+  safeRedirectPath,
   saveUsername,
 } from "@/lib/auth";
 
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/";
+  // S6 审计修复：协议相对（//evil）、外域绝对 URL 与反斜杠变体一律回退默认页
+  const redirect = safeRedirectPath(searchParams.get("redirect"), "/");
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
