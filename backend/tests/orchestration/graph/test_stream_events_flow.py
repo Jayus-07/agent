@@ -698,3 +698,35 @@ def test_tool_selection_clarification_event_exposes_business_labels_only():
     ]
     assert "sql.query" not in payload_text
     assert "rag.search" not in payload_text
+
+
+def test_worker_binding_failure_terminates_stream_with_error(monkeypatch):
+    """审计 P1-3（2026-11-03）：_worker 绑定段（bind/import/挂 sink）异常
+    也必须终结流。
+
+    修复前绑定段位于 try 之外：一旦抛异常 worker 线程静默死亡，done
+    sentinel 永不入队，主循环 merged_q.get() 永久挂起并占死线程池线程。
+    修复后：绑定失败按图内异常同口径出 error 帧，sentinel 恰好投递一次。
+    """
+    from backend.observability.tracer import trace_collector
+
+    monkeypatch.setattr(trace_collector, "finish", lambda *_args: None)
+
+    import backend.context_budget.metrics as ctx_metrics
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("context sink binding exploded")
+
+    monkeypatch.setattr(ctx_metrics, "set_context_event_scope", _boom)
+
+    sys_obj = _make_system(_FakeGraph([
+        {"general_chat": {"final_answer": "不应到达"}},
+    ]))
+    # list() 能自然返回本身即断言了「不挂死」——修复前这里会永久阻塞
+    events = _collect_events(sys_obj)
+
+    error_events = [e for e in events if e.get("event") == "error"]
+    assert error_events, (
+        "绑定失败必须出 error 帧，实际事件: "
+        f"{[e.get('event') for e in events]}"
+    )
