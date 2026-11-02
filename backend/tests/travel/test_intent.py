@@ -206,6 +206,20 @@ def test_repeated_city_keeps_first_mention():
     assert extract_destination("北京和上海相比，北京好玩吗") == "北京"
 
 
+def test_previous_destination_repeated_in_message_is_kept_not_dropped():
+    """只读咨询 prompt 的行程事实 JSON 中上一轮目的地会重复出现（目的地
+    字段 + 各地点地址前缀）；「换目的地」剔除不能把候选剔成空列表再取
+    [0]（P5 只读问答 IndexError 回归）。全部候选都是上一轮目的地时视为重申。"""
+    message = ('正式行程事实 JSON：{"brief":{"destination":"苏州"},'
+               '"days":[{"items":[{"place":{"address":"苏州市姑苏区东北街"}}]}]}'
+               '用户问题：请确认行程天数和成人数量')
+    assert extract_destination(message, "苏州") == "苏州"
+
+
+def test_change_destination_semantics_still_prefers_new_city():
+    assert extract_destination("苏州改天再去，先规划杭州", "苏州") == "杭州"
+
+
 def test_answer_does_not_create_planning_pending():
     from backend.orchestration.graph.travel_graph_node import _sync_travel_run
 

@@ -378,7 +378,10 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
         # 2) 「换目的地」语义：多个候选含上一轮目的地时，变化目标优先
         if (len(candidates) > 1 and previous_destination
                 and previous_destination in candidates):
-            candidates = [c for c in candidates if c != previous_destination]
+            remaining = [c for c in candidates if c != previous_destination]
+            # 候选全部是上一轮目的地（如只读 prompt 的行程事实 JSON 中
+            # 目的地与地点地址重复出现）时视为重申，不能剔成空列表。
+            candidates = remaining or candidates
         # 3) 消息出现顺序取最左
         order: dict[str, int] = {}
         for pos, city in hits:
