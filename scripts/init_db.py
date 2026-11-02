@@ -345,6 +345,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 旅游 V2 精选模板种子（目录页/首页模板区在全新环境不再空态）。
     # 2026-11-01：原编号 125 与先行合入 main 的 125_mall_wallet 冲突，顺延为 129。
     "129_travel_v2_template_seed.sql": "memory",
+    # MCP grant 租户一致性 DB 级防线（S1 审计修复）：组合外键 + 存量错配行收口。
+    "130_mcp_grant_tenant_consistency.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

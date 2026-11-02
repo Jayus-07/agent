@@ -326,3 +326,179 @@ class TestGrantDomainBoundary:
                         headers=ADMIN_HEADERS, json={"product_key": "agent"})
         assert r.status_code == 400, r.text
         assert "travel.poi_search" in r.json()["message"]
+
+
+class TestGrantTenantBoundary:
+    """S1 审计修复：grant/runtime/tool/connection 租户必须一致。
+
+    capability slug 全局唯一，历史实现下 B 租户管理员可用 A 租户已批准
+    工具的 slug 创建 bundle，把执行授权绑到 A 的 runtime/connection/凭据
+    （读调用经 product_granted 放行；写调用被 verify_write_authorization
+    拦截）。修复后四层防线：登记端成员校验拒绝跨租户成员、授权端写入
+    租户过滤 + 0 行显式冲突、读快照对存量错配行默认拒绝、迁移 130 的
+    DB 组合外键兜底。
+    """
+
+    B_TENANT = "e2e-bundle-tenant-b"
+    B_HEADERS = {
+        "X-Auth-Type": "jwt",
+        "X-User-Id": "u-e2e-bundle-admin-b",
+        "X-User-Roles": "admin",
+        "X-Tenant-Id": "e2e-bundle-tenant-b",
+    }
+
+    def _inject_runtime(self, tool_id: int) -> None:
+        from backend.infra.mcp_registry import store as mcp_store
+        from backend.infra.mcp_registry import specs as spec_lib
+
+        spec = spec_lib.derive_tool_spec(
+            DYN_CAP, "e2e",
+            {"type": "object", "properties": {}},
+            {"operation": "read", "risk_level": "R1"})
+        mcp_store.inject_snapshot_for_tests(mcp_store.McpRegistrySnapshot(
+            loaded=True,
+            tools={DYN_CAP: mcp_store.McpToolRuntime(
+                capability=DYN_CAP, tool_id=tool_id,
+                connection_id="bundle_test_conn", upstream_tool_name="get_order",
+                tenant_id=TENANT, spec=spec, network_scope="private")},
+            connections={"bundle_test_conn": mcp_store.McpConnectionRuntime(
+                connection_id="bundle_test_conn",
+                base_url="http://127.0.0.1:1", auth_type="none",
+                network_scope="private")},
+        ))
+
+    def _delete_grants_for_tenants(self) -> None:
+        raw = _raw_conn()
+        try:
+            with raw.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM ai.mcp_tool_grants WHERE tenant_id = ANY(%(ts)s)",
+                    {"ts": [TENANT, self.B_TENANT]})
+            raw.commit()
+        finally:
+            raw.close()
+
+    def test_cross_tenant_member_rejected_at_bundle_create(self, client):
+        """B 租户创建含 A 租户工具 slug 的 bundle → 400（登记端拒绝）。"""
+        _insert_fixture_tool()
+        tool_id = _fixture_tool_id()
+        self._inject_runtime(tool_id)
+        try:
+            r = client.post(
+                "/admin/capability-bundles", headers=self.B_HEADERS,
+                json={"name": "跨租户包", "domain": "mcp",
+                      "capabilities": [DYN_CAP]})
+            assert r.status_code == 400, r.text
+            assert "不属于当前租户" in r.json()["message"]
+        finally:
+            _delete_fixture_tool(tool_id)
+            from backend.infra.mcp_registry import store as mcp_store
+
+            mcp_store.reset_for_tests()
+
+    def test_cross_tenant_bundle_grant_rejected_at_write(self, client):
+        """A 创建自有工具 bundle 合法；B 授权该 bundle → 409，且不产生 B 的 grant 行。"""
+        _insert_fixture_tool()
+        tool_id = _fixture_tool_id()
+        self._inject_runtime(tool_id)
+        try:
+            bundle_id = _create(client, "A自有工具包", [DYN_CAP], domain="mcp")
+            r = client.post(
+                f"/admin/capability-bundles/{bundle_id}/grants",
+                headers=self.B_HEADERS, json={"product_key": "agent"})
+            assert r.status_code == 409, r.text
+            assert "不属于当前租户" in r.json()["message"]
+            raw = _raw_conn()
+            try:
+                with raw.cursor() as cur:
+                    cur.execute(
+                        "SELECT count(*) FROM ai.mcp_tool_grants "
+                        "WHERE tool_id = %(tid)s AND tenant_id = %(tn)s",
+                        {"tid": tool_id, "tn": self.B_TENANT})
+                    assert cur.fetchone()[0] == 0
+            finally:
+                raw.close()
+        finally:
+            _delete_fixture_tool(tool_id)
+            from backend.infra.mcp_registry import store as mcp_store
+
+            mcp_store.reset_for_tests()
+
+    def test_poisoned_grant_row_excluded_from_snapshot(self):
+        """存量错配行（tool 属 A、grant 记 B）不进读快照：product_granted
+        与 verify_write_authorization 双双拒绝——迁移 130 之前 DB 可能存在
+        此类行，读路径默认拒绝是执行链的最后防线。"""
+        import asyncio
+
+        import psycopg2
+
+        from backend.infra.mcp_registry import store as mcp_store
+
+        _insert_fixture_tool()
+        tool_id = _fixture_tool_id()
+        raw = _raw_conn()
+        try:
+            with raw.cursor() as cur:
+                # A 租户正常授权行（回归正例的载体）
+                cur.execute(
+                    "INSERT INTO ai.mcp_tool_grants "
+                    "(tool_id, product_key, granted_by, tenant_id) "
+                    "VALUES (%(tid)s, 'agent', 'e2e', %(t)s) "
+                    "ON CONFLICT (tool_id, product_key, tenant_id) DO NOTHING",
+                    {"tid": tool_id, "t": TENANT})
+                # 错配行：模拟迁移 130 之前的历史脏数据。组合外键生效的库
+                # 上直插会被拒，用 session_replication_role 绕过（仅测试库
+                # postgres 超用户可执行），专测读快照的防线本身。
+                cur.execute("SET session_replication_role = replica")
+                cur.execute(
+                    "INSERT INTO ai.mcp_tool_grants "
+                    "(tool_id, product_key, granted_by, tenant_id) "
+                    "VALUES (%(tid)s, 'agent', 'e2e-poison', %(t)s)",
+                    {"tid": tool_id, "t": self.B_TENANT})
+                cur.execute("RESET session_replication_role")
+            raw.commit()
+        finally:
+            raw.close()
+        try:
+            mcp_store.reset_for_tests()
+            assert asyncio.run(mcp_store.refresh())
+            assert mcp_store.product_granted("agent", DYN_CAP, self.B_TENANT) is False
+            assert mcp_store.product_granted("agent", DYN_CAP, TENANT) is True
+            ok, _reason = mcp_store.verify_write_authorization(
+                DYN_CAP, "agent", self.B_TENANT)
+            assert ok is False
+        finally:
+            self._delete_grants_for_tenants()
+            _delete_fixture_tool(tool_id)
+            mcp_store.reset_for_tests()
+
+    def test_db_fk_rejects_cross_tenant_grant_insert(self):
+        """迁移 130 组合外键：错配 grant 直插必须被 DB 拒绝（NOT VALID
+        只豁免存量行，新写入立即生效）。"""
+        import psycopg2
+
+        raw = _raw_conn()
+        try:
+            with raw.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM pg_constraint "
+                    "WHERE conname = 'fk_mcp_grants_tool_tenant'")
+                if cur.fetchone() is None:
+                    pytest.skip("迁移 130 未执行（组合外键不存在）")
+        finally:
+            raw.close()
+        _insert_fixture_tool()
+        tool_id = _fixture_tool_id()
+        raw = _raw_conn()
+        try:
+            with raw.cursor() as cur:
+                with pytest.raises(psycopg2.errors.ForeignKeyViolation):
+                    cur.execute(
+                        "INSERT INTO ai.mcp_tool_grants "
+                        "(tool_id, product_key, granted_by, tenant_id) "
+                        "VALUES (%(tid)s, 'agent', 'e2e', %(t)s)",
+                        {"tid": tool_id, "t": self.B_TENANT})
+                raw.rollback()
+        finally:
+            raw.close()
+            _delete_fixture_tool(tool_id)
