@@ -78,9 +78,10 @@ def current_usage_attribution() -> dict[str, str]:
     # Provider 调用生成局部 Trace ID；保留该 Trace ID 会使 usage 与预算账本
     # 无法按 request_id 对账，因此只把 Trace ID 留在 trace_id 字段。
     try:
-        from backend.infra.llm.budget import current_request_id
+        from backend.infra.llm.budget import current_request_id, current_run_budget
 
-        budget_request_id = current_request_id()
+        run_scope = current_run_budget()
+        budget_request_id = run_scope[0] if run_scope else current_request_id()
     except Exception:
         budget_request_id = ""
     if budget_request_id:

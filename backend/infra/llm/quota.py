@@ -935,6 +935,7 @@ class PostgresQuotaStore:
         amount_cny: Decimal,
         request_id: str = "",
         now: datetime | None = None,
+        request_limit_cny: Decimal | None = None,
     ) -> PostgresQuotaReservation:
         """按真实身份预占（user/tenant 两层，模板策略只提供上限）。
 
@@ -947,12 +948,38 @@ class PostgresQuotaStore:
         amount = Decimal(amount_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if amount < 0:
             raise ValueError("预算预占金额不能为负数")
+        request_limit = None
+        if request_limit_cny is not None:
+            request_limit = Decimal(request_limit_cny)
+            if not request_id or not request_limit.is_finite() or request_limit < 0:
+                raise ValueError('整批预算必须有请求ID和非负有限人民币上限')
+            request_limit = request_limit.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         policies = self.resolve(user_id, tenant_id)
         periods = budget_periods(now, policies.tenant.timezone)
         reservation_id = str(uuid.uuid4())
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    if request_limit is not None:
+                        # 同一批次跨进程串行预占；复用既有预占表，不建平行账本。
+                        cur.execute(
+                            'SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))',
+                            (f'budget-request:{request_id}',),
+                        )
+                        cur.execute(
+                            f'''SELECT COALESCE(SUM(CASE WHEN status = 'settled'
+                                       THEN settled_cny ELSE reserved_cny END), 0)
+                                FROM (SELECT DISTINCT ON (id)
+                                             id, status, settled_cny, reserved_cny
+                                      FROM {self._reservations}
+                                      WHERE request_id = %s
+                                        AND status IN ('reserved', 'needs_review', 'settled')
+                                      ORDER BY id) reservations''',
+                            (request_id,),
+                        )
+                        committed = Decimal(cur.fetchone()[0])
+                        if committed >= request_limit or committed + amount > request_limit:
+                            raise QuotaExceeded(f'request:{request_id}', 'run')
                     for scope_type, scope_id, policy in (
                         ("user", user_id, policies.user),
                         ("tenant", tenant_id, policies.tenant),

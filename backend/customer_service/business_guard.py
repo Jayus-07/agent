@@ -42,7 +42,10 @@ FINGERPRINT_LENGTH = 64
 # created_at/expires_at、proposal_text（LLM 措辞）、retry_count、UI 来源、
 # trace/request id（§9）——否则第二个 confirmation 永远生成不同 key，
 # guard 失效。
-_SEMANTIC_PAYLOAD_KEYS = ("amount", "currency", "items", "scope", "quantity")
+# new_address（Q3 2026-11-03）：地址修改的业务效果就是目标地址本身；
+# 缺它时同账户不同订单/不同地址的改址提案指纹相同，互相误挡
+# （Q3 action 池实测：DEMO-1012/1010/1014 三单改址共用同一指纹）。
+_SEMANTIC_PAYLOAD_KEYS = ("amount", "currency", "items", "scope", "quantity", "new_address")
 
 # risk_level 是 proposal 语义的一部分（STOP C 执行 payload 已认定：
 # 「risk_level 是 proposal 语义的一部分：变更 = 不同请求」）

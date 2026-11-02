@@ -32,6 +32,20 @@ _CS_EXPERT_NODES = {
 }
 
 
+def _user_turns(case: TestCase) -> list[str]:
+    """按锁版顺序重放用户轮次；不将标注的助手回复伪装成系统输出。"""
+    turns = case.metadata.get('turns')
+    if not turns:
+        return [case.question]
+    messages = [
+        str(turn.get('text', '')).strip()
+        for turn in turns if turn.get('role') == 'user'
+    ]
+    if not messages or any(not message for message in messages):
+        raise ValueError('多轮样本必须包含非空用户输入')
+    return messages
+
+
 def _run_cs(cases: list[TestCase], live: bool = False,
             mode: str = "graph_only", **kwargs) -> list[EvalResult]:
     if not live:
@@ -104,23 +118,26 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
         t0 = time.time()
         exp = case.expected
         try:
+            from backend.infra.llm.budget import check_quota_blocked
+
+            check_quota_blocked()
             # thread_id 按 run+case 隔离，避免评测样本间与跨 run 状态串扰
             config = {
                 "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
                 "configurable": {"thread_id": f"eval-cs-{run_token}-{case.id}"},
             }
-            cs_input = new_cs_graph_input(
-                user_message=case.question,
-                user_id="eval_bot",
-                # session 必须 case 级隔离：confirmation/handoff store 按
-                # (user_id, session_id) 键控——session 仅 run 级时，同一 run
-                # 内先跑 case 的动作提案 pending 态仍会拦住后续 case
-                # （b0r3/r4/r5 三轮实测），而评测每条 case 即独立单轮会话
-                session_id=f"cs_eval_{run_token}-{case.id}",
-                conversation_id=f"eval-cs-{run_token}-{case.id}",
-                cs_route=get_cs_router().route(case.question).model_dump(),
-            )
-            final_state = graph.invoke(cs_input, config=config)
+            messages = _user_turns(case)
+            for message in messages:
+                check_quota_blocked()
+                # 同一case跨轮保留业务会话；不同case/run仍严格隔离。
+                cs_input = new_cs_graph_input(
+                    user_message=message,
+                    user_id="eval_bot",
+                    session_id=f"cs_eval_{run_token}-{case.id}",
+                    conversation_id=f"eval-cs-{run_token}-{case.id}",
+                    cs_route=get_cs_router().route(message).model_dump(),
+                )
+                final_state = graph.invoke(cs_input, config=config)
             duration_ms = int((time.time() - t0) * 1000)
 
             answer = (final_state.get("final_answer") or "").strip()
@@ -143,6 +160,7 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
 
             actual = {
                 "final_answer": answer[:200],
+                'turn_count': len(messages),
                 "visited_experts": sorted(visited),
                 "handoff_state": final_state.get("handoff_state", ""),
                 "status": final_state.get("conversation_status", ""),
@@ -205,6 +223,7 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
     from backend.orchestration.graph import MultiAgentSystem
 
     agent = MultiAgentSystem()
+    run_token = uuid.uuid4().hex[:12]
     results: list[EvalResult] = []
     for case in cases:
         t0 = time.time()
@@ -213,21 +232,36 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
         deltas: list[str] = []
         clarify_seen = False
         try:
-            for evt in agent.stream_events(
-                case.question, f"eval-cs-v2-{case.id}", kb_id="default",
-                user_id="eval_bot",
-            ):
-                name = evt.get("event")
-                data = evt.get("data") or {}
-                if name == "status" and data.get("node"):
-                    nodes.add(data["node"])
-                elif name == "clarification":
-                    clarify_seen = True
-                elif name == "delta" and isinstance(data.get("content"), str):
-                    deltas.append(data["content"])
+            from backend.infra.llm.budget import check_quota_blocked
+
+            check_quota_blocked()
+            messages = _user_turns(case)
+            session_id = f'eval-cs-v2-{run_token}-{case.id}'
+            for message in messages:
+                check_quota_blocked()
+                # 断言针对最后一轮；前轮的域进入/澄清不能替末轮通过。
+                nodes = set()
+                deltas = []
+                clarify_seen = False
+                for evt in agent.stream_events(
+                    message, session_id, kb_id="default",
+                    user_id="eval_bot", tenant_id='default',
+                ):
+                    name = evt.get("event")
+                    data = evt.get("data") or {}
+                    if name == "status" and data.get("node"):
+                        nodes.add(data["node"])
+                    elif name == "clarification":
+                        clarify_seen = True
+                    elif name == "delta" and isinstance(data.get("content"), str):
+                        deltas.append(data["content"])
+                    elif name == 'error':
+                        raise RuntimeError('完整路径返回执行错误事件')
             answer = "".join(deltas)
             problems: list[str] = []
             metrics: dict[str, float | None] = {}
+            if not answer.strip() and not clarify_seen:
+                problems.append('末轮没有回答或澄清事件')
             if exp.get("cs_route") == "hit" and "cs_graph_node" not in nodes:
                 problems.append(f"未进入客服域: nodes={sorted(nodes)}")
             for kw in exp.get("must_contain") or []:
@@ -246,6 +280,7 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                 status="fail" if problems else "pass",
                 expected=exp,
                 actual={"nodes": sorted(nodes), "answer_head": answer[:200],
+                        'turn_count': len(messages),
                         "pending": "p1-fields: intent/entities 断言待 CSUnderstanding"},
                 metrics=metrics,
                 duration_ms=int((time.time() - t0) * 1000),

@@ -55,6 +55,32 @@ def _install(monkeypatch, final_state: dict) -> _FakeGraph:
     return graph
 
 
+def test_graph_live_replays_each_user_turn_in_same_case_session(monkeypatch):
+    graph = _install(monkeypatch, {
+        'final_answer': '退款需要确认',
+        'expert_history': [{'expert': 'action'}],
+    })
+    inputs = []
+    original = graph.invoke
+
+    def invoke(state, config):
+        inputs.append((dict(state), dict(config['configurable'])))
+        return original(state, config)
+
+    monkeypatch.setattr(graph, 'invoke', invoke)
+    case = _case('multi').model_copy(update={'metadata': {'turns': [
+        {'role': 'user', 'text': '第一轮'},
+        {'role': 'assistant', 'text': '标注回复不能注入'},
+        {'role': 'user', 'text': '第二轮'},
+    ]}})
+    result = cs_runner._run_cs([case], live=True)[0]
+    assert [state['user_message'] for state, _ in inputs] == ['第一轮', '第二轮']
+    assert inputs[0][0]['session_id'] == inputs[1][0]['session_id']
+    assert inputs[0][1]['thread_id'] == inputs[1][1]['thread_id']
+    assert result.actual['turn_count'] == 2
+    assert result.status == 'pass'
+
+
 @pytest.mark.parametrize(
     ("expert_history", "expected_visited", "desc"),
     [

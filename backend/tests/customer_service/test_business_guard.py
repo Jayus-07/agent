@@ -514,3 +514,34 @@ def test_d23_bypass_scan():
         if "CSConfirmation(" in content:
             offenders.append(rel)
     assert offenders == [], f"存在绕过 guard 的直接写入口: {offenders}"
+
+
+def test_fingerprint_address_change_distinguishes_orders_and_addresses():
+    """Q3 回归：地址修改的语义指纹必须区分订单与目标地址。
+
+    缺陷实测：target 塌缩到 user 且 new_address 不参与指纹时，三个不同
+    订单的改址提案共用同一指纹，跨会话互相挡（BusinessOperationAlreadyActive）。
+    """
+    def _addr_pending(order_id: str, address: str) -> dict:
+        return {
+            "action_id": str(uuid.uuid4()),
+            "action_type": "address_update",
+            "target_type": "order" if order_id else "account",
+            "target_id": order_id or "eval_bot",
+            "risk_level": "medium",
+            "proposal_text": "地址修改确认卡",
+            "before_state": {"user_id": "eval_bot", "field": "address"},
+            "after_state": {"user_id": "eval_bot", "new_address": address},
+            "requires_confirmation": True,
+            "confirmation_state": "pending",
+            "expires_at": "2099-01-01T00:00:00+00:00",
+        }
+
+    a = _addr_pending("DEMO-1012", "北京市朝阳区")
+    b = _addr_pending("DEMO-1010", "上海市浦东新区")
+    assert compute_semantic_fingerprint(a) != compute_semantic_fingerprint(b)
+    # 同单同地址 = 同一操作（幂等），同单改地址 = 新操作
+    assert compute_semantic_fingerprint(a) == compute_semantic_fingerprint(
+        _addr_pending("DEMO-1012", "北京市朝阳区"))
+    assert compute_semantic_fingerprint(a) != compute_semantic_fingerprint(
+        _addr_pending("DEMO-1012", "上海市浦东新区"))

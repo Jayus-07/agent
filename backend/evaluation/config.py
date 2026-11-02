@@ -1,7 +1,10 @@
 """评测配置 — EvalConfig 模型。"""
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Literal
+from decimal import Decimal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class EvalConfig(BaseModel):
@@ -9,6 +12,8 @@ class EvalConfig(BaseModel):
 
     module: str = "all"
     live: bool = False
+    cs_mode: Literal['graph_only', 'full_path'] = 'graph_only'
+    cs_max_cost_cny: Decimal = Field(default=Decimal('10'), gt=0, le=10)
     smoke: bool = False
     judge: bool = False
     tier: str = "all"
@@ -41,3 +46,9 @@ class EvalConfig(BaseModel):
     # 发布版——发布评测必须携带本字段（2026-10-29 修复）。
     prompt_templates: dict[str, tuple[int, str]] | None = None
     release_id: str | None = None  # 关联的 Prompt 发布记录
+
+    @model_validator(mode='after')
+    def validate_cs_mode(self) -> 'EvalConfig':
+        if self.cs_mode == 'full_path' and (self.module != 'cs' or not self.live):
+            raise ValueError('full_path 仅支持显式 cs live 评测')
+        return self

@@ -319,3 +319,32 @@ def test_explicit_route_lands_on_business_query_via_router():
     route = get_cs_router().route(r.resolved_query, detect_cached(r.resolved_query))
     assert route.intent == "t_order_status"
     assert route.route_path.value == "business_query"
+
+
+def test_explicit_order_with_domain_keywords_not_rewritten():
+    """带客服域关键词的显式订单问句不得被改写吞掉动作意图（Q3 C3-021 回归）。
+
+    「订单 DEMO-1012 申请退款」含 AFTER_SALES 意图；改写成「查询订单 X」
+    会把 as_refund 丢成 t_order_status（Q3 full_path live 实测）。业务路由
+    可达的问句必须返回 None，让原始 query 照常路由。
+    """
+    from backend.customer_service.context_resolver import (
+        resolve_explicit_order_route,
+    )
+
+    assert resolve_explicit_order_route("订单 DEMO-1012 申请退款") is None
+    assert resolve_explicit_order_route("DEMO-1012 退货") is None
+    # 纯实体查询（原始路由落 knowledge 兜底）仍按缺陷9 语义纠偏
+    r = resolve_explicit_order_route("查 MO-3C052B3A")
+    assert r is not None and r.order_id == "MO-3C052B3A"
+    assert r.resolved_query == "查询订单 MO-3C052B3A"
+
+
+def test_explicit_order_action_query_routes_to_after_sales():
+    """守卫生效后「订单 X 申请退款」原始路由应落 AFTER_SALES/as_refund。"""
+    from backend.customer_service.router.cs_router import get_cs_router
+    from backend.customer_service.router.domain_detector import detect_cached
+
+    route = get_cs_router().route("订单 DEMO-1012 申请退款", detect_cached("订单 DEMO-1012 申请退款"))
+    assert route.intent == "as_refund"
+    assert route.route_path.value == "business_action"

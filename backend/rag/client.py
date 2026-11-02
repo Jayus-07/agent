@@ -48,6 +48,21 @@ _DEADLINE_HEADER = "X-Agent-Deadline-Seconds"
 _DEADLINE_SEND_MARGIN_S = 1.0
 
 
+def _reject_run_budget(reason: str) -> None:
+    from backend.infra.llm.budget import RequestBudgetExceeded, note_quota_blocked
+
+    exc = RequestBudgetExceeded(reason)
+    note_quota_blocked(exc)
+    raise exc
+
+
+def _internal_headers() -> dict[str, str]:
+    """服务端配置内部令牌时统一携带；未配置保持旧行为（中间件不校验）。"""
+    from backend.config.messaging import AI_INTERNAL_TOKEN
+
+    return {'X-Internal-Token': AI_INTERNAL_TOKEN} if AI_INTERNAL_TOKEN else {}
+
+
 def _effective_tenant_id(tenant_id: str) -> str:
     value = str(tenant_id or "").strip()
     if value:
@@ -159,6 +174,31 @@ class RAGServiceProxy:
         tenant_id = _effective_tenant_id(tenant_id)
         try:
             headers = {}
+            from backend.infra.llm.budget import current_run_budget
+
+            run_scope = current_run_budget()
+            if run_scope is not None:
+                from backend.config.messaging import AI_INTERNAL_TOKEN
+
+                if not AI_INTERNAL_TOKEN:
+                    _reject_run_budget('run_budget_internal_token_missing')
+                try:
+                    capability = self._client.get('/readyz', timeout=5)
+                    capability.raise_for_status()
+                    version = capability.json().get('run_budget_version')
+                except (httpx.HTTPError, ValueError):
+                    _reject_run_budget('run_budget_preflight_unavailable')
+                if type(version) is not int or version != 1:
+                    _reject_run_budget('run_budget_remote_unsupported')
+                headers.update({
+                    'X-Internal-Token': AI_INTERNAL_TOKEN,
+                    'X-Agent-Budget-Run-Id': run_scope[0],
+                    'X-Agent-Budget-Run-Limit-Cny': str(run_scope[1]),
+                })
+            # 普通问答同样必须携带令牌（与文档管理端点一致）：共享 RAG 开启
+            # 内部令牌后，缺头的普通 /ask 会被既有中间件 401，评测与正常请求
+            # 必须能同服务共存。
+            headers.update(_internal_headers())
             # 父请求在工具执行时限内（SafeToolExecutor 作用域）时：
             #   1) 读等待同步封顶到剩余时限 —— 父请求 wait_for 取消后，
             #      同步线程不再在 300s 读上空转（线程池/连接占用）；
@@ -243,12 +283,15 @@ class RAGServiceProxy:
         except httpx.HTTPError as e:
             response = getattr(e, "response", None)
             if (response is not None and response.status_code == 402
-                    and response.headers.get("X-Agent-Quota-Scope") in {"user", "tenant"}):
+                    and response.headers.get("X-Agent-Quota-Scope") in {"user", "tenant", "request"}):
                 from backend.infra.llm.budget import note_quota_blocked
                 from backend.infra.llm.quota import QuotaExceeded
 
                 scope = response.headers["X-Agent-Quota-Scope"]
-                exc = QuotaExceeded(f"{scope}:{user_id if scope == 'user' else tenant_id}", "day_or_month")
+                subject = run_scope[0] if scope == 'request' and run_scope else (
+                    user_id if scope == 'user' else tenant_id
+                )
+                exc = QuotaExceeded(f"{scope}:{subject}", 'run' if scope == 'request' else 'day_or_month')
                 note_quota_blocked(exc)
                 raise exc from e
             # 连接建立前失败时服务端不会创建子 Trace；清理预留关系。
@@ -298,6 +341,7 @@ class RAGServiceProxy:
         try:
             resp = self._client.post(
                 "/retrieve",
+                headers=_internal_headers(),
                 json={
                     "question": question,
                     "kb_id": kb_id,
@@ -347,6 +391,7 @@ class RAGServiceProxy:
         try:
             resp = self._client.post(
                 "/retrieve_docs",
+                headers=_internal_headers(),
                 json={
                     "question": question,
                     "kb_id": kb_id,

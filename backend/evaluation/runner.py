@@ -126,6 +126,7 @@ def run_all(
     multiquery: bool = False,
     full_trace: bool = False,
     force_rerun: bool = False,
+    cs_mode: str = 'graph_only',
 ) -> Any:
     """主入口 — 薄包装器，委托给 EvaluationService.evaluate()。
 
@@ -137,6 +138,7 @@ def run_all(
     config = EvalConfig(
         module=module,
         live=live,
+        cs_mode=cs_mode,
         smoke=smoke,
         judge=judge,
         dataset=dataset_file,

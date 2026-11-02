@@ -84,6 +84,10 @@ def build_parser() -> argparse.ArgumentParser:
              "travel-provider=Provider 层探针（STOP J9）",
     )
     parser.add_argument(
+        '--cs-mode', choices=['graph_only', 'full_path'], default='graph_only',
+        help='客服 live 执行路径：领域图或主图完整路径',
+    )
+    parser.add_argument(
         "--smoke", action="store_true",
         help="快速冒烟（每模块仅取 5 条用例）",
     )
@@ -271,6 +275,7 @@ def main():
             resume=not args.no_resume,
             multiquery=args.multiquery,
             full_trace=args.full_trace,
+            cs_mode=args.cs_mode,
             force_rerun=args.force,
         )
     except Exception as e:

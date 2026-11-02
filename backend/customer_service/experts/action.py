@@ -610,8 +610,12 @@ def _build_proposal(
     if action_type == "address":
         from backend.customer_service.service.account_action_service import get_account_action_service
         new_address = cs_route.get("metadata", {}).get("new_address", "")
+        # 订单级改址以订单为操作实体：语义守卫按 (tenant, action, target,
+        # payload) 去重，塌缩到 user 会让不同订单的改址互相误挡（Q3 实测
+        # 三单改址共用同一指纹）；无订单号才是账户级默认地址修改。
+        order_id = _resolve_order_id(cs_route, user_message)
         return get_account_action_service().build_address_update_proposal(
-            user_id, user_id, new_address,
+            user_id, order_id or user_id, new_address,
         )
 
     if action_type == "password":

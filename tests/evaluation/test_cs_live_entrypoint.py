@@ -23,11 +23,44 @@ def test_host_environment_uses_remote_and_disables_refund(monkeypatch):
     assert os.environ['CS_REFUND_REQUEST_MODE'] == 'disabled'
 
 
+def test_host_entrypoint_accepts_isolated_loopback_ports(monkeypatch):
+    monkeypatch.setenv('CS_EVAL_RAG_URL', 'http://127.0.0.1:18090')
+    monkeypatch.setenv('CS_EVAL_BUSINESS_URL', 'http://127.0.0.1:18081')
+    for key in ('RAG_MODE', 'RAG_SERVICE_URL', 'BUSINESS_SERVICE_URL',
+                'NO_PROXY', 'CS_REFUND_REQUEST_MODE'):
+        monkeypatch.setenv(key, 'old')
+    run_cs_live.prepare_environment()
+    assert os.environ['RAG_SERVICE_URL'] == 'http://127.0.0.1:18090'
+    assert os.environ['BUSINESS_SERVICE_URL'] == 'http://127.0.0.1:18081'
+
+
+@pytest.mark.parametrize('value', ['https://outside.test', 'http://127.0.0.1@outside.test'])
+def test_host_entrypoint_rejects_nonlocal_service_url(monkeypatch, value):
+    monkeypatch.setenv('CS_EVAL_RAG_URL', value)
+    with pytest.raises(ValueError, match='本机'):
+        run_cs_live.prepare_environment()
+
+
+def test_preflight_stops_without_token_before_http(monkeypatch):
+    from backend.config import messaging
+
+    monkeypatch.setattr(messaging, 'AI_INTERNAL_TOKEN', '')
+    monkeypatch.setattr(run_cs_live, 'build_opener', lambda *args: pytest.fail('不能请求HTTP'))
+    with pytest.raises(RuntimeError, match='内部令牌'):
+        run_cs_live.check_services()
+
+
 @pytest.mark.parametrize('ready', [True, False])
 def test_preflight_requires_ready_rag_and_models(monkeypatch, ready):
+    from backend.config import llm, messaging
+
+    monkeypatch.setattr(messaging, 'AI_INTERNAL_TOKEN', 'test-token')
+    monkeypatch.setattr(llm, 'LLM_BUDGET_MODE', 'enforce')
+    monkeypatch.setenv('RAG_SERVICE_URL', 'http://127.0.0.1:18090')
+    monkeypatch.setenv('BUSINESS_SERVICE_URL', 'http://127.0.0.1:18081')
     responses = [
         {'status': 'ok', 'models_loaded': ['embedder', 'reranker']},
-        {'ready': ready},
+        {'ready': ready, 'run_budget_version': 1},
     ]
 
     class Opener:

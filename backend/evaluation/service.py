@@ -593,7 +593,8 @@ class EvaluationService:
         heartbeat_thread.start()
         try:
             from backend.core.request_context import scoped_tool_identity
-            from backend.infra.llm.budget import scoped_request_budget
+            from backend.infra.llm.budget import scoped_request_budget, scoped_run_budget
+            from contextlib import nullcontext
             from backend.infra.llm.proxy import scoped_current_user_id
 
             with scoped_current_user_id(eval_user):
@@ -606,7 +607,18 @@ class EvaluationService:
                         tenant_id=EVAL_TENANT_ID,
                         on_error=_handle_budget_binding_error,
                     ):
-                        report = self._evaluate_cases(config, run_id, run_started_ts)
+                        with (
+                            scoped_run_budget(f'eval:{run_id}', config.cs_max_cost_cny)
+                            if config.module == 'cs' and (config.live or config.judge)
+                            else nullcontext()
+                        ):
+                            if config.module == 'cs' and (config.live or config.judge):
+                                from backend.infra.llm.budget import current_request_budget
+
+                                state = current_request_budget()
+                                if state is None or state.mode != 'enforce':
+                                    raise BudgetBlockedError('客服live必须启用强制预算保护')
+                            report = self._evaluate_cases(config, run_id, run_started_ts)
             # C2-3：attempt 计数随报告落盘（跨次续跑可审计「跑了几次」）
             status = read_run_status(run_id) or {}
             report.metadata["attempt_no"] = int(status.get("attempt_no", 1) or 1)
@@ -813,7 +825,14 @@ class EvaluationService:
                 runner_kwargs.update(eval_scope=scope, run_id=run_id)
                 report_metadata["evaluation_scope"] = scope.as_dict()
                 report_metadata["dataset_version"] = dataset_version
+            if m == "cs":
+                runner_kwargs['mode'] = config.cs_mode
+                report_metadata['cs_mode'] = config.cs_mode
             results = _run_module(m, cases, **runner_kwargs)
+            if m == 'cs' and live:
+                from backend.infra.llm.budget import check_quota_blocked
+
+                check_quota_blocked()
             all_results.extend(results)
             summaries.append(_build_summary(results, m))
             all_cases.extend(cases)
