@@ -60,7 +60,7 @@
 | **P3 工作台功能块** | W2 概览统计块（六行，travelOverview 单一事实源）+ W3 天数 chip 主题；W7/W11 实测已对齐零改动 | ✅ 合并 | #240 |
 | **P4a 生成流引擎抽取 + 工作台生成态** | `useTravelPlanGeneration` 单一实现 + `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 后端冲突消息可读性修复 | ✅ 合并 | #246 |
 | **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch`） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test，其余随组件退役 | ✅ 已合并 | #254 + 决策 5 收口 |
-| **T2 排程车程衔接修复**（后端确定性排程器） | 见下「T2 专项分析」 | ✅ 本地验收通过，待 PR | fix 5c78453；三城保存全链通过 |
+| **T2 排程车程衔接修复**（后端确定性排程器） | 见下「T2 专项分析」 | ✅ 已合并 | #262，merge 7fc468f；三城保存全链通过 |
 | P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ⬜ | 校对清单 |
 | P5 历史/列表/地图形态校对 | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正、W15 断点点测 | ⬜ | PR + L/W9/W14 全勾 |
 | P6 总验收 | 原型全页面点测 + rebuild 全链（含生成→保存→跳转全链复验）+ 用户逐页验收 | ⬜ | 用户验收 |
@@ -333,3 +333,14 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - 范围外实测发现：苏州（11/18）与福州（11/20）的助手文案中酒店 deeplink 日期均为 11/16–11/18，与行程日期不一致；「无儿童」仍被解析为亲子偏好。根因未定位，未修改，建议后续针对日期透传及否定槽位单独排查。
 - 目的地时区仍显示 UTC 未确认披露；苏州/福州 12306 失败如实降级，远期天气未检查如实披露。天气/机票契约位、API 闭环预订 BLOCKED 等原边界沿用。
 - 下一阶段仍为 P2/P5 校对，再做 P6 总验收，本轮不扩大范围。
+## 生成输入修正续工（2026-11-02，codex/travel-proto-generation-input-fixes）
+
+- 基点 main@7fc468f（T2 #262 已合并），复用干净的 agent-wt-travel-proto 工作树；修复范围为 T2 真机发现的酒店日期错位与否定儿童语境误识别，前端、validator 不动。
+- 酒店根因已确认：rollinggo 适配器缓存键/本地报价记录含请求日期，但 `_mcp_args` 漏传 `checkInParam.checkInDate`。PG 5433 的管理端已登记 schema 与真实样本 fixture 均支持该字段；修复为透传已有请求日期，不改写供应商链接。缓存键加入 provider 与版本，隔离旧的错误日期报价。
+- 儿童语境根因已确认：关键词命中未排除「无儿童/不带孩子」等否定表达，连带亲子偏好、轻松节奏和同伴人数推断。复用同一局部屏蔽函数后再走既有规则，不改变其他正向人群与显式节奏；覆盖「10/20个儿童」不被误当0人，以及独立正向亲子意图保留。
+- 新增回归首轮 7 failed、13 passed、1 live smoke skipped，精确复现缺陷。修复后输入/住宿/排程边界定向 125 passed、1 skipped；口语 Golden 与酒店服务回归通过。补充缓存测试一度因测试漏传 observed_at 失败，已修正后 20 passed、1 skipped；追加数字边界后否定语境 13 passed。py_compile、git diff --check 通过。真实出网测试尚待重建后验收，不把本地回放当真实链路通过。
+- 新测试已加入 rag_smoke 定向清单；依赖未变，无新增安装。
+- **运行态验收 PASS**：PowerShell `devctl.bat rebuild /y` 退出0，后端/worker/前端健康；镜像内已核对 checkInDate 透传，TRAIN_MCP_ENABLED=false。首页输入→生成态→真实SSE→保存201→自动正式工作台走通，trip_id=8ca00536-ac45-5fec-bedd-d37f80427d02；PG 127.0.0.1:5433 核对 brief.start_date=2026-11-20、interests=[自然,人文]、adults=2、children=0、pace=balanced（无亲子误识别）。
+- **真实酒店来源核对 PASS**：同一城市苏州两组日期 11/20–11/22（9条，来自本轮生成写入的新缓存）和11/24–11/26（10条，现场真实 MCP 调用），共19条 booking_deep_link 的 checkInDate/checkOutDate 与请求和报价日期全部相同。未修改供应商链接、未用 mock。
+- 当前状态：修复与本地/运行态验收 PASS，未提交、未开 PR；按仓库提交规则待用户确认。
+- **P2 对照进展**：原型8124与真实3100桌面1280宽的Hero/文案/输入卡/胶囊/照片模板卡形态对照；快捷酒店面板就地展开；移动390×844首页无横向溢出、模板横滚和底导可见；新账号空态及首页输入直达生成态验证通过。真实目录当前3个模板，原型6个为演示数据差异，不补假数据。最近行程态和完整P5仍待后续校对，不标整阶段完成。
