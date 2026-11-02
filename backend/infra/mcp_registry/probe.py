@@ -26,14 +26,19 @@ def conn_headers(auth_type: str, secret: str) -> dict[str, str] | None:
 def probe_http_api(
     base_url: str, headers: dict[str, str] | None,
 ) -> tuple[int, bool, str]:
-    """HTTP API 连接探活：HEAD base_url。返回 (elapsed_ms, ok, error)。"""
+    """HTTP API 连接探活：HEAD base_url。返回 (elapsed_ms, ok, error)。
+
+    不跟随重定向（S2 审计修复）：探活入口对配置 URL 已做 SSRF 校验，
+    自动跟随跳转会绕过该校验把请求打进私网。3xx 响应本身仍按「可达」
+    语义返回 ok——本探活只要求网络/TLS 可触达，不要求根路径有路由。
+    """
     import httpx
 
     started = time.perf_counter()
     try:
         with httpx.Client(trust_env=False, timeout=10.0) as client:
             response = client.head(str(base_url or ""), headers=headers or None,
-                                   follow_redirects=True)
+                                   follow_redirects=False)
         elapsed = int((time.perf_counter() - started) * 1000)
         return elapsed, True, ""
     except Exception as exc:  # noqa: BLE001 — 探活收口全部网络异常

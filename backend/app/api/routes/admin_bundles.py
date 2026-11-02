@@ -116,8 +116,9 @@ def _bundle_rows(tenant_id: str) -> list[dict]:
     return rows
 
 
-def _validate_members(capabilities: list[str]) -> None:
-    """成员名校验：格式 + 动态成员须已注册（静态成员由一致性检查对账）。"""
+def _validate_members(capabilities: list[str], tenant: str) -> None:
+    """成员名校验：格式 + 动态成员须已注册且属于当前租户
+    （静态成员由一致性检查对账）。"""
     from backend.infra.mcp_registry import store as mcp_store
     from backend.infra.mcp_registry.specs import is_valid_slug
 
@@ -131,9 +132,16 @@ def _validate_members(capabilities: list[str]) -> None:
             slug = name[len("mcp."):]
             if not is_valid_slug(slug):
                 raise _MutationConflict(f"动态 capability 名非法: {name}")
-            if mcp_store.get_runtime(name) is None:
+            runtime = mcp_store.get_runtime(name)
+            if runtime is None:
                 raise _MutationConflict(
                     f"动态 capability 未在运行时生效: {name}")
+            # capability slug 全局唯一，但工具按租户归属：他租户的已批准
+            # 工具对当前租户不可授权，否则 bundle 会把执行授权绑到跨租户
+            # runtime/connection/凭据（S1 审计修复，默认拒绝）。
+            if str(runtime.tenant_id or "default") != tenant:
+                raise _MutationConflict(
+                    f"动态 capability 不属于当前租户: {name}")
 
 
 @router.get("")
@@ -179,7 +187,7 @@ async def create_bundle(request: Request, body: BundleCreate):
     if body.domain not in _VALID_DOMAINS:
         return _bad_request(f"domain 非法: {body.domain}（允许 {_VALID_DOMAINS}）")
     try:
-        _validate_members(body.capabilities)
+        _validate_members(body.capabilities, tenant)
     except _MutationConflict as exc:
         return _bad_request(str(exc))
     bundle_id = f"cap_bundle_{uuid.uuid4().hex[:12]}"
@@ -228,7 +236,7 @@ async def update_bundle(request: Request, bundle_id: str, body: BundleUpdate):
         return _bad_request(f"domain 非法: {body.domain}")
     if body.capabilities is not None:
         try:
-            _validate_members(body.capabilities)
+            _validate_members(body.capabilities, tenant)
         except _MutationConflict as exc:
             return _bad_request(str(exc))
 
@@ -386,7 +394,9 @@ async def grant_bundle(request: Request, bundle_id: str,
                     "revoked_at = NULL, granted_by = %(actor)s, "
                     "granted_at = now() WHERE id = %(gid)s",
                     {"gid": dup["id"], "actor": actor})
-            # bundle 内动态成员补建执行授权（幂等：存在即启用）
+            # bundle 内动态成员补建执行授权（幂等：存在即启用）。
+            # 工具选择必须与 grant 同租户（S1 审计修复）：slug 全局唯一，
+            # 不加 t.tenant_id 过滤时他租户同 slug 工具会被绑进本租户授权。
             for cap in row["capabilities"]:
                 if cap.startswith("mcp."):
                     g = _query_one(
@@ -394,18 +404,26 @@ async def grant_bundle(request: Request, bundle_id: str,
                         "FROM ai.mcp_tool_grants g JOIN ai.mcp_tools t "
                         "ON g.tool_id = t.id "
                         "WHERE t.capability_slug = %(slug)s "
+                        "AND t.tenant_id = %(tenant)s "
                         "AND g.product_key = %(pk)s AND g.tenant_id = %(tenant)s",
                         {"slug": cap[len("mcp."):], "pk": body.product_key,
                          "tenant": tenant})
                     if g is None:
-                        _execute(
+                        created = _execute(
                             "INSERT INTO ai.mcp_tool_grants "
                             "(tool_id, product_key, granted_by, tenant_id) "
                             "SELECT t.id, %(pk)s, %(actor)s, %(tenant)s "
                             "FROM ai.mcp_tools t "
-                            "WHERE t.capability_slug = %(slug)s",
+                            "WHERE t.capability_slug = %(slug)s "
+                            "AND t.tenant_id = %(tenant)s",
                             {"pk": body.product_key, "actor": actor,
                              "tenant": tenant, "slug": cap[len("mcp."):]})
+                        # 成员校验读快照、写入走事实源：两步之间工具可能
+                        # 被停用/漂移/不属于本租户——0 行显式冲突，绝不
+                        # 静默生成空授权（失败关闭）。
+                        if created == 0:
+                            raise _MutationConflict(
+                                f"动态工具不属于当前租户或已不可授权: {cap}")
                     else:
                         _execute(
                             "UPDATE ai.mcp_tool_grants SET enabled = true, "
