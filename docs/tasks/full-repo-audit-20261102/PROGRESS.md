@@ -88,3 +88,11 @@
 - 修复：resolve_explicit_order_route 守卫精细化——非 knowledge_query 时仅当 raw_route.intent == "t_order_status"（纯状态查询，改写「查询订单 X」不丢信息）放行改写；动作域意图维持 #270 口径返回 None。
 - 回归测试：test_defect9_context_resolver 增 test_explicit_order_status_query_rewritten_despite_transaction_route（含前置形态断言：表达漂移时先红提示重估白名单边界）；#270 的动作意图保护测试（test_explicit_order_with_domain_keywords_not_rewritten 等）全部保留且通过。
 - 验证：defect9 + cross_domain_continuity 46 passed；router 目录全集 + cs_router 核心 59 passed。
+
+## 2026-11-03 W4/router 收官 + W5 实施（审计计划全部批次落地）
+
+- W4：PR #276 合并（e44eac7），门禁全绿（含 frontend-admin build/security/functional）。
+- router 方向 A 修复：PR #279 合并（3b19137）。#270 的「非 knowledge_query 一律不改写」守卫把「请查一下订单 MO-…」（TRANSACTION/t_order_status conf=0.63）打成 None，P0 查单主路径断裂；精细化后仅 t_order_status（改写不丢信息）放行，动作域维持 #270 口径。定向 46+59 passed，#270 保护测试全绿。
+- main 无参数全量 run 41531968489（HEAD 3b19137）：15/15 success，misc router 回归清零。backend-root 编码 flake 本轮未复现（与 runner 镜像迁移期漂移判定一致），留观察。
+- W5（最后一批）：chart_generator 图表公开 URL 随机后缀 uuid4().hex[:8]（32bit）→ 完整 UUID hex（128bit），兼容读取端白名单；新增 128bit 熵回归测试，business_report 5 passed。
+- 审计发现最终状态：S1/S2（W1，#268）、S3/S4（W2，#271）、Q1/Q2/C1（W3，#274）、S6/S7（W4，#276）、S5（W5，本 PR）全部落地；条件项（生产代理转发头、GitHub Environment/runner 隔离、DNS rebinding、真实出口策略）仍属仓库外补证，不在代码修复范围。

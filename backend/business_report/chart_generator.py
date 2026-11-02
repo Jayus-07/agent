@@ -135,7 +135,11 @@ class ChartGenerator:
                     # urllib ascii 直连失败）：slug 剔除非 ASCII，空则回退
                     # chart；中文可读性由 Markdown alt 文本承载
                     slug = re.sub(r"[^A-Za-z0-9_-]+", "_", title).strip("_")[:40]
-                    fname = f"{slug or 'chart'}_{uuid.uuid4().hex[:8]}.png"
+                    # S5 审计修复：随机后缀用完整 UUID hex（128 bit）。图表
+                    # URL 按产品语义公开匿名读取（/report-files 白名单 +
+                    # 网关限速），8 hex（32 bit）在 slug 可猜场景下不足以
+                    # 承担不可枚举性；完整 hex 兼容读取端 _SAFE_NAME 白名单。
+                    fname = f"{slug or 'chart'}_{uuid.uuid4().hex}.png"
                     fpath = os.path.join(self.chart_output_dir, fname)
                     fig.savefig(fpath, format="png", bbox_inches="tight",
                                 dpi=self.dpi)

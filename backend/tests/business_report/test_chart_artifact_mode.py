@@ -29,6 +29,24 @@ def test_file_mode_writes_png_and_references_url(tmp_path):
     assert pngs[0] in md
 
 
+def test_filename_random_suffix_is_128bit(tmp_path):
+    """S5 审计修复回归：随机后缀必须是完整 UUID hex（32 字符 = 128 bit）。
+
+    8 hex（32 bit）在 slug 可猜场景下不足以承担公开匿名读取 URL 的
+    不可枚举性。后缀格式同时须满足读取端 _SAFE_NAME 白名单
+    （^[A-Za-z0-9_-]+\\.png$）。"""
+    from backend.app.api.routes.report_files import _SAFE_NAME
+
+    gen = ChartGenerator(chart_output_dir=str(tmp_path), url_prefix="/api/report-files/")
+    md = gen.generate([{"type": "bar", "x": "day", "y": "sales", "title": "销量"}], _DATA)
+    (fname,) = [f for f in os.listdir(tmp_path) if f.endswith(".png")]
+    suffix = fname.rsplit("_", 1)[-1][:-4]
+    assert len(suffix) == 32 and all(c in "0123456789abcdef" for c in suffix), (
+        f"随机后缀熵不足（{len(suffix)} 字符）：{fname}")
+    assert _SAFE_NAME.fullmatch(fname), f"文件名须满足读取端白名单：{fname}"
+    assert fname in md
+
+
 def test_default_mode_keeps_base64_inline():
     gen = ChartGenerator()
     md = gen.generate([{"type": "bar", "x": "day", "y": "sales", "title": "销量"}], _DATA)
