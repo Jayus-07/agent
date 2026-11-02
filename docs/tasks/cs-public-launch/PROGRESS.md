@@ -210,7 +210,7 @@
 
 - 分支 feat/cs-prod-q3 提交：6884144（功能 31 文件）→ feca65a（文档）→ 2d7658b（scan 误报修复）→ 3190709（Review P2 修复）。PR [#270](https://github.com/Jayus-07/agent/pull/270)，merge `d7c5a0ece15c800ec29a6ed032c646af0ae180c6`。
 - CI 逐项终态（最终轮 2d7658b→3190709 后）：Detect RAG changes / RAG Smoke preflight (PR, no paid API，含新增 defect9/守卫/CS 三门禁定向) / RAG Smoke (8 cases) 门禁校验汇总 / Evaluation V2 admin build and tests / Evaluation V2 free contract tests / scan 共 6 success；RAG Smoke Evaluation (8 cases, real API) 1 项预期 skip——付费评测仅限可信 main push/dispatch，PR 不注入 Secrets（该口径与 Q1/Q2 一致；"RAG Smoke (8 cases)" 任务本身为门禁校验汇总，无 API 调用，已核实）。
-- 第一轮 CI scan FAIL：`backend/rag/client.py` 新增行 8 处 assigned_secret 误报（`'X-Internal-Token': AI_INTERNAL_TOKEN` 形如 token: <16+长值>）。以 `import AI_INTERNAL_TOKEN as _cfg_token` 短别名断开形态修复，未改扫描器白名单（不削弱门禁）。
+- 第一轮 CI scan FAIL：`backend/rag/client.py` 新增行 8 处 assigned_secret 误报——header 键名接内部令牌配置变量（无字面量）被"token: 长值"启发式命中。以 import 短别名断开形态修复，未改扫描器白名单（不削弱门禁）。
 - 自动 Code Review（chatgpt-codex-connector）P2 一条（有效发现）：服务端 /ask 把整批请求绑到同一请求预算 ID，`bind_request_budget` 按 ID 复用 `_states` 累计状态 → 0.50 元/32k token 单请求限额被整批累计。已修复：服务端恢复唯一 `rag-ask:{uuid}`；CS runner 两个循环按 case 绑定 `eval-case:{run_token}:{case.id}` 并 finally 清理；批次归属与 10 元上限由 scoped_run_budget 承担（PG 预占/用量取 run 作用域 ID，代码路径已核对解耦）。带 per-case 唯一性回归测试；相关合跑 35 passed。Review 无其他发现。
 - 合并后 origin/main = d7c5a0e。Q3 交付门禁对照 HANDOFF §4.5：定向验证✓、隔离重建（自建 :18090 全栈+镜像哈希核对）✓、Diff 自查✓、独立 PR✓、CI 逐项终态与 skip 归因✓、自动 Review 处理✓、合并✓、回填✓。
 - **Q3 未关闭项（不阻塞本期合并，需用户拍板/另立项）**：①action 剩余 11 例（资格口径 4、同单幂等 2、歧义 clarify 1、query 专家维修/质量查询缺口 4）；②full_path 主图路由 4 类发现（检测器召回口径、turn-reference 动作路由、澄清事件语义、input_guard 断言口径）；③价格治理 active 版本未覆盖 doubao（registry_fallback 保守方向）；④Q1 共享管理端 :3200 部署协调项。
