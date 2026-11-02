@@ -24,6 +24,8 @@
 
 ## 常用运行形式
 
+新增 `backend/tests` 顶层目录必须同步 `full_regression.yml` matrix；目录覆盖守卫会阻止漏登记（排除 fixtures 与 __pycache__）。
+
 后端定向测试从仓库根目录使用项目 Python，并显式给出测试路径：
 
 ~~~bash
