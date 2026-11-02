@@ -59,7 +59,7 @@
 | **P1 全局骨架** | 底导「我的」接抽屉（共享组件向后兼容扩展）+ 旅游导航插槽（决策 4）；G1 令牌决策=按 travelTheme 增量收口不建第二套表 | ✅ 合并 | #236 |
 | **P3 工作台功能块** | W2 概览统计块（六行，travelOverview 单一事实源）+ W3 天数 chip 主题；W7/W11 实测已对齐零改动 | ✅ 合并 | #240 |
 | **P4a 生成流引擎抽取 + 工作台生成态** | `useTravelPlanGeneration` 单一实现 + `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 后端冲突消息可读性修复 | ✅ 合并 | #246 |
-| **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch` 已建） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test 或新 hook 级测试，其余随组件退役 | ⬜ 待开工 | PR + 决策 5 收口 |
+| **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch`） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test，其余随组件退役 | ✅ 已完成（待 PR） | PR + 决策 5 收口 |
 | **T2 planner 排程约束对齐**（新立项，后端+提示词+评测） | 见下「T2 专项分析」 | ⬜ 待开工 | PR + 评测连带 |
 | P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ⬜ | 校对清单 |
 | P5 历史/列表/地图形态校对 | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正、W15 断点点测 | ⬜ | PR + L/W9/W14 全勾 |
@@ -94,7 +94,7 @@
 
 ## 三、测试纪律（各阶段底线）
 
-- 前端：`cd frontend && ./node_modules/.bin/vitest run src/components/travel src/api` → **当前基线 423 passed**（每阶段只增不劣化、零删断言）；`./node_modules/.bin/tsc --noEmit` → **16 错 = main 既有基线**（travel 面零错误）。
+- 前端：`cd frontend && ./node_modules/.bin/vitest run src/components/travel src/api` → **P4b 后基线 417 passed**（423 − TravelChatPage.test 10 退役 + 迁入 WorkbenchGenerate.test 4，每阶段只增不劣化、零删断言；`src/app/travel` 另有 7 passed，含 P4b 新增 chat 重定向 6 用例）；`./node_modules/.bin/tsc --noEmit` → **16 错 = main 既有基线**（travel 面零错误）。
 - 后端：按风险最小充分（本次 T2 触及提示词+评测；trip 契约测试在 `backend/tests/travel_v2/test_api_contract.py`）；跑测前查并发 pytest（Pitfalls §三）。
 - 浏览器点测（IAB）：**rAF 在 IAB 被挂起**——依赖 `nextPaint` 的写状态两段式会停在 VALIDATING，先垫片 `window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16)` 再驱动流程；React 受控输入用 Playwright `fill()`（原生 value 赋值无效）；轮询断言非固定 sleep。
 - 不跑全量 pytest/全量回归；提交前查并发会话。
@@ -105,7 +105,7 @@
 2. 差距矩阵 v1 全项勾选回填 PROGRESS（排除项显式标注）；
 3. 前端 423+tsc 基线全绿；后端触及面测试全绿 + rag_smoke CI 过；
 4. `devctl.bat rebuild` 后运行态全链：登录→首页→**输入直达生成态→真实生成→保存成功→自动进工作台**（T2 验收的关键一段）→编辑→查询→优选→预订跳转/确认门→历史/ICS/分享；管理端治理视图（rollinggo+12306）与运行态一致；
-5. `/travel/chat` 旧链接重定向兼容核对（带 trip_id 与带 prompt 两种）；
+5. `/travel/chat` 旧链接重定向兼容核对（带 trip_id 与带 prompt 两种）——**P4b 已真机核对通过（含裸访问），P6 复验**；
 6. 移动端断点核对；已知边界如实标注（API 闭环预订 BLOCKED/机票契约位/天气契约位/notice-event 契约位）。
 
 ## 五、已知信息（执行会话开工前通读）
@@ -253,6 +253,43 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 ### 下一步
 
 - P4b：首页输入卡/模板卡/胶囊改指 `/travel/itineraries/new`；`/travel/chat` 废弃重定向（决策 5）；TravelChatPage 生成路径删除与测试迁移。
+
+## P4b 执行记录（2026-11-02，分支 feat/travel-proto-p4b-entry-switch）
+
+### 改动（入口切换 + chat 废弃，决策 5 收口）
+
+- `TravelHome.tsx`：Hero 输入卡 `form action` + prompt 胶囊 href → `/travel/itineraries/new`（首页不再有任何 /travel/chat 引用）。
+- `TravelTemplateCatalog.tsx`：空态「开始规划」链接 → `/travel/itineraries/new`。
+- `app/travel/chat/page.tsx`：重写为服务端重定向路由（redirect()，决策 5 旧链接兼容）；目标映射抽为纯函数 `app/travel/chat/redirect.ts` 的 `travelChatRedirectHref`——**Next.js Page 文件不允许任意导出**（首版把纯函数放 page.tsx 导出，`next build` 报 "not a valid Page export field"，rebuild 失败后抽出独立模块修复）。
+- 删除 `TravelChatPage.tsx`（455 行）+ `TravelChatPage.test.tsx`（10 用例）。
+- `TravelV2TripWorkspace.tsx`：移动端顶栏「对话」钮 `travelV2ChatHref` → `travelV2WorkspaceHref`（/travel/chat 已废弃，改指工作台自身）。
+- `travelV2Conversation.ts`：删 `travelV2ChatHref`（唯一产出 /travel/chat 的工具函数）；其单测断言行随语义退役。
+- 注释同步：`useTravelPlanGeneration.ts`（消费方=工作台生成态、回归网=WorkbenchGenerate.test）、`travelLiveRuntime.ts`（草稿渲染方）、`ToolProcessRows.tsx`、`TravelWorkbenchGenerate.tsx`。
+
+### 测试迁移（红线语义不丢）
+
+- 迁入 `TravelWorkbenchGenerate.test.tsx`（断言逐条保留；保存成功入口断言按 WorkbenchGenerate 语义改为 `routerReplace`）：① UNKNOWN 同幂等键同 payload 安全重试（含二次成功后「行程已保存到 V2」）；② 澄清选项渲染+点击以该内容续聊；③ tool.card 渲染+「帮我排进行程」直通聊天管线（stream 2 次）；④ 决策令牌持久化不显示+刷新恢复后 actionPayload 自动提交。
+- 随组件退役（语义已有覆盖，非删除覆盖）：SSE→草稿→保存核心（WorkbenchGenerate.test 既有 2 用例同语义）；5 个 trip 恢复用例（TravelV2TripWorkspace.test 已有等价红线覆盖：无关联不读 URL 对话/服务端权威替换/大写 UUID 规范化/关联失败停用对话）。
+- 新增 `app/travel/chat/page.test.ts` 6 用例（trip_id→工作台透传 conversation_id/无会话裸路径/空白 trip_id 不进工作台分支/prompt 保留/prompt+conversation_id 同留/裸访问）。
+
+### 验证
+
+- `vitest run src/components/travel src/api` → **417 passed**（423 基线 −10 退役 +4 迁移，零回归）；`vitest run src/app/travel` → **7 passed**（+6 新增）；`tsc --noEmit` → **16 错 = main 基线**，travel 面零错误。
+- `devctl.bat rebuild /y`（worktree 代码）→ frontend rebuilt + healthy（backend healthy 不受影响）。
+- 真机点测（IAB，:3100，复用浏览器既有登录态，未新建账号）：
+  - `/travel/chat?prompt=杭州慢游` → 最终 URL `/travel/itineraries/new?prompt=…`，生成态三列齐全、textarea 预填「杭州慢游」；
+  - `/travel/chat?trip_id=<uuid>&conversation_id=travel-conv-x&prompt=忽略` → `/travel/itineraries/<uuid>?conversation_id=travel-conv-x`（prompt 按设计丢弃；假 trip_id 下工作台如实显示「请求的资源不存在」）；
+  - 裸 `/travel/chat` → `/travel/itineraries/new`（conversation_id 由生成态 URL 同步 effect 补写）；
+  - 首页 DOM 断言：`form[action="/travel/itineraries/new"]`×1、胶囊 `a[href^=/travel/itineraries/new?prompt=]`×3、旧 /travel/chat 引用×0；
+  - 点击胶囊「杭州慢游」→ 生成态预填；输入卡填写「周末去苏州，想看园林」提交 → 生成态预填。
+- 点测坑（与 P4a 一致）：IAB rAF 挂起使 Playwright click 的 actionability 轮询卡住（元素实际可见）——DOM `el.click()` 或坐标点击可用；React 受控输入用 prototype setter + input 事件。
+
+### 已知边界（如实）
+
+- `TravelLiveWorkspace.tsx`（V1 遗留孤儿组件，全库无消费方）内部两处 `/travel/chat` 引用未改——由重定向兜底可达生成态；建议后续清理任务整体删除该组件（本次不做范围外删除）。
+- 移动端工作台顶栏「对话」钮现指工作台自身；移动端布局暂无内嵌对话区（对话组件仅桌面右列渲染），P5/P6 按 W15 断点校对时复核移动端对话入口形态。
+- Next 15 对 server redirect() 的文档请求返回 200 + 内嵌 307 指令（客户端路由器执行跳转），非 HTTP 3xx——curl 直连看不到 Location 头，浏览器最终落点已验证正确。
+- 「生成→保存→自动跳工作台」全链真机复验仍属 T2 验收范围（planner 排程冲突未解前保存会如实 422）。
 
 
 1. **原型侧**：`E:\.zcode\v2\visualizations\c052931e…\travel-platform-proto.html` + 同目录 HANDOFF.md（§4 全功能清单/§5 用户已确认架构决策/§7 坑清单）；`data-test` 锚点可驱动场景（opt/book/tz/convbad/ics/dayops 等）。
