@@ -392,3 +392,23 @@ v1 108 → v2 61 → v3 20 → v5 15 → v14 54+api（backend-root 首曝）→ 
 
 - progit_en_501p 全预算 OCR 下仍有 4 个 PDF 解析硬异常（纯图页无文本产出 / parser_pdf_source_text_audit_gap / pdf_page_coverage）——修 PDF 解析器属产品课题（#225 PR 描述有详单）。
 - capability-governance 的 govtest 残留行创建方未补清理（本会话已手工清本地主栈库 2 连接 + 10 工具行；若治理测试还会产生同款残留需在该测试补 finally）。
+
+# 守护轮会话（2026-11-02）：T1 合入全量验证 + v29 间歇红根因清偿
+
+## 守护轮结论
+
+- **T1（#232 车次动态通道）全量验证过关**：v29（run 41363455037，main@257af71）travel suite 全绿（含 test_train_dynamic_channel 13 例），TRAIN_MCP_ENABLED 收窄三态语义在 CI 口径无行为漂移。
+- v29 12/13 绿，唯一红 backend-root `test_heartbeat_renews_admission_token` = 间歇红（admission 模块/conftest/测试文件在 21235b0..257af71 区间零变更，b837b3e 经 `git merge-base --is-ancestor` 确认在 v28 基线内，均排除）。
+- 修复后 **v30（run 41365926765，9bc3cc2）= 13/13 suite + Regression summary 全绿**（PR #251）。
+- scheduled 全量首个 cron 触发点 = 2026-11-02 03:00 UTC（workflow 10-30 才建立，此前无 schedule 运行历史）；首跑结果核对留待cron 后，守护轮主线已闭环。
+
+## 坑位（31，续接 26–30）
+
+31. **「跨 worker flushdb」的分片收口必须按「flushdb 调用点」穷举，不能按「出事文件」**：#237 修 heartbeat 恒红时只收口了 admission 三文件，同款旧模板（裸 `base + "/15"`）仍活在 test_distributed_gate.py / test_tool_stats_aggregation.py——v29 负载分配把 distributed_gate 排到 gw1（gate fixture 每用例 flushdb），admission_runtime 在 gw0，flushdb(db15) 跨 worker 清掉 gw0（15-0）分片库的 admission 键。v24–v28 全绿只是 loadfile 动态分配恰好同 worker 的巧合，非修复生效。修复后 flushdb 调用点五个文件全部分片（PR #251）。
+    - 判读要点：HB-DEBUG 出现 `renew_stats` 全 True + `all_keys=[]` ⇒ 键被**外部整库清空**（flushdb/flushall），先穷举所有 flushdb 调用点的 db 口径，而不是怀疑 renew 链路（v24 形态是 `adm_false` 高 = TTL 竞速，坑位 27 家族；两种形态同 key 不同病）。
+    - xdiag 的 `diag_gw*.tests` 时间线（START/DONE 按 worker 分文件落盘）可直接给出「哪个文件在哪个 worker」的分配事实，是跨 worker 互删定性的第一证据。
+
+## 守护轮验证证据
+
+- 修复本地验证：两文件单跑 23 passed；admission×2 + runtime + dgate + tool_stats 五文件 `-n 4 --dist loadfile` 74 passed。
+- CI：v29 失败明细与 xdiag 存 /d/tmp/ci-debt/v29/；定向 backend-root run 41365378939 success；全量 v30 run 41365926765 success。
