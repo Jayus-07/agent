@@ -1,0 +1,98 @@
+# 审计与修复计划进度
+
+## 当前状态
+**审计阶段完成；修复未开始。** 已完成基于指定主线快照的静态审查，并整理 7 项安全发现、2 项业务正确性问题和 1 项 CI 清单缺口。发现与计划已写入 FINDINGS.md 和 TASK.md。Codex Security Standard 扫描已封存，报告见 C:\Users\wh\.codex\state\plugins\codex-security\scans\agent\775cf745f6b7088e062639390dbf688f0be61756_20261102T160137Z_opay35x6\report.md。
+
+## 基线与工作树
+- 日期：2026-11-03（Asia/Shanghai）
+- 审计仓库快照：origin/main，HEAD 775cf745f6b7088e062639390dbf688f0be61756
+- 审计目录：C:\Users\wh\.codex\worktrees\full-repo-audit-plan\agent
+- 分支：codex/full-repo-audit-plan
+- 原工作树：D:\Program Files\workplace\agent。保留原有未跟踪内容；没有在原工作树改文件。
+- 其他已有 worktree：只读检查，未修改。
+- 安全扫描：Standard，全仓 inventory 6422 项，scan ID 5dbdc462-5415-4858-9eb2-6de626dc9333。
+- 审计工作树 source code：未修改。
+
+## 已完成
+- 检查仓库规则和测试分层指南。
+- 本机 main 落后 origin/main 17 个提交；为避免过期基线，在隔离审计 worktree 使用最新 origin/main 快照。该 worktree 基线已核验干净。
+- 复核安全重点：RAG、SQL、异步任务/Celery、MCP 注册表、共享 data API、文件处理、登录流程、旅游约束、图表公开 URL、CI 工作流。
+- 对关键问题追踪入口、授权校验、sink 和影响边界；把条件性问题与已验证发现分开。
+- 形成 5 个后续实施 worktree 批次和 T1/T2 定向验证计划。
+
+## 发现计数
+- 安全：1 项 P1、3 项 P2、3 项 P3。
+- 正确性：2 项 P2。
+- CI：1 项 P3。
+- 待外部配置确认：代理转发头可信性、GitHub Environment/Runner 隔离、DNS rebinding 与真实出口限制。
+
+## 测试和运行验证
+本轮没有运行测试、应用、Docker、数据库或外部服务；没有读取 .env 或秘密。测试表是修复阶段计划，不是已执行证据。已执行文档级尾随空白检查与 git diff --check；项目测试未运行。
+
+## 下一步
+下一个会话从最新提交的 origin/main 创建 W1–W5 worktree，先处理 P1，再逐批修复和验证；按仓库规则交付 diff，等待确认后提交/合并。
+
+## 2026-11-03 W1 批次实施完成（未提交，待确认）
+
+- 工作树：C:\Users\wh\.codex\worktrees\fix-mcp-boundaries\agent；分支 codex/fix-mcp-boundaries；基线 origin/main b065431（含 #264/#265/#267）。范围按计划为 S1（P1）+ S2（P2）。
+- S1 四层防线：admin_bundles 成员校验绑定租户 + grant 写入按 t.tenant_id 过滤且 0 行显式冲突；store 快照 _SELECT_GRANTS 加 t.tenant_id = g.tenant_id（存量错配行默认拒绝）；load_snapshot 排除工具↔连接租户错配；新增迁移 130_mcp_grant_tenant_consistency.sql（组合唯一索引 + 存量错配 grant 失效 + 组合外键 ON DELETE CASCADE NOT VALID），已登记 init_db MIGRATION_TARGETS（memory 库）。写路径 verify_write_authorization 原本已有租户过滤（复核确认）。
+- S2：probe_http_api follow_redirects 改 False（3xx 仍按可达语义）；mcp_client 默认不跟随（核实）；eval_dispatch.py 不在审计范围未动。
+- T2 测试：test_admin_bundles_api.py 增 TestGrantTenantBoundary 4 例（登记端拒绝/授权端 409/错配行读快照默认拒绝/组合外键拒绝直插）；新增 test_mcp_probe_redirect.py 2 例（重定向目标零触达/正常端点可达）。
+- 验证：独立 PG（pgvector/pgvector:pg16，容器 agent-test-pg-w1，端口 55432，与主栈隔离）init_db rc=0（120 迁移含 130）；定向 pytest 12 passed（17.46s）；注册表既有回归 test_mcp_dynamic_e2e + test_mcp_health_monitor + test_consistency_dynamic 24 passed（48.27s）。
+- 未覆盖风险：本机共享栈未从该工作树重建（devctl rebuild 会进入前端构建，按 HANDOFF §5 需跨会话协调，标 UNVERIFIED）；生产代理/出口策略与 GitHub 环境保护仍属仓库外补证项；CI 全量在 PR 门禁后执行。测试容器 agent-test-pg-w1 保留待复核用。
+
+## 2026-11-03 W1 收官
+
+- PR #268 合并（merge 7316d32，含 S1 0665f2a / S2 138e9e0 / 迁移分类 eca993b）。首次门禁失败为迁移分类守卫按设计拦截（130 未登记 rag_smoke_path_filter），归入 NON_AI 后通过——守卫连带机制实证。
+- main 无参数全量 run 41508733152（HEAD 7316d32）：15/15 success。审计工作树与 W1 工作树已按"已合并+干净+资产核对"移除。
+
+## 2026-11-03 W2 批次实施完成（未提交，待确认）
+
+- 工作树 C:\Users\wh\.codex\worktrees\fix-data-api-boundaries\agent；分支 codex/fix-data-api-boundaries；基线 7316d32。
+- S3：/data/* 全部端点补服务端授权——读类（datasets/generate/assets/两类 history）挂 require_editor_user（对齐授权标准矩阵「数据读 = sql.read」），写类（upload/pipeline/run/collect/collect/all）挂 require_admin_user；客户端 enable_write 不再构成（也从未构成）授权依据。选择既有依赖，未新造权限码；stg_* 白名单表无租户列，数据范围以角色门禁+硬编码表白名单承载（如实记录）。网关角色闸未加（标准明言后端授权为权威，网关层属可选加固）。
+- S4：上传磁盘文件名完全服务端生成（file_id_ + 净化展示名，\w.- 白名单、限长 80），realpath commonpath 校验位于上传根目录内，解析失败仅清理本次文件；展示名保留原文返回前端。
+- T2 测试：新增 backend/tests/api/test_data_api_authorization.py 8 例（匿名拒绝/viewer 全拒/editor 读通写拒+enable_write 非授权依据/admin collect 正例不触写库/穿越文件名封在根内/反斜杠净化/失败清理不碰哨兵/非 CSV-JSON 拒绝）。UPLOAD_DIR monkeypatch 至 tmp，不污染仓库。
+- 验证：定向 pytest 8 passed（38.12s）；api_router 装配检查通过。generate/collect 走本地静态数据集回退路径，enable_write=False 不触库。
+- 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；前端 datasets 页对低角色用户将收到 403（frontend-admin 使用者为 admin，实际影响面预计为零，前端提示文案未改）。
+
+## 2026-11-03 W2 收官（含一次环境形态修正）
+
+- PR #271 合并（1829035）。随后 main 全量 run 41512457337 唯一失败：test_anonymous_denied 断言 401/403，但 CI 未配置 AI_INTERNAL_TOKEN 时匿名请求经内部令牌通道 fail-closed 返回 503（InternalTokenNotConfigured）。拒绝语义成立、拒绝码依赖环境——PR #272 修正为 401/403/503 拒绝家族（merge 1ff0a36），本地两种形态均验证。
+- main 无参数全量 run 41515055545（HEAD 1ff0a36）：15/15 success。W2 工作树已按合并+干净移除。
+
+## 2026-11-03 W3 批次实施完成（未提交，待确认）
+
+- 工作树 C:\Users\wh\.codex\worktrees\fix-travel-constraints\agent；分支 codex/fix-travel-constraints；基线 1ff0a36。范围：Q1（P2）+ Q2（P2）+ C1（P3）。
+- Q1：schedule_day 的午餐补插加 _maybe_place_lunch 守卫——完整午餐（窗口 60 分钟）能在 day_end（末日=离开时刻）前放下才插入；放不下则跳过并把「剩余时间不足以安排完整午餐」记入时间轴末项备注，不静默生成超时午餐。离开早于午餐窗口的旧行为不变（本来就不插）。
+- Q2：_RE_NEGATED_CHILD_CONTEXT 连接词枚举扩充——否定词（不/没有/无/非/别/勿）+ 显式动词段（需要/想要/打算/准备/考虑/安排/想/要/用/带/携带/携）+ 「带」段 + 儿童词；「不想带孩子」「不要带孩子」等 8 类表达不再残留「带孩子」被 _RE_COMPANION 误判。刻意不做自由字符桥接（「不妨带孩子」正向表达不误吞）；转折正例（「但想考察亲子酒店」）靠掩码只吞否定短语保留。
+- C1：test_schedule_travel_buffer.py 加入 rag_smoke.yml 定向清单（紧邻 test_negated_child_context，同语法）。
+- 测试：test_negated_child_context.py +10 用例（8 类否定短语表驱动 + 转折保留 + 无桥接护栏）、test_schedule_travel_buffer.py +3 边界（离开早于窗口/窗口内放不下/放得下）。定向 31 passed。
+- 回归：午餐与儿童短语相关 9 个测试文件 213 passed（plan_diff/phase2_input_boundaries/requirement_agent_contract/turn_decision/weather_expert/p0_mvp/phase4_p1_batch/itinerary_adapter/trip_edit_operations）。
+- 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；rag_smoke 新增路径已按等效定向命令本地收集执行。
+
+## 2026-11-03 W3 收官后 main 全量两失败的根因归属（均与 W3 diff 无关）
+
+- run 41521140057（HEAD 36688c2）13/15 job 绿。两失败归属：
+- misc router：PR #270（cs-prod-q3，6884144）给 resolve_explicit_order_route 加「非 knowledge_query 一律不改写」守卫，「请查一下订单 MO-…」被判 TRANSACTION/t_order_status conf=0.63 → 返回 None → 既有断言失败。本地单跑稳定复现；1ff0a36（#270 合入前）同套件全绿；该文件在 1ff0a36..36688c2 区间仅出自 #270。修复裁决：方向 A 守卫精细化（纯状态查询仍改写，动作域维持不改写），另立分支。
+- backend-root：UnicodeDecodeError（fixture teardown 解码 0xbc）自 84% 起爆发，仅 CI 出现、本地同测试全绿、两 run 间 git 快照相同；单独重跑 run 41525770423 success。判定 CI 环境性 flake（runner ubuntu-latest→26 镜像迁移期漂移特征），留观察。
+
+## 2026-11-03 W4 批次实施完成（随本 PR 提交）
+
+- 工作树 fix-login-credential-safety；分支 codex/fix-login-credential-safety；基线 36688c2。范围：S6（三端开放重定向）+ S7（主站明文密码 localStorage）。
+- S6：三端 lib/auth.ts 各加 safeRedirectPath（同语义随端维护）：协议相对 //evil、外域绝对 URL、反斜杠变体 /\evil、路径中裸反斜杠回退默认页；同源路径原样放行。三端登录页 redirect 接入。
+- S7：主站删除 saveCredentials/getSavedCredentials，登录只 saveUsername；历史两代明文键（agent.saved_credentials 与 _v1）首次读取登录态时清除；注册回访 sessionStorage 一次性预填保留；勾选文案改「记住账号，下次自动填充」。
+- 验证：authCredentials.test 14 例 passed；主站全量 693 passed 零回归；admin 585 全绿（4 例全源码扫描测试在 node_modules junction 跨盘 IO 下超时，放宽超时单跑通过，非代码回归）；三端 tsc 改动文件零错误（主站 bff-proxy.test/chat.test 16 个基线类型债务非本次引入）；cs 端 tsc 零错误、vitest 本地缺依赖（主目录 node_modules 既有缺口）由 CI 覆盖。前端依赖复用主目录 junction，未重复安装。
+
+## 2026-11-03 router 回归方向 A 修复（用户裁决：由本会话修）
+
+- 修复：resolve_explicit_order_route 守卫精细化——非 knowledge_query 时仅当 raw_route.intent == "t_order_status"（纯状态查询，改写「查询订单 X」不丢信息）放行改写；动作域意图维持 #270 口径返回 None。
+- 回归测试：test_defect9_context_resolver 增 test_explicit_order_status_query_rewritten_despite_transaction_route（含前置形态断言：表达漂移时先红提示重估白名单边界）；#270 的动作意图保护测试（test_explicit_order_with_domain_keywords_not_rewritten 等）全部保留且通过。
+- 验证：defect9 + cross_domain_continuity 46 passed；router 目录全集 + cs_router 核心 59 passed。
+
+## 2026-11-03 W4/router 收官 + W5 实施（审计计划全部批次落地）
+
+- W4：PR #276 合并（e44eac7），门禁全绿（含 frontend-admin build/security/functional）。
+- router 方向 A 修复：PR #279 合并（3b19137）。#270 的「非 knowledge_query 一律不改写」守卫把「请查一下订单 MO-…」（TRANSACTION/t_order_status conf=0.63）打成 None，P0 查单主路径断裂；精细化后仅 t_order_status（改写不丢信息）放行，动作域维持 #270 口径。定向 46+59 passed，#270 保护测试全绿。
+- main 无参数全量 run 41531968489（HEAD 3b19137）：15/15 success，misc router 回归清零。backend-root 编码 flake 本轮未复现（与 runner 镜像迁移期漂移判定一致），留观察。
+- W5（最后一批）：chart_generator 图表公开 URL 随机后缀 uuid4().hex[:8]（32bit）→ 完整 UUID hex（128bit），兼容读取端白名单；新增 128bit 熵回归测试，business_report 5 passed。
+- 审计发现最终状态：S1/S2（W1，#268）、S3/S4（W2，#271）、Q1/Q2/C1（W3，#274）、S6/S7（W4，#276）、S5（W5，本 PR）全部落地；条件项（生产代理转发头、GitHub Environment/runner 隔离、DNS rebinding、真实出口策略）仍属仓库外补证，不在代码修复范围。

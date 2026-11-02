@@ -1,0 +1,44 @@
+{
+  "script": "cs_dispatch_loadtest.py",
+  "gateway": "http://127.0.0.1:9080",
+  "path": "/api/cs/customer-context",
+  "burst_concurrency": 20,
+  "sustained_rps_target": 8,
+  "sustained_duration_s": 180,
+  "started_at": "2026-11-02T20:42:12.179244+00:00",
+  "probe": {
+    "status": "200",
+    "latency_s": 0.0977
+  },
+  "burst": {
+    "total": 20,
+    "success": 20,
+    "count": 20,
+    "success_ratio": 1.0,
+    "errors": {},
+    "latency_basis": "2xx 成功请求",
+    "p50_s": 0.5641,
+    "p95_s": 0.8066,
+    "p99_s": 0.8228,
+    "max_s": 0.8228,
+    "mean_s": 0.5757
+  },
+  "sustained": {
+    "rps_target": 8,
+    "rps_emitted_actual": 8.0,
+    "rps_finished_actual": 8.0,
+    "duration_s": 180,
+    "total": 1441,
+    "success": 1441,
+    "count": 1441,
+    "success_ratio": 1.0,
+    "errors": {},
+    "latency_basis": "2xx 成功请求",
+    "p50_s": 0.0417,
+    "p95_s": 0.116,
+    "p99_s": 0.2412,
+    "max_s": 0.4054,
+    "mean_s": 0.0543
+  },
+  "finished_at": "2026-11-02T20:45:13.543636+00:00"
+}

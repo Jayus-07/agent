@@ -13,6 +13,12 @@ def _fresh_provider_slots(monkeypatch):
     本文件用例各自从满容量开始（容量语义不变，只隔离前序泄漏）。"""
     monkeypatch.setattr(resilience, "_provider_slots",
                         threading.BoundedSemaphore(4))
+    # 共享 4-worker 池同为模块级单例：前序用例运行中的 loader（future.cancel
+    # 不可停止）会占住 worker，令本用例的 submit 排队——排队中的 future 在
+    # 预算到期被 cancel，loader 永不启动，started 事件永不置位（main run
+    # 41493314368 gw1 实证：4 条预算告警但断言失败）。与槽位同样按用例隔离，
+    # 池在下次 call_with_budget 惰性重建。
+    monkeypatch.setattr(resilience, "_pool", None)
 
 
 def test_single_flight_reclaims_unique_key_locks():

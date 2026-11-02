@@ -118,6 +118,10 @@ def schedule_day(
     # 16:00 到达补一顿午餐是假排程；晚间用餐由美食推荐卡承接，不进时间轴。
     lunch_latest = 15 * 60
     lunch_done = False
+    # Q1 审计修复：午餐在窗口内、但末日剩余时间放不下完整午餐时跳过并
+    # 记备注——历史上无视 day_end 直接插入，景点 12:10 结束、12:30 离开
+    # 也会排出 12:10–13:10 的超时午餐。
+    lunch_skipped_for_time = False
 
     prev_item: ItineraryItem | None = None
     prev_coord: tuple[float, float] | None = None
@@ -130,13 +134,46 @@ def schedule_day(
         lunch_done = True
         prev_item = item  # 用餐不改变所在位置，prev_coord 保持
 
+    def _maybe_place_lunch() -> None:
+        """窗口内且完整午餐能在 day_end（末日=离开时刻）前放下才插。"""
+        nonlocal lunch_skipped_for_time
+        if lunch_done or not (lunch_start <= cursor < lunch_latest):
+            return
+        if cursor + lunch_minutes > day_end_min:
+            lunch_skipped_for_time = True
+            return
+        _place_lunch()
+
     for poi in ordered:
-        if not lunch_done and lunch_start <= cursor < lunch_latest:
-            _place_lunch()
+        _maybe_place_lunch()
+
+        # 车程衔接缓冲（T2）：上一站到本站的车程先计入到达时刻，再叠加开门
+        # 等候。必须与 trip_write_validator 的 SCHEDULE_OVERLAP 同口径——
+        # leg.minutes > 0 在 V2 document 映射中 reliability=verified/estimated，
+        # validator 会把它加进下一项的最早开始时刻；排程若不计入，生成草稿
+        # 必然 422。leg 构造需要在 start 计算之前完成，故从循环后部前移。
+        travel_minutes = 0
+        if prev_coord is not None:
+            # 透传出行日期：providers/travel 据此执行「远期出行日期强制本地
+            # 估算」策略（实时路况对远期日期是伪事实）。编排逻辑不变。
+            est = estimate_leg(prev_coord[0], prev_coord[1], poi.lat, poi.lng,
+                               trip_date=day_date)
+            leg = TransitLeg(
+                from_title=prev_item.title if prev_item else "起点",
+                to_title=poi.name, **est,
+            )
+            # 公交候选旁路附加（验收 #41）：只消费预热缓存，miss/远期/异常
+            # 一律无候选 —— 主路线口径与时间轴计算零改动（best-effort）。
+            option = _transit_option_for(prev_coord, (poi.lat, poi.lng), day_date)
+            if option is not None:
+                leg.transit_option = TransitOption(**option)
+            day.legs.append(leg)
+            travel_minutes = max(0, int(est.get("minutes") or 0))
 
         open_min = to_min(poi.open_time, 0)
-        start = max(cursor, open_min)
-        wait = start - cursor
+        arrive_min = cursor + travel_minutes
+        start = max(arrive_min, open_min)
+        wait = start - arrive_min
         end = start + max(_MIN_VISIT_MINUTES, poi.suggested_minutes)
 
         notes: list[str] = []
@@ -155,22 +192,6 @@ def schedule_day(
             else:
                 notes.append("当日可用时间不足，需另作安排")
 
-        if prev_coord is not None:
-            # 透传出行日期：providers/travel 据此执行「远期出行日期强制本地
-            # 估算」策略（实时路况对远期日期是伪事实）。编排逻辑不变。
-            est = estimate_leg(prev_coord[0], prev_coord[1], poi.lat, poi.lng,
-                               trip_date=day_date)
-            leg = TransitLeg(
-                from_title=prev_item.title if prev_item else "起点",
-                to_title=poi.name, **est,
-            )
-            # 公交候选旁路附加（验收 #41）：只消费预热缓存，miss/远期/异常
-            # 一律无候选 —— 主路线口径与时间轴计算零改动（best-effort）。
-            option = _transit_option_for(prev_coord, (poi.lat, poi.lng), day_date)
-            if option is not None:
-                leg.transit_option = TransitOption(**option)
-            day.legs.append(leg)
-
         item = ItineraryItem(
             title=poi.name, kind=KIND_VISIT,
             start=from_min(start), end=from_min(end),
@@ -182,9 +203,13 @@ def schedule_day(
         prev_item = item
         prev_coord = (poi.lat, poi.lng)
 
-    if (not lunch_done and day.items
-            and lunch_start <= cursor < lunch_latest):
-        _place_lunch()
+    _maybe_place_lunch()
+
+    if lunch_skipped_for_time and day.items:
+        last = day.items[-1]
+        extra = (f"剩余时间不足以安排完整午餐（约 {lunch_minutes} 分钟），"
+                 "请调整离开时间或自行安排午餐")
+        last.note = f"{last.note}；{extra}" if last.note else extra
 
     # 有效活动时长只计到访项：用餐是必需开销不是游玩强度，通勤由地理轴
     # 单独约束。把这两者算进来会掩盖真正的超量，也会让两轴互相包含。

@@ -89,7 +89,7 @@ class McpRegistrySnapshot:
 
 _SELECT_CONNECTIONS = """
 SELECT c.id, c.base_url, c.auth_type, c.network_scope, c.transport,
-       k.secret_cipher
+       c.tenant_id, k.secret_cipher
 FROM ai.mcp_connections c
 LEFT JOIN ai.mcp_connection_credentials k ON k.connection_id = c.id
 WHERE c.enabled
@@ -114,7 +114,12 @@ SELECT g.tool_id, g.product_key, g.tenant_id
 FROM ai.mcp_tool_grants g
 JOIN ai.mcp_tools t ON t.id = g.tool_id
 WHERE g.enabled AND g.revoked_at IS NULL AND t.status = 'approved'
+  AND t.tenant_id = g.tenant_id
 """
+# grant 与工具必须同租户（S1 审计修复）：历史上该关联不校验租户一致性，
+# 跨租户 slug 会让 B 租户 grant 指向 A 租户工具并经 product_granted 放行
+# 读调用。此处对存量错配行默认拒绝（不进快照 = 不可执行）；写路径由
+# verify_write_authorization 的 t.tenant_id 过滤与迁移 130 组合外键兜底。
 
 # 快照查询结果缓存（DB 行），供管理端"当前生效视图"接口复用
 _last_rows: dict[str, list[dict]] = {}
@@ -256,11 +261,19 @@ async def load_snapshot() -> McpRegistrySnapshot:
             }
 
     rows_by_id = {int(row["id"]): row for row in trow}
+    conn_tenants = {
+        str(r["id"]): str(r["tenant_id"] or "default") for r in crow}
     for tool_id, capability in tool_ids.items():
         row = rows_by_id[tool_id]
         conn = connections.get(str(row["connection_id"]))
         if conn is None:
             errors.append((capability, "所属连接未启用或不存在"))
+            continue
+        # 工具与连接租户不一致属脏数据（工具创建时继承连接租户，正常
+        # 不会出现）——排除出运行时，避免经错配连接使用他租户凭据。
+        if conn_tenants.get(str(row["connection_id"])) != str(
+                row["tenant_id"] or "default"):
+            errors.append((capability, "工具与所属连接租户不一致，已排除"))
             continue
         invocation = dict(row["invocation"] or {})
         try:

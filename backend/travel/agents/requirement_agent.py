@@ -126,6 +126,20 @@ _RE_COMPANION = re.compile(
     r"(?:带|和|跟|与)\s*(爸妈|父母|家人|孩子|小孩|朋友|女朋友|男朋友|"
     r"老婆|老公|对象|闺蜜|同事)")
 _COMPANION_PLUS = {"爸妈": 2, "父母": 2}  # 其余同伴默认 +1
+# 否定儿童语境（Q2 审计修复）：否定词 + 显式连接词枚举（动词段 + 「带」段）
+# + 儿童词。此前连接词缺「想/要」单独形式，「不想带孩子」「不要带孩子」
+# 不匹配，残留的「带孩子」被 _RE_COMPANION 误判为同伴 guess（苏州两日游
+# 被推出 2 人 + relaxed 亲子节奏）。刻意不做自由字符桥接：「不听话的孩子」
+# 等正向表达不能被误吞；否定后转折的正向需求（「但想考察亲子酒店」）靠
+# 掩码只吞否定短语本身来保留。
+_RE_NEGATED_CHILD_CONTEXT = re.compile(
+    r"(?:不|没(?:有)?|无|非|别|勿)\s*"
+    r"(?:需要|想要|打算|准备|考虑|安排|想|要|用|带|携带|携)?\s*"
+    r"(?:带)?\s*"
+    r"(?:亲子(?:游|活动)?|带娃|溜娃|娃|小孩|儿童|孩子)"
+    r"|(?<![\d零一二两三四五六七八九十])(?:0|零)\s*[个名位]?\s*"
+    r"(?:小孩|儿童|孩子)"
+)
 # 成人/儿童显式表达（Phase 2 adults/children 拆分，修 D4「2个大人」排成 1 人）：
 # 数字 + 大人/成人 / 大人/成人 + 数字，儿童同构。不带数字的「带孩子」是同伴
 # guess 表达（_RE_COMPANION 管辖），这里不认——避免与同伴推断重复计数。
@@ -372,7 +386,10 @@ def extract_destination(message: str, previous_destination: str = "") -> str:
         # 2) 「换目的地」语义：多个候选含上一轮目的地时，变化目标优先
         if (len(candidates) > 1 and previous_destination
                 and previous_destination in candidates):
-            candidates = [c for c in candidates if c != previous_destination]
+            remaining = [c for c in candidates if c != previous_destination]
+            # 候选全部是上一轮目的地（如只读 prompt 的行程事实 JSON 中
+            # 目的地与地点地址重复出现）时视为重申，不能剔成空列表。
+            candidates = remaining or candidates
         # 3) 消息出现顺序取最左
         order: dict[str, int] = {}
         for pos, city in hits:
@@ -500,12 +517,20 @@ def extract_days_range(message: str) -> tuple[int, int, str] | None:
     return None
 
 
+def _mask_negated_child_context(message: str) -> str:
+    """屏蔽明确否定的儿童同行/亲子表述，保留位置和其他正向表达。"""
+    return _RE_NEGATED_CHILD_CONTEXT.sub(
+        lambda match: " " * len(match.group()), message
+    )
+
+
 def extract_party_size(message: str) -> int | None:
     """人数：数字表达 > 「一家三口」 > 同伴表达（带爸妈/和女朋友）。
 
     分层兜底是因为口语里大量需求不带「N人」字样；每层都要求明确的
     事实信号，不做开放式猜测（「组团去」之类一律不认）。
     """
+    message = _mask_negated_child_context(message)
     match = _RE_PARTY.search(message)
     if match:
         value = _to_int(match.group(1))
@@ -530,6 +555,7 @@ def party_size_source(message: str) -> str:
     写提示 note，让用户有机会纠正，而不是默默按猜的数字算钱。
     大人/儿童显式表达（「2个大人」）是明确事实，计 explicit。
     """
+    message = _mask_negated_child_context(message)
     if (_RE_PARTY.search(message) or _RE_FAMILY_KOU.search(message)
             or _RE_ADULTS.search(message) or _RE_ADULTS_REV.search(message)
             or _RE_CHILDREN.search(message) or _RE_CHILDREN_REV.search(message)):
@@ -546,6 +572,7 @@ def extract_adults_children(message: str) -> tuple[int | None, int | None]:
     同伴 guess 表达（「带爸妈」）不进这里。返回 (adults, children)，未表达
     为 None——party_size 的派生规则见 extract_fresh_brief（显式总数优先）。
     """
+    message = _mask_negated_child_context(message)
     adults = _first_int(message, _RE_ADULTS, _RE_ADULTS_REV)
     children = _first_int(message, _RE_CHILDREN, _RE_CHILDREN_REV)
     return adults, children
@@ -853,6 +880,7 @@ def detect_multi_city(message: str) -> list[str]:
 
 
 def extract_preferences(message: str) -> list[str]:
+    message = _mask_negated_child_context(message)
     tags: list[str] = []
     for tag, keywords in PREFERENCE_KEYWORDS.items():
         if any(k in message for k in keywords):
@@ -912,6 +940,7 @@ _GROUP_PACE_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 def extract_group_pace(message: str) -> str | None:
     """同行人群 → 默认节奏档位（显式 pace 优先，本函数只兜底）。"""
+    message = _mask_negated_child_context(message or "")
     for pattern, pace in _GROUP_PACE_HINTS:
         if pattern.search(message or ""):
             return pace
@@ -1026,6 +1055,7 @@ def _explicit_total_party(message: str) -> int | None:
     被 adults/children 拆分暴露）：凡与 adults/children 匹配段重叠的
     _RE_PARTY 命中一律跳过，把计数权交还给派生规则。
     """
+    message = _mask_negated_child_context(message)
     contaminated: list[tuple[int, int]] = []
     for pattern in (_RE_ADULTS, _RE_ADULTS_REV, _RE_CHILDREN, _RE_CHILDREN_REV):
         contaminated.extend(m.span() for m in pattern.finditer(message))

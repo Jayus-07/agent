@@ -27,7 +27,9 @@ def sync_call_with_timeout(func: Callable, timeout: float, *args, **kwargs) -> A
                 _sync_timeout_pool = concurrent.futures.ThreadPoolExecutor(
                     max_workers=2, thread_name_prefix="sync-timeout",
                 )
-    future = _sync_timeout_pool.submit(func, *args, **kwargs)
+    # 每次提交独立快照：保留预算/身份/Trace，退出时恢复池线程原上下文。
+    context = contextvars.copy_context()
+    future = _sync_timeout_pool.submit(context.run, func, *args, **kwargs)
     return future.result(timeout=timeout)
 
 

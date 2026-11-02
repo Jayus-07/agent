@@ -120,16 +120,52 @@ def test_business_failure_and_bad_shape_are_signals():
 def test_channel_limits_rejected_not_clamped():
     """多间房/携儿童无法如实表达 → 显式拒绝（不静默降级为假答案）。"""
     with pytest.raises(CommerceSearchSignal):
-        _mcp_args("上海", nights=2, adults=2, children=0, rooms=2,
+        _mcp_args("上海", check_in="2027-11-18", nights=2,
+                  adults=2, children=0, rooms=2,
                   star_rating=None)
     with pytest.raises(CommerceSearchSignal):
-        _mcp_args("上海", nights=2, adults=2, children=1, rooms=1,
+        _mcp_args("上海", check_in="2027-11-18", nights=2,
+                  adults=2, children=1, rooms=1,
                   star_rating=None)
-    args = _mcp_args("上海", nights=2, adults=2, children=0, rooms=1,
+    args = _mcp_args("上海", check_in="2027-11-18", nights=2,
+                     adults=2, children=0, rooms=1,
                      star_rating=4)
     assert args["place"] == "上海" and args["placeType"] == "城市"
     assert args["checkInParam"]["stayNights"] == 2
     assert args["filterOptions"]["starRatings"] == [4.0, 5.0]
+
+
+def test_search_passes_requested_check_in_to_mcp(monkeypatch):
+    """请求日期必须真正传给上游，不能仅标注在本地报价和缓存键上。"""
+    calls = []
+
+    def invoke(capability, params):
+        calls.append(params)
+        return _payload()
+
+    monkeypatch.setattr(
+        "backend.providers.travel.live.rollinggo_mcp._invoke_mcp", invoke
+    )
+    provider = RollinggoHotelSearchProvider()
+    for day in (18, 20):
+        old_key = pcache.build_key(
+            "hotel_search", "苏州", f"2027-11-{day}", f"2027-11-{day + 2}",
+            2, 0, 1, 0,
+        )
+        pcache.cache_put_success(
+            old_key, data=[], provider=provider.name, operation="hotel_search",
+            observed_at="2026-11-02T00:00:00Z",
+        )
+        provider.search_hotels(
+            "苏州", date(2027, 11, day), date(2027, 11, day + 2)
+        )
+    assert len(calls) == 2
+    for params, day in zip(calls, (18, 20)):
+        assert params["checkInParam"] == {
+            "checkInDate": f"2027-11-{day}",
+            "stayNights": 2,
+            "adultCount": 2,
+        }
 
 
 # =============================================

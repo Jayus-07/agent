@@ -66,8 +66,11 @@ class TravelUiContext(BaseModel):
 
 
 class TravelPlanRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=2000,
-                         description="本轮用户输入（如「帮我排杭州2天行程，亲子，带娃不累」）")
+    # 20000 对齐同文件 TravelConversationMessage.content 上限。V2 只读咨询的
+    # message 由前端拼入行程事实 JSON（travelV2Conversation 预算 6500 字符
+    # + 指令与问题），实测两天行程即超旧上限 2000 并触发 422，只读通道整体不可用。
+    message: str = Field(..., min_length=1, max_length=20000,
+                         description="本轮用户输入（如「帮我排杭州2天行程，亲子，带娃不累」）；V2 只读咨询会携带行程事实 JSON，上限按 V2 咨询 prompt 设计预算放宽")
     session_id: str = Field("", max_length=128)
     conversation_id: str = Field("", max_length=128,
                                  description="跨轮会话标识；同一值可跨轮改单（依赖 checkpointer）")

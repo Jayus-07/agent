@@ -103,12 +103,15 @@ class RollinggoHotelSearchProvider:
 
         city = (city or "").strip()
         ci, co = check_in.isoformat(), check_out.isoformat()
-        key = pcache.build_key(self.operation, city.lower(), ci, co,
-                               adults, children, rooms, star_rating or 0)
+        # 旧缓存可能是缺少入住日期的上游报价，不能继续作为本次日期的结果。
+        key = pcache.build_key(
+            self.operation, self.name, "v2", city.lower(), ci, co,
+            adults, children, rooms, star_rating or 0,
+        )
 
         def _load() -> list[HotelOfferRecord]:
             payload = _invoke_mcp(live_capability(), _mcp_args(
-                city, nights=(check_out - check_in).days, adults=adults,
+                city, check_in=ci, nights=(check_out - check_in).days, adults=adults,
                 children=children, rooms=rooms, star_rating=star_rating))
             return _records_from_payload(
                 payload, city=city, check_in=ci, check_out=co,
@@ -140,7 +143,7 @@ def _invoke_mcp(capability: str, params: dict) -> object:
             f"MCP 通道异常: {type(exc).__name__}") from exc
 
 
-def _mcp_args(city: str, *, nights: int, adults: int, children: int,
+def _mcp_args(city: str, *, check_in: str, nights: int, adults: int, children: int,
               rooms: int, star_rating: int | None) -> dict:
     """请求 → searchHotels 入参（确定性构造，无 LLM 参与）。
 
@@ -156,7 +159,9 @@ def _mcp_args(city: str, *, nights: int, adults: int, children: int,
             ProviderStatus.UNAVAILABLE,
             "rollinggo 通道当前不支持携儿童询价（无法如实表达儿童数）")
 
-    check_in_param: dict = {"adultCount": adults, "stayNights": nights}
+    check_in_param: dict = {
+        "checkInDate": check_in, "adultCount": adults, "stayNights": nights,
+    }
     args: dict = {
         "originQuery": _origin_query(city, nights=nights, adults=adults,
                                      star_rating=star_rating),

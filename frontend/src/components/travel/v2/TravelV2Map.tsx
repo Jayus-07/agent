@@ -127,6 +127,22 @@ export default function TravelV2Map({
     map.fitBounds(bounds, { padding: [32, 32], maxZoom: 15 })
   }, [onSelectItem, points, ready, selectedItemId, selectedLocation])
 
+  useEffect(() => {
+    const container = containerRef.current
+    const map = mapRef.current
+    if (!ready || !container || !map || typeof ResizeObserver === 'undefined') return
+    // 隐藏时 Leaflet 读到零尺寸；断点恢复后按实际容器重算，避免点位移出地图。
+    const observer = new ResizeObserver(() => {
+      if (!container.clientWidth || !container.clientHeight || points.length === 0) return
+      map.invalidateSize({ pan: false, animate: false })
+      map.fitBounds(points.map((point) => [point.lat, point.lng] as [number, number]), {
+        padding: [32, 32], maxZoom: 15, animate: false,
+      })
+    })
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [points, ready])
+
   if (failed) return <div className="flex h-full min-h-[220px] items-center justify-center rounded-[18px] bg-[#f5f8fc] px-5 text-center text-sm text-[#667b94] md:min-h-[320px]">地图暂时无法加载，请检查地图服务连接。</div>
 
   const emptyMessage = day?.items.length

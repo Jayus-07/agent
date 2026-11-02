@@ -172,8 +172,10 @@ export default function TravelV2TripConversation({
         setAssistantResult(intent, 'read_only', answer, '行程咨询')
         updateOperation(null)
       }
-    } catch {
+    } catch (cause) {
       if (controller.signal.aborted || !mountedRef.current) return
+      // 失败层（关联 GET / SSE 传输 / 流终态校验）不吞细节；文案保持通用，证据留控制台供定位。
+      console.error('[TravelV2TripConversation] 只读咨询失败', cause)
       setProcess((current) => current ? { ...current, status: 'error', error: '旅游问答暂不可用' } : current)
       setAssistantResult(intent, 'read_only', '旅游问答暂时不可用。服务端已将本次请求判定为只读，正式行程没有变化。', '行程咨询暂不可用', 'warn')
       updateOperation(null)

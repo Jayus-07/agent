@@ -43,6 +43,9 @@ def collect_snapshot_inputs(config: Any, report: EvalReport) -> dict[str, Any]:
             "suite_content_hash": str(governance.get("content_hash", "")),
             "cases_hash": str(governance.get("content_hash", "")) or _canonical_cases_hash(),
         },
+        **({'cs_mode': getattr(config, 'cs_mode', 'graph_only'),
+            'cs_max_cost_cny': str(getattr(config, 'cs_max_cost_cny', '10'))}
+           if getattr(config, 'module', '') == 'cs' else {}),
         "prompt_versions": prompt_versions,
         "prompt_template_hashes": collect_template_hashes(list(prompt_versions)),
         "model_config": {

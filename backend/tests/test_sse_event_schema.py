@@ -239,6 +239,33 @@ def test_runner_event_stream_passes_contract():
     proxy_mod.reset_stream_sink()
 
 
+def test_graph_worker_keeps_run_budget_scope():
+    from decimal import Decimal
+
+    from backend.infra.llm.budget import current_run_budget, scoped_run_budget
+    from backend.orchestration.graph.runner import GraphRunner
+    from backend.orchestration.graph.system import MultiAgentSystem
+
+    observed = []
+
+    class ScopeGraph(_FakeGraph):
+        def stream(self, initial_state, config=None):
+            observed.append(current_run_budget())
+            yield from super().stream(initial_state, config)
+
+    agent = MultiAgentSystem.__new__(MultiAgentSystem)
+    graph = ScopeGraph([
+        {'router': {'route_mode': 'plan', 'cs_context': {}}},
+        {'reporter': {'final_answer': '完成'}},
+    ])
+    agent._runner = GraphRunner(graph=graph, memory=_FakeMemory(), skill_nodes=set())
+    with scoped_run_budget('eval:worker-scope', Decimal('10')):
+        events = list(agent.stream_events('测试问题', 'scope-session', user_id='scope-user'))
+    assert events
+    assert observed == [('eval:worker-scope', Decimal('10'))]
+    assert current_run_budget() is None
+
+
 # ── 3b) HTTP 层完整 SSE 流 ──────────────────────────
 
 

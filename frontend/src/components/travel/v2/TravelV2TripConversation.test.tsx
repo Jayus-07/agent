@@ -247,6 +247,28 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     expect(page.container.textContent).toContain('旅游问答暂时不可用')
   })
 
+  it('只读流失败时文案保持通用但记录失败证据，不吞异常细节', async () => {
+    mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
+    mocks.stream.mockImplementation(async function* () {
+      yield { event: 'error', data: { message: 'SSE 传输中断' } }
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const page = mount()
+
+      await submit(page.container, '请确认行程天数和成人数量')
+      await settle()
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[TravelV2TripConversation] 只读咨询失败', expect.objectContaining({ message: 'SSE 传输中断' }),
+      )
+      expect(page.container.textContent).toContain('旅游问答暂时不可用')
+      expect(page.onTripSaved).not.toHaveBeenCalled()
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
+
   it('投影截断后不把空酒店和车次安排说成尚未安排', async () => {
     mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
     mocks.stream.mockImplementation(async function* () {

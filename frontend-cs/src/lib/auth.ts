@@ -379,6 +379,21 @@ function purgeLegacyCredentials(): void {
   }
 }
 
+/**
+ * 登录回跳目标白名单化（S6 审计修复）：只接受本站路径。
+ * 协议相对（//evil.example）、绝对外域与反斜杠变体（/\evil.example——
+ * 浏览器把 \ 归一为 /，等价协议相对）一律回退默认页。三端登录页共用
+ * 同一语义，实现随端各自维护。
+ */
+export function safeRedirectPath(
+  target: string | null | undefined, fallback: string,
+): string {
+  if (!target) return fallback;
+  if (target.includes("\\")) return fallback;
+  if (!target.startsWith("/") || target.startsWith("//")) return fallback;
+  return target;
+}
+
 /** 记住用户名：登录成功后按需调用（只记用户名，不记密码） */
 export function saveUsername(username: string): void {
   if (!isBrowser()) return;

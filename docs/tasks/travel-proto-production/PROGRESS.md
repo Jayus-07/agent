@@ -59,32 +59,31 @@
 | **P1 全局骨架** | 底导「我的」接抽屉（共享组件向后兼容扩展）+ 旅游导航插槽（决策 4）；G1 令牌决策=按 travelTheme 增量收口不建第二套表 | ✅ 合并 | #236 |
 | **P3 工作台功能块** | W2 概览统计块（六行，travelOverview 单一事实源）+ W3 天数 chip 主题；W7/W11 实测已对齐零改动 | ✅ 合并 | #240 |
 | **P4a 生成流引擎抽取 + 工作台生成态** | `useTravelPlanGeneration` 单一实现 + `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 后端冲突消息可读性修复 | ✅ 合并 | #246 |
-| **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch`） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test，其余随组件退役 | ✅ 已完成（待 PR） | PR + 决策 5 收口 |
-| **T2 planner 排程约束对齐**（新立项，后端+提示词+评测） | 见下「T2 专项分析」 | ⬜ 待开工 | PR + 评测连带 |
-| P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ⬜ | 校对清单 |
-| P5 历史/列表/地图形态校对 | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正、W15 断点点测 | ⬜ | PR + L/W9/W14 全勾 |
+| **P4b 入口切换 + chat 废弃**（分支 `feat/travel-proto-p4b-entry-switch`） | ① 首页输入卡 `action="/travel/chat"` → `/travel/itineraries/new`；② prompt 胶囊 href 同改；③ `/travel/chat` 路由改服务端重定向（保留 query：`trip_id` → 工作台 `travelV2WorkspaceHref`，其余 → `/travel/itineraries/new?prompt=…`，旧链接兼容）；④ 删除 TravelChatPage 组件与页面（工作台右列已内嵌 TravelV2TripConversation，移动端「对话」钮改指工作台）；⑤ 测试迁移：TravelChatPage.test 10 用例中仍有效的断言（UNKNOWN 同键重试/决策令牌持久化/澄清选项/tool.card）迁到 WorkbenchGenerate.test，其余随组件退役 | ✅ 已合并 | #254 + 决策 5 收口 |
+| **T2 排程车程衔接修复**（后端确定性排程器） | 见下「T2 专项分析」 | ✅ 已合并 | #262，merge 7fc468f；三城保存全链通过 |
+| P2 首页对照校对 | H1–H7 逐屏对照原型点测，只修真差异 | ✅ 对照完成，无需代码改动 | 见 P2/P5 续工记录 |
+| P5 历史/列表/地图形态校对 | W9/列表已点测；响应式与地图修复有未提交代码，输入框随消息增长仍被裁切、只读咨询失败待查 | **PAUSED，未验收** | 续工见 HANDOFF-P5.md，未开PR |
 | P6 总验收 | 原型全页面点测 + rebuild 全链（含生成→保存→跳转全链复验）+ 用户逐页验收 | ⬜ | 用户验收 |
 
 **建议执行顺序**：P4b（前端最小收口决策 5）→ T2（planner 对齐，见下）→ P2/P5（校对类可穿插）→ P6（总验收，依赖 T2 落地后生成链路可用）。
 
-### T2 专项分析：planner 排程约束对齐（下一会话从这里侦察开工）
+### T2 专项分析：确定性排程器的车程衔接缺口（根因修正版）
 
-**现象**（P4a 真机 4+ 轮实证）：真实 LLM 多次生成「柳浪闻莺（09:00+120min）→ 奥体博览城（11:00 开始）」相邻安排，两站车程 27 分钟（planner 已调路线 API 拿到 `duration_min=27` 写进 legs）但排程未预留衔接时间 → 服务端 `trip_write_validator` 的 `SCHEDULE_OVERLAP` 硬校验如实拒绝（422，消息已可读）。用户无论怎么重试保存都会失败，只能反复「再调整」——生成流可用性实际受损。
+**现象**：P4a 多轮真实生成后，保存被服务端以 `422 SCHEDULE_OVERLAP` 拒绝。相邻景点已取得 27 分钟车程，但下一站仍从上一站结束时刻开始。
 
-**根因**：生成面（规划链提示词）不知道校验面的硬约束——validator 是创建/编辑的硬门，planner 无对应指令。
+**已定位根因**：`backend/travel/services/transit_service.py::schedule_day` 只将排程光标推进到 `cursor = end`，未计入已经生成的 `leg.minutes`。`start_time` 来自确定性排程器；LLM 的 `planning_agent.propose_day_plan` 负责候选分天，optimization_agent 无 LLM。因此旧提示词方案作废，不需要修改提示词、发布版本或 golden。
 
-**下一会话侦察与施工顺序**（马斯克五步，先读后改）：
-1. 读 `backend/travel_v2/services/trip_write_validator.py` 的 SCHEDULE_OVERLAP 精确判定（overlap 定义、缓冲口径、其它冲突码），把规则**原样**翻译成提示词约束——不是发明新规则，是同步既有规则。
-2. 定位规划链提示词（`backend/prompts/` 或 travel 域 planner 的 prompt 注册处）与版本治理方式（`docs/prompt/architecture.md`——改动走 prompt 发布/回滚链路，不硬编码）。
-3. 提示词补约束（方向，勿直接照抄）：「相邻地点的下一站 `start_time` ≥ 上一站 `start_time + duration_min + leg.duration_min`（车程缓冲）；无法满足时压缩景点数而不是压缩衔接时间」+ 一个正反例。
-4. 评测连带（AGENTS.md 第 8 条）：规划链评测/golden 增加排程可行性断言（生成结果相邻衔接 ≥ leg duration），防回归；改 prompt 常量 → 同步守卫断言。
-5. 验收：不同城市真实生成 ≥3 次全部通过服务端创建（无 422 冲突）；P4a 生成态真机「保存→跳工作台」全链走通（P4a 未走到的最后一段）。
+**修复**：将 leg 构造移到 start 计算前，`travel_minutes = max(0, int(est.get("minutes") or 0))`，`arrive_min = cursor + travel_minutes`，`start = max(arrive_min, open_min)`，`wait = start - arrive_min`。开门等待仅计算到达后的等待。首次排程、天气替换及 repair 均复用 `rebuild_days → schedule_day`，无需平行修复实现。
 
-**边界**：不改 validator（校验器是对的）；不动前端；若 prompt 约束不足（LLM 不稳定遵守），备选方案 = 保存前服务端把冲突以 pending_resolution 语义回给生成流做一次自动修复重排——仅在 prompt 方案实测不稳后评估，避免过度设计。
+**validator 精确口径（只读未改）**：同天 items 按数组顺序，下一项 start 不得小于上一项 start + duration_min + 匹配 from/to 的 leg.duration_min；leg 仅在 reliability 为 verified/estimated 且 duration_min 非 None 时计入，无 start_time 的项跳过且不更新链条。前端映射 minutes>0 为 verified/estimated，其余 unavailable；排程对非正车程按 0，与校验器一致。SCHEDULE_OUT_OF_DAY、VERIFIED_CLOSED、VERIFIED_OPENING_HOURS 等既有硬门保持。
+
+**回归证据（上会话）**：新增 `test_schedule_travel_buffer.py` 5 用例，修复前 4 红 1 绿、修复后全绿，包含直接调用 validator 本体验证排程产出；既有排程 73 passed；travel + travel_v2 定向回归 1569 passed、84 skipped、9 xfailed、零失败（39 分钟，既有门控与预期标记，本轮不重复运行）。
+
+**收口验收**：重建后不同城市真实生成至少 3 次，全部经页面保存成功且自动进入工作台；validator、前端零改动。执行结果见本文件 T2 执行记录，未完成真机验证前不得标记验收通过。
 
 ## 二、工作树与环境
 
-- **Worktree**：`D:\Program Files\workplace\agent-wt-travel-proto`（每阶段独立分支从最新 origin/main 建，独立 PR；当前 P4b 分支已建）。`frontend/node_modules` = Junction 指主仓库（vitest 直接可跑）。
+- **Worktree**：`D:\Program Files\workplace\agent-wt-travel-proto`（每阶段独立分支从最新 origin/main 建，独立 PR；当前分支 feat/travel-proto-t2-planner-schedule）。`frontend/node_modules` = Junction 指主仓库（vitest 直接可跑）。
 - **共享栈**：`devctl.bat rebuild /y`（PowerShell 调用；`start/restart` 不换代码不换 .env）；改后端唯一生效路径 = rebuild。
 - **PG**：一律显式 `127.0.0.1:5433`（5432 是宿主机另一套 PG，勿连）。
 - **live 开关现状**：`TRAVEL_COMMERCE_PROVIDER_MODE=live` + `TRAVEL_COMMERCE_DEEPLINK_ALLOWED_HOSTS=rollinggo.cn`（保持）；**`TRAIN_MCP_ENABLED=false`（T1 已收窄，动态通道在场优先，勿改回 true——改回会让撤销/停用静默回退静态直连）**。两份 .env（主仓库+worktree）均已同步。
@@ -95,7 +94,7 @@
 ## 三、测试纪律（各阶段底线）
 
 - 前端：`cd frontend && ./node_modules/.bin/vitest run src/components/travel src/api` → **P4b 后基线 417 passed**（423 − TravelChatPage.test 10 退役 + 迁入 WorkbenchGenerate.test 4，每阶段只增不劣化、零删断言；`src/app/travel` 另有 7 passed，含 P4b 新增 chat 重定向 6 用例）；`./node_modules/.bin/tsc --noEmit` → **16 错 = main 既有基线**（travel 面零错误）。
-- 后端：按风险最小充分（本次 T2 触及提示词+评测；trip 契约测试在 `backend/tests/travel_v2/test_api_contract.py`）；跑测前查并发 pytest（Pitfalls §三）。
+- 后端：按风险最小充分（本次 T2 触及确定性排程器；trip 契约测试在 `backend/tests/travel_v2/test_api_contract.py`）；跑测前查并发 pytest（Pitfalls §三）。
 - 浏览器点测（IAB）：**rAF 在 IAB 被挂起**——依赖 `nextPaint` 的写状态两段式会停在 VALIDATING，先垫片 `window.requestAnimationFrame = (cb) => setTimeout(() => cb(performance.now()), 16)` 再驱动流程；React 受控输入用 Playwright `fill()`（原生 value 赋值无效）；轮询断言非固定 sleep。
 - 不跑全量 pytest/全量回归；提交前查并发会话。
 
@@ -303,3 +302,69 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 5. **治理运行态现状**（2026-11-01 核查）：连接 rollinggo（connected，searchHotels approved+agent 授权）/12306-govtest、rollinggo-govtest（disabled 残留）/probe-rest×3（enabled+error 残留，治理卫生可顺手清）；/capabilities count=20/routed=17 与库一致。
 6. **历史事故避坑**：本仓库多会话并行——git add/commit 双路径限定、并发 pytest 冻结、容器/端口归属先查、admin 门禁与前端改道原子提交；详见 .zcode/skills/agent-repo-pitfalls/SKILL.md。
 7. **未完成边界**（如实维持）：API 闭环预订 BLOCKED（上游 MCP 只读形态，跳转型已上线）；机票/notice/event 契约位无数据源；决策点 1/2/3/4 待 D0 问询。
+
+## T2 执行记录（2026-11-02，分支 feat/travel-proto-t2-planner-schedule）
+
+### 改动与范围
+
+- 修复提交 `5c78453`：仅 `backend/travel/services/transit_service.py` 与新增回归 `backend/tests/travel/test_schedule_travel_buffer.py`。根因及精确修复见上方「T2 专项分析」。validator、前端、提示词及 golden 零改动。
+- 本轮将旧提示词根因段整体替换为确定性排程器根因，回填执行证据；既有接力文档提交 `9f54d0a`、`e9220f5` 保留，不重写已推送历史。
+
+### 实际验证
+
+- **T0**：`git diff --check` 通过；`tsc --noEmit` 为既有 16 错（bff-proxy.test.ts 14、chat.test.ts 2），旅游面零新增；类型检查整体仍非全绿。
+- **T1/T2（上会话证据，本轮不重复）**：新增排程回归 5 passed，先红后绿；既有排程 73 passed；`pytest backend/tests/travel backend/tests/travel_v2 -q`：1569 passed、84 skipped、9 xfailed，零失败（39 分钟）。
+- **前端复核（本轮）**：`vitest run src/components/travel src/api src/app/travel`：48 文件、424 passed = 417+7，20.97 秒。
+- **重建（本轮）**：PowerShell 在本任务工作树执行 `devctl.bat rebuild /y`，退出 0。用户已确认覆盖原 ci-blindspots 工作树共享运行态。后端、worker、前端健康；容器 working_dir 指向本任务工作树，容器源码含 `arrive_min = cursor + travel_minutes`，`TRAIN_MCP_ENABLED=false`。
+- **T3 定向真实链路（本轮，IAB :3100，真实 LLM/Provider，不使用 mock）**：下列三城均在 `/travel/itineraries/new` 输入需求，真实 SSE 生成、点击「保存为正式行程」、自动跳转 `/travel/itineraries/{trip_id}`，正式工作台加载成功。后端日志恰有三次 `POST /travel/v2/trips → 201 Created`，无 422；PG 127.0.0.1:5433 核对三条正式行程 revision=1/status=active。
+
+| 城市 / 出行日期 | trip_id | 排程衔接实测 |
+|---|---|---|
+| 杭州 / 2026-11-16（2天） | 6261c828-35bc-54cd-895b-ceb0a3b6c316 | 湘湖 08:30+120min → 45min 车程 → 太子湾 11:15 |
+| 苏州 / 2026-11-18（2天） | 48e5d957-9361-51df-9749-0d185216633f | 苏博 09:00+120min → 拙政园 11:05；第二日甪直 08:30+120min → 狮子林 11:58 |
+| 福州 / 2026-11-20（2天） | 9035f689-cc37-57ce-9017-790e8a3c0670 | 三坊七巷 08:30+120min → 森林公园 11:03 |
+
+- **清理**：临时账号 id=1333 已 status=0；1 条会话吊销，3 条 refresh token 删除；认证 Redis 中该账号的会话闸键/索引定向清除。核对 active_sessions=0、refresh_tokens=0；凭据未写入文件或文档，登录未开启记住密码。
+- **未计入验收的尝试**：重建前端结束前提前发起一轮杭州请求，被容器切换中断（network error），未保存；重建完成后新页面重新进行以上三轮，全部通过。本轮 IAB 保存与跳转正常，无需 rAF 垫片。Playwright MCP 缺其指定 Chrome，直接复用内置浏览器，无安装。
+
+### 已知边界与后续
+
+- **T2 本地状态 PASS**：排程缓冲修复及三城「生成→保存→跳转」完成；PR/CI/合并结果以交付简报为准。未做全仓回归，不把局部通过等同 P6 总验收完成。
+- 范围外实测发现：苏州（11/18）与福州（11/20）的助手文案中酒店 deeplink 日期均为 11/16–11/18，与行程日期不一致；「无儿童」仍被解析为亲子偏好。根因未定位，未修改，建议后续针对日期透传及否定槽位单独排查。
+- 目的地时区仍显示 UTC 未确认披露；苏州/福州 12306 失败如实降级，远期天气未检查如实披露。天气/机票契约位、API 闭环预订 BLOCKED 等原边界沿用。
+- 下一阶段仍为 P2/P5 校对，再做 P6 总验收，本轮不扩大范围。
+## 生成输入修正续工（2026-11-02，codex/travel-proto-generation-input-fixes）
+
+- 基点 main@7fc468f（T2 #262 已合并），复用干净的 agent-wt-travel-proto 工作树；修复范围为 T2 真机发现的酒店日期错位与否定儿童语境误识别，前端、validator 不动。
+- 酒店根因已确认：rollinggo 适配器缓存键/本地报价记录含请求日期，但 `_mcp_args` 漏传 `checkInParam.checkInDate`。PG 5433 的管理端已登记 schema 与真实样本 fixture 均支持该字段；修复为透传已有请求日期，不改写供应商链接。缓存键加入 provider 与版本，隔离旧的错误日期报价。
+- 儿童语境根因已确认：关键词命中未排除「无儿童/不带孩子」等否定表达，连带亲子偏好、轻松节奏和同伴人数推断。复用同一局部屏蔽函数后再走既有规则，不改变其他正向人群与显式节奏；覆盖「10/20个儿童」不被误当0人，以及独立正向亲子意图保留。
+- 新增回归首轮 7 failed、13 passed、1 live smoke skipped，精确复现缺陷。修复后输入/住宿/排程边界定向 125 passed、1 skipped；口语 Golden 与酒店服务回归通过。补充缓存测试一度因测试漏传 observed_at 失败，已修正后 20 passed、1 skipped；追加数字边界后否定语境 13 passed。py_compile、git diff --check 通过。真实出网测试尚待重建后验收，不把本地回放当真实链路通过。
+- 新测试已加入 rag_smoke 定向清单；依赖未变，无新增安装。
+- **运行态验收 PASS**：PowerShell `devctl.bat rebuild /y` 退出0，后端/worker/前端健康；镜像内已核对 checkInDate 透传，TRAIN_MCP_ENABLED=false。首页输入→生成态→真实SSE→保存201→自动正式工作台走通，trip_id=8ca00536-ac45-5fec-bedd-d37f80427d02；PG 127.0.0.1:5433 核对 brief.start_date=2026-11-20、interests=[自然,人文]、adults=2、children=0、pace=balanced（无亲子误识别）。
+- **真实酒店来源核对 PASS**：同一城市苏州两组日期 11/20–11/22（9条，来自本轮生成写入的新缓存）和11/24–11/26（10条，现场真实 MCP 调用），共19条 booking_deep_link 的 checkInDate/checkOutDate 与请求和报价日期全部相同。未修改供应商链接、未用 mock。
+- **已合并 #263**：fix 3ca0e5d、docs 3fb5841，merge 775cf74；免费 CI 与 secret-scan 通过，自动 Code Review completed/no findings。
+- **P2 对照进展**：原型8124与真实3100桌面1280宽的Hero/文案/输入卡/胶囊/照片模板卡形态对照；快捷酒店面板就地展开；移动390×844首页无横向溢出、模板横滚和底导可见；新账号空态及首页输入直达生成态验证通过。真实目录当前3个模板，原型6个为演示数据差异，不补假数据。最近行程态和完整P5仍待后续校对，不标整阶段完成。
+## P2/P5 续工（2026-11-02，codex/travel-proto-p5-responsive）
+
+- 基点 main@775cf74（含 #263）；REUSE=现有 TravelV2TripConversation、父级 conversation 状态、地图与查询组件；FIX=窄屏对话不可达与中屏三列溢出；BUILD=无新增组件、依赖或独立会话；BLOCKED=无。
+- **P2 H1–H7 对照完成**：桌面1280宽与原型Hero/文案/照片/输入卡形态对照；酒店/美食/动车三个快捷面板均在首页内展开；胶囊链接与首页输入均直达生成态（前者沿用 #254 真机证据，后者本轮真实生成保存）；真实模板照片卡桌面三列、手机横滚；新账号空态→保存后最近行程卡（日期/版本/照片/归档入口）均核对。移动390×844无横向溢出。目录现有3个真实模板，原型6个为演示数据，不为数量对齐补假数据。本阶段零前端改动。
+- **P5 实测问题**：390宽工作台「对话」跳回自身、助手不可见；1024宽页面 scrollWidth=1156，三列最小宽度挤出助手。根因是助手被包含在仅桌面可见的三列容器，且三列在1024过早启用。
+- **运行态发现并继续修复**：首次响应式验收发现手机输入框底部837px落入固定底栏；根因是页面被应用父级flex布局压到视口高度，改为flex-none后页面按内容自然增高（实测1779px），输入框底部741px，顶栏与底栏均不遮挡。断点恢复还暴露隐藏地图的零尺寸初始化问题：补ResizeObserver，仅对非零尺寸 invalidateSize 并无动画 fitBounds，日期更新/卸载时 disconnect；不新增地图实例或加载路径。地图最终重建后已验证四断点2个标记均在可视范围；消息增加后的输入高度与只读咨询仍失败，见接力稿。
+- **最小修复**：同一助手实例在手机排到行程下方，顶栏对话使用原生页内锚点；目标可聚焦且预留sticky顶栏间距，无新增动画，减弱动态偏好下同样即时定位。821–1279使用两列（助手占整行），1280起维持三列；中屏页面正常纵向滚动，不缩小三列硬塞。沿用原型≤820单列与中屏两列方向，宽屏阈值按真实三列最小可用空间收口。
+- **T0/T1/T2**：新增入口回归修复前1 failed/26 passed，修复后 `vitest run src/components/travel src/api src/app/travel`：49文件、426 passed（21.44秒）。断言同页唯一助手、未发送草稿和服务端可信会话保留，以及地图隐藏恢复、最新点位重算、观察器释放；既有权限/UNKNOWN/恢复等测试未改且全过。tsc仍为既有16错（bff-proxy.test.ts/chat.test.ts），旅游面零新增；diff --check通过。
+- **收尾状态 PAUSED**：426个定向用例通过，最终PowerShell rebuild退出0且healthy；四断点无溢出/单助手/草稿/地图位置局部通过。但消息增加后输入框bottom=860px、子区617px超出约428px包装层；只读咨询返回暂不可用（ai-edits HTTP200不等于答复成功），PG revision仍1。P5未验收、未提交、未开PR；P6未完成。
+- **交接**：[HANDOFF-P5.md](HANDOFF-P5.md)包含总计划、工作树/HEAD/7个未提交文件、进度、测试、真实测量、剩余施工顺序和已知信息。用户要求本会话收尾，未再修复或测试。临时账号1334已停用，活动会话/refresh token均0；原型8124服务与7个验收标签页已清理，共享栈保持healthy。
+
+## P5 续工修复（2026-11-03，codex/travel-proto-p5-responsive）
+
+- **P5-A 输入框裁切修复**：根因是 Workspace 包裹 TravelV2TripConversation 的 `<div class="min-h-0 flex-1">` 缺 `flex flex-col`（block 容器使组件根的 flex-1/overflow-hidden 全部失效），消息增多后 section 被内容撑到 617px 溢出 aside 的 overflow-hidden 裁切区；初始消息少不溢出所以首轮验收未暴露。补 flex 列容器后实测：12 条消息时 form top=634/bottom=735 完整在 390×844 视口内且不与底栏重叠（修复前 812/860 落入底栏外）；布局契约断言进 TravelV2TripWorkspace.test.tsx（jsdom 不算布局，锁定 flex 高度约束链不被回归删除）。
+- **P5-B 只读咨询两层根因修复**（后端日志 trace 定位 + 容器内真实 checkpoint state 复现）：
+  1. 通道层 422：`POST /travel/v2/plan/stream` 的 `TravelPlanRequest.message` max_length=2000（V1 时代 bdc9d64 设定），而 V2 只读 prompt 拼入行程事实 JSON（前端 08c3b70 起设计预算 6500 字符+指令+问题）——实测两天行程 prompt 2206 字符必超限，只读通道从未通过过。放宽到 20000（对齐同文件 TravelConversationMessage.content 上限），V1/V2 共用模型仅放宽不改变既有合法请求。
+  2. 图执行层 IndexError：限长修复后暴露 `requirement_agent.extract_destination` 的「换目的地」剔除——当消息中上一轮目的地多位置重复出现（facts JSON 的 brief 与地点地址前缀）且候选全部是该城市时，剔除后成空列表取 [0] 崩溃。修法与同函数既有 `kept or candidates` 同款非空兜底（全部为上一轮目的地时视为重申保留）。
+  3. 前端 `answerReadOnly` catch 补 `console.error` 记录 cause（原先吞异常细节，只能靠后端日志反查）。
+- **P5-B 运行态验收**：真实账号→苏州生成→保存 201→工作台 390 发送「请确认行程天数和成人数量，只回答，不修改行程。」：plan/stream 返回 200 真实流式答复（不再"暂不可用"），PG 复核 Trip revision=1/status=active 未被改写。**已知边界**：图对 mode=chat 的既有意图路由会把只读 prompt 判为 plan 并返回整份行程报告（含天数人数信息）而非简短直接回答，并附带查询结果卡——属 chat 轮既有路由行为，本轮不改意图路由/提示词，留待后续评估。
+- **回归与类型**：backend `test_travel_turn_contract.py`（+限长回归，8 passed）、`test_intent.py`（+2 个 extract_destination 回归，68 passed）、关联方 `test_handoff_contract`+`test_stop1_acceptance`（27 passed）；py_compile 通过。前端 vitest 旅游面 49 文件 **427 passed**（基线 426+新增「只读流失败保留证据」回归）；tsc 仍 16 既有错误（bff-proxy/chat）零新增；diff --check 通过。
+- **断点复核（真实页面）**：390/820/1024/1280 唯一助手实例、草稿跨断点保留、无横向溢出；820 单列地图 790px 可见、1024 两列地图 464px、1280 三列地图 442px；390 终态截图确认输入框含草稿完整可见。
+- **验收环境坑**：IAB 渲染节流下 rAF 冻结使保存流程 `nextPaint()` 永不返回（VALIDATING 卡死、保存请求不发）——自动化环境现象非业务 bug，页面内注入 rAF→setTimeout 垫片后保存 201 正常；真实前台浏览器不受影响，业务代码未改。
+- **清理**：临时账号 13900001103（id=1335）status=0、会话全吊销、refresh_tokens=0、Redis 会话索引键清零；验收标签页已关。共享栈 rebuild 退出 0 healthy（backend/frontend 均含本轮全部修复，容器内已核对 max_length=20000）。
+- **P5 状态**：代码修复与验收完成，**待用户确认提交**（PR base main）；P6 未开始。

@@ -23,16 +23,26 @@ class AccountActionService:
     def build_address_update_proposal(
         self, user_id: str, target_id: str, new_address: str = ""
     ) -> ActionProposal:
+        # 订单级改址（传入订单号）以订单为操作实体；无订单号才是账户级
+        # 默认地址修改。target 塌缩到 user 会让语义守卫把不同订单的改址
+        # 判为同一操作（Q3 action 池实测）。
+        order_scoped = bool(target_id) and target_id != user_id
+        # 确认卡必须点名操作对象：用户要能看出改的是哪张订单的地址
+        # （锁版断言 must_contain 订单号；退款/退货卡同口径）。
+        scope_line = (
+            f"此操作将修改订单 {target_id} 的收货地址。" if order_scoped
+            else "此操作将修改您的默认收货地址。"
+        )
         proposal_text = (
             f"## 地址修改\n\n"
             f"**新地址:** {new_address or '（未提供）'}\n\n"
-            f"此操作将修改您的默认收货地址。\n\n"
+            f"{scope_line}\n\n"
             f"请确认是否提交修改？（回复「确认」提交 / 「取消」放弃）"
         )
 
         return ActionProposal(
             action_type=ActionType.ADDRESS_UPDATE,
-            target_type="account",
+            target_type="order" if order_scoped else "account",
             target_id=target_id or user_id,
             risk_level=RiskLevel.MEDIUM,
             proposal_text=proposal_text,

@@ -16,10 +16,9 @@ import {
   clearSavedUsername,
   consumeExpiredFlag,
   consumePendingLoginCredentials,
-  getSavedCredentials,
   getSavedUsername,
   login,
-  saveCredentials,
+  safeRedirectPath,
   saveUsername,
 } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
@@ -42,7 +41,8 @@ const DEMO_LOGIN_USERNAMES = new Set(["demo_fuzhou", "demo_li", "demo_wang"]);
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/agent";
+  // S6 审计修复：协议相对（//evil）、外域绝对 URL 与反斜杠变体一律回退默认页
+  const redirect = safeRedirectPath(searchParams.get("redirect"), "/agent");
   const selectedAssistant = redirect.startsWith("/customer-service")
     ? "智能客服"
     : redirect.startsWith("/travel")
@@ -65,10 +65,12 @@ function LoginForm() {
     if (credentialsHydrated.current) return;
     credentialsHydrated.current = true;
     const pendingCredentials = consumePendingLoginCredentials();
-    const savedCredentials = getSavedCredentials();
     const saved = getSavedUsername();
-    const username = pendingCredentials?.username || savedCredentials?.username || saved;
-    const savedPassword = pendingCredentials?.password || savedCredentials?.password;
+    const username = pendingCredentials?.username || saved;
+    // S7 审计修复：localStorage 明文凭据已废除，密码只在注册回访的
+    // sessionStorage 一次性通道（pendingCredentials）里预填，其余情形
+    // 由浏览器密码管理器自动填充。
+    const savedPassword = pendingCredentials?.password;
     if (username) {
       setAccount(username);
       setRemember(true);
@@ -108,7 +110,8 @@ function LoginForm() {
         router.replace("/change-password");
         return;
       }
-      if (remember) saveCredentials(account.trim(), password);
+      // S7 审计修复：只记账号，密码永不落 localStorage（同管理端/客服端收口）
+      if (remember) saveUsername(account.trim());
       else clearSavedUsername();
       goNext();
     } catch (err) {
@@ -238,7 +241,7 @@ function LoginForm() {
           }}
             style={{ accentColor: theme.accent }}
           />
-          记住账号和密码，下次自动填充
+          记住账号，下次自动填充
         </label>
 
         <button
