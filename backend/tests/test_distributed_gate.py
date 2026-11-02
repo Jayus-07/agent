@@ -207,13 +207,15 @@ def redis_client():
         import redis as redis_lib
 
         from backend.config.redis import REDIS_URL
+        from backend.tests.fixtures.redis_test import redis_test_db_url
 
-        # 换 db15（专用测试库）；host 钉死 127.0.0.1 消 DNS 双栈轮换
-        base = REDIS_URL.rsplit("/", 1)[0]
-        if "@localhost:" in base:
-            base = base.replace("@localhost:", "@127.0.0.1:")
+        # 专用测试库按 xdist worker 分片（15-idx）+ host 钉死 127.0.0.1 消
+        # DNS 双栈轮换。flushdb 是整库操作：固定 db15 会跨 worker 清掉
+        # gw0（15-0）分片库的 admission 键（v29 run 41363455037
+        # test_heartbeat_renews_admission_token HB-DEBUG 实证：gw1 本文件
+        # flushdb 撞进 gw0 心跳用例诊断窗口，token/count 键全空）。
         client = redis_lib.Redis.from_url(
-            base + "/15", decode_responses=True,
+            redis_test_db_url(REDIS_URL), decode_responses=True,
             socket_timeout=3, socket_connect_timeout=3,
         )
         client.ping()

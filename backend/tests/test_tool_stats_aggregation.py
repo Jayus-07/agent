@@ -191,12 +191,13 @@ def redis_client():
         import redis as redis_lib
 
         from backend.config.redis import REDIS_URL
+        from backend.tests.fixtures.redis_test import redis_test_db_url
 
-        base = REDIS_URL.rsplit("/", 1)[0]
-        if "@localhost:" in base:
-            base = base.replace("@localhost:", "@127.0.0.1:")
+        # 专用测试库按 xdist worker 分片（15-idx），同 test_distributed_gate：
+        # 固定 db15 的 flushdb 会跨 worker 清掉 gw0 admission 分片键
+        # （v29 run 41363455037 实证）。
         client = redis_lib.Redis.from_url(
-            base + "/15", decode_responses=True,
+            redis_test_db_url(REDIS_URL), decode_responses=True,
             socket_timeout=3, socket_connect_timeout=3,
         )
         client.ping()
