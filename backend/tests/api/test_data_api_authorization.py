@@ -53,8 +53,12 @@ def client(tmp_path, monkeypatch):
 
 class TestServerSideAuthorization:
     def test_anonymous_denied(self, client):
+        # 匿名（无 JWT 头）必须被拒。拒绝形态依赖环境的内部令牌配置：
+        # 已配置 → 401/403；未配置 → 内部令牌通道 fail-closed 返回 503
+        # （InternalTokenNotConfigured，main run 41512457337 实证）。
+        # 断言语义是「不得放行」，不钉死具体拒绝码。
         r = client.post("/data/generate")
-        assert r.status_code in (401, 403), r.text
+        assert r.status_code in (401, 403, 503), r.text
 
     def test_viewer_denied_read_and_write(self, client):
         for method, url, kwargs in (
