@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P6 已完成；下一会话从 P7（case 归档端点）开工——P7/P8 为运营收尾最后两项（TASK §10）**
+- 当前状态：**P1–P7 已完成；P8（持久化 intake）为运营收尾最后一项（TASK §10）**
 
 ## 阶段状态总表
 
@@ -15,7 +15,7 @@
 | P4 | 管理端评测中心接线（offline 先行；live 需用户拍板预算） | **已完成（offline）**（2026-11-02） | 纯运营操作无代码分支；见日志 2026-11-02（四） | run 1a2ae7da：324/324 pass |
 | P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
 | P6 | P6 live 跑批（预算 10 元）+ live 通道核实收口 | **已完成（部分验收缺口移交）**（2026-11-02） | feat/cs-eval-p6 / [PR #244](https://github.com/Jayus-07/agent/pull/244)（merged）+ 运营执行 | 324 条全量 197/324（v1 9/20 与离线一致、CS2 188/304=61.8%）；成本 ≈1.05 元；见日志 2026-11-02（六） |
-| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | 待实施（下一会话开工） | feat/cs-eval-p7（计划） | TASK §10 P7 |
+| P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | **已完成**（2026-11-02） | feat/cs-eval-p7 / [PR #252](https://github.com/Jayus-07/agent/pull/252)（merged 1ea315a）+ 运营执行 | 398/398 游离 case 归档、审计 398 条、published 保护 409 实测；见日志 2026-11-02（七） |
 | P8 | 持久化 intake（unanswered_questions → 候选） | 待实施 | feat/cs-eval-p8（计划） | TASK §10 P8 |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
@@ -33,6 +33,25 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（七）—— P7 落地：case 软归档端点（PR #252）+ 398 个 P4 竞态游离 case 归档清零
+
+- **实现（feat/cs-eval-p7，[PR #252](https://github.com/Jayus-07/agent/pull/252) merged 1ea315a，CI 5 pass + 2 预期 skip）**：
+  - `backend/evaluation_v2/repository.py::archive_case`：软归档 `eval_cases.lifecycle_status → 'archived'`（复用 108 迁移既有 CHECK 值域，此前 archived 全库零写入方；`review_candidate` 修订通道 1325 行「修订目标已归档不再可审核」预留语义由本端点补全闭环）；**已进入 published dataset version 的 case 拒绝归档**（按 `eval_dataset_items JOIN eval_dataset_versions(status='published')` 数据事实判定而非状态标记，防孤儿 published 状态漏网）→ 409；审计 `case.archived`/target_type=`case`，before_hash=最新修订 content_hash，details 记 previous_status 与 latest_revision。
+  - `POST /v2/cases/{case_id}/archive`（evaluation_v2.py）：`_role(actor, "admin")` 门禁，异常走 `_safe_error` 既有映射（404/409/422/403）。
+  - **幂等语义落定（TASK「200/409 明确化」）**：重复归档返回 200 + `archived: false`（本次未重复写审计），对齐仓库既有审核/门禁幂等重放口径（`record_gate_approval` 先例：重放不重复写审计）；409 保留给锁版引用冲突。
+  - 测试 `backend/tests/evaluation_v2/test_case_archive.py` 7 例（归档成功+审计断言/幂等重放不重复写审计/已发布引用拒绝/404/非法 UUID/editor 403/冲突 409 映射）+ evaluation_v2 全目录回归 **140 passed**（既有 133 例零回归）。
+  - **CI skipping 核对（TASK 要求逐项确认）**：`RAG Smoke Evaluation` skipping=付费评测仅 push(main)/dispatch 触发（既有口径）；`RAG Smoke preflight` skipping=本 PR 三文件经 `.github/scripts/rag_smoke_path_filter.py::is_relevant` 实测 **False**（路径过滤预期，非异常）——对照 PR #244（改 runner 触达 rag 链路）preflight 为 pass，口径自洽。
+- **运营执行（宿主进程直调 `repository.archive_case`，P6 先例——共享 app 容器为并行会话 travel-proto worktree 构建、不重建覆盖；archive_case 为已合并 main@1ea315a 同一实现，审计/事务/幂等/锁版拒绝与 API 通道同一代码）**：
+  - 游离 case 盘点（只读 SQL）：P4 竞态残留 = **398 个**（TASK 预估「约 400」吻合）；结构核对——324 个唯一 `source_ref.case_id` 每组恰好 1 个进 published version v1.0.0，398 个全部为同组多余副本（tenant=default，source_kind=import），无「组内无保留项」异常。
+  - 归档执行：**398/398 成功（8s，0 失败）**；执行序列含冒烟（游离 case latest-revision 200 可见）→ published case 归档边界（409「Case 已进入已发布数据集版本，禁止归档」实测）→ 逐个归档 → 幂等重放（archived=false 无新审计）→ 复核。
+  - 归档后复核（全部实测）：latest-revision 抽样 20/20 不可见（404）；审计 `case.archived` 恰 398 条；lifecycle 分布 archived=398 / published=325；cs v1.0.0 items **324 不变**；`archived ∩ items = 0`（三项独立复核）；归档 case 传入 `publish_dataset_version` 被拒（「未审核通过的样本不能发布为 Golden」实测）——锁版引用保护双向闭环。
+  - 复核过程如实记录：首次 `archived ∩ items` 计数曾瞬时返回 1（与 publish-guard 实测并行执行的窗口内，无复现）；随即三项独立复核均为 0，且审计表证实窗口内仅 398 条 case.archived、无其他写事件（6e6e3daa 从未被归档）——以稳定复核为准，保护面完整。
+- **管理端复核口径（如实，含移交项）**：
+  - case 层残留**清零**：latest-revision / 修订候选通道（1325 行）/ 发布通道（publish 1566 行）对 archived case 全部不可见或拒绝。
+  - 候选层残留**仍在**：管理端 DatasetsTab 候选列表可见 722 条 cs approved candidates（324 进 version + 398 指向已归档 case）——候选行是历史审核事实，`list_candidates` 不 join cases，且平台无候选清理端点。**后果**：UI `publishApproved` 会组装全部 722 条发布 → 后端对 archived case 拒绝 → 整体 422 失败（P4 期间 cs 发布走脚本直传 324，UI 路径从未对 cs 成功使用，非回归但被显性化）。运营口径：cs 发布新 version 用脚本/API 直传合法 case_ids；候选层清理（398 条 approved candidates 的 reject/过滤）移交平台后续会话。
+- **顺带发现**：`eval_cases` 中另有 1 个 published 残留 `6e6e3daa`（rag 数据集 smoke_refuse_mvmdmqfr v1.0.0，created 2026-10-24，非 cs、非 P4 竞态）——并入投产检查清单第 5 项（共享库测试残留）。
+- 一次性脚本：`d:/tmp/p7_archive_run.py` + 游离清单 `d:/tmp/p7_orphan_cases.txt`（不入库）。
 
 ### 2026-11-02（六）—— P6 落地：live 跑批 324 条全量 + runner live 契约四处修复（PR #244）
 
