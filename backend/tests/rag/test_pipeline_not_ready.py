@@ -38,6 +38,31 @@ def test_not_ready_error_is_retryable():
     assert decision.source == "runtime"
 
 
+def test_service_unavailable_cancelable_while_scheduled_for_retry():
+    """审计 P1-2（2026-11-03）：service_unavailable 的两条口径必须一致。
+
+    classify_task_error 给出 retryable=True（会调度延迟重投）时，
+    is_waiting_retry（cancel_task 与状态机用它区分「终态 FAILED」与
+    「等待重试 FAILED」）也必须认它——否则用户取消被「任务已结束」
+    拒绝，延迟重投到点后任务复活执行。此前 _RETRYABLE_TYPES 漏配即此病。
+    """
+    from types import SimpleNamespace
+
+    from backend.tasks.error_taxonomy import retryable_of
+    from backend.tasks.retry_policy import is_waiting_retry
+
+    assert retryable_of("service_unavailable") is True
+
+    record = SimpleNamespace(
+        status=SimpleNamespace(value="FAILED"),
+        retry_exhausted=False,
+        error_type="service_unavailable",
+        retry_count=0,
+        max_retries=3,
+    )
+    assert is_waiting_retry(record) is True
+
+
 def test_not_ready_is_runtime_error_compat():
     """现有 except RuntimeError 调用方（rag_server 503 等）不受影响。"""
     assert issubclass(pl.PipelineNotReadyError, RuntimeError)

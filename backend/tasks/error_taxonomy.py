@@ -20,12 +20,14 @@ runtime 词表（超集＝规格要求全集）：
   validation_error      参数/输入/文档结构类永久错误
   permission_denied     权限拒绝
   illegal_transition    状态机非法跳转
+  service_unavailable   依赖服务未就绪（如 RAG Pipeline 初始化退避窗口）
   internal_error        未归类的进程内错误（budget 内限次重试）
   worker_lost / cancelled 由 Recovery / 控制路径表达，不经本分类器。
 
 Retry 口径（规格 §七）：
   retryable=True ：provider_timeout / rate_limited / provider_error(临时) /
-                   timeout / internal_error（budget 限次）
+                   timeout / internal_error（budget 限次）/
+                   service_unavailable（依赖未就绪，退避后重投）
   retryable=False：quota_exhausted / auth_failed / validation_error /
                    permission_denied / illegal_transition
 """
@@ -48,12 +50,18 @@ TASK_ERROR_TYPES = (
     "validation_error",
     "permission_denied",
     "illegal_transition",
+    "service_unavailable",
     "internal_error",
 )
 
+# service_unavailable 必须与 classify_task_error 的 retryable=True 同口径：
+# 它既会被调度延迟重投（agent_tasks._retry_after_state_recheck 只认
+# status == FAILED），也要能被 cancel_task 在重投到达前取消——
+# is_waiting_retry 用本集合判定，漏配曾导致「已取消任务复活执行」
+# （审计 P1-2，2026-11-03）。
 _RETRYABLE_TYPES = frozenset({
     "timeout", "provider_timeout", "rate_limited", "provider_error",
-    "internal_error",
+    "internal_error", "service_unavailable",
 })
 
 #: source 维度（规格 §六）：runtime / provider / validation / security / worker
