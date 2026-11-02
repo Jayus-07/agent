@@ -18,8 +18,8 @@ from backend.tests.rag._migration_residue_guard import cleanup_residue
 _STALE_DT = datetime.now(timezone.utc) - timedelta(hours=2)
 
 
-def _make_residue(cur, *, stale: bool, with_model: bool) -> str:
-    """插入一套残留行，返回 provider_id。
+def _make_residue(cur, *, stale: bool, with_model: bool) -> tuple[str, str]:
+    """插入一套残留行，返回 (provider_id, price_table_version)。
 
     llm_models 主键是 name（'new' 全库唯一），同一测试内只有一套套件能带
     模型/凭据行——stale 套件带全套，fresh 套件仅 provider/价格/任务行
@@ -60,15 +60,35 @@ def _make_residue(cur, *, stale: bool, with_model: bool) -> str:
     if stale:
         cur.execute("UPDATE tasks SET created_at = now() - interval '2 hours' WHERE id=%s",
                     (record.id,))
-    return provider_id
+    return provider_id, version
 
 
 def test_cleanup_removes_stale_residue_only():
     created_providers: list[str] = []
+    created_versions: list[str] = []
+    # 并行竞态模拟：xdist 多 worker 共库时，另一 worker 的计量测试可能正持有
+    # 同前缀 fresh 价格行（main run 41454704459 实证：本测试的对称清理按
+    # 'migration-test-%' 前缀宽匹配，把 gw3 刚插入的行软关，致其价格查询落空、
+    # 收尾再关时被 append-only 触发器拒绝）。用独立 model_name 造一行，
+    # 验证本测试的收尾清理不越界碰他人行。
+    foreign_version = "migration-test-" + uuid.uuid4().hex
+    foreign_inserted = False
     try:
         with task_service._conn() as conn, conn.cursor() as cur:
-            created_providers.append(_make_residue(cur, stale=True, with_model=True))
-            created_providers.append(_make_residue(cur, stale=False, with_model=False))
+            provider_id, version = _make_residue(cur, stale=True, with_model=True)
+            created_providers.append(provider_id)
+            created_versions.append(version)
+            provider_id, version = _make_residue(cur, stale=False, with_model=False)
+            created_providers.append(provider_id)
+            created_versions.append(version)
+            cur.execute(
+                "INSERT INTO model_price(model_name,component,dimension,price_per_unit,"
+                "unit,currency,price_table_version,source,effective_from,approval_status,reviewer_1,reviewer_2) "
+                "VALUES ('race-guard-sim','embedding','input',1,'per_1m_tokens','CNY',%s,"
+                "'provider-page',now(),'approved','test-reviewer','system')",
+                (foreign_version,),
+            )
+            foreign_inserted = True
         deleted = cleanup_residue()
         # stale 套件被清（本测试外的同名前缀历史残留也一并清，用 >= 断言）
         assert deleted["providers"] >= 1 and deleted["models"] >= 1
@@ -92,7 +112,9 @@ def test_cleanup_removes_stale_residue_only():
                 "AND effective_from < now() - interval '2 hours' AND effective_to IS NULL")
             assert cur.fetchone()[0] == 0, "stale 价格行未被软关"
     finally:
-        # 对称清理：即使中途断言失败，本测试造的每一行都要收走
+        # 对称清理：即使中途断言失败，本测试造的每一行都要收走。
+        # 必须按本测试登记的精确版本收口——前缀宽匹配会误关并行 worker
+        # 正在使用的 fresh 价格行（main run 41454704459 竞态实证）。
         with task_service._conn() as conn, conn.cursor() as cur:
             for pid in created_providers:
                 cur.execute("DELETE FROM llm_models WHERE provider_id=%s", (pid,))
@@ -100,16 +122,30 @@ def test_cleanup_removes_stale_residue_only():
                 cur.execute("DELETE FROM llm_providers WHERE id=%s", (pid,))
             cur.execute(
                 "UPDATE model_price SET effective_to=now() "
-                "WHERE price_table_version LIKE 'migration-test-%' AND effective_to IS NULL "
-                "AND effective_from <= now()")
+                "WHERE price_table_version = ANY(%s) AND effective_to IS NULL "
+                "AND effective_from <= now()", (created_versions,))
+            if foreign_inserted:
+                # 先取证再收走模拟行：清理若仍越界，这里必须失败而不是放过。
+                cur.execute(
+                    "SELECT effective_to IS NULL FROM model_price "
+                    "WHERE price_table_version=%s", (foreign_version,))
+                foreign_still_open = cur.fetchone()[0]
+                cur.execute(
+                    "UPDATE model_price SET effective_to=now() "
+                    "WHERE price_table_version=%s AND effective_to IS NULL",
+                    (foreign_version,))
+                assert foreign_still_open, (
+                    "并行模拟的 fresh 价格行被本测试清理误关——对称清理仍在"
+                    "前缀宽匹配（main run 41454704459 竞态回归）")
             cur.execute(
-                "SELECT count(*) FROM model_price WHERE price_table_version LIKE 'migration-test-%' "
-                "AND effective_to IS NULL AND effective_from > now()")
+                "SELECT count(*) FROM model_price WHERE price_table_version = ANY(%s) "
+                "AND effective_to IS NULL AND effective_from > now()",
+                (created_versions + [foreign_version],))
             leftover = cur.fetchone()[0]
             if leftover:
-                # 历史失败轮累积的坏行（naive 时间写成未来值）：append-only 触发器
+                # 本套件登记的坏行（naive 时间写成未来值）：append-only 触发器
                 # 不允许软关或删除，治理上只能保留（model='new' 无生产计费影响）。
-                print(f"[residue-guard] {leftover} 行历史坏价格行无法软关（append-only 限制），保留")
+                print(f"[residue-guard] {leftover} 行本套件价格行无法软关（append-only 限制），保留")
 
 
 def test_cleanup_is_safe_to_run_repeatedly():
