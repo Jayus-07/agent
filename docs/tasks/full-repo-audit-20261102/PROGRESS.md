@@ -82,3 +82,9 @@
 - S6：三端 lib/auth.ts 各加 safeRedirectPath（同语义随端维护）：协议相对 //evil、外域绝对 URL、反斜杠变体 /\evil、路径中裸反斜杠回退默认页；同源路径原样放行。三端登录页 redirect 接入。
 - S7：主站删除 saveCredentials/getSavedCredentials，登录只 saveUsername；历史两代明文键（agent.saved_credentials 与 _v1）首次读取登录态时清除；注册回访 sessionStorage 一次性预填保留；勾选文案改「记住账号，下次自动填充」。
 - 验证：authCredentials.test 14 例 passed；主站全量 693 passed 零回归；admin 585 全绿（4 例全源码扫描测试在 node_modules junction 跨盘 IO 下超时，放宽超时单跑通过，非代码回归）；三端 tsc 改动文件零错误（主站 bff-proxy.test/chat.test 16 个基线类型债务非本次引入）；cs 端 tsc 零错误、vitest 本地缺依赖（主目录 node_modules 既有缺口）由 CI 覆盖。前端依赖复用主目录 junction，未重复安装。
+
+## 2026-11-03 router 回归方向 A 修复（用户裁决：由本会话修）
+
+- 修复：resolve_explicit_order_route 守卫精细化——非 knowledge_query 时仅当 raw_route.intent == "t_order_status"（纯状态查询，改写「查询订单 X」不丢信息）放行改写；动作域意图维持 #270 口径返回 None。
+- 回归测试：test_defect9_context_resolver 增 test_explicit_order_status_query_rewritten_despite_transaction_route（含前置形态断言：表达漂移时先红提示重估白名单边界）；#270 的动作意图保护测试（test_explicit_order_with_domain_keywords_not_rewritten 等）全部保留且通过。
+- 验证：defect9 + cross_domain_continuity 46 passed；router 目录全集 + cs_router 核心 59 passed。
