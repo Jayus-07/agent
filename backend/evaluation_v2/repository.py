@@ -1090,6 +1090,86 @@ def create_case_revision_candidate(
         return result
 
 
+def archive_case(tenant_id: str, actor: str, case_id: str) -> dict[str, Any]:
+    """软归档评测 Case；已进入已发布数据集版本的 Case 拒绝归档以保护锁版引用。
+
+    幂等语义：重复归档返回 200 与当前状态（archived=False 表示本次未重复写审计），
+    与既有审核/门禁重放口径一致；仅归档动作本身产生 case.archived 审计事件。
+    """
+    tenant_id = _tenant(tenant_id)
+    try:
+        normalized_case_id = str(uuid.UUID(case_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("Case 标识必须是 UUID") from exc
+
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT c.case_id, c.lifecycle_status,
+                   r.revision, r.content_hash
+            FROM evaluation_v2.eval_cases AS c
+            JOIN LATERAL (
+                SELECT revision, content_hash
+                FROM evaluation_v2.eval_case_revisions
+                WHERE tenant_id = c.tenant_id AND case_id = c.case_id
+                ORDER BY revision DESC
+                LIMIT 1
+            ) AS r ON true
+            WHERE c.tenant_id = %s AND c.case_id = %s
+            FOR UPDATE OF c
+            """,
+            (tenant_id, normalized_case_id),
+        )
+        case = _dict(cur.fetchone())
+        if not case:
+            raise RepositoryNotFoundError("Case 不存在或已不可见")
+        if case["lifecycle_status"] == "archived":
+            return {
+                "case_id": normalized_case_id,
+                "lifecycle_status": "archived",
+                "latest_revision": case["revision"],
+                "archived": False,
+            }
+        cur.execute(
+            """
+            SELECT 1
+            FROM evaluation_v2.eval_dataset_items AS i
+            JOIN evaluation_v2.eval_dataset_versions AS v
+              ON v.tenant_id = i.tenant_id
+             AND v.dataset_version_id = i.dataset_version_id
+            WHERE i.tenant_id = %s AND i.case_id = %s AND v.status = 'published'
+            LIMIT 1
+            """,
+            (tenant_id, normalized_case_id),
+        )
+        if cur.fetchone():
+            raise RepositoryConflictError("Case 已进入已发布数据集版本，禁止归档")
+        cur.execute(
+            """
+            UPDATE evaluation_v2.eval_cases
+            SET lifecycle_status = 'archived'
+            WHERE tenant_id = %s AND case_id = %s
+              AND lifecycle_status = %s
+            """,
+            (tenant_id, normalized_case_id, case["lifecycle_status"]),
+        )
+        _record_audit(
+            cur, tenant_id, actor, "case.archived", "case",
+            normalized_case_id,
+            before_hash=str(case["content_hash"] or ""),
+            details={
+                "previous_status": case["lifecycle_status"],
+                "latest_revision": case["revision"],
+            },
+        )
+        return {
+            "case_id": normalized_case_id,
+            "lifecycle_status": "archived",
+            "latest_revision": case["revision"],
+            "archived": True,
+        }
+
+
 def create_candidates_bulk(
     tenant_id: str,
     actor: str,
