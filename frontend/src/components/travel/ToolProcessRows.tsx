@@ -2,7 +2,7 @@
 
 /**
  * ToolProcessRows — 旅游域 Tool 事件行渲染（2026-10-03 从 page.tsx 抽出共享）：
- * 生成中卡（page）与旅行助手聊天流（TravelChatDrawer）共用同一份实现。
+ * 工作台生成态面板与旅行助手聊天流（TravelChatDrawer）共用同一份实现。
  * 展开口径：进行中 / 失败 / 有结果 preview 的行默认展开，其余折叠成一行摘要。
  */
 import { useState } from 'react'

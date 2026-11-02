@@ -7,11 +7,13 @@
  * （过程行/tool.card/澄清选项）、草稿预览（A5 两段式）、确认保存
  * （createTravelTripV2 幂等 + UNKNOWN 同请求安全重试）、草稿撤下。
  *
- * 红线（迁移自 TravelChatPage 原实现，逻辑零改动，由其既有测试作回归网）：
+ * 红线（P4a 从 TravelChatPage 原实现抽出，逻辑零改动）：
  *  - 写状态机 travelWriteStatus 五态与幂等键（UNKNOWN 只允许同一请求重试）；
  *  - SSE 事件消费顺序与 process 归并（travelRuntime）；
  *  - 会话关联：保存成功后服务端会话为权威（conversationChanged 时切换并披露）。
- * 消费方：TravelChatPage（过渡期）与工作台生成态（P4a /travel/itineraries/new）。
+ * 消费方：工作台生成态 TravelWorkbenchGenerate（/travel/itineraries/new，
+ * P4b 后为生成流唯一入口；chat 独立页已废弃）。回归网 = TravelWorkbenchGenerate.test
+ * （P4b 迁入的 UNKNOWN 同键重试/决策令牌/澄清选项/tool.card 用例 + P4a 基础用例）。
  */
 import { useCallback, useRef, useState } from 'react'
 import { nanoid } from 'nanoid'

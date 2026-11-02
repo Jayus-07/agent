@@ -65,10 +65,6 @@ export function travelV2WorkspaceRestoreHref(tripId: string, conversationId: str
   return `${travelV2WorkspaceHref(tripId, conversationId)}&restore_revision=${encodeURIComponent(String(revision))}`
 }
 
-export function travelV2ChatHref(tripId: string, conversationId: string): string {
-  return `/travel/chat?trip_id=${encodeURIComponent(tripId)}&conversation_id=${encodeURIComponent(conversationId)}`
-}
-
 function safeTripFactText(value: unknown, maxLength = 180): string {
   if (typeof value !== 'string' && typeof value !== 'number') return ''
   return String(value)

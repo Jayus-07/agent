@@ -1,6 +1,11 @@
-import TravelChatPage from '@/components/travel/v2/TravelChatPage'
+import { redirect } from 'next/navigation'
+import { travelChatRedirectHref } from './redirect'
 
-export default async function TravelChatRoute({ searchParams }: { searchParams: Promise<{ prompt?: string; conversation_id?: string; trip_id?: string }> }) {
+/**
+ * /travel/chat 旧链接兼容重定向路由（决策 5：chat 独立生成页废弃，P4b）。
+ * 目标映射规则见同目录 redirect.ts。
+ */
+export default async function TravelChatRedirectRoute({ searchParams }: { searchParams: Promise<{ prompt?: string; conversation_id?: string; trip_id?: string }> }) {
   const query = await searchParams
-  return <TravelChatPage key={`${query.trip_id ?? ''}:${query.conversation_id ?? ''}`} initialPrompt={query.prompt ?? ''} initialConversationId={query.conversation_id ?? ''} initialTripId={query.trip_id ?? ''} />
+  redirect(travelChatRedirectHref(query))
 }

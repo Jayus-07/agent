@@ -5,7 +5,6 @@ import {
   parseTravelV2RestoreRevisionRequest,
   setTravelV2TripAssociation,
   travelV2ConversationIdForTrip,
-  travelV2ChatHref,
   travelV2TripIdsMatch,
   travelV2WorkspaceHref,
   travelV2WorkspaceRestoreHref,
@@ -43,7 +42,6 @@ describe('V2 Trip 会话关联', () => {
     expect(() => travelV2ConversationIdForTrip(tripId)).toThrow(/server-verified conversation association/)
     expect(travelV2WorkspaceHref(tripId, conversationId)).toBe('/travel/itineraries/trip-a?conversation_id=travel-v2-trip-trip-a')
     expect(travelV2WorkspaceRestoreHref(tripId, conversationId, 2)).toBe('/travel/itineraries/trip-a?conversation_id=travel-v2-trip-trip-a&restore_revision=2')
-    expect(travelV2ChatHref(tripId, conversationId)).toBe('/travel/chat?trip_id=trip-a&conversation_id=travel-v2-trip-trip-a')
   })
 
   it('只接受服务端验证的会话 ID，本地缓存和 URL 候选不作为关联依据', () => {
