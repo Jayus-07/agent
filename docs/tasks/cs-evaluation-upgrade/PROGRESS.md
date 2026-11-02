@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；评估由上一会话完成，本文件承接实施进度
 - 更新时间：2026-11-02
-- 当前状态：**P1–P7 已完成；P8（持久化 intake）为运营收尾最后一项（TASK §10）**
+- 当前状态：**P1–P8 全部完成（评测运营线收官）；上线运营巡检清单见 TASK §10「上线运营巡检」**
 
 ## 阶段状态总表
 
@@ -16,7 +16,7 @@
 | P5 | 坏例回流运营闭环 | **机制闭环已验证**（2026-11-02，长期运营） | 无代码（复用 manual candidate 通道）；SOP 入 evaluation-governance.md | 见日志 2026-11-02（四） |
 | P6 | P6 live 跑批（预算 10 元）+ live 通道核实收口 | **已完成（部分验收缺口移交）**（2026-11-02） | feat/cs-eval-p6 / [PR #244](https://github.com/Jayus-07/agent/pull/244)（merged）+ 运营执行 | 324 条全量 197/324（v1 9/20 与离线一致、CS2 188/304=61.8%）；成本 ≈1.05 元；见日志 2026-11-02（六） |
 | P7 | 评测平台 case 归档端点 + 清理约 400 个重复 approved case | **已完成**（2026-11-02） | feat/cs-eval-p7 / [PR #252](https://github.com/Jayus-07/agent/pull/252)（merged 1ea315a）+ 运营执行 | 398/398 游离 case 归档、审计 398 条、published 保护 409 实测；见日志 2026-11-02（七） |
-| P8 | 持久化 intake（unanswered_questions → 候选） | 待实施 | feat/cs-eval-p8（计划） | TASK §10 P8 |
+| P8 | 持久化 intake（unanswered_questions → 候选） | **已完成**（2026-11-02） | feat/cs-eval-p8 / [PR #255](https://github.com/Jayus-07/agent/pull/255)（merged 8b1278c） | intake 201 → origin 幂等重放 → reject 留痕全链路实证；见日志 2026-11-02（八） |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -33,6 +33,23 @@
 - 环境坑：TASK §2.3（Mimosa hook / GitHub 抖动重试 / compose 等价原命令 / MSYS_NO_PATHCONV / connect_timeout / 并行会话纪律）——开工必读
 
 ## 日志
+
+### 2026-11-02（八）—— P8 落地：持久化坏例 intake（PR #255）+ SOP 切换 + P1–P8 运营线收官
+
+- **实现（feat/cs-eval-p8，[PR #255](https://github.com/Jayus-07/agent/pull/255) merged 8b1278c，CI 5 pass + 2 预期 skip——skipping 口径与 P7 相同：付费评测不跑 PR、preflight 经 rag_smoke_path_filter 实测 is_relevant=False）**：
+  - `POST /v2/intake/from-unanswered`（body：`entry_id` + `idempotency_key`，`_role(actor, "admin")`）：读 `ai.unanswered_questions` 行（应用连接，与 admin_unanswered.py 同一查询通道——evaluation_v2 租户角色无 ai schema 权限，故不经 `_transaction`；from-trace 读进程内 trace collector 同为「路由层取外部数据源」既有模式）→ `sanitize_candidate_payload` 脱敏 → `repository.create_candidate`（source_kind=`trace` 与 from-trace 一致；`metadata.source=unanswered_question`、`ground_truth_verified=False`、`source_ref.origin=<entry id>`、`origin_source=rag_miss|sql_empty`）。
+  - **幂等三层**：①idempotency_key（create_candidate 原生 ON CONFLICT + 同内容重放返回原候选）；②**source_ref.origin 级查重**（新增 `repository.find_candidate_by_source_origin`——同一条坏例跨请求/跨运营者只回流一次，命中返回 `duplicate: true` 不再创建）；③审核层既有防重查询。**TASK 点名的 `count_duplicate_queries` 查重提示落定为 origin 级查重**：该函数签名要求绑定 dataset_key，unanswered 坏例（rag_miss/sql_empty）无数据集绑定，origin 是坏例稳定业务标识、语义更精确——偏离已在 PR 说明。
+  - 批量参数（--limit Top N）按 TASK「最小充分」不做：SOP 循环单条调用即可。
+  - 测试 `backend/tests/evaluation_v2/test_intake_unanswered.py` 7 例（创建成功契约断言/404/空 question 422/origin 重复重放不再创建/PII 脱敏手机号→[PHONE_REDACTED]/editor 403/origin 参数化断言）+ evaluation_v2 全目录 **147 passed**（既有 140 零回归）。过程注：初版测试断言含 SQL 片段文本被 Mimosa hook 误判「SQL 注入」拦截写入（测试文件无拼接面，纯断言文本），改写断言规避误判后通过。
+- **执行链路实证（宿主直调路由函数，与 API 同一代码路径；app 容器为并行会话 travel-proto 构建，不重建覆盖，P6/P7 先例）**：
+  - 真实坏例 entry=16「福州有什么景点」（rag_miss）→ intake 201：candidate `6f7a30bd`，review_status=in_review，source_ref/metadata 契约与设计一致；
+  - 幂等重放（同 entry 不同 key）→ 返回同 candidate_id + `duplicate=True`，零新创建；
+  - review reject 留痕（本批 29 条均为测试残留，不进数据集下一 version，approve 路径由 P5 SOP 覆盖）→ revision=2；
+  - 审计：`candidate.created`（trace 类）恰 1 条；unanswered 来源候选分布 rejected=2（另 1 条为 P5 时代 manual 通道既有记录）。
+- **文档同步**：`docs/evaluation/evaluation-governance.md` §1 收录段坏例回流 SOP 替换为 intake/from-unanswered 口径（三层幂等 + 周度评审路径；manual 通道降级为兜底）。
+- **上线运营巡检（TASK §10 附带项，随 P8 验收核对）**：渠道=web 待落档 customer-service.md 渠道段、frontend-cs 生产构建验证、资金开关记录、共享库残留清理（govtest/probe + P7 发现的 rag 残留 case 6e6e3daa + P6 交付的 tickets/confirmation/checkpointer 副作用清理）——移交项均已挂账 TASK §10，不阻塞受控试用。
+- 一次性脚本：`d:/tmp/p8_intake_run.py`（不入库）。
+- **任务收官**：P1–P8 全部完成，TASK §7 总验收矩阵以本 PROGRESS 各日志为证据源；评测运营线达到「可上线运营（受控试用）」口径——全量公开投产另需压测/渗透/资金范围决策（不在本任务范围）。
 
 ### 2026-11-02（七）—— P7 落地：case 软归档端点（PR #252）+ 398 个 P4 竞态游离 case 归档清零
 

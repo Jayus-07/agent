@@ -184,7 +184,7 @@
 - 执行：对 P4 重复 case 清单（按 payload 的 source_ref.case_id 分组，非最新 revision 的多余 case_id）逐个归档；管理端 case 池复核无残留可见。
 - 验收：CI 显式全绿；归档后列表不可见；审计留痕；PROGRESS 回填。
 
-### P8 持久化 intake
+### P8 持久化 intake——已完成（2026-11-02，详见 PROGRESS 2026-11-02（八））
 
 - 背景：`POST /v2/intake/from-trace` 只认进程内 trace collector 最近 200 条——`ai.unanswered_questions`（当前 29 条，均为测试残留）等持久化坏例跨重启无法经 trace 入口回流；现走 manual candidate 通道（SOP 已入 evaluation-governance.md §5）。
 - 改动：`POST /v2/intake/from-unanswered`（body：`entry_id` + `idempotency_key`）——读 `ai.unanswered_questions` 行（question/detail）→ 复用 `sanitize_candidate_payload` → `create_candidate`（source_kind 用现有枚举，metadata.source=unanswered_question、source_ref.origin=entry id）→ 幂等（idempotency_key + `count_duplicate_queries` 查重提示）；admin 权限；可选批量参数（`--limit` 按 question_hash 聚合 Top N）不做也行（最小充分，SOP 循环调用单条即可）。
