@@ -452,12 +452,16 @@ def ask(
         request.state.rag_pipeline_init_ms = (time.perf_counter() - started) * 1000
     # TD-14：带身份的请求绑定请求级预算（reserve/settle 在本进程落库，
     # 归属 user/tenant；此前旁路告警 [Budget] reserve 旁路 即缺此绑定）。
+    # 请求级预算 ID 必须每次唯一：bind_request_budget 按 ID 复用 _states
+    # 累计状态，绑批次 ID 会让 0.50 元/32k token 的单请求限额被整批
+    # 累计（Review P2 实测发现）。批次归属与 10 元上限由 scoped_run_budget
+    # 承担——PG 预占/用量取 run 作用域 ID，与请求级 ID 解耦。
     _budget_bound = False
     if req.user_id and tenant_id:
         try:
             from backend.infra.llm.budget import bind_request_budget
             bind_request_budget(
-                run_scope[0] if run_scope else f"rag-ask:{uuid.uuid4().hex}",
+                f"rag-ask:{uuid.uuid4().hex}",
                 user_id=req.user_id, tenant_id=tenant_id,
             )
             _budget_bound = True

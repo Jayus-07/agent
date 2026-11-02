@@ -118,26 +118,40 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
         t0 = time.time()
         exp = case.expected
         try:
-            from backend.infra.llm.budget import check_quota_blocked
+            from backend.infra.llm.budget import (
+                bind_request_budget,
+                check_quota_blocked,
+                clear_request_budget,
+            )
 
             check_quota_blocked()
-            # thread_id 按 run+case 隔离，避免评测样本间与跨 run 状态串扰
-            config = {
-                "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
-                "configurable": {"thread_id": f"eval-cs-{run_token}-{case.id}"},
-            }
-            messages = _user_turns(case)
-            for message in messages:
-                check_quota_blocked()
-                # 同一case跨轮保留业务会话；不同case/run仍严格隔离。
-                cs_input = new_cs_graph_input(
-                    user_message=message,
-                    user_id="eval_bot",
-                    session_id=f"cs_eval_{run_token}-{case.id}",
-                    conversation_id=f"eval-cs-{run_token}-{case.id}",
-                    cs_route=get_cs_router().route(message).model_dump(),
-                )
-                final_state = graph.invoke(cs_input, config=config)
+            # 请求级预算按 case 唯一：bind 复用同 ID 会让 0.50 元/32k token
+            # 的单请求限额被整批累计（Review P2 同类发现）；批次归属与
+            # ≤10 元上限由外层 scoped_run_budget 承担，二者解耦。
+            bind_request_budget(
+                f"eval-case:{run_token}:{case.id}",
+                user_id="eval_bot", tenant_id="default",
+            )
+            try:
+                # thread_id 按 run+case 隔离，避免评测样本间与跨 run 状态串扰
+                config = {
+                    "recursion_limit": CS_GRAPH_RECURSION_LIMIT,
+                    "configurable": {"thread_id": f"eval-cs-{run_token}-{case.id}"},
+                }
+                messages = _user_turns(case)
+                for message in messages:
+                    check_quota_blocked()
+                    # 同一case跨轮保留业务会话；不同case/run仍严格隔离。
+                    cs_input = new_cs_graph_input(
+                        user_message=message,
+                        user_id="eval_bot",
+                        session_id=f"cs_eval_{run_token}-{case.id}",
+                        conversation_id=f"eval-cs-{run_token}-{case.id}",
+                        cs_route=get_cs_router().route(message).model_dump(),
+                    )
+                    final_state = graph.invoke(cs_input, config=config)
+            finally:
+                clear_request_budget()
             duration_ms = int((time.time() - t0) * 1000)
 
             answer = (final_state.get("final_answer") or "").strip()
@@ -232,31 +246,43 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
         deltas: list[str] = []
         clarify_seen = False
         try:
-            from backend.infra.llm.budget import check_quota_blocked
+            from backend.infra.llm.budget import (
+                bind_request_budget,
+                check_quota_blocked,
+                clear_request_budget,
+            )
 
             check_quota_blocked()
-            messages = _user_turns(case)
-            session_id = f'eval-cs-v2-{run_token}-{case.id}'
-            for message in messages:
-                check_quota_blocked()
-                # 断言针对最后一轮；前轮的域进入/澄清不能替末轮通过。
-                nodes = set()
-                deltas = []
-                clarify_seen = False
-                for evt in agent.stream_events(
-                    message, session_id, kb_id="default",
-                    user_id="eval_bot", tenant_id='default',
-                ):
-                    name = evt.get("event")
-                    data = evt.get("data") or {}
-                    if name == "status" and data.get("node"):
-                        nodes.add(data["node"])
-                    elif name == "clarification":
-                        clarify_seen = True
-                    elif name == "delta" and isinstance(data.get("content"), str):
-                        deltas.append(data["content"])
-                    elif name == 'error':
-                        raise RuntimeError('完整路径返回执行错误事件')
+            # 同 _run_live：请求级预算按 case 唯一，批次归属走外层 run 作用域
+            bind_request_budget(
+                f"eval-case:{run_token}:{case.id}",
+                user_id="eval_bot", tenant_id="default",
+            )
+            try:
+                messages = _user_turns(case)
+                session_id = f'eval-cs-v2-{run_token}-{case.id}'
+                for message in messages:
+                    check_quota_blocked()
+                    # 断言针对最后一轮；前轮的域进入/澄清不能替末轮通过。
+                    nodes = set()
+                    deltas = []
+                    clarify_seen = False
+                    for evt in agent.stream_events(
+                        message, session_id, kb_id="default",
+                        user_id="eval_bot", tenant_id='default',
+                    ):
+                        name = evt.get("event")
+                        data = evt.get("data") or {}
+                        if name == "status" and data.get("node"):
+                            nodes.add(data["node"])
+                        elif name == "clarification":
+                            clarify_seen = True
+                        elif name == "delta" and isinstance(data.get("content"), str):
+                            deltas.append(data["content"])
+                        elif name == 'error':
+                            raise RuntimeError('完整路径返回执行错误事件')
+            finally:
+                clear_request_budget()
             answer = "".join(deltas)
             problems: list[str] = []
             metrics: dict[str, float | None] = {}
