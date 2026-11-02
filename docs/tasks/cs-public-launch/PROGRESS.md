@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；计划由 2026-11-02 会话立项（承接 cs-evaluation-upgrade 收官）
 - 更新时间：2026-11-02
-- 当前状态：**Q1–Q3 已合并；Q4 压测实测完成（PR 流程中）；Q5/Q6 待实施**
+- 当前状态：**Q1–Q4 已合并；Q5/Q6 报告已交付（PR 流程中）——两拍板项待用户**
 
 ## 阶段状态总表
 
@@ -11,9 +11,9 @@
 | Q1 | 上线巡检小件（管理端选项处理 / frontend-cs 构建验证 / 渠道资金落档 / 残留清理） | 已完成（残留按依据保留；共享管理端部署待协调） | feat/cs-prod-q1 / PR #259 | merge 01aa614；见下方验收日志 |
 | Q2 | cs_faq BM25 索引补建 + live 冒烟对比 | 已完成（知识链路指标；非完整质量PASS） | feat/cs-prod-q2 / PR #260 | merge 144aea7；60条繁忙0% |
 | Q3 | live 质量缺口决策与实施（4 个拍板项） | 已完成（预算/full_path/多轮/action 合并；剩余拍板项见 2026-11-03（四）） | feat/cs-prod-q3 / PR #270 | merge d7c5a0e；CI 6 success+1 预期 skip；Review P2 已修；action 27/38 |
-| Q4 | 多坐席容量压测 | 待实施 | feat/cs-prod-q4（计划） | TASK §3 Q4 |
-| Q5 | 安全渗透自检（Mimosa + 边界复核） | 待实施 | feat/cs-prod-q5（计划） | TASK §3 Q5 |
-| Q6 | 资金范围决策落档 | 待实施 | docs（计划） | TASK §3 Q6 |
+| Q4 | 多坐席容量压测 | 已完成（只读链路实测+限流边界；WS/写路径挂账需隔离栈） | feat/cs-prod-q4 / PR #275 | merge 2b4d21a；8RPS×180s 1441/1441 p95=116ms；报告 Q4-LOADTEST.md |
+| Q5 | 安全渗透自检（Mimosa + 边界复核） | 已完成（密封扫描+逐端点复核；立即修 0，4 项挂账） | docs/cs-prod-q6 / PR #278 | scan seal 722528c4…；报告 Q5-SECURITY.md |
+| Q6 | 资金范围决策落档 | 已完成（全景核对+建议；两拍板项待用户） | docs/cs-prod-q6 / PR #278 | 报告 Q6-FUNDS-DECISION.md |
 
 状态取值：待实施 / 进行中 / 待验收 / 已完成 / BLOCKED（注明原因）/ PAUSED（注明现场）。
 
@@ -225,3 +225,11 @@
 - 报告：docs/tasks/cs-public-launch/Q4-LOADTEST.md（解读/未覆盖场景/瓶颈分级）。原始 JSON 在 docs/reports/（随分支入库），SHA256 前 16：e362aca476f2881a / 67f0edd9c9ce02e3 / 69645e87ff9b7149 / 9697dc137992cd50。
 - 瓶颈分级：限流 600/分/用户=设计边界（放量前确认并发用户规模）；突发排队（50 并发 p50 8.5s）=可挂账（隔离栈复测 100/200 并发）；WS/写路径容量零数据=挂账（需隔离栈，不阻塞受控试用）。
 - 未覆盖如实声明：写路径、坐席状态流转、WS 长连接、主 agent 并行、资源水位——均需隔离 app 实例，本报告不据此宣称容量。
+
+### 2026-11-03（六）—— Q5 安全自检 + Q6 资金范围核对
+
+- **Q5 Mimosa 深扫**：本会话 Mimosa MCP 工具可用（HANDOFF「工具缺失」已失效）；jobId scan-job-mvzrfg8m-877b3546f6831efa，scanId scan-2026-11-02T21-22-50.452Z-77e8d4e922d1，seal sha256:722528c4…（密封完成）。304 findings（high 250）+ 依赖离线告警 88 条/14 包。逐类抽查+全部高危单点人工核实：硬编码凭据 3=误报（字典键/故意错误凭据测试占位）、SQL 74=服务端配置表名 DDL 拼接（值参数化）、SSRF 115=前端 fetch 与内部脚本、路径穿越 44=防御在位（realpath+commonpath/basename）；挂账 4 项（pptx ElementTree 解析用户上传 XML 建议换 defusedxml=中；验证码 random→secrets、演练脚本 shell=False、BM25 pickle→restricted unpickler=低），立即修=0。报告 Q5-SECURITY.md。
+- **Q5 授权边界逐端点复核**：13 个 cs_* 路由文件三档鉴权全覆盖、无未鉴权路由；会话对象级访问守卫（user+tenant 双匹配、仅当前认领坐席）覆盖全部按 ID 端点；工单详情 tenant+归属+404 防探测；evaluation_v2 42/42 路由有鉴权依赖（脚本核验）；WS 一次性票据 60s/单次/服务端反查 agent_id/API-Key 拒签；app :8000 仅绑 127.0.0.1（信任边界=网络边界）；customer_service 无 f-string SQL（参数化），sandbox 走 agent_readonly SELECT-only。报告 Q5-SECURITY.md §二—§四。
+- **Q6 资金入口全景**（共享栈运行态实测）：①退款申请 CS_REFUND_REQUEST_MODE 未设置=disabled ✓；②退款审核双开关未启=disabled ✓；③**order_cancel 无独立开关**且 gateway=http 下取消+退款链可达（终点 business-mock，幂等+身份闸在位）——真实后端接入前需补开关（挂账，用户拍板）；④/mall 演示商城 9/9 路由有鉴权；⑤CS_BUSINESS_GATEWAY_MODE=http 非资金开关。**当前全链路无真实资金通道**（全部指向 business-mock）。
+- **Q6 文档同步**：部署/prod-4c8g/README.md 修正「BUSINESS_GATEWAY 默认 disabled」旧描述（代码事实：默认 sandbox，disabled 非受支持值）。决策记录 Q6-FUNDS-DECISION.md：建议首期不开放真实资金动作（现状即满足），两个拍板项（首期范围、order_cancel 开关）待用户。
+- 交付物：Q5-SECURITY.md、Q6-FUNDS-DECISION.md、README 修正——docs/cs-prod-q5 与 docs/cs-prod-q6 两分支走 PR。
