@@ -240,3 +240,17 @@
 - 受控试用放量（Q1+Q2）门槛达成；全量公开投产待：①Q6 两拍板项（首期资金范围、order_cancel 开关）；②主链路真实冒烟零回归；③挂账项消化进度（Q3 剩余 action 11 例、full_path 路由 4 类发现、Q4 WS/写路径容量、Q5 四项缓解、Q1 :3200 部署协调）。
 - 并行会话协同记录：#274 合并时覆盖了本任务 PROGRESS 的 Q4 日志段（已在本任务分支恢复）；#279 演进了 Q3 的实体改写守卫（恢复纯查单改写、动作域维持不改写，真机回归验证）——Q3 报告中该条目以 #279 后的 main 实现为准。
 - HANDOFF.md 已被本收官日志取代为历史文件：现场（worktree/分支/HEAD/未提交）不再以它为准，以 Git 与本文件为准。
+
+### 2026-11-03（八）—— 执行会话收尾与资源台账
+
+- 收官 PR #281 合并（main=c4bfad0）；本会话累计合并 PR：#270/#273/#275/#278/#281（Q3 收口、Q4、Q5+Q6、终态），分支已清理，worktree agent-cs-prod 停靠 detached main、工作树零未提交。
+- **资源台账（下一会话恢复/退役时核对归属后再处置，禁盲删）**：
+  - 隔离容器：agent-cs-prod-q3-pg（:15433/cs_q3，含 Q3/Q4 全部验收与压测数据）；agent-cs-prod-q1-admin-check（:13200，Q1 镜像验证容器）。
+  - 镜像：cs-prod-q3-app:latest（73993ebdacf0，Q3 代码镜像，8 关键文件哈希已核对）。
+  - 共享副作用（已清理验证）：auth-redis 会话键 auth:session:279:* 残留 0；压测 token 文件已删；隔离 rag_server :18090 已停止。
+  - d:/tmp 复用件：cs-q3-isolated.env（含凭据，禁提交/打印）、q3-rag-data/（共享索引只读拷贝）、q3_rag_data.sql、q3_test_env.sh、q3_full_env.sh、q3_minimal_live.py、q4_mint_token.py、q3-fp-selection.jsonl、Q3/Q4 报告 JSON（docs/reports/ 已入库）。
+- **剩余任务总览（见 TASK §7 与各报告「未覆盖/挂账」节）**：
+  1. 用户拍板两项：首期资金范围（建议不开放，现状即满足）；order_cancel 独立开关（建议挂账小 PR，真实资金后端接入前必须）。
+  2. 全量公开投产前：主链路真实冒烟零回归（含共享 :3200 管理端部署协调这一 Q1 遗留）。
+  3. 挂账消化（不阻塞受控试用）：Q3 action 剩余 11 例（资格口径 4/同单幂等 2/歧义 clarify 1/query 专家缺口 4，多需锁版拍板）+ full_path 主图路由 4 类发现；Q4 WS/写路径容量（需隔离 app 实例，脚本已具备能力）；Q5 四项缓解（pptx defusedxml=中、验证码 secrets/演练脚本 shell=False/BM25 restricted unpickler=低）；依赖治理线 88 条离线 advisory。
+  4. 外部渗透是否引入：用户拍板（Q5 自检不替代外部渗透）。
