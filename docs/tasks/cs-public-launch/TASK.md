@@ -4,7 +4,7 @@
 - 来源：2026-11-02 用户拍板「写公开投产实施计划，下一会话处理」；承接 `cs-evaluation-upgrade`（P1–P8 已收官，评测运营线达成受控试用口径）
 - Worktree：**已存在，下一会话必须复用** `D:\Program Files\workplace\agent-cs-prod`、`feat/cs-prod-q3`；保留未提交改动。初始Q1从origin/main创建的步骤已完成，勿在agent-gov或主目录改本任务。
 - 分支策略：每期独立分支 `feat/cs-prod-qN` 独立 PR；纯文档/计划分支 `docs/cs-prod-*`。**合并前显式逐项确认全部 CI 结论**（含 skipping 项核对是否非 RAG 预期）
-- 状态：**PAUSED：Q1/Q2 已合并，Q3 未提交/未验收；下一会话先读 [HANDOFF.md](HANDOFF.md)**
+- 状态：**Q1/Q2/Q3 已合并（Q3=PR #270，merge d7c5a0e）；Q4 进行中；Q5/Q6 待实施。剩余拍板项见 PROGRESS 2026-11-03（四）**
 
 ---
 
