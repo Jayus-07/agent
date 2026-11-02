@@ -28,6 +28,36 @@ _MAX_TRACKED_REQUESTS = 4096
 _current_request_id: ContextVar[str] = ContextVar(
     "llm_budget_request_id", default=""
 )
+@dataclass
+class _RunScope:
+    request_id: str
+    limit_cny: Decimal
+    failure: Exception | None = None
+
+
+_run_scope: ContextVar[_RunScope | None] = ContextVar(
+    'llm_budget_run_scope', default=None,
+)
+
+
+@contextmanager
+def scoped_run_budget(request_id: str, limit_cny: Decimal):
+    """可信评测入口绑定批次上限；节点重绑Trace时不丢批次归属。"""
+    limit = Decimal(limit_cny)
+    if not request_id or not limit.is_finite() or limit <= 0:
+        raise ValueError('整批预算需要请求ID和正的有限人民币上限')
+    token = _run_scope.set(_RunScope(request_id, limit))
+    try:
+        yield
+    finally:
+        _run_scope.reset(token)
+
+
+def current_run_budget() -> tuple[str, Decimal] | None:
+    scope = _run_scope.get()
+    return (scope.request_id, scope.limit_cny) if scope else None
+
+
 _current_call_decision: ContextVar[str] = ContextVar(
     "llm_budget_call_decision", default="primary"
 )
@@ -211,7 +241,9 @@ class RequestBudget:
                         # 预占本次请求级剩余成本上限；成功后按真实价格结算并
                         # 释放差额，避免并发请求在未知 completion token 时超卖。
                         amount_cny=reservation_cost,
-                        request_id=_current_request_id.get(),
+                        request_id=(current_run_budget() or (_current_request_id.get(),))[0],
+                        **({'request_limit_cny': _run_scope.get().limit_cny}
+                           if _run_scope.get() is not None else {}),
                     )
                 except Exception as exc:
                     from backend.infra.llm.quota import QuotaExceeded
@@ -410,6 +442,9 @@ def current_request_budget() -> RequestBudget | None:
 
 def check_quota_blocked() -> None:
     """预算拒绝不能被工具降级吞掉，更不能提交为已完成的节点检查点。"""
+    scope = _run_scope.get()
+    if scope is not None and scope.failure is not None:
+        raise scope.failure
     state = current_request_budget()
     if state is not None and state.quota_error is not None:
         raise state.quota_error
@@ -417,6 +452,9 @@ def check_quota_blocked() -> None:
 
 def note_quota_blocked(exc: Exception) -> None:
     """将可信内部服务返回的额度拒绝关联到当前请求预算。"""
+    scope = _run_scope.get()
+    if scope is not None and scope.failure is None:
+        scope.failure = exc
     state = current_request_budget()
     if state is not None:
         from backend.infra.llm.quota import QuotaExceeded
@@ -444,6 +482,7 @@ def reserve_model_call(
     model_name: str = "",
     component: str = "llm",
 ) -> None:
+    check_quota_blocked()
     if kind not in _VALID_CALL_KINDS:
         raise ValueError(f"非法预算调用类型: {kind}")
     if not model_name:
@@ -452,6 +491,10 @@ def reserve_model_call(
         model_name = get_active_model_name()
     state = current_request_budget()
     if state is None:
+        if _run_scope.get() is not None:
+            exc = RequestBudgetExceeded('run_budget_context_missing')
+            note_quota_blocked(exc)
+            raise exc
         # 静默旁路可诊断化（TD-05，2026-10-02）：mode=enforce 下 state 为
         # None 意味着当前线程从未执行 bind_request_budget——预占/结算整体
         # 旁路且无痕迹（实测聊天链路部分线程只绑 trace 没绑身份，预算侧
@@ -468,9 +511,14 @@ def reserve_model_call(
             )
         _current_call_decision.set(kind)
         return
-    reservation = state.reserve(
-        kind, model_name=model_name, component=component,
-    )
+    try:
+        reservation = state.reserve(
+            kind, model_name=model_name, component=component,
+        )
+    except Exception as exc:
+        if _run_scope.get() is not None:
+            note_quota_blocked(exc)
+        raise
     _current_quota_reservation.set(reservation)
     _current_call_decision.set(kind)
 
@@ -606,6 +654,8 @@ __all__ = [
     "current_request_id",
     "current_reservation_id",
     "current_request_budget",
+    "current_run_budget",
+    "scoped_run_budget",
     "record_model_usage",
     "release_model_reservation",
     "reserve_model_call",

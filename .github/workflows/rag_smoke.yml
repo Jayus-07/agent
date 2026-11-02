@@ -154,6 +154,15 @@ jobs:
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             tests/evaluation/test_rag_runner.py \
             tests/evaluation/test_cs_live_entrypoint.py \
+            backend/tests/evaluation/test_cs_execution_mode.py \
+            backend/tests/infra/test_sync_timeout_context.py \
+            backend/tests/infra/test_run_budget_pg.py \
+            backend/tests/rag/test_run_budget_transport.py \
+            backend/tests/test_sse_event_schema.py::test_graph_worker_keeps_run_budget_scope \
+            backend/tests/customer_service/test_defect9_context_resolver.py \
+            backend/tests/customer_service/test_business_guard.py \
+            backend/tests/customer_service/test_cs_eval_gate.py \
+            backend/tests/customer_service/test_cs_decision_replay.py \
             backend/tests/rag/test_specialized_budget.py \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \

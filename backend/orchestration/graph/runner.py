@@ -22,6 +22,7 @@ ask() 与 stream_events() 的单一实现（重构 #2：收敛双轨编排）。
 from __future__ import annotations
 
 import asyncio
+from contextvars import copy_context
 import queue
 import threading
 import time
@@ -1021,7 +1022,11 @@ class GraphRunner:
         trace.metadata["entry_timing"]["worker_launch_ms"] = round(
             (time.perf_counter() - entry_started) * 1000, 1,
         )
-        threading.Thread(target=_worker, daemon=True, name="graph-worker").start()
+        worker_context = copy_context()
+        threading.Thread(
+            target=worker_context.run, args=(_worker,),
+            daemon=True, name="graph-worker",
+        ).start()
 
         def _finalize_trace(status: str, metrics: dict | None = None,
                             answer: str | None = None,

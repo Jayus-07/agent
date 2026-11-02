@@ -16,6 +16,8 @@ app 等消费方通过 RAG_MODE=remote + backend/rag/client.py 代理调用。
     python -m uvicorn backend.services.rag_server:app --host 0.0.0.0 --port 8090
 """
 import contextlib
+from decimal import Decimal, InvalidOperation
+import hmac
 import math
 import threading
 import re
@@ -30,6 +32,7 @@ from pydantic import BaseModel, Field
 from backend.core.request_context import scoped_tool_identity
 from backend.core.tool_runtime.deadline import scoped_execution_timeout
 from backend.infra.llm.proxy import scoped_current_user_id
+from backend.infra.llm.budget import scoped_run_budget
 from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 from backend.shared.logger import logger
 
@@ -395,6 +398,34 @@ def ask_deadline_usable(request: Request | None, entry_perf: float) -> float | N
 
 # ==================== 端点 ====================
 
+def _trusted_run_budget(request: Request | None, user_id: str):
+    """批次预算只信任服务令牌，开发免鉴权不能声明批次限额。"""
+    if request is None:
+        return None
+    run_id = request.headers.get('X-Agent-Budget-Run-Id', '')
+    raw_limit = request.headers.get('X-Agent-Budget-Run-Limit-Cny', '')
+    if not run_id and not raw_limit:
+        return None
+    token = _internal_token()
+    if not token or not hmac.compare_digest(
+        request.headers.get('X-Internal-Token', ''), token,
+    ):
+        raise HTTPException(status_code=403, detail='整批预算需要可信内部服务身份')
+    if not user_id or not re.fullmatch(r'eval:[A-Za-z0-9_-]{1,128}', run_id):
+        raise HTTPException(status_code=422, detail='非法评测批次身份')
+    try:
+        limit = Decimal(raw_limit)
+    except InvalidOperation as exc:
+        raise HTTPException(status_code=422, detail='非法整批金额上限') from exc
+    if not limit.is_finite() or limit <= 0 or limit > 10:
+        raise HTTPException(status_code=422, detail='整批金额上限必须大于0且不超过10元')
+    from backend.config.llm import LLM_BUDGET_MODE
+
+    if LLM_BUDGET_MODE != 'enforce':
+        raise HTTPException(status_code=503, detail='整批预算强制保护不可用')
+    return run_id, limit
+
+
 @app.post("/ask")
 def ask(
     req: AskRequest,
@@ -411,6 +442,7 @@ def ask(
     tenant_id = req.tenant_id.strip()
     if not tenant_id:
         raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    run_scope = _trusted_run_budget(request, req.user_id)
     try:
         pipeline = _get_pipeline()
     except RuntimeError as e:
@@ -420,6 +452,10 @@ def ask(
         request.state.rag_pipeline_init_ms = (time.perf_counter() - started) * 1000
     # TD-14：带身份的请求绑定请求级预算（reserve/settle 在本进程落库，
     # 归属 user/tenant；此前旁路告警 [Budget] reserve 旁路 即缺此绑定）。
+    # 请求级预算 ID 必须每次唯一：bind_request_budget 按 ID 复用 _states
+    # 累计状态，绑批次 ID 会让 0.50 元/32k token 的单请求限额被整批
+    # 累计（Review P2 实测发现）。批次归属与 10 元上限由 scoped_run_budget
+    # 承担——PG 预占/用量取 run 作用域 ID，与请求级 ID 解耦。
     _budget_bound = False
     if req.user_id and tenant_id:
         try:
@@ -430,6 +466,8 @@ def ask(
             )
             _budget_bound = True
         except Exception as e:  # noqa: BLE001 — 预算绑定失败不阻塞问答
+            if run_scope:
+                raise HTTPException(status_code=503, detail='整批预算绑定失败') from e
             logger.warning(f"[RAG /ask] 预算绑定失败（放行）: {e}")
     parent_id = (
         parent_trace_id
@@ -455,6 +493,8 @@ def ask(
         # 内部端点已验证服务令牌；用同一请求主体绑定明细与预算，退出后
         # 恢复线程旧上下文，避免线程池复用导致用户归属残留。
         with (
+            scoped_run_budget(*run_scope)
+            if run_scope else contextlib.nullcontext(),
             scoped_tool_identity(user_id=req.user_id, tenant_id=tenant_id),
             scoped_current_user_id(req.user_id),
         ):
@@ -755,7 +795,12 @@ def readyz() -> dict[str, Any]:
     from backend.rag.pipeline import _get_local_pipeline_state
     state = _get_local_pipeline_state()
     if state["state"] == "ready":
-        return {"ready": True, "state": "ready"}
+        from backend.config.llm import LLM_BUDGET_MODE
+
+        return {
+            "ready": True, "state": "ready",
+            'run_budget_version': 1 if _internal_token() and LLM_BUDGET_MODE == 'enforce' else 0,
+        }
     if state["state"] == "not_started":
         _kick_init()
     raise HTTPException(

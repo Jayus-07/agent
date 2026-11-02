@@ -55,6 +55,32 @@ def _install(monkeypatch, final_state: dict) -> _FakeGraph:
     return graph
 
 
+def test_graph_live_replays_each_user_turn_in_same_case_session(monkeypatch):
+    graph = _install(monkeypatch, {
+        'final_answer': '退款需要确认',
+        'expert_history': [{'expert': 'action'}],
+    })
+    inputs = []
+    original = graph.invoke
+
+    def invoke(state, config):
+        inputs.append((dict(state), dict(config['configurable'])))
+        return original(state, config)
+
+    monkeypatch.setattr(graph, 'invoke', invoke)
+    case = _case('multi').model_copy(update={'metadata': {'turns': [
+        {'role': 'user', 'text': '第一轮'},
+        {'role': 'assistant', 'text': '标注回复不能注入'},
+        {'role': 'user', 'text': '第二轮'},
+    ]}})
+    result = cs_runner._run_cs([case], live=True)[0]
+    assert [state['user_message'] for state, _ in inputs] == ['第一轮', '第二轮']
+    assert inputs[0][0]['session_id'] == inputs[1][0]['session_id']
+    assert inputs[0][1]['thread_id'] == inputs[1][1]['thread_id']
+    assert result.actual['turn_count'] == 2
+    assert result.status == 'pass'
+
+
 @pytest.mark.parametrize(
     ("expert_history", "expected_visited", "desc"),
     [
@@ -124,3 +150,33 @@ def test_run_live_route_mismatch_still_fails(monkeypatch):
     assert result.status == "fail"
     assert result.metrics["expert_match"] == 0.0
     assert "路由不符" in (result.error_msg or "")
+
+
+def test_graph_live_binds_unique_request_budget_per_case(monkeypatch):
+    """Q3 Review P2 回归：请求级预算 ID 必须 per-case 唯一。
+
+    bind 复用同 ID 会让 0.50 元/32k token 的单请求限额被整批累计
+    （_states 缓存同 ID 状态）；批次归属由外层 scoped_run_budget 承担。
+    """
+    from backend.infra.llm import budget
+
+    graph = _install(monkeypatch, {
+        'final_answer': '退款需要确认',
+        'expert_history': [{'expert': 'action'}],
+    })
+    seen_ids = []
+    original = graph.invoke
+
+    def invoke(state, config):
+        seen_ids.append(budget.current_request_id())
+        return original(state, config)
+
+    monkeypatch.setattr(graph, 'invoke', invoke)
+    cases = [_case('CS2-C3-021'), _case('CS2-C3-022')]
+    results = cs_runner._run_cs(cases, live=True)
+    assert [r.status for r in results] == ['pass', 'pass']
+    assert len(seen_ids) == 2
+    assert seen_ids[0] != seen_ids[1]
+    assert all(sid.startswith('eval-case:') for sid in seen_ids)
+    # case 结束后请求级绑定已清理，批次作用域不受影响
+    assert budget.current_request_id() == ''

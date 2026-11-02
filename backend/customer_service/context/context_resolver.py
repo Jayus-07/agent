@@ -293,6 +293,15 @@ def resolve_explicit_order_route(query: str) -> ContextResolution | None:
     order_id = extract_explicit_order(query)
     if not order_id:
         return None
+    # 只救「原始路由落 knowledge 兜底」的纯实体查询；已能路由到业务域的
+    # 问句不改写——改写成查单会吞掉原意图（实测「订单 X 申请退款」被改写
+    # 后 as_refund 丢成 t_order_status，Q3 full_path live 复现）。
+    from backend.customer_service.router.cs_router import get_cs_router
+    from backend.customer_service.router.domain_detector import detect_cached
+
+    raw_route = get_cs_router().route(query, detect_cached(query))
+    if raw_route.route_path.value != "knowledge_query":
+        return None
     return ContextResolution(
         order_id=order_id,
         resolved_query=f"查询订单 {order_id}",
