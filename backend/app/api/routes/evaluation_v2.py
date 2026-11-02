@@ -840,6 +840,24 @@ async def create_case_revision_candidate(
         _safe_error(exc)
 
 
+@router.post("/cases/{case_id}/archive")
+async def archive_case(
+    case_id: uuid.UUID,
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    _role(actor, "admin")
+    try:
+        return await asyncio.to_thread(
+            repository.archive_case,
+            identity.tenant_id,
+            actor.actor,
+            str(case_id),
+        )
+    except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
+        _safe_error(exc)
+
+
 @router.post("/intake/from-trace", status_code=201)
 async def intake_trace(
     body: TraceIntake,
