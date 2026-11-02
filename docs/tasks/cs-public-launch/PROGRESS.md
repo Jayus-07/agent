@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；计划由 2026-11-02 会话立项（承接 cs-evaluation-upgrade 收官）
 - 更新时间：2026-11-02
-- 当前状态：**PAUSED：用户暂停，Q3未提交/未验收；下一会话先读HANDOFF.md**
+- 当前状态：**Q1/Q2/Q3 已合并；Q4 进行中（压测）；Q5/Q6 待实施**
 
 ## 阶段状态总表
 
@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | Q1 | 上线巡检小件（管理端选项处理 / frontend-cs 构建验证 / 渠道资金落档 / 残留清理） | 已完成（残留按依据保留；共享管理端部署待协调） | feat/cs-prod-q1 / PR #259 | merge 01aa614；见下方验收日志 |
 | Q2 | cs_faq BM25 索引补建 + live 冒烟对比 | 已完成（知识链路指标；非完整质量PASS） | feat/cs-prod-q2 / PR #260 | merge 144aea7；60条繁忙0% |
-| Q3 | live 质量缺口决策与实施（4 个拍板项） | PAUSED（施工未验收） | feat/cs-prod-q3；无PR | 决策已批准；现场/测试/下一步见HANDOFF.md |
+| Q3 | live 质量缺口决策与实施（4 个拍板项） | 已完成（预算/full_path/多轮/action 合并；剩余拍板项见 2026-11-03（四）） | feat/cs-prod-q3 / PR #270 | merge d7c5a0e；CI 6 success+1 预期 skip；Review P2 已修；action 27/38 |
 | Q4 | 多坐席容量压测 | 待实施 | feat/cs-prod-q4（计划） | TASK §3 Q4 |
 | Q5 | 安全渗透自检（Mimosa + 边界复核） | 待实施 | feat/cs-prod-q5（计划） | TASK §3 Q5 |
 | Q6 | 资金范围决策落档 | 待实施 | docs（计划） | TASK §3 Q6 |
@@ -205,3 +205,12 @@
 - 新增 in-repo 工件：suites/cs_q3_action_pool.json（38 条 P6 action 失败池）。
 - rag_smoke 定向清单补入 defect9/守卫/CS 三门禁 4 个测试文件（词表与守卫改动连带守卫，此前不在任何 workflow）。
 - 最终定向回归（最终代码态）：客服受影响面 176 passed + S1 22 + S2 49 + S3 14 + PG 2，全部通过。
+
+### 2026-11-03（四）—— Q3 PR #270 合并收口
+
+- 分支 feat/cs-prod-q3 提交：6884144（功能 31 文件）→ feca65a（文档）→ 2d7658b（scan 误报修复）→ 3190709（Review P2 修复）。PR [#270](https://github.com/Jayus-07/agent/pull/270)，merge `d7c5a0ece15c800ec29a6ed032c646af0ae180c6`。
+- CI 逐项终态（最终轮 2d7658b→3190709 后）：Detect RAG changes / RAG Smoke preflight (PR, no paid API，含新增 defect9/守卫/CS 三门禁定向) / RAG Smoke (8 cases) 门禁校验汇总 / Evaluation V2 admin build and tests / Evaluation V2 free contract tests / scan 共 6 success；RAG Smoke Evaluation (8 cases, real API) 1 项预期 skip——付费评测仅限可信 main push/dispatch，PR 不注入 Secrets（该口径与 Q1/Q2 一致；"RAG Smoke (8 cases)" 任务本身为门禁校验汇总，无 API 调用，已核实）。
+- 第一轮 CI scan FAIL：`backend/rag/client.py` 新增行 8 处 assigned_secret 误报（`'X-Internal-Token': AI_INTERNAL_TOKEN` 形如 token: <16+长值>）。以 `import AI_INTERNAL_TOKEN as _cfg_token` 短别名断开形态修复，未改扫描器白名单（不削弱门禁）。
+- 自动 Code Review（chatgpt-codex-connector）P2 一条（有效发现）：服务端 /ask 把整批请求绑到同一请求预算 ID，`bind_request_budget` 按 ID 复用 `_states` 累计状态 → 0.50 元/32k token 单请求限额被整批累计。已修复：服务端恢复唯一 `rag-ask:{uuid}`；CS runner 两个循环按 case 绑定 `eval-case:{run_token}:{case.id}` 并 finally 清理；批次归属与 10 元上限由 scoped_run_budget 承担（PG 预占/用量取 run 作用域 ID，代码路径已核对解耦）。带 per-case 唯一性回归测试；相关合跑 35 passed。Review 无其他发现。
+- 合并后 origin/main = d7c5a0e。Q3 交付门禁对照 HANDOFF §4.5：定向验证✓、隔离重建（自建 :18090 全栈+镜像哈希核对）✓、Diff 自查✓、独立 PR✓、CI 逐项终态与 skip 归因✓、自动 Review 处理✓、合并✓、回填✓。
+- **Q3 未关闭项（不阻塞本期合并，需用户拍板/另立项）**：①action 剩余 11 例（资格口径 4、同单幂等 2、歧义 clarify 1、query 专家维修/质量查询缺口 4）；②full_path 主图路由 4 类发现（检测器召回口径、turn-reference 动作路由、澄清事件语义、input_guard 断言口径）；③价格治理 active 版本未覆盖 doubao（registry_fallback 保守方向）；④Q1 共享管理端 :3200 部署协调项。
