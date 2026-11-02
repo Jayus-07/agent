@@ -4,7 +4,7 @@
 - 来源：2026-11-02 用户拍板「写公开投产实施计划，下一会话处理」；承接 `cs-evaluation-upgrade`（P1–P8 已收官，评测运营线达成受控试用口径）
 - Worktree：**新建** `D:\Program Files\workplace\agent-cs-prod`（勿复用 agent-gov——已停靠 docs/cs-eval-p8-wrapup 使命完结；分支自最新 origin/main）
 - 分支策略：每期独立分支 `feat/cs-prod-qN` 独立 PR；纯文档/计划分支 `docs/cs-prod-*`。**合并前显式逐项确认全部 CI 结论**（含 skipping 项核对是否非 RAG 预期）
-- 状态：**计划已立项，Q1 待实施**
+- 状态：**持续实施中，Q1 进行中；按 §7 推进**
 
 ---
 
@@ -41,12 +41,12 @@
 - ①**管理端非 rag 评测方式选项**：`frontend-admin/src/components/workbench/evaluation/proto/RunsTab.tsx` 发起评测表单（:124-184 附近）——非 rag 模块隐藏 semantic/ragas 选项（contract_only 终态口径）；若用户拍板接线 live 则另立项，不在本任务默认范围。前端改动需 frontend-admin build 验证（node_modules 用 junction 复用主仓库）。
 - ②**frontend-cs 生产构建验证**：`COMPOSE_PROJECT_NAME=agent docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-cs` 后 `up -d frontend-cs`，验证 `:3300/login` 200。动容器前先 `docker ps`/`netstat` 核查归属（并行会话纪律）。
 - ③**渠道决策落档**：`docs/domains/customer-service.md` 渠道段写入「真实渠道=web（2026-11-01 用户确认）；app/phone/wechat 未接入」。
-- ④**资金开关记录**：落档 `CS_BUSINESS_GATEWAY_MODE` / `CS_REFUND_REQUEST_MODE` 保持 disabled 及其含义（不阻塞 web 首期；资金真实后端另立项）。
+- ④**资金开关记录**：落档业务网关 http / sandbox 的真实语义与 `CS_REFUND_REQUEST_MODE=disabled`；业务网关并非独立资金开关，不设置无效 disabled（不阻塞 web 首期；资金真实后端另立项）。
 - ⑤**共享库残留清理**（逐项确认非活跃/无引用后处置，处置方式有疑义先报告）：
-  - `ai.unanswered_questions` 余 28 条测试残留（entry=16 已被 P8 intake 消费 reject，其余为 2026-11-02 测试批）；
-  - P6 副作用：`customer_service.tickets` eval_bot 名下 60 条工单（COMPLAINT-*/HANDOFF-* 前缀）、confirmation store eval 残留（地址修改 pending）、checkpointer `eval-cs-*` 线程；
+  - `ai.unanswered_questions` 实测 29 条（entry=16 intake 后原记录仍保留；日期跨 10 月，不能证明均为当日测试残留）；按 Q1-RESIDUALS.md 保留依据处理；
+  - P6 副作用：`customer_service.tickets` eval_bot 名下 60 条工单（COMPLAINT-*/HANDOFF-* 前缀）、confirmation store eval 记录（实测均 expired/cancelled，无 pending）、checkpointer `eval-cs-*` 线程；
   - rag 残留 case `6e6e3daa`（dataset smoke_refuse_mvmdmqfr v1.0.0，2026-10-24）——它在 published version items 内，**P7 archive 端点会拒绝**；需确认该数据集与 CI/评测引用关系后处置（禁删被 rag_smoke.yml 或 suite 引用的对象）；
-  - 候选层 398 条 approved 重复 candidates（promoted_case_id 指向已归档 case，无清理端点）——方案：经 `POST /v2/candidates/{id}/review` 逐条 reject 留痕（372 行 review 端点已存在），或评估后补候选清理端点（另走小 PR）；
+  - 候选层 398 条 approved 重复 candidates（promoted_case_id 指向已归档 case，无清理端点）——2026-11-02 用户确认保留历史审核记录，挂账候选发布过滤修复；现有 review_candidate 禁止覆盖 approved/rejected，不再次 reject、不直改审核结论；
   - govtest/p7v/p9g- 前缀测试数据确认非活跃后清。
 - **验收**：管理端非 rag 发起评测表单无误导选项；:3300 生产容器健康；customer-service.md 渠道/资金段落档；残留清单逐项清零或标注保留依据。
 
@@ -108,3 +108,25 @@
 | 渗透自检的边界 | 只读自检 + 受控验证，不做破坏性利用；外部渗透是否引入由用户拍板 |
 | 资金范围 | 纯用户拍板；disabled 即不阻塞 web 首期 |
 | 基线漂移 | live 基线以 P6 数字为参照；变化以「数字 + 依据」走 PR 记录 |
+
+## 7. 持续实施计划（2026-11-02 优化）
+
+目标保持不变：Q1+Q2 达到受控试用放量条件；Q1–Q6 全绿并完成主链路冒烟后才可宣布公开投产。按 Q1→Q2→Q3→Q4→Q5→Q6 实施，不以写出计划替代实施。
+
+| 阶段 | 最小实施路径 | 完成证据与停止条件 |
+|---|---|---|
+| Q1 | 修正非 RAG 表单与提交参数；组件真实渲染验证；两个前端生产构建；渠道与资金语义落档；逐项盘点残留 | 切换 RAG/CS 的 UI 与请求断言通过；生产容器健康；每类残留清零或有可核实保留依据；PR 合并 |
+| Q2 | 先核对 cs_faq 发布指针、fixture、索引世代与现有导入入口；只补缺失索引，避免无依据重建整个知识库 | ≥60 条 live 冒烟、繁忙率≤5%、路由门禁零回归；保留批次与成本证据 |
+| Q3 | 基于 Q2 干净基线归类 action 失败，再提出四项建议请用户拍板；只实施批准范围 | 决策记录齐全；实施项定向验证与 CI 全绿；不以修改期望掩盖真实缺陷 |
+| Q4 | 独立实例/端口与测试身份；先低负载探测再阶梯加压，记录资源、P95、错误率、连接恢复与状态正确性 | 报告明确实测容量和瓶颈；达不到业务要求则标记未验收，不用 HTTP 200 代替容量结论 |
+| Q5 | 开工核对 Mimosa 实际可用性；按对应安全 Skill 执行扫描，结合客服与评测 API、SSE/WS 做资源级授权验证 | 报告含范围、工具限制、有效发现与修复证据；没有工具时明确缺口，不宣称完成深扫 |
+| Q6 | 汇总所有资金入口及真实开关状态，建议首期关闭资金写入，向用户拍板；按决定验证 | 决策与实际行为一致；超出首期的真实资金后端另立项，不默认为已完成 |
+
+执行约束：
+- 每期独立分支/PR；实现→实际测试→Diff自查→PR→逐项核对 CI（含 skip 触发与路径过滤原因）→合并→回填 PROGRESS。用户已授权本持续计划的逐期 PR 与合并，不重复请求例行许可。
+- 共享服务先查 compose 工作目录、端口和活动连接；其他会话使用时采用宿主或隔离容器，不覆盖其构建。构建镜像也不代表已部署。
+- 残留只读盘点先行：发布版本、suite、运行快照、审计/候选来源引用都需核对。无法证明无引用或非活跃时保留并写明依据，不为清零直接删库。
+- 398 条 approved 候选按用户决定保留；过滤修复另立小 PR，不纳入本期清理施工。
+- 实测已知偏差：unanswered 当前 29 条，日期跨 10 月，不能沿用“28 条、全部为当日测试批”预设；smoke_refuse_mvmdmqfr 的 published version 有 2 个 suite version 引用，必须保留；eval_bot confirmations 当前均 expired/cancelled；eval-cs-* checkpoint 为 0。
+- Q3/Q6 必须等明确决策再实施依赖项；等待期间推进不依赖该决策的只读分析或验证。外部阻塞记录原因、已尝试证据与具体解法，不重复无效安装/测试。
+- 最终逐项回填验收矩阵、PR/HEAD、T0–T3 实测、Review处理、运行版本及未处置风险；有必需缺口则保持 UNVERIFIED/BLOCKED，不宣布全量投产。
