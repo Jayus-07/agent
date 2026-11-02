@@ -2,7 +2,7 @@
 
 - 任务文件：同目录 TASK.md（唯一事实源）；计划由 2026-11-02 会话立项（承接 cs-evaluation-upgrade 收官）
 - 更新时间：2026-11-02
-- 当前状态：**Q1/Q2/Q3 已合并；Q4 进行中（压测）；Q5/Q6 待实施**
+- 当前状态：**Q1–Q4 已合并；Q5/Q6 报告已交付（PR 流程中）——两拍板项待用户**
 
 ## 阶段状态总表
 
@@ -214,3 +214,22 @@
 - 自动 Code Review（chatgpt-codex-connector）P2 一条（有效发现）：服务端 /ask 把整批请求绑到同一请求预算 ID，`bind_request_budget` 按 ID 复用 `_states` 累计状态 → 0.50 元/32k token 单请求限额被整批累计。已修复：服务端恢复唯一 `rag-ask:{uuid}`；CS runner 两个循环按 case 绑定 `eval-case:{run_token}:{case.id}` 并 finally 清理；批次归属与 10 元上限由 scoped_run_budget 承担（PG 预占/用量取 run 作用域 ID，代码路径已核对解耦）。带 per-case 唯一性回归测试；相关合跑 35 passed。Review 无其他发现。
 - 合并后 origin/main = d7c5a0e。Q3 交付门禁对照 HANDOFF §4.5：定向验证✓、隔离重建（自建 :18090 全栈+镜像哈希核对）✓、Diff 自查✓、独立 PR✓、CI 逐项终态与 skip 归因✓、自动 Review 处理✓、合并✓、回填✓。
 - **Q3 未关闭项（不阻塞本期合并，需用户拍板/另立项）**：①action 剩余 11 例（资格口径 4、同单幂等 2、歧义 clarify 1、query 专家维修/质量查询缺口 4）；②full_path 主图路由 4 类发现（检测器召回口径、turn-reference 动作路由、澄清事件语义、input_guard 断言口径）；③价格治理 active 版本未覆盖 doubao（registry_fallback 保守方向）；④Q1 共享管理端 :3200 部署协调项。
+
+### 2026-11-03（五）—— Q4 容量压测（脚本修正 + 三段实测）
+
+- 脚本修正（HANDOFF §7 判断属实）：cs_dispatch_loadtest.py 重写为 open-loop 定时发射（旧实现串行，实际速率=1/延迟）；分位数只统计 2xx、错误按 status/异常独立分布；P95 ceil 索引防小样本越界；预检按 401/403/429/5xx 分类；--header 支持认证；默认路径改为真实存在的 /api/cs/customer-context（旧默认 /cs/conversations/stats 网关 404）。定向单测 4 passed（backend/tests/scripts/test_cs_dispatch_loadtest.py）。
+- 网关事实核实：CS 路由经 /api/* 兜底（剥前缀）+ gateway-auth（JWT 验签+会话闸 auth:session:{uid}:{jti}）+ limit-count 600 次/分/用户（≈10 RPS 反滥用基线）；应用层另需 X-API-Key（纵深）。
+- 身份链：项目 issue_access_token 签发 user 279 / agent 角色 / TTL 1800s，会话键写入共享 auth-redis；测后 auth:session:279:* 全部删除（残留 0），token 文件已删，凭据未入日志。
+- 实测（共享栈 :9080，只读端点）：突发 50 并发 50/50 成功 p50 8.53s（排队未失败）；突发 20 p50 0.56s；持续 8 RPS×180s **1441/1441 成功、零错误，p50=42ms / p95=116ms / p99=241ms**，发射=完成 8.0 rps 无积压；限流边界 25 RPS×30s 751 发射 589 成功 + 162×429（网关层拒绝，桶 600/分行为与配置一致）。
+- PR #275 Review 两条已修：P1 新测试文件补入 rag_smoke 定向清单（AGENTS.md 连带要求）；P2 httpx 默认连接池 100 会导致 open-loop 在途超池时客户端排队虚报发射速率——新增 _pool_size() 显式配置（max(并发, rps×超时, 512)）+ 单测；已核实在途≈rps×p95 远低于默认池，本报告数据不受影响。单测 5 passed。
+- 报告：docs/tasks/cs-public-launch/Q4-LOADTEST.md（解读/未覆盖场景/瓶颈分级）。原始 JSON 在 docs/reports/（随分支入库），SHA256 前 16：e362aca476f2881a / 67f0edd9c9ce02e3 / 69645e87ff9b7149 / 9697dc137992cd50。
+- 瓶颈分级：限流 600/分/用户=设计边界（放量前确认并发用户规模）；突发排队（50 并发 p50 8.5s）=可挂账（隔离栈复测 100/200 并发）；WS/写路径容量零数据=挂账（需隔离栈，不阻塞受控试用）。
+- 未覆盖如实声明：写路径、坐席状态流转、WS 长连接、主 agent 并行、资源水位——均需隔离 app 实例，本报告不据此宣称容量。
+
+### 2026-11-03（六）—— Q5 安全自检 + Q6 资金范围核对
+
+- **Q5 Mimosa 深扫**：本会话 Mimosa MCP 工具可用（HANDOFF「工具缺失」已失效）；jobId scan-job-mvzrfg8m-877b3546f6831efa，scanId scan-2026-11-02T21-22-50.452Z-77e8d4e922d1，seal sha256:722528c4…（密封完成）。304 findings（high 250）+ 依赖离线告警 88 条/14 包。逐类抽查+全部高危单点人工核实：硬编码凭据 3=误报（字典键/故意错误凭据测试占位）、SQL 74=服务端配置表名 DDL 拼接（值参数化）、SSRF 115=前端 fetch 与内部脚本、路径穿越 44=防御在位（realpath+commonpath/basename）；挂账 4 项（pptx ElementTree 解析用户上传 XML 建议换 defusedxml=中；验证码 random→secrets、演练脚本 shell=False、BM25 pickle→restricted unpickler=低），立即修=0。报告 Q5-SECURITY.md。
+- **Q5 授权边界逐端点复核**：13 个 cs_* 路由文件三档鉴权全覆盖、无未鉴权路由；会话对象级访问守卫（user+tenant 双匹配、仅当前认领坐席）覆盖全部按 ID 端点；工单详情 tenant+归属+404 防探测；evaluation_v2 42/42 路由有鉴权依赖（脚本核验）；WS 一次性票据 60s/单次/服务端反查 agent_id/API-Key 拒签；app :8000 仅绑 127.0.0.1（信任边界=网络边界）；customer_service 无 f-string SQL（参数化），sandbox 走 agent_readonly SELECT-only。报告 Q5-SECURITY.md §二—§四。
+- **Q6 资金入口全景**（共享栈运行态实测）：①退款申请 CS_REFUND_REQUEST_MODE 未设置=disabled ✓；②退款审核双开关未启=disabled ✓；③**order_cancel 无独立开关**且 gateway=http 下取消+退款链可达（终点 business-mock，幂等+身份闸在位）——真实后端接入前需补开关（挂账，用户拍板）；④/mall 演示商城 9/9 路由有鉴权；⑤CS_BUSINESS_GATEWAY_MODE=http 非资金开关。**当前全链路无真实资金通道**（全部指向 business-mock）。
+- **Q6 文档同步**：部署/prod-4c8g/README.md 修正「BUSINESS_GATEWAY 默认 disabled」旧描述（代码事实：默认 sandbox，disabled 非受支持值）。决策记录 Q6-FUNDS-DECISION.md：建议首期不开放真实资金动作（现状即满足），两个拍板项（首期范围、order_cancel 开关）待用户。
+- 交付物：Q5-SECURITY.md、Q6-FUNDS-DECISION.md、README 修正——docs/cs-prod-q5 与 docs/cs-prod-q6 两分支走 PR。
