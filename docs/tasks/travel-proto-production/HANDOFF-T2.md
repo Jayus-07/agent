@@ -36,13 +36,13 @@
 2. **修复**（transit_service.py schedule_day）：leg 构造块前移到 start 计算之前，`arrive_min = cursor + travel_minutes`，`start = max(arrive_min, open_min)`，`wait = start - arrive_min`（开门等候语义不被车程污染）；`travel_minutes = max(0, int(est.get("minutes") or 0))`。口径与 validator 精确对齐：`leg.minutes>0` → V2 映射 reliability=verified/estimated → validator 计入；`≤0` → unavailable → 不计入（排程也按 0）。`rebuild_days` 是唯一重排实现（首次排程/天气替换/repair 全走 schedule_day），一处修复全链生效。
 3. **新回归测试** `backend/tests/travel/test_schedule_travel_buffer.py` 5 用例（含把 schedule_day 产出内联映射为 validator document 直接调 `validate_trip_write` 断言不抛 SCHEDULE_OVERLAP——口径零漂移）：**5/5 绿**（先红后绿验证：修复前 4 红 1 绿，红用例精确复现缺口）。
 4. **既有排程测试**：`test_phase2_input_boundaries.py + test_transit_option.py + test_p0_mvp.py` → **73 passed**（无既有断言依赖旧的无缓冲时刻）。
+5. **travel + travel_v2 全量定向回归（2026-11-02 会话末补齐）**：`pytest backend/tests/travel backend/tests/travel_v2 -q` → **1569 passed, 84 skipped, 9 xfailed，零失败**（39 分钟；skip=环境门控、xfail=既有预期标记，均非本次修复引入）。weather/repair/golden 无依赖旧时刻的断言——**步骤 1 已完成，勿重复跑**。
 
 ### 剩余（下一会话按序）
 
-1. **定向回归**：`D:/Python/python.exe -m pytest backend/tests/travel backend/tests/travel_v2 -q`（上会话刚启动即被额度截断；重点看 weather/repair/golden 类测试是否有依赖旧时刻的断言——预期无，73 用例已过）。
-2. **rebuild + 真机验收**（T2 验收口径，见第五节）。
-3. **PROGRESS 回填**：把本文件「进度」内容并入 PROGRESS.md（含 T2 专项分析的根因修正版本——注意 PROGRESS.md 在 main@a6bea93 的版本才是最新，其「T2 专项分析」仍是旧提示词方案，需整体替换为根因修正版，参考本文件第一节与下方 validator 规则）。
-4. **提交 + PR**：双路径限定（`git add -A -- <paths>` + `git commit -m "..." -- <paths>`）；fix(travel) 一个 commit + docs 一个 commit；PR → CI 绿后合并并简报（延续「持续实施」授权）。
+1. **rebuild + 真机验收**（T2 验收口径，见第五节）。
+2. **PROGRESS 回填**：把本文件「进度」内容并入 PROGRESS.md（含 T2 专项分析的根因修正版本——注意 PROGRESS.md 在 main@a6bea93 的版本才是最新，其「T2 专项分析」仍是旧提示词方案，需整体替换为根因修正版，参考本文件第一节与下方 validator 规则）。
+3. **提交 + PR**：双路径限定（`git add -A -- <paths>` + `git commit -m "..." -- <paths>`）；fix(travel) 一个 commit + docs 一个 commit；PR → CI 绿后合并并简报（延续「持续实施」授权）。
 
 ### 关键事实（写 PROGRESS / PR 描述用）
 
