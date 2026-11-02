@@ -68,3 +68,5 @@
 - 补充验证：评测中心目录全量定向 Vitest 5 files / 10 tests PASS（9.75s）；独立 tsc --noEmit exit 0；Diff 静态自查无后端/授权/数据库写入变更。
 - Q2 只读预探：共享 rag-service 实际存在 /app/data/bm25/PUBLISHED.json 和索引文件，因此“缺失 BM25”的旧根因必须重新核实宿主与容器路径/发布指针，不盲目重建共享索引。
 - admin Docker build PASS，镜像 sha256:4dc84edc5d72638472cab1677b0e4ccb4b0c3faf090e1dbe65b9c09ce3b75c88；独立容器 agent-cs-prod-q1-admin-check 在 :13200 运行，宿主 /login 与容器内 fetch 均 200。共享 :3200 未更新，避免覆盖旅游会话；后续统一部署仍需协调。
+- Q1 PR #259，初始 HEAD 9c1ca42；自动 Review 提出 P2：不能将 travel/travel-provider 的离线质量评测标成 contract_only。已改为中性“离线评测（按方案执行）”，避免在前端复制后端模块能力注册表；补两旅游模块切换断言，定向测试 PASS。最终镜像需按修复后代码重建。
+- RAG skip 归因实测：本 PR changed paths 输入 rag_smoke_path_filter.py --event pull_request 返回 relevant=false，所以 preflight 跳过；付费 Evaluation 仅可信 main push/dispatch，PR 跳过属预期。自动 Review 已计入，不额外触发云端审查。

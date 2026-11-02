@@ -135,7 +135,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
         </select>
         {isRag ? <select aria-label="评测方式" value={mode} onChange={e => setMode(e.target.value)} className={ctl}>
           {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select> : <p className="self-center text-xs text-text-muted">离线契约校验（contract_only）</p>}
+        </select> : <p className="self-center text-xs text-text-muted">离线评测（按方案执行）</p>}
         <button type="button" className={ctlPrimary} disabled={busy || !suiteId || (isRag && !kbId)} onClick={() => void start()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始运行</button>
       </div>
       <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_1fr_1.2fr]">
