@@ -343,44 +343,32 @@ export async function register(
   return unwrapResult<RegisterResult>(body);
 }
 
-/** 清除历史明文凭据残留（幂等，随 getSavedUsername/clear 一并触发） */
+/** 清除历史明文凭据残留（幂等，随 getSavedUsername/clear 一并触发）。
+ * S7 审计修复：明文密码不再落 localStorage（任意同源脚本/浏览器 profile
+ * 读取即可复用），登录页只保留非敏感用户名偏好，凭据记忆交给浏览器
+ * 密码管理器；两代历史明文键在首次访问登录态时清除。 */
 function purgeLegacyCredentials(): void {
   try {
     localStorage.removeItem(LEGACY_CREDS_KEY);
-  } catch {
-    /* ignore */
-  }
-}
-
-/** 登录成功后按需记住账号密码，供当前浏览器下次自动填入 */
-export function saveCredentials(username: string, password: string): void {
-  if (!isBrowser()) return;
-  try {
-    localStorage.setItem(USERNAME_KEY, username);
-    localStorage.setItem(SAVED_CREDENTIALS_KEY, JSON.stringify({ username, password }));
-  } catch {
-    /* ignore */
-  }
-}
-
-export function getSavedCredentials(): SavedCredentials | null {
-  if (!isBrowser()) return null;
-  try {
-    const raw = localStorage.getItem(SAVED_CREDENTIALS_KEY);
-    if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (
-      typeof parsed === "object" && parsed !== null &&
-      "username" in parsed && typeof parsed.username === "string" &&
-      "password" in parsed && typeof parsed.password === "string"
-    ) {
-      return { username: parsed.username, password: parsed.password };
-    }
     localStorage.removeItem(SAVED_CREDENTIALS_KEY);
-    return null;
   } catch {
-    return null;
+    /* ignore */
   }
+}
+
+/**
+ * 登录回跳目标白名单化（S6 审计修复）：只接受本站路径。
+ * 协议相对（//evil.example）、绝对外域（https://evil.example）与反斜杠
+ * 变体（/\evil.example——浏览器把 \ 归一为 /，等价协议相对）一律回退
+ * 默认页；空值/异常同样回退。三端登录页共用同一语义，实现随端各自维护。
+ */
+export function safeRedirectPath(
+  target: string | null | undefined, fallback: string,
+): string {
+  if (!target) return fallback;
+  if (target.includes("\\")) return fallback;
+  if (!target.startsWith("/") || target.startsWith("//")) return fallback;
+  return target;
 }
 
 /** 兼容只记账号的流程，例如首次登录需要先修改临时密码 */
