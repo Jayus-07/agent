@@ -17,7 +17,7 @@ from __future__ import annotations
 from datetime import date
 
 from backend.tools.travel import routing
-from backend.travel.models.itinerary import ItineraryDay, KIND_VISIT
+from backend.travel.models.itinerary import ItineraryDay, KIND_MEAL, KIND_VISIT
 from backend.travel.models.brief import TravelBrief
 from backend.travel.services.transit_service import schedule_day
 from backend.travel_v2.services.trip_write_validator import (
@@ -163,3 +163,41 @@ class TestScheduleTravelBuffer:
 def _to_minutes(clock: str) -> int:
     hour, minute = clock.split(":")
     return int(hour) * 60 + int(minute)
+
+
+class TestLunchBeforeDeparture:
+    """Q1 审计修复回归：末日午餐的完整时长必须 ≤ 离开时刻。
+
+    历史：_place_lunch 无视 day_end（末日=离开时刻），景点 12:10 结束、
+    12:30 离开也会排出 12:10–13:10 的超时午餐。修复后放不下完整午餐
+    就不排，并把「时间不足」记入时间轴备注（不静默生成假排程）。"""
+
+    def _single_visit_day(self, departure: str | None) -> ItineraryDay:
+        # 单景点 08:30 开排 + 220 分钟 → 12:10 结束，正好落进午餐窗口
+        poi = make_poi(poi_id="a", name="景点A", open_time="07:00",
+                       suggested_minutes=220, close_time="23:59")
+        brief = TravelBrief(destination="测试城", days=1,
+                            departure_time=departure)
+        return schedule_day([poi], 1, date(2026, 11, 16), brief)
+
+    def test_departure_before_lunch_window_places_no_lunch(self):
+        day = self._single_visit_day("10:30")
+        assert all(item.kind != KIND_MEAL for item in day.items)
+        assert all("午餐" not in item.note for item in day.items)
+        assert all(_to_minutes(item.end) <= _to_minutes("10:30")
+                   for item in day.items)
+
+    def test_departure_inside_window_without_room_skips_lunch_with_note(self):
+        day = self._single_visit_day("12:30")
+        assert all(item.kind != KIND_MEAL for item in day.items), \
+            "20 分钟放不下完整午餐，不得排超时午餐"
+        note = day.items[-1].note
+        assert "午餐" in note and "时间不足" in note
+        assert all(_to_minutes(item.end) <= _to_minutes("12:30")
+                   for item in day.items)
+
+    def test_departure_with_room_keeps_lunch(self):
+        day = self._single_visit_day("13:30")
+        meals = [item for item in day.items if item.kind == KIND_MEAL]
+        assert len(meals) == 1
+        assert _to_minutes(meals[0].end) <= _to_minutes("13:30")
