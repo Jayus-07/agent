@@ -10,6 +10,11 @@
 - 坐席工作台实时层：WS `useAgentSocket`（ticket 鉴权、seq 游标补发、降级轮询）；坐席状态四态（`cs_agents.status`，away/offline 不派单）与接单开关（`accepting`）即时生效；坐席间转接复用 offer 状态机（拒单/超时回退 waiting_human 队列）；SLA warning/breach 分级事件幂等。
 - 侧栏订单复用 `AccountService` 与 `OrderService`；演示沙盒开启时仍由客服业务层映射到演示客户，页面明确标记演示数据。
 
+## 首期投产范围
+
+- 真实接入渠道为 web（2026-11-01 用户确认）；app、phone、wechat 尚未接入。
+- 首期退款申请写入保持 `CS_REFUND_REQUEST_MODE=disabled`；业务网关 `CS_BUSINESS_GATEWAY_MODE` 同时控制订单和物流查询，支持 http / sandbox，不将 disabled 当作关闭资金的开关。2026-11-02 本机共享 app 为 http 网关、退款申请未显式设置（默认 disabled）；此记录不代表其他支付或退款审核路径已经验收。资金首期范围与真实后端仍待 Q6 拍板。
+
 ## 领域职责与安全边界
 
 - Supervisor 按当前请求状态分派知识查询、业务查询、动作提案、投诉或人工接管；专家通过共享 state 和显式结果协作，不互相直接调用。

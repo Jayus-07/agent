@@ -102,7 +102,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
       const result = await evaluationService.createV2Run({
         suite_version_id: suiteId,
         source: 'manual',
-        evaluation_mode: mode,
+        evaluation_mode: isRag ? mode : 'offline',
         ...(isRag ? { kb_id: kbId } : {}),
         request_id: createIdempotencyKey(),
         ...(Object.keys(promptVersions).length ? { prompt_versions: promptVersions } : {}),
@@ -133,9 +133,9 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
           <option value="">选择已发布数据集方案</option>
           {suites.map(item => <option key={item.suite_version_id} value={item.suite_version_id}>{item.name} · {item.module} · v{item.version}（{item.case_count} 条）</option>)}
         </select>
-        <select aria-label="评测方式" value={mode} onChange={e => setMode(e.target.value)} className={ctl}>
+        {isRag ? <select aria-label="评测方式" value={mode} onChange={e => setMode(e.target.value)} className={ctl}>
           {Object.entries(MODE_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-        </select>
+        </select> : <p className="self-center text-xs text-text-muted">离线评测（按方案执行）</p>}
         <button type="button" className={ctlPrimary} disabled={busy || !suiteId || (isRag && !kbId)} onClick={() => void start()}><Play size={13} className="mr-1 inline" aria-hidden="true" />开始运行</button>
       </div>
       <div className="mt-3 grid gap-3 lg:grid-cols-[1.2fr_1fr_1.2fr]">
@@ -152,7 +152,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
             {kbs.map(item => <option key={item.kb_id} value={item.kb_id}>{item.name} · {item.kb_id}</option>)}
           </select>
           : <p className="self-center text-xs text-text-muted">非 RAG 方案：通过既有离线 Runner 执行，不调用模型与知识库。</p>}
-        <p className="self-center text-xs text-text-muted">{mode === 'offline' ? '离线模式不调用模型，结果可复现、零成本。' : mode === 'ragas' ? 'RAGAS 每题多次 Judge 调用，慢且消耗预算。' : '在线模式将真实调用模型生成回答。'}</p>
+        <p className="self-center text-xs text-text-muted">{!isRag || mode === 'offline' ? '离线模式不调用模型，结果可复现、零成本。' : mode === 'ragas' ? 'RAGAS 每题多次 Judge 调用，慢且消耗预算。' : '在线模式将真实调用模型生成回答。'}</p>
       </div>
     </Card>
 
