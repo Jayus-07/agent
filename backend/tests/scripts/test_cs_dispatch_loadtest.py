@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from scripts.cs_dispatch_loadtest import run_sustained, summarize
+from scripts.cs_dispatch_loadtest import _pool_size, run_sustained, summarize
 
 
 def test_summary_excludes_errors_from_latency_percentiles():
@@ -72,3 +72,15 @@ async def test_sustained_emits_near_target_rate(rps, duration):
     # open-loop 不等待响应：总耗时受发射节拍主导，远短于串行总耗时
     assert wall < duration + len(records) * 0.05 + 1.0
     assert all(status == 200 for _lat, status in records)
+
+
+def test_pool_size_covers_open_loop_inflight():
+    """Review P2：连接池必须覆盖 open-loop 在途上界（rps×超时），否则客户端排队虚报发射速率。"""
+    # 8rps×15s=120 在途 → 池至少 512 下限
+    assert _pool_size(concurrency=50, rps=8) == 512
+    # 25rps×15s=375 < 512 → 仍取下限
+    assert _pool_size(concurrency=10, rps=25) == 512
+    # 200rps×15s=3000 → 被 2000 上界钳制
+    assert _pool_size(concurrency=200, rps=200) == 2000
+    # 突发并发大于稳态在途时取并发
+    assert _pool_size(concurrency=1000, rps=1) == 1000

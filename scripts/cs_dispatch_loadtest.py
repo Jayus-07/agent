@@ -131,6 +131,16 @@ def _write_report(report: dict) -> Path:
     return out
 
 
+def _pool_size(*, concurrency: int, rps: int) -> int:
+    """客户端连接池上界：open-loop 在途请求 ≈ rps × 最坏延迟(TIMEOUT_S)。
+
+    Review P2：httpx 默认池 100，在途超过池容量时任务在客户端排队——
+    发射速率虚高（按任务数计）且排队时间混入延迟，会把客户端瓶颈误判
+    为服务端容量。池取 max(突发并发, rps×超时, 512) 并写入报告。
+    """
+    return max(concurrency, min(rps * int(TIMEOUT_S), 2000), 512)
+
+
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gateway", required=True, help="如 http://127.0.0.1:9080")
@@ -152,6 +162,7 @@ async def main() -> int:
         headers[name.strip()] = value.strip()
 
     url = args.gateway.rstrip("/") + args.path
+    pool = _pool_size(concurrency=args.concurrency, rps=args.rps)
     report: dict = {
         "script": "cs_dispatch_loadtest.py",
         "gateway": args.gateway,
@@ -159,10 +170,12 @@ async def main() -> int:
         "burst_concurrency": args.concurrency,
         "sustained_rps_target": args.rps,
         "sustained_duration_s": args.duration,
+        "client_pool_max_connections": pool,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
 
-    async with httpx.AsyncClient(timeout=TIMEOUT_S) as client:
+    limits = httpx.Limits(max_connections=pool, max_keepalive_connections=pool)
+    async with httpx.AsyncClient(timeout=TIMEOUT_S, limits=limits) as client:
         probe_lat, probe_status = await _one_get(client, url, headers)
         report["probe"] = {"status": str(probe_status), "latency_s": round(probe_lat, 4)}
         ok_probe = isinstance(probe_status, int) and 200 <= probe_status < 300

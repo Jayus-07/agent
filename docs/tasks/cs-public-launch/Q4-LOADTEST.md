@@ -15,6 +15,7 @@ HANDOFF §7 判断属实，旧脚本不能证明目标 RPS 或错误率。修正
 | 预检只挡 5xx，401/403 与限流冲突不区分 | 预检按 401/403/429/5xx 分类归因后中止 |
 | 不支持认证 | `--header` 可重复注入（本链路需 JWT + X-API-Key 双凭据） |
 | 默认路径 `/cs/conversations/stats` 网关 404（路由不存在） | 默认改 `/api/cs/customer-context`（真实只读端点，覆盖 gateway-auth+应用身份+DB 读） |
+| httpx 默认连接池 100，在途超池时客户端排队会虚报发射速率（Review P2） | `_pool_size()` 显式配置（max(并发, rps×超时, 512)）并写入报告。本报告实测在途 ≈ rps×p95（8×0.116<1）远低于默认池 100，已有数据不受影响 |
 
 定向单测：`backend/tests/scripts/test_cs_dispatch_loadtest.py` 4 passed（错误不污染分位数、小样本不越界、open-loop 发射速率接近目标且远快于串行）。
 
