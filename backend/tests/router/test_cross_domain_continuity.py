@@ -153,7 +153,10 @@ def test_same_domain_customer_service_continuity(first_query, second_query):
     assert first["domain_decision"]["domain"] == "customer_service"
     assert second["domain_decision"]["domain"] == "customer_service"
     assert second["capability_decision"]["capability"] == "customer_service"
-    assert second["execution_decision"]["mode"] == "direct"
+    # 域连续性不授予执行权限；旧元数据缺少可信候选时必须安全澄清。
+    assert second["execution_decision"]["mode"] == "plan"
+    assert second["execution_decision"]["target"] == "clarify"
+    assert second["capability_decision"]["candidates"][0]["permission_ready"] is False
     assert second["routing_context"] == second_context
     _assert_trace(second)
     _assert_legacy_fields_preserved(second)
@@ -309,7 +312,9 @@ def test_engine_route_decision_trace_is_serializable_and_non_destructive():
 
     _assert_trace(result)
     assert result["capability_decision"]["capability"] == "sql.query"
-    assert result["execution_decision"]["mode"] == "direct"
+    # 旧 direct 提示不能替代统一能力与权限校验。
+    assert result["execution_decision"]["mode"] == "plan"
+    assert result["execution_decision"]["target"] == "clarify"
     assert result["legacy_used"] is False
     assert result["route_decision"] == legacy
     assert result["route_mode"] == "direct"

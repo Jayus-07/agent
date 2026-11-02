@@ -32,8 +32,8 @@ def _reset_runtime_context() -> None:
 def test_all_capabilities_have_complete_tool_specs() -> None:
     result = validate_tool_spec_registry()
     assert result["tool_registry_pass"] is True
-    assert result["capability_spec_count"] == 17
-    assert result["tool_spec_count"] >= 56
+    assert result["capability_spec_count"] == 20
+    assert result["tool_spec_count"] >= 63
     assert all(
         spec.params_schema["additionalProperties"] is False
         for spec in all_tool_specs().values()

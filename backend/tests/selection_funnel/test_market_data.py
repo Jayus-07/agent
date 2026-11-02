@@ -249,6 +249,12 @@ def client():
     from backend.app.api.routes.selection_funnel import router
     app = FastAPI()
     app.include_router(router)
+    from backend.app.api.deps import (
+        OperatorIdentity, require_editor_user, resolve_operator_role,
+    )
+    identity = lambda: OperatorIdentity(role="editor", actor="user:test")
+    app.dependency_overrides[resolve_operator_role] = identity
+    app.dependency_overrides[require_editor_user] = identity
     return TestClient(app)
 
 

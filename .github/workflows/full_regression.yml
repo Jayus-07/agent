@@ -18,6 +18,13 @@ on:
         required: false
 
 jobs:
+  matrix-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 检查测试目录覆盖
+        run: python scripts/check_full_regression_coverage.py
+
   pytest-suite:
     name: pytest ${{ matrix.suite.name }}
     runs-on: ubuntu-latest
@@ -110,7 +117,8 @@ jobs:
           - { name: prompts-context, paths: "backend/tests/prompts backend/tests/context_budget" }
           - { name: tools-security-obs, paths: "backend/tests/tools backend/tests/security backend/tests/observability" }
           - { name: services-travelv2, paths: "backend/tests/services backend/tests/memory backend/tests/travel_v2" }
-          - { name: misc, paths: "backend/tests/audit backend/tests/business_report backend/tests/config backend/tests/domain_runtime backend/tests/inventory backend/tests/mcp_registry backend/tests/messaging backend/tests/node_runtime backend/tests/runtime backend/tests/scripts backend/tests/skills backend/tests/tool_runtime backend/tests/workers" }
+          # 2026-11-02 对差收口：7 个目录、209 个用例此前未进入全量。
+          - { name: misc, paths: "backend/tests/audit backend/tests/business_report backend/tests/config backend/tests/domain_runtime backend/tests/inventory backend/tests/mcp_registry backend/tests/messaging backend/tests/node_runtime backend/tests/runtime backend/tests/scripts backend/tests/skills backend/tests/tool_runtime backend/tests/workers backend/tests/agents backend/tests/eval backend/tests/router backend/tests/selection_decision backend/tests/selection_funnel backend/tests/tasks backend/tests/tool_governance" }
           - { name: backend-root, paths: "" } # backend/tests 根散文件，步骤内展开
           - { name: repo-tests, paths: "tests" }
     steps:
@@ -233,7 +241,7 @@ jobs:
 
   summary:
     name: Regression summary
-    needs: pytest-suite
+    needs: [pytest-suite, matrix-coverage]
     if: always()
     runs-on: ubuntu-latest
     steps:

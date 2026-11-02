@@ -10,7 +10,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import backend.app.api.routes.selection_decision as route_mod
-from backend.app.api.deps import OperatorIdentity, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity, require_editor_user, resolve_operator_role,
+)
 from backend.selection_decision.store import SelectionDecisionStore
 from backend.tests.fixtures.pg_env import (  # noqa: F401
     pg_clean_tables,
@@ -35,6 +37,9 @@ def env(tmp_path, monkeypatch):
     # 2026-09-24 STOP A：路由挂运营角色门禁；本文件只测业务契约，
     # 门禁行为由 tests/api/test_selection_routes_authz.py 覆盖
     app.dependency_overrides[resolve_operator_role] = lambda: OperatorIdentity(
+        role="editor", actor="user:test")
+    # 写接口通过独立依赖校验，业务测试显式提供已授权用户。
+    app.dependency_overrides[require_editor_user] = lambda: OperatorIdentity(
         role="editor", actor="user:test")
     return TestClient(app), store
 
