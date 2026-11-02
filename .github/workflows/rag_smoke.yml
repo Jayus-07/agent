@@ -153,6 +153,7 @@ jobs:
             tests/evaluation/test_release_gate_tier_samples.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             tests/evaluation/test_rag_runner.py \
+            tests/evaluation/test_cs_live_entrypoint.py \
             backend/tests/rag/test_specialized_budget.py \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
