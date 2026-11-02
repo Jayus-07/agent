@@ -2,7 +2,7 @@
 
 > 任务 ID：ci-debt-blindspots
 > 创建：2026-11-02（守护轮会话立项；前序 ci-regression-debt 已 COMPLETED）
-> 状态：RUNNING（计划就绪，待执行；预计 1 个会话约半天）
+> 状态：COMPLETED（#261 收口 + #264/#265 修复两起 suite 竞态；main 无参数全量 run 41497402474 15/15 全绿）
 
 ## 目标
 
@@ -61,12 +61,12 @@
 
 ## 五、验收
 
-- [ ] P0：scheduled 首跑结论与 v30 一致（13/13），或按四步法清偿后一致。
-- [ ] P1：misc suite 收口 7 目录；dispatch `suites=misc` 首曝清单清零（不 skip/xfail、不放宽断言、不扩大 mock）。
-- [ ] P1：dispatch 无参数全量 → **15 job（13 suite + summary + matrix-coverage）全绿**，用例口径含 209 例收口。
-- [ ] P1.5：两个守卫在位且验证过「会红」（临时注入假违例验证后还原）。
-- [ ] P2：三处文档更新合入，与 workflow/测试实态一致（文档标准：文档与代码冲突时以实态为准修正）。
-- [ ] 收官：TASK.md 状态改 COMPLETED，本目录 PROGRESS.md 回填曲线（首曝数 → 0）、run 号与坑位。
+- [x] P0：scheduled run 41426703350 / main@144aea7，14/14 job success（13 suite + summary），与 v30 全绿一致。
+- [x] P1：misc suite 收口 7 目录；dispatch `suites=misc` 首曝清单清零（不 skip/xfail、不放宽断言、不扩大 mock）。
+- [x] P1：dispatch 无参数全量 → **15 job（13 suite + summary + matrix-coverage）全绿**，用例口径含 209 例收口。main run 41497402474（HEAD c992708）success，12688 passed / 142 skipped / 9 xfailed；期间两起 suite 竞态分别由 #264（rag 残留守卫跨 worker 误关价格行）与 #265（travel bulkhead 共享池未按用例隔离）修复。
+- [x] P1.5：两个守卫在位且验证过「会红」（临时注入假违例验证后还原）。
+- [x] P2：三处文档更新合入，与 workflow/测试实态一致（文档标准：文档与代码冲突时以实态为准修正）。
+- [x] 收官：TASK.md 状态改 COMPLETED，本目录 PROGRESS.md 回填曲线（首曝数 → 0）、run 号与坑位。
 
 ## 六、纪律与边界
 
