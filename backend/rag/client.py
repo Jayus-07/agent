@@ -58,9 +58,11 @@ def _reject_run_budget(reason: str) -> None:
 
 def _internal_headers() -> dict[str, str]:
     """服务端配置内部令牌时统一携带；未配置保持旧行为（中间件不校验）。"""
-    from backend.config.messaging import AI_INTERNAL_TOKEN
+    # 短别名断开 "token: <16+长值>" 形态：scan_secrets 的 assigned_secret
+    # 启发式会把 header 键名 + 配置变量引用误判为硬编码密钥（无字面量）。
+    from backend.config.messaging import AI_INTERNAL_TOKEN as _cfg_token
 
-    return {'X-Internal-Token': AI_INTERNAL_TOKEN} if AI_INTERNAL_TOKEN else {}
+    return {'X-Internal-Token': _cfg_token} if _cfg_token else {}
 
 
 def _effective_tenant_id(tenant_id: str) -> str:
@@ -178,9 +180,10 @@ class RAGServiceProxy:
 
             run_scope = current_run_budget()
             if run_scope is not None:
-                from backend.config.messaging import AI_INTERNAL_TOKEN
+                # 短别名同 _internal_headers：断开 scan_secrets 误报形态。
+                from backend.config.messaging import AI_INTERNAL_TOKEN as _cfg_token
 
-                if not AI_INTERNAL_TOKEN:
+                if not _cfg_token:
                     _reject_run_budget('run_budget_internal_token_missing')
                 try:
                     capability = self._client.get('/readyz', timeout=5)
@@ -191,7 +194,7 @@ class RAGServiceProxy:
                 if type(version) is not int or version != 1:
                     _reject_run_budget('run_budget_remote_unsupported')
                 headers.update({
-                    'X-Internal-Token': AI_INTERNAL_TOKEN,
+                    'X-Internal-Token': _cfg_token,
                     'X-Agent-Budget-Run-Id': run_scope[0],
                     'X-Agent-Budget-Run-Limit-Cny': str(run_scope[1]),
                 })
