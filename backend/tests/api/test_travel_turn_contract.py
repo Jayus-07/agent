@@ -70,6 +70,15 @@ def test_invalid_turn_contract_is_rejected(payload: dict) -> None:
         TravelPlanRequest.model_validate(payload)
 
 
+def test_message_limit_allows_v2_readonly_prompt_and_rejects_oversize() -> None:
+    """V2 只读咨询把行程事实 JSON 拼进 message，实测两天行程即 2206 字符；
+    旧上限 2000 会让整条只读通道 422。放宽后常规量级须放行、超限仍拒绝。"""
+    readonly_prompt = '请只读回答用户问题。正式行程事实 JSON：' + 'x' * 2200
+    assert TravelPlanRequest(message=readonly_prompt, mode="chat").mode == "chat"
+    with pytest.raises(ValidationError):
+        TravelPlanRequest.model_validate({"message": "x" * 20001})
+
+
 def test_response_metadata_distinguishes_draft_and_preserves_version_refs() -> None:
     result = _attach_travel_response_metadata(
         {

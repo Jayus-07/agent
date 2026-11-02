@@ -242,6 +242,41 @@ afterEach(() => {
 })
 
 describe('V2 工作台 Trip 状态隔离', () => {
+  it('窄屏对话入口定位同页唯一助手，保留草稿与服务端会话', async () => {
+    mocks.fetchTripConversation.mockResolvedValueOnce({
+      trip_id: 'trip-mobile', conversation_id: 'travel-mobile-original', linked: true,
+    })
+    const page = mount('trip-mobile')
+    await load(tripRequest(0), makeTrip('trip-mobile', '移动端行程'))
+    const link = [...page.container.querySelectorAll('a')]
+      .find((entry) => entry.textContent?.trim() === '对话')
+    expect(link?.getAttribute('href')).toBe('#travel-trip-conversation')
+    const panel = page.container.querySelector('#travel-trip-conversation')
+    expect(panel).not.toBeNull()
+    expect(panel?.querySelectorAll('[aria-label="旅行对话"]')).toHaveLength(1)
+    expect(page.container.querySelectorAll('[aria-label="旅行对话"]')).toHaveLength(1)
+    // P5-A 回归：jsdom 不计算布局，这里锁定高度约束链的布局契约——对话宿主
+    // 必须是 flex 列容器，否则组件根的 flex-1/overflow-hidden 失效，消息增多后
+    // 输入框会被内容撑出助手面板的 overflow-hidden 裁切区。
+    const conversationHost = page.container.querySelector('[aria-label="旅行对话"]')?.parentElement
+    expect(conversationHost?.className).toContain('flex')
+    expect(conversationHost?.className).toContain('flex-col')
+    expect(conversationHost?.className).toContain('min-h-0')
+    expect(conversationHost?.className).toContain('flex-1')
+    const input = panel!.querySelector('textarea')!
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!
+      setter.call(input, '保留这条未发送的草稿')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => { link!.click() })
+    expect(panel!.querySelector('textarea')).toBe(input)
+    expect(input.value).toBe('保留这条未发送的草稿')
+    expect(mocks.fetchTripConversation).toHaveBeenCalledTimes(1)
+    expect(mocks.conversationRequests.every((entry) =>
+      !entry.enabled || entry.conversationId === 'travel-mobile-original')).toBe(true)
+  })
+
   it('服务端没有 Trip 会话关联时保留行程查看但不加载 URL 对话', async () => {
     const candidate = 'travel-workspace-unlinked-candidate'
     window.history.replaceState({}, '', `/travel/itineraries/trip-unlinked?conversation_id=${candidate}`)
