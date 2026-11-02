@@ -118,6 +118,10 @@ def schedule_day(
     # 16:00 到达补一顿午餐是假排程；晚间用餐由美食推荐卡承接，不进时间轴。
     lunch_latest = 15 * 60
     lunch_done = False
+    # Q1 审计修复：午餐在窗口内、但末日剩余时间放不下完整午餐时跳过并
+    # 记备注——历史上无视 day_end 直接插入，景点 12:10 结束、12:30 离开
+    # 也会排出 12:10–13:10 的超时午餐。
+    lunch_skipped_for_time = False
 
     prev_item: ItineraryItem | None = None
     prev_coord: tuple[float, float] | None = None
@@ -130,9 +134,18 @@ def schedule_day(
         lunch_done = True
         prev_item = item  # 用餐不改变所在位置，prev_coord 保持
 
+    def _maybe_place_lunch() -> None:
+        """窗口内且完整午餐能在 day_end（末日=离开时刻）前放下才插。"""
+        nonlocal lunch_skipped_for_time
+        if lunch_done or not (lunch_start <= cursor < lunch_latest):
+            return
+        if cursor + lunch_minutes > day_end_min:
+            lunch_skipped_for_time = True
+            return
+        _place_lunch()
+
     for poi in ordered:
-        if not lunch_done and lunch_start <= cursor < lunch_latest:
-            _place_lunch()
+        _maybe_place_lunch()
 
         # 车程衔接缓冲（T2）：上一站到本站的车程先计入到达时刻，再叠加开门
         # 等候。必须与 trip_write_validator 的 SCHEDULE_OVERLAP 同口径——
@@ -190,9 +203,13 @@ def schedule_day(
         prev_item = item
         prev_coord = (poi.lat, poi.lng)
 
-    if (not lunch_done and day.items
-            and lunch_start <= cursor < lunch_latest):
-        _place_lunch()
+    _maybe_place_lunch()
+
+    if lunch_skipped_for_time and day.items:
+        last = day.items[-1]
+        extra = (f"剩余时间不足以安排完整午餐（约 {lunch_minutes} 分钟），"
+                 "请调整离开时间或自行安排午餐")
+        last.note = f"{last.note}；{extra}" if last.note else extra
 
     # 有效活动时长只计到访项：用餐是必需开销不是游玩强度，通勤由地理轴
     # 单独约束。把这两者算进来会掩盖真正的超量，也会让两轴互相包含。

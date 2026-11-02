@@ -54,3 +54,18 @@
 - T2 测试：新增 backend/tests/api/test_data_api_authorization.py 8 例（匿名拒绝/viewer 全拒/editor 读通写拒+enable_write 非授权依据/admin collect 正例不触写库/穿越文件名封在根内/反斜杠净化/失败清理不碰哨兵/非 CSV-JSON 拒绝）。UPLOAD_DIR monkeypatch 至 tmp，不污染仓库。
 - 验证：定向 pytest 8 passed（38.12s）；api_router 装配检查通过。generate/collect 走本地静态数据集回退路径，enable_write=False 不触库。
 - 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；前端 datasets 页对低角色用户将收到 403（frontend-admin 使用者为 admin，实际影响面预计为零，前端提示文案未改）。
+
+## 2026-11-03 W2 收官（含一次环境形态修正）
+
+- PR #271 合并（1829035）。随后 main 全量 run 41512457337 唯一失败：test_anonymous_denied 断言 401/403，但 CI 未配置 AI_INTERNAL_TOKEN 时匿名请求经内部令牌通道 fail-closed 返回 503（InternalTokenNotConfigured）。拒绝语义成立、拒绝码依赖环境——PR #272 修正为 401/403/503 拒绝家族（merge 1ff0a36），本地两种形态均验证。
+- main 无参数全量 run 41515055545（HEAD 1ff0a36）：15/15 success。W2 工作树已按合并+干净移除。
+
+## 2026-11-03 W3 批次实施完成（未提交，待确认）
+
+- 工作树 C:\Users\wh\.codex\worktrees\fix-travel-constraints\agent；分支 codex/fix-travel-constraints；基线 1ff0a36。范围：Q1（P2）+ Q2（P2）+ C1（P3）。
+- Q1：schedule_day 的午餐补插加 _maybe_place_lunch 守卫——完整午餐（窗口 60 分钟）能在 day_end（末日=离开时刻）前放下才插入；放不下则跳过并把「剩余时间不足以安排完整午餐」记入时间轴末项备注，不静默生成超时午餐。离开早于午餐窗口的旧行为不变（本来就不插）。
+- Q2：_RE_NEGATED_CHILD_CONTEXT 连接词枚举扩充——否定词（不/没有/无/非/别/勿）+ 显式动词段（需要/想要/打算/准备/考虑/安排/想/要/用/带/携带/携）+ 「带」段 + 儿童词；「不想带孩子」「不要带孩子」等 8 类表达不再残留「带孩子」被 _RE_COMPANION 误判。刻意不做自由字符桥接（「不妨带孩子」正向表达不误吞）；转折正例（「但想考察亲子酒店」）靠掩码只吞否定短语保留。
+- C1：test_schedule_travel_buffer.py 加入 rag_smoke.yml 定向清单（紧邻 test_negated_child_context，同语法）。
+- 测试：test_negated_child_context.py +10 用例（8 类否定短语表驱动 + 转折保留 + 无桥接护栏）、test_schedule_travel_buffer.py +3 边界（离开早于窗口/窗口内放不下/放得下）。定向 31 passed。
+- 回归：午餐与儿童短语相关 9 个测试文件 213 passed（plan_diff/phase2_input_boundaries/requirement_agent_contract/turn_decision/weather_expert/p0_mvp/phase4_p1_batch/itinerary_adapter/trip_edit_operations）。
+- 未覆盖风险：本机共享栈未重建（UNVERIFIED，由 PR 门禁与合并后 CI 全量覆盖）；rag_smoke 新增路径已按等效定向命令本地收集执行。
