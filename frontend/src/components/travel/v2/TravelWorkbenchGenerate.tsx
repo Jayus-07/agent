@@ -8,8 +8,8 @@
  * 伴随（澄清选项/tool 卡片）。保存经服务端确认后 router.replace 进正式
  * 工作台编辑态（服务端行程为事实源，无缝衔接）。
  *
- * 生成引擎 = useTravelPlanGeneration（与 TravelChatPage 同一实现，写状态
- * 机/SSE 契约/幂等重试零复制）；草稿地图复用 TravelV2Map。
+ * 生成引擎 = useTravelPlanGeneration 单一实现（P4 自 TravelChatPage 抽出；
+ * 写状态机/SSE 契约/幂等重试零复制）；草稿地图复用 TravelV2Map。
  */
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'

@@ -1,6 +1,6 @@
 # TASK: 旅游平台原型生产化（travel-proto-production）——原型功能全集复刻进真实前端
 
-> 创建：2026-11-01 · 状态：**执行中（T1/D0/P1/P3/P4a 已合并；下一阶段 P4b → T2 → P2/P5 → P6，接力计划见 PROGRESS「总计划全景」）**
+> 创建：2026-11-01 · 状态：**执行中（T1/D0/P1/P3/P4a 已合并；P4b 已完成待 PR 合并；下一阶段 T2 → P2/P5 → P6，接力计划见 PROGRESS「总计划全景」）**
 > 用户需求原话（2026-11-01）：「现在的生产旅游平台不是用我的原型图，需要把原型图完全复刻到生产环境……首页点和 AI 聊聊跳转的原型图页面，相当于原型图出来用户系统外，全替换原来生产的旅游平台」；补充：「原型图不只布局，还有很多功能是原来旅游平台没有的。目前原型图是可以模拟生产，只是差后端真实数据」。
 
 ## 0. 需求解读（执行会话开工前与用户复核一遍）
@@ -110,7 +110,7 @@
 | **P2 首页对照校对**（v1 降级：#220 已落全量） | H1-H7 逐屏对照原型点测，只修真差异 | TravelHome.tsx 校对 | 原型首页对照点测（桌面+移动）；H1-H7 全勾 |
 | **P3 工作台功能块** | W2 概览统计块（travelOverview 六行单一事实源）+ W3 天数 chip 主题（行内加天=原型误读已修正）；W7/W11 实测已对齐零改动 | TravelV2TripWorkspace、travelOverview | ✅ 合并 #240；W2 六行+chip 主题真机点测 |
 | **P4a 生成流引擎 + 工作台生成态** | useTravelPlanGeneration 单一实现（ChatPage 10/10 回归）+ `/travel/itineraries/new` 三列生成态（草稿概览/地图+生成面板+对话伴随）+ 保存 replace 进工作台；后端冲突消息可读性修复 | TravelChatPage/新 hook/新视图/trips.py | ✅ 合并 #246；真机 4+ 轮链路点测 |
-| **P4b 入口切换 + chat 废弃** | 首页输入卡/胶囊改指 `/travel/itineraries/new`；`/travel/chat` 服务端重定向（trip_id→工作台，prompt→生成态，旧链接兼容）；删 TravelChatPage（工作台已内嵌对话，移动端「对话」钮改指工作台）；测试迁移（UNKNOWN 重试/决策令牌/澄清断言迁 WorkbenchGenerate/hook 级） | TravelHome/app/travel/chat/删 TravelChatPage | PR + 决策 5 收口 + 旧链接兼容核对 |
+| **P4b 入口切换 + chat 废弃** | 首页输入卡/胶囊改指 `/travel/itineraries/new`；`/travel/chat` 服务端重定向（trip_id→工作台，prompt→生成态，旧链接兼容）；删 TravelChatPage（工作台已内嵌对话，移动端「对话」钮改指工作台）；测试迁移（UNKNOWN 重试/决策令牌/澄清断言迁 WorkbenchGenerate.test） | TravelHome/app/travel/chat/删 TravelChatPage | ✅ 完成（待 PR 合并）；旧链接兼容真机核对通过 |
 | **T2 planner 排程约束对齐**（2026-11-02 立项） | 真实生成反复触发服务端 SCHEDULE_OVERLAP（planner 已拿车程 27min 但排程不留衔接缓冲）：读 validator 精确规则 → 规划链提示词同步该硬约束（走 prompt 发布治理）→ 评测加排程可行性断言（AGENTS.md 第 8 条连带）→ 验收=不同城市生成 ≥3 次全过创建 + P4a 生成态保存→跳转全链走通 | 规划链 prompt/评测资产（validator 只读不动） | PR + 评测连带 + 真机验收 |
 | **P5 历史/列表/地图形态校对** | W9 抽屉/时间线样式、L1 照片卡视觉、W14 invalidateSize 校正（CDN 回退已排除）、W15 断点点测 | HistoryPanel/TemplateCatalog/TravelV2Map | PR + L/W9/W14 全勾 |
 | **P6 总验收** | 原型逐场景浏览器点测（全页面）；移动端断点；408+tsc；`devctl.bat rebuild` 运行态全链；PROGRESS 回填 F 清单 | — | 用户逐页验收 |

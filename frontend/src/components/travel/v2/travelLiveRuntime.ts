@@ -36,8 +36,8 @@ export function resolveTravelStreamOutcome(events: TravelStreamEvent[]): TravelS
     return { kind: 'clarification', response }
   }
   if (response.itinerary) {
-    // 原型 F03 两段式：plan 结果交由 TravelChatPage 渲染草稿预览，用户确认后才创建正式 Trip；
-    // 保存动作与幂等键由页面持有，这里只负责把 SSE 结果归一为 plan。
+    // 原型 F03 两段式：plan 结果交由工作台生成态（TravelWorkbenchGenerate）渲染草稿
+    // 预览，用户确认后才创建正式 Trip；保存动作与幂等键由消费方持有，这里只负责把 SSE 结果归一为 plan。
     return { kind: 'plan', response }
   }
   return { kind: 'answer', response }
