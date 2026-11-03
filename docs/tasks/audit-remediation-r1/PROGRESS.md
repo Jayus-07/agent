@@ -142,3 +142,16 @@
 - `test_auth_local.py` 全套恢复通过（含既有不锁定契约，注入 Redis 桩）→ 新旧合计 15 passed
 - 迁移 131 活库事务干跑（BEGIN→执行→ROLLBACK）通过，合并后由 db-migrate 自动执行
 - auth 关联套件（session_family / refresh_claims / rbac_user_lifecycle / security_ops / sys_config_admin）→ 54 passed（仅本次受影响的 login 用例外全部通过）
+
+## 第七轮：P2 收官三项（fix/audit-r7-p2-wrapup）
+
+**实现**：
+1. **OOXML 部件实体扩展防护**（pptx_parser.py）：新增 `_parse_ooxml_xml`（前置 DTD/ENTITY 检测 fail-closed + feed/close 解析，同 xml_parser 口径），5 处裸 `ET.fromstring(archive.read(...))` 全部替换。合法 OOXML 部件全为 namespace 化元素，零误伤。xml_parser 同类问题已由 1458070 修复（核对确认），本轮补齐 pptx 侧 5 处。defusedxml 离线不可用，零依赖方案（Mimosa hook 拦截后按其建议口径调整形态通过）。
+2. **OCR 用量接入统一预算链路**（ocr.py）：`_record_ocr_usage` 成功分支追加 `record_model_usage` 结算——存在请求级预算上下文（/chat 内 RAG 技能实时解析）时 token 计入预算；后台索引任务无上下文自然跳过（no_request_budget）。软失败不影响主流程；视觉调用不走 proxy 为既有裁决（文本 chat 角色通道，改造风险大于收益）。
+3. **/chat/messages DTO 契约**（schemas.py + chat.py）：`ChatMessagesRequest`（session_id ≤128、messages ≤200 条、单条 role ≤32 / content ≤100k 白名单）——裸 dict 直透持久层收口为 422 语义。
+
+**competitor 租户列裁决（暂缓）**：当前单租户部署现实（网关注入 default、迁移 131 刚收口空租户），租户列改造需多表迁移（watch/snapshot/config/events）+ 爬虫管线扫描语义重构 + watch url 全局 UNIQUE 改联合唯一——为不存在的多租户场景做高风险迁移不符合最小改动原则。**标注为「多租户启用前必做」前置项**；角色闸（第三轮）已把越权者挡在门外，现阶段风险可接受。
+
+**验证**：
+- 新增 `backend/tests/api/test_p2_wrapup_fixes.py`（8 passed）：实体爆炸 payload 拒绝 / 合法部件零误伤 / OCR 预算结算与 error 跳过 / messages 超批超长缺字段 422 + 合法放行
+- 既有套件（chat_memory_persistence / enterprise_document_structure / ocr_registered_model / session_ownership）→ 26 passed，零回归

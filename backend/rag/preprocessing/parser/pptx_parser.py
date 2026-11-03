@@ -20,6 +20,20 @@ _NS = {
 _SLIDE_RE = re.compile(r"^ppt/slides/slide(\d+)\.xml$")
 _MAX_ENTRIES = 20000
 _MAX_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+# 实体扩展防护（审计 P2 批次）：标准解析器会接受内部 DTD 实体，恶意 pptx
+#（zip 内部件含实体爆炸）可致解析资源耗尽。合法 OOXML 部件全部是
+# namespace 化元素、不含 DTD——fail-closed 拒绝零误伤（同 xml_parser 口径）。
+_XML_DTD_RE = re.compile(br"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
+
+
+def _parse_ooxml_xml(data: bytes) -> ET.Element:
+    """先拒绝 DTD/ENTITY 再喂给标准解析器（feed/close 与 fromstring 等价，
+    安全性由前置拒绝保证——离线无 defusedxml，采用同 xml_parser 的零依赖口径）。"""
+    if _XML_DTD_RE.search(data.replace(b"\x00", b"")):
+        raise ValueError("OOXML 部件含 DTD/ENTITY 声明，已拒绝解析")
+    parser = ET.XMLParser()
+    parser.feed(data)
+    return parser.close()
 
 
 def _text(element: ET.Element) -> str:
@@ -29,7 +43,7 @@ def _text(element: ET.Element) -> str:
 def _slide_relationships(archive: zipfile.ZipFile, slide_number: int) -> dict[str, str]:
     path = f"ppt/slides/_rels/slide{slide_number}.xml.rels"
     try:
-        root = ET.fromstring(archive.read(path))
+        root = _parse_ooxml_xml(archive.read(path))
     except KeyError:
         return {}
     result: dict[str, str] = {}
@@ -132,7 +146,7 @@ def _chart_rows(chart_root: ET.Element) -> tuple[str, list[list[str]]]:
 
 def _core_title(archive: zipfile.ZipFile) -> str:
     try:
-        root = ET.fromstring(archive.read("docProps/core.xml"))
+        root = _parse_ooxml_xml(archive.read("docProps/core.xml"))
     except (KeyError, ET.ParseError):
         return ""
     for tag in ("dc:title", "cp:title"):
@@ -164,7 +178,7 @@ class PptxParser(BaseDocumentParser):
             document_title = _core_title(archive)
             for slide_path in slide_paths:
                 slide_number = int(_SLIDE_RE.match(slide_path).group(1))
-                slide_xml = ET.fromstring(archive.read(slide_path))
+                slide_xml = _parse_ooxml_xml(archive.read(slide_path))
                 shape_tree = slide_xml.find("p:cSld/p:spTree", _NS)
                 if shape_tree is None:
                     continue
@@ -241,7 +255,7 @@ class PptxParser(BaseDocumentParser):
                             chart_title = ""
                             if "/charts/" in related:
                                 try:
-                                    chart_root = ET.fromstring(archive.read(related))
+                                    chart_root = _parse_ooxml_xml(archive.read(related))
                                     chart_title, chart_rows = _chart_rows(chart_root)
                                 except (KeyError, ET.ParseError):
                                     chart_rows = []
@@ -292,7 +306,7 @@ class PptxParser(BaseDocumentParser):
                 )
                 if note_target:
                     try:
-                        notes_xml = ET.fromstring(archive.read(note_target))
+                        notes_xml = _parse_ooxml_xml(archive.read(note_target))
                     except (KeyError, ET.ParseError):
                         notes_xml = None
                     if notes_xml is not None:

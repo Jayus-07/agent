@@ -29,6 +29,19 @@ class AbortRequest(BaseModel):
     request_id: str = Field("default", description="请求ID")
 
 
+class ChatMessageItem(BaseModel):
+    """单条会话消息（/chat/messages 入参白名单，审计 P2：裸 dict 直透收口）。"""
+    role: str = Field(..., min_length=1, max_length=32, description="消息角色")
+    content: str = Field(..., max_length=100_000, description="消息内容")
+
+
+class ChatMessagesRequest(BaseModel):
+    """批量保存会话消息（前端 SSE done 后调用）。"""
+    session_id: str = Field(..., min_length=1, max_length=128, description="会话ID")
+    messages: list[ChatMessageItem] = Field(..., max_length=200,
+                                             description="本轮消息列表（≤200 条）")
+
+
 # ── SQL 查询 ─────────────────────────────────────
 
 class SQLAskRequest(BaseModel):
