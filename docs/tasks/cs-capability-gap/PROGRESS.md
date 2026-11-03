@@ -72,7 +72,7 @@
 1. ✅ **KB 启用**：经 `knowledge_base_store.activate_knowledge_base`（版本 CAS+审计）启用 6 库（v2，actor=task:cs-capability-gap-b1）。注册表每请求实时读库，无需重启。复验：authorized=['cs_product','cs_aftersales','cs_faq','cs_complaint','cs_policy','travel','cs_scripts']；**A5 终验 7/7 命中**（rag-service `/retrieve_docs` HTTP 链路：退款/券叠加/积分/支付/开票/价保 六问全命中 cs_policy 新文档 + cs_faq 老文档）
 2. ✅ **A6 终验**（第二轮，demo_fuzhou 经 :9080）：q3 券叠加 **3/3 全过**（FAQ 治理生效）；q4 积分 3/3（政策库 evidence 引用）；q1/q6 FAQ 兜住正确答复；q2 价保/q5 支付检索命中新文档但 **ClaimVerifier 判 hallucination 拦截**（数字句「30 分钟有效/15 天窗口」在证据 chunk 中缺失→fail-closed 拒答，**护栏正确行为**，检索完整性/校验容差调优记 P2 挂账）——6 问无空答、无错误口径
 3. ✅ **FAQ 内容治理**：`ai.cs_faq` 112 条 published 逐条对照新政策，修订 13 个客户域矛盾口径（14 次 upsert，含 id=538 短键行）：券叠加(id=23)/退款路径与时效(id=4/87/90/538/810)/审核时效(id=12/88)/发货时效(id=10)/开票时限(id=15)/人工时间(id=22)/会员等级(id=8)/验收(id=89)——全部对齐 kb/ 新政策与 mock 行为；员工内部政策（差旅/变更/运维）与国际站分国家口径不在治理范围
-4. ✅ **A7 坐席端接 RAG 通道**（本 PR）：`/cs/knowledge/search` FAQ+RAG 合并、SearchItem.source=faq|rag（默认 faq 旧前端零影响）、失败逐库降级、to_thread 不阻塞事件循环；T2 4/4（backend/tests/api/test_cs_knowledge_search_rag.py，RAG proxy 打桩+真库 FAQ）；口径同步 FINAL-PLAN §四/§七 + customer-service.md
+4. ✅ **A7 坐席端接 RAG 通道**（PR #317 → ce902ea 已合并部署）：`/cs/knowledge/search` FAQ+RAG 合并、SearchItem.source=faq|rag（默认 faq 旧前端零影响）、失败逐库降级、to_thread 不阻塞事件循环；CI 907 passed/2 skipped；**真机终验**（cs_wire_agent 经 :9080）：搜「优惠券叠加」7 条 = FAQ 1（治理后口径）+ RAG 6（速查 2 + 通用 FAQ 2 + coupon-policy 新政策 3），source 区分正确、两通道口径一致互证；主链路零回归（/health ok + 17 容器 healthy + 三端在位）
 
 **P2 挂账**（不阻塞 B1 收官）：
 

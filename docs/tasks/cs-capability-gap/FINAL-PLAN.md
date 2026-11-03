@@ -184,7 +184,7 @@ cs_faq 库：新增 1 篇「高频问题速查」（20-40 条 Q&A，与上表一
 | 批 | 状态 |
 |---|---|
 | B0 | ✅ 合并部署验收（PR #309 → e2990b9：sandbox 取消 NameError 修复 + 隔离 PG T2 + CI 真跑） |
-| B1 | ✅ 合并（PR #312 → 1620a74）+ 真机验收闭环（2026-11-04）：seed ok=17；**验收揪出先于 B1 的检索链断裂双根因并已修复**——①6 个 cs KB 曾于 10-22 被批量置 inactive（auth.knowledge_base_audits 留痕，super_admin 279）→ 已按 store API 全部启用（v2）；②向量索引身份 vs 注册表 source 标签 bug 已随并行会话 #311-#314 修复；A5 检索 7/7 命中、A6 对话 4/6 直接达标（q3 券叠加经 FAQ 治理后 3/3），q2/q5 ClaimVerifier 拦截为 fail-closed 正确行为（检索完整性调优 P2 挂账）；FAQ 治理 14 写入对齐新政策；A7 坐席端 RAG 通道随后续 PR |
+| B1 | ✅ 合并（PR #312 → 1620a74）+ 真机验收闭环 + A7 落地（PR #317 → ce902ea，2026-11-04 全部完成）：**验收揪出先于 B1 的检索链断裂双根因并已修复**——①6 个 cs KB 曾于 10-22 被批量置 inactive（auth.knowledge_base_audits 留痕，super_admin 279）→ 已按 store API 全部启用（v2）；②向量索引身份 vs 注册表 source 标签 bug 已随并行会话 #311-#314 修复；A5 检索 7/7 命中、A6 对话 4/6 直接达标（q3 券叠加经 FAQ 治理后 3/3），q2/q5 ClaimVerifier 拦截为 fail-closed 正确行为（检索完整性调优 P2 挂账）；FAQ 治理 14 写入对齐新政策；A7 坐席端 RAG 通道真机验收：搜「优惠券叠加」7 条 = FAQ 1 + RAG 6（含 coupon-policy 新文档），source 区分正确、两通道口径一致互证；主链路零回归（/health ok + 17 容器 healthy） |
 | B2-B9 | ⬜ 待实施（B2 积分样板为查询型接入首批） |
 | 挂账：外部真实系统对接（比价/物流商/支付网关/开票） | ⬜ 不阻塞 mock 契约落地 |
 | 挂账：坐席端知识检索接 RAG | ✅ 已实施（A7，2026-11-04 用户裁决：坐席端接 RAG 通道；T2 见 backend/tests/api/test_cs_knowledge_search_rag.py） |
