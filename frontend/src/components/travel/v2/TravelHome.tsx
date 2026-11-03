@@ -6,6 +6,7 @@ import { archiveTravelTripV2, fetchTravelTripsV2, fetchTravelTemplatesV2, type T
 import { TRAVEL_PHOTOS } from './travelV2Data'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 import TravelSearchPanel, { type TravelSearchKind } from './TravelSearchPanel'
+import TravelShowcase from './TravelShowcase'
 import { travelDestinationImage } from './TravelTemplateCard'
 
 export default function TravelHome() {
@@ -65,6 +66,9 @@ export default function TravelHome() {
             <div className="relative hidden h-[245px] overflow-hidden rounded-[25px] md:block"><img src={TRAVEL_PHOTOS.westLake} alt="杭州湖山风景" className="absolute inset-0 h-full w-full object-cover" /><div className="absolute inset-0 bg-gradient-to-t from-[#102a48]/60 via-transparent to-white/10" /><div className="absolute bottom-4 left-4 right-4 flex items-end justify-between text-white"><div><p className="text-xs text-white/75">此刻的灵感</p><p className="mt-1 text-lg font-semibold">杭州 · 湖山之间</p></div><span className="rounded-full border border-white/30 bg-white/20 px-3 py-1.5 text-[10px] backdrop-blur">慢慢走，刚刚好</span></div><span className="absolute right-4 top-4 rounded-full bg-white/90 px-3 py-1.5 text-[10px] font-semibold text-[#356aa9] shadow-sm">自然 · 人文 · 美食</span></div>
           </div>
         </section>
+
+        {/* B4 能力橱窗：Hero 与最近行程之间；与最近行程共用同一次 fetchTravelTripsV2 */}
+        <TravelShowcase trips={trips} loading={tripsLoading} />
 
         <section className="mt-8 md:mt-10">
           <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold text-[#4a82c5]">接着上次的计划</p><h2 className="mt-1 text-lg font-bold tracking-[-.025em] text-[#17283f] md:text-[21px]">我的最近行程</h2></div><a href="/travel/itineraries" className="text-xs font-medium text-[#2878f5]">全部行程</a></div>
