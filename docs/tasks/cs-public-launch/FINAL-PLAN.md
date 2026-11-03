@@ -96,7 +96,11 @@
 | PR #291 网关豁免 `-` 元字符转义 | ✅ 合并+部署验证（右栏 200/折叠卡 200） |
 | `.env` 退款开关 + 转人工 600s | ✅ 已生效 |
 | 坐席账号 supervisor 升级 + 密码重置 | ✅（已告知用户） |
-| W1–W5 | ⬜ 全部待实施（本计划交付物） |
+| W1 余额问答事实丢失 | ✅ PR [#295](https://github.com/Jayus-07/agent/pull/295)：根因=FactSet 白名单缺 balance 投影器（composer 零事实，LLM 编造「查询不到」，容器内复现 `build_fact_set=={}`）；修复=balance 投影器+流水 facts+守卫余额金额类别；真机验证回复含真实金额与流水 memo，订单查询零回归；连带把 composer/facts/query_expert 测试补进 rag_smoke 定向清单 |
+| W2 队列终态过滤 / 转人工率口径 / 绩效归属 | ⬜ 待实施 |
+| W3 WS 自动派单（NEXT_PUBLIC_WS_ORIGIN） | ⬜ 待实施 |
+| W4 测试数据治理 | ⬜ 待 dry-run（执行前须用户拍板范围） |
+| W5 order_cancel 开关 + 收尾总验收 | ⬜ 待实施（默认值语义实施前确认） |
 | :3200 共享管理端部署协调 / ECS 镜像核对 | ⬜ 挂账（非本仓代码任务，需用户/其他会话协调） |
 
 ## 六、测试与验收
