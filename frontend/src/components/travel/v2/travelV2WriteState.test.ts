@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { transitionTravelTripWrite, type TravelTripWriteTransition } from './travelV2WriteState'
+import { describe, expect, it, vi } from 'vitest'
+import { nextPaint, transitionTravelTripWrite, type TravelTripWriteTransition } from './travelV2WriteState'
 
 function event(
   kind: TravelTripWriteTransition['kind'],
@@ -9,6 +9,23 @@ function event(
 ): TravelTripWriteTransition {
   return { kind, tripId: 'trip-a', signature, key, status }
 }
+
+describe('nextPaint 兜底', () => {
+  it('rAF 永不触发（不可渲染标签页）时，短超时兜底让写流程不被永久挂起', async () => {
+    vi.useFakeTimers()
+    const rafSpy = vi.spyOn(globalThis, 'requestAnimationFrame').mockImplementation(() => 1)
+    try {
+      const pending = nextPaint()
+      const result = await Promise.race([pending.then(() => 'resolved'), Promise.resolve('pending')])
+      expect(result).toBe('pending') // rAF 被钳制后不立即 resolve
+      await vi.advanceTimersByTimeAsync(300)
+      expect(await pending.then(() => 'resolved')).toBe('resolved') // 250ms 兜底生效
+    } finally {
+      rafSpy.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('同一 Trip 正式写入守卫', () => {
   it('UNKNOWN 编辑期间拒绝 Restore，且只放行原编辑请求重试', () => {
