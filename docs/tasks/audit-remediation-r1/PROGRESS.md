@@ -288,3 +288,24 @@ OSV 区间匹配需人工复核原文）；pip/setuptools 随基础镜像走；3
 - py_compile 全部改动文件通过。
 
 
+## P3 批次 C（fix/audit-p3-c，基线 582e05b）：生产配置检查清单落档
+
+- 新增 `docs/operations/production-config-checklist.md`：四项审计遗留检查逐一落档，
+  每项含 语义/检查方法/期望值/当前状态：
+  1. **GATEWAY_SESSION_CHECK**：仓库口径 enforce（compose 缺省），本机 .env=enforce
+     （VERIFIED）；**生产 ECS 实际值 UNVERIFIED**（app 进程读不到部署层 env，
+     必须上机 `docker inspect` 核实）。
+  2. **JWT_SESSION_GUARD_MODE**：代码默认 audit，DB 覆盖 15s 生效——动态开关，
+     每次发布现场读取，**当前 UNVERIFIED**。
+  3. **9080 端口**：compose 绑定 `127.0.0.1:9080`，本机 netstat 实测 loopback
+     （VERIFIED）；**生产 ECS 实机绑定与安全组 UNVERIFIED**。
+  4. **依赖豁免记录**：A1 结论的豁免/延期项逐条入档（pywin32 疑似误报豁免、
+     基建包随镜像、跨主版本延期、4 条无修复公告挂起），33 包升级批待立项。
+- 维护规则：UNVERIFIED 验证后回填 + 注明日期；新部署层安全开关同步登记；
+  定位为 release-quality §2 观测/运维门禁的落地细化。
+
+### 验证
+- 文档级交付（T0）：无代码改动；全部事实源（compose/env/lua/sys_config）均给出
+  file:line 引用，UNVERIFIED 项如实标注、未报告为通过。
+
+
