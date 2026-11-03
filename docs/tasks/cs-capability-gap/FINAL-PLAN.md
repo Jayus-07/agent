@@ -55,7 +55,7 @@
 | **知识面**：cs_policy 空库 | `scripts/index_cs_seed_docs.py` 仅 8 篇，cs_policy 零种子；源文档散在 docs/customer-service/demo-kb/ | B1：`docs/customer-service/kb/` 入 git + seed 脚本扩展 | B1 |
 | **配置面**：动作型无独立开关 | 价保/改址/开票/催办均无开关 | 仿 `CS_ORDER_CANCEL_MODE`（config/customer_service.py:254 + cancel_order_service.py `_ensure_cancel_mode` fail-closed 双入口闸） | B5-B8 |
 | **组合层**：每新查询域 facts 断链 | composer LLM 转写的唯一事实源=FactSet 白名单（response/facts.py projectors 表），草稿不进模型上下文 | **每新增查询域必须同步加** `_project_<domain>` 投影器 + 注册 + （涉金额）composer `_fact_amounts`/`_amount_claim_kind` 标签——否则重演 W1 余额问答「查询不到」事故 | B2/B3/B4（凡查询） |
-| **坐席端知识检索**：只查 FAQ 层 | cs_knowledge.py:162-181 仅 faq store，RAG 文档补齐后该 Tab 仍搜不到 | 可选小改（search 加 RAG 通道，`subject_type="customer"` 权限链路已就绪）；**默认不做**（双轨定位明确：FAQ=坐席速查，RAG=用户对话），仅当运营提出再改 | 可选 P2 |
+| **坐席端知识检索**：只查 FAQ 层 | ~~cs_knowledge.py:162-181 仅 faq store~~ **A7 已实施（2026-11-04 用户裁决改口径）**：search 合并 RAG 通道（cs_faq/cs_policy 双库 top3，subject_type=customer 同对话授权，失败逐库降级），SearchItem 新增 source=faq\|rag 字段（默认 faq 旧前端零影响） | 已完成（PR：feat/cs-knowledge-rag-channel） | ✅ 已实施 |
 | **外部依赖**（真实生产态） | 比价数据源/物流商改址 API/支付网关/开票系统均不存在 | mock 契约先行（contract.md 登记路由+错误语义），真实接入只换 adapter | 挂账，不阻塞 |
 | **多模态底座** | ChatRequest 纯文本；vision 模型未注册；无图片存储 | 独立立项（B9 记录），不混入本计划 | B9 |
 
@@ -184,10 +184,10 @@ cs_faq 库：新增 1 篇「高频问题速查」（20-40 条 Q&A，与上表一
 | 批 | 状态 |
 |---|---|
 | B0 | ✅ 合并部署验收（PR #309 → e2990b9：sandbox 取消 NameError 修复 + 隔离 PG T2 + CI 真跑） |
-| B1 | 🔄 实现完成随本 PR 合并（cs_policy 8 篇政策 + cs_faq 速查 + 种子链路 git 化 + 一致性守卫）；合并部署后执行 A4-A7 真机验收，结果回填 PROGRESS.md |
+| B1 | ✅ 合并（PR #312 → 1620a74）+ 真机验收闭环（2026-11-04）：seed ok=17；**验收揪出先于 B1 的检索链断裂双根因并已修复**——①6 个 cs KB 曾于 10-22 被批量置 inactive（auth.knowledge_base_audits 留痕，super_admin 279）→ 已按 store API 全部启用（v2）；②向量索引身份 vs 注册表 source 标签 bug 已随并行会话 #311-#314 修复；A5 检索 7/7 命中、A6 对话 4/6 直接达标（q3 券叠加经 FAQ 治理后 3/3），q2/q5 ClaimVerifier 拦截为 fail-closed 正确行为（检索完整性调优 P2 挂账）；FAQ 治理 14 写入对齐新政策；A7 坐席端 RAG 通道随后续 PR |
 | B2-B9 | ⬜ 待实施（B2 积分样板为查询型接入首批） |
 | 挂账：外部真实系统对接（比价/物流商/支付网关/开票） | ⬜ 不阻塞 mock 契约落地 |
-| 挂账：坐席端知识检索接 RAG（可选 P2） | ⬜ 默认不做 |
+| 挂账：坐席端知识检索接 RAG | ✅ 已实施（A7，2026-11-04 用户裁决：坐席端接 RAG 通道；T2 见 backend/tests/api/test_cs_knowledge_search_rag.py） |
 | 挂账：用户端订单页开发票入口 | ⬜ 二期 |
 
 ## 八、测试策略

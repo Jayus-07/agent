@@ -203,6 +203,7 @@ jobs:
             backend/tests/test_indexer_bm25_sync.py \
             backend/tests/rag/test_contextual_prefix.py \
             backend/tests/api/test_rag_server_internal_token.py \
+            backend/tests/api/test_cs_knowledge_search_rag.py \
             backend/tests/test_rag_remote_mode.py \
             backend/tests/prompts/ \
             backend/tests/travel_v2/test_hotel_search_service.py \

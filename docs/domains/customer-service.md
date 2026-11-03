@@ -37,6 +37,8 @@
 
 客服知识查询与数据库查询分别走现有 RAG 和 SQL 能力，不在客服图中复制这些服务实现。失败、转人工和部分结果按状态契约返回。
 
+知识底座与检索（B1/A7，2026-11-04）：政策文档事实源 = `docs/customer-service/kb/`（cs_policy 8 篇 + cs_faq 速查，镜像 COPY 随代码分发），`scripts/index_cs_seed_docs.py` 同步 git 源到数据卷后增量索引；cs KB 注册表状态（auth.knowledge_bases）是被检索的前提——inactive 库对 customer 主体不可见（2026-11-04 曾因批量 inactive 致 cs 检索整体失效，已恢复）。坐席端 `GET /cs/knowledge/search` = FAQ 速查层 + RAG 文档层合并（source=faq|rag，cs_faq/cs_policy 双库 top3，subject_type=customer 与用户对话同授权语义，RAG 通道失败逐库降级不 fail 接口）。
+
 ## 维护与验证
 
 - 核心实现：backend/customer_service/ 与 backend/customer_service/experts/。

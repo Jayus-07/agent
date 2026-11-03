@@ -46,12 +46,38 @@
 - ✅ A2 worktree 镜像构建（agent-csfix-b1-app）：/app/docs/customer-service/kb/ 完整（8 政策+3 faq）；容器内 `from scripts.cs_kb_seed import` 冒烟 17 条/8 政策
 - ✅ A3 scan_secrets 0 命中；py_compile 全过
 
-合并后真机验收（待执行，对齐 §九.1）：
+合并后真机验收结果（2026-11-04 实测，对齐 §九.1）：
 
-- A4 容器内重跑 seed：ok=17 failed=0
-- A5 rag-service :8090 `POST /retrieve`（kb_id=cs_policy）问「退款政策」命中新文档
-- A6 用户端对话（:9080 网关，demo_fuzhou/872）问「退款政策/价保/优惠券能叠加吗/积分怎么用/支付失败怎么办/怎么开票」→ 回复含政策要点 + evidence 引用
-- A7 坐席端知识检索（FAQ 层）命中速查问答；主链路零回归（/health + 三端冒烟）
+- ✅ **A4** 容器内 seed 重跑：`ok=17 skipped=0 failed=0`（速查文档识别 39 组 Q/A→41 chunks）。途中修一个部署缺陷：数据卷 cs KB 目录混合属主（docker cp 时代 root 遗留），appuser 同步被拒——已按镜像运行时身份（10001）限定范围 chown 六个 cs KB 目录
+- ❌ **A5** cs 库检索不可达——**先于 B1 的平台级问题，非本批回归**。根因链（证据齐备）：向量索引身份 `custom-gpu/bge-m3`（rag_index_meta，建于 10-27）≠ DB 注册表运行时解析身份 `db/bge-m3`（指纹不可用）→ fresh 进程硬抛 IndexEmbeddingMismatchError、rag-service 向量腿异常降级 → BM25 全局兜底 → customer keep-set 含 audience=customer 的 travel 库 → 海量旅游内容霸榜（cs_faq 老库同样失 scoped，返回文档 kb 元数据明示 travel）。**旁路探针证明数据+过滤+翻译+embedding 全部健康**：绕过身份检查后，单 kb 与 $or 双 kb（知识专家形态）均完美命中新政策文档（退款政策 top1、速查 Q&A 命中）
+- ❌ **A6** 对话 6 问法（demo_fuzhou 经 ：9080 网关 + X-API-Key 实测）：退款（7 天无理由）/发票（抬头规则）/优惠券 三问由 FAQ 层部分兜住；**价保/积分/支付失败 三问空答**（新政策文档不可达，同 A5 根因）。**附加发现：ai.cs_faq 审核表存在内容矛盾**——「店铺券与平台券可叠加，单笔最多 3 张」与新政策文档「默认不可叠加」直接冲突（faq 层优先命中了错误口径），需 FAQ 治理
+- ⚠️ **A7 口径冲突**：坐席端 `/cs/knowledge/search` 只查 `ai.cs_faq` 审核表（cs_knowledge.py:162 仅 faq store）；速查文档在 RAG cs_faq 库中坐席端搜不到。计划 §四「接 RAG 通道默认不做」与 §九.1「坐席端知识检索命中速查问答」互相矛盾，需用户裁决（补 ai.cs_faq 种子 or 坐席端接 RAG 通道）
+
+修复方向（**需用户裁决，触及模型注册表领域，疑似并行会话工作范围**）：
+
+- 方案 a：把 DB 注册表 bge-m3 的 provider 登记对齐回索引身份 custom-gpu（或补指纹）→ 向量腿即恢复，零索引重建
+- 方案 b：以当前注册表身份重建向量索引（重操作）
+- 方案 c：转交掌握模型注册表的会话处理（证据已足够定位）
+
+其余说明：验收期间共享栈被并行会话两次 rebuild（#311/#314 合并），日志证据随重启丢失但关键探针结论均在重启前后复测一致；本会话未动模型注册表与索引身份。
+
+## 裁决后执行结果（2026-11-04，用户拍板：方案 a + FAQ 治理 + A7 接 RAG）
+
+**根因修正（推翻上节 A5 假设）**：「provider=db」线索走到 DB 层后发现模型注册表**本来就是对齐的**（bge-m3→custom-gpu、指纹 9b0cdc11 与索引元数据一致，#311-#314 间已修复），真正的根因是——
+
+**6 个 cs KB（cs_faq/cs_policy/cs_product/cs_complaint/cs_scripts/cs_aftersales）于 2026-10-22 19:11-19:13 UTC 被 local_super_admin(id=279) 批量置 inactive**（auth.knowledge_base_audits 留痕）。customer 主体授权集=audience=customer 且 active 的库 → 只剩 travel → `_constrain_filter_to_authorized` 丢弃 kb_id → `_keep` 拒掉所有 cs 文档 → 向量腿恒 0 + BM25 全局兜底只剩 travel——完整解释「cs 查询返回旅游内容」「vector=0 无异常」。此前所有探针（原始 store 直查）绕过了 `_keep` 授权层所以「健康」。
+
+**执行动作与验证**：
+
+1. ✅ **KB 启用**：经 `knowledge_base_store.activate_knowledge_base`（版本 CAS+审计）启用 6 库（v2，actor=task:cs-capability-gap-b1）。注册表每请求实时读库，无需重启。复验：authorized=['cs_product','cs_aftersales','cs_faq','cs_complaint','cs_policy','travel','cs_scripts']；**A5 终验 7/7 命中**（rag-service `/retrieve_docs` HTTP 链路：退款/券叠加/积分/支付/开票/价保 六问全命中 cs_policy 新文档 + cs_faq 老文档）
+2. ✅ **A6 终验**（第二轮，demo_fuzhou 经 :9080）：q3 券叠加 **3/3 全过**（FAQ 治理生效）；q4 积分 3/3（政策库 evidence 引用）；q1/q6 FAQ 兜住正确答复；q2 价保/q5 支付检索命中新文档但 **ClaimVerifier 判 hallucination 拦截**（数字句「30 分钟有效/15 天窗口」在证据 chunk 中缺失→fail-closed 拒答，**护栏正确行为**，检索完整性/校验容差调优记 P2 挂账）——6 问无空答、无错误口径
+3. ✅ **FAQ 内容治理**：`ai.cs_faq` 112 条 published 逐条对照新政策，修订 13 个客户域矛盾口径（14 次 upsert，含 id=538 短键行）：券叠加(id=23)/退款路径与时效(id=4/87/90/538/810)/审核时效(id=12/88)/发货时效(id=10)/开票时限(id=15)/人工时间(id=22)/会员等级(id=8)/验收(id=89)——全部对齐 kb/ 新政策与 mock 行为；员工内部政策（差旅/变更/运维）与国际站分国家口径不在治理范围
+4. ✅ **A7 坐席端接 RAG 通道**（本 PR）：`/cs/knowledge/search` FAQ+RAG 合并、SearchItem.source=faq|rag（默认 faq 旧前端零影响）、失败逐库降级、to_thread 不阻塞事件循环；T2 4/4（backend/tests/api/test_cs_knowledge_search_rag.py，RAG proxy 打桩+真库 FAQ）；口径同步 FINAL-PLAN §四/§七 + customer-service.md
+
+**P2 挂账**（不阻塞 B1 收官）：
+
+- ClaimVerifier 误杀有据数字句：检索完整性（rerank/top_k）与校验容差调优，B2 查询域接 facts 后一并观察
+- 10-22 批量停用 cs KB 的背景无人可考（审计无 reason 字段）——已在本文件留痕，运营侧如需审计问询找 super_admin 279
 
 ## 后续批次
 
