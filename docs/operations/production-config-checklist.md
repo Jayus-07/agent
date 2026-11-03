@@ -60,6 +60,11 @@
   | nltk / PyJWT / chromadb / transformers 各 1 条无修复公告 | 挂起（上游无 fix） | 跟踪上游公告；其中 PyJWT 的 GHSA-gvp8-978c-rx2q 为 options-dict 变异类，规避路径见公告原文 |
 - **待办**：33 个同主版本可升级包（pillow/pypdf/GitPython/aiohttp/PyJWT 主线等）
   **升级批次未立项**——升级需独立分支 + 定向回归 + 全量回归，作为 audit 后续工作项。
+  **2026-11-04 更新**：第一批已落地（PR #310，24 包 + 连带 yarl，9 项延期理由见
+  PROGRESS「P3 补遗批次」）；同日修正两点——①「可升级」结论自本日起一律先对目标
+  版本跑 OSV 清零验证（pillow 12.3.0 实测仍命中 54 条，真正清零需 13.0.0 跨主版本，
+  归入延期批）；② **生产 app 镜像不消费 lock**（Dockerfile 浮动解析 pyproject），
+  生产暴露面需按容器内 `pip freeze` 另行审计（见 PROGRESS「P3 收尾修正」）。
 - **复查方法**：重跑 A1 脚本（OSV querybatch，方法见 PROGRESS「P3 批次 A」）对照本表；
   npm 侧 `npm audit --package-lock-only` 三前端各一次。
 
