@@ -116,13 +116,19 @@ class HandoffRepository:
         tenant_id: str | None = None,
         limit: int = 50,
     ) -> list[CSHandoff]:
-        """列出进行中的 handoff（坐席工作台队列）。
+        """列出待接入队列（坐席工作台）。
 
         Args:
-            states: 只取这些状态（缺省=全部未关闭），按 updated_at 升序
-                （最早请求的排最前，避免老会话饿死）。
+            states: 只取这些状态（缺省=可认领状态 waiting_human/
+                agent_offered），按 updated_at 升序（最早请求的排最前，
+                避免老会话饿死）。
             tenant_id: 租户谓词（STOP CS-A P0-2）；None=跨租户（受信任
                 服务视图），JWT 通道必须传本租户。
+
+        W2-1（2026-11-03）：缺省从「全部未关闭」收敛为「可认领」——
+        实测共享库 16 条 human_active 残留（历史会话已关但 handoff 永未
+        置终态）混入队列，点击认领 409；已分配/人工处理中的会话属于
+        工作台活动列表，不属于待接入队列。
         """
         q = select(CSHandoff)
         if tenant_id:
@@ -130,7 +136,9 @@ class HandoffRepository:
         if states:
             q = q.where(CSHandoff.handoff_state.in_(states))
         else:
-            q = q.where(CSHandoff.handoff_state != "closed")
+            q = q.where(CSHandoff.handoff_state.in_(
+                ("waiting_human", "agent_offered"),
+            ))
         q = q.order_by(CSHandoff.updated_at).limit(limit)
         result = await self._s.execute(q)
         return list(result.scalars().all())
