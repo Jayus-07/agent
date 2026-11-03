@@ -223,7 +223,11 @@ services:
   frontend-cs:
     build:
       context: ./frontend-cs
-      args: { API_URL: "http://apisix:9080" }
+      args:
+        API_URL: "http://apisix:9080"
+        # W3：坐席端 WS 网关 origin（构建期内联客户端产物）。本机默认网关
+        # 9080；ECS 部署注入对应网关地址（如 wss://cs.example.com）。
+        NEXT_PUBLIC_WS_ORIGIN: ${NEXT_PUBLIC_WS_ORIGIN:-ws://127.0.0.1:9080}
     environment:
       API_URL: http://apisix:9080
       API_KEY: ${API_KEY:?API_KEY is required}

@@ -99,8 +99,8 @@
 | W1 余额问答事实丢失 | ✅ PR [#295](https://github.com/Jayus-07/agent/pull/295)：根因=FactSet 白名单缺 balance 投影器（composer 零事实，LLM 编造「查询不到」，容器内复现 `build_fact_set=={}`）；修复=balance 投影器+流水 facts+守卫余额金额类别；真机验证回复含真实金额与流水 memo，订单查询零回归；连带把 composer/facts/query_expert 测试补进 rag_smoke 定向清单 |
 | W2-1 队列只列可认领状态 | ✅ fix/cs-queue-filter：`list_open` 缺省谓词由 `!=closed` 收敛为 `IN(waiting_human,agent_offered)`（实测 16 条 human_active 残留混入、认领 409）；REST 验证队列返回 0 条残留 |
 | W2-2 看板转人工率口径 | ✅ PR [#298](https://github.com/Jayus-07/agent/pull/298)：分子改 count(DISTINCT conversation_id)（推荐去重口径）；真库 T2 比率 0.5 断言；实测 102%→71.21% |
-| W2-3 坐席绩效归属 | ✅ fix/cs-agent-kpi：归属唯一事实源改 assignments.accepted（生产认领链路从不写 handoffs.assigned_agent_id——FINAL-PLAN 原假设不成立，REST 实证 cs_wire_e2e 归属在 assignments）；同根因一并修：趋势转人工序列恒 0、self 口径六卡/意图/趋势；绩效 AHT=unassigned_at-assigned_at |
-| W3 WS 自动派单（NEXT_PUBLIC_WS_ORIGIN） | ⬜ 待实施 |
+| W2-3 坐席绩效归属 | ✅ PR [#300](https://github.com/Jayus-07/agent/pull/300)：归属唯一事实源改 assignments.accepted（生产认领链路从不写 handoffs.assigned_agent_id——FINAL-PLAN 原假设不成立，REST 实证 cs_wire_e2e 归属在 assignments）；同根因一并修：趋势转人工序列恒 0、self 口径六卡/意图/趋势；真库 8 passed；实测接待 0→3 |
+| W3 WS 自动派单 | ✅ feat/cs-ws-origin：useAgentSocket 构建期注入 `NEXT_PUBLIC_WS_ORIGIN`（缺省回退 location.host 零破坏）+ Dockerfile ARG/ENV + compose 默认 `ws://127.0.0.1:9080` + .env.example/部署 README 说明；vitest 6 passed（新增 origin 注入/回退 2 断言）；真机双端验证：坐席端「实时推送已连接」恒态，用户转人工后**秒级**收到新接入邀请卡（38s 倒计时）+ 待接入/通知实时更新，未注入时回退旧行为 |
 | W4 测试数据治理 | ⬜ 待 dry-run（执行前须用户拍板范围） |
 | W5 order_cancel 开关 + 收尾总验收 | ⬜ 待实施（默认值语义实施前确认） |
 | :3200 共享管理端部署协调 / ECS 镜像核对 | ⬜ 挂账（非本仓代码任务，需用户/其他会话协调） |
