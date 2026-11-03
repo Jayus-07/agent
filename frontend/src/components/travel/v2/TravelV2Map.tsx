@@ -178,7 +178,7 @@ export default function TravelV2Map({
     ? '已有安排的地点缺少有效坐标，暂时无法定位。'
     : '这一天还没有行程地点。选择其他日期或查看查询候选后，地图会显示对应位置。'
 
-  return <div className="relative h-full min-h-[220px] overflow-hidden rounded-[18px] border border-[#e5edf6] bg-[#f5f8fc] md:min-h-[320px]">
+  return <div className="relative isolate h-full min-h-[220px] overflow-hidden rounded-[18px] border border-[#e5edf6] bg-[#f5f8fc] md:min-h-[320px]">
     <div ref={containerRef} className="absolute inset-0" role="img" aria-label="行程地图，各天地点按天配色并连成动线" />
     {!hasPoints && <div role="status" className="absolute inset-0 z-[400] flex items-center justify-center px-5 text-center text-sm leading-6 text-[#667b94]">
       <p>{emptyMessage}</p>

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   applyEdit: vi.fn(),
   restoreTrip: vi.fn(),
   selectionWrite: vi.fn(),
+  searchFood: vi.fn(),
+  addMeal: vi.fn(),
   searchPanelProps: [] as Array<Record<string, any>>,
   tripRequests: [] as Array<Record<string, any>>,
   revisionRequests: [] as Array<Record<string, any>>,
@@ -26,6 +28,8 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
   fetchTravelTripRevisionsV2: mocks.fetchRevisions,
   applyTravelTripEditV2: mocks.applyEdit,
   restoreTravelTripV2: mocks.restoreTrip,
+  searchTravelFoodV2: mocks.searchFood,
+  addTravelMealV2: mocks.addMeal,
 }))
 
 vi.mock('./TravelSearchPanel', () => ({
@@ -832,5 +836,86 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(page.container.textContent).not.toContain('最早的 A')
     expect(requestA1.signal?.aborted).toBe(true)
     expect(requestB.signal?.aborted).toBe(true)
+  })
+})
+
+describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
+  function makeTripWithMealAndFacts(): TravelTripV2 {
+    const base = makeTrip('trip-meal', '成都')
+    const day = base.document.days[0]
+    day.items = [
+      {
+        item_id: 'meal-1', kind: 'activity', activity_type: 'meal', title: '午餐',
+        start_time: '12:00', duration_min: 60, fixed_start: false,
+        place: null, must_visit: false, locked: false, note: '就近用餐',
+      },
+      {
+        item_id: 'place-1', kind: 'place', title: '成都武侯祠博物馆',
+        start_time: '09:00', duration_min: 120, fixed_start: false,
+        place: {
+          place_id: 'poi-1', name: '成都武侯祠博物馆', lat: 30.64, lng: 104.05,
+          address: '成都市武侯区武侯祠大街', facts: {
+            rating: 4.8, ticket_price_cny: 0, verification: 'verified', source: 'amap',
+          },
+        },
+        must_visit: false, locked: false, note: '',
+      },
+    ] as typeof day.items
+    return base
+  }
+
+  it('点击餐食卡出现候选餐厅面板（美食通道），「加入午餐」二次确认后走 selections/meals', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+    mocks.searchFood.mockResolvedValue({
+      kind: 'food', status: 'success', source: 'amap', queried_at: '2026-11-04T00:00:00Z',
+      message: '查询完成', disclosure: '商户信息来自高德，可能随时间变化。',
+      results: [{
+        selection_id: 'm-1', merchant_id: 'mch-1', name: '烤匠麻辣烤鱼', address: '成都市锦江区',
+        rating: 4.5, open_status: '营业中', lat: 30.65, lng: 104.06,
+        avg_cost_cny: 85, source: 'amap', queried_at: '2026-11-04T00:00:00Z',
+      }],
+    })
+    mocks.addMeal.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 2, document: trip.document })
+
+    await click(page.container, (button) => button.textContent?.includes('午餐') ?? false)
+    await settle()
+
+    const panel = page.container.querySelector('[aria-label="候选餐厅"]')
+    expect(panel).not.toBeNull()
+    expect(panel?.textContent).toContain('烤匠麻辣烤鱼')
+    expect(panel?.textContent).toContain('加入午餐')
+    // place 项的「备选地点」按钮对 meal 占位隐藏
+    expect(page.container.textContent).not.toContain('的备选地点')
+
+    const panelElement = panel as HTMLElement
+    await click(panelElement, (button) => button.textContent === '加入午餐')
+    expect(panelElement.textContent).toContain('再次点击确认加入')
+    expect(mocks.addMeal).not.toHaveBeenCalled()
+
+    await click(panelElement, (button) => button.textContent === '再次点击确认加入')
+    await settle()
+
+    expect(mocks.addMeal).toHaveBeenCalledOnce()
+    const [tripId, input] = mocks.addMeal.mock.calls[0]
+    expect(tripId).toBe('trip-meal')
+    expect(input.day_id).toBe('trip-meal-day')
+    expect(input.meal_period).toBe('lunch')
+    expect(input.merchant.merchant_id).toBe('mch-1')
+    expect(page.container.textContent).toContain('已将「烤匠麻辣烤鱼」加入午餐')
+  })
+
+  it('行程卡 hover 介绍行只用真实 facts（评分/免费门票/核验）+ 备注，无事实则不渲染', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+
+    const cards = [...page.container.querySelectorAll('button.group')]
+    const placeCard = cards.find((card) => card.textContent?.includes('成都武侯祠博物馆'))!
+    expect(placeCard.textContent).toContain('评分 4.8 · 门票免费 · 坐标已核验')
+
+    const mealCard = cards.find((card) => card.textContent?.includes('午餐') && card.textContent?.includes('就近用餐'))!
+    expect(mealCard.textContent).toContain('就近用餐')
   })
 })
