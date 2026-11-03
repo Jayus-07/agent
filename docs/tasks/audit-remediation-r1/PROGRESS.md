@@ -49,7 +49,26 @@
 ## 未完成 / 并行协调备注
 
 - 另一会话的审计线（0f74940 S3/S4、`docs/tasks` 回填「W4/router 收官与 W5 实施」）与本项目后续轮次可能重叠：**启动 P1-5（competitor 域鉴权）、P2 批次前必须先核对 main 最新任务档案与其 S/W 编号清单，避免同题两套实现**（本次 data.py 即发生一次重叠，靠合并消解）。
-- P1-1（checkpointer 连接池）、P1-4（网关直通面）、P2 批次待下一轮立项。
+- ~~P1-1（checkpointer 连接池）~~ → 第二轮已实施，见下节。
+- P1-4（网关直通面）、P2 批次待后续轮次立项。
+
+## 第二轮：P1-1 checkpointer/审批存储连接池收口（fix/audit-r2-checkpointer-pool）
+
+**实现**：
+- 新增共享构建 `backend/orchestration/checkpoint/pg_saver.py`（psycopg_pool + 借出前探活 + `connect_timeout=5` + 幂等 setup），四处 PostgresSaver 站点（主图/travel/CS/task_executor）全部接入；task_executor 保留自身进程级单例与锁。
+- 同病收口：`backend/security/tool_approval.py` `_PgApprovalStore`（治理关键面：审批单存储是进程级单例 + 长活裸连接）同步池化，API 不变（`_cursor` contextmanager 包装池借出）。
+- server.py:180 的裸连接是一次性 DDL + 立即关闭，用法正确，不动。
+
+**过程中的环境级发现（重要）**：
+- 首跑恢复套件 4 例 PoolTimeout——**独立脚本复现证明与本次重构无关**（同配置直连 OK、池 30s 拿不到连接；旧 task_executor 模板同参数，属存量隐患）。
+- 根因：vpnkit（Docker Desktop→宿主 PG）半开路径上无超时的 TCP 握手会**无限等待并卡死池 worker 线程**（连 pool.close() 都停不下来，pyproject/pytest.ini 对该病态有既有记载，但只做了测试级看门狗，连接级无防护）。池的 open=True 后台建连踩中即全量 PoolTimeout。
+- 修复：连接 kwargs 加 `connect_timeout=5`（快速失败交给池自动重试，正是池的设计意图）；守卫测试锁定该参数防回退。
+
+**验证（全绿）**：
+- `test_pg_saver_pool.py`（新增 4 例：探活/autocommit/connect_timeout 参数锁定、task_executor 单例、三站点防回退文本守卫）+ `test_checkpointer_degrade_policy.py`（故障注入夹具 psycopg→psycopg_pool 适配）→ 25 passed
+- `test_task_checkpoint_recovery.py`（真 PG 崩溃恢复演练）→ 4 passed（6.5 min，修复前 4 ERROR PoolTimeout）
+- `test_task_executor_lease_interface` + `security/test_tool_approval` + `test_email_durable_idempotency` + `test_startup_validation` → 82 passed
+- `travel/test_checkpointer` + `travel/test_persistence` + `travel/test_travel_graph`（含池守卫）→ 84 passed
 
 ## 阻塞
 
