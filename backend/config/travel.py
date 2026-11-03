@@ -221,6 +221,33 @@ def city_cost_tier(city: str) -> dict[str, float]:
     return {"meal": TRAVEL_MEAL_PER_DAY_CNY, "lodging": TRAVEL_LODGING_PER_NIGHT_CNY}
 
 
+# ── 平价档（budget）低价定额（2026-11-04 travel-value-showcase B1，D0 实测定稿）──
+# 口径 = 独立低价定额表（TASK 决策点 1）：budget 档不走「城市均值 × 乘数」——
+# 各城均值不同，乘数算不出绝对低价——直接用平价带绝对值，保证 2 人 2 天
+# 地板 ≤ ¥400 / 3 天 ≤ ¥600（城际大交通不计入）。economy/comfortable 路径
+# 零改动（红线 4：新增更低价档，不拉低已验收口径）。
+# 数字依据 rollinggo live 实测（docs/tasks/travel-value-showcase/
+# d0-rollinggo-hotel-samples.json）：住宿 = 实测最低价取整，餐饮 = 实测小吃带
+# ¥34-40 取下沿。未登记城市回落平价全局定额。
+TRAVEL_BUDGET_MEAL_PER_DAY_CNY = float(os.getenv("TRAVEL_BUDGET_MEAL_PER_DAY_CNY", "35"))
+TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY = float(os.getenv("TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY", "130"))
+TRAVEL_CITY_BUDGET_COST_TIERS: dict[str, dict[str, float]] = {
+    "成都": {"meal": 35.0, "lodging": 90.0},
+    "西安": {"meal": 35.0, "lodging": 90.0},
+    "杭州": {"meal": 35.0, "lodging": 90.0},
+    "福州": {"meal": 35.0, "lodging": 150.0},
+    "厦门": {"meal": 35.0, "lodging": 190.0},
+}
+
+
+def budget_city_cost_tier(city: str) -> dict[str, float]:
+    """平价档（budget）城市定额；未登记城市回落平价全局定额（与均值表同构兜底）。"""
+    tier = TRAVEL_CITY_BUDGET_COST_TIERS.get((city or "").strip())
+    if tier:
+        return dict(tier)
+    return {"meal": TRAVEL_BUDGET_MEAL_PER_DAY_CNY, "lodging": TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY}
+
+
 # =============================================
 # 天气专家（2026-09-22 P0-2 接入域图）
 # =============================================
