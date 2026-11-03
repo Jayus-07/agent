@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,7 +30,15 @@ from backend.app.api.routes.cs_agent_offers import (
 
 router = APIRouter(tags=["智能客服-知识助手"])
 
+logger = logging.getLogger("rag_system.cs_knowledge")
+
 _SOURCE_ZH = {"rag_miss": "拒答", "sql_empty": "查询空结果"}
+
+# A7（cs-capability-gap）：坐席知识检索的 RAG 扩展通道——FAQ 速查层之外，
+# 按客户视角检索知识库文档（与用户对话同一授权语义，subject_type=customer）。
+_RAG_SEARCH_KBS = ("cs_faq", "cs_policy")
+_RAG_TOP_K = 3
+_RAG_SNIPPET_MAX_CHARS = 500
 
 
 class QaFaqDraftBody(BaseModel):
@@ -74,6 +84,9 @@ class SearchItem(BaseModel):
     answer: str
     score: float
     matched: bool
+    # faq=速查层命中；rag=知识库文档命中（B1/A7 扩展通道，默认 faq 保持
+    # 既有响应契约，旧前端不读该字段不受影响）
+    source: str = "faq"
 
 
 class SearchResponse(BaseModel):
@@ -159,27 +172,78 @@ async def create_faq_draft(
     )
 
 
+async def _rag_channel_items(query: str, tenant_id: str) -> list[SearchItem]:
+    """RAG 扩展通道：知识库文档级检索（只读增强，失败逐库降级为空）。
+
+    与用户对话同一授权语义（subject_type=customer，KB keep-set 服务端
+    强制）；同步 HTTP 经 to_thread 执行，不阻塞事件循环。检索失败只记
+    日志并跳过该库——FAQ 命中照常返回，不 fail 整个接口。
+    """
+    from backend.rag.client import get_rag_proxy
+
+    proxy = get_rag_proxy()
+    items: list[SearchItem] = []
+    for kb_id in _RAG_SEARCH_KBS:
+        try:
+            docs = await asyncio.to_thread(
+                proxy.retrieve_documents, query,
+                kb_id=kb_id, top_k=_RAG_TOP_K,
+                subject_type="customer", tenant_id=tenant_id,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[CSKnowledge] RAG 通道降级 kb=%s tenant=%s: %s",
+                kb_id, tenant_id, exc,
+            )
+            continue
+        for doc in docs:
+            meta = doc.metadata or {}
+            content = str(doc.page_content or "").strip()
+            if not content:
+                continue
+            title = (
+                meta.get("source_file")
+                or meta.get("section_title")
+                or meta.get("doc_id")
+                or kb_id
+            )
+            distance = meta.get("score")
+            # metadata.score 为向量距离（越小越相关），转相似度语义对齐
+            # FAQ 分值方向；BM25 补充结果无 score，落 0.5 固定档
+            if isinstance(distance, (int, float)):
+                similarity = max(0.0, min(1.0, 1.0 - float(distance)))
+            else:
+                similarity = 0.5
+            items.append(SearchItem(
+                question=f"【知识库】{title}",
+                answer=content[:_RAG_SNIPPET_MAX_CHARS],
+                score=round(similarity, 4),
+                matched=False,
+                source="rag",
+            ))
+    return items
+
+
 @router.get("/cs/knowledge/search", response_model=SearchResponse)
 async def knowledge_search(
     q: str = Query(min_length=1, max_length=500),
     context: AgentContext = Depends(require_agent),
 ) -> SearchResponse:
-    """知识检索：FAQ 只读命中（精确=1.0 / bigram Jaccard 相似度），零台账。"""
+    """知识检索：FAQ 只读命中（精确/模糊）+ RAG 知识库文档命中，零台账。"""
     from backend.customer_service.faq import get_faq_store
 
     query = q.strip()
     if not query:
         raise HTTPException(422, detail="检索词不能为空")
     results = get_faq_store().search(query, k=5, min_score=0.30)
-    return SearchResponse(
-        items=[
-            SearchItem(
-                question=item["question"],
-                answer=item["answer"],
-                score=item["score"],
-                matched=item["matched"],
-            )
-            for item in results
-        ],
-        query=query,
-    )
+    items = [
+        SearchItem(
+            question=item["question"],
+            answer=item["answer"],
+            score=item["score"],
+            matched=item["matched"],
+        )
+        for item in results
+    ]
+    rag_items = await _rag_channel_items(query, context.tenant_id)
+    return SearchResponse(items=items + rag_items, query=query)
