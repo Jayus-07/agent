@@ -160,6 +160,19 @@ def _seed_session(
                 _PREFIX + "user-1", tenant_id, agent_id, created, created, closed,
             ),
         )
+        # W2-3（2026-11-03）：坐席归属唯一事实源 = assignments.accepted，
+        # 与生产认领链路一致（dashboard 不再读 handoffs.assigned_agent_id）
+        if agent_id:
+            cur.execute(
+                "INSERT INTO customer_service.assignments"
+                " (tenant_id, handoff_id, conversation_id, agent_id, state,"
+                "  assigned_at, unassigned_at)"
+                " VALUES (%s, %s, %s, %s, 'accepted', %s, %s)",
+                (
+                    tenant_id, _PREFIX + "ho-" + conversation_id,
+                    conversation_id, agent_id, created, closed,
+                ),
+            )
         if intent:
             cur.execute(
                 "INSERT INTO customer_service.messages"
@@ -307,6 +320,27 @@ def test_dashboard_handoff_rate_dedupes_same_conversation(db, sup_client):
     assert cards["received"]["value"] == 2
     # 2 条 handoff 行 → 去重后 1 个会话：比率 1/2；旧口径为 2/2=100%
     assert cards["handoff_rate"]["value"] == 0.5
+
+
+def test_dashboard_agent_kpi_survives_conversation_close(db, sup_client):
+    """W2-3（2026-11-03）：绩效接待量取 assignments.accepted 归属。
+
+    生产实况：认领链路从不写 handoffs.assigned_agent_id，会话关闭时
+    conversations.assigned_agent_id 一并清空——旧口径绩效接待恒 0。
+    assignments 行保留归属（state=accepted，unassigned_at=关闭时间），
+    关闭后仍可计数；无接待的坐席行保持 0。
+    """
+    _seed_agent(_PREFIX + "agent-a")
+    _seed_agent(_PREFIX + "agent-zero")   # 有坐席行、无接待
+    _seed_session(_PREFIX + "conv-k1", agent_id=_PREFIX + "agent-a",
+                  handle_minutes=12)
+
+    response = sup_client.get("/cs/dashboard", params={"range": "today"})
+    assert response.status_code == 200, response.text
+    agents = {a["agent_id"]: a for a in response.json()["agents"]}
+    assert agents[_PREFIX + "agent-a"]["handled"] == 1
+    assert agents[_PREFIX + "agent-a"]["aht_s"] == 12 * 60
+    assert agents[_PREFIX + "agent-zero"]["handled"] == 0
 
 
 def test_dashboard_agent_scope_self_only(db, agent_client):

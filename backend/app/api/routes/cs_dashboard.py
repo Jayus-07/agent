@@ -58,14 +58,17 @@ _AGG_SQL = {
         FROM customer_service.conversations c
         WHERE c.tenant_id = :tenant
           AND c.created_at >= :a AND c.created_at < :b
-          AND EXISTS (SELECT 1 FROM customer_service.handoffs hh
-                       WHERE hh.conversation_id = c.conversation_id
-                         AND hh.tenant_id = c.tenant_id
-                         AND hh.assigned_agent_id = :agent)
+          AND EXISTS (SELECT 1 FROM customer_service.assignments aa
+                       WHERE aa.conversation_id = c.conversation_id
+                         AND aa.tenant_id = c.tenant_id
+                         AND aa.agent_id = :agent
+                         AND aa.state = 'accepted')
     """,
 }
 
-# 近 7 日趋势（转人工序列：ALL=全部坐席 / SELF=仅本人）。
+# 近 7 日趋势（转人工序列：ALL=全部转人工会话 / SELF=仅本人接待的）。
+# W2-3（2026-11-03）：坐席归属唯一事实源 = assignments——认领链路从不
+# 写 handoffs.assigned_agent_id，旧条件使转人工序列与本人口径恒 0。
 _TREND_SQL = {
     "all": """
         SELECT to_char(d.day, 'MM-DD')                          AS label,
@@ -83,7 +86,6 @@ _TREND_SQL = {
                ON h.tenant_id = :tenant
               AND h.created_at >= d.day
               AND h.created_at < d.day + interval '1 day'
-              AND h.assigned_agent_id IS NOT NULL
               AND (c.conversation_id IS NULL
                    OR h.conversation_id = c.conversation_id)
         GROUP BY d.day
@@ -105,7 +107,11 @@ _TREND_SQL = {
                ON h.tenant_id = :tenant
               AND h.created_at >= d.day
               AND h.created_at < d.day + interval '1 day'
-              AND h.assigned_agent_id = :agent
+              AND EXISTS (SELECT 1 FROM customer_service.assignments a
+                          WHERE a.conversation_id = h.conversation_id
+                            AND a.tenant_id = h.tenant_id
+                            AND a.agent_id = :agent
+                            AND a.state = 'accepted')
               AND (c.conversation_id IS NULL
                    OR h.conversation_id = c.conversation_id)
         GROUP BY d.day
@@ -137,10 +143,11 @@ _INTENTS_SQL = {
           AND m.created_at >= :start AND m.created_at < :end
           AND m.role = 'user'
           AND m.intent_name IS NOT NULL AND m.intent_name <> ''
-          AND EXISTS (SELECT 1 FROM customer_service.handoffs hh
-                       WHERE hh.conversation_id = m.conversation_id
-                         AND hh.tenant_id = c.tenant_id
-                         AND hh.assigned_agent_id = :agent)
+          AND EXISTS (SELECT 1 FROM customer_service.assignments aa
+                       WHERE aa.conversation_id = m.conversation_id
+                         AND aa.tenant_id = c.tenant_id
+                         AND aa.agent_id = :agent
+                         AND aa.state = 'accepted')
         GROUP BY m.intent_name
         ORDER BY cnt DESC
         LIMIT 8
@@ -321,12 +328,14 @@ async def _agents(
     rows = (
         await session.execute(text("""
             WITH h AS (
-                SELECT assigned_agent_id, conversation_id,
-                       EXTRACT(EPOCH FROM (closed_at - created_at)) AS handle_s
-                FROM customer_service.handoffs
-                WHERE tenant_id = :tenant
-                  AND created_at >= :start AND created_at < :end
-                  AND assigned_agent_id IS NOT NULL
+                SELECT a.agent_id AS assigned_agent_id, a.conversation_id,
+                       EXTRACT(EPOCH FROM (a.unassigned_at - a.assigned_at))
+                           AS handle_s
+                FROM customer_service.assignments a
+                WHERE a.tenant_id = :tenant
+                  AND a.assigned_at >= :start AND a.assigned_at < :end
+                  AND a.state = 'accepted'
+                  AND a.agent_id IS NOT NULL
             ),
             perf AS (
                 SELECT assigned_agent_id,
