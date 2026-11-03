@@ -533,6 +533,7 @@ class MallService:
 
     def _cancel_order_local(
         self, user_id: str, order_no: str, *, via_confirmation: bool,
+        expected_status: str | None = None,
     ) -> dict[str, Any]:
         from sqlalchemy import text
 
