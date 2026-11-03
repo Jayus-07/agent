@@ -268,6 +268,47 @@ def test_dashboard_supervisor_aggregation(db, sup_client):
     assert trend[-1]["received"] >= 3
 
 
+def test_dashboard_handoff_rate_dedupes_same_conversation(db, sup_client):
+    """W2-2（2026-11-03）：转人工分子按会话去重，比率不超 100%。
+
+    同一会话多次转人工/超时重开会重复产生 handoff 行，旧口径 count(*)
+    曾致近 7 日转人工率 102%；去重后分子=发生转人工的去重会话数，
+    与分母「接待会话数」语义对齐。
+    """
+    _seed_agent(_PREFIX + "agent-a")
+    now = datetime.now(timezone.utc)
+    with _pg() as conn, conn.cursor() as cur:
+        # 会话 1：两条 handoff（转人工 → 超时重开 → 再转）；
+        # 会话 2：纯 AI 接待，无 handoff
+        for conv_id in (_PREFIX + "conv-h1", _PREFIX + "conv-h2"):
+            cur.execute(
+                "INSERT INTO customer_service.conversations"
+                " (conversation_id, user_id, tenant_id, conversation_status,"
+                "  handling_mode, channel, priority, created_at, updated_at)"
+                " VALUES (%s, %s, %s, 'resolved', 'ai', 'web', 'medium', %s, %s)",
+                (conv_id, _PREFIX + "user-1", TENANT, now, now),
+            )
+        for i, ho_id in enumerate(("ho-h1a", "ho-h1b")):
+            cur.execute(
+                "INSERT INTO customer_service.handoffs"
+                " (handoff_id, conversation_id, user_id, tenant_id,"
+                "  handoff_state, attempt_count, created_at, updated_at, closed_at)"
+                " VALUES (%s, %s, %s, %s, 'closed', %s, %s, %s, %s)",
+                (
+                    _PREFIX + ho_id, _PREFIX + "conv-h1", _PREFIX + "user-1",
+                    TENANT, i + 1, now - timedelta(minutes=10), now, now,
+                ),
+            )
+        conn.commit()
+
+    response = sup_client.get("/cs/dashboard", params={"range": "today"})
+    assert response.status_code == 200, response.text
+    cards = response.json()["cards"]
+    assert cards["received"]["value"] == 2
+    # 2 条 handoff 行 → 去重后 1 个会话：比率 1/2；旧口径为 2/2=100%
+    assert cards["handoff_rate"]["value"] == 0.5
+
+
 def test_dashboard_agent_scope_self_only(db, agent_client):
     _seed_agent(_PREFIX + "agent-a")
     _seed_agent(_PREFIX + "agent-b")
