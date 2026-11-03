@@ -891,6 +891,12 @@ async def travel_plan(request: Request):
     # 鉴权先于 body 解析：未认证不消费请求体（fail-closed）
     identity = require_identity(request)
 
+    # audit P3/B4：租户 fail-closed——网关对 JWT 必注入 tenant_id，空租户
+    # 仅旧令牌/异常路径可达；对齐 cs_admin._resolve_tenant_scope 口径，
+    # 绝不静默回落 'default'（worker 内异常会被吞成计划错误，必须在此拦截）。
+    if not getattr(identity, "tenant_id", ""):
+        raise HTTPException(403, detail="缺少可信租户身份")
+
     req = await _load_travel_plan_request(request)
 
     conversation_id = req.conversation_id or req.session_id or f"travel-{uuid4().hex}"
@@ -909,7 +915,8 @@ async def travel_plan(request: Request):
         _annotate_trace_source(trace, req.client_run_id, req.source)
         graph_input = _build_travel_graph_input(
             req, identity, conversation_id, turn_id)
-        tenant_id = getattr(identity, "tenant_id", "") or "default"
+        # audit P3/B4：路由层已 fail-closed 校验租户非空，此处不再回退 default
+        tenant_id = getattr(identity, "tenant_id", "")
         final_state: dict = {}
         read_only_context: dict[str, Any] = {}
         tool_events: list[dict] = []
