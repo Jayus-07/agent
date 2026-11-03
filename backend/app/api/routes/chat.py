@@ -32,7 +32,13 @@ from backend.config.settings import (
     CHAT_SSE_GET_TIMEOUT,
 )
 
-from backend.app.api.schemas import ChatRequest, ChatResponse, AbortRequest, ErrorResponse
+from backend.app.api.schemas import (
+    AbortRequest,
+    ChatMessagesRequest,
+    ChatRequest,
+    ChatResponse,
+    ErrorResponse,
+)
 from backend.app.api.deps import get_multi_agent
 from backend.core.product_context import (
     AGENT_PRODUCT, CUSTOMER_SERVICE_PRODUCT, PUBLIC_PRODUCT,
@@ -809,10 +815,11 @@ async def chat_stream_resume(
 @router.post("/messages")
 @router.post("/agent/messages")
 @router.post("/customer-service/messages")
-def save_messages(req: dict, request: Request):
+def save_messages(req: ChatMessagesRequest, request: Request):
     """批量保存会话消息（前端 SSE done 后调用）
 
-    body: { session_id, messages: [{ role, content }, ...] }
+    DTO 契约（审计 P2 批次）：messages 数量/单条长度/字段白名单在 Pydantic
+    层收口（422 语义），不再裸 dict 直透持久层。
 
     同步 def + memory_manager 桥接：DB engine 绑定在 memory 后台 loop，
     主 loop 直接 await 会抛 "attached to a different loop"（CS 页消息
@@ -827,13 +834,13 @@ def save_messages(req: dict, request: Request):
             status_code=403,
             detail="共享对话入口不开放持久记忆，请使用产品专属入口",
         )
-    session_id = _product_session_id(product, req.get("session_id", ""))
+    session_id = _product_session_id(product, req.session_id)
     from backend.memory.manager import memory_manager
     from backend.memory.service import MemoryService
     return memory_manager.run_tool(
         lambda: MemoryService().save_messages(
             session_id=session_id,
-            messages=req.get("messages", []),
+            messages=[m.model_dump() for m in req.messages],
             user_id=memory_user_id(product, user_id),
             tenant_id=identity.tenant_id,
         )

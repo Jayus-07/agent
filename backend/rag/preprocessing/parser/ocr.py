@@ -285,6 +285,19 @@ def _record_ocr_usage(model: str, prompt_tokens: int, completion_tokens: int,
             "stage": attribution["stage"] or "ocr",
             "finish_reason": status,
         })
+        # 审计 P2 批次：OCR 此前只写观测、绕过统一预算链路——存在请求级预算
+        # 上下文时（如 /chat 内 RAG 技能实时解析）把 token 计入请求预算结算；
+        # 后台索引任务无预算上下文时 record_model_usage 返回 no_request_budget
+        # 自然跳过。软失败：预算链路故障不影响 OCR 主流程。视觉调用本身不走
+        # proxy 是既有裁决（文本 chat 角色通道，改造风险大于收益）。
+        if status == "success":
+            from backend.infra.llm.budget import record_model_usage
+
+            record_model_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
     except Exception as e:
         logger.debug(f"[OCR] 用量记录失败（不影响主流程）: {e}")
 
