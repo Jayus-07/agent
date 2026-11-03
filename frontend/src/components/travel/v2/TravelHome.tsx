@@ -1,35 +1,26 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { ArrowRight, ArrowUpRight, CalendarDays, Hotel, MapPin, MessageCircle, Plane, Sparkles, TrainFront, Utensils } from 'lucide-react'
+import { ArrowRight, CalendarDays, Hotel, MapPin, MessageCircle, Plane, Sparkles, TrainFront, Utensils } from 'lucide-react'
 import { archiveTravelTripV2, fetchTravelTripsV2, fetchTravelTemplatesV2, type TravelTemplateV2, type TravelTripV2 } from '@/api/travelV2'
 import { TRAVEL_PHOTOS } from './travelV2Data'
 import { TravelBottomNav, TravelTopBar } from './TravelV2Frame'
 import TravelSearchPanel, { type TravelSearchKind } from './TravelSearchPanel'
-import { TravelTemplateCard, travelDestinationImage } from './TravelTemplateCard'
+import { travelDestinationImage } from './TravelTemplateCard'
 
 export default function TravelHome() {
   const [templates, setTemplates] = useState<TravelTemplateV2[]>([])
   const [trips, setTrips] = useState<TravelTripV2[]>([])
-  const [templatesLoading, setTemplatesLoading] = useState(true)
   const [tripsLoading, setTripsLoading] = useState(true)
-  const [templateError, setTemplateError] = useState('')
   const [tripError, setTripError] = useState('')
   const [searchKind, setSearchKind] = useState<Exclude<TravelSearchKind, 'trip'> | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    // 模板列表仅用于行程卡封面映射（PlanCard），首页不再展示种子模板区块
     void fetchTravelTemplatesV2().then((data) => {
-      if (!cancelled) {
-        setTemplates(data.templates ?? [])
-        setTemplatesLoading(false)
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        setTemplateError('模板目录暂时无法加载，请稍后重试。')
-        setTemplatesLoading(false)
-      }
-    })
+      if (!cancelled) setTemplates(data.templates ?? [])
+    }).catch(() => { /* 封面映射失败时回落本地图片，不打断行程列表 */ })
     void fetchTravelTripsV2().then((data) => {
       if (!cancelled) {
         setTrips(data.trips ?? [])
@@ -76,13 +67,8 @@ export default function TravelHome() {
         </section>
 
         <section className="mt-8 md:mt-10">
-          <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold text-[#4a82c5]">从一份好路线开始</p><h2 className="mt-1 text-lg font-bold tracking-[-.025em] text-[#17283f] md:text-[21px]">精选旅行模板</h2></div><a href="/travel/templates" className="inline-flex min-h-10 items-center gap-1 rounded-lg px-2 text-xs font-medium text-[#2878f5] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#2878f5]">浏览模板 <ArrowUpRight size={14} aria-hidden /></a></div>
-          {templateError ? <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{templateError}</p> : templatesLoading ? <p role="status" className="rounded-xl border border-[#e6edf5] bg-white px-4 py-6 text-center text-xs text-[#8292a6]">正在加载平台精选模板…</p> : templates.length === 0 ? <p role="status" className="rounded-xl border border-[#e6edf5] bg-white px-4 py-6 text-center text-xs text-[#8292a6]">暂时没有精选模板</p> : <div className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 md:mx-0 md:grid md:grid-cols-3 md:gap-4 md:overflow-visible md:px-0">{templates.slice(0, 6).map((template) => <TravelTemplateCard key={template.slug} template={template} layout="carousel" />)}</div>}
-        </section>
-
-        <section className="mt-8 md:mt-10">
           <div className="mb-4 flex items-end justify-between gap-4"><div><p className="text-[10px] font-semibold text-[#4a82c5]">接着上次的计划</p><h2 className="mt-1 text-lg font-bold tracking-[-.025em] text-[#17283f] md:text-[21px]">我的最近行程</h2></div><a href="/travel/itineraries" className="text-xs font-medium text-[#2878f5]">全部行程</a></div>
-          {tripError ? <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{tripError}</p> : tripsLoading ? <p role="status" className="rounded-xl border border-[#e6edf5] bg-white px-4 py-6 text-center text-xs text-[#8292a6]">正在加载最近行程…</p> : trips.length === 0 ? <div className="rounded-[20px] border border-dashed border-[#cfdeef] bg-white/70 p-6 text-center"><Plane size={22} className="mx-auto text-[#83a7d5]" aria-hidden /><p className="mt-2 text-sm font-semibold text-[#465e7a]">还没有已保存的行程</p><p className="mt-1 text-xs text-[#8a9bb0]">从上方描述旅行需求，或复制一份精选模板。</p></div> : <div className="space-y-3">{trips.slice(0, 3).map((trip) => <PlanCard key={trip.trip_id} trip={trip} templates={templates} onArchived={() => setTrips((current) => current.filter((item) => item.trip_id !== trip.trip_id))} />)}</div>}
+          {tripError ? <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">{tripError}</p> : tripsLoading ? <p role="status" className="rounded-xl border border-[#e6edf5] bg-white px-4 py-6 text-center text-xs text-[#8292a6]">正在加载最近行程…</p> : trips.length === 0 ? <div className="rounded-[20px] border border-dashed border-[#cfdeef] bg-white/70 p-6 text-center"><Plane size={22} className="mx-auto text-[#83a7d5]" aria-hidden /><p className="mt-2 text-sm font-semibold text-[#465e7a]">还没有已保存的行程</p><p className="mt-1 text-xs text-[#8a9bb0]">从上方描述旅行需求，规划完成后自动保存到这里。</p></div> : <div className="space-y-3">{trips.slice(0, 3).map((trip) => <PlanCard key={trip.trip_id} trip={trip} templates={templates} onArchived={() => setTrips((current) => current.filter((item) => item.trip_id !== trip.trip_id))} />)}</div>}
         </section>
       </div>
       <TravelBottomNav active="home" />
