@@ -57,6 +57,22 @@ router = APIRouter(prefix="/travel", tags=["旅游域"])
 _retired_v1_router = APIRouter(prefix="/travel", tags=["已退役旅游 V1"])
 
 
+def _travel_tenant(request: Request, identity) -> str:
+    """租户 fail-closed（audit P3 全域收口）。
+
+    header/strict 源只认网关注入的 ``identity.tenant_id``；legacy body 源读
+    ``X-Tenant-Id`` 信任头；两者皆空即 403，绝不静默回落 ``'default'``
+    （对齐 cs_admin._resolve_tenant_scope / plan_revisions._tenant 口径）。
+    """
+    if getattr(identity, "source", "") == "body":
+        tenant = request.headers.get("X-Tenant-Id", "")
+    else:
+        tenant = getattr(identity, "tenant_id", "")
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    return tenant
+
+
 # ============================================================
 # POST /travel/plan — 非流式规划（返回 markdown 行程单 + 结构化行程）
 # ============================================================
@@ -572,7 +588,10 @@ def _restore_from_chat_reference(
     from backend.travel.core.plan_service import plan_version_service
 
     user_id = identity.user_id or ""
-    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    tenant_id = getattr(identity, "tenant_id", "")
+    if not tenant_id:
+        # 调用方（/plan 与 v2 流 worker）路由层已 fail-closed；此处兜底防复活
+        raise ValueError("缺少可信租户身份")
     latest = plan_version_service.latest_version(
         conversation_id, user_id, tenant_id=tenant_id, strict=True)
     if not latest:
@@ -1059,9 +1078,12 @@ def _stopped_result(reason: str) -> dict:
 
 def _submit_travel_request(identity, conversation_id, worker):
     from backend.travel.request_runtime import RequestRejected, get_request_executor
+    tenant = getattr(identity, "tenant_id", "")
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     try:
         return get_request_executor().submit(
-            getattr(identity, "tenant_id", "") or "default", identity.user_id or "",
+            tenant, identity.user_id or "",
             conversation_id, worker,
         )
     except RequestRejected as exc:
@@ -1104,6 +1126,8 @@ async def _travel_plan_stream_impl(
     V1 checkpoint；只有退役入口才触碰 V1 计划账本。
     """
     identity = require_identity(request)
+    # audit P3：全域租户 fail-closed——worker 内异常会被吞成错误帧，必须在入口拦截
+    tenant = _travel_tenant(request, identity)
     req = await _load_travel_plan_request(request)
     if not persist_legacy_plan and req.mode == "read_only":
         raise HTTPException(status_code=422, detail="旅游 V2 规划流不接受 V1 只读模式")
@@ -1190,7 +1214,7 @@ async def _travel_plan_stream_impl(
         graph_input = _build_travel_graph_input(
             req, identity, execution_conversation_id, turn_id)
         graph_input["session_id"] = execution_conversation_id
-        tenant_id = getattr(identity, "tenant_id", "") or "default"
+        tenant_id = tenant
         started_at = time.monotonic()
         from backend.observability.tracer import trace_collector
         trace = trace_collector.start(
@@ -1926,16 +1950,20 @@ def _travel_message_session_id(
     conversation_id = (conversation_id or "").strip()
     if not conversation_id or len(conversation_id) > 128:
         raise HTTPException(status_code=422, detail="会话标识无效")
-    scope = "\0".join((
-        (tenant_id or "").strip() or "default", user_id, conversation_id,
-    ))
+    tenant = (tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    scope = "\0".join((tenant, user_id, conversation_id))
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
     return f"travel:{digest}"
 
 
 def _travel_message_owner_id(user_id: str, tenant_id: str) -> str:
     """给无 tenant_id 列的共享 memory 表提供租户隔离属主键。"""
-    scope = f"{(tenant_id or '').strip() or 'default'}\0{user_id}"
+    tenant = (tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    scope = f"{tenant}\0{user_id}"
     digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
     return f"travel:{digest[:57]}"  # ChatSession.user_id 列宽为 64
 
@@ -1953,7 +1981,7 @@ def _run_travel_memory(operation):
 def travel_conversation_messages(conversation_id: str, request: Request):
     identity = require_identity(request)
     user_id = identity.user_id
-    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    tenant_id = _travel_tenant(request, identity)
     memory_owner_id = _travel_message_owner_id(user_id, tenant_id)
     memory_session_id = _travel_message_session_id(
         conversation_id, user_id, tenant_id,
@@ -1983,7 +2011,7 @@ def replace_travel_conversation_messages(
 ):
     identity = require_identity(request)
     user_id = identity.user_id
-    tenant_id = getattr(identity, "tenant_id", "") or "default"
+    tenant_id = _travel_tenant(request, identity)
     memory_owner_id = _travel_message_owner_id(user_id, tenant_id)
     memory_session_id = _travel_message_session_id(
         conversation_id, user_id, tenant_id,
@@ -2007,9 +2035,10 @@ def travel_plan_list(request: Request, limit: int = Query(30, ge=1, le=100)):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     plans = plan_version_service.list_conversations(
         identity.user_id or "", limit=limit,
-        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        tenant_id=tenant_id)
     return {"plans": plans}
 
 
@@ -2022,11 +2051,12 @@ def delete_travel_plan(conversation_id: str, request: Request):
     )
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     try:
         deleted = plan_version_service.delete_conversation(
             conversation_id,
             identity.user_id or "",
-            tenant_id=getattr(identity, "tenant_id", "") or "default",
+            tenant_id=tenant_id,
         )
     except PlanVersionPersistenceError as exc:
         raise HTTPException(status_code=503, detail="行程未能删除，请稍后重试") from exc
@@ -2039,16 +2069,17 @@ def travel_plan_latest(conversation_id: str, request: Request):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     latest = plan_version_service.latest_version(
         conversation_id, identity.user_id or "",
-        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        tenant_id=tenant_id)
     if not latest:
         # 不存在 / 越权 / 账本不可用一律 404，不泄露存在性
         raise HTTPException(status_code=404, detail="无可用行程版本")
     active_reader = getattr(plan_version_service, "active_version", None)
     active = (active_reader(
         conversation_id, identity.user_id or "",
-        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        tenant_id=tenant_id)
         if active_reader else None)
     return {
         "conversation_id": conversation_id,
@@ -2111,9 +2142,10 @@ def travel_candidates(conversation_id: str, request: Request):
     from backend.travel.graph_builder import get_travel_graph
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     latest = plan_version_service.latest_version(
         conversation_id, identity.user_id or "",
-        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        tenant_id=tenant_id)
     if not latest:
         raise HTTPException(status_code=404, detail="无可用行程版本")
 
@@ -2127,7 +2159,7 @@ def travel_candidates(conversation_id: str, request: Request):
 
         snap = get_travel_graph().get_state(_build_invoke_config(
             conversation_id,
-            getattr(identity, "tenant_id", "") or "default",
+            tenant_id,
             identity.user_id or ""))
         raw = (getattr(snap, "values", None) or {}).get("candidates") or []
         if raw:
@@ -2172,9 +2204,10 @@ def travel_plan_versions(conversation_id: str, request: Request):
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     versions = plan_version_service.list_versions(
         conversation_id, identity.user_id or "",
-        tenant_id=getattr(identity, "tenant_id", "") or "default")
+        tenant_id=tenant_id)
     return {"conversation_id": conversation_id, "versions": versions}
 
 
@@ -2187,6 +2220,7 @@ class TravelPlanConfirmRequest(BaseModel):
 @_retired_v1_router.post("/plans/confirm", summary="已退役：V1 草案确认")
 async def travel_plan_confirm(request: Request):
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     try:
         req = TravelPlanConfirmRequest(**(await request.json()))
     except Exception as e:
@@ -2198,7 +2232,7 @@ async def travel_plan_confirm(request: Request):
         return await asyncio.to_thread(
             plan_version_service.confirm,
             req.conversation_id, identity.user_id or "", req.plan_version,
-            tenant_id=getattr(identity, "tenant_id", "") or "default")
+            tenant_id=tenant_id)
     except Exception as e:
         raise _version_http_error(e)
 
@@ -2212,6 +2246,7 @@ class TravelPlanDiscardRequest(BaseModel):
 @_retired_v1_router.post("/plans/discard", summary="已退役：V1 草案放弃")
 async def travel_plan_discard(request: Request):
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     try:
         req = TravelPlanDiscardRequest(**(await request.json()))
     except Exception as e:
@@ -2222,7 +2257,7 @@ async def travel_plan_discard(request: Request):
         return await asyncio.to_thread(
             plan_version_service.discard,
             req.conversation_id, identity.user_id or "", req.plan_version,
-            tenant_id=getattr(identity, "tenant_id", "") or "default")
+            tenant_id=tenant_id)
     except Exception as e:
         raise _version_http_error(e)
 
@@ -2238,6 +2273,7 @@ class TravelPlanRestoreRequest(BaseModel):
 @_retired_v1_router.post("/plans/restore", summary="已退役：V1 行程恢复")
 async def travel_plan_restore(request: Request):
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     try:
         req = TravelPlanRestoreRequest(**(await request.json()))
     except Exception as e:
@@ -2249,7 +2285,7 @@ async def travel_plan_restore(request: Request):
             plan_version_service.restore,
             req.conversation_id, identity.user_id or "",
             target_version=req.target_version, base_version=req.base_version,
-            tenant_id=getattr(identity, "tenant_id", "") or "default")
+            tenant_id=tenant_id)
     except Exception as e:
         raise _version_http_error(e)
 
@@ -2264,11 +2300,12 @@ def travel_plan_diff(
     from backend.travel.core.plan_service import plan_version_service
 
     identity = require_identity(request)
+    tenant_id = _travel_tenant(request, identity)
     try:
         return plan_version_service.diff(
             conversation_id, identity.user_id or "",
             from_version=from_version, to_version=to_version,
-            tenant_id=getattr(identity, "tenant_id", "") or "default")
+            tenant_id=tenant_id)
     except Exception as e:
         raise _version_http_error(e)
 

@@ -40,7 +40,8 @@ async def test_travel_plan_stream_creates_and_finishes_trace(monkeypatch):
             )
             return {"brief": {"destination": "杭州"}}
 
-    monkeypatch.setattr(travel, "require_identity", lambda _request: SimpleNamespace(user_id="u-1"))
+    monkeypatch.setattr(travel, "require_identity", lambda _request: SimpleNamespace(
+        user_id="u-1", source="header", tenant_id="default"))
     monkeypatch.setattr(
         travel, "_load_travel_plan_request",
         lambda _request: _resolved(travel.TravelPlanRequest(
@@ -92,7 +93,8 @@ async def test_travel_plan_stream_binds_trace_inside_worker(monkeypatch):
             captured.append(current)
             return {"brief": {"destination": "上海"}}
 
-    monkeypatch.setattr(travel, "require_identity", lambda _request: SimpleNamespace(user_id="u-2"))
+    monkeypatch.setattr(travel, "require_identity", lambda _request: SimpleNamespace(
+        user_id="u-2", source="header", tenant_id="default"))
     monkeypatch.setattr(
         travel, "_load_travel_plan_request",
         lambda _request: _resolved(travel.TravelPlanRequest(
