@@ -129,7 +129,7 @@ def test_modify_avoid_uses_existing_replan():
 
 
 def test_missing_days_options_require_explicit_acceptance():
-    result = slot_filler_node({"user_message": "帮我规划丽江"})
+    result = slot_filler_node({"user_message": "帮我规划丽江，先不定日期"})
     assert result["brief"]["days"] is None
     assert result["clarification_options"] == [
         {"label": "按 3 天参考规划", "days": 3, "message": "规划丽江3天行程"},
@@ -139,6 +139,7 @@ def test_missing_days_options_require_explicit_acceptance():
     assert decide(result).action == "finish_report"
     accepted = slot_filler_node({**result, "user_message": result["clarification_options"][0]["message"]})
     assert accepted["brief"]["days"] == 3
+    # 日期槽（2026-11-03）：丽江用例消息已带弹性表达，合并后不再追问
     assert accepted["brief_missing"] == []
     assert accepted["clarification_options"] == []
 
@@ -161,7 +162,7 @@ def test_options_in_result():
 
 
 def test_ordinal_day_modification_does_not_change_trip_length():
-    brief = TravelBrief(destination="厦门", days=3)
+    brief = TravelBrief(destination="厦门", days=3, start_date_flexible=True)
     result = slot_filler_node({"user_message": "把第二天下午换成室内",
                               "brief": brief.model_dump(),
                               "brief_fingerprint": brief_fingerprint(brief),
@@ -238,7 +239,7 @@ def test_options_in_requirement_event():
 
     events = []
     with travel_event_scope(events.append):
-        result = slot_filler_node({"user_message": "帮我规划丽江"})
+        result = slot_filler_node({"user_message": "帮我规划丽江，先不定日期"})
     interpreted = next(e for e in events if e["event"] == "requirement.interpreted")
     assert interpreted["clarification_options"] == result["clarification_options"]
     assert interpreted["intent"] == "plan"

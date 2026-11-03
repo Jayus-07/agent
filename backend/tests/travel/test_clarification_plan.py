@@ -35,16 +35,50 @@ def test_priority_covers_required_slots():
 
 def test_plan_none_when_ready():
     assert build_clarification_plan(
-        TravelBrief(destination="福州", days=3)) is None
+        TravelBrief(destination="福州", days=3, start_date="2026-11-08")) is None
+    # 日期弹性：明确「先不定」后同样就绪（不再追问日期）
+    assert build_clarification_plan(
+        TravelBrief(destination="福州", days=3, start_date_flexible=True)) is None
 
 
 def test_plan_asks_single_highest_priority_slot():
-    """P0-10/11：missing=[destination,days] 只问 destination。"""
+    """P0-10/11：missing=[destination,days,start_date] 只问 destination。"""
     plan = build_clarification_plan(TravelBrief())
     assert plan is not None
-    assert plan.missing_slots == ["destination", "days"]
+    assert plan.missing_slots == ["destination", "days", "start_date"]
     assert plan.ask_slots == ["destination"]
     assert plan.allow_free_text is True
+
+
+def test_plan_asks_date_after_days_resolved():
+    """日期为第三必填槽：城市与天数齐备后追问日期，附快捷选项。"""
+    plan = build_clarification_plan(TravelBrief(destination="成都", days=2))
+    assert plan is not None
+    assert plan.ask_slots == ["start_date"]
+    labels = [option.label for option in plan.options]
+    assert labels == ["今天出发", "明天出发", "这周末出发", "先不定日期"]
+
+
+def test_date_options_reroute_and_flex():
+    """日期 chips 重发可解析（可路由性）、「先不定」可置弹性收口追问。"""
+    from backend.travel.agents.requirement_agent import (
+        extract_date_flexible,
+        extract_fresh_brief,
+        extract_start_date,
+    )
+
+    plan = build_clarification_plan(TravelBrief(destination="成都", days=2))
+    today = extract_start_date("今天出发")
+    tomorrow = extract_start_date("明天出发")
+    weekend = extract_start_date("这周末出发")
+    assert today is not None and tomorrow is not None and weekend is not None
+    assert tomorrow > today
+    # 「先不定日期」→ 弹性标志置位，追问链收口
+    flex_brief = extract_fresh_brief("先不定日期")
+    assert flex_brief.start_date_flexible is True
+    assert extract_date_flexible("日期没定，随便排") is True
+    # 普通无日期消息不误触弹性（那是该追问的正常场景）
+    assert extract_date_flexible("帮我规划个行程") is False
 
 
 def test_plan_asks_days_when_destination_known():
@@ -89,6 +123,23 @@ def test_destination_options_clickable_reroute():
         assert intent is TravelIntent.PLAN, message
         assert fresh.destination == option["label"].replace("规划", ""), (
             f"{message} 应抽出城市")
+
+
+def test_destination_options_cover_nonseed_hot_cities():
+    """推荐池迁常量清单（2026-11-03）：chips 含种子外热门城市。
+
+    回归锚点：此前推荐池 = 种子 3 城，欢迎语暗示「只能规划这三个」；
+    迁移后 chips 应覆盖种子外城市，且逐个可被 extract_destination 回填
+    （可路由性由 test_destination_options_clickable_reroute 逐项锁定）。
+    """
+    from backend.tools.travel import poi_seed
+
+    plan = build_clarification_plan(TravelBrief())
+    options = frontend_options(plan)
+    assert len(options) == 6
+    seed_cities = set(poi_seed.all_cities())
+    chip_cities = {option["label"].replace("规划", "") for option in options}
+    assert chip_cities - seed_cities, "chips 应含种子外热门城市"
 
 
 def test_days_option_message_routes_and_fills_days():
@@ -211,8 +262,10 @@ def test_trace_semantics_carries_llm_layer_fields():
 
 
 def test_plan_can_ask_for_an_unresolved_selected_poi_reference():
+    # start_date_flexible=True 对应「用户已声明先不定日期、继续对话改行程」
+    # 的真实形态——日期不再追问，选点澄清正常触发。
     plan = build_clarification_plan(
-        TravelBrief(destination="福州", days=2),
+        TravelBrief(destination="福州", days=2, start_date_flexible=True),
         "把这个景点换掉",
         additional_missing=["selected_poi_id"],
     )

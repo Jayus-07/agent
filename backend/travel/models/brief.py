@@ -15,7 +15,7 @@ from datetime import date
 from pydantic import BaseModel, Field
 
 # 缺失即追问的槽位（其余槽位缺失时专家按默认值推进，并在 warnings 里标注）
-REQUIRED_SLOTS: tuple[str, ...] = ("destination", "days")
+REQUIRED_SLOTS: tuple[str, ...] = ("destination", "days", "start_date")
 
 # 节奏档位；未识别时落到 moderate
 PACE_LEVELS: tuple[str, ...] = ("relaxed", "moderate", "intense")
@@ -65,12 +65,11 @@ TIER_LABELS: dict[str, str] = {"economy": "经济实用型", "comfortable": "舒
 SLOT_QUESTIONS: dict[str, str] = {
     "destination": "去哪个城市（或区域）？",
     "days": "打算玩几天？",
-    "start_date": "大概什么时候出发？（不确定可以不说，我按「第 1 天」排）",
+    "start_date": "大概什么时候出发？可以点下方选项，或直接输入日期（还没定也可以先出方案）",
     "party_size": "几个人一起？",
     "budget_cny": "有预算范围吗？",
     "lodging": "希望住在哪个区域？（不确定可以不说）",
     "origin": "从哪里出发？",
-    "start_date": "计划哪天出发？",
     "target_day": "你想调整行程的第几天？",
     "selected_poi_id": "你指的是行程中的哪个景点？",
     "replacement_poi": "想换成什么类型或哪个景点？",
@@ -105,6 +104,10 @@ class TravelBrief(BaseModel):
     destination: str = ""
     origin: str = ""
     start_date: date | None = None
+    # 日期弹性（2026-11-03）：用户明确表示日期未定（「先不定日期」「日期没定」）
+    # 时置位——start_date 虽为必填槽，置位后不再追问，行程按「第 N 天」表述。
+    # 只影响追问（missing_slots），不参与排程指纹（对已有行程置位不该触发重排）。
+    start_date_flexible: bool = False
     days: int | None = None
     # 首末日时间（验收 #82）：「16点到」「10点走」→ HH:MM 字符串，空=未表达。
     # 排程承接：首日光标起点=到达时间、末日截止=离开时间
@@ -157,6 +160,10 @@ class TravelBrief(BaseModel):
             missing.append("destination")
         if self.days is None or self.days < 1:
             missing.append("days")
+        # 日期（2026-11-03）：必填，但用户明确「先不定」后不再追问——
+        # 行程按「第 N 天」表述，时区/天气披露照旧如实。
+        if self.start_date is None and not self.start_date_flexible:
+            missing.append("start_date")
         return missing
 
     def is_ready(self) -> bool:

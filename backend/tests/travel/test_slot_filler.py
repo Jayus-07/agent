@@ -313,18 +313,19 @@ class TestBriefAndClarification:
     def test_full_extraction(self):
         brief = extract_brief(
             "帮我规划福州3天行程，2个人，喜欢人文和摄影，"
-            "一定要去三坊七巷和鼓山，预算3000元"
+            "一定要去三坊七巷和鼓山，预算3000元，11月8号出发"
         )
         assert brief.destination == "福州"
         assert brief.days == 3
         assert brief.party_size == 2
         assert brief.budget_cny == 3000.0
+        assert brief.start_date is not None
         assert brief.is_ready() is True
         assert "三坊七巷" in brief.must_go and "鼓山" in brief.must_go
 
     def test_missing_slots_when_destination_absent(self):
         brief = extract_brief("我想玩3天")
-        assert brief.missing_slots() == ["destination"]
+        assert brief.missing_slots() == ["destination", "start_date"]
         assert brief.is_ready() is False
 
     def test_clarification_asks_highest_priority_slot_only(self):
@@ -340,7 +341,13 @@ class TestBriefAndClarification:
 
     def test_no_clarification_when_ready(self):
         assert build_clarification(
-            TravelBrief(destination="福州", days=2)) == ""
+            TravelBrief(destination="福州", days=2)) != ""
+        assert build_clarification(
+            TravelBrief(destination="福州", days=2,
+                        start_date="2026-11-08")) == ""
+        assert build_clarification(
+            TravelBrief(destination="福州", days=2,
+                        start_date_flexible=True)) == ""
 
     def test_merge_keeps_previous_values(self):
         """追问后用户只补了「3天」，不能把之前说的目的地弄丢。"""

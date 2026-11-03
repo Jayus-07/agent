@@ -111,6 +111,11 @@ def merge_brief(previous: TravelBrief, fresh: TravelBrief) -> TravelBrief:
     # 饮食忌口：本轮有表述才覆盖（与 pace 同一合并语义）
     if fresh.diet:
         merged.diet = fresh.diet
+    # 日期弹性（2026-11-03）：粘滞置位——用户任何一轮明确「先不定日期」后
+    # 不再回退追问；用户随后给出具体日期时 start_date 覆盖（上面已合并），
+    # 弹性标志保持 True 不影响排程（不参与指纹）。
+    if fresh.start_date_flexible:
+        merged.start_date_flexible = True
     return merged
 
 

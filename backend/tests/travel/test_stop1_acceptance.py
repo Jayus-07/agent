@@ -111,11 +111,11 @@ def test_default_party_size_is_explicit_in_requirement_event():
 
 def test_missing_required_slots_clarify_without_fake_itinerary():
     result = slot_filler_node({"user_message": "我想出去玩"})
-    assert result["brief_missing"] == ["destination", "days"]
+    assert result["brief_missing"] == ["destination", "days", "start_date"]
     assert result["clarifications"]
     assert "itinerary" not in result
 
     partial = slot_filler_node({"user_message": "想去杭州"})
     assert partial["brief"]["destination"] == "杭州"
-    assert partial["brief_missing"] == ["days"]
+    assert partial["brief_missing"] == ["days", "start_date"]
     assert "itinerary" not in partial

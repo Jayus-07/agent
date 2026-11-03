@@ -96,7 +96,7 @@ class TestCrossTurnInvalidation:
         graph = checkpointed_graph
         tid = "cross-turn-change"
         first = graph.invoke(
-            new_travel_graph_input("福州3天，2个人，紧凑一点，预算3000"),
+            new_travel_graph_input("福州3天，2个人，紧凑一点，预算3000，先不定日期"),
             config=_cfg(tid))
 
         second = graph.invoke(
@@ -117,7 +117,7 @@ class TestCrossTurnInvalidation:
     def test_added_city_changes_destination_and_replans(self, checkpointed_graph):
         graph = checkpointed_graph
         tid = "cross-turn-city"
-        graph.invoke(new_travel_graph_input("福州3天，1个人"), config=_cfg(tid))
+        graph.invoke(new_travel_graph_input("福州3天，1个人，先不定日期"), config=_cfg(tid))
         second = graph.invoke(new_travel_graph_input("换成杭州吧"), config=_cfg(tid))
         assert second["brief"]["destination"] == "杭州"
         names = [i["title"] for d in second["itinerary"]["days"] for i in d["items"]]
@@ -127,7 +127,7 @@ class TestCrossTurnInvalidation:
         """需求没变就不该重排 —— 否则每轮都白算一遍，用户看到行程无故变化。"""
         graph = checkpointed_graph
         tid = "cross-turn-same"
-        first = graph.invoke(new_travel_graph_input("福州3天，1个人，预算3000"),
+        first = graph.invoke(new_travel_graph_input("福州3天，1个人，预算3000，先不定日期"),
                             config=_cfg(tid))
         second = graph.invoke(new_travel_graph_input("谢谢"), config=_cfg(tid))
 

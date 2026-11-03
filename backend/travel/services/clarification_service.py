@@ -29,7 +29,7 @@ from backend.travel.models.brief import (
 
 # 追问优先级（任务书 八）：missing 含多个时一次只问第一个；用户补齐后
 # 下一轮再问下一个。只收 required 槽；顺序显式声明，禁止散落多个 if。
-CLARIFICATION_PRIORITY: tuple[str, ...] = ("destination", "days")
+CLARIFICATION_PRIORITY: tuple[str, ...] = ("destination", "days", "start_date")
 
 
 class ClarificationOption(BaseModel):
@@ -101,7 +101,7 @@ def _destination_notes(brief: TravelBrief, unsupported_city: str) -> list[str]:
             render_recommendation_line,
         )
 
-        rec_line = render_recommendation_line(recommend_cities(brief.preferences))
+        rec_line = render_recommendation_line(recommend_cities(brief.preferences, top=5))
         if rec_line:
             notes.append(f"{rec_line}，回复城市名即可开始规划。")
     except Exception:  # noqa: BLE001 — 推荐是增强项，失败不影响追问
@@ -118,7 +118,7 @@ def _destination_options() -> list[ClarificationOption]:
     try:
         from backend.travel.recommend import recommend_cities
 
-        recs = recommend_cities([], top=3)
+        recs = recommend_cities([], top=6)
     except Exception:  # noqa: BLE001 — 选项是增强项，失败留空仍可自由输入
         return []
     return [
@@ -129,6 +129,26 @@ def _destination_options() -> list[ClarificationOption]:
             value=rec.city,
         )
         for rec in recs
+    ]
+
+
+def _date_options() -> list[ClarificationOption]:
+    """日期快捷选项（2026-11-03）：今天/明天/这周末 + 明确放弃。
+
+    label 即 message（点击原样重发），必须能被 extract_start_date 解析
+    （今天/明天/周末都在相对日期词表内）或命中弹性抽取（先不定日期 →
+    start_date_flexible，追问链收口）。自由输入永远可用——具体日期
+    （「11月10号」「周五」）由既有日期词表解析，不设「自己填」空消息选项。
+    """
+    return [
+        ClarificationOption(label="今天出发", message="今天出发",
+                            slot="start_date", value="today"),
+        ClarificationOption(label="明天出发", message="明天出发",
+                            slot="start_date", value="tomorrow"),
+        ClarificationOption(label="这周末出发", message="这周末出发",
+                            slot="start_date", value="this_weekend"),
+        ClarificationOption(label="先不定日期", message="先不定日期",
+                            slot="start_date", value="flexible"),
     ]
 
 
@@ -194,9 +214,11 @@ def build_clarification_plan(
         )
     elif ask == "days":
         options = _days_options(brief.destination)
+    elif ask == "start_date":
+        options = _date_options()
     return ClarificationPlan(
         reason=("必填槽位缺失，需要用户补充"
-                if ask in {"destination", "days"}
+                if ask in {"destination", "days", "start_date"}
                 else "修改目标或附加查询信息不明确，需要用户确认"),
         missing_slots=list(missing),
         ask_slots=[ask],
