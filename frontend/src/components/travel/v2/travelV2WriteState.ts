@@ -132,7 +132,17 @@ export function travelWriteStatusTone(status: TravelWriteStatus): string {
 
 export function nextPaint(): Promise<void> {
   return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve())
-    else setTimeout(resolve, 0)
+    let settled = false
+    const once = () => {
+      if (settled) return
+      settled = true
+      resolve()
+    }
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(once)
+    else setTimeout(once, 0)
+    // 兜底：标签页不可渲染（后台节流/无合成器）时 rAF 永不触发，会让
+    // 「生成完成即自动保存」永久停在 VALIDATING。race 一个短超时保证写
+    // 请求总能发出；正常可渲染环境仍以 rAF 为准（超时分支不生效）。
+    setTimeout(once, 250)
   })
 }

@@ -11,6 +11,7 @@ import {
 export type PlacePreferenceV2 = "must_visit" | "interested" | "excluded";
 export type PlaceVerificationV2 = "verified" | "estimated" | "unknown";
 export type TripPaceV2 = "relaxed" | "balanced" | "intense";
+export type TripTierV2 = "economy" | "budget" | "comfortable";
 export type TripHealthStatusV2 = "ok" | "needs_attention" | "blocked";
 export type TripLegModeV2 = "walk" | "drive" | "transit" | "taxi";
 export type TripLegReliabilityV2 = "verified" | "estimated" | "unavailable";
@@ -24,6 +25,8 @@ export interface TripBriefV2 {
   travelers: { adults: number; children: number };
   budget: { amount: number | null; currency: "CNY" };
   pace: TripPaceV2;
+  /** 方案档位（B2）：旧行程文档无此字段时后端模型默认 economy。 */
+  tier: TripTierV2;
   interests: string[];
   requirements: string[];
 }

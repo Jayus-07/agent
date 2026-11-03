@@ -539,8 +539,16 @@ def build_skeleton(
             for w in optional_names
         )
 
+    # 平价档免费权重加成（B3）：budget 档在同优先级组内把免门票候选排前段
+    # （组内仍按热度）；其余档不插入该槽位，排序键与旧版完全一致（红线 4）。
+    def _free_slot(poi: Poi) -> int:
+        if brief.tier != "budget":
+            return 0
+        return 0 if (poi.ticket_cny or 0) == 0 else 1
+
     ordered = sorted(candidates, key=lambda p: (not p.required,
                                                 _is_optional(p),
+                                                _free_slot(p),
                                                 -p.rating, p.poi_id))
 
     def _is_user_named(poi: Poi) -> bool:

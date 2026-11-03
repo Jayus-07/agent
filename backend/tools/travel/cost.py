@@ -43,12 +43,33 @@ def day_transit_cost(day: ItineraryDay) -> float:
     return sum(leg.cost_cny for leg in day.legs)
 
 
-def day_cost(day: ItineraryDay, party_size: int, city: str = "") -> float:
+def _city_tier_data(city: str, tier: str) -> dict[str, float]:
+    """餐饮/住宿定额取数单点：budget 档走平价低价表，其余档走城市均值表。
+
+    budget 是独立低价口径（M3-e 第三档）：绝对低价才能验收 2 人 2 天
+    ≤ ¥400 的硬数字，城市均值 × 乘数算不出绝对低价，也不复用。
+    """
+    if tier == "budget":
+        return T.budget_city_cost_tier(city)
+    return T.city_cost_tier(city)
+
+
+def _tier_multiplier(tier: str) -> dict[str, float]:
+    """档位乘数：budget 档定额即绝对值（乘数恒 1），其余档走 TIER_PROFILES。"""
+    if tier == "budget":
+        return {"meals": 1.0, "lodging": 1.0}
+    return (T.TIER_PROFILES.get(tier) or T.TIER_PROFILES["economy"])["cost_multiplier"]
+
+
+def day_cost(day: ItineraryDay, party_size: int, city: str = "",
+             tier: str = "economy") -> float:
     """单日花费 = 门票×人数 + 人均日餐费×人数 + 通勤。
 
     住宿不摊到单日：末晚不产生住宿，摊到某一天会误导用户以为那天特别贵。
+    tier 仅影响餐饮取数表（budget 平价表 / 其余城市均值表）；不传或默认
+    economy 时与旧版行为完全一致（transit_service 旧调用点零改动）。
     """
-    meal = T.city_cost_tier(city)["meal"]
+    meal = _city_tier_data(city, tier)["meal"]
     meals = meal * max(1, party_size)
     return round(day_visit_tickets(day) * max(1, party_size) + meals
                  + day_transit_cost(day), 2)
@@ -64,13 +85,14 @@ def estimate_cost(
         days: 全部行程日（用于累加门票与通勤）
         party_size: 同行人数
         city: 目的地城市键（决定餐饮/住宿档位；空串回落全局定额）
-        tier: 方案档位（M3-e）——economy/comfortable 乘数见 TIER_PROFILES，
-              只作用于餐饮/住宿（门票与通勤按实际行程累加，不乘档位）
+        tier: 方案档位（M3-e）——budget 走平价低价定额（乘数恒 1），
+              economy/comfortable 乘数见 TIER_PROFILES；都只作用于
+              餐饮/住宿（门票与通勤按实际行程累加，不乘档位）
     """
     people = max(1, party_size)
     night_count = max(0, len(days) - 1)
-    tier_data = T.city_cost_tier(city)
-    mult = (T.TIER_PROFILES.get(tier) or T.TIER_PROFILES["economy"])["cost_multiplier"]
+    tier_data = _city_tier_data(city, tier)
+    mult = _tier_multiplier(tier)
 
     return CostBreakdown(
         tickets=round(sum(day_visit_tickets(d) for d in days) * people, 2),
@@ -80,16 +102,18 @@ def estimate_cost(
     )
 
 
-def estimate_budget_floor(days_count: int, party_size: int, city: str = "") -> dict:
-    """当前资源的**最低可行预算**（经济档硬成本，M3-f 缺口卡数据）。
+def estimate_budget_floor(days_count: int, party_size: int, city: str = "",
+                          tier: str = "economy") -> dict:
+    """当前资源的**最低可行预算**（档位硬成本，M3-f 缺口卡数据）。
 
-    口径：经济档餐饮 + 经济档住宿，门票/通勤按 0 计（行程未定时无从
-    累加）——即「再怎么省也省不掉」的部分。预算低于此值时任何排程都是
-    假行程，走删减协商而不是硬排。
+    口径：档位餐饮 + 档位住宿（budget 走平价低价表，economy 及默认走
+    城市均值表），门票/通勤按 0 计（行程未定时无从累加）——即「再怎么省
+    也省不掉」的部分。预算低于此值时任何排程都是假行程，走删减协商
+    而不是硬排。
     """
     people = max(1, party_size)
     night_count = max(0, max(0, days_count) - 1)
-    tier_data = T.city_cost_tier(city)
+    tier_data = _city_tier_data(city, tier)
     meals = round(tier_data["meal"] * people * max(0, days_count), 2)
     lodging = round(tier_data["lodging"] * night_count * rooms_needed(people), 2)
     total = round(meals + lodging, 2)

@@ -50,6 +50,10 @@ def itinerary_to_trip_document(
         "relaxed": "relaxed", "moderate": "balanced", "balanced": "balanced",
         "intense": "intense",
     }.get(str(brief.get("pace") or "moderate"), "balanced")
+    # 档位白名单映射（travel-value-showcase B2）：V1 tier 是自由字符串，
+    # 未知值一律回落 economy（与 TravelBrief 默认一致），不让脏值进 V2 契约。
+    tier = str(brief.get("tier") or "economy")
+    tier = tier if tier in ("economy", "budget", "comfortable") else "economy"
     adults = brief.get("adults")
     children = brief.get("children")
     if adults is None:
@@ -237,6 +241,7 @@ def itinerary_to_trip_document(
             },
             "budget": {"amount": brief.get("budget_cny"), "currency": "CNY"},
             "pace": pace,
+            "tier": tier,
             "interests": [str(value) for value in brief.get("preferences") or []],
             "requirements": [
                 str(value) for value in (brief.get("must_go") or [])

@@ -92,3 +92,16 @@ def test_adapter_preserves_existing_ids_when_agent_returns_same_places() -> None
 
     assert updated.days[0].day_id == first.days[0].day_id
     assert updated.days[0].items[0].item_id == first.days[0].items[0].item_id
+
+
+def test_adapter_maps_tier_with_whitelist_fallback() -> None:
+    """档位映射（B2）：budget 透传；未知值/缺失回落 economy（V2 契约新字段）。"""
+    raw = agent_itinerary()
+    raw["brief"]["tier"] = "budget"
+    assert itinerary_to_trip_document(raw).brief.tier == "budget"
+
+    raw["brief"]["tier"] = "luxury"
+    assert itinerary_to_trip_document(raw).brief.tier == "economy"
+
+    del raw["brief"]["tier"]
+    assert itinerary_to_trip_document(raw).brief.tier == "economy"

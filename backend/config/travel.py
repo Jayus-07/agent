@@ -221,6 +221,33 @@ def city_cost_tier(city: str) -> dict[str, float]:
     return {"meal": TRAVEL_MEAL_PER_DAY_CNY, "lodging": TRAVEL_LODGING_PER_NIGHT_CNY}
 
 
+# ── 平价档（budget）低价定额（2026-11-04 travel-value-showcase B1，D0 实测定稿）──
+# 口径 = 独立低价定额表（TASK 决策点 1）：budget 档不走「城市均值 × 乘数」——
+# 各城均值不同，乘数算不出绝对低价——直接用平价带绝对值，保证 2 人 2 天
+# 地板 ≤ ¥400 / 3 天 ≤ ¥600（城际大交通不计入）。economy/comfortable 路径
+# 零改动（红线 4：新增更低价档，不拉低已验收口径）。
+# 数字依据 rollinggo live 实测（docs/tasks/travel-value-showcase/
+# d0-rollinggo-hotel-samples.json）：住宿 = 实测最低价取整，餐饮 = 实测小吃带
+# ¥34-40 取下沿。未登记城市回落平价全局定额。
+TRAVEL_BUDGET_MEAL_PER_DAY_CNY = float(os.getenv("TRAVEL_BUDGET_MEAL_PER_DAY_CNY", "35"))
+TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY = float(os.getenv("TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY", "130"))
+TRAVEL_CITY_BUDGET_COST_TIERS: dict[str, dict[str, float]] = {
+    "成都": {"meal": 35.0, "lodging": 90.0},
+    "西安": {"meal": 35.0, "lodging": 90.0},
+    "杭州": {"meal": 35.0, "lodging": 90.0},
+    "福州": {"meal": 35.0, "lodging": 150.0},
+    "厦门": {"meal": 35.0, "lodging": 190.0},
+}
+
+
+def budget_city_cost_tier(city: str) -> dict[str, float]:
+    """平价档（budget）城市定额；未登记城市回落平价全局定额（与均值表同构兜底）。"""
+    tier = TRAVEL_CITY_BUDGET_COST_TIERS.get((city or "").strip())
+    if tier:
+        return dict(tier)
+    return {"meal": TRAVEL_BUDGET_MEAL_PER_DAY_CNY, "lodging": TRAVEL_BUDGET_LODGING_PER_NIGHT_CNY}
+
+
 # =============================================
 # 天气专家（2026-09-22 P0-2 接入域图）
 # =============================================
@@ -269,6 +296,19 @@ TRAVEL_GUIDE_ZHIHU_ENABLED = os.getenv("TRAVEL_GUIDE_ZHIHU_ENABLED", "true").str
 # profile 定「检索过滤与归类意图」；tool 搜到的实际价格定成本（无价字段
 # 由 cost 估算兜底）。第三档预留：加一段配置即可，不改逻辑。
 TIER_PROFILES: dict[str, dict] = {
+    # 平价档（travel-value-showcase B2）：展示名「平价出行」。价格带收紧到
+    # 平价供给（小吃带人均 ≤45、经济连锁/招待所），付费体验占比压到最低——
+    # 成本侧的绝对低价由平价定额表承担（TRAVEL_CITY_BUDGET_COST_TIERS），
+    # 这里只定「检索过滤与归类意图」，与既有两档同构。
+    "budget": {
+        "label": "平价出行",
+        "meal_price_band": (0, 45),        # 餐饮人均带（元）：小吃/快餐带
+        "lodging_grade_keywords": ["经济型", "连锁", "招待所", "青旅", "客栈"],
+        "max_spots_per_day": 4,            # 每日地点上限（与 economy 一致）
+        "transport_priority": ["transit", "walk", "drive"],  # 公交优先
+        "paid_experience_budget_share": 0.05,  # 付费体验预算占比上限（压到最低）
+        "cost_multiplier": {"meals": 1.0, "lodging": 1.0},  # 平价定额即绝对值
+    },
     "economy": {
         "label": "经济实用型",
         "meal_price_band": (0, 80),        # 餐饮人均带（元）
@@ -298,7 +338,7 @@ BUDGET_POLICY = {
     "never_touch": ["must_go", "purchased_tickets", "days", "party_size"],
     # 档位下限系数：该档最低可行预算 ≈ 硬成本基准 × 系数（粗估口径，
     # 精确值由 cost 估算体系给出；低于硬成本 → 缺口卡协商）
-    "tier_floor_multiplier": {"economy": 1.0, "comfortable": 1.6},
+    "tier_floor_multiplier": {"budget": 1.0, "economy": 1.0, "comfortable": 1.6},
 }
 # 旅游域知识库 id：语料未灌入时检索返回空，risk 专家自动降级为免责声明
 TRAVEL_RAG_KB_ID = os.getenv("TRAVEL_RAG_KB_ID", "travel")

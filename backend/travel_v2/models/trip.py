@@ -36,6 +36,9 @@ class TripBriefV2(StrictModel):
     travelers: TravelersV2
     budget: BudgetV2 = Field(default_factory=BudgetV2)
     pace: Literal["relaxed", "balanced", "intense"] = "balanced"
+    # 方案档位（travel-value-showcase B2）：V2 契约新字段，默认 economy
+    # 兼容既有已存行程（旧文档读取自然回落）；由 adapter 白名单映射写入。
+    tier: Literal["economy", "budget", "comfortable"] = "economy"
     interests: list[str] = Field(default_factory=list, max_length=64)
     requirements: list[str] = Field(default_factory=list, max_length=64)
 

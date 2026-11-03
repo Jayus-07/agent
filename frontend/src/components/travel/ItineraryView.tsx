@@ -951,7 +951,7 @@ export interface ItineraryViewProps {
   /** M3-e 当前档位（brief.tier 缺省 economy） */
   tier?: string
   /** M3-e 切换档位 → 代发重排（草案 diff 确认） */
-  onTierChange?: (tier: 'economy' | 'comfortable') => void
+  onTierChange?: (tier: 'economy' | 'budget' | 'comfortable') => void
   /** M3-f 预算协商（rationale.budget_negotiation） */
   budgetNegotiation?: {
     tier_downgraded?: boolean
@@ -1139,9 +1139,10 @@ export default function ItineraryView({
         {/* M3-e 档位切换器：切换 → 代发重排 → 草案 diff 确认（apply 走聊天管线） */}
         {!draftPreview && onTierChange && (
           <span className="inline-flex items-center overflow-hidden rounded-lg border border-[#dae7e5]" role="group" aria-label="方案档位">
-            {(['economy', 'comfortable'] as const).map((t) => {
+            {(['economy', 'budget', 'comfortable'] as const).map((t) => {
               const active = (tier || 'economy') === t
-              const label = t === 'economy' ? '经济实用型' : '舒适均衡型'
+              // 档位展示名（红线 2）：「平价出行」，UI 侧零「穷游」字样
+              const label = t === 'economy' ? '经济实用型' : t === 'budget' ? '平价出行' : '舒适均衡型'
               return (
                 <button
                   key={t}
