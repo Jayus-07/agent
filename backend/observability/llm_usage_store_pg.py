@@ -33,6 +33,7 @@ from backend.observability.llm_usage_store import (
     _now_iso,
 )
 from backend.shared.logger import logger
+from backend.shared.pg_identifier import pg_table_name
 
 _COLS = ("ts, trace_id, request_id, session_id, user_id, tenant_id, "
          "component, model, provider, "
@@ -88,7 +89,7 @@ class PostgresLLMUsageStore(LLMUsageStore):
     def __init__(self, db_path: str = "data/analytics.db"):
         self._db_path = db_path  # 兼容保留，PG 模式下无意义
         self._lock = threading.Lock()
-        self._table = os.getenv("OBS_DB_PG_TABLE_PREFIX", "") + "llm_usage"
+        self._table = pg_table_name("OBS_DB_PG_TABLE_PREFIX", "llm_usage")
         self._write_count = 0
         self._init_db()
 

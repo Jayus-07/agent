@@ -32,6 +32,7 @@ from backend.observability.analytics_store import (
     _cfg_enabled,
 )
 from backend.shared.logger import logger
+from backend.shared.pg_identifier import pg_table_name
 
 
 class PostgresAnalyticsStore(AnalyticsStore):
@@ -40,7 +41,7 @@ class PostgresAnalyticsStore(AnalyticsStore):
     def __init__(self, db_path: str = "data/analytics.db"):
         self._db_path = db_path  # 兼容保留，PG 模式下无意义
         self._lock = threading.Lock()
-        self._table = os.getenv("OBS_DB_PG_TABLE_PREFIX", "") + "trace_summary"
+        self._table = pg_table_name("OBS_DB_PG_TABLE_PREFIX", "trace_summary")
         self._init_db()
 
     # ---- 连接层 ----

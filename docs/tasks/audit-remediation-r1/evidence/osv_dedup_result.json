@@ -1,0 +1,4237 @@
+{
+ "aiohttp==3.13.5": [
+  {
+   "primary": "GHSA-2fqr-mr3j-6wp8",
+   "aliases": [
+    "CVE-2026-54279",
+    "PYSEC-2026-2112"
+   ],
+   "summary": "aiohttp: Host-Only Cookies Become Domain Cookies After CookieJar Persistence",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-2g87-pp6c-29x5",
+   "aliases": [],
+   "summary": "aiohttp: Multiple instances of excessive or unbounded memory/CPU use",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-494j-54xm-rwp3",
+   "aliases": [
+    "CVE-2026-111063"
+   ],
+   "summary": "AIOHTTP: Secure attribute not enforced for shared cookie",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-4fvr-rgm6-gqmc",
+   "aliases": [
+    "CVE-2026-54273",
+    "PYSEC-2026-2107"
+   ],
+   "summary": "aiohttp: HTTP/1 Pipelined Requests Queue Without Limit",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-4m7w-qmgq-4wj5",
+   "aliases": [
+    "CVE-2026-54275",
+    "PYSEC-2026-237"
+   ],
+   "summary": "aiohttp: TLS Server Hostname Override Is Ignored When Reusing HTTPS Connections",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5wr8-gcqf-gqf3",
+   "aliases": [
+    "CVE-2026-111064"
+   ],
+   "summary": "aiohttp server lacks an initial request/header timeout",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-63hw-fmq6-xxg2",
+   "aliases": [
+    "CVE-2026-54277",
+    "PYSEC-2026-2110"
+   ],
+   "summary": "aiohttp: C HTTP Parser Bypasses max_line_size for Fragmented Lines",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-6cjc-53gc-5rqm",
+   "aliases": [
+    "CVE-2026-111065"
+   ],
+   "summary": "AIOHTTP: Connector pool exhaustion via Max-Age overflow",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-9x8q-7h8h-wcw9",
+   "aliases": [
+    "CVE-2026-54280",
+    "PYSEC-2026-2113"
+   ],
+   "summary": "aiohttp: Payload Response Resources Are Not Closed After Mid-Body Disconnect",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-9xw5-w5jj-pvcg",
+   "aliases": [
+    "CVE-2026-111066"
+   ],
+   "summary": "AIOHTTP: File descriptor exhaustion in multipart requests",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cq5v-8q36-5273",
+   "aliases": [
+    "CVE-2026-69244",
+    "PYSEC-2026-3545"
+   ],
+   "summary": "AIOHTTP: Out-of-bounds heap read in C HTTP response parser error path (malformed chunked response)",
+   "fixes": [
+    "3.14.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-f9xw-jh8m-3mwq",
+   "aliases": [
+    "CVE-2026-111748"
+   ],
+   "summary": "AIOHTTP: Absolute-form request targets can spoof Request.scheme",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g3cq-j2xw-wf74",
+   "aliases": [
+    "CVE-2026-54278",
+    "PYSEC-2026-2111"
+   ],
+   "summary": "aiohttp: Unread Compressed Request Bodies Bypass client_max_size During Cleanup",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-gx76-c99x-2c96",
+   "aliases": [
+    "CVE-2026-111749"
+   ],
+   "summary": "AIOHTTP: Cookie from subdomain can remove Host-Only Scope from existing cookies",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-hg6j-4rv6-33pg",
+   "aliases": [
+    "CVE-2026-47265",
+    "PYSEC-2026-2105"
+   ],
+   "summary": "AIOHTTP is vulnerable to cross-origin redirect with per-request cookies",
+   "fixes": [
+    "3.14.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-hpj7-wq8m-9hgp",
+   "aliases": [
+    "CVE-2026-54276",
+    "PYSEC-2026-2109"
+   ],
+   "summary": "aiohttp: DigestAuthMiddleware Applies Credentials to Cross-Origin Redirect Challenges",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jg22-mg44-37j8",
+   "aliases": [
+    "CVE-2026-34993",
+    "PYSEC-2026-2104"
+   ],
+   "summary": "AIOHTTP is Vulnerable to Deserialization of Untrusted Data",
+   "fixes": [
+    "3.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:H/UI:R/S:C/C:L/I:H/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-m6qw-4cw2-hm4m",
+   "aliases": [
+    "CVE-2026-50269",
+    "PYSEC-2026-2106"
+   ],
+   "summary": "aiohttp: CRLF injection in multipart headers",
+   "fixes": [
+    "3.14.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-mfx4-hv73-q22v",
+   "aliases": [
+    "CVE-2026-69243",
+    "PYSEC-2026-3546"
+   ],
+   "summary": "AIOHTTP: HTTP request smuggling via WebSocket upgrade",
+   "fixes": [
+    "3.14.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-mq44-7p77-q5h7",
+   "aliases": [
+    "CVE-2026-59881",
+    "PYSEC-2026-3547"
+   ],
+   "summary": "AIOHTTP: WebSocket client accepts compressed frames without negotiated permessage-deflate",
+   "fixes": [
+    "3.14.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-pqxq-w44r-73xw",
+   "aliases": [
+    "CVE-2026-111750"
+   ],
+   "summary": "AIOHTTP: Pure-Python parser request smuggling",
+   "fixes": [
+    "3.14.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-xcgm-r5h9-7989",
+   "aliases": [
+    "CVE-2026-54274",
+    "PYSEC-2026-2108"
+   ],
+   "summary": "aiohttp: Incomplete websocket frame payloads bypass memory limits",
+   "fixes": [
+    "3.14.1"
+   ],
+   "severity": []
+  }
+ ],
+ "anyio==4.13.0": [
+  {
+   "primary": "GHSA-5p39-cfhj-2xmp",
+   "aliases": [
+    "CVE-2026-64847",
+    "PYSEC-2026-4024"
+   ],
+   "summary": "AnyIO process-pool workers can block indefinitely on undrained stderr",
+   "fixes": [
+    "4.14.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-82r6-8w77-94w6",
+   "aliases": [
+    "CVE-2026-63374",
+    "PYSEC-2026-4025"
+   ],
+   "summary": "AnyIO: TLSStream IDNA 2003 host name encoding enables potential TLS certificate spoofing",
+   "fixes": [
+    "4.14.2"
+   ],
+   "severity": []
+  }
+ ],
+ "Authlib==1.7.2": [
+  {
+   "primary": "GHSA-6v38-4h7w-rj9h",
+   "aliases": [
+    "CVE-2026-96760"
+   ],
+   "summary": "Authlib: empty signatures validation in JWS JSON deserialization",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-7vr2-2fgp-9w7p",
+   "aliases": [
+    "CVE-2026-114615",
+    "PYSEC-2026-4355"
+   ],
+   "summary": "Authlib incomplete algorithm-confusion fix permits HMAC forgery with prefixed public keys",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8m4g-j4wp-wgcg",
+   "aliases": [
+    "CVE-2026-114616",
+    "PYSEC-2026-4356"
+   ],
+   "summary": "Authlib accepts an empty HMAC key, allowing JWS/JWT signature forgery (HS256/HS384/HS512)",
+   "fixes": [
+    "1.9.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-c5mf-xmp2-59rc",
+   "aliases": [
+    "CVE-2026-114617",
+    "PYSEC-2026-4357"
+   ],
+   "summary": "Authlib: ID token can disable its own nonce validation via the nonce_supported claim",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-c73q-w75p-j82v",
+   "aliases": [
+    "CVE-2026-116672"
+   ],
+   "summary": "Authlib RFC 7592 examples omit registration-access-token client binding",
+   "fixes": [
+    "1.9.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-fch4-3c6x-j4gc",
+   "aliases": [
+    "CVE-2026-114618",
+    "PYSEC-2026-4358"
+   ],
+   "summary": "Authlib: Default JWT bearer grant accepts assertions for the wrong audience",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-jj7h-c3hg-m23x",
+   "aliases": [
+    "CVE-2026-114614",
+    "PYSEC-2026-4354"
+   ],
+   "summary": "Authlib: is_secure_transport() loopback exemption can be bypassed with a userinfo component, allowing cleartex",
+   "fixes": [
+    "1.8.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:R/S:U/C:L/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-q686-2qmg-hqc7",
+   "aliases": [
+    "CVE-2026-114619",
+    "PYSEC-2026-4359"
+   ],
+   "summary": "Authlib: OpenID implicit grant checks raw scope instead of allowed scope before issuing ID tokens",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:L/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-x4rv-c3wx-4cr8",
+   "aliases": [
+    "CVE-2026-114620",
+    "PYSEC-2026-4360"
+   ],
+   "summary": "Authlib: Unvalidated request_uri fetch in JWT-secured authorization request (JAR) leading to SSRF",
+   "fixes": [
+    "1.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:C/C:L/I:L/A:N"
+    }
+   ]
+  }
+ ],
+ "brotli==1.2.0": [
+  {
+   "primary": "GHSA-9v8h-qqgm-4m35",
+   "aliases": [
+    "BIT-brotli-2026-111497",
+    "BIT-dotnet-2026-111497",
+    "BIT-dotnet-sdk-2026-111497",
+    "BIT-node-2026-111497",
+    "BIT-node-min-2026-111497",
+    "BIT-powershell-2026-111497",
+    "CVE-2026-111497",
+    "PYSEC-2026-4322",
+    "PYSEC-2026-4323"
+   ],
+   "summary": "Brotli: Out-of-bounds write in the Brotli decoder (\"Node2Shell\") also affects the PyPI Brotli package",
+   "fixes": [
+    "1.2.1",
+    "1.2.1.0"
+   ],
+   "severity": []
+  }
+ ],
+ "certifi==2026.4.22": [
+  {
+   "primary": "GHSA-6q48-6c7w-9gw2",
+   "aliases": [
+    "PYSEC-2026-4320"
+   ],
+   "summary": "certifi bundles emSign root CAs with compromised intermediate CA keys",
+   "fixes": [
+    "2026.10.18"
+   ],
+   "severity": []
+  }
+ ],
+ "chromadb==1.5.9": [
+  {
+   "primary": "GHSA-2wm9-hf6c-p5cr",
+   "aliases": [
+    "CVE-2026-45830",
+    "PYSEC-2026-3813"
+   ],
+   "summary": "ChromaDB allows any authenticated users to arbitrarily read, write, update, or delete data in any tenant's col",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-36p7-vc44-83pf",
+   "aliases": [
+    "CVE-2026-45833",
+    "PYSEC-2026-3814"
+   ],
+   "summary": "ChromaDB has a code injection vulnerability",
+   "fixes": [],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-f4j7-r4q5-qw2c",
+   "aliases": [
+    "CVE-2026-45829",
+    "PYSEC-2026-311"
+   ],
+   "summary": "ChromaDB Python project has a pre-authentication code injection vulnerability",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-xph7-9rjv-w5fr",
+   "aliases": [
+    "CVE-2026-45831",
+    "PYSEC-2026-3815"
+   ],
+   "summary": "ChromaDB's SimpleRBACAuthorizationProvider doesn't check which tenant, database, or collection a permission ap",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "cryptography==49.0.0": [
+  {
+   "primary": "GHSA-g6cj-pr64-35w5",
+   "aliases": [
+    "CVE-2026-69247",
+    "PYSEC-2026-3552"
+   ],
+   "summary": "cryptography: PKCS#7 EnvelopedData decryption exposes a Bleichenbacher oracle through distinguishable errors a",
+   "fixes": [
+    "50.0.0"
+   ],
+   "severity": []
+  }
+ ],
+ "datasets==4.8.5": [
+  {
+   "primary": "GHSA-379c-qx7v-6h59",
+   "aliases": [
+    "CVE-2026-66007",
+    "PYSEC-2026-3716"
+   ],
+   "summary": "Hugging Face Datasets folder-based builders allow path traversal through file_name metadata",
+   "fixes": [
+    "5.0.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    }
+   ]
+  }
+ ],
+ "dnspython==2.8.0": [
+  {
+   "primary": "GHSA-45c3-73f7-pv4m",
+   "aliases": [
+    "CVE-2026-114605"
+   ],
+   "summary": "dnspython dns.name.from_wire_parser() excessive CPU use",
+   "fixes": [
+    "2.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  }
+ ],
+ "fastmcp==3.4.4": [
+  {
+   "primary": "GHSA-7xgj-8392-5q4r",
+   "aliases": [],
+   "summary": "FastMCP: Post-transform component authorization is skipped on direct calls",
+   "fixes": [
+    "3.4.10",
+    "4.1.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "fastmcp-slim==3.4.4": [
+  {
+   "primary": "GHSA-7xgj-8392-5q4r",
+   "aliases": [],
+   "summary": "FastMCP: Post-transform component authorization is skipped on direct calls",
+   "fixes": [
+    "3.4.10",
+    "4.1.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "filelock==3.29.0": [
+  {
+   "primary": "GHSA-567q-5qvw-pf92",
+   "aliases": [
+    "CVE-2026-112907"
+   ],
+   "summary": "filelock: On Windows an oplock on a soft lock's marker holds SoftFileLock.acquire() past its timeout and block",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-69hj-f68j-2879",
+   "aliases": [
+    "CVE-2026-112909"
+   ],
+   "summary": "filelock: UnixFileLock truncates and chmods any regular file another user renames or hard-links onto the lock ",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8mx5-7m5m-r77g",
+   "aliases": [
+    "CVE-2026-112910"
+   ],
+   "summary": "filelock: WindowsFileLock ignores mode: a 0o600 lock file and the ReadWriteLock database inherit the directory",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9vhv-jxww-xfm5",
+   "aliases": [
+    "CVE-2026-112913"
+   ],
+   "summary": "filelock: ReadWriteLock on Windows acts on SQLite side files another local user places beside its database",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-cwqr-hh33-gh44",
+   "aliases": [
+    "CVE-2026-112915"
+   ],
+   "summary": "filelock ReadWriteLock: a crafted lock database makes every acquire stall or hang regardless of timeout",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-fq56-3cx3-fjxp",
+   "aliases": [
+    "CVE-2026-112935"
+   ],
+   "summary": "filelock: SoftFileLock stale-lock break removes a live lock file on a reused inode number and admits two holde",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-j8f7-rjxc-mr56",
+   "aliases": [
+    "CVE-2026-112936"
+   ],
+   "summary": "filelock: ReadWriteLock follows a symlink at the lock path into SQLite",
+   "fixes": [
+    "4.0.9"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-rfpc-qcw5-3pc4",
+   "aliases": [
+    "CVE-2026-112939"
+   ],
+   "summary": "filelock: SoftFileLock removes a live holder's marker when another user forges the PID in a writable marker",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:N/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-v4x8-3wr5-3wq8",
+   "aliases": [
+    "CVE-2026-112940"
+   ],
+   "summary": "filelock ReadWriteLock: SQLite reopens the lock database by name, so a planted symlink or journal file makes t",
+   "fixes": [
+    "4.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "fsspec==2026.2.0": [
+  {
+   "primary": "GHSA-27vj-qcqg-25rc",
+   "aliases": [
+    "CVE-2026-104851",
+    "PYSEC-2026-4217"
+   ],
+   "summary": "fsspec: Server-Side Template Injection in ReferenceFileSystem leads to Remote Code Execution",
+   "fixes": [
+    "2026.6.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "GitPython==3.1.50": [
+  {
+   "primary": "GHSA-239g-whfq-7xj9",
+   "aliases": [
+    "CVE-2026-87817",
+    "PYSEC-2026-3982"
+   ],
+   "summary": "GitPython: Repository content can impersonate the git directory, leading to arbitrary code execution",
+   "fixes": [
+    "3.1.60"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-23mf-xhv8-69c2",
+   "aliases": [
+    "CVE-2026-110859"
+   ],
+   "summary": "GitPython: arbitrary file read via attacker-controlled branch name in `Head.checkout()` (incomplete fix of CVE",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-284h-m62q-gf8w",
+   "aliases": [
+    "CVE-2026-78676",
+    "PYSEC-2026-3786"
+   ],
+   "summary": "GitPython: Dormant multi-line git-config values are corrupted into live injected directives (e.g. core.hooksPa",
+   "fixes": [
+    "3.1.59"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-2f96-g7mh-g2hx",
+   "aliases": [
+    "CVE-2026-67325",
+    "PYSEC-2026-3836"
+   ],
+   "summary": "GitPython: Command Injection via git long-option prefix abbreviation bypass of CVE-2026-42215 blocklist",
+   "fixes": [
+    "3.1.51"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-3f7w-8rr8-f37f",
+   "aliases": [
+    "CVE-2026-73620",
+    "PYSEC-2026-3949"
+   ],
+   "summary": "GitPython: Unguarded git option forwarding in IndexFile.checkout() and TagReference.create() enables arbitrary",
+   "fixes": [
+    "3.1.57"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-3rp5-jjmw-4wv2",
+   "aliases": [
+    "CVE-2026-69097",
+    "PYSEC-2026-3981"
+   ],
+   "summary": "GitPython: git-config section-name injection enables arbitrary config directives (core.sshCommand RCE)",
+   "fixes": [
+    "3.1.53"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-3wxw-xv34-2frg",
+   "aliases": [
+    "CVE-2026-78679",
+    "PYSEC-2026-3837"
+   ],
+   "summary": "GitPython: TagReference.create positional reference bypasses kwargs-only --file guard, enabling arbitrary file",
+   "fixes": [
+    "3.1.59"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-4gmw-gg2m-w46p",
+   "aliases": [
+    "CVE-2026-76219",
+    "PYSEC-2026-3838"
+   ],
+   "summary": "GitPython: Unguarded git read-tree option forwarding in IndexFile.from_tree/reset/merge_tree enables arbitrary",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-539m-9xh6-q6rr",
+   "aliases": [
+    "CVE-2026-73619",
+    "PYSEC-2026-3948"
+   ],
+   "summary": "GitPython: Incomplete unsafe_git_archive_options denylist omits --add-file / --add-virtual-file, enabling arbi",
+   "fixes": [
+    "3.1.57"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-59cr-6r3x-644w",
+   "aliases": [
+    "CVE-2026-100689"
+   ],
+   "summary": "GitPython submodule update path traversal can write outside the repository",
+   "fixes": [
+    "3.1.62"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5xxx-qhh7-9287",
+   "aliases": [
+    "CVE-2026-78678",
+    "PYSEC-2026-3788"
+   ],
+   "summary": "GitPython: Incomplete unsafe_git_revision_options denylist omits --contents/-S, enabling arbitrary file read v",
+   "fixes": [
+    "3.1.59"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6p8h-3wgx-97gf",
+   "aliases": [
+    "CVE-2026-73623",
+    "PYSEC-2026-3952"
+   ],
+   "summary": "GitPython: Incomplete unsafe_git_clone_options denylist omits --template enabling arbitrary command execution ",
+   "fixes": [
+    "3.1.54"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-7833-fr7j-v32q",
+   "aliases": [
+    "CVE-2026-78675",
+    "PYSEC-2026-3785"
+   ],
+   "summary": "GitPython: Arbitrary local file content disclosure via [include] directive in untrusted .gitmodules (Submodule",
+   "fixes": [
+    "3.1.59"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-83vg-56qc-22m7",
+   "aliases": [
+    "CVE-2026-114145"
+   ],
+   "summary": "GitPython validates a submodule's \".git\" path only after cloning into it (RCE)",
+   "fixes": [
+    "3.2.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8mcc-hrx5-hvxc",
+   "aliases": [
+    "CVE-2026-78677",
+    "PYSEC-2026-3787"
+   ],
+   "summary": "GitPython: clone_from()/clone() omit --separate-git-dir from unsafe_git_clone_options, enabling arbitrary git-",
+   "fixes": [
+    "3.1.59"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-94p4-4cq8-9g67",
+   "aliases": [
+    "CVE-2026-73622",
+    "PYSEC-2026-3951"
+   ],
+   "summary": "GitPython: Environment-variable exfiltration via Repo.create_remote() / Remote.add() URL (incomplete fix of GH",
+   "fixes": [
+    "3.1.55"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-956x-8gvw-wg5v",
+   "aliases": [
+    "CVE-2026-67323",
+    "PYSEC-2026-3839"
+   ],
+   "summary": "GitPython: command injection via unguarded Git options in `Repo.archive()`, `git.ls_remote()`, and arbitrary f",
+   "fixes": [
+    "3.1.51"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9rj7-rf2p-w77r",
+   "aliases": [
+    "CVE-2026-76218",
+    "PYSEC-2026-3840"
+   ],
+   "summary": "GitPython: Unguarded git option forwarding in Repo.init enables arbitrary command execution via --template clo",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-f9j4-qggq-h239",
+   "aliases": [
+    "CVE-2026-110858"
+   ],
+   "summary": "GitPython Remote.pull() refspec bypasses the --upload-pack unsafe-option guard, enabling arbitrary command exe",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-fjr4-x663-mwxc",
+   "aliases": [
+    "CVE-2026-73624",
+    "PYSEC-2026-3995"
+   ],
+   "summary": "GitPython: Arbitrary file overwrite via git diff --output argument injection in Diffable.diff (key- and value-",
+   "fixes": [
+    "3.1.54"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-fx3j-rwgx-fr94",
+   "aliases": [
+    "CVE-2026-110855"
+   ],
+   "summary": "GitPython: separate_git_dir leaks env vars via crafted .gitmodules submodule name",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-g5vv-9gxw-82hx",
+   "aliases": [
+    "CVE-2026-87819",
+    "PYSEC-2026-3984"
+   ],
+   "summary": "GitPython: Denial of Service via catastrophic backtracking (ReDoS) in Actor.name_email_regex — commit author/c",
+   "fixes": [
+    "3.1.60"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-gq48-pqfc-9p58",
+   "aliases": [
+    "CVE-2026-110860"
+   ],
+   "summary": "GitPython: Submodule.move() follows an attacker-committed intermediate symlink outside the worktree",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-hh9p-6wh2-4mfc",
+   "aliases": [
+    "CVE-2026-76217",
+    "PYSEC-2026-3841"
+   ],
+   "summary": "GitPython: Arbitrary file read via --pathspec-from-file in IndexFile.remove() and Head.checkout()",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-hmq2-w58f-27jc",
+   "aliases": [
+    "CVE-2026-76222",
+    "PYSEC-2026-3784"
+   ],
+   "summary": "GitPython: Arbitrary Git Repository Creation Outside the Working Tree via Unvalidated .gitmodules Submodule Na",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:N/I:H/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-jm78-9fvv-mhgr",
+   "aliases": [
+    "CVE-2026-76221",
+    "PYSEC-2026-3783"
+   ],
+   "summary": "GitPython: git-config OPTION-name injection via =/#/whitespace bypasses name validator, enabling forged core.s",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-m64x-33q8-m5h7",
+   "aliases": [
+    "CVE-2026-110856"
+   ],
+   "summary": "GitPython parse_actor_and_date() is vulnerable to quadratic backtracking on malformed identity lines",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-p538-c434-8v24",
+   "aliases": [
+    "CVE-2026-73621",
+    "PYSEC-2026-3950"
+   ],
+   "summary": "GitPython: Arbitrary file truncation via git rev-list --output argument injection in unguarded Commit.count",
+   "fixes": [
+    "3.1.56"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:L/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-r9mr-m37c-5fr3",
+   "aliases": [
+    "CVE-2026-73625",
+    "PYSEC-2026-3953"
+   ],
+   "summary": "GitPython: Unsafe git option guard bypass via single-character kwarg value token smuggling enables arbitrary c",
+   "fixes": [
+    "3.1.54"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-rwj8-pgh3-r573",
+   "aliases": [
+    "CVE-2026-67322",
+    "PYSEC-2026-3842"
+   ],
+   "summary": "GitPython: Environment-variable exfiltration via os.path.expandvars() on Repo.clone_from() URL",
+   "fixes": [
+    "3.1.52"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-v396-v7q4-x2qj",
+   "aliases": [
+    "CVE-2026-67324",
+    "PYSEC-2026-3947"
+   ],
+   "summary": "GitPython unsafe clone option gate bypass through joined short options",
+   "fixes": [
+    "3.1.51"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-w8jc-g24h-crhw",
+   "aliases": [
+    "CVE-2026-110857"
+   ],
+   "summary": "GitPython command wrappers omit unsafe protocol and option checks",
+   "fixes": [
+    "3.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-wvpp-8hx9-p66j",
+   "aliases": [
+    "CVE-2026-76220",
+    "PYSEC-2026-3843"
+   ],
+   "summary": "GitPython: Unsafe git option guard bypass via split_single_char_options=False short-option token smuggling ena",
+   "fixes": [
+    "3.1.58"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "h2==4.3.0": [
+  {
+   "primary": "GHSA-6hr6-w5qg-qmwg",
+   "aliases": [
+    "CVE-2026-71554",
+    "PYSEC-2026-3628"
+   ],
+   "summary": "h2: Duplicate Host header could facilitate request smuggling",
+   "fixes": [
+    "4.4.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  }
+ ],
+ "idna==3.13": [
+  {
+   "primary": "GHSA-65pc-fj4g-8rjx",
+   "aliases": [
+    "CVE-2026-45409",
+    "PYSEC-2026-215"
+   ],
+   "summary": "Internationalized Domain Names in Applications (IDNA): Specially crafted inputs to idna.encode() can bypass CV",
+   "fixes": [
+    "3.15"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  }
+ ],
+ "joserfc==1.7.3": [
+  {
+   "primary": "GHSA-9pg5-8c7x-5hfx",
+   "aliases": [
+    "CVE-2026-119284"
+   ],
+   "summary": "joserfc: Compact JWS size guard allocates attacker-controlled segments before rejection",
+   "fixes": [
+    "1.7.6"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jpxq-7h8p-2q76",
+   "aliases": [
+    "CVE-2026-119283"
+   ],
+   "summary": "joserfc: Unbounded JWE General JSON `recipients` Array Leads to CPU Exhaustion (DoS) via Repeated RSA Private-",
+   "fixes": [
+    "1.7.5"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  }
+ ],
+ "kafka-python==2.0.2": [
+  {
+   "primary": "GHSA-2jcm-hq8r-84wx",
+   "aliases": [
+    "CVE-2026-10143",
+    "PYSEC-2026-2191"
+   ],
+   "summary": "kafka-python vulnerable to denial of service through an unbounded SCRAM iteration count",
+   "fixes": [
+    "2.3.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-m3px-q5gj-j9x7",
+   "aliases": [
+    "CVE-2026-10142",
+    "PYSEC-2026-2190"
+   ],
+   "summary": "kafka-python vulnerable to denial of service through an unvalidated protocol frame length",
+   "fixes": [
+    "2.3.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  }
+ ],
+ "langchain==1.2.18": [
+  {
+   "primary": "GHSA-gr75-jv2w-4656",
+   "aliases": [
+    "CVE-2026-55443",
+    "PYSEC-2026-2192",
+    "PYSEC-2026-2556"
+   ],
+   "summary": "LangChain: Path traversal and sandbox escape in LangChain file-search middleware and loaders",
+   "fixes": [
+    "1.3.9",
+    "1.4.6"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  }
+ ],
+ "langgraph-checkpoint-postgres==3.1.0": [
+  {
+   "primary": "GHSA-47pj-3jcm-6whg",
+   "aliases": [
+    "CVE-2026-71433",
+    "PYSEC-2026-3635",
+    "PYSEC-2026-3636"
+   ],
+   "summary": "LangGraph: Namespace prefix matching crosses segment boundaries in Postgres and SQLite stores",
+   "fixes": [
+    "3.1.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6hmw-9432-67qq",
+   "aliases": [
+    "CVE-2026-115883"
+   ],
+   "summary": "LangGraph: Namespace labels containing `.` reach other namespaces in Postgres and SQLite stores",
+   "fixes": [
+    "3.1.2",
+    "3.1.3"
+   ],
+   "severity": []
+  }
+ ],
+ "langgraph-sdk==0.3.14": [
+  {
+   "primary": "GHSA-fvww-7h3r-vfhp",
+   "aliases": [
+    "CVE-2026-104873",
+    "PYSEC-2026-4240"
+   ],
+   "summary": "LangGraph SDK custom auth silently ignores actions= on resource decorators",
+   "fixes": [
+    "0.4.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-w39p-vh2g-g8g5",
+   "aliases": [
+    "CVE-2026-48776",
+    "PYSEC-2026-2194",
+    "PYSEC-2026-2575"
+   ],
+   "summary": "LangGraph SDK has unsafe URL path construction",
+   "fixes": [
+    "0.3.15"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:L/I:L/A:N"
+    }
+   ]
+  }
+ ],
+ "langsmith==0.8.3": [
+  {
+   "primary": "GHSA-f4xh-w4cj-qxq8",
+   "aliases": [
+    "CVE-2026-59152"
+   ],
+   "summary": "LangSmith SDK TracingMiddleware: Arbitrary server-side file read",
+   "fixes": [
+    "0.8.18"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:N/A:N"
+    }
+   ]
+  }
+ ],
+ "Mako==1.4.1": [
+  {
+   "primary": "GHSA-5639-2j2p-m4mx",
+   "aliases": [
+    "CVE-2026-102991",
+    "PYSEC-2026-4243"
+   ],
+   "summary": "Mako: Path traversal via drive-letter URI on Windows in TemplateLookup",
+   "fixes": [
+    "1.4.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:N"
+    }
+   ]
+  }
+ ],
+ "mcp==1.28.1": [
+  {
+   "primary": "GHSA-5h93-6whr-6q8j",
+   "aliases": [
+    "CVE-2026-116685"
+   ],
+   "summary": "Model Context Protocol Python SDK: HTTP client transports followed cross-origin redirects carrying custom head",
+   "fixes": [
+    "1.30.0",
+    "2.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-84m7-p3x7-pcfv",
+   "aliases": [
+    "CVE-2026-59951"
+   ],
+   "summary": "MCP Python SDK: Unbounded Session Accumulation in StreamableHTTP Transport Enables Resource Exhaustion",
+   "fixes": [
+    "1.30.0",
+    "2.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-rwrf-2pqf-9j8j",
+   "aliases": [
+    "CVE-2026-116686"
+   ],
+   "summary": "Model Context Protocol Python SDK: Client fetched server-chosen $ref URLs while validating tool results agains",
+   "fixes": [
+    "1.30.0",
+    "2.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-w4fh-qvv9-3v23",
+   "aliases": [
+    "CVE-2026-116684"
+   ],
+   "summary": "Model Context Protocol Python SDK: Server bearer-token authentication accepts tokens issued for a different re",
+   "fixes": [
+    "1.30.0",
+    "2.2.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "multidict==6.7.1": [
+  {
+   "primary": "GHSA-54p9-h82j-f925",
+   "aliases": [
+    "CVE-2026-104874",
+    "PYSEC-2026-4244"
+   ],
+   "summary": "Multidict: Reference leak in CIMultiDict/MultiDict items-view union and subtraction",
+   "fixes": [
+    "6.9.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  }
+ ],
+ "nltk==3.9.4": [
+  {
+   "primary": "GHSA-2jhm-w3mp-jcwr",
+   "aliases": [
+    "CVE-2026-12372",
+    "PYSEC-2026-3955"
+   ],
+   "summary": "NLTK network URL validation permits SSRF to RFC 6598 shared-address-space hosts",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.0/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-3gq4-3j92-5w49",
+   "aliases": [
+    "CVE-2026-79674",
+    "PYSEC-2026-3736"
+   ],
+   "summary": "NLTK: Corpus Reader Sandbox Bypass",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-3gqm-fcw5-w839",
+   "aliases": [
+    "CVE-2026-63311",
+    "PYSEC-2026-3723"
+   ],
+   "summary": "NLTK: SSRF Fail-Open in validate_network_url() via DNS Resolution Failure",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-568f-pv23-39p4",
+   "aliases": [
+    "CVE-2026-62385",
+    "PYSEC-2026-3728"
+   ],
+   "summary": "NLTK: Stable FrameNet and NKJP readers parse outside-root XML",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6hm5-jgcp-p838",
+   "aliases": [
+    "CVE-2026-12072",
+    "PYSEC-2026-3581"
+   ],
+   "summary": "Natural Language Toolkit (NLTK): Path Traversal in NKJPCorpusReader leads to Arbitrary File Read and bypasses ",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6hwm-xvph-95vm",
+   "aliases": [
+    "CVE-2026-78680",
+    "PYSEC-2026-3868"
+   ],
+   "summary": "NLTK: Uncontrolled search path when invoking the Graphviz 'dot' binary",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6ww7-3frv-cqxh",
+   "aliases": [
+    "CVE-2026-78682",
+    "PYSEC-2026-3733"
+   ],
+   "summary": "NLTK: pathsec SSRF protection can be bypassed when a proxy is configured",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-72r2-7mfr-5xr9",
+   "aliases": [
+    "CVE-2026-65915",
+    "PYSEC-2026-3731"
+   ],
+   "summary": "NLTK: FileSystemPathPointer.open() sandbox check is dead code — arbitrary file read via file:// protocol",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8mgp-746c-j5xp",
+   "aliases": [
+    "CVE-2026-81726",
+    "PYSEC-2026-3740"
+   ],
+   "summary": "NLTK: Model-artifact APIs bypass pathsec and touch files outside allowed roots",
+   "fixes": [
+    "3.10.4"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:L/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8mpw-7fpc-4gqj",
+   "aliases": [
+    "CVE-2026-81725",
+    "PYSEC-2026-3752"
+   ],
+   "summary": "NLTK: Pl196xCorpusReader has quadratic ReDoS on malformed TEI blocks",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-97qj-x29f-37w7",
+   "aliases": [
+    "CVE-2026-78681",
+    "PYSEC-2026-3748"
+   ],
+   "summary": "NLTK: Entity-expansion DoS (billion laughs) via remaining raw ElementTree parses",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cv22-g7mw-8v73",
+   "aliases": [
+    "CVE-2026-71514",
+    "PYSEC-2026-3790"
+   ],
+   "summary": "NLTK CrubadanCorpusReader path traversal allows arbitrary file disclosure",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:L/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-cw6x-m8jw-qmrh",
+   "aliases": [
+    "CVE-2026-81724",
+    "PYSEC-2026-3739"
+   ],
+   "summary": "NLTK: Uncontrolled recursion in nltk.featstruct.FeatStructReader causes unhandled RecursionError (DoS) via dee",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-f794-5jv7-7672",
+   "aliases": [
+    "CVE-2026-81727",
+    "PYSEC-2026-3741"
+   ],
+   "summary": "NLTK: Downloader.download follows hardlinks and overwrites outside-root files",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:N/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-ff5c-cp5c-9wjf",
+   "aliases": [
+    "CVE-2026-12876",
+    "PYSEC-2026-3869"
+   ],
+   "summary": "NLTK: Uncontrolled resource consumption in RecursiveDescentParser via ambiguous or left-recursive grammars",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-ffj6-66c4-86gw",
+   "aliases": [
+    "CVE-2026-12261",
+    "PYSEC-2026-3954"
+   ],
+   "summary": "NLTK downloader allows cross-package resource and model poisoning",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.0/AV:N/AC:H/PR:N/UI:R/S:U/C:N/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-fg7f-2386-8897",
+   "aliases": [
+    "CVE-2026-12061",
+    "PYSEC-2026-3582"
+   ],
+   "summary": "Natural Language Toolkit (NLTK): ReDoS in NLTK ReviewsCorpusReader FEATURES regex",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-j456-xh4h-cpf2",
+   "aliases": [
+    "CVE-2026-109956"
+   ],
+   "summary": "NLTK: WekaClassifier passes an unvalidated caller-controlled model path to the weka JVM, bypassing nltk.pathse",
+   "fixes": [
+    "3.10.4"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:H/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-m42h-3232-vpv3",
+   "aliases": [
+    "CVE-2026-12243",
+    "PYSEC-2026-597"
+   ],
+   "summary": "nltk: Arbitrary File Read via Path Traversal in nltk.data.load() through Percent-Encoded Sequences",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-m4rf-3fr8-xwx3",
+   "aliases": [
+    "CVE-2026-79675",
+    "PYSEC-2026-3749"
+   ],
+   "summary": "NLTK: JVM argument injection bypass via per-call options in the NLTK Stanford wrappers (incomplete fix of CVE-",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-p3m8-78j2-g5p3",
+   "aliases": [
+    "CVE-2026-62388",
+    "PYSEC-2026-3722"
+   ],
+   "summary": "NLTK: Default ENFORCE=False Disables All pathsec Security Controls",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-p4gq-832x-fm9v",
+   "aliases": [
+    "CVE-2026-54293",
+    "PYSEC-2026-2078"
+   ],
+   "summary": "Natural Language Toolkit (NLTK): URL-Encoded Path Traversal in nltk.data.load() Allows Arbitrary Local File Re",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-p4rw-rvv2-7xwr",
+   "aliases": [
+    "CVE-2026-79676",
+    "PYSEC-2026-3737"
+   ],
+   "summary": "NLTK: Corpus readers follow symlinks outside trusted roots despite pathsec enforcement",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-qvv7-cg9c-w4x3",
+   "aliases": [
+    "CVE-2026-12075",
+    "PYSEC-2026-3583"
+   ],
+   "summary": "Natural Language Toolkit (NLTK): DNS-rebinding SSRF filter bypass in nltk.pathsec.urlopen (nltk.download / nlt",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-qx2g-xrx7-vfh8",
+   "aliases": [
+    "CVE-2026-72818",
+    "PYSEC-2026-3870"
+   ],
+   "summary": " NLTK TweetTokenizer vulnerable to denial of service through catastrophic regex backtracking",
+   "fixes": [
+    "3.10.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-rhp5-r9x4-f5g2",
+   "aliases": [
+    "CVE-2026-78683",
+    "PYSEC-2026-3734"
+   ],
+   "summary": "NLTK: Unsafe Pickle Deserialization in TransitionParser Allows Remote Code Execution",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-rrv8-h7p8-rx55",
+   "aliases": [
+    "CVE-2026-80205",
+    "PYSEC-2026-3750"
+   ],
+   "summary": " NLTK: ReDoS in nltk.text.Text.findall() via unvalidated user-supplied regular expressions",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-vp2x-qp44-57v7",
+   "aliases": [
+    "CVE-2026-81723",
+    "PYSEC-2026-3871"
+   ],
+   "summary": "NLTK: Quadratic CPU Exhaustion in `XMLCorpusView._read_xml_fragment()`",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-w3v8-gmh9-3wv7",
+   "aliases": [
+    "CVE-2026-80206",
+    "PYSEC-2026-3751"
+   ],
+   "summary": "NLTK: ReDoS in nltk.tgrep via unvalidated user-supplied regular expressions",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-ww6m-cw3f-q94g",
+   "aliases": [
+    "CVE-2026-81722",
+    "PYSEC-2026-3738"
+   ],
+   "summary": "NLTK: Quadratic-time DoS in PorterStemmer via long runs of 'y'",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-x5ph-mj9p-rfr8",
+   "aliases": [
+    "CVE-2026-63312",
+    "PYSEC-2026-3730"
+   ],
+   "summary": "NLTK: StreamBackedCorpusView Bypasses pathsec.ENFORCE - Arbitrary Local File Read",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-x99w-6fgc-pmfw",
+   "aliases": [
+    "CVE-2026-79657",
+    "PYSEC-2026-3735"
+   ],
+   "summary": "NLTK: Allowlisted pickle loaders still permit code execution in current source",
+   "fixes": [
+    "3.10.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-xh95-f55m-82fw",
+   "aliases": [
+    "CVE-2026-12074",
+    "PYSEC-2026-3584"
+   ],
+   "summary": "Natural Language Toolkit (NLTK) has path traversal in FramenetCorpusReader.frame() that allows arbitrary XML f",
+   "fixes": [
+    "3.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "PYSEC-2026-4318",
+   "aliases": [
+    "CVE-2026-12259",
+    "CVE-2026-63310",
+    "GHSA-5wp5-5229-5g6q",
+    "GHSA-gf32-cmjh-8m9v",
+    "PYSEC-2026-3729"
+   ],
+   "summary": "In nltk version 3.9.4, the `nltk.downloader.Downloader._download_package()` function writes downloaded package",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "oauthlib==3.3.1": [
+  {
+   "primary": "GHSA-3jp2-3mrg-2vxc",
+   "aliases": [
+    "CVE-2026-49272"
+   ],
+   "summary": "OAuthLib: Bearer token can be retrieved as long as client knows a valid client ID for device workflow",
+   "fixes": [
+    "4.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:L/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-7984-qgvg-3j9c",
+   "aliases": [
+    "CVE-2026-118669"
+   ],
+   "summary": "OAuthLib: Token grants can use attacker-supplied client_id for authorization after authenticating a different ",
+   "fixes": [
+    "4.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-hj66-6f7g-4r5v",
+   "aliases": [
+    "CVE-2026-49264",
+    "PYSEC-2026-4113"
+   ],
+   "summary": "Oauthlib : Unsafe JSONP callback injection in RevocationEndpoint allows arbitrary JavaScript response generati",
+   "fixes": [
+    "4.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-xpv3-w29h-x7cv",
+   "aliases": [
+    "CVE-2026-49265",
+    "PYSEC-2026-4114"
+   ],
+   "summary": "Oauthlib: Timing Attack Vulnerability in PKCE code_verifier Comparison (CWE-208)",
+   "fixes": [
+    "4.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:R/S:U/C:H/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "opentelemetry-api==1.41.1": [
+  {
+   "primary": "GHSA-xcq7-p3pf-p88h",
+   "aliases": [
+    "CVE-2026-114603"
+   ],
+   "summary": "OpenTelemetry Python: Unbounded tracestate parsing in opentelemetry-api",
+   "fixes": [
+    "1.45.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  }
+ ],
+ "pillow==12.2.0": [
+  {
+   "primary": "GHSA-22hg-r758-rrw9",
+   "aliases": [
+    "BIT-pillow-2026-112390",
+    "CVE-2026-112390"
+   ],
+   "summary": "Pillow: Infinite loop in MIC n_frames when the embedded TIFF",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-24rc-8hj2-v98c",
+   "aliases": [
+    "BIT-pillow-2026-96638",
+    "CVE-2026-96638"
+   ],
+   "summary": "Pillow: BMP RLE decoder memory-amplification DoS via unbounded delta escape / absolute mode",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-254f-3936-288h",
+   "aliases": [
+    "BIT-pillow-2026-112391",
+    "CVE-2026-112391"
+   ],
+   "summary": "Pillow: PdfParser can recurse without limit in get_value() and linearize_page_tree()",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-27h8-gf7j-v5hc",
+   "aliases": [
+    "BIT-pillow-2026-112392",
+    "CVE-2026-112392",
+    "PYSEC-2026-4326"
+   ],
+   "summary": "Pillow: NULL dereference in ImagingExpand via rank filters on zero-size images",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-332p-7hrc-92wf",
+   "aliases": [
+    "BIT-pillow-2026-112393",
+    "CVE-2026-112393"
+   ],
+   "summary": "Pillow: Heap buffer overflow in _tiffWriteProc when saving TIFF to BytesIO",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-3j72-p6qg-6xp7",
+   "aliases": [
+    "BIT-pillow-2026-96642",
+    "CVE-2026-96642",
+    "PYSEC-2026-4341"
+   ],
+   "summary": "Pillow: TarIO negative size field causes infinite CPU-spin loop",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-4558-3h8r-v8xp",
+   "aliases": [
+    "BIT-pillow-2026-112394",
+    "CVE-2026-112394",
+    "PYSEC-2026-4327"
+   ],
+   "summary": "Pillow: P;2L and P;4L decoders may read 1 to 3 bytes past the passed buffer size",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-45hq-cxwh-f6vc",
+   "aliases": [
+    "BIT-pillow-2026-55379",
+    "CVE-2026-55379",
+    "PYSEC-2026-2255"
+   ],
+   "summary": "Pillow `BdfFontFile`: `Image.new()` called without `_decompression_bomb_check()` — bomb protection bypass via ",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-462x-pgg6-55fp",
+   "aliases": [
+    "BIT-pillow-2026-112395",
+    "CVE-2026-112395"
+   ],
+   "summary": "Pillow tiled-TIFF decoder reads past tile buffer in copy4 (Unpack.c:1290)",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-4rm8-3hmm-39fg",
+   "aliases": [
+    "BIT-pillow-2026-96641",
+    "CVE-2026-96641",
+    "PYSEC-2026-4340"
+   ],
+   "summary": "Pillow: Reachable undefined behavior in native integer operations, potentially leading to denial of service or",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-4rr5-89j8-mwwm",
+   "aliases": [
+    "BIT-pillow-2026-112396",
+    "CVE-2026-112396",
+    "PYSEC-2026-4328"
+   ],
+   "summary": "Pillow: Heap use-after-free when encoding TIFF to an in-memory buffer",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-4x4j-2g7c-83w6",
+   "aliases": [
+    "BIT-pillow-2026-55798",
+    "CVE-2026-55798",
+    "PYSEC-2026-2257"
+   ],
+   "summary": "Pillow: WindowsViewer.get_command() OS command injection via unescaped shell path",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:H/PR:N/UI:R/S:U/C:L/I:L/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-58r4-6rv3-gfh8",
+   "aliases": [
+    "BIT-pillow-2026-112397",
+    "CVE-2026-112397",
+    "PYSEC-2026-4329"
+   ],
+   "summary": "Pillow: Out-of-bounds access in _imagingmorph on a zero-width image",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5x8w-8jj5-q52h",
+   "aliases": [
+    "BIT-pillow-2026-112398",
+    "CVE-2026-112398",
+    "PYSEC-2026-4330"
+   ],
+   "summary": "Pillow: Heap buffer overflow in FlashPix (FPX) JPEG decoding leads to code execution",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5x94-69rx-g8h2",
+   "aliases": [
+    "BIT-pillow-2026-54060",
+    "CVE-2026-54060",
+    "PYSEC-2026-2254"
+   ],
+   "summary": "Pillow: `FontFile.compile()`: `Image.new()` called without `_decompression_bomb_check()`",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-5xm2-6676-qcp9",
+   "aliases": [
+    "BIT-pillow-2026-112399",
+    "CVE-2026-112399"
+   ],
+   "summary": "Pillow: APNG background disposal allocates full canvas before decompression bomb check",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-62p4-gmf7-7g93",
+   "aliases": [
+    "BIT-pillow-2026-54058",
+    "CVE-2026-54058",
+    "PYSEC-2026-3493"
+   ],
+   "summary": "Pillow: Out-of-bounds read via attacker-controlled row stride on Pillow's mmap path (McIdas AREA files)",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-654x-cwwv-5j9c",
+   "aliases": [
+    "BIT-pillow-2026-114501",
+    "CVE-2026-114501",
+    "PYSEC-2026-4336"
+   ],
+   "summary": "Pillow: Arrow export leaks stale heap memory when PILLOW_ALIGNMENT > 1",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-65qm-jvmh-6pqg",
+   "aliases": [
+    "BIT-pillow-2026-112400",
+    "CVE-2026-112400"
+   ],
+   "summary": "Pillow: GIF seek keeps rejected size after DecompressionBombError, allowing DoS",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-6r8x-57c9-28j4",
+   "aliases": [
+    "BIT-pillow-2026-59199",
+    "CVE-2026-59199",
+    "PYSEC-2026-3451"
+   ],
+   "summary": "Pillow: Heap out-of-bounds write `Image.paste()` / `Image.crop()` via signed coordinate overflow",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-74r2-7ff9-mjj2",
+   "aliases": [
+    "BIT-pillow-2026-112401",
+    "CVE-2026-112401"
+   ],
+   "summary": "Pillow: Quadratic GIF comment concatenation allows DoS in Image.open()",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-78g4-xqwv-q3g8",
+   "aliases": [],
+   "summary": "Pillow: Bundled libopenjp2 2.5.4 in all wheels since 11.1.0 carries OSV-2025-219 heap-buffer-overflow write re",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-7mwm-ghpf-9vrm",
+   "aliases": [
+    "BIT-pillow-2026-112402",
+    "CVE-2026-112402",
+    "PYSEC-2026-4331"
+   ],
+   "summary": "Pillow: Double free in ImagingScaleAffine on calloc failure via Image.transform",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-8g5g-8vmr-9782",
+   "aliases": [
+    "BIT-pillow-2026-112403",
+    "CVE-2026-112403",
+    "PYSEC-2026-4332"
+   ],
+   "summary": "Pillow: Heap buffer overflow in ImagingJpegDecode",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-8v84-f9pq-wr9x",
+   "aliases": [
+    "BIT-pillow-2026-54059",
+    "CVE-2026-54059",
+    "PYSEC-2026-2253"
+   ],
+   "summary": "Pillow `PcfFontFile._load_bitmaps()`: `Image.frombytes()` called without `_decompression_bomb_check()` — bomb ",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9hw9-ch79-4vh6",
+   "aliases": [
+    "BIT-pillow-2026-59205",
+    "CVE-2026-59205",
+    "PYSEC-2026-3453"
+   ],
+   "summary": "Pillow: Controlled heap out-of-bounds write in Pillow `ImageCmsTransform.apply()` via output mode mismatch",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9v9v-9qvf-h2hj",
+   "aliases": [
+    "BIT-pillow-2026-96644",
+    "CVE-2026-96644",
+    "PYSEC-2026-4343"
+   ],
+   "summary": "Pillow: Heap over-read in WMF/EMF rendering via 16-bit dimension truncation (Windows builds)",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-c6hw-5grf-ff96",
+   "aliases": [
+    "BIT-pillow-2026-112404",
+    "CVE-2026-112404"
+   ],
+   "summary": "Pillow: OOB read in TiffDecode.c tile and RGBA paths leaks heap memory into pixels",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cp9v-662q-vvx9",
+   "aliases": [
+    "BIT-pillow-2026-112405",
+    "CVE-2026-112405",
+    "PYSEC-2026-4333"
+   ],
+   "summary": "Pillow: NULL pointer dereference in Image.merge via an unvalidated band 0",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-f2g6-542v-9j58",
+   "aliases": [
+    "BIT-pillow-2026-112406",
+    "CVE-2026-112406"
+   ],
+   "summary": "Pillow: Infinite loop in PdfParser.rewrite_pages on page tree Parent cycle",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fc9g-5qg7-mf45",
+   "aliases": [
+    "BIT-pillow-2026-112891",
+    "CVE-2026-112891"
+   ],
+   "summary": "Pillow: Quadratic GIF comment copying during save",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fj7v-r99m-22gq",
+   "aliases": [
+    "BIT-pillow-2026-59198",
+    "CVE-2026-59198",
+    "PYSEC-2026-3494"
+   ],
+   "summary": "Pillow TGA RLE encoder can serialize up to ~57 KB of adjacent heap data into generated images",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-g4qv-2jxx-769h",
+   "aliases": [
+    "BIT-pillow-2026-96643",
+    "CVE-2026-96643",
+    "PYSEC-2026-4342"
+   ],
+   "summary": "Pillow: PNG eXIf chunk makes EXIF parsing run in quadratic time",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g7cr-3p24-7wf7",
+   "aliases": [
+    "BIT-pillow-2026-96778",
+    "CVE-2026-96778"
+   ],
+   "summary": "Pillow: Heap buffer overflow writing JPEG comment after ICC profile fills buffer",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g842-9rc4-69pw",
+   "aliases": [
+    "BIT-pillow-2026-96637",
+    "CVE-2026-96637",
+    "PYSEC-2026-4338"
+   ],
+   "summary": "Pillow: Decompression bomb check bypass in SpiderImagePlugin.seek() leads to unbounded allocation DoS",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-gg2r-wvfm-q9rx",
+   "aliases": [
+    "BIT-pillow-2026-112892",
+    "CVE-2026-112892"
+   ],
+   "summary": "Pillow: MSP RLE decoder expands a tiny file into unbounded memory",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-j4m9-6w36-pw47",
+   "aliases": [
+    "BIT-pillow-2026-112893",
+    "CVE-2026-112893"
+   ],
+   "summary": "Pillow: Invalid free in FreeType glyph rendering when a stroker is active",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jg86-v3jv-hrpm",
+   "aliases": [
+    "BIT-pillow-2026-112894",
+    "CVE-2026-112894"
+   ],
+   "summary": "Pillow: Quadratic-time DoS in PDF save_all (PdfParser.next_object_id)",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jjj6-mw9f-p565",
+   "aliases": [
+    "BIT-pillow-2026-59200",
+    "CVE-2026-59200",
+    "PYSEC-2026-3495"
+   ],
+   "summary": "Pillow: Decompression Bomb DoS via PdfParser.PdfStream.decode()",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-mrfp-p49p-3hf2",
+   "aliases": [
+    "BIT-pillow-2026-96640",
+    "CVE-2026-96640"
+   ],
+   "summary": "Pillow PDF append accepts malformed shared page-tree DAG causing resource exhaustion",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-p4wg-p73j-c528",
+   "aliases": [
+    "BIT-pillow-2026-112895",
+    "CVE-2026-112895"
+   ],
+   "summary": "Pillow: Unbounded recursion parsing a PDF page tree or trailer chain (incomplete fix for CVE-2026-42310)",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-p8hx-v2p6-rp84",
+   "aliases": [
+    "BIT-pillow-2026-96636",
+    "CVE-2026-96636",
+    "PYSEC-2026-4337"
+   ],
+   "summary": "Pillow: Decompression-bomb protection bypass via multi-frame seek() in MPO and DCX (MpoImageFile.seek / DcxIma",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-pchr-8j38-3x4p",
+   "aliases": [
+    "BIT-pillow-2026-112896",
+    "CVE-2026-112896",
+    "PYSEC-2026-4334"
+   ],
+   "summary": "Pillow: TIFF encoder ColorMap plane-size mismatch causes a heap out-of-bounds read",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-pg7v-jwj7-p798",
+   "aliases": [
+    "BIT-pillow-2026-59203",
+    "CVE-2026-59203",
+    "PYSEC-2026-3452"
+   ],
+   "summary": "Pillow EpsImagePlugin negative %%BeginBinary byte count causes infinite loop denial of service",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-phj9-mv4w-65pm",
+   "aliases": [
+    "BIT-pillow-2026-55380",
+    "CVE-2026-55380",
+    "PYSEC-2026-2256"
+   ],
+   "summary": "Pillow `GdImageFile._open()`: image dimensions accepted without `_decompression_bomb_check()`",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-q45j-58j2-45rg",
+   "aliases": [
+    "BIT-pillow-2026-112897",
+    "CVE-2026-112897"
+   ],
+   "summary": "Pillow: TiffDecode returns uninitialized memory as pixels for short JPEG strips",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-rfgq-q3w2-pmv2",
+   "aliases": [
+    "BIT-pillow-2026-112898",
+    "CVE-2026-112898"
+   ],
+   "summary": "Pillow: Image.quantize() with empty palette leaks uninitialized stack memory",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-v9pv-5gc8-w2m6",
+   "aliases": [
+    "BIT-pillow-2026-96639",
+    "CVE-2026-96639",
+    "PYSEC-2026-4339"
+   ],
+   "summary": "Pillow multi-frame loaders can reuse stale native image storage after mode transitions",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-vjc4-5qp5-m44j",
+   "aliases": [
+    "BIT-pillow-2026-59204",
+    "CVE-2026-59204",
+    "PYSEC-2026-3496"
+   ],
+   "summary": "Pillow JPEG2000 tiled decode retains a growing scratch buffer and can be used for denial of service",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-vx6w-vv9f-6gvg",
+   "aliases": [
+    "CVE-2026-112899"
+   ],
+   "summary": "Pillow: EPS load(scale) lets Ghostscript render past the decompression bomb limit",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-w889-685w-c8fh",
+   "aliases": [
+    "BIT-pillow-2026-112900",
+    "CVE-2026-112900"
+   ],
+   "summary": "Pillow: Argument Injection in Ghostscript call, potentially leading into RCE",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-xgh8-jp6q-p5x8",
+   "aliases": [
+    "BIT-pillow-2026-112901",
+    "CVE-2026-112901",
+    "PYSEC-2026-4335"
+   ],
+   "summary": "Pillow: ReDoS in XbmImagePlugin: 512-byte file stalls Image.open() for minutes",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-xj96-63gp-2gmr",
+   "aliases": [
+    "BIT-pillow-2026-59197",
+    "CVE-2026-59197",
+    "PYSEC-2026-3454"
+   ],
+   "summary": "Pillow: Heap out-of-bounds write in `ImageFilter.RankFilter` via integer overflow in `ImagingExpand`",
+   "fixes": [
+    "12.3.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:L/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-xvh5-g6gv-559v",
+   "aliases": [
+    "CVE-2026-112902"
+   ],
+   "summary": " Pillow: Memory disclosure and segfault in libtiff encoder via crafted TIFF tags",
+   "fixes": [
+    "13.0.0"
+   ],
+   "severity": []
+  }
+ ],
+ "pip==25.1.1": [
+  {
+   "primary": "GHSA-4xh5-x5gv-qwph",
+   "aliases": [
+    "CVE-2025-8869",
+    "PYSEC-2026-1795"
+   ],
+   "summary": "pip's fallback tar extraction doesn't check symbolic links point to extraction directory",
+   "fixes": [
+    "25.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-58qw-9mgm-455v",
+   "aliases": [
+    "CVE-2026-3219",
+    "PYSEC-2026-2875"
+   ],
+   "summary": "pip has an interpretation conflict due to handling both concatenated tar and ZIP files as ZIP files",
+   "fixes": [
+    "26.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-6vgw-5pg2-w6jp",
+   "aliases": [
+    "CVE-2026-1703",
+    "PYSEC-2026-1796"
+   ],
+   "summary": "pip Path Traversal vulnerability",
+   "fixes": [
+    "26.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jp4c-xjxw-mgf9",
+   "aliases": [
+    "CVE-2026-6357",
+    "PYSEC-2026-2876"
+   ],
+   "summary": "pip Vulnerable to Inclusion of Functionality from Untrusted Control Sphere",
+   "fixes": [
+    "26.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-qwm4-qh6w-59xr",
+   "aliases": [
+    "CVE-2026-13346",
+    "PYSEC-2026-3721"
+   ],
+   "summary": "pip would incorrectly handle doubly-encoded package URLs from indexes",
+   "fixes": [
+    "26.2.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-wf93-45jw-7689",
+   "aliases": [
+    "CVE-2026-8643",
+    "PYSEC-2026-196"
+   ],
+   "summary": " pip: Path traversal in console_scripts/gui_scripts entry point names allows installing scripts outside of tar",
+   "fixes": [
+    "26.1.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:R/S:U/C:H/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "pydantic-settings==2.14.1": [
+  {
+   "primary": "GHSA-4xgf-cpjx-pc3j",
+   "aliases": [
+    "CVE-2026-58203"
+   ],
+   "summary": "pydantic-settings: NestedSecretsSettingsSource follows symlinks outside secrets_dir, enabling local file read ",
+   "fixes": [
+    "2.14.2"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+    }
+   ]
+  }
+ ],
+ "PyJWT==2.13.0": [
+  {
+   "primary": "GHSA-2gx3-rcp4-g85q",
+   "aliases": [
+    "CVE-2026-101917",
+    "PYSEC-2026-4140"
+   ],
+   "summary": "PyJWT: PyJWKClient still amplifies unauthenticated JWKS fetches on unknown kid values (incomplete fix of CVE-2",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-42vr-xj54-vc7v",
+   "aliases": [
+    "CVE-2026-101918",
+    "PYSEC-2026-4141"
+   ],
+   "summary": "PyJWT: Unauthenticated RecursionError DoS in pre-verification payload parse (PyJWKClient.get_signing_key_from_",
+   "fixes": [
+    "2.15.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-8wjv-2p76-3863",
+   "aliases": [
+    "CVE-2026-102265",
+    "PYSEC-2026-4142"
+   ],
+   "summary": "PyJWT: Uncaught RecursionError in jwt.decode() on deeply nested token header",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9j54-fg26-wv3r",
+   "aliases": [
+    "CVE-2026-102266",
+    "PYSEC-2026-4143"
+   ],
+   "summary": "PyJWT: PyJWK accepts empty HMAC keys, bypassing PyJWT's empty-key validation",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-9v7f-9g4p-ffgj",
+   "aliases": [
+    "CVE-2026-102267",
+    "PYSEC-2026-4144"
+   ],
+   "summary": "PyJWT: PyJWKClient follows redirects when fetching JWKS",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-ffc3-869f-jxw9",
+   "aliases": [
+    "CVE-2026-102268",
+    "PYSEC-2026-4145"
+   ],
+   "summary": "PyJWT: Asymmetric-PEM detection bypass: whitespace/line-ending-mutated public keys skip the HS/asymmetric conf",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-gvp8-978c-rx2q",
+   "aliases": [
+    "CVE-2026-103001",
+    "PYSEC-2026-4146"
+   ],
+   "summary": "PyJWT.decode() reintroduces options-dict mutation, enabling silent claim-verification bypass on dict reuse",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-hxm8-2xgr-2p9m",
+   "aliases": [
+    "CVE-2026-102269",
+    "PYSEC-2026-4147"
+   ],
+   "summary": "PyJWT: Non-canonical signature segments enable raw-token revocation bypass",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-jwrc-g2q2-pq5p",
+   "aliases": [
+    "CVE-2026-102270",
+    "PYSEC-2026-4148"
+   ],
+   "summary": "PyJWT: ReDoS vulnerability when calling the `is_pem_format` function.",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:H/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-p4g4-x82p-q773",
+   "aliases": [
+    "CVE-2026-102271",
+    "PYSEC-2026-4149"
+   ],
+   "summary": "PyJWT: Public keys in DER form are accepted as HMAC secrets, bypassing the CVE-2022-29217 guard",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-pxh4-856f-4h89",
+   "aliases": [],
+   "summary": "PyJWT: HS256/384/512 verify accepts empty HMAC key via oct JWK (PyJWK/PyJWKClient) enabling token forgery",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-r6x4-923q-g947",
+   "aliases": [
+    "CVE-2026-102272",
+    "PYSEC-2026-4150"
+   ],
+   "summary": "PyJWT BOM Bypass",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-w2cx-738m-mc7w",
+   "aliases": [
+    "CVE-2026-102273",
+    "PYSEC-2026-4151"
+   ],
+   "summary": "PyJWT accepts public JWK containers as HMAC secrets",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:H/I:H/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-w6j9-cwv2-h6wq",
+   "aliases": [
+    "CVE-2026-102274",
+    "PYSEC-2026-4152"
+   ],
+   "summary": "PyJWT: Malformed RSA JWK aborts parsing of an entire JWK Set",
+   "fixes": [
+    "2.14.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-x33g-cr3x-6449",
+   "aliases": [
+    "CVE-2026-102275",
+    "PYSEC-2026-4183"
+   ],
+   "summary": "PyJWT accepts inconsistent OKP x/d JWKs, causing public/private key identity confusion",
+   "fixes": [
+    "2.15.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:L/I:H/A:N"
+    }
+   ]
+  }
+ ],
+ "pypdf==6.11.0": [
+  {
+   "primary": "GHSA-23w6-3w8w-8484",
+   "aliases": [
+    "CVE-2026-84310",
+    "PYSEC-2026-3910"
+   ],
+   "summary": "pypdf: Possible long runtimes/large memory usage when retrieving outlines",
+   "fixes": [
+    "6.16.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-248m-82v9-q6g6",
+   "aliases": [
+    "CVE-2026-48156",
+    "PYSEC-2026-3004"
+   ],
+   "summary": "pypdf: Possible long runtimes for zero-only width values in cross-reference streamsuntimes for zero-only width",
+   "fixes": [
+    "6.12.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-39mj-jf6j-2qj3",
+   "aliases": [
+    "CVE-2026-113794"
+   ],
+   "summary": "pypdf: Possible infinite loop when hitting EOF in standard xref table",
+   "fixes": [
+    "6.20.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-42gh-23hr-vphw",
+   "aliases": [
+    "CVE-2026-119206"
+   ],
+   "summary": "pypdf has possible long runtimes when retrieving page labels",
+   "fixes": [
+    "6.21.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-4vqv-7265-gm2w",
+   "aliases": [
+    "CVE-2026-119207"
+   ],
+   "summary": "pypdf has possible large memory usage for exceptions in strict mode",
+   "fixes": [
+    "6.21.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-52x6-gq3r-vpf4",
+   "aliases": [
+    "CVE-2026-54530",
+    "PYSEC-2026-3009"
+   ],
+   "summary": "pypdf: Possible infinite loop when retrieving fonts for layout-mode text extraction",
+   "fixes": [
+    "6.13.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-55h5-xmcq-c37v",
+   "aliases": [
+    "CVE-2026-59937",
+    "PYSEC-2026-3610"
+   ],
+   "summary": "pypdf: Possible long runtimes for repeated malformed cross-reference entries ",
+   "fixes": [
+    "6.14.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5849-834g-hvw5",
+   "aliases": [
+    "CVE-2026-119203"
+   ],
+   "summary": "pypdf has possible infinite loop when hitting EOF in standard xref table during trailer search",
+   "fixes": [
+    "6.21.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5hgr-hg42-57jg",
+   "aliases": [
+    "CVE-2026-49460",
+    "PYSEC-2026-3010"
+   ],
+   "summary": "pypdf: Inefficient decoding of FlateDecode PNG predictor streams",
+   "fixes": [
+    "6.12.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5hx5-vpf9-5wcv",
+   "aliases": [
+    "CVE-2026-113786"
+   ],
+   "summary": "pypdf: Unvalidated JPEG image data loading",
+   "fixes": [
+    "6.21.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5jq2-8x83-x246",
+   "aliases": [
+    "CVE-2026-102994",
+    "PYSEC-2026-4153"
+   ],
+   "summary": "pypdf: Possible long runtimes/large memory usage when parsing indirect objects",
+   "fixes": [
+    "6.18.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5qjq-93h5-hrgp",
+   "aliases": [
+    "CVE-2026-59938",
+    "PYSEC-2026-3611"
+   ],
+   "summary": "pypdf: Possible large memory usage for wrong image dimensions",
+   "fixes": [
+    "6.14.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-5xf7-4p34-54qr",
+   "aliases": [
+    "CVE-2026-59936",
+    "PYSEC-2026-3612"
+   ],
+   "summary": "pypdf: Possible infinite loop for not terminated inline images",
+   "fixes": [
+    "6.14.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-62m5-6wh8-28x7",
+   "aliases": [
+    "CVE-2026-119208"
+   ],
+   "summary": "pypdf has possible long runtimes/large memory usage for encrypted PDF files",
+   "fixes": [
+    "6.21.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-6c7f-9265-g8fw",
+   "aliases": [
+    "CVE-2026-115572"
+   ],
+   "summary": "pypdf: Possible long runtimes for repeated references to the same missing object",
+   "fixes": [
+    "6.21.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-6vvc-x485-93v7",
+   "aliases": [
+    "CVE-2026-113789"
+   ],
+   "summary": "pypdf: Possible long runtimes/large memory usage when retrieving form fields",
+   "fixes": [
+    "6.21.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-763m-79hh-57f2",
+   "aliases": [
+    "CVE-2026-84311",
+    "PYSEC-2026-3911"
+   ],
+   "summary": "pypdf: Possible long runtimes/large memory usage when extracting XForm objects",
+   "fixes": [
+    "6.16.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-7mh2-4gg2-979f",
+   "aliases": [
+    "CVE-2026-113795"
+   ],
+   "summary": "pypdf: Possible large memory usage for streams with multiple filters",
+   "fixes": [
+    "6.20.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-9mx8-4j7g-633p",
+   "aliases": [
+    "CVE-2026-113793"
+   ],
+   "summary": "pypdf: Possible infinite loop when removing tree items",
+   "fixes": [
+    "6.20.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cgf9-327m-v77c",
+   "aliases": [
+    "CVE-2026-113791"
+   ],
+   "summary": "pypdf: Possible large memory usage when parsing content streams",
+   "fixes": [
+    "6.21.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cggf-277g-3q54",
+   "aliases": [
+    "CVE-2026-119204"
+   ],
+   "summary": "pypdf has possible large memory usage when parsing page tree",
+   "fixes": [
+    "6.21.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-cj93-chg6-vgv8",
+   "aliases": [
+    "CVE-2026-48155",
+    "PYSEC-2026-3016"
+   ],
+   "summary": "pypdf: Possible large memory usage for large offsets for layout mode text",
+   "fixes": [
+    "6.12.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-f54x-cmq8-qg57",
+   "aliases": [
+    "CVE-2026-113790"
+   ],
+   "summary": "pypdf: Possible large memory usage when parsing arrays and dictionaries",
+   "fixes": [
+    "6.21.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fc8x-2rww-xw9m",
+   "aliases": [
+    "CVE-2026-82398",
+    "PYSEC-2026-3912"
+   ],
+   "summary": "pypdf: Inefficient handling of non-whitespace inputs in read_until_whitespace",
+   "fixes": [
+    "6.15.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fp3f-mc75-235c",
+   "aliases": [
+    "CVE-2026-71870",
+    "PYSEC-2026-3655"
+   ],
+   "summary": "pypdf: Possible large memory usage for large /ToUnicode streams",
+   "fixes": [
+    "6.15.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fp3h-c4fm-7vvf",
+   "aliases": [
+    "CVE-2026-102995",
+    "PYSEC-2026-4154"
+   ],
+   "summary": "pypdf: Possible large memory usage for large /ToUnicode streams (Follow-up 2)",
+   "fixes": [
+    "6.18.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-fwg2-594c-jp42",
+   "aliases": [
+    "CVE-2026-71852",
+    "PYSEC-2026-3656"
+   ],
+   "summary": "pypdf: Possible long runtimes/large memory usage for large CID font width ranges",
+   "fixes": [
+    "6.15.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g867-7843-wf8q",
+   "aliases": [
+    "CVE-2026-59935",
+    "PYSEC-2026-3613"
+   ],
+   "summary": "pypdf: Possible infinite loop for not terminated inline images (ASCII85 and ASCIIHex filter)",
+   "fixes": [
+    "6.14.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g9cg-prrw-2r8q",
+   "aliases": [
+    "CVE-2026-102996",
+    "PYSEC-2026-4155"
+   ],
+   "summary": "pypdf: Possible large memory usage when parsing font data",
+   "fixes": [
+    "6.18.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-g9xf-7f8q-9mcj",
+   "aliases": [
+    "CVE-2026-54651",
+    "PYSEC-2026-3018"
+   ],
+   "summary": "pypdf: Possible infinite loop when processing threads/articles in writer",
+   "fixes": [
+    "6.13.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-gmh7-3g9r-mjh5",
+   "aliases": [
+    "CVE-2026-115580"
+   ],
+   "summary": "pypdf: Possible long runtimes for large xref table header limits",
+   "fixes": [
+    "6.21.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-j543-4vmf-qm7v",
+   "aliases": [
+    "CVE-2026-49461",
+    "PYSEC-2026-3020"
+   ],
+   "summary": "pypdf: Possible large memory usage for form XObjects during text extraction",
+   "fixes": [
+    "6.12.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jm82-fx9c-mx94",
+   "aliases": [
+    "CVE-2026-57204"
+   ],
+   "summary": "pypdf: Missing stream length values ignore defined limits",
+   "fixes": [
+    "6.13.3"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jp53-mhqp-8xcg",
+   "aliases": [
+    "CVE-2026-84309",
+    "PYSEC-2026-3913"
+   ],
+   "summary": "pypdf: Possible infinite loop for TreeObject.insert_child",
+   "fixes": [
+    "6.16.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jr96-gvgh-j3r4",
+   "aliases": [
+    "CVE-2026-115585"
+   ],
+   "summary": "pypdf: Possible long runtimes for repeated malformed cross-reference entries (Follow-up)",
+   "fixes": [
+    "6.21.2"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-jw7q-gvrg-4vj3",
+   "aliases": [
+    "CVE-2026-102997",
+    "PYSEC-2026-4156"
+   ],
+   "summary": "pypdf: Possible long runtimes for partially malformed FlateDecode streams (Follow-up)",
+   "fixes": [
+    "6.18.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-m2v9-299j-rv96",
+   "aliases": [
+    "CVE-2026-54531",
+    "PYSEC-2026-3022"
+   ],
+   "summary": "pypdf: Possible infinite loop when processing outlines/bookmarks in writer",
+   "fixes": [
+    "6.13.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-mfr5-77xh-9j7h",
+   "aliases": [
+    "CVE-2026-119205"
+   ],
+   "summary": "pypdf has possible infinite loop when cloning dictionaries",
+   "fixes": [
+    "6.21.4"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-php9-fj8v-98fj",
+   "aliases": [
+    "CVE-2026-102998",
+    "PYSEC-2026-4157"
+   ],
+   "summary": "pypdf: Possible long runtimes when generating appearance streams",
+   "fixes": [
+    "6.19.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-qfv9-64jg-mh7p",
+   "aliases": [
+    "CVE-2026-113792"
+   ],
+   "summary": "pypdf: Possible infinite loop in PdfWriter.find_outline_item",
+   "fixes": [
+    "6.20.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-qv6h-rv94-w285",
+   "aliases": [
+    "CVE-2026-102993",
+    "PYSEC-2026-4158"
+   ],
+   "summary": "pypdf: Possible large memory usage when retrieving Roman page labels",
+   "fixes": [
+    "6.17.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-v247-6f48-mgcj",
+   "aliases": [
+    "CVE-2026-102999",
+    "PYSEC-2026-4159"
+   ],
+   "summary": "pypdf: Possible long runtimes with large amount of embedded files",
+   "fixes": [
+    "6.19.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-w23x-9jrw-r45c",
+   "aliases": [
+    "CVE-2026-103000",
+    "PYSEC-2026-4160"
+   ],
+   "summary": "pypdf: Possible large memory usage when retrieving alphabetical page labels",
+   "fixes": [
+    "6.19.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-wjqc-6w8f-h24c",
+   "aliases": [
+    "CVE-2026-48735",
+    "PYSEC-2026-3025"
+   ],
+   "summary": "pypdf: Manipulated XMP metadata streams can exhaust RAM",
+   "fixes": [
+    "6.12.1"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-x3rh-gjgm-fmqc",
+   "aliases": [
+    "CVE-2026-119209"
+   ],
+   "summary": "pypdf has possible large memory usage when parsing cross-reference streams",
+   "fixes": [
+    "6.21.3"
+   ],
+   "severity": []
+  }
+ ],
+ "python-multipart==0.0.28": [
+  {
+   "primary": "GHSA-5rvq-cxj2-64vf",
+   "aliases": [
+    "CVE-2026-53539",
+    "PYSEC-2026-3036"
+   ],
+   "summary": "python-multipart: Quadratic-time querystring parsing with semicolon separators causes CPU denial of service",
+   "fixes": [
+    "0.0.30"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-6jv3-5f52-599m",
+   "aliases": [
+    "CVE-2026-53538",
+    "PYSEC-2026-3037"
+   ],
+   "summary": "python-multipart: Semicolon treated as querystring field separator enables parameter smuggling",
+   "fixes": [
+    "0.0.30"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-v9pg-7xvm-68hf",
+   "aliases": [
+    "CVE-2026-53540",
+    "PYSEC-2026-3040"
+   ],
+   "summary": "python-multipart: Negative Content-Length in parse_form buffers the entire body in memory",
+   "fixes": [
+    "0.0.31"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-vffw-93wf-4j4q",
+   "aliases": [
+    "CVE-2026-53537",
+    "PYSEC-2026-3041"
+   ],
+   "summary": "python-multipart: Content-Disposition parameter smuggling via RFC 2231/5987 extended parameters",
+   "fixes": [
+    "0.0.30"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:H/PR:N/UI:N/S:U/C:N/I:L/A:N"
+    }
+   ]
+  }
+ ],
+ "pywin32==312;": [
+  {
+   "primary": "GHSA-hwfp-hg2m-9vr2",
+   "aliases": [
+    "CVE-2021-32559",
+    "PYSEC-2021-112"
+   ],
+   "summary": "Integer overflow in pywin32",
+   "fixes": [
+    "301"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  }
+ ],
+ "sentence-transformers==5.4.1": [
+  {
+   "primary": "GHSA-jhr6-gm9c-rqjv",
+   "aliases": [
+    "CVE-2026-68770",
+    "PYSEC-2026-4164"
+   ],
+   "summary": "sentence-transformers local model loading bypasses trust_remote_code and executes custom Python",
+   "fixes": [
+    "5.6.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  }
+ ],
+ "setuptools==80.3.1": [
+  {
+   "primary": "GHSA-h35f-9h28-mq5c",
+   "aliases": [
+    "BIT-setuptools-2026-59890",
+    "CVE-2026-59890",
+    "PYSEC-2026-3447"
+   ],
+   "summary": "setuptools: MANIFEST.in exclusion bypass in sdist via Unicode normalization collision (NFC/NFD) on macOS APFS/",
+   "fixes": [
+    "83.0.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:N/UI:R/S:U/C:H/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-xmj3-9gf7-h52w",
+   "aliases": [],
+   "summary": "setuptools: Windows path escape via namespace_packages.txt during legacy wheel installation  Description",
+   "fixes": [
+    "84.1.0"
+   ],
+   "severity": []
+  }
+ ],
+ "soupsieve==2.8.3": [
+  {
+   "primary": "GHSA-2wc2-fm75-p42x",
+   "aliases": [
+    "CVE-2026-49476",
+    "PYSEC-2026-3071"
+   ],
+   "summary": "Soup Sieve has Memory Exhaustion via Large Comma-Separated Selector Lists",
+   "fixes": [
+    "2.8.4"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-836r-79rf-4m37",
+   "aliases": [
+    "CVE-2026-49477",
+    "PYSEC-2026-3072"
+   ],
+   "summary": "Soup Sieve: Regular Expression Denial of Service (ReDoS) via Selector Parser",
+   "fixes": [
+    "2.8.4"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-gjv8-xp57-g29c",
+   "aliases": [
+    "CVE-2026-86000",
+    "PYSEC-2026-4170"
+   ],
+   "summary": "Soup Sieve: Polynomial-time ReDoS (O(n²)) in the `IDENTIFIER` / `VALUE` selector sub-patterns",
+   "fixes": [
+    "2.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-j934-xhv5-fg8f",
+   "aliases": [
+    "CVE-2026-85999",
+    "PYSEC-2026-4171"
+   ],
+   "summary": "Soup Sieve: Polynomial-time ReDoS (O(n²)) in the whitespace/comment trimming regex `RE_WS_END` (triggers on VA",
+   "fixes": [
+    "2.9.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:N/I:N/A:L"
+    }
+   ]
+  }
+ ],
+ "torch==2.11.0": [
+  {
+   "primary": "GHSA-rrmf-rvhw-rf47",
+   "aliases": [
+    "BIT-pytorch-2025-3000",
+    "CVE-2025-3000",
+    "PYSEC-2025-194"
+   ],
+   "summary": "PyTorch is vulnerable to memory corruption through its torch.jit.script function",
+   "fixes": [
+    "2.13.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:L/I:L/A:L"
+    }
+   ]
+  }
+ ],
+ "transformers==5.8.0": [
+  {
+   "primary": "GHSA-x9r9-c232-4q39",
+   "aliases": [
+    "CVE-2026-80047",
+    "PYSEC-2026-4174"
+   ],
+   "summary": "Hugging Face Transformers downloads custom generation code before trust consent",
+   "fixes": [],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-xrqw-3rrv-vx5w",
+   "aliases": [
+    "CVE-2026-9856",
+    "PYSEC-2026-3929"
+   ],
+   "summary": "Transformers save_pretrained path traversal allows arbitrary file writes through chat template names",
+   "fixes": [
+    "5.10.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.0/AV:N/AC:L/PR:N/UI:R/S:U/C:N/I:H/A:L"
+    }
+   ]
+  }
+ ],
+ "unstructured==0.18.3": [
+  {
+   "primary": "GHSA-4mvj-m6j5-pmf7",
+   "aliases": [
+    "CVE-2026-71428",
+    "PYSEC-2026-3930"
+   ],
+   "summary": "unstructured: Server-Side Request Forgery in the URL-based partitioning",
+   "fixes": [
+    "0.24.0"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-gm8q-m8mv-jj5m",
+   "aliases": [
+    "CVE-2025-64712",
+    "PYSEC-2026-558"
+   ],
+   "summary": "Unstructured has Path Traversal via Malicious MSG Attachment that Allows Arbitrary File Write",
+   "fixes": [
+    "0.18.18"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"
+    }
+   ]
+  },
+  {
+   "primary": "GHSA-v5mq-3xhg-98m9",
+   "aliases": [
+    "CVE-2026-104250"
+   ],
+   "summary": "unstructured: Stored XSS via unescaped HTML generation",
+   "fixes": [
+    "0.24.1"
+   ],
+   "severity": [
+    {
+     "type": "CVSS_V3",
+     "score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"
+    }
+   ]
+  }
+ ],
+ "urllib3==2.7.0": [
+  {
+   "primary": "GHSA-8988-9cw3-xx77",
+   "aliases": [
+    "CVE-2026-97687",
+    "PYSEC-2026-4175"
+   ],
+   "summary": "urllib3: HTTPS proxy TLS configuration may be ignored or overridden",
+   "fixes": [
+    "2.8.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-gh4c-6fx4-qh6g",
+   "aliases": [
+    "CVE-2026-97688",
+    "PYSEC-2026-4176"
+   ],
+   "summary": "urllib3: Chunked Deflate streaming can enter an infinite loop",
+   "fixes": [
+    "2.8.0"
+   ],
+   "severity": []
+  },
+  {
+   "primary": "GHSA-vxq7-64xx-v4gw",
+   "aliases": [
+    "CVE-2026-97689",
+    "PYSEC-2026-4177"
+   ],
+   "summary": "urllib3: HTTPResponse.stream()/read_chunked() buffers an unbounded chunk-size line into memory",
+   "fixes": [
+    "2.8.0"
+   ],
+   "severity": []
+  }
+ ],
+ "Werkzeug==3.1.8": [
+  {
+   "primary": "GHSA-g6x2-hccm-hh4m",
+   "aliases": [
+    "CVE-2026-102598",
+    "PYSEC-2026-4312"
+   ],
+   "summary": "Werkzeug safe_join() allows Windows special device names",
+   "fixes": [
+    "3.1.9"
+   ],
+   "severity": []
+  }
+ ]
+}

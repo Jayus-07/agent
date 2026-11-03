@@ -156,6 +156,99 @@
 - 新增 `backend/tests/api/test_p2_wrapup_fixes.py`（8 passed）：实体爆炸 payload 拒绝 / 合法部件零误伤 / OCR 预算结算与 error 跳过 / messages 超批超长缺字段 422 + 合法放行
 - 既有套件（chat_memory_persistence / enterprise_document_structure / ocr_registered_model / session_ownership）→ 26 passed，零回归
 
+
+## P3 批次 A（fix/audit-p3-a，基线 0a77b50）：A1 依赖公告核对 + A2 SQL 注入分诊修复
+
+### A1 依赖公告逐包核对（分诊，不改依赖）
+
+**方法学（如实记录）**：NEXT-SESSION 记录的「Mimosa 密封产物 13 包 63 条」在两份密封产物
+（scan-…7e692965b766 / scan-…b5fe43c69829）中均无依赖公告明细字段（findings.json 仅静态
+代码发现，manifest/seal/jobs 记录亦无），原 summary 未落盘、不可复原。本轮以重生成清单为准：
+- 前端三包（frontend / frontend-admin / frontend-cs）：`npm audit --package-lock-only` → **0 漏洞**；
+- 后端 `requirements-lock.txt`（341 包）：OSV querybatch + 逐公告详情（去 withdrawn + 别名簇去重）
+  → **43 包 / 287 条独立公告**；归一化脚本与全量结果见本目录 `evidence/osv_dedup_result.json`
+  （脚本在 d:/tmp，未入库）。
+- 「13 包 63 条」与 43/287 的口径差异：Mimosa 依赖审计范围不可考（pyproject 直接依赖仅 2 个），
+  无法对照到包级；本轮清单为可复核的权威口径。
+
+**逐包结论（43 包，按公告数降序；分类：可升级/跨主版本/需处理）**：
+
+| 包 | 锁定版本 | 公告数 | 结论 |
+|---|---|---|---|
+| pillow | 12.2.0 | 54 | 可升级→12.3.0 |
+| pypdf | 6.11.0 | 45 | 可升级→6.21.4 |
+| nltk | 3.9.4 | 34 | 需处理（1 条无修复版本） |
+| GitPython | 3.1.50 | 33 | 可升级→3.2.1 |
+| aiohttp | 3.13.5 | 22 | 可升级→3.14.4 |
+| PyJWT | 2.13.0 | 15 | 需处理（1 条无修复版本，GHSA-gvp8-978c-rx2q） |
+| Authlib | 1.7.2 | 9 | 可升级→1.9.1 |
+| filelock | 3.29.0 | 9 | 跨主版本→4.2.1 |
+| pip | 25.1.1 | 6 | 可升级→25.3（容器基建，随基础镜像走） |
+| chromadb | 1.5.9 | 4 | 需处理（4 条无修复版本） |
+| mcp | 1.28.1 | 4 | 可升级→1.30.0 |
+| oauthlib | 3.3.1 | 4 | 跨主版本→4.0.0 |
+| python-multipart | 0.0.28 | 4 | 可升级→0.0.31 |
+| soupsieve | 2.8.3 | 4 | 可升级→2.9.0 |
+| unstructured | 0.18.3 | 3 | 可升级→0.24.1 |
+| urllib3 | 2.7.0 | 3 | 可升级→2.8.0 |
+| anyio | 4.13.0 | 2 | 可升级→4.14.2 |
+| joserfc | 1.7.3 | 2 | 可升级→1.7.6 |
+| kafka-python | 2.0.2 | 2 | 可升级→2.3.2 |
+| langgraph-checkpoint-postgres | 3.1.0 | 2 | 可升级→3.1.3 |
+| langgraph-sdk | 0.3.14 | 2 | 可升级→0.4.4 |
+| setuptools | 80.3.1 | 2 | 跨主版本→84.1.0 |
+| transformers | 5.8.0 | 2 | 需处理（1 条无修复版本） |
+| brotli | 1.2.0 | 1 | 可升级→1.2.1.0 |
+| certifi | 2026.4.22 | 1 | 可升级→2026.10.18 |
+| cryptography | 49.0.0 | 1 | 跨主版本→50.0.0 |
+| datasets | 4.8.5 | 1 | 跨主版本→5.0.1 |
+| dnspython | 2.8.0 | 1 | 可升级→2.9.0 |
+| fastmcp / fastmcp-slim | 3.4.4 | 各 1 | 可升级→3.4.10 |
+| fsspec | 2026.2.0 | 1 | 可升级→2026.6.0 |
+| h2 | 4.3.0 | 1 | 可升级→4.4.1 |
+| idna | 3.13 | 1 | 可升级→3.15 |
+| langchain | 1.2.18 | 1 | 可升级→1.4.6 |
+| langsmith | 0.8.3 | 1 | 可升级→0.8.18 |
+| Mako | 1.4.1 | 1 | 可升级→1.4.2 |
+| multidict | 6.7.1 | 1 | 可升级→6.9.1 |
+| opentelemetry-api | 1.41.1 | 1 | 可升级→1.45.1 |
+| pydantic-settings | 2.14.1 | 1 | 可升级→2.14.2 |
+| pywin32 | 312 | 1 | **疑似误报**（fix=301 < 现版本 312，OSV 区间匹配需人工复核原文） |
+| sentence-transformers | 5.4.1 | 1 | 可升级→5.6.0 |
+| torch | 2.11.0 | 1 | 可升级→2.13.0 |
+| Werkzeug | 3.1.8 | 1 | 可升级→3.1.9 |
+
+### A2 SQL 注入告警分诊（27 条告警逐条结论）
+
+**分诊表**：
+
+| 告警位置 | 条数 | 结论 | 依据 |
+|---|---|---|---|
+| operation_log_pg.py:74,96-100 | 6 | 需修（已修） | 表名=f-string 拼 `*_TABLE_PREFIX` env 前缀；DML 值全参数化，仅标识符直插 |
+| llm_usage_store_pg.py:124,251-258 | 6 | 需修（已修） | 同模式（OBS_DB_PG_TABLE_PREFIX） |
+| trace_store_pg.py:93,107-110 | 5 | 需修（已修） | 同模式 |
+| analytics_store_pg.py:75,99-102 | 4 | 需修（已修） | 同模式 |
+| keyword_store_pg.py:79,93-95 | 3 | 需修（已修） | 同模式 |
+| e2e_side_effect_idempotency_verify.py:68,74,75 | 3 | **误报** | `LEDGER="s6v_idempotency_records"` 模块常量，dev-only 脚本无外部输入 |
+| shared/idempotency.py:1415 | 0 | 无告警 | 1415 行为 `run_idempotent_operation_for_identity` 函数定义；grep 确认共享层无动态 SQL，交接文档行号指向的是函数区域而非告警点 |
+
+**修复（A2 code change，5 文件 + 新助手 + 守卫测试）**：
+- 新增 `backend/shared/pg_identifier.py`：`pg_table_name(env_key, suffix)`——组合前缀+后缀后
+  对**最终进入 DDL 的完整标识符**做 `[A-Za-z_][A-Za-z0-9_]*` fullmatch，非法 fail-closed
+  抛 ValueError；口径对齐既有先例（price_page_monitor.py:403-404 前缀校验、
+  operation_log_pg.py:163 registry_table 白名单）。
+- 5 个 store 的 `self._table` 组合改为经助手（operation_log_pg / keyword_store_pg /
+  llm_usage_store_pg / trace_store_pg / analytics_store_pg），DDL f-string 保留（标识符不可参数化，
+  这是 psycopg2 的固有限制，守卫在源头）。
+- 新增 `backend/tests/test_pg_table_identifier_guard.py`（10 例）：默认/合法前缀放行 + 7 种注入
+  形态负例 fail-closed + 五 store 源码级防回退。
+- **验证**：py_compile 全部改动文件通过；新守卫测试 10 passed（32s）；受影响面既有套件
+  （test_obs_stores_pg / test_rag_stores_pg / test_llm_attribution / test_trace_retention /
+  test_trace_store_batch / test_ttft_persistence）→ **47 passed（2m20s），零回归**。
+
+**遗留标注**：pywin32==312 的 PYSEC-2021-112 标注疑似误报（公告 fix=301 < 现版本 312，
+OSV 区间匹配需人工复核原文）；pip/setuptools 随基础镜像走；33 个可升级包的批量升级
+**不在本批次实施**（A1 为分诊任务，升级需独立批次 + 全量回归，避免单批改动面过大）。
 ## P3 批次 B（fix/audit-p3-b，基线 ab22fb2）：B1-B4 四项小修
 
 ### B1 xml_parser 对齐 `_parse_ooxml_xml` 形态（CWE-776 扫描盲区清扫）
@@ -193,4 +286,5 @@
   test_engineering_p2_fixes（tasks/agent_chat_tasks 补帧/锁语义）→ 43 passed 零回归；
   test_apisix_b4_direct_routes → 3 passed。
 - py_compile 全部改动文件通过。
+
 
