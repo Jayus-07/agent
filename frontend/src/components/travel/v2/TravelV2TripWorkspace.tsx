@@ -3,13 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, CalendarDays, Check, ChevronDown, Clock3, History, MapPin, MessageCircle, MoreHorizontal, RotateCcw, Sparkles, Users, Wallet } from 'lucide-react'
 import {
+  addTravelMealV2,
   applyTravelTripEditV2,
   createTravelV2IdempotencyKey,
   fetchTravelTripRevisionsV2,
   fetchTravelTripV2,
   fetchTravelTripConversationV2,
   restoreTravelTripV2,
+  searchTravelFoodV2,
   searchTravelPlacesV2,
+  type MerchantSearchResultV2,
+  type MerchantSnapshotV2,
   type PlaceSearchResultV2,
   type TravelTripV2,
   type TripDayV2,
@@ -103,6 +107,13 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const [inlineCandidates, setInlineCandidates] = useState<{
     loading: boolean; results: PlaceSearchResultV2[]; error: string;
     disclosure: string; confirmId: string | null
+  } | null>(null)
+  // 餐食候选（workbench-ux #3）：点击时间轴餐食项 → 美食通道（amap 商户）
+  // 出候选，加入走既有 selections/meals 端点（二次确认 + 写状态机守卫）。
+  const [mealCandidates, setMealCandidates] = useState<{
+    loading: boolean; merchants: MerchantSearchResultV2[]; error: string;
+    disclosure: string; confirmId: string | null; addedName: string | null;
+    dayId: string; period: 'lunch' | 'dinner'
   } | null>(null)
   const [writeFeedback, setWriteFeedback] = useState<WriteFeedback | null>(null)
   const [restoreFeedback, setRestoreFeedback] = useState<WriteFeedback | null>(null)
@@ -470,6 +481,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
 
   async function loadInlineCandidates() {
     if (!trip || !selectedItem || inlineCandidates?.loading) return
+    setMealCandidates(null)
     setInlineCandidates({ loading: true, results: [], error: '', disclosure: '', confirmId: null })
     try {
       const response = await searchTravelPlacesV2(trip.document.brief.destination, selectedItem.title)
@@ -498,6 +510,104 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       `已将「${selectedItem.title}」替换为「${candidate.place.name}」`,
     )
     if (ok) setInlineCandidates(null)
+  }
+
+  /** 餐食占位 → 就餐时段推断：标题优先，其次开始时间（<15 点算午餐）。 */
+  function inferMealPeriod(item: TripItemV2): 'lunch' | 'dinner' {
+    if (item.title.includes('晚') || item.title.includes('夜')) return 'dinner'
+    if (item.title.includes('午')) return 'lunch'
+    const hour = Number.parseInt((item.start_time ?? '').slice(0, 2), 10)
+    return Number.isFinite(hour) && hour >= 15 ? 'dinner' : 'lunch'
+  }
+
+  async function loadMealCandidates(item: TripItemV2) {
+    if (!trip || mealCandidates?.loading) return
+    const dayId = trip.document.days.find((day) => day.items.some((entry) => entry.item_id === item.item_id))?.day_id
+    if (!dayId) return
+    setInlineCandidates(null)
+    setMealCandidates({
+      loading: true, merchants: [], error: '', disclosure: '', confirmId: null,
+      addedName: null, dayId, period: inferMealPeriod(item),
+    })
+    try {
+      const response = await searchTravelFoodV2(trip.document.brief.destination)
+      setMealCandidates((current) => current ? {
+        ...current, loading: false, merchants: response.results ?? [],
+        disclosure: response.disclosure || '',
+      } : current)
+    } catch (cause) {
+      setMealCandidates((current) => current ? {
+        ...current, loading: false, merchants: [],
+        error: cause instanceof Error ? cause.message : '候选餐厅查询未完成，行程没有修改。',
+      } : current)
+    }
+  }
+
+  async function addMealCandidate(merchant: MerchantSearchResultV2) {
+    if (!trip || !mealCandidates || Boolean(pendingTripWrite)) return
+    // 二次确认：与备选替换同一语义（首次点击进入确认态，再次点击才提交）
+    if (mealCandidates.confirmId !== merchant.selection_id) {
+      setMealCandidates((current) => current ? { ...current, confirmId: merchant.selection_id } : current)
+      return
+    }
+    const periodLabel = mealCandidates.period === 'lunch' ? '午餐' : '晚餐'
+    const input = {
+      expected_revision: trip.revision,
+      day_id: mealCandidates.dayId,
+      meal_period: mealCandidates.period,
+      selection_id: merchant.selection_id,
+      merchant: {
+        merchant_id: merchant.merchant_id, name: merchant.name, address: merchant.address,
+        lat: merchant.lat, lng: merchant.lng, rating: merchant.rating,
+        open_status: merchant.open_status, open_time_today: merchant.open_time_today,
+        avg_cost_cny: merchant.avg_cost_cny, source: merchant.source, observed_at: merchant.queried_at,
+      } as MerchantSnapshotV2,
+    }
+    const identity = {
+      kind: 'selection' as const, tripId: trip.trip_id,
+      signature: JSON.stringify({ tripId: trip.trip_id, input }),
+      key: createTravelV2IdempotencyKey(),
+    }
+    if (!transitionTripWrite({ ...identity, status: 'VALIDATING' })) return
+    try {
+      await nextPaint()
+      transitionTripWrite({ ...identity, status: 'SAVING' })
+      const result = await addTravelMealV2(trip.trip_id, input, identity.key)
+      if (!isConfirmedTravelWrite(result, trip.trip_id, trip.revision)) {
+        transitionTripWrite({ ...identity, status: 'UNKNOWN' })
+        setMealCandidates((current) => current ? {
+          ...current, confirmId: null,
+          error: '提交回执尚不能证明事务已完成；请用同一请求安全重试。',
+        } : current)
+        return
+      }
+      const nextTrip = { ...trip, revision: result.revision, document: result.document }
+      const current = tripRef.current
+      if (current?.trip_id === trip.trip_id && current.revision === trip.revision) setTrip(nextTrip)
+      transitionTripWrite({ ...identity, status: 'SAVED' })
+      setMealCandidates((current) => current ? {
+        ...current, confirmId: null, addedName: merchant.name,
+      } : current)
+      setWriteFeedback({
+        status: 'SAVED',
+        message: `已将「${merchant.name}」加入${periodLabel}（v${result.revision}）。原占位餐项可通过卡片「编辑」菜单移除。`,
+      })
+    } catch (cause) {
+      const status = classifyTravelWriteError(cause)
+      transitionTripWrite({ ...identity, status })
+      setMealCandidates((current) => current ? {
+        ...current, confirmId: null,
+        error: travelWriteErrorMessage(cause, status),
+      } : current)
+    }
+  }
+
+  /** 时间轴卡片点击：普通地点联动地图；餐食项追加加载候选餐厅（workbench-ux #3）。 */
+  function selectTimelineItem(item: TripItemV2) {
+    setSelectedItemId(item.item_id)
+    setSelectedLocation(null)
+    if (item.activity_type === 'meal') void loadMealCandidates(item)
+    else setMealCandidates(null)
   }
 
   const onSelectMapItem = useCallback((id: string) => {
@@ -573,12 +683,12 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     <div className="contents min-h-0 flex-1 gap-3 p-3 min-[821px]:grid min-[821px]:grid-cols-2 xl:grid-cols-[minmax(470px,.98fr)_minmax(420px,1.02fr)_320px]">
       <aside id="travel-trip-conversation" aria-labelledby="travel-workspace-assistant-title" tabIndex={-1} className="order-3 mx-3 mb-24 flex h-[min(75dvh,640px)] min-h-0 min-w-0 shrink-0 scroll-mt-16 flex-col min-[821px]:col-span-2 min-[821px]:mx-0 min-[821px]:mb-0 xl:col-span-1 xl:h-auto overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><header className="shrink-0 border-b border-[#edf1f6] px-4 py-3"><div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={15} aria-hidden /></span><div><h2 id="travel-workspace-assistant-title" className="text-sm font-bold text-[#263b55]">AI 旅行助手</h2><p className="mt-0.5 text-[9px] text-[#8a98aa]">讨论或修改当前正式行程</p></div></div></header><div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3"><details className="mb-2 shrink-0 rounded-lg border border-[#e8eef5] px-2.5 py-2"><summary className="cursor-pointer text-[9px] font-semibold text-[#536b86]">查询过程 · Tool 状态</summary><div className="mt-2"><TravelSearchActivity events={searchEvents}/></div></details><div className="flex min-h-0 flex-1 flex-col">{conversationReady ? <TravelV2TripConversation key={conversationId} trip={trip} conversationId={conversationId} conversation={conversation} onTripSaved={refreshAfterAIEdit} onRefreshTrip={refreshAfterAIConflict} onRestoreRequest={(revision) => { setRestoreRequest({ revision }); setHistoryOpen(true) }} embedded /> : <div role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-900">{conversationNotice || '原始对话关联未验证；没有读取 URL 会话或历史记录。行程仍可查看和编辑。'}</div>}</div></div></aside>
 
-      <section className="order-2 hidden min-h-0 min-[821px]:flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><nav aria-label="行程与查询" className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{TABS.map((tab) => <button key={tab.id} type="button" aria-pressed={activeTab === tab.id} disabled={Boolean(pendingTripWrite)} onClick={() => selectWorkspaceTab(tab.id)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${activeTab === tab.id ? 'border-[#2878f5] text-[#2878f5]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{tab.label}</button>)}</nav>{activeTab === 'trip' ? <div className="flex min-h-0 flex-1 flex-col"><header className="shrink-0 border-b border-[#edf1f6] px-4 pb-3 pt-3.5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-[#263b55]">{brief.destination} 行程时间轴</h2><p className="mt-1 text-[9px] text-[#8a98aa]">按天安排 · 与地图地点双向联动 · 天数在左侧地图列切换</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] font-medium bg-[#f4f7fb] text-[#73849a]`}>调整顺序</button></div></header><div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{savingMessage && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[9px] text-emerald-800"><span className="flex items-center gap-1"><Check size={12} aria-hidden />{savingMessage}</span>{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex shrink-0 items-center gap-1 font-medium"><RotateCcw size={11} aria-hidden />撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}<div className="mb-3 flex items-center justify-between"><div><p className="text-[11px] font-semibold text-[#344b67]">第 {dayIndex + 1} 天 · {day?.date || '日期待定'}</p><p className="mt-1 text-[9px] text-[#93a0b1]">{day?.items.length ?? 0} 个安排</p></div></div>{day?.items.length ? <div className="space-y-1.5">{day.items.map((item, index) => <div key={item.item_id}><button type="button" onClick={() => { setSelectedItemId(item.item_id); setSelectedLocation(null) }} className={`flex w-full items-center gap-2.5 rounded-[15px] border p-2.5 text-left ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white ${selectedItem?.item_id === item.item_id ? 'bg-[#175fc5]' : 'bg-[#2878f5]'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-semibold text-[#2b405b]">{item.title}</span><span className="shrink-0 text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 flex items-center gap-2 text-[9px] text-[#8190a3]"><span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden />停留 {item.duration_min} 分钟</span>{item.activity_type === 'meal' && <span className="rounded bg-[#fff5e9] px-1.5 py-0.5 text-[#b57835]">餐饮</span>}</span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || item.place?.facts.source || '地点详情'}</span></span><MoreHorizontal size={15} className="shrink-0 text-[#8798ad]" aria-hidden /></button>{index < day.items.length - 1 && <div className="ml-10 flex h-8 items-center gap-2"><span className="h-px w-4 border-t border-dashed border-[#bdd2ec]"/><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden /></button></div>}</div>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}</div></div> : <div className="min-h-0 flex-1 overflow-y-auto p-3"><TravelSearchPanel key={`${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}</section>
+      <section className="order-2 hidden min-h-0 min-[821px]:flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><nav aria-label="行程与查询" className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{TABS.map((tab) => <button key={tab.id} type="button" aria-pressed={activeTab === tab.id} disabled={Boolean(pendingTripWrite)} onClick={() => selectWorkspaceTab(tab.id)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${activeTab === tab.id ? 'border-[#2878f5] text-[#2878f5]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{tab.label}</button>)}</nav>{activeTab === 'trip' ? <div className="flex min-h-0 flex-1 flex-col"><header className="shrink-0 border-b border-[#edf1f6] px-4 pb-3 pt-3.5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-[#263b55]">{brief.destination} 行程时间轴</h2><p className="mt-1 text-[9px] text-[#8a98aa]">按天安排 · 与地图地点双向联动 · 天数在左侧地图列切换</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] font-medium bg-[#f4f7fb] text-[#73849a]`}>调整顺序</button></div></header><div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{savingMessage && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[9px] text-emerald-800"><span className="flex items-center gap-1"><Check size={12} aria-hidden />{savingMessage}</span>{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex shrink-0 items-center gap-1 font-medium"><RotateCcw size={11} aria-hidden />撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}<div className="mb-3 flex items-center justify-between"><div><p className="text-[11px] font-semibold text-[#344b67]">第 {dayIndex + 1} 天 · {day?.date || '日期待定'}</p><p className="mt-1 text-[9px] text-[#93a0b1]">{day?.items.length ?? 0} 个安排</p></div></div>{day?.items.length ? <div className="space-y-1.5">{day.items.map((item, index) => <div key={item.item_id}><button type="button" onClick={() => selectTimelineItem(item)} className={`group flex w-full items-center gap-2.5 rounded-[15px] border p-2.5 text-left ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white ${selectedItem?.item_id === item.item_id ? 'bg-[#175fc5]' : 'bg-[#2878f5]'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-semibold text-[#2b405b]">{item.title}</span><span className="shrink-0 text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 flex items-center gap-2 text-[9px] text-[#8190a3]"><span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden />停留 {item.duration_min} 分钟</span>{item.activity_type === 'meal' && <span className="rounded bg-[#fff5e9] px-1.5 py-0.5 text-[#b57835]">餐饮</span>}</span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || item.place?.facts.source || '地点详情'}</span>{placeIntroLine(item) && <span className="hidden group-hover:block text-[9px] leading-4 text-[#5c7074]">{placeIntroLine(item)}</span>}</span><MoreHorizontal size={15} className="shrink-0 text-[#8798ad]" aria-hidden /></button>{index < day.items.length - 1 && <div className="ml-10 flex h-8 items-center gap-2"><span className="h-px w-4 border-t border-dashed border-[#bdd2ec]"/><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden /></button></div>}</div>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}</div></div> : <div className="min-h-0 flex-1 overflow-y-auto p-3"><TravelSearchPanel key={`${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}</section>
 
       <aside className="order-1 hidden min-h-0 min-[821px]:flex min-w-0 flex-col gap-3 rounded-[22px] border border-[#e4ebf4] bg-white p-3 shadow-[0_6px_24px_rgba(31,74,130,.05)]"><div className="flex items-center justify-between px-1"><div><h2 className="text-sm font-bold text-[#263b55]">行程地图</h2><p className="mt-1 text-[9px] text-[#8a98aa]">天数条切换日期 · 点击编号定位行程地点</p></div><span className="rounded-full bg-[#f1f6fc] px-2.5 py-1 text-[9px] text-[#7589a1]">第 {dayIndex + 1} 天</span></div><div className="flex shrink-0 gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[88px] rounded-xl border px-3 py-2 text-left ${dayIndex === index ? 'border-[#76aaf4] bg-[#f2f7ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#6e8097]'}`}><span className="block truncate text-[10px] font-semibold">第 {index + 1} 天{item.title?.trim() ? ` · ${item.title.trim()}` : ''}</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div><div className="min-h-0 flex-1"><TravelV2Map days={days} activeDayIndex={dayIndex} selectedItemId={selectedItem?.item_id ?? ''} selectedLocation={selectedLocation} onSelectItem={onSelectMapItem}/></div><section aria-label="行程概览" className="shrink-0 rounded-xl border border-[#e2ecf7] bg-[#f6faff] p-3">
         <div className="flex items-center justify-between gap-2"><p className="truncate text-xs font-bold text-[#263b55]">行程概览</p><span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-medium text-[#6380a0]">v{trip.revision}</span></div>
         <dl className="mt-2 space-y-1.5">{buildTripOverview(trip).map((row) => <div key={row.label} className="flex items-start justify-between gap-3 text-[10px] leading-4"><dt className="shrink-0 font-semibold text-[#52698a]">{row.label}</dt><dd className="min-w-0 flex-1 text-right text-[#42596f]">{row.value}</dd></div>)}</dl>
-      </section><section className="flex min-h-[122px] gap-3 overflow-hidden rounded-[18px] border border-[#e8edf4] bg-white p-2.5"><span className="flex h-[92px] w-[102px] shrink-0 items-center justify-center rounded-xl bg-[#edf4fc] text-[#82a4cc]"><MapPin size={24} aria-hidden /></span><div className="min-w-0 flex-1 py-0.5"><p className="text-[8px] font-medium text-[#5b89c0]">{selectedLocation ? '查询结果位置' : '行程地点详情'}</p><h3 className="mt-1 truncate text-sm font-semibold text-[#2b405b]">{selectedLocation?.name || selectedItem?.title || '选择地点查看详情'}</h3><p className="mt-2 line-clamp-2 text-[9px] leading-4 text-[#75869a]">{selectedLocation ? '位置来自查询候选。' : selectedItem?.place?.address || selectedItem?.note || '当前地点没有详细地址。'}</p><div className="mt-2 flex items-center gap-3 text-[9px] text-[#8292a6]">{selectedItem && <span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden/>{selectedItem.start_time || '时间待定'}</span>}{selectedItem && <span>停留 {selectedItem.duration_min} 分钟</span>}</div></div></section>{selectedItem && !inlineCandidates && <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void loadInlineCandidates()} className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] font-medium text-[#2878f5] disabled:opacity-50">查看「{selectedItem.title}」的备选地点</button>}
+      </section><section className="flex min-h-[122px] gap-3 overflow-hidden rounded-[18px] border border-[#e8edf4] bg-white p-2.5"><span className="flex h-[92px] w-[102px] shrink-0 items-center justify-center rounded-xl bg-[#edf4fc] text-[#82a4cc]"><MapPin size={24} aria-hidden /></span><div className="min-w-0 flex-1 py-0.5"><p className="text-[8px] font-medium text-[#5b89c0]">{selectedLocation ? '查询结果位置' : '行程地点详情'}</p><h3 className="mt-1 truncate text-sm font-semibold text-[#2b405b]">{selectedLocation?.name || selectedItem?.title || '选择地点查看详情'}</h3><p className="mt-2 line-clamp-2 text-[9px] leading-4 text-[#75869a]">{selectedLocation ? '位置来自查询候选。' : selectedItem?.place?.address || selectedItem?.note || '当前地点没有详细地址。'}</p><div className="mt-2 flex items-center gap-3 text-[9px] text-[#8292a6]">{selectedItem && <span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden/>{selectedItem.start_time || '时间待定'}</span>}{selectedItem && <span>停留 {selectedItem.duration_min} 分钟</span>}</div></div></section>{selectedItem && selectedItem.activity_type !== 'meal' && !inlineCandidates && <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void loadInlineCandidates()} className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] font-medium text-[#2878f5] disabled:opacity-50">查看「{selectedItem.title}」的备选地点</button>}
 {inlineCandidates?.loading && <p role="status" className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] text-[#526984]">正在检索备选地点…</p>}
 {inlineCandidates && !inlineCandidates.loading && <section aria-label="备选地点" className="shrink-0 space-y-1.5">
   {inlineCandidates.error && <p role="alert" className="rounded-lg bg-rose-50 px-2.5 py-2 text-[9px] text-rose-700">{inlineCandidates.error}</p>}
@@ -597,12 +707,32 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   </ul>}
   {inlineCandidates.disclosure && <p className="text-[9px] leading-4 text-[#8796a8]">{inlineCandidates.disclosure}</p>}
   <button type="button" onClick={() => setInlineCandidates(null)} className="text-[9px] text-[#71839b] underline">收起备选</button>
+</section>}
+{mealCandidates?.loading && <p role="status" className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] text-[#526984]">正在检索候选餐厅…</p>}
+{mealCandidates && !mealCandidates.loading && <section aria-label="候选餐厅" className="shrink-0 space-y-1.5">
+  {mealCandidates.addedName && <p role="status" className="rounded-lg bg-emerald-50 px-2.5 py-2 text-[9px] text-emerald-800">已把「{mealCandidates.addedName}」加入行程；原占位餐项可通过卡片「编辑」菜单移除。</p>}
+  {mealCandidates.error && <p role="alert" className="rounded-lg bg-rose-50 px-2.5 py-2 text-[9px] text-rose-700">{mealCandidates.error}</p>}
+  {mealCandidates.merchants.length > 0 ? <ul className="max-h-[210px] space-y-1.5 overflow-y-auto">
+    {mealCandidates.merchants.map((merchant) => {
+      const confirming = mealCandidates.confirmId === merchant.selection_id
+      const periodLabel = mealCandidates.period === 'lunch' ? '午餐' : '晚餐'
+      return <li key={merchant.selection_id} className="rounded-lg border border-[#e7edf5] bg-white p-2">
+        <p className="truncate text-[10px] font-semibold text-[#2b405b]">{merchant.name}</p>
+        <p className="truncate text-[9px] text-[#8292a6]">{[merchant.address || '地址待核实', typeof merchant.rating === 'number' ? `评分 ${merchant.rating}` : null, typeof merchant.avg_cost_cny === 'number' && merchant.avg_cost_cny > 0 ? `人均 ¥${merchant.avg_cost_cny}` : null, merchant.open_status || null].filter(Boolean).join(' · ')}</p>
+        <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void addMealCandidate(merchant)} className={`mt-1 h-7 w-full rounded-md px-2 text-[9px] font-medium disabled:opacity-50 ${confirming ? 'bg-[#b45309] text-white' : 'bg-[#f2f7fd] text-[#2878f5]'}`}>
+          {confirming ? '再次点击确认加入' : `加入${periodLabel}`}
+        </button>
+      </li>
+    })}
+  </ul> : !mealCandidates.error && <p className="rounded-lg bg-[#f6faff] px-2.5 py-2 text-[9px] text-[#526984]">没有查到候选餐厅，可到「美食」标签页手动查询。</p>}
+  {mealCandidates.disclosure && <p className="text-[9px] leading-4 text-[#8796a8]">{mealCandidates.disclosure}</p>}
+  <button type="button" onClick={() => setMealCandidates(null)} className="text-[9px] text-[#71839b] underline">收起候选</button>
 </section>}<div className="flex items-center justify-between border-t border-[#edf1f6] px-1 pt-2 text-[8px] text-[#96a3b2]"><span>地图位置根据可用数据展示</span><span>V2 工作台</span></div></aside>
     </div>
 
     <div className="flex-1 pb-3 min-[821px]:hidden"><section className="mx-3 mt-3 rounded-[18px] border border-[#e4ebf4] bg-white p-3 shadow-[0_4px_16px_rgba(31,74,130,.04)]"><div className="flex items-start justify-between gap-3"><div><p className="text-[9px] font-medium text-[#5a87bd]">正式行程 · 自动保存</p><h2 className="mt-1 text-base font-bold text-[#263b55]">{trip.title || brief.destination}</h2><p className="mt-1 text-[10px] text-[#8796a8]">{brief.start_date || '日期待定'} · {brief.day_count} 天 · {brief.travelers.adults + brief.travelers.children} 人</p></div><span className="rounded-full bg-[#f1f6fc] px-2 py-1 text-[8px] text-[#6380a0]">v{trip.revision}</span></div><div className="mt-3 grid grid-cols-3 divide-x divide-[#e8edf4] rounded-xl bg-[#f7faff] py-2.5"><div className="text-center"><p className="text-[8px] text-[#91a0b1]">人数</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{brief.travelers.adults + brief.travelers.children} 位</p></div><div className="text-center"><p className="text-[8px] text-[#91a0b1]">预算</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{budget}</p></div><div className="text-center"><p className="text-[8px] text-[#91a0b1]">节奏</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{paceLabel(brief.pace)}</p></div></div></section>
       <nav aria-label="行程和查询切换" className="mx-3 mt-3 grid grid-cols-4 rounded-xl border border-[#e5ecf5] bg-white p-1">{TABS.map((tab) => <button key={tab.id} type="button" aria-pressed={activeTab === tab.id} disabled={Boolean(pendingTripWrite)} onClick={() => selectWorkspaceTab(tab.id)} className={`h-9 rounded-lg text-[10px] ${activeTab === tab.id ? 'bg-[#edf5ff] font-semibold text-[#2878f5]' : 'text-[#7e8da1]'}`}>{tab.label}</button>)}</nav>
-      {activeTab !== 'trip' && undoRevision !== null && <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl border border-[#cfe0f5] bg-[#eff6ff] px-3 py-2.5 text-xs leading-5 text-[#315f91] lg:hidden"><span>最近一次正式变更可撤销。</span><button type="button" aria-label="撤销最近一次正式变更" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 font-medium disabled:opacity-50"><RotateCcw size={13} aria-hidden/>撤销</button></div>}      {activeTab === 'trip' ? <><div className="mx-3 mt-3 flex gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[92px] rounded-xl border px-3 py-2 text-center ${dayIndex === index ? 'border-[#79aaf2] bg-[#edf5ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#788ba3]'}`}><span className="block truncate text-[10px] font-semibold">第 {index + 1} 天{item.title?.trim() ? ` · ${item.title.trim()}` : ''}</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div><div className="mx-3 mt-2 h-[230px]"><TravelV2Map days={days} activeDayIndex={dayIndex} selectedItemId={selectedItem?.item_id ?? ''} selectedLocation={selectedLocation} onSelectItem={onSelectMapItem}/></div><section className="mx-3 mt-3 rounded-[20px] border border-[#e4ebf4] bg-white p-3 shadow-[0_4px_16px_rgba(31,74,130,.04)]"><header className="mb-3 flex items-center justify-between"><div><h2 className="text-xs font-bold text-[#2d435e]">第 {dayIndex + 1} 天安排</h2><p className="mt-1 text-[9px] text-[#92a0b1]">{day?.items.length ?? 0} 个地点 · 点击卡片联动地图</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] bg-[#f3f7fc] text-[#71839b]`}>调整顺序</button></header>{(savingMessage || undoRevision !== null) && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-[#cfe0f5] bg-[#eff6ff] px-3 py-2.5 text-xs leading-5 text-[#315f91]"><span className="flex items-center gap-1.5">{savingMessage && <Check size={14} aria-hidden />}{savingMessage || '最近一次正式变更可撤销。'}</span>{undoRevision !== null && <button type="button" aria-label="撤销最近一次正式变更" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 font-medium disabled:opacity-50"><RotateCcw size={13} aria-hidden/>撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}{day?.items.length ? <div className="space-y-2">{day.items.map((item, index) => <article key={item.item_id} className={`rounded-[15px] border p-2.5 ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><div className="flex items-center gap-2.5"><button type="button" onClick={() => { setSelectedItemId(item.item_id); setSelectedLocation(null) }} aria-label={`地图定位到第 ${index + 1} 站 ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#2878f5] text-[10px] font-semibold text-white">{index + 1}</button><button type="button" onClick={() => { setSelectedItemId(item.item_id); setSelectedLocation(null) }} className="min-w-0 flex-1 text-left"><span className="flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold text-[#2b405b]">{item.title}</span><span className="text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || `停留 ${item.duration_min} 分钟`}</span></button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'item', itemId: item.item_id })} aria-label={`编辑${item.title}`} className="rounded-lg p-1 text-[#8798ad]"><MoreHorizontal size={16} aria-hidden/></button></div>{index < day.items.length - 1 && <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="ml-10 mt-2 flex items-center gap-2 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden/></button>}</article>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}<button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'add' })} className="mt-3 h-10 w-full rounded-xl border border-dashed border-[#a9c7ed] bg-[#f6faff] text-xs font-semibold text-[#2878f5]">＋ 添加地点或活动</button></section></> : <div className="mx-3 mt-3"><TravelSearchPanel key={`mobile-${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}
+      {activeTab !== 'trip' && undoRevision !== null && <div className="mx-3 mt-2 flex items-center justify-between gap-3 rounded-xl border border-[#cfe0f5] bg-[#eff6ff] px-3 py-2.5 text-xs leading-5 text-[#315f91] lg:hidden"><span>最近一次正式变更可撤销。</span><button type="button" aria-label="撤销最近一次正式变更" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 font-medium disabled:opacity-50"><RotateCcw size={13} aria-hidden/>撤销</button></div>}      {activeTab === 'trip' ? <><div className="mx-3 mt-3 flex gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[92px] rounded-xl border px-3 py-2 text-center ${dayIndex === index ? 'border-[#79aaf2] bg-[#edf5ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#788ba3]'}`}><span className="block truncate text-[10px] font-semibold">第 {index + 1} 天{item.title?.trim() ? ` · ${item.title.trim()}` : ''}</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div><div className="mx-3 mt-2 h-[230px]"><TravelV2Map days={days} activeDayIndex={dayIndex} selectedItemId={selectedItem?.item_id ?? ''} selectedLocation={selectedLocation} onSelectItem={onSelectMapItem}/></div><section className="mx-3 mt-3 rounded-[20px] border border-[#e4ebf4] bg-white p-3 shadow-[0_4px_16px_rgba(31,74,130,.04)]"><header className="mb-3 flex items-center justify-between"><div><h2 className="text-xs font-bold text-[#2d435e]">第 {dayIndex + 1} 天安排</h2><p className="mt-1 text-[9px] text-[#92a0b1]">{day?.items.length ?? 0} 个地点 · 点击卡片联动地图</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] bg-[#f3f7fc] text-[#71839b]`}>调整顺序</button></header>{(savingMessage || undoRevision !== null) && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg border border-[#cfe0f5] bg-[#eff6ff] px-3 py-2.5 text-xs leading-5 text-[#315f91]"><span className="flex items-center gap-1.5">{savingMessage && <Check size={14} aria-hidden />}{savingMessage || '最近一次正式变更可撤销。'}</span>{undoRevision !== null && <button type="button" aria-label="撤销最近一次正式变更" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex min-h-10 shrink-0 items-center gap-1 rounded-lg px-2 font-medium disabled:opacity-50"><RotateCcw size={13} aria-hidden/>撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}{day?.items.length ? <div className="space-y-2">{day.items.map((item, index) => <article key={item.item_id} className={`rounded-[15px] border p-2.5 ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><div className="flex items-center gap-2.5"><button type="button" onClick={() => { setSelectedItemId(item.item_id); setSelectedLocation(null) }} aria-label={`地图定位到第 ${index + 1} 站 ${item.title}`} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#2878f5] text-[10px] font-semibold text-white">{index + 1}</button><button type="button" onClick={() => selectTimelineItem(item)} className="group min-w-0 flex-1 text-left"><span className="flex items-center justify-between gap-2"><span className="truncate text-xs font-semibold text-[#2b405b]">{item.title}</span><span className="text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || `停留 ${item.duration_min} 分钟`}</span>{placeIntroLine(item) && <span className="hidden group-hover:block text-[9px] leading-4 text-[#5c7074]">{placeIntroLine(item)}</span>}</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'item', itemId: item.item_id })} aria-label={`编辑${item.title}`} className="rounded-lg p-1 text-[#8798ad]"><MoreHorizontal size={16} aria-hidden/></button></div>{index < day.items.length - 1 && <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="ml-10 mt-2 flex items-center gap-2 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden/></button>}</article>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}<button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'add' })} className="mt-3 h-10 w-full rounded-xl border border-dashed border-[#a9c7ed] bg-[#f6faff] text-xs font-semibold text-[#2878f5]">＋ 添加地点或活动</button></section></> : <div className="mx-3 mt-3"><TravelSearchPanel key={`mobile-${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}
     </div>
     {editPanel && <TravelV2EditDialog
       panel={editPanel}
@@ -643,5 +773,26 @@ function legLabel(day: TripDayV2, from: TripItemV2, to: TripItemV2): string {
   const labels = { walk: '步行', drive: '驾车', transit: '公共交通', taxi: '出租车' }
   if (leg.duration_min === null || leg.reliability === 'unavailable') return `${labels[leg.selected_mode]} · 耗时未知`
   return `${labels[leg.selected_mode]} · ${leg.duration_min} 分钟`
+}
+
+/** 行程卡 hover 介绍行（M2.5 降噪模式的 V2 移植）：只用服务端真实 facts，
+ * 没有「介绍正文」数据源（amap 不提供描述），不编造文案；无可述事实返回 null。 */
+function placeIntroLine(item: TripItemV2): string | null {
+  const facts = item.place?.facts
+  const parts: string[] = []
+  if (typeof facts?.rating === 'number' && facts.rating > 0) parts.push(`评分 ${facts.rating}`)
+  if (facts?.ticket_price_cny === 0) parts.push('门票免费')
+  else if (typeof facts?.ticket_price_cny === 'number' && facts.ticket_price_cny > 0) parts.push(`门票 ¥${facts.ticket_price_cny}`)
+  if (typeof facts?.avg_cost_cny === 'number' && facts.avg_cost_cny > 0) parts.push(`人均 ¥${facts.avg_cost_cny}`)
+  const hours = facts?.opening_hours
+  if (hours && typeof hours === 'object' && !Array.isArray(hours)) {
+    const open = (hours as Record<string, unknown>).open_time
+    const close = (hours as Record<string, unknown>).close_time
+    if (typeof open === 'string' && typeof close === 'string' && open && close) parts.push(`${open}-${close}`)
+  }
+  if (typeof facts?.open_status === 'string' && facts.open_status.trim()) parts.push(facts.open_status.trim())
+  if (facts?.verification === 'verified') parts.push('坐标已核验')
+  if (item.note.trim()) parts.push(item.note.trim())
+  return parts.length ? parts.join(' · ') : null
 }
 

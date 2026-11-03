@@ -99,6 +99,9 @@ describe('TravelV2Map 点位可信度与空态', () => {
     expect(container.textContent).toContain('这一天还没有行程地点')
     expect(container.textContent).not.toContain('杭州')
     expect(container.querySelector('.leaflet-container')).toBeNull()
+    // workbench-ux #1：根容器收拢 Leaflet 内部 z-index（200-1000），
+    // 保证 z-50/z-60 的工作台弹层不被地图盖住
+    expect(container.querySelector('.isolate')).not.toBeNull()
 
     act(() => root.unmount())
   })
