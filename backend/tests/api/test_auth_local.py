@@ -75,10 +75,27 @@ def test_repeated_invalid_login_attempts_do_not_lock_account(monkeypatch):
     async def no_user(_session, _username, _tenant_id):
         return None
 
+    class _NoopAuthStore:
+        """防爆破计数桩（审计 P2 批次后 login 依赖认证 Redis）：
+        get 永远返回未锁定，incr/delete 空操作——测试确定性隔离。"""
+
+        def get(self, _key):
+            return None
+
+        def incr(self, _key):
+            return 1
+
+        def expire(self, _key, _ttl):
+            return True
+
+        def delete(self, _key):
+            return 1
+
     app = FastAPI()
     app.include_router(auth_local.router)
     monkeypatch.setattr(auth_local, "_db", fake_db)
     monkeypatch.setattr(auth_local, "_fetch_user", no_user)
+    monkeypatch.setattr(auth_local, "_get_auth_store", lambda: _NoopAuthStore())
 
     with TestClient(app) as client:
         responses = [

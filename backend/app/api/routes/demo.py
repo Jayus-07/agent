@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
+from backend.app.api.deps import require_admin_user
 from backend.seed.demo.runner import get_demo_runner
 from backend.shared.logger import logger
 
@@ -17,8 +18,12 @@ router = APIRouter(prefix="/demo", tags=["Demo"])
 
 
 @router.post("/seed")
-async def seed_demo_data() -> dict[str, Any]:
-    """导入所有 demo 数据（商品 + 销售 + 阈值 + 策略）"""
+async def seed_demo_data(_admin=Depends(require_admin_user)) -> dict[str, Any]:
+    """导入所有 demo 数据（商品 + 销售 + 阈值 + 策略）
+
+    审计 P2 批次（2026-11-03）：写库 + 场景触发属运营/管理员演示功能，
+    此前任何 viewer 可反复触发（LLM 消耗 + 业务库写入），挂 admin 闸。
+    """
     try:
         runner = get_demo_runner()
         result = runner.seed_data()
@@ -29,7 +34,8 @@ async def seed_demo_data() -> dict[str, Any]:
 
 
 @router.post("/run/{scenario_id}")
-async def run_demo_scenario(scenario_id: str) -> dict[str, Any]:
+async def run_demo_scenario(scenario_id: str,
+                            _admin=Depends(require_admin_user)) -> dict[str, Any]:
     """触发单个 demo 场景
 
     scenario_id:

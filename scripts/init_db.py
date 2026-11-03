@@ -347,6 +347,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "129_travel_v2_template_seed.sql": "memory",
     # MCP grant 租户一致性 DB 级防线（S1 审计修复）：组合外键 + 存量错配行收口。
     "130_mcp_grant_tenant_consistency.sql": "memory",
+    # 用户名唯一性收窄到租户内（审计 P2）：auth.users 联合唯一 + 空租户收口。
+    "131_auth_username_tenant_unique.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

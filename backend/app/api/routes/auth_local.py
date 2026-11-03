@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import random
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -38,6 +39,7 @@ from backend.app.api.deps import (
 )
 from backend.config.auth import TENANT_ID_HEADER
 from backend.infra.redis.client import get_auth_redis
+from backend.security.events import record_security_event
 # 保留旧名称供存量测试/扩展模块注入 fake；生产路径由 _get_auth_store
 # 明确走认证控制面 Redis，不再把 JWT 闸键写入业务缓存实例。
 get_redis = get_auth_redis
@@ -379,6 +381,58 @@ async def _revoke_session_row(db, *, session_id: str, reason: str) -> None:
 
 # ── /auth/login ──────────────────────────────────────────────
 
+# 登录账号级防爆破（审计 P2 批次，2026-11-03）：网关 limit-count 30/60s 是
+# IP 维度反滥用；此处按 tenant+username 累计失败（认证 Redis），窗口内达到
+# 阈值即临时锁定。Redis 不可用时 fail-open（与 logout 黑名单同哲学：不阻断
+# 登录主链路，记 warning 不静默）。
+_LOGIN_LOCKOUT_THRESHOLD = 5
+_LOGIN_LOCKOUT_WINDOW_SECONDS = 900   # 滚动窗口：首次失败起算 15 分钟
+_LOGIN_LOCKOUT_HOLD_SECONDS = 900     # 命中阈值后的锁定时长
+
+
+def _lockout_key(tenant_id: str, username: str) -> str:
+    return f"auth:lockout:{tenant_id}:{username}"
+
+
+def _login_lockout_check(tenant_id: str, username: str) -> bool:
+    """该账号当前是否处于锁定窗口（Redis 不可用 fail-open 放行）。"""
+    try:
+        raw = _get_auth_store().get(_lockout_key(tenant_id, username))
+        return int(raw or 0) >= _LOGIN_LOCKOUT_THRESHOLD
+    except Exception:
+        logger.warning(
+            "[local-auth] 防爆破锁定检查失败（fail-open 放行）", exc_info=True)
+        return False
+
+
+def _login_lockout_record_failure(tenant_id: str, username: str) -> None:
+    """记一次登录失败：窗口内累计，首次失败起算窗口；命中阈值延长为锁定
+    时长并落一条安全事件（每次失败都记会刷屏，锁定点才是可处置信号）。"""
+    key = _lockout_key(tenant_id, username)
+    try:
+        count = int(_get_auth_store().incr(key))
+        _get_auth_store().expire(key, _LOGIN_LOCKOUT_WINDOW_SECONDS)
+        if count >= _LOGIN_LOCKOUT_THRESHOLD:
+            _get_auth_store().expire(key, _LOGIN_LOCKOUT_HOLD_SECONDS)
+            record_security_event(
+                "LOGIN_BRUTE_FORCE_LOCKED", category="auth_login",
+                detail={"username": username, "failures": count},
+                tenant_id=tenant_id,
+            )
+    except Exception:
+        logger.warning(
+            "[local-auth] 防爆破失败计数写入异常（不影响登录主流程）",
+            exc_info=True)
+
+
+def _login_lockout_reset(tenant_id: str, username: str) -> None:
+    """登录成功清零失败计数（尽力而为）。"""
+    try:
+        _get_auth_store().delete(_lockout_key(tenant_id, username))
+    except Exception:
+        logger.debug("[local-auth] 防爆破计数清零失败", exc_info=True)
+
+
 @router.post("/login")
 async def login(request: Request, response: Response):
     body = await request.json()
@@ -394,10 +448,21 @@ async def login(request: Request, response: Response):
     if tenant_id is None:
         return _fail("缺少可信租户身份", code=401)
 
+    if _login_lockout_check(tenant_id, username):
+        return _fail("失败次数过多，该账号已临时锁定，请稍后再试", code=429)
+
     async with _db() as session:
         row = await _fetch_user(session, username, tenant_id)
-    if row is None or row["status"] != 1 or not verify_password(password, row["password_hash"]):
+    if row is None:
+        # 用户不存在：不计数（契约 test_repeated_invalid_login_attempts_do_not_lock_account
+        # ——按账号计数的锁定可被第三方滥用为「知道用户名即可锁死他人登录」的
+        # DoS 向量；对不存在的用户名计数毫无价值）。存在但凭据错才计数。
         return _fail("用户名或密码错误", code=400)
+    if row["status"] != 1 or not verify_password(password, row["password_hash"]):
+        _login_lockout_record_failure(tenant_id, username)
+        return _fail("用户名或密码错误", code=400)
+
+    _login_lockout_reset(tenant_id, username)
 
     async with _db() as session:
         # 同设备替换（2026-09-19 会话实体改造）：同一 user + device_id 的活跃
@@ -700,7 +765,9 @@ def _captcha_issue() -> tuple[str, str]:
 
     数字-only 是产品拍板：手机上 inputmode=numeric 直弹数字键盘。
     """
-    code = "".join(random.choice("0123456789") for _ in range(4))
+    # 验证码是安全凭证：用 CSPRNG（审计 P2 批次——random 的 Mersenne Twister
+    # 状态可预测）。SVG 干扰线的角度/颜色仍用 random（非安全用途）。
+    code = "".join(secrets.choice("0123456789") for _ in range(4))
     ticket = uuid.uuid4().hex
     now = time.time()
     with _CAPTCHA_LOCK:
@@ -806,8 +873,12 @@ async def register(request: Request):
         return _fail("图形验证码错误或已过期，请刷新后重试", code=400)
 
     async with _db() as session:
+        # 审计 P2 批次（2026-11-03）：查重收窄到租户内——跨租户同名互不互见，
+        # 「用户名已存在」的枚举面从全平台缩到单租户（DB 级兜底见迁移 131
+        # uq_auth_users_tenant_username）。
         exists = (await session.execute(text(
-            "SELECT 1 FROM auth.users WHERE username = :u"), {"u": username})).first()
+            "SELECT 1 FROM auth.users WHERE username = :u AND tenant_id = :tenant_id"),
+            {"u": username, "tenant_id": tenant_id})).first()
         if exists:
             return _fail("用户名已存在", code=400)
         row = (await session.execute(text(

@@ -114,3 +114,19 @@
 - **网关级实测**（重启 agent-apisix 加载新 yaml，归属核查=主栈 compose 管理非孤儿）：`GET /metrics → 404`、`GET /openapi.json → 404`、`GET / → 404`、`GET /health → 200`、`POST /api/auth/login → 400`（转发+参数校验正常）、`GET /api/competitor/stats → 401`（gateway-auth 正常，第三轮角色闸在网关后工作正常）
 
 **遗留（非仓库代码，部署检查清单项）**：生产 ECS 确认 9080 不出宿主机/安全组。
+
+## 第五轮：P2 批次·认证面加固（fix/audit-r5-authn-hardening）
+
+**撞车核对**：main 9159e1b 上登录无任何失败计数/锁定机制、demo 两端点无闸——P2 各项未被并行线覆盖。
+
+**实现四项**：
+1. **登录账号级防爆破**（auth_local.py）：`auth:lockout:{tenant}:{username}` 计数（认证 Redis 6380），15 分钟滚动窗口内失败 5 次 → 锁定 15 分钟（429）；成功登录清零；命中阈值落 `LOGIN_BRUTE_FORCE_LOCKED` 安全事件；Redis 不可用 fail-open（与 logout 黑名单同哲学，记 warning 不静默）。**计数只对「存在的账号」触发**——不存在的用户名永不计数/锁定：既有契约测试 `test_repeated_invalid_login_attempts_do_not_lock_account` 钉死了「不锁账号」语义（防「知道用户名即可锁死他人登录」的第三方 DoS 向量），据此把计数限定在「用户存在但凭据错误」，爆破防护对真实账号完整生效、既有契约原样保留（该测试同步注入认证 Redis 桩保证确定性隔离）。
+2. **注册查重租户化 + 迁移 131**：查重 SQL 加 `AND tenant_id = :tenant_id`（枚举面从全平台缩到单租户）；**连带发现活库 username 全局唯一约束实际缺失**（初始化差异）——迁移 `131_auth_username_tenant_unique.sql`：幂等删列级全局 UNIQUE（有则删无则跳）+ 空租户存量收口 default + 列默认值 default + `(tenant_id, username)` 联合唯一索引兜底。
+3. **验证码 CSPRNG**：签发码 `random.choice` → `secrets.choice`（验证码是安全凭证；SVG 干扰线角度/颜色保留 random）。
+4. **demo 角色闸**：`/demo/seed`、`/demo/run/{id}` 挂 `require_admin_user`（写库 + workflow/LLM 消耗面）。
+
+**验证**：
+- 新增 `backend/tests/api/test_authn_hardening.py`（10 passed）：锁定阈值/租户分桶/成功清零/Redis 宕 fail-open/安全事件落点 + 登录级行为（ghost 永不锁定 8×400 / alice 阈值后 429）+ login 接线/查重租户化/验证码 CSPRNG 源码级防回退 + demo 闸结构断言
+- `test_auth_local.py` 全套恢复通过（含既有不锁定契约，注入 Redis 桩）→ 新旧合计 15 passed
+- 迁移 131 活库事务干跑（BEGIN→执行→ROLLBACK）通过，合并后由 db-migrate 自动执行
+- auth 关联套件（session_family / refresh_claims / rbac_user_lifecycle / security_ops / sys_config_admin）→ 54 passed（仅本次受影响的 login 用例外全部通过）
