@@ -74,6 +74,22 @@
 
 - 无。
 
+## 第三轮：P1-5 competitor 域角色闸收口（fix/audit-r3-competitor-authz）
+
+**撞车核对结论**：main `45cdbdd`（并行审计线）已给 9 个写端点建「可信身份 + 审批 + 幂等」边界（`_run_idempotent_write`）并给 `test-cookies` 挂 admin——但**缺角色闸**（viewer 也能过身份校验），且 6 个读端点（含 GET /cookies 凭据状态）与 qr-login/start 完全无闸。P1-5 剩余缺口据此收口。
+
+**实现（backend/app/api/routes/competitor.py，纵深双层中的应用层权威闸）**：
+- admin 档（Depends(require_admin_user)）：GET/POST/DELETE `/cookies`、`/qr-login/start`、`/qr-login/poll`（凭据面 + 外呼副作用；与既有 test-cookies=admin 口径一致）
+- editor 档（Depends(require_editor_user)）：watchlist 读/增/删/改、`/history`、`/stats`、`/analyze`、`/scan`、`/retry-blocked`、`/anti-ban/stats`、`/anti-ban/resume`、`/qr-login/platforms`
+- 公开读（有意不挂闸，docstring 裁决说明）：GET `/recommendations`（与 /selection/recommendations 同口径业务读，挂闸会锁死用户端选品推荐）
+- 灰度语义不变：SENSITIVE_API_GUARD_MODE=audit 下低角色放行（前端 viewer 用户流不打破），enforce 下 403
+
+**记录为后续项（本轮不做）**：store 层租户列改造——`competitor.store_pg` 的 watch/snapshot/config 表均无 tenant 维度（url UNIQUE 全局），需迁移 + list/add/snapshot/history 全链路改造；在角色闸收口后风险等级已大幅下降（越权者先被角色挡住）。
+
+**验证**：
+- 新增 `backend/tests/api/test_competitor_authz_gate.py`（5 passed）：18 端点分档结构断言（APIRoute dependant 反射，防回退）+ enforce 拒绝/放行行为断言 + audit 灰度锁死 + recommendations 公开读锁死
+- 既有套件（test_competitor / api_idempotency_contract / cookie_manager_tenant_safety）→ **204 passed**（零回归；1h50m，竞品爬虫测试含真实网络等待）
+
 ## 下一步
 
 1. ~~回填 runner/词表/任务取消套件测试结果~~（已回填：102 passed）。
