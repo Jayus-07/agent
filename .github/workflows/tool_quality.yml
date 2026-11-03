@@ -47,7 +47,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-lock.txt
+          pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Tool contract lock drift check
         run: |

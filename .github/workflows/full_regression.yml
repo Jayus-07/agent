@@ -147,7 +147,7 @@ jobs:
         if: env.SKIP_SUITE != 'true'
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Initialize isolated databases
         if: env.SKIP_SUITE != 'true'

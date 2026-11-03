@@ -137,7 +137,7 @@ jobs:
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Evaluation preflight (E0, free)
         run: python -m backend.evaluation.preflight --module rag --selection desktop_upload_smoke
@@ -321,7 +321,7 @@ jobs:
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Evaluation preflight
         run: python -m backend.evaluation.preflight --module rag --selection desktop_upload_smoke

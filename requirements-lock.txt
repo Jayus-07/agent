@@ -309,11 +309,11 @@ nvidia-ml-py==13.595.45
 olefile==0.47
 opencv-python==5.0.0.93
 openapi-pydantic==0.5.1
-opentelemetry-exporter-otlp==1.41.1
-opentelemetry-instrumentation==0.62b1
-opentelemetry-instrumentation-asgi==0.62b1
-opentelemetry-instrumentation-fastapi==0.62b1
-opentelemetry-util-http==0.62b1
+opentelemetry-exporter-otlp==1.45.1
+opentelemetry-instrumentation==0.66b1
+opentelemetry-instrumentation-asgi==0.66b1
+opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-util-http==0.66b1
 pathable==0.6.0
 phrasetree==0.0.9
 pip==25.1.1

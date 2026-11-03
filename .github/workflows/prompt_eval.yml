@@ -105,7 +105,7 @@ jobs:
           cache: pip
 
       - name: Install locked dependencies
-        run: python -m pip install -r requirements-lock.txt
+        run: python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Prepare migration compatibility database
         run: |
