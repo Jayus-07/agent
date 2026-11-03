@@ -254,3 +254,20 @@
   2. 全量公开投产前：主链路真实冒烟零回归（含共享 :3200 管理端部署协调这一 Q1 遗留）。
   3. 挂账消化（不阻塞受控试用）：Q3 action 剩余 11 例（资格口径 4/同单幂等 2/歧义 clarify 1/query 专家缺口 4，多需锁版拍板）+ full_path 主图路由 4 类发现；Q4 WS/写路径容量（需隔离 app 实例，脚本已具备能力）；Q5 四项缓解（pptx defusedxml=中、验证码 secrets/演练脚本 shell=False/BM25 restricted unpickler=低）；依赖治理线 88 条离线 advisory。
   4. 外部渗透是否引入：用户拍板（Q5 自检不替代外部渗透）。
+
+### 2026-11-03（九）—— 主链路真实冒烟实测完成 + 6 项投产阻断缺陷修复（PR #289）
+
+- 用户授权接手（唯一客服会话），完成剩余验收「主链路真实冒烟」：真实登录 + SSE + business-mock 懒种子数据 + 用户端(:3100)/坐席端(:3300) 双端浏览器联动，账号 demo_fuzhou(872, default) / cs_wire_agent(24, supervisor)。
+- **实测发现并修复 6 项阻断缺陷**（先复现后修复，证据见 [SMOKE-MATRIX.md](SMOKE-MATRIX.md)）：
+  1. `:3300/cs` 入口 404（/cs 无索引页，登录后默认跳转落地 404）——P0；
+  2. **退款链路对 default 租户双向全断**：8 处 `tenant_id=='default'` 拒绝闸与「auth.users 全部真实注册用户均在 default 租户」的部署现实冲突——即用户报障的「当前业务通道暂不支持提交退款申请」根因，非开关问题；P0；
+  3. 网关 `/api/cs` 角色闸豁免漏加 v2 用户端 4 端点 → 右栏客户资料永久「加载中」、退款折叠卡 403——P0（cs-workstation-v2 P8 验收未覆盖普通用户角色实为缺陷根源）；
+  4. need_info 补槽永不命中（订单号正则只认纯数字段 + READ_ONLY 分支先于槽位检查）→ 退款提案缺槽直至超时——P0；
+  5. 空目标确认卡可点确认（need_info 提案渲染成完整卡）→ 后端权威 confirmable 字段 + 前端渲染防护——P1；
+  6. 快捷入口/prompt 硬编码 DEMO-1xxx 与 mock MO-xxxx 数据面不匹配，欢迎页 3/4 入口必失败——P1。
+- **全链路实测通过**：退款闭环（申请→补槽→提案→确认→RA-622E6885DC48 落账→坐席审核通过→钱包 ¥5000→¥6299 回款流水）；转人工双端联动（转人工→认领→坐席回复→用户接管后输入直达→关闭）；SLA 超时降级（留言工单 GD-20261103-E351）。
+- **运维配置落地（.env，不入库）**：`CS_REFUND_REQUEST_MODE=http`（Q6 拍板项 1 = 开放退款申请+审核闭环，终点 business-mock 无真实收单）；`CS_HANDOFF_TIMEOUT_SECONDS` 120→600。
+- **坐席账号**：cs_wire_agent(24) 实为既有坐席行 cs_wire_e2e 绑定的 auth 账号，本会话升 role=supervisor 并重置密码（新密码已告知用户，哈希不落盘）。
+- **新增挂账**：坐席端 WS offer 断连（Next 生产容器不支持 WS upgrade，同源 :3300/ws/* 无路由）→ 轮询降级+手动认领可用，自动派单失效；修复需 NEXT_PUBLIC_WS_ORIGIN 部署形态决策，另立小 PR。
+- 用户报告「余额查询空回复」经查为 app recreate 窗口期 SSE 断开（日志实证其请求未达后端），非功能缺陷，待复测。
+- 验收口径：PR #289 CI 全绿 + 合并后主栈按 main 重建（frontend-cs/frontend/app/lua）+ 折叠卡/右栏复验 = 主链路真实冒烟完成；全量公开投产仍差挂账四项（WS 修复、:3200 协调、ECS 核对、Q6 拍板项 2 order_cancel）。
