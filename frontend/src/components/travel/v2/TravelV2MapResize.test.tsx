@@ -48,7 +48,7 @@ it('隐藏恢复和容器变宽后重算最新点位，切换日期及卸载时�
   const render = async (value: TripDayV2) => {
     await act(async () => {
       root.render(createElement(TravelV2Map, {
-        day: value, selectedItemId: '', selectedLocation: null, onSelectItem: () => {},
+        days: [value], activeDayIndex: 0, selectedItemId: '', selectedLocation: null, onSelectItem: () => {},
       }))
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
