@@ -1,0 +1,469 @@
+{
+  "福州": {
+    "status": "success",
+    "reason": "",
+    "count": 10,
+    "rows": [
+      {
+        "name": "柏纳酒店（五一广场三坊七巷店）",
+        "total": 145.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "柏纳酒店(福州海峡奥体中心烟台山店)",
+        "total": 160.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "尚客优酒店(福州站北广场店)",
+        "total": 182.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "尚客优悦酒店(福州三坊七巷东街口地铁站店)",
+        "total": 184.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "柏纳S酒店(福州三坊七巷西湖公园店)",
+        "total": 193.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "福州空港佰翔花园酒店",
+        "total": 196.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "柏纳酒店(福州三坊七巷水部地铁站店)",
+        "total": 237.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "福州世纪金源大饭店",
+        "total": 423.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "福州香格里拉大酒店",
+        "total": 494.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "福州三迪希尔顿酒店",
+        "total": 613.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      }
+    ]
+  },
+  "厦门": {
+    "status": "success",
+    "reason": "",
+    "count": 10,
+    "rows": [
+      {
+        "name": "柏纳酒店(厦门机场湖里大道店)",
+        "total": 193.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "如家商旅酒店(厦门中山路步行街店)",
+        "total": 210.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "柏纳S酒店(厦门火车站地铁站万象城店)",
+        "total": 213.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门海尚雅歌酒店(中山路步行街店)",
+        "total": 244.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门朗豪酒店",
+        "total": 501.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门五缘湾凯悦酒店",
+        "total": 517.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门禹洲温德姆至尊豪廷大酒店 (五缘湾店)",
+        "total": 538.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门海港英迪格酒店(中山路店)",
+        "total": 550.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门瑞颐大酒店",
+        "total": 623.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "厦门航空费尔蒙酒店",
+        "total": 909.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      }
+    ]
+  },
+  "成都": {
+    "status": "success",
+    "reason": "",
+    "count": 10,
+    "rows": [
+      {
+        "name": "速8酒店(成都西南交大九里堤地铁站店)",
+        "total": 85.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "速8优选酒店(成都郫县龙湖时代天街店)",
+        "total": 99.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "美豪酒店(成都春熙路太古里店)",
+        "total": 188.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "美豪R酒店(成都春熙路太古里店)",
+        "total": 225.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都帝盛酒店(春熙路文殊院店)",
+        "total": 305.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都盛捷江畔服务公寓(天府广场华西坝地铁站店)",
+        "total": 310.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都空港云享酒店(双流机场店)",
+        "total": 371.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都天府丽都喜来登饭店(天府广场店)",
+        "total": 572.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都富力丽思卡尔顿酒店",
+        "total": 1330.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "成都瑞吉酒店",
+        "total": 3443.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      }
+    ]
+  },
+  "西安": {
+    "status": "success",
+    "reason": "",
+    "count": 8,
+    "rows": [
+      {
+        "name": "尚客优精选酒店(西安唐都医院纺织城地铁站店)",
+        "total": 87.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "尚客优酒店(半坡地铁站店)",
+        "total": 87.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "尚客优酒店(西安凤城十二路地铁站店)",
+        "total": 110.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "锦江|康铂酒店(西安钟楼店)",
+        "total": 186.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "陕西世纪金源大饭店(西等驾坡地铁站店)",
+        "total": 295.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "西安西咸诺富特酒店",
+        "total": 379.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "西安城墙希尔顿酒店(钟鼓楼店)",
+        "total": 517.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "西安索菲特人民大厦(钟鼓楼五路口地铁站店)",
+        "total": 558.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      }
+    ]
+  },
+  "杭州": {
+    "status": "success",
+    "reason": "",
+    "count": 10,
+    "rows": [
+      {
+        "name": "布丁酒店(杭州萧山博奥地铁站店)",
+        "total": 80.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "Zsmart智尚酒店(杭州浙大紫金港城西银泰店)",
+        "total": 92.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "柏纳酒店(西湖文化广场地铁站店)",
+        "total": 146.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州丁桥开元颐居酒店(丁兰广场店)",
+        "total": 189.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州萧山国际机场柏纳酒店",
+        "total": 202.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州富阳东方茂开元名都大酒店",
+        "total": 293.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州城东文澜大酒店",
+        "total": 384.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州开元名都大酒店",
+        "total": 508.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "忆泊酒店(杭州西湖店)",
+        "total": 639.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      },
+      {
+        "name": "杭州索菲特西湖大酒店",
+        "total": 755.0,
+        "nights": 1,
+        "currency": "CNY",
+        "room": null,
+        "avail": "unknown",
+        "source": "rollinggo:mcp"
+      }
+    ]
+  }
+}
