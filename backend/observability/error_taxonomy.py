@@ -2,7 +2,7 @@
 
 为什么存在：平台已有三套正交错误词表，各自落各自的目的地——
   - 模型层 5 类（infra/llm/error_taxonomy.py → llm_failures_total）
-  - 任务层 10 类（tasks/error_taxonomy.py → tasks.error_type）
+  - 任务层 11 类（tasks/error_taxonomy.py → tasks.error_type）
   - Tool 层 ToolStatus 8 值（core/tool_runtime/models.py → agent_tool_*）
 三套词表都对，但聚合不出「今天失败里 timeout 占多少」这种统一分布。
 本模块是**纯映射出口**：不新造第四套词表、不改变三套源词表的任何
@@ -55,6 +55,9 @@ _TASK_MAP = {
     "validation_error": "validation_error",
     "permission_denied": "permission_denied",
     "illegal_transition": "validation_error",
+    # 依赖未就绪（PipelineNotReady 退避窗口）：与 Tool 层 UNAVAILABLE
+    # → network_error 同口径
+    "service_unavailable": "network_error",
     "internal_error": "business_error",
 }
 
@@ -76,7 +79,7 @@ def unify_model_error(error_type: str | None) -> str:
 
 
 def unify_task_error(error_type: str | None) -> str:
-    """任务层十类 → 统一类。未知/None → unknown（ZOMBIE_RECONCILED 等
+    """任务层十一类 → 统一类。未知/None → unknown（ZOMBIE_RECONCILED 等
     特殊标记、admission_rejected 拒绝语义落 business_error 由调用方决定，
     本函数不猜）。"""
     return _TASK_MAP.get((error_type or "").strip().lower(), "unknown")

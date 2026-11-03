@@ -20,6 +20,12 @@ router = APIRouter(prefix="/data", tags=["数据"])
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# 审计 P0-1 补充（2026-11-03，audit-remediation-r1）：S4 修复（0f74940）已收口
+# 路径穿越，这里补上仍缺失的大小上限——下方 await file.read() 全量进内存，
+# 单个大请求即可打满进程内存。
+DATA_UPLOAD_MAX_BYTES = 50 * 1024 * 1024
+DATA_UPLOAD_CHUNK_SIZE = 1024 * 1024
+
 # 数据采集数据库连接池（单例，避免每次请求重新创建 Engine）
 _dc_engine = None
 _dc_engine_lock = threading.Lock()
@@ -67,7 +73,22 @@ async def upload_file(
     _upload_root = os.path.realpath(UPLOAD_DIR)
     if os.path.commonpath((_upload_root, os.path.realpath(save_path))) != _upload_root:
         return {"ok": False, "error": "非法文件路径"}
-    content = await file.read()
+
+    # 流式读取并强制大小上限（audit-remediation-r1：防止单请求打满内存）
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(DATA_UPLOAD_CHUNK_SIZE)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > DATA_UPLOAD_MAX_BYTES:
+            return {
+                "ok": False,
+                "error": f"文件过大（上限 {DATA_UPLOAD_MAX_BYTES // (1024 * 1024)}MB）",
+            }
+        chunks.append(chunk)
+    content = b"".join(chunks)
 
     with open(save_path, "wb") as f:
         f.write(content)

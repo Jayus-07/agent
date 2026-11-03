@@ -820,47 +820,83 @@ class GraphRunner:
             put_context(initial_state, request_ctx)
 
         def _worker() -> None:
-            # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
-            # Send 内部线程分支由节点入口的 bind_from_state 覆盖
-            request_ctx.bind()
-            # STOP CS-A P0-3：把 /chat/abort 的 stop_event 绑进请求上下文
-            # （ContextVar 随 copy_context 传播进域图节点与专家线程），
-            # CS 图内各取消检查边界据此在节点/调用边界提前终止
-            from backend.core.request_context import bind_cancel_event
+            # 审计 P1-3（2026-11-03）：绑定段（bind/import/挂 sink）原先在
+            # try 之外，一旦抛异常 worker 线程静默死亡——done sentinel 永不
+            # 入队，主循环 merged_q.get() 永久挂起并逐个占死 SSE 线程池线程。
+            # 绑定段单独包层：失败时按图内异常同口径出 error 帧，再投递
+            # sentinel 后返回；绑定成功则进入下方原有 try/finally 主流程。
+            _scope_token = None
+            _sink_token = None
+            _sse_sink_token = None
+            try:
+                # ContextVar 不跨线程：worker 入口整体绑定一次请求上下文；
+                # Send 内部线程分支由节点入口的 bind_from_state 覆盖
+                request_ctx.bind()
+                # STOP CS-A P0-3：把 /chat/abort 的 stop_event 绑进请求上下文
+                # （ContextVar 随 copy_context 传播进域图节点与专家线程），
+                # CS 图内各取消检查边界据此在节点/调用边界提前终止
+                from backend.core.request_context import bind_cancel_event
 
-            bind_cancel_event(stop_event)
-            # context SSE 事件 sink（L1/L2/L3 压缩发生时发声，2026-09-22）：
-            # worker 线程内挂载（ContextVar 不跨线程继承），退出时还原
-            from backend.context_budget.metrics import (
-                reset_context_sink,
-                reset_context_event_scope,
-                set_context_sink,
-                set_context_event_scope,
-            )
-            from backend.orchestration.graph.sse_event_sink import (
-                bind_sse_event_sink,
-                reset_sse_event_sink,
-            )
+                bind_cancel_event(stop_event)
+                # context SSE 事件 sink（L1/L2/L3 压缩发生时发声，2026-09-22）：
+                # worker 线程内挂载（ContextVar 不跨线程继承），退出时还原
+                from backend.context_budget.metrics import (
+                    reset_context_sink,
+                    reset_context_event_scope,
+                    set_context_sink,
+                    set_context_event_scope,
+                )
+                from backend.orchestration.graph.sse_event_sink import (
+                    bind_sse_event_sink,
+                    reset_sse_event_sink,
+                )
 
-            def _context_sink(evt: dict) -> None:
-                if ctx.get("sse_events_closed"):
-                    return
-                if stop_event is not None and stop_event.is_set():
-                    return
-                merged_q.put(("evt", {"event": "context", "data": evt}))
+                def _context_sink(evt: dict) -> None:
+                    if ctx.get("sse_events_closed"):
+                        return
+                    if stop_event is not None and stop_event.is_set():
+                        return
+                    merged_q.put(("evt", {"event": "context", "data": evt}))
 
-            def _sse_event_sink(evt: dict) -> None:
-                if ctx.get("sse_events_closed"):
-                    return
-                if stop_event is not None and stop_event.is_set():
-                    return
-                merged_q.put(("evt", evt))
+                def _sse_event_sink(evt: dict) -> None:
+                    if ctx.get("sse_events_closed"):
+                        return
+                    if stop_event is not None and stop_event.is_set():
+                        return
+                    merged_q.put(("evt", evt))
 
-            _scope_token = set_context_event_scope(context_event_scope)
-            _sink_token = set_context_sink(
-                _context_sink, scope=context_event_scope,
-            )
-            _sse_sink_token = bind_sse_event_sink(_sse_event_sink)
+                _scope_token = set_context_event_scope(context_event_scope)
+                _sink_token = set_context_sink(
+                    _context_sink, scope=context_event_scope,
+                )
+                _sse_sink_token = bind_sse_event_sink(_sse_event_sink)
+            except Exception as e:  # noqa: BLE001 — 绑定失败也必须终结流
+                logger.error(f"[GraphRunner] worker 绑定失败: {e}", exc_info=True)
+                ctx["worker_error"] = True
+                event, error_code = _runner_error_event(e)
+                ctx["worker_error_code"] = error_code
+                merged_q.put(("evt", event))
+                # SSE 线程池线程会复用：已挂载的 ContextVar 必须就地还原，
+                # 不得泄漏给同线程的下一个请求
+                from backend.context_budget.metrics import (
+                    reset_context_sink as _reset_context_sink,
+                    reset_context_event_scope as _reset_context_event_scope,
+                )
+                from backend.orchestration.graph.sse_event_sink import (
+                    reset_sse_event_sink as _reset_sse_event_sink,
+                )
+
+                for token, reset in (
+                        (_sse_sink_token, _reset_sse_event_sink),
+                        (_sink_token, _reset_context_sink),
+                        (_scope_token, _reset_context_event_scope)):
+                    if token is not None:
+                        try:
+                            reset(token)
+                        except Exception:  # noqa: BLE001 — 还原失败不掩盖原始错误
+                            pass
+                merged_q.put(("done", None))
+                return
             try:
                 # recursion_limit：超限时 LangGraph 抛 GraphRecursionError 而非
                 # 静默挂起（supervisor 自身 10 轮上限之外的最后一道防线）。
