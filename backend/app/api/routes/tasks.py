@@ -298,6 +298,25 @@ async def stream_task_events(task_id: str, request: Request,
             )
             return
 
+        # 订阅窗口补帧（审计 P2 批次）：入口快照与 subscribe 之间存在窗口，
+        # 期间发布的终态事件在 Redis pub/sub（无重放缓冲）里永久丢失——
+        # 订阅建立后重查 DB 权威状态，已终态则补终态帧收口，客户端不再
+        # 依赖 heartbeat 无限等待（幂等：未终态时零额外开销）。
+        try:
+            latest = task_service.get_task(task_id)
+            if latest is not None and latest.status.is_terminal():
+                if latest.status == TaskStatus.SUCCESS:
+                    yield _sse_frame("completed", {})
+                    yield _sse_frame("done", {})
+                elif latest.status == TaskStatus.CANCELLED:
+                    yield _sse_frame("cancelled", {})
+                else:
+                    yield _sse_frame("failed", {})
+                    yield _sse_frame("error", {})
+                return
+        except Exception:  # noqa: BLE001 — 补帧失败不影响后续订阅消费
+            logger.debug("[TasksAPI] 订阅后补帧查询失败", exc_info=True)
+
         try:
             idle = 0.0
             while True:

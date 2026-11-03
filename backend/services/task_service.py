@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 from backend.config.database import DB_CONNECT_TIMEOUT, MEMORY_DB_CONFIG
@@ -24,6 +24,15 @@ _SCHEMA_PATH = Path(__file__).resolve().parents[1] / "tasks" / "schema.sql"
 
 _schema_lock = threading.Lock()
 _schema_ready = False
+
+# 审计 P2 批次（2026-11-03）：心跳路径（renew_lease 每 15s/任务）此前每次
+# 新建完整 TCP+auth 握手。池化后高频 with 场景走 _pooled_conn()（借出前探活、
+# 坏连接自动重建）；_conn() 保留裸连接语义，仅供需要连接所有权的事务场景
+# （evaluation/managed_tasks 的显式事务执行器，归还由其自行管理）。
+# 池惰性创建（首次调用时）——Celery prefork 下连接不可跨 fork 共享。
+_pool = None
+_pool_lock = threading.Lock()
+_POOL_MAX_SIZE = 8
 
 
 def _dsn() -> str:
@@ -42,6 +51,36 @@ def _conn():
     )
 
 
+def _get_pool():
+    global _pool
+    if _pool is not None:
+        return _pool
+    with _pool_lock:
+        if _pool is not None:
+            return _pool
+        from psycopg_pool import ConnectionPool
+
+        c = MEMORY_DB_CONFIG
+        _pool = ConnectionPool(
+            kwargs={
+                "host": c["host"], "port": c["port"], "dbname": c["dbname"],
+                "user": c["user"], "password": c["password"],
+                "autocommit": True,
+                "connect_timeout": DB_CONNECT_TIMEOUT,
+            },
+            min_size=1, max_size=_POOL_MAX_SIZE, open=True,
+            check=ConnectionPool.check_connection,
+        )
+        return _pool
+
+
+@contextmanager
+def _pooled_conn():
+    """池借还形态（with 场景专用）：借出前探活，坏连接自动换新。"""
+    with _get_pool().connection() as conn:
+        yield conn
+
+
 def ensure_schema() -> None:
     """幂等建表（进程内只执行一次；多进程并发安全由 IF NOT EXISTS 保证）。"""
     global _schema_ready
@@ -52,7 +91,7 @@ def ensure_schema() -> None:
             return
         try:
             sql = _SCHEMA_PATH.read_text(encoding="utf-8")
-            with _conn() as conn, conn.cursor() as cur:
+            with _pooled_conn() as conn, conn.cursor() as cur:
                 cur.execute(sql)
             _schema_ready = True
             logger.info("[TaskService] schema ensured (tasks + agent_checkpoints)")
@@ -116,7 +155,7 @@ def mark_queued(task_id: str, celery_task_id: str, *,
     tasks.queue 语义 = 本次投递的物理队列快照，非配置源）。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET celery_task_id = %s, queue = %s, "
             "queued_at = now(), updated_at = now() WHERE id = %s",
@@ -167,7 +206,7 @@ def try_acquire_lease(task_id: str, *, worker: str | None = None,
         TaskStatus.PENDING.value,
         TaskStatus.RUNNING.value, str(int(stale_running_seconds)),
     ])
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET " + ", ".join(sets) + " "
             "WHERE id = %s AND (status = %s OR "
@@ -203,7 +242,7 @@ def renew_lease(task_id: str, execution_id: str, *,
         from backend.config.tasks import TASK_LEASE_TTL_SECONDS
 
         lease_ttl_seconds = TASK_LEASE_TTL_SECONDS
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET lease_heartbeat_at = now(), "
             "lease_expires_at = now() + (%s || ' seconds')::interval, "
@@ -218,7 +257,7 @@ def renew_lease(task_id: str, execution_id: str, *,
 def check_lease_active(task_id: str, execution_id: str) -> bool:
     """fencing 校验（只读）：本 execution 是否仍是任务的活跃执行者。"""
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT 1 FROM tasks WHERE id = %s AND execution_id = %s "
             "AND status = %s",
@@ -272,7 +311,7 @@ def reap_zombie_running(
         "        ELSE t.duration_ms END "
         "FROM stale WHERE t.id = stale.id RETURNING t.id"
     )
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         rows = cur.fetchall()
     return [str(r[0]) for r in rows]
@@ -320,7 +359,7 @@ def update_status(task_id: str, status: TaskStatus, *,
     from backend.models.task import IllegalTaskTransition, TaskLeaseLost
 
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT status FROM tasks WHERE id = %s", (task_id,))
         row = cur.fetchone()
         if row is None:
@@ -442,7 +481,7 @@ def update_progress(task_id: str, node_name: str, progress: str = "",
     """
     ensure_schema()
     if execution_id is not None:
-        with _conn() as conn, conn.cursor() as cur:
+        with _pooled_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "UPDATE tasks SET current_node = %s, progress = %s, "
                 "checkpoint_id = COALESCE(%s, thread_id), updated_at = now() "
@@ -453,7 +492,7 @@ def update_progress(task_id: str, node_name: str, progress: str = "",
             _record_fenced_write("progress",
                                  "accepted" if cur.rowcount > 0 else "fenced")
             return cur.rowcount > 0
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET current_node = %s, progress = %s, "
             "checkpoint_id = COALESCE(%s, thread_id), updated_at = now() "
@@ -473,7 +512,7 @@ def mark_paused_if_pending(task_id: str, *, progress: str = "队列内暂停") -
     而它无从感知。返回是否落库成功。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, progress = %s, updated_at = now() "
             "WHERE id = %s AND status = %s",
@@ -492,7 +531,7 @@ def claim_for_resume(task_id: str, expected: TaskStatus) -> bool:
     状态机白名单合法跳转（PAUSED/WAITING_USER/FAILED→PENDING）。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, updated_at = now() "
             "WHERE id = %s AND status = %s",
@@ -518,7 +557,7 @@ def release_lease_for_defer(task_id: str, execution_id: str, *,
     提前重投。与租约释放同条 SQL 保证原子。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         if not_before_seconds:
             cur.execute(
                 "UPDATE tasks SET status = %s, execution_id = '', "
@@ -561,7 +600,7 @@ def set_trace_id(task_id: str, trace_id: str) -> None:
     execution 的 trace 经 trace.tags["task_id"] / session_id 反查。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET trace_id = %s, updated_at = now() "
             "WHERE id = %s",
@@ -594,7 +633,7 @@ def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
         retry_guard = " AND retry_exhausted = false AND retry_count < max_retries AND error_type = ANY(%s)"
         retry_args = (list(_RETRYABLE_TYPES),)
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, progress = %s, error_message = %s, "
             "finished_at = now(), updated_at = now(), "
@@ -611,7 +650,7 @@ def mark_cancelled_if_status(task_id: str, expected: TaskStatus, *,
 def increment_retry(task_id: str) -> int:
     """重试计数 +1，返回新值（Celery self.request.retries 的 DB 侧镜像）。"""
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET retry_count = retry_count + 1, updated_at = now() "
             "WHERE id = %s RETURNING retry_count", (task_id,))
@@ -630,7 +669,7 @@ def append_checkpoint(task_id: str, node_name: str, state: dict, *,
     ensure_schema()
     payload = json.dumps(state, ensure_ascii=False, default=str)
     if execution_id is not None:
-        with _conn() as conn, conn.cursor() as cur:
+        with _pooled_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO agent_checkpoints (task_id, node_name, state_json) "
                 "SELECT %s, %s, %s FROM tasks "
@@ -642,7 +681,7 @@ def append_checkpoint(task_id: str, node_name: str, state: dict, *,
             _record_fenced_write("checkpoint",
                                  "accepted" if cur.rowcount > 0 else "fenced")
             return cur.rowcount > 0
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "INSERT INTO agent_checkpoints (task_id, node_name, state_json) "
             "VALUES (%s, %s, %s)",
@@ -672,7 +711,7 @@ def find_stale_executions(*, grace_seconds: int,
     if max_age_seconds is None:
         max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM tasks WHERE status = %s AND updated_at > "
             "now() - (%s || ' seconds')::interval AND ("
@@ -704,7 +743,7 @@ def claim_stale_for_recovery(task_id: str, *, grace_seconds: int,
     if max_age_seconds is None:
         max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, recovery_count = recovery_count + 1, "
             "updated_at = now() WHERE id = %s AND status = %s AND updated_at > "
@@ -729,7 +768,7 @@ def revert_recovery_claim(task_id: str) -> bool:
     假象卡 RUNNING 永远不被再次恢复。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, updated_at = now() "
             "WHERE id = %s AND status = %s",
@@ -748,7 +787,7 @@ def fail_recovered_task(task_id: str, *, grace_seconds: int,
     from backend.config.tasks import TASK_MAX_LEASE_RECOVERIES
 
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, error_type = 'ZOMBIE_RECONCILED', "
             "error_message = %s, finished_at = now(), updated_at = now(), "
@@ -801,7 +840,7 @@ def find_stale_pending(*, threshold_seconds: int,
         max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
     count_cap = (2 ** 31 - 1) if max_recovery_count is None else int(max_recovery_count)
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id FROM tasks WHERE status = %s "
             "AND (dispatch_not_before_at IS NULL OR dispatch_not_before_at <= now()) "
@@ -842,7 +881,7 @@ def claim_stale_pending_for_recovery(
     if max_age_seconds is None:
         max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET pending_recovery_last_at = now(), "
             "pending_recovery_count = pending_recovery_count + 1, "
@@ -886,7 +925,7 @@ def fail_stale_pending_delivery(task_id: str, *, message: str,
     if max_age_seconds is None:
         max_age_seconds = TASK_RECOVERY_MAX_AGE_SECONDS
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "UPDATE tasks SET status = %s, "
             "error_type = 'DELIVERY_RECOVERY_EXHAUSTED', "
@@ -914,7 +953,7 @@ def fail_stale_pending_delivery(task_id: str, *, message: str,
 def get_task(task_id: str) -> TaskRecord | None:
     """按 id 读取（内部/Worker 用；API 层必须走 get_task_for_user）。"""
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM tasks WHERE id = %s", (task_id,))
         row = cur.fetchone()
         if not row:
@@ -935,7 +974,7 @@ def get_task_for_user(task_id: str, user_id: str,
     if tenant_id:
         sql += " AND tenant_id = %s"
         args.append(tenant_id)
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         row = cur.fetchone()
         if not row:
@@ -950,7 +989,7 @@ def get_latest_biz_task(biz_type: str, biz_id: str) -> TaskRecord | None:
     内部/管理面用；调用方自行按 status 判定是否 active（PENDING/RUNNING）。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT * FROM tasks WHERE biz_type = %s AND biz_id = %s "
             "ORDER BY created_at DESC LIMIT 1",
@@ -983,7 +1022,7 @@ def list_tasks_for_user(user_id: str, *, tenant_id: str = "",
         args.append(conversation_id)
     sql += " ORDER BY created_at DESC LIMIT %s"
     args.append(max(1, min(int(limit), 100)))
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         rows = cur.fetchall()
         cols = [d.name for d in cur.description]
@@ -996,7 +1035,7 @@ def get_user_input(task_id: str) -> str:
     读取即消费（删除该行），避免下次重试重复注入。
     """
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT state_json->>'user_input' FROM agent_checkpoints "
             "WHERE task_id = %s AND node_name = '__user_input__' "
@@ -1016,7 +1055,7 @@ def list_checkpoints(task_id: str, user_id: str) -> list[dict]:
     if owner is None:
         return []
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, node_name, state_json, created_at "
             "FROM agent_checkpoints WHERE task_id = %s ORDER BY id", (task_id,))
@@ -1080,7 +1119,7 @@ def list_tasks_admin(
         where.append("t.retry_count > %s")
         args.append(int(retries_gt))
     where_sql = " AND ".join(where)
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(f"SELECT count(*) FROM tasks t WHERE {where_sql}", args)
         total = int(cur.fetchone()[0])  # type: ignore[index]
         cur.execute(
@@ -1097,7 +1136,7 @@ def list_tasks_admin(
 def stats_tasks(*, hours: float = 24) -> dict:
     """任务统计：窗口内各状态计数 / 成功率 / 失败率 / 平均与 P95 耗时 / 重试任务数。"""
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT status, count(*) AS n,
@@ -1139,7 +1178,7 @@ def stats_tasks(*, hours: float = 24) -> dict:
 def list_checkpoints_admin(task_id: str) -> list[dict]:
     """管理员视角节点 checkpoint 历史（不做 user 归属校验，闸在上层）。"""
     ensure_schema()
-    with _conn() as conn, conn.cursor() as cur:
+    with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, node_name, state_json, created_at "
             "FROM agent_checkpoints WHERE task_id = %s ORDER BY id", (task_id,))

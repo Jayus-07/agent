@@ -115,6 +115,18 @@
 
 **遗留（非仓库代码，部署检查清单项）**：生产 ECS 确认 9080 不出宿主机/安全组。
 
+## 第六轮：P2 批次·核心链路工程质量四项（fix/audit-r6-engineering-fixes）
+
+**实现**：
+1. **任务流 SSE 订阅窗口补帧**（tasks.py）：入口快照与 `subscribe_events` 之间窗口内发布的终态事件在 Redis pub/sub（无重放缓冲）永久丢失 → 订阅建立后重查 DB 权威状态，已终态即补终态帧收口（幂等，未终态零开销）——客户端不再依赖 heartbeat 无限等待。
+2. **会话守卫锁过期释放**（agent_chat_tasks.py）：守卫体内 seed_task+submit_task 可能超锁 30s TTL，`release` 抛 `LockNotOwnedError` 会把已成功提交的任务掩盖成 500 → 吞 LockNotOwnedError（正常路径，info 日志）；LockError 记 warning。
+3. **task_service 池化**：新增 `_pooled_conn()`（psycopg_pool，借出前探活 + connect_timeout，惰性建池兼容 Celery prefork），全部 33 处 with 场景切换；`_conn()` 保留裸连接语义供事务所有权场景（evaluation/managed_tasks 显式事务执行器）。修复心跳路径 renew_lease 每 15s/任务新建完整 TCP+auth 握手。
+4. **内网 embedding 超时**（embedding_singleton.py）：自建 httpx client 显式 `timeout=timeout`——openai SDK 传入自定义 client 时请求级超时取自该 client（默认近乎无限），此前 `EMBEDDING_REQUEST_TIMEOUT` 对内网直连路径失效。
+
+**验证**：
+- 新增 `backend/tests/api/test_engineering_p2_fixes.py`（5 passed）：补帧收口行为（终态帧 + 不进心跳循环）/ 锁过期吞与业务异常照常上抛 / 池化源码防回退（with 场景全池化、探活参数、_conn 保留）/ embedding 超时源码断言
+- 受影响面既有套件（agent_chat_tasks / task_admission_runtime / phase2_runtime_contract / task_cancel）→ **39 passed**（2m17s，零回归）
+
 ## 第五轮：P2 批次·认证面加固（fix/audit-r5-authn-hardening）
 
 **撞车核对**：main 9159e1b 上登录无任何失败计数/锁定机制、demo 两端点无闸——P2 各项未被并行线覆盖。
