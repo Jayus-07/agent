@@ -27,11 +27,29 @@
 
 ## 验证证据
 
-- `py_compile`：4 个改动源文件 + 3 个测试文件全部通过。
+- `py_compile`：全部改动源文件 + 测试文件通过。
 - pytest 定向（worktree，非全量），全部通过：
-  - `backend/tests/api/test_data_upload_path_guard.py` + `backend/tests/rag/test_pipeline_not_ready.py` → **11 passed**（2026-11-03）
-  - `backend/tests/orchestration/graph/test_stream_events_flow.py` + `backend/tests/test_error_taxonomy_unify.py` + `backend/tests/test_task_phase2_step2_error_taxonomy.py` + `backend/tests/test_task_cancel.py` → **102 passed**（2026-11-03，927s）
-- 未运行全量回归（遵循 testing-guide 最小充分测试；本轮无 DB 迁移/契约变更）。
+  - P0-1/P1-2 初版：`test_data_upload_path_guard.py`（7 例）+ `test_pipeline_not_ready.py`（含新口径用例）→ 11 passed
+  - P1-3/词表：`test_stream_events_flow.py` + `test_error_taxonomy_unify.py` + `test_task_phase2_step2_error_taxonomy.py` + `test_task_cancel.py` → 102 passed
+- **与 main 合并（eb405b3）后复验**：main 侧 0f74940（S3/S4，另一会话）已修复 data.py 路径穿越并加 admin 鉴权，且 runner.py 增加 copy_context worker 包裹。据此：
+  - data.py 冲突以 main 版为基，仅叠加仍缺失的流式 50MB 大小上限（S4 未覆盖的内存缺口）；
+  - `test_data_upload_path_guard.py` 重写为锁定合并后语义（净化不逃逸 + admin 桩 + 超限拒绝）→ 6 passed；
+  - `test_stream_events_flow.py`（copy_context × 绑定段包层组合语义）→ 30 passed。
+- PR CI（#283）全绿：RAG Smoke preflight、Evaluation V2 free contract / admin build、secret-scan、Detect RAG changes。
+
+## 提交与合并记录
+
+- 1cb8d04 fix(data)：P0-1（初版，后与 main S4 合流）
+- 9d410b3 fix(tasks)：P1-2
+- 8a5945f fix(runtime)：P1-3
+- 6b80db6 docs(tasks)：立项档案
+- eb405b3 merge origin/main + data.py 冲突消解（main S3/S4 为基 + 大小上限）+ 测试语义重写
+- PR：#283（CI 全绿后合并 main）
+
+## 未完成 / 并行协调备注
+
+- 另一会话的审计线（0f74940 S3/S4、`docs/tasks` 回填「W4/router 收官与 W5 实施」）与本项目后续轮次可能重叠：**启动 P1-5（competitor 域鉴权）、P2 批次前必须先核对 main 最新任务档案与其 S/W 编号清单，避免同题两套实现**（本次 data.py 即发生一次重叠，靠合并消解）。
+- P1-1（checkpointer 连接池）、P1-4（网关直通面）、P2 批次待下一轮立项。
 
 ## 阻塞
 
