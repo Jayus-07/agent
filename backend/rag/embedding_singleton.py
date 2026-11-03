@@ -200,8 +200,13 @@ def _get_cloud_embedding(
         import httpx
 
         # 已明确登记的内网服务直连，避免继承宿主机公网代理后误转发。
-        embedding_kwargs["http_client"] = httpx.Client(trust_env=False)
-        embedding_kwargs["http_async_client"] = httpx.AsyncClient(trust_env=False)
+        # 审计 P2 批次：openai SDK 传入自定义 http_client 时，请求级超时取自
+        # 该 client（默认近乎无限）——不显式设 timeout 会让上方 kwargs["timeout"]
+        # 对这条路径失效，内网 embedding 卡死时最坏等待远超 EMBEDDING_REQUEST_TIMEOUT。
+        embedding_kwargs["http_client"] = httpx.Client(
+            trust_env=False, timeout=timeout)
+        embedding_kwargs["http_async_client"] = httpx.AsyncClient(
+            trust_env=False, timeout=timeout)
     embedding = OpenAIEmbeddings(**embedding_kwargs)
     
     logger.info(

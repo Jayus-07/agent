@@ -8,6 +8,7 @@ from backend.app.api.identity import require_product_identity
 from backend.app.api.routes import tasks
 from backend.core.product_context import AGENT_PRODUCT, namespace_session_id
 from backend.services import task_service
+from backend.shared.logger import logger
 from backend.tasks import task_manager
 
 router = APIRouter(prefix="/chat/agent/tasks", tags=["企业助手长任务"])
@@ -23,6 +24,9 @@ def _session(value: str) -> str:
 @contextmanager
 def _conversation_guard(ident, session_id: str):
     """串行创建/替换同会话任务，防止两个标签页互相取消新任务。"""
+    import threading
+    from redis.exceptions import LockError, LockNotOwnedError
+
     redis = task_manager._redis()
     if redis is None:
         raise HTTPException(status_code=503, detail="任务控制通道暂不可用")
@@ -34,7 +38,21 @@ def _conversation_guard(ident, session_id: str):
     try:
         yield
     finally:
-        lock.release()
+        try:
+            lock.release()
+        except LockNotOwnedError:
+            # 守卫体内 seed_task（checkpoint 持久化）+ submit_task 合计可能
+            # 超过锁的 30s TTL：锁已自动过期属正常路径——此时任务很可能已
+            # 成功提交，release 再抛会把成功结果掩盖成 500（审计 P2 批次）。
+            logger.info(
+                "[AgentChatTasks] 会话守卫锁已过期（>30s），跳过释放: session=%s",
+                session_id,
+            )
+        except LockError:
+            logger.warning(
+                "[AgentChatTasks] 会话守卫锁释放异常: session=%s", session_id,
+                exc_info=True,
+            )
 
 
 def _cancel_previous(ident, session_id: str, *, exclude: str = "") -> None:
