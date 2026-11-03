@@ -50,10 +50,20 @@ def _identity(request: Request):
 
 
 def _tenant(request: Request, identity) -> str:
-    """租户取可信 header 身份（网关模式）；legacy 无租户时缺省 default。"""
-    if identity.source == "header":
-        return identity.tenant_id or "default"
-    return request.headers.get("X-Tenant-Id", "") or "default"
+    """租户取可信 header 身份（网关模式）；缺失即 fail-closed 403。
+
+    audit P3/B4：网关对 JWT 必注入 tenant_id，空租户仅旧令牌/异常路径可达；
+    对齐 cs_admin._resolve_tenant_scope 口径——绝不静默回落 'default'
+    （否则跨租户数据会被写进 default 租户）。
+    """
+    tenant = (
+        identity.tenant_id
+        if identity.source == "header"
+        else request.headers.get("X-Tenant-Id", "")
+    )
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    return tenant
 
 
 def _revision_error(exc: PlanRevisionError) -> HTTPException:

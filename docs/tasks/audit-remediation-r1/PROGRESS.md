@@ -155,3 +155,42 @@
 **验证**：
 - 新增 `backend/tests/api/test_p2_wrapup_fixes.py`（8 passed）：实体爆炸 payload 拒绝 / 合法部件零误伤 / OCR 预算结算与 error 跳过 / messages 超批超长缺字段 422 + 合法放行
 - 既有套件（chat_memory_persistence / enterprise_document_structure / ocr_registered_model / session_ownership）→ 26 passed，零回归
+
+## P3 批次 B（fix/audit-p3-b，基线 ab22fb2）：B1-B4 四项小修
+
+### B1 xml_parser 对齐 `_parse_ooxml_xml` 形态（CWE-776 扫描盲区清扫）
+- `rag/preprocessing/parser/xml_parser.py`：`ET.fromstring` → `XMLParser().feed()+close()`，
+  前置 DTD/ENTITY 拒绝守卫原样保留（与 pptx_parser 口径一致，安全性由前置拒绝保证）。
+- 回归：合法 XML 仍 parse_status=complete（新增功能断言）+ 源码防回退（禁止 `ET.fromstring`）。
+
+### B2 列表分页收口
+- `routes/tasks.py`：GET /tasks 新增 `offset: Query(0, ge=0)`；`services/task_service.py`
+  `list_tasks_for_user` 加 offset 参数（SQL `OFFSET %s`，负数钳 0）。向后兼容（默认 0）。
+- `routes/agent_chat_tasks.py`：GET 列表 limit 从固定 100 改 `Query(100, ge=1, le=100)`。
+- `routes/memory.py`：extractions 列表 limit 从裸 int=100 改 `Query(100, ge=1, le=200)`
+  （与 service 层 `safe_limit≤200` 同口径）。
+- 说明：`agent_chat_tasks._cancel_previous` 内部清扫的 limit=100 为实现细节非 API 分页，
+  保持不动。
+
+### B3 /admin/email/channel 挂 admin 闸
+- `routes/admin_email.py`：router 级 `Depends(require_admin_user)`——SMTP host/账号存在性
+  属运维敏感面，此前 viewer 可见；与 admin_* 其他路由同口径。只读语义不变。
+
+### B4 tenant 空值回退改 fail-closed
+- `routes/plan_revisions.py:_tenant`：header 与 legacy 双分支空租户一律 403「缺少可信租户身份」
+  （对齐 `cs_admin._resolve_tenant_scope`，绝不回落 'default'）。
+- `routes/travel.py`（审计原 :909，现 :918 偏移）：`/plan`（retired V1）在路由层
+  `require_identity` 后加空租户 403 守卫——worker 闭包内异常会被吞成计划错误，
+  必须在启动前拦截；worker 内 `or "default"` 回退移除。
+- **遗留如实标注**：travel.py 其余 17 处 `or "default"`（多为 retired V1 读路径与 v2 流）
+  不在本批范围（handoff 仅点名 :909）；如需全域 fail-closed 应独立批次逐路由补守卫。
+
+### 验证
+- 新增 `backend/tests/api/test_audit_p3_fixes.py`（11 passed）：xml 功能回归+源码防回退 /
+  三端点 limit·offset 参数契约 / service OFFSET 钳 0 / admin_email 角色闸结构断言 /
+  plan_revisions._tenant 双分支 403 + 合法透传 / travel 路由守卫位置 + worker 无回退。
+- 受影响面既有套件：test_enterprise_document_structure + test_plan_revision +
+  test_engineering_p2_fixes（tasks/agent_chat_tasks 补帧/锁语义）→ 43 passed 零回归；
+  test_apisix_b4_direct_routes → 3 passed。
+- py_compile 全部改动文件通过。
+

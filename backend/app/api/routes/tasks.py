@@ -172,11 +172,12 @@ async def get_task_status(task_id: str, request: Request,
 async def list_tasks(request: Request,
                      user_id: str = Query("", description="legacy 身份"),
                      status: str = Query("", description="按状态过滤"),
-                     limit: int = Query(TASKS_LIST_DEFAULT_LIMIT, ge=1, le=100)):
+                     limit: int = Query(TASKS_LIST_DEFAULT_LIMIT, ge=1, le=100),
+                     offset: int = Query(0, ge=0)):
     ident = _identity(request, user_id or None)
     records = task_service.list_tasks_for_user(
         ident.user_id, tenant_id=_tenant(request, identity=ident),
-        status=status, limit=limit)
+        status=status, limit=limit, offset=offset)
     return {"tasks": [r.to_public_dict() for r in records], "count": len(records)}
 
 

@@ -12,9 +12,15 @@
   （秒级扫描类排除）——它们是「报告/日报邮件推送」的候选消费方；
   当前无任务真实接线邮件推送，页面如实展示候选清单。
 """
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
+
+from backend.app.api.deps import require_admin_user
 
 router = APIRouter(prefix="/admin/email", tags=["邮件通道"])
+
+# audit P3/B3：SMTP host/账号存在性属运维敏感面，统一挂 admin 角色闸
+#（此前 viewer 可见；与 admin_* 其他路由同一闸口径）。只读语义不变。
+router.dependencies.append(Depends(require_admin_user))
 
 
 def _smtp_status() -> dict:

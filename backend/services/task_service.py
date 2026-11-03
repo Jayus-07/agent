@@ -1003,7 +1003,8 @@ def get_latest_biz_task(biz_type: str, biz_id: str) -> TaskRecord | None:
 
 def list_tasks_for_user(user_id: str, *, tenant_id: str = "",
                         status: str = "", limit: int = 20,
-                        biz_type: str = "", conversation_id: str = "") -> list[TaskRecord]:
+                        biz_type: str = "", conversation_id: str = "",
+                        offset: int = 0) -> list[TaskRecord]:
     """用户任务历史（created_at 倒序）。"""
     ensure_schema()
     sql = "SELECT * FROM tasks WHERE user_id = %s"
@@ -1020,8 +1021,9 @@ def list_tasks_for_user(user_id: str, *, tenant_id: str = "",
     if conversation_id:
         sql += " AND conversation_id = %s"
         args.append(conversation_id)
-    sql += " ORDER BY created_at DESC LIMIT %s"
+    sql += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
     args.append(max(1, min(int(limit), 100)))
+    args.append(max(0, int(offset)))
     with _pooled_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, args)
         rows = cur.fetchall()

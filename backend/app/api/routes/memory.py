@@ -16,7 +16,7 @@ PR-2.x: 业务逻辑已迁移至 MemoryService，路由仅做参数提取和委�
 单会话读/删/改名额外校验可信 tenant/user 双重归属，跨域访问按 404 处理。
 未认证（guest，即未经网关 JWT 的直连流量）一律 401。
 """
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from backend.app.api.identity import require_product_identity, resolve_identity
@@ -281,7 +281,12 @@ def get_session_context(session_id: str, request: Request):
 @router.get("/sessions/{session_id}/extractions")
 @router.get("/agent/sessions/{session_id}/extractions")
 @router.get("/customer-service/sessions/{session_id}/extractions")
-def list_extraction_jobs(session_id: str, request: Request, limit: int = 100):
+def list_extraction_jobs(
+    session_id: str,
+    request: Request,
+    # 分页收口（audit P3/B2）：路由层限幅，与 service 层 safe_limit≤200 同口径
+    limit: int = Query(100, ge=1, le=200),
+):
     """查询本人会话的长期记忆抽取状态；身份域来自网关验签上下文。"""
     ident = _require_identity(request)
     return _raise_for_error(

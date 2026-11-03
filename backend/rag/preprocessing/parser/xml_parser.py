@@ -29,7 +29,11 @@ class XmlParser(BaseDocumentParser):
         raw_bytes = Path(file_path).read_bytes()
         if _XML_DTD_RE.search(raw_bytes.replace(b"\x00", b"")):
             raise ValueError("XML 文档含 DTD/ENTITY 声明，已拒绝解析")
-        root_element = ET.fromstring(raw_bytes)
+        # feed/close 与 fromstring 等价，安全性由前置 DTD/ENTITY 拒绝保证——
+        # 形态与 pptx_parser._parse_ooxml_xml 对齐（离线无 defusedxml 的零依赖口径）。
+        parser = ET.XMLParser()
+        parser.feed(raw_bytes)
+        root_element = parser.close()
         root = DocumentNode(type="section", text="", level=0)
         lines: list[str] = []
         count = 0
