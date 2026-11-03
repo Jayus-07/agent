@@ -308,4 +308,40 @@ OSV 区间匹配需人工复核原文）；pip/setuptools 随基础镜像走；3
 - 文档级交付（T0）：无代码改动；全部事实源（compose/env/lua/sys_config）均给出
   file:line 引用，UNVERIFIED 项如实标注、未报告为通过。
 
+## P3 补遗批次：依赖安全升级第一批（fix/deps-osv-batch1，基线 6ca11e0）
+
+承接批次 A1 的「33 个可升级包」结论。**实际落盘 25 行（24 包 + 连带 yarl）**，
+其余 9 项经逐项验证后延期（理由如下），不做无验证的硬升。
+
+### 已升级（25 行，全量 pip 解析验证通过）
+pillow 12.3.0 / pypdf 6.21.4 / GitPython 3.2.1 / aiohttp 3.14.4 / Authlib 1.9.1 /
+mcp 1.30.0 / python-multipart 0.0.31 / soupsieve 2.9.0 / urllib3 2.8.0 /
+anyio 4.14.2 / joserfc 1.7.6 / kafka-python 2.3.2 / brotli 1.2.1.0 /
+certifi 2026.10.18 / fastmcp+fastmcp-slim 3.4.10 / h2 4.4.1 / idna 3.15 /
+langsmith 0.8.18 / Mako 1.4.2 / multidict 6.9.1 / pydantic-settings 2.14.2 /
+sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 3.14.4
+要求 ≥1.25.1 的连带升级）**。
+
+### 延期 9 项（逐项含理由，防无脑重试）
+| 包 | 目标 | 延期理由 |
+|---|---|---|
+| dnspython | 2.9.0 | fix 版本 requires_python ≥3.11（全环境 Python 3.10：镜像/CI/本地一致），不可达 |
+| unstructured | 0.24.1 | 同上（≥3.11）；py3.10 上限 0.18.32 不清除公告 |
+| fsspec | 2026.6.0 | 被 datasets 4.8.5 钳 ≤2026.2.0；解除需 datasets 5.x 跨主版本 |
+| langchain | 1.4.6 | 需连带 langchain-core ≥1.6.10 + langgraph ≥1.2.12 整族升级 → 专项批次 |
+| langgraph-sdk | 0.4.4 | 被 langgraph 1.1.10 钳制，同上整族 |
+| langgraph-checkpoint-postgres | 3.1.3 | 拉 高 langgraph-checkpoint 要求，与 langgraph 1.1.10 冲突，同上整族 |
+| opentelemetry-api | 1.45.1 | 家族一致性（api/sdk/exporters/instrumentation 必须协同），另行批次 |
+| torch | 2.13.0 | 生产经 constraints/torch-cpu.txt 实装 2.14.1+cpu ≥ fix，本不受影响；lock 记账偏差留待 relock 专项 |
+| pip | 25.3 | 容器基建随基础镜像（批次 A1 既定裁决） |
+
+### 验证方法（如实）
+1. PyPI JSON API 逐包校验目标版本 requires_python（30→筛出 2 个 ≥3.11 不兼容）；
+2. `pip install --dry-run` 全量解析（剔除 spaCy URL 直连依赖后的等效集）——迭代
+   消解 4 轮冲突（yarl 连带、fsspec/datasets、langchain 族、langgraph 族）后
+   **零 ERROR 通过**；
+3. 真实安装验证由 CI 承担（frontend-admin.yml / evaluation-v2.yml 以 Python 3.10
+   `pip install -r requirements-lock.txt` 装全量 lock）+ 合并后 rebuild 容器内定向测试。
+
+
 
