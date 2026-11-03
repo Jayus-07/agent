@@ -230,7 +230,8 @@ def execute_action(
             status=ExpertStatus.SUCCESS.value,
             response_draft=(
                 "暂时没有找到可用于该申请的订单。请告诉我订单号"
-                "（例如 DEMO-1002），或回复「查我的所有订单」先查看订单。"
+                "（订单号可在「我的订单」页查看，形如 MO-XXXX），"
+                "或回复「查我的所有订单」先查看订单。"
             ),
             data={},
         )
@@ -894,8 +895,9 @@ def _ask_missing_slot(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
         response_draft=(
-            f"请提供需要办理{label}的订单号（例如 DEMO-1002）{window_note}，"
-            "我会先为您核对订单，确认无误后再提交申请。"
+            f"请提供需要办理{label}的订单号{window_note}，"
+            "订单号可在「我的订单」页查看，也可以回复「查我的所有订单」"
+            "由我为您列出；我会先核对订单，确认无误后再提交申请。"
         ),
         data={
             "pending_action": pending,
@@ -1040,8 +1042,9 @@ def _handle_slot_fill(
         expert="action",
         status=ExpertStatus.SUCCESS.value,
         response_draft=(
-            f"请提供需要办理{label}的订单号（例如 DEMO-1002），"
-            "我会先为您核对订单，确认无误后再提交申请。"
+            f"请提供需要办理{label}的订单号，"
+            "订单号可在「我的订单」页查看，也可以回复「查我的所有订单」"
+            "由我为您列出；我会先核对订单，确认无误后再提交申请。"
         ),
         data={
             "pending_action": updated,

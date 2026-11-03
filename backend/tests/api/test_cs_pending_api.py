@@ -102,6 +102,8 @@ def test_returns_owner_scoped_safe_snapshot_and_masks_pii(
             "reason": "",
             "expires_at": expires_at,
             "state": "pending",
+            # 桩提案无 missing_slots/status=need_info 标记 → 可确认。
+            "confirmable": True,
     }
     assert "13800138000" not in response.text
     assert "must-not-leak" not in response.text
@@ -118,6 +120,27 @@ def test_no_pending_returns_explicit_null(
 
     assert response.status_code == 200
     assert response.json() == {"pending_action": None}
+
+
+def test_need_info_proposal_is_not_confirmable(
+    client, fake_identity, fake_owner_check, fake_store, fake_handoff,
+):
+    """缺槽位（need_info）提案必须 confirmable=False——前端据此隐藏
+    确认按钮，防止把「等待补充信息」渲染成可执行的确认卡（2026-11-03）。"""
+    fake_store.result = {
+        "proposal_id": "proposal-2", "version": 1,
+        "action_type": "refund_request", "target_type": "order",
+        "target_id": "", "proposal_text": "提交退款申请",
+        "status": "need_info", "missing_slots": ["order_id"],
+        "requires_confirmation": False, "confirmation_state": "pending",
+    }
+
+    response = client.get("/cs/conversations/my/conversation-1/pending")
+
+    assert response.status_code == 200
+    snap = response.json()["pending_action"]
+    assert snap["confirmable"] is False
+    assert snap["state"] == "pending"
 
 
 def test_pending_is_marked_paused_while_handoff_is_active(

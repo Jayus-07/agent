@@ -302,6 +302,12 @@ local ROLE_GATE_EXEMPT_PATTERNS = {
     "^/api/cs/conversations/[^/]+/rating$",               -- 用户满意度评分
     "^/api/cs/tickets$",                                  -- 我的工单列表（2026-10-08：B案工单展示）
     "^/api/cs/tickets/[^/]+$",                            -- 工单详情（admin/* 不命中，仍走前缀闸）
+    -- cs-workstation-v2 用户端三件（2026-11-03 实测补齐：漏加导致普通用户
+    -- 403 role-insufficient——右栏客户资料/我的退款申请折叠卡/退款原因修改）：
+    "^/api/cs/customer-context$",                         -- 客户360右栏（消费者）
+    "^/api/cs/refund-requests$",                          -- 我的退款申请列表（消费者）
+    "^/api/cs/refund-requests/[^/]+$",                    -- 退款申请详情（消费者）
+    "^/api/cs/conversations/my/.+/refund-draft$",         -- 修改退款申请原因（消费者）
 }
 
 local function role_gate(uri, method, roles)

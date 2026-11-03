@@ -114,10 +114,10 @@ class RefundService:
         limit: int = 20,
     ) -> list[dict]:
         """读取当前可信用户和租户可见的售后申请。"""
-        if (
-            not user_id or user_id == "anonymous" or not tenant_id
-            or tenant_id == "default"
-        ):
+        # default 是注册账号的正式租户值（auth.users 全部真实用户均在
+        # default，2026-11-03 实测）；身份可信性由已认证 user_id 保证，
+        # 数据可见性按 user_id + tenant_id 双重过滤收口。
+        if not user_id or user_id == "anonymous" or not tenant_id:
             raise RefundRequestUnavailableError("售后查询缺少可信身份")
 
         from backend.customer_service.service.order_service import _use_http_gateway
@@ -421,9 +421,12 @@ class RefundService:
         sandbox_mode = gateway_mode == "sandbox" and refund_mode == "sandbox"
         if not (http_mode or sandbox_mode):
             raise RefundRequestUnavailableError()
+        # default 是注册账号的正式租户值（auth.users 全部真实用户均在
+        # default，2026-11-03 实测）；写操作仍受已认证 user_id、会话归属、
+        # 幂等键与人工审核闸约束，default 不再视为缺失身份。
         if (
             not user_id or user_id == "anonymous" or not tenant_id
-            or tenant_id == "default" or not conversation_id
+            or not conversation_id
         ):
             raise RefundRequestUnavailableError(
                 "退款申请缺少可信用户、租户或会话身份",

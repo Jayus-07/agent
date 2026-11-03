@@ -31,10 +31,13 @@ import SiteNav from '@/mall/SiteNav'
 import ConfirmCard from './ConfirmCard'
 import FoldCards from './FoldCards'
 
+// 快捷入口话术不携带具体订单号：订单号由懒种子按用户生成（MO- 前缀、
+// 无法预知），通用话术会触发后端候选点选/订单列表，任何账号都能走通
+//（2026-11-03 修复：原 DEMO-1001 等硬编码号在 http 网关下必然查无此单）。
 const QUICK_ENTRIES = [
-  { icon: '📦', title: '查询订单', hint: 'DEMO-1001 的订单状态', text: '帮我查一下 DEMO-1001 的订单状态' },
-  { icon: '🚚', title: '物流追踪', hint: 'DEMO-1003 的物流进度', text: 'DEMO-1003 的物流到哪了？' },
-  { icon: '💰', title: '申请退款', hint: 'DEMO-1012 未发货退款', text: '我要退掉 DEMO-1012 的耳机' },
+  { icon: '📦', title: '查询订单', hint: '查看我的近期订单', text: '帮我查一下我的订单状态' },
+  { icon: '🚚', title: '物流追踪', hint: '查询订单物流进度', text: '帮我查一下订单的物流进度' },
+  { icon: '💰', title: '申请退款', hint: '为订单申请退款', text: '我要申请退款' },
   { icon: '📝', title: '投诉建议', hint: '物流时效投诉', text: '我要投诉，物流太慢了' },
 ] as const
 

@@ -82,6 +82,8 @@ export default function ConfirmCard({
   const secondsLeft = leftSeconds(snapshot.expires_at, now)
   const isRefund = snapshot.action_type === 'refund_request'
   const label = ACTION_LABELS[snapshot.action_type] ?? '业务操作'
+  // 后端权威判定：need_info（缺槽位）提案 confirmable=false；字段缺省视为可确认。
+  const confirmable = snapshot.confirmable
 
   const submit = async (decision: 'confirm' | 'cancel') => {
     setSubmitting(true)
@@ -167,6 +169,13 @@ export default function ConfirmCard({
               返回确认
             </button>
           </div>
+        </div>
+      ) : confirmable === false ? (
+        // need_info 提案（缺订单号等槽位）：后端权威判定不可确认，
+        // 只提示补充信息，不渲染可执行按钮（2026-11-03 修复空目标卡）。
+        <div className="mt-2.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-slate-500">
+          待确认信息尚未补全，请按客服指引回复（如订单号）后重新发起；
+          本卡暂不可确认。
         </div>
       ) : (
         <div className="mt-2.5 flex flex-wrap gap-2">

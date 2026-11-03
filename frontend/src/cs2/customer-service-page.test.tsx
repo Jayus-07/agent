@@ -113,4 +113,28 @@ describe('CustomerServicePage（/customer-service，P8 切换）', () => {
     })
     expect(cs2Api.requestHandoff).toHaveBeenCalledWith('conv-a')
   })
+
+  it('need_info 提案（confirmable=false）不渲染确认按钮，只提示补充信息', async () => {
+    cs2Api.fetchPendingSnapshot.mockResolvedValueOnce({
+      proposal_id: 'p-need-info',
+      version: 1,
+      action_type: 'refund_request',
+      masked_target: '订单',
+      summary: '提交退款申请',
+      reason: '',
+      expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+      state: 'pending',
+      confirmable: false,
+    })
+    const c = await mount()
+    const select = c.querySelector('select[aria-label="切换会话"]') as HTMLSelectElement
+    await act(async () => {
+      select.value = 'conv-a'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    await act(async () => {})
+    expect(cs2Api.fetchPendingSnapshot).toHaveBeenCalledWith('conv-a')
+    expect(c.textContent).toContain('待确认信息尚未补全')
+    expect(Array.from(c.querySelectorAll('button')).some((b) => b.textContent?.includes('确认退款'))).toBe(false)
+  })
 })

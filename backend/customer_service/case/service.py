@@ -322,7 +322,8 @@ class CSCaseService:
         from backend.customer_service.models.case import CSCase, compute_sla_deadline
         from backend.memory.database import AsyncSessionLocal
 
-        if not user_id or not tenant_id or tenant_id == "default" or not conversation_id:
+        # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+        if not user_id or not tenant_id or not conversation_id:
             raise BusinessRuleError(
                 "退款申请缺少可信用户、租户或会话身份",
                 user_message="身份信息暂不可核验，未创建退款申请；请联系人工客服。",
@@ -497,7 +498,8 @@ class CSCaseService:
         from backend.customer_service.models.case import CSCase
         from backend.memory.database import AsyncSessionLocal
 
-        if not user_id or not tenant_id or tenant_id == "default":
+        # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+        if not user_id or not tenant_id:
             raise BusinessRuleError(
                 "退款申请查询缺少可信用户或租户身份",
                 user_message="身份信息暂不可核验，无法查询退款申请。",
@@ -538,7 +540,8 @@ class CSCaseService:
         from backend.customer_service.models.case import CSCase
         from backend.memory.database import AsyncSessionLocal
 
-        if not tenant_id or tenant_id == "default":
+        # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+        if not tenant_id:
             raise BusinessRuleError(
                 "审核队列缺少可信租户身份",
                 user_message="身份信息暂不可核验，无法查询审核队列。",
