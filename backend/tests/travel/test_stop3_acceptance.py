@@ -24,7 +24,8 @@ def _poi(poi_id: str, name: str, *, lat: float = 30.2, lng: float = 120.1) -> Po
 
 
 def _itinerary():
-    brief = TravelBrief(destination="杭州", days=3)
+    # start_date_flexible：对应用户「先不定日期」后继续改行程的真实状态
+    brief = TravelBrief(destination="杭州", days=3, start_date_flexible=True)
     pois = [
         _poi("west", "西湖", lat=30.25, lng=120.15),
         _poi("museum", "西湖博物馆", lat=30.24, lng=120.14),

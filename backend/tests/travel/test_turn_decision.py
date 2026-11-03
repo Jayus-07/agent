@@ -182,7 +182,9 @@ def test_unverified_selected_poi_reference_asks_which_attraction(monkeypatch):
     from backend.travel.slot_filler import slot_filler_node
 
     _quiet_slot_filler(monkeypatch)
-    previous = TravelBrief(destination="厦门", days=2, version=3).model_dump()
+    # start_date_flexible：对应用户已声明「先不定日期」后继续改行程的真实状态
+    previous = TravelBrief(destination="厦门", days=2, version=3,
+                           start_date_flexible=True).model_dump()
     update = slot_filler_node({
         "user_message": "这个景点换掉",
         "brief": previous,

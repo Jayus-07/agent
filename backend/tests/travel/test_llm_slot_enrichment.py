@@ -279,7 +279,7 @@ def test_rule_complete_means_zero_llm_calls(monkeypatch):
     from backend.travel.slot_filler import slot_filler_node
 
     calls = _patch_turn_decision(monkeypatch)
-    result = slot_filler_node({"user_message": "福州3天"})
+    result = slot_filler_node({"user_message": "福州3天，11月8号出发"})
     assert result["brief_missing"] == []
     assert calls == []
     assert result["slot_parse_source"] == "rule"
@@ -336,7 +336,7 @@ def test_enrichment_fills_days_end_to_end(monkeypatch, _flag_on):
     calls = _patch_turn_decision(monkeypatch, decision, status="ok")
     from backend.travel.slot_filler import slot_filler_node
 
-    result = slot_filler_node({"user_message": "去福州待一周"})
+    result = slot_filler_node({"user_message": "去福州待一周，先不定日期"})
     assert len(calls) == 1
     assert result["brief"]["days"] == 7
     assert result["brief_missing"] == []

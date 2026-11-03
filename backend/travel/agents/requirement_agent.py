@@ -186,6 +186,12 @@ _RE_REL_WEEK_ONLY = re.compile(r"(这|本|下)周(?![一二三四五六日天末
 _RE_VAGUE_TIME = re.compile(
     r"(月初|月中|月底|月末|年初|年底|上半年|下半年|上旬|中旬|下旬|"
     r"节假日|寒假|暑假|周末前后|月底前后|月初前后)")
+# 日期弹性（2026-11-03）：用户明确表示日期未定 → start_date_flexible=True，
+# 追问链不再追问日期（行程按「第 N 天」排）。只认显式放弃表达，
+# 「帮我规划行程」这类无日期消息不算（那是要追问的正常场景）。
+_RE_DATE_FLEX = re.compile(
+    r"(先不定(日期|时间)|日期没定|日期不确定|时间没定|时间不确定|"
+    r"还没定(日期|时间)|日期随缘|不看日子)")
 _WEEKDAY_CN_TO_MON1 = {"一": 1, "二": 2, "三": 3, "四": 4,
                        "五": 5, "六": 6, "日": 7, "天": 7}
 _REL_DAYS_OFFSET = {"今天": 0, "明天": 1, "后天": 2, "大后天": 3}
@@ -1084,6 +1090,15 @@ def _explicit_total_party(message: str) -> int | None:
     return None
 
 
+def extract_date_flexible(message: str) -> bool:
+    """用户明确表示日期未定（「先不定日期」「日期没定」）→ True。
+
+    只认显式放弃表达；给过具体日期的消息即使同时命中弹性词，
+    以日期为准（missing_slots 对已填 start_date 不再追问）。
+    """
+    return bool(_RE_DATE_FLEX.search(message))
+
+
 def extract_fresh_brief(
     message: str, previous_destination: str = "",
 ) -> TravelBrief:
@@ -1109,6 +1124,7 @@ def extract_fresh_brief(
         budget_constraint=extract_budget_constraint(message) or "hard",
         weather_conditions=extract_weather_conditions(message),
         start_date=extract_start_date(message),
+        start_date_flexible=extract_date_flexible(message),
         arrival_time=extract_arrival_time(message) or "",
         departure_time=extract_departure_time(message) or "",
         preferences=extract_preferences(message),

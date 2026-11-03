@@ -430,6 +430,29 @@ describe('reduceTravelStreamEvent', () => {
     expect(state.tools[0].preview?.[0]).toEqual({ name: '真实小吃店', source: 'amap' })
   })
 
+  it('服务端 run_id 与前端轮次键不同源：首事件绑定后正常归并，异源事件拒绝（真机回归）', () => {
+    // 后端每个事件盖 travel-{uuid}，前端轮次键是 clientRunId——两者永远
+    // 不同。此前归并按「run_id === 轮次键」过滤，真机上 stage/tool 事件
+    // 全部被静默丢弃，过程面板与工具行永远为空。
+    let state = initialTravelProcess('client-abc123')
+    state = reduceTravelStreamEvent(state, {
+      event: 'stage.started',
+      data: { run_id: 'travel-server-1', seq: 1, stage: 'travel_slot_filler' },
+    })
+    state = reduceTravelStreamEvent(state, {
+      event: 'stage.finished',
+      data: { run_id: 'travel-server-1', seq: 2, stage: 'travel_slot_filler' },
+    })
+    expect(state.serverRunId).toBe('travel-server-1')
+    expect(state.stages.travel_slot_filler?.status).toBe('completed')
+    // 绑定后，其他服务端轮次的迟到事件仍被拒绝
+    const stale = reduceTravelStreamEvent(state, {
+      event: 'stage.started',
+      data: { run_id: 'travel-server-2', seq: 3, stage: 'travel_poi_expert' },
+    })
+    expect(stale).toBe(state)
+  })
+
   it('Tool 失败只标记该行，不把整轮 run 拖成 error（Tool Failure ≠ Workflow Failure）', () => {
     let state = initialTravelProcess('run-1')
     state = reduceTravelStreamEvent(state, {

@@ -120,7 +120,7 @@ class TestStateReservedKey:
         try:
             graph = gb.get_travel_graph()
             final = graph.invoke(
-                new_travel_graph_input("福州1天行程，1个人"),
+                new_travel_graph_input("福州1天行程，1个人，先不定日期"),
                 config={"configurable": {"thread_id": "t-p7-reserved"}},
             )
             assert final.get("candidate_plans") in (None, []), \

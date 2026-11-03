@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { describe, expect, it } from 'vitest'
 import type { TripDayV2 } from '@/api/travelV2'
 import TravelV2Map from './TravelV2Map'
-import { getTravelMapPoints, isValidMapCoordinate, travelMapPointColor } from './travelV2MapData'
+import { getAllTravelMapPoints, getTravelMapPoints, isValidMapCoordinate, travelMapPointColor } from './travelV2MapData'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -89,7 +89,8 @@ describe('TravelV2Map 点位可信度与空态', () => {
     const container = document.createElement('div')
     const root = createRoot(container)
     act(() => root.render(createElement(TravelV2Map, {
-      day: makeDay([]),
+      days: [makeDay([])],
+      activeDayIndex: 0,
       selectedItemId: '',
       selectedLocation: null,
       onSelectItem: () => undefined,
@@ -100,5 +101,26 @@ describe('TravelV2Map 点位可信度与空态', () => {
     expect(container.querySelector('.leaflet-container')).toBeNull()
 
     act(() => root.unmount())
+  })
+
+  it('全天数取点带天标签，候选点挂当前选中天（按天分色连线的数据源）', () => {
+    const dayOne = makeDay([
+      { item_id: 'd1a', title: '第一天甲', place: { lat: 30.2, lng: 120.1 } },
+      { item_id: 'd1b', title: '第一天乙', place: { lat: 30.3, lng: 120.2 } },
+    ])
+    const dayTwo = { ...makeDay([
+      { item_id: 'd2a', title: '第二天甲', place: { lat: 31, lng: 121 } },
+    ]), day_id: 'day-2' } as TripDayV2
+
+    const points = getAllTravelMapPoints([dayOne, dayTwo], 0, null)
+    expect(points.map((point) => `${point.dayIndex}:${point.id}`)).toEqual([
+      '0:d1a', '0:d1b', '1:d2a',
+    ])
+    // 候选（查询候选）挂在当前选中天，随选中天切换归属
+    const withCandidate = getAllTravelMapPoints(
+      [dayOne, dayTwo], 1, { name: '候选', lat: 31.5, lng: 121.5 },
+    )
+    const candidate = withCandidate.find((point) => point.candidate)
+    expect(candidate?.dayIndex).toBe(1)
   })
 })

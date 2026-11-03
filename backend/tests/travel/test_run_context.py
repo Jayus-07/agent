@@ -120,7 +120,7 @@ class TestCrossTurnRun:
             travel_graph_node,
         )
 
-        travel_graph_node(_node_state("想去福州玩", tid))
+        travel_graph_node(_node_state("想去福州玩，先不定日期", tid))
         _mark(tid)
         ctx = _ctx(tid)
         assert ctx.travel_pending is not None
@@ -195,7 +195,7 @@ class TestNewRun:
             travel_graph_node,
         )
 
-        travel_graph_node(_node_state("福州两天的行程", tid))
+        travel_graph_node(_node_state("福州两天的行程，先不定日期", tid))
         _mark(tid)
         old_run = _ctx(tid).travel_run_id
         old_seq = _ctx(tid).travel_run_seq
@@ -204,7 +204,7 @@ class TestNewRun:
         assert resolve_travel_pending(
             "重新规划杭州两天", _routing(tid)) is None
 
-        travel_graph_node(_node_state("重新规划杭州两天", tid))
+        travel_graph_node(_node_state("重新规划杭州两天，先不定日期", tid))
         ctx = _ctx(tid)
         assert ctx.travel_run_seq == old_seq + 1
         assert ctx.travel_run_id != old_run
@@ -257,7 +257,7 @@ class TestReconstruct:
         ——「改成3天」在 destination=福州 的基础上出 3 天单，不丢目的地。"""
         tid = _tid()
         reconstruct = {"destination": "福州", "days": 2, "party_size": 1,
-                       "pace": "moderate"}
+                       "pace": "moderate", "start_date_flexible": True}
         final = memory_graph.invoke(
             {**new_travel_graph_input("改成3天", user_id="u-f2", session_id=tid,
                                       conversation_id=tid),
@@ -284,10 +284,10 @@ class TestCompletion:
             travel_graph_node,
         )
 
-        travel_graph_node(_node_state("想去福州玩", tid))
+        travel_graph_node(_node_state("想去福州玩，先不定日期", tid))
         assert _ctx(tid).travel_pending is not None
         # 齐备补槽出单 → adapter 走 mark_travel_run_completed
-        travel_graph_node(_node_state("福州玩2天", tid))
+        travel_graph_node(_node_state("福州玩2天，先不定日期", tid))
         assert _ctx(tid).travel_stage == "completed"
         assert _ctx(tid).travel_pending is None
         # 下一轮普通问题不再被 pending 拦截（无 pending → resolver 不介入）

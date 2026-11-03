@@ -367,4 +367,87 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - **断点复核（真实页面）**：390/820/1024/1280 唯一助手实例、草稿跨断点保留、无横向溢出；820 单列地图 790px 可见、1024 两列地图 464px、1280 三列地图 442px；390 终态截图确认输入框含草稿完整可见。
 - **验收环境坑**：IAB 渲染节流下 rAF 冻结使保存流程 `nextPaint()` 永不返回（VALIDATING 卡死、保存请求不发）——自动化环境现象非业务 bug，页面内注入 rAF→setTimeout 垫片后保存 201 正常；真实前台浏览器不受影响，业务代码未改。
 - **清理**：临时账号 13900001103（id=1335）status=0、会话全吊销、refresh_tokens=0、Redis 会话索引键清零；验收标签页已关。共享栈 rebuild 退出 0 healthy（backend/frontend 均含本轮全部修复，容器内已核对 max_length=20000）。
-- **P5 状态**：代码修复与验收完成，**待用户确认提交**（PR base main）；P6 未开始。
+- **P5 状态**：用户确认后已提交（fix 8f3e7fa + docs 8384983），PR #266 免费档 CI 三项 SUCCESS、自动 Code Review completed/no findings，**已合并 main（merge e6dc26b）**。P6 进入机器侧总验收。
+
+## P6 机器侧总验收（2026-11-03，codex/travel-proto-p6-acceptance）
+
+- **分支**：从 main（e6dc26b，含 #265 其他会话测试修复）新建；运行栈与 main 内容等价（#265 仅测试）。
+- **验收通过项（真实账号 13900001104 全程真实链路）**：
+  1. 独立页面：列表页空态、模板目录（3 卡 3 照片）、发现页均无溢出；旧 `/travel/chat?prompt=` 重定向进生成态（#254 契约保持）。
+  2. 生成→保存→工作台：厦门三天真实生成、保存 201、自动进工作台。
+  3. 查询 Tab：酒店 `POST /travel/v2/search/hotels 200`（真实通道）；车次查询走 12306 MCP 动态通道（`tools/list ok 7 tools`，TRAIN_MCP_ENABLED=false 仅关静态回退）。
+  4. 备选地点替换：二次确认流（确认态→再点提交）成功，v1→v2 `structured_edit` 落库。
+  5. 历史抽屉与恢复：版本列表/摘要/每版本 ICS+分享入口完整；恢复确认框明示「服务端会创建新的 v3」，恢复后 v3 `restore_revision` 落库。
+  6. 自动优选：建议生成（真实餐饮数据+「未提供有效入住/退房日期，未查询住宿」如实披露）→ 确认并逐条选入 → v4–v6 三条 `structured_edit` 幂等落库。
+  7. 编辑面板：地点操作菜单（替换/时间与停留/同日移动/跨天/删除）完整。
+  8. ICS：转换器对带日期文档输出 12 个 VEVENT；无日期行程如实拒绝（「此版本缺少日历所需的有效日期或时刻」）。
+  9. 分享：创建 201（幂等/哈希派生/到期选项）、验证端点 200、撤销入口；`TRAVEL_V2_SHARE_TOKEN_SECRET` 缺失时 fail-closed 503（已补配置）。
+  10. 降级披露：时区未确认 note、天气未做检查、住宿未查询、预算未核验、地图数据说明、AI 修改失败 UNKNOWN 安全重试语义均如实展示。
+- **BLOCKED（环境配置，非代码缺陷）**：AI 对话修改的 LLM 候选路径——`bind_llm_for_role("main")` 绑定 `doubao-seed-2.0-mini`，该模型未在管理端 LLM 注册表登记（provider 判定走错端点 + ollama 客户端不接受 temperature），3 次修改请求全部如实「未保存：模型没有返回可用的结构化修改候选」，Trip 无变化、失败处理链路合规。**需管理端把 main 角色绑定到已登记模型**；不依赖 LLM 的结构化写路径（替换/优选选入/恢复）已全部验证可用。
+- **环境配置变更**：本机 `.env` 追加 `TRAVEL_V2_SHARE_TOKEN_SECRET`（随机生成，仅本地部署）并 rebuild 生效；分享创建由 fail-closed 503 转为可用。
+- **验收环境限制（非业务缺陷）**：IAB goto 丢弃 URL fragment 导致分享页拿不到 `#token`（真实浏览器保留 hash 不受影响）；分享端点用完整 token 复验 200（revision=6、内容完整）。ICS Blob 下载事件在 IAB 不触发，改用端点直验。
+- **临时账号清理**：13900001104（id=1336）status=0、会话吊销、refresh_tokens=0、Redis 索引清零；验收标签页关闭。
+- **P6 状态**：机器侧验收完成；**待用户逐页人工验收**后收口。
+
+## 生成页按原型复刻收口（2026-11-03 用户反馈驱动）
+
+- **用户反馈**：规划页 `/travel/itineraries/new` 没有按原型替换成功——原型生成完成态的中列是「结构化摘要卡 + 逐日富卡片 + 交通行」，真实实现只有「时间/名称/时长」纯文本行。
+- **对照确认**（原型 8124 服务 + 真实页面同流程截图）：三列骨架/助手在右/天数 chips/真实地图均已对齐（P4a 即按原型做）；缺失的是草稿完成态的渲染层——①摘要卡（住宿建议/预算求解/节奏校验/天气与风险）②富卡片（编号圆点/评分/门票/来源标签/地址/营业）③卡片间交通行（方式+耗时+费用）。**数据层完整无缺**：PlaceFactsV2（rating/ticket_price_cny/avg_cost_cny/open_time_today/source/verification）、TripLegV2（mode/duration/cost）、lodgings/totals/health 全在草稿 document 里，纯渲染层未消费。
+- **修复**（`TravelWorkbenchGenerate.tsx` 渲染层重构，零后端改动、保存链路不动）：新增 `draftSummaryRows`（摘要卡四行：需求/住宿建议/预算求解/天气与风险，缺数据如实显示"未安排——对话或备选确认后选入"、预算"未核验"）、`draftItemRow`（富卡片：评分/门票 0=免费/餐饮人均/来源标签带核验色/地址/营业；交通行 `legLabel` 含"耗时未知"降级）、`draftDayCard`（天数+安排数+逐卡片）。
+- **验证**：组件测试 7 passed（+1 富卡片/摘要卡回归：评分 4.8/门票·免费/门票 ¥40/amap.live/地址/交通·步行·8 分钟/摘要如实文案）；旅游面 49 文件 **428 passed**；tsc 16 既有错误零新增；rebuild 退出 0 healthy；真实页面福州生成→新形态截图与原型对照一致→保存 201 自动进工作台（链路无损）。
+- **遗留差异（次要形态，本次未动）**：过程行在生成面板内（原型在助手气泡内折叠，功能等价）；顶部条徽章/保存按钮位置微差（信息等价）。如需进一步对齐再单独评估。
+- **清理**：13900001105（id=1338）status=0、会话吊销、refresh_tokens=0；8124 原型服务停止；验收标签页关闭。
+## 会话移交接手：对话窗口三件套 + 助手列四件套 + run_id 真机修复（2026-11-03）
+
+- **交接核对**：用户将本任务从上一会话移交；本地分支 0 领先 origin/main 21 提交（P1–P5 已全部合入远端），唯一独有内容为上节未提交的富草稿卡改动——审读完整后 ff 到最新 main 保留续用。vitest 421 passed、tsc 16 既有错误，基线干净。
+- **PR-1 对话窗口三件套（原型 C1/C2/C3）**：新增 `TravelProcessInline.tsx`（过程行进气泡：运行中单行替换显示当前阶段，结束折叠「✓ 已完成 N 个步骤」可展开阶段清单+Tool 耗时；后端图节点名→原型中文标签映射）+ `TravelMessageMarkdown.tsx`（复用主聊天 MarkdownContent，作用域收排版 13px）；`TravelWorkbenchGenerate` 接入打字机（复用 V1 `useTypewriter`，仅本轮新回复启用，历史直显）与 markdown 渲染（此前 `#`/`**` 裸奔）；助手气泡对齐原型（14px 圆角/描边/92% 宽/去逐条头像）；澄清 chips 内嵌气泡（C7）；自动滚底（新消息强制/流式贴底跟随，原型 logBottom）。
+- **真机 Bug 修复（SSE 归并 run_id 失配）**：后端每个事件盖服务端 `run_id`（travel.py:1105/1136，`travel-{uuid}`），前端归并层误与 `clientRunId` 比对 → **真机上全部 stage/tool 事件被静默丢弃**，中列阶段徽章/工具行自 P4a 起从未在真机显示过。修复：`TravelProcessState` 增 `serverRunId`，首事件绑定为本轮事实源，后续异源事件仍拒绝（防串台语义保留）；轮次键（runId=clientRunId）不变，tool 卡索引不受影响。回归测试覆盖「异源首绑+迟到拒绝」。
+- **PR-2 助手列四件套（C4）+ 页头（G1）**：生成页助手列补齐原型四件套——上下文 banner（brief/需求解读驱动，全程披露查询不入行程）、快捷查询三格（草稿期点击提示「生成完成后即可使用查询。」= 原型 2194-2197 行口径，走共享 useToast）、查询过程·Tool 状态箱（运行中跟随当前轮、空闲显示最近一轮、最新 5 条）、放大对话（右列宽度切换）；页头补紫色「草稿·未保存」胶囊+页头保存主钮（与中列并存=原型 ws-draftsave）；中列 stage 徽章同步中文标签映射。
+- **PR-3 字号规范（U1）**：本页 8/9/10px 共 26 处统一抬至 11px（规范禁止 8-10px 承载业务含义；11px 为原型自身小字基准）。
+- **验证**：旅游面 47 文件 **425 passed**（基线 421 + 新增 4：过程行/markdown/四件套/run_id 回归）；tsc 16 既有错误零新增；`docker compose -p agent` 从本工作树 rebuild frontend 三轮均 healthy；真机全流程四轮点测（福州/杭州/厦门/成都）——过程行实时阶段、折叠摘要展开（10 阶段+7 Tool 耗时）、markdown 结构化渲染、页头动作、放大对话全部通过；保存→replace 进工作台链路无损。
+- **已知边界**：三类契约位（机票/节事/公告）按纪律如实降级，不伪造数据；打字机动画在测试环境经 matchMedia stub 固定 reduced-motion 口径。
+
+## 热门城市推荐迁常量清单（2026-11-03 用户追加需求）
+
+- **需求**：欢迎语「热门城市：厦门/杭州/福州」让用户误以为只能规划三个城市。根因：推荐池取本地种子池（poi_seed 仅 3 城），而 POI 候选自 live 模式起已全国覆盖（TRAVEL_POI_SOURCE=live，识别名录 120+ 城）。
+- **实现**：`backend/travel/recommend.py` 重写——新增 `HotCity` + `HOT_CITIES` 常量清单（10 城：北京/上海/西安/成都/厦门/重庆/长沙/三亚/杭州/福州，含亮点与偏好标签），`recommend_cities` 改为对常量清单按偏好标签命中数打分（稳定排序保确定性）；清单城市全部在识别名录 CITY_DIRECTORY 内（chips 重发可回填 destination 的前提），docstring 记录维护约定。偏好个性化保留（命中 →「根据你的偏好」前缀 + 贴合标注）。追问文案行升为 5 城、destination chips 升为 6 个；slot_filler DISCOVER 与 GET /travel/recommend 口径不变。
+- **测试**：定向 62 passed（test_p0_mvp 3 个推荐用例改写为常量语义 + 新增清单覆盖种子三城回归；test_clarification_plan 新增 chips 含种子外城市回归，可路由性由既有逐项断言自动覆盖）；全 travel 域 1470 passed / 8 skipped / 9 xfailed，2 个 booking 生命周期用例（b13/b20）在整包负载下失败、单跑均通过——墙钟 TTL 敏感 flake，booking 目录零改动与本变更无关。
+- **真机**：`docker compose -p agent` rebuild app healthy；新会话发「帮我规划个行程」→ 欢迎语展示 5 城示例 + 6 chips；点击「规划成都」→ 重发回填 destination=成都 → 下一轮按 P0-11 只追问天数，banner 同步「已识别：成都」。
+
+## 对话窗减法与回车发送（2026-11-03 用户口径）
+
+- **用户反馈**：①生成页助手窗的上下文 banner（「先告诉我目的地…」）与酒店/美食/动车三按钮不要显示；②对话输入框回车应直接发送而不是换行。
+- **实现**：`TravelWorkbenchGenerate` 移除 banner 与快捷查询三格（保留 Tool 状态箱与放大对话；banner 派生量与 useToast 依赖一并清除）；两处对话输入框（生成页 + `TravelV2TripConversation` 工作台对话）加 Enter 即发送——Shift+Enter 保留换行，输入法组词中的回车不误发（`nativeEvent.isComposing` 守卫），placeholder 标注「Enter 发送，Shift+Enter 换行」。
+- **测试**：vitest 426 passed（四件套用例改写为「不渲染 banner/三按钮 + Tool 箱/放大对话/页头动作保留」+ 新增回车发送用例：Enter 调 stream 一次、Shift+Enter 不调）；tsc 16 既有错误零新增。
+- **真机**：frontend rebuild healthy——空态确认 banner/三按钮消失、仅剩 Tool 状态箱；真实键盘事件按 Enter 直接发送（用户消息上屏、过程行实时阶段、中列过程面板同步）。注：自动化工具 `locator.press("Enter")` 不派发 keydown 属 IAB 工具实现限制，真实键盘无此问题（CUA keypress 同路径验证通过）。
+
+## 日期追问槽 + 草稿自动保存 + 地图按天分色连线（2026-11-03 用户需求四连）
+
+- **需求补全（用户委托设计）**：①行程生成后没有日期——采用「前置追问」而非事后选日期组件：日期影响天气/排程/预算，事后改=重规划，越早问越省；②对话优先产品形态下不建独立日期选择器（生成后改日期在对话里说「改成 11 月 10 号出发」走既有重规划链路，比前端改字段诚实——改日期=天气/风险/价格全变必须重算）。
+- **实现（后端）**：`start_date` 升为第三必填槽（destination→days→start_date，P0-11 一次只问一个）；`_date_options` 四枚快捷 chips（今天出发/明天出发/这周末出发/先不定日期，label 即 message 全部可重解析）；「先不定日期/日期没定」显式放弃表达 → `TravelBrief.start_date_flexible`（粘滞置位，追问链收口，行程按「第 N 天」排；不参与排程指纹，对已有行程置位不触发重排）；SLOT_QUESTIONS 日期话术补全（顺带修复该字典 start_date 重复键的历史笔误）。日期解析词表既有能力直接复用（今天/明天/周末/周X/具体日期，验收 #63/#64）。
+- **实现（前端）**：澄清 chips 自动渲染新日期选项，零改动。
+- **③ 自动保存（用户口径：保存后也能调整，确认门多余）**：`useTravelPlanGeneration` 生成完成即自动保存（幂等键 + 服务端写状态机不变，UNKNOWN「同一请求安全重试」保留；补挂 pendingPlanWriteRef）；移除「保存为正式行程/再调整一下」按钮族与页头紫色草稿胶囊；中列预览改为「行程已生成 · 正在保存为正式行程」（保存窗口内可见），保存成功自动 replace 进工作台。
+- **① 地图按天分色连线（用户口径）**：`TravelV2Map` 重写为全天数视图——同天标记按动线顺序折线相连（L.polyline），不同天不同色（DAYCOLORS 清单，>6 天循环），图例按天显示色点；核验信息（已核验/估算/未知）从标记配色改为 tooltip 承载；「查询候选」保持独立灰底形态。`travelV2MapData` 新增 `TRAVEL_MAP_DAY_COLORS`/`travelMapDayColor`/`getAllTravelMapPoints`（候选挂当前选中天）。生成页左列与工作台地图列（桌面+移动）三处调用点同步。
+- **测试**：前端 vitest **427 passed**（自动保存/预览窗口/UNKNOWN 同键重试/回车发送/地图全天数取点等用例改写与新增）、tsc 16 既有错误零新增；后端定向 44+57 passed（澄清计划/日期选项可路由性/弹性收口/端到端与 turn_decision 补弹性标志或「先不定日期」）。全 travel 域套件在途（日期升必填对存量流程测试的波及修复进行中）。
+- **真机**：全链点测通过——「帮我规划个行程」→ 城市 chips → 天数 chips → **日期追问 chips（今天/明天/这周末/先不定）** → 点「明天出发」→ 生成（左列天数卡显示 2026-11-04/05/06 真实日期）→ **地图三天分色连线 + 天色图例** → 自动保存中 → 自动 replace 进工作台。
+
+## 续工收口：日期槽全量波及修复 + 预算口径 + 评测基线升级（2026-11-03 续）
+
+- **全量波及修复**（日期升必填后首跑 79 failed → 逐文件修复）：slot_llm_golden 数据集 42 条 plan 用例按规则抽取重算 missing/ask 基线（黄金基线跟随产品语义升级）；test_travel_graph 9 处、test_scenarios 8 处、test_run_context 6 处、test_turn_decision/test_slot_filler/test_intent/test_requirement_agent_contract/test_llm_slot_enrichment/test_checkpointer/test_booking_candidate/test_stop1/test_stop3 逐处补「先不定日期」弹性表达或 `start_date_flexible=True` 基底（对应用户真实状态）；test_slot_llm_golden 的 complex 用例保持原话断言不改消息。定向复验：四文件 192 passed、checkpointer 18 passed、stop3 7 passed、slot_filler/intent/contract/enrichment 全绿。
+- **评测数据集走守卫合规路径**：cases.jsonl 被 DATA-01 hash 守卫锁定，首次原地修改被 fail-fast 拦截（符合设计）；改为规范升级——23 条 ready 期望用例的问题句统一补「12月5号出发」（ready 语义 = 完整需求，日期现为需求的一部分，比弹性路径保持更高评测强度；固定远期周六避免时钟敏感），manifest content_hash 用 loader 同一 `file_content_hash` 重算（5adaad807a033162），notes 记录变更理由，PR review 承担审核。test_travel_dataset 19 passed。
+- **② 预算高的既有机制（用户问"有什么办法降预算"）**：后端已有完整预算协商链——①生成时超预算：comfortable 档自动降 economy 并明示（budget_expert_node M3-f）；②经济档仍超：输出「最低可行预算+缺口」缺口卡供协商；③对话改预算：「预算砍到 1200」→ calculate_budget 全量重算 + 改写建议；④档位关键词：说「经济/实惠/性价比」即 economy 档（默认），「舒适/住好点」升 comfortable。结论：无需新功能，用法 = 在需求里给预算数字（硬约束）+ 说「经济实惠」，行程自动按经济档排（餐饮人均 0-80 带lodging 快捷连锁、每日 ≤4 点、公交优先），超支时缺口卡给出最低可行预算。
+
+## 续工终收：全量套件全绿 + quality_golden 根因定界（2026-11-03 终）
+
+- **全 travel 域最终回归**：**1472 passed / 8 skipped / 9 xfailed**，仅余 quality_golden 与 1 个 booking ERROR，逐一排查定界。
+- **quality_golden 两层问题、均已收口**：①超时（pytest-timeout 300s 掐断）根因 = 本机 `.env` `TRAVEL_CHECKPOINTER_ENABLED=true` 使单跑时域图带 PostgresSaver，卡 `psycopg wait_conn`（`TRAVEL_CHECKPOINTER_ENABLED=false` 时 41s 跑完）——环境因素非代码回归，与本任务改动无关；②契约失败（7 例 turn1 无行程）：travel_v2 数据集 8 条「turn1 要求出行程但顶层无 ready 期望」的用例（D 组预算不可能/G 组金标/B04/F02）漏在首轮 ready 筛选外，同守卫合规流程补「12月5号出发」并同步 manifest hash（2bf38964690b1bf1）；travel v1 数据集同型扫出 5 条漏网一并补齐（271b00be2ff9b44e）。**quality_golden 2 passed（39s）、test_travel_dataset 19 passed**。
+- **booking stop_e ERROR**：单跑 passed（120s）——与前述 b13/b20 同型负载 flake（墙钟敏感），booking 目录零改动。
+- **最终状态**：travel 域全部测试文件在本机环境口径下全绿；前端 vitest 427 passed、tsc 16 既有错误零新增；真机全链（澄清四轮→日期→自动保存→分色地图→工作台）截图验证通过。
+
+## 会话收尾（2026-11-03）
+
+- **提交与 PR**：用户确认后 3 个 commit 推送并创建 **PR #286**（https://github.com/Jayus-07/agent/pull/286，`codex/travel-proto-p6-acceptance` → `main`）：`5cac42f` 前端原型复刻收口（13 文件）、`f12d043` 后端日期槽+推荐池+评测基线（24 文件）、`ddd2221` 任务文档。工作树干净。
+- **容器终态**：`agent-app-1`/`agent-frontend-1` 均为本工作树构建、healthy（7h+），供用户验收使用；未动共享栈其他服务。
+- **验收账号交接**：测试账号 `13800130266` / `test12345`（本会话注册，走正常注册流程）保留供用户逐页验收登录；验收完成后可按上会话同款口径清理（status=0、会话吊销、refresh_tokens 清零）。
+- **待办交接**：①PR CI 与 review 通过后合并 main（历史惯例 merge commit）；②用户逐页人工验收（原型对照清单见本文件 2026-11-03 各段与 TASK §2 矩阵）；③验收后的账号清理与（如需）下一轮迭代。
+- **临时产物**：pytest 全量日志在 `d:/tmp/travel_full_*.log`、`d:/tmp/quality_golden*.log`（临时目录，不入库）。

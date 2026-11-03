@@ -49,13 +49,26 @@ def test_recommend_prefers_matching_tags():
     from backend.travel.recommend import recommend_cities
 
     recs = recommend_cities(["自然", "亲子"], top=3)
-    assert recs, "种子池非空时必须有推荐"
+    assert recs, "常量清单非空时必须有推荐"
     cities = [r.city for r in recs]
     assert len(cities) == len(set(cities)) <= 3
-    # 有命中的城市分数必大于 0；福州有自然+亲子候选，应命中
-    fz = next(r for r in recs if r.city == "福州")
-    assert fz.score > 0
-    assert "自然" in fz.matched_preferences
+    # 命中数降序：成都/三亚同时命中自然+亲子（2 分）应压过单命中城市，
+    # 同分按清单顺序稳定（成都先于三亚）
+    assert recs[0].city == "成都"
+    assert recs[0].score == 2
+    assert {"自然", "亲子"} <= set(recs[0].matched_preferences)
+
+
+def test_recommend_pool_covers_seed_cities():
+    """推荐池迁常量清单后，种子三城（福州/厦门/杭州）仍在池内不缩水。"""
+    from backend.travel.recommend import HOT_CITIES, recommend_cities
+
+    all_cities = {r.city for r in recommend_cities([], top=len(HOT_CITIES))}
+    assert {"福州", "厦门", "杭州"} <= all_cities
+    # 无偏好：按清单顺序取前 N 且分数全 0（纯热度榜语义）
+    recs = recommend_cities([], top=3)
+    assert [r.city for r in recs] == ["北京", "上海", "西安"]
+    assert [r.score for r in recs] == [0, 0, 0]
 
 
 def test_recommend_deterministic():
@@ -71,6 +84,8 @@ def test_recommend_line_rendering():
 
     line = render_recommendation_line(recommend_cities(["美食"], top=2))
     assert "先看看" in line
+    # 美食标签命中（西安/成都等）→ 走个性化前缀而非纯热度榜
+    assert "根据你的偏好" in line
     assert "、".join([""]) != line
 
 

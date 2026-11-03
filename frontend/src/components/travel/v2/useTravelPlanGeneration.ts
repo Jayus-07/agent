@@ -4,8 +4,8 @@
  * useTravelPlanGeneration — V2 生成流引擎（P4 从 TravelChatPage 抽出复用）
  *
  * 职责：无正式行程时的「对话伴随生成」全流程——streamTravelPlanV2 SSE 消费
- * （过程行/tool.card/澄清选项）、草稿预览（A5 两段式）、确认保存
- * （createTravelTripV2 幂等 + UNKNOWN 同请求安全重试）、草稿撤下。
+ * （过程行/tool.card/澄清选项）、行程生成完成即自动保存（2026-11-03 用户
+ * 口径取消 A5 确认门；createTravelTripV2 幂等 + UNKNOWN 同请求安全重试）。
  *
  * 红线（P4a 从 TravelChatPage 原实现抽出，逻辑零改动）：
  *  - 写状态机 travelWriteStatus 五态与幂等键（UNKNOWN 只允许同一请求重试）；
@@ -59,7 +59,8 @@ export function visibleTravelMessage(text: string): string {
 
 type PendingTravelPlanWrite = { key: string; input: CreateTravelTripV2; runId: string; replyText: string }
 
-/** 原型 A5 语义：SSE 完成后先出逐日草稿预览，用户确认才落正式行程（v1）。 */
+/** 生成完成即自动保存（2026-11-03 用户口径，原 A5 两段式确认已取消）：
+ * 中列预览仅在保存请求窗口内展示；确认后进工作台调整。 */
 export type DraftPlanPreview = { runId: string; replyText: string; input: CreateTravelTripV2 }
 
 export interface TravelPlanGenerationOptions {
@@ -138,30 +139,6 @@ export function useTravelPlanGeneration({ conversationId, messages, setMessages,
     return persistPlanWrite(intent)
   }, [persistPlanWrite, writeFeedback?.status])
 
-  /** 草稿确认保存：首次点击生成幂等键；UNKNOWN 后走「同一请求安全重试」，不得另起请求。 */
-  const saveDraftPlan = useCallback(async () => {
-    if (!draftPlan || planWriteLockRef.current || writeFeedback?.status === 'UNKNOWN') return
-    const intent: PendingTravelPlanWrite = {
-      key: createTravelV2IdempotencyKey(),
-      input: draftPlan.input,
-      runId: draftPlan.runId,
-      replyText: draftPlan.replyText,
-    }
-    pendingPlanWriteRef.current = intent
-    await persistPlanWrite(intent)
-  }, [draftPlan, persistPlanWrite, writeFeedback?.status])
-
-  /** 撤下草稿：不落库，保留对话继续调整（再次生成会覆盖草稿）。 */
-  const discardDraftPlan = useCallback(() => {
-    if (planWriteLockRef.current) return
-    setDraftPlan(null)
-    setMessages((current) => [...current, {
-      id: `draft-discard-${Date.now()}`, conversationId, turnId: `draft-discard-${Date.now()}`,
-      role: 'assistant', text: '草稿已撤下，没有保存。继续告诉我你的调整想法，我会重新生成。',
-      tag: '草稿未保存', tone: 'warn',
-    }])
-  }, [conversationId, setMessages])
-
   const sendText = useCallback(async (raw: string) => {
     const text = raw.trim()
     if (!text || loading || !canSend || pendingPlanWriteRef.current) return
@@ -216,21 +193,30 @@ export function useTravelPlanGeneration({ conversationId, messages, setMessages,
         setClarifyOptions(options.length ? { runId: clientRunId, options } : null)
       }
       if (outcome.kind === 'plan' && response.itinerary) {
-        // 原型 F03：先生成草稿预览，用户确认后才创建正式行程（不再自动保存）
+        // 2026-11-03 用户口径：草稿确认门取消——生成完成即自动保存
+        // （幂等键 + 服务端写状态机不变），保存成功后进工作台继续调整
+        // （修订/撤销/删除都在服务端）；中列预览在保存窗口内仍可见，
+        // UNKNOWN「同一请求安全重试」语义不变。
         const document = itineraryToTripDocumentV2(response.itinerary)
-        setDraftPlan({
-          runId: clientRunId,
-          replyText,
-          input: {
-            title: `${document.brief.destination} ${document.brief.day_count} 天行程`,
-            document,
-            conversation_id: conversationId,
-          },
-        })
+        const input = {
+          title: `${document.brief.destination} ${document.brief.day_count} 天行程`,
+          document,
+          conversation_id: conversationId,
+        }
+        setDraftPlan({ runId: clientRunId, replyText, input })
         setMessages((current) => [...current, {
           id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
           role: 'assistant', text: replyText, tag: '行程草稿 · 待确认保存', tone,
         }])
+        // 挂待决写（UNKNOWN 的「同一请求安全重试」以此为准），再发起自动保存
+        const intent: PendingTravelPlanWrite = {
+          key: createTravelV2IdempotencyKey(),
+          input,
+          runId: clientRunId,
+          replyText,
+        }
+        pendingPlanWriteRef.current = intent
+        void persistPlanWrite(intent)
         return
       }
       setMessages((current) => [...current, {
@@ -261,8 +247,6 @@ export function useTravelPlanGeneration({ conversationId, messages, setMessages,
     clarifyOptions,
     cardsForTurn,
     sendText,
-    saveDraftPlan,
-    discardDraftPlan,
     writeFeedback,
     retryPendingPlanWrite,
     pendingPlanWriteRef,

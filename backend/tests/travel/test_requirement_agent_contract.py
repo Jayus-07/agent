@@ -137,9 +137,9 @@ class TestMissingSlotDetection:
 
     def test_no_clarification_when_complete(self):
         agent = RequirementAgent()
-        brief = agent.extract_fresh_brief("福州3天")
+        brief = agent.extract_fresh_brief("福州3天，11月8号出发")
         assert agent.detect_missing(brief) == []
-        assert agent.build_clarification(brief, "福州3天") == ""
+        assert agent.build_clarification(brief, "福州3天，11月8号出发") == ""
 
 
 class TestMemoryBoundary:

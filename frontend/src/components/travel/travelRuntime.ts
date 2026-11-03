@@ -431,7 +431,10 @@ export interface TravelProcessTool {
 }
 
 export interface TravelProcessState {
+  /** 轮次键 = 前端 clientRunId（tool 卡与消息 turnId 的索引键）。 */
   runId: string
+  /** 服务端 run_id（travel-{uuid}，与 clientRunId 不同源）：首个带 run_id 的事件绑定为本轮事实源。 */
+  serverRunId?: string
   lastSeq: number
   status: TravelProcessStatus
   stages: Record<string, { status: TravelStageProcessStatus }>
@@ -474,12 +477,24 @@ export function reduceTravelStreamEvent(
   event: TravelStreamEvent,
 ): TravelProcessState {
   const data = event.data
-  const runId = stringField(data, 'run_id')
+  const eventRunId = stringField(data, 'run_id')
   const seq = numberField(data, 'seq')
-  if (runId !== state.runId || seq == null || seq <= state.lastSeq) return state
+  // 服务端 run_id 与前端 clientRunId 是两套标识（后端每个事件盖 travel-{uuid}）。
+  // 首个带 run_id 的事件把 serverRunId 绑定为本轮事实源；此后 run_id 不一致的
+  // 事件视为其他轮次的迟到事件丢弃。若不绑定，全部 stage/tool 事件都会因
+  // 「run_id ≠ clientRunId」被静默丢掉，过程面板与工具行在真机上永远为空。
+  let serverRunId = state.serverRunId
+  if (serverRunId === undefined) {
+    if (!eventRunId) return state
+    serverRunId = eventRunId
+  } else if (eventRunId && eventRunId !== serverRunId) {
+    return state
+  }
+  if (seq == null || seq <= state.lastSeq) return state
 
   const next: TravelProcessState = {
     ...state,
+    serverRunId,
     lastSeq: seq,
     stages: { ...state.stages },
     tools: state.tools.map((tool) => ({ ...tool })),

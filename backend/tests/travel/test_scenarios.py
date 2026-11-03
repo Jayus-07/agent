@@ -76,12 +76,14 @@ class TestMultiturn:
         assert "玩几天" in ans
         assert "去哪个城市" not in ans
         third = _ask(memory_graph, "2天", tid)
-        assert third.get("itinerary") is not None
-        assert (third["itinerary"]["brief"]["destination"] == "杭州")
+        # 日期槽（2026-11-03）：天数已答后追问日期，弹性答复收口不再追问
+        fourth = _ask(memory_graph, "先不定日期", tid)
+        assert fourth.get("itinerary") is not None
+        assert (fourth["itinerary"]["brief"]["destination"] == "杭州")
 
     def test_t3_cross_turn_days_change_replans(self, memory_graph):
         tid = _tid()
-        first = _ask(memory_graph, "杭州2天行程，2个人", tid)
+        first = _ask(memory_graph, "杭州2天行程，2个人，先不定日期", tid)
         assert first.get("itinerary") is not None
         second = _ask(memory_graph, "改成3天", tid)
         it = second.get("itinerary") or {}
@@ -98,7 +100,7 @@ class TestMultiturn:
 
     def test_t4_vague_pace_feedback_replans(self, memory_graph):
         tid = _tid()
-        _ask(memory_graph, "厦门2天行程，节奏紧凑", tid)
+        _ask(memory_graph, "厦门2天行程，节奏紧凑，先不定日期", tid)
         second = _ask(memory_graph, "太赶了", tid)
         it = second.get("itinerary") or {}
         assert (it.get("brief") or {}).get("pace") == "relaxed"
@@ -106,7 +108,7 @@ class TestMultiturn:
 
     def test_t5_avoid_removes_from_must_go(self, memory_graph):
         tid = _tid()
-        _ask(memory_graph, "福州2天，一定要去鼓山", tid)
+        _ask(memory_graph, "福州2天，一定要去鼓山，先不定日期", tid)
         second = _ask(memory_graph, "不想去鼓山了", tid)
         brief = second.get("brief") or {}
         assert "鼓山" not in (brief.get("must_go") or [])
@@ -119,7 +121,7 @@ class TestMultiturn:
         """强持久化策略：降级后端里跨轮改单必须明说不可用，而不是静默假成功。"""
         monkeypatch.setattr(T, "TRAVEL_REQUIRE_PERSISTENCE", True)
         tid = _tid()
-        _ask(memory_graph, "杭州2天行程，2个人", tid)
+        _ask(memory_graph, "杭州2天行程，2个人，先不定日期", tid)
         second = _ask(memory_graph, "改成3天", tid)
         notes = second.get("notes", [])
         assert any("跨轮修改行程暂不可用" in n for n in notes)
@@ -131,7 +133,7 @@ class TestMultiturn:
         """模拟「新 worker + 共享持久后端」：同 checkpointer 重建图后可续。"""
         saver = memory_graph.checkpointer
         tid = _tid()
-        _ask(memory_graph, "杭州2天行程，2个人", tid)
+        _ask(memory_graph, "杭州2天行程，2个人，先不定日期", tid)
         rebuilt = build_travel_graph(checkpointer=saver)
         second = _ask(rebuilt, "改成3天", tid)
         it = second.get("itinerary") or {}
@@ -171,7 +173,7 @@ class TestDegradation:
         monkeypatch.setattr(T, "TRAVEL_PREFS_ENABLED", False)
         with _ProviderFailure(fail_transit=True, fail_poi=False):
             final = get_travel_graph().invoke(
-                new_travel_graph_input("厦门2天行程，2个人",
+                new_travel_graph_input("厦门2天行程，2个人，先不定日期",
                                        session_id="s-w2", conversation_id="s-w2"),
                 config={"recursion_limit": 40, "configurable": {"thread_id": _tid()}})
         legs = [leg for d in final["itinerary"]["days"] for leg in d.get("legs", [])]
@@ -190,7 +192,7 @@ class TestDegradation:
         import backend.rag.pipeline as P
         monkeypatch.setattr(P, "get_rag_pipeline", lambda: _Boom())
         final = gb.get_travel_graph().invoke(
-            new_travel_graph_input("杭州2天行程，1个人",
+            new_travel_graph_input("杭州2天行程，1个人，先不定日期",
                                    session_id="s-w3", conversation_id="s-w3"),
             config={"recursion_limit": 40, "configurable": {"thread_id": _tid()}})
         assert final.get("itinerary") is not None
@@ -206,7 +208,7 @@ class TestDegradation:
         monkeypatch.setattr(prefs, "get_preferences", _boom)
         monkeypatch.setattr(prefs, "upsert_preferences", _boom)
         monkeypatch.setattr(T, "TRAVEL_PREFS_ENABLED", True)
-        final = _ask(memory_graph, "杭州2天行程，2个人", _tid())
+        final = _ask(memory_graph, "杭州2天行程，2个人，先不定日期", _tid())
         assert final.get("itinerary") is not None
 
     def test_w5_far_trip_no_weather_action(self, monkeypatch):
@@ -331,7 +333,7 @@ class TestConcurrency:
         def run(city: str):
             tid = _tid()
             final = graph.invoke(
-                new_travel_graph_input(f"{city}2天行程，2个人",
+                new_travel_graph_input(f"{city}2天行程，2个人，先不定日期",
                                        session_id=tid, conversation_id=tid),
                 config={"recursion_limit": 40, "configurable": {"thread_id": tid}})
             return (final["itinerary"]["brief"]["destination"],
@@ -372,7 +374,7 @@ class TestConcurrency:
         def run(i: int):
             tid = _tid()
             final = graph.invoke(
-                new_travel_graph_input("福州2天行程，2个人",
+                new_travel_graph_input("福州2天行程，2个人，先不定日期",
                                        session_id=tid, conversation_id=tid),
                 config={"recursion_limit": 40, "configurable": {"thread_id": tid}})
             return final.get("itinerary") is not None

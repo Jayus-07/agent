@@ -592,7 +592,13 @@ export default function TravelV2TripConversation({
     <form onSubmit={submit} className="shrink-0 border-t border-[#edf1f6] p-2.5">
       <label htmlFor={`trip-conversation-${trip.trip_id}`} className="sr-only">与 AI 讨论或修改当前行程</label>
       <div className="flex items-end gap-2 rounded-xl border border-[#dfe8f3] bg-[#fbfdff] p-1.5">
-      <textarea id={`trip-conversation-${trip.trip_id}`} rows={2} maxLength={4000} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={working || Boolean(operation) || Boolean(refreshPending)} placeholder="询问行程，或提出一项修改…" className="min-h-10 flex-1 resize-none bg-transparent px-2 py-1 text-[11px] leading-5 text-[#344b67] outline-none placeholder:text-[#9aa8b8] disabled:opacity-60" />
+      <textarea id={`trip-conversation-${trip.trip_id}`} rows={2} maxLength={4000} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => {
+        // 与生成页一致：Enter 即发送、Shift+Enter 换行；输入法组词中的回车是选词，不发送
+        if (event.key !== 'Enter' || event.shiftKey) return
+        if ((event.nativeEvent as KeyboardEvent).isComposing) return
+        event.preventDefault()
+        if (draft.trim()) void submit(event as unknown as React.FormEvent<HTMLFormElement>)
+      }} disabled={working || Boolean(operation) || Boolean(refreshPending)} placeholder="询问行程，或提出一项修改…（Enter 发送，Shift+Enter 换行）" className="min-h-10 flex-1 resize-none bg-transparent px-2 py-1 text-[11px] leading-5 text-[#344b67] outline-none placeholder:text-[#9aa8b8] disabled:opacity-60" />
         <button type="submit" aria-label="发送消息" disabled={working || Boolean(operation) || Boolean(refreshPending) || !draft.trim()} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#2878f5] text-white disabled:opacity-50"><Send size={14} aria-hidden /></button>
       </div>
       <div className="mt-1.5 flex items-center justify-between px-1 text-[8px] text-[#9aa8b8]"><span className="inline-flex items-center gap-1"><MessageCircle size={10} aria-hidden />只修改服务端允许的单项内容</span><span>Trip v{trip.revision}</span></div>

@@ -272,7 +272,7 @@ class TestTravelPrefilter:
         assert is_travel_request("周末的订单量") is False
 
     def test_city_plus_days_detected(self):
-        assert is_travel_request("福州2天，1个人，轻松一点") is True
+        assert is_travel_request("福州2天，1个人，轻松一点，先不定日期") is True
 
     def test_business_time_window_not_detected(self):
         """「福州的近3天订单量」必须留在业务链路，不能被旅游域抢走。"""
@@ -318,7 +318,7 @@ class TestEndToEnd:
     def test_full_plan_succeeds_and_passes_validation(self):
         final = self._invoke(
             "帮我规划福州3天行程，2个人，喜欢人文和摄影，"
-            "一定要去三坊七巷和鼓山，预算3000元"
+            "一定要去三坊七巷和鼓山，预算3000元，先不定日期"
         )
         result = build_travel_graph_result(final)
         assert result["status"] == STATUS_SUCCESS
@@ -330,12 +330,12 @@ class TestEndToEnd:
 
     def test_must_go_lands_in_itinerary(self):
         final = self._invoke(
-            "福州3天，1个人，一定要去三坊七巷和鼓山")
+            "福州3天，1个人，一定要去三坊七巷和鼓山，先不定日期")
         names = [i["title"] for d in final["itinerary"]["days"] for i in d["items"]]
         assert "三坊七巷" in names and "鼓山" in names
 
     def test_plan_is_deterministic(self):
-        message = "厦门3天行程，2个人，想吃美食"
+        message = "厦门3天行程，2个人，想吃美食，先不定日期"
         first = self._invoke(message)
         second = self._invoke(message)
         # 确定性断言的是「规划产物」（天数/POI 序列/时刻/费用），不含生成
@@ -355,7 +355,7 @@ class TestEndToEnd:
         assert a == b
 
     def test_report_does_not_expose_unverified_seed_values(self):
-        final = self._invoke("杭州2天行程，1个人")
+        final = self._invoke("杭州2天行程，1个人，先不定日期")
         answer = build_travel_graph_result(final)["final_answer"]
         assert "示例数据" not in answer
         assert "seed:local" not in answer
@@ -390,21 +390,21 @@ class TestEndToEnd:
         # retrieve_candidates），行为断言不变（候选池空 → 如实披露）
         monkeypatch.setattr(poi_expert, "retrieve_candidates",
                             lambda brief: ([], []))
-        final = self._invoke("福州3天行程，1个人")
+        final = self._invoke("福州3天行程，1个人，先不定日期")
         result = build_travel_graph_result(final)
         assert result["status"] == STATUS_NO_DATA
         assert "暂时无法" in result["final_answer"]
 
     def test_relaxed_pace_yields_lighter_days(self):
-        relaxed = self._invoke("福州2天，1个人，轻松一点")
-        intense = self._invoke("福州2天，1个人，紧凑一点")
+        relaxed = self._invoke("福州2天，1个人，轻松一点，先不定日期")
+        intense = self._invoke("福州2天，1个人，紧凑一点，先不定日期")
         relaxed_pois = sum(len(d["items"]) for d in relaxed["itinerary"]["days"])
         intense_pois = sum(len(d["items"]) for d in intense["itinerary"]["days"])
         assert relaxed_pois < intense_pois
 
     def test_every_visit_respects_opening_hours(self):
         """端到端最强断言：所有到访项都必须落在各自开放时段内。"""
-        final = self._invoke("厦门4天怎么玩？3个人，想吃美食和拍照")
+        final = self._invoke("厦门4天怎么玩？3个人，想吃美食和拍照，先不定日期")
         for day in final["itinerary"]["days"]:
             for item in day["items"]:
                 if item["kind"] != "visit":
