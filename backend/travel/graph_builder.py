@@ -258,19 +258,13 @@ def _build_checkpointer() -> tuple[Any, str]:
 
     if TRAVEL_CHECKPOINTER_BACKEND == "postgres":
         try:
-            import psycopg
-            from langgraph.checkpoint.postgres import PostgresSaver
+            # 审计 P1-1（2026-11-03）：单条裸 psycopg 连接在 PG 重启后死亡且
+            # 永不重建，改为共享的 psycopg_pool 构建函数（探活 + 坏连接自愈）
+            from backend.orchestration.checkpoint.pg_saver import (
+                create_pooled_postgres_saver,
+            )
 
-            from backend.config.database import MEMORY_DB_CONFIG
-            c = MEMORY_DB_CONFIG
-            dsn = (f"postgresql://{c['user']}:{c['password']}"
-                   f"@{c['host']}:{c['port']}/{c['dbname']}")
-            # autocommit：checkpointer 写入需即时提交（官方建议）
-            conn = psycopg.Connection.connect(dsn, autocommit=True)
-            checkpointer = PostgresSaver(conn)
-            checkpointer.setup()  # 首次建表（幂等）
-            logger.info("[TravelGraph] checkpointer enabled (PostgresSaver: %s/%s)",
-                        c["host"], c["dbname"])
+            checkpointer = create_pooled_postgres_saver(owner="TravelGraph")
             # TTL 清理守护：与主图 / 客服域共用同一组表，全进程单例幂等启动
             try:
                 from backend.orchestration.graph.checkpointer_cleanup import (
