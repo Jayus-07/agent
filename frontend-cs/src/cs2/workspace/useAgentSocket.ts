@@ -60,7 +60,13 @@ export function useAgentSocket(
       }
       if (disposed) return
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-      const url = `${proto}://${location.host}${wsPath}?ticket=${encodeURIComponent(ticket)}`
+      // W3（2026-11-03）：Next standalone 生产容器无 /ws/* 路由，页面同源
+      // 握手必败（恒「连接中断·轮询降级」）。构建时经 NEXT_PUBLIC_WS_ORIGIN
+      // 注入网关 origin（NEXT_PUBLIC_* 由 next build 内联进客户端产物）；
+      // 未注入时回退现状 location.host，零破坏。
+      const origin =
+        process.env.NEXT_PUBLIC_WS_ORIGIN || `${proto}://${location.host}`
+      const url = `${origin}${wsPath}?ticket=${encodeURIComponent(ticket)}`
       ws = new WebSocket(url)
 
       ws.onopen = () => {

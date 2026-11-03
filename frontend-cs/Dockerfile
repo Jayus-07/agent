@@ -18,6 +18,13 @@ COPY . .
 ARG API_URL=http://apisix:9080
 ENV API_URL=${API_URL}
 
+# W3：坐席端 WS 网关 origin（构建期内联进客户端产物）。
+# Next standalone 容器无 /ws/* 路由，页面同源握手必败；经此注入网关
+# origin（本机 ws://127.0.0.1:9080，ECS 按部署网关注入）。空值 = 回退
+# location.host（旧行为，零破坏）。
+ARG NEXT_PUBLIC_WS_ORIGIN=
+ENV NEXT_PUBLIC_WS_ORIGIN=${NEXT_PUBLIC_WS_ORIGIN}
+
 # 生产构建（standalone 模式）
 RUN npm run build
 

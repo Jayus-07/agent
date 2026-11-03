@@ -65,6 +65,8 @@ docker compose --env-file .env.production up -d app rag-service mcp-service agen
 
 退款写入开关 `CS_REFUND_REQUEST_MODE` 默认 disabled（安全默认，env.production 未显式配置即关闭）；`CS_BUSINESS_GATEWAY_MODE` 是查询/业务网关模式（代码默认 sandbox，disabled 不是受支持值），不是资金开关——见 docs/domains/customer-service.md。如需启用客服资金链路（退款审核闭环、商城订单/物流契约），两个开关必须同启为 `http` 且 business-service 可达：compose 已定义 `business-mock`（docker-compose.4c8g.yml，演示/联调事实源，重启清空内存态），但不在上方启动清单内——启用时须将其加入 build 与 up -d 列表；生产收单/真实支付属商城域另立项，不得把 mock 当生产支付。
 
+坐席端 WS 自动派单依赖构建参数 `NEXT_PUBLIC_WS_ORIGIN`（frontend-cs 构建期内联，[W3 2026-11-03]）：本机默认 `ws://127.0.0.1:9080`；ECS 部署必须在 .env.production 注入对外网关 origin（如 `wss://cs.example.com`，走 HTTPS 入口反向代理需支持 WebSocket upgrade）。缺省回退页面同源——Next standalone 容器无 `/ws/*` 路由，回退即坐席端恒「连接中断·轮询降级」（自动派单失效，仅手动认领可用）。
+
 模型供应商需由管理端登记为可从生产服务器访问的外部地址。host.docker.internal:8088 是本机联调地址，不能直接视为生产模型地址。登记/切换模型继续经过预检、身份围栏和重建确认。
 
 MCP 能力中心出站白名单 `MCP_EGRESS_ALLOWLIST` 默认未配置即不启用（新建/编辑外部 MCP 连接只受 SSRF 防护约束，历史行为不变）。生产部署建议显式配置为逗号分隔的批准出口（精确 host 如 `mcp.example.com` 或后缀通配如 `*.trusted.io`，大小写不敏感）：配置后管理端新建/改址的连接 host 必须命中白名单，否则结构化 400 拒绝（防「影子服务器」双保险的第二层，第一层为既有 SSRF url_guard）；已批准存量连接的运行时出网不受影响。修改后需 `devctl rebuild` / 等价 compose 重建 app 生效。

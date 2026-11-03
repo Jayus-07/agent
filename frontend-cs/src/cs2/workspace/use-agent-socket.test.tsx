@@ -129,4 +129,24 @@ describe('useAgentSocket（cs2 坐席 WS）', () => {
     instances[0].emit({ type: 'message.created', seq: 3, payload: {} })
     expect(events.map((e) => e.seq)).toEqual([9, 3])
   })
+
+  it('W3：构建注入 NEXT_PUBLIC_WS_ORIGIN 时直连网关 origin', async () => {
+    process.env.NEXT_PUBLIC_WS_ORIGIN = 'ws://127.0.0.1:9080'
+    try {
+      const instances = await mount()
+      expect(instances[0].url).toBe(
+        'ws://127.0.0.1:9080/ws/cs/agent?ticket=t-1',
+      )
+    } finally {
+      delete process.env.NEXT_PUBLIC_WS_ORIGIN
+    }
+  })
+
+  it('W3：未注入时回退 location.host（零破坏回退）', async () => {
+    delete process.env.NEXT_PUBLIC_WS_ORIGIN
+    const instances = await mount()
+    expect(instances[0].url).toBe(
+      `ws://${location.host}/ws/cs/agent?ticket=t-1`,
+    )
+  })
 })
