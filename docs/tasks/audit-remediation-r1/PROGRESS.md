@@ -308,6 +308,37 @@ OSV 区间匹配需人工复核原文）；pip/setuptools 随基础镜像走；3
 - 文档级交付（T0）：无代码改动；全部事实源（compose/env/lua/sys_config）均给出
   file:line 引用，UNVERIFIED 项如实标注、未报告为通过。
 
+
+## P3 补遗批次：travel 其余 17 处租户回退收口（fix/audit-p3-travel-tenant，基线 6ca11e0）
+
+### 挂载面核实（先行）
+- `router.py:168` 只挂载 `travel.router`（活跃）；`_retired_v1_router` **未在任何
+  include_router 注册**——批次 B 点名的 13 处死代码回退全部位于该未挂载路由
+  （plans/candidates/versions/confirm/discard/restore/diff/preferences）。
+- 活跃面真实清单：`/v2/plan/stream`（worker 内回退）、messages GET/PUT、
+  共享助手 `_restore_from_chat_reference`（934 死路由 + 1222 活跃流两路调用）、
+  `_submit_travel_request`（1031 死 + 1481 活跃）、`_travel_message_session_id/_owner_id`。
+
+### 实现（17 处全部统一收口，含死代码防复活）
+- 新增 `_travel_tenant(request, identity)`：header/strict 源只认 `identity.tenant_id`，
+  legacy body 源读 `X-Tenant-Id` 信任头，皆空 403（对齐 cs_admin/plan_revisions 口径）。
+- 12 个路由端点/入口统一改走助手（含 V2 流在 worker 启动前拦截——worker 异常会被吞）。
+- 3 个无 request 上下文的助手改严格校验：`_restore_from_chat_reference` raise ValueError、
+  `_submit_travel_request` raise 403、`_travel_message_session_id/_owner_id` raise 403
+  （共享 memory 表隔离键绝不允许落 default）。
+- 全文件 `or "default"` 租户回退清零（grep 0 命中）。
+
+### 验证
+- 新增 `backend/tests/api/test_travel_tenant_fail_closed.py`（10 passed）：助手双分支 403/
+  透传、memory 键助手严格性、messages 路由空租户 403 + 合法租户越过闸（503 语义）、
+  源码级防回退 + V2 流守卫位置。
+- 既有套件：travel_trace / travel_turn_contract / travel_auth → 29 passed（其中
+  trace 两例身份桩补 tenant_id——新闸正确拦截无租户桩，属预期修正）。
+- py_compile 通过；travel_trace 断言确认 trace 绑定行为不变。
+
+### 遗留标注
+- `_retired_v1_router` 为未挂载死代码（约 460 行，注释声明「算法迁移期间保留」）——
+  本次机械统一防复活；若确认算法迁移完成，建议独立批次整段删除（删除优先）。
 ## P3 补遗批次：依赖安全升级第一批（fix/deps-osv-batch1，基线 6ca11e0）
 
 承接批次 A1 的「33 个可升级包」结论。**实际落盘 25 行（24 包 + 连带 yarl）**，
@@ -342,6 +373,7 @@ sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 
    **零 ERROR 通过**；
 3. 真实安装验证由 CI 承担（frontend-admin.yml / evaluation-v2.yml 以 Python 3.10
    `pip install -r requirements-lock.txt` 装全量 lock）+ 合并后 rebuild 容器内定向测试。
+
 
 
 

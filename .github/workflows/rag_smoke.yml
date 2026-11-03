@@ -119,6 +119,10 @@ jobs:
       RAG_STORES_PGDATABASE: agent_memory_test
       DOC_REGISTRY_PGDATABASE: agent_memory_test
       OBS_DB_PGDATABASE: agent_memory_test
+      # 取消订单 sandbox 直查链路回归的专属隔离库（库名过测试库守卫），
+      # 由测试 fixture 自行按迁移建表，不依赖 init_db 目标库；
+      # 连接复用本 job 既有 PGHOST/PGPORT/PGUSER/PGPASSWORD，不在本文件内嵌凭据。
+      MALL_SANDBOX_PG_DBNAME: agent_business_sandbox_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -142,6 +146,7 @@ jobs:
         run: |
           # 004 只读角色迁移的兼容库；所有操作均在本 job 的临时 PG 中。
           PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business'
+          PGPASSWORD=postgres psql -h localhost -U postgres -d postgres -c 'CREATE DATABASE agent_business_sandbox_test'
           python scripts/init_db.py --host localhost --port 5432 --user postgres
 
       - name: Targeted regression tests (free, no paid API)
@@ -167,6 +172,7 @@ jobs:
             backend/tests/customer_service/response/test_facts.py \
             backend/tests/customer_service/test_query_expert.py \
             backend/tests/customer_service/test_order_cancel_flow.py \
+            backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/rag/test_specialized_budget.py \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
