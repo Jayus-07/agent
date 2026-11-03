@@ -114,6 +114,8 @@ COPY mcp_servers/ ./mcp_servers/
 # appuser(uid 10001) 运行时要在代码目录下建 data/uploads（routes/data.py 模块导入期 mkdir；2026-10-07 容器部署实测 PermissionError 崩溃循环）
 RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/data
 COPY scripts/ ./scripts/
+# 客服知识库种子文档事实源（B1）：index_cs_seed_docs.py 同步到数据卷后索引
+COPY docs/customer-service/kb/ ./docs/customer-service/kb/
 
 USER appuser
 
