@@ -100,3 +100,22 @@ def test_projection_keeps_order_link_and_refund_arrival_estimate():
         "logistics": {"order_no": "MO-001", "shipping_status": "shipped"},
         "refund": {"order_no": "MO-001", "estimated_arrival": "2026-10-10"},
     }
+
+
+def test_balance_projection_whitelists_wallet_and_recent_ledger():
+    projected = project_fact_set({
+        "balance": {
+            "balance": "6299.00", "currency": "CNY",
+            "recent_direction": "in", "recent_amount": "5000.00",
+            "recent_memo": "充值",
+            "customer_id": "872", "internal_token": "secret",
+        },
+    })
+
+    assert projected == {
+        "balance": {
+            "balance": "6299", "currency": "CNY",
+            "recent_direction": "in", "recent_amount": "5000",
+            "recent_memo": "充值",
+        },
+    }

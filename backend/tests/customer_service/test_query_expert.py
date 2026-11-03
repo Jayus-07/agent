@@ -115,3 +115,30 @@ class TestQueryTaskFacts:
         assert task["status"] == "failed"
         assert task["error_type"] == "provider_error"
         assert task["facts"] == {}
+
+
+class TestBalanceQueryFacts:
+    @patch("backend.customer_service.security.permission.PermissionChecker.validate_user_identity", return_value="872")
+    @patch("backend.customer_service.experts.query._llm_decompose_intents", return_value=None)
+    @patch("backend.customer_service.service.mall_service.MallService")
+    def test_balance_query_exports_wallet_facts(
+        self, mall_service, _decompose, _identity,
+    ):
+        """W1（2026-11-03）：余额+最近流水进入 service_facts（composer 唯一事实源）。"""
+        mall_service.return_value.get_wallet.return_value = {
+            "balance": 6299.0, "currency": "CNY",
+            "ledger": [{"direction": "in", "amount": 5000.0, "memo": "充值"}],
+        }
+
+        result = execute_query(
+            "我的余额还有多少",
+            {"intent": "t_balance_query", "route_path": "business_query"},
+            {"user_id": "872", "tenant_id": "default", "session_id": "s1"},
+        )
+
+        assert "¥6299.00" in result["response_draft"]
+        assert result["data"]["service_facts"]["balance"] == {
+            "balance": 6299.0, "currency": "CNY",
+            "recent_direction": "in", "recent_amount": 5000.0,
+            "recent_memo": "充值",
+        }

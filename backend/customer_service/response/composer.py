@@ -406,7 +406,7 @@ def _fact_amounts(
         )
         order_no = section.get("order_no") or inherited_order_no
         order_no = str(order_no) if order_no else None
-        for key in ("amount", "total_amount"):
+        for key in ("amount", "total_amount", "balance", "recent_amount"):
             item = section.get(key)
             if item is None or isinstance(item, bool):
                 continue
@@ -424,6 +424,7 @@ def _fact_amounts(
         for item in section if isinstance(section, list) else [section]:
             add_amounts(item, "order")
     add_amounts(facts.get("refund"), "refund")
+    add_amounts(facts.get("balance"), "balance")
     task_result = facts.get("task_result")
     if isinstance(task_result, dict):
         add_amounts(task_result.get("facts"), "order")
@@ -458,10 +459,14 @@ def _amount_claim_kind(answer: str, start: int, end: int) -> str | None:
         r"订单(?:的)?(?:总金额|总额|金额)?|商品(?:总额|金额)?|"
         r"下单金额|合计金额|总金额",
     )
+    balance_label = re.compile(r"账户余额|余额|钱包|流水|入账|支出")
 
     def labels(text: str, offset: int = 0) -> list[tuple[int, int, str]]:
         found: list[tuple[int, int, str]] = []
-        for pattern, kind in ((refund_label, "refund"), (order_label, "order")):
+        for pattern, kind in (
+            (refund_label, "refund"), (order_label, "order"),
+            (balance_label, "balance"),
+        ):
             found.extend(
                 (offset + match.start(), offset + match.end(), kind)
                 for match in pattern.finditer(text)
