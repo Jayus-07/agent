@@ -889,11 +889,12 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     // place 项的「备选地点」按钮对 meal 占位隐藏
     expect(page.container.textContent).not.toContain('的备选地点')
 
-    await click(panel!, (button) => button.textContent === '加入午餐')
-    expect(panel!.textContent).toContain('再次点击确认加入')
+    const panelElement = panel as HTMLElement
+    await click(panelElement, (button) => button.textContent === '加入午餐')
+    expect(panelElement.textContent).toContain('再次点击确认加入')
     expect(mocks.addMeal).not.toHaveBeenCalled()
 
-    await click(panel!, (button) => button.textContent === '再次点击确认加入')
+    await click(panelElement, (button) => button.textContent === '再次点击确认加入')
     await settle()
 
     expect(mocks.addMeal).toHaveBeenCalledOnce()
