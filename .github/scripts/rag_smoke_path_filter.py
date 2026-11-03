@@ -211,6 +211,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/129_travel_v2_template_seed.sql",
     # MCP grant 租户一致性约束（授权层 authz，不触及模型调用/费用/预算）
     "backend/sql/migrations/130_mcp_grant_tenant_consistency.sql",
+    # 用户名唯一性收窄到租户内（认证表 auth.users，与模型调用无关）
+    "backend/sql/migrations/131_auth_username_tenant_unique.sql",
 })
 
 
