@@ -451,3 +451,11 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - **验收账号交接**：测试账号 `13800130266` / `test12345`（本会话注册，走正常注册流程）保留供用户逐页验收登录；验收完成后可按上会话同款口径清理（status=0、会话吊销、refresh_tokens 清零）。
 - **待办交接**：①PR CI 与 review 通过后合并 main（历史惯例 merge commit）；②用户逐页人工验收（原型对照清单见本文件 2026-11-03 各段与 TASK §2 矩阵）；③验收后的账号清理与（如需）下一轮迭代。
 - **临时产物**：pytest 全量日志在 `d:/tmp/travel_full_*.log`、`d:/tmp/quality_golden*.log`（临时目录，不入库）。
+
+## 回车发送"失效"排查定界与容器恢复（2026-11-03 晚，用户反馈驱动）
+
+- **用户反馈**：合并后真实键盘 Enter 仍是换行不发送。
+- **排查定界**（分层二分）：①容器 bundle 化验——3100 前端容器在 11:39 被并行会话（agent-cs-fix-entry，客服域任务）从其工作树重建，**构建时该工作树尚未合入 PR #286**（合并 11:33、其 pull 在构建后），travel chunk 无 `isComposing`/「Enter 发送」文案——用户浏览器加载的是无回车功能的旧 bundle，Enter 走 textarea 默认换行，行为完全成立；②代码层——最新 main 构建的 bundle 中 `travel/itineraries/new/page` 与共享 chunk `8361-*` 均含回车代码，React fiber 化验 `onKeyDown` 绑定正常；③功能层——新容器下生成页（真实键盘 CUA 路径）与工作台（dispatchEvent 探针，React 委托对 untrusted 事件同样触发）Enter 发送双双验证通过（消息上屏、输入框清空）。
+- **处置**：frontend 容器已从最新 origin/main（ed905de，含 PR #286 与后续 #288-#292）重建并 healthy；重建前核查 cs-fix-entry 工作树——其未提交改动全在 backend（客服域），frontend 与 main 一致，重建无覆盖；期间 agent-app-1 出现短暂 Bad Gateway 为该会话重建窗口，已自行恢复 healthy，未动其容器。
+- **用户侧动作**：**刷新浏览器（F5/Ctrl+F5）** 即可——旧标签的 SPA bundle 不自刷新，刷新后加载新代码回车即发送。
+- **运维教训（建议后续补入 agent-repo-pitfalls）**：共享栈容器的并行重建会让其他会话已合并的功能静默回滚——rebuild 前应确认 base 包含全部已合并 main 的改动（`git fetch && git merge-base --is-ancestor origin/main HEAD`），或构建后对关键功能 bundle 做特征校验。
