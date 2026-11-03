@@ -374,6 +374,38 @@ sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 
 3. 真实安装验证由 CI 承担（frontend-admin.yml / evaluation-v2.yml 以 Python 3.10
    `pip install -r requirements-lock.txt` 装全量 lock）+ 合并后 rebuild 容器内定向测试。
 
+## P3 收尾修正（docs/audit-deps-followup，2026-11-04）：两项如实更正
+
+### 修正 1：A1「可升级」结论的方法学瑕疵
+- 原结论以「目标 fix 版本 > 现版本」推断可升级，**未验证「升级后是否清零」**。
+  容器实测 pillow 12.3.0 仍命中同一批 54 条公告——这些公告的 OSV 区间以
+  last_affected/多段区间表达，12.3.0 不在其修复线上；经查 **pillow 需 13.0.0
+  （跨主版本，OSV 实测 0 命中）才真正清零**。
+- 处置：lock 保持 12.3.0（与容器浮动值一致，比 12.2.0 新），pillow 归入
+  跨主版本延期批（与 cryptography/datasets/filelock 同批，需图像链路回归）。
+  后续所有「可升级」结论一律先对目标版本跑 OSV 验证清零再下结论。
+
+### 修正 2（重要发现）：生产 app 镜像不消费 requirements-lock.txt
+- Dockerfile 依赖层为 `pip install -e ".[postgres,ragas]"`——**构建时浮动解析
+  pyproject 声明**；requirements-lock.txt 仅被 CI workflows（frontend-admin /
+  evaluation-v2，py3.10）消费。本批 24 包升级修复的是 **CI/dev 环境**；
+  生产镜像的依赖集每次重建都可能漂移。
+- 容器实测（2026-11-04 rebuild 后）：kafka-python 3.0.11、sentence-transformers
+  6.2.0、multidict 7.1.0、anyio 4.15.1 等**主版本跳跃**均不在 lock 内；
+  OSV 快查 19 包 **18 干净、pillow 12.3.0 命中 54 条**（见修正 1）。
+- 含义：A1 的 287 条公告口径 = lock 环境；生产镜像暴露面需按
+  `docker exec agent-app-1 pip freeze` 另行审计。
+- 建议后续专项（需架构裁决，不在本批）：① Dockerfile 改为消费 lock
+  （需先解决 torch lock 2.11.0 vs constraints 2.14.1+cpu 的口径冲突，
+  建议 lock 直接收编 constraints 的 CPU wheel 约束）；② 每次发布对生产镜像
+  跑 pip freeze + OSV 审计纳入 release-quality 门禁。
+
+### 本批最终验证状态
+- CI/dev（lock 消费面）：PR #310 CI 真实安装新 lock 全绿；25 行变更全部生效。
+- 生产镜像（浮动面）：rebuild 后全容器 healthy、`/health` 200×2、应用完整导入
+  冒烟 OK、19 包 OSV 快查 18 干净；该面的系统性收口见上述专项建议。
+
+
 
 
 
