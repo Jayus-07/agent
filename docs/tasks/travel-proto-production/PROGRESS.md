@@ -443,3 +443,11 @@ v0（2026-11-01）把 Home Hero/快捷查询内嵌/模板照片卡/PlanCard/两�
 - **quality_golden 两层问题、均已收口**：①超时（pytest-timeout 300s 掐断）根因 = 本机 `.env` `TRAVEL_CHECKPOINTER_ENABLED=true` 使单跑时域图带 PostgresSaver，卡 `psycopg wait_conn`（`TRAVEL_CHECKPOINTER_ENABLED=false` 时 41s 跑完）——环境因素非代码回归，与本任务改动无关；②契约失败（7 例 turn1 无行程）：travel_v2 数据集 8 条「turn1 要求出行程但顶层无 ready 期望」的用例（D 组预算不可能/G 组金标/B04/F02）漏在首轮 ready 筛选外，同守卫合规流程补「12月5号出发」并同步 manifest hash（2bf38964690b1bf1）；travel v1 数据集同型扫出 5 条漏网一并补齐（271b00be2ff9b44e）。**quality_golden 2 passed（39s）、test_travel_dataset 19 passed**。
 - **booking stop_e ERROR**：单跑 passed（120s）——与前述 b13/b20 同型负载 flake（墙钟敏感），booking 目录零改动。
 - **最终状态**：travel 域全部测试文件在本机环境口径下全绿；前端 vitest 427 passed、tsc 16 既有错误零新增；真机全链（澄清四轮→日期→自动保存→分色地图→工作台）截图验证通过。
+
+## 会话收尾（2026-11-03）
+
+- **提交与 PR**：用户确认后 3 个 commit 推送并创建 **PR #286**（https://github.com/Jayus-07/agent/pull/286，`codex/travel-proto-p6-acceptance` → `main`）：`5cac42f` 前端原型复刻收口（13 文件）、`f12d043` 后端日期槽+推荐池+评测基线（24 文件）、`ddd2221` 任务文档。工作树干净。
+- **容器终态**：`agent-app-1`/`agent-frontend-1` 均为本工作树构建、healthy（7h+），供用户验收使用；未动共享栈其他服务。
+- **验收账号交接**：测试账号 `13800130266` / `test12345`（本会话注册，走正常注册流程）保留供用户逐页验收登录；验收完成后可按上会话同款口径清理（status=0、会话吊销、refresh_tokens 清零）。
+- **待办交接**：①PR CI 与 review 通过后合并 main（历史惯例 merge commit）；②用户逐页人工验收（原型对照清单见本文件 2026-11-03 各段与 TASK §2 矩阵）；③验收后的账号清理与（如需）下一轮迭代。
+- **临时产物**：pytest 全量日志在 `d:/tmp/travel_full_*.log`、`d:/tmp/quality_golden*.log`（临时目录，不入库）。
