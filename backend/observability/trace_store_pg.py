@@ -44,6 +44,7 @@ def _utc_ceiling_text() -> str:
     return _utc_now_text()
 from backend.infra.db import engine_for
 from backend.observability.trace_store import _MAX_ROWS, TraceStore, _serialize_trace
+from backend.shared.pg_identifier import pg_table_name
 from backend.shared.logger import logger
 
 
@@ -58,7 +59,7 @@ class PostgresTraceStore(TraceStore):
     def __init__(self, db_path: str = "data/trace_store.db"):
         self._db_path = db_path  # 兼容保留，PG 模式下无意义
         self._lock = threading.Lock()
-        self._table = os.getenv("OBS_DB_PG_TABLE_PREFIX", "") + "trace_store"
+        self._table = pg_table_name("OBS_DB_PG_TABLE_PREFIX", "trace_store")
         self._init_db()
 
     # ---- 连接层（池化：从统一 Engine 借出，close 即归还，不再每操作建 TCP）----
