@@ -99,3 +99,18 @@
 ## 备注
 
 - Mimosa PreToolUse hook 对 `os.path.join(base, f"...")` 内联 f-string 拼路径会拦截；改为先提取 `stored_name` 变量再 join + realpath 包含校验后通过。后续在此仓库写路径相关代码时沿用该形态。
+
+## 第四轮：P1-4 网关直通面收口（fix/audit-r4-gateway-b4，PR #287）
+
+**实现（apisix/apisix.yaml，纯网关配置）**：
+- 移除三条无鉴权直通路由：`/metrics`（Prometheus 实际抓 host.docker.internal:8000，不经网关）、`/openapi.json`（侦察面，BFF 只代理 /api/*）、`/`（无消费价值）——网关侧无匹配即 404
+- 保留 `/health` 直通：内容不含敏感配置（安全审查已验证），供外部探活；容器 healthcheck 走容器内 127.0.0.1:8000，不依赖网关
+- 兜底 `/api/*` gateway-auth 不动；头部注释记录 B4 收口裁决与消费方事实
+- 后端 middleware/auth.py 豁免清单未动（app:8000 仅绑 127.0.0.1 + API-Key fail-closed，直连面已有纵深）
+
+**验证**：
+- 新增 `backend/tests/api/test_apisix_b4_direct_routes.py`（3 例：三条直通不存在 + /health 保留 + 兜底鉴权锁死）+ 既有 ws_route 契约 → 4 passed；YAML 语法校验通过
+- PR #287 CI 全绿，合并 809c5c0（11:21:03Z）
+- **网关级实测**（重启 agent-apisix 加载新 yaml，归属核查=主栈 compose 管理非孤儿）：`GET /metrics → 404`、`GET /openapi.json → 404`、`GET / → 404`、`GET /health → 200`、`POST /api/auth/login → 400`（转发+参数校验正常）、`GET /api/competitor/stats → 401`（gateway-auth 正常，第三轮角色闸在网关后工作正常）
+
+**遗留（非仓库代码，部署检查清单项）**：生产 ECS 确认 9080 不出宿主机/安全组。
