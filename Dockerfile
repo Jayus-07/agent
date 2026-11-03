@@ -41,8 +41,12 @@ WORKDIR /build
 # 依赖单独成层：依赖声明与 Torch 约束未变时命中缓存
 COPY pyproject.toml ./
 COPY constraints/torch-cpu.txt ./constraints/torch-cpu.txt
+COPY requirements-lock.txt ./requirements-lock.txt
 # sentence-transformers 会传递引入 Torch。仅追加 CPU 索引会让 pip 在所有索引
 # 中选择最高版本，可能从 PyPI 拉入整套 CUDA 依赖；先装 CPU wheel 并用约束锁定。
+# 供应链收口（audit P3）：依赖一律走 requirements-lock.txt（由生产容器冻结 +
+# CI/dev 并集重锁，torch==2.14.1+cpu 与 constraints 同源），pyproject 不再参与
+# 构建期解析，杜绝每次重建的浮动漂移；项目本体以 --no-deps 安装。
 ARG TORCH_CPU_INDEX_URL=https://download.pytorch.org/whl/cpu
 RUN --mount=type=cache,id=agent-platform-pip,target=/root/.cache/pip,sharing=locked \
     python -m venv /opt/venv \
@@ -50,9 +54,9 @@ RUN --mount=type=cache,id=agent-platform-pip,target=/root/.cache/pip,sharing=loc
     && /opt/venv/bin/pip install --no-deps \
         --index-url ${TORCH_CPU_INDEX_URL} \
         -r constraints/torch-cpu.txt \
-    && /opt/venv/bin/pip install -e ".[postgres,ragas]" \
-        --constraint constraints/torch-cpu.txt \
-        --extra-index-url ${TORCH_CPU_INDEX_URL}
+    && /opt/venv/bin/pip install -r requirements-lock.txt \
+        --extra-index-url ${TORCH_CPU_INDEX_URL} \
+    && /opt/venv/bin/pip install --no-deps -e .
 
 # tokenizer 资源只在构建期取得，避免每次新容器首问再联网下载约1.6MB。
 # 单独缓存，不因业务源码变动重复下载；tiktoken 自身校验资源哈希。

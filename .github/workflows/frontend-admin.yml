@@ -35,7 +35,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-lock.txt
       - name: 安装锁定的后端测试依赖
-        run: python -m pip install -r requirements-lock.txt
+        # torch==2.14.1+cpu 由 PyTorch CPU 索引提供（lock 重锁收编生产实装版本）
+        run: python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
       - name: 管理端全局观测 API 权限回归
         run: python -m pytest backend/tests/observability/test_admin_observability_reads.py -q --no-cov
 

@@ -405,6 +405,43 @@ sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 
 - 生产镜像（浮动面）：rebuild 后全容器 healthy、`/health` 200×2、应用完整导入
   冒烟 OK、19 包 OSV 快查 18 干净；该面的系统性收口见上述专项建议。
 
+## 供应链收口批次 1（fix/lock-consume-relock，2026-11-04）：Dockerfile 消费 lock
+
+承接「修正 2」的专项建议，本批落实最小充分版本：
+
+### 决策（分析后拍板）
+- 真正的危害 = 浮动解析的**主版本跳跃**（当日 rebuild 实测拉入 kafka-python 3.0.11 /
+  sentence-transformers 6.2.0 / multidict 7.1.0，均不在任何受控清单内）。
+- 重锁数据源选**生产容器冻结**（agent-app-1 即权威环境：当日 OSV 快查 18/19 干净 +
+  导入冒烟 + healthy），而非本地 Windows 重装（平台偏差风险），而非全量重锁专项
+  （批次 2 再做语义对齐）。
+- 并集 = 容器 freeze 244 包（权威运行时，含 torch==2.14.1+cpu 与 constraints 同源）
+  + 老锁 dev-only 124 包原 pin（CI pytest 等依赖）= **368 包**。
+- `zh_core_web_sm @ github`（老锁遗留）经全仓 grep 确认**无任何消费方**，不进新锁。
+
+### 实现
+- `requirements-lock.txt`：重锁为 368 包并集，头部写明生成方式/升级流程/CPU 索引要求；
+  **新增依赖流程改为「重装→容器冻结→并集→dry-run→CI」**，禁止手工追加。
+- `Dockerfile`：依赖层三步化——① torch CPU wheel（constraints，不变）→
+  ② `pip install -r requirements-lock.txt`（+CPU 索引）→ ③ `pip install --no-deps -e .`
+  （项目本体）。pyproject 不再参与构建期解析。
+- CI（frontend-admin.yml / evaluation-v2.yml）：lock 安装加
+  `--extra-index-url https://download.pytorch.org/whl/cpu`（+cpu 轮子不在 PyPI）。
+
+### 验证（如实）
+- 并集全量解析：368 包中除 torch 外 **dry-run 零 ERROR**（本地 py3.10；torch 的
+  +cpu pin 来自运行中生产容器，本地解析受代理阻断不作为证据，真实验证交给
+  CI 真实安装 + 镜像构建）。
+- 待 CI/合并后补：rebuild 后容器内 `pip freeze` 与 lock 一致性核验 + 导入冒烟 + /health。
+
+### 同批落档：ECS 三项 UNVERIFIED → BLOCKED
+- 2026-11-04 实测：SSH 主机密钥整体变更（ED25519/ECDSA），且 publickey 对
+  root/ubuntu × id_ed25519/agent 四组合全部 403——判定重装后 authorized_keys 未恢复。
+  历史证据：旧钥自 10-07 起稳定使用；仓库无重装记录也无反证。
+- 三项核实**外部阻塞于访问手段**（非判断分歧），清单已改标 BLOCKED 并写明两条
+  恢复路径（①控制台追加公钥后由会话核实；②用户控制台自查交回填）。
+
+
 
 
 
