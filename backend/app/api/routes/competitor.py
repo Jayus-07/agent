@@ -11,7 +11,11 @@ from urllib.parse import unquote
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import require_admin_user, require_idempotency_key
+from backend.app.api.deps import (
+    require_admin_user,
+    require_editor_user,
+    require_idempotency_key,
+)
 from backend.app.api.identity import resolve_identity
 from backend.competitor import cookie_manager
 from backend.competitor.store import get_store
@@ -100,7 +104,10 @@ class QrPollRequest(BaseModel):
 # ── GET /competitor/watchlist ───────────────────
 
 @router.get("/watchlist")
-def list_watchlist(enabled_only: bool = Query(True, description="是否仅返回启用项")):
+def list_watchlist(
+    enabled_only: bool = Query(True, description="是否仅返回启用项"),
+    _guard=Depends(require_editor_user),  # 审计 P1-5：运营面读闸（audit 灰度放行）
+):
     """列出监控项，附带最新快照价格信息"""
     store = get_store()
     items = store.list_watch(enabled_only=enabled_only)
@@ -129,7 +136,8 @@ def list_watchlist(enabled_only: bool = Query(True, description="是否仅返回
 # ── POST /competitor/watchlist ──────────────────
 
 @router.post("/watchlist")
-def add_watch(req: AddWatchRequest, request: Request):
+def add_watch(req: AddWatchRequest, request: Request,
+              _guard=Depends(require_editor_user)):  # 审计 P1-5：运营写闸
     """添加监控项（URL 已存在则更新名称等字段）"""
     from backend.competitor.adapters import detect_platform
 
@@ -178,7 +186,8 @@ def add_watch(req: AddWatchRequest, request: Request):
 
 @router.delete("/watchlist")
 def remove_watch(request: Request,
-                 url: str = Query(..., description="待移除的竞品 URL")):
+                 url: str = Query(..., description="待移除的竞品 URL"),
+                 _guard=Depends(require_editor_user)):  # 审计 P1-5
     """移除监控项（不删除快照历史）"""
     store = get_store()
     def _write():
@@ -196,7 +205,8 @@ def remove_watch(request: Request,
 # ── PATCH /competitor/watchlist ─────────────────
 
 @router.patch("/watchlist")
-def toggle_watch(req: ToggleRequest, request: Request):
+def toggle_watch(req: ToggleRequest, request: Request,
+                 _guard=Depends(require_editor_user)):  # 审计 P1-5
     """启用/停用监控项"""
     store = get_store()
     def _write():
@@ -219,6 +229,7 @@ def get_history(
     url: str = Query(..., description="竞品 URL"),
     days: int = Query(0, description="最近 N 天（0=全部）"),
     limit: int = Query(50, description="最大返回条数"),
+    _guard=Depends(require_editor_user),  # 审计 P1-5：运营面读闸
 ):
     """获取价格历史快照（新→旧排列）"""
     store = get_store()
@@ -250,7 +261,8 @@ def get_history(
 # ── POST /competitor/analyze ────────────────────
 
 @router.post("/analyze")
-def analyze_competitor(req: AnalyzeRequest, request: Request):
+def analyze_competitor(req: AnalyzeRequest, request: Request,
+                       _guard=Depends(require_editor_user)):  # 审计 P1-5
     """立即分析一个竞品页面（抓取→抽取→快照入库）"""
     from backend.competitor.pipeline import analyze_url
 
@@ -272,7 +284,7 @@ def analyze_competitor(req: AnalyzeRequest, request: Request):
 # ── POST /competitor/scan ───────────────────────
 
 @router.post("/scan")
-def scan_all(request: Request):
+def scan_all(request: Request, _guard=Depends(require_editor_user)):  # 审计 P1-5
     """巡检全部启用的监控项"""
     from backend.competitor.pipeline import scan_watchlist
 
@@ -293,7 +305,7 @@ def scan_all(request: Request):
 # ── GET /competitor/stats ───────────────────────
 
 @router.get("/stats")
-def get_stats():
+def get_stats(_guard=Depends(require_editor_user)):  # 审计 P1-5：运营面读闸
     """概览统计"""
     store = get_store()
     all_items = store.list_watch(enabled_only=False)
@@ -328,7 +340,7 @@ def get_stats():
 # ── GET /competitor/cookies ───────────────────
 
 @router.get("/cookies")
-def get_cookies():
+def get_cookies(_guard=Depends(require_admin_user)):  # 审计 P1-5：凭据面读闸
     """查询各平台 Cookie 配置状态（列表，不返回完整值）"""
     items = cookie_manager.list_cookies()
     return {"configured": len(items) > 0, "items": items}
@@ -337,7 +349,8 @@ def get_cookies():
 # ── POST /competitor/cookies ──────────────────
 
 @router.post("/cookies")
-def save_cookies(req: CookiesRequest, request: Request):
+def save_cookies(req: CookiesRequest, request: Request,
+                 _guard=Depends(require_admin_user)):  # 审计 P1-5：凭据写库
     """保存某平台 Cookie 到数据库（立即生效，无需重启）"""
     cookies = req.cookies.strip()
     if not cookies:
@@ -363,7 +376,8 @@ def save_cookies(req: CookiesRequest, request: Request):
 
 @router.delete("/cookies")
 def clear_cookies(request: Request,
-                  platform: str = Query("", description="指定平台，空=删除全部")):
+                  platform: str = Query("", description="指定平台，空=删除全部"),
+                  _guard=Depends(require_admin_user)):  # 审计 P1-5：凭据删除
     """清除 Cookie 配置（按平台或全部）"""
     def _write():
         if platform:
@@ -412,7 +426,8 @@ def test_cookies(req: TestCookiesRequest, _admin=Depends(require_admin_user)):
 # ── POST /competitor/qr-login/start ───────────
 
 @router.post("/qr-login/start")
-async def qr_login_start(req: QrLoginRequest):
+async def qr_login_start(req: QrLoginRequest,
+                         _guard=Depends(require_admin_user)):  # 审计 P1-5：外呼副作用
     """启动扫码登录，返回 QR 码图片 URL"""
     from backend.competitor.qr_login import start_qr_login, get_supported_platforms
 
@@ -433,7 +448,8 @@ async def qr_login_start(req: QrLoginRequest):
 # ── POST /competitor/qr-login/poll ────────────
 
 @router.post("/qr-login/poll")
-async def qr_login_poll(req: QrPollRequest, request: Request):
+async def qr_login_poll(req: QrPollRequest, request: Request,
+                        _guard=Depends(require_admin_user)):  # 审计 P1-5：凭据入库
     """轮询扫码状态，确认后自动提取 Cookie 并入库"""
     from backend.competitor.qr_login import poll_qr_login
 
@@ -456,7 +472,7 @@ async def qr_login_poll(req: QrPollRequest, request: Request):
 # ── GET /competitor/qr-login/platforms ────────
 
 @router.get("/qr-login/platforms")
-def qr_login_platforms():
+def qr_login_platforms(_guard=Depends(require_editor_user)):  # 审计 P1-5
     """返回支持扫码登录的平台列表"""
     from backend.competitor.qr_login import get_supported_platforms
     return {"platforms": get_supported_platforms()}
@@ -465,7 +481,8 @@ def qr_login_platforms():
 # ── POST /competitor/retry-blocked ─────────────
 
 @router.post("/retry-blocked")
-def retry_blocked_urls(request: Request):
+def retry_blocked_urls(request: Request,
+                       _guard=Depends(require_editor_user)):  # 审计 P1-5
     """重新抓取所有 login_blocked 状态的监控项"""
     from backend.competitor.pipeline import analyze_url
 
@@ -512,7 +529,7 @@ def retry_blocked_urls(request: Request):
 # ── GET /competitor/anti-ban/stats ──────────────
 
 @router.get("/anti-ban/stats")
-def anti_ban_stats():
+def anti_ban_stats(_guard=Depends(require_editor_user)):  # 审计 P1-5：运营面读闸
     """防封策略观测: 今日预算/平台配额/熔断状态/Cookie 龄期/风控事件"""
     from backend.competitor import anti_ban
     return anti_ban.stats()
@@ -521,7 +538,8 @@ def anti_ban_stats():
 # ── POST /competitor/anti-ban/resume ────────────
 
 @router.post("/anti-ban/resume")
-def anti_ban_resume(request: Request):
+def anti_ban_resume(request: Request,
+                    _guard=Depends(require_editor_user)):  # 审计 P1-5：人工恢复决策
     """人工确认后解除 L2 全局停采（单账号场景不做自动重试，恢复必须人工决策）"""
     from backend.competitor import anti_ban
 
@@ -543,6 +561,11 @@ def competitor_recommendations(
     platform: Optional[str] = Query(None, description="平台过滤"),
     min_score: float = Query(0.0, ge=0.0, le=100.0),
 ):
-    """推荐列表别名端点（直接调选品引擎，与 /selection/recommendations 等价）"""
+    """推荐列表别名端点（直接调选品引擎，与 /selection/recommendations 等价）
+
+    审计 P1-5 裁决：与 /selection/recommendations 同口径的**业务公开读**，
+    不挂运营面角色闸（挂了会把用户端选品推荐一起锁死）；运营面读写闸
+    见上文各端点。
+    """
     from backend.selection.recommender import recommend
     return recommend(limit=limit, platform=platform, min_score=min_score)
