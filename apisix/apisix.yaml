@@ -23,8 +23,12 @@
 # - 阈值刻意宽松（后端还有 MAX_CONCURRENT_REQUESTS=5 并发门兜底）：网关层定位是
 #   反滥用与按用户公平，不是主容量防线。
 #
-# 系统直通路由（/, /health, /metrics, /openapi.json）：B1 为基线兼容保留，
-# B4 生产加固时按 §2 "不对外" 收口决策复核。
+# 系统直通路由（B4 收口裁决，2026-11-03 审计 P1-4）：
+# - /health 保留直通：内容不含敏感配置（安全审查已验证），供外部探活/人工
+#   看服务状态；容器 healthcheck 走容器内 127.0.0.1:8000，不依赖本路由。
+# - /metrics、/openapi.json、/ 直通已移除（侦察面）：Prometheus 抓取走
+#   host.docker.internal:8000、openapi 仅开发调试用，均无需经网关暴露；
+#   网关侧无匹配路由即 404。守卫测试：backend/tests/api/test_apisix_b4_direct_routes.py
 
 upstreams:
   - id: app
@@ -231,24 +235,10 @@ routes:
         default_conn_delay: 0.1
         rejected_code: 429
 
-  # ── 系统直通（B1 基线兼容；B4 复核收口）──
+  # ── 系统直通（B4 收口后仅存 /health；/metrics、/openapi.json、/ 已移除，
+  #    见文件头注释与守卫测试）──
   - id: sys-health
     uri: /health
-    plugins:
-      prometheus: {}
-    upstream_id: app
-  - id: sys-metrics
-    uri: /metrics
-    plugins:
-      prometheus: {}
-    upstream_id: app
-  - id: sys-openapi
-    uri: /openapi.json
-    plugins:
-      prometheus: {}
-    upstream_id: app
-  - id: sys-index
-    uri: /
     plugins:
       prometheus: {}
     upstream_id: app
