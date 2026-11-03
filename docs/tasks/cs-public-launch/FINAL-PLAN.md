@@ -102,7 +102,7 @@
 | W2-3 坐席绩效归属 | ✅ PR [#300](https://github.com/Jayus-07/agent/pull/300)：归属唯一事实源改 assignments.accepted（生产认领链路从不写 handoffs.assigned_agent_id——FINAL-PLAN 原假设不成立，REST 实证 cs_wire_e2e 归属在 assignments）；同根因一并修：趋势转人工序列恒 0、self 口径六卡/意图/趋势；真库 8 passed；实测接待 0→3 |
 | W3 WS 自动派单 | ✅ feat/cs-ws-origin：useAgentSocket 构建期注入 `NEXT_PUBLIC_WS_ORIGIN`（缺省回退 location.host 零破坏）+ Dockerfile ARG/ENV + compose 默认 `ws://127.0.0.1:9080` + .env.example/部署 README 说明；vitest 6 passed（新增 origin 注入/回退 2 断言）；真机双端验证：坐席端「实时推送已连接」恒态，用户转人工后**秒级**收到新接入邀请卡（38s 倒计时）+ 待接入/通知实时更新，未注入时回退旧行为 |
 | W4 测试数据治理 | ✅ 用户拍板 A+B 全清（排除 123123/13067412060 两个手工号）；dry-run 与清理脚本见 [W4-dryrun.sql](W4-dryrun.sql)/[W4-cleanup.sql](W4-cleanup.sql)；执行：940 会话+2345 messages+2452 events+147 handoffs+112 tickets 等共约 6,800 行删除，逐段事务回显；结果：会话 1200→260、open 1110→257、demo(872) 实测数据 10 会话完整保留、不碰 auth.users 与 agent_business 库 |
-| W5 order_cancel 开关 + 收尾总验收 | ⬜ 待实施（默认值语义实施前确认） |
+| W5 order_cancel 开关 | ✅ 用户拍板默认 http：新增 `CS_ORDER_CANCEL_MODE`（http 默认跟随网关 / disabled 双入口全拒 / 未知值安全拒绝），提案+执行双入口同闸；T2 2 例（disabled 拒提案+拒执行钱包不动、未知值 fail-closed）+ 既有 5 例全过（默认不劣化）；补入 rag_smoke 定向清单；.env.example/部署 README 同步 |
 | :3200 共享管理端部署协调 / ECS 镜像核对 | ⬜ 挂账（非本仓代码任务，需用户/其他会话协调） |
 
 ## 六、测试与验收
