@@ -53,12 +53,21 @@ PACE_KEYWORDS: dict[str, list[str]] = {
 # 方案档位关键词（M3-e）：档位决定「在预算内怎么花」的偏好权重
 # （价格带/交通方式/每日景点上限，见 config/travel.py::TIER_PROFILES）。
 # 用户没提 → economy（默认经济型，拍板口径）。
+# budget 平价档（travel-value-showcase B2）：档位靠前放置，平价专属表述
+# （穷游/越便宜越好）与 economy 词同现时优判平价。「穷游」只作为输入
+# 触发词收录——展示侧（标签/卡片/UI 文案）一律用「平价出行」，红线 2。
 TIER_KEYWORDS: dict[str, list[str]] = {
+    "budget": ["穷游", "省钱", "花小钱", "抠门", "预算紧张", "预算有限",
+               "越便宜越好", "最低预算", "能省则省"],
     "comfortable": ["舒适", "住好点", "住好一点", "品质", "四星", "五星", "高端",
                     "享受", "宽松点", "舒服点", "好一点的酒店", "升档"],
-    "economy": ["经济", "实惠", "省钱", "穷游", "便宜点", "性价比", "节省"],
+    "economy": ["经济", "实惠", "便宜点", "性价比", "节省"],
 }
-TIER_LABELS: dict[str, str] = {"economy": "经济实用型", "comfortable": "舒适均衡型"}
+TIER_LABELS: dict[str, str] = {
+    "economy": "经济实用型",
+    "budget": "平价出行",
+    "comfortable": "舒适均衡型",
+}
 
 
 # 槽位追问话术（缺失槽位 → 向用户提的具体问题）
@@ -136,8 +145,9 @@ class TravelBrief(BaseModel):
     optional_go: list[str] = Field(default_factory=list)
     avoid: list[str] = Field(default_factory=list)
     pace: str = "moderate"
-    # 方案档位（M3-e）：economy | comfortable。预算硬约束下的分配偏好；
-    # 预算把档位顶穿时由 budget_policy 自动降档并明示（reporter/缺口卡）。
+    # 方案档位（M3-e）：economy | budget | comfortable。预算硬约束下的分配
+    # 偏好；budget 平价档见 config/travel.py 平价定额表（B1）。预算把档位
+    # 顶穿时由 budget_policy 自动降档并明示（reporter/缺口卡）。
     tier: str = "economy"
     # 偏好补充（P1-1 偏好管理，2026-09-22）：饮食忌口/住宿倾向/交通偏好。
     # 只做记录与持久化，暂不参与排程判定与指纹（指纹不含它们——用户换着

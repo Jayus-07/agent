@@ -111,6 +111,8 @@ export function itineraryToTripDocumentV2(itinerary: Itinerary, confirmedTimezon
       travelers: { adults, children },
       budget: { amount: finiteOrNull(brief.budget_cny), currency: 'CNY' },
       pace: brief.pace === 'relaxed' ? 'relaxed' : brief.pace === 'intense' ? 'intense' : 'balanced',
+      // 档位白名单映射（B2）：V1 brief.tier 自由字符串，未知值回落 economy
+      tier: brief.tier === 'budget' ? 'budget' : brief.tier === 'comfortable' ? 'comfortable' : 'economy',
       interests: [...(brief.preferences ?? [])],
       requirements: [
         ...(brief.must_go ?? []).map((name) => `必去：${name}`),

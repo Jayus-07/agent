@@ -68,8 +68,11 @@ def budget_expert_node(state: dict) -> dict:
             econ_total = round(float(_bs.estimate_cost(
                 itinerary.days, brief.party_size, city=brief.destination,
                 tier="economy").total), 2)
+            # 缺口地板按档取数（B2）：budget 档用户给平价地板（≤¥400 级），
+            # 其余档沿用 economy 均值口径（红线 4：economy/comfortable 零回归）。
             floor = _bs.estimate_budget_floor(
-                len(itinerary.days), brief.party_size, city=brief.destination)
+                len(itinerary.days), brief.party_size, city=brief.destination,
+                tier=("budget" if brief.tier == "budget" else "economy"))
             if brief.tier == "comfortable" and econ_total <= budget:
                 itinerary.cost = run_travel_tool(
                     "travel.calculate_budget",
