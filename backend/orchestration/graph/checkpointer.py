@@ -27,19 +27,13 @@ def build_main_checkpointer() -> Any:
         return None
 
     try:
-        import psycopg
-        from langgraph.checkpoint.postgres import PostgresSaver
+        # 审计 P1-1（2026-11-03）：单条裸 psycopg 连接在 PG 重启后死亡且永不
+        # 重建，改为共享的 psycopg_pool 构建函数（借出前探活 + 坏连接自愈）
+        from backend.orchestration.checkpoint.pg_saver import (
+            create_pooled_postgres_saver,
+        )
 
-        from backend.config.database import MEMORY_DB_CONFIG
-        c = MEMORY_DB_CONFIG
-        dsn = (f"postgresql://{c['user']}:{c['password']}"
-               f"@{c['host']}:{c['port']}/{c['dbname']}")
-        # autocommit：checkpointer 写入需即时提交（官方建议）
-        conn = psycopg.Connection.connect(dsn, autocommit=True)
-        checkpointer = PostgresSaver(conn)
-        checkpointer.setup()  # 首次建表（幂等）
-        logger.info("[MainGraph] checkpointer enabled (PostgresSaver: %s/%s)",
-                    c["host"], c["dbname"])
+        checkpointer = create_pooled_postgres_saver(owner="MainGraph")
         # checkpoint 膨胀防护：TTL 清理守护（同一 agent_memory 库、同一组
         # checkpoints 表，全进程单例；各域都幂等启动，谁先起谁定的 TTL 生效，
         # 因此三方统一用 DEFAULT_TTL_DAYS=7）

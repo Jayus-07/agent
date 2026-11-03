@@ -44,21 +44,25 @@ def prod(monkeypatch):
 
 @pytest.fixture
 def no_postgres_driver(monkeypatch):
-    """让 `import psycopg` 直接抛 ImportError（sys.modules 置 None 是标准手法）。"""
-    monkeypatch.setitem(sys.modules, "psycopg", None)
+    """让 checkpointer 构建期的池/驱动 import 直接抛 ImportError（标准手法）。
+
+    审计 P1-1 后连接载体是 psycopg_pool（见 orchestration/checkpoint/pg_saver.py），
+    因此故障注入目标从 `psycopg` 换成 `psycopg_pool` 与 checkpoint postgres 扩展。
+    """
+    monkeypatch.setitem(sys.modules, "psycopg_pool", None)
     monkeypatch.setitem(sys.modules, "langgraph.checkpoint.postgres", None)
 
 
 @pytest.fixture
 def broken_postgres(monkeypatch):
-    """psycopg 在、但连不上（PG 宕机 / 口令错）：连到一半失败，走同一条 except。"""
-    fake = types.ModuleType("psycopg")
+    """池模块在、但建池即连不上（PG 宕机 / 口令错）：构造失败走同一条 except。"""
+    fake = types.ModuleType("psycopg_pool")
 
     def _boom(*args, **kwargs):
         raise OSError("connection refused")
 
-    fake.Connection = types.SimpleNamespace(connect=_boom)
-    monkeypatch.setitem(sys.modules, "psycopg", fake)
+    fake.ConnectionPool = _boom
+    monkeypatch.setitem(sys.modules, "psycopg_pool", fake)
 
 
 # ============================================================

@@ -26,6 +26,7 @@ import hashlib
 import json
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from backend.config import TOOL_APPROVAL_MODE, TOOL_APPROVAL_TTL_SECONDS
@@ -121,18 +122,38 @@ class _PgApprovalStore:
     """PostgreSQL 存储（ai.tool_approval_requests，agent_business 库）。"""
 
     def __init__(self):
-        import psycopg
+        # 审计 P1-1 同病收口（2026-11-03）：本存储是进程级单例 + 长活连接，
+        # 裸 psycopg 连接在 PG 重启后死亡且永不重建 → 审批链路整体失效直至
+        # 进程重启。改用 psycopg_pool：借出前探活、坏连接自动换新。
+        from psycopg_pool import ConnectionPool
+
         from backend.config.database import BUSINESS_DB_CONFIG
         c = BUSINESS_DB_CONFIG
-        dsn = (f"postgresql://{c['user']}:{c['password']}"
-               f"@{c['host']}:{c['port']}/{c['dbname']}")
         # autocommit：审批决策需即时可见（官方建议，同 checkpointer）
-        self._conn = psycopg.Connection.connect(dsn, autocommit=True)
+        self._pool = ConnectionPool(
+            kwargs={
+                "host": c["host"], "port": c["port"], "dbname": c["dbname"],
+                "user": c["user"], "password": c["password"],
+                "autocommit": True,
+                # 同 pg_saver（审计 P1-1）：无超时建连在 vpnkit 半开路径
+                # 会永久卡死池 worker；快速失败交池自动重试。
+                "connect_timeout": 5,
+            },
+            min_size=1, max_size=4, open=True,
+            check=ConnectionPool.check_connection,
+        )
         self._ensure_table()
+
+    @contextmanager
+    def _cursor(self):
+        """借出池连接的游标上下文（调用方用法与裸连接版完全一致）。"""
+        with self._pool.connection() as conn:
+            with conn.cursor() as cur:
+                yield cur
 
     def _ensure_table(self):
         """建表幂等自愈（生产仍以 migrations/007_tool_approval.sql 为准）。"""
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS ai.tool_approval_requests (
                     id UUID PRIMARY KEY,
@@ -181,7 +202,7 @@ class _PgApprovalStore:
                tenant_id="default") -> dict:
         rid = str(uuid.uuid4())
         try:
-            with self._conn.cursor() as cur:
+            with self._cursor() as cur:
                 cur.execute(
                     """INSERT INTO ai.tool_approval_requests
                        (id, tool_name, action, fingerprint, detail, user_id,
@@ -207,7 +228,7 @@ class _PgApprovalStore:
         }
 
     def get(self, rid: str) -> dict | None:
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute("SELECT * FROM ai.tool_approval_requests WHERE id = %s", (rid,))
             row = cur.fetchone()
             # cols 必须在 with 块内读取：块外游标已关闭，description 在
@@ -220,7 +241,7 @@ class _PgApprovalStore:
 
     def find_pending_by_fingerprint(self, fingerprint: str) -> dict | None:
         """同指纹 pending 去重：返回最新一条，避免重复审批单。"""
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """SELECT * FROM ai.tool_approval_requests
                    WHERE fingerprint = %s AND status = %s
@@ -251,7 +272,7 @@ class _PgApprovalStore:
                        FOR UPDATE SKIP LOCKED
                    )
                    RETURNING *"""
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(sql, params)
             row = cur.fetchone()
             if row is None:
@@ -261,7 +282,7 @@ class _PgApprovalStore:
 
     def decide(self, request_id: str, approve: bool, reviewer: str,
                reason: str, tenant_id: str = "default") -> dict | None:
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """UPDATE ai.tool_approval_requests
                    SET status = %s, reviewer = %s, reason = %s, decided_at = now()
@@ -288,7 +309,7 @@ class _PgApprovalStore:
             conds.append("tool_name = %s")
             params.append(tool)
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
-        with self._conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 f"""SELECT * FROM ai.tool_approval_requests {where}
                     ORDER BY created_at DESC LIMIT %s""",
