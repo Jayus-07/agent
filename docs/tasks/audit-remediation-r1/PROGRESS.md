@@ -441,6 +441,23 @@ sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 
 - 三项核实**外部阻塞于访问手段**（非判断分歧），清单已改标 BLOCKED 并写明两条
   恢复路径（①控制台追加公钥后由会话核实；②用户控制台自查交回填）。
 
+### 批次 1 合并后核验（PR #314 已合并，rebuild 实测 2026-11-04）
+- PR #314 CI 首轮暴露两处遗漏并修复：① otel 家族冲突（老锁携带的
+  instrumentation 0.62b1 系 vs 容器冻结 1.45.1/0.66b1 世代）→ 携带包对齐容器世代；
+  ② 除 frontend-admin/evaluation-v2 外还有 5 个 workflow 装 lock（rag_smoke/
+  tool_quality/full_regression/prompt_eval/rag_regression）→ 全部补 CPU 索引。
+  复跑 **11 checks 全 pass**（含此前挂掉的全部 job，真实安装新 lock）。
+- rebuild（新三步安装，依赖层 368 包重装约 40 分钟）后核验：
+  **容器 `pip freeze` 368 包与 lock 完全一致、0 漂移**（3 个 win-only marker 包
+  linux 不装属正确）；导入冒烟 OK；抽验 kafka-python==3.0.11 /
+  sentence-transformers==6.2.0 / multidict==7.1.0 / torch==2.14.1+cpu 与 lock 同源
+  （当日 OSV 快查 18/19 干净）；全容器 healthy、`/health` 200×2。
+- **供应链漂移自此死亡**：生产依赖集 = lock = CI 测试环境，三者同源可审计；
+  后续升级走「重装→容器冻结→并集→dry-run→CI」流程（lock 头部已写明）。
+- 批次 2（另行）：老锁 dev-only 包的语义对齐复检、生产 ECS 落地（等 SSH 恢复）、
+  pillow 13.0.0 跨主版本清零批。
+
+
 
 
 
