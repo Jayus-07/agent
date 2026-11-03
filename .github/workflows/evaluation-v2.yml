@@ -94,7 +94,8 @@ jobs:
           cache-dependency-path: requirements-lock.txt
 
       - name: Install locked dependencies
-        run: python -m pip install -r requirements-lock.txt
+        # torch==2.14.1+cpu 由 PyTorch CPU 索引提供（lock 重锁收编生产实装版本）
+        run: python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Compile evaluation V2 code
         run: >-

@@ -16,7 +16,13 @@
 - **当前状态**：
   - 仓库口径：`docker-compose.yml:102` = `${GATEWAY_SESSION_CHECK:-enforce}`（缺省即 enforce）。
   - 本机共享栈 `.env:222` = `enforce`（**VERIFIED**，2026-11-04）。
-  - **生产 ECS 实际值：UNVERIFIED**（本机无法登录 ECS；上线检查时按上述方法执行并回填）。
+  - **生产 ECS 实际值：BLOCKED**（2026-11-04：SSH 主机密钥于 11-03~11-04 间整体变更
+    （ED25519/ECDSA 双变更），且 publickey 对 root/ubuntu × id_ed25519/agent 四组合
+    全部 403——判定服务器重装后 authorized_keys 未恢复。**无法登录即无法核实**。
+    恢复路径二选一：① 控制台/VNC 把本机 `~/.ssh/id_ed25519.pub` 追加进
+    `/root/.ssh/authorized_keys` 后告知会话，本会话完成三项核实并回填；
+    ② 用户自行在控制台执行本节三条检查方法并把输出交给会话回填。核实时请顺带
+    比对 `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`（当前=89hddvrj…）。）。
 
 ## 2. JWT_SESSION_GUARD_MODE（后端 Bearer 会话闸，第二道校验）
 
@@ -28,8 +34,8 @@
   2. DB 直查：`SELECT value FROM sys_config WHERE config_key='JWT_SESSION_GUARD_MODE'`
      （无行 = 用代码默认 audit）。
 - **期望值**：`enforce`（与网关闸构成纵深；off/audit 仅用于回滚窗口）。
-- **当前状态**：**UNVERIFIED**（本机无法核实生产 DB 覆盖值与运行值；该开关动态可变，
-  每次发布复查必须现场读取，不能用历史记录替代）。
+- **当前状态**：**BLOCKED**（同第 1 项 SSH 访问丧失；该开关动态可变（DB 覆盖 15s 生效），
+  恢复访问后必须现场读取，不能用历史记录替代）。
 
 ## 3. 9080（APISIX 入口端口）不出宿主机 / 安全组
 
@@ -43,7 +49,7 @@
   - 仓库口径：`docker-compose.yml:88` = `"127.0.0.1:9080:9080"`；生产覆盖层
     `部署/prod-4c8g/docker-compose.local.yml` 未改写该绑定（仅前端端口 `127.0.0.1:*` 发布）。
   - 本机实测：`netstat` 显示 `127.0.0.1:9080 LISTENING`（**VERIFIED**，2026-11-04）。
-  - **生产 ECS 实机绑定与安全组：UNVERIFIED**（需在 ECS 上执行上述三条并回填）。
+  - **生产 ECS 实机绑定与安全组：BLOCKED**（同第 1 项 SSH 访问丧失；恢复后执行上述三条并回填）。
 
 ## 4. 依赖豁免记录（A1 分诊结论的豁免项与升级策略）
 

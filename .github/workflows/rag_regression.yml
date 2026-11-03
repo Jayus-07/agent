@@ -116,7 +116,7 @@ jobs:
       - name: Install locked dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements-lock.txt
+          python -m pip install -r requirements-lock.txt --extra-index-url https://download.pytorch.org/whl/cpu
 
       - name: Evaluation preflight
         env:
