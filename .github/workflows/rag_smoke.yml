@@ -166,6 +166,7 @@ jobs:
             backend/tests/customer_service/response/test_composer.py \
             backend/tests/customer_service/response/test_facts.py \
             backend/tests/customer_service/test_query_expert.py \
+            backend/tests/customer_service/test_order_cancel_flow.py \
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/rag/test_specialized_budget.py \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
