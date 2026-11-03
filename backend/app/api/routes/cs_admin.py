@@ -158,7 +158,8 @@ async def update_my_refund_draft(
     tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
     if not ident.authenticated or not user_id:
         raise HTTPException(401, detail="修改申请需要已认证用户身份")
-    if not tenant_id or tenant_id == "default":
+    # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+    if not tenant_id:
         raise HTTPException(403, detail="修改申请需要有效租户身份")
 
     from backend.config import customer_service as cfg
@@ -311,7 +312,8 @@ async def list_my_refund_requests(request: Request, limit: int = Query(20, ge=1,
     tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
     if not ident.authenticated or not user_id:
         raise HTTPException(401, detail="查询退款申请需要已认证用户身份")
-    if not tenant_id or tenant_id == "default":
+    # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+    if not tenant_id:
         raise HTTPException(403, detail="查询退款申请需要有效租户身份")
     from backend.customer_service.service.refund_service import get_refund_service
 
@@ -347,7 +349,8 @@ async def get_my_refund_request(request: Request, request_id: str) -> dict:
     tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
     if not ident.authenticated or not user_id:
         raise HTTPException(401, detail="查询退款申请需要已认证用户身份")
-    if not tenant_id or tenant_id == "default":
+    # default 是注册账号的正式租户值，不再视为缺失身份（2026-11-03）。
+    if not tenant_id:
         raise HTTPException(403, detail="查询退款申请需要有效租户身份")
     from backend.customer_service.service.refund_service import get_refund_service
 
@@ -1206,6 +1209,15 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
     else:
         state = "expired" if expired else "pending"
 
+    # need_info 提案（缺订单号等槽位）不可确认：后端权威判定，前端只消费
+    # confirmable，避免把「等待补充信息」渲染成可执行的确认卡（2026-11-03）。
+    missing_slots = pending.get("missing_slots")
+    confirmable = (
+        pending.get("requires_confirmation") is not False
+        and not (isinstance(missing_slots, list) and missing_slots)
+        and str(pending.get("status") or "") != "need_info"
+    )
+
     return {
         "pending_action": {
             "proposal_id": str(pending.get("proposal_id") or pending.get("action_id") or ""),
@@ -1218,6 +1230,7 @@ async def get_my_pending_action(request: Request, conversation_id: str) -> dict:
             ),
             "expires_at": expires_at,
             "state": state,
+            "confirmable": confirmable,
         },
     }
 

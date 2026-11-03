@@ -284,6 +284,46 @@ class TestNeedInfoCancel:
         assert cmd.goto == "cs_supervisor"
         assert cmd.update["pending_turn_decision"] == "READ_ONLY_QUERY"
 
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    def test_mixed_alnum_order_no_fills_slot(self, _mock_expired):
+        """混合段订单号（business-mock 懒种子 MO-AA2383B8）在 need_info
+        补槽期必须被识别为槽位答案转发 action expert——原正则只认纯数字段，
+        混合段被当只读查询放行，退款申请永远补不上订单号（2026-11-03）。"""
+        with patch(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+        ), patch(
+            "backend.customer_service.confirmation.is_expired", return_value=False,
+        ):
+            for order_no in ("MO-AA2383B8", "MO-14187999", "DEMO-1001"):
+                cmd = cs_pending_handler_node(_state(
+                    pending_action=_need_info_pending(),
+                    confirmation_state="pending_confirmation",
+                    user_message=order_no,
+                ))
+                assert cmd.goto == "cs_action_expert", (
+                    f"{order_no} 应识别为 need_info 槽位答案: {cmd.goto}"
+                )
+
+    @patch("backend.customer_service.confirmation.is_expired", return_value=False)
+    def test_order_no_with_query_route_still_fills_slot(self, _mock_expired):
+        """订单号回复即使被路由判为 t_order_status（READ_ONLY_QUERY），
+        也必须优先补槽而非放行为只读查询——分支顺序回归（2026-11-03）。"""
+        with patch(
+            "backend.customer_service.confirmation_store.get_confirmation_store",
+        ), patch(
+            "backend.customer_service.confirmation.is_expired", return_value=False,
+        ):
+            cmd = cs_pending_handler_node(_state(
+                pending_action=_need_info_pending(),
+                confirmation_state="pending_confirmation",
+                user_message="MO-AA2383B8",
+                cs_route={
+                    "domain": "TRANSACTION", "route_path": "business_query",
+                    "intent": "t_order_status", "confidence": 0.63,
+                },
+            ))
+        assert cmd.goto == "cs_action_expert"
+
 
 class TestNeedInfoHandoffEscape:
     """转人工逃生（2026-10-05 浏览器走查发现）：need_info 追问期显式转人工

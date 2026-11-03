@@ -314,17 +314,70 @@ class TestGetConversationTraces:
 
 
 class TestMyRefundRequests:
-    def test_default_tenant_is_rejected_without_reading_case_data(
+    def test_default_tenant_queries_scoped_by_authenticated_user(
+        self, confirm_client, monkeypatch,
+    ):
+        """default 是注册账号的正式租户值（auth.users 全部真实用户均在
+        default，2026-11-03 实测）：已认证的 default 用户按 user_id +
+        tenant_id 过滤正常查询，仅空租户仍 403。"""
+        from backend.app.api.identity import Identity
+
+        received = {}
+
+        class _CaseService:
+            async def async_list_refund_requests(self, **kwargs):
+                received.update(kwargs)
+                return []
+
+        monkeypatch.setattr(
+            "backend.customer_service.case.service.get_case_service",
+            lambda: _CaseService(),
+        )
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda _req: Identity(
+                user_id="customer-9", user_name="customer-9", auth_type="jwt",
+                source="header", roles=(), tenant_id="default",
+            ),
+        )
+        # 钉住 sandbox 双开关：本用例桩掉 case service，不能被本机 .env 的
+        # http 双开关劫持到真实 business-service（同 test_list_uses_… 口径）。
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_REFUND_REQUEST_MODE",
+            "sandbox", raising=False,
+        )
+        monkeypatch.setattr(
+            "backend.config.customer_service.CS_BUSINESS_GATEWAY_MODE",
+            "sandbox", raising=False,
+        )
+
+        response = confirm_client.get("/cs/refund-requests")
+
+        assert response.status_code == 200
+        assert received == {
+            "user_id": "customer-9", "tenant_id": "default", "limit": 20,
+        }
+
+    def test_missing_tenant_is_rejected_without_reading_case_data(
         self, confirm_client, monkeypatch,
     ):
         service = type("CaseService", (), {
             "async_list_refund_requests": staticmethod(
-                lambda **_kwargs: pytest.fail("不可查询 default 租户申请"),
+                lambda **_kwargs: pytest.fail("不可查询缺失租户的申请"),
             ),
         })()
         monkeypatch.setattr(
             "backend.customer_service.case.service.get_case_service",
             lambda: service,
+        )
+        from backend.app.api.identity import Identity
+
+        monkeypatch.setattr(
+            "backend.app.api.identity.resolve_identity",
+            lambda _req: Identity(
+                user_id="customer-1", user_name="customer-1", auth_type="jwt",
+                source="header", roles=(), tenant_id="",
+            ),
         )
 
         response = confirm_client.get("/cs/refund-requests")

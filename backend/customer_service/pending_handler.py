@@ -67,15 +67,20 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
         if confirmation_state not in _PENDING_STATES:
             return Command(goto="cs_supervisor", update={})
 
-        if decision == PendingTurnDecision.READ_ONLY_QUERY:
-            return _allow_readonly_turn(pending_action, decision, state)
-
+        # 明确槽位答案优先于只读放行：订单号回复被路由判为 t_order_status
+        # 时会落入 READ_ONLY_QUERY，先检查槽位答案，否则补槽永远轮不到
+        #（2026-11-03 实测：need_info 期间回复 MO-AA2383B8 被放行为订单
+        # 查询，退款提案缺槽直至过期）。
         if _looks_like_need_info_slot_answer(state):
             return Command(goto="cs_action_expert", update={
                 "pending_turn_decision": PendingTurnDecision.AMBIGUOUS.value,
                 "pending_turn_slot_fill": True,
                 "pending_action": pending_action,
             })
+
+        if decision == PendingTurnDecision.READ_ONLY_QUERY:
+            return _allow_readonly_turn(pending_action, decision, state)
+
         return _pending_clarification(
             pending_action, decision=PendingTurnDecision.AMBIGUOUS,
             state=state, need_info=True,
@@ -284,8 +289,12 @@ def _looks_like_need_info_slot_answer(state: dict[str, Any]) -> bool:
     message = str(state.get("user_message") or "").strip()
     if re.fullmatch(r"第[一二两三四五六七八九十\d]+个?(?:订单|单)?", message):
         return True
+    # 订单号段支持字母数字混合（business-mock 懒种子为 8 位混合段，如
+    # MO-AA2383B8；旧格式 DEMO-1001 纯数字段同样命中）。2026-11-03 修正：
+    # 原正则只认 \d{3,} 纯数字段，混合段订单号在 need_info 补槽时被当作
+    # 只读查询放行，槽位永远补不上、退款申请无法继续。
     if re.fullmatch(
-        r"(?:订单(?:号)?\s*[:：是]?\s*)?[A-Z]{1,5}[-_]?\d{3,}",
+        r"(?:订单(?:号)?\s*[:：是]?\s*)?[A-Z]{1,5}[-_]?[A-Z0-9]{3,}",
         message, re.I,
     ):
         return True
