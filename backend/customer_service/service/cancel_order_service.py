@@ -25,11 +25,34 @@ from backend.shared.logger import logger
 _CANCELLABLE_STATUS = "paid"
 
 
+def _ensure_cancel_mode() -> None:
+    """订单取消模式闸（Q6 拍板项 2，2026-11-04）。
+
+    disabled = 拒绝取消提案写入与确认执行（不取消、不退款）；http（默认）
+    = 跟随业务网关既有模式放行；其余未知值按安全默认拒绝。提案与执行
+    双入口同闸，防「提案已建、执行被拒」的半途状态。
+    """
+    from backend.config import customer_service as cfg
+
+    cancel_mode = str(getattr(cfg, "CS_ORDER_CANCEL_MODE", "http")).lower()
+    if cancel_mode == "http":
+        return
+    if cancel_mode == "disabled":
+        raise OrderNotEligibleError(
+            "当前部署已停用订单取消功能，暂无法为您取消订单；"
+            "已发货订单可走退款/退货流程，或回复「转人工」由人工客服协助。",
+        )
+    raise OrderNotEligibleError(
+        "当前业务通道暂不支持取消订单，请联系人工客服协助。",
+    )
+
+
 class CancelOrderService:
     def build_cancel_order_proposal(
         self, user_id: str, order_id: str, reason: str = "",
     ) -> ActionProposal:
         """已支付订单的取消提案（未付款订单走商城直取，不进确认流）。"""
+        _ensure_cancel_mode()
         from backend.customer_service.service.order_service import get_order_service
 
         order = get_order_service().query_orders(
@@ -85,6 +108,7 @@ class CancelOrderService:
         conversation_id: str,
     ) -> AgentActionRecord:
         """确认后的真实取消执行：重查事实 → MallService 幂等取消+退款。"""
+        _ensure_cancel_mode()
         if pending_action.get("action_type") != ActionType.ORDER_CANCEL:
             raise OrderNotEligibleError("取消订单确认动作类型无效")
         if not user_id or user_id == "anonymous" or not tenant_id or not conversation_id:

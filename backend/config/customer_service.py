@@ -246,6 +246,13 @@ CS_REFUND_REQUEST_MODE = os.getenv(
     "CS_REFUND_REQUEST_MODE", "disabled",
 ).strip().lower()
 
+# 订单取消独立开关（Q6 拍板项 2，2026-11-04）：
+#   http（默认）= 跟随业务网关既有模式（sandbox/http 均可，与 .env 已开
+#     的退款申请闭环一致），仅作为真实资金后端接入前的独立闸；
+#   disabled = 拒绝取消提案写入与确认执行（不取消、不退款）；
+#   其余未知值按安全默认拒绝。
+CS_ORDER_CANCEL_MODE = os.getenv("CS_ORDER_CANCEL_MODE", "http").strip().lower()
+
 # ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))
 CS_QUALITY_ALERT_ROUTE_CONSISTENCY = float(os.getenv("CS_QUALITY_ALERT_ROUTE_CONSISTENCY", "0.85"))

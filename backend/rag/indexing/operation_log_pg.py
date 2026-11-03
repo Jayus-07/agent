@@ -26,6 +26,7 @@ import psycopg2.extras
 
 from backend.config.database import RAG_STORES_PG_CONFIG
 from backend.infra.db import engine_for
+from backend.shared.pg_identifier import pg_table_name
 from backend.rag.indexing.operation_log import OPERATIONS, DocumentOperationLogger
 
 
@@ -39,7 +40,7 @@ class PostgresDocumentOperationLogger(DocumentOperationLogger):
     def __init__(self, db_path: str = "data/doc_operation_log.db"):
         self._db_path = db_path  # 兼容保留，PG 模式下无意义
         self._lock = threading.Lock()
-        self._table = os.getenv("RAG_STORES_PG_TABLE_PREFIX", "") + "doc_operation_log"
+        self._table = pg_table_name("RAG_STORES_PG_TABLE_PREFIX", "doc_operation_log")
         self._init_db()
 
     # ---- 连接层 ----

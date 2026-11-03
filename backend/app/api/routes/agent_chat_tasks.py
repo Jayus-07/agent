@@ -128,11 +128,16 @@ def public_task(record, *, detail: bool = False) -> dict:
 
 
 @router.get("")
-def list_agent_tasks(request: Request, session_id: str = Query("")):
+def list_agent_tasks(
+    request: Request,
+    session_id: str = Query(""),
+    # 分页收口（audit P3/B2）：limit 显式可调但仍钳 100，对齐 tasks 列表口径
+    limit: int = Query(100, ge=1, le=100),
+):
     ident = require_product_identity(request)
     rows = task_service.list_tasks_for_user(
         ident.user_id, tenant_id=ident.tenant_id, biz_type=AGENT_LONG_TASK,
-        conversation_id=_session(session_id) if session_id else "", limit=100,
+        conversation_id=_session(session_id) if session_id else "", limit=limit,
     )
     return {"tasks": [public_task(row) for row in rows]}
 

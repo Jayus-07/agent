@@ -29,6 +29,7 @@ from backend.config import DEFAULT_KEYWORDS, SIGNAL_RULES
 from backend.config.database import BUSINESS_DB_CONFIG, RAG_STORES_PG_CONFIG
 from backend.infra.db import engine_for
 from backend.rag.preprocessing.keyword_store import KeywordRuleStore
+from backend.shared.pg_identifier import pg_table_name
 from backend.shared.logger import logger
 
 
@@ -42,7 +43,7 @@ class PostgresKeywordRuleStore(KeywordRuleStore):
     def __init__(self, db_path: str = "data/keyword_rules.db"):
         self._db_path = db_path  # 兼容保留，PG 模式下无意义
         self._lock = threading.Lock()
-        self._table = os.getenv("RAG_STORES_PG_TABLE_PREFIX", "") + "keyword_rules"
+        self._table = pg_table_name("RAG_STORES_PG_TABLE_PREFIX", "keyword_rules")
         self._cache: dict[str, Any] | None = None
         self._cache_ts: float = 0
         self._init_db()

@@ -224,6 +224,66 @@ def test_confirmed_cancel_rejected_when_facts_changed(http_wire, fake_store):
     assert wallet_after["balance"] == balance_before
 
 
+def test_cancel_mode_disabled_rejects_proposal_and_execution(
+    http_wire, fake_store, monkeypatch,
+):
+    """W5（Q6 拍板项 2）：CS_ORDER_CANCEL_MODE=disabled 双入口全拒。
+
+    提案写入与确认执行都被拒绝（不取消、不退款，钱包不动）；默认 http
+    行为不变（其余用例未设置该变量即默认放行）。
+    """
+    from backend.config import customer_service as cfg
+
+    monkeypatch.setattr(cfg, "CS_ORDER_CANCEL_MODE", "disabled")
+    user_id, tenant_id = "customer-cancel-sw", "tenant-a"
+    paid = _paid_order(http_wire, user_id)
+    balance_before = http_wire.get(
+        "/business/wallet",
+        params={"user_id": user_id, "tenant_id": tenant_id}, headers=_HEADERS,
+    ).json()["data"]["wallet"]["balance"]
+
+    with pytest.raises(OrderNotEligibleError, match="停用订单取消"):
+        CancelOrderService().build_cancel_order_proposal(
+            user_id, paid["order_no"], "不想要了",
+        )
+
+    # 绕过提案闸构造 pending（模拟开关在提案后关闭的半途状态），执行同样被拒
+    monkeypatch.setattr(cfg, "CS_ORDER_CANCEL_MODE", "http")
+    from backend.customer_service.action import build_pending_action
+
+    pending = build_pending_action(
+        CancelOrderService().build_cancel_order_proposal(
+            user_id, paid["order_no"], "不想要了",
+        ),
+    )
+    monkeypatch.setattr(cfg, "CS_ORDER_CANCEL_MODE", "disabled")
+    fake_store.save(user_id, "cs-cancel-switch", pending, tenant_id=tenant_id)
+    from backend.customer_service.confirmation_flow import process_confirmation
+
+    outcome = process_confirmation(
+        pending, "确认", user_id, "cs-cancel-switch", tenant_id=tenant_id,
+    )
+    assert outcome.kind in {"failed", "error"}
+    wallet_after = http_wire.get(
+        "/business/wallet",
+        params={"user_id": user_id, "tenant_id": tenant_id}, headers=_HEADERS,
+    ).json()["data"]["wallet"]
+    assert wallet_after["balance"] == balance_before
+
+
+def test_cancel_mode_unknown_value_fails_closed(http_wire, monkeypatch):
+    """未知模式值按安全默认拒绝，不放行。"""
+    from backend.config import customer_service as cfg
+
+    monkeypatch.setattr(cfg, "CS_ORDER_CANCEL_MODE", "yolo")
+    user_id = "customer-cancel-sw2"
+    paid = _paid_order(http_wire, user_id)
+    with pytest.raises(OrderNotEligibleError, match="暂不支持取消订单"):
+        CancelOrderService().build_cancel_order_proposal(
+            user_id, paid["order_no"], "不想要了",
+        )
+
+
 def test_balance_query_answer_contains_wallet_and_ledger(http_wire):
     from backend.customer_service.experts.query import execute_query
 
