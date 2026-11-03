@@ -67,3 +67,33 @@ def test_tier_keywords_only_in_trigger_table():
     任何展示性常量（标签/profile label）里——红线 2 的静态面。"""
     assert "穷游" in TIER_KEYWORDS["budget"]
     assert "穷游" not in TIER_KEYWORDS["economy"]
+
+
+# ============================================================
+# 排程适配（B3）：budget 档免费 POI 权重加成
+# ============================================================
+def _skeleton_order(brief_tier: str) -> list[str]:
+    from backend.travel.models.brief import TravelBrief
+    from backend.travel.models.poi import Poi
+    from backend.travel.services.poi_service import build_skeleton
+
+    candidates = [
+        Poi(poi_id="paid", name="收费点", city="福州", lat=26.0, lng=119.3,
+            rating=5.0, suggested_minutes=90, ticket_cny=50.0, tags=[]),
+        Poi(poi_id="free", name="免费点", city="福州", lat=26.05, lng=119.3,
+            rating=4.5, suggested_minutes=90, ticket_cny=0.0, tags=[]),
+    ]
+    brief = TravelBrief(destination="福州", days=1, party_size=2, tier=brief_tier)
+    skeleton = build_skeleton(brief, candidates)
+    return [p.poi_id for p in skeleton.days[0]]
+
+
+def test_budget_tier_prefers_free_pois():
+    """budget 档：免门票候选在同优先级组内排前（热度略低也先落地）。"""
+    assert _skeleton_order("budget")[0] == "free"
+
+
+def test_other_tiers_keep_rating_order_no_regression():
+    """economy/comfortable：排序键不变（红线 4），收费高分点仍在前。"""
+    assert _skeleton_order("economy")[0] == "paid"
+    assert _skeleton_order("comfortable")[0] == "paid"

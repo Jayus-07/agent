@@ -278,7 +278,8 @@ def plan_weather_swaps(
     new_itinerary.repair_rounds = itinerary.repair_rounds
     new_itinerary.cost = estimate_cost(new_itinerary.days,
                                        itinerary.brief.party_size,
-                                       city=itinerary.brief.destination)
+                                       city=itinerary.brief.destination,
+                                       tier=itinerary.brief.tier)
     # 版本事实沿用旧值：天气替换不改变 brief（非需求变化），候选池签名不变；
     # change_reason 用 repair 语义会让「调整说明」误报校验修复，故保持原值。
     new_itinerary.plan_version = itinerary.plan_version
