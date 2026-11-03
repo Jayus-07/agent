@@ -294,6 +294,10 @@ local ROLE_GATE_PREFIXES = {
 -- 消费者身份调用的，走正常 JWT 验签 + 后端归属校验兜底，不做 cs 角色要求。
 -- ⚠️ 只放用户侧：坐席/主管端点（claim/close/agent-messages/queue/stats/
 -- offers/ws-ticket/{id} 详情/typing 等）仍被 /api/cs 前缀闸拦截。
+-- ⚠️ Lua pattern 元字符：路径里的字面 `-` 必须写成 `%-`（裸 `-` 是「最短
+-- 重复」修饰符，pattern 静默不匹配——2026-11-03 实测：含 `-` 的豁免项
+-- （customer-context/refund-requests/refund-draft）从未生效，普通用户持续
+-- 403，而无 `-` 的既有项（conversations/my 等）一直正常，掩盖了该缺陷）。
 local ROLE_GATE_EXEMPT_PATTERNS = {
     "^/api/cs/confirm$",                                  -- 确认卡操作（消费者）
     "^/api/cs/conversations/my$",                         -- 我的会话列表
@@ -304,10 +308,10 @@ local ROLE_GATE_EXEMPT_PATTERNS = {
     "^/api/cs/tickets/[^/]+$",                            -- 工单详情（admin/* 不命中，仍走前缀闸）
     -- cs-workstation-v2 用户端三件（2026-11-03 实测补齐：漏加导致普通用户
     -- 403 role-insufficient——右栏客户资料/我的退款申请折叠卡/退款原因修改）：
-    "^/api/cs/customer-context$",                         -- 客户360右栏（消费者）
-    "^/api/cs/refund-requests$",                          -- 我的退款申请列表（消费者）
-    "^/api/cs/refund-requests/[^/]+$",                    -- 退款申请详情（消费者）
-    "^/api/cs/conversations/my/.+/refund-draft$",         -- 修改退款申请原因（消费者）
+    "^/api/cs/customer%-context$",                        -- 客户360右栏（消费者）
+    "^/api/cs/refund%-requests$",                         -- 我的退款申请列表（消费者）
+    "^/api/cs/refund%-requests/[^/]+$",                   -- 退款申请详情（消费者）
+    "^/api/cs/conversations/my/.+/refund%-draft$",        -- 修改退款申请原因（消费者）
 }
 
 local function role_gate(uri, method, roles)
