@@ -86,6 +86,46 @@ class TestHandoffRepoTenantPredicate:
         assert "'tenant-b'" in where_part.replace(" ", "")
 
     @pytest.mark.asyncio
+    async def test_list_open_default_only_claimable_states(self):
+        """W2-1（2026-11-03）：队列缺省只取可认领状态。
+
+        实测共享库 16 条 human_active 残留（会话已关但 handoff 永未置
+        终态）混入待接入队列，点击认领 409；缺省谓词必须收敛为
+        waiting_human/agent_offered，终态与处理中状态不入列。
+        """
+        from sqlalchemy.dialects import postgresql
+
+        from backend.customer_service.repository.handoff_repo import (
+            HandoffRepository,
+        )
+
+        captured = {}
+
+        class _Result:
+            def scalars(self):
+                return self
+
+            def all(self):
+                return []
+
+        class _Session(_StubSession):
+            async def execute(self, stmt):
+                captured["sql"] = str(
+                    stmt.compile(
+                        dialect=postgresql.dialect(),
+                        compile_kwargs={"literal_binds": True},
+                    )
+                )
+                return _Result()
+
+        await HandoffRepository(_Session()).list_open(tenant_id="tenant-b")
+        where_part = captured["sql"].split("WHERE", 1)[-1]
+        assert "waiting_human" in where_part
+        assert "agent_offered" in where_part
+        assert "human_active" not in where_part
+        assert "closed" not in where_part
+
+    @pytest.mark.asyncio
     async def test_list_open_without_tenant_keeps_cross_view(self):
         """服务间跨租户视图（tenant_id=None）不拼租户条件。"""
         from sqlalchemy.dialects import postgresql

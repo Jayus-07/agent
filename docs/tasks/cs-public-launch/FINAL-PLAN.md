@@ -97,7 +97,8 @@
 | `.env` 退款开关 + 转人工 600s | ✅ 已生效 |
 | 坐席账号 supervisor 升级 + 密码重置 | ✅（已告知用户） |
 | W1 余额问答事实丢失 | ✅ PR [#295](https://github.com/Jayus-07/agent/pull/295)：根因=FactSet 白名单缺 balance 投影器（composer 零事实，LLM 编造「查询不到」，容器内复现 `build_fact_set=={}`）；修复=balance 投影器+流水 facts+守卫余额金额类别；真机验证回复含真实金额与流水 memo，订单查询零回归；连带把 composer/facts/query_expert 测试补进 rag_smoke 定向清单 |
-| W2 队列终态过滤 / 转人工率口径 / 绩效归属 | ⬜ 待实施 |
+| W2-1 队列只列可认领状态 | ✅ fix/cs-queue-filter：`list_open` 缺省谓词由 `!=closed` 收敛为 `IN(waiting_human,agent_offered)`（实测 16 条 human_active 残留混入、认领 409）；REST 验证队列返回 0 条残留 |
+| W2-2 看板转人工率口径 / W2-3 坐席绩效归属 | ⬜ 待实施 |
 | W3 WS 自动派单（NEXT_PUBLIC_WS_ORIGIN） | ⬜ 待实施 |
 | W4 测试数据治理 | ⬜ 待 dry-run（执行前须用户拍板范围） |
 | W5 order_cancel 开关 + 收尾总验收 | ⬜ 待实施（默认值语义实施前确认） |

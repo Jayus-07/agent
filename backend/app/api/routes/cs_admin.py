@@ -1613,7 +1613,8 @@ async def get_handoff_queue(
     request: Request,
     states: str | None = Query(
         None,
-        description="逗号分隔 handoff 状态过滤，缺省=全部未关闭",
+        description="逗号分隔 handoff 状态过滤，缺省=可认领"
+                    "（waiting_human/agent_offered）",
     ),
 ):
     """坐席工作台待接入队列（WS 降级轮询源 / 初始全量拉取）。"""
