@@ -181,8 +181,11 @@ async def _cards(
         row = await _scalar(
             session, _AGG_SQL[scope], {**base_params, "a": a, "b": b},
         )
+        # W2-2（2026-11-03）：转人工分子按会话去重（同一会话多次转人工/
+        # 超时重开会重复计行，曾致比率 >100%）；口径与趋势序列
+        # _TREND_SQL 的 count(DISTINCT h.conversation_id) 对齐。
         handoff_row = await _scalar(session, """
-            SELECT count(*) AS human
+            SELECT count(DISTINCT h.conversation_id) AS human
             FROM customer_service.handoffs h
             WHERE h.tenant_id = :tenant
               AND h.created_at >= :a AND h.created_at < :b
