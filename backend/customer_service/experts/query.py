@@ -449,9 +449,19 @@ def _dispatch_service(
                 f"（{direction} ¥{float(recent.get('amount') or 0):.2f}）。",
             )
         lines.append("退款审核通过后，货款将自动退回该余额。")
-        return _QueryServiceResponse("\n".join(lines), {
-            "balance": {"balance": balance, "currency": wallet.get("currency", "CNY")},
-        })
+        # W1（2026-11-03）：最近一笔流水一并进入 facts——FactSet 白名单是
+        # composer LLM 转写的唯一事实来源（草稿不进模型上下文），缺流水
+        # 字段会导致转写回复丢失流水信息。
+        balance_facts: dict[str, Any] = {
+            "balance": balance, "currency": wallet.get("currency", "CNY"),
+        }
+        if ledger:
+            balance_facts.update({
+                "recent_direction": str(ledger[0].get("direction") or ""),
+                "recent_amount": float(ledger[0].get("amount") or 0),
+                "recent_memo": str(ledger[0].get("memo") or "资金变动"),
+            })
+        return _QueryServiceResponse("\n".join(lines), {"balance": balance_facts})
 
     if service_type == "refund_status":
         from backend.customer_service.errors import (

@@ -27,6 +27,7 @@ _OPERATION_ACTION = {"refund", "return", "exchange", "repair", "unknown"}
 _COMPLAINT_SEVERITY = {"low", "medium", "high", "critical", "unknown"}
 _COMPLAINT_CLASS = {"complaint", "not_complaint", "unknown"}
 _CURRENCY = {"cny", "usd", "eur", "jpy", "hkd", "unknown"}
+_LEDGER_DIRECTION = {"in", "out"}
 
 
 def project_fact_set(raw: object) -> dict[str, Any]:
@@ -45,6 +46,7 @@ def project_fact_set(raw: object) -> dict[str, Any]:
         "orders": lambda value: _project_list(value, _project_order),
         "logistics": lambda value: _project_logistics(value),
         "refund": lambda value: _project_refund(value),
+        "balance": lambda value: _project_balance(value),
         "operation": lambda value: _project_operation(value),
         "task_result": lambda value: _project_task_result(value),
         "complaint": lambda value: _project_complaint(value),
@@ -157,6 +159,28 @@ def _project_refund(value: object) -> dict[str, Any]:
     })
     if reason is not None:
         result["reason_code"] = reason
+    return result
+
+
+def _project_balance(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    amount = _safe_amount(value.get("balance"))
+    if amount is not None:
+        result["balance"] = amount
+    currency = _enum_value(value.get("currency"), _CURRENCY)
+    if currency is not None:
+        result["currency"] = currency
+    direction = _enum_value(value.get("recent_direction"), _LEDGER_DIRECTION)
+    if direction is not None:
+        result["recent_direction"] = direction
+    recent_amount = _safe_amount(value.get("recent_amount"))
+    if recent_amount is not None:
+        result["recent_amount"] = recent_amount
+    memo = _safe_text(value.get("recent_memo"), limit=40)
+    if memo:
+        result["recent_memo"] = memo
     return result
 
 

@@ -133,6 +133,28 @@ class TestComposeReply:
         assert source == "llm_fallback"
         assert text == draft
 
+    def test_balance_llm_rewrite_passes_fact_guard(self, monkeypatch):
+        """W1（2026-11-03）：余额事实进入 FactSet 后，转写回复可过守卫。"""
+        from backend.customer_service.response.contracts import CSRenderedResponse
+
+        monkeypatch.setattr(
+            "backend.customer_service.response.composer._compose_with_llm",
+            lambda *_a, **_k: (
+                CSRenderedResponse(answer="您的账户余额为 ¥6299.00。"), 3,
+            ),
+        )
+        text, source = composer.compose_reply(
+            "query", "当前账户余额：¥6299.00。",
+            {"data": {"service_facts": {"balance": {
+                "balance": 6299.0, "currency": "CNY",
+                "recent_direction": "in", "recent_amount": 5000.0,
+                "recent_memo": "充值",
+            }}}},
+            _cs_route("t_balance_query"), _state("我的余额还有多少"),
+        )
+        assert source == "llm"
+        assert "6299" in text
+
     def test_guard_rejects_new_order_no(self, monkeypatch):
         """P0-18：LLM 输出引入事实里没有的订单号 → 拒绝回模板。"""
         from backend.customer_service.response.contracts import CSRenderedResponse
@@ -214,6 +236,17 @@ class TestGuard:
 
         assert composer._guard_fact_consistency("订单金额为 ¥199.00", facts)
         assert not composer._guard_fact_consistency("订单金额为 ¥299.00", facts)
+
+    def test_balance_amount_supported_by_wallet_facts(self):
+        facts = {"balance": {
+            "balance": "6299", "currency": "CNY",
+            "recent_direction": "in", "recent_amount": "5000",
+            "recent_memo": "充值",
+        }}
+
+        assert composer._guard_fact_consistency("当前账户余额为 ¥6299.00。", facts)
+        assert composer._guard_fact_consistency("最近一笔流水为充值，入账 ¥5000。", facts)
+        assert not composer._guard_fact_consistency("当前账户余额为 ¥9999。", facts)
 
     def test_rejects_amount_with_wrong_currency_or_order(self):
         wrong_currency = {
