@@ -1,8 +1,8 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**IN_PROGRESS**（E'、D1、D3 已收口；F 代码已合并但 F1-F3 写操作实机验收 **UNVERIFIED**；D4a 待验收）
-- 当前工作树：`agent-wt-eval-d3` / `fix/deps-d3-langchain-family`；F 批 worktree `agent-wt-audit-r1` 保留，不清理。
-- 当前基线：`origin/main=83aa74c`；任务沿革基线见 TASK.md。
+- 状态：**IN_PROGRESS**（E'、D1、D3、D4a 已收口；F 代码已合并但 F1-F3 写操作实机验收 **UNVERIFIED**）
+- 当前工作树：`agent-wt-eval-d4a` / `fix/deps-d4a-cross-major`；F 与 D3 worktree 保留，不清理。
+- 当前基线：`origin/main=073c613`；任务沿革基线见 TASK.md。
 
 ## 并行协调记录
 
@@ -27,9 +27,9 @@
 
 ## 下一步
 
-1. 完成 D4a（当前 lock 已满足目标版本；收齐 PyPI / OSV / 定向回归证据并独立 PR）；
-2. 若准备好隔离的 PASS run、feedback candidate 与绑定 Human Rubric 的用例，再完成 F1-F3 写操作实机闭环；
-3. ECS 三项及 pillow/filelock/dnspython/unstructured 按既有裁决保持不动。
+1. F1-F3 写操作实机闭环仍 UNVERIFIED：待有隔离的 PASS run、feedback candidate 和绑定 Human Rubric 的用例后再执行；
+2. 不在当前共享业务数据上造数或审批现有失败运行；
+3. ECS 三项与 pillow/filelock/dnspython/unstructured 按既有裁决保持不动。
 
 ## 2026-11-05 接手批续工（F / D3）
 
@@ -48,3 +48,13 @@
 - 全锁解析、PR CI、合并、重建、freeze 一致性和健康检查沿用 PR #314 与 `docs/tasks/audit-remediation-r1/PROGRESS.md` 已记录证据：368 包 dry-run 零 ERROR、11 checks pass、容器 freeze 368 包与 lock 零漂移、导入冒烟通过、`/health` 200×2。当前 app 容器实装版本与 lock 上述 8 个 pin 一致。
 - D3 定向回归在当前 lock 的 Python 3.10 app 容器运行：RAG chain、pg_saver_pool、task checkpoint recovery、runtime checkpoint recovery、main graph checkpoint identity，**41 passed**。容器缺 Git，首次运行被测试数据快照保护挡住；最终运行设置 `RAG_EVAL_NO_ISOLATION=1` 并显式将 `RAG_DATA_DIR` 指向空目录 `/tmp/eval-closure-d3-data`，未读写共享 RAG 文件数据。checkpoint 用例按测试约定使用唯一 ID 并 teardown 清理。
 - D3 结论：原目标升级已由 PR #314 完成；本批没有必要的 lock 变更。
+
+### D4a：cryptography / datasets / oauthlib
+
+- 当前 lock 已满足并超过原目标：cryptography 50.0.2（目标 50.0.0）、datasets 5.1.0（目标 5.0.1）、oauthlib 4.0.0（目标相同）；三项已随供应链 PR #314 合并，不做降级或重复 lock 改动。
+- 2026-11-05 核对 PyPI JSON：三项均未 yanked；`Requires-Python` 分别为 `!=3.9.0,!=3.9.1,>=3.9`、`>=3.10.0`、`>=3.9`，兼容项目 Python 3.10 基线。
+- OSV：`pip-audit -r D:\tmp\eval-closure-d4a-requirements.txt --no-deps --disable-pip --vulnerability-service osv`，3 个目标直接包 **No known vulnerabilities found**；本结果不代表完整 lock 的 OSV 扫描。
+- D4a 定向回归在当前 lock 的 Python 3.10.22 app 容器运行：认证防爆破、本地认证、会话 family、RAG fixture ingest、dataset enterprise extensions、managed dataset execution、RAG eval suites，**76 passed（16.38s）**。session family 用例依约对随机用户做创建/级联清理。
+- 新 FastAPI 0.161.1 使用延迟 router inclusion；原 authn 测试通过 `FastAPI.include_router().routes` 枚举不到 `_IncludedRouter` 里的 APIRoute。D4a 分支仅调整该结构测试为直接检查 `demo.router.routes`，仍断言两个 POST 路由有 `require_admin_user`，不改运行时授权。测试容器还缺仓库根 `docker-compose.yml`、部署 compose 与 `pyproject.toml`；临时复制这些只读测试输入后全组通过，结束后恢复 authn 原文件并清理临时副本。
+- 八步链中的 lock 全量解析、PR CI、合并、rebuild/freeze 与 health 证据沿用 PR #314 / audit-remediation-r1 记录；当前 app 容器 `cryptography==50.0.2`、`datasets==5.1.0`、`oauthlib==4.0.0` 与 lock 一致。
+- D4a 结论：目标版本已由 PR #314 完成；本批无必要的 lock 变更，PR 只包含 FastAPI lazy-router 兼容测试修正与验收记录。

@@ -141,10 +141,8 @@ def test_captcha_uses_csprng():
 def test_demo_endpoints_require_admin():
     from backend.app.api.routes import demo as demo_route
 
-    app = FastAPI()
-    app.include_router(demo_route.router)
     guards = {}
-    for r in app.routes:
+    for r in demo_route.router.routes:
         if isinstance(r, APIRoute) and r.path.startswith("/demo"):
             names = {d.call.__name__ for d in r.dependant.dependencies
                      if getattr(d.call, "__name__", "").startswith("require_")}
