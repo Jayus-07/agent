@@ -175,15 +175,17 @@ html, body {
 .overview-flash { animation: overviewFlash 1.6s ease-out; }
 
 /* 旅行助手气泡内的紧凑 Markdown 排版（.travel-md 双类名提高优先级，
-   覆盖 .markdown-body 全局 15px 口径——2026-10-03 实测「规划说明展开后字很大」） */
-.markdown-body.travel-md { font-size: 12px; line-height: 1.65; }
-.markdown-body.travel-md h1 { font-size: 13.5px; margin: 0.9em 0 0.35em; }
-.markdown-body.travel-md h2 { font-size: 12.5px; margin: 0.9em 0 0.35em; }
-.markdown-body.travel-md h3, .markdown-body.travel-md h4 { font-size: 12px; margin: 0.8em 0 0.3em; }
-.markdown-body.travel-md p { margin: 0.4em 0; }
-.markdown-body.travel-md ul, .markdown-body.travel-md ol { padding-left: 1.3em; margin: 0.35em 0; }
-.markdown-body.travel-md li { margin: 0.2em 0; }
-.markdown-body.travel-md table { font-size: 11px; margin: 0.6em 0; }
-.markdown-body.travel-md th, .markdown-body.travel-md td { padding: 0.35em 0.6em; }
-.markdown-body.travel-md hr { margin: 0.8em 0; }
-.markdown-body.travel-md blockquote { margin: 0.5em 0; padding-left: 0.8em; border-left: 3px solid #dae7e5; color: #5c7074; }
+   覆盖 .markdown-body 全局 15px 口径——2026-10-03 实测「规划说明展开后字很大」）。
+   ux3：TravelMessageMarkdown 组件统一挂 .md-scope 外层（生成页/工作台助手
+   同一紧凑口径），Tailwind 任意变体在 globals 顺序下不稳定，用双类选择器兜底。 */
+.markdown-body.travel-md, .md-scope .markdown-body { font-size: 12px; line-height: 1.65; }
+.markdown-body.travel-md h1, .md-scope .markdown-body h1 { font-size: 13.5px; margin: 0.9em 0 0.35em; }
+.markdown-body.travel-md h2, .md-scope .markdown-body h2 { font-size: 12.5px; margin: 0.9em 0 0.35em; }
+.markdown-body.travel-md h3, .markdown-body.travel-md h4, .md-scope .markdown-body h3, .md-scope .markdown-body h4 { font-size: 12px; margin: 0.8em 0 0.3em; }
+.markdown-body.travel-md p, .md-scope .markdown-body p { margin: 0.4em 0; }
+.markdown-body.travel-md ul, .markdown-body.travel-md ol, .md-scope .markdown-body ul, .md-scope .markdown-body ol { padding-left: 1.3em; margin: 0.35em 0; }
+.markdown-body.travel-md li, .md-scope .markdown-body li { margin: 0.2em 0; }
+.markdown-body.travel-md table, .md-scope .markdown-body table { font-size: 11px; margin: 0.6em 0; }
+.markdown-body.travel-md th, .markdown-body.travel-md td, .md-scope .markdown-body th, .md-scope .markdown-body td { padding: 0.35em 0.6em; }
+.markdown-body.travel-md hr, .md-scope .markdown-body hr { margin: 0.8em 0; }
+.markdown-body.travel-md blockquote, .md-scope .markdown-body blockquote { margin: 0.5em 0; padding-left: 0.8em; border-left: 3px solid #dae7e5; color: #5c7074; }
