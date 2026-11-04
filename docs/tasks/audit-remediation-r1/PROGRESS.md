@@ -457,6 +457,67 @@ sentence-transformers 5.6.0 / Werkzeug 3.1.9 / **yarl 1.23.0→1.25.1（aiohttp 
 - 批次 2（另行）：老锁 dev-only 包的语义对齐复检、生产 ECS 落地（等 SSH 恢复）、
   pillow 13.0.0 跨主版本清零批。
 
+## 供应链收口批次 2：dev-only 124 包语义复检（D1，2026-11-05）
+
+### 范围与方法
+
+- 以 `requirements-lock.txt` 空行前 244 个 runtime pins、空行后 124 个 dev-only pins 为分界；
+  本批只核对锁定版本与 PyPI 最新版本及官方发布说明，**不修改依赖**。
+- PyPI JSON API 对 124 个发行包请求 **124/124 HTTP 200、0 errors**；按 PEP 440 版本比较，
+  **69 个有更新，55 个已是 PyPI 最新**。该结果是 2026-11-05 的快照。
+- 69 个新版本中，15 个最新版声明 `requires_python >=3.11`：aiofile、altair、asgiref、
+  coverage、cyclopts、dnspython、griffelib、joserfc、Markdown、more-itertools、
+  platformdirs、streamlit、unstructured、unstructured-client、watchdog。当前基线 Python 3.10；
+  挂起项 dnspython/unstructured 仍按既有裁决保持挂起。
+
+### 版本差异清单（锁定版 → PyPI 最新）
+
+```text
+absl-py 2.4.0→2.5.1; aiofile 3.9.0→3.12.3; altair 6.1.0→6.3.0; asgiref 3.11.1→3.13.0;
+Authlib 1.9.1→1.9.4; beartype 0.22.9→0.23.1; blis 1.3.3→1.3.4; cachetools 7.1.1→7.2.8;
+caio 0.9.25→0.12.10; cloudpathlib 0.24.0→0.26.0; code-review-graph 2.3.6→2.3.9;
+confection 1.3.3→1.3.4; coverage 7.15.2→7.17.2; cyclopts 4.20.0→5.3.3; cymem 2.0.13→2.0.16;
+dnspython 2.8.0→2.9.2; emoji 2.15.0→2.16.0; fastmcp 3.4.10→4.1.6; fastmcp-slim 3.4.10→4.1.6;
+flower 2.0.1→2.2.0; griffelib 2.1.0→2.4.1; hanlp 2.1.3→2.1.7; iniconfig 2.3.0→2.3.1;
+jaraco.functools 4.5.0→4.6.0; joserfc 1.7.6→1.8.0; Markdown 3.10.2→3.11.2;
+more-itertools 11.1.0→11.2.1; murmurhash 1.0.15→1.0.16; narwhals 2.21.0→2.28.0;
+nvidia-ml-py 13.595.45→13.615.71; openapi-pydantic 0.5.1→0.6.0;
+opentelemetry-exporter-otlp 1.45.1→1.45.2; opentelemetry-instrumentation 0.66b1→0.66b2;
+opentelemetry-instrumentation-asgi 0.66b1→0.66b2; opentelemetry-instrumentation-fastapi 0.66b1→0.66b2;
+opentelemetry-util-http 0.66b1→0.66b2; pip 25.1.1→26.3; platformdirs 4.10.0→4.14.5;
+pluggy 1.6.0→1.7.0; preshed 3.0.13→3.0.15; prometheus-fastapi-instrumentator 8.0.2→8.1.0;
+py-key-value-aio 0.4.5→0.4.6; py-spy 0.4.2→0.4.3; pydeck 0.9.2→0.9.3;
+pypdfium2 5.8.0→5.14.0; pyreadline3 3.5.4→3.5.6; pytest 9.1.1→9.2.0;
+pytest-asyncio 1.4.0→1.4.1.post1; python-iso639 2026.4.20→2026.7.23; reportlab 5.0.0→5.1.0;
+rich-rst 2.1.0→2.2.0; sentencepiece 0.2.1→0.2.2; setuptools 80.3.1→84.2.1;
+smart_open 7.6.1→9.0.2; spacy 3.8.14→3.8.18; spacy_pkuseg 1.0.1→1.0.2; srsly 2.5.3→3.0.1;
+streamlit 1.57.0→1.66.1; tensorboard 2.20.0→2.21.0; thinc 8.3.13→10.0.0; toposort 1.5→1.10;
+tree-sitter-language-pack 0.13.0→1.23.1; uncalled-for 0.3.2→0.4.2; unstructured 0.18.3→0.27.36;
+unstructured-client 0.42.12→0.46.4; watchdog 5.0.3→7.0.0; weasel 1.0.0→1.0.1;
+webencodings 0.5.1→0.6.1; win32_setctime 1.2.0→1.2.1
+```
+
+### 官方 breaking 变更筛查与处置
+
+| 包 | 官方说明 / 仓库影响 | D1 结论 |
+|---|---|---|
+| fastmcp / fastmcp-slim 3.4.10→4.1.6 | [4.0 更新记录](https://github.com/PrefectHQ/fastmcp/blob/main/docs/updates.mdx)明确移除 server-initiated sampling/roots 与 3.x 兼容 shim；仓库未发现 `fastmcp` 发行包的直接 import（测试中的 `mcp.server.fastmcp` 来自 `mcp` SDK）。 | 属真实跨主版本迁移，保持 pin；若后续升级需独立评估调用面。 |
+| cyclopts 4.20.0→5.3.3 | [v5.0.0 release](https://github.com/BrianPugh/cyclopts/releases/tag/v5.0.0)列出 CLI fuzzy matching、参数解析归属、退出码等多项 breaking，且 v5 移除 Python 3.10 支持；仓库未发现直接 import。 | 最新版与当前 Python 基线不兼容，保持 pin。 |
+| smart_open 7.6.1→9.0.2 | [官方 changelog](https://github.com/piskvorky/smart_open/blob/develop/CHANGELOG.md)记载 v8.0 移除 deprecated `smart_open()`、并发池与若干参数/API；仓库未发现直接 import。 | 有明确 API 破坏，保持 pin。 |
+| pypdfium2 5.8.0→5.14.0 | [官方 5.10.1 说明](https://github.com/pypdfium2-team/pypdfium2/releases/tag/5.10.1)记载移除 `PdfFormEnv.pdf/parent`、`close()` 改为 no-op；仓库未发现直接 import。 | 同主版本内有 API 破坏，保持 pin。 |
+| pytest 9.1.1→9.2.0 | [官方 changelog](https://docs.pytest.org/en/stable/changelog.html)列出 `-c` 对无效配置路径改为 usage error，以及 `Metafunc.parametrize()` 的 `indirect/ids/scope` 参数改为 keyword-only。静态 AST 检查 backend/tests 与 tests 未发现 `.parametrize()` 超过 2 个位置参数的调用；仓库命令中未发现 pytest 传 `-c` 的用法。 | 已知改动未匹配到仓库直接调用点；D1 不升级，也未因此运行测试。 |
+| watchdog 5.0.3→7.0.0 | [官方 changelog](https://github.com/gorakhargosh/watchdog/blob/master/changelog.rst)记录 v7 改用 `Path.full_match()`，glob pattern 需从 `*.py` 调整为 `**/*.py`；最新版要求 Python ≥3.11，仓库未发现直接 import。 | 最新版不适配 py3.10 且有 pattern 迁移，保持 pin。 |
+| openapi-pydantic 0.5.1→0.6.0 | [v0.6.0 release](https://github.com/mike-oakley/openapi-pydantic/releases/tag/v0.6.0)的唯一 Breaking 项是移除 EOL Python 3.8 支持；项目基线 Python ≥3.10。 | 未发现当前版本基线上的兼容性阻断；本批仍不升级。 |
+| thinc 8.3.13→10.0.0 | [v10.0.0 release](https://github.com/explosion/thinc/releases/tag/v10.0.0)说明代码与 `8.3.14` 相同、v9 线已弃用。 | major 编号本身不代表 API 破坏；仍不脱离 spaCy 依赖族单独升级。 |
+| tree-sitter-language-pack 0.13.0→1.23.1 | 上游 [issue #143](https://github.com/xberg-io/tree-sitter-language-pack/issues/143)记录 1.9.x 发生的 `get_language()` 返回类型/API 兼容变化；当前官方 [API 文档](https://github.com/xberg-io/tree-sitter-language-pack/blob/main/docs-site/src/content/docs/reference/api-python.md)现描述 native `Language` API。仓库未发现直接 import。 | 该演进不在 v1.9.0 release notes 中；保持 pin，升级前对目标版本 API 做实际验证。 |
+| srsly 2.5.3→3.0.1 | [v3.0.1 release](https://github.com/explosion/srsly/releases/tag/v3.0.1)记录 JSONL/`json_dumps` bug fixes；PyPI 的 3.0.0 曾 yanked（reason=`Failing`）。锁中的 [spaCy 3.8.14 metadata](https://pypi.org/pypi/spacy/3.8.14/json)要求 `srsly<3.0.0,>=2.5.3`。 | v3.0.1 release note 未列 API breaking，但 spaCy 上限阻止单独升级；保持 2.5.3，随 spaCy 依赖族另行评估。 |
+
+### 结论与验证
+
+- 本批完成 PyPI 版本差异和官方 breaking 项语义复检；没有发现需要立即修改代码的直接调用断点，**requirements-lock.txt 未改动**。FastMCP、cyclopts、smart_open、pypdfium2、watchdog 保持原锁；srsly 3.x 受 spaCy `<3.0.0` 约束，不可单独升级。
+- 冻结裁决未变：ECS 三项不处理；pillow/filelock/dnspython/unstructured 继续挂起；pip/setuptools 仍随基础镜像裁决处理。
+- 文档批 T0：`git diff --check` 通过；无代码变化，未运行代码测试或 rebuild（不适用）。
+
 
 
 
