@@ -1,9 +1,11 @@
 'use client'
 
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ArrowLeft, ArrowRightLeft, Bus, CarFront, Clock3, Footprints, MapPin, Plus, Search, Trash2, X } from 'lucide-react'
+import { ArrowLeft, ArrowRightLeft, Bus, CarFront, Clock3, Footprints, MapPin, Plus, Search, Trash2, Utensils, X } from 'lucide-react'
 import {
+  searchTravelFoodV2,
   searchTravelPlacesV2,
+  type MerchantSearchResultV2,
   type PlaceSearchResultV2,
   type TravelSearchStatusV2,
   type TravelTripV2,
@@ -46,6 +48,7 @@ export default function TravelV2EditDialog({
   writeMessage = '',
   onClose,
   onEdit,
+  onSwitchMeal,
   onRetry,
   onRefreshConflict,
 }: {
@@ -60,10 +63,12 @@ export default function TravelV2EditDialog({
   writeMessage?: string
   onClose: () => void
   onEdit: (operation: TripEditOperationV2, summary: string) => Promise<boolean>
+  /** 餐食占位「换家餐厅」（ux2 #2）：加入餐厅 + 移除占位由工作台顺序双写。 */
+  onSwitchMeal?: (merchant: MerchantSearchResultV2, placeholder: TripItemV2) => Promise<boolean>
   onRetry?: () => Promise<boolean>
   onRefreshConflict?: () => Promise<boolean>
 }) {
-  const [view, setView] = useState<'menu' | 'add' | 'search' | 'activity' | 'time' | 'move' | 'transport'>('add')
+  const [view, setView] = useState<'menu' | 'add' | 'search' | 'meal' | 'activity' | 'time' | 'move' | 'transport'>('add')
   const [keyword, setKeyword] = useState('')
   const [querying, setQuerying] = useState(false)
   const [searchResponse, setSearchResponse] = useState<Awaited<ReturnType<typeof searchTravelPlacesV2>> | null>(null)
@@ -75,25 +80,56 @@ export default function TravelV2EditDialog({
   const [startTime, setStartTime] = useState('')
   const [duration, setDuration] = useState(90)
   const [note, setNote] = useState('')
+  // 换家餐厅（ux2 #2）：美食通道候选（amap 商户）+ 两步确认切换
+  const [mealLoading, setMealLoading] = useState(false)
+  const [mealMerchants, setMealMerchants] = useState<MerchantSearchResultV2[]>([])
+  const [mealError, setMealError] = useState('')
+  const [mealDisclosure, setMealDisclosure] = useState('')
+  const [mealConfirmId, setMealConfirmId] = useState<string | null>(null)
+  const mealSequence = useRef(0)
 
   useEffect(() => {
     searchSequence.current += 1
     searchController.current?.abort()
     searchController.current = null
+    mealSequence.current += 1
     setView(panel?.kind === 'item' ? 'menu' : panel?.kind === 'transport' ? 'transport' : 'add')
-    setKeyword('')
+    // 替换地点（ux2 #2）：搜索关键词预填当前地点名，减少重复输入
+    setKeyword(panel?.kind === 'item' && item?.kind === 'place' ? item.title : '')
     setSearchResponse(null)
     setSearchError('')
     setNote(item?.note ?? '')
     setStartTime(item?.start_time ?? '')
     setDuration(item?.duration_min ?? 90)
     setActivityTitle('')
+    setMealLoading(false)
+    setMealMerchants([])
+    setMealError('')
+    setMealDisclosure('')
+    setMealConfirmId(null)
     return () => {
       searchSequence.current += 1
       searchController.current?.abort()
       searchController.current = null
     }
   }, [panel, item?.item_id])
+
+  const isMealItem = Boolean(item && item.activity_type === 'meal')
+  useEffect(() => {
+    if (view !== 'meal' || mealLoading || mealMerchants.length > 0 || mealError) return
+    const sequence = ++mealSequence.current
+    setMealLoading(true)
+    void searchTravelFoodV2(trip.document.brief.destination).then((response) => {
+      if (sequence !== mealSequence.current) return
+      setMealMerchants(response.results ?? [])
+      setMealDisclosure(response.disclosure || '')
+    }).catch((cause: unknown) => {
+      if (sequence !== mealSequence.current) return
+      setMealError(cause instanceof Error ? cause.message : '候选餐厅查询未完成，行程没有修改。')
+    }).finally(() => {
+      if (sequence === mealSequence.current) setMealLoading(false)
+    })
+  }, [view, mealLoading, mealMerchants.length, mealError, trip.document.brief.destination])
 
   if (!panel) return null
 
@@ -107,8 +143,9 @@ export default function TravelV2EditDialog({
       : view === 'time' ? '调整时间与停留'
         : view === 'move' ? '移动到其他日期'
           : view === 'transport' ? '选择路段交通'
-            : view === 'search' ? (selectedItem ? '替换地点' : '搜索地点')
-              : '添加地点或活动'
+            : view === 'meal' ? '换家餐厅'
+              : view === 'search' ? (selectedItem ? '替换地点' : '搜索地点')
+                : '添加地点或活动'
 
   async function save(operation: TripEditOperationV2, summary: string) {
     if (await onEdit(operation, summary)) onClose()
@@ -152,6 +189,17 @@ export default function TravelV2EditDialog({
       place: candidate.place, start_time: startTime || null,
       duration_min: duration,
     }, `已添加「${candidate.place.name}」`)
+  }
+
+  /** 换家餐厅（ux2 #2）：两步确认后交工作台顺序双写；成功即关弹窗。 */
+  async function switchToMerchant(merchant: MerchantSearchResultV2) {
+    if (!selectedItem || !onSwitchMeal) return
+    if (mealConfirmId !== merchant.selection_id) {
+      setMealConfirmId(merchant.selection_id)
+      return
+    }
+    const ok = await onSwitchMeal(merchant, selectedItem)
+    if (ok) onClose()
   }
 
   async function submitActivity(event: FormEvent<HTMLFormElement>) {
@@ -202,7 +250,11 @@ export default function TravelV2EditDialog({
       {saving && !writeStatus && <p role="status" className="mb-3 rounded-xl bg-[#eff6ff] px-3 py-2 text-[11px] text-[#356fae]">正在校验并保存正式行程…</p>}
 
       {view === 'menu' && selectedItem && <div className="grid grid-cols-2 gap-2">
-        <button type="button" disabled={saving || locked} onClick={() => setView('search')} className="flex h-11 items-center gap-2 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50"><ArrowRightLeft size={14} aria-hidden />替换地点</button>
+        {isMealItem ? (
+          <button type="button" disabled={saving || locked || !onSwitchMeal} onClick={() => { setMealConfirmId(null); setView('meal') }} className="flex h-11 items-center gap-2 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50"><Utensils size={14} aria-hidden />换家餐厅</button>
+        ) : (
+          <button type="button" disabled={saving || locked} onClick={() => setView('search')} className="flex h-11 items-center gap-2 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50"><ArrowRightLeft size={14} aria-hidden />替换地点</button>
+        )}
         <button type="button" disabled={saving || locked} onClick={() => setView('time')} className="flex h-11 items-center gap-2 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50"><Clock3 size={14} aria-hidden />时间与停留</button>
         <button type="button" disabled={saving || locked || fixed || itemIndex <= 0} onClick={() => void reorderItem(-1)} className="h-11 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50">同日上移</button>
         <button type="button" disabled={saving || locked || fixed || !itemDay || itemIndex >= itemDay.items.length - 1} onClick={() => void reorderItem(1)} className="h-11 rounded-xl bg-[#f2f7fd] px-3 text-left text-[11px] font-medium text-[#49627f] disabled:opacity-50">同日下移</button>
@@ -230,6 +282,27 @@ export default function TravelV2EditDialog({
         {placeResults.length > 0 && <div className="mt-3 max-h-[45vh] space-y-2 overflow-y-auto">
           {placeResults.map((candidate) => <button key={candidate.selection_id} type="button" disabled={saving} onClick={() => void choosePlace(candidate)} className="flex w-full items-center gap-3 rounded-xl border border-[#e7edf5] p-3 text-left transition hover:border-[#a9c9f2] hover:bg-[#f8fbff] disabled:opacity-50"><span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#edf5ff] text-[#2878f5]"><MapPin size={16} aria-hidden /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold text-[#344b66]">{candidate.place.name}</span><span className="mt-1 block truncate text-[10px] text-[#8292a6]">{candidate.place.address || candidate.category || '地点地址待核实'}</span><span className="mt-1 block text-[9px] text-[#a0aaba]">坐标来源：{candidate.source} · 营业时间和价格未知</span></span><Plus size={15} className="shrink-0 text-[#2878f5]" aria-hidden /></button>)}
         </div>}
+      </div>}
+
+      {view === 'meal' && selectedItem && <div>
+        <p className="mb-3 rounded-lg bg-[#f3f7fc] px-3 py-2 text-[10px] leading-4 text-[#657b95]">从真实商户候选中选一家替换「{selectedItem.title}」：确认后加入该餐厅并移除占位餐项；营业状态与人均来自商户快照，随时可能变化。</p>
+        {mealLoading && <p role="status" className="rounded-lg bg-[#f2f7fd] px-3 py-2 text-[10px] text-[#526984]">正在检索候选餐厅…</p>}
+        {mealError && <p role="alert" className="rounded-lg bg-rose-50 px-3 py-2 text-[10px] text-rose-700">{mealError}</p>}
+        {!mealLoading && !mealError && mealMerchants.length === 0 && <p className="rounded-lg bg-[#f6faff] px-3 py-2 text-[10px] text-[#526984]">没有查到候选餐厅，可到「美食」标签页手动查询后加入。</p>}
+        <div className="max-h-[45vh] space-y-2 overflow-y-auto">
+          {mealMerchants.map((merchant) => {
+            const confirming = mealConfirmId === merchant.selection_id
+            return <button key={merchant.selection_id} type="button" disabled={saving} onClick={() => void switchToMerchant(merchant)} className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition disabled:opacity-50 ${confirming ? 'border-[#e2b26a] bg-[#fffaf0]' : 'border-[#e7edf5] hover:border-[#a9c9f2] hover:bg-[#f8fbff]'}`}>
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#fff3e2] text-[#c07a2b]"><Utensils size={16} aria-hidden /></span>
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-semibold text-[#344b66]">{merchant.name}</span>
+                <span className="mt-1 block truncate text-[10px] text-[#8292a6]">{[merchant.address || '地址待核实', typeof merchant.rating === 'number' ? `评分 ${merchant.rating}` : null, typeof merchant.avg_cost_cny === 'number' && merchant.avg_cost_cny > 0 ? `人均 ¥${merchant.avg_cost_cny}` : null, merchant.open_status || null].filter(Boolean).join(' · ')}</span>
+              </span>
+              <span className={`shrink-0 rounded-md px-2 py-1 text-[9px] font-medium ${confirming ? 'bg-[#b45309] text-white' : 'bg-[#f2f7fd] text-[#2878f5]'}`}>{confirming ? '再次点击确认替换' : '换这家'}</span>
+            </button>
+          })}
+        </div>
+        {mealDisclosure && <p className="mt-2 text-[9px] leading-4 text-[#8796a8]">{mealDisclosure}</p>}
       </div>}
 
       {view === 'activity' && <form onSubmit={(event) => void submitActivity(event)} className="space-y-3">

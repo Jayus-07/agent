@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowLeft, CalendarDays, Check, ChevronDown, Clock3, History, MapPin, MessageCircle, MoreHorizontal, RotateCcw, Sparkles, Users, Wallet } from 'lucide-react'
+import { ArrowLeft, CalendarDays, Check, ChevronDown, Clock3, History, MapPin, MessageCircle, MoreHorizontal, RotateCcw, Sparkles, Users, Wallet, X } from 'lucide-react'
 import {
   addTravelMealV2,
   applyTravelTripEditV2,
@@ -11,10 +11,8 @@ import {
   fetchTravelTripConversationV2,
   restoreTravelTripV2,
   searchTravelFoodV2,
-  searchTravelPlacesV2,
   type MerchantSearchResultV2,
   type MerchantSnapshotV2,
-  type PlaceSearchResultV2,
   type TravelTripV2,
   type TripDayV2,
   type TripEditOperationV2,
@@ -25,7 +23,7 @@ import TravelSearchPanel, { type TravelSearchEvent, type TravelSearchKind } from
 import TravelV2Map from './TravelV2Map'
 import type { TemporaryTravelMapLocation } from './travelV2MapData'
 import TravelV2EditDialog, { type TravelV2EditPanel } from './TravelV2EditDialog'
-import { buildTripOverview, paceLabel } from './travelOverview'
+import { paceLabel } from './travelOverview'
 import TravelTripHistoryPanel from './TravelTripHistoryPanel'
 import TravelV2TripConversation from './TravelV2TripConversation'
 import AutoOptimizePanel from './AutoOptimizePanel'
@@ -103,18 +101,10 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   const [restoreRequest, setRestoreRequest] = useState<{ revision: number } | null>(null)
   // F04 自动优选入口：建议确认卡（选入走既有单条 selections 端点逐条幂等）
   const [autoOptimizeOpen, setAutoOptimizeOpen] = useState(false)
-  // F05 详情卡内联备选：同源地点检索 + 二次确认替换（replace_place 单一写路径）
-  const [inlineCandidates, setInlineCandidates] = useState<{
-    loading: boolean; results: PlaceSearchResultV2[]; error: string;
-    disclosure: string; confirmId: string | null
-  } | null>(null)
-  // 餐食候选（workbench-ux #3）：点击时间轴餐食项 → 美食通道（amap 商户）
-  // 出候选，加入走既有 selections/meals 端点（二次确认 + 写状态机守卫）。
-  const [mealCandidates, setMealCandidates] = useState<{
-    loading: boolean; merchants: MerchantSearchResultV2[]; error: string;
-    disclosure: string; confirmId: string | null; addedName: string | null;
-    dayId: string; period: 'lunch' | 'dinner'
-  } | null>(null)
+  // F05 详情卡内联备选已收进编辑弹窗（ux2 #2/#3）：候选入口统一走三点菜单，
+  // 左列地图以下不再挂候选/详情面板。
+  // 时区提示可关闭（ux2 #1）：同行程记住关闭，不重复占屏。
+  const [tzBannerDismissed, setTzBannerDismissed] = useState(false)
   const [writeFeedback, setWriteFeedback] = useState<WriteFeedback | null>(null)
   const [restoreFeedback, setRestoreFeedback] = useState<WriteFeedback | null>(null)
   const [refreshNotice, setRefreshNotice] = useState('')
@@ -479,37 +469,20 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     setSavingMessage('')
   }
 
-  async function loadInlineCandidates() {
-    if (!trip || !selectedItem || inlineCandidates?.loading) return
-    setMealCandidates(null)
-    setInlineCandidates({ loading: true, results: [], error: '', disclosure: '', confirmId: null })
+  /** 时区横幅关闭记忆（ux2 #1）：同行程只提示一次，不再常驻占屏。 */
+  useEffect(() => {
+    let dismissed = false
     try {
-      const response = await searchTravelPlacesV2(trip.document.brief.destination, selectedItem.title)
-      setInlineCandidates({
-        loading: false, results: response.results ?? [], error: '',
-        disclosure: response.disclosure || '', confirmId: null,
-      })
-    } catch (cause) {
-      setInlineCandidates({
-        loading: false, results: [],
-        error: cause instanceof Error ? cause.message : '备选查询未完成，行程没有修改。',
-        disclosure: '', confirmId: null,
-      })
-    }
-  }
+      dismissed = window.localStorage.getItem(`travel-tz-banner-dismissed:${tripId}`) === '1'
+    } catch { /* 隐私模式等存取失败按未关闭处理 */ }
+    setTzBannerDismissed(dismissed)
+  }, [tripId])
 
-  async function replaceWithCandidate(candidate: PlaceSearchResultV2) {
-    if (!selectedItem || Boolean(pendingTripWrite)) return
-    // 二次确认：首次点击进入确认态，再次点击才提交（原型 F05 语义）
-    if (inlineCandidates?.confirmId !== candidate.selection_id) {
-      setInlineCandidates((current) => current ? { ...current, confirmId: candidate.selection_id } : current)
-      return
-    }
-    const ok = await applyEdit(
-      { op: 'replace_place', item_id: selectedItem.item_id, selection_id: candidate.selection_id, place: candidate.place },
-      `已将「${selectedItem.title}」替换为「${candidate.place.name}」`,
-    )
-    if (ok) setInlineCandidates(null)
+  function dismissTzBanner() {
+    setTzBannerDismissed(true)
+    try {
+      window.localStorage.setItem(`travel-tz-banner-dismissed:${tripId}`, '1')
+    } catch { /* 忽略：会话内仍保持关闭 */ }
   }
 
   /** 餐食占位 → 就餐时段推断：标题优先，其次开始时间（<15 点算午餐）。 */
@@ -520,41 +493,22 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     return Number.isFinite(hour) && hour >= 15 ? 'dinner' : 'lunch'
   }
 
-  async function loadMealCandidates(item: TripItemV2) {
-    if (!trip || mealCandidates?.loading) return
-    const dayId = trip.document.days.find((day) => day.items.some((entry) => entry.item_id === item.item_id))?.day_id
-    if (!dayId) return
-    setInlineCandidates(null)
-    setMealCandidates({
-      loading: true, merchants: [], error: '', disclosure: '', confirmId: null,
-      addedName: null, dayId, period: inferMealPeriod(item),
-    })
-    try {
-      const response = await searchTravelFoodV2(trip.document.brief.destination)
-      setMealCandidates((current) => current ? {
-        ...current, loading: false, merchants: response.results ?? [],
-        disclosure: response.disclosure || '',
-      } : current)
-    } catch (cause) {
-      setMealCandidates((current) => current ? {
-        ...current, loading: false, merchants: [],
-        error: cause instanceof Error ? cause.message : '候选餐厅查询未完成，行程没有修改。',
-      } : current)
-    }
-  }
+  /** 编辑弹窗「换家餐厅」（ux2 #2）：加入真实餐厅（selections/meals）+ 移除占位
+   * 餐项（remove_item）顺序双写；每步独立幂等键与写状态机守卫，UNKNOWN 不冒充
+   * 成功也不自动重试（避免同一请求重复提交两份）。 */
+  async function switchMeal(merchant: MerchantSearchResultV2, placeholder: TripItemV2): Promise<boolean> {
+    const currentTrip = tripRef.current
+    if (!currentTrip || Boolean(pendingTripWrite)) return false
+    const day = currentTrip.document.days.find((entry) => entry.items.some((stop) => stop.item_id === placeholder.item_id))
+    if (!day) return false
+    const period = inferMealPeriod(placeholder)
+    const periodLabel = period === 'lunch' ? '午餐' : '晚餐'
 
-  async function addMealCandidate(merchant: MerchantSearchResultV2) {
-    if (!trip || !mealCandidates || Boolean(pendingTripWrite)) return
-    // 二次确认：与备选替换同一语义（首次点击进入确认态，再次点击才提交）
-    if (mealCandidates.confirmId !== merchant.selection_id) {
-      setMealCandidates((current) => current ? { ...current, confirmId: merchant.selection_id } : current)
-      return
-    }
-    const periodLabel = mealCandidates.period === 'lunch' ? '午餐' : '晚餐'
-    const input = {
-      expected_revision: trip.revision,
-      day_id: mealCandidates.dayId,
-      meal_period: mealCandidates.period,
+    // 第一步：加入餐厅（既有 selections/meals 单条端点）
+    const addInput = {
+      expected_revision: currentTrip.revision,
+      day_id: day.day_id,
+      meal_period: period,
       selection_id: merchant.selection_id,
       merchant: {
         merchant_id: merchant.merchant_id, name: merchant.name, address: merchant.address,
@@ -563,51 +517,87 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
         avg_cost_cny: merchant.avg_cost_cny, source: merchant.source, observed_at: merchant.queried_at,
       } as MerchantSnapshotV2,
     }
-    const identity = {
-      kind: 'selection' as const, tripId: trip.trip_id,
-      signature: JSON.stringify({ tripId: trip.trip_id, input }),
+    const addIdentity = {
+      kind: 'selection' as const, tripId: currentTrip.trip_id,
+      signature: JSON.stringify({ tripId: currentTrip.trip_id, add: addInput }),
       key: createTravelV2IdempotencyKey(),
     }
-    if (!transitionTripWrite({ ...identity, status: 'VALIDATING' })) return
+    // 当前未决写的身份（异常收敛用）：两步分别收敛，终态异常才释放守卫
+    let activeIdentity: Pick<TravelTripWriteTransition, 'kind' | 'tripId' | 'signature' | 'key'> = addIdentity
+    if (!transitionTripWrite({ ...addIdentity, status: 'VALIDATING' })) return false
     try {
       await nextPaint()
-      transitionTripWrite({ ...identity, status: 'SAVING' })
-      const result = await addTravelMealV2(trip.trip_id, input, identity.key)
-      if (!isConfirmedTravelWrite(result, trip.trip_id, trip.revision)) {
-        transitionTripWrite({ ...identity, status: 'UNKNOWN' })
-        setMealCandidates((current) => current ? {
-          ...current, confirmId: null,
-          error: '提交回执尚不能证明事务已完成；请用同一请求安全重试。',
-        } : current)
-        return
+      transitionTripWrite({ ...addIdentity, status: 'SAVING' })
+      const addResult = await addTravelMealV2(currentTrip.trip_id, addInput, addIdentity.key)
+      if (!isConfirmedTravelWrite(addResult, currentTrip.trip_id, currentTrip.revision)) {
+        transitionTripWrite({ ...addIdentity, status: 'UNKNOWN' })
+        setError('「' + merchant.name + '」的加入回执待确认；为保留原请求已锁定其他写入，请刷新页面后在占位餐项「编辑」菜单重试。')
+        return false
       }
-      const nextTrip = { ...trip, revision: result.revision, document: result.document }
+      let latest: TravelTripV2 = { ...currentTrip, revision: addResult.revision, document: addResult.document }
+      transitionTripWrite({ ...addIdentity, status: 'SAVED' })
+
+      // 第二步：移除占位餐项（餐厅已确认落库，删除失败不回滚加入）
+      const placeholderGone = !latest.document.days.some((entry) => entry.items.some((stop) => stop.item_id === placeholder.item_id))
+      let removedPlaceholder = false
+      if (!placeholderGone) {
+        const removeOp: TripEditOperationV2 = { op: 'remove_item', item_id: placeholder.item_id }
+        const removeIdentity = {
+          kind: 'edit' as const, tripId: latest.trip_id,
+          signature: JSON.stringify({ tripId: latest.trip_id, revision: latest.revision, remove: removeOp }),
+          key: createTravelV2IdempotencyKey(),
+        }
+        activeIdentity = removeIdentity
+        if (!transitionTripWrite({ ...removeIdentity, status: 'VALIDATING' })) return false
+        await nextPaint()
+        transitionTripWrite({ ...removeIdentity, status: 'SAVING' })
+        const removeResult = await applyTravelTripEditV2(latest.trip_id, {
+          expected_revision: latest.revision,
+          change_summary: `已将「${placeholder.title}」换为「${merchant.name}」（移除占位餐项）`,
+          operation: removeOp,
+        }, removeIdentity.key)
+        if (!isConfirmedTravelWrite(removeResult, latest.trip_id, latest.revision)) {
+          transitionTripWrite({ ...removeIdentity, status: 'UNKNOWN' })
+          setError(`「${merchant.name}」已加入${periodLabel}（v${addResult.revision}）；占位餐项删除回执待确认，请刷新页面后通过占位卡片「编辑」菜单重试删除。`)
+          return false
+        }
+        latest = { ...latest, revision: removeResult.revision, document: removeResult.document }
+        transitionTripWrite({ ...removeIdentity, status: 'SAVED' })
+        removedPlaceholder = true
+      }
+
       const current = tripRef.current
-      if (current?.trip_id === trip.trip_id && current.revision === trip.revision) setTrip(nextTrip)
-      transitionTripWrite({ ...identity, status: 'SAVED' })
-      setMealCandidates((current) => current ? {
-        ...current, confirmId: null, addedName: merchant.name,
-      } : current)
+      if (current?.trip_id === latest.trip_id) {
+        setTrip(latest)
+        setUndoRevision(currentTrip.revision)
+        const mealDayIndex = latest.document.days.findIndex((entry) => entry.items.some((stop) => stop.item_id === merchant.selection_id || stop.title === merchant.name))
+        if (mealDayIndex >= 0) {
+          setDayIndex(mealDayIndex)
+          const newMeal = latest.document.days[mealDayIndex].items.find((stop) => stop.title === merchant.name)
+          setSelectedItemId(newMeal?.item_id ?? '')
+        }
+      }
       setWriteFeedback({
         status: 'SAVED',
-        message: `已将「${merchant.name}」加入${periodLabel}（v${result.revision}）。原占位餐项可通过卡片「编辑」菜单移除。`,
+        message: removedPlaceholder
+          ? `已将「${merchant.name}」加入${periodLabel}，并移除占位「${placeholder.title}」（v${latest.revision}）。`
+          : `已将「${merchant.name}」加入${periodLabel}（v${latest.revision}）。`,
       })
+      return true
     } catch (cause) {
       const status = classifyTravelWriteError(cause)
-      transitionTripWrite({ ...identity, status })
-      setMealCandidates((current) => current ? {
-        ...current, confirmId: null,
-        error: travelWriteErrorMessage(cause, status),
-      } : current)
+      // 明确失败族（INVALID/CONFLICT/FAILED）收敛释放守卫；UNKNOWN 语义 =
+      // 服务端结果未知，保持守卫锁定并提示刷新后在原入口处理（见上方分支）。
+      transitionTripWrite({ ...activeIdentity, status })
+      setError(travelWriteErrorMessage(cause, status))
+      return false
     }
   }
 
-  /** 时间轴卡片点击：普通地点联动地图；餐食项追加加载候选餐厅（workbench-ux #3）。 */
+  /** 时间轴卡片点击：选中联动地图；候选切换统一走三点编辑弹窗（ux2 #2）。 */
   function selectTimelineItem(item: TripItemV2) {
     setSelectedItemId(item.item_id)
     setSelectedLocation(null)
-    if (item.activity_type === 'meal') void loadMealCandidates(item)
-    else setMealCandidates(null)
   }
 
   const onSelectMapItem = useCallback((id: string) => {
@@ -674,8 +664,9 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     >
       <p><span className="mr-1.5 font-semibold">{travelWriteStatusLabel(pendingTripWrite.status)}</span>{pendingWriteMessage}</p>
     </section>}
-    {timezoneWarning && <section role="note" className="mx-3 mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-5 text-amber-950 lg:mx-4 lg:mt-4">
-      目的地时区尚未确认。当前记录的 {brief.timezone} 来自未确认的默认值或格式占位，不代表目的地当地时区；行程当地时间可能不准确，请确认后再依赖时间安排。
+    {timezoneWarning && !tzBannerDismissed && <section role="note" className="mx-3 mt-3 flex items-start justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-5 text-amber-950 lg:mx-4 lg:mt-4">
+      <p className="min-w-0">目的地时区尚未确认。当前记录的 {brief.timezone} 来自未确认的默认值或格式占位，不代表目的地当地时区；行程当地时间可能不准确，请确认后再依赖时间安排。</p>
+      <button type="button" aria-label="关闭时区提示，本次行程不再显示" onClick={dismissTzBanner} className="shrink-0 rounded-full p-1 text-amber-700 hover:bg-amber-100"><X size={15} aria-hidden /></button>
     </section>}
     {autoOptimizeOpen && <AutoOptimizePanel trip={trip} disabled={Boolean(pendingTripWrite)} onTripSaved={saved} onClose={() => setAutoOptimizeOpen(false)} />}
 
@@ -685,49 +676,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
 
       <section className="order-2 hidden min-h-0 min-[821px]:flex min-w-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]"><nav aria-label="行程与查询" className="flex shrink-0 gap-1 overflow-x-auto border-b border-[#edf1f6] px-3 pt-2.5">{TABS.map((tab) => <button key={tab.id} type="button" aria-pressed={activeTab === tab.id} disabled={Boolean(pendingTripWrite)} onClick={() => selectWorkspaceTab(tab.id)} className={`shrink-0 border-b-2 px-3 py-2 text-[11px] font-medium ${activeTab === tab.id ? 'border-[#2878f5] text-[#2878f5]' : 'border-transparent text-[#71839b] hover:text-[#2878f5]'}`}>{tab.label}</button>)}</nav>{activeTab === 'trip' ? <div className="flex min-h-0 flex-1 flex-col"><header className="shrink-0 border-b border-[#edf1f6] px-4 pb-3 pt-3.5"><div className="flex items-center justify-between"><div><h2 className="text-sm font-bold text-[#263b55]">{brief.destination} 行程时间轴</h2><p className="mt-1 text-[9px] text-[#8a98aa]">按天安排 · 与地图地点双向联动 · 天数在左侧地图列切换</p></div><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => selectedItem ? setEditPanel({ kind: 'item', itemId: selectedItem.item_id }) : setEditPanel({ kind: 'add' })} className={`rounded-lg px-2.5 py-2 text-[9px] font-medium bg-[#f4f7fb] text-[#73849a]`}>调整顺序</button></div></header><div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">{savingMessage && <div className="mb-3 flex items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-[9px] text-emerald-800"><span className="flex items-center gap-1"><Check size={12} aria-hidden />{savingMessage}</span>{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex shrink-0 items-center gap-1 font-medium"><RotateCcw size={11} aria-hidden />撤销</button>}</div>}{error && <p role="alert" className="mb-3 rounded-lg bg-rose-50 px-3 py-2 text-[9px] text-rose-700">{error}</p>}<div className="mb-3 flex items-center justify-between"><div><p className="text-[11px] font-semibold text-[#344b67]">第 {dayIndex + 1} 天 · {day?.date || '日期待定'}</p><p className="mt-1 text-[9px] text-[#93a0b1]">{day?.items.length ?? 0} 个安排</p></div></div>{day?.items.length ? <div className="space-y-1.5">{day.items.map((item, index) => <div key={item.item_id}><button type="button" onClick={() => selectTimelineItem(item)} className={`group flex w-full items-center gap-2.5 rounded-[15px] border p-2.5 text-left ${selectedItem?.item_id === item.item_id ? 'border-[#78aaf4] shadow-[0_4px_14px_rgba(40,120,245,.1)]' : 'border-[#e8eef5]'}`}><span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold text-white ${selectedItem?.item_id === item.item_id ? 'bg-[#175fc5]' : 'bg-[#2878f5]'}`}>{index + 1}</span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-2"><span className="truncate text-[11px] font-semibold text-[#2b405b]">{item.title}</span><span className="shrink-0 text-[9px] text-[#8190a3]">{item.start_time || '时间待定'}</span></span><span className="mt-1 flex items-center gap-2 text-[9px] text-[#8190a3]"><span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden />停留 {item.duration_min} 分钟</span>{item.activity_type === 'meal' && <span className="rounded bg-[#fff5e9] px-1.5 py-0.5 text-[#b57835]">餐饮</span>}</span><span className="mt-1 block truncate text-[9px] text-[#98a5b4]">{item.place?.address || item.note || item.place?.facts.source || '地点详情'}</span>{placeIntroLine(item) && <span className="hidden group-hover:block text-[9px] leading-4 text-[#5c7074]">{placeIntroLine(item)}</span>}</span><MoreHorizontal size={15} className="shrink-0 text-[#8798ad]" aria-hidden /></button>{index < day.items.length - 1 && <div className="ml-10 flex h-8 items-center gap-2"><span className="h-px w-4 border-t border-dashed border-[#bdd2ec]"/><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel({ kind: 'transport', fromItemId: item.item_id, toItemId: day.items[index + 1].item_id })} className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[9px] text-[#72849b]">交通 · {legLabel(day, item, day.items[index + 1])} <ChevronDown size={10} aria-hidden /></button></div>}</div>)}</div> : <div className="rounded-xl border border-dashed border-[#dce6f2] bg-[#fbfdff] p-6 text-center text-xs text-[#8797aa]">这一天还没有安排。</div>}</div></div> : <div className="min-h-0 flex-1 overflow-y-auto p-3"><TravelSearchPanel key={`${activeTab}-${trip.trip_id}`} initialKind={activeTab as Exclude<TravelSearchKind, 'trip'>} trip={trip} showTabs={false} onTripSaved={saved} onRefreshConflict={() => void refreshLatestTrip()} writeLocked={Boolean(pendingTripWrite)} onTripWriteTransition={transitionTripWrite} onLocationSelect={setSelectedLocation} onSearchEvent={recordSearchEvent}/></div>}</section>
 
-      <aside className="order-1 hidden min-h-0 min-[821px]:flex min-w-0 flex-col gap-3 rounded-[22px] border border-[#e4ebf4] bg-white p-3 shadow-[0_6px_24px_rgba(31,74,130,.05)]"><div className="flex items-center justify-between px-1"><div><h2 className="text-sm font-bold text-[#263b55]">行程地图</h2><p className="mt-1 text-[9px] text-[#8a98aa]">天数条切换日期 · 点击编号定位行程地点</p></div><span className="rounded-full bg-[#f1f6fc] px-2.5 py-1 text-[9px] text-[#7589a1]">第 {dayIndex + 1} 天</span></div><div className="flex shrink-0 gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[88px] rounded-xl border px-3 py-2 text-left ${dayIndex === index ? 'border-[#76aaf4] bg-[#f2f7ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#6e8097]'}`}><span className="block truncate text-[10px] font-semibold">第 {index + 1} 天{item.title?.trim() ? ` · ${item.title.trim()}` : ''}</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div><div className="min-h-0 flex-1"><TravelV2Map days={days} activeDayIndex={dayIndex} selectedItemId={selectedItem?.item_id ?? ''} selectedLocation={selectedLocation} onSelectItem={onSelectMapItem}/></div><section aria-label="行程概览" className="shrink-0 rounded-xl border border-[#e2ecf7] bg-[#f6faff] p-3">
-        <div className="flex items-center justify-between gap-2"><p className="truncate text-xs font-bold text-[#263b55]">行程概览</p><span className="shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-medium text-[#6380a0]">v{trip.revision}</span></div>
-        <dl className="mt-2 space-y-1.5">{buildTripOverview(trip).map((row) => <div key={row.label} className="flex items-start justify-between gap-3 text-[10px] leading-4"><dt className="shrink-0 font-semibold text-[#52698a]">{row.label}</dt><dd className="min-w-0 flex-1 text-right text-[#42596f]">{row.value}</dd></div>)}</dl>
-      </section><section className="flex min-h-[122px] gap-3 overflow-hidden rounded-[18px] border border-[#e8edf4] bg-white p-2.5"><span className="flex h-[92px] w-[102px] shrink-0 items-center justify-center rounded-xl bg-[#edf4fc] text-[#82a4cc]"><MapPin size={24} aria-hidden /></span><div className="min-w-0 flex-1 py-0.5"><p className="text-[8px] font-medium text-[#5b89c0]">{selectedLocation ? '查询结果位置' : '行程地点详情'}</p><h3 className="mt-1 truncate text-sm font-semibold text-[#2b405b]">{selectedLocation?.name || selectedItem?.title || '选择地点查看详情'}</h3><p className="mt-2 line-clamp-2 text-[9px] leading-4 text-[#75869a]">{selectedLocation ? '位置来自查询候选。' : selectedItem?.place?.address || selectedItem?.note || '当前地点没有详细地址。'}</p><div className="mt-2 flex items-center gap-3 text-[9px] text-[#8292a6]">{selectedItem && <span className="inline-flex items-center gap-1"><Clock3 size={10} aria-hidden/>{selectedItem.start_time || '时间待定'}</span>}{selectedItem && <span>停留 {selectedItem.duration_min} 分钟</span>}</div></div></section>{selectedItem && selectedItem.activity_type !== 'meal' && !inlineCandidates && <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void loadInlineCandidates()} className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] font-medium text-[#2878f5] disabled:opacity-50">查看「{selectedItem.title}」的备选地点</button>}
-{inlineCandidates?.loading && <p role="status" className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] text-[#526984]">正在检索备选地点…</p>}
-{inlineCandidates && !inlineCandidates.loading && <section aria-label="备选地点" className="shrink-0 space-y-1.5">
-  {inlineCandidates.error && <p role="alert" className="rounded-lg bg-rose-50 px-2.5 py-2 text-[9px] text-rose-700">{inlineCandidates.error}</p>}
-  {inlineCandidates.results.length > 0 && <ul className="max-h-[210px] space-y-1.5 overflow-y-auto">
-    {inlineCandidates.results.map((candidate) => {
-      const confirming = inlineCandidates.confirmId === candidate.selection_id
-      return <li key={candidate.selection_id} className="rounded-lg border border-[#e7edf5] bg-white p-2">
-        <p className="truncate text-[10px] font-semibold text-[#2b405b]">{candidate.place.name}</p>
-        <p className="truncate text-[9px] text-[#8292a6]">{candidate.place.address || candidate.category || '地点地址待核实'}</p>
-        <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void replaceWithCandidate(candidate)}
-          className={`mt-1 h-7 w-full rounded-md px-2 text-[9px] font-medium disabled:opacity-50 ${confirming ? 'bg-[#b45309] text-white' : 'bg-[#f2f7fd] text-[#2878f5]'}`}>
-          {confirming ? '再次点击确认替换' : `替换「${selectedItem?.title ?? ''}」`}
-        </button>
-      </li>
-    })}
-  </ul>}
-  {inlineCandidates.disclosure && <p className="text-[9px] leading-4 text-[#8796a8]">{inlineCandidates.disclosure}</p>}
-  <button type="button" onClick={() => setInlineCandidates(null)} className="text-[9px] text-[#71839b] underline">收起备选</button>
-</section>}
-{mealCandidates?.loading && <p role="status" className="shrink-0 rounded-lg bg-[#f2f7fd] px-2.5 py-2 text-[9px] text-[#526984]">正在检索候选餐厅…</p>}
-{mealCandidates && !mealCandidates.loading && <section aria-label="候选餐厅" className="shrink-0 space-y-1.5">
-  {mealCandidates.addedName && <p role="status" className="rounded-lg bg-emerald-50 px-2.5 py-2 text-[9px] text-emerald-800">已把「{mealCandidates.addedName}」加入行程；原占位餐项可通过卡片「编辑」菜单移除。</p>}
-  {mealCandidates.error && <p role="alert" className="rounded-lg bg-rose-50 px-2.5 py-2 text-[9px] text-rose-700">{mealCandidates.error}</p>}
-  {mealCandidates.merchants.length > 0 ? <ul className="max-h-[210px] space-y-1.5 overflow-y-auto">
-    {mealCandidates.merchants.map((merchant) => {
-      const confirming = mealCandidates.confirmId === merchant.selection_id
-      const periodLabel = mealCandidates.period === 'lunch' ? '午餐' : '晚餐'
-      return <li key={merchant.selection_id} className="rounded-lg border border-[#e7edf5] bg-white p-2">
-        <p className="truncate text-[10px] font-semibold text-[#2b405b]">{merchant.name}</p>
-        <p className="truncate text-[9px] text-[#8292a6]">{[merchant.address || '地址待核实', typeof merchant.rating === 'number' ? `评分 ${merchant.rating}` : null, typeof merchant.avg_cost_cny === 'number' && merchant.avg_cost_cny > 0 ? `人均 ¥${merchant.avg_cost_cny}` : null, merchant.open_status || null].filter(Boolean).join(' · ')}</p>
-        <button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => void addMealCandidate(merchant)} className={`mt-1 h-7 w-full rounded-md px-2 text-[9px] font-medium disabled:opacity-50 ${confirming ? 'bg-[#b45309] text-white' : 'bg-[#f2f7fd] text-[#2878f5]'}`}>
-          {confirming ? '再次点击确认加入' : `加入${periodLabel}`}
-        </button>
-      </li>
-    })}
-  </ul> : !mealCandidates.error && <p className="rounded-lg bg-[#f6faff] px-2.5 py-2 text-[9px] text-[#526984]">没有查到候选餐厅，可到「美食」标签页手动查询。</p>}
-  {mealCandidates.disclosure && <p className="text-[9px] leading-4 text-[#8796a8]">{mealCandidates.disclosure}</p>}
-  <button type="button" onClick={() => setMealCandidates(null)} className="text-[9px] text-[#71839b] underline">收起候选</button>
-</section>}<div className="flex items-center justify-between border-t border-[#edf1f6] px-1 pt-2 text-[8px] text-[#96a3b2]"><span>地图位置根据可用数据展示</span><span>V2 工作台</span></div></aside>
+      <aside className="order-1 hidden min-h-0 min-[821px]:flex min-w-0 flex-col gap-3 rounded-[22px] border border-[#e4ebf4] bg-white p-3 shadow-[0_6px_24px_rgba(31,74,130,.05)]"><div className="flex items-center justify-between px-1"><div><h2 className="text-sm font-bold text-[#263b55]">行程地图</h2><p className="mt-1 text-[9px] text-[#8a98aa]">天数条切换日期 · 点击编号定位行程地点</p></div><span className="rounded-full bg-[#f1f6fc] px-2.5 py-1 text-[9px] text-[#7589a1]">第 {dayIndex + 1} 天</span></div><div className="flex shrink-0 gap-2 overflow-x-auto pb-1">{days.map((item, index) => <button key={item.day_id} type="button" aria-pressed={dayIndex === index} onClick={() => selectDay(index)} className={`min-w-[88px] rounded-xl border px-3 py-2 text-left ${dayIndex === index ? 'border-[#76aaf4] bg-[#f2f7ff] text-[#246bd2]' : 'border-[#e6edf5] bg-white text-[#6e8097]'}`}><span className="block truncate text-[10px] font-semibold">第 {index + 1} 天{item.title?.trim() ? ` · ${item.title.trim()}` : ''}</span><span className="mt-1 block text-[8px]">{item.date || '日期待定'}</span></button>)}</div><div className="min-h-0 flex-1"><TravelV2Map days={days} activeDayIndex={dayIndex} selectedItemId={selectedItem?.item_id ?? ''} selectedLocation={selectedLocation} onSelectItem={onSelectMapItem}/></div></aside>
     </div>
 
     <div className="flex-1 pb-3 min-[821px]:hidden"><section className="mx-3 mt-3 rounded-[18px] border border-[#e4ebf4] bg-white p-3 shadow-[0_4px_16px_rgba(31,74,130,.04)]"><div className="flex items-start justify-between gap-3"><div><p className="text-[9px] font-medium text-[#5a87bd]">正式行程 · 自动保存</p><h2 className="mt-1 text-base font-bold text-[#263b55]">{trip.title || brief.destination}</h2><p className="mt-1 text-[10px] text-[#8796a8]">{brief.start_date || '日期待定'} · {brief.day_count} 天 · {brief.travelers.adults + brief.travelers.children} 人</p></div><span className="rounded-full bg-[#f1f6fc] px-2 py-1 text-[8px] text-[#6380a0]">v{trip.revision}</span></div><div className="mt-3 grid grid-cols-3 divide-x divide-[#e8edf4] rounded-xl bg-[#f7faff] py-2.5"><div className="text-center"><p className="text-[8px] text-[#91a0b1]">人数</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{brief.travelers.adults + brief.travelers.children} 位</p></div><div className="text-center"><p className="text-[8px] text-[#91a0b1]">预算</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{budget}</p></div><div className="text-center"><p className="text-[8px] text-[#91a0b1]">节奏</p><p className="mt-1 text-[10px] font-semibold text-[#4b6380]">{paceLabel(brief.pace)}</p></div></div></section>
@@ -746,6 +695,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       writeMessage={writeFeedback?.message ?? ''}
       onClose={() => setEditPanel(null)}
       onEdit={applyEdit}
+      onSwitchMeal={switchMeal}
       onRetry={retryEdit}
       onRefreshConflict={refreshLatestTrip}
     />}
