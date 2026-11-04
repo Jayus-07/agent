@@ -20,7 +20,8 @@ def _trace(tid: str, *, status: str = "success", question: str = "q",
            workflow: str = "agent", degraded_meta: bool = False) -> dict:
     return {
         "id": tid, "status": status, "question": question,
-        "answer_preview": f"answer-{tid}", "duration_ms": duration_ms,
+        "answer_preview": f"answer-{tid}", "answer_len": len(f"answer-{tid}"),
+        "duration_ms": duration_ms,
         "cost_cny": cost_cny, "workflow_name": workflow,
         "metadata": {"degraded": degraded_meta} if degraded_meta else {},
         "error": {} if status != "error" else {"message": "boom"},
@@ -83,6 +84,38 @@ def test_trace_source_unavailable_skips():
     assert result["skipped"] == "trace_store_unavailable"
 
 
+def test_negative_feedback_query_closes_pooled_connection():
+    """负反馈查询显式归还 raw_connection，不依赖代理对象上下文管理器。"""
+    conn = MagicMock(spec=["cursor", "commit", "rollback", "close"])
+    conn.cursor.return_value.fetchall.return_value = [("trace-negative",)]
+    engine = MagicMock()
+    engine.raw_connection.return_value = conn
+
+    with patch("backend.infra.db.engine_for", return_value=engine):
+        trace_ids = sut._negative_trace_ids("2026-11-04 00:00:00")
+
+    assert trace_ids == {"trace-negative"}
+    conn.commit.assert_called_once()
+    conn.close.assert_called_once()
+    conn.rollback.assert_not_called()
+
+
+def test_pooled_connection_rolls_back_and_closes_after_error():
+    """连接块异常时回滚并关闭池化连接。"""
+    conn = MagicMock(spec=["cursor", "commit", "rollback", "close"])
+    engine = MagicMock()
+    engine.raw_connection.return_value = conn
+
+    with patch("backend.infra.db.engine_for", return_value=engine):
+        with pytest.raises(RuntimeError, match="query failed"):
+            with sut._pooled_connection({"dbname": "agent_memory"}):
+                raise RuntimeError("query failed")
+
+    conn.rollback.assert_called_once()
+    conn.close.assert_called_once()
+    conn.commit.assert_not_called()
+
+
 # ── 采样口径 ─────────────────────────────────────────────────────────────────
 
 
@@ -105,6 +138,11 @@ def test_priority_ordering_negative_first():
                                      "degraded": 1}
     # 封顶截断：普通/拒答样本被挤出
     assert "normal" not in result["by_priority"]
+
+
+def test_business_failed_status_gets_failure_priority():
+    """无顶层异常的业务 failed 终态也优先采样。"""
+    assert sut._priority(_trace("business-failed", status="failed"), set()) == 1
 
 
 def test_rate_proportional_with_min_one():
@@ -156,6 +194,27 @@ def test_judge_below_passline_is_fail_sample():
     assert result["judge_avg_total"] == 2.0
 
 
+def test_truncated_answer_is_skipped_without_judging_preview():
+    """只有 answer_preview 且全文更长时记录 skip，不用片段伪装完整回答。"""
+    trace = _trace("long-answer")
+    trace["answer_preview"] = "x" * 200
+    trace["answer_len"] = 800
+    with _patch_trace_store([trace]), _patch_judge() as judge_mock, \
+            patch.object(sut, "_negative_trace_ids", return_value=set()), \
+            patch.object(sut, "_persist", return_value=True) as persist_mock, \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}):
+        result = sut.run_online_sampling()
+
+    judge_mock.assert_not_called()
+    assert result["judge_skipped_count"] == 1
+    assert result["judge_failed_count"] == 0
+    assert result["judge_avg_total"] is None
+    assert result["judge_pass_rate"] is None
+    rows = persist_mock.call_args.args[1]
+    assert rows[0]["status"] == "skip"
+    assert rows[0]["answer_skipped"] is True
+
+
 # ── 聚合与落库 ───────────────────────────────────────────────────────────────
 
 
@@ -183,8 +242,8 @@ def test_persist_record_and_sample_fields():
             patch("backend.evaluation.run_records.collect_model_binding_fingerprint",
                   return_value="fp0"), \
             patch("backend.infra.db.engine_for") as engine_mock:
-        conn = MagicMock()
-        engine_mock.return_value.raw_connection.return_value.__enter__.return_value = conn
+        conn = MagicMock(spec=["cursor", "commit", "rollback", "close"])
+        engine_mock.return_value.raw_connection.return_value = conn
 
         result = sut.run_online_sampling()
 
@@ -204,6 +263,9 @@ def test_persist_record_and_sample_fields():
     assert sample_delete[0][1] == (result["run_id"], "judge")
     # 样本批量：executemany 写 ai.eval_run_samples
     assert "ai.eval_run_samples" in conn.cursor().executemany.call_args[0][0]
+    conn.commit.assert_called_once()
+    conn.close.assert_called_once()
+    conn.rollback.assert_not_called()
 
 
 def test_persist_failure_soft():

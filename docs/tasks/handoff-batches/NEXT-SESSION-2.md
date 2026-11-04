@@ -15,7 +15,7 @@
 | B1 | `backend/evaluation/release_gate.py` | `DEFAULT_THRESHOLDS` 加 `p95_latency_ms=30000 / cost_per_case_cny=1.0 / degradation_rate=0.05`（全部 direction=lower）；三项进 `LOWER_IS_BETTER`/`GATE_METRIC_LABELS`/`METRIC_SOURCE`；进 **RAG 与 SQL policy 的 optional**（有值裁决超线 FAIL、缺失 N/A 不影响存量 gate——required 会把所有现存 suite 干成 FAIL，勿改成 required） |
 | B2 | `backend/evaluation/online_sampler.py`（新建） | `run_online_sampling()`：trace_store 权威源采样 → judge 打分 → `ai.eval_run_records`（trigger='online'）+ `ai.eval_run_samples`（evaluator='judge'）落库 |
 | B3 | `backend/tasks/eval_sampling_tasks.py`（新建）+ `celery_app.py` include/beat_schedule + `queue_router.py` 登记 | task `evaluation.online_sampling`，每日 01:30 UTC，queue=report（beat_queue 派生） |
-| 测试 | `tests/evaluation/test_release_gate_module_aware.py`（+93 行 7 用例）、`tests/evaluation/test_online_sampler.py`（新 13 用例） | **41 passed**（原 40 条基线 + Beat 注册断言）；路由/拓扑守卫 `test_phase2_runtime_contract + test_task_queue_router + test_worker_topology` **48 passed** |
+| 测试 | `tests/evaluation/test_release_gate_module_aware.py`（+93 行 7 用例）、`tests/evaluation/test_online_sampler.py`（新 17 用例） | **48 passed**（采样/门禁 + rag_smoke workflow 契约）；路由/拓扑守卫此前 **48 passed** |
 
 ### 关键设计事实（本轮核实，含踩坑）
 
@@ -30,20 +30,23 @@
 3. **feedback 表在 `agent_business` 库**（`FEEDBACK_PG_CONFIG`，public.feedback，
    非 agent_memory！），有 `trace_id` 列——负反馈直接 `SELECT DISTINCT trace_id
    WHERE vote='negative' AND created_at >= cutoff`（UTC 文本字典序比较）。
-4. **trace 三个优先信号全部现成**：`status`（error/cancelled/degraded/rejected/success）、
+4. **trace 优先信号全部现成**：`status`（error/failed/cancelled/degraded/rejected/success）、
    `metadata.degraded`+`degraded_reasons`（降级）、feedback.vote='negative'。
    「低置信」无独立字段（rejection.scores 语义未核实），用 degraded 替代，如需补先核实。
 5. **judge 契约**：`judge_answer(question, rubric, answer)` 永不抛（catch-all 返
    total=0.0）；0.0 → status='error' 计数不吞、不进均值（与 rag.py:843 先例一致）。
    及格线 judge_total≥3.0（60 分）→ pass。eval_gen 未绑定模型时全部 0.0——
    生产首次开 `EVAL_ONLINE_SAMPLER_ENABLED=true` 前先确认 eval_gen 已绑模型。
-6. **幂等**：run_id 按天 `online-YYYYMMDD`；records ON CONFLICT 更新 run 摘要，
+6. **答案预览边界**：`TraceRecord` 保存全文字符数 `answer_len`，但 trace_store 仅持久化
+   `answer_preview=answer[:200]`；长度不匹配或缺字段时样本记 `skip`，记录
+   `error_stage=answer_preview_incomplete` 和 `judge_skipped_count`，不对截断片段评分。
+7. **幂等**：run_id 按天 `online-YYYYMMDD`；records ON CONFLICT 更新 run 摘要，
    样本明细在同一事务内先清理该 run 的旧 judge 行、再写当前行集，避免同日重跑
    后摘要计数与样本明细不一致。
-7. **采样开关与参数（env，治理边界：不建配置页）**：
+8. **采样开关与参数（env，治理边界：不建配置页）**：
    `EVAL_ONLINE_SAMPLER_ENABLED`（默认 false）、`EVAL_ONLINE_SAMPLE_RATE`（0.05）、
    `EVAL_ONLINE_SAMPLE_MAX`（20）、`EVAL_ONLINE_SAMPLE_WINDOW_HOURS`（24）。
-8. **B1 判定路径**：`_evaluate_requirement` optional+有值+阈值（DEFAULT 恒有）→
+9. **B1 判定路径**：`_evaluate_requirement` optional+有值+阈值（DEFAULT 恒有）→
    判定；三项放 optional 是向后兼容唯一可行解，TASK.md 验收「缺数据 fail-closed」
    由 required 既有铁律覆盖（守卫用例 test_perf_optional_does_not_mask_required_fail）。
 
@@ -67,25 +70,24 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 
 ## 三、E' 收尾步骤（下一个会话第一件事）
 
-1. worktree `D:\Program Files\workplace\agent-wt-audit-r1`（分支 `feat/eval-closure-backend`）
-   先 `git status` 核对 7 个文件改动仍在（见一节表格）+ 复跑定向测试确认基线：
-   `cd backend && D:/Python/python.exe -m pytest tests/evaluation/test_online_sampler.py
-   tests/evaluation/test_release_gate_module_aware.py -q`（当前预期 41 passed；原始 40 条
-   基线已复跑，之后增加 Beat 时间/队列注册回归断言）。
-2. 按 AGENTS.md 提交规范分一次 commit（一个提交一件事，全部文件同属 eval-closure 后端批）：
-   `git add -A -- backend/evaluation/online_sampler.py backend/evaluation/release_gate.py
-   backend/tasks/eval_sampling_tasks.py backend/tasks/celery_app.py backend/tasks/queue_router.py
-   backend/tests/evaluation/test_online_sampler.py backend/tests/evaluation/test_release_gate_module_aware.py
-   docs/tasks/handoff-batches/NEXT-SESSION-2.md`
-   然后 `git commit -m "feat(evaluation): eval-closure 后端三项——表现阈值门禁/在线采样评测/每日调度" -- <同上路径>`（双重路径限定）。
-3. push（带代理）→ 开 PR（base main，说明含测试证据）→ CI 全绿 → 合并。
+1. worktree `D:\Program Files\workplace\agent-wt-audit-r1`（分支 `feat/eval-closure-backend`），
+   PR #326 已开。复核 Review 修复后运行：
+   `D:/Python/python.exe -m pytest backend/tests/evaluation/test_online_sampler.py
+   backend/tests/evaluation/test_release_gate_module_aware.py
+   tests/evaluation/test_rag_ci_workflow_contracts.py -q --no-cov`（当前 48 passed）。
+2. Review 修复经本地 Diff 与 48 项定向验证后，按路径限定提交 4 个改动文件：
+   `git add -A -- .github/workflows/rag_smoke.yml backend/evaluation/online_sampler.py
+   backend/tests/evaluation/test_online_sampler.py docs/tasks/handoff-batches/NEXT-SESSION-2.md`
+   然后 `git commit -m "fix(evaluation): address online sampler review findings" -- <同上路径>`。
+3. 使用代理推送分支并更新已存在的 PR #326（base main，补充 48 passed 证据）；等待本次提交的 CI 全绿后合并。
 4. 主仓 pull → `devctl.bat rebuild /y`（subprocess 包 cmd.exe，timeout ≥7000s）→
    容器健康 + `beat` 容器日志确认 `evaluation.online_sampling` 注册
    （默认关：`EVAL_ONLINE_SAMPLER_ENABLED` 未开时任务每天空跑返回 skipped）。
 5. 合并后主仓 `git pull` 并核对 NEXT-SESSION-2.md 已入库。
 
-**未完成原因**：本轮会话在定向测试全绿后到达交接边界；commit/PR 需按协作规范
-先向用户展示 Diff 求确认，由下一会话连同 D1 批次一起推进，避免半途提交。
+**当前状态**：首提交 `3d919b9` 已推送且 PR #326 已创建；自动 Review 的 4 项意见已修复，
+本地定向验证 48 passed，Diff 已核对。Review 修复的 4 文件尚未提交/推送；新 CI、合并、
+主仓 pull/rebuild 与在线落库实机验收仍待完成。
 
 ## 四、D1 步骤（E' 合并后可立即做，文档批）
 
@@ -108,7 +110,7 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 ## 六、工作树
 
 - `D:\Program Files\workplace\agent-wt-audit-r1`（分支 `feat/eval-closure-backend`，
-  基于 origin/main e7d7325；**8 个实现文件 + 本交接稿，共 9 个文件未提交**：5 M + 3 新增；根 .env 在位、backend/.env
+  PR #326，首提交 `3d919b9`，基于 origin/main e7d7325；**9 个实现文件 + 本交接稿，共 10 个 PR 文件**；根 .env 在位、backend/.env
   主仓也没有——DB 测试走容器内 5433 环境变量，无需 backend/.env）。
 - E' 提交并合并后该 worktree 可继续承载 D1/F 分支（每批一次独立分支）。
 - 不动其他会话 worktree；开工前 `ls docs/tasks/` + `git fetch` 防撞车
@@ -118,8 +120,8 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 
 - 依赖批（D3/D4a）固定八步链：① requires_python 逐包 → ② OSV 清零 → ③ 改 lock →
   ④ dry-run 全量解析 → ⑤ PR CI → ⑥ 合并 → ⑦ pull+rebuild → ⑧ 容器 freeze 一致性+冒烟+/health 双 200。
-- E 批验收（TASK.md）：B1 三态裁决+缺数据 fail-closed（原 40 条基线复跑；加入 Beat
-  注册断言后当前 41 passed）✓（代码面）；
+- E 批验收（TASK.md）：B1 三态裁决+缺数据 fail-closed（原 40 条基线已复跑；Review
+  修复后采样/门禁与 rag_smoke workflow 契约合计 48 passed）✓（代码面）；
   B2/B3 beat 触发一次采样 run 落库且 trigger='online' 可过滤——**rebuild 后需实机验证**
   （临时开 `EVAL_ONLINE_SAMPLER_ENABLED=true` 手动触发任务一次，查
   `SELECT run_id, trigger, metrics FROM ai.eval_run_records WHERE trigger='online'`，
@@ -133,8 +135,8 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 > 继续 agent 仓库 eval-closure 接手批。先读 docs/tasks/handoff-batches/NEXT-SESSION-2.md
 > （本轮 E 批代码已完成未提交，含设计事实/踩坑/收尾步骤）与 docs/tasks/eval-closure/TASK.md，
 > fetch 核对 main 最新并 ls docs/tasks/ 防撞车。然后按序执行：
-> ① E' 收尾——到 worktree agent-wt-audit-r1（feat/eval-closure-backend 分支）核对 8 个
-> 实现文件 + 本交接稿与 41 passed 当前基线（原始 40 条已复跑），向用户展示 Diff 求确认后 commit/push/PR/CI 全绿/合并/主仓 pull/
+> ① E' 收尾——到 worktree agent-wt-audit-r1（feat/eval-closure-backend 分支，PR #326）核对 9 个
+> 实现文件 + 本交接稿与 48 passed 当前基线（原始 40 条已复跑），完成 Review 修复后 push/重跑 CI 全绿/合并/主仓 pull/
 > devctl rebuild/beat 注册确认，并开 EVAL_ONLINE_SAMPLER_ENABLED 实机验证一次
 > trigger='online' 落库后还原；② D1 dev-only 124 包复检（文档批）；③ F 批前端三项
 > （前置已满足，开工前逐文件 diff 核对三 tab 基线）；④ D3/D4a 依赖升级（八步链）。

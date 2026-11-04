@@ -158,6 +158,8 @@ jobs:
           python -m pytest tests/test_rag_smoke_path_filter.py \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
+            backend/tests/evaluation/test_online_sampler.py \
+            backend/tests/evaluation/test_release_gate_module_aware.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             tests/evaluation/test_rag_runner.py \
             tests/evaluation/test_cs_live_entrypoint.py \

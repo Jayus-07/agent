@@ -10,6 +10,8 @@
 - **采样参数留环境变量与代码**（治理边界裁决），不建管理端配置页；
 - **judge 失败不吞**：judge_answer 失败返回 total=0.0（judge.py 契约），
   此处记 status='error' + judge_failed_count 显式暴露，不进均值、不假装通过；
+- **预览不冒充全文**：trace_store 仅存 answer_preview；answer_len 不匹配时记
+  status='skip' 并计入 judge_skipped_count，不用截断文本打分；
 - **幂等**：run_id 按天固定（``online-YYYYMMDD``），重跑覆盖同键
   （records ON CONFLICT run_id / samples UNIQUE (run_id, case_id, evaluator)）；
 - **软失败分层**：trace 源/DB 不可达 → skipped/warning 返回，不炸 beat 调度；
@@ -19,11 +21,28 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any
+from contextlib import contextmanager
+from typing import Any, Iterator
 
 from backend.shared.logger import logger
 
 # ── 配置（env 直读不缓存：测试可 monkeypatch.setenv，beat 每日重读）──────────
+
+
+@contextmanager
+def _pooled_connection(config: dict[str, Any]) -> Iterator[Any]:
+    """获取池化 DBAPI 连接，并显式提交/回滚及归还连接。"""
+    from backend.infra.db import engine_for
+
+    conn = engine_for(config).raw_connection()
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _enabled() -> bool:
@@ -85,9 +104,8 @@ def _negative_trace_ids(cutoff: str) -> set[str]:
     try:
         from backend.config.database import FEEDBACK_PG_CONFIG
         from backend.feedback.pg import _table
-        from backend.infra.db import engine_for
 
-        with engine_for(FEEDBACK_PG_CONFIG).raw_connection() as conn:
+        with _pooled_connection(FEEDBACK_PG_CONFIG) as conn:
             cur = conn.cursor()
             cur.execute(
                 f"SELECT DISTINCT trace_id FROM {_table()} "
@@ -110,7 +128,7 @@ def _priority(trace: dict, negatives: set[str]) -> int:
     if trace_id and trace_id in negatives:
         return 0
     status = str(trace.get("status", ""))
-    if status in ("error", "cancelled") or trace.get("error"):
+    if status in ("error", "failed", "cancelled") or trace.get("error"):
         return 1
     metadata = trace.get("metadata") or {}
     if status == "degraded" or metadata.get("degraded"):
@@ -124,9 +142,18 @@ _PRIORITY_LABELS = {0: "negative_feedback", 1: "failed", 2: "degraded", 3: "reje
 
 
 def _judgeable(trace: dict) -> bool:
-    """judge 需要问题与答案双要素；缺失的 trace（如纯路由失败）不可评。"""
+    """采样池至少要有问题；答案完整性在评分时单独判定并记录 skip。"""
     return bool(str(trace.get("question", "")).strip())
-    # answer_preview 允许空串（可代表"未生成答案"，judge 按完整性低分裁定）
+
+
+def _answer_is_complete(trace: dict) -> bool:
+    """trace_store 只保存 answer_preview；仅长度证明预览就是全文时可评分。"""
+    answer = str(trace.get("answer_preview", "") or "")
+    try:
+        answer_len = int(trace["answer_len"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return answer_len == len(answer)
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -157,17 +184,35 @@ def _sample_traces(cutoff: str) -> list[tuple[int, dict]]:
 
 
 def _judge_all(samples: list[tuple[int, dict]]) -> list[dict]:
-    """逐条 judge 打分。judge_answer 自带 catch-all（失败返 total=0.0），
-    此处只按其契约分流：0.0 → error（不吞、不进均值）。"""
+    """仅完整答案进入 judge；失败记 error，缺完整答案记 skip。"""
     from backend.evaluation.judge import judge_answer
 
     rows: list[dict] = []
     for priority, trace in samples:
         trace_id = str(trace.get("id", ""))
+        answer = str(trace.get("answer_preview", "") or "")
+        if not _answer_is_complete(trace):
+            rows.append({
+                "case_id": trace_id,
+                "priority": _PRIORITY_LABELS.get(priority, "normal"),
+                "status": "skip",
+                "judge_total": None,
+                "judge_failed": False,
+                "answer_skipped": True,
+                "confidence": "",
+                "reasoning": "无法恢复完整答案，未对预览文本评分",
+                "scores": {},
+                "workflow_name": str(trace.get("workflow_name", "")),
+                "trace_duration_ms": int(trace.get("duration_ms") or 0),
+                "trace_cost_cny": float(trace.get("cost_cny") or 0.0),
+                "trace_degraded": str(trace.get("status", "")) == "degraded"
+                or bool((trace.get("metadata") or {}).get("degraded")),
+            })
+            continue
         result = judge_answer(
             str(trace.get("question", "")),
             ONLINE_JUDGE_RUBRIC,
-            str(trace.get("answer_preview", "")),
+            answer,
         )
         failed = result.total <= 0.0
         rows.append({
@@ -176,6 +221,7 @@ def _judge_all(samples: list[tuple[int, dict]]) -> list[dict]:
             "status": "error" if failed else ("pass" if result.total >= _JUDGE_PASS_TOTAL else "fail"),
             "judge_total": round(result.total, 4),
             "judge_failed": failed,
+            "answer_skipped": False,
             "confidence": result.confidence,
             "reasoning": result.reasoning[:500],
             "scores": result.scores,
@@ -190,8 +236,10 @@ def _judge_all(samples: list[tuple[int, dict]]) -> list[dict]:
 
 def _aggregate(rows: list[dict]) -> dict[str, Any]:
     """run 级聚合。表现指标与 release_gate B1 新增三项同键名（口径单一）。"""
-    scored = [r for r in rows if not r["judge_failed"]]
+    scored = [r for r in rows if r["status"] in ("pass", "fail")]
     passed = [r for r in scored if r["status"] == "pass"]
+    judge_failed_count = sum(1 for r in rows if r["judge_failed"])
+    judge_skipped_count = sum(1 for r in rows if r["answer_skipped"])
     durations = [r["trace_duration_ms"] for r in rows if r["trace_duration_ms"] > 0]
     costs = [r["trace_cost_cny"] for r in rows]
     degraded = sum(1 for r in rows if r["trace_degraded"])
@@ -200,7 +248,8 @@ def _aggregate(rows: list[dict]) -> dict[str, Any]:
         by_priority[r["priority"]] = by_priority.get(r["priority"], 0) + 1
     return {
         "sampled_count": len(rows),
-        "judge_failed_count": len(rows) - len(scored),
+        "judge_failed_count": judge_failed_count,
+        "judge_skipped_count": judge_skipped_count,
         "judge_avg_total": round(sum(r["judge_total"] for r in scored) / len(scored), 4) if scored else None,
         "judge_pass_rate": round(len(passed) / len(scored), 4) if scored else None,
         # 表现阈值三项（release_gate DEFAULT_THRESHOLDS 同键，越小越好）
@@ -222,15 +271,13 @@ def _persist(run_id: str, rows: list[dict], agg: dict[str, Any]) -> bool:
     import json
 
     from backend.config.database import OBS_DB_PG_CONFIG
-    from backend.infra.db import engine_for
-
     try:
         from backend.evaluation.run_records import (
             collect_model_binding_fingerprint,
             collect_prompt_snapshot,
         )
 
-        with engine_for(OBS_DB_PG_CONFIG).raw_connection() as conn:
+        with _pooled_connection(OBS_DB_PG_CONFIG) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
@@ -287,12 +334,13 @@ def _persist(run_id: str, rows: list[dict], agg: dict[str, Any]) -> bool:
                             "trace_duration_ms": r["trace_duration_ms"],
                             "trace_cost_cny": r["trace_cost_cny"],
                         }, ensure_ascii=False),
-                        "judge_failed" if r["judge_failed"] else "",
+                        "judge_failed" if r["judge_failed"] else (
+                            "answer_preview_incomplete" if r["answer_skipped"] else ""
+                        ),
                     )
                     for r in rows
                 ],
             )
-            conn.commit()
         return True
     except Exception as e:  # noqa: BLE001 — 采样台账软失败（不炸 beat）
         logger.warning(f"[online_sampler] eval_run_records/samples 写入失败: {e}")
