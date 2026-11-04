@@ -5,10 +5,11 @@
  * 发起表单（数据集/评测方式/被测 Prompt/知识库快照）→ 运行列表（来源/方式/进度）→ 环境指纹卡。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowRight, Play, RotateCw, X } from 'lucide-react'
 import {
   evaluationService,
+  type EvaluationV2Gate,
   type EvaluationSuite,
   type EvaluationV2Run,
   type EvaluationV2RunFingerprint,
@@ -32,6 +33,7 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
   const [promptVersion, setPromptVersion] = useState('')
   const [kbId, setKbId] = useState('')
   const [selectedRunId, setSelectedRunId] = useState('')
+  const [gateRunId, setGateRunId] = useState('')
   const [fingerprint, setFingerprint] = useState<EvaluationV2RunFingerprint | null>(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -157,26 +159,38 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
     </Card>
 
     <Card title="运行记录" subtitle="失败区分执行错误与质量不达标；错误不计入通过率分母。">
-      {loading ? <Empty text="正在读取运行状态…" /> : runs.length === 0 ? <Empty text="还没有运行记录。选择上方方案发起第一次评测。" /> : <TableWrap minWidth={980}>
-        <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th end>耗时</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
+      {loading ? <Empty text="正在读取运行状态…" /> : runs.length === 0 ? <Empty text="还没有运行记录。选择上方方案发起第一次评测。" /> : <TableWrap minWidth={1160}>
+        <thead className="bg-bg-elevated"><tr><Th>Run</Th><Th>数据集</Th><Th>被测配置</Th><Th>评测方式</Th><Th>状态</Th><Th>Gate</Th><Th>进度 / 结果</Th><Th end>费用</Th><Th end>耗时</Th><Th>完成时间</Th><Th end>操作</Th></tr></thead>
         <tbody className="divide-y divide-border-subtle">
-          {runs.map(run => <tr key={run.run_id} className={run.run_id === selectedRunId ? 'bg-accent-soft/40' : ''}>
+          {runs.map(run => <Fragment key={run.run_id}><tr className={run.run_id === selectedRunId ? 'bg-accent-soft/40' : ''}>
             <Td mono>{run.run_id.slice(0, 8)}</Td>
             <Td><span className="block text-text-primary">{run.suite_name || run.suite_key}</span><span className="text-[11px] text-text-muted">v{run.suite_version || '—'}</span></Td>
             <Td>{(() => { const versions = run.prompt_versions || {}; return Object.keys(versions).length ? Object.entries(versions).map(([key, value]) => `${key}@${String(value)}`).join(' · ') : '默认配置' })()}</Td>
-            <Td>{modeShort(run.evaluation_mode)}{run.source && run.source !== 'manual' && <span className="ml-1.5"><Badge text={run.source === 'prompt_release' ? '发布' : run.source} tone="accent" /></span>}</Td>
+            <Td>{modeShort(run.evaluation_mode)}{run.source && run.source !== 'manual' && <span className="ml-1.5"><Badge text={run.source === 'online' ? '线上采样' : run.source === 'prompt_release' ? '发布' : run.source} tone="accent" /></span>}</Td>
             <Td><StatusBadge status={run.job_status} /></Td>
+            <Td>
+              {run.gate_verdict
+                ? <Badge text={run.gate_verdict} tone={run.gate_verdict === 'PASS' ? 'good' : run.gate_verdict === 'FAIL' ? 'bad' : 'warn'} />
+                : <span className="text-text-muted">—</span>}
+              {!!run.gate_reason?.length && <details className="mt-1 max-w-48 text-[11px] text-text-muted">
+                <summary className="cursor-pointer">裁决原因（{run.gate_reason.length}）</summary>
+                <ul className="mt-1 space-y-1">{run.gate_reason.map((reason, index) => <li key={index} className="break-words">{JSON.stringify(reason)}</li>)}</ul>
+              </details>}
+            </Td>
             <Td>{run.completed_cases}/{run.total_cases} · 通过 {run.passed_cases}</Td>
             <Td end>{fmtCost(run.cost_amount, run.cost_currency)}</Td>
             <Td end>{run.started_at && run.finished_at ? `${Math.max(1, Math.round((new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()) / 1000))}s` : '—'}</Td>
             <Td>{timeShort(run.finished_at)}</Td>
             <Td end>
               <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setSelectedRunId(run.run_id)}>指纹</button>
+              {run.job_status === 'completed' && <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setGateRunId(current => current === run.run_id ? '' : run.run_id)}>{run.gate_verdict === 'PASS' ? 'Gate 审批' : 'Gate 详情'}</button>}
               {run.job_status === 'completed' && <button type="button" className={`${ctlGhost} mr-1`} onClick={() => onGoCompare?.(run.run_id)}>查看结果<ArrowRight size={11} className="ml-0.5 inline" aria-hidden="true" /></button>}
               {!TERMINAL.has(run.job_status) && <button type="button" className={`${ctlGhost} mr-1`} disabled={busy} onClick={() => cancel(run)}><X size={12} className="mr-0.5 inline" aria-hidden="true" />取消</button>}
               {run.job_status === 'failed' && <button type="button" className={ctl} disabled={busy} onClick={() => retry(run)}><RotateCw size={12} className="mr-1 inline" aria-hidden="true" />重试</button>}
             </Td>
-          </tr>)}
+          </tr>
+          {gateRunId === run.run_id && <tr><td colSpan={11} className="bg-bg-elevated/50 p-3"><GateApprovalPanel runId={run.run_id} onClose={() => setGateRunId('')} onSubmitted={() => void load()} /></td></tr>}
+          </Fragment>)}
         </tbody>
       </TableWrap>}
     </Card>
@@ -195,4 +209,77 @@ export default function RunsTab({ promptPrefill, focusRunId, onGoCompare }: { pr
       </div>
     </Card>}
   </div>
+}
+
+function GateApprovalPanel({ runId, onClose, onSubmitted }: { runId: string; onClose: () => void; onSubmitted: () => void }) {
+  const [gate, setGate] = useState<EvaluationV2Gate | null>(null)
+  const [decision, setDecision] = useState<'approved' | 'rejected'>('approved')
+  const [releaseReference, setReleaseReference] = useState('')
+  const [rationale, setRationale] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const pendingRequest = useRef<{ key: string; requestId: string } | null>(null)
+
+  const loadGate = useCallback(async () => {
+    setLoading(true); setError('')
+    try { setGate(await evaluationService.getV2Gate(runId)) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '读取 Gate 记录失败') }
+    finally { setLoading(false) }
+  }, [runId])
+  useEffect(() => { void loadGate() }, [loadGate])
+
+  const latest = gate?.decisions[0]
+  const canReview = gate?.verdict === 'PASS' && latest?.verdict === 'PASS'
+  const referenceValid = /^[A-Za-z0-9][A-Za-z0-9._:/@+#-]{2,159}$/.test(releaseReference.trim())
+  const rationaleValid = rationale.trim().length >= 8 && rationale.trim().length <= 2000
+
+  const submit = async () => {
+    if (!canReview || !latest) { setError('最新 Gate 不是 PASS，请刷新后核对。'); return }
+    const cleanReference = releaseReference.trim()
+    const cleanRationale = rationale.trim()
+    if (!referenceValid || !rationaleValid) { setError('请填写有效的发布引用和 8 到 2000 字审批理由。'); return }
+    const key = JSON.stringify([latest.decision_id, decision, cleanReference, cleanRationale])
+    const pending = pendingRequest.current?.key === key
+      ? pendingRequest.current
+      : { key, requestId: createIdempotencyKey() }
+    pendingRequest.current = pending
+    setSaving(true); setError(''); setMessage('')
+    try {
+      const approval = await evaluationService.createV2GateApproval(runId, {
+        gate_decision_id: latest.decision_id,
+        request_id: pending.requestId,
+        decision,
+        release_reference: cleanReference,
+        rationale: cleanRationale,
+      })
+      pendingRequest.current = null
+      setMessage(`Gate 发布意见已记录：${approval.decision === 'approved' ? '批准' : '拒绝'} · ${approval.release_reference}`)
+      await loadGate()
+      onSubmitted()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : '提交 Gate 审批失败') }
+    finally { setSaving(false) }
+  }
+
+  return <section className="space-y-3 rounded-md border border-border-subtle bg-surface-base p-3" aria-label={`Run ${runId} Gate 审批`}>
+    <div className="flex items-center justify-between gap-2"><div><h3 className="text-sm font-medium text-text-primary">Gate 审批 · {runId.slice(0, 8)}</h3><p className="text-xs text-text-muted">只允许针对最新 PASS 裁决记录批准或拒绝意见。</p></div><button type="button" className={ctlGhost} onClick={onClose}>收起</button></div>
+    {loading && <p role="status" className="text-xs text-text-secondary">正在读取 Gate 裁决与审批历史…</p>}
+    {error && <p role="alert" className="text-xs text-red-700">{error}</p>}
+    {message && <p role="status" className="text-xs text-text-secondary">{message}</p>}
+    {gate && <>
+      <div className="space-y-1 text-xs text-text-secondary"><p>当前状态：<Badge text={gate.verdict || '待裁决'} tone={gate.verdict === 'PASS' ? 'good' : gate.verdict === 'FAIL' ? 'bad' : 'warn'} /></p>
+        {gate.reasons.length > 0 && <ul className="list-disc pl-5">{gate.reasons.map((reason, index) => <li key={index}>{JSON.stringify(reason)}</li>)}</ul>}
+        {gate.approvals.length > 0 && <p>最近意见：{gate.approvals[0].decision === 'approved' ? '批准' : '拒绝'} · {gate.approvals[0].release_reference} · {gate.approvals[0].decided_by}</p>}
+      </div>
+      {canReview
+        ? <div className="grid gap-2 sm:grid-cols-2">
+          <label className="text-xs text-text-secondary">审批结论<select aria-label="Gate 审批结论" value={decision} onChange={event => setDecision(event.target.value as 'approved' | 'rejected')} className={`${ctl} mt-1 w-full`}><option value="approved">批准发布</option><option value="rejected">拒绝发布</option></select></label>
+          <label className="text-xs text-text-secondary">发布引用<input aria-label="Gate 发布引用" value={releaseReference} onChange={event => setReleaseReference(event.target.value)} minLength={3} maxLength={160} pattern="[A-Za-z0-9][A-Za-z0-9._:/@+#-]{2,159}" className={`${ctl} mt-1 w-full`} placeholder="release/2026.11" /></label>
+          <label className="text-xs text-text-secondary sm:col-span-2">审批理由<textarea aria-label="Gate 审批理由" value={rationale} onChange={event => setRationale(event.target.value)} minLength={8} maxLength={2000} rows={2} className={`${ctl} mt-1 w-full`} /></label>
+          <div className="sm:col-span-2"><button type="button" className={ctlPrimary} disabled={saving || loading || !referenceValid || !rationaleValid} onClick={() => void submit()}>{saving ? '提交中…' : '提交 Gate 审批'}</button></div>
+        </div>
+        : <p className="text-xs text-text-muted">当前最新裁决不是 PASS，服务端不会接受发布审批。</p>}
+    </>}
+  </section>
 }

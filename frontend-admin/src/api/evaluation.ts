@@ -195,6 +195,7 @@ export interface EvaluationV2DatasetCoverage {
 
 export interface EvaluationV2Candidate {
   candidate_id: string;
+  source_kind?: 'manual' | 'import' | 'document_synthesized' | 'trace' | 'feedback' | 'legacy';
   payload_json: {
     input?: { query?: string };
     proposed_facts?: Array<Record<string, unknown>>;
