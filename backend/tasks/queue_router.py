@@ -115,6 +115,8 @@ _BEAT_TASK_ROUTES: dict[str, tuple[str, str]] = {
     "model.health_check_one": ("maintenance", "beat_binding"),
     "budget.reconciliation_check": ("maintenance", "beat_binding"),
     "model.price_page_monitor": ("report", "beat_binding"),
+    # eval-closure B3：在线采样评测每日调度（report workload，与价格页巡检同性质）
+    "evaluation.online_sampling": ("report", "beat_binding"),
     "prompts.poll_github_eval": ("maintenance", "prompt_eval_polling"),
     # 决策 #27：用户自动任务 cron 扫描 + result_refs 每日清理（#25 尾巴）。
     "automations.scan": ("maintenance", "beat_binding"),

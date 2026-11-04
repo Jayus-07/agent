@@ -47,6 +47,7 @@ celery_app = Celery(
              "backend.tasks.memory_extraction_tasks",  # L3 durable outbox + 提取 worker
              "backend.tasks.travel_booking_tasks",  # STOP L：Booking 恢复扫描（beat）
              "backend.tasks.prompt_eval_tasks",  # Prompt 发布评测 GitHub 轮询
+             "backend.tasks.eval_sampling_tasks",  # eval-closure B3：在线采样评测每日调度
              "backend.tasks.automation_tasks",  # 决策#27：用户自动任务（cron 扫描/触发/清理）
              "backend.tasks.signals",         # 运行时埋点（worker/queue/耗时/异常）
              "backend.observability.worker_metrics"],  # Phase2-F：worker 指标端点
@@ -97,6 +98,16 @@ celery_app.conf.update(
     # 不再依赖 task_default_queue 隐式决定；maintenance/report 当前
     # 物理共享 agent worker（Step5 待拆，logical 口径见 queue_router）。
     beat_schedule={
+        # eval-closure B3（2026-11-04）：在线流量采样评测。每日 09:30
+        # Asia/Shanghai（01:30 UTC；Celery app timezone=Asia/Shanghai）
+        # 抽近期 trace（优先负反馈/失败/降级）judge 打分后落 eval_run_records
+        # （trigger=online）。开关 EVAL_ONLINE_SAMPLER_ENABLED 默认关——
+        # 关闭时任务返回 skipped 正常结束；重跑按 run_id 幂等覆盖。
+        "eval-online-sampling": {
+            "task": "evaluation.online_sampling",
+            "schedule": crontab(hour=9, minute=30),
+            "options": {"queue": beat_queue("evaluation.online_sampling")},
+        },
         "rag-index-reconcile": {
             "task": "rag.index_reconcile",
             "schedule": crontab(hour=2, minute=0),  # 应用 timezone=Asia/Shanghai
