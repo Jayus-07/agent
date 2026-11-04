@@ -79,7 +79,9 @@
 - ClaimVerifier 误杀有据数字句：检索完整性（rerank/top_k）与校验容差调优，B2 查询域接 facts 后一并观察
 - 10-22 批量停用 cs KB 的背景无人可考（审计无 reason 字段）——已在本文件留痕，运营侧如需审计问询找 super_admin 279
 
-## B2：积分/等级查询（查询型样板）—— 实现与验收（2026-11-04，分支 feat/cs-points-query）
+## B2：积分/等级查询（查询型样板）—— ✅ 已合并部署（PR #320 → d1d38df，CI 对账 919 passed/2 skipped = 907+12 零漂移）
+
+> 实现与验收证据见下（分支 feat/cs-points-query，commit dffbeb9 + b734a7b）。
 
 **实现**（FINAL-PLAN §五 B2 + 模板 A 全集，14 文件）：
 
@@ -104,6 +106,8 @@
 5. 主链路零回归：:8000 /health ok + :3100/:3300 200 + :9080 用户/坐席双登录冒烟 200；客服 RAG/FAQ 链路经 q4 实测在位
 
 **收尾**：rag_smoke 定向清单 +`test_points_flow.py` 与 `POINTS_SANDBOX_PG_DBNAME` env；GAP_LIST 积分行改「已覆盖（B1 政策问答 + B2 意图级积分/等级查询）」；customer-service.md 第 8 行（积分/等级查询口径）与第 49 行（词表扩圈台账）同步；FAQ id=8/16 与 mock/迁移种子数字三方一致（3500∈黄金档、100 分=1 元）。
+
+**CI 门禁坑（B3+ 注意，首轮 CI 实证）**：新迁移文件必须显式登记进 `.github/scripts/rag_smoke_path_filter.py`（`NON_AI_MIGRATION_ENTRIES` 或 `PAID_RELEVANT_MIGRATION_ENTRIES`），否则 `Detect RAG changes` 直接 exit 2、preflight 被跳过（首轮即因此 fail，补登记 b734a7b 后重跑全绿对账 919）。
 
 ## 后续批次
 
