@@ -18,6 +18,7 @@ import {
   type TravelTripV2,
 } from '@/api/travelV2'
 import { streamTravelPlanV2, parseTravelToolCard, type TravelStreamEvent, type TravelToolCard } from '@/api/travel'
+import MarkdownContent from '@/components/chat/MarkdownContent'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
 import type { TravelConversationMessage } from '@/components/travel/useTravelConversation'
@@ -559,8 +560,8 @@ export default function TravelV2TripConversation({
       {visibleMessages.length === 0 && <div className="flex items-start gap-2"><span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={14} aria-hidden /></span><div className="rounded-xl rounded-tl-sm bg-[#f2f7fd] px-3 py-2.5 text-[11px] leading-5 text-[#405875]">你好，我已经打开这条正式行程。你可以询问安排，也可以明确提出一项修改。</div></div>}
       {visibleMessages.map((message) => <div key={message.id} className={`flex items-start gap-2 ${message.role === 'user' ? 'justify-end' : ''}`}>
         {message.role === 'assistant' && <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={14} aria-hidden /></span>}
-        <div className={`max-w-[92%] whitespace-pre-wrap rounded-xl px-3 py-2.5 text-[11px] leading-5 ${message.role === 'user' ? 'rounded-tr-sm bg-[#2878f5] text-white' : 'rounded-tl-sm bg-[#f2f7fd] text-[#405875]'}`}>
-          {message.role === 'assistant' && message.tag && <span className="mb-1 block text-[9px] font-semibold text-[#4882ca]">{message.tag}</span>}{message.text}
+        <div className={`max-w-[92%] rounded-xl px-3 py-2.5 text-[11px] leading-5 ${message.role === 'user' ? 'whitespace-pre-wrap rounded-tr-sm bg-[#2878f5] text-white' : 'rounded-tl-sm bg-[#f2f7fd] text-[#405875]'}`}>
+          {message.role === 'assistant' && message.tag && <span className="mb-1 block text-[9px] font-semibold text-[#4882ca]">{message.tag}</span>}{message.role === 'assistant' ? <MarkdownContent content={message.text} /> : message.text}
           {message.restoreRevision !== null && onRestoreRequest && <button
             type="button"
             onClick={() => onRestoreRequest(message.restoreRevision!)}

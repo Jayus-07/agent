@@ -5,6 +5,7 @@ from hashlib import sha256
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
+from backend.travel_v2.leg_modes import recommend_leg_mode
 from backend.travel_v2.models.trip import TripDocumentV2
 
 _PLATFORM_TIMEZONE = "Asia/Shanghai"
@@ -187,6 +188,22 @@ def itinerary_to_trip_document(
                 "reliability": reliability,
                 "source": source,
                 "observed_at": observed_at,
+            })
+
+        # 缺失相邻对按直线距离推荐交通方式合成（ux2 #5）：生成行程后用户
+        # 不必逐段手选；已有 agent 腿原样保留。耗时/费用保持未知（无真实
+        # 路线查询不编造数字）。
+        existing_edges = {(leg["from_item_id"], leg["to_item_id"]) for leg in legs}
+        for source, target in zip(items, items[1:]):
+            edge = (source["item_id"], target["item_id"])
+            if edge in existing_edges:
+                continue
+            legs.append({
+                "leg_id": _stable_id(f"travel-v2/leg-rec/{edge[0]}/{edge[1]}"),
+                "from_item_id": edge[0], "to_item_id": edge[1],
+                "selected_mode": recommend_leg_mode(source.get("place"), target.get("place")),
+                "duration_min": None, "distance_m": None, "cost_cny": None,
+                "reliability": "unavailable", "source": None, "observed_at": None,
             })
 
         days.append({

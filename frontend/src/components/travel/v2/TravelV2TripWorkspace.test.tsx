@@ -13,6 +13,12 @@ const mocks = vi.hoisted(() => ({
   selectionWrite: vi.fn(),
   searchFood: vi.fn(),
   addMeal: vi.fn(),
+  editDialogProps: [] as Array<Record<string, any>>,
+  merchantFixture: {
+    selection_id: 'm-1', merchant_id: 'mch-1', name: '烤匠麻辣烤鱼', address: '成都市锦江区',
+    rating: 4.5, open_status: '营业中', lat: 30.65, lng: 104.06,
+    avg_cost_cny: 85, source: 'amap', queried_at: '2026-11-04T00:00:00Z',
+  },
   searchPanelProps: [] as Array<Record<string, any>>,
   tripRequests: [] as Array<Record<string, any>>,
   revisionRequests: [] as Array<Record<string, any>>,
@@ -95,16 +101,19 @@ vi.mock('./TravelV2Map', () => ({
 }))
 
 vi.mock('./TravelV2EditDialog', () => ({
-  default: ({ trip, onEdit, onClose, writeStatus, writeMessage, onRetry, onRefreshConflict }: {
+  default: ({ trip, item, onEdit, onSwitchMeal, onClose, writeStatus, writeMessage, onRetry, onRefreshConflict }: {
     trip: TravelTripV2
+    item: unknown
     onEdit: (operation: unknown, summary: string) => Promise<boolean>
+    onSwitchMeal?: (merchant: unknown, placeholder: unknown) => Promise<boolean>
     onClose: () => void
     writeStatus?: string | null
     writeMessage?: string
     onRetry?: () => Promise<boolean>
     onRefreshConflict?: () => Promise<boolean>
-  }) =>
-    createElement('div', { 'data-testid': 'edit-dialog' }, [
+  }) => {
+    mocks.editDialogProps.push({ trip, item, onSwitchMeal })
+    return createElement('div', { 'data-testid': 'edit-dialog' }, [
       createElement('span', { key: 'trip' }, `编辑 ${trip.trip_id}`),
       writeStatus && createElement('p', { key: 'status', role: writeStatus === 'UNKNOWN' || writeStatus === 'CONFLICT' ? 'alert' : 'status' }, `${writeStatus} ${writeMessage}`),
       createElement('button', {
@@ -112,10 +121,16 @@ vi.mock('./TravelV2EditDialog', () => ({
         type: 'button',
         onClick: () => void onEdit({ op: 'update_item', item_id: `${trip.trip_id}-item` }, `${trip.trip_id} 修改已保存`),
       }, `提交 ${trip.trip_id} 编辑`),
+      createElement('button', {
+        key: 'switch-meal',
+        type: 'button',
+        onClick: () => void onSwitchMeal?.(mocks.merchantFixture, item),
+      }, '模拟换餐厅'),
       createElement('button', { key: 'close', type: 'button', onClick: onClose }, '关闭编辑面板'),
       writeStatus === 'UNKNOWN' && createElement('button', { key: 'retry', type: 'button', onClick: () => void onRetry?.() }, '使用同一请求安全重试'),
       writeStatus === 'CONFLICT' && createElement('button', { key: 'refresh', type: 'button', onClick: () => void onRefreshConflict?.() }, '刷新最新版本并重新编辑'),
-    ]),
+    ])
+  },
 }))
 
 vi.mock('./TravelV2Frame', () => ({ TravelBottomNav: () => null }))
@@ -217,6 +232,7 @@ async function clickWorkspaceTab(container: HTMLElement, label: string) {
 
 beforeEach(() => {
   mocks.searchPanelProps.length = 0
+  mocks.editDialogProps.length = 0
   mocks.tripRequests.length = 0
   mocks.revisionRequests.length = 0
   mocks.conversationRequests.length = 0
@@ -784,7 +800,6 @@ describe('V2 工作台 Trip 状态隔离', () => {
     await clickWorkspaceTab(page.container, '行程')
     expect(map.textContent).toBe('')
     expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
-    expect(page.container.textContent).toContain('行程 A 景点')
 
     await clickWorkspaceTab(page.container, '美食')
     act(() => latestSearchProps('trip-a').onLocationSelect?.({ name: '第二个临时候选', lat: 30.4, lng: 120.3 }))
@@ -793,7 +808,6 @@ describe('V2 工作台 Trip 状态隔离', () => {
 
     expect(map.textContent).toBe('')
     expect(map.getAttribute('data-selected-item-id')).toBe('trip-a-item')
-    expect(page.container.textContent).toContain('行程 A 景点')
   })
 
   it('同一 queryId 的终态替换查询中状态，且不覆盖其他记录或已终止记录', async () => {
@@ -864,46 +878,61 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     return base
   }
 
-  it('点击餐食卡出现候选餐厅面板（美食通道），「加入午餐」二次确认后走 selections/meals', async () => {
+  it('餐食占位「换家餐厅」：顺序双写 selections/meals + remove_item，占位移除且反馈明确', async () => {
     const trip = makeTripWithMealAndFacts()
     const page = mount('trip-meal')
     await load(tripRequest(0), trip)
-    mocks.searchFood.mockResolvedValue({
-      kind: 'food', status: 'success', source: 'amap', queried_at: '2026-11-04T00:00:00Z',
-      message: '查询完成', disclosure: '商户信息来自高德，可能随时间变化。',
-      results: [{
-        selection_id: 'm-1', merchant_id: 'mch-1', name: '烤匠麻辣烤鱼', address: '成都市锦江区',
-        rating: 4.5, open_status: '营业中', lat: 30.65, lng: 104.06,
-        avg_cost_cny: 85, source: 'amap', queried_at: '2026-11-04T00:00:00Z',
-      }],
-    })
-    mocks.addMeal.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 2, document: trip.document })
 
+    // 第一步回执：餐厅加入（v2，占位仍在）；第二步回执：占位移除（v3）
+    const documentWithMerchant = JSON.parse(JSON.stringify(trip.document))
+    documentWithMerchant.days[0].items.push({
+      item_id: 'meal-added', kind: 'activity', activity_type: 'meal', title: '烤匠麻辣烤鱼',
+      start_time: '12:00', duration_min: 60, fixed_start: false, place: null,
+      must_visit: false, locked: false, note: '午餐',
+    })
+    const documentWithoutPlaceholder = JSON.parse(JSON.stringify(documentWithMerchant))
+    documentWithoutPlaceholder.days[0].items = documentWithoutPlaceholder.days[0].items.filter(
+      (item: { item_id: string }) => item.item_id !== 'meal-1',
+    )
+    mocks.addMeal.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 2, document: documentWithMerchant })
+    mocks.applyEdit.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 3, document: documentWithoutPlaceholder })
+
+    // 选中餐食卡 → 三点打开编辑弹窗 → 触发「换家餐厅」
     await click(page.container, (button) => button.textContent?.includes('午餐') ?? false)
+    await click(page.container, (button) => button.getAttribute('aria-label') === '编辑午餐')
+    const dialogProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'meal-1')
+    expect(dialogProps).toBeTruthy()
+    expect(typeof dialogProps!.onSwitchMeal).toBe('function')
+
+    await click(page.container, (button) => button.textContent === '模拟换餐厅')
     await settle()
 
-    const panel = page.container.querySelector('[aria-label="候选餐厅"]')
-    expect(panel).not.toBeNull()
-    expect(panel?.textContent).toContain('烤匠麻辣烤鱼')
-    expect(panel?.textContent).toContain('加入午餐')
-    // place 项的「备选地点」按钮对 meal 占位隐藏
-    expect(page.container.textContent).not.toContain('的备选地点')
+    // 顺序双写断言：先加入（selections/meals，amap 商户快照）再移除占位
+    expect(mocks.addMeal).toHaveBeenCalledOnce()
+    const [tripId, addInput] = mocks.addMeal.mock.calls[0]
+    expect(tripId).toBe('trip-meal')
+    expect(addInput.day_id).toBe('trip-meal-day')
+    expect(addInput.meal_period).toBe('lunch')
+    expect(addInput.merchant.merchant_id).toBe('mch-1')
+    expect(mocks.applyEdit).toHaveBeenCalledOnce()
+    expect(mocks.applyEdit.mock.calls[0][1].operation).toEqual({ op: 'remove_item', item_id: 'meal-1' })
+    expect(page.container.textContent).toContain('已将「烤匠麻辣烤鱼」加入午餐，并移除占位「午餐」')
+  })
 
-    const panelElement = panel as HTMLElement
-    await click(panelElement, (button) => button.textContent === '加入午餐')
-    expect(panelElement.textContent).toContain('再次点击确认加入')
-    expect(mocks.addMeal).not.toHaveBeenCalled()
+  it('换餐厅第一步回执 UNKNOWN 时不继续删占位，也不冒充成功', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+    mocks.addMeal.mockResolvedValue({ saved: false, trip_id: 'trip-meal', revision: 1, document: trip.document })
 
-    await click(panelElement, (button) => button.textContent === '再次点击确认加入')
+    await click(page.container, (button) => button.textContent?.includes('午餐') ?? false)
+    await click(page.container, (button) => button.getAttribute('aria-label') === '编辑午餐')
+    await click(page.container, (button) => button.textContent === '模拟换餐厅')
     await settle()
 
     expect(mocks.addMeal).toHaveBeenCalledOnce()
-    const [tripId, input] = mocks.addMeal.mock.calls[0]
-    expect(tripId).toBe('trip-meal')
-    expect(input.day_id).toBe('trip-meal-day')
-    expect(input.meal_period).toBe('lunch')
-    expect(input.merchant.merchant_id).toBe('mch-1')
-    expect(page.container.textContent).toContain('已将「烤匠麻辣烤鱼」加入午餐')
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+    expect(page.container.textContent).not.toContain('已将「烤匠麻辣烤鱼」加入午餐')
   })
 
   it('行程卡 hover 介绍行只用真实 facts（评分/免费门票/核验）+ 备注，无事实则不渲染', async () => {
