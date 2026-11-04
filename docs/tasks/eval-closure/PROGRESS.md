@@ -1,8 +1,8 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**PLANNED**（任务已立项，未开工；接手总纲见 `docs/tasks/handoff-batches/NEXT-SESSION.md`）
-- 工作树：待建/复用（见 TASK.md「工作树策略」）
-- 基线：立项时 origin/main = `0a77b50`；本档案随 docs/handoff-next-batches PR 首次入库
+- 状态：**IN_PROGRESS**（E'、D1、D3 已收口；F 代码已合并但 F1-F3 写操作实机验收 **UNVERIFIED**；D4a 待验收）
+- 当前工作树：`agent-wt-eval-d3` / `fix/deps-d3-langchain-family`；F 批 worktree `agent-wt-audit-r1` 保留，不清理。
+- 当前基线：`origin/main=83aa74c`；任务沿革基线见 TASK.md。
 
 ## 并行协调记录
 
@@ -14,19 +14,37 @@
 
 ## 进度
 
-- [ ] B1 表现阈值入门禁（release_gate.py）
-- [ ] B2 在线采样评测器（online_sampler.py）
-- [ ] B3 Celery Beat 调度注册
-- [ ] F1 RunsTab：gate 状态/审批/来源徽标（等 eval-center-simplify 合并）
-- [ ] F2 DatasetsTab：反馈候选审核（同上）
-- [ ] F3 CompareTab：人工评审挂载（同上）
+- [x] B1 表现阈值入门禁（PR #326；定向测试通过）
+- [x] B2 在线采样评测器（PR #326；一次 trigger=online 落库实测）
+- [x] B3 Celery Beat 调度注册（PR #326；beat 注册实测）
+- [x] F1 RunsTab：Gate 状态/审批/来源徽标（PR #328；写操作 API 实测 UNVERIFIED）
+- [x] F2 DatasetsTab：反馈候选审核（PR #328；写操作 API 实测 UNVERIFIED）
+- [x] F3 CompareTab：人工评审挂载（PR #328；提交 API 实测 UNVERIFIED）
 
 ## 阻塞
 
-- 无硬阻塞。F1-F3 为软依赖：并行任务未合并前不动手。
+- F1-F3 代码已合并。写操作实机验证缺安全测试数据：V2 没有 PASS 运行，feedback 候选为 0；不对共享库造数或审批现有失败运行。
 
 ## 下一步
 
-1. E 批开工（B1→B2→B3，独立分支 `feat/eval-closure-backend`）；
-2. 每次 F 批动工前 `git fetch` 核对 eval-center-simplify 是否已合并；
-3. 完成项逐个勾选并附验证证据。
+1. 完成 D4a（当前 lock 已满足目标版本；收齐 PyPI / OSV / 定向回归证据并独立 PR）；
+2. 若准备好隔离的 PASS run、feedback candidate 与绑定 Human Rubric 的用例，再完成 F1-F3 写操作实机闭环；
+3. ECS 三项及 pillow/filelock/dnspython/unstructured 按既有裁决保持不动。
+
+## 2026-11-05 接手批续工（F / D3）
+
+### F 批（管理端）
+
+- PR [#328](https://github.com/Jayus-07/agent/pull/328) 已于 2026-11-05 合并，HEAD `27320474a0d53e766e2b7a7f93fb525a5a11320f`，merge commit `83aa74ca81a2c91774d084dfd41e80d059fe90a2`。
+- 改动：RunsTab Gate 状态/审批/线上来源、DatasetsTab feedback 候选审核与晋升、CompareTab 人工评审挂载；新增三处组件测试。
+- 定向测试 4 个组件文件 / 6 个测试通过；`tsc --noEmit` 通过；任务 worktree `devctl.bat rebuild /y` 完成，API / 管理端健康检查 200。
+- super_admin 只读 API 实测运行和反馈候选 GET 均 200，logout 200。写操作实机验收 **UNVERIFIED**：本地 V2 运行 8 条均为 `FAIL/INVALID`、无 PASS；`agent_business.public.feedback_candidates` 为 0 行。没有伪造记录或改写共享库。TASK.md 的 F1-F3 实机写操作验收保持未勾选。
+
+### D3：LangChain / LangGraph 依赖族
+
+- 最新 `requirements-lock.txt` 已满足并超过原目标：langchain 1.4.7、langchain-classic 1.0.8、langchain-core 1.7.0、langgraph 1.2.16、langgraph-checkpoint 4.3.0、langgraph-checkpoint-postgres 3.2.0、langgraph-sdk 0.4.8、langsmith 0.14.12。该组升级已随供应链 PR #314 落入 main；本批不降级，也不产生重复 lock 改动。
+- 2026-11-05 从 PyPI JSON 核对 8 个当前 pin：均未 yanked，`Requires-Python` 均兼容 Python 3.10。
+- OSV：`pip-audit -r D:\tmp\eval-closure-d3-requirements.txt --no-deps --disable-pip --vulnerability-service osv`，8 个目标包 **No known vulnerabilities found**。该次只扫描目标直接包，不代表全锁 OSV 扫描。
+- 全锁解析、PR CI、合并、重建、freeze 一致性和健康检查沿用 PR #314 与 `docs/tasks/audit-remediation-r1/PROGRESS.md` 已记录证据：368 包 dry-run 零 ERROR、11 checks pass、容器 freeze 368 包与 lock 零漂移、导入冒烟通过、`/health` 200×2。当前 app 容器实装版本与 lock 上述 8 个 pin 一致。
+- D3 定向回归在当前 lock 的 Python 3.10 app 容器运行：RAG chain、pg_saver_pool、task checkpoint recovery、runtime checkpoint recovery、main graph checkpoint identity，**41 passed**。容器缺 Git，首次运行被测试数据快照保护挡住；最终运行设置 `RAG_EVAL_NO_ISOLATION=1` 并显式将 `RAG_DATA_DIR` 指向空目录 `/tmp/eval-closure-d3-data`，未读写共享 RAG 文件数据。checkpoint 用例按测试约定使用唯一 ID 并 teardown 清理。
+- D3 结论：原目标升级已由 PR #314 完成；本批没有必要的 lock 变更。
