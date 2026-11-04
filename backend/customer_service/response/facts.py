@@ -29,6 +29,12 @@ _COMPLAINT_CLASS = {"complaint", "not_complaint", "unknown"}
 _CURRENCY = {"cny", "usd", "eur", "jpy", "hkd", "unknown"}
 _LEDGER_DIRECTION = {"in", "out"}
 _TIER = {"normal", "silver", "gold", "platinum"}
+_COUPON_KIND = {"full_reduction", "discount", "no_threshold"}
+_COUPON_STATUS = {"available", "expired", "used"}
+_COUPON_REASON = {
+    "applicable", "threshold_not_met", "not_stackable", "expired",
+    "excluded_category", "unknown",
+}
 
 
 def project_fact_set(raw: object) -> dict[str, Any]:
@@ -49,6 +55,8 @@ def project_fact_set(raw: object) -> dict[str, Any]:
         "refund": lambda value: _project_refund(value),
         "balance": lambda value: _project_balance(value),
         "points": lambda value: _project_points(value),
+        "coupons": lambda value: _project_list(value, _project_coupon),
+        "coupon_check": lambda value: _project_coupon_check(value),
         "operation": lambda value: _project_operation(value),
         "task_result": lambda value: _project_task_result(value),
         "complaint": lambda value: _project_complaint(value),
@@ -212,6 +220,75 @@ def _project_points(value: object) -> dict[str, Any]:
     memo = _safe_text(value.get("recent_memo"), limit=40)
     if memo:
         result["recent_memo"] = memo
+    return result
+
+
+def _project_coupon(value: object) -> dict[str, Any]:
+    """B3 优惠券投影：券面额/门槛是元金额，经白名单进 composer 守卫。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    currency = _enum_value(value.get("currency"), _CURRENCY)
+    if currency is not None:
+        result["currency"] = currency
+    coupon_code = _safe_text(value.get("coupon_code"), limit=40)
+    if coupon_code:
+        result["coupon_code"] = coupon_code
+    kind = _enum_value(value.get("kind"), _COUPON_KIND)
+    if kind is not None:
+        result["kind"] = kind
+    kind_label = _safe_text(value.get("kind_label"), limit=20)
+    if kind_label:
+        result["kind_label"] = kind_label
+    for key in ("threshold_amount", "discount_value"):
+        amount = _safe_amount(value.get(key))
+        if amount is not None:
+            result[key] = amount
+    if value.get("max_discount") is not None:
+        max_discount = _safe_amount(value.get("max_discount"))
+        if max_discount is not None:
+            result["max_discount"] = max_discount
+    if isinstance(value.get("stackable"), bool):
+        result["stackable"] = value["stackable"]
+    status = _enum_value(value.get("status"), _COUPON_STATUS)
+    if status is not None:
+        result["status"] = status
+    valid_until = _safe_text(value.get("valid_until"), limit=40)
+    if valid_until:
+        result["valid_until"] = valid_until
+    return result
+
+
+def _project_coupon_check(value: object) -> dict[str, Any]:
+    """B3 用券校验投影：适用性 + 不生效原因（四类）+ 所验券摘要。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    currency = _enum_value(value.get("currency"), _CURRENCY)
+    if currency is not None:
+        result["currency"] = currency
+    if isinstance(value.get("applicable"), bool):
+        result["applicable"] = value["applicable"]
+    reason_code = _enum_value(value.get("reason_code"), _COUPON_REASON)
+    if reason_code is not None:
+        result["reason_code"] = reason_code
+    reason_label = _safe_text(value.get("reason_label"), limit=30)
+    if reason_label:
+        result["reason_label"] = reason_label
+    reason_text = _safe_text(value.get("reason_text"), limit=80)
+    if reason_text:
+        result["reason_text"] = reason_text
+    order_no = _safe_text(value.get("order_no"), limit=40)
+    if order_no:
+        result["order_no"] = order_no
+    order_total = _safe_amount(value.get("order_total"))
+    if order_total is not None:
+        result["order_total"] = order_total
+    coupon = value.get("coupon")
+    if isinstance(coupon, dict):
+        projected_coupon = _project_coupon(coupon)
+        if projected_coupon:
+            result["coupon"] = projected_coupon
     return result
 
 

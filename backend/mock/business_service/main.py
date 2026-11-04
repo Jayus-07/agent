@@ -26,6 +26,10 @@ _ORDERS: dict[tuple[str, str], dict[str, Any]] = {}
 _WALLETS: dict[tuple[str, str], dict[str, Any]] = {}
 # B2 会员积分账本：余额与流水（数字与 points-policy.md / FAQ id=8/16 互为事实源）
 _POINTS: dict[tuple[str, str], dict[str, Any]] = {}
+# B3 优惠券档案 + 核销记录（数字与 coupon-policy.md / FAQ id=23 互为事实源）
+_COUPONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_REDEMPTIONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_COUPON_SEQ = 0
 _SEEDED_USERS: set[str] = set()
 _WALLET_LEDGER_SEQ = 0
 
@@ -288,6 +292,136 @@ def _points_for(user_id: str, tenant_id: str) -> dict[str, Any]:
     return profile
 
 
+def _coupons_for(user_id: str, tenant_id: str) -> list[dict[str, Any]]:
+    """懒初始化券档案：满减/无门槛/折扣三类可用样本 + 一张已过期券。
+
+    数字与 coupon-policy.md §1 示例及 ai.cs_faq id=23 口径一致（互为事实源）：
+    一单仅可用一张券（stackable 恒 false）、秒杀/拼团价不参与券抵扣。
+    """
+    key = (user_id.strip(), tenant_id.strip())
+    coupons = _COUPONS.get(key)
+    if coupons is None:
+        global _COUPON_SEQ
+        now = datetime.now(timezone.utc)
+        defs = (
+            # (code, kind, name, threshold, value, max_discount, valid_until, status)
+            ("SAVE30", "full_reduction", "满减券", 200.0, 30.0, None,
+             now + timedelta(days=30), "available"),
+            ("NEW5", "no_threshold", "无门槛券", 0.0, 5.0, None,
+             now + timedelta(days=15), "available"),
+            ("D90", "discount", "折扣券", 100.0, 0.9, 50.0,
+             now + timedelta(days=45), "available"),
+            ("OLD10", "full_reduction", "满减券", 100.0, 10.0, None,
+             now - timedelta(days=5), "expired"),
+        )
+        coupons = []
+        for code, kind, name, threshold, value, max_discount, valid_until, status in defs:
+            _COUPON_SEQ += 1
+            coupons.append({
+                "coupon_id": f"C{_COUPON_SEQ:04d}",
+                "coupon_code": code,
+                "kind": kind,
+                "name": name,
+                "threshold_amount": threshold,
+                "discount_value": value,
+                "max_discount": max_discount,
+                "stackable": False,
+                "exclusions": "秒杀/拼团价商品" if kind != "no_threshold" else "",
+                "valid_from": (valid_until - timedelta(days=90)).isoformat(),
+                "valid_until": valid_until.isoformat(),
+                "status": status,
+            })
+        _COUPONS[key] = coupons
+        # 核销样本绑定「已发货」单（种子第 2 新）：该单购下时已用 NEW5，
+        # 为 check 端点提供「一单仅可用一张」的确定性 not_stackable 样本
+        _REDEMPTIONS[key] = [{
+            "coupon_code": "NEW5",
+            "order_no": _orders_for(user_id)[1]["order_no"],
+            "redeemed_at": (now - timedelta(days=2)).isoformat(),
+            "amount_applied": 5.0,
+        }]
+    return coupons
+
+
+def _coupon_check(
+    user_id: str, tenant_id: str, order_no: str, coupon_code: str = "",
+) -> dict[str, Any]:
+    """券可用性校验：确定性规则覆盖三类不生效样本（政策 §6 四类原因）。
+
+    规则优先级：显式券码过期 → 未满足门槛（实付合计、不含运费）→
+    不可叠加（该订单已有核销记录：一单仅可用一张券）→ 可用。
+    排除品类为政策/结算页校验职责，mock 不模拟命中样本。
+    """
+    order = _find_order(user_id, order_no)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+    key = (user_id.strip(), tenant_id.strip())
+    coupons = _coupons_for(user_id, tenant_id)
+    redeemed_for_order = {
+        item["coupon_code"] for item in _REDEMPTIONS.get(key, [])
+        if item["order_no"] == order["order_no"]
+    }
+
+    def _result(coupon: dict[str, Any], applicable: bool,
+                reason_code: str, reason_text: str) -> dict[str, Any]:
+        return {
+            "applicable": applicable,
+            "reason_code": reason_code,
+            "reason_text": reason_text,
+            "order_no": order["order_no"],
+            "order_total": float(order["total_amount"]),
+            "coupon": {
+                "coupon_code": coupon["coupon_code"], "kind": coupon["kind"],
+                "name": coupon["name"],
+                "threshold_amount": float(coupon["threshold_amount"]),
+                "discount_value": float(coupon["discount_value"]),
+            },
+        }
+
+    if coupon_code:
+        target = next(
+            (c for c in coupons
+             if c["coupon_code"].casefold() == coupon_code.strip().casefold()),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail="coupon not found")
+        if target["status"] == "expired":
+            return _result(
+                target, False, "expired",
+                "该优惠券已过有效期，过期不可恢复、不可延期。",
+            )
+    else:
+        target = next((c for c in coupons if c["status"] == "available"), None)
+    total = float(order["total_amount"])
+    threshold = float(target["threshold_amount"])
+    if threshold > total:
+        return _result(
+            target, False, "threshold_not_met",
+            f"未满足门槛：该券需满 {threshold:.0f} 元"
+            f"（按商品实付合计、不含运费），当前订单 ¥{total:.2f}。",
+        )
+    if redeemed_for_order:
+        return _result(
+            target, False, "not_stackable",
+            "该订单已使用过一张优惠券：一单仅可使用一张，不可叠加。",
+        )
+    if target["kind"] == "full_reduction":
+        reason_text = (
+            f"订单可使用 {target['name']}"
+            f"（满 {threshold:.0f} 减 {float(target['discount_value']):.0f}）。"
+        )
+    elif target["kind"] == "discount":
+        reason_text = (
+            f"订单可使用 {target['name']}"
+            f"（{float(target['discount_value']) * 10:.0f} 折，"
+            f"最高减 {float(target['max_discount']):.0f} 元）。"
+        )
+    else:
+        reason_text = f"订单可使用 {target['name']}（直接抵扣 {float(target['discount_value']):.0f} 元）。"
+    return _result(target, True, "applicable", reason_text)
+
+
 def _logistics(order: dict[str, Any]) -> dict[str, Any]:
     """由订单状态派生可重复验证的物流轨迹。"""
     status = order["status"]
@@ -369,6 +503,8 @@ def reset_mock_state() -> None:
         _ORDERS.clear()
         _WALLETS.clear()
         _POINTS.clear()
+        _COUPONS.clear()
+        _REDEMPTIONS.clear()
         _SEEDED_USERS.clear()
 
 
@@ -464,6 +600,46 @@ def get_points(
     with _STATE_LOCK:
         profile = _points_for(user_id.strip(), tenant_id.strip())
         return _ok({"points": profile})
+
+
+@app.get("/business/coupons")
+def list_coupons(
+    user_id: str = Query("", min_length=1),
+    tenant_id: str = Query("", min_length=1),
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        coupons = _coupons_for(user_id.strip(), tenant_id.strip())
+        return _ok({"coupons": [
+            {**c,
+             "threshold_amount": float(c["threshold_amount"]),
+             "discount_value": float(c["discount_value"]),
+             **({"max_discount": float(c["max_discount"])}
+                if c["max_discount"] is not None else {})}
+            for c in coupons[:10]
+        ]})
+
+
+class CouponCheckInput(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    coupon_code: str = Field(default="", max_length=64)
+
+
+@app.post("/business/coupons/check")
+def check_coupon(
+    payload: CouponCheckInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        result = _coupon_check(
+            payload.user_id.strip(), payload.tenant_id.strip(),
+            payload.order_no.strip(), payload.coupon_code.strip(),
+        )
+        return _ok({"coupon_check": result})
 
 
 @app.post("/business/wallet/topup")

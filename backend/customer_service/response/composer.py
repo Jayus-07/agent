@@ -409,6 +409,7 @@ def _fact_amounts(
         for key in (
             "amount", "total_amount", "balance", "recent_amount",
             "points", "recent_points",
+            "threshold_amount", "discount_value", "max_discount", "order_total",
         ):
             item = section.get(key)
             if item is None or isinstance(item, bool):
@@ -432,6 +433,18 @@ def _fact_amounts(
     # 命中的元金额守卫可对照真实积分数——如「8000 积分抵 ¥80」类越权换算
     # 只有当 facts 真有该金额才放行）
     add_amounts(facts.get("points"), "points")
+    # B3：券面额/门槛是元金额，进白名单并按 coupon 类核验；check 的订单实付
+    # 合计按 order 类核验（与其 order_no 归属联动）
+    coupons_section = facts.get("coupons")
+    for item in coupons_section if isinstance(coupons_section, list) else []:
+        add_amounts(item, "coupon")
+    check_section = facts.get("coupon_check")
+    if isinstance(check_section, dict):
+        add_amounts(
+            {k: v for k, v in check_section.items() if k != "coupon"}, "order",
+        )
+        if isinstance(check_section.get("coupon"), dict):
+            add_amounts(check_section["coupon"], "coupon")
     task_result = facts.get("task_result")
     if isinstance(task_result, dict):
         add_amounts(task_result.get("facts"), "order")
@@ -472,12 +485,18 @@ def _amount_claim_kind(answer: str, start: int, end: int) -> str | None:
     points_label = re.compile(
         r"积分(?:余额|流水|明细|抵扣|兑换|变动)?|会员(?:等级|权益)|等级(?:权益)?",
     )
+    # B3：优惠券标签——面额/门槛金额按 coupon 类核验（「最高减 ¥99」类
+    # 无 facts 支撑的面额 fail-closed 拒绝）
+    coupon_label = re.compile(
+        r"优惠券|满减券?|折扣券?|无门槛券?|最高减|券(?:面额|门槛|码)",
+    )
 
     def labels(text: str, offset: int = 0) -> list[tuple[int, int, str]]:
         found: list[tuple[int, int, str]] = []
         for pattern, kind in (
             (refund_label, "refund"), (order_label, "order"),
             (balance_label, "balance"), (points_label, "points"),
+            (coupon_label, "coupon"),
         ):
             found.extend(
                 (offset + match.start(), offset + match.end(), kind)

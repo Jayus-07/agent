@@ -21,6 +21,7 @@ _INTENT_SERVICE_MAP = {
     "t_refund_status": "refund_status",
     "t_balance_query": "balance",  # P2 商城域：余额+最近流水
     "t_points_query": "points",  # B2 cs-capability-gap：积分+等级+最近流水
+    "t_coupon_query": "coupon",  # B3 cs-capability-gap：券列表/用券校验
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -506,6 +507,104 @@ def _dispatch_service(
         if tier_note:
             points_facts["tier_note"] = tier_note[:40]
         return _QueryServiceResponse("\n".join(lines), {"points": points_facts})
+
+    if service_type == "coupon":
+        # B3（cs-capability-gap 2026-11-04）：优惠券查询/用券校验。带订单号
+        # → check 路径（适用性+不生效原因四类）；否则 → 券列表。券面额/门槛
+        # 是元金额，facts 白名单必须带齐（composer coupon 标签核验）。
+        from backend.customer_service.context_manager import resolve_order_slot
+        from backend.customer_service.service.coupon_service import CouponService
+
+        service = CouponService()
+        order_no = resolve_order_slot(cs_route, question) or ""
+        try:
+            if order_no:
+                check = service.check_coupon(user_id, tenant_id, order_no)
+                lines = [
+                    f"订单 `{check['order_no']}` 用券检查：{check['reason_label']}。",
+                    check["reason_text"],
+                ]
+                coupon = check.get("coupon")
+                if check.get("applicable") and coupon:
+                    if coupon["kind"] == "discount":
+                        lines.append(
+                            f"{coupon['kind_label']}："
+                            f"{float(coupon['discount_value']) * 10:.0f} 折"
+                            + (
+                                f"（最高减 ¥{float(coupon['max_discount']):.2f}）"
+                                if coupon.get("max_discount") is not None else ""
+                            )
+                            + "，结算时自动抵扣。"
+                        )
+                    elif coupon["kind"] == "no_threshold":
+                        lines.append(
+                            f"{coupon['kind_label']}：直接抵扣 "
+                            f"¥{float(coupon['discount_value']):.2f}，结算时自动抵扣。"
+                        )
+                    else:
+                        lines.append(
+                            f"{coupon['kind_label']}：满 "
+                            f"¥{float(coupon['threshold_amount']):.2f} 减 "
+                            f"¥{float(coupon['discount_value']):.2f}，结算时自动抵扣。"
+                        )
+                lines.append("一单仅可使用一张优惠券，不可叠加；秒杀/拼团价商品不参与券抵扣。")
+                # 金额守卫按币种比对：facts 必须带 currency（元金额 → CNY），
+                # 嵌套券摘要同样补齐（composer 对 coupon_check.coupon 单独扫金额）
+                check_facts = {**check, "currency": str(check.get("currency") or "CNY")}
+                if isinstance(check.get("coupon"), dict):
+                    check_facts["coupon"] = {
+                        **check["coupon"], "currency": "CNY",
+                    }
+                return _QueryServiceResponse(
+                    "\n".join(lines), {"coupon_check": check_facts},
+                )
+            coupons = service.get_coupons(user_id, tenant_id)
+            if not coupons:
+                return "您名下暂时没有可用的优惠券，领券中心的券到账后即可查询。"
+            lines = ["## 您的优惠券\n"]
+            coupon_facts: list[dict[str, Any]] = []
+            for i, c in enumerate(coupons[:10], 1):
+                expired = c.get("status") == "expired"
+                title = f"{c.get('kind_label') or '优惠券'} {c.get('coupon_code') or ''}".strip()
+                if c.get("kind") == "discount":
+                    summary = (
+                        f"{float(c.get('discount_value') or 0) * 10:.0f} 折"
+                        + (
+                            f"（最高减 ¥{float(c['max_discount']):.2f}）"
+                            if c.get("max_discount") is not None else ""
+                        )
+                        + f"，满 ¥{float(c.get('threshold_amount') or 0):.2f} 可用"
+                    )
+                elif c.get("kind") == "no_threshold":
+                    summary = f"直接抵扣 ¥{float(c.get('discount_value') or 0):.2f}"
+                else:
+                    summary = (
+                        f"满 ¥{float(c.get('threshold_amount') or 0):.2f} 减 "
+                        f"¥{float(c.get('discount_value') or 0):.2f}"
+                    )
+                valid_until = str(c.get("valid_until") or "")[:10]
+                lines.append(
+                    f"**{i}.** [{title}] {summary}"
+                    f" | 有效期至 {valid_until or '见券面'}"
+                    + (" | **已过期**" if expired else " | 不可叠加")
+                )
+                coupon_facts.append({
+                    "currency": str(c.get("currency") or "CNY"),
+                    "coupon_code": c.get("coupon_code") or "",
+                    "kind": c.get("kind") or "full_reduction",
+                    "kind_label": c.get("kind_label") or "满减券",
+                    "threshold_amount": float(c.get("threshold_amount") or 0),
+                    "discount_value": float(c.get("discount_value") or 0),
+                    "max_discount": c.get("max_discount"),
+                    "stackable": bool(c.get("stackable")),
+                    "status": c.get("status") or "available",
+                    "valid_until": valid_until,
+                })
+            lines.append("\n一单仅可使用一张优惠券，不可叠加；不满足门槛、已过期或排除品类的券不可用。")
+            return _QueryServiceResponse("\n".join(lines), {"coupons": coupon_facts})
+        except Exception:  # noqa: BLE001 — 查询失败礼貌降级，不打断会话
+            logger.warning("[QueryExpert] 优惠券查询失败", exc_info=True)
+            return "优惠券查询服务暂时不可用，请稍后再试。"
 
     if service_type == "refund_status":
         from backend.customer_service.errors import (

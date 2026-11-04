@@ -525,6 +525,7 @@ _SOP_TEMPLATES: dict[str, list[list[str]]] = {
     "t_ticket_status": [["定位工单", "done"], ["同步处理进度", "cur"], ["确认是否升级", "todo"]],
     "t_balance_query": [["核实账户余额", "done"], ["同步流水", "cur"], ["确认是否充值", "todo"]],
     "t_points_query": [["核实积分与等级", "done"], ["同步最近流水", "cur"], ["讲解权益与抵扣", "todo"]],
+    "t_coupon_query": [["核实名下优惠券", "done"], ["核对用券资格", "cur"], ["讲解叠加与门槛规则", "todo"]],
     "t_delivery_estimate": [["确认收货地址", "done"], ["给出时效区间", "cur"], ["标记跟踪", "todo"]],
     "a_password": [["核实身份", "done"], ["引导自助重置", "cur"], ["确认恢复登录", "todo"]],
     "a_address": [["确认新地址", "done"], ["评估改址窗口", "cur"], ["提交修改", "todo"]],

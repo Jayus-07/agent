@@ -33,7 +33,7 @@ const GAP_LIST: Array<{
   { question: '买完降价了，退差价（价保）', behavior: '仅能答政策条文', missing: '比价 Tool + 部分退款', priority: '近期', priorityClass: 'bg-amber-50 text-amber-600' },
   { question: '注销账号 / 删除我的数据', behavior: '无流程', missing: '合规注销流程（红线级）', priority: '合规', priorityClass: 'bg-red-50 text-red-600' },
   { question: '催发货 / 催派送', behavior: '仅能查预计送达', missing: '催办动作 + 商家协同', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
-  { question: '优惠券能不能叠加 / 为什么没优惠', behavior: '知识答不了账户级事实', missing: '券校验 Tool（账户数据）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
+  { question: '优惠券能不能叠加 / 为什么没优惠', behavior: '已覆盖（政策问答 + B3 意图级券查询/用券校验）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '积分怎么用 / 等级权益', behavior: '已覆盖（B1 政策问答 + B2 意图级积分/等级查询）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '支付失败 / 重复扣款', behavior: '无意图', missing: '支付域查询 + 退款联动', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '在途包裹改地址', behavior: '仅账户默认地址', missing: '物流商改址 API', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },

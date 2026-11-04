@@ -109,6 +109,31 @@
 
 **CI 门禁坑（B3+ 注意，首轮 CI 实证）**：新迁移文件必须显式登记进 `.github/scripts/rag_smoke_path_filter.py`（`NON_AI_MIGRATION_ENTRIES` 或 `PAID_RELEVANT_MIGRATION_ENTRIES`），否则 `Detect RAG changes` 直接 exit 2、preflight 被跳过（首轮即因此 fail，补登记 b734a7b 后重跑全绿对账 919）。
 
+## B3：优惠券查询/用券校验 —— 实现与验收（2026-11-05，分支 feat/cs-coupon-query，基于 41d97fa）
+
+**实现**（FINAL-PLAN §五 B3 + 模板 A，18 文件）：
+
+- 路由：`t_coupon_query`（TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_policy","cs_faq"]）——vocab TRANSACTION 域词（优惠券）+ 3 条句式（券列表/查券/用券异常），VOCAB_VERSION → **2026-11-04.2**（test_vocab 断言同步）；**域冲突钉住**：「优惠券怎么领/能不能叠加」政策问句 KNOWLEDGE 2-3 票优先不翻域（golden「优惠券怎么领？」等 3 条口径不变）；cases.jsonl 退款语义「用了优惠券想退了重拍」不落 TRANSACTION（单测钉住）；fine 词表含「用券/领券」（真机实锚补入，见下）
+- Service：`coupon_service.py` 双模式（http→`GET /business/coupons` + `POST /business/coupons/check`；sandbox→marketing.coupons/coupon_redemptions）；kind_label/reason_label 展示归一 + **currency=CNY 归一**（composer 金额守卫按币种比对，facts 缺 currency 会把元面额一律 fail-closed——balance 样板未暴露、B3 首轮测试揪出）
+- mock：四券懒种子（SAVE30 满 200 减 30 / NEW5 无门槛 5 元 / D90 9 折最高减 50 / OLD10 已过期，**stackable 恒 false** 与 FAQ id=23 一致）+ 一条核销样本（绑定 shipped 种子单 → not_stackable 确定性样本）；check 规则优先级 expired→threshold_not_met→not_stackable→applicable（政策 §6 四类原因，排除品类由结算页校验不模拟）；contract.md **v1.3**
+- facts 三件套（W1 红线）：`_project_coupon`（面额/门槛/叠加/状态，currency 入白名单）+ `_project_coupon_check`（四类原因+订单实付）+ composer `_fact_amounts` 加 threshold_amount/discount_value/max_discount/order_total 四键、`_amount_claim_kind` 加 `coupon` 标签（券面额按 coupon 类核验，check 订单实付按 order 类）
+- 迁移：`133_cs_coupon.sql`（**CREATE SCHEMA IF NOT EXISTS marketing** + coupons/coupon_redemptions，UNIQUE(customer_id,coupon_code)，872 四券幂等种子）+ init_db 登记 + **path_filter NON_AI 登记（B2 新坑直接规避）**
+- 测试：`test_coupon_flow.py` 16 例 = 路由钉住（政策 3 问句不翻域 + 退款样本不误入 + 真机实锚「用券」句式）+ 豁免词 + mock 数字一致性 + **check 四类原因逐条** + Service 归一 + facts 导出/降级 + 投影白名单/非法枚举丢弃 + composer 守卫放行/拒绝 + 隔离 PG（15434 复用，sandbox 券档案+核销 not_stackable+过期，重跑幂等）
+
+**验证链**：
+
+1. T2：test_coupon_flow **16/16**（两遍跑幂等）；双门禁 + B2/查询/facts/composer 回归 110 过；全域 **1577 passed 零失败**；阴性验证 2 处成立（撤券投影器→投影 2 例失败；撤 fine 词条→路由测试失败）
+2. 环境事件：Docker Desktop 引擎重启一次（redis AOF incr 截断损坏→`redis-check-aof --fix` 截尾 107 字节恢复 healthy；agent-csfix-b0-pg 拉回）——共享栈全量恢复后复测
+3. worktree rebuild（基于 41d97fa rebase，stash 过桥 #322 docs-only）+ 133 落库实证（marketing schema/两表/872 四券种子）+ frontend-cs 单独重建（GAP_LIST B3 行）
+4. **真机验收 4/4 PASS**（demo_fuzhou 经 :9080，脚本 d:/tmp/cs_b3_acc.py，落盘 d:/tmp/cs-b3-acc-result.txt）：
+   - q1「我的优惠券有哪些」→ 四券列表（满减 200-30/无门槛 5 元/9 折最高减 50/已过期标记）+ 不可叠加 ✅
+   - q2「订单 MO-6DEC4021 用券为什么没生效」→ **不可叠加（该订单已用过一张）** ✅（首轮 FAIL 实锚：fine 词表缺「用券」落域默认 t_order_status 答成订单状态——补词 rebuild 后复测过）
+   - q3「优惠券能不能叠加使用？」→ FAQ id=23 原口径 + 参考来源（政策问句未误走数据查询）✅
+   - q4「订单 MO-35374034 的优惠券为什么用不了」→ **未满足门槛（¥199.00 < 满 200，实付口径）** ✅
+5. 主链路零回归：:8000 /health + :3100/:3300 200 + :9080 坐席登录 200；B2 积分链路经全量回归复证
+
+**收尾**：rag_smoke 清单 +`test_coupon_flow.py`；GAP_LIST 优惠券行改「已覆盖（政策问答 + B3 意图级券查询/用券校验）」；customer-service.md 第 8/49 行同步；mock/迁移种子与 coupon-policy.md/FAQ id=23 三方一致。
+
 ## 后续批次
 
-B2 定型（本批合并）→ B3/B4 可并行（复制查询型模板）。B5-B8 依 FINAL-PLAN §二。
+B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
