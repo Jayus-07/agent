@@ -44,6 +44,12 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         "t_balance_query": ["余额", "钱包", "到账", "退回哪里", "账户还有多少钱"],
         # B2（cs-capability-gap 2026-11-04）：积分/等级查询（域内命中）
         "t_points_query": ["积分", "会员等级", "等级权益", "会员权益", "我的等级"],
+        # B3（cs-capability-gap 2026-11-04）：优惠券账户级查询/用券校验——
+        # 「用券/领券」覆盖不带「优惠」前缀的自然说法（真机实锚：订单 X
+        # 用券为什么没生效，此前落域默认 t_order_status 答成订单状态）
+        "t_coupon_query": [
+            "优惠券", "满减券", "折扣券", "无门槛", "我的券", "用券", "领券",
+        ],
         # P3（cs-evaluation-upgrade 2026-11-02）：物流/时效细分——此前
         # TRANSACTION 只有工单/退款进度/余额词表，「订单 X 的物流到哪了」
         # 全部落域默认 t_order_status

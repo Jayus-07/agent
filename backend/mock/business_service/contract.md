@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.2）
+# business-service 客服业务契约（v1.3）
 
-> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本与会员积分档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.3（cs-capability-gap B3）：新增优惠券查询与用券校验（懒种子：满减/无门槛/折扣三类可用 + 一张已过期券 + 一条核销样本，数字与 coupon-policy.md / FAQ id=23 一致；check 确定性覆盖 expired/threshold_not_met/not_stackable 三类不生效）。
 - v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
 - v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
 
@@ -109,6 +110,18 @@
 ### GET `/business/points?user_id={id}&tenant_id={id}`
 
 返回 `data.points`：`points`（余额，整数）、`tier`（`normal`/`silver`/`gold`/`platinum`）、`spend_90d`、`updated_at`、`ledger[]`（最近流水，`direction`（`in`/`out`）、`points`、`balance_after`、`kind`（`earn`/`redeem`/`rollback`/`expire`）、`memo`、`created_at`）。只读端点，无副作用与幂等键。
+
+## 优惠券（v1.3）
+
+券档案为只读演示数据。券类型/叠加/门槛/有效期口径与 coupon-policy.md 一致（互为事实源）：**默认不可叠加（一单仅可用一张）**、门槛按商品实付合计不含运费、过期不可恢复；秒杀/拼团价商品不参与券抵扣（mock 不模拟命中样本，排除品类由结算页校验）。每个用户首访懒初始化：`SAVE30` 满减券（满 200 减 30）、`NEW5` 无门槛券（5 元）、`D90` 折扣券（9 折最高减 50，门槛 100）、`OLD10` 满减券（已过期，满 100 减 10）；另种一条核销记录（`NEW5` 已用于该用户「已发货」种子单 → check 返回 not_stackable 的确定性样本）。
+
+### GET `/business/coupons?user_id={id}&tenant_id={id}`
+
+返回 `data.coupons[]`（最多 10 张）：`coupon_id`、`coupon_code`、`kind`（`full_reduction`/`discount`/`no_threshold`）、`name`、`threshold_amount`、`discount_value`（满减额或折扣率）、`max_discount`（仅折扣券）、`stackable`（恒 false）、`exclusions`、`valid_from`、`valid_until`、`status`（`available`/`expired`）。只读端点。
+
+### POST `/business/coupons/check`
+
+请求体 `{user_id, tenant_id, order_no, coupon_code?}`。规则优先级：显式券码过期（`expired`）→ 未满足门槛（`threshold_not_met`，按订单实付合计）→ 不可叠加（`not_stackable`，该订单已有核销记录）→ 可用（`applicable`）。订单或券不存在返回 404。返回 `data.coupon_check`：`applicable`、`reason_code`、`reason_text`、`order_no`、`order_total`、`coupon{coupon_code, kind, name, threshold_amount, discount_value}`。只读校验，无副作用与幂等键。
 
 ## 错误语义
 
