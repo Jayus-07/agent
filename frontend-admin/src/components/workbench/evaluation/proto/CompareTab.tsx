@@ -14,6 +14,7 @@ import {
   type EvaluationV2RunCaseDetail,
 } from '@/api/evaluation'
 import { atLeast } from '@/lib/auth'
+import EvaluationHumanReviewButton from '@/components/workbench/evaluation/EvaluationHumanReviewButton'
 import { Badge, Card, ctl, ctlGhost, Empty, modeShort, TableWrap, Td, Th, timeShort } from './evalUi'
 
 const GROUP_LABELS: Array<{ label: string; match: (key: string) => boolean }> = [
@@ -235,6 +236,10 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
             <p className="mt-1.5 text-xs text-text-muted">越权与版本不可见的切片仍保留在命中列表供审计，但不参与召回判分。</p>
           </div>
         })()}
+        <div className="mt-4 flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-bg-elevated p-3">
+          <div className="mr-auto"><p className="text-xs font-medium text-text-primary">人工评审</p><p className="text-[11px] text-text-muted">人工评审仅作校准记录，不进入自动门禁。</p></div>
+          <EvaluationHumanReviewButton runId={candidateId} caseId={caseDetail.case_id} />
+        </div>
       </Card>}
 
       <p className="text-xs text-text-muted">对比仅在相同数据集版本与相同评测方式的运行间有效；RAGAS 指标仅在该运行的评测方式包含 RAGAS 时产出。</p>

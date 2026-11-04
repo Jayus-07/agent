@@ -17,6 +17,14 @@ import {
 } from '@/api/evaluation'
 import { evaluationAssets, type EvaluationTask, type ImportManifest } from '@/api/evaluation-assets'
 import { createIdempotencyKey } from '@/api/client'
+import {
+  canPromoteCandidate,
+  listFeedbackCandidates,
+  promoteFeedbackCandidate,
+  reviewFeedbackCandidate,
+  type CandidateStatus,
+  type FeedbackCandidate,
+} from '@/api/feedbackCandidates'
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
 import { Badge, Card, ctl, ctlGhost, ctlPrimary, Empty, StatusBadge, TableWrap, Td, Th, timeShort } from './evalUi'
 import EvidenceSearchPicker from './EvidenceSearchPicker'
@@ -58,6 +66,13 @@ function candidateQuery(candidate: EvaluationV2Candidate): string {
 export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: string) => void }) {
   const [datasets, setDatasets] = useState<EvaluationV2Dataset[]>([])
   const [candidates, setCandidates] = useState<EvaluationV2Candidate[]>([])
+  const [feedbackCandidates, setFeedbackCandidates] = useState<FeedbackCandidate[]>([])
+  const [feedbackStatusFilter, setFeedbackStatusFilter] = useState<CandidateStatus | 'all'>('pending')
+  const [feedbackNotes, setFeedbackNotes] = useState<Record<string, string>>({})
+  const [feedbackLoading, setFeedbackLoading] = useState(true)
+  const [feedbackBusyId, setFeedbackBusyId] = useState('')
+  const [feedbackError, setFeedbackError] = useState('')
+  const [feedbackMessage, setFeedbackMessage] = useState('')
   const [kbs, setKbs] = useState<KbAuthorityItem[]>([])
   const [search, setSearch] = useState('')
   const [moduleFilter, setModuleFilter] = useState<string>('all')
@@ -85,6 +100,14 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
   }, [])
   useEffect(() => { void load() }, [load])
 
+  const loadFeedbackCandidates = useCallback(async () => {
+    setFeedbackLoading(true); setFeedbackError('')
+    try { setFeedbackCandidates((await listFeedbackCandidates()).items) }
+    catch (cause) { setFeedbackError(cause instanceof Error ? cause.message : '读取反馈候选失败') }
+    finally { setFeedbackLoading(false) }
+  }, [])
+  useEffect(() => { void loadFeedbackCandidates() }, [loadFeedbackCandidates])
+
   const filtered = useMemo(() => datasets.filter(item =>
     (moduleFilter === 'all' || item.domain === moduleFilter)
     && (!search.trim() || item.name.toLowerCase().includes(search.trim().toLowerCase()) || item.dataset_key.toLowerCase().includes(search.trim().toLowerCase()))
@@ -94,6 +117,32 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
     setBusy(true); setError(''); setMessage('')
     try { await fn() } catch (e) { setError(e instanceof Error ? e.message : '操作失败') }
     finally { setBusy(false) }
+  }
+
+  const visibleFeedbackCandidates = useMemo(() => feedbackCandidates.filter(item => feedbackStatusFilter === 'all' || item.status === feedbackStatusFilter), [feedbackCandidates, feedbackStatusFilter])
+
+  const reviewFeedback = async (candidate: FeedbackCandidate, decision: 'approve' | 'reject') => {
+    setFeedbackBusyId(candidate.candidate_id); setFeedbackError(''); setFeedbackMessage('')
+    try {
+      const reviewed = await reviewFeedbackCandidate(candidate.candidate_id, decision, feedbackNotes[candidate.candidate_id]?.trim() || '')
+      setFeedbackCandidates(current => current.map(item => item.candidate_id === reviewed.candidate_id
+        ? { ...item, status: reviewed.status, reviewed_at: reviewed.reviewed_at, reviewer: reviewed.reviewer }
+        : item))
+      setFeedbackMessage(`反馈候选已${decision === 'approve' ? '批准' : '拒绝'}：${candidate.candidate_id.slice(0, 8)}`)
+    } catch (cause) { setFeedbackError(cause instanceof Error ? cause.message : '审核反馈候选失败') }
+    finally { setFeedbackBusyId('') }
+  }
+
+  const promoteFeedback = async (candidate: FeedbackCandidate) => {
+    setFeedbackBusyId(candidate.candidate_id); setFeedbackError(''); setFeedbackMessage('')
+    try {
+      const result = await promoteFeedbackCandidate(candidate.candidate_id)
+      setFeedbackCandidates(current => current.map(item => item.candidate_id === candidate.candidate_id ? { ...item, status: result.status } : item))
+      setFeedbackMessage(result.appended
+        ? `反馈候选已追加为评测用例：${result.case_id || candidate.candidate_id}`
+        : `反馈候选已标记为已晋升，评测用例未重复追加：${result.case_id || candidate.candidate_id}`)
+    } catch (cause) { setFeedbackError(cause instanceof Error ? cause.message : '晋升反馈候选失败') }
+    finally { setFeedbackBusyId('') }
   }
 
   return <div className="space-y-4">
@@ -115,6 +164,45 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
 
       {error && <p role="alert" className="rounded-md border border-red-200 p-2.5 text-xs text-red-700">{error}</p>}
       {message && <p role="status" className="text-xs text-text-secondary">{message}</p>}
+
+      <Card title="反馈候选" subtitle="来源=feedback。审核通过后才能晋升为评测用例；重复晋升由服务端幂等处理。">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Badge text="source=feedback" tone="accent" />
+          <label className="flex items-center gap-2 text-xs text-text-secondary">状态筛选
+            <select aria-label="反馈候选状态筛选" value={feedbackStatusFilter} onChange={event => setFeedbackStatusFilter(event.target.value as CandidateStatus | 'all')} className={ctl}>
+              <option value="pending">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option><option value="promoted">已晋升</option><option value="all">全部状态</option>
+            </select>
+          </label>
+          <button type="button" className={ctlGhost} disabled={feedbackLoading} onClick={() => void loadFeedbackCandidates()}>刷新</button>
+        </div>
+        {feedbackError && <p role="alert" className="mb-2 rounded-md border border-red-200 p-2.5 text-xs text-red-700">{feedbackError}</p>}
+        {feedbackMessage && <p role="status" className="mb-2 text-xs text-text-secondary">{feedbackMessage}</p>}
+        {feedbackLoading ? <Empty text="正在读取反馈候选…" /> : visibleFeedbackCandidates.length === 0
+          ? <Empty text={feedbackCandidates.length ? '当前状态下没有反馈候选。' : '暂无来源为 feedback 的候选。'} />
+          : <div className="space-y-2">
+            {visibleFeedbackCandidates.map(candidate => <article key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge text={candidate.status} tone={candidate.status === 'approved' ? 'good' : candidate.status === 'rejected' ? 'bad' : candidate.status === 'pending' ? 'warn' : 'gray'} />
+                <Badge text={candidate.module || '未知模块'} tone="gray" />
+                <span className="font-mono text-[11px] text-text-muted">{candidate.candidate_id.slice(0, 8)}</span>
+                {candidate.trace_id && <a className="text-xs text-accent hover:underline" href={`/observability/monitoring?tab=traces&q=${encodeURIComponent(candidate.trace_id)}`}>查看 Trace</a>}
+              </div>
+              <p className="mt-2 text-sm text-text-primary">{candidate.summary || candidate.expected_answer || candidate.correction_text || '（候选未提供摘要）'}</p>
+              {candidate.expected_answer && <p className="mt-1 text-xs text-text-secondary">期望答案：{candidate.expected_answer}</p>}
+              {candidate.correction_text && <p className="mt-1 text-xs text-text-secondary">纠正内容：{candidate.correction_text}</p>}
+              {candidate.reason && <p className="mt-1 text-xs text-text-muted">反馈原因：{candidate.reason}</p>}
+              {candidate.status === 'pending' && <>
+                <label className="mt-2 block text-xs text-text-secondary">审核备注<input aria-label={`反馈候选 ${candidate.candidate_id} 审核备注`} value={feedbackNotes[candidate.candidate_id] || ''} onChange={event => setFeedbackNotes(current => ({ ...current, [candidate.candidate_id]: event.target.value }))} maxLength={1000} className={`${ctl} mt-1 w-full`} /></label>
+                <div className="mt-2 flex justify-end gap-2">
+                  <button type="button" className={ctlGhost} disabled={feedbackBusyId === candidate.candidate_id} onClick={() => void reviewFeedback(candidate, 'reject')}>{feedbackBusyId === candidate.candidate_id ? '提交中…' : '拒绝'}</button>
+                  <button type="button" className={ctlPrimary} disabled={feedbackBusyId === candidate.candidate_id} onClick={() => void reviewFeedback(candidate, 'approve')}>{feedbackBusyId === candidate.candidate_id ? '提交中…' : '批准'}</button>
+                </div>
+              </>}
+              {canPromoteCandidate(candidate.status) && <div className="mt-2 flex justify-end"><button type="button" className={ctlPrimary} disabled={feedbackBusyId === candidate.candidate_id} onClick={() => void promoteFeedback(candidate)}>{feedbackBusyId === candidate.candidate_id ? '晋升中…' : '晋升为评测用例'}</button></div>}
+              {candidate.status === 'promoted' && <p className="mt-2 text-xs text-text-muted">已晋升至评测用例，不会重复追加。</p>}
+            </article>)}
+          </div>}
+      </Card>
 
       {genOpen && <GeneratePanel kbs={kbs} onDone={() => void load()} />}
       {newOpen && <NewDatasetForm onDone={() => { setNewOpen(false); void load() }} />}
@@ -488,7 +576,8 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
 }) {
   // 候选是全局待确认池（与数据集在发布时才建立关联），编辑视图展示全部待确认候选；
   // 采纳后在「版本历史」中把已批准用例发布进当前数据集的新版本。
-  const mine = candidates
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'feedback'>('all')
+  const mine = sourceFilter === 'feedback' ? candidates.filter(candidate => candidate.source_kind === 'feedback') : candidates
   const [edits, setEdits] = useState<Record<string, { question: string; reference: string; facts: string; snapshotId: string }>>({})
   const [manualOpen, setManualOpen] = useState(false)
   const [manual, setManual] = useState({ question: '', reference: '', facts: '' })
@@ -573,7 +662,12 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
       </div>
     </Card>}
     <Card title="待确认候选" subtitle="与导入模板同 schema：问题 / 参考答案 / 必需事实 / 证据引用；批准后到「版本历史」发布新版本。">
-      {mine.length === 0 ? <Empty text="该数据集暂无待确认候选：通过「从知识库生成」或「导入数据集」写入。" />
+      <label className="mb-3 flex items-center gap-2 text-xs text-text-secondary">候选来源
+        <select aria-label="按候选来源筛选" value={sourceFilter} onChange={event => setSourceFilter(event.target.value as 'all' | 'feedback')} className={ctl}>
+          <option value="all">全部来源</option><option value="feedback">来源=feedback</option>
+        </select>
+      </label>
+      {mine.length === 0 ? <Empty text={sourceFilter === 'feedback' ? '没有来源为 feedback 的待确认候选。' : '该数据集暂无待确认候选：通过「从知识库生成」或「导入数据集」写入。'} />
         : <div className="space-y-3">
           {mine.map(candidate => {
             const edit = getEdit(candidate.candidate_id, candidate)
@@ -589,6 +683,7 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
                 <input aria-label="必需事实" placeholder="必需事实（逗号分隔）" value={edit.facts} onChange={e => setEdit(candidate.candidate_id, { facts: e.target.value })} className={ctl} />
                 <div className="flex items-center gap-2">
                   <Badge text={complete ? '✓ 可批准' : '⚠ 缺参考答案'} tone={complete ? 'good' : 'warn'} />
+                  <Badge text={candidate.source_kind || '未知来源'} tone={candidate.source_kind === 'feedback' ? 'accent' : 'gray'} />
                   {!edit.facts.trim() && <Badge text="必需事实待补充" tone="warn" />}
                   <Badge text={evidenceList.length ? `证据 ${evidenceList.length} 条` : '⚠ 无证据'} tone={evidenceList.length ? 'blue' : 'warn'} />
                   <span className="font-mono text-[11px] text-text-muted">{candidate.candidate_id.slice(0, 8)}</span>

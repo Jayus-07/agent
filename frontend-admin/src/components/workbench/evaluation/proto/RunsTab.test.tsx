@@ -44,3 +44,57 @@ it('从 RAG 切换到客服后隐藏方式并固定提交 offline，再切回保
     vi.restoreAllMocks()
   }
 })
+
+it('展示线上采样与 Gate 裁决，并提交最新 PASS 的 Gate 审批', async () => {
+  (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+  const run = {
+    run_id: 'run-online-1', suite_version_id: 'suite-1', suite_name: '线上评测', suite_key: 'online-suite', suite_version: '1',
+    job_status: 'completed', source: 'online', gate_verdict: 'PASS', gate_reason: [{ metric: 'pass_rate', value: 1 }],
+    total_cases: 1, completed_cases: 1, passed_cases: 1, evaluation_mode: 'offline', cost_amount: 0,
+    started_at: null, finished_at: null,
+  } as Awaited<ReturnType<typeof evaluationService.listV2Runs>>[number]
+  vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([run])
+  vi.spyOn(evaluationService, 'listSuites').mockResolvedValue([])
+  vi.spyOn(evaluationService, 'getV2Gate').mockResolvedValue({
+    run_id: run.run_id, job_status: 'completed', verdict: 'PASS', reasons: [],
+    decisions: [{ decision_id: 'gate-decision-1', run_id: run.run_id, policy_hash: 'hash', verdict: 'PASS', reasons_json: [], decided_by: 'admin', decided_at: '2026-11-05T00:00:00Z' }],
+    approvals: [],
+  })
+  const createApproval = vi.spyOn(evaluationService, 'createV2GateApproval').mockResolvedValue({
+    approval_id: 'approval-1', run_id: run.run_id, gate_decision_id: 'gate-decision-1', decision: 'approved',
+    release_reference: 'release/2026.11', rationale: '通过门禁并完成发布核验', decided_by: 'admin', decided_at: '2026-11-05T00:00:00Z',
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+  try {
+    await act(async () => { root.render(<RunsTab />) })
+    expect(container.textContent).toContain('线上采样')
+    expect(container.textContent).toContain('PASS')
+
+    const open = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('Gate 审批'))
+    expect(open).toBeDefined()
+    await act(async () => { open!.click() })
+    expect(evaluationService.getV2Gate).toHaveBeenCalledWith(run.run_id)
+
+    const reference = container.querySelector('[aria-label="Gate 发布引用"]') as HTMLInputElement
+    const rationale = container.querySelector('[aria-label="Gate 审批理由"]') as HTMLTextAreaElement
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(reference, 'release/2026.11')
+      reference.dispatchEvent(new Event('input', { bubbles: true }))
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(rationale, '通过门禁并完成发布核验')
+      rationale.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === '提交 Gate 审批')
+    expect(submit).toBeDefined()
+    await act(async () => { submit!.click() })
+    expect(createApproval).toHaveBeenCalledWith(run.run_id, expect.objectContaining({
+      gate_decision_id: 'gate-decision-1', decision: 'approved', release_reference: 'release/2026.11', rationale: '通过门禁并完成发布核验',
+    }))
+    expect(container.textContent).toContain('Gate 发布意见已记录：批准')
+  } finally {
+    await act(async () => root.unmount())
+    container.remove()
+    vi.restoreAllMocks()
+  }
+})
