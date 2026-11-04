@@ -42,6 +42,8 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         ],
         # P2 商城域：余额/到账查询（vocab 出域豁免词表已含「余额」，域内命中）
         "t_balance_query": ["余额", "钱包", "到账", "退回哪里", "账户还有多少钱"],
+        # B2（cs-capability-gap 2026-11-04）：积分/等级查询（域内命中）
+        "t_points_query": ["积分", "会员等级", "等级权益", "会员权益", "我的等级"],
         # P3（cs-evaluation-upgrade 2026-11-02）：物流/时效细分——此前
         # TRANSACTION 只有工单/退款进度/余额词表，「订单 X 的物流到哪了」
         # 全部落域默认 t_order_status

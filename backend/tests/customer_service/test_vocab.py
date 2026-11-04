@@ -19,7 +19,9 @@ class TestSingleSource:
         # 2026-10-04.2：T6 出域豁免信号词表（业务域词精确口径，防通用疑问词误豁免）
         # 2026-10-04.3：寒暄谢谢组后缀放宽 {0,2}（"谢谢你啦"实测漏判修正）
         # 2026-10-08：朋友/他人订单、借用账号、跳过验证和假冒授权信号（M1 对抗集）
-        assert vocab.VOCAB_VERSION == "2026-10-08.1"
+        # 2026-11-04.1：B2 积分/等级查询（cs-capability-gap）——TRANSACTION 域
+        # 词/句式 + 出域豁免「等级/权益」（golden T-015 政策问句口径不翻域）
+        assert vocab.VOCAB_VERSION == "2026-11-04.1"
 
     def test_risk_markers_cover_cross_user_refund_attacks(self):
         from backend.customer_service.context.understanding.signals import (

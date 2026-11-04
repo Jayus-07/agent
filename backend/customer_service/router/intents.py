@@ -13,6 +13,7 @@ FINE_INTENTS: dict[str, str] = {
     "t_order_status": "订单状态查询",
     "t_order_cancel": "取消订单",
     "t_balance_query": "余额查询",
+    "t_points_query": "积分与等级查询",
     "t_logistics": "物流查询",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
@@ -88,6 +89,13 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         intent="t_balance_query", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
+    ),
+    # B2（cs-capability-gap 2026-11-04）：积分/等级为只读查询——数据走业务面
+    #（mock/agent_business 积分账本），政策口径挂 cs_faq/cs_policy 供证据
+    "t_points_query": IntentProfile(
+        intent="t_points_query", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq", "cs_policy"],
     ),
     "t_logistics": IntentProfile(
         intent="t_logistics", domain=CSDomain.TRANSACTION,

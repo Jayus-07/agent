@@ -20,6 +20,7 @@ _INTENT_SERVICE_MAP = {
     "t_ticket_status": "ticket",  # 批次C：工单进度
     "t_refund_status": "refund_status",
     "t_balance_query": "balance",  # P2 商城域：余额+最近流水
+    "t_points_query": "points",  # B2 cs-capability-gap：积分+等级+最近流水
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -462,6 +463,49 @@ def _dispatch_service(
                 "recent_memo": str(ledger[0].get("memo") or "资金变动"),
             })
         return _QueryServiceResponse("\n".join(lines), {"balance": balance_facts})
+
+    if service_type == "points":
+        # B2（cs-capability-gap 2026-11-04）：积分/等级查询。草稿格式仿
+        # balance（余额+N 等级+最近一笔流水+权益提示）；权益只做定性描述，
+        # 不展开「积分抵 1 元」换算（元金额无 facts 支撑会被 composer 守卫
+        # fail-closed 打回模板）。
+        from backend.customer_service.service.points_service import PointsService
+
+        try:
+            profile = PointsService().get_points(user_id, tenant_id)
+        except Exception:  # noqa: BLE001 — 查询失败礼貌降级，不打断会话
+            return "积分查询服务暂时不可用，请稍后再试。"
+        ledger = profile.get("ledger") or []
+        points = int(profile.get("points") or 0)
+        tier_label = str(profile.get("tier_label") or "普通会员")
+        lines = [f"当前积分余额：{points} 分（{tier_label}）。"]
+        if ledger:
+            recent = ledger[0]
+            direction = "入账" if recent.get("direction") == "in" else "扣减"
+            lines.append(
+                f"最近一笔流水：{recent.get('memo') or '积分变动'}"
+                f"（{direction} {recent.get('points')} 分）。",
+            )
+        tier_note = str(profile.get("tier_note") or "").strip()
+        if tier_note:
+            lines.append(f"{tier_label}权益：{tier_note}。")
+        lines.append("等级按近 90 天实付消费每日评定，积分抵扣规则详见积分政策。")
+        # W1 同款纪律：流水/等级一并进入 facts——FactSet 白名单是 composer
+        # LLM 转写的唯一事实来源（草稿不进模型上下文）。
+        points_facts: dict[str, Any] = {
+            "points": points,
+            "tier": str(profile.get("tier") or "normal"),
+            "tier_label": tier_label,
+        }
+        if ledger:
+            points_facts.update({
+                "recent_direction": str(ledger[0].get("direction") or ""),
+                "recent_points": int(ledger[0].get("points") or 0),
+                "recent_memo": str(ledger[0].get("memo") or "积分变动"),
+            })
+        if tier_note:
+            points_facts["tier_note"] = tier_note[:40]
+        return _QueryServiceResponse("\n".join(lines), {"points": points_facts})
 
     if service_type == "refund_status":
         from backend.customer_service.errors import (

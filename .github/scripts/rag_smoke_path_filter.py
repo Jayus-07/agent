@@ -213,6 +213,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/130_mcp_grant_tenant_consistency.sql",
     # 用户名唯一性收窄到租户内（认证表 auth.users，与模型调用无关）
     "backend/sql/migrations/131_auth_username_tenant_unique.sql",
+    # 会员积分账本 + 等级档案（B2 客服业务数据面，与模型调用无关）
+    "backend/sql/migrations/132_cs_points.sql",
 })
 
 

@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.1）
+# business-service 客服业务契约（v1.2）
 
-> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请与商城钱包账本，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本与会员积分档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
 - v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
 
 ## 通用约定
@@ -100,6 +101,14 @@
 ### POST `/business/orders/{order_no}/cancel`
 
 请求体 `{user_id, tenant_id, expected_status, expected_amount, reason?, operation_key}`。取消资格：`pending`（未付款直接取消，无资金变动）与 `paid`（已支付取消，全额退回钱包，`kind=cancel_refund` 入账流水，`payment_status→refunded`）。其余状态、事实不符、越权返回 409/404。
+
+## 会员积分与等级（v1.2）
+
+积分档案为只读演示数据。等级按近 90 天实付消费评定（`spend_90d`，points-policy.md §3【业务确认】：白银≥500 / 黄金≥2000 / 铂金≥8000 元）；积分获取/抵扣比例（消费 1 元=1 分、100 积分抵 1 元）与 `ai.cs_faq` id=8/16 口径一致，文档与 Mock 互为事实源。每个用户首访懒初始化：余额 8000 分 + 等级 `gold`（`spend_90d=3500.00`）+ 两笔 `earn` 入账流水（消费获取 7800、订单完成奖励 200）。
+
+### GET `/business/points?user_id={id}&tenant_id={id}`
+
+返回 `data.points`：`points`（余额，整数）、`tier`（`normal`/`silver`/`gold`/`platinum`）、`spend_90d`、`updated_at`、`ledger[]`（最近流水，`direction`（`in`/`out`）、`points`、`balance_after`、`kind`（`earn`/`redeem`/`rollback`/`expire`）、`memo`、`created_at`）。只读端点，无副作用与幂等键。
 
 ## 错误语义
 

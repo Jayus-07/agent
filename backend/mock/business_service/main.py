@@ -24,6 +24,8 @@ _OPERATIONS: dict[tuple[str, str], dict[str, Any]] = {}
 # P2 商城 Mock 账本：订单可变状态与钱包（金额一律 Decimal，禁浮点累加）
 _ORDERS: dict[tuple[str, str], dict[str, Any]] = {}
 _WALLETS: dict[tuple[str, str], dict[str, Any]] = {}
+# B2 会员积分账本：余额与流水（数字与 points-policy.md / FAQ id=8/16 互为事实源）
+_POINTS: dict[tuple[str, str], dict[str, Any]] = {}
 _SEEDED_USERS: set[str] = set()
 _WALLET_LEDGER_SEQ = 0
 
@@ -255,6 +257,37 @@ def _wallet_view(wallet: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _points_for(user_id: str, tenant_id: str) -> dict[str, Any]:
+    """懒初始化积分档案：余额 8000 分 + 黄金档（近 90 天实付 3500 元）。
+
+    数字口径与 docs/customer-service/kb/cs_policy/points-policy.md 及
+    ai.cs_faq id=8（白银≥500/黄金≥2000/铂金≥8000 元）一致：3500 落黄金档；
+    两笔 earn 流水（消费获取 + 订单完成奖励）与政策 §1 发放口径一致。
+    """
+    key = (user_id.strip(), tenant_id.strip())
+    profile = _POINTS.get(key)
+    if profile is None:
+        now = datetime.now(timezone.utc).isoformat()
+        profile = {
+            "points": 8000,
+            "tier": "gold",
+            "spend_90d": 3500.0,
+            "updated_at": now,
+            "ledger": [
+                {
+                    "direction": "in", "points": 200, "balance_after": 8000,
+                    "kind": "earn", "memo": "订单完成奖励", "created_at": now,
+                },
+                {
+                    "direction": "in", "points": 7800, "balance_after": 7800,
+                    "kind": "earn", "memo": "消费获取", "created_at": now,
+                },
+            ],
+        }
+        _POINTS[key] = profile
+    return profile
+
+
 def _logistics(order: dict[str, Any]) -> dict[str, Any]:
     """由订单状态派生可重复验证的物流轨迹。"""
     status = order["status"]
@@ -335,6 +368,7 @@ def reset_mock_state() -> None:
         _OPERATIONS.clear()
         _ORDERS.clear()
         _WALLETS.clear()
+        _POINTS.clear()
         _SEEDED_USERS.clear()
 
 
@@ -418,6 +452,18 @@ def get_wallet(
     with _STATE_LOCK:
         wallet = _wallet_for(user_id.strip(), tenant_id.strip())
         return _ok({"wallet": _wallet_view(wallet)})
+
+
+@app.get("/business/points")
+def get_points(
+    user_id: str = Query("", min_length=1),
+    tenant_id: str = Query("", min_length=1),
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        profile = _points_for(user_id.strip(), tenant_id.strip())
+        return _ok({"points": profile})
 
 
 @app.post("/business/wallet/topup")
