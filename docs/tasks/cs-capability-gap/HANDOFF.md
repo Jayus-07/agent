@@ -7,12 +7,12 @@
 
 | 项 | 状态 |
 |---|---|
-| main | `61d4226`（PR #318 合并；B0=#309→e2990b9、B1=#312→1620a74、A7=#317→ce902ea 均已合并部署） |
+| main | `d1d38df`（PR #320 合并；B0=#309→e2990b9、B1=#312→1620a74、A7=#317→ce902ea、**B2=#320→d1d38df** 均已合并部署） |
 | worktree | `D:/Program Files/workplace/agent-cs-fix-entry`，detached 于 origin/main，干净 |
-| 共享栈 | 全量 healthy（app:8000/frontend:3100/frontend-cs:3300/apisix:9080/business-mock:8081/postgres:5433）；rebuild 后容器内已含 kb/ 文档与 A7 代码 |
-| CI 基线 | rag_smoke preflight **907 passed / 2 skipped**（@61d4226；2 skip 为既有归因）——新批次 CI 对账公式：`907 + 新增测试数 = passed`，多了少了都要查 |
-| B1 验收 | ✅ 全链路关闭：A4 seed ok=17 / A5 检索 7/7 / A6 六问 4/6 直接达标（q2/q5 ClaimVerifier fail-closed 拦截=P2 挂账）/ A7 坐席端双通道真机 7 条互证 / 主链路零回归 |
-| 待实施 | B2（积分样板）→ B3/B4 → B5-B8（B3/B4 可与 B2 定型后并行）→ B9 仅立项；每批固定收尾见 FINAL-PLAN §二 |
+| 共享栈 | 全量 healthy（app:8000/frontend:3100/frontend-cs:3300/apisix:9080/business-mock:8081/postgres:5433）；rebuild 后容器内已含 kb/ 文档与 B2 代码，132 迁移已落库 |
+| CI 基线 | rag_smoke preflight **919 passed / 2 skipped**（@d1d38df，含 B2 新增 12 例；2 skip 为既有归因）——新批次 CI 对账公式：`919 + 新增测试数 = passed`，多了少了都要查 |
+| B2 验收 | ✅ 全链路关闭：真机 4/4 PASS（8000 分/黄金会员/权益/最近流水；政策问句 T-015 口径走 FAQ）+ facts 三件套 + 阴性验证 2 处 + 隔离 PG sandbox；详见 PROGRESS B2 节 |
+| 待实施 | B3/B4（可并行，复制 B2 查询型模板）→ B5-B8 → B9 仅立项；每批固定收尾见 FINAL-PLAN §二 |
 
 ## 二、启动清单（下一会话 5 步进场）
 
@@ -63,6 +63,8 @@
 | Git Bash curl 中文 body | 会被 GBK 控制台搞坏 → 用 `python -c` + urllib 或 UTF-8 文件体 `--data-binary @file` |
 | secrets 扫描 tree 闸 | workflow/文档**绝不写带凭据 URL 原文**（`postgresql://user:pass@…` 形态即拦，事故记录也只写形态描述）；测试库连接用「库名 env + job 既有 PG* 变量」模式（见 test_mall_cancel_sandbox_pg.py 的 DSN/DBNAME 双路径） |
 | secrets 扫描 history 闸 | 扫 PR 提交区间——脏提交进分支后必须 force-with-lease 重写历史（未合并分支可安全做）；**本地 scan 只扫已跟踪文件，提交前先 git add 再跑** |
+| 新迁移 CI 门禁（B2 实证） | 迁移文件必须显式登记 `.github/scripts/rag_smoke_path_filter.py`（NON_AI/PAID_RELEVANT 二选一）——漏登记 `Detect RAG changes` exit 2、preflight 静默 skipping |
+| frontend-cs 重建（B2 实证） | devctl rebuild 不含 frontend-cs（独立 compose 服务，容器 config_files 记录构建来源）——改 frontend-cs 代码后需 `docker compose -p agent -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-cs && up -d frontend-cs` 从本 worktree 重建 |
 | Mimosa PreToolUse hook | Bash 命令文本里出现 .py 源码路径写操作/git commit heredoc 内嵌代码会被拦 → 文件一律走 Write/Edit；commit message 用 `-F file` 或 `-F -`（stdin） |
 | worktree 切 main | `git checkout main` 会报被主仓占用 → 用 `git checkout --detach origin/main` |
 | 测试账号 | 用户端 `demo_fuzhou / Demo@2026`（user_id=872，租户 default；**872 是 user_id 不是密码**）；坐席端 `cs_wire_agent / CsWire@2026`（auth id=24，supervisor） |
