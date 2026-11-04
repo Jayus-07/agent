@@ -16,6 +16,7 @@ from backend.evaluation.models import EvalReport, EvalResult, ModuleSummary, Tie
 from backend.evaluation.release_gate import (
     DEFAULT_THRESHOLDS,
     GateVerdict,
+    LOWER_IS_BETTER,
     compute_metrics_gate,
     compute_module_release_gate,
     policy_for,
@@ -374,3 +375,95 @@ def test_json_report_carries_three_state_verdict(tmp_path):
     assert data["release_gate"]["verdict"] == "INVALID"
     assert data["release_gate"]["invalid_reason"] == "request_budget_exhausted"
     assert data["release_gate"]["overall"] is False
+
+
+# ── eval-closure B1：表现阈值（P95 时延 / 单例成本 / 降级率）──────────────
+
+_PERF_METRICS = {
+    "pass_rate": 1.0, "recall@5": 0.92, "mrr": 0.89,
+    "reject_accuracy": 1.0, "false_answer_rate": 0.0,
+}
+
+
+def _rag_with_perf(**perf) -> EvalReport:
+    """RAG 黄金集质量全达标 + 追加表现指标。"""
+    return _report(
+        "rag",
+        [_summary("rag", 10, 10, metrics={**_PERF_METRICS, **perf})],
+        [_result(f"RC-{i:03d}", "pass", module="rag") for i in range(10)],
+    )
+
+
+def test_perf_thresholds_constants_registered():
+    """三项表现阈值进 DEFAULT_THRESHOLDS 且全部越小越好（口径单一）。"""
+    for metric in ("p95_latency_ms", "cost_per_case_cny", "degradation_rate"):
+        assert metric in DEFAULT_THRESHOLDS, f"{metric} 缺默认阈值"
+        assert metric in LOWER_IS_BETTER, f"{metric} 未登记越小越好"
+    assert DEFAULT_THRESHOLDS["p95_latency_ms"] == 30000.0
+    assert DEFAULT_THRESHOLDS["cost_per_case_cny"] == 1.00
+    assert DEFAULT_THRESHOLDS["degradation_rate"] == 0.05
+
+
+def test_perf_within_thresholds_passes():
+    """表现指标全部达标 → 质量与表现双过 → PASS。"""
+    gate = compute_module_release_gate(
+        _rag_with_perf(p95_latency_ms=25000.0, cost_per_case_cny=0.5,
+                       degradation_rate=0.02))
+    assert gate["verdict"] == GateVerdict.PASS.value
+    by_metric = {it["metric"]: it for it in gate["items"]}
+    for metric in ("p95_latency_ms", "cost_per_case_cny", "degradation_rate"):
+        assert by_metric[metric]["passed"] is True, metric
+        assert by_metric[metric]["requirement"] == "optional"
+
+
+def test_perf_over_threshold_fails():
+    """P95 时延超线 → optional 裁决 FAIL（数据缺失不装成功，超线更不行）。"""
+    gate = compute_module_release_gate(
+        _rag_with_perf(p95_latency_ms=35000.0, cost_per_case_cny=0.5,
+                       degradation_rate=0.02))
+    assert gate["verdict"] == GateVerdict.FAIL.value
+    item = next(it for it in gate["items"] if it["metric"] == "p95_latency_ms")
+    assert item["passed"] is False
+    assert "阈值" in item["reason"]
+
+
+def test_perf_cost_and_degradation_over_threshold_fail():
+    """单例成本 / 降级率超线同口径 FAIL（direction=lower）。"""
+    for perf in ({"cost_per_case_cny": 2.0}, {"degradation_rate": 0.10}):
+        gate = compute_module_release_gate(
+            _rag_with_perf(p95_latency_ms=1000.0, **perf))
+        assert gate["verdict"] == GateVerdict.FAIL.value, perf
+
+
+def test_perf_metrics_absent_not_applicable():
+    """存量 suite 无表现指标 → N/A 不影响门禁（向后兼容锚点）。"""
+    gate = compute_module_release_gate(_rag_with_perf())
+    assert gate["verdict"] == GateVerdict.PASS.value
+    item = next(it for it in gate["items"] if it["metric"] == "p95_latency_ms")
+    assert item["passed"] is None
+    assert item["status"] == "not_applicable"
+
+
+def test_perf_optional_does_not_mask_required_fail():
+    """表现达标不能掩盖质量 required 失败——三态裁决不被 optional 稀释。"""
+    report = _rag_with_perf(p95_latency_ms=1000.0, cost_per_case_cny=0.1,
+                            degradation_rate=0.0)
+    report.summaries[0].metrics["recall@5"] = 0.10  # required 检索指标崩塌
+    gate = compute_module_release_gate(report)
+    assert gate["verdict"] == GateVerdict.FAIL.value
+
+
+def test_perf_sql_policy_same_optional_semantics():
+    """SQL policy 与 RAG 同口径：有值裁决、缺失 N/A。"""
+    report = _report(
+        "sql",
+        [_summary("sql", 10, 10, metrics={
+            "pass_rate": 1.0, "router_hit": 1.0, "safety_pass": 1.0,
+            "execution_match": 1.0, "degradation_rate": 0.5,  # 超线
+        })],
+        [_result(f"SC-{i:03d}", "pass") for i in range(10)],
+    )
+    gate = compute_module_release_gate(report)
+    assert gate["verdict"] == GateVerdict.FAIL.value
+    item = next(it for it in gate["items"] if it["metric"] == "degradation_rate")
+    assert item["passed"] is False

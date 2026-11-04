@@ -42,6 +42,7 @@ METRIC_SOURCE: dict[str, str] = {
     "ragas_context_recall": "RAGAS", "ragas_context_precision": "RAGAS",
     "ragas_faithfulness": "RAGAS", "ragas_answer_relevancy": "RAGAS",
     "ragas_answer_correctness": "RAGAS",
+    "p95_latency_ms": "自研", "cost_per_case_cny": "自研", "degradation_rate": "自研",
 }
 
 # 常用指标中文名（门禁项展示用；完整展示层标签表仍在 report/builder.METRIC_LABELS）
@@ -66,6 +67,10 @@ GATE_METRIC_LABELS: dict[str, str] = {
     "router_hit": "路由表命中率",
     "safety_pass": "安全校验通过率",
     "execution_match": "执行结果一致率",
+    # eval-closure B1：表现指标中文名（门禁项展示用）
+    "p95_latency_ms": "P95 响应时间 (ms)",
+    "cost_per_case_cny": "单例成本 (CNY)",
+    "degradation_rate": "降级率",
 }
 
 # 门禁阈值（质量口径的唯一事实源；builder.DEFAULT_THRESHOLDS 迁入至此）
@@ -89,10 +94,18 @@ DEFAULT_THRESHOLDS: dict[str, float] = {
     "router_hit": 0.95,
     "safety_pass": 1.00,
     "execution_match": 0.80,
+    # eval-closure B1：表现（性能/成本/稳定性）阈值——采集侧已有原始数据
+    # （eval_case_results.latency/cost、trace.metadata.degraded），此前只采集
+    # 不裁决。默认值宁松勿紧（先闭环判定通道，超线收紧走调用方覆盖）。
+    "p95_latency_ms": 30000.0,      # P95 响应 30s（单请求 SLA 10s 的 3 倍放宽）
+    "cost_per_case_cny": 1.00,      # 单例成本上限 1 元（Billing V2 CNY 主口径）
+    "degradation_rate": 0.05,       # 降级率 ≤5%（trace degraded 终态占比）
 }
 
 LOWER_IS_BETTER: set[str] = {
     "false_answer_rate", "sem_hallucination_rate", "dept_leak", "context_noise@10",
+    # eval-closure B1：表现指标全部越小越好
+    "p95_latency_ms", "cost_per_case_cny", "degradation_rate",
 }
 
 # 旧单一 RAG 指标表（2026-10-07 起弃用，仅为兼容保留；裁决走 MODULE_GATE_POLICIES）
@@ -184,6 +197,11 @@ _RAG_POLICY = ModuleGatePolicy(
         _req("ragas_faithfulness", "生成", ragas_conditional=True),
         _req("ragas_answer_relevancy", "生成", ragas_conditional=True),
         _req("ragas_answer_correctness", "生成", ragas_conditional=True),
+        # eval-closure B1：表现阈值走 optional——有值则裁决（超线 FAIL），
+        # 缺失 N/A 不影响门禁（存量 suite 无表现指标，required 会全军覆没）
+        _req("p95_latency_ms", "性能", direction="lower"),
+        _req("cost_per_case_cny", "成本", direction="lower"),
+        _req("degradation_rate", "稳定性", direction="lower"),
     ),
     not_applicable_display=("router_hit", "safety_pass", "execution_match"),
     tier_gate=True,
@@ -196,6 +214,12 @@ _SQL_POLICY = ModuleGatePolicy(
         _req("router_hit", "路由"),
         _req("safety_pass", "安全"),
         _req("execution_match", "执行"),
+    ),
+    optional=(
+        # eval-closure B1：与 RAG 同口径的表现阈值（optional，有值才裁决）
+        _req("p95_latency_ms", "性能", direction="lower"),
+        _req("cost_per_case_cny", "成本", direction="lower"),
+        _req("degradation_rate", "稳定性", direction="lower"),
     ),
     not_applicable_display=(
         "recall@5", "mrr", "ndcg@10",

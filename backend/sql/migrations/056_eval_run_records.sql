@@ -6,7 +6,7 @@
 -- 口径：
 --   prompt_snapshot  PG 权威（prompts/service.snapshot_prompt_versions()），
 --                    与 meta.json 的 yaml 扫描口径并存（meta.json 保留旧口径）
---   trigger          manual | prompt_publish | scheduled | release_gate | ci
+--   trigger          manual | prompt_publish | scheduled | release_gate | ci | online
 --   metrics          每模块 {module: {pass_rate, total, passed, ...}}
 -- 幂等：IF NOT EXISTS；run_id UNIQUE 支持重复 upsert（checkpoint 续跑场景）。
 

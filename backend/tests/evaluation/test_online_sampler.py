@@ -1,0 +1,231 @@
+"""在线流量采样评测器回归测试（eval-closure B2/B3）。
+
+验收锚点：
+- 开关关闭 / 无可评样本 → skipped 正常终态（beat 不告警不重试）
+- 采样口径：优先级排序（负反馈 > 失败 > 降级 > 拒答 > 普通）+ 比例驱动 + 硬封顶
+- judge 失败（total=0.0）不吞：status='error' 计数显式暴露、不进均值
+- 落库字段：trigger='online' / mode='online' / run_id=online-YYYYMMDD、样本 judge 口径
+"""
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from backend.evaluation import online_sampler as sut
+
+
+def _trace(tid: str, *, status: str = "success", question: str = "q",
+           duration_ms: int = 1000, cost_cny: float = 0.1,
+           workflow: str = "agent", degraded_meta: bool = False) -> dict:
+    return {
+        "id": tid, "status": status, "question": question,
+        "answer_preview": f"answer-{tid}", "duration_ms": duration_ms,
+        "cost_cny": cost_cny, "workflow_name": workflow,
+        "metadata": {"degraded": degraded_meta} if degraded_meta else {},
+        "error": {} if status != "error" else {"message": "boom"},
+    }
+
+
+@pytest.fixture(autouse=True)
+def _sampler_enabled(monkeypatch):
+    """默认打开采样开关（单测不测 disabled 之外路径时不受 env 影响）。"""
+    monkeypatch.setenv("EVAL_ONLINE_SAMPLER_ENABLED", "true")
+
+
+def _patch_trace_store(traces: list[dict]):
+    """patch trace_store 单例的 list_since（采样数据源）。"""
+    store = MagicMock()
+    store.list_since.return_value = traces
+    return patch("backend.observability.trace_store.get_trace_store",
+                 return_value=store)
+
+
+def _patch_judge(total: float = 4.0, confidence: str = "high"):
+    """patch judge_answer（LLM 外部依赖；失败契约 = total<=0.0）。"""
+    judge_result = MagicMock(scores={"completeness": 4, "faithfulness": 4,
+                                     "conciseness": 4, "citation_quality": 4},
+                             total=total, reasoning="ok", confidence=confidence)
+    return patch("backend.evaluation.judge.judge_answer", return_value=judge_result)
+
+
+# ── 开关与空数据终态 ─────────────────────────────────────────────────────────
+
+
+def test_disabled_skips(monkeypatch):
+    """默认关：未启用时返回 skipped=disabled，不触 trace 源也不落库。"""
+    monkeypatch.setenv("EVAL_ONLINE_SAMPLER_ENABLED", "false")
+    with _patch_trace_store([]) as store_patch:
+        result = sut.run_online_sampling()
+    assert result == {"skipped": "disabled", "run_id": ""}
+    store_patch.assert_not_called()
+
+
+def test_no_eligible_traces_skips():
+    """窗口内无可评 trace → skipped，不建空 run（避免每日垃圾台账行）。"""
+    with _patch_trace_store([]):
+        result = sut.run_online_sampling()
+    assert result["skipped"] == "no_eligible_traces"
+
+
+def test_unjudgeable_trace_filtered():
+    """无 question 的 trace（纯路由失败等）不进采样池。"""
+    with _patch_trace_store([_trace("t1", question="")]), _patch_judge():
+        result = sut.run_online_sampling()
+    assert result["skipped"] == "no_eligible_traces"
+
+
+def test_trace_source_unavailable_skips():
+    """trace 源不可达 → skipped 终态而非异常（不炸 beat）。"""
+    with patch("backend.observability.trace_store.get_trace_store",
+               side_effect=RuntimeError("pg down")):
+        result = sut.run_online_sampling()
+    assert result["skipped"] == "trace_store_unavailable"
+
+
+# ── 采样口径 ─────────────────────────────────────────────────────────────────
+
+
+def test_priority_ordering_negative_first():
+    """负反馈 > 失败 > 降级 > 拒答 > 普通优先级排序，封顶内优先采样。"""
+    traces = [
+        _trace("normal", workflow="agent"),
+        _trace("rejected", status="rejected"),
+        _trace("degraded", status="degraded"),
+        _trace("failed", status="error"),
+        _trace("neg", workflow="agent"),
+    ]
+    with _patch_trace_store(traces), _patch_judge(), \
+            patch.object(sut, "_negative_trace_ids", return_value={"neg"}), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0",
+                                      "EVAL_ONLINE_SAMPLE_MAX": "3"}):
+        result = sut.run_online_sampling()
+    assert result["sampled_count"] == 3
+    assert result["by_priority"] == {"negative_feedback": 1, "failed": 1,
+                                     "degraded": 1}
+    # 封顶截断：普通/拒答样本被挤出
+    assert "normal" not in result["by_priority"]
+
+
+def test_rate_proportional_with_min_one():
+    """比例驱动：可评 10 条 × rate=0.5 → 采 5 条；不足时至少 1 条。"""
+    traces = [_trace(f"t{i}", degraded_meta=(i % 2 == 0)) for i in range(10)]
+    with _patch_trace_store(traces), _patch_judge(), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "0.5"}):
+        result = sut.run_online_sampling()
+    assert result["sampled_count"] == 5
+
+
+def test_degraded_meta_counts_for_priority():
+    """status=success 但 metadata.degraded=true 的 trace 归降级优先级。"""
+    traces = [_trace("a"), _trace("b", degraded_meta=True)]
+    with _patch_trace_store(traces), _patch_judge(), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0",
+                                      "EVAL_ONLINE_SAMPLE_MAX": "1"}):
+        result = sut.run_online_sampling()
+    assert result["by_priority"] == {"degraded": 1}
+    assert "normal" not in result["by_priority"]
+
+
+# ── judge 契约 ───────────────────────────────────────────────────────────────
+
+
+def test_judge_failure_not_swallowed():
+    """judge 失败（total=0.0）→ 样本 error、failed_count 显式暴露、不进均值。"""
+    with _patch_trace_store([_trace("ok"), _trace("bad")]), \
+            patch("backend.evaluation.judge.judge_answer",
+                  side_effect=[MagicMock(scores={}, total=4.0, reasoning="ok",
+                                         confidence="high"),
+                               MagicMock(scores={}, total=0.0,
+                                         reasoning="judge failed",
+                                         confidence="low")]), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}):
+        result = sut.run_online_sampling()
+    assert result["judge_failed_count"] == 1
+    # 均值只含有效分：单条 4.0 → avg 4.0（0.0 混入会拉成 2.0）
+    assert result["judge_avg_total"] == 4.0
+    assert result["judge_pass_rate"] == 1.0
+
+
+def test_judge_below_passline_is_fail_sample():
+    """judge 低于及格线（3.0）→ 样本 status=fail，pass_rate 归零。"""
+    with _patch_trace_store([_trace("low")]), _patch_judge(total=2.0), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}):
+        result = sut.run_online_sampling()
+    assert result["judge_pass_rate"] == 0.0
+    assert result["judge_avg_total"] == 2.0
+
+
+# ── 聚合与落库 ───────────────────────────────────────────────────────────────
+
+
+def test_aggregate_perf_metrics():
+    """run 聚合含表现三项（与 release_gate DEFAULT_THRESHOLDS 同键名）。"""
+    traces = [_trace(f"t{i}", duration_ms=1000 * (i + 1),
+                     cost_cny=0.2, degraded_meta=(i == 0))
+              for i in range(4)]
+    with _patch_trace_store(traces), _patch_judge(), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}):
+        result = sut.run_online_sampling()
+    assert result["p95_latency_ms"] == 4000.0  # <20 样本取最大
+    assert result["cost_per_case_cny"] == pytest.approx(0.2)
+    assert result["degradation_rate"] == 0.25
+
+
+def test_persist_record_and_sample_fields():
+    """落库：run 行 trigger/mode/module 口径 + 样本行 evaluator/status。"""
+    with _patch_trace_store([_trace("t1"), _trace("t2", status="error")]), \
+            _patch_judge(total=4.5), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}), \
+            patch.object(sut, "_negative_trace_ids", return_value=set()), \
+            patch("backend.evaluation.run_records.collect_prompt_snapshot",
+                  return_value={"rag.qa": "23"}), \
+            patch("backend.evaluation.run_records.collect_model_binding_fingerprint",
+                  return_value="fp0"), \
+            patch("backend.infra.db.engine_for") as engine_mock:
+        conn = MagicMock()
+        engine_mock.return_value.raw_connection.return_value.__enter__.return_value = conn
+
+        result = sut.run_online_sampling()
+
+    assert result["persisted"] is True
+    assert result["run_id"].startswith("online-")
+    assert len(result["run_id"]) == len("online-YYYYMMDD")
+    run_sql = conn.cursor().execute.call_args_list[0][0][0]
+    assert "ai.eval_run_records" in run_sql
+    run_params = conn.cursor().execute.call_args_list[0][0][1]
+    # trigger='online'（管理端 online 来源过滤口径）、module='all'、mode='online'
+    assert run_params[8] == "online"
+    assert run_params[0] == result["run_id"]
+    assert run_params[1] == "all"
+    assert run_params[2] == "online"
+    sample_delete = conn.cursor().execute.call_args_list[1]
+    assert "DELETE FROM ai.eval_run_samples" in sample_delete[0][0]
+    assert sample_delete[0][1] == (result["run_id"], "judge")
+    # 样本批量：executemany 写 ai.eval_run_samples
+    assert "ai.eval_run_samples" in conn.cursor().executemany.call_args[0][0]
+
+
+def test_persist_failure_soft():
+    """DB 写入失败 → persisted=False 软失败返回，不抛异常。"""
+    with _patch_trace_store([_trace("t1")]), _patch_judge(), \
+            patch.dict("os.environ", {"EVAL_ONLINE_SAMPLE_RATE": "1.0"}), \
+            patch("backend.infra.db.engine_for",
+                  side_effect=RuntimeError("db down")):
+        result = sut.run_online_sampling()
+    assert result["persisted"] is False
+    assert result["run_id"]
+
+
+def test_celery_beat_registers_online_sampling_at_0130_utc():
+    """beat 以 Asia/Shanghai 时区在 09:30 调度，对应 01:30 UTC。"""
+    from backend.tasks.celery_app import celery_app
+
+    entry = celery_app.conf.beat_schedule["eval-online-sampling"]
+    schedule = entry["schedule"]
+    assert celery_app.conf.timezone == "Asia/Shanghai"
+    assert schedule.hour == {9}
+    assert schedule.minute == {30}
+    assert entry["task"] == "evaluation.online_sampling"
+    assert entry["options"]["queue"] == "report"
+    assert "backend.tasks.eval_sampling_tasks" in celery_app.conf.include
