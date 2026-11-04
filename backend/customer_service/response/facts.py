@@ -28,6 +28,7 @@ _COMPLAINT_SEVERITY = {"low", "medium", "high", "critical", "unknown"}
 _COMPLAINT_CLASS = {"complaint", "not_complaint", "unknown"}
 _CURRENCY = {"cny", "usd", "eur", "jpy", "hkd", "unknown"}
 _LEDGER_DIRECTION = {"in", "out"}
+_TIER = {"normal", "silver", "gold", "platinum"}
 
 
 def project_fact_set(raw: object) -> dict[str, Any]:
@@ -47,6 +48,7 @@ def project_fact_set(raw: object) -> dict[str, Any]:
         "logistics": lambda value: _project_logistics(value),
         "refund": lambda value: _project_refund(value),
         "balance": lambda value: _project_balance(value),
+        "points": lambda value: _project_points(value),
         "operation": lambda value: _project_operation(value),
         "task_result": lambda value: _project_task_result(value),
         "complaint": lambda value: _project_complaint(value),
@@ -178,6 +180,35 @@ def _project_balance(value: object) -> dict[str, Any]:
     recent_amount = _safe_amount(value.get("recent_amount"))
     if recent_amount is not None:
         result["recent_amount"] = recent_amount
+    memo = _safe_text(value.get("recent_memo"), limit=40)
+    if memo:
+        result["recent_memo"] = memo
+    return result
+
+
+def _project_points(value: object) -> dict[str, Any]:
+    """B2 积分/等级投影：账户事实白名单（流水只留最近一笔，W1 同口径）。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    points = _safe_amount(value.get("points"))
+    if points is not None:
+        result["points"] = points
+    tier = _enum_value(value.get("tier"), _TIER)
+    if tier is not None:
+        result["tier"] = tier
+    tier_label = _safe_text(value.get("tier_label"), limit=20)
+    if tier_label:
+        result["tier_label"] = tier_label
+    tier_note = _safe_text(value.get("tier_note"), limit=40)
+    if tier_note:
+        result["tier_note"] = tier_note
+    direction = _enum_value(value.get("recent_direction"), _LEDGER_DIRECTION)
+    if direction is not None:
+        result["recent_direction"] = direction
+    recent_points = _safe_amount(value.get("recent_points"))
+    if recent_points is not None:
+        result["recent_points"] = recent_points
     memo = _safe_text(value.get("recent_memo"), limit=40)
     if memo:
         result["recent_memo"] = memo

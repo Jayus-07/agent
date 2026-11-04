@@ -406,7 +406,10 @@ def _fact_amounts(
         )
         order_no = section.get("order_no") or inherited_order_no
         order_no = str(order_no) if order_no else None
-        for key in ("amount", "total_amount", "balance", "recent_amount"):
+        for key in (
+            "amount", "total_amount", "balance", "recent_amount",
+            "points", "recent_points",
+        ):
             item = section.get(key)
             if item is None or isinstance(item, bool):
                 continue
@@ -425,6 +428,10 @@ def _fact_amounts(
             add_amounts(item, "order")
     add_amounts(facts.get("refund"), "refund")
     add_amounts(facts.get("balance"), "balance")
+    # B2：积分数字进白名单（积分本身不经元金额抽取，注册是为让「积分」标签
+    # 命中的元金额守卫可对照真实积分数——如「8000 积分抵 ¥80」类越权换算
+    # 只有当 facts 真有该金额才放行）
+    add_amounts(facts.get("points"), "points")
     task_result = facts.get("task_result")
     if isinstance(task_result, dict):
         add_amounts(task_result.get("facts"), "order")
@@ -460,12 +467,17 @@ def _amount_claim_kind(answer: str, start: int, end: int) -> str | None:
         r"下单金额|合计金额|总金额",
     )
     balance_label = re.compile(r"账户余额|余额|钱包|流水|入账|支出")
+    # B2：积分/等级标签——紧邻积分标签的元金额按 points 类核验，
+    # 无积分 facts 支撑的换算金额（「积分可抵 ¥80」）fail-closed 拒绝
+    points_label = re.compile(
+        r"积分(?:余额|流水|明细|抵扣|兑换|变动)?|会员(?:等级|权益)|等级(?:权益)?",
+    )
 
     def labels(text: str, offset: int = 0) -> list[tuple[int, int, str]]:
         found: list[tuple[int, int, str]] = []
         for pattern, kind in (
             (refund_label, "refund"), (order_label, "order"),
-            (balance_label, "balance"),
+            (balance_label, "balance"), (points_label, "points"),
         ):
             found.extend(
                 (offset + match.start(), offset + match.end(), kind)

@@ -349,6 +349,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "130_mcp_grant_tenant_consistency.sql": "memory",
     # 用户名唯一性收窄到租户内（审计 P2）：auth.users 联合唯一 + 空租户收口。
     "131_auth_username_tenant_unique.sql": "memory",
+    # 会员积分账本 + 等级档案（cs-capability-gap B2）：finance.points_ledger
+    # + customer.tier_profiles（agent_business 库，余额=流水净和）。
+    "132_cs_points.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

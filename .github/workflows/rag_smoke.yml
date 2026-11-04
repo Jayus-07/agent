@@ -123,6 +123,8 @@ jobs:
       # 由测试 fixture 自行按迁移建表，不依赖 init_db 目标库；
       # 连接复用本 job 既有 PGHOST/PGPORT/PGUSER/PGPASSWORD，不在本文件内嵌凭据。
       MALL_SANDBOX_PG_DBNAME: agent_business_sandbox_test
+      # 积分查询 sandbox 直查链路回归（B2）：复用同一隔离库，同守卫纪律。
+      POINTS_SANDBOX_PG_DBNAME: agent_business_sandbox_test
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -173,6 +175,7 @@ jobs:
             backend/tests/customer_service/test_query_expert.py \
             backend/tests/customer_service/test_order_cancel_flow.py \
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
+            backend/tests/customer_service/test_points_flow.py \
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/scripts/test_cs_kb_seed_sync.py \
             backend/tests/rag/test_specialized_budget.py \

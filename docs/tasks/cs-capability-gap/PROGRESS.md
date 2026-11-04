@@ -79,6 +79,32 @@
 - ClaimVerifier 误杀有据数字句：检索完整性（rerank/top_k）与校验容差调优，B2 查询域接 facts 后一并观察
 - 10-22 批量停用 cs KB 的背景无人可考（审计无 reason 字段）——已在本文件留痕，运营侧如需审计问询找 super_admin 279
 
+## B2：积分/等级查询（查询型样板）—— 实现与验收（2026-11-04，分支 feat/cs-points-query）
+
+**实现**（FINAL-PLAN §五 B2 + 模板 A 全集，14 文件）：
+
+- 路由：`t_points_query`（TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）——vocab.py TRANSACTION 域词（积分/会员等级/等级权益）+ 3 条句式 pattern，VOCAB_VERSION → **2026-11-04.1**（test_vocab 版本守卫断言同步，AGENTS.md #8 连带更新）；出域豁免补「等级/权益」（「积分/会员」10-08 已在表，HANDOFF §四.1 与实际有出入，以代码为准）；fine_router 域内词表；agent_assist SOP 三步行
+- 口径钉住：golden T-015「会员积分怎么用？」KNOWLEDGE 2 票 > TRANSACTION 1 票不翻域（test_points_flow 路由测试钉死，真机 q4 复证走知识域 FAQ id=16 原口径）
+- Service：`points_service.py` 双模式（http→`GET /business/points`；sandbox→finance.points_ledger 净和 + customer.tier_profiles）；tier_label/tier_note 由 Service 归一（数据面只回 tier 码）
+- mock：懒种子 **8000 分 + gold（spend_90d=3500，黄金档 2000≤x<8000 与 FAQ id=8 一致）+ 2 笔 earn 流水**；contract.md **v1.2**（变更记录 + 「会员积分与等级」节）
+- facts 三件套（W1 红线）：`_project_points`（points/tier/tier_label/tier_note/recent_*）+ projectors 注册 + composer `_fact_amounts` 扫 "points"/"recent_points" 键、`_amount_claim_kind` 加 `points` 标签——积分→元越权换算（「8000 积分可抵 ¥80」）fail-closed 打回模板
+- 迁移：`132_cs_points.sql`（finance.points_ledger + customer.tier_profiles，账本净和为余额单一事实源，872 幂等种子）+ init_db.py MIGRATION_TARGETS 登记 "business"（共享栈 db-migrate 实际应用，schema_migrations 有记录）
+- 测试：`test_points_flow.py` 12 例 = 路由钉住（含 T-015）+ 豁免词 + mock 契约数字一致性 + http Service + facts 导出/降级 + 投影白名单/非法 tier 丢弃 + composer 守卫放行/拒绝 + **隔离 PG（15434）sandbox 直查**（fixture 自带 003+132 建表，POINTS_SANDBOX_PG_DBNAME 双路径 env 同 MALL 守卫纪律）
+
+**验证链**：
+
+1. T2 全绿：test_points_flow **12/12**（含隔离库 sandbox）；customer_service 全域回归 **1561 passed**（发现并修复 test_vocab 版本断言连带）；vocab 双门禁（test_cs_eval_gate + test_cs_decision_replay）全过
+2. 阴性验证 2 处成立：撤 facts.py 投影器注册 → 投影白名单 2 例失败；撤 fine_router 词条 → 路由测试失败（证明测试钉住行为）
+3. worktree rebuild：backend/business-mock/frontend/frontend-admin 重建 healthy；**132 落库实证**（agent_business.schema_migrations 有 132 行 + 872/gold/3500 种子在位；/health migrations 字段 131 为 memory 库口径，非漂移）；frontend-cs 需单独 `docker compose -p agent build frontend-cs`（devctl rebuild 不含它，容器 config_files 指主仓路径——已从 worktree 重建）
+4. **真机验收 4/4 PASS**（demo_fuzhou 经 :9080，脚本 d:/tmp/cs_b2_acc.py，结果落盘 d:/tmp/cs-b2-acc-result.txt）：
+   - q1「我的积分有多少？」→ 8000 + 黄金会员 + 1.5 倍权益 + 最近 200 分流水 ✅
+   - q2「我的等级权益有哪些？」→ 等级 + 权益 + 积分（豁免词「等级/权益」召回路径验证）✅
+   - q3「查一下我的积分和最近流水」→ 余额 + memo「订单完成奖励」入 facts 进回复（W1 纪律真机面）✅
+   - q4「会员积分怎么用？怎么抵扣？」→ 知识域 FAQ 答复（每消费 1 元累计 1 分，满 1000 分抵 10 元）+ 参考来源 ✅（政策问句未误走数据查询）
+5. 主链路零回归：:8000 /health ok + :3100/:3300 200 + :9080 用户/坐席双登录冒烟 200；客服 RAG/FAQ 链路经 q4 实测在位
+
+**收尾**：rag_smoke 定向清单 +`test_points_flow.py` 与 `POINTS_SANDBOX_PG_DBNAME` env；GAP_LIST 积分行改「已覆盖（B1 政策问答 + B2 意图级积分/等级查询）」；customer-service.md 第 8 行（积分/等级查询口径）与第 49 行（词表扩圈台账）同步；FAQ id=8/16 与 mock/迁移种子数字三方一致（3500∈黄金档、100 分=1 元）。
+
 ## 后续批次
 
-B2 积分样板（§五模板 A 10 文件）→ B3/B4 并行。B2 定型前不动。
+B2 定型（本批合并）→ B3/B4 可并行（复制查询型模板）。B5-B8 依 FINAL-PLAN §二。
