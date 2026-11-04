@@ -61,13 +61,19 @@ CSAT/质检分→评测候选管道、travel 反馈接线、阈值/采样率管�
 
 ## 验收
 
-- [ ] B1：release_gate 对含表现指标的 suite 出三态裁决，阈值缺失 fail-closed；
-- [ ] B2/B3：beat 触发一次采样 run 落库，`source=online` 可被 run 列表过滤；
+- [x] B1：release_gate 对含表现指标的 suite 出三态裁决，阈值缺失 fail-closed（定向用例通过）；
+- [x] B2/B3：beat 触发一次采样 run 落库，`trigger=online` 可过滤（实机验收 2026-11-05，见 `NEXT-SESSION-2.md`）；
 - [ ] F1：super_admin 可在 RunsTab 完成 gate 审批闭环（API 实际调用成功）；
 - [ ] F2：反馈候选可在 DatasetsTab approve/reject/promote（API 实际调用成功）；
 - [ ] F3：CompareTab 用例详情可提交人工评审，页面标注「不进自动门禁」；
-- [ ] 前端 tsc + 组件测试绿；后端定向测试绿；`devctl.bat rebuild` 健康检查通过；
+- [ ] F1-F3 前端验收：tsc、组件测试及管理端实际 API 闭环（待 F 批）；
+- [x] 后端定向测试 48 passed；`devctl.bat rebuild /y` 健康检查通过，beat 注册确认（2026-11-05）；
 - [ ] 未实际执行的验证不得报告为通过。
+
+### E 批运行风险记录（2026-11-05）
+
+- 一次性实机任务落库成功，结束后 `EVAL_ONLINE_SAMPLER_ENABLED` 未留在 worker/beat 环境或主 `.env`；开关仍默认关闭。
+- 实机模型调用日志出现 `[Budget] reserve 旁路`（后台任务无请求级预算上下文）。触发与落库验收通过不等于预算预占/结算已覆盖；评估任务长期启用前需单独裁决并补齐后台预算链路。
 
 ## 关键代码事实（设计依据，file:line 已核）
 
