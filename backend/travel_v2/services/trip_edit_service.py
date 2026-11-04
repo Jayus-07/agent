@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from uuid import UUID, uuid4
 
 from backend.travel_v2.db import memory_connection
+from backend.travel_v2.leg_modes import recommend_leg_mode
 from backend.travel_v2.models.commands import (
     AddMealSelectionCommand,
     SelectIntercityTrainCommand,
@@ -110,6 +111,9 @@ class TripEditService:
                 "must_visit": False, "locked": False, "note": period_label,
             }
             self._insert_meal_in_order(day, meal_item)
+            # 插入餐项后相邻关系变化：刷新当天腿（新边按推荐模式合成），
+            # 否则旧 A→B 腿悬空、新边无腿，前端出现「待选择」（ux2 #5）。
+            TripEditService._refresh_day_legs(day)
             self._refresh_derived_totals_and_budget(document, "add_meal")
         validated = TripDocumentV2.model_validate(document)
         return self.apply_document(
@@ -1131,10 +1135,15 @@ class TripEditService:
                     leg_id = f"leg-{edge_hash}"
                 else:
                     leg_id = f"leg-{uuid4().hex}"
+                # 缺失腿按直线距离推荐交通方式（ux2 #5）：生成/插入新安排后
+                # 用户不必逐段手选；耗时/费用仍未知（无真实路线查询不编造）。
                 leg = {
                     "leg_id": leg_id,
                     "from_item_id": edge[0], "to_item_id": edge[1],
-                    "selected_mode": "transit", "duration_min": None,
+                    "selected_mode": recommend_leg_mode(
+                        source.get("place"), target.get("place"),
+                    ),
+                    "duration_min": None,
                     "distance_m": None, "cost_cny": None,
                     "reliability": "unavailable", "source": None,
                     "observed_at": None,
