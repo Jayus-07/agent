@@ -19,6 +19,7 @@ import {
 } from '@/api/travelV2'
 import { streamTravelPlanV2, parseTravelToolCard, type TravelStreamEvent, type TravelToolCard } from '@/api/travel'
 import TravelMessageMarkdown from './TravelMessageMarkdown'
+import { useTypewriter } from '@/components/travel/useTypewriter'
 import ToolProcessRows from '@/components/travel/ToolProcessRows'
 import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
 import type { TravelConversationMessage } from '@/components/travel/useTravelConversation'
@@ -86,6 +87,8 @@ export default function TravelV2TripConversation({
   const [qaCards, setQaCards] = useState<TravelToolCard[]>([])
   const [refreshPending, setRefreshPending] = useState<{ intent: OperationIntent; revision: number } | null>(null)
   const [refreshingTrip, setRefreshingTrip] = useState(false)
+  // 打字机（ux3）：只对本会话新产生的助手终态回复渐显；历史消息与轮询占位直显。
+  const [typedMessageId, setTypedMessageId] = useState<string | null>(null)
   const operationRef = useRef<OperationView | null>(null)
   const locallyStartedOperationKeysRef = useRef(new Set<string>())
   const busyRef = useRef(false)
@@ -109,13 +112,16 @@ export default function TravelV2TripConversation({
     tone: TravelConversationMessage['tone'] = 'ok',
   ) => {
     const cleanText = `${text}\n[[travel-v2-ai-result:${intent.key}:${status}]]`
+    const assistantId = `${intent.turnId}:assistant`
+    // 占位（processing）会被轮询替换，不启用打字机；终态文本只渐显一次。
+    if (status !== 'processing') setTypedMessageId(assistantId)
     setMessages((current) => {
       const existingIndex = current.findIndex((message) => {
         if (message.role !== 'assistant') return false
         return message.text.match(RESULT_MARKER)?.[1] === intent.key
       })
       const assistant: TravelConversationMessage = {
-        id: `${intent.turnId}:assistant`, conversationId, turnId: intent.turnId,
+        id: assistantId, conversationId, turnId: intent.turnId,
         role: 'assistant', text: cleanText, tag, tone,
       }
       if (existingIndex < 0) return [...current, assistant]
@@ -561,7 +567,7 @@ export default function TravelV2TripConversation({
       {visibleMessages.map((message) => <div key={message.id} className={`flex items-start gap-2 ${message.role === 'user' ? 'justify-end' : ''}`}>
         {message.role === 'assistant' && <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={14} aria-hidden /></span>}
         <div className={`max-w-[92%] rounded-xl px-3 py-2.5 text-[11px] leading-5 ${message.role === 'user' ? 'whitespace-pre-wrap rounded-tr-sm bg-[#2878f5] text-white' : 'rounded-tl-sm bg-[#f2f7fd] text-[#405875]'}`}>
-          {message.role === 'assistant' && message.tag && <span className="mb-1 block text-[9px] font-semibold text-[#4882ca]">{message.tag}</span>}{message.role === 'assistant' ? <TravelMessageMarkdown content={message.text} /> : message.text}
+          {message.role === 'assistant' && message.tag && <span className="mb-1 block text-[9px] font-semibold text-[#4882ca]">{message.tag}</span>}{message.role === 'assistant' ? <TypedAssistantBody text={message.text} animate={message.id === typedMessageId} /> : message.text}
           {message.restoreRevision !== null && onRestoreRequest && <button
             type="button"
             onClick={() => onRestoreRequest(message.restoreRevision!)}
@@ -605,6 +611,13 @@ export default function TravelV2TripConversation({
       <div className="mt-1.5 flex items-center justify-between px-1 text-[8px] text-[#9aa8b8]"><span className="inline-flex items-center gap-1"><MessageCircle size={10} aria-hidden />只修改服务端允许的单项内容</span><span>Trip v{trip.revision}</span></div>
     </form>
   </section>
+}
+
+/** 打字机渐显（ux3）：animate=false 时直显全文；复用 useTypewriter 既有口径
+ * （仅最新一条、码点安全、reduced-motion 直显）， hooks 不能在 map 里调用所以独立成组件。 */
+function TypedAssistantBody({ text, animate }: { text: string; animate: boolean }) {
+  const shown = useTypewriter(text, animate)
+  return <TravelMessageMarkdown content={shown} />
 }
 
 function affectedItemNames(ids: string[], trip: TravelTripV2): string {

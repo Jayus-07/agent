@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import { CircleAlert, LoaderCircle, Send, Sparkles } from 'lucide-react'
 import { fetchTravelCandidates, streamTravelPlan, type TravelCandidate, type TravelCandidatesResponse, type TravelStreamEvent } from '@/api/travel'
 import { initialTravelProcess, reduceTravelStreamEvent, travelProcessStatusLabel, type TravelProcessState } from '@/components/travel/travelRuntime'
+import { useTypewriter } from '@/components/travel/useTypewriter'
 import { useTravelConversation } from '@/components/travel/useTravelConversation'
 import { resolveTravelStreamOutcome } from './travelLiveRuntime'
 
@@ -18,6 +19,8 @@ export default function TravelLiveAssistantPanel({ conversationId, onPlanUpdated
   const [error, setError] = useState('')
   const [candidateData, setCandidateData] = useState<TravelCandidatesResponse | null>(null)
   const [candidateError, setCandidateError] = useState('')
+  // 打字机（ux3）：只对本会话新产生的助手回复渐显；历史消息直显。
+  const [typedMessageId, setTypedMessageId] = useState<string | null>(null)
   const abortRef = useRef<AbortController | null>(null)
 
   const loadCandidates = useCallback(() => {
@@ -67,6 +70,7 @@ export default function TravelLiveAssistantPanel({ conversationId, onPlanUpdated
         id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
         role: 'assistant', text: message, tag, tone,
       }])
+      setTypedMessageId(`${clientRunId}:assistant`)
       if (response.itinerary) onPlanUpdated()
       loadCandidates()
     } catch (cause) {
@@ -77,6 +81,7 @@ export default function TravelLiveAssistantPanel({ conversationId, onPlanUpdated
           id: `${clientRunId}:assistant`, conversationId, turnId: clientRunId,
           role: 'assistant', text: `本次修改未完成：${message}`, tag: '请求失败', tone: 'warn',
         }])
+        setTypedMessageId(`${clientRunId}:assistant`)
       }
     } finally {
       if (abortRef.current === controller) abortRef.current = null
@@ -95,7 +100,7 @@ export default function TravelLiveAssistantPanel({ conversationId, onPlanUpdated
   return <section className="flex min-h-0 flex-col overflow-hidden rounded-[22px] border border-[#e4ebf4] bg-white shadow-[0_6px_24px_rgba(31,74,130,.05)]">
     <header className="shrink-0 border-b border-[#edf1f6] px-4 py-3"><div className="flex items-center gap-2"><span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eaf2ff] text-[#2878f5]"><Sparkles size={15} aria-hidden /></span><div><h2 className="text-sm font-bold text-[#263b55]">行程助手</h2><p className="mt-0.5 text-[9px] text-[#8a98aa]">对话结果通过旅游 Agent 返回</p></div></div></header>
     <div className="min-h-0 flex-1 overflow-y-auto p-3">
-      {messages.length === 0 ? <p className="rounded-xl bg-[#f4f8fd] px-3 py-3 text-[10px] leading-5 text-[#6e8097]">可以问景点、天气和交通，也可以直接说“把某地点移到第二天”。只有服务端返回的行程会更新此工作台。</p> : <div className="space-y-2.5">{messages.map((message) => <div key={message.id} className={`rounded-xl px-3 py-2.5 text-[10px] leading-5 ${message.role === 'user' ? 'ml-5 bg-[#2878f5] text-white' : 'mr-2 bg-[#f2f7fd] text-[#49617e]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4c81bd]'}`}>{message.tag}</span>}{message.text}</div>)}</div>}
+      {messages.length === 0 ? <p className="rounded-xl bg-[#f4f8fd] px-3 py-3 text-[10px] leading-5 text-[#6e8097]">可以问景点、天气和交通，也可以直接说“把某地点移到第二天”。只有服务端返回的行程会更新此工作台。</p> : <div className="space-y-2.5">{messages.map((message) => <div key={message.id} className={`rounded-xl px-3 py-2.5 text-[10px] leading-5 ${message.role === 'user' ? 'ml-5 bg-[#2878f5] text-white' : 'mr-2 bg-[#f2f7fd] text-[#49617e]'}`}>{message.role === 'assistant' && message.tag && <span className={`mb-1 block text-[9px] font-semibold ${message.tone === 'warn' ? 'text-amber-700' : 'text-[#4c81bd]'}`}>{message.tag}</span>}{message.role === 'assistant' ? <TypedMessageText text={message.text} animate={message.id === typedMessageId} /> : message.text}</div>)}</div>}
       {loading && <div className="mt-3 rounded-xl bg-[#f2f7fd] px-3 py-2 text-[10px] text-[#526984]"><div className="flex items-center gap-2"><LoaderCircle size={13} className="animate-spin text-[#2878f5]" aria-hidden />{travelProcessStatusLabel({ loading, stopped: false, status: process?.status })}</div>{process && Object.entries(process.stages).length > 0 && <div className="mt-2 flex flex-wrap gap-1">{Object.entries(process.stages).map(([stage, status]) => <span key={stage} className="rounded-full bg-white px-2 py-0.5 text-[8px] text-[#71839a]">{stage}: {status.status === 'completed' ? '完成' : status.status === 'failed' ? '失败' : '进行中'}</span>)}</div>}</div>}
       {error && <p role="alert" className="mt-3 flex items-start gap-1.5 rounded-lg bg-rose-50 px-2.5 py-2 text-[9px] leading-4 text-rose-700"><CircleAlert size={12} className="mt-0.5 shrink-0" aria-hidden />{error}</p>}
       {syncError && <p role="status" className="mt-2 text-[9px] text-amber-700">{syncError}</p>}
@@ -103,6 +108,12 @@ export default function TravelLiveAssistantPanel({ conversationId, onPlanUpdated
     </div>
     <form onSubmit={submit} className="shrink-0 border-t border-[#edf1f6] p-2.5"><label htmlFor="trip-assistant-input" className="sr-only">给行程助手发消息</label><div className="flex items-end gap-1.5 rounded-xl border border-[#dfe8f3] bg-[#fbfdff] p-1.5"><textarea id="trip-assistant-input" rows={2} value={draft} onChange={(event) => setDraft(event.target.value)} disabled={loading} placeholder="问问题或描述行程调整…" className="min-h-10 flex-1 resize-none bg-transparent px-1.5 py-1 text-[10px] leading-4 text-[#344b67] outline-none placeholder:text-[#9aa8b8]" /><button type="submit" aria-label="发送消息" disabled={!draft.trim() || loading} className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[#2878f5] text-white disabled:bg-[#c7d7ed]"><Send size={13} aria-hidden /></button></div></form>
   </section>
+}
+
+/** 打字机渐显（ux3）：animate=false 直显全文；hooks 不能在 map 里调用所以独立成组件。 */
+function TypedMessageText({ text, animate }: { text: string; animate: boolean }) {
+  const shown = useTypewriter(text, animate)
+  return <>{shown}</>
 }
 
 function CandidateButton({ candidate, onChoose }: { candidate: TravelCandidate; onChoose: () => void }) {

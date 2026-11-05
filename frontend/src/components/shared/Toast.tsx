@@ -87,7 +87,7 @@ function ToastContainer({
 }) {
   if (toasts.length === 0) return null;
   return (
-    <div className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
+    <div role="status" aria-live="polite" className="fixed top-4 right-4 z-50 flex flex-col gap-2 max-w-sm">
       {toasts.map((t) => {
         const c = COLORS[t.type];
         return (
