@@ -30,6 +30,16 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
 
 vi.mock('@/api/travel', () => ({ streamTravelPlanV2: mocks.stream }))
 
+// 打字机是纯展示动画（useTypewriter.test.tsx 专项覆盖）；业务流程用例只关心
+// 最终文本，mock 为直显并记录 animate 入参，断言「仅本会话新终态回复渐显」的接线（ux3）。
+const typewriterCalls = vi.hoisted(() => [] as Array<{ text: string; animate: boolean }>)
+vi.mock('@/components/travel/useTypewriter', () => ({
+  useTypewriter: (text: string, enabled: boolean) => {
+    typewriterCalls.push({ text, animate: enabled })
+    return text
+  },
+}))
+
 import TravelV2TripConversation from './TravelV2TripConversation'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -125,6 +135,7 @@ async function settle() {
 describe('Trip 绑定的 V2 旅游会话', () => {
   beforeEach(() => {
     for (const mock of Object.values(mocks)) mock.mockReset()
+    typewriterCalls.length = 0
     mocks.fetchTripConversation.mockResolvedValue({
       trip_id: tripId, conversation_id: conversationId, linked: true,
       server_now: '2026-10-17T12:00:00.000Z',
@@ -153,6 +164,28 @@ describe('Trip 绑定的 V2 旅游会话', () => {
     expect(page.container.textContent).toContain('第二天只有两项安排')
     expect(page.onTripSaved).not.toHaveBeenCalled()
     expect(mocks.getStatus).not.toHaveBeenCalled()
+  })
+
+  it('打字机只对本会话新产生的助手终态回复启用，历史消息直显（ux3）', async () => {
+    mocks.applyEdit.mockImplementation(async (_id: string, _input: unknown, key: string) => response(key, 'read_only'))
+    mocks.stream.mockImplementation(async function* () {
+      yield { event: 'done', data: { status: 'success', result: { status: 'success', final_answer: '第二天只有两项安排，节奏比较轻松。', itinerary: null } } }
+    })
+    // 历史消息挂载：全部直显，不重放动画
+    const page = mount([{
+      id: 'history-1', conversationId, turnId: 'history-1', role: 'assistant',
+      text: '历史答复，直接显示。', tag: '', tone: 'ok',
+    }])
+
+    expect(typewriterCalls.length).toBeGreaterThan(0)
+    expect(typewriterCalls.every((call) => !call.animate)).toBe(true)
+
+    // 本会话新终态回复：打字机启用，内容为最终答案全文
+    await submit(page.container, '第二天会不会太赶？')
+    const animated = typewriterCalls.filter((call) => call.animate)
+    expect(animated.length).toBeGreaterThan(0)
+    expect(animated.at(-1)!.text).toContain('第二天只有两项安排，节奏比较轻松。')
+    expect(page.container.textContent).toContain('第二天只有两项安排')
   })
 
   it('只读事实包含酒店、车次、地点地址、备注与正式版本，并标记备注不可信', async () => {

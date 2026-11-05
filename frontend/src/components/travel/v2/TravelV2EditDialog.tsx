@@ -16,7 +16,8 @@ import {
 import { travelWriteStatusLabel, travelWriteStatusRole, travelWriteStatusTone, type TravelWriteStatus } from './travelV2WriteState'
 
 export type TravelV2EditPanel =
-  | { kind: 'item'; itemId: string }
+  /** view（ux3）：从时间轴卡 ⋯ 直达时跳过菜单，餐食落「换家餐厅」、景点落「替换地点」。 */
+  | { kind: 'item'; itemId: string; view?: 'meal' | 'search' }
   | { kind: 'add' }
   | { kind: 'transport'; fromItemId: string; toItemId: string }
   | null
@@ -93,7 +94,7 @@ export default function TravelV2EditDialog({
     searchController.current?.abort()
     searchController.current = null
     mealSequence.current += 1
-    setView(panel?.kind === 'item' ? 'menu' : panel?.kind === 'transport' ? 'transport' : 'add')
+    setView(panel?.kind === 'item' ? panel.view ?? 'menu' : panel?.kind === 'transport' ? 'transport' : 'add')
     // 替换地点（ux2 #2）：搜索关键词预填当前地点名，减少重复输入
     setKeyword(panel?.kind === 'item' && item?.kind === 'place' ? item.title : '')
     setSearchResponse(null)
@@ -131,6 +132,20 @@ export default function TravelV2EditDialog({
     })
   }, [view, mealLoading, mealMerchants.length, mealError, trip.document.brief.destination])
 
+  // 直达「替换地点」视图（ux3）：打开时用预填的当前地点名自动查询，
+  // 与「换家餐厅」视图一致，一步出候选，不用再手点「查询」。
+  const directSearchTitle = panel?.kind === 'item' && panel.view === 'search' && item?.kind === 'place'
+    ? item.title.trim()
+    : ''
+  const directSearchRef = useRef('')
+  useEffect(() => {
+    if (!directSearchTitle || directSearchRef.current === directSearchTitle) return
+    directSearchRef.current = directSearchTitle
+    void searchPlaces(undefined, directSearchTitle)
+    // searchPlaces 每次渲染重建；directSearchRef 保证同一地点只自动查一次
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [directSearchTitle])
+
   if (!panel) return null
 
   const selectedItem = panel.kind === 'item' ? item : null
@@ -151,9 +166,10 @@ export default function TravelV2EditDialog({
     if (await onEdit(operation, summary)) onClose()
   }
 
-  async function searchPlaces(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!keyword.trim() || querying) return
+  async function searchPlaces(event?: FormEvent<HTMLFormElement>, overrideKeyword?: string) {
+    event?.preventDefault()
+    const term = (overrideKeyword ?? keyword).trim()
+    if (!term || querying) return
     const sequence = ++searchSequence.current
     searchController.current?.abort()
     const controller = new AbortController()
@@ -162,7 +178,7 @@ export default function TravelV2EditDialog({
     setSearchError('')
     setSearchResponse(null)
     try {
-      const response = await searchTravelPlacesV2(trip.document.brief.destination, keyword.trim(), { signal: controller.signal })
+      const response = await searchTravelPlacesV2(trip.document.brief.destination, term, { signal: controller.signal })
       if (controller.signal.aborted || sequence !== searchSequence.current) return
       setSearchResponse(response)
     } catch (cause) {

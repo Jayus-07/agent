@@ -4,10 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TravelTripV2 } from '@/api/travelV2'
 import type { TravelWriteStatus } from './travelV2WriteState'
 
-const mocks = vi.hoisted(() => ({ searchPlaces: vi.fn() }))
+const mocks = vi.hoisted(() => ({ searchPlaces: vi.fn(), searchFood: vi.fn() }))
 vi.mock('@/api/travelV2', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/travelV2')>()),
   searchTravelPlacesV2: mocks.searchPlaces,
+  searchTravelFoodV2: mocks.searchFood,
 }))
 
 import TravelV2EditDialog, { type TravelV2EditPanel } from './TravelV2EditDialog'
@@ -49,6 +50,7 @@ const trip = {
 
 function renderDialog({
   panel = { kind: 'add' },
+  item,
   onEdit = vi.fn(async () => true),
   writeStatus = null,
   writeMessage = '',
@@ -56,6 +58,7 @@ function renderDialog({
   onRefreshConflict,
 }: {
   panel?: TravelV2EditPanel
+  item?: TravelTripV2['document']['days'][number]['items'][number] | null
   onEdit?: (operation: unknown, summary: string) => Promise<boolean>
   writeStatus?: TravelWriteStatus | null
   writeMessage?: string
@@ -66,7 +69,7 @@ function renderDialog({
   const root = createRoot(container)
   const close = vi.fn()
   act(() => root.render(createElement(TravelV2EditDialog, {
-    panel, trip, dayId: 'day-1', item: panel?.kind === 'item' ? trip.document.days[0].items[0] : null,
+    panel, trip, dayId: 'day-1', item: item ?? (panel?.kind === 'item' ? trip.document.days[0].items[0] : null),
     route: panel?.kind === 'transport' ? { fromItemId: panel.fromItemId, toItemId: panel.toItemId } : undefined,
     saving: false, error: '', writeStatus, writeMessage, onRetry, onRefreshConflict,
     onClose: close, onEdit: onEdit as never,
@@ -164,6 +167,57 @@ describe('V2 正式行程结构化编辑面板', () => {
 
     expect(onRetry).toHaveBeenCalledOnce()
     expect(rendered.close).not.toHaveBeenCalled()
+    rendered.dispose()
+  })
+
+  it('景点卡直达「替换地点」视图时用预填标题自动查询，一步出候选（ux3）', async () => {
+    mocks.searchPlaces.mockResolvedValue({
+      kind: 'places', status: 'success', source: 'tencent:lbs',
+      queried_at: '2026-10-09T08:00:00+08:00', message: '地点检索完成。',
+      disclosure: '',
+      results: [{
+        selection_id: 'tencent:lbs:selection-1', category: '风景名胜', source: 'tencent:lbs',
+        queried_at: '2026-10-09T08:00:00+08:00',
+        place: {
+          place_id: 'poi-1', name: '断桥残雪', lat: 30.25, lng: 120.16,
+          address: '杭州市西湖区',
+          facts: { opening_hours: null, ticket_price_cny: null, verification: 'unknown', source: 'tencent:lbs', observed_at: '2026-10-09T08:00:00+08:00' },
+        },
+      }],
+    })
+    // 不点击任何按钮：打开即应落在替换地点视图并自动查询
+    const rendered = renderDialog({ panel: { kind: 'item', itemId: 'item-1', view: 'search' } })
+    await act(async () => { await Promise.resolve() })
+
+    expect(rendered.container.textContent).toContain('替换地点')
+    expect(mocks.searchPlaces).toHaveBeenCalledWith('杭州', '西湖', expect.objectContaining({ signal: expect.anything() }))
+    expect(rendered.container.textContent).toContain('断桥残雪')
+    expect(rendered.onEdit).not.toHaveBeenCalled()
+    rendered.dispose()
+  })
+
+  it('餐食卡直达「换家餐厅」视图时自动查询候选，不先写入（ux3）', async () => {
+    mocks.searchFood.mockResolvedValue({
+      status: 'success', source: 'amap', queried_at: '2026-10-09T08:00:00+08:00', disclosure: '',
+      results: [{
+        selection_id: 'm-1', merchant_id: 'mch-1', name: '楼外楼', address: '杭州市孤山路',
+        rating: 4.6, open_status: '营业中', lat: 30.25, lng: 120.14,
+        avg_cost_cny: 120, source: 'amap', queried_at: '2026-10-09T08:00:00+08:00',
+      }],
+    })
+    const mealItem = {
+      item_id: 'meal-1', kind: 'activity', activity_type: 'meal', title: '午餐',
+      start_time: '12:00', duration_min: 60, fixed_start: false,
+      place: null, must_visit: false, locked: false, note: '就近用餐',
+    } as TravelTripV2['document']['days'][number]['items'][number]
+    const onEdit = vi.fn(async () => true)
+    const rendered = renderDialog({ panel: { kind: 'item', itemId: 'meal-1', view: 'meal' }, item: mealItem, onEdit })
+    await act(async () => { await Promise.resolve() })
+
+    expect(rendered.container.textContent).toContain('换家餐厅')
+    expect(mocks.searchFood).toHaveBeenCalledWith('杭州')
+    expect(rendered.container.textContent).toContain('楼外楼')
+    expect(onEdit).not.toHaveBeenCalled()
     rendered.dispose()
   })
 })

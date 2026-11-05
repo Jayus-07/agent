@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   selectionWrite: vi.fn(),
   searchFood: vi.fn(),
   addMeal: vi.fn(),
+  toastShow: vi.fn(),
   editDialogProps: [] as Array<Record<string, any>>,
   merchantFixture: {
     selection_id: 'm-1', merchant_id: 'mch-1', name: '烤匠麻辣烤鱼', address: '成都市锦江区',
@@ -36,6 +37,17 @@ vi.mock('@/api/travelV2', async (importOriginal) => ({
   restoreTravelTripV2: mocks.restoreTrip,
   searchTravelFoodV2: mocks.searchFood,
   addTravelMealV2: mocks.addMeal,
+}))
+
+// SAVED 反馈 toast 化（ux3）：捕获 show 调用断言成功反馈，不再依赖常驻横幅文本。
+vi.mock('@/components/shared/Toast', () => ({
+  useToast: () => ({
+    show: mocks.toastShow,
+    success: (message: string) => mocks.toastShow(message, 'success'),
+    error: (message: string) => mocks.toastShow(message, 'error'),
+    warning: (message: string) => mocks.toastShow(message, 'warning'),
+    info: (message: string) => mocks.toastShow(message, 'info'),
+  }),
 }))
 
 vi.mock('./TravelSearchPanel', () => ({
@@ -101,7 +113,8 @@ vi.mock('./TravelV2Map', () => ({
 }))
 
 vi.mock('./TravelV2EditDialog', () => ({
-  default: ({ trip, item, onEdit, onSwitchMeal, onClose, writeStatus, writeMessage, onRetry, onRefreshConflict }: {
+  default: ({ panel, trip, item, onEdit, onSwitchMeal, onClose, writeStatus, writeMessage, onRetry, onRefreshConflict }: {
+    panel: Record<string, any>
     trip: TravelTripV2
     item: unknown
     onEdit: (operation: unknown, summary: string) => Promise<boolean>
@@ -112,7 +125,7 @@ vi.mock('./TravelV2EditDialog', () => ({
     onRetry?: () => Promise<boolean>
     onRefreshConflict?: () => Promise<boolean>
   }) => {
-    mocks.editDialogProps.push({ trip, item, onSwitchMeal })
+    mocks.editDialogProps.push({ panel, trip, item, onSwitchMeal })
     return createElement('div', { 'data-testid': 'edit-dialog' }, [
       createElement('span', { key: 'trip' }, `编辑 ${trip.trip_id}`),
       writeStatus && createElement('p', { key: 'status', role: writeStatus === 'UNKNOWN' || writeStatus === 'CONFLICT' ? 'alert' : 'status' }, `${writeStatus} ${writeMessage}`),
@@ -251,6 +264,7 @@ beforeEach(() => {
   mocks.applyEdit.mockReset()
   mocks.restoreTrip.mockReset()
   mocks.selectionWrite.mockReset()
+  mocks.toastShow.mockReset()
 })
 
 afterEach(() => {
@@ -490,7 +504,8 @@ describe('V2 工作台 Trip 状态隔离', () => {
     expect(mocks.applyEdit).toHaveBeenCalledTimes(2)
     expect(mocks.applyEdit.mock.calls[1]).toEqual(firstRequest)
     expect(page.container.textContent).toContain('v2')
-    expect(page.container.textContent).toContain('已保存')
+    // 成功反馈走 toast（ux3）：不再断言常驻横幅文本，改为断言 toast 调用
+    expect(mocks.toastShow).toHaveBeenCalledWith(expect.stringContaining('已保存到 v2。'), 'success', 4500)
   })
 
   it('成功刷新冲突后退出冲突状态并显示重新编辑提示', async () => {
@@ -897,11 +912,12 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     mocks.addMeal.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 2, document: documentWithMerchant })
     mocks.applyEdit.mockResolvedValue({ saved: true, trip_id: 'trip-meal', revision: 3, document: documentWithoutPlaceholder })
 
-    // 选中餐食卡 → 三点打开编辑弹窗 → 触发「换家餐厅」
+    // 选中餐食卡 → 三点打开编辑弹窗（直达「换家餐厅」候选视图）→ 触发「换家餐厅」
     await click(page.container, (button) => button.textContent?.includes('午餐') ?? false)
-    await click(page.container, (button) => button.getAttribute('aria-label') === '编辑午餐')
+    await click(page.container, (button) => button.getAttribute('aria-label') === '打开「午餐」的编辑与候选')
     const dialogProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'meal-1')
     expect(dialogProps).toBeTruthy()
+    expect(dialogProps!.panel).toMatchObject({ kind: 'item', itemId: 'meal-1', view: 'meal' })
     expect(typeof dialogProps!.onSwitchMeal).toBe('function')
 
     await click(page.container, (button) => button.textContent === '模拟换餐厅')
@@ -916,7 +932,9 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     expect(addInput.merchant.merchant_id).toBe('mch-1')
     expect(mocks.applyEdit).toHaveBeenCalledOnce()
     expect(mocks.applyEdit.mock.calls[0][1].operation).toEqual({ op: 'remove_item', item_id: 'meal-1' })
-    expect(page.container.textContent).toContain('已将「烤匠麻辣烤鱼」加入午餐，并移除占位「午餐」')
+    // SAVED 反馈走 toast（ux3）：断言 toast 调用与文案，常驻横幅不再出现
+    expect(mocks.toastShow).toHaveBeenCalledWith('已将「烤匠麻辣烤鱼」加入午餐，并移除占位「午餐」（v3）。', 'success', 4500)
+    expect(page.container.textContent).not.toContain('已将「烤匠麻辣烤鱼」加入午餐，并移除占位「午餐」')
   })
 
   it('换餐厅第一步回执 UNKNOWN 时不继续删占位，也不冒充成功', async () => {
@@ -926,7 +944,7 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     mocks.addMeal.mockResolvedValue({ saved: false, trip_id: 'trip-meal', revision: 1, document: trip.document })
 
     await click(page.container, (button) => button.textContent?.includes('午餐') ?? false)
-    await click(page.container, (button) => button.getAttribute('aria-label') === '编辑午餐')
+    await click(page.container, (button) => button.getAttribute('aria-label') === '打开「午餐」的编辑与候选')
     await click(page.container, (button) => button.textContent === '模拟换餐厅')
     await settle()
 
@@ -946,5 +964,71 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
 
     const mealCard = cards.find((card) => card.textContent?.includes('午餐') && card.textContent?.includes('就近用餐'))!
     expect(mealCard.textContent).toContain('就近用餐')
+  })
+
+  it('行程卡 ⋯ 直达候选视图（ux3）：景点卡打开编辑弹窗直接落在「替换地点」', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+
+    await click(page.container, (button) => button.getAttribute('aria-label') === '打开「成都武侯祠博物馆」的编辑与候选')
+    const placeProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'place-1')
+    expect(placeProps).toBeTruthy()
+    expect(placeProps!.panel).toMatchObject({ kind: 'item', itemId: 'place-1', view: 'search' })
+  })
+
+  it('介绍行选中即展开（ux3）：选中卡介绍常驻显示，未选中卡保持 hover 渐现', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+
+    // 默认选中第一项（午餐占位）：介绍行「就近用餐」为选中展开态
+    const introSpan = (card: Element) =>
+      [...card.querySelectorAll('span')].find((span) => span.className.includes('leading-4'))
+    const cards = [...page.container.querySelectorAll('button.group')]
+    const mealCard = cards.find((card) => card.textContent?.includes('午餐') && card.textContent?.includes('就近用餐'))!
+    expect(introSpan(mealCard)!.className.startsWith('block')).toBe(true)
+
+    // 未选中的景点卡：介绍行仍为 hover 渐现
+    const placeCard = cards.find((card) => card.textContent?.includes('成都武侯祠博物馆'))!
+    expect(introSpan(placeCard)!.className.startsWith('hidden')).toBe(true)
+
+    // 点击景点卡选中后介绍行展开
+    await click(page.container, (button) => button.textContent?.includes('成都武侯祠博物馆') ?? false)
+    expect(introSpan(placeCard)!.className.startsWith('block')).toBe(true)
+    expect(introSpan(mealCard)!.className.startsWith('hidden')).toBe(true)
+  })
+})
+
+describe('时区提示 toast 化（ux3）', () => {
+  function makeTripWithTzIssue(): TravelTripV2 {
+    const base = makeTrip('trip-tz', '东京')
+    base.document.health = {
+      status: 'needs_attention',
+      issues: [{ code: 'timezone_assumed', severity: 'warning', message: '目的地时区按默认值假定，未经确认。' }],
+    }
+    return base
+  }
+
+  it('进入行程时区未确认 → toast 提示一次 + 头部小徽标，无常驻横幅', async () => {
+    window.localStorage.removeItem('travel-tz-toast-shown:trip-tz')
+    const page = mount('trip-tz')
+    await load(tripRequest(0), makeTripWithTzIssue())
+
+    expect(mocks.toastShow).toHaveBeenCalledTimes(1)
+    expect(mocks.toastShow.mock.calls[0][0]).toContain('目的地时区尚未确认')
+    expect(mocks.toastShow.mock.calls[0][1]).toBe('warning')
+    expect(page.container.textContent).toContain('时区未确认')
+    expect(page.container.textContent).not.toContain('行程当地时间可能不准确')
+  })
+
+  it('同行程已提示过（localStorage 记忆）不再重复 toast，徽标保留', async () => {
+    window.localStorage.setItem('travel-tz-toast-shown:trip-tz', '1')
+    const page = mount('trip-tz')
+    await load(tripRequest(0), makeTripWithTzIssue())
+
+    expect(mocks.toastShow).not.toHaveBeenCalled()
+    expect(page.container.textContent).toContain('时区未确认')
+    window.localStorage.removeItem('travel-tz-toast-shown:trip-tz')
   })
 })
