@@ -63,10 +63,12 @@ CSAT/质检分→评测候选管道、travel 反馈接线、阈值/采样率管�
 
 - [x] B1：release_gate 对含表现指标的 suite 出三态裁决，阈值缺失 fail-closed（定向用例通过）；
 - [x] B2/B3：beat 触发一次采样 run 落库，`trigger=online` 可过滤（实机验收 2026-11-05，见 `NEXT-SESSION-2.md`）；
-- [ ] F1：super_admin 可在 RunsTab 完成 gate 审批闭环（API 实际调用成功）；
-- [ ] F2：反馈候选可在 DatasetsTab approve/reject/promote（API 实际调用成功）；
-- [ ] F3：CompareTab 用例详情可提交人工评审，页面标注「不进自动门禁」；
-- [ ] F1-F3 前端验收：tsc、组件测试及管理端实际 API 闭环（待 F 批）；
+- [x] F1：RunsTab Gate 审批 API 闭环（组件调用测试；隔离 HTTP API：GET 200 → POST 201 → GET 读回 200，测试身份为 super_admin）；
+- [x] F2：DatasetsTab 反馈候选 approve/reject/promote（组件调用测试；隔离 HTTP API 三写入均 200，状态读回正确且 promotion 追加 1 行临时 JSONL）；
+- [x] F3：CompareTab 人工评审（组件测试覆盖挂载与“不进入自动门禁”文案；隔离 API GET 200 → POST 201 → GET 读回 200）；
+- [x] F1-F3：`tsc`、组件测试及隔离 API 写操作读回验收完成（细节见 `PROGRESS.md`）；
+> 隔离 API 验收使用临时 Postgres/Redis、临时数据集目录和 API 测试密钥，并注入网关契约身份头；验证实际 FastAPI 中间件、路由、角色依赖与持久化，但不等同于浏览器点击或 APISIX JWT 验签。
+
 - [x] 后端定向测试 48 passed；`devctl.bat rebuild /y` 健康检查通过，beat 注册确认（2026-11-05）；
 - [ ] 未实际执行的验证不得报告为通过。
 

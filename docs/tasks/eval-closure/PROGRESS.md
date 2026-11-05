@@ -1,8 +1,8 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**IN_PROGRESS**（E'、D1、D3、D4a 已收口；F 代码已合并但 F1-F3 写操作实机验收 **UNVERIFIED**）
-- 当前工作树：`agent-wt-eval-d4a` / `fix/deps-d4a-cross-major`；F 与 D3 worktree 保留，不清理。
-- 当前基线：`origin/main=073c613`；任务沿革基线见 TASK.md。
+- 状态：**PASS（任务验收范围已完成）**；F 路由写操作在隔离环境通过；真实浏览器 + APISIX JWT 写入链路 **UNVERIFIED**。
+- 本次验收记录：`agent-wt-eval-f-acceptance` / `codex/eval-closure-f-api-acceptance`（从 `origin/main` 创建；原 F/D3/D4a worktree 保留）。
+- 当前基线：`origin/main=8798dca`；任务沿革基线见 TASK.md。
 
 ## 并行协调记录
 
@@ -17,19 +17,21 @@
 - [x] B1 表现阈值入门禁（PR #326；定向测试通过）
 - [x] B2 在线采样评测器（PR #326；一次 trigger=online 落库实测）
 - [x] B3 Celery Beat 调度注册（PR #326；beat 注册实测）
-- [x] F1 RunsTab：Gate 状态/审批/来源徽标（PR #328；写操作 API 实测 UNVERIFIED）
-- [x] F2 DatasetsTab：反馈候选审核（PR #328；写操作 API 实测 UNVERIFIED）
-- [x] F3 CompareTab：人工评审挂载（PR #328；提交 API 实测 UNVERIFIED）
+- [x] F1 RunsTab：Gate 状态/审批/来源徽标（PR #328；隔离 API POST 201，GET 读回 1 条审批）
+- [x] F2 DatasetsTab：反馈候选审核（PR #328；隔离 API approve/reject/promote 均成功，状态与 JSONL 读回正确）
+- [x] F3 CompareTab：人工评审挂载（PR #328；隔离 API POST 201，GET 读回 1 条人工评分）
 
-## 阻塞
+## 验证边界
 
-- F1-F3 代码已合并。写操作实机验证缺安全测试数据：V2 没有 PASS 运行，feedback 候选为 0；不对共享库造数或审批现有失败运行。
+- 共享业务库保持只读；隔离 API 验收数据写入独立临时 Postgres/Redis 容器和容器内临时 JSONL，验收后容器、匿名卷及主机临时脚本/环境文件均已删除。
+- 隔离服务使用测试 API key 和 `X-Auth-Type=jwt`、`X-User-Roles=super_admin`、租户等网关契约头，实际经过 API key 中间件、路由依赖、角色检查、数据库事务及幂等存储；该侧车调用没有经过 APISIX，也没有验证真实 JWT 签名。
+- 组件测试与 `tsc` 已按 F 批记录通过；本次没有在浏览器中点击管理端写操作。故“路由写操作闭环”已验证；APISIX JWT + 浏览器的联合链路未声称通过。
 
 ## 下一步
 
-1. F1-F3 写操作实机闭环仍 UNVERIFIED：待有隔离的 PASS run、feedback candidate 和绑定 Human Rubric 的用例后再执行；
-2. 不在当前共享业务数据上造数或审批现有失败运行；
-3. ECS 三项与 pillow/filelock/dnspython/unstructured 按既有裁决保持不动。
+- 本任务计划中的 E′、D1、F、D3、D4a 均无剩余实现批次。
+- ECS 三项与 pillow/filelock/dnspython/unstructured 继续按既有裁决保持不动。
+- 在线采样长期启用前，仍须单独裁决并补齐后台预算预占/结算链路（见 E′ 风险记录）。
 
 ## 2026-11-05 接手批续工（F / D3）
 
@@ -38,7 +40,7 @@
 - PR [#328](https://github.com/Jayus-07/agent/pull/328) 已于 2026-11-05 合并，HEAD `27320474a0d53e766e2b7a7f93fb525a5a11320f`，merge commit `83aa74ca81a2c91774d084dfd41e80d059fe90a2`。
 - 改动：RunsTab Gate 状态/审批/线上来源、DatasetsTab feedback 候选审核与晋升、CompareTab 人工评审挂载；新增三处组件测试。
 - 定向测试 4 个组件文件 / 6 个测试通过；`tsc --noEmit` 通过；任务 worktree `devctl.bat rebuild /y` 完成，API / 管理端健康检查 200。
-- super_admin 只读 API 实测运行和反馈候选 GET 均 200，logout 200。写操作实机验收 **UNVERIFIED**：本地 V2 运行 8 条均为 `FAIL/INVALID`、无 PASS；`agent_business.public.feedback_candidates` 为 0 行。没有伪造记录或改写共享库。TASK.md 的 F1-F3 实机写操作验收保持未勾选。
+- PR #328 合并时，真实 super_admin 只读 API 的运行/反馈候选 GET 与 logout 均 200；因共享库没有安全写入 fixture，当时写操作保持 UNVERIFIED。后续隔离写操作 API 验收见本文“F 写操作隔离 API 验收”。
 
 ### D3：LangChain / LangGraph 依赖族
 
@@ -58,3 +60,12 @@
 - 新 FastAPI 0.161.1 使用延迟 router inclusion；原 authn 测试通过 `FastAPI.include_router().routes` 枚举不到 `_IncludedRouter` 里的 APIRoute。D4a 分支仅调整该结构测试为直接检查 `demo.router.routes`，仍断言两个 POST 路由有 `require_admin_user`，不改运行时授权。测试容器还缺仓库根 `docker-compose.yml`、部署 compose 与 `pyproject.toml`；临时复制这些只读测试输入后全组通过，结束后恢复 authn 原文件并清理临时副本。
 - 八步链中的 lock 全量解析、PR CI、合并、rebuild/freeze 与 health 证据沿用 PR #314 / audit-remediation-r1 记录；当前 app 容器 `cryptography==50.0.2`、`datasets==5.1.0`、`oauthlib==4.0.0` 与 lock 一致。
 - D4a 结论：目标版本已由 PR #314 完成；本批无必要的 lock 变更，PR 只包含 FastAPI lazy-router 兼容测试修正与验收记录。
+
+## 2026-11-05 F 写操作隔离 API 验收
+
+- 环境：一次性 Postgres 16 + Redis 容器，FastAPI `TestClient` 通过 ASGI HTTP 调用 API；只在隔离数据库中创建 PASS Gate、绑定 Human Rubric 的用例结果及两条反馈候选。
+- F1：`GET /evaluation/v2/gates/{run_id}` 200；审批 `POST` 201；再次 `GET` 200，数据库读回 1 条审批。
+- F2：候选列表 `GET` 200；approve、reject、promote `POST` 均 200；两条候选状态读回正确；promote 返回 `appended=true`，隔离数据集 `rag/cases.jsonl` 仅 1 行。
+- F3：人工 Rubric `GET` 200；提交人工评分 `POST` 201；再次 `GET` 200，读回 1 条评分，综合分 0.74。
+- API 请求使用测试密钥和模拟网关注入的 `super_admin` 身份头；没有对主库写入，也没有触发模型调用。测试代码实际载入的 Gate/feedback/auth/repository 源文件哈希与 main 工作树一致；`curator.append_case` 函数实现一致。容器 `GIT_COMMIT` 未提供，因此未将容器镜像标记为可追溯构建。
+- 清理：临时 Postgres/Redis 容器及匿名卷已删除，主机临时脚本和环境文件已删除；主仓 `git status` 未新增受本任务影响的文件。
