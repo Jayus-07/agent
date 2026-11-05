@@ -28,6 +28,26 @@ CREATE INDEX IF NOT EXISTS idx_payment_records_owner_order
 
 -- 演示用户（872）三态订单种子，与 business-mock 懒种子金额/状态对齐。
 -- 冲突时不覆盖已有订单或支付记录，迁移可安全重放。
+-- 干净初始化的 customer.customers 可能只有 001 的 1–3 号演示客户，先补齐 872。
+INSERT INTO customer.customers (id, name, gender, level, register_time)
+VALUES (872, '客服演示用户', NULL, '普通', now())
+ON CONFLICT (id) DO NOTHING;
+
+-- 该显式演示 ID 可能高于现有序列值；只向前对齐，避免后续默认 INSERT 撞主键。
+SELECT setval(
+    pg_get_serial_sequence('customer.customers', 'id'),
+    GREATEST(
+        (SELECT COALESCE(MAX(id), 1) FROM customer.customers),
+        COALESCE(
+            pg_sequence_last_value(
+                pg_get_serial_sequence('customer.customers', 'id')::regclass
+            ),
+            1
+        )
+    ),
+    true
+);
+
 INSERT INTO "order".orders
     (order_no, customer_id, total_amount, status, payment_status, created_at)
 VALUES

@@ -718,3 +718,12 @@ def test_sandbox_payment_reads_idempotent_migration_seed(
             " WHERE customer_id = 872 AND transaction_no LIKE 'PAY-872-%'",
         )
         assert cursor.fetchone()[0] == 4
+        cursor.execute(
+            "SELECT id, pg_sequence_last_value("
+            " pg_get_serial_sequence('customer.customers', 'id')::regclass)"
+            " FROM customer.customers WHERE id = 872",
+        )
+        seeded_customer = cursor.fetchone()
+        assert seeded_customer is not None
+        assert int(seeded_customer[0]) == 872
+        assert int(seeded_customer[1]) >= 872

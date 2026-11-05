@@ -16,18 +16,18 @@
 | A7 坐席知识检索接 RAG 通道 | ✅ | #317 → ce902ea |
 | **B2 积分/等级查询（查询型样板）** | ✅ 本会话 | #320 → d1d38df（+docs #321 → da13495） |
 | **B3 优惠券查询/用券校验** | ✅ 本会话 | #324 → 55e0fcb |
-| B4 支付流水查询 + 重复扣款转退款 | ⏳ 实施中（验收通过，待提交） | q1-q4 真机 PASS；q4 Supervisor 防重复调用已修复，未提交 |
+| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放 | q1-q4 真机 PASS；CI 的 134 演示客户外键问题已本地修复，待推送并重跑 CI |
 | B5 催办 / B6 价保 / B7 改址 / B8 开票 | ⬜ | B4 定型后 B5-B7 可并行，B8 随时可并行 |
 | B9 多模态 | 仅立项文档，不实施 | 并入最后收尾 PR |
 
-- B3 收官快照 main=`55e0fcb`；当前 B4 工作树 HEAD=`7b0bfc5`，`origin/main`=`c877de1`（比工作树多 1 个旅游 UI 提交，尚未 rebase；保留本地未提交改动）。CI 历史基线 935，B4 新增用例数以 CI 结果为准。
+- B3 收官快照 main=`55e0fcb`；B4 分支已建 PR #336（初始 HEAD=`7f948b8`，本次 CI 修复待推送），基于 `origin/main=c877de1`。CI 历史基线 935，合入前以最新 CI 对账为准。
 - B4 当前共享栈健康；134 迁移已应用，主后端/前端/网关探针通过；宿主 8088 GPU embedding/rerank 已按运维脚本恢复。q4 首轮暴露 Supervisor 重复调用 KnowledgeExpert 并以第二次拒答覆盖第一次有效答复；2026-11-06 已加防重复收尾并真机复验通过，ClaimVerifier 未改。
 - 本会话真机验收：B2 4/4 PASS + B3 4/4 PASS（合并后 main 上双探针复证）。
 
 ## 三、未完成（含挂账）
 
 **待实施批次**（细节见 FINAL-PLAN §五，B4 详设见本文件 §六）：
-1. **B4 支付流水查询 + 重复扣款转退款**——代码已实现，q1-q4 真机验收通过；当前待用户查看 Diff 并确认提交/PR；
+1. **B4 支付流水查询 + 重复扣款转退款**——PR #336 开放，q1-q4 真机验收通过；CI 迁移种子问题已修并待推送、重跑；自动退款尚未实现；
 2. B5 催发货/催派送（低风险直执行，不承诺具体补发时间——composer ETA 守卫 fail-closed）；
 3. B6 价保退差价（**全链路最重**：资金红线三项缺一不合并——终点 business-mock / 开关 fail-closed 双入口 / 审计齐全）；
 4. B7 在途包裹改地址（确认流，订单级与账户默认地址严格区分）；
@@ -79,7 +79,7 @@
 
 ## 五、工作树与环境现场
 
-- **worktree**：`D:\Program Files\workplace\agent-cs-fix-entry`，分支 `feat/cs-payment-query`，HEAD=`7b0bfc5`；B4 代码与本交接文档均未提交。`origin/main` 有 1 个无关旅游 UI 提交尚未同步；不要 reset/stash 覆盖本地改动。
+- **worktree**：`D:\Program Files\workplace\agent-cs-fix-entry`，分支 `feat/cs-payment-query`，用于 PR #336；134 迁移外键种子修复、对应 sandbox 断言及本交接状态更新已提交在分支，工作树应保持干净。已 rebase 到 `origin/main=987eddb`；勿 reset/stash 覆盖其他改动。
 - 主仓 `D:\Program Files\workplace\agent`；共享栈 compose 项目名 `agent`，端口 8000/8090/8091/9080/5433/3100/3200/3300/8081 由主栈占用。后端通过 `devctl.bat rebuild /y` 从本 B4 worktree 重建，`frontend-cs` 用 compose overlay 单独重建。
 - 隔离测试 PG：`agent-csfix-b0-pg` @ 127.0.0.1:15434（postgres/b0sandbox，库 agent_business_sandbox_test；134 迁移测试已执行）；测试 DSN 传 `POINTS_SANDBOX_PG_TEST_DSN`；测试库守卫：库名必须含 test/sandbox。
 - 宿主本地模型服务通过本 worktree `dev-local-models.bat start` 恢复，PID 4320，8088 ready；Docker RAG 调 `host.docker.internal:8088`。重启宿主/服务后按运维手册重新检查状态。
@@ -88,7 +88,7 @@
 
 ## 六、B4 实施状态与剩余事项（支付流水查询 + 重复扣款转退款）
 
-**当前进度**：实现、T2、阴性验证、worktree rebuild 与 q1-q4 真机通过；q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。B4 仍未提交/建 PR，需用户查看 Diff 并确认后按流程提交。
+**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 已开放。CI 首轮发现干净业务库未含 customer 872，134 在外键约束下写订单失败；修复已提交在 PR 分支，并在新建隔离库验证 134 成功应用、客户 872 在位、序列值 872、4 条流水种子在位；对应 sandbox 用例 1 passed。该隔离容器的完整 `init_db` 还受 vector 扩展、只读角色和其它 memory schema 前置条件影响，不能记为全初始化通过。下一步推送修复并核对 PR CI 全绿。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
 
 **意图与路由**：`t_payment_issue`（domain=TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）。词表：TRANSACTION 加「支付/扣款/付款失败」域词 + 句式（「订单 X 是不是重复扣款」「支付失败怎么办」注意「支付失败」是政策引导高频句——KNOWLEDGE 现有 k_faq「支付方式」词与 payment-faq-policy 文档在位，**先推演票数再动词表**；payment 金额走 order 标签）；VOCAB 升 2026-11-05.1 + test_vocab 断言同步。
 

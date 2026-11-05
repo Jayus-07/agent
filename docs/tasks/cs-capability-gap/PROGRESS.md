@@ -138,9 +138,9 @@
 
 B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
 
-## B4：支付流水查询 + 重复扣款退款提案（实施中，2026-11-05）
+## B4：支付流水查询 + 重复扣款退款提案（PR #336 开放；CI 修复续工，2026-11-06）
 
-**现场**：worktree `D:/Program Files/workplace/agent-cs-fix-entry`，分支 `feat/cs-payment-query`，HEAD `7b0bfc5d022fe030e072a04db7162551655bf17a`；代码、测试、文档均未提交。当前 `origin/main=c877de1`，较 HEAD 多 1 个旅游 UI 提交；本次未 rebase/reset，保留在途改动。共享栈从本 worktree 重建；隔离 PG `agent-csfix-b0-pg:15434` 保留。
+**现场**：worktree `D:/Program Files/workplace/agent-cs-fix-entry`，分支 `feat/cs-payment-query`，PR #336 开放（初始 HEAD `7f948b815f7392b6a62e00d2fe2d8df15967554f`）；CI 修复已提交在分支，待推送。已 rebase 到 `origin/main=987eddb`。共享栈已从本 worktree 重建；隔离 PG `agent-csfix-b0-pg:15434` 保留。
 
 **实现范围**：新增 `payment_service.py` 双模式查询；迁移 `134_cs_payment.sql` 和 init_db/path_filter 登记；mock 三态支付流水；新增 `t_payment_issue`、支付词表及 facts 白名单/金额守卫；有限 TaskPlan 先查流水，满足精确退款候选条件后调用既有 refund request proposal/confirmation 流；支付回复固定使用可信模板；客服知识页 GAP_LIST、customer-service 文档、mock contract、rag_smoke 定向清单同步。支付记录只读；任何条件不满足时不创建提案；提案仍须用户确认后才进入既有人工审核，不存在自动退款通道。
 
@@ -159,7 +159,7 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 4. q4「支付失败怎么办？」首轮 **FAIL**：宿主 GPU 服务 8088 未运行时 RAG 不可达；恢复后 Supervisor 同轮调用 KnowledgeExpert 两次，第二次响应因 ClaimVerifier `citation_not_found missing=['E5']` 被拒绝，覆盖第一次有效答复。该失败最初误判为单纯检索完整性问题；根因及后续修复见本节「q4 修复与真机复验」。ClaimVerifier 未被绕过或修改。
 5. q4 隔离复测脚本/结果：`D:/tmp/cs_b4_q4_retry.py`、`D:/tmp/cs-b4-q4-retry.txt`；RAG 和 app 详细日志仍可按 session `b4-acc-q4-retry` 查询。
 
-**状态与下一步**：B4 q1-q4 已在当前 worktree 完成定向测试与真机验收，状态为 **PASS（实现/验收）**；代码、测试和文档仍未提交、未建 PR、未合并。下一步展示 Diff 与验证结果，等待用户确认后再提交/建 PR。`b4-acc-q3` 保留在待确认状态；不要向该 session 发送确认。
+**状态与下一步**：B4 q1-q4 真机验收通过，PR #336 已开放且未合并；q3 session `b4-acc-q3` 保留待确认状态，不要发送确认。最新 CI 首轮失败根因及修复证据见下；修复已提交，待推送后重跑 CI。自动退款不属于当前 B4，仍需单独分析与立项。
 
 ### q4 修复与真机复验（2026-11-06）
 
@@ -173,4 +173,12 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 2. `py_compile` 通过；`git diff --check` 通过。使用当前 worktree 执行 `devctl.bat rebuild /y` 成功；app、business-mock、RAG、workers、frontend/admin 健康。复验探针：`:8000/health`、`:8081/health`、`:8090/readyz`、`:3100/login`、`:3200/login`、`:3300/login`、宿主 `:8088/healthz` 全部 HTTP 200。
 3. 真机 q4 脚本 `D:/tmp/cs_b4_q4_supervisorfix.py`，结果 `D:/tmp/cs-b4-q4-supervisorfix.txt`，全新 session `b4-acc-q4-supervisorfix-20261106`：`POST :9080/api/chat/customer-service` HTTP 200；答复含「重试」「支付方式」及引用 `[E1] [E2] [E5]`；RAG 日志确认 ClaimVerifier **3 claims 全部通过**；app 日志仅一次 `CS Expert start expert=knowledge`，其后 Supervisor 以「知识答复已成功生成，不重复调用 KnowledgeExpert」FINISH。未执行任何退款写操作或确认动作。
 
-**收尾**：q1-q4 当前 worktree 验收通过；保持未提交状态，等待用户查看 Diff 并明确确认提交/PR。此前 `origin/main=c877de1` 比当前 B4 HEAD `7b0bfc5` 多 1 个旅游 UI 提交，尚未同步；提交前需再核对分支漂移及 PR 门禁。`b4-acc-q3` 仍待确认，禁止发送确认。
+**q4 阶段收尾记录**：当时 q1-q4 验收通过、q3 session `b4-acc-q3` 待确认；后续已创建 PR #336。q3 仍不得发送确认，PR/CI 后续状态见下节。
+
+### PR #336 CI 修复：134 演示客户外键（2026-11-06）
+
+**根因**：GitHub `RAG Smoke preflight` 的全新业务库在迁移 134 写入 `customer_id=872` 的订单时触发 `fk_orders_customer`；干净初始化只有 001 的客户 1–3，没有 872。聚合 `RAG Smoke (8 cases)` 随 preflight 失败，其他免费契约、管理端构建和 scan 检查通过。
+
+**修复**：134 在写 B4 三态订单前幂等补齐无个人信息的客服演示客户 872；只向前校准客户 ID 序列，避免后续默认 INSERT 撞主键。sandbox 验收增加客户存在、序列不低于 872 的断言。
+
+**验证**：新建隔离库运行 `scripts/init_db.py` 时迁移 134 显示 applied；查询确认客户 872 存在、序列值 872、PAY-872 种子 4 条。对应 sandbox 用例 **1 passed**。完整 `init_db.py` 在该自建容器因 vector 扩展、只读角色和既有 memory schema 前置条件退出 1，不记为全初始化 PASS。随后从本 worktree 执行 `devctl.bat rebuild /y` 退出 0，后端、business-mock、前端与管理端探针均 200。PR 最新 CI 仍待推送修复后重跑。
