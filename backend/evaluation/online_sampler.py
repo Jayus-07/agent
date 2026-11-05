@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from typing import Any, Iterator
 
@@ -234,6 +235,27 @@ def _judge_all(samples: list[tuple[int, dict]]) -> list[dict]:
     return rows
 
 
+def _judge_with_budget(request_id: str, samples: list[tuple[int, dict]]) -> list[dict]:
+    """用评测服务身份绑定在线 judge 的请求预算、预占与用量结算。"""
+    from backend.core.request_context import scoped_tool_identity
+    from backend.evaluation.run_guards import EVAL_TENANT_ID
+    from backend.evaluation.service import _handle_budget_binding_error
+    from backend.infra.llm.budget import scoped_request_budget
+    from backend.infra.llm.proxy import scoped_current_user_id
+
+    actor = os.getenv("EVAL_TRIGGERED_BY", "").strip() or "eval-runner"
+    actor = actor.removeprefix("user:")
+    with scoped_current_user_id(actor):
+        with scoped_tool_identity(user_id=actor, tenant_id=EVAL_TENANT_ID):
+            with scoped_request_budget(
+                request_id,
+                user_id=actor,
+                tenant_id=EVAL_TENANT_ID,
+                on_error=_handle_budget_binding_error,
+            ):
+                return _judge_all(samples)
+
+
 def _aggregate(rows: list[dict]) -> dict[str, Any]:
     """run 级聚合。表现指标与 release_gate B1 新增三项同键名（口径单一）。"""
     scored = [r for r in rows if r["status"] in ("pass", "fail")]
@@ -365,7 +387,13 @@ def run_online_sampling() -> dict[str, Any]:
         return {"skipped": "no_eligible_traces", "run_id": ""}
 
     run_id = f"online-{time.strftime('%Y%m%d')}"
-    rows = _judge_all(sampled)
+    # 持久化 run_id 按天固定以支持同日补跑覆盖；预算 request_id 则必须
+    # 每次执行唯一，避免复用进程内缓存的旧额度/拒绝状态。
+    budget_request_id = f"{run_id}:{uuid.uuid4().hex}"
+    # 在线 judge 不经过 GraphRunner；在这里绑定与 EvaluationService 相同的
+    # eval-runner / eval 身份及请求预算，确保 enforce 下先预占、后按实际用量结算。
+    # 预算绑定失败时复用评测服务策略：enforce 阻断出站，observe 留告警。
+    rows = _judge_with_budget(budget_request_id, sampled)
     agg = _aggregate(rows)
     agg["window_hours"] = _window_hours()
     agg["cutoff"] = cutoff

@@ -1,8 +1,8 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**PASS（任务验收范围已完成）**；F 路由写操作在隔离环境通过；真实浏览器 + APISIX JWT 写入链路 **UNVERIFIED**。
+- 状态：**IN_PROGRESS（收尾项）**；原计划 E′、D1、F、D3、D4a 已合并。PR #333 代码修复提交 `6acaea5` 已推送；Review P2 已回复并解决。CI 在代码 HEAD `e7fcbc8` 上通过（RAG 真实 API job 按策略 skipped）；当前代码尚未完成最新工作树重建，真实浏览器写操作仍 **UNVERIFIED**。
 - 本次验收记录：`agent-wt-eval-f-acceptance` / `codex/eval-closure-f-api-acceptance`（从 `origin/main` 创建；原 F/D3/D4a worktree 保留）。
-- 当前主线核对基线：2026-11-05 `origin/main=dc4a181`（包含 PR #331）；F API 验收 worktree
+- 当前主线核对基线：2026-11-05 `origin/main=040453a`（包含 PR #332）；F API 验收 worktree
   起始基线为 `8798dca`。任务沿革基线见 TASK.md。
 
 ## 并行协调记录
@@ -70,3 +70,14 @@
 - F3：人工 Rubric `GET` 200；提交人工评分 `POST` 201；再次 `GET` 200，读回 1 条评分，综合分 0.74。
 - API 请求使用测试密钥和模拟网关注入的 `super_admin` 身份头；没有对主库写入，也没有触发模型调用。测试代码实际载入的 Gate/feedback/auth/repository 源文件哈希与 main 工作树一致；`curator.append_case` 函数实现一致。容器 `GIT_COMMIT` 未提供，因此未将容器镜像标记为可追溯构建。
 - 清理：临时 Postgres/Redis 容器及匿名卷已删除，主机临时脚本和环境文件已删除；主仓 `git status` 未新增受本任务影响的文件。
+
+## 2026-11-05 在线 sampler 预算上下文修复（PR #333）
+
+- 工作树：`agent-wt-eval-sampler-budget`，分支 `codex/eval-online-sampler-budget`，基于 `origin/main=040453a`。
+- 改动：`backend/evaluation/online_sampler.py` 在后台 judge 调用外层绑定评测身份及 `scoped_request_budget`，复用既有预算预占/实际用量结算路径；enforce 模式预算绑定失败时阻断模型调用。`backend/tests/evaluation/test_online_sampler.py` 覆盖身份/租户/request_id、reserve/settle 和失败阻断；测试负反馈读取已 mock，不触碰共享业务库。
+- 初始 PR 提交 `533e02c` 的 sampler 定向测试 **19 passed**。Review 指出同日重跑可能复用 `budget.py` 的旧 RequestBudget 状态；后续提交 `6acaea5` 保留按天幂等的持久化 `run_id`，改为每次执行生成独立预算 `request_id`，并增加同日重跑回归断言。
+- 后续修复验证：回归用例 **1 passed（43.77s，退出码 0）**；`ruff check`、`py_compile`、`git diff --check` 均通过。该 pytest 会话结束时的全局迁移残留守卫触发 `TaskService.ensure_schema`，连接池 30 秒未取得连接，SQL 未执行；本次修复后未重跑整个 sampler 文件。
+- Docker Desktop 在机器重启后未能启动 Engine，界面报本地 `dockerInference` IPC 路径错误。此前 `devctl.bat rebuild /y` 和健康检查针对修复前提交，不能代表当前 HEAD；本次代码的 rebuild/健康检查 **UNVERIFIED**。机器可用内存读数约 6.3–6.5 GB（总 15.8 GB），没有证据确认关机由内存导致；未运行并发或压力测试。
+- PR #333 在 HEAD `e7fcbc8` 的 CI 结果：secret scan、Evaluation V2 Contract、RAG PR Smoke 均 success；RAG PR Smoke preflight 与 8 案例免费回归 success，8 案例真实 API job 按 workflow policy skipped。Review P2 已回复并解决；没有声称旧 Review 对新 HEAD 做过额外审查。
+- 无真实模型调用，`EVAL_ONLINE_SAMPLER_ENABLED` 仍关闭；真实预算存储结算尚未实测。
+- F 浏览器验收曾通过真实管理端登录并经隔离 APISIX 验证应用签发的 HS512 JWT、读取候选列表；拒绝按钮写入及隔离数据库读回尚未完成。Docker Engine 恢复后只需重新启动隔离验收栈完成这一步；当前仍标记 **UNVERIFIED**。
