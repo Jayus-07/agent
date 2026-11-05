@@ -2,8 +2,8 @@
 
 > 取代 `NEXT-SESSION.md`（其环境、方法教训和挂起裁决仍有效）。截至本次核对，
 > E′、D1、F、D3、D4a 均已完成并合入 main；没有剩余的计划内实现批次。
-> F 的真实浏览器 + APISIX JWT 写入链路仍未验收；在线采样长期启用前的后台预算
-> 预占/结算风险仍未关闭。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
+> F 的真实浏览器 + APISIX JWT 写入链路仍未验收；在线采样预算上下文修复已在独立工作树
+> 实现并本地验证，PR 待创建；真实预算存储结算未做实机调用，Sampler 仍默认关闭。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
 > **用户已裁决（继承）：ECS 三项不处理；pillow/filelock/dnspython/unstructured
 > 因 py3.11 不可达保持挂起勿翻案。**
 
@@ -150,3 +150,9 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 > 在线采样保持默认关闭，长期启用前先解决后台预算预占/结算旁路。ECS 三项不处理；
 > pillow/filelock/dnspython/unstructured 继续挂起，勿翻案。新代码任务仍需从最新 main
 > 开独立 worktree/PR，推送使用 HTTPS_PROXY=http://127.0.0.1:7897，未执行的验证不得报通过。
+
+## 九、2026-11-05 续工状态
+
+- 在线采样预算修复：`agent-wt-eval-sampler-budget` / `codex/eval-online-sampler-budget`，已在 judge 外层绑定 `eval-runner` / `eval` 身份和 request budget，失败时按 enforce 策略阻断；本地定向测试 **19 passed**、ruff check、py_compile 通过。重建和健康检查已执行；Sampler 开关仍关闭、未发起真实模型调用。PR 尚未创建。
+- 剩余动作：审阅并提交上述工作树，HTTPS_PROXY 推送并开 PR，等 CI/Review 后合并；随后在独立 Postgres/Redis、独立 APISIX 及独立管理端容器中跑一次 F 写操作浏览器链路，记录 JWT 验签和 DB 读回结果；失败或隔离环境不可搭建时保留 **UNVERIFIED/BLOCKED**。
+- 其他原批次已完成。ECS 三项不处理；pillow/filelock/dnspython/unstructured 继续挂起勿翻案。

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,12 +35,33 @@ def _sampler_enabled(monkeypatch):
     monkeypatch.setenv("EVAL_ONLINE_SAMPLER_ENABLED", "true")
 
 
+@contextmanager
 def _patch_trace_store(traces: list[dict]):
-    """patch trace_store 单例的 list_since（采样数据源）。"""
+    """patch 采样源并阻断测试对共享 feedback 库的读取。"""
     store = MagicMock()
     store.list_since.return_value = traces
-    return patch("backend.observability.trace_store.get_trace_store",
-                 return_value=store)
+    with patch(
+        "backend.observability.trace_store.get_trace_store",
+        return_value=store,
+    ) as trace_store_mock:
+        with patch.object(sut, "_negative_trace_ids", return_value=set()):
+            yield trace_store_mock
+
+
+def _patch_run_date(monkeypatch, value: str) -> None:
+    """为预算测试使用独立请求 ID，避免复用进程内同日预算状态。"""
+    original_strftime = sut.time.strftime
+
+    def _isolated_strftime(fmt: str, *args):
+        if fmt == "%Y%m%d":
+            return value
+        return original_strftime(fmt, *args)
+
+    monkeypatch.setattr(
+        sut.time,
+        "strftime",
+        _isolated_strftime,
+    )
 
 
 def _patch_judge(total: float = 4.0, confidence: str = "high"):
@@ -213,6 +235,122 @@ def test_truncated_answer_is_skipped_without_judging_preview():
     rows = persist_mock.call_args.args[1]
     assert rows[0]["status"] == "skip"
     assert rows[0]["answer_skipped"] is True
+
+
+def test_online_judge_binds_evaluation_budget_and_settles_usage(monkeypatch):
+    """在线 judge 复用评测身份，真实走预算预占与结算接口。"""
+    from decimal import Decimal
+
+    from backend.core.request_context import get_tool_tenant_id, get_tool_user_id
+    from backend.infra.llm import budget as budget_module
+    from backend.infra.llm.proxy import _thread_local_user_id
+
+    class _PriceTable:
+        def require(self, model_name, component, *, enforce):
+            assert model_name == "eval-test-model"
+            assert component == "eval_gen"
+            assert enforce is True
+
+    class _QuotaStore:
+        def __init__(self):
+            self.reservations = []
+            self.settlements = []
+
+        def reserve(self, **kwargs):
+            reservation = object()
+            self.reservations.append((kwargs, reservation))
+            return reservation
+
+        def settle(self, reservation, actual_cny):
+            self.settlements.append((reservation, actual_cny))
+
+    quota_store = _QuotaStore()
+    captured = {}
+    monkeypatch.setenv("EVAL_TRIGGERED_BY", "user:eval-budget-actor")
+    _patch_run_date(monkeypatch, "20990101")
+
+    def _score(samples):
+        state = budget_module.current_request_budget()
+        assert state is not None
+        captured["request_id"] = budget_module.current_request_id()
+        captured["user_id"] = get_tool_user_id()
+        captured["tenant_id"] = get_tool_tenant_id()
+        captured["rate_limit_user"] = _thread_local_user_id()
+
+        budget_module.reserve_model_call(
+            "primary", model_name="eval-test-model", component="eval_gen",
+        )
+        captured["settlement"] = budget_module.record_model_usage(
+            prompt_tokens=12,
+            completion_tokens=8,
+            total_tokens=20,
+            cost=Decimal("0.0125"),
+        )
+        return [{
+            "case_id": "trace-budgeted",
+            "priority": "normal",
+            "status": "pass",
+            "judge_total": 4.0,
+            "judge_failed": False,
+            "answer_skipped": False,
+            "confidence": "high",
+            "reasoning": "ok",
+            "scores": {},
+            "workflow_name": "agent",
+            "trace_duration_ms": 1000,
+            "trace_cost_cny": 0.1,
+            "trace_degraded": False,
+        }]
+
+    with _patch_trace_store([_trace("trace-budgeted")]), \
+            patch.object(sut, "_sample_traces", return_value=[
+                (4, _trace("trace-budgeted")),
+            ]), \
+            patch.object(sut, "_judge_all", side_effect=_score), \
+            patch.object(sut, "_persist", return_value=True), \
+            patch.object(budget_module, "_config_mode", return_value="enforce"), \
+            patch.object(budget_module, "_config_limits", return_value=(
+                budget_module.RequestBudgetLimits(max_cost=Decimal("0.50"))
+            )), \
+            patch("backend.infra.llm.quota.PostgresQuotaStore",
+                  return_value=quota_store), \
+            patch("backend.infra.llm.models.lookup_model_entry", return_value=None), \
+            patch("backend.infra.llm.pricing.get_current_price_table",
+                  return_value=_PriceTable()):
+        result = sut.run_online_sampling()
+
+    assert result["persisted"] is True
+    assert captured["request_id"] == result["run_id"]
+    assert captured["user_id"] == "eval-budget-actor"
+    assert captured["tenant_id"] == "eval"
+    assert captured["rate_limit_user"] == "eval-budget-actor"
+    assert captured["settlement"] == "settled"
+    assert len(quota_store.reservations) == 1
+    reserve_args, reservation = quota_store.reservations[0]
+    assert reserve_args["user_id"] == "eval-budget-actor"
+    assert reserve_args["tenant_id"] == "eval"
+    assert reserve_args["request_id"] == result["run_id"]
+    assert quota_store.settlements == [(reservation, Decimal("0.0125"))]
+
+
+def test_enforced_budget_binding_failure_blocks_online_judge(monkeypatch):
+    """enforce 下预算存储不可用时，在线 judge 不得绕过预算出站。"""
+    from backend.evaluation.service import BudgetBlockedError
+    from backend.infra.llm import budget as budget_module
+
+    monkeypatch.setattr("backend.config.llm.LLM_BUDGET_MODE", "enforce")
+    _patch_run_date(monkeypatch, "20990102")
+    with patch.object(sut, "_sample_traces", return_value=[
+            (4, _trace("trace-budget-blocked")),
+    ]), \
+            patch.object(sut, "_judge_all") as judge_mock, \
+            patch.object(budget_module, "_config_mode", return_value="enforce"), \
+            patch("backend.infra.llm.quota.PostgresQuotaStore",
+                  side_effect=RuntimeError("quota store unavailable")):
+        with pytest.raises(BudgetBlockedError, match="拒绝调用模型"):
+            sut.run_online_sampling()
+
+    judge_mock.assert_not_called()
 
 
 # ── 聚合与落库 ───────────────────────────────────────────────────────────────

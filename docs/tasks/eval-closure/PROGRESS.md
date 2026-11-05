@@ -1,8 +1,8 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**PASS（任务验收范围已完成）**；F 路由写操作在隔离环境通过；真实浏览器 + APISIX JWT 写入链路 **UNVERIFIED**。
+- 状态：**IN_PROGRESS（收尾项）**；计划批次已合并，预算上下文修复已在独立工作树实现并完成本地验证、PR 待创建；真实浏览器 + APISIX JWT 写入链路仍 **UNVERIFIED**。
 - 本次验收记录：`agent-wt-eval-f-acceptance` / `codex/eval-closure-f-api-acceptance`（从 `origin/main` 创建；原 F/D3/D4a worktree 保留）。
-- 当前主线核对基线：2026-11-05 `origin/main=dc4a181`（包含 PR #331）；F API 验收 worktree
+- 当前主线核对基线：2026-11-05 `origin/main=040453a`（包含 PR #332）；F API 验收 worktree
   起始基线为 `8798dca`。任务沿革基线见 TASK.md。
 
 ## 并行协调记录
@@ -70,3 +70,11 @@
 - F3：人工 Rubric `GET` 200；提交人工评分 `POST` 201；再次 `GET` 200，读回 1 条评分，综合分 0.74。
 - API 请求使用测试密钥和模拟网关注入的 `super_admin` 身份头；没有对主库写入，也没有触发模型调用。测试代码实际载入的 Gate/feedback/auth/repository 源文件哈希与 main 工作树一致；`curator.append_case` 函数实现一致。容器 `GIT_COMMIT` 未提供，因此未将容器镜像标记为可追溯构建。
 - 清理：临时 Postgres/Redis 容器及匿名卷已删除，主机临时脚本和环境文件已删除；主仓 `git status` 未新增受本任务影响的文件。
+
+## 2026-11-05 在线 sampler 预算上下文修复（PR 待创建）
+
+- 工作树：`agent-wt-eval-sampler-budget`，分支 `codex/eval-online-sampler-budget`，基于 `origin/main=040453a`。
+- 改动：`backend/evaluation/online_sampler.py` 在后台 judge 调用外层绑定评测身份及 `scoped_request_budget`，复用既有预算预占/实际用量结算路径；enforce 模式预算绑定失败时阻断模型调用。`backend/tests/evaluation/test_online_sampler.py` 覆盖身份/租户/request_id、reserve/settle 和失败阻断；测试负反馈读取已 mock，不触碰共享业务库。
+- 验证证据（本工作树执行）：定向 sampler 测试 **19 passed**、ruff check 通过、py_compile 通过、`git diff --check` 通过。`ruff format --check` 对改动文件提示需格式化，但基线同样不通过；未对全文件做大面积格式化。
+- 受影响服务已从本工作树执行 `devctl.bat rebuild /y`，命令退出码 0；API、APISIX、RAG、MCP、前后端健康检查均健康，Beat 动态导入后注册 `evaluation.online_sampling`。无真实模型调用；`EVAL_ONLINE_SAMPLER_ENABLED` 仍为空/默认关闭。
+- 当前状态：实现和本地验证完成，尚未 commit/push/开 PR；不能据此宣称 CI、Review、合并完成，也未实测真实预算服务结算。下一步先审阅本次 diff，提交并开独立 PR；CI 通过合并后再做隔离 APISIX/JWT + 浏览器写操作验收。
