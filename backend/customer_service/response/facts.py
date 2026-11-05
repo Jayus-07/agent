@@ -17,6 +17,7 @@ _ERROR_TYPES = {
 _SERVICE_SOURCES = {
     "sandbox_logistics_service", "business_logistics_service",
     "sandbox_order_service", "business_order_service",
+    "sandbox_payment_service", "business_payment_service",
     "sandbox_business_service", "unknown",
 }
 _OPERATION_STATUS = {
@@ -35,6 +36,8 @@ _COUPON_REASON = {
     "applicable", "threshold_not_met", "not_stackable", "expired",
     "excluded_category", "unknown",
 }
+_PAYMENT_STATUS = {"success", "failed", "unknown"}
+_PAYMENT_KIND = {"alipay", "wechat_pay", "bank_card", "unknown"}
 
 
 def project_fact_set(raw: object) -> dict[str, Any]:
@@ -57,6 +60,7 @@ def project_fact_set(raw: object) -> dict[str, Any]:
         "points": lambda value: _project_points(value),
         "coupons": lambda value: _project_list(value, _project_coupon),
         "coupon_check": lambda value: _project_coupon_check(value),
+        "payment": lambda value: _project_payment(value),
         "operation": lambda value: _project_operation(value),
         "task_result": lambda value: _project_task_result(value),
         "complaint": lambda value: _project_complaint(value),
@@ -292,6 +296,56 @@ def _project_coupon_check(value: object) -> dict[str, Any]:
     return result
 
 
+def _project_payment_record(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    status = _enum_value(value.get("status"), _PAYMENT_STATUS)
+    kind = _enum_value(value.get("kind"), _PAYMENT_KIND)
+    amount = _safe_amount(value.get("amount"))
+    paid_at = _safe_text(value.get("paid_at"), limit=40)
+    kind_label = _safe_text(value.get("kind_label"), limit=20)
+    if status is not None:
+        result["status"] = status
+    if kind is not None:
+        result["kind"] = kind
+    if amount is not None:
+        result["amount"] = amount
+    if paid_at:
+        result["paid_at"] = paid_at
+    if kind_label:
+        result["kind_label"] = kind_label
+    return result
+
+
+def _project_payment(value: object) -> dict[str, Any]:
+    """B4 支付事实白名单；只输出查询所需流水，不暴露租户/客户标识。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    order_no = _safe_text(value.get("order_no"), limit=40)
+    if order_no:
+        result["order_no"] = order_no
+    total = _safe_amount(value.get("total_amount"))
+    if total is not None:
+        result["total_amount"] = total
+    currency = _enum_value(value.get("currency"), _CURRENCY)
+    if currency is not None:
+        result["currency"] = currency
+    count = value.get("success_count")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        result["success_count"] = count
+    for key in ("duplicate_payment", "refund_candidate"):
+        if isinstance(value.get(key), bool):
+            result[key] = value[key]
+    payments = value.get("payments")
+    if isinstance(payments, list):
+        projected = _project_list(payments, _project_payment_record)
+        if projected:
+            result["payments"] = projected
+    return result
+
+
 def _project_operation(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -343,6 +397,16 @@ def _project_task_result(value: object) -> dict[str, Any]:
             safe_facts["order_status"] = order_status
         if shipping_status is not None:
             safe_facts["shipping_status"] = shipping_status
+        success_count = facts.get("success_count")
+        if (
+            isinstance(success_count, int)
+            and not isinstance(success_count, bool)
+            and success_count >= 0
+        ):
+            safe_facts["success_count"] = success_count
+        for key in ("duplicate_payment", "refund_candidate"):
+            if isinstance(facts.get(key), bool):
+                safe_facts[key] = facts[key]
         amount = _safe_amount(facts.get("total_amount"))
         if amount is not None:
             safe_facts["total_amount"] = amount

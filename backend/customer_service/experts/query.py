@@ -22,6 +22,7 @@ _INTENT_SERVICE_MAP = {
     "t_balance_query": "balance",  # P2 商城域：余额+最近流水
     "t_points_query": "points",  # B2 cs-capability-gap：积分+等级+最近流水
     "t_coupon_query": "coupon",  # B3 cs-capability-gap：券列表/用券校验
+    "t_payment_issue": "payment",  # B4 cs-capability-gap：支付流水/重复扣款
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -64,7 +65,9 @@ def execute_query(
     )
 
     current_task = state.get("current_task") or {}
-    if current_task.get("capability") in ("query_logistics", "query_order_status"):
+    if current_task.get("capability") in (
+        "query_logistics", "query_order_status", "query_payments",
+    ):
         return _execute_task_query(
             current_task, user_id, user_message, cs_route, state,
         )
@@ -182,10 +185,15 @@ def _execute_task_query(
                     f"{item.get('product_names')}（{item.get('created_at')}）"
                     for item in resolution.candidates
                 )
+                source_kind = (
+                    "payment"
+                    if current_task.get("capability") == "query_payments"
+                    else "order"
+                )
                 result = CSTaskResult(
                     task_id=task_id, status="needs_clarification",
                     facts={"order_count": len(resolution.candidates)},
-                    source=_task_query_source("order"),
+                    source=_task_query_source(source_kind),
                 )
                 return ExpertResult(
                     expert="query", status=ExpertStatus.SUCCESS.value,
@@ -198,6 +206,70 @@ def _execute_task_query(
                         "intent": current_task.get("capability"),
                     },
                 )
+
+        if current_task.get("capability") == "query_payments":
+            if not order_ref:
+                result = CSTaskResult(
+                    task_id=task_id, status="needs_clarification", facts={},
+                    source=_task_query_source("payment"),
+                )
+                return ExpertResult(
+                    expert="query", status=ExpertStatus.SUCCESS.value,
+                    response_draft="请提供订单号，我再帮您核对支付流水。",
+                    data={
+                        "task_result": result.model_dump(),
+                        "intent": "t_payment_issue",
+                    },
+                )
+            from backend.customer_service.service.payment_service import (
+                PaymentNotFoundError,
+                PaymentService,
+            )
+
+            try:
+                payment = PaymentService().get_payments(
+                    user_id,
+                    str(state.get("tenant_id") or "default"),
+                    order_ref,
+                )
+            except PaymentNotFoundError:
+                result = CSTaskResult(
+                    task_id=task_id, status="needs_clarification", facts={},
+                    source=_task_query_source("payment"),
+                    error_type="business_error",
+                )
+                return ExpertResult(
+                    expert="query", status=ExpertStatus.SUCCESS.value,
+                    response_draft="没有找到这笔订单，或您无权查询其支付记录。",
+                    data={
+                        "task_result": result.model_dump(),
+                        "intent": "t_payment_issue",
+                    },
+                )
+            except Exception:
+                logger.warning("[QueryExpert] 支付任务查询失败", exc_info=True)
+                return _failed_task_query(task_id, "支付")
+
+            facts.update({
+                "order_count": 1,
+                "order_id": order_ref,
+                "order_no": str(payment.get("order_no") or order_ref),
+                "success_count": int(payment.get("success_count") or 0),
+                "duplicate_payment": bool(payment.get("duplicate_payment")),
+                "refund_candidate": bool(payment.get("refund_candidate")),
+            })
+            result = CSTaskResult(
+                task_id=task_id, status="success", facts=facts,
+                source=_task_query_source("payment"),
+            )
+            return ExpertResult(
+                expert="query", status=ExpertStatus.SUCCESS.value,
+                response_draft=_payment_answer(payment),
+                data={
+                    "task_result": result.model_dump(),
+                    "intent": "t_payment_issue",
+                },
+            )
 
         from backend.customer_service.service.order_service import get_order_service
 
@@ -318,10 +390,14 @@ def _task_query_source(kind: str) -> str:
     prefix = "business" if CS_BUSINESS_GATEWAY_MODE == "http" else "sandbox"
     if kind == "order":
         return f"{prefix}_order_service"
+    if kind == "payment":
+        return f"{prefix}_payment_service"
     return f"{prefix}_logistics_service"
 
 
-def _failed_task_query(task_id: str) -> ExpertResult:
+def _failed_task_query(
+    task_id: str, service_name: str = "业务查询",
+) -> ExpertResult:
     from backend.customer_service.understanding.task_plan import CSTaskResult
 
     result = CSTaskResult(
@@ -330,9 +406,63 @@ def _failed_task_query(task_id: str) -> ExpertResult:
     )
     return ExpertResult(
         expert="query", status=ExpertStatus.SUCCESS.value,
-        response_draft="订单或物流服务暂时不可用，这次没有发起退款申请，请稍后重试。",
+        response_draft=(
+            "订单、物流或支付服务暂时不可用，这次没有发起退款申请，请稍后重试。"
+            if service_name == "业务查询"
+            else f"{service_name}服务暂时不可用，这次没有发起退款申请，请稍后重试。"
+        ),
         data={"task_result": result.model_dump()},
     )
+
+
+def _payment_answer(payment: dict[str, Any]) -> str:
+    """用支付服务已归一事实生成保守的查询回复。"""
+    from decimal import Decimal, InvalidOperation
+
+    order_no = str(payment.get("order_no") or "该订单")
+    total = payment.get("total_amount")
+    try:
+        total_text = f"¥{Decimal(str(total)).quantize(Decimal('0.01')):.2f}"
+    except (InvalidOperation, TypeError, ValueError):
+        total_text = "金额暂缺"
+    records = payment.get("payments")
+    lines = [f"订单 `{order_no}` 支付流水（订单金额 {total_text}）："]
+    if isinstance(records, list) and records:
+        status_labels = {"success": "支付成功", "failed": "支付失败"}
+        for item in records[:20]:
+            if not isinstance(item, dict):
+                continue
+            status = status_labels.get(str(item.get("status") or ""), "状态未知")
+            channel = str(item.get("kind_label") or "支付渠道未知")
+            try:
+                amount = f"¥{Decimal(str(item.get('amount'))).quantize(Decimal('0.01')):.2f}"
+            except (InvalidOperation, TypeError, ValueError):
+                amount = "金额暂缺"
+            paid_at = str(item.get("paid_at") or "")[:19].replace("T", " ")
+            lines.append(
+                f"- {status}，{channel}，{amount}"
+                + (f"，时间 {paid_at}" if paid_at else "")
+            )
+    else:
+        lines.append("目前没有可显示的支付流水记录。")
+
+    success_count = int(payment.get("success_count") or 0)
+    if payment.get("refund_candidate") is True:
+        lines.append(
+            "核对到两笔成功扣款，确认存在重复扣款，且每笔金额都与订单金额一致。尚未发起退款；"
+            "如需申请，请明确回复“申请退款”，系统会先生成待确认提案，"
+            "确认后进入人工审核，不会自动退款。"
+        )
+    elif payment.get("duplicate_payment") is True:
+        lines.append(
+            "发现多笔成功支付，但金额或记录不满足安全的全额退款提案条件；"
+            "本次没有发起退款申请，请联系人工客服核对。"
+        )
+    elif success_count == 0:
+        lines.append("当前没有成功支付记录；可稍后重试支付，或联系人工客服核对。")
+    else:
+        lines.append("当前核对到一笔成功支付，未发现重复扣款。")
+    return "\n".join(lines)
 
 
 def _compound_suspected(question: str) -> bool:
@@ -640,6 +770,29 @@ def _dispatch_service(
         elif request.get("status") == "approved":
             answer += "审核已通过；此状态不代表资金已到账。"
         return answer
+
+    if service_type == "payment":
+        from backend.customer_service.context_manager import resolve_order_slot
+        from backend.customer_service.service.payment_service import (
+            PaymentNotFoundError,
+            PaymentService,
+        )
+
+        order_no = resolve_order_slot(cs_route, question) or ""
+        if not order_no:
+            order_no = _semantic_unique_order(cs_route, user_id, tenant_id) or ""
+        if not order_no:
+            return "请提供订单号，我再帮您核对支付流水。"
+        try:
+            payment = PaymentService().get_payments(user_id, tenant_id, order_no)
+        except PaymentNotFoundError:
+            return "没有找到这笔订单，或您无权查询其支付记录。"
+        except Exception:
+            logger.warning("[QueryExpert] 支付流水查询失败", exc_info=True)
+            return "支付查询服务暂时不可用；本次没有发起退款申请，请稍后重试。"
+        return _QueryServiceResponse(
+            _payment_answer(payment), {"payment": payment},
+        )
 
     if service_type == "order":
         from backend.customer_service.context_manager import resolve_order_slot

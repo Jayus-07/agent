@@ -336,6 +336,18 @@ def _decision_v1(state: dict[str, Any]) -> CSSupervisorDecision:
         _record_decision(decision)
         return decision
 
+    # 同一轮的知识回答已成功生成时直接交给 Reporter，避免普通路由再次
+    # 覆盖该答复；更高优先级的 handoff/pending/风险门已在上方处理。
+    expert = _resolve_expert(cs_route)
+    if _has_completed_knowledge_answer(state, expert):
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason="知识答复已成功生成，不重复调用 KnowledgeExpert",
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
     # ── Layer 1c: confidence 降级 ──
     if confidence < CS_CONFIDENCE_CAUTIOUS and not expert_history:
         # P2.1（audit #156）：低置信但意图明确的知识类请求放行检索——
@@ -548,9 +560,19 @@ def _decision_v2(state: dict[str, Any]) -> CSSupervisorDecision:
         _record_decision(direct)
         return direct
 
+    # 已成功完成的知识答复不再被同轮路由覆盖；TaskPlan 编排保持原调度链。
+    expert = _resolve_expert(cs_route)
+    if _has_completed_knowledge_answer(state, expert):
+        decision = _make_decision(
+            ExpertAction.FINISH, None, layer=2,
+            reason="知识答复已成功生成，不重复调用 KnowledgeExpert",
+            is_finished=True,
+        )
+        _record_decision(decision)
+        return decision
+
     # ── 第 5 层：意图路由（route_path 强先验，绝大多数流量到此为止）──
     if confidence >= CS_CONFIDENCE_CAUTIOUS:
-        expert = _resolve_expert(cs_route)
         decision = _make_decision(
             ExpertAction.RUN_EXPERT, ExpertType(expert), layer=1,
             reason=f"[v2·L5] route → expert={expert} (confidence={confidence:.2f})",
@@ -845,6 +867,27 @@ def _is_expert_repeating(expert_history: list[dict]) -> bool:
         return False
     return (
         expert_history[-1].get("expert") == expert_history[-2].get("expert")
+    )
+
+
+def _has_completed_knowledge_answer(state: dict[str, Any], expert: str) -> bool:
+    """同一轮已有成功 Knowledge 答复时，不重复调用并覆盖结果。"""
+    if expert != ExpertType.KNOWLEDGE.value or state.get("task_plan"):
+        return False
+
+    history = state.get("expert_history") or []
+    last_result = state.get("last_expert_result") or {}
+    if not isinstance(history, list) or not history or not isinstance(last_result, dict):
+        return False
+
+    last_history = history[-1]
+    return bool(
+        isinstance(last_history, dict)
+        and last_history.get("expert") == ExpertType.KNOWLEDGE.value
+        and last_history.get("status") == "success"
+        and last_result.get("expert") == ExpertType.KNOWLEDGE.value
+        and last_result.get("status") == "success"
+        and str(last_result.get("response_draft") or "").strip()
     )
 
 
@@ -1161,12 +1204,21 @@ def _task_plan_command(state: dict[str, Any]) -> Command | None:
                 task_id=task.task_id, status="skipped", facts={},
                 source=str(dependencies[-1].get("source") or "unknown"),
             ).model_dump())
-            status = facts.get("shipping_status")
-            if status == "shipped":
+            if "refund_candidate" in facts:
+                if facts.get("refund_candidate") is False and facts.get("duplicate_payment"):
+                    reply = (
+                        "发现多笔成功支付，但金额或流水不满足安全的全额退款提案条件；"
+                        "本次没有发起退款申请，请联系人工客服核对。"
+                    )
+                elif facts.get("duplicate_payment") is False:
+                    reply = "未发现重复扣款，因此没有发起退款申请。"
+                else:
+                    reply = "暂时无法核实重复扣款资格，这次没有发起退款申请。"
+            elif facts.get("shipping_status") == "shipped":
                 reply = "查询结果显示订单已发货，因此没有发起退款申请。"
-            elif status == "delivered":
+            elif facts.get("shipping_status") == "delivered":
                 reply = "查询结果显示订单已签收，因此没有发起退款申请。"
-            elif status == "cancelled":
+            elif facts.get("shipping_status") == "cancelled":
                 reply = "查询结果显示订单已取消，因此没有发起退款申请。"
             else:
                 reply = "暂时无法确认物流状态，这次没有发起退款申请。"

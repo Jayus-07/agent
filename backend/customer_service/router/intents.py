@@ -15,6 +15,7 @@ FINE_INTENTS: dict[str, str] = {
     "t_balance_query": "余额查询",
     "t_points_query": "积分与等级查询",
     "t_coupon_query": "优惠券查询与用券校验",
+    "t_payment_issue": "支付流水与支付异常查询",
     "t_logistics": "物流查询",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
@@ -104,6 +105,12 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         intent="t_coupon_query", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_policy", "cs_faq"],
+    ),
+    # B4：支付流水由可信用户/租户查询，失败处理引用支付政策文档。
+    "t_payment_issue": IntentProfile(
+        intent="t_payment_issue", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq", "cs_policy"],
     ),
     "t_logistics": IntentProfile(
         intent="t_logistics", domain=CSDomain.TRANSACTION,

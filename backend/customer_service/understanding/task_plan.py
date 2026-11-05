@@ -3,26 +3,36 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 
 ShippingStatus = Literal[
     "not_shipped", "shipped", "delivered", "cancelled", "unknown",
 ]
 TaskCapability = Literal[
-    "query_logistics", "query_order_status", "propose_refund",
+    "query_logistics", "query_order_status", "query_payments", "propose_refund",
 ]
 TaskStatus = Literal["success", "needs_clarification", "skipped", "failed"]
 
 
 class CSTaskCondition(BaseModel):
-    """只允许基于物流状态做等值判断。"""
+    """只允许基于登记的物流/支付事实做等值判断。"""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    fact: Literal["shipping_status"]
+    fact: Literal["shipping_status", "refund_candidate"]
     operator: Literal["eq"]
-    value: ShippingStatus
+    value: ShippingStatus | StrictBool
+
+    @model_validator(mode="after")
+    def validate_fact_value(self) -> "CSTaskCondition":
+        if self.fact == "shipping_status" and not isinstance(self.value, str):
+            raise ValueError("物流条件值必须是状态文本")
+        if self.fact == "refund_candidate" and not isinstance(self.value, bool):
+            raise ValueError("退款资格条件值必须是布尔值")
+        if self.fact == "refund_candidate" and self.value is not True:
+            raise ValueError("退款提案条件只能要求退款资格为真")
+        return self
 
 
 class CSTask(BaseModel):
@@ -42,7 +52,7 @@ class CSTaskPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal[1]
-    primary_intent: Literal["t_logistics", "t_order_status"]
+    primary_intent: Literal["t_logistics", "t_order_status", "t_payment_issue"]
     tasks: list[CSTask] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
@@ -69,7 +79,9 @@ class CSTaskPlan(BaseModel):
             write = writes[0]
             read_dependencies = {
                 task.task_id for task in self.tasks
-                if task.capability in ("query_logistics", "query_order_status")
+                if task.capability in (
+                    "query_logistics", "query_order_status", "query_payments",
+                )
             }
             if not write.condition or not write.depends_on:
                 raise ValueError("退款提案必须有条件并依赖事实查询")
@@ -81,6 +93,12 @@ class CSTaskPlan(BaseModel):
                 for task in self.tasks
             ):
                 raise ValueError("物流状态条件必须依赖物流查询")
+            if write.condition.fact == "refund_candidate" and not any(
+                task.task_id in write.depends_on
+                and task.capability == "query_payments"
+                for task in self.tasks
+            ):
+                raise ValueError("重复扣款条件必须依赖支付流水查询")
         return self
 
 
@@ -95,6 +113,7 @@ class CSTaskResult(BaseModel):
     source: Literal[
         "sandbox_logistics_service", "business_logistics_service",
         "sandbox_order_service", "business_order_service",
+        "sandbox_payment_service", "business_payment_service",
         "sandbox_business_service", "unknown",
     ]
     error_type: Literal[
@@ -106,7 +125,8 @@ class CSTaskResult(BaseModel):
     def validate_facts(self) -> "CSTaskResult":
         allowed = {
             "shipping_status", "order_count", "order_id", "order_no",
-            "order_status",
+            "order_status", "success_count", "duplicate_payment",
+            "refund_candidate",
         }
         if set(self.facts) - allowed:
             raise ValueError("facts 含未登记字段")
@@ -124,6 +144,20 @@ class CSTaskResult(BaseModel):
             or self.facts["order_count"] < 0
         ):
             raise ValueError("order_count 必须为非负整数")
+        if "success_count" in self.facts and (
+            isinstance(self.facts["success_count"], bool)
+            or not isinstance(self.facts["success_count"], int)
+            or self.facts["success_count"] < 0
+        ):
+            raise ValueError("success_count 必须为非负整数")
+        for key in ("duplicate_payment", "refund_candidate"):
+            if key in self.facts and not isinstance(self.facts[key], bool):
+                raise ValueError(f"{key} 必须为布尔值")
+        if self.facts.get("refund_candidate") is True and (
+            self.facts.get("duplicate_payment") is not True
+            or self.facts.get("success_count") != 2
+        ):
+            raise ValueError("退款候选必须由两笔成功重复支付事实支撑")
         for key in ("order_id", "order_no", "order_status"):
             if key in self.facts and not isinstance(self.facts[key], str):
                 raise ValueError(f"{key} 必须为文本")
@@ -150,7 +184,7 @@ def evaluate_task_condition(
 
 
 def build_rule_task_plan(user_message: str) -> dict[str, Any] | None:
-    """识别可安全编排的显式「查物流，未发货则申请退款」请求。"""
+    """识别可安全编排的显式物流退款或重复扣款退款请求。"""
     import re
 
     text = (user_message or "").strip()
@@ -181,8 +215,32 @@ def build_rule_task_plan(user_message: str) -> dict[str, Any] | None:
         text,
     ))
     if refund_negation or refund_withdrawal or not (
-        has_logistics and has_if and has_not_shipped and explicit_refund
+        explicit_refund
     ):
+        return None
+    has_duplicate_payment = any(
+        token in text for token in (
+            "重复扣款", "重复支付", "重复付款", "扣了两次", "扣款两次",
+            "支付了两次", "付了两次", "扣了两笔", "多扣了一笔",
+        )
+    )
+    if has_duplicate_payment:
+        return {
+            "schema_version": 1,
+            "primary_intent": "t_payment_issue",
+            "tasks": [
+                {"task_id": "q1", "capability": "query_payments", "depends_on": []},
+                {
+                    "task_id": "a1", "capability": "propose_refund",
+                    "depends_on": ["q1"],
+                    "condition": {
+                        "fact": "refund_candidate", "operator": "eq",
+                        "value": True,
+                    },
+                },
+            ],
+        }
+    if not (has_logistics and has_if and has_not_shipped):
         return None
     return {
         "schema_version": 1,

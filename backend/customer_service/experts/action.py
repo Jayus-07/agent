@@ -254,7 +254,7 @@ def _execute_conditional_refund_task(
         evaluate_task_condition,
     )
 
-    safe_reply = "订单和物流信息尚未满足退款条件，这次没有发起退款申请。"
+    safe_reply = "支付或订单事实尚未满足退款条件，这次没有发起退款申请。"
     current = state.get("current_task") or {}
     task_id = str(current.get("task_id") or "")
     query_result = None
@@ -265,6 +265,7 @@ def _execute_conditional_refund_task(
         task_facts = {
             key: facts[key] for key in (
                 "shipping_status", "order_count", "order_id", "order_no",
+                "success_count", "duplicate_payment", "refund_candidate",
             ) if key in facts
         }
         return CSTaskResult(
@@ -305,12 +306,13 @@ def _execute_conditional_refund_task(
                 item for item in dependencies
                 if item.source in (
                     "sandbox_logistics_service", "business_logistics_service",
+                    "sandbox_payment_service", "business_payment_service",
                 )
             ),
             None,
         )
         if query_result is None:
-            raise ValueError("authoritative logistics facts are missing")
+            raise ValueError("authoritative order/payment facts are missing")
         facts = {}
         for item in dependencies:
             facts.update(item.facts)
@@ -333,6 +335,12 @@ def _execute_conditional_refund_task(
         {**(state.get("cs_route") or {}), "intent": "as_refund"},
         str(facts["order_id"]),
     )
+    if query_result.source in (
+        "sandbox_payment_service", "business_payment_service",
+    ):
+        trusted_metadata = dict(trusted_route.get("metadata") or {})
+        trusted_metadata["reason"] = "重复扣款"
+        trusted_route = {**trusted_route, "metadata": trusted_metadata}
     try:
         proposal_result = _build_new_proposal(
             user_id, "as_refund", trusted_route, session_id, store,

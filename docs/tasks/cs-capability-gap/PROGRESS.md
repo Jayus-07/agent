@@ -137,3 +137,40 @@
 ## 后续批次
 
 B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
+
+## B4：支付流水查询 + 重复扣款退款提案（实施中，2026-11-05）
+
+**现场**：worktree `D:/Program Files/workplace/agent-cs-fix-entry`，分支 `feat/cs-payment-query`，HEAD `7b0bfc5d022fe030e072a04db7162551655bf17a`；代码、测试、文档均未提交。当前 `origin/main=c877de1`，较 HEAD 多 1 个旅游 UI 提交；本次未 rebase/reset，保留在途改动。共享栈从本 worktree 重建；隔离 PG `agent-csfix-b0-pg:15434` 保留。
+
+**实现范围**：新增 `payment_service.py` 双模式查询；迁移 `134_cs_payment.sql` 和 init_db/path_filter 登记；mock 三态支付流水；新增 `t_payment_issue`、支付词表及 facts 白名单/金额守卫；有限 TaskPlan 先查流水，满足精确退款候选条件后调用既有 refund request proposal/confirmation 流；支付回复固定使用可信模板；客服知识页 GAP_LIST、customer-service 文档、mock contract、rag_smoke 定向清单同步。支付记录只读；任何条件不满足时不创建提案；提案仍须用户确认后才进入既有人工审核，不存在自动退款通道。
+
+**代码与测试证据**：
+
+1. T2：支付、任务计划、CSRouter、FineRouter、composer、vocab 六套定向测试带显式 sandbox DSN 最终 **141 passed，零 skip**（30.31s，包含 134 迁移幂等测试）。此前未传 DSN 的合并运行是 140 passed/1 skipped；随后已补跑并在全量定向集合中消除了该 skip。
+2. Python `py_compile` 与 `git diff --check` 通过。此前客服全目录基线 **1596 passed, 2 skipped**（8m44s；发生在本节最后两处细路由/模板改动之前，不能替代最新定向结果）。阴性验证已确认移除支付 facts 投影器会令测试失败、移除支付路由细词会令路由测试失败。
+3. `verify_migration_state.py --image agent-db-migrate` 输出 `MIGRATION_STATE_OK`：仓库/镜像 139 个已登记迁移一致，权威数据库全部已应用；B4 134 已应用。隔离 PG 的 134 重放和支付种子测试在定向用例中通过。
+4. 后端 `devctl.bat rebuild /y` 成功，`frontend-cs` 从本 worktree 使用 compose overlay 单独重建；8000/8081/3300/8090 均 HTTP 200，devctl 对 3100/3200 探针也通过，所有代码容器 healthy。9080 根路径返回 404（网关未暴露根路由，非健康判据）；demo 登录由真机脚本 HTTP 200 实证。
+
+**真机验收**（脚本 `D:/tmp/cs_b4_acc.py`，证据 `D:/tmp/cs-b4-acc-result.txt`）：
+
+1. q1 单笔成功流水：PASS，真实订单号/金额/渠道/状态。
+2. q2 失败流水：PASS，明确包含“可稍后重试支付”。
+3. q3 重复扣款：PASS，核验到两笔同额成功记录，返回既有待确认退款卡并说明确认后走人工审核；脚本未发送“确认”，没有提交退款申请。
+4. q4「支付失败怎么办？」首轮 **FAIL**：宿主 GPU 服务 8088 未运行时 RAG 不可达；恢复后 Supervisor 同轮调用 KnowledgeExpert 两次，第二次响应因 ClaimVerifier `citation_not_found missing=['E5']` 被拒绝，覆盖第一次有效答复。该失败最初误判为单纯检索完整性问题；根因及后续修复见本节「q4 修复与真机复验」。ClaimVerifier 未被绕过或修改。
+5. q4 隔离复测脚本/结果：`D:/tmp/cs_b4_q4_retry.py`、`D:/tmp/cs-b4-q4-retry.txt`；RAG 和 app 详细日志仍可按 session `b4-acc-q4-retry` 查询。
+
+**状态与下一步**：B4 q1-q4 已在当前 worktree 完成定向测试与真机验收，状态为 **PASS（实现/验收）**；代码、测试和文档仍未提交、未建 PR、未合并。下一步展示 Diff 与验证结果，等待用户确认后再提交/建 PR。`b4-acc-q3` 保留在待确认状态；不要向该 session 发送确认。
+
+### q4 修复与真机复验（2026-11-06）
+
+**根因**：`支付失败怎么办？` 路由为 KNOWLEDGE，confidence=0.63，高于 Supervisor 0.60 的路由门槛。第一次 KnowledgeExpert 已返回 ClaimVerifier 通过的有效答复；Supervisor v2 的高置信 L5（v1 默认路由同理）没有检查当前轮已有成功知识答复，因而再次调用 KnowledgeExpert。第二次检索/生成结果非确定性地引用不存在的 `[E5]`，ClaimVerifier 正确 fail-closed，Reporter 最终使用第二次拒答覆盖第一次答复。问题在 Supervisor 重复派发，不在 ClaimVerifier。
+
+**修复**：在 v1/v2 两套 Supervisor 中，handoff、pending、风险、循环和分诊门之后，普通路由之前检查最近 Expert 记录与 `last_expert_result`。两者均为 KnowledgeExpert `success` 且答复非空时直接 `FINISH` 交给 Reporter，避免覆盖；失败/空答复仍允许再次尝试，带 `task_plan` 状态的编排不受该 guard 影响。未修改 ClaimVerifier、RAG citation 逻辑或退款确认流。
+
+**验证**：
+
+1. TDD：新增回归先在 v1/v2 均失败（两次都再次路由到 `cs_knowledge_expert`）；修复后定向集合 **81 passed，0 skipped**，包含 `test_payment_flow.py`、`test_supervisor_v2_priority.py`、`test_cs_supervisor.py`，显式使用隔离 PG 15434。用例覆盖成功知识答复收尾、失败/空答复仍可重试、pending 优先。
+2. `py_compile` 通过；`git diff --check` 通过。使用当前 worktree 执行 `devctl.bat rebuild /y` 成功；app、business-mock、RAG、workers、frontend/admin 健康。复验探针：`:8000/health`、`:8081/health`、`:8090/readyz`、`:3100/login`、`:3200/login`、`:3300/login`、宿主 `:8088/healthz` 全部 HTTP 200。
+3. 真机 q4 脚本 `D:/tmp/cs_b4_q4_supervisorfix.py`，结果 `D:/tmp/cs-b4-q4-supervisorfix.txt`，全新 session `b4-acc-q4-supervisorfix-20261106`：`POST :9080/api/chat/customer-service` HTTP 200；答复含「重试」「支付方式」及引用 `[E1] [E2] [E5]`；RAG 日志确认 ClaimVerifier **3 claims 全部通过**；app 日志仅一次 `CS Expert start expert=knowledge`，其后 Supervisor 以「知识答复已成功生成，不重复调用 KnowledgeExpert」FINISH。未执行任何退款写操作或确认动作。
+
+**收尾**：q1-q4 当前 worktree 验收通过；保持未提交状态，等待用户查看 Diff 并明确确认提交/PR。此前 `origin/main=c877de1` 比当前 B4 HEAD `7b0bfc5` 多 1 个旅游 UI 提交，尚未同步；提交前需再核对分支漂移及 PR 门禁。`b4-acc-q3` 仍待确认，禁止发送确认。
