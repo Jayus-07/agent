@@ -1,8 +1,10 @@
 # PROGRESS: 评测闭环收口（eval-closure）
 
-- 状态：**IN_PROGRESS（收尾项）**；原计划 E′、D1、F、D3、D4a 已合并。PR #333 代码修复提交 `6acaea5` 已推送；Review P2 已回复并解决。CI 在代码 HEAD `e7fcbc8` 上通过（RAG 真实 API job 按策略 skipped）；当前代码尚未完成最新工作树重建，真实浏览器写操作仍 **UNVERIFIED**。
+- 状态：**COMPLETE（范围内实现与收尾验收完成）**；E′、D1、F、D3、D4a 已合并。PR #333
+  已合并至 `main`（当前 `a479949`）；最终 HEAD `79aec108` 的必需 CI 成功，真实 API job 按策略 skipped。
+  2026-11-05 已完成合入代码重建、全栈健康确认及真实浏览器 + APISIX JWT 拒绝写入验收。
 - 本次验收记录：`agent-wt-eval-f-acceptance` / `codex/eval-closure-f-api-acceptance`（从 `origin/main` 创建；原 F/D3/D4a worktree 保留）。
-- 当前主线核对基线：2026-11-05 `origin/main=040453a`（包含 PR #332）；F API 验收 worktree
+- 当前主线核对基线：2026-11-05 `origin/main=a479949`（包含 PR #333）；F API 验收 worktree
   起始基线为 `8798dca`。任务沿革基线见 TASK.md。
 
 ## 并行协调记录
@@ -26,13 +28,14 @@
 
 - 共享业务库保持只读；隔离 API 验收数据写入独立临时 Postgres/Redis 容器和容器内临时 JSONL，验收后容器、匿名卷及主机临时脚本/环境文件均已删除。
 - 隔离服务使用测试 API key 和 `X-Auth-Type=jwt`、`X-User-Roles=super_admin`、租户等网关契约头，实际经过 API key 中间件、路由依赖、角色检查、数据库事务及幂等存储；该侧车调用没有经过 APISIX，也没有验证真实 JWT 签名。
-- 组件测试与 `tsc` 已按 F 批记录通过；本次没有在浏览器中点击管理端写操作。故“路由写操作闭环”已验证；APISIX JWT + 浏览器的联合链路未声称通过。
+- 组件测试与 `tsc` 按 F 批记录通过；PR #328/#331 时的验收没有浏览器写操作。2026-11-05 已另行完成真实浏览器 + APISIX JWT 的拒绝操作和隔离库读回，详见最终收尾记录。
+- 最终收尾已补做真实浏览器 + 隔离 APISIX JWT 验收：候选 `e2e-closure-f2-20261105` 经管理端拒绝后，APISIX access log 记录 `auth_type=jwt`、HTTP 200，`agent_business.public.feedback_candidates` 读回 `status=rejected`。该操作只写隔离库。
 
 ## 下一步
 
-- 本任务计划中的 E′、D1、F、D3、D4a 均无剩余实现批次。
+- 本任务计划中的 E′、D1、F、D3、D4a 及浏览器收尾验收均已完成，无剩余实现批次。
 - ECS 三项与 pillow/filelock/dnspython/unstructured 继续按既有裁决保持不动。
-- 在线采样长期启用前，仍须单独裁决并补齐后台预算预占/结算链路（见 E′ 风险记录）。
+- 在线采样仍默认关闭；PR #333 已补后台预算上下文并有定向测试/CI 证据，但修复后未再发真实模型请求验证预算账本。长期启用前应单独核实真实 reserve/settle 账本行为。
 
 ## 2026-11-05 接手批续工（F / D3）
 
@@ -77,7 +80,12 @@
 - 改动：`backend/evaluation/online_sampler.py` 在后台 judge 调用外层绑定评测身份及 `scoped_request_budget`，复用既有预算预占/实际用量结算路径；enforce 模式预算绑定失败时阻断模型调用。`backend/tests/evaluation/test_online_sampler.py` 覆盖身份/租户/request_id、reserve/settle 和失败阻断；测试负反馈读取已 mock，不触碰共享业务库。
 - 初始 PR 提交 `533e02c` 的 sampler 定向测试 **19 passed**。Review 指出同日重跑可能复用 `budget.py` 的旧 RequestBudget 状态；后续提交 `6acaea5` 保留按天幂等的持久化 `run_id`，改为每次执行生成独立预算 `request_id`，并增加同日重跑回归断言。
 - 后续修复验证：回归用例 **1 passed（43.77s，退出码 0）**；`ruff check`、`py_compile`、`git diff --check` 均通过。该 pytest 会话结束时的全局迁移残留守卫触发 `TaskService.ensure_schema`，连接池 30 秒未取得连接，SQL 未执行；本次修复后未重跑整个 sampler 文件。
-- Docker Desktop 在机器重启后未能启动 Engine，界面报本地 `dockerInference` IPC 路径错误。此前 `devctl.bat rebuild /y` 和健康检查针对修复前提交，不能代表当前 HEAD；本次代码的 rebuild/健康检查 **UNVERIFIED**。机器可用内存读数约 6.3–6.5 GB（总 15.8 GB），没有证据确认关机由内存导致；未运行并发或压力测试。
-- PR #333 在 HEAD `e7fcbc8` 的 CI 结果：secret scan、Evaluation V2 Contract、RAG PR Smoke 均 success；RAG PR Smoke preflight 与 8 案例免费回归 success，8 案例真实 API job 按 workflow policy skipped。Review P2 已回复并解决；没有声称旧 Review 对新 HEAD 做过额外审查。
+- 初次续工时 Docker Desktop 29.2.1 Engine 启动报 `dockerInference` IPC 路径错误；当时 PR #333 代码 rebuild/健康检查未验证。随后 Engine 已恢复，并于 2026-11-05 从合并代码工作树完成 `devctl.bat rebuild /y` 与全栈健康检查；内存实测见本节收尾记录。机器重启是否由内存导致仍无证据，未运行压力测试。
+- PR #333 在最终 HEAD `79aec108` 的 CI 结果：secret scan、Evaluation V2 Contract、RAG PR Smoke 均 success；RAG PR Smoke preflight 与 8 案例免费回归 success，真实 API job 按 workflow policy skipped。Review P2 已回复并解决；没有声称旧 Review 对新 HEAD 做过额外审查。
 - 无真实模型调用，`EVAL_ONLINE_SAMPLER_ENABLED` 仍关闭；真实预算存储结算尚未实测。
-- F 浏览器验收曾通过真实管理端登录并经隔离 APISIX 验证应用签发的 HS512 JWT、读取候选列表；拒绝按钮写入及隔离数据库读回尚未完成。Docker Engine 恢复后只需重新启动隔离验收栈完成这一步；当前仍标记 **UNVERIFIED**。
+- PR #333 已合并，当前 `main` / `origin/main=a479949`。Docker Desktop 29.2.1 / Engine 已恢复；从 `agent-wt-eval-sampler-budget`（HEAD `79aec108`）执行 `devctl.bat rebuild /y` 和 `devctl.bat start all /y` 均退出 0。
+- API、APISIX、business-mock、三个前端入口均 HTTP 200；Beat、report-worker、agent-worker、Postgres、Redis、Redis broker 健康。重建后 Beat 实际注册 `evaluation.online_sampling`，每天 09:30 Asia/Shanghai、queue=`report`；report-worker 注册清单含该任务。
+- 浏览器在隔离管理端拒绝候选 `e2e-closure-f2-20261105`；APISIX access log 记录 `POST /feedback/candidates/e2e-closure-f2-20261105/reject`、`auth_type=jwt`、HTTP 200，trace id `2026-11-05 05:04:51-58-a140`；隔离 `agent_business.public.feedback_candidates` 读回 `rejected`、reviewer=`user:1`。测试 fixture 原密码哈希已恢复，本次 session 已撤销，临时文件/剪贴板已清理；隔离容器已停止但未删除。
+- Docker Desktop 曾报 `dockerInference` IPC 路径错误；当前 Engine 可用。此前通过移动锁定的旧 IPC 目录到带时间戳备份并重启 Desktop 恢复，未做 factory reset、未删除 Docker volumes。`Not a git repo, skipping` 来自 2026-10-24 安全审计历史记录，与本次 Docker 启动无关。
+- `EVAL_ONLINE_SAMPLER_ENABLED` 未设置在 Beat/report-worker 环境中，默认 false；本轮没有触发采样任务或新模型调用。整栈运行后空闲内存约 1.24 GB / 15.84 GB，重建期间最低约 1.68 GB，未观察到 OOM。
+- 剩余运行风险：在线采样继续默认关闭；未来若决定启用，先单独核实 PR #333 修复后的真实预算 reserve/settle 账本，再开启定时触发。

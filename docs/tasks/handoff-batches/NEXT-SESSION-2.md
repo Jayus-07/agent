@@ -2,8 +2,8 @@
 
 > 取代 `NEXT-SESSION.md`（其环境、方法教训和挂起裁决仍有效）。截至本次核对，
 > E′、D1、F、D3、D4a 均已完成并合入 main；没有剩余的计划内实现批次。
-> PR #333 的预算上下文修复提交 `6acaea5` 已推送并解决 Review P2；代码 HEAD `e7fcbc8` 的免费必需 CI 已通过，真实 API job 按策略 skipped。最新代码的本机 rebuild 因 Docker Desktop 启动错误尚未验证。
-> F 的真实浏览器 + APISIX JWT 写操作与隔离 DB 读回仍未完成；Sampler 默认关闭。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
+> PR #333 已合并，当前 `main`/`origin/main=a479949`；最终 HEAD `79aec108` 的必需 CI 成功，真实 API job 按策略 skipped。合入代码的本机 rebuild、Beat 注册和全栈健康已核验。
+> F 的真实浏览器 + APISIX JWT 拒绝写入与隔离 DB 读回已于 2026-11-05 完成；Sampler 仍默认关闭，修复后的真实预算账本请求未再触发。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
 > **用户已裁决（继承）：ECS 三项不处理；pillow/filelock/dnspython/unstructured
 > 因 py3.11 不可达保持挂起勿翻案。**
 
@@ -65,13 +65,13 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 |---|---|---|---|
 | E′ | 后端门禁指标、在线采样器和 Beat 调度 | **已完成并合并**（PR #326；实机 `trigger=online` 落库后开关还原） | 无 |
 | D1 | dev-only 124 包语义复检 | **已完成**（PR #327；文档复检，未改 lock） | 无 |
-| F | 管理端三项：RunsTab、DatasetsTab、CompareTab | **已完成并合并**（PR #328；隔离写操作验收记录 PR #331） | 无；浏览器 + APISIX JWT 联合链路仍 UNVERIFIED |
+| F | 管理端三项：RunsTab、DatasetsTab、CompareTab | **已完成并合并**（PR #328；隔离写操作验收 PR #331；浏览器 + APISIX JWT 另于 2026-11-05 实测） | 无 |
 | D3 | LangChain/LangGraph 依赖族升级与复核 | **已完成**（版本已由供应链 PR #314 合入；PR #329 记录核验，无重复改 lock） | 无 |
 | D4a | cryptography / datasets / oauthlib 跨大版本升级与复核 | **已完成**（版本已由供应链 PR #314 合入；PR #330 含测试兼容修正，无重复改 lock） | 无 |
-| 收尾项 | F 浏览器 + APISIX JWT 实际写入验收（如需端到端验收） | **UNVERIFIED**；隔离 API 写操作已经通过，不等价于真实 JWT 验签和浏览器操作 | 安全的隔离验收环境与 super_admin 登录 |
+| 收尾项 | F 浏览器 + APISIX JWT 实际写入验收 | **已完成**；真实 Edge 管理端拒绝候选，APISIX JWT access log HTTP 200，隔离业务库读回 `rejected` | 无 |
 | 风险项 | 在线采样长期启用前补齐后台预算预占/结算 | **未关闭**；当前 `EVAL_ONLINE_SAMPLER_ENABLED` 默认关闭 | 单独裁决后台任务预算方案 |
 
-计划内批次已完成；表中的收尾项和风险项是剩余验收/运行边界，不代表对应验证已通过。
+计划内批次与浏览器收尾已完成；仅保留在线采样长期启用前的真实预算账本核验风险。
 
 ## 三、E' 收尾与实机验收（已完成）
 
@@ -88,7 +88,7 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
   judge_skipped=0；查询 `ai.eval_run_records` 确认 `trigger=online`、
   `triggered_by=celery_beat`，样本行 `status=pass`。临时环境变量随子进程结束还原，
   worker/beat 与主 `.env` 均未留 `EVAL_ONLINE_SAMPLER_ENABLED`，默认仍关闭。
-- **未关闭风险**：实机 judge 调用出现 `[Budget] reserve 旁路` 日志（后台任务无请求级预算上下文）。
+- 原实机触发曾出现 `[Budget] reserve 旁路`。PR #333 已在后台 judge 调用绑定 `scoped_request_budget`，并有定向测试与 CI 证据；修复后未进行真实模型请求验证预算 reserve/settle 账本。采样保持默认关闭，未来启用前须单独完成真实账本核验。
   本次只验收一次性触发和落库；长期启用前须单独裁决并补齐后台预算预占/结算链路。
 
 ## 四、D1 步骤（E' 合并后可立即做，文档批）
@@ -114,12 +114,11 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 - PR [#331](https://github.com/Jayus-07/agent/pull/331) 合入隔离 API 写操作验收：F1 审批
   GET 200 → POST 201 → 读回 200；F2 approve/reject/promote 均 200 且读回状态正确；
   F3 人工评审 GET 200 → POST 201 → 读回 200。隔离数据库和临时 JSONL 已清理。
-- **未验收**：上述 F 写操作使用测试 API key 和模拟网关注入的 super_admin 身份头，
-  未经过 APISIX JWT 验签，也未通过真实管理端浏览器点击；不能将联合链路标记为通过。
+- PR #331 中记录的写操作仍是 API/测试密钥路径，单独看它们不证明 APISIX JWT 或浏览器行为；后续真实联合链路结果见本文第十节，已补齐此前缺口。
 
 ## 六、工作树
 
-- 本次核对时主仓 `main` 与 `origin/main` 均为 `dc4a181`（PR #331），主仓仅有其他会话
+- 本次收尾时主仓 `main` 与 `origin/main` 均为 `a479949`（含 PR #333），主仓仅有其他会话
   的未跟踪目录；均未触碰：`docs/tasks/.mimosa/`、`docs/tasks/trace-probe-isolation/`、
   `docs/tasks/trace-query-pushdown/`、`docs/tasks/trace-ux-pack/`、`frontend/src/.mimosa/`。
 - 已合并批次的工作树仍保留且核对时干净：`agent-wt-audit-r1`（PR #328 分支，HEAD
@@ -137,24 +136,33 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
   定向测试分别见 `docs/tasks/eval-closure/PROGRESS.md`；D3 **41 passed**，D4a **76 passed**。
 - E 批验收（TASK.md）：B1 三态裁决+缺数据 fail-closed（Review 修复后采样/门禁与
   rag_smoke workflow 契约 48 passed）；B2/B3 beat 已实机触发且 `trigger='online'` 落库；
-  rebuild/health/beat 注册已核验。长期启用前后台预算链路风险仍需裁决，详见第三节。
+  rebuild/health/beat 注册已核验。PR #333 已补后台预算上下文并通过定向测试/CI；修复后的真实 reserve/settle 账本未实测，采样保持默认关闭，详见第三节。
 - F 批验收：三 tab 各自 API 实际调用成功（super_admin gate 审批闭环、候选
   approve/reject/promote、人工评审提交）+ tsc/组件测试绿；真实浏览器 + APISIX JWT
-  联合写入链路仍 **UNVERIFIED**，详见第五节及 `eval-closure/PROGRESS.md`。
+  联合拒绝写入及隔离库读回已通过，详见第五、十节及 `eval-closure/PROGRESS.md`。
 - 未实际执行的验证不得报告为通过。
 
 ## 八、下一会话启动提示词（复制即用）
 
-> eval-closure 与本计划的 E′、D1、F、D3、D4a 均已完成并合入，不要重复实施。若继续做
-> 端到端验收，只在隔离数据上验证真实浏览器 + APISIX JWT 的 F 写操作链路，并如实记录结果；
-> 在线采样保持默认关闭，长期启用前先解决后台预算预占/结算旁路。ECS 三项不处理；
+> eval-closure 与本计划的 E′、D1、F、D3、D4a 和 F 浏览器/APISIX 收尾均已完成，不要重复实施。
+> 在线采样保持默认关闭；未来如需启用，先单独核实 PR #333 修复后的真实预算 reserve/settle 账本，再改开关。
+> ECS 三项不处理；
 > pillow/filelock/dnspython/unstructured 继续挂起，勿翻案。新代码任务仍需从最新 main
 > 开独立 worktree/PR，推送使用 HTTPS_PROXY=http://127.0.0.1:7897，未执行的验证不得报通过。
 
 ## 九、2026-11-05 续工状态
 
 - 在线采样预算修复：`agent-wt-eval-sampler-budget` / `codex/eval-online-sampler-budget`。PR #333 初始提交 `533e02c` 的 19 个 sampler 定向测试通过；Codex Review P2 指出日固定 `run_id` 不应复用作预算 request ID。后续提交 `6acaea5` 已分离每次执行的预算 request ID；新增回归用例 **1 passed（43.77s，退出码 0）**，ruff check、py_compile、`git diff --check` 通过。修复后未重跑整个测试文件；pytest 会话结束时迁移残留守卫未能取得 DB 连接，SQL 未执行。
-- PR #333 的代码 HEAD `e7fcbc8`：secret scan、Evaluation V2 Contract、RAG PR Smoke 成功；RAG 真实 API job 按 workflow 策略 skipped。P2 Review 线程已回复并解决；没有将旧 Review 收据描述为新 HEAD 的 Review。在线采样开关仍关闭，未发真实模型调用。
-- Docker Desktop 重启后报 `dockerInference` IPC 路径错误，Engine 当前不可用；可用内存约 6.3 GB / 15.8 GB，没有证据把关机归因于内存。不要做工厂重置或并发压力测试。此前 rebuild/健康证据针对修复前 HEAD；最新代码 rebuild/健康检查 **UNVERIFIED/BLOCKED**。恢复 Docker 后从本工作树重建并检查健康状态，完成后再合并 PR #333。
-- F 联合验收已通过真实浏览器登录、隔离 APISIX HS512 JWT 验签和候选列表读取；尚未点击拒绝并验证 DB 状态读回。Docker 恢复后，只启动隔离 Postgres/Redis、APISIX、API、管理端，完成该次写操作验收；不操作共享数据库。
+- PR #333 最终 HEAD `79aec108`：secret scan、Evaluation V2 Contract、RAG PR Smoke 成功；真实 API job 按 workflow 策略 skipped。PR 已合并，main=`a479949`；Sampler 保持默认关闭。
+- Docker Engine 已恢复；从 `agent-wt-eval-sampler-budget` 执行 `devctl.bat rebuild /y`、`devctl.bat start all /y` 均退出 0。API/APISIX/business-mock 与三个前端入口 HTTP 200；Beat、report-worker、agent-worker、Postgres、Redis、Redis broker 健康。Beat 实际注册 `evaluation.online_sampling`、09:30 Asia/Shanghai、queue=`report`；环境未设置采样开关。本轮没有真实模型调用。整栈运行后空闲内存约 1.24 GB / 15.84 GB。
+- F 联合验收完成：真实 Edge 管理端通过隔离 APISIX 提交 `e2e-closure-f2-20261105` 拒绝请求；APISIX 记录 `auth_type=jwt`、POST HTTP 200，隔离 `agent_business.public.feedback_candidates` 读回 `rejected`。隔离 fixture 原密码哈希已恢复、本次 session 已撤销，临时文件和剪贴板已清理；五个隔离容器已停止保留。
 - 其他原批次已完成。ECS 三项不处理；pillow/filelock/dnspython/unstructured 继续挂起勿翻案。
+
+## 十、2026-11-05 最终验收与 Docker 恢复
+
+- Docker Desktop `29.2.1` 当前 Engine 可用。此前将锁定的旧 `dockerInference` IPC 目录移动到带时间戳备份后重启 Desktop，未做 factory reset、未删卷。`Not a git repo, skipping` 是 2026-10-24 安全审计中的历史记录，与 Docker 启动无关。
+- 浏览器使用隔离管理端 `127.0.0.1:13201`，经隔离 APISIX `127.0.0.1:19081` 拒绝唯一 pending fixture `e2e-closure-f2-20261105`。网关 access log：`POST /feedback/candidates/e2e-closure-f2-20261105/reject`，`auth_type=jwt`、HTTP 200、user_id=`1`、trace_id=`2026-11-05 05:04:51-58-a140`；`agent_business.public.feedback_candidates` 读回 `status=rejected`、reviewer=`user:1`。没有写共享业务库。
+- 为完成本机登录，临时更改隔离用户 `evale2e` 的密码哈希；验收后恢复原哈希、撤销本次 session、删除临时备份文件并清空剪贴板。隔离 Postgres/Redis/API/APISIX/admin 容器停止保留，未删除容器或卷。
+- 从已合并代码工作树 `agent-wt-eval-sampler-budget`（HEAD `79aec108`）运行 `devctl.bat rebuild /y` 与 `devctl.bat start all /y` 均退出 0。`8000/health`、`9080/health`、`8081/health`、`3100/3200/3300/login` 全部 HTTP 200；app、workers、beat、Postgres、Redis、Redis broker、business-mock 和前端容器健康。此前 Redis broker 保持 stopped，故单独启动既有 `agent-redis-broker` 后 report-worker / agent-worker 恢复 healthy；未改其配置。
+- Beat 容器实际注册 `evaluation.online_sampling`，schedule=`09:30` Asia/Shanghai、queue=`report`；report-worker 注册清单含该任务。`EVAL_ONLINE_SAMPLER_ENABLED` 未出现在 Beat/report-worker 环境中，默认 false。本轮未触发采样任务、未发真实模型请求。最终主机空闲内存约 1.24 GB / 15.84 GB；重建期间观测最低约 1.68 GB，未发生 OOM。
+- **剩余运行风险**：PR #333 已补后台预算上下文，并有定向回归与 CI 证据；修复后未再使用真实模型请求验证预算 reserve/settle 账本。在线采样继续关闭，未来启用前单独完成该验证。
