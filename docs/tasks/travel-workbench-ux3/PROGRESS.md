@@ -1,6 +1,6 @@
 # PROGRESS: travel-workbench-ux3
 
-状态：**已获用户确认，准备提交并创建 PR**（实现、构建和定向测试完成；真实 AI 回复与保存写入尚未在浏览器端到端触发）
+状态：**PR #335 已创建，等待 CI/Review；未合并**（实现、构建和定向测试完成；真实 AI 回复与保存写入尚未在浏览器端到端触发）
 
 ## 会话 1（2026-11-05）已完成
 
@@ -54,11 +54,12 @@
 - 分支已 rebase 到 `origin/main` `7b0bfc5`。唯一冲突在助手消息渲染：保留主线 `TravelMessageMarkdown` 紧凑排版，并将打字机渐显接入该渲染器；工作台列宽更新一并保留。
 - rebase 后定向 Vitest 再次 **109/109 通过**；Docker 生产构建通过（Next 类型检查、19 个静态页面生成成功）。独立容器 `travel-workbench-ux3-web-pr` 在 `127.0.0.1:3114` 运行，`/login` 返回 HTTP 200；没有重启主栈或写入共享数据库。
 - 代码审查仍未发现未解决的阻塞问题。全项目独立 `tsc` 的 17 个基线错误分布在未修改文件；Next 构建的类型检查通过。
+- 实现提交 `bca8b259469a8d25a63a5dea6461553a67f70468`；已推送 `feat/travel-v2-ux3` 并创建 [PR #335](https://github.com/Jayus-07/agent/pull/335) 到 `main`。GitHub 判定 `MERGEABLE`；RAG Smoke 通过、实际付费评测按规则跳过；secret scan 在创建时仍运行中。未执行合并。
 
 ## 未完成
 
 1. 若要求现场端到端验证打字机与 SAVED toast，需提供隔离后端/数据库或允许建立仅拦截写请求的测试代理；当前只读浏览器检查未触发这两条写链路。
-2. 已获用户确认提交任务分支并创建 PR；本次不自动合并 main，合并待 PR 检查与用户后续指示。
+2. [PR #335](https://github.com/Jayus-07/agent/pull/335) 已创建；等待 CI 与 Review 完成。合并 main 待 PR 门禁和用户后续指示。
 3. 本次为前端组件与 toast 展示变化，没有新增 Agent/Tool 链路环节；PR 中说明无需更新 rag_smoke 清单。
 
 ## 阻塞
