@@ -159,7 +159,7 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 4. q4「支付失败怎么办？」首轮 **FAIL**：宿主 GPU 服务 8088 未运行时 RAG 不可达；恢复后 Supervisor 同轮调用 KnowledgeExpert 两次，第二次响应因 ClaimVerifier `citation_not_found missing=['E5']` 被拒绝，覆盖第一次有效答复。该失败最初误判为单纯检索完整性问题；根因及后续修复见本节「q4 修复与真机复验」。ClaimVerifier 未被绕过或修改。
 5. q4 隔离复测脚本/结果：`D:/tmp/cs_b4_q4_retry.py`、`D:/tmp/cs-b4-q4-retry.txt`；RAG 和 app 详细日志仍可按 session `b4-acc-q4-retry` 查询。
 
-**状态与下一步**：B4 q1-q4 真机验收通过，PR #336 已开放且未合并；q3 session `b4-acc-q3` 保留待确认状态，不要发送确认。最新 CI 首轮失败根因及修复证据见下；修复已提交，待推送后重跑 CI。自动退款不属于当前 B4，仍需单独分析与立项。
+**状态与下一步**：B4 q1-q4 真机验收通过，PR #336 已开放且未合并；q3 session `b4-acc-q3` 保留待确认状态，不要发送确认。134 外键修复已推送，CI 全新业务库初始化通过；随后有 1 条测试因未钉 gateway mode 而失败，本地已固定该单测为 HTTP 模式，待验证并更新 PR。自动退款不属于当前 B4，仍需单独分析与立项。
 
 ### q4 修复与真机复验（2026-11-06）
 
@@ -181,4 +181,4 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 
 **修复**：134 在写 B4 三态订单前幂等补齐无个人信息的客服演示客户 872；只向前校准客户 ID 序列，避免后续默认 INSERT 撞主键。sandbox 验收增加客户存在、序列不低于 872 的断言。
 
-**验证**：新建隔离库运行 `scripts/init_db.py` 时迁移 134 显示 applied；查询确认客户 872 存在、序列值 872、PAY-872 种子 4 条。对应 sandbox 用例 **1 passed**。完整 `init_db.py` 在该自建容器因 vector 扩展、只读角色和既有 memory schema 前置条件退出 1，不记为全初始化 PASS。随后从本 worktree 执行 `devctl.bat rebuild /y` 退出 0，后端、business-mock、前端与管理端探针均 200。PR 最新 CI 仍待推送修复后重跑。
+**验证**：新建隔离库运行 `scripts/init_db.py` 时迁移 134 显示 applied；查询确认客户 872 存在、序列值 872、PAY-872 种子 4 条。对应 sandbox 用例 **1 passed**。完整本地 `init_db.py` 在自建容器因 vector 扩展、只读角色和既有 memory schema 前置条件退出 1，不记为全初始化 PASS。随后从本 worktree 执行 `devctl.bat rebuild /y` 退出 0，后端、business-mock、前端与管理端探针均 200。修复推送后的 CI 已通过初始化步骤，但目标回归 **1006 passed, 2 skipped, 1 failed**：失败用例源于断言 HTTP 来源但依赖 CI 默认 sandbox 配置；已补显式模式设置，待验证并重跑。

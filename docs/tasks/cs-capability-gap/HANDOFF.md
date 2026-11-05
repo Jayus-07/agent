@@ -16,7 +16,7 @@
 | A7 坐席知识检索接 RAG 通道 | ✅ | #317 → ce902ea |
 | **B2 积分/等级查询（查询型样板）** | ✅ 本会话 | #320 → d1d38df（+docs #321 → da13495） |
 | **B3 优惠券查询/用券校验** | ✅ 本会话 | #324 → 55e0fcb |
-| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放 | q1-q4 真机 PASS；CI 的 134 演示客户外键问题已本地修复，待推送并重跑 CI |
+| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放 | q1-q4 真机 PASS；134 外键修复已推送且 CI 初始化通过；最新回归发现测试未钉 gateway mode，修复待推送 |
 | B5 催办 / B6 价保 / B7 改址 / B8 开票 | ⬜ | B4 定型后 B5-B7 可并行，B8 随时可并行 |
 | B9 多模态 | 仅立项文档，不实施 | 并入最后收尾 PR |
 
@@ -88,7 +88,7 @@
 
 ## 六、B4 实施状态与剩余事项（支付流水查询 + 重复扣款转退款）
 
-**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 已开放。CI 首轮发现干净业务库未含 customer 872，134 在外键约束下写订单失败；修复已提交在 PR 分支，并在新建隔离库验证 134 成功应用、客户 872 在位、序列值 872、4 条流水种子在位；对应 sandbox 用例 1 passed。该隔离容器的完整 `init_db` 还受 vector 扩展、只读角色和其它 memory schema 前置条件影响，不能记为全初始化通过。下一步推送修复并核对 PR CI 全绿。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
+**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 已开放。CI 首轮发现干净业务库缺 customer 872，134 外键修复已推送；最新 CI 已通过数据库初始化，但 1006 个回归中有 1 个失败，原因是测试固定断言 HTTP 来源却未显式指定 gateway mode。现已将该测试改为固定 HTTP 模式，待本地验证、推送与 CI 复跑。此前本地隔离库已验证 134 成功应用、客户 872 在位、序列值 872、4 条流水种子在位；对应 sandbox 用例 1 passed。完整本地 `init_db` 因隔离容器缺 vector 扩展、只读角色和其它 memory schema 前置条件退出 1，不能记为全初始化通过。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
 
 **意图与路由**：`t_payment_issue`（domain=TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）。词表：TRANSACTION 加「支付/扣款/付款失败」域词 + 句式（「订单 X 是不是重复扣款」「支付失败怎么办」注意「支付失败」是政策引导高频句——KNOWLEDGE 现有 k_faq「支付方式」词与 payment-faq-policy 文档在位，**先推演票数再动词表**；payment 金额走 order 标签）；VOCAB 升 2026-11-05.1 + test_vocab 断言同步。
 

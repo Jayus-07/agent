@@ -519,7 +519,11 @@ def test_duplicate_payment_refund_plan_requires_explicit_request():
 
 
 def test_payment_task_query_returns_only_trusted_refund_facts(monkeypatch):
+    from backend.config import customer_service as cs_cfg
     from backend.customer_service.experts.query import _execute_task_query
+
+    # 该测试固定验收业务网关来源；不依赖本机 .env 或 CI 的默认 sandbox 模式。
+    monkeypatch.setattr(cs_cfg, "CS_BUSINESS_GATEWAY_MODE", "http")
 
     class Service:
         def get_payments(self, user_id, tenant_id, order_no):
