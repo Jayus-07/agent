@@ -937,6 +937,25 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     expect(page.container.textContent).not.toContain('已将「烤匠麻辣烤鱼」加入午餐，并移除占位「午餐」')
   })
 
+  it('锁定餐食的 ⋯ 保留编辑菜单，且替换回调不会开始第一步写入', async () => {
+    const trip = makeTripWithMealAndFacts()
+    const lockedMeal = trip.document.days[0].items.find((item) => item.item_id === 'meal-1')!
+    lockedMeal.locked = true
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+
+    await click(page.container, (button) => button.getAttribute('aria-label') === '打开「午餐」的编辑与候选')
+    const dialogProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'meal-1')!
+    expect(dialogProps.panel).toEqual({ kind: 'item', itemId: 'meal-1' })
+
+    let switched = true
+    const staleUnlockedMeal = { ...lockedMeal, locked: false }
+    await act(async () => { switched = await dialogProps.onSwitchMeal(mocks.merchantFixture, staleUnlockedMeal) })
+    expect(switched).toBe(false)
+    expect(mocks.addMeal).not.toHaveBeenCalled()
+    expect(mocks.applyEdit).not.toHaveBeenCalled()
+  })
+
   it('换餐厅第一步回执 UNKNOWN 时不继续删占位，也不冒充成功', async () => {
     const trip = makeTripWithMealAndFacts()
     const page = mount('trip-meal')
@@ -975,6 +994,17 @@ describe('V2 工作台餐食候选与介绍行（workbench-ux）', () => {
     const placeProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'place-1')
     expect(placeProps).toBeTruthy()
     expect(placeProps!.panel).toMatchObject({ kind: 'item', itemId: 'place-1', view: 'search' })
+  })
+
+  it('锁定地点的 ⋯ 不直达可提交的替换候选视图', async () => {
+    const trip = makeTripWithMealAndFacts()
+    trip.document.days[0].items.find((item) => item.item_id === 'place-1')!.locked = true
+    const page = mount('trip-meal')
+    await load(tripRequest(0), trip)
+
+    await click(page.container, (button) => button.getAttribute('aria-label') === '打开「成都武侯祠博物馆」的编辑与候选')
+    const placeProps = [...mocks.editDialogProps].reverse().find((props) => (props.item as { item_id?: string } | null)?.item_id === 'place-1')!
+    expect(placeProps.panel).toEqual({ kind: 'item', itemId: 'place-1' })
   })
 
   it('介绍行选中即展开（ux3）：选中卡介绍常驻显示，未选中卡保持 hover 渐现', async () => {
@@ -1020,6 +1050,13 @@ describe('时区提示 toast 化（ux3）', () => {
     expect(mocks.toastShow.mock.calls[0][1]).toBe('warning')
     expect(page.container.textContent).toContain('时区未确认')
     expect(page.container.textContent).not.toContain('行程当地时间可能不准确')
+
+    const tabletHeader = [...page.container.querySelectorAll('header')].find((header) => header.className.includes('sticky') && header.className.includes('xl:hidden'))!
+    const tabletBadge = [...tabletHeader.querySelectorAll('button')].find((button) => button.getAttribute('aria-label') === '查看目的地时区提示')
+    expect(tabletBadge?.className).toContain('min-[821px]:inline-flex')
+    await click(page.container, (button) => button.getAttribute('aria-label') === '查看目的地时区提示')
+    expect(mocks.toastShow).toHaveBeenCalledTimes(2)
+    expect(mocks.toastShow).toHaveBeenLastCalledWith(expect.stringContaining('目的地时区尚未确认'), 'warning', 6000)
   })
 
   it('同行程已提示过（localStorage 记忆）不再重复 toast，徽标保留', async () => {
