@@ -2,7 +2,8 @@
 
 - 状态：**PASS（任务验收范围已完成）**；F 路由写操作在隔离环境通过；真实浏览器 + APISIX JWT 写入链路 **UNVERIFIED**。
 - 本次验收记录：`agent-wt-eval-f-acceptance` / `codex/eval-closure-f-api-acceptance`（从 `origin/main` 创建；原 F/D3/D4a worktree 保留）。
-- 当前基线：`origin/main=8798dca`；任务沿革基线见 TASK.md。
+- 当前主线核对基线：2026-11-05 `origin/main=dc4a181`（包含 PR #331）；F API 验收 worktree
+  起始基线为 `8798dca`。任务沿革基线见 TASK.md。
 
 ## 并行协调记录
 
