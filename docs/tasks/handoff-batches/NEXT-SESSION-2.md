@@ -1,9 +1,9 @@
-# 接手计划（NEXT-SESSION-2，2026-11-05 写）
+# 接手计划与收尾记录（NEXT-SESSION-2，2026-11-05 更新）
 
-> 取代 `NEXT-SESSION.md`（其已知信息/教训/挂起裁决仍然有效，本文只增量）。
-> **E 批（eval-closure 后端 B1-B3）已合并并完成实机验收**（PR #326，见第三节）；
-> D1 已完成 124 包语义复检且未改依赖（升级约束与风险见第四节）。
-> 后续按 F → D3 → D4a 推进。
+> 取代 `NEXT-SESSION.md`（其环境、方法教训和挂起裁决仍有效）。截至本次核对，
+> E′、D1、F、D3、D4a 均已完成并合入 main；没有剩余的计划内实现批次。
+> F 的真实浏览器 + APISIX JWT 写入链路仍未验收；在线采样长期启用前的后台预算
+> 预占/结算风险仍未关闭。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
 > **用户已裁决（继承）：ECS 三项不处理；pillow/filelock/dnspython/unstructured
 > 因 py3.11 不可达保持挂起勿翻案。**
 
@@ -59,15 +59,19 @@
 py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也可能被 hook 误判为
 写源码——读文件优先用 Read 工具，grep 单独发。
 
-## 二、总计划（剩余工作，按优先级）
+## 二、总计划与当前状态
 
 | # | 内容 | 状态 | 前置 |
 |---|---|---|---|
-| E' | E 批收尾：commit → push → PR → CI → 合并 → pull → rebuild → 健康确认 → 在线采样实机验收 | **已完成**（PR #326；实机 `trigger=online` 落库后开关还原） | 无 |
-| D1 | dev-only 124 包语义复检（PyPI 最新版 + 官方 breaking notes） | **已完成文档复检；未改 lock** | 无 |
-| F | eval-closure 前端三项（F1 RunsTab gate 列/审批按钮/online 徽标；F2 DatasetsTab 反馈候选审核；F3 CompareTab 人工评审挂载） | 待开工 | ~~eval-center-simplify 已合并~~ **已满足**（95f3c4d/497c909 已在 main，worktree 已清理；F 批开工前仍需逐文件 diff 核对基线，因 9c1ca42/e1268cb 11-02 又改过三 tab） |
-| D3 | langchain/langgraph 整族升级（目标组合见 NEXT-SESSION.md） | 未开工 | 独立批 |
-| D4a | cryptography 50 / datasets 5.0.1 / oauthlib 4.0 跨大版本 | 未开工 | 独立批+定向回归 |
+| E′ | 后端门禁指标、在线采样器和 Beat 调度 | **已完成并合并**（PR #326；实机 `trigger=online` 落库后开关还原） | 无 |
+| D1 | dev-only 124 包语义复检 | **已完成**（PR #327；文档复检，未改 lock） | 无 |
+| F | 管理端三项：RunsTab、DatasetsTab、CompareTab | **已完成并合并**（PR #328；隔离写操作验收记录 PR #331） | 无；浏览器 + APISIX JWT 联合链路仍 UNVERIFIED |
+| D3 | LangChain/LangGraph 依赖族升级与复核 | **已完成**（版本已由供应链 PR #314 合入；PR #329 记录核验，无重复改 lock） | 无 |
+| D4a | cryptography / datasets / oauthlib 跨大版本升级与复核 | **已完成**（版本已由供应链 PR #314 合入；PR #330 含测试兼容修正，无重复改 lock） | 无 |
+| 收尾项 | F 浏览器 + APISIX JWT 实际写入验收（如需端到端验收） | **UNVERIFIED**；隔离 API 写操作已经通过，不等价于真实 JWT 验签和浏览器操作 | 安全的隔离验收环境与 super_admin 登录 |
+| 风险项 | 在线采样长期启用前补齐后台预算预占/结算 | **未关闭**；当前 `EVAL_ONLINE_SAMPLER_ENABLED` 默认关闭 | 单独裁决后台任务预算方案 |
+
+计划内批次已完成；表中的收尾项和风险项是剩余验收/运行边界，不代表对应验证已通过。
 
 ## 三、E' 收尾与实机验收（已完成）
 
@@ -100,40 +104,49 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
    `srsly<3.0.0`，禁止单独升级，继续保持 `2.5.3`。结论及官方链接已记入
    `docs/tasks/audit-remediation-r1/PROGRESS.md`；本批未修改依赖。
 
-## 五、F 批要点（前置已满足，开工前再核对）
+## 五、F 批结果与验收边界（已完成）
 
-- 分支 `feat/eval-closure-admin-ui` 从最新 origin/main；worktree 可复用 audit-r1 或新建（拷 .env）。
-- F1 `RunsTab.tsx`：gate 状态列绑 `gate_verdict/gate_reason`（api/evaluation.ts:296-297）、
-  super_admin 审批按钮（`getV2Gate/createV2GateApproval` :725-737）、online 来源徽标
-  （`run.source==='online'` 展示位）；F2 `DatasetsTab.tsx`：
-  `reviewFeedbackCandidate/promoteFeedbackCandidate`（api/feedbackCandidates.ts:16-21）
-  + 来源=feedback 过滤；F3 `CompareTab.tsx`：挂 `EvaluationHumanReviewButton`
-  + 「不进自动门禁」标注。全部纯接线，不新增页面/权限面。
-- 验证：tsc + 组件测试 + rebuild 后真实页面走查（super_admin 审批闭环 API 实际调用成功）。
+- PR [#328](https://github.com/Jayus-07/agent/pull/328) 已合并，merge commit
+  `83aa74ca81a2c91774d084dfd41e80d059fe90a2`。RunsTab 接 Gate 状态/审批/online
+  徽标；DatasetsTab 接反馈候选审核与晋升；CompareTab 挂载人工评审并标注不进入自动门禁。
+- 组件测试 4 个文件 / 6 个测试通过，`tsc --noEmit` 通过；任务 worktree 重建及 API /
+  管理端健康检查通过。PR 合并时真实 super_admin 只读 API GET 与 logout 返回 200。
+- PR [#331](https://github.com/Jayus-07/agent/pull/331) 合入隔离 API 写操作验收：F1 审批
+  GET 200 → POST 201 → 读回 200；F2 approve/reject/promote 均 200 且读回状态正确；
+  F3 人工评审 GET 200 → POST 201 → 读回 200。隔离数据库和临时 JSONL 已清理。
+- **未验收**：上述 F 写操作使用测试 API key 和模拟网关注入的 super_admin 身份头，
+  未经过 APISIX JWT 验签，也未通过真实管理端浏览器点击；不能将联合链路标记为通过。
 
 ## 六、工作树
 
-- `D:\Program Files\workplace\agent-wt-audit-r1` 已从 E 分支切至独立 D1 分支
-  `codex/eval-closure-d1-review`（基于最新 `origin/main`）；根 `.env` 在位。
-- D1 合并后再从最新 main 开独立 F 分支；F 批开工前逐文件核对三 tab diff。
-- 不动其他会话 worktree；开工前 `ls docs/tasks/` + `git fetch` 防撞车
-  （本轮核对：trace-probe-isolation / trace-query-pushdown / trace-ux-pack 为其他会话在途，与本计划无交集）。
+- 本次核对时主仓 `main` 与 `origin/main` 均为 `dc4a181`（PR #331），主仓仅有其他会话
+  的未跟踪目录；均未触碰：`docs/tasks/.mimosa/`、`docs/tasks/trace-probe-isolation/`、
+  `docs/tasks/trace-query-pushdown/`、`docs/tasks/trace-ux-pack/`、`frontend/src/.mimosa/`。
+- 已合并批次的工作树仍保留且核对时干净：`agent-wt-audit-r1`（PR #328 分支，HEAD
+  `2732047`）、`agent-wt-eval-d3`（PR #329，HEAD `25aa44f`）、`agent-wt-eval-d4a`
+  （PR #330，HEAD `8abde7c`）、`agent-wt-eval-f-acceptance`（PR #331，HEAD `6808bdb`）。
+  未清理这些工作树，也未触碰其他会话工作树。
+- 后续如开展新的实现，仍需先 `git fetch`、核对 `docs/tasks/` 和工作树状态，并从当时
+  最新 `origin/main` 建独立分支；本计划中的 F/D3/D4a 不要重复开工。
 
 ## 七、测试与验收（继承八步链 + E 批专项）
 
-- 依赖批（D3/D4a）固定八步链：① requires_python 逐包 → ② OSV 清零 → ③ 改 lock →
-  ④ dry-run 全量解析 → ⑤ PR CI → ⑥ 合并 → ⑦ pull+rebuild → ⑧ 容器 freeze 一致性+冒烟+/health 双 200。
+- 依赖批（D3/D4a）八步链已由供应链 PR #314 的 lock 升级证据覆盖：① requires_python
+  逐包 → ② OSV 检查 → ③ 更新 lock → ④ dry-run 全量解析 → ⑤ PR CI → ⑥ 合并 →
+  ⑦ pull+rebuild → ⑧ 容器 freeze 一致性、导入冒烟和 `/health`。D3/D4a 的目标包复核及
+  定向测试分别见 `docs/tasks/eval-closure/PROGRESS.md`；D3 **41 passed**，D4a **76 passed**。
 - E 批验收（TASK.md）：B1 三态裁决+缺数据 fail-closed（Review 修复后采样/门禁与
   rag_smoke workflow 契约 48 passed）；B2/B3 beat 已实机触发且 `trigger='online'` 落库；
   rebuild/health/beat 注册已核验。长期启用前后台预算链路风险仍需裁决，详见第三节。
 - F 批验收：三 tab 各自 API 实际调用成功（super_admin gate 审批闭环、候选
-  approve/reject/promote、人工评审提交）+ tsc/组件测试绿。
+  approve/reject/promote、人工评审提交）+ tsc/组件测试绿；真实浏览器 + APISIX JWT
+  联合写入链路仍 **UNVERIFIED**，详见第五节及 `eval-closure/PROGRESS.md`。
 - 未实际执行的验证不得报告为通过。
 
 ## 八、下一会话启动提示词（复制即用）
 
-> 继续 agent 仓库剩余批次。E' 已由 PR #326 合并并实机验收，D1 dev-only 124 包语义复检已记录，
-> 不要重复执行 E/D1。下一步从最新 `origin/main` 为 F 批开独立分支，开工前逐文件 diff 核对
-> RunsTab/DatasetsTab/CompareTab 基线，完成三项前端接线与定向验证后走独立 PR；随后依序评估
-> D3 和 D4a 八步链。ECS 三项不处理；pillow/filelock/dnspython/unstructured 挂起勿翻案；
-> 推送/PR 用 HTTPS_PROXY=http://127.0.0.1:7897；全程中文汇报，未执行的验证不得报通过。
+> eval-closure 与本计划的 E′、D1、F、D3、D4a 均已完成并合入，不要重复实施。若继续做
+> 端到端验收，只在隔离数据上验证真实浏览器 + APISIX JWT 的 F 写操作链路，并如实记录结果；
+> 在线采样保持默认关闭，长期启用前先解决后台预算预占/结算旁路。ECS 三项不处理；
+> pillow/filelock/dnspython/unstructured 继续挂起，勿翻案。新代码任务仍需从最新 main
+> 开独立 worktree/PR，推送使用 HTTPS_PROXY=http://127.0.0.1:7897，未执行的验证不得报通过。
