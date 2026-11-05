@@ -2,7 +2,7 @@
 
 > 取代 `NEXT-SESSION.md`（其环境、方法教训和挂起裁决仍有效）。截至本次核对，
 > E′、D1、F、D3、D4a 均已完成并合入 main；没有剩余的计划内实现批次。
-> PR #333 的预算上下文修复已由后续提交 `6acaea5` 处理 Review P2；推送后 CI 待复核，最新代码的本机 rebuild 因 Docker Desktop 启动错误尚未验证。
+> PR #333 的预算上下文修复提交 `6acaea5` 已推送并解决 Review P2；代码 HEAD `e7fcbc8` 的免费必需 CI 已通过，真实 API job 按策略 skipped。最新代码的本机 rebuild 因 Docker Desktop 启动错误尚未验证。
 > F 的真实浏览器 + APISIX JWT 写操作与隔离 DB 读回仍未完成；Sampler 默认关闭。详细证据见 `docs/tasks/eval-closure/PROGRESS.md`。
 > **用户已裁决（继承）：ECS 三项不处理；pillow/filelock/dnspython/unstructured
 > 因 py3.11 不可达保持挂起勿翻案。**
@@ -154,7 +154,7 @@ py3.10 铁律。**本轮新坑**：Bash 里 `sed -n` 纯读取 + grep 组合也�
 ## 九、2026-11-05 续工状态
 
 - 在线采样预算修复：`agent-wt-eval-sampler-budget` / `codex/eval-online-sampler-budget`。PR #333 初始提交 `533e02c` 的 19 个 sampler 定向测试通过；Codex Review P2 指出日固定 `run_id` 不应复用作预算 request ID。后续提交 `6acaea5` 已分离每次执行的预算 request ID；新增回归用例 **1 passed（43.77s，退出码 0）**，ruff check、py_compile、`git diff --check` 通过。修复后未重跑整个测试文件；pytest 会话结束时迁移残留守卫未能取得 DB 连接，SQL 未执行。
-- PR #333 推送后先复核新 HEAD 的必需 CI 与 Review 线程；CI 结果不得沿用旧 HEAD。在线采样开关仍关闭，未发真实模型调用。
+- PR #333 的代码 HEAD `e7fcbc8`：secret scan、Evaluation V2 Contract、RAG PR Smoke 成功；RAG 真实 API job 按 workflow 策略 skipped。P2 Review 线程已回复并解决；没有将旧 Review 收据描述为新 HEAD 的 Review。在线采样开关仍关闭，未发真实模型调用。
 - Docker Desktop 重启后报 `dockerInference` IPC 路径错误，Engine 当前不可用；可用内存约 6.3 GB / 15.8 GB，没有证据把关机归因于内存。不要做工厂重置或并发压力测试。此前 rebuild/健康证据针对修复前 HEAD；最新代码 rebuild/健康检查 **UNVERIFIED/BLOCKED**。恢复 Docker 后从本工作树重建并检查健康状态，完成后再合并 PR #333。
 - F 联合验收已通过真实浏览器登录、隔离 APISIX HS512 JWT 验签和候选列表读取；尚未点击拒绝并验证 DB 状态读回。Docker 恢复后，只启动隔离 Postgres/Redis、APISIX、API、管理端，完成该次写操作验收；不操作共享数据库。
 - 其他原批次已完成。ECS 三项不处理；pillow/filelock/dnspython/unstructured 继续挂起勿翻案。
