@@ -1,6 +1,6 @@
 # PROGRESS: travel-workbench-ux3
 
-状态：**PR #335 已合并；合并后审查发现两条仍有效的 P2，修复已在隔离分支完成并通过定向验证，当前待审核差异与确认后提交**
+状态：**PR #335 已合并；合并后发现的两条 P2 已修复，T0–T2 验证通过，follow-up 修复已提交并推送**
 
 ## 会话 1（2026-11-05）已完成
 
@@ -107,6 +107,7 @@
 
 ### 当前状态与下一步
 
-- 修复和定向验证已完成；差异在 `codex/travel-ux3-review-followup` 工作树，尚未提交或推送。原功能工作树仍干净，main 未被本地修改。
-- PR #335 的两个历史 Review threads 仍在已合并 PR 上保持未解决；合并这些修复需新建 follow-up PR。按仓库规则，先审核下面的本地差异并取得用户确认，再提交、推送并创建 PR；不得直接推 main。
-- 低风险验证边界：SAVED 成功 toast 曾在隔离 mock 中出现，调用时长 4500ms 且由定向测试断言；浏览器未单独计时记录它的消失时刻。时区 toast 的自动消失已在浏览器中实测。
+- 已按用户确认提交 `fc4b8afde858d1180363f121b2f48ce55516651b` 并推送到 `codex/travel-ux3-review-followup`；原功能工作树仍干净，main 未被本地修改。
+- PR #335 的两个历史 Review threads 仍在已合并 PR 上保持未解决；修复通过 follow-up PR 交付，不直接推 main。
+- SAVED toast 补充浏览器计时：页面 mock 完成餐厅加入和占位删除后，唯一成功 toast 在可见状态 **4454.5ms**，MutationObserver 随后记录它从 DOM 消失；此结果与 4500ms 配置一致。`search/food`、`selections/meals` 和 `edits` 都由页面 fetch mock 返回，`unhandled=[]`，没有后端或数据库请求。
+- **T3 真实后端/生产数据验收仍未运行**；本次实际完成的是 T2 隔离浏览器验收，不将 mock 写链路称为真实生产验收。时区 toast 自动消失也已在浏览器实测。
