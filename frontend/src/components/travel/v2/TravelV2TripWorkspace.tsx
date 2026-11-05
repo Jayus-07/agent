@@ -518,8 +518,9 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
     const currentTrip = tripRef.current
     if (!currentTrip || Boolean(pendingTripWrite)) return false
     const day = currentTrip.document.days.find((entry) => entry.items.some((stop) => stop.item_id === placeholder.item_id))
-    if (!day) return false
-    const period = inferMealPeriod(placeholder)
+    const currentPlaceholder = day?.items.find((stop) => stop.item_id === placeholder.item_id)
+    if (!day || !currentPlaceholder || currentPlaceholder.locked) return false
+    const period = inferMealPeriod(currentPlaceholder)
     const periodLabel = period === 'lunch' ? '午餐' : '晚餐'
 
     // 第一步：加入餐厅（既有 selections/meals 单条端点）
@@ -556,10 +557,10 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       transitionTripWrite({ ...addIdentity, status: 'SAVED' })
 
       // 第二步：移除占位餐项（餐厅已确认落库，删除失败不回滚加入）
-      const placeholderGone = !latest.document.days.some((entry) => entry.items.some((stop) => stop.item_id === placeholder.item_id))
+      const placeholderGone = !latest.document.days.some((entry) => entry.items.some((stop) => stop.item_id === currentPlaceholder.item_id))
       let removedPlaceholder = false
       if (!placeholderGone) {
-        const removeOp: TripEditOperationV2 = { op: 'remove_item', item_id: placeholder.item_id }
+        const removeOp: TripEditOperationV2 = { op: 'remove_item', item_id: currentPlaceholder.item_id }
         const removeIdentity = {
           kind: 'edit' as const, tripId: latest.trip_id,
           signature: JSON.stringify({ tripId: latest.trip_id, revision: latest.revision, remove: removeOp }),
@@ -571,7 +572,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
         transitionTripWrite({ ...removeIdentity, status: 'SAVING' })
         const removeResult = await applyTravelTripEditV2(latest.trip_id, {
           expected_revision: latest.revision,
-          change_summary: `已将「${placeholder.title}」换为「${merchant.name}」（移除占位餐项）`,
+          change_summary: `已将「${currentPlaceholder.title}」换为「${merchant.name}」（移除占位餐项）`,
           operation: removeOp,
         }, removeIdentity.key)
         if (!isConfirmedTravelWrite(removeResult, latest.trip_id, latest.revision)) {
@@ -597,7 +598,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       }
       setWriteFeedback(null)
       showToast(removedPlaceholder
-        ? `已将「${merchant.name}」加入${periodLabel}，并移除占位「${placeholder.title}」（v${latest.revision}）。`
+        ? `已将「${merchant.name}」加入${periodLabel}，并移除占位「${currentPlaceholder.title}」（v${latest.revision}）。`
         : `已将「${merchant.name}」加入${periodLabel}（v${latest.revision}）。`, 'success', 4500)
       return true
     } catch (cause) {
@@ -618,6 +619,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
   }
 
   function openItemEditPanel(item: TripItemV2) {
+    if (item.locked) return { kind: 'item' as const, itemId: item.item_id }
     if (item.activity_type === 'meal') return { kind: 'item' as const, itemId: item.item_id, view: 'meal' as const }
     if (item.kind === 'place') return { kind: 'item' as const, itemId: item.item_id, view: 'search' as const }
     return { kind: 'item' as const, itemId: item.item_id }
@@ -657,7 +659,7 @@ function TravelV2TripWorkspaceInstance({ tripId, editMode = false }: { tripId: s
       <div className="flex shrink-0 items-center gap-2"><span className="rounded-full bg-[#f1f6fc] px-3 py-1.5 text-[9px] font-medium text-[#6380a0]">V2 正式行程 · v{trip.revision}</span>{timezoneWarning && <button type="button" onClick={() => showToast(timezoneWarningText(brief.timezone), 'warning', 6000)} className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2.5 py-1.5 text-[9px] font-medium text-amber-800"><AlertTriangle size={11} aria-hidden />时区未确认</button>}{undoRevision !== null && <button type="button" disabled={Boolean(pendingTripWrite) || undoing} onClick={() => void undo()} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#dce6f1] bg-white px-3 text-[10px] font-medium text-[#5b718d] disabled:opacity-50"><RotateCcw size={13} aria-hidden />{undoing ? '恢复中…' : '撤销'}</button>}<button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#dce6f1] bg-white px-3 text-[10px] font-medium text-[#5b718d]"><History size={14} aria-hidden />历史</button><button type="button" aria-pressed={autoOptimizeOpen} disabled={Boolean(pendingTripWrite)} onClick={() => setAutoOptimizeOpen((value) => !value)} className="inline-flex h-9 items-center gap-1.5 rounded-xl border border-[#b9d3fa] bg-[#f2f7ff] px-3 text-[10px] font-medium text-[#2878f5] disabled:opacity-50"><Sparkles size={14} aria-hidden />自动优选</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="inline-flex h-9 items-center gap-1.5 rounded-xl bg-[#2878f5] px-3.5 text-[10px] font-semibold text-white"><MoreHorizontal size={14} aria-hidden />{editMode ? '编辑模式' : '编辑行程'}</button></div>
     </header>
 
-    <header className="sticky top-0 z-20 flex h-[56px] shrink-0 items-center justify-between border-b border-[#e5ecf4] bg-white px-3 xl:hidden"><a href="/travel/itineraries" aria-label="返回行程列表" className="flex h-9 w-9 items-center justify-center rounded-full text-[#536984]"><ArrowLeft size={18} aria-hidden /></a><div className="min-w-0 px-2 text-center"><h1 className="truncate text-sm font-semibold text-[#263b55]">{trip.title || brief.destination}</h1><p className="mt-0.5 text-[9px] text-[#92a0b1]">{brief.day_count} 天 · {brief.start_date || '日期待定'} · v{trip.revision}</p></div><div className="flex shrink-0 items-center gap-1.5"><button type="button" aria-pressed={autoOptimizeOpen} disabled={Boolean(pendingTripWrite)} onClick={() => setAutoOptimizeOpen((value) => !value)} className="min-h-10 rounded-full bg-[#f2f7ff] px-3 text-[10px] font-medium text-[#2878f5] disabled:opacity-50">优选</button>{conversationReady ? <a href="#travel-trip-conversation" className="inline-flex min-h-10 items-center gap-1 rounded-full border border-[#dce6f1] px-2.5 text-[10px] font-medium text-[#526b86]"><MessageCircle size={13} aria-hidden />对话</a> : <span aria-disabled="true" className="inline-flex min-h-10 items-center gap-1 rounded-full border border-[#e6ebf1] px-2.5 text-[10px] text-[#9aa8b8]">对话不可用</span>}<button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="min-h-10 rounded-full border border-[#dce6f1] px-3 text-[10px] font-medium text-[#526b86]">历史</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="min-h-10 rounded-full bg-[#2878f5] px-3 text-[10px] font-semibold text-white">编辑</button></div></header>
+    <header className="sticky top-0 z-20 flex h-[56px] shrink-0 items-center justify-between border-b border-[#e5ecf4] bg-white px-3 xl:hidden"><a href="/travel/itineraries" aria-label="返回行程列表" className="flex h-9 w-9 items-center justify-center rounded-full text-[#536984]"><ArrowLeft size={18} aria-hidden /></a><div className="min-w-0 px-2 text-center"><h1 className="truncate text-sm font-semibold text-[#263b55]">{trip.title || brief.destination}</h1><p className="mt-0.5 text-[9px] text-[#92a0b1]">{brief.day_count} 天 · {brief.start_date || '日期待定'} · v{trip.revision}</p></div><div className="flex shrink-0 items-center gap-1.5">{timezoneWarning && <button type="button" aria-label="查看目的地时区提示" title="目的地时区尚未确认，点击查看完整提示" onClick={() => showToast(timezoneWarningText(brief.timezone), 'warning', 6000)} className="hidden min-[821px]:inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-1 text-[8px] font-medium text-amber-800"><AlertTriangle size={10} aria-hidden />时区未确认</button>}<button type="button" aria-pressed={autoOptimizeOpen} disabled={Boolean(pendingTripWrite)} onClick={() => setAutoOptimizeOpen((value) => !value)} className="min-h-10 rounded-full bg-[#f2f7ff] px-3 text-[10px] font-medium text-[#2878f5] disabled:opacity-50">优选</button>{conversationReady ? <a href="#travel-trip-conversation" className="inline-flex min-h-10 items-center gap-1 rounded-full border border-[#dce6f1] px-2.5 text-[10px] font-medium text-[#526b86]"><MessageCircle size={13} aria-hidden />对话</a> : <span aria-disabled="true" className="inline-flex min-h-10 items-center gap-1 rounded-full border border-[#e6ebf1] px-2.5 text-[10px] text-[#9aa8b8]">对话不可用</span>}<button type="button" onClick={() => setHistoryOpen(true)} aria-label="查看版本历史" className="min-h-10 rounded-full border border-[#dce6f1] px-3 text-[10px] font-medium text-[#526b86]">历史</button><button type="button" disabled={Boolean(pendingTripWrite)} onClick={() => setEditPanel(selectedItem ? { kind: 'item', itemId: selectedItem.item_id } : { kind: 'add' })} className="min-h-10 rounded-full bg-[#2878f5] px-3 text-[10px] font-semibold text-white">编辑</button></div></header>
 
     {writeFeedback && !editPanel && !historyOpen && <section
       role={travelWriteStatusRole(writeFeedback.status)}
