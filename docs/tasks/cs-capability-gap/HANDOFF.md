@@ -16,18 +16,18 @@
 | A7 坐席知识检索接 RAG 通道 | ✅ | #317 → ce902ea |
 | **B2 积分/等级查询（查询型样板）** | ✅ 本会话 | #320 → d1d38df（+docs #321 → da13495） |
 | **B3 优惠券查询/用券校验** | ✅ 本会话 | #324 → 55e0fcb |
-| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放 | q1-q4 真机 PASS；134 外键修复已推送且 CI 初始化通过；最新回归发现测试未钉 gateway mode，修复待推送 |
+| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放 | q1-q4 真机 PASS；最近测试 HEAD `a267cf1` 的必需 CI 全绿（1007 passed / 2 skipped；真实 API 按 PR 规则跳过） |
 | B5 催办 / B6 价保 / B7 改址 / B8 开票 | ⬜ | B4 定型后 B5-B7 可并行，B8 随时可并行 |
 | B9 多模态 | 仅立项文档，不实施 | 并入最后收尾 PR |
 
-- B3 收官快照 main=`55e0fcb`；B4 分支已建 PR #336（初始 HEAD=`7f948b8`，本次 CI 修复待推送），基于 `origin/main=c877de1`。CI 历史基线 935，合入前以最新 CI 对账为准。
+- B3 收官快照 main=`55e0fcb`；B4 PR #336 已 rebase 到 `origin/main=987eddb`。最近测试通过的 PR HEAD=`a267cf1`；CI 历史基线 935，合入前仍应以 PR 最新检查为准。
 - B4 当前共享栈健康；134 迁移已应用，主后端/前端/网关探针通过；宿主 8088 GPU embedding/rerank 已按运维脚本恢复。q4 首轮暴露 Supervisor 重复调用 KnowledgeExpert 并以第二次拒答覆盖第一次有效答复；2026-11-06 已加防重复收尾并真机复验通过，ClaimVerifier 未改。
 - 本会话真机验收：B2 4/4 PASS + B3 4/4 PASS（合并后 main 上双探针复证）。
 
 ## 三、未完成（含挂账）
 
 **待实施批次**（细节见 FINAL-PLAN §五，B4 详设见本文件 §六）：
-1. **B4 支付流水查询 + 重复扣款转退款**——PR #336 开放，q1-q4 真机验收通过；CI 迁移种子问题已修并待推送、重跑；自动退款尚未实现；
+1. **B4 支付流水查询 + 重复扣款转退款**——PR #336 开放，q1-q4 真机验收通过、最近测试 HEAD 必需 CI 全绿；自动退款尚未实现；
 2. B5 催发货/催派送（低风险直执行，不承诺具体补发时间——composer ETA 守卫 fail-closed）；
 3. B6 价保退差价（**全链路最重**：资金红线三项缺一不合并——终点 business-mock / 开关 fail-closed 双入口 / 审计齐全）；
 4. B7 在途包裹改地址（确认流，订单级与账户默认地址严格区分）；
@@ -88,7 +88,7 @@
 
 ## 六、B4 实施状态与剩余事项（支付流水查询 + 重复扣款转退款）
 
-**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 已开放。CI 首轮发现干净业务库缺 customer 872，134 外键修复已推送；最新 CI 已通过数据库初始化，但 1006 个回归中有 1 个失败，原因是测试固定断言 HTTP 来源却未显式指定 gateway mode。现已将该测试改为固定 HTTP 模式，待本地验证、推送与 CI 复跑。此前本地隔离库已验证 134 成功应用、客户 872 在位、序列值 872、4 条流水种子在位；对应 sandbox 用例 1 passed。完整本地 `init_db` 因隔离容器缺 vector 扩展、只读角色和其它 memory schema 前置条件退出 1，不能记为全初始化通过。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
+**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 仍开放、未合并。CI 首轮缺 customer 872 的问题已在迁移 134 修复；后续 gateway mode 单测已固定为 HTTP。最近测试 HEAD `a267cf1` 的 CI：RAG preflight 初始化成功、**1007 passed / 2 skipped**；Evaluation V2 免费测试、管理端、scan、Detect RAG changes 均通过；真实 API 评测按 PR 规则跳过。此前隔离本地完整 `init_db` 因容器缺 vector 扩展、只读角色和其它 memory schema 前置条件退出 1，不记为全初始化通过。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
 
 **意图与路由**：`t_payment_issue`（domain=TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）。词表：TRANSACTION 加「支付/扣款/付款失败」域词 + 句式（「订单 X 是不是重复扣款」「支付失败怎么办」注意「支付失败」是政策引导高频句——KNOWLEDGE 现有 k_faq「支付方式」词与 payment-faq-policy 文档在位，**先推演票数再动词表**；payment 金额走 order 标签）；VOCAB 升 2026-11-05.1 + test_vocab 断言同步。
 
