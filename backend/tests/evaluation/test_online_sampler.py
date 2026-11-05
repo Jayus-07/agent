@@ -272,7 +272,9 @@ def test_online_judge_binds_evaluation_budget_and_settles_usage(monkeypatch):
     def _score(samples):
         state = budget_module.current_request_budget()
         assert state is not None
-        captured["request_id"] = budget_module.current_request_id()
+        captured.setdefault("request_ids", []).append(
+            budget_module.current_request_id()
+        )
         captured["user_id"] = get_tool_user_id()
         captured["tenant_id"] = get_tool_tenant_id()
         captured["rate_limit_user"] = _thread_local_user_id()
@@ -318,19 +320,33 @@ def test_online_judge_binds_evaluation_budget_and_settles_usage(monkeypatch):
             patch("backend.infra.llm.pricing.get_current_price_table",
                   return_value=_PriceTable()):
         result = sut.run_online_sampling()
+        rerun_result = sut.run_online_sampling()
 
     assert result["persisted"] is True
-    assert captured["request_id"] == result["run_id"]
+    assert rerun_result["persisted"] is True
+    assert rerun_result["run_id"] == result["run_id"]
+    assert len(captured["request_ids"]) == 2
+    assert captured["request_ids"][0] != captured["request_ids"][1]
+    assert all(
+        request_id.startswith(f"{result['run_id']}:")
+        for request_id in captured["request_ids"]
+    )
     assert captured["user_id"] == "eval-budget-actor"
     assert captured["tenant_id"] == "eval"
     assert captured["rate_limit_user"] == "eval-budget-actor"
     assert captured["settlement"] == "settled"
-    assert len(quota_store.reservations) == 1
-    reserve_args, reservation = quota_store.reservations[0]
-    assert reserve_args["user_id"] == "eval-budget-actor"
-    assert reserve_args["tenant_id"] == "eval"
-    assert reserve_args["request_id"] == result["run_id"]
-    assert quota_store.settlements == [(reservation, Decimal("0.0125"))]
+    assert len(quota_store.reservations) == 2
+    assert [args["request_id"] for args, _ in quota_store.reservations] == (
+        captured["request_ids"]
+    )
+    assert all(args["user_id"] == "eval-budget-actor"
+               for args, _ in quota_store.reservations)
+    assert all(args["tenant_id"] == "eval"
+               for args, _ in quota_store.reservations)
+    assert quota_store.settlements == [
+        (reservation, Decimal("0.0125"))
+        for _, reservation in quota_store.reservations
+    ]
 
 
 def test_enforced_budget_binding_failure_blocks_online_judge(monkeypatch):
