@@ -21,13 +21,12 @@ class TestSingleSource:
         # 2026-10-08：朋友/他人订单、借用账号、跳过验证和假冒授权信号（M1 对抗集）
         # 2026-11-04.1：B2 积分/等级查询（cs-capability-gap）——TRANSACTION 域
         # 词/句式 + 出域豁免「等级/权益」（golden T-015 政策问句口径不翻域）
-        # 2026-11-04.2：B3 优惠券账户级查询（cs-capability-gap）——TRANSACTION
+        # 2026-11-06.1：B8 发票查询/申请（cs-capability-gap）——TRANSACTION
         # 域词/句式（「优惠券怎么领/能不能叠加」政策问句 KNOWLEDGE 口径不翻域）
-        # 2026-11-06.2：B7 在途订单改址路由词表。
-        # 2026-11-05.1：B4 支付流水查询（数据问句进 TRANSACTION，政策问句留 KNOWLEDGE）
-        # 2026-11-06.1：B5 催发货/催派送动作和物流异常升级词表。
-        # 2026-11-06.2：B6 价保动作分流与资金模拟确认词。
-        assert vocab.VOCAB_VERSION == "2026-11-06.2"
+        # 2026-11-05.1：B4 支付流水查询。
+        # 2026-11-06.1：B5 催发货/催派送；.2：B6 价保与 B7 在途改址。
+        # 2026-11-06.3：B8 发票查询/确认后模拟申请。
+        assert vocab.VOCAB_VERSION == "2026-11-06.3"
 
     def test_risk_markers_cover_cross_user_refund_attacks(self):
         from backend.customer_service.context.understanding.signals import (

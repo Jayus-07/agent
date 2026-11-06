@@ -180,6 +180,7 @@ jobs:
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \
+            backend/tests/customer_service/test_invoice_flow.py \
             backend/tests/customer_service/test_payment_flow.py \
             backend/tests/customer_service/test_task_plan.py \
             backend/tests/customer_service/test_urge_flow.py \

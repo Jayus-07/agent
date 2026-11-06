@@ -27,6 +27,7 @@ class ActionType:
     ADDRESS_UPDATE = "address_update"
     PASSWORD_RESET = "password_reset"
     ORDER_CANCEL = "order_cancel"
+    INVOICE_REQUEST = "invoice_request"
     PRICE_MATCH = "price_match"
     URGE_REQUEST = "urge_request"
     ADDRESS_CHANGE = "address_change"

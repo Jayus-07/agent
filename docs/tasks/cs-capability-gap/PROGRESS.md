@@ -4,14 +4,17 @@
 
 > 本节为当前权威状态；下方批次记录保留各自当时现场，若状态冲突以本节及最新 PR/提交为准。
 
-- B4 PR #336 已合并，merge commit `c2d3dc2`；B5 PR #338 已合并，merge commit `d3334c1`，必需 CI 全绿，真实 API 评测按 PR 规则跳过。
-- B6 价保 PR #339 已合并，merge commit `84ad3fa`；全部必需检查通过。B4–B6 组合回归 **170 passed / 4 skipped**，B6 独立 PostgreSQL T2 **1 passed**。
-- B7 `feat/cs-address-change` 功能提交 `c7af318` 与最新 main `84ad3fa` 已集成，集成提交 `7dd3b9b`；PR **#340** 已开放，CI 运行中。B4–B7 定向回归 **218 passed / 5 skipped**；py_compile、聚焦 Ruff、YAML 解析和 `git diff --check` 通过。B7 独立 PostgreSQL T2 先前 **1 passed**；本轮 PG T2 因未提供隔离 DSN 跳过。
-- B8 `feat/cs-invoice` 功能提交 `4baeded` 已本地提交、尚未开 PR；仍需在 B7 合入后同步最新 main、解冲突、组合回归并开 PR。
-- B9 立项文档仍在 `codex/cs-b9-charter` 工作树，未提交/开 PR；当前基线仍旧，待 B8 合入后同步 main。
-- q3 `b4-acc-q3` 退款提案状态为 `expired`（到期时间 `2026-11-05 15:43:48 UTC`）；对应客服退款动作记录 **0**、business-mock 退款申请 **0**。没有确认、没有提交、没有发起退款；集成验收保持不触碰。
-- B4–B8 最终主容器重建及客服运行时验收尚未开始。用户已授权使用共享主栈；待 B7/B8 合并后从含全部最新代码的任务工作树重建，并核验健康状态、迁移及模拟业务路径。真实支付、物流、税务和资金系统不接入。
+- B4 PR #336、B5 PR #338、B6 PR #339、B7 PR #340 均已合入 main；B7 merge commit 为 `f1bfd73`。B4–B7 定向回归此前 **218 passed / 5 skipped**，B7 独立 PostgreSQL T2 **1 passed**。
+- B8 本地 merge commit `37b16ff` 已合入 `origin/main`（`f1bfd73`），PR #341 已开放。集成回归 **262 passed / 6 skipped**；新发票 Service/测试 Ruff、Python 编译、YAML 解析、`git diff --check` 通过。PR 首轮 RAG Smoke preflight 为 **1109 passed / 5 skipped / 1 failed**；唯一失败是 T2 测试未给迁移后的会话状态列显式合法值，已修正测试并在隔离 PG T2 **1 passed**，等待修复提交后的 CI 重跑。全 touched-file Ruff 仍报 10 个既有旧行问题，未触及配置导入、事实投影导入排序和 `init_db.py` 局部变量。
+- B9 立项文档仍在 `codex/cs-b9-charter` 工作树，尚未提交/开 PR；待 B8 完成后同步最新 main。
+- q3 `b4-acc-q3` 退款提案仍为 `expired`（到期 `2026-11-05 15:43:48 UTC`）；2026-11-06 通过共享 PG 只读核验 `confirmed_at`/`executed_at` 为空、对应客服 `refund_request` 动作 **0**、幂等记录 **0**、业务库对应订单退款记录 **0**。没有确认、提交或发起退款；后续验收继续不触碰。
+- B4–B8 最终主容器重建及运行时验收尚未开始；待 B8/B9 集成后，从含全部最新代码的任务工作树重建，再核验迁移、健康状态和安全的 mock 流程。真实支付、物流、税务和资金系统不接入。
 
+## 管理端能力治理现状（2026-11-06）
+
+- 已有通用运营治理：主管退款审核队列（必填意见、终态锁、`audit_logs`）、客服团队/RBAC、工单与会话队列、质检、知识缺口与 FAQ 草稿审核；新动作通过用户确认、服务端授权/租户校验、幂等和 `agent_actions`/`audit_logs` 留痕。
+- B4–B8 的功能开关和阈值主要由环境变量/后端配置控制；代码与检索未发现管理端对这些能力提供逐项启停、金额/风险阈值、白名单、发布回滚或策略版本管理的 UI/API。
+- 结论：执行和审计治理已有复用，能力运营治理只部分体现；专用管理入口仍是待补项，不作为 B4–B8 已完成能力。
 > 接手会话现场记录。依据 FINAL-PLAN.md（main c6023dc）执行。恢复时先读 FINAL-PLAN §十一 + 本文件，核对 worktree/HEAD/未提交状态。
 
 ## 现场（2026-11-04）
@@ -291,3 +294,13 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - T2：临时 PostgreSQL 16 绑定 `127.0.0.1:15438`；先执行迁移 050、135，再由 B6 T2 用例重放 050 并执行 136。`AuditRepository` 实际写入 `price_match/executed` 成功，最终约束同时允许 `urge_request` 和 `price_match`；动作和会话测试记录均为 0。测试容器在结果核对后停止并移除，不含持久卷。
 - T0：改动 Python 文件 `py_compile` 通过；新增/相关核心文件 Ruff（忽略导入排序 I001）通过；完整触及文件 Ruff 仍报 10 条既有旧行问题（confirmation_flow、supervisor、init_db），未扩范围清理；YAML 解析与 `git diff --check` 通过。
 - **未验收**：尚无 B6 PR/CI 结果、主 API 重建和真机对话证据；统一运行时验收待 B4–B8 集成后执行。q3 未触碰。
+
+
+## B8：发票抬头/记录查询与确认后模拟申请（2026-11-06）
+
+- 范围：查询当前用户已有抬头/开票记录；显式确认后登记模拟申请。不开真实税务系统，不支持自助新增/修改抬头；服务默认关闭。
+- 关键约束：只允许符合状态的订单及已有 active 抬头；确认时重核业务事实；写入走幂等和现有审计，未知结果进入 `verifying`。迁移 138/139、路径过滤、`rag_smoke` 定向测试及契约/客服文档已随 B8 分支增加。
+- B8 独立分支既有证据：发票流程 **13 passed / 0 skipped**；隔离 PostgreSQL 审计 T2 **1 passed**，验证 action、audit、幂等记录各一条且真实开票标记为 false；mock HTTP 冒烟、mock 与坐席前端构建通过。
+- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。集成组合回归 **262 passed / 6 skipped**；PR #341 首轮 CI 发现审计 T2 fixture 对迁移后的会话状态默认值不兼容。fixture 现在按 schema 选择 `conversation_status=open` 或旧列 `status=active`；独立 PostgreSQL T2 **1 passed**。CI 修复重跑、主容器重建和运行时验收待完成。
+- PR 自动审查发现两项补槽/演示身份问题，已在后续修改中修复：发票抬头和记录读取现与确认写入使用同一演示业务身份，认证/权限仍保留真实登录身份；缺订单号时将抬头选择及纸质/电子类型写入既有 `collected_slots`，补槽时恢复。新增两个回归覆盖企业抬头补槽、纸质类型拒绝及 demo 模式完整确认链路。
+- 审查修复后的本地验证：完整 `test_invoice_flow.py` **14 passed / 1 skipped**；新增用例筛选 **2 passed**；三个改动 Python 文件 `py_compile`、Ruff 与 `git diff --check` 均通过。pytest 进程退出前仍输出既有全局 `TaskService.ensure_schema` / residue guard PostgreSQL PoolTimeout 日志；未影响退出码，本轮 PR CI 与运行时重建复核待完成。

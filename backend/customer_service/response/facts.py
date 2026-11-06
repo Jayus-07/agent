@@ -36,6 +36,10 @@ _COUPON_REASON = {
     "applicable", "threshold_not_met", "not_stackable", "expired",
     "excluded_category", "unknown",
 }
+_INVOICE_TITLE_TYPE = {"individual", "company", "unknown"}
+_INVOICE_TITLE_STATUS = {"active", "inactive", "unknown"}
+_INVOICE_TYPE = {"electronic", "unknown"}
+_INVOICE_STATUS = {"simulated", "unknown"}
 _PAYMENT_STATUS = {"success", "failed", "unknown"}
 _PAYMENT_KIND = {"alipay", "wechat_pay", "bank_card", "unknown"}
 
@@ -60,6 +64,9 @@ def project_fact_set(raw: object) -> dict[str, Any]:
         "points": lambda value: _project_points(value),
         "coupons": lambda value: _project_list(value, _project_coupon),
         "coupon_check": lambda value: _project_coupon_check(value),
+        "invoice_titles": lambda value: _project_list(value, _project_invoice_title),
+        "invoices": lambda value: _project_list(value, _project_invoice),
+        "invoice_summary": lambda value: _project_invoice_summary(value),
         "payment": lambda value: _project_payment(value),
         "operation": lambda value: _project_operation(value),
         "task_result": lambda value: _project_task_result(value),
@@ -260,6 +267,65 @@ def _project_coupon(value: object) -> dict[str, Any]:
     valid_until = _safe_text(value.get("valid_until"), limit=40)
     if valid_until:
         result["valid_until"] = valid_until
+    return result
+
+
+def _project_invoice_title(value: object) -> dict[str, Any]:
+    """B8 发票抬头投影不透出税号、邮箱等敏感字段。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key, limit in (("title_id", 64), ("title_name", 120)):
+        item = _safe_text(value.get(key), limit=limit)
+        if item:
+            result[key] = item
+    title_type = _enum_value(value.get("title_type"), _INVOICE_TITLE_TYPE)
+    if title_type is not None:
+        result["title_type"] = title_type
+    if isinstance(value.get("is_default"), bool):
+        result["is_default"] = value["is_default"]
+    status = _enum_value(value.get("status"), _INVOICE_TITLE_STATUS)
+    if status is not None:
+        result["status"] = status
+    return result
+
+
+def _project_invoice(value: object) -> dict[str, Any]:
+    """B8 模拟开票记录只公开抬头摘要，不声称产生税务发票。"""
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key, limit in (
+        ("invoice_no", 64), ("order_no", 64), ("title_name", 120),
+        ("created_at", 40),
+    ):
+        item = _safe_text(value.get(key), limit=limit)
+        if item:
+            result[key] = item
+    title_type = _enum_value(value.get("title_type"), _INVOICE_TITLE_TYPE)
+    if title_type is not None:
+        result["title_type"] = title_type
+    invoice_type = _enum_value(value.get("invoice_type"), _INVOICE_TYPE)
+    if invoice_type is not None:
+        result["invoice_type"] = invoice_type
+    status = _enum_value(value.get("status"), _INVOICE_STATUS)
+    if status is not None:
+        result["status"] = status
+    if isinstance(value.get("real_invoice_issued"), bool):
+        result["real_invoice_issued"] = value["real_invoice_issued"]
+    return result
+
+
+def _project_invoice_summary(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("title_count", "invoice_count"):
+        count = value.get(key)
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+            result[key] = min(count, 20)
+    if isinstance(value.get("has_invoice_records"), bool):
+        result["has_invoice_records"] = value["has_invoice_records"]
     return result
 
 

@@ -22,7 +22,8 @@ _INTENT_SERVICE_MAP = {
     "t_balance_query": "balance",  # P2 商城域：余额+最近流水
     "t_points_query": "points",  # B2 cs-capability-gap：积分+等级+最近流水
     "t_coupon_query": "coupon",  # B3 cs-capability-gap：券列表/用券校验
-    "t_payment_issue": "payment",  # B4 cs-capability-gap：支付流水/重复扣款
+    "t_invoice_query": "invoice",  # B8 客服发票抬头/模拟记录
+    "t_payment_issue": "payment",  # B4 客服支付流水/重复扣款
     "as_repair": "order",
     "as_quality_issue": "order",
 }
@@ -771,6 +772,88 @@ def _dispatch_service(
         except Exception:  # noqa: BLE001 — 查询失败礼貌降级，不打断会话
             logger.warning("[QueryExpert] 优惠券查询失败", exc_info=True)
             return "优惠券查询服务暂时不可用，请稍后再试。"
+
+    if service_type == "invoice":
+        from backend.customer_service.context_manager import resolve_order_slot
+        from backend.customer_service.service.invoice_service import (
+            get_invoice_service,
+        )
+
+        service = get_invoice_service()
+        order_no = resolve_order_slot(cs_route, question) or ""
+        wants_titles = any(word in question for word in ("抬头", "单位名称"))
+        wants_records = any(word in question for word in ("记录", "开过", "开具情况"))
+        if not wants_titles and not wants_records:
+            wants_records = True
+        try:
+            titles = service.get_titles(user_id, tenant_id) if wants_titles else []
+            invoices = (
+                service.get_invoices(user_id, tenant_id, order_no)
+                if wants_records else []
+            )
+        except Exception:  # noqa: BLE001 — 查询失败礼貌降级，不打断会话
+            logger.warning("[QueryExpert] 发票查询失败", exc_info=True)
+            return "发票信息暂时无法查询，请稍后重试或联系人工客服。"
+
+        lines: list[str] = []
+        title_facts: list[dict[str, Any]] = []
+        invoice_facts: list[dict[str, Any]] = []
+        if wants_titles:
+            lines.append("## 发票抬头（模拟档案）")
+            if not titles:
+                lines.append("当前没有可用的发票抬头，请联系人工客服登记。")
+            for item in titles[:20]:
+                label = "默认" if item.get("is_default") else "可选"
+                lines.append(
+                    f"- {item.get('title_name') or '未命名抬头'}"
+                    f"（{label}，{item.get('title_type') or '类型未知'}）"
+                )
+                title_facts.append({
+                    "title_id": item.get("title_id") or "",
+                    "title_name": item.get("title_name") or "",
+                    "title_type": item.get("title_type") or "unknown",
+                    "is_default": bool(item.get("is_default")),
+                    "status": item.get("status") or "active",
+                })
+        if wants_records:
+            if lines:
+                lines.append("")
+            lines.append("## 开票记录（模拟）")
+            if not invoices:
+                lines.append("暂时没有模拟开票记录。")
+            for item in invoices[:20]:
+                state = (
+                    "模拟登记，未实际开票"
+                    if item.get("status") == "simulated"
+                    and item.get("real_invoice_issued") is False
+                    else "状态待核实"
+                )
+                lines.append(
+                    f"- 订单 `{item.get('order_no') or ''}`："
+                    f"{item.get('title_name') or '未命名抬头'}，"
+                    f"记录号 `{item.get('invoice_no') or ''}`，{state}。"
+                )
+                invoice_facts.append({
+                    "invoice_no": item.get("invoice_no") or "",
+                    "order_no": item.get("order_no") or "",
+                    "title_name": item.get("title_name") or "",
+                    "title_type": item.get("title_type") or "unknown",
+                    "invoice_type": item.get("invoice_type") or "electronic",
+                    "status": item.get("status") or "unknown",
+                    "real_invoice_issued": item.get("real_invoice_issued") is True,
+                    "created_at": item.get("created_at") or "",
+                })
+        facts = {
+            "invoice_titles": title_facts,
+            "invoices": invoice_facts,
+            "invoice_summary": {
+                "title_count": len(title_facts) if wants_titles else None,
+                "invoice_count": len(invoice_facts) if wants_records else None,
+                "has_invoice_records": bool(invoice_facts) if wants_records else None,
+            },
+        }
+        lines.append("模拟数据仅用于客服流程验收，不代表已向税务系统开票。")
+        return _QueryServiceResponse("\n".join(lines), facts)
 
     if service_type == "refund_status":
         from backend.customer_service.errors import (

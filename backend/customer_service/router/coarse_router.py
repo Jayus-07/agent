@@ -41,6 +41,9 @@ class CSCoarseRouter:
         if self._is_delivery_policy_question(query):
             return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "delivery_policy: KNOWLEDGE"
 
+        if self._is_invoice_policy_question(query):
+            return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "invoice_policy: KNOWLEDGE"
+
         if self._is_address_change_policy_question(query):
             return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "address_change_policy: KNOWLEDGE"
 
@@ -128,6 +131,21 @@ class CSCoarseRouter:
         ))
 
     @staticmethod
+    def _is_invoice_policy_question(query: str) -> bool:
+        """把开票政策问句与抬头查询/明确申请分开。"""
+        if not any(token in query for token in ("发票", "开票", "抬头")):
+            return False
+        if re.search(
+            r"(我要|帮我|申请|提交|办理|查|查询|查看|记录|有哪些|名下)",
+            query,
+        ):
+            return False
+        return bool(re.search(
+            r"(怎么|如何|需要|资料|规则|政策|流程|条件|多久|吗|哪些|什么)",
+            query,
+        ))
+
+    @staticmethod
     def _is_order_address_change_request(query: str) -> bool:
         """将明确针对订单/包裹的改址动作放进交易域。"""
         target = re.search(r"(订单|订单号|包裹|物流|在途|运输中)", query)
@@ -154,7 +172,7 @@ class CSCoarseRouter:
         ):
             return False
         return bool(re.search(
-            r"(能不能|可以吗|能否|是否|吗|政策|规则|条件|时效|怎么|如何)",
+            r"(能不能|可以吗|能否|是否|吗|政策|规则|条件|时效|怎么|如何|需要|资料|流程|多久|哪些|什么)",
             query,
         ))
 

@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.8）
+# business-service 客服业务契约（v1.9）
 
-> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案、优惠券档案与模拟开票记录，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.9（cs-capability-gap B8）：新增抬头/开票记录查询与确认后的模拟申请；不连接税务系统。
 - v1.8（cs-capability-gap B7）：新增在途订单改址模拟契约；只登记 mock 请求，不更改真实订单或联系承运方。
 - v1.7（cs-capability-gap B6）：新增 business-mock 自营商品当前售价读取和确认后价保差价模拟入账；仅写内存演示钱包，单订单一次、确认幂等，不影响真实资金。
 - v1.6（cs-capability-gap B5）：新增催发货/催派送模拟登记；同租户、用户、订单和类型 24 小时内复用同一登记；物流超过 5 天无更新时不登记、返回人工升级信号。mock 登记在进程内存，重启后清空；客服动作与审计仍走现有 PostgreSQL agent_actions/audit_logs 幂等落库。
@@ -166,6 +167,22 @@
 请求体 `{action_id, user_id, tenant_id, order_no}`，需带内部服务令牌。服务端核验订单归属、恰有两笔成功流水且金额均等于订单金额，随后仅把最新一笔标记为 `refund_status=simulated`。金额、币种和退款 ID 均由 mock 端事实生成，不接受调用方金额。按 `action_id` 幂等重放；同一订单已模拟退款但使用新 `action_id` 时返回 409。返回 `data.refund`，其中 `status=simulated`、`execution_mode=simulation`、`real_funds_affected=false`。该端点不调用支付平台，不创建真实退款申请，也不写真实钱包/资金账本。
 
 客服端仅在显式 `CS_AUTO_DUPLICATE_REFUND_MODE=mock`、正数金额上限、CNY、业务流水来源、业务 URL 明确为 `http://business-mock:8081` 且所有流水事实完整时调用。默认开关关闭、上限为 0；非 mock、超限、事实变化、写入结果未知均停止自动处理，转人工核查或沿用原确认/审核流程。真实 business-service 不应实现或暴露此演示接口。
+
+## 发票（v1.9）
+
+发票数据为模拟档案：每个用户懒生成个人与企业两条抬头，个人抬头为默认值。HTTP Mock 记录只保存在进程内，服务重启后会清空；永久审计由客服既有 `agent_actions` 流程承担。记录状态固定为 `simulated`，`real_invoice_issued=false` 且 `tax_system_contacted=false`，不是税务发票。
+
+### GET `/business/invoice-titles?user_id={id}&tenant_id={id}`
+
+返回当前用户/租户的 `data.invoice_titles[]`：`title_id`、`title_name`、`title_type`（`individual`/`company`）、`is_default`、`status`。响应不包含税号或邮箱。
+
+### GET `/business/invoices?user_id={id}&tenant_id={id}&order_no={optional}`
+
+返回当前用户/租户最近最多 20 条 `data.invoices[]`，可按订单号筛选；只返回模拟登记记录，不返回税务系统票据或下载链接。
+
+### POST `/business/invoices`
+
+请求体 `{operation_key, user_id, tenant_id, conversation_id, order_no, expected_order_status, title_id, invoice_type}`。只支持 `electronic`；服务端重核订单归属、订单状态和抬头归属，只允许 `paid`、`shipped`、`completed` 订单。`operation_key` 绑定全量请求，原样重放返回同一模拟记录；同订单/同抬头已登记但操作键不同返回 409。成功返回 `data.invoice`，状态为 `simulated`；不调用税务系统、不生成真实发票，响应显式包含两个 `false` 副作用标记。
 
 ## 错误语义
 

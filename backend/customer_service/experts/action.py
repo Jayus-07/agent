@@ -29,6 +29,7 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
+    "t_invoice_request": "invoice",
     "t_change_address_in_transit": "address_change",
     "t_price_match": "price_match",
     "t_urge_shipping": "urge_request",
@@ -39,6 +40,7 @@ _INTENT_ACTION_MAP = {
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
 _SLOT_ORDER_INTENTS = frozenset({
     "as_refund", "as_return", "as_exchange", "t_order_cancel",
+    "t_invoice_request",
     "t_change_address_in_transit",
     "t_price_match",
     "t_urge_shipping", "t_urge_delivery",
@@ -51,6 +53,7 @@ _ACTION_TYPE_LABELS = {
     "address_update": "地址修改",
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
+    "invoice_request": "模拟开票申请",
     "address_change": "订单改址",
     "address_change_request": "订单改址",
     "price_match": "价保退差价",
@@ -84,6 +87,38 @@ def _resolve_tenant(state: dict[str, Any]) -> str:
 
     ctx_tenant = str(((state.get("cs_context") or {}).get("tenant_id")) or "")
     return ctx_tenant or get_tool_tenant_id() or "default"
+
+
+def _invoice_request_slots(
+    cs_route: dict, user_message: str,
+) -> tuple[str, str]:
+    """提取补槽期间需要保留的发票抬头选择和发票类型。"""
+    metadata = cs_route.get("metadata") or {}
+    title_selector = str(
+        metadata.get("invoice_title_id")
+        or metadata.get("invoice_title_name")
+        or metadata.get("invoice_title_selector")
+        or ""
+    ).strip()
+    if not title_selector:
+        for slot in metadata.get("semantic_slots") or []:
+            if isinstance(slot, dict) and slot.get("name") in {
+                "invoice_title_id", "invoice_title_name", "invoice_title",
+            }:
+                title_selector = str(slot.get("value") or "").strip()
+                if title_selector:
+                    break
+    if not title_selector and any(
+        word in user_message for word in ("个人", "自然人", "企业", "公司", "单位")
+    ):
+        title_selector = user_message
+
+    invoice_type = str(metadata.get("invoice_type") or "electronic").strip()
+    if "纸质" in user_message:
+        invoice_type = "paper"
+    elif "电子" in user_message:
+        invoice_type = "electronic"
+    return title_selector, invoice_type
 
 
 def execute_action(
@@ -175,6 +210,14 @@ def execute_action(
         new_address = extract_new_address(cs_route, user_message)
         if new_address:
             collected_slots = {"new_address": new_address}
+    elif intent == "t_invoice_request":
+        title_selector, invoice_type = _invoice_request_slots(
+            cs_route, user_message,
+        )
+        collected_slots = {
+            "invoice_title_selector": title_selector,
+            "invoice_type": invoice_type,
+        }
 
     if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
         try:
@@ -918,6 +961,23 @@ def _build_proposal(
             user_id, order_id, reason,
         )
 
+    if action_type == "invoice":
+        from backend.customer_service.service.invoice_service import (
+            get_invoice_service,
+        )
+
+        title_selector, invoice_type = _invoice_request_slots(
+            cs_route, user_message,
+        )
+        order_id = _resolve_order_id(cs_route, user_message)
+        return get_invoice_service().build_invoice_proposal(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            order_no=order_id,
+            title_selector=title_selector,
+            invoice_type=invoice_type,
+        )
+
     if action_type == "price_match":
         from backend.customer_service.service.price_match_service import (
             get_price_match_service,
@@ -1106,6 +1166,7 @@ def _ask_missing_slot(
     now = datetime.now(timezone.utc)
     action_type = _INTENT_ACTION_MAP.get(intent, "refund")
     label = _ACTION_TYPE_LABELS.get(f"{action_type}_request", action_type)
+    slot_risk_level = "medium" if action_type == "invoice" else "high"
 
     # 退款点选候选（2026-10-08 拍板）：缺订单号时不再让用户手输——按
     # 退款政策窗口列出可退订单（订单号+商品名+金额）供用户点选/回复序号。
@@ -1162,7 +1223,7 @@ def _ask_missing_slot(
             "candidates": candidates,
             "target_type": "order",
             "target_id": "",
-            "risk_level": "high",
+            "risk_level": slot_risk_level,
             "requires_confirmation": False,
             "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
             "retry_count": 0,
@@ -1206,7 +1267,7 @@ def _ask_missing_slot(
         "collected_slots": dict(collected_slots or {}),
         "target_type": "order",
         "target_id": "",
-        "risk_level": "high",
+        "risk_level": slot_risk_level,
         "requires_confirmation": False,
         "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
         "retry_count": 0,
@@ -1486,6 +1547,23 @@ def _handle_slot_fill(
                     order_id=order_id, tenant_id=tenant_id,
                 )
             metadata["new_address"] = address
+        elif intent == "t_invoice_request":
+            collected_slots = pending_action.get("collected_slots") or {}
+            title_selector, _ = _invoice_request_slots(cs_route, user_message)
+            if not title_selector and collected_slots.get("invoice_title_selector"):
+                metadata["invoice_title_selector"] = collected_slots[
+                    "invoice_title_selector"
+                ]
+            has_current_invoice_type = (
+                metadata.get("invoice_type") == "paper"
+                or "纸质" in user_message
+                or "电子" in user_message
+            )
+            if (
+                not has_current_invoice_type
+                and collected_slots.get("invoice_type")
+            ):
+                metadata["invoice_type"] = collected_slots["invoice_type"]
         cs_route["metadata"] = metadata
         logger.info(
             "[ActionExpert] slot filled: order_id=%s intent=%s", order_id, intent,

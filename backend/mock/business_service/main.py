@@ -30,6 +30,8 @@ _POINTS: dict[tuple[str, str], dict[str, Any]] = {}
 # B3 优惠券档案 + 核销记录（数字与 coupon-policy.md / FAQ id=23 互为事实源）
 _COUPONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _REDEMPTIONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_INVOICE_TITLES: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_INVOICES: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _URGE_REQUESTS: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 # B4 支付流水样本；只开放不触碰真实资金的重复扣款模拟退款。
 _PAYMENT_RECORDS: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
@@ -646,6 +648,8 @@ def reset_mock_state() -> None:
         _POINTS.clear()
         _COUPONS.clear()
         _REDEMPTIONS.clear()
+        _INVOICE_TITLES.clear()
+        _INVOICES.clear()
         _URGE_REQUESTS.clear()
         _PAYMENT_RECORDS.clear()
         _SEEDED_USERS.clear()
@@ -1016,6 +1020,162 @@ def check_coupon(
             payload.order_no.strip(), payload.coupon_code.strip(),
         )
         return _ok({"coupon_check": result})
+
+
+def _invoice_titles_for(user_id: str, tenant_id: str) -> list[dict[str, Any]]:
+    key = (tenant_id.strip(), user_id.strip())
+    titles = _INVOICE_TITLES.get(key)
+    if titles is None:
+        suffix = hashlib.sha256("|".join(key).encode()).hexdigest()[:10].upper()
+        titles = [
+            {
+                "title_id": f"MOCK-{suffix}-PERSONAL",
+                "title_name": "个人抬头（模拟）",
+                "title_type": "individual",
+                "is_default": True,
+                "status": "active",
+            },
+            {
+                "title_id": f"MOCK-{suffix}-COMPANY",
+                "title_name": "企业抬头（模拟）",
+                "title_type": "company",
+                "is_default": False,
+                "status": "active",
+            },
+        ]
+        _INVOICE_TITLES[key] = titles
+    return [dict(item) for item in titles]
+
+
+def _invoice_view(invoice: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "invoice_id": invoice["invoice_id"],
+        "invoice_no": invoice["invoice_no"],
+        "order_no": invoice["order_no"],
+        "title_id": invoice["title_id"],
+        "title_name": invoice["title_name"],
+        "title_type": invoice["title_type"],
+        "invoice_type": invoice["invoice_type"],
+        "status": invoice["status"],
+        "real_invoice_issued": False,
+        "tax_system_contacted": False,
+        "created_at": invoice["created_at"],
+    }
+
+
+class InvoiceRequestInput(BaseModel):
+    operation_key: str = Field(min_length=8, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    conversation_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    expected_order_status: str = Field(min_length=1, max_length=32)
+    title_id: str = Field(min_length=1, max_length=128)
+    invoice_type: str = Field(default="electronic", max_length=16)
+
+
+@app.get("/business/invoice-titles")
+def list_invoice_titles(
+    user_id: str = Query("", min_length=1),
+    tenant_id: str = Query("", min_length=1),
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        return _ok({"invoice_titles": _invoice_titles_for(
+            user_id.strip(), tenant_id.strip(),
+        )})
+
+
+@app.get("/business/invoices")
+def list_invoices(
+    user_id: str = Query("", min_length=1),
+    tenant_id: str = Query("", min_length=1),
+    order_no: str = "",
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    key = (tenant_id.strip(), user_id.strip())
+    with _STATE_LOCK:
+        invoices = [dict(item) for item in _INVOICES.get(key, [])]
+        if order_no.strip():
+            invoices = [
+                item for item in invoices
+                if item["order_no"].casefold() == order_no.strip().casefold()
+            ]
+        return _ok({"invoices": [_invoice_view(item) for item in invoices[:20]]})
+
+
+@app.post("/business/invoices")
+def create_mock_invoice(
+    payload: InvoiceRequestInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    tenant_id = payload.tenant_id.strip()
+    order_no = payload.order_no.strip()
+    key = (tenant_id, user_id)
+    operation_key = ("invoice-create", tenant_id, user_id, payload.operation_key)
+    request_payload = {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "conversation_id": payload.conversation_id.strip(),
+        "order_no": order_no,
+        "expected_order_status": payload.expected_order_status,
+        "title_id": payload.title_id,
+        "invoice_type": payload.invoice_type,
+    }
+    with _STATE_LOCK:
+        prior = _OPERATIONS.get(operation_key)
+        if prior is not None:
+            if prior["payload"] != request_payload:
+                raise HTTPException(status_code=409, detail="operation key payload conflict")
+            return _ok({"invoice": _invoice_view(prior["invoice"]), "idempotent": True})
+
+        order = _find_order(user_id, order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        if (
+            order["status"] != payload.expected_order_status
+            or order["status"] not in {"paid", "shipped", "completed"}
+        ):
+            raise HTTPException(status_code=409, detail="order facts changed or ineligible")
+        if payload.invoice_type != "electronic":
+            raise HTTPException(status_code=422, detail="unsupported invoice type")
+        title = next(
+            (item for item in _invoice_titles_for(user_id, tenant_id)
+             if item["title_id"] == payload.title_id and item["status"] == "active"),
+            None,
+        )
+        if title is None:
+            raise HTTPException(status_code=404, detail="invoice title not found")
+        duplicate = next(
+            (item for item in _INVOICES.get(key, [])
+             if item["order_no"].casefold() == order_no.casefold()
+             and item["title_id"] == title["title_id"]),
+            None,
+        )
+        if duplicate is not None:
+            raise HTTPException(status_code=409, detail="order already invoiced for title")
+
+        invoice = {
+            "invoice_id": str(uuid.uuid4()),
+            "invoice_no": f"MOCK-INV-{uuid.uuid4().hex[:12].upper()}",
+            "order_no": order["order_no"],
+            "title_id": title["title_id"],
+            "title_name": title["title_name"],
+            "title_type": title["title_type"],
+            "invoice_type": payload.invoice_type,
+            "status": "simulated",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _INVOICES.setdefault(key, []).append(dict(invoice))
+        _OPERATIONS[operation_key] = {
+            "payload": request_payload,
+            "invoice": dict(invoice),
+        }
+        return _ok({"invoice": _invoice_view(invoice), "idempotent": False})
 
 
 @app.post("/business/wallet/topup")

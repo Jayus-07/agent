@@ -242,6 +242,8 @@ CS_CONFIRM_LLM_CANDIDATE_ENABLED = os.getenv("CS_CONFIRM_LLM_CANDIDATE_ENABLED",
 # http：经 infra/http/business_client 调 business-service（Java/mock）；
 #       订单、物流和售后申请都以远端为事实源，失败不回退 sandbox
 CS_BUSINESS_GATEWAY_MODE = os.getenv("CS_BUSINESS_GATEWAY_MODE", "sandbox").strip().lower()
+# B8 开票申请只允许显式启用 business-mock 模拟登记；默认关闭。
+CS_INVOICE_MODE = os.getenv("CS_INVOICE_MODE", "disabled").strip().lower()
 # 默认关闭退款申请写入；仅同网关模式下显式配置 sandbox 或 http 才开放。
 CS_REFUND_REQUEST_MODE = os.getenv(
     "CS_REFUND_REQUEST_MODE", "disabled",

@@ -35,9 +35,9 @@ const GAP_LIST: Array<{
   { question: '催发货 / 催派送', behavior: '已覆盖（mock 登记、24 小时幂等、异常转人工）', missing: '真实商家/物流系统对接（挂账）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '优惠券能不能叠加 / 为什么没优惠', behavior: '已覆盖（政策问答 + B3 意图级券查询/用券校验）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '积分怎么用 / 等级权益', behavior: '已覆盖（B1 政策问答 + B2 意图级积分/等级查询）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
-  { question: '支付失败 / 重复扣款', behavior: '已覆盖（B4 支付流水查询、重复扣款识别与退款申请提案；退款仍需人工审核）', missing: '真实支付/退款渠道接入（当前不接入）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
-  { question: '在途包裹改地址', behavior: '已覆盖（B7 订单级确认、模拟登记与审计；真实地址保持不变）', missing: '真实物流渠道对接（当前不接入）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
-  { question: '帮我开票 / 修改发票抬头', behavior: '仅 FAQ 答复', missing: '开票 Tool + 抬头子表', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
+  { question: '支付失败 / 重复扣款', behavior: '已覆盖（B4 流水查询；严格低风险样本可显式开启 mock 自动模拟，其他情况沿用确认/人工审核）', missing: '真实支付/退款系统接入（当前不接入）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
+  { question: '在途包裹改地址', behavior: '已覆盖（B7 用户确认后模拟登记与审计；真实地址保持不变）', missing: '真实物流渠道对接（当前不接入）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
+  { question: '帮我开票 / 修改发票抬头', behavior: '已覆盖查询已有抬头/记录；确认后模拟登记', missing: '自助新增/修改抬头；真实税务通道（二期）', priority: '部分覆盖', priorityClass: 'bg-amber-50 text-amber-600' },
   { question: '（发送破损照片）你看下', behavior: '消息拒收（仅文本）', missing: '消息多模态（前端 + 模型）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
 ]
 
