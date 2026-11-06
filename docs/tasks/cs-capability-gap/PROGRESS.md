@@ -137,3 +137,34 @@
 ## 后续批次
 
 B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
+
+## B6：价保退差价（mock-only）——实现及本地验收完成，待审阅提交
+
+- worktree：`C:/Users/wh/.codex/worktrees/cs-price-match/agent`；分支 `feat/cs-price-match`；基于 `987eddbd139c311ff87803427103e86c8a226ca8`；本批改动尚未提交。
+- 路由与执行：新增 `t_price_match` 高风险动作；只接受单商品单件、已支付/已完成、CNY、配置窗口内且金额一致的订单；先展示当前自营价和差额提案，用户明确确认后再次核价，再向 business-mock 写演示钱包流水。
+- 双门禁：客服与 business-mock 均需显式 `CS_PRICE_MATCH_MODE=mock` 且价保窗口为相同正数；客服还要求 HTTP 目标主机在 business-mock allowlist。默认 disabled / 0；不会调用真实支付或退款系统，回复与持久审计均标明 `real_funds_affected=false`。
+- 幂等与审计：确认 UUID 幂等；mock 每订单只允许一条价保流水，订单/售价/时间窗/金额变化会闭锁；迁移 136 允许 agent_actions 写入 `price_match` 并暂时兼容 `urge_request`。**合并顺序依赖 B5 migration 135：先确保 135 已合并/执行，再合并 136；避免后续 135 收窄约束。**
+- 变更还包括业务 mock 价目与 partial-refund 契约、客服配置/错误类型/确认流/意图词表、migration target/path filter、rag_smoke 定向测试、客服能力清单和价保契约文档。
+
+**本地验证证据**：
+
+1. 相关客服回归：**90 passed, 2 skipped**；包括价保提案→用户确认→演示钱包单笔记账、重放/重复订单保护、价格变化与窗口失败闭锁、关闭/非 mock 目标闭锁，以及相关 points/coupon/order-cancel/vocab/router 回归。
+2. 隔离 PostgreSQL T2：真实 `AuditRepository.insert_agent_action` 写入 `price_match`，查回 action_type/status 与 before/after JSON 通过；仅使用本任务 loopback 测试库。
+3. rag_smoke path-filter 测试 **12 passed**；新增测试已加入 rag_smoke 定向清单。
+4. 本批新增 Python 文件 Ruff 通过；所有改动 Python 文件 `py_compile` 通过；`git diff --check` 通过。
+
+**未验收/下一步**：
+
+- 共享 Docker 栈包含其他 worktree 配置且正在使用，禁止从本分支重建覆盖；B6 后端镜像重建、服务健康、真实浏览器/真机验收为 **UNVERIFIED**。前端仅文案改动，worktree 无前端依赖，前端 build 未执行。
+- 本地无 PR/CI/云端 review 结果；当前未提交、未创建 PR。完成审阅后需用户明确确认才能提交。
+- 已停止并移除本任务创建的 `agent-cs-price-audit-pg` 隔离 PG；共享项目 `agent` 未操作。
+**环境说明**：pytest sessionfinish 残留数据检查在本次空白隔离库中提示 `llm_provider_credentials` 表尚未建立；主测试断言通过且进程退出码为 0。该提示仅来自隔离测试库，未访问共享数据库；完整 schema 下的 sessionfinish 检查仍待运行环境验证。
+
+**本轮续验（2026-11-06）**：复核时发现 Compose 的 `business-mock` 服务此前没有接收 `CS_PRICE_MATCH_MODE` 与 `CS_PRICE_MATCH_WINDOW_DAYS`，容器会一直使用 disabled 默认值。已在 Compose 中以 `disabled` / `0` 安全默认透传，并在 `.env.example` 说明显式启用 mock + HTTP 的配置方式；新增测试守卫防止该接线回退。
+
+- 定向客服回归与双门禁：`test_price_match_flow.py`、coarse/fine router、vocab、客服 eval gate、decision replay、points、coupon、order cancel、RAG path filter 共 **118 passed, 3 skipped**（39.91s，退出码 0）。本轮未设置 B6 PostgreSQL T2 DSN，T2 用例跳过；上一轮隔离 loopback PostgreSQL T2 的 `AuditRepository` 持久化证据仍有效。
+- 加入“mock 已写入但返回 2xx 损坏封套”的场景：客服确认结果进入既有 `verifying`，审计标记 `in_doubt`，演示钱包仍只有一笔记录；关闭闸门时回复也不再错误声称“未创建提案”。B6 流程最终代码 **8 passed, 1 skipped**（34.52s，退出码 0）。
+- 最新完整定向组合（含上项未知结果用例、Compose 配置守卫与所有相邻回归）**119 passed, 3 skipped**（40.08s，退出码 0）；之后仅调整关闭闸门的用户文案，并用最终 B6 流程测试验证。3 个 skip 分别为本机未设置 DSN 的 B6 AuditRepository T2、points/coupon sandbox T2。
+- 本轮 `py_compile`、B6 范围 Ruff（对确认流、ActionExpert、配置和迁移登记文件仅忽略已在基线存在的告警）、Compose YAML 解析/价保环境透传断言、`git diff --check` 均通过。
+- pytest 结束时通用 residue guard 因当前 worktree 无 `.env`，尝试 `localhost:5432` 后报无密码/PoolTimeout；pytest 退出码仍为 0。未连接或修改共享数据库。
+- 共享 `agent` Compose 仍由多个 worktree 配置共同构成，且本轮宿主可用内存约 2.08 GB；未从本分支重建 app 或 business-mock，也未做真机验收。代码部署与用户路径仍为 **UNVERIFIED**。

@@ -12,11 +12,13 @@
 
 ## 首期投产范围
 
+- 价保退差价采用 B6 mock-only 流程：提案、用户确认、确认前重核订单和自营售价、写 business-mock 演示钱包并落客服审计；客服与 business-mock 两侧 CS_PRICE_MATCH_MODE 默认 disabled、价保窗口默认 0，不影响真实资金。
 - 真实接入渠道为 web（2026-11-01 用户确认）；app、phone、wechat 尚未接入。
 - 首期退款申请写入保持 `CS_REFUND_REQUEST_MODE=disabled`；业务网关 `CS_BUSINESS_GATEWAY_MODE` 同时控制订单和物流查询，支持 http / sandbox，不将 disabled 当作关闭资金的开关。2026-11-02 本机共享 app 为 http 网关、退款申请未显式设置（默认 disabled）；此记录不代表其他支付或退款审核路径已经验收。资金首期范围与真实后端仍待 Q6 拍板。
 
 ## 领域职责与安全边界
 
+- 价保模拟独立使用 CS_PRICE_MATCH_MODE=disabled 与 CS_PRICE_MATCH_WINDOW_DAYS=0 默认值；客服和 business-mock 两侧都显式设为 mock、窗口相同且为正数、目标地址在允许列表内时才开放确认流程。它只写内存演示钱包，并由既有 agent_actions/audit_logs 记录操作事实；不连接真实资金或支付系统。
 - Supervisor 按当前请求状态分派知识查询、业务查询、动作提案、投诉或人工接管；专家通过共享 state 和显式结果协作，不互相直接调用。
 - 权限与租户范围只取自服务端验证后的身份；订单、工单及会话数据必须按资源授权隔离。输出守卫和知识库证据规则按当前安全模块及测试执行。
 - 退款、退货等写操作先形成提案并校验必填信息，再进入用户确认、授权执行和幂等保护；`pending`、`executed`、`failed`、`unknown` 等状态不可互相伪装。

@@ -30,7 +30,7 @@ const GAP_LIST: Array<{
   priority: string
   priorityClass: string
 }> = [
-  { question: '买完降价了，退差价（价保）', behavior: '仅能答政策条文', missing: '比价 Tool + 部分退款', priority: '近期', priorityClass: 'bg-amber-50 text-amber-600' },
+  { question: '买完降价了，退差价（价保）', behavior: '已覆盖（B6 提案→确认→mock 差价流水与审计；默认关闭）', missing: '无（不接真实资金系统）', priority: '近期', priorityClass: 'bg-amber-50 text-amber-600' },
   { question: '注销账号 / 删除我的数据', behavior: '无流程', missing: '合规注销流程（红线级）', priority: '合规', priorityClass: 'bg-red-50 text-red-600' },
   { question: '催发货 / 催派送', behavior: '仅能查预计送达', missing: '催办动作 + 商家协同', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '优惠券能不能叠加 / 为什么没优惠', behavior: '已覆盖（政策问答 + B3 意图级券查询/用券校验）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },

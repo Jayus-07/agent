@@ -179,6 +179,7 @@ jobs:
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \
+            backend/tests/customer_service/test_price_match_flow.py \
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/scripts/test_cs_kb_seed_sync.py \
             backend/tests/rag/test_specialized_budget.py \

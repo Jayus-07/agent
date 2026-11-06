@@ -70,6 +70,9 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         "t_order_cancel": [
             "取消订单", "我要取消", "退掉订单", "把订单取消", "订单不要了",
         ],
+        "t_price_match": [
+            "退差价", "补差价", "价保申请", "申请价保", "保价申请",
+        ],
         "as_return": ["退货", "退换", "return"],
         "as_exchange": ["换货", "exchange", "换个", "换成"],
         "as_repair": ["维修", "报修", "送修", "返修", "修一下"],

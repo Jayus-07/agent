@@ -14,6 +14,7 @@ from backend.customer_service.errors import (
     DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
+    PriceMatchUnavailableError,
     RefundRequestUnavailableError,
 )
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -27,11 +28,15 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
+    "t_price_match": "price_match",
 }
 
 # 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
-_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange", "t_order_cancel"})
+_SLOT_ORDER_INTENTS = frozenset({
+    "as_refund", "as_return", "as_exchange", "t_order_cancel",
+    "t_price_match",
+})
 
 _ACTION_TYPE_LABELS = {
     "refund_request": "退款申请",
@@ -40,6 +45,7 @@ _ACTION_TYPE_LABELS = {
     "address_update": "地址修改",
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
+    "price_match": "价保退差价",
 }
 
 # 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
@@ -193,6 +199,12 @@ def execute_action(
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
                                    user_message, tenant_id=tenant_id)
     except RefundRequestUnavailableError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
+    except PriceMatchUnavailableError as exc:
         return ExpertResult(
             expert="action", status=ExpertStatus.SUCCESS.value,
             response_draft=exc.user_message,
@@ -594,6 +606,16 @@ def _build_proposal(
         reason = cs_route.get("metadata", {}).get("reason", "")
         return get_cancel_order_service().build_cancel_order_proposal(
             user_id, order_id, reason,
+        )
+
+    if action_type == "price_match":
+        from backend.customer_service.service.price_match_service import (
+            get_price_match_service,
+        )
+
+        order_id = _resolve_order_id(cs_route, user_message)
+        return get_price_match_service().build_proposal(
+            user_id, tenant_id, order_id,
         )
 
     if action_type == "return":

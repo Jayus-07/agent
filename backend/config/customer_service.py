@@ -60,6 +60,7 @@ CS_HIGH_RISK_ACTIONS = frozenset({
     "refund_execute",
     "return_execute",
     "order_cancel",
+    "price_match",
 })
 
 CS_CRITICAL_ACTIONS = frozenset({
@@ -252,6 +253,11 @@ CS_REFUND_REQUEST_MODE = os.getenv(
 #   disabled = 拒绝取消提案写入与确认执行（不取消、不退款）；
 #   其余未知值按安全默认拒绝。
 CS_ORDER_CANCEL_MODE = os.getenv("CS_ORDER_CANCEL_MODE", "http").strip().lower()
+
+# B6 价保差价只开放到显式 business-mock 网关；默认关闭，未确认业务窗口前
+# 不设资格天数。非法或未配置值由 PriceMatchService 在每个写入口 fail-closed。
+CS_PRICE_MATCH_MODE = os.getenv("CS_PRICE_MATCH_MODE", "disabled").strip().lower()
+CS_PRICE_MATCH_WINDOW_DAYS = os.getenv("CS_PRICE_MATCH_WINDOW_DAYS", "0").strip()
 
 # ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))

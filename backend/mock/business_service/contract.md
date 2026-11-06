@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.3）
+# business-service 客服业务契约（v1.4）
 
 > `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.4（cs-capability-gap B6）：新增 business-mock 自营商品当前售价读取和确认后价保差价模拟入账；仅写内存演示钱包，单订单一次、确认幂等，不影响真实资金。
 - v1.3（cs-capability-gap B3）：新增优惠券查询与用券校验（懒种子：满减/无门槛/折扣三类可用 + 一张已过期券 + 一条核销样本，数字与 coupon-policy.md / FAQ id=23 一致；check 确定性覆盖 expired/threshold_not_met/not_stackable 三类不生效）。
 - v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
 - v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
@@ -122,6 +123,20 @@
 ### POST `/business/coupons/check`
 
 请求体 `{user_id, tenant_id, order_no, coupon_code?}`。规则优先级：显式券码过期（`expired`）→ 未满足门槛（`threshold_not_met`，按订单实付合计）→ 不可叠加（`not_stackable`，该订单已有核销记录）→ 可用（`applicable`）。订单或券不存在返回 404。返回 `data.coupon_check`：`applicable`、`reason_code`、`reason_text`、`order_no`、`order_total`、`coupon{coupon_code, kind, name, threshold_amount, discount_value}`。只读校验，无副作用与幂等键。
+
+## 价保差价（v1.4，business-mock only）
+
+客服与 business-mock 两侧默认关闭：CS_PRICE_MATCH_MODE=disabled、CS_PRICE_MATCH_WINDOW_DAYS=0。只有两侧都显式设为 mock、HTTP 网关指向 business-mock:8081（或本机 8081）且两侧窗口同为正数时，客服才构建提案并允许 mock 入账。业务价保窗口未确认前不得配置生产默认值。样例订单提供固定 SKU 和固定自营价，不能代表真实商品报价。
+
+### GET /business/products/{product_no}/current-price
+
+返回 data：product_no、price、currency。未知商品返回 404。
+
+### POST /business/orders/{order_no}/partial-refund
+
+仅供客服内部价保模拟，要求 X-Internal-Token。请求体包含 operation_key（确认 UUID）、user_id、tenant_id、order_no、expected_status、expected_payment_status、expected_paid_at、expected_currency、product_no、expected_original_price、expected_current_price、expected_amount 和 window_days。business-mock 重查订单归属、已支付状态、CNY、单商品单件、支付时间窗口、当前 SKU 价和差额；任何事实变化返回 409。相同操作键与相同参数返回原结果，内容不同返回 409；一个订单只允许一笔价保流水。
+
+成功返回 data.refund（amount、currency=CNY、kind=price_match、status=simulated、real_funds_affected=false）及 data.wallet。只追加内存演示钱包流水，不调用支付、退款或其他真实业务系统。客服 agent_actions 和 audit_logs 复用既有持久审计通路；business-mock 重启后其钱包和流水会清空。
 
 ## 错误语义
 

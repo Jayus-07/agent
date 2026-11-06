@@ -355,6 +355,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 优惠券档案 + 核销记录（cs-capability-gap B3）：marketing.coupons
     # + marketing.coupon_redemptions（agent_business 库，含建 marketing schema）。
     "133_cs_coupon.sql": "business",
+    # B6 价保动作审计类型扩展；资金模拟仍由 business-mock 承接。
+    "136_cs_price_match_action_type.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
