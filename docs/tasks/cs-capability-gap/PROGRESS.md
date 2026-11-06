@@ -6,9 +6,10 @@
 
 - B4 PR #336、B5 PR #338、B6 PR #339、B7 PR #340 均已合入 main；B7 merge commit 为 `f1bfd73`。B4–B7 定向回归此前 **218 passed / 5 skipped**，B7 独立 PostgreSQL T2 **1 passed**。
 - B8 PR #341 已于 2026-11-06 合入 main：代码 HEAD `3039c42`，merge commit `ed95ddc`。B4–B8 集成组合此前 **262 passed / 6 skipped**；审查修复后的发票流程 **14 passed / 1 skipped**，独立 PostgreSQL 审计 T2 **1 passed**。PR CI 的 RAG preflight、RAG Smoke、Eval V2 免费契约、管理端构建/测试、scan 和路径检测均通过；真实 API 评测按 PR 规则跳过。两条 P2 审查意见已修复：演示身份在读取和写入间一致，补槽保留发票抬头与类型。
-- B9 只含立项书，工作树已快进到 `ed95ddc`，并将现状基线更新为该提交；文档尚未提交/开 PR。图片上传、存储和客服视觉推理仍未实现。
+- B9 立项书 PR #342 已于 2026-11-06 合入 main，merge commit `badf603`；现状基线为 B8 合并后的 `ed95ddc`。图片上传、存储和客服视觉推理仍未实现，PR 仅交付方案与门槛。
 - q3 `b4-acc-q3` 退款提案仍为 `expired`（到期 `2026-11-05 15:43:48 UTC`）；2026-11-06 通过共享 PG 只读核验 `confirmed_at`/`executed_at` 为空、对应客服 `refund_request` 动作 **0**、幂等记录 **0**、业务库对应订单退款记录 **0**。没有确认、提交或发起退款；后续验收继续不触碰。
-- B4–B8 最终主容器重建及运行时验收尚未开始；待 B9 文档 PR 合入后，从含最新 main 的任务工作树重建，再核验迁移、健康状态和安全的 mock 查询流程。真实支付、物流、税务和资金系统不接入。
+- B4–B8 最终主容器重建及运行时验收已从任务工作树 `D:/Program Files/workplace/agent-cs-b9-charter`、HEAD `badf603` 完成：迁移 138/139 applied，db-migrate 退出码 0，app、business-mock、RAG、MCP、workers、三个前端容器均 healthy；`:8000/health`、`:8081/health`、`:8090/readyz`、`:9080/health`、`:3100/login`、`:3200/login`、`:3300/login` 均 HTTP 200。客服支付流水与发票查询 API 只读对话分别成功，证据见 B8 收尾记录。当前服务绑定本机回环地址，不是公网生产部署。
+- 运行开关复核：`CS_BUSINESS_GATEWAY_MODE=http`，目标 `business-mock:8081`；`CS_DEMO_MODE=false`；自动模拟退款关闭且上限 0；发票、改址、价保写入均 disabled。未执行任何退款/开票/改址/价保写入，q3 `b4-acc-q3` 未触碰。business-mock 使用进程内存状态和进程内 RLock；本次只验收单实例路径，未做负载压测或多副本一致性验收，不宣称具备高并发生产保证。
 
 ## 管理端能力治理现状（2026-11-06）
 
@@ -301,6 +302,14 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - 范围：查询当前用户已有抬头/开票记录；显式确认后登记模拟申请。不开真实税务系统，不支持自助新增/修改抬头；服务默认关闭。
 - 关键约束：只允许符合状态的订单及已有 active 抬头；确认时重核业务事实；写入走幂等和现有审计，未知结果进入 `verifying`。迁移 138/139、路径过滤、`rag_smoke` 定向测试及契约/客服文档已随 B8 分支增加。
 - B8 独立分支既有证据：发票流程 **13 passed / 0 skipped**；隔离 PostgreSQL 审计 T2 **1 passed**，验证 action、audit、幂等记录各一条且真实开票标记为 false；mock HTTP 冒烟、mock 与坐席前端构建通过。
-- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。集成组合回归 **262 passed / 6 skipped**；PR #341 首轮 CI 发现审计 T2 fixture 对迁移后的会话状态默认值不兼容。fixture 现在按 schema 选择 `conversation_status=open` 或旧列 `status=active`；独立 PostgreSQL T2 **1 passed**。PR #341 已合入 `ed95ddc`；审查修复和 CI 结果以本节顶部当前集成状态为准。主容器重建和运行时验收仍待完成。
+- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。集成组合回归 **262 passed / 6 skipped**；PR #341 首轮 CI 发现审计 T2 fixture 对迁移后的会话状态默认值不兼容。fixture 现在按 schema 选择 `conversation_status=open` 或旧列 `status=active`；独立 PostgreSQL T2 **1 passed**。PR #341 已合入 `ed95ddc`；审查修复和 CI 结果以本节顶部当前集成状态为准。
 - PR 自动审查发现两项补槽/演示身份问题，已在后续修改中修复：发票抬头和记录读取现与确认写入使用同一演示业务身份，认证/权限仍保留真实登录身份；缺订单号时将抬头选择及纸质/电子类型写入既有 `collected_slots`，补槽时恢复。新增两个回归覆盖企业抬头补槽、纸质类型拒绝及 demo 模式完整确认链路。
-- 审查修复后的本地验证：完整 `test_invoice_flow.py` **14 passed / 1 skipped**；新增用例筛选 **2 passed**；三个改动 Python 文件 `py_compile`、Ruff 与 `git diff --check` 均通过。pytest 退出前仍输出既有全局 `TaskService.ensure_schema` / residue guard PostgreSQL PoolTimeout 日志；未影响退出码。PR CI 已全绿并合入 `ed95ddc`；主容器重建和运行时验收待完成。
+- 审查修复后的本地验证：完整 `test_invoice_flow.py` **14 passed / 1 skipped**；新增用例筛选 **2 passed**；三个改动 Python 文件 `py_compile`、Ruff 与 `git diff --check` 均通过。pytest 退出前仍输出既有全局 `TaskService.ensure_schema` / residue guard PostgreSQL PoolTimeout 日志；未影响退出码。PR CI 已全绿并合入 `ed95ddc`。
+
+### B4–B8 合并后主容器重建与运行时验收（2026-11-06）
+
+- 使用 B9 合入后的任务工作树 `D:/Program Files/workplace/agent-cs-b9-charter`，HEAD `badf603`，从该工作树运行 `devctl.bat rebuild /y` 退出 0；其后单独用同一工作树 Compose 构建并替换 `frontend-cs`（`/cs/knowledge` 已进生产构建）。`agent-app-1`、`agent-business-mock-1`、`agent-frontend-cs-1` 等代码容器的 Compose `working_dir` 均指向该工作树。共享基础设施未整体停启；隔离 PostgreSQL `cs-address-change-t2` 未操作。
+- `agent-db-migrate-1` 退出码 0；日志确认迁移 **138 `cs_invoice_business`** 与 **139 `cs_invoice_action_type`** applied。app、business-mock、RAG、MCP、worker、客服前端、web、admin 健康；`:8000/health`、`:8081/health`、`:8090/readyz`、`:9080/health`、`:3100/login`、`:3200/login`、`:3300/login` 全部 HTTP 200。
+- 容器内配置：gateway `http` → `http://business-mock:8081`；`CS_DEMO_MODE=false`；`CS_AUTO_DUPLICATE_REFUND_MODE=disabled`、金额上限 `0`；`CS_INVOICE_MODE`、`CS_ADDRESS_CHANGE_MODE`、`CS_PRICE_MATCH_MODE` 均 `disabled`。因此本轮只做查询，不启用写动作。
+- 真实应用链路只读验收：B4 `POST /api/chat/customer-service` 查询单笔支付流水，session `cs-runtime-b4-08004585d1324ded849f451f46b7d8fb` 返回一笔支付宝成功流水并明确未发现重复扣款；B8 同 endpoint 查询发票抬头/记录，session `cs-runtime-b8-fc05577570c740d9ba5714e6f649bd70` 返回两个模拟抬头、无开票记录。两次均 HTTP 200；没有执行确认或业务写入；q3 session 未访问。
+- 运行边界：当前 Compose 对外端口只绑定 `127.0.0.1`，不能作为公网服务入口；business-mock 数据在单进程内存并由 `threading.RLock` 保护，重启即重置、多个副本之间不共享。本次没有做并发/负载压测，不能给出并发容量数字或多副本一致性保证。
