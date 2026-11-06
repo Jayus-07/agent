@@ -221,6 +221,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/134_cs_payment.sql",
     # 物流催办动作类型扩展（B5 客服动作审计，与模型调用无关）
     "backend/sql/migrations/135_cs_urge_request_action_type.sql",
+    # 价保动作类型扩展（B6 客服审计，与模型调用无关）
+    "backend/sql/migrations/136_cs_price_match_action_type.sql",
 })
 
 

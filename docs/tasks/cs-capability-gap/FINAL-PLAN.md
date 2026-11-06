@@ -139,9 +139,9 @@
 ### B6：价保退差价（资金动作，全链路最重）
 
 - 意图：`t_price_match`（AFTER_SALES，BUSINESS_ACTION，high，确认流）。
-- Service：`price_match_service.py`——`build_proposal`：查订单（paid/completed 且在价保窗口）+ 查当前售价（mock `GET /business/products/{no}/current-price`，**业务口径=自营当前售出价**，外部比价挂账）→ 差价=订单价-现价（>0 才可保）→ 提案（差价金额+退回钱包+政策引用）；`execute_confirmed`：重查价格/状态（变化即拒）→ 差价退款走**部分退款契约**（mock `POST /business/refund-requests` 扩展 `kind=price_match` 或新增 `POST /business/orders/{no}/partial-refund`，写 wallet 流水 kind=price_match）→ 开关 `CS_PRICE_MATCH_MODE`（fail-closed 双入口）。
-- facts：operation（status/action=price_match/simulated）+ refund 金额——composer 守卫的 refund 语义全部自动生效（金额/到账声明核验）。
-- 迁移：`finance.wallet_ledger.kind` 枚举扩展 + 订单价快照列（如需）。
+- Service：price_match_service.py——build_proposal 查已支付订单和 business-mock 当前自营售价，限单件、单商品、CNY、正数显式价保窗口；确认时重核全部事实后调用 partial-refund mock，用户确认、高风险、默认关闭。
+- 审计事实：agent_actions.data 保存核验前后订单、售价和差额、模拟流水及 real_funds_affected=false；用户回复使用确认流模板引用 mock 返回值，不把资金结果交给生成式改写。
+- 迁移：136 扩展 customer_service.agent_actions.action_type 允许值 price_match，并保留 B5 urge_request；价保账本仅由 business-mock 内存对象承接，不改真实钱包表。
 - 红线：资金动作终点 business-mock；不开放真实资金；审计走既有 agent_actions/audit_logs。
 
 ### B7：在途包裹改地址

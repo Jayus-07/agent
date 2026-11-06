@@ -182,6 +182,7 @@ jobs:
             backend/tests/customer_service/test_payment_flow.py \
             backend/tests/customer_service/test_task_plan.py \
             backend/tests/customer_service/test_urge_flow.py \
+            backend/tests/customer_service/test_price_match_flow.py \
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/scripts/test_cs_kb_seed_sync.py \
             backend/tests/rag/test_specialized_budget.py \

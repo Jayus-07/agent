@@ -187,6 +187,7 @@ def _execute_confirmed_action(
     confirmation_id = str(pending_action.get("action_id", "") or "")
     action_type = str(pending_action.get("action_type", "") or "")
     refund_request_written = False
+    price_match_written = False
     if action_type == "refund_request":
         if not confirmation_id or not user_id or not tenant_id or not session_id:
             from backend.customer_service.errors import RefundRequestUnavailableError
@@ -226,6 +227,26 @@ def _execute_confirmed_action(
                 conversation_id=session_id,
             )
             return action_record.to_dict()
+    elif action_type == "price_match":
+        if not confirmation_id or not user_id or not tenant_id or not session_id:
+            from backend.customer_service.errors import PriceMatchUnavailableError
+
+            raise PriceMatchUnavailableError("价保确认缺少可信上下文")
+        from backend.customer_service.service.price_match_service import (
+            get_price_match_service,
+        )
+
+        def execute() -> dict:
+            nonlocal price_match_written
+            action_record = get_price_match_service().execute_confirmed_action(
+                pending_action,
+                confirmation_id=confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                conversation_id=session_id,
+            )
+            price_match_written = True
+            return action_record.to_dict()
     else:
         def execute() -> dict:
             return _simulate_execute(pending_action).to_dict()
@@ -240,6 +261,9 @@ def _execute_confirmed_action(
         # risk_level 是 proposal 语义的一部分：变更 = 不同请求（冲突检测）
         "risk_level": pending_action.get("risk_level", ""),
     }
+    if action_type == "price_match":
+        payload["before_state"] = pending_action.get("before_state", {})
+        payload["after_state"] = pending_action.get("after_state", {})
     resolved_tenant = tenant_id or get_tool_tenant_id() or "default"
     try:
         return run_idempotent_side_effect(
@@ -251,9 +275,14 @@ def _execute_confirmed_action(
             client_key=f"cs_action:{confirmation_id}",
         )
     except IdempotencyUnavailable as exc:
-        if action_type == "refund_request" and refund_request_written:
+        if (
+            (action_type == "refund_request" and refund_request_written)
+            or (action_type == "price_match" and price_match_written)
+        ):
             raise SideEffectOutcomeUnknown(
-                "退款申请操作已写入，但幂等终态未能确认"
+                "价保 mock 入账已写入，但幂等终态未能确认"
+                if action_type == "price_match"
+                else "退款申请操作已写入，但幂等终态未能确认"
             ) from exc
         raise
 
@@ -386,6 +415,14 @@ def _handle_confirm(
                 f"**订单号:** `{record.get('target_id', '')}`\n"
                 f"**货款已退回账户余额:** ¥{float(wallet.get('balance') or 0):.2f}\n"
                 "可在「资金流水」查看退款入账记录。"
+            )
+        elif action_type == "price_match":
+            refund = (record.get("data") or {}).get("refund") or {}
+            answer = (
+                "✅ 价保差价已写入 business-mock 演示钱包流水。\n\n"
+                f"**订单号:** {record.get('target_id', '')}\n"
+                f"**模拟差价:** ¥{refund.get('amount', '0.00')}\n"
+                "此操作仅为模拟记账，未影响真实资金。"
             )
         else:
             answer = (

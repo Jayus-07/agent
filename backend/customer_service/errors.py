@@ -163,6 +163,20 @@ class RefundRequestUnavailableError(BusinessRuleError):
         )
 
 
+class PriceMatchUnavailableError(BusinessRuleError):
+    """价保 mock 通道未开放或不满足受控执行条件。"""
+
+    def __init__(self, message: str = "价保服务暂不可用", **kw):
+        super().__init__(
+            message,
+            user_message=(
+                "当前价保模拟通道未开放或暂不可用，未执行价保；"
+                "未发起真实退款、未影响真实资金。请联系人工客服协助。"
+            ),
+            **kw,
+        )
+
+
 class RefundReviewConflictError(BusinessRuleError):
     """退款申请已处于终态（或审核操作冲突），不可再次审核。"""
 

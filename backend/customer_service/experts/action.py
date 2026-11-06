@@ -14,6 +14,7 @@ from backend.customer_service.errors import (
     DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
+    PriceMatchUnavailableError,
     RefundRequestUnavailableError,
 )
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -27,6 +28,7 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
+    "t_price_match": "price_match",
     "t_urge_shipping": "urge_request",
     "t_urge_delivery": "urge_request",
 }
@@ -35,6 +37,7 @@ _INTENT_ACTION_MAP = {
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
 _SLOT_ORDER_INTENTS = frozenset({
     "as_refund", "as_return", "as_exchange", "t_order_cancel",
+    "t_price_match",
     "t_urge_shipping", "t_urge_delivery",
 })
 
@@ -45,6 +48,7 @@ _ACTION_TYPE_LABELS = {
     "address_update": "地址修改",
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
+    "price_match": "价保退差价",
     "urge_request": "物流催办",
 }
 
@@ -205,6 +209,12 @@ def execute_action(
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
                                    user_message, tenant_id=tenant_id)
     except RefundRequestUnavailableError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
+    except PriceMatchUnavailableError as exc:
         return ExpertResult(
             expert="action", status=ExpertStatus.SUCCESS.value,
             response_draft=exc.user_message,
@@ -862,6 +872,16 @@ def _build_proposal(
         reason = cs_route.get("metadata", {}).get("reason", "")
         return get_cancel_order_service().build_cancel_order_proposal(
             user_id, order_id, reason,
+        )
+
+    if action_type == "price_match":
+        from backend.customer_service.service.price_match_service import (
+            get_price_match_service,
+        )
+
+        order_id = _resolve_order_id(cs_route, user_message)
+        return get_price_match_service().build_proposal(
+            user_id, tenant_id, order_id,
         )
 
     if action_type == "return":
