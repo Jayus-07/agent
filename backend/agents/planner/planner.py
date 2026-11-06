@@ -140,16 +140,25 @@ def planner_node(state: dict) -> dict:
     """
     question = state.get("question", "")
     kb_id = state.get("kb_id", "default")
+    evaluation_mode = bool(state.get("_evaluation_mode"))
 
     if not question:
         logger.warning("[Planner] 空问题，返回空 plan")
-        return {"plan": {"nodes": {}, "edges": {}}}
+        result = {"plan": {"nodes": {}, "edges": {}}}
+        if evaluation_mode:
+            result["_planner_evaluation"] = {
+                "status": "success",
+                "source": "empty_input",
+                "actual_plan": {"nodes": [], "edges": {}},
+            }
+        return result
 
     # 可信产品/域（执行门同取值链：request_context 投影 → state 平铺 →
     # internal），决定授权可见集与缓存隔离
     from backend.core.product_context import product_id_from_state
     product_id = product_id_from_state(state)
     domain = str(state.get("domain") or "")
+    visible = _authorized_visible_capabilities(product_id, domain)
 
     # ── 2026-08-11: Router candidates hint ──
     router_decision = state.get("route_decision") or {}
@@ -164,13 +173,36 @@ def planner_node(state: dict) -> dict:
     # ── P2 性能优化：缓存命中 → 跳过 LLM ──
     from backend.prompts.service import prompt_service
     prompt_version = prompt_service.get_version_for_cache_key("planner.system")
-    cached = _planner_cache.get_json(
-        _cache_key(question, kb_id, product_id, domain, prompt_version))
+    cached = None
+    if not evaluation_mode:
+        cached = _planner_cache.get_json(
+            _cache_key(question, kb_id, product_id, domain, prompt_version))
     if cached is not None:
-        logger.info(f"[Planner] 缓存命中 → {len(cached.get('nodes',{}))} 节点")
-        return {"plan": cached}
+        cached_nodes = cached.get("nodes") if isinstance(cached, dict) else None
+        cached_raw_nodes = (
+            list(cached_nodes.values()) if isinstance(cached_nodes, dict)
+            else cached_nodes
+        )
+        cached_contract = {
+            "nodes": cached_raw_nodes,
+            "edges": cached.get("edges") if isinstance(cached, dict) else None,
+        }
+        cached_errors = _validate_plan_contract(
+            cached_contract, allowed=set(visible))
+        if not isinstance(cached_nodes, dict):
+            cached_errors.append("cached nodes must be a normalized object")
+        elif any(
+            not isinstance(node, dict) or str(step_id) != node.get("step_id")
+            for step_id, node in cached_nodes.items()
+        ):
+            cached_errors.append("cached node keys must match step IDs")
+        if isinstance(cached, dict) and set(cached) != {"nodes", "edges"}:
+            cached_errors.append("cached plan contains unsupported fields")
+        if not cached_errors and cached_raw_nodes:
+            logger.info(f"[Planner] 缓存命中 → {len(cached_raw_nodes)} 节点")
+            return {"plan": cached}
+        logger.warning("[Planner] 缓存计划契约无效，重新请求模型")
 
-    visible = _authorized_visible_capabilities(product_id, domain)
     capabilities_schema = _format_capabilities_schema(visible)
     cap_example = visible[0] if visible else "rag.search"
     schema_overview = _format_schema_overview()
@@ -205,10 +237,49 @@ def planner_node(state: dict) -> dict:
             ("system", prompt),
             ("human", user_msg),
         ], max_tokens=PLANNER_LLM_MAX_TOKENS)
+
+        if evaluation_mode:
+            from backend.infra.llm.proxy import is_degraded_response
+
+            if is_degraded_response(resp):
+                metadata = getattr(resp, "additional_kwargs", {}) or {}
+                error_type = str(metadata.get("llm_error_type") or "provider_error")
+                return {
+                    "plan": {"nodes": {}, "edges": {}},
+                    "_planner_evaluation": {
+                        "status": "error",
+                        "source": "provider_degradation",
+                        "error_category": "provider",
+                        "error_code": error_type,
+                    },
+                }
         content = resp.content.strip()
 
         # 提取 JSON（现在直接返回 dict）
         plan = _extract_json(content)
+
+        contract_errors = _validate_plan_contract(plan, allowed=set(visible))
+        if contract_errors:
+            if evaluation_mode:
+                return {
+                    "plan": {"nodes": {}, "edges": {}},
+                    "_planner_evaluation": {
+                        "status": "invalid_output",
+                        "source": "model",
+                        "error_category": "contract_violation",
+                        "errors": contract_errors,
+                    },
+                }
+            logger.warning("[Planner] 模型输出不符合计划契约，使用安全兜底")
+            fallback = _with_kb_scope(
+                _fallback_plan(question, rag_allowed="rag.search" in visible),
+                kb_id,
+            )
+            return {
+                "plan": fallback,
+            }
+
+        model_plan_empty = not plan["nodes"]
 
         # 校验（叠加当前请求授权集：LLM 输出不得保留越权能力）
         plan = _normalize_plan(plan, allowed=set(visible))
@@ -225,35 +296,64 @@ def planner_node(state: dict) -> dict:
         logger.info(f"[Planner] 计划生成(product={product_id}): "
                     f"{node_count} 个节点, {edge_count} 条依赖")
 
-        # P2 perf: 写入缓存
-        _planner_cache.set_json(
-            _cache_key(question, kb_id, product_id, domain, prompt_version),
-            plan)
-
         # 兜底：空计划 → 自动添加 search_knowledge 步骤
+        used_fallback = model_plan_empty or not plan.get("nodes")
         if not plan.get("nodes"):
-            plan = _fallback_plan(question,
-                                  rag_allowed="rag.search" in visible)
+            plan = _with_kb_scope(
+                _fallback_plan(question, rag_allowed="rag.search" in visible),
+                kb_id,
+            )
             logger.info("[Planner] 空计划，使用兜底 RAG 步骤")
 
         # KB 隔离：为所有 search_knowledge 步骤注入 kb_id
-        for step_id, node in plan.get("nodes", {}).items():
-            if node.get("capability") == "rag.search":
-                node.setdefault("params", {})
-                node["params"]["kb_id"] = kb_id
+        plan = _with_kb_scope(plan, kb_id)
 
-        return {"plan": plan}
+        # 只缓存通过严格校验且由模型生成非空的完整计划。
+        if not evaluation_mode and not used_fallback and plan.get("nodes"):
+            _planner_cache.set_json(
+                _cache_key(question, kb_id, product_id, domain, prompt_version),
+                plan)
+
+        result = {"plan": plan}
+        if evaluation_mode:
+            final_nodes = list(plan.get("nodes", {}).values())
+            result["_planner_evaluation"] = {
+                "status": "fallback" if used_fallback else "success",
+                "source": (
+                    "runtime_policy" if model_plan_empty and plan.get("nodes")
+                    else "runtime_fallback" if used_fallback
+                    else "model"
+                ),
+                "error_category": "empty_model_plan" if used_fallback else "",
+                "actual_plan": {"nodes": final_nodes, "edges": plan.get("edges", {})},
+            }
+        return result
 
     except json.JSONDecodeError as e:
-        logger.error(f"[Planner] JSON 解析失败: {e}, 内容: {content[:200]}")
+        logger.error("[Planner] JSON 解析失败: %s", type(e).__name__)
         logger.info("[Planner] 使用兜底 RAG 步骤")
-        return {"plan": _fallback_plan(question,
-                                       rag_allowed="rag.search" in visible)}
+        if evaluation_mode:
+            return {
+                "plan": {"nodes": {}, "edges": {}},
+                "_planner_evaluation": {
+                    "status": "invalid_output",
+                    "source": "model",
+                    "error_category": "output_parse",
+                    "errors": ["model output is not valid JSON"],
+                },
+            }
+        return {"plan": _with_kb_scope(
+            _fallback_plan(question, rag_allowed="rag.search" in visible), kb_id)}
     except Exception as e:
         logger.error(f"[Planner] 规划失败: {e}")
         logger.info("[Planner] 使用兜底 RAG 步骤")
-        return {"plan": _fallback_plan(question,
-                                       rag_allowed="rag.search" in visible)}
+        if evaluation_mode:
+            return {
+                "plan": {"nodes": {}, "edges": {}},
+                "_planner_evaluation": _planner_evaluation_error(e),
+            }
+        return {"plan": _with_kb_scope(
+            _fallback_plan(question, rag_allowed="rag.search" in visible), kb_id)}
 
 
 # =====================================================
@@ -264,6 +364,31 @@ def planner_node(state: dict) -> dict:
 # 保留原模块别名，兼容外部对 planner._extract_json 的 patch
 from backend.agents.planner.plan_utils import extract_json as _extract_json
 from backend.agents.planner.plan_utils import normalize_plan as _normalize_plan
+from backend.agents.planner.plan_utils import validate_plan_contract as _validate_plan_contract
+
+
+def _planner_evaluation_error(error: Exception) -> dict:
+    """把 Live 评测异常归为稳定类别，避免落盘原始异常或敏感内容。"""
+    from backend.context_budget.errors import ContextBudgetExceededError
+    from backend.infra.llm.budget import RequestBudgetExceeded
+    from backend.infra.llm.error_taxonomy import ModelProviderError
+
+    if isinstance(error, ContextBudgetExceededError):
+        category, code = "context_budget", error.code
+    elif isinstance(error, RequestBudgetExceeded):
+        category, code = "budget", error.code
+    elif isinstance(error, ModelProviderError):
+        category, code = "provider", error.error_type
+    elif isinstance(error, TimeoutError):
+        category, code = "timeout", "timeout"
+    else:
+        category, code = "runtime", type(error).__name__
+    return {
+        "status": "error",
+        "source": "runtime",
+        "error_category": category,
+        "error_code": code,
+    }
 
 
 # =====================================================
@@ -384,3 +509,12 @@ def _fallback_plan(question: str, rag_allowed: bool = True) -> dict:
         },
         "edges": {},
     }
+
+
+def _with_kb_scope(plan: dict, kb_id: str) -> dict:
+    """确保模型计划和所有运行时兜底都绑定当前知识库。"""
+    for node in plan.get("nodes", {}).values():
+        if node.get("capability") == "rag.search":
+            node.setdefault("params", {})
+            node["params"]["kb_id"] = kb_id
+    return plan

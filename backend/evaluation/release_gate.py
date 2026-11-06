@@ -25,8 +25,7 @@ from typing import Any
 from backend.evaluation.validity import (
     RunValidity,
     RunValidityVerdict,
-    classify_report_validity,
-    validity_from_report_metadata,
+    resolve_report_validity,
 )
 
 # ============ 指标展示常量（自 report/builder.py 原位迁入；builder 保留 re-export） ============
@@ -396,9 +395,7 @@ def compute_module_release_gate(
     """
     th = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
     if validity is None:
-        validity = validity_from_report_metadata(getattr(report, "metadata", None))
-    if validity is None:
-        validity = classify_report_validity(report)
+        validity = resolve_report_validity(report)
 
     metadata = getattr(report, "metadata", None) or {}
     if metadata.get("managed_dataset"):

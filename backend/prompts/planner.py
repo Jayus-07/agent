@@ -24,6 +24,11 @@ def build_output_example(cap_example: str) -> str:
 
 
 _OUTPUT_EXAMPLE_RAW = """## 输出格式（严格的 JSON，不要解释）
+根对象只能有 nodes 和 edges 两个字段。nodes 必须是数组；每个节点只能有
+step_id、capability、description、params 四个字段，类型分别为非空字符串、
+非空字符串、非空字符串、对象。step_id 不可重复。edges 必须是对象，键为
+现有目标步骤 ID，值为现有依赖步骤 ID 数组；不允许自依赖、重复依赖或循环。
+不得输出未授权能力、额外字段或无效步骤引用。
 {
     "nodes": [
         {"step_id": "1",

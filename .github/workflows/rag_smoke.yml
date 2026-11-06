@@ -158,6 +158,9 @@ jobs:
           python -m pytest tests/test_rag_smoke_path_filter.py \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
+            backend/tests/agents/test_planner_output_contract.py \
+            backend/tests/evaluation/test_planner_contract.py \
+            backend/tests/evaluation/test_planner_live_runner.py \
             backend/tests/evaluation/test_online_sampler.py \
             backend/tests/evaluation/test_release_gate_module_aware.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \

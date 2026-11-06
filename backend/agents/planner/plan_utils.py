@@ -63,6 +63,112 @@ def plan_depth(plan: dict) -> int:
     return max(depth_cache.values()) if depth_cache else 0
 
 
+def validate_plan_contract(
+    plan: object,
+    allowed: set[str] | None = None,
+) -> list[str]:
+    """验证 Planner 的原始 JSON 契约，不做静默修复或删步。
+
+    模型输出和缓存计划在调用 ``normalize_plan`` 前使用此函数，避免越权
+    capability、缺字段和非法依赖被规范化阶段掩盖。契约与 prompt 示例一致：
+    nodes 是节点数组，edges 是「目标步骤 -> 依赖步骤数组」的映射。
+    """
+    errors: list[str] = []
+    if not isinstance(plan, dict):
+        return ["root must be an object"]
+
+    expected_root = {"nodes", "edges"}
+    actual_root = set(plan)
+    if actual_root != expected_root:
+        missing = expected_root - actual_root
+        extra = actual_root - expected_root
+        if missing:
+            errors.append("root is missing required fields")
+        if extra:
+            errors.append("root contains unsupported fields")
+
+    raw_nodes = plan.get("nodes")
+    if not isinstance(raw_nodes, list):
+        errors.append("nodes must be an array")
+        raw_nodes = []
+
+    node_fields = {"step_id", "capability", "description", "params"}
+    nodes: dict[str, dict] = {}
+    for index, raw_node in enumerate(raw_nodes):
+        if not isinstance(raw_node, dict):
+            errors.append(f"nodes[{index}] must be an object")
+            continue
+        fields = set(raw_node)
+        if fields != node_fields:
+            errors.append(f"nodes[{index}] has an invalid field set")
+
+        step_id = raw_node.get("step_id")
+        if (
+            not isinstance(step_id, str)
+            or not step_id
+            or len(step_id) > 64
+            or step_id.strip() != step_id
+        ):
+            errors.append(f"nodes[{index}].step_id must be a non-empty string")
+            continue
+        if step_id in nodes:
+            errors.append(f"nodes[{index}].step_id is duplicated")
+            continue
+
+        capability = raw_node.get("capability")
+        if (
+            not isinstance(capability, str)
+            or not capability.strip()
+            or len(capability) > 128
+        ):
+            errors.append(f"nodes[{index}].capability must be a non-empty string")
+        elif allowed is not None and capability not in allowed:
+            errors.append(f"nodes[{index}].capability is not authorized")
+
+        description = raw_node.get("description")
+        if (
+            not isinstance(description, str)
+            or not description.strip()
+            or len(description) > 2000
+        ):
+            errors.append(f"nodes[{index}].description must be a non-empty string")
+        if not isinstance(raw_node.get("params"), dict):
+            errors.append(f"nodes[{index}].params must be an object")
+        nodes[step_id] = raw_node
+
+    raw_edges = plan.get("edges")
+    if not isinstance(raw_edges, dict):
+        errors.append("edges must be an object")
+        raw_edges = {}
+
+    edges: dict[str, list[str]] = {}
+    for target, raw_deps in raw_edges.items():
+        if not isinstance(target, str) or target not in nodes:
+            errors.append("edges contains an unknown target step")
+            continue
+        if not isinstance(raw_deps, list):
+            errors.append("edge dependencies must be arrays")
+            continue
+        deps: list[str] = []
+        for dependency in raw_deps:
+            if not isinstance(dependency, str) or dependency not in nodes:
+                errors.append("edges contains an unknown dependency step")
+                continue
+            if dependency == target:
+                errors.append("a step cannot depend on itself")
+            if dependency in deps:
+                errors.append("an edge contains a duplicate dependency")
+            else:
+                deps.append(dependency)
+        edges[target] = deps
+
+    if not errors:
+        depth = plan_depth({"nodes": nodes, "edges": edges})
+        if depth > MAX_PLAN_DEPTH:
+            errors.append("plan contains a cycle or exceeds the maximum depth")
+    return errors
+
+
 def extract_json(text: str, source: str = "planner.system") -> dict:
     """4 层修复管道（实现见 shared/json_extractor.py）。
 

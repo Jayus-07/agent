@@ -128,6 +128,59 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
             {"total": len(results)},
         )
 
+    # Planner 只在 Live 模式有评测意义。单个模型/预算/运行时错误就意味着
+    # 这轮 Planner 样本没有真实模型结果，不能沿用通用「少数 error 可忽略」
+    # 门槛，也不能把代理降级话术或运行时兜底记进模型质量通过率。
+    if (
+        getattr(report, "mode", "") == "live"
+        and getattr(report, "module", "") in {"planner", "all"}
+    ):
+        planner_results = [
+            result for result in results
+            if getattr(result, "module", "") == "planner"
+        ]
+        for result in planner_results:
+            status = getattr(result, "status", "")
+            actual = getattr(result, "actual", None) or {}
+            outcome = actual.get("planner_outcome", {}) if isinstance(actual, dict) else {}
+            category = str(
+                outcome.get("error_category")
+                or getattr(result, "error_stage", "")
+                or ""
+            ) if isinstance(outcome, dict) else str(getattr(result, "error_stage", "") or "")
+            if status == "skip":
+                return RunValidityVerdict(
+                    RunValidity.INVALID_INFRA,
+                    "planner_live_case_skipped",
+                    {"case_id": getattr(result, "case_id", "")},
+                )
+            if status == "error":
+                error_code = str(outcome.get("error_code", "")) if isinstance(outcome, dict) else ""
+                category_validity = {
+                    "budget": RunValidity.INVALID_BUDGET,
+                    "context_budget": RunValidity.INVALID_BUDGET,
+                    "provider": RunValidity.INVALID_PROVIDER,
+                    "timeout": RunValidity.INVALID_INFRA,
+                    "runtime": RunValidity.INVALID_INFRA,
+                    "planner_runtime": RunValidity.INVALID_INFRA,
+                }
+                if category == "provider" and error_code == "quota_exhausted":
+                    validity = RunValidity.INVALID_BUDGET
+                elif category == "provider" and error_code == "timeout":
+                    validity = RunValidity.INVALID_INFRA
+                else:
+                    validity = category_validity.get(
+                        category, RunValidity.INVALID_INFRA)
+                return RunValidityVerdict(
+                    validity,
+                    f"planner_live_{category or 'execution'}_error",
+                    {
+                        "case_id": getattr(result, "case_id", ""),
+                        "error_category": category or "unknown",
+                        "error_code": error_code,
+                    },
+                )
+
     matched: dict[tuple[str, str], int] = {}
     for r in non_skip:
         surface = _error_surface(r)
@@ -195,11 +248,21 @@ def validity_from_report_metadata(metadata: dict[str, Any] | None) -> RunValidit
     )
 
 
+def resolve_report_validity(report: Any) -> RunValidityVerdict:
+    """读取已保存裁决，同时允许报告中更强的当前错误证据推翻旧 VALID。"""
+    stored = validity_from_report_metadata(getattr(report, "metadata", None))
+    observed = classify_report_validity(report)
+    if stored is None or (stored.is_valid and not observed.is_valid):
+        return observed
+    return stored
+
+
 __all__ = [
     "RunValidity",
     "RunValidityVerdict",
     "classify_report_validity",
     "validity_from_report_metadata",
+    "resolve_report_validity",
     "INFRA_ERROR_SIGNATURES",
     "INFRA_MIN_HITS",
     "INFRA_MATCH_RATIO",
