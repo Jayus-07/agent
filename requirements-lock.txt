@@ -1,6 +1,6 @@
 # requirements-lock.txt — 生产依赖锁定（2026-11-04 重锁，供应链漂移收口批）
-# 组成：① agent-app-1 生产容器 pip freeze（权威运行时集，246 包，含 torch==2.14.1+cpu）；
-#       ② 老锁中仅 CI/dev 需要的包（pytest 等，原 pin 保留）。
+# 组成：① agent-app-1 生产容器 pip freeze（2026-11-04 快照，含 torch==2.14.1+cpu）；
+#       2026-11-05 按运行时代码清理未集成的 langfuse；② 老锁中仅 CI/dev 需要的包（pytest 等，原 pin 保留）。
 # 生成方式：docker exec agent-app-1 pip freeze + 老锁 dev-only 并集（见 audit-remediation-r1 PROGRESS）。
 # 升级流程：重建生产镜像 → 容器内 pip freeze → 重新并集 → pip dry-run 全量解析 → CI 验证。
 # 注意：torch 由 constraints/torch-cpu.txt 的 +cpu wheel 提供（不在 PyPI），安装需
@@ -112,7 +112,6 @@ langchain-ollama==1.1.0
 langchain-openai==1.7.2
 langchain-protocol==0.0.20
 langchain-text-splitters==1.1.3
-langfuse==4.18.0
 langgraph==1.2.16
 langgraph-checkpoint==4.3.0
 langgraph-checkpoint-postgres==3.2.0

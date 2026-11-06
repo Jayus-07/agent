@@ -89,7 +89,6 @@ jobs:
       PROMPT_EVAL_TEST_EMBEDDING_MODEL: ${{ vars.PROMPT_EVAL_TEST_EMBEDDING_MODEL }}
       SECRETS_ENCRYPTION_KEY: ${{ secrets.SECRETS_ENCRYPTION_KEY }}
       PYTHONUTF8: "1"
-      LANGFUSE_ENABLED: "false"
       OBS_ANALYTICS_ENABLED: "false"
       EVAL_TRIGGER: prompt_publish
       EVAL_TRIGGERED_BY: github-actions

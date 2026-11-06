@@ -285,7 +285,6 @@ jobs:
       LLM_REQUEST_MAX_TOKENS: "96000"
       LLM_REQUEST_MAX_COST: "0.40"
       # 改写与生产共用默认子预算，不设置评测专用 timeout 覆盖值。
-      LANGFUSE_ENABLED: "false"
       # 隔离评测库需要落 llm_usage 明细供费用归因；不得关闭统一账本写入。
       OBS_ANALYTICS_ENABLED: "true"
       PYTHONUTF8: "1"
