@@ -355,6 +355,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 优惠券档案 + 核销记录（cs-capability-gap B3）：marketing.coupons
     # + marketing.coupon_redemptions（agent_business 库，含建 marketing schema）。
     "133_cs_coupon.sql": "business",
+    # 客服支付流水（cs-capability-gap B4）：payment.payment_records。
+    "134_cs_payment.sql": "business",
     # 物流催办动作类型扩展（cs-capability-gap B5）：agent_actions 仍走
     # memory 库的既有审计事务，不新增平行业务表。
     "135_cs_urge_request_action_type.sql": "memory",

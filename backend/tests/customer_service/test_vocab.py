@@ -23,6 +23,7 @@ class TestSingleSource:
         # 词/句式 + 出域豁免「等级/权益」（golden T-015 政策问句口径不翻域）
         # 2026-11-04.2：B3 优惠券账户级查询（cs-capability-gap）——TRANSACTION
         # 域词/句式（「优惠券怎么领/能不能叠加」政策问句 KNOWLEDGE 口径不翻域）
+        # 2026-11-05.1：B4 支付流水查询（数据问句进 TRANSACTION，政策问句留 KNOWLEDGE）
         # 2026-11-06.1：B5 催发货/催派送动作和物流异常升级词表。
         assert vocab.VOCAB_VERSION == "2026-11-06.1"
 
