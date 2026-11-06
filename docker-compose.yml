@@ -406,6 +406,9 @@ services:
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - CS_REFUND_WINDOW_DAYS=${CS_REFUND_WINDOW_DAYS:-30}
       - CS_REFUNDABLE_STATUSES=${CS_REFUNDABLE_STATUSES:-paid,shipped,completed}
+      # B6 价保演示闸；与 app 使用同一模式和窗口，默认始终关闭。
+      - CS_PRICE_MATCH_MODE=${CS_PRICE_MATCH_MODE:-disabled}
+      - CS_PRICE_MATCH_WINDOW_DAYS=${CS_PRICE_MATCH_WINDOW_DAYS:-0}
       - LOG_FORMAT=${LOG_FORMAT:-json}
     healthcheck:
       test:

@@ -1,114 +1,134 @@
-# cs-capability-gap 接手实施计划（B2-B9，供下一会话执行）
+# cs-capability-gap 会话交接报告（B4 当前状态，截至 2026-11-06）
 
-> 生成：2026-11-04 施工会话（B0/B1/A7 已完成收官）。上游文档：[FINAL-PLAN.md](./FINAL-PLAN.md)（总体九批计划、§四缺口清单、§五文件级方案、§六文档要求、§八测试策略、§九验收矩阵——**仍然全部有效，本文件不重复其内容，只写增量与修正**）+ [PROGRESS.md](./PROGRESS.md)（B0/B1/A7 全部验收证据与根因记录）。
-> 纪律基线不变：优先深入功能；满足功能前提下最小改动；意图级接入不平台 Tool 化；每批独立 PR；验收先行（§九矩阵逐条真机验证后才可标完成）。
+> 上游文档（仍然全部有效，本文件不重复其细节）：[FINAL-PLAN.md](./FINAL-PLAN.md)（九批总计划、§四缺口清单、§五文件级方案、§八测试策略、§九验收矩阵——**执行依据**）+ [PROGRESS.md](./PROGRESS.md)（B0-B3 全部验收证据与根因记录；B4 当前实施状态见文末）。
+> 纪律基线不变：优先深入功能；满足功能前提下最小改动；意图级接入不平台 Tool 化；每批独立 PR；验收先行（§九矩阵逐条真机验证后才可标完成）；**未实际执行的验证不得报告为通过**。
 
-## 一、当前状态（2026-11-04 收官快照）
+## 一、总任务
 
-| 项 | 状态 |
-|---|---|
-| main | `d1d38df`（PR #320 合并；B0=#309→e2990b9、B1=#312→1620a74、A7=#317→ce902ea、**B2=#320→d1d38df** 均已合并部署） |
-| worktree | `D:/Program Files/workplace/agent-cs-fix-entry`，detached 于 origin/main，干净 |
-| 共享栈 | 全量 healthy（app:8000/frontend:3100/frontend-cs:3300/apisix:9080/business-mock:8081/postgres:5433）；rebuild 后容器内已含 kb/ 文档与 B2 代码，132 迁移已落库 |
-| CI 基线 | rag_smoke preflight **919 passed / 2 skipped**（@d1d38df，含 B2 新增 12 例；2 skip 为既有归因）——新批次 CI 对账公式：`919 + 新增测试数 = passed`，多了少了都要查 |
-| B2 验收 | ✅ 全链路关闭：真机 4/4 PASS（8000 分/黄金会员/权益/最近流水；政策问句 T-015 口径走 FAQ）+ facts 三件套 + 阴性验证 2 处 + 隔离 PG sandbox；详见 PROGRESS B2 节 |
-| 待实施 | B3/B4（可并行，复制 B2 查询型模板）→ B5-B8 → B9 仅立项；每批固定收尾见 FINAL-PLAN §二 |
+把坐席端「能力差距」表的 8 项未覆盖诉求分九批补齐（B0 顺手 bug → B1 知识底座 → B2-B4 查询型 → B5-B8 动作型 → B9 多模态仅立项），全部按生产标准（迁移/开关/审计/幂等/测试/文档）走独立 PR。RAG 知识面与坐席检索已在 B1/A7 关闭。**查询型接入模板已由 B2/B3 双实例定型，B4 直接复制。**
 
-## 二、启动清单（下一会话 5 步进场）
+## 二、进度快照（截至 2026-11-06）
 
-1. 读本文件 + FINAL-PLAN.md（§五方案与 §九验收仍按它执行）+ PROGRESS.md（验收证据风格与根因记录）。
-2. `git -c http.proxy=http://127.0.0.1:7897 fetch origin` 核对 main ≥ `61d4226`；worktree detached 停靠 origin/main；每批从最新 origin/main 开分支（分支名 FINAL-PLAN §三已定）。
-3. `docker ps` 全量健康；**注意并行会话频繁 rebuild 共享栈**（B0-A7 期间 #311/#314/#316 都是并行会话合并的）——动容器前先 `git pull` 确认本地 main 不落后，否则会部署旧代码（本会话实际踩过：pull 网络失败后 rebuild 部署了旧 main）。
-4. 从 **B2 积分样板**开始（B2 定型后 B3/B4 可并行）。不要重探查：链路结论全部在本文件 §三，FINAL-PLAN §五的 file:line 有漂移处以代码为准。
-5. 验收先行：每批开工前先读 §九 对应条目，设计好真机验收脚本再动手（验收脚本模式见 §四.6）。
+| 批 | 状态 | PR → main |
+|---|---|---|
+| B0 sandbox 取消 NameError | ✅ | #309 → e2990b9 |
+| B1 RAG 知识底座（8 篇政策 + FAQ 治理 14 写入） | ✅ | #312 → 1620a74 |
+| A7 坐席知识检索接 RAG 通道 | ✅ | #317 → ce902ea |
+| **B2 积分/等级查询（查询型样板）** | ✅ 本会话 | #320 → d1d38df（+docs #321 → da13495） |
+| **B3 优惠券查询/用券校验** | ✅ 本会话 | #324 → 55e0fcb |
+| B4 支付流水查询 + 重复扣款转退款 | 🟡 PR #336 开放；本轮改动未提交 | q1-q4 真机 PASS；支付/TaskPlan **82 passed**，审计单测 **13 passed**，隔离 PG 审计持久化 **1 passed**；当前共享栈 7 个健康/登录探针均 HTTP 200，模拟退款运行开关关闭 |
+| B5 催办 / B6 价保 / B7 改址 / B8 开票 | ⬜ | B4 定型后 B5-B7 可并行，B8 随时可并行 |
+| B9 多模态 | 仅立项文档，不实施 | 并入最后收尾 PR |
 
-## 三、本会话实测获得的链路机制（FINAL-PLAN 没有或需修正的）
+- B3 收官快照 main=`55e0fcb`；B4 PR #336 基于 `origin/main=987eddb`，远端 HEAD=`9ee601b`。PR 当前 6 项必需检查成功、真实 API 评测 1 项按规则跳过；本地 mock-only 改动尚未提交，不能据此声称这些改动已通过 CI。
+- B4 当前共享栈健康；134 迁移已应用，主后端/前端/网关探针通过；宿主 8088 GPU embedding/rerank 已按运维脚本恢复。q4 首轮暴露 Supervisor 重复调用 KnowledgeExpert 并以第二次拒答覆盖第一次有效答复；2026-11-06 已加防重复收尾并真机复验通过，ClaimVerifier 未改。本轮另增加严格 business-mock 重复扣款模拟退款，运行时开关仍关闭、上限为 0。
+- 本会话真机验收：B2 4/4 PASS + B3 4/4 PASS（合并后 main 上双探针复证）。
 
-以下全部为本会话真机/容器内实证，接手会话直接引用，勿重探：
+## 三、未完成（含挂账）
 
-### 3.1 KB 授权链（B1 验收最大根因的机制，B2-B8 都依赖）
+**待实施批次**（细节见 FINAL-PLAN §五）：
+1. B5 催发货/催派送（低风险直执行，不承诺具体补发时间——composer ETA 守卫 fail-closed）；
+2. B6 价保退差价（**全链路最重**：资金红线三项缺一不合并——终点 business-mock / 开关 fail-closed 双入口 / 审计齐全）；
+3. B7 在途包裹改地址（确认流，订单级与账户默认地址严格区分）；
+4. B8 开票/抬头（迁移 + 查询 + 动作，抬头子表）；
+5. B9 多模态：仅立项记录并入收尾 PR。
 
-- 运行时 KB 注册表 = **DB 表 `auth.knowledge_bases`**（非代码静态表；代码表仅 bootstrap，`config/knowledge_base.py::get_knowledge_bases` 每请求实时读库）。
-- customer 主体可见集 = `audience='customer' AND status='active'` 的全部库；**inactive 库对一切检索不可见**（`_keep` 在 `rag/pipeline.py::retrieve_documents` 强制授权过滤）。
-- ⚠️ 历史教训：6 个 cs KB 曾于 2026-10-22 被 super_admin(id=279) 批量置 inactive → 全部 cs 检索静默死亡、BM25 全局兜底返回 travel 内容。**每批验收若见「检索返回 travel 内容/0 命中」，第一反应查 `auth.knowledge_bases.status`**（只读 SQL 或 `list_knowledge_bases(include_inactive=True)`）。
-- 激活/停用走 `rag/knowledge_base_store.py::activate_knowledge_base`（version CAS + 审计），不要裸 UPDATE。
-- B2-B8 不新增 KB（复用 cs_faq/cs_policy），无需动注册表。
+**当前等待**：B4 新增模拟退款差异已验收但未提交，需先走本轮 Diff 确认，再更新 PR #336；未合并前不另开依赖 B4 的后续批次。
 
-### 3.2 检索与对话链路
+**挂账（不阻塞，勿顺手扩大）**：
+- ClaimVerifier 误杀有据数字句（B1 q2/q5）：检索完整性调优，等运营反馈再立项，**不硬改护栏**；
+- B4 q4 首轮曾因第二次 KnowledgeExpert 调用的 `[E5]` 引用缺失而整答被 ClaimVerifier 拦截；已通过 Supervisor 在同轮成功知识答复后直接收尾修复，ClaimVerifier 保持原样。B1 有据数字句的检索完整性挂账仍单独保留。
+- 外部真实系统对接（比价/物流商/支付网关/开票）：mock 契约即边界，只换 adapter；
+- 用户端订单页开发票入口：二期；GAP_LIST「注销账号/删除数据」合规行：不在八项范围；
+- 杂项：远端分支 `docs/cs-b1-acceptance-final` 清理；原隔离容器 `agent-csfix-b0-pg`（15434）当前不存在，后续如需隔离 PG 先按资源纪律重新评估，不得改连共享 5433。
 
-- 向量身份已对齐：索引 `custom-gpu/bge-m3`（fingerprint 9b0cdc11…）= 注册表解析身份；embedding 服务 host.docker.internal:8088 健康。fresh 进程必须先 `refresh_registry()` 否则报「数据库未配置可用的 embedding 供应商 API Key」（rag-service 启动时自动做）。
-- `rag-service :8090 /retrieve_docs`：`{question, kb_id, top_k, subject_type:'customer', tenant_id:'default'}`；返回 `docs[{content, metadata}]`，metadata 白名单含 `doc_id/kb_id/source_file/section_title/score`（score=**向量距离，越小越相关**；BM25 补充结果无 score）。dev 环境 AI_INTERNAL_TOKEN 为空=跳过鉴权（.env 无 AI_INTERNAL_TOKEN/INTERNAL_API_TOKEN 变量）。
-- KnowledgeExpert 检索顺序：**先 FAQ 层（ai.cs_faq 表，jaccard≥0.30，60s 索引缓存）命中即答**，不中才走 RAG（kb_ids 按 intents.py 意图声明）。**FAQ 里有错误口径会挡住正确的 RAG 文档**——B2-B8 每批收尾必须检查 ai.cs_faq 是否有与该域新政策/mock 矛盾的条目（本会话治理了 13 条，方法见 §四.5）。
-- ClaimVerifier（rag-service /ask 内）：生成回答中的数字/事实句必须在证据 chunk 中找到支撑，否则 fail-closed 拒答（日志 `[RAGChain] 拒答 layer=claim_verify reason=hallucination`）。**已知误杀模式**：政策文档里的数字句（如「30 分钟有效」「15 天窗口」）若未被完整检索进证据，会被拦。B2 查询域的真实数据走 facts 投影（不走 /ask），不受此影响；政策问答里再遇到「生成回答未能通过事实一致性校验」属此机制，是**正确护栏行为**，P2 挂账勿硬改。
-- 网关对话链路：`POST :9080/api/chat/customer-service`，需 `X-API-Key` 头（值=主仓 .env `API_KEY`）+ `Authorization: Bearer <login token>`。ChatResponse 的 `sources` 字段在 CS 路径恒空，evidence 以文内引用呈现（`[E1]`/`参考文献`/`--- 参考来源`）。
+## 四、已知信息（本会话实证，接手勿重探；FINAL-PLAN 没有的增量）
 
-### 3.3 业务数据面与幂等（B2 直接要用）
+### 4.1 查询型模板定型结论（B2/B3 双实例验证，B4 照抄）
 
-- business-mock（`backend/mock/business_service/main.py`）：内存对象 + `_STATE_LOCK` + `reset_mock_state()` + `operation_key` 幂等，钱包实现 `_wallet_for/_wallet_append`（:193 起）——B2 mock 积分对象照此模式。
-- mock 契约登记：`backend/mock/business_service/contract.md` 版本递增。
-- agent_business 新表：迁移放 `backend/sql/migrations/`（当前最大 131）+ **`scripts/init_db.py::MIGRATION_TARGETS` 登记 `"business"`（漏登记 init_db 直接报错退出）**。
-- sandbox 直查链路写池= `infra.db.get_business_engine()`（BUSINESS_DB_CONFIG），只读池= `sql/executor` 模块级单例（BUSINESS_DB_READONLY_CONFIG）——**测试里 monkeypatch 配置后必须调 `executor._close_pool()` + `infra.db.reset_engines()` 逼重建**（参考 test_mall_cancel_sandbox_pg.py）。
+模板 A 十文件清单（FINAL-PLAN §五）逐项落地可行，B2/B3 的可复制资产：
+- **Service**：`_use_http_gateway()` + `_unwrap` + `_mock_error`（404/409 语义映射）+ `_xxx_view()` 展示归一（kind_label/reason_label/**currency=CNY 必须在 Service 归一层补**——composer 金额守卫按币种比对，facts 缺 currency 会把一切元金额 fail-closed，B3 首轮测试揪出）；
+- **B4 mock-only 自动模拟扩展**：除查询模板外，重复扣款只有在用户明确申请、business-mock 地址、CNY、两笔全额成功且未模拟退款、正数金额上限内才会模拟；默认 `CS_AUTO_DUPLICATE_REFUND_MODE=disabled` / 上限 `0`。复用 `refund_execute` 与现有 Action/Audit 幂等落库，不建真实退款申请；未知结果不重试或退回新提案。q3 `b4-acc-q3` 未触发。
+- **facts 三件套（W1 红线，凡查询域必做）**：`_project_<domain>` + projectors 注册 + composer `_fact_amounts` 扫金额键 + `_amount_claim_kind` 加域标签。金额键现状已含：amount/total_amount/balance/recent_amount/points/recent_points/**threshold_amount/discount_value/max_discount/order_total**；标签已含 refund/order/balance/points/**coupon**。B4 的 payment 金额走既有 `order` 标签即可（紧邻订单金额自动归 order 类），如需独立标签再加 `payment`；
+- **词表双门禁**：改动必过 `test_cs_eval_gate`（golden 回放）+ `test_cs_decision_replay`（锁版 v2.2，324 条）；政策问句与数据问句同词时，先推演票数再动词表（T-015「会员积分怎么用」、golden 券 3 问句均靠 KNOWLEDGE 2-3 票 > TRANSACTION 1 票保住）；**裸短词（用券/领券）容易漏——B3 真机 q2 实锚「订单 X 用券为什么没生效」fine 词表缺「用券」落域默认答成订单状态**；不确定的问法先加测试再改词表；`VOCAB_VERSION` 升版并同步 test_vocab 断言（现为 **2026-11-04.2**）；
+- **测试**：`test_<domain>_flow.py` 复制 `test_coupon_flow.py`/`test_points_flow.py`（http_wire fixture + 路由钉住 + mock 数字一致性 + facts 导出/降级 + 投影白名单/非法枚举 + composer 守卫放行/拒绝 + 隔离 PG sandbox，造数必须重跑幂等）；
+- **真机验收脚本**：复用 `d:/tmp/cs_b2_acc.py` / `cs_b3_acc.py` 骨架（登录 demo_fuzhou → mock 直查种子实体号 → POST /api/chat/customer-service 断言要点），session_id 用 `bN-acc-*` 前缀防撞记忆。
 
-### 3.4 坐席端与 FAQ 治理机制
+### 4.2 B3 新增机制
 
-- A7 已上线：`/cs/knowledge/search` = FAQ 层 + RAG 层（cs_faq/cs_policy 双库 top3，source=faq|rag，失败逐库降级）。B2+ 无需再动它。
-- FAQ 写入走 `FAQStore.upsert_faq(question, answer, status='published', kb_refs=…)`：**faq_key=normalize_question(question)**，同 key 幂等更新、保留 id/hit_count、立即失效索引。⚠️ 暗行陷阱：历史行的 faq_key 可能与当前 question 不一致（如 id=538 key=「退款到账时长」）——治理时先查 `faq_key` 实际值再按 key 更新。
-- B2 联动点：ai.cs_faq 中积分/等级相关条目（id=8 会员等级、id=16 积分累计）已在 B1 治理时按 points-policy.md 草案口径改写（100 分=1 元、白银≥500/黄金≥2000/铂金≥8000、近 90 天评定）——**B2 的 mock 实现必须与这些数字一致**（文档与 mock 互为事实源；数字全部带【业务确认】，生产前业务复核）。
+- mock check 类端点的确定性规则设计：**规则优先级显式化**（expired → threshold_not_met → not_stackable → applicable），每类原因都要有可达样本（券过期靠显式 coupon_code、门槛靠 199 元种子单、一单一券靠核销样本绑定 shipped 种子单）；
+- `_coupon_check` 的订单实付在 composer 里按 `order` 类核验（coupon_check 拆两层扫金额：外层 order_total 归 order、内层 coupon 归 coupon）；
+- FAQ id=23「一单仅可使用一张优惠券，不可叠加」= mock check not_stackable 文案口径，三方一致（policy §2 / FAQ / mock）。
 
-### 3.5 环境与工具链坑（本会话全部实战踩过）
+### 4.3 环境与工具链坑（全部实战踩过）
 
 | 坑 | 正确姿势 |
 |---|---|
-| Git Bash 调 devctl | `MSYS2_ARG_CONV_EXCL="*" cmd.exe /c "devctl.bat rebuild -y"`（`/y` 会被 MSYS 转换吞掉；rebuild 覆盖 backend+容器化前端） |
-| Git Bash curl 中文 body | 会被 GBK 控制台搞坏 → 用 `python -c` + urllib 或 UTF-8 文件体 `--data-binary @file` |
-| secrets 扫描 tree 闸 | workflow/文档**绝不写带凭据 URL 原文**（`postgresql://user:pass@…` 形态即拦，事故记录也只写形态描述）；测试库连接用「库名 env + job 既有 PG* 变量」模式（见 test_mall_cancel_sandbox_pg.py 的 DSN/DBNAME 双路径） |
-| secrets 扫描 history 闸 | 扫 PR 提交区间——脏提交进分支后必须 force-with-lease 重写历史（未合并分支可安全做）；**本地 scan 只扫已跟踪文件，提交前先 git add 再跑** |
-| 新迁移 CI 门禁（B2 实证） | 迁移文件必须显式登记 `.github/scripts/rag_smoke_path_filter.py`（NON_AI/PAID_RELEVANT 二选一）——漏登记 `Detect RAG changes` exit 2、preflight 静默 skipping |
-| frontend-cs 重建（B2 实证） | devctl rebuild 不含 frontend-cs（独立 compose 服务，容器 config_files 记录构建来源）——改 frontend-cs 代码后需 `docker compose -p agent -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-cs && up -d frontend-cs` 从本 worktree 重建 |
-| Mimosa PreToolUse hook | Bash 命令文本里出现 .py 源码路径写操作/git commit heredoc 内嵌代码会被拦 → 文件一律走 Write/Edit；commit message 用 `-F file` 或 `-F -`（stdin） |
-| worktree 切 main | `git checkout main` 会报被主仓占用 → 用 `git checkout --detach origin/main` |
-| 测试账号 | 用户端 `demo_fuzhou / Demo@2026`（user_id=872，租户 default；**872 是 user_id 不是密码**）；坐席端 `cs_wire_agent / CsWire@2026`（auth id=24，supervisor） |
-| 登录限流 | 连续失败 4 次触发 429 临时锁定（约 20-30 分钟自解）——验密码前先查文档勿试错 |
-| 隔离测试 PG | 容器 `agent-csfix-b0-pg` @ 127.0.0.1:**15434**（postgres/b0sandbox，库 agent_business_sandbox_test，已应用 003+125 迁移）——B2 若需 business 库表集成测试可复用（建新迁移表即可）；测试库守卫：库名必须含 test/sandbox |
-| 主仓/并行会话 | 共享栈 rebuild 前必 `git pull`（fetch 失败会部署旧 main）；验收期间日志可能被并行 rebuild 清空——关键探针结论及时落盘 d:/tmp 并回填 PROGRESS |
+| **新迁移 CI 门禁**（两次实证） | 迁移文件必须显式登记 `.github/scripts/rag_smoke_path_filter.py`（NON_AI/PAID_RELEVANT 二选一），漏登记 `Detect RAG changes` exit 2、preflight 静默 skipping |
+| **marketing/payment 等新 schema** | agent_business 只有 ai/crawler/customer/finance/inventory/order/product/public——新 schema 在迁移文件内 `CREATE SCHEMA IF NOT EXISTS`（133 已示范） |
+| **rebuild 轮换窗口验收坑**（B3 合并后终验实锚） | devctl rebuild 尾段服务轮换期间探针会撞到 502/服务暂不可用（app/frontend 重建时差可达分钟级）——**终验前先确认全栈静止**（app/db-migrate 容器 Up > 2 分钟且 :8000 连续 200），再跑探针 |
+| 副作用幂等测试的数据库边界 | `backend/tests/test_side_effect_idempotency.py` 的 `ledger_env` 使用 `MEMORY_DB_CONFIG`，本机解析到 `localhost:5433/agent_memory`（共享库），会建/清理 `s6_idempotency_records`、`s6_side_effect_probe`；**未显式改为 15434 隔离 DSN 前，勿运行整份文件**。本轮已中止该测试，fixture 清理状态未查证；禁止为排查再访问共享库。 |
+| devctl 的 MSYS 写法 | `MSYS2_ARG_CONV_EXCL="*" cmd.exe /c "devctl.bat rebuild -y"`（rebuild 不含 frontend-cs） |
+| frontend-cs 单独重建 | `docker compose -p agent -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-cs && up -d frontend-cs`（从 worktree 目录跑） |
+| Git Bash curl 中文 body | GBK 控制台会搞坏 → python urllib 或 `--data-binary @file` |
+| secrets 扫描双闸 | tree 闸：提交前先 `git add` 再跑 `scan_secrets.py --tree`，文档/workflow 绝不写带凭据 URL 原文；history 闸：扫 PR 区间，脏提交可 force-with-lease 重写（未合并分支安全） |
+| Mimosa PreToolUse hook | 文件写操作一律走 Write/Edit；commit message 用 `-F file` |
+| GitHub 抖动 | push/gh 用 `git -c http.proxy=http://127.0.0.1:7897` / `HTTPS_PROXY=http://127.0.0.1:7897`；连不上时带退避重试（本会话 push 第 3 次才落盘，务必 `ls-remote` 验证） |
+| Redis AOF 强杀损坏 | Docker 重启可致 `appendonly.aof.*.incr.aof` 截断 → `docker run --rm -v agent_redis_data:/data redis:7-alpine sh -c "yes | redis-check-aof --fix /data/appendonlydir/<文件>"` 后 start（dev 数据截尾可接受） |
+| 测试账号 | 用户端 `demo_fuzhou / Demo@2026`（user_id=872，租户 default；**872 是 user_id 不是密码**）；坐席端 `cs_wire_agent / CsWire@2026`；登录限流：连续失败 4 次触发 429（约 20-30 分钟自解），验密码前先查文档勿试错 |
+| 共享栈 .env | `CS_BUSINESS_GATEWAY_MODE=http`（真机走 business-mock）；worktree 有自己的 .env（gitignore，缺失从主仓拷） |
+| 并行会话 | rebuild 前必 `git fetch` 查 main 漂移（本会话 B3 开工时撞上 #322 合并 → stash 过桥 rebase）；验收期间日志可能被并行 rebuild 清空，关键探针结论及时落盘 d:/tmp 并回填 PROGRESS |
+| worktree 切 main | `git checkout main` 会被主仓占用 → `git checkout --detach origin/main`；未提交改动 rebase 前先 stash |
 
-## 四、B2 积分/等级查询（首批，详设补充）
+## 五、工作树与环境现场
 
-FINAL-PLAN §五 B2 + 模板 A（10 文件清单）仍为准，以下为本会话增量信息：
+- **worktree**：`D:\Program Files\workplace\agent-cs-fix-entry`，分支 `feat/cs-payment-query`，用于 PR #336；134 迁移外键种子修复、sandbox 断言及 q1-q4 修复已在分支。当前 B4 mock-only 模拟退款实现与任务文档为未提交改动；HEAD `9ee601b`，已 rebase 到 `origin/main=987eddb`；勿 reset/stash 覆盖这些改动。
+- 主仓 `D:\Program Files\workplace\agent`；共享栈 compose 项目名 `agent`，端口 8000/8090/8091/9080/5433/3100/3200/3300/8081 由主栈占用。后端通过 `devctl.bat rebuild /y` 从本 B4 worktree 重建，`frontend-cs` 用 compose overlay 单独重建。
+- 隔离测试 PG：原 `agent-csfix-b0-pg` @ 127.0.0.1:15434 当前不存在；历史 134 迁移测试已执行，但此 DSN 现不可用。重新创建前先检查 Docker 资源与其他会话；所有测试库名必须含 test/sandbox，禁止改连共享 5433。
+- 宿主本地模型服务通过本 worktree `dev-local-models.bat start` 恢复，PID 4320，8088 ready；Docker RAG 调 `host.docker.internal:8088`。重启宿主/服务后按运维手册重新检查状态。
+- 验收脚本与产物：`d:/tmp/cs_b2_acc.py`、`cs_b3_acc.py`、`cs_b4_acc.py`、`cs-b2-acc-result.txt`、`cs-b3-acc-result.txt`、`cs-b4-acc-result.txt`、`cs-b4-q4-retry.txt`、`cs_b1_a6.py`（B1 骨架）。
+- 提交纪律：双重路径限定（`git add -A -- <paths>` + `git commit -F <file> -- <paths>`）；新引用符号的定义文件必须同批提交。
 
-1. **意图与词表**：`t_points_query`（domain=TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）。词表改动必过双门禁：`test_cs_eval_gate`（三份 golden 回放）+ `test_cs_decision_replay`（锁版 v2.2）——不确定的问法先加测试再改词表；`CS_SIGNAL_EXEMPT_PATTERNS` 必加新词（否则被出域词表截胡）；`VOCAB_VERSION` 升版。
-2. **Service 双模式**：`points_service.py` 仿 balance——`_use_http_gateway()`（CS_BUSINESS_GATEWAY_MODE）http 走 `business_client.get_json_sync` → `_unwrap` → `_mock_error`；sandbox 直查 agent_business 新表。mock `GET /business/points?user_id=`（懒种子：积分 8000 + 等级 gold + 2 笔流水——数字必须与 points-policy.md 和 FAQ id=8/16 一致）。
-3. **facts 三件套（W1 红线，必做）**：`response/facts.py` 加 `_project_points` + projectors 注册；涉金额/流水数字进 `composer._fact_amounts`/`_amount_claim_kind` 标签——否则重演「余额问答查询不到」事故。测试必须覆盖 facts 导出 + 投影白名单 + composer 守卫放行/拒绝（test_facts.py 风格）。
-4. **迁移**：`finance.points_ledger` + `customer.tier_profiles`（最小列、snake_case、id/created_at/updated_at 必备、金额 DECIMAL）+ init_db.py MIGRATION_TARGETS 登记。
-5. **测试**：`backend/tests/customer_service/test_points_flow.py` 复制 test_order_cancel_flow.py 的 `http_wire` fixture（TestClient 挂真实 mock + 打桩 http_client + 旁路幂等/metrics）；PG 级集成可复用 15434 隔离容器（建新迁移表，注意只读池 close_pool 重建）。
-6. **真机验收脚本模式**（§九.2：问「我的积分/等级权益」→ 回复含积分余额、等级、最近流水；异常礼貌降级）：复用 `d:/tmp/cs_b1_a6.py` 骨架——登录 demo_fuzhou → POST /api/chat/customer-service（X-API-Key + Bearer）→ 断言回答含要点 + evidence。会话 ID 用新前缀（如 b2-acc-q1）避免撞记忆。参考文件在本会话结束前保留在 d:/tmp。
-7. **固定收尾**（勿漏）：①GAP_LIST（frontend-cs `knowledge/page.tsx` :26-42）「积分怎么用 / 等级权益」行——上线后 behavior 改「已覆盖（意图级查询）」或按既有风格标注；②新测试文件进 rag_smoke 定向清单；③customer-service.md 行为口径如有变化同步；④FAQ/政策文档与 mock 数字一致性核对（§3.4）。
+## 六、B4 实施状态与剩余事项（支付流水查询 + 重复扣款转退款）
 
-## 五、B3-B9 速览（增量提示）
+**当前进度**：B4 实现、定向测试、阴性验证、worktree rebuild 与 q1-q4 真机通过；PR #336 仍开放、未合并。CI 首轮缺 customer 872 的问题已在迁移 134 修复；后续 gateway mode 单测已固定为 HTTP。最近测试 HEAD `a267cf1` 的 CI：RAG preflight 初始化成功、**1007 passed / 2 skipped**；Evaluation V2 免费测试、管理端、scan、Detect RAG changes 均通过；真实 API 评测按 PR 规则跳过。此前隔离本地完整 `init_db` 因容器缺 vector 扩展、只读角色和其它 memory schema 前置条件退出 1，不记为全初始化通过。q4 已确认根因是 Supervisor 在高置信知识路由下重复派发 KnowledgeExpert，现已在 v1/v2 中增加成功答复收尾守卫，且不改动 ClaimVerifier。
 
-| 批 | FINAL-PLAN 方案 | 增量提示 |
-|---|---|---|
-| B3 优惠券查询 | §五 B3 | mock 刻意种「不可叠加/不满足门槛/已过期」三类样本；FAQ id=23 已按新口径治理——mock 行为与其一致 |
-| B4 支付查询+重复扣款 | §五 B4 | 红线：转退款必须走既有 refund-requests 人工审核闸（CS_REFUND_REQUEST_MODE），绝不自动退；payment-faq-policy.md 已就位 |
-| B5 催办 | §五 B5 | low-risk 直执行路径在 action expert 既有 simulate 分发挂点；**不承诺具体补发时间**（composer ETA 守卫 fail-closed） |
-| B6 价保 | §五 B6 | 资金红线三项缺一不合并：终点 business-mock / 开关 fail-closed 双入口（仿 `_ensure_cancel_mode`）/ 审计齐全；价保窗口 15 天等数字已入 price-match-policy.md（【业务确认】） |
-| B7 改址 | §五 B7 | 订单级改址与 account_action_service（账户默认地址）明确区分；shipping-policy.md 已写「在途可改/每单 1 次/影响时效 1-3 天」——mock 与文档一致 |
-| B8 开票 | §五 B8 | 抬头子表 + finance.invoices；invoice-policy.md 已就位（普票 1 工作日/专票 3 工作日/90 天换开）；FAQ id=15/27/534 已对齐 |
-| B9 多模态 | §五 B9 | 仅立项文档，不实施，不混入任何批次 |
+**意图与路由**：`t_payment_issue`（domain=TRANSACTION，BUSINESS_QUERY，kb_ids=["cs_faq","cs_policy"]）。词表：TRANSACTION 加「支付/扣款/付款失败」域词 + 句式（「订单 X 是不是重复扣款」「支付失败怎么办」注意「支付失败」是政策引导高频句——KNOWLEDGE 现有 k_faq「支付方式」词与 payment-faq-policy 文档在位，**先推演票数再动词表**；payment 金额走 order 标签）；VOCAB 升 2026-11-05.1 + test_vocab 断言同步。
 
-**每批共同验收底线**（§九.10）：/agent、travel、RAG 主链路零回归（:8000 /health + :3100 + :3300 + :9080 登录冒烟）+ CI 全绿逐项核对终态。
+**Service**：`payment_service.py`（双模式，仿 coupon_service）：`get_payments(user_id, tenant_id, order_no)` 返回 `{order_no, total_amount, currency, payments:[{status, amount, paid_at, kind}], success_count}`；分支逻辑在 query 分发层：单笔成功→正常流水答复；失败→引导重试/换支付方式（payment-faq-policy.md 口径）；**同单多笔成功 → 核对流水 → 引导转退款申请**。
 
-## 六、P2 挂账与已知残留
+**资金红线（不可妥协）**：自动路径仅用于 `business-mock` 演示模拟，不调用支付/退款真实接口，也不创建真实退款申请。仅用户明确申请重复扣款退款、事实来自 HTTP business-mock、币种 CNY、两笔全额成功且尚未模拟退款、金额在显式正数上限内，并同时显式设置 `CS_AUTO_DUPLICATE_REFUND_MODE=mock`、`CS_BUSINESS_GATEWAY_MODE=http` 时才可模拟；默认 `disabled`、金额上限 `0`。不满足任一条件继续既有确认/人工审核流程。q3 `b4-acc-q3` 不触发、不确认、不提交。
 
-1. **ClaimVerifier 误杀有据数字句**（B1 验收 q2 价保/q5 支付）：检索完整性（rerank/top_k）与校验容差调优——B2+ 查询域真实数据走 facts 不受影响；政策纯问答场景若运营反馈再立项，不硬改护栏。
-2. 远端分支 `docs/cs-b1-acceptance-final` 删除失败（GitHub 代理抖动）——已合并无害，顺手时清理。
-3. 隔离容器 `agent-csfix-b0-pg`（15434）常驻——全部批次完工后可 `docker rm -f` 清理。
-4. GAP_LIST 各行 missing 均为 Tool/数据面（B2-B8 范畴），B1/A7 不改行——每批收尾按 §四.7 同步对应行。
-5. 10-22 批量停用 cs KB 的背景无人可考（审计无 reason 字段）——PROGRESS 已留痕；KB 状态现在全部 active，勿重复处置。
+**mock**：`GET /business/payments?order_no=` 保留三态只读查询；新增受内部 token 保护的 `POST /business/payments/duplicate-refund-simulations`，按稳定 action_id 幂等，仅给最新一笔 demo 流水标注 `simulated`，响应必须声明 `execution_mode=simulation`、`real_funds_affected=false`。contract.md 升 **v1.5**。
 
-## 七、验收纪律（每批强制，不可裁剪）
+**迁移**：`134_cs_payment.sql`——`payment.payment_records`（**payment schema 需迁移内 CREATE**，金额 NUMERIC、status CHECK、order_no 索引、872 幂等种子对齐 mock 三态）+ init_db 登记 "business" + **path_filter NON_AI 登记**。
 
-1. **验收先行**：开工前写好 §九 对应条目的验收脚本与判定标准；实现完先 T2（http_wire + facts 三件套 + vocab_gate）→ 本地全绿 → 阴性验证（撤改动测试必须失败，证明测试钉住行为）→ PR → CI 精确对账（passed 数 = 基线 + 新增数）→ 合并 → 主仓 pull+rebuild → 真机验收逐条过 → 回填 PROGRESS/§七。
-2. **验证证据落盘**：真机验收结果写 PROGRESS.md（含失败与拦截，如实记录；「未实际执行的验证不得报告为通过」）。
-3. **提交纪律**：双重路径限定（`git add -A -- <paths>` + `git commit -F <file> -- <paths>`）；提交前 git add 后跑本地 scan_secrets；新引用符号的定义文件必须同批提交。
-4. **停止条件**：真机验收发现「检索返回 travel/0 命中」先查 KB 注册表状态（§3.1）；遇并行会话冲突（共享栈 rebuild 撞车、工作区被收编）先报告不覆盖；任何一步无法安全重建或验证失败，标 BLOCKED/UNVERIFIED 停下报告。
+**facts 三件套**：`_project_payment`（order_no/status/amount/total_amount/paid_at/currency/success_count/refund_candidate；金额归 order 标签，facts 必须带有效 currency）；composer 无需新标签（order 已覆盖）。
+
+**测试**：`test_payment_flow.py` 覆盖 mock 端点租户/订单归属、稳定幂等重放、自动模拟准入与人工确认回退、模拟审计和未知结果不重试；TaskPlan facts 校验金额与币种。最近重跑 `test_payment_flow.py` + `test_task_plan.py` **82 passed / 1 deselected**（仅排除真实 PG 审计用例，该用例独立验收）；护栏加固后的 PG 审计用例 **1 passed / 0 skipped（10.10s）**；`test_audit.py` + `TestAuditPersistGateSQL` **13 passed**。本轮自动模拟只在 TestClient/mock 测试中启用；共享栈默认关闭，未做真机模拟退款验收。
+
+**隔离库告警**：本次 pytest 的 payment sandbox fixture 仅连接 `127.0.0.1:15434/agent_business_sandbox_test`（容器 `agent-csfix-b0-pg`），数据库名守卫通过。退出时全局 TaskService/residue guard 另尝试使用 `MEMORY_DB_CONFIG=127.0.0.1:15434/agent_memory`，出现 PoolTimeout；这不是共享 `5433/agent_memory`，pytest 退出码仍为 0。未查询该隔离 Memory 库状态，不把告警记为通过。
+
+**真实持久化补验（2026-11-06）**：在本机 PostgreSQL 18 的 `127.0.0.1:5432` 临时新建 `agent_memory_cs_audit_20261106_test`，运行 `test_mock_refund_action_and_audit_persist_once_in_isolated_memory_pg`。首次 **1 passed / 0 skipped（8.31s）**；将数据库目标限定为 loopback 且拒绝共享端口 5433 后再次 **1 passed / 0 skipped（10.10s）**。测试两次调用客服图节点真实 `_persist_audit_records`，确认动作表（`simulated`）、审计表（`success`）和幂等 ledger 各只有一条；结束后相关测试记录计数均为 0，且已删除本次专用隔离库。pytest residue guard 因该临时库没有 `llm_provider_credentials` 表输出 `UndefinedTable` 警告，不影响本用例通过。新测试复用既有 `test_payment_flow.py`，rag_smoke 已包含该文件。
+
+**本轮复核后的运行环境**：Docker Engine 可用，共享 Compose 项目 `agent` 有 20 个运行中容器和 12 个退出容器；没有操作共享栈的启动/停止。`:8000/health`、`:8081/health`、`:8090/readyz`、`:9080/health`、`:3100/login`、`:3200/login`、`:3300/login` 当前均 HTTP 200；`agent-app-1` 的 Compose workdir 标签指向本 B4 worktree。应用内配置为 `auto_mode=disabled`、`max_amount=0`、gateway `http`、业务 mock 主机 `business-mock:8081`。Windows 可用内存复核为 **3.37 GB**；本轮没有修改运行时代码，未重复 rebuild，既有从 B4 worktree 成功 rebuild 的证据仍适用。原隔离 PG 容器当前不存在；后续如改运行时代码需从本 worktree 按顺序 rebuild 并健康检查，若需隔离库先重新评估资源。
+
+**固定收尾四件（勿漏）**：①GAP_LIST「支付失败 / 重复扣款」行改已覆盖；②`test_payment_flow.py` 进 rag_smoke 定向清单；③迁移登记 path_filter；④customer-service.md 第 8/49 行同步 + payment-faq-policy.md/FAQ/mock 数字三方一致核对。
+
+**执行顺序（验收先行，不可裁剪）**：读 §九.4 → q1-q4 只读/人工引导真机验收（已通过）；mock 自动模拟用隔离 TestClient 覆盖准入、写入、幂等、拒绝和审计，默认关闭，未在共享栈实操 → T2 定向测试 → 变更 diff 和风险复核 → 展示证据请确认 → 提交并更新既有 PR #336 → CI 对账 → 经单独确认后合并 → 主仓 pull+rebuild → 终验 → 停靠收官 + HANDOFF 刷新。
+
+## 七、测试纪律
+
+- B4 原有支付/TaskPlan/CSRouter/FineRouter/composer/vocab 定向集合显式连隔离 PG 15434：**141 passed，零 skip**；本次新增 `test_payment_flow.py` Supervisor v1/v2 回归后，支付流程 + 两套 Supervisor 定向集合 **81 passed，零 skip**。q4 新 session 复验通过，证据见 PROGRESS。
+- T2 起步：每批 `backend/tests/customer_service/test_<domain>_flow.py`，断言四件：意图路由命中（含政策问句不翻域钉住）、Service 数据正确（含幂等重放）、facts 导出 + 投影白名单 + composer 守卫放行/拒绝、错误降级话术；
+- 词表变更：双门禁 + 全域回归（customer_service 全目录约 9 分钟）；**阴性验证**：撤投影器/撤路由词各跑一次，测试必须失败（证明钉住行为）；
+- 本地跑法：worktree 里 `../agent/.venv/Scripts/python.exe -m pytest backend/tests/... -q --no-cov`；隔离 PG 凭据通过 `POINTS_SANDBOX_PG_TEST_DSN` 环境变量传入（指向 15434 隔离库），文档与 workflow 不保存连接凭据；
+- CI 对账：preflight `passed = 935 + 新增`，skipped 恒 2；docs-only PR 的 preflight skipping 属预期。
+
+## 八、验收纪律（每批强制）
+
+1. **验收先行**：原 B4 q1-q4 查询真机验收已通过；会话 `b4-acc-q3` 保留 pending，禁止触碰。本轮仅以 T2 mock 测试配置验证：明确申请 + 所有准入条件满足才在 mock 中模拟；只查询或条件不满足时不自动写入，回到既有确认/人工流程；回复明确标注真实资金未变。
+2. **真机前检查**：全栈静止（§4.3 rebuild 轮换坑）+ KB 状态（检索返回 travel/0 命中先查 `auth.knowledge_bases.status`）+ FAQ/mock/迁移数字三方一致。
+3. **证据落盘**：真机结果写 PROGRESS.md（含失败与拦截如实记录）；脚本与结果留 d:/tmp。
+4. **停止条件**：并行会话冲突先报告不覆盖；任何一步无法安全重建或验证失败，标 BLOCKED/UNVERIFIED 停下报告。
+5. **每批共同底线**（§九.10）：/agent、travel、RAG 主链路零回归（:8000 /health + :3100 + :3300 + :9080 登录冒烟）+ CI 全绿逐项核对终态。

@@ -15,8 +15,12 @@ FINE_INTENTS: dict[str, str] = {
     "t_balance_query": "余额查询",
     "t_points_query": "积分与等级查询",
     "t_coupon_query": "优惠券查询与用券校验",
+    "t_price_match": "价保退差价",
+    "t_payment_issue": "支付流水与支付异常查询",
     "t_logistics": "物流查询",
     "t_change_address_in_transit": "在途订单改地址",
+    "t_urge_shipping": "催发货",
+    "t_urge_delivery": "催派送/催物流",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
     "t_delivery_estimate": "配送时效",
@@ -106,6 +110,18 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_policy", "cs_faq"],
     ),
+    "t_price_match": IntentProfile(
+        intent="t_price_match", domain=CSDomain.AFTER_SALES,
+        requires_auth=True, requires_action=True, risk_level="high",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_aftersales"],
+    ),
+    # B4：支付流水由可信用户/租户查询，失败处理引用支付政策文档。
+    "t_payment_issue": IntentProfile(
+        intent="t_payment_issue", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_faq", "cs_policy"],
+    ),
     "t_logistics": IntentProfile(
         intent="t_logistics", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
@@ -114,6 +130,20 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     "t_change_address_in_transit": IntentProfile(
         intent="t_change_address_in_transit", domain=CSDomain.TRANSACTION,
         requires_auth=True, requires_action=True, risk_level="medium",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
+    ),
+    # B5：直接登记 business-mock 催办；低风险，无确认卡；异常由
+    # Supervisor 自动转入现有人工队列。
+    "t_urge_shipping": IntentProfile(
+        intent="t_urge_shipping", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="low",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
+    ),
+    "t_urge_delivery": IntentProfile(
+        intent="t_urge_delivery", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="low",
         route_path=CSRoutePath.BUSINESS_ACTION,
         kb_ids=["cs_policy", "cs_faq"],
     ),

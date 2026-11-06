@@ -120,6 +120,26 @@ class TestCSTaskPlanSchema:
             "source": "sandbox_logistics_service", "error_type": None,
         }
 
+    @pytest.mark.parametrize(
+        "amount", [True, -1, float("inf"), float("nan"), 10 ** 1000, "699.00"],
+    )
+    def test_payment_amount_fact_must_be_finite_nonnegative_number(self, amount):
+        with pytest.raises(ValidationError):
+            CSTaskResult(
+                task_id="q1", status="success",
+                facts={"total_amount": amount},
+                source="business_payment_service",
+            )
+
+    @pytest.mark.parametrize("currency", ["", "CN", "人民币", 123])
+    def test_currency_fact_must_be_three_letter_code(self, currency):
+        with pytest.raises(ValidationError):
+            CSTaskResult(
+                task_id="q1", status="success",
+                facts={"currency": currency},
+                source="business_payment_service",
+            )
+
     def test_graph_input_transfers_only_validated_plan_and_resets_cursor(self):
         cs_input = new_cs_graph_input(
             "查下物流，如果没发货就申请退款", "u1", "s1", "c1",

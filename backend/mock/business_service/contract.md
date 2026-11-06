@@ -1,10 +1,14 @@
-# business-service 客服业务契约（v1.4）
+# business-service 客服业务契约（v1.8）
 
 > `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
-- v1.4（cs-capability-gap B7）：新增在途订单改址模拟契约；只登记 mock 请求，不更改真实订单或联系承运方。
+- v1.8（cs-capability-gap B7）：新增在途订单改址模拟契约；只登记 mock 请求，不更改真实订单或联系承运方。
+- v1.7（cs-capability-gap B6）：新增 business-mock 自营商品当前售价读取和确认后价保差价模拟入账；仅写内存演示钱包，单订单一次、确认幂等，不影响真实资金。
+- v1.6（cs-capability-gap B5）：新增催发货/催派送模拟登记；同租户、用户、订单和类型 24 小时内复用同一登记；物流超过 5 天无更新时不登记、返回人工升级信号。mock 登记在进程内存，重启后清空；客服动作与审计仍走现有 PostgreSQL agent_actions/audit_logs 幂等落库。
+- v1.5（cs-capability-gap B4）：增加严格 mock-only 的重复扣款模拟退款接口；只标记演示流水，不触碰真实支付、资金或退款申请。
+- v1.4（cs-capability-gap B4）：新增只读支付流水查询；覆盖单笔成功、支付失败和重复成功演示样本。
 - v1.3（cs-capability-gap B3）：新增优惠券查询与用券校验（懒种子：满减/无门槛/折扣三类可用 + 一张已过期券 + 一条核销样本，数字与 coupon-policy.md / FAQ id=23 一致；check 确定性覆盖 expired/threshold_not_met/not_stackable 三类不生效）。
 - v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
 - v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
@@ -38,6 +42,11 @@
 请求体 `{operation_key, user_id, tenant_id, order_no, expected_shipping_status, new_address}`。仅接受当前用户拥有且订单与物流状态均为 `shipped` 的订单；执行时重新核验状态。每个订单最多登记一次改址请求，同一 `operation_key` 与相同请求体重放返回原结果，键绑定不同内容或该订单已有请求时返回 409；订单不属于用户时返回 404。
 
 该端点只在 business-mock 内存中记录 `status=simulated`，明确返回 `real_carrier_notified=false`、`real_order_address_changed=false`；不会修改订单字段，也不会调用真实物流商。Mock 进程重启会清空该演示请求；确认动作的 durable 记录另走客服 `agent_actions`/`audit_logs`。
+### POST `/business/urge-requests`
+
+仅供客服演示环境调用，请求体 `{user_id, tenant_id, conversation_id, order_no, request_type}`，其中 `request_type` 为 `shipping` 或 `delivery`。服务端核对用户订单归属和当前状态：`shipping` 只接受已支付待发货订单，`delivery` 只接受运输中订单；其他状态返回 409。超过 5 天没有物流更新时返回 `handoff_required=true` 和当前物流状态，不创建催办记录。正常登记返回 `urge_request{request_id, order_no, request_type, status, created_at}`、`already_registered`、`logistics`。同租户、用户、订单和类型 24 小时内重复调用返回原 `request_id`，不创建第二条有效记录。
+
+此接口只在客服服务明确配置 HTTP `business-mock:8081`（或本机回环地址）时开放；sandbox 与真实业务地址均由客服服务拒绝。mock 登记为进程内存数据，不代表商家或物流商已收到请求，也不承诺发货/送达时间。
 
 ## 退款申请
 
@@ -129,6 +138,34 @@
 ### POST `/business/coupons/check`
 
 请求体 `{user_id, tenant_id, order_no, coupon_code?}`。规则优先级：显式券码过期（`expired`）→ 未满足门槛（`threshold_not_met`，按订单实付合计）→ 不可叠加（`not_stackable`，该订单已有核销记录）→ 可用（`applicable`）。订单或券不存在返回 404。返回 `data.coupon_check`：`applicable`、`reason_code`、`reason_text`、`order_no`、`order_total`、`coupon{coupon_code, kind, name, threshold_amount, discount_value}`。只读校验，无副作用与幂等键。
+
+## 价保差价（v1.7，business-mock only）
+
+客服与 business-mock 两侧默认关闭：CS_PRICE_MATCH_MODE=disabled、CS_PRICE_MATCH_WINDOW_DAYS=0。只有两侧都显式设为 mock、HTTP 网关指向 business-mock:8081（或本机 8081）且两侧窗口同为正数时，客服才构建提案并允许 mock 入账。业务价保窗口未确认前不得配置生产默认值。样例订单提供固定 SKU 和固定自营价，不能代表真实商品报价。
+
+### GET /business/products/{product_no}/current-price
+
+返回 data：product_no、price、currency。未知商品返回 404。
+
+### POST /business/orders/{order_no}/partial-refund
+
+仅供客服内部价保模拟，要求 X-Internal-Token。请求体包含 operation_key（确认 UUID）、user_id、tenant_id、order_no、expected_status、expected_payment_status、expected_paid_at、expected_currency、product_no、expected_original_price、expected_current_price、expected_amount 和 window_days。business-mock 重查订单归属、已支付状态、CNY、单商品单件、支付时间窗口、当前 SKU 价和差额；任何事实变化返回 409。相同操作键与相同参数返回原结果，内容不同返回 409；一个订单只允许一笔价保流水。
+
+成功返回 data.refund（amount、currency=CNY、kind=price_match、status=simulated、real_funds_affected=false）及 data.wallet。只追加内存演示钱包流水，不调用支付、退款或其他真实业务系统。客服 agent_actions 和 audit_logs 复用既有持久审计通路；business-mock 重启后其钱包和流水会清空。
+
+## 支付流水（v1.5）
+
+支付查询本身是只读端点，不创建支付、退款申请或资金账本记录。演示订单懒初始化三类流水：单笔成功、失败和两笔成功。业务服务必须先核实订单归属；订单不存在或不属于当前用户时返回 404。`refund_candidate` 仅在恰有两笔成功流水且每笔金额均等于订单总额、且尚无模拟退款时为真。
+
+### GET `/business/payments?user_id={id}&tenant_id={id}&order_no={order_no}`
+
+请求需带内部服务令牌。返回 `data.payment`：`order_no`、`total_amount`、`currency`（CNY）、`payments[]`（`payment_id`、`status`=`success`/`failed`、`amount`、`paid_at`、`kind`，以及可选 `refund_status=simulated`）、`success_count`、`duplicate_payment` 与 `refund_candidate`。
+
+### POST `/business/payments/duplicate-refund-simulations`
+
+请求体 `{action_id, user_id, tenant_id, order_no}`，需带内部服务令牌。服务端核验订单归属、恰有两笔成功流水且金额均等于订单金额，随后仅把最新一笔标记为 `refund_status=simulated`。金额、币种和退款 ID 均由 mock 端事实生成，不接受调用方金额。按 `action_id` 幂等重放；同一订单已模拟退款但使用新 `action_id` 时返回 409。返回 `data.refund`，其中 `status=simulated`、`execution_mode=simulation`、`real_funds_affected=false`。该端点不调用支付平台，不创建真实退款申请，也不写真实钱包/资金账本。
+
+客服端仅在显式 `CS_AUTO_DUPLICATE_REFUND_MODE=mock`、正数金额上限、CNY、业务流水来源、业务 URL 明确为 `http://business-mock:8081` 且所有流水事实完整时调用。默认开关关闭、上限为 0；非 mock、超限、事实变化、写入结果未知均停止自动处理，转人工核查或沿用原确认/审核流程。真实 business-service 不应实现或暴露此演示接口。
 
 ## 错误语义
 
