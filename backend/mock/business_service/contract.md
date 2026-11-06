@@ -1,8 +1,11 @@
-# business-service 客服业务契约（v1.3）
+# business-service 客服业务契约（v1.5）
 
 > `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
+
+- v1.5（cs-capability-gap B4）：增加严格 mock-only 的重复扣款模拟退款接口；只标记演示流水，不触碰真实支付、资金或退款申请。
+- v1.4（cs-capability-gap B4）：新增只读支付流水查询；覆盖单笔成功、支付失败和重复成功演示样本。
 
 - v1.3（cs-capability-gap B3）：新增优惠券查询与用券校验（懒种子：满减/无门槛/折扣三类可用 + 一张已过期券 + 一条核销样本，数字与 coupon-policy.md / FAQ id=23 一致；check 确定性覆盖 expired/threshold_not_met/not_stackable 三类不生效）。
 - v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
@@ -122,6 +125,20 @@
 ### POST `/business/coupons/check`
 
 请求体 `{user_id, tenant_id, order_no, coupon_code?}`。规则优先级：显式券码过期（`expired`）→ 未满足门槛（`threshold_not_met`，按订单实付合计）→ 不可叠加（`not_stackable`，该订单已有核销记录）→ 可用（`applicable`）。订单或券不存在返回 404。返回 `data.coupon_check`：`applicable`、`reason_code`、`reason_text`、`order_no`、`order_total`、`coupon{coupon_code, kind, name, threshold_amount, discount_value}`。只读校验，无副作用与幂等键。
+
+## 支付流水（v1.5）
+
+支付查询本身是只读端点，不创建支付、退款申请或资金账本记录。演示订单懒初始化三类流水：单笔成功、失败和两笔成功。业务服务必须先核实订单归属；订单不存在或不属于当前用户时返回 404。`refund_candidate` 仅在恰有两笔成功流水且每笔金额均等于订单总额、且尚无模拟退款时为真。
+
+### GET `/business/payments?user_id={id}&tenant_id={id}&order_no={order_no}`
+
+请求需带内部服务令牌。返回 `data.payment`：`order_no`、`total_amount`、`currency`（CNY）、`payments[]`（`payment_id`、`status`=`success`/`failed`、`amount`、`paid_at`、`kind`，以及可选 `refund_status=simulated`）、`success_count`、`duplicate_payment` 与 `refund_candidate`。
+
+### POST `/business/payments/duplicate-refund-simulations`
+
+请求体 `{action_id, user_id, tenant_id, order_no}`，需带内部服务令牌。服务端核验订单归属、恰有两笔成功流水且金额均等于订单金额，随后仅把最新一笔标记为 `refund_status=simulated`。金额、币种和退款 ID 均由 mock 端事实生成，不接受调用方金额。按 `action_id` 幂等重放；同一订单已模拟退款但使用新 `action_id` 时返回 409。返回 `data.refund`，其中 `status=simulated`、`execution_mode=simulation`、`real_funds_affected=false`。该端点不调用支付平台，不创建真实退款申请，也不写真实钱包/资金账本。
+
+客服端仅在显式 `CS_AUTO_DUPLICATE_REFUND_MODE=mock`、正数金额上限、CNY、业务流水来源、业务 URL 明确为 `http://business-mock:8081` 且所有流水事实完整时调用。默认开关关闭、上限为 0；非 mock、超限、事实变化、写入结果未知均停止自动处理，转人工核查或沿用原确认/审核流程。真实 business-service 不应实现或暴露此演示接口。
 
 ## 错误语义
 

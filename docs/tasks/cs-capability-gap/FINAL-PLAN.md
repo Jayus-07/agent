@@ -123,10 +123,10 @@
 
 ### B4：支付流水查询 + 重复扣款转退款
 
-- 意图：`t_payment_issue`（domain=TRANSACTION）。Service：`payment_service.py`——`get_payments(order_no)`（流水状态/金额/次数）；分支逻辑：单笔成功→正常；失败→引导重试/换支付方式（政策文档）；**同单多笔成功（重复扣款）→ 核对流水 → 生成退款申请（复用既有 `POST /business/refund-requests` 契约 + 人工审核闸），绝不自动退**。
-- facts：`{"payments": [{status, amount, paid_at}]}` → `_project_payment`。
-- mock `GET /business/payments?order_no=`（懒种子含一单两笔成功样本）；迁移 `payment.payment_records`。
-- 红线：重复扣款退款必须走既有 refund-requests 人工审核链路（与 SMOKE-MATRIX S3 同闸），开关沿用 `CS_REFUND_REQUEST_MODE`，不新开自动退款通道。
+- 意图：`t_payment_issue`（domain=TRANSACTION）。Service：`payment_service.py`——`get_payments(order_no)`（流水状态/金额/次数）；单笔成功→正常；失败→引导重试/换支付方式；重复扣款→先核对两笔成功流水与金额。仅对 business-mock、CNY、低于显式配置上限且用户明确申请的样本执行自动**模拟**退款；其他情况复用原确认提案与人工审核。
+- facts：`{"payments": [{status, amount, paid_at, refund_status?}], total_amount, currency}` 与候选状态；所有事实来自业务查询，不接受模型补值。
+- mock `GET /business/payments` 查询，`POST /business/payments/duplicate-refund-simulations` 幂等标记 mock 样本；迁移 `134_cs_payment.sql` 提供支付演示数据。
+- 红线：自动路径必须同时满足 `CS_AUTO_DUPLICATE_REFUND_MODE=mock`、正数金额上限、HTTP 业务查询、URL 精确指向 `business-mock:8081`、CNY、两笔全额成功流水、用户明确提出退款。动作记录状态为 `simulated`，持久审计标明 `real_funds_affected=false`；绝不调用真实支付接口或创建真实退款申请。写入结果未知时不重试、不转成新退款申请，提示人工核查。默认关闭/上限 0。
 
 ### B5：催发货/催派送（低风险直执行，不进确认卡）
 
@@ -203,7 +203,7 @@ cs_faq 库：新增 1 篇「高频问题速查」（20-40 条 Q&A，与上表一
 1. B1：问「退款政策/价保/优惠券能叠加吗/积分怎么用/支付失败怎么办/怎么开票」→ 回复含政策要点 + evidence 引用（不再「仅能答条文」或空答）；坐席端知识检索命中速查问答。
 2. B2：问「我的积分/等级权益」→ 回复含积分余额、等级、最近流水；异常礼貌降级。
 3. B3：问「我的优惠券/为什么没优惠」→ 回复含真实券列表/不生效原因（四类原因之一）。
-4. B4：问「订单 X 支付失败/是不是重复扣款」→ 失败引导；重复扣款核对流水并转退款申请（人工审核态）。
+4. B4：问「订单 X 支付失败/是不是重复扣款」→ 失败引导；重复扣款先核实完整流水，低风险 demo 样本模拟退款且明确显示真实资金未变化；非 mock/超限走确认与人工审核，未知结果提示人工核查。
 5. B5：问「催发货」→ 物流状态 + 已登记催办；同单重复催办幂等答复；不承诺具体时间。
 6. B6：问「买完降价了退差价」→ 价保资格判定 → 差价提案卡 → 确认 → 钱包入账（kind=price_match）→ 坐席端可见；disabled 全拒。
 7. B7：在途订单改址 → 提案（新地址+时效告知）→ 确认 → mock 记录变更；已签收拒绝。
