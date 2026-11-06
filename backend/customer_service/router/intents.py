@@ -15,6 +15,8 @@ FINE_INTENTS: dict[str, str] = {
     "t_balance_query": "余额查询",
     "t_points_query": "积分与等级查询",
     "t_coupon_query": "优惠券查询与用券校验",
+    "t_invoice_query": "发票抬头与开票记录查询",
+    "t_invoice_request": "模拟开票申请",
     "t_logistics": "物流查询",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
@@ -103,6 +105,18 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
     "t_coupon_query": IntentProfile(
         intent="t_coupon_query", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_policy", "cs_faq"],
+    ),
+    # B8：发票查询只读；申请为中风险动作，必须确认后登记到 business-mock。
+    "t_invoice_query": IntentProfile(
+        intent="t_invoice_query", domain=CSDomain.TRANSACTION,
+        requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
+        kb_ids=["cs_policy", "cs_faq"],
+    ),
+    "t_invoice_request": IntentProfile(
+        intent="t_invoice_request", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="medium",
+        route_path=CSRoutePath.BUSINESS_ACTION,
         kb_ids=["cs_policy", "cs_faq"],
     ),
     "t_logistics": IntentProfile(

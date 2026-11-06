@@ -187,6 +187,7 @@ def _execute_confirmed_action(
     confirmation_id = str(pending_action.get("action_id", "") or "")
     action_type = str(pending_action.get("action_type", "") or "")
     refund_request_written = False
+    invoice_request_written = False
     if action_type == "refund_request":
         if not confirmation_id or not user_id or not tenant_id or not session_id:
             from backend.customer_service.errors import RefundRequestUnavailableError
@@ -226,6 +227,27 @@ def _execute_confirmed_action(
                 conversation_id=session_id,
             )
             return action_record.to_dict()
+    elif action_type == "invoice_request":
+        from backend.customer_service.errors import OrderNotEligibleError
+
+        if not confirmation_id or not user_id or not tenant_id or not session_id:
+            raise OrderNotEligibleError("开票申请缺少可信确认上下文")
+
+        def execute() -> dict:
+            nonlocal invoice_request_written
+            from backend.customer_service.service.invoice_service import (
+                get_invoice_service,
+            )
+
+            action_record = get_invoice_service().execute_confirmed_invoice(
+                pending_action,
+                confirmation_id=confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                conversation_id=session_id,
+            )
+            invoice_request_written = True
+            return action_record.to_dict()
     else:
         def execute() -> dict:
             return _simulate_execute(pending_action).to_dict()
@@ -254,6 +276,10 @@ def _execute_confirmed_action(
         if action_type == "refund_request" and refund_request_written:
             raise SideEffectOutcomeUnknown(
                 "退款申请操作已写入，但幂等终态未能确认"
+            ) from exc
+        if action_type == "invoice_request" and invoice_request_written:
+            raise SideEffectOutcomeUnknown(
+                "模拟开票申请已登记，但幂等终态未能确认"
             ) from exc
         raise
 
@@ -329,13 +355,14 @@ def _handle_confirm(
             "status": "success",
             "action_record": record,
         }
-        audit_entry = build_audit_entry(
-            user_id=user_id,
-            action_type=action_type,
-            result="success",
-            target_type=pending_action.get("target_type", ""),
-            target_id=pending_action.get("target_id", ""),
-            detail=(
+        if action_type == "invoice_request":
+            invoice = (record.get("data") or {}).get("invoice") or {}
+            audit_detail = (
+                "simulated invoice request registered; not issued; invoice_no="
+                + str(invoice.get("invoice_no") or "")
+            )
+        elif action_type == "refund_request":
+            audit_detail = (
                 (
                     "refund request reason updated; "
                     if refund_operation == "update_reason"
@@ -345,14 +372,23 @@ def _handle_confirm(
                 + str(((record.get("data") or {}).get("request") or {}).get(
                     "request_id", "",
                 ))
-                if action_type == "refund_request"
-                else (
-                    "order cancelled; funds refunded to wallet; order_no="
-                    + str(record.get("target_id", ""))
-                    if action_type == "order_cancel"
-                    else f"simulated execution, action_id={record.get('action_id', '')}"
-                )
-            ),
+            )
+        elif action_type == "order_cancel":
+            audit_detail = (
+                "order cancelled; funds refunded to wallet; order_no="
+                + str(record.get("target_id", ""))
+            )
+        else:
+            audit_detail = (
+                f"simulated execution, action_id={record.get('action_id', '')}"
+            )
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=action_type,
+            result="success",
+            target_type=pending_action.get("target_type", ""),
+            target_id=pending_action.get("target_id", ""),
+            detail=audit_detail,
             # agent_actions.conversation_id NOT NULL + FK（006）：审计落库
             # 必须带会话归属——session_id 即 conversations.conversation_id
             # （confirmation 落库时已幂等 get_or_create，2026-09-24 实测：
@@ -386,6 +422,13 @@ def _handle_confirm(
                 f"**订单号:** `{record.get('target_id', '')}`\n"
                 f"**货款已退回账户余额:** ¥{float(wallet.get('balance') or 0):.2f}\n"
                 "可在「资金流水」查看退款入账记录。"
+            )
+        elif action_type == "invoice_request":
+            invoice = (record.get("data") or {}).get("invoice") or {}
+            answer = (
+                "✅ 模拟开票申请已登记。\n\n"
+                f"**模拟记录编号:** `{invoice.get('invoice_no') or '已登记'}`\n"
+                "这只是演示记录，未实际开票，也未连接税务系统。"
             )
         else:
             answer = (
@@ -446,7 +489,10 @@ def _handle_confirm(
             user_id=user_id,
             action_type=action_type,
             result="failure",
+            target_type=pending_action.get("target_type", ""),
+            target_id=pending_action.get("target_id", ""),
             detail=str(e),
+            conversation_id=session_id,
         )
         logger.error("[CSConfirmationFlow] execution failed: %s", e, exc_info=True)
 

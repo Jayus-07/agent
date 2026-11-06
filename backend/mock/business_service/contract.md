@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.3）
+# business-service 客服业务契约（v1.4）
 
-> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
+> `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案、优惠券档案和模拟开票记录，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.4（cs-capability-gap B8）：新增抬头/模拟开票记录查询与确认后模拟登记；重复同一订单/抬头返回冲突，记录明确未实际开票且不连接税务系统。
 - v1.3（cs-capability-gap B3）：新增优惠券查询与用券校验（懒种子：满减/无门槛/折扣三类可用 + 一张已过期券 + 一条核销样本，数字与 coupon-policy.md / FAQ id=23 一致；check 确定性覆盖 expired/threshold_not_met/not_stackable 三类不生效）。
 - v1.2（cs-capability-gap B2）：新增会员积分与等级查询（懒种子：余额 8000 分 + 黄金档 + 两笔 earn 流水，数字与 points-policy.md / FAQ id=8/16 一致）。
 - v1.1（cs-workstation-v2 P2）：新增商城 Mock 账本（钱包/充值/创建订单/支付/取消订单）；订单种子扩至六状态全态机；订单由派生数据改为可变存储（支付/取消后状态持续）。
@@ -123,6 +124,22 @@
 
 请求体 `{user_id, tenant_id, order_no, coupon_code?}`。规则优先级：显式券码过期（`expired`）→ 未满足门槛（`threshold_not_met`，按订单实付合计）→ 不可叠加（`not_stackable`，该订单已有核销记录）→ 可用（`applicable`）。订单或券不存在返回 404。返回 `data.coupon_check`：`applicable`、`reason_code`、`reason_text`、`order_no`、`order_total`、`coupon{coupon_code, kind, name, threshold_amount, discount_value}`。只读校验，无副作用与幂等键。
 
+## 发票（v1.4）
+
+发票数据为模拟档案：每个用户懒生成个人与企业两条抬头，个人抬头为默认值。HTTP Mock 记录只保存在进程内，服务重启后会清空；永久审计由客服既有 `agent_actions` 流程承担。记录状态固定为 `simulated`，`real_invoice_issued=false` 且 `tax_system_contacted=false`，不是税务发票。
+
+### GET `/business/invoice-titles?user_id={id}&tenant_id={id}`
+
+返回当前用户/租户的 `data.invoice_titles[]`：`title_id`、`title_name`、`title_type`（`individual`/`company`）、`is_default`、`status`。响应不包含税号或邮箱。
+
+### GET `/business/invoices?user_id={id}&tenant_id={id}&order_no={optional}`
+
+返回当前用户/租户最近最多 20 条 `data.invoices[]`，可按订单号筛选；只返回模拟登记记录，不返回税务系统票据或下载链接。
+
+### POST `/business/invoices`
+
+请求体 `{operation_key, user_id, tenant_id, conversation_id, order_no, expected_order_status, title_id, invoice_type}`。只支持 `electronic`；服务端重核订单归属、订单状态和抬头归属，只允许 `paid`、`shipped`、`completed` 订单。`operation_key` 绑定全量请求，原样重放返回同一模拟记录；同订单/同抬头已登记但操作键不同返回 409。成功返回 `data.invoice`，状态为 `simulated`；不调用税务系统、不生成真实发票，响应显式包含两个 `false` 副作用标记。
+
 ## 错误语义
 
 | HTTP | 含义 | Python 客服行为 |
@@ -133,4 +150,4 @@
 | 422 | 参数格式错误 | 拒绝执行 |
 | 网络错误 / 5xx | 写入最终结果可能未知 | 不重试、不报成功，进入 `verifying` 并提示人工核实 |
 
-所有 GET 失败都不得回退到 sandbox。写操作只在 `CS_BUSINESS_GATEWAY_MODE=http` 且 `CS_REFUND_REQUEST_MODE=http` 时启用；本地案件库的 `sandbox` 写入仅在两个配置均为 `sandbox` 时启用。
+所有 GET 失败都不得回退到 sandbox。退款写操作按 `CS_REFUND_REQUEST_MODE` 既有闸控制；B8 发票写操作默认关闭，仅在 `CS_INVOICE_MODE=mock`、`CS_BUSINESS_GATEWAY_MODE=http` 且 `BUSINESS_SERVICE_URL` 指向白名单 business-mock 时启用，不存在真实税务写路径。

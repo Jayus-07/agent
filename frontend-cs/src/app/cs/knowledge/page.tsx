@@ -37,7 +37,7 @@ const GAP_LIST: Array<{
   { question: '积分怎么用 / 等级权益', behavior: '已覆盖（B1 政策问答 + B2 意图级积分/等级查询）', missing: '无', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '支付失败 / 重复扣款', behavior: '无意图', missing: '支付域查询 + 退款联动', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
   { question: '在途包裹改地址', behavior: '仅账户默认地址', missing: '物流商改址 API', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
-  { question: '帮我开票 / 修改发票抬头', behavior: '仅 FAQ 答复', missing: '开票 Tool + 抬头子表', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
+  { question: '帮我开票 / 修改发票抬头', behavior: '查询已有抬头/记录；确认后模拟登记', missing: '自助新增/修改抬头；真实税务通道（二期）', priority: '部分覆盖', priorityClass: 'bg-amber-50 text-amber-600' },
   { question: '（发送破损照片）你看下', behavior: '消息拒收（仅文本）', missing: '消息多模态（前端 + 模型）', priority: '中期', priorityClass: 'bg-blue-50 text-blue-600' },
 ]
 

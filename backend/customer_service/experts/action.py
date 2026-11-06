@@ -27,11 +27,15 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
+    "t_invoice_request": "invoice",
 }
 
 # 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
-_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange", "t_order_cancel"})
+_SLOT_ORDER_INTENTS = frozenset({
+    "as_refund", "as_return", "as_exchange", "t_order_cancel",
+    "t_invoice_request",
+})
 
 _ACTION_TYPE_LABELS = {
     "refund_request": "退款申请",
@@ -40,6 +44,7 @@ _ACTION_TYPE_LABELS = {
     "address_update": "地址修改",
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
+    "invoice_request": "模拟开票申请",
 }
 
 # 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
@@ -596,6 +601,41 @@ def _build_proposal(
             user_id, order_id, reason,
         )
 
+    if action_type == "invoice":
+        from backend.customer_service.service.invoice_service import (
+            get_invoice_service,
+        )
+
+        metadata = cs_route.get("metadata") or {}
+        title_selector = str(
+            metadata.get("invoice_title_id")
+            or metadata.get("invoice_title_name")
+            or ""
+        ).strip()
+        if not title_selector:
+            for slot in metadata.get("semantic_slots") or []:
+                if slot.get("name") in {
+                    "invoice_title_id", "invoice_title_name", "invoice_title",
+                }:
+                    title_selector = str(slot.get("value") or "").strip()
+                    if title_selector:
+                        break
+        if not title_selector and any(
+            word in user_message for word in ("个人", "自然人", "企业", "公司", "单位")
+        ):
+            title_selector = user_message
+        invoice_type = str(metadata.get("invoice_type") or "electronic").strip()
+        if "纸质" in user_message:
+            invoice_type = "paper"
+        order_id = _resolve_order_id(cs_route, user_message)
+        return get_invoice_service().build_invoice_proposal(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            order_no=order_id,
+            title_selector=title_selector,
+            invoice_type=invoice_type,
+        )
+
     if action_type == "return":
         from backend.customer_service.service.after_sales_service import get_after_sales_service
         order_id = _resolve_order_id(cs_route, user_message)
@@ -773,6 +813,7 @@ def _ask_missing_slot(
     now = datetime.now(timezone.utc)
     action_type = _INTENT_ACTION_MAP.get(intent, "refund")
     label = _ACTION_TYPE_LABELS.get(f"{action_type}_request", action_type)
+    slot_risk_level = "medium" if action_type == "invoice" else "high"
 
     # 退款点选候选（2026-10-08 拍板）：缺订单号时不再让用户手输——按
     # 退款政策窗口列出可退订单（订单号+商品名+金额）供用户点选/回复序号。
@@ -829,7 +870,7 @@ def _ask_missing_slot(
             "candidates": candidates,
             "target_type": "order",
             "target_id": "",
-            "risk_level": "high",
+            "risk_level": slot_risk_level,
             "requires_confirmation": False,
             "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
             "retry_count": 0,
@@ -873,7 +914,7 @@ def _ask_missing_slot(
         "collected_slots": {},
         "target_type": "order",
         "target_id": "",
-        "risk_level": "high",
+        "risk_level": slot_risk_level,
         "requires_confirmation": False,
         "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
         "retry_count": 0,

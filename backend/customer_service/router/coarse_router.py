@@ -41,6 +41,9 @@ class CSCoarseRouter:
         if self._is_delivery_policy_question(query):
             return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "delivery_policy: KNOWLEDGE"
 
+        if self._is_invoice_policy_question(query):
+            return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "invoice_policy: KNOWLEDGE"
+
         domain, conf, reason = self._rule_classify(query, CS_DOMAIN_KEYWORDS)
         # P2.1（audit #157）：规则决定线 0.8 → CS_CONFIDENCE_CAUTIOUS（0.6）。
         # 向量层删除后规则通道是唯一判定，规则命中即采信。
@@ -119,6 +122,21 @@ class CSCoarseRouter:
             return False
         return bool(re.search(
             r"(多久|几天|时效|什么时候|通常|一般|多长|多少天|到达)", query
+        ))
+
+    @staticmethod
+    def _is_invoice_policy_question(query: str) -> bool:
+        """把开票政策问句与抬头查询/明确申请分开。"""
+        if not any(token in query for token in ("发票", "开票", "抬头")):
+            return False
+        if re.search(
+            r"(我要|帮我|申请|提交|办理|查|查询|查看|记录|有哪些|名下)",
+            query,
+        ):
+            return False
+        return bool(re.search(
+            r"(怎么|如何|需要|资料|规则|政策|流程|条件|多久|吗|哪些|什么)",
+            query,
         ))
 
     @staticmethod

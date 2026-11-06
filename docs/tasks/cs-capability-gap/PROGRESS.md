@@ -134,6 +134,48 @@
 
 **收尾**：rag_smoke 清单 +`test_coupon_flow.py`；GAP_LIST 优惠券行改「已覆盖（政策问答 + B3 意图级券查询/用券校验）」；customer-service.md 第 8/49 行同步；mock/迁移种子与 coupon-policy.md/FAQ id=23 三方一致。
 
+## B8：发票抬头/开票记录查询与确认后模拟申请 —— 实现与局部验收（2026-11-06，分支 `feat/cs-invoice`，基于 `987eddb`，未提交）
+
+**范围**：只补已有抬头查询、开票记录查询和用户确认后的模拟申请；不接真实税务系统。当前不支持用户自助新建/修改发票抬头，坐席 GAP_LIST 明确标为部分覆盖。
+
+**实现**：
+
+- 路由：`t_invoice_query` / `t_invoice_request`；「发票怎么开」等政策问句继续走 KNOWLEDGE。VOCAB_VERSION → `2026-11-06.1`，同步 `test_vocab.py`、cs-gate 与决策回放门禁。
+- Service：查询只信当前用户/租户；申请只在 `CS_INVOICE_MODE=mock`、业务网关 `http` 且目标为白名单 `business-mock:8081` 时启用，默认关闭。只允许 paid/shipped/completed 订单、已有 active 抬头和电子发票；提案为 medium risk，必须显式确认。
+- Mock：按用户/租户隔离个人与企业演示抬头；确认申请后登记内存态模拟记录。相同 operation key 同 payload 幂等重放；同订单/抬头换 key 冲突。响应固定 `status=simulated`、`real_invoice_issued=false`、`tax_system_contacted=false`；服务重启会清空 Mock 记录，客服 `agent_actions` 留审计。
+- 状态与审计：确认时重新核对订单状态和抬头；未知写入结果进入既有 `verifying`，拒绝盲目重试。确认失败审计补齐 `conversation_id`、目标订单；新增 `invoice_request` 到 memory 库动作类型约束。
+- 数据/CI/文档：迁移 138→business（抬头、模拟记录表及真实开票恒 false 约束），139→memory（动作类型约束）；`init_db.py` 与 `rag_smoke_path_filter.py` 登记；`rag_smoke.yml` 加入新测试；业务契约升 v1.4；域文档与坐席 GAP_LIST 标部分覆盖。
+
+**验证**：
+
+1. T2 双门禁/查询模板回归：`test_cs_eval_gate`、`test_cs_decision_replay`、`test_vocab`、粗细路由、意图契约、B2/B3、facts：**126 passed, 2 skipped**。
+2. 最终跨层回归：`test_invoice_flow`、确认状态机、ActionExpert、缺槽链、QueryExpert：**99 passed**，覆盖缺订单追问、确认后登记、订单状态变更拒绝并审计、重复写冲突、未知结果 verifying、facts 脱敏。
+3. 隔离 PostgreSQL 16：138/139 各重复应用两次成功；种子保持 2 条；`real_invoice_issued=true` 与未知 action_type 均被约束拒绝；`invoice_request:simulated` 被 status/type 约束接受。只使用本任务临时 PG，不触碰共享库。
+4. 当前工作树构建的独立 `business-mock` 容器 healthy；HTTP 冒烟：health ok、抬头查询、模拟登记、相同键 replay、换键重复 409，两个真实开票标记均 false。独立坐席前端镜像 Next build（含类型检查）成功，`/login` 与 `/cs/knowledge` 均 200 且容器 healthy。B8 `app` 镜像从本工作树构建成功。
+5. T0：所有改动 Python 文件 `py_compile` 通过；新服务/测试/路由 Ruff 通过；`git diff --check` 通过。完整 touched-file Ruff 仍报告 15 个既有 lint 项，均在本次未改动的旧行；未顺手清理。
+
+**未完成/风险**：
+
+- 主 API 容器未启动验收。当前共享 Compose 项目 `agent` 的配置文件混有多个工作树；按 `devctl.bat rebuild` 会重建/重启共享 backend 服务，故本轮只构建 B8 app 镜像，不把隔离 API 接入共享数据库。`app` 健康与经 :9080 真机对话记 `UNVERIFIED`。
+- 两轮 pytest session-finish 的全局残留守卫尝试连工作树默认 `localhost:5432`，因无 `.env` 密码超时；**不影响 pytest 结果**。未将守卫指向共享数据库。
+- 无 PR/CI 结果，未提交、未合并。当前分支基于 `987eddb`，主线尚缺 B4-B7 的 134-137 迁移；合并顺序必须先落 B4-B7，再合 B8（否则后合的旧动作类型迁移可能覆盖 `invoice_request` 约束）。
+
 ## 后续批次
 
-B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
+- B4 支付查询/重复扣款退款提案已实现，但 PR #336 仍需确认状态并按用户授权合并；资金红线仍是 `refund-requests` 人工审核闸。
+- B5-B7 按各自任务工作树继续，不在 B8 工作树改写；B7 当前有独立未提交改动，须保留。
+- B8 当前已完成功能实现和局部验收；下一步先让 B4-B7 依序合入主线，再将 B8 分支更新到包含迁移 134-137 的主线，复核并提交/发 PR。`feat/cs-invoice` 工作树保持未提交状态，未经用户确认不提交或合并。
+
+### B8 本轮功能专项复跑（2026-11-06）
+
+- 使用 PYTHONPATH 指向当前 worktree，并通过 --confcutdir=backend/tests/customer_service 避开全局 pytest 收尾数据库清理钩子；test_invoice_flow.py **12 passed，0 skipped**。
+- 本次仅复跑客服发票流程测试，不代表主 API 已部署；容器内主 API/真机验收仍为 **UNVERIFIED**。
+
+### B8 持久审计 T2（2026-11-06）
+
+- 在已有 test_invoice_flow.py 中新增真实 PostgreSQL 审计持久化用例；仅允许 loopback 的 test/sandbox 数据库，拒绝共享栈 5433。测试文件已在 rag_smoke 免费档定向清单中，无需新增清单项。
+- 使用独立 PostgreSQL 16 容器项目 cs-invoice-audit-t2，绑定 127.0.0.1:15436；测试库依次初始化迁移 006、031、050、139。真实调用 cs_graph_node._persist_audit_records 两次后，验证 agent_actions(action_type=invoice_request,status=simulated)、audit_logs(result=success)、ai.idempotency_records 各仅 1 条，且模拟开票/税务真实副作用标记均为 false。
+- 完整发票流程测试 **13 passed / 0 skipped**；T2 运行后动作、审计、幂等和会话残留均为 0。py_compile、Ruff（忽略本文件原有 I001 导入排序项）通过。
+- 本批仍未重建主 API；主容器对话和真机验收继续为 **UNVERIFIED**。
+
+\n
