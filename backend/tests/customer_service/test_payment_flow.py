@@ -124,6 +124,107 @@ def test_duplicate_payment_request_dispatches_query_task_before_refund():
     assert command.update["current_task"]["capability"] == "query_payments"
 
 
+@pytest.mark.parametrize(
+    ("business_url", "requires_confirmation"),
+    [
+        ("http://business-mock:8081", False),
+        ("https://payments.example.com", True),
+    ],
+)
+def test_refund_task_skips_confirmation_only_for_bounded_mock(
+    business_url, requires_confirmation, monkeypatch,
+):
+    from backend.config import customer_service as cfg
+    from backend.config import messaging
+    from backend.customer_service.graph_state import CS_ACTION_EXPERT
+    from backend.customer_service.supervisor import _task_plan_command
+    from backend.customer_service.understanding.task_plan import build_rule_task_plan
+
+    monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "http")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MODE", "mock")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    monkeypatch.setattr(messaging, "BUSINESS_SERVICE_URL", business_url)
+    plan = build_rule_task_plan(_REFUND_REQUEST)
+    assert plan is not None
+    state = {
+        "user_message": _REFUND_REQUEST,
+        "user_id": "872", "tenant_id": "default",
+        "session_id": "b4-supervisor-gate", "conversation_id": "b4-supervisor-gate",
+        "cs_route": {"intent": "t_payment_issue", "metadata": {}},
+        "handoff_state": "ai_active", "handling_mode": "ai",
+        "confirmation_state": "not_required", "expert_loop_count": 0,
+        "expert_history": [], "task_plan": plan, "task_cursor": 1,
+        "task_plan_source": "rule_candidate", "current_task": None,
+        "task_results": [{
+            "task_id": "q1", "status": "success",
+            "source": "business_payment_service",
+            "facts": {
+                "order_count": 1, "order_id": "MO-12345678",
+                "order_no": "MO-12345678", "success_count": 2,
+                "duplicate_payment": True, "refund_candidate": True,
+                "total_amount": 699.0, "currency": "CNY",
+            },
+        }],
+    }
+
+    command = _task_plan_command(state)
+
+    assert command is not None
+    assert command.goto == CS_ACTION_EXPERT
+    assert command.update["supervisor_decision"]["requires_confirmation"] \
+        is requires_confirmation
+
+
+def test_unknown_mock_refund_result_does_not_fall_back_to_proposal(monkeypatch):
+    from backend.config import customer_service as cfg
+    from backend.config import messaging
+    from backend.customer_service.experts import action as action_expert
+    from backend.customer_service.service.refund_service import RefundService
+    from backend.shared.idempotency import SideEffectOutcomeUnknown
+    from backend.customer_service.understanding.task_plan import build_rule_task_plan
+
+    monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "http")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MODE", "mock")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "http://business-mock:8081",
+    )
+    monkeypatch.setattr(
+        RefundService, "simulate_duplicate_payment_refund",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            SideEffectOutcomeUnknown("unknown"),
+        ),
+    )
+    monkeypatch.setattr(
+        action_expert, "_build_new_proposal",
+        lambda *_args, **_kwargs: pytest.fail("未知结果不得退回新提案"),
+    )
+    plan = build_rule_task_plan(_REFUND_REQUEST)
+    assert plan is not None
+
+    result = action_expert._execute_conditional_refund_task(
+        _REFUND_REQUEST, "872", "b4-unknown-result", None, "default",
+        {
+            "conversation_id": "b4-unknown-result",
+            "task_plan": plan, "current_task": plan["tasks"][1],
+            "task_results": [{
+                "task_id": "q1", "status": "success",
+                "source": "business_payment_service",
+                "facts": {
+                    "order_count": 1, "order_id": "MO-12345678",
+                    "order_no": "MO-12345678", "success_count": 2,
+                    "duplicate_payment": True, "refund_candidate": True,
+                    "total_amount": 699.0, "currency": "CNY",
+                },
+            }],
+        },
+    )
+
+    assert result["data"]["task_status"] == "failed"
+    assert result["data"]["audit_entry"]["result"] == "error"
+    assert "停止自动重试" in result["response_draft"]
+
+
 def test_payment_signal_is_exempt_from_out_of_scope():
     from backend.customer_service.vocab import match_cs_signal_exempt
 
@@ -258,6 +359,43 @@ def test_mock_payment_lazy_seed_covers_three_states(http_wire):
     assert duplicate["currency"] == "CNY"
 
 
+def test_mock_payment_cache_updates_after_wallet_payment(http_wire):
+    orders = http_wire.get(
+        "/business/orders",
+        params={"user_id": "customer-payment", "tenant_id": "tenant-payment"},
+        headers=_HEADERS,
+    ).json()["data"]["orders"]
+    pending = next(order for order in orders if order["status"] == "pending")
+    params = {
+        "user_id": "customer-payment",
+        "tenant_id": "tenant-payment",
+        "order_no": pending["order_no"],
+    }
+    before = http_wire.get(
+        "/business/payments", params=params, headers=_HEADERS,
+    ).json()["data"]["payment"]
+    assert before["payments"][0]["status"] == "failed"
+
+    paid = http_wire.post(
+        f"/business/orders/{pending['order_no']}/pay",
+        json={
+            "user_id": "customer-payment",
+            "tenant_id": "tenant-payment",
+            "expected_amount": pending["total_amount"],
+            "operation_key": "payment-cache-refresh-test",
+        },
+        headers=_HEADERS,
+    )
+    assert paid.status_code == 200
+
+    after = http_wire.get(
+        "/business/payments", params=params, headers=_HEADERS,
+    ).json()["data"]["payment"]
+    assert after["success_count"] == 1
+    assert [item["status"] for item in after["payments"]] == ["failed", "success"]
+    assert after["payments"][1]["kind"] == "wallet"
+
+
 def test_mock_payment_query_checks_order_ownership(http_wire):
     order = http_wire.get(
         "/business/orders", params={"user_id": "customer-payment"},
@@ -268,6 +406,66 @@ def test_mock_payment_query_checks_order_ownership(http_wire):
         params={
             "user_id": "other-customer", "tenant_id": "tenant-payment",
             "order_no": order["order_no"],
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 404
+
+
+def test_mock_duplicate_refund_simulation_is_idempotent_and_explicit(http_wire):
+    orders = http_wire.get(
+        "/business/orders", params={"user_id": "customer-payment"},
+        headers=_HEADERS,
+    ).json()["data"]["orders"]
+    duplicate = next(item for item in orders if item["status"] == "shipped")
+    payload = {
+        "action_id": "6c0a1690-23c4-47a8-a2c7-07d75c2ec1d1",
+        "user_id": "customer-payment",
+        "tenant_id": "tenant-payment",
+        "order_no": duplicate["order_no"],
+    }
+
+    first = http_wire.post(
+        "/business/payments/duplicate-refund-simulations",
+        json=payload, headers=_HEADERS,
+    )
+    replay = http_wire.post(
+        "/business/payments/duplicate-refund-simulations",
+        json=payload, headers=_HEADERS,
+    )
+    second_action = http_wire.post(
+        "/business/payments/duplicate-refund-simulations",
+        json={**payload, "action_id": "6c0a1690-23c4-47a8-a2c7-07d75c2ec1d3"},
+        headers=_HEADERS,
+    )
+
+    assert first.status_code == replay.status_code == 200
+    assert second_action.status_code == 409
+    first_refund = first.json()["data"]["refund"]
+    assert replay.json()["data"]["refund"] == first_refund
+    assert first_refund["status"] == "simulated"
+    assert first_refund["execution_mode"] == "simulation"
+    assert first_refund["real_funds_affected"] is False
+    assert first_refund["amount"] == duplicate["total_amount"]
+
+    after = _payment(http_wire, duplicate["order_no"])
+    assert after["refund_candidate"] is False, after
+    assert after["payments"][0].get("refund_status") is None
+    assert after["payments"][1]["refund_status"] == "simulated"
+
+
+def test_mock_duplicate_refund_simulation_checks_order_ownership(http_wire):
+    orders = http_wire.get(
+        "/business/orders", params={"user_id": "customer-payment"},
+        headers=_HEADERS,
+    ).json()["data"]["orders"]
+    duplicate = next(item for item in orders if item["status"] == "shipped")
+    response = http_wire.post(
+        "/business/payments/duplicate-refund-simulations",
+        json={
+            "action_id": "6c0a1690-23c4-47a8-a2c7-07d75c2ec1d2",
+            "user_id": "other-customer", "tenant_id": "tenant-payment",
+            "order_no": duplicate["order_no"],
         },
         headers=_HEADERS,
     )
@@ -294,7 +492,51 @@ def test_payment_service_http_mode_normalizes_payment_facts(http_wire):
     assert all(item["paid_at"] for item in payment["payments"])
 
 
+def test_auto_duplicate_refund_is_mock_only_and_bounded(monkeypatch):
+    from backend.config import customer_service as cfg
+    from backend.config import messaging
+    from backend.customer_service.service.payment_service import (
+        auto_duplicate_refund_simulation_eligible,
+    )
+
+    monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "http")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MODE", "mock")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "http://business-mock:8081",
+    )
+    payment = {
+        "total_amount": 699.0, "currency": "CNY", "refund_candidate": True,
+    }
+
+    assert auto_duplicate_refund_simulation_eligible(
+        payment, source="business_payment_service",
+    ) is True
+    assert auto_duplicate_refund_simulation_eligible(
+        payment, source="sandbox_payment_service",
+    ) is False
+
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "https://payments.example.com",
+    )
+    assert auto_duplicate_refund_simulation_eligible(
+        payment, source="business_payment_service",
+    ) is False
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "http://business-mock:8081",
+    )
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "698.99")
+    assert auto_duplicate_refund_simulation_eligible(
+        payment, source="business_payment_service",
+    ) is False
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    assert auto_duplicate_refund_simulation_eligible(
+        {**payment, "currency": ""}, source="business_payment_service",
+    ) is False
+
+
 def test_payment_view_requires_complete_full_amount_duplicate_records():
+    from backend.customer_service.experts.query import _payment_answer
     from backend.customer_service.service.payment_service import _payment_view
 
     base = {
@@ -324,8 +566,27 @@ def test_payment_view_requires_complete_full_amount_duplicate_records():
         ],
     }
     assert len(truncated["payments"]) == 21
-    assert _payment_view(truncated)["success_count"] == 2
-    assert _payment_view(truncated)["refund_candidate"] is False
+    normalized = _payment_view(truncated)
+    assert normalized["success_count"] == 2
+    assert normalized["payments_complete"] is False
+    assert normalized["refund_candidate"] is False
+
+    late_success = {
+        **base,
+        "payments": [
+            *[
+                {"status": "failed", "amount": "699.00", "kind": "bank_card"}
+                for _ in range(20)
+            ],
+            {"status": "success", "amount": "699.00", "kind": "wechat_pay"},
+        ],
+    }
+    normalized = _payment_view(late_success)
+    assert normalized["success_count"] == 1
+    assert normalized["duplicate_payment"] is None
+    assert normalized["payments_complete"] is False
+    assert "无法确认全部支付状态" in _payment_answer(normalized)
+    assert "当前没有成功支付记录" not in _payment_answer(normalized)
 
 
 @patch(
@@ -380,6 +641,60 @@ def test_payment_query_exports_facts_without_submitting_refund(
     )
 
 
+def test_payment_query_updates_session_order_reference(monkeypatch):
+    from backend.customer_service import context_resolver
+    from backend.customer_service.security.permission import PermissionChecker
+    from backend.customer_service.service import payment_service
+
+    monkeypatch.setattr(
+        PermissionChecker, "validate_user_identity", lambda state: "872",
+    )
+    monkeypatch.setattr(
+        "backend.customer_service.experts.query._llm_decompose_intents",
+        lambda question: None,
+    )
+    calls = []
+    monkeypatch.setattr(
+        context_resolver,
+        "record_recent_order",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    class Service:
+        def get_payments(self, user_id, tenant_id, order_no):
+            return {
+                "order_no": order_no,
+                "total_amount": 699.0,
+                "currency": "CNY",
+                "payments": [],
+                "success_count": 0,
+                "duplicate_payment": False,
+                "refund_candidate": False,
+                "payments_complete": True,
+            }
+
+    monkeypatch.setattr(payment_service, "PaymentService", Service)
+    state = {
+        "user_id": "872", "tenant_id": "tenant-payment",
+        "session_id": "payment-session",
+    }
+    for order_no in ("MO-12345678", "MO-87654321"):
+        execute_query(
+            f"查订单 {order_no} 的支付流水",
+            {
+                "intent": "t_payment_issue",
+                "route_path": "business_query",
+                "metadata": {"order_id": order_no},
+            },
+            state,
+        )
+
+    assert calls[-1] == (
+        ("tenant-payment", "872", "payment-session", "MO-87654321"),
+        {"source_intent": "t_payment_issue"},
+    )
+
+
 @patch(
     "backend.customer_service.security.permission.PermissionChecker"
     ".validate_user_identity",
@@ -410,6 +725,7 @@ def test_payment_fact_projection_is_allowlisted_and_currency_safe():
             "order_no": "MO-12345678", "total_amount": 699,
             "currency": "CNY", "success_count": 2,
             "duplicate_payment": True, "refund_candidate": True,
+            "payments_complete": False,
             "payments": [
                 {
                     "status": "success", "amount": 699,
@@ -428,6 +744,7 @@ def test_payment_fact_projection_is_allowlisted_and_currency_safe():
         "payment": {
             "order_no": "MO-12345678", "total_amount": "699", "currency": "CNY",
             "success_count": 2, "duplicate_payment": True, "refund_candidate": True,
+            "payments_complete": False,
             "payments": [
                 {
                     "status": "success", "amount": "699",
@@ -553,6 +870,7 @@ def test_payment_task_query_returns_only_trusted_refund_facts(monkeypatch):
         "order_count": 1, "order_id": "MO-12345678",
         "order_no": "MO-12345678", "success_count": 2,
         "duplicate_payment": True, "refund_candidate": True,
+        "total_amount": 699.0, "currency": "CNY",
     }
 
 
@@ -560,11 +878,19 @@ def test_payment_task_query_returns_only_trusted_refund_facts(monkeypatch):
 def test_payment_task_proposal_reuses_existing_refund_confirmation(
     refund_candidate, monkeypatch,
 ):
+    from backend.config import customer_service as cfg
+    from backend.config import messaging
     from backend.customer_service.experts import action as action_expert
     from backend.customer_service.experts.base import ExpertResult
     from backend.customer_service.understanding.task_plan import build_rule_task_plan
 
     message = _REFUND_REQUEST
+    monkeypatch.setattr(cfg, "CS_BUSINESS_GATEWAY_MODE", "http")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MODE", "disabled")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "http://business-mock:8081",
+    )
     plan = build_rule_task_plan(message)
     assert plan is not None
     pending = {
@@ -614,6 +940,7 @@ def test_payment_task_proposal_reuses_existing_refund_confirmation(
                     "order_no": "MO-12345678", "success_count": 2,
                     "duplicate_payment": True,
                     "refund_candidate": refund_candidate,
+                    "total_amount": 699.0, "currency": "CNY",
                 },
             }],
         },
@@ -628,6 +955,87 @@ def test_payment_task_proposal_reuses_existing_refund_confirmation(
     else:
         assert calls == []
         assert "没有发起退款申请" in result["response_draft"]
+
+
+def test_low_risk_duplicate_refund_runs_mock_simulation_and_audits(
+    http_wire, monkeypatch,
+):
+    from backend.config import customer_service as cfg
+    from backend.config import messaging
+    from backend.customer_service.experts import action as action_expert
+    from backend.customer_service.experts.query import _payment_answer
+    from backend.customer_service.understanding.task_plan import build_rule_task_plan
+
+    orders = http_wire.get(
+        "/business/orders", params={"user_id": "customer-payment"},
+        headers=_HEADERS,
+    ).json()["data"]["orders"]
+    order = next(item for item in orders if item["status"] == "shipped")
+    payment = PaymentService().get_payments(
+        "customer-payment", "tenant-payment", order["order_no"],
+    )
+
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MODE", "mock")
+    monkeypatch.setattr(cfg, "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "700")
+    monkeypatch.setattr(
+        messaging, "BUSINESS_SERVICE_URL", "http://business-mock:8081",
+    )
+    monkeypatch.setattr(
+        "backend.customer_service.security.permission.PermissionChecker"
+        ".validate_user_identity",
+        lambda _state: "customer-payment",
+    )
+
+    class Store:
+        def load(self, user_id, session_id):
+            return None
+
+    monkeypatch.setattr(
+        "backend.customer_service.confirmation_store.get_confirmation_store",
+        Store,
+    )
+    plan = build_rule_task_plan(_REFUND_REQUEST)
+    assert plan is not None
+    state = {
+        "user_id": "customer-payment", "tenant_id": "tenant-payment",
+        "session_id": "b4-mock-refund", "conversation_id": "b4-mock-refund",
+        "cs_context": {"tenant_id": "tenant-payment"},
+        "task_plan": plan, "current_task": plan["tasks"][1],
+        "task_results": [{
+            "task_id": "q1", "status": "success",
+            "source": "business_payment_service",
+            "facts": {
+                "order_count": 1, "order_id": order["order_no"],
+                "order_no": order["order_no"],
+                "success_count": payment["success_count"],
+                "duplicate_payment": payment["duplicate_payment"],
+                "refund_candidate": payment["refund_candidate"],
+                "total_amount": payment["total_amount"],
+                "currency": payment["currency"],
+            },
+        }],
+    }
+    route = {"intent": "t_payment_issue", "metadata": {}}
+    result = action_expert.execute_action(_REFUND_REQUEST, route, state)
+    replay = action_expert.execute_action(_REFUND_REQUEST, route, state)
+
+    data = result["data"]
+    record = data["action_result"]["action_record"]
+    assert record["action_type"] == "refund_execute"
+    assert record["status"] == "simulated"
+    assert record["data"]["execution_mode"] == "simulation"
+    assert record["data"]["real_funds_affected"] is False
+    assert data["audit_entry"]["result"] == "success"
+    assert "execution_mode=simulation" in data["audit_entry"]["detail"]
+    assert "没有创建真实退款申请" in result["response_draft"]
+    assert "pending_action" not in data
+    assert replay["data"]["action_result"]["action_record"] == record
+
+    after = PaymentService().get_payments(
+        "customer-payment", "tenant-payment", order["order_no"],
+    )
+    assert after["refund_candidate"] is False, after
+    assert "真实支付平台和资金没有发生变化" in _payment_answer(after)
 
 
 def _sandbox_conn_kwargs() -> dict[str, object] | None:
@@ -731,3 +1139,175 @@ def test_sandbox_payment_reads_idempotent_migration_seed(
         assert seeded_customer is not None
         assert int(seeded_customer[0]) == 872
         assert int(seeded_customer[1]) >= 872
+
+
+def test_mock_refund_action_and_audit_persist_once_in_isolated_memory_pg():
+    """真实 PostgreSQL 验证模拟退款动作、审计与幂等 ledger 同事务落库。"""
+    from uuid import uuid4
+
+    from backend.config.database import MEMORY_DB_CONFIG
+    from backend.customer_service.audit import build_audit_entry
+    from backend.customer_service.action import AgentActionRecord
+    from backend.orchestration.graph.cs_graph_node import _persist_audit_records
+
+    dbname = str(MEMORY_DB_CONFIG.get("dbname") or "").lower()
+    host = str(MEMORY_DB_CONFIG.get("host") or "").strip().lower()
+    port = int(MEMORY_DB_CONFIG.get("port") or 0)
+    if not (
+        dbname.endswith("_test")
+        or dbname.startswith("test_")
+        or "sandbox" in dbname
+    ) or host not in {"localhost", "127.0.0.1", "::1"} or port == 5433:
+        pytest.skip(
+            "审计持久化验收只允许连接本机隔离 test/sandbox 数据库，"
+            "并拒绝共享栈端口 5433",
+        )
+
+    conn = psycopg2.connect(**MEMORY_DB_CONFIG, connect_timeout=10)
+    nonce = uuid4().hex
+    conversation_id = f"b4-audit-{nonce}"
+    user_id = f"b4-audit-user-{nonce}"
+    action_id = str(uuid4())
+    refund_id = f"b4-sim-refund-{nonce}"
+    audit_entry = build_audit_entry(
+        user_id=user_id,
+        action_type="refund_execute",
+        result="success",
+        target_type="refund_simulation",
+        target_id=refund_id,
+        detail=(
+            "execution_mode=simulation; real_funds_affected=false; "
+            "amount=1.00; currency=CNY"
+        ),
+        conversation_id=conversation_id,
+    )
+    record = AgentActionRecord(
+        action_id=action_id,
+        action_type="refund_execute",
+        agent_type="ai",
+        target_type="refund_simulation",
+        target_id=refund_id,
+        data={
+            "before_state": {
+                "order_no": f"B4-{nonce}",
+                "refund_candidate": True,
+                "amount": 1.0,
+                "currency": "CNY",
+            },
+            "after_state": {
+                "refund_id": refund_id,
+                "status": "simulated",
+                "amount": 1.0,
+                "currency": "CNY",
+                "execution_mode": "simulation",
+                "real_funds_affected": False,
+            },
+        },
+        status="simulated",
+    ).to_dict()
+    record["action_id"] = action_id
+    state = {
+        "cs_audit_entries": [audit_entry],
+        "cs_action_result": {"action_record": record},
+    }
+    conversation_created = False
+
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT current_database(), current_setting('transaction_read_only')",
+            )
+            target_db, read_only = cursor.fetchone()
+            assert target_db == MEMORY_DB_CONFIG["dbname"]
+            assert read_only == "off"
+            cursor.execute(
+                "SELECT to_regclass('customer_service.conversations'), "
+                "to_regclass('customer_service.agent_actions'), "
+                "to_regclass('customer_service.audit_logs'), "
+                "to_regclass('ai.idempotency_records')",
+            )
+            assert all(cursor.fetchone()), "客服审计迁移未初始化到隔离测试库"
+            cursor.execute(
+                "INSERT INTO customer_service.conversations "
+                "(conversation_id, user_id) VALUES (%s, %s)",
+                (conversation_id, user_id),
+            )
+        conn.commit()
+        conversation_created = True
+
+        _persist_audit_records(state)
+        _persist_audit_records(state)
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT status, confirmation_state, target_type, target_id, "
+                "after_state FROM customer_service.agent_actions "
+                "WHERE action_id = %s",
+                (action_id,),
+            )
+            action_row = cursor.fetchone()
+            assert action_row is not None
+            assert action_row[:4] == (
+                "simulated", "success", "refund_simulation", refund_id,
+            )
+            assert action_row[4]["real_funds_affected"] is False
+
+            cursor.execute(
+                "SELECT action, result, resource_type, resource_id, "
+                "error_detail FROM customer_service.audit_logs "
+                "WHERE log_id = %s",
+                (audit_entry["log_id"],),
+            )
+            audit_row = cursor.fetchone()
+            assert audit_row == (
+                "refund_execute", "success", "refund_simulation", refund_id,
+                audit_entry["detail"],
+            )
+
+            cursor.execute(
+                "SELECT count(*) FROM customer_service.agent_actions "
+                "WHERE action_id = %s",
+                (action_id,),
+            )
+            assert cursor.fetchone()[0] == 1
+            cursor.execute(
+                "SELECT count(*) FROM customer_service.audit_logs "
+                "WHERE log_id = %s",
+                (audit_entry["log_id"],),
+            )
+            assert cursor.fetchone()[0] == 1
+            cursor.execute(
+                "SELECT count(*) FROM ai.idempotency_records "
+                "WHERE operation = 'cs.action.persist' AND client_key = %s",
+                (action_id,),
+            )
+            assert cursor.fetchone()[0] == 1
+    finally:
+        try:
+            conn.rollback()
+            if conversation_created:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "DELETE FROM customer_service.agent_actions "
+                        "WHERE action_id = %s",
+                        (action_id,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM customer_service.audit_logs "
+                        "WHERE log_id = %s",
+                        (audit_entry["log_id"],),
+                    )
+                    cursor.execute(
+                        "DELETE FROM ai.idempotency_records "
+                        "WHERE operation = 'cs.action.persist' "
+                        "AND client_key = %s",
+                        (action_id,),
+                    )
+                    cursor.execute(
+                        "DELETE FROM customer_service.conversations "
+                        "WHERE conversation_id = %s",
+                        (conversation_id,),
+                    )
+                conn.commit()
+        finally:
+            conn.close()

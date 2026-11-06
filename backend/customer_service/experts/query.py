@@ -255,9 +255,16 @@ def _execute_task_query(
                 "order_id": order_ref,
                 "order_no": str(payment.get("order_no") or order_ref),
                 "success_count": int(payment.get("success_count") or 0),
-                "duplicate_payment": bool(payment.get("duplicate_payment")),
-                "refund_candidate": bool(payment.get("refund_candidate")),
+                "refund_candidate": payment.get("refund_candidate") is True,
             })
+            if isinstance(payment.get("duplicate_payment"), bool):
+                facts["duplicate_payment"] = payment["duplicate_payment"]
+            if isinstance(payment.get("payments_complete"), bool):
+                facts["payments_complete"] = payment["payments_complete"]
+            if payment.get("total_amount") is not None:
+                facts["total_amount"] = float(payment["total_amount"])
+            if payment.get("currency"):
+                facts["currency"] = str(payment["currency"]).upper()
             result = CSTaskResult(
                 task_id=task_id, status="success", facts=facts,
                 source=_task_query_source("payment"),
@@ -420,9 +427,16 @@ def _payment_answer(payment: dict[str, Any]) -> str:
     from decimal import Decimal, InvalidOperation
 
     order_no = str(payment.get("order_no") or "该订单")
+    currency = str(payment.get("currency") or "").strip().upper()
+    currency_label = "¥" if currency == "CNY" else (
+        f"{currency} " if currency else ""
+    )
     total = payment.get("total_amount")
     try:
-        total_text = f"¥{Decimal(str(total)).quantize(Decimal('0.01')):.2f}"
+        total_value = f"{Decimal(str(total)).quantize(Decimal('0.01')):.2f}"
+        total_text = f"{currency_label}{total_value}" if currency_label else (
+            f"{total_value}（币种未提供）"
+        )
     except (InvalidOperation, TypeError, ValueError):
         total_text = "金额暂缺"
     records = payment.get("payments")
@@ -433,9 +447,17 @@ def _payment_answer(payment: dict[str, Any]) -> str:
             if not isinstance(item, dict):
                 continue
             status = status_labels.get(str(item.get("status") or ""), "状态未知")
+            if item.get("refund_status") == "simulated":
+                status += "（已模拟退款）"
             channel = str(item.get("kind_label") or "支付渠道未知")
             try:
-                amount = f"¥{Decimal(str(item.get('amount'))).quantize(Decimal('0.01')):.2f}"
+                amount_value = (
+                    f"{Decimal(str(item.get('amount'))).quantize(Decimal('0.01')):.2f}"
+                )
+                amount = (
+                    f"{currency_label}{amount_value}" if currency_label else
+                    f"{amount_value}（币种未提供）"
+                )
             except (InvalidOperation, TypeError, ValueError):
                 amount = "金额暂缺"
             paid_at = str(item.get("paid_at") or "")[:19].replace("T", " ")
@@ -447,7 +469,21 @@ def _payment_answer(payment: dict[str, Any]) -> str:
         lines.append("目前没有可显示的支付流水记录。")
 
     success_count = int(payment.get("success_count") or 0)
-    if payment.get("refund_candidate") is True:
+    simulated_refund = isinstance(records, list) and any(
+        isinstance(item, dict) and item.get("refund_status") == "simulated"
+        for item in records
+    )
+    if payment.get("payments_complete") is False:
+        lines.append(
+            "支付流水超过当前完整核验范围，记录不完整，无法确认全部支付状态；"
+            "本次没有发起退款动作，请联系人工客服核对。"
+        )
+    elif simulated_refund:
+        lines.append(
+            "其中一笔重复扣款已在 Mock 演示环境模拟退款；真实支付平台和资金"
+            "没有发生变化，也没有创建真实退款申请。"
+        )
+    elif payment.get("refund_candidate") is True:
         lines.append(
             "核对到两笔成功扣款，确认存在重复扣款，且每笔金额都与订单金额一致。尚未发起退款；"
             "如需申请，请明确回复“申请退款”，系统会先生成待确认提案，"
@@ -790,6 +826,19 @@ def _dispatch_service(
         except Exception:
             logger.warning("[QueryExpert] 支付流水查询失败", exc_info=True)
             return "支付查询服务暂时不可用；本次没有发起退款申请，请稍后重试。"
+        verified_order_no = str(payment.get("order_no") or "").strip()
+        if verified_order_no:
+            from backend.customer_service.context_resolver import (
+                record_recent_order,
+            )
+
+            record_recent_order(
+                tenant_id,
+                user_id,
+                session_id,
+                verified_order_no,
+                source_intent=intent,
+            )
         return _QueryServiceResponse(
             _payment_answer(payment), {"payment": payment},
         )

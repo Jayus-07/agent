@@ -335,7 +335,9 @@ def _project_payment(value: object) -> dict[str, Any]:
     count = value.get("success_count")
     if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
         result["success_count"] = count
-    for key in ("duplicate_payment", "refund_candidate"):
+    for key in (
+        "duplicate_payment", "refund_candidate", "payments_complete",
+    ):
         if isinstance(value.get(key), bool):
             result[key] = value[key]
     payments = value.get("payments")
@@ -404,7 +406,9 @@ def _project_task_result(value: object) -> dict[str, Any]:
             and success_count >= 0
         ):
             safe_facts["success_count"] = success_count
-        for key in ("duplicate_payment", "refund_candidate"):
+        for key in (
+            "duplicate_payment", "refund_candidate", "payments_complete",
+        ):
             if isinstance(facts.get(key), bool):
                 safe_facts[key] = facts[key]
         amount = _safe_amount(facts.get("total_amount"))

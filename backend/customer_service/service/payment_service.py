@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any
+from urllib.parse import urlsplit
 
 
 class PaymentError(Exception):
@@ -14,11 +15,12 @@ class PaymentNotFoundError(PaymentError):
 
 
 _PAYMENT_STATUSES = {"success", "failed"}
-_PAYMENT_KINDS = {"alipay", "wechat_pay", "bank_card", "unknown"}
+_PAYMENT_KINDS = {"alipay", "wechat_pay", "bank_card", "wallet", "unknown"}
 _PAYMENT_KIND_LABELS = {
     "alipay": "支付宝",
     "wechat_pay": "微信支付",
     "bank_card": "银行卡",
+    "wallet": "账户余额",
     "unknown": "支付渠道未知",
 }
 
@@ -62,52 +64,149 @@ def _decimal_amount(value: object) -> Decimal | None:
 
 
 def _payment_view(raw: dict[str, Any]) -> dict[str, Any]:
-    """归一两种数据模式的流水，并严格判断可否走订单全额退款提案。"""
+    """归一支付流水；截断时禁止生成确定性结论或退款候选。"""
     total = _decimal_amount(raw.get("total_amount"))
     total_amount = float(total) if total is not None else None
-    records: list[dict[str, Any]] = []
+    currency = str(raw.get("currency") or "").strip().upper()
     raw_records = raw.get("payments")
-    if isinstance(raw_records, list):
-        for item in raw_records[:20]:
-            if not isinstance(item, dict):
-                continue
-            status = str(item.get("status") or "unknown").lower()
-            if status not in _PAYMENT_STATUSES:
-                status = "unknown"
-            kind = str(item.get("kind") or "unknown").lower()
-            if kind not in _PAYMENT_KINDS:
-                kind = "unknown"
-            amount = _decimal_amount(item.get("amount"))
-            if amount is None:
-                continue
-            paid_at = item.get("paid_at")
-            if hasattr(paid_at, "isoformat"):
-                paid_at = paid_at.isoformat()
-            records.append({
-                "status": status,
-                "amount": float(amount),
-                "paid_at": str(paid_at or ""),
-                "kind": kind,
-                "kind_label": _PAYMENT_KIND_LABELS[kind],
-            })
+    has_records = isinstance(raw_records, list)
+    reported_complete = raw.get("payments_complete")
+    reported_payment_count = raw.get("payment_count")
+    if isinstance(reported_complete, bool):
+        payments_complete = reported_complete
+    elif (
+        isinstance(reported_payment_count, int)
+        and not isinstance(reported_payment_count, bool)
+        and reported_payment_count >= 0
+    ):
+        payments_complete = (
+            has_records
+            and reported_payment_count <= 20
+            and len(raw_records) >= reported_payment_count
+        )
+    else:
+        payments_complete = has_records and len(raw_records) <= 20
+    if has_records and len(raw_records) > 20:
+        payments_complete = False
+    if (
+        isinstance(reported_payment_count, int)
+        and not isinstance(reported_payment_count, bool)
+        and reported_payment_count >= 0
+        and (
+            reported_payment_count > 20
+            or not has_records
+            or reported_payment_count != len(raw_records)
+        )
+    ):
+        payments_complete = False
 
-    successful = [item for item in records if item["status"] == "success"]
+    normalized: list[dict[str, Any]] = []
+    observed_success_count = 0
+    for item in (raw_records if has_records else []):
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "unknown").lower()
+        if status == "success":
+            observed_success_count += 1
+        if status not in _PAYMENT_STATUSES:
+            status = "unknown"
+        kind = str(item.get("kind") or "unknown").lower()
+        if kind not in _PAYMENT_KINDS:
+            kind = "unknown"
+        amount = _decimal_amount(item.get("amount"))
+        if amount is None:
+            continue
+        paid_at = item.get("paid_at")
+        if hasattr(paid_at, "isoformat"):
+            paid_at = paid_at.isoformat()
+        normalized.append({
+            "status": status,
+            "amount": float(amount),
+            "paid_at": str(paid_at or ""),
+            "kind": kind,
+            "kind_label": _PAYMENT_KIND_LABELS[kind],
+            **({"refund_status": "simulated"}
+               if str(item.get("refund_status") or "").lower()
+               == "simulated" else {}),
+            **({"refund_id": str(item.get("refund_id") or "")}
+               if item.get("refund_id") else {}),
+        })
+
+    reported_success_count = raw.get("success_count")
+    if (
+        isinstance(reported_success_count, int)
+        and not isinstance(reported_success_count, bool)
+        and reported_success_count >= observed_success_count
+    ):
+        success_count = reported_success_count
+    else:
+        success_count = observed_success_count
+
+    successful = [
+        item for item in normalized if item["status"] == "success"
+    ]
+    refunded = any(item.get("refund_status") for item in normalized)
     refund_candidate = bool(
-        total is not None
-        and isinstance(raw_records, list)
+        payments_complete
+        and has_records
         and len(raw_records) <= 20
+        and total is not None
         and len(successful) == 2
+        and success_count == 2
+        and not refunded
         and all(_decimal_amount(item["amount"]) == total for item in successful)
+    )
+    duplicate_payment = (
+        True if success_count > 1
+        else False if payments_complete
+        else None
     )
     return {
         "order_no": str(raw.get("order_no") or ""),
         "total_amount": total_amount,
-        "currency": "CNY",
-        "payments": records,
-        "success_count": len(successful),
-        "duplicate_payment": len(successful) > 1,
+        "currency": currency,
+        "payments": normalized[:20],
+        "payments_complete": payments_complete,
+        "success_count": success_count,
+        "duplicate_payment": duplicate_payment,
         "refund_candidate": refund_candidate,
     }
+
+
+def auto_duplicate_refund_simulation_eligible(
+    payment: dict[str, Any],
+    *,
+    source: str,
+) -> bool:
+    """只允许显式 mock 模式下的小额、同币种重复扣款模拟退款。"""
+    from backend.config.customer_service import (
+        CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT,
+        CS_AUTO_DUPLICATE_REFUND_MODE,
+        CS_BUSINESS_GATEWAY_MODE,
+    )
+    from backend.config.messaging import BUSINESS_SERVICE_URL
+
+    amount = _decimal_amount(payment.get("total_amount"))
+    limit = _decimal_amount(CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT)
+    try:
+        mock_target = (
+            urlsplit(BUSINESS_SERVICE_URL.strip()).scheme == "http"
+            and urlsplit(BUSINESS_SERVICE_URL.strip()).hostname == "business-mock"
+            and urlsplit(BUSINESS_SERVICE_URL.strip()).port == 8081
+        )
+    except ValueError:
+        mock_target = False
+    return bool(
+        CS_BUSINESS_GATEWAY_MODE == "http"
+        and CS_AUTO_DUPLICATE_REFUND_MODE == "mock"
+        and source == "business_payment_service"
+        and mock_target
+        and payment.get("refund_candidate") is True
+        and str(payment.get("currency") or "").strip().upper() == "CNY"
+        and amount is not None and amount > 0
+        and limit is not None and limit > 0
+        and amount <= limit
+    )
 
 
 class PaymentService:
@@ -172,5 +271,6 @@ class PaymentService:
         return _payment_view({
             "order_no": first["order_no"],
             "total_amount": first["total_amount"],
+            "currency": "CNY",
             "payments": payments,
         })

@@ -1,6 +1,7 @@
 """客服复合任务的有限计划契约与纯条件求值。"""
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
@@ -126,7 +127,7 @@ class CSTaskResult(BaseModel):
         allowed = {
             "shipping_status", "order_count", "order_id", "order_no",
             "order_status", "success_count", "duplicate_payment",
-            "refund_candidate",
+            "refund_candidate", "total_amount", "currency",
         }
         if set(self.facts) - allowed:
             raise ValueError("facts 含未登记字段")
@@ -150,6 +151,26 @@ class CSTaskResult(BaseModel):
             or self.facts["success_count"] < 0
         ):
             raise ValueError("success_count 必须为非负整数")
+        if "total_amount" in self.facts:
+            amount = self.facts["total_amount"]
+            try:
+                finite_amount = math.isfinite(float(amount))
+            except (OverflowError, TypeError, ValueError):
+                finite_amount = False
+            if (
+                isinstance(amount, bool)
+                or not isinstance(amount, (int, float))
+                or not finite_amount
+                or amount < 0
+            ):
+                raise ValueError("total_amount 必须为有限非负金额")
+        if "currency" in self.facts and (
+            not isinstance(self.facts["currency"], str)
+            or len(self.facts["currency"]) != 3
+            or not self.facts["currency"].isascii()
+            or not self.facts["currency"].isalpha()
+        ):
+            raise ValueError("currency 必须为三位币种代码")
         for key in ("duplicate_payment", "refund_candidate"):
             if key in self.facts and not isinstance(self.facts[key], bool):
                 raise ValueError(f"{key} 必须为布尔值")
@@ -158,7 +179,7 @@ class CSTaskResult(BaseModel):
             or self.facts.get("success_count") != 2
         ):
             raise ValueError("退款候选必须由两笔成功重复支付事实支撑")
-        for key in ("order_id", "order_no", "order_status"):
+        for key in ("order_id", "order_no", "order_status", "currency"):
             if key in self.facts and not isinstance(self.facts[key], str):
                 raise ValueError(f"{key} 必须为文本")
         return self

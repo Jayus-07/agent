@@ -266,6 +266,7 @@ def _execute_conditional_refund_task(
             key: facts[key] for key in (
                 "shipping_status", "order_count", "order_id", "order_no",
                 "success_count", "duplicate_payment", "refund_candidate",
+                "total_amount", "currency",
             ) if key in facts
         }
         return CSTaskResult(
@@ -341,6 +342,100 @@ def _execute_conditional_refund_task(
         trusted_metadata = dict(trusted_route.get("metadata") or {})
         trusted_metadata["reason"] = "重复扣款"
         trusted_route = {**trusted_route, "metadata": trusted_metadata}
+
+    from backend.customer_service.service.payment_service import (
+        auto_duplicate_refund_simulation_eligible,
+    )
+
+    if auto_duplicate_refund_simulation_eligible(
+        facts, source=query_result.source,
+    ):
+        from backend.customer_service.action import ActionType
+        from backend.customer_service.audit import build_audit_entry
+        from backend.customer_service.service.refund_service import RefundService
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        audit_result = "error"
+        try:
+            record = RefundService().simulate_duplicate_payment_refund(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                order_no=str(facts["order_no"]),
+            )
+            refund = record.data["refund"]
+            refund_id = str(refund["refund_id"])
+            amount = float(refund["amount"])
+            audit_result = "success"
+            audit_entry = build_audit_entry(
+                user_id=user_id,
+                action_type=ActionType.REFUND_EXECUTE,
+                result=audit_result,
+                target_type=record.target_type,
+                target_id=record.target_id,
+                detail=(
+                    "execution_mode=simulation; real_funds_affected=false; "
+                    f"refund_id={refund_id}; amount={amount:.2f}; currency=CNY"
+                ),
+                conversation_id=str(
+                    state.get("conversation_id") or session_id,
+                ),
+            )
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    f"已在演示环境完成重复扣款的模拟退款，金额 ¥{amount:.2f}，"
+                    f"模拟编号 `{refund_id}`。这是 mock 模拟，真实支付平台和资金"
+                    "没有发生变更，也没有创建真实退款申请。"
+                ),
+                data={
+                    "task_status": "success",
+                    "task_result": task_result("success"),
+                    "action_result": {
+                        "action_type": ActionType.REFUND_EXECUTE,
+                        "status": "simulated",
+                        "action_record": record.to_dict(),
+                    },
+                    "audit_entry": audit_entry,
+                },
+            )
+        except SideEffectOutcomeUnknown:
+            error_type = "provider_error"
+            reply = (
+                "Mock 未能确认模拟退款结果，已停止自动重试并提示人工核查；"
+                "本次没有调用真实支付系统。请勿重复提交。"
+            )
+        except OrderNotEligibleError as exc:
+            audit_result = "denied"
+            error_type = "business_error"
+            reply = f"{exc}\n\n本次未执行模拟退款，请转人工核实。"
+        except (DatabaseError, OrderNotFoundError, RefundRequestUnavailableError):
+            error_type = "provider_error"
+            reply = "模拟退款服务暂时不可用，未创建真实退款申请，请转人工核实。"
+
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=ActionType.REFUND_EXECUTE,
+            result=audit_result,
+            target_type="order",
+            target_id=str(facts["order_id"]),
+            detail=(
+                "execution_mode=simulation; result=not_confirmed; "
+                "real_funds_affected=false"
+            ),
+            conversation_id=str(state.get("conversation_id") or session_id),
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=reply,
+            data={
+                "task_status": "failed",
+                "task_result": task_result("failed", error_type),
+                "audit_entry": audit_entry,
+            },
+        )
+
     try:
         proposal_result = _build_new_proposal(
             user_id, "as_refund", trusted_route, session_id, store,

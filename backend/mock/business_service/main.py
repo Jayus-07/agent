@@ -29,7 +29,7 @@ _POINTS: dict[tuple[str, str], dict[str, Any]] = {}
 # B3 优惠券档案 + 核销记录（数字与 coupon-policy.md / FAQ id=23 互为事实源）
 _COUPONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _REDEMPTIONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
-# B4 支付流水只读样本；不实现支付或退款写接口。
+# B4 支付流水样本；只开放不触碰真实资金的重复扣款模拟退款。
 _PAYMENT_RECORDS: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
 _COUPON_SEQ = 0
 _SEEDED_USERS: set[str] = set()
@@ -61,6 +61,13 @@ class RefundRequestInput(BaseModel):
     expected_amount: float = Field(gt=0)
     policy_version: str = Field(min_length=1, max_length=64)
     reason: str = Field(default="", max_length=500)
+
+
+class DuplicateRefundSimulationInput(BaseModel):
+    action_id: uuid.UUID
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
 
 
 class RefundReasonUpdateInput(BaseModel):
@@ -388,11 +395,21 @@ def _payments_for(
             records = []
         _PAYMENT_RECORDS[key] = records
 
+    for index, item in enumerate(records):
+        item.setdefault(
+            "payment_id",
+            str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"cs-payment:{key[0]}:{key[1]}:{key[2]}:{index}",
+            )),
+        )
+
     successful = [item for item in records if item["status"] == "success"]
     total = _money(order["total_amount"])
     refund_candidate = bool(
         len(records) <= 20
         and len(successful) == 2
+        and not any(item.get("refund_status") for item in records)
         and all(_money(item["amount"]) == total for item in successful)
     )
     return {
@@ -402,6 +419,8 @@ def _payments_for(
         "payments": [
             {**item, "amount": float(item["amount"])} for item in records[:20]
         ],
+        "payment_count": len(records),
+        "payments_complete": len(records) <= 20,
         "success_count": len(successful),
         "duplicate_payment": len(successful) > 1,
         "refund_candidate": refund_candidate,
@@ -684,6 +703,70 @@ def get_payments(
         return _ok({"payment": payment})
 
 
+@app.post("/business/payments/duplicate-refund-simulations")
+def simulate_duplicate_payment_refund(
+    payload: DuplicateRefundSimulationInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """仅在 Mock 内标记最新一笔重复扣款已模拟退款，不动真实资金。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    tenant_id = payload.tenant_id.strip()
+    order_no = payload.order_no.strip()
+    action_id = str(payload.action_id)
+    identity = (tenant_id, user_id, order_no)
+    operation_key = ("duplicate-refund-simulation", action_id)
+
+    with _STATE_LOCK:
+        prior = _OPERATIONS.get(operation_key)
+        if prior is not None:
+            if prior.get("identity") != identity:
+                raise HTTPException(status_code=404, detail="payment not found")
+            return _ok({"refund": dict(prior["refund"])})
+
+        payment = _payments_for(user_id, tenant_id, order_no)
+        if payment["refund_candidate"] is not True:
+            raise HTTPException(
+                status_code=409,
+                detail="duplicate payment is no longer eligible for simulation",
+            )
+
+        key = (tenant_id, user_id, payment["order_no"])
+        records = _PAYMENT_RECORDS[key]
+        successful = [
+            (index, item) for index, item in enumerate(records)
+            if item.get("status") == "success"
+        ]
+        if len(successful) != 2:
+            raise HTTPException(status_code=409, detail="payment facts changed")
+        payment_index, payment_record = max(
+            successful, key=lambda pair: str(pair[1].get("paid_at") or ""),
+        )
+        refund_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL, f"cs-refund-simulation:{action_id}",
+        ))
+        payment_record["refund_status"] = "simulated"
+        payment_record["refund_id"] = refund_id
+        refund = {
+            "refund_id": refund_id,
+            "action_id": action_id,
+            "payment_id": payment_record["payment_id"],
+            "order_no": payment["order_no"],
+            "amount": payment["total_amount"],
+            "currency": payment["currency"],
+            "status": "simulated",
+            "execution_mode": "simulation",
+            "real_funds_affected": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _OPERATIONS[operation_key] = {
+            "identity": identity,
+            "payment_index": payment_index,
+            "refund": dict(refund),
+        }
+        return _ok({"refund": refund})
+
+
 @app.get("/business/coupons")
 def list_coupons(
     user_id: str = Query("", min_length=1),
@@ -830,6 +913,17 @@ def pay_order(
         )
         order["status"] = "paid"
         order["payment_status"] = "paid"
+        payment_key = (
+            payload.tenant_id.strip(),
+            payload.user_id.strip(),
+            order["order_no"],
+        )
+        _PAYMENT_RECORDS.setdefault(payment_key, []).append({
+            "status": "success",
+            "amount": float(expected),
+            "paid_at": datetime.now(timezone.utc).isoformat(),
+            "kind": "wallet",
+        })
         _OPERATIONS[operation_key] = {
             "order": dict(order),
             "wallet": {

@@ -1225,6 +1225,27 @@ def _task_plan_command(state: dict[str, Any]) -> Command | None:
             return _task_plan_finish(reply, results=results)
 
         from backend.customer_service.graph_state import CS_ACTION_EXPERT, CS_QUERY_EXPERT
+        from backend.customer_service.service.payment_service import (
+            auto_duplicate_refund_simulation_eligible,
+        )
+
+        requires_confirmation = task.capability == "propose_refund"
+        payment_source = next((
+            str(dependency.get("source") or "")
+            for dependency in dependencies
+            if dependency.get("source") in {
+                "business_payment_service", "sandbox_payment_service",
+            }
+        ), "")
+        if (
+            requires_confirmation
+            and task.condition is not None
+            and task.condition.fact == "refund_candidate"
+            and auto_duplicate_refund_simulation_eligible(
+                facts, source=payment_source,
+            )
+        ):
+            requires_confirmation = False
 
         target = (
             CS_ACTION_EXPERT if task.capability == "propose_refund"
@@ -1243,7 +1264,7 @@ def _task_plan_command(state: dict[str, Any]) -> Command | None:
                     "next_expert": expert,
                     "decision_layer": 1,
                     "reason": "validated_task_plan",
-                    "requires_confirmation": task.capability == "propose_refund",
+                    "requires_confirmation": requires_confirmation,
                     "requires_handoff": False,
                     "is_finished": False,
                     "context_updates": {},
