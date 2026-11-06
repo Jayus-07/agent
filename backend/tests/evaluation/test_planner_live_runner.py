@@ -67,7 +67,7 @@ def _report(results: list[EvalResult], pass_rate: float | None = None) -> EvalRe
     )
 
 
-def _run_with_outcome(monkeypatch, outcome: dict) -> EvalResult:
+def _run_with_outcome(monkeypatch, outcome: dict, case: EvalCase | None = None) -> EvalResult:
     package = importlib.import_module("backend.agents.planner")
 
     def fake_planner_node(state: dict) -> dict:
@@ -75,7 +75,7 @@ def _run_with_outcome(monkeypatch, outcome: dict) -> EvalResult:
         return {"plan": {}, "_planner_evaluation": outcome}
 
     monkeypatch.setattr(package, "planner_node", fake_planner_node)
-    return _run_planner([_case()])[0]
+    return _run_planner([case or _case()])[0]
 
 
 def test_live_runner_accepts_only_the_current_model_source(monkeypatch):
@@ -102,6 +102,40 @@ def test_runtime_fallback_is_quality_failure_even_if_fallback_matches(monkeypatc
     assert result.status == "fail"
     assert result.error_stage == "planner_fallback"
     assert "不能作为模型通过样本" in (result.error_msg or "")
+
+
+def test_runtime_knowledge_injection_does_not_hide_missing_model_capability(monkeypatch):
+    case = EvalCase(
+        id="P-RUNTIME-POLICY",
+        question="查询本月退款订单，并说明退款处理规范。",
+        module="planner",
+        expected={
+            "capabilities": ["sql.query", "rag.search"],
+            "min_steps": 2,
+            "max_steps": 2,
+            "edges": [],
+        },
+    )
+    model_plan = {
+        "nodes": [{
+            "step_id": "1",
+            "capability": "sql.query",
+            "description": "查询退款订单",
+            "params": {},
+        }],
+        "edges": {},
+    }
+
+    result = _run_with_outcome(monkeypatch, {
+        "status": "success",
+        "source": "model",
+        "runtime_adjusted": True,
+        "actual_plan": model_plan,
+    }, case=case)
+
+    assert result.status == "fail"
+    assert result.metrics["capability_match"] < 1.0
+    assert result.metrics["structure_ok"] == 0.0
 
 
 def test_invalid_model_output_is_quality_failure_not_environment_error(monkeypatch):

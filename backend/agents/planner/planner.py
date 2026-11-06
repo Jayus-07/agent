@@ -16,6 +16,7 @@ Tool 选择由 Supervisor + ToolRegistry 完成。
   - 不同 kb_id 视为不同请求（不同知识库可能有不同 plan）
 """
 
+import copy
 import hashlib
 import json
 
@@ -283,6 +284,8 @@ def planner_node(state: dict) -> dict:
 
         # 校验（叠加当前请求授权集：LLM 输出不得保留越权能力）
         plan = _normalize_plan(plan, allowed=set(visible))
+        # 评测必须使用策略修正前的模型计划；下方过滤/补全会原地修改节点。
+        model_plan = copy.deepcopy(plan)
 
         # 后置规则过滤器：非知识类问题强制移除冗余 RAG 步骤
         plan = _filter_plan(plan, question)
@@ -307,6 +310,7 @@ def planner_node(state: dict) -> dict:
 
         # KB 隔离：为所有 search_knowledge 步骤注入 kb_id
         plan = _with_kb_scope(plan, kb_id)
+        runtime_adjusted = plan != model_plan
 
         # 只缓存通过严格校验且由模型生成非空的完整计划。
         if not evaluation_mode and not used_fallback and plan.get("nodes"):
@@ -316,7 +320,6 @@ def planner_node(state: dict) -> dict:
 
         result = {"plan": plan}
         if evaluation_mode:
-            final_nodes = list(plan.get("nodes", {}).values())
             result["_planner_evaluation"] = {
                 "status": "fallback" if used_fallback else "success",
                 "source": (
@@ -325,7 +328,11 @@ def planner_node(state: dict) -> dict:
                     else "model"
                 ),
                 "error_category": "empty_model_plan" if used_fallback else "",
-                "actual_plan": {"nodes": final_nodes, "edges": plan.get("edges", {})},
+                "runtime_adjusted": runtime_adjusted,
+                "actual_plan": {
+                    "nodes": list(model_plan.get("nodes", {}).values()),
+                    "edges": model_plan.get("edges", {}),
+                },
             }
         return result
 

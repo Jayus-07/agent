@@ -57,21 +57,29 @@ def _valid_raw_plan() -> dict:
     }
 
 
-def _setup(monkeypatch, response=None, error=None, cache=None):
+def _setup(
+    monkeypatch,
+    response=None,
+    error=None,
+    cache=None,
+    capabilities=("rag.search",),
+    apply_knowledge_policy=False,
+):
     from backend.prompts import service as prompt_service_module
 
+    capabilities = tuple(capabilities)
     cache = cache or _Cache()
     fake_llm = _FakeLlm(response=response, error=error)
     monkeypatch.setattr(planner, "_planner_cache", cache)
     monkeypatch.setattr(planner, "llm", fake_llm)
     monkeypatch.setattr(planner, "_authorized_visible_capabilities",
-                        lambda *_args: ("rag.search",))
+                        lambda *_args: capabilities)
     monkeypatch.setattr(planner, "_format_capabilities_schema", lambda *_args: "")
     monkeypatch.setattr(planner, "_format_schema_overview", lambda: "")
     monkeypatch.setattr(planner, "_extract_json", json.loads)
 
     def normalize(raw, allowed):
-        assert allowed == {"rag.search"}
+        assert allowed == set(capabilities)
         return {
             "nodes": {node["step_id"]: node for node in raw["nodes"]},
             "edges": raw["edges"],
@@ -79,9 +87,10 @@ def _setup(monkeypatch, response=None, error=None, cache=None):
 
     monkeypatch.setattr(planner, "_normalize_plan", normalize)
     monkeypatch.setattr(planner, "_filter_plan", lambda plan, _question: plan)
-    monkeypatch.setattr(
-        planner, "_ensure_knowledge_step", lambda plan, _question, **_kwargs: plan
-    )
+    if not apply_knowledge_policy:
+        monkeypatch.setattr(
+            planner, "_ensure_knowledge_step", lambda plan, _question, **_kwargs: plan
+        )
     monkeypatch.setattr(prompt_service_module, "prompt_service", _PromptService())
     return cache, fake_llm
 
@@ -106,7 +115,47 @@ def test_evaluation_mode_calls_model_and_bypasses_plan_cache(monkeypatch):
     assert result["_planner_evaluation"]["source"] == "model"
     actual_node = result["_planner_evaluation"]["actual_plan"]["nodes"][0]
     assert actual_node["capability"] == "rag.search"
-    assert actual_node["params"]["kb_id"] == "default"
+    assert "kb_id" not in actual_node["params"]
+    assert result["_planner_evaluation"]["runtime_adjusted"] is True
+    assert result["plan"]["nodes"]["1"]["params"]["kb_id"] == "default"
+
+
+def test_live_evaluation_scores_model_plan_before_runtime_knowledge_injection(monkeypatch):
+    raw_plan = {
+        "nodes": [{
+            "step_id": "1",
+            "capability": "sql.query",
+            "description": "查询退款订单",
+            "params": {"question": "查询本月退款订单"},
+        }],
+        "edges": {},
+    }
+    response = SimpleNamespace(
+        content=json.dumps(raw_plan, ensure_ascii=False),
+        additional_kwargs={},
+        response_metadata={},
+    )
+    cache, _fake_llm = _setup(
+        monkeypatch,
+        response=response,
+        capabilities=("sql.query", "rag.search"),
+        apply_knowledge_policy=True,
+    )
+
+    result = planner.planner_node({
+        "question": "查询本月退款订单，并说明退款处理规范。",
+        "_evaluation_mode": True,
+    })
+
+    outcome = result["_planner_evaluation"]
+    assert result["plan"]["nodes"]["2"]["capability"] == "rag.search"
+    assert [node["capability"] for node in outcome["actual_plan"]["nodes"]] == [
+        "sql.query",
+    ]
+    assert outcome["runtime_adjusted"] is True
+    assert outcome["status"] == "success"
+    assert outcome["source"] == "model"
+    assert cache.writes == []
 
 
 def test_unauthorized_raw_capability_is_rejected_before_normalization(monkeypatch):
@@ -258,5 +307,5 @@ def test_empty_model_plan_fallback_is_not_cached_or_scored_as_model(monkeypatch)
     outcome = result["_planner_evaluation"]
     assert outcome["status"] == "fallback"
     assert outcome["source"] == "runtime_policy"
-    assert outcome["actual_plan"]["nodes"]
+    assert outcome["actual_plan"]["nodes"] == []
     assert cache.writes == []
