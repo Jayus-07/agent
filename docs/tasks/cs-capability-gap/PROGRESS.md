@@ -6,7 +6,7 @@
 
 - B4 PR #336 已合并，merge commit `c2d3dc2`；B5 PR #338 已合并，merge commit `d3334c1`，必需 CI 全绿，真实 API 评测按 PR 规则跳过。
 - B6 价保 PR #339 已合并，merge commit `84ad3fa`；全部必需检查通过。B4–B6 组合回归 **170 passed / 4 skipped**，B6 独立 PostgreSQL T2 **1 passed**。
-- B7 `feat/cs-address-change` 功能提交 `c7af318` 已与 B6 最新 main `84ad3fa` 在本工作树合并并解冲突；当前合并结果已暂存，待生成集成提交、开 PR。B4–B7 定向回归 **218 passed / 5 skipped**；新增/合并代码 py_compile、聚焦 Ruff、YAML 解析和 `git diff --check` 通过。B7 独立 PostgreSQL T2 先前 **1 passed**；本轮 5 个 skip 中的 PG T2 因未提供隔离 DSN 跳过。
+- B7 `feat/cs-address-change` 功能提交 `c7af318` 与最新 main `84ad3fa` 已集成，集成提交 `7dd3b9b`；PR **#340** 已开放，CI 运行中。B4–B7 定向回归 **218 passed / 5 skipped**；py_compile、聚焦 Ruff、YAML 解析和 `git diff --check` 通过。B7 独立 PostgreSQL T2 先前 **1 passed**；本轮 PG T2 因未提供隔离 DSN 跳过。
 - B8 `feat/cs-invoice` 功能提交 `4baeded` 已本地提交、尚未开 PR；仍需在 B7 合入后同步最新 main、解冲突、组合回归并开 PR。
 - B9 立项文档仍在 `codex/cs-b9-charter` 工作树，未提交/开 PR；当前基线仍旧，待 B8 合入后同步 main。
 - q3 `b4-acc-q3` 退款提案状态为 `expired`（到期时间 `2026-11-05 15:43:48 UTC`）；对应客服退款动作记录 **0**、business-mock 退款申请 **0**。没有确认、没有提交、没有发起退款；集成验收保持不触碰。
