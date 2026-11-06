@@ -246,6 +246,13 @@ CS_BUSINESS_GATEWAY_MODE = os.getenv("CS_BUSINESS_GATEWAY_MODE", "sandbox").stri
 CS_REFUND_REQUEST_MODE = os.getenv(
     "CS_REFUND_REQUEST_MODE", "disabled",
 ).strip().lower()
+# B4 重复扣款自动处理仅支持显式 mock 模拟；默认关闭，不调用真实资金接口。
+CS_AUTO_DUPLICATE_REFUND_MODE = os.getenv(
+    "CS_AUTO_DUPLICATE_REFUND_MODE", "disabled",
+).strip().lower()
+CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT = os.getenv(
+    "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "0",
+).strip()
 
 # 订单取消独立开关（Q6 拍板项 2，2026-11-04）：
 #   http（默认）= 跟随业务网关既有模式（sandbox/http 均可，与 .env 已开

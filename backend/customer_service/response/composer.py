@@ -75,6 +75,16 @@ def compose_reply(
 
     policy = EXPERT_RESPONSE_POLICY.get(expert_name, ResponsePolicy.TEMPLATE)
 
+    # 支付流水回复包含逐笔事实和强制的重试/退款确认边界；保留 QueryExpert
+    # 的确定性模板，避免 LLM 转写时漏掉必要指引或人工审核说明。
+    if (
+        expert_name == "query"
+        and str((cs_route or {}).get("intent") or "") == "t_payment_issue"
+    ):
+        _metrics_inc("cs_response_total", {"source": "template"})
+        _tag_trace(cs_response_source="template")
+        return draft, "template"
+
     # knowledge：RAG 上游已是 LLM 生成 + 证据门禁，直通（source=llm）
     if policy is ResponsePolicy.LLM_UPSTREAM:
         _metrics_inc("cs_response_total", {"source": "llm"})
@@ -395,6 +405,7 @@ def _fact_amounts(
         section: object,
         kind: str,
         inherited_order_no: str | None = None,
+        inherited_currency: str | None = None,
     ) -> None:
         if not isinstance(section, dict):
             return
@@ -402,7 +413,7 @@ def _fact_amounts(
         currency = (
             str(currency_value).upper()
             if isinstance(currency_value, str) and currency_value.upper() != "UNKNOWN"
-            else None
+            else inherited_currency
         )
         order_no = section.get("order_no") or inherited_order_no
         order_no = str(order_no) if order_no else None
@@ -445,6 +456,17 @@ def _fact_amounts(
         )
         if isinstance(check_section.get("coupon"), dict):
             add_amounts(check_section["coupon"], "coupon")
+    payment_section = facts.get("payment")
+    if isinstance(payment_section, dict):
+        add_amounts(payment_section, "order")
+        payment_order_no = payment_section.get("order_no")
+        payment_currency = payment_section.get("currency")
+        payment_records = payment_section.get("payments")
+        for item in payment_records if isinstance(payment_records, list) else []:
+            add_amounts(
+                item, "order", str(payment_order_no or "") or None,
+                str(payment_currency or "") or None,
+            )
     task_result = facts.get("task_result")
     if isinstance(task_result, dict):
         add_amounts(task_result.get("facts"), "order")
@@ -490,6 +512,9 @@ def _amount_claim_kind(answer: str, start: int, end: int) -> str | None:
     coupon_label = re.compile(
         r"优惠券|满减券?|折扣券?|无门槛券?|最高减|券(?:面额|门槛|码)",
     )
+    payment_label = re.compile(
+        r"支付(?:流水|记录|金额|款)?|扣款(?:流水|记录|金额)?|交易流水|支付渠道",
+    )
 
     def labels(text: str, offset: int = 0) -> list[tuple[int, int, str]]:
         found: list[tuple[int, int, str]] = []
@@ -497,6 +522,7 @@ def _amount_claim_kind(answer: str, start: int, end: int) -> str | None:
             (refund_label, "refund"), (order_label, "order"),
             (balance_label, "balance"), (points_label, "points"),
             (coupon_label, "coupon"),
+            (payment_label, "order"),
         ):
             found.extend(
                 (offset + match.start(), offset + match.end(), kind)

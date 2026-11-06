@@ -30,6 +30,7 @@ def execute_handoff(
     from backend.customer_service.audit import build_audit_entry
     from backend.customer_service.handoff import (
         HandoffState,
+        TriggerType,
         detect_handoff_trigger,
     )
     from backend.customer_service.handoff import (
@@ -50,8 +51,14 @@ def execute_handoff(
         trigger_type = explicit_trigger.trigger_type.value
         trigger_reason = explicit_trigger.reason
     else:
-        trigger_type = "auto_trigger"
-        trigger_reason = "系统自动触发 (低置信度/连续失败)"
+        prior_data = ((state.get("last_expert_result") or {}).get("data") or {})
+        escalation_reason = str(prior_data.get("handoff_reason") or "").strip()
+        if escalation_reason:
+            trigger_type = TriggerType.BUSINESS_ESCALATION.value
+            trigger_reason = escalation_reason[:500]
+        else:
+            trigger_type = "auto_trigger"
+            trigger_reason = "系统自动触发 (低置信度/连续失败)"
 
     record_cs_handoff(trigger_type)
 
@@ -263,4 +270,8 @@ def handoff_expert_node(state: dict[str, Any]) -> dict[str, Any]:
         "expert_history": expert_history,
         "cs_audit_entries": audit_entries,
         "cs_context": cs_context,
+        "handoff_state": result.get("data", {}).get("handoff_state")
+        or state.get("handoff_state", "ai_active"),
+        "handling_mode": result.get("data", {}).get("handling_mode")
+        or state.get("handling_mode", "ai"),
     }

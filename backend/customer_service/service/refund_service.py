@@ -399,6 +399,124 @@ class RefundService:
             },
         )
 
+    def simulate_duplicate_payment_refund(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        order_no: str,
+    ) -> AgentActionRecord:
+        """仅对 business-mock 的低风险重复扣款做可审计模拟，不触碰真实资金。"""
+        from backend.customer_service.service.payment_service import (
+            PaymentError,
+            PaymentNotFoundError,
+            PaymentService,
+            auto_duplicate_refund_simulation_eligible,
+        )
+
+        if not user_id or user_id == "anonymous" or not tenant_id or not order_no:
+            raise RefundRequestUnavailableError("模拟退款缺少可信用户、租户或订单")
+
+        user_id = str(user_id).strip()
+        tenant_id = str(tenant_id).strip()
+        order_no = str(order_no).strip()
+        stable_name = "\x1f".join((tenant_id, user_id, order_no))
+        action_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL, f"cs-duplicate-refund:{stable_name}",
+        ))
+        try:
+            payment = PaymentService().get_payments(user_id, tenant_id, order_no)
+        except PaymentNotFoundError as exc:
+            raise OrderNotFoundError(str(exc)) from exc
+        except PaymentError as exc:
+            raise DatabaseError("支付流水暂时不可核实") from exc
+        has_prior_simulation = any(
+            isinstance(item, dict) and item.get("refund_status") == "simulated"
+            for item in payment.get("payments", [])
+        )
+        eligible_payment = (
+            {**payment, "refund_candidate": True}
+            if has_prior_simulation else payment
+        )
+        if not auto_duplicate_refund_simulation_eligible(
+            eligible_payment, source="business_payment_service",
+        ):
+            raise OrderNotEligibleError(
+                "支付流水或模拟开关已变化；未执行模拟退款，请由人工核实。",
+            )
+
+        data = self._business_request(
+            "POST", "/business/payments/duplicate-refund-simulations",
+            json_body={
+                "action_id": action_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "order_no": order_no,
+            },
+        )
+        refund = data.get("refund")
+        expected_amount = Decimal(str(payment["total_amount"])).quantize(
+            Decimal("0.01"),
+        )
+        try:
+            returned_amount = Decimal(str(refund.get("amount"))).quantize(
+                Decimal("0.01"),
+            ) if isinstance(refund, dict) else None
+            executed_at = datetime.fromisoformat(str(refund.get("created_at")))
+            if executed_at.tzinfo is None:
+                executed_at = None
+        except (AttributeError, InvalidOperation, TypeError, ValueError):
+            returned_amount = None
+            executed_at = None
+        if (
+            not isinstance(refund, dict)
+            or refund.get("action_id") != action_id
+            or refund.get("order_no") != payment.get("order_no")
+            or refund.get("status") != "simulated"
+            or refund.get("execution_mode") != "simulation"
+            or refund.get("real_funds_affected") is not False
+            or refund.get("currency") != "CNY"
+            or returned_amount != expected_amount
+            or not refund.get("refund_id")
+            or executed_at is None
+        ):
+            from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+            raise SideEffectOutcomeUnknown(
+                "Mock 未返回可核验的模拟退款结果，已停止自动处理。",
+            )
+
+        return AgentActionRecord(
+            action_id=action_id,
+            action_type=ActionType.REFUND_EXECUTE,
+            agent_type="ai",
+            target_type="refund_simulation",
+            target_id=str(refund["refund_id"]),
+            data={
+                "refund": refund,
+                "execution_mode": "simulation",
+                "real_funds_affected": False,
+                "before_state": {
+                    "order_no": order_no,
+                    "refund_candidate": True,
+                    "success_count": payment["success_count"],
+                    "amount": payment["total_amount"],
+                    "currency": payment["currency"],
+                },
+                "after_state": {
+                    "refund_id": str(refund["refund_id"]),
+                    "status": "simulated",
+                    "amount": float(expected_amount),
+                    "currency": "CNY",
+                    "execution_mode": "simulation",
+                    "real_funds_affected": False,
+                },
+            },
+            status="simulated",
+            created_at=executed_at,
+            executed_at=executed_at,
+        )
+
     def execute_refund_request(
         self,
         pending_action: dict,
