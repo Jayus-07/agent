@@ -150,6 +150,7 @@ exit /b 0
 call :confirm rebuild
 if errorlevel 1 exit /b 0
 call :rebuild_backend
+if errorlevel 1 exit /b 1
 call :rebuild_frontend
 call :do_status
 exit /b 0
@@ -225,19 +226,19 @@ if not errorlevel 1 (
 exit /b 0
 
 :start_backend
-echo   [backend] docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher ...
+echo   [backend] docker compose up -d --no-build --no-recreate app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher ...
 pushd "%ROOT%"
-docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
+docker compose up -d --no-build --no-recreate app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 goto start_backend_retry
 goto start_backend_up_ok
 
 :start_backend_retry
 echo   [backend] up failed - prune stale containers, retry once ...
 call :prune_stale_backend_containers
-docker compose up -d --build app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
+docker compose up -d --no-build --no-recreate app business-mock apisix rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher
 if errorlevel 1 (
     popd
-    echo   [ERROR] docker compose up -d --build app failed after retry
+    echo   [ERROR] docker compose up -d --no-build --no-recreate app failed after retry
     exit /b 1
 )
 
@@ -267,6 +268,8 @@ exit /b 0
 :: re-run automatically through the compose depends_on chain.
 :: =====================================================================
 :rebuild_backend
+call :set_build_identity
+if errorlevel 1 exit /b 1
 set "BACKEND_SERVICES=app business-mock db-migrate rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher"
 echo   [backend] docker compose build %BACKEND_SERVICES% ...
 pushd "%ROOT%"
@@ -496,6 +499,32 @@ echo   cancelled
 exit /b 1
 
 :: =====================================================================
+:set_build_identity
+set "GIT_COMMIT="
+for /f "delims=" %%I in ('git -C "%ROOT%" rev-parse --short HEAD 2^>nul') do set "GIT_COMMIT=%%I"
+if not defined GIT_COMMIT (
+    echo   [ERROR] cannot determine Git commit for backend image
+    exit /b 1
+)
+set "BUILD_TIME="
+for /f "delims=" %%I in ('powershell.exe -NoProfile -Command "[DateTime]::UtcNow.ToString('o')" 2^>nul') do set "BUILD_TIME=%%I"
+if not defined BUILD_TIME (
+    echo   [ERROR] cannot determine UTC build time for backend image
+    exit /b 1
+)
+set "GIT_STATUS_FILE=%TEMP%\dev-svc-git-status-%RANDOM%-%RANDOM%.tmp"
+git -C "%ROOT%" status --porcelain --untracked-files=normal > "%GIT_STATUS_FILE%" 2>nul
+if errorlevel 1 (
+    del /q "%GIT_STATUS_FILE%" >nul 2>&1
+    echo   [ERROR] cannot determine Git working tree state for backend image
+    exit /b 1
+)
+set "GIT_DIRTY=false"
+for %%F in ("%GIT_STATUS_FILE%") do if %%~zF GTR 0 set "GIT_DIRTY=true"
+del /q "%GIT_STATUS_FILE%" >nul 2>&1
+echo   [build] commit=!GIT_COMMIT! build_time=!BUILD_TIME! dirty=!GIT_DIRTY!
+exit /b 0
+
 :usage
 echo dev-svc.bat - shared impl of dev-start / dev-stop / dev-restart / dev-rebuild / devctl
 echo.

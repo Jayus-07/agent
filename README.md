@@ -196,7 +196,10 @@ devctl.bat rebuild /y              :: 重建后端（改代码 / 改 .env 后必
 
 非 Windows 环境用等价的 compose / node 命令，功能无差异：
 ```bash
-docker compose up -d --build                              # 等价 devctl start backend
+# 正式发布：使用含构建身份和 Release Gate 的入口。
+bash scripts/release.sh
+# 日常启动只复用已构建的镜像。
+docker compose up -d --no-build --no-recreate
 cd frontend       && npm install && npx next dev -p 3100  # 等价 devctl start web
 cd frontend-admin && npm install && npx next dev -p 3200  # 等价 devctl start admin
 cd frontend-cs    && npm install && npx next dev -p 3300  # 等价 devctl start cs

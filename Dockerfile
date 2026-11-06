@@ -73,14 +73,6 @@ FROM python:3.10-slim
 
 LABEL description="Agent Platform: LangGraph + MCP + RAG + NL2SQL"
 
-# ── Build Identity（Platform Readiness STOP B1）──────────────────
-# 运行容器必须可回答「我是哪个 commit 构建的」。compose 侧以 build args
-# 注入（未设置时 unknown）；启动日志与 /health 读取这两个 env。
-ARG GIT_COMMIT=unknown
-ARG BUILD_TIME=unknown
-ENV GIT_COMMIT=${GIT_COMMIT} \
-    BUILD_TIME=${BUILD_TIME}
-
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -128,4 +120,15 @@ EXPOSE 8000
 # B6（2026-09-21 审查）：--timeout-graceful-shutdown 600 —— SIGTERM 后最多
 # 等 600s 让在途请求（分钟级 SSE/长 RAG）自然收尾；compose 侧配套
 # stop_grace_period: 700s（app/rag/mcp），worker 用 acks_late 重投兜底。
+# 构建身份放在依赖和源码层之后，更新时间戳时仍复用昂贵的缓存层。
+ARG GIT_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ARG GIT_DIRTY=unknown
+LABEL org.opencontainers.image.revision="${GIT_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_TIME}" \
+      com.agent-platform.git-dirty="${GIT_DIRTY}"
+ENV GIT_COMMIT=${GIT_COMMIT} \
+    BUILD_TIME=${BUILD_TIME} \
+    GIT_DIRTY=${GIT_DIRTY}
+
 CMD ["python", "-m", "uvicorn", "backend.app.server:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-graceful-shutdown", "600"]

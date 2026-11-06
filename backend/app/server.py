@@ -146,14 +146,15 @@ async def install_otel_mirror():
 async def log_build_identity():
     """启动身份日志（Platform Readiness STOP B2）：本进程是哪个 commit 构建。
 
-    GIT_COMMIT/BUILD_TIME 由镜像构建时注入（Dockerfile ARG→ENV，compose
-    x-build 锚从发布脚本环境透传）；缺失 = unknown = 发布流程违规（A8）。
-    只记身份三要素，禁止携带任何 secret。
+    GIT_COMMIT/BUILD_TIME/GIT_DIRTY 由镜像构建时注入（Dockerfile ARG→ENV，
+    compose x-build 锚从发布或本机重建入口透传）。只记构建身份字段，
+    禁止携带任何 secret。
     """
     logger.info(
-        "[Build] service=app commit=%s build_time=%s env=%s",
+        "[Build] service=app commit=%s build_time=%s dirty=%s env=%s",
         os.getenv("GIT_COMMIT", "unknown"),
         os.getenv("BUILD_TIME", "unknown"),
+        os.getenv("GIT_DIRTY", "unknown"),
         os.getenv("ENVIRONMENT", "unknown"),
     )
 
