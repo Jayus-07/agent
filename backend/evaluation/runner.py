@@ -4,6 +4,7 @@ run_all() 委托给 EvaluationService.evaluate()。
 evaluate_planner_offline() 是纯函数，供 planners runner 使用。
 """
 
+from collections import Counter
 from typing import Any
 
 from backend.evaluation.metrics import jaccard_similarity
@@ -13,24 +14,101 @@ from backend.evaluation.models import EvalResult
 def evaluate_planner_offline(
     case_id: str,
     expected: dict[str, Any],
-    actual_capabilities: list[str],
+    actual_capabilities: list[str] | None = None,
     actual_params: dict[str, dict] | None = None,
+    actual_plan: dict[str, Any] | None = None,
 ) -> EvalResult:
     """离线评估 Planner 输出 — 纯函数，不依赖项目模块。
 
     评估维度：
     - jaccard: 期望能力与实际能力的 Jaccard 相似度
     - redundancy: 不应出现的能力实际出现的比例
-    - structure_ok: edges 中的能力是否都出现在实际能力中
+    - structure_ok: Plan schema、预期依赖边和步骤数量是否满足契约
     - param_match: 关键参数断言（expected.params，可缺省）
+
+    Live Planner Runner 传入完整 actual_plan，按能力多重集和依赖边精确评分。
+    旧调用方可继续传 actual_capabilities，沿用能力覆盖率兼容口径。
 
     expected.params 结构（按 capability 声明关键参数，不做全量对比）：
         {"sql.query": {"question": {"contains": "部门"}},
          "email.send": {"to": {"contains": "@"}}}
     值为标量时按相等断言；{"contains": s} 按子串断言。
     """
-    expected_caps = set(expected.get("capabilities", []))
+    expected_capability_list = expected.get("capabilities", [])
+    expected_caps = set(expected_capability_list)
     should_not = set(expected.get("should_not_contain", []))
+    actual_plan_errors: list[str] = []
+    actual_edge_data: list[dict[str, str]] = []
+    node_count: int | None = None
+    edge_match: bool | None = None
+    step_count_ok = True
+    if actual_plan is not None:
+        from backend.agents.planner.plan_utils import validate_plan_contract
+
+        actual_plan_errors = validate_plan_contract(actual_plan)
+        raw_nodes = actual_plan.get("nodes", [])
+        if isinstance(raw_nodes, dict):
+            nodes = list(raw_nodes.values())
+        elif isinstance(raw_nodes, list):
+            nodes = raw_nodes
+        else:
+            nodes = []
+        actual_capabilities = [
+            node.get("capability", "")
+            for node in nodes
+            if isinstance(node, dict) and node.get("capability")
+        ]
+        actual_params = {
+            node.get("capability"): node.get("params") or {}
+            for node in nodes
+            if isinstance(node, dict) and node.get("capability")
+        }
+        node_count = len(nodes)
+        minimum = expected.get("min_steps")
+        maximum = expected.get("max_steps")
+        step_count_ok = (
+            (minimum is None or node_count >= minimum)
+            and (maximum is None or node_count <= maximum)
+        )
+        if "edges" in expected:
+            node_by_id = {
+                str(node.get("step_id")): node
+                for node in nodes
+                if isinstance(node, dict) and node.get("step_id") is not None
+            }
+            actual_edges: Counter[tuple[str, str]] = Counter()
+            raw_edges = actual_plan.get("edges", {})
+            if isinstance(raw_edges, dict):
+                for target, dependencies in raw_edges.items():
+                    if not isinstance(dependencies, list):
+                        continue
+                    target_node = node_by_id.get(str(target))
+                    if not target_node:
+                        continue
+                    for dependency in dependencies:
+                        dependency_node = node_by_id.get(str(dependency))
+                        if dependency_node:
+                            source_capability = str(
+                                dependency_node.get("capability", ""))
+                            target_capability = str(
+                                target_node.get("capability", ""))
+                            actual_edges[(source_capability, target_capability)] += 1
+                            actual_edge_data.append({
+                                "from": source_capability,
+                                "to": target_capability,
+                            })
+            expected_edges: Counter[tuple[str, str]] = Counter()
+            raw_expected_edges = expected.get("edges")
+            if isinstance(raw_expected_edges, list):
+                for edge in raw_expected_edges:
+                    if isinstance(edge, dict):
+                        expected_edges[(
+                            str(edge.get("from", "")),
+                            str(edge.get("to", "")),
+                        )] += 1
+            edge_match = actual_edges == expected_edges
+
+    actual_capabilities = actual_capabilities or []
     actual_set = set(actual_capabilities)
 
     jaccard = jaccard_similarity(actual_set, expected_caps)
@@ -38,13 +116,15 @@ def evaluate_planner_offline(
     redundancy_hits = should_not & actual_set
     redundancy = len(redundancy_hits) / len(should_not) if should_not else 0.0
 
-    structure_ok = True
-    if "edges" in expected:
+    structure_ok = not actual_plan_errors and step_count_ok
+    if actual_plan is not None and edge_match is not None:
+        structure_ok = structure_ok and edge_match
+    elif actual_plan is None and "edges" in expected:
         edge_caps = set()
         for edge in expected["edges"]:
             edge_caps.add(edge["from"])
             edge_caps.add(edge["to"])
-        structure_ok = edge_caps.issubset(actual_set)
+        structure_ok = structure_ok and edge_caps.issubset(actual_set)
 
     # ── 关键参数断言：只覆盖声明了的 (capability, param)。写操作误填代价高
     # （收件人/动作类型），给 Planner 参数填充一个可回归的度量 ──
@@ -75,16 +155,31 @@ def evaluate_planner_offline(
         if total_checks else None
     )
 
+    exact_capabilities = Counter(actual_capabilities) == Counter(expected_capability_list)
     passed = (
-        jaccard >= 0.5
+        (exact_capabilities if actual_plan is not None else jaccard >= 0.5)
         and redundancy <= 0.25
         and structure_ok
         and (param_match is None or param_match >= 1.0)
     )
 
+    problems = list(actual_plan_errors)
+    if actual_plan is not None and not exact_capabilities:
+        problems.append("实际 capability 集合与预期不一致")
+    if actual_plan is not None and not step_count_ok:
+        problems.append("实际步骤数量不在预期范围内")
+    if actual_plan is not None and edge_match is False:
+        problems.append("实际依赖边与预期不一致")
+    problems.extend(param_problems)
+
     actual: dict[str, Any] = {"capabilities": actual_capabilities}
     if actual_params:
         actual["params"] = actual_params
+    if actual_plan is not None:
+        actual["node_count"] = node_count
+        actual["edges"] = actual_edge_data
+        actual["edge_match"] = edge_match
+        actual["plan_contract_errors"] = actual_plan_errors
 
     return EvalResult(
         case_id=case_id,
@@ -96,9 +191,13 @@ def evaluate_planner_offline(
             "jaccard": round(jaccard, 4),
             "redundancy": round(redundancy, 4),
             "structure_ok": 1.0 if structure_ok else 0.0,
+            "capability_match": 1.0 if exact_capabilities else 0.0,
+            "edge_match": None if edge_match is None else (1.0 if edge_match else 0.0),
+            "step_count_ok": 1.0 if step_count_ok else 0.0,
+            "node_count": node_count,
             "param_match": param_match,
         },
-        error_msg="; ".join(param_problems) or None,
+        error_msg="; ".join(problems) or None,
     )
 
 

@@ -633,9 +633,11 @@ class EvaluationService:
             report.metadata["run_guards"] = guard_meta
             # P0-04：run 有效性（VALID/INVALID_*）随报告落盘——release_gate、
             # DB 台账与管理端「环境无效」徽章共用这一个裁决口径
-            from backend.evaluation.validity import classify_report_validity, validity_from_report_metadata
+            from backend.evaluation.validity import resolve_report_validity
 
-            verdict = validity_from_report_metadata(report.metadata) or classify_report_validity(report)
+            # 当前 run 必须按刚执行的结果重算；旧 metadata 不得覆盖新的
+            # Planner Provider/预算失败分类。
+            verdict = resolve_report_validity(report)
             report.metadata["run_validity"] = verdict.as_dict()
             return report
         except Exception as exc:

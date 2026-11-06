@@ -91,13 +91,10 @@ def record_run(report: EvalReport, run_id: str, meta: dict[str, Any] | None = No
     summary = _summarize(report)
     # P0-04：有效性裁决（服务侧已随 report.metadata 落盘；历史/旁路路径现算兜底）
     from backend.evaluation.validity import (
-        classify_report_validity,
-        validity_from_report_metadata,
+        resolve_report_validity,
     )
 
-    validity_verdict = validity_from_report_metadata(report.metadata)
-    if validity_verdict is None:
-        validity_verdict = classify_report_validity(report)
+    validity_verdict = resolve_report_validity(report)
     row = {
         "run_id": run_id,
         "module": report.module,

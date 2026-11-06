@@ -10,7 +10,8 @@
 - **数据集**：`backend/evaluation/datasets/<module>/` 常以 `cases.jsonl` 组织，具有版本治理的模块另提供 `manifest.json` 和可选的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。**目前 `travel-provider` 只有 `cases.jsonl`，并无 manifest/hash 保护；loader 对缺失 manifest 存在兼容默认版本路径。这属于待补齐的评测资产缺口，不能宣称已锁版。** 历史 deprecated 文件不可进入新运行基线。
 - **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
 - **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。
-- **样本校验**：`backend/evaluation/dataset/validator.py` 的某些分支仍只接受 planner/rag/cs，而模块注册已扩展到其它域。此为**需要定向审查的潜在契约漂移**；不得据此把所有新域数据标记合法或直接删除验证。
+- **样本校验**：模块取值与 `ModuleKind / MODULE_KINDS` 同源；Planner 另要求每条样本有 capability、正反向约束、步骤范围及完整 DAG 依赖边。其它模块仍须由各自 Runner 和模块级契约测试验证，通用样本校验通过不代表 Live 能力已接通。
+- **Planner Live**：评测入口绕过计划缓存，输出必须有节点字段、授权 capability 和有效 DAG；期望能力、依赖边、步骤数精确匹配。模型输出契约失败是质量 `FAIL`；Provider 降级、预算/上下文不足、执行异常或 Live 样本跳过会使该次 run `INVALID`，不计入模型通过率。
 
 ## 2. 统一评测资产规范
 

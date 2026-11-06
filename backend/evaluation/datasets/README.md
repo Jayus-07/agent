@@ -1,4 +1,4 @@
-# 评测数据集盘点（2026-11-02 更新）
+# 评测数据集盘点（2026-11-07 更新）
 
 > 位置：`backend/evaluation/datasets/`。加载入口统一为 `backend/evaluation/dataset/loader.py::load_dataset(module, selection)`。
 > 优先级：`selection`（suites/）→ `{module}/cases.jsonl`（V3 canonical）→ `{module}/` 目录分片 → 顶层 `{module}_v2.json` / `{module}_test_kb.json` / `{module}.json`。文件名含 `.deprecated.` 一律跳过。
@@ -8,7 +8,7 @@
 | 模块 | Canonical | 条数 | 版本 | 加载方式 | 备注 |
 |------|-----------|------|------|----------|------|
 | rag | `rag/cases.jsonl` | 24 | 6.0.0-desktop-candidate.1 | `load_dataset('rag')` | `desktop_upload_smoke`(8) / `desktop_upload_full`(24)，对应 `rag_eval_kb` 的 28 份上传样本 |
-| planner | `planner/cases.jsonl` | 20 | v1.0 | `load_dataset('planner')` | 2026-09-15 由顶层 planner.json 迁入 V3，内容逐条一致 |
+| planner | `planner/cases.jsonl` | 20 | v2.0 | `load_dataset('planner')` | 业务域和 capability 对齐当前平台；每条样本锁定完整依赖边和步骤范围，hash 由 manifest 校验 |
 | cs | `cs/cases.jsonl` | 324 | v2.2 | `load_dataset('cs')` | 2026-09-19 锁版 320 条（20 v1 + 300 cs-v2）；2026-11-02 P2 修订升 v2.1（faq 标注口径同源化 + intent→target 映射矛盾修复）、P3 收编 4 条候选（t_balance_query×2 / t_order_cancel×2，词表扩圈后回放全绿）升 v2.2。依据见 manifest notes。消费：决策层回放门禁 `backend/tests/customer_service/test_cs_decision_replay.py`（离线口径 284/244，multi_turn 与 safety-risk 显式 skip）+ 词表门禁 `cs/gate/`（test_cs_eval_gate）；管理端评测中心已接线（2026-11-02 P4：dataset_key `cs_locked_v2_2`，domain=cs，v1.0.0 版本 324 cases，offline run 324/324 pass）|
 | sql | `sql/cases.jsonl` | 15 | v1.0 | `load_dataset('sql')` | 含 S014~S017 安全用例 |
 | e2e | `e2e/cases.jsonl` | 25 | v1.0 | `load_dataset('e2e')` | manifest case_count 2026-09-15 由 13 校正为 25 |
@@ -29,6 +29,7 @@
 1. 新增/修改用例一律改 `{module}/cases.jsonl`；rag 模块改完记得同步受影响的 suites（suite 只存 case_id 引用，不会自动适配期望变化）。
 2. manifest 的 `case_count` 必须与 cases.jsonl 行数一致（本次发现 e2e 曾失同步）。
 3. 弃用集不删除，改名加 `.deprecated.` 中缀 + `_DEPRECATED`/`_replacement` 字段，loader 与 storage 均按此约定拦截。
+4. Planner 样本必须声明 capability、`should_not_contain`、`min_steps`、`max_steps` 和完整 `edges`。样本期望边用 `{from, to}` 表示“前置 capability → 依赖它的 capability”；模型原始 Plan 的 `edges` 则按目标步骤 ID 映射其依赖步骤 ID。改题时同步升版本、重算内容 hash，并运行 Planner 离线契约测试。
 
 ## 模块 ↔ 测试知识库对照（2026-10-08 修正版，manifest kb_id 为权威）
 
