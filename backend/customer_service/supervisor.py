@@ -115,6 +115,22 @@ def make_supervisor_decision(state: dict[str, Any]) -> CSSupervisorDecision:
             _record_decision(pending_turn_decision)
             return pending_turn_decision
 
+        last_result = state.get("last_expert_result") or {}
+        result_data = last_result.get("data") or {}
+        if (
+            last_result.get("expert") == ExpertType.ACTION.value
+            and result_data.get("handoff_required") is True
+        ):
+            decision = _make_decision(
+                ExpertAction.RUN_EXPERT,
+                ExpertType.HANDOFF,
+                layer=1,
+                reason="动作专家检测到物流异常，转入现有人工队列",
+                requires_handoff=True,
+            )
+            _record_decision(decision)
+            return decision
+
     from backend.config.customer_service import CS_DECISION_V2
 
     if CS_DECISION_V2:

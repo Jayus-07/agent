@@ -134,6 +134,27 @@
 
 **收尾**：rag_smoke 清单 +`test_coupon_flow.py`；GAP_LIST 优惠券行改「已覆盖（政策问答 + B3 意图级券查询/用券校验）」；customer-service.md 第 8/49 行同步；mock/迁移种子与 coupon-policy.md/FAQ id=23 三方一致。
 
-## 后续批次
+## B5：催发货/催派送（mock-only）——实现与本地验收（2026-11-06）
 
-B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
+**工作树**：`C:/Users/wh/.codex/worktrees/cs-urge-action/agent`，分支 `feat/cs-urge-action`，基线 `987eddbd`；改动尚未提交。
+
+**实现**：
+
+- 路由新增 `t_urge_shipping` / `t_urge_delivery`，维持 TRANSACTION 域；物流/快递通用查询不被催办词抢路由，配送政策问句仍落 KNOWLEDGE。
+- ActionExpert 对用户明确发起的催办走低风险直执行，不创建确认卡；只把请求发给精确白名单 `business-mock:8081` / 本机 8081，sandbox 或真实 URL 均 fail-closed。
+- business-mock 校验当前用户订单归属与订单状态；同租户/用户/订单/类型 24 小时幂等；订单超过 5 天无物流更新、丢件/破损及结果未知不登记/不重试，并路由到现有人工队列。
+- 成功登记使用 `simulated` + `confirmation_state=not_required`，审计记录包含 mock `request_id`；明确告知未通知真实商家/物流系统，不承诺时效。新增迁移 135 仅扩展 agent_actions 类型约束，保留现有客服动作值；无新业务表。
+- 更新 business-mock 契约、客服域说明、能力清单 UI、FINAL-PLAN 与本进度，并把测试加入 rag_smoke 定向列表及迁移 NON_AI path filter。
+
+**验证结果**：
+
+1. B5 + 相邻客服定向集合：**49 passed**；覆盖双意图路由、模拟登记、24 小时幂等、租户去重、跨用户订单拒绝、订单状态拒绝、审计、超期/丢件转人工、未知 POST 仅一次调用、真实业务 URL 拒绝。
+2. Handoff 状态机与触发器回归：`test_handoff.py` **29 passed**。
+3. 词表 cs-gate、Supervisor 决策回放、迁移登记和 RAG 路径过滤：**33 passed**；`py_compile`、`git diff --check` 与 B5 相关 Ruff 检查通过。
+4. 迁移 135 在独立临时 `pgvector/pgvector:pg16` 数据库实际执行，13 种现有/新增动作类型全部可写入；临时容器、网络与配置已清理。此为 SQL migration T2，不是共享数据库验收。
+5. pytest 进程仍输出既有 residue-guard 日志：TaskService 默认尝试连接本机 5432，但该环境未提供密码；各测试进程退出码均为 0。后续若需要更大范围回归，先给测试配置有效隔离 DSN，避免无效等待。
+6. 新增真实持久化 T2：隔离 PostgreSQL 16 中运行 B5 催办专家并两次调用 `_persist_audit_records`，核对 `agent_actions`=`simulated/not_required`、`audit_logs` 有 mock 请求编号、`ai.idempotency_records` 均仅一条；`test_urge_flow.py` **14 passed**。测试记录清理后复查会话/动作/审计/ledger 均为 0。测试需显式设置 `CS_AUDIT_PG_TEST=1`，并拒绝非本机、非 test/sandbox 数据库及共享端口 5433。pytest residue-guard 仍提示隔离库缺 embedding role seed；不影响 B5 用例。
+
+**运行时状态：UNVERIFIED**。没有从本分支重建共享栈：Docker 检查确认 `agent-app-1` 与 `agent-business-mock-1` 当前由 B4 的 `agent-cs-fix-entry` worktree 构建；PR #336 仍 OPEN，最新已核实记录有 3 条未解决的 P2 审查意见。直接从 B5 对应的主线基线重建会撤掉未合并的 B4 运行时代码；本批未触碰 B4 worktree 或共享 DB，也未改共享栈。B5 代码级与隔离 PG 持久化验收通过，容器部署、健康检查与真机验收待 B4 稳定合入后，在包含 B4+B5 的最新 worktree 继续。
+
+**后续批次**：先保持 B4 退款闸口不变（q3 提案仍未确认、未提交）；B4 审查修复并合并后，把 B5 更新到最新 main，做冲突复核、共享栈重建/健康检查/真机验收，再进入 B6-B8；B9 仍为独立立项。

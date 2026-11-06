@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -29,6 +29,7 @@ _POINTS: dict[tuple[str, str], dict[str, Any]] = {}
 # B3 优惠券档案 + 核销记录（数字与 coupon-policy.md / FAQ id=23 互为事实源）
 _COUPONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _REDEMPTIONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_URGE_REQUESTS: dict[tuple[str, str, str, str], dict[str, Any]] = {}
 _COUPON_SEQ = 0
 _SEEDED_USERS: set[str] = set()
 _WALLET_LEDGER_SEQ = 0
@@ -97,6 +98,14 @@ class OrderCancelInput(BaseModel):
     expected_amount: float = Field(ge=0)
     reason: str = Field(default="", max_length=500)
     operation_key: str = Field(min_length=8, max_length=128)
+
+
+class UrgeRequestInput(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    conversation_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    request_type: Literal["shipping", "delivery"]
 
 
 @app.exception_handler(HTTPException)
@@ -505,6 +514,7 @@ def reset_mock_state() -> None:
         _POINTS.clear()
         _COUPONS.clear()
         _REDEMPTIONS.clear()
+        _URGE_REQUESTS.clear()
         _SEEDED_USERS.clear()
 
 
@@ -574,6 +584,78 @@ def get_order_logistics(
     if order is None:
         raise HTTPException(status_code=404, detail="order not found")
     return _ok({"logistics": _logistics(order)})
+
+
+@app.post("/business/urge-requests")
+def create_urge_request(
+    payload: UrgeRequestInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """模拟催办登记；同租户/用户/订单/类型 24 小时内只建一条。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    order = _find_order(user_id, payload.order_no.strip())
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    logistics = _logistics(order)
+    if payload.request_type == "shipping" and order["status"] != "paid":
+        raise HTTPException(status_code=409, detail="order is not awaiting shipment")
+    if payload.request_type == "delivery" and order["status"] != "shipped":
+        raise HTTPException(status_code=409, detail="order is not in transit")
+
+    events = logistics.get("events") or []
+    last_update = (
+        datetime.fromisoformat(events[-1]["time"])
+        if events else datetime.fromisoformat(order["created_at"])
+    )
+    now = datetime.now(timezone.utc)
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=timezone.utc)
+    stale_days = max(0, int((now - last_update).total_seconds() // 86400))
+    if stale_days > 5:
+        return _ok({
+            "handoff_required": True,
+            "handoff_reason": "物流超过 5 天无更新，需人工核实",
+            "logistics": logistics,
+            "stale_days": stale_days,
+        })
+
+    key = (
+        payload.tenant_id.strip(), user_id,
+        order["order_no"].casefold(), payload.request_type,
+    )
+    with _STATE_LOCK:
+        existing = _URGE_REQUESTS.get(key)
+        if existing:
+            created_at = datetime.fromisoformat(existing["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if now - created_at < timedelta(hours=24):
+                return _ok({
+                    "urge_request": dict(existing),
+                    "already_registered": True,
+                    "handoff_required": False,
+                    "logistics": logistics,
+                    "stale_days": stale_days,
+                })
+
+        urge_request = {
+            "request_id": f"URGE-{uuid.uuid4().hex[:12].upper()}",
+            "order_no": order["order_no"],
+            "request_type": payload.request_type,
+            "status": "registered",
+            "created_at": now.isoformat(),
+            "conversation_id": payload.conversation_id,
+        }
+        _URGE_REQUESTS[key] = urge_request
+    return _ok({
+        "urge_request": dict(urge_request),
+        "already_registered": False,
+        "handoff_required": False,
+        "logistics": logistics,
+        "stale_days": stale_days,
+    })
 
 
 # ── P2 商城 Mock 账本：钱包 / 创建订单 / 支付 / 取消 ─────────────
