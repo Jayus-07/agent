@@ -5,9 +5,9 @@
 > 本节为当前权威状态；下方批次记录保留各自当时现场，若状态冲突以本节及最新 PR/提交为准。
 
 - B4 PR #336 已合并，merge commit `c2d3dc2`；B5 PR #338 已合并，merge commit `d3334c1`，必需 CI 全绿，真实 API 付费评测按 PR 策略跳过。
-- B6 价保：分支 `feat/cs-price-match` 的功能提交为 `87bce2b`。B4+B5 最新主线冲突已解决，组合回归 **170 passed / 4 skipped**；单独 PostgreSQL T2 **1 passed**，按 050→135→136 顺序验证价保动作可持久写入。当前合并提交、PR/CI、主容器验收尚未完成。
+- B6 价保：分支 `feat/cs-price-match` 功能提交 `87bce2b`，已集成 B4+B5，当前 HEAD/合并提交 `2c34968`。组合回归 **170 passed / 4 skipped**；单独 PostgreSQL T2 **1 passed**，按 050→135→136 顺序验证价保动作可持久写入。PR/CI、主容器验收尚未完成。
 - B7、B8 当前分别在 `cs-address-change`、`cs-invoice` 工作树，均有未提交实现，基础 HEAD 为 `987eddb`；需按顺序在 B6 合入后更新并复核，未提交更改须保留。
-- B9 立项文档仍在 `codex/cs-b9-charter` 工作树，尚未提交/开 PR；该工作树落后当前 main 7 个提交，需更新基线后提交。
+- B9 立项文档仍在 `codex/cs-b9-charter` 工作树，尚未提交/开 PR；截至 `origin/main=d3334c1`，基础 `987eddb` 落后 10 个提交，需更新基线后提交。
 - B4 q3 `b4-acc-q3` 未触碰，退款提案仍未确认、未提交，没有退款申请。
 - B4–B8 最终集成重建和真实客服路径验收尚未开始；用户已授权使用主容器，届时从包含最新合并代码的任务工作树重建。真实支付、物流、税务和资金系统仍不接入。
 
@@ -267,12 +267,12 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 
 **后续批次**：先完成当前 B5 集成合并、开 PR、CI 与合入；随后依序更新 B6、B7、B8 到各自最新 main，逐批完成冲突复核、定向/T2 测试、PR CI 和合入；全部代码批次完成后，用含 B4-B8 的最新工作树统一重建/运行时验收。B9 立项文档单独提交；q3 保持未触碰。
 
-## B6：价保退差价（mock-only）——本地实现与 B4–B6 组合验证完成，PR 待创建
+## B6：价保退差价（mock-only）——实现与 B4–B6 组合验证完成，PR/CI 待完成
 
-- 工作树 `C:/Users/wh/.codex/worktrees/cs-price-match/agent`，分支 `feat/cs-price-match`，功能提交 `87bce2b`；当前已合入 B4/B5 主线并解决冲突，准备提交合并结果。
+- 工作树 `C:/Users/wh/.codex/worktrees/cs-price-match/agent`，分支 `feat/cs-price-match`，功能提交 `87bce2b`，集成 B4/B5 的 merge commit `2c34968`。
 - 价保只允许用户确认后写 business-mock 演示钱包；客服与 mock 两侧默认关闭，确认时重新核对订单状态、支付时间、CNY、单件商品、窗口和当前价；订单级重复、金额变化、错误目标或结果未知均拒绝/进入 `verifying`，不触达真实资金。
 - 迁移顺序与门禁：134 支付→135 催办→136 价保；三个迁移均已登记 business/memory 目标与 NON_AI path filter，B4、B5、B6 测试均纳入 rag_smoke 清单；词表版本升至 `2026-11-06.2`。
 - 组合回归：支付、任务计划、催办、价保、词表、客服 Golden/决策回放及路由 **170 passed / 4 skipped**。跳过项未配置相应 sandbox/audit DSN；B6 隔离审计用例已另跑 **1 passed**。
 - T2：临时 PostgreSQL 16 绑定 `127.0.0.1:15438`；先执行迁移 050、135，再由 B6 T2 用例重放 050 并执行 136。`AuditRepository` 实际写入 `price_match/executed` 成功，最终约束同时允许 `urge_request` 和 `price_match`；动作和会话测试记录均为 0。测试容器在结果核对后停止并移除，不含持久卷。
 - T0：改动 Python 文件 `py_compile` 通过；新增/相关核心文件 Ruff（忽略导入排序 I001）通过；完整触及文件 Ruff 仍报 10 条既有旧行问题（confirmation_flow、supervisor、init_db），未扩范围清理；YAML 解析与 `git diff --check` 通过。
-- **未验收**：尚无 B6 集成 merge commit、PR/CI 结果、主 API 重建和真机对话证据；统一运行时验收待 B4–B8 集成后执行。q3 未触碰。
+- **未验收**：尚无 B6 PR/CI 结果、主 API 重建和真机对话证据；统一运行时验收待 B4–B8 集成后执行。q3 未触碰。
