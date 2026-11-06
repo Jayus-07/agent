@@ -29,6 +29,7 @@ class ActionType:
     ORDER_CANCEL = "order_cancel"
     PRICE_MATCH = "price_match"
     URGE_REQUEST = "urge_request"
+    ADDRESS_CHANGE = "address_change"
     REFUND_EXECUTE = "refund_execute"
     RETURN_EXECUTE = "return_execute"
 

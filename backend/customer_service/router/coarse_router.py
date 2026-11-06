@@ -41,6 +41,12 @@ class CSCoarseRouter:
         if self._is_delivery_policy_question(query):
             return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "delivery_policy: KNOWLEDGE"
 
+        if self._is_address_change_policy_question(query):
+            return CSDomain.KNOWLEDGE, CS_CONFIDENCE_CAUTIOUS, "address_change_policy: KNOWLEDGE"
+
+        if self._is_order_address_change_request(query):
+            return CSDomain.TRANSACTION, CS_CONFIDENCE_CAUTIOUS, "address_change_action: TRANSACTION"
+
         domain, conf, reason = self._rule_classify(query, CS_DOMAIN_KEYWORDS)
         # P2.1（audit #157）：规则决定线 0.8 → CS_CONFIDENCE_CAUTIOUS（0.6）。
         # 向量层删除后规则通道是唯一判定，规则命中即采信。
@@ -119,6 +125,37 @@ class CSCoarseRouter:
             return False
         return bool(re.search(
             r"(多久|几天|时效|什么时候|通常|一般|多长|多少天|到达)", query
+        ))
+
+    @staticmethod
+    def _is_order_address_change_request(query: str) -> bool:
+        """将明确针对订单/包裹的改址动作放进交易域。"""
+        target = re.search(r"(订单|订单号|包裹|物流|在途|运输中)", query)
+        action = re.search(
+            r"(改地址|改址|修改.{0,4}地址|更改.{0,4}地址|改到|改为|改成|换到|寄到|送到)",
+            query,
+        )
+        return bool(target and action)
+
+    @staticmethod
+    def _is_address_change_policy_question(query: str) -> bool:
+        """把在途改址政策问句与显式订单改址动作分开。"""
+        if not any(token in query for token in (
+            "改地址", "改址", "修改地址", "改收货地址",
+        )):
+            return False
+        if not any(token in query for token in (
+            "在途", "运输中", "运输途中", "发货", "快递", "包裹", "物流",
+        )):
+            return False
+        if re.search(
+            r"(帮我|帮忙|请帮|我要|我想|改到|改为|改成|换到|寄到|送到)",
+            query,
+        ):
+            return False
+        return bool(re.search(
+            r"(能不能|可以吗|能否|是否|吗|政策|规则|条件|时效|怎么|如何)",
+            query,
         ))
 
     @staticmethod

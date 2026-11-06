@@ -24,8 +24,8 @@ from typing import Any
 
 from langgraph.types import Command
 
-from backend.shared.logger import logger
 from backend.customer_service.graph_state import PendingTurnDecision
+from backend.shared.logger import logger
 
 _PENDING_STATES = frozenset({"pending", "pending_confirmation"})
 
@@ -71,7 +71,7 @@ def cs_pending_handler_node(state: dict[str, Any]) -> Command:
         # 时会落入 READ_ONLY_QUERY，先检查槽位答案，否则补槽永远轮不到
         #（2026-11-03 实测：need_info 期间回复 MO-AA2383B8 被放行为订单
         # 查询，退款提案缺槽直至过期）。
-        if _looks_like_need_info_slot_answer(state):
+        if _looks_like_need_info_slot_answer(state, pending_action):
             return Command(goto="cs_action_expert", update={
                 "pending_turn_decision": PendingTurnDecision.AMBIGUOUS.value,
                 "pending_turn_slot_fill": True,
@@ -265,7 +265,10 @@ def _pending_clarification(
             "回复「取消」放弃，或回复「转人工」由客服协助。"
         )
     elif need_info:
-        missing = "、".join(pending_action.get("missing_slots") or []) or "所需信息"
+        missing_slots = pending_action.get("missing_slots") or []
+        labels = {"order_id": "订单号", "new_address": "完整的新收货地址"}
+        missing = "、".join(labels.get(slot, slot) for slot in missing_slots)
+        missing = missing or "所需信息"
         answer = f"我们还在处理当前申请，请补充{missing}；如果想了解其他问题，请直接说明。"
     else:
         answer = (
@@ -284,9 +287,17 @@ def _pending_clarification(
     })
 
 
-def _looks_like_need_info_slot_answer(state: dict[str, Any]) -> bool:
-    """只把明确的订单选择/标识当作 need_info 槽位回答。"""
+def _looks_like_need_info_slot_answer(
+    state: dict[str, Any], pending_action: dict | None = None,
+) -> bool:
+    """只把明确的订单选择/标识或有效地址当作 need_info 槽位回答。"""
     message = str(state.get("user_message") or "").strip()
+    if "new_address" in ((pending_action or {}).get("missing_slots") or []):
+        from backend.customer_service.service.address_change_service import (
+            extract_new_address,
+        )
+
+        return bool(extract_new_address({"metadata": {"new_address": message}}, message))
     if re.fullmatch(r"第[一二两三四五六七八九十\d]+个?(?:订单|单)?", message):
         return True
     # 订单号段支持字母数字混合（business-mock 懒种子为 8 位混合段，如

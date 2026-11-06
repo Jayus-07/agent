@@ -29,6 +29,7 @@
 - 订单列表、详情和物流轨迹经 business-service HTTP 契约读取；商品/时间指称先用真实用户订单匹配，歧义时追问，不由模型提供订单 ID。唯一物流查询会写入会话级订单上下文，后续已支持的条件退款计划可以承接该订单。退款提案确认时重查订单归属、状态、金额及政策版本。
 - 退款申请状态查询按服务端认证的 user 和 tenant 限定。未提交提案的原因修改使用 Proposal Version CAS 使旧确认失效；已提交申请的原因修改先形成新提案、用户确认后再调用 business-service，服务端只允许审核中的申请被修改。
 - business-service Mock 在内存模拟订单、物流和售后状态，服务重启会清空售后申请；它不代替生产数据库，也不执行资金退款。接口事实源见 [Mock 契约](../../backend/mock/business_service/contract.md)。
+- 在途订单改址走独立的 `t_change_address_in_transit` 提案：需用户确认，确认后只向 business-mock 登记单次模拟请求；服务端重核订单归属和运输状态，审计记录落既有 `agent_actions`/`audit_logs`。默认 `CS_ADDRESS_CHANGE_MODE=disabled`，真实订单地址与承运方均不受影响。
 - B5 催办记录同样是 business-mock 内存态，重启后 24 小时去重状态清空；客服动作与审计记录仍通过既有 PostgreSQL agent_actions/audit_logs 幂等写入。当前功能只用于模拟流程验收，不宣称真实商家已收到催办。
 - 坐席工作台通过既有实时事件与补偿查询同步队列和会话；人工接管的认领、回复和关闭服从服务端状态机。
 - 管理端客服档案独立于平台用户维护：`/sys/rbac/customer-service/team` 只列出租户内标记为客服部门的成员，角色、容量、启用和接单状态由专用更新接口维护。客服部门类型与主管配置由访问控制的部门管理维护；用户调离客服部门或账号停用时，后端会停用其客服档案并关闭接单状态。

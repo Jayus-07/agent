@@ -41,7 +41,7 @@
 ## 三、工作树与 Git 规范
 
 - **复用 worktree**：`D:\Program Files\workplace\agent-cs-fix-entry`（本分析会话建立，已停靠 origin/main，工作树干净）。每批从最新 origin/main 新建分支：
-  - B0→`fix/mall-sandbox-cancel-nameerror`；B1→`docs/cs-rag-kb-seed`；B2→`feat/cs-points-query`；B3→`feat/cs-coupon-query`；B4→`feat/cs-payment-query`；B5→`feat/cs-urge-action`；B6→`feat/cs-price-match`；B7→`feat/cs-transit-address-change`；B8→`feat/cs-invoice`。
+  - B0→`fix/mall-sandbox-cancel-nameerror`；B1→`docs/cs-rag-kb-seed`；B2→`feat/cs-points-query`；B3→`feat/cs-coupon-query`；B4→`feat/cs-payment-query`；B5→`feat/cs-urge-action`；B6→`feat/cs-price-match`；B7→`feat/cs-address-change`；B8→`feat/cs-invoice`。
 - .env 在 worktree（缺时从主仓拷贝）；GitHub 抖动用 `git -c http.proxy=http://127.0.0.1:7897` / gh 用 `HTTPS_PROXY=http://127.0.0.1:7897`（本会话已实证）。
 - 每批：分支→实现→T2→worktree 重建受影响服务→真机/REST 验证→PR→CI 逐项核对（docs-only PR 的 preflight skipping 属预期）→合并→主仓 pull+重建→回填 §七进度。
 - 提交双重路径限定（`git add -A -- <paths>` + `git commit -m "..." -- <paths>`）。
@@ -146,10 +146,10 @@
 
 ### B7：在途包裹改地址
 
-- 意图：`t_change_address_in_transit`（LOGISTICS，BUSINESS_ACTION，medium，确认流）。
-- Service：`address_change_service.py`——`build_proposal`：查物流状态=shipped（在途）→ 提案（新地址+「改址可能影响时效」告知）；`execute_confirmed`：重查状态（已派送/已签收即拒）→ mock `POST /business/logistics/{no}/change-address`（幂等 operation_key）。
-- 与既有 `account_action_service`（账户默认地址）明确区分：本项是**订单级**；缺新地址时走 `_SLOT_ORDER_INTENTS` 同款槽位追问。
-- 迁移：`logistics.address_change_requests`。
+- 意图：`t_change_address_in_transit`（项目当前无 `LOGISTICS` 域，使用 `TRANSACTION` + `BUSINESS_ACTION`；medium，确认流）。
+- Service：`address_change_service.py`——`build_proposal`：核实订单和物流状态均为 shipped（在途）→ 提案展示新地址及 1-3 天时效影响、每单限 1 次；`execute_confirmed`：再核状态，变化或已派送/签收即拒绝 → mock `POST /business/logistics/{no}/change-address`，按 confirmation UUID 幂等。
+- 与既有 `account_action_service`（账户默认地址）明确区分：本项是**订单级**；缺新地址时走既有 need_info 槽位补充，之后仍需用户确认。真实物流商不接入。
+- 迁移：`137_cs_address_change_action_type.sql` 扩展 `agent_actions.action_type` 并保留 B5/B6 动作类型；该迁移须在 135/136 后执行，防止较早迁移收窄约束。
 
 ### B8：开票/修改发票抬头
 

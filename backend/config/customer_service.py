@@ -253,6 +253,10 @@ CS_AUTO_DUPLICATE_REFUND_MODE = os.getenv(
 CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT = os.getenv(
     "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "0",
 ).strip()
+# B7 订单级在途改址只开放到 business-mock，默认关闭。
+CS_ADDRESS_CHANGE_MODE = os.getenv(
+    "CS_ADDRESS_CHANGE_MODE", "disabled",
+).strip().lower()
 
 # 订单取消独立开关（Q6 拍板项 2，2026-11-04）：
 #   http（默认）= 跟随业务网关既有模式（sandbox/http 均可，与 .env 已开

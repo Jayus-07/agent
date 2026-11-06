@@ -163,6 +163,20 @@ class RefundRequestUnavailableError(BusinessRuleError):
         )
 
 
+class AddressChangeUnavailableError(BusinessRuleError):
+    """订单改址的受控 business-mock 通道未开放或不可用。"""
+
+    def __init__(self, message: str = "订单改址模拟服务暂不可用", **kw):
+        super().__init__(
+            message,
+            user_message=(
+                "当前订单改址模拟通道未开放或暂不可用，未提交改址请求；"
+                "请联系人工客服协助。"
+            ),
+            **kw,
+        )
+
+
 class PriceMatchUnavailableError(BusinessRuleError):
     """价保 mock 通道未开放或不满足受控执行条件。"""
 

@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.7）
+# business-service 客服业务契约（v1.8）
 
 > `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.8（cs-capability-gap B7）：新增在途订单改址模拟契约；只登记 mock 请求，不更改真实订单或联系承运方。
 - v1.7（cs-capability-gap B6）：新增 business-mock 自营商品当前售价读取和确认后价保差价模拟入账；仅写内存演示钱包，单订单一次、确认幂等，不影响真实资金。
 - v1.6（cs-capability-gap B5）：新增催发货/催派送模拟登记；同租户、用户、订单和类型 24 小时内复用同一登记；物流超过 5 天无更新时不登记、返回人工升级信号。mock 登记在进程内存，重启后清空；客服动作与审计仍走现有 PostgreSQL agent_actions/audit_logs 幂等落库。
 - v1.5（cs-capability-gap B4）：增加严格 mock-only 的重复扣款模拟退款接口；只标记演示流水，不触碰真实支付、资金或退款申请。
@@ -36,6 +37,11 @@
 
 返回 `data.logistics`：`order_no`、`shipping_status`（`not_shipped` / `shipped` / `delivered` / `cancelled`）、`status_display`、`carrier`、`tracking_no`、`tracking_info`、`estimated_delivery` 和按时间升序排列的 `events[]`（`time`、`location`、`description`）。
 
+### POST `/business/logistics/{order_no}/change-address`
+
+请求体 `{operation_key, user_id, tenant_id, order_no, expected_shipping_status, new_address}`。仅接受当前用户拥有且订单与物流状态均为 `shipped` 的订单；执行时重新核验状态。每个订单最多登记一次改址请求，同一 `operation_key` 与相同请求体重放返回原结果，键绑定不同内容或该订单已有请求时返回 409；订单不属于用户时返回 404。
+
+该端点只在 business-mock 内存中记录 `status=simulated`，明确返回 `real_carrier_notified=false`、`real_order_address_changed=false`；不会修改订单字段，也不会调用真实物流商。Mock 进程重启会清空该演示请求；确认动作的 durable 记录另走客服 `agent_actions`/`audit_logs`。
 ### POST `/business/urge-requests`
 
 仅供客服演示环境调用，请求体 `{user_id, tenant_id, conversation_id, order_no, request_type}`，其中 `request_type` 为 `shipping` 或 `delivery`。服务端核对用户订单归属和当前状态：`shipping` 只接受已支付待发货订单，`delivery` 只接受运输中订单；其他状态返回 409。超过 5 天没有物流更新时返回 `handoff_required=true` 和当前物流状态，不创建催办记录。正常登记返回 `urge_request{request_id, order_no, request_type, status, created_at}`、`already_registered`、`logistics`。同租户、用户、订单和类型 24 小时内重复调用返回原 `request_id`，不创建第二条有效记录。

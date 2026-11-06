@@ -18,6 +18,7 @@ FINE_INTENTS: dict[str, str] = {
     "t_price_match": "价保退差价",
     "t_payment_issue": "支付流水与支付异常查询",
     "t_logistics": "物流查询",
+    "t_change_address_in_transit": "在途订单改地址",
     "t_urge_shipping": "催发货",
     "t_urge_delivery": "催派送/催物流",
     "t_ticket_status": "工单进度查询",
@@ -125,6 +126,12 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         intent="t_logistics", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
+    ),
+    "t_change_address_in_transit": IntentProfile(
+        intent="t_change_address_in_transit", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="medium",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
     ),
     # B5：直接登记 business-mock 催办；低风险，无确认卡；异常由
     # Supervisor 自动转入现有人工队列。
