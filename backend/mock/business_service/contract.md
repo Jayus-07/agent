@@ -1,9 +1,10 @@
-# business-service 客服业务契约（v1.5）
+# business-service 客服业务契约（v1.6）
 
 > `backend/mock/business_service/main.py` 是可运行的状态化业务替身。它为每个用户生成确定订单（v1.1 起覆盖订单状态机全部状态：pending / paid / shipped / completed / cancelled / refunded），内存保存售后申请、商城钱包账本、会员积分档案与优惠券档案，进程重启后会清空 Mock 状态；资金为演示账本（Decimal 记账），非真实支付。真实业务服务应实现相同 HTTP 契约，并在服务端完成订单归属、资格、幂等和售后状态校验。
 
 ## 变更记录
 
+- v1.6（cs-capability-gap B5）：新增催发货/催派送模拟登记；同租户、用户、订单和类型 24 小时内复用同一登记；物流超过 5 天无更新时不登记、返回人工升级信号。mock 登记在进程内存，重启后清空；客服动作与审计仍走现有 PostgreSQL agent_actions/audit_logs 幂等落库。
 - v1.5（cs-capability-gap B4）：增加严格 mock-only 的重复扣款模拟退款接口；只标记演示流水，不触碰真实支付、资金或退款申请。
 - v1.4（cs-capability-gap B4）：新增只读支付流水查询；覆盖单笔成功、支付失败和重复成功演示样本。
 
@@ -34,6 +35,12 @@
 ### GET `/business/orders/{order_no}/logistics?user_id={id}`
 
 返回 `data.logistics`：`order_no`、`shipping_status`（`not_shipped` / `shipped` / `delivered` / `cancelled`）、`status_display`、`carrier`、`tracking_no`、`tracking_info`、`estimated_delivery` 和按时间升序排列的 `events[]`（`time`、`location`、`description`）。
+
+### POST `/business/urge-requests`
+
+仅供客服演示环境调用，请求体 `{user_id, tenant_id, conversation_id, order_no, request_type}`，其中 `request_type` 为 `shipping` 或 `delivery`。服务端核对用户订单归属和当前状态：`shipping` 只接受已支付待发货订单，`delivery` 只接受运输中订单；其他状态返回 409。超过 5 天没有物流更新时返回 `handoff_required=true` 和当前物流状态，不创建催办记录。正常登记返回 `urge_request{request_id, order_no, request_type, status, created_at}`、`already_registered`、`logistics`。同租户、用户、订单和类型 24 小时内重复调用返回原 `request_id`，不创建第二条有效记录。
+
+此接口只在客服服务明确配置 HTTP `business-mock:8081`（或本机回环地址）时开放；sandbox 与真实业务地址均由客服服务拒绝。mock 登记为进程内存数据，不代表商家或物流商已收到请求，也不承诺发货/送达时间。
 
 ## 退款申请
 

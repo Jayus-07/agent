@@ -17,6 +17,8 @@ FINE_INTENTS: dict[str, str] = {
     "t_coupon_query": "优惠券查询与用券校验",
     "t_payment_issue": "支付流水与支付异常查询",
     "t_logistics": "物流查询",
+    "t_urge_shipping": "催发货",
+    "t_urge_delivery": "催派送/催物流",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
     "t_delivery_estimate": "配送时效",
@@ -116,6 +118,20 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         intent="t_logistics", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
+    ),
+    # B5：直接登记 business-mock 催办；低风险，无确认卡；异常由
+    # Supervisor 自动转入现有人工队列。
+    "t_urge_shipping": IntentProfile(
+        intent="t_urge_shipping", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="low",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
+    ),
+    "t_urge_delivery": IntentProfile(
+        intent="t_urge_delivery", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="low",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
     ),
     # 批次C：工单进度查询（投诉工单/转人工工单落库后用户可查）
     "t_ticket_status": IntentProfile(

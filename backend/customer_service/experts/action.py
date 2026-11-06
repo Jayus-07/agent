@@ -27,11 +27,16 @@ _INTENT_ACTION_MAP = {
     "a_address":   "address",
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
+    "t_urge_shipping": "urge_request",
+    "t_urge_delivery": "urge_request",
 }
 
 # 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
 # 操作对象，缺 order_id 时绝不允许替用户猜目标（有副作用动作）。
-_SLOT_ORDER_INTENTS = frozenset({"as_refund", "as_return", "as_exchange", "t_order_cancel"})
+_SLOT_ORDER_INTENTS = frozenset({
+    "as_refund", "as_return", "as_exchange", "t_order_cancel",
+    "t_urge_shipping", "t_urge_delivery",
+})
 
 _ACTION_TYPE_LABELS = {
     "refund_request": "退款申请",
@@ -40,6 +45,7 @@ _ACTION_TYPE_LABELS = {
     "address_update": "地址修改",
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
+    "urge_request": "物流催办",
 }
 
 # 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
@@ -189,6 +195,12 @@ def execute_action(
             return _ask_missing_slot(user_id, intent, session_id, store,
                                      tenant_id=tenant_id)
 
+    if intent in {"t_urge_shipping", "t_urge_delivery"}:
+        return _execute_urge_request(
+            user_id, intent, cs_route, user_message, session_id, state,
+            tenant_id=tenant_id,
+        )
+
     try:
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
                                    user_message, tenant_id=tenant_id)
@@ -235,6 +247,159 @@ def execute_action(
             ),
             data={},
         )
+
+
+def _execute_urge_request(
+    user_id: str,
+    intent: str,
+    cs_route: dict,
+    user_message: str,
+    session_id: str,
+    state: dict[str, Any],
+    *,
+    tenant_id: str,
+) -> ExpertResult:
+    """在 business-mock 登记低风险物流催办；异常转交 Supervisor 升级人工。"""
+    import uuid
+
+    from backend.customer_service.action import ActionType, AgentActionRecord
+    from backend.customer_service.audit import build_audit_entry
+    from backend.customer_service.service.urge_service import (
+        UrgeServiceError,
+        get_urge_service,
+    )
+
+    order_id = _resolve_order_id(cs_route, user_message)
+    request_type = "shipping" if intent == "t_urge_shipping" else "delivery"
+    conversation_id = str(
+        state.get("conversation_id")
+        or (state.get("cs_context") or {}).get("conversation_id")
+        or session_id
+    )
+
+    escalation = _urge_escalation_reason(user_message)
+    if escalation:
+        return _urge_handoff_signal(escalation)
+
+    try:
+        outcome = get_urge_service().register_urge(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            order_no=order_id,
+            request_type=request_type,
+        )
+    except UrgeServiceError as exc:
+        if exc.handoff_required:
+            return _urge_handoff_signal(exc.handoff_reason)
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=ActionType.URGE_REQUEST,
+            result="failure",
+            target_type="order",
+            target_id=order_id,
+            detail="mock urge request rejected",
+            conversation_id=conversation_id,
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={
+                "audit_entry": audit_entry,
+                "action_result": {
+                    "action_type": ActionType.URGE_REQUEST,
+                    "status": "failed",
+                    "user_message": exc.user_message,
+                },
+            },
+        )
+
+    if outcome.get("handoff_required"):
+        return _urge_handoff_signal(str(
+            outcome.get("handoff_reason") or "物流状态异常，需人工核实",
+        ))
+
+    request = outcome["urge_request"]
+    logistics = outcome["logistics"]
+    already_registered = bool(outcome.get("already_registered"))
+    request_label = "催发货" if request_type == "shipping" else "催派送"
+    status_display = str(logistics.get("status_display") or "状态未知")
+    if already_registered:
+        answer = (
+            f"该订单的{request_label}已在处理中（模拟环境已登记）；"
+            f"当前状态：{status_display}。"
+            "这是演示记录，没有向真实商家或物流系统发送请求，"
+            "也不承诺具体发货或送达时间。"
+        )
+    else:
+        answer = (
+            f"已在模拟环境为该订单登记{request_label}；"
+            f"当前状态：{status_display}。"
+            "这是演示记录，没有向真实商家或物流系统发送请求，"
+            "也不承诺具体发货或送达时间。"
+        )
+
+    record = AgentActionRecord(
+        action_id=str(uuid.uuid4()),
+        action_type=ActionType.URGE_REQUEST,
+        agent_type="ai",
+        target_type="order",
+        target_id=str(request.get("order_no") or order_id),
+        data={
+            "before_state": {"status_display": status_display},
+            "after_state": {
+                "request_id": str(request.get("request_id") or ""),
+                "request_type": request_type,
+                "already_registered": already_registered,
+                "simulated": True,
+            },
+        },
+        status="simulated",
+    )
+    record_dict = {**record.to_dict(), "confirmation_state": "not_required"}
+    audit_entry = build_audit_entry(
+        user_id=user_id,
+        action_type=ActionType.URGE_REQUEST,
+        result="success",
+        target_type="order",
+        target_id=record.target_id,
+        detail=(
+            f"business_mock request_id={request.get('request_id')}; "
+            f"request_type={request_type}; already_registered={already_registered}"
+        ),
+        conversation_id=conversation_id,
+    )
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft=answer,
+        data={
+            "audit_entry": audit_entry,
+            "action_result": {
+                "action_type": ActionType.URGE_REQUEST,
+                "status": "success",
+                "user_message": answer,
+                "action_record": record_dict,
+            },
+        },
+    )
+
+
+def _urge_escalation_reason(user_message: str) -> str:
+    """用户明确反馈物流异常时，禁止自动登记并转人工核实。"""
+    if any(term in user_message for term in ("丢件", "丢失", "丢了", "破损", "损坏")):
+        return "用户反馈包裹可能丢失或破损，需人工核实并处理"
+    return ""
+
+
+def _urge_handoff_signal(reason: str) -> ExpertResult:
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft="该物流问题需要人工核实，正在为您转接客服。",
+        data={"handoff_required": True, "handoff_reason": reason},
+    )
 
 
 def _execute_conditional_refund_task(

@@ -130,10 +130,11 @@
 
 ### B5：催发货/催派送（低风险直执行，不进确认卡）
 
-- 意图：`t_urge_shipping`/`t_urge_delivery`（domain=LOGISTICS，BUSINESS_ACTION，risk_level=low，**requires_action 但走直执行**：action expert 对 low risk 不建确认卡，直接 `_simulate_execute` 模式或真实登记——按 action.py 既有 low-risk 路径接线，探查报告 :1058-1108 的 simulate 分发即现成挂点）。
-- Service：`urge_service.py`——`register_urge(order_no, type)` → mock `POST /business/urge-requests`（幂等：同单同类型 24h 内重复催办返回 already_registered，答复「已在处理中」）；答复「已登记催办 + 当前物流状态 + 承诺时效」。
-- 迁移：`customer_service.urge_records`（或 business 库 `logistics.urge_requests`，二选一以 action 归属定）。
-- 红线：**不承诺具体补发时间**（composer ETA 守卫会拒——`_has_delivery_or_arrival_promise` 对无 facts 的时间承诺 fail-closed），话术只引用政策文档时效。
+- 意图：`t_urge_shipping`/`t_urge_delivery`（当前客服粗分类域没有 LOGISTICS，故落 TRANSACTION；BUSINESS_ACTION，risk_level=low）。当前 ActionExpert 没有可直接复用的 low-risk 分支，必须显式接入 `urge_request` 直执行，且不生成确认卡。
+- Service：`urge_service.py` 只允许 HTTP 网关精确指向 `business-mock:8081` 或本机 8081 回环地址；sandbox/真实业务 URL 一律拒绝。调用 mock `POST /business/urge-requests`，同租户/用户/订单/类型 24h 内重复返回原登记编号；回复当前物流状态。
+- 审计：复用 `customer_service.agent_actions`、`audit_logs` 与既有 action_id 幂等 ledger；动作状态=`simulated`、确认态=`not_required`。迁移 135 仅扩展 agent_actions action_type CHECK，不新建业务表；mock 请求自身保存在内存，重启清空。
+- 异常升级：物流超过 5 天无更新、用户反馈丢件/破损或写入结果未知时，不发起/不重试催办，Supervisor 派发既有 Handoff Expert 创建人工队列事项。错误的物流状态/不存在订单明确拒绝登记。
+- 红线：**不承诺具体发货、补发或送达时间**；mock 记录不代表真实商家/物流系统已收到请求。
 
 ### B6：价保退差价（资金动作，全链路最重）
 
@@ -185,7 +186,11 @@ cs_faq 库：新增 1 篇「高频问题速查」（20-40 条 Q&A，与上表一
 |---|---|
 | B0 | ✅ 合并部署验收（PR #309 → e2990b9：sandbox 取消 NameError 修复 + 隔离 PG T2 + CI 真跑） |
 | B1 | ✅ 合并（PR #312 → 1620a74）+ 真机验收闭环 + A7 落地（PR #317 → ce902ea，2026-11-04 全部完成）：**验收揪出先于 B1 的检索链断裂双根因并已修复**——①6 个 cs KB 曾于 10-22 被批量置 inactive（auth.knowledge_base_audits 留痕，super_admin 279）→ 已按 store API 全部启用（v2）；②向量索引身份 vs 注册表 source 标签 bug 已随并行会话 #311-#314 修复；A5 检索 7/7 命中、A6 对话 4/6 直接达标（q3 券叠加经 FAQ 治理后 3/3），q2/q5 ClaimVerifier 拦截为 fail-closed 正确行为（检索完整性调优 P2 挂账）；FAQ 治理 14 写入对齐新政策；A7 坐席端 RAG 通道真机验收：搜「优惠券叠加」7 条 = FAQ 1 + RAG 6（含 coupon-policy 新文档），source 区分正确、两通道口径一致互证；主链路零回归（/health ok + 17 容器 healthy） |
-| B2-B9 | ⬜ 待实施（B2 积分样板为查询型接入首批） |
+| B2-B3 | ✅ 已合并部署（积分查询、优惠券查询/校验；详见本文件进度记录） |
+| B4 | ⏳ PR #336 OPEN；最新已核实有 3 条未解决 P2 审查意见（不在 B5 工作树处理） |
+| B5 | ⏳ `test_urge_flow.py` 14 passed，含隔离 PG 持久化与幂等 T2；运行时验收待 B4 稳定合入后进行 |
+| B6-B8 | ⬜ 待实施 |
+| B9 | 📝 仅立项，独立排期 |
 | 挂账：外部真实系统对接（比价/物流商/支付网关/开票） | ⬜ 不阻塞 mock 契约落地 |
 | 挂账：坐席端知识检索接 RAG | ✅ 已实施（A7，2026-11-04 用户裁决：坐席端接 RAG 通道；T2 见 backend/tests/api/test_cs_knowledge_search_rag.py） |
 | 挂账：用户端订单页开发票入口 | ⬜ 二期 |

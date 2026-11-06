@@ -228,3 +228,30 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - 在本任务独立 PostgreSQL 16 库上应用 006/031/050，并还原 020 中会话状态列迁移与检查约束后，重新运行真实审计持久化用例：**1 passed / 0 skipped**；`py_compile`、Ruff（忽略既有 I001）及 `git diff --check` 通过。
 - 首轮 CI：RAG Smoke preflight **失败**（单个新增 T2 夹具状态列问题）；Eval V2 free contract、Eval V2 admin、scan 和 RAG path detection **通过**；真实 API 评测按规则 skipped。修复尚未提交/推送，须重跑 CI 后再判断。
 - q3 `b4-acc-q3` 仍未访问、未确认、未提交退款申请。当前主容器由多个 worktree 配置组成，代码最终重建与运行时验收仍待依 PR 顺序集成后进行。
+
+## B5：催发货/催派送（mock-only）——实现与本地验收（2026-11-06）
+
+**工作树**：`C:/Users/wh/.codex/worktrees/cs-urge-action/agent`，分支 `feat/cs-urge-action`。B5 功能提交为 `810f932`；已将 B4 合并提交 `c2d3dc2` 合入当前工作树，组合验证通过，集成合并提交和 B5 PR 待完成。
+
+**实现**：
+
+- 路由新增 `t_urge_shipping` / `t_urge_delivery`，维持 TRANSACTION 域；物流/快递通用查询不被催办词抢路由，配送政策问句仍落 KNOWLEDGE。
+- ActionExpert 对用户明确发起的催办走低风险直执行，不创建确认卡；只把请求发给精确白名单 `business-mock:8081` / 本机 8081，sandbox 或真实 URL 均 fail-closed。
+- business-mock 校验当前用户订单归属与订单状态；同租户/用户/订单/类型 24 小时幂等；订单超过 5 天无物流更新、丢件/破损及结果未知不登记/不重试，并路由到现有人工队列。
+- 成功登记使用 `simulated` + `confirmation_state=not_required`，审计记录包含 mock `request_id`；明确告知未通知真实商家/物流系统，不承诺时效。新增迁移 135 仅扩展 agent_actions 类型约束，保留现有客服动作值；无新业务表。
+- 更新 business-mock 契约、客服域说明、能力清单 UI、FINAL-PLAN 与本进度，并把测试加入 rag_smoke 定向列表及迁移 NON_AI path filter。
+
+**验证结果**：
+
+1. B5 + 相邻客服定向集合：**49 passed**；覆盖双意图路由、模拟登记、24 小时幂等、租户去重、跨用户订单拒绝、订单状态拒绝、审计、超期/丢件转人工、未知 POST 仅一次调用、真实业务 URL 拒绝。
+2. Handoff 状态机与触发器回归：`test_handoff.py` **29 passed**。
+3. 词表 cs-gate、Supervisor 决策回放、迁移登记和 RAG 路径过滤：**33 passed**；`py_compile`、`git diff --check` 与 B5 相关 Ruff 检查通过。
+4. 迁移 135 在独立临时 `pgvector/pgvector:pg16` 数据库实际执行，13 种现有/新增动作类型全部可写入；临时容器、网络与配置已清理。此为 SQL migration T2，不是共享数据库验收。
+5. pytest 进程仍输出既有 residue-guard 日志：TaskService 默认尝试连接本机 5432，但该环境未提供密码；各测试进程退出码均为 0。后续若需要更大范围回归，先给测试配置有效隔离 DSN，避免无效等待。
+6. 新增真实持久化 T2：隔离 PostgreSQL 16 中运行 B5 催办专家并两次调用 `_persist_audit_records`，核对 `agent_actions`=`simulated/not_required`、`audit_logs` 有 mock 请求编号、`ai.idempotency_records` 均仅一条；`test_urge_flow.py` **14 passed**。测试记录清理后复查会话/动作/审计/ledger 均为 0。测试需显式设置 `CS_AUDIT_PG_TEST=1`，并拒绝非本机、非 test/sandbox 数据库及共享端口 5433。pytest residue-guard 仍提示隔离库缺 embedding role seed；不影响 B5 用例。
+7. 合并 B4 后在同一独立 PostgreSQL 16 库应用 006/031/050/135，并还原当前 `conversation_status` 约束；B4 模拟退款与 B5 催办的两项真实审计持久化用例 **2 passed**。测试动作、审计、幂等和会话记录复核均为 0。
+8. B4+B5 组合定向集（支付、任务计划、催办、词表双门禁、决策回放、RAG path filter）最新 **143 passed / 3 skipped**；跳过项由未给本轮完整集合配置专用 sandbox/audit DSN 引起，对应 B4/B5 audit T2 已在上一项独立通过。
+
+**运行时状态：UNVERIFIED**。共享 `agent` 栈仍由多个 worktree 配置组成；当前尚未从包含 B4+B5 的最新工作树重建，也未做 B5 真机验收。下一步在 B5 PR 按序合入后，以最新合并工作树重建主容器，检查健康探针并验收 B4/B5 用户路径。没有操作共享数据库；B4 q3 仍未确认或提交退款。
+
+**后续批次**：先完成当前 B5 集成合并、开 PR、CI 与合入；随后依序更新 B6、B7、B8 到各自最新 main，逐批完成冲突复核、定向/T2 测试、PR CI 和合入；全部代码批次完成后，用含 B4-B8 的最新工作树统一重建/运行时验收。B9 立项文档单独提交；q3 保持未触碰。
