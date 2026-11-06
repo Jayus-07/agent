@@ -5,7 +5,7 @@
 > 本节为当前权威状态；下方批次记录保留各自当时现场，若状态冲突以本节及最新 PR/提交为准。
 
 - B4 PR #336、B5 PR #338、B6 PR #339、B7 PR #340 均已合入 main；B7 merge commit 为 `f1bfd73`。B4–B7 定向回归此前 **218 passed / 5 skipped**，B7 独立 PostgreSQL T2 **1 passed**。
-- B8 分支 `feat/cs-invoice` 功能提交 `4baeded` 已与 `origin/main`（`f1bfd73`）完成本地合并和冲突解决；组合定向回归 **262 passed / 6 skipped**，新发票 Service/测试 Ruff、Python 编译、YAML 解析、`git diff --check` 通过。全 touched-file Ruff 仍报 10 个既有问题，未触及的旧行包括配置导入、事实投影导入排序和 `init_db.py` 局部变量。B8 尚未提交 merge commit、开 PR 或跑 CI。
+- B8 本地 merge commit `37b16ff` 已合入 `origin/main`（`f1bfd73`），PR #341 已开放。集成回归 **262 passed / 6 skipped**；新发票 Service/测试 Ruff、Python 编译、YAML 解析、`git diff --check` 通过。PR 首轮 RAG Smoke preflight 为 **1109 passed / 5 skipped / 1 failed**；唯一失败是 T2 测试未给迁移后的会话状态列显式合法值，已修正测试并在隔离 PG T2 **1 passed**，等待修复提交后的 CI 重跑。全 touched-file Ruff 仍报 10 个既有旧行问题，未触及配置导入、事实投影导入排序和 `init_db.py` 局部变量。
 - B9 立项文档仍在 `codex/cs-b9-charter` 工作树，尚未提交/开 PR；待 B8 完成后同步最新 main。
 - q3 `b4-acc-q3` 退款提案仍为 `expired`（到期 `2026-11-05 15:43:48 UTC`）；2026-11-06 通过共享 PG 只读核验 `confirmed_at`/`executed_at` 为空、对应客服 `refund_request` 动作 **0**、幂等记录 **0**、业务库对应订单退款记录 **0**。没有确认、提交或发起退款；后续验收继续不触碰。
 - B4–B8 最终主容器重建及运行时验收尚未开始；待 B8/B9 集成后，从含全部最新代码的任务工作树重建，再核验迁移、健康状态和安全的 mock 流程。真实支付、物流、税务和资金系统不接入。
@@ -301,4 +301,4 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - 范围：查询当前用户已有抬头/开票记录；显式确认后登记模拟申请。不开真实税务系统，不支持自助新增/修改抬头；服务默认关闭。
 - 关键约束：只允许符合状态的订单及已有 active 抬头；确认时重核业务事实；写入走幂等和现有审计，未知结果进入 `verifying`。迁移 138/139、路径过滤、`rag_smoke` 定向测试及契约/客服文档已随 B8 分支增加。
 - B8 独立分支既有证据：发票流程 **13 passed / 0 skipped**；隔离 PostgreSQL 审计 T2 **1 passed**，验证 action、audit、幂等记录各一条且真实开票标记为 false；mock HTTP 冒烟、mock 与坐席前端构建通过。
-- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。本次集成后的组合回归、PR/CI、主容器重建和运行时验收待完成。
+- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。集成组合回归 **262 passed / 6 skipped**；PR #341 首轮 CI 发现审计 T2 fixture 对迁移后的会话状态默认值不兼容。fixture 现在按 schema 选择 `conversation_status=open` 或旧列 `status=active`；独立 PostgreSQL T2 **1 passed**。CI 修复重跑、主容器重建和运行时验收待完成。

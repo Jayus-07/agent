@@ -561,9 +561,21 @@ def test_invoice_action_and_audit_persist_once_in_isolated_memory_pg():
             )
             assert all(cursor.fetchone()), "客服审计迁移未初始化到隔离测试库"
             cursor.execute(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = 'customer_service' "
+                "AND table_name = 'conversations' "
+                "AND column_name = 'conversation_status')",
+            )
+            has_conversation_status = cursor.fetchone()[0]
+            status_column = (
+                "conversation_status" if has_conversation_status else "status"
+            )
+            status_value = "open" if has_conversation_status else "active"
+            cursor.execute(
                 "INSERT INTO customer_service.conversations "
-                "(conversation_id, user_id) VALUES (%s, %s)",
-                (conversation_id, user_id),
+                f"(conversation_id, user_id, {status_column}) "
+                "VALUES (%s, %s, %s)",
+                (conversation_id, user_id, status_value),
             )
         conn.commit()
         conversation_created = True
