@@ -17,7 +17,7 @@ async def health():
     """健康检查：返回服务状态 + RAG 模块状态 + 会话上下文 backend 状态
 
     Platform Readiness STOP B1/B4 增补：
-    - build：本进程构建身份（commit/build_time，镜像构建注入）——回答
+    - build：本进程构建身份（commit/build_time/dirty，镜像构建注入）——回答
       「现在运行的 app 是哪个 commit」；
     - migrations：agent_memory 迁移水位观测（packaged_max vs applied_max）——status=
       "drifted" 表示镜像内迁移领先于 DB 已登记水位（历史静默跳过场景）。
@@ -29,6 +29,9 @@ async def health():
       缺失清单；观测面而非硬门（软失败返回 unknown 不影响存活判定）。
     """
     from backend.app.api.deps import get_rag_status
+
+    dirty_value = os.getenv("GIT_DIRTY", "unknown").strip().lower()
+    dirty_state = {"true": True, "false": False}.get(dirty_value)
 
     # 迁移水位与 schema 实查均使用同步 psycopg2，并且会打开独立连接。
     # 直接在 async handler 中调用会阻塞 event loop：100 个并发探针会串行
@@ -43,6 +46,7 @@ async def health():
         "build": {
             "commit": os.getenv("GIT_COMMIT", "unknown"),
             "build_time": os.getenv("BUILD_TIME", "unknown"),
+            "dirty": dirty_state,
         },
         "migrations": migrations,
         "schema_consistency": schema_consistency,

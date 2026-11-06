@@ -2,7 +2,7 @@
 
 全部经真实 APISIX :9080（G4 纪律：不直连 FastAPI 冒充）。
 
-  Gate 0  Build Identity  /health.build.commit 非 unknown（发布违规拦截）
+  Gate 0  Build Identity  commit 匹配、build_time 已知且 dirty=false
   Gate 1  Migration       verify_migration_state 三层一致
   Gate 2  Auth            无 JWT → 401（伪造/缺失凭据拒绝）
   Gate 3  Tenant          跨租户读任务 → 404
@@ -136,9 +136,32 @@ def chat(token: str, session: str, question: str, direct=False, actor=None,
 
 def g0_build() -> bool:
     st, body = _request("GET", "http://127.0.0.1:8000/health", timeout=10)
-    commit = (json.loads(body).get("build") or {}).get("commit", "?") if st == 200 else "?"
-    DETAIL["g0"] = f"commit={commit}"
-    return st == 200 and commit not in ("unknown", "?", "")
+    try:
+        payload = json.loads(body) if st == 200 else {}
+    except (TypeError, ValueError):
+        payload = {}
+    build = payload.get("build") if isinstance(payload, dict) else {}
+    if not isinstance(build, dict):
+        build = {}
+    commit = str(build.get("commit") or "?")
+    build_time = build.get("build_time")
+    dirty = build.get("dirty")
+    expected_commit = os.getenv("GIT_COMMIT", "").strip()
+    commit_ok = (
+        commit not in ("unknown", "?", "")
+        and (not expected_commit or expected_commit == "unknown"
+             or commit == expected_commit)
+    )
+    build_time_ok = (
+        isinstance(build_time, str)
+        and bool(build_time.strip())
+        and build_time.strip().lower() != "unknown"
+    )
+    DETAIL["g0"] = (
+        f"commit={commit} build_time={build_time or '?'} "
+        f"dirty={dirty} expected_commit={expected_commit or 'unspecified'}"
+    )
+    return st == 200 and commit_ok and build_time_ok and dirty is False
 
 
 def g1_migration() -> bool:

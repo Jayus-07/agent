@@ -51,6 +51,13 @@ cp 部署/prod-4c8g/env.production .env.production
 # 替换全部占位凭据，确认生产网关鉴权启用；文件只允许部署账号读取。
 chmod 600 .env.production
 export COMPOSE_FILE=docker-compose.yml:部署/prod-4c8g/docker-compose.local.yml:部署/prod-4c8g/docker-compose.4c8g.yml
+# 后端镜像只从干净提交构建，并把版本身份传给所有 Compose build。
+if [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+  echo "发布工作树不干净，拒绝构建"; exit 1
+fi
+export GIT_COMMIT="$(git rev-parse --short HEAD)"
+export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+export GIT_DIRTY=false
 # CLI 插值与容器 env_file 都读取生产配置；不依赖开发 .env。
 docker compose --env-file .env.production build app rag-service mcp-service agent-worker rag-index-worker maintenance-worker report-worker beat cs-dispatcher db-migrate
 for service in frontend frontend-admin frontend-cs; do

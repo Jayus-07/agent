@@ -15,7 +15,7 @@
 .\devctl.bat rebuild /y
 ~~~
 
-`rebuild` 会重建后端服务；日常查看状态和日志优先使用下面的 Compose 命令。共享环境中不要擅自停止或重建服务。
+`rebuild` 会将当前 Git commit、UTC 构建时间和工作树状态写入后端镜像 OCI 标签、启动日志及 `/health.build`。dirty 开发构建会显示 `dirty: true`；正式发布只接受 `dirty: false`。日常查看状态和日志优先使用下面的 Compose 命令。共享环境中不要擅自停止或重建服务。
 
 脚本内部把 Compose 项目名固定为共享栈的 `agent`：从目录名不是 `agent` 的任务工作树运行时，若未显式导出 `COMPOSE_PROJECT_NAME`，脚本会自动设为 `agent` 并打印一行提示，避免构建出平行项目镜像；调用方已导出该变量时以调用方为准。在 Git Bash 中运行时确认参数用 `-y`（`/y` 会被 MSYS 路径转换吞掉）。
 
@@ -135,6 +135,7 @@ docker compose config --images
 docker image ls
 docker buildx ls
 docker buildx du
+# 仅诊断 BuildKit 缓存；未注入 GIT_COMMIT/BUILD_TIME/GIT_DIRTY 时不可作为发布镜像。
 docker compose build --progress=plain app
 ~~~
 

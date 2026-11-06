@@ -18,15 +18,14 @@ networks:
     driver: bridge
 
 # ── Build Identity 锚（Platform Readiness STOP B1）──────────────
-# 所有代码承载服务共用：构建时注入 git commit / 构建时间（启动日志与
-# /health 回读）。发布脚本（scripts/release.sh / release checklist）负责
-# export GIT_COMMIT=$(git rev-parse --short HEAD)；未设置时 unknown——
-# 「运行容器不知道自己是哪个 commit」即视为发布流程违规（A8/P1-17）。
+# 后端代码镜像共用：注入 commit、构建时间和工作树状态（启动日志与
+# /health 回读）；发布入口要求干净工作树，本机构建明确标记 dirty。
 x-build: &build
   context: .
   args:
     GIT_COMMIT: ${GIT_COMMIT:-unknown}
     BUILD_TIME: ${BUILD_TIME:-unknown}
+    GIT_DIRTY: ${GIT_DIRTY:-unknown}
     DEBIAN_MIRROR: ${DEBIAN_MIRROR:-}
     RUNTIME_DEBIAN_MIRROR: ${RUNTIME_DEBIAN_MIRROR:-${DEBIAN_MIRROR:-}}
     PIP_INDEX_URL: ${PIP_INDEX_URL:-}
