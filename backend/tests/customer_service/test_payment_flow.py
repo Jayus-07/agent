@@ -1228,10 +1228,27 @@ def test_mock_refund_action_and_audit_persist_once_in_isolated_memory_pg():
             )
             assert all(cursor.fetchone()), "客服审计迁移未初始化到隔离测试库"
             cursor.execute(
-                "INSERT INTO customer_service.conversations "
-                "(conversation_id, user_id) VALUES (%s, %s)",
-                (conversation_id, user_id),
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema = 'customer_service' "
+                "AND table_name = 'conversations'",
             )
+            conversation_columns = {row[0] for row in cursor.fetchall()}
+            if "conversation_status" in conversation_columns:
+                cursor.execute(
+                    "INSERT INTO customer_service.conversations "
+                    "(conversation_id, user_id, conversation_status) "
+                    "VALUES (%s, %s, 'open')",
+                    (conversation_id, user_id),
+                )
+            elif "status" in conversation_columns:
+                cursor.execute(
+                    "INSERT INTO customer_service.conversations "
+                    "(conversation_id, user_id, status) "
+                    "VALUES (%s, %s, 'active')",
+                    (conversation_id, user_id),
+                )
+            else:
+                pytest.fail("客服会话表缺少可识别的状态列")
         conn.commit()
         conversation_created = True
 

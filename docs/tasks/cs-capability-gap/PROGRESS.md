@@ -220,3 +220,11 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - 纠正本轮首次测试的隔离疏漏：默认 pytest 收尾钩子会连接 MEMORY_DB_CONFIG 当前指向的共享 agent_memory:5433，执行任务表 ensure_schema() 并按 migration-test 条件清扫历史残留。该次收尾钩子已运行；其 DDL/DML 结果未核验，本记录不声称共享库未触碰。该守卫 SQL 只限定迁移测试标记记录，没有调用客服支付/退款动作。此后复验绕过该钩子，未再运行数据库清理。
 - **部署状态：UNVERIFIED**。本次代码修复尚未从 B4 worktree 重建共享服务；当前 agent Compose 项目包含多个 worktree 配置且 20 个容器运行，不能安全地单独重建替换。旧版 B4 部署证据不能覆盖本次修复。
 - PR #336 仍 OPEN；远端 HEAD 仍未包含这些本地修复，3 条 P2 需随后续提交更新。工作树未提交、未推送；q3 b4-acc-q3 未访问、未确认、未提交退款申请。
+
+### B4 CI schema 兼容修复（2026-11-06）
+
+- 提交 `91d54c5` 已推送到 PR #336。CI 的 `RAG Smoke preflight` 在新增持久审计 T2 用例失败：会话 schema 已从旧 `status` 列迁到 `conversation_status`，测试却依赖默认 `active`，触发状态约束。
+- 测试现查询会话表列名：新 schema 显式插入 `conversation_status='open'`，旧 schema 显式插入 `status='active'`。仅修正测试夹具，不改业务运行代码。
+- 在本任务独立 PostgreSQL 16 库上应用 006/031/050，并还原 020 中会话状态列迁移与检查约束后，重新运行真实审计持久化用例：**1 passed / 0 skipped**；`py_compile`、Ruff（忽略既有 I001）及 `git diff --check` 通过。
+- 首轮 CI：RAG Smoke preflight **失败**（单个新增 T2 夹具状态列问题）；Eval V2 free contract、Eval V2 admin、scan 和 RAG path detection **通过**；真实 API 评测按规则 skipped。修复尚未提交/推送，须重跑 CI 后再判断。
+- q3 `b4-acc-q3` 仍未访问、未确认、未提交退款申请。当前主容器由多个 worktree 配置组成，代码最终重建与运行时验收仍待依 PR 顺序集成后进行。
