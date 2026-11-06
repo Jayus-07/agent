@@ -37,6 +37,19 @@ Domain Graph 通过 backend/domains/__init__.py 与各域注册模块登记，bu
 - 产品专属流式对话的浏览器断连由 SSE 恢复层继续消费 producer；若 Runner 生成器本身被关闭，则设置取消信号停止后台图，避免无人消费时继续执行节点副作用。用户主动取消和图执行失败均不得写入成功轮次记忆。
 - Trace 与日志应记录必要的运行归因、耗时和错误类别，不写入敏感参数。
 
+## Checkpoint 启用与恢复边界
+
+图级 Checkpoint 保存 LangGraph 的执行状态，不替代会话历史、业务数据库或任务账本；打开开关本身也不会创建可供 API 使用的恢复入口。生产环境不需要把所有图一律打开，应按每条链路实际提供的暂停、续跑和跨请求状态契约决定。
+
+| 链路 | 当前实现 | 生产决策 |
+| --- | --- | --- |
+| 主图普通会话 | `MAIN_GRAPH_CHECKPOINTER_ENABLED` 默认 `false`。开启后每次主图执行仍用独立 `agent-<UUID>` thread_id；普通 `/agent` 没有按该 ID 恢复同一次中断运行的接口。多轮消息由 MemoryService 管理；开启还会把 RequestContext 转成 checkpoint-safe 字典，Send 并行分支的流式/Trace 绑定会降级。 | 普通问答保持关闭。需要暂停、等待用户或跨 Worker 恢复的多步骤任务走后台 TaskGraphExecutor。 |
+| 客服图 | `CS_CHECKPOINTER_ENABLED` 默认 `false`。客服域声明 `supports_checkpoint=true`、`supports_interrupt=false`；服务端身份齐全时 thread 为 `cs:{tenant}:{user}:{conversation}`，缺身份时使用较弱的 conversation 前缀。每轮入口从业务存储重载确认、转人工和会话状态，重置执行态；当前没有客服图 `Command(resume=...)` 路径。 | 普通客服流程可继续由业务库恢复，默认保持关闭。只有当产品确实依赖跨请求保留 LangGraph 执行态时才开启，并确保服务端 tenant/user 身份、状态清理和副作用幂等。 |
+| 旅游图 | Python 默认 `TRAVEL_CHECKPOINTER_ENABLED=false`；根 `docker-compose.yml` 的应用服务默认设为 `true`，后端为 PostgreSQL。旅游 thread 按租户、用户、会话隔离，行程 brief/itinerary 依赖它支持跨轮改单；只读问答图显式不挂 Checkpointer。`TRAVEL_USER_DECISION_INTERRUPT` 默认 `false`，只有启用时才走 interrupt 与后续 `Command(resume=...)`。 | 生产提供跨轮改单时保持 Checkpointer 开启。若明确关闭，产品需按每轮重新规划处理；不能把进程内 MemorySaver 误报成持久恢复。 |
+| 后台 TaskGraphExecutor | 独立于主图开关，始终构建 PostgreSQL Checkpointer，使用稳定 `task-{id}` thread；暂停、等待用户输入、Worker 接管和失败重试依赖已保存状态。 | 只要后台任务提供暂停/等待/恢复，就必须使用持久 PostgreSQL Checkpointer。PostgreSQL 不可用时失败关闭，不能回退内存后继续宣称可恢复。 |
+
+主图、客服图和旅游图启用持久 Checkpointer 时，生产环境缺少 PostgreSQL Checkpointer 后端会 fail-loud；`CHECKPOINTER_ALLOW_DEGRADE=true` 是显式接受 MemorySaver 的例外，MemorySaver 不支持进程重启或多 Worker 间恢复。三类业务图共享 Checkpoint 表与清理守护，默认保留期为 7 天；变更保留期前需核对共享清理配置和敏感状态留存要求。
+
 ## Node Runtime
 
 专家和域内节点的通用执行生命周期由 `backend/core/node_runtime/` 提供：执行上下文 → start hook → 节点调用 → 错误/超时策略 → `NodeResult` →完成/错误 hook。它只处理节点级错误策略与超时，不承担 Tool 的重试、熔断、并发隔离或副作用治理。
