@@ -27,6 +27,7 @@ class ActionType:
     ADDRESS_UPDATE = "address_update"
     PASSWORD_RESET = "password_reset"
     ORDER_CANCEL = "order_cancel"
+    ADDRESS_CHANGE = "address_change"
     REFUND_EXECUTE = "refund_execute"
     RETURN_EXECUTE = "return_execute"
 

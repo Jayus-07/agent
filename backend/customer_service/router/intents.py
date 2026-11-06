@@ -16,6 +16,7 @@ FINE_INTENTS: dict[str, str] = {
     "t_points_query": "积分与等级查询",
     "t_coupon_query": "优惠券查询与用券校验",
     "t_logistics": "物流查询",
+    "t_change_address_in_transit": "在途订单改地址",
     "t_ticket_status": "工单进度查询",
     "t_refund_status": "退款申请进度查询",
     "t_delivery_estimate": "配送时效",
@@ -109,6 +110,12 @@ INTENT_PROFILES: dict[str, IntentProfile] = {
         intent="t_logistics", domain=CSDomain.TRANSACTION,
         requires_auth=True, route_path=CSRoutePath.BUSINESS_QUERY,
         kb_ids=["cs_faq"],
+    ),
+    "t_change_address_in_transit": IntentProfile(
+        intent="t_change_address_in_transit", domain=CSDomain.TRANSACTION,
+        requires_auth=True, requires_action=True, risk_level="medium",
+        route_path=CSRoutePath.BUSINESS_ACTION,
+        kb_ids=["cs_policy", "cs_faq"],
     ),
     # 批次C：工单进度查询（投诉工单/转人工工单落库后用户可查）
     "t_ticket_status": IntentProfile(

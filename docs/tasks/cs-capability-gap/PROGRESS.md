@@ -134,6 +134,20 @@
 
 **收尾**：rag_smoke 清单 +`test_coupon_flow.py`；GAP_LIST 优惠券行改「已覆盖（政策问答 + B3 意图级券查询/用券校验）」；customer-service.md 第 8/49 行同步；mock/迁移种子与 coupon-policy.md/FAQ id=23 三方一致。
 
+## B7：在途订单改地址 —— 实施中（2026-11-06，分支 feat/cs-address-change）
+
+**当前实现**：新增在途状态复核、订单级改址提案/确认、business-mock 幂等模拟登记、每单一次限制、真实订单/承运方零副作用；地址缺槽走既有 need_info → proposal → 用户确认；成功后 `agent_actions` 的 after_state 保存模拟状态和请求 ID。账号默认地址能力保持原语义；`.env.example` 登记默认关闭的 `CS_ADDRESS_CHANGE_MODE` 与 HTTP mock 联调说明。
+
+**验证证据**：B7 定向 `test_address_change_flow.py` 当前 **10/10 通过**，含独立 PostgreSQL T2：应用状态迁移 050 与 B7 迁移 137 后，真实 `AuditRepository` 将 `address_change/simulated`、订单/地址/请求 ID 和两个“真实副作用为 false”标志写入 `agent_actions` 并读回。客服双门禁与相邻回归最新 **212 passed, 2 skipped**；`py_compile`、涉及 Python 文件 Ruff、`git diff --check` 通过。独立 PG 仅绑定 `127.0.0.1:15435`，没有连接共享业务库。
+
+**本轮补强**：HTTP 写请求已成功到达 mock、但客户端得到非标准异常时，现在映射到既有 `verifying/in_doubt` 状态；新增端到端测试验证 mock 已登记一笔、用户被提示勿重复提交且审计结果为 `in_doubt`。这不增加人工审核流程，也不改变真实订单或物流商状态。
+
+**环境说明**：本轮 212 用例命令复用了任务专属 PG `15435`，B7 AuditRepository T2 通过；points/coupon 两个 sandbox T2 因未配置其独立 DSN 而跳过。通用 residue guard 因 worktree 无 `.env` 尝试连接 `localhost:5432` 并报无密码/PoolTimeout，pytest 退出码为 0。共享数据库未被操作。
+
+**未验收**：B7 代码尚未从本 worktree 重建部署；当前 `agent` Compose 项目由多个 worktree 的配置共同组成，不能安全地用单一 B7 worktree 重建替换。共享栈当前服务健康不等于 B7 已部署；真机对话尚未验收，状态为 **UNVERIFIED**。待共享栈配置可安全归属/重建后再做代码部署与真机验收。
+
+**迁移顺序约束**：本分支迁移 137 保留 B5 135 的 `urge_request` 与 B6 136 的 `price_match`；B7 PR/迁移须排在 135/136 之后合入并按序应用，避免旧迁移后到时收窄约束。
+
 ## 后续批次
 
 B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。

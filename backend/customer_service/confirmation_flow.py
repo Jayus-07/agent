@@ -57,8 +57,6 @@ def process_confirmation(
     请求上下文 ContextVar，再回退 "default"——只影响幂等 ledger 的
     租户隔离维度，不改变任何状态机行为。
     """
-    action_type = pending_action.get("action_type", "unknown")
-
     # ── 1. 过期检查（响应式；后台 Celery 扫描见 P2.4）──
     if confirmation_sm.is_expired(pending_action):
         return _handle_expired(pending_action, user_id, session_id)
@@ -132,11 +130,11 @@ def _handle_expired(
     from backend.customer_service.confirmation_store import get_confirmation_store
     from backend.observability.metrics import record_cs_confirmation
 
-    CS = confirmation_sm.ConfirmationState
-    confirmation_sm.transition(CS.PENDING_CONFIRMATION, CS.EXPIRED)
+    cs = confirmation_sm.ConfirmationState
+    confirmation_sm.transition(cs.PENDING_CONFIRMATION, cs.EXPIRED)
     # P1：终态写 expired（此前被 repo.clear 一律写成 cancelled）
     get_confirmation_store().clear(
-        user_id, session_id, final_state=CS.EXPIRED.value,
+        user_id, session_id, final_state=cs.EXPIRED.value,
     )
     record_cs_confirmation("expired")
 
@@ -187,6 +185,7 @@ def _execute_confirmed_action(
     confirmation_id = str(pending_action.get("action_id", "") or "")
     action_type = str(pending_action.get("action_type", "") or "")
     refund_request_written = False
+    address_change_written = False
     if action_type == "refund_request":
         if not confirmation_id or not user_id or not tenant_id or not session_id:
             from backend.customer_service.errors import RefundRequestUnavailableError
@@ -226,6 +225,26 @@ def _execute_confirmed_action(
                 conversation_id=session_id,
             )
             return action_record.to_dict()
+    elif action_type == "address_change":
+        from backend.customer_service.errors import AddressChangeUnavailableError
+
+        if not confirmation_id or not user_id or not tenant_id or not session_id:
+            raise AddressChangeUnavailableError("订单改址确认缺少可信上下文")
+        from backend.customer_service.service.address_change_service import (
+            get_address_change_service,
+        )
+
+        def execute() -> dict:
+            nonlocal address_change_written
+            action_record = get_address_change_service().execute_confirmed_action(
+                pending_action,
+                confirmation_id=confirmation_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                conversation_id=session_id,
+            )
+            address_change_written = True
+            return action_record.to_dict()
     else:
         def execute() -> dict:
             return _simulate_execute(pending_action).to_dict()
@@ -240,6 +259,9 @@ def _execute_confirmed_action(
         # risk_level 是 proposal 语义的一部分：变更 = 不同请求（冲突检测）
         "risk_level": pending_action.get("risk_level", ""),
     }
+    if action_type == "address_change":
+        payload["before_state"] = pending_action.get("before_state", {})
+        payload["after_state"] = pending_action.get("after_state", {})
     resolved_tenant = tenant_id or get_tool_tenant_id() or "default"
     try:
         return run_idempotent_side_effect(
@@ -254,6 +276,10 @@ def _execute_confirmed_action(
         if action_type == "refund_request" and refund_request_written:
             raise SideEffectOutcomeUnknown(
                 "退款申请操作已写入，但幂等终态未能确认"
+            ) from exc
+        if action_type == "address_change" and address_change_written:
+            raise SideEffectOutcomeUnknown(
+                "改址模拟请求已登记，但幂等终态未能确认"
             ) from exc
         raise
 
@@ -271,7 +297,7 @@ def _handle_confirm(
     from backend.shared.idempotency import SideEffectOutcomeUnknown
 
     store = get_confirmation_store()
-    CS = confirmation_sm.ConfirmationState
+    cs = confirmation_sm.ConfirmationState
     action_type = pending_action.get("action_type", "unknown")
     refund_operation = str(
         ((pending_action.get("after_state") or {}).get("operation") or "create")
@@ -307,12 +333,12 @@ def _handle_confirm(
             kind="duplicate",
             answer="该操作已处理过，无需重复确认。如需再次操作请重新发起。",
             action_type=action_type,
-            confirmation_state=CS.USER_CONFIRMED.value,
+            confirmation_state=cs.USER_CONFIRMED.value,
             audit_entry=audit_entry,
         )
 
-    confirmation_sm.transition(CS.PENDING_CONFIRMATION, CS.USER_CONFIRMED)
-    confirmation_sm.transition(CS.USER_CONFIRMED, CS.EXECUTING)
+    confirmation_sm.transition(cs.PENDING_CONFIRMATION, cs.USER_CONFIRMED)
+    confirmation_sm.transition(cs.USER_CONFIRMED, cs.EXECUTING)
     record_cs_confirmation("confirmed")
 
     try:
@@ -320,8 +346,8 @@ def _handle_confirm(
             pending_action, user_id=user_id, tenant_id=tenant_id,
             session_id=session_id,
         )
-        confirmation_sm.transition(CS.EXECUTING, CS.SUCCESS)
-        store.clear(user_id, session_id, final_state=CS.SUCCESS.value)
+        confirmation_sm.transition(cs.EXECUTING, cs.SUCCESS)
+        store.clear(user_id, session_id, final_state=cs.SUCCESS.value)
         record_cs_action(action_type, "success")
 
         action_result = {
@@ -350,7 +376,15 @@ def _handle_confirm(
                     "order cancelled; funds refunded to wallet; order_no="
                     + str(record.get("target_id", ""))
                     if action_type == "order_cancel"
-                    else f"simulated execution, action_id={record.get('action_id', '')}"
+                    else (
+                        "simulated address-change request registered; "
+                        "real order address unchanged; carrier not notified; request_id="
+                        + str(((record.get("data") or {}).get(
+                            "address_change_request", {},
+                        )).get("request_id", ""))
+                        if action_type == "address_change"
+                        else f"simulated execution, action_id={record.get('action_id', '')}"
+                    )
                 )
             ),
             # agent_actions.conversation_id NOT NULL + FK（006）：审计落库
@@ -387,6 +421,16 @@ def _handle_confirm(
                 f"**货款已退回账户余额:** ¥{float(wallet.get('balance') or 0):.2f}\n"
                 "可在「资金流水」查看退款入账记录。"
             )
+        elif action_type == "address_change":
+            request = (record.get("data") or {}).get(
+                "address_change_request", {},
+            )
+            answer = (
+                "✅ 改址模拟请求已登记。\n\n"
+                f"**订单号:** `{record.get('target_id', '')}`\n"
+                f"**模拟请求编号:** `{request.get('request_id', '')}`\n"
+                "这只是演示环境记录：真实订单地址未修改，也未通知真实承运方。"
+            )
         else:
             answer = (
                 f"✅ 操作已提交成功！\n\n"
@@ -399,7 +443,7 @@ def _handle_confirm(
             kind="success",
             answer=answer,
             action_type=action_type,
-            confirmation_state=CS.SUCCESS.value,
+            confirmation_state=cs.SUCCESS.value,
             action_result=action_result,
             audit_entry=audit_entry,
         )
@@ -410,7 +454,7 @@ def _handle_confirm(
         # 生命周期含 verifying），STOP E reconciliation 裁决前禁止同语义
         # 操作再次创建。绝不落 failed（那会释放 guard 绕过 STOP C）。
         from backend.customer_service.confirmation import ConfirmationState
-        confirmation_sm.transition(CS.EXECUTING, ConfirmationState.VERIFYING)
+        confirmation_sm.transition(cs.EXECUTING, ConfirmationState.VERIFYING)
         store.clear(user_id, session_id,
                     final_state=ConfirmationState.VERIFYING.value)
         record_cs_action(action_type, "verifying")
@@ -439,8 +483,8 @@ def _handle_confirm(
         )
 
     except Exception as e:
-        confirmation_sm.transition(CS.EXECUTING, CS.FAILED)
-        store.clear(user_id, session_id, final_state=CS.FAILED.value)
+        confirmation_sm.transition(cs.EXECUTING, cs.FAILED)
+        store.clear(user_id, session_id, final_state=cs.FAILED.value)
         record_cs_action(action_type, "failed")
         audit_entry = build_audit_entry(
             user_id=user_id,
@@ -457,7 +501,7 @@ def _handle_confirm(
                 or "操作执行失败，请稍后重试或联系人工客服。"
             ),
             action_type=action_type,
-            confirmation_state=CS.FAILED.value,
+            confirmation_state=cs.FAILED.value,
             audit_entry=audit_entry,
         )
 
@@ -474,7 +518,7 @@ def _handle_cancel(
     from backend.customer_service.confirmation_store import get_confirmation_store
     from backend.observability.metrics import record_cs_confirmation
 
-    CS = confirmation_sm.ConfirmationState
+    cs = confirmation_sm.ConfirmationState
     store = get_confirmation_store()
     versioned_cancel = bool(tenant_id and expected_version is not None)
     if versioned_cancel:
@@ -499,13 +543,13 @@ def _handle_cancel(
                 kind="duplicate",
                 answer="待确认操作已更新或已处理，请刷新会话状态。",
                 action_type=pending_action.get("action_type", "unknown"),
-                confirmation_state=CS.USER_CANCELLED.value,
+                confirmation_state=cs.USER_CANCELLED.value,
                 audit_entry=audit_entry,
             )
     else:
         store.clear(user_id, session_id)  # graph 内自然语言取消的旧入口
 
-    confirmation_sm.transition(CS.PENDING_CONFIRMATION, CS.USER_CANCELLED)
+    confirmation_sm.transition(cs.PENDING_CONFIRMATION, cs.USER_CANCELLED)
     record_cs_confirmation("cancelled")
 
     action_type = pending_action.get("action_type", "unknown")
@@ -523,7 +567,7 @@ def _handle_cancel(
         kind="cancelled",
         answer="操作已取消。如有其他问题，请随时咨询。",
         action_type=action_type,
-        confirmation_state=CS.USER_CANCELLED.value,
+        confirmation_state=cs.USER_CANCELLED.value,
         audit_entry=audit_entry,
     )
 

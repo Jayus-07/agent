@@ -20,6 +20,7 @@ app = FastAPI(title="business-service mock", docs_url=None, redoc_url=None)
 _INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 _STATE_LOCK = threading.RLock()
 _REFUND_REQUESTS: dict[tuple[str, str, str], dict[str, Any]] = {}
+_ADDRESS_CHANGE_REQUESTS: dict[tuple[str, str], dict[str, Any]] = {}
 _OPERATIONS: dict[tuple[str, str], dict[str, Any]] = {}
 # P2 商城 Mock 账本：订单可变状态与钱包（金额一律 Decimal，禁浮点累加）
 _ORDERS: dict[tuple[str, str], dict[str, Any]] = {}
@@ -66,6 +67,15 @@ class RefundReasonUpdateInput(BaseModel):
     user_id: str = Field(min_length=1, max_length=128)
     tenant_id: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class AddressChangeInput(BaseModel):
+    operation_key: str = Field(min_length=8, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    expected_shipping_status: str = Field(min_length=1, max_length=32)
+    new_address: str = Field(min_length=6, max_length=255)
 
 
 class WalletTopUpInput(BaseModel):
@@ -499,6 +509,7 @@ def reset_mock_state() -> None:
     """重置售后内存状态，供隔离测试使用。"""
     with _STATE_LOCK:
         _REFUND_REQUESTS.clear()
+        _ADDRESS_CHANGE_REQUESTS.clear()
         _OPERATIONS.clear()
         _ORDERS.clear()
         _WALLETS.clear()
@@ -574,6 +585,73 @@ def get_order_logistics(
     if order is None:
         raise HTTPException(status_code=404, detail="order not found")
     return _ok({"logistics": _logistics(order)})
+
+
+@app.post("/business/logistics/{order_no}/change-address")
+def change_address_in_transit(
+    order_no: str,
+    payload: AddressChangeInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """只登记演示改址请求；不改订单、不调用真实承运方。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    tenant_id = payload.tenant_id.strip()
+    normalized_order_no = order_no.strip()
+    if normalized_order_no.casefold() != payload.order_no.strip().casefold():
+        raise HTTPException(status_code=422, detail="order number mismatch")
+    operation_payload = {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "order_no": normalized_order_no,
+        "expected_shipping_status": payload.expected_shipping_status.strip().lower(),
+        "new_address": payload.new_address.strip(),
+    }
+    operation_key = ("address-change", payload.operation_key)
+    with _STATE_LOCK:
+        prior = _OPERATIONS.get(operation_key)
+        if prior is not None:
+            if prior["payload"] != operation_payload:
+                raise HTTPException(status_code=409, detail="request key payload conflict")
+            return _ok({"address_change_request": dict(prior["request"])})
+
+        order = _find_order(user_id, normalized_order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        logistics = _logistics(order)
+        if (
+            order.get("status") != "shipped"
+            or logistics.get("shipping_status") != "shipped"
+            or operation_payload["expected_shipping_status"] != "shipped"
+        ):
+            raise HTTPException(status_code=409, detail="order is not in transit")
+        already_requested = any(
+            item.get("user_id") == user_id
+            and str(item.get("order_no") or "").casefold()
+            == normalized_order_no.casefold()
+            for item in _ADDRESS_CHANGE_REQUESTS.values()
+        )
+        if already_requested:
+            raise HTTPException(status_code=409, detail="address change already requested")
+
+        request = {
+            "request_id": payload.operation_key,
+            "order_no": order["order_no"],
+            "new_address": payload.new_address.strip(),
+            "status": "simulated",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "real_carrier_notified": False,
+            "real_order_address_changed": False,
+        }
+        _ADDRESS_CHANGE_REQUESTS[(user_id, payload.operation_key)] = {
+            **operation_payload,
+            **request,
+        }
+        _OPERATIONS[operation_key] = {
+            "payload": operation_payload,
+            "request": dict(request),
+        }
+        return _ok({"address_change_request": request})
 
 
 # ── P2 商城 Mock 账本：钱包 / 创建订单 / 支付 / 取消 ─────────────
