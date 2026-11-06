@@ -4,7 +4,7 @@
 #       后续承载 Sessions 聚合 / Cost 聚合 / Prompts / 评测数据集。
 #
 # 设计约束：
-#   - 与主业务栈（docker-compose.yml）、Langfuse 栈（docker-compose.langfuse.yml）完全隔离
+#   - 与主业务栈（docker-compose.yml）完全隔离
 #   - 宿主机端口 5433（5432 被本机原生 PostgreSQL 18 占用）
 #   - 专用卷，不影响任何其他数据
 #
