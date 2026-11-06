@@ -120,7 +120,15 @@ def _invoice_view(raw: dict[str, Any]) -> dict[str, Any]:
 class InvoiceService:
     """发票抬头/模拟记录双模式读取，申请写入只走 business-mock。"""
 
+    @staticmethod
+    def _business_user_id(user_id: str) -> str:
+        """仅映射业务数据身份；认证与授权始终使用原始登录身份。"""
+        from backend.customer_service.service.demo_mode import resolve_user_id
+
+        return str(resolve_user_id(user_id))
+
     def get_titles(self, user_id: str, tenant_id: str) -> list[dict[str, Any]]:
+        business_user_id = self._business_user_id(user_id)
         if _use_http_gateway():
             try:
                 _ensure_business_mock_endpoint()
@@ -128,7 +136,10 @@ class InvoiceService:
 
                 data = _unwrap(get_json_sync(
                     "/business/invoice-titles",
-                    params={"user_id": str(user_id), "tenant_id": str(tenant_id)},
+                    params={
+                        "user_id": business_user_id,
+                        "tenant_id": str(tenant_id),
+                    },
                 ))
                 return [
                     _title_view(item)
@@ -139,17 +150,21 @@ class InvoiceService:
                 raise
             except Exception as exc:
                 raise _map_gateway_error(exc) from exc
-        return self._titles_local(user_id, tenant_id)
+        return self._titles_local(business_user_id, tenant_id)
 
     def get_invoices(
         self, user_id: str, tenant_id: str, order_no: str = "",
     ) -> list[dict[str, Any]]:
+        business_user_id = self._business_user_id(user_id)
         if _use_http_gateway():
             try:
                 _ensure_business_mock_endpoint()
                 from backend.infra.http.business_client import get_json_sync
 
-                params = {"user_id": str(user_id), "tenant_id": str(tenant_id)}
+                params = {
+                    "user_id": business_user_id,
+                    "tenant_id": str(tenant_id),
+                }
                 if order_no:
                     params["order_no"] = str(order_no)
                 data = _unwrap(get_json_sync("/business/invoices", params=params))
@@ -162,7 +177,7 @@ class InvoiceService:
                 raise
             except Exception as exc:
                 raise _map_gateway_error(exc) from exc
-        return self._invoices_local(user_id, tenant_id, order_no)
+        return self._invoices_local(business_user_id, tenant_id, order_no)
 
     def _titles_local(
         self, user_id: str, tenant_id: str,
@@ -360,7 +375,6 @@ class InvoiceService:
         ):
             raise OrderNotEligibleError("该订单已使用此抬头登记过模拟开票申请")
 
-        from backend.customer_service.service.demo_mode import resolve_user_id
         from backend.infra.http.business_client import (
             BusinessServiceError,
             post_json_sync,
@@ -369,7 +383,7 @@ class InvoiceService:
 
         payload = {
             "operation_key": stable_confirmation_id,
-            "user_id": str(resolve_user_id(user_id)),
+            "user_id": self._business_user_id(user_id),
             "tenant_id": tenant_id,
             "conversation_id": conversation_id,
             "order_no": order_no,

@@ -264,6 +264,90 @@ def test_invoice_action_without_order_asks_instead_of_guessing(
     assert store.pending[(user_id, "cs-invoice-slot")] == pending
 
 
+def test_invoice_slot_fill_preserves_title_and_paper_type(http_wire, monkeypatch):
+    from types import SimpleNamespace
+
+    from backend.customer_service import confirmation_store
+    from backend.customer_service.context import semantic_slots
+    from backend.customer_service.experts.action import execute_action
+    from backend.customer_service.security.permission import PermissionChecker
+
+    user_id, tenant_id = "customer-invoice-slot-fill", "tenant-invoice"
+    order = _paid_order(http_wire, user_id)
+    store = _FakeConfirmStore()
+    monkeypatch.setattr(confirmation_store, "get_confirmation_store", lambda: store)
+    monkeypatch.setattr(
+        PermissionChecker, "validate_user_identity", lambda _state: user_id,
+    )
+    monkeypatch.setattr(
+        semantic_slots, "resolve_from_metadata",
+        lambda *_args: SimpleNamespace(
+            resolved=False, ambiguous=False, order_id="", candidates=[],
+        ),
+    )
+    state = {
+        "session_id": "cs-invoice-slot-company",
+        "cs_context": {"tenant_id": tenant_id},
+    }
+    route = {"intent": "t_invoice_request", "metadata": {}}
+
+    first = execute_action("请用企业抬头帮我开票", route, state)
+    assert first["data"]["pending_action"]["collected_slots"][
+        "invoice_title_selector"
+    ]
+    second = execute_action(order["order_no"], route, state)
+    assert second["data"]["pending_action"]["after_state"][
+        "title_type"
+    ] == "company"
+
+    paper_state = {
+        "session_id": "cs-invoice-slot-paper",
+        "cs_context": {"tenant_id": tenant_id},
+    }
+    paper_first = execute_action("请帮我开纸质发票", route, paper_state)
+    assert paper_first["data"]["pending_action"]["collected_slots"][
+        "invoice_type"
+    ] == "paper"
+    paper_second = execute_action(
+        order["order_no"],
+        {"intent": "t_invoice_request", "metadata": {"invoice_type": "electronic"}},
+        paper_state,
+    )
+    assert "只支持电子开票申请" in paper_second["response_draft"]
+    assert "pending_action" not in paper_second["data"]
+
+
+def test_invoice_demo_mode_uses_business_identity_for_reads_and_write(
+    http_wire, monkeypatch,
+):
+    from backend.config import customer_service as cfg
+    from backend.customer_service import confirmation_store
+    from backend.customer_service.confirmation_flow import process_confirmation
+
+    login_user = "registered-invoice-demo-user"
+    demo_user = "demo-customer-invoice"
+    tenant_id = "tenant-invoice-demo"
+    monkeypatch.setattr(cfg, "CS_DEMO_MODE", True)
+    monkeypatch.setattr(cfg, "CS_DEMO_CUSTOMER_ID", demo_user)
+
+    order = _paid_order(http_wire, demo_user)
+    service = InvoiceService()
+    assert service.get_titles(login_user, tenant_id)
+
+    store = _FakeConfirmStore()
+    monkeypatch.setattr(confirmation_store, "get_confirmation_store", lambda: store)
+    pending, session_id = _save_confirmation(
+        store, login_user, tenant_id, order["order_no"],
+    )
+    outcome = process_confirmation(
+        pending, "确认", login_user, session_id, tenant_id=tenant_id,
+    )
+
+    assert outcome.kind == "success"
+    assert len(business_mock._INVOICES[(tenant_id, demo_user)]) == 1
+    assert business_mock._INVOICES.get((tenant_id, login_user), []) == []
+
+
 def test_disabled_or_unallowlisted_invoice_write_fails_closed(
     http_wire, monkeypatch,
 ):

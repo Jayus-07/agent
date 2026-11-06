@@ -89,6 +89,38 @@ def _resolve_tenant(state: dict[str, Any]) -> str:
     return ctx_tenant or get_tool_tenant_id() or "default"
 
 
+def _invoice_request_slots(
+    cs_route: dict, user_message: str,
+) -> tuple[str, str]:
+    """提取补槽期间需要保留的发票抬头选择和发票类型。"""
+    metadata = cs_route.get("metadata") or {}
+    title_selector = str(
+        metadata.get("invoice_title_id")
+        or metadata.get("invoice_title_name")
+        or metadata.get("invoice_title_selector")
+        or ""
+    ).strip()
+    if not title_selector:
+        for slot in metadata.get("semantic_slots") or []:
+            if isinstance(slot, dict) and slot.get("name") in {
+                "invoice_title_id", "invoice_title_name", "invoice_title",
+            }:
+                title_selector = str(slot.get("value") or "").strip()
+                if title_selector:
+                    break
+    if not title_selector and any(
+        word in user_message for word in ("个人", "自然人", "企业", "公司", "单位")
+    ):
+        title_selector = user_message
+
+    invoice_type = str(metadata.get("invoice_type") or "electronic").strip()
+    if "纸质" in user_message:
+        invoice_type = "paper"
+    elif "电子" in user_message:
+        invoice_type = "electronic"
+    return title_selector, invoice_type
+
+
 def execute_action(
     user_message: str,
     cs_route: dict,
@@ -178,6 +210,14 @@ def execute_action(
         new_address = extract_new_address(cs_route, user_message)
         if new_address:
             collected_slots = {"new_address": new_address}
+    elif intent == "t_invoice_request":
+        title_selector, invoice_type = _invoice_request_slots(
+            cs_route, user_message,
+        )
+        collected_slots = {
+            "invoice_title_selector": title_selector,
+            "invoice_type": invoice_type,
+        }
 
     if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
         try:
@@ -926,27 +966,9 @@ def _build_proposal(
             get_invoice_service,
         )
 
-        metadata = cs_route.get("metadata") or {}
-        title_selector = str(
-            metadata.get("invoice_title_id")
-            or metadata.get("invoice_title_name")
-            or ""
-        ).strip()
-        if not title_selector:
-            for slot in metadata.get("semantic_slots") or []:
-                if slot.get("name") in {
-                    "invoice_title_id", "invoice_title_name", "invoice_title",
-                }:
-                    title_selector = str(slot.get("value") or "").strip()
-                    if title_selector:
-                        break
-        if not title_selector and any(
-            word in user_message for word in ("个人", "自然人", "企业", "公司", "单位")
-        ):
-            title_selector = user_message
-        invoice_type = str(metadata.get("invoice_type") or "electronic").strip()
-        if "纸质" in user_message:
-            invoice_type = "paper"
+        title_selector, invoice_type = _invoice_request_slots(
+            cs_route, user_message,
+        )
         order_id = _resolve_order_id(cs_route, user_message)
         return get_invoice_service().build_invoice_proposal(
             user_id=user_id,
@@ -1525,6 +1547,23 @@ def _handle_slot_fill(
                     order_id=order_id, tenant_id=tenant_id,
                 )
             metadata["new_address"] = address
+        elif intent == "t_invoice_request":
+            collected_slots = pending_action.get("collected_slots") or {}
+            title_selector, _ = _invoice_request_slots(cs_route, user_message)
+            if not title_selector and collected_slots.get("invoice_title_selector"):
+                metadata["invoice_title_selector"] = collected_slots[
+                    "invoice_title_selector"
+                ]
+            has_current_invoice_type = (
+                metadata.get("invoice_type") == "paper"
+                or "纸质" in user_message
+                or "电子" in user_message
+            )
+            if (
+                not has_current_invoice_type
+                and collected_slots.get("invoice_type")
+            ):
+                metadata["invoice_type"] = collected_slots["invoice_type"]
         cs_route["metadata"] = metadata
         logger.info(
             "[ActionExpert] slot filled: order_id=%s intent=%s", order_id, intent,

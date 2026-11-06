@@ -302,3 +302,5 @@ B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线�
 - 关键约束：只允许符合状态的订单及已有 active 抬头；确认时重核业务事实；写入走幂等和现有审计，未知结果进入 `verifying`。迁移 138/139、路径过滤、`rag_smoke` 定向测试及契约/客服文档已随 B8 分支增加。
 - B8 独立分支既有证据：发票流程 **13 passed / 0 skipped**；隔离 PostgreSQL 审计 T2 **1 passed**，验证 action、audit、幂等记录各一条且真实开票标记为 false；mock HTTP 冒烟、mock 与坐席前端构建通过。
 - 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。集成组合回归 **262 passed / 6 skipped**；PR #341 首轮 CI 发现审计 T2 fixture 对迁移后的会话状态默认值不兼容。fixture 现在按 schema 选择 `conversation_status=open` 或旧列 `status=active`；独立 PostgreSQL T2 **1 passed**。CI 修复重跑、主容器重建和运行时验收待完成。
+- PR 自动审查发现两项补槽/演示身份问题，已在后续修改中修复：发票抬头和记录读取现与确认写入使用同一演示业务身份，认证/权限仍保留真实登录身份；缺订单号时将抬头选择及纸质/电子类型写入既有 `collected_slots`，补槽时恢复。新增两个回归覆盖企业抬头补槽、纸质类型拒绝及 demo 模式完整确认链路。
+- 审查修复后的本地验证：完整 `test_invoice_flow.py` **14 passed / 1 skipped**；新增用例筛选 **2 passed**；三个改动 Python 文件 `py_compile`、Ruff 与 `git diff --check` 均通过。pytest 进程退出前仍输出既有全局 `TaskService.ensure_schema` / residue guard PostgreSQL PoolTimeout 日志；未影响退出码，本轮 PR CI 与运行时重建复核待完成。
