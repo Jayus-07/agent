@@ -355,6 +355,11 @@ MIGRATION_TARGETS: dict[str, str] = {
     # 优惠券档案 + 核销记录（cs-capability-gap B3）：marketing.coupons
     # + marketing.coupon_redemptions（agent_business 库，含建 marketing schema）。
     "133_cs_coupon.sql": "business",
+    # 客服支付、催办、价保、改址及发票迁移分别应用到业务库/审计库。
+    "134_cs_payment.sql": "business",
+    "135_cs_urge_request_action_type.sql": "memory",
+    "136_cs_price_match_action_type.sql": "memory",
+    "137_cs_address_change_action_type.sql": "memory",
     "138_cs_invoice_business.sql": "business",
     "139_cs_invoice_action_type.sql": "memory",
 }

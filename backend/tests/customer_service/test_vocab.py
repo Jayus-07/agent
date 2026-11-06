@@ -23,7 +23,10 @@ class TestSingleSource:
         # 词/句式 + 出域豁免「等级/权益」（golden T-015 政策问句口径不翻域）
         # 2026-11-06.1：B8 发票查询/申请（cs-capability-gap）——TRANSACTION
         # 域词/句式（「优惠券怎么领/能不能叠加」政策问句 KNOWLEDGE 口径不翻域）
-        assert vocab.VOCAB_VERSION == "2026-11-06.1"
+        # 2026-11-05.1：B4 支付流水查询。
+        # 2026-11-06.1：B5 催发货/催派送；.2：B6 价保与 B7 在途改址。
+        # 2026-11-06.3：B8 发票查询/确认后模拟申请。
+        assert vocab.VOCAB_VERSION == "2026-11-06.3"
 
     def test_risk_markers_cover_cross_user_refund_attacks(self):
         from backend.customer_service.context.understanding.signals import (

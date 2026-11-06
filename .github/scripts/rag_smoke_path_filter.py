@@ -217,7 +217,11 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/132_cs_points.sql",
     # 优惠券档案 + 核销记录（B3 客服业务数据面，与模型调用无关）
     "backend/sql/migrations/133_cs_coupon.sql",
-    # 发票抬头与模拟开票记录（B8 客服业务数据面，与模型调用无关）
+    # 客服支付、催办、价保、改址与发票迁移均不调用模型。
+    "backend/sql/migrations/134_cs_payment.sql",
+    "backend/sql/migrations/135_cs_urge_request_action_type.sql",
+    "backend/sql/migrations/136_cs_price_match_action_type.sql",
+    "backend/sql/migrations/137_cs_address_change_action_type.sql",
     "backend/sql/migrations/138_cs_invoice_business.sql",
     "backend/sql/migrations/139_cs_invoice_action_type.sql",
 })

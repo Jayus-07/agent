@@ -275,7 +275,9 @@ async def _async_persist_audit(audit_entries: list, action_record: dict | None) 
                     **action_record,
                     "conversation_id": first.get("conversation_id", ""),
                     "user_id": first.get("user_id", ""),
-                    "confirmation_state": "success",
+                    "confirmation_state": action_record.get(
+                        "confirmation_state", "success",
+                    ),
                 },
                 audit_entries,
                 tenant_id=get_tool_tenant_id() or "default",

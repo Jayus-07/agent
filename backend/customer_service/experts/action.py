@@ -11,9 +11,11 @@ import re
 from typing import Any
 
 from backend.customer_service.errors import (
+    AddressChangeUnavailableError,
     DatabaseError,
     OrderNotEligibleError,
     OrderNotFoundError,
+    PriceMatchUnavailableError,
     RefundRequestUnavailableError,
 )
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -28,6 +30,10 @@ _INTENT_ACTION_MAP = {
     "a_password":  "password",
     "t_order_cancel": "order_cancel",
     "t_invoice_request": "invoice",
+    "t_change_address_in_transit": "address_change",
+    "t_price_match": "price_match",
+    "t_urge_shipping": "urge_request",
+    "t_urge_delivery": "urge_request",
 }
 
 # 缺槽位需要追问的动作意图（缺陷6.2）：refund/return/exchange 以订单为
@@ -35,6 +41,9 @@ _INTENT_ACTION_MAP = {
 _SLOT_ORDER_INTENTS = frozenset({
     "as_refund", "as_return", "as_exchange", "t_order_cancel",
     "t_invoice_request",
+    "t_change_address_in_transit",
+    "t_price_match",
+    "t_urge_shipping", "t_urge_delivery",
 })
 
 _ACTION_TYPE_LABELS = {
@@ -45,6 +54,10 @@ _ACTION_TYPE_LABELS = {
     "password_reset": "密码重置",
     "order_cancel": "取消订单",
     "invoice_request": "模拟开票申请",
+    "address_change": "订单改址",
+    "address_change_request": "订单改址",
+    "price_match": "价保退差价",
+    "urge_request": "物流催办",
 }
 
 # 语义槽位解析失败的空结果占位已移除——异常路径统一走 _new_empty_resolution()
@@ -156,6 +169,16 @@ def execute_action(
     # 引用）按真实业务数据解析 —— 唯一匹配自动绑定落穿 proposal（资格
     # 校验照常），多候选进点选，无匹配保持既有追问。业务服务故障如实
     # 告知不可用（与 proposal 阶段同口径），不伪装成「没有匹配」。
+    collected_slots = None
+    new_address = ""
+    if intent == "t_change_address_in_transit":
+        from backend.customer_service.service.address_change_service import (
+            extract_new_address,
+        )
+        new_address = extract_new_address(cs_route, user_message)
+        if new_address:
+            collected_slots = {"new_address": new_address}
+
     if intent in _SLOT_ORDER_INTENTS and not _resolve_order_id(cs_route, user_message):
         try:
             from backend.customer_service.context.semantic_slots import (
@@ -187,17 +210,47 @@ def execute_action(
                 resolution.order_id, resolution.matched_product,
             )
         elif resolution.ambiguous:
-            return _ask_missing_slot(user_id, intent, session_id, store,
-                                     tenant_id=tenant_id,
-                                     candidates_override=resolution.candidates)
+            return _ask_missing_slot(
+                user_id, intent, session_id, store,
+                tenant_id=tenant_id,
+                candidates_override=resolution.candidates,
+                collected_slots=collected_slots,
+            )
         else:
-            return _ask_missing_slot(user_id, intent, session_id, store,
-                                     tenant_id=tenant_id)
+            return _ask_missing_slot(
+                user_id, intent, session_id, store, tenant_id=tenant_id,
+                collected_slots=collected_slots,
+            )
+
+    if intent == "t_change_address_in_transit" and not new_address:
+        return _ask_missing_address_slot(
+            user_id, intent, session_id, store,
+            order_id=_resolve_order_id(cs_route, user_message),
+            tenant_id=tenant_id,
+        )
+
+    if intent in {"t_urge_shipping", "t_urge_delivery"}:
+        return _execute_urge_request(
+            user_id, intent, cs_route, user_message, session_id, state,
+            tenant_id=tenant_id,
+        )
 
     try:
         return _build_new_proposal(user_id, intent, cs_route, session_id, store,
                                    user_message, tenant_id=tenant_id)
+    except AddressChangeUnavailableError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
     except RefundRequestUnavailableError as exc:
+        return ExpertResult(
+            expert="action", status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
+    except PriceMatchUnavailableError as exc:
         return ExpertResult(
             expert="action", status=ExpertStatus.SUCCESS.value,
             response_draft=exc.user_message,
@@ -242,6 +295,159 @@ def execute_action(
         )
 
 
+def _execute_urge_request(
+    user_id: str,
+    intent: str,
+    cs_route: dict,
+    user_message: str,
+    session_id: str,
+    state: dict[str, Any],
+    *,
+    tenant_id: str,
+) -> ExpertResult:
+    """在 business-mock 登记低风险物流催办；异常转交 Supervisor 升级人工。"""
+    import uuid
+
+    from backend.customer_service.action import ActionType, AgentActionRecord
+    from backend.customer_service.audit import build_audit_entry
+    from backend.customer_service.service.urge_service import (
+        UrgeServiceError,
+        get_urge_service,
+    )
+
+    order_id = _resolve_order_id(cs_route, user_message)
+    request_type = "shipping" if intent == "t_urge_shipping" else "delivery"
+    conversation_id = str(
+        state.get("conversation_id")
+        or (state.get("cs_context") or {}).get("conversation_id")
+        or session_id
+    )
+
+    escalation = _urge_escalation_reason(user_message)
+    if escalation:
+        return _urge_handoff_signal(escalation)
+
+    try:
+        outcome = get_urge_service().register_urge(
+            user_id=user_id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            order_no=order_id,
+            request_type=request_type,
+        )
+    except UrgeServiceError as exc:
+        if exc.handoff_required:
+            return _urge_handoff_signal(exc.handoff_reason)
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=ActionType.URGE_REQUEST,
+            result="failure",
+            target_type="order",
+            target_id=order_id,
+            detail="mock urge request rejected",
+            conversation_id=conversation_id,
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={
+                "audit_entry": audit_entry,
+                "action_result": {
+                    "action_type": ActionType.URGE_REQUEST,
+                    "status": "failed",
+                    "user_message": exc.user_message,
+                },
+            },
+        )
+
+    if outcome.get("handoff_required"):
+        return _urge_handoff_signal(str(
+            outcome.get("handoff_reason") or "物流状态异常，需人工核实",
+        ))
+
+    request = outcome["urge_request"]
+    logistics = outcome["logistics"]
+    already_registered = bool(outcome.get("already_registered"))
+    request_label = "催发货" if request_type == "shipping" else "催派送"
+    status_display = str(logistics.get("status_display") or "状态未知")
+    if already_registered:
+        answer = (
+            f"该订单的{request_label}已在处理中（模拟环境已登记）；"
+            f"当前状态：{status_display}。"
+            "这是演示记录，没有向真实商家或物流系统发送请求，"
+            "也不承诺具体发货或送达时间。"
+        )
+    else:
+        answer = (
+            f"已在模拟环境为该订单登记{request_label}；"
+            f"当前状态：{status_display}。"
+            "这是演示记录，没有向真实商家或物流系统发送请求，"
+            "也不承诺具体发货或送达时间。"
+        )
+
+    record = AgentActionRecord(
+        action_id=str(uuid.uuid4()),
+        action_type=ActionType.URGE_REQUEST,
+        agent_type="ai",
+        target_type="order",
+        target_id=str(request.get("order_no") or order_id),
+        data={
+            "before_state": {"status_display": status_display},
+            "after_state": {
+                "request_id": str(request.get("request_id") or ""),
+                "request_type": request_type,
+                "already_registered": already_registered,
+                "simulated": True,
+            },
+        },
+        status="simulated",
+    )
+    record_dict = {**record.to_dict(), "confirmation_state": "not_required"}
+    audit_entry = build_audit_entry(
+        user_id=user_id,
+        action_type=ActionType.URGE_REQUEST,
+        result="success",
+        target_type="order",
+        target_id=record.target_id,
+        detail=(
+            f"business_mock request_id={request.get('request_id')}; "
+            f"request_type={request_type}; already_registered={already_registered}"
+        ),
+        conversation_id=conversation_id,
+    )
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft=answer,
+        data={
+            "audit_entry": audit_entry,
+            "action_result": {
+                "action_type": ActionType.URGE_REQUEST,
+                "status": "success",
+                "user_message": answer,
+                "action_record": record_dict,
+            },
+        },
+    )
+
+
+def _urge_escalation_reason(user_message: str) -> str:
+    """用户明确反馈物流异常时，禁止自动登记并转人工核实。"""
+    if any(term in user_message for term in ("丢件", "丢失", "丢了", "破损", "损坏")):
+        return "用户反馈包裹可能丢失或破损，需人工核实并处理"
+    return ""
+
+
+def _urge_handoff_signal(reason: str) -> ExpertResult:
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft="该物流问题需要人工核实，正在为您转接客服。",
+        data={"handoff_required": True, "handoff_reason": reason},
+    )
+
+
 def _execute_conditional_refund_task(
     user_message: str,
     user_id: str,
@@ -252,14 +458,14 @@ def _execute_conditional_refund_task(
 ) -> ExpertResult:
     """只把已核实的唯一物流结果转成现有退款提案流程。"""
     from backend.customer_service.understanding.task_plan import (
-        CSTaskPlan,
         CSTask,
+        CSTaskPlan,
         CSTaskResult,
         build_rule_task_plan,
         evaluate_task_condition,
     )
 
-    safe_reply = "订单和物流信息尚未满足退款条件，这次没有发起退款申请。"
+    safe_reply = "支付或订单事实尚未满足退款条件，这次没有发起退款申请。"
     current = state.get("current_task") or {}
     task_id = str(current.get("task_id") or "")
     query_result = None
@@ -270,6 +476,8 @@ def _execute_conditional_refund_task(
         task_facts = {
             key: facts[key] for key in (
                 "shipping_status", "order_count", "order_id", "order_no",
+                "success_count", "duplicate_payment", "refund_candidate",
+                "total_amount", "currency",
             ) if key in facts
         }
         return CSTaskResult(
@@ -310,12 +518,13 @@ def _execute_conditional_refund_task(
                 item for item in dependencies
                 if item.source in (
                     "sandbox_logistics_service", "business_logistics_service",
+                    "sandbox_payment_service", "business_payment_service",
                 )
             ),
             None,
         )
         if query_result is None:
-            raise ValueError("authoritative logistics facts are missing")
+            raise ValueError("authoritative order/payment facts are missing")
         facts = {}
         for item in dependencies:
             facts.update(item.facts)
@@ -338,6 +547,106 @@ def _execute_conditional_refund_task(
         {**(state.get("cs_route") or {}), "intent": "as_refund"},
         str(facts["order_id"]),
     )
+    if query_result.source in (
+        "sandbox_payment_service", "business_payment_service",
+    ):
+        trusted_metadata = dict(trusted_route.get("metadata") or {})
+        trusted_metadata["reason"] = "重复扣款"
+        trusted_route = {**trusted_route, "metadata": trusted_metadata}
+
+    from backend.customer_service.service.payment_service import (
+        auto_duplicate_refund_simulation_eligible,
+    )
+
+    if auto_duplicate_refund_simulation_eligible(
+        facts, source=query_result.source,
+    ):
+        from backend.customer_service.action import ActionType
+        from backend.customer_service.audit import build_audit_entry
+        from backend.customer_service.service.refund_service import RefundService
+        from backend.shared.idempotency import SideEffectOutcomeUnknown
+
+        audit_result = "error"
+        try:
+            record = RefundService().simulate_duplicate_payment_refund(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                order_no=str(facts["order_no"]),
+            )
+            refund = record.data["refund"]
+            refund_id = str(refund["refund_id"])
+            amount = float(refund["amount"])
+            audit_result = "success"
+            audit_entry = build_audit_entry(
+                user_id=user_id,
+                action_type=ActionType.REFUND_EXECUTE,
+                result=audit_result,
+                target_type=record.target_type,
+                target_id=record.target_id,
+                detail=(
+                    "execution_mode=simulation; real_funds_affected=false; "
+                    f"refund_id={refund_id}; amount={amount:.2f}; currency=CNY"
+                ),
+                conversation_id=str(
+                    state.get("conversation_id") or session_id,
+                ),
+            )
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    f"已在演示环境完成重复扣款的模拟退款，金额 ¥{amount:.2f}，"
+                    f"模拟编号 `{refund_id}`。这是 mock 模拟，真实支付平台和资金"
+                    "没有发生变更，也没有创建真实退款申请。"
+                ),
+                data={
+                    "task_status": "success",
+                    "task_result": task_result("success"),
+                    "action_result": {
+                        "action_type": ActionType.REFUND_EXECUTE,
+                        "status": "simulated",
+                        "action_record": record.to_dict(),
+                    },
+                    "audit_entry": audit_entry,
+                },
+            )
+        except SideEffectOutcomeUnknown:
+            error_type = "provider_error"
+            reply = (
+                "Mock 未能确认模拟退款结果，已停止自动重试并提示人工核查；"
+                "本次没有调用真实支付系统。请勿重复提交。"
+            )
+        except OrderNotEligibleError as exc:
+            audit_result = "denied"
+            error_type = "business_error"
+            reply = f"{exc}\n\n本次未执行模拟退款，请转人工核实。"
+        except (DatabaseError, OrderNotFoundError, RefundRequestUnavailableError):
+            error_type = "provider_error"
+            reply = "模拟退款服务暂时不可用，未创建真实退款申请，请转人工核实。"
+
+        audit_entry = build_audit_entry(
+            user_id=user_id,
+            action_type=ActionType.REFUND_EXECUTE,
+            result=audit_result,
+            target_type="order",
+            target_id=str(facts["order_id"]),
+            detail=(
+                "execution_mode=simulation; result=not_confirmed; "
+                "real_funds_affected=false"
+            ),
+            conversation_id=str(state.get("conversation_id") or session_id),
+        )
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=reply,
+            data={
+                "task_status": "failed",
+                "task_result": task_result("failed", error_type),
+                "audit_entry": audit_entry,
+            },
+        )
+
     try:
         proposal_result = _build_new_proposal(
             user_id, "as_refund", trusted_route, session_id, store,
@@ -591,6 +900,17 @@ def _build_proposal(
         reason = cs_route.get("metadata", {}).get("reason", "")
         return get_refund_service().build_refund_proposal(user_id, order_id, reason)
 
+    if action_type == "address_change":
+        from backend.customer_service.service.address_change_service import (
+            extract_new_address,
+            get_address_change_service,
+        )
+        return get_address_change_service().build_proposal(
+            user_id,
+            _resolve_order_id(cs_route, user_message),
+            extract_new_address(cs_route, user_message),
+        )
+
     if action_type == "order_cancel":
         from backend.customer_service.service.cancel_order_service import (
             get_cancel_order_service,
@@ -634,6 +954,16 @@ def _build_proposal(
             order_no=order_id,
             title_selector=title_selector,
             invoice_type=invoice_type,
+        )
+
+    if action_type == "price_match":
+        from backend.customer_service.service.price_match_service import (
+            get_price_match_service,
+        )
+
+        order_id = _resolve_order_id(cs_route, user_message)
+        return get_price_match_service().build_proposal(
+            user_id, tenant_id, order_id,
         )
 
     if action_type == "return":
@@ -788,6 +1118,7 @@ def _ask_missing_slot(
     user_id: str, intent: str, session_id: str, store: Any,
     tenant_id: str = "",
     candidates_override: list[dict] | None = None,
+    collected_slots: dict[str, str] | None = None,
 ) -> ExpertResult:
     """缺订单槽位：持久化 need_info 型 pending_action 并结构化追问。
 
@@ -865,7 +1196,7 @@ def _ask_missing_slot(
             "intent": intent,
             "status": "need_info",
             "missing_slots": ["order_id"],
-            "collected_slots": {},
+            "collected_slots": dict(collected_slots or {}),
             # 点选候选映射：用户回复序号 N → candidates[N-1].order_id
             "candidates": candidates,
             "target_type": "order",
@@ -911,7 +1242,7 @@ def _ask_missing_slot(
         "intent": intent,
         "status": "need_info",
         "missing_slots": ["order_id"],
-        "collected_slots": {},
+        "collected_slots": dict(collected_slots or {}),
         "target_type": "order",
         "target_id": "",
         "risk_level": slot_risk_level,
@@ -947,6 +1278,162 @@ def _ask_missing_slot(
     )
 
 
+def _ask_missing_address_slot(
+    user_id: str,
+    intent: str,
+    session_id: str,
+    store: Any,
+    *,
+    order_id: str,
+    tenant_id: str = "",
+) -> ExpertResult:
+    """订单号已明确但缺新地址时，保存 need_info 状态并追问。"""
+    import uuid
+    from datetime import datetime, timezone
+
+    from backend.config.customer_service import CS_CONFIRMATION_TTL_SECONDS
+    from backend.customer_service.confirmation import (
+        ConfirmationState,
+        compute_expires_at,
+    )
+
+    now = datetime.now(timezone.utc)
+    pending = {
+        "action_id": str(uuid.uuid4()),
+        "action_type": "address_change_request",
+        "intent": intent,
+        "status": "need_info",
+        "missing_slots": ["new_address"],
+        "collected_slots": {"order_id": order_id},
+        "target_type": "order",
+        "target_id": order_id,
+        "risk_level": "medium",
+        "requires_confirmation": False,
+        "confirmation_state": ConfirmationState.PENDING_CONFIRMATION.value,
+        "retry_count": 0,
+        "created_at": now.isoformat(),
+        "expires_at": compute_expires_at(
+            now, CS_CONFIRMATION_TTL_SECONDS,
+        ).isoformat(),
+    }
+    store.save(user_id, session_id, pending, tenant_id=tenant_id)
+    return ExpertResult(
+        expert="action",
+        status=ExpertStatus.SUCCESS.value,
+        response_draft=(
+            f"请提供订单 {order_id} 的完整新收货地址（省/市/区县和详细门牌），"
+            "目前没有提交改址请求。"
+        ),
+        data={
+            "pending_action": pending,
+            "confirmation_state": pending["confirmation_state"],
+        },
+    )
+
+
+def _handle_new_address_slot_fill(
+    pending_action: dict,
+    user_message: str,
+    user_id: str,
+    session_id: str,
+    store: Any,
+    cs_route: dict,
+    tenant_id: str,
+) -> ExpertResult:
+    from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
+    from backend.customer_service.service.address_change_service import (
+        extract_new_address,
+    )
+
+    address = extract_new_address(
+        {"metadata": {"new_address": user_message}}, user_message,
+    )
+    if not address:
+        retries = int(pending_action.get("retry_count", 0)) + 1
+        if retries > CS_MAX_CONFIRMATION_RETRIES:
+            store.clear(user_id, session_id, final_state="expired")
+            return ExpertResult(
+                expert="action",
+                status=ExpertStatus.SUCCESS.value,
+                response_draft=(
+                    "多次未收到有效的新收货地址，已结束本次改址请求；"
+                    "如需继续，请重新发起或联系人工客服。"
+                ),
+                data={},
+            )
+        updated = {**pending_action, "retry_count": retries}
+        store.save(user_id, session_id, updated, tenant_id=tenant_id)
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "地址信息不完整，请提供包含省/市/区县和详细门牌的完整新地址；"
+                "目前没有提交改址请求。"
+            ),
+            data={
+                "pending_action": updated,
+                "confirmation_state": updated.get(
+                    "confirmation_state", "pending_confirmation",
+                ),
+            },
+        )
+
+    order_id = str(
+        (pending_action.get("collected_slots") or {}).get("order_id")
+        or pending_action.get("target_id")
+        or ""
+    )
+    route = dict(cs_route or {})
+    metadata = dict(route.get("metadata") or {})
+    metadata["order_id"] = order_id
+    metadata["new_address"] = address
+    route["metadata"] = metadata
+    try:
+        return _build_new_proposal(
+            user_id,
+            pending_action.get("intent", "t_change_address_in_transit"),
+            route,
+            session_id,
+            store,
+            user_message,
+            tenant_id=tenant_id,
+        )
+    except AddressChangeUnavailableError as exc:
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=exc.user_message,
+            data={},
+        )
+    except DatabaseError:
+        logger.warning("[ActionExpert] address change service unavailable after slot fill")
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "改址模拟服务暂时不可用，未提交改址请求；"
+                "您可以稍后重试或联系人工客服。"
+            ),
+            data={"pending_action": pending_action},
+        )
+    except OrderNotFoundError:
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=(
+                "没有找到这笔订单，未提交改址请求；请核对订单号或联系人工客服。"
+            ),
+            data={},
+        )
+    except OrderNotEligibleError as exc:
+        return ExpertResult(
+            expert="action",
+            status=ExpertStatus.SUCCESS.value,
+            response_draft=str(exc),
+            data={},
+        )
+
+
 def _handle_slot_fill(
     pending_action: dict,
     user_message: str,
@@ -964,6 +1451,17 @@ def _handle_slot_fill(
     当前轮的显式订单号实体。
     """
     from backend.config.customer_service import CS_MAX_CONFIRMATION_RETRIES
+
+    if "new_address" in (pending_action.get("missing_slots") or []):
+        return _handle_new_address_slot_fill(
+            pending_action,
+            user_message,
+            user_id,
+            session_id,
+            store,
+            cs_route,
+            tenant_id,
+        )
 
     # need_info 阶段用户取消由 pending_handler 在转发前短路处理
     # （设计方案 场景4；取消后不进 supervisor 再路由——B6 实机验证定位），
@@ -1012,8 +1510,22 @@ def _handle_slot_fill(
         cs_route = dict(cs_route or {})
         metadata = dict(cs_route.get("metadata") or {})
         metadata["order_id"] = order_id
-        cs_route["metadata"] = metadata
         intent = pending_action.get("intent", "as_refund")
+        if intent == "t_change_address_in_transit":
+            from backend.customer_service.service.address_change_service import (
+                extract_new_address,
+            )
+            address = (
+                (pending_action.get("collected_slots") or {}).get("new_address")
+                or extract_new_address(cs_route, user_message)
+            )
+            if not address:
+                return _ask_missing_address_slot(
+                    user_id, intent, session_id, store,
+                    order_id=order_id, tenant_id=tenant_id,
+                )
+            metadata["new_address"] = address
+        cs_route["metadata"] = metadata
         logger.info(
             "[ActionExpert] slot filled: order_id=%s intent=%s", order_id, intent,
         )

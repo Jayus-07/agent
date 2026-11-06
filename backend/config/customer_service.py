@@ -60,6 +60,7 @@ CS_HIGH_RISK_ACTIONS = frozenset({
     "refund_execute",
     "return_execute",
     "order_cancel",
+    "price_match",
 })
 
 CS_CRITICAL_ACTIONS = frozenset({
@@ -247,6 +248,17 @@ CS_INVOICE_MODE = os.getenv("CS_INVOICE_MODE", "disabled").strip().lower()
 CS_REFUND_REQUEST_MODE = os.getenv(
     "CS_REFUND_REQUEST_MODE", "disabled",
 ).strip().lower()
+# B4 重复扣款自动处理仅支持显式 mock 模拟；默认关闭，不调用真实资金接口。
+CS_AUTO_DUPLICATE_REFUND_MODE = os.getenv(
+    "CS_AUTO_DUPLICATE_REFUND_MODE", "disabled",
+).strip().lower()
+CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT = os.getenv(
+    "CS_AUTO_DUPLICATE_REFUND_MAX_AMOUNT", "0",
+).strip()
+# B7 订单级在途改址只开放到 business-mock，默认关闭。
+CS_ADDRESS_CHANGE_MODE = os.getenv(
+    "CS_ADDRESS_CHANGE_MODE", "disabled",
+).strip().lower()
 
 # 订单取消独立开关（Q6 拍板项 2，2026-11-04）：
 #   http（默认）= 跟随业务网关既有模式（sandbox/http 均可，与 .env 已开
@@ -254,6 +266,11 @@ CS_REFUND_REQUEST_MODE = os.getenv(
 #   disabled = 拒绝取消提案写入与确认执行（不取消、不退款）；
 #   其余未知值按安全默认拒绝。
 CS_ORDER_CANCEL_MODE = os.getenv("CS_ORDER_CANCEL_MODE", "http").strip().lower()
+
+# B6 价保差价只开放到显式 business-mock 网关；默认关闭，未确认业务窗口前
+# 不设资格天数。非法或未配置值由 PriceMatchService 在每个写入口 fail-closed。
+CS_PRICE_MATCH_MODE = os.getenv("CS_PRICE_MATCH_MODE", "disabled").strip().lower()
+CS_PRICE_MATCH_WINDOW_DAYS = os.getenv("CS_PRICE_MATCH_WINDOW_DAYS", "0").strip()
 
 # ── CS 质量报告告警阈值（超过即触发 alerts）────────────────
 CS_QUALITY_ALERT_FALLBACK_RATE = float(os.getenv("CS_QUALITY_ALERT_FALLBACK_RATE", "0.02"))

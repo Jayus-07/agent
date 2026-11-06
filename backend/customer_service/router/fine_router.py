@@ -36,6 +36,14 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
     },
     # 批次C：TRANSACTION 域规则直查（工单进度）
     "TRANSACTION": {
+        # B5（cs-capability-gap）：低风险催办动作；异常（丢件/破损）沿同
+        # 一动作入口升级人工，不承诺具体发货/送达时间。
+        "t_urge_shipping": ["催发货", "催一下发货", "催仓库", "催出库"],
+        "t_urge_delivery": [
+            "催派送", "催物流", "催一下物流", "催快递", "催配送",
+            "丢件", "丢失", "丢了", "快递丢了", "包裹丢了",
+            "破损", "损坏", "物流破损", "快递破损",
+        ],
         "t_ticket_status": ["工单", "投诉单", "报修单", "投诉进度"],
         "t_refund_status": [
             "申请审核", "退款申请进度", "退款申请状态", "审核到哪",
@@ -57,9 +65,20 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         "t_invoice_query": [
             "发票抬头", "开票记录", "我的发票", "查发票", "查抬头", "抬头有哪些",
         ],
+        # B4：支付数据查询；纯支付政策问句留在 KNOWLEDGE，不在本域细分。
+        "t_payment_issue": [
+            "支付流水", "付款流水", "支付记录", "扣款记录", "支付失败",
+            "付款失败", "重复扣款", "重复支付", "扣了两次", "多扣了一次",
+        ],
         # P3（cs-evaluation-upgrade 2026-11-02）：物流/时效细分——此前
         # TRANSACTION 只有工单/退款进度/余额词表，「订单 X 的物流到哪了」
         # 全部落域默认 t_order_status
+        "t_change_address_in_transit": [
+            "在途改地址", "在途改址", "改地址", "改址", "修改地址",
+            "修改收货地址", "修改订单地址", "更改地址", "更改订单地址",
+            "订单改地址", "订单改址", "改到", "改为", "把地址改到",
+            "把收货地址改到", "改收货地址到", "改配送地址到",
+        ],
         "t_logistics": ["物流", "快递", "包裹", "配送"],
         "t_delivery_estimate": ["多久能到", "几天能到", "几号能送到", "多久送到"],
     },
@@ -76,6 +95,9 @@ _RULE_INTENT_MAP: dict[str, dict[str, list[str]]] = {
         # P2：取消订单（显式短语，避免「取消」误伤确认卡的取消语义）
         "t_order_cancel": [
             "取消订单", "我要取消", "退掉订单", "把订单取消", "订单不要了",
+        ],
+        "t_price_match": [
+            "退差价", "补差价", "价保申请", "申请价保", "保价申请",
         ],
         "as_return": ["退货", "退换", "return"],
         "as_exchange": ["换货", "exchange", "换个", "换成"],
@@ -108,6 +130,19 @@ class CSFineRouter:
             (intent, confidence, reason)
         """
         domain_val = domain.value
+
+        # 明确的「重复扣款 + 申请退款」是先查支付、再按事实决定是否
+        # 进入退款提案。退款词不能把这类受限复合请求提前送入 ActionExpert。
+        from backend.customer_service.understanding.task_plan import (
+            build_rule_task_plan,
+        )
+
+        plan = build_rule_task_plan(query)
+        if plan and plan.get("primary_intent") == "t_payment_issue":
+            return (
+                "t_payment_issue", 1.0,
+                "rule: validated duplicate payment refund plan",
+            )
 
         if domain_val in _RULE_INTENT_MAP:
             intent, conf, reason = self._rule_classify(query, domain_val)

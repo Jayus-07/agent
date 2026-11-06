@@ -1,5 +1,20 @@
 # cs-capability-gap PROGRESS
 
+## 当前集成状态（2026-11-06）
+
+> 本节为当前权威状态；下方批次记录保留各自当时现场，若状态冲突以本节及最新 PR/提交为准。
+
+- B4 PR #336、B5 PR #338、B6 PR #339、B7 PR #340 均已合入 main；B7 merge commit 为 `f1bfd73`。B4–B7 定向回归此前 **218 passed / 5 skipped**，B7 独立 PostgreSQL T2 **1 passed**。
+- B8 分支 `feat/cs-invoice` 功能提交 `4baeded` 已与 `origin/main`（`f1bfd73`）完成本地合并和冲突解决；组合定向回归 **262 passed / 6 skipped**，新发票 Service/测试 Ruff、Python 编译、YAML 解析、`git diff --check` 通过。全 touched-file Ruff 仍报 10 个既有问题，未触及的旧行包括配置导入、事实投影导入排序和 `init_db.py` 局部变量。B8 尚未提交 merge commit、开 PR 或跑 CI。
+- B9 立项文档仍在 `codex/cs-b9-charter` 工作树，尚未提交/开 PR；待 B8 完成后同步最新 main。
+- q3 `b4-acc-q3` 退款提案仍为 `expired`（到期 `2026-11-05 15:43:48 UTC`）；2026-11-06 通过共享 PG 只读核验 `confirmed_at`/`executed_at` 为空、对应客服 `refund_request` 动作 **0**、幂等记录 **0**、业务库对应订单退款记录 **0**。没有确认、提交或发起退款；后续验收继续不触碰。
+- B4–B8 最终主容器重建及运行时验收尚未开始；待 B8/B9 集成后，从含全部最新代码的任务工作树重建，再核验迁移、健康状态和安全的 mock 流程。真实支付、物流、税务和资金系统不接入。
+
+## 管理端能力治理现状（2026-11-06）
+
+- 已有通用运营治理：主管退款审核队列（必填意见、终态锁、`audit_logs`）、客服团队/RBAC、工单与会话队列、质检、知识缺口与 FAQ 草稿审核；新动作通过用户确认、服务端授权/租户校验、幂等和 `agent_actions`/`audit_logs` 留痕。
+- B4–B8 的功能开关和阈值主要由环境变量/后端配置控制；代码与检索未发现管理端对这些能力提供逐项启停、金额/风险阈值、白名单、发布回滚或策略版本管理的 UI/API。
+- 结论：执行和审计治理已有复用，能力运营治理只部分体现；专用管理入口仍是待补项，不作为 B4–B8 已完成能力。
 > 接手会话现场记录。依据 FINAL-PLAN.md（main c6023dc）执行。恢复时先读 FINAL-PLAN §十一 + 本文件，核对 worktree/HEAD/未提交状态。
 
 ## 现场（2026-11-04）
@@ -134,48 +149,156 @@
 
 **收尾**：rag_smoke 清单 +`test_coupon_flow.py`；GAP_LIST 优惠券行改「已覆盖（政策问答 + B3 意图级券查询/用券校验）」；customer-service.md 第 8/49 行同步；mock/迁移种子与 coupon-policy.md/FAQ id=23 三方一致。
 
-## B8：发票抬头/开票记录查询与确认后模拟申请 —— 实现与局部验收（2026-11-06，分支 `feat/cs-invoice`，基于 `987eddb`，未提交）
+## B7：在途订单改地址 —— 实施中（2026-11-06，分支 feat/cs-address-change）
 
-**范围**：只补已有抬头查询、开票记录查询和用户确认后的模拟申请；不接真实税务系统。当前不支持用户自助新建/修改发票抬头，坐席 GAP_LIST 明确标为部分覆盖。
+**当前实现**：新增在途状态复核、订单级改址提案/确认、business-mock 幂等模拟登记、每单一次限制、真实订单/承运方零副作用；地址缺槽走既有 need_info → proposal → 用户确认；成功后 `agent_actions` 的 after_state 保存模拟状态和请求 ID。账号默认地址能力保持原语义；`.env.example` 登记默认关闭的 `CS_ADDRESS_CHANGE_MODE` 与 HTTP mock 联调说明。
 
-**实现**：
+**验证证据**：B7 定向 `test_address_change_flow.py` 当前 **10/10 通过**，含独立 PostgreSQL T2：应用状态迁移 050 与 B7 迁移 137 后，真实 `AuditRepository` 将 `address_change/simulated`、订单/地址/请求 ID 和两个“真实副作用为 false”标志写入 `agent_actions` 并读回。客服双门禁与相邻回归最新 **212 passed, 2 skipped**；`py_compile`、涉及 Python 文件 Ruff、`git diff --check` 通过。独立 PG 仅绑定 `127.0.0.1:15435`，没有连接共享业务库。
 
-- 路由：`t_invoice_query` / `t_invoice_request`；「发票怎么开」等政策问句继续走 KNOWLEDGE。VOCAB_VERSION → `2026-11-06.1`，同步 `test_vocab.py`、cs-gate 与决策回放门禁。
-- Service：查询只信当前用户/租户；申请只在 `CS_INVOICE_MODE=mock`、业务网关 `http` 且目标为白名单 `business-mock:8081` 时启用，默认关闭。只允许 paid/shipped/completed 订单、已有 active 抬头和电子发票；提案为 medium risk，必须显式确认。
-- Mock：按用户/租户隔离个人与企业演示抬头；确认申请后登记内存态模拟记录。相同 operation key 同 payload 幂等重放；同订单/抬头换 key 冲突。响应固定 `status=simulated`、`real_invoice_issued=false`、`tax_system_contacted=false`；服务重启会清空 Mock 记录，客服 `agent_actions` 留审计。
-- 状态与审计：确认时重新核对订单状态和抬头；未知写入结果进入既有 `verifying`，拒绝盲目重试。确认失败审计补齐 `conversation_id`、目标订单；新增 `invoice_request` 到 memory 库动作类型约束。
-- 数据/CI/文档：迁移 138→business（抬头、模拟记录表及真实开票恒 false 约束），139→memory（动作类型约束）；`init_db.py` 与 `rag_smoke_path_filter.py` 登记；`rag_smoke.yml` 加入新测试；业务契约升 v1.4；域文档与坐席 GAP_LIST 标部分覆盖。
+**本轮补强**：HTTP 写请求已成功到达 mock、但客户端得到非标准异常时，现在映射到既有 `verifying/in_doubt` 状态；新增端到端测试验证 mock 已登记一笔、用户被提示勿重复提交且审计结果为 `in_doubt`。这不增加人工审核流程，也不改变真实订单或物流商状态。
 
-**验证**：
+**环境说明**：本轮 212 用例命令复用了任务专属 PG `15435`，B7 AuditRepository T2 通过；points/coupon 两个 sandbox T2 因未配置其独立 DSN 而跳过。通用 residue guard 因 worktree 无 `.env` 尝试连接 `localhost:5432` 并报无密码/PoolTimeout，pytest 退出码为 0。共享数据库未被操作。
 
-1. T2 双门禁/查询模板回归：`test_cs_eval_gate`、`test_cs_decision_replay`、`test_vocab`、粗细路由、意图契约、B2/B3、facts：**126 passed, 2 skipped**。
-2. 最终跨层回归：`test_invoice_flow`、确认状态机、ActionExpert、缺槽链、QueryExpert：**99 passed**，覆盖缺订单追问、确认后登记、订单状态变更拒绝并审计、重复写冲突、未知结果 verifying、facts 脱敏。
-3. 隔离 PostgreSQL 16：138/139 各重复应用两次成功；种子保持 2 条；`real_invoice_issued=true` 与未知 action_type 均被约束拒绝；`invoice_request:simulated` 被 status/type 约束接受。只使用本任务临时 PG，不触碰共享库。
-4. 当前工作树构建的独立 `business-mock` 容器 healthy；HTTP 冒烟：health ok、抬头查询、模拟登记、相同键 replay、换键重复 409，两个真实开票标记均 false。独立坐席前端镜像 Next build（含类型检查）成功，`/login` 与 `/cs/knowledge` 均 200 且容器 healthy。B8 `app` 镜像从本工作树构建成功。
-5. T0：所有改动 Python 文件 `py_compile` 通过；新服务/测试/路由 Ruff 通过；`git diff --check` 通过。完整 touched-file Ruff 仍报告 15 个既有 lint 项，均在本次未改动的旧行；未顺手清理。
+**未验收**：B7 代码尚未从本 worktree 重建部署；当前 `agent` Compose 项目由多个 worktree 的配置共同组成，不能安全地用单一 B7 worktree 重建替换。共享栈当前服务健康不等于 B7 已部署；真机对话尚未验收，状态为 **UNVERIFIED**。待共享栈配置可安全归属/重建后再做代码部署与真机验收。
 
-**未完成/风险**：
-
-- 主 API 容器未启动验收。当前共享 Compose 项目 `agent` 的配置文件混有多个工作树；按 `devctl.bat rebuild` 会重建/重启共享 backend 服务，故本轮只构建 B8 app 镜像，不把隔离 API 接入共享数据库。`app` 健康与经 :9080 真机对话记 `UNVERIFIED`。
-- 两轮 pytest session-finish 的全局残留守卫尝试连工作树默认 `localhost:5432`，因无 `.env` 密码超时；**不影响 pytest 结果**。未将守卫指向共享数据库。
-- 无 PR/CI 结果，未提交、未合并。当前分支基于 `987eddb`，主线尚缺 B4-B7 的 134-137 迁移；合并顺序必须先落 B4-B7，再合 B8（否则后合的旧动作类型迁移可能覆盖 `invoice_request` 约束）。
+**迁移顺序约束**：本分支迁移 137 保留 B5 135 的 `urge_request` 与 B6 136 的 `price_match`；B7 PR/迁移须排在 135/136 之后合入并按序应用，避免旧迁移后到时收窄约束。
 
 ## 后续批次
 
-- B4 支付查询/重复扣款退款提案已实现，但 PR #336 仍需确认状态并按用户授权合并；资金红线仍是 `refund-requests` 人工审核闸。
-- B5-B7 按各自任务工作树继续，不在 B8 工作树改写；B7 当前有独立未提交改动，须保留。
-- B8 当前已完成功能实现和局部验收；下一步先让 B4-B7 依序合入主线，再将 B8 分支更新到包含迁移 134-137 的主线，复核并提交/发 PR。`feat/cs-invoice` 工作树保持未提交状态，未经用户确认不提交或合并。
+B3 定型（本批合并）→ B4 支付查询（复制查询型模板，红线：转退款走 refund-requests 人工审核闸）→ B5-B8。
 
-### B8 本轮功能专项复跑（2026-11-06）
+## B4：支付流水查询 + 重复扣款退款提案（PR #336 开放；CI 修复续工，2026-11-06）
 
-- 使用 PYTHONPATH 指向当前 worktree，并通过 --confcutdir=backend/tests/customer_service 避开全局 pytest 收尾数据库清理钩子；test_invoice_flow.py **12 passed，0 skipped**。
-- 本次仅复跑客服发票流程测试，不代表主 API 已部署；容器内主 API/真机验收仍为 **UNVERIFIED**。
+**现场**：worktree `D:/Program Files/workplace/agent-cs-fix-entry`，分支 `feat/cs-payment-query`，PR #336 开放（初始 HEAD `7f948b815f7392b6a62e00d2fe2d8df15967554f`）；CI 修复已推送。已 rebase 到 `origin/main=987eddb`；最近测试通过的 HEAD `a267cf14d57add39957be883c871e00814e017a1`。共享栈已从本 worktree 重建；隔离 PG `agent-csfix-b0-pg:15434` 保留。
 
-### B8 持久审计 T2（2026-11-06）
+**实现范围**：新增 `payment_service.py` 双模式查询；迁移 `134_cs_payment.sql` 和 init_db/path_filter 登记；mock 三态支付流水；新增 `t_payment_issue`、支付词表及 facts 白名单/金额守卫；有限 TaskPlan 先查流水，满足精确退款候选条件后调用既有 refund request proposal/confirmation 流；支付回复固定使用可信模板；客服知识页 GAP_LIST、customer-service 文档、mock contract、rag_smoke 定向清单同步。支付记录只读；任何条件不满足时不创建提案；提案仍须用户确认后才进入既有人工审核，不存在自动退款通道。
 
-- 在已有 test_invoice_flow.py 中新增真实 PostgreSQL 审计持久化用例；仅允许 loopback 的 test/sandbox 数据库，拒绝共享栈 5433。测试文件已在 rag_smoke 免费档定向清单中，无需新增清单项。
-- 使用独立 PostgreSQL 16 容器项目 cs-invoice-audit-t2，绑定 127.0.0.1:15436；测试库依次初始化迁移 006、031、050、139。真实调用 cs_graph_node._persist_audit_records 两次后，验证 agent_actions(action_type=invoice_request,status=simulated)、audit_logs(result=success)、ai.idempotency_records 各仅 1 条，且模拟开票/税务真实副作用标记均为 false。
-- 完整发票流程测试 **13 passed / 0 skipped**；T2 运行后动作、审计、幂等和会话残留均为 0。py_compile、Ruff（忽略本文件原有 I001 导入排序项）通过。
-- 本批仍未重建主 API；主容器对话和真机验收继续为 **UNVERIFIED**。
+**代码与测试证据**：
 
-\n
+1. T2：支付、任务计划、CSRouter、FineRouter、composer、vocab 六套定向测试带显式 sandbox DSN 最终 **141 passed，零 skip**（30.31s，包含 134 迁移幂等测试）。此前未传 DSN 的合并运行是 140 passed/1 skipped；随后已补跑并在全量定向集合中消除了该 skip。
+2. Python `py_compile` 与 `git diff --check` 通过。此前客服全目录基线 **1596 passed, 2 skipped**（8m44s；发生在本节最后两处细路由/模板改动之前，不能替代最新定向结果）。阴性验证已确认移除支付 facts 投影器会令测试失败、移除支付路由细词会令路由测试失败。
+3. `verify_migration_state.py --image agent-db-migrate` 输出 `MIGRATION_STATE_OK`：仓库/镜像 139 个已登记迁移一致，权威数据库全部已应用；B4 134 已应用。隔离 PG 的 134 重放和支付种子测试在定向用例中通过。
+4. 后端 `devctl.bat rebuild /y` 成功，`frontend-cs` 从本 worktree 使用 compose overlay 单独重建；8000/8081/3300/8090 均 HTTP 200，devctl 对 3100/3200 探针也通过，所有代码容器 healthy。9080 根路径返回 404（网关未暴露根路由，非健康判据）；demo 登录由真机脚本 HTTP 200 实证。
+
+**真机验收**（脚本 `D:/tmp/cs_b4_acc.py`，证据 `D:/tmp/cs-b4-acc-result.txt`）：
+
+1. q1 单笔成功流水：PASS，真实订单号/金额/渠道/状态。
+2. q2 失败流水：PASS，明确包含“可稍后重试支付”。
+3. q3 重复扣款：PASS，核验到两笔同额成功记录，返回既有待确认退款卡并说明确认后走人工审核；脚本未发送“确认”，没有提交退款申请。
+4. q4「支付失败怎么办？」首轮 **FAIL**：宿主 GPU 服务 8088 未运行时 RAG 不可达；恢复后 Supervisor 同轮调用 KnowledgeExpert 两次，第二次响应因 ClaimVerifier `citation_not_found missing=['E5']` 被拒绝，覆盖第一次有效答复。该失败最初误判为单纯检索完整性问题；根因及后续修复见本节「q4 修复与真机复验」。ClaimVerifier 未被绕过或修改。
+5. q4 隔离复测脚本/结果：`D:/tmp/cs_b4_q4_retry.py`、`D:/tmp/cs-b4-q4-retry.txt`；RAG 和 app 详细日志仍可按 session `b4-acc-q4-retry` 查询。
+
+**状态与下一步**：B4 q1-q4 真机验收通过，PR #336 已开放且未合并；q3 session `b4-acc-q3` 保留待确认状态，不要发送确认。CI 两处问题均已修复：134 全新库客户外键种子、支付任务单测 gateway mode 环境依赖。最近测试 HEAD **1007 passed / 2 skipped**，必需 CI 全绿（真实 API 评测按 PR 规则跳过）。初始 PR 范围没有自动退款；本次后续扩展为 mock-only 低风险模拟退款（详见下文），真实资金退款与真实渠道仍未实现。
+
+### q4 修复与真机复验（2026-11-06）
+
+**根因**：`支付失败怎么办？` 路由为 KNOWLEDGE，confidence=0.63，高于 Supervisor 0.60 的路由门槛。第一次 KnowledgeExpert 已返回 ClaimVerifier 通过的有效答复；Supervisor v2 的高置信 L5（v1 默认路由同理）没有检查当前轮已有成功知识答复，因而再次调用 KnowledgeExpert。第二次检索/生成结果非确定性地引用不存在的 `[E5]`，ClaimVerifier 正确 fail-closed，Reporter 最终使用第二次拒答覆盖第一次答复。问题在 Supervisor 重复派发，不在 ClaimVerifier。
+
+**修复**：在 v1/v2 两套 Supervisor 中，handoff、pending、风险、循环和分诊门之后，普通路由之前检查最近 Expert 记录与 `last_expert_result`。两者均为 KnowledgeExpert `success` 且答复非空时直接 `FINISH` 交给 Reporter，避免覆盖；失败/空答复仍允许再次尝试，带 `task_plan` 状态的编排不受该 guard 影响。未修改 ClaimVerifier、RAG citation 逻辑或退款确认流。
+
+**验证**：
+
+1. TDD：新增回归先在 v1/v2 均失败（两次都再次路由到 `cs_knowledge_expert`）；修复后定向集合 **81 passed，0 skipped**，包含 `test_payment_flow.py`、`test_supervisor_v2_priority.py`、`test_cs_supervisor.py`，显式使用隔离 PG 15434。用例覆盖成功知识答复收尾、失败/空答复仍可重试、pending 优先。
+2. `py_compile` 通过；`git diff --check` 通过。使用当前 worktree 执行 `devctl.bat rebuild /y` 成功；app、business-mock、RAG、workers、frontend/admin 健康。复验探针：`:8000/health`、`:8081/health`、`:8090/readyz`、`:3100/login`、`:3200/login`、`:3300/login`、宿主 `:8088/healthz` 全部 HTTP 200。
+3. 真机 q4 脚本 `D:/tmp/cs_b4_q4_supervisorfix.py`，结果 `D:/tmp/cs-b4-q4-supervisorfix.txt`，全新 session `b4-acc-q4-supervisorfix-20261106`：`POST :9080/api/chat/customer-service` HTTP 200；答复含「重试」「支付方式」及引用 `[E1] [E2] [E5]`；RAG 日志确认 ClaimVerifier **3 claims 全部通过**；app 日志仅一次 `CS Expert start expert=knowledge`，其后 Supervisor 以「知识答复已成功生成，不重复调用 KnowledgeExpert」FINISH。未执行任何退款写操作或确认动作。
+
+**q4 阶段收尾记录**：当时 q1-q4 验收通过、q3 session `b4-acc-q3` 待确认；后续已创建 PR #336。q3 仍不得发送确认，PR/CI 后续状态见下节。
+
+### PR #336 CI 修复：134 演示客户外键（2026-11-06）
+
+**根因**：GitHub `RAG Smoke preflight` 的全新业务库在迁移 134 写入 `customer_id=872` 的订单时触发 `fk_orders_customer`；干净初始化只有 001 的客户 1–3，没有 872。聚合 `RAG Smoke (8 cases)` 随 preflight 失败，其他免费契约、管理端构建和 scan 检查通过。
+
+**修复**：134 在写 B4 三态订单前幂等补齐无个人信息的客服演示客户 872；只向前校准客户 ID 序列，避免后续默认 INSERT 撞主键。sandbox 验收增加客户存在、序列不低于 872 的断言。
+
+**验证**：新建隔离库运行 `scripts/init_db.py` 时迁移 134 显示 applied；查询确认客户 872 存在、序列值 872、PAY-872 种子 4 条。对应 sandbox 用例 **1 passed**。完整本地 `init_db.py` 在自建容器因 vector 扩展、只读角色和既有 memory schema 前置条件退出 1，不记为全初始化 PASS。随后从本 worktree 执行 `devctl.bat rebuild /y` 退出 0，后端、business-mock、前端与管理端探针均 200。PR HEAD `a267cf1` 的 CI：134 初始化成功；支付单测 gateway mode 已固定；RAG preflight **1007 passed / 2 skipped**，Evaluation V2 免费测试、管理端、scan、Detect RAG changes 均通过。真实 API 评测按 PR 规则跳过。
+# 持续实施任务启动（2026-11-06）
+
+- 目标与边界：见同目录 `TASK.md`。当前 worktree 继续使用 B4 分支 `feat/cs-payment-query`；PR #336 开放、未合并，HEAD `9ee601b`。新需求为 mock 内严格低风险模拟退款 + 可审计/人工分流，不接真实系统。
+- 会话启动证据：当时工作树干净；`origin/main=987eddb`，PR HEAD 与远端一致。q3 `b4-acc-q3` 仍 pending，禁止发确认或退款提交。当前 B4 实现和文档有未提交改动，详见下方现场。
+- 顺序：先完成 B4 的 mock-only 自动模拟/审计并重验；之后 B5、B6、B7、B8 各自独立 worktree/PR；B9 只交立项文档。提交前展示差异并等待确认。
+- 生产口径：现有 `business-mock` 是内存模拟；新业务动作须通过现有客服持久化 action/audit 链路落库，并标明 `execution_mode=simulation`。无真实接口的非演示客户走人工队列。
+
+### B4：低风险重复扣款模拟退款（实现与本地验收，2026-11-06）
+
+**实现**：仅在用户明确申请、事实来自 `business_payment_service`、业务地址精确为 `business-mock:8081`、币种 CNY、两笔全额成功且未退款、金额不超过显式上限时执行模拟。默认 `CS_AUTO_DUPLICATE_REFUND_MODE=disabled`、上限 `0`。Mock 新增按稳定 action_id 幂等的模拟端点；只标记最新一笔 demo 流水，不调用真实支付/退款接口、不创建真实退款申请。客服通过现有 `refund_execute` Action 和 audit 日志落库；未知结果不重试、不回退创建新提案。q3 `b4-acc-q3` 未触发、未确认、未提交。
+
+**验收证据**：显式配置隔离 PG 后，`test_payment_flow.py` + `test_task_plan.py`：**82 passed / 0 skipped**；`test_audit.py` + `TestAuditPersistGateSQL`：**13 passed**；`py_compile`、`git diff --check` 通过。`devctl.bat rebuild /y` 从本 worktree 退出 **0**；app、business-mock、RAG、web、admin、客服前端探针均 HTTP **200**。容器运行配置复核 `auto_mode=disabled`、`max_amount=0`、目标 `business-mock:8081`，因此共享栈没有执行退款模拟。pytest 退出时全局 TaskService/residue guard 对 `127.0.0.1:15434/agent_memory` 报 PoolTimeout；支付 sandbox fixture 使用 `127.0.0.1:15434/agent_business_sandbox_test` 并通过，整组 pytest 退出码为 0。未检查隔离 Memory 库状态。
+
+**数据库测试边界**：额外尝试启动完整 `test_side_effect_idempotency.py` 后，发现其 fixture 使用 `MEMORY_DB_CONFIG` 指向 `localhost:5433/agent_memory`（共享数据库），立即中止；该 fixture 会创建/清理 `s6_idempotency_records`、`s6_side_effect_probe` 测试表。该中断不计入通过项，未再查询或操作共享数据库；中断时 fixture 是否完成清理未验证。审计幂等通过项仅为无数据库的 `test_audit.py` 与 `TestAuditPersistGateSQL`。
+
+**当前状态**：B4 变更留在 `feat/cs-payment-query` 工作树，PR #336 仍未合并；本批改动尚未提交/推送，等用户审阅确认。自动退款在任何部署中仍需先明确金额上限并显式启用；真实业务接入和 q3 操作均不在本批范围。
+
+### B4 模拟退款审计持久化补验（2026-11-06）
+
+- 新增 `test_mock_refund_action_and_audit_persist_once_in_isolated_memory_pg`，复用现有 `test_payment_flow.py`（已在 rag_smoke 定向清单中）。测试要求 `MEMORY_DB_CONFIG` 指向 test/sandbox 库，否则安全跳过；在 CI 的 `agent_memory_test` 上应实际执行。
+- 通过本机 PostgreSQL 18 的 `127.0.0.1:5432` 新建临时隔离库 `agent_memory_cs_audit_20261106_test`，按当前审计/动作表契约建立测试表并应用迁移 050；运行该新用例 **1 passed / 0 skipped（8.31s）**。用例实际调用 `cs_graph_node._persist_audit_records` 两次，验证只保留 1 条 `agent_actions(status=simulated)`、1 条 `audit_logs(result=success)`、1 条 `ai.idempotency_records`；结束后查询三表均为 0 行并删除本次新建测试库。
+- pytest sessionfinish 的全局 residue guard 提示该临时库没有 `llm_provider_credentials` 表（`UndefinedTable`）；不影响用例退出码或审计写入断言。此前有日志记录 `test_side_effect_idempotency.py` 27 passed，但该文件的 fixture 指向共享库 `localhost:5433/agent_memory`，与隔离纪律冲突；本轮不重跑，该数字不计入本批验收。
+- 新增测试文件 `py_compile` 和全工作树 `git diff --check` 通过；测试文件已在 rag_smoke 中，未新增工作流清单项。
+- Docker Desktop 初始未运行；普通权限启动服务被拒后，通过管理员上下文成功启动 `com.docker.service`，Docker Engine 29.2.1 恢复。此前只读记录曾显示隔离 PG 已 stop；本次 `docker inspect agent-csfix-b0-pg` 返回容器不存在，因此不把 15434 当作可用环境，也未操作共享 Compose 项目。
+- 容器恢复后顺序重跑 `test_payment_flow.py` + `test_task_plan.py`：**82 passed / 1 deselected / 0 failed（10.19s）**；唯一 deselected 是独立执行的真实 PG 审计持久化用例。另有 Starlette/httpx 弃用提示及 residue guard 缺少 `llm_provider_credentials` 表告警，未影响退出码。审计用例在本轮安全护栏加固后再次独立执行：**1 passed / 0 skipped（10.10s）**；测试专用库相关动作/审计/幂等记录均清零、无其他会话后已删除。
+- 当前共享栈只读复核：`:8000/health`、`:8081/health`、`:8090/readyz`、`:9080/health`、`:3100/login`、`:3200/login`、`:3300/login` 全部 HTTP 200；`agent-app-1` 的 Compose workdir 标签指向本 B4 worktree。应用内配置为 `auto_mode=disabled`、`max_amount=0`、gateway `http`、业务主机 `business-mock:8081`，没有执行模拟退款。
+- Windows 可用内存当前为 **3.37 GB**。本轮没有修改运行时代码，未重复 rebuild；此前从本 B4 worktree 成功 rebuild 的证据仍适用。若后续有运行时代码改动，先按共享栈纪律检查资源，再从本 worktree 顺序执行 `devctl.bat rebuild /y` 和健康检查。
+- PR #336 当前 OPEN，远端 HEAD `9ee601bd31593725a10dd20b60e52fc2906bc4af`；6 项检查成功，真实 API 评测 1 项按规则 skipped。PR 说明仍描述旧的“只提案、不自动模拟”范围，提交前需要更新。当前 B4 改动未提交/未推送；q3 `b4-acc-q3` 未访问、未确认、未提交退款申请。
+
+### B4 PR 审查意见修复与复验（2026-11-06）
+
+- 修复支付查询后会话订单引用滞后的问题：仅在支付服务核验成功后，用返回的订单号更新当前会话引用；新增同会话先查 A 再查 B 的回归。
+- 修复 Mock 钱包支付后的流水缓存：先查询未付款订单再完成支付，会追加一条带 wallet 渠道的成功流水；操作幂等重放不会重复记流水。
+- 修复超过 20 条支付尝试时的截断误判：支付服务统计完整响应中的成功数，暴露 payments_complete；列表不完整或数量标记不一致时不生成退款候选、不把未知误答成“没有成功支付”，用户转人工核对。事实投影保留完整性标记。
+- 本轮安全 pytest 命令使用 --confcutdir=backend/tests/customer_service 绕开全局收尾钩子：test_payment_flow.py + test_task_plan.py **83 passed / 2 skipped**；py_compile、git diff --check 通过。跳过项是未配置隔离 PostgreSQL 的 T2 用例；Ruff 仅报告 5 个已有导入排序 I001，--ignore I001 检查通过。
+- 纠正本轮首次测试的隔离疏漏：默认 pytest 收尾钩子会连接 MEMORY_DB_CONFIG 当前指向的共享 agent_memory:5433，执行任务表 ensure_schema() 并按 migration-test 条件清扫历史残留。该次收尾钩子已运行；其 DDL/DML 结果未核验，本记录不声称共享库未触碰。该守卫 SQL 只限定迁移测试标记记录，没有调用客服支付/退款动作。此后复验绕过该钩子，未再运行数据库清理。
+- **部署状态：UNVERIFIED**。本次代码修复尚未从 B4 worktree 重建共享服务；当前 agent Compose 项目包含多个 worktree 配置且 20 个容器运行，不能安全地单独重建替换。旧版 B4 部署证据不能覆盖本次修复。
+- PR #336 仍 OPEN；远端 HEAD 仍未包含这些本地修复，3 条 P2 需随后续提交更新。工作树未提交、未推送；q3 b4-acc-q3 未访问、未确认、未提交退款申请。
+
+### B4 CI schema 兼容修复（2026-11-06）
+
+- 提交 `91d54c5` 已推送到 PR #336。CI 的 `RAG Smoke preflight` 在新增持久审计 T2 用例失败：会话 schema 已从旧 `status` 列迁到 `conversation_status`，测试却依赖默认 `active`，触发状态约束。
+- 测试现查询会话表列名：新 schema 显式插入 `conversation_status='open'`，旧 schema 显式插入 `status='active'`。仅修正测试夹具，不改业务运行代码。
+- 在本任务独立 PostgreSQL 16 库上应用 006/031/050，并还原 020 中会话状态列迁移与检查约束后，重新运行真实审计持久化用例：**1 passed / 0 skipped**；`py_compile`、Ruff（忽略既有 I001）及 `git diff --check` 通过。
+- 首轮 CI：RAG Smoke preflight **失败**（单个新增 T2 夹具状态列问题）；Eval V2 free contract、Eval V2 admin、scan 和 RAG path detection **通过**；真实 API 评测按规则 skipped。修复尚未提交/推送，须重跑 CI 后再判断。
+- q3 `b4-acc-q3` 仍未访问、未确认、未提交退款申请。当前主容器由多个 worktree 配置组成，代码最终重建与运行时验收仍待依 PR 顺序集成后进行。
+
+## B5：催发货/催派送（mock-only）——实现与本地验收（2026-11-06）
+
+**工作树**：`C:/Users/wh/.codex/worktrees/cs-urge-action/agent`，分支 `feat/cs-urge-action`。B5 功能提交为 `810f932`；已将 B4 合并提交 `c2d3dc2` 合入当前工作树，组合验证通过，集成合并提交和 B5 PR 待完成。
+
+**实现**：
+
+- 路由新增 `t_urge_shipping` / `t_urge_delivery`，维持 TRANSACTION 域；物流/快递通用查询不被催办词抢路由，配送政策问句仍落 KNOWLEDGE。
+- ActionExpert 对用户明确发起的催办走低风险直执行，不创建确认卡；只把请求发给精确白名单 `business-mock:8081` / 本机 8081，sandbox 或真实 URL 均 fail-closed。
+- business-mock 校验当前用户订单归属与订单状态；同租户/用户/订单/类型 24 小时幂等；订单超过 5 天无物流更新、丢件/破损及结果未知不登记/不重试，并路由到现有人工队列。
+- 成功登记使用 `simulated` + `confirmation_state=not_required`，审计记录包含 mock `request_id`；明确告知未通知真实商家/物流系统，不承诺时效。新增迁移 135 仅扩展 agent_actions 类型约束，保留现有客服动作值；无新业务表。
+- 更新 business-mock 契约、客服域说明、能力清单 UI、FINAL-PLAN 与本进度，并把测试加入 rag_smoke 定向列表及迁移 NON_AI path filter。
+
+**验证结果**：
+
+1. B5 + 相邻客服定向集合：**49 passed**；覆盖双意图路由、模拟登记、24 小时幂等、租户去重、跨用户订单拒绝、订单状态拒绝、审计、超期/丢件转人工、未知 POST 仅一次调用、真实业务 URL 拒绝。
+2. Handoff 状态机与触发器回归：`test_handoff.py` **29 passed**。
+3. 词表 cs-gate、Supervisor 决策回放、迁移登记和 RAG 路径过滤：**33 passed**；`py_compile`、`git diff --check` 与 B5 相关 Ruff 检查通过。
+4. 迁移 135 在独立临时 `pgvector/pgvector:pg16` 数据库实际执行，13 种现有/新增动作类型全部可写入；临时容器、网络与配置已清理。此为 SQL migration T2，不是共享数据库验收。
+5. pytest 进程仍输出既有 residue-guard 日志：TaskService 默认尝试连接本机 5432，但该环境未提供密码；各测试进程退出码均为 0。后续若需要更大范围回归，先给测试配置有效隔离 DSN，避免无效等待。
+6. 新增真实持久化 T2：隔离 PostgreSQL 16 中运行 B5 催办专家并两次调用 `_persist_audit_records`，核对 `agent_actions`=`simulated/not_required`、`audit_logs` 有 mock 请求编号、`ai.idempotency_records` 均仅一条；`test_urge_flow.py` **14 passed**。测试记录清理后复查会话/动作/审计/ledger 均为 0。测试需显式设置 `CS_AUDIT_PG_TEST=1`，并拒绝非本机、非 test/sandbox 数据库及共享端口 5433。pytest residue-guard 仍提示隔离库缺 embedding role seed；不影响 B5 用例。
+7. 合并 B4 后在同一独立 PostgreSQL 16 库应用 006/031/050/135，并还原当前 `conversation_status` 约束；B4 模拟退款与 B5 催办的两项真实审计持久化用例 **2 passed**。测试动作、审计、幂等和会话记录复核均为 0。
+8. B4+B5 组合定向集（支付、任务计划、催办、词表双门禁、决策回放、RAG path filter）最新 **143 passed / 3 skipped**；跳过项由未给本轮完整集合配置专用 sandbox/audit DSN 引起，对应 B4/B5 audit T2 已在上一项独立通过。
+
+**运行时状态：UNVERIFIED**。共享 `agent` 栈仍由多个 worktree 配置组成；当前尚未从包含 B4+B5 的最新工作树重建，也未做 B5 真机验收。下一步在 B5 PR 按序合入后，以最新合并工作树重建主容器，检查健康探针并验收 B4/B5 用户路径。没有操作共享数据库；B4 q3 仍未确认或提交退款。
+
+**后续批次**：先完成当前 B5 集成合并、开 PR、CI 与合入；随后依序更新 B6、B7、B8 到各自最新 main，逐批完成冲突复核、定向/T2 测试、PR CI 和合入；全部代码批次完成后，用含 B4-B8 的最新工作树统一重建/运行时验收。B9 立项文档单独提交；q3 保持未触碰。
+
+## B6：价保退差价（mock-only）——实现与 B4–B6 组合验证完成，PR/CI 待完成
+
+- 工作树 `C:/Users/wh/.codex/worktrees/cs-price-match/agent`，分支 `feat/cs-price-match`，功能提交 `87bce2b`，集成 B4/B5 的 merge commit `2c34968`。
+- 价保只允许用户确认后写 business-mock 演示钱包；客服与 mock 两侧默认关闭，确认时重新核对订单状态、支付时间、CNY、单件商品、窗口和当前价；订单级重复、金额变化、错误目标或结果未知均拒绝/进入 `verifying`，不触达真实资金。
+- 迁移顺序与门禁：134 支付→135 催办→136 价保；三个迁移均已登记 business/memory 目标与 NON_AI path filter，B4、B5、B6 测试均纳入 rag_smoke 清单；词表版本升至 `2026-11-06.2`。
+- 组合回归：支付、任务计划、催办、价保、词表、客服 Golden/决策回放及路由 **170 passed / 4 skipped**。跳过项未配置相应 sandbox/audit DSN；B6 隔离审计用例已另跑 **1 passed**。
+- T2：临时 PostgreSQL 16 绑定 `127.0.0.1:15438`；先执行迁移 050、135，再由 B6 T2 用例重放 050 并执行 136。`AuditRepository` 实际写入 `price_match/executed` 成功，最终约束同时允许 `urge_request` 和 `price_match`；动作和会话测试记录均为 0。测试容器在结果核对后停止并移除，不含持久卷。
+- T0：改动 Python 文件 `py_compile` 通过；新增/相关核心文件 Ruff（忽略导入排序 I001）通过；完整触及文件 Ruff 仍报 10 条既有旧行问题（confirmation_flow、supervisor、init_db），未扩范围清理；YAML 解析与 `git diff --check` 通过。
+- **未验收**：尚无 B6 PR/CI 结果、主 API 重建和真机对话证据；统一运行时验收待 B4–B8 集成后执行。q3 未触碰。
+
+
+## B8：发票抬头/记录查询与确认后模拟申请（2026-11-06）
+
+- 范围：查询当前用户已有抬头/开票记录；显式确认后登记模拟申请。不开真实税务系统，不支持自助新增/修改抬头；服务默认关闭。
+- 关键约束：只允许符合状态的订单及已有 active 抬头；确认时重核业务事实；写入走幂等和现有审计，未知结果进入 `verifying`。迁移 138/139、路径过滤、`rag_smoke` 定向测试及契约/客服文档已随 B8 分支增加。
+- B8 独立分支既有证据：发票流程 **13 passed / 0 skipped**；隔离 PostgreSQL 审计 T2 **1 passed**，验证 action、audit、幂等记录各一条且真实开票标记为 false；mock HTTP 冒烟、mock 与坐席前端构建通过。
+- 与 B4–B7 集成后的词表版本调整为 `2026-11-06.3`。本次集成后的组合回归、PR/CI、主容器重建和运行时验收待完成。

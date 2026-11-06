@@ -8,7 +8,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +20,7 @@ app = FastAPI(title="business-service mock", docs_url=None, redoc_url=None)
 _INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
 _STATE_LOCK = threading.RLock()
 _REFUND_REQUESTS: dict[tuple[str, str, str], dict[str, Any]] = {}
+_ADDRESS_CHANGE_REQUESTS: dict[tuple[str, str], dict[str, Any]] = {}
 _OPERATIONS: dict[tuple[str, str], dict[str, Any]] = {}
 # P2 商城 Mock 账本：订单可变状态与钱包（金额一律 Decimal，禁浮点累加）
 _ORDERS: dict[tuple[str, str], dict[str, Any]] = {}
@@ -31,6 +32,9 @@ _COUPONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _REDEMPTIONS: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _INVOICE_TITLES: dict[tuple[str, str], list[dict[str, Any]]] = {}
 _INVOICES: dict[tuple[str, str], list[dict[str, Any]]] = {}
+_URGE_REQUESTS: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+# B4 支付流水样本；只开放不触碰真实资金的重复扣款模拟退款。
+_PAYMENT_RECORDS: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
 _COUPON_SEQ = 0
 _SEEDED_USERS: set[str] = set()
 _WALLET_LEDGER_SEQ = 0
@@ -43,12 +47,26 @@ _REFUNDABLE_STATUSES = frozenset(
     if value.strip()
 )
 _ACTIVE_REFUND_STATUSES = frozenset({"pending_review", "reviewing", "approved"})
+_ELIGIBLE_PRICE_MATCH_STATUSES = frozenset({"paid", "completed"})
 _REFUND_WINDOW_DAYS = int(os.getenv("CS_REFUND_WINDOW_DAYS", "30"))
 # 取消订单资格：未付款直接取消；已支付待发货走客服提案（退款回钱包）
 _CANCELLABLE_STATUSES = frozenset({"pending", "paid"})
 _WALLET_INITIAL_BALANCE = Decimal(
     os.getenv("MOCK_WALLET_INITIAL_BALANCE", "5000.00"),
 )
+_PRICE_MATCH_MODE = os.getenv("CS_PRICE_MATCH_MODE", "disabled").strip().lower()
+try:
+    _PRICE_MATCH_WINDOW_DAYS = int(os.getenv("CS_PRICE_MATCH_WINDOW_DAYS", "0"))
+except ValueError:
+    _PRICE_MATCH_WINDOW_DAYS = 0
+_PRODUCT_CURRENT_PRICES: dict[str, Decimal] = {
+    "SKU-WIRELESS-HEADPHONES": Decimal("1199.00"),
+    "SKU-BLUETOOTH-SPEAKER": Decimal("699.00"),
+    "SKU-WIRED-HEADPHONES": Decimal("259.00"),
+    "SKU-JUICER": Decimal("358.00"),
+    "SKU-WATERPROOF-SPEAKER": Decimal("199.00"),
+    "SKU-WOOL-COAT": Decimal("599.00"),
+}
 
 
 class RefundRequestInput(BaseModel):
@@ -63,11 +81,27 @@ class RefundRequestInput(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class DuplicateRefundSimulationInput(BaseModel):
+    action_id: uuid.UUID
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+
+
 class RefundReasonUpdateInput(BaseModel):
     operation_id: str
     user_id: str = Field(min_length=1, max_length=128)
     tenant_id: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=500)
+
+
+class AddressChangeInput(BaseModel):
+    operation_key: str = Field(min_length=8, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    expected_shipping_status: str = Field(min_length=1, max_length=32)
+    new_address: str = Field(min_length=6, max_length=255)
 
 
 class WalletTopUpInput(BaseModel):
@@ -99,6 +133,30 @@ class OrderCancelInput(BaseModel):
     expected_amount: float = Field(ge=0)
     reason: str = Field(default="", max_length=500)
     operation_key: str = Field(min_length=8, max_length=128)
+
+
+class PriceMatchRefundInput(BaseModel):
+    operation_key: str = Field(min_length=8, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    expected_status: str = Field(min_length=1, max_length=32)
+    expected_payment_status: str = Field(min_length=1, max_length=32)
+    expected_paid_at: str = Field(min_length=1, max_length=64)
+    expected_currency: str = Field(min_length=1, max_length=8)
+    product_no: str = Field(min_length=1, max_length=64)
+    expected_original_price: Decimal = Field(gt=0)
+    expected_current_price: Decimal = Field(gt=0)
+    expected_amount: Decimal = Field(gt=0)
+    window_days: int = Field(gt=0)
+
+
+class UrgeRequestInput(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    conversation_id: str = Field(min_length=1, max_length=128)
+    order_no: str = Field(min_length=1, max_length=64)
+    request_type: Literal["shipping", "delivery"]
 
 
 @app.exception_handler(HTTPException)
@@ -138,16 +196,16 @@ def _seed_orders(user_id: str) -> list[dict[str, Any]]:
     digest = hashlib.sha256(f"orders:{user_id}".encode()).hexdigest()
     now = datetime.now(timezone.utc)
     definitions = (
-        ("paid", "paid", 1299.0, "无线耳机", 7),
-        ("shipped", "paid", 699.0, "蓝牙音箱", 3),
-        ("completed", "paid", 299.0, "有线耳机", 45),
+        ("paid", "paid", 1299.0, "无线耳机", 7, "SKU-WIRELESS-HEADPHONES"),
+        ("shipped", "paid", 699.0, "蓝牙音箱", 3, "SKU-BLUETOOTH-SPEAKER"),
+        ("completed", "paid", 299.0, "有线耳机", 45, "SKU-WIRED-HEADPHONES"),
         # P2 商城域：种子扩至五态（pending/cancelled/refunded 补齐状态机演示）
-        ("pending", "unpaid", 358.0, "便携榨汁杯 400ml", 0),
-        ("cancelled", "unpaid", 199.0, "户外防水音箱 mini", 12),
-        ("refunded", "refunded", 599.0, "羊毛外套", 20),
+        ("pending", "unpaid", 358.0, "便携榨汁杯 400ml", 0, "SKU-JUICER"),
+        ("cancelled", "unpaid", 199.0, "户外防水音箱 mini", 12, "SKU-WATERPROOF-SPEAKER"),
+        ("refunded", "refunded", 599.0, "羊毛外套", 20, "SKU-WOOL-COAT"),
     )
     orders: list[dict[str, Any]] = []
-    for index, (status, payment, amount, product, age_days) in enumerate(
+    for index, (status, payment, amount, product, age_days, product_no) in enumerate(
         definitions, start=1,
     ):
         segment = digest[(index - 1) * 8:index * 8].upper()
@@ -159,11 +217,18 @@ def _seed_orders(user_id: str) -> list[dict[str, Any]]:
             "status": status,
             "payment_status": payment,
             "total_amount": amount,
+            "currency": "CNY",
             "item_count": 1,
             "item_summary": product,
             "product_names": product,
-            "items": [{"product_name": product, "quantity": 1, "price": amount}],
+            "items": [{
+                "product_no": product_no,
+                "product_name": product,
+                "quantity": 1,
+                "price": amount,
+            }],
             "created_at": created_at.isoformat(),
+            "paid_at": created_at.isoformat() if payment == "paid" else None,
             "estimated_delivery": (
                 (created_at + timedelta(days=4)).isoformat()
                 if status == "shipped" else None
@@ -345,6 +410,81 @@ def _coupons_for(user_id: str, tenant_id: str) -> list[dict[str, Any]]:
     return coupons
 
 
+def _payments_for(
+    user_id: str, tenant_id: str, order_no: str,
+) -> dict[str, Any]:
+    """按订单状态懒造确定性支付流水，覆盖成功、失败和重复成功三态。"""
+    order = _find_order(user_id, order_no)
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    key = (tenant_id.strip(), user_id.strip(), order["order_no"])
+    records = _PAYMENT_RECORDS.get(key)
+    if records is None:
+        total = _money(order["total_amount"])
+        now = datetime.now(timezone.utc)
+        order_status = str(order.get("status") or "").lower()
+        payment_status = str(order.get("payment_status") or "").lower()
+        if order_status == "shipped":
+            records = [
+                {
+                    "status": "success", "amount": total,
+                    "paid_at": (now - timedelta(minutes=2)).isoformat(),
+                    "kind": "alipay",
+                },
+                {
+                    "status": "success", "amount": total,
+                    "paid_at": (now - timedelta(minutes=1)).isoformat(),
+                    "kind": "wechat_pay",
+                },
+            ]
+        elif payment_status == "paid" or order_status in {"paid", "completed"}:
+            records = [{
+                "status": "success", "amount": total,
+                "paid_at": (now - timedelta(minutes=2)).isoformat(),
+                "kind": "alipay",
+            }]
+        elif order_status == "pending":
+            records = [{
+                "status": "failed", "amount": total,
+                "paid_at": "", "kind": "bank_card",
+            }]
+        else:
+            records = []
+        _PAYMENT_RECORDS[key] = records
+
+    for index, item in enumerate(records):
+        item.setdefault(
+            "payment_id",
+            str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"cs-payment:{key[0]}:{key[1]}:{key[2]}:{index}",
+            )),
+        )
+
+    successful = [item for item in records if item["status"] == "success"]
+    total = _money(order["total_amount"])
+    refund_candidate = bool(
+        len(records) <= 20
+        and len(successful) == 2
+        and not any(item.get("refund_status") for item in records)
+        and all(_money(item["amount"]) == total for item in successful)
+    )
+    return {
+        "order_no": order["order_no"],
+        "total_amount": float(total),
+        "currency": "CNY",
+        "payments": [
+            {**item, "amount": float(item["amount"])} for item in records[:20]
+        ],
+        "payment_count": len(records),
+        "payments_complete": len(records) <= 20,
+        "success_count": len(successful),
+        "duplicate_payment": len(successful) > 1,
+        "refund_candidate": refund_candidate,
+    }
+
+
 def _coupon_check(
     user_id: str, tenant_id: str, order_no: str, coupon_code: str = "",
 ) -> dict[str, Any]:
@@ -501,6 +641,7 @@ def reset_mock_state() -> None:
     """重置售后内存状态，供隔离测试使用。"""
     with _STATE_LOCK:
         _REFUND_REQUESTS.clear()
+        _ADDRESS_CHANGE_REQUESTS.clear()
         _OPERATIONS.clear()
         _ORDERS.clear()
         _WALLETS.clear()
@@ -509,6 +650,8 @@ def reset_mock_state() -> None:
         _REDEMPTIONS.clear()
         _INVOICE_TITLES.clear()
         _INVOICES.clear()
+        _URGE_REQUESTS.clear()
+        _PAYMENT_RECORDS.clear()
         _SEEDED_USERS.clear()
 
 
@@ -567,6 +710,22 @@ def get_order(
     return _ok({"order": order})
 
 
+@app.get("/business/products/{product_no}/current-price")
+def get_current_product_price(
+    product_no: str,
+    x_internal_token: str | None = Header(default=None),
+):
+    _check_token(x_internal_token)
+    price = _PRODUCT_CURRENT_PRICES.get(product_no)
+    if price is None:
+        raise HTTPException(status_code=404, detail="current price not found")
+    return _ok({
+        "product_no": product_no,
+        "price": str(price),
+        "currency": "CNY",
+    })
+
+
 @app.get("/business/orders/{order_no}/logistics")
 def get_order_logistics(
     order_no: str,
@@ -578,6 +737,143 @@ def get_order_logistics(
     if order is None:
         raise HTTPException(status_code=404, detail="order not found")
     return _ok({"logistics": _logistics(order)})
+
+
+@app.post("/business/logistics/{order_no}/change-address")
+def change_address_in_transit(
+    order_no: str,
+    payload: AddressChangeInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """只登记演示改址请求；不改订单、不调用真实承运方。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    tenant_id = payload.tenant_id.strip()
+    normalized_order_no = order_no.strip()
+    if normalized_order_no.casefold() != payload.order_no.strip().casefold():
+        raise HTTPException(status_code=422, detail="order number mismatch")
+    operation_payload = {
+        "user_id": user_id,
+        "tenant_id": tenant_id,
+        "order_no": normalized_order_no,
+        "expected_shipping_status": payload.expected_shipping_status.strip().lower(),
+        "new_address": payload.new_address.strip(),
+    }
+    operation_key = ("address-change", payload.operation_key)
+    with _STATE_LOCK:
+        prior = _OPERATIONS.get(operation_key)
+        if prior is not None:
+            if prior["payload"] != operation_payload:
+                raise HTTPException(status_code=409, detail="request key payload conflict")
+            return _ok({"address_change_request": dict(prior["request"])})
+
+        order = _find_order(user_id, normalized_order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        logistics = _logistics(order)
+        if (
+            order.get("status") != "shipped"
+            or logistics.get("shipping_status") != "shipped"
+            or operation_payload["expected_shipping_status"] != "shipped"
+        ):
+            raise HTTPException(status_code=409, detail="order is not in transit")
+        already_requested = any(
+            item.get("user_id") == user_id
+            and str(item.get("order_no") or "").casefold()
+            == normalized_order_no.casefold()
+            for item in _ADDRESS_CHANGE_REQUESTS.values()
+        )
+        if already_requested:
+            raise HTTPException(status_code=409, detail="address change already requested")
+
+        request = {
+            "request_id": payload.operation_key,
+            "order_no": order["order_no"],
+            "new_address": payload.new_address.strip(),
+            "status": "simulated",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "real_carrier_notified": False,
+            "real_order_address_changed": False,
+        }
+        _ADDRESS_CHANGE_REQUESTS[(user_id, payload.operation_key)] = {
+            **operation_payload,
+            **request,
+        }
+        _OPERATIONS[operation_key] = {
+            "payload": operation_payload,
+            "request": dict(request),
+        }
+        return _ok({"address_change_request": request})
+@app.post("/business/urge-requests")
+def create_urge_request(
+    payload: UrgeRequestInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """模拟催办登记；同租户/用户/订单/类型 24 小时内只建一条。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    order = _find_order(user_id, payload.order_no.strip())
+    if order is None:
+        raise HTTPException(status_code=404, detail="order not found")
+
+    logistics = _logistics(order)
+    if payload.request_type == "shipping" and order["status"] != "paid":
+        raise HTTPException(status_code=409, detail="order is not awaiting shipment")
+    if payload.request_type == "delivery" and order["status"] != "shipped":
+        raise HTTPException(status_code=409, detail="order is not in transit")
+
+    events = logistics.get("events") or []
+    last_update = (
+        datetime.fromisoformat(events[-1]["time"])
+        if events else datetime.fromisoformat(order["created_at"])
+    )
+    now = datetime.now(timezone.utc)
+    if last_update.tzinfo is None:
+        last_update = last_update.replace(tzinfo=timezone.utc)
+    stale_days = max(0, int((now - last_update).total_seconds() // 86400))
+    if stale_days > 5:
+        return _ok({
+            "handoff_required": True,
+            "handoff_reason": "物流超过 5 天无更新，需人工核实",
+            "logistics": logistics,
+            "stale_days": stale_days,
+        })
+
+    key = (
+        payload.tenant_id.strip(), user_id,
+        order["order_no"].casefold(), payload.request_type,
+    )
+    with _STATE_LOCK:
+        existing = _URGE_REQUESTS.get(key)
+        if existing:
+            created_at = datetime.fromisoformat(existing["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=timezone.utc)
+            if now - created_at < timedelta(hours=24):
+                return _ok({
+                    "urge_request": dict(existing),
+                    "already_registered": True,
+                    "handoff_required": False,
+                    "logistics": logistics,
+                    "stale_days": stale_days,
+                })
+
+        urge_request = {
+            "request_id": f"URGE-{uuid.uuid4().hex[:12].upper()}",
+            "order_no": order["order_no"],
+            "request_type": payload.request_type,
+            "status": "registered",
+            "created_at": now.isoformat(),
+            "conversation_id": payload.conversation_id,
+        }
+        _URGE_REQUESTS[key] = urge_request
+    return _ok({
+        "urge_request": dict(urge_request),
+        "already_registered": False,
+        "handoff_required": False,
+        "logistics": logistics,
+        "stale_days": stale_days,
+    })
 
 
 # ── P2 商城 Mock 账本：钱包 / 创建订单 / 支付 / 取消 ─────────────
@@ -604,6 +900,86 @@ def get_points(
     with _STATE_LOCK:
         profile = _points_for(user_id.strip(), tenant_id.strip())
         return _ok({"points": profile})
+
+
+@app.get("/business/payments")
+def get_payments(
+    user_id: str = Query("", min_length=1),
+    tenant_id: str = Query("", min_length=1),
+    order_no: str = Query("", min_length=1),
+    x_internal_token: str | None = Header(default=None),
+):
+    """查询归属用户订单的支付流水，不提供交易或退款操作。"""
+    _check_token(x_internal_token)
+    with _STATE_LOCK:
+        payment = _payments_for(
+            user_id.strip(), tenant_id.strip(), order_no.strip(),
+        )
+        return _ok({"payment": payment})
+
+
+@app.post("/business/payments/duplicate-refund-simulations")
+def simulate_duplicate_payment_refund(
+    payload: DuplicateRefundSimulationInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """仅在 Mock 内标记最新一笔重复扣款已模拟退款，不动真实资金。"""
+    _check_token(x_internal_token)
+    user_id = payload.user_id.strip()
+    tenant_id = payload.tenant_id.strip()
+    order_no = payload.order_no.strip()
+    action_id = str(payload.action_id)
+    identity = (tenant_id, user_id, order_no)
+    operation_key = ("duplicate-refund-simulation", action_id)
+
+    with _STATE_LOCK:
+        prior = _OPERATIONS.get(operation_key)
+        if prior is not None:
+            if prior.get("identity") != identity:
+                raise HTTPException(status_code=404, detail="payment not found")
+            return _ok({"refund": dict(prior["refund"])})
+
+        payment = _payments_for(user_id, tenant_id, order_no)
+        if payment["refund_candidate"] is not True:
+            raise HTTPException(
+                status_code=409,
+                detail="duplicate payment is no longer eligible for simulation",
+            )
+
+        key = (tenant_id, user_id, payment["order_no"])
+        records = _PAYMENT_RECORDS[key]
+        successful = [
+            (index, item) for index, item in enumerate(records)
+            if item.get("status") == "success"
+        ]
+        if len(successful) != 2:
+            raise HTTPException(status_code=409, detail="payment facts changed")
+        payment_index, payment_record = max(
+            successful, key=lambda pair: str(pair[1].get("paid_at") or ""),
+        )
+        refund_id = str(uuid.uuid5(
+            uuid.NAMESPACE_URL, f"cs-refund-simulation:{action_id}",
+        ))
+        payment_record["refund_status"] = "simulated"
+        payment_record["refund_id"] = refund_id
+        refund = {
+            "refund_id": refund_id,
+            "action_id": action_id,
+            "payment_id": payment_record["payment_id"],
+            "order_no": payment["order_no"],
+            "amount": payment["total_amount"],
+            "currency": payment["currency"],
+            "status": "simulated",
+            "execution_mode": "simulation",
+            "real_funds_affected": False,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _OPERATIONS[operation_key] = {
+            "identity": identity,
+            "payment_index": payment_index,
+            "refund": dict(refund),
+        }
+        return _ok({"refund": refund})
 
 
 @app.get("/business/coupons")
@@ -851,6 +1227,7 @@ def create_order(
                 raise HTTPException(status_code=422, detail="order item missing product_name")
             total += price * quantity
             items.append({
+                "product_no": str(item.get("product_no", "")),
                 "product_id": str(item.get("product_id", "")),
                 "product_name": name,
                 "quantity": quantity,
@@ -864,11 +1241,13 @@ def create_order(
             "status": "pending",
             "payment_status": "unpaid",
             "total_amount": float(_money(total)),
+            "currency": "CNY",
             "item_count": sum(i["quantity"] for i in items),
             "item_summary": "；".join(i["product_name"] for i in items),
             "product_names": "；".join(i["product_name"] for i in items),
             "items": items,
             "created_at": now,
+            "paid_at": None,
             "estimated_delivery": None,
         }
         # 先物化种子再插入：防止「首访即创建」跳过种子装载
@@ -908,6 +1287,19 @@ def pay_order(
         )
         order["status"] = "paid"
         order["payment_status"] = "paid"
+        paid_at = datetime.now(timezone.utc).isoformat()
+        order["paid_at"] = paid_at
+        payment_key = (
+            payload.tenant_id.strip(),
+            payload.user_id.strip(),
+            order["order_no"],
+        )
+        _PAYMENT_RECORDS.setdefault(payment_key, []).append({
+            "status": "success",
+            "amount": float(expected),
+            "paid_at": paid_at,
+            "kind": "wallet",
+        })
         _OPERATIONS[operation_key] = {
             "order": dict(order),
             "wallet": {
@@ -962,6 +1354,135 @@ def cancel_order(
             },
         }
         return _ok({"order": order, "wallet": _wallet_view(wallet)})
+
+
+@app.post("/business/orders/{order_no}/partial-refund")
+def create_price_match_refund(
+    order_no: str,
+    payload: PriceMatchRefundInput,
+    x_internal_token: str | None = Header(default=None),
+):
+    """价保演示写入：只增加 business-mock 钱包流水，不触及真实资金。"""
+    _check_token(x_internal_token)
+    if _PRICE_MATCH_MODE != "mock" or _PRICE_MATCH_WINDOW_DAYS <= 0:
+        raise HTTPException(status_code=409, detail="price match is disabled")
+    if payload.window_days != _PRICE_MATCH_WINDOW_DAYS:
+        raise HTTPException(status_code=409, detail="price match window mismatch")
+    if order_no != payload.order_no:
+        raise HTTPException(status_code=409, detail="order reference mismatch")
+    try:
+        expected_paid_at = datetime.fromisoformat(
+            payload.expected_paid_at.replace("Z", "+00:00"),
+        )
+    except ValueError:
+        raise HTTPException(status_code=422, detail="invalid paid_at") from None
+    if expected_paid_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="invalid paid_at")
+    expected_paid_at = expected_paid_at.astimezone(timezone.utc)
+
+    amount_expected = _money(payload.expected_amount)
+    original_expected = _money(payload.expected_original_price)
+    current_expected = _money(payload.expected_current_price)
+    request_facts = (
+        payload.user_id.strip(), payload.tenant_id.strip(), order_no,
+        payload.expected_status, payload.expected_payment_status,
+        expected_paid_at.isoformat(), payload.expected_currency,
+        payload.product_no, str(original_expected), str(current_expected),
+        str(amount_expected), payload.window_days,
+    )
+    operation_key = ("price-match", payload.operation_key)
+    with _STATE_LOCK:
+        previous = _OPERATIONS.get(operation_key)
+        if previous is not None:
+            if previous.get("request") != request_facts:
+                raise HTTPException(status_code=409, detail="operation key conflict")
+            return _ok(previous["data"])
+
+        order = _find_order(payload.user_id.strip(), order_no)
+        if order is None:
+            raise HTTPException(status_code=404, detail="order not found")
+        if (
+            order.get("status") != payload.expected_status
+            or order.get("payment_status") != payload.expected_payment_status
+            or order.get("status") not in _ELIGIBLE_PRICE_MATCH_STATUSES
+            or order.get("payment_status") != "paid"
+            or order.get("currency") != "CNY"
+            or payload.expected_currency != "CNY"
+        ):
+            raise HTTPException(status_code=409, detail="order facts changed or ineligible")
+
+        items = order.get("items")
+        if not isinstance(items, list) or len(items) != 1 or not isinstance(items[0], dict):
+            raise HTTPException(status_code=409, detail="order items are ineligible")
+        item = items[0]
+        try:
+            quantity = int(item.get("quantity", 0) or 0)
+        except (TypeError, ValueError):
+            quantity = 0
+        if (
+            quantity != 1
+            or str(item.get("product_no") or "") != payload.product_no
+        ):
+            raise HTTPException(status_code=409, detail="product facts changed")
+        if _money(item.get("price")) != original_expected:
+            raise HTTPException(status_code=409, detail="original price changed")
+        if _money(order.get("total_amount")) != original_expected:
+            raise HTTPException(status_code=409, detail="order amount changed")
+
+        try:
+            paid_at = datetime.fromisoformat(
+                str(order.get("paid_at") or "").replace("Z", "+00:00"),
+            )
+        except ValueError:
+            raise HTTPException(status_code=409, detail="paid_at unavailable") from None
+        if paid_at.tzinfo is None:
+            raise HTTPException(status_code=409, detail="paid_at unavailable")
+        paid_at = paid_at.astimezone(timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - paid_at).total_seconds()
+        if (
+            paid_at != expected_paid_at
+            or age_seconds < 0
+            or age_seconds > payload.window_days * 86400
+        ):
+            raise HTTPException(status_code=409, detail="price match window changed")
+
+        current_price = _PRODUCT_CURRENT_PRICES.get(payload.product_no)
+        if current_price is None or _money(current_price) != current_expected:
+            raise HTTPException(status_code=409, detail="current price changed")
+        refund_amount = (original_expected - current_expected).quantize(Decimal("0.01"))
+        if refund_amount <= 0 or refund_amount != amount_expected:
+            raise HTTPException(status_code=409, detail="price difference changed")
+
+        wallet = _wallet_for(payload.user_id.strip(), payload.tenant_id.strip())
+        if any(
+            entry.get("kind") == "price_match"
+            and entry.get("ref_no") == order_no
+            for entry in wallet.get("ledger", [])
+        ):
+            raise HTTPException(status_code=409, detail="price match already applied")
+        _wallet_append(
+            wallet,
+            direction="in",
+            amount=refund_amount,
+            kind="price_match",
+            ref_no=order_no,
+            memo=f"价保差价模拟入账 {order_no}",
+        )
+        data = {
+            "refund": {
+                "amount": str(refund_amount),
+                "currency": "CNY",
+                "kind": "price_match",
+                "status": "simulated",
+                "real_funds_affected": False,
+            },
+            "wallet": _wallet_view(wallet),
+        }
+        _OPERATIONS[operation_key] = {
+            "request": request_facts,
+            "data": data,
+        }
+        return _ok(data)
 
 
 @app.post("/business/refund-requests")

@@ -149,6 +149,7 @@ class TriggerType(str, Enum):
     LOW_CONFIDENCE = "low_confidence"
     CONSECUTIVE_FAILURES = "consecutive_failures"
     COMPLAINT_ESCALATION = "complaint_escalation"
+    BUSINESS_ESCALATION = "business_escalation"
     HIGH_RISK_ACTION = "high_risk_action"
     NONE = "none"
 
@@ -162,6 +163,7 @@ HANDOFF_REASON_BUCKETS = {
     TriggerType.LOW_CONFIDENCE.value: "capability_gap",
     TriggerType.CONSECUTIVE_FAILURES.value: "capability_gap",
     TriggerType.COMPLAINT_ESCALATION.value: "healthy_escalation",
+    TriggerType.BUSINESS_ESCALATION.value: "healthy_escalation",
     TriggerType.HIGH_RISK_ACTION.value: "healthy_escalation",
     TriggerType.NONE.value: "capability_gap",  # 无明确 trigger 的转人工按能力缺口处理
 }
