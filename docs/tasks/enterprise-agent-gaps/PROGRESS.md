@@ -2,14 +2,16 @@
 
 ## 当前状态
 
-`IN_PROGRESS`。当前子任务为 Planner 完整 Plan 契约与降级有效性，位于 Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-planner-contract\agent`，分支 `codex/planner-plan-validation`，起始 HEAD `74a9b38bbb2c428509021ef6ba841d5008f0cf5d`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
+`IN_PROGRESS`。Planner 契约整改已合并；当前完成 checkpoint 策略代码核验并同步总进度，Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-checkpoint-restore\agent`，分支 `codex/checkpoint-restore-audit`，基于 `c7c6b2d134a233aefdc194f23eefff87fd96bf87`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
 
 ## 已完成并合并
 
 - 构建版本身份追溯：PR [#346](https://github.com/Jayus-07/agent/pull/346)，commit `92b92839889fc337d8c20f9a0b86370a5fe6303f`，已合并。此前核验证据包括 13 项定向测试通过、Ruff/py_compile/Compose 配置检查通过；Docker rebuild 与 `/health.build` 未验证。
 - Langfuse 依赖/文档清理：PR [#344](https://github.com/Jayus-07/agent/pull/344)，已合并；PR 检查通过。合并后可信 push 的真实 RAG API 评测因离线限制在任务步骤启动前取消，不代表 Live 通过。
+- Planner 完整 Plan 契约和有效性：PR [#347](https://github.com/Jayus-07/agent/pull/347)，head `26cb238974e7033fcae80650aa9d58f61197c342`，squash merge `c7c6b2d134a233aefdc194f23eefff87fd96bf87`，已合并。PR 免费 CI 全通过；本地定向集合 **142 passed, 1 既有收集警告**；Ruff、py_compile、diff check 通过。自动 Review 的“运行时补全误记为模型成功”已修复，评分使用补全前模型计划并标记 `runtime_adjusted`。
+- Checkpoint 启用策略：PR [#345](https://github.com/Jayus-07/agent/pull/345) 文档修改已合并；本轮按当前配置、源码和测试复核，无需开启主图普通对话或客服图的生产开关，详细依据见下方。
 
-## 当前子任务：Planner 完整 Plan 与降级有效性
+## 已完成子任务：Planner 完整 Plan 与降级有效性
 
 ### 本轮实施与离线验证
 
@@ -26,25 +28,40 @@
 - Planner/数据集/Release Gate/RAG Smoke 定向集：**140 passed**；覆盖无缓存 Live 入口、非法/越权原始输出、过期未授权缓存、代理降级响应、Provider/预算/超时分类、完整边集、步骤范围、重复 capability 与历史有效性缓存。此总数包含有效性台账回归。
 - Review 修复后重新运行同一完整定向集：**142 passed, 1 warning**；警告为既有 `Eval TestCase` pytest 收集提示。
 - `py_compile`、Ruff（`--ignore I001,F401,E402`）、`git diff --check` 通过；Planner v2.0 `case_count=20` 与 canonical 内容 hash 在测试及 manifest 生成器核验中一致。
-- PR #347 原提交的免费 CI 全绿：secret scan、Evaluation V2 admin/free contract、RAG change detection、RAG Smoke preflight 与离线 smoke 汇总通过；真实 API Job 为 `SKIPPED` 且 `steps=[]`。P2 修复推送后需以新 commit 的 CI 结果为准。
+- PR #347 最终 head 的免费 CI 全绿：secret scan、Evaluation V2 admin/free contract、RAG change detection、RAG Smoke preflight 与离线 smoke 汇总通过；PR 真实 API Job 为 `SKIPPED` 且 `steps=[]`。
+- 合并后 main 的 secret scan 与 Evaluation V2 Contract 通过。可信 push 的 RAG 真实评测 Job 在 `queued` 后取消，Job `steps=[]`；RAG 汇总门按设计因未取得真实评测成功而失败。此结果遵守离线限制，不代表 Live 通过。
 - 未调用真实模型/Provider；测试使用 fake 响应。没有运行 Planner Live 评测，因此没有新的模型质量分数。
 
-### 本轮待办
+### Planner 子任务验收边界
 
-- 已完成 Planner 契约、Runtime 评测入口、Live Runner、数据集、Run Validity 和定向 Smoke 清单修改；Review 修复后的 142 项定向测试已通过，见上方证据。
 - Docker/资源复核：Windows 可用内存 **3.68 GiB**；共享 Compose 项目 `agent` 有 **20 个运行容器**，其配置来自 **4 个工作树**。当前任务 Worktree 没有 `.env`，`docker compose config` 因缺少必需数据库变量失败；`devctl.bat rebuild` 会将此 Worktree 的 Compose 配置固定到共享项目 `agent` 并重建多组服务，存在覆盖其他工作树运行配置的风险。因此未重建/重启共享栈，当前代码部署及 `/health.build` 为 **`UNVERIFIED`**。解除方式：在确认共享栈归属/配置且安全地补齐任务 Worktree 环境后，复用共享栈只重建受影响服务并检查 `/health.build`，或安排独立维护窗口执行。
-- 当前 PR #347 已有原提交 `ae16bce90a98c880df73e230e1077df217348d11`；自动 Review 提出的 P2 已修复并通过本地新增回归，待更新分支、等待新 commit CI、按用户授权合并并核对 main。真实 Planner Live 仍待模型凭据/授权验证。
+- 真实 Planner Live 仍待模型凭据/授权验证；当前只有 fake/离线验证，没有新的模型质量分数。
+
+## Checkpoint 策略核查结论
+
+- 主图普通 `/agent`：`MAIN_GRAPH_CHECKPOINTER_ENABLED` 代码默认 `false`；每次普通图执行使用新的不透明 `agent-<UUID>` thread_id，没有按该 ID 恢复同一次中断执行的公开入口。多轮历史由 MemoryService 管理。保持生产关闭是正确选择。
+- 客服图：`CS_CHECKPOINTER_ENABLED` 默认 `false`；图入口每轮从客服业务存储重新加载状态并清空单轮执行字段，`supports_interrupt=false`，没有客服图 `Command(resume=...)` 入口。客服对话/确认状态走业务存储，不需要仅因生产而打开图级 checkpoint。
+- 后台 TaskGraphExecutor：不受主图开关控制，始终构造 PostgreSQL Checkpointer；暂停、等待用户、Worker 接管和重试恢复依赖它。此类提供恢复契约的任务必须保持持久化，不能以 MemorySaver 代替。
+- 旅游图：主线允许复用稳定会话 thread_id，存在 interrupt 和 `Command(resume=...)` 恢复路径；`docker-compose.yml` 默认 `TRAVEL_CHECKPOINTER_ENABLED=true`，运行中的 `agent-app-1` 也显式设置为 `true`。其多轮改单/人工决策恢复需要持久 checkpoint；只读问答明确不挂载。
+- 当前容器没有设置主图或客服 checkpoint 环境变量，代码默认关闭；部署容器显式设置 `TRAVEL_CHECKPOINTER_ENABLED=true`。该环境核对只证明变量配置，不代替目标 Worktree 部署/健康验收。
+- 本轮未修改运行时代码。上述策略已由 PR #345 的现行 [AI Runtime 文档](../../architecture/ai-runtime.md)记录，本轮按 builder、runner、customer-service state loader、task executor、travel resume 调用及现有 checkpoint 测试复核。
 
 ## 未完成全局项
 
 - 客服 full_path 尚有 `next_action`、事实 ID、语义禁答和未命中路由等待闭环断言。
 - RAG/SQL/旅游/E2E/记忆/工具及多 Agent/办公的 Live 有效性、权限、恢复、并发、SSE 和真实来源需逐模块盘点并补证；不能把离线通过视为模型质量通过。
-- Checkpoint 生产启用应按具体链路的跨请求恢复契约决定，需重新核对 checkpoint-policy 分支/PR 当前状态；普通会话图不因生产环境默认打开。
+- Checkpoint 生产策略已核实：普通主图和客服图默认关闭；TaskGraphExecutor 与支持跨轮/中断恢复的旅游图使用 PostgreSQL checkpoint。后续若新增公开暂停/恢复链路，再据其状态契约和权限模型评审。
 - 成本、BadCase 回流、可观测和发布门禁需以当前代码/CI/运行证据复核。
 - Python/LLM/后端学习清单需要 Demo 运行证据；生产代码覆盖不能代替独立 Demo。
 - 当前离线限制下，真实模型质量、Provider 故障演练、生产部署与上线验收均未完成。
 
 ## 当前阻塞与解决办法
 
-- 部署验收当前为 `UNVERIFIED`，原因是当前 Worktree 缺 `.env` 且 `agent` 项目合并了多工作树 Compose 配置；不要用单工作树配置直接重建共享栈。先确认共享部署上下文并定向重建受影响服务，随后核对 `/health.build` commit/build identity。
+- 部署验收当前为 `UNVERIFIED`，原因是任务 Worktree 缺 `.env` 且共享 `agent` 项目合并了多工作树 Compose 配置；不要用单工作树配置直接重建共享栈。先确认共享部署上下文并定向重建受影响服务，随后核对正确的 build identity 健康接口。
 - 真实模型凭据未授权隔离，本轮只跑 fake/离线边界。解除限制后建立独立评测绑定与 Run ID，再执行 Planner Live，报告实际样本量、模型/Prompt/Commit、成本、延迟和 validity。
+
+## 下一步
+
+1. 客服评测闭环：优先补齐 `full_path` 对 `next_action`、事实 ID、语义禁答和未命中路由的断言，然后核对 Live 来源、跳过/降级 validity 与 release gate。
+2. 逐模块复核 RAG、SQL、旅游、记忆、工具/MCP、办公与多 Agent 的恢复、权限、并发、SSE 与成本/Trace 证据，按证据选择最小独立修复。
+3. 对照 Python/LLM/后端知识清单核查独立 Demo 运行证据；最后在安全部署上下文执行 Docker 重建与健康身份验收。
