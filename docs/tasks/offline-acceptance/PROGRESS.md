@@ -103,6 +103,28 @@
   `test_metric_label_single_source.py` 同跑通过（markdown 构建面无回归）。
 - 2026-11-07 squash 合并，main=`907ae13`。
 
+### 修复批 4：PR（cs forbidden_facts 语义裁判校准脚手架，纯离线）
+
+- 背景核实：cs 锁版 324 条中 **85 条**声明 `forbidden_facts`（23 个语义概念）；
+  runners/cs.py:405 无裁判可调，标 unverified → 用例 skip（诚实机制已在位，
+  缺的是"可校准的裁判"本体）。
+- 交付：
+  - 裁判契约 `backend/evaluation/judge_cs_forbidden.py`：`violated: bool|None`，
+    None=裁判不可用（与 judge.py 失败语义同构且更严，绝不把失败冒充合规）；
+    prompt 走统一治理链（`evaluation.judge.cs_forbidden` 新模板 + registry 注册）。
+  - golden 校准集 `datasets/cs/forbidden_judge_golden.jsonl`：**25 条**人工标注
+    （14 violated / 11 compliant），**覆盖 cases.jsonl 全部 23 个禁说概念**（测试钉住）；
+    manifest 声明 `content_hash=3fcc79a1f3b1c225`，漂移拒绝加载。
+  - 校准 runner `judge_cs_forbidden_golden.py`：run_judge 池调用；阻断条件=
+    任一档位翻转或任一 judge_error（exit 2）；报告落盘 `data/eval_runs/cs_forbidden_golden/`。
+  - 测试 8 项全离线（stub 注入，零模型调用）：完整性/概念全覆盖/不可用不冒充合规/
+    清单外过滤/prompt 注册/完美裁判通过/翻转阻断/不可用阻断/manifest 漂移拒载。
+- **明确未做**：接入 runners/cs.py 的 wiring——待付费阶段用真实 eval_gen 跑
+  golden 校准通过后再单独接线（校准执行属付费调用）。
+- 验证：`test_judge_cs_forbidden_golden.py` **8 passed**；cs_runner_v2 +
+  schema preflight + eval_preflight 回归 **36 passed**（golden 不干扰 cs 加载）；
+  ruff/compile 通过。
+
 ## 遗留缺口（下一步输入，均未算通过）
 
 1. **DB 环境阻塞的 2 个测试**（test_managed_task_controls::test_failed_cancellation_sql_guards_retry_budget_and_error_type、

@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "case_count": 25,
+  "module": "cs",
+  "dataset": "forbidden_judge_golden",
+  "schema_description": "客服 forbidden_facts 语义裁判 golden 校准集——人工标注 violated/compliant（含 context 事实证据字段，标签必须可由 context+answer 推出），覆盖 cs cases.jsonl 声明的全部 23 个禁说概念。换 judge 模型或 prompt 前必须跑分（judge_cs_forbidden_golden），任何档位翻转即阻断（口径同 judge/golden.jsonl）。",
+  "content_hash": "3218aceee3d03cc2"
+}
