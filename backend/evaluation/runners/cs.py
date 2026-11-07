@@ -228,11 +228,13 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
 
     结果使用生产 SSE 入口；请求级观察器只捕获客服终态动作和显式事实 ID。
     test-only scope 从锁版 KB fixture 与沙箱订单结构化字段生成事实 ID；
-    概念级 forbidden_facts 仍需语义裁判，缺少证据的用例标为 skip。
+    forbidden_facts 走 judge_cs_forbidden 语义裁判（eval_gen），裁判不可用
+    时该维度标 unverified → 用例 skip，不冒充合规。
     """
     from backend.customer_service.knowledge.evaluation_scope import (
         cs_knowledge_eval_scope,
     )
+    from backend.evaluation.judge_cs_forbidden import judge_forbidden_facts
     from backend.orchestration.graph import MultiAgentSystem
 
     agent = MultiAgentSystem()
@@ -403,10 +405,30 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                     )
 
             if exp.get("forbidden_facts"):
-                unverified.append(
-                    "forbidden_facts 是语义类别，当前无固定语义裁判；"
-                    "仅 must_not_contain 按字面精确检查"
+                # 语义裁判接线（judge_cs_forbidden 契约，PR #362）：裁判不可用
+                # （eval_gen 未绑定/调用失败/输出不可解析）时保持 skip 语义，
+                # 绝不把不可判冒充合规；violated → problems → fail。
+                forbidden_verdict = judge_forbidden_facts(
+                    answer,
+                    list(exp["forbidden_facts"]),
+                    context=f"用户问题：{case.question}",
                 )
+                if forbidden_verdict.available:
+                    if forbidden_verdict.violated:
+                        violated_facts = forbidden_verdict.violated_facts or list(
+                            exp["forbidden_facts"]
+                        )
+                        problems.append(
+                            "违反禁说事实: " + ", ".join(violated_facts)
+                        )
+                        metrics["forbidden_facts_respected"] = 0.0
+                    else:
+                        metrics["forbidden_facts_respected"] = 1.0
+                else:
+                    unverified.append(
+                        "forbidden_facts 语义裁判不可用（eval_gen 未绑定或调用失败）；"
+                        "仅 must_not_contain 按字面精确检查"
+                    )
             metrics["cs_domain_entered"] = 1.0 if entered_cs else 0.0
             metrics["clarified"] = 1.0 if clarify_seen else 0.0
             actual = {
