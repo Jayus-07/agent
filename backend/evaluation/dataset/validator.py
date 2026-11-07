@@ -30,7 +30,9 @@ def _normalize_ground_truth_context(expected: dict) -> None:
     expected["ground_truth_context"] = normalized
 
 
-def validate_dataset(cases: list[TestCase]) -> list[str]:
+def validate_dataset(
+    cases: list[TestCase], *, expected_module: str | None = None,
+) -> list[str]:
     """校验测试集，返回错误信息列表。空列表表示通过。
 
     V2.0 扩展校验：
@@ -45,6 +47,8 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
     seen_ids: set[str] = set()
 
     for case in cases:
+        if not case.id.strip():
+            errors.append("Case ID is empty")
         if case.id in seen_ids:
             errors.append(f"Duplicate case ID: {case.id}")
         seen_ids.add(case.id)
@@ -53,6 +57,11 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
             errors.append(f"Case {case.id}: question is empty")
         if case.module not in MODULE_KINDS:
             errors.append(f"Case {case.id}: invalid module '{case.module}'")
+        if expected_module and case.module != expected_module:
+            errors.append(
+                f"Case {case.id}: module '{case.module}' does not match dataset "
+                f"'{expected_module}'"
+            )
 
         if case.module == "planner":
             expected = case.expected
@@ -167,7 +176,9 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
                         )
 
         relevant_docs = case.expected.get("relevant_docs", [])
-        if relevant_docs:
+        if relevant_docs is not None and not isinstance(relevant_docs, list):
+            errors.append(f"Case {case.id}: relevant_docs must be a list")
+        elif isinstance(relevant_docs, list):
             for doc_entry in relevant_docs:
                 if isinstance(doc_entry, dict):
                     if not doc_entry.get("source_file") and not doc_entry.get("doc_id"):
@@ -176,15 +187,21 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
                     errors.append(f"Case {case.id}: relevant_docs contains invalid entry: {doc_entry}")
 
         answer_type = case.metadata.get("answer_type", "")
-        if answer_type and answer_type not in _VALID_ANSWER_TYPES:
-            errors.append(f"Case {case.id}: invalid answer_type '{answer_type}'")
+        if not isinstance(answer_type, str):
+            errors.append(f"Case {case.id}: answer_type must be a string")
+        elif case.module == "rag" and answer_type and answer_type not in _VALID_ANSWER_TYPES:
+            errors.append(f"Case {case.id}: invalid RAG answer_type '{answer_type}'")
 
         query_type = case.metadata.get("query_type", "")
-        if query_type and query_type not in _VALID_QUERY_TYPES:
-            errors.append(f"Case {case.id}: invalid query_type '{query_type}'")
+        if not isinstance(query_type, str):
+            errors.append(f"Case {case.id}: query_type must be a string")
+        elif case.module == "rag" and query_type and query_type not in _VALID_QUERY_TYPES:
+            errors.append(f"Case {case.id}: invalid RAG query_type '{query_type}'")
 
         tier = case.metadata.get("tier", "")
-        if tier and tier not in _VALID_TIERS:
+        if not isinstance(tier, str):
+            errors.append(f"Case {case.id}: tier must be a string")
+        elif tier and tier not in _VALID_TIERS:
             errors.append(f"Case {case.id}: invalid tier '{tier}'")
 
         for field in ("must_contain", "must_not_contain"):
@@ -193,8 +210,41 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
                 errors.append(f"Case {case.id}: {field} must be a list, got {type(value).__name__}")
 
         source = case.metadata.get("source", "")
-        if source and source not in _VALID_SOURCES:
+        if not isinstance(source, str):
+            errors.append(f"Case {case.id}: source must be a string")
+        elif source and source not in _VALID_SOURCES:
             errors.append(f"Case {case.id}: invalid source '{source}'")
+
+        if case.module == "sql":
+            expected = case.expected
+            should_reject = expected.get("should_reject", False)
+            if not isinstance(should_reject, bool):
+                errors.append(f"Case {case.id}: SQL should_reject must be a boolean")
+
+            expected_tables = expected.get("expected_tables")
+            if not isinstance(expected_tables, list) or any(
+                not isinstance(table, str) or not table.strip()
+                for table in expected_tables
+            ):
+                errors.append(
+                    f"Case {case.id}: SQL expected_tables must be a list of non-empty strings"
+                )
+            elif not should_reject and not expected_tables:
+                errors.append(f"Case {case.id}: SQL positive case needs expected_tables")
+
+            if should_reject is True:
+                expected_status = expected.get("expected_status")
+                if not isinstance(expected_status, list) or not expected_status or any(
+                    not isinstance(status, str) or not status.strip()
+                    for status in expected_status
+                ):
+                    errors.append(
+                        f"Case {case.id}: SQL reject case needs non-empty expected_status strings"
+                    )
+            else:
+                gold_sql = expected.get("gold_sql")
+                if not isinstance(gold_sql, str) or not gold_sql.strip():
+                    errors.append(f"Case {case.id}: SQL positive case needs non-empty gold_sql")
 
         gt = case.expected.get("ground_truth_context")
         should_reject = case.expected.get("should_reject", False)
@@ -207,9 +257,12 @@ def validate_dataset(cases: list[TestCase]) -> list[str]:
                         errors.append(
                             f"Case {case.id}: ground_truth_context[{i}] must be a dict"
                         )
-                    elif not entry.get("text", "").strip():
+                    elif (
+                        not isinstance(entry.get("text", ""), str)
+                        or not entry.get("text", "").strip()
+                    ):
                         errors.append(
-                            f"Case {case.id}: ground_truth_context[{i}].text is empty"
+                            f"Case {case.id}: ground_truth_context[{i}].text must be a non-empty string"
                         )
                 if should_reject and len(gt) > 0:
                     errors.append(

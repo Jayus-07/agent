@@ -45,6 +45,8 @@
 | E2：Integrated / Live | 隔离 PG、Redis、真实 LLM/Embedding/Provider（按需） | 高风险契约、新模型/Prompt/检索策略发布 |
 | E3：Product E2E | 实际网关、权限、三端 UI、实际 Provider、降级与恢复 | 发布/高风险迁移；截图和 Trace/API/DB 证据 |
 
+E0 的模块校验由统一数据集校验器按模块契约执行：RAG 的 `answer_type` / `query_type` 使用 RAG 枚举；SQL、E2E 等模块保留各自的查询类型，并校验 SQL 正向题的 `gold_sql` / `expected_tables` 与拒答题的 `expected_status`。评测服务须在创建 run 和启动任一 Runner 前，预校验本次所有模块的数据；校验失败时拒绝启动，不能先运行前序模块后才发现后续题集损坏。题集 Curator 写入也必须在校验失败时拒绝落盘。
+
 T0–T3 的选择继续由 [测试策略](../development/testing-guide.md) 决定；E0–E3 描述评测的**证据层**，不要求每个 Bug 都运行所有层。只有运行有效、必要指标达标、安全红线全过，且没有阻断项才能输出发布 PASS。可用配置将低风险功能直接发布到本机，不强制影子双跑或灰度。
 
 ## 5. 生命周期与输出

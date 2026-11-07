@@ -111,6 +111,58 @@ def test_preflight_rejects_missing_case_ids(tmp_path, monkeypatch):
     assert "GHOST-9" in result.reason
 
 
+def test_preflight_rejects_malformed_case_ids(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "backend.evaluation.dataset.loader.DATASET_DIR", tmp_path,
+    )
+    suites = tmp_path / "rag" / "suites"
+    suites.mkdir(parents=True)
+    (suites / "malformed-ids.json").write_text(json.dumps({
+        "name": "malformed-ids",
+        "kb_id": "rag_eval_kb",
+        "fixture_set": "baseline",
+        "dataset_version": "1.0",
+        "case_ids": [[]],
+    }), encoding="utf-8")
+
+    result = run_preflight(module="rag", selection="malformed-ids")
+
+    assert not result.passed
+    assert result.fail_stage == "case_ids_invalid"
+
+
+def test_preflight_rejects_invalid_rag_schema_before_fixture_checks(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "backend.evaluation.dataset.loader.DATASET_DIR", tmp_path,
+    )
+    rag = tmp_path / "rag"
+    suites = rag / "suites"
+    suites.mkdir(parents=True)
+    (rag / "cases.jsonl").write_text(
+        json.dumps({
+            "id": "R-1",
+            "question": "RAG 查询",
+            "module": "rag",
+            "expected": {},
+            "metadata": {"query_type": "join_aggregate"},
+        }, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    (suites / "bad-schema.json").write_text(json.dumps({
+        "name": "bad-schema",
+        "kb_id": "rag_eval_kb",
+        "fixture_set": "baseline",
+        "dataset_version": "1.0",
+        "case_ids": ["R-1"],
+    }, ensure_ascii=False), encoding="utf-8")
+
+    result = run_preflight(module="rag", selection="bad-schema")
+
+    assert not result.passed
+    assert result.fail_stage == "dataset_schema"
+    assert "invalid RAG query_type" in result.reason
+
+
 def test_preflight_cli_exit_codes(tmp_path, capsys):
     from backend.evaluation.preflight import main
 

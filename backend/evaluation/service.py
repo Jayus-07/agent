@@ -543,6 +543,26 @@ class EvaluationService:
             from backend.evaluation.preflight import run_preflight_strict
 
             run_preflight_strict(module="rag", selection=config.selection)
+        # E0 数据契约必须覆盖这次 run 的全部模块，并在创建 run / 调用任一
+        # Runner 前完成；否则 module=all 可能先付费跑完前序模块，再发现后续
+        # SQL/E2E 数据集损坏。
+        from backend.evaluation.preflight import run_schema_preflight_strict
+
+        if config.dataset:
+            schema_modules = ["rag"]
+            schema_dataset_path = None if config.selection else config.dataset
+        else:
+            schema_modules = (
+                list(ALL_RUN_MODULES)
+                if config.module == "all"
+                else [config.module]
+            )
+            schema_dataset_path = None
+        run_schema_preflight_strict(
+            schema_modules,
+            selection=config.selection,
+            dataset_path=schema_dataset_path,
+        )
         # 运行一开始就固定 run_id：checkpoint 与最终报告使用同一目录；
         # 中断后可从目录名取得 ID，再通过 --run-id + 默认 resume 续跑。
         run_id = config.run_id or make_run_id()
