@@ -12,6 +12,9 @@ orchestration/graph/cs_graph_node.py — Main Graph ↔ CS Graph 适配器
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 from backend.customer_service.context import merge_cs_context
 from backend.customer_service.graph_builder import get_cs_graph
@@ -21,6 +24,103 @@ from backend.orchestration.runtime_result_adapter import attach_runtime_result
 from backend.shared.logger import logger
 
 _FALLBACK_ANSWER = "抱歉，客服系统暂时不可用，请稍后再试。"
+_CS_EVAL_OBSERVER: ContextVar[Callable[[dict], None] | None] = ContextVar(
+    "cs_eval_observer", default=None,
+)
+
+
+@contextmanager
+def capture_cs_graph_evaluation(
+    observer: Callable[[dict], None],
+) -> Iterator[None]:
+    """仅为内部评测捕获脱敏后的客服终态；普通请求不安装观察器。"""
+    token = _CS_EVAL_OBSERVER.set(observer)
+    try:
+        yield
+    finally:
+        _CS_EVAL_OBSERVER.reset(token)
+
+
+def _publish_cs_eval_result(final_state: dict) -> None:
+    """发布评测需要的低基数决策和显式事实 ID，不传输业务数据。"""
+    observer = _CS_EVAL_OBSERVER.get()
+    if observer is None:
+        return
+
+    try:
+        observer(_build_cs_eval_observation(final_state))
+    except Exception:
+        # 评测捕获是旁路，格式漂移或观察器故障不能改变客服请求结果。
+        logger.debug("[cs_graph_node] 评测观察器写入失败", exc_info=True)
+
+
+def _build_cs_eval_observation(final_state: dict) -> dict:
+    """提取客服终态；只保留低基数决策和稳定事实标识。"""
+    decision = _as_mapping(final_state.get("supervisor_decision"))
+    expert = _as_mapping(final_state.get("last_expert_result"))
+    expert_data = _as_mapping(expert.get("data"))
+    pending = _as_mapping(final_state.get("pending_action"))
+    action_value = decision.get("next_action")
+    action = getattr(action_value, "value", action_value)
+    if action == "handoff":
+        next_action = "handoff"
+    elif action == "pending":
+        next_action = (
+            "propose_with_gap" if pending.get("status") == "need_info"
+            else "propose"
+        )
+    elif action == "finish":
+        next_action = (
+            "refuse" if expert_data.get("decision") == "refuse" else "answer"
+        )
+    else:
+        next_action = None
+
+    fact_ids: set[str] = set()
+    fact_ids_observable = False
+    for container in (expert, expert_data):
+        if "fact_id" in container or "fact_ids" in container:
+            fact_ids_observable = True
+        raw_ids = container.get("fact_ids")
+        if isinstance(raw_ids, (list, tuple, set)):
+            fact_ids.update(str(item) for item in raw_ids if item)
+        raw_id = container.get("fact_id")
+        if raw_id:
+            fact_ids.add(str(raw_id))
+    evidence = expert.get("evidence") or []
+    if isinstance(evidence, list):
+        for item in evidence:
+            if not isinstance(item, Mapping):
+                continue
+            if "fact_id" in item or "fact_ids" in item:
+                fact_ids_observable = True
+            raw_ids = item.get("fact_ids")
+            if isinstance(raw_ids, (list, tuple, set)):
+                fact_ids.update(str(value) for value in raw_ids if value)
+            raw_id = item.get("fact_id")
+            if raw_id:
+                fact_ids.add(str(raw_id))
+
+    response_guard_result = None
+    try:
+        from backend.observability.tracer import trace_collector
+
+        tracer = trace_collector.current()
+        if tracer is not None:
+            response_guard_result = tracer.tags.get("cs_response_guard_result")
+    except Exception:
+        pass
+
+    return {
+        "next_action": next_action,
+        "fact_ids": sorted(fact_ids) if fact_ids_observable else None,
+        "fact_ids_observable": fact_ids_observable,
+        "response_guard_result": response_guard_result,
+    }
+
+
+def _as_mapping(value: object) -> Mapping:
+    return value if isinstance(value, Mapping) else {}
 
 
 def cs_graph_node(state: dict) -> dict:
@@ -59,6 +159,7 @@ def cs_graph_node(state: dict) -> dict:
             user_id=cs_context.get("authenticated_user_id", ""))
         final_state = graph.invoke(cs_input, config=invoke_config)
         result = build_cs_graph_result(final_state)
+        _publish_cs_eval_result(final_state)
     except RequestCancelled as exc:
         # STOP CS-A P0-3：用户中止不是系统故障 —— 不落兜底话术、不产生
         # 正常回复；final_answer 置空（runner 不落库/不发 done），cancel
