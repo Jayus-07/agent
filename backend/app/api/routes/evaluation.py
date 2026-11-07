@@ -475,9 +475,17 @@ async def get_eval_run(
         # 字面量（pydantic 解析放行），出响应前统一清洗，禁止 500 打穿前端
         from backend.shared.jsonable import safe_jsonable
 
+        # 详情 API 也是质量对比的数据源。历史报告的有效性可能过期；
+        # 只改响应副本，与列表 API 一样重算，且不回写报告文件。
+        report_payload = report.model_dump(mode="json")
+        report_metadata = report_payload.get("metadata")
+        report_metadata = dict(report_metadata) if isinstance(report_metadata, dict) else {}
+        report_metadata["run_validity"] = resolve_report_validity(report).as_dict()
+        report_payload["metadata"] = report_metadata
+
         return {
             "run_id": run_id,
-            "report": safe_jsonable(mask_report_for_viewer(report.model_dump(mode="json"))),
+            "report": safe_jsonable(mask_report_for_viewer(report_payload)),
             "meta": safe_jsonable(meta),
             "run_status": safe_jsonable(read_run_status(run_id)),
         }

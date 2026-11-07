@@ -14,6 +14,8 @@
 
 当前离线审计修复了评测历史列表的有效性一致性：PG 摘要有效性为空或旧 `VALID` 时，会在工作线程读报告复核；PG 不可用走文件降级时也复用统一裁决器，旧报告会补算，当前错误证据可推翻旧 `VALID`。全量错误时保留已识别的数据库/Provider/预算原因。定向集合 **61 passed**，Ruff、`py_compile`、YAML 解析和 `git diff --check` 通过。pytest 收尾阶段 TaskService 尝试连接本机无密码 PostgreSQL 并超时，测试进程退出码 0、断言全部通过。由于本次改动后端 API，本机 rebuild/health 为 `UNVERIFIED`：Docker Engine named pipe 不存在、该 Worktree 无 `.env`；未触碰共享栈。恢复 Docker、补齐隔离环境并确认栈归属后再定向重建。
 
+后续核对发现详情 API 也会向管理端质量对比暴露报告中的历史 `run_validity`。当前分支已补齐详情响应重算，且只改响应副本；新增覆盖旧 `VALID` 被错误证据推翻、持久化 `INVALID` 不降级及不改写原报告。列表/详情/Release Gate/API workflow 定向集合 **63 passed in 41.23s**，Ruff、`py_compile`、`git diff --check` 通过。pytest 退出清理仍报告本机 PostgreSQL 未提供密码，最终退出码 0。Docker Engine named pipe 不可用，无法按仓库规则重建后端服务或检查健康身份，部署验收 `UNVERIFIED`；未运行任何 Provider。
+
 ## 已完成并合并
 
 - 构建版本身份追溯：PR [#346](https://github.com/Jayus-07/agent/pull/346)，commit `92b92839889fc337d8c20f9a0b86370a5fe6303f`，已合并。此前核验证据包括 13 项定向测试通过、Ruff/py_compile/Compose 配置检查通过；Docker rebuild 与 `/health.build` 未验证。
