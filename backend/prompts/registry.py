@@ -667,6 +667,15 @@ _register(PromptSpec(
     default_file="evaluation_judge_user.yaml",
 ))
 
+_register(PromptSpec(
+    key="evaluation.judge.cs_forbidden",
+    name="客服禁说事实裁判 Prompt",
+    category="evaluation",
+    risk_level="low",
+    variables=(R("forbidden_list"), R("actual_answer")),
+    default_file="evaluation_judge_cs_forbidden.yaml",
+))
+
 # ── External Prompt Files ──────────────────────────────────────
 
 _register(PromptSpec(
