@@ -477,6 +477,82 @@ def test_full_path_binds_registered_suite_scope_but_keeps_main_graph_default(
     assert current_cs_knowledge_eval_scope() is None
 
 
+@pytest.mark.parametrize(
+    "judge_violated,observable,expected_status,expected_metric",
+    [
+        (True, True, "fail", 0.0),
+        (False, True, "pass", 1.0),
+        (None, True, "skip", None),
+        (False, False, "skip", None),
+    ],
+)
+def test_full_path_forbidden_facts_judge_wiring(
+    monkeypatch, judge_violated, observable, expected_status, expected_metric
+):
+    """forbidden_facts 接线四态：violated→fail / 合规→pass / 裁判不可用→skip /
+    无可核验事实证据→不凭裁判计分（skip）。"""
+    from backend.evaluation.judge_cs_forbidden import ForbiddenJudgeResult
+    from backend.evaluation.models import TestCase
+    from backend.evaluation.runners import cs
+    from backend.infra.llm import budget
+    from backend.orchestration.graph import MultiAgentSystem
+    from backend.orchestration.graph.cs_graph_node import _publish_cs_eval_result
+
+    case = TestCase(
+        id="forbidden-wiring",
+        question="订单 8765 的物流呢",
+        module="cs",
+        expected={"forbidden_facts": ["静默纠错订单号"]},
+        metadata=_scope_args(),
+    )
+    monkeypatch.setattr(MultiAgentSystem, "__init__", lambda self: None)
+    monkeypatch.setattr(budget, "check_quota_blocked", lambda: None)
+    monkeypatch.setattr(budget, "bind_request_budget", lambda *a, **k: None)
+    monkeypatch.setattr(budget, "clear_request_budget", lambda *a, **k: None)
+
+    captured: dict = {}
+
+    def fake_judge(answer, forbidden_facts, context=None):
+        captured["answer"] = answer
+        captured["facts"] = list(forbidden_facts)
+        captured["context"] = context
+        return ForbiddenJudgeResult(violated=judge_violated, reasoning="stub")
+
+    # runner 在调用点动态 import——patch 源模块属性
+    monkeypatch.setattr(
+        "backend.evaluation.judge_cs_forbidden.judge_forbidden_facts", fake_judge
+    )
+
+    def stream_events(self, _message, _session_id, **kwargs):
+        expert_data = (
+            {"fact_ids": ["kb:policy-refund-timeline#时效"]}
+            if observable else {}
+        )
+        _publish_cs_eval_result({
+            "supervisor_decision": {"next_action": "finish"},
+            "last_expert_result": {"data": expert_data},
+        })
+        yield {"event": "status", "data": {"node": "cs_graph_node"}}
+        yield {"event": "done", "data": {"answer": "已为您查到订单 8756 的物流。"}}
+
+    monkeypatch.setattr(MultiAgentSystem, "stream_events", stream_events)
+    result = cs._run_live_full_path([case])[0]
+
+    assert result.status == expected_status
+    if observable and judge_violated is not None:
+        # 有证据时裁判必须被调用且拿到声明清单与证据 context
+        assert captured["facts"] == ["静默纠错订单号"]
+        assert "订单 8765" in (captured["context"] or "")
+        assert "运行时事实 ID" in (captured["context"] or "")
+    if expected_metric is None:
+        assert "forbidden_facts_respected" not in result.metrics
+        assert result.actual["unverified_checks"]
+    else:
+        assert result.metrics["forbidden_facts_respected"] == expected_metric
+        if judge_violated:
+            assert "违反禁说事实" in (result.error_msg or "")
+
+
 def test_full_path_rejects_non_cs_test_kb_suite_metadata():
     from backend.evaluation.models import TestCase
     from backend.evaluation.runners.cs import _cs_full_path_eval_scope_args

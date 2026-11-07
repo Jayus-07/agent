@@ -239,6 +239,36 @@
 4. AT-03/AT-05 现场 E2E（真实 worker kill 接管、provider 契约查账本）——归
    隔离全栈批次（Demo/Docker 验收时顺带）。
 
+### Demo 半项闭环（2026-11-08）：5/5 学习 Demo 实跑证据 ✅
+
+- 出处核实：`docs/tasks/enterprise-agent-gaps/learning-lab/`（gaps 工作树未提交
+  改动内），共 **5 个** Demo（非交接所称"十几个"）：python_basics（async/装饰器/
+  数据结构/异常）、llm_contracts（Token/工具 Schema/结构化输出/证据门控）、
+  agent_workflow（LangGraph 人工确认+MemorySaver 恢复+真 ReAct）、api_sse_demo
+  （FastAPI/SSE）、backend_io_demo（PG 临时表+Redis 幂等键）。
+- 2026-11-06 记录：前 4 个已实跑 exit 0；唯一缺证据的是 backend_io_demo
+  （当时隔离服务未启动）。
+- **2026-11-08 全部重跑**：4 个纯本地 Demo exit 0；backend_io_demo 对本任务隔离
+  容器（PG 5544 / Redis 16380，脚本内置守卫拒绝共享端口）exit 0——PG `ON COMMIT
+  DROP` 临时表读写、Redis `SET NX` 幂等写入/重复拒写/随机键删除。踩坑一处：
+  gaps 工作树 `.env` 的带密码 `REDIS_PASSWORD` 被 dotenv 装入，需命令级置空压制
+  （隔离 Redis 无认证）。
+- 结论：Demo 半项闭环，无需另立任务；gaps 工作树文件全程只读执行，未改动。
+
+### runners 接线（PR：forbidden_facts 语义裁判三态接线）
+
+- `runners/cs.py` full_path 的 forbidden_facts 从「无条件 unverified」改为走
+  `judge_cs_forbidden` 三态：violated→problems→fail（metrics
+  `forbidden_facts_respected=0`）；合规→pass（=1.0）；裁判不可用→unverified→
+  **skip 语义保持不变**（eval_gen 未绑定/失败绝不冒充合规）。context 传入用户
+  问题（满足依赖上下文判定类别的证据要求）。
+- 新增 3 例参数化接线测试（stub 裁判，零模型调用）：violated→fail+metrics、
+  合规→pass+metrics、不可用→skip+unverified_checks 记录；契约断言裁判收到
+  声明清单与用户问题 context。
+- 验证：`test_cs_eval_kb_contract.py` **21 passed**；ruff 通过。
+- **付费阶段前置注意**：接线后真实生效需 eval_gen 绑定模型；首次付费跑之前
+  先做 golden 25 条真实跑分校准（judge_cs_forbidden_golden），翻转即阻断。
+
 ## 遗留缺口（下一步输入，均未算通过）
 
 1. **DB 环境阻塞的 2 个测试**：✅ 已解决（见「隔离环境批 1」①——test A 夹具修复
