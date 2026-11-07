@@ -226,13 +226,9 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
     """full_path 模式（P0 评测集设计稿 §4）：
     Input Guard → 主图 Router（含 CS/旅游预过滤）→ route_selector → CS 子图全链。
 
-    当前可断言信号（不依赖 P1 CSUnderstanding 契约）：
-      - 域进入：cs_route=hit ⇒ status 流出现 cs_graph_node；
-      - 文本断言：must_contain / must_not_contain / forbidden_facts；
-      - 澄清：next_action=clarify ⇒ 流中出现 clarification 事件。
-    intent/entities 精确断言待 P1 CSUnderstanding 契约落地后在 actual 接线
-    （actual.pending 标注 p1-fields，不计 fail）。多轮 case 暂以末轮输入执行，
-    逐轮会话重放待 runner v2.1。
+    结果使用生产 SSE 入口；请求级观察器只捕获客服终态动作和显式事实 ID。
+    概念级 forbidden_facts 需要语义裁判，KB/DB allowed_facts 需要统一事实 ID；
+    对缺少证据的用例标为 skip，不能按文本包含关系假报通过。
     """
     from backend.orchestration.graph import MultiAgentSystem
 
@@ -245,6 +241,8 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
         nodes: set[str] = set()
         deltas: list[str] = []
         clarify_seen = False
+        done_data: dict = {}
+        last_observation: dict = {}
         try:
             from backend.infra.llm.budget import (
                 bind_request_budget,
@@ -259,6 +257,10 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                 user_id="eval_bot", tenant_id="default",
             )
             try:
+                from backend.orchestration.graph.cs_graph_node import (
+                    capture_cs_graph_evaluation,
+                )
+
                 messages = _user_turns(case)
                 session_id = f'eval-cs-v2-{run_token}-{case.id}'
                 for message in messages:
@@ -267,50 +269,149 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                     nodes = set()
                     deltas = []
                     clarify_seen = False
-                    for evt in agent.stream_events(
-                        message, session_id, kb_id="default",
-                        user_id="eval_bot", tenant_id='default',
-                    ):
-                        name = evt.get("event")
-                        data = evt.get("data") or {}
-                        if name == "status" and data.get("node"):
-                            nodes.add(data["node"])
-                        elif name == "clarification":
-                            clarify_seen = True
-                        elif name == "delta" and isinstance(data.get("content"), str):
-                            deltas.append(data["content"])
-                        elif name == 'error':
-                            raise RuntimeError('完整路径返回执行错误事件')
+                    done_data = {}
+                    observations: list[dict] = []
+                    with capture_cs_graph_evaluation(observations.append):
+                        for evt in agent.stream_events(
+                            message, session_id, kb_id="default",
+                            user_id="eval_bot", tenant_id='default',
+                        ):
+                            name = evt.get("event")
+                            data = evt.get("data") or {}
+                            if name == "status" and data.get("node"):
+                                nodes.add(data["node"])
+                            elif name == "clarification":
+                                clarify_seen = True
+                            elif name == "delta" and isinstance(data.get("content"), str):
+                                deltas.append(data["content"])
+                            elif name == "done":
+                                done_data = data
+                            elif name == 'error':
+                                raise RuntimeError('完整路径返回执行错误事件')
+                    last_observation = observations[-1] if observations else {}
             finally:
                 clear_request_budget()
-            answer = "".join(deltas)
+            if not isinstance(done_data, dict):
+                done_data = {}
+            done_answer = done_data.get("answer")
+            answer = (
+                done_answer if isinstance(done_answer, str)
+                else "".join(deltas)
+            )
+            source_ids = _source_ids(done_data.get("sources"))
             problems: list[str] = []
+            unverified: list[str] = []
             metrics: dict[str, float | None] = {}
+            route_matches = True
             if not answer.strip() and not clarify_seen:
                 problems.append('末轮没有回答或澄清事件')
-            if exp.get("cs_route") == "hit" and "cs_graph_node" not in nodes:
-                problems.append(f"未进入客服域: nodes={sorted(nodes)}")
+            entered_cs = "cs_graph_node" in nodes
+            expected_route = exp.get("cs_route")
+            if expected_route == "hit" and not entered_cs:
+                problems.append(f"期望进入客服域但未进入: nodes={sorted(nodes)}")
+                route_matches = False
+            elif expected_route == "miss_non_cs" and entered_cs:
+                problems.append("期望未命中客服域，但实际进入了 cs_graph_node")
+                route_matches = False
+            elif expected_route == "clarify_weak":
+                if entered_cs:
+                    problems.append("弱命中澄清不应进入 cs_graph_node")
+                    route_matches = False
+                if not clarify_seen:
+                    problems.append("弱命中路由期望澄清，但没有 clarification 事件")
+                    route_matches = False
+            if expected_route is not None:
+                metrics["cs_route_match"] = 1.0 if route_matches else 0.0
+
+            observed_action = (
+                "clarify" if clarify_seen
+                else last_observation.get("next_action")
+            )
+            expected_action = exp.get("next_action")
+            if expected_action is not None:
+                if expected_action == "clarify" and not clarify_seen:
+                    problems.append("期望澄清但末轮没有 clarification 事件")
+                    metrics["next_action_match"] = 0.0
+                elif observed_action is None:
+                    unverified.append("next_action 缺少客服终态观察证据")
+                elif observed_action != expected_action:
+                    problems.append(
+                        f"next_action 不符: 期望 {expected_action!r}，"
+                        f"实际 {observed_action!r}"
+                    )
+                    metrics["next_action_match"] = 0.0
+                else:
+                    metrics["next_action_match"] = 1.0
+
             for kw in exp.get("must_contain") or []:
                 if kw and kw not in answer:
                     problems.append(f"must_contain 未命中: {kw!r}")
-            for kw in (exp.get("must_not_contain") or []) + (exp.get("forbidden_facts") or []):
-                if kw and kw in answer:
+            for kw in exp.get("must_not_contain") or []:
+                if kw and kw.casefold() in answer.casefold():
                     problems.append(f"禁词命中: {kw!r}")
-            if exp.get("next_action") == "clarify" and not clarify_seen:
-                problems.append("期望澄清但未出现 clarification 事件")
-            metrics["cs_domain_entered"] = 1.0 if "cs_graph_node" in nodes else 0.0
+
+            expected_facts = exp.get("allowed_facts") or []
+            observed_fact_ids = last_observation.get("fact_ids")
+            fact_ids_observable = last_observation.get(
+                "fact_ids_observable", False,
+            )
+            if expected_facts:
+                if (
+                    not fact_ids_observable
+                    or observed_fact_ids is None
+                    or not observed_fact_ids
+                ):
+                    unverified.append(
+                        "allowed_facts 缺少与预期 KB/DB 锚点一致的运行时事实 ID"
+                    )
+                else:
+                    disallowed_facts = sorted(
+                        set(observed_fact_ids) - set(expected_facts)
+                    )
+                    if disallowed_facts:
+                        problems.append(
+                            f"运行时引用了未允许事实: {disallowed_facts}"
+                        )
+                    metrics["allowed_facts_verified"] = (
+                        0.0 if disallowed_facts else 1.0
+                    )
+
+            if exp.get("forbidden_facts"):
+                unverified.append(
+                    "forbidden_facts 是语义类别，当前无固定语义裁判；"
+                    "仅 must_not_contain 按字面精确检查"
+                )
+            metrics["cs_domain_entered"] = 1.0 if entered_cs else 0.0
             metrics["clarified"] = 1.0 if clarify_seen else 0.0
+            actual = {
+                "nodes": sorted(nodes),
+                "answer_head": answer[:200],
+                "turn_count": len(messages),
+                "route_observed": (
+                    "hit" if entered_cs else
+                    "clarify_weak" if clarify_seen else "miss_non_cs"
+                ),
+                "next_action": observed_action,
+                "source_ids": source_ids,
+                "fact_ids": observed_fact_ids,
+                "fact_ids_observable": bool(fact_ids_observable),
+                "response_guard_result": last_observation.get(
+                    "response_guard_result",
+                ),
+                "unverified_checks": unverified,
+            }
+            status = "fail" if problems else "skip" if unverified else "pass"
             results.append(EvalResult(
                 case_id=case.id,
                 module="cs",
-                status="fail" if problems else "pass",
+                status=status,
                 expected=exp,
-                actual={"nodes": sorted(nodes), "answer_head": answer[:200],
-                        'turn_count': len(messages),
-                        "pending": "p1-fields: intent/entities 断言待 CSUnderstanding"},
+                actual=actual,
                 metrics=metrics,
                 duration_ms=int((time.time() - t0) * 1000),
-                error_msg="; ".join(problems) or None,
+                error_msg="; ".join(
+                    problems + [f"未验证: {item}" for item in unverified]
+                ) or None,
             ))
         except Exception as e:
             logger.warning(f"[CS Runner] full_path case {case.id} 执行失败: {e}", exc_info=True)
@@ -324,3 +425,18 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                 error_msg=str(e)[:300],
             ))
     return results
+
+
+def _source_ids(sources: object) -> list[str]:
+    """从 SSE done.sources 提取安全的来源标识，不把标题/内容计作事实 ID。"""
+    if not isinstance(sources, list):
+        return []
+    identifiers: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("fact_id", "source_id", "doc_id"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                identifiers.add(value.strip())
+    return sorted(identifiers)

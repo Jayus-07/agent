@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`IN_PROGRESS`。Planner 契约整改已合并；当前完成 checkpoint 策略代码核验并同步总进度，Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-checkpoint-restore\agent`，分支 `codex/checkpoint-restore-audit`，基于 `c7c6b2d134a233aefdc194f23eefff87fd96bf87`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
+`IN_PROGRESS`。Planner 契约整改和 checkpoint 策略核验已合并；当前实施客服 `full_path` 评测闭环，Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-cs-eval-closure\agent`，分支 `codex/cs-fullpath-eval-contract`，基于 `0a647972d3e41a76a586ccf0bd6ec1f204a4aac0`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
 
 ## 已完成并合并
 
@@ -46,9 +46,29 @@
 - 当前容器没有设置主图或客服 checkpoint 环境变量，代码默认关闭；部署容器显式设置 `TRAVEL_CHECKPOINTER_ENABLED=true`。该环境核对只证明变量配置，不代替目标 Worktree 部署/健康验收。
 - 本轮未修改运行时代码。上述策略已由 PR #345 的现行 [AI Runtime 文档](../../architecture/ai-runtime.md)记录，本轮按 builder、runner、customer-service state loader、task executor、travel resume 调用及现有 checkpoint 测试复核。
 
+## 客服 full_path 评测闭环（本轮代码已实现，事实裁判待补）
+
+- Runner 继续走生产 `MultiAgentSystem.stream_events`；终态答案优先取 `done.answer`，同时记录稳定来源 ID；每轮重新初始化观察结果，前轮 clarification/action 不会替末轮通过。
+- 新增仅评测调用安装的请求级观察器，从客服图终态捕获规范化 `next_action`（answer/refuse/handoff/propose/propose_with_gap）；普通业务请求未安装观察器，不改变 SSE 或业务行为。Route `hit`、`miss_non_cs`、`clarify_weak` 都有反向断言。
+- 字面 `must_not_contain` 保持精确文本检查；概念级 `forbidden_facts` 不再拿标签本身做子串匹配。存在语义禁答约束、但没有固定语义裁判时，该样本标为 `skip`，不会冒充 `pass`。
+- `allowed_facts` 只在运行时提供显式 `fact_id(s)` 且与 expected 锚点可比时执行白名单断言；普通 `doc_id` 不冒充事实 ID。当前 CS Knowledge 只透传来源/FAQ ID，DB 专家也没有统一事实 ID；manifest 同时说明 `cs_eval_kb` 为 test-only 且 live 消费接线未完成，所以这类样本当前标记 `skip`。
+- 影响范围：锁版 v2.2 共 324 条，其中 185 条有 `allowed_facts`、85 条有语义级 `forbidden_facts`、107 条有字面 `must_not_contain`；304 条带 `next_action` 和 `cs_route`。
+- 下一步：为测试 KB 和 DB 查询建立稳定的事实 ID/字段来源契约并接入 `cs_q3_acceptance`；再选定经人工校准的语义裁判验证 `forbidden_facts`，在真实模型/Provider 未授权期间只做离线规则与契约测试。
+- 本地定向测试 **38 passed**；Ruff、`py_compile`、`git diff --check` 通过，未调用真实模型/Provider。pytest 退出码为 0；结束时另有既有 `TaskService.ensure_schema` 连接池超时日志，需要在后续基础设施检查中确认是否与测试环境连接池配置有关。
+- 部署与健康验收为 `UNVERIFIED`：当前没有 `.env`，Docker Desktop Linux Engine 管道不可用，`docker compose ls`/`docker stats` 均无法连接 daemon；未尝试启动或重建共享栈。Docker 可用、环境完整且共享栈归属确认后，再仅重建受影响服务并检查 `/health.build`。
+
+### 自动 Review P2：补槽后的终态动作识别（PR #349 follow-up）
+
+- 根因：`pending_turn_slot_fill` 由 Supervisor 以 `finish` 收尾；原观察器将所有 `finish` 视作 `answer`，导致补槽后新建待确认提案被误判，且只看顶层状态会读到补槽前遗留的 `need_info`。
+- 修复：只在补槽轮检查本轮 `last_expert_result.data.pending_action`。新待确认提案映射为 `propose`，仍缺信息映射为 `propose_with_gap`；本轮未产生新 pending 时按回答/拒绝处理，不使用旧顶层快照。客服业务执行路径未改。
+- 回归：观察器和生产 full_path runner 分别覆盖三种终态，包括“旧状态仍 need_info、但当前补槽未生成提案”的失败边界。
+- 本地验证：定向评测/观察器/图契约测试 **44 passed**；Ruff、`py_compile`、`git diff --check` 通过。pytest 退出码为 0，但结束日志显示 `TaskService.ensure_schema` 因本机 PostgreSQL `127.0.0.1:5432` 未提供密码而连接超时；该环境连接问题未解决，也未掩盖断言失败。
+- PR #349 的免费检查在修复前 head 全通过；真实 RAG API 评测按离线要求跳过。修复后的新 head 仍待 PR CI 与 review 状态复核。
+- Docker 重建/健康验收 `UNVERIFIED`：宿主可用内存 6.29 GiB，但 Docker Desktop Linux Engine named pipe 不存在，且当前 Worktree 无 `.env`；未启动或重建共享栈。恢复 Docker daemon、补齐安全的任务环境并确认共享栈归属后，按部署规则重建受影响服务，再检查 `/health.build`。
+
 ## 未完成全局项
 
-- 客服 full_path 尚有 `next_action`、事实 ID、语义禁答和未命中路由等待闭环断言。
+- 客服 full_path 的 route 与 `next_action` 已由生产路径/请求级观察器断言；`allowed_facts` 与概念级 `forbidden_facts` 已改为缺证据 `skip`。稳定事实 ID、测试 KB 到 Live 的绑定、经校准语义裁判仍未完成，不能发布 CS 全路径质量通过率。
 - RAG/SQL/旅游/E2E/记忆/工具及多 Agent/办公的 Live 有效性、权限、恢复、并发、SSE 和真实来源需逐模块盘点并补证；不能把离线通过视为模型质量通过。
 - Checkpoint 生产策略已核实：普通主图和客服图默认关闭；TaskGraphExecutor 与支持跨轮/中断恢复的旅游图使用 PostgreSQL checkpoint。后续若新增公开暂停/恢复链路，再据其状态契约和权限模型评审。
 - 成本、BadCase 回流、可观测和发布门禁需以当前代码/CI/运行证据复核。
@@ -62,6 +82,6 @@
 
 ## 下一步
 
-1. 客服评测闭环：优先补齐 `full_path` 对 `next_action`、事实 ID、语义禁答和未命中路由的断言，然后核对 Live 来源、跳过/降级 validity 与 release gate。
+1. 客服评测闭环：建立 KB/DB 稳定事实 ID、接通 test-only `cs_eval_kb` 与 full_path suite；之后接入有版本与人工校准的语义裁判，验证 `forbidden_facts` 并发布有效样本结果。
 2. 逐模块复核 RAG、SQL、旅游、记忆、工具/MCP、办公与多 Agent 的恢复、权限、并发、SSE 与成本/Trace 证据，按证据选择最小独立修复。
 3. 对照 Python/LLM/后端知识清单核查独立 Demo 运行证据；最后在安全部署上下文执行 Docker 重建与健康身份验收。
