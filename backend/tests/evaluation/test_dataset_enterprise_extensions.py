@@ -122,7 +122,7 @@ def test_managed_release_gate(status, fixed, total, expected):
             "corpus_source_mapping_complete": True,
             "run_validity": {"validity": status},
         },
-        results=[SimpleNamespace(status="pass")] * total,
+        results=[SimpleNamespace(status="pass", actual={})] * total,
     )
     assert compute_module_release_gate(report)["verdict"] == expected
 
@@ -294,7 +294,7 @@ def test_legacy_source_mapping_cannot_pass_release_gate():
             "corpus_source_mapping_complete": False,
             "run_validity": {"validity": "VALID"},
         },
-        results=[SimpleNamespace(status="pass")] * 5,
+        results=[SimpleNamespace(status="pass", actual={})] * 5,
     )
     gate = compute_module_release_gate(report)
     assert gate["verdict"] == "FAIL"
