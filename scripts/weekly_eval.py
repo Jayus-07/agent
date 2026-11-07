@@ -7,8 +7,8 @@ weekly_eval.py — 周度 RAG 评测（2026-08-21 P1-2 迁移到 backend.evaluat
     python scripts/weekly_eval.py
 
 旧实现基于 backend.eval 的 5 条 golden 用例（端到端、依赖 LLM），已随
-backend/eval 一并移除；现统一走 backend.evaluation 的 54 条 rag_test_kb
-离线检索评测（确定性、无 API 成本）。手动 CLI 全量评测也可直接用:
+backend/eval 一并移除；现统一走 backend.evaluation 的 103 条 rag_test_kb
+离线检索评测（v4.0，确定性、无 API 成本）。手动 CLI 全量评测也可直接用:
     python -m backend.evaluation rag --dataset rag_test_kb.json
 """
 import sys
@@ -22,7 +22,7 @@ from backend.evaluation.weekly import run_weekly_rag_eval
 
 
 def main():
-    print("📝 数据集: rag_test_kb.json (v1.3, 54 条, 离线检索评测)")
+    print("📝 数据集: rag_test_kb.json (v4.0, 103 条, 离线检索评测)")
     print()
 
     summary = run_weekly_rag_eval()
