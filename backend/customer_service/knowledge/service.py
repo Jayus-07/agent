@@ -55,6 +55,24 @@ class CSKnowledgeService:
                 空 = 未认证会话，按 demo 命名空间隔离，绝不共享长期记忆
             tenant_id: 租户 id（来自 cs_context.tenant_id）
         """
+        from backend.customer_service.knowledge.evaluation_scope import (
+            CS_EVAL_KB_ID,
+            current_cs_knowledge_eval_scope,
+        )
+
+        eval_scope = current_cs_knowledge_eval_scope()
+        if eval_scope is not None:
+            if eval_scope.kb_id != CS_EVAL_KB_ID:
+                raise ValueError("客服评测 scope 包含未登记的知识库")
+            from backend.config.knowledge_base import get_knowledge_bases
+
+            kb_info = get_knowledge_bases().get(CS_EVAL_KB_ID)
+            if not kb_info or kb_info.get("audience") != "test":
+                raise PermissionError(
+                    f"拒绝评测检索：{CS_EVAL_KB_ID} 未标记为 audience=test"
+                )
+            # 忽略 route/client 传入的任何范围，只允许读取唯一的 test KB。
+            kb_ids = [CS_EVAL_KB_ID]
         if not kb_ids:
             kb_ids = ["cs_faq"]
         # E2（2026-09-23）：身份贯通——认证用户按真实身份隔离 L2/L3 记忆；
@@ -65,18 +83,23 @@ class CSKnowledgeService:
 
         # C3/C4 FAQ 双轨（2026-10-04）：精准命中直返，不进 RAG/LLM——
         # TTFT 从秒级降到百毫级、成本≈0；未命中原样落回既有 RAG 链。
-        faq_t0 = time.monotonic()
-        try:
-            from backend.customer_service.faq import get_faq_store
-            faq = get_faq_store().match(question)
-        except Exception as faq_err:
-            logger.warning(f"[CSKnowledge] FAQ 层故障（降级走 RAG 链）: {faq_err}")
+        faq = None
+        if eval_scope is None:
+            faq_t0 = time.monotonic()
             try:
-                from backend.customer_service.faq import cs_faq_layer_failures_total
-                cs_faq_layer_failures_total.inc()
-            except Exception:
-                pass  # 观测旁路失败不影响降级主链
-            faq = None
+                from backend.customer_service.faq import get_faq_store
+                faq = get_faq_store().match(question)
+            except Exception as faq_err:
+                logger.warning(
+                    f"[CSKnowledge] FAQ 层故障（降级走 RAG 链）: {faq_err}"
+                )
+                try:
+                    from backend.customer_service.faq import (
+                        cs_faq_layer_failures_total,
+                    )
+                    cs_faq_layer_failures_total.inc()
+                except Exception:
+                    pass  # 观测旁路失败不影响降级主链
         if faq is not None:
             latency_ms = int((time.monotonic() - faq_t0) * 1000)
             logger.info(
@@ -117,15 +140,23 @@ class CSKnowledgeService:
                 f"kb_ids={kb_ids}"
             )
 
+            retrieval_kwargs = {"subject_type": "customer"}
+            if eval_scope is not None:
+                retrieval_kwargs = {
+                    "subject_type": "employee",
+                    # super_admin 仅从服务器内部评测 ContextVar 注入，并受显式
+                    # 单 KB 范围约束；普通客服请求不会获得此角色。
+                    "roles": ("super_admin",),
+                    "persist_memory": False,
+                }
             outcome = pipeline.ask_result(
                 question=question,
                 session_id=session_id,
                 kb_id=primary_kb,
                 kb_ids=kb_ids,
-                # 对客知识问答：检索授权收敛到 audience=="customer" 库（cs_*）
-                subject_type="customer",
                 user_id=user_id,
                 tenant_id=tenant_id,
+                **retrieval_kwargs,
             )
             answer = outcome.answer
 
@@ -164,8 +195,24 @@ class CSKnowledgeService:
                 # 拒答自救阶梯（V4/V5，2026-10-04 对话体验改造）：不直接推
                 # 人工——先给换问法引导/相似 FAQ 候选，人工仅用户主动或
                 # C8 必转时机（handoff 时机集另有规则面承接）
-                final_answer = _build_refusal_reply(
-                    question, cs_decision.suffix)
+                if eval_scope is None:
+                    final_answer = _build_refusal_reply(
+                        question, cs_decision.suffix,
+                    )
+                else:
+                    final_answer = _build_refusal_reply(
+                        question,
+                        cs_decision.suffix,
+                        include_faq_candidates=False,
+                    )
+
+            sources = list(getattr(outcome, "sources", None) or [])
+            if eval_scope is not None:
+                sources = [
+                    {**source, "kb_id": eval_scope.kb_id}
+                    if isinstance(source, dict) else source
+                    for source in sources
+                ]
 
             return CSKnowledgeResult(
                 answer=final_answer,
@@ -173,7 +220,7 @@ class CSKnowledgeService:
                 confidence=confidence,
                 kb_ids=kb_ids,
                 suffix=cs_decision.suffix,
-                sources=list(getattr(outcome, "sources", None) or []),
+                sources=sources,
             )
 
         except Exception as e:
@@ -189,18 +236,25 @@ class CSKnowledgeService:
 _service_instance: CSKnowledgeService | None = None
 
 
-def _build_refusal_reply(question: str, base_text: str) -> str:
+def _build_refusal_reply(
+    question: str,
+    base_text: str,
+    *,
+    include_faq_candidates: bool = True,
+) -> str:
     """拒答自救阶梯（V4，任务卡 T2）：基础话术 + 相似 FAQ 候选或换问法引导。
 
     零 LLM 零额外 IO（复用 FAQ 进程内索引）；FAQ 层故障不阻断拒答
     （旁路降级为基础话术）。"已记录"来自 base_text——拒答已由 FAQ 层
     落 ai.cs_faq_query_log，缺口周检闭环消费。
     """
-    try:
-        from backend.customer_service.faq import get_faq_store
-        candidates = get_faq_store().match_candidates(question, k=2)
-    except Exception:
-        candidates = []
+    candidates = []
+    if include_faq_candidates:
+        try:
+            from backend.customer_service.faq import get_faq_store
+            candidates = get_faq_store().match_candidates(question, k=2)
+        except Exception:
+            candidates = []
     if candidates:
         listed = "、".join(f"「{c.question}」" for c in candidates)
         return f"{base_text}您是不是想问：{listed}？换个问法我可能就能帮到您。"

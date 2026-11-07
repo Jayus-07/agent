@@ -2,7 +2,11 @@
 
 ## 当前状态
 
-`IN_PROGRESS`。Planner 契约整改和 checkpoint 策略核验已合并；当前实施客服 `full_path` 评测闭环，Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-cs-eval-closure\agent`，分支 `codex/cs-fullpath-eval-contract`，基于 `0a647972d3e41a76a586ccf0bd6ec1f204a4aac0`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
+`IN_PROGRESS`。Planner 契约整改和 checkpoint 策略核验已合并；当前实施客服 `full_path` 评测事实 ID 与 test KB 接线，Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-cs-facts\agent`，分支 `codex/cs-fact-id-contract`，基于 PR #349 merge commit `baffc319bfe6bcbb60aec64aca99891feccf6d0e`。本轮只允许离线/代码验证，不调用真实模型或 Provider。
+
+2026-11-07 更新：客服 full_path 修复已通过 PR [#349](https://github.com/Jayus-07/agent/pull/349) 合并，merge commit `baffc319bfe6bcbb60aec64aca99891feccf6d0e`。本地 44 项定向测试通过，Ruff、`py_compile`、diff check 通过；PR 免费 CI 全通过。合并后 Evaluation V2 main workflow 通过；main RAG real-API workflow 按离线限制取消，真实 Job `steps=[]`，其汇总门因缺少真实结果报失败，未执行模型调用。部署仍 `UNVERIFIED`（Docker daemon 不可用、任务 Worktree 无 `.env`）。当前下一任务在 `C:\Users\wh\.codex\worktrees\enterprise-agent-cs-facts\agent`，分支 `codex/cs-fact-id-contract`，基于该 merge commit。
+
+当前子任务验收证据与进度见 [cs-fact-id-contract](../cs-fact-id-contract/TASK.md) 和其 `PROGRESS.md`。
 
 ## 已完成并合并
 
@@ -46,15 +50,17 @@
 - 当前容器没有设置主图或客服 checkpoint 环境变量，代码默认关闭；部署容器显式设置 `TRAVEL_CHECKPOINTER_ENABLED=true`。该环境核对只证明变量配置，不代替目标 Worktree 部署/健康验收。
 - 本轮未修改运行时代码。上述策略已由 PR #345 的现行 [AI Runtime 文档](../../architecture/ai-runtime.md)记录，本轮按 builder、runner、customer-service state loader、task executor、travel resume 调用及现有 checkpoint 测试复核。
 
-## 客服 full_path 评测闭环（本轮代码已实现，事实裁判待补）
+## 客服 full_path 评测闭环（事实来源接线已实施，Live 与语义裁判待补）
 
 - Runner 继续走生产 `MultiAgentSystem.stream_events`；终态答案优先取 `done.answer`，同时记录稳定来源 ID；每轮重新初始化观察结果，前轮 clarification/action 不会替末轮通过。
 - 新增仅评测调用安装的请求级观察器，从客服图终态捕获规范化 `next_action`（answer/refuse/handoff/propose/propose_with_gap）；普通业务请求未安装观察器，不改变 SSE 或业务行为。Route `hit`、`miss_non_cs`、`clarify_weak` 都有反向断言。
 - 字面 `must_not_contain` 保持精确文本检查；概念级 `forbidden_facts` 不再拿标签本身做子串匹配。存在语义禁答约束、但没有固定语义裁判时，该样本标为 `skip`，不会冒充 `pass`。
-- `allowed_facts` 只在运行时提供显式 `fact_id(s)` 且与 expected 锚点可比时执行白名单断言；普通 `doc_id` 不冒充事实 ID。当前 CS Knowledge 只透传来源/FAQ ID，DB 专家也没有统一事实 ID；manifest 同时说明 `cs_eval_kb` 为 test-only 且 live 消费接线未完成，所以这类样本当前标记 `skip`。
+- 当前分支正在接入稳定事实来源：登记 suite 的 full_path 通过服务器内部 scope 只检索 `audience=test` 的 `cs_eval_kb`；固定 fixture manifest 校验文档 hash、RAG version 与精确章节，普通 `doc_id` 不冒充事实 ID；订单事实只从 `sandbox_order_service` 返回的 DEMO 订单结构化字段生成。普通客服仍保持 customer 授权和生产 FAQ 行为。该实现尚待 PR CI 与合并验收，不能视为已进入 main。
+- Fixture 导入器要求显式 `--apply`，并将清理和写入限制在专用 test KB。本轮遵守离线限制，没有运行导入器或 embedding Provider；实际索引状态、检索质量和真实模型质量仍未验证。
+- `allowed_facts` 有了运行时事实 ID 后可执行白名单断言；概念级 `forbidden_facts` 仍没有经人工校准的语义裁判，缺少判据的样本继续标记 `skip`，不会冒充 `pass`。
 - 影响范围：锁版 v2.2 共 324 条，其中 185 条有 `allowed_facts`、85 条有语义级 `forbidden_facts`、107 条有字面 `must_not_contain`；304 条带 `next_action` 和 `cs_route`。
-- 下一步：为测试 KB 和 DB 查询建立稳定的事实 ID/字段来源契约并接入 `cs_q3_acceptance`；再选定经人工校准的语义裁判验证 `forbidden_facts`，在真实模型/Provider 未授权期间只做离线规则与契约测试。
-- 本地定向测试 **38 passed**；Ruff、`py_compile`、`git diff --check` 通过，未调用真实模型/Provider。pytest 退出码为 0；结束时另有既有 `TaskService.ensure_schema` 连接池超时日志，需要在后续基础设施检查中确认是否与测试环境连接池配置有关。
+- 当前子任务的离线测试、PR 免费 CI 和合并验收完成后，再独立设计并校准 `forbidden_facts` 语义裁判；真实 fixture 导入与模型评测需等到获准使用隔离 Provider 凭据后执行。
+- 上一轮观察器/Runner 定向测试 **38 passed**；本次事实 ID 与 test KB 接线在当前 Worktree 的独立验证为 **99 passed in 49.19s**（退出码 0）。Ruff、`py_compile`、manifest JSON、YAML 与 `git diff --check` 通过，未调用真实模型/Provider。测试收尾另有 `TaskService.ensure_schema` 因本机 PostgreSQL 未提供密码的连接池超时日志，不影响通过结果。
 - 部署与健康验收为 `UNVERIFIED`：当前没有 `.env`，Docker Desktop Linux Engine 管道不可用，`docker compose ls`/`docker stats` 均无法连接 daemon；未尝试启动或重建共享栈。Docker 可用、环境完整且共享栈归属确认后，再仅重建受影响服务并检查 `/health.build`。
 
 ### 自动 Review P2：补槽后的终态动作识别（PR #349 follow-up）
@@ -68,7 +74,7 @@
 
 ## 未完成全局项
 
-- 客服 full_path 的 route 与 `next_action` 已由生产路径/请求级观察器断言；`allowed_facts` 与概念级 `forbidden_facts` 已改为缺证据 `skip`。稳定事实 ID、测试 KB 到 Live 的绑定、经校准语义裁判仍未完成，不能发布 CS 全路径质量通过率。
+- 客服 full_path 的 route 与 `next_action` 已由生产路径/请求级观察器断言；稳定事实来源及 test KB 代码接线正在当前独立 PR 中实施，合并后仍须验证 fixture 实际索引和 Live 结果。概念级 `forbidden_facts` 仍因缺少校准裁判而 skip，当前不能发布 CS 全路径质量通过率。
 - RAG/SQL/旅游/E2E/记忆/工具及多 Agent/办公的 Live 有效性、权限、恢复、并发、SSE 和真实来源需逐模块盘点并补证；不能把离线通过视为模型质量通过。
 - Checkpoint 生产策略已核实：普通主图和客服图默认关闭；TaskGraphExecutor 与支持跨轮/中断恢复的旅游图使用 PostgreSQL checkpoint。后续若新增公开暂停/恢复链路，再据其状态契约和权限模型评审。
 - 成本、BadCase 回流、可观测和发布门禁需以当前代码/CI/运行证据复核。
@@ -82,6 +88,6 @@
 
 ## 下一步
 
-1. 客服评测闭环：建立 KB/DB 稳定事实 ID、接通 test-only `cs_eval_kb` 与 full_path suite；之后接入有版本与人工校准的语义裁判，验证 `forbidden_facts` 并发布有效样本结果。
+1. 完成本分支的客服 test KB/事实 ID 变更 PR、CI 与合并验收；之后另立任务校准 `forbidden_facts` 语义裁判，并在 Provider 获准后导入 fixture、运行 Live 评测及发布有效样本结果。
 2. 逐模块复核 RAG、SQL、旅游、记忆、工具/MCP、办公与多 Agent 的恢复、权限、并发、SSE 与成本/Trace 证据，按证据选择最小独立修复。
 3. 对照 Python/LLM/后端知识清单核查独立 Demo 运行证据；最后在安全部署上下文执行 Docker 重建与健康身份验收。

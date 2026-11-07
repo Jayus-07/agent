@@ -123,6 +123,22 @@ def _build_cs_eval_observation(final_state: dict) -> dict:
             if raw_id:
                 fact_ids.add(str(raw_id))
 
+    from backend.customer_service.knowledge.evaluation_scope import (
+        current_cs_knowledge_eval_scope,
+    )
+
+    if current_cs_knowledge_eval_scope() is not None:
+        # TaskPlan 的前序 Query 结果会保存在 task_results，末轮常已是 Action
+        # Expert；从结构化、显式标记 sandbox 的结果补齐本轮 DB 证据。
+        fact_ids_observable = True
+        from backend.customer_service.experts.query import _sandbox_order_fact_ids
+
+        for task_result in final_state.get("task_results") or []:
+            if isinstance(task_result, Mapping):
+                fact_ids.update(_sandbox_order_fact_ids({
+                    "task_result": dict(task_result),
+                }))
+
     response_guard_result = None
     try:
         from backend.observability.tracer import trace_collector

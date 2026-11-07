@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from backend.customer_service.experts.base import ExpertResult, ExpertStatus
@@ -69,9 +70,10 @@ def execute_query(
     if current_task.get("capability") in (
         "query_logistics", "query_order_status", "query_payments",
     ):
-        return _execute_task_query(
+        result = _execute_task_query(
             current_task, user_id, user_message, cs_route, state,
         )
+        return _attach_cs_eval_fact_ids(result)
 
     intents = None
     if _compound_suspected(user_message):
@@ -100,12 +102,12 @@ def execute_query(
         merged_facts = _merge_service_facts(service_facts)
         if merged_facts:
             data["service_facts"] = merged_facts
-        return ExpertResult(
+        return _attach_cs_eval_fact_ids(ExpertResult(
             expert="query",
             status=ExpertStatus.SUCCESS.value,
             response_draft=answer,
             data=data,
-        )
+        ))
 
     tenant_id = str(state.get("tenant_id") or "default")
     session_id = str(state.get("session_id") or "")
@@ -116,12 +118,76 @@ def execute_query(
     data = {"intent": intent, "user_id": user_id}
     if isinstance(service_response, _QueryServiceResponse):
         data["service_facts"] = service_response.facts
-    return ExpertResult(
+    return _attach_cs_eval_fact_ids(ExpertResult(
         expert="query",
         status=ExpertStatus.SUCCESS.value,
         response_draft=str(service_response),
         data=data,
+    ))
+
+
+def _attach_cs_eval_fact_ids(result: ExpertResult) -> ExpertResult:
+    """只在内部评测 scope 为沙箱 DEMO 订单结构化结果添加事实 ID。"""
+    from backend.customer_service.knowledge.evaluation_scope import (
+        current_cs_knowledge_eval_scope,
     )
+
+    if current_cs_knowledge_eval_scope() is None:
+        return result
+    output = dict(result)
+    data = dict(output.get("data") or {})
+    data["fact_ids"] = _sandbox_order_fact_ids(data)
+    data["fact_ids_observable"] = True
+    output["data"] = data
+    return output
+
+
+def _sandbox_order_fact_ids(data: dict[str, Any]) -> list[str]:
+    """从明确标记为 sandbox 的订单服务结构化结果生成稳定 ID。"""
+    fact_ids: set[str] = set()
+    service_facts = data.get("service_facts")
+    if isinstance(service_facts, dict) and (
+        service_facts.get("source") == "sandbox_order_service"
+    ):
+        orders = service_facts.get("orders")
+        if isinstance(orders, list):
+            fact_ids.update(_order_fact_ids(orders, include_list_semantic=True))
+
+    task_result = data.get("task_result")
+    if isinstance(task_result, dict) and (
+        task_result.get("source") == "sandbox_order_service"
+    ):
+        facts = task_result.get("facts")
+        if isinstance(facts, dict):
+            fact_ids.update(_order_fact_ids([facts]))
+    return sorted(fact_ids)
+
+
+def _order_fact_ids(
+    orders: list[Any], *, include_list_semantic: bool = False,
+) -> set[str]:
+    fact_ids: set[str] = set()
+    valid_orders: list[dict[str, Any]] = []
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        order_no = str(order.get("order_no") or order.get("order_id") or "")
+        if not re.fullmatch(r"DEMO-\d{4}", order_no):
+            continue
+        valid_orders.append(order)
+        prefix = f"db:demo_order#{order_no}"
+        if order.get("status") is not None or order.get("order_status") is not None:
+            fact_ids.add(f"{prefix}.status")
+        if order.get("total_amount") is not None or order.get("amount") is not None:
+            fact_ids.add(f"{prefix}.amount")
+        if any(order.get(key) is not None for key in (
+            "created_at", "order_date", "date",
+        )):
+            fact_ids.add(f"{prefix}.date")
+    if include_list_semantic and len(valid_orders) > 1:
+        # 只有服务确实返回多个 DEMO 订单才标记列表语义。
+        fact_ids.add("db:demo_order#列表语义")
+    return fact_ids
 
 
 def _merge_service_facts(fact_sets: list[dict[str, Any]]) -> dict[str, Any]:
