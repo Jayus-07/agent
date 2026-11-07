@@ -37,12 +37,14 @@ NON_RAG_EXACT_ENTRIES = frozenset({
 
 # 评测准备文件和 Workflow 的 PR 变化运行免费预检，main 更新不触发真实 Provider。
 PR_STATIC_ONLY_ENTRIES = frozenset({
+    "backend/app/api/routes/evaluation.py",
     "scripts/init_db.py",
     ".github/workflows/rag_smoke.yml",
     ".github/workflows/rag_regression.yml",
     ".github/scripts/rag_smoke_path_filter.py",
     "backend/scripts/seed_prompt_eval_db.py",
     "scripts/seed_eval_model_bindings.py",
+    "backend/tests/api/test_evaluation_runs_list.py",
     "tests/evaluation/test_rag_ci_workflow_contracts.py",
     "tests/test_rag_smoke_path_filter.py",
 })

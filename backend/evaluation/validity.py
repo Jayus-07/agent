@@ -192,12 +192,6 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
                 break
 
     errored = sum(1 for r in non_skip if getattr(r, "status", "") == "error")
-    if errored == len(non_skip):
-        return RunValidityVerdict(
-            RunValidity.INVALID_INFRA, "all_cases_errored",
-            {"errored": errored, "non_skip": len(non_skip)},
-        )
-
     total_hits = sum(matched.values())
     # 全量命中（不论样本数）→ 环境无效；部分命中需 ≥80% 且 ≥3 条
     # （防个别瞬时抖动被放大成「本轮无效」）
@@ -221,6 +215,14 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
                 "threshold": threshold,
                 "signatures": {f"{k[0]}/{k[1]}": v for k, v in matched.items()},
             },
+        )
+
+    # 已知错误签名优先保留具体原因；只有错误信息无法归类时，才回落到
+    # 通用 all_cases_errored，避免 Provider/预算故障被误报为普通基础设施故障。
+    if errored == len(non_skip):
+        return RunValidityVerdict(
+            RunValidity.INVALID_INFRA, "all_cases_errored",
+            {"errored": errored, "non_skip": len(non_skip)},
         )
 
     valid_samples = len(non_skip) - errored

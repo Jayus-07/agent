@@ -10,6 +10,10 @@
 
 2026-11-07 更新：数据契约与 E0 preflight 通过 PR [#352](https://github.com/Jayus-07/agent/pull/352) 合并，head `3773a36a4d5d22f96175c6c0a9e86a43ec423166`，merge SHA `d34ed983643e7c1bbee10b4d03a24ed921cd58c5`。本地定向验证 70 passed；PR 免费离线检查通过，自动 Review 的 P1/P2 已修复。合并后 RAG Live 曾由 main push 自动排入；在零执行步骤时取消，未发生 Provider 调用，summary 因缺少 Live 结果失败。这暴露出自动触发与“离线先行”冲突，本任务将改为显式手动 opt-in。
 
+2026-11-07 更新：RAG 付费评测显式 opt-in 通过 PR [#353](https://github.com/Jayus-07/agent/pull/353) 合并，head `709b1401847b1410b921da97d91d862973a21f4b`，merge SHA `8b2ba9aafa3d5667255892daa5923ada92cc7d98`。本地 15 项定向测试通过，PR 免费 preflight、required gate、secret scan 均通过，自动 Review 无发现；PR Live Job 为 `skipped`。合并后的 main push run `42335026667` 中 Live 与免费 preflight 均跳过、required gate 成功报告 `DEFERRED`，无 Provider 调用。
+
+当前离线审计修复了评测历史列表的有效性一致性：PG 摘要有效性为空或旧 `VALID` 时，会在工作线程读报告复核；PG 不可用走文件降级时也复用统一裁决器，旧报告会补算，当前错误证据可推翻旧 `VALID`。全量错误时保留已识别的数据库/Provider/预算原因。定向集合 **61 passed**，Ruff、`py_compile`、YAML 解析和 `git diff --check` 通过。pytest 收尾阶段 TaskService 尝试连接本机无密码 PostgreSQL 并超时，测试进程退出码 0、断言全部通过。由于本次改动后端 API，本机 rebuild/health 为 `UNVERIFIED`：Docker Engine named pipe 不存在、该 Worktree 无 `.env`；未触碰共享栈。恢复 Docker、补齐隔离环境并确认栈归属后再定向重建。
+
 ## 已完成并合并
 
 - 构建版本身份追溯：PR [#346](https://github.com/Jayus-07/agent/pull/346)，commit `92b92839889fc337d8c20f9a0b86370a5fe6303f`，已合并。此前核验证据包括 13 项定向测试通过、Ruff/py_compile/Compose 配置检查通过；Docker rebuild 与 `/health.build` 未验证。
@@ -17,6 +21,7 @@
 - Planner 完整 Plan 契约和有效性：PR [#347](https://github.com/Jayus-07/agent/pull/347)，head `26cb238974e7033fcae80650aa9d58f61197c342`，squash merge `c7c6b2d134a233aefdc194f23eefff87fd96bf87`，已合并。PR 免费 CI 全通过；本地定向集合 **142 passed, 1 既有收集警告**；Ruff、py_compile、diff check 通过。自动 Review 的“运行时补全误记为模型成功”已修复，评分使用补全前模型计划并标记 `runtime_adjusted`。
 - 客服 full_path test KB 与事实 ID：PR [#350](https://github.com/Jayus-07/agent/pull/350)，head `6e776e057668f5b6e00768f13cbe35003d0e47ff`，squash merge `6240f556096a92969c3b86f657902bf4ebaeaa93`，已合并。最终定向测试 **140 passed in 50.56s**；新 head 的免费 PR 检查通过，真实 API Job 按离线限制跳过；三项 Review P2 已解决。合并后 main 的 RAG Live Job 在零执行步骤时取消，汇总 Job 因无 Live 结果失败；不代表离线契约失败或 Live 质量通过。Docker rebuild/health、fixture 导入和检索质量仍 `UNVERIFIED`。
 - 模块化数据契约和 E0 preflight：PR [#352](https://github.com/Jayus-07/agent/pull/352)，head `3773a36a4d5d22f96175c6c0a9e86a43ec423166`，squash merge `d34ed983643e7c1bbee10b4d03a24ed921cd58c5`，已合并。本地定向测试 **70 passed**，PR 免费 CI 通过；模块 schema 校验、SQL gold 字段、Curator fail-closed 和 RAG preflight 均覆盖。合并后 main 自动排入的真实评测在零步骤时取消，未发生 Provider 调用。
+- RAG Live 显式 opt-in：PR [#353](https://github.com/Jayus-07/agent/pull/353)，head `709b1401847b1410b921da97d91d862973a21f4b`，squash merge `8b2ba9aafa3d5667255892daa5923ada92cc7d98`，已合并。PR 离线 preflight / required gate / secret scan 通过；Live job `skipped`。合并后 main push 验证为 gate `success` + `DEFERRED`，没有 Provider 调用；真实评测只允许 `main` 上显式 `run_live_eval=true`。
 - Checkpoint 启用策略：PR [#345](https://github.com/Jayus-07/agent/pull/345) 文档修改已合并；本轮按当前配置、源码和测试复核，无需开启主图普通对话或客服图的生产开关，详细依据见下方。
 
 ## 已完成子任务：Planner 完整 Plan 与降级有效性
@@ -90,11 +95,10 @@
 ## 当前阻塞与解决办法
 
 - 部署验收当前为 `UNVERIFIED`，原因是任务 Worktree 缺 `.env` 且共享 `agent` 项目合并了多工作树 Compose 配置；不要用单工作树配置直接重建共享栈。先确认共享部署上下文并定向重建受影响服务，随后核对正确的 build identity 健康接口。
-- `main` 当前已合并版本的 `rag_smoke.yml` 会在 push 自动排入真实评测，与离线优先要求冲突；本任务工作树将改成 push 只报告 Live 延后、手动默认跑免费离线预检，且只有 `main` 上显式 `run_live_eval=true` 才调用 Provider。
 - 真实模型凭据尚未确认隔离，当前只跑 fake/离线边界。离线清单通过后，先准备独立评测绑定、Run ID、预算和凭据隔离，再运行 Live 并报告样本量、模型/Prompt/Commit、成本、延迟和 validity。
 
 ## 下一步
 
-1. 先合并真实评测显式 opt-in 门禁，确认 PR 离线任务通过、main push 不再调用 Provider、默认手动运行也只跑离线。
-2. 逐模块完成离线评测有效性、错误/跳过状态、Release Gate、权限/恢复/并发/SSE/成本归因测试；同步完成客服离线语义裁判方案与学习清单 Demo。未通过项继续修复并分别提交 PR。
+1. 继续核对各模块 API、台账、报告文件与 Release Gate 的状态一致性，补齐尚未覆盖的错误/跳过/恢复分支。
+2. 逐模块完成离线数据有效性、错误/跳过状态、权限/恢复/并发/SSE/成本归因测试；同步完成客服离线语义裁判方案与学习清单 Demo。未通过项继续修复并分别提交 PR。
 3. 离线测试与免费 CI 全部通过后，再确认凭据隔离、预算、Run ID 和授权，执行付费 Live；Docker 部署/健康验收在确认安全部署上下文后单独完成。任何未验证项保留 `UNVERIFIED/BLOCKED`，不得报成通过。
