@@ -172,6 +172,10 @@ jobs:
             backend/tests/evaluation/test_dataset_schema_preflight.py \
             backend/tests/evaluation/test_eval_preflight.py \
             backend/tests/evaluation/test_judge_cs_forbidden_golden.py \
+            backend/tests/evaluation/test_provider_breaker.py \
+            backend/tests/evaluation/test_compose_scheduling_contract.py \
+            backend/tests/test_circuit_breaker.py \
+            backend/tests/test_llm_resilience.py \
             backend/tests/evaluation/test_planner_live_runner.py \
             backend/tests/evaluation/test_online_sampler.py \
             backend/tests/evaluation/test_release_gate_module_aware.py \
