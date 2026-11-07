@@ -28,6 +28,8 @@ def test_golden_dataset_integrity_and_full_concept_coverage():
     assert manifest["case_count"] == len(cases) == 25
     assert {c["id"] for c in cases} == {f"FG-{i:02d}" for i in range(1, 26)}
     assert {c["expected_verdict"] for c in cases} == {"violated", "compliant"}
+    # Review P2：依赖上下文的标签必须携带事实证据，标签可由 context+answer 推出
+    assert all(c["context"].strip() for c in cases)
 
     case_concepts = set()
     for line in (_GOLDEN_ROOT / "cases.jsonl").read_text(encoding="utf-8").splitlines():
@@ -49,7 +51,30 @@ def test_judge_unavailable_returns_none_never_compliant(monkeypatch):
         raise RuntimeError("eval_gen not bound")
 
     monkeypatch.setattr(judge_mod, "_get_llm_response", _boom)
-    result = judge_forbidden_facts("任意回答", ["编造政策"])
+    result = judge_forbidden_facts("任意回答", ["编造政策"], context="证据：无适用政策")
+    assert result.available is False
+    assert result.violated is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"violated": None},
+        {"violated": "false"},
+        {"violated": 0, "violated_facts": []},
+    ],
+)
+def test_judge_invalid_violated_output_is_unavailable_not_compliant(monkeypatch, payload):
+    """Review P2：violated 缺失/null/非布尔一律判不可判，禁止折叠成合规。"""
+    from backend.evaluation import judge as judge_mod
+
+    monkeypatch.setattr(
+        judge_mod,
+        "_get_llm_response",
+        lambda prompt: json.dumps(payload),
+    )
+    result = judge_forbidden_facts("任意回答", ["编造政策"], context="（无）")
     assert result.available is False
     assert result.violated is None
 
@@ -60,6 +85,7 @@ def test_judge_violated_facts_must_come_from_declared_list(monkeypatch):
 
     def _fake_llm(prompt: str) -> str:
         assert "编造政策" in prompt and "任意回答" in prompt
+        assert "订单 8756" in prompt  # context 事实证据必须进入 prompt
         return json.dumps({
             "violated": True,
             "violated_facts": ["编造政策", "清单外幻觉项"],
@@ -68,25 +94,32 @@ def test_judge_violated_facts_must_come_from_declared_list(monkeypatch):
         })
 
     monkeypatch.setattr(judge_mod, "_get_llm_response", _fake_llm)
-    result = judge_forbidden_facts("任意回答", ["编造政策"])
+    result = judge_forbidden_facts(
+        "任意回答", ["编造政策"], context="工具事实：系统中存在订单 8756",
+    )
     assert result.available is True
     assert result.violated is True
     assert result.violated_facts == ["编造政策"]
 
 
 def test_prompt_template_registered_and_renders():
-    """新 prompt 走统一 prompt 治理链，渲染包含清单与回答。"""
+    """新 prompt 走统一 prompt 治理链，渲染包含清单、证据与回答。"""
     from backend.prompts.service import prompt_service
 
     r = prompt_service.render_sync(
         "evaluation.judge.cs_forbidden",
         forbidden_list="- 编造政策",
+        context="工具事实：未检索到适用条款",
         actual_answer="测试回答文本",
     )
-    assert "编造政策" in r.text and "测试回答文本" in r.text
+    assert "编造政策" in r.text
+    assert "未检索到适用条款" in r.text
+    assert "测试回答文本" in r.text
 
 
-def _perfect_judge(answer: str, forbidden_facts: list[str]) -> ForbiddenJudgeResult:
+def _perfect_judge(
+    answer: str, forbidden_facts: list[str], context: str | None = None
+) -> ForbiddenJudgeResult:
     cases = load_forbidden_golden()
     expected = next(c["expected_verdict"] for c in cases if c["answer"] == answer)
     return ForbiddenJudgeResult(
@@ -106,10 +139,12 @@ def test_runner_blocks_on_tier_flip():
     cases = load_forbidden_golden()
     first_violated = next(c for c in cases if c["expected_verdict"] == "violated")
 
-    def _flipping_judge(answer: str, forbidden_facts: list[str]) -> ForbiddenJudgeResult:
+    def _flipping_judge(
+        answer: str, forbidden_facts: list[str], context: str | None = None
+    ) -> ForbiddenJudgeResult:
         if answer == first_violated["answer"]:
             return ForbiddenJudgeResult(violated=False, reasoning="stub 漏判")
-        return _perfect_judge(answer, forbidden_facts)
+        return _perfect_judge(answer, forbidden_facts, context)
 
     report = run_forbidden_golden(judge_fn=_flipping_judge)
     assert report["passed"] is False
@@ -117,7 +152,9 @@ def test_runner_blocks_on_tier_flip():
 
 
 def test_runner_blocks_on_judge_unavailable():
-    def _dead_judge(answer: str, forbidden_facts: list[str]) -> ForbiddenJudgeResult:
+    def _dead_judge(
+        answer: str, forbidden_facts: list[str], context: str | None = None
+    ) -> ForbiddenJudgeResult:
         return ForbiddenJudgeResult(violated=None, reasoning="stub 不可用")
 
     report = run_forbidden_golden(judge_fn=_dead_judge)
@@ -128,7 +165,10 @@ def test_runner_blocks_on_judge_unavailable():
 def test_manifest_drift_rejects_loading(tmp_path, monkeypatch):
     """golden 内容与 manifest 指纹不一致时拒绝加载（fail-fast，口径同 loader）。"""
     drifted = tmp_path / "forbidden_judge_golden.jsonl"
-    drifted.write_text('{"id": "X", "forbidden_facts": ["编造政策"], "answer": "a", "expected_verdict": "violated"}\n', encoding="utf-8")
+    drifted.write_text(
+        '{"id": "X", "forbidden_facts": ["编造政策"], "context": "c", "answer": "a", "expected_verdict": "violated"}\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(
         "backend.evaluation.judge_cs_forbidden_golden.DEFAULT_GOLDEN_PATH", drifted
     )

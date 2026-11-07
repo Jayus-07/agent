@@ -75,9 +75,9 @@ def load_forbidden_golden(
             item = json.loads(line)
         except json.JSONDecodeError as e:
             raise ValueError(f"golden 第 {lineno} 行非法 JSON: {e}") from e
-        required = ("id", "forbidden_facts", "answer", "expected_verdict")
+        required = ("id", "forbidden_facts", "context", "answer", "expected_verdict")
         if any(not item.get(k) for k in required) or not item.get("forbidden_facts"):
-            raise ValueError(f"golden 第 {lineno} 行缺必填字段")
+            raise ValueError(f"golden 第 {lineno} 行缺必填字段（含 context 事实证据）")
         if item["expected_verdict"] not in ("violated", "compliant"):
             raise ValueError(
                 f"golden 第 {lineno} 行 expected_verdict 非法: {item['expected_verdict']}"
@@ -111,7 +111,12 @@ def run_forbidden_golden(
         expected = str(case["expected_verdict"])
         verdicts: list[str] = []
         for _ in range(repeat):
-            result = run_judge(judge_fn, case["answer"], list(case["forbidden_facts"]))
+            result = run_judge(
+                judge_fn,
+                case["answer"],
+                list(case["forbidden_facts"]),
+                case.get("context") or None,
+            )
             if not result.available:
                 # 裁判不可用（模型未绑定/失败/不可解析）——绝不冒充任何档位
                 verdicts.append("judge_error")

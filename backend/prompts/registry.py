@@ -672,7 +672,7 @@ _register(PromptSpec(
     name="客服禁说事实裁判 Prompt",
     category="evaluation",
     risk_level="low",
-    variables=(R("forbidden_list"), R("actual_answer")),
+    variables=(R("forbidden_list"), R("context"), R("actual_answer")),
     default_file="evaluation_judge_cs_forbidden.yaml",
 ))
 
