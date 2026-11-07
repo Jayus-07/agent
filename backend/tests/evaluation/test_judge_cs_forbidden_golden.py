@@ -135,6 +135,28 @@ def test_runner_passes_with_perfect_judge():
     assert report["accuracy"] == 1.0
 
 
+def test_golden_run_binds_request_budget_scope(monkeypatch):
+    """真实模型跑分必须处于有效请求预算作用域（与 #367 接线同口径），
+    否则 reserve_model_call 因 run_budget_context_missing 全员判不可用。"""
+    import contextlib
+
+    entered: list[tuple] = []
+
+    def fake_scoped(request_id, *, user_id="", tenant_id="", on_error=None):
+        entered.append((request_id, user_id, tenant_id))
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(
+        "backend.infra.llm.budget.scoped_request_budget", fake_scoped
+    )
+    report = run_forbidden_golden(judge_fn=_perfect_judge)
+    assert report["passed"] is True
+    assert report["request_id"].startswith("cs-forbidden-golden:")
+    assert len(entered) == 1
+    assert entered[0][0] == report["request_id"]
+    assert entered[0][1:] == ("eval_bot", "default")
+
+
 def test_runner_blocks_on_tier_flip():
     cases = load_forbidden_golden()
     first_violated = next(c for c in cases if c["expected_verdict"] == "violated")

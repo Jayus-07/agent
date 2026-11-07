@@ -100,12 +100,60 @@ def run_forbidden_golden(
     """跑一遍 forbidden golden 集；repeat>1 输出逐条稳定性。
 
     judge_fn 仅供测试注入 stub；生产路径恒用 judge_forbidden_facts。
+    裁判走真实模型时必须处于有效请求预算作用域内（与 PR #367 接线同口径），
+    否则 reserve_model_call 因 run_budget_context_missing 全员判不可用。
     """
     judge_fn = judge_fn or judge_forbidden_facts
     repeat = max(1, int(repeat))
     cases = load_forbidden_golden(golden_path)
     started = time.time()
 
+    from backend.infra.llm.budget import scoped_request_budget
+    from backend.infra.llm.proxy import scoped_current_user_id
+
+    per_case: dict[str, dict[str, Any]] = {}
+    request_id = f"cs-forbidden-golden:{datetime.now():%Y%m%d-%H%M%S}"
+    with scoped_current_user_id("eval_bot"):
+        with scoped_request_budget(
+            request_id, user_id="eval_bot", tenant_id="default",
+        ):
+            per_case = _run_golden_cases(
+                cases, judge_fn=judge_fn, repeat=repeat,
+            )
+
+    flip_cases = [cid for cid, c in per_case.items() if c["flip"]]
+    report = {
+        "kind": "cs_forbidden_judge_golden",
+        "golden_path": str(golden_path or DEFAULT_GOLDEN_PATH),
+        "repeat": repeat,
+        "request_id": request_id,
+        "total": len(cases),
+        "judge_error_count": sum(
+            1 for c in per_case.values() if "judge_error" in c["verdicts"]
+        ),
+        "tier_flip_count": len(flip_cases),
+        "tier_flip_cases": flip_cases,
+        "accuracy": round(
+            sum(
+                1 for c in per_case.values()
+                if not c["flip"] and "judge_error" not in c["verdicts"]
+            ) / len(cases),
+            4,
+        ) if cases else 0.0,
+        "cases": per_case,
+        "duration_ms": int((time.time() - started) * 1000),
+        "ran_at": datetime.now().isoformat(),
+    }
+    report["passed"] = report["tier_flip_count"] == 0 and report["judge_error_count"] == 0
+    return report
+
+
+def _run_golden_cases(
+    cases: list[dict[str, Any]],
+    *,
+    judge_fn: Callable[..., ForbiddenJudgeResult],
+    repeat: int,
+) -> dict[str, dict[str, Any]]:
     per_case: dict[str, dict[str, Any]] = {}
     for case in cases:
         expected = str(case["expected_verdict"])
@@ -130,31 +178,7 @@ def run_forbidden_golden(
             "flip": bool(flips) or "judge_error" in verdicts,
             "note": case.get("note", ""),
         }
-
-    flip_cases = [cid for cid, c in per_case.items() if c["flip"]]
-    report = {
-        "kind": "cs_forbidden_judge_golden",
-        "golden_path": str(golden_path or DEFAULT_GOLDEN_PATH),
-        "repeat": repeat,
-        "total": len(cases),
-        "judge_error_count": sum(
-            1 for c in per_case.values() if "judge_error" in c["verdicts"]
-        ),
-        "tier_flip_count": len(flip_cases),
-        "tier_flip_cases": flip_cases,
-        "accuracy": round(
-            sum(
-                1 for c in per_case.values()
-                if not c["flip"] and "judge_error" not in c["verdicts"]
-            ) / len(cases),
-            4,
-        ) if cases else 0.0,
-        "cases": per_case,
-        "duration_ms": int((time.time() - started) * 1000),
-        "ran_at": datetime.now().isoformat(),
-    }
-    report["passed"] = report["tier_flip_count"] == 0 and report["judge_error_count"] == 0
-    return report
+    return per_case
 
 
 def persist_golden_report(report: dict[str, Any]) -> Path:
