@@ -12,27 +12,35 @@ def test_rag_required_gate_and_cost_artifacts_follow_ci_contract():
     smoke = (ROOT / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
     regression = (ROOT / ".github/workflows/rag_regression.yml").read_text(encoding="utf-8")
 
-    # The stable required check must validate the appropriate lane and cannot
-    # treat a skipped relevant RAG run as successful.
+    # The stable required check distinguishes offline deferral from an actual
+    # Live pass; a skipped paid job alone is never reported as Live success.
     assert "rag-smoke-gate:\n    name: RAG Smoke (8 cases)" in smoke
     assert "needs: [detect-changes, rag-smoke-pr-static, rag-smoke]" in smoke
     assert "if: ${{ always() }}" in smoke
     assert 'PR_PREFLIGHT_RESULT" != "success" || "$SMOKE_RESULT" != "skipped"' in smoke
     assert '"$SMOKE_RESULT" != "success"' in smoke
     assert "RAG Smoke Evaluation (8 cases, real API)" in smoke
-    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in smoke
-    assert "if: github.event_name == 'pull_request' && needs.detect-changes.outputs.relevant == 'true'" in smoke
+    assert "github.event_name == 'workflow_dispatch' &&" in smoke
+    assert "inputs.run_live_eval == true" in smoke
+    assert "github.ref == 'refs/heads/main'" in smoke
+    live_condition = smoke.split("  rag-smoke:\n", 1)[1].split("    name:", 1)[0]
+    assert "github.event_name == 'push'" not in live_condition
+    assert "github.event_name == 'pull_request' ||" in smoke
+    assert "github.event_name == 'workflow_dispatch' && inputs.run_live_eval != true" in smoke
+    assert "if [[ \"$EVENT_NAME\" == \"push\" ]]; then" in smoke
+    assert "DEFERRED: offline PR checks passed" in smoke
+    assert "Offline dispatch requires successful free preflight" in smoke
+    assert "Explicit Live dispatch requires a successful real 8-case evaluation" in smoke
     assert "github.event.pull_request.base.sha || github.event.before" in smoke
     assert "github.event.pull_request.head.sha || github.sha" in smoke
     assert 'if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then' in smoke
+    assert "run_live_eval:" in smoke
+    assert "default: false" in smoke
     assert "multiquery:" in smoke
     # 生产检索链默认启用 MultiQuery：受信任评测默认按生产口径执行，
     # 关闭仅作为对照（dispatch 显式传 false）。
     assert "type: boolean\n        default: true" in smoke
-    assert (
-        "EVAL_MULTIQUERY: ${{ github.event_name == 'push' && 'true' || inputs.multiquery }}"
-        in smoke
-    )
+    assert "EVAL_MULTIQUERY: ${{ inputs.multiquery }}" in smoke
     assert 'if [[ "$EVAL_MULTIQUERY" == "true" ]]; then' in smoke
     assert 'MULTIQUERY_ARGS+=(--multiquery)' in smoke
     assert 'if [[ "$EVENT_NAME" == "push" && "$BASE_SHA" == "0000000000000000000000000000000000000000" ]]; then' in smoke

@@ -4,8 +4,9 @@ name: RAG PR Smoke
 # - pull_request：只跑免费可信预检（路径检测 + E0 preflight），**不引用付费
 #   Secrets、不跑真实 API 评测**——同仓库未审核 PR 不获得付费凭据
 #   （prompt-eval environment 当前无 protection_rules，该收敛由触发器保证）。
-# - RAG 相关 push(main) / workflow_dispatch：受信任入口（合并后相关代码或有
-#   写权限者人工触发），执行 DB API 模型口径的真实检索评测。
+# - push(main)：只汇总离线预检状态，不自动调用真实 Provider。
+# - workflow_dispatch：默认只跑免费离线预检；仅显式设置 run_live_eval=true
+#   才进入真实检索评测，供离线矩阵通过、凭据与预算准备后使用。
 # - 完整回归由 rag_regression.yml 的 workflow_dispatch 承担（无 PR/定时触发）。
 #
 # 语义定位：固定 8 条用例（desktop_upload_smoke suite）的真实检索评测，全部层级阈值
@@ -18,6 +19,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      run_live_eval:
+        description: "显式启用真实 Provider 评测（离线矩阵通过且已获准后才开启）"
+        required: true
+        type: boolean
+        default: false
       multiquery:
         description: "受信任评测启用 MultiQuery（生产检索链默认启用；false 仅用于对照）"
         required: false
@@ -87,11 +93,14 @@ jobs:
           echo "$relevant_output"
           echo "$relevant_output" >> "$GITHUB_OUTPUT"
 
-  # ── PR：免费可信预检（无付费 Secrets、无真实 API 调用）──────────────
+  # ── PR / 手动默认：免费预检（无付费 Secrets、无真实 API 调用）───────
   rag-smoke-pr-static:
     needs: detect-changes
-    if: github.event_name == 'pull_request' && needs.detect-changes.outputs.relevant == 'true'
-    name: RAG Smoke preflight (PR, no paid API)
+    if: >-
+      (github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_live_eval != true)) &&
+      needs.detect-changes.outputs.relevant == 'true'
+    name: RAG Smoke preflight (offline, no paid API)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
@@ -237,23 +246,36 @@ jobs:
             -q --no-cov
 
       - name: Declare skipped real-API scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_LIVE_EVAL: ${{ inputs.run_live_eval }}
         run: |
-          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
-          ## RAG Smoke（真实 API 评测）= SKIPPED_UNTRUSTED_PR
-          同仓库 PR 不获得付费 API Secrets（prompt-eval environment 无
-          protection_rules，收敛由触发器保证）。真实 Smoke 在合并后由
-          push(main) / workflow_dispatch 执行；完整 Regression 仅由其
-          workflow_dispatch 按需运行。
-          本 Job 仅覆盖免费 E0 资产预检（suite/hash/case 完整性）。
-          EOF
-          echo "REAL_API_EVAL=SKIPPED_UNTRUSTED_PR"
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            scope="SKIPPED_UNTRUSTED_PR"
+            reason="同仓库 PR 不获得付费 API Secrets。"
+          elif [[ "$EVENT_NAME" == "workflow_dispatch" && "$RUN_LIVE_EVAL" != "true" ]]; then
+            scope="SKIPPED_LIVE_OPT_IN_REQUIRED"
+            reason="手动运行未显式设置 run_live_eval=true。"
+          else
+            echo "::error::Unexpected event reached the offline-only preflight job."
+            exit 1
+          fi
+          {
+            echo "## RAG Smoke（真实 API 评测）= $scope"
+            echo "$reason"
+            echo "本 Job 仅覆盖免费 E0 资产预检（suite/hash/case 完整性）和离线定向测试。"
+            echo "真实评测需在离线矩阵通过、凭据隔离和预算准备完成后显式触发。"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "REAL_API_EVAL=$scope"
 
-  # ── 受信任入口：main push / 手动 dispatch 才跑真实 API 评测 ─────────
+  # ── 付费入口：仅受信任的手动 dispatch 显式 opt-in 才运行 ────────────
   rag-smoke:
     needs: detect-changes
     if: >-
       needs.detect-changes.outputs.relevant == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.run_live_eval == true
     name: RAG Smoke Evaluation (8 cases, real API)
     runs-on: [self-hosted, linux, x64, local-stack]
     # 受信任环境：与 prompt-eval 共用 environment secrets。
@@ -313,9 +335,8 @@ jobs:
       PROMPT_EVAL_TEST_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_BASE_URL }}
       PROMPT_EVAL_TEST_MODEL: ${{ vars.PROMPT_EVAL_TEST_MODEL }}
       # 价格快照仅通过只读 Registry 连接导入，禁止 CI 变量自报价格。
-      # 生产检索链默认启用 MultiQuery；main push 必须按生产口径评测，
-      # 否则门禁评的是"未上线路径"，与 main 真实检索能力脱节。
-      EVAL_MULTIQUERY: ${{ github.event_name == 'push' && 'true' || inputs.multiquery }}
+      # Live 仅由显式 workflow_dispatch 触发；默认按生产口径启用 MultiQuery。
+      EVAL_MULTIQUERY: ${{ inputs.multiquery }}
       PROMPT_EVAL_TEST_EMBEDDING_PROVIDER_ID: rag-eval-embedding
       PROMPT_EVAL_TEST_EMBEDDING_API_KEY: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_API_KEY }}
       PROMPT_EVAL_TEST_EMBEDDING_BASE_URL: ${{ secrets.PROMPT_EVAL_TEST_EMBEDDING_BASE_URL }}
@@ -693,6 +714,7 @@ jobs:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
           RAG_RELEVANT: ${{ needs.detect-changes.outputs.relevant }}
           EVENT_NAME: ${{ github.event_name }}
+          RUN_LIVE_EVAL: ${{ inputs.run_live_eval }}
           PR_PREFLIGHT_RESULT: ${{ needs.rag-smoke-pr-static.result }}
           SMOKE_RESULT: ${{ needs.rag-smoke.result }}
         run: |
@@ -726,13 +748,32 @@ jobs:
             exit 0
           fi
 
-          if [[ "$EVENT_NAME" != "push" && "$EVENT_NAME" != "workflow_dispatch" ]]; then
-            echo "::error::Unsupported event for the RAG Smoke required gate: $EVENT_NAME"
-            exit 1
-          fi
-          if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "success" ]]; then
-            echo "::error::Trusted RAG changes require a successful real 8-case evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
-            exit 1
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "skipped" ]]; then
+              echo "::error::Main pushes must defer paid evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "DEFERRED: offline PR checks passed; real evaluation requires an explicit trusted workflow_dispatch with run_live_eval=true."
+            exit 0
           fi
 
-          echo "SUCCESS: trusted RAG changes passed the real 8-case evaluation."
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$RUN_LIVE_EVAL" != "true" ]]; then
+              if [[ "$PR_PREFLIGHT_RESULT" != "success" || "$SMOKE_RESULT" != "skipped" ]]; then
+                echo "::error::Offline dispatch requires successful free preflight and must skip real API evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+                exit 1
+              fi
+              echo "SUCCESS: offline dispatch passed free preflight; real API evaluation remains opt-in."
+              exit 0
+            fi
+
+            if [[ "$PR_PREFLIGHT_RESULT" != "skipped" || "$SMOKE_RESULT" != "success" ]]; then
+              echo "::error::Explicit Live dispatch requires a successful real 8-case evaluation (preflight: $PR_PREFLIGHT_RESULT, evaluation: $SMOKE_RESULT)."
+              exit 1
+            fi
+            echo "SUCCESS: explicit trusted Live dispatch passed the real 8-case evaluation."
+            exit 0
+          fi
+
+          echo "::error::Unsupported event for the RAG Smoke required gate: $EVENT_NAME"
+          exit 1
