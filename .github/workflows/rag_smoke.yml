@@ -167,6 +167,9 @@ jobs:
             tests/evaluation/test_rag_runner.py \
             tests/evaluation/test_cs_live_entrypoint.py \
             backend/tests/evaluation/test_cs_execution_mode.py \
+            backend/tests/evaluation/test_cs_eval_kb_contract.py \
+            backend/tests/rag/test_sources_request_scope.py \
+            backend/tests/test_citation_passthrough.py \
             backend/tests/infra/test_sync_timeout_context.py \
             backend/tests/infra/test_run_budget_pg.py \
             backend/tests/rag/test_run_budget_transport.py \

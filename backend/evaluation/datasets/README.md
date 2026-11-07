@@ -40,7 +40,7 @@
 | 模块 | kb_id | 性质 | 说明 |
 |------|-------|------|------|
 | rag | `rag_eval_kb` | ✅ 唯一独立测试库（audience=test） | 当前桌面上传候选版含 24 道问答、28 份正式 fixture；详见 `fixtures/rag_eval_kb/README.md`。旧 data/docs 目录仅作兼容留存；UI 不可见，走 fixture/脚本灌数 |
-| cs | `cs_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 评测本体零检索依赖；合成测试语料存此库；域图 live 仍走生产库 cs_*，接线为后续任务 |
+| cs | `cs_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | `graph_only` 不检索；登记的 `full_path` suite 仅在服务器内部评测 scope 中检索该库，普通客服仍按 customer 授权访问生产 `cs_*`。合成语料/事实来源见 `fixtures/cs_eval_kb/manifest.json`；显式导入需调用 embedding Provider，当前离线验收未导入或运行 Live |
 | travel | `travel_eval_kb` | ✅ 独立测试库（audience=test，2026-10-08 建） | 离线评测零检索依赖；合成测试语料存此库；live 探针仍走生产库 travel，接线为后续任务 |
 | sql | （空） | 非 RAG | NL2SQL 直连业务库 agent_business |
 | planner | （空） | 无检索依赖 | 只评任务拆解 |

@@ -1,6 +1,6 @@
 # CI 与评测环境运行规范
 
-> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-11-02（本次覆盖收口工作树基线 `84601db`；209 例本地与 CI 环境模拟通过，真实 CI 待验证）；其它状态保留各自标注的核对日期。**
+> **文档类型**：现行跨模块运维/CI 契约。**实现状态快照日期：2026-11-07（客服 test KB 接线随本次变更合并后生效；评测 fixture 未在离线环境导入，客服 Live 质量仍未验收）；其它状态保留各自标注的核对日期。**
 > **职责**：规定 CI 如何准备隔离数据库、DB API 模型绑定、评测语料和向量索引，以及 Secrets、费用与证据闭环。**不**复制测试分层（[testing-guide](../development/testing-guide.md)）、质量阈值与 Golden 规则（[evaluation-governance](../evaluation/evaluation-governance.md)）、计费公式（[llm-budget-billing](../governance/llm-budget-billing.md)）、RBAC 规则（[authorization-standard](../auth/authorization-standard.md)）或数据库 Schema（[DATABASE](../DATABASE.md)）。
 >
 > **实现状态图例**（本文所有条款按下表标注，状态不得凭文档存在认定）：
@@ -36,7 +36,7 @@
 - 检索面：`backend/rag/authz.py` 的 `retrieval_authorized_kbs()` 对 `super_admin` 传入 `include_test=True`，因此超管可检索 test 库用于管理与评测验证；admin 及以下主体不可检索 test 库，customer 主体仅见 `audience=customer`。
 - 跨库兜底：`audience=test` 由属性推导进入兜底禁入名单（`CROSS_KB_FALLBACK_EXCLUDE_TEST`，默认 true），虚构语料不得经放宽路径对客召回。
 - 前端上传 KB 列表来自 `GET /api/rag/knowledge-bases`，按 `RagAuthorization.can_search_kb` 后端裁决收敛；上传走 `can_upload_to` 同一授权视图。权限由服务端负责，前端隐藏不是边界。
-- **Runner 接线警示（❌ 尚未实现）**：`cs_eval_kb` / `travel_eval_kb` 已登记，但 `backend/evaluation/` 下当前无任何 Runner 引用这两个 KB（全仓零引用，2026-10-11 核对）——登记不等于评测已消费。SQL/Planner/E2E 不绑定 RAG KB。
+- **Runner 接线（部分实现）**：客服 `full_path` runner 只接受登记的 CS suite 元数据；客服知识节点通过服务器内部 scope 显式检索 `cs_eval_kb`，并校验 registry 的 `audience=test`。普通客服仍以 customer 身份检索生产 KB。后端镜像包含锁版 fixture 的只读源文件，但不会自动索引；显式导入器需调用 embedding Provider，本地离线验收未运行导入器，因此 test KB 实际索引状态与检索质量仍 `UNVERIFIED`。客服事实裁判使用回答实际引用的 chunk/章节证据，并与按文件去重的 SourceCard 分离。`travel_eval_kb` 尚无 Runner 接线。SQL/Planner/E2E 不绑定 RAG KB。
 
 ### 2.2 CI 身份与用户登录分离（✅ 架构上已分离）
 
@@ -84,7 +84,7 @@ CI 通过脚本直连隔离数据库导入版本化 fixtures（`import_fixture`�
 | SQL | [`runners/sql.py`](../../backend/evaluation/runners/sql.py) | 隔离业务库 Schema/测试行/授权（不依赖任何向量 KB） | ❌ 尚未实现：main 无 SQL CI workflow，评测在本地/评测中心执行 |
 | Planner / Router | [`runners/planner.py`](../../backend/evaluation/runners/planner.py) | 固定意图/候选/规划用例；模型调用按 E1/E2 口径声明 | ❌ 尚未实现：无 CI workflow |
 | E2E | [`runners/e2e.py`](../../backend/evaluation/runners/e2e.py) | Graph 全链路（进程内 Router→Skill→Reporter），非网关级 | ❌ 尚未实现：无 CI workflow |
-| CS / Travel | [`runners/cs.py`](../../backend/evaluation/runners/cs.py)、[`runners/travel.py`](../../backend/evaluation/runners/travel.py) | `cs_eval_kb`/`travel_eval_kb` **已登记未接线**（§2.1） | ❌ 无 CI workflow，且 KB 消费链需先审计接入 |
+| CS / Travel | [`runners/cs.py`](../../backend/evaluation/runners/cs.py)、[`runners/travel.py`](../../backend/evaluation/runners/travel.py) | CS `full_path` 的登记 suite 使用 `cs_eval_kb` 内部 scope；Travel `travel_eval_kb` 仍未接线（§2.1） | ❌ 无 CI workflow；当前新增测试只覆盖免费离线契约，未执行 fixture 索引或真实模型质量评测 |
 
 各模块质量阈值以现行 Runner、Suite 与 [evaluation-governance](../evaluation/evaluation-governance.md) 为准；CI 环境只提供依赖与隔离，不定义第二套质量规则。
 

@@ -97,6 +97,32 @@ def test_ask_result_returns_request_scoped_sources():
                                    "sources": [{"title": "来源A", "snippet": "s"}]}
 
 
+def test_ask_result_separates_citation_evidence_from_answer_meta():
+    clear_context()
+    pipe = _make_stub_pipeline("引用[E1]", [{"filename": "a.md"}])
+    citation_evidence = [{
+        "doc_id": "doc-a",
+        "filename": "a.md",
+        "section": "退款时效",
+        "version_id": "v1",
+    }]
+    pipe._snapshot_answer_meta = lambda: setattr(
+        pipe,
+        "last_answer_meta",
+        {
+            "can_answer": True,
+            "confidence": 0.9,
+            "sources": [{"filename": "a.md"}],
+            "citation_evidence": citation_evidence,
+        },
+    )
+
+    outcome = pipe.ask_result("问题", "sess-evidence")
+
+    assert outcome.citation_evidence == citation_evidence
+    assert "citation_evidence" not in outcome.answer_meta
+
+
 def test_ask_compat_returns_answer_string():
     clear_context()
     pipe = _make_stub_pipeline("兼容答案", [{"title": "s"}])

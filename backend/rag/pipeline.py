@@ -66,10 +66,12 @@ class AskOutcome:
     answer: str
     sources: list = None
     answer_meta: dict = None
+    citation_evidence: list = None
 
     def __post_init__(self):
         self.sources = list(self.sources or [])
         self.answer_meta = dict(self.answer_meta or {})
+        self.citation_evidence = list(self.citation_evidence or [])
 
 
 class RAGPipeline:
@@ -938,9 +940,13 @@ class RAGPipeline:
             user_id=user_id, tenant_id=tenant_id, roles=roles,
             persist_memory=persist_memory)
         meta = dict(answer_meta or {})
-        return AskOutcome(answer=answer,
-                          sources=list(meta.get("sources") or []),
-                          answer_meta=meta)
+        citation_evidence = list(meta.pop("citation_evidence", []) or [])
+        return AskOutcome(
+            answer=answer,
+            sources=list(meta.get("sources") or []),
+            answer_meta=meta,
+            citation_evidence=citation_evidence,
+        )
 
     def _ask_inner(
         self,
@@ -1150,6 +1156,10 @@ class RAGPipeline:
                 sources = chain._last_sources or []
                 meta["source_count"] = len(sources)
                 meta["sources"] = sources[:8]
+            if hasattr(chain, "_last_citation_evidence"):
+                meta["citation_evidence"] = list(
+                    chain._last_citation_evidence or []
+                )
             # 向量路降级可观测（TD-01）：降级时召回只来自 BM25 路，分数
             # 尺度不可比——下游（客服置信度/评测/管理端）据此解读结果。
             try:

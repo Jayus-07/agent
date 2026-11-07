@@ -32,11 +32,16 @@ def execute_knowledge(
     Returns:
         ExpertResult — status=success 时含 response_draft + evidence
     """
-    from backend.observability.metrics import record_cs_rag_status
     from backend.customer_service.pii import mask_pii, unmask_text
+    from backend.observability.metrics import record_cs_rag_status
 
     kb_ids = cs_route.get("kb_ids", [])
     intent = cs_route.get("intent", "k_faq")
+    from backend.customer_service.knowledge.evaluation_scope import (
+        current_cs_knowledge_eval_scope,
+    )
+
+    eval_scope = current_cs_knowledge_eval_scope()
 
     # C11 PII 最小化（个保法）：手机号/地址/自报姓名等在进入 RAG prompt
     # 前掩码，回复回来按 vault 还原；日志也只落掩码文本
@@ -61,19 +66,38 @@ def execute_knowledge(
     record_cs_rag_status("hit" if result.answer else "miss")
 
     evidence = []
-    raw_sources = getattr(result, "source_documents", None) or getattr(
-        result, "sources", None
-    ) or []
-    for doc in raw_sources[:5]:
+    fact_ids: set[str] = set()
+    if eval_scope is not None:
+        raw_sources = result.citation_evidence
+    else:
+        raw_sources = getattr(result, "source_documents", None) or getattr(
+            result, "sources", None
+        ) or []
+    evidence_sources = (
+        raw_sources if eval_scope is not None else raw_sources[:5]
+    )
+    for doc in evidence_sources:
         if isinstance(doc, dict):
-            evidence.append({
+            item = {
                 "source": doc.get(
                     "source",
                     doc.get("source_file", doc.get("doc_id", "unknown")),
                 ),
                 "doc_id": doc.get("doc_id", ""),
                 "score": doc.get("score", 0.0),
-            })
+            }
+            if eval_scope is not None:
+                from backend.evaluation.cs_fixture_catalog import (
+                    fact_ids_for_rag_source,
+                )
+
+                source_fact_ids = fact_ids_for_rag_source(
+                    doc,
+                    kb_id=eval_scope.kb_id,
+                )
+                item["fact_ids"] = source_fact_ids
+                fact_ids.update(source_fact_ids)
+            evidence.append(item)
 
     response_draft = result.answer
     if not response_draft:
@@ -86,16 +110,21 @@ def execute_knowledge(
         result.decision.value, result.confidence, len(response_draft),
     )
 
+    data = {
+        "decision": result.decision.value,
+        "confidence": result.confidence,
+        "kb_ids": result.kb_ids,
+    }
+    if eval_scope is not None:
+        data["fact_ids"] = sorted(fact_ids)
+        data["fact_ids_observable"] = True
+
     return ExpertResult(
         expert="knowledge",
         status=ExpertStatus.SUCCESS.value,
         response_draft=response_draft,
         evidence=evidence,
-        data={
-            "decision": result.decision.value,
-            "confidence": result.confidence,
-            "kb_ids": result.kb_ids,
-        },
+        data=data,
     )
 
 

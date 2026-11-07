@@ -10,16 +10,16 @@ live 模式：逐条 invoke CS Graph（thread_id 按 case id 隔离）。
 """
 import time
 import uuid
-
-from backend.evaluation.models import EvalResult, TestCase
-from backend.evaluation.registry import register_runner
-from backend.shared.logger import logger
+from contextlib import nullcontext
 
 # cs_target（Router 预过滤产物）→ CS Graph expert 节点名
 # 单一事实源在 customer_service/graph_state.py（cs_graph_node 同用此映射）
 from backend.customer_service.graph_state import CS_TARGET_TO_EXPERT as _TARGET_TO_EXPERT
 from backend.customer_service.graph_state import EXPERT_NAME_TO_NODE as _EXPERT_NAME_TO_NODE
 from backend.customer_service.router.intents import FINE_INTENTS as _FINE_INTENTS
+from backend.evaluation.models import EvalResult, TestCase
+from backend.evaluation.registry import register_runner
+from backend.shared.logger import logger
 
 _VALID_TARGETS = set(_TARGET_TO_EXPERT)
 _VALID_INTENTS = set(_FINE_INTENTS)
@@ -101,10 +101,10 @@ def _run_live(cases: list[TestCase]) -> list[EvalResult]:
     会话指代消解与 CSUnderstanding LLM 增补属会话软层，单轮评测样本不
     消费，不在此复刻。
     """
+    from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
     from backend.customer_service.graph_builder import get_cs_graph
     from backend.customer_service.graph_state import new_cs_graph_input
     from backend.customer_service.router.cs_router import get_cs_router
-    from backend.config.customer_service import CS_GRAPH_RECURSION_LIMIT
 
     # run 级隔离 token：thread_id/conversation_id 必须区分不同 run——
     # 固定 eval-cs-{case.id} 会让下一次 run 续上上一次的 checkpointer
@@ -227,9 +227,12 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
     Input Guard → 主图 Router（含 CS/旅游预过滤）→ route_selector → CS 子图全链。
 
     结果使用生产 SSE 入口；请求级观察器只捕获客服终态动作和显式事实 ID。
-    概念级 forbidden_facts 需要语义裁判，KB/DB allowed_facts 需要统一事实 ID；
-    对缺少证据的用例标为 skip，不能按文本包含关系假报通过。
+    test-only scope 从锁版 KB fixture 与沙箱订单结构化字段生成事实 ID；
+    概念级 forbidden_facts 仍需语义裁判，缺少证据的用例标为 skip。
     """
+    from backend.customer_service.knowledge.evaluation_scope import (
+        cs_knowledge_eval_scope,
+    )
     from backend.orchestration.graph import MultiAgentSystem
 
     agent = MultiAgentSystem()
@@ -243,7 +246,10 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
         clarify_seen = False
         done_data: dict = {}
         last_observation: dict = {}
+        case_fact_ids: set[str] = set()
+        case_fact_ids_observable = False
         try:
+            eval_scope_args = _cs_full_path_eval_scope_args(case)
             from backend.infra.llm.budget import (
                 bind_request_budget,
                 check_quota_blocked,
@@ -271,9 +277,20 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                     clarify_seen = False
                     done_data = {}
                     observations: list[dict] = []
-                    with capture_cs_graph_evaluation(observations.append):
+                    scope_context = (
+                        cs_knowledge_eval_scope(**eval_scope_args)
+                        if eval_scope_args is not None else nullcontext()
+                    )
+                    with scope_context, capture_cs_graph_evaluation(
+                        observations.append,
+                    ):
                         for evt in agent.stream_events(
-                            message, session_id, kb_id="default",
+                            message,
+                            session_id,
+                            # 主图仍使用 default；只有客服知识服务在内部
+                            # eval scope 内切到 cs_eval_kb，避免把测试库扩散
+                            # 给主图的其它通用检索/工具。
+                            kb_id="default",
                             user_id="eval_bot", tenant_id='default',
                         ):
                             name = evt.get("event")
@@ -289,6 +306,15 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                             elif name == 'error':
                                 raise RuntimeError('完整路径返回执行错误事件')
                     last_observation = observations[-1] if observations else {}
+                    if last_observation.get("fact_ids_observable"):
+                        case_fact_ids_observable = True
+                    observed_turn_fact_ids = last_observation.get("fact_ids")
+                    if isinstance(observed_turn_fact_ids, list):
+                        case_fact_ids.update(
+                            str(fact_id)
+                            for fact_id in observed_turn_fact_ids
+                            if fact_id
+                        )
             finally:
                 clear_request_budget()
             if not isinstance(done_data, dict):
@@ -351,10 +377,10 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                     problems.append(f"禁词命中: {kw!r}")
 
             expected_facts = exp.get("allowed_facts") or []
-            observed_fact_ids = last_observation.get("fact_ids")
-            fact_ids_observable = last_observation.get(
-                "fact_ids_observable", False,
+            observed_fact_ids = (
+                sorted(case_fact_ids) if case_fact_ids_observable else None
             )
+            fact_ids_observable = case_fact_ids_observable
             if expected_facts:
                 if (
                     not fact_ids_observable
@@ -425,6 +451,42 @@ def _run_live_full_path(cases: list[TestCase]) -> list[EvalResult]:
                 error_msg=str(e)[:300],
             ))
     return results
+
+
+def _cs_full_path_eval_scope_args(case: TestCase) -> dict[str, str] | None:
+    """从 suite metadata 建立受控客服 test KB 范围；不按请求文本推断。"""
+    metadata = case.metadata or {}
+    scope_keys = {"kb_id", "fixture_set", "suite", "dataset_version"}
+    scope_identity_keys = {"kb_id", "fixture_set", "suite"}
+    if not scope_identity_keys.intersection(metadata):
+        # 兼容未使用 suite loader 的旧单例测试；这类运行不启用 test KB。
+        return None
+    if not all(str(metadata.get(key) or "").strip() for key in scope_keys):
+        raise ValueError("客服 full_path suite 缺少完整的 KB/fixture/version 身份")
+
+    from backend.evaluation.cs_fixture_catalog import (
+        CS_EVAL_FIXTURE_SET,
+        CS_EVAL_KB_ID,
+        CS_EVAL_VERSION_ID,
+        load_cs_fixture_catalog,
+    )
+    if (
+        metadata["kb_id"] != CS_EVAL_KB_ID
+        or metadata["fixture_set"] != CS_EVAL_FIXTURE_SET
+        or metadata["dataset_version"] != "2.2"
+    ):
+        raise ValueError("客服 full_path suite 与锁定的 cs_eval_kb 范围不符")
+    catalog = load_cs_fixture_catalog()
+    if catalog.version_id != CS_EVAL_VERSION_ID:
+        raise ValueError("客服 full_path fixture 版本未通过校验")
+
+    # 预先构造 manager，runner 在每个用户轮次进入/退出以隔离 ContextVar。
+    return {
+        "kb_id": CS_EVAL_KB_ID,
+        "fixture_set": CS_EVAL_FIXTURE_SET,
+        "suite": str(metadata["suite"]),
+        "dataset_version": str(metadata["dataset_version"]),
+    }
 
 
 def _source_ids(sources: object) -> list[str]:
