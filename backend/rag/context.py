@@ -70,6 +70,8 @@ class RagRequestState:
     # 请求级输出（2026-09-23 D1-6）：sources 随 ask_result 返回值带回，
     # 不再落 RAGChain 单例实例属性（并发请求互相覆盖串扰）
     sources: list = field(default_factory=list)
+    # 客服评测从实际引用的 chunk 获取事实来源，不使用文件级 SourceCard。
+    citation_evidence: list = field(default_factory=list)
     answer_meta: dict = field(default_factory=dict)
 
     # ── QueryAnalyzer 缓存（避免同一请求内多次调用）──

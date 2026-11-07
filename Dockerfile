@@ -112,6 +112,8 @@ RUN mkdir -p /app/backend/app/data && chown -R appuser:appuser /app/backend/app/
 COPY scripts/ ./scripts/
 # 客服知识库种子文档事实源（B1）：index_cs_seed_docs.py 同步到数据卷后索引
 COPY docs/customer-service/kb/ ./docs/customer-service/kb/
+# 客服评测 fixture 来源：full_path 运行时校验 manifest 哈希/章节，导入器显式读取此目录
+COPY docs/customer-service/demo-kb/ ./docs/customer-service/demo-kb/
 
 USER appuser
 

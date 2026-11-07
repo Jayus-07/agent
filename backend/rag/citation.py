@@ -340,6 +340,47 @@ class CitationFormatter:
 
         return sorted(seen.values(), key=lambda s: s.get("index", 0))
 
+    def extract_citation_evidence(self, docs: list, answer: str = "") -> list[dict]:
+        """提取回答实际引用的 chunk 来源，不按文件名合并不同章节。"""
+        if not docs:
+            return []
+
+        cited = self._extract_cited_indexes(answer)
+        if not cited:
+            # 无显式引用时不能把检索候选误当成答案事实来源。
+            return []
+
+        evidence: list[dict] = []
+        seen: set[tuple[str, str, str, str]] = set()
+        for doc in docs:
+            metadata = getattr(doc, "metadata", None)
+            if not isinstance(metadata, dict):
+                continue
+            index = metadata.get("index")
+            filename = str(
+                metadata.get("source_file", metadata.get("source", "")) or ""
+            ).strip()
+            if index not in cited or not filename:
+                continue
+
+            source = {
+                "index": index,
+                "doc_id": str(metadata.get("doc_id") or ""),
+                "filename": filename,
+                "section": str(metadata.get("section_title") or "").strip(),
+                "version_id": str(metadata.get("version_id") or ""),
+            }
+            identity = (
+                source["doc_id"], source["filename"],
+                source["section"], source["version_id"],
+            )
+            if identity in seen:
+                continue
+            seen.add(identity)
+            evidence.append(source)
+
+        return sorted(evidence, key=lambda item: item["index"])
+
     def _extract_cited_indexes(self, answer: str) -> set[int]:
         """从回答中提取引用编号集合。
 

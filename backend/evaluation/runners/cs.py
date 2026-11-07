@@ -457,7 +457,8 @@ def _cs_full_path_eval_scope_args(case: TestCase) -> dict[str, str] | None:
     """从 suite metadata 建立受控客服 test KB 范围；不按请求文本推断。"""
     metadata = case.metadata or {}
     scope_keys = {"kb_id", "fixture_set", "suite", "dataset_version"}
-    if not scope_keys.intersection(metadata):
+    scope_identity_keys = {"kb_id", "fixture_set", "suite"}
+    if not scope_identity_keys.intersection(metadata):
         # 兼容未使用 suite loader 的旧单例测试；这类运行不启用 test KB。
         return None
     if not all(str(metadata.get(key) or "").strip() for key in scope_keys):

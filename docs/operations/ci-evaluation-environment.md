@@ -36,7 +36,7 @@
 - 检索面：`backend/rag/authz.py` 的 `retrieval_authorized_kbs()` 对 `super_admin` 传入 `include_test=True`，因此超管可检索 test 库用于管理与评测验证；admin 及以下主体不可检索 test 库，customer 主体仅见 `audience=customer`。
 - 跨库兜底：`audience=test` 由属性推导进入兜底禁入名单（`CROSS_KB_FALLBACK_EXCLUDE_TEST`，默认 true），虚构语料不得经放宽路径对客召回。
 - 前端上传 KB 列表来自 `GET /api/rag/knowledge-bases`，按 `RagAuthorization.can_search_kb` 后端裁决收敛；上传走 `can_upload_to` 同一授权视图。权限由服务端负责，前端隐藏不是边界。
-- **Runner 接线（部分实现）**：客服 `full_path` runner 只接受登记的 CS suite 元数据；客服知识节点通过服务器内部 scope 显式检索 `cs_eval_kb`，并校验 registry 的 `audience=test`。普通客服仍以 customer 身份检索生产 KB。锁版 fixture manifest 与需显式执行的导入器已实现，但本地离线验收未运行导入器（它会调用 embedding Provider），因此 test KB 中实际索引状态与检索质量仍 `UNVERIFIED`。`travel_eval_kb` 尚无 Runner 接线。SQL/Planner/E2E 不绑定 RAG KB。
+- **Runner 接线（部分实现）**：客服 `full_path` runner 只接受登记的 CS suite 元数据；客服知识节点通过服务器内部 scope 显式检索 `cs_eval_kb`，并校验 registry 的 `audience=test`。普通客服仍以 customer 身份检索生产 KB。后端镜像包含锁版 fixture 的只读源文件，但不会自动索引；显式导入器需调用 embedding Provider，本地离线验收未运行导入器，因此 test KB 实际索引状态与检索质量仍 `UNVERIFIED`。客服事实裁判使用回答实际引用的 chunk/章节证据，并与按文件去重的 SourceCard 分离。`travel_eval_kb` 尚无 Runner 接线。SQL/Planner/E2E 不绑定 RAG KB。
 
 ### 2.2 CI 身份与用户登录分离（✅ 架构上已分离）
 

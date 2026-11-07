@@ -337,6 +337,14 @@ class RAGChain:
         get_context().sources = list(value or [])
 
     @property
+    def _last_citation_evidence(self) -> list:
+        return get_context().citation_evidence
+
+    @_last_citation_evidence.setter
+    def _last_citation_evidence(self, value: list) -> None:
+        get_context().citation_evidence = list(value or [])
+
+    @property
     def gate(self):
         ctx = get_context()
         if ctx.gate is None:
@@ -1672,6 +1680,11 @@ class RAGChain:
         # 多源同事实出现不同数值时，确定性标注「存在不同说法」并保留双方引用；
         # 不让一次 LLM 输出偶然只选择 top hit，亦不替用户静默裁决权威值。
         answer = self.formatter.annotate_conflicts(answer, verified_docs, question)
+        # 事实来源必须匹配模型答案中的 chunk 引用；不复用按文件去重的 SourceCard。
+        self._last_citation_evidence = self.formatter.extract_citation_evidence(
+            verified_docs,
+            answer,
+        )
         trace_collector.end_span(citation_span,
                              metrics={"verified_citations": len(verified_docs),
                                       "total_citations": len(context_docs),

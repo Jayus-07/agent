@@ -194,6 +194,28 @@ class TestProxyHTTP:
         assert outcome.answer == "答案"
         assert captured["persist_memory"] is False
 
+    def test_remote_ask_result_returns_private_citation_evidence(self):
+        citation_evidence = [{
+            "doc_id": "doc-a",
+            "filename": "a.md",
+            "section": "退款时效",
+            "version_id": "v1",
+        }]
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={
+                "answer": "引用[E1]",
+                "meta": {
+                    "sources": [{"filename": "a.md"}],
+                    "citation_evidence": citation_evidence,
+                },
+            })
+
+        outcome = _make_proxy(handler).ask_result("问题", session_id="s1")
+
+        assert outcome.citation_evidence == citation_evidence
+        assert "citation_evidence" not in outcome.answer_meta
+
     def test_rag_server_ask_forwards_memory_policy(self, monkeypatch):
         """HTTP 边界把是否落 Memory 的请求级策略传到 RAGPipeline。"""
         from backend.services import rag_server

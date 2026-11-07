@@ -29,11 +29,18 @@ class TestPipelineMetaSnapshot:
         class FakeChain:
             _last_meta = {"confidence": 0.9, "can_answer": True}
             _last_sources = _SOURCES
+            _last_citation_evidence = [{
+                "doc_id": "doc-a",
+                "filename": "fba_sop.pdf",
+                "section": "退货条件",
+                "version_id": "v1",
+            }]
 
         p = _bare_pipeline(FakeChain())
         p._snapshot_answer_meta()
         assert p.last_answer_meta["source_count"] == 2
         assert p.last_answer_meta["sources"] == _SOURCES
+        assert p.last_answer_meta["citation_evidence"] == FakeChain._last_citation_evidence
         assert p.last_answer_meta["confidence"] == 0.9
 
     def test_sources_truncated_to_8(self):
@@ -89,7 +96,16 @@ class TestRagServerAskPassthrough:
         import backend.services.rag_server as server
 
         class FakePipeline:
-            last_answer_meta = {"confidence": 0.9, "sources": _SOURCES}
+            last_answer_meta = {
+                "confidence": 0.9,
+                "sources": _SOURCES,
+                "citation_evidence": [{
+                    "doc_id": "doc-a",
+                    "filename": "fba_sop.pdf",
+                    "section": "退货条件",
+                    "version_id": "v1",
+                }],
+            }
 
             def __init__(self):
                 self.received_permissions = None
@@ -117,6 +133,7 @@ class TestRagServerAskPassthrough:
         payload = resp.json()
         assert payload["answer"] == "答案"
         assert payload["meta"]["sources"] == _SOURCES
+        assert payload["meta"]["citation_evidence"][0]["section"] == "退货条件"
         assert payload["meta"]["confidence"] == 0.9
 
     def test_ask_passes_permissions_through(self, client):

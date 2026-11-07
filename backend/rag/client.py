@@ -455,7 +455,13 @@ class RAGServiceProxy:
         )
         meta = dict(self.last_answer_meta or {})
         sources = list(meta.pop("sources", []) or [])
-        return AskOutcome(answer=answer, sources=sources, answer_meta=meta)
+        citation_evidence = list(meta.pop("citation_evidence", []) or [])
+        return AskOutcome(
+            answer=answer,
+            sources=sources,
+            answer_meta=meta,
+            citation_evidence=citation_evidence,
+        )
 
     def fetch_document_file(self, doc_id: str) -> tuple[int, bytes, str]:
         """原文快照拉取（原文定位 P1，remote 模式转发面）。

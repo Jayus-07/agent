@@ -88,6 +88,131 @@ def test_cs_fact_ids_require_test_kb_stable_doc_version_and_exact_section():
     ) == []
 
 
+def test_citation_evidence_keeps_same_document_sections_separate():
+    from backend.rag.citation import CitationFormatter
+
+    docs = [
+        SimpleNamespace(metadata={
+            "index": 1,
+            "doc_id": "cs-eval-policy-return-us",
+            "source_file": "policy-return-us.md",
+            "section_title": "退货条件",
+            "version_id": CS_EVAL_VERSION_ID,
+        }),
+        SimpleNamespace(metadata={
+            "index": 2,
+            "doc_id": "cs-eval-policy-return-us",
+            "source_file": "policy-return-us.md",
+            "section_title": "退款方式与时限",
+            "version_id": CS_EVAL_VERSION_ID,
+        }),
+        SimpleNamespace(metadata={
+            "index": 3,
+            "doc_id": "cs-eval-policy-return-us",
+            "source_file": "policy-return-us.md",
+            "section_title": "特殊说明",
+            "version_id": CS_EVAL_VERSION_ID,
+        }),
+    ]
+    formatter = CitationFormatter()
+
+    # SourceCard 按文件去重；事实证据保留回答实际引用的两个章节。
+    assert len(formatter.extract_sources(docs, "退货资格[E1]，退款时效[E2]")) == 1
+    evidence = formatter.extract_citation_evidence(
+        docs,
+        "退货资格[E1]，退款时效[E2]",
+    )
+
+    assert [item["section"] for item in evidence] == ["退货条件", "退款方式与时限"]
+    assert formatter.extract_citation_evidence(docs, "没有引用标记") == []
+
+
+def test_knowledge_expert_uses_all_cited_sections_for_fact_ids(monkeypatch):
+    import backend.customer_service.knowledge as knowledge
+    from backend.customer_service.experts.knowledge import execute_knowledge
+    from backend.customer_service.knowledge.answer_decision import Decision
+    from backend.customer_service.knowledge.service import CSKnowledgeResult
+
+    cited_sections = [
+        {
+            "index": 1,
+            "doc_id": "cs-eval-policy-return-us",
+            "filename": "policy-return-us.md",
+            "section": "退货条件",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+        {
+            "index": 2,
+            "doc_id": "cs-eval-policy-return-us",
+            "filename": "policy-return-us.md",
+            "section": "退款方式与时限",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+        {
+            "index": 3,
+            "doc_id": "cs-eval-policy-refund-timeline",
+            "filename": "policy-refund-timeline.md",
+            "section": "处理时限",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+        {
+            "index": 4,
+            "doc_id": "cs-eval-policy-logistics-exception",
+            "filename": "policy-logistics-exception.md",
+            "section": "催件条件",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+        {
+            "index": 5,
+            "doc_id": "cs-eval-policy-shipping-fee",
+            "filename": "policy-shipping-fee.md",
+            "section": "基本原则",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+        {
+            "index": 6,
+            "doc_id": "cs-eval-product-catalog",
+            "filename": "product-catalog.md",
+            "section": "导购建议速查",
+            "version_id": CS_EVAL_VERSION_ID,
+        },
+    ]
+    service_result = CSKnowledgeResult(
+        answer="可以申请退货，退款将按规则处理。",
+        decision=Decision.ANSWER,
+        confidence=0.97,
+        kb_ids=[CS_EVAL_KB_ID],
+        sources=[{"doc_id": cited_sections[0]["doc_id"]}],
+        citation_evidence=cited_sections,
+    )
+
+    class StubKnowledgeService:
+        def answer(self, **_kwargs):
+            return service_result
+
+    monkeypatch.setattr(
+        knowledge,
+        "get_knowledge_service",
+        lambda: StubKnowledgeService(),
+    )
+    with cs_knowledge_eval_scope(**_scope_args()):
+        result = execute_knowledge(
+            "退货和退款规则是什么",
+            {"intent": "k_faq", "kb_ids": ["cs_policy"]},
+            "cs-eval-session",
+            user_id="eval_bot",
+        )
+
+    expected_fact_ids = sorted({
+        fact_id
+        for source in cited_sections
+        for fact_id in fact_ids_for_rag_source(source, kb_id=CS_EVAL_KB_ID)
+    })
+    assert len(cited_sections) == 6
+    assert len(expected_fact_ids) > 5
+    assert result["data"]["fact_ids"] == expected_fact_ids
+
+
 def test_cs_eval_scope_is_allowlisted_and_restored():
     assert current_cs_knowledge_eval_scope() is None
     with cs_knowledge_eval_scope(**_scope_args()) as scope:
@@ -132,6 +257,12 @@ def test_eval_knowledge_uses_only_test_kb_and_does_not_write_memory(monkeypatch)
             "version_id": CS_EVAL_VERSION_ID,
             "section": "处理时限",
         }],
+        citation_evidence=[{
+            "doc_id": "cs-eval-policy-refund-timeline",
+            "filename": "policy-refund-timeline.md",
+            "version_id": CS_EVAL_VERSION_ID,
+            "section": "处理时限",
+        }],
     )
     rag_pipeline = MagicMock()
     rag_pipeline.ask_result.return_value = outcome
@@ -147,6 +278,7 @@ def test_eval_knowledge_uses_only_test_kb_and_does_not_write_memory(monkeypatch)
     assert result.kb_ids == [CS_EVAL_KB_ID]
     assert result.answer == "退款规则回答"
     assert result.sources[0]["kb_id"] == CS_EVAL_KB_ID
+    assert result.citation_evidence == outcome.citation_evidence
     call = rag_pipeline.ask_result.call_args.kwargs
     assert call["kb_id"] == CS_EVAL_KB_ID
     assert call["kb_ids"] == [CS_EVAL_KB_ID]
@@ -362,6 +494,18 @@ def test_full_path_rejects_non_cs_test_kb_suite_metadata():
         _cs_full_path_eval_scope_args(case)
 
 
+def test_full_path_non_suite_dataset_version_remains_compatible():
+    from backend.evaluation.models import TestCase
+    from backend.evaluation.runners.cs import _cs_full_path_eval_scope_args
+
+    case = TestCase(
+        id="legacy-dataset-case", question="问题", module="cs", expected={},
+        metadata={"dataset_version": "2.2"},
+    )
+
+    assert _cs_full_path_eval_scope_args(case) is None
+
+
 def test_full_path_aggregates_explicit_facts_across_user_turns(monkeypatch):
     from backend.evaluation.models import TestCase
     from backend.evaluation.runners import cs
@@ -436,3 +580,13 @@ def test_cs_fixture_import_rejects_paths_outside_test_kb(tmp_path):
 
     with pytest.raises(RuntimeError, match="根目录之外"):
         _resolve_test_kb_path(test_kb_root, test_kb_root)
+
+
+def test_backend_image_includes_cs_fixture_source_directory():
+    repository_root = Path(__file__).resolve().parents[3]
+    dockerfile = (repository_root / "Dockerfile").read_text(encoding="utf-8")
+
+    assert (
+        "COPY docs/customer-service/demo-kb/ ./docs/customer-service/demo-kb/"
+        in dockerfile
+    )

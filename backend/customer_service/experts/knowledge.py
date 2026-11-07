@@ -67,10 +67,16 @@ def execute_knowledge(
 
     evidence = []
     fact_ids: set[str] = set()
-    raw_sources = getattr(result, "source_documents", None) or getattr(
-        result, "sources", None
-    ) or []
-    for doc in raw_sources[:5]:
+    if eval_scope is not None:
+        raw_sources = result.citation_evidence
+    else:
+        raw_sources = getattr(result, "source_documents", None) or getattr(
+            result, "sources", None
+        ) or []
+    evidence_sources = (
+        raw_sources if eval_scope is not None else raw_sources[:5]
+    )
+    for doc in evidence_sources:
         if isinstance(doc, dict):
             item = {
                 "source": doc.get(

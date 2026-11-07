@@ -55,12 +55,12 @@
 - Runner 继续走生产 `MultiAgentSystem.stream_events`；终态答案优先取 `done.answer`，同时记录稳定来源 ID；每轮重新初始化观察结果，前轮 clarification/action 不会替末轮通过。
 - 新增仅评测调用安装的请求级观察器，从客服图终态捕获规范化 `next_action`（answer/refuse/handoff/propose/propose_with_gap）；普通业务请求未安装观察器，不改变 SSE 或业务行为。Route `hit`、`miss_non_cs`、`clarify_weak` 都有反向断言。
 - 字面 `must_not_contain` 保持精确文本检查；概念级 `forbidden_facts` 不再拿标签本身做子串匹配。存在语义禁答约束、但没有固定语义裁判时，该样本标为 `skip`，不会冒充 `pass`。
-- 当前分支正在接入稳定事实来源：登记 suite 的 full_path 通过服务器内部 scope 只检索 `audience=test` 的 `cs_eval_kb`；固定 fixture manifest 校验文档 hash、RAG version 与精确章节，普通 `doc_id` 不冒充事实 ID；订单事实只从 `sandbox_order_service` 返回的 DEMO 订单结构化字段生成。普通客服仍保持 customer 授权和生产 FAQ 行为。该实现尚待 PR CI 与合并验收，不能视为已进入 main。
+- 当前 PR #350 分支接入稳定事实来源：登记 suite 的 full_path 通过服务器内部 scope 只检索 `audience=test` 的 `cs_eval_kb`；固定 fixture manifest 校验文档 hash、RAG version 与精确章节；KB 事实 ID 从回答实际引用的 chunk/章节 evidence 生成，不使用按文件去重的 SourceCard，也不受五条展示截断影响；订单事实只从 `sandbox_order_service` 返回的 DEMO 订单结构化字段生成。普通客服仍保持 customer 授权和生产 FAQ 行为。自动 Review 的三项 P2 已在未提交的 follow-up Diff 修复，140 项离线定向测试通过；新 head 的 CI 与合并尚待完成，不能视为已进入 main。
 - Fixture 导入器要求显式 `--apply`，并将清理和写入限制在专用 test KB。本轮遵守离线限制，没有运行导入器或 embedding Provider；实际索引状态、检索质量和真实模型质量仍未验证。
 - `allowed_facts` 有了运行时事实 ID 后可执行白名单断言；概念级 `forbidden_facts` 仍没有经人工校准的语义裁判，缺少判据的样本继续标记 `skip`，不会冒充 `pass`。
 - 影响范围：锁版 v2.2 共 324 条，其中 185 条有 `allowed_facts`、85 条有语义级 `forbidden_facts`、107 条有字面 `must_not_contain`；304 条带 `next_action` 和 `cs_route`。
 - 当前子任务的离线测试、PR 免费 CI 和合并验收完成后，再独立设计并校准 `forbidden_facts` 语义裁判；真实 fixture 导入与模型评测需等到获准使用隔离 Provider 凭据后执行。
-- 上一轮观察器/Runner 定向测试 **38 passed**；本次事实 ID 与 test KB 接线在当前 Worktree 的独立验证为 **99 passed in 49.19s**（退出码 0）。Ruff、`py_compile`、manifest JSON、YAML 与 `git diff --check` 通过，未调用真实模型/Provider。测试收尾另有 `TaskService.ensure_schema` 因本机 PostgreSQL 未提供密码的连接池超时日志，不影响通过结果。
+- 上一轮观察器/Runner 定向测试 **38 passed**；PR #350 初版事实 ID 与 test KB 接线验证为 **99 passed in 49.19s**。后续处理自动 Review P2 后，当前修复版最终定向集合为 **140 passed in 50.56s**（退出码 0）。Ruff、`py_compile`、manifest JSON、YAML 与 `git diff --check` 通过，未调用真实模型/Provider。测试收尾另有 `TaskService.ensure_schema` 因本机 PostgreSQL 未提供密码的连接池超时日志，不影响通过结果。
 - 部署与健康验收为 `UNVERIFIED`：当前没有 `.env`，Docker Desktop Linux Engine 管道不可用，`docker compose ls`/`docker stats` 均无法连接 daemon；未尝试启动或重建共享栈。Docker 可用、环境完整且共享栈归属确认后，再仅重建受影响服务并检查 `/health.build`。
 
 ### 自动 Review P2：补槽后的终态动作识别（PR #349 follow-up）

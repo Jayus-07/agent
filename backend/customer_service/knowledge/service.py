@@ -32,6 +32,8 @@ class CSKnowledgeResult:
     latency_ms: int = 0
     # 请求级证据，供客服 Reporter/Trace 原样透传，避免只返回自然语言答案。
     sources: list[dict] = field(default_factory=list)
+    # 完整引用 chunk 的精简元数据；与按文件去重的 SourceCard 分开保留。
+    citation_evidence: list[dict] = field(default_factory=list)
 
 
 class CSKnowledgeService:
@@ -213,6 +215,10 @@ class CSKnowledgeService:
                     if isinstance(source, dict) else source
                     for source in sources
                 ]
+            citation_evidence = (
+                list(getattr(outcome, "citation_evidence", None) or [])
+                if eval_scope is not None else []
+            )
 
             return CSKnowledgeResult(
                 answer=final_answer,
@@ -221,6 +227,7 @@ class CSKnowledgeService:
                 kb_ids=kb_ids,
                 suffix=cs_decision.suffix,
                 sources=sources,
+                citation_evidence=citation_evidence,
             )
 
         except Exception as e:
