@@ -29,6 +29,33 @@ def test_file_content_hash_is_eol_independent(tmp_path):
     assert file_content_hash(crlf) == expected
 
 
+def test_travel_provider_manifest_locks_canonical_cases():
+    """travel-provider canonical 样本必须由 manifest 内容指纹锁定。"""
+    from backend.evaluation.dataset.loader import DATASET_DIR
+
+    dataset_dir = DATASET_DIR / "travel-provider"
+    manifest = json.loads(
+        (dataset_dir / "manifest.json").read_text(encoding="utf-8")
+    )
+    cases_path = dataset_dir / "cases.jsonl"
+
+    assert manifest.get("content_hash"), "travel-provider manifest 缺少 content_hash"
+    assert manifest["content_hash"] == file_content_hash(cases_path)
+
+
+def test_canonical_manifest_hash_drift_fails_fast(tmp_path):
+    """声明过内容指纹的 canonical 数据发生漂移时必须拒绝加载。"""
+    from backend.evaluation.dataset.loader import verify_dataset_integrity
+
+    (tmp_path / "cases.jsonl").write_text('{"id":"TP-001"}\n', encoding="utf-8")
+    (tmp_path / "manifest.json").write_text(
+        json.dumps({"content_hash": "0" * 16}), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="内容校验失败"):
+        verify_dataset_integrity("travel-provider", tmp_path)
+
+
 def test_preflight_passes_on_real_desktop_upload_suite():
     """仓库内完整上传题组必须通过全部校验，身份指纹完整。"""
     result = run_preflight(module="rag", selection="desktop_upload_full")
