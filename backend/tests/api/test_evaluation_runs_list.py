@@ -15,8 +15,10 @@ import pytest
 
 from backend.app.api.routes.evaluation import (
     _load_run_rows_from_pg,
+    get_eval_run,
     list_eval_runs,
 )
+from backend.evaluation.models import EvalReport, EvalResult
 
 
 def _pg_row(run_id: str, module: str, pass_rate: float, **over) -> dict:
@@ -129,6 +131,76 @@ def test_pg_summary_rechecks_stale_validity_from_report(monkeypatch):
     assert summary.summary_source == "postgres"
     assert summary.validity == "INVALID_INFRA"
     assert summary.invalid_reason == "db_unavailable"
+
+
+def test_eval_run_detail_rechecks_stale_validity_without_mutating_report(monkeypatch):
+    """详情报告不能把历史 VALID 继续暴露给管理端质量对比。"""
+    from backend.app.api.deps import OperatorIdentity
+    from backend.app.api.routes import evaluation
+
+    report = EvalReport(
+        module="sql",
+        mode="live",
+        summaries=[],
+        results=[EvalResult(
+            case_id=f"S{i}",
+            module="sql",
+            status="error",
+            expected={},
+            actual={"error": "connection refused"},
+            error_msg="connection refused",
+        ) for i in range(5)],
+        metadata={
+            "run_validity": {"validity": "VALID", "invalid_reason": "", "detail": {}}
+        },
+    )
+    monkeypatch.setattr(evaluation, "load_report", lambda _run_id: (report, {}))
+    monkeypatch.setattr(evaluation, "read_run_status", lambda _run_id: None)
+
+    response = asyncio.run(evaluation.get_eval_run(
+        "stale-valid-1",
+        _tenant="default",
+        _operator=OperatorIdentity(role="super_admin", actor="service:test"),
+    ))
+
+    validity = response["report"]["metadata"]["run_validity"]
+    assert validity["validity"] == "INVALID_INFRA"
+    assert validity["invalid_reason"] == "db_unavailable"
+    assert report.metadata["run_validity"]["validity"] == "VALID"
+
+
+def test_eval_run_detail_preserves_persisted_invalid_validity(monkeypatch):
+    """详情接口重算不得把已持久化的 INVALID 降回 VALID。"""
+    from backend.app.api.deps import OperatorIdentity
+    from backend.app.api.routes import evaluation
+
+    report = EvalReport(
+        module="sql",
+        mode="live",
+        summaries=[],
+        results=[EvalResult(
+            case_id="S0", module="sql", status="pass", expected={}, actual={},
+        )],
+        metadata={
+            "run_validity": {
+                "validity": "INVALID_BUDGET",
+                "invalid_reason": "request_budget_exhausted",
+                "detail": {},
+            }
+        },
+    )
+    monkeypatch.setattr(evaluation, "load_report", lambda _run_id: (report, {}))
+    monkeypatch.setattr(evaluation, "read_run_status", lambda _run_id: None)
+
+    response = asyncio.run(evaluation.get_eval_run(
+        "persisted-invalid-1",
+        _tenant="default",
+        _operator=OperatorIdentity(role="super_admin", actor="service:test"),
+    ))
+
+    validity = response["report"]["metadata"]["run_validity"]
+    assert validity["validity"] == "INVALID_BUDGET"
+    assert validity["invalid_reason"] == "request_budget_exhausted"
 
 
 def test_pg_unavailable_falls_back_to_files(monkeypatch, tmp_path):
