@@ -125,6 +125,45 @@
   schema preflight + eval_preflight 回归 **36 passed**（golden 不干扰 cs 加载）；
   ruff/compile 通过。
 
+### 隔离环境批 1（2026-11-07，一次性容器 `agent-eval-pg-test` @ 127.0.0.1:5544）——①②全部完成 ✅
+
+**环境纪律**：`pgvector/pgvector:pg16`（与主栈同镜像）、端口 5544、init_db 幂等灌
+121 迁移、kb 种子 18 行；全程零触碰共享栈与共享库 5433；零付费模型调用。
+
+**① DB 阻塞测试验证 ✅**
+- `test_managed_task_controls.py` **10 passed**：根因是测试 patch 已废弃的 `_conn`，
+  而 `mark_cancelled_if_status` 走 `_pooled_conn`（task_service.py:81/637）——纯单测
+  修 monkeypatch 目标即绿，无需 DB。
+- `test_rag_eval_migration.py` **3 passed**（对隔离库）：`get_knowledge_bases` 的
+  42P01→bootstrap 回退与 DB 直读路径均按设计工作（config/knowledge_base.py:57-74）。
+
+**② cs_eval_kb 真实索引/检索验收 ✅（PASS 6/6）**
+
+- **关键纠偏（用户指正）**：我先误判需要新建 Ollama——只查了隔离库（绑定空）与
+  共享库旧兼容表（残留 DashScope 行），漏查权威角色绑定链 `llm_model_role_bindings`。
+  实际共享栈配置早已是**本地模型**：`custom-gpu`（host :8088，billing=local）+
+  `bge-m3`(embedding) / `bge-reranker-v2-m3`(rerank)，角色绑定直指；main 角色为
+  豆包 doubao-seed-2.0-mini（方舟 API）。
+- **服务启动方式（文档在 commands.md「本地专项模型服务」节，此前我漏读）**：
+  `dev-local-models.bat start`（后台启动+双模型真实预热；PID 文件管理；端口被占
+  拒绝不杀）。健康：`/healthz` → status ok、双模型 CUDA 加载。
+- **隔离库镜像配置**：provider `custom-gpu`(127.0.0.1:8088, driver=openai,
+  billing=local) + 模型 `bge-m3`/`bge-reranker-v2-m3`（model_kind 对应）+ 角色绑定
+  embedding/rerank + 凭据密文（同机共享库复制占位键，同 `SECRETS_ENCRYPTION_KEY`
+  可解；宿主进程需从 .env 注入该变量）。
+- **真实索引成功**：`ingest_cs_fixtures --fixture-set baseline --apply` → 15 个
+  fixture 文档 / **293 chunks** 全部经本地 bge-m3 嵌入写入隔离库（embedding_model
+  =bge-m3、fingerprint 已登记），BM25 293 文档同步。
+- **检索验收 PASS（脚本 d:/tmp/cs-eval-acceptance/retrieval_acceptance.py，不入库）**：
+  6 个中文查询 × 授权检索出口 `retrieve_documents`，全部命中正确 fixture 文档
+  （top5），并从命中 chunk 的 `doc_id/source_file/version_id/section_title` 四元组
+  经 `fact_ids_for_rag_source` 派生出期望事实 ID——事实 ID 断言依赖的检索链路
+  真实可用。命中示例：运费→`kb:policy-shipping-fee#承担方/#规则`；美国退货→
+  `#凭证/#资格`；物流丢失→`#时效/#赔付`。
+- **验收口径说明**：期望映射以「查询语义正确的文档」为准（如"退款多久能到账"
+  命中 FAQ 的 `Q: 退款多久到账？` 章节而非政策文档属正确召回）；事实派生选块跳过
+  H1 文档级块（其 section 与目录子章节不匹配，属预期）。
+
 ## 遗留缺口（下一步输入，均未算通过）
 
 1. **DB 环境阻塞的 2 个测试**（test_managed_task_controls::test_failed_cancellation_sql_guards_retry_budget_and_error_type、

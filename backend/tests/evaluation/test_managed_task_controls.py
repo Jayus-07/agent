@@ -153,7 +153,8 @@ def test_failed_cancellation_sql_guards_retry_budget_and_error_type(monkeypatch)
 
     cursor = Cursor()
     monkeypatch.setattr(task_service, "ensure_schema", lambda: None)
-    monkeypatch.setattr(task_service, "_conn", lambda: Connection(cursor))
+    # mark_cancelled_if_status 已改走池借还形态（_pooled_conn），patch 目标同步
+    monkeypatch.setattr(task_service, "_pooled_conn", lambda: Connection(cursor))
 
     assert task_service.mark_cancelled_if_status(
         "managed-retry-probe", TaskStatus.FAILED,
