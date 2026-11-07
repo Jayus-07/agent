@@ -29,6 +29,18 @@ class RunValidity(str, Enum):
     INVALID_BUDGET = "INVALID_BUDGET"
     INVALID_DATASET = "INVALID_DATASET"
     INVALID_INFRA = "INVALID_INFRA"
+    INVALID_CANCELLED = "INVALID_CANCELLED"
+
+
+# 已由 RunGuard 触发的批次级停止原因。少量已完成样本即使碰巧达到通过率，
+# 也不能把取消或熔断后的部分报告当作完整质量证据。
+RUN_GUARD_STOP_INVALIDITIES: dict[str, tuple[RunValidity, str]] = {
+    "cancelled": (RunValidity.INVALID_CANCELLED, "evaluation_cancelled"),
+    "deadline_exceeded": (RunValidity.INVALID_INFRA, "deadline_exceeded"),
+    "budget_exceeded": (RunValidity.INVALID_BUDGET, "budget_exceeded"),
+    "evaluator_token_limit": (RunValidity.INVALID_BUDGET, "evaluator_token_limit"),
+    "token_circuit_break": (RunValidity.INVALID_BUDGET, "token_circuit_break"),
+}
 
 
 # 环境故障签名表：(判级, invalid_reason, 错误面子串, 大小写不敏感)。
@@ -114,6 +126,18 @@ def _error_surface(result: Any) -> str:
 
 def classify_report_validity(report: Any) -> RunValidityVerdict:
     """从 EvalReport（或兼容对象）分类 run 有效性。纯函数，无 IO。"""
+    metadata = getattr(report, "metadata", None)
+    run_guards = metadata.get("run_guards") if isinstance(metadata, dict) else None
+    stop_reason = str(run_guards.get("stop_reason") or "").strip() if isinstance(run_guards, dict) else ""
+    guard_invalidity = RUN_GUARD_STOP_INVALIDITIES.get(stop_reason)
+    if guard_invalidity is not None:
+        validity, invalid_reason = guard_invalidity
+        return RunValidityVerdict(
+            validity,
+            invalid_reason,
+            {"stop_reason": stop_reason},
+        )
+
     results = list(getattr(report, "results", None) or [])
     if not results:
         return RunValidityVerdict(

@@ -205,6 +205,55 @@ def test_release_gate_rag_golden_pass():
     assert ragas_items and all(it["status"] == "not_applicable" for it in ragas_items)
 
 
+@pytest.mark.parametrize(
+    "stop_reason,expected_validity",
+    [
+        ("cancelled", RunValidity.INVALID_CANCELLED),
+        ("deadline_exceeded", RunValidity.INVALID_INFRA),
+        ("budget_exceeded", RunValidity.INVALID_BUDGET),
+        ("evaluator_token_limit", RunValidity.INVALID_BUDGET),
+        ("token_circuit_break", RunValidity.INVALID_BUDGET),
+    ],
+)
+def test_run_guard_stop_cannot_be_reported_as_valid_or_pass(
+    stop_reason, expected_validity,
+):
+    """部分用例达到分数线，也不能掩盖取消、deadline 或预算熔断。"""
+    results = [
+        _result(f"RC-{i:03d}", "pass", module="rag")
+        for i in range(99)
+    ] + [
+        _result("RC-099", "skip", module="rag", error_msg=stop_reason)
+    ]
+    report = _report(
+        "rag",
+        [_summary("rag", 100, 99, skipped=1, metrics={
+            "pass_rate": 0.99,
+            "recall@5": 0.99,
+            "mrr": 0.99,
+            "reject_accuracy": 1.0,
+            "false_answer_rate": 0.0,
+        })],
+        results,
+        metadata={
+            "run_validity": {"validity": "VALID", "invalid_reason": "", "detail": {}},
+            "run_guards": {"stop_reason": stop_reason},
+        },
+    )
+
+    from backend.evaluation.validity import resolve_report_validity
+
+    validity = resolve_report_validity(report)
+    gate = compute_module_release_gate(report)
+
+    assert validity.validity is expected_validity
+    assert validity.invalid_reason == (
+        "evaluation_cancelled" if stop_reason == "cancelled" else stop_reason
+    )
+    assert gate["verdict"] == GateVerdict.INVALID.value
+    assert gate["overall"] is False
+
+
 def test_release_gate_ragas_mode_promotes_to_required():
     """evaluator_mode 含 ragas → ragas 指标升级 required；缺失 → FAIL（fail-closed）。"""
     report = _rag_golden_like()
