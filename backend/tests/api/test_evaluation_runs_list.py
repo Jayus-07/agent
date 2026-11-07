@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from backend.app.api.routes.evaluation import (
     _load_run_rows_from_pg,
@@ -85,9 +88,47 @@ def test_invalid_run_carries_validity_fields(monkeypatch):
         "backend.app.api.routes.evaluation._load_run_rows_from_pg",
         lambda limit: rows,
     )
+    monkeypatch.setattr(
+        "backend.app.api.routes.evaluation.load_report",
+        lambda _run_id: pytest.fail("已记录 INVALID 时不需要读取报告文件"),
+    )
     s = asyncio.run(list_eval_runs(limit=10))[0]
     assert s.validity == "INVALID_BUDGET"
     assert s.invalid_reason == "request_budget_exhausted"
+
+
+def test_pg_summary_rechecks_stale_validity_from_report(monkeypatch):
+    """PG 摘要残留 VALID 时，报告中的当前基础设施错误必须推翻它。"""
+    rows = [_pg_row("stale-valid-1", "sql", 0.0, case_count=5, pass_count=0)]
+    report = SimpleNamespace(
+        module="sql",
+        mode="live",
+        metadata={
+            "run_validity": {"validity": "VALID", "invalid_reason": "", "detail": {}}
+        },
+        results=[
+            SimpleNamespace(
+                status="error",
+                error_msg="connection refused",
+                actual={"error": "connection refused"},
+            )
+            for _ in range(5)
+        ],
+    )
+    monkeypatch.setattr(
+        "backend.app.api.routes.evaluation._load_run_rows_from_pg",
+        lambda limit: rows,
+    )
+    monkeypatch.setattr(
+        "backend.app.api.routes.evaluation.load_report",
+        lambda _run_id: (report, {}),
+    )
+
+    summary = asyncio.run(list_eval_runs(limit=10))[0]
+
+    assert summary.summary_source == "postgres"
+    assert summary.validity == "INVALID_INFRA"
+    assert summary.invalid_reason == "db_unavailable"
 
 
 def test_pg_unavailable_falls_back_to_files(monkeypatch, tmp_path):
@@ -132,6 +173,7 @@ def test_pg_unavailable_falls_back_to_files(monkeypatch, tmp_path):
     assert s.module == "sql"
     assert abs(s.pass_rate - 0.9333) < 1e-6
     assert s.case_count == 45 and s.pass_count == 42
+    assert s.validity == "VALID"
 
 
 def test_pg_engine_error_returns_none_for_fallback(monkeypatch):
@@ -147,3 +189,54 @@ def test_pg_engine_error_returns_none_for_fallback(monkeypatch):
         "backend.infra.db.engine_for", lambda cfg: type("E", (), {"raw_connection": lambda self: _Boom()})(),
     )
     assert _load_run_rows_from_pg(5) is None
+
+
+@pytest.mark.parametrize("stored_validity", [None, "VALID"])
+def test_file_fallback_recomputes_missing_or_stale_validity(
+    monkeypatch, tmp_path, stored_validity,
+):
+    """文件降级时补算旧报告，并用当前错误证据推翻历史 VALID。"""
+    monkeypatch.setattr(
+        "backend.app.api.routes.evaluation._load_run_rows_from_pg",
+        lambda limit: None,
+    )
+    monkeypatch.setattr("backend.evaluation.storage.DATA_ROOT", tmp_path)
+    monkeypatch.setattr(
+        "backend.app.api.routes.evaluation.list_runs",
+        lambda limit: ["db-error-run"],
+    )
+
+    metadata = {}
+    if stored_validity:
+        metadata["run_validity"] = {
+            "validity": stored_validity,
+            "invalid_reason": "",
+            "detail": {},
+        }
+    run_dir = tmp_path / "db-error-run"
+    run_dir.mkdir()
+    report = {
+        "timestamp": "2026-11-07T00:00:00",
+        "module": "sql",
+        "mode": "live",
+        "metadata": metadata,
+        "summaries": [{
+            "module": "sql", "total": 5, "passed": 0, "failed": 0,
+            "errors": 5, "skipped": 0, "pass_rate": 0.0, "metrics": {},
+        }],
+        "results": [{
+            "case_id": f"S{i}", "module": "sql", "status": "error",
+            "expected": {}, "actual": {"error": "connection refused"},
+            "metrics": {}, "error_msg": "connection refused",
+        } for i in range(5)],
+    }
+    (run_dir / "report.json").write_text(
+        json.dumps(report, ensure_ascii=False), encoding="utf-8",
+    )
+    (run_dir / "meta.json").write_text("{}", encoding="utf-8")
+
+    summary = asyncio.run(list_eval_runs(limit=10))[0]
+
+    assert summary.validity == "INVALID_INFRA"
+    assert summary.invalid_reason == "db_unavailable"
+    assert summary.pass_rate == 0.0

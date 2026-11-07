@@ -15,6 +15,7 @@ from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.mode import resolve_evaluation_mode
 from backend.evaluation.models import ModuleKind
+from backend.evaluation.validity import resolve_report_validity
 from backend.evaluation.storage import (
     list_runs,
     load_report,
@@ -298,10 +299,27 @@ def _load_run_rows_from_pg(limit: int) -> list[dict] | None:
 
 
 def _row_to_summary(row: dict) -> RunSummary:
-    """台账行 → 列表 DTO。rag 专属指标从该 run 主模块的 metrics 取。"""
+    """台账行 → 列表 DTO；从报告补核空白或旧 VALID 有效性。"""
     metrics_by_module = row.get("metrics") or {}
     own = metrics_by_module.get(row.get("module") or "", {}) or {}
     own_metrics = own.get("metrics", {}) if isinstance(own, dict) else {}
+    validity = str(row.get("validity") or "")
+    invalid_reason = str(row.get("invalid_reason") or "")
+    # PG 是摘要权威，但历史行可能在有效性列上线前写入或残留旧 VALID。
+    # 报告文件保留逐样本错误面；仅在台账为空/VALID 时补核，且只允许
+    # 更强的当前 INVALID 证据覆盖，不让文件把已记录 INVALID 降回 VALID。
+    if validity in {"", "VALID"}:
+        try:
+            report, _ = load_report(str(row["run_id"]))
+            verdict = resolve_report_validity(report)
+            if not validity or not verdict.is_valid:
+                validity = verdict.validity.value
+                invalid_reason = verdict.invalid_reason
+        except Exception as exc:  # noqa: BLE001 — 明细文件不可用时保留 PG 摘要
+            logger.debug(
+                f"[evaluation] run {row.get('run_id')} 有效性无法从报告复核，"
+                f"保留台账值: {exc}"
+            )
     dataset_version = row.get("dataset_version")
     if not isinstance(dataset_version, str):
         # provenance 结构（suite 化运行）取 dataset_version 字段
@@ -329,8 +347,8 @@ def _row_to_summary(row: dict) -> RunSummary:
         dataset_version=dataset_version,
         trigger=str(row.get("trigger") or ""),
         triggered_by=str(row.get("triggered_by") or ""),
-        validity=str(row.get("validity") or ""),
-        invalid_reason=str(row.get("invalid_reason") or ""),
+        validity=validity,
+        invalid_reason=invalid_reason,
         case_count=int(row.get("case_count") or 0),
         pass_count=int(row.get("pass_count") or 0),
         summary_source="postgres",
@@ -348,7 +366,7 @@ async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返�
     """
     rows = await asyncio.to_thread(_load_run_rows_from_pg, limit)
     if rows is not None:
-        return [_row_to_summary(row) for row in rows]
+        return await asyncio.to_thread(lambda: [_row_to_summary(row) for row in rows])
 
     # 文件降级口径（离线/无 PG 环境保留可用性；来源显式可见）
     run_ids = list_runs(limit=limit)
@@ -361,7 +379,7 @@ async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返�
             own = next(
                 (s for s in report.summaries if s.module == report.module), None,
             )
-            validity_meta = (report.metadata or {}).get("run_validity") or {}
+            validity_verdict = resolve_report_validity(report)
             summaries.append(RunSummary(
                 run_id=run_id,
                 module=report.module,
@@ -377,8 +395,8 @@ async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返�
                 mrr=float(own.metrics.get("mrr", 0.0) or 0.0) if own else 0.0,
                 ndcg_at_10=float(own.metrics.get("ndcg@10", 0.0) or 0.0) if own else 0.0,
                 timestamp=report.timestamp,
-                validity=str(validity_meta.get("validity", "") or ""),
-                invalid_reason=str(validity_meta.get("invalid_reason", "") or ""),
+                validity=validity_verdict.validity.value,
+                invalid_reason=validity_verdict.invalid_reason,
                 case_count=len(report.results),
                 pass_count=sum(1 for r in report.results if r.status == "pass"),
                 summary_source="file_fallback",

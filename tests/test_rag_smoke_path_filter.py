@@ -70,6 +70,17 @@ def test_rag_runtime_paths_trigger_smoke():
         assert _filter_subprocess([path]) is True, path
 
 
+def test_legacy_evaluation_history_uses_free_pr_preflight_only():
+    paths = [
+        "backend/app/api/routes/evaluation.py",
+        "backend/tests/api/test_evaluation_runs_list.py",
+    ]
+    assert _filter_import(paths, "pull_request") is True
+    assert _filter_subprocess(paths, "pull_request") is True
+    assert _filter_import(paths, "push") is False
+    assert _filter_subprocess(paths, "push") is False
+
+
 def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     paths = [
         "backend/sql/migrations/006_customer_service.sql",

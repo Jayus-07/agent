@@ -327,6 +327,36 @@ def test_validity_all_errored_is_infra_invalid():
     assert verdict.validity is RunValidity.INVALID_INFRA
 
 
+@pytest.mark.parametrize(
+    ("error_text", "expected_validity", "expected_reason"),
+    [
+        ("connection refused", RunValidity.INVALID_INFRA, "db_unavailable"),
+        ("Rate limit reached", RunValidity.INVALID_PROVIDER, "llm_provider_rate_limited"),
+        (
+            "请求预算已超限: request_fallbacks",
+            RunValidity.INVALID_BUDGET,
+            "request_budget_exhausted",
+        ),
+    ],
+)
+def test_all_error_cases_preserve_known_failure_category(
+    error_text, expected_validity, expected_reason,
+):
+    results = [
+        _result(
+            f"SC-{i:03d}", "error", module="sql", error_msg=error_text,
+            actual={"error": error_text},
+        )
+        for i in range(3)
+    ]
+    report = _report("sql", [_summary("sql", 3, 0, errors=3)], results)
+
+    verdict = classify_report_validity(report)
+
+    assert verdict.validity is expected_validity
+    assert verdict.invalid_reason == expected_reason
+
+
 def test_validity_few_transient_failures_stay_valid():
     """45 条里 2 条限流抖动 → 低于门槛，仍是 VALID（不把抖动放大成环境无效）。"""
     results = [
