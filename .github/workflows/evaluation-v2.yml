@@ -115,6 +115,8 @@ jobs:
           python -m pytest
           backend/tests/evaluation_v2
           backend/tests/evaluation/test_dataset_enterprise_extensions.py::test_synthesis_uses_visible_chunks_directly_and_keeps_request_budget
+          backend/tests/evaluation/test_dataset_enterprise_extensions.py::test_managed_release_gate
+          backend/tests/evaluation/test_dataset_enterprise_extensions.py::test_legacy_source_mapping_cannot_pass_release_gate
           backend/tests/evaluation/test_sql_eval.py
           backend/tests/evaluation/test_cs_runner_v2.py
           backend/tests/evaluation/test_travel_golden_v1.py
