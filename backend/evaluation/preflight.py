@@ -68,6 +68,68 @@ def _fail(stage: str, reason: str) -> PreflightResult:
     return PreflightResult(passed=False, fail_stage=stage, reason=reason)
 
 
+def run_schema_preflight(
+    modules: list[str],
+    *,
+    selection: str | None = None,
+    dataset_path: str | None = None,
+) -> PreflightResult:
+    """校验本次评测将运行的全部数据集，保证错误在模型调用前暴露。"""
+    from backend.evaluation.dataset import load_dataset, load_dataset_file, validate_dataset
+
+    if not modules:
+        return _fail("dataset_empty", "没有为评测选择数据集模块")
+    if dataset_path and len(modules) != 1:
+        return _fail("dataset_path_invalid", "显式 dataset 文件只能用于单模块评测")
+
+    counts: dict[str, int] = {}
+    problems: list[str] = []
+    for module in modules:
+        try:
+            cases = (
+                load_dataset_file(dataset_path, default_module=module)
+                if dataset_path
+                else load_dataset(module, selection=selection)
+            )
+        except Exception as exc:  # noqa: BLE001 — 装载问题同属 E0，必须先于 Runner 暴露
+            problems.append(f"{module}: 数据集无法加载: {exc}")
+            continue
+
+        counts[module] = len(cases)
+        if not cases:
+            problems.append(f"{module}: 数据集为空")
+            continue
+        errors = validate_dataset(cases, expected_module=module)
+        if errors:
+            problems.append(
+                f"{module}: " + "; ".join(errors[:20])
+                + (f"; 另有 {len(errors) - 20} 项" if len(errors) > 20 else "")
+            )
+
+    if problems:
+        return _fail("dataset_schema", " | ".join(problems))
+    return PreflightResult(
+        passed=True,
+        identity={"modules": ",".join(modules), "case_counts": counts},
+    )
+
+
+def run_schema_preflight_strict(
+    modules: list[str],
+    *,
+    selection: str | None = None,
+    dataset_path: str | None = None,
+) -> PreflightResult:
+    """service 侧 E0 入口：任何模块数据无效时，在 Runner 前拒绝启动。"""
+    result = run_schema_preflight(
+        modules, selection=selection, dataset_path=dataset_path,
+    )
+    if not result.passed:
+        raise PreflightError(result.fail_stage, result.reason)
+    logger.info("[preflight] E0 schema %s", result.render().replace("\n", " | "))
+    return result
+
+
 def run_preflight(module: str = "rag", selection: str | None = None) -> PreflightResult:
     """suite 化评测的运行前校验。任何一环不过即返回失败结果（不抛异常）。"""
     # 1. selection 非空
@@ -113,6 +175,16 @@ def run_preflight(module: str = "rag", selection: str | None = None) -> Prefligh
     if not isinstance(case_ids, list) or not case_ids:
         return _fail("case_ids_empty", f"suite case_ids 为空: {suite_path}")
 
+    invalid_case_ids = [
+        case_id for case_id in case_ids
+        if not isinstance(case_id, str) or not case_id.strip()
+    ]
+    if invalid_case_ids:
+        return _fail(
+            "case_ids_invalid",
+            f"case_ids 必须为非空字符串，发现: {invalid_case_ids[:10]}",
+        )
+
     # 8. canonical 存在且 case_ids 全部可解析
     canonical_path = DATASET_DIR / module / "cases.jsonl"
     if not canonical_path.exists():
@@ -121,13 +193,23 @@ def run_preflight(module: str = "rag", selection: str | None = None) -> Prefligh
         all_cases = _load_jsonl(canonical_path, default_module=module)
     except (json.JSONDecodeError, OSError) as e:
         return _fail("canonical_unreadable", f"canonical 解析失败: {canonical_path} ({e})")
-    case_map = {c.id for c in all_cases}
+    case_map = {c.id: c for c in all_cases}
     missing = [cid for cid in case_ids if cid not in case_map]
     if missing:
         return _fail(
             "case_ids_missing",
             f"case_ids 引用了 canonical 中不存在的用例: {missing[:10]}"
             f"（共缺 {len(missing)} 条）",
+        )
+    from backend.evaluation.dataset.validator import validate_dataset
+
+    selected_cases = [case_map[cid] for cid in case_ids]
+    schema_errors = validate_dataset(selected_cases, expected_module=module)
+    if schema_errors:
+        return _fail(
+            "dataset_schema",
+            "; ".join(schema_errors[:20])
+            + (f"; 另有 {len(schema_errors) - 20} 项" if len(schema_errors) > 20 else ""),
         )
 
     # 9. suite 声明的 cases_hash == canonical 归一化 hash（行尾漂移在此显式暴露）

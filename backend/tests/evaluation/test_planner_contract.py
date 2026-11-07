@@ -235,7 +235,11 @@ def test_dataset_validator_accepts_registered_module_kinds(module):
                 "max_steps": 1,
                 "edges": [],
             }
-            if module == "planner" else {}
+            if module == "planner" else {
+                "should_reject": True,
+                "expected_tables": [],
+                "expected_status": ["no_table"],
+            } if module == "sql" else {}
         ),
     )
 

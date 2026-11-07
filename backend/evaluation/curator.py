@@ -33,6 +33,14 @@ def append_case(
     base_dir = dataset_dir or DATASET_DIR
     target_path = base_dir / target_module / "cases.jsonl"
 
+    if case.module != target_module:
+        return {
+            "appended": False,
+            "duplicate": False,
+            "reason": f"用例模块 {case.module} 与目标数据集 {target_module} 不一致",
+            "path": str(target_path),
+        }
+
     with _write_lock:
         existing_cases: list[TestCase] = []
 
@@ -67,9 +75,14 @@ def append_case(
                 "path": str(target_path),
             }
 
-        errors = validate_dataset(existing_cases + [case])
+        errors = validate_dataset(existing_cases + [case], expected_module=target_module)
         if errors:
-            logger.warning(f"[curator] 追加后校验警告: {errors[:3]}")
+            return {
+                "appended": False,
+                "duplicate": False,
+                "reason": "数据集校验失败: " + "; ".join(errors[:10]),
+                "path": str(target_path),
+            }
 
         case_line = json.dumps({
             "id": case.id,
