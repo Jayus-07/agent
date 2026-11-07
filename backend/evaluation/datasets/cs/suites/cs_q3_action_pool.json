@@ -2,6 +2,7 @@
   "name": "cs_q3_action_pool",
   "version": "1.0.0",
   "dataset_version": "2.2",
+  "cases_hash": "0e0ec5bde442b0c1",
   "kb_id": "cs_eval_kb",
   "fixture_set": "baseline",
   "description": "Q3 action 逐例复核池：P6 cs-live-1102 b1-b4 的 38 条 action 失败样本，graph_only 重测拿当前基线。",
