@@ -164,11 +164,85 @@
   命中 FAQ 的 `Q: 退款多久到账？` 章节而非政策文档属正确召回）；事实派生选块跳过
   H1 文档级块（其 section 与目录子章节不匹配，属预期）。
 
+### 隔离环境批 1（2026-11-07，一次性容器 `agent-eval-pg-test` @ 127.0.0.1:5544）——①②全部完成 ✅
+
+**环境纪律**：`pgvector/pgvector:pg16`（与主栈同镜像）、端口 5544、init_db 幂等灌
+121 迁移、kb 种子 18 行；全程零触碰共享栈与共享库 5433；零付费模型调用。
+
+**① DB 阻塞测试验证 ✅**
+- `test_managed_task_controls.py` **10 passed**：根因是测试 patch 已废弃的 `_conn`，
+  而 `mark_cancelled_if_status` 走 `_pooled_conn`（task_service.py:81/637）——纯单测
+  修 monkeypatch 目标即绿，无需 DB。
+- `test_rag_eval_migration.py` **3 passed**（对隔离库）：`get_knowledge_bases` 的
+  42P01→bootstrap 回退与 DB 直读路径均按设计工作（config/knowledge_base.py:57-74）。
+
+**② cs_eval_kb 真实索引/检索验收 ✅（PASS 6/6）**
+
+- **关键纠偏（用户指正）**：先误判需要新建 Ollama——只查了隔离库（绑定空）与
+  共享库旧兼容表（残留 DashScope 行），漏查权威角色绑定链 `llm_model_role_bindings`。
+  实际共享栈配置早已是**本地模型**：`custom-gpu`（host :8088，billing=local）+
+  `bge-m3`(embedding) / `bge-reranker-v2-m3`(rerank)，角色绑定直指；main 角色为
+  豆包 doubao-seed-2.0-mini（方舟 API）。
+- **服务启动方式（文档在 commands.md「本地专项模型服务」节）**：
+  `dev-local-models.bat start`（后台启动+双模型真实预热；端口被占拒绝不杀）。
+  健康：`/healthz` → status ok、双模型 CUDA 加载。
+- **隔离库镜像配置**：provider `custom-gpu`(127.0.0.1:8088, driver=openai,
+  billing=local) + 模型 `bge-m3`/`bge-reranker-v2-m3` + 角色绑定 embedding/rerank
+  + 凭据密文（同机共享库复制占位键；宿主进程需从 .env 注入 `SECRETS_ENCRYPTION_KEY`）。
+- **真实索引成功**：`ingest_cs_fixtures --fixture-set baseline --apply` → 15 个
+  fixture 文档 / **293 chunks** 全部经本地 bge-m3 嵌入写入隔离库（embedding_model
+  =bge-m3、fingerprint 已登记），BM25 293 文档同步。
+- **检索验收 PASS（脚本 d:/tmp/cs-eval-acceptance/retrieval_acceptance.py，不入库）**：
+  6 个中文查询 × 授权检索出口 `retrieve_documents`，全部命中正确 fixture 文档，
+  并从命中 chunk 的 `doc_id/source_file/version_id/section_title` 四元组经
+  `fact_ids_for_rag_source` 派生出期望事实 ID——事实 ID 断言依赖的检索链路真实可用。
+
+## 2026-11-08 可靠性离线验证（11 维度盘点 + 定向补强）
+
+**静态盘点**（只读代理，file:line 证据齐全）：4 绿（超时/重试/权限隔离/用量归因
+——用量归因 8 文件已在 PR 门禁，全库最强）、6 黄（降级/幂等/断点恢复/SSE 断开/
+并发调度/人工确认/BadCase 回流）、1 个「实现存在但测试为零」（ProviderBreaker）。
+**共性缺口：绝大多数权威测试只在周级 full_regression，PR 门禁零覆盖。**
+
+### 修复批 6：PR #365（纯离线补强）——已合并 ✅（main=8252f9c）
+
+- 新增 `test_provider_breaker.py`（7 例可控时钟）：达阈开路/窗口赦免/半开清窗/
+  成功清窗/审计恰一次/20 线程并发恰一次——**消灭 11 维度中唯一的零测试实现**；
+- 新增 `test_compose_scheduling_contract.py`（2 例）：beat 单实例 + 四类 worker
+  并发档位从「注释纪律」固化为回归契约；
+- rag_smoke 定向清单登记 4 文件（新增 2 + 既有 breaker/resilience 2）→ PR 门禁
+  补上降级与调度契约每次必跑；
+- 验证：9 例新增 + 35 例既有全绿；ruff/YAML 校验过；CI preflight+smoke pass。
+
+### 隔离环境批 2（D4/D5/D8 权威矩阵，PG+Redis）
+
+- **环境插曲（如实记录）**：宿主机过夜重启 → Docker 引擎与隔离容器消失 →
+  重启 Docker Desktop（29.9.2）→ `docker start agent-eval-pg-test`（数据完好，
+  schema_migrations 126）+ 一次性 `agent-eval-redis-test`（127.0.0.1:16380）。
+- D4 幂等：`test_idempotency_protocol + test_side_effect_idempotency` ✅
+- D5 断点恢复：`test_task_pending_recovery(T1-T11) + test_task_checkpoint_recovery
+  + test_task_resume` ✅ **31 passed**
+- D8 并发调度：`test_task_admission`（Redis 准入，原 21 skip）✅
+- 三文件合并跑 **59 passed**（修复前同批 15 passed/21 skipped/23 errors——根因
+  是容器随宿主重启消失 + Redis 缺位，非代码问题）
+- **操作失误记录**：续工核对时在带未提交修改状态下误跑 `reset --hard`，丢弃
+  TASK/PROGRESS 两处未提交编辑；已凭原文完整恢复并改用精确锚点重写。教训：
+  切换/重置前必须先 `git status` 确认工作区（pitfalls §一「绝不用 --hard」）。
+
+### 可靠性剩余缺口（下一步输入）
+
+1. SSE 断开：`stream_resume` 注册表级单测抽离（现有用例走 FastAPI client 依赖重），
+   确认 client fixture 无 PG 依赖后纳入 PR 门禁（纯离线）；
+2. BadCase 回流端到端：负反馈→candidate→approve→promote→落库（需隔离 PG，现仅
+   幂等契约层）；
+3. 预算对账任务 `budget_reconciliation_check` 正确性用例（需隔离 PG）；
+4. AT-03/AT-05 现场 E2E（真实 worker kill 接管、provider 契约查账本）——归
+   隔离全栈批次（Demo/Docker 验收时顺带）。
+
 ## 遗留缺口（下一步输入，均未算通过）
 
-1. **DB 环境阻塞的 2 个测试**（test_managed_task_controls::test_failed_cancellation_sql_guards_retry_budget_and_error_type、
-   test_rag_eval_migration::test_production_authorized_kbs_exclude_unified_eval_kb）：
-   需隔离 PG 验证，不连共享库（5433 红线）。
+1. **DB 环境阻塞的 2 个测试**：✅ 已解决（见「隔离环境批 1」①——test A 夹具修复
+   10 passed 走 PR；test B 隔离库 3 passed）。
 2. **顶层辅助集 10 个无 hash 锁**（盘点缺口清单第 1 条）：是否补锁/补守卫测试待逐项裁决。
 3. **tool_selector / tool_routing / router_domain 三个评测脚本无守卫测试、不在任何 CI**。
 4. **孤儿资产**（rag_cases_20.jsonl、travel/golden_v1.baseline.json）与 **sql_v2 双事实源**：
