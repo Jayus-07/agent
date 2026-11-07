@@ -33,4 +33,4 @@
 
 ## 当前状态
 
-`IN_PROGRESS`。2026-11-07 从 PR #349 merge commit `baffc319bfe6bcbb60aec64aca99891feccf6d0e` 的 main 创建独立 Worktree `C:\Users\wh\.codex\worktrees\enterprise-agent-cs-facts\agent`，分支 `codex/cs-fact-id-contract`。
+`COMPLETE`（代码与离线契约验收范围）。PR [#350](https://github.com/Jayus-07/agent/pull/350) 已以 squash merge 合入，merge SHA `6240f556096a92969c3b86f657902bf4ebaeaa93`；分支 head `6e776e057668f5b6e00768f13cbe35003d0e47ff`。离线测试与 PR CI 通过；fixture 实际导入/检索、Live 质量及 Docker 部署健康仍为 `UNVERIFIED`，由企业总任务后续授权和环境就绪后验收。
