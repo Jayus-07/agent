@@ -448,7 +448,8 @@ def write_markdown_report(
     lines.append("## 15. Machine-readable Summary")
     lines.append("")
     summary_json = {
-        "verdict": "PASS" if gate["overall"] else "FAIL",
+        "verdict": gate["verdict"],
+        "invalid_reason": gate["invalid_reason"],
         "timestamp": report.timestamp,
         "timestamp_shanghai": shanghai_timestamp,
         "module": report.module,
