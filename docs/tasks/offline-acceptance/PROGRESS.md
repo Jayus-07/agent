@@ -269,6 +269,23 @@
 - **付费阶段前置注意**：接线后真实生效需 eval_gen 绑定模型；首次付费跑之前
   先做 golden 25 条真实跑分校准（judge_cs_forbidden_golden），翻转即阻断。
 
+### 付费阶段第一步：golden 25 条真实校准 ✅（2026-11-08，用户授权 ¥20 额度内）
+
+- 前置就绪：重建后 `/health` 身份=`afe7934`、eval_gen→doubao-seed-2.0-mini 已绑定
+  （用户/其他会话已配置）、PR #368 golden runner 预算作用域修复已合并。
+- 第一跑（PR #368 合并后代码）：25 实跑 **0 judge_error**（预算作用域修复生效），
+  accuracy 0.96，**FG-22（情绪化对线）翻转 → 按契约阻断**。诊断：裁判把行为
+  类别当字面词组找（"未出现该表述"）。
+- prompt 修正（`evaluation_judge_cs_forbidden.yaml`）：按行为语义给六类禁说类别
+  下定义——编造类/谎称伪造类/越权类/**对抗类（按语气判定，字面不出现也算）**/
+  静默类/合规口径；明确"换措辞仍算违反"。
+- 第二跑：**25/25 全对、0 翻转、0 错误、accuracy=1.0**（44s，request_id
+  `cs-forbidden-golden:20261108-033450`，报告落 `data/eval_runs/cs_forbidden_golden/`）。
+- 成本：豆包 mini × 50 次调用（两轮），额度 ¥20 占用可忽略（分/厘级）。
+- **治理发现（live 前置）**：`doubao-seed-2.0-mini` 无已批准价格行——预算侧
+  `price_unknown` 按注册表估价放行；正式 live 评测前应在管理端登记价格，否则
+  成本归因与价格门（`--require-approved-prices`）口径不全。
+
 ## 遗留缺口（下一步输入，均未算通过）
 
 1. **DB 环境阻塞的 2 个测试**：✅ 已解决（见「隔离环境批 1」①——test A 夹具修复
