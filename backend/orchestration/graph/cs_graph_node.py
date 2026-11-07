@@ -70,9 +70,31 @@ def _build_cs_eval_observation(final_state: dict) -> dict:
             else "propose"
         )
     elif action == "finish":
-        next_action = (
-            "refuse" if expert_data.get("decision") == "refuse" else "answer"
-        )
+        if final_state.get("pending_turn_slot_fill"):
+            # 补槽轮的顶层 pending_action 可能还是进入 ActionExpert 前的旧
+            # need_info 快照；只认本轮 ActionExpert 返回的新状态，避免把旧
+            # 提案当成本轮新提案。补槽失败且未返回 pending_action 时回落回答。
+            current_pending = _as_mapping(expert_data.get("pending_action"))
+            current_status = current_pending.get("status")
+            if current_status == "need_info":
+                next_action = "propose_with_gap"
+            elif (
+                expert.get("expert") == "action"
+                and current_pending.get("confirmation_state")
+                in {"pending", "pending_confirmation"}
+                and (current_pending.get("action_id")
+                     or current_pending.get("proposal_text"))
+            ):
+                next_action = "propose"
+            else:
+                next_action = (
+                    "refuse" if expert_data.get("decision") == "refuse"
+                    else "answer"
+                )
+        else:
+            next_action = (
+                "refuse" if expert_data.get("decision") == "refuse" else "answer"
+            )
     else:
         next_action = None
 

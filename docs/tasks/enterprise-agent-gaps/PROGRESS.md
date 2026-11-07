@@ -57,6 +57,15 @@
 - 本地定向测试 **38 passed**；Ruff、`py_compile`、`git diff --check` 通过，未调用真实模型/Provider。pytest 退出码为 0；结束时另有既有 `TaskService.ensure_schema` 连接池超时日志，需要在后续基础设施检查中确认是否与测试环境连接池配置有关。
 - 部署与健康验收为 `UNVERIFIED`：当前没有 `.env`，Docker Desktop Linux Engine 管道不可用，`docker compose ls`/`docker stats` 均无法连接 daemon；未尝试启动或重建共享栈。Docker 可用、环境完整且共享栈归属确认后，再仅重建受影响服务并检查 `/health.build`。
 
+### 自动 Review P2：补槽后的终态动作识别（PR #349 follow-up）
+
+- 根因：`pending_turn_slot_fill` 由 Supervisor 以 `finish` 收尾；原观察器将所有 `finish` 视作 `answer`，导致补槽后新建待确认提案被误判，且只看顶层状态会读到补槽前遗留的 `need_info`。
+- 修复：只在补槽轮检查本轮 `last_expert_result.data.pending_action`。新待确认提案映射为 `propose`，仍缺信息映射为 `propose_with_gap`；本轮未产生新 pending 时按回答/拒绝处理，不使用旧顶层快照。客服业务执行路径未改。
+- 回归：观察器和生产 full_path runner 分别覆盖三种终态，包括“旧状态仍 need_info、但当前补槽未生成提案”的失败边界。
+- 本地验证：定向评测/观察器/图契约测试 **44 passed**；Ruff、`py_compile`、`git diff --check` 通过。pytest 退出码为 0，但结束日志显示 `TaskService.ensure_schema` 因本机 PostgreSQL `127.0.0.1:5432` 未提供密码而连接超时；该环境连接问题未解决，也未掩盖断言失败。
+- PR #349 的免费检查在修复前 head 全通过；真实 RAG API 评测按离线要求跳过。修复后的新 head 仍待 PR CI 与 review 状态复核。
+- Docker 重建/健康验收 `UNVERIFIED`：宿主可用内存 6.29 GiB，但 Docker Desktop Linux Engine named pipe 不存在，且当前 Worktree 无 `.env`；未启动或重建共享栈。恢复 Docker daemon、补齐安全的任务环境并确认共享栈归属后，按部署规则重建受影响服务，再检查 `/health.build`。
+
 ## 未完成全局项
 
 - 客服 full_path 的 route 与 `next_action` 已由生产路径/请求级观察器断言；`allowed_facts` 与概念级 `forbidden_facts` 已改为缺证据 `skip`。稳定事实 ID、测试 KB 到 Live 的绑定、经校准语义裁判仍未完成，不能发布 CS 全路径质量通过率。

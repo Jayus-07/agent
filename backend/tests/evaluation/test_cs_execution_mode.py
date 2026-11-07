@@ -130,6 +130,33 @@ def test_full_path_rejects_runtime_error_and_forbidden_answer(monkeypatch, event
           'pending_action': {'status': 'pending_confirmation'}}, 'propose'),
         ({'supervisor_decision': {'next_action': 'pending'},
           'pending_action': {'status': 'need_info'}}, 'propose_with_gap'),
+        ({
+            'supervisor_decision': {'next_action': 'finish'},
+            'pending_turn_slot_fill': True,
+            'pending_action': {'status': 'need_info'},
+            'last_expert_result': {
+                'expert': 'action',
+                'data': {'pending_action': {
+                    'action_id': 'new-action',
+                    'proposal_text': '退款申请',
+                    'confirmation_state': 'pending',
+                }},
+            },
+        }, 'propose'),
+        ({
+            'supervisor_decision': {'next_action': 'finish'},
+            'pending_turn_slot_fill': True,
+            'last_expert_result': {
+                'expert': 'action',
+                'data': {'pending_action': {'status': 'need_info'}},
+            },
+        }, 'propose_with_gap'),
+        ({
+            'supervisor_decision': {'next_action': 'finish'},
+            'pending_turn_slot_fill': True,
+            'pending_action': {'status': 'need_info'},
+            'last_expert_result': {'expert': 'action', 'data': {}},
+        }, 'answer'),
     ],
 )
 def test_cs_graph_evaluation_observer_captures_terminal_action(
@@ -290,6 +317,55 @@ def test_full_path_compares_observed_terminal_action_exactly(monkeypatch):
     wrong = cs._run_live_full_path([wrong_case])[0]
     assert wrong.status == 'fail'
     assert wrong.metrics['next_action_match'] == 0.0
+
+
+@pytest.mark.parametrize(
+    ('current_pending', 'expected_action'),
+    [
+        ({
+            'action_id': 'new-action', 'proposal_text': '退款申请',
+            'confirmation_state': 'pending',
+        }, 'propose'),
+        ({'status': 'need_info'}, 'propose_with_gap'),
+        (None, 'answer'),
+    ],
+)
+def test_full_path_maps_slot_fill_from_current_action_result(
+    monkeypatch, current_pending, expected_action,
+):
+    from backend.evaluation.models import TestCase as Case
+    from backend.evaluation.runners import cs
+    from backend.orchestration.graph import MultiAgentSystem
+    from backend.orchestration.graph.cs_graph_node import _publish_cs_eval_result
+
+    monkeypatch.setattr(MultiAgentSystem, '__init__', lambda self: None)
+
+    def stream(self, *args, **kwargs):
+        result_data = (
+            {'pending_action': current_pending}
+            if current_pending is not None else {}
+        )
+        _publish_cs_eval_result({
+            'supervisor_decision': {'next_action': 'finish'},
+            'pending_turn_slot_fill': True,
+            # 模拟图状态保留的旧 need_info 快照；当前轮专家无新 pending 时
+            # 不能因此误报仍在补槽。
+            'pending_action': {'status': 'need_info'},
+            'last_expert_result': {'expert': 'action', 'data': result_data},
+        })
+        yield {'event': 'status', 'data': {'node': 'cs_graph_node'}}
+        yield {'event': 'done', 'data': {'answer': '本轮客服回复'}}
+
+    monkeypatch.setattr(MultiAgentSystem, 'stream_events', stream)
+    result = cs._run_live_full_path([
+        Case(
+            id=f'slot-fill-{expected_action}', question='补充订单号', module='cs',
+            expected={'cs_route': 'hit', 'next_action': expected_action},
+        )
+    ])[0]
+
+    assert result.status == 'pass'
+    assert result.actual['next_action'] == expected_action
 
 
 @pytest.mark.parametrize(
