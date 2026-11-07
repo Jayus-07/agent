@@ -2,7 +2,7 @@
 
 ## 状态
 
-`IN_PROGRESS`。本任务只做离线和代码验证，不调用真实模型或 Provider。
+`COMPLETE`（代码与离线契约验收范围）。本任务未调用真实模型或 Provider；fixture 实际导入/检索和 Docker 部署健康仍未验收，列入企业总任务的后续工作。
 
 ## 基线和工作区
 
@@ -23,7 +23,7 @@
 ## 已完成
 
 - 从最新 `origin/main` 建立独立 Worktree 和任务分支。
-- 基线为 PR #349 merge commit `baffc319bfe6bcbb60aec64aca99891feccf6d0e`；首版功能已提交到 PR #350，当前 P2 follow-up 尚待提交。
+- 基线为 PR #349 merge commit `baffc319bfe6bcbb60aec64aca99891feccf6d0e`；PR #350 head `6e776e057668f5b6e00768f13cbe35003d0e47ff` 已 squash merge 为 `6240f556096a92969c3b86f657902bf4ebaeaa93`。
 - 完成任务边界和验收条件；范围限定在登记 suite 的 full_path、test-only 客服 KB 和稳定事实来源，不改变普通客服授权或业务行为。
 - 新增 `cs_eval_kb` baseline fixture manifest：15 个合成 Markdown 文档有固定 fixture doc ID、内容 SHA-256、RAG version；事实 ID 只映射到登记文档的精确章节。Catalog 校验源目录、hash、标题、ID 与路径。
 - 新增显式 fixture 导入器：必须指定 `--fixture-set baseline --apply`，导入前验证 KB `audience=test`，索引与 stale cleanup 限定在 `cs_eval_kb`；该命令会调用 embedding Provider，本轮没有运行。
@@ -31,14 +31,13 @@
 - RAG `CitationFormatter` 从回答实际引用的已验证 chunk 提取精简 citation evidence；即使同一文件引用多个章节也分别保留。该字段经本地/远端 `AskOutcome` 传入客服 Knowledge Expert，且从公开 `answer_meta` 分离；评测 scope 只从这组证据生成 KB `fact_ids`。Query Expert 仅从 `sandbox_order_service` 的 DEMO 订单结构化字段生成 DB `fact_ids`。观察器收集前序 task result，runner 在 case 内跨轮汇总，不跨 case。
 - 标准后端镜像复制 `docs/customer-service/demo-kb`，让镜像内 full_path manifest 校验和显式导入器都能访问源文件；复制不触发索引或生产 KB 导入。只有 `kb_id`、`fixture_set`、`suite` 身份字段会启用 test KB scope，普通数据集仅携带 `dataset_version` 时保持兼容。
 - 新增契约与隔离测试并加入 `.github/workflows/rag_smoke.yml` 的免费 PR 定向清单；更新 CS 数据集说明及 CI/评测环境文档，明确代码接线不等于已导入或 Live 通过。
-- 自动 Review 的 3 个 P2 已在工作区修复：非 suite 仅带 `dataset_version` 时保持兼容；后端镜像复制 fixture 源目录；RAG 引用证据保留同文件多章节且评测不受普通来源卡片五条截断影响。回归覆盖同文件多章节和 6 个引用来源。
+- 自动 Review 的 3 个 P2 已修复、提交并合并：非 suite 仅带 `dataset_version` 时保持兼容；后端镜像复制 fixture 源目录；RAG 引用证据保留同文件多章节且评测不受普通来源卡片五条截断影响。回归覆盖同文件多章节和 6 个引用来源；三条 Review 线程已解决。
 - 修复后的最终定向集合：140 项测试通过；Ruff、`py_compile`、fixture JSON、RAG Smoke YAML 与 `git diff --check` 通过，详见下方记录。
 
-## 待完成
+## 未验收边界与解决办法
 
-1. 复核 Review 修复的最终 Diff，提交并推送更新后的 PR #350。
-2. 复核新 head 的 Review/免费离线 CI；无阻断意见且门禁通过后合并，记录最终 head 与 merge SHA。
-3. Docker rebuild 与服务健康检查当前 `UNVERIFIED`；Docker Engine 可用、任务环境齐备且共享栈归属安全确认后，才可按仓库部署规则定向重建并检查 `/health.build`。
+- Docker rebuild 与服务健康检查当前 `UNVERIFIED`：本轮 `docker info` 无法连接 Docker Desktop Linux Engine named pipe。待 Docker 可用、任务环境齐备且共享栈归属安全确认后，按仓库规则定向重建并检查 `/health.build`。
+- fixture 导入会调用 embedding Provider；按当前离线约束未运行，因此 `cs_eval_kb` 实际索引/检索和 Live 质量仍未验证。待用户允许进入付费阶段并建立隔离凭据、Run ID 归因后再执行。
 
 ## 阻塞与剩余风险
 
@@ -54,4 +53,4 @@
 - Fixture manifest：`python -m json.tool` 解析通过；catalog 测试校验 15 份来源文件 SHA-256 和章节映射。
 - `git diff --check`：通过。
 - 未调用真实模型/Provider，未执行 fixture 导入器；真实检索、Live 质量及 Docker 部署/健康状态未验收。
-- PR #350 已创建；Review 的 3 个 P2 已在当前未提交 Diff 中修复，更新后的 CI 与合并尚未完成。
+- PR #350 已合并（merge SHA `6240f556096a92969c3b86f657902bf4ebaeaa93`）。合并前该 head 的 7 项检查中 6 项成功，真实 API Job 按离线限制跳过；合并后 main 的 RAG Smoke real-API Job 在零执行步骤时取消，required summary 明确因 `SMOKE_RESULT=cancelled` 而失败。该状态是离线限制导致的 Live 发布门禁 `BLOCKED`，不是离线契约测试失败，也不代表 Live 通过。
