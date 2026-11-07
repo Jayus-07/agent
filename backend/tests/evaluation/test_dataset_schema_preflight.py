@@ -49,6 +49,37 @@ def test_rag_query_type_still_uses_rag_taxonomy():
 
 
 @pytest.mark.parametrize(
+    "query_type",
+    ["single_doc", "multi_doc", "table", "procedural", "no_evidence", "permission_denied"],
+)
+def test_rag_validator_accepts_every_managed_upload_query_type(query_type):
+    from backend.evaluation.dataset.imports import ImportCase
+
+    case = EvaluationCase(
+        id=f"managed-{query_type}",
+        question="检查托管题集查询类型",
+        module="rag",
+        expected={"should_reject": query_type in {"no_evidence", "permission_denied"}},
+        metadata={"query_type": query_type},
+    )
+
+    assert query_type in ImportCase.model_fields["query_type"].annotation.__args__
+    assert validate_dataset([case]) == []
+
+
+@pytest.mark.parametrize("source", ["trace", "unanswered_question", "ragas_synthesis"])
+def test_curator_source_contract_accepts_existing_provenance_values(source):
+    case = EvaluationCase(
+        id=f"source-{source}",
+        question="检查候选来源",
+        module="rag",
+        metadata={"source": source},
+    )
+
+    assert validate_dataset([case]) == []
+
+
+@pytest.mark.parametrize(
     "expected,fragment",
     [
         ({"should_reject": False, "expected_tables": ["public.test"]}, "gold_sql"),
@@ -116,6 +147,21 @@ def test_curator_does_not_write_an_invalid_case(tmp_path):
     assert result["appended"] is False
     assert result["reason"].startswith("数据集校验失败")
     assert not (tmp_path / "sql" / "cases.jsonl").exists()
+
+
+def test_trace_bridge_case_can_be_promoted_into_dataset(tmp_path):
+    from backend.evaluation.curator import append_case
+    from backend.evaluation.trace_bridge import build_test_case_from_trace
+
+    case = build_test_case_from_trace({
+        "id": "trace-1",
+        "question": "请说明退货政策",
+        "answer_preview": "请查看退货政策。",
+        "workflow_name": "rag_agent",
+    })
+
+    assert validate_dataset([case]) == []
+    assert append_case(case, dataset_dir=tmp_path)["appended"] is True
 
 
 def test_all_modules_are_validated_before_any_runner(monkeypatch):

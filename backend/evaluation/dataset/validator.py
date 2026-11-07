@@ -7,11 +7,15 @@ _VALID_QUERY_TYPES = {
     "single_doc", "multi_hop", "adversarial", "negative", "table",
     "chunk_level", "long_doc", "comparative", "procedural", "aggregation",
     "conditional_reasoning", "negation_exclusion", "implicit_condition", "",
+    # managed 上传题集的 ImportCase.query_type 契约，需由守卫测试同步覆盖。
+    "multi_doc", "no_evidence", "permission_denied",
 }
 _VALID_TIERS = {"smoke", "core", "hard", "regression", ""}
 _VALID_SOURCES = {"curated", "adversarial", "production_log", "regression", "",
                   # cs-v2 锁版（2026-09-19）：生成器归档见 datasets/cs/v2.deprecated
-                  "demo-kb", "demo-order", "synthetic", "mapping-review"}
+                  "demo-kb", "demo-order", "synthetic", "mapping-review",
+                  # Trace 回流和合成候选的来源值，需先兼容再做硬性 Curator 校验。
+                  "trace", "unanswered_question", "ragas_synthesis"}
 
 
 def _normalize_ground_truth_context(expected: dict) -> None:
