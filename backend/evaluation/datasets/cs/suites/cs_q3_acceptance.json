@@ -2,6 +2,7 @@
   "name": "cs_q3_acceptance",
   "version": "1.0.0",
   "dataset_version": "2.2",
+  "cases_hash": "0e0ec5bde442b0c1",
   "kb_id": "cs_eval_kb",
   "fixture_set": "baseline",
   "description": "Q3 full_path/多轮真实验收最小集：拒答(faq+safety)、澄清(faq+action+multi_turn)、propose+must_contain、query链、多轮上下文依赖(沿用订单号/指代解析)、投诉handoff；断言覆盖域进入/must_contain/must_not_contain/forbidden_facts/clarify。",
