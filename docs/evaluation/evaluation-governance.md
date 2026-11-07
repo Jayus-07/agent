@@ -11,6 +11,7 @@
 - **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
 - **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。
 - **历史结果有效性**：评测列表与详情 API 共用 `backend/evaluation/validity.py` 的报告裁决器；历史 `VALID` 可被报告中的当前错误证据推翻，已持久化的 `INVALID` 不降级。详情接口只修正响应副本，不回写历史报告。
+- **批次停止状态**：RunGuard 的取消、deadline、预算和 token 熔断原因会使运行判为 `INVALID_*`；部分样本碰巧达到分数线时也不能以 `PASS` 作为完整评测证据。
 - **样本校验**：模块取值与 `ModuleKind / MODULE_KINDS` 同源；Planner 另要求每条样本有 capability、正反向约束、步骤范围及完整 DAG 依赖边。其它模块仍须由各自 Runner 和模块级契约测试验证，通用样本校验通过不代表 Live 能力已接通。
 - **Planner Live**：评测入口绕过计划缓存，输出必须有节点字段、授权 capability 和有效 DAG；期望能力、依赖边、步骤数精确匹配。模型输出契约失败是质量 `FAIL`；Provider 降级、预算/上下文不足、执行异常或 Live 样本跳过会使该次 run `INVALID`，不计入模型通过率。
 
