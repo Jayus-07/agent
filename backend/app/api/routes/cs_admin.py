@@ -456,14 +456,27 @@ def _require_operator_and_tenant(request: Request) -> str | None:
 
 
 async def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> str:
-    """坐席身份解析（P7：不再用 user_name 冒充 agent_id）。
+    agent_id, _tenant_id = await _resolve_agent_identity_and_tenant(
+        request, fallback_agent_id
+    )
+    return agent_id
 
-    JWT 通道必须能用 ``cs_agents.auth_user_id`` 反查到**启用**坐席，否则
-    403 —— 这是「浏览器不再提交可信 agent_id」的落点：坐席身份的唯一权威
-    是服务端绑定关系，任何客户端提交的 agent_id 都被忽略。
 
-    服务间 API-Key 通道沿用声明的 agent_id（BFF 服务端凭据，非浏览器可见；
-    网关 Bearer 优先，因此浏览器流量不会走到这一支）。
+async def _resolve_agent_identity_and_tenant(
+    request: Request, fallback_agent_id: str
+) -> tuple[str, str | None]:
+    """坐席身份解析 + 租户作用域（2026-11-08 跨租户审计）。
+
+    返回 ``(agent_id, tenant_id)``：
+
+    - JWT 通道：tenant_id 来自网关注入的可信身份（cs-claim-close 审计修复）；
+      认领/关闭/发言据此加 ``tenant_id`` 谓词，他租坐席看到的是 404/409。
+    - 服务间 API-Key 通道：tenant_id 为 ``None``（受信任 BFF 的跨租户服务
+      视图，与 ``_resolve_tenant_scope`` 同语义），保持既有调用方行为。
+
+    其余语义与旧 ``_resolve_agent_identity`` 一致：JWT 必须能按
+    ``cs_agents.auth_user_id`` + 可信租户反查到启用坐席，客户端提交的
+    agent_id 一律忽略。
     """
     from backend.app.api.identity import resolve_identity
 
@@ -471,7 +484,7 @@ async def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> s
         agent_id = (fallback_agent_id or "").strip()
         if not agent_id:
             raise HTTPException(422, detail="agent_id is required")
-        return agent_id
+        return agent_id, None
 
     ident = resolve_identity(request)
     if not ident.authenticated:
@@ -491,7 +504,7 @@ async def _resolve_agent_identity(request: Request, fallback_agent_id: str) -> s
 
     if not agent_id:
         raise HTTPException(403, detail="当前用户未绑定启用的客服坐席")
-    return str(agent_id)
+    return str(agent_id), ident.tenant_id
 
 
 async def _lookup_bound_agent_id(*, tenant_id: str, user_id: str) -> str | None:
@@ -1700,7 +1713,9 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
     工单（agent_offered / human_active）只能由被分配坐席关闭**，其他坐席
     一律 409 —— 主管要改派走 /handoffs/{id}/reassign，不是替人关闭。
     """
-    agent_id = await _resolve_agent_identity(request, body.agent_id)
+    agent_id, tenant_id = await _resolve_agent_identity_and_tenant(
+        request, body.agent_id
+    )
 
     from datetime import datetime, timezone
 
@@ -1715,14 +1730,22 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
         from backend.customer_service.models.handoff import CSHandoff
         from backend.memory.database import AsyncSessionLocal
 
+        # 2026-11-08 跨租户审计（cs-claim-close.missing-tenant-predicate）：
+        # JWT 坐席只能关闭自己租户的会话；API-Key 服务通道保持跨租户视图。
+        handoff_where = [
+            CSHandoff.conversation_id == conversation_id,
+            CSHandoff.handoff_state != "closed",
+        ]
+        conv_where = [CSConversation.conversation_id == conversation_id]
+        if tenant_id is not None:
+            handoff_where.append(CSHandoff.tenant_id == tenant_id)
+            conv_where.append(CSConversation.tenant_id == tenant_id)
+
         # P3 事务统一：route 持有事务（同 rating 端点注释）。
         async with AsyncSessionLocal() as db, db.begin():
             row = (
                 await db.execute(
-                    select(CSHandoff).where(
-                        CSHandoff.conversation_id == conversation_id,
-                        CSHandoff.handoff_state != "closed",
-                    ).limit(1)
+                    select(CSHandoff).where(*handoff_where).limit(1)
                 )
             ).scalar_one_or_none()
             if row is None:
@@ -1732,9 +1755,7 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
 
             conv = (
                 await db.execute(
-                    select(CSConversation).where(
-                        CSConversation.conversation_id == conversation_id,
-                    )
+                    select(CSConversation).where(*conv_where)
                 )
             ).scalar_one_or_none()
 
@@ -1758,12 +1779,22 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
             # 会话处理模式归位（human / waiting_human → ai）
             from sqlalchemy import update
 
+            conv_update_where = [
+                CSConversation.conversation_id == conversation_id,
+                CSConversation.handling_mode != "ai",
+            ]
+            assignment_update_where = [
+                CSAssignment.conversation_id == conversation_id,
+                CSAssignment.unassigned_at.is_(None),
+            ]
+            if tenant_id is not None:
+                conv_update_where.append(CSConversation.tenant_id == tenant_id)
+                assignment_update_where.append(
+                    CSAssignment.tenant_id == tenant_id
+                )
             await db.execute(
                 update(CSConversation)
-                .where(CSConversation.handling_mode != "ai")
-                .where(
-                    CSConversation.conversation_id == conversation_id
-                )
+                .where(*conv_update_where)
                 .values(
                     handling_mode="ai",
                     assigned_agent_id=None,
@@ -1772,10 +1803,7 @@ async def close_conversation(conversation_id: str, body: ClaimRequest, request: 
             )
             await db.execute(
                 update(CSAssignment)
-                .where(
-                    CSAssignment.conversation_id == conversation_id,
-                    CSAssignment.unassigned_at.is_(None),
-                )
+                .where(*assignment_update_where)
                 .values(unassigned_at=datetime.now(timezone.utc))
             )
 
@@ -1829,14 +1857,16 @@ async def claim_conversation(conversation_id: str, body: ClaimRequest, request: 
     （WHERE handoff_state='waiting_human'）+ 影响行数判定，并发双认领
     只有一方成功；agent_id 服务端解析。
     """
-    agent_id = await _resolve_agent_identity(request, body.agent_id)
+    agent_id, tenant_id = await _resolve_agent_identity_and_tenant(
+        request, body.agent_id
+    )
 
     from backend.customer_service.errors import BusinessRuleError
 
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_claim(
-            conversation_id, agent_id, run_sync
+            conversation_id, agent_id, tenant_id, run_sync
         )
     except HTTPException:
         raise
@@ -1854,14 +1884,16 @@ async def post_agent_message(conversation_id: str, body: AgentMessageRequest, re
     P7：坐席身份由服务端从 ``cs_agents.auth_user_id`` 反查；只有该会话当前
     被分配的坐席能发言（``_async_agent_message`` 内的归属断言给 409）。
     """
-    agent_id = await _resolve_agent_identity(request, body.agent_id)
+    agent_id, tenant_id = await _resolve_agent_identity_and_tenant(
+        request, body.agent_id
+    )
     if not body.content.strip():
         raise HTTPException(422, detail="content is required")
 
     try:
         from backend.customer_service._db_loop import run_sync
         return await _async_agent_message(
-            conversation_id, agent_id, body.content.strip(), run_sync
+            conversation_id, agent_id, tenant_id, body.content.strip(), run_sync
         )
     except HTTPException:
         raise
@@ -2433,26 +2465,40 @@ async def _ensure_cs_agent(db, agent_id: str) -> None:
     await db.flush()
 
 
-async def _load_assigned_agent_id(db, conversation_id: str) -> str | None:
-    """读取当前会话坐席归属，供幂等认领与并发冲突校验使用。"""
+async def _load_assigned_agent_id(
+    db, conversation_id: str, tenant_id: str | None = None,
+) -> str | None:
+    """读取当前会话坐席归属，供幂等认领与并发冲突校验使用。
+
+    ``tenant_id`` 非空时加租户谓词（JWT 坐席通道）；API-Key 服务通道传
+    ``None`` 保持跨租户服务视图。
+    """
     from sqlalchemy import select
 
     from backend.customer_service.models.conversation import CSConversation
 
-    return (
-        await db.execute(
-            select(CSConversation.assigned_agent_id)
-            .where(CSConversation.conversation_id == conversation_id)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    stmt = (
+        select(CSConversation.assigned_agent_id)
+        .where(CSConversation.conversation_id == conversation_id)
+        .limit(1)
+    )
+    if tenant_id is not None:
+        stmt = stmt.where(CSConversation.tenant_id == tenant_id)
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
-async def _async_claim(conversation_id: str, agent_id: str, run_sync):
+async def _async_claim(
+    conversation_id: str, agent_id: str, tenant_id: str | None, run_sync,
+):
     """认领会话并同步写入 handoff、conversation、assignment 三处状态。
 
     P3 事务统一：整个用例一个事务（begin → 退出提交/异常回滚），
     分支内不再手写 commit。
+
+    2026-11-08 跨租户审计（cs-claim-close.missing-tenant-predicate）：
+    ``tenant_id`` 非空时（JWT 坐席）所有 handoff/conversation 读写都带
+    租户谓词，他租会话返回 404；API-Key 服务通道传 ``None`` 保持既有
+    跨租户语义。
     """
     from datetime import datetime, timezone
 
@@ -2460,6 +2506,13 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
 
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
+
+    handoff_where = [
+        CSHandoff.conversation_id == conversation_id,
+        CSHandoff.handoff_state != "closed",
+    ]
+    if tenant_id is not None:
+        handoff_where.append(CSHandoff.tenant_id == tenant_id)
 
     async with AsyncSessionLocal() as db, db.begin():
         row = (
@@ -2470,10 +2523,7 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
                     CSHandoff.handoff_state,
                     CSHandoff.tenant_id,
                 )
-                .where(
-                    CSHandoff.conversation_id == conversation_id,
-                    CSHandoff.handoff_state != "closed",
-                )
+                .where(*handoff_where)
                 .limit(1)
             )
         ).first()
@@ -2483,7 +2533,9 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
         current_state = row.handoff_state
 
         if current_state == "human_active":
-            assigned_agent_id = await _load_assigned_agent_id(db, conversation_id)
+            assigned_agent_id = await _load_assigned_agent_id(
+                db, conversation_id, tenant_id,
+            )
             if assigned_agent_id and assigned_agent_id != agent_id:
                 raise HTTPException(409, detail="会话已由其他坐席认领")
             if not assigned_agent_id:
@@ -2509,30 +2561,36 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
             }
 
         # 原子条件更新：只有仍处于 waiting_human 的行才会被认领。
+        claim_where = [
+            CSHandoff.conversation_id == conversation_id,
+            CSHandoff.handoff_state == "waiting_human",
+        ]
+        if tenant_id is not None:
+            claim_where.append(CSHandoff.tenant_id == tenant_id)
         claim_result = await db.execute(
             update(CSHandoff)
-            .where(
-                CSHandoff.conversation_id == conversation_id,
-                CSHandoff.handoff_state == "waiting_human",
-            )
+            .where(*claim_where)
             .values(handoff_state="human_active")
         )
         claimed = claim_result.rowcount > 0
         if not claimed:
             # 并发下已被认领 / 状态已流转 —— 重查给出明确响应。
+            fresh_where = [
+                CSHandoff.conversation_id == conversation_id,
+                CSHandoff.handoff_state != "closed",
+            ]
+            if tenant_id is not None:
+                fresh_where.append(CSHandoff.tenant_id == tenant_id)
             fresh = (
                 await db.execute(
                     select(CSHandoff.handoff_state)
-                    .where(
-                        CSHandoff.conversation_id == conversation_id,
-                        CSHandoff.handoff_state != "closed",
-                    )
+                    .where(*fresh_where)
                     .limit(1)
                 )
             ).scalar_one_or_none()
             if fresh == "human_active":
                 assigned_agent_id = await _load_assigned_agent_id(
-                    db, conversation_id,
+                    db, conversation_id, tenant_id,
                 )
                 if assigned_agent_id and assigned_agent_id != agent_id:
                     raise HTTPException(409, detail="会话已由其他坐席认领")
@@ -2603,7 +2661,9 @@ async def _async_claim(conversation_id: str, agent_id: str, run_sync):
     }
 
 
-async def _async_agent_message(conversation_id: str, agent_id: str, content: str, run_sync):
+async def _async_agent_message(
+    conversation_id: str, agent_id: str, tenant_id: str | None, content: str, run_sync,
+):
     from datetime import datetime, timezone
 
     from sqlalchemy import select
@@ -2611,13 +2671,17 @@ async def _async_agent_message(conversation_id: str, agent_id: str, content: str
     from backend.customer_service.models.handoff import CSHandoff
     from backend.memory.database import AsyncSessionLocal
 
+    handoff_where = [
+        CSHandoff.conversation_id == conversation_id,
+        CSHandoff.handoff_state != "closed",
+    ]
+    if tenant_id is not None:
+        handoff_where.append(CSHandoff.tenant_id == tenant_id)
+
     # P3 事务统一：route 持有事务（begin → block 退出提交，异常回滚）
     async with AsyncSessionLocal() as db, db.begin():
         result = await db.execute(
-            select(CSHandoff).where(
-                CSHandoff.conversation_id == conversation_id,
-                CSHandoff.handoff_state != "closed",
-            ).limit(1)
+            select(CSHandoff).where(*handoff_where).limit(1)
         )
         row = result.scalar_one_or_none()
         if row is None:

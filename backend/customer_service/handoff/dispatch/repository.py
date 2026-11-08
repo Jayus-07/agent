@@ -758,12 +758,15 @@ def oldest_pending_outbox_stmt() -> Select:
     )
 
 
-def pending_outbox_count_stmt():
-    return (
+def pending_outbox_count_stmt(*, tenant_id: str | None = None):
+    stmt = (
         select(func.count())
         .select_from(CSEvent)
         .where(CSEvent.outbox_status == "pending")
     )
+    if tenant_id is not None:
+        stmt = stmt.where(CSEvent.tenant_id == tenant_id)
+    return stmt
 
 
 async def lock_pending_outbox_events(
@@ -774,13 +777,20 @@ async def lock_pending_outbox_events(
 
 
 async def oldest_pending_outbox_created_at(
-    session: AsyncSession,
+    session: AsyncSession, *, tenant_id: str | None = None,
 ) -> datetime | None:
-    return (await session.execute(oldest_pending_outbox_stmt())).scalar_one_or_none()
+    stmt = oldest_pending_outbox_stmt()
+    if tenant_id is not None:
+        stmt = stmt.where(CSEvent.tenant_id == tenant_id)
+    return (await session.execute(stmt)).scalar_one_or_none()
 
 
-async def count_pending_outbox(session: AsyncSession) -> int:
-    return int((await session.execute(pending_outbox_count_stmt())).scalar_one())
+async def count_pending_outbox(
+    session: AsyncSession, *, tenant_id: str | None = None,
+) -> int:
+    return int(
+        (await session.execute(pending_outbox_count_stmt(tenant_id=tenant_id))).scalar_one()
+    )
 
 
 # ── P8 运营统计（队列深度 / 在线坐席）────────────────────────
@@ -820,18 +830,25 @@ def enabled_agent_count_stmt(*, tenant_id: str | None = None) -> Select:
 
 
 async def count_queue_by_tenant(
-    session: AsyncSession,
+    session: AsyncSession, *, tenant_id: str | None = None,
 ) -> dict[str, int]:
-    """返回 {tenant_id: 排队中工单数}（未出现的租户视为 0）。"""
-    result = await session.execute(waiting_handoff_count_stmt())
+    """返回 {tenant_id: 排队中工单数}（未出现的租户视为 0）。
+
+    ``tenant_id`` 非空时只统计该租户（租户域 supervisor 的运营视图）。
+    """
+    result = await session.execute(waiting_handoff_count_stmt(tenant_id=tenant_id))
     return {str(row[0]): int(row[1]) for row in result.all()}
 
 
-async def count_offering_by_tenant(session: AsyncSession) -> dict[str, int]:
-    result = await session.execute(offering_handoff_count_stmt())
+async def count_offering_by_tenant(
+    session: AsyncSession, *, tenant_id: str | None = None,
+) -> dict[str, int]:
+    result = await session.execute(offering_handoff_count_stmt(tenant_id=tenant_id))
     return {str(row[0]): int(row[1]) for row in result.all()}
 
 
-async def count_enabled_agents_by_tenant(session: AsyncSession) -> dict[str, int]:
-    result = await session.execute(enabled_agent_count_stmt())
+async def count_enabled_agents_by_tenant(
+    session: AsyncSession, *, tenant_id: str | None = None,
+) -> dict[str, int]:
+    result = await session.execute(enabled_agent_count_stmt(tenant_id=tenant_id))
     return {str(row[0]): int(row[1]) for row in result.all()}
