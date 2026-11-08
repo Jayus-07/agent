@@ -66,6 +66,35 @@ class TestCteReferenceSkipped:
         qualified_seen = {q for s in scopes for q, _ in s}
         assert "recent" not in qualified_seen
 
+    def test_schema_qualified_table_not_shadowed_by_cte_alias(self):
+        """CTE 别名只能遮蔽未限定表名；schema 限定的真实表必须进入表域校验。
+
+        回归 2026-11-09 审计：``WITH orders AS (...) SELECT * FROM
+        analytics.orders`` 此前因裸名匹配被当成 CTE 引用跳过。
+        """
+        sql = ("WITH orders AS (SELECT 1 AS id) "
+               "SELECT * FROM analytics.orders")
+        parsed = sqlglot.parse(sql, read="postgres")
+        stmt = parsed[0]
+        cte_names = {cte.alias.lower() for cte in stmt.find_all(exp.CTE)}
+        refs = _collect_table_refs(stmt, cte_names)
+        assert refs == {"analytics.orders"}
+
+        scopes = [
+            _collect_scope_table_refs(sel, cte_names)
+            for sel in stmt.find_all(exp.Select)
+        ]
+        pairs = {p for s in scopes for p in s}
+        assert ("analytics.orders", "orders") in pairs
+
+    def test_cte_reference_without_schema_still_skipped(self):
+        """未限定 CTE 引用仍按别名跳过（不误判为真实表）。"""
+        sql = ("WITH recent AS (SELECT id FROM demo.tenant_projects) "
+               "SELECT id FROM recent")
+        stmt = sqlglot.parse(sql, read="postgres")[0]
+        cte_names = {cte.alias.lower() for cte in stmt.find_all(exp.CTE)}
+        assert _collect_table_refs(stmt, cte_names) == {"demo.tenant_projects"}
+
 
 class TestSubqueryDenyPropagation:
     def test_personal_table_in_subquery_denied_for_department(self):

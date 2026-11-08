@@ -418,13 +418,19 @@ class SQLPolicyGuard:
 # =================================================
 
 def _collect_table_refs(stmt: exp.Expression, cte_names: set[str]) -> set[str]:
-    """全 AST 真实表引用（qualified 名；跳过 CTE 别名引用）。"""
+    """全 AST 真实表引用（qualified 名；跳过 CTE 别名引用）。
+
+    2026-11-09 审计修复：只有**未限定**的表名才可能是 CTE 别名。
+    此前按裸名匹配会把 ``analytics.orders`` 也当成 CTE ``orders`` 跳过，
+    导致 schema 限定的真实表绕过表域校验。
+    """
     refs: set[str] = set()
     for table in stmt.find_all(exp.Table):
         name = table.name.lower()
-        if name in cte_names:
-            continue
         db = (table.db or "").lower()
+        catalog = (table.catalog or "").lower()
+        if not db and not catalog and name in cte_names:
+            continue
         refs.add(f"{db}.{name}" if db else name)
     return refs
 
@@ -449,9 +455,11 @@ def _collect_scope_table_refs(
             nodes.append(join.this)
     for table in nodes:
         name = table.name.lower()
-        if name in cte_names:
-            continue
         db = (table.db or "").lower()
+        catalog = (table.catalog or "").lower()
+        # 同 _collect_table_refs：schema 限定的表不是 CTE 别名引用
+        if not db and not catalog and name in cte_names:
+            continue
         qualified = f"{db}.{name}" if db else name
         alias = (table.alias_or_name or name).lower()
         key = (qualified, alias)
