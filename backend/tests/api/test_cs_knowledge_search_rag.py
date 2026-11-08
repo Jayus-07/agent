@@ -99,6 +99,7 @@ def test_search_merges_faq_and_rag_channels(db, agent_client, rag_docs_factory):
     get_faq_store().upsert_faq(
         _PREFIX + "优惠券可以叠加吗", "一单仅可使用一张优惠券，不可叠加。",
         status="published",
+        tenant_id=TENANT,
     )
     rag_docs_factory["docs"] = [
         _rag_doc("## 2. 叠加规则 **默认不可叠加**：一单仅可使用一张优惠券。"),
@@ -129,6 +130,7 @@ def test_rag_channel_degrades_on_error_keeps_faq(db, agent_client,
 
     get_faq_store().upsert_faq(
         _PREFIX + "怎么开发票", "电子普票 1 个工作日内开具。", status="published",
+        tenant_id=TENANT,
     )
     rag_docs_factory["error"] = RuntimeError("rag-service 不可达")
 
