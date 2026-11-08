@@ -10,7 +10,7 @@ api/routes/llm.py — LLM 切换 + 余额查询 API
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from backend.app.api.deps import require_admin_user
+from backend.app.api.deps import require_admin_user, require_user_actor
 from backend.config import llm as config_llm
 from backend.infra.llm import get_llm_factory
 from backend.infra.llm import credentials as credentials_mod
@@ -18,7 +18,11 @@ from backend.infra.llm import models as models_mod
 from backend.infra.llm.models import get_available_models
 from backend.shared.logger import logger
 
-router = APIRouter(prefix="/llm", tags=["llm"])
+router = APIRouter(
+    prefix="/llm",
+    tags=["llm"],
+    dependencies=[Depends(require_user_actor)],
+)
 
 
 def _current_runtime_model(factory) -> str:

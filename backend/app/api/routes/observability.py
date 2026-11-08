@@ -29,8 +29,6 @@ from backend.observability.trace_store import (
 )
 from backend.memory.database import AsyncSessionLocal
 
-router = APIRouter(prefix="/observability", tags=["可观测性"])
-
 
 # -- Trace 读取的统一身份闸（2026-10-10 管理端/API 主题）------------
 #
@@ -55,6 +53,17 @@ async def _require_observability_admin(request: Request):
     from backend.app.api.deps import require_admin_user
 
     return await require_admin_user(request)
+
+
+# 2026-11-09 审计收口：可观测性路由整体要求登录身份。
+# 此前只有部分端点单独加了守卫，/rag-traces*、/tokens/*、/graph、
+# /gateway-access-logs、/system-health 等仍可匿名读取；改为 router 级
+# 依赖，后端直连也必须先通过 require_user_actor（管理端点仍额外要求 admin）。
+router = APIRouter(
+    prefix="/observability",
+    tags=["可观测性"],
+    dependencies=[Depends(_require_trace_reader)],
+)
 
 
 # ═══════════════════════════════════════════════════
