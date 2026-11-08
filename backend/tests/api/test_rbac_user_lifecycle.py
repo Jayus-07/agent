@@ -238,6 +238,32 @@ def test_user_lifecycle_end_to_end(monkeypatch):
         assert new_payload is not None
         assert new_payload.get("must_change_password") is False
 
+        # ── 2026-11-08 审计修复（local-auth.change-password.reissues-stale-roles）──
+        # 重签必须按 user_id 现读 DB 的角色/部门/用户名，禁止透传旧 claim：
+        # 用「super_admin + stale 部门/用户名」的自签令牌改密，得到的新令牌
+        # 仍应是 DB 里的 viewer，且部门为空（上文已清空 dept）。
+        forged = issue_access_token(
+            user_id=user_id, username="stale-name", dept="stale-dept",
+            roles=["super_admin"], tenant_id="tenant-p6",
+        )
+        cp2 = _change_password(forged["token"], cp["_newPassword"])
+        assert cp2["code"] == 200, cp2
+        fresh_payload = verify_access_token(cp2["data"]["token"])
+        assert fresh_payload is not None
+        assert fresh_payload.get("roles") == ["viewer"]   # DB 角色，非旧 claim
+        assert fresh_payload.get("dept") == ""            # DB 部门
+        assert fresh_payload.get("username") == username  # DB 用户名
+        assert fresh_payload.get("sid") != forged.get("sid")
+        assert fresh_payload.get("sid")                   # 新会话已建立
+
+        # 已吊销/不存在的会话不得换发新令牌（旧格式无 sid 的令牌保持兼容）
+        ghost = issue_access_token(
+            user_id=user_id, username=username, roles=["viewer"],
+            tenant_id="tenant-p6", session_id=str(uuid.uuid4()),
+        )
+        cp3 = _change_password(ghost["token"], cp2["_newPassword"])
+        assert cp3["code"] == 401, cp3
+
         # ── 重置密码：旧会话失效 + 强制改密 ──
         reset = client.post(f"/api/sys/rbac/users/{user_id}/reset-password")
         assert reset.status_code == 200
@@ -263,6 +289,10 @@ def test_user_lifecycle_end_to_end(monkeypatch):
         assert patch.status_code == 200, patch.text
         row = _psql_row("SELECT status FROM auth.users WHERE id = %s", (user_id,))
         assert row[0] == 0
+
+        # 禁用账户即使令牌签名有效也不得改密换发新令牌
+        disabled_cp = _change_password(cp2["data"]["token"], cp2["_newPassword"])
+        assert disabled_cp["code"] == 403, disabled_cp
     finally:
         _cleanup(prefix)
 
@@ -296,20 +326,24 @@ def _run_async(coro):
         loop.close()
 
 
-def _change_password(token: str, old_password: str) -> dict:
+def _change_password(token: str, old_password: str,
+                     new_password: str | None = None) -> dict:
     """以临时密码调用 /auth/change-password（走 TestClient + 真实 DB）。"""
     from backend.app.api.routes.auth_local import router as auth_router
 
     app = FastAPI()
     app.include_router(auth_router)
     client = TestClient(app, raise_server_exceptions=False)
+    new_password = new_password or f"New-{secrets.token_hex(6)}"
     resp = client.post(
         "/auth/change-password",
-        json={"oldPassword": old_password, "newPassword": f"New-{secrets.token_hex(6)}"},
+        json={"oldPassword": old_password, "newPassword": new_password},
         headers={
             "Authorization": f"Bearer {token}",
             "X-Tenant-Id": "tenant-p6",
             "X-Auth-Type": "jwt",
         },
     )
-    return resp.json()
+    body = resp.json()
+    body["_newPassword"] = new_password
+    return body

@@ -692,11 +692,31 @@ async def change_password(request: Request, response: Response):
 
     async with _db() as session:
         row = (await session.execute(text(
-            "SELECT id, username, password_hash, must_change_password "
+            "SELECT id, username, password_hash, real_name, dept, role, status, "
+            "tenant_id, must_change_password "
             "FROM auth.users WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
             {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
         if row is None:
             return _fail("用户不存在", code=404)
+        if int(row.get("status", 1)) != 1:
+            return _fail("账户已禁用，无法修改密码", code=403)
+        # 2026-11-08 安全审计修复（local-auth.change-password.reissues-stale-roles）：
+        # 会话实体存在时先确认当前会话仍未吊销——管理员强制下线/改权撤销后，
+        # 旧令牌不得再换出一枚新会话。旧格式令牌（无 sid）保持既有兼容语义，
+        # 由会话闸按 JWT_SESSION_GUARD_MODE 处置。
+        sid_claim = str(payload.get("sid") or "")
+        if sid_claim:
+            try:
+                uuid.UUID(sid_claim)
+            except (ValueError, AttributeError, TypeError):
+                return _fail("会话已失效，请重新登录", code=401)
+            alive = (await session.execute(text(
+                "SELECT 1 FROM auth.sessions "
+                "WHERE id = CAST(:sid AS uuid) AND user_id = :uid "
+                "AND revoked_at IS NULL"),
+                {"sid": sid_claim, "uid": user_id})).scalar()
+            if not alive:
+                return _fail("会话已失效，请重新登录", code=401)
         if not verify_password(old_password, row["password_hash"]):
             return _fail("旧密码错误", code=400)
         await session.execute(text(
@@ -713,6 +733,12 @@ async def change_password(request: Request, response: Response):
         for s in sids:
             await _revoke_session_row(session, session_id=str(s["id"]),
                                       reason="password_changed")
+        # 2026-11-08 安全审计修复：重签前按 user_id 现读角色/部门/客服角色，
+        # 禁止透传旧 token 的 roles/username/dept claim（否则被降权用户可用
+        # 旧角色自铸新令牌）。_enrich_user_row 同时按可信租户校验归属。
+        fresh = await _enrich_user_row(session, dict(row), tenant_id)
+        if fresh is None:
+            return _fail("用户不存在", code=404)
         await session.commit()
         for s in sids:
             _delete_session_redis_keys(user_id, str(s["id"]))
@@ -732,10 +758,11 @@ async def change_password(request: Request, response: Response):
             {"uid": user_id, "th": token_hash,
              "ttl": _REFRESH_TTL_SECONDS, "sid": sid})
         await session.commit()
-    issued = issue_access_token(user_id=user_id, username=payload.get("username") or "",
-                                dept=payload.get("dept") or "",
-                                roles=payload.get("roles") or ["viewer"],
-                                tenant_id=tenant_id, session_id=sid,
+    issued = issue_access_token(user_id=user_id, username=fresh.get("username") or "",
+                                dept=fresh.get("dept") or "",
+                                roles=_jwt_roles(fresh),
+                                tenant_id=fresh.get("tenant_id") or tenant_id,
+                                session_id=sid,
                                 client_id=client_app,
                                 must_change_password=False)
     _write_session(issued)
