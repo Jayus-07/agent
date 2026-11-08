@@ -1099,8 +1099,34 @@ async def security_overview(request: Request,
     })
 
 
+def _session_tenant_scope(
+    request: Request, operator: OperatorIdentity,
+) -> str | None:
+    """安全会话运营面的租户作用域（2026-11-08 跨租户审计）。
+
+    - 平台 **super_admin**：返回 ``None`` = 显式全库视图（保留既有能力）；
+    - 其他管理员：返回网关注入的可信租户；缺失即 fail-closed 403，
+      绝不静默回落 default。
+
+    指纹：rbac.security-sessions.missing-tenant-scope。
+    """
+    role = str(getattr(operator, "role", "") or "").strip().lower()
+    if role == "super_admin":
+        return None
+    from backend.app.api.identity import resolve_identity
+
+    ident = resolve_identity(request)
+    tenant_id = (getattr(ident, "tenant_id", "") or "").strip()
+    if not tenant_id:
+        raise HTTPException(403, detail="缺少可信租户身份")
+    return tenant_id
+
+
 @sys_router.get("/security/sessions")
-async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)):
+async def list_sessions(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
     """有效登录会话列表（2026-09-19 会话实体改造：DB 口径）。
 
     一行 = 一次设备登录（auth.sessions），refresh 轮换/多标签/页面刷新
@@ -1109,15 +1135,24 @@ async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)
     user_id 正序导致刚登录的会话沉底，巡检时看似丢失）。
     这不是实时在线人数：Redis 只是在线闸门，台账以数据库为准（Redis 故障不影响列表）。
     最近活跃时间由调用方按窗口计算。
+
+    2026-11-08 跨租户审计（rbac.security-sessions.missing-tenant-scope）：
+    除平台 super_admin（显式全库视图）外，只返回调用方租户的会话。
     """
+    tenant_id = _session_tenant_scope(request, operator)
+    where = ["s.revoked_at IS NULL AND s.refresh_expires_at > now()"]
+    params: dict[str, str] = {}
+    if tenant_id is not None:
+        where.append("u.tenant_id = :tenant_id")
+        params["tenant_id"] = tenant_id
     async with _db() as session:
         rows = (await session.execute(text(
             "SELECT s.id, s.user_id, s.device_id, s.user_agent, s.ip, s.client_id, "
             "s.created_at, s.last_active_at, s.refresh_expires_at, "
             "u.username, u.real_name, u.role "
             "FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id "
-            "WHERE s.revoked_at IS NULL AND s.refresh_expires_at > now() "
-            "ORDER BY s.created_at DESC, s.id"))).mappings().all()
+            "WHERE " + " AND ".join(where) + " "
+            "ORDER BY s.created_at DESC, s.id"), params)).mappings().all()
     sessions = [{
         "sessionId": str(r["id"]),
         "userId": r["user_id"],
@@ -1136,8 +1171,20 @@ async def list_sessions(operator: OperatorIdentity = Depends(require_admin_user)
 
 
 @sys_router.get("/security/sessions/history")
-async def list_session_history(operator: OperatorIdentity = Depends(require_admin_user)):
-    """会话历史（最近 200 条）：包含已撤销、已过期和仍有效的登录记录。"""
+async def list_session_history(
+    request: Request,
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
+    """会话历史（最近 200 条）：包含已撤销、已过期和仍有效的登录记录。
+
+    2026-11-08 跨租户审计：与列表同口径按租户过滤（super_admin 全库）。
+    """
+    tenant_id = _session_tenant_scope(request, operator)
+    where = ""
+    params: dict[str, str] = {}
+    if tenant_id is not None:
+        where = "WHERE u.tenant_id = :tenant_id "
+        params["tenant_id"] = tenant_id
     async with _db() as session:
         rows = (await session.execute(text(
             "SELECT s.id, s.user_id, s.device_id, s.user_agent, s.ip, s.client_id, "
@@ -1148,7 +1195,8 @@ async def list_session_history(operator: OperatorIdentity = Depends(require_admi
             "     ELSE 'active' END AS status, "
             "u.username, u.real_name, u.role "
             "FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id "
-            "ORDER BY s.created_at DESC, s.id DESC LIMIT 200"))).mappings().all()
+            + where +
+            "ORDER BY s.created_at DESC, s.id DESC LIMIT 200"), params)).mappings().all()
     sessions = [{
         "sessionId": str(r["id"]),
         "userId": r["user_id"],
@@ -1170,19 +1218,31 @@ async def list_session_history(operator: OperatorIdentity = Depends(require_admi
 
 
 @sys_router.delete("/security/sessions/{session_id}")
-async def force_logout(session_id: str,
-                       operator: OperatorIdentity = Depends(require_admin_user)):
+async def force_logout(
+    session_id: str,
+    request: Request,
+    operator: OperatorIdentity = Depends(require_admin_user),
+):
     """强制下线（按 session）：撤销会话实体 + 家族全部 refresh token +
-    删除 Redis 内该会话全部 jti 闸键（enforce 下下一次请求即 401）。"""
+    删除 Redis 内该会话全部 jti 闸键（enforce 下下一次请求即 401）。
+
+    2026-11-08 跨租户审计：非 super_admin 只能撤销本租户用户会话；
+    他租 sessionId 一律 404（不泄露存在性）。
+    """
     try:
         sid = str(uuid.UUID(session_id))
     except ValueError:
         return _fail("sessionId 格式非法", code=400)
+    tenant_id = _session_tenant_scope(request, operator)
     async with _db() as session:
         row = (await session.execute(text(
-            "SELECT user_id, revoked_at FROM auth.sessions WHERE id = :sid"),
+            "SELECT s.user_id, s.revoked_at, u.tenant_id "
+            "FROM auth.sessions s JOIN auth.users u ON u.id = s.user_id "
+            "WHERE s.id = :sid"),
             {"sid": sid})).mappings().first()
         if row is None:
+            return _fail("会话不存在", code=404)
+        if tenant_id is not None and row["tenant_id"] != tenant_id:
             return _fail("会话不存在", code=404)
         if row["revoked_at"] is None:
             await _revoke_session_row(session, session_id=sid,

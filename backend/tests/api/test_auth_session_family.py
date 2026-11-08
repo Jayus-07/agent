@@ -679,3 +679,68 @@ def test_refresh_rejects_cookie_from_another_client_app(env, user):
         headers={"X-Tenant-Id": "default", "X-Client-App": "admin"},
     )
     assert refresh.status_code == 401
+
+def test_security_sessions_tenant_scope(env, user):
+    """2026-11-08 审计修复（rbac.security-sessions.missing-tenant-scope）：
+    会话列表/历史/强下线按租户隔离；super_admin 保留全库视图。"""
+    client, _ = env
+    _login(client, user, device_id="dev-scope")
+    suffix = uuid.uuid4().hex[:10]
+    other_uid = None
+    try:
+        with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO auth.users "
+                    "(username, password_hash, real_name, role, tenant_id) "
+                    "VALUES (%s, %s, '他租用户', 'admin', 'tenant-b') RETURNING id",
+                    (f"other-{suffix}", hash_password("pw-123456")))
+                other_uid = cur.fetchone()[0]
+                cur.execute(
+                    "INSERT INTO auth.sessions "
+                    "(user_id, device_id, refresh_expires_at) "
+                    "VALUES (%s, 'dev-b', now() + interval '1 day') RETURNING id",
+                    (other_uid,))
+                other_sid = str(cur.fetchone()[0])
+            conn.commit()
+
+        # 本租户管理员：列表/历史都看不到他租会话
+        sessions = client.get(
+            "/api/sys/security/sessions", headers=ADMIN_HEADERS
+        ).json()["data"]["sessions"]
+        assert other_uid not in {s["userId"] for s in sessions}
+        history = client.get(
+            "/api/sys/security/sessions/history", headers=ADMIN_HEADERS
+        ).json()["data"]["sessions"]
+        assert other_uid not in {s["userId"] for s in history}
+
+        # 强下线他租会话 → 404，且目标会话保持未撤销
+        denied = client.delete(
+            f"/api/sys/security/sessions/{other_sid}", headers=ADMIN_HEADERS
+        )
+        assert denied.status_code == 404, denied.text
+        assert _pg(
+            "SELECT revoked_at FROM auth.sessions WHERE id = %s", (other_sid,)
+        )[0][0] is None
+
+        # super_admin：显式全库视图，可枚举并强下线他租会话
+        super_headers = {**ADMIN_HEADERS, "X-User-Roles": "super_admin"}
+        su_sessions = client.get(
+            "/api/sys/security/sessions", headers=super_headers
+        ).json()["data"]["sessions"]
+        assert other_uid in {s["userId"] for s in su_sessions}
+        allowed = client.delete(
+            f"/api/sys/security/sessions/{other_sid}", headers=super_headers
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert _pg(
+            "SELECT revoked_at FROM auth.sessions WHERE id = %s", (other_sid,)
+        )[0][0] is not None
+    finally:
+        if other_uid is not None:
+            with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "DELETE FROM auth.users WHERE id = %s", (other_uid,)
+                    )
+                conn.commit()
