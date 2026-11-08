@@ -25,6 +25,7 @@ from backend.rag.preprocessing.ast import DocumentAST, DocumentNode
 from backend.rag.preprocessing.parser.base import BaseDocumentParser
 from backend.config.rag import (
     RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT, RAG_OCR_MIN_TEXT_CHARS,
+    RAG_PDF_MAX_PAGES, RAG_PDF_MAX_PAGE_AREA, RAG_PDF_MAX_TOTAL_PAGE_AREA,
 )
 from backend.shared.logger import logger
 
@@ -342,6 +343,43 @@ def _is_heading_line(text: str, size: float, body_size: float) -> bool:
     return True
 
 
+def pdf_budget_error(doc) -> str | None:
+    """PDF 页数/页面面积预算；返回错误文案，None 表示通过。"""
+    page_count = len(doc)
+    if page_count > RAG_PDF_MAX_PAGES:
+        return (
+            f"PDF 页数 {page_count} 超过上限 {RAG_PDF_MAX_PAGES} 页，已拒绝解析"
+        )
+    total_area = 0.0
+    for index in range(page_count):
+        page = doc[index]
+        area = abs(float(page.rect.width) * float(page.rect.height))
+        if area > RAG_PDF_MAX_PAGE_AREA:
+            return (
+                f"PDF 第 {index + 1} 页面积 {area:.0f} pt² 超过上限 "
+                f"{RAG_PDF_MAX_PAGE_AREA:.0f} pt²，已拒绝解析"
+            )
+        total_area += area
+        if total_area > RAG_PDF_MAX_TOTAL_PAGE_AREA:
+            return (
+                f"PDF 总页面面积超过上限 "
+                f"{RAG_PDF_MAX_TOTAL_PAGE_AREA:.0f} pt²，已拒绝解析"
+            )
+    return None
+
+
+def check_pdf_budget(file_path: str) -> str | None:
+    """上传入口预检：打开 PDF 检查资源预算，打不开时放行给解析层报错。"""
+    try:
+        doc = fitz.open(file_path)
+    except Exception:
+        return None
+    try:
+        return pdf_budget_error(doc)
+    finally:
+        doc.close()
+
+
 class PdfParser(BaseDocumentParser):
     # v3（2026-10-24）：相邻页表格合并（保守规则），跨页表格完整行可检索
     PARSER_VERSION = "v3"
@@ -386,6 +424,10 @@ class PdfParser(BaseDocumentParser):
             raise
 
         pdf_repaired = bool(getattr(doc, "is_repaired", False))
+        budget_error = pdf_budget_error(doc)
+        if budget_error:
+            doc.close()
+            raise ValueError(budget_error)
         raw_items: list[tuple[str, float, int, tuple]] = []  # (文本, 字号, 页码, bbox) — 仅非表格文本
         # P0-04（2026-10-13）：段落与表格按 (页序, 页内 y) 统一成事件流，
         # 建 AST 时按阅读顺序交错挂 section——旧实现先处理全部文本、再把
@@ -970,6 +1012,16 @@ class PdfParser(BaseDocumentParser):
                     clip = fitz.Rect(*bbox) if bbox else None
                     for attempt, dpi in enumerate(render_dpis):
                         try:
+                            target_rect = clip or doc[page_idx].rect
+                            pixels = (
+                                float(target_rect.width) * dpi / 72.0
+                            ) * (float(target_rect.height) * dpi / 72.0)
+                            if pixels > rag_cfg.RAG_OCR_MAX_PAGE_PIXELS:
+                                raise ValueError(
+                                    f"第 {page_number} 页 OCR 渲染像素 {pixels:.0f} "
+                                    f"超过上限 "
+                                    f"{rag_cfg.RAG_OCR_MAX_PAGE_PIXELS}，已跳过"
+                                )
                             pix = doc[page_idx].get_pixmap(dpi=dpi, clip=clip)
                             text = ocr_mod.ocr_image(pix.tobytes("png"))
                             if text and text.strip():

@@ -817,6 +817,14 @@ async def sync_upload_impl(
         # 入口直接明确拒绝，不让用户等后台索引几十秒才报错（预检失败不误杀）
         if ext == "pdf":
             from backend.config.rag import RAG_PDF_PRECHECK_PAGES, RAG_OCR_PROVIDER
+            from backend.rag.preprocessing.parser.pdf_parser import check_pdf_budget
+            budget_error = check_pdf_budget(staging_path)
+            if budget_error:
+                try:
+                    os.unlink(staging_path)
+                except OSError:
+                    pass
+                return {"ok": False, "error": budget_error}
             if (RAG_PDF_PRECHECK_PAGES > 0 and RAG_OCR_PROVIDER == "off"
                     and _pdf_has_text_layer(staging_path, RAG_PDF_PRECHECK_PAGES) is False):
                 try:
