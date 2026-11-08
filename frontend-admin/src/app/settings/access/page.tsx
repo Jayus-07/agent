@@ -531,7 +531,7 @@ function AdminAccessControlContent() {
                     id="rbac-user-search"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="搜索用户名、姓名或部门"
+                    placeholder="搜索账号、姓名或部门"
                     className="h-9 w-full rounded-lg border border-gray-200 bg-surface-elevated pl-9 pr-3 text-xs text-text-primary outline-none placeholder:text-text-muted focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
                   />
                 </div>
@@ -889,8 +889,17 @@ function AdminAccessControlContent() {
             </p>
             <form className="mt-4 space-y-3" onSubmit={submitCreate}>
               <div>
-                <label htmlFor="create-username" className="text-xs text-text-secondary">用户名（2-20 位字母/数字/_.-）</label>
-                <input id="create-username" name="username" required pattern="[A-Za-z0-9_.-]{2,20}" className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20" />
+                <label htmlFor="create-username" className="text-xs text-text-secondary">
+                  账号（11 位数字；运维账号用 ops_ / svc_ 开头）
+                </label>
+                <input
+                  id="create-username"
+                  name="username"
+                  required
+                  placeholder="如 13800138000 或 ops_admin"
+                  pattern="(?:\d{11}|(?:ops_|svc_)[A-Za-z0-9_.-]{2,60})"
+                  className="mt-1 h-9 w-full rounded-lg border border-gray-200 px-3 text-xs outline-none focus-visible:border-accent focus-visible:ring-2 focus-visible:ring-accent/20"
+                />
               </div>
               <div>
                 <label htmlFor="create-realname" className="text-xs text-text-secondary">姓名</label>

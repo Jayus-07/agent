@@ -27,7 +27,7 @@ from backend.config.auth import AUTH_TYPE_HEADER, USER_ID_HEADER
 from backend.shared.logger import logger
 
 # 探测/抓取类端点：高频且无审计价值，打点只会稀释日志
-_SKIP_PATHS = frozenset({"/health", "/metrics", "/ops"})
+_SKIP_PATHS = frozenset({"/health", "/metrics"})
 
 # 身份/链路字段缺失时的占位符（避免逐字段判空）
 _DASH = "-"

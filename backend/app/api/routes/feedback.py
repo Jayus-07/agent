@@ -156,7 +156,7 @@ async def post_feedback(req: FeedbackRequest, request: Request):
 
 @router.get("/feedback/stats")
 async def get_feedback_stats(days: int = 7):
-    """最近 N 天的反馈统计（供 /ops 看板或独立周报）。"""
+    """最近 N 天的反馈统计（供运营统计或独立周报）。"""
     try:
         return stats_query(days=days)
     except Exception as e:

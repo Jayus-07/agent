@@ -1631,6 +1631,17 @@ async def update_user(
 # ── P6 用户生命周期（2026-09-21，治理实施方案 §P6）──────────────
 
 _USERNAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,20}$")
+# 2026-11-09 决策：管理员建号默认 11 位数字；运维/系统账号用显式前缀豁免。
+_OPS_USERNAME_PREFIXES = ("ops_", "svc_")
+
+
+def _valid_new_username(username: str) -> bool:
+    """新账号标识：11 位数字，或 ops_/svc_ 前缀的运维/系统账号。"""
+    if len(username) == 11 and username.isdigit():
+        return True
+    return username.startswith(_OPS_USERNAME_PREFIXES) and bool(
+        _USERNAME_RE.match(username)
+    )
 
 
 def _generate_temp_password() -> str:
@@ -1687,8 +1698,9 @@ async def create_user(
         raise _http_error("tenantId 与操作者租户不一致（多租户规则禁止跨租户创建）", 403)
 
     username = str(body.get("username") or "").strip()
-    if not _USERNAME_RE.match(username):
-        raise _http_error("username 必须为 2-20 位字母/数字/_.-", 400)
+    if not _valid_new_username(username):
+        raise _http_error(
+            "username 必须为 11 位数字，或以 ops_/svc_ 开头的运维账号", 400)
     platform_role = body.get("platformRole") or "viewer"
     if platform_role not in _ALLOWED_PLATFORM_ROLES:
         raise _http_error("platformRole 必须是 viewer/editor/admin/super_admin", 400)

@@ -81,3 +81,17 @@ def test_portal_admission_rules():
     assert auth_local._portal_admission_error("cs", super_admin) is None
     assert auth_local._portal_admission_error("cs", agent) is None
     assert auth_local._portal_admission_error("cs", supervisor) is None
+
+
+def test_admin_created_username_policy():
+    """2026-11-09 决策：管理员建号默认 11 位，ops_/svc_ 前缀显式豁免。"""
+    from backend.app.api.routes.rbac import _valid_new_username
+
+    assert _valid_new_username("13900000000")
+    assert _valid_new_username("ops_admin")
+    assert _valid_new_username("svc_billing")
+    assert not _valid_new_username("admin")
+    assert not _valid_new_username("opsadmin")       # 缺下划线
+    assert not _valid_new_username("operator")       # 非 11 位、非豁免前缀
+    assert not _valid_new_username("1390000000")     # 10 位
+    assert not _valid_new_username("ops_" + "x" * 30)  # 超长
