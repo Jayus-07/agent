@@ -103,4 +103,14 @@ flowchart TD
 - **管理入口**：`python -m backend.scripts.manage_api_keys create|list|revoke`；`create` 的明文输出不得进入仓库、日志或工单。
 - **审计**：日志只记录 `key_id`、`caller` 与摘要前 8 位指纹，禁止记录明文 Key。
 
+## 7. 登录端准入（五个端）
+
+- **账号标识**：新账号统一 11 位数字（自助注册与管理员建号）；登录接受历史非数字账号（兼容，不再前端硬拦）。
+- **web**（企业助手 / 智能客服用户侧 / 旅游）：任意启用账号（viewer 起）。
+- **管理端**：仅平台 `admin` / `super_admin`，其他账号登录即 403（不再"登进去看无权限页"）。
+- **客服工作台**：`admin` / `super_admin`，或启用的 `cs_agents` 绑定（`agent` / `supervisor`）；否则登录即 403。
+- **会话**：三端独立（`refresh_token_web/admin/cs`），不做跨端 SSO；改角色/部门吊销全部会话。
+- **注册**：自助注册只产生 `viewer`；管理端/客服端账号由管理员开通。随机体验账号 = 11 位数字 + 随机强密码，非真实手机号、无法找回，生成后仍需图形验证码。
+- **登录限流键**：BFF 默认不信任客户端 `X-Forwarded-For`，用服务端签发的 `rl_client` Cookie 分桶；只有显式 `TRUST_PROXY_HEADERS=true`（位于可信前置代理之后）才采信转发头。
+
 关联 [身份头协议](../contracts/identity-header-protocol.md)、[认证导航](README.md)、[数据库](../DATABASE.md)、[Tool 失败/拒绝](../architecture/failure-degradation.md)。特别关注安全测试中的真实 tenant/owner SQL 结果断言与 WS 消息订阅；仅模拟 403 不等于证明无数据泄漏。

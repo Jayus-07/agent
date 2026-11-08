@@ -21,6 +21,7 @@
  *   - 401 → 静默 refresh → 重试 的逻辑仍在浏览器侧 client.ts，本层不介入。
  */
 import type { NextRequest } from "next/server";
+import { randomUUID } from "crypto";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -30,6 +31,24 @@ const GATEWAY = (process.env.API_URL || "http://127.0.0.1:9080").replace(
   "",
 );
 const CLIENT_APP = "web";
+
+/**
+ * 登录限流/会话台账的客户端键（2026-11-09 审计修复）。
+ * 默认不信任客户端可伪造的 X-Forwarded-For / X-Real-IP：改用服务端签发的
+ * HttpOnly rl_client Cookie 作为分桶键；只有显式声明位于可信代理之后
+ * （TRUST_PROXY_HEADERS=true）才采信转发头。
+ */
+function resolveClientKey(req: NextRequest): { key: string; issued?: string } {
+  if (process.env.TRUST_PROXY_HEADERS === "true") {
+    const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const real = req.headers.get("x-real-ip")?.trim();
+    return { key: forwarded || real || "" };
+  }
+  const existing = req.cookies.get("rl_client")?.value || "";
+  if (/^[0-9a-f-]{36}$/i.test(existing)) return { key: `rl-${existing}` };
+  const issued = randomUUID();
+  return { key: `rl-${issued}`, issued };
+}
 
 const FORWARD_REQ_HEADERS = [
   "authorization",
@@ -139,12 +158,9 @@ async function proxy(
   const apiKey = process.env.API_KEY;
   if (apiKey) headers.set("X-API-Key", apiKey);
 
-  // 登录限流和会话台账使用此地址；前置入口必须覆盖客户端伪造的代理头。
-  const clientIp =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    req.headers.get("x-real-ip")?.trim() ||
-    "";
-  if (clientIp) headers.set("X-Client-IP", clientIp);
+  // 限流/台账键：默认用服务端签发的 rl_client Cookie，不信客户端转发头
+  const rl = resolveClientKey(req);
+  if (rl.key) headers.set("X-Client-IP", rl.key);
 
   const method = req.method;
   // T6（2026-11-08 安全审计）：带 Content-Length 的请求在 arrayBuffer()
@@ -194,6 +210,12 @@ async function proxy(
   // Headers 复制会合并多条 set-cookie，必须用 getSetCookie 逐条回填）
   for (const sc of upstream.headers.getSetCookie()) {
     resHeaders.append("set-cookie", sc);
+  }
+  if (rl.issued) {
+    resHeaders.append(
+      "set-cookie",
+      `rl_client=${rl.issued}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`,
+    );
   }
   return new Response(upstream.body, {
     status: upstream.status,

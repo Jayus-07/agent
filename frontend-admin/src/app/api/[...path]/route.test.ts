@@ -39,12 +39,13 @@ describe("BFF 代理转发契约", () => {
     );
   });
 
-  it("透传 user-agent 与 cookie，并注入 X-Client-IP", async () => {
+  it("透传 user-agent/cookie，并用 rl_client Cookie 作为限流键（不信 XFF）", async () => {
     const req = makeReq("/api/auth/login", {
       "content-type": "application/json",
       "user-agent": "Mozilla/5.0 TestBrowser/1.0",
       cookie: "refresh_token=old; Path=/api/auth",
       "x-forwarded-for": "203.0.113.9, 10.0.0.2",
+      "x-real-ip": "203.0.113.8",
       "x-client-ip": "198.51.100.44",
     });
     const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
@@ -54,8 +55,47 @@ describe("BFF 代理转发契约", () => {
     const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
     expect(upstreamHeaders.get("user-agent")).toBe("Mozilla/5.0 TestBrowser/1.0");
     expect(upstreamHeaders.get("cookie")).toBe("refresh_token=old; Path=/api/auth");
-    expect(upstreamHeaders.get("x-client-ip")).toBe("203.0.113.9");
+    // 默认不采信客户端可伪造的 XFF/X-Real-IP
+    expect(upstreamHeaders.get("x-client-ip")).toMatch(/^rl-[0-9a-f-]{36}$/);
+    expect(upstreamHeaders.get("x-client-ip")).not.toContain("203.0.113");
     expect(upstreamHeaders.get("x-client-app")).toBe("admin");
+    // 服务端签发 rl_client Cookie
+    const issued = res.headers.getSetCookie().find((c) => c.startsWith("rl_client="));
+    expect(issued).toBeTruthy();
+    expect(issued).toContain("HttpOnly");
+  });
+
+  it("已有 rl_client Cookie 时复用同一限流键", async () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+    const req = makeReq("/api/auth/login", {
+      "content-type": "application/json",
+      cookie: `rl_client=${id}`,
+      "x-forwarded-for": "203.0.113.9",
+    });
+    const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
+    const res = await GET(req, ctx);
+
+    const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(upstreamHeaders.get("x-client-ip")).toBe(`rl-${id}`);
+    expect(
+      res.headers.getSetCookie().some((c) => c.startsWith("rl_client=")),
+    ).toBe(false);
+  });
+
+  it("显式 TRUST_PROXY_HEADERS=true 时才采信 XFF 首段", async () => {
+    vi.stubEnv("TRUST_PROXY_HEADERS", "true");
+    try {
+      const req = makeReq("/api/auth/login", {
+        "content-type": "application/json",
+        "x-forwarded-for": "203.0.113.9, 10.0.0.2",
+      });
+      const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
+      await GET(req, ctx);
+      const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
+      expect(upstreamHeaders.get("x-client-ip")).toBe("203.0.113.9");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("透传 Idempotency-Key，治理写接口才能通过后端幂等门", async () => {
@@ -69,18 +109,6 @@ describe("BFF 代理转发契约", () => {
 
     const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
     expect(upstreamHeaders.get("idempotency-key")).toBe("fallback-change-1");
-  });
-
-  it("无 XFF 时回退 X-Real-IP 作为 X-Client-IP", async () => {
-    const req = makeReq("/api/auth/login", {
-      "content-type": "application/json",
-      "x-real-ip": "127.0.0.1",
-    });
-    const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };
-    await GET(req, ctx);
-
-    const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
-    expect(upstreamHeaders.get("x-client-ip")).toBe("127.0.0.1");
   });
 
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {

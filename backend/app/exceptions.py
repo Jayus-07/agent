@@ -1,4 +1,5 @@
 """全局异常处理与统一失败协议适配。"""
+import json
 import traceback
 from dataclasses import replace
 
@@ -47,6 +48,27 @@ async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content=_http_payload(envelope),
+    )
+
+
+async def invalid_json_exception_handler(request: Request, exc: json.JSONDecodeError):
+    """请求体不是合法 JSON → 400（2026-11-08 审计收口）。
+
+    此前 `await request.json()` 的 JSONDecodeError 会落到 500 兜底：既把
+    客户端输入错误记成服务端故障，又把 traceback 打进日志/响应链路。
+    不回显原始请求体，避免把用户输入（可能含凭据）带进日志。
+    """
+    logger.warning(
+        "[InvalidJSON] %s %s → %s at pos %s",
+        request.method, request.url.path, type(exc).__name__, getattr(exc, "pos", "-"),
+    )
+    return JSONResponse(
+        status_code=400,
+        content={
+            "error": "InvalidJSON",
+            "detail": "请求体不是合法的 JSON，请检查后重试。",
+            "code": 400,
+        },
     )
 
 

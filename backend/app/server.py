@@ -15,6 +15,7 @@ from backend.infra.async_utils import spawn_background_task
 from backend.app.exceptions import (
     http_exception_handler,
     global_exception_handler,
+    invalid_json_exception_handler,
     memory_db_unavailable_handler,
     request_validation_exception_handler,
 )
@@ -76,6 +77,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from backend.memory.database import MemoryDatabaseUnavailable
 app.add_exception_handler(StarletteHTTPException, http_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
+# 请求体非法 JSON（await request.json 抛错）→ 400，不落 500 兜底
+import json as _json
+app.add_exception_handler(_json.JSONDecodeError, invalid_json_exception_handler)
 # 比 Exception 兜底更具体：Starlette 按 MRO 查找，配置缺失会命中这个而非 500
 app.add_exception_handler(MemoryDatabaseUnavailable, memory_db_unavailable_handler)
 app.add_exception_handler(Exception, global_exception_handler)

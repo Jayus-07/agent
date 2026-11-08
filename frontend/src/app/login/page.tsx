@@ -92,8 +92,8 @@ function LoginForm() {
     if (loading) return;
     setError("");
     setNotice("");
-    if (!DEMO_LOGIN_USERNAMES.has(account.trim()) && !/^\d{11}$/.test(account.trim())) {
-      setError("请输入 11 位数字手机号");
+    if (!account.trim()) {
+      setError("请输入账号");
       return;
     }
     if (!password) {
@@ -176,7 +176,7 @@ function LoginForm() {
           登录你的账号
         </h2>
         <p className="mt-1.5 text-[13px] text-[#7A8480]">
-          使用注册时的 11 位数字账号登录，直达{selectedAssistant}
+          使用注册账号登录，直达{selectedAssistant}
         </p>
       </div>
 
@@ -198,14 +198,14 @@ function LoginForm() {
       <form onSubmit={handleSubmit} noValidate>
         <div className="space-y-4">
           <AuthInput
-            label={isDemoAccount ? "演示账号" : "11 位数字账号"}
+            label={isDemoAccount ? "演示账号" : "账号"}
             accent={theme.accent}
             type={isNumericAccount ? "tel" : "text"}
             name="username"
             autoComplete="username"
             inputMode={isNumericAccount ? "numeric" : "text"}
-            maxLength={isNumericAccount ? 11 : 32}
-            placeholder={isDemoAccount ? "请输入演示账号" : "11 位数字账号或演示账号"}
+            maxLength={32}
+            placeholder={isDemoAccount ? "请输入演示账号" : "请输入账号（11 位数字或管理员分配账号）"}
             value={account}
             onChange={(e) => setAccount(e.target.value)}
           />

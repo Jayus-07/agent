@@ -201,11 +201,11 @@ function AdminLoginForm() {
             <form onSubmit={handleSubmit} noValidate>
               <div className="space-y-4">
                 <AuthInput
-                  label="管理员手机号 / 邮箱"
+                  label="管理员账号"
                   accent={ACCENT}
                   type="text"
                   autoComplete="username"
-                  placeholder="请输入管理员手机号或邮箱"
+                  placeholder="请输入管理员账号"
                   value={account}
                   onChange={(e) => setAccount(e.target.value)}
                 />
