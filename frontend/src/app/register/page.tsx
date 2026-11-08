@@ -11,7 +11,7 @@
 import { Suspense, useCallback, useEffect, useState, type FormEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { RefreshCw } from "lucide-react";
+import { Copy, RefreshCw } from "lucide-react";
 import { consumeExpiredFlag, fetchRegisterCaptcha, register, setPendingLoginCredentials } from "@/lib/auth";
 import type { RegisterCaptcha } from "@/lib/auth";
 import AuthShell, { AuthNav } from "@/components/auth/AuthShell";
@@ -242,7 +242,9 @@ function RegisterForm() {
           即将进入：{selectedAssistant}
         </span>
         <h2 className="text-[22px] font-semibold text-[#16191A] sm:text-[24px] lg:text-[26px]">创建你的账号</h2>
-        <p className="mt-1.5 text-[13px] leading-5 text-[#7A8480]">用 11 位数字账号和密码注册；密码需为 8–20 位且包含字母和数字，完成图形验证码即可提交，无需短信验证码。注册后将进入{selectedAssistant}。</p>
+        <p className="mt-1.5 text-[13px] leading-5 text-[#7A8480]">
+          11 位数字账号 + 密码（8–20 位，含字母和数字），完成验证码即可注册。
+        </p>
       </div>
 
       {notice && (
@@ -257,7 +259,7 @@ function RegisterForm() {
       )}
 
       <form onSubmit={handleSubmit} noValidate>
-        <div className="space-y-4">
+        <div className="space-y-3">
           <AuthInput
             label="11 位数字账号"
             accent={ACCENT}
@@ -267,17 +269,17 @@ function RegisterForm() {
             placeholder="请输入 11 位数字账号"
             value={phone}
             onChange={(e) => { setPhone(e.target.value); setGenerated(null); }}
+            trailing={
+              <button
+                type="button"
+                onClick={handleGenerate}
+                className="ml-2 shrink-0 whitespace-nowrap rounded-lg bg-[#1F7A4D]/[0.08] px-2.5 py-1.5 text-[12px] font-medium text-[#1F7A4D] transition-colors hover:bg-[#1F7A4D]/[0.15]"
+                title="随机生成 11 位数字账号和强密码"
+              >
+                随机生成
+              </button>
+            }
           />
-          <div className="flex items-center justify-between text-[12px]">
-            <span className="text-[#98A29D]">没有手机号？</span>
-            <button
-              type="button"
-              onClick={handleGenerate}
-              className="font-medium text-[#1F7A4D] underline-offset-2 hover:underline"
-            >
-              随机生成体验账号
-            </button>
-          </div>
           <AuthInput
             label="设置密码"
             accent={ACCENT}
@@ -301,26 +303,31 @@ function RegisterForm() {
         </div>
 
         {generated && (
-          <div className="mt-4 rounded-xl border border-[#EAD7A5] bg-[#FDF8E9] px-3.5 py-3 text-[12px] leading-5 text-[#6B5320]">
-            <p className="font-medium">
-              已生成随机体验账号（非真实手机号，无法接收短信或找回），请立即保存。
+          <div className="mt-3 rounded-xl border border-[#EAD7A5] bg-[#FDF8E9] px-3 py-2 text-[12px] text-[#6B5320]">
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">体验账号已生成</span>
+              <button
+                type="button"
+                onClick={() => void copyGenerated()}
+                className="inline-flex shrink-0 items-center gap-1 font-medium text-[#1F7A4D] hover:underline"
+              >
+                <Copy size={13} />
+                {copyHint || "复制"}
+              </button>
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 font-mono text-[12px]">
+              <span>账号 {generated.account}</span>
+              <span>密码 {generated.password}</span>
+            </div>
+            <p className="mt-1 text-[11px] text-[#8A6D2F]">
+              非真实手机号，无法接收短信或找回，请先保存。
             </p>
-            <p className="mt-1 break-all">账号：{generated.account}</p>
-            <p className="break-all">密码：{generated.password}</p>
-            <button
-              type="button"
-              onClick={() => void copyGenerated()}
-              className="mt-1.5 font-medium text-[#1F7A4D] underline-offset-2 hover:underline"
-            >
-              复制账号和密码
-            </button>
-            {copyHint && <span className="ml-2 text-[#5C6662]">{copyHint}</span>}
           </div>
         )}
 
         {/* 图形验证码（2026-10-07）：4 位纯数字，点图/刷新按钮换一张，
             inputmode=numeric 让手机直弹数字键盘 */}
-        <div className="mt-4">
+        <div className="mt-3">
           <label htmlFor="register-captcha" className="mb-1.5 block text-[13px] text-[#3F4A46]">
             图形验证码
           </label>
@@ -368,7 +375,7 @@ function RegisterForm() {
           </div>
         </div>
 
-        <label className="mt-4 flex cursor-pointer items-start gap-2 text-[13px] text-[#5C6662]">
+        <label className="mt-3 flex cursor-pointer items-start gap-2 text-[13px] text-[#5C6662]">
           <input
             type="checkbox"
             checked={agree}
@@ -384,7 +391,7 @@ function RegisterForm() {
         <button
           type="submit"
           disabled={loading}
-          className="mt-6 w-full rounded-xl py-3.5 text-[16px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+          className="mt-4 w-full rounded-xl py-3.5 text-[16px] font-medium text-white transition-colors disabled:cursor-not-allowed disabled:opacity-60"
           style={{ background: ACCENT }}
           onMouseEnter={(e) => {
             if (!loading) e.currentTarget.style.background = ACCENT_HOVER;
