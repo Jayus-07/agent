@@ -57,6 +57,13 @@ def data_collection_tool(
     if not source:
         return "❌ 错误: 请提供 source 参数（数据源标识）"
 
+    # 目标表名是 LLM 可控参数：先按标识符白名单校验，避免注入/误写。
+    from backend.data_collection.writers.sqlalchemy_writer import validate_target_table
+    try:
+        target_table = validate_target_table(target_table)
+    except ValueError as exc:
+        return f"❌ 错误: {exc}"
+
     # 写操作审批门：写入数据库属高危副作用，参数不再开放给 LLM 控制
     # （旧 enable_write 参数可被 LLM 传参打开，形同虚设，已移除）。
     pending = ensure_approved(

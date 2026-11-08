@@ -7,6 +7,7 @@ fetchers/http_fetcher.py — HTTP 数据采集器
 
 import time
 from typing import Any
+from urllib.parse import urljoin
 
 import requests
 
@@ -54,17 +55,43 @@ class HttpFetcher(AbstractFetcher):
 
     def fetch(self, source: str, **kwargs: Any) -> RawData:
         """通过 HTTP GET 获取数据"""
+        # 延迟导入：backend.tools 包初始化会反向加载 data_collection，
+        # 顶层导入会形成循环（2026-11-09）。
+        from backend.tools.url_guard import assert_url_allowed
+
         headers = kwargs.get("headers", {})
         started_at = time.time()
         last_error: Exception | None = None
 
         for attempt in range(self._max_retries + 1):
             try:
+                # 2026-11-09 审计修复：出站前过 SSRF 守卫，且手动跟随重定向
+                # 逐跳校验（requests 自动跟随会让公网 URL 302 到 169.254.169.254）。
+                current = source
+                assert_url_allowed(current)
                 resp = self._session.get(
-                    source,
+                    current,
                     headers={**self._session.headers, **headers},
                     timeout=self._timeout,
+                    allow_redirects=False,
                 )
+                hops = 0
+                while resp.is_redirect:
+                    hops += 1
+                    if hops > 3:
+                        raise requests.TooManyRedirects(
+                            f"重定向超过 3 次: {source}", response=resp)
+                    location = resp.headers.get("Location")
+                    if not location:
+                        break
+                    current = urljoin(current, location)
+                    assert_url_allowed(current)
+                    resp = self._session.get(
+                        current,
+                        headers={**self._session.headers, **headers},
+                        timeout=self._timeout,
+                        allow_redirects=False,
+                    )
                 resp.raise_for_status()
                 elapsed = time.time() - started_at
 

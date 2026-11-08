@@ -14,6 +14,7 @@ writers/sqlalchemy_writer.py — SQLAlchemy 统一写入器
     result = writer.write(records, table="stg_products", mode="append")
 """
 
+import re
 import time
 from typing import Any
 
@@ -24,6 +25,22 @@ from sqlalchemy.engine import Engine
 
 from backend.data_collection.writers.base import AbstractWriter, WriteResult
 from backend.shared.logger import logger
+
+# 2026-11-09 审计修复：目标表名此前直接拼进 DELETE FROM，LLM 可控参数
+# 可注入 SQL。表名只允许标识符（可选一个 schema），落库前再按方言加引号。
+_TABLE_NAME_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]{0,62}(\.[A-Za-z_][A-Za-z0-9_]{0,62})?$"
+)
+
+
+def validate_target_table(table: str) -> str:
+    """校验并归一化目标表名；非法标识符直接拒绝。"""
+    value = (table or "").strip()
+    if not _TABLE_NAME_RE.fullmatch(value):
+        raise ValueError(
+            "target_table 必须是合法表名（字母/数字/下划线，可带一个 schema）"
+        )
+    return value
 
 
 class SQLAlchemyWriter(AbstractWriter):
@@ -83,6 +100,7 @@ class SQLAlchemyWriter(AbstractWriter):
         Returns:
             WriteResult: 写入计数
         """
+        table = validate_target_table(table)
         if not records:
             logger.warning(f"[SQLAlchemyWriter] 无数据可写入 {table}")
             return WriteResult(table=table)
@@ -129,8 +147,11 @@ class SQLAlchemyWriter(AbstractWriter):
 
     def _do_replace(self, df: pd.DataFrame, table: str) -> None:
         """清空表后写入"""
+        table = validate_target_table(table)
+        preparer = self._engine.dialect.identifier_preparer
+        quoted = ".".join(preparer.quote(part) for part in table.split("."))
         with self._engine.begin() as conn:
-            conn.execute(text(f"DELETE FROM {table}"))
+            conn.execute(text(f"DELETE FROM {quoted}"))
         df.to_sql(table, self._engine, if_exists="append", index=False)
         logger.info(f"[SQLAlchemyWriter] replace: 清空 {table} → 写入 {len(df)} 条")
 
