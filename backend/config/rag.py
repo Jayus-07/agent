@@ -98,6 +98,15 @@ RAG_OCR_MIN_TEXT_CHARS = int(os.getenv("RAG_OCR_MIN_TEXT_CHARS", "30"))
 # 渲染 DPI（越高越准越慢）与单文档 OCR 页数上限（防异常大文档失控烧钱/耗时）
 RAG_OCR_DPI = int(os.getenv("RAG_OCR_DPI", "200"))
 RAG_OCR_MAX_PAGES = int(os.getenv("RAG_OCR_MAX_PAGES", "100"))
+# PDF 解析资源预算（2026-11-09 审计）：正常文档远低于此，只挡恶意超大文档。
+# 页数、单页面积（pt²）、总页面面积任一超限即拒绝解析。
+RAG_PDF_MAX_PAGES = int(os.getenv("RAG_PDF_MAX_PAGES", "3000"))
+RAG_PDF_MAX_PAGE_AREA = float(os.getenv("RAG_PDF_MAX_PAGE_AREA", "20000000"))
+RAG_PDF_MAX_TOTAL_PAGE_AREA = float(
+    os.getenv("RAG_PDF_MAX_TOTAL_PAGE_AREA", "2000000000"))
+# OCR 单次渲染像素上限（含高 DPI 重试），防超大幅面渲染耗尽内存。
+RAG_OCR_MAX_PAGE_PIXELS = int(
+    os.getenv("RAG_OCR_MAX_PAGE_PIXELS", "120000000"))
 # 仅管理员单次 PDF 上传可以覆盖全局预算；该硬上限不由请求方或环境变量提高。
 RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT = 500
 # 云端 OCR 的供应商、Key、URL 与模型由管理端 ocr 角色绑定和凭据表提供。
