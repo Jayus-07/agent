@@ -70,7 +70,7 @@ docker compose --env-file .env.production up -d app rag-service mcp-service agen
 
 `RUNTIME_ENV_FILE` 默认是 .env.production；只有本机演练才可显式指向 .env。生产层用 !override 替换根服务 env_file，避免误读开发凭据。前端端口默认仅绑定 127.0.0.1:3100/3200/3300，由已有 HTTPS 入口反向代理；本配置不自动扩大公网暴露。
 
-退款写入开关 `CS_REFUND_REQUEST_MODE` 默认 disabled（安全默认，env.production 未显式配置即关闭）；`CS_BUSINESS_GATEWAY_MODE` 是查询/业务网关模式（代码默认 sandbox，disabled 不是受支持值），不是资金开关——见 docs/domains/customer-service.md。如需启用客服资金链路（退款审核闭环、商城订单/物流契约），两个开关必须同启为 `http` 且 business-service 可达：compose 已定义 `business-mock`（docker-compose.4c8g.yml，演示/联调事实源，重启清空内存态），但不在上方启动清单内——启用时须将其加入 build 与 up -d 列表；生产收单/真实支付属商城域另立项，不得把 mock 当生产支付。
+退款写入开关 `CS_REFUND_REQUEST_MODE` 默认 disabled（安全默认，env.production 未显式配置即关闭）；`CS_BUSINESS_GATEWAY_MODE` 是查询/业务网关模式（代码默认 sandbox，disabled 不是受支持值），不是资金开关——见 docs/domains/customer-service.md。如需启用客服资金链路（退款审核闭环、商城订单/物流契约），两个开关必须同启为 `http` 且 business-service 可达：compose 已定义 `business-mock`（docker-compose.4c8g.yml，演示/联调事实源，重启清空内存态），但不在上方启动清单内——启用时须将其加入 build 与 up -d 列表；生产收单/真实支付属商城域另立项，不得把 mock 当生产支付。启用时还必须显式配置 `INTERNAL_API_TOKEN`（2026-11-08 安全审计 T7a：production 缺失该变量时 business-mock 启动期直接拒绝，不再 fail-open 无鉴权运行）。
 
 订单取消独立开关 `CS_ORDER_CANCEL_MODE`（[W5 2026-11-04]）：默认 `http`（跟随业务网关既有模式放行，与退款申请闭环一致）；显式 `disabled` 时取消提案写入与确认执行全拒（不取消、不退款）。与 `CS_REFUND_REQUEST_MODE` 相互独立；未知值安全拒绝。
 

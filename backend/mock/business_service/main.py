@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import threading
 import time
@@ -18,6 +19,31 @@ from pydantic import BaseModel, Field
 app = FastAPI(title="business-service mock", docs_url=None, redoc_url=None)
 
 _INTERNAL_TOKEN = os.getenv("INTERNAL_API_TOKEN", "")
+
+
+def require_internal_boot(environment: str | None = None) -> None:
+    """启动期守卫（T7a）：production 缺内部令牌直接拒启动。
+
+    与 ``backend/services/rag_server.py::require_internal_boot`` 同模式：
+    production 必须有令牌；development/本地联调允许无令牌（compose 只把
+    8081 绑在 127.0.0.1）。审计指纹
+    ``business-mock.x-internal-token.fail-open-default``。
+    """
+    if _INTERNAL_TOKEN:
+        return
+    env = (environment or os.getenv("ENVIRONMENT", "development")).strip().lower()
+    if env == "production":
+        raise RuntimeError(
+            "INTERNAL_API_TOKEN 缺失: production 环境必须配置"
+            "（business-mock 业务动作端点无令牌即拒启动）"
+        )
+    logging.getLogger(__name__).warning(
+        "[business-mock] INTERNAL_API_TOKEN 未配置：仅本地开发允许无鉴权运行"
+    )
+
+
+require_internal_boot()
+
 _STATE_LOCK = threading.RLock()
 _REFUND_REQUESTS: dict[tuple[str, str, str], dict[str, Any]] = {}
 _ADDRESS_CHANGE_REQUESTS: dict[tuple[str, str], dict[str, Any]] = {}
