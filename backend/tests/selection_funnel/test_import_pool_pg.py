@@ -241,3 +241,56 @@ class TestPoolConnHygiene:
 def _ipp_pool():
     import backend.selection_funnel.import_pool_pg as ipp
     return ipp._get_pool()
+
+class TestTenantIsolationPG:
+    """2026-11-08 审计 T4d：选品三表按租户隔离（真实 PG）。"""
+
+    def test_import_pool_tenant_isolation(self, pg_sf):
+        ipp, _mdp = pg_sf
+        store = ipp.PostgresImportPoolStore()
+        batch_a, _ = store.add_batch(
+            [_row("A 品", url="ua")], category="宠物零食", tenant_id="tenant-a")
+        store.add_batch(
+            [_row("B 品", url="ub")], category="宠物零食", tenant_id="tenant-b")
+
+        assert [r["title"] for r in store.list_candidates(
+            tenant_id="tenant-a")] == ["A 品"]
+        assert [r["title"] for r in store.list_candidates(
+            tenant_id="tenant-b")] == ["B 品"]
+        assert store.count(tenant_id="tenant-a") == 1
+
+        # 他租批号删除不到；本租才生效
+        assert store.clear_batch(batch_a, tenant_id="tenant-b") == 0
+        assert store.count(tenant_id="tenant-a") == 1
+        assert store.clear_batch(batch_a, tenant_id="tenant-a") == 1
+        assert store.count(tenant_id="tenant-a") == 0
+
+        # 同款历史不跨租户
+        store.add_batch([_row("同款", url="same")], category="宠物零食",
+                        tenant_id="tenant-a")
+        store.add_batch([_row("同款", url="same")], category="宠物零食",
+                        tenant_id="tenant-b")
+        hist = store.history_by_keys(
+            [("same", "同款", "淘宝")], tenant_id="tenant-a")
+        assert len(hist["url:same"]) == 1
+
+    def test_market_tenant_isolation(self, pg_sf):
+        _ipp, mdp = pg_sf
+        store = mdp.PostgresMarketStore()
+        store.add_keywords([{"keyword": "A 词", "search_pop": 9}],
+                           category="宠物零食", tenant_id="tenant-a")
+        store.add_keywords([{"keyword": "B 词", "search_pop": 8}],
+                           category="宠物零食", tenant_id="tenant-b")
+        assert [k["keyword"] for k in store.keywords(
+            "宠物零食", tenant_id="tenant-a")] == ["A 词"]
+        assert [k["keyword"] for k in store.keywords(
+            "宠物零食", tenant_id="tenant-b")] == ["B 词"]
+
+        rv_a, _ = store.add_reviews(
+            [{"product_title": "A 品", "content": "慢", "star": 2}],
+            category="宠物零食", tenant_id="tenant-a")
+        store.add_reviews(
+            [{"product_title": "B 品", "content": "坏", "star": 1}],
+            category="宠物零食", tenant_id="tenant-b")
+        assert store.clear_batch(rv_a, tenant_id="tenant-b") == 0
+        assert len(store.reviews("宠物零食", tenant_id="tenant-a")) == 1

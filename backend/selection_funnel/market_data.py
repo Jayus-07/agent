@@ -136,33 +136,37 @@ def _parse_generic(data: bytes | str, aliases: dict[str, set[str]],
     return out
 
 
-def import_keywords(data: bytes | str, category: str = "") -> tuple[str, int, list[str]]:
+def import_keywords(data: bytes | str, category: str = "",
+                    *, tenant_id: str = "default") -> tuple[str, int, list[str]]:
     try:
         rows = _parse_generic(data, KEYWORD_ALIASES, "keyword")
     except Exception as e:
         logger.warning("[MarketData] 关键词榜解析失败: %s", e)
         return "", 0, [f"导入失败: {e}"]
-    batch_id, n = get_market_store().add_keywords(rows, category=category)
+    batch_id, n = get_market_store().add_keywords(
+        rows, category=category, tenant_id=tenant_id)
     return batch_id, n, [f"关键词榜批次 {batch_id}：{n} 个词已入库"]
 
 
-def import_reviews(data: bytes | str, category: str = "") -> tuple[str, int, list[str]]:
+def import_reviews(data: bytes | str, category: str = "",
+                   *, tenant_id: str = "default") -> tuple[str, int, list[str]]:
     try:
         rows = _parse_generic(data, REVIEW_ALIASES, "content")
     except Exception as e:
         logger.warning("[MarketData] 差评解析失败: %s", e)
         return "", 0, [f"导入失败: {e}"]
-    batch_id, n = get_market_store().add_reviews(rows, category=category)
+    batch_id, n = get_market_store().add_reviews(
+        rows, category=category, tenant_id=tenant_id)
     return batch_id, n, [f"差评批次 {batch_id}：{n} 条已入库"]
 
 
 # ── 赛道画像 ──────────────────────────────────────────────────────────
-def market_snapshot(category: str) -> dict:
+def market_snapshot(category: str, *, tenant_id: str = "default") -> dict:
     """赛道画像：top 词 + 机会词（搜索人气高、竞争度低）。
 
     机会词口径：人气名次 − 竞争名次差值最大的词（两列都有值才参与）。
     """
-    kws = get_market_store().keywords(category)
+    kws = get_market_store().keywords(category, tenant_id=tenant_id)
     if not kws:
         return {}
     top = kws[:10]
@@ -283,9 +287,9 @@ def _match_title(product_title: str, candidate_title: str) -> bool:
 
 
 def pain_points_for(titles: list[str], category: str,
-                    top_n_pains: int = 3) -> list[dict]:
-    """按候选标题关联差评，规则桶聚类出 top 痛点。"""
-    reviews = get_market_store().reviews(category)
+                    top_n_pains: int = 3, *, tenant_id: str = "default") -> list[dict]:
+    """按候选标题关联差评，规则桶聚类出 top 痛点（租户内）。"""
+    reviews = get_market_store().reviews(category, tenant_id=tenant_id)
     if not reviews:
         return []
     out: list[dict] = []
