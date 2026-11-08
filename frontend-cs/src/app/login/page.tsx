@@ -192,7 +192,7 @@ function LoginForm() {
               onChange={(e) => setRemember(e.target.checked)}
               style={{ accentColor: "var(--accent)" }}
             />
-            记住账号和密码（本机保存，下次自动填充）
+            记住账号（本机保存，下次自动填充）
           </label>
 
           <button

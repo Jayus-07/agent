@@ -397,7 +397,7 @@ def _is_service_channel(request: Request) -> bool:
     return (request.headers.get(AUTH_TYPE_HEADER) or "").strip().lower() == "api-key"
 
 
-_CS_OPERATOR_ROLES = frozenset({"admin", "supervisor", "agent"})
+_CS_OPERATOR_ROLES = frozenset({"admin", "super_admin", "supervisor", "agent"})
 
 
 def _is_cs_operator(request: Request) -> bool:

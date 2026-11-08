@@ -87,6 +87,26 @@ def _get_auth_store():
 _session_service = SessionService(redis_getter=_get_auth_store)
 
 
+def _portal_admission_error(client_app: str, row) -> str | None:
+    """按登录端做准入（2026-11-09 登录/RBAC 决策）。
+
+    - web：任意启用账号（viewer 起）；
+    - admin：平台 admin / super_admin；
+    - cs：平台 admin / super_admin，或启用的 cs_agents 绑定（agent/supervisor）。
+    返回 None 表示放行，否则返回给用户的 403 文案。
+    """
+    role = str(row.get("role") or "").lower()
+    if client_app == "admin":
+        return None if role in ("admin", "super_admin") else "该账号无管理端权限"
+    if client_app == "cs":
+        if role in ("admin", "super_admin"):
+            return None
+        if str(row.get("cs_role") or "") in ("agent", "supervisor"):
+            return None
+        return "该账号未绑定客服坐席，无法登录客服工作台"
+    return None
+
+
 def _resolve_client_app(request: Request, *, body: dict | None = None,
                         payload: dict | None = None) -> str:
     """解析受信任的前端来源，非法值回退 web。"""
@@ -464,6 +484,11 @@ async def login(request: Request, response: Response):
 
     _login_lockout_reset(tenant_id, username)
 
+    # 2026-11-09 决策：管理端/客服端登录即校验端准入，不再"先登录再看无权限页"
+    portal_error = _portal_admission_error(client_app, row)
+    if portal_error:
+        return _fail(portal_error, code=403)
+
     async with _db() as session:
         # 同设备替换（2026-09-19 会话实体改造）：同一 user + device_id 的活跃
         # 会话先撤销再建新会话，不留多条同设备活跃会话。旧标签页的 access
@@ -675,8 +700,9 @@ async def change_password(request: Request, response: Response):
     new_password = body.get("newPassword") or ""
     if not old_password or not new_password:
         return _fail("旧密码与新密码不能为空", code=400)
-    if len(new_password) < 8:
-        return _fail("新密码长度至少 8 位", code=400)
+    policy_error = _password_policy_error(new_password)
+    if policy_error:
+        return _fail(policy_error, code=400)
     if new_password == old_password:
         return _fail("新密码不能与旧密码相同", code=400)
     tenant_id = _trusted_tenant_id(request)
@@ -870,6 +896,21 @@ async def register_captcha():
 # ── /sys/users/register（对齐前端 register 契约）─────────────
 
 _PHONE_RE = re.compile(r"1\d{10}")
+# 新账号标识统一 11 位数字（2026-11-09 登录/RBAC 决策）；登录端不限制，
+# 兼容历史非数字账号（如 admin）。
+_ACCOUNT_RE = re.compile(r"\d{11}")
+
+
+def _password_policy_error(password: str) -> str | None:
+    """统一密码策略：8–20 位且同时包含字母与数字。返回错误文案或 None。
+
+    注册、改密共用；管理员建号/重置走随机临时密码，天然满足。
+    """
+    if not (8 <= len(password) <= 20):
+        return "密码长度需为 8-20 位"
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return "密码需同时包含字母和数字"
+    return None
 
 
 @sys_router.post("/users/register")
@@ -888,10 +929,11 @@ async def register(request: Request):
     if phone and not _PHONE_RE.fullmatch(phone):
         return _fail("手机号格式不正确（11 位数字）", code=400)
 
-    if not (3 <= len(username) <= 20):
-        return _fail("用户名长度需为 3-20 个字符", code=400)
-    if not (6 <= len(password) <= 20):
-        return _fail("密码长度需为 6-20 个字符", code=400)
+    if _ACCOUNT_RE.fullmatch(username) is None:
+        return _fail("账号需为 11 位数字（手机号）", code=400)
+    policy_error = _password_policy_error(password)
+    if policy_error:
+        return _fail(policy_error, code=400)
     if password != confirm:
         return _fail("两次输入的密码不一致", code=400)
     # 图形验证码：一码一用，错/对都销毁，前端需换图重填
