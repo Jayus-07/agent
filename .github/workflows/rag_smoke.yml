@@ -263,6 +263,7 @@ jobs:
             backend/tests/test_mcp_security.py \
             backend/tests/test_mcp_returnfix_acceptance.py \
             backend/tests/sql/test_sql_production_closure.py \
+            backend/tests/api/test_business_mock_failclosed.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

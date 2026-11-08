@@ -402,6 +402,8 @@ services:
     ports:
       - "127.0.0.1:8081:8081"
     environment:
+      # T7a：production 未配置该变量时 business-mock 启动期直接拒绝；本地留空
+      # 表示仅回环（127.0.0.1:8081）联调，不对外暴露。
       - INTERNAL_API_TOKEN=${INTERNAL_API_TOKEN:-}
       - CS_REFUND_WINDOW_DAYS=${CS_REFUND_WINDOW_DAYS:-30}
       - CS_REFUNDABLE_STATUSES=${CS_REFUNDABLE_STATUSES:-paid,shipped,completed}
