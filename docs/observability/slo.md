@@ -102,7 +102,7 @@ WP6 新增 9 个固定标签指标，标签只允许稳定的操作名、组件�
 | 成本明细 | `GET /observability/tokens/calls` | 每次调用的 token/成本 |
 
 抓取配置：`docker/prometheus.yml`（目标 `host.docker.internal:8000`）。
-`/metrics` 自 2026-11-08 起经 API Key 中间件保护，匿名请求返回 401；抓取方必须
+`/metrics` 自 2026-11-08 起经 API Key 中间件保护，匿名请求返回 401；抓取方可用 `X-API-Key`，Prometheus 侧用 `Authorization: Bearer`（容器启动时从 `API_KEY` 生成凭据文件，见 docker/prometheus.yml 与 commands.md）。
 携带 `X-API-Key`，Prometheus 侧需手工配置凭据（见 `docs/operations/commands.md`「观测栈」）。
 注意：TTFT/TPOT 只在 `/chat/stream` 流式请求中采样；Histogram 首次观测后才会出现在 /metrics。
 

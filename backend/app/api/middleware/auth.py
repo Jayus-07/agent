@@ -105,11 +105,23 @@ async def api_key_middleware(request: Request, call_next):
 
     # 生产模式：校验 X-API-Key（常量时间比较，防时序侧信道）
     client_key = request.headers.get("X-API-Key", "")
+    if not client_key and path == "/metrics":
+        # T8（2026-11-08）：Prometheus 的 scrape_config 只能配置标准
+        # Authorization 头，发不了自定义 X-API-Key；仅 /metrics 接受
+        # ``Authorization: Bearer <API_KEY>`` 作为等价凭据。其他路径不认，
+        # 避免把 Bearer 语义扩散到业务接口（那里 Bearer 是 JWT）。
+        authz_header = request.headers.get("authorization") or ""
+        if authz_header[:7].lower() == "bearer ":
+            client_key = authz_header[7:].strip()
     if not secrets.compare_digest(client_key.encode("utf-8"), API_KEY.encode("utf-8")):
         return JSONResponse(
             status_code=401,
             content={"error": "Unauthorized", "detail": "无效或缺失 X-API-Key"},
         )
+
+    # 指标端点只认 API Key，不需要 JWT 会话闸
+    if path == "/metrics":
+        return await call_next(request)
 
     # ── 会话闸（方案 A 纵深防御；主校验在 APISIX gateway-auth）──────────
     result = await _session_guard(request)
