@@ -144,7 +144,8 @@ def faq_conn():
 _FAQ_DDL = """
 CREATE TABLE IF NOT EXISTS ai.cs_faq (
     id          BIGSERIAL PRIMARY KEY,
-    faq_key     TEXT NOT NULL UNIQUE,
+    tenant_id   TEXT NOT NULL DEFAULT 'default',
+    faq_key     TEXT NOT NULL,
     question    TEXT NOT NULL,
     variants    TEXT NOT NULL DEFAULT '',
     answer      TEXT NOT NULL,
@@ -153,7 +154,8 @@ CREATE TABLE IF NOT EXISTS ai.cs_faq (
     valid_until TEXT,
     hit_count   INTEGER NOT NULL DEFAULT 0,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, faq_key)
 )"""
 
 # 权威=迁移 076_cs_faq_tables.sql
@@ -197,9 +199,9 @@ class FAQStore:
         # （Lock 非重入会造成首次 match 自死锁，2026-10-04 实测修复）
         self._lock = threading.RLock()
         self._ensured = False
-        self._index_built_at = 0.0
-        self._index: dict[str, FAQEntry] = {}      # 规范化问题/变体 → 条目
-        self._entries: list[tuple[FAQEntry, set[str]]] = []  # (条目, bigram集)
+        self._index_built_at: dict[str, float] = {}
+        self._indexes: dict[str, dict[str, FAQEntry]] = {}
+        self._entries_by_tenant: dict[str, list[tuple[FAQEntry, set[str]]]] = {}
 
     # ── 存储 ────────────────────────────────────────────────
 
@@ -219,37 +221,41 @@ class FAQStore:
         self, question: str, answer: str, *,
         variants: list[str] | None = None, status: str = "published",
         kb_refs: str = "", valid_until: str | None = None,
+        tenant_id: str = "default",
     ) -> int:
-        """幂等写入（faq_key=规范化问题）；返回 faq id。"""
+        """幂等写入（tenant + faq_key 唯一）；返回 faq id。"""
         self._ensure_tables()
+        tenant_id = (tenant_id or "default").strip() or "default"
         key = normalize_question(question)
         if not key:
             raise ValueError("question 规范化后为空")
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "INSERT INTO ai.cs_faq (faq_key, question, variants, answer, status, kb_refs, valid_until) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-                    "ON CONFLICT (faq_key) DO UPDATE SET question=EXCLUDED.question, "
+                    "INSERT INTO ai.cs_faq (tenant_id, faq_key, question, variants, answer, status, kb_refs, valid_until) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
+                    "ON CONFLICT (tenant_id, faq_key) DO UPDATE SET question=EXCLUDED.question, "
                     "variants=EXCLUDED.variants, answer=EXCLUDED.answer, status=EXCLUDED.status, "
                     "kb_refs=EXCLUDED.kb_refs, valid_until=EXCLUDED.valid_until, updated_at=now() "
                     "RETURNING id",
-                    (key, question, "\n".join(variants or []), answer, status,
+                    (tenant_id, key, question, "\n".join(variants or []), answer, status,
                      kb_refs, valid_until),
                 )
                 row = cur.fetchone()
         self.invalidate_index()
         return row[0]
 
-    def load_published(self) -> list[FAQEntry]:
+    def load_published(self, tenant_id: str = "default") -> list[FAQEntry]:
         self._ensure_tables()
+        tenant_id = (tenant_id or "default").strip() or "default"
         today = date.today().isoformat()
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT id, question, variants, answer, kb_refs, valid_until FROM ai.cs_faq "
-                    "WHERE status = 'published' AND (valid_until IS NULL OR valid_until = '' OR valid_until >= %s)",
-                    (today,),
+                    "WHERE tenant_id = %s AND status = 'published' "
+                    "AND (valid_until IS NULL OR valid_until = '' OR valid_until >= %s)",
+                    (tenant_id, today),
                 )
                 rows = cur.fetchall()
         out = []
@@ -301,10 +307,10 @@ class FAQStore:
     # ── 匹配索引 ────────────────────────────────────────────
 
     def invalidate_index(self) -> None:
-        self._index_built_at = 0.0
+        self._index_built_at.clear()
 
-    def _build_index(self) -> None:
-        entries = self.load_published()
+    def _build_index(self, tenant_id: str) -> None:
+        entries = self.load_published(tenant_id)
         index: dict[str, FAQEntry] = {}
         with_bigrams: list[tuple[FAQEntry, set[str]]] = []
         for e in entries:
@@ -313,26 +319,29 @@ class FAQStore:
                 if key and key not in index:
                     index[key] = e
             with_bigrams.append((e, _bigrams(e.question)))
-        self._index = index
-        self._entries = with_bigrams
-        self._index_built_at = time.monotonic()
+        self._indexes[tenant_id] = index
+        self._entries_by_tenant[tenant_id] = with_bigrams
+        self._index_built_at[tenant_id] = time.monotonic()
 
-    def _get_index(self):
-        if time.monotonic() - self._index_built_at > _INDEX_TTL_S:
+    def _get_index(self, tenant_id: str):
+        tenant_id = (tenant_id or "default").strip() or "default"
+        built_at = self._index_built_at.get(tenant_id, 0.0)
+        if time.monotonic() - built_at > _INDEX_TTL_S:
             with self._lock:
-                if time.monotonic() - self._index_built_at > _INDEX_TTL_S:
-                    self._build_index()
-        return self._index, self._entries
+                if time.monotonic() - self._index_built_at.get(tenant_id, 0.0) > _INDEX_TTL_S:
+                    self._build_index(tenant_id)
+        return self._indexes.setdefault(tenant_id, {}), self._entries_by_tenant.setdefault(tenant_id, [])
 
-    def match(self, question: str) -> FAQMatch | None:
+    def match(self, question: str, tenant_id: str = "default") -> FAQMatch | None:
         """FAQ 精准匹配：规范化精确（question/variants）→ bigram Jaccard。
 
-        未命中返回 None（调用方落回 RAG 链）。
+        未命中返回 None（调用方落回 RAG 链）。按租户隔离索引与命中统计。
         """
         if not question or not question.strip():
             return None
+        tenant_id = (tenant_id or "default").strip() or "default"
         t0 = time.monotonic()
-        index, entries = self._get_index()
+        index, entries = self._get_index(tenant_id)
         norm = normalize_question(question)
 
         matched: FAQMatch | None = None
@@ -361,7 +370,8 @@ class FAQStore:
         return matched
 
     def match_candidates(self, question: str, k: int = 2,
-                         min_score: float = 0.30) -> list[FAQMatch]:
+                         min_score: float = 0.30,
+                         tenant_id: str = "default") -> list[FAQMatch]:
         """拒答自救候选（任务卡 V4）：返回 top-k 相似条目，供「您是不是想问」。
 
         与 match() 同索引同打分、只放低阈值（主匹配 0.42 / 推荐 0.30）；
@@ -370,7 +380,8 @@ class FAQStore:
         """
         if not question or not question.strip():
             return []
-        index, entries = self._get_index()
+        tenant_id = (tenant_id or "default").strip() or "default"
+        index, entries = self._get_index(tenant_id)
         if normalize_question(question) in index:
             return []
         q_bigrams = _bigrams(question)
@@ -386,7 +397,8 @@ class FAQStore:
         ]
 
     def search(self, question: str, k: int = 5,
-               min_score: float = 0.30) -> list[dict]:
+               min_score: float = 0.30,
+               tenant_id: str = "default") -> list[dict]:
         """坐席知识检索（P7）：只读命中清单（精确+模糊），零台账零 hit 计数。
 
         与 match()（问答主链，会落台账）和 match_candidates()（拒答自救，
@@ -395,7 +407,7 @@ class FAQStore:
         """
         if not question or not question.strip():
             return []
-        index, entries = self._get_index()
+        index, entries = self._get_index(tenant_id)
         norm = normalize_question(question)
         results: list[dict] = []
         exact = index.get(norm)

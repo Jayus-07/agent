@@ -442,7 +442,22 @@ def test_faq_draft_idempotent_and_not_published(db, agent_client):
     assert status == "draft"
     assert "p7t" in kb_refs
     # 草稿不进线上
-    assert get_faq_store().match("p7t-发票怎么开") is None
+    assert get_faq_store().match("p7t-发票怎么开", tenant_id=TENANT) is None
+
+
+def test_faq_tenant_isolation_same_question(db, agent_client):
+    """同一问题在两个租户各自有答案时，命中不串租户（2026-11-09 审计）。"""
+    from backend.customer_service.faq import get_faq_store
+
+    store = get_faq_store()
+    store.upsert_faq("p7t-租户隔离问题", "A租户答案", tenant_id=TENANT)
+    store.upsert_faq("p7t-租户隔离问题", "B租户答案", tenant_id=TENANT_OTHER)
+
+    a = store.match("p7t-租户隔离问题", tenant_id=TENANT)
+    b = store.match("p7t-租户隔离问题", tenant_id=TENANT_OTHER)
+    assert a is not None and a.answer == "A租户答案"
+    assert b is not None and b.answer == "B租户答案"
+    assert store.match("p7t-租户隔离问题", tenant_id="tenant-unknown") is None
 
 
 def test_knowledge_search_hits_without_ledger(db, agent_client):
@@ -451,6 +466,7 @@ def test_knowledge_search_hits_without_ledger(db, agent_client):
     store = get_faq_store()
     store.upsert_faq(
         "p7t-运费险怎么使用", "在订单页申请退货运费理赔。", status="published",
+        tenant_id=TENANT,
     )
     with _pg() as conn, conn.cursor() as cur:
         cur.execute("SELECT count(*) FROM ai.cs_faq_query_log")
