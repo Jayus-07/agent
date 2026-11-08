@@ -251,6 +251,7 @@ jobs:
             backend/tests/travel/test_tool_governance.py \
             backend/tests/test_auth_middleware.py \
             backend/tests/api/test_auth_policy_and_json.py \
+            backend/tests/api/test_observability_unauth_closure.py \
             backend/tests/api/test_api_keys.py \
             backend/tests/api/test_apisix_b4_direct_routes.py \
             backend/tests/api/test_cs_ops_stats.py \

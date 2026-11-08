@@ -9,9 +9,15 @@ GET /capabilities  列出 capability 路由清单 + workflow + Skill 注册情�
 对账字段 registered：manifest 声明了但 Skill 注册表没有 = False（漂移信号，
 正常应恒为 True——不一致会被 test_registry_consistency 在 CI 拦下）。
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter(prefix="/capabilities", tags=["Capabilities"])
+from backend.app.api.deps import require_user_actor
+
+router = APIRouter(
+    prefix="/capabilities",
+    tags=["Capabilities"],
+    dependencies=[Depends(require_user_actor)],
+)
 
 
 @router.get("")
