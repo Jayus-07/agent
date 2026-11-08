@@ -228,6 +228,7 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/139_cs_invoice_action_type.sql",
     "backend/sql/migrations/140_selection_funnel_tenant.sql",
     "backend/sql/migrations/141_api_keys.sql",
+    "backend/sql/migrations/142_cs_faq_tenant.sql",
 })
 
 

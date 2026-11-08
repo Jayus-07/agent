@@ -90,7 +90,7 @@ class CSKnowledgeService:
             faq_t0 = time.monotonic()
             try:
                 from backend.customer_service.faq import get_faq_store
-                faq = get_faq_store().match(question)
+                faq = get_faq_store().match(question, tenant_id=tenant_id or "default")
             except Exception as faq_err:
                 logger.warning(
                     f"[CSKnowledge] FAQ 层故障（降级走 RAG 链）: {faq_err}"
@@ -259,7 +259,8 @@ def _build_refusal_reply(
     if include_faq_candidates:
         try:
             from backend.customer_service.faq import get_faq_store
-            candidates = get_faq_store().match_candidates(question, k=2)
+            candidates = get_faq_store().match_candidates(
+                question, k=2, tenant_id=tenant_id or "default")
         except Exception:
             candidates = []
     if candidates:

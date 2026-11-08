@@ -161,6 +161,7 @@ async def create_faq_draft(
         "（草稿）待知识运营补充答案。",
         variants=variants,
         status="draft",
+        tenant_id=context.tenant_id or "default",
         kb_refs=f"cs-knowledge-gap:{context.tenant_id}",
     )
     from backend.customer_service.faq import normalize_question
@@ -235,7 +236,8 @@ async def knowledge_search(
     query = q.strip()
     if not query:
         raise HTTPException(422, detail="检索词不能为空")
-    results = get_faq_store().search(query, k=5, min_score=0.30)
+    results = get_faq_store().search(
+        query, k=5, min_score=0.30, tenant_id=context.tenant_id or "default")
     items = [
         SearchItem(
             question=item["question"],
