@@ -39,6 +39,11 @@ nginx_config:
     access_log: /dev/stdout
     access_log_format: '{"time":"$time_iso8601","client_ip":"$remote_addr","user_id":"$http_x_user_id","auth_type":"$http_x_auth_type","trace_id":"$http_x_trace_id","method":"$request_method","uri":"$uri","query":"$args","status":$status,"bytes":$body_bytes_sent,"duration":$request_time,"upstream_time":"$upstream_response_time","ua":"$http_user_agent"}'
     access_log_format_escape: json
+    # 2026-11-08 安全审计（T6）：全局请求体硬上限。此前仓库与 APISIX 均无
+    # 上限，nginx 会先完整收包再转上游。64m > RAG 单文件 50MB（含 multipart
+    # 余量）；更小的端点上限由 apisix.yaml 的 client-control 按路由收紧。
+    # nginx 按实际收包字节计数，chunked 请求同样生效。
+    client_max_body_size: 64m
 
 apisix:
   # 自研插件：容器内挂载为 custom_plugins/apisix/plugins/*.lua，
@@ -56,6 +61,8 @@ plugins:
   - limit-conn
   - limit-count
   - gateway-access-log
+  # 2026-11-08 T6：按路由收紧请求体上限（webhook 回调 1MB）
+  - client-control
 
 # Prometheus 导出服务：默认绑定容器内 127.0.0.1，Prometheus 容器跨网络够不着
 # （GAP 实测 9091 在听但对 agent-net 不可达）。改绑 0.0.0.0——compose 未发布

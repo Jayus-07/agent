@@ -147,6 +147,26 @@ async function proxy(
   if (clientIp) headers.set("X-Client-IP", clientIp);
 
   const method = req.method;
+  // T6（2026-11-08 安全审计）：带 Content-Length 的请求在 arrayBuffer()
+  // 整体读入内存前先做上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。
+  const maxBodyBytes = Number(
+    process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024,
+  );
+  const declaredLength = Number(req.headers.get("content-length") || "0");
+  if (
+    method !== "GET" &&
+    method !== "HEAD" &&
+    Number.isFinite(declaredLength) &&
+    declaredLength > maxBodyBytes
+  ) {
+    return Response.json(
+      {
+        error: "PayloadTooLarge",
+        message: `请求体超过上限（${maxBodyBytes} bytes）`,
+      },
+      { status: 413 },
+    );
+  }
   const body =
     method === "GET" || method === "HEAD"
       ? undefined
