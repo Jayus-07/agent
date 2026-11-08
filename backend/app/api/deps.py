@@ -302,27 +302,40 @@ async def resolve_operator_role(request: Request) -> OperatorIdentity:
 # 本依赖是收敛后的唯一实现，新敏感端点一律挂它。
 #
 # 灰度开关 SENSITIVE_API_GUARD_MODE（与 observability 既有开关同源）：
-#   audit   —— 规则生效但仅记日志不拦截（灰度观察 1-2 周）
+#   audit   —— 只对**只读**请求（GET/HEAD/OPTIONS）放宽 kind/角色判定并记
+#              日志；写操作与管理动作照常 enforce（2026-11-08 安全审计修复
+#              sensitive-api-guard.audit-non-admin-bypass，此前整体降级为
+#              warning 放行，切到 audit 即可成为后门）
 #   enforce —— 拦截 service 身份请求，403
 # 切换方式：.env 设 SENSITIVE_API_GUARD_MODE=enforce 后重启 app 容器。
+
+#: audit 灰度唯一认可的只读方法。POST 查询类端点（如 RAG search）在 audit
+#: 下也按写操作处理——宁严勿松，避免靠路径白名单再次打开旁路。
+_READ_ONLY_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
+def is_read_only_request(request: Request) -> bool:
+    """audit 灰度旁路的唯一读写判定（GET/HEAD/OPTIONS = 只读）。"""
+    return (getattr(request, "method", "") or "").upper() in _READ_ONLY_METHODS
 
 
 async def require_user_actor(request: Request):
     """敏感端点统一依赖：仅允许 actor.kind == "user"（JWT 通道）通过。
 
     不限角色——角色门槛（如 admin）由调用方在本依赖之后叠加判断
-    （operator.role）。audit 模式放行 service 请求但记 warning，
-    enforce 模式 403（错误体与 observability 既有守卫同构）。
+    （operator.role）。audit 模式仅对只读请求放行 service 身份并记
+    warning；写请求仍 403。enforce 模式一律 403。
     """
     ident = await resolve_operator_role(request)
     if ident.kind == "user":
         return ident
     # 2026-09-16 动态化：DB 覆盖层（免重启）→ env 兜底，见 services/sys_config.py
     mode = get_mode("SENSITIVE_API_GUARD_MODE")
-    if mode == "audit":
+    if mode == "audit" and is_read_only_request(request):
         logger.warning(
-            "[SensitiveGuard] audit 放行 service 身份访问敏感端点: "
-            f"actor={ident.actor} role={ident.role}"
+            "[SensitiveGuard] audit 放行 service 身份只读访问敏感端点: "
+            f"actor={ident.actor} role={ident.role} "
+            f"method={request.method} path={request.url.path}"
         )
         return ident
     raise HTTPException(
@@ -374,18 +387,20 @@ async def require_admin_user(request: Request):
 
     语义与 observability.require_admin_operator 等价，作为收敛后的
     统一实现提供；observability 迁移本依赖前两者并存（行为一致）。
-    kind 门槛由 require_user_actor 处理（audit 下会先记一次 service
-    放行日志），这里只叠加角色判定。
+    kind 门槛由 require_user_actor 处理（audit 下只对只读请求放行
+    service 身份），这里只叠加角色判定；角色判定在 audit 下同样只对
+    只读请求放宽。
     """
     ident = await require_user_actor(request)
     if is_platform_admin(ident.role):
         return ident
     # 2026-09-16 动态化：DB 覆盖层（免重启）→ env 兜底，见 services/sys_config.py
     mode = get_mode("SENSITIVE_API_GUARD_MODE")
-    if mode == "audit":
+    if mode == "audit" and is_read_only_request(request):
         logger.warning(
-            "[SensitiveGuard] audit 放行非管理员访问敏感端点: "
-            f"actor={ident.actor} role={ident.role}"
+            "[SensitiveGuard] audit 放行非管理员只读访问敏感端点: "
+            f"actor={ident.actor} role={ident.role} "
+            f"method={request.method} path={request.url.path}"
         )
         return ident
     # M9：权限拒绝旁路落 security_events（此前零记录；软失败）
@@ -421,10 +436,11 @@ async def require_editor_user(request: Request):
     ident = await require_user_actor(request)
     if _ROLE_RANK.get(ident.role, -1) >= _ROLE_RANK["editor"]:
         return ident
-    if get_mode("SENSITIVE_API_GUARD_MODE") == "audit":
+    if get_mode("SENSITIVE_API_GUARD_MODE") == "audit" and is_read_only_request(request):
         logger.warning(
-            "[SensitiveGuard] audit 放行低角色访问 editor 端点: "
-            f"actor={ident.actor} role={ident.role}"
+            "[SensitiveGuard] audit 放行低角色只读访问 editor 端点: "
+            f"actor={ident.actor} role={ident.role} "
+            f"method={request.method} path={request.url.path}"
         )
         return ident
     raise HTTPException(

@@ -72,7 +72,10 @@ _SWITCHES: dict[str, dict[str, Any]] = {
     "SENSITIVE_API_GUARD_MODE": {
         "allowed": ("audit", "enforce"),
         "default": "enforce",
-        "desc": "敏感端点统一守卫（require_user_actor / require_admin_user）处置模式",
+        "desc": (
+            "敏感端点统一守卫处置模式：audit 只放宽只读请求（GET/HEAD/"
+            "OPTIONS），写操作与管理动作仍 enforce；enforce 全部拦截 service 身份"
+        ),
     },
     "CS_DISPATCH_ROLLOUT_PERCENT": {
         "validator": lambda v: v.isdigit() and 0 <= int(v) <= 100,
