@@ -8,7 +8,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse  # 2026-08-11 /ops 看板路由需要
 
 from backend.app.api.router import api_router
 from backend.infra.async_utils import spawn_background_task
@@ -626,108 +625,6 @@ async def eager_init_lifecycle_scan():
     threading.Thread(target=_scan, daemon=True, name="lifecycle-scan").start()
 
 
-# ═══════════════════════════════════════════════════
-# /ops 运营指标看板（HTML 自建，2026-08-11）
-# ═══════════════════════════════════════════════════
-_OPS_DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>RAG 运营指标看板</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, "Segoe UI", sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; }
-  h1 { margin-bottom: 24px; font-size: 24px; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
-  .card { background: #1e293b; border-radius: 12px; padding: 20px; border: 1px solid #334155; }
-  .card h2 { font-size: 14px; color: #94a3b8; margin-bottom: 12px; font-weight: 500; }
-  .value { font-size: 36px; font-weight: 700; margin-bottom: 8px; }
-  .threshold { font-size: 12px; color: #64748b; }
-  .ok { color: #22c55e; }
-  .warn { color: #eab308; }
-  .bad { color: #ef4444; }
-  .refresh { margin-bottom: 16px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer; }
-</style>
-</head>
-<body>
-<h1>📊 RAG 运营指标看板</h1>
-<button class="refresh" onclick="loadMetrics()">🔄 刷新</button>
-<div class="grid" id="metrics">
-  <div class="card"><h2>加载中...</h2></div>
-</div>
-<script>
-async function loadMetrics() {
-  try {
-    const res = await fetch('/metrics');
-    const text = await res.text();
-    const metrics = parseMetrics(text);
-    render(metrics);
-  } catch (e) {
-    document.getElementById('metrics').innerHTML = '<div class="card">加载失败: ' + e + '</div>';
-  }
-}
-
-function parseMetrics(text) {
-  const out = {};
-  text.split('\\n').forEach(line => {
-    if (!line.startsWith('rag_') && !line.startsWith('feedback_') && !line.startsWith('doc_metadata_')) return;
-    const m = line.match(/^(\\w+)\\s+([\\d.]+)$/);
-    if (m) out[m[1]] = parseFloat(m[2]);
-  });
-  return out;
-}
-
-function render(m) {
-  const grid = document.getElementById('metrics');
-  grid.innerHTML = `
-    <div class="card">
-      <h2>RAG 命中率</h2>
-      <div class="value ${ok(m.rag_hit_rate, 0.7)}">${pct(m.rag_hit_rate)}</div>
-      <div class="threshold">阈值: > 70%</div>
-    </div>
-    <div class="card">
-      <h2>RAG 拒答率</h2>
-      <div class="value ${warn(m.rag_reject_rate, 0.3)}">${pct(m.rag_reject_rate)}</div>
-      <div class="threshold">阈值: < 30%</div>
-    </div>
-    <div class="card">
-      <h2>文档 metadata 完整度</h2>
-      <div class="value ${ok(m.doc_metadata_coverage, 0.8)}">${pct(m.doc_metadata_coverage)}</div>
-      <div class="threshold">阈值: > 80%</div>
-    </div>
-    <div class="card">
-      <h2>用户反馈 👍 比例</h2>
-      <div class="value ${ok(m.feedback_positive_rate, 0.7)}">${pct(m.feedback_positive_rate)}</div>
-      <div class="threshold">阈值: > 70%</div>
-    </div>
-    <div class="card">
-      <h2>RAG 查询总数</h2>
-      <div class="value">${m.rag_query_total ?? 0}</div>
-      <div class="threshold">累计</div>
-    </div>
-    <div class="card">
-      <h2>用户反馈总数</h2>
-      <div class="value">${m.feedback_total ?? 0}</div>
-      <div class="threshold">累计</div>
-    </div>
-  `;
-}
-
-function pct(v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; }
-function ok(v, t) { return v == null ? '' : (v >= t ? 'ok' : 'bad'); }
-function warn(v, t) { return v == null ? '' : (v < t ? 'ok' : 'bad'); }
-
-loadMetrics();
-setInterval(loadMetrics, 10000);
-</script>
-</body>
-</html>"""
-
-
-@app.get("/ops", response_class=HTMLResponse)
-async def ops_dashboard():
-    """RAG 运营指标看板（HTML 自建，2026-08-11）。"""
-    return _OPS_DASHBOARD_HTML
 
 
 # ═══════════════════════════════════════════════════

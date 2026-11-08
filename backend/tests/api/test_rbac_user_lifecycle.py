@@ -112,7 +112,7 @@ def test_user_lifecycle_end_to_end(monkeypatch):
     # 进程内注入测试密钥，本地与 .env 同语义覆盖。
     monkeypatch.setenv("JWT_SECRET", "ci-test-jwt-secret-0123456789abcdef")
     client = _client(monkeypatch)
-    prefix = f"p6lc{uuid.uuid4().hex[:8]}"
+    prefix = f"ops_p6{uuid.uuid4().hex[:6]}"
     username = f"{prefix}a"
     _seed_tenant_department("general")
     try:
