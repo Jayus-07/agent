@@ -35,6 +35,10 @@ def _build_app() -> FastAPI:
     async def chat():
         return {"ok": True}
 
+    @app.post("/webhooks/automations/t/a")
+    async def webhook():
+        return {"ok": True}
+
     app.middleware("http")(api_key_middleware)
     return app
 
@@ -164,3 +168,27 @@ class TestMetricsAuth:
         resp = client.get("/metrics")
         assert resp.status_code == 503
         assert resp.json()["error"] == "AuthNotConfigured"
+
+
+class TestWebhookAuthChain:
+    """2026-11-08 审计（T7b）：外部回调与 APISIX 豁免口径对齐。
+
+    APISIX 的 automations-webhook 路由不挂 gateway-auth；调用方是外部系统，
+    身份由应用层每自动化 HMAC 签名承担。平台 API Key 不能作为额外门槛。
+    """
+
+    def test_webhook_does_not_require_api_key(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        assert client.post("/webhooks/automations/t/a").status_code == 200
+        # 带错误 Key 也不影响（本层不消费该头；HMAC 在路由内校验）
+        assert client.post(
+            "/webhooks/automations/t/a", headers={"X-API-Key": "wrong"}
+        ).status_code == 200
+
+    def test_non_webhook_post_still_requires_key(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        assert client.post("/chat").status_code == 401

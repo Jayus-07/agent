@@ -45,6 +45,11 @@ _SKIP_AUTH_PREFIXES = (
     # 请求带不了凭据；文件名含 8 位 hex 不可枚举（capability URL），网关侧
     # 已按 /api/report-files/* 白名单放行并限流，本层同步豁免 X-API-Key。
     "/report-files",
+    # 外部自动化回调（2026-11-08 T7b）：APISIX 该路由不挂 gateway-auth，
+    # 调用方是外部系统。认证只在应用层 = 每自动化独立 HMAC 签名 + 路径
+    # 租户绑定（automations.py）；平台 API Key 不代表调用方身份，不能再
+    # 作为第二道门槛（否则外部系统要么绕过签名、要么必须持有全平台 Key）。
+    "/webhooks",
 )
 
 # 精确匹配豁免（绝不能进 _SKIP_AUTH_PREFIXES：那里的 startswith 语义
