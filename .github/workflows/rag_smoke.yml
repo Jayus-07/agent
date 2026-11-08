@@ -249,6 +249,13 @@ jobs:
             backend/tests/travel/test_amap_poi_provider.py \
             backend/tests/travel/test_lodging_expert.py \
             backend/tests/travel/test_tool_governance.py \
+            backend/tests/test_auth_middleware.py \
+            backend/tests/api/test_apisix_b4_direct_routes.py \
+            backend/tests/api/test_cs_ops_stats.py \
+            backend/tests/api/test_cs_admin_claim_regression.py \
+            backend/tests/api/test_cs_admin_close_tenant_regression.py \
+            backend/tests/api/test_auth_session_family.py::test_security_sessions_tenant_scope \
+            backend/tests/api/test_rbac_user_lifecycle.py::test_user_lifecycle_end_to_end \
             -q --no-cov
 
       - name: Declare skipped real-API scope
