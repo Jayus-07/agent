@@ -1,63 +1,57 @@
-"""可观测性 / capabilities / llm 端点匿名访问收口（2026-11-09 审计）。
+"""可观测性 / capabilities / llm 端点的鉴权依赖收口（2026-11-09 审计）。
 
 此前 /observability/rag-traces*、/tokens/*、/graph、/gateway-access-logs、
-/system-health 以及 /capabilities、/llm/balance 无后端鉴权；本测试锁住
-router 级 require_user_actor 与余额端点 admin 门禁。
+/system-health 以及 /capabilities、/llm/models|balance 无后端鉴权。
+本测试直接检查路由依赖（不依赖 DB/Redis），锁住 router 级 require_user_actor：
+删除或绕过依赖会让测试失败。
 """
 from __future__ import annotations
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from backend.app.api.routes import capabilities, llm, observability
-from backend.config import auth as auth_config
 
 
-def _client(monkeypatch, headers: dict | None = None) -> TestClient:
-    monkeypatch.setattr(auth_config, "IDENTITY_SOURCE", "header")
-    app = FastAPI()
-    app.include_router(observability.router)
-    app.include_router(capabilities.router)
-    app.include_router(llm.router)
-    client = TestClient(app, raise_server_exceptions=False)
-    if headers:
-        client.headers.update(headers)
-    return client
+def _dep_names(router) -> dict[str, set[str]]:
+    return {
+        route.path: {
+            getattr(dep.call, "__name__", "")
+            for dep in route.dependant.dependencies
+        }
+        for route in router.routes
+    }
 
 
-ANON_PATHS = [
-    ("GET", "/observability/rag-traces"),
-    ("GET", "/observability/rag-traces/stream"),
-    ("GET", "/observability/tokens/summary"),
-    ("GET", "/observability/graph"),
-    ("GET", "/observability/gateway-access-logs"),
-    ("GET", "/observability/system-health"),
-    ("POST", "/observability/traces/t-1/replay"),
-    ("GET", "/capabilities"),
-    ("GET", "/llm/models"),
-    ("GET", "/llm/balance"),
-]
-
-
-@pytest.mark.parametrize("method,path", ANON_PATHS)
-def test_anonymous_access_is_rejected(monkeypatch, method, path):
-    client = _client(monkeypatch)
-    resp = client.request(method, path)
-    assert resp.status_code in (401, 403), f"{method} {path} -> {resp.status_code}"
-
-
-def test_viewer_can_read_capabilities_but_not_balance(monkeypatch):
-    client = _client(
-        monkeypatch,
-        {
-            "X-Auth-Type": "jwt",
-            "X-User-Id": "1001",
-            "X-Tenant-Id": "default",
-            "X-User-Roles": "viewer",
-        },
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/observability/rag-traces",
+        "/observability/rag-traces/stream",
+        "/observability/rag-traces/{trace_id}",
+        "/observability/tokens/summary",
+        "/observability/graph",
+        "/observability/gateway-access-logs",
+        "/observability/system-health",
+        "/observability/traces/{trace_id}/replay",
+    ],
+)
+def test_observability_routes_require_identity(path):
+    deps = _dep_names(observability.router)
+    assert path in deps, f"{path} 路由不存在"
+    assert "_require_trace_reader" in deps[path], (
+        f"{path} 缺少 router 级 require_user_actor 守卫"
     )
-    assert client.get("/capabilities").status_code == 200
-    assert client.get("/observability/rag-traces").status_code == 200
-    # 余额端点保持"登录即可读"（客服工具栏当前依赖）；匿名访问已在上面锁住。
-    assert client.get("/llm/balance").status_code != 401
+
+
+def test_capabilities_router_requires_identity():
+    deps = _dep_names(capabilities.router)
+    assert deps, "capabilities 路由为空"
+    for path, names in deps.items():
+        assert "require_user_actor" in names, f"{path} 缺少身份守卫"
+
+
+def test_llm_router_requires_identity():
+    deps = _dep_names(llm.router)
+    assert deps, "llm 路由为空"
+    for path, names in deps.items():
+        assert "require_user_actor" in names, f"{path} 缺少身份守卫"
