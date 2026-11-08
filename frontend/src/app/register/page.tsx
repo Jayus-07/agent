@@ -26,6 +26,43 @@ const FOG: [string, string, string, string] = [
   "radial-gradient(circle at 8% 92%, rgba(200,225,205,0.6), transparent 70%)",
 ];
 
+// 随机体验账号（2026-11-09）：用 Web Crypto 生成，非真实手机号、不可找回。
+const LOWER = "abcdefghjkmnpqrstuvwxyz";
+const UPPER = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+const DIGITS = "23456789";
+const ALL_CHARS = LOWER + UPPER + DIGITS;
+
+function randomBelow(n: number): number {
+  const limit = Math.floor(0xffffffff / n) * n;
+  const buf = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(buf);
+  } while (buf[0] >= limit);
+  return buf[0] % n;
+}
+
+function generateAccount(): string {
+  let out = String(1 + randomBelow(9));
+  for (let i = 0; i < 10; i += 1) out += String(randomBelow(10));
+  return out;
+}
+
+function generatePassword(length = 14): string {
+  const chars = [
+    LOWER[randomBelow(LOWER.length)],
+    UPPER[randomBelow(UPPER.length)],
+    DIGITS[randomBelow(DIGITS.length)],
+  ];
+  while (chars.length < length) {
+    chars.push(ALL_CHARS[randomBelow(ALL_CHARS.length)]);
+  }
+  for (let i = chars.length - 1; i > 0; i -= 1) {
+    const j = randomBelow(i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
+
 function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -44,6 +81,31 @@ function RegisterForm() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
+  const [generated, setGenerated] = useState<{ account: string; password: string } | null>(null);
+  const [copyHint, setCopyHint] = useState("");
+
+  const handleGenerate = () => {
+    const account = generateAccount();
+    const pwd = generatePassword();
+    setPhone(account);
+    setPassword(pwd);
+    setConfirm(pwd);
+    setGenerated({ account, password: pwd });
+    setCopyHint("");
+    setError("");
+  };
+
+  const copyGenerated = async () => {
+    if (!generated) return;
+    try {
+      await navigator.clipboard.writeText(
+        `账号：${generated.account}\n密码：${generated.password}`,
+      );
+      setCopyHint("已复制");
+    } catch {
+      setCopyHint("复制失败，请手动记录");
+    }
+  };
 
   // 图形验证码（2026-10-07）：4 位纯数字，一码一用——提交后无论对错都换图
   const [captcha, setCaptcha] = useState<RegisterCaptcha | null>(null);
@@ -125,7 +187,14 @@ function RegisterForm() {
       setPendingLoginCredentials(phone.trim(), password);
       router.replace(`${loginHref}&registered=1`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "注册失败，请稍后重试");
+      const message = err instanceof Error ? err.message : "注册失败，请稍后重试";
+      if (generated && message.includes("已存在")) {
+        handleGenerate();
+        setError("账号已被占用，已重新生成，请再试一次");
+        setLoading(false);
+        return;
+      }
+      setError(message);
       setLoading(false);
     }
   };
@@ -197,8 +266,18 @@ function RegisterForm() {
             autoComplete="username"
             placeholder="请输入 11 位数字账号"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => { setPhone(e.target.value); setGenerated(null); }}
           />
+          <div className="flex items-center justify-between text-[12px]">
+            <span className="text-[#98A29D]">没有手机号？</span>
+            <button
+              type="button"
+              onClick={handleGenerate}
+              className="font-medium text-[#1F7A4D] underline-offset-2 hover:underline"
+            >
+              随机生成体验账号
+            </button>
+          </div>
           <AuthInput
             label="设置密码"
             accent={ACCENT}
@@ -207,7 +286,7 @@ function RegisterForm() {
             autoComplete="new-password"
             placeholder="8-20 位，需包含字母与数字"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            onChange={(e) => { setPassword(e.target.value); setGenerated(null); }}
           />
           <AuthInput
             label="确认密码"
@@ -217,9 +296,27 @@ function RegisterForm() {
             autoComplete="new-password"
             placeholder="请再次输入密码"
             value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
+            onChange={(e) => { setConfirm(e.target.value); setGenerated(null); }}
           />
         </div>
+
+        {generated && (
+          <div className="mt-4 rounded-xl border border-[#EAD7A5] bg-[#FDF8E9] px-3.5 py-3 text-[12px] leading-5 text-[#6B5320]">
+            <p className="font-medium">
+              已生成随机体验账号（非真实手机号，无法接收短信或找回），请立即保存。
+            </p>
+            <p className="mt-1 break-all">账号：{generated.account}</p>
+            <p className="break-all">密码：{generated.password}</p>
+            <button
+              type="button"
+              onClick={() => void copyGenerated()}
+              className="mt-1.5 font-medium text-[#1F7A4D] underline-offset-2 hover:underline"
+            >
+              复制账号和密码
+            </button>
+            {copyHint && <span className="ml-2 text-[#5C6662]">{copyHint}</span>}
+          </div>
+        )}
 
         {/* 图形验证码（2026-10-07）：4 位纯数字，点图/刷新按钮换一张，
             inputmode=numeric 让手机直弹数字键盘 */}
