@@ -27,12 +27,14 @@ from backend.config import ALLOW_UNAUTHENTICATED, API_KEY, ENVIRONMENT
 from backend.shared.logger import logger
 
 # 不需要认证的路径
+# 注意：/metrics 不在此清单（2026-11-08 安全审计 confirmed-low
+# server.metrics-outside-auth-middleware）：运营指标含业务量与成本数据，
+# 统一由本中间件的 X-API-Key 校验保护，不再对匿名请求开放。
 _SKIP_AUTH_PREFIXES = (
     "/health",
     "/docs",
     "/redoc",
     "/openapi.json",
-    "/metrics",
     # 服务间内部端点：不走 API Key，由 internal_ai.py 的
     # verify_internal_token 依赖校验 X-Internal-Token
     "/internal",
@@ -59,7 +61,7 @@ async def api_key_middleware(request: Request, call_next):
     """
     path = request.url.path
 
-    # 跳过系统端点（健康检查、文档、metrics、服务首页）
+    # 跳过系统端点（健康检查、文档、服务首页）；metrics 走正常校验
     if path in _EXACT_SKIP_AUTH or path in _SKIP_AUTH_PREFIXES or any(
         path.startswith(prefix) for prefix in _SKIP_AUTH_PREFIXES
     ):

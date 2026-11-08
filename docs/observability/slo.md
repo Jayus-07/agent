@@ -96,12 +96,14 @@ WP6 新增 9 个固定标签指标，标签只允许稳定的操作名、组件�
 
 | 方式 | 入口 | 适用 |
 |---|---|---|
-| 原始值 | `curl http://localhost:8000/metrics` | 快速确认指标存在 |
+| 原始值 | `curl -H "X-API-Key: $API_KEY" http://localhost:8000/metrics` | 快速确认指标存在 |
 | 曲线/告警 | Prometheus `http://localhost:9090`（`docker compose --profile observability up -d prometheus grafana`） | 查 recording rules、看 Alert 页签 |
 | 看板 | Grafana `http://localhost:3001`（数据源已自动装配） | 长期趋势 |
 | 成本明细 | `GET /observability/tokens/calls` | 每次调用的 token/成本 |
 
 抓取配置：`docker/prometheus.yml`（目标 `host.docker.internal:8000`）。
+`/metrics` 自 2026-11-08 起经 API Key 中间件保护，匿名请求返回 401；抓取方必须
+携带 `X-API-Key`，Prometheus 侧需手工配置凭据（见 `docs/operations/commands.md`「观测栈」）。
 注意：TTFT/TPOT 只在 `/chat/stream` 流式请求中采样；Histogram 首次观测后才会出现在 /metrics。
 
 ## 9. Grafana 看板维护与验收入口

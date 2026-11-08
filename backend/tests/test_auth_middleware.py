@@ -4,7 +4,8 @@
 1. 未配置 API_KEY 且未豁免 → 业务端点 503（不再静默放行）
 2. 未配置 API_KEY 但 ALLOW_UNAUTHENTICATED=true → 放行
 3. 配置了 API_KEY → 无/错 Key 返回 401，正确 Key 放行
-4. /health、/metrics 等系统端点不受认证影响
+4. /health 等系统端点不受认证影响；/metrics 自 2026-11-08 安全审计修复起
+   必须携带 X-API-Key（server.metrics-outside-auth-middleware）
 5. 比较使用常量时间（secrets.compare_digest）
 """
 from __future__ import annotations
@@ -74,13 +75,12 @@ class TestFailClosed:
         assert resp.status_code == 503
         assert resp.json()["error"] == "AuthNotConfigured"
 
-    def test_system_endpoints_bypass_auth(self, auth_env):
-        """健康检查与 metrics 不受认证影响（供探活/抓取）"""
+    def test_health_endpoint_bypasses_auth(self, auth_env):
+        """健康检查不受认证影响（供容器 healthcheck/探活）"""
         auth_env(api_key="", allow_unauth="false")
         client = TestClient(_build_app())
 
         assert client.get("/health").status_code == 200
-        assert client.get("/metrics").status_code == 200
 
     def test_explicit_allow_unauthenticated_passes(self, auth_env):
         auth_env(api_key="", allow_unauth="true")
@@ -126,3 +126,41 @@ class TestApiKeyValidation:
         assert client.get("/chat").status_code == 401
         resp = client.get("/chat", headers={"X-API-Key": "wrong"})
         assert resp.status_code == 401
+
+
+class TestMetricsAuth:
+    """2026-11-08 安全审计修复：/metrics 不再豁免 API Key。
+
+    指纹 server.metrics-outside-auth-middleware（confirmed-low）：
+    修复前无凭据 GET /metrics 返回 200，暴露运营指标。
+    """
+
+    def test_metrics_without_key_returns_401(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        resp = client.get("/metrics")
+        assert resp.status_code == 401
+        assert resp.json()["error"] == "Unauthorized"
+
+    def test_metrics_with_wrong_key_returns_401(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        assert client.get("/metrics", headers={"X-API-Key": "wrong"}).status_code == 401
+
+    def test_metrics_with_valid_key_returns_200(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        resp = client.get("/metrics", headers={"X-API-Key": "secret-key-123"})
+        assert resp.status_code == 200
+
+    def test_metrics_fail_closed_when_key_unconfigured(self, auth_env):
+        """未配置 API_KEY 时与业务端点同口径 fail-closed（503，不再静默放行）"""
+        auth_env(api_key="", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        resp = client.get("/metrics")
+        assert resp.status_code == 503
+        assert resp.json()["error"] == "AuthNotConfigured"

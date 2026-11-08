@@ -113,9 +113,11 @@ async def root_index():
     })
 
 # ── Prometheus /metrics 端点（PR-0.3）────────────────
+# 认证：经统一 API Key 中间件（X-API-Key，fail-closed）；抓取方需携带凭据，
+# 见 docker/prometheus.yml 顶部说明。
 @app.get("/metrics", include_in_schema=False)
 async def metrics_endpoint():
-    """Prometheus 拉取端点 — 不受 auth / CORS 限制（K8s scrape）。"""
+    """Prometheus 拉取端点 — 受 API Key 中间件保护（2026-11-08 审计修复）。"""
     from fastapi.responses import Response
     # P1-8: 抓取时刷新熔断器状态 Gauge（LLMCircuitBreakerOpen 告警数据源）
     try:

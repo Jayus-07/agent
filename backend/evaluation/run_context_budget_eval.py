@@ -201,12 +201,15 @@ def run_case_c() -> dict:
 
 def run_rate() -> dict:
     import requests as rq
+    from backend.config import API_KEY
     from backend.evaluation.context_budget.driver import BASE as _B
 
-    # APISIX 代理 /metrics → app；直接打 app 8000 亦可
+    # /metrics 自 2026-11-08 起经 API Key 中间件保护（审计修复）
+    headers = {"X-API-Key": API_KEY} if API_KEY else {}
+    # APISIX 不代理 /metrics（B4 收口）；直接打 app 8000 是主路径
     for url in ("http://127.0.0.1:8000/metrics", f"{_B}/metrics"):
         try:
-            resp = rq.get(url, timeout=10)
+            resp = rq.get(url, timeout=10, headers=headers)
             if resp.status_code == 200:
                 text = resp.text
                 break
