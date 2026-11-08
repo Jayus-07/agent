@@ -1827,6 +1827,13 @@ async def get_user_detail(
     }
 
 
+def _can_operate_super_admin(operator_role: str, target_role: str) -> bool:
+    """super_admin 账号只允许 super_admin 操作（2026-11-09 审计）。"""
+    target = str(target_role or "").lower()
+    operator = str(operator_role or "").lower()
+    return target != "super_admin" or operator == "super_admin"
+
+
 @router.post("/users/{user_id}/reset-password")
 async def reset_password(
     user_id: int,
@@ -1838,11 +1845,13 @@ async def reset_password(
     temp_password = _generate_temp_password()
     async with _db() as db:
         row = (await db.execute(text(
-            "SELECT id, username FROM auth.users "
+            "SELECT id, username, role FROM auth.users "
             "WHERE id = :uid AND tenant_id = :tenant_id FOR UPDATE"),
             {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
         if row is None:
             raise _http_error("用户不存在", 404)
+        if not _can_operate_super_admin(operator.role, row.get("role")):
+            raise _http_error("仅 super_admin 可重置 super_admin 账号", 403)
         await db.execute(text(
             "UPDATE auth.users SET password_hash = :ph, "
             "must_change_password = TRUE, updated_at = now() WHERE id = :uid"),
@@ -1880,11 +1889,13 @@ async def force_logout_user(
     tenant_id = _tenant_id(request)
     async with _db() as db:
         row = (await db.execute(text(
-            "SELECT id, username FROM auth.users "
+            "SELECT id, username, role FROM auth.users "
             "WHERE id = :uid AND tenant_id = :tenant_id"),
             {"uid": user_id, "tenant_id": tenant_id})).mappings().first()
         if row is None:
             raise _http_error("用户不存在", 404)
+        if not _can_operate_super_admin(operator.role, row.get("role")):
+            raise _http_error("仅 super_admin 可强制下线 super_admin 账号", 403)
         revoked = await _session_service.revoke_user_sessions(
             db, user_id, reason="force_logout"
         )

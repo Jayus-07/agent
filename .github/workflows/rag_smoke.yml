@@ -253,6 +253,7 @@ jobs:
             backend/tests/api/test_auth_policy_and_json.py \
             backend/tests/api/test_observability_unauth_closure.py \
             backend/tests/tools/test_data_collection_ssrf.py \
+            backend/tests/api/test_rbac_super_admin_guard.py \
             backend/tests/api/test_api_keys.py \
             backend/tests/api/test_apisix_b4_direct_routes.py \
             backend/tests/api/test_cs_ops_stats.py \
