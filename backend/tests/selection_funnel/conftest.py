@@ -63,7 +63,7 @@ class FakeCompetitorStore:
 
 
 class FakeImportPoolStore:
-    """导入候选池内存替身（语义对齐 PostgresImportPoolStore）。"""
+    """导入候选池内存替身（语义对齐 PostgresImportPoolStore，含租户维度）。"""
 
     def __init__(self):
         self._rows: list[dict] = []
@@ -76,12 +76,16 @@ class FakeImportPoolStore:
                          r.get("platform") or "")
 
     def add_batch(self, rows: list[dict], category: str = "",
-                  platform: str = "") -> tuple[str, int]:
+                  platform: str = "", *, tenant_id: str = "default") -> tuple[str, int]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         batch_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         for r in rows:
             self._rows.append({
                 "id": self._next_id, "batch_id": batch_id,
+                "tenant_id": tenant_id,
                 "title": r.get("title") or "",
                 "platform": r.get("platform") or platform,
                 "price": r.get("price"), "original_price": r.get("original_price"),
@@ -99,9 +103,15 @@ class FakeImportPoolStore:
             self._next_id += 1
         return batch_id, len(rows)
 
-    def list_candidates(self, category: str = "", platform: str = "") -> list[dict]:
+    def list_candidates(self, category: str = "", platform: str = "",
+                        *, tenant_id: str = "default") -> list[dict]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         out = []
         for r in self._rows:
+            if r.get("tenant_id") != tenant_id:
+                continue
             if category and category not in (r.get("category") or ""):
                 continue
             if platform and (r.get("platform") or "") != platform:
@@ -109,24 +119,34 @@ class FakeImportPoolStore:
             d = dict(r)
             key = self._key(r)
             d["history_batches"] = len({x["batch_id"] for x in self._rows
-                                        if self._key(x) == key})
+                                        if x.get("tenant_id") == tenant_id
+                                        and self._key(x) == key})
             out.append(d)
         return out   # 插入序即 id 序（旧行在前，对齐 ORDER BY id ASC）
 
-    def clear_batch(self, batch_id: str) -> int:
+    def clear_batch(self, batch_id: str, *, tenant_id: str = "default") -> int:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         before = len(self._rows)
-        self._rows = [r for r in self._rows if r["batch_id"] != batch_id]
+        self._rows = [r for r in self._rows
+                      if not (r["batch_id"] == batch_id
+                              and r.get("tenant_id") == tenant_id)]
         return before - len(self._rows)
 
-    def count(self) -> int:
-        return len(self._rows)
+    def count(self, *, tenant_id: str = "default") -> int:
+        return sum(1 for r in self._rows if r.get("tenant_id") == tenant_id)
 
     def history_by_keys(self, keys: list[tuple[str, str, str]],
+                        *, tenant_id: str = "default",
                         limit: int = 50) -> dict[str, list[dict]]:
         from backend.selection_funnel.import_pool import dedup_key
+        tenant_id = str(tenant_id or "").strip()
         wanted = {dedup_key(u, t, p) for u, t, p in keys}
         grouped: dict[str, list[dict]] = {}
         for r in sorted(self._rows, key=lambda x: -x["id"]):   # 新→旧
+            if r.get("tenant_id") != tenant_id:
+                continue
             key = self._key(r)
             if key not in wanted:
                 continue
@@ -140,7 +160,7 @@ class FakeImportPoolStore:
 
 
 class FakeMarketStore:
-    """赛道数据内存替身（语义对齐 PostgresMarketStore）。"""
+    """赛道数据内存替身（语义对齐 PostgresMarketStore，含租户维度）。"""
 
     def __init__(self):
         self._kw: list[dict] = []
@@ -151,9 +171,11 @@ class FakeMarketStore:
         return (f"{prefix}-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}",
                 datetime.now().isoformat(timespec="seconds"))
 
-    def add_keywords(self, rows: list[dict], category: str) -> tuple[str, int]:
+    def add_keywords(self, rows: list[dict], category: str, *,
+                     tenant_id: str) -> tuple[str, int]:
         batch_id, now = self._batch("kw")
-        self._kw.extend({"batch_id": batch_id, "category": category,
+        self._kw.extend({"batch_id": batch_id, "tenant_id": tenant_id,
+                         "category": category,
                          "keyword": r.get("keyword") or "",
                          "search_pop": r.get("search_pop"),
                          "click_rate": r.get("click_rate"),
@@ -162,30 +184,42 @@ class FakeMarketStore:
                          "imported_at": now} for r in rows)
         return batch_id, len(rows)
 
-    def add_reviews(self, rows: list[dict], category: str) -> tuple[str, int]:
+    def add_reviews(self, rows: list[dict], category: str, *,
+                    tenant_id: str) -> tuple[str, int]:
         batch_id, now = self._batch("rv")
-        self._rv.extend({"batch_id": batch_id, "category": category,
+        self._rv.extend({"batch_id": batch_id, "tenant_id": tenant_id,
+                         "category": category,
                          "product_title": r.get("product_title") or "",
                          "content": r.get("content") or "",
                          "star": r.get("star"), "imported_at": now}
                         for r in rows)
         return batch_id, len(rows)
 
-    def keywords(self, category: str = "") -> list[dict]:
+    def keywords(self, category: str = "", *, tenant_id: str = "default") -> list[dict]:
         rows = [dict(r) for r in self._kw
-                if not category or category in (r.get("category") or "")]
+                if r.get("tenant_id") == tenant_id
+                and (not category or category in (r.get("category") or ""))]
         rows.sort(key=lambda r: -(r["search_pop"] or 0))
         return rows
 
-    def reviews(self, category: str = "") -> list[dict]:
+    def reviews(self, category: str = "", *, tenant_id: str = "default") -> list[dict]:
         return [dict(r) for r in self._rv
-                if not category or category in (r.get("category") or "")]
+                if r.get("tenant_id") == tenant_id
+                and (not category or category in (r.get("category") or ""))]
 
-    def clear_batch(self, batch_id: str) -> int:
-        removed = sum(1 for r in self._kw if r["batch_id"] == batch_id)
-        removed += sum(1 for r in self._rv if r["batch_id"] == batch_id)
-        self._kw = [r for r in self._kw if r["batch_id"] != batch_id]
-        self._rv = [r for r in self._rv if r["batch_id"] != batch_id]
+    def clear_batch(self, batch_id: str, *, tenant_id: str = "default") -> int:
+        removed = sum(1 for r in self._kw
+                      if r["batch_id"] == batch_id
+                      and r.get("tenant_id") == tenant_id)
+        removed += sum(1 for r in self._rv
+                       if r["batch_id"] == batch_id
+                       and r.get("tenant_id") == tenant_id)
+        self._kw = [r for r in self._kw
+                    if not (r["batch_id"] == batch_id
+                            and r.get("tenant_id") == tenant_id)]
+        self._rv = [r for r in self._rv
+                    if not (r["batch_id"] == batch_id
+                            and r.get("tenant_id") == tenant_id)]
         return removed
 
 

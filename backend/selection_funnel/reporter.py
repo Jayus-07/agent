@@ -63,11 +63,11 @@ def _recommend_table(candidates: list[dict]) -> list[str]:
     return lines
 
 
-def _market_lines(category: str) -> list[str]:
+def _market_lines(category: str, tenant_id: str) -> list[str]:
     """赛道画像（关键词榜上传数据）；无数据/不可用 → 空（不渲染段）。"""
     try:
         from backend.selection_funnel.market_data import market_snapshot
-        snap = market_snapshot(category)
+        snap = market_snapshot(category, tenant_id=tenant_id)
     except Exception as e:
         logger.warning("[FunnelReport] 赛道画像不可用: %s", e)
         return []
@@ -94,11 +94,13 @@ PAIN_ACTIONS: dict[str, str] = {
 }
 
 
-def _pain_lines(candidates: list[dict], category: str) -> list[str]:
+def _pain_lines(candidates: list[dict], category: str, tenant_id: str) -> list[str]:
     """痛点机会（差评实证上传数据）；无数据/不可用 → 空。"""
     try:
         from backend.selection_funnel.market_data import pain_points_for
-        rows = pain_points_for([(c.get("title") or "") for c in candidates], category)
+        rows = pain_points_for(
+            [(c.get("title") or "") for c in candidates],
+            category, tenant_id=tenant_id)
     except Exception as e:
         logger.warning("[FunnelReport] 痛点分析不可用: %s", e)
         return []
@@ -532,8 +534,12 @@ def reporter_node(state: dict) -> dict:
     moq = (ctx.get("supply") or {}).get("moq") if isinstance(ctx, dict) else None
     answer = render_report(brief, list(state.get("stage_logs") or []),
                            candidates, notes, knowledge=knowledge,
-                           market=_market_lines(brief.category),
-                           pains=_pain_lines(candidates, brief.category),
+                           market=_market_lines(
+                               brief.category,
+                               str(state.get("tenant_id") or "default")),
+                           pains=_pain_lines(
+                               candidates, brief.category,
+                               str(state.get("tenant_id") or "default")),
                            pool=list(state.get("pool") or []),
                            moq=moq, min_margin=min_margin,
                            config_lines=_config_lines(brief, min_margin))

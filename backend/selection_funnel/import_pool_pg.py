@@ -42,6 +42,7 @@ _SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_TABLE} (
     id BIGSERIAL PRIMARY KEY,
     batch_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     title TEXT NOT NULL,
     platform TEXT DEFAULT '',
     price DOUBLE PRECISION,
@@ -60,11 +61,14 @@ CREATE TABLE IF NOT EXISTS {_TABLE} (
 CREATE INDEX IF NOT EXISTS idx_sf_imp_category ON {_TABLE}(category);
 CREATE INDEX IF NOT EXISTS idx_sf_imp_batch ON {_TABLE}(batch_id);
 CREATE INDEX IF NOT EXISTS idx_sf_imp_url ON {_TABLE}(url);
+ALTER TABLE {_TABLE} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_sf_imp_tenant_batch ON {_TABLE}(tenant_id, batch_id);
 """
 
 _INSERT_COLS = (
-    "batch_id, title, platform, price, original_price, rating, review_count,"
-    " sales, unit_cost, category, url, promo_text, highlights, extra_json, imported_at"
+    "batch_id, tenant_id, title, platform, price, original_price, rating,"
+    " review_count, sales, unit_cost, category, url, promo_text, highlights,"
+    " extra_json, imported_at"
 )
 
 _pool: Any = None
@@ -120,17 +124,23 @@ class PostgresImportPoolStore:
             conn.cursor().execute(_SCHEMA_SQL)
 
     def add_batch(self, rows: list[dict[str, Any]], category: str = "",
-                  platform: str = "") -> tuple[str, int]:
+                  platform: str = "", *, tenant_id: str = "default") -> tuple[str, int]:
         """写入一个导入批次（单事务 execute_values，失败整批回滚）。
 
         行内 category/platform 缺失时用批次级默认补齐；语义与 SQLite 版一致。
+        ``tenant_id`` 必填（2026-11-08 审计 T4d）：导入池按租户隔离，
+        调用方必须来自可信身份，禁止缺省归入共享租户。
         Returns: (batch_id, 写入行数)
         """
+        if not tenant_id or not str(tenant_id).strip():
+            raise ValueError("tenant_id is required")
+        tenant_id = str(tenant_id).strip()
         from datetime import datetime
         batch_id = f"imp-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         values = [
             (batch_id,
+             tenant_id,
              r.get("title") or "",
              r.get("platform") or platform,
              r.get("price"), r.get("original_price"), r.get("rating"),
@@ -153,22 +163,27 @@ class PostgresImportPoolStore:
         return batch_id, len(values)
 
     def list_candidates(self, category: str = "",
-                        platform: str = "") -> list[dict[str, Any]]:
+                        platform: str = "", *, tenant_id: str = "default") -> list[dict[str, Any]]:
         """拉取候选（粗过滤，哑管道不去重，语义与建池层约定一致）。
 
         同款去重统一由 build_pool 的 duplicate 规则负责（保留最新批次）。
         返回字段与漏斗 _POOL_FIELDS 对齐 + sales/extra + history_batches
         （窗口 COUNT：同款跨批次记录数，工作台「历史」徽章数据源，
         口径与 dedup_key 一致——url 优先，无 url 退 title|platform）。
+
+        ``tenant_id`` 必填：窗口 COUNT 也在租户内计算，跨租户同款互不可见。
         """
-        conds, params = [], []
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        conds, params = ["tenant_id = %s"], [tenant_id]
         if category:
             conds.append("category LIKE %s")
             params.append(f"%{category}%")
         if platform:
             conds.append("platform = %s")
             params.append(platform)
-        where = ("WHERE " + " AND ".join(conds)) if conds else ""
+        where = "WHERE " + " AND ".join(conds)
         sql = (
             f"SELECT *, COUNT(*) OVER (PARTITION BY"
             f" CASE WHEN url <> '' THEN 'url:' || url"
@@ -186,13 +201,20 @@ class PostgresImportPoolStore:
             out.append(d)
         return out
 
-    def clear_batch(self, batch_id: str) -> int:
+    def clear_batch(self, batch_id: str, *, tenant_id: str = "default") -> int:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with self._conn() as conn:
             cur = conn.cursor()
-            cur.execute(f"DELETE FROM {_TABLE} WHERE batch_id = %s", (batch_id,))
+            cur.execute(
+                f"DELETE FROM {_TABLE} WHERE batch_id = %s AND tenant_id = %s",
+                (batch_id, tenant_id),
+            )
             return cur.rowcount
 
     def history_by_keys(self, keys: list[tuple[str, str, str]],
+                        *, tenant_id: str = "default",
                         limit: int = 50) -> dict[str, list[dict[str, Any]]]:
         """批量取同款历史批次（趋势接线，2026-09-18）：一次 ANY 数组查询替代逐候选 N 次。
 
@@ -210,17 +232,24 @@ class PostgresImportPoolStore:
         titles = sorted({(t or "").strip() for _, t, _ in keys if (t or "").strip()})
         if not urls and not titles:
             return {}
-        conds, params = [], []
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        match_conds, params = [], []
         if urls:
-            conds.append("(url <> '' AND url = ANY(%s))")
+            match_conds.append("(url <> '' AND url = ANY(%s))")
             params.append(urls)
         if titles:
-            conds.append("title = ANY(%s)")
+            match_conds.append("title = ANY(%s)")
             params.append(titles)
-        sql = f"SELECT * FROM {_TABLE} WHERE {' OR '.join(conds)} ORDER BY id DESC"
+        sql = (
+            f"SELECT * FROM {_TABLE} WHERE tenant_id = %s AND ("
+            + " OR ".join(match_conds)
+            + ") ORDER BY id DESC"
+        )
         with self._conn() as conn:
             cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
-            cur.execute(sql, tuple(params))
+            cur.execute(sql, (tenant_id, *params))
             rows = cur.fetchall()
         grouped: dict[str, list[dict[str, Any]]] = {}
         for r in rows:
@@ -237,10 +266,16 @@ class PostgresImportPoolStore:
             grouped.setdefault(key, []).append(snap)
         return {k: v[:limit] for k, v in grouped.items()}
 
-    def count(self) -> int:
+    def count(self, *, tenant_id: str = "default") -> int:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         with self._conn() as conn:
             cur = conn.cursor()
-            cur.execute(f"SELECT COUNT(*) FROM {_TABLE}")
+            cur.execute(
+                f"SELECT COUNT(*) FROM {_TABLE} WHERE tenant_id = %s",
+                (tenant_id,),
+            )
             return cur.fetchone()[0]
 
 

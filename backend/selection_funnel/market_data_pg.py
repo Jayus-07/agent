@@ -33,6 +33,7 @@ _SCHEMA_SQL = f"""
 CREATE TABLE IF NOT EXISTS {_T_KW} (
     id BIGSERIAL PRIMARY KEY,
     batch_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     category TEXT DEFAULT '',
     keyword TEXT,
     search_pop DOUBLE PRECISION,
@@ -43,9 +44,12 @@ CREATE TABLE IF NOT EXISTS {_T_KW} (
 );
 CREATE INDEX IF NOT EXISTS idx_sf_kw_cat ON {_T_KW}(category);
 CREATE INDEX IF NOT EXISTS idx_sf_kw_pop ON {_T_KW}(search_pop DESC);
+ALTER TABLE {_T_KW} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_sf_kw_tenant ON {_T_KW}(tenant_id, category);
 CREATE TABLE IF NOT EXISTS {_T_RV} (
     id BIGSERIAL PRIMARY KEY,
     batch_id TEXT NOT NULL,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     category TEXT DEFAULT '',
     product_title TEXT,
     content TEXT,
@@ -53,6 +57,8 @@ CREATE TABLE IF NOT EXISTS {_T_RV} (
     imported_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sf_rv_cat ON {_T_RV}(category);
+ALTER TABLE {_T_RV} ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'default';
+CREATE INDEX IF NOT EXISTS idx_sf_rv_tenant ON {_T_RV}(tenant_id, category);
 """
 
 _kw_init_lock = threading.Lock()
@@ -90,54 +96,83 @@ class PostgresMarketStore:
             cur.execute(sql, params)
             return [dict(r) for r in cur.fetchall()]
 
-    def add_keywords(self, rows: list[dict], category: str) -> tuple[str, int]:
+    def add_keywords(self, rows: list[dict], category: str, *,
+                     tenant_id: str = "default") -> tuple[str, int]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         batch_id = f"kw-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         with pool_conn() as conn:
             psycopg2.extras.execute_values(
                 conn.cursor(),
-                f"INSERT INTO {_T_KW} (batch_id, category, keyword, search_pop,"
-                f" click_rate, pay_rate, competition, imported_at) VALUES %s",
-                [(batch_id, category, r.get("keyword") or "", r.get("search_pop"),
-                  r.get("click_rate"), r.get("pay_rate"), r.get("competition"), now)
+                f"INSERT INTO {_T_KW} (batch_id, tenant_id, category, keyword,"
+                f" search_pop, click_rate, pay_rate, competition, imported_at)"
+                f" VALUES %s",
+                [(batch_id, tenant_id, category, r.get("keyword") or "",
+                  r.get("search_pop"), r.get("click_rate"), r.get("pay_rate"),
+                  r.get("competition"), now)
                  for r in rows])
         return batch_id, len(rows)
 
-    def add_reviews(self, rows: list[dict], category: str) -> tuple[str, int]:
+    def add_reviews(self, rows: list[dict], category: str, *,
+                    tenant_id: str = "default") -> tuple[str, int]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         batch_id = f"rv-{datetime.now().strftime('%Y%m%d%H%M%S')}-{uuid.uuid4().hex[:6]}"
         now = datetime.now().isoformat(timespec="seconds")
         with pool_conn() as conn:
             psycopg2.extras.execute_values(
                 conn.cursor(),
-                f"INSERT INTO {_T_RV} (batch_id, category, product_title,"
-                f" content, star, imported_at) VALUES %s",
-                [(batch_id, category, r.get("product_title") or "",
+                f"INSERT INTO {_T_RV} (batch_id, tenant_id, category,"
+                f" product_title, content, star, imported_at) VALUES %s",
+                [(batch_id, tenant_id, category,
+                  r.get("product_title") or "",
                   r.get("content") or "", r.get("star"), now) for r in rows])
         return batch_id, len(rows)
 
-    def keywords(self, category: str = "") -> list[dict]:
-        sql = f"SELECT keyword, search_pop, click_rate, pay_rate, competition FROM {_T_KW}"
-        params: tuple = ()
+    def keywords(self, category: str = "", *, tenant_id: str = "default") -> list[dict]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        sql = (
+            f"SELECT keyword, search_pop, click_rate, pay_rate, competition"
+            f" FROM {_T_KW} WHERE tenant_id = %s"
+        )
+        params: tuple = (tenant_id,)
         if category:
-            sql += " WHERE category LIKE %s"
-            params = (f"%{category}%",)
+            sql += " AND category LIKE %s"
+            params = (tenant_id, f"%{category}%")
         sql += " ORDER BY search_pop DESC"
         return self._fetch(sql, params)
 
-    def reviews(self, category: str = "") -> list[dict]:
-        sql = f"SELECT product_title, content, star FROM {_T_RV}"
-        params: tuple = ()
+    def reviews(self, category: str = "", *, tenant_id: str = "default") -> list[dict]:
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
+        sql = f"SELECT product_title, content, star FROM {_T_RV} WHERE tenant_id = %s"
+        params: tuple = (tenant_id,)
         if category:
-            sql += " WHERE category LIKE %s"
-            params = (f"%{category}%",)
+            sql += " AND category LIKE %s"
+            params = (tenant_id, f"%{category}%")
         return self._fetch(sql, params)
 
-    def clear_batch(self, batch_id: str) -> int:
-        """按批次清除关键词/差评（batch_id 前缀 kw-/rv- 两表通吃，语义同 SQLite 版）。"""
+    def clear_batch(self, batch_id: str, *, tenant_id: str = "default") -> int:
+        """按批次清除关键词/差评（batch_id 前缀 kw-/rv- 两表通吃）。
+
+        2026-11-08 审计 T4d：租户谓词必填，跨租户批次 ID 删除不到任何行。
+        """
+        tenant_id = str(tenant_id or "").strip()
+        if not tenant_id:
+            raise ValueError("tenant_id is required")
         removed = 0
         with pool_conn() as conn:
             for table in (_T_KW, _T_RV):
                 cur = conn.cursor()
-                cur.execute(f"DELETE FROM {table} WHERE batch_id = %s", (batch_id,))
+                cur.execute(
+                    f"DELETE FROM {table} WHERE batch_id = %s AND tenant_id = %s",
+                    (batch_id, tenant_id),
+                )
                 removed += cur.rowcount
         return removed

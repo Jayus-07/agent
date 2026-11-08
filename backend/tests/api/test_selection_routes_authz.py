@@ -35,7 +35,8 @@ def _deny_internal_token(monkeypatch):
     monkeypatch.setattr("backend.app.api.deps.require_internal_token", _deny)
 
 
-_JWT_HEADERS = {"X-User-Id": "15", "X-Auth-Type": "jwt", "X-User-Roles": "viewer"}
+_JWT_HEADERS = {"X-User-Id": "15", "X-Auth-Type": "jwt",
+                "X-User-Roles": "viewer", "X-Tenant-Id": "default"}
 
 
 class TestSelectionDecisionAuthz:
@@ -96,7 +97,7 @@ class TestSelectionFunnelAuthz:
 
     def test_jwt_viewer_allowed(self, monkeypatch):
         class _StubImportStore:
-            def list_candidates(self, category="", platform=""):
+            def list_candidates(self, category="", platform="", **kwargs):
                 return []
 
         monkeypatch.setattr(import_pool_mod, "get_import_store",

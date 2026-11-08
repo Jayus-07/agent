@@ -34,6 +34,19 @@ router = APIRouter(
 _KINDS = ("products", "keywords", "reviews")
 
 
+def _trusted_tenant(request: Request) -> str:
+    """可信租户（2026-11-08 审计 T4d）：缺失即 403，不回落共享 default。
+
+    选品导入池/市场库按租户隔离；身份只认网关注入的 header。
+    """
+    from backend.app.api.identity import resolve_identity
+
+    tenant = (resolve_identity(request).tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    return tenant
+
+
 class TextImportRequest(BaseModel):
     """对话粘贴场景：Excel 直接 Ctrl+C 复制的 TSV 文本。"""
     content: str = Field(..., min_length=1, description="表格文本（TSV 或 CSV）")
@@ -108,18 +121,21 @@ def run_funnel(
 
 
 def _dispatch_import(data: bytes | str, kind: str, category: str,
-                     platform: str = "", filename: str = "") -> tuple[str, int, list[str]]:
+                     platform: str = "", filename: str = "",
+                     *, tenant_id: str) -> tuple[str, int, list[str]]:
     if kind == "keywords":
-        return _md.import_keywords(data, category=category)
+        return _md.import_keywords(data, category=category, tenant_id=tenant_id)
     if kind == "reviews":
-        return _md.import_reviews(data, category=category)
+        return _md.import_reviews(data, category=category, tenant_id=tenant_id)
     if kind == "products":
-        return _ip.import_table(data, category=category, platform=platform, filename=filename)
+        return _ip.import_table(data, category=category, platform=platform,
+                                filename=filename, tenant_id=tenant_id)
     raise HTTPException(status_code=400, detail=f"未知 kind「{kind}」，支持: {', '.join(_KINDS)}")
 
 
 @router.post("/import/file", response_model=ImportResult, summary="上传表格导入（商品/关键词榜/差评）")
 async def import_file(
+    request: Request,
     file: UploadFile = File(..., description="CSV / TSV / XLSX 表格，首行为表头"),
     kind: str = Form("products", description="products / keywords / reviews"),
     category: str = Form("", description="批次级类目"),
@@ -129,8 +145,9 @@ async def import_file(
     data = await file.read()
     if not data:
         raise HTTPException(status_code=400, detail="上传文件为空")
-    batch_id, count, notes = _dispatch_import(data, kind, category, platform,
-                                              filename=file.filename or "")
+    batch_id, count, notes = _dispatch_import(
+        data, kind, category, platform, filename=file.filename or "",
+        tenant_id=_trusted_tenant(request))
     if not batch_id:
         raise HTTPException(status_code=400, detail=notes[0] if notes else "导入失败")
     logger.info("[SelectionFunnelAPI] 文件导入(%s) %s：%d 条", kind, batch_id, count)
@@ -140,10 +157,12 @@ async def import_file(
 @router.post("/import/text", response_model=ImportResult, summary="粘贴表格文本导入（商品/关键词榜/差评）")
 async def import_text(
     req: TextImportRequest,
+    request: Request,
     _editor=Depends(require_editor_user),
 ) -> ImportResult:
-    batch_id, count, notes = _dispatch_import(req.content, req.kind, req.category,
-                                              req.platform, filename="")
+    batch_id, count, notes = _dispatch_import(
+        req.content, req.kind, req.category, req.platform, filename="",
+        tenant_id=_trusted_tenant(request))
     if not batch_id:
         raise HTTPException(status_code=400, detail=notes[0] if notes else "导入失败")
     logger.info("[SelectionFunnelAPI] 文本导入(%s) %s：%d 条", req.kind, batch_id, count)
@@ -151,14 +170,18 @@ async def import_text(
 
 
 @router.get("/import/candidates", summary="查看导入候选（粗过滤）")
-async def list_candidates(category: str = "", platform: str = "") -> dict:
-    items = _ip.get_import_store().list_candidates(category=category, platform=platform)
+async def list_candidates(
+    request: Request, category: str = "", platform: str = "",
+) -> dict:
+    items = _ip.get_import_store().list_candidates(
+        category=category, platform=platform,
+        tenant_id=_trusted_tenant(request))
     return {"count": len(items), "items": items}
 
 
 @router.get("/market/snapshot", summary="赛道画像（关键词榜统计）")
-async def market_snapshot(category: str = "") -> dict:
-    snap = _md.market_snapshot(category)
+async def market_snapshot(request: Request, category: str = "") -> dict:
+    snap = _md.market_snapshot(category, tenant_id=_trusted_tenant(request))
     if not snap:
         return {"count": 0, "top": [], "opportunities": [],
                 "hint": "暂无关键词榜数据——POST /selection-funnel/import/text 或 /file 上传（kind=keywords）"}
@@ -166,21 +189,28 @@ async def market_snapshot(category: str = "") -> dict:
 
 
 @router.get("/reviews/pain-points", summary="痛点机会（差评聚类，按候选标题）")
-async def review_pain_points(category: str = "", titles: str = "") -> dict:
+async def review_pain_points(
+    request: Request, category: str = "", titles: str = "",
+) -> dict:
     title_list = [t.strip() for t in titles.split("|") if t.strip()]
-    rows = _md.pain_points_for(title_list, category)
+    rows = _md.pain_points_for(
+        title_list, category, tenant_id=_trusted_tenant(request))
     return {"count": len(rows), "items": rows}
 
 
 @router.delete("/import/batch/{batch_id}", summary="清除指定导入批次")
 async def clear_batch(
     batch_id: str,
+    request: Request,
     _editor=Depends(require_editor_user),
 ) -> dict:
+    tenant_id = _trusted_tenant(request)
     if batch_id.startswith("imp-"):
-        removed = _ip.get_import_store().clear_batch(batch_id)
+        removed = _ip.get_import_store().clear_batch(
+            batch_id, tenant_id=tenant_id)
     else:  # kw- / rv- → 市场库（关键词榜/差评），2026-09-17 全流程实测补
-        removed = _md.get_market_store().clear_batch(batch_id)
+        removed = _md.get_market_store().clear_batch(
+            batch_id, tenant_id=tenant_id)
     if not removed:
         raise HTTPException(status_code=404, detail=f"批次 {batch_id} 不存在")
     return {"batch_id": batch_id, "removed": removed}

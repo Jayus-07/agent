@@ -100,8 +100,8 @@ def test_report_market_and_pains_sections():
     import_reviews(RV_TSV, category="宠物零食")
 
     from backend.selection_funnel.reporter import _market_lines, _pain_lines
-    market = _market_lines("宠物零食")
-    pains = _pain_lines([{"title": "宠物零食冻干鸡肉 500g"}], "宠物零食")
+    market = _market_lines("宠物零食", "default")
+    pains = _pain_lines([{"title": "宠物零食冻干鸡肉 500g"}], "宠物零食", "default")
     report = render_report(_B(), [], [], [], market=market, pains=pains)
     assert "### 赛道画像（关键词榜）" in report and "冻干鸡肉" in report
     assert "### 痛点机会（差评实证）" in report and "气味口感" in report
@@ -113,8 +113,8 @@ def test_report_sections_absent_without_data():
     class _B:
         pass
 
-    assert _market_lines("不存在的类目") == []
-    assert _pain_lines([{"title": "没有评论的品"}], "不存在的类目") == []
+    assert _market_lines("不存在的类目", "default") == []
+    assert _pain_lines([{"title": "没有评论的品"}], "不存在的类目", "default") == []
 
 
 # ── 竞争格局（六步法②）───────────────────────────────────────────────
@@ -260,26 +260,29 @@ def client():
 
 def test_api_text_import_keywords_kind(client):
     resp = client.post("/selection-funnel/import/text", json={
-        "content": KW_TSV, "kind": "keywords", "category": "宠物零食"})
+        "content": KW_TSV, "kind": "keywords", "category": "宠物零食"},
+        headers=HEADERS)
     assert resp.status_code == 200 and resp.json()["count"] == 4
     snap = client.get("/selection-funnel/market/snapshot",
-                      params={"category": "宠物零食"}).json()
+                      params={"category": "宠物零食"}, headers=HEADERS).json()
     assert snap["count"] == 4 and snap["top"][0]["keyword"] == "冻干鸡肉"
 
 
 def test_api_text_import_reviews_kind(client):
     resp = client.post("/selection-funnel/import/text", json={
-        "content": RV_TSV, "kind": "reviews", "category": "宠物零食"})
+        "content": RV_TSV, "kind": "reviews", "category": "宠物零食"},
+        headers=HEADERS)
     assert resp.status_code == 200 and resp.json()["count"] == 4
     pp = client.get("/selection-funnel/reviews/pain-points",
                     params={"category": "宠物零食",
-                            "titles": "宠物零食冻干鸡肉 500g"}).json()
+                            "titles": "宠物零食冻干鸡肉 500g"},
+                    headers=HEADERS).json()
     assert pp["count"] == 1 and pp["items"][0]["negative"] == 3
 
 
 def test_api_text_import_unknown_kind_400(client):
     resp = client.post("/selection-funnel/import/text", json={
-        "content": "x", "kind": "nope"})
+        "content": "x", "kind": "nope"}, headers=HEADERS)
     assert resp.status_code == 400
 
 
@@ -298,7 +301,12 @@ def test_market_store_clear_batch_keywords_and_reviews(isolated_market_store):
 
 def test_api_delete_keyword_batch(client):
     kw_batch, _, _ = import_keywords(KW_TSV, category="宠物零食")
-    resp = client.delete(f"/selection-funnel/import/batch/{kw_batch}")
+    resp = client.delete(f"/selection-funnel/import/batch/{kw_batch}",
+                         headers=HEADERS)
     assert resp.status_code == 200 and resp.json()["removed"] == 4
     assert client.delete(
-        f"/selection-funnel/import/batch/{kw_batch}").status_code == 404
+        f"/selection-funnel/import/batch/{kw_batch}",
+        headers=HEADERS).status_code == 404
+
+HEADERS = {"X-Auth-Type": "jwt", "X-User-Id": "u-editor",
+           "X-User-Roles": "editor", "X-Tenant-Id": "default"}

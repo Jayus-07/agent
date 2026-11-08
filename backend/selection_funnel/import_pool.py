@@ -242,10 +242,11 @@ def get_import_store() -> Any:
 
 
 def import_table(data: bytes | str, category: str = "", platform: str = "",
-                 filename: str = "") -> tuple[str, int, list[str]]:
+                 filename: str = "", *, tenant_id: str = "default") -> tuple[str, int, list[str]]:
     """一条龙：解析 → 入库。Returns: (batch_id, 行数, notes)。
 
     解析失败不炸调用方——返回 ("", 0, [原因])。
+    ``tenant_id`` 必填（2026-11-08 审计 T4d）：调用方从可信身份取租户。
     """
     notes: list[str] = []
     try:
@@ -254,7 +255,8 @@ def import_table(data: bytes | str, category: str = "", platform: str = "",
         logger.warning("[ImportPool] 表格解析失败: %s", e)
         return "", 0, [f"导入失败: {e}"]
     truncated = len(rows) >= MAX_IMPORT_ROWS
-    batch_id, n = get_import_store().add_batch(rows, category=category, platform=platform)
+    batch_id, n = get_import_store().add_batch(
+        rows, category=category, platform=platform, tenant_id=tenant_id)
     notes.append(f"导入批次 {batch_id}：{n} 条候选已入库"
                  + (f"（达到单批上限 {MAX_IMPORT_ROWS}，超出部分未纳入）" if truncated else ""))
     return batch_id, n, notes
