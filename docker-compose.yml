@@ -937,11 +937,25 @@ services:
   prometheus:
     image: prom/prometheus:latest
     profiles: ["observability"]
-    # M4（2026-10-06 验收补充）：显式声明保留策略，不依赖镜像隐式默认值
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
+    # T8（2026-11-08）：Prometheus 只能发标准 Authorization 头。启动时从
+    # API_KEY 生成凭据文件（不落 Git / 镜像），供 prometheus.yml 的 app
+    # target 以 Bearer 抓取 /metrics。API_KEY 为空时写占位值，抓取 401。
+    environment:
+      - API_KEY=${API_KEY:-}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        if [ -n "$$API_KEY" ]; then
+          printf '%s' "$$API_KEY" > /tmp/metrics_api_key
+        else
+          printf '%s' 'metrics-key-not-configured' > /tmp/metrics_api_key
+        fi
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.path=/prometheus \
+          --storage.tsdb.retention.time=15d
     ports:
       - "127.0.0.1:9090:9090"
     volumes:

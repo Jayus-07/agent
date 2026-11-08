@@ -5,11 +5,10 @@
 # 告警规则：docker/prometheus-alert-rules.yml（阈值定义见 docs/observability/slo.md）
 #
 # ⚠️ 2026-11-08 安全审计修复：app /metrics 已纳入 API Key 中间件（X-API-Key），
-#    不再接受匿名抓取。本 profile 的 app target 因此需要手工补凭据后才会 up；
-#    Prometheus 的 scrape_config 不支持自定义 X-API-Key 头（仅 authorization/
-#    basic_auth 类），故不在此文件内置明文密钥。启用观测栈时按
-#    docs/operations/commands.md「观测栈」一节的说明处理，未配凭据时
-#    agent-platform-app target 显示 down 属预期，不代表服务不可用。
+#    不再接受匿名抓取。Prometheus 无法发送自定义 X-API-Key 头，因此 app
+#    target 使用标准 Authorization: Bearer，凭据由 prometheus 容器启动时
+#    从 API_KEY 环境变量生成到 /tmp/metrics_api_key（见 docker-compose.yml），
+#    不落 Git、不写进镜像。API_KEY 未配置时该 target 会 401（预期）。
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
@@ -27,6 +26,10 @@ rule_files:
 scrape_configs:
   - job_name: agent-platform-app
     # Python 后端跑在宿主机 8000；若后端改为容器部署（app 服务启用），改成 app:8000
+    # 凭据文件由容器 entrypoint 从 API_KEY 生成（标准 Authorization: Bearer）
+    authorization:
+      type: Bearer
+      credentials_file: /tmp/metrics_api_key
     static_configs:
       - targets: ["host.docker.internal:8000"]
 

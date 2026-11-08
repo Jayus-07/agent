@@ -67,7 +67,7 @@ curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8000/metrics            
 curl.exe -s -H "X-API-Key: $env:API_KEY" http://127.0.0.1:8000/metrics | Select-Object -First 5
 ~~~
 
-Prometheus 的 scrape_config 不支持自定义 `X-API-Key` 头，因此 `docker/prometheus.yml` 未内置明文密钥。启用 `observability` profile 时，`agent-platform-app` target 在补上凭据前显示 down 属预期；其余 target（worker 9809、rag-service、APISIX 9091、exporters）不受影响。需要观测 app 指标时，从 `.env` 读取 `API_KEY`，按 Prometheus 支持的 `authorization`/`basic_auth` 方式为该 target 单独配凭据文件，且不要把密钥写进被 Git 跟踪的 yml。
+Prometheus 的 scrape_config 不支持自定义 `X-API-Key` 头，因此 `/metrics` 同时接受 `Authorization: Bearer <API_KEY>`（仅该路径）。`docker-compose.yml` 的 prometheus 服务在启动时从 `API_KEY` 环境变量生成 `/tmp/metrics_api_key`，`docker/prometheus.yml` 用 `authorization.credentials_file` 读取，凭据不落 Git、不写进镜像。`API_KEY` 未配置时该 target 抓取 401（预期）；其余 target（worker 9809、rag-service、APISIX 9091、exporters）不受影响。
 
 ### 数据库连接耗尽排障（2026-10-21 事故）
 

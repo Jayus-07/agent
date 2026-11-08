@@ -169,6 +169,32 @@ class TestMetricsAuth:
         assert resp.status_code == 503
         assert resp.json()["error"] == "AuthNotConfigured"
 
+    # ── T8：Prometheus 无法发自定义头，/metrics 接受 Bearer API Key ──
+
+    def test_metrics_accepts_bearer_api_key(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        resp = client.get(
+            "/metrics", headers={"Authorization": "Bearer secret-key-123"})
+        assert resp.status_code == 200
+
+    def test_metrics_rejects_wrong_bearer(self, auth_env):
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        assert client.get(
+            "/metrics", headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+    def test_bearer_api_key_not_accepted_on_business_paths(self, auth_env):
+        """Bearer 等价凭据只限 /metrics，不能扩散到业务接口（那里 Bearer 是 JWT）。"""
+        auth_env(api_key="secret-key-123", allow_unauth="false")
+        client = TestClient(_build_app())
+
+        resp = client.get(
+            "/chat", headers={"Authorization": "Bearer secret-key-123"})
+        assert resp.status_code == 401
+
 
 class TestWebhookAuthChain:
     """2026-11-08 审计（T7b）：外部回调与 APISIX 豁免口径对齐。
