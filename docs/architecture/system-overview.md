@@ -16,6 +16,8 @@
 
 APISIX 是外部请求入口。身份头由网关验证并注入，后端只接受已验证的服务端身份上下文；不能信任客户端自带的用户或租户标识。网关身份协议见 [identity-header-protocol.md](../contracts/identity-header-protocol.md)。
 
+请求体上限分两层：APISIX `nginx_config.http.client_max_body_size` 全局 64MB，`automations-webhook` 路由用 `client-control` 单独收紧到 1MB；后端 `middleware/body_limit.py` 在 endpoint 读取前按 Content-Length 再拦一次（webhook 1MB、选品导入 32MB、RAG 上传 `RAG_MAX_FILE_SIZE`、其余 8MB），BFF 在 `arrayBuffer()` 前按 `BFF_MAX_BODY_BYTES`（默认 64MB）预检。chunked 请求没有 Content-Length，源内无法预检，依赖 APISIX 按实际收包字节计数。
+
 ## 数据与运行边界
 
 - 数据库结构及升级以 backend/sql/migrations/ 和实际数据库代码为准。

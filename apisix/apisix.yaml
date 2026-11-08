@@ -146,6 +146,9 @@ routes:
     upstream_id: app
     plugins:
       prometheus: {}
+      # 2026-11-08 T6：回调负载只有事件 JSON，路由级收紧到 1MB（全局 64m）。
+      client-control:
+        max_body_size: 1048576
       limit-count:
         key: remote_addr
         count: 120

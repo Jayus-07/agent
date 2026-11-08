@@ -19,12 +19,12 @@ from backend.app.exceptions import (
     request_validation_exception_handler,
 )
 from backend.app.api.middleware.access_log import access_log_middleware
+from backend.app.api.middleware.body_limit import body_size_limit_middleware
 from backend.app.api.middleware.concurrency import concurrency_limit_middleware
 from backend.app.api.middleware.distributed_gate import distributed_gate_middleware
 from backend.app.api.middleware.auth import api_key_middleware, must_change_password_gate
 from backend.observability.metrics import render_metrics
 from backend.shared.logger import logger
-from backend.config.rag import RAG_MAX_FILE_SIZE
 from backend.config import CORS_ORIGINS
 from mcp_servers.servers import register_all as register_mcp_servers
 
@@ -45,21 +45,8 @@ app.middleware("http")(api_key_middleware)
 # 1.5 临时密码门禁（P6.3）：must_change_password=true 的账户仅放行改密闭环
 app.middleware("http")(must_change_password_gate)
 
-# 2. 上传大小限制：在请求体接收前拦截超大文件
-@app.middleware("http")
-async def upload_size_limit_middleware(request, call_next):
-    """P0-1: 在 endpoint 之前检查 Content-Length, 超过限制直接 413 拒绝.
-    避免 FastAPI 等客户端发完整 body 才在 endpoint 拒 (耗带宽/磁盘).
-    """
-    if request.method == "POST" and "/rag/upload" in str(request.url.path):
-        cl = request.headers.get("content-length")
-        if cl and cl.isdigit() and int(cl) > RAG_MAX_FILE_SIZE * 1024 * 1024:
-            from fastapi.responses import JSONResponse, HTMLResponse
-            return JSONResponse(
-                {"ok": False, "error": f"file too large (max {RAG_MAX_FILE_SIZE}MB, Content-Length={cl})"},
-                status_code=413,
-            )
-    return await call_next(request)
+# 2. 上传/请求体大小限制：在请求体接收前拦截（T6：2026-11-08 安全审计）
+app.middleware("http")(body_size_limit_middleware)
 
 # 2.5 分布式准入门（P0-1，2026-09-30）：Redis 全局硬上限，多副本共享；
 #     注册在 concurrency 之前（= 执行时在其内层）——先拿进程内槽再占全局槽，
