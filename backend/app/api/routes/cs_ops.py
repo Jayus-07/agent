@@ -41,20 +41,44 @@ async def dispatch_stats(
     request: Request,
     _operator=Depends(require_cs_supervisor),
 ):
-    """派单域运营快照（管理员）。
+    """派单域运营快照（管理员 / 租户域主管）。
 
     - ``queue``：waiting_human / agent_offered 工单数（含按租户分布）
     - ``agents``：启用坐席数（在线与否由 Redis presence 决定，见 /metrics
       的 ``cs_dispatch_online_agents``，由 worker 每秒刷新）
     - ``outbox``：pending 事件数与最旧事件 lag（秒）
+
+    2026-11-08 跨租户审计（cs_ops.dispatch_stats.supervisor_cross_tenant_aggregate）：
+    平台管理员（roles/role 含 admin）看全租户聚合；客服域 supervisor 只看
+    自己租户；可信租户缺失时 fail-closed 403。
     """
+    roles = set(getattr(_operator, "roles", ()) or ())
+    role = str(getattr(_operator, "role", "") or "").strip().lower()
+    tenant_id = str(getattr(_operator, "tenant_id", "") or "")
+    if "admin" in roles or role == "admin":
+        tenant_scope: str | None = None
+    else:
+        if not tenant_id:
+            raise HTTPException(403, detail="缺少可信租户身份")
+        tenant_scope = tenant_id
+
     try:
         async with AsyncSessionLocal() as session:
-            waiting = await repository.count_queue_by_tenant(session)
-            offering = await repository.count_offering_by_tenant(session)
-            enabled = await repository.count_enabled_agents_by_tenant(session)
-            pending = await repository.count_pending_outbox(session)
-            oldest = await repository.oldest_pending_outbox_created_at(session)
+            waiting = await repository.count_queue_by_tenant(
+                session, tenant_id=tenant_scope
+            )
+            offering = await repository.count_offering_by_tenant(
+                session, tenant_id=tenant_scope
+            )
+            enabled = await repository.count_enabled_agents_by_tenant(
+                session, tenant_id=tenant_scope
+            )
+            pending = await repository.count_pending_outbox(
+                session, tenant_id=tenant_scope
+            )
+            oldest = await repository.oldest_pending_outbox_created_at(
+                session, tenant_id=tenant_scope
+            )
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
 

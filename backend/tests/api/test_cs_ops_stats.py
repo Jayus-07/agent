@@ -59,7 +59,7 @@ def _install(monkeypatch: pytest.MonkeyPatch, *, oldest=None) -> None:
 async def test_dispatch_stats_returns_snapshot(monkeypatch) -> None:
     _install(monkeypatch, oldest=NOW - timedelta(seconds=2))
 
-    data = await cs_ops.dispatch_stats(_operator())
+    data = await cs_ops.dispatch_stats(None, _operator=_operator())
 
     assert data["queue"]["waiting_total"] == 4
     assert data["queue"]["offered_total"] == 2
@@ -75,7 +75,7 @@ async def test_dispatch_stats_without_pending_events_has_zero_lag(
 ) -> None:
     _install(monkeypatch, oldest=None)
 
-    data = await cs_ops.dispatch_stats(_operator())
+    data = await cs_ops.dispatch_stats(None, _operator=_operator())
 
     assert data["outbox"]["pending"] == 7  # pending 计数与 oldest 解耦
     assert data["outbox"]["oldest_pending_lag_seconds"] == 0.0
@@ -107,6 +107,91 @@ async def test_dispatch_stats_maps_db_unavailable(monkeypatch) -> None:
     monkeypatch.setattr(cs_ops, "AsyncSessionLocal", _BrokenLocal())
 
     with pytest.raises(HTTPException) as exc_info:
-        await cs_ops.dispatch_stats(_operator())
+        await cs_ops.dispatch_stats(None, _operator=_operator())
 
     assert exc_info.value.status_code == 503
+
+
+# ── 2026-11-08 跨租户审计（cs_ops.dispatch_stats.supervisor_cross_tenant_aggregate）──
+
+
+class _Supervisor:
+    roles = ("supervisor",)
+    tenant_id = "tenant-a"
+    role = "viewer"
+    actor = "user:sup-1"
+    kind = "user"
+
+
+class _NoTenantSupervisor(_Supervisor):
+    tenant_id = ""
+
+
+def _install_capturing(monkeypatch) -> dict:
+    captured: dict = {}
+
+    async def count_pending(*_a, **kwargs):
+        captured["outbox"] = kwargs.get("tenant_id")
+        return 0
+
+    async def oldest_pending(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(
+        repository, "count_queue_by_tenant", _record_sync(captured, "queue")
+    )
+    monkeypatch.setattr(
+        repository, "count_offering_by_tenant", _record_sync(captured, "offering")
+    )
+    monkeypatch.setattr(
+        repository,
+        "count_enabled_agents_by_tenant",
+        _record_sync(captured, "agents"),
+    )
+    monkeypatch.setattr(repository, "count_pending_outbox", count_pending)
+    monkeypatch.setattr(
+        repository, "oldest_pending_outbox_created_at", oldest_pending
+    )
+    monkeypatch.setattr(cs_ops, "AsyncSessionLocal", _FakeSessionLocal())
+    return captured
+
+
+def _record_sync(captured: dict, name: str):
+    async def _fn(*_a, **kwargs):
+        captured[name] = kwargs.get("tenant_id")
+        return {"tenant-a": 1}
+
+    return _fn
+
+
+async def test_supervisor_stats_scoped_to_own_tenant(monkeypatch) -> None:
+    captured = _install_capturing(monkeypatch)
+
+    data = await cs_ops.dispatch_stats(None, _operator=_Supervisor())
+
+    assert captured == {
+        "queue": "tenant-a",
+        "offering": "tenant-a",
+        "agents": "tenant-a",
+        "outbox": "tenant-a",
+    }
+    assert data["queue"]["waiting_by_tenant"] == {"tenant-a": 1}
+
+
+async def test_supervisor_stats_without_tenant_fails_closed(monkeypatch) -> None:
+    _install_capturing(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await cs_ops.dispatch_stats(None, _operator=_NoTenantSupervisor())
+
+    assert exc_info.value.status_code == 403
+
+
+async def test_platform_admin_stats_keeps_cross_tenant_view(monkeypatch) -> None:
+    captured = _install_capturing(monkeypatch)
+
+    await cs_ops.dispatch_stats(None, _operator=_operator())
+
+    assert captured["queue"] is None
+    assert captured["outbox"] is None
+
