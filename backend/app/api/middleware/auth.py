@@ -113,7 +113,21 @@ async def api_key_middleware(request: Request, call_next):
         authz_header = request.headers.get("authorization") or ""
         if authz_header[:7].lower() == "bearer ":
             client_key = authz_header[7:].strip()
-    if not secrets.compare_digest(client_key.encode("utf-8"), API_KEY.encode("utf-8")):
+
+    authorized = bool(client_key) and secrets.compare_digest(
+        client_key.encode("utf-8"), API_KEY.encode("utf-8"))
+    if not authorized and client_key.startswith("ak_"):
+        # T9（2026-11-08）：调用方级 Key（auth.api_keys，哈希存储、可吊销）。
+        # 校验是同步 DB 查询（带 15s 缓存），放到线程池避免阻塞事件循环。
+        from starlette.concurrency import run_in_threadpool
+
+        from backend.security import api_keys
+
+        record = await run_in_threadpool(api_keys.verify_api_key, client_key)
+        if record is not None:
+            request.state.api_key = record
+            authorized = True
+    if not authorized:
         return JSONResponse(
             status_code=401,
             content={"error": "Unauthorized", "detail": "无效或缺失 X-API-Key"},

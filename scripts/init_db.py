@@ -363,6 +363,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "138_cs_invoice_business.sql": "business",
     "139_cs_invoice_action_type.sql": "memory",
     "140_selection_funnel_tenant.sql": "business",
+    "141_api_keys.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

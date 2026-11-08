@@ -1,4 +1,4 @@
-﻿name: RAG PR Smoke
+name: RAG PR Smoke
 
 # 触发与信任边界（2026-10-11 GPT 复核整改）：
 # - pull_request：只跑免费可信预检（路径检测 + E0 preflight），**不引用付费
@@ -250,6 +250,7 @@ jobs:
             backend/tests/travel/test_lodging_expert.py \
             backend/tests/travel/test_tool_governance.py \
             backend/tests/test_auth_middleware.py \
+            backend/tests/api/test_api_keys.py \
             backend/tests/api/test_apisix_b4_direct_routes.py \
             backend/tests/api/test_cs_ops_stats.py \
             backend/tests/api/test_cs_admin_claim_regression.py \

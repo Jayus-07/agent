@@ -95,4 +95,12 @@ flowchart TD
 | AU-11 | 非授权角色不可查看他人 Trace、成本、Prompt、管理 API |
 | AU-12 | 前端按钮展示与后端权限状态一致，但安全判断不依赖前端 |
 
+## 6. 服务凭据（API Key）治理
+
+- **两类凭据**：env `API_KEY` 是 legacy/引导凭据（全平台共享）；调用方级 Key 存 `auth.api_keys`（迁移 141），格式 `ak_<随机>`，库中只存 SHA-256 摘要，明文只在创建时输出一次。
+- **生命周期**：`enabled`、`expires_at`、`revoked_at`；应用侧 15s 进程缓存，停用/吊销最迟 15s 生效。DB 不可用时调用方 Key 校验 fail-closed（拒绝）。
+- **能力边界**：API Key 只证明持有服务端签发的调用方凭据，不映射真人身份；敏感端点仍由 `require_user_actor` 拒绝 service 身份（audit 模式也只放宽只读）。
+- **管理入口**：`python -m backend.scripts.manage_api_keys create|list|revoke`；`create` 的明文输出不得进入仓库、日志或工单。
+- **审计**：日志只记录 `key_id`、`caller` 与摘要前 8 位指纹，禁止记录明文 Key。
+
 关联 [身份头协议](../contracts/identity-header-protocol.md)、[认证导航](README.md)、[数据库](../DATABASE.md)、[Tool 失败/拒绝](../architecture/failure-degradation.md)。特别关注安全测试中的真实 tenant/owner SQL 结果断言与 WS 消息订阅；仅模拟 403 不等于证明无数据泄漏。
