@@ -260,6 +260,9 @@ jobs:
             backend/tests/api/test_session_guard_and_actor_kind.py \
             backend/tests/api/test_body_size_limit.py \
             backend/tests/test_trace_retention_pg.py \
+            backend/tests/test_mcp_security.py \
+            backend/tests/test_mcp_returnfix_acceptance.py \
+            backend/tests/sql/test_sql_production_closure.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope
