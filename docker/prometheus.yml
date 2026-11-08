@@ -3,6 +3,13 @@
 # 挂载：docker compose --profile observability up -d
 # 抓取目标：宿主机 Python 后端 /metrics（Prometheus 文本格式，见 backend/app/server.py）
 # 告警规则：docker/prometheus-alert-rules.yml（阈值定义见 docs/observability/slo.md）
+#
+# ⚠️ 2026-11-08 安全审计修复：app /metrics 已纳入 API Key 中间件（X-API-Key），
+#    不再接受匿名抓取。本 profile 的 app target 因此需要手工补凭据后才会 up；
+#    Prometheus 的 scrape_config 不支持自定义 X-API-Key 头（仅 authorization/
+#    basic_auth 类），故不在此文件内置明文密钥。启用观测栈时按
+#    docs/operations/commands.md「观测栈」一节的说明处理，未配凭据时
+#    agent-platform-app target 显示 down 属预期，不代表服务不可用。
 global:
   scrape_interval: 15s
   evaluation_interval: 15s

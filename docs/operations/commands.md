@@ -58,6 +58,17 @@ docker compose --profile observability up -d prometheus grafana
 
 停止或重建前先确认服务是否被其他会话使用。不要使用 `down -v` 清理共享数据卷。观测栈的启停配置见根目录 Compose 文件中的 `observability` profile。
 
+### 观测栈与 /metrics 凭据
+
+`/metrics` 受统一 API Key 中间件保护（2026-11-08 安全审计修复）：匿名请求返回 401，未配置 `API_KEY` 时 fail-closed 返回 503。宿主机自检：
+
+~~~powershell
+curl.exe -s -o NUL -w "%{http_code}`n" http://127.0.0.1:8000/metrics                      # 401
+curl.exe -s -H "X-API-Key: $env:API_KEY" http://127.0.0.1:8000/metrics | Select-Object -First 5
+~~~
+
+Prometheus 的 scrape_config 不支持自定义 `X-API-Key` 头，因此 `docker/prometheus.yml` 未内置明文密钥。启用 `observability` profile 时，`agent-platform-app` target 在补上凭据前显示 down 属预期；其余 target（worker 9809、rag-service、APISIX 9091、exporters）不受影响。需要观测 app 指标时，从 `.env` 读取 `API_KEY`，按 Prometheus 支持的 `authorization`/`basic_auth` 方式为该 target 单独配凭据文件，且不要把密钥写进被 Git 跟踪的 yml。
+
 ### 数据库连接耗尽排障（2026-10-21 事故）
 
 症状：登录/查询报 500，后端日志见 `asyncpg.exceptions.TooManyConnectionsError`。
