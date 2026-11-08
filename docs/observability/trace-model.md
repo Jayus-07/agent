@@ -75,6 +75,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 列表响应中的 Workflow、模型和 KB 筛选维度从已授权的留存 Trace 集合独立生成，不随当前页或所选筛选条件变化；不得先从未授权数据生成筛选项。
 - `has_tool` 下钻在留存上限内批量读取完整 Trace 和 Span，避免逐条查询造成 N+1 数据库访问。
 - 列表和统计均复用唯一 TraceStore。当前 TraceStore 最多保留 5,000 条；统计响应返回 `records_considered`、`retention_limit` 与 `observed_at`，仅代表该留存范围内的授权结果，不代表全量历史。
+- `trace_summary`（结构化摘要）与 `ai.trace_records`（PG 镜像）同样受留存期约束：`backend/observability/trace_retention.py` 的 `purge_expired_pg_traces()` 每周期按默认 14 天批量删除，不允许出现“SQLite store 在清理、PG 派生表无限保留”的分叉。
 - 管理端运行总览最近记录表兼容最多展示 200 条样本；统计由 `GET /api/observability/traces/stats` 在服务端按当前身份和租户范围聚合。样本行数不能作为全量统计口径。
 - 列表页 CSV 导出已随 2026-10-30 管理端工作台重构移除；服务端全量导出为后续规划，落地前不得宣称存在导出能力。
 

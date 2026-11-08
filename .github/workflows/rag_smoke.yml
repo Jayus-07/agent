@@ -259,6 +259,7 @@ jobs:
             backend/tests/api/test_sensitive_guard_audit_write.py \
             backend/tests/api/test_session_guard_and_actor_kind.py \
             backend/tests/api/test_body_size_limit.py \
+            backend/tests/test_trace_retention_pg.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

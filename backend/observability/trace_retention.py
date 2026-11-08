@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from backend.config.observability import (
     TRACE_RETENTION_BATCH_SIZE,
@@ -103,6 +103,75 @@ def purge_expired_traces(store, now: datetime | None = None,
     return stats
 
 
+async def purge_expired_pg_traces(now: datetime | None = None,
+                                  batch_size: int = TRACE_RETENTION_BATCH_SIZE) -> dict:
+    """清理 PG 侧派生/镜像表（2026-11-08 审计 T7c）。
+
+    覆盖 ``trace_summary``（结构化摘要，含明文 question/answer_preview）与
+    ``ai.trace_records``（trace PG 镜像）。两表都没有 doc_type 敏感分类，
+    因此统一按默认留存期（14 天）删除——宁可早删，符合
+    docs/observability/trace-model.md 的 14/180 天契约下限。
+
+    返回 ``{summary_purged, mirror_purged, errors}``；批量删除，异常不中断。
+    """
+    from sqlalchemy import text
+
+    from backend.config.database import OBS_DB_PG_TABLE_PREFIX
+    from backend.memory.database import AsyncSessionLocal
+
+    now_dt = now or datetime.now(timezone.utc)
+    cutoff_dt = now_dt - timedelta(days=TRACE_RETENTION_DAYS_DEFAULT)
+    # trace_summary.created_at 是应用侧 localtime 文本，与 trace_store 同构。
+    cutoff_text = cutoff_dt.strftime(_CUTOFF_FMT)
+    summary_table = f"{OBS_DB_PG_TABLE_PREFIX}trace_summary"
+    stats = {"summary_purged": 0, "mirror_purged": 0, "errors": 0}
+
+    async with AsyncSessionLocal() as db:
+        try:
+            while True:
+                result = await db.execute(
+                    text(
+                        f"DELETE FROM {summary_table} WHERE ctid IN ("
+                        f"SELECT ctid FROM {summary_table} "
+                        "WHERE created_at < :cut LIMIT :lim)"
+                    ),
+                    {"cut": cutoff_text, "lim": batch_size},
+                )
+                purged = int(result.rowcount or 0)
+                stats["summary_purged"] += purged
+                await db.commit()
+                if purged < batch_size:
+                    break
+        except Exception as exc:  # noqa: BLE001 — 清理失败不阻断服务
+            await db.rollback()
+            stats["errors"] += 1
+            logger.warning(f"[TraceRetention] trace_summary 清理失败: {exc}")
+
+        try:
+            while True:
+                result = await db.execute(
+                    text(
+                        "DELETE FROM ai.trace_records WHERE ctid IN ("
+                        "SELECT ctid FROM ai.trace_records "
+                        "WHERE created_at < :cut LIMIT :lim)"
+                    ),
+                    {"cut": cutoff_dt, "lim": batch_size},
+                )
+                purged = int(result.rowcount or 0)
+                stats["mirror_purged"] += purged
+                await db.commit()
+                if purged < batch_size:
+                    break
+        except Exception as exc:  # noqa: BLE001
+            await db.rollback()
+            stats["errors"] += 1
+            logger.warning(f"[TraceRetention] ai.trace_records 清理失败: {exc}")
+
+    if any(stats.values()):
+        logger.info(f"[TraceRetention] PG 清理完成: {stats}")
+    return stats
+
+
 async def trace_retention_loop(store=None) -> None:
     """startup 后台任务：首次延迟避开启动期，之后按周期清理。"""
     import asyncio
@@ -114,6 +183,7 @@ async def trace_retention_loop(store=None) -> None:
     while True:
         try:
             await asyncio.to_thread(purge_expired_traces, store)
+            await purge_expired_pg_traces()
         except Exception as e:
             logger.warning(f"[TraceRetention] 清理周期异常（不影响服务）: {e}")
         await asyncio.sleep(TRACE_RETENTION_SWEEP_INTERVAL_HOURS * 3600)
