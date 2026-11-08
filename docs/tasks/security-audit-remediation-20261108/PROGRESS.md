@@ -44,7 +44,8 @@
 - 验证：`test_api_keys.py` **8 passed**（真实 PG 生命周期 + 脚本闭环 + 中间件）；本机 E2E：托管 Key 访问 `/agents` **200**、无效 `ak_` **401**、吊销后等待 15s **401**；测试数据已清理。
 
 ## 后续
-1. T8/T9 已合并；后续只需从最新 main 重建并终验。
-2. T8/T9 合并后从最新 main 重建并终验，再更新本文件走 docs PR。
+1. T8/T9 已合并并完成本机终验；后续从最新 main 重建即可。
+2. 登录/RBAC 收尾与 5 个安全专项见 [login-rbac-security-hardening-20261109](../login-rbac-security-hardening-20261109/PROGRESS.md)（#387–#395）。
 3. 已知环境噪音：本机 `test_rag_authz.py` 9 条失败源于 KB 注册表被 CS 种子污染；CI 隔离库不受影响。
+4. 仍待办：生产发布与发布后观察、审计其余 needs_validation 线索、选品 owner/执行面授权。
 
