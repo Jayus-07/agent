@@ -276,11 +276,15 @@ class PostgresDocumentRegistry(DocumentRegistry):
             rows = self._exec(conn, f"SELECT * FROM {self._table}").fetchall()
         return {r["file_path"]: self._row_dict(r) for r in rows}
 
-    def list_active(self) -> list[dict]:
+    def list_active(self, tenant_id: str | None = None) -> list[dict]:
+        """active 文档行；tenant_id 非空时只返回该租户（MCP 与 HTTP 同口径）。"""
+        sql = f"SELECT * FROM {self._table} WHERE status = 'active'"
+        params: tuple = ()
+        if tenant_id is not None:
+            sql += " AND tenant_id = %s"
+            params = (tenant_id,)
         with self._lock, self._conn() as conn:
-            rows = self._exec(
-                conn, f"SELECT * FROM {self._table} WHERE status = 'active'"
-            ).fetchall()
+            rows = self._exec(conn, sql, params).fetchall()
         return [self._row_dict(r) for r in rows]
 
     def list_by_statuses(self, statuses: tuple[str, ...] | list[str]) -> list[dict]:

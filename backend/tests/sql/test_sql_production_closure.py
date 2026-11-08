@@ -365,9 +365,12 @@ class TestToolChannelClosure:
 class TestMcpChannelClosure:
     def test_list_tables_matches_whitelist_exactly(self):
         """list_tables 数据源 = schema_loader 白名单（修复连错库 +
-        information_schema 探测面）；7 个业务 schema 全部可见。"""
+        information_schema 探测面）；admin 身份下 7 个业务 schema 全部可见。"""
         from mcp_servers.servers.sql import SQLMCPServer
 
+        set_tool_user_id("9")
+        set_tool_roles(("admin",))
+        set_tool_tenant_id("default")
         out = SQLMCPServer().call_tool("list_tables", {})
         tables = set(out["tables"])
         expected = set(schema_loader.get_all_table_names())
@@ -378,6 +381,16 @@ class TestMcpChannelClosure:
         # 白名单外对象绝不出现（旧实现连 agent_memory 库会列出内部表）
         assert "public.schema_migrations" not in tables
         assert not any(t.startswith("auth.") for t in tables)
+
+    def test_list_tables_without_identity_denied(self):
+        """2026-11-08 审计：MCP list_tables 与 HTTP 同源，无身份即拒。"""
+        import pytest
+
+        from mcp_servers.manager import MCPToolError
+        from mcp_servers.servers.sql import SQLMCPServer
+
+        with pytest.raises(MCPToolError, match="权限门拒绝"):
+            SQLMCPServer().call_tool("list_tables", {})
 
     def test_mcp_sql_query_without_identity_denied(self):
         """MCP 通道无可信身份 → 权限门拒绝（不存在匿名 SQL），

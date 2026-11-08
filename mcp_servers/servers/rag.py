@@ -178,8 +178,13 @@ class RAGMCPServer(MCPServer):
                 keyword=keyword, status_filter="active",
                 page=page, page_size=page_size,
                 kb_scope=sorted(authz.kb_scope),
+                # 2026-11-08 审计（mcp-rag.tools.missing-tenant-pushdown）：
+                # 租户谓词与 HTTP 通道 can_read_row 同源，不能只靠 kb_id。
+                tenant_id=str(authz.principal.tenant_id),
                 visible_scopes=authz.sql_visible_scopes(
-                    registry.distinct_permission_scopes()),
+                    registry.distinct_permission_scopes(
+                        tenant_id=str(authz.principal.tenant_id)),
+                ),
             )
             docs = [_safe_doc_row(d) for d in result["items"]]
             return {"documents": docs, "total": result["total"],
@@ -199,7 +204,8 @@ class RAGMCPServer(MCPServer):
             if not authz.is_admin:
                 raise _deny("get_stats 仅限管理员（rag.admin 权限点）")
             registry = DocumentRegistry(DOC_REGISTRY_PATH)
-            docs = [d for d in registry.list_active()
+            docs = [d for d in registry.list_active(
+                        tenant_id=str(authz.principal.tenant_id))
                     if str(d.get("kb_id") or "") in authz.kb_scope]
             return {
                 "kb_count": len(set(str(d.get("kb_id") or "default") for d in docs)),

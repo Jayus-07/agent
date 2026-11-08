@@ -105,9 +105,29 @@ class SQLMCPServer(MCPServer):
             raise MCPToolError("SQL 查询失败，请稍后重试。", "tool_failed")
 
         if tool_name == "list_tables":
+            # 2026-11-08 审计（mcp-sql-list-tables-missing-sql-read）：
+            # 与 GET /api/sql/tables 同源——sql.read 预检 + 表域/scope
+            # 可见集下推；无身份/无权限 fail-closed，不再直接回全量白名单。
+            from backend.sql.policy import SQLPolicyError, SQLPolicyGuard
             from backend.sql.schema_loader import schema_loader
 
-            tables = schema_loader.get_all_table_names()
+            policy = _mcp_sql_policy_context()
+            try:
+                allowed = set(SQLPolicyGuard().get_allowed_tables(policy))
+            except SQLPolicyError as exc:
+                logger.warning(
+                    "[MCP-sql] 权限门拒绝 channel=list_tables code=%s",
+                    getattr(exc, "code", "-"),
+                )
+                from mcp_servers.manager import MCPToolError
+
+                raise MCPToolError(
+                    "SQL 表目录被权限门拒绝", "permission_denied",
+                ) from None
+            tables = [
+                name for name in schema_loader.get_all_table_names()
+                if name in allowed
+            ]
             return {"tables": tables, "count": len(tables)}
 
         raise ValueError(f"未知 tool: {tool_name}")

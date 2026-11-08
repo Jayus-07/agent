@@ -108,7 +108,10 @@ class FakeRegistry:
              "file_path": "/srv/secret/b.md"},
         ]
 
-    def list_active(self):
+    last_list_active_kwargs: dict = {}
+
+    def list_active(self, **kwargs):
+        FakeRegistry.last_list_active_kwargs = kwargs
         return self._rows()
 
     def search(self, **kwargs):
@@ -117,7 +120,8 @@ class FakeRegistry:
         items = [d for d in self._rows() if d["kb_id"] in kb_scope]
         return {"items": items, "total": len(items)}
 
-    def distinct_permission_scopes(self):
+    def distinct_permission_scopes(self, **kwargs):
+        FakeRegistry.last_scope_kwargs = kwargs
         return ["general"]
 
 
@@ -179,6 +183,8 @@ def test_get_stats_admin_sanitized(fake_registry, unbind):
     result = _server().call_tool("get_stats", {})
     assert "error" not in result
     assert result["doc_count"] == 2
+    # 2026-11-08 审计：统计行集同样按租户下推
+    assert fake_registry.last_list_active_kwargs.get("tenant_id") == "t1"
     assert result["kb_count"] == 2
     assert result["chunk_count"] == 8
     assert result["vector_db"] == "pgvector"
@@ -196,7 +202,7 @@ def test_get_stats_admin_scope_excludes_other_kb(fake_registry, unbind):
          "department": "", "doc_type": "", "created_at": "", "updated_at": "",
          "file_path": "/srv/secret/t.md"},
     ]
-    fake_registry.list_active = lambda self: rows
+    fake_registry.list_active = lambda self, **kwargs: rows
     result = _server().call_tool("get_stats", {})
     assert result["doc_count"] == 2  # 未登记 kb 不进 admin 统计
 
@@ -216,6 +222,8 @@ def test_list_documents_scope_pushdown_and_path_stripped(fake_registry, unbind):
     result = _server().call_tool("list_documents", {"keyword": "", "page": 1})
     # 授权下推：kb_scope 进了 registry.search（员工未带部门只见 "all" 库）
     assert fake_registry.last_kwargs.get("kb_scope")
+    # 2026-11-08 审计：租户谓词必须与 HTTP can_read_row 同源下推
+    assert fake_registry.last_kwargs.get("tenant_id") == "t1"
     assert all(d["doc_id"] != "d2" for d in result["documents"])
     # 行白名单：file_path 等内部路径不出 MCP 边界
     for row in result["documents"]:

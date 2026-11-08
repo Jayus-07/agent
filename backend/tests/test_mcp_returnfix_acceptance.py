@@ -61,7 +61,7 @@ class FakeRegistry:
              "permission_scope": "restricted", "file_path": "/srv/secret/b.md"},
         ]
 
-    def list_active(self):
+    def list_active(self, **kwargs):
         return self._rows()
 
     def search(self, **kwargs):
@@ -73,7 +73,7 @@ class FakeRegistry:
                  and ((d.get("permission_scope") or "general") in visible)]
         return {"items": items, "total": len(items)}
 
-    def distinct_permission_scopes(self):
+    def distinct_permission_scopes(self, **kwargs):
         return ["general", "restricted"]
 
 
