@@ -80,9 +80,15 @@ def _sensitive_guard_mode() -> str:
 
 
 async def require_admin_operator(request: Request) -> None:
-    """网关审计类端点的管理员闸（A3 收口；enforce 默认 / audit 可回退）。"""
+    """网关审计类端点的管理员闸（A3 收口；enforce 默认 / audit 只读可回退）。
+
+    2026-11-08 安全审计修复（sensitive-api-guard.audit-non-admin-bypass）：
+    audit 灰度只放宽**只读**请求；写操作（如任务中心 retry/revoke/
+    reexecute）即使 audit 也按管理员闸 enforce。
+    """
     from backend.app.api.deps import (  # 局部导入避免循环依赖
         is_platform_admin,
+        is_read_only_request,
         resolve_operator_role,
     )
 
@@ -90,10 +96,11 @@ async def require_admin_operator(request: Request) -> None:
     # actor 形如 "user:<id>"（JWT 通道）或 "service:internal-token"（服务凭据）
     if is_platform_admin(ident.role) and ident.actor.startswith("user:"):
         return
-    if _sensitive_guard_mode() == "audit":
+    if _sensitive_guard_mode() == "audit" and is_read_only_request(request):
         logger.warning(
-            f"[SensitiveGuard] audit 模式放行非管理员访问网关审计数据: "
-            f"actor={ident.actor} role={ident.role}"
+            f"[SensitiveGuard] audit 模式放行只读访问网关审计数据: "
+            f"actor={ident.actor} role={ident.role} "
+            f"method={request.method} path={request.url.path}"
         )
         return
     raise HTTPException(

@@ -256,6 +256,8 @@ jobs:
             backend/tests/api/test_cs_admin_close_tenant_regression.py \
             backend/tests/api/test_auth_session_family.py::test_security_sessions_tenant_scope \
             backend/tests/api/test_rbac_user_lifecycle.py::test_user_lifecycle_end_to_end \
+            backend/tests/api/test_sensitive_guard_audit_write.py \
+            backend/tests/api/test_session_guard_and_actor_kind.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

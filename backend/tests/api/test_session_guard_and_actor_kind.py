@@ -218,6 +218,14 @@ def guard_client(monkeypatch):
     async def admin_only(ident=Depends(require_admin_user)):
         return {"kind": ident.kind, "role": ident.role}
 
+    @app.post("/user-write")
+    async def user_write(ident=Depends(require_user_actor)):
+        return {"kind": ident.kind}
+
+    @app.post("/admin-write")
+    async def admin_write(ident=Depends(require_admin_user)):
+        return {"kind": ident.kind, "role": ident.role}
+
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -247,3 +255,24 @@ def test_guard_audit_mode_allows_service(guard_client, internal_token, monkeypat
     monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "audit")
     r = guard_client.get("/user-only", headers=SERVICE_HEADERS)
     assert r.status_code == 200 and r.json()["kind"] == "service"
+
+
+# ── 2026-11-08 审计修复：audit 只放宽只读，写操作仍 enforce ──
+
+def test_guard_audit_mode_denies_service_write(guard_client, internal_token, monkeypatch):
+    """audit 下 service 身份只可读；POST 敏感端点仍 403（防后门复活）。"""
+    monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "audit")
+    assert guard_client.post("/user-write", headers=SERVICE_HEADERS).status_code == 403
+    assert guard_client.post("/admin-write", headers=SERVICE_HEADERS).status_code == 403
+
+
+def test_guard_audit_mode_denies_viewer_admin_write(guard_client, monkeypatch):
+    """audit 下非管理员对管理端点的写操作仍 403。"""
+    monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "audit")
+    assert guard_client.post("/admin-write", headers=VIEWER_HEADERS).status_code == 403
+
+
+def test_guard_audit_mode_allows_viewer_read(guard_client, monkeypatch):
+    """只读放宽保留：audit 下 viewer 仍可读（灰度回退语义不变）。"""
+    monkeypatch.setenv("SENSITIVE_API_GUARD_MODE", "audit")
+    assert guard_client.get("/admin-only", headers=VIEWER_HEADERS).status_code == 200
