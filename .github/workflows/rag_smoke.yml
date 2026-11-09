@@ -275,6 +275,7 @@ jobs:
             backend/tests/rag/test_tenant_scope_retrieval.py \
             backend/tests/messaging/test_whatsapp_consumer.py \
             backend/tests/test_startup_validation.py::TestToolApprovalModeProductionFatal \
+            backend/tests/travel/booking/test_booking_transition_whitelist.py \
             backend/tests/security/test_input_guard_exemptions.py \
             backend/tests/prompts/test_prompt_eval_dispatch.py \
             backend/tests/api/test_prompt_release_api.py \

@@ -19,6 +19,11 @@ from decimal import Decimal
 from typing import Any
 
 from backend.shared.logger import logger
+from backend.travel.booking.state import (
+    BookingOrderStatus,
+    IllegalBookingTransition,
+    require_transition,
+)
 
 _SCHEMA = "travel"
 
@@ -237,10 +242,29 @@ class BookingStore:
         failure_code: str | None = None, failure_class: str | None = None,
         provider_order_id: str | None = None, detail: dict | None = None,
     ) -> dict:
-        """集中状态转换（G20/G21）：CAS + 版本单调 + 同事务事件追加。
+        """集中状态转换（G20/G21）：白名单硬闸 + CAS + 版本单调 + 同事务事件追加。
 
-        并发/陈旧（expected_status 不匹配）→ StaleTransition（调用方重读）。
+        状态机白名单在此强制（安全审计 #80，2026-11-09）：非法转换
+        fail-closed 抛 IllegalBookingTransition（state.require_transition），
+        IN_DOUBT 出口额外校验 cause ∈ {reconciliation, manual}。此前白名单
+        只在 state.py 定义、生产代码零调用，webhook 可把任意当前状态直接
+        推进终态。并发/陈旧（expected_status 不匹配）→ StaleTransition
+        （调用方重读）。
         """
+        # 未知状态值同样 fail-closed（枚举解析失败 = 非法转换）
+        try:
+            require_transition(
+                BookingOrderStatus(expected_status),
+                BookingOrderStatus(target),
+                cause=cause,
+            )
+        except IllegalBookingTransition:
+            raise
+        except ValueError as exc:
+            raise IllegalBookingTransition(
+                f"未知状态值: expected={expected_status!r} target={target!r}"
+            ) from exc
+
         ts_cols: list[str] = []
         ts_params: list[Any] = []
         for col in _TRANSITION_TS.get(target, ()):
