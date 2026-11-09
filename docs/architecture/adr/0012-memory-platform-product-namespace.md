@@ -96,11 +96,22 @@ L3 事实增加 `valid_from` / `invalid_at` / `evidence`（来源消息引用）
 | 身份层 | 读 + 可写 | 只读 | 读 + 显式可写 |
 | 显式写确认门（#50） | 开 | 开 | 开 |
 
-### D6. `memory_store_tool` 加用户确认门（#50）
+### D6. `memory_store_tool` 加用户意图门（#50）
 
-治理登记 `confirmation_policy` 从 `none` 改为 `user_confirmation`，与同组
-`memory_forget_tool` 对称；写入附 evidence 绑定（来源用户轮次），落
-Governance 既有确认/审批机制——不新造确认通道。
+**第 1 期落地形态：证据门（2026-11-10 修订）**。写入前校验当前会话最近
+用户消息确实表达过该内容（jieba 分词语义词 ≥2 命中或规范化子串复述，
+双通道任一），无证据即拒绝（fail-closed）——与后台 inferred 管线的
+`_evidence_from_user` 防线对齐，补齐 provenance 契约（"用户消息 = 唯一
+可形成用户长期记忆的证据，prompt 不是安全边界"）在显式工具通道的唯一
+例外。`confirmation_policy` 暂保持 `none`。
+
+**user_confirmation 不在本期启用的原因**：探索确认 Prepare→Confirm
+治理机制（guard/preview/TTL/指纹）完整，但图内回路未接线——
+`tool_confirmation_id` 无写入者、无确认 API、前端无弹窗，现有
+`memory_forget_tool`（user_confirmation）因此实际不可执行。直接改登记
+会把 store 工具同样置于不可用状态。**确认回路接线（后端 SSE 确认卡 +
+前端弹窗 + 既有 user_confirmation 工具修复）单独立项**，完成后本工具
+对称升级为 `user_confirmation`。
 
 ### D7. schema 与存量数据迁移
 
