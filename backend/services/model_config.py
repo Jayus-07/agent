@@ -1454,6 +1454,12 @@ class ModelConfigService:
         clear_api_key = bool(payload.get("clearApiKey"))
         if api_key is not None and not str(api_key).strip() and not clear_api_key:
             raise ValueError("apiKey 为空时请使用 clearApiKey=true 明确清除")
+        # 1.2 同堵（2026-11-10 独立评审 P3-2）：编辑供应商允许顺带提交模型
+        # 单价，与 add_provider_model 同口径校验+落价；metered 未带价不改
+        # 现状（模型价缺失时由模型编辑入口补齐）。
+        input_price, output_price, cached_input_price, price_currency = (
+            _parse_model_price(payload)
+        )
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
         # None = 未提交该字段（保持原值，见 SQL 的 COALESCE）；{} = 显式清空
         extra_body = (
@@ -1650,6 +1656,20 @@ class ModelConfigService:
                     migration_base_url=base_url,
                     upstream_model_name=upstream_model_name,
                 )
+                if input_price is not None or output_price is not None:
+                    # _apply_model_pricing 内含 _validate_model_pricing：
+                    # metered 缺必填维度 / 非 metered 填价统一在此拒绝。
+                    await _apply_model_pricing(
+                        session,
+                        provider_row={"billing": billing},
+                        model_name=model_name,
+                        model_kind=model_kind,
+                        input_price=input_price,
+                        output_price=output_price,
+                        operator=operator,
+                        cached_input_price=cached_input_price,
+                        price_currency=price_currency,
+                    )
             old_headers = _decode_json_object(old_row.get("extra_headers"))
             old_body = _decode_json_object(old_row.get("extra_body"))
             call_config_changed = any((
@@ -1701,7 +1721,16 @@ class ModelConfigService:
             }
         if clear_api_key:
             new_credential = {"configured": False}
-        return _provider_payload(row, new_credential)
+        updated = _provider_payload(row, new_credential)
+        if (
+            billing == "metered"
+            and model_name
+            and input_price is None
+            and output_price is None
+        ):
+            # 同 create_provider：metered 模型缺价时显式提示补价。
+            updated["needs_pricing"] = True
+        return updated
 
     async def _upsert_model(
         self,
@@ -2280,6 +2309,12 @@ class ModelConfigService:
             raise ValueError("networkScope 只能是 public 或 private")
         if billing not in {"metered", "subscription", "local"}:
             raise ValueError("billing 只能是 metered、subscription 或 local")
+        # 1.2 同堵（2026-11-10 独立评审 P3-2）：创建供应商允许直接带模型
+        # 单价，与 add_provider_model 同口径校验+落价；metered 未带价仍可
+        # 创建（先建后补价的既有流程），响应标 needs_pricing 提示补价。
+        input_price, output_price, cached_input_price, price_currency = (
+            _parse_model_price(payload)
+        )
         extra_headers = _normalize_extra_headers(payload.get("extraHeaders"))
         extra_body = _normalize_extra_body(payload.get("extraBody"))
 
@@ -2365,6 +2400,20 @@ class ModelConfigService:
                 migration_base_url=base_url,
                 upstream_model_name=upstream_model_name or model_name,
             )
+            if input_price is not None or output_price is not None:
+                # _apply_model_pricing 内含 _validate_model_pricing：
+                # metered 缺必填维度 / 非 metered 填价统一在此拒绝。
+                await _apply_model_pricing(
+                    session,
+                    provider_row={"billing": billing},
+                    model_name=model_name,
+                    model_kind=model_kind,
+                    input_price=input_price,
+                    output_price=output_price,
+                    operator=operator,
+                    cached_input_price=cached_input_price,
+                    price_currency=price_currency,
+                )
             if api_key:
                 await session.execute(
                     text(
@@ -2420,7 +2469,7 @@ class ModelConfigService:
             break
 
         await registry_store.refresh_registry()
-        return _provider_payload(
+        created = _provider_payload(
             {
                 "id": provider_id,
                 "display_name": display_name or urlparse(base_url).hostname or provider_id,
@@ -2441,6 +2490,16 @@ class ModelConfigService:
                 "rotatedBy": operator,
             },
         )
+        if (
+            billing == "metered"
+            and model_name
+            and input_price is None
+            and output_price is None
+        ):
+            # metered 模型无价调用会被预算链拒绝（price_unavailable），
+            # 显式提示管理员到模型编辑补价（前端 missingPrice 会禁用保存）。
+            created["needs_pricing"] = True
+        return created
 
     async def delete_provider(
         self,

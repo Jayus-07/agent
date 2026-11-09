@@ -714,3 +714,74 @@ async def test_delete_provider_rejects_unknown_provider(monkeypatch):
         await model_config.ModelConfigService().delete_provider(
             "ghost", "user:test-admin"
         )
+
+
+def _create_provider_env(monkeypatch, session):
+    """create_provider 测试公共打桩：会话/加密/注册表刷新/探测通过。"""
+    monkeypatch.setattr(model_config, "get_session", lambda: _session_stream(session))
+    monkeypatch.setattr(model_config, "encrypt_secret", lambda value: "enc:cipher")
+    monkeypatch.setattr(
+        model_config.registry_store, "refresh_registry", AsyncMock(return_value=True)
+    )
+
+    async def _probe(**_kwargs):
+        return ProbeResult(
+            ok=True,
+            blocked_at=None,
+            summary="模型连通性通过（快速测试）",
+            steps=[ProbeStep("L2", "pass", "模型名可用")],
+        )
+
+    monkeypatch.setattr(model_config.provider_probe, "probe_provider", _probe)
+
+
+@pytest.mark.asyncio
+async def test_create_provider_metered_without_price_flags_needs_pricing(monkeypatch):
+    """1.2 同堵（评审 P3-2）：metered 创建缺价仍可建（先建后补价的既有
+    流程），响应标 needs_pricing 提示补价；不落任何 model_price 行。"""
+    session = _CreateSession()
+    _create_provider_env(monkeypatch, session)
+
+    result = await model_config.ModelConfigService().create_provider(
+        {
+            "baseUrl": "https://provider.example/v1",
+            "apiKey": "sk-secret-value",
+            "modelName": "custom-model",
+        },
+        "user:test-admin",
+    )
+
+    assert result["modelName"] == "custom-model"
+    assert result.get("needs_pricing") is True
+    assert not any("INSERT INTO model_price" in s for s in session.statements)
+
+
+@pytest.mark.asyncio
+async def test_create_provider_with_prices_applies_pricing(monkeypatch):
+    """1.2 同堵（评审 P3-2）：创建时带价 → 走 _apply_model_pricing
+    校验+落价（metered 必填/非 metered 拒价由其内部统一执行），
+    响应不再标 needs_pricing。"""
+    from decimal import Decimal
+
+    session = _CreateSession()
+    _create_provider_env(monkeypatch, session)
+    apply_mock = AsyncMock(return_value=None)
+    monkeypatch.setattr(model_config, "_apply_model_pricing", apply_mock)
+
+    result = await model_config.ModelConfigService().create_provider(
+        {
+            "baseUrl": "https://provider.example/v1",
+            "apiKey": "sk-secret-value",
+            "modelName": "custom-model",
+            "inputPricePer1m": "0.002",
+            "outputPricePer1m": "0.006",
+        },
+        "user:test-admin",
+    )
+
+    apply_mock.assert_awaited_once()
+    kwargs = apply_mock.await_args.kwargs
+    assert kwargs["input_price"] == Decimal("0.002")
+    assert kwargs["output_price"] == Decimal("0.006")
+    assert kwargs["provider_row"] == {"billing": "metered"}
+    assert "needs_pricing" not in result
