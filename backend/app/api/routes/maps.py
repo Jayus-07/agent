@@ -426,7 +426,7 @@ async def navigate(to_location: str = Query(..., alias="to", description="目的
         raise HTTPException(status_code=400, detail="from 格式错误，应形如 26.0824,119.2968")
 
     try:
-        return api.navigation_uri(
+        result = api.navigation_uri(
             to_lat=dst[0], to_lng=dst[1], to_name=to_name,
             from_lat=src[0] if src else None, from_lng=src[1] if src else None,
             from_name=from_name, mode=mode, policy=policy,
@@ -435,6 +435,21 @@ async def navigate(to_location: str = Query(..., alias="to", description="目的
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise _guard("导航调起")(e) from e
+
+    # 审计 #44：backend 分支的 URL 含后端 Key，不能外发。此前只返回
+    # warning 让调用方自觉，实际把密钥随响应交给了任何已登录用户。
+    if str(result.get("key_kind") or "") == "backend":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "MapFrontendKeyNotConfigured",
+                "message": (
+                    "导航链接需要前端专用 Key（TENCENT_LBS_FRONTEND_KEY），"
+                    "当前未配置，已拒绝返回含后端密钥的 URL"
+                ),
+            },
+        )
+    return result
 
 
 # =============================================

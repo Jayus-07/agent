@@ -95,3 +95,12 @@ def test_admin_created_username_policy():
     assert not _valid_new_username("operator")       # 非 11 位、非豁免前缀
     assert not _valid_new_username("1390000000")     # 10 位
     assert not _valid_new_username("ops_" + "x" * 30)  # 超长
+
+def test_login_username_rejects_control_chars():
+    """审计 #43：登录名只允许可见 ASCII 标识符，控制字符/CRLF 直接拒绝。"""
+    assert auth_local._login_username_error("ops_admin") is None
+    assert auth_local._login_username_error("13900000009") is None
+    assert auth_local._login_username_error("bad\nname") == "用户名格式不正确"
+    assert auth_local._login_username_error("bad\rname") == "用户名格式不正确"
+    assert auth_local._login_username_error("bad name") == "用户名格式不正确"
+    assert auth_local._login_username_error("") == "用户名格式不正确"

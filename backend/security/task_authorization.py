@@ -57,6 +57,44 @@ def _fetch_auth_user(uid: int):
         return cur.fetchone()
 
 
+def resolve_delegated_actor(user_id: str) -> tuple[str, str, tuple[str, ...]]:
+    """内部网关委托的终端 user_id → (tenant_id, department, roles)。
+
+    审计 #38：/internal/ai/call 以请求体 actor_user_id 作为记忆检索身份。
+    这里要求 actor 必须是 auth.users 中启用中的真实用户，并返回其权威租户，
+    避免把「令牌持有者可指定任意 id」直接变成「读任意用户记忆」，
+    同时不再把租户归一成 default 桶。
+
+    fail-closed：非数字 id / 用户不存在 / 已禁用 / 租户为空 → TaskAuthorizationDenied。
+    """
+    raw_uid = str(user_id or "").strip()
+    if raw_uid in _UNAUTHENTICATED:
+        raise TaskAuthorizationDenied(
+            f"委托 actor 身份不可信（user_id={raw_uid!r}）")
+    try:
+        uid = int(raw_uid)
+    except ValueError:
+        raise TaskAuthorizationDenied(
+            f"委托 actor user_id={raw_uid!r} 不是 auth.users.id 口径") from None
+    try:
+        row = _fetch_auth_user(uid)
+    except Exception as exc:
+        raise TaskAuthorizationDenied(
+            f"委托 actor 授权解析失败（fail-closed）: {exc}") from exc
+    if row is None:
+        raise TaskAuthorizationDenied(f"委托 actor 用户不存在: user_id={uid}")
+    role, status, dept, tenant = row
+    if int(status or 0) != _USER_STATUS_ENABLED:
+        raise TaskAuthorizationDenied(
+            f"委托 actor 已禁用: user_id={uid} (status={status})")
+    tenant_id = str(tenant or "").strip()
+    if not tenant_id:
+        raise TaskAuthorizationDenied(
+            f"委托 actor 缺少租户: user_id={uid}")
+    roles = (str(role).strip(),) if role else ()
+    return tenant_id, str(dept or ""), roles
+
+
 def resolve_task_authorization(user_id: str, tenant_id: str) -> AuthorizationContext:
     """任务持久化 actor → 当前权威 AuthorizationContext（无 HTTP 环境）。
 

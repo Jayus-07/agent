@@ -100,14 +100,32 @@ async def call_tool(req: AiCallRequest, request: Request):
     from backend.observability.tracer import current_trace_context
     from mcp_servers.manager import manager
 
-    # 返修5（PR#27 复审）：Java 委托主体显式全量绑定——actor 未携带的
-    # 维度（roles/tenant/permissions）显式置空，语义上不存在「继承前值」。
-    # 每请求 task 上下文本就隔离，这里是语义自文档化兜底；工具侧
-    # permissions=None = 未声明（文档级权限按未声明裁决，不放大）。
-    set_tool_user_id(req.actor_user_id)
-    set_tool_department(req.actor_department)
-    set_tool_tenant_id("")
-    set_tool_roles(())
+    # 审计 #38：actor 必须解析成启用中的真实用户，并绑定其权威租户；
+    # 此前直接把请求体 id 当身份、租户置空（归一 default 桶），
+    # 令牌持有者可指定任意 user_id 读取该用户长期记忆。
+    from backend.security.task_authorization import (
+        TaskAuthorizationDenied,
+        resolve_delegated_actor,
+    )
+
+    actor = (req.actor_user_id or "").strip()
+    tenant_id = ""
+    roles: tuple[str, ...] = ()
+    department = req.actor_department
+    if actor:
+        try:
+            tenant_id, db_department, roles = resolve_delegated_actor(actor)
+        except TaskAuthorizationDenied as exc:
+            raise HTTPException(
+                status_code=403,
+                detail={"error": "ActorNotTrusted", "message": str(exc)},
+            ) from exc
+        department = department or db_department
+
+    set_tool_user_id(actor)
+    set_tool_department(department)
+    set_tool_tenant_id(tenant_id)
+    set_tool_roles(roles)
     set_tool_permissions(None)
 
     started = time.perf_counter()
