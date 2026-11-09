@@ -266,6 +266,7 @@ jobs:
             backend/tests/api/test_body_size_limit.py \
             backend/tests/test_trace_retention_pg.py \
             backend/tests/test_mcp_security.py \
+            backend/tests/api/test_eval_asset_authz.py \
             backend/tests/test_mcp_returnfix_acceptance.py \
             backend/tests/sql/test_sql_production_closure.py \
             backend/tests/sql/test_sql_scope_subquery.py \
