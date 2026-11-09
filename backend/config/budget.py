@@ -49,6 +49,24 @@ BUDGET_RECONCILE_ALERT_MIN_SAMPLES = int(
     os.getenv("BUDGET_RECONCILE_ALERT_MIN_SAMPLES", "20")
 )
 
+# 1.3（2026-11-10 待对账治理）：未知用量/瞬时失败的单笔预占估算结算上限。
+# 预占 ≤ 该金额按预占上限保守结算（settled_estimated），> 该金额转待对账
+# （needs_review）等人工对账。注意预占额是请求剩余上限（远大于真实单笔
+# 成本），此为保守口径；0 = 关闭估算结算、全部人工（旧行为，回滚开关）。
+_raw_estimated_settlement = os.getenv("BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY", "5")
+try:
+    BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY = Decimal(_raw_estimated_settlement)
+except Exception as exc:
+    raise ValueError(
+        f"BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY 不是合法数字: "
+        f"{_raw_estimated_settlement!r}"
+    ) from exc
+if BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY < 0:
+    raise ValueError(
+        "BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY 必须 >= 0"
+        "（0 = 全部人工对账，不设上限校验）"
+    )
+
 
 def to_base_currency(amount: Decimal | int | float | str, currency: str) -> Decimal:
     """把任意币种金额折算为记账本位币；未登记汇率的币种快速失败。"""

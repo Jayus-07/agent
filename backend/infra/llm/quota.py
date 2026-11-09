@@ -759,8 +759,7 @@ class PostgresQuotaStore:
                         cur.fetchone()
                     )
                     cur.execute(
-                        f"""SELECT COALESCE(SUM(reserved_cny), 0),
-                                   COUNT(DISTINCT (scope_type, scope_id))
+                        f"""SELECT COUNT(DISTINCT (scope_type, scope_id))
                                        FILTER (WHERE enforcement = 'hard'
                                                AND used_cny + reserved_cny >= limit_cny
                                                AND ((period_type = 'day'
@@ -782,7 +781,20 @@ class PostgresQuotaStore:
                             periods.day_start_utc, periods.month_start_utc,
                         ),
                     )
-                    reserved, blocked, near = cur.fetchone()
+                    blocked, near = cur.fetchone()
+                    # 未结算预留按预占单去重（2026-11-10 待对账治理 1.4）：
+                    # 同一预占在 user/tenant × day/month 的账本上是 4 行同值，
+                    # 行级 SUM 会把占额放大数倍（实测 ¥78.60 显示成 ¥228）。
+                    # 口径对齐 reconciliation_summary：reserved（在途）+
+                    # needs_review（待对账占额）逐单只算一次。
+                    cur.execute(
+                        f"""SELECT COALESCE(SUM(reserved_cny), 0)
+                            FROM (SELECT DISTINCT ON (id) id, reserved_cny
+                                  FROM {self._reservations}
+                                  WHERE status IN ('reserved', 'needs_review')
+                                  ORDER BY id, created_at) r"""
+                    )
+                    reserved = cur.fetchone()[0]
                     cur.execute(
                         f"""SELECT COALESCE(
                                    SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END)::numeric

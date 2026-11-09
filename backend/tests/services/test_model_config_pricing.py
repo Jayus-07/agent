@@ -19,6 +19,7 @@ from backend.services.model_config import (
     ModelConfigService,
     _apply_model_pricing,
     _parse_model_price,
+    _validate_model_pricing,
 )
 
 
@@ -150,10 +151,77 @@ async def test_llm_requires_both_prices():
 
 
 @pytest.mark.asyncio
-async def test_blank_prices_are_noop():
+async def test_metered_blank_prices_are_rejected():
+    """1.2（T3/T4）：metered 缺价直接拒绝——旧逻辑双空 no-op 放行了无价模型。
+
+    embedding 只填 output 等价于无价（input 才是计费维度），一并拒绝；
+    拒绝必须发生在任何写库语句之前。
+    """
     session = _PricingSession()
-    await _run(session, input_price=None, output_price=None)
+    with pytest.raises(ValueError, match="输入与输出"):
+        await _run(
+            session, model_name="no-price-chat", model_kind="chat",
+            input_price=None, output_price=None,
+        )
+    with pytest.raises(ValueError, match="输入单价"):
+        await _run(
+            session, model_name="no-price-embed", model_kind="embedding",
+            input_price=None, output_price=None,
+        )
+    with pytest.raises(ValueError, match="输入单价"):
+        await _run(
+            session, model_name="output-only-embed", model_kind="embedding",
+            input_price=None, output_price=Decimal("0.2"),
+        )
     assert session.statements == []
+
+
+@pytest.mark.asyncio
+async def test_non_metered_blank_prices_still_noop():
+    """1.2（T5）：local/subscription 不填价照常保存（无事可做）。"""
+    for billing in ("local", "subscription"):
+        session = _PricingSession()
+        await _run(
+            session, provider_row={"id": "p", "billing": billing},
+            input_price=None, output_price=None,
+        )
+        assert session.statements == []
+
+
+def test_validate_model_pricing_rules():
+    """校验函数规则直测：先算 component 再判必填；缓存命中价仍可选。"""
+    metered = {"id": "p", "billing": "metered"}
+    local = {"id": "p", "billing": "local"}
+    assert _validate_model_pricing(
+        provider_row=metered, model_name="m", model_kind="chat",
+        input_price=Decimal("0.1"), output_price=Decimal("0.2"),
+    ) == "llm"
+    assert _validate_model_pricing(
+        provider_row=metered, model_name="m", model_kind="rerank",
+        input_price=Decimal("0.1"), output_price=None,
+    ) == "rerank"
+    assert _validate_model_pricing(
+        provider_row=local, model_name="m", model_kind="embedding",
+        input_price=None, output_price=None,
+    ) == "embedding"
+    # 缓存命中价可选：metered 不填不影响通过；非 metered 单独填缓存价
+    # 沿用旧语义（input/output 双空静默无事可做，不触发"无需填价"拒绝）
+    assert _validate_model_pricing(
+        provider_row=metered, model_name="m", model_kind="chat",
+        input_price=Decimal("0.1"), output_price=Decimal("0.2"),
+        cached_input_price=None,
+    ) == "llm"
+    assert _validate_model_pricing(
+        provider_row={"id": "p", "billing": "subscription"},
+        model_name="m", model_kind="chat",
+        input_price=None, output_price=None, cached_input_price=Decimal("0.01"),
+    ) == "llm"
+    with pytest.raises(ValueError, match="无需填写模型单价"):
+        _validate_model_pricing(
+            provider_row={"id": "p", "billing": "subscription"},
+            model_name="m", model_kind="chat",
+            input_price=Decimal("0.1"), output_price=None,
+        )
 
 
 def test_parse_model_price_validation():

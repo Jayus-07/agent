@@ -54,7 +54,7 @@ def test_multi_query_proxy_uses_role_retry_limit_and_skip_policy(
         lambda kind, **_kwargs: calls["reserve"].append(kind),
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation",
+        "backend.infra.llm.budget.settle_or_review_model_reservation",
         lambda reason: calls["review"].append(reason),
     )
     monkeypatch.setattr(
@@ -130,7 +130,7 @@ def test_multi_query_timeout_signal_stops_retries_and_skips_fallback(
         lambda kind, **_kwargs: calls["reserve"].append(kind),
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation",
+        "backend.infra.llm.budget.settle_or_review_model_reservation",
         lambda reason: calls["review"].append(reason),
     )
     monkeypatch.setattr(
@@ -291,7 +291,7 @@ def test_multi_query_fallback_uses_role_policy_model(monkeypatch, is_async, capl
         ),
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation", lambda *_: None,
+        "backend.infra.llm.budget.settle_or_review_model_reservation", lambda *_: None,
     )
     monkeypatch.setattr(
         "backend.infra.llm.budget.release_model_reservation", lambda: None,
@@ -373,7 +373,7 @@ def test_multi_query_fallback_failure_logs_only_exception_types(
         "backend.infra.llm.budget.reserve_model_call", lambda *_args, **_kwargs: None,
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation", lambda *_args: None,
+        "backend.infra.llm.budget.settle_or_review_model_reservation", lambda *_args: None,
     )
     monkeypatch.setattr(
         "backend.infra.llm.budget.release_model_reservation", lambda: None,

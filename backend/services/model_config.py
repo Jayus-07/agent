@@ -135,6 +135,44 @@ def _parse_model_price(
     )
 
 
+def _validate_model_pricing(
+    *,
+    provider_row: Mapping[str, Any],
+    model_name: str,
+    model_kind: str,
+    input_price: Decimal | None,
+    output_price: Decimal | None,
+    cached_input_price: Decimal | None = None,
+) -> str:
+    """按量计费模型的价格条件必填校验（2026-11-10 待对账治理 1.2）。
+
+    旧逻辑在 `_apply_model_pricing` 里"输入/输出双空直接 return"，无价
+    metered 模型得以保存；运行时预占链只能按 price_unknown/needs_review
+    挂账，是待对账堆积的直接入口。本校验在 `_upsert_model` 之前与
+    `_apply_model_pricing` 内都执行：先算 component 再判必填，避免事务
+    回滚不彻底时残留无价模型。返回 component 供调用方复用。
+    """
+    component = _COMPONENT_BY_MODEL_KIND.get(model_kind, "llm")
+    billing = str(provider_row.get("billing") or "")
+    if billing != "metered":
+        if input_price is not None or output_price is not None:
+            raise ValueError("该供应商不是按量计费（metered），无需填写模型单价")
+        return component
+    if component == "llm":
+        if input_price is None or output_price is None:
+            raise ValueError(
+                f"按量计费文本模型「{model_name}」需同时填写输入与输出单价"
+            )
+    else:
+        # embedding/rerank 只有 input 维度计费；只填 output 等价于无价，
+        # 旧逻辑会写出展示价 0 且零计费行，一并拒绝。
+        if input_price is None:
+            raise ValueError(
+                f"按量计费 embedding/rerank 模型「{model_name}」需填写输入单价"
+            )
+    return component
+
+
 async def _apply_model_pricing(
     session: Any,
     *,
@@ -167,15 +205,19 @@ async def _apply_model_pricing(
     则先关闭全部未关闭条目（含 pending 旧草稿）再插入新条目 —— append-only
     的「改价 = 关旧开新」。
     """
+    component = _validate_model_pricing(
+        provider_row=provider_row,
+        model_name=model_name,
+        model_kind=model_kind,
+        input_price=input_price,
+        output_price=output_price,
+        cached_input_price=cached_input_price,
+    )
     if input_price is None and output_price is None:
+        # 校验已保证 metered 双空必然抛错；走到这里的双空只可能是
+        # 非 metered 未填价，无事可做。
         return
-    if str(provider_row.get("billing") or "") != "metered":
-        raise ValueError("该供应商不是按量计费（metered），无需填写模型单价")
-
-    component = _COMPONENT_BY_MODEL_KIND.get(model_kind, "llm")
     if component == "llm":
-        if input_price is None or output_price is None:
-            raise ValueError("按量文本模型需同时填写输入与输出单价")
         dimensions = ("input", "output")
     else:
         dimensions = ("input",)
@@ -2005,6 +2047,17 @@ class ModelConfigService:
                     model_name, upstream_model_name, _fail_detail,
                 )
                 raise ValueError(f"模型测试未通过：{probe_result.summary}")
+
+        # 1.2（2026-11-10）：价格必填校验前移——在 _upsert_model 之前拒绝，
+        # 避免异常路径残留无价模型污染目录与预算链路。
+        _validate_model_pricing(
+            provider_row=provider,
+            model_name=model_name,
+            model_kind=model_kind,
+            input_price=input_price,
+            output_price=output_price,
+            cached_input_price=cached_input_price,
+        )
 
         async for session in get_session():
             await self._upsert_model(

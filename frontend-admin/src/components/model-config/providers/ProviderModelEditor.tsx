@@ -36,6 +36,10 @@ export default function ProviderModelEditor({
 }) {
   const metered = draft.provider.billing === 'metered'
   const isLlmFamily = draft.modelKind !== 'embedding' && draft.modelKind !== 'rerank'
+  // 1.2（2026-11-10）：按量计费缺价禁止保存——后端 _validate_model_pricing
+  // 是最终事实源，这里只做体验层拦截，避免提交后才报错。
+  const missingPrice = metered
+    && (!draft.inputPrice.trim() || (isLlmFamily && !draft.outputPrice.trim()))
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4 py-6" role="dialog" aria-modal="true" aria-label={`${draft.editingExisting ? '调整' : '新增'} ${draft.provider.displayName} 模型`}>
       <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
@@ -70,11 +74,11 @@ export default function ProviderModelEditor({
                 </select>
               </label>
               <div className={`grid gap-2 ${isLlmFamily ? 'grid-cols-2' : 'grid-cols-1'}`}>
-                <label className="block text-[11px] text-text-secondary">输入价格
+                <label className="block text-[11px] text-text-secondary">输入价格 <span className="text-red-500" aria-hidden="true">*</span>
                   <input value={draft.inputPrice} onChange={(event) => setDraft({ ...draft, inputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="3" />
                 </label>
                 {isLlmFamily && (
-                  <label className="block text-[11px] text-text-secondary">输出价格
+                  <label className="block text-[11px] text-text-secondary">输出价格 <span className="text-red-500" aria-hidden="true">*</span>
                     <input value={draft.outputPrice} onChange={(event) => setDraft({ ...draft, outputPrice: event.target.value, error: null })} inputMode="decimal" className="mt-1 w-full rounded-lg border border-black/10 px-3 py-2 font-mono text-xs" placeholder="9" />
                   </label>
                 )}
@@ -92,6 +96,9 @@ export default function ProviderModelEditor({
               {!isLlmFamily && (
                 <div className="mt-2 text-[10px] leading-4 text-text-muted">向量 / 重排模型按输入 token 计量计费：API 不产生输出 token，故无输出单价（与系统 token 计量口径一致）。</div>
               )}
+              {missingPrice && (
+                <div className="mt-2 text-[10px] leading-4 text-red-600">按量计费模型需填写{isLlmFamily ? '输入与输出单价' : '输入单价'}后才能保存。</div>
+              )}
             </fieldset>
           )}
           {probe && <ProbeResultDetails result={probe} />}
@@ -105,7 +112,12 @@ export default function ProviderModelEditor({
             onClick={onTest}
             className="flex items-center gap-1 rounded-lg border border-accent/30 px-3 py-2 text-xs text-accent disabled:opacity-50"
           ><FlaskConical size={13} />{testing ? '测试中…' : '测试连接'}</button>
-          <button disabled={busy} onClick={onSave} className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"><Save size={13} />{busy ? '保存中…' : '保存'}</button>
+          <button
+            disabled={busy || missingPrice}
+            title={missingPrice ? '按量计费模型需先填写必填单价' : '保存登记配置（价格即保存即生效）'}
+            onClick={onSave}
+            className="flex items-center gap-1 rounded-lg bg-accent px-3 py-2 text-xs text-white disabled:opacity-50"
+          ><Save size={13} />{busy ? '保存中…' : '保存'}</button>
         </div>
       </div>
     </div>

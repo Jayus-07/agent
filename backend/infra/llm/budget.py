@@ -532,7 +532,7 @@ def current_call_decision() -> str:
 def scoped_model_call(
     model_name: str, component: str, *, kind: str = "primary",
 ) -> Iterator[None]:
-    """专项模型复用统一预占；恢复外层预占，未知结果保留待对账。"""
+    """专项模型复用统一预占；恢复外层预占，未知结果按 1.3 收敛。"""
     token = _current_quota_reservation.set(None)
     decision_token = _current_call_decision.set(_current_call_decision.get())
     try:
@@ -540,8 +540,9 @@ def scoped_model_call(
         try:
             yield
         finally:
-            # 成功结算会清空当前预占；异常/未记账不能按零释放。
-            review_model_reservation("provider_usage_unavailable")
+            # 成功结算会清空当前预占；异常/未记账按 1.3 收敛：小额估算结算，
+            # 大额保留待对账，不能按零释放。
+            settle_or_review_model_reservation("provider_usage_unavailable")
     finally:
         _current_quota_reservation.reset(token)
         _current_call_decision.reset(decision_token)
@@ -588,6 +589,64 @@ def review_model_reservation(reason: str) -> bool:
         return bool(marked)
 
 
+def settle_or_review_model_reservation(reason: str) -> str:
+    """未知用量预占的收敛（2026-11-10 待对账治理 1.3）：小额估算结算，大额待对账。
+
+    取代「一律转待对账」的旧收敛：预占额 ≤ ``BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY``
+    时按预占上限保守估算结算（settled_estimated），避免小额未知用量在待对账
+    队列堆积（121 笔历史积压的主入口之一）；超过阈值才转 needs_review 等人工。
+    返回收敛状态字符串供 Trace/日志；不新增 DB status 枚举。
+
+    边界：
+    - 预占对象缺失 ``reserved_cny``（无法证明估算依据）→ 保守转待对账；
+    - 结算失败 → 回退 ``mark_needs_review``，不吞异常、不静默丢账；
+    - 阈值为 0 等同旧行为（全部人工），供回滚；
+    - release 语义（确定未发给供应商，零成本放走）不经过这里。
+    """
+    reservation = _current_quota_reservation.get()
+    if reservation is None:
+        return "not_reserved"
+    state = current_request_budget()
+    if state is None or state.quota_store is None:
+        return (
+            "needs_review"
+            if review_model_reservation(reason)
+            else "needs_review_mark_failed"
+        )
+    from backend.config.budget import BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY
+
+    reserved_amount = getattr(reservation, "reserved_cny", None)
+    if reserved_amount is None or Decimal(str(reserved_amount)) > Decimal(
+        str(BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY),
+    ):
+        return (
+            "needs_review"
+            if review_model_reservation(reason)
+            else "needs_review_mark_failed"
+        )
+    amount = Decimal(str(reserved_amount))
+    try:
+        state.quota_store.settle(reservation, amount)
+    except Exception as exc:  # noqa: BLE001 — 结算失败回退待对账，不静默丢账
+        logger.warning(
+            "[Budget] 估算结算失败，回退待对账 reservation=%s amount=%s: %s",
+            getattr(reservation, "reservation_id", "?"), amount, exc,
+        )
+        return (
+            "needs_review"
+            if review_model_reservation(reason)
+            else "needs_review_mark_failed"
+        )
+    _record_budget_request(state.mode, "settled_estimated")
+    _current_quota_reservation.set(None)
+    logger.info(
+        "[Budget][settled_estimated] reservation=%s amount=%s reason=%s"
+        "（未知用量按预占上限保守结算）",
+        getattr(reservation, "reservation_id", "?"), amount, reason,
+    )
+    return "settled_estimated"
+
+
 def record_model_usage(
     *,
     prompt_tokens: int | None = None,
@@ -612,11 +671,8 @@ def record_model_usage(
     if state.quota_store is None:
         return "quota_store_unavailable"
     if review_reason:
-        return (
-            "needs_review"
-            if review_model_reservation(review_reason)
-            else "needs_review_mark_failed"
-        )
+        # 1.3 收敛：小额按预占上限估算结算，大额保留待对账。
+        return settle_or_review_model_reservation(review_reason)
     try:
         state.quota_store.settle(reservation, Decimal(str(cost or 0)))
         return "settled"
@@ -660,6 +716,7 @@ __all__ = [
     "release_model_reservation",
     "reserve_model_call",
     "review_model_reservation",
-    "scoped_request_budget",
     "scoped_model_call",
+    "scoped_request_budget",
+    "settle_or_review_model_reservation",
 ]

@@ -642,7 +642,7 @@ def _handle_terminal_failure(
             RequestBudgetExceeded,
             release_model_reservation,
             reserve_model_call,
-            review_model_reservation,
+            settle_or_review_model_reservation,
         )
         from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
@@ -692,7 +692,7 @@ def _handle_terminal_failure(
             raise
         except Exception as e:
             if _is_transient(e):
-                review_model_reservation("fallback_failed_possibly_billed")
+                settle_or_review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
             fallback_error = type(e).__name__ if role == "multi_query" else e
@@ -749,7 +749,7 @@ async def _ahandle_terminal_failure(
         from backend.infra.llm.budget import (
             release_model_reservation,
             reserve_model_call,
-            review_model_reservation,
+            settle_or_review_model_reservation,
         )
 
         _enforce_model_input_price_tier(
@@ -787,11 +787,11 @@ async def _ahandle_terminal_failure(
             release_model_reservation()
             raise
         except asyncio.CancelledError:
-            review_model_reservation("fallback_cancelled_possibly_billed")
+            settle_or_review_model_reservation("fallback_cancelled_possibly_billed")
             raise
         except Exception as e:
             if _is_transient(e):
-                review_model_reservation("fallback_failed_possibly_billed")
+                settle_or_review_model_reservation("fallback_failed_possibly_billed")
             else:
                 release_model_reservation()
             fallback_error = type(e).__name__ if role == "multi_query" else e
@@ -881,7 +881,7 @@ def _call_with_resilience(attr, *args, **kwargs):
         RequestBudgetExceeded,
         release_model_reservation,
         reserve_model_call,
-        review_model_reservation,
+        settle_or_review_model_reservation,
     )
     from backend.infra.llm.quota import QuotaConfigurationError, QuotaExceeded
 
@@ -974,7 +974,7 @@ def _call_with_resilience(attr, *args, **kwargs):
             )
             # 瞬时类失败可能已计费，进入待对账；确定未计费的失败释放预占。
             if _is_transient(e):
-                review_model_reservation("call_failed_possibly_billed")
+                settle_or_review_model_reservation("call_failed_possibly_billed")
                 settlement_status = "needs_review"
             else:
                 release_model_reservation()
@@ -1015,7 +1015,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
     from backend.infra.llm.budget import (
         release_model_reservation,
         reserve_model_call,
-        review_model_reservation,
+        settle_or_review_model_reservation,
     )
 
     last_err: BaseException | None = None
@@ -1037,7 +1037,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
         try:
             return await breaker.acall(attr, *args, **kwargs)
         except asyncio.CancelledError:
-            review_model_reservation("call_cancelled_possibly_billed")
+            settle_or_review_model_reservation("call_cancelled_possibly_billed")
             raise
         except CircuitBreakerOpenError as e:
             release_model_reservation()
@@ -1050,7 +1050,7 @@ async def _acall_with_resilience(attr, *args, **kwargs):
             )
         except Exception as e:
             if _is_transient(e):
-                review_model_reservation("call_failed_possibly_billed")
+                settle_or_review_model_reservation("call_failed_possibly_billed")
             else:
                 release_model_reservation()
             _record_failed_attempt(
@@ -3046,7 +3046,7 @@ class _LLMProxy:
                     from backend.infra.llm.budget import (
                         release_model_reservation,
                         reserve_model_call,
-                        review_model_reservation,
+                        settle_or_review_model_reservation,
                     )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
@@ -3089,7 +3089,7 @@ class _LLMProxy:
                             raise _context_length_error() from e
                         # 2026-10-01 P0 修复：流中途失败，供应商可能已处理并计费
                         # （生产主路径是流式），转待对账而非释放
-                        review_model_reservation("stream_failed_possibly_billed")
+                        settle_or_review_model_reservation("stream_failed_possibly_billed")
                         raise
                     finally:
                         # 正常结束或客户端中断都记录（finally 在 generator close 时也执行）
@@ -3107,7 +3107,7 @@ class _LLMProxy:
                                 meter, args, (time.monotonic() - _t0) * 1000,
                                 "astream",
                             ):
-                                review_model_reservation("stream_usage_missing")
+                                settle_or_review_model_reservation("stream_usage_missing")
                                 _notify_stream_usage_missing("astream")
                 return astream_wrapper
             # sync generator（stream）：修好此前走通用 wrapper 的坏路径
@@ -3122,7 +3122,7 @@ class _LLMProxy:
                     from backend.infra.llm.budget import (
                         release_model_reservation,
                         reserve_model_call,
-                        review_model_reservation,
+                        settle_or_review_model_reservation,
                     )
 
                     user_id = kwargs.get("user_id") or _thread_local_user_id()
@@ -3186,7 +3186,7 @@ class _LLMProxy:
                                 # 已产出内容后失败 = 必然已处理——都转待对账，
                                 # 只有"确定未发出"（非瞬时错误且未产出内容）才释放。
                                 if yielded_content or _is_transient(e):
-                                    review_model_reservation(
+                                    settle_or_review_model_reservation(
                                         "stream_failed_possibly_billed",
                                     )
                                 else:
@@ -3220,7 +3220,7 @@ class _LLMProxy:
                                 meter, args, (time.monotonic() - _t0) * 1000,
                                 "stream",
                             ):
-                                review_model_reservation("stream_usage_missing")
+                                settle_or_review_model_reservation("stream_usage_missing")
                                 _notify_stream_usage_missing("stream")
                 return stream_wrapper
             # async 方法（ainvoke/agenerate）：coroutine 必须先 await 才能取结果，
