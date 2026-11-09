@@ -166,6 +166,10 @@ MIGRATION_TARGETS: dict[str, str] = {
     # ADR-0012 第 1 期（审计 #68/#50）：记忆键加产品维度——4 表 product 列、
     # user_id 拆前缀回填、唯一键/索引全部纳入 product；抽取任务加 source_trace_id。
     "143_memory_product_scope.sql": "memory",
+    # ADR-0012 第 2 期（D3）：记忆事实时间有效性——valid_from/invalid_at 两列，
+    # 存量回填 valid_from=created_at；失效行不召回（is_active=False 双写），
+    # 版本链可审计还原。
+    "145_memory_time_validity.sql": "memory",
     # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
     # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
     # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。

@@ -231,6 +231,8 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/142_cs_faq_tenant.sql",
     # ADR-0012 第 1 期：记忆表结构迁移（加列/索引/回填），不改变模型调用面。
     "backend/sql/migrations/143_memory_product_scope.sql",
+    # ADR-0012 第 2 期：记忆时间有效性两列（D3），不改变模型调用面。
+    "backend/sql/migrations/145_memory_time_validity.sql",
 })
 
 
