@@ -319,9 +319,15 @@ class TestJavaInternalGateway:
         app.include_router(internal_ai_router)
         return TestClient(app)
 
-    def test_actor_delegation_with_explicit_blanks(self, java_client, monkeypatch):
-        """actor 委托传递 user/dept；roles/tenant/permissions 显式置空。"""
+    def test_actor_delegation_binds_tenant(self, java_client, monkeypatch):
+        """审计 #38：actor 必须解析成真实用户，绑定其租户与角色。"""
+        from backend.security import task_authorization as ta
         from mcp_servers.manager import manager as global_manager
+
+        monkeypatch.setattr(
+            ta, "resolve_delegated_actor",
+            lambda _uid: ("tenant-java", "sales", ("viewer",)),
+        )
 
         captured = {}
 
@@ -339,14 +345,14 @@ class TestJavaInternalGateway:
         resp = java_client.post("/internal/ai/call",
                                 json={"tool": "search_knowledge",
                                       "params": {"question": "q"},
-                                      "actor_user_id": "java_user",
+                                      "actor_user_id": "42",
                                       "actor_department": "sales"},
                                 headers={"X-Internal-Token": "itok"})
         assert resp.status_code == 200
-        assert captured["user"] == "java_user"
+        assert captured["user"] == "42"
         assert captured["dept"] == "sales"
-        assert captured["roles"] == ()
-        assert captured["tenant"] == ""
+        assert captured["roles"] == ("viewer",)
+        assert captured["tenant"] == "tenant-java"
         assert captured["permissions"] is None
 
     def test_tool_whitelist_denied(self, java_client):
