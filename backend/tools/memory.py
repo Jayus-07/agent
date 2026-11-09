@@ -193,6 +193,18 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
 
     product = get_current_product_id()
 
+    # 工具通道唯一归一（评审修复 2026-11-10）：_context_ids 返回的 user_id
+    # 是 memory_user_id 兼容层前缀编码（客服产品 = "customer_service::u"），
+    # 而 _store 直调 store_with_resolution 不经 MemoryService，conflict 层
+    # 对 user_id 原样落库——双传会把客服显式记忆写进
+    # (customer_service, "customer_service::u") 分裂命名空间，检索/画像
+    # 永不可见。与 MemoryService 同函数归一（幂等、前缀权威优先），保证
+    # 写入与检索/删除（走 MemoryService）同命名空间。
+    from backend.memory.service import _resolve_memory_identity
+
+    user_id, tenant_id, product = _resolve_memory_identity(
+        user_id, tenant_id, product)
+
     async def _store() -> tuple[bool, str]:
         from backend.memory.keying import StoreOutcome
         async with AsyncSessionLocal() as db:

@@ -186,10 +186,16 @@ class TestProductIsolation:
         assert _resolve_memory_identity(
             "u1", "", "") == ("u1", "default", "agent")
 
-    def test_scoped_session_id_mixes_product(self):
-        """属主派生隔离键掺入 product：同 session_id 不同产品派生不同键。"""
+    def test_scoped_session_id_stable_across_products(self):
+        """派生隔离键不掺 product（升级前形态）：跨产品同串不破隔离。
+
+        产品隔离由 uq_chat_sessions_product_session 复合唯一键与消息
+        (product, session_id) 过滤承担（test_l2_sessions_isolated_by_product
+        已锁定跨产品同 session_id 各建各行）；哈希掺 product 会让升级前
+        已派生隔离会话的用户升级后失联（评审修复 2026-11-10）。
+        """
         from backend.memory.service import MemoryService
 
         a = MemoryService._scoped_session_id("s1", "u1", "t1", product=AGENT)
         b = MemoryService._scoped_session_id("s1", "u1", "t1", product=CS)
-        assert a != b
+        assert a == b

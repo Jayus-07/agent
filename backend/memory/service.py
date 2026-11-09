@@ -969,23 +969,24 @@ class MemoryService:
         """跨用户/租户/产品收养拦截后的稳定隔离键，且不超过数据库列宽。"""
         import hashlib
 
-        # product 掺入派生哈希（ADR-0012）：同 session_id 的不同产品派生到
-        # 不同隔离键；default 租户的 legacy 形态保持不带 product（升级后旧
-        # 的用户隔离会话不失联）。
+        # 派生哈希保持升级前形态（不掺 product，评审修复 2026-11-10）：注释
+        # 曾宣称"legacy 形态保持不带 product 不失联"，第 1 期实现却把 product
+        # 掺入 digest——升级前已派生隔离会话的用户升级后同场景会派生出不同
+        # 键，旧隔离会话从上下文失联。产品隔离由 uq_chat_sessions_product_session
+        # 复合唯一键 + 消息读写按 (product, session_id) 过滤承担，派生键同串
+        # 时两产品各建各的行，互不可见（test_l2_sessions_isolated_by_product）。
         if tenant_id == "default":
-            digest = hashlib.sha1(
-                f"{user_id}\0{product}".encode("utf-8")
-            ).hexdigest()[:8]
+            digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
             legacy = f"{session_id}::u:{digest}"
             if len(legacy) <= 128:
                 return legacy
             digest = hashlib.sha1(
-                f"{session_id}\0{user_id}\0{product}".encode("utf-8")
+                f"{session_id}\0{user_id}".encode("utf-8")
             ).hexdigest()[:24]
             return f"{session_id[:100]}::u:{digest}"
 
         digest = hashlib.sha256(
-            f"{session_id}\0{tenant_id}\0{product}\0{user_id}".encode("utf-8")
+            f"{session_id}\0{tenant_id}\0{user_id}".encode("utf-8")
         ).hexdigest()[:32]
         return f"{session_id[:92]}::t:{digest}"
 
