@@ -722,7 +722,15 @@ class GraphRunner:
                                      metrics={"error": str(e)[:100]})
             trace_collector.end_span(load_span, status="error",
                                      metrics={"error": str(e)[:100]})
-            yield {"event": "error", "data": {"message": f"会话加载失败: {e}", "ts": time.time()}}
+            # 异常原文只进日志/trace（安全审计 #1，2026-11-09）：此前 error
+            # 事件 message 携带 f"会话加载失败: {e}" 原始异常文本，经
+            # ask_result 终态嵌入回答并随 WhatsApp /ai.reply.events 发布到
+            # 外部渠道。改走 _runner_error_event 泛化封套，与其余错误路径
+            # （图执行/工作流）同口径——用户可见消息只含既定安全文案。
+            logger.warning(
+                f"[GraphRunner] 会话/记忆加载失败: {e}", exc_info=True)
+            error_evt, _code = _runner_error_event(e)
+            yield error_evt
             _end_root(trace, status="error", metrics={"error": "session_load_failed"})
             trace_collector.finish(trace, "",
                                    int((time.time() - start_time) * 1000), "", "")

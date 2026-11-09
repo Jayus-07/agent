@@ -272,6 +272,12 @@ jobs:
             backend/tests/api/test_agents_inventory_auth.py \
             backend/tests/api/test_eval_asset_authz.py \
             backend/tests/api/test_cs_tenant_binding.py \
+            backend/tests/rag/test_tenant_scope_retrieval.py \
+            backend/tests/messaging/test_whatsapp_consumer.py \
+            backend/tests/test_startup_validation.py::TestToolApprovalModeProductionFatal \
+            backend/tests/travel/booking/test_booking_transition_whitelist.py \
+            backend/tests/orchestration/graph/test_runner_terminal_semantics.py::test_session_load_error_frame_is_protocol_envelope \
+            backend/tests/orchestration/graph/test_runner_terminal_semantics.py::test_session_load_error_ask_terminal_does_not_echo_exception \
             backend/tests/security/test_input_guard_exemptions.py \
             backend/tests/prompts/test_prompt_eval_dispatch.py \
             backend/tests/api/test_prompt_release_api.py \

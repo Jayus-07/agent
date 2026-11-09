@@ -143,6 +143,22 @@ def _apply(store: BookingStore, provider: str, event_id: str,
         store.inbox_mark(provider=provider, event_id=event_id,
                          status="ignored", reason="unmapped_status")
         return order
+
+    # 状态机白名单强制（安全审计 #80，2026-11-09）：webhook 只允许
+    # SUBMITTING→BOOKED/FAILED（模块纪律声明，webhook.py:9-12；此前代码
+    # 行为与声明不一致——awaiting_confirmation/quoted/expired/in_doubt 的
+    # 订单可被 provider 事件跳过用户确认门与金额互检直接落终态）。其余
+    # 状态收到 confirmed/failed 事件 = 误序投递或迟到事件，幂等忽略
+    # （订单不变，事件账 ignored）。
+    current = str(order.get("status") or "")
+    if current != BookingOrderStatus.SUBMITTING.value:
+        store.inbox_mark(provider=provider, event_id=event_id,
+                         status="ignored", reason="not_submitting")
+        logger.info(
+            "[BookingWebhook] event=%s 订单 %s 处于 %s（非 submitting），"
+            "忽略 %s 事件", event_id, order["order_id"], current, incoming)
+        return store.get_order(order["order_id"]) or order
+
     try:
         # W5：webhook 早于 HTTP 收尾——SUBMITTING→BOOKED 合法；
         # B17：迟到事件（终态）→ CAS 不命中 → 幂等忽略（不倒退）

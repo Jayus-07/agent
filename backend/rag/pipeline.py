@@ -1018,8 +1018,8 @@ class RAGPipeline:
 
         主体属性以本次调用声明为准回填到运行态借读的权威身份实例
         （组合非复制）：图路径该实例已由 RequestContext.bind() 注入；
-        CS/eval/直连路径无图上下文，用默认实例。mf 为空时提前返回、
-        不触碰上下文——与旧实现"未 set 即默认空身份"语义一致。
+        CS/eval/直连路径无图上下文，用默认实例。租户谓词强制写入
+        （空租户缺省 default，#67），mf 恒非空、必建本次请求状态。
         roles（2026-10-01 授权收口）：网关验签后的 JWT 角色，检索链
         admin 跨部门口径的唯一输入；空 = 不覆盖（保留绑定实例自带值）。
         """
@@ -1081,18 +1081,13 @@ class RAGPipeline:
         except Exception:
             logger.debug("query_filter 合并失败", exc_info=True)
 
-        if effective_tenant_id:
-            mf["tenant_id"] = effective_tenant_id
-
-        # 保留旧契约：没有过滤条件且调用方没有声明任何授权属性时，
-        # 不创建新的 RAG 状态，避免覆盖图路径已绑定的身份实例。
-        if (
-            not mf
-            and not effective_subject_type
-            and not effective_department
-            and effective_permissions is None
-        ):
-            return
+        # 空租户 fail-closed（#67，2026-11-09）：ask 链此前仅租户非空才写谓词，
+        # 空租户=全库无租户约束，跨租户语料可进入模型上下文。与兄弟出口
+        # retrieve_documents/retrieve_knowledge 统一：空租户缺省 "default" 并
+        # 强制谓词（pgvector 编译器把缺 tenant 键的存量行按 default 归属）。
+        # 谓词使 mf 恒非空，旧"空 filter 且未声明主体时不新建状态"分支随之
+        # 失效删除——身份仍组合借读图路径实例（组合非复制），不会覆盖。
+        mf["tenant_id"] = effective_tenant_id or "default"
 
         ctx = RagRequestState(
             metadata_filter=mf,
@@ -1263,15 +1258,21 @@ class RAGPipeline:
 
     @staticmethod
     def _authorization_scope(identity) -> str:
-        """生成包含主体、部门和文档权限的缓存隔离键。"""
+        """生成包含主体、部门、文档权限和租户的缓存隔离键。
+
+        租户段（#67 次生面，2026-11-09）：此前 scope 不含租户，空租户调用
+        共享缓存键，租户分隔仅依赖 filter_hash 中的 tenant_id 键。显式加入
+        后不同租户答案缓存物理隔离；键值变化旧条目自然 miss，无需迁移。
+        """
         permissions = getattr(identity, "permissions", None)
         permission_scope = (
             "-" if permissions is None else ",".join(sorted(set(permissions))) or "-"
         )
+        tenant = str(getattr(identity, "tenant_id", "") or "").strip() or "default"
         return (
             f"{getattr(identity, 'subject_type', '') or '-'}:"
             f"{getattr(identity, 'department', '') or '-'}:"
-            f"{permission_scope}"
+            f"{permission_scope}:{tenant}"
         )
 
     def retrieve_documents(
