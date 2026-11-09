@@ -35,9 +35,11 @@ flowchart LR
 
 ## 隔离范围与未来演进
 
-- **当前范围**：tenant/user 是已实现的主体归属边界，现有 domain hint 辅助领域检索；**本版不新增 agent_id 列、不强制不同 Agent 独立记忆空间**。是否对全部记忆路径形成强隔离必须按查询链验证。
-- **重新决策触发条件**：引入第二个需要私有 L3 的 Agent、明确跨 Agent 串扰或法律/业务隔离要求时，先定义哪些 Agent 共享何种记忆的授权矩阵，评估迁移、回滚和召回质量后再设计 schema。
-- MM-05 必须用用户/租户交叉召回和缓存实验验证，不能只依赖静态源码确认。
+> 2026-11-10 修订：本节原"本版不新增 agent_id 列"决策已被 [ADR-0012](../architecture/adr/0012-memory-platform-product-namespace.md) 触发的重新决策取代（三产品接入记忆 + 审计 #68 串扰证实），第 1 期已随施工落地。
+
+- **当前范围**：记忆键为 **(tenant_id, product, user_id)** 三元组——product 是独立列（迁移 143，user_id 已拆裸），MemoryService 唯一入口服务端强制解析；现有 domain hint 辅助领域检索。三产品命名空间：`agent`（存量 raw 身份）/ `customer_service` / `travel`（预留）；`internal` 不落记忆库。调用方传 raw 身份 + product，禁止预换算。
+- **身份层白名单共享、事实时间有效性（失效而非删除）、dreaming 整合、前端记忆管理**：见 ADR-0012 D2/D3/D4/D8 分期路线（第 2/3 期）。
+- MM-05 必须用用户/租户/**产品**交叉召回和缓存实验验证，不能只依赖静态源码确认（第 1 期已补产品维度交叉断言：tests/memory/test_memory_product_isolation.py）。
 
 ## MM-01～MM-10 验收
 
