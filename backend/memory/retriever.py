@@ -24,7 +24,9 @@ from backend.config import (
     MEMORY_MIN_RELEVANCE_SCORE,
     MEMORY_RETRIEVAL_CANDIDATES,
 )
-from backend.memory.keying import normalize_tenant_id, origin_priority
+from backend.memory.keying import (
+    PRODUCT_DEFAULT, normalize_product, normalize_tenant_id, origin_priority,
+)
 
 
 class RetrievedMemory:
@@ -65,6 +67,7 @@ class HybridRetriever:
         self, query: str, embedding: list[float], user_id: str,
         top_k: int | None = None, tenant_id: str = "",
         enforce_gate: bool = True, domain: str | None = None,
+        product: str = PRODUCT_DEFAULT,
     ) -> list[RetrievedMemory]:
         """candidate（SQL eligibility）→ gate → rank → merge → max-K。
 
@@ -85,7 +88,7 @@ class HybridRetriever:
 
         candidates = await self._repo.search_hybrid(
             embedding, user_id, top_k=candidate_k, tenant_id=tenant_id,
-            domain=domain)
+            domain=domain, product=product)
         _metric_safe(memory_retrieval_candidate_total.inc)
         now = datetime.now(timezone.utc)
 

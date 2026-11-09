@@ -44,6 +44,33 @@ from backend.observability.metrics import (
 from backend.shared.logger import logger
 
 
+def _resolve_memory_identity(
+    user_id: str, tenant_id: str, product: str = "",
+) -> tuple[str, str, str]:
+    """入口唯一身份归一（ADR-0012 第 1 期，审计 #68）。
+
+    - tenant 经 normalize_tenant_id；product 经 normalize_product（缺省
+      agent——存量调用方语义），**不消费 ContextVar 兜底**：本服务协程
+      运行在 memory 后台 loop，请求级 ContextVar 不可靠，product 必须
+      由调用方显式传入。
+    - 兼容旧调用方传入 memory_user_id 前缀编码（"customer_service::u"）：
+      已知前缀优先反解（前缀即权威产品），返回拆裸 user_id。
+    Returns:
+        (bare_user_id, tenant_id, product)
+    """
+    from backend.memory.keying import (
+        normalize_product, normalize_tenant_id, unscoped_memory_user_id,
+    )
+
+    tenant_id = normalize_tenant_id(tenant_id)
+    known_prefixes = ("customer_service::",)
+    value = str(user_id or "").strip()
+    if value.startswith(known_prefixes):
+        prefix_product, bare = unscoped_memory_user_id(value)
+        return bare, tenant_id, normalize_product(prefix_product)
+    return value, tenant_id, normalize_product(product or "agent")
+
+
 def _metric_safe(fn, **labels) -> None:
     """metric 埋点兜底：观测面异常绝不反噬业务链路。"""
     try:
@@ -92,10 +119,11 @@ class MemoryService:
     async def start_session(
         self, session_id: str, user_id: str = "default", query: str = "",
         tenant_id: str = "", domain: str | None = None,
-        event_scope=None,
+        event_scope=None, product: str = "",
     ) -> ShortTermBuffer:
         from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
-        tenant_id = normalize_tenant_id(tenant_id)
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         domain = normalize_memory_domain(domain)
         async with AsyncSessionLocal() as db_session:
             try:
@@ -106,24 +134,25 @@ class MemoryService:
                 # 存储键——该用户的所有读写落到自己的键下，互不可见
                 try:
                     srow = await srepo.get_or_create(
-                        session_id, user_id, tenant_id,
+                        session_id, user_id, tenant_id, product=product,
                     )
                 except SessionOwnerMismatch:
                     original = session_id
                     session_id = await self._scoped_session_id_for_owner(
                         srepo, session_id, user_id, tenant_id,
+                        product=product,
                     )
                     logger.warning(
                         "[MemoryService] session %s 租户/属主不匹配（跨域收养拦截），"
                         "隔离至派生键", original)
                     srow = await srepo.get_or_create(
-                        session_id, user_id, tenant_id,
+                        session_id, user_id, tenant_id, product=product,
                     )
 
                 # L2 → L1（只取最近 SHORT_TERM_MAX_MESSAGES*2 条：
                 #  ① 查询层限量，避免长会话全量拉取；② 多取一倍给去重留余量）
                 from backend.config import SHORT_TERM_MAX_MESSAGES
-                l2 = await SessionMemory.create(session_id, srepo, user_id)
+                l2 = await SessionMemory.create(session_id, srepo, user_id, product=product)
                 self._sessions[session_id] = l2
 
                 l1 = ShortTermBuffer()
@@ -215,7 +244,7 @@ class MemoryService:
                         try:
                             retrieved = await retriever.retrieve(
                                 l3_query, emb, user_id, tenant_id=tenant_id,
-                                domain=domain,
+                                domain=domain, product=product,
                             )
                         except BaseException as exc:
                             trace_collector.end_span(
@@ -274,7 +303,8 @@ class MemoryService:
                             async with AsyncSessionLocal() as mark_db:
                                 await MemoryRepository(mark_db).mark_accessed(
                                     [str(r.id) for r in records],
-                                    tenant_id=tenant_id, user_id=user_id)
+                                    tenant_id=tenant_id, user_id=user_id,
+                                    product=product)
                                 await mark_db.commit()
                             _metric_safe(memory_access_mark_total.inc)
                         except Exception as mark_exc:
@@ -387,7 +417,8 @@ class MemoryService:
 
     async def end_turn(self, session_id: str, question: str, answer: str,
                        user_id: str = "default", tenant_id: str = "",
-                       idempotency_key: str = "") -> None:
+                       idempotency_key: str = "", product: str = "",
+                       trace_id: str = "") -> None:
         # L2 消息、请求收据与 L3 outbox 在同一事务提交；source id 来自本轮用户消息。
         from backend.memory.models.memory import (
             MemoryExtractionJob,
@@ -396,6 +427,8 @@ class MemoryService:
         from backend.memory.models.session import ChatMessage
         from backend.memory.keying import normalize_tenant_id
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         idempotency_key = (idempotency_key or "").strip()
         key_hash = (
@@ -411,12 +444,15 @@ class MemoryService:
                 # Ensure chat_sessions row exists (may not if start_session was never called)
                 # STOP C（C4 属主隔离）：与 start_session 同口径派生隔离键
                 try:
-                    await srepo.get_or_create(session_id, user_id, tenant_id)
+                    await srepo.get_or_create(session_id, user_id, tenant_id,
+                                              product=product)
                 except SessionOwnerMismatch:
                     session_id = await self._scoped_session_id_for_owner(
                         srepo, session_id, user_id, tenant_id,
+                        product=product,
                     )
-                    await srepo.get_or_create(session_id, user_id, tenant_id)
+                    await srepo.get_or_create(session_id, user_id, tenant_id,
+                                              product=product)
 
                 receipt = None
                 if key_hash:
@@ -455,10 +491,12 @@ class MemoryService:
                         raise RuntimeError("记忆轮次收据引用的消息不完整")
                 else:
                     # 不允许后台任务回查“最新用户消息”；并发 turn 必须绑定本轮 ID。
-                    q_msg, a_msg = await srepo.save_turn(session_id, question, answer)
+                    q_msg, a_msg = await srepo.save_turn(
+                        session_id, question, answer, product=product)
                     if key_hash and q_msg.id is not None and a_msg.id is not None:
                         db_session.add(MemoryTurnReceipt(
                             tenant_id=tenant_id,
+                            product=product,
                             user_id=user_id,
                             session_id=session_id,
                             idempotency_key_hash=key_hash,
@@ -474,6 +512,7 @@ class MemoryService:
                         job_result = await db_session.execute(
                             select(MemoryExtractionJob).where(
                                 MemoryExtractionJob.tenant_id == tenant_id,
+                                MemoryExtractionJob.product == product,
                                 MemoryExtractionJob.user_id == user_id,
                                 MemoryExtractionJob.source_message_id == q_msg.id,
                             )
@@ -482,11 +521,14 @@ class MemoryService:
                     if job is None:
                         job = MemoryExtractionJob(
                             tenant_id=tenant_id,
+                            product=product,
                             user_id=user_id,
                             session_id=session_id,
                             source_message_id=q_msg.id,
                             assistant_message_id=a_msg.id if a_msg is not None else None,
                             status="PENDING",
+                            # D9：来源请求 trace，记忆条目可回溯产生它的对话
+                            source_trace_id=(trace_id or "").strip() or None,
                         )
                         db_session.add(job)
                         await db_session.flush()
@@ -509,7 +551,7 @@ class MemoryService:
         from backend.infra.async_utils import spawn_background_task
 
         spawn_background_task(
-            self._summarize_if_needed(session_id),
+            self._summarize_if_needed(session_id, product=product),
             name=f"l2-summary-{session_id}",
         )
 
@@ -529,7 +571,8 @@ class MemoryService:
             spawn_background_task(dispatch_committed_job(),
                                   name=f"l3-dispatch-{job_id}")
 
-    async def _summarize_if_needed(self, session_id: str) -> None:
+    async def _summarize_if_needed(self, session_id: str,
+                                   product: str = "agent") -> None:
         """L2 摘要后台任务（STOP E）。
 
         触发（既有口径不变）：message_count >= SESSION_MAX_MESSAGES（条数制）。
@@ -552,15 +595,18 @@ class MemoryService:
                         CONTEXT_L5_MAX_DELTA_MESSAGES,
                         SESSION_MAX_MESSAGES,
                     )
-                    state = await srepo.get_summary_state(session_id)
+                    state = await srepo.get_summary_state(
+                        session_id, product=product)
                     through = int(state.get("through_id") or 0)
                     boundary = await srepo.summarizable_before_id(
-                        session_id, CONTEXT_L4_KEEP_RECENT_TURNS)
+                        session_id, CONTEXT_L4_KEEP_RECENT_TURNS,
+                        product=product)
                     if not boundary or boundary <= through:
                         return
                     rows = await srepo.load_messages_since(
                         session_id, through, boundary,
-                        limit=CONTEXT_L5_MAX_DELTA_MESSAGES)
+                        limit=CONTEXT_L5_MAX_DELTA_MESSAGES,
+                        product=product)
                     if not rows:
                         return
 
@@ -577,13 +623,15 @@ class MemoryService:
                     )
                     message_cap_reached = await srepo.needs_summarization(
                         session_id, max_messages=SESSION_MAX_MESSAGES,
+                        product=product,
                     )
                     if not token_triggered and not message_cap_reached:
                         return
                     if (not token_triggered
                             and len(rows) < CONTEXT_L2_SUMMARY_MIN_DELTA_MESSAGES):
                         return  # 小增量攒批；达到 Token 线时无需等满消息数
-                    l2 = await SessionMemory.create(session_id, srepo)
+                    l2 = await SessionMemory.create(
+                        session_id, srepo, product=product)
                     summary = await l2.summarize()
                     if summary is None:
                         # 摘要失败：保留旧摘要并留痕（静默丢失上下文最难排查）
@@ -619,9 +667,11 @@ class MemoryService:
 
     async def search(self, query: str, session_id: str, user_id: str = "default",
                      top_k: int = 5, tenant_id: str = "",
-                     domain: str | None = None) -> list[MemoryFact]:
+                     domain: str | None = None, product: str = "",
+                     ) -> list[MemoryFact]:
         from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
-        tenant_id = normalize_tenant_id(tenant_id)
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         domain = normalize_memory_domain(domain)
         async with AsyncSessionLocal() as db_session:
             try:
@@ -638,12 +688,14 @@ class MemoryService:
                 retrieved = await retriever.retrieve(query, emb, user_id, top_k=top_k,
                                                      tenant_id=tenant_id,
                                                      domain=domain,
-                                                     enforce_gate=False)
+                                                     enforce_gate=False,
+                                                     product=product)
                 records = [m.record for m in retrieved]
 
                 if records:
                     await mrepo.mark_accessed([str(r.id) for r in records],
-                                              tenant_id=tenant_id, user_id=user_id)
+                                              tenant_id=tenant_id, user_id=user_id,
+                                              product=product)
                     await db_session.commit()
 
                 return [
@@ -670,7 +722,8 @@ class MemoryService:
 
     async def store(self, question: str, answer: str, session_id: str, user_id: str = "default",
                     source_message_id: int | None = None, tenant_id: str = "",
-                    job_id: str | None = None, job_attempt: int | None = None) -> dict:
+                    job_id: str | None = None, job_attempt: int | None = None,
+                    product: str = "") -> dict:
         """后台管线: extract → evidence gate → PII → classify → score → conflict resolution → write
 
         provenance 契约（STOP B）：
@@ -692,7 +745,8 @@ class MemoryService:
         from backend.memory.models.memory import MemoryExtractionJob
 
         job_uuid = UUID(str(job_id)) if job_id is not None else None
-        tenant_id = normalize_tenant_id(tenant_id)
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         async with AsyncSessionLocal() as db_session:
             write_started = time.perf_counter()
             try:
@@ -751,7 +805,8 @@ class MemoryService:
                             return {"status": "cancelled", "facts": len(facts), "stored": stored}
                     # 5. Conflict resolution + write（per-fact 事务：一个 fact 失败不丢同批其他）
                     try:
-                        result = await l3.store_with_resolution(fact, user_id, session_id, tenant_id)
+                        result = await l3.store_with_resolution(
+                            fact, user_id, session_id, tenant_id, product=product)
                         await db_session.commit()
                     except IntegrityError:
                         # 同 key 首建竞态：unique index 兜底 → rollback 后独立事务重试一次
@@ -761,7 +816,8 @@ class MemoryService:
                         async with AsyncSessionLocal() as retry_db:
                             retry_l3 = LongTermMemory(MemoryRepository(retry_db))
                             result = await retry_l3.store_with_resolution(
-                                fact, user_id, session_id, tenant_id)
+                                fact, user_id, session_id, tenant_id,
+                                product=product)
                             await retry_db.commit()
                     _metric_safe(memory_store_outcome_total.labels(
                         outcome=result.outcome.value).inc)
@@ -835,11 +891,13 @@ class MemoryService:
 
     async def save_messages(
         self, session_id: str, messages: list[dict], user_id: str = "default",
-        tenant_id: str = "",
+        tenant_id: str = "", product: str = "",
     ) -> dict:
         """批量保存会话消息（供 chat API 调用）。"""
         from backend.memory.keying import normalize_tenant_id
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         if not session_id or not messages:
             return {"saved": 0}
@@ -849,14 +907,19 @@ class MemoryService:
                 repo = SessionRepository(db)
                 # STOP C（C4 属主隔离）：与 start/end_turn 同口径
                 try:
-                    await repo.get_or_create(session_id, user_id, tenant_id)
+                    await repo.get_or_create(session_id, user_id, tenant_id,
+                                             product=product)
                 except SessionOwnerMismatch:
                     session_id = await self._scoped_session_id_for_owner(
                         repo, session_id, user_id, tenant_id,
+                        product=product,
                     )
-                    await repo.get_or_create(session_id, user_id, tenant_id)
+                    await repo.get_or_create(session_id, user_id, tenant_id,
+                                             product=product)
                 for m in messages:
-                    await repo.save_message(session_id, m.get("role", "user"), m.get("content", ""))
+                    await repo.save_message(
+                        session_id, m.get("role", "user"),
+                        m.get("content", ""), product=product)
                     saved += 1
                 await db.commit()
         except Exception as e:
@@ -866,12 +929,17 @@ class MemoryService:
     async def replace_session_messages(
         self, session_id: str, messages: list[dict[str, str]],
         user_id: str = "default", tenant_id: str | None = None,
+        product: str = "",
     ) -> dict:
         """以单事务替换会话快照，供客户端按轮同步时保持幂等。"""
         if tenant_id is not None:
             from backend.memory.keying import normalize_tenant_id
 
+            user_id, tenant_id, product = _resolve_memory_identity(
+                user_id, tenant_id, product)
             tenant_id = normalize_tenant_id(tenant_id)
+        else:
+            _, _, product = _resolve_memory_identity(user_id, "", product)
         if not session_id or len(session_id) > 128:
             return {"saved": 0, "error": "会话标识无效"}
         try:
@@ -879,12 +947,13 @@ class MemoryService:
                 repo = SessionRepository(db_session)
                 try:
                     await repo.get_or_create(
-                        session_id, user_id, tenant_id,
+                        session_id, user_id, tenant_id, product=product,
                     )
                 except SessionOwnerMismatch:
                     await db_session.rollback()
                     return {"saved": 0, "error": "会话不存在"}
-                saved = await repo.replace_messages(session_id, messages)
+                saved = await repo.replace_messages(
+                    session_id, messages, product=product)
                 await db_session.commit()
                 return {"saved": len(saved)}
         except Exception as e:
@@ -895,37 +964,45 @@ class MemoryService:
     @staticmethod
     def _scoped_session_id(
         session_id: str, user_id: str, tenant_id: str = "default",
+        product: str = "agent",
     ) -> str:
-        """跨用户/租户收养拦截后的稳定隔离键，且不超过数据库列宽。"""
+        """跨用户/租户/产品收养拦截后的稳定隔离键，且不超过数据库列宽。"""
         import hashlib
 
+        # product 掺入派生哈希（ADR-0012）：同 session_id 的不同产品派生到
+        # 不同隔离键；default 租户的 legacy 形态保持不带 product（升级后旧
+        # 的用户隔离会话不失联）。
         if tenant_id == "default":
-            # 保留既有默认租户映射，避免升级后旧的用户隔离会话失联。
-            digest = hashlib.sha1(str(user_id).encode("utf-8")).hexdigest()[:8]
+            digest = hashlib.sha1(
+                f"{user_id}\0{product}".encode("utf-8")
+            ).hexdigest()[:8]
             legacy = f"{session_id}::u:{digest}"
             if len(legacy) <= 128:
                 return legacy
             digest = hashlib.sha1(
-                f"{session_id}\0{user_id}".encode("utf-8")
+                f"{session_id}\0{user_id}\0{product}".encode("utf-8")
             ).hexdigest()[:24]
             return f"{session_id[:100]}::u:{digest}"
 
         digest = hashlib.sha256(
-            f"{session_id}\0{tenant_id}\0{user_id}".encode("utf-8")
+            f"{session_id}\0{tenant_id}\0{product}\0{user_id}".encode("utf-8")
         ).hexdigest()[:32]
         return f"{session_id[:92]}::t:{digest}"
 
     async def _scoped_session_id_for_owner(
         self, repo: SessionRepository, session_id: str,
-        user_id: str, tenant_id: str,
+        user_id: str, tenant_id: str, product: str = "agent",
     ) -> str:
         """复用归属可证明的旧 user-only 键，否则生成 tenant/user 新键。"""
-        tenant_scoped = self._scoped_session_id(session_id, user_id, tenant_id)
+        tenant_scoped = self._scoped_session_id(
+            session_id, user_id, tenant_id, product=product)
         if tenant_id != "default":
             # C4 已上线过 user-only 派生键。仅当数据库中的真实 owner tuple
             # 与当前请求完全相同才复用；同 user 的其他租户仍转到新键。
-            legacy = self._scoped_session_id(session_id, user_id, "default")
-            if await repo.get_owner(legacy) == (tenant_id, user_id):
+            legacy = self._scoped_session_id(
+                session_id, user_id, "default", product=product)
+            if await repo.get_owner(legacy, product=product) == (
+                    tenant_id, product, user_id):
                 return legacy
         return tenant_scoped
 
@@ -944,9 +1021,9 @@ class MemoryService:
     @staticmethod
     async def _check_owner(
         repo, session_id: str, user_id: str | None,
-        tenant_id: str | None = None,
+        tenant_id: str | None = None, product: str = "agent",
     ) -> str | None:
-        """路由面属主校验：检查已提供的用户与租户，失败统一返回 404。
+        """路由面属主校验：检查已提供的用户/租户/产品，失败统一返回 404。
 
         返回 None 表示校验通过（user_id=None 为内部调用方直通）。tenant_id
         为空仅供把租户编码进 user_id 的内部适配器兼容使用；公开 API 必须传入
@@ -955,8 +1032,11 @@ class MemoryService:
         """
         if user_id is None:
             return None
-        owner = await repo.get_owner(session_id)
-        if (owner is None or owner[1] != user_id
+        from backend.memory.keying import normalize_product
+
+        product = normalize_product(product)
+        owner = await repo.get_owner(session_id, product=product)
+        if (owner is None or owner[2] != user_id
                 or (tenant_id is not None and owner[0] != tenant_id)):
             return "会话不存在"
         return None
@@ -964,7 +1044,8 @@ class MemoryService:
     async def list_sessions(self, user_id: str = "default",
                             limit: int = 50, before: str | None = None,
                             before_session_id: str | None = None,
-                            tenant_id: str = "") -> dict:
+                            tenant_id: str = "", product: str = "",
+                            ) -> dict:
         """列出用户所有会话（支持分页）。
 
         Args:
@@ -974,6 +1055,8 @@ class MemoryService:
         """
         from backend.memory.keying import normalize_tenant_id
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
@@ -985,6 +1068,7 @@ class MemoryService:
                     limit=safe_limit + 1,
                     before=before,
                     before_session_id=before_session_id,
+                    product=product,
                 )
                 has_more = len(sessions) > safe_limit
                 sessions = sessions[:safe_limit]
@@ -994,6 +1078,7 @@ class MemoryService:
                 if before is None:
                     total = await repo.count_sessions(
                         user_id=user_id, tenant_id=tenant_id,
+                        product=product,
                     )
                 await db_session.commit()
                 return {
@@ -1007,18 +1092,21 @@ class MemoryService:
                 return {"sessions": [], "total": 0, "error": str(e)}
 
     async def get_profile(self, user_id: str, tenant_id: str = "",
-                          limit: int = 50) -> dict:
+                          limit: int = 50, product: str = "") -> dict:
         """用户画像：全部 eligible active 长期记忆（设置页只读展示）。
 
         与 Agent 检索（search_hybrid）走同一 eligibility 口径（is_active +
         (tenant, user) 双维度 + 未过期），但不做语义召回、不更新 access_count
         ——展示读不得污染召回排序的 recency 信号。
         """
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = MemoryRepository(db_session)
                 all_records = await repo.list_active_profile(
                     user_id=user_id, tenant_id=tenant_id, limit=None,
+                    product=product,
                 )
                 from backend.memory.profile import build_profile_projection
 
@@ -1057,12 +1145,16 @@ class MemoryService:
                 return {"records": [], "total": 0, "error": str(e)}
 
     async def get_pending_profile(self, user_id: str, tenant_id: str = "",
-                                  limit: int = 100) -> dict:
+                                  limit: int = 100, product: str = "",
+                                  ) -> dict:
         """返回需用户确认的自动推断候选；不将候选混入有效画像。"""
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         async with AsyncSessionLocal() as db_session:
             try:
                 records = await MemoryRepository(db_session).list_pending_profile(
                     user_id=user_id, tenant_id=tenant_id, limit=limit,
+                    product=product,
                 )
                 await db_session.commit()
                 return {
@@ -1085,22 +1177,27 @@ class MemoryService:
                 return {"records": [], "total": 0, "error": str(e)}
 
     async def list_extraction_jobs(
-        self, session_id: str, user_id: str, tenant_id: str = "", limit: int = 100,
+        self, session_id: str, user_id: str, tenant_id: str = "",
+        limit: int = 100, product: str = "",
     ) -> dict:
         """返回会话内 L3 提取状态，不返回对话正文或异常原文。"""
         from backend.memory.keying import normalize_tenant_id
         from backend.memory.models.memory import MemoryExtractionJob
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 denied = await self._check_owner(
-                    SessionRepository(db_session), session_id, user_id, tenant_id,
+                    SessionRepository(db_session), session_id, user_id,
+                    tenant_id, product=product,
                 )
                 if denied:
                     return {"jobs": [], "total": 0, "error": denied}
                 filters = (
                     MemoryExtractionJob.tenant_id == tenant_id,
+                    MemoryExtractionJob.product == product,
                     MemoryExtractionJob.user_id == user_id,
                     MemoryExtractionJob.session_id == session_id,
                 )
@@ -1135,12 +1232,16 @@ class MemoryService:
 
     async def verify_profile_memory(
         self, user_id: str, tenant_id: str, memory_id: str,
+        product: str = "",
     ) -> dict:
         """用户明确确认候选后才允许其进入检索和画像。"""
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         async with AsyncSessionLocal() as db_session:
             try:
                 changed = await MemoryRepository(db_session).verify_pending_memory(
                     user_id=user_id, tenant_id=tenant_id, record_id=memory_id,
+                    product=product,
                 )
                 if not changed:
                     await db_session.rollback()
@@ -1156,10 +1257,13 @@ class MemoryService:
     async def delete_profile_memory(
         self, user_id: str, tenant_id: str = "", *,
         memory_id: str | None = None, memory_key: str | None = None,
+        product: str = "",
     ) -> dict:
         """删除当前用户的长期记忆；正文/向量物理清除，最小 tombstone 防旧任务复活。"""
         from backend.memory.keying import normalize_tenant_id
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
@@ -1168,6 +1272,7 @@ class MemoryService:
                     tenant_id=tenant_id,
                     record_id=memory_id,
                     memory_key=memory_key,
+                    product=product,
                 )
                 if result is None:
                     await db_session.rollback()
@@ -1181,9 +1286,11 @@ class MemoryService:
 
     async def get_session_messages(
         self, session_id: str, user_id: str | None = None,
-        tenant_id: str | None = None,
+        tenant_id: str | None = None, product: str = "",
     ) -> dict:
         """获取会话消息列表。"""
+        _, tenant_id, product = _resolve_memory_identity(
+            user_id or "default", tenant_id or "", product)
         if tenant_id is not None:
             from backend.memory.keying import normalize_tenant_id
 
@@ -1193,10 +1300,11 @@ class MemoryService:
                 repo = SessionRepository(db_session)
                 denied = await self._check_owner(
                     repo, session_id, user_id, tenant_id,
+                    product=product,
                 )
                 if denied:
                     return {"session_id": session_id, "messages": [], "error": denied}
-                msgs = await repo.load_messages(session_id)
+                msgs = await repo.load_messages(session_id, product=product)
                 await db_session.commit()
                 return {
                     "session_id": session_id,
@@ -1212,7 +1320,9 @@ class MemoryService:
                 return {"session_id": session_id, "messages": [], "error": str(e)}
 
     async def list_profile_memories(self, user_id: str = "default",
-                                    limit: int = 50, tenant_id: str = "") -> dict:
+                                    limit: int = 50, tenant_id: str = "",
+                                    product: str = "",
+                                    ) -> dict:
         """列出当前用户的画像记忆（memory_records active 行，设置页只读展示）。
 
         与 /memory/sessions（会话记忆）互补：这里只出长期记忆四类
@@ -1224,6 +1334,8 @@ class MemoryService:
         from backend.memory.keying import normalize_tenant_id
         from backend.memory.models.memory import MemoryRecord
 
+        user_id, tenant_id, product = _resolve_memory_identity(
+            user_id, tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
@@ -1232,6 +1344,7 @@ class MemoryService:
                     .where(
                         MemoryRecord.user_id == user_id,
                         MemoryRecord.tenant_id == tenant_id,
+                        MemoryRecord.product == product,
                         MemoryRecord.is_active.is_(True),
                     )
                     .order_by(
@@ -1259,21 +1372,24 @@ class MemoryService:
 
     async def get_session_context(
         self, session_id: str, user_id: str | None = None,
-        tenant_id: str = "",
+        tenant_id: str = "", product: str = "",
     ) -> dict:
         """获取会话 Agent 工作上下文。"""
         from backend.memory.keying import normalize_tenant_id
 
+        _, tenant_id, product = _resolve_memory_identity(
+            user_id or "default", tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
                 denied = await self._check_owner(
                     repo, session_id, user_id, tenant_id,
+                    product=product,
                 )
                 if denied:
                     return {"session_id": session_id, "context": None, "error": denied}
-                ctx = await repo.get_context(session_id)
+                ctx = await repo.get_context(session_id, product=product)
                 await db_session.commit()
                 if ctx:
                     import json as _json
@@ -1289,17 +1405,20 @@ class MemoryService:
 
     async def delete_session(
         self, session_id: str, user_id: str | None = None,
-        tenant_id: str = "",
+        tenant_id: str = "", product: str = "",
     ) -> dict:
         """删除会话及消息。"""
         from backend.memory.keying import normalize_tenant_id
 
+        _, tenant_id, product = _resolve_memory_identity(
+            user_id or "default", tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
                 denied = await self._check_owner(
                     repo, session_id, user_id, tenant_id,
+                    product=product,
                 )
                 if denied:
                     return {"ok": False, "error": denied}
@@ -1307,6 +1426,7 @@ class MemoryService:
 
                 cancel_jobs = update(MemoryExtractionJob).where(
                     MemoryExtractionJob.session_id == session_id,
+                    MemoryExtractionJob.product == product,
                     MemoryExtractionJob.status.in_(("PENDING", "RUNNING")),
                 )
                 if user_id is not None:
@@ -1321,7 +1441,7 @@ class MemoryService:
                     last_error_code="SESSION_DELETED",
                     updated_at=func.now(),
                 ))
-                ok = await repo.delete(session_id)
+                ok = await repo.delete(session_id, product=product)
                 await db_session.commit()
                 if ok:
                     logger.info(f"[MemoryService] 已删除会话: {session_id}")
@@ -1334,21 +1454,24 @@ class MemoryService:
 
     async def rename_session(
         self, session_id: str, title: str, user_id: str | None = None,
-        tenant_id: str = "",
+        tenant_id: str = "", product: str = "",
     ) -> dict:
         """重命名会话。"""
         from backend.memory.keying import normalize_tenant_id
 
+        _, tenant_id, product = _resolve_memory_identity(
+            user_id or "default", tenant_id, product)
         tenant_id = normalize_tenant_id(tenant_id)
         async with AsyncSessionLocal() as db_session:
             try:
                 repo = SessionRepository(db_session)
                 denied = await self._check_owner(
                     repo, session_id, user_id, tenant_id,
+                    product=product,
                 )
                 if denied:
                     return {"ok": False, "error": denied}
-                ok = await repo.rename(session_id, title)
+                ok = await repo.rename(session_id, title, product=product)
                 await db_session.commit()
                 if ok:
                     logger.info(f"[MemoryService] 已重命名: {session_id} → {title}")

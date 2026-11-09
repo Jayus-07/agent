@@ -20,7 +20,8 @@ class _MemoryRecorder:
         self.calls = []
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id=""):
+                 tenant_id="", **_kwargs):
+        # ADR-0012 第 1 期：调用方新增 product/trace_id 等 kwargs
         self.calls.append((session_id, question, answer, user_id))
 
 

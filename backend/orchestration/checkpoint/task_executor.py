@@ -471,6 +471,8 @@ class TaskGraphExecutor:
                 messages = memory_manager.start_session(
                     record.conversation_id, query, user_id=record.user_id,
                     tenant_id=record.tenant_id,
+                    # 长任务产品恒 agent（task_executor.py 注册路由同值）
+                    product="agent",
                 ).messages
             payload = make_initial_state(
                 query, task_id, kb_id=(record.input or {}).get("kb_id", "default"),
@@ -573,6 +575,7 @@ class TaskGraphExecutor:
                 record.conversation_id, query, final_answer,
                 user_id=record.user_id, tenant_id=record.tenant_id,
                 idempotency_key=f"agent-task:{record.id}",
+                product="agent", trace_id=str(execution_id or ""),
             )
         task_service.update_status(
             task_id, TaskStatus.SUCCESS, error_message="", progress="执行完成",

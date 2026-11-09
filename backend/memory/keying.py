@@ -54,6 +54,40 @@ def normalize_tenant_id(raw: str | None) -> str:
     return value
 
 
+# ── 产品维度（ADR-0012 第 1 期，审计 #68）─────────────────────
+# 与 core/product_context 的产品注册表保持同源（agent/customer_service/
+# public/internal + travel 预留）；memory 层不 import product_context
+# （避免 core→memory 反向依赖），值域以本清单为唯一裁决。
+MEMORY_PRODUCTS = frozenset({"agent", "customer_service", "travel", "public", "internal"})
+PRODUCT_DEFAULT = "agent"
+
+
+def normalize_product(raw: str | None) -> str:
+    """产品归一：空/未声明 → agent；未知值 → agent（不 fail-open）。
+
+    agent 是存量数据的唯一产品（143 迁移回填口径），未声明产品的调用方
+    归一到 agent 保持行为兼容；查询永远携带具体 product 值。
+    """
+    value = (raw or "").strip().lower()
+    return value if value in MEMORY_PRODUCTS else PRODUCT_DEFAULT
+
+
+# memory_user_id 旧前缀编码的逆解析（143 迁移同口径）：
+# customer_service:: 恰 18 字符；agent/internal 历史上返回裸值。
+_MEMORY_PRODUCT_PREFIXES = {
+    "customer_service": "customer_service::",
+}
+
+
+def unscoped_memory_user_id(key: str) -> tuple[str, str]:
+    """旧前缀编码 user_id → (product, bare_user)；裸值 → (agent, 原值)。"""
+    value = str(key or "").strip()
+    for product, prefix in _MEMORY_PRODUCT_PREFIXES.items():
+        if value.startswith(prefix):
+            return product, value[len(prefix):]
+    return PRODUCT_DEFAULT, value
+
+
 def normalize_memory_key(raw: str | None) -> str | None:
     """memory_key 归一：NFKC → trim → lower → 空白转下划线 → 格式校验。
 

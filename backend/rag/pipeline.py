@@ -114,8 +114,10 @@ class RAGPipeline:
         if memory is None or not session_id:
             return False
         try:
+            from backend.core.request_context import get_current_product_id
             buf = memory.start_session(
                 session_id, "", user_id=user_id, tenant_id=tenant_id,
+                product=get_current_product_id(),
             )
             return bool(buf is not None and len(buf) > 0)
         except Exception:

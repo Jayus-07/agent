@@ -116,21 +116,24 @@ class MemoryManager:
         tenant_id: str = "",
         domain: str | None = None,
         event_scope=None,
+        product: str = "",
     ) -> ShortTermBuffer:
         # question 透传给 L3：长期记忆检索用当前问题做语义 query（此前误用 session_id）
         result = self._run(lambda: self._service.start_session(
             session_id, user_id, query=question, tenant_id=tenant_id,
-            domain=domain, event_scope=event_scope))
+            domain=domain, event_scope=event_scope, product=product))
         if result is None:
             return ShortTermBuffer()
         return result
 
     def end_turn(self, session_id: str, question: str, answer: str,
                  user_id: str = "default", tenant_id: str = "",
-                 idempotency_key: str = "") -> None:
+                 idempotency_key: str = "", product: str = "",
+                 trace_id: str = "") -> None:
         self._run(lambda: self._service.end_turn(
             session_id, question, answer, user_id, tenant_id=tenant_id,
-            idempotency_key=idempotency_key))
+            idempotency_key=idempotency_key, product=product,
+            trace_id=trace_id))
 
     @property
     def service(self) -> MemoryService:

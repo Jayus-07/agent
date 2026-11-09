@@ -195,12 +195,14 @@ def _fake_guard(monkeypatch):
 class _FakeMemory:
     def start_session(
         self, session_id, question, user_id="default", tenant_id="",
-        event_scope=None,
+        event_scope=None, **_kwargs,
     ):
+        # ADR-0012 第 1 期：runner 新增 product 等 kwargs——桩不关心该维度
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
-    def end_turn(self, session_id, question, answer, user_id="default", tenant_id=""):
+    def end_turn(self, session_id, question, answer, user_id="default",
+                 tenant_id="", **_kwargs):
         self.last_answer = answer
 
 

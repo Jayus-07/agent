@@ -5,6 +5,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import DateTime, delete, func, select, type_coerce, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.memory.keying import PRODUCT_DEFAULT, normalize_product
 from backend.memory.message_codec import serialize_message
 from backend.memory.models.session import ChatMessage, ChatSession
 
@@ -25,10 +26,14 @@ class SessionRepository:
 
     async def get_or_create(
         self, session_id: str, user_id: str = "default",
-        tenant_id: str | None = "default",
+        tenant_id: str | None = "default", product: str = PRODUCT_DEFAULT,
     ) -> ChatSession:
+        product = normalize_product(product)
         result = await self._s.execute(
-            select(ChatSession).where(ChatSession.session_id == session_id)
+            select(ChatSession).where(
+                ChatSession.session_id == session_id,
+                ChatSession.product == product,
+            )
         )
         row = result.scalar_one_or_none()
         if row:
@@ -39,20 +44,24 @@ class SessionRepository:
             return row
         obj = ChatSession(
             session_id=session_id, user_id=user_id,
-            tenant_id=tenant_id or "default",
+            tenant_id=tenant_id or "default", product=product,
         )
         self._s.add(obj)
         await self._s.flush()
         return obj
 
-    async def load_messages(self, session_id: str, limit: int | None = None) -> list[ChatMessage]:
+    async def load_messages(self, session_id: str, limit: int | None = None,
+                            product: str = PRODUCT_DEFAULT) -> list[ChatMessage]:
         """读取会话消息，按时间升序返回。
 
         带 limit 时取「最近 N 条」（先倒序取再反转），而不是最早的 N 条 ——
         语义修正：上下文注入和摘要只关心最近的对话，旧实现会把最早的消息
         当成"最近历史"喂给模型。
         """
-        q = select(ChatMessage).where(ChatMessage.session_id == session_id)
+        q = select(ChatMessage).where(
+            ChatMessage.session_id == session_id,
+            ChatMessage.product == normalize_product(product),
+        )
         if limit:
             recent = await self._s.execute(
                 q.order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
@@ -68,21 +77,28 @@ class SessionRepository:
         self, session_id: str, role: str, content: str, *,
         message_type: str | None = None,
         message_metadata: dict | None = None,
+        product: str = PRODUCT_DEFAULT,
     ) -> ChatMessage:
+        product = normalize_product(product)
         msg = ChatMessage(
             session_id=session_id, role=role, content=content,
             message_type=message_type, message_metadata=message_metadata,
+            product=product,
         )
         self._s.add(msg)
         # touch session updated_at
         await self._s.execute(
-            update(ChatSession).where(ChatSession.session_id == session_id).values(updated_at=datetime.now(timezone.utc))
+            update(ChatSession)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == product)
+            .values(updated_at=datetime.now(timezone.utc))
         )
         await self._s.flush()
         return msg
 
     async def save_langchain_message(
         self, session_id: str, message: BaseMessage,
+        product: str = PRODUCT_DEFAULT,
     ) -> ChatMessage:
         """保存服务端 LangChain 消息，并以数据库主键作为恢复身份。"""
         payload = serialize_message(message)
@@ -90,35 +106,46 @@ class SessionRepository:
             session_id, payload["role"], payload["content"],
             message_type=payload["message_type"],
             message_metadata=payload["message_metadata"],
+            product=product,
         )
 
-    async def save_turn(self, session_id: str, question: str, answer: str) -> tuple[ChatMessage, ChatMessage]:
+    async def save_turn(self, session_id: str, question: str, answer: str,
+                        product: str = PRODUCT_DEFAULT,
+                        ) -> tuple[ChatMessage, ChatMessage]:
         # GraphRunner.end_turn 的真实落库入口走受控消息编解码；工具协议消息
         # 只有在执行图实际提供 LangChain ToolMessage 时才单独持久化。
+        product = normalize_product(product)
         q = await self.save_langchain_message(
-            session_id, HumanMessage(content=question),
+            session_id, HumanMessage(content=question), product=product,
         )
         a = await self.save_langchain_message(
-            session_id, AIMessage(content=answer),
+            session_id, AIMessage(content=answer), product=product,
         )
         # 首轮自动设标题（仅当 title 为空，不覆盖用户重命名）
         await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id, ChatSession.title.is_(None))
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == product, ChatSession.title.is_(None))
             .values(title=question[:128])
         )
         return q, a
 
     async def replace_messages(
         self, session_id: str, messages: list[dict[str, str]],
+        product: str = PRODUCT_DEFAULT,
     ) -> list[ChatMessage]:
         """原子替换会话消息快照，并清除已失效的摘要水位线。"""
+        product = normalize_product(product)
         await self._s.execute(
-            delete(ChatMessage).where(ChatMessage.session_id == session_id)
+            delete(ChatMessage).where(
+                ChatMessage.session_id == session_id,
+                ChatMessage.product == product,
+            )
         )
         await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == product)
             .values(
                 summary=None,
                 summary_through_message_id=None,
@@ -131,32 +158,40 @@ class SessionRepository:
         for message in messages:
             role = message["role"]
             content = message["content"]
-            saved.append(await self.save_message(session_id, role, content))
+            saved.append(await self.save_message(session_id, role, content,
+                                                 product=product))
             if role == "user" and not first_user_text:
                 first_user_text = content
         if first_user_text:
             await self._s.execute(
                 update(ChatSession)
                 .where(ChatSession.session_id == session_id,
+                       ChatSession.product == product,
                        ChatSession.title.is_(None))
                 .values(title=first_user_text[:128])
             )
         return saved
 
-    async def message_count(self, session_id: str) -> int:
+    async def message_count(self, session_id: str,
+                            product: str = PRODUCT_DEFAULT) -> int:
         result = await self._s.execute(
-            select(func.count()).where(ChatMessage.session_id == session_id)
+            select(func.count()).where(
+                ChatMessage.session_id == session_id,
+                ChatMessage.product == normalize_product(product),
+            )
         )
         return result.scalar() or 0
 
-    async def needs_summarization(self, session_id: str, max_messages: int = 50) -> bool:
-        count = await self.message_count(session_id)
+    async def needs_summarization(self, session_id: str, max_messages: int = 50,
+                                  product: str = PRODUCT_DEFAULT) -> bool:
+        count = await self.message_count(session_id, product=product)
         return count >= max_messages
 
     async def list_all(self, user_id: str = "default", limit: int = 50,
                        before: str | None = None,
                        before_session_id: str | None = None,
-                       tenant_id: str = "default") -> list[dict]:
+                       tenant_id: str = "default",
+                       product: str = PRODUCT_DEFAULT) -> list[dict]:
         """列出用户的所有会话（id + 标题 + 消息数 + 时间）。
 
         Args:
@@ -187,6 +222,7 @@ class SessionRepository:
             .where(
                 ChatSession.user_id == user_id,
                 ChatSession.tenant_id == tenant_id,
+                ChatSession.product == normalize_product(product),
             )
             .group_by(ChatSession.id)
             .order_by(desc(sort_updated_at), desc(ChatSession.session_id))
@@ -229,34 +265,43 @@ class SessionRepository:
 
     async def count_sessions(
         self, user_id: str = "default", tenant_id: str = "default",
+        product: str = PRODUCT_DEFAULT,
     ) -> int:
         """统计用户会话总数，配合 list_all 用于 hasMore 判断"""
         result = await self._s.execute(
             select(func.count()).select_from(ChatSession).where(
                 ChatSession.user_id == user_id,
                 ChatSession.tenant_id == tenant_id,
+                ChatSession.product == normalize_product(product),
             )
         )
         return int(result.scalar() or 0)
 
-    async def get_owner(self, session_id: str) -> tuple[str, str] | None:
-        """查询会话归属（tenant_id, user_id）。会话不存在返回 None。
+    async def get_owner(self, session_id: str,
+                        product: str = PRODUCT_DEFAULT,
+                        ) -> tuple[str, str, str] | None:
+        """查询会话归属（tenant_id, product, user_id）。不存在返回 None。
 
-        供路由层做属主校验：跨用户访问与「会话不存在」同语义返回 404，
-        不向调用方泄露该 session_id 是否真实存在。
+        供路由层做属主校验：跨用户/跨产品访问与「会话不存在」同语义返回
+        404，不向调用方泄露该 session_id 是否真实存在。
         """
         result = await self._s.execute(
-            select(ChatSession.tenant_id, ChatSession.user_id).where(
+            select(ChatSession.tenant_id, ChatSession.product, ChatSession.user_id).where(
                 ChatSession.session_id == session_id,
+                ChatSession.product == normalize_product(product),
             )
         )
         row = result.one_or_none()
-        return (row.tenant_id, row.user_id) if row else None
+        return (row.tenant_id, row.product, row.user_id) if row else None
 
-    async def delete(self, session_id: str) -> bool:
+    async def delete(self, session_id: str,
+                     product: str = PRODUCT_DEFAULT) -> bool:
         """删除会话（级联删除 messages）"""
         result = await self._s.execute(
-            select(ChatSession).where(ChatSession.session_id == session_id)
+            select(ChatSession).where(
+                ChatSession.session_id == session_id,
+                ChatSession.product == normalize_product(product),
+            )
         )
         row = result.scalar_one_or_none()
         if not row:
@@ -265,32 +310,38 @@ class SessionRepository:
         await self._s.flush()
         return True
 
-    async def rename(self, session_id: str, title: str) -> bool:
+    async def rename(self, session_id: str, title: str,
+                     product: str = PRODUCT_DEFAULT) -> bool:
         """重命名会话（写独立 title 字段，不再占用 summary —— 那是 L2 摘要的位置）"""
         result = await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == normalize_product(product))
             .values(title=title[:128], updated_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 
-    async def update_summary(self, session_id: str, summary: str) -> bool:
+    async def update_summary(self, session_id: str, summary: str,
+                             product: str = PRODUCT_DEFAULT) -> bool:
         """持久化 L2 自动摘要（消息数超阈后的压缩结果）"""
         result = await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == normalize_product(product))
             .values(summary=summary, updated_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 
     # ── L5 AutoCompact 摘要水位线（2026-09-22 Phase 3，migration 040）──
 
-    async def get_summary_state(self, session_id: str) -> dict:
+    async def get_summary_state(self, session_id: str,
+                                product: str = PRODUCT_DEFAULT) -> dict:
         """读取摘要水位线状态（summary / through_id / token_count）。"""
         result = await self._s.execute(
             select(ChatSession.summary, ChatSession.summary_through_message_id,
                    ChatSession.summary_token_count)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == normalize_product(product))
         )
         row = result.first()
         if not row:
@@ -299,6 +350,7 @@ class SessionRepository:
 
     async def summarizable_before_id(
         self, session_id: str, keep_recent_turns: int,
+        product: str = PRODUCT_DEFAULT,
     ) -> int | None:
         """最近 keep_recent_turns 轮（user 消息开轮）之前的边界消息 id。
 
@@ -307,6 +359,7 @@ class SessionRepository:
         result = await self._s.execute(
             select(ChatMessage.id)
             .where(ChatMessage.session_id == session_id,
+                   ChatMessage.product == normalize_product(product),
                    ChatMessage.role == "user")
             .order_by(ChatMessage.id.desc())
             .offset(max(0, int(keep_recent_turns) - 1))
@@ -316,11 +369,13 @@ class SessionRepository:
 
     async def load_messages_since(
         self, session_id: str, after_id: int, before_id: int, limit: int = 200,
+        product: str = PRODUCT_DEFAULT,
     ) -> list[ChatMessage]:
         """读取水位线区间 (after_id, before_id) 的消息（id 升序）。"""
         result = await self._s.execute(
             select(ChatMessage)
             .where(ChatMessage.session_id == session_id,
+                   ChatMessage.product == normalize_product(product),
                    ChatMessage.id > int(after_id or 0),
                    ChatMessage.id < int(before_id))
             .order_by(ChatMessage.id.asc())
@@ -330,11 +385,13 @@ class SessionRepository:
 
     async def update_summary_state(
         self, session_id: str, summary: str, through_id: int, token_count: int,
+        product: str = PRODUCT_DEFAULT,
     ) -> bool:
         """持久化增量摘要 + 推进水位线（原子：同一条 UPDATE）。"""
         result = await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == normalize_product(product))
             .values(summary=summary,
                     summary_through_message_id=int(through_id),
                     summary_token_count=int(token_count),
@@ -343,19 +400,25 @@ class SessionRepository:
         )
         return result.rowcount > 0
 
-    async def update_context(self, session_id: str, context: str) -> bool:
+    async def update_context(self, session_id: str, context: str,
+                             product: str = PRODUCT_DEFAULT) -> bool:
         """更新 Agent 工作上下文（JSON: sql_results/rag_docs/report/turns）"""
         result = await self._s.execute(
             update(ChatSession)
-            .where(ChatSession.session_id == session_id)
+            .where(ChatSession.session_id == session_id,
+                   ChatSession.product == normalize_product(product))
             .values(context_summary=context, updated_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 
-    async def get_context(self, session_id: str) -> str | None:
+    async def get_context(self, session_id: str,
+                          product: str = PRODUCT_DEFAULT) -> str | None:
         """读取会话的上下文摘要"""
         result = await self._s.execute(
-            select(ChatSession.context_summary).where(ChatSession.session_id == session_id)
+            select(ChatSession.context_summary).where(
+                ChatSession.session_id == session_id,
+                ChatSession.product == normalize_product(product),
+            )
         )
         row = result.scalar_one_or_none()
         return row or None

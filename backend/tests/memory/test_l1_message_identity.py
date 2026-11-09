@@ -76,7 +76,7 @@ def test_session_memory_restores_database_ids_and_human_ai_roles():
     ]
 
     class Repository:
-        async def load_messages(self, session_id, limit=None):
+        async def load_messages(self, session_id, limit=None, product="agent"):
             assert session_id == "session-1"
             assert limit == 10
             return rows
@@ -107,10 +107,10 @@ def test_memory_service_keeps_repeated_text_from_distinct_l2_rows(monkeypatch):
         async def get_or_create(self, *_args, **_kwargs):
             return SimpleNamespace(summary=None)
 
-        async def message_count(self, _session_id):
+        async def message_count(self, _session_id, product="agent"):
             return len(rows)
 
-        async def load_messages(self, _session_id, limit=None):
+        async def load_messages(self, _session_id, limit=None, product="agent"):
             assert limit is not None
             return rows
 

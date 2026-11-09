@@ -32,12 +32,18 @@ from backend.config import (
     MEMORY_ORIGIN_EXPLICIT,
     MEMORY_ORIGIN_INFERRED,
 )
-from backend.memory.keying import StoreOutcome, StoreResult, origin_priority
-from backend.memory.keying import memory_scope_domain
+from backend.memory.keying import (
+    PRODUCT_DEFAULT,
+    StoreOutcome,
+    StoreResult,
+    memory_scope_domain,
+    normalize_product,
+    origin_priority,
+)
 
 
 def _build_record(fact, user_id: str, session_id: str, tenant_id: str,
-                  embedding, *, version: int = 1):
+                  embedding, *, version: int = 1, product: str = PRODUCT_DEFAULT):
     from backend.memory.models.memory import MemoryRecord
 
     scope, domain = memory_scope_domain(fact.memory_key)
@@ -48,6 +54,7 @@ def _build_record(fact, user_id: str, session_id: str, tenant_id: str,
 
     return MemoryRecord(
         tenant_id=tenant_id,
+        product=normalize_product(product),
         user_id=user_id,
         session_id=session_id,
         memory_type=fact.fact_type,
@@ -67,34 +74,38 @@ def _build_record(fact, user_id: str, session_id: str, tenant_id: str,
 
 
 async def resolve_keyed(repo, fact, user_id: str, session_id: str,
-                        tenant_id: str, embedding) -> StoreResult:
+                        tenant_id: str, embedding,
+                        product: str = PRODUCT_DEFAULT) -> StoreResult:
     """keyed 事实写入：定位 active 版本 → 按 origin 矩阵裁决 → 原子落库。
 
     在 repo 所属的当前事务内执行（不自行 commit）——supersede 三步与
     调用方同事务，rollback 即整体回滚（§34）。
     """
+    product = normalize_product(product)
     await repo.lock_memory_identity(
-        tenant_id, user_id, memory_key=fact.memory_key,
+        tenant_id, user_id, memory_key=fact.memory_key, product=product,
     )
     if await repo.delete_tombstone_blocks(
         tenant_id, user_id, memory_key=fact.memory_key,
         source_message_id=fact.source_message_id,
         explicit=fact.origin == MEMORY_ORIGIN_EXPLICIT,
+        product=product,
     ):
         return StoreResult(StoreOutcome.BLOCKED_BY_DELETE, reason="delete_barrier")
 
     scope, domain = memory_scope_domain(fact.memory_key)
     existing = await repo.find_active_by_key(
         tenant_id, user_id, fact.memory_key, scope=scope, domain=domain,
-        for_update=True)
+        for_update=True, product=product)
 
     if existing is None:
         version = await repo.next_memory_version(
             tenant_id, user_id, scope=scope, domain=domain,
-            memory_key=fact.memory_key,
+            memory_key=fact.memory_key, product=product,
         )
         record = _build_record(
             fact, user_id, session_id, tenant_id, embedding, version=version,
+            product=product,
         )
         # 首建竞态由 partial unique index 兜底：并发双插时 loser 撞
         # IntegrityError，事务 abort，调用方 rollback 后有界重试一次（§40）
@@ -116,7 +127,7 @@ async def resolve_keyed(repo, fact, user_id: str, session_id: str,
         )
     return await _resolve_conflict(
         repo, existing, fact, user_id, session_id, tenant_id, embedding,
-        version=existing.version + 1,
+        version=existing.version + 1, product=product,
     )
 
 
@@ -150,7 +161,8 @@ async def _resolve_reaffirm(repo, existing, fact) -> StoreResult:
 
 
 async def _resolve_conflict(repo, existing, fact, user_id: str, session_id: str,
-                            tenant_id: str, embedding, *, version: int) -> StoreResult:
+                            tenant_id: str, embedding, *, version: int,
+                            product: str = PRODUCT_DEFAULT) -> StoreResult:
     """同 key 不同值：按 origin 矩阵裁决 supersede 或阻断。"""
     incoming = fact.origin
     if incoming == MEMORY_ORIGIN_EXPLICIT:
@@ -176,6 +188,7 @@ async def _resolve_conflict(repo, existing, fact, user_id: str, session_id: str,
     await repo.deactivate(str(old_id))
     record = _build_record(
         fact, user_id, session_id, tenant_id, embedding, version=version,
+        product=product,
     )
     await repo.insert(record)
     await repo.supersede(str(old_id), str(record.id))
@@ -187,27 +200,30 @@ async def _resolve_conflict(repo, existing, fact, user_id: str, session_id: str,
 
 
 async def resolve_unkeyed(repo, fact, user_id: str, session_id: str,
-                          tenant_id: str, embedding) -> StoreResult:
+                          tenant_id: str, embedding,
+                          product: str = PRODUCT_DEFAULT) -> StoreResult:
     """unkeyed 兼容路径：语义相似只判 duplicate，永不 supersede（§43-45）。
 
     sim ≥ L3_SUPERSEDE_THRESHOLD → DUPLICATE（高相似同义表达）；
     L3_DEDUP_COSINE_THRESHOLD ≤ sim < SUPERSEDE → INSERT（旧版静默丢弃带，
     现在「中等相似 = 独立事实」）；< DEDUP → INSERT。
     """
+    product = normalize_product(product)
     content_hash = hashlib.sha256(fact.content.encode("utf-8")).hexdigest()
     await repo.lock_memory_identity(
-        tenant_id, user_id, content_hash=content_hash,
+        tenant_id, user_id, content_hash=content_hash, product=product,
     )
     if await repo.delete_tombstone_blocks(
         tenant_id, user_id, content_hash=content_hash,
         source_message_id=fact.source_message_id,
         explicit=fact.origin == MEMORY_ORIGIN_EXPLICIT,
+        product=product,
     ):
         return StoreResult(StoreOutcome.BLOCKED_BY_DELETE, reason="delete_barrier")
 
     candidates = await repo.find_similar_candidates(
         embedding, user_id, tenant_id,
-        threshold=L3_DEDUP_COSINE_THRESHOLD, top_n=5)
+        threshold=L3_DEDUP_COSINE_THRESHOLD, top_n=5, product=product)
     if candidates:
         best_record, best_sim = candidates[0]
         if best_sim >= L3_SUPERSEDE_THRESHOLD:
@@ -216,7 +232,8 @@ async def resolve_unkeyed(repo, fact, user_id: str, session_id: str,
                 memory_id=str(best_record.id),
                 reason=f"semantic sim={best_sim:.3f}",
             )
-    record = _build_record(fact, user_id, session_id, tenant_id, embedding)
+    record = _build_record(
+        fact, user_id, session_id, tenant_id, embedding, product=product)
     await repo.insert(record)
     return StoreResult(StoreOutcome.INSERTED, memory_id=str(record.id))
 

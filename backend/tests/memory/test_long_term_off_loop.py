@@ -38,7 +38,8 @@ def test_store_with_resolution_off_loop_runs_without_name_error(monkeypatch):
 
     captured = {}
 
-    async def fake_resolve_unkeyed(repo, fact, user_id, session_id, tenant_id, emb):
+    async def fake_resolve_unkeyed(repo, fact, user_id, session_id, tenant_id,
+                                   emb, product="agent"):
         captured["emb"] = emb
         return object()  # 形状无关：只验证 to_thread 下放与传参
 

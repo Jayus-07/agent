@@ -8,9 +8,12 @@ from backend.shared.logger import logger
 class SessionMemory:
     """单个会话的持久化记忆 — backed by PostgreSQL"""
 
-    def __init__(self, session_id: str, user_id: str = "default"):
+    def __init__(self, session_id: str, user_id: str = "default",
+                 product: str = "agent"):
         self.session_id = session_id
         self.user_id = user_id
+        # 产品命名空间（ADR-0012 第 1 期）：L2 消息读写按 (product, session_id)。
+        self.product = product
         self._summary: str | None = None
         self._repo = None  # set during async init
         self._message_count: int = 0
@@ -20,19 +23,22 @@ class SessionMemory:
         self.summary_persisted: bool = False
 
     @classmethod
-    async def create(cls, session_id: str, repo, user_id: str = "default") -> "SessionMemory":
-        inst = cls(session_id, user_id)
+    async def create(cls, session_id: str, repo, user_id: str = "default",
+                     product: str = "agent") -> "SessionMemory":
+        inst = cls(session_id, user_id, product=product)
         inst._repo = repo
-        inst._message_count = await repo.message_count(session_id)
+        inst._message_count = await repo.message_count(session_id, product=product)
         return inst
 
     async def load_messages(self, limit: int | None = None) -> list[BaseMessage]:
-        rows = await self._repo.load_messages(self.session_id, limit=limit)
+        rows = await self._repo.load_messages(
+            self.session_id, limit=limit, product=self.product)
         from backend.memory.message_codec import restore_message
         return [restore_message(row) for row in rows]
 
     async def save_turn(self, question: str, answer: str) -> None:
-        await self._repo.save_turn(self.session_id, question, answer)
+        await self._repo.save_turn(
+            self.session_id, question, answer, product=self.product)
         self._message_count += 2
 
     @property

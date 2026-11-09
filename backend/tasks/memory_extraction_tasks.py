@@ -240,9 +240,12 @@ async def _claim_job(job_id: UUID) -> tuple[dict | None, str]:
         payload = {
             "job_id": str(job.id),
             "tenant_id": job.tenant_id,
+            "product": job.product,
             "user_id": job.user_id,
             "session_id": job.session_id,
             "source_message_id": job.source_message_id,
+            # D9：来源请求 trace（工人侧仅透传，不落日志正文）
+            "source_trace_id": job.source_trace_id or "",
             "attempt": attempt,
             "question": source.content,
             "answer": assistant.content,
@@ -353,6 +356,7 @@ async def process_memory_extraction(job_id_value: str) -> dict:
                 tenant_id=payload["tenant_id"],
                 job_id=payload["job_id"],
                 job_attempt=payload["attempt"],
+                product=payload["product"],
             )
     except Exception as exc:
         logger.exception("[MemoryExtraction] worker failed job=%s error=%s",

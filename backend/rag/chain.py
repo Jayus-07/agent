@@ -1013,11 +1013,14 @@ class RAGChain:
             return
         if self._memory:
             try:
+                from backend.core.request_context import get_current_product_id
                 identity = get_context().identity
                 user_id = (getattr(identity, "user_id", "") or "default")
                 self._memory.end_turn(session_id, question, answer,
                                       user_id=user_id,
-                                      tenant_id=getattr(identity, "tenant_id", "") or "")
+                                      tenant_id=getattr(identity, "tenant_id", "") or "",
+                                      product=get_current_product_id(),
+                                      trace_id=str(getattr(trace, "id", "") or "") if trace is not None else "")
             except Exception:
                 logger.debug("[RAGChain] memory end_turn 失败（不影响应答）",
                              exc_info=True)
@@ -1270,8 +1273,13 @@ class RAGChain:
         identity = get_context().identity
         user_id = getattr(identity, "user_id", "") or "default"
         tenant_id = getattr(identity, "tenant_id", "") or ""
+        # ADR-0012 第 1 期（审计 #68）：product 由 ContextVar 解析（主图
+        # runner 已 bind；rag-service 由 /ask 入口 bind），记忆层唯一入口
+        # 据此解析命名空间——客服知识问答不再串入 agent 记忆。
+        from backend.core.request_context import get_current_product_id
         l1 = (self._memory.start_session(session_id, question, user_id=user_id,
-                                         tenant_id=tenant_id)
+                                         tenant_id=tenant_id,
+                                         product=get_current_product_id())
               if self._memory else None)
         return list(l1.messages) if l1 else []
 

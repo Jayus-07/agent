@@ -23,6 +23,7 @@ from backend.config import (
     MEMORY_ORIGIN_LEGACY,
 )
 from backend.memory.keying import (
+    PRODUCT_DEFAULT,
     StoreResult,
     StoreOutcome,
     normalize_memory_key,
@@ -224,7 +225,8 @@ class LongTermMemory:
         ) for r, _sim in rows]
 
     async def store_with_resolution(self, fact: MemoryFact, user_id: str,
-                                    session_id: str, tenant_id: str = "") -> StoreResult:
+                                    session_id: str, tenant_id: str = "",
+                                    product: str = PRODUCT_DEFAULT) -> StoreResult:
         """事实写入唯一入口（STOP C）：normalize → 裁决 → 原子落库。
 
         防线纵深：confidence 再 clamp、origin 非法值回退 legacy、key/value
@@ -256,13 +258,17 @@ class LongTermMemory:
         from backend.memory import conflict
         if fact.memory_key is not None:
             return await conflict.resolve_keyed(
-                self._repo, fact, user_id, session_id, tenant_id, emb)
+                self._repo, fact, user_id, session_id, tenant_id, emb,
+                product=product)
         return await conflict.resolve_unkeyed(
-            self._repo, fact, user_id, session_id, tenant_id, emb)
+            self._repo, fact, user_id, session_id, tenant_id, emb,
+            product=product)
 
     async def store_single(self, fact: MemoryFact, user_id: str, session_id: str,
-                           tenant_id: str = "") -> bool:
+                           tenant_id: str = "",
+                           product: str = PRODUCT_DEFAULT) -> bool:
         """兼容 wrapper（§47）：旧调用方拿到 bool；核心路径用 store_with_resolution。"""
-        result = await self.store_with_resolution(fact, user_id, session_id, tenant_id)
+        result = await self.store_with_resolution(
+            fact, user_id, session_id, tenant_id, product=product)
         return result.stored
 
