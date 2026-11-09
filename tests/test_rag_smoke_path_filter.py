@@ -216,6 +216,40 @@ def test_non_rag_docs_and_backend_changes_skip_smoke():
     assert _filter_subprocess(paths) is False
 
 
+def test_admin_governance_changes_run_pr_static_but_not_main_paid_smoke():
+    """管理端工具治理面（admin_mcp/admin_tools/admin_llm）：PR 免费预检触发，
+    main push 不触发真实 Provider 评测——载荷契约测试进 CI 门禁的路径入口
+    （PR #414 评审发现：TestToolListPayload 此前不被任何 workflow 执行）。"""
+    paths = [
+        "backend/app/api/routes/admin_mcp.py",
+        "backend/app/api/routes/admin_tools.py",
+        "backend/shared/admin_llm.py",
+        "backend/tests/api/test_admin_mcp_api.py",
+    ]
+    assert _filter_import(paths) is False
+    assert _filter_subprocess(paths) is False
+    assert _filter_import(paths, event="pull_request") is True
+    assert _filter_subprocess(paths, event="pull_request") is True
+
+
+def test_tool_list_payload_contract_in_smoke_checklist():
+    """过滤器把治理面归类为 PR 免费预检后，定向清单必须真的包含
+    TestToolListPayload——防止「过滤器说触发、清单没跑用例」的门禁空转。"""
+    root = Path(__file__).resolve().parents[1]
+    smoke = yaml.safe_load(
+        (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
+    )
+    run_steps = [
+        step for job in smoke["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and "run" in step
+    ]
+    assert any(
+        "backend/tests/api/test_admin_mcp_api.py::TestToolListPayload" in step["run"]
+        for step in run_steps
+    ), "rag_smoke 定向清单缺少 TestToolListPayload（载荷契约门禁空转）"
+
+
 def test_empty_diff_skips_smoke():
     assert _filter_import([]) is False
     assert _filter_subprocess([]) is False

@@ -47,6 +47,13 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     "backend/tests/api/test_evaluation_runs_list.py",
     "tests/evaluation/test_rag_ci_workflow_contracts.py",
     "tests/test_rag_smoke_path_filter.py",
+    # 管理端工具治理面（ADR-0011）：载荷契约与 LLM 辅助去重实现。
+    # 变化只触发 PR 免费预检（含 TestToolListPayload 定向用例），
+    # main 更新不触发真实 Provider 评测。
+    "backend/app/api/routes/admin_mcp.py",
+    "backend/app/api/routes/admin_tools.py",
+    "backend/shared/admin_llm.py",
+    "backend/tests/api/test_admin_mcp_api.py",
 })
 PR_STATIC_ONLY_PREFIXES = ("backend/sql/migrations/",)
 PREFIX_ENTRIES = (
