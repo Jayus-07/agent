@@ -50,13 +50,13 @@ import {
   approveMcpSemantic, disableMcpTool, getMcpToolDetail, getMcpTools,
   grantMcpTool, reviewMcpTool, saveMcpSemanticDraft, suggestMcpSemantic,
   testInvokeMcpTool,
-  type McpTool, type TestInvokeResult,
+  type McpTool, type McpToolSummary, type TestInvokeResult,
 } from '@/api/mcp'
 import {
   getFailureAnalyses, runFailureAnalysis,
   type FailureAnalysisRecord, type FailureAnalysisResult,
 } from '@/api/failureAnalysis'
-import { ApiError } from '@/api/client'
+import { errMessage } from '@/api/client'
 
 const TOOL_PAGE_TABS = [
   { id: 'registry', label: '工具目录与操作' },
@@ -120,7 +120,7 @@ function DataSourceBadge({ ds }: { ds: NonNullable<ToolContractEntry['data_sourc
 }
 
 /** 动态工具来源徽章：MCP（Streamable HTTP 发现）/ HTTP API（手工登记），附连接名。 */
-function DynamicSourceBadge({ tool }: { tool: McpTool }) {
+function DynamicSourceBadge({ tool }: { tool: McpToolSummary }) {
   const isHttp = tool.conn_transport === 'http_api'
   return (
     <span
@@ -215,11 +215,6 @@ const OPERATION_OPTIONS = [
 ]
 
 const fmtCount = (n?: number) => (n ?? 0).toLocaleString('zh-CN')
-
-function errMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.message
-  return e instanceof Error ? e.message : '请求失败'
-}
 
 /** 契约参数表（lock args_schema）：参数 / 类型 / 必填 / 默认值。 */
 function ToolArgsTable({ args }: { args: NonNullable<ToolContractEntry['args_schema']> }) {
@@ -1442,7 +1437,7 @@ export default function ToolsPage() {
   const [failedOnly, setFailedOnly] = useState(searchParams.get('failed') === '1')
   const [clsFilter, setClsFilter] = useState<ChangeCls>(parseCls(searchParams.get('cls')))
   // 外部 MCP 动态工具（数据库事实源，非契约 lock；连接管理在 /mcp 连接中心）
-  const [mcpTools, setMcpTools] = useState<McpTool[]>([])
+  const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([])
   const [mcpError, setMcpError] = useState<string | null>(null)
   // 动态工具详情抽屉
   const [drawerToolId, setDrawerToolId] = useState<number | null>(null)

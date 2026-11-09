@@ -32,9 +32,9 @@ import {
   type ConnectionInput, type ConnectionTestResult, type DiscoverResult,
   type HttpToolInvocation, type McpConnection, type McpConnectionHealth,
   type McpOverview,
-  type McpTool,
+  type McpToolSummary,
 } from '@/api/mcp'
-import { ApiError } from '@/api/client'
+import { errMessage } from '@/api/client'
 
 const MCP_PAGE_TABS = [
   { id: 'all', label: '全部连接' },
@@ -73,11 +73,6 @@ const TOOL_STATUS_META: Record<string, { label: string; tone: StatusTone }> = {
 const TRANSPORT_META: Record<string, { label: string; badgeCls: string }> = {
   streamable_http: { label: 'MCP · Streamable HTTP', badgeCls: 'bg-violet-100 text-violet-700' },
   http_api: { label: 'HTTP API', badgeCls: 'bg-sky-100 text-sky-700' },
-}
-
-function errMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.message
-  return e instanceof Error ? e.message : '请求失败'
 }
 
 function TransportBadge({ transport }: { transport: string }) {
@@ -245,7 +240,7 @@ function parseOpenApiOperation(specText: string): {
 function HttpToolForm({
   initial, onRegister, onUpdate, onCancel, submitting, mode,
 }: {
-  initial?: McpTool | null
+  initial?: McpToolSummary | null
   onRegister: (input: { tool_name: string; description: string;
     invocation: HttpToolInvocation;
     input_schema: Record<string, unknown> }) => void
@@ -270,8 +265,10 @@ function HttpToolForm({
   const [bodyFrom, setBodyFrom] = useState(initialInv?.body_from ?? '')
   const [schemaText, setSchemaText] = useState(
     JSON.stringify(
-      initial?.snapshots?.[0]?.input_schema
-      ?? { type: 'object', properties: {}, additionalProperties: false },
+      // 列表行（McpToolSummary）不含 snapshots——该字段仅详情端点返回，
+      // 此预填在列表数据流下历来恒为默认值；如需带出当前 Schema 应改为
+      // 编辑前先拉取详情（本次保持既有行为不变）。
+      { type: 'object', properties: {}, additionalProperties: false },
       null, 0))
   const [openApiText, setOpenApiText] = useState('')
   const [showOpenApi, setShowOpenApi] = useState(false)
@@ -689,7 +686,7 @@ export default function McpPage() {
   const { tab, selectTab } = useWorkbenchTab(MCP_PAGE_TAB_IDS, 'all')
   const [overview, setOverview] = useState<McpOverview | null>(null)
   const [connections, setConnections] = useState<McpConnection[]>([])
-  const [mcpTools, setMcpTools] = useState<McpTool[]>([])
+  const [mcpTools, setMcpTools] = useState<McpToolSummary[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [search, setSearch] = useState('')
@@ -704,7 +701,7 @@ export default function McpPage() {
   const [drawerTab, setDrawerTab] = useState('overview')
   // HTTP API 工具登记/编辑：{ connId, tool } | null（tool 空 = 新登记）
   const [httpToolForm, setHttpToolForm] = useState<
-    { connId: string; tool: McpTool | null } | null>(null)
+    { connId: string; tool: McpToolSummary | null } | null>(null)
 
   const reload = useCallback(async () => {
     setLoading(true)

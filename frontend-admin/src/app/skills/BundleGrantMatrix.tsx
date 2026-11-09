@@ -12,7 +12,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { CheckCircle2, CircleSlash, Loader2, Plus, RefreshCw } from 'lucide-react'
 import { AssetActionButton, AssetSection } from '@/components/layout/AssetPageShell'
 import { useToast } from '@/components/shared/Toast'
-import { ApiError } from '@/api/client'
+import { errMessage } from '@/api/client'
 import {
   createCapabilityBundle, getCapabilityBundles, grantCapabilityBundle,
   updateCapabilityBundle,
@@ -23,11 +23,6 @@ const PRODUCTS = [
   { key: 'agent', label: '主助手' },
   { key: 'customer_service', label: '客服' },
 ] as const
-
-function errMessage(e: unknown): string {
-  if (e instanceof ApiError) return e.message
-  return e instanceof Error ? e.message : '请求失败'
-}
 
 export default function BundleGrantMatrix() {
   const toast = useToast()

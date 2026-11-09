@@ -103,24 +103,28 @@ export function getWorkflowCatalog(): Promise<WorkflowCatalogResponse> {
 }
 
 // ── MCP Server / Tool（复用既有只读接口） ────────────────
+// 命名注意：这里是 /api/mcp/*（mcp_servers/manager 的**内部** MCP server
+// 运行时视图，/skills 页展示注册情况）；ADR-0011 外部动态工具的治理
+// 视图在 @/api/mcp（/api/admin/mcp/*）。Runtime 前缀避免两套 McpTool
+// 同名混淆——历史上两处同名不同义，误改会造成跨视图类型错配。
 
-export interface McpServer {
+export interface RuntimeMcpServer {
   name: string
   description: string
   tool_count: number
 }
 
-export interface McpTool {
+export interface RuntimeMcpTool {
   server: string
   name: string
   description: string
   parameters: Record<string, unknown>
 }
 
-export function getMcpServers(): Promise<{ servers: McpServer[] }> {
-  return request<{ servers: McpServer[] }>('/api/mcp/servers')
+export function getRuntimeMcpServers(): Promise<{ servers: RuntimeMcpServer[] }> {
+  return request<{ servers: RuntimeMcpServer[] }>('/api/mcp/servers')
 }
 
-export function getMcpTools(): Promise<{ count: number; tools: McpTool[] }> {
-  return request<{ count: number; tools: McpTool[] }>('/api/mcp/tools')
+export function getRuntimeMcpTools(): Promise<{ count: number; tools: RuntimeMcpTool[] }> {
+  return request<{ count: number; tools: RuntimeMcpTool[] }>('/api/mcp/tools')
 }

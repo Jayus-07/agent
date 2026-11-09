@@ -3,8 +3,8 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getCapabilities = vi.hoisted(() => vi.fn())
-const getMcpServers = vi.hoisted(() => vi.fn())
-const getMcpTools = vi.hoisted(() => vi.fn())
+const getRuntimeMcpServers = vi.hoisted(() => vi.fn())
+const getRuntimeMcpTools = vi.hoisted(() => vi.fn())
 const atLeast = vi.hoisted(() => vi.fn())
 const getDiscoveryPolicy = vi.hoisted(() => vi.fn())
 const updateDiscoveryPolicy = vi.hoisted(() => vi.fn())
@@ -14,7 +14,7 @@ const navigation = vi.hoisted(() => ({
   router: { push: vi.fn(), replace: vi.fn() },
 }))
 
-vi.mock('@/api/registry', () => ({ getCapabilities, getMcpServers, getMcpTools }))
+vi.mock('@/api/registry', () => ({ getCapabilities, getRuntimeMcpServers, getRuntimeMcpTools }))
 vi.mock('@/api/discovery', () => ({ getDiscoveryPolicy, updateDiscoveryPolicy, simulateDiscovery }))
 vi.mock('@/lib/auth', () => ({ atLeast }))
 vi.mock('next/navigation', () => ({
@@ -44,8 +44,8 @@ beforeEach(() => {
     workflows: [],
     skills: [],
   })
-  getMcpServers.mockResolvedValue({ servers: [] })
-  getMcpTools.mockResolvedValue({ tools: [] })
+  getRuntimeMcpServers.mockResolvedValue({ servers: [] })
+  getRuntimeMcpTools.mockResolvedValue({ tools: [] })
   getDiscoveryPolicy.mockResolvedValue({
     policy: {
       id: '', name: '', active: false, mode: 'adaptive', top_k: 3,

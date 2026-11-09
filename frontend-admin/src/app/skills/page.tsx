@@ -21,10 +21,10 @@ import EmptyState from '@/components/shared/EmptyState'
 import { atLeast } from '@/lib/auth'
 import {
   getCapabilities,
-  getMcpServers,
-  getMcpTools,
-  type McpServer,
-  type McpTool,
+  getRuntimeMcpServers,
+  getRuntimeMcpTools,
+  type RuntimeMcpServer,
+  type RuntimeMcpTool,
 } from '@/api/registry'
 import {
   getDiscoveryPolicy, simulateDiscovery, updateDiscoveryPolicy,
@@ -82,8 +82,8 @@ function KeywordChips({ words, empty }: { words: string[]; empty: string }) {
 function CapabilitiesTab() {
   const canOpenToolRegistry = atLeast('admin')
   const [caps, setCaps] = useState<Awaited<ReturnType<typeof getCapabilities>> | null>(null)
-  const [servers, setServers] = useState<McpServer[] | null>(null)
-  const [tools, setTools] = useState<McpTool[] | null>(null)
+  const [servers, setServers] = useState<RuntimeMcpServer[] | null>(null)
+  const [tools, setTools] = useState<RuntimeMcpTool[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -94,8 +94,8 @@ function CapabilitiesTab() {
       // MCP 为可选信息：失败只降级对应区块，不阻塞能力清单主区块
       const [capRes, mcpServers, mcpTools] = await Promise.all([
         getCapabilities(),
-        getMcpServers().then((r) => r.servers).catch(() => null),
-        getMcpTools().then((r) => r.tools).catch(() => null),
+        getRuntimeMcpServers().then((r) => r.servers).catch(() => null),
+        getRuntimeMcpTools().then((r) => r.tools).catch(() => null),
       ])
       setCaps(capRes)
       setServers(mcpServers)
