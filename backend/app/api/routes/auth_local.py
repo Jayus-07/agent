@@ -464,6 +464,9 @@ async def login(request: Request, response: Response):
     ip = _client_ip(request)
     if not username or not password:
         return _fail("用户名或密码不能为空", code=400)
+    username_error = _login_username_error(username)
+    if username_error:
+        return _fail(username_error, code=400)
     tenant_id = _trusted_tenant_id(request)
     if tenant_id is None:
         return _fail("缺少可信租户身份", code=401)
@@ -899,6 +902,16 @@ _PHONE_RE = re.compile(r"1\d{10}")
 # 新账号标识统一 11 位数字（2026-11-09 登录/RBAC 决策）；登录端不限制，
 # 兼容历史非数字账号（如 admin）。
 _ACCOUNT_RE = re.compile(r"\d{11}")
+# 登录名只允许可见 ASCII 标识符（审计 #43：历史账号 + 登录入口的字符集防线）。
+# 长度放宽到 64，避免误伤历史账号；控制字符/CRLF 一律拒绝。
+_LOGIN_USERNAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def _login_username_error(username: str) -> str | None:
+    """登录名格式校验：仅字母/数字/._-，拒绝控制字符与空白。"""
+    if not _LOGIN_USERNAME_RE.fullmatch(username or ""):
+        return "用户名格式不正确"
+    return None
 
 
 def _password_policy_error(password: str) -> str | None:
