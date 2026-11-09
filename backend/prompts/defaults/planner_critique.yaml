@@ -12,7 +12,7 @@ template: |
   {capabilities_schema}
 
   ## 审查规则
-  1. **capability 匹配**：每个步骤的 capability 是否真正匹配问题意图？
+  1. **capability 匹配**：以下仅为常见示例，实际能力以 `{capabilities_schema}` 的声明为准。每个步骤的 capability 是否真正匹配问题意图？
      - sql.query → 需要具体数据/统计/排名/数量的问题（如"销售额""排名""库存"）
      - rag.search → 需要制度/规范/经验/方法/定义/流程的问题（如"流程""规定""怎么做"）
      - report.generate → 需要生成格式化报告的问题

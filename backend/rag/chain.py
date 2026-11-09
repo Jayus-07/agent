@@ -203,6 +203,30 @@ def _mark_gate_degraded(layer: str, action: str, error, span=None) -> None:
 # Prompt 构建器：优先从 prompt_service 获取，降级到 DEFAULT 常量
 # =====================================================
 
+# 历史感知改写只在问题确实依赖上下文时启用。原问题独立完整时跳过改写，
+# 既省一次 LLM 调用，也避免模型把知识库/平台名称扩写进检索 query。
+_HISTORY_REWRITE_CUES = (
+    "他", "她", "它", "这个", "那个", "这些", "那些", "该", "其", "此",
+    "上述", "前述", "刚才", "刚刚", "之前", "前面", "还有", "另外", "再",
+    "那", "那么", "继续", "同样", "换成", "改成", "呢",
+)
+
+
+def _needs_history_rewrite(question: str) -> bool:
+    """判断问题是否真的需要结合历史改写。
+
+    保守策略：只有出现代词、承接语或极短追问时才走 history-aware 改写；
+    独立完整的问题直接走 standalone 检索，防止改写模型引入原问题没有的
+    业务域/产品/组织词。
+    """
+    q = (question or "").strip()
+    if not q:
+        return False
+    if len(q) <= 5:
+        return True
+    return any(cue in q for cue in _HISTORY_REWRITE_CUES)
+
+
 def _build_contextualize_prompt() -> ChatPromptTemplate:
     """从 prompt_service 构建查询重写 ChatPromptTemplate。"""
     # 延迟导入（见文件顶部注释）
@@ -1292,8 +1316,13 @@ class RAGChain:
             input={"question": question[:500]},
         )
 
-        # ── 双链选择：无历史时跳过 HistoryAware LLM 调用 ──
-        active_chain = self.chain_standalone if not chat_history else self.chain
+        # ── 双链选择：无历史或问题本身独立时跳过 HistoryAware LLM 调用 ──
+        history_rewrite_used = (
+            bool(chat_history)
+            and _needs_history_rewrite(question)
+            and getattr(self, "chain", None) is not None
+        )
+        active_chain = self.chain if history_rewrite_used else self.chain_standalone
         # ── Phase 5（spec §23/§24）：检索级 deadline 预算——入口生成一次，
         # 下游（MQ 改写/fan-out/adaptive/synonym）统一 remaining_ms() 消费；
         # 预算经 ContextVar 随 multi_query 的提交方快照进入变体任务。
@@ -1311,6 +1340,15 @@ class RAGChain:
         # （P1 审查）。这里只负责检索预算。
         try:
             result = active_chain.invoke({"input": question, "chat_history": chat_history})
+            if history_rewrite_used and not (
+                isinstance(result, dict) and result.get("context")
+            ):
+                # 历史改写后的 query 可能被扩写坏了；无证据时用原问题重试一次，
+                # 避免把“改写漂移”误判成知识库没有答案。
+                logger.info("[RAGChain] 历史改写检索无证据，回退原问题重试")
+                result = self.chain_standalone.invoke(
+                    {"input": question, "chat_history": []}
+                )
         finally:
             clear_retrieval_budget()
 

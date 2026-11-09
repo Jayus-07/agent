@@ -67,17 +67,24 @@ class TestByteExactness:
         )
 
     def test_followup_rewrite_renders_legacy_bytes(self):
-        # 旧 _llm_rewrite 内联 f-string 构造（收编前行为），渲染必须逐字节一致
+        # 降级内联拼接必须与注册表渲染逐字节一致
         last, ctx_snapshot, raw = "上轮发言", '{"cities": ["大理"]}', "第二天呢"
         expected = (
             "你是 query 改写器。把依赖上下文的用户问题改写成独立完整的问题。\n"
+            "\n"
+            "规则：\n"
+            "1. 只做指代消解和必要的上下文补全；不得添加原问题、上一轮发言或"
+            "结构化上下文中不存在的业务域、产品、组织、时间、地点或限定词。\n"
+            "2. 原问题已独立完整时，standalone_query 必须原样返回。\n"
+            "3. 无法确定指代对象时 resolved=false、need_clarification=true，"
+            "不得猜测。\n"
+            "\n"
             f"上一轮用户发言：{last}\n"
             f"结构化上下文：{ctx_snapshot}\n"
             f"当前问题：{raw}\n"
             "只输出 JSON，不要输出其他内容：\n"
             '{"standalone_query": "", "resolved": true, "used_context": [],'
-            ' "need_clarification": false, "clarification_question": null}\n'
-            "上下文不足以改写时 resolved=false 且 need_clarification=true。"
+            ' "need_clarification": false, "clarification_question": null}'
         )
         assert _render(
             "context.followup_rewrite",
