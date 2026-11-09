@@ -11,6 +11,10 @@ from sqlalchemy import and_, delete, func, or_, select, update, text, type_coerc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 
+from backend.config.memory import (
+    MEMORY_SAFETY_CONTENT_PATTERNS,
+    MEMORY_SAFETY_KEY_PREFIXES,
+)
 from backend.memory.keying import (
     PRODUCT_DEFAULT,
     normalize_memory_domain,
@@ -486,24 +490,52 @@ class MemoryRepository:
         return result.rowcount > 0
 
     async def apply_decay(self, days: int, factor: float,
-                          upper_days: int | None = None) -> int:
+                          upper_days: int | None = None,
+                          product: str | None = None) -> int:
         """衰减 [days, upper_days) 天未访问的 active 非 explicit 记录。
 
         upper_days 构成互斥区间（90~180 → 0.95，>180 → 0.9）——旧实现两档
         级联（>180 天被 ×0.9×0.95 双重衰减），接线时修正为互斥语义。
+        第 2 期（D5）：product 指定命名空间档位（decay.run 按产品循环）。
+        D-2 安全豁免：memory_key 命中白名单前缀、或内容命中安全关键词的
+        行不衰减（安全记忆必须永远参与自动注入，不得被降权挤出 top-K；
+        关键词清单宁宽勿严——误豁免只损失 rank 信号）。
         """
-        clause = "last_access_at < NOW() - (:days || ' days')::INTERVAL"
+        params: dict = {"factor": factor, "days": str(days)}
+        conditions = [
+            "is_active = TRUE",
+            "origin <> 'explicit'",
+            "last_access_at < NOW() - (:days || ' days')::INTERVAL",
+        ]
         if upper_days is not None:
-            clause += " AND last_access_at >= NOW() - (:upper || ' days')::INTERVAL"
+            conditions.append(
+                "last_access_at >= NOW() - (:upper || ' days')::INTERVAL")
+            params["upper"] = str(upper_days)
+        key_prefixes = list(MEMORY_SAFETY_KEY_PREFIXES)
+        if key_prefixes:
+            # 排除「匹配任一白名单前缀」的行 = 所有 NOT LIKE 同时成立（AND）；
+            # NULL（unkeyed）行不因本条件被排除：OR memory_key IS NULL 保位
+            conditions.append("(" + " OR ".join(["memory_key IS NULL"])
+                              + " OR (" + " AND ".join(
+                                  f"memory_key NOT LIKE :sk{i}"
+                                  for i in range(len(key_prefixes))
+                              ) + "))")
+            params.update({f"sk{i}": f"{p}%" for i, p in enumerate(key_prefixes)})
+        content_patterns = list(MEMORY_SAFETY_CONTENT_PATTERNS)
+        if content_patterns:
+            conditions.append("NOT (" + " OR ".join(
+                f"content LIKE :sp{i}" for i in range(len(content_patterns))
+            ) + ")")
+            params.update({f"sp{i}": f"%{p}%" for i, p in enumerate(content_patterns)})
+        if product is not None:
+            conditions.append("product = :product")
+            params["product"] = normalize_product(product)
         result = await self._s.execute(
-            text(f"""
-                UPDATE memory_records
-                SET importance_score = importance_score * :factor
-                WHERE is_active = TRUE
-                  AND origin <> 'explicit'
-                  AND {clause}
-            """),
-            {"factor": factor, "days": str(days),
-             **({"upper": str(upper_days)} if upper_days is not None else {})},
+            text(
+                "UPDATE memory_records "
+                "SET importance_score = importance_score * :factor "
+                "WHERE " + " AND ".join(conditions)
+            ),
+            params,
         )
         return result.rowcount

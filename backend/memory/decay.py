@@ -22,12 +22,23 @@ class MemoryDecayService:
         self._repo = repo
 
     async def run(self) -> dict:
-        """Execute one decay cycle. Returns stats."""
-        # >180 days → importance × 0.9
-        n_180 = await self._repo.apply_decay(180, 0.9)
-        # 90~180 days → importance × 0.95（互斥区间）
-        n_90 = await self._repo.apply_decay(90, 0.95, upper_days=180)
+        """Execute one decay cycle（按产品档位循环，D5）。Returns stats."""
+        from backend.config.memory import MEMORY_DECAY_PROFILES
 
-        if n_180 + n_90:
-            logger.info(f"[Decay] 衰减 {n_180 + n_90} 条（仅降权，不失效不隐藏）")
-        return {"decayed": n_180 + n_90}
+        stats: dict[str, int] = {}
+        total = 0
+        for product, profile in MEMORY_DECAY_PROFILES.items():
+            # 上档：> long_days ×long_factor；下档 [short_days, long_days)
+            # ×short_factor（互斥区间）
+            n_long = await self._repo.apply_decay(
+                int(profile["long_days"]), float(profile["long_factor"]),
+                product=product)
+            n_short = await self._repo.apply_decay(
+                int(profile["short_days"]), float(profile["short_factor"]),
+                upper_days=int(profile["long_days"]), product=product)
+            stats[product] = n_long + n_short
+            total += stats[product]
+
+        if total:
+            logger.info(f"[Decay] 衰减 {total} 条（仅降权，不失效不隐藏）: {stats}")
+        return {"decayed": total, "by_product": stats}

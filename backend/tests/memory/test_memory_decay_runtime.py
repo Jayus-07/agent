@@ -48,6 +48,18 @@ def _record(origin: str, importance: float, days_since_access: int) -> MemoryRec
     )
 
 
+def _profile_record(origin: str, importance: float, days_since_access: int,
+                    *, product: str = "agent", memory_key: str | None = None,
+                    content: str | None = None) -> MemoryRecord:
+    return MemoryRecord(
+        tenant_id="default", user_id=_USER, session_id=f"{_PREFIX}s",
+        memory_type="preference", content=content or f"decay-test {origin} {importance}",
+        embedding=None, importance_score=importance, confidence_score=1.0,
+        origin=origin, product=product, memory_key=memory_key,
+        last_access_at=datetime.now(timezone.utc) - timedelta(days=days_since_access),
+    )
+
+
 async def _row(content: str) -> tuple:
     async with AsyncSessionLocal() as db:
         return (await db.execute(text(
@@ -123,3 +135,56 @@ async def test_decay_never_deactivates_any_row():
             "SELECT is_active FROM memory_records WHERE user_id=:u"),
             {"u": _USER})).all()
     assert rows and all(r[0] is True for r in rows), "衰减不得使任何行失效"
+
+
+async def test_decay_product_profiles_d5():
+    """D5 档位：travel 快衰减（60 天 ×0.9），agent 慢（60 天不动）。"""
+    async with AsyncSessionLocal() as db:
+        repo = MemoryRepository(db)
+        for r in (
+            _profile_record("inferred", 0.5, 45, product="travel",
+                            content="decay-test travel 45d"),   # [30,60) 下档 ×0.95
+            _profile_record("inferred", 0.5, 45, product="agent",
+                            content="decay-test agent 45d"),    # agent <90 不动
+            _profile_record("inferred", 0.5, 70, product="travel",
+                            content="decay-test travel 70d"),   # >60 上档 ×0.9
+        ):
+            await repo.insert(r)
+        await db.commit()
+
+    result = await MemoryService().run_decay()
+    assert result["by_product"]["travel"] >= 2
+
+    travel45 = await _row("decay-test travel 45d")
+    assert abs(travel45[0] - 0.475) < 1e-9, "travel 45 天应命中下档 ×0.95"
+    travel70 = await _row("decay-test travel 70d")
+    assert abs(travel70[0] - 0.45) < 1e-9, "travel 70 天应命中上档 ×0.9"
+    agent45 = await _row("decay-test agent 45d")
+    assert agent45[0] == 0.5, "agent 档 45 天不应衰减（下档 90 天起）"
+
+
+async def test_decay_safety_exempt_d2():
+    """D-2 安全豁免：keyed 白名单 + 内容关键词行不衰减；普通行照常。"""
+    async with AsyncSessionLocal() as db:
+        repo = MemoryRepository(db)
+        for r in (
+            _profile_record("inferred", 0.5, 200, product="agent",
+                            memory_key="health.allergy.peanut",
+                            content="decay-test keyed safety"),
+            _profile_record("inferred", 0.5, 200, product="agent",
+                            content="decay-test 用户对花生过敏"),
+            _profile_record("inferred", 0.5, 200, product="agent",
+                            content="decay-test plain unkeyed"),
+        ):
+            await repo.insert(r)
+        await db.commit()
+
+    result = await MemoryService().run_decay()
+    assert result["decayed"] >= 1
+
+    keyed = await _row("decay-test keyed safety")
+    assert keyed[0] == 0.5, "keyed 安全行不得衰减"
+    content_safe = await _row("decay-test 用户对花生过敏")
+    assert content_safe[0] == 0.5, "内容命中安全关键词的行不得衰减"
+    plain = await _row("decay-test plain unkeyed")
+    assert plain[0] < 0.5, "普通行应照常衰减"

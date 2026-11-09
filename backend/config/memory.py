@@ -101,6 +101,20 @@ MEMORY_SAFETY_KEY_PREFIXES = tuple(
     ).split(",") if p.strip()
 )
 
+# ── 衰减产品档位（145 迁移，ADR-0012 第 2 期 D5/D-3 裁决）──
+# 三产品统一引擎 + 差异配置：agent 慢 / customer_service 中 / travel 快。
+# 两档互斥区间（long_days 上档 ×long_factor；[short_days, long_days) 下档
+# ×short_factor）；系数全局一致（0.9/0.95），只有天数档位按产品差异化。
+# D-3 裁决：config 常量起步，DB 热更留到有运营需求时。
+MEMORY_DECAY_PROFILES: dict[str, dict[str, float | int]] = {
+    "agent": {"long_days": 180, "long_factor": 0.9,
+              "short_days": 90, "short_factor": 0.95},
+    "customer_service": {"long_days": 120, "long_factor": 0.9,
+                         "short_days": 60, "short_factor": 0.95},
+    "travel": {"long_days": 60, "long_factor": 0.9,
+               "short_days": 30, "short_factor": 0.95},
+}
+
 # ── L3 读取管线（048+，STOP D：Safe Injection + Relevance Gate）──
 # 候选召回数（SQL eligibility 后的 top-N；沿用旧 top20 口径，不扩大召回）
 MEMORY_RETRIEVAL_CANDIDATES = int(os.getenv("MEMORY_RETRIEVAL_CANDIDATES", "20"))
