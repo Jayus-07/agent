@@ -112,6 +112,8 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/110_evaluation_v2_human_reviews.sql",
     "backend/sql/migrations/111_evaluation_v2_case_revision_candidates.sql",
     "backend/sql/migrations/112_evaluation_v2_domain_runner.sql",
+    # 144 待对账核销闭环：budget_reservations resolution 轴 + 核销审计表（影响预算/费用）
+    "backend/sql/migrations/144_budget_reservation_resolution.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
