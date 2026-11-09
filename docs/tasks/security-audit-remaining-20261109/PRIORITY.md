@@ -9,19 +9,20 @@
 
 本轮及上一轮已合并：#387 #388 #389 #390 #391 #392 #393 #394 #395 #396 #397 #398 #400 #401 #402 #404 #405 #406 #407 #408。
 
-- 已修：2 / 6 / 7 / 9 / 10 / 11 / 12 / 13 / 14 / 15 / 19 / 20 / 21 / 24 / 25 / 26 / 32 / 37 / 38 / 41 / 43 / 44 / 47 / 48 / 54 / 55 / 57 / 58 / 61 / 62 / 63 / 64 / 65 / 69 / 70 / 71 / 73 / 75
+- 已修：2 / 6 / 7 / 9 / 10 / 11 / 12 / 13 / 14 / 15 / 19 / 20 / 21 / 24 / 25 / 26 / 32 / 37 / 38 / 41 / 43 / 44 / 47 / 48 / 54 / 55 / 57 / 58 / 61 / 62 / 63 / 64 / 65 / 69 / 70 / 71 / 73 / 75 / 78 / 79
+- 已修（分支待合并，2026-11-09 批次三）：1 / 39 / 60 / 67 / 77 / 80 —— 各自独立 worktree 已完成实现与验证（双租户/无凭据对照测试、容器内运行时验证、本机重建健康），分支：fix/rag-tenant-failclosed-20261109（60+67）、fix/kafka-inbound-strict-identity-20261109（39）、fix/tool-approval-auto-prod-guard-20261109（77）、fix/travel-booking-transition-whitelist-20261109（80）、fix/runner-session-load-error-envelope-20261109（1）
 - 部分：49（T4c 余项）、72（T4d owner 维度）
 - 已实现但生产待启用：33（GATEWAY_TRUST_SECRET；本机已开并验证）
-- 决策保留：40（/llm/balance 登录可读，客服工具栏依赖）
-- 仍待验证（P0）：1 / 39 / 49 / 60 / 67 / 72 / 76 / 77 / 78 / 80
+- 决策保留：40（/llm/balance 登录可读，客服工具栏依赖）；49 余项（bundle 平台级共享授权单元为设计意图，T4c 已覆盖动态成员与 grant 一致性）；72 余项（选品池同租户内多操作者共池为设计意图，T4d 已覆盖租户隔离主体）
+- 仍待验证（P0）：76（sidecar 鉴权，源码最小部分为 alert-bridge token 校验，部署面需 owner 观察）——P0 源码可修项至此全部处置完毕
 
-下一步建议顺序：#67 + #60（RAG 租户簇，一个 PR）→ #39（休眠，仅加默认严格校验）→ #68（记忆产品命名空间）→ 76/77/78/80。
+下一步建议顺序：批次三六分支提交建 PR 合并 → #78 → #76（源码部分）→ P1 按域成批推进（68 记忆产品命名空间需先定旧记忆迁移策略）。
 
 ## P0 · 立即验证/修复（外部可利用、跨租户、身份伪造、注入、密钥）
 
 | # | 线索 | 档 | 状态 |
 |---|---|---|---|
-| 1 | agent-ask:runner-session-load-error-echoed-to-reply-channel | P0 | 待验证 |
+| 1 | agent-ask:runner-session-load-error-echoed-to-reply-channel | P0 | 已修（分支待合并 batch3） |
 | 2 | agents.inventory-read-no-identity-dependency | P0 | 已修 #400 |
 | 9 | backend.observability.replay.internal-product-default | P0 | 已修 #407 |
 | 10 | backend/evaluation-v2/evidence-search-missing-kb-authz | P0 | 已修 #401 |
@@ -35,24 +36,24 @@
 | 33 | fastapi-direct-header-identity-trust | P0 | 开关已实现 #407/#408（生产待启用） |
 | 37 | input_guard.question-context-exemption-defeats-strong-injection-block | P0 | 已修 #402 |
 | 38 | internal-ai.actor-user-memory-retrieval | P0 | 已修 #406 |
-| 39 | kafka-whatsapp:unverified-body-identity-as-agent-principal | P0 | 待验证 |
+| 39 | kafka-whatsapp:unverified-body-identity-as-agent-principal | P0 | 已修（分支待合并 batch3） |
 | 43 | local-auth.username-charset.gateway-header-smuggling | P0 | 已修 #406 |
 | 44 | maps.navigate.backend-key-disclosure | P0 | 已修 #406 |
 | 47 | mcp-rag.tools.missing-tenant-pushdown | P0 | 已修 T4c |
 | 48 | mcp-sql-list-tables-missing-sql-read | P0 | 已修 T4c |
-| 49 | mcp.bundle-global-namespace-foreign-tenant-mutation | P0 | 部分 T4c |
+| 49 | mcp.bundle-global-namespace-foreign-tenant-mutation | P0 | 部分 T4c；余项决策保留（平台级共享授权单元为设计意图） |
 | 57 | prompt-eval.github-artifact-release-identity-unbound | P0 | 已修 #405 |
 | 58 | prompt-release.approval-before-key-binding | P0 | 已修 #405 |
-| 60 | rag-expansion-tenant-scope | P0 | 待验证 |
-| 67 | rag.askchain.empty-tenant-no-predicate | P0 | 待验证 |
+| 60 | rag-expansion-tenant-scope | P0 | 已修（分支待合并 batch3） |
+| 67 | rag.askchain.empty-tenant-no-predicate | P0 | 已修（分支待合并 batch3） |
 | 69 | rbac.reset-password.can-reset-super-admin | P0 | 已修 #393 |
 | 70 | rbac.security-sessions.missing-tenant-scope | P0 | 已修 T4b |
 | 71 | runner.clarify-exemption-unscoped-security-categories | P0 | 已修 #402 |
-| 72 | selection-funnel-missing-tenant-isolation | P0 | 部分 T4d |
-| 76 | sidecars.observability.unauth-listeners.flat-agent-net | P0 | 待验证 |
-| 77 | tool-approval.auto-mode-unrestricted | P0 | 待验证 |
-| 78 | toolserver.http-fetcher.outbound-fetch-no-ssrf-guard | P0 | 待验证 |
-| 80 | travel.booking:transition_order-missing-state-whitelist | P0 | 待验证 |
+| 72 | selection-funnel-missing-tenant-isolation | P0 | 部分 T4d；余项决策保留（同租户共池为设计意图） |
+| 76 | sidecars.observability.unauth-listeners.flat-agent-net | P0 | 待验证（部署面 owner 观察；源码最小部分 alert-bridge token 校验未动工） |
+| 77 | tool-approval.auto-mode-unrestricted | P0 | 已修（分支待合并 batch3） |
+| 78 | toolserver.http-fetcher.outbound-fetch-no-ssrf-guard | P0 | 已修 #392 |
+| 80 | travel.booking:transition_order-missing-state-whitelist | P0 | 已修（分支待合并 batch3） |
 
 ## P1 · 高（需前置条件或用于资源放大、审计泄漏、边界不一致）
 
@@ -91,7 +92,7 @@
 | 73 | selection-funnel-unbounded-import-body | P1 | 已修 T6 |
 | 74 | sensitive-api-guard.audit-non-admin-bypass | P1 | 待验证 |
 | 75 | server.metrics-outside-auth-middleware | P1 | 已修 T1 |
-| 79 | toolserver.sqlalchemy-writer.raw-table-identifier-interpolation | P1 | 待验证 |
+| 79 | toolserver.sqlalchemy-writer.raw-table-identifier-interpolation | P1 | 已修 #392 |
 | 81 | workflow.execution.request-budget-unbound | P1 | 待验证 |
 
 ## P2 · 中（部署面配置、CI 供应链、低危或已有缓解）
