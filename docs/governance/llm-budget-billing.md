@@ -106,6 +106,7 @@
 - **按量计费价格条件必填（1.2）**：`metered` 供应商登记模型时，LLM 类（chat/vision/speech/ocr）必须填输入+输出单价，embedding/rerank 必须填输入单价，缺价在 `_upsert_model` 之前由 `_validate_model_pricing` 拒绝（旧逻辑"双空静默保存"已移除）。`local`/`subscription` 不要求价格，仍拒绝非 metered 供应商填价；缓存命中价保持可选。前端只在 metered 时标记必填并禁用保存，后端为最终事实源。
 - **未知用量估算结算（1.3）**：预占额 ≤ `BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY`（默认 5，0 = 全部人工，回滚开关）的未知用量/瞬时失败按预占上限保守估算结算，Trace/日志标 `settled_estimated`（返回值语义，不新增 DB status 枚举）；超过阈值保留 `needs_review` 人工对账。收敛入口为 `budget.settle_or_review_model_reservation`，`scoped_model_call` finally、`record_model_usage(review_reason)` 与 proxy 各 possibly_billed 失败分支统一走它。`release_model_reservation`（确定未发给供应商：熔断开路、鉴权/参数类错误）语义不变，必须零成本放走，不得改走估算结算。预占对象缺失 `reserved_cny` 时保守转待对账。
 - **未结算预留按预占单去重（1.4）**：`summary().unsettled_reserved` 改为按 `budget_reservations`（`reserved` + `needs_review`）`DISTINCT ON (id)` 去重汇总，与 `reconciliation_summary` 占额口径一致（同一预占在 user/tenant × day/month 账本上是 4 行同值，旧行级 SUM 会放大数倍）。
+- **估算结算 DB 标记（迁移 145，2026-11-10）**：估算结算写入 `budget_reservations.settle_kind='estimated'`（`''`=精确结算；status 枚举不动，与人工核销轴 `resolution` 正交）。`reconciliation_summary` 的 `billing_mismatch` 窗口对账排除估算结算单——估算按预占上限入账而 `llm_usage` 无同额成本行，属设计内保守口径而非结算分叉；精确结算与 usage 分叉仍照常触发该红信号。
 
 统一账本将本地推理记为 `pricing_source=local_inference`、云端按量应付费用 0 CNY，保留真实调用次数和可得 token。嵌入 SDK 未提供统一原始 usage 时按文本估算，标 `usage_source=estimated`、`cost_status=estimated`，不冒充厂商精确账单；硬件、电费及托管开销不在该零金额含义内。
 

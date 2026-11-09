@@ -245,3 +245,40 @@ def test_queue_filters_test_data_by_default(store):
     assert test_run not in visible
     with_test = {i['tenant_id'] for i in store.list_pending_review(200, include_test=True)}
     assert test_run in with_test
+
+
+def test_billing_mismatch_excludes_estimated_settlement(store):
+    """迁移 145：估算结算（settle_kind='estimated'）不计入 billing_mismatch——
+    按预占上限入账而 llm_usage 无同额成本行属设计内保守口径，不是结算分叉；
+    精确结算（settle_kind=''）与 usage 分叉仍触发，守卫不被稀释。"""
+    estimated_run = f'mism-est-{uuid4().hex}'
+    exact_run = f'mism-exact-{uuid4().hex}'
+
+    def mismatch_count() -> int:
+        return int(store.reconciliation_summary()['billing_mismatch_count'])
+
+    before = mismatch_count()
+    # ① 估算结算：settle 带 estimated 标记 → 不进 mismatch 计数。
+    estimated = store.reserve(
+        user_id=estimated_run, tenant_id=estimated_run,
+        amount_cny=Decimal('0.50'), request_id=estimated_run,
+    )
+    store.settle(estimated, Decimal('0.50'), settle_kind='estimated')
+    assert mismatch_count() - before == 0, (
+        '估算结算（无 usage 成本行）不应触发 billing_mismatch'
+    )
+    # ② 精确结算：无 usage 成本行 → 真实分叉，计数 +1。
+    exact = store.reserve(
+        user_id=exact_run, tenant_id=exact_run,
+        amount_cny=Decimal('0.30'), request_id=exact_run,
+    )
+    store.settle(exact, Decimal('0.30'))
+    assert mismatch_count() - before == 1, (
+        '精确结算与 usage 分叉仍必须触发 billing_mismatch'
+    )
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT DISTINCT settle_kind FROM budget_reservations
+                   WHERE id = %s""", (estimated.reservation_id,))
+            assert cur.fetchone()[0] == 'estimated'

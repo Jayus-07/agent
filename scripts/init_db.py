@@ -370,6 +370,7 @@ MIGRATION_TARGETS: dict[str, str] = {
     "142_cs_faq_tenant.sql": "memory",
     # 143_memory_product_scope.sql 由并行会话占用（未合入 main），本批从 144 起
     "144_budget_reservation_resolution.sql": "memory",
+    "145_budget_settlement_kind.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
