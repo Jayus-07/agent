@@ -10,7 +10,12 @@ import json
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user, resolve_operator_role
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_admin_user,
+    require_editor_user,
+    resolve_operator_role,
+)
 from backend.evaluation.curator import append_case, list_cases
 from backend.evaluation.config import EvalConfig
 from backend.evaluation.mode import resolve_evaluation_mode
@@ -107,6 +112,7 @@ async def create_case_from_trace(
 @router.get("/cases", response_model=list[CaseDTO])
 async def list_eval_cases(
     module: ModuleKind = Query(..., description="评测模块"),
+    _editor: OperatorIdentity = Depends(require_editor_user),
 ):
     """列出指定模块的评测用例。"""
     cases = list_cases(module)
@@ -356,7 +362,10 @@ def _row_to_summary(row: dict) -> RunSummary:
 
 
 @router.get("/runs", response_model=list[RunSummary])
-async def list_eval_runs(limit: int = Query(20, ge=1, le=100, description="返回数量")):
+async def list_eval_runs(
+    limit: int = Query(20, ge=1, le=100, description="返回数量"),
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     """列出历史评测运行记录。
 
     Phase 2 数据源收口：**PG ai.eval_run_records = Run Summary 权威**（M7
@@ -417,6 +426,7 @@ async def eval_runs_for_prompt_version(
     key: str = Query(..., description="prompt key"),
     version: int = Query(..., ge=1, description="prompt 版本号"),
     limit: int = Query(10, ge=1, le=50),
+    _editor: OperatorIdentity = Depends(require_editor_user),
 ):
     """治理验收 #4a：某 prompt 版本关联的评测 run（JSONB 包含反查）。
 

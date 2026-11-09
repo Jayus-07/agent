@@ -584,6 +584,7 @@ async def search_dataset_evidence(
     body: EvidenceSearchCreate,
     identity: Identity = Depends(require_product_identity),
     actor: OperatorIdentity = Depends(require_user_actor),
+    principal=Depends(require_principal),
 ):
     """在知识库快照内检索证据切片，供建集/编辑时勾选引用。
 
@@ -600,6 +601,21 @@ async def search_dataset_evidence(
         raise HTTPException(404, "知识库快照不存在") from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    # 审计 #10：快照 ID 是全局 24-hex 标识，load 不做授权。捕获端只允许
+    # super_admin 对可见 KB 建快照，检索端必须做同等的 KB 授权复核，
+    # 否则普通 admin 可借 run 里的 legacy_snapshot_id 读到 test KB 语料。
+    from backend.rag.authz import RagAuthorization, RagAuthorizationError
+
+    snapshot_kb = str(snapshot.get("kb_id") or "")
+    snapshot_tenant = str(snapshot.get("tenant_id") or "")
+    try:
+        authorization = await asyncio.to_thread(RagAuthorization.build, principal)
+    except RagAuthorizationError as exc:
+        raise HTTPException(403, "授权服务暂不可用，已拒绝操作") from exc
+    if snapshot_tenant and snapshot_tenant != principal.tenant_id:
+        raise HTTPException(403, "没有该知识库快照的检索权限")
+    if not snapshot_kb or not authorization.can_search_kb(snapshot_kb):
+        raise HTTPException(403, "没有该知识库快照的检索权限")
     fulltext = snapshot.get("fulltext") or []
     items = await asyncio.to_thread(search_evidence, fulltext, body.query, body.top_k)
     version_by_doc = {
