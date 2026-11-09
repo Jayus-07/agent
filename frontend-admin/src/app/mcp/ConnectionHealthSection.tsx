@@ -4,34 +4,31 @@
  * 故障模拟四按钮保持置灰壳位——那是演练/评测能力，不属健康监测本体。
  * （自 page.tsx 拆出，纯移动。）
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle, CheckCircle2, Loader2, RefreshCw } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import StatusChip, { type StatusTone } from '@/components/layout/StatusChip'
 import { AssetActionButton } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
 import { useToast } from '@/components/shared/Toast'
-import { getMcpHealthOverview, testMcpConnection, type McpConnection, type McpConnectionHealth } from '@/api/mcp'
+import { getMcpHealthOverview, testMcpConnection, type McpConnection } from '@/api/mcp'
+import { errMessage } from '@/api/client'
 
 export function ConnectionHealthSection({ conn }: { conn: McpConnection }) {
   const toast = useToast()
-  const [health, setHealth] = useState<McpConnectionHealth | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const queryClient = useQueryClient()
   const [probing, setProbing] = useState(false)
-
-  const load = useCallback(() => {
-    setLoading(true)
-    setError(null)
-    getMcpHealthOverview()
-      .then((r) => {
-        setHealth(r.connections.find((c) => c.id === conn.id) ?? null)
-      })
-      .catch((e: Error) => setError(e.message))
-      .finally(() => setLoading(false))
-  }, [conn.id])
-
-  useEffect(() => { load() }, [load])
+  // 健康总览走 react-query（P2-6 样板）：queryKey 带 conn.id——切换连接时
+  // 重新拉取（与原 useEffect 依赖 conn.id 重放同语义）；写后失效重取。
+  const healthQuery = useQuery({
+    queryKey: ['admin', 'mcp-health', conn.id],
+    queryFn: () => getMcpHealthOverview(),
+    select: (r) => r.connections.find((c) => c.id === conn.id) ?? null,
+  })
+  const health = healthQuery.data ?? null
+  const loading = healthQuery.isPending
+  const error = healthQuery.error ? errMessage(healthQuery.error) : null
 
   const onProbe = async () => {
     setProbing(true)
@@ -42,7 +39,7 @@ export function ConnectionHealthSection({ conn }: { conn: McpConnection }) {
       } else {
         toast.error(`探活失败：${result.error ?? '连接不可达'}`)
       }
-      load()
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'mcp-health', conn.id] })
     } catch (e) {
       toast.error(e instanceof Error ? e.message : '探活请求失败')
     } finally {
@@ -54,7 +51,7 @@ export function ConnectionHealthSection({ conn }: { conn: McpConnection }) {
     return <div className="rounded-lg border border-border-subtle bg-white p-6 text-center text-[12px] text-text-muted">加载健康数据中…</div>
   }
   if (error) {
-    return <ErrorState message={error} onRetry={load} />
+    return <ErrorState message={error} onRetry={() => void healthQuery.refetch()} />
   }
   if (!health) {
     return (

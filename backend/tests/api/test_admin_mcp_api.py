@@ -232,6 +232,66 @@ class TestInputValidation:
                         json={"action": "maybe"})
         assert r.status_code == 422
 
+
+class TestToolListPayload:
+    """目录列表载荷契约（P1 裁剪）：_tool_list_view 只下发摘要字段。
+
+    锁两点：① 摘要字段齐全（/tools 来源徽标、业务域/风险列、HTTP 编辑
+    预填依赖 invocation）；② 大字段（hash/审核留痕/语义契约/examples）
+    不再随列表整表搬运，只随 GET /admin/mcp/tools/{id} 详情下发。
+    """
+
+    FULL_ROW = {
+        "id": 1,
+        "connection_id": "mcp_conn_x",
+        "connection_name": "zhihu",
+        "conn_transport": "http_api",
+        "tool_name": "get_answers",
+        "capability_slug": "zhihu-get-answers",
+        "description": "获取回答列表",
+        "status": "approved",
+        "content_hash": "a" * 64,
+        "approved_hash": "b" * 64,
+        "schema_changed": True,
+        "governance": {"operation": "read", "risk_level": "R1"},
+        "invocation": {"method": "GET", "path": "/answers"},
+        "examples": ["示例路由"],
+        "review_notes": "ok",
+        "reviewed_by": "admin",
+        "reviewed_at": None,
+        "semantic_draft": {"summary": "草稿"},
+        "semantic_approved": {"summary": "并入"},
+        "last_seen_version": 2,
+        "retired_reason": "",
+        "updated_at": None,
+    }
+
+    def test_summary_fields_present(self):
+        view = admin_mcp._tool_list_view(self.FULL_ROW)
+        for key in ("id", "connection_id", "connection_name", "conn_transport",
+                    "tool_name", "capability", "capability_slug", "description",
+                    "status", "schema_changed", "governance", "invocation"):
+            assert key in view, f"列表行缺摘要字段 {key}"
+        # capability 由 slug 派生；invocation 必须保留（编辑预填依赖）
+        assert view["capability"] == "mcp.zhihu-get-answers"
+        assert view["invocation"] == {"method": "GET", "path": "/answers"}
+        assert view["schema_changed"] is True
+
+    def test_detail_only_fields_absent(self):
+        view = admin_mcp._tool_list_view(self.FULL_ROW)
+        for key in ("content_hash", "approved_hash", "examples", "review_notes",
+                    "reviewed_by", "reviewed_at", "semantic_draft",
+                    "semantic_approved", "last_seen_version", "retired_reason",
+                    "updated_at"):
+            assert key not in view, f"大字段 {key} 不应随列表下发（仅详情端点）"
+
+    def test_summary_view_is_subset_of_detail_view(self):
+        """列表视图必须是详情视图的子集——同一行两种视图不允许字段冲突。"""
+        detail = admin_mcp._tool_view(self.FULL_ROW)
+        summary = admin_mcp._tool_list_view(self.FULL_ROW)
+        for key, value in summary.items():
+            assert detail.get(key) == value, f"{key} 在列表/详情两视图中不一致"
+
     def test_connection_detail_requires_idempotency_free_read(self, client):
         """读端点不带幂等键可用；未命中租户的数据走 404（本测试无 DB，
         连接不存在 → 404 由查库阶段返回；这里只确认不被 403 拦）。"""

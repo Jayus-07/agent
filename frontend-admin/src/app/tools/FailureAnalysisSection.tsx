@@ -5,8 +5,9 @@
  * 边界：只生成建议与候选评测集，不自动应用/改写任何正式配置；送 LLM 的
  * 输入只有聚类计数与截断摘要，不含用户参数原文与凭据（后端保证）。
  */
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Loader2, ShieldCheck } from 'lucide-react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AssetSection } from '@/components/layout/AssetPageShell'
 import { useToast } from '@/components/shared/Toast'
 import {
@@ -74,22 +75,20 @@ function AnalysisClusterCard({ cluster }: { cluster: FailureAnalysisResult['clus
 
 export function FailureAnalysisSection() {
   const toast = useToast()
+  const queryClient = useQueryClient()
   const [windowMinutes, setWindowMinutes] = useState(60)
   const [running, setRunning] = useState(false)
   const [runError, setRunError] = useState<string | null>(null)
   const [result, setResult] = useState<FailureAnalysisResult | null>(null)
-  const [recent, setRecent] = useState<FailureAnalysisRecord[]>([])
-  const [recentLoading, setRecentLoading] = useState(true)
-
-  const loadRecent = useCallback(() => {
-    setRecentLoading(true)
-    getFailureAnalyses(10)
-      .then((r) => setRecent(r.analyses))
-      .catch(() => setRecent([]))
-      .finally(() => setRecentLoading(false))
-  }, [])
-
-  useEffect(() => { loadRecent() }, [loadRecent])
+  // 最近分析列表走 react-query（P2-6 样板）：轮询/缓存/去重收口到根 client
+  // （retry:1 / refetchOnWindowFocus 由 layout.tsx 统一默认），写后失效重取。
+  const recentQuery = useQuery({
+    queryKey: ['admin', 'tool-failure-analyses'],
+    queryFn: () => getFailureAnalyses(10),
+    select: (r) => r.analyses,
+  })
+  const recent = recentQuery.data ?? []
+  const recentLoading = recentQuery.isPending
 
   const run = async () => {
     setRunning(true)
@@ -98,7 +97,7 @@ export function FailureAnalysisSection() {
       const r = await runFailureAnalysis({ window_minutes: windowMinutes })
       setResult(r)
       toast.success('分析完成')
-      loadRecent()
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'tool-failure-analyses'] })
     } catch (e) {
       setRunError(errMessage(e))
     } finally {
