@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
 from contextlib import contextmanager
@@ -46,6 +45,8 @@ from backend.app.api.deps import (
 )
 from backend.app.api.identity import resolve_identity
 from backend.infra.mcp_client import McpClientError, list_tools as mcp_list_tools
+from backend.shared.admin_llm import current_llm_model, invoke_admin_llm
+from backend.shared.admin_llm import redact_urls as _redact_urls
 from backend.shared.crypto import encrypt_secret, fingerprint, last4
 from backend.shared.logger import logger
 
@@ -261,14 +262,6 @@ SEMANTIC_ITEM_MAX = 200
 SEMANTIC_LIST_MAX = 10
 SEMANTIC_HINT_MAX = 128
 
-_URL_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://\S+")
-
-
-def _redact_urls(text: str) -> str:
-    """prompt 输入清洗：任何形如 scheme://... 的字符串替换为占位符，
-    防止上游描述/Schema 中携带的 URL（可能内嵌凭据）进入 LLM 出口。"""
-    return _URL_PATTERN.sub("[URL已屏蔽]", str(text or ""))
-
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
@@ -346,24 +339,6 @@ def _render_semantic_prompt(row: dict, input_schema: dict) -> str:
         governance_operation=str(
             (row.get("governance") or {}).get("operation") or "read"),
     ).text
-
-
-async def _invoke_semantic_llm(prompt_text: str) -> str:
-    """调用当前 LLM 生成语义契约 JSON（同步 invoke 经 to_thread 执行）。"""
-    from backend.infra.llm import llm
-
-    resp = await asyncio.to_thread(
-        llm.invoke,
-        [("system", prompt_text), ("human", "请只输出 JSON 结果。")],
-    )
-    content = getattr(resp, "content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):  # 多块内容（LangChain content blocks）
-        return "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content)
-    return str(content)
 
 
 # URL 内嵌凭据红线（Batch 4 收口，PR #115 Codex P1）：连接地址不得携带
@@ -1315,6 +1290,30 @@ def _tool_view(row: dict) -> dict:
     }
 
 
+def _tool_list_view(row: dict) -> dict:
+    """目录列表行的精简视图（/admin/mcp/tools、/connections/{id}/tools）。
+
+    只保留列表/抽屉摘要与编辑预填需要的字段；hash、审核留痕、语义契约
+    （semantic_draft/semantic_approved）、examples 等大字段只随
+    GET /admin/mcp/tools/{id} 详情下发，列表 N 行时不再整表搬 JSON。
+    invocation 保留：/tools 来源徽标与 HTTP 调用定义编辑预填依赖它。
+    """
+    return {
+        "id": row["id"],
+        "connection_id": row["connection_id"],
+        "connection_name": row.get("connection_name"),
+        "conn_transport": row.get("conn_transport") or "streamable_http",
+        "tool_name": row["tool_name"],
+        "capability": f"mcp.{row['capability_slug']}",
+        "capability_slug": row["capability_slug"],
+        "description": row["description"],
+        "status": row["status"],
+        "schema_changed": bool(row["schema_changed"]),
+        "governance": row.get("governance") or {},
+        "invocation": row.get("invocation") or {},
+    }
+
+
 @router.get("/connections/{conn_id}/tools")
 async def list_connection_tools(request: Request, conn_id: str):
     operator = await require_admin_user(request)
@@ -1341,7 +1340,7 @@ async def list_connection_tools(request: Request, conn_id: str):
             })
         tools = []
         for r in rows:
-            view = _tool_view(r)
+            view = _tool_list_view(r)
             view["grants"] = grants_by_tool.get(int(r["id"]), [])
             tools.append(view)
         return {"tools": tools}
@@ -1376,7 +1375,7 @@ async def list_all_tools(request: Request, status_filter: str = ""):
                 str(g["product_key"]))
         views = []
         for r in rows:
-            view = _tool_view(r)
+            view = _tool_list_view(r)
             view["grants"] = [
                 {"product_key": p} for p in grants_by_tool.get(int(r["id"]), [])]
             views.append(view)
@@ -1586,7 +1585,7 @@ async def suggest_semantic(request: Request, tool_id: int):
     last_reason = ""
     for _attempt in range(2):  # 解析失败重试 1 次
         try:
-            content = await _invoke_semantic_llm(prompt_text)
+            content = await invoke_admin_llm(prompt_text)
         except Exception as exc:  # noqa: BLE001 — LLM 失败不伪造结果
             return JSONResponse(
                 status_code=503,
@@ -1616,6 +1615,8 @@ async def suggest_semantic(request: Request, tool_id: int):
             "summary_chars": len(record["summary"]),
             "scenarios": len(record["scenarios"]),
             "exclusions": len(record["exclusions"]),
+            # 模型名留痕（与 tool_failure_analysis 同口径；软失败留空）
+            "model": current_llm_model(),
         }, user_id=actor, tenant_id=tenant)
         return record
 

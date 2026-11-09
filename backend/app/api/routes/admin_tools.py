@@ -25,7 +25,6 @@ from __future__ import annotations
 import asyncio
 
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -36,6 +35,8 @@ from pydantic import BaseModel, Field
 
 from backend.app.api.deps import require_admin_user, require_editor_user, run_governance_mutation
 from backend.config import ENVIRONMENT
+from backend.shared.admin_llm import current_llm_model, invoke_admin_llm
+from backend.shared.admin_llm import redact_urls as _redact_urls
 from backend.shared.logger import logger
 
 router = APIRouter(prefix="/admin/tools", tags=["Admin-Tools"])
@@ -830,19 +831,12 @@ _FAILURE_SAMPLE_CHARS = 300      # 单条摘要截断（红线：摘要而非原
 _SUGGESTION_MAX = 3              # LLM 建议条数上限
 _CANDIDATE_CASES_MAX = 6         # 候选评测用例总条数上限（响应级）
 
-_URL_PATTERN = re.compile(r"[a-zA-Z][a-zA-Z0-9+.\-]*://\S+")
-
 
 class FailureAnalysisRequest(BaseModel):
     """AI 失败分析请求（边界校验在端点内显式 400，Pydantic 只兜超大 payload）。"""
 
     window_minutes: int = Field(60)
     limit: int = Field(50)
-
-
-def _redact_urls(text: str) -> str:
-    """prompt 输入清洗：任何 scheme://... 替换为占位符（防 URL 内嵌凭据出口）。"""
-    return _URL_PATTERN.sub("[URL已屏蔽]", str(text or ""))
 
 
 def _failure_tenant(request: Request) -> str:
@@ -1001,34 +995,6 @@ def _normalize_failure_analysis(content: str,
     return clusters
 
 
-async def _invoke_failure_llm(prompt_text: str) -> str:
-    """调用当前 LLM 生成失败分析 JSON（同步 invoke 经 to_thread 执行）。"""
-    from backend.infra.llm import llm
-
-    resp = await asyncio.to_thread(
-        llm.invoke,
-        [("system", prompt_text), ("human", "请只输出 JSON 结果。")],
-    )
-    content = getattr(resp, "content", "")
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):  # 多块内容（LangChain content blocks）
-        return "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part)
-            for part in content)
-    return str(content)
-
-
-def _current_llm_model() -> str:
-    """当前模型名（软失败留空：只作留痕展示，不影响分析结果）。"""
-    try:
-        from backend.infra.llm import get_llm_factory
-
-        return str(get_llm_factory().get_current_model_name() or "")
-    except Exception:  # noqa: BLE001 — 模型名读取失败不影响落库
-        return ""
-
-
 def _audit_failure_analysis(event: str, detail: dict[str, Any], *,
                             user_id: str = "", tenant_id: str = "") -> None:
     """操作审计旁路（软失败，不因审计故障带崩分析主流程）。"""
@@ -1082,7 +1048,7 @@ async def run_failure_analysis(request: Request, body: FailureAnalysisRequest):
         last_reason = ""
         for _attempt in range(2):  # 解析失败重试 1 次
             try:
-                content = await _invoke_failure_llm(prompt_text)
+                content = await invoke_admin_llm(prompt_text)
             except Exception as exc:  # noqa: BLE001 — LLM 失败不伪造结果
                 raise _HTTP(503, f"LLM 不可用或调用失败: {str(exc)[:300]}")
             clusters = _normalize_failure_analysis(content, groups)
@@ -1092,7 +1058,7 @@ async def run_failure_analysis(request: Request, body: FailureAnalysisRequest):
         if clusters is None:
             raise _HTTP(502, "失败分析解析失败（重试后仍无法得到合法 JSON）："
                              f"{last_reason}")
-        model_name = _current_llm_model()
+        model_name = current_llm_model()
     else:
         clusters = []
 

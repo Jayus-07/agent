@@ -39,7 +39,18 @@
 - 单个旧兼容导出（例如 `lib/fetcher.ts` re-export）只有在所有引用方及构建通过、回滚方案可用时才能删除；不得以目录“看上去重复”直接清理。
 - 共享代码迁移保持 API surface、事件行为、错误类型以及样式一致；大面积改目录使用 [安全重构手册](refactoring-playbook.md)。
 
-## 5. 验收
+## 5. 服务端数据获取（react-query 增量迁移，2026-11-10 起）
+
+- **根 Provider 常驻**：`frontend-admin/src/app/layout.tsx` 挂全局 `QueryClientProvider`（默认 `retry: 1`、`refetchOnWindowFocus: true`）。新代码不得再手写 `loading/error` + `useEffect` 拉数与 `setInterval` 轮询；服务端数据的加载/缓存/去重/失效统一走 react-query。
+- **增量边界**：存量页面在因其它改动被接触时逐步迁移（样板：`app/tools/FailureAnalysisSection.tsx`、`app/mcp/ConnectionHealthSection.tsx`），不做一次性大重构；纯移动拆分时保持原实现。
+- **约定**：
+  - queryKey 以 `['admin', <资源名>, <作用域 id>]` 组织；同一资源跨组件共享同一 key；
+  - 写操作成功后用 `invalidateQueries` 失效重取，不手动回填缓存；
+  - 列表与详情字段形状分离时用两个类型（样板：`api/mcp.ts` 的 `McpToolSummary`（列表行）/ `McpTool`（详情）），列表组件不得假设详情字段存在；
+  - 页面测试 `mountPage` 需包独立 `QueryClient`（`retry: false` 避免重试干扰断言），react-query 解析跨多个微任务，用保留断言的 `waitForText` 式助手冲刷时序，不得删除断言。
+- **工具函数去重**：API 错误转文案统一用 `api/client.ts` 的 `errMessage`，页面不再各自复制实现；`api/registry.ts` 的 `getRuntimeMcpServers/getRuntimeMcpTools` 是 `/api/mcp/*`（内部 MCP server 运行时视图），与 `api/mcp.ts` 的 `/api/admin/mcp/*`（ADR-0011 治理视图）是两套事实源，命名不得混用。
+
+## 6. 验收
 
 | 编号 | 场景 | 必须通过 |
 | --- | --- | --- |

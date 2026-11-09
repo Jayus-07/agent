@@ -127,7 +127,17 @@ export interface McpSemanticApproved {
   description_after: string
 }
 
-export interface McpTool {
+export type McpToolStatus = 'pending' | 'approved' | 'rejected' | 'disabled' | 'retired'
+
+/**
+ * 动态工具目录列表行（GET /admin/mcp/tools、GET /admin/mcp/connections/{id}/tools）。
+ *
+ * 服务端只下发摘要字段（backend admin_mcp._tool_list_view）；hash、审核留痕、
+ * 语义契约（semantic_draft/semantic_approved）、examples 等大字段仅随
+ * GET /admin/mcp/tools/{id} 详情返回（见 McpTool），列表不再整表搬 JSON。
+ * invocation 保留：/tools 来源徽标与 HTTP 调用定义编辑预填依赖它。
+ */
+export interface McpToolSummary {
   id: number
   connection_id: string
   connection_name?: string
@@ -136,12 +146,21 @@ export interface McpTool {
   capability: string
   capability_slug: string
   description: string
-  status: 'pending' | 'approved' | 'rejected' | 'disabled' | 'retired'
-  content_hash: string
-  approved_hash: string
+  status: McpToolStatus
   schema_changed: boolean
   governance: McpGovernance
   invocation?: HttpToolInvocation
+  grants?: {
+    product_key: string
+    granted_by?: string
+    granted_at?: string
+  }[]
+}
+
+/** 动态工具详情（GET /admin/mcp/tools/{id}）：摘要字段 + 审核工作区全量字段。 */
+export interface McpTool extends McpToolSummary {
+  content_hash: string
+  approved_hash: string
   examples: string[]
   review_notes: string
   reviewed_by: string
@@ -223,15 +242,15 @@ export async function getConnectionDetail(id: string): Promise<McpConnection> {
   return request<McpConnection>(`/api/admin/mcp/connections/${id}`)
 }
 
-export async function getConnectionTools(id: string): Promise<McpTool[]> {
-  const data = await request<{ tools: McpTool[] }>(
+export async function getConnectionTools(id: string): Promise<McpToolSummary[]> {
+  const data = await request<{ tools: McpToolSummary[] }>(
     `/api/admin/mcp/connections/${id}/tools`)
   return data.tools ?? []
 }
 
-export async function getMcpTools(statusFilter = ''): Promise<McpTool[]> {
+export async function getMcpTools(statusFilter = ''): Promise<McpToolSummary[]> {
   const qs = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : ''
-  const data = await request<{ tools: McpTool[] }>(`/api/admin/mcp/tools${qs}`)
+  const data = await request<{ tools: McpToolSummary[] }>(`/api/admin/mcp/tools${qs}`)
   return data.tools ?? []
 }
 

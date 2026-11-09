@@ -1,5 +1,6 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getToolInventory = vi.hoisted(() => vi.fn())
@@ -224,8 +225,17 @@ async function mountPage(initialQuery = '') {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  // 页面内 section（AI 失败分析等）已迁移 react-query：测试用独立 client，
+  // retry 关闭避免失败重试拖慢/干扰断言（生产根 client 默认 retry:1）。
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
   await act(async () => {
-    root.render(<ToolsPage />)
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <ToolsPage />
+      </QueryClientProvider>,
+    )
     await Promise.resolve()
   })
   mounted.push({ container, root })

@@ -51,6 +51,13 @@ export class ApiError extends Error {
   }
 }
 
+/** API 错误转可展示文案：ApiError 用后端 message，其余 Error 用自身 message，
+ *  兜底「请求失败」。页面统一引此函数，不再各自复制 errMessage 实现。 */
+export function errMessage(e: unknown): string {
+  if (e instanceof ApiError) return e.message
+  return e instanceof Error ? e.message : '请求失败'
+}
+
 function readableErrorDetail(value: unknown): string | undefined {
   if (typeof value === "string") return value.trim() || undefined;
   if (Array.isArray(value)) {

@@ -1,5 +1,6 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getMcpOverview = vi.hoisted(() => vi.fn())
@@ -48,7 +49,7 @@ vi.mock('next/navigation', () => ({
 }))
 
 import McpPage from './page'
-import type { McpConnection, McpTool } from '@/api/mcp'
+import type { McpConnection, McpToolSummary } from '@/api/mcp'
 
 beforeAll(() => {
   ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
@@ -90,7 +91,10 @@ const connHttp: McpConnection = {
   credential: { configured: false, fingerprint: '', last4: '', version: 0 },
 }
 
-const mcpTool: McpTool = {
+// 列表行按后端 _tool_list_view 精简形状构造（P1 载荷裁剪）：hash/审核留痕/
+// 语义契约等大字段只随详情端点下发，列表 fixture 不再携带——锁定消费端
+// 在纯摘要行上即可完整渲染（内容来自 GET /admin/mcp/tools 实际契约）。
+const mcpTool: McpToolSummary = {
   id: 7,
   connection_id: 'conn-1',
   connection_name: 'zhihu-open-api',
@@ -100,19 +104,9 @@ const mcpTool: McpTool = {
   capability_slug: 'zhihu-get-answers',
   description: '获取回答列表',
   status: 'approved',
-  content_hash: 'aabbccdd11223344',
-  approved_hash: 'aabbccdd11223344',
   schema_changed: false,
   governance: { operation: 'read', risk_level: 'R1' },
-  examples: [],
-  review_notes: '',
-  reviewed_by: 'admin',
-  reviewed_at: null,
-  last_seen_version: 2,
-  retired_reason: '',
-  updated_at: null,
   grants: [],
-  snapshots: [],
 }
 
 beforeEach(() => {
@@ -145,8 +139,17 @@ async function mountPage(initialQuery = '') {
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  // 连接健康区已迁移 react-query：测试用独立 client，retry 关闭避免
+  // 失败重试拖慢/干扰断言（生产根 client 默认 retry:1）。
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } },
+  })
   await act(async () => {
-    root.render(<McpPage />)
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <McpPage />
+      </QueryClientProvider>,
+    )
     await Promise.resolve()
     await Promise.resolve()
   })
@@ -159,6 +162,16 @@ function clickDrawerTab(container: HTMLElement, label: string) {
     .find((item) => item.textContent?.trim() === label)
   expect(tab, `找不到抽屉 Tab：${label}`).toBeTruthy()
   act(() => { tab!.click() })
+}
+
+/** react-query 解析跨越多个微任务（observer 订阅/批处理）：循环冲刷直到
+ *  目标文本出现；上限耗尽仍缺失则按原断言失败（保留断言，只修时序）。 */
+async function waitForText(container: HTMLElement, text: string, tries = 30) {
+  for (let i = 0; i < tries; i++) {
+    if (container.textContent?.includes(text)) return
+    await act(async () => { await Promise.resolve() })
+  }
+  expect(container.textContent).toContain(text)
 }
 
 describe('连接中心页面（V2：连接为一级资产）', () => {
@@ -258,7 +271,7 @@ describe('连接中心页面（V2：连接为一级资产）', () => {
     })
 
     clickDrawerTab(container, '运行健康')
-    await act(async () => { await Promise.resolve(); await Promise.resolve() })
+    await waitForText(container, '自动巡检')
     expect(container.textContent).toContain('自动巡检')
     expect(container.textContent).toContain('健康')
     expect(container.textContent).toContain('健康事件')
