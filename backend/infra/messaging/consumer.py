@@ -7,6 +7,8 @@
 
 设计（与 producer/redis 同款降级模式）：
 - KAFKA_ENABLED=false 或 KAFKA_CONSUMER_ENABLED=false 时不启动
+- 入站身份 fail-closed（安全审计 #39）：source 白名单 + tenant_id/user_id
+  必填，缺失即拒绝（不执行 ask、不发布回复）
 - 连接失败 60s 冷却重连，不阻塞主进程
 - auto_offset_reset=latest：只处理启动后的新消息（不回放历史积压，
   避免对几小时前的旧消息生成迟到的回复）；漏消息由 Meta webhook 重试兜底
@@ -143,6 +145,7 @@ def _report_lag(consumer, topic: str) -> None:
 
 def _handle_event(raw: bytes | str, topic: str) -> None:
     """处理单条入站事件（异常向上抛，由 poll 循环计数 error）。"""
+    from backend.config.messaging import KAFKA_INBOUND_ALLOWED_SOURCES
     from backend.observability.metrics import kafka_consumer_processed_total
 
     try:
@@ -170,11 +173,41 @@ def _handle_event(raw: bytes | str, topic: str) -> None:
         kafka_consumer_processed_total.labels(topic=topic, status="skipped").inc()
         return
 
+    # ── 入站身份严格校验（安全审计 #39，2026-11-09，fail-closed）──
+    # broker 消息体声明的 user_id/conversation_id 曾直接作为可信执行主体：
+    # 无生产者鉴别（契约的 source 字段被忽略）、无租户维度，tenant 缺省经
+    # normalize_tenant_id 归一 default 与平台真实用户共享记忆/会话键空间
+    # （声明受害者 user_id 即可读写其长期记忆并经 ai.reply.events 回流）。
+    # 启用 WhatsApp 闭环前事件必须携带可信来源与租户维度，缺失即拒绝：
+    #   - source ∈ KAFKA_INBOUND_ALLOWED_SOURCES（合法生产者白名单）；
+    #   - tenant_id 必填非空（Java 契约需同步补该字段，启用前必修）；
+    #   - user_id 必填非空（废除 'whatsapp' 共享主体回退）。
+    # 拒绝 = 丢弃 + 计数 rejected，不执行 ask、不发布回复。
+    source = str(event.get("source") or "").strip()
+    tenant_id = str(
+        event.get("tenant_id") or payload.get("tenant_id") or ""
+    ).strip()
+    user_id = user_id.strip()
+    reject_reason = ""
+    if source not in KAFKA_INBOUND_ALLOWED_SOURCES:
+        reject_reason = f"source_missing_or_untrusted(source={source!r})"
+    elif not tenant_id:
+        reject_reason = "tenant_id_missing"
+    elif not user_id:
+        reject_reason = "user_id_missing"
+    if reject_reason:
+        logger.warning(
+            f"[KafkaConsumer] event rejected ({reject_reason}), "
+            f"message_id={message_id or '<empty>'}"
+        )
+        kafka_consumer_processed_total.labels(topic=topic, status="rejected").inc()
+        return
+
     if _is_duplicate(message_id, topic):
         return
 
     started = time.perf_counter()
-    answer = _generate_reply(text, conversation_id, user_id)
+    answer = _generate_reply(text, conversation_id, user_id, tenant_id)
     elapsed = time.perf_counter() - started
 
     from backend.observability.metrics import kafka_consumer_duration_seconds
@@ -224,16 +257,25 @@ def _is_duplicate(message_id: str, topic: str) -> bool:
     return False
 
 
-def _generate_reply(text: str, conversation_id: str, user_id: str) -> str:
-    """调 Agent 生成回复。任何异常返回空串（不发送）。"""
+def _generate_reply(
+    text: str, conversation_id: str, user_id: str, tenant_id: str,
+) -> str:
+    """调 Agent 生成回复。任何异常返回空串（不发送）。
+
+    tenant_id 透传（#39）：入站严格校验保证非空，记忆/会话键不再经
+    normalize_tenant_id 把空租户归一 default——渠道主体与平台真实用户
+    即使 user_id 相同也分属不同键空间。
+    """
     try:
         from backend.app.api.deps import get_multi_agent
         agent = get_multi_agent()
-        # WhatsApp 会话以 conversation_id 作为 session_id，渠道用户 ID 直接复用
+        # WhatsApp 会话以 conversation_id 作为 session_id；user/tenant 已由
+        # 入站严格校验保证非空（无共享主体回退）
         return agent.ask(
             text,
             session_id=conversation_id or "whatsapp",
-            user_id=user_id or "whatsapp",
+            user_id=user_id,
+            tenant_id=tenant_id,
         )
     except Exception:
         logger.warning("[KafkaConsumer] agent ask failed", exc_info=True)
