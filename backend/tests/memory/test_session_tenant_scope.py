@@ -84,8 +84,9 @@ def test_repository_and_service_scope_same_user_sessions_by_tenant_in_sqlite(mon
             list_a = await service.list_sessions("same-user", tenant_id="tenant-a")
             list_b = await service.list_sessions("same-user", tenant_id="tenant-b")
 
-            assert owner_a == ("tenant-a", "same-user")
-            assert owner_b == ("tenant-b", "same-user")
+            # ADR-0012：get_owner 返回 (tenant, product, user) 三元组
+            assert owner_a == ("tenant-a", "agent", "same-user")
+            assert owner_b == ("tenant-b", "agent", "same-user")
             assert [row["session_id"] for row in sessions_a] == ["same-session"]
             assert [row["session_id"] for row in sessions_b] == [scoped_id]
             assert [message.content for message in messages_a] == ["A 的问题", "A 的回答"]

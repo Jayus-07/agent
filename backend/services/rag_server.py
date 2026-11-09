@@ -29,7 +29,10 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.core.request_context import scoped_tool_identity
+from backend.core.request_context import (
+    scoped_product_context,
+    scoped_tool_identity,
+)
 from backend.core.tool_runtime.deadline import scoped_execution_timeout
 from backend.infra.llm.proxy import scoped_current_user_id
 from backend.infra.llm.budget import scoped_run_budget
@@ -180,6 +183,10 @@ class AskRequest(BaseModel):
     # 默认保持独立 RAG 问答的既有 Memory 行为；主聊天图显式关闭，
     # 由父 Runner 统一保存 Reporter 的最终答案。
     persist_memory: bool = Field(True, description="是否由 RAG 服务写入会话记忆")
+    # ADR-0012 第 1 期（审计 #68）：调用方产品，记忆读写据此归命名空间；
+    # 缺省 agent 兼容旧 client。
+    product: str = Field("agent", min_length=1, max_length=32,
+                         description="调用方产品 ID（记忆命名空间归属）")
 
 
 class RetrieveRequest(BaseModel):
@@ -497,6 +504,7 @@ def ask(
             if run_scope else contextlib.nullcontext(),
             scoped_tool_identity(user_id=req.user_id, tenant_id=tenant_id),
             scoped_current_user_id(req.user_id),
+            scoped_product_context(req.product),
         ):
             # 父请求剩余时限>0 时以本地单调钟还原为执行作用域：检索/
             # rerank/LLM 共享同一条递减时限，LLM 代理按剩余秒数收窄

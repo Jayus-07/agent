@@ -176,6 +176,21 @@ def get_current_product_source() -> str:
     return _current_product_source.get()
 
 
+@contextmanager
+def scoped_product_context(product_id: str) -> Iterator[None]:
+    """临时绑定产品身份并在退出时恢复（ADR-0012 第 1 期）。
+
+    供 rag-service 等跨进程入口在请求边界绑定调用方产品（请求体字段经
+    服务端校验后传入），使记忆层在独立进程内也能按产品解析命名空间；
+    退出精确还原前值，嵌套安全。
+    """
+    token = _current_product_id.set(product_id or "internal")
+    try:
+        yield
+    finally:
+        _current_product_id.reset(token)
+
+
 def set_tool_idempotency_key(idempotency_key: str) -> None:
     _current_idempotency_key.set(idempotency_key or "")
 

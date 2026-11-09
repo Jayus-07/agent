@@ -72,6 +72,52 @@ def memory_search_tool(query: str, top_k: int = 5) -> str:
     return output[:_MAX_OUTPUT_CHARS]
 
 
+def _has_user_evidence(content: str, recent_user_texts: list[str]) -> bool:
+    """证据门匹配（#50）：用户最近消息是否表达过该记忆内容。
+
+    双通道任一命中即放行：
+    1. 子串：规范化（NFKC/小写/去空白标点）后，记忆内容的最长语义单元
+       （≥8 字符时全串；否则取首个 ≥4 字符的连续段）出现在任一用户消息中；
+    2. 关键词：内容切分出的全部实质词（≥2 字、去停用词）都出现在同一条
+       用户消息中（顺序无关）。
+    仅凭模型自述参数无法伪造用户历史消息——防线基座是服务端会话历史。
+    """
+    import re
+    import unicodedata
+
+    def _norm(text: str) -> str:
+        text = unicodedata.normalize("NFKC", text or "").lower()
+        return re.sub("[\\s，。！？、；：\"'（）()\\[\\]{}.,!?;:]+", "", text)
+
+    stop = {"的", "了", "是", "我", "你", "他", "她", "它", "请", "记住",
+            "一下", "以后", "总是", "记得", "希望", "喜欢", "要", "想"}
+    # 中文整句无空格，正则切段会得到整句 token——实质词切分用 jieba
+    # （仓库既有依赖，RAG 分段同款）：≥2 字、去高频虚词/指令词。
+    try:
+        import jieba
+
+        tokens = [t for t in jieba.lcut(content)
+                  if len(t) >= 2 and t not in stop]
+    except Exception:  # noqa: BLE001 — 分词不可用回退英文/数字段
+        tokens = [t for t in re.findall(r"[A-Za-z0-9]+", content)
+                  if len(t) >= 2 and t not in stop]
+    norm_content = _norm(content)
+    if not tokens and len(norm_content) < 6:
+        return False
+    for text in recent_user_texts:
+        norm_text = _norm(text)
+        if not norm_text:
+            continue
+        # 通道 1：原话复述（规范化子串，≥6 字符降低偶然命中）
+        if len(norm_content) >= 6 and norm_content in norm_text:
+            return True
+        # 通道 2：语义关键词——≥2 个实质词出现在同一条用户消息
+        hits = sum(1 for t in tokens if t in norm_text)
+        if tokens and hits >= min(2, len(tokens)):
+            return True
+    return False
+
+
 @tool
 def memory_store_tool(content: str, memory_type: str = "user_fact",
                       memory_key: str = "", structured_value: str = "") -> str:
@@ -99,6 +145,34 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
 
     session_id, user_id, tenant_id = _context_ids()
 
+    # ── 证据门（安全审计 #50，2026-11-10）─────────────────────
+    # provenance 契约（long_term.py）声明「用户消息 = 唯一可形成用户长期
+    # 记忆的证据，prompt 不是安全边界」——后台 inferred 管线有代码级
+    # _evidence_from_user 防线，显式工具通道此前是唯一例外（模型可被
+    # 诱导在无用户请求时写 verified explicit 记忆，且此后 inferred 修正
+    # 被 CONFLICT_BLOCKED_EXPLICIT 阻断）。写入前校验当前会话最近用户
+    # 消息确实表达过该内容（规范化子串或关键词重合），无证据即拒绝。
+    from backend.core.request_context import get_current_product_id
+    try:
+        evidence = memory_manager.run_tool(
+            lambda: memory_manager.service.get_session_messages(
+                session_id, user_id=user_id, tenant_id=tenant_id,
+                product=get_current_product_id(),
+            )
+        )
+    except Exception as exc:  # 会话历史不可得 = 无法证明有证据 → fail-closed
+        logger.warning(f"[Tool:memory_store] 证据门历史读取失败（拒绝写入）: {exc}")
+        return ("⏸ 暂时无法核实该内容来自你的明确表述，未写入记忆。"
+                "请在对话中直接说明（例如「请记住…」），稍后再试。")
+    _recent_user_texts = [
+        str(m.get("content") or "") for m in (evidence or {}).get("messages", [])
+        if m.get("role") == "user"
+    ][-6:]
+    if not _has_user_evidence(content.strip(), _recent_user_texts):
+        logger.info("[Tool:memory_store] 证据门拒绝：最近用户消息无匹配内容")
+        return ("⏸ 未在你近期的发言中找到该内容的明确表述，暂不写入长期记忆。"
+                "如果你确实希望记住，请直接告诉我（例如「请记住：…」）。")
+
     # 写入前强制 PII 脱敏（与后台管线同一口径）
     scan = scan_and_sanitize(content.strip())
     # 显式通道 provenance（STOP B）：用户主动要求记住 → origin=explicit、
@@ -117,11 +191,13 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
         structured_value=(structured_value or "").strip() or None,
     )
 
+    product = get_current_product_id()
+
     async def _store() -> tuple[bool, str]:
         from backend.memory.keying import StoreOutcome
         async with AsyncSessionLocal() as db:
             result = await LongTermMemory(MemoryRepository(db)).store_with_resolution(
-                fact, user_id, session_id, tenant_id)
+                fact, user_id, session_id, tenant_id, product=product)
             await db.commit()
             try:
                 from backend.observability.metrics import memory_store_outcome_total

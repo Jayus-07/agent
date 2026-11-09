@@ -416,12 +416,12 @@ class GraphRunner:
         if stop_event is None:
             stop_event = threading.Event()
 
-        from backend.core.product_context import product_by_id, memory_user_id, namespace_session_id
+        from backend.core.product_context import product_by_id, namespace_session_id
         product_context = product_by_id(product_id)
         product_session_id = namespace_session_id(product_context, session_id)
-        memory_owner_id = (
-            memory_user_id(product_context, user_id) if persist_memory else user_id
-        )
+        # ADR-0012 第 1 期：记忆命名空间由记忆层唯一入口按 product 解析，
+        # 调用方统一使用 raw 身份（不再预换算 memory_user_id）。
+        memory_owner_id = user_id
         from backend.observability.tracer import SpanKind, trace_collector
 
         start_time = time.time()
@@ -678,14 +678,15 @@ class GraphRunner:
         load_span = trace_collector.start_span(
             "session_load", name="会话/记忆加载", type="workflow",
             kind=SpanKind.KB_ROUTING.value,
-            input={"session_id": product_session_id})
+            # product 为非 PII 枚举（ADR-0012 D9）；原文/租户红线不变
+            input={"session_id": product_session_id, "product": product_id})
         # STOP G observability：memory.retrieve span 贯穿（§七）。span 须在
         # 本侧创建——start_session 协程跑在 memory 后台 loop，无 ambient
         # trace；阶段计数由 service 经 l1.retrieval_stats 带回（仅
         # count/threshold 枚举，无记忆原文/PII）。
         retrieve_span = trace_collector.start_span(
             "memory.retrieve", name="长期记忆检索", type="retrieval",
-            input={"session_id": product_session_id})
+            input={"session_id": product_session_id, "product": product_id})
         try:
             # 记忆作用域（2026-10-10 整合）：租户 + 业务域。domain_hint 非空时
             # 一并下发，使长期记忆按业务域隔离；manager.start_session 的
@@ -694,11 +695,13 @@ class GraphRunner:
             if domain_hint:
                 memory_scope["domain"] = domain_hint
             if persist_memory:
-                from backend.core.product_context import product_by_id, memory_user_id
-                memory_owner_id = memory_user_id(product_by_id(product_id), user_id)
+                # ADR-0012 第 1 期（审计 #68）：raw 身份 + product 由记忆层
+                # 唯一入口解析命名空间，调用方不再预换算。
+                memory_owner_id = user_id
                 l1 = self._memory.start_session(
                     product_session_id, question, user_id=memory_owner_id,
-                    event_scope=context_event_scope, **memory_scope,
+                    event_scope=context_event_scope, product=product_id,
+                    **memory_scope,
                 )
             else:
                 from backend.memory.short_term import ShortTermBuffer
@@ -1279,10 +1282,12 @@ class GraphRunner:
                     and persist_memory):
                 ctx["memory_persisted"] = True
                 try:
-                    from backend.core.product_context import product_by_id, memory_user_id
                     memory_kwargs = {
-                        "user_id": memory_user_id(product_by_id(product_id), user_id),
+                        "user_id": user_id,
                         "tenant_id": tenant_id,
+                        "product": product_id,
+                        # D9：抽取任务可回溯产生它的请求 trace
+                        "trace_id": str(trace.id or ""),
                     }
                     if idempotency_key:
                         memory_kwargs["idempotency_key"] = idempotency_key

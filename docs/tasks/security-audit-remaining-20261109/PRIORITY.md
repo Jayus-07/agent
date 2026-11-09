@@ -75,7 +75,7 @@
 | 41 | local-auth.change-password.reissues-stale-roles | P1 | 已修 T5 |
 | 42 | local-auth.session-revocation.audit-default-gates-log-only | P1 | 待验证 |
 | 45 | markdown.external-image.selection-report | P1 | 待验证 |
-| 50 | memory_store_tool.explicit-write-no-confirmation | P1 | 待验证 |
+| 50 | memory_store_tool.explicit-write-no-confirmation | P1 | 已修（证据门，分支待合并 memory-p1） |
 | 51 | observability.alert-detail.user-content-unredacted-egress | P1 | 待验证 |
 | 52 | observability.alert-webhook.credential-in-failure-log | P1 | 待验证 |
 | 53 | observability:dto-redaction-skips-span-metrics | P1 | 待验证 |
@@ -88,7 +88,7 @@
 | 64 | rag-pdf-page-raster-area | P1 | 已修 #395 |
 | 65 | rag-upload-worker-stale-authz | P1 | 已修 #397 |
 | 66 | rag-xml-dom-prelimit-allocation | P1 | 待验证 |
-| 68 | rag.chain.memory-callsites-missing-product-owner | P1 | 待验证 |
+| 68 | rag.chain.memory-callsites-missing-product-owner | P1 | 已修（ADR-0012 第 1 期收口，分支待合并 memory-p1） |
 | 73 | selection-funnel-unbounded-import-body | P1 | 已修 T6 |
 | 74 | sensitive-api-guard.audit-non-admin-bypass | P1 | 待验证 |
 | 75 | server.metrics-outside-auth-middleware | P1 | 已修 T1 |

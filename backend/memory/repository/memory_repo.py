@@ -11,7 +11,12 @@ from sqlalchemy import and_, delete, func, or_, select, update, text, type_coerc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 
-from backend.memory.keying import normalize_memory_domain, normalize_tenant_id
+from backend.memory.keying import (
+    PRODUCT_DEFAULT,
+    normalize_memory_domain,
+    normalize_product,
+    normalize_tenant_id,
+)
 from backend.memory.models.memory import EMBEDDING_DIM, MemoryRecord
 
 
@@ -40,19 +45,20 @@ class MemoryRepository:
     async def search_hybrid(
         self, embedding: list[float], user_id: str, top_k: int = 20,
         memory_type: str | None = None, tenant_id: str = "",
-        domain: str | None = None,
+        domain: str | None = None, product: str = PRODUCT_DEFAULT,
     ) -> list[MemoryRecord]:
         """候选召回（SQL 层 hard eligibility，STOP D）。
 
         排序键：cosine similarity = 1 - cosine_distance（范围约 [0,1]，
         越高越相关——relevance gate 的 normalized 口径与此一致）。
         过滤条件（全部 SQL 层，过期行不占候选槽位，§21）：
-          is_active AND tenant_id AND user_id
+          is_active AND tenant_id AND product AND user_id
           AND (expire_at IS NULL OR expire_at > NOW())
         注意：本方法仅按相似度排序，不做 relevance gate 与 importance/
         recency 联合打分（职责在 Retriever，§72）。
         """
         tenant_id = normalize_tenant_id(tenant_id)
+        product = normalize_product(product)
         query_vec = _query_vector(embedding)
         eligible_scope = or_(
             MemoryRecord.scope == "user_global",
@@ -67,6 +73,7 @@ class MemoryRepository:
         ).where(
             MemoryRecord.is_active == True,
             MemoryRecord.tenant_id == tenant_id,
+            MemoryRecord.product == product,
             MemoryRecord.user_id == user_id,
             MemoryRecord.verification_status.in_(("verified", "legacy")),
             eligible_scope,
@@ -83,7 +90,7 @@ class MemoryRepository:
 
     async def find_similar_candidates(
         self, embedding: list[float], user_id: str, tenant_id: str,
-        threshold: float = 0.85, top_n: int = 5,
+        threshold: float = 0.85, top_n: int = 5, product: str = PRODUCT_DEFAULT,
     ) -> list[tuple[MemoryRecord, float]]:
         """unkeyed 语义去重候选：返回相似度 ≥ threshold 的 top-N (record, sim)。
 
@@ -93,6 +100,7 @@ class MemoryRepository:
         semantic similarity 不再拥有 supersede 资格（§44-46）。
         """
         tenant_id = normalize_tenant_id(tenant_id)
+        product = normalize_product(product)
         query_vec = _query_vector(embedding)
         query = (
             select(
@@ -102,6 +110,7 @@ class MemoryRepository:
             .where(
                 MemoryRecord.is_active == True,
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
             )
             .order_by(text("sim DESC"))
@@ -112,6 +121,7 @@ class MemoryRepository:
 
     async def list_active_profile(
         self, user_id: str, tenant_id: str = "", limit: int | None = 50,
+        product: str = PRODUCT_DEFAULT,
     ) -> list[MemoryRecord]:
         """画像展示：列出用户全部 eligible active 记忆（不走向量召回）。
 
@@ -120,11 +130,13 @@ class MemoryRepository:
         + (tenant, user) 双维度 + 未过期），按重要度、最近访问排序。
         """
         tenant_id = normalize_tenant_id(tenant_id)
+        product = normalize_product(product)
         query = (
             select(MemoryRecord)
             .where(
                 MemoryRecord.is_active == True,
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.verification_status.in_(("verified", "legacy")),
                 (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
@@ -141,11 +153,13 @@ class MemoryRepository:
 
     async def list_pending_profile(
         self, user_id: str, tenant_id: str = "", limit: int = 200,
+        product: str = PRODUCT_DEFAULT,
     ) -> list[MemoryRecord]:
         """列出本人待确认的自动推断候选，不供 Agent 上下文直接注入。"""
         query = (select(MemoryRecord).where(
             MemoryRecord.is_active.is_(True),
             MemoryRecord.tenant_id == normalize_tenant_id(tenant_id),
+            MemoryRecord.product == normalize_product(product),
             MemoryRecord.user_id == user_id,
             MemoryRecord.verification_status == "pending",
             (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
@@ -155,6 +169,7 @@ class MemoryRepository:
 
     async def verify_pending_memory(
         self, user_id: str, tenant_id: str, record_id: str,
+        product: str = PRODUCT_DEFAULT,
     ) -> bool:
         from backend.config import MEMORY_EXPLICIT_DEFAULT_CONFIDENCE
 
@@ -165,6 +180,7 @@ class MemoryRepository:
         result = await self._s.execute(update(MemoryRecord).where(
             MemoryRecord.id == parsed_id,
             MemoryRecord.tenant_id == normalize_tenant_id(tenant_id),
+            MemoryRecord.product == normalize_product(product),
             MemoryRecord.user_id == user_id,
             MemoryRecord.is_active.is_(True),
             MemoryRecord.verification_status == "pending",
@@ -179,12 +195,13 @@ class MemoryRepository:
 
     async def lock_memory_identity(
         self, tenant_id: str, user_id: str, *, memory_key: str | None = None,
-        content_hash: str | None = None,
+        content_hash: str | None = None, product: str = PRODUCT_DEFAULT,
     ) -> None:
         """串行化同一记忆的写入与删除，防止删除屏障竞态。"""
         identity = (f"key:{memory_key}" if memory_key else
                     f"content:{content_hash or ''}")
-        lock_key = f"memory:{normalize_tenant_id(tenant_id)}:{user_id}:{identity}"
+        lock_key = (f"memory:{normalize_tenant_id(tenant_id)}:"
+                    f"{normalize_product(product)}:{user_id}:{identity}")
         await self._s.execute(
             text("SELECT pg_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": lock_key},
@@ -192,13 +209,14 @@ class MemoryRepository:
 
     async def next_memory_version(
         self, tenant_id: str, user_id: str, *, scope: str,
-        domain: str, memory_key: str,
+        domain: str, memory_key: str, product: str = PRODUCT_DEFAULT,
     ) -> int:
         """在已持有同一 key advisory lock 时读取下一单调版本。"""
         result = await self._s.execute(select(
             func.coalesce(func.max(MemoryRecord.version), 0)
         ).where(
             MemoryRecord.tenant_id == normalize_tenant_id(tenant_id),
+            MemoryRecord.product == normalize_product(product),
             MemoryRecord.user_id == user_id,
             MemoryRecord.scope == scope,
             MemoryRecord.domain == domain,
@@ -216,13 +234,16 @@ class MemoryRepository:
         self, tenant_id: str, user_id: str, *,
         memory_key: str | None = None, content_hash: str | None = None,
         source_message_id: int | None = None, explicit: bool = False,
+        product: str = PRODUCT_DEFAULT,
     ) -> bool:
         """判断候选是否来自删除前的事件；删除行中不保留原文或向量。"""
         tenant_id = normalize_tenant_id(tenant_id)
+        product = normalize_product(product)
         query = select(MemoryRecord).where(
             MemoryRecord.memory_type == "tombstone",
             MemoryRecord.is_active.is_(False),
             MemoryRecord.tenant_id == tenant_id,
+            MemoryRecord.product == product,
             MemoryRecord.user_id == user_id,
         )
         if memory_key:
@@ -256,16 +277,19 @@ class MemoryRepository:
     async def delete_profile_memory(
         self, user_id: str, tenant_id: str, *,
         record_id: str | None = None, memory_key: str | None = None,
+        product: str = PRODUCT_DEFAULT,
     ) -> dict | None:
         """按本人/租户范围物理清除记忆正文与 Embedding，并写最小删除屏障。"""
         from backend.memory.keying import normalize_memory_key
 
         tenant_id = normalize_tenant_id(tenant_id)
+        product = normalize_product(product)
         if bool(record_id) == bool(memory_key):
             raise ValueError("必须且只能提供 record_id 或 memory_key")
         query = select(MemoryRecord).where(
             MemoryRecord.is_active.is_(True),
             MemoryRecord.tenant_id == tenant_id,
+            MemoryRecord.product == product,
             MemoryRecord.user_id == user_id,
             (MemoryRecord.expire_at.is_(None))
             | (MemoryRecord.expire_at > text("NOW()")),
@@ -287,7 +311,7 @@ class MemoryRepository:
         content_hash = hashlib.sha256(record.content.encode("utf-8")).hexdigest()
         await self.lock_memory_identity(
             tenant_id, user_id, memory_key=record.memory_key,
-            content_hash=content_hash,
+            content_hash=content_hash, product=product,
         )
         # 先拿 advisory lock 再锁行，避免与写入方反序等待造成死锁。
         record = (await self._s.execute(query.limit(1).with_for_update())) \
@@ -308,12 +332,14 @@ class MemoryRepository:
             # 在同一事务内物理删除旧版本，避免 FK 阻止删除。
             await self._s.execute(update(MemoryRecord).where(
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.memory_key == record_key,
                 MemoryRecord.memory_type != "tombstone",
             ).values(superseded_by=None))
             deleted = await self._s.execute(delete(MemoryRecord).where(
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.memory_key == record_key,
                 MemoryRecord.memory_type != "tombstone",
@@ -321,6 +347,7 @@ class MemoryRepository:
         else:
             deleted = await self._s.execute(delete(MemoryRecord).where(
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.memory_key.is_(None),
                 MemoryRecord.content == record_content,
@@ -329,6 +356,7 @@ class MemoryRepository:
 
         tombstone = MemoryRecord(
             tenant_id=tenant_id,
+            product=product,
             user_id=user_id,
             session_id="",
             memory_type="tombstone",
@@ -356,7 +384,7 @@ class MemoryRepository:
     async def find_active_by_key(
         self, tenant_id: str, user_id: str, memory_key: str, *,
         scope: str | None = None, domain: str | None = None,
-        for_update: bool = False,
+        for_update: bool = False, product: str = PRODUCT_DEFAULT,
     ) -> MemoryRecord | None:
         """按 (tenant, user, memory_key) 精确定位唯一 active 记录。
 
@@ -370,6 +398,7 @@ class MemoryRepository:
             .where(
                 MemoryRecord.is_active == True,
                 MemoryRecord.tenant_id == tenant_id,
+                MemoryRecord.product == normalize_product(product),
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.memory_key == memory_key,
             )
@@ -406,7 +435,7 @@ class MemoryRepository:
         return result.rowcount > 0
 
     async def mark_accessed(self, ids: list[str], tenant_id: str = "",
-                            user_id: str = "") -> None:
+                            user_id: str = "", product: str = PRODUCT_DEFAULT) -> None:
         """批量更新访问状态（单 SQL，§27）——只有真正注入模型 / 工具返回的
         记忆才调用（§25/§26：候选与被拒者不计访问）。
 
@@ -419,6 +448,7 @@ class MemoryRepository:
             .where(
                 MemoryRecord.id.in_(ids),
                 MemoryRecord.tenant_id == normalize_tenant_id(tenant_id),
+                MemoryRecord.product == normalize_product(product),
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.is_active == True,
             )

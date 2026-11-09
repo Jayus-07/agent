@@ -269,10 +269,23 @@ async def test_b3_explicit_tool_channel_writes_explicit_origin(monkeypatch):
         "backend.memory.long_term.get_embedding", lambda: _FakeEmbedding())
 
     # 不 mock run_tool：MemoryManager 后台 loop 在进程内已就绪，
-    # 走真实 sync→async 桥（工具运行路径与生产一致）
+    # 走真实 sync→async 桥（工具运行路径与生产一致）。
+    # 证据门（#50）：stub 会话历史使最近用户消息包含待记内容——工具的
+    # 写入路径不变，仅证据读取（get_session_messages）按测试替身返回。
     from backend.core.request_context import _current_session_id, _current_user_id
     token_sid = _current_session_id.set(_SESSION)
     token_uid = _current_user_id.set(_USER)
+
+    async def _evidence_history(*_args, **_kwargs):
+        return {"messages": [
+            {"id": 1, "role": "user",
+             "content": "请记住：用户偏好中文回答", "created_at": "2026-01-01"},
+        ]}
+
+    from backend.memory import service as _svc
+    token_evid = monkeypatch.setattr(
+        _svc.MemoryService, "get_session_messages",
+        lambda self, *a, **k: _evidence_history())
     try:
         from backend.tools.memory import memory_store_tool
         result = memory_store_tool.invoke(
@@ -280,7 +293,8 @@ async def test_b3_explicit_tool_channel_writes_explicit_origin(monkeypatch):
     finally:
         _current_session_id.reset(token_sid)
         _current_user_id.reset(token_uid)
-    assert "已记住" in result
+        monkeypatch.undo()
+    assert "已记住" in result, result
 
     async with AsyncSessionLocal() as db:
         row = (await db.execute(

@@ -31,11 +31,12 @@ class _MemoryRecorder:
         self.ends = []
 
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id=""):
+                      tenant_id="", **_kwargs):
+        # ADR-0012 第 1 期：调用方新增 product 等 kwargs——桩只关心身份断言
         self.starts.append((session_id, question, user_id, tenant_id))
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id=""):
+                 tenant_id="", **_kwargs):
         self.ends.append((session_id, question, answer, user_id, tenant_id))
 
 

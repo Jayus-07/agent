@@ -23,6 +23,9 @@ class MemoryRecord(Base):
     # quarantine=迁移保留哨兵（无身份表映射的 legacy 行，运行时永不产出）
     tenant_id = Column(String(64), nullable=False, default="default")
     user_id = Column(String(64), nullable=False, default="default")
+    # 产品命名空间（143，ADR-0012 第 1 期，审计 #68）：user_id 拆裸，
+    # 产品隔离由本列承载（agent/customer_service/travel/...）。
+    product = Column(String(32), nullable=False, default="agent")
     session_id = Column(String(128), nullable=False, default="")
     memory_type = Column(String(32), nullable=False)
     content = Column(Text, nullable=False)
@@ -57,17 +60,22 @@ class MemoryExtractionJob(Base):
     __tablename__ = "memory_extraction_jobs"
     __table_args__ = (
         UniqueConstraint(
-            "tenant_id", "user_id", "source_message_id",
+            "tenant_id", "product", "user_id", "source_message_id",
             name="uq_memory_extraction_source",
         ),
         Index("idx_memory_extraction_dispatch", "status", "last_enqueued_at"),
-        Index("idx_memory_extraction_session", "tenant_id", "user_id", "session_id"),
+        Index("idx_memory_extraction_session", "tenant_id", "product", "user_id", "session_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id = Column(String(64), nullable=False)
     user_id = Column(String(64), nullable=False)
+    # 产品命名空间（143，ADR-0012 第 1 期）：与 user_id（拆裸后）共同定位。
+    product = Column(String(32), nullable=False, default="agent")
     session_id = Column(String(128), nullable=False)
+    # D9：产生本抽取任务的请求 trace（end_turn 写入，存量 NULL）；
+    # 记忆条目 → evidence（source_message_id）→ 会话消息 → 来源 trace 全链可回溯。
+    source_trace_id = Column(String(64), nullable=True)
     source_message_id = Column(Integer, nullable=False)
     assistant_message_id = Column(Integer, nullable=True)
     status = Column(String(16), nullable=False, default="PENDING")
@@ -87,15 +95,17 @@ class MemoryTurnReceipt(Base):
     __tablename__ = "memory_turn_idempotency"
     __table_args__ = (
         UniqueConstraint(
-            "tenant_id", "user_id", "session_id", "idempotency_key_hash",
+            "tenant_id", "product", "user_id", "session_id", "idempotency_key_hash",
             name="uq_memory_turn_request",
         ),
-        Index("idx_memory_turn_session", "tenant_id", "user_id", "session_id"),
+        Index("idx_memory_turn_session", "tenant_id", "product", "user_id", "session_id"),
     )
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     tenant_id = Column(String(64), nullable=False)
     user_id = Column(String(64), nullable=False)
+    # 产品命名空间（143，ADR-0012 第 1 期）。
+    product = Column(String(32), nullable=False, default="agent")
     session_id = Column(String(128), nullable=False)
     idempotency_key_hash = Column(String(64), nullable=False)
     question_hash = Column(String(64), nullable=False)

@@ -97,7 +97,7 @@ async def test_end_turn_commits_outbox_with_messages_and_dispatches_only_job_id(
         published.append(job_id)
         return True
 
-    async def no_summary(self, session_id: str) -> None:
+    async def no_summary(self, session_id: str, product: str = "agent") -> None:
         return None
 
     monkeypatch.setattr(memory_extraction_tasks, "dispatch_memory_extraction", record_dispatch)
@@ -144,7 +144,7 @@ async def test_committed_turn_does_not_wait_for_slow_broker(monkeypatch):
         finally:
             finished.set()
 
-    async def no_summary(self, session_id):
+    async def no_summary(self, session_id, product: str = "agent"):
         return None
 
     monkeypatch.setattr(memory_extraction_tasks, "dispatch_memory_extraction", blocked_dispatch)
@@ -189,7 +189,7 @@ async def test_end_turn_idempotency_is_atomic_and_scoped(monkeypatch):
         published.append(job_id)
         return True
 
-    async def no_summary(self, session_id: str) -> None:
+    async def no_summary(self, session_id: str, product: str = "agent") -> None:
         return None
 
     monkeypatch.setattr(memory_extraction_tasks, "dispatch_memory_extraction", record_dispatch)

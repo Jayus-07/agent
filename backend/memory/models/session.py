@@ -9,12 +9,17 @@ Base = declarative_base()
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
     __table_args__ = (
-        Index("idx_chat_sessions_tenant_user", "tenant_id", "user_id"),
+        # 产品维度唯一（143，ADR-0012 第 1 期）：跨产品同 session_id 各建各
+        # 的行；同产品内越权由运行时属主校验（SessionOwnerMismatch）承担。
+        Index("uq_chat_sessions_product_session", "product", "session_id", unique=True),
+        Index("idx_chat_sessions_tenant_user", "tenant_id", "product", "user_id"),
     )
 
     id = Column(Integer, primary_key=True)
-    session_id = Column(String(128), unique=True, nullable=False, index=True)
+    session_id = Column(String(128), nullable=False, index=True)
     user_id = Column(String(64), nullable=False, default="default")
+    # 产品命名空间（143，ADR-0012 第 1 期）：user_id 拆裸后由本列承载产品。
+    product = Column(String(32), nullable=False, default="agent")
     # 运行时空租户归一为 default；quarantine 仅用于无法权威映射的旧会话。
     tenant_id = Column(
         String(64), nullable=False, default="default", server_default="quarantine",
@@ -40,6 +45,8 @@ class ChatMessage(Base):
 
     id = Column(Integer, primary_key=True)
     session_id = Column(String(128), ForeignKey("chat_sessions.session_id", ondelete="CASCADE"), nullable=False)
+    # 产品命名空间（143，ADR-0012 第 1 期）：跨产品同 session_id 时区分消息行。
+    product = Column(String(32), nullable=False, default="agent")
     role = Column(String(16), nullable=False)
     content = Column(Text, nullable=False)
     # 旧行保持 NULL；新 LangChain 行保存 human/ai/tool 类型及非正文元数据。

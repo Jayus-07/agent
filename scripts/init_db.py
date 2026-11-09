@@ -163,6 +163,9 @@ MIGRATION_TARGETS: dict[str, str] = {
     "091_chat_message_langchain_metadata.sql": "memory",
     # L2 会话归属：租户和用户双重隔离，旧数据仅按 auth.users 权威映射。
     "092_chat_session_tenant_scope.sql": "memory",
+    # ADR-0012 第 1 期（审计 #68/#50）：记忆键加产品维度——4 表 product 列、
+    # user_id 拆前缀回填、唯一键/索引全部纳入 product；抽取任务加 source_trace_id。
+    "143_memory_product_scope.sql": "memory",
     # Phase3 STOP B（2026-09-24）：tasks PENDING Recovery 列 + 索引。
     # tasks 表演进权威在 backend/tasks/schema.sql（ensure_schema 幂等），
     # 本文件为 db-migrate 流程的实库执行留痕，语句全部 IF NOT EXISTS 幂等。

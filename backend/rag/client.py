@@ -65,6 +65,21 @@ def _internal_headers() -> dict[str, str]:
     return {'X-Internal-Token': _cfg_token} if _cfg_token else {}
 
 
+def _caller_product_id() -> str:
+    """调用方产品 ID（ADR-0012）：internal 是无产品上下文哨兵 → agent 兜底。
+
+    记忆命名空间只有 agent/customer_service/travel 等真实产品（143 迁移
+    回填口径）；internal 不落记忆库，出现即视为未声明。
+    """
+    try:
+        from backend.core.request_context import get_current_product_id
+
+        value = str(get_current_product_id() or "").strip().lower()
+    except Exception:  # noqa: BLE001 — 无上下文按 agent 兜底
+        return "agent"
+    return "agent" if value in ("", "internal") else value
+
+
 def _effective_tenant_id(tenant_id: str) -> str:
     value = str(tenant_id or "").strip()
     if value:
@@ -262,6 +277,9 @@ class RAGServiceProxy:
                     "tenant_id": tenant_id,
                     "roles": list(roles),
                     "persist_memory": persist_memory,
+                    # ADR-0012 第 1 期（审计 #68）：跨进程传递调用方产品，
+                    # rag-service 据此把记忆读写归到正确命名空间。
+                    "product": _caller_product_id(),
                 },
                 timeout=request_timeout,
             )
