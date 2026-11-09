@@ -67,13 +67,16 @@ def reporter_node(state: dict) -> dict:
     # 一句如实告知的短文案（"_clarify" 不重复附带，防双卡片）
     if state.get("route_mode") == "clarify":
         from backend.orchestration.graph.clarify_content import (
-            CLARIFY_STANDALONE_TEXT,
+            clarify_standalone_text,
         )
+        from backend.orchestration.state_projection import clarification_request
 
         # CSInputGuard 的业务拦截也复用 clarify 短路，但需要保留其
-        # 面向用户的安全提示；普通 L1 追问没有预置答案时才用通用文案。
+        # 面向用户的安全提示；无预置答案时按“是否真有选项卡”选择文案，
+        # 避免路由降级/空卡仍承诺“从下方选项中选择”。
         return {
-            "final_answer": state.get("final_answer") or CLARIFY_STANDALONE_TEXT,
+            "final_answer": state.get("final_answer")
+            or clarify_standalone_text(clarification_request(state)),
         }
 
     # ── 域引导（多域隔离 M2，2026-10-06）：handoff 模式同 clarify 短路 ──

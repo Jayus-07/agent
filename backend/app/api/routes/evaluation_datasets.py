@@ -15,7 +15,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from backend.app.api.deps import OperatorIdentity, require_admin_user
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_admin_user,
+    require_editor_user,
+)
 from backend.evaluation.dataset.loader import DATASET_DIR
 from backend.evaluation.models import MODULE_KINDS, PROBE_MODULES
 from backend.shared.logger import logger
@@ -342,7 +346,10 @@ def _stage_candidate(candidate: DatasetCandidate, reviewer: str) -> DatasetCandi
 
 
 @router.get("/datasets")
-async def list_datasets(module: str | None = Query(default=None)):
+async def list_datasets(
+    module: str | None = Query(default=None),
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     # 目录扫描只认 MODULE_KINDS 声明过的模块（sql_v2/travel_v2 等专项金标集
     # 由 pytest/验收脚本直读，不进评测框架口径，不刷目录页）；
     # 显式点名 module 时不过滤，治理侧仍可单独查看。
@@ -355,8 +362,18 @@ async def list_datasets(module: str | None = Query(default=None)):
 
 
 @router.get("/datasets/{dataset_id}/versions/{version}")
-async def get_dataset_version(dataset_id: str, version: str):
-    canonical_root = DATASET_DIR / dataset_id
+async def get_dataset_version(
+    dataset_id: str,
+    version: str,
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
+    # 审计 #32：dataset_id/version 直接拼路径，先做标识符白名单与根目录收容
+    _ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+    if not _ID_RE.match(dataset_id) or not _ID_RE.match(version):
+        raise HTTPException(status_code=422, detail="评测集标识符非法")
+    canonical_root = (DATASET_DIR / dataset_id).resolve()
+    if not str(canonical_root).startswith(str(DATASET_DIR.resolve())):
+        raise HTTPException(status_code=422, detail="评测集标识符非法")
     manifest = _read_json(canonical_root / "manifest.json")
     cases_path = canonical_root / "cases.jsonl"
     if str(manifest.get("version", "")) != version:
@@ -388,7 +405,10 @@ async def get_dataset_version(dataset_id: str, version: str):
 
 
 @router.get("/dataset-candidates")
-async def list_dataset_candidates(status: str | None = Query(default=None)):
+async def list_dataset_candidates(
+    status: str | None = Query(default=None),
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     candidates = list(_load_candidates().values())
     if status:
         candidates = [item for item in candidates if item.status == status]
@@ -463,7 +483,9 @@ async def reject_dataset_candidate(
 
 
 @router.get("/suites")
-async def list_evaluation_suites():
+async def list_evaluation_suites(
+    _editor: OperatorIdentity = Depends(require_editor_user),
+):
     return {"items": _suite_items()}
 
 

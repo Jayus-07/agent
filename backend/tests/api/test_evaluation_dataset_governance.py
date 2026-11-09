@@ -63,10 +63,18 @@ def governance(monkeypatch, tmp_path):
     app.include_router(module.router, prefix="/api")
     # P0-01：候选审核端点已挂 require_admin_user；单测聚焦审核业务规则，
     # 以固定管理员身份覆写鉴权依赖（鉴权本体由 deps 层自己的测试覆盖）
-    from backend.app.api.deps import OperatorIdentity, require_admin_user
+    from backend.app.api.deps import (
+        OperatorIdentity,
+        require_admin_user,
+        require_editor_user,
+    )
 
     app.dependency_overrides[require_admin_user] = lambda: OperatorIdentity(
         role="admin", actor="user:test-admin",
+    )
+    # 读端点已挂 editor 闸（审计 #32），本文件只验目录/版本业务规则
+    app.dependency_overrides[require_editor_user] = lambda: OperatorIdentity(
+        role="editor", actor="user:test-editor",
     )
     return module, TestClient(app)
 

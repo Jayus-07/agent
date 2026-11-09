@@ -322,10 +322,18 @@ def router_node(state: dict) -> dict:
         )
     except Exception as e:
         logger.warning(f"[RouterNode] 统一路由引擎失败，进入安全澄清: {e}")
+        from backend.orchestration.graph.clarify_content import (
+            CLARIFY_UNAVAILABLE_TEXT,
+        )
+
         update = route_update_for_mode(
             "clarify",
             extra={
                 "route_decision": None,
+                # 引擎异常是系统故障，不是用户表达不清：不合成空追问卡，
+                # 直接给可重试提示。
+                "final_answer": CLARIFY_UNAVAILABLE_TEXT,
+                "need_clarification": False,
                 "router_fallback_reason": f"engine:{type(e).__name__}",
                 "legacy_used": False,
             },

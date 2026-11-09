@@ -109,7 +109,9 @@ class TestPrefilterOrder:
 
         assert update is not None
         assert update["route_mode"] == "clarify"
-        assert update["need_clarification"] is True
+        # 防循环拦截后没有可点选项：不发空追问卡，正文改为补充信息提示。
+        assert update["need_clarification"] is False
+        assert update["final_answer"] == clarify_content.CLARIFY_DETAIL_TEXT
         assert rn.route_selector(update) == "clarify"
 
 
