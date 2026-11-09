@@ -71,13 +71,17 @@ async def test_decay_task_registered_end_to_end():
 
 
 async def test_decay_updates_inferred_only_and_spares_explicit():
-    """§55：explicit 完全豁免；inferred 200 天 → ×0.9；只动 active（§54）。"""
+    """§55：explicit 完全豁免；inferred 200 天 → ×0.9；只动 active（§54）。
+
+    D4 边界（第 2 期 D-1 裁决）：衰减只降权，**任何行不得被归档**
+    （原「importance<0.2 归档」废止——低分行保持 active，设置页可见）。
+    """
     async with AsyncSessionLocal() as db:
         repo = MemoryRepository(db)
         for r in (
             _record("inferred", 0.5, 200),   # 命中 >180 档 ×0.9
             _record("explicit", 0.5, 200),   # 豁免
-            _record("inferred", 0.15, 10),   # importance<0.2 → 归档
+            _record("inferred", 0.15, 10),   # 低分 + 未到期 → 不动、不归档
             _record("inferred", 0.6, 120),   # 90~180 区间 → ×0.95（互斥）
             _record("inferred", 0.8, 1),     # 最近访问 → 不动
         ):
@@ -86,14 +90,36 @@ async def test_decay_updates_inferred_only_and_spares_explicit():
 
     result = await MemoryService().run_decay()
     assert result["decayed"] >= 1
+    assert "archived" not in result  # D4：衰减不再产出归档动作
 
     decayed = await _row("decay-test inferred 0.5")
     assert abs(decayed[0] - 0.45) < 1e-9 and decayed[1] is True
     explicit = await _row("decay-test explicit 0.5")
     assert explicit[0] == 0.5 and explicit[1] is True            # explicit 不衰减
     low = await _row("decay-test inferred 0.15")
-    assert low[1] is False                                        # <0.2 归档
+    assert low[0] == 0.15 and low[1] is True                     # 未到期：不动且**不归档**
     midband = await _row("decay-test inferred 0.6")
     assert abs(midband[0] - 0.57) < 1e-9 and midband[1] is True  # 仅 ×0.95（不叠加 ×0.9）
     recent = await _row("decay-test inferred 0.8")
     assert abs(recent[0] - 0.8) < 1e-9 and recent[1] is True      # 未到期不动
+
+
+async def test_decay_never_deactivates_any_row():
+    """D4 边界总锁面：衰减循环后全部行保持 is_active=True（不删除不隐藏）。"""
+    async with AsyncSessionLocal() as db:
+        repo = MemoryRepository(db)
+        for r in (
+            _record("inferred", 0.5, 400),    # >180 档 ×0.9
+            _record("legacy", 0.1, 200),      # 低分旧行：旧契约会被归档
+            _record("inferred", 0.05, 150),   # 极低分：只降权
+        ):
+            await repo.insert(r)
+        await db.commit()
+
+    await MemoryService().run_decay()
+
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(text(
+            "SELECT is_active FROM memory_records WHERE user_id=:u"),
+            {"u": _USER})).all()
+    assert rows and all(r[0] is True for r in rows), "衰减不得使任何行失效"

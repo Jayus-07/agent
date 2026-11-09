@@ -507,13 +507,3 @@ class MemoryRepository:
              **({"upper": str(upper_days)} if upper_days is not None else {})},
         )
         return result.rowcount
-
-    async def archive_stale(self, min_importance: float = 0.2) -> int:
-        result = await self._s.execute(
-            update(MemoryRecord)
-            .where(MemoryRecord.is_active == True,
-                   MemoryRecord.importance_score < min_importance,
-                   MemoryRecord.origin != "explicit")
-            .values(is_active=False)
-        )
-        return result.rowcount
