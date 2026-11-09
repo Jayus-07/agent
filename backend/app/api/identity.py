@@ -133,6 +133,20 @@ def require_product_identity(request: Request) -> Identity:
     return ident
 
 
+def require_tenant_id(identity: Identity) -> str:
+    """已认证身份的租户必须非空（审计 #25：空租户不得回落 default）。
+
+    与 require_product_identity / cs_admin._resolve_tenant_scope 同口径，
+    供只拿 Identity 的端点复用。
+    """
+    from fastapi import HTTPException
+
+    tenant = str(getattr(identity, "tenant_id", "") or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
+    return tenant
+
+
 def resolve_principal(request: Request) -> "Principal":
     """统一主体入口（P1 授权收口）：Identity → Principal，RAG 等业务模块
     只接 Principal，不再自行推导 subject_type（谁/哪租户/哪部门/什么角色

@@ -17,7 +17,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.app.api.identity import Identity, require_identity
+from backend.app.api.identity import Identity, require_identity, require_tenant_id
 from backend.app.api.routes.cs_ops import require_cs_supervisor
 from backend.customer_service.errors import BusinessRuleError
 from backend.customer_service.ticket_store import get_ticket_store
@@ -72,7 +72,7 @@ async def list_my_tickets(
         raise HTTPException(403, detail="缺少可信用户身份")
     tickets = await get_ticket_store().async_list_for_user(
         identity.user_id,
-        tenant_id=identity.tenant_id or "default",
+        tenant_id=require_tenant_id(identity),
         limit=limit,
     )
     return TicketListResponse(
@@ -89,7 +89,7 @@ async def get_my_ticket(
     if not identity.user_id:
         raise HTTPException(403, detail="缺少可信用户身份")
     ticket = await get_ticket_store().async_get(
-        ticket_id, tenant_id=identity.tenant_id or "default",
+        ticket_id, tenant_id=require_tenant_id(identity),
     )
     if ticket is None or ticket["user_id"] != identity.user_id:
         raise HTTPException(404, detail="ticket not found")
@@ -108,7 +108,7 @@ async def admin_list_tickets(
 ):
     """管理侧工单列表（按状态/类型过滤）。"""
     tickets = await get_ticket_store().async_list_admin(
-        tenant_id=identity.tenant_id or "default",
+        tenant_id=require_tenant_id(identity),
         status=status, type=type, limit=limit,
     )
     return TicketListResponse(
@@ -126,7 +126,7 @@ async def admin_transition_ticket(
     try:
         ticket = await get_ticket_store().async_transition(
             ticket_id, body.status,
-            tenant_id=identity.tenant_id or "default",
+            tenant_id=require_tenant_id(identity),
             actor=identity.user_id or "",
             resolution=body.resolution,
         )

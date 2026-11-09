@@ -150,6 +150,8 @@ async def review_refund(
                 decision=body.decision,
                 opinion=body.opinion,
                 reviewer_id=context.agent_id,
+                # 审计 #24：审核人租户必须随请求下发，不能只靠下游自觉
+                tenant_id=context.tenant_id,
             )
         else:
             from backend.customer_service.case.service import get_case_service
