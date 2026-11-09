@@ -67,6 +67,17 @@ if BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY < 0:
         "（0 = 全部人工对账，不设上限校验）"
     )
 
+# 第二批（2026-11-10）：测试/评测数据隔离——生产视图默认不显示的请求标记
+# 前缀（request_id 以这些前缀开头视为测试/评测数据）。租户/用户沿用
+# BUDGET_TEST_TENANT_PREFIX 的前缀判定。
+BUDGET_TEST_REQUEST_PREFIXES = tuple(
+    p.strip()
+    for p in os.getenv(
+        "BUDGET_TEST_REQUEST_PREFIXES", "eval,synthetic,probe,recon_test"
+    ).split(",")
+    if p.strip()
+)
+
 
 def to_base_currency(amount: Decimal | int | float | str, currency: str) -> Decimal:
     """把任意币种金额折算为记账本位币；未登记汇率的币种快速失败。"""
