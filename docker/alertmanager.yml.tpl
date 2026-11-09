@@ -24,3 +24,9 @@ receivers:
         # 2026-10-06 企业化：恢复通知必须外发（firing→resolved 双向可达）；
         # 接收端=compose 内 alert-bridge 桥（转企微/飞书/钉钉，见服务注释）
         send_resolved: true
+        # 入站鉴权（安全审计 #76，2026-11-10）：compose 用同一
+        # ALERT_BRIDGE_TOKEN 变量注入桥（校验）与本模板（携带）；
+        # 桥侧未配置 token 时此头为空、桥保持旧行为（启动打 WARNING）。
+        http_config:
+          http_headers:
+            X-Alert-Bridge-Token: "__ALERT_BRIDGE_TOKEN__"

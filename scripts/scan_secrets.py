@@ -79,6 +79,7 @@ ALLOWLIST: list[tuple[str, str]] = [
     ("backend/tests/", "url_with_credentials"),       # 测试用假 DSN
     ("backend/.env.example", "url_with_credentials"),  # 示例 DSN 模板
     ("backend/.env.example", "assigned_secret"),       # 示例密钥占位
+    ("docker/alertmanager.yml.tpl", "assigned_secret"),  # AM 模板占位符（compose sed 注入 __ALERT_BRIDGE_TOKEN__，非真实凭据）
     ("backend/evaluation/runners/travel_booking.py", "assigned_secret"),  # 运行时配置名
     ("backend/app/api/routes/observability.py", "url_with_credentials"),  # 文档示例
     ("backend/data_collection/writers/sqlalchemy_writer.py", "url_with_credentials"),

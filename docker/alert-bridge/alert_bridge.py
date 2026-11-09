@@ -32,6 +32,15 @@ DINGTALK_SECRET = os.environ.get("ALERT_BRIDGE_DINGTALK_SECRET", "").strip()
 FEISHU_SECRET = os.environ.get("ALERT_BRIDGE_FEISHU_SECRET", "").strip()
 MAX_MSG_CHARS = 1800  # 群机器人单条消息上限（企微 2048 字节级），超长截断
 
+# 入站鉴权（安全审计 #76，2026-11-10）：桥监听 0.0.0.0（容器网内全可达），
+# do_POST 此前仅路径白名单、无任何身份校验——网内任意容器/进程可注入
+# 告警文本外推到 IM 群。配置 ALERT_BRIDGE_TOKEN 后强制校验请求头
+# X-Alert-Bridge-Token（compose 里与 alertmanager 模板同源注入，AM 发送
+# 自动携带）；未配置时保持旧行为（网内仅日志模式无外泄面），但启动打
+# WARNING 提醒 owner 启用。AM webhook_configs.http_config.http_headers
+# 原生支持自定义头（v0.27.0），无需改 AM 代码。
+BRIDGE_TOKEN = os.environ.get("ALERT_BRIDGE_TOKEN", "").strip()
+
 
 def _feishu_sign() -> dict:
     """飞书自定义机器人「签名校验」：key=timestamp\\nsecret 对空串 HmacSHA256 再 base64"""
@@ -140,6 +149,13 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(404)
             self.end_headers()
             return
+        if BRIDGE_TOKEN:
+            supplied = (self.headers.get("X-Alert-Bridge-Token") or "").strip()
+            if not hmac.compare_digest(supplied, BRIDGE_TOKEN):
+                print("[bridge] rejected: token missing/mismatch", flush=True)
+                self.send_response(403)
+                self.end_headers()
+                return
         try:
             n = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(n).decode("utf-8"))
@@ -164,4 +180,13 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     active = [k for k, v in CHANNELS.items() if v]
     print(f"[bridge] listening :{LISTEN[1]}, channels={active or '无(仅日志)'}", flush=True)
+    if BRIDGE_TOKEN:
+        print("[bridge] inbound auth: enabled (X-Alert-Bridge-Token)", flush=True)
+    else:
+        print(
+            "[bridge] WARNING: ALERT_BRIDGE_TOKEN 未配置，入站无鉴权"
+            "（容器网内任意来源可注入告警文本）。启用：.env 设 token 并"
+            "与 alertmanager 侧同值（compose 已同源注入）。",
+            flush=True,
+        )
     ThreadingHTTPServer(LISTEN, Handler).serve_forever()

@@ -1030,7 +1030,7 @@ services:
     # 启动前用 sed 把占位符替换成真实 webhook URL 再 exec 主进程
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - "sed \"s|__ALERT_WEBHOOK_URL__|${ALERTMANAGER_WEBHOOK_URL:-http://127.0.0.1:9/unset}|g\" /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
+      - "sed \"s|__ALERT_WEBHOOK_URL__|${ALERTMANAGER_WEBHOOK_URL:-http://127.0.0.1:9/unset}|g; s|__ALERT_BRIDGE_TOKEN__|${ALERT_BRIDGE_TOKEN:-}|g\" /etc/alertmanager/alertmanager.yml.tpl > /tmp/alertmanager.yml && exec /bin/alertmanager --config.file=/tmp/alertmanager.yml --storage.path=/alertmanager"
     volumes:
       - ./docker/alertmanager.yml.tpl:/etc/alertmanager/alertmanager.yml.tpl:ro
     depends_on:
@@ -1063,6 +1063,11 @@ services:
       - ALERT_BRIDGE_FEISHU_SECRET=${ALERT_BRIDGE_FEISHU_SECRET:-}
       - ALERT_BRIDGE_DINGTALK_WEBHOOK=${ALERT_BRIDGE_DINGTALK_WEBHOOK:-}
       - ALERT_BRIDGE_DINGTALK_SECRET=${ALERT_BRIDGE_DINGTALK_SECRET:-}
+      # 入站鉴权（安全审计 #76，2026-11-10）：与 alertmanager 模板同源
+      # 注入（AM 发送自动携带 X-Alert-Bridge-Token 头）；未配置=桥无鉴权
+      # 运行（启动打 WARNING）。启用：.env 设 ALERT_BRIDGE_TOKEN=<随机串>，
+      # 两侧自动同值，无需改模板。
+      - ALERT_BRIDGE_TOKEN=${ALERT_BRIDGE_TOKEN:-}
     networks:
       - agent-net
     restart: unless-stopped
