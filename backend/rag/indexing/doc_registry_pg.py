@@ -657,6 +657,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         *,
         active_generation: str = "",
         expected_base_generation: str = "",
+        expected_base_status: str = "",
     ) -> int:
         """候选版本的条件发布（B 阶段提交点）。
 
@@ -667,14 +668,24 @@ class PostgresDocumentRegistry(DocumentRegistry):
             候选同时发布同一逻辑文档时，后到者 rowcount=0（输掉 CAS，必须
             自行清理候选并报 superseded），先到者成为唯一发布者。
         首次上传（无行）走 INSERT 分支，守卫不生效（无被覆盖对象）。
-        返回 1 = 发布成功；0 = CAS 失败（已有更新的发布者）。
+
+        expected_base_status（#61 生命周期守卫）：认领运行时观测到的
+        registry.status。非空时额外要求当前行状态仍等于该值——文档在
+        排队期间被下线（deprecated）或送审（pending_review）后，迟到
+        发布输掉 CAS，避免把撤销决策覆写回 active。空串 = 旧记录无
+        认领状态，保持旧行为。
+        返回 1 = 发布成功；0 = CAS 失败（已有更新的发布者/文档已撤销）。
         """
         row = self._build_register_row(
             file_path, doc_id, file_hash, kb_id, chunk_ids, doc_db_id, metadata)
         row["active_generation"] = active_generation
         guard = f"{self._table}.active_generation IS NOT DISTINCT FROM %s"
+        if expected_base_status:
+            guard += f" AND {self._table}.status IS NOT DISTINCT FROM %s"
         sql, params = self._upsert_sql(self._table, row, guard=guard)
         params = params + (expected_base_generation,)
+        if expected_base_status:
+            params = params + (expected_base_status,)
         with self._lock, self._conn() as conn:
             cur = self._exec(conn, sql, params)
             return cur.rowcount

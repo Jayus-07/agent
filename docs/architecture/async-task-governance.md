@@ -37,6 +37,7 @@ flowchart TD
   UNKNOWN -->|确认未写且合法| RETRY
 ```
 
+- **身份固定、授权动态**：队列消息与运行记录里的 actor/tenant 只证明「谁发起」，不证明「现在还有权」。执行/发布前按 actor 当前权威行复验状态、租户、角色与资源授权（`backend/security/task_authorization.py`），失权按 superseded/failed 终止，不把创建时快照当执行期授权。RAG 索引发布段已接入（`backend/app/api/routes/rag_upload.py` → `_reverify_publish_authorization`）。
 - 身份、tenant、`task_id`、`execution_id`、幂等 key 互相不替代。重试/recovery/resume 保留稳定业务幂等键，`execution_id` 可更换但只证明 Lease Owner；失去 Lease 的执行者不得继续写数据。
 - 任务状态以现有持久 TaskRecord/TaskStatus 为准。Redis 标志、pub/sub 与内存进度只负责控制与 UI 通知，不能代替任务正式终态。
 - 取消与暂停在约定安全边界生效，不保证已执行的外部副作用自动撤销。进度 UI 必须标明 queued/running/retrying/blocked/completed/failed/unknown 的真实映射（以现有枚举为准），不能伪造完整通用枚举。
@@ -56,7 +57,7 @@ flowchart TD
 | AT-03 | Worker crash/Heartbeat 丢失后只能合法 Owner 接管 |
 | AT-04 | 重复投递/恢复不会使账单、退款、预订等写操作重复 |
 | AT-05 | 超时后写入结果未知 → 账本查询，不盲重试 |
-| AT-06 | 用户/租户/服务身份在队列消息及重试中保持合法且不可伪造 |
+| AT-06 | 用户/租户/服务身份在队列消息及重试中保持合法且不可伪造；执行期按 actor 复验授权，撤权后不得继续发布/写入 |
 | AT-07 | 取消/暂停/恢复后前端进度与真实任务终态一致 |
 | AT-08 | Redis/PG/Broker 故障不会被标为业务成功，队列错误可定位 |
 | AT-09 | 索引、记忆、预算对账、客服及旅行等实际任务有各自定向回归 |

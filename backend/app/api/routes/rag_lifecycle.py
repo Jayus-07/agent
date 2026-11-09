@@ -37,9 +37,13 @@ _service: KnowledgeLifecycleService | None = None
 def _get_lifecycle_service() -> KnowledgeLifecycleService:
     global _service
     if _service is None:
+        from backend.rag.indexing.index_run_store_pg import get_index_run_store
+
         _service = KnowledgeLifecycleService(
             _get_registry(),
             LifecycleAuditLog(default_audit_conn),
+            # #61：撤销类迁移（下线/送审）联动取消该文件的在途索引运行
+            run_store=get_index_run_store(),
         )
     return _service
 

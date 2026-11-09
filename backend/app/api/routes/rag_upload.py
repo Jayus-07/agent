@@ -1268,6 +1268,9 @@ def _dispatch_index_to_celery(**kwargs) -> dict:
             actor_id=actor_id,
             base_generation=str(
                 (existing_row or {}).get("active_generation") or ""),
+            # #61：认领时观测的生命周期状态，发布 CAS 据此判断排队期间
+            # 是否被下线/送审（撤销决策不得被迟到发布覆写）。
+            base_status=str((existing_row or {}).get("status") or ""),
         )
 
     db_task_id = create_index_task_record(
@@ -1567,6 +1570,49 @@ def _remove_bak(filepath: str) -> None:
         logger.warning(f"[RAG] .bak 清理失败 {bak}: {exc}")
 
 
+def _reverify_publish_authorization(
+    *, actor_id: str, tenant_id: str, kb_id: str, department: str,
+) -> None:
+    """发布前按运行记录 actor/tenant 复验当前授权（#65，fail-closed）。
+
+    入队时的授权只在 HTTP 时点有效；任务可能因排队/重试/崩溃重投在数十分钟
+    后才执行。此处按 actor 当前权威行重建授权（与图/Tool 通道同一套
+    resolve_task_authorization → RagAuthorization），失权即拒绝发布，由调用方
+    按 superseded 语义清理候选。
+
+    部门口径：HTTP 通道的 principal.department 来自请求头（网关注入），与
+    auth.users.dept 不保证一致；发布目标部门在入队时已裁决并固化进运行记录，
+    因此复验时用记录部门重建授权面（当前权威行仍提供状态/租户/角色），部门
+    是否仍启用由 validate_kb_dept 的 active_departments 兜底。
+
+    跳过条件：运行记录没有可复验的用户身份（空/占位 actor，或未声明租户）——
+    这些不是已认证 HTTP 上传，保持既有行为。
+    """
+    actor = str(actor_id or "").strip()
+    tid = str(tenant_id or "").strip()
+    if not actor or not tid or actor in {"system", "default", "anonymous"}:
+        return
+    from backend.rag.authz import RagAuthorization, RagAuthorizationError
+    from backend.rag.indexing.publish import PublishAuthorizationRevoked
+    from backend.security.task_authorization import (
+        TaskAuthorizationDenied,
+        resolve_task_authorization,
+    )
+    from dataclasses import replace
+
+    try:
+        ctx = resolve_task_authorization(actor, tid)
+        authz = RagAuthorization.build(
+            replace(ctx.principal, department=str(department or "")))
+    except (TaskAuthorizationDenied, RagAuthorizationError) as e:
+        raise PublishAuthorizationRevoked(
+            f"索引发布前授权复验失败（{actor}@{tid}）: {e}") from e
+    ok, reason = authz.can_upload_to(kb_id, department)
+    if not ok:
+        raise PublishAuthorizationRevoked(
+            f"索引发布前授权已失效（{actor}@{tid} → {kb_id}/{department}）: {reason}")
+
+
 def _do_index_sync(upload_id: str, filepath: str, filename: str,
                    main_loop: asyncio.AbstractEventLoop | None,
                    kb_id: str = "policy_general",
@@ -1620,6 +1666,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
             kb_id=kb_id, department=department,
             file_hash=file_hash, staging_path=staging_path,
             base_generation=str((existing0 or {}).get("active_generation") or ""),
+            base_status=str((existing0 or {}).get("status") or ""),
         )
     generation = run["generation"]
     staging = run.get("staging_path") or staging_path or filepath
@@ -1757,6 +1804,13 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
         except (ValueError, TypeError):
             old_chunk_ids = []
         from backend.rag.indexing.publish import publish_candidate
+
+        # #65：发布前复验 actor 当前授权（排队/重试期间被撤销即拒绝发布）
+        _reverify_publish_authorization(
+            actor_id=str(run.get("actor_id") or ""),
+            tenant_id=str(run.get("tenant_id") or ""),
+            kb_id=kb_id, department=department,
+        )
         publish_candidate(
             run_store=run_store,
             upload_id=upload_id,
@@ -1767,6 +1821,7 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
             kb_id=kb_id,
             file_hash=actual_hash,
             base_generation=base_generation,
+            base_status=str(run.get("base_status") or ""),
             index_result=index_result,
             old_row=old_row,
             old_chunk_ids=old_chunk_ids,

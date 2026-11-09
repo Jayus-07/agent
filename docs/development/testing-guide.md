@@ -80,6 +80,10 @@ PYTEST_XDIAG=1 PYTEST_XDIAG_DIR=/d/tmp/xdiag-local python -m pytest backend/test
 | Domain Agent / Supervisor / Reporter | T1+T2：普通请求允许 DEGRADED；同一工具遇到用户硬约束 BLOCKED；内部异常 FAILED；前端/SSE 与终态一致 |
 | 退款/预订/其它副作用 | T2：用户确认、幂等键、结果未知 IN_DOUBT、重复提交不重复生效、跨租户拒绝 |
 | Prompt/Router/LLM 路由选择 | T2：候选白名单、低置信度澄清、业务失败不被模型生成成功；必要时隔离集成测试 |
+| RAG 生命周期与发布 | T1：撤销后排队发布输掉 CAS、待审核行可被新上传替换、旧运行记录回退旧行为；T1：chunk 正文三面同口径（管理员豁免） |
+| 异步任务撤权/执行期授权 | T1：发布前复验失败按 superseded 终止、合法 actor 放行、占位身份跳过；T2：真实 worker 链路（如可用） |
+
+安全、权限、生命周期类契约测试采用**双向索引**：测试文件顶部 docstring 写明「钉死哪条契约」，对应现行文档（如 [RAG 域](../domains/rag.md)、[异步任务治理](../architecture/async-task-governance.md)）在同一章节链回该测试文件。新契约先在权威文档落一句可判定的话，再写能识别回归的用例，避免「有测试但没人知道它守什么」。
 
 推荐既有入口：`backend/tests/tool_runtime/test_governance.py`、`backend/tests/travel/test_tool_failure_policy.py`、`backend/tests/skills/test_tool_contract_boundary.py`。先检查项目实际测试列表及 fixture，路径不是覆盖已足够的证明。生产真实 Provider、端到端浏览器以及真实 LLM 评测仅在依赖就绪且风险需要时运行。
 

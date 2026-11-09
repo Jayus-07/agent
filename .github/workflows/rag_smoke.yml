@@ -270,6 +270,7 @@ jobs:
             backend/tests/sql/test_sql_production_closure.py \
             backend/tests/sql/test_sql_scope_subquery.py \
             backend/tests/rag/test_parser_resource_budgets.py \
+            backend/tests/rag/test_lifecycle_publication_guard.py \
             backend/tests/api/test_cs_dashboard_knowledge.py \
             backend/tests/api/test_business_mock_failclosed.py \
             backend/tests/selection_funnel/test_api_import.py \

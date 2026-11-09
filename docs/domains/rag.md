@@ -50,6 +50,30 @@ Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由
 
 文档读写执行资源级授权和租户范围校验。管理端索引与发布操作遵循现有审批及状态管理。
 
+### 生命周期与发布不变量（2026-11 审计收口）
+
+- **发布是唯一可见性切换点**：解析、切块、向量化只写入候选代次，正文与检索在
+  `register_published` 提交成功前都不可见。发布提交点按 `(active_generation,
+  认领时 status)` 双基准做 CAS（`backend/rag/indexing/doc_registry_pg.py`）。
+- **撤销优先于排队发布**：文档在排队期间被下线（`active → deprecated`）或送审
+  （`active → pending_review`）后，迟到发布输掉 CAS，按 superseded 清理候选，
+  不得把撤销决策覆写回 active。生命周期迁移同时把该文件的在途索引运行标
+  superseded（`backend/rag/indexing/lifecycle.py`）；取消失败只记日志，不回滚
+  已生效的撤销。待审核行仍可被新上传替换（认领状态 = pending_review 时放行）。
+- **正文读取三面同口径**：原文预览、chunk 列表、chunk 详情对非 active 文档都不
+  出正文；chunk 详情对管理员保留诊断读取（历史 Trace 排查），普通可读主体拿
+  不到（`backend/app/api/routes/rag_documents.py`）。
+- **发布前复验授权**：索引 worker 在发布段按运行记录 actor/tenant 重建当前授权
+  （`backend/security/task_authorization.py` → `RagAuthorization`），用户停用、
+  移租户、撤角色或 KB 授权回收即按 superseded 终止。部门口径取入队时固化的
+  目标部门（HTTP 部门来自请求头，与 `auth.users.dept` 不保证一致），部门是否仍
+  启用由知识库目录校验兜底（`backend/app/api/routes/rag_upload.py`）。
+
+对应回归：`backend/tests/rag/test_lifecycle_publication_guard.py`（生产发布 CAS、
+撤销联动、chunk 详情门、发布前授权复验）；相关契约见
+[`backend/tests/rag/test_candidate_publish.py`](../../backend/tests/rag/test_candidate_publish.py)
+与 [`backend/tests/rag/test_doc_registry_pg.py`](../../backend/tests/rag/test_doc_registry_pg.py)。
+
 知识库目录由 `auth.knowledge_bases` 提供运行时授权事实源，初始数据来自
 `backend/config/knowledge_base.py` 的迁移基线。`owner_depts` 可关联多个部门，
 `all` 作为独占标记代表全部启用部门；上传弹窗切换知识库后，部门候选按当前

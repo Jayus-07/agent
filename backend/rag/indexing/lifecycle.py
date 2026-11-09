@@ -27,6 +27,7 @@ import psycopg2
 import psycopg2.extras
 
 from backend.rag.indexing.doc_registry import DOC_STATUSES
+from backend.shared.logger import logger
 
 # 操作者可发起的状态迁移（键=源状态，值=允许目标集合）。
 # 有意收窄到「有真实下游驱动」的迁移，防陷阱态：
@@ -159,11 +160,15 @@ class KnowledgeLifecycleService:
 
     registry 仅需 get_by_doc_id / transition_status_by_doc_id / set_expire_at
     三个方法（测试用内存桩实现同一签名）。
+
+    run_store（可选，rag_index_runs 仓储）：撤销类迁移（下线/送审）成功后
+    把该文件的在途索引运行标 superseded（#61）。None = 不联动（单测隔离）。
     """
 
-    def __init__(self, registry, audit: LifecycleAuditLog):
+    def __init__(self, registry, audit: LifecycleAuditLog, run_store=None):
         self._registry = registry
         self._audit = audit
+        self._run_store = run_store
 
     def transition(
         self, doc_id: str, to_status: str,
@@ -187,7 +192,54 @@ class KnowledgeLifecycleService:
             action=action or f"{from_status}->{to_status}",
             actor=actor, reason=reason,
         )
-        return {"ok": True, "doc_id": doc_id, "from": from_status, "to": to_status}
+        cancelled = (
+            self._cancel_inflight_runs(doc, to_status)
+            if to_status in ("deprecated", "pending_review") else []
+        )
+        return {
+            "ok": True, "doc_id": doc_id, "from": from_status,
+            "to": to_status, "cancelled_runs": cancelled,
+        }
+
+    def _cancel_inflight_runs(self, doc: dict, to_status: str) -> list[str]:
+        """撤销类迁移：把该文件在途索引运行标 superseded（#61）。
+
+        只做状态收口，不删暂存文件——worker 读到 superseded 会拒绝重跑，
+        残留暂存由既有启动清理兜底；取消失败只记日志，不回滚已完成的
+        状态迁移（撤销本身必须生效，发布侧另有 CAS 状态守卫兜底）。
+        """
+        if self._run_store is None:
+            return []
+        file_path = str((doc or {}).get("file_path") or "")
+        if not file_path:
+            return []
+        from backend.rag.indexing.index_run_store_pg import RunStateConflict
+
+        try:
+            runs = self._run_store.list_non_terminal_by_file(file_path)
+        except Exception as e:  # noqa: BLE001 — 联动是尽力而为，不阻断迁移
+            logger.warning(f"[RAG] 生命周期取消在途索引失败（查询）: {e}")
+            return []
+        cancelled: list[str] = []
+        for run in runs:
+            upload_id = str((run or {}).get("upload_id") or "")
+            if not upload_id:
+                continue
+            try:
+                self._run_store.mark_status(
+                    upload_id, "superseded",
+                    error=f"文档已转为 {to_status}，在途索引取消",
+                )
+                cancelled.append(upload_id)
+            except RunStateConflict:
+                continue
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"[RAG] 生命周期取消在途索引失败 {upload_id}: {e}")
+        if cancelled:
+            logger.info(
+                f"[RAG] 生命周期 {to_status} 取消在途索引: {cancelled}")
+        return cancelled
 
     def set_expire_at(
         self, doc_id: str, expire_at: str | None,

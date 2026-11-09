@@ -1072,12 +1072,24 @@ async def get_chunks(doc_id: str, request: Request):
 @router.get("/chunks/{doc_id}/detail")
 async def get_chunk_detail(doc_id: str, request: Request):
     """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
-    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。"""
+    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。
+
+    发布状态门（#62）：与兄弟端点同口径——非 active（下线/待审核）文档
+    不再向普通可读主体暴露正文；管理员保留诊断读取（历史 trace 排查），
+    否则下线文档的正文可被原有可读主体经本端点绕过生命周期取回。"""
     try:
         authz = await _require_authz(request)
         doc = _get_registry().get_by_doc_id(doc_id)
         if not doc or not authz.can_read_row(doc):
             return {"doc_id": doc_id, "chunks": [], "total": 0, "error": "文档不存在"}
+        status = str(doc.get("status") or "")
+        if status != "active" and not authz.is_admin:
+            logger.info(
+                f"[RAG] Chunk 详情跳过非 active 文档: doc={doc_id} status={status}")
+            return {
+                "doc_id": doc_id, "chunks": [], "total": 0,
+                "status": status, "error": "文档已下线或待审核",
+            }
         from backend.rag.indexing.chunk_store import get_chunk_store
         cs = get_chunk_store()
         rows = cs.get_by_doc_id(doc_id)
