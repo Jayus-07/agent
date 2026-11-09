@@ -46,6 +46,14 @@ class SupersededCandidate(RuntimeError):
     """发布 CAS 失败：同一逻辑文档已被更新的候选发布（本次候选被取代）。"""
 
 
+class PublishAuthorizationRevoked(SupersededCandidate):
+    """发布前授权复验失败（#65）：actor 已停用/移租户/撤角色/撤 KB 授权。
+
+    按 superseded 语义处理——候选未提交，调用方清理产物即可；不把失权
+    主体入队时的授权当成执行期授权。
+    """
+
+
 class CandidatePublishError(RuntimeError):
     """发布阶段失败（提交点之后）——必须保持 publishing 状态等待续跑。"""
 
@@ -440,6 +448,7 @@ def publish_candidate(
     kb_id: str,
     file_hash: str,
     base_generation: str,
+    base_status: str = "",
     index_result: dict,
     old_row: dict | None,
     old_chunk_ids: list[str],
@@ -515,6 +524,7 @@ def publish_candidate(
         metadata=registry_metadata,
         active_generation=generation,
         expected_base_generation=expected_base,
+        expected_base_status=base_status,
     )
     if rowcount == 0:
         raise SupersededCandidate(

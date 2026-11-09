@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS {table} (
     tenant_id    TEXT NOT NULL DEFAULT 'default',
     actor_id     TEXT NOT NULL DEFAULT '',
     base_generation TEXT NOT NULL DEFAULT '',
+    base_status     TEXT NOT NULL DEFAULT '',
     celery_task_id  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'claimed',
     stage        TEXT NOT NULL DEFAULT '',
@@ -106,6 +107,18 @@ class IndexRunStore:
     def _init_db(self) -> None:
         with self._lock, self._conn() as conn:
             conn.cursor().execute(_SCHEMA_SQL.format(table=self._table, now=_NOW_SQL))
+            self._ensure_columns(conn)
+
+    def _ensure_columns(self, conn) -> None:
+        """存量表补列（#61 生命周期发布守卫）。
+
+        base_status = 认领运行时观测到的 registry 生命周期状态：发布 CAS
+        据此判断文档是否在排队期间被下线/送审。空串 = 旧记录（无认领
+        状态），发布段回退旧行为（不做状态守卫）。
+        """
+        conn.cursor().execute(
+            f"ALTER TABLE {self._table} ADD COLUMN IF NOT EXISTS "
+            f"base_status TEXT NOT NULL DEFAULT ''")
 
     # ---- 写 ----
 
@@ -114,7 +127,8 @@ class IndexRunStore:
         doc_id: str = "", kb_id: str = "", department: str = "",
         file_hash: str = "", staging_path: str = "",
         tenant_id: str = "default", actor_id: str = "",
-        base_generation: str = "", celery_task_id: str = "",
+        base_generation: str = "", base_status: str = "",
+        celery_task_id: str = "",
     ) -> dict:
         """登记运行。同 upload_id 重传（同键幂等重放/失败重试）→ 重置为新一轮
         候选：新 generation、状态回 claimed（终态记录允许被同 id 新内容重开，
@@ -125,8 +139,8 @@ class IndexRunStore:
                 f"""INSERT INTO {self._table}
                    (upload_id, generation, file_path, doc_id, kb_id, department,
                     file_hash, staging_path, tenant_id, actor_id,
-                    base_generation, celery_task_id, status, stage)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'claimed','')
+                    base_generation, base_status, celery_task_id, status, stage)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'claimed','')
                    ON CONFLICT (upload_id) DO UPDATE SET
                      generation = EXCLUDED.generation,
                      file_path = EXCLUDED.file_path,
@@ -138,13 +152,14 @@ class IndexRunStore:
                      tenant_id = EXCLUDED.tenant_id,
                      actor_id = EXCLUDED.actor_id,
                      base_generation = EXCLUDED.base_generation,
+                     base_status = EXCLUDED.base_status,
                      celery_task_id = EXCLUDED.celery_task_id,
                      status = 'claimed', stage = '', error = '',
                      updated_at = {_NOW_SQL}
                    RETURNING *""",
                 (upload_id, generation, file_path, doc_id, kb_id, department,
                  file_hash, staging_path, tenant_id, actor_id,
-                 base_generation, celery_task_id),
+                 base_generation, base_status, celery_task_id),
             )
             row = cur.fetchone()
         return dict(row) if row else {}
