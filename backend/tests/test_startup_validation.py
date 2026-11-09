@@ -1359,3 +1359,42 @@ class TestReadonlyPassword:
         monkeypatch.delenv("ENVIRONMENT", raising=False)
         warnings = su.validate_startup_settings()
         assert not any("PG_READONLY_PASSWORD" in w for w in warnings)
+
+
+class TestToolApprovalModeProductionFatal:
+    """安全审计 #77：TOOL_APPROVAL_MODE=auto 在生产环境必须拒绝启动。
+
+    auto 生效时 R2 写能力（send_email/export/data_collection 等）的
+    Prepare→Confirm 用户确认与管理员审批整体跳过（ensure_approved 直接
+    放行副作用）。对照 IDENTITY_SOURCE=legacy 先例：本地调试开关与生产
+    取值之间必须有确定性 guard，不能只靠部署自觉。
+    """
+
+    def test_auto_fatal_in_production(self, valid_env, monkeypatch):
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "prod-readonly-secret")
+        monkeypatch.setenv("LLM_BUDGET_MODE", "observe")
+        monkeypatch.setenv("TOOL_APPROVAL_MODE", "auto")
+
+        with pytest.raises(su.SettingsValidationError) as exc_info:
+            su.validate_startup_settings()
+
+        assert "TOOL_APPROVAL_MODE=auto" in str(exc_info.value)
+
+    def test_required_passes_in_production(self, valid_env, monkeypatch):
+        """对照：required（企业安全基线默认值）在生产不被拦。"""
+        monkeypatch.setenv("ENVIRONMENT", "production")
+        monkeypatch.setenv("PG_READONLY_PASSWORD", "prod-readonly-secret")
+        monkeypatch.setenv("LLM_BUDGET_MODE", "observe")
+        monkeypatch.setenv("TOOL_APPROVAL_MODE", "required")
+
+        warnings = su.validate_startup_settings()
+        assert not any("TOOL_APPROVAL_MODE" in w for w in warnings)
+
+    def test_auto_allowed_in_development(self, valid_env, monkeypatch):
+        """auto 仅限本地调试：开发环境不拦（保持既有调试工作流）。"""
+        monkeypatch.delenv("ENVIRONMENT", raising=False)
+        monkeypatch.setenv("TOOL_APPROVAL_MODE", "auto")
+
+        warnings = su.validate_startup_settings()
+        assert not any("TOOL_APPROVAL_MODE" in w for w in warnings)

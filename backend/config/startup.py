@@ -335,6 +335,17 @@ def validate_startup_settings() -> List[str]:
             "由网关验签后注入 X-User-Id 等身份头。"
         )
 
+    # Tool 审批模式（安全审计 #77，2026-11-09）：auto 仅限本地调试——生效时
+    # R2 写能力的 Prepare→Confirm 用户确认与管理员审批整体跳过
+    # （governance guard needs_confirmation 恒 False、ensure_approved 直接
+    # 放行副作用）。对照 IDENTITY_SOURCE=legacy 先例：生产启动显式拒绝。
+    if _is_prod and _env("TOOL_APPROVAL_MODE", "required").lower() == "auto":
+        _fatal.append(
+            "ENVIRONMENT=production + TOOL_APPROVAL_MODE=auto：生产环境禁止跳过"
+            "工具副作用审批（auto 仅限本地开发调试，send_email/export 等 R2 "
+            "写工具将不经确认直接执行）。请设置 TOOL_APPROVAL_MODE=required。"
+        )
+
     # 只读凭据必须由受控配置显式提供；生产漏配时拒绝启动。
     if _is_prod and not s.database.pg_readonly_password:
         _fatal.append(
