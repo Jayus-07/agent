@@ -38,7 +38,10 @@ flowchart LR
 > 2026-11-10 修订：本节原"本版不新增 agent_id 列"决策已被 [ADR-0012](../architecture/adr/0012-memory-platform-product-namespace.md) 触发的重新决策取代（三产品接入记忆 + 审计 #68 串扰证实），第 1 期已随施工落地。
 
 - **当前范围**：记忆键为 **(tenant_id, product, user_id)** 三元组——product 是独立列（迁移 143，user_id 已拆裸），MemoryService 唯一入口服务端强制解析；现有 domain hint 辅助领域检索。三产品命名空间：`agent`（存量 raw 身份）/ `customer_service` / `travel`（预留）；`internal` 不落记忆库。调用方传 raw 身份 + product，禁止预换算。
-- **身份层白名单共享、事实时间有效性（失效而非删除）、dreaming 整合、前端记忆管理**：见 ADR-0012 D2/D3/D4/D8 分期路线（第 2/3 期）。
+- **身份层白名单共享、前端记忆管理**：见 ADR-0012 D2/D8（第 3 期）。
+- **事实时间有效性（第 2 期已落地，迁移 145）**：memory_records 加 `valid_from`（生效时刻，存量回填 created_at）/ `invalid_at`（失效时刻）。supersede = `is_active=False + invalid_at` 同事务双写；失效行不参与召回/画像/删除定位（`invalid_at IS NULL + valid_from <= NOW()` 五路径统一口径），行保留 + superseded_by 版本链可审计还原。矛盾失效 / dreaming 合并共用同一失效通道。
+- **dreaming 整合（第 2 期已落地，D4）**：每日 beat `memory.dreaming`（03:30 UTC，`MEMORY_DREAMING_ENABLED` 默认关）——unkeyed 高相似碎片经 LLM 三分类（merge/contradiction/independent）合并或失效，动作全部走 supersede 版本链可回滚；聚合只重组已有信息不臆造新事实（origin=inferred、verification=pending 不直进召回）；簇内含 explicit 整体跳过；安全类内容（过敏/禁忌/无障碍/紧急联系人等白名单）永不参与整合。
+- **衰减边界（第 2 期契约变更，D-1 裁决）**：衰减只降低注入排序权重（importance），**不删除不隐藏**——原 STOP C「importance<0.2 归档」条款废止（archive_stale 已移除，低分重要性行保持 active 且设置页可见）。记忆量有界由 dreaming 整合 + invalid_at 失效 + 用户删除承担。衰减档位按产品差异化（D5：agent 180/90 天、customer_service 120/60、travel 60/30，系数 0.9/0.95 全局一致）；安全类行（keyed 白名单前缀 + 内容关键词）豁免衰减（必须永远参与自动注入）。
 - MM-05 必须用用户/租户/**产品**交叉召回和缓存实验验证，不能只依赖静态源码确认（第 1 期已补产品维度交叉断言：tests/memory/test_memory_product_isolation.py）。
 
 ## MM-01～MM-10 验收
