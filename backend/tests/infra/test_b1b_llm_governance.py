@@ -660,7 +660,7 @@ def test_async_provider_cancellation_marks_reservation_for_review(monkeypatch):
         lambda *a, **k: calls.append("reserve"),
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation",
+        "backend.infra.llm.budget.settle_or_review_model_reservation",
         lambda reason: calls.append(("review", reason)),
     )
     monkeypatch.setattr(
@@ -788,7 +788,7 @@ def test_failed_fallback_releases_or_reviews_reservation(
         lambda: calls.append("release"),
     )
     monkeypatch.setattr(
-        "backend.infra.llm.budget.review_model_reservation",
+        "backend.infra.llm.budget.settle_or_review_model_reservation",
         lambda _reason: calls.append("review"),
     )
     set_current_resolved_model(ResolvedModelContext(

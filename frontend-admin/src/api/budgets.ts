@@ -33,9 +33,12 @@ export interface BudgetEvent { scope_type: string; scope_id: string; period_type
 export interface BudgetPolicyAudit { scope_type: string; scope_id: string; before_value: Record<string, unknown> | null; after_value: Record<string, unknown>; reason: string; updated_by: string; created_at: string }
 
 // 待对账：用量未知（可能已对供应商计费）的预占，保留占额并等待人工核查
+// 第二批：resolution 轴（''=开态；settled_actual/released/written_off/archived=已核销）
 export interface BudgetReconciliationItem {
   reservation_id: string; request_id: string; user_id: string; tenant_id: string;
   reserved_cny: string; status: string; review_reason: string; created_at: string;
+  resolution: string; resolved_by: string; resolved_at: string | null;
+  actual_cny: string | null;
   periods: { period_type: string; period_start: string }[];
 }
 export interface BudgetReconciliation {
@@ -79,7 +82,46 @@ export function describeBudgetExceeded(details: Record<string, unknown> = {}): s
 }
 
 export async function getBudgetSummary(): Promise<BudgetSummary> { return request<BudgetSummary>("/api/admin/budgets/summary"); }
-export async function getBudgetReconciliation(): Promise<BudgetReconciliation> { return request<BudgetReconciliation>("/api/admin/budgets/reconciliation"); }
+export async function getBudgetReconciliation(params: { includeClosed?: boolean; includeTest?: boolean } = {}): Promise<BudgetReconciliation> {
+  const query = new URLSearchParams();
+  if (params.includeClosed) query.set("include_closed", "true");
+  if (params.includeTest) query.set("include_test", "true");
+  const qs = query.toString();
+  return request<BudgetReconciliation>(`/api/admin/budgets/reconciliation${qs ? `?${qs}` : ""}`);
+}
+// 第二批：单笔核销（settled_actual 需带供应商实际账单金额；其余动作不记账成本）
+export async function resolveBudgetReconciliation(body: {
+  reservationId: string; action: "settled_actual" | "released" | "written_off" | "archived";
+  reason: string; actualCny?: string;
+}): Promise<{ found: boolean; already_resolved: boolean; released_cny: string; booked_cny: string | null }> {
+  return mutationRequest("/api/admin/budgets/reconciliation/resolve", {
+    operation: `budget-resolve:${body.reservationId}`, method: "POST",
+    body: {
+      reservation_id: body.reservationId, action: body.action, reason: body.reason,
+      ...(body.actualCny ? { actual_cny: body.actualCny } : {}),
+    },
+  });
+}
+export async function resolveBudgetReconciliationBatch(body: {
+  reservationIds: string[]; action: "settled_actual" | "released" | "written_off" | "archived";
+  reason: string; actualCny?: string;
+}): Promise<{ results: { reservation_id: string; already_resolved: boolean }[]; requested: number; resolved: number; already_resolved: number }> {
+  return mutationRequest("/api/admin/budgets/reconciliation/resolve-batch", {
+    operation: `budget-resolve-batch:${body.action}`, method: "POST",
+    body: {
+      reservation_ids: body.reservationIds, action: body.action, reason: body.reason,
+      ...(body.actualCny ? { actual_cny: body.actualCny } : {}),
+    },
+  });
+}
+// 第二批：存量分类 dry-run（只读，不写任何状态）
+export async function getBudgetBacklogDryRun(): Promise<{
+  open_count: number; open_held_cny: string;
+  classes: Record<string, { count: number; held_cny: string; suggested_action: string; samples: { reservation_id: string; reserved_cny: string; review_reason: string; request_id: string; user_id: string; tenant_id: string }[] }>;
+  note: string;
+}> {
+  return request("/api/admin/budgets/reconciliation/dry-run");
+}
 export async function listBudgetSubjects(params: { scope?: string; period?: string } = {}): Promise<{ items: BudgetSubject[] }> {
   const query = new URLSearchParams();
   if (params.scope) query.set("scope", params.scope);

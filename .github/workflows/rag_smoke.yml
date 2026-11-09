@@ -189,6 +189,9 @@ jobs:
             backend/tests/test_citation_passthrough.py \
             backend/tests/infra/test_sync_timeout_context.py \
             backend/tests/infra/test_run_budget_pg.py \
+            backend/tests/infra/test_budget_quota.py \
+            backend/tests/infra/test_estimated_settlement.py \
+            backend/tests/infra/test_local_inference_billing.py \
             backend/tests/rag/test_run_budget_transport.py \
             backend/tests/test_sse_event_schema.py::test_graph_worker_keeps_run_budget_scope \
             backend/tests/customer_service/test_defect9_context_resolver.py \

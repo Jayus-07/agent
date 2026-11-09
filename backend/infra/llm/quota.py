@@ -351,6 +351,8 @@ class PostgresQuotaStore:
         self._events = prefix + "budget_events"
         self._price_table = prefix + "model_price"
         self._policy_audit = prefix + "budget_policy_audit"
+        # 第二批：待对账核销动作审计（append-only，144 迁移）
+        self._resolution_audit = prefix + "budget_reservation_resolutions"
 
     @staticmethod
     @contextmanager
@@ -759,8 +761,7 @@ class PostgresQuotaStore:
                         cur.fetchone()
                     )
                     cur.execute(
-                        f"""SELECT COALESCE(SUM(reserved_cny), 0),
-                                   COUNT(DISTINCT (scope_type, scope_id))
+                        f"""SELECT COUNT(DISTINCT (scope_type, scope_id))
                                        FILTER (WHERE enforcement = 'hard'
                                                AND used_cny + reserved_cny >= limit_cny
                                                AND ((period_type = 'day'
@@ -782,7 +783,21 @@ class PostgresQuotaStore:
                             periods.day_start_utc, periods.month_start_utc,
                         ),
                     )
-                    reserved, blocked, near = cur.fetchone()
+                    blocked, near = cur.fetchone()
+                    # 未结算预留按预占单去重（2026-11-10 待对账治理 1.4）：
+                    # 同一预占在 user/tenant × day/month 的账本上是 4 行同值，
+                    # 行级 SUM 会把占额放大数倍（实测 ¥78.60 显示成 ¥228）。
+                    # 口径对齐 reconciliation_summary：reserved（在途）+
+                    # needs_review（待对账占额）逐单只算一次。
+                    cur.execute(
+                        f"""SELECT COALESCE(SUM(reserved_cny), 0)
+                            FROM (SELECT DISTINCT ON (id) id, reserved_cny
+                                  FROM {self._reservations}
+                                  WHERE status IN ('reserved', 'needs_review')
+                                    AND resolution = ''
+                                  ORDER BY id, created_at) r"""
+                    )
+                    reserved = cur.fetchone()[0]
                     cur.execute(
                         f"""SELECT COALESCE(
                                    SUM(CASE WHEN approval_status = 'approved' THEN 1 ELSE 0 END)::numeric
@@ -1295,6 +1310,274 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("滞留预占回收失败") from exc
 
+    _RESOLUTION_ACTIONS = frozenset(
+        {"settled_actual", "released", "written_off", "archived"}
+    )
+
+    @staticmethod
+    def _test_marker_sql_params() -> dict[str, Any]:
+        """测试/评测数据的 SQL 匹配参数（第二批隔离：租户/用户前缀 + 请求前缀）。"""
+        from backend.config.budget import (
+            BUDGET_TEST_REQUEST_PREFIXES,
+            BUDGET_TEST_TENANT_PREFIX,
+        )
+
+        return {
+            "test_prefix": f"{BUDGET_TEST_TENANT_PREFIX}%",
+            "request_markers": [f"{p}%" for p in BUDGET_TEST_REQUEST_PREFIXES],
+        }
+
+    @classmethod
+    def _test_marker_where(cls, alias: str = "") -> str:
+        """测试/评测数据的 WHERE 片段（排除测试主体与测试请求）。"""
+        prefix = f"{alias}." if alias else ""
+        return (
+            f"({prefix}tenant_id LIKE %(test_prefix)s"
+            f" OR {prefix}user_id LIKE %(test_prefix)s"
+            f" OR {prefix}request_id LIKE ANY(%(request_markers)s))"
+        )
+
+    def resolve_needs_review(
+        self,
+        reservation_id: str,
+        *,
+        action: str,
+        reason: str,
+        resolved_by: str,
+        actual_cny: Decimal | None = None,
+    ) -> dict[str, Any]:
+        """核销一笔待对账预占（2026-11-10 第二批闭环）。
+
+        语义：
+        - 仅 ``status='needs_review'`` 且 ``resolution=''``（开态）可核销；
+          预占不存在或已核销时幂等返回 ``already_resolved``，不二次释放账本；
+        - ``released`` / ``written_off`` / ``archived``：仅释放账本占额，
+          不记成本——无法确认的成本不得入账（不伪造费用）；
+        - ``settled_actual``：按供应商实际账单金额入账（used_cny +=
+          actual_cny），actual_cny 必填且 ≥ 0，占额按原 held 释放；
+        - 账本行锁序与 reserve/settle/release 一致（user→tenant、day→month），
+          避免 AB-BA 死锁（2026-10-29 生产实测教训）；审计写
+          ``budget_reservation_resolutions``（append-only），不物理删除。
+        """
+        action = str(action or "").strip()
+        if action not in self._RESOLUTION_ACTIONS:
+            raise ValueError(f"非法核销动作: {action}（可选: {sorted(self._RESOLUTION_ACTIONS)}）")
+        reason = str(reason or "").strip()
+        if not reason:
+            raise ValueError("核销原因不能为空")
+        resolved_by = str(resolved_by or "").strip()
+        if not resolved_by:
+            raise ValueError("核销操作人不能为空")
+        booked: Decimal | None = None
+        if action == "settled_actual":
+            if actual_cny is None:
+                raise ValueError("settled_actual 必须提供供应商实际账单金额")
+            booked = Decimal(str(actual_cny)).quantize(
+                _SIX_PLACES, rounding=ROUND_HALF_UP,
+            )
+            if booked < 0:
+                raise ValueError("实际账单金额不能为负数")
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT scope_type, scope_id, period_type,
+                                   period_start, reserved_cny, resolution
+                            FROM {self._reservations}
+                            WHERE id = %s AND status = 'needs_review'
+                            ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
+                            FOR UPDATE""",
+                        (reservation_id,),
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        return {
+                            "reservation_id": reservation_id, "action": action,
+                            "found": False, "already_resolved": True,
+                            "released_cny": "0.000000", "booked_cny": None,
+                        }
+                    held = Decimal(str(rows[0][4])).quantize(_SIX_PLACES)
+                    current_resolution = str(rows[0][5] or "")
+                    if current_resolution:
+                        return {
+                            "reservation_id": reservation_id, "action": action,
+                            "found": True, "already_resolved": True,
+                            "released_cny": "0.000000", "booked_cny": None,
+                            "resolution": current_resolution,
+                        }
+                    for scope_type, scope_id, period_type, period_start, reserved, _ in rows:
+                        cur.execute(
+                            f"""UPDATE {self._ledger}
+                                SET reserved_cny = GREATEST(reserved_cny - %s, 0),
+                                    used_cny = used_cny + COALESCE(%s, 0),
+                                    updated_at = now()
+                                WHERE scope_type = %s AND scope_id = %s
+                                  AND period_type = %s AND period_start = %s
+                                RETURNING used_cny, reserved_cny, limit_cny""",
+                            (reserved, booked, scope_type, scope_id,
+                             period_type, period_start),
+                        )
+                        ledger_row = cur.fetchone()
+                        if booked is not None and ledger_row is not None:
+                            _record_quota_metric(
+                                "budget_quota_total",
+                                scope_type=scope_type,
+                                period_type=period_type,
+                                result="settled",
+                            )
+                            _insert_threshold_events(
+                                cur,
+                                self._events,
+                                scope_type=scope_type,
+                                scope_id=scope_id,
+                                period_type=period_type,
+                                period_start=period_start,
+                                used=ledger_row[0],
+                                reserved=ledger_row[1],
+                                limit=ledger_row[2],
+                            )
+                        elif booked is None:
+                            _record_quota_metric(
+                                "budget_quota_total",
+                                scope_type=scope_type,
+                                period_type=period_type,
+                                result="released",
+                            )
+                    cur.execute(
+                        f"""UPDATE {self._reservations}
+                            SET resolution = %s, resolved_by = %s,
+                                resolved_at = now(), actual_cny = %s
+                            WHERE id = %s AND status = 'needs_review'
+                              AND resolution = ''""",
+                        (action, resolved_by, booked, reservation_id),
+                    )
+                    cur.execute(
+                        f"""INSERT INTO {self._resolution_audit} (
+                                reservation_id, action, reason, resolved_by,
+                                actual_cny, released_cny)
+                            VALUES (%s, %s, %s, %s, %s, %s)""",
+                        (reservation_id, action, reason, resolved_by,
+                         booked, held),
+                    )
+            logger.warning(
+                "[Quota] 待对账核销 reservation=%s action=%s held=%s booked=%s "
+                "by=%s reason=%s",
+                reservation_id, action, held, booked, resolved_by, reason,
+            )
+            return {
+                "reservation_id": reservation_id, "action": action,
+                "found": True, "already_resolved": False,
+                "released_cny": str(held),
+                "booked_cny": str(booked) if booked is not None else None,
+            }
+        except ValueError:
+            raise
+        except Exception as exc:
+            raise QuotaConfigurationError("待对账核销存储不可用") from exc
+
+    def dry_run_backlog_migration(self) -> dict[str, Any]:
+        """存量待对账分类 dry-run（第二批迁移）：只读，不写任何状态。
+
+        分类优先级：test_eval（测试/评测主体或请求标记）→ local_unpriced
+        （本地模型未定价审核）→ small_unknown（占额 ≤ 估算结算阈值）→
+        large_unknown（其余，需人工逐笔核对）。每类给出单数、占额、建议
+        动作与样例单据。
+        """
+        from backend.config.budget import BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY
+
+        suggested = {
+            "test_eval": "archived",
+            "local_unpriced": "released",
+            "small_unknown": "written_off",
+            "large_unknown": "settled_actual 或人工逐笔核对",
+        }
+        params = self._test_marker_sql_params()
+        params["threshold"] = str(BUDGET_ESTIMATED_SETTLEMENT_MAX_CNY)
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""SELECT cls, COUNT(*), COALESCE(SUM(reserved_cny), 0)
+                            FROM (
+                                SELECT CASE
+                                    WHEN {self._test_marker_where()} THEN 'test_eval'
+                                    WHEN review_reason IN (
+                                        'embedding_usage_or_price_unavailable',
+                                        'rerank_usage_or_price_unavailable'
+                                    ) THEN 'local_unpriced'
+                                    WHEN reserved_cny <= %(threshold)s
+                                        THEN 'small_unknown'
+                                    ELSE 'large_unknown'
+                                END AS cls, reserved_cny, id
+                                FROM (SELECT DISTINCT ON (id)
+                                             id, tenant_id, user_id, request_id,
+                                             review_reason, reserved_cny
+                                      FROM {self._reservations}
+                                      WHERE status = 'needs_review'
+                                        AND resolution = ''
+                                      ORDER BY id, created_at) open_reviews
+                            ) grouped
+                            GROUP BY cls""",
+                        params,
+                    )
+                    class_rows = cur.fetchall()
+                    cur.execute(
+                        f"""SELECT CASE
+                                    WHEN {self._test_marker_where()} THEN 'test_eval'
+                                    WHEN review_reason IN (
+                                        'embedding_usage_or_price_unavailable',
+                                        'rerank_usage_or_price_unavailable'
+                                    ) THEN 'local_unpriced'
+                                    WHEN reserved_cny <= %(threshold)s
+                                        THEN 'small_unknown'
+                                    ELSE 'large_unknown'
+                                END AS cls, id, reserved_cny, review_reason,
+                                request_id, user_id, tenant_id
+                            FROM (SELECT DISTINCT ON (id)
+                                         id, tenant_id, user_id, request_id,
+                                         review_reason, reserved_cny, created_at
+                                  FROM {self._reservations}
+                                  WHERE status = 'needs_review' AND resolution = ''
+                                  ORDER BY id, created_at) open_reviews
+                            ORDER BY cls, reserved_cny DESC""",
+                        params,
+                    )
+                    all_rows = cur.fetchall()
+            classes: dict[str, dict[str, Any]] = {}
+            for cls, count, total in class_rows:
+                classes[cls] = {
+                    "count": int(count),
+                    "held_cny": str(Decimal(str(total)).quantize(_SIX_PLACES)),
+                    "suggested_action": suggested.get(cls, "人工核对"),
+                    "samples": [],
+                }
+            for cls, rid, reserved, reason, request_id, user_id, tenant_id in all_rows:
+                bucket = classes.setdefault(cls, {
+                    "count": 0, "held_cny": "0.000000",
+                    "suggested_action": suggested.get(cls, "人工核对"),
+                    "samples": [],
+                })
+                if len(bucket["samples"]) < 10:
+                    bucket["samples"].append({
+                        "reservation_id": str(rid),
+                        "reserved_cny": str(Decimal(str(reserved)).quantize(_SIX_PLACES)),
+                        "review_reason": reason or "",
+                        "request_id": request_id or "",
+                        "user_id": user_id or "",
+                        "tenant_id": tenant_id or "",
+                    })
+            total_open = sum(c["count"] for c in classes.values())
+            total_held = sum(Decimal(c["held_cny"]) for c in classes.values())
+            return {
+                "open_count": int(total_open),
+                "open_held_cny": str(total_held.quantize(_SIX_PLACES)),
+                "classes": classes,
+                "note": "dry-run 只读；批量核销经 POST /admin/budgets/reconciliation/resolve-batch 执行，写库需人工确认",
+            }
+        except Exception as exc:
+            raise QuotaConfigurationError("存量迁移 dry-run 失败") from exc
+
     def reconciliation_summary(self) -> dict[str, Any]:
         """待对账总览：队列规模、最老滞留时长、占额与原因分布。"""
         from backend.config.budget import BUDGET_STALE_RESERVATION_HOURS
@@ -1316,6 +1599,7 @@ class PostgresQuotaStore:
                             FROM (SELECT DISTINCT ON (id) id, reserved_cny, created_at
                                   FROM {self._reservations}
                                   WHERE status = 'needs_review'
+                                    AND resolution = ''
                                   ORDER BY id, created_at) d"""
                     )
                     pending, held, oldest = cur.fetchone()
@@ -1323,6 +1607,7 @@ class PostgresQuotaStore:
                         f"""SELECT review_reason, COUNT(DISTINCT id)
                             FROM {self._reservations}
                             WHERE status = 'needs_review'
+                              AND resolution = ''
                             GROUP BY review_reason ORDER BY 2 DESC"""
                     )
                     by_reason = {row[0] or "unknown": int(row[1]) for row in cur.fetchall()}
@@ -1342,8 +1627,9 @@ class PostgresQuotaStore:
                     cur.execute(
                         f"""SELECT COUNT(DISTINCT id),
                                    COUNT(DISTINCT CASE WHEN status = 'needs_review'
+                                                        AND resolution = ''
                                                        THEN id END)
-                            FROM (SELECT DISTINCT ON (id) id, status
+                            FROM (SELECT DISTINCT ON (id) id, status, resolution
                                   FROM {self._reservations}
                                   WHERE created_at >= %s
                                   ORDER BY id, created_at) w""",
@@ -1404,31 +1690,53 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("待对账汇总读取失败") from exc
 
-    def list_pending_review(self, limit: int = 100) -> list[dict[str, Any]]:
-        """待对账明细（needs_review + 超龄未回收的 reserved），按最老优先。"""
+    def list_pending_review(
+        self,
+        limit: int = 100,
+        *,
+        include_closed: bool = False,
+        include_test: bool = False,
+    ) -> list[dict[str, Any]]:
+        """待对账明细（needs_review + 超龄未回收的 reserved），按最老优先。
+
+        默认只显示开态（resolution=''）且非测试/评测数据；管理端筛选可
+        打开已核销（include_closed）与测试数据（include_test）视图。
+        """
         from backend.config.budget import BUDGET_STALE_RESERVATION_HOURS
 
         capped = max(1, min(limit, 500))
         cutoff = datetime.now(timezone.utc) - timedelta(
             hours=float(BUDGET_STALE_RESERVATION_HOURS)
         )
+        closed_clause = ""
+        if not include_closed:
+            closed_clause = " AND resolution = ''"
+        test_clause = ""
+        if not include_test:
+            test_clause = f" AND NOT {self._test_marker_where()}"
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    query_params: dict[str, Any] = {
+                        "cutoff": cutoff,
+                        **self._test_marker_sql_params(),
+                    }
                     cur.execute(
                         f"""SELECT DISTINCT ON (id) id, request_id, user_id, tenant_id,
                                    scope_type, scope_id, period_type, period_start,
-                                   reserved_cny, status, review_reason, created_at
+                                   reserved_cny, status, review_reason, created_at,
+                                   resolution, resolved_by, resolved_at, actual_cny
                             FROM {self._reservations}
-                            WHERE status = 'needs_review'
-                               OR (status = 'reserved' AND created_at < %s)
+                            WHERE (status = 'needs_review'{closed_clause}
+                                   OR (status = 'reserved' AND created_at < %(cutoff)s)){test_clause}
                             ORDER BY id, created_at""",
-                        (cutoff,),
+                        query_params,
                     )
                     rows = cur.fetchall()
             items: dict[str, dict[str, Any]] = {}
             for (rid, request_id, user_id, tenant_id, scope_type, scope_id,
-                 period_type, period_start, reserved, status, reason, created_at) in rows:
+                 period_type, period_start, reserved, status, reason, created_at,
+                 resolution, resolved_by, resolved_at, actual_cny) in rows:
                 item = items.setdefault(rid, {
                     "reservation_id": str(rid),
                     "request_id": request_id,
@@ -1438,6 +1746,13 @@ class PostgresQuotaStore:
                     "status": status,
                     "review_reason": reason or "",
                     "created_at": created_at.isoformat(),
+                    "resolution": resolution or "",
+                    "resolved_by": resolved_by or "",
+                    "resolved_at": resolved_at.isoformat() if resolved_at else None,
+                    "actual_cny": (
+                        str(Decimal(str(actual_cny)).quantize(_SIX_PLACES))
+                        if actual_cny is not None else None
+                    ),
                     "periods": [],
                 })
                 item["periods"].append(
