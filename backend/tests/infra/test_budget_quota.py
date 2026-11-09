@@ -282,3 +282,26 @@ def test_billing_mismatch_excludes_estimated_settlement(store):
                 """SELECT DISTINCT settle_kind FROM budget_reservations
                    WHERE id = %s""", (estimated.reservation_id,))
             assert cur.fetchone()[0] == 'estimated'
+
+
+def test_resolution_audit_table_is_append_only(store):
+    """迁移 146:审计行 UPDATE/DELETE 被 DB 触发器拒绝——append-only
+    从应用层纪律升级为物理约束(仿 model_price 053 先例)。"""
+    run = f'audit-apx-{uuid4().hex}'
+    reservation = _open_reservation(store, run, '0.20')
+    store.resolve_needs_review(
+        reservation.reservation_id, action='released',
+        reason='确认供应商未计费', resolved_by='user:test-admin',
+    )
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT id FROM budget_reservation_resolutions
+                   WHERE reservation_id = %s""", (reservation.reservation_id,))
+            audit_id = cur.fetchone()[0]
+            with pytest.raises(psycopg2.Error):
+                cur.execute(
+                    """UPDATE budget_reservation_resolutions
+                       SET reason = 'attempted-tamper' WHERE id = %s""",
+                    (audit_id,))
+            conn.rollback()

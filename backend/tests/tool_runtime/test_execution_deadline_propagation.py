@@ -235,7 +235,12 @@ def resilience_env(monkeypatch):
         lambda *a, **k: reserve_calls.append(k),
     )
     monkeypatch.setattr(budget_mod, "release_model_reservation", lambda *a, **k: None)
-    monkeypatch.setattr(budget_mod, "review_model_reservation", lambda *a, **k: None)
+    # 1.3 收敛接缝（2026-11-10）：possibly_billed 分支已迁到
+    # settle_or_review_model_reservation，桩随接缝迁移（reserve 已整体
+    # 打桩 → reservation 恒为 None，收敛函数实际返回 not_reserved）。
+    monkeypatch.setattr(
+        budget_mod, "settle_or_review_model_reservation", lambda *a, **k: None,
+    )
     monkeypatch.setattr(budget_mod, "current_reservation_id", lambda: "")
     return breaker, reserve_calls
 
@@ -322,7 +327,11 @@ def stream_env(monkeypatch):
     monkeypatch.setattr(proxy_mod, "get_active_model_name", lambda: "test-model")
     monkeypatch.setattr(budget_mod, "reserve_model_call", lambda *a, **k: None)
     monkeypatch.setattr(budget_mod, "release_model_reservation", lambda *a, **k: None)
-    monkeypatch.setattr(budget_mod, "review_model_reservation", lambda *a, **k: None)
+    # 1.3 收敛接缝（2026-11-10）：possibly_billed 分支已迁到
+    # settle_or_review_model_reservation，桩随接缝迁移。
+    monkeypatch.setattr(
+        budget_mod, "settle_or_review_model_reservation", lambda *a, **k: None,
+    )
     monkeypatch.setattr(
         proxy_mod, "_settle_estimated_stream_usage", lambda *a, **k: True,
     )
@@ -377,7 +386,9 @@ def test_astream_caps_and_aborts_after_total_deadline(stream_env) -> None:
     stream_env._delay = 0.25
     got, timeout = asyncio.run(collect())
     assert got == ["a"]
-    assert isinstance(timeout, float) and 0 < timeout <= 0.3
+    # 剩余时限计算含时钟读取误差（实测 0.3000000000029104），加浮点容差
+    # 防批量运行时的边界抖动（2026-11-10 评审发现的 main 既有 flake）。
+    assert isinstance(timeout, float) and 0 < timeout <= 0.3 + 1e-9
 
 
 # ── 5. rag client：时限头与读超时封顶 ──
