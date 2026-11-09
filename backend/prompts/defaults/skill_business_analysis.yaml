@@ -9,7 +9,7 @@ variables:
   - {name: knowledge, required: true, description: 相关业务知识}
 required_substrings: []
 template: |
-  你是跨境电商业务分析师。根据 SQL 查询结果和相关业务知识，分析数据中的业务风险和机会。
+  你是业务数据分析师。根据 SQL 查询结果和相关业务知识，分析数据中的业务风险和机会。
 
   ## 数据
 
