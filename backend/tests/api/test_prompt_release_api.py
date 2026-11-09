@@ -166,3 +166,21 @@ def test_release_request_defaults_to_github_executor():
     from backend.app.api.routes.prompt_releases import CreateReleaseRequest
 
     assert CreateReleaseRequest(suite="pr_smoke").executor == "github"
+
+def test_approve_with_foreign_key_does_not_mutate(client, monkeypatch):
+    """审计 #58：归属校验先于状态迁移——错误 key 返回 404 且状态不变。"""
+    from backend.app.api.routes import prompt_releases as route
+
+    monkeypatch.setattr(route, "_check_permission", lambda *_a, **_k: None)
+    fake_service = _FakeReleaseService(_release(status="passed", prompt_key="key-b"))
+    with patch(
+        "backend.app.api.routes.prompt_releases.get_release_service",
+        return_value=fake_service,
+    ):
+        response = client.post(
+            "/api/prompts/key-a/releases/rel-1/approve",
+            headers=AUTH,
+        )
+
+    assert response.status_code == 404
+    assert fake_service.release.status == "passed"
