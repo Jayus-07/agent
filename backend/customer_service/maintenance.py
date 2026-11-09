@@ -16,6 +16,17 @@ from typing import Any
 from backend.shared.logger import logger
 
 
+def _sla_event_kwargs(item: dict) -> dict:
+    """SLA 告警封套参数（审计 #20：必须携带 tenant_id，否则广播跨租户）。"""
+    return {
+        "handoff_id": item["handoff_id"],
+        "conversation_id": item["conversation_id"],
+        "tenant_id": item["tenant_id"],
+        "level": item["level"],
+        "elapsed_seconds": item["elapsed_seconds"],
+    }
+
+
 def scan_handoff_timeouts() -> dict[str, Any]:
     """全局扫描转接等待进度 → SLA warning 提前告警 + closed 兜底。
 
@@ -125,10 +136,7 @@ def scan_handoff_timeouts() -> dict[str, Any]:
             get_agent_hub().publish(
                 f"sla.{item['level']}",
                 persist=True,
-                handoff_id=item["handoff_id"],
-                conversation_id=item["conversation_id"],
-                level=item["level"],
-                elapsed_seconds=item["elapsed_seconds"],
+                **_sla_event_kwargs(item),
             )
             logger.warning(
                 "[CSMaintenance] handoff SLA %s: conv=%s elapsed=%ss",

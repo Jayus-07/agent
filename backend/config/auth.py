@@ -33,6 +33,10 @@ USER_DEPT_HEADER = "X-User-Dept"
 USER_ROLES_HEADER = "X-User-Roles"
 # JWT permissions claim 经网关规范化后注入；客户端不可伪造。
 USER_PERMISSIONS_HEADER = "X-User-Permissions"
+# 审计 #33（可选加固）：网关与后端共享的信任标记。配置非空时，后端只接受
+# 携带该头的请求，防止直连 8000 伪造身份头；为空则维持“信任边界=网络边界”。
+GATEWAY_TRUST_HEADER = "X-Gateway-Trust"
+GATEWAY_TRUST_SECRET: str = os.getenv("GATEWAY_TRUST_SECRET", "").strip()
 
 _AUTH_MODES = ("legacy", "header", "strict")
 IDENTITY_SOURCE: str = os.getenv("IDENTITY_SOURCE", "header").strip().lower()
