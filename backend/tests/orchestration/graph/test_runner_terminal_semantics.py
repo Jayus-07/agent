@@ -145,6 +145,21 @@ class _HttpxTimedOutGraph:
         yield  # pragma: no cover
 
 
+class _SessionLoadFailingMemory(_FakeMemory):
+    """会话/记忆加载失败（安全审计 #1 泄漏路径的入口异常源）。"""
+
+    def __init__(self):
+        super().__init__()
+        self.start_session_calls = 0
+
+    def start_session(self, session_id, question, user_id="default",
+                      tenant_id="", event_scope=None):
+        self.start_session_calls += 1
+        raise RuntimeError(
+            "postgresql://demo:synthetic-secret-not-real@db.invalid/mem "
+            "connection refused")
+
+
 def _events_normal():
     return [
         {"router": {"route_mode": "plan", "cs_context": {}}},
@@ -324,3 +339,60 @@ def test_worker_timeout_trace_consistency_without_stop_event(_spy_finish):
     assert frame["data"]["code"] == "TIMEOUT"
     record, _ = _spy_finish.calls[0]
     assert record.metadata.get("error_code") == "TIMEOUT"
+
+
+# =============================================
+# 安全审计 #1：会话加载失败不泄漏异常原文（2026-11-09）
+# =============================================
+
+def _make_system_with_memory(graph, memory):
+    """同 _make_system，但注入自定义 memory（start_session 抛异常变体）。"""
+    sys_obj = MultiAgentSystem.__new__(MultiAgentSystem)
+    sys_obj._graph = graph
+    sys_obj._memory = memory
+    sys_obj._skill_nodes = {"rag_skill"}
+    sys_obj._runner = GraphRunner(
+        graph=graph, memory=memory, skill_nodes={"rag_skill"})
+    return sys_obj
+
+
+def test_session_load_error_frame_is_protocol_envelope(_spy_finish):
+    """start_session 失败：error 帧走协议封套（INTERNAL_ERROR 安全文案），
+    异常原文（含连接串形态）不进用户可见消息；trace 留痕。"""
+    memory = _SessionLoadFailingMemory()
+    sys_obj = _make_system_with_memory(_StaticGraph(_events_normal()), memory)
+    out = list(sys_obj.stream_events(
+        "测试问题", "s-1", user_id="u-1", idempotency_key="turn-key-load-1"))
+
+    assert memory.start_session_calls == 1
+    terminals = _terminal_frames(out)
+    assert len(terminals) == 1
+    frame = terminals[0]
+    assert frame["event"] == "error"
+    assert frame["data"]["code"] == "INTERNAL_ERROR"
+    assert frame["data"]["message"] == "服务器内部错误，请稍后重试。"
+    serialized = str(frame["data"])
+    assert "synthetic-secret-not-real" not in serialized
+    assert "db.invalid" not in serialized
+    assert "会话加载失败" not in serialized
+    assert not any(e["event"] == "done" for e in out)
+    validate_frame_sequence(out, require_meta=False)
+
+    record, _ = _spy_finish.calls[0]
+    assert _root(record).status == "error"
+    assert sys_obj._memory.end_turn_calls == []
+
+
+def test_session_load_error_ask_terminal_does_not_echo_exception(_spy_finish):
+    """ask() 公开终态（WhatsApp/外部渠道 sink）：只含泛化错误说明，
+    异常原文不进 answer——对照 system.py 注释『不把内部异常文本泄露
+    给用户』的声明。"""
+    memory = _SessionLoadFailingMemory()
+    sys_obj = _make_system_with_memory(_StaticGraph(_events_normal()), memory)
+    answer = sys_obj.ask(
+        "测试问题", "s-1", user_id="u-1", idempotency_key="turn-key-ask-1")
+
+    assert "synthetic-secret-not-real" not in answer
+    assert "db.invalid" not in answer
+    assert "会话加载失败" not in answer
+    assert "系统错误" in answer
