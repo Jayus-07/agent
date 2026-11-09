@@ -561,6 +561,14 @@ async def _ensure_conversation_access(
             logger.warning("[CSAdmin] resolve agent identity for read failed: %s", exc)
             agent_id = None
         if agent_id and str(agent_id) == str(assigned_agent_id):
+            # 审计 #19 残留：坐席分支原先只比对 agent_id，不与会话租户交叉校验。
+            # claim 已带租户谓词，这里再补一道，防历史脏 assignment。
+            if (
+                conv_tenant_id is not None
+                and ident.tenant_id
+                and conv_tenant_id != ident.tenant_id
+            ):
+                raise HTTPException(403, detail="无权访问其他租户的会话")
             return
     if ident.authenticated:
         if conv_user_id != ident.user_id:

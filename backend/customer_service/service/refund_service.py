@@ -815,6 +815,7 @@ class RefundService:
         decision: str,
         opinion: str,
         reviewer_id: str,
+        tenant_id: str | None = None,
     ) -> dict:
         """审核终态推进：approved 由订单系统回款钱包；终态不可回退。
 
@@ -835,6 +836,7 @@ class RefundService:
                     "opinion": opinion.strip(),
                     "reviewer_id": reviewer_id,
                     "operation_id": str(_uuid.uuid4()),
+                    **({"tenant_id": tenant_id} if tenant_id else {}),
                 },
             )
         except BusinessServiceError as exc:

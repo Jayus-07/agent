@@ -1697,6 +1697,9 @@ class RefundReviewInput(BaseModel):
     reviewer_id: str = Field(min_length=1, max_length=64)
     opinion: str = Field(min_length=1, max_length=500)
     operation_id: str  # UUID 幂等键
+    # 审计 #24：审核人租户。缺省为 None 兼容旧调用方（按 request_id 匹配），
+    # 提供时按 (request_id, tenant_id) 双匹配，与 detail 读端口径一致。
+    tenant_id: str | None = Field(default=None, max_length=64)
 
 
 @app.get("/business/refunds/review-queue")
@@ -1748,9 +1751,11 @@ def review_refund_request(
         "opinion": opinion,
     }
     with _STATE_LOCK:
+        reviewer_tenant = (payload.tenant_id or "").strip()
         request = next(
             (item for item in _REFUND_REQUESTS.values()
-             if item["request_id"] == request_id),
+             if item["request_id"] == request_id
+             and (not reviewer_tenant or item["tenant_id"] == reviewer_tenant)),
             None,
         )
         if request is None:

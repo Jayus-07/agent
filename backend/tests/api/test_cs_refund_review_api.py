@@ -100,10 +100,12 @@ def supervisor_client(db, monkeypatch):
     }
     review_calls: list[dict] = []
 
-    def fake_review(self, *, request_id, decision, opinion, reviewer_id):
+    def fake_review(self, *, request_id, decision, opinion, reviewer_id,
+                    tenant_id=None):
         review_calls.append(
             {"request_id": request_id, "decision": decision,
-             "opinion": opinion, "reviewer_id": reviewer_id},
+             "opinion": opinion, "reviewer_id": reviewer_id,
+             "tenant_id": tenant_id},
         )
         return dict(reviewed)
 
@@ -145,11 +147,14 @@ def test_review_persists_and_writes_audit(supervisor_client):
         json={"decision": "approved", "opinion": "凭证齐全，同意退款"},
     )
     assert response.status_code == 200, response.text
+    # 审计 #24：审核请求必须携带审核人租户，不能只依赖下游
+    assert review_calls[0]["tenant_id"] == TENANT
     body = response.json()
     assert body["status"] == "approved"
     assert review_calls == [{
         "request_id": "p5-req-1", "decision": "approved",
         "opinion": "凭证齐全，同意退款", "reviewer_id": ctx.agent_id,
+        "tenant_id": TENANT,
     }]
     with _pg() as conn, conn.cursor() as cur:
         cur.execute(

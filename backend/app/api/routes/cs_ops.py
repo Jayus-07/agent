@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.app.api.identity import resolve_identity
+from backend.app.api.identity import require_tenant_id, resolve_identity
 from backend.customer_service.dispatch import repository
 from backend.memory.database import AsyncSessionLocal, MemoryDatabaseUnavailable
 
@@ -26,7 +26,7 @@ async def require_cs_supervisor(request: Request):
     注入，客户端不可伪造）。api-key 服务通道不映射用户身份，一律 403，
     与 deps.require_admin_user 的 kind 语义一致。
     """
-    from backend.app.api.identity import resolve_identity
+    from backend.app.api.identity import require_tenant_id, resolve_identity
 
     ident = resolve_identity(request)
     if ident.authenticated and ({"admin", "supervisor"} & set(ident.roles)):
@@ -137,7 +137,7 @@ async def qa_reports(
     try:
         reports = await list_reports(
             start_date, end_date,
-            tenant_id=ident.tenant_id or "default",
+            tenant_id=require_tenant_id(ident),
         )
     except MemoryDatabaseUnavailable as exc:
         raise HTTPException(503, detail="Database unavailable") from exc
