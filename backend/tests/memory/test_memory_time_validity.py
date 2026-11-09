@@ -137,3 +137,145 @@ class TestSupersedeTimeValidity:
             loop.run_until_complete(_scenario())
         finally:
             loop.close()
+
+
+class _FakeEmbedding:
+    """容器测试无供应商凭据：文本确定性伪随机向量（隔离测试同款）。"""
+
+    def embed_query(self, text: str) -> list[float]:
+        import hashlib
+
+        seed = int(hashlib.sha256(text.encode()).hexdigest()[:8], 16)
+        return [(seed >> i) & 1 for i in range(1024)]
+
+
+class TestRecallFiltering:
+    """D3 召回过滤：失效/未生效事实不召回（5 路径统一口径的锁面）。"""
+
+    def test_invalidated_not_recalled(self, _isolated_user):
+        """失效行（is_active=False + invalid_at）不进召回与画像。"""
+        from datetime import datetime, timezone
+
+        from sqlalchemy import update as sa_update
+
+        from backend.memory.database import AsyncSessionLocal
+        from backend.memory.models.memory import MemoryRecord
+        from backend.memory.repository.memory_repo import MemoryRepository
+
+        user, tenant = _isolated_user
+        product = "customer_service"
+
+        async def _scenario():
+            async with AsyncSessionLocal() as db:
+                repo = MemoryRepository(db)
+                await repo.insert(MemoryRecord(
+                    tenant_id=tenant, product=product, user_id=user,
+                    session_id="", memory_type="preference",
+                    content=f"{user} 偏好简洁报表", embedding=_FakeEmbedding().embed_query("x"),
+                    origin="explicit", confidence_score=0.9,
+                    verification_status="verified", scope="user_global",
+                ))
+                # 模拟任意失效来源（dreaming 矛盾失效等）与 supersede 同口径
+                await db.execute(sa_update(MemoryRecord).where(
+                    MemoryRecord.user_id == user,
+                ).values(is_active=False,
+                         invalid_at=datetime.now(timezone.utc)))
+                await db.commit()
+
+                emb = _FakeEmbedding().embed_query(f"{user} 偏好")
+                recalled = await repo.search_hybrid(
+                    emb, user, tenant_id=tenant, product=product)
+                profile = await repo.list_active_profile(
+                    user, tenant_id=tenant, product=product)
+            assert recalled == [], "失效行仍被召回"
+            assert profile == [], "失效行仍进画像"
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_scenario())
+        finally:
+            loop.close()
+
+    def test_future_valid_from_not_recalled(self, _isolated_user):
+        """未生效事实（valid_from 未来）不召回；生效后恢复召回。"""
+        from datetime import datetime, timedelta, timezone
+
+        from backend.memory.database import AsyncSessionLocal
+        from backend.memory.models.memory import MemoryRecord
+        from backend.memory.repository.memory_repo import MemoryRepository
+
+        user, tenant = _isolated_user
+        product = "agent"
+
+        async def _scenario():
+            async with AsyncSessionLocal() as db:
+                repo = MemoryRepository(db)
+                future = datetime.now(timezone.utc) + timedelta(days=30)
+                await repo.insert(MemoryRecord(
+                    tenant_id=tenant, product=product, user_id=user,
+                    session_id="", memory_type="decision",
+                    content=f"{user} 决定下月启用新流程", embedding=_FakeEmbedding().embed_query("x"),
+                    origin="inferred", confidence_score=0.8,
+                    verification_status="verified", scope="user_global",
+                    valid_from=future,
+                ))
+                await db.commit()
+
+                emb = _FakeEmbedding().embed_query("新流程")
+                recalled = await repo.search_hybrid(
+                    emb, user, tenant_id=tenant, product=product)
+                profile = await repo.list_active_profile(
+                    user, tenant_id=tenant, product=product)
+                assert recalled == [], "未生效行被召回"
+                assert profile == [], "未生效行进画像"
+
+                # 生效后恢复
+                from sqlalchemy import update as sa_update
+
+                await db.execute(sa_update(MemoryRecord).where(
+                    MemoryRecord.user_id == user,
+                ).values(valid_from=datetime.now(timezone.utc) - timedelta(days=1)))
+                await db.commit()
+                recalled2 = await repo.search_hybrid(
+                    emb, user, tenant_id=tenant, product=product)
+                assert len(recalled2) == 1, "生效后仍不召回"
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_scenario())
+        finally:
+            loop.close()
+
+    def test_normal_recall_unaffected(self, _isolated_user):
+        """正常行（valid_from 过去、invalid_at NULL）召回与画像不受过滤影响。"""
+        from backend.memory.database import AsyncSessionLocal
+        from backend.memory.models.memory import MemoryRecord
+        from backend.memory.repository.memory_repo import MemoryRepository
+
+        user, tenant = _isolated_user
+        product = "travel"
+
+        async def _scenario():
+            async with AsyncSessionLocal() as db:
+                repo = MemoryRepository(db)
+                await repo.insert(MemoryRecord(
+                    tenant_id=tenant, product=product, user_id=user,
+                    session_id="", memory_type="preference",
+                    content=f"{user} 偏好靠窗座位", embedding=_FakeEmbedding().embed_query("x"),
+                    origin="explicit", confidence_score=0.9,
+                    verification_status="verified", scope="user_global",
+                ))
+                await db.commit()
+                emb = _FakeEmbedding().embed_query("座位")
+                recalled = await repo.search_hybrid(
+                    emb, user, tenant_id=tenant, product=product)
+                profile = await repo.list_active_profile(
+                    user, tenant_id=tenant, product=product)
+            assert len(recalled) == 1, "正常行被过滤误伤"
+            assert len(profile) == 1
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(_scenario())
+        finally:
+            loop.close()

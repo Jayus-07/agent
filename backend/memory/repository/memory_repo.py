@@ -78,6 +78,11 @@ class MemoryRepository:
             MemoryRecord.verification_status.in_(("verified", "legacy")),
             eligible_scope,
             (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+            # D3 时间有效性（第 2 期）：失效/未生效事实不召回。is_active
+            # 过滤已挡住现行失效路径（supersede 双写），本条件为全部失效
+            # 来源（矛盾失效/合并等）的防御性统一口径。
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         )
         if memory_type:
             query = query.where(MemoryRecord.memory_type == memory_type)
@@ -112,6 +117,9 @@ class MemoryRepository:
                 MemoryRecord.tenant_id == tenant_id,
                 MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
+                # D3：失效/未生效事实不参与去重候选（与召回同口径）
+                MemoryRecord.invalid_at.is_(None),
+                MemoryRecord.valid_from <= text("NOW()"),
             )
             .order_by(text("sim DESC"))
             .limit(top_n)
@@ -140,6 +148,9 @@ class MemoryRepository:
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.verification_status.in_(("verified", "legacy")),
                 (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+                # D3：失效/未生效事实不进画像（与召回同口径）
+                MemoryRecord.invalid_at.is_(None),
+                MemoryRecord.valid_from <= text("NOW()"),
             )
             .order_by(
                 MemoryRecord.importance_score.desc(),
@@ -163,6 +174,9 @@ class MemoryRepository:
             MemoryRecord.user_id == user_id,
             MemoryRecord.verification_status == "pending",
             (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+            # D3：失效/未生效候选不进待确认画像
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         ).order_by(MemoryRecord.created_at.desc()).limit(max(1, min(int(limit), 200))))
         result = await self._s.execute(query)
         return list(result.scalars().all())
@@ -293,6 +307,10 @@ class MemoryRepository:
             MemoryRecord.user_id == user_id,
             (MemoryRecord.expire_at.is_(None))
             | (MemoryRecord.expire_at > text("NOW()")),
+            # D3：失效/未生效行不在删除定位范围（已失效行靠 is_active 挡，
+            # 本条件与召回/画像保持同口径防御）
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         )
         if memory_key:
             normalized_key = normalize_memory_key(memory_key)
