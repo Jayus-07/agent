@@ -241,6 +241,52 @@ def _should_bypass_guard_for_human_relay(
         return False
 
 
+_SECURITY_CLARIFY_CATEGORIES = frozenset({
+    GuardCategory.PROMPT_INJECTION,
+    GuardCategory.HARMFUL,
+    GuardCategory.SENSITIVE_DATA,
+})
+
+
+def _is_security_clarify(guard_result) -> bool:
+    """安全类澄清不参与体验豁免（审计 #71）。
+
+    CLARIFY 豁免原本只看 action 与文本词法命中，弱注入命中
+    （category=PROMPT_INJECTION, risk=MEDIUM）可被「这样可以吗」类确认词
+    改写为 ALLOW 直接进图。与相邻的 _should_bypass_guard_for_human_relay
+    口径对齐：安全类别且非低风险一律保持澄清。
+    """
+    return (
+        guard_result.category in _SECURITY_CLARIFY_CATEGORIES
+        and guard_result.risk_level != RiskLevel.LOW
+    )
+
+
+def _should_exempt_guard_clarify(
+    guard_result,
+    question: str,
+    *,
+    domain_hint: str,
+    user_id: str,
+    session_id: str,
+) -> bool:
+    """转人工/确认/人工接管期是否豁免 CLARIFY（安全类不豁免）。"""
+    if guard_result.action != GuardAction.CLARIFY:
+        return False
+    if _is_security_clarify(guard_result):
+        return False
+    return (
+        _is_explicit_handoff(question or "")
+        or _is_confirmation_text(question or "")
+        or _should_bypass_guard_for_human_relay(
+            guard_result,
+            domain_hint=domain_hint,
+            user_id=user_id,
+            session_id=session_id,
+        )
+    )
+
+
 def _is_explicit_handoff(question: str) -> bool:
     """是否为显式转人工表述（复用 handoff 关键词/正则表，零模型调用）。
 
@@ -438,18 +484,11 @@ class GraphRunner:
             # 话术），cs_prefilter 直通层永远收不到。此处仅豁免体验层的
             # CLARIFY——改写为 ALLOW 放行进图，由 cs_prefilter 直通路由到
             # cs_handoff；BLOCK（安全拦截：注入/有害）不豁免。
-            if (
-                guard_result.action == GuardAction.CLARIFY
-                and (
-                    _is_explicit_handoff(question or "")
-                    or _is_confirmation_text(question or "")
-                    or _should_bypass_guard_for_human_relay(
-                        guard_result,
-                        domain_hint=domain_hint,
-                        user_id=user_id,
-                        session_id=session_id,
-                    )
-                )
+            if _should_exempt_guard_clarify(
+                guard_result, question or "",
+                domain_hint=domain_hint,
+                user_id=user_id,
+                session_id=session_id,
             ):
                 logger.info(
                     "[Runner] 转人工/确认/人工接管期豁免 input_guard clarify，放行进图: "
