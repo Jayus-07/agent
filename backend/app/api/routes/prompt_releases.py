@@ -247,11 +247,15 @@ async def approve_release(
     operator: OperatorIdentity = Depends(resolve_operator_role),
 ):
     _check_permission(key, "publish", operator.role)
+    service = get_release_service()
     try:
-        record = await get_release_service().approve(release_id, operator.actor)
+        # 审计 #58：归属校验必须先于状态迁移。此前先 approve 落库再比对
+        # prompt_key，跨 key 借道时响应 404 但目标 release 已被置为 approved。
+        record = await service.get(release_id)
         if record.prompt_key != key:
             raise KeyError(release_id)
-        return _to_dict(record)
+        approved = await service.approve(release_id, operator.actor)
+        return _to_dict(approved)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PromptReleaseError as exc:

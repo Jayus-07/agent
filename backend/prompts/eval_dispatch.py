@@ -217,9 +217,25 @@ class GitHubPromptEvalPoller:
     ) -> None:
         if str(result.get("release_id") or release.release_id) != release.release_id:
             raise ValueError("GitHub Artifact release_id 与当前 Release 不匹配")
-        external_run_id = str(result.get("external_run_id") or "")
-        if external_run_id and external_run_id != release.external_run_id:
+        # 审计 #57：artifact 身份必须绑定被评测对象，不能只认 release_id。
+        # workflow_dispatch 的 inputs 可被触发者指定，只比对 release_id 会让
+        # 任意 suite / 旧版本结果冒充当前 release 的评测结论。
+        external_run_id = str(result.get("external_run_id") or "").strip()
+        if not external_run_id or external_run_id != release.external_run_id:
             raise ValueError("GitHub Artifact external_run_id 与当前 Release 不匹配")
+        prompt_key = str(result.get("prompt_key") or "").strip()
+        if prompt_key != release.prompt_key:
+            raise ValueError("GitHub Artifact prompt_key 与当前 Release 不匹配")
+        version = result.get("version")
+        try:
+            version_matches = int(version) == release.version
+        except (TypeError, ValueError):
+            version_matches = False
+        if not version_matches:
+            raise ValueError("GitHub Artifact version 与当前 Release 不匹配")
+        suite = str(result.get("suite") or "").strip()
+        if suite and suite != release.eval_suite:
+            raise ValueError("GitHub Artifact suite 与当前 Release 不匹配")
 
 
 class LocalPromptEvalDispatcher:

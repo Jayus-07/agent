@@ -141,6 +141,8 @@ async def test_github_poller_records_artifact_result_after_run_completes():
         run={"id": 42, "status": "completed", "conclusion": "success"},
         result={
             "release_id": "rel-1",
+            "prompt_key": "rag.qa",
+            "version": 2,
             "external_run_id": "github-run-1",
             "eval_run_id": "eval-gh-1",
             "status": "passed",
@@ -180,6 +182,8 @@ async def test_github_poller_does_not_accept_passed_artifact_from_failed_run():
         run={"id": 42, "status": "completed", "conclusion": "failure"},
         result={
             "release_id": "rel-1",
+            "prompt_key": "rag.qa",
+            "version": 2,
             "external_run_id": "github-run-1",
             "eval_run_id": "eval-gh-1",
             "status": "passed",
@@ -217,3 +221,50 @@ async def test_github_dispatch_serializes_workflow_inputs_without_callback_url(
     assert captured["inputs"]["version"] == "2"
     assert captured["inputs"]["dataset_version"] == '{"version":"5.0.0"}'
     assert "callback_url" not in captured["inputs"]
+
+# ── 审计 #57：artifact 身份绑定 ────────────────────────────────
+
+
+def _github_release() -> PromptReleaseRecord:
+    return PromptReleaseRecord(
+        release_id="rel-1",
+        prompt_key="rag.qa",
+        version=2,
+        status=PromptReleaseStatus.RUNNING,
+        eval_suite="pr_baseline",
+        dataset_provenance={"version": "5.0.0"},
+        executor="github",
+        external_run_id="run-1",
+    )
+
+
+def _artifact(**overrides):
+    payload = {
+        "release_id": "rel-1",
+        "prompt_key": "rag.qa",
+        "version": 2,
+        "external_run_id": "run-1",
+        "status": "passed",
+    }
+    payload.update(overrides)
+    return payload
+
+
+@pytest.mark.parametrize("overrides", [
+    {"prompt_key": "rag.other"},
+    {"version": 1},
+    {"external_run_id": ""},
+    {"external_run_id": "run-2"},
+    {"suite": "other_suite"},
+])
+def test_artifact_identity_mismatch_is_rejected(overrides):
+    with pytest.raises(ValueError):
+        GitHubPromptEvalPoller._validate_result_identity(
+            _github_release(), _artifact(**overrides),
+        )
+
+
+def test_artifact_identity_matching_is_accepted():
+    GitHubPromptEvalPoller._validate_result_identity(
+        _github_release(), _artifact(suite="pr_baseline"),
+    )
