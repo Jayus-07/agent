@@ -246,6 +246,59 @@ def _permission_scope_pushdown(
     return {"$and": [metadata_filter, scope_cond]}
 
 
+def effective_tenant_id_from_filter(metadata_filter: dict | None) -> str:
+    """从 metadata_filter 提取生效租户；缺失 → "default"（#67/#60 收口基准）。
+
+    与 retrieve_documents._keep、pgvector where 编译器（缺 tenant 键的存量
+    行按 default 归属）同语义：空租户不等于无租户约束。兼容
+    _permission_scope_pushdown 的 $and 包装形态。
+    """
+    if isinstance(metadata_filter, dict):
+        tenant = metadata_filter.get("tenant_id")
+        if not tenant:
+            for cond in metadata_filter.get("$and") or []:
+                if isinstance(cond, dict) and cond.get("tenant_id"):
+                    tenant = cond["tenant_id"]
+                    break
+        if tenant:
+            return str(tenant)
+    return "default"
+
+
+def _context_tenant_id() -> str:
+    """从请求上下文借读生效租户（上下文缺失 → default）。
+
+    仅供扩展 get 的 where 谓词使用；收口裁决一律走
+    effective_tenant_id_from_filter(_Staging.metadata_filter)。
+    """
+    try:
+        from backend.rag.context import get_context
+
+        return effective_tenant_id_from_filter(get_context().metadata_filter)
+    except Exception:  # noqa: BLE001 — 借读失败按 default，收口过滤仍兜底
+        return "default"
+
+
+def _keep_docs_in_tenant(docs: list, tenant_id: str) -> list:
+    """按生效租户后过滤（缺 tenant 键的存量行按 default 归属）。
+
+    扩展路径（adaptive 扩 K / parent / neighbor / 引用表格）按 doc_id 或
+    chunk_id 直取存储，不经过检索 where 下推；跨租户同键行在此统一剔除，
+    与 retrieve_documents._keep 的租户分支同语义（#60/#67）。
+    """
+    kept = [
+        d for d in docs
+        if str((d.metadata or {}).get("tenant_id") or "default") == tenant_id
+    ]
+    dropped = len(docs) - len(kept)
+    if dropped:
+        logger.info(
+            f"ChunkLevelRetriever: 租户收口剔除越界租户文档 {dropped} 条 "
+            f"(tenant={tenant_id})"
+        )
+    return kept
+
+
 def _keep_docs_in_allowed_kbs(docs: list, allowed: set, span=None) -> list:
     """主体已声明时强制白名单：只保留授权库的文档（未知 kb 一律剔除）。
 
@@ -740,6 +793,11 @@ class ChunkLevelRetriever(BaseRetriever):
             return None
         logger.warning(f"ChunkLevelRetriever: Stage 2 无结果，尝试 Neighbor Expansion")
         fallback_docs = self._neighbor_expansion(st.query, st.doc_ids, st.metadata_filter)
+        # 租户收口先行（#60）：neighbor 按 doc_id 直取全文不走 where 下推，
+        # 与 _stage2_postprocess 同语义（缺键行按 default 归属）。
+        if fallback_docs:
+            fallback_docs = _keep_docs_in_tenant(
+                fallback_docs, effective_tenant_id_from_filter(st.metadata_filter))
         if st.authorized is not None and fallback_docs:
             fallback_docs = _keep_docs_in_allowed_kbs(fallback_docs, st.authorized, st.span)
         elif st.cross_kb_fallback and fallback_docs:
@@ -793,6 +851,10 @@ class ChunkLevelRetriever(BaseRetriever):
         st.docs = attach_referenced_context(st.docs, self._lookup_referenced_tables)
 
         # ── 收口过滤：adaptive 扩展可能再拉入文档，统一在此执行 ──
+        # 租户先行（#60/#67，2026-11-09）：扩 K/parent/引用表格按 doc_id、
+        # chunk_id 直取存储不走 where 下推，跨租户同键行在此统一剔除。
+        st.docs = _keep_docs_in_tenant(
+            st.docs, effective_tenant_id_from_filter(st.metadata_filter))
         # 已声明主体 → 白名单强制（无条件）；未声明 → 仅跨库兜底剔除 test 库
         if st.authorized is not None:
             st.docs = _keep_docs_in_allowed_kbs(st.docs, st.authorized, st.span)
@@ -865,7 +927,12 @@ class ChunkLevelRetriever(BaseRetriever):
         missing_ids = [chunk_id for chunk_id in chunk_ids if chunk_id not in found]
         if not missing_ids:
             return result
-        data = self.vectordb.get(where={"chunk_id": {"$in": missing_ids}})
+        # 租户谓词下推（#60）：chunk_id $in 直取不带上限约束时，跨租户同键
+        # 行会被整段拉回；与检索 where 同语义（default 放行缺键存量行）。
+        data = self.vectordb.get(where={
+            "chunk_id": {"$in": missing_ids},
+            "tenant_id": _context_tenant_id(),
+        })
         ids = data.get("ids") or []
         documents = data.get("documents") or []
         metadatas = data.get("metadatas") or []
@@ -1019,7 +1086,12 @@ class ChunkLevelRetriever(BaseRetriever):
 
         # 拉取文档全文
         try:
-            results = self.doc_db.get(where={"doc_id": {"$in": doc_ids[:5]}})
+            # 租户谓词下推（#60）：doc_id $in 直取不携带租户条件时，跨租户
+            # 同键行会被整篇拉回并进入 LLM 上下文；与检索 where 同语义。
+            results = self.doc_db.get(where={
+                "doc_id": {"$in": doc_ids[:5]},
+                "tenant_id": effective_tenant_id_from_filter(metadata_filter),
+            })
             full_docs = []
             for i, content in enumerate(results.get("documents", [])):
                 meta = results["metadatas"][i] if i < len(results.get("metadatas", [])) else {}
@@ -1161,14 +1233,24 @@ class AdaptiveRetriever(BaseRetriever):
 
         logger.info(f"AdaptiveRetriever: Cluster 检测 (docs={clustered}, {len(clustered)}/{len(doc_counter)}) → Context Expansion")
         try:
-            results = self.doc_db.get(where={"doc_id": {"$in": clustered}})
+            # 租户谓词下推（#60，2026-11-09）：clustered 的 doc_id 虽来自已收口
+            # 的 base_retriever 结果，但 get 按 doc_id $in 直取——跨租户同键行
+            # 会被整篇替换进 LLM 上下文。谓词下推 + full_doc_map 后置双保险
+            # （后置兜底不严格执行 where 的 mock/替代存储）。
+            tenant = _context_tenant_id()
+            results = self.doc_db.get(where={
+                "doc_id": {"$in": clustered},
+                "tenant_id": tenant,
+            })
             full_doc_map = {}
             for i, content in enumerate(results["documents"]):
-                doc_id = results["metadatas"][i].get("doc_id")
-                if doc_id:
+                meta = results["metadatas"][i]
+                doc_id = meta.get("doc_id")
+                meta_tenant = str((meta or {}).get("tenant_id") or "default")
+                if doc_id and meta_tenant == tenant:
                     full_doc_map[doc_id] = Document(
                         page_content=content,
-                        metadata=results["metadatas"][i],
+                        metadata=meta,
                     )
 
             # ── 替换而非前置：full doc 替换其 source chunks，保持排序 ──
