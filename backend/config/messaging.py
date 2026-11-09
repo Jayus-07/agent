@@ -64,3 +64,15 @@ KAFKA_CONSUMER_ENABLED = os.getenv("KAFKA_CONSUMER_ENABLED", "false").strip().lo
 
 # 消费者组 ID（WhatsApp 入站消费）
 KAFKA_CONSUMER_GROUP = os.getenv("KAFKA_CONSUMER_GROUP", "ai-service")
+
+# 入站事件可信来源白名单（安全审计 #39 fail-closed）：Kafka PLAINTEXT 无
+# SASL，broker 消息体声明的身份不可直接信任。source 不在白名单、或事件缺
+# tenant_id/user_id 时消费者直接拒绝（不执行 ask、不发布回复）。默认
+# business-service = WhatsApp 闭环唯一合法生产者（与既有事件契约 fixture
+# 一致）；启用闭环前须与 Java 端 KafkaEventPublisher 的实际 source 值核对，
+# 并在 Java 契约补 tenant_id 字段。逗号分隔多个值。
+KAFKA_INBOUND_ALLOWED_SOURCES = {
+    s.strip()
+    for s in os.getenv("KAFKA_INBOUND_ALLOWED_SOURCES", "business-service").split(",")
+    if s.strip()
+}
