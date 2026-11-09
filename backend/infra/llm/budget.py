@@ -626,7 +626,9 @@ def settle_or_review_model_reservation(reason: str) -> str:
         )
     amount = Decimal(str(reserved_amount))
     try:
-        state.quota_store.settle(reservation, amount)
+        # settle_kind='estimated'（迁移 145）：DB 层标记保守估算结算，
+        # billing_mismatch 对账据此排除，避免设计内口径触发误报。
+        state.quota_store.settle(reservation, amount, settle_kind="estimated")
     except Exception as exc:  # noqa: BLE001 — 结算失败回退待对账，不静默丢账
         logger.warning(
             "[Budget] 估算结算失败，回退待对账 reservation=%s amount=%s: %s",

@@ -1088,10 +1088,20 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("预算预占存储不可用") from exc
 
-    def settle(self, reservation: PostgresQuotaReservation, actual_cny: Decimal) -> None:
+    def settle(
+        self,
+        reservation: PostgresQuotaReservation,
+        actual_cny: Decimal,
+        *,
+        settle_kind: str = "",
+    ) -> None:
         actual = Decimal(actual_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if actual < 0:
             raise ValueError("结算金额不能为负数")
+        if settle_kind not in ("", "estimated"):
+            raise ValueError(
+                f"非法结算标记: {settle_kind!r}（''=精确结算, 'estimated'=保守估算）"
+            )
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
@@ -1142,9 +1152,10 @@ class PostgresQuotaStore:
                             )
                     cur.execute(
                         f"""UPDATE {self._reservations}
-                            SET settled_cny = %s, status = 'settled', settled_at = now()
+                            SET settled_cny = %s, status = 'settled', settled_at = now(),
+                                settle_kind = %s
                             WHERE id = %s AND status = 'reserved'""",
-                        (actual, reservation.reservation_id),
+                        (actual, settle_kind, reservation.reservation_id),
                     )
         except Exception as exc:
             raise QuotaConfigurationError("预算结算存储不可用") from exc
@@ -1641,6 +1652,9 @@ class PostgresQuotaStore:
                     # 已结算预占按 request 聚合后与 V2 用量行（billed_cost_cny）
                     # 逐笔对账——正常恒 0；非 0 = 结算与记账分叉（少结/多结/
                     # 丢 usage 行），是对账日报的新红信号。
+                    # 2026-11-10：排除估算结算单（settle_kind='estimated'）——
+                    # 估算按预占上限入账而 llm_usage 无同额成本行，必然
+                    # "分叉"，属设计内保守口径而非事故信号（迁移 145）。
                     cur.execute(
                         f"""SELECT COUNT(*) FROM (
                                 SELECT r.request_id,
@@ -1655,6 +1669,7 @@ class PostgresQuotaStore:
                                                settled_cny
                                           FROM {self._reservations}
                                          WHERE status = 'settled'
+                                           AND COALESCE(settle_kind, '') = ''
                                            AND COALESCE(settled_at, created_at) >= %s
                                          ORDER BY id, created_at) r
                                  GROUP BY r.request_id

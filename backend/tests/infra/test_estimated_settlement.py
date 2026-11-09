@@ -24,10 +24,10 @@ class _Quota:
         self.released: list[object] = []
         self._settle_error = settle_error
 
-    def settle(self, reservation, amount):
+    def settle(self, reservation, amount, *, settle_kind: str = ""):
         if self._settle_error is not None:
             raise self._settle_error
-        self.settled.append((reservation, Decimal(amount)))
+        self.settled.append((reservation, Decimal(amount), settle_kind))
 
     def mark_needs_review(self, reservation, reason):
         self.reviewed.append(reason)
@@ -67,9 +67,11 @@ def test_small_unknown_usage_settles_at_reserved_cap(monkeypatch):
     quota = _Quota()
     status, _ = _run(quota, _reservation("0.50"), "call_failed_possibly_billed")
     assert status == "settled_estimated"
+    # 迁移 145：估算结算必须带 settle_kind='estimated' DB 标记，
+    # billing_mismatch 对账据此排除（设计内保守口径 ≠ 结算分叉事故）。
     assert quota.settled == [(SimpleNamespace(reservation_id="res-1",
                                               reserved_cny=Decimal("0.50")),
-                              Decimal("0.50"))]
+                              Decimal("0.50"), "estimated")]
     assert quota.reviewed == []
 
 
