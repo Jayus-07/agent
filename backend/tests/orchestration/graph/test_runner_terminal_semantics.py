@@ -73,12 +73,13 @@ class _FakeMemory:
         self.end_turn_calls = []
 
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id="", event_scope=None):
+                      tenant_id="", event_scope=None, **_kwargs):
+        # ADR-0012 第 1 期：runner 新增 product 等 kwargs——桩不关心该维度
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id="", idempotency_key=""):
+                 tenant_id="", idempotency_key="", **_kwargs):
         self.end_turn_calls.append((session_id, question, answer))
 
 
@@ -153,7 +154,7 @@ class _SessionLoadFailingMemory(_FakeMemory):
         self.start_session_calls = 0
 
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id="", event_scope=None):
+                      tenant_id="", event_scope=None, **_kwargs):
         self.start_session_calls += 1
         raise RuntimeError(
             "postgresql://demo:synthetic-secret-not-real@db.invalid/mem "
