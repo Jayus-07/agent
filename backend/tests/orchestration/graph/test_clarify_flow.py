@@ -648,3 +648,127 @@ class TestCsRefusalClarify:
         self._patch_guard(monkeypatch, allowed=False)
         assert _refusal_clarify(
             self._final_state(), {"question": "x", "session_id": "s1"}) is None
+
+
+# =====================================================
+# 澄清原因分流 + 有无选项卡分流（2026-11-09）
+# =====================================================
+
+class TestClarifyReasonAndCardSplit:
+    """基础设施降级不再伪装成“用户没说清”，正文只在真有选项时承诺选项。"""
+
+    def _state(self, **overrides) -> dict:
+        state = {
+            "question": "员工账号密码有什么要求？",
+            "product_session_id": "s-clarify-split",
+            "domain_hint": "main",
+        }
+        state.update(overrides)
+        return state
+
+    def _degraded_meta(self) -> dict:
+        return {
+            "domain": "unknown",
+            "domain_action": "clarify",
+            "domain_source": "fallback",
+            "decision_source": "llm_fallback",
+            "fallback_reason": "domain_classifier_degraded",
+            "need_clarification": True,
+            "clarification_reason": "no_registered_candidates",
+        }
+
+    def test_engine_degraded_clarify_returns_retry_notice(self):
+        from backend.orchestration.graph.clarify_content import (
+            CLARIFY_UNAVAILABLE_TEXT,
+        )
+        from backend.orchestration.graph.routing.hierarchical import (
+            _handle_hierarchical_meta,
+        )
+
+        out = _handle_hierarchical_meta(
+            self._degraded_meta(),
+            self._state(),
+            "员工账号密码有什么要求？",
+            {},
+        )
+        assert out["route_mode"] == "clarify"
+        assert out["final_answer"] == CLARIFY_UNAVAILABLE_TEXT
+        assert not out.get("_clarify")
+        assert out["need_clarification"] is False
+        assert out["router_fallback_reason"] == "domain_classifier_degraded"
+        assert out["clarification_reason"] == (
+            "router_unavailable:domain_classifier_degraded"
+        )
+
+    def test_engine_ambiguous_clarify_keeps_options_card(self, monkeypatch):
+        from backend.orchestration.graph import clarify_content
+        from backend.orchestration.graph.routing.hierarchical import (
+            _handle_hierarchical_meta,
+        )
+
+        monkeypatch.setattr(clarify_content, "clarify_allowed",
+                            lambda sid, q="": True)
+        monkeypatch.setattr(clarify_content, "mark_clarified",
+                            lambda sid, q="", **k: None)
+        meta = {
+            "domain": "unknown",
+            "domain_action": "clarify",
+            "domain_source": "embedding",
+            "decision_source": "domain_capability_policy",
+            "fallback_reason": "",
+            "need_clarification": True,
+            "clarification_reason": "low_confidence",
+        }
+        out = _handle_hierarchical_meta(
+            meta, self._state(), "帮我弄一下", {},
+        )
+        assert out["_clarify"]["options"]
+        assert "final_answer" not in out
+
+    def test_loop_guard_fallback_has_no_empty_card(self, monkeypatch):
+        from backend.orchestration.graph import clarify_content
+        from backend.orchestration.graph.routing.hierarchical import (
+            _handle_hierarchical_meta,
+        )
+
+        monkeypatch.setattr(clarify_content, "clarify_allowed",
+                            lambda sid, q="": False)
+        meta = {
+            "domain": "unknown",
+            "domain_action": "clarify",
+            "domain_source": "embedding",
+            "decision_source": "domain_capability_policy",
+            "fallback_reason": "",
+            "need_clarification": True,
+            "clarification_reason": "low_confidence",
+        }
+        out = _handle_hierarchical_meta(
+            meta, self._state(), "帮我弄一下", {},
+        )
+        assert out["final_answer"] == clarify_content.CLARIFY_DETAIL_TEXT
+        assert not out.get("_clarify")
+        assert out["need_clarification"] is False
+
+    @pytest.mark.parametrize(
+        "extra,expected",
+        [
+            ({"final_answer": "您只能查询和操作自己的数据。"},
+             "您只能查询和操作自己的数据。"),
+            ({"_clarify": {"question": "请选择", "options": ["选项A"]}},
+             "这条请求我暂时无法直接处理。请从下方选项中选择，或换个说法描述您的需求。"),
+            ({"_clarify": {"question": "请补充", "options": []}},
+             "请补充更多信息，以便我继续为您处理。"),
+            ({}, "抱歉，当前服务暂时无法完成需求理解，请稍后重试。"),
+        ],
+    )
+    def test_reporter_clarify_text_follows_card(self, extra, expected, monkeypatch):
+        from backend.agents.reporter import reporter as reporter_mod
+
+        def _boom(*args, **kwargs):
+            raise AssertionError("clarify 模式不应进入 LLM 汇总")
+
+        monkeypatch.setattr(reporter_mod, "generate_final_answer", _boom)
+        state = {"question": "q", "route_mode": "clarify", "step_results": {}}
+        state.update(extra)
+        out = reporter_mod.reporter_node(state)
+        assert out["final_answer"] == expected
