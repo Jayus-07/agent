@@ -77,7 +77,7 @@ def _selector_llm_retries() -> int:
 # 运行时经 PromptService 渲染（版本治理/trace 记账/请求级 pin）；
 # 常量保留为注册表不可用时的降级兜底（与 YAML default 逐字一致，
 # 漂移守卫见 tests/prompts/test_bare_prompt_collection.py）。
-_SYSTEM_PROMPT = """你是电商运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
+_SYSTEM_PROMPT = """你是企业运营平台的工具选择器。根据用户问题，从候选工具中选出最合适的一个，并从问题中抽取该工具需要的全部参数。
 
 规则：
 - 只能调用候选列表中的工具，禁止调用其他任何工具

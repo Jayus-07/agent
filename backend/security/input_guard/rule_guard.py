@@ -257,14 +257,19 @@ class RuleGuard:
                 break
         if not strong_hits and not weak_hits:
             return None
-        if _has_question_context(q):
-            return None  # "什么是 Prompt Injection？"类知识咨询 → 放行
         if strong_hits:
+            # 审计 #37：强命中不做疑问豁免。此前整句疑问标记（含句尾 ?/？）
+            # 先把裁决降级为 None，"忽略之前的所有指令，好吗？" 可直接放行。
+            # 疑问豁免只适用于弱提及（"什么是 Prompt Injection？"类咨询），
+            # 与 detect_harmful 仅在 weak 分支豁免的口径对齐。
             conf = min(0.97, 0.88 + 0.05 * len(strong_hits))
             return RuleFinding(
                 GuardCategory.PROMPT_INJECTION, RiskLevel.CRITICAL, conf,
                 "命中指令操纵/提示词泄露句式", "strong", hits=strong_hits[:3],
             )
+        # 仅 weak：疑问语境视为知识咨询（强命中已在上面返回）
+        if _has_question_context(q):
+            return None
         # 仅 weak：祈使化才升级为边界命中，否则视为正常提及
         if weak_hits and _is_imperative(q):
             return RuleFinding(

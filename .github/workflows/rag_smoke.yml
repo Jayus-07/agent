@@ -269,6 +269,7 @@ jobs:
             backend/tests/api/test_agents_inventory_auth.py \
             backend/tests/api/test_eval_asset_authz.py \
             backend/tests/api/test_cs_tenant_binding.py \
+            backend/tests/security/test_input_guard_exemptions.py \
             backend/tests/test_mcp_returnfix_acceptance.py \
             backend/tests/sql/test_sql_production_closure.py \
             backend/tests/sql/test_sql_scope_subquery.py \
