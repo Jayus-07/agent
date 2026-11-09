@@ -52,3 +52,27 @@ def memory_daily_decay() -> dict:
     except Exception:  # 观测面异常不反噬任务
         pass
     return {"decayed": result.get("decayed", 0)}
+
+
+@celery_app.task(
+    name="memory.dreaming",
+    autoretry_for=(Exception,),
+    retry_kwargs={"max_retries": CELERY_MAX_RETRIES,
+                  "countdown": CELERY_RETRY_BACKOFF,
+                  "max": CELERY_RETRY_BACKOFF_MAX},
+)
+def memory_dreaming() -> dict:
+    """每日 dreaming 整合（ADR-0012 D4）：碎片合并/矛盾失效，动作走版本链。
+
+    开关 MEMORY_DREAMING_ENABLED 默认关：关闭时返回 skipped 正常终态
+    （不算失败不重试，与 eval 采样同保守模式）。核心逻辑在
+    MemoryDreamingService（与 Celery 解耦，可测试、可手动触发）。
+    """
+    import asyncio
+
+    from backend.infra.async_utils import run_on_worker_loop
+    from backend.memory.dreaming import MemoryDreamingService
+
+    result = run_on_worker_loop(MemoryDreamingService().run())
+    logger.info("[MemoryDreamingTask] %s", result)
+    return result
