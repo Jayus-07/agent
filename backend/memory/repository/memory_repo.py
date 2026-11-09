@@ -427,10 +427,15 @@ class MemoryRepository:
         return result.rowcount > 0
 
     async def deactivate(self, old_id: str) -> bool:
-        """原子 supersede 第 2 步：先置 inactive（superseded_by 等 new 落库后回填）。"""
+        """原子 supersede 第 2 步：先置 inactive（superseded_by 等 new 落库后回填）。
+
+        D3 时间有效性（第 2 期）：失效时刻与 is_active=False 同一 UPDATE
+        原子双写——失效行不召回（is_active 过滤），invalid_at 供审计还原
+        （何时被取代）。supersede 回填只动 superseded_by，不碰本列。
+        """
         result = await self._s.execute(
             update(MemoryRecord).where(MemoryRecord.id == old_id, MemoryRecord.is_active == True)
-            .values(is_active=False)
+            .values(is_active=False, invalid_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 
