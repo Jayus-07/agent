@@ -52,6 +52,25 @@ def _hierarchical_state_fields(meta: dict) -> dict:
     }
 
 
+_DEGRADED_DOMAIN_SOURCES = {"degraded", "fallback"}
+
+
+def _clarify_degraded_reason(meta: dict) -> str:
+    """返回非空 = 澄清由路由/向量/LLM 基础设施降级引起，不是用户没说清。
+
+    只在引擎明确标记降级时命中：llm_fallback / llm_failure / 域分类器
+    degraded。不能把所有非空 fallback_reason 都当降级，避免把正常的
+    低置信澄清误判成服务故障。
+    """
+    if not isinstance(meta, dict):
+        return ""
+    if meta.get("decision_source") == "llm_fallback" or meta.get("llm_failure"):
+        return str(meta.get("fallback_reason") or "llm_fallback")
+    if str(meta.get("domain_source") or "") in _DEGRADED_DOMAIN_SOURCES:
+        return "domain_classifier_degraded"
+    return ""
+
+
 def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                               route_context: dict) -> dict | None:
     """hierarchical 决策分派。
@@ -149,6 +168,34 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
 
     # ── unknown / 低置信：澄清（复用 L1 追问卡片与防循环守卫）─────
     if action == "clarify":
+        from backend.orchestration.graph.clarify_content import (
+            CLARIFY_DETAIL_TEXT,
+            CLARIFY_UNAVAILABLE_TEXT,
+        )
+
+        degraded_reason = _clarify_degraded_reason(meta)
+        if degraded_reason:
+            # 基础设施降级不是用户表达问题：不发追问卡、不消耗追问配额，
+            # 直接给可重试提示；否则用户会被引导去点无效的通用选项。
+            logger.warning(
+                "[RouterNode] 路由降级，返回可重试提示: %s", degraded_reason,
+            )
+            return {
+                **state,
+                **route_update_for_mode(
+                    "clarify",
+                    extra={
+                        "route_decision": None,
+                        **fields,
+                        "final_answer": CLARIFY_UNAVAILABLE_TEXT,
+                        "need_clarification": False,
+                        "clarification_reason": (
+                            f"router_unavailable:{degraded_reason}"
+                        ),
+                        "router_fallback_reason": degraded_reason,
+                    },
+                ),
+            }
         try:
             from backend.orchestration.graph.clarify_content import (
                 build_refusal_clarify,
@@ -200,7 +247,10 @@ def _handle_hierarchical_meta(meta: dict, state: dict, query: str,
                 extra={
                     "route_decision": None,
                     **fields,
-                    "need_clarification": True,
+                    # 防循环/文案构造失败时没有 options；不能再让前端渲染
+                    # 一张空选项卡，改为无卡的补充信息提示。
+                    "final_answer": CLARIFY_DETAIL_TEXT,
+                    "need_clarification": False,
                     "clarification_reason": (
                         fields.get("clarification_reason") or "clarification_unavailable"
                     ),

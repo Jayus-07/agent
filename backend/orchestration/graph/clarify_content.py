@@ -22,6 +22,9 @@
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
+from typing import Any
+
 from backend.config import REFUSAL_CLARIFY_ENABLED
 from backend.shared.logger import logger
 
@@ -77,6 +80,26 @@ _SQL_EMPTY_OPTIONS = (
 CLARIFY_STANDALONE_TEXT = (
     "这条请求我暂时无法直接处理。请从下方选项中选择，或换个说法描述您的需求。"
 )
+
+# 无可点选项时的短文案：不能承诺“下方选项”，只如实请用户补充信息。
+CLARIFY_DETAIL_TEXT = "请补充更多信息，以便我继续为您处理。"
+
+# 路由/向量/LLM 等基础设施降级：不是用户没说清，给可重试提示且不发追问卡。
+CLARIFY_UNAVAILABLE_TEXT = "抱歉，当前服务暂时无法完成需求理解，请稍后重试。"
+
+
+def clarify_standalone_text(card: Mapping[str, Any] | None) -> str:
+    """按追问卡的实际形态选择正文，避免承诺不存在的“下方选项”。
+
+    有卡且有选项 → 现有追问文案；
+    有卡但无选项 → 请用户补充信息；
+    无卡（路由降级/引擎异常）→ 可重试提示。
+    """
+    if not card:
+        return CLARIFY_UNAVAILABLE_TEXT
+    if card.get("options"):
+        return CLARIFY_STANDALONE_TEXT
+    return CLARIFY_DETAIL_TEXT
 
 
 # =====================================================
