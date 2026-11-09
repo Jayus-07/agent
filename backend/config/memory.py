@@ -69,6 +69,52 @@ MEMORY_INFERRED_DEFAULT_CONFIDENCE = float(os.getenv("MEMORY_INFERRED_DEFAULT_CO
 # 防 assistant 复述把模糊意图强化成高置信"决定"（Case B4），纯规则非 LLM
 MEMORY_HEDGED_CONFIDENCE_CAP = float(os.getenv("MEMORY_HEDGED_CONFIDENCE_CAP", "0.55"))
 
+# ── dreaming 整合任务（145 迁移，ADR-0012 第 2 期 D4/D-2/D-4 裁决）──
+# 低频后台整合：unkeyed 高相似碎片聚合（LLM 聚合表述，不引入新信息）+
+# 矛盾对失效（invalid_at 双写）。keyed 行不参与（同 key 由唯一约束 +
+# conflict supersede 治理）。红线：整合只调整有效性，不臆造新事实；
+# 动作走 supersede 版本链，可审计可回滚。
+# 开关默认关：上线后观测首批 trace 再开（与 eval 采样同保守模式）。
+MEMORY_DREAMING_ENABLED = os.getenv("MEMORY_DREAMING_ENABLED", "false").lower() == "true"
+# 合并候选相似度下限：高于 unkeyed dedup（0.85），只把"近乎同义"的碎片
+# 交给 LLM 三分类（合并/矛盾/独立），降低误合并面。
+MEMORY_DREAMING_MERGE_SIM_THRESHOLD = float(os.getenv("MEMORY_DREAMING_MERGE_SIM_THRESHOLD", "0.92"))
+# 预算护栏：单次运行最多处理的用户数 / 每用户最多簇数（每簇一次 LLM 调用）
+MEMORY_DREAMING_MAX_USERS_PER_RUN = int(os.getenv("MEMORY_DREAMING_MAX_USERS_PER_RUN", "50"))
+MEMORY_DREAMING_MAX_CLUSTERS_PER_USER = int(os.getenv("MEMORY_DREAMING_MAX_CLUSTERS_PER_USER", "3"))
+# 单用户 unkeyed 碎片扫描上限（行数太多说明该用户需多次批处理消化）
+MEMORY_DREAMING_MAX_FRAGMENTS_PER_USER = int(os.getenv("MEMORY_DREAMING_MAX_FRAGMENTS_PER_USER", "60"))
+# 安全类豁免（D-2）：内容命中这些关键词的行**不参与合并/失效**——漏判
+# （安全事实被整合）是高危害方向，清单宁宽勿严；keyed 行另受
+# MEMORY_SAFETY_KEY_PREFIXES 保护。
+MEMORY_SAFETY_CONTENT_PATTERNS = tuple(
+    p.strip() for p in os.getenv(
+        "MEMORY_SAFETY_CONTENT_PATTERNS",
+        "过敏,忌口,禁忌,不喝,不吃,素食,清真,宗教,无障碍,轮椅,紧急联系人,"
+        "血型,疾病,糖尿病,高血压,哮喘,药物,用药,剂量,癫痫,妊娠,怀孕",
+    ).split(",") if p.strip()
+)
+# keyed 行安全豁免前缀（写入侧 ImportanceScorer 提权同源）
+MEMORY_SAFETY_KEY_PREFIXES = tuple(
+    p.strip().lower() for p in os.getenv(
+        "MEMORY_SAFETY_KEY_PREFIXES", "health.,safety.,dietary.,medical.,emergency."
+    ).split(",") if p.strip()
+)
+
+# ── 衰减产品档位（145 迁移，ADR-0012 第 2 期 D5/D-3 裁决）──
+# 三产品统一引擎 + 差异配置：agent 慢 / customer_service 中 / travel 快。
+# 两档互斥区间（long_days 上档 ×long_factor；[short_days, long_days) 下档
+# ×short_factor）；系数全局一致（0.9/0.95），只有天数档位按产品差异化。
+# D-3 裁决：config 常量起步，DB 热更留到有运营需求时。
+MEMORY_DECAY_PROFILES: dict[str, dict[str, float | int]] = {
+    "agent": {"long_days": 180, "long_factor": 0.9,
+              "short_days": 90, "short_factor": 0.95},
+    "customer_service": {"long_days": 120, "long_factor": 0.9,
+                         "short_days": 60, "short_factor": 0.95},
+    "travel": {"long_days": 60, "long_factor": 0.9,
+               "short_days": 30, "short_factor": 0.95},
+}
+
 # ── L3 读取管线（048+，STOP D：Safe Injection + Relevance Gate）──
 # 候选召回数（SQL eligibility 后的 top-N；沿用旧 top20 口径，不扩大召回）
 MEMORY_RETRIEVAL_CANDIDATES = int(os.getenv("MEMORY_RETRIEVAL_CANDIDATES", "20"))

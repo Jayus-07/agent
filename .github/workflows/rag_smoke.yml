@@ -286,6 +286,9 @@ jobs:
             backend/tests/memory/test_memory_store_evidence_gate.py \
             backend/tests/memory/test_memory_extraction_trace_link.py \
             backend/tests/memory/test_memory_store_tool_keying.py \
+            backend/tests/memory/test_memory_time_validity.py \
+            backend/tests/memory/test_memory_dreaming.py \
+            backend/tests/memory/test_memory_decay_runtime.py \
             backend/tests/security/test_input_guard_exemptions.py \
             backend/tests/prompts/test_prompt_eval_dispatch.py \
             backend/tests/api/test_prompt_release_api.py \

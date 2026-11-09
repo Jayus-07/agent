@@ -163,12 +163,21 @@ celery_app.conf.update(
             "options": {"queue": beat_queue("cs.faq.gap_review")},
         },
         # STOP C（2026-09-24）：Memory 衰减生命周期。每日 04:30 UTC 衰减
-        # 久未访问的 inferred/legacy 记忆并归档低重要性行；explicit 豁免
-        # （用户显式记忆不因时间消失）。幂等条件 UPDATE，失败自动重试。
+        # 久未访问的 inferred/legacy 记忆（第 2 期 D4 对齐：仅降权不归档）；
+        # explicit 豁免（用户显式记忆不因时间消失）。幂等条件 UPDATE，
+        # 失败自动重试。
         "memory-daily-decay": {
             "task": "memory.daily_decay",
             "schedule": crontab(hour=4, minute=30),
             "options": {"queue": beat_queue("memory.daily_decay")},
+        },
+        # ADR-0012 第 2 期（D4）：dreaming 整合。每日 03:30 UTC（decay 前）
+        # unkeyed 碎片合并/矛盾失效，动作走 supersede 版本链可回滚；
+        # MEMORY_DREAMING_ENABLED 默认关，关闭时空跑返回 skipped。
+        "memory-dreaming": {
+            "task": "memory.dreaming",
+            "schedule": crontab(hour=3, minute=30),
+            "options": {"queue": beat_queue("memory.dreaming")},
         },
         "memory-extraction-recovery": {
             "task": "memory.extraction_recovery",

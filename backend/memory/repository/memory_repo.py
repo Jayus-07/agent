@@ -11,6 +11,10 @@ from sqlalchemy import and_, delete, func, or_, select, update, text, type_coerc
 from sqlalchemy.ext.asyncio import AsyncSession
 from pgvector.sqlalchemy import Vector
 
+from backend.config.memory import (
+    MEMORY_SAFETY_CONTENT_PATTERNS,
+    MEMORY_SAFETY_KEY_PREFIXES,
+)
 from backend.memory.keying import (
     PRODUCT_DEFAULT,
     normalize_memory_domain,
@@ -78,6 +82,11 @@ class MemoryRepository:
             MemoryRecord.verification_status.in_(("verified", "legacy")),
             eligible_scope,
             (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+            # D3 时间有效性（第 2 期）：失效/未生效事实不召回。is_active
+            # 过滤已挡住现行失效路径（supersede 双写），本条件为全部失效
+            # 来源（矛盾失效/合并等）的防御性统一口径。
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         )
         if memory_type:
             query = query.where(MemoryRecord.memory_type == memory_type)
@@ -112,6 +121,9 @@ class MemoryRepository:
                 MemoryRecord.tenant_id == tenant_id,
                 MemoryRecord.product == product,
                 MemoryRecord.user_id == user_id,
+                # D3：失效/未生效事实不参与去重候选（与召回同口径）
+                MemoryRecord.invalid_at.is_(None),
+                MemoryRecord.valid_from <= text("NOW()"),
             )
             .order_by(text("sim DESC"))
             .limit(top_n)
@@ -140,6 +152,9 @@ class MemoryRepository:
                 MemoryRecord.user_id == user_id,
                 MemoryRecord.verification_status.in_(("verified", "legacy")),
                 (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+                # D3：失效/未生效事实不进画像（与召回同口径）
+                MemoryRecord.invalid_at.is_(None),
+                MemoryRecord.valid_from <= text("NOW()"),
             )
             .order_by(
                 MemoryRecord.importance_score.desc(),
@@ -163,6 +178,9 @@ class MemoryRepository:
             MemoryRecord.user_id == user_id,
             MemoryRecord.verification_status == "pending",
             (MemoryRecord.expire_at.is_(None)) | (MemoryRecord.expire_at > text("NOW()")),
+            # D3：失效/未生效候选不进待确认画像
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         ).order_by(MemoryRecord.created_at.desc()).limit(max(1, min(int(limit), 200))))
         result = await self._s.execute(query)
         return list(result.scalars().all())
@@ -293,6 +311,10 @@ class MemoryRepository:
             MemoryRecord.user_id == user_id,
             (MemoryRecord.expire_at.is_(None))
             | (MemoryRecord.expire_at > text("NOW()")),
+            # D3：失效/未生效行不在删除定位范围（已失效行靠 is_active 挡，
+            # 本条件与召回/画像保持同口径防御）
+            MemoryRecord.invalid_at.is_(None),
+            MemoryRecord.valid_from <= text("NOW()"),
         )
         if memory_key:
             normalized_key = normalize_memory_key(memory_key)
@@ -427,10 +449,15 @@ class MemoryRepository:
         return result.rowcount > 0
 
     async def deactivate(self, old_id: str) -> bool:
-        """原子 supersede 第 2 步：先置 inactive（superseded_by 等 new 落库后回填）。"""
+        """原子 supersede 第 2 步：先置 inactive（superseded_by 等 new 落库后回填）。
+
+        D3 时间有效性（第 2 期）：失效时刻与 is_active=False 同一 UPDATE
+        原子双写——失效行不召回（is_active 过滤），invalid_at 供审计还原
+        （何时被取代）。supersede 回填只动 superseded_by，不碰本列。
+        """
         result = await self._s.execute(
             update(MemoryRecord).where(MemoryRecord.id == old_id, MemoryRecord.is_active == True)
-            .values(is_active=False)
+            .values(is_active=False, invalid_at=datetime.now(timezone.utc))
         )
         return result.rowcount > 0
 
@@ -463,34 +490,52 @@ class MemoryRepository:
         return result.rowcount > 0
 
     async def apply_decay(self, days: int, factor: float,
-                          upper_days: int | None = None) -> int:
+                          upper_days: int | None = None,
+                          product: str | None = None) -> int:
         """衰减 [days, upper_days) 天未访问的 active 非 explicit 记录。
 
         upper_days 构成互斥区间（90~180 → 0.95，>180 → 0.9）——旧实现两档
         级联（>180 天被 ×0.9×0.95 双重衰减），接线时修正为互斥语义。
+        第 2 期（D5）：product 指定命名空间档位（decay.run 按产品循环）。
+        D-2 安全豁免：memory_key 命中白名单前缀、或内容命中安全关键词的
+        行不衰减（安全记忆必须永远参与自动注入，不得被降权挤出 top-K；
+        关键词清单宁宽勿严——误豁免只损失 rank 信号）。
         """
-        clause = "last_access_at < NOW() - (:days || ' days')::INTERVAL"
+        params: dict = {"factor": factor, "days": str(days)}
+        conditions = [
+            "is_active = TRUE",
+            "origin <> 'explicit'",
+            "last_access_at < NOW() - (:days || ' days')::INTERVAL",
+        ]
         if upper_days is not None:
-            clause += " AND last_access_at >= NOW() - (:upper || ' days')::INTERVAL"
+            conditions.append(
+                "last_access_at >= NOW() - (:upper || ' days')::INTERVAL")
+            params["upper"] = str(upper_days)
+        key_prefixes = list(MEMORY_SAFETY_KEY_PREFIXES)
+        if key_prefixes:
+            # 排除「匹配任一白名单前缀」的行 = 所有 NOT LIKE 同时成立（AND）；
+            # NULL（unkeyed）行不因本条件被排除：OR memory_key IS NULL 保位
+            conditions.append("(" + " OR ".join(["memory_key IS NULL"])
+                              + " OR (" + " AND ".join(
+                                  f"memory_key NOT LIKE :sk{i}"
+                                  for i in range(len(key_prefixes))
+                              ) + "))")
+            params.update({f"sk{i}": f"{p}%" for i, p in enumerate(key_prefixes)})
+        content_patterns = list(MEMORY_SAFETY_CONTENT_PATTERNS)
+        if content_patterns:
+            conditions.append("NOT (" + " OR ".join(
+                f"content LIKE :sp{i}" for i in range(len(content_patterns))
+            ) + ")")
+            params.update({f"sp{i}": f"%{p}%" for i, p in enumerate(content_patterns)})
+        if product is not None:
+            conditions.append("product = :product")
+            params["product"] = normalize_product(product)
         result = await self._s.execute(
-            text(f"""
-                UPDATE memory_records
-                SET importance_score = importance_score * :factor
-                WHERE is_active = TRUE
-                  AND origin <> 'explicit'
-                  AND {clause}
-            """),
-            {"factor": factor, "days": str(days),
-             **({"upper": str(upper_days)} if upper_days is not None else {})},
-        )
-        return result.rowcount
-
-    async def archive_stale(self, min_importance: float = 0.2) -> int:
-        result = await self._s.execute(
-            update(MemoryRecord)
-            .where(MemoryRecord.is_active == True,
-                   MemoryRecord.importance_score < min_importance,
-                   MemoryRecord.origin != "explicit")
-            .values(is_active=False)
+            text(
+                "UPDATE memory_records "
+                "SET importance_score = importance_score * :factor "
+                "WHERE " + " AND ".join(conditions)
+            ),
+            params,
         )
         return result.rowcount

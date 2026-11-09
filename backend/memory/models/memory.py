@@ -51,6 +51,14 @@ class MemoryRecord(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     last_access_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     expire_at = Column(DateTime(timezone=True), nullable=True)
+    # D3 时间有效性（145，ADR-0012 第 2 期）：事实生效/失效时刻。valid_from
+    # 首建写入（存量回填 created_at）；invalid_at 由 supersede/矛盾失效/
+    # dreaming 合并与 is_active=False 双写——失效行不召回，但行保留 +
+    # superseded_by 版本链可审计还原。列实际形态 timestamp without time zone
+    # （与表内既有时间列一致，写入按 UTC 约定）。
+    valid_from = Column(DateTime(timezone=True), nullable=False,
+                        default=lambda: datetime.now(timezone.utc))
+    invalid_at = Column(DateTime(timezone=True), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
     superseded_by = Column(UUID(as_uuid=True), ForeignKey("memory_records.id"), nullable=True)
 
