@@ -8,9 +8,16 @@ GET /agents  列出主图全部 Agent 节点（编排节点 / Skill 节点 / 域
 """
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
-router = APIRouter(prefix="/agents", tags=["Agents"])
+from backend.app.api.deps import require_editor_user
+
+# 路由级角色闸（审计 #2）：清单含 Agent 图节点与 Tool 源码路径，属管理端资产；
+# 对齐 admin_tools 的 tool_inventory/tool_stats（require_editor_user）。
+router = APIRouter(
+    prefix="/agents", tags=["Agents"],
+    dependencies=[Depends(require_editor_user)],
+)
 
 # 编排节点名单：与 builder.build_main_graph 的 add_node 调用一一对应。
 # 标签运行时取 builder._NODE_LABELS（节点标签的单一事实源），缺失时回退节点名。

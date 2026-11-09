@@ -95,7 +95,7 @@ export const NAV: NavEntry[] = [
         activeQuery: { key: 'tab', value: 'traces' },
         icon: <ListTree size={16} />, activePaths: ['/observability/traces'], section: '运行状态',
       },
-      { label: 'Agent 与工作流', path: '/agents', icon: <Bot size={16} /> },
+      { label: 'Agent 与工作流', path: '/agents', icon: <Bot size={16} />, minRole: 'editor' },
       { label: 'Agent 圆桌', path: '/roundtable', icon: <MessagesSquare size={16} />, minRole: 'admin', section: '服务观测' },
       { label: '任务中心', path: '/tasks', icon: <ClipboardList size={16} />, section: '异步任务' },
       { label: '定时任务', path: '/schedules', icon: <CalendarClock size={16} />, section: '异步任务' },

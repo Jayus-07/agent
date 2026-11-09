@@ -12,8 +12,15 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.app.api.deps import (
+    OperatorIdentity,
+    require_editor_user,
+    require_user_actor,
+)
 from backend.app.api.routes.agents import router as agents_router
 from backend.app.api.routes.capabilities import router as capabilities_router
+
+_EDITOR = OperatorIdentity(role="editor", actor="user:1")
 
 
 @pytest.fixture(scope="module")
@@ -21,6 +28,9 @@ def client():
     app = FastAPI()
     app.include_router(agents_router)
     app.include_router(capabilities_router)
+    # 契约测试只验响应结构，身份闸由 test_agents_inventory_auth 覆盖
+    app.dependency_overrides[require_editor_user] = lambda: _EDITOR
+    app.dependency_overrides[require_user_actor] = lambda: _EDITOR
     return TestClient(app)
 
 

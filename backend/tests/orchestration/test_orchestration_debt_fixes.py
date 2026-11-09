@@ -245,10 +245,14 @@ def test_agents_tools_endpoint():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
+    from backend.app.api.deps import OperatorIdentity, require_editor_user
     from backend.app.api.routes.agents import router as agents_router
 
     app = FastAPI()
     app.include_router(agents_router)
+    # /agents 清单已挂 editor 闸（审计 #2）；本用例只验 Tool 表契约
+    app.dependency_overrides[require_editor_user] = lambda: OperatorIdentity(
+        role="editor", actor="user:1")
     resp = TestClient(app).get("/agents/tools")
     assert resp.status_code == 200
     body = resp.json()
