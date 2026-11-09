@@ -272,6 +272,7 @@ jobs:
             backend/tests/api/test_agents_inventory_auth.py \
             backend/tests/api/test_eval_asset_authz.py \
             backend/tests/api/test_cs_tenant_binding.py \
+            backend/tests/travel/booking/test_booking_transition_whitelist.py \
             backend/tests/security/test_input_guard_exemptions.py \
             backend/tests/prompts/test_prompt_eval_dispatch.py \
             backend/tests/api/test_prompt_release_api.py \
