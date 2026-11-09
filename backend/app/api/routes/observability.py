@@ -882,7 +882,11 @@ async def skill_health(
 # ═══════════════════════════════════════════════════
 
 @router.post("/traces/{trace_id}/replay")
-async def replay_trace(trace_id: str):
+async def replay_trace(
+    trace_id: str,
+    request: Request,
+    _operator=Depends(_require_observability_admin),
+):
     """重放一条历史 trace：用原问题重新走一遍 Agent 链路（异步启动）。
 
     失败/降级 trace 的"重试"按钮后端。fire-and-forget：立即返回，
@@ -907,10 +911,22 @@ async def replay_trace(trace_id: str):
     tags = _get(data, "tags", {}) or {}
     kb_id = str(tags.get("kb_id", "default") or "default")
 
+    # 审计 #9：重放不再以 internal 默认主体执行——绑定触发者身份，
+    # 产品能力过滤与记忆归属按真实主体裁决（此前 user/tenant 落 default）。
+    from backend.app.api.identity import resolve_identity
+
+    _ident = resolve_identity(request)
+
     def _run():
         try:
             from backend.orchestration.graph.system import MultiAgentSystem
-            MultiAgentSystem().ask(question, session_id=session_id, kb_id=kb_id)
+            MultiAgentSystem().ask(
+                question, session_id=session_id, kb_id=kb_id,
+                user_id=_ident.user_id or "default",
+                tenant_id=_ident.tenant_id or "",
+                roles=tuple(_ident.roles or ()),
+                product_source="observability_replay",
+            )
             logger.info(f"[Replay] trace {trace_id[:12]} 重放完成")
         except Exception:
             logger.warning(f"[Replay] trace {trace_id[:12]} 重放失败", exc_info=True)

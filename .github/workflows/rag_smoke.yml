@@ -253,6 +253,7 @@ jobs:
             backend/tests/api/test_auth_policy_and_json.py \
             backend/tests/api/test_map_navigate_key.py \
             backend/tests/api/test_internal_ai_actor_binding.py \
+            backend/tests/api/test_batch3_hardening.py \
             backend/tests/api/test_observability_unauth_closure.py \
             backend/tests/tools/test_data_collection_ssrf.py \
             backend/tests/api/test_rbac_super_admin_guard.py \

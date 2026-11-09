@@ -190,6 +190,8 @@ async def _assist_task(conversation_id: str, trigger: str) -> None:
                 "assist.suggestion",
                 persist=False,
                 conversation_id=conversation_id,
+                # 审计 #20：辅助建议含订单摘要，必须带租户，避免跨租户广播。
+                tenant_id=context.get("tenant_id") or "",
                 trigger=trigger,
                 intent=intent,
                 emotion=emotion,

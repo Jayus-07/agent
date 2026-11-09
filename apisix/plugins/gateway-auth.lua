@@ -45,7 +45,7 @@ local concat          = table.concat
 -- 此处置为剥离属提前防御；大小写变体无需单列——ngx.req.set_header 对头名大小写不敏感，会一并清除）
 -- X-User-Roles/X-User-Permissions/X-Tenant-Id 由本插件注入（JWT claim → 逗号分隔/原值），
 -- 同样禁止客户端伪造
-local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept", "X-User-Roles",
+local FORGED_HEADERS  = { "X-Auth-Type", "X-User-Id", "X-User-Name", "X-User-Dept", "X-User-Roles", "X-Gateway-Trust",
                           "X-User-Permissions", "X-Tenant-Id", "X-Operator-Role", "X-Operator-Id" }
 
 local HEADER_AUTH_TYPE = "X-Auth-Type"
@@ -227,6 +227,8 @@ local function build_conf()
     return {
         jwt_secret = jwt_secret,
         jwt_secret_previous = (prev ~= "" and prev) or nil,
+        -- 审计 #33：与后端 GATEWAY_TRUST_SECRET 配对的信任标记（可选）
+        trust_secret = env("GATEWAY_TRUST_SECRET", ""),
         issuer = env("JWT_ISSUER", "agent-platform"),
         clock_skew = tonumber(env("GATEWAY_AUTH_CLOCK_SKEW", "60")),
         alg_expected = expected_alg(jwt_secret),
@@ -510,6 +512,10 @@ function _M.access(_, ctx)
     -- ⑪ 注入可信身份头（仅验证全通过后）
     core.request.set_header(ctx, HEADER_AUTH_TYPE, "jwt")
     core.request.set_header(ctx, HEADER_USER_ID, user_id)
+    -- 审计 #33：配置了共享标记时注入，后端据此拒绝直连伪造身份头
+    if CONF.trust_secret ~= "" then
+        core.request.set_header(ctx, "X-Gateway-Trust", CONF.trust_secret)
+    end
     local uname = to_str_or_nil(payload.username)
     if uname then
         core.request.set_header(ctx, HEADER_USER_NAME, uname)

@@ -295,6 +295,8 @@ async def test_assist_task_publishes(enabled):
     assert event_type == "assist.suggestion"
     assert persist is False
     assert payload["conversation_id"] == "conv-1"
+    # 审计 #20：封套必须带租户，否则 _broadcast 会跳过租户过滤
+    assert payload["tenant_id"] == _CONTEXT["tenant_id"]
     assert payload["suggestions"][0]["text"] == "预计 3 天送达"
     # 任务收口后 in-flight 释放
     assert "conv-1" not in agent_assist._inflight

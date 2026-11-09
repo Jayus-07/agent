@@ -62,6 +62,18 @@ def _normalize_tenant_id(raw: str) -> str:
 
 
 def _from_headers(request: Request) -> Identity:
+    # 可选加固（审计 #33）：配置了 GATEWAY_TRUST_SECRET 时，必须带网关
+    # 注入的信任标记；直连 8000 的伪造身份头会因缺标记而退化为 guest。
+    from backend.config import auth as _auth_cfg
+
+    trust_secret = getattr(_auth_cfg, "GATEWAY_TRUST_SECRET", "")
+    if trust_secret:
+        import hmac as _hmac
+
+        provided = request.headers.get(_auth_cfg.GATEWAY_TRUST_HEADER, "")
+        if not _hmac.compare_digest(provided, trust_secret):
+            return Identity(user_id="", auth_type="guest", source="untrusted")
+
     uid = (request.headers.get(USER_ID_HEADER) or "").strip()
     auth_type = (request.headers.get(AUTH_TYPE_HEADER) or "").strip()
     if not uid or uid == _ANONYMOUS or auth_type == _ANONYMOUS:
