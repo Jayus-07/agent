@@ -232,6 +232,13 @@ class TestInputValidation:
                         json={"action": "maybe"})
         assert r.status_code == 422
 
+    def test_connection_detail_requires_idempotency_free_read(self, client):
+        """读端点不带幂等键可用；未命中租户的数据走 404（本测试无 DB，
+        连接不存在 → 404 由查库阶段返回；这里只确认不被 403 拦）。"""
+        r = client.get("/admin/mcp/connections/mcp_conn_none",
+                       headers=ADMIN_HEADERS)
+        assert r.status_code in (404, 500)  # 无 DB 时查询失败不伪装成功
+
 
 class TestToolListPayload:
     """目录列表载荷契约（P1 裁剪）：_tool_list_view 只下发摘要字段。
@@ -291,10 +298,3 @@ class TestToolListPayload:
         summary = admin_mcp._tool_list_view(self.FULL_ROW)
         for key, value in summary.items():
             assert detail.get(key) == value, f"{key} 在列表/详情两视图中不一致"
-
-    def test_connection_detail_requires_idempotency_free_read(self, client):
-        """读端点不带幂等键可用；未命中租户的数据走 404（本测试无 DB，
-        连接不存在 → 404 由查库阶段返回；这里只确认不被 403 拦）。"""
-        r = client.get("/admin/mcp/connections/mcp_conn_none",
-                       headers=ADMIN_HEADERS)
-        assert r.status_code in (404, 500)  # 无 DB 时查询失败不伪装成功

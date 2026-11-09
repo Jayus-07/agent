@@ -69,8 +69,8 @@
 ### 评审发现与处置
 
 1. **[P2，已修] TestToolListPayload 不被任何 CI 门禁执行**：`admin_mcp.py`/`admin_tools.py` 不在 `rag_smoke_path_filter.py` 相关路径中（admin 改动不触发 RAG Smoke 完整清单），`api-structural.yml` 只在 router/observability 路径触发，`admin-observability-auth` 只跑 `test_admin_observability_reads.py`——后端载荷契约测试只在本地跑，属漂移防线缺口（前端 vitest mock 与后端解耦，锁不住 `_tool_list_view` 单侧漂移）。处置：治理面 4 路径入 `PR_STATIC_ONLY_ENTRIES`（PR 触发免费预检、main push 不触发真实评测）+ rag_smoke 定向清单加 `test_admin_mcp_api.py::TestToolListPayload`（3 纯函数用例、无 DB）+ `test_rag_smoke_path_filter.py` 补正反触发回归与清单守卫断言（防"过滤器说触发、清单没跑用例"空转）。
-2. **[澄清] TestToolListPayload 用例数**：PROGRESS 原文"4 用例"实为类内 4 个 def——3 个新增（summary_fields_present / detail_only_fields_absent / summary_view_is_subset_of_detail_view）+ 1 个原有测试 `test_connection_detail_requires_idempotency_free_read` 因插入位置物理落入该类（归属移动、语义不匹配但 pytest 均执行、无行为影响）。
-3. **[澄清] TASK.md 行数**：tools 2093→786 实测 2088→786；mcp 1242→623 实测 1239→623（±5 行，不影响"纯移动"结论）。
+2. **[已修正] TestToolListPayload 用例数**：PROGRESS 原文"4 用例"实为 3 个新增契约用例（summary_fields_present / detail_only_fields_absent / summary_view_is_subset_of_detail_view）+ 1 个原有测试 `test_connection_detail_requires_idempotency_free_read` 因插入位置物理落入该类（属 TestInputValidation 的输入校验用例，与载荷契约无关）。该测试已移回 `TestInputValidation`，`TestToolListPayload` 恢复纯契约组（3 用例）。
+3. **[已修正] TASK.md 行数**：tools 2093→786 实测 2088→786；mcp 1242→623 实测 1239→623，TASK.md 已按实测修正（±5 行为拆分 commit 前统计口径出入，不影响"纯移动"结论）。
 4. **[已收口] getConnectionTools 死代码**：全仓 grep 证实无 import/调用（连接抽屉用 `getMcpTools()` 本地过滤）；已从 `api/mcp.ts` 删除并注释说明（后端 `/connections/{id}/tools` 端点保留，供直连与契约测试使用）。
 
 ### 评审结论

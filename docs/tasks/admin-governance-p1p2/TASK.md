@@ -12,7 +12,7 @@
 | P1-2 | `GET /admin/mcp/tools`、`GET /admin/mcp/connections/{id}/tools` 载荷裁剪：新增 `_tool_list_view`，hash/审核留痕/语义契约/examples 等大字段仅详情端点下发；invocation 保留（来源徽标+HTTP 编辑预填依赖） | ✅ b7e44b3 |
 | P1-3 | 前端 `errMessage` 三处重复下沉 `api/client.ts` | ✅ f197abd |
 | P1-4 | `api/registry.ts` 运行时视图改名 `getRuntimeMcpServers/getRuntimeMcpTools`（+Runtime 类型前缀），消除与治理视图 `api/mcp.ts#getMcpTools` 同名不同义 | ✅ f197abd |
-| P2-5 | tools/page.tsx 2093→786 行、mcp/page.tsx 1242→623 行按组件拆分（纯移动零行为变化） | ✅ f01e02c |
+| P2-5 | tools/page.tsx 2088→786 行、mcp/page.tsx 1239→623 行按组件拆分（纯移动零行为变化） | ✅ f01e02c |
 | P2-6 | react-query 增量样板：FailureAnalysisSection、ConnectionHealthSection 迁移 useQuery；frontend-guide 增补数据层约定 | ✅ d4c85dd |
 
 ## 明确不做
