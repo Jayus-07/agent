@@ -165,6 +165,7 @@ jobs:
           # 门禁机制与路径过滤的定向回归（免费：无付费模型调用、不读
           # API Secrets；不扩大为全量 pytest）。
           python -m pytest tests/test_rag_smoke_path_filter.py \
+            backend/tests/api/test_admin_mcp_api.py::TestToolListPayload \
             tests/evaluation/test_seed_eval_bindings_verify.py \
             tests/evaluation/test_release_gate_tier_samples.py \
             backend/tests/agents/test_planner_output_contract.py \

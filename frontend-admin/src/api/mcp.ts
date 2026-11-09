@@ -242,11 +242,9 @@ export async function getConnectionDetail(id: string): Promise<McpConnection> {
   return request<McpConnection>(`/api/admin/mcp/connections/${id}`)
 }
 
-export async function getConnectionTools(id: string): Promise<McpToolSummary[]> {
-  const data = await request<{ tools: McpToolSummary[] }>(
-    `/api/admin/mcp/connections/${id}/tools`)
-  return data.tools ?? []
-}
+// 注：不封装 GET /admin/mcp/connections/{id}/tools——连接抽屉的工具列表
+// 用全局 getMcpTools() 拉取后本地按 connection_id 过滤（PR #414 评审收口，
+// 该封装此前无任何消费方）。后端端点保留供直连使用。
 
 export async function getMcpTools(statusFilter = ''): Promise<McpToolSummary[]> {
   const qs = statusFilter ? `?status_filter=${encodeURIComponent(statusFilter)}` : ''
