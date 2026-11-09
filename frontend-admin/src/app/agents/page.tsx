@@ -14,6 +14,7 @@ import Link from 'next/link'
 import { ArrowRight, Bot, Database, GitBranch, RefreshCw, Sparkles, Wrench } from 'lucide-react'
 import { AssetActionButton, AssetPageShell, AssetSection, AssetStatCard, AssetState } from '@/components/layout/AssetPageShell'
 import ErrorState from '@/components/shared/ErrorState'
+import { ApiError } from '@/api/client'
 import { getAgents, getWorkflowCatalog, type AgentKind, type AgentNode, type WorkflowCatalogEntry } from '@/api/registry'
 import { atLeast } from '@/lib/auth'
 import { subflowAttribution, orderDomainGraphs } from '@/lib/domain-attribution'
@@ -157,7 +158,7 @@ function WorkflowCard({ workflow }: { workflow: WorkflowCatalogEntry }) {
 export default function AgentsPage() {
   const [data, setData] = useState<Awaited<ReturnType<typeof getAgents>> | null>(null)
   const [workflows, setWorkflows] = useState<WorkflowCatalogEntry[] | null>(null)
-  const [agentError, setAgentError] = useState(false)
+  const [agentError, setAgentError] = useState<null | 'forbidden' | 'failed'>(null)
   const [workflowError, setWorkflowError] = useState(false)
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -178,9 +179,10 @@ export default function AgentsPage() {
 
     if (agentsResult.status === 'fulfilled') {
       setData(agentsResult.value)
-      setAgentError(false)
+      setAgentError(null)
     } else {
-      setAgentError(true)
+      const reason = (agentsResult as PromiseRejectedResult).reason
+      setAgentError(reason instanceof ApiError && reason.status === 403 ? 'forbidden' : 'failed')
     }
     if (workflowsResult?.status === 'fulfilled') {
       setWorkflows(workflowsResult.value.workflows)
@@ -200,6 +202,12 @@ export default function AgentsPage() {
     return () => { requestSequence.current += 1 }
   }, [load])
 
+  const agentAlert = agentError === 'forbidden'
+    ? '无权限刷新清单，以下保留上次成功读取的数据。'
+    : agentError === 'failed'
+      ? '刷新失败，以下保留上次成功读取的数据。'
+      : null
+
   return (
     <AssetPageShell
       title="Agent 与工作流"
@@ -218,9 +226,10 @@ export default function AgentsPage() {
       <div className="space-y-4">
         <AssetSection title="Agent 节点" meta={data ? `${data.agents.length} 个` : undefined} bodyClassName="p-0">
           {loading && !data ? <AssetState>正在读取 Agent 注册表…</AssetState>
-            : agentError && !data ? <ErrorState title="Agent 注册表暂不可用" message="读取失败，请检查服务后重试。" onRetry={() => void load()} />
+            : agentError === 'forbidden' ? <ErrorState title="无权限查看 Agent 清单" message="该清单仅对编辑者及以上角色开放；如需访问请联系管理员开通。" />
+              : agentError === 'failed' && !data ? <ErrorState title="Agent 注册表暂不可用" message="读取失败，请检查服务后重试。" onRetry={() => void load()} />
               : <>
-                {agentError && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">刷新失败，以下保留上次成功读取的数据。</p>}
+                {agentAlert && <p role="alert" className="border-b border-amber-200 bg-amber-50 px-4 py-2 text-[12px] text-amber-900">{agentAlert}</p>}
                 {!data || data.agents.length === 0 ? <AssetState>注册表当前没有 Agent 节点。</AssetState>
                   : <div className="p-4">
                   <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
