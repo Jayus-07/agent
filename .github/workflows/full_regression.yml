@@ -177,11 +177,14 @@ jobs:
              GRANT USAGE ON SCHEMA product, \"order\", inventory, customer, crawler, finance, ai TO agent_readonly;
              GRANT SELECT ON ALL TABLES IN SCHEMA product, \"order\", inventory, customer, crawler, finance TO agent_readonly;
              GRANT SELECT ON ai.agent_tasks, ai.agent_trace TO agent_readonly;
-             REVOKE SELECT ON finance.wallet_balances, finance.wallet_ledger FROM agent_readonly;"
+             REVOKE SELECT ON finance.wallet_balances, finance.wallet_ledger, finance.invoices, finance.points_ledger, customer.tier_profiles, customer.invoice_titles FROM agent_readonly;"
           # 末行 REVOKE：schema 级 GRANT 会把 init_db 之后新建的业务表一并授给
-          # 只读角色（125_mall_wallet 的 wallet 两表实证，v3 run 41151145995
-          # test_readonly_grants_equal_declared_tables 越权告警）。新业务表
-          # 默认不纳管（fail-closed）；确需只读访问时在 083 口径显式登记。
+          # 只读角色（125_mall_wallet 的 wallet 两表实证，v3 run 41151145995；
+          # CS 能力批次 132/134/138 的 4 张表同型实证，v4 run 42601291303）。
+          # 与迁移 147_readonly_revoke_cs_business_tables.sql 同口径——迁移管
+          # 本地/生产，本行管 CI（GRANT 在 init_db 之后执行，会覆盖迁移的
+          # REVOKE）。新业务表默认不纳管（fail-closed）；确需只读访问时在
+          # 083 口径显式登记。
 
       - name: Suite pytest
         if: env.SKIP_SUITE != 'true'
