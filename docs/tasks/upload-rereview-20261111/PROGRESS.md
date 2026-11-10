@@ -188,3 +188,37 @@
 ### 过程事故记录（如实）
 
 - 批后评审时误执行 `git checkout main -- .`（本地 main 停在 c3f07de），把旧版文件污染进工作区+暂存区，导致 batch5 首轮验证出现 4 个假失败（SSE 测试因 knowledge.ts 被回退）。处置：git reset（mixed）+ git checkout HEAD -- .（未用 --hard），在干净基线重做 batch5 删除并复跑验证全绿。教训：`git checkout <branch> -- .` 在并行 worktree 场景等同覆盖工作区，后续一律禁用（用分支切换 `git checkout <branch>` 而非路径检出）。
+
+---
+
+## 会话收尾（2026-11-11 batch3~5 会话交接）
+
+### 本会话产出汇总
+
+| PR | 批次 | 内容 | 状态 |
+|----|------|------|------|
+| #434 | batch3 | 复审报告+排期落盘 | 已合并 |
+| #439 | batch4a | SSE 可靠性包（后端三态宽限 / 前端重连+活跃性看门狗+reader cancel） | 已合并 |
+| #444 | batch4b | 快修+体验包（batch_id 校验/文案脱敏/上限联动/窗口可用性/#9 测试） | 已合并 |
+| #445 | batch5 | 死代码收口（multi-query 三端+publish.py 死函数） | 已合并 |
+
+已合并远端分支 ×4 已删除；批后链路评审完成（三端 BFF 一致、死代码清零）。排期权威：followups TASK.md「batch6~7 排期」节（含新会话复审清单 R1~R7）。
+
+### 工作树状态（接手必读）
+
+- worktree：`D:/Program Files/workplace/agent-wt-upload-rereview`，分支 fix/upload-rereview-batch5（已合并，本会话收尾 docs 提交后可删）。开工新任务按规范自建新分支。
+- **node_modules Junction ×3**：worktree 的 frontend{,-admin,-cs}/node_modules 是指向主仓库同名目录的 Junction（worktree 无独立依赖）。本地跑测试用 `./node_modules/.bin/vitest.CMD / tsc.CMD`；若删除重建 worktree 需重新建 Junction（PowerShell New-Item -ItemType Junction）。
+- frontend-cs 本机 node_modules 不完整（缺 typescript）：cs 端 tsc 本地跑不了，依赖 CI 或重装。
+- 主仓库根有其他会话未跟踪文件：不触碰、不提交。
+
+### 接手会话第一步
+
+1. `git status` 核对工作区干净（本会话曾发生 `git checkout main -- .` 污染事故已恢复——**该命令禁用**，分支切换用 `git checkout <branch>` 不带 `-- .`）。
+2. 按 TASK.md R1~R7 复审清单以新鲜眼复审 batch4/5 改动，结论写回本 PROGRESS.md。
+3. 复审通过 → batch7（7.1 需启动 Docker）→ batch6.1 ADR（方案方向需用户拍板：新路径 vs Accept 头协商）。
+
+### 遗留验证欠账（如实）
+
+- batch4/5 全部改动未做部署级动态冒烟（Docker 未启动）：51MB 413 / 49MB 流式 / SSE 真实链路 / health 新字段 / batch_id 校验实测均 UNVERIFIED，batch7.1 闭环。
+- 后端 16 个 PG 依赖用例上轮为连接拒绝（环境性），batch7.2 复跑。
+- cs 端 tsc/vitest 本地无法跑（依赖不全 + 无 CI），batch7.3 补 CI 后闭环。
