@@ -15,6 +15,15 @@ import backend.app.api.routes.rag_upload as ru
 import backend.tasks.index_tasks as it
 
 
+@pytest.fixture(autouse=True)
+def _no_gateway_trust_secret(monkeypatch):
+    """SSE 归属校验走真实头解析；本机 .env 若配置 GATEWAY_TRUST_SECRET，
+    _FakeSSERequest 的身份头会退化为 guest → require_principal 401。
+    本文件测试的前提是「网关已验签并注入身份头」，故关闭信任加固。"""
+    from backend.config import auth as auth_cfg
+    monkeypatch.setattr(auth_cfg, "GATEWAY_TRUST_SECRET", "")
+
+
 def _mk_queue_ctx(monkeypatch):
     """构造 _progress_queues + Redis 写捕获环境，返回 (upload_id, events, redis_writes)。"""
     upload_id = "u-test-1"

@@ -96,6 +96,23 @@ def _make_rich_page_with_image(tmp_path, name="rich-image-region.pdf"):
     return str(path)
 
 
+@pytest.fixture(autouse=True)
+def _no_db_model_overrides():
+    """清空进程内模型覆盖层，钉死「无 DB 覆盖 → 代码默认」前提。
+
+    同进程先跑过触发 refresh_worker_model_registry 的测试（如
+    test_rag_upload_celery_mode 的 worker 用例）时，共享库的 OCR 角色绑定
+    会注入 model_roles._overrides，本文件期望本地 rapidocr 默认路径的用例
+    会误入「数据库供应商未配置 API Key」分支（2026-11-10 组合回归实测）。
+    文件内显式 patch resolve_effective 的 DB 绑定用例不受影响。
+    """
+    from backend.config import model_roles
+
+    model_roles.reset_overrides()
+    yield
+    model_roles.reset_overrides()
+
+
 @pytest.fixture
 def ocr_on(monkeypatch):
     """模拟 OCR 供应商可用，记录裁剪图像尺寸。"""
