@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generated_at": "2026-11-02T02:39:25+08:00",
-  "git_sha": "05e656e",
+  "generated_at": "2026-11-11T01:26:47+08:00",
+  "git_sha": "bd543ec",
   "tool_count": 43,
   "tools": {
     "booking_quote_tool": {
@@ -892,7 +892,7 @@
           "note": "腾讯LBS 日软预算闸门只装在旅游域 live 适配器上，本工具直连 HTTP 层不经闸门（用量仅供参考）；个人 Key 约 5 QPS"
         }
       },
-      "description_hash": "c7e1265e71884784",
+      "description_hash": "98fa46a748954451",
       "args_schema": {
         "from_location": {
           "schema": {
