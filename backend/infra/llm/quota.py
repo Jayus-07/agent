@@ -604,22 +604,50 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("预算策略审计读取失败") from exc
 
-    def list_subjects(self, limit: int = 200) -> list[dict[str, Any]]:
+    def list_subjects(
+        self, limit: int = 200, *, include_test: bool = False,
+    ) -> list[dict[str, Any]]:
         """读取真实主体（user/tenant 身份键）的预算窗口，金额以字符串返回。
 
         主体集合 = 账本出现过的身份键 ∪ 有显式 user/tenant 策略的身份键。
         模板作用域（platform/tenant_default）不再作为主体展示，只通过
         policy_source/effective_policy 说明继承来源。
+        测试/评测主体默认排除（2026-11-10 UX 走查）：scope_id 前缀命中
+        BUDGET_TEST_TENANT_PREFIX / BUDGET_TEST_REQUEST_PREFIXES 的主体只在
+        include_test=True 时返回，与待对账队列的测试数据开关同口径。
         """
+        from backend.config.budget import (
+            BUDGET_TEST_REQUEST_PREFIXES,
+            BUDGET_TEST_TENANT_PREFIX,
+        )
+
+        test_prefixes = tuple(
+            str(prefix).lower()
+            for prefix in (BUDGET_TEST_TENANT_PREFIX, *BUDGET_TEST_REQUEST_PREFIXES)
+        )
+
+        def _is_test_subject(scope_id: str) -> bool:
+            return str(scope_id).lower().startswith(test_prefixes)
+
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
+                    test_filter_sql = (
+                        "" if include_test
+                        # 注意 NOT LIKE ANY 语义是「至少一个不匹配」（恒真），
+                        # 必须整体取反：NOT (scope_id LIKE ANY (...))
+                        else " AND NOT (scope_id LIKE ANY(%(test_like)s))"
+                    )
                     cur.execute(
                         f"""SELECT scope_type, scope_id FROM {self._ledger}
                             WHERE scope_type IN ('user', 'tenant')
+                              {test_filter_sql}
                             GROUP BY scope_type, scope_id
-                            ORDER BY scope_type, scope_id LIMIT %s""",
-                        (limit,),
+                            ORDER BY scope_type, scope_id LIMIT %(limit)s""",
+                        {
+                            "limit": limit,
+                            "test_like": [p + "%" for p in test_prefixes],
+                        },
                     )
                     subjects = [(row[0], row[1]) for row in cur.fetchall()]
                     cur.execute(
@@ -653,91 +681,95 @@ class PostgresQuotaStore:
             platform = policies.get(("platform", "default"))
             seen: set[tuple[str, str]] = set()
             result: list[dict[str, Any]] = []
-            for scope_type, scope_id in sorted(set(subjects) | {
-                key for key in policies if key[0] in _IDENTITY_SCOPES
-            }):
-                if (scope_type, scope_id) in seen or len(result) >= limit:
-                    continue
-                seen.add((scope_type, scope_id))
-                if scope_type == "user":
-                    explicit = policies.get(("user", scope_id))
-                    # 任务 10（2026-11-10）：旧实现查 ("tenant", "") 空键且
-                    # 把用户 id 当租户 id——显式租户策略对用户永不生效，
-                    # 页面恒显示 tenant_default。现在经 user→tenant 映射
-                    # （预占单回查）找到真实租户再查其显式策略。
-                    tenant_scope_id = user_tenant.get(scope_id, "")
-                    tenant_of_user = policies.get(("tenant", tenant_scope_id))
-                    candidates = [
-                        explicit,
-                        tenant_of_user,
-                        tenant_default,
-                        platform,
-                    ]
-                else:
-                    explicit = policies.get(("tenant", scope_id))
-                    candidates = [explicit, tenant_default, platform]
-                    tenant_scope_id = scope_id
-                effective = next(
-                    (item for item in candidates if item is not None), None,
-                )
-                if effective is None:
-                    # 无任何可用模板：无法给出窗口口径，跳过并留待补策略
-                    logger.warning(
-                        "[Quota] 主体 %s:%s 无生效策略模板，跳过展示",
-                        scope_type, scope_id,
-                    )
-                    continue
-                # 无显式策略的租户，其用户层的租户模板回退链与解析一致
-                if scope_type == "user":
-                    tenant_template = policies.get(
-                        ("tenant", tenant_scope_id)
-                    ) or tenant_default or platform
-                else:
-                    tenant_template = effective
-                user_template = explicit or tenant_template or effective
+            # 窗口查询复用单连接：此前每主体单独借还连接（N+1），主体
+            # 增长后连接建立开销线性放大（2026-11-10 测试库实证超时）。
+            with self._connection_factory() as conn_win:
+                with conn_win.cursor() as cur_win:
+                    for scope_type, scope_id in sorted(set(subjects) | {
+                        key for key in policies
+                        if key[0] in _IDENTITY_SCOPES
+                        and (include_test or not _is_test_subject(key[1]))
+                    }):
+                        if (scope_type, scope_id) in seen or len(result) >= limit:
+                            continue
+                        seen.add((scope_type, scope_id))
+                        if scope_type == "user":
+                            explicit = policies.get(("user", scope_id))
+                            # 任务 10（2026-11-10）：旧实现查 ("tenant", "") 空键且
+                            # 把用户 id 当租户 id——显式租户策略对用户永不生效，
+                            # 页面恒显示 tenant_default。现在经 user→tenant 映射
+                            # （预占单回查）找到真实租户再查其显式策略。
+                            tenant_scope_id = user_tenant.get(scope_id, "")
+                            tenant_of_user = policies.get(("tenant", tenant_scope_id))
+                            candidates = [
+                                explicit,
+                                tenant_of_user,
+                                tenant_default,
+                                platform,
+                            ]
+                        else:
+                            explicit = policies.get(("tenant", scope_id))
+                            candidates = [explicit, tenant_default, platform]
+                            tenant_scope_id = scope_id
+                        effective = next(
+                            (item for item in candidates if item is not None), None,
+                        )
+                        if effective is None:
+                            # 无任何可用模板：无法给出窗口口径，跳过并留待补策略
+                            logger.warning(
+                                "[Quota] 主体 %s:%s 无生效策略模板，跳过展示",
+                                scope_type, scope_id,
+                            )
+                            continue
+                        # 无显式策略的租户，其用户层的租户模板回退链与解析一致
+                        if scope_type == "user":
+                            tenant_template = policies.get(
+                                ("tenant", tenant_scope_id)
+                            ) or tenant_default or platform
+                        else:
+                            tenant_template = effective
+                        user_template = explicit or tenant_template or effective
 
-                def policy_view(item: BudgetPolicy | None) -> dict[str, Any] | None:
-                    if item is None:
-                        return None
-                    return {
-                        "scope_type": item.scope_type,
-                        "scope_id": item.scope_id,
-                        "daily_limit_cny": item.daily_limit_cny,
-                        "monthly_limit_cny": item.monthly_limit_cny,
-                        "enforcement": item.enforcement,
-                        "timezone": item.timezone,
-                        "audit_exempt": item.audit_exempt,
-                    }
+                        def policy_view(item: BudgetPolicy | None) -> dict[str, Any] | None:
+                            if item is None:
+                                return None
+                            return {
+                                "scope_type": item.scope_type,
+                                "scope_id": item.scope_id,
+                                "daily_limit_cny": item.daily_limit_cny,
+                                "monthly_limit_cny": item.monthly_limit_cny,
+                                "enforcement": item.enforcement,
+                                "timezone": item.timezone,
+                                "audit_exempt": item.audit_exempt,
+                            }
 
-                periods = budget_periods(timezone_name=effective.timezone)
-                windows = {}
-                with self._connection_factory() as conn2:
-                    with conn2.cursor() as cur2:
+                        periods = budget_periods(timezone_name=effective.timezone)
+                        windows = {}
                         for period_type, start in (
                             ("day", periods.day_start_utc),
                             ("month", periods.month_start_utc),
                         ):
                             windows[period_type] = self._window(
-                                cur2, self._ledger, scope_type, scope_id,
+                                cur_win, self._ledger, scope_type, scope_id,
                                 effective, period_type, start,
                             )
-                ratio = max(windows["day"]["ratio"], windows["month"]["ratio"])
-                result.append({
-                    "scope": scope_type,
-                    "id": scope_id,
-                    "daily": windows["day"],
-                    "monthly": windows["month"],
-                    "enforcement": effective.enforcement,
-                    "ratio": ratio,
-                    "explicit_policy": policy_view(explicit),
-                    "effective_policy": policy_view(effective),
-                    "user_template": policy_view(user_template),
-                    "tenant_template": policy_view(tenant_template),
-                    "policy_source": {
-                        "scope_type": effective.scope_type,
-                        "scope_id": effective.scope_id,
-                    },
-                })
+                        ratio = max(windows["day"]["ratio"], windows["month"]["ratio"])
+                        result.append({
+                            "scope": scope_type,
+                            "id": scope_id,
+                            "daily": windows["day"],
+                            "monthly": windows["month"],
+                            "enforcement": effective.enforcement,
+                            "ratio": ratio,
+                            "explicit_policy": policy_view(explicit),
+                            "effective_policy": policy_view(effective),
+                            "user_template": policy_view(user_template),
+                            "tenant_template": policy_view(tenant_template),
+                            "policy_source": {
+                                "scope_type": effective.scope_type,
+                                "scope_id": effective.scope_id,
+                            },
+                        })
             return result
         except Exception as exc:
             raise QuotaConfigurationError("预算主体读取失败") from exc

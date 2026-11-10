@@ -125,11 +125,12 @@ async def get_budget_summary(
 @router.get("/admin/budgets/subjects")
 async def get_budget_subjects(
     scope: str = Query("", pattern="^(|user|tenant)$"),
+    include_test: bool = Query(False, description="包含测试/评测主体（默认排除）"),
     operator: OperatorIdentity = Depends(require_admin_user),
 ) -> dict[str, Any]:
     del operator
     try:
-        items = _store().list_subjects()
+        items = _store().list_subjects(include_test=include_test)
         if scope:
             items = [item for item in items if item["scope"] == scope]
         return {"items": _json_value(items)}
