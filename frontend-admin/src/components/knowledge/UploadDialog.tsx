@@ -332,6 +332,9 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                 onChange={e => {
                   // 2026-11-10 评审：超限文件选择即拒（fail-fast），权威上限仍在后端
                   const fs = Array.from(e.target.files || [])
+                  // 评审 A1：重置 input.value —— 不重置时「选 A → 移除 → 再选
+                  // 同一个 A」onChange 不触发（value 未变），列表静默不更新
+                  e.target.value = ''
                   if (!fs.length) return
                   const limit = MAX_UPLOAD_MB * 1024 * 1024
                   const oversized = fs.filter(f => f.size > limit)
@@ -406,7 +409,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                   // 总耗时优先用后端真实值（覆盖 stageElapsed 之和，避免幽灵时间）
                   const totalMs = r.totalMs ?? (r.stageElapsed ? Object.values(r.stageElapsed).reduce((a, b) => a + b, 0) : 0)
                   const showExpanded = r.expanded && (r.status === 'success')
-                  const currentStageIdx = r.currentStage ? STAGES.findIndex(x => x.key === r.currentStage) : -1
+                  // 评审 A3：后端新增 stage 不在前端映射表时 findIndex=-1，
+                  // 会让 10 个阶段全部显示灰点（像卡死）。视为「列表后阶段」：
+                  // 全部点亮，活动感由 stageMessage 文本承担
+                  const currentStageIdx = r.currentStage
+                    ? (() => { const i = STAGES.findIndex(x => x.key === r.currentStage); return i === -1 ? STAGES.length : i })()
+                    : -1
                   return (
                     <div key={idx} className={`rounded-lg px-3 py-2 ${r.status === 'failed' ? 'bg-red-50/50 border border-red-200' : 'bg-surface-elevated'}`}>
                       {/* 文件名 + 状态 + 总耗时 */}
@@ -422,12 +430,17 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                         <span className={`truncate font-medium flex-1 ${r.status === 'failed' ? 'text-red-700' : r.status === 'duplicate' ? 'text-text-muted' : 'text-text-primary'}`}>{r.name}</span>
                         {r.status === 'duplicate' ? <span className="text-[10px] text-amber-500 shrink-0">已存在，跳过</span>
                           : r.status === 'failed' ? <span className="text-[10px] text-red-400 shrink-0" title={r.error || '上传失败'}>{r.error ? r.error.slice(0, 40) : '失败'}</span>
-                          : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{r.currentStage}…</span>
+                          : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{STAGES.find(x => x.key === r.currentStage)?.label ?? r.currentStage}…</span>
                           : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
                       </div>
                       {/* 运行中阶段明细 */}
                       {isRunning && (
                         <div className="space-y-0.5 ml-6 mt-1.5">
+                          {/* 评审 A2：阶段消息单行渲染（后端 span 附带的上下文，
+                              如「候选索引完成，正在发布...」），此前只存不显示 */}
+                          {r.stageMessage && (
+                            <div className="text-[10px] text-text-secondary break-all">{r.stageMessage}</div>
+                          )}
                           {STAGES.map((s) => {
                             const thisIdx = STAGES.findIndex(x => x.key === s.key)
                             const isDone = thisIdx < currentStageIdx

@@ -29,7 +29,8 @@ const DOMAINS = [
   'evaluation',
   'feedback',
   'keyword',
-  'knowledge',
+  // 'knowledge' 已随 web 端知识库上传死代码清理删除（2026-11-10：UploadDialog/
+  // useKnowledge 零消费方，知识库管理面归 admin 端 DocumentsPanel）
   'llm',
   'memory',
   'observability',
