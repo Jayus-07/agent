@@ -189,4 +189,80 @@ describe('UploadDialog 后台上传体验', () => {
     expect(uploadedFile.name).toBe('ok.md')
     act(() => root.unmount())
   })
+
+  it('移除文件后可重新选择同一文件（评审 A1：onChange 前重置 input.value）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const fileA = new File(['a'], 'same.md')
+    const setFiles = (f: File) => {
+      Object.defineProperty(input, 'files', { configurable: true, value: [f] })
+    }
+
+    setFiles(fileA)
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('same.md')
+
+    // 移除（点 X 按钮）
+    const removeButton = Array.from(container.querySelectorAll('button'))
+      .find(b => b.querySelector('svg.lucide-x-circle, svg.lucide-circle-x'))
+      || Array.from(container.querySelectorAll('button')).at(-1)
+    await act(async () => { removeButton!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(container.textContent).not.toContain('same.md')
+
+    // 再选同一个文件：value 已在 onChange 内重置 → change 仍触发
+    setFiles(fileA)
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.textContent).toContain('same.md')
+    act(() => root.unmount())
+  })
+
+  it('运行中阶段显示中文标签与阶段消息（评审 A2：不再只显示英文 stage key）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    let captureProgress!: (stage: string, message: string) => void
+    mocks.uploadDocument.mockImplementation(
+      (_file, progress) => {
+        captureProgress = progress
+        return new Promise(() => { /* 挂起保持 running 态 */ })
+      },
+    )
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', { configurable: true, value: [new File(['x'], 'a.md')] })
+    await act(async () => { input.dispatchEvent(new Event('change', { bubbles: true })) })
+
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    // 未知 stage（后端新增键）→ 显示原始 key + 阶段全点亮（A3 兜底）
+    await act(async () => { captureProgress('brand_new_stage', '新阶段处理中') })
+    expect(container.textContent).toContain('brand_new_stage…')
+    expect(container.textContent).toContain('新阶段处理中')
+
+    // 已知 stage → 显示中文 label 而非 key
+    await act(async () => { captureProgress('chunking', '正在切分') })
+    expect(container.textContent).toContain('Chunk 切分…')
+    expect(container.textContent).toContain('正在切分')
+    act(() => root.unmount())
+  })
 })
