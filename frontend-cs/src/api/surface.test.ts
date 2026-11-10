@@ -22,11 +22,12 @@ const DOMAINS = [
   'alerts',
   'chat',
   // 'cs' 已随 cs-workstation-v2 P8 删除（重建命名空间 src/cs2/workspace/api.ts 承接）
+  // 'knowledge' 已随知识库上传死代码清理删除（2026-11-10：UploadDialog/
+  // useKnowledge 零消费方，整链移除；知识库管理面归 admin 端）
   'competitor',
   'evaluation',
   'feedback',
   'keyword',
-  'knowledge',
   'llm',
   'memory',
   'observability',
