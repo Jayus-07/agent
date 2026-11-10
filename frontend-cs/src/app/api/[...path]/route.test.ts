@@ -109,6 +109,38 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("idempotency-key")).toBe("fallback-change-1");
   });
 
+  it("透传 X-Batch-Id，批量写操作的批次关联不失效（2026-11-10 评审同步 web/admin）", async () => {
+    const req = makeReq("/api/rag/documents/delete", {
+      "content-type": "application/json",
+      authorization: "Bearer test-token",
+      "x-batch-id": "batch-cs-1",
+    });
+    const ctx = { params: { path: ["rag", "documents", "delete"] } };
+    await GET(req as never, ctx as never);
+
+    const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(upstreamHeaders.get("x-batch-id")).toBe("batch-cs-1");
+  });
+
+  it("RAG 上传超路径上限（50MiB+16KiB）在 BFF 直接 413 人话拒绝，不触达上游（2026-11-10 冒烟修复同步）", async () => {
+    const req = makeReq(
+      "/api/rag/upload",
+      {
+        "content-type": "multipart/form-data; boundary=x",
+        "content-length": String(50 * 1024 * 1024 + 16 * 1024 + 1),
+        authorization: "Bearer test-token",
+      },
+    );
+    const ctx = { params: { path: ["rag", "upload"] } };
+    const res = await GET(req as never, ctx as never);
+
+    expect(res.status).toBe(413);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = (await res.json()) as { error?: string; detail?: string };
+    expect(body.error).toBe("PayloadTooLarge");
+    expect(body.detail).toContain("请求体超过上限");
+  });
+
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {
     const req = makeReq("/api/auth/login", { "content-type": "application/json" });
     const ctx = { params: { path: ["auth", "login"] } };

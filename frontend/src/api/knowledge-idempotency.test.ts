@@ -75,3 +75,34 @@ describe("knowledgeService 上传 4xx 错误解析（2026-11-10 评审）", () =
     ).rejects.toThrow("上传失败（502）");
   });
 });
+
+describe("knowledgeService 删除/重索引错误可见性（2026-11-10 评审 #4）", () => {
+  beforeEach(() => {
+    apiMock.fetchRaw.mockReset();
+    apiMock.mutationFetchRaw.mockReset();
+  });
+
+  it("403 授权拒绝取 detail 人话，不再返回无原因的 {ok:false}", async () => {
+    apiMock.fetchRaw.mockResolvedValue(
+      new Response(JSON.stringify({ detail: "没有该文档的管理权限" }), { status: 403 }),
+    );
+    const result = await knowledgeService.deleteDocument("doc-1");
+    expect(result).toEqual({ ok: false, error: "没有该文档的管理权限" });
+  });
+
+  it("网关 HTML 错误页退回状态码兜底文案（重索引）", async () => {
+    apiMock.fetchRaw.mockResolvedValue(
+      new Response("<html>502</html>", { status: 502 }),
+    );
+    const result = await knowledgeService.reindexDocument("doc-1");
+    expect(result).toEqual({ ok: false, error: "操作失败（HTTP 502）" });
+  });
+
+  it("2xx 业务成功原样透传", async () => {
+    apiMock.fetchRaw.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, warnings: ["w1"] }), { status: 200 }),
+    );
+    const result = await knowledgeService.deleteDocument("doc-1");
+    expect(result).toEqual({ ok: true, warnings: ["w1"] });
+  });
+});

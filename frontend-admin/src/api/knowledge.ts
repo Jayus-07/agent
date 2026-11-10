@@ -344,7 +344,11 @@ export const knowledgeService: any = {
     fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' })
       .then(async r => {
         const data = await r.json().catch(() => ({}))
-        if (!r.ok && !data.error) data.error = `重索引请求失败 (${r.status})`
+        if (!r.ok && !data.error) {
+          // 2026-11-10 评审（#4）：4xx 人话在 detail/error 字段（403 授权
+          // 拒绝等），复用 deleteErrorMessage 提取链而非拼状态码
+          data.error = deleteErrorMessage(data, r.status)
+        }
         return data
       }).catch((e) => ({ ok: false, error: String(e) })),
 
@@ -421,8 +425,11 @@ export const knowledgeService: any = {
     for (const id of ids) {
       try {
         const res = await fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
-        const r = await res.json()
-        if (r.ok) ok++
+        const r = await res.json().catch(() => null)
+        if (!res.ok) {
+          // 2026-11-10 评审（#4）：4xx 人话提取（403 授权拒绝不再只显示状态码）
+          failed.push({ id, error: deleteErrorMessage(r, res.status) })
+        } else if (r.ok) ok++
         else failed.push({ id, error: r.error || '重索引提交失败' })
       } catch (e) {
         failed.push({ id, error: (e as Error).message })

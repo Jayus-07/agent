@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * BFF 代理（app/api/[...path]/route.ts）转发头契约测试（2026-09-23 缺陷4）
  *
@@ -8,11 +9,12 @@
  *
  * 放在 src/api/ 而非 [...path] 目录：目录名里的方括号会被 vitest 的
  * glob include 当字符类解释，测试文件放那里根本不会被收集。
- * route.ts 对 NextRequest 是 type-only import，运行时不需要 Next 环境，
- * 用 Request + nextUrl/ip 两个运行时字段补齐 proxy 的实际消费面即可。
+ * 用 NextRequest 构造（与 admin/cs 同款）：plain Request 会按规范剥掉
+ * 手设的 content-length（按实际 body 重算），超限预检用例需要保留声明头。
  */
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
 
 import { GET, POST } from "../app/api/[...path]/route";
 
@@ -22,14 +24,12 @@ function makeProxyRequest(
   url: string,
   init: RequestInit,
 ): ProxyRequest {
-  const req = Object.assign(new Request(url, init), {
-    nextUrl: new URL(url),
-    ip: "127.0.0.1",
-    // proxy 的 resolveClientKey 现读 req.cookies（2026-11-09 rl_client 台账），
-    // plain Request 没有该字段；测试场景统一走「无 rl_client Cookie」分支
-    cookies: { get: () => undefined },
-  });
-  return req as unknown as ProxyRequest;
+  // NextRequest 的 init 是 Next 扩展的 RequestInit 类型（与 DOM 版结构兼容
+  // 但 TS 互斥），经构造器参数类型收窄转换
+  return new NextRequest(
+    url,
+    init as ConstructorParameters<typeof NextRequest>[1],
+  ) as unknown as ProxyRequest;
 }
 
 // App Router 签名（Next 15）：params 是 Promise
@@ -194,6 +194,53 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     expect(typeof init.body).not.toBe("string");
     const text = await new Response(init.body as ReadableStream).text();
     expect(text).toBe("hello-upload-body");
+  });
+
+  it("RAG 上传超路径上限（50MiB+16KiB）在 BFF 直接 413 人话拒绝，不触达上游（2026-11-10 冒烟回归）", async () => {
+    // 背景：流式透传场景下，超限 body 全量转发后上游 413 断连会触发
+    // undici「terminated」，客户端收到连接重置（000）而非 413。修复：与
+    // 后端 body_limit 三方同源的上限在 BFF 预检拒绝。只声明超限
+    // Content-Length，不需要真实大 body。
+    const fetchSpy = upstream();
+
+    const response = await POST(
+      makeProxyRequest("http://localhost:3000/api/rag/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "multipart/form-data; boundary=x",
+          "Content-Length": String(50 * 1024 * 1024 + 16 * 1024 + 1),
+          Authorization: "Bearer t",
+        },
+        body: "x",
+      }),
+      ctx(["rag", "upload"]),
+    );
+
+    expect(response.status).toBe(413);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    const body = (await response.json()) as { error?: string; detail?: string };
+    expect(body.error).toBe("PayloadTooLarge");
+    // detail 人话对齐后端 body_limit 413 字段结构（前端解析链 detail 优先）
+    expect(body.detail).toContain("请求体超过上限");
+  });
+
+  it("非上传路径沿用默认 64MB 上限，51MB JSON 请求不被拦（同批次回归）", async () => {
+    const fetchSpy = upstream();
+
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/selection-funnel/import", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": String(51 * 1024 * 1024),
+          Authorization: "Bearer t",
+        },
+        body: "{}",
+      }),
+      ctx(["selection-funnel", "import"]),
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
   it("白名单既有头不回归：Authorization / Content-Type / X-Trace-Id 照常转发", async () => {
