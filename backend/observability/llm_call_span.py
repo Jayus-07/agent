@@ -162,6 +162,10 @@ def record_llm_call_span(
             "model_role": str(metrics.get("model_role") or ""),
             "binding_source": str(metrics.get("binding_source") or ""),
             "usage_source": str(metrics.get("usage_source") or ""),
+            # 结算形态（2026-11-10 补呈现缺口）：settled / settled_estimated /
+            # needs_review / released / accounting_error，Trace UI 呈现与
+            # llm_usage 行同源
+            "settlement_status": str(metrics.get("settlement_status") or ""),
             # 与 backfill（token_source=llm_usage_backfill）区分：
             # 本 span 指标与 llm_usage 行同源，回填配对不再占用该行
             "token_source": "proxy_span",

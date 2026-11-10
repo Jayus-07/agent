@@ -268,6 +268,79 @@ def test_dry_run_empty_backlog_returns_zero_not_error(store):
                 cur.execute(f"DROP TABLE {table}")
 
 
+def test_monthly_reconciliation_aggregates_and_csv(store):
+    """PR-A（2026-11-10 路线图第 4 块）：月度对账三段聚合 + CSV 导出。
+
+    隔离测试库当月增量断言：唯一 key（provider/model/tenant 带 hex）避免
+    历史残留干扰；usage 走 V2 billed_cost_cny 口径（cost_cny_sql_expr）。
+    """
+    from datetime import datetime, timezone
+
+    run = f'mon-{uuid4().hex}'
+    provider = f'mon-provider-{uuid4().hex[:8]}'
+    model = f'mon-model-{uuid4().hex[:8]}'
+    ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+    month = ts[:7]
+
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO llm_usage
+                       (ts, created_at, request_id, model, provider, tenant_id,
+                        billing_schema_version, billed_cost_cny, total_cost,
+                        currency)
+                   VALUES (%s, %s, %s, %s, %s, %s, 2, %s, %s, 'USD')""",
+                (ts, ts, f'{run}-req', model, provider, run,
+                 '0.123456', '0.05'),
+            )
+    reservation = store.reserve(
+        user_id=run, tenant_id=run, amount_cny=Decimal('0.40'),
+        request_id=f'{run}-req',
+    )
+    store.settle(reservation, Decimal('0.04'))
+
+    try:
+        report = store.monthly_reconciliation(months=3)
+        assert month in report['months']
+
+        usage = report['usage_by_month'].get(month) or {}
+        provider_slot = (usage.get('by_provider') or {}).get(provider) or {}
+        assert provider_slot.get('calls') == 1
+        assert Decimal(provider_slot.get('cost_cny', '0')) == Decimal('0.123456')
+        model_slot = (usage.get('by_model') or {}).get(model) or {}
+        assert Decimal(model_slot.get('cost_cny', '0')) == Decimal('0.123456')
+        tenant_slot = (usage.get('by_tenant') or {}).get(run) or {}
+        assert Decimal(tenant_slot.get('cost_cny', '0')) == Decimal('0.123456')
+
+        assert month in report['ledger_by_month']
+        by_scope = report['ledger_by_month'][month].get('by_scope') or {}
+        # 账本行按主体 scope 落（user/tenant × day/month），非 policy scope
+        assert f'tenant:{run}' in by_scope
+        assert f'user:{run}' in by_scope
+
+        shapes = report['reservations_by_month'].get(month) or {}
+        settled_exact = [
+            s for s in shapes.get('by_shape') or []
+            if s['status'] == 'settled' and s['settle_kind'] == ''
+        ]
+        assert settled_exact, '当月精确结算形态必须出现在分布里'
+
+        csv_text = store.monthly_reconciliation_csv(months=3)
+        lines = csv_text.strip().split('\n')
+        assert lines[0] == 'month,dimension,key,calls,cost_cny'
+        assert any(
+            line.startswith(f'{month},provider,{provider},1,0.123456')
+            for line in lines
+        )
+        assert any(line.startswith(f'{month},total,,') for line in lines)
+    finally:
+        with store._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM llm_usage WHERE request_id = %s",
+                    (f'{run}-req',),
+                )
+
 def test_queue_filters_test_data_by_default(store):
     """B2：测试/评测数据默认不进队列，include_test 打开可见。"""
     run = f'vis-{uuid4().hex}'
