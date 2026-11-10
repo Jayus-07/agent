@@ -84,24 +84,32 @@ def get_rag_status() -> dict:
     from backend.rag.pipeline import get_rag_pipeline_state
     state = get_rag_pipeline_state()
     if state["state"] == "ready":
-        return {"ready": True, "status": "ready"}
-    if state["state"] == "remote":
+        status = {"ready": True, "status": "ready"}
+    elif state["state"] == "remote":
         # 远端模式：rag-service 就绪与否由其 /readyz 决定，此处只透传模式信息
-        return {
+        status = {
             "ready": True,
             "status": "remote",
             "endpoint": state["endpoint"],
             "message": "RAG 运行于远端服务模式，实际就绪状态见 rag-service /readyz",
         }
-    if state["state"] == "error":
-        return {"ready": False, "status": "error", "error": state["error"]}
-    if state["state"] == "not_started":
-        _kick_pipeline_init()
-    return {
-        "ready": False,
-        "status": "initializing",
-        "message": state.get("message", "模型加载中，请稍后重试"),
-    }
+    elif state["state"] == "error":
+        status = {"ready": False, "status": "error", "error": state["error"]}
+    else:
+        if state["state"] == "not_started":
+            _kick_pipeline_init()
+        status = {
+            "ready": False,
+            "status": "initializing",
+            "message": state.get("message", "模型加载中，请稍后重试"),
+        }
+    # 上传预检上限透传（#6，2026-11-11）：前端 fail-fast 预检的权威值来源，
+    # 改 RAG_MAX_FILE_SIZE env 后前端跟随，不再写死 50；multipart 余量
+    # 同源透传（与 body_limit / 路由层 F10 预检同一常量）。
+    from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_UPLOAD_MULTIPART_OVERHEAD
+    status["max_file_size_mb"] = RAG_MAX_FILE_SIZE
+    status["multipart_overhead_bytes"] = RAG_UPLOAD_MULTIPART_OVERHEAD
+    return status
 
 
 def require_rag_ready():
