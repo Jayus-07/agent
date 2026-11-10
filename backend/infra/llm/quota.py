@@ -637,6 +637,17 @@ class PostgresQuotaStore:
                         )
                         for row in cur.fetchall()
                     }
+                    # 用户→租户映射：预算身份的权威来源是预占单（账本的
+                    # user/tenant 行都由 reserve 写入）。list_subjects 只有
+                    # scope 键，没有请求级 tenant_id，须回查预占单补映射；
+                    # 取该用户最近一次预占的租户。
+                    cur.execute(
+                        f"""SELECT DISTINCT ON (user_id)
+                                   user_id, tenant_id
+                              FROM {self._reservations}
+                             ORDER BY user_id, created_at DESC"""
+                    )
+                    user_tenant = {row[0]: row[1] for row in cur.fetchall()}
 
             tenant_default = policies.get(("tenant_default", "default"))
             platform = policies.get(("platform", "default"))
@@ -650,14 +661,18 @@ class PostgresQuotaStore:
                 seen.add((scope_type, scope_id))
                 if scope_type == "user":
                     explicit = policies.get(("user", scope_id))
-                    tenant_of_user = policies.get(("tenant", ""), None)
+                    # 任务 10（2026-11-10）：旧实现查 ("tenant", "") 空键且
+                    # 把用户 id 当租户 id——显式租户策略对用户永不生效，
+                    # 页面恒显示 tenant_default。现在经 user→tenant 映射
+                    # （预占单回查）找到真实租户再查其显式策略。
+                    tenant_scope_id = user_tenant.get(scope_id, "")
+                    tenant_of_user = policies.get(("tenant", tenant_scope_id))
                     candidates = [
                         explicit,
                         tenant_of_user,
                         tenant_default,
                         platform,
                     ]
-                    tenant_scope_id = scope_id
                 else:
                     explicit = policies.get(("tenant", scope_id))
                     candidates = [explicit, tenant_default, platform]

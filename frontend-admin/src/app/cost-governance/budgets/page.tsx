@@ -76,6 +76,8 @@ export default function BudgetGovernancePage() {
   const [dryRun, setDryRun] = useState<Awaited<ReturnType<typeof getBudgetBacklogDryRun>> | null>(null)
   const [resolving, setResolving] = useState(false)
   const [csvBusy, setCsvBusy] = useState(false)
+  // 用户额度搜索（任务 10）：主体多时按 scope id / 显示名客户端过滤
+  const [subjectQuery, setSubjectQuery] = useState('')
 
   // 月度对账（路线图第 4 块 PR-A）：按月聚合 usage 成本 / 预算月行 / 结算形态
   const monthlyRecon = useQuery({
@@ -434,12 +436,20 @@ export default function BudgetGovernancePage() {
               </section>
 
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
-                <SectionTitle title="预算主体" action={<RefreshButton onClick={() => subjects.refetch()} loading={subjects.isFetching} />} />
+                <SectionTitle title="预算主体" action={<div className="flex items-center gap-3"><input value={subjectQuery} onChange={(event) => setSubjectQuery(event.target.value)} placeholder="搜索用户 / 租户 ID" className="w-44 rounded-lg border border-black/10 px-2 py-1.5 text-[11px]" /><RefreshButton onClick={() => subjects.refetch()} loading={subjects.isFetching} /></div>} />
                 <div className="overflow-x-auto">
                   <table className="w-full text-left text-xs">
                     <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">主体<InfoTip text="用户或租户；每行显示它的用量与实际生效的额度上限" /></th><th className="px-4 py-3">显式值 / 继承来源 / 生效值<InfoTip text="显式值=该主体自己配置的策略；继承来源=没有显式策略时实际套用的上层条目；生效值=当前真正执行的日/月上限（按用户覆盖›租户覆盖›全租户默认›平台兜底取第一层）" /></th><th className="px-4 py-3 text-right">日用量 / 上限</th><th className="px-4 py-3 text-right">月用量 / 上限</th><th className="px-4 py-3">执行模式</th></tr></thead>
                     <tbody>
-                      {(subjects.data?.items ?? []).map((item) => (
+                      {(subjects.data?.items ?? []).filter((item) => {
+                        const q = subjectQuery.trim().toLowerCase()
+                        if (!q) return true
+                        return (
+                          item.id.toLowerCase().includes(q)
+                          || (item.display_name || '').toLowerCase().includes(q)
+                          || `${item.scope}:${item.id}`.toLowerCase().includes(q)
+                        )
+                      }).map((item) => (
                         <tr key={`${item.scope}:${item.id}`} className="border-b border-slate-50">
                           <td className="px-4 py-3"><div className="font-medium text-text-primary">{item.display_name || item.id}</div><div className="mt-0.5 font-mono text-[10px] text-text-muted" title={scopeHint(item.scope)}>{item.scope}:{item.id}</div></td>
                           <td className="px-4 py-3 text-text-secondary"><div>{item.explicit_policy ? '显式策略' : '未配置显式策略'}</div><div className="mt-0.5 text-[10px] text-text-muted">继承自 {item.policy_source?.label || `${item.policy_source?.scope_type}:${item.policy_source?.scope_id}`}</div><div className="mt-0.5 font-mono text-[11px] font-semibold text-text-primary" title="当前真正执行的上限">生效 {formatCny(item.effective_policy?.daily_limit_cny)} / {formatCny(item.effective_policy?.monthly_limit_cny)}</div></td>
@@ -451,6 +461,7 @@ export default function BudgetGovernancePage() {
                     </tbody>
                   </table>
                   {!subjects.isLoading && (subjects.data?.items ?? []).length === 0 && <EmptyRow text="暂无预算主体数据" />}
+                  {!subjects.isLoading && (subjects.data?.items ?? []).length > 0 && subjectQuery.trim() && (subjects.data?.items ?? []).every((item) => !(item.id.toLowerCase().includes(subjectQuery.trim().toLowerCase()) || (item.display_name || '').toLowerCase().includes(subjectQuery.trim().toLowerCase()))) && <EmptyRow text="没有匹配搜索条件的主体" />}
                 </div>
               </section>
 
