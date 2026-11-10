@@ -1760,8 +1760,10 @@ class PostgresQuotaStore:
     def monthly_reconciliation(self, months: int = 6) -> dict[str, Any]:
         """月度对账聚合（路线图第 4 块 PR-A，2026-11-10）：三段只读口径。
 
-        - usage：llm_usage 按月 × 供应商 × 模型 × 租户的 CNY 成本——
+        - usage：llm_usage 按月 × 供应商 × 模型 × 租户 × 产品域的 CNY 成本——
           ``cost_cny_sql_expr()`` 全仓唯一折算口径（G2），读层不二次换汇；
+          域取 agent_domain（任务 9-B 域成本可见性），空归
+          '(unattributed)' 暴露归因覆盖缺口；
         - ledger：budget_ledger 月行（period_type='month'）按月 × scope 汇总
           used_cny——预算口径的「入账」，与主体页月用量同源；
         - reservations：预占单按结算月（COALESCE(settled_at, created_at)）
@@ -1806,6 +1808,23 @@ class PostgresQuotaStore:
                         (tz, cutoff_iso,),
                     )
                     usage_rows = cur.fetchall()
+                    # ①b usage：月 × agent_domain 成本聚合（域成本可见性，
+                    # 任务 9-B 前置）——执行化（域硬限）的决策依据；空域归
+                    # '(unattributed)'，提示归因覆盖缺口
+                    cur.execute(
+                        f"""SELECT to_char(
+                                        ((substring(ts, 1, 19) || 'Z')
+                                         ::timestamptz) AT TIME ZONE %s,
+                                        'YYYY-MM') AS month,
+                                   COALESCE(NULLIF(agent_domain, ''),
+                                            '(unattributed)') AS domain,
+                                   SUM({cost_cny_sql_expr()}), COUNT(*)
+                              FROM llm_usage
+                             WHERE ts >= %s
+                             GROUP BY 1, 2""",
+                        (tz, cutoff_iso,),
+                    )
+                    domain_rows = cur.fetchall()
                     # ② ledger 月行：月 × scope 汇总
                     cur.execute(
                         f"""SELECT to_char(period_start AT TIME ZONE %s,
@@ -1847,7 +1866,8 @@ class PostgresQuotaStore:
                 bucket = usage_by_month.setdefault(
                     month,
                     {"total_cny": "0.000000", "calls": 0,
-                     "by_provider": {}, "by_model": {}, "by_tenant": {}},
+                     "by_provider": {}, "by_model": {}, "by_tenant": {},
+                     "by_domain": {}},
                 )
                 cost_d = Decimal(str(cost or 0))
                 calls_n = int(calls)
@@ -1866,6 +1886,21 @@ class PostgresQuotaStore:
                     )
                 bucket["total_cny"] = _dec(
                     Decimal(bucket["total_cny"]) + cost_d
+                )
+
+            for month, domain, cost, calls in domain_rows:
+                bucket = usage_by_month.setdefault(
+                    month,
+                    {"total_cny": "0.000000", "calls": 0,
+                     "by_provider": {}, "by_model": {}, "by_tenant": {},
+                     "by_domain": {}},
+                )
+                slot = bucket["by_domain"].setdefault(
+                    domain, {"calls": 0, "cost_cny": "0.000000"}
+                )
+                slot["calls"] += int(calls)
+                slot["cost_cny"] = _dec(
+                    Decimal(slot["cost_cny"]) + Decimal(str(cost or 0))
                 )
 
             ledger_by_month: dict[str, dict[str, Any]] = {}
@@ -1937,6 +1972,7 @@ class PostgresQuotaStore:
                 ("provider", bucket.get("by_provider") or {}),
                 ("model", bucket.get("by_model") or {}),
                 ("tenant", bucket.get("by_tenant") or {}),
+                ("domain", bucket.get("by_domain") or {}),
             ):
                 for key in sorted(group):
                     writer.writerow(

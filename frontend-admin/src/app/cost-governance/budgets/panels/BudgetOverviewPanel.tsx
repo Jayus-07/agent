@@ -74,6 +74,7 @@ export default function BudgetOverviewPanel({ canAdmin }: { canAdmin: boolean })
                 <th className="px-4 py-3 text-right">估算结算<InfoTip text="settle_kind='estimated'：按预占上限保守估算结算（小额未知用量），设计内口径" /></th>
                 <th className="px-4 py-3 text-right">待对账核销<InfoTip text="resolution 非空：released / written_off / archived / settled_actual 的人工核销单" /></th>
                 <th className="px-4 py-3 text-right">预算月行入账<InfoTip text="budget_ledger 月行 used_cny 合计——预算口径的实际入账，与主体页月用量同源" /></th>
+                <th className="px-4 py-3">域成本分布<InfoTip text="按 agent_domain 聚合的当月成本 top3 + 其他——产品域成本可见性（任务 9-B），是评估「按域设硬限」的决策依据；'(unattributed)' 表示该月无域归因的调用量" /></th>
               </tr>
             </thead>
             <tbody>
@@ -86,6 +87,11 @@ export default function BudgetOverviewPanel({ canAdmin }: { canAdmin: boolean })
                 const ledgerUsed = Object.values(monthlyRecon.data?.ledger_by_month[m]?.by_scope ?? {}).reduce(
                   (acc, slot) => acc + Number(slot.used_cny), 0,
                 )
+                // 域成本 top3（按金额降序），其余合并为「其他」
+                const domainEntries = Object.entries(usage?.by_domain ?? {})
+                  .sort(([, a], [, b]) => Number(b.cost_cny) - Number(a.cost_cny))
+                const topDomains = domainEntries.slice(0, 3)
+                const restCost = domainEntries.slice(3).reduce((acc, [, slot]) => acc + Number(slot.cost_cny), 0)
                 return (
                   <tr key={m} className="border-b border-slate-50">
                     <td className="px-4 py-3 font-mono text-[11px]">{m}</td>
@@ -95,6 +101,16 @@ export default function BudgetOverviewPanel({ canAdmin }: { canAdmin: boolean })
                     <td className="px-4 py-3 text-right font-mono text-amber-700">{estimatedCount}</td>
                     <td className="px-4 py-3 text-right font-mono text-text-secondary">{resolvedCount}</td>
                     <td className="px-4 py-3 text-right font-mono">{formatCny(ledgerUsed.toFixed(6))}</td>
+                    <td className="px-4 py-3 text-[10px] leading-4 text-text-secondary">
+                      {domainEntries.length === 0
+                        ? <span className="text-text-muted">—</span>
+                        : topDomains.map(([domain, slot]) => (
+                          <span key={domain} className="mr-2 whitespace-nowrap" title={domain}>
+                            <span className="font-mono">{domain}</span> {formatCny(slot.cost_cny)}
+                          </span>
+                        ))}
+                      {restCost > 0 && <span className="mr-2 whitespace-nowrap text-text-muted">其他 {formatCny(restCost.toFixed(6))}</span>}
+                    </td>
                   </tr>
                 )
               })}

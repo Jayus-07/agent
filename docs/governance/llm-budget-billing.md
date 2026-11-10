@@ -114,7 +114,8 @@
 
 ### 4.6 月度对账报表（2026-11-10 待对账治理第三批 PR-A）
 
-- **聚合口径**：`PostgresQuotaStore.monthly_reconciliation(months)` 只读聚合三段——①`llm_usage` 按月 × 供应商/模型/租户的 CNY 成本（复用 `cost_cny_sql_expr()` 唯一折算口径，读层不二次换汇）；②`budget_ledger` 月行（`period_type='month'`）按月 × scope 的 `used_cny`/`reserved_cny`；③预占单按结算月（`COALESCE(settled_at, created_at)`）的 status × `settle_kind` × `resolution` 分布。月标签一律按 `BUDGET_TIMEZONE`（默认 Asia/Shanghai）渲染——预算 `period_start` 即该时区自然月，UTC 会话直接 `to_char` 会把月初 8 小时归到上月。
-- **API**：`GET /admin/budgets/reconciliation/monthly?months=6`（JSON，1–24 个月）与 `.../monthly.csv`（CSV 导出，`month,dimension,key,calls,cost_cny`），均 `require_admin_user`；前端预算页「月度对账」卡呈现月份行并支持 CSV 下载。CSV 是与供应商月账单核对的基线材料，录入/导入与差异调整见后续 PR-B/PR-C。
+- **聚合口径**：`PostgresQuotaStore.monthly_reconciliation(months)` 只读聚合三段——①`llm_usage` 按月 × 供应商/模型/租户/产品域的 CNY 成本（复用 `cost_cny_sql_expr()` 唯一折算口径，读层不二次换汇）；②`budget_ledger` 月行（`period_type='month'`）按月 × scope 的 `used_cny`/`reserved_cny`；③预占单按结算月（`COALESCE(settled_at, created_at)`）的 status × `settle_kind` × `resolution` 分布。月标签一律按 `BUDGET_TIMEZONE`（默认 Asia/Shanghai）渲染——预算 `period_start` 即该时区自然月，UTC 会话直接 `to_char` 会把月初 8 小时归到上月。
+- **域成本可见性（任务 9-B，2026-11-10）**：usage 聚合增加 `by_domain` 段（取 `agent_domain`，空归 `'(unattributed)'` 暴露归因覆盖缺口），前端「月度对账」卡呈现当月域成本 top3+其他，CSV 增加 `dimension=domain` 行。这是 quota_profile（按域硬限）的决策前置——先看清各域花多少钱；按域设限的执行化仍挂起，待真实需求与主链路归因覆盖率提升后再立项。
+- **API**：`GET /admin/budgets/reconciliation/monthly?months=6`（JSON，1–24 个月）与 `.../monthly.csv`（CSV 导出，`month,dimension,key,calls,cost_cny`），均 `require_admin_user`；前端预算页「月度对账」卡呈现月份行并支持 CSV 下载。CSV 是与供应商月账单核对的基线材料，录入/导入与差异调整见后续 PR-B/PR-C（已延后）。
 - **llm_call span 补呈现**：`llm_call_span.py` 的 `span_metrics` 增加 `settlement_status`（`settled` / `settled_estimated` / `needs_review` / `released` / `accounting_error`，与 llm_usage 行同源）——此前 DB 与日志可查但 Trace UI 不呈现，属呈现缺口补齐。
 

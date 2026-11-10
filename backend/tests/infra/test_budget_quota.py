@@ -282,16 +282,38 @@ def test_monthly_reconciliation_aggregates_and_csv(store):
     ts = datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
     month = ts[:7]
 
+    # 域桶是共享 key（travel / (unattributed)），隔离库可能有历史残留——
+    # 按文件头约定用前后增量断言
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT COUNT(*) FROM llm_usage
+                    WHERE ts >= %s AND COALESCE(agent_domain, '') = ''""",
+                (f'{month}-01',),
+            )
+            before_unattributed = cur.fetchone()[0]
+
     with store._connection_factory() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """INSERT INTO llm_usage
                        (ts, created_at, request_id, model, provider, tenant_id,
+                        agent_domain,
                         billing_schema_version, billed_cost_cny, total_cost,
                         currency)
-                   VALUES (%s, %s, %s, %s, %s, %s, 2, %s, %s, 'USD')""",
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, 2, %s, %s, 'USD')""",
                 (ts, ts, f'{run}-req', model, provider, run,
-                 '0.123456', '0.05'),
+                 'travel', '0.123456', '0.05'),
+            )
+            cur.execute(
+                """INSERT INTO llm_usage
+                       (ts, created_at, request_id, model, provider, tenant_id,
+                        agent_domain,
+                        billing_schema_version, billed_cost_cny, total_cost,
+                        currency)
+                   VALUES (%s, %s, %s, %s, %s, %s, '', 2, %s, %s, 'USD')""",
+                (ts, ts, f'{run}-req2', model + '2', provider + '2',
+                 run + '2', '0.000100', '0.00005'),
             )
     reservation = store.reserve(
         user_id=run, tenant_id=run, amount_cny=Decimal('0.40'),
@@ -311,6 +333,15 @@ def test_monthly_reconciliation_aggregates_and_csv(store):
         assert Decimal(model_slot.get('cost_cny', '0')) == Decimal('0.123456')
         tenant_slot = (usage.get('by_tenant') or {}).get(run) or {}
         assert Decimal(tenant_slot.get('cost_cny', '0')) == Decimal('0.123456')
+        # 任务 9-B：域维度聚合——带 agent_domain 的行归入对应域，
+        # CSV 同步出 domain 维度行
+        domain_slot = (usage.get('by_domain') or {}).get('travel') or {}
+        assert domain_slot.get('calls') == 1
+        assert Decimal(domain_slot.get('cost_cny', '0')) == Decimal('0.123456')
+        unattributed = (usage.get('by_domain') or {}).get('(unattributed)') or {}
+        assert unattributed.get('calls') == before_unattributed + 1, (
+            '无域归因的行必须计入 (unattributed) 桶（增量 +1）'
+        )
 
         assert month in report['ledger_by_month']
         by_scope = report['ledger_by_month'][month].get('by_scope') or {}
@@ -332,13 +363,17 @@ def test_monthly_reconciliation_aggregates_and_csv(store):
             line.startswith(f'{month},provider,{provider},1,0.123456')
             for line in lines
         )
+        assert any(
+            line.startswith(f'{month},domain,travel,1,0.123456')
+            for line in lines
+        )
         assert any(line.startswith(f'{month},total,,') for line in lines)
     finally:
         with store._connection_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "DELETE FROM llm_usage WHERE request_id = %s",
-                    (f'{run}-req',),
+                    "DELETE FROM llm_usage WHERE request_id IN (%s, %s)",
+                    (f'{run}-req', f'{run}-req2'),
                 )
 
 def test_list_subjects_user_inherits_explicit_tenant_policy(store):
