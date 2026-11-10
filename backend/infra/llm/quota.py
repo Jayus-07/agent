@@ -1579,7 +1579,12 @@ class PostgresQuotaStore:
                         "tenant_id": tenant_id or "",
                     })
             total_open = sum(c["count"] for c in classes.values())
-            total_held = sum(Decimal(c["held_cny"]) for c in classes.values())
+            # sum 空序列返回 int 0（0.quantize 会抛 AttributeError），必须显式
+            # 以 Decimal("0") 为起点——存量开态清零后 classes 为空，否则 dry-run
+            # 稳定 503（2026-11-10 :3200 目检实证）。
+            total_held = sum(
+                (Decimal(c["held_cny"]) for c in classes.values()), Decimal("0")
+            )
             return {
                 "open_count": int(total_open),
                 "open_held_cny": str(total_held.quantize(_SIX_PLACES)),

@@ -233,6 +233,41 @@ def test_dry_run_classifies_backlog_with_suggested_actions(store):
     assert any(i['reservation_id'] in small_ids for i in items)
 
 
+def test_dry_run_empty_backlog_returns_zero_not_error(store):
+    """回归（2026-11-10 :3200 目检）：存量开态清零后 dry-run 必须返回 0 值
+    而不是 503——sum() 空序列返回 int 0，0.quantize() 抛 AttributeError 被
+    except Exception 包装成 QuotaConfigurationError（线上 dry-run 按钮
+    100% 503 的根因；有开态数据时 sum 从 Decimal 起步故未暴露）。"""
+    table = f'budget_reservations_dryrun_empty_{uuid4().hex[:8]}'
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""CREATE TABLE {table} (
+                        id uuid PRIMARY KEY,
+                        tenant_id text NOT NULL,
+                        user_id text NOT NULL,
+                        request_id text NOT NULL DEFAULT '',
+                        review_reason text NOT NULL DEFAULT '',
+                        reserved_cny numeric(18,6) NOT NULL,
+                        status text NOT NULL DEFAULT 'needs_review',
+                        resolution text NOT NULL DEFAULT '',
+                        created_at timestamptz NOT NULL DEFAULT now()
+                    )"""
+            )
+    original = store._reservations
+    store._reservations = table
+    try:
+        report = store.dry_run_backlog_migration()
+        assert report['open_count'] == 0
+        assert Decimal(report['open_held_cny']) == Decimal('0')
+        assert report['classes'] == {}
+    finally:
+        store._reservations = original
+        with store._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"DROP TABLE {table}")
+
+
 def test_queue_filters_test_data_by_default(store):
     """B2：测试/评测数据默认不进队列，include_test 打开可见。"""
     run = f'vis-{uuid4().hex}'
