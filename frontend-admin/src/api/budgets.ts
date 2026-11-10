@@ -131,6 +131,7 @@ export interface BudgetMonthlyReconciliation {
     by_provider: Record<string, { calls: number; cost_cny: string }>;
     by_model: Record<string, { calls: number; cost_cny: string }>;
     by_tenant: Record<string, { calls: number; cost_cny: string }>;
+    by_domain: Record<string, { calls: number; cost_cny: string }>;
   }>;
   ledger_by_month: Record<string, { by_scope: Record<string, { used_cny: string; reserved_cny: string }> }>;
   reservations_by_month: Record<string, {
