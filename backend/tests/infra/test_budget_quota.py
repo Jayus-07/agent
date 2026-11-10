@@ -341,6 +341,36 @@ def test_monthly_reconciliation_aggregates_and_csv(store):
                     (f'{run}-req',),
                 )
 
+def test_list_subjects_user_inherits_explicit_tenant_policy(store):
+    """任务 10 回归：用户必须经 user→tenant 映射（预占单回查）继承其租户
+    的显式策略；旧实现查 ("tenant", "") 空键且把用户 id 当租户 id，导致
+    显式租户策略对用户永不生效、页面恒显示 tenant_default。"""
+    run = f'subj-{uuid4().hex}'
+    tenant_id = f'subj-tenant-{uuid4().hex[:8]}'
+
+    store.upsert_policy(
+        scope_type='tenant', scope_id=tenant_id,
+        daily_limit_cny=Decimal('7'), monthly_limit_cny=Decimal('77'),
+        enforcement='soft', audit_exempt=False,
+        updated_by='user:test-admin', reason='任务10回归',
+    )
+    reservation = store.reserve(
+        user_id=run, tenant_id=tenant_id, amount_cny=Decimal('0.10'),
+    )
+    store.settle(reservation, Decimal('0'))
+
+    rows = store.list_subjects(500)
+    user_row = next(
+        (r for r in rows if r['scope'] == 'user' and r['id'] == run), None)
+    assert user_row is not None, '预占过的用户必须出现在主体列表'
+    assert user_row['policy_source']['scope_type'] == 'tenant'
+    assert user_row['policy_source']['scope_id'] == tenant_id, (
+        '用户生效策略必须继承其真实租户的显式策略，而非 tenant_default'
+    )
+    assert user_row['enforcement'] == 'soft'
+    tenant_template = user_row.get('tenant_template') or {}
+    assert tenant_template.get('scope_id') == tenant_id
+
 def test_queue_filters_test_data_by_default(store):
     """B2：测试/评测数据默认不进队列，include_test 打开可见。"""
     run = f'vis-{uuid4().hex}'
