@@ -238,21 +238,45 @@ export const knowledgeService: any = {
         // 后端认证中间件 401 拒绝），改用 fetchRaw + ReadableStream 手动解析 SSE。
         return new Promise((resolve) => {
           let resolved = false
-          // P1 看门狗:后台任务异常死亡时服务端永不发终态事件,旧实现 Promise 永久挂起,
-          // UI 卡在"索引中"。超过上限直接判失败,用户可去文档列表确认/重试。
-          const WATCHDOG_MS = 10 * 60 * 1000
-          let watchdog: ReturnType<typeof setTimeout> | undefined
+          // batch3 复审 P2-1/P2-2 + #8（2026-11-11）：看门狗从「10 分钟绝对
+          // 超时」改为「活跃性驱动」——以最后收到字节（含 SSE keepalive 注释
+          // 帧）计 idle 上限，远大于服务端心跳周期（队列模式 15s / Redis 轮询
+          // 30s keepalive），长任务（如 500 页 PDF OCR）只要连接活着不再被
+          // 误判失败；保留绝对兜底对齐后端 RAG_SSE_REDIS_POLL_MAX_SECONDS
+          // （1900s，后端会先发 error 事件，这里只兜极简场景）。
+          // 连接层失败 / idle 超时先重订阅一次（后端支持 Redis 镜像重订阅，
+          // 已终态则立即重放终态）再终判，降低瞬时抖动误报；终态事件
+          // （error）是任务失败语义，不走重连。
+          const IDLE_TIMEOUT_MS = 120 * 1000
+          const MAX_TOTAL_MS = 1900 * 1000
+          const RETRY_DELAY_MS = 1000
+          let retried = false
+          let idleDeadline = 0
+          const startedAt = Date.now()
+          let idleTimer: ReturnType<typeof setInterval> | undefined
+          let totalTimer: ReturnType<typeof setTimeout> | undefined
 
           const cleanup = () => {
-            if (watchdog) clearTimeout(watchdog)
             resolved = true
+            if (idleTimer) clearInterval(idleTimer)
+            if (totalTimer) clearTimeout(totalTimer)
+          }
+
+          const finishFail = (error: string) => {
+            if (!resolved) {
+              cleanup()
+              resolve({ ok: false, error })
+            }
           }
 
           const fail = () => {
-            if (!resolved) {
-              cleanup()
-              resolve({ ok: false, error: '进度连接中断' })
+            if (resolved) return
+            if (!retried && Date.now() - startedAt + RETRY_DELAY_MS < MAX_TOTAL_MS) {
+              retried = true
+              setTimeout(() => { if (!resolved) consumeStream() }, RETRY_DELAY_MS)
+              return
             }
+            finishFail('进度连接中断')
           }
 
           const handleMessage = (raw: string) => {
@@ -278,15 +302,21 @@ export const knowledgeService: any = {
             }
           }
 
-          watchdog = setTimeout(() => {
-            if (!resolved) {
-              cleanup()
-              resolve({ ok: false, error: '索引超时（10 分钟），请在文档列表确认状态或稍后重试' })
-            }
-          }, WATCHDOG_MS)
+          // 活跃性看门狗：任何字节（含 keepalive）都刷新 idleDeadline，
+          // 只有持续无更新超上限才判连接失效
+          idleTimer = setInterval(() => {
+            if (resolved) return
+            if (idleDeadline && Date.now() > idleDeadline) fail()
+          }, 5000)
 
-          // fetch 流式解析 SSE：按空行分隔事件，取 data: 行
-          ;(async () => {
+          // 绝对兜底：对齐后端轮询上限（防御重连风暴等极端场景）
+          totalTimer = setTimeout(() => {
+            if (!resolved) finishFail('索引耗时过长，请在文档列表确认状态或稍后重试')
+          }, MAX_TOTAL_MS)
+
+          // fetch 流式解析 SSE：按空行分隔事件，取 data: 行；可重入（重连复用）
+          async function consumeStream() {
+            idleDeadline = Date.now() + IDLE_TIMEOUT_MS
             try {
               const res = await fetchRaw(`${BASE}/upload/${data.upload_id}/stream`)
               if (!res.ok || !res.body) {
@@ -299,10 +329,11 @@ export const knowledgeService: any = {
               for (;;) {
                 const { done, value } = await reader.read()
                 if (done) {
-                  // 服务端正常关闭但未收到终态事件 → 视为中断
+                  // 服务端正常关闭但未收到终态事件 → 视为中断（先重连一次）
                   fail()
                   return
                 }
+                idleDeadline = Date.now() + IDLE_TIMEOUT_MS
                 buf += decoder.decode(value, { stream: true }).replace(/\r/g, '')
                 let sep: number
                 while ((sep = buf.indexOf('\n\n')) !== -1) {
@@ -313,12 +344,15 @@ export const knowledgeService: any = {
                     .map(l => l.slice(5).trim())
                     .join('\n')
                   if (msg) handleMessage(msg)
+                  if (resolved) return
                 }
               }
             } catch {
               fail()
             }
-          })()
+          }
+
+          consumeStream()
         })
       })
   },

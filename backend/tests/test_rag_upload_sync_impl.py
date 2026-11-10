@@ -846,7 +846,7 @@ class TestUploadStreamEndpoint:
         monkeypatch.setattr(ru, "_progress_queues", {})
         monkeypatch.setattr(ru, "_progress_owners", {"uid_resub": ("test-tenant", "7")})
         monkeypatch.setattr(ru, "_read_progress_redis",
-                            lambda uid: {"stage": "embedding", "message": "进行中"})
+                            lambda uid: ("ok", {"stage": "embedding", "message": "进行中"}))
         captured = {}
 
         def fake_redis_stream(uid, last_sig=None):
