@@ -10,6 +10,19 @@ const BASE = '/api/rag'
 
 import { createIdempotencyKey, fetchRaw, mutationFetchRaw } from '@/api/client'
 
+/** 从写操作的错误响应 body 尽力提取面向用户的人话（detail → error → 状态码兜底）。
+ *  与 uploadDocument 的 4xx 解析同口径（2026-11-10 评审 #4）。 */
+function extractMutationError(status: number, data: unknown): string {
+  if (data && typeof data === 'object') {
+    const body = data as { detail?: unknown; error?: unknown; message?: unknown }
+    for (const key of ['detail', 'error', 'message'] as const) {
+      const v = body[key]
+      if (typeof v === 'string' && v) return v
+    }
+  }
+  return `操作失败（HTTP ${status}）`
+}
+
 /** 构建查询字符串，自动过滤 undefined/null/空字符串，避免 URLSearchParams 将其转为字面字符串 "undefined" */
 const qs = (params: Record<string, any>) => {
   const clean: Record<string, string> = {}
@@ -222,11 +235,34 @@ export const knowledgeService: any = {
       })
   },
 
-  deleteDocument: (id: string) =>
-    fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE' }).then(r => r.json()).catch(() => ({ ok: false })),
+  deleteDocument: async (id: string) => {
+    try {
+      const res = await fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE' })
+      const r = await res.json().catch(() => null)
+      if (!res.ok) {
+        // 2026-11-10 评审（#4）：失败原因可见——403 授权拒绝等 4xx 的
+        // 人话在 body 的 detail/error 字段；旧实现吞掉后调用方只能拿到
+        // {ok:false} 无原因
+        return { ok: false, error: extractMutationError(res.status, r) }
+      }
+      return r
+    } catch (e) {
+      return { ok: false, error: (e as Error).message || '网络错误' }
+    }
+  },
 
-  reindexDocument: (id: string) =>
-    fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' }).then(r => r.json()).catch(() => ({ ok: false })),
+  reindexDocument: async (id: string) => {
+    try {
+      const res = await fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST' })
+      const r = await res.json().catch(() => null)
+      if (!res.ok) {
+        return { ok: false, error: extractMutationError(res.status, r) }
+      }
+      return r
+    } catch (e) {
+      return { ok: false, error: (e as Error).message || '网络错误' }
+    }
+  },
 
   /**
    * 批量删除（并发）— 使用 X-Batch-Id 头关联同一批次，操作中心按批次折叠展示。
@@ -240,7 +276,10 @@ export const knowledgeService: any = {
       docs.map(async ({ id, name }) => {
         try {
           const res = await fetchRaw(`${BASE}/documents/${id}`, { method: 'DELETE', headers })
-          const r = await res.json()
+          const r = await res.json().catch(() => null)
+          if (!res.ok) {
+            return { id, name, ok: false, error: extractMutationError(res.status, r), warnings: undefined }
+          }
           return { id, name, ok: r.ok as boolean, error: r.error as string | undefined, warnings: r.warnings as string[] | undefined }
         } catch (e) {
           return { id, name, ok: false, error: (e as Error).message || '网络错误', warnings: undefined }
@@ -274,8 +313,10 @@ export const knowledgeService: any = {
     for (const id of ids) {
       try {
         const res = await fetchRaw(`${BASE}/documents/${id}/reindex`, { method: 'POST', headers })
-        const r = await res.json()
-        if (r.ok) ok++
+        const r = await res.json().catch(() => null)
+        if (!res.ok) {
+          failed.push({ id, error: extractMutationError(res.status, r) })
+        } else if (r.ok) ok++
         else failed.push({ id, error: r.error || '重索引失败' })
       } catch (e) {
         failed.push({ id, error: (e as Error).message })
