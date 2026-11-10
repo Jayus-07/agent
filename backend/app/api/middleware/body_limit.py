@@ -9,7 +9,10 @@ before-auth-no-size-limit`` / ``selection-funnel-unbounded-import-body``）。
 分路径上限（字节）：
   - /webhooks/automations  1 MiB —— 外部回调负载只有事件 JSON；
   - /selection-funnel/import 32 MiB —— 选品表格导入；
-  - /rag/upload            RAG_MAX_FILE_SIZE（默认 50 MiB）；
+  - /rag/upload            RAG_MAX_FILE_SIZE + multipart 开销余量（默认 50 MiB
+                           + 16 KiB）——余量与路由层预检同源（F10），贴上限的
+                           合法文件不被中间件误拒；文件体精确上限仍由路由的
+                           流式字节计数强制执行；
   - 其余                   8 MiB —— 普通 JSON API。
 
 已知边界：chunked 请求没有 Content-Length，源内无法预检；此时依赖
@@ -20,14 +23,14 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from backend.config.rag import RAG_MAX_FILE_SIZE
+from backend.config.rag import RAG_MAX_FILE_SIZE, RAG_UPLOAD_MULTIPART_OVERHEAD
 
 DEFAULT_BODY_LIMIT = 8 * 1024 * 1024
 
 _BODY_LIMIT_RULES: tuple[tuple[str, int], ...] = (
     ("/webhooks/automations", 1 * 1024 * 1024),
     ("/selection-funnel/import", 32 * 1024 * 1024),
-    ("/rag/upload", RAG_MAX_FILE_SIZE * 1024 * 1024),
+    ("/rag/upload", RAG_MAX_FILE_SIZE * 1024 * 1024 + RAG_UPLOAD_MULTIPART_OVERHEAD),
 )
 
 

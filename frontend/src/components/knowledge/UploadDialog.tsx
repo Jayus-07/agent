@@ -7,7 +7,12 @@ import { fetchRaw } from '@/api/client'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-// 阶段映射：后端 SSE stage → 显示文案 + UI 索引（9 阶段，覆盖后端 span 树）
+/** 前端大小预检上限（MB）——对齐后端 RAG_MAX_FILE_SIZE 默认值（config/rag.py）。
+ *  仅作 fail-fast 体验优化：超限文件不再整包上传后才被拒；权威上限始终由
+ *  后端流式字节计数强制执行，后端调 env 时此处提示阈值可能滞后。 */
+const MAX_UPLOAD_MB = 50
+
+// 阶段映射：后端 SSE stage → 显示文案 + UI 索引（10 阶段，覆盖后端 span 树）
 const STAGES = [
   { key: 'uploading', label: '上传文件' },
   { key: 'loading',   label: '文件加载' },
@@ -60,10 +65,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [selectedKbId, setSelectedKbId] = useState('policy_general')
   const [selectedDept, setSelectedDept] = useState('general')
   const [kbList, setKbList] = useState<{ id: string; name: string; depts: { id: string; label: string }[] }[]>([])
+  const [kbLoadFailed, setKbLoadFailed] = useState(false)
 
   // 加载 KB 列表
   useEffect(() => {
     if (!open) return
+    setKbLoadFailed(false)
     fetchRaw('/api/rag/knowledge-bases')
       .then(r => r.json())
       .then(d => {
@@ -74,7 +81,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
           setSelectedDept(kbs[0].depts?.[0]?.id || 'general')
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        // 2026-11-10 评审：加载失败静默吞掉会让下拉框空着、上传默认打
+        // policy_general 被授权层 403 且原因不显示 —— 至少提示用户刷新
+        setKbLoadFailed(true)
+      })
   }, [open])
 
   const currentKb = kbList.find(k => k.id === selectedKbId)
@@ -125,7 +136,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setError('')
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
 
-    let okCount = 0
+    let successCount = 0
     const batchId = files.length > 1 ? crypto.randomUUID() : undefined
 
     for (let i = 0; i < files.length; i++) {
@@ -156,7 +167,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             ...(serverElapsed || {}),
           }
           updateReport(i, { status: 'duplicate', stageElapsed: elapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
-          okCount++
+          successCount++
         } else if (res.ok) {
           // 优先使用后端提供的 stage_elapsed；缺失阶段用 SSE 间隔法兜底
           const serverElapsed = res.stage_elapsed
@@ -180,7 +191,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             Object.assign(finalElapsed, elapsed)
           }
           updateReport(i, { status: 'success', stageElapsed: finalElapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
-          okCount++
+          successCount++
         } else {
           updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
         }
@@ -190,7 +201,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     }
 
     setUploading(false)
-    if (okCount > 0) onSuccess()
+    if (successCount > 0) onSuccess()
   }
 
   const isMulti = files.length > 1
@@ -216,11 +227,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               </div>
             )}
           </div>
-          {/* 失败数（用户要求：只显示成功/失败统计，不展开失败详情） */}
+          {/* 失败数汇总；具体原因在失败行内单行渲染（2026-11-10 评审调整） */}
           {!uploading && failCount > 0 && (
             <div className="mt-2 text-xs text-red-500 flex items-center gap-2">
               <AlertCircle size={12} />
-              <span>{failCount} 个文件失败，未显示详情</span>
+              <span>{failCount} 个文件失败</span>
             </div>
           )}
         </div>
@@ -240,6 +251,15 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               </select>
             </div>
 
+            {/* KB 列表加载失败提示（2026-11-10 评审：静默吞掉会让下拉框空着、
+                上传默认目标被授权层 403 且原因不显示） */}
+            {kbLoadFailed && (
+              <div className="flex items-center gap-2 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-600">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>知识库列表加载失败，请刷新重试；列表为空时上传会被拒绝</span>
+              </div>
+            )}
+
             {/* RAG 未就绪 → 等待提示 */}
             {ragReady === false && (
               <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-700">
@@ -251,7 +271,18 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               <input type="file" ref={fileRef} multiple
                 accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.markdown,.html,.htm,.pptx,.json,.xml" className="hidden"
                 disabled={ragReady === false}
-                onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) setFiles(fs) }} />
+                onChange={e => {
+                  // 2026-11-10 评审：超限文件选择即拒（fail-fast），不再整包
+                  // 上传后才被服务端流式计数拒绝；权威上限仍在后端
+                  const fs = Array.from(e.target.files || [])
+                  if (!fs.length) return
+                  const limit = MAX_UPLOAD_MB * 1024 * 1024
+                  const oversized = fs.filter(f => f.size > limit)
+                  setFiles(fs.filter(f => f.size <= limit))
+                  setError(oversized.length
+                    ? `以下文件超过 ${MAX_UPLOAD_MB}MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
+                    : '')
+                }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />
                 <p className={`text-xs ${ragReady === false ? 'text-amber-400' : 'text-text-muted'}`}>
@@ -316,6 +347,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                           : r.status === 'running' && r.currentStage ? <span className="text-[10px] text-accent shrink-0">{r.currentStage}…</span>
                           : r.status === 'success' && <span className="text-text-muted text-[10px] tabular-nums shrink-0">{totalMs > 0 ? fmtMs(totalMs) : '<1ms'}</span>}
                       </div>
+                      {/* 失败原因单行渲染（2026-11-10 评审）：后端 error 本就是
+                          面向用户的文案；原「不显示详情」策略让校验类失败
+                          （超大/格式不符）零反馈，用户无从下手 */}
+                      {r.status === 'failed' && r.error && (
+                        <div className="ml-6 mt-1 text-[10px] text-red-500 break-all">{r.error}</div>
+                      )}
                       {/* 运行中阶段明细 */}
                       {isRunning && (
                         <div className="space-y-0.5 ml-6 mt-1.5">

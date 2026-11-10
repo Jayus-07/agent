@@ -56,6 +56,9 @@ const FORWARD_REQ_HEADERS = [
   "user-agent",
   "cookie",
   "idempotency-key",
+  // 批次关联（2026-11-10 评审修复）：RAG 批量删除/重索引/上传由前端注入
+  // X-Batch-Id，后端落操作日志供操作中心按批次折叠；缺它 = 批次头被剥。
+  "x-batch-id",
   "x-trace-id",
 ] as const;
 const FORWARD_RES_HEADERS = [
@@ -112,8 +115,9 @@ async function proxy(
   if (rl.key) headers.set("X-Client-IP", rl.key);
 
   const method = req.method;
-  // T6（2026-11-08 安全审计）：带 Content-Length 的请求在 arrayBuffer()
-  // 整体读入内存前先做上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。
+  // T6（2026-11-08 安全审计）：带 Content-Length 的请求在读取 body 前先做
+  // 上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。chunked 请求无
+  // Content-Length 无法预检，由 APISIX 边缘上限按实际字节兜底。
   const maxBodyBytes = Number(
     process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024,
   );
@@ -132,14 +136,26 @@ async function proxy(
       { status: 413 },
     );
   }
+  // 请求体流式透传（2026-11-10 评审）：旧实现 arrayBuffer() 把整个上传体
+  // （最大 50MB）读入 Node 内存后再转发，并发上传内存峰值线性叠加。改为
+  // ReadableStream 直通，Node fetch（undici）对流 body 要求 duplex: "half"。
+  // 代价：下游收到 chunked 请求（无 Content-Length），body_limit 的源内
+  // 预检对 chunked 不生效——该边界本就存在，由 APISIX 边缘上限兜底。
   const body =
-    method === "GET" || method === "HEAD"
+    method === "GET" || method === "HEAD" || req.body === null
       ? undefined
-      : await req.arrayBuffer();
+      : req.body;
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, { method, headers, body, redirect: "manual" });
+    upstream = await fetch(target, {
+      method,
+      headers,
+      body,
+      // undici：body 为 ReadableStream 时必需
+      duplex: "half",
+      redirect: "manual",
+    } as RequestInit & { duplex: "half" });
   } catch (e) {
     return Response.json(
       { error: "Bad Gateway", message: `网关不可达: ${String(e)}` },

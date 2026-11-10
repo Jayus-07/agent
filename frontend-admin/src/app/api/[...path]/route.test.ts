@@ -111,6 +111,19 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("idempotency-key")).toBe("fallback-change-1");
   });
 
+  it("透传 X-Batch-Id，批量删除/重索引/上传的批次关联才不失效（2026-11-10 评审回归）", async () => {
+    const req = makeReq("/api/rag/documents/delete", {
+      "content-type": "application/json",
+      authorization: "Bearer test-token",
+      "x-batch-id": "batch-admin-1",
+    });
+    const ctx = { params: Promise.resolve({ path: ["rag", "documents", "delete"] }) };
+    await GET(req, ctx);
+
+    const upstreamHeaders = fetchMock.mock.calls[0][1].headers as Headers;
+    expect(upstreamHeaders.get("x-batch-id")).toBe("batch-admin-1");
+  });
+
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {
     const req = makeReq("/api/auth/login", { "content-type": "application/json" });
     const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };

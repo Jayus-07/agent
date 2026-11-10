@@ -538,6 +538,13 @@ def client(monkeypatch):
     from backend.app.api.routes import rag_upload as ru
     import backend.config.knowledge_base as kb_cfg
     import backend.config.rag as rag_cfg
+    # 2026-10-01 权限收口后端点内 resolve_principal/require_principal 走真实
+    # 头解析；本机 .env 若配置 GATEWAY_TRUST_SECRET，直连测试客户端的身份头
+    # 会退化为 guest → 上传 403 / SSE 订阅 401。端点行为测试的前提是
+    # 「网关已验签并注入身份头」，故关闭信任加固，与既有 RAG_MAX_FILE_SIZE
+    # 等 patch 同风格。
+    from backend.config import auth as auth_cfg
+    monkeypatch.setattr(auth_cfg, "GATEWAY_TRUST_SECRET", "")
 
     monkeypatch.setattr(ru, "require_rag_ready", lambda: None)
     # 45cdbdd 起 validate_kb_dept 增加租户/部门状态可选参，stub 按新签名对齐
@@ -690,6 +697,43 @@ class TestUploadEndpoint:
                        data={"kb_id": "policy_general", "department": "general"})
         assert resp.status_code == 503
 
+    def test_exception_message_not_leaked_to_client(self, client, monkeypatch):
+        """2026-11-10 评审：兜底异常串可能含服务器绝对路径（OSError），
+        全文只进服务端日志，客户端只能拿到通用文案。"""
+        tc, _ = client
+        import backend.app.api.routes.rag_upload as ru
+
+        async def boom(*args, **kwargs):
+            raise OSError(
+                "[Errno 28] No space left on device: '/server/secret/staging/x.md'")
+
+        monkeypatch.setattr(ru, "sync_upload_impl", boom)
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"})
+        body = resp.json()
+        assert body["ok"] is False
+        assert "/server/secret" not in body["error"], body
+        assert "OSError" not in body["error"], body
+
+    def test_dispatch_failure_message_not_leaked(self, client, monkeypatch):
+        """2026-11-10 评审：派发失败异常可能含 Redis/PG 连接串，不下发客户端。"""
+        tc, _ = client
+        import backend.app.api.routes.rag_upload as ru
+
+        def boom(**kwargs):
+            raise ConnectionError(
+                "connect to redis://:secretpw@10.0.0.9:6379 failed")
+
+        monkeypatch.setattr(ru, "_dispatch_index_with_idempotency", boom)
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"})
+        body = resp.json()
+        assert body["ok"] is False
+        assert "secretpw" not in body["error"], body
+        assert "10.0.0.9" not in body["error"], body
+
 
 class TestUploadStreamEndpoint:
 
@@ -791,3 +835,48 @@ class TestUploadStreamEndpoint:
         assert stages == ["uploading", "done"]
         # SSE 断连后队列被回收（event_stream finally）
         assert "uid_late" not in queues
+
+    def test_resubscribe_after_disconnect_uses_redis_mirror(self, client, monkeypatch):
+        """2026-11-10 评审回归：进程内索引场景 SSE 断连（队列已 pop）后重订阅，
+        Redis 镜像存在时切 Redis 轮询通道续看，而不是报“不存在或已过期”。"""
+        from fastapi.responses import StreamingResponse
+        from backend.app.api.routes import rag_upload as ru
+
+        monkeypatch.setattr(ru, "_celery_routed", set())
+        monkeypatch.setattr(ru, "_progress_queues", {})
+        monkeypatch.setattr(ru, "_progress_owners", {"uid_resub": ("test-tenant", "7")})
+        monkeypatch.setattr(ru, "_read_progress_redis",
+                            lambda uid: {"stage": "embedding", "message": "进行中"})
+        captured = {}
+
+        def fake_redis_stream(uid, last_sig=None):
+            captured["uid"] = uid
+
+            async def gen():
+                yield "data: {}\n\n"
+            return StreamingResponse(gen(), media_type="text/event-stream")
+
+        monkeypatch.setattr(ru, "_redis_poll_stream_response", fake_redis_stream)
+
+        tc, _ = client
+        resp = tc.get("/upload/uid_resub/stream")
+        assert captured["uid"] == "uid_resub", "应切换到 Redis 轮询通道"
+        assert "不存在或已过期" not in resp.text
+
+    def test_resubscribe_without_mirror_reports_not_found(self, client, monkeypatch):
+        """队列与镜像都没有（任务确实不存在/已过期）→ 维持原拒绝语义。
+        本用例与 test_unknown_upload_id 的区别：owner 在册（走到队列分支）。"""
+        from backend.app.api.routes import rag_upload as ru
+
+        monkeypatch.setattr(ru, "_celery_routed", set())
+        monkeypatch.setattr(ru, "_progress_queues", {})
+        monkeypatch.setattr(ru, "_progress_owners", {"uid_gone": ("test-tenant", "7")})
+
+        tc, _ = client
+        resp = tc.get("/upload/uid_gone/stream")
+        # _sse_encode ensure_ascii=True，中文以 \uXXXX 转义 —— 解析后断言
+        import json as _json
+        data_lines = [l for l in resp.text.splitlines() if l.startswith("data: ")]
+        assert data_lines, f"SSE 流应有 data 行，实际: {resp.text!r}"
+        payload = _json.loads(data_lines[0][len("data: "):])
+        assert "不存在或已过期" in payload["message"]
