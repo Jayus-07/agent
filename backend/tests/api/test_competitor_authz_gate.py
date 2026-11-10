@@ -88,13 +88,26 @@ _PUBLIC = {("/competitor/recommendations", "GET")}
 
 
 def _route_guard_names(app):
-    """path+method → 本轮守卫依赖的函数名集合（无守卫 = 空集）。"""
+    """path+method → 本轮守卫依赖的函数名集合（无守卫 = 空集）。
+
+    fastapi 0.161（requirements-lock）起 include_router 惰性挂载：
+    app.routes 里是 _IncludedRouter 包装对象而非展平的 APIRoute
+    （0.136 才展平）——必须沿 original_router 递归解包，否则守卫集
+    恒为空（周回归 v4/v5 CI-only 失败根因，2026-11-10 实证）。
+    """
     from fastapi.routing import APIRoute
 
+    def _iter(routes):
+        for route in routes:
+            if isinstance(route, APIRoute):
+                yield route
+                continue
+            nested = getattr(route, "original_router", None)
+            if nested is not None:
+                yield from _iter(getattr(nested, "routes", []))
+
     out = {}
-    for r in app.routes:
-        if not isinstance(r, APIRoute):
-            continue
+    for r in _iter(app.routes):
         guards = {
             d.call.__name__ for d in r.dependant.dependencies
             if getattr(d.call, "__name__", "").startswith("require_")
@@ -110,33 +123,7 @@ def test_all_guarded_endpoints_carry_expected_tier(app):
     guards = _route_guard_names(app)
 
     for key in _EDITOR | _ADMIN | _PUBLIC:
-        if key not in guards:
-            # 诊断（CI-only 空路由分诊 2026-11-10）：dump 路由表真实形态
-            import sys
-
-            import fastapi.routing as _fr
-
-            _mods = sorted(
-                k for k in sys.modules
-                if k.endswith("routes.competitor") or k == "routes.competitor")
-            _instances = {}
-            for _k in _mods:
-                _mod = sys.modules[_k]
-                _router = getattr(_mod, "router", None)
-                _instances[_k] = (
-                    None if _router is None
-                    else (len(getattr(_router, "routes", [])),
-                          id(_router)))
-            _route_types = sorted(
-                type(r).__module__ + "." + type(r).__name__
-                for r in app.routes)
-            pytest.fail(
-                f"路由缺失: {key}; "
-                f"module_router_routes={_instances}; "
-                f"app_routes_count={len(app.routes)}; "
-                f"app_routes_types={_route_types}; "
-                f"api_route_cls={_fr.APIRoute!r}"
-            )
+        assert key in guards, f"路由缺失: {key}"
     for key in _EDITOR:
         assert guards[key] == {"require_editor_user"}, f"{key} 应挂 editor 闸，实际 {guards[key]}"
     for key in _ADMIN:
