@@ -124,6 +124,23 @@ describe("BFF 代理转发契约", () => {
     expect(upstreamHeaders.get("x-batch-id")).toBe("batch-admin-1");
   });
 
+  it("RAG 上传超路径上限（50MiB+16KiB）在 BFF 直接 413 人话拒绝，不触达上游（2026-11-10 冒烟修复同步）", async () => {
+    const req = makeReq("/api/rag/upload", {
+      "content-type": "multipart/form-data; boundary=x",
+      "content-length": String(50 * 1024 * 1024 + 16 * 1024 + 1),
+      authorization: "Bearer test-token",
+    });
+    const ctx = { params: Promise.resolve({ path: ["rag", "upload"] }) };
+    const res = await GET(req, ctx);
+
+    expect(res.status).toBe(413);
+    expect(fetchMock).not.toHaveBeenCalled();
+    const body = (await res.json()) as { error?: string; detail?: string };
+    expect(body.error).toBe("PayloadTooLarge");
+    // detail 人话对齐后端 body_limit 413 字段结构（前端解析链 detail 优先）
+    expect(body.detail).toContain("请求体超过上限");
+  });
+
   it("响应侧逐条透传 set-cookie（refresh_token Cookie 生命周期依赖）", async () => {
     const req = makeReq("/api/auth/login", { "content-type": "application/json" });
     const ctx = { params: Promise.resolve({ path: ["auth", "login"] }) };

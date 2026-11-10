@@ -116,25 +116,38 @@ async function proxy(
 
   const method = req.method;
   // T6（2026-11-08 安全审计）：带 Content-Length 的请求在读取 body 前先做
-  // 上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。chunked 请求无
-  // Content-Length 无法预检，由 APISIX 边缘上限按实际字节兜底。
-  const maxBodyBytes = Number(
-    process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024,
-  );
+  // 上限检查。分路径规则（2026-11-10 冒烟修复，与 web 端同款）：
+  //   - /rag/upload → RAG_MAX_FILE_SIZE + multipart 余量（与后端 body_limit
+  //     三方同源）。超限在 BFF 直接人话拒绝：流式透传场景下游会读完整个
+  //     body 才拒，且上游快速 413 断连会触发 undici「terminated」把错误
+  //     变成连接重置（客户端收到 000 而非 413）。
+  //   - 其余 → BFF_MAX_BODY_BYTES 默认 64MB。
+  // chunked 请求无 Content-Length 无法预检，由 APISIX 边缘上限按实际字节兜底。
   const declaredLength = Number(req.headers.get("content-length") || "0");
   if (
     method !== "GET" &&
     method !== "HEAD" &&
     Number.isFinite(declaredLength) &&
-    declaredLength > maxBodyBytes
+    declaredLength > 0
   ) {
-    return Response.json(
-      {
-        error: "PayloadTooLarge",
-        message: `请求体超过上限（${maxBodyBytes} bytes）`,
-      },
-      { status: 413 },
-    );
+    // 对齐 backend/config/rag.py RAG_UPLOAD_MULTIPART_OVERHEAD（前端写死，
+    // 联动方案见 docs/tasks/upload-followups-20261110 #6）
+    const ragUploadLimit = 50 * 1024 * 1024 + 16 * 1024;
+    const maxBodyBytes =
+      path[0] === "rag" && path[1] === "upload"
+        ? ragUploadLimit
+        : Number(process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024);
+    if (declaredLength > maxBodyBytes) {
+      return Response.json(
+        {
+          // detail 优先对齐后端 body_limit 413 的字段结构——前端 4xx 解析
+          // 链（detail → error → 原文）取 detail 人话，不显示错误码
+          error: "PayloadTooLarge",
+          detail: `请求体超过上限（${maxBodyBytes} bytes）`,
+        },
+        { status: 413 },
+      );
+    }
   }
   // 请求体流式透传（2026-11-10 评审）：旧实现 arrayBuffer() 把整个上传体
   // （最大 50MB）读入 Node 内存后再转发，并发上传内存峰值线性叠加。改为
