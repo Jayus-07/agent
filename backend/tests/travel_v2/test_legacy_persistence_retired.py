@@ -56,5 +56,29 @@ def test_legacy_trip_persistence_api_routes_are_not_mounted():
     }
 
     assert mounted.isdisjoint(retired)
+    if ("/travel/v2/trips", "POST") not in mounted:
+        # 诊断（CI-only 空路由分诊 2026-11-10）：dump api_router 真实形态
+        import sys
+
+        _mods = sorted(
+            k for k in sys.modules
+            if k.endswith("api.router") or k.endswith("api\\router")
+            or k == "api.router")
+        _instances = {}
+        for _k in _mods:
+            _mod = sys.modules[_k]
+            _ar = getattr(_mod, "api_router", None)
+            _instances[_k] = (
+                None if _ar is None
+                else (len(getattr(_ar, "routes", [])), id(_ar)))
+        _v2 = sys.modules.get("backend.travel_v2.api.router")
+        _v2_len = None
+        if _v2 is not None and hasattr(_v2, "router"):
+            _v2_len = len(getattr(_v2.router, "routes", []))
+        pytest.fail(
+            f"travel/v2/trips 未挂载; mounted_count={len(mounted)}; "
+            f"api_router_instances={_instances}; "
+            f"travel_v2_router_routes={_v2_len}"
+        )
     assert ("/travel/v2/trips", "POST") in mounted
     assert ("/travel/v2/plan/stream", "POST") in mounted
