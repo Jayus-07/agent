@@ -81,10 +81,15 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(1);
   });
 
-  it("长时间无更新（超 idle 上限）→ 触发重连，新流终态成功", async () => {
+  it("长时间无更新（超 idle 上限）→ 触发重连，旧流被 cancel，新流终态成功", async () => {
     vi.useFakeTimers();
-    // 第一条流：连接建立后无任何字节（read 永久挂起）
-    const hangingStream = new ReadableStream<Uint8Array>({ start() { /* 挂起 */ } });
+    // 第一条流：连接建立后无任何字节（read 永久挂起）；cancel 必须被调用，
+    // 否则队列模式下新旧连接会竞争消费同一进程内进度队列分流事件
+    let cancelled = false;
+    const hangingStream = new ReadableStream<Uint8Array>({
+      start() { /* 挂起 */ },
+      cancel() { cancelled = true; },
+    });
     apiMock.fetchRaw
       .mockResolvedValueOnce(new Response(hangingStream, { status: 200 }))
       .mockResolvedValueOnce(new Response(DONE_FRAME, { status: 200 }));
@@ -97,5 +102,6 @@ describe("knowledgeService 上传 SSE 流可靠性（batch4a）", () => {
 
     expect(result.ok).toBe(true);
     expect(apiMock.fetchRaw).toHaveBeenCalledTimes(2);
+    expect(cancelled).toBe(true);
   });
 });

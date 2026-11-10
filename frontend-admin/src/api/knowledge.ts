@@ -252,6 +252,14 @@ export const knowledgeService: any = {
           const RETRY_DELAY_MS = 1000
           let retried = false
           let idleDeadline = 0
+          // 重连前必须 cancel 旧 reader：队列模式下旧 SSE 连接若还挂着，
+          // 与新连接竞争消费同一个进程内进度队列会分流事件（终态可能被
+          // 旧连接拿走后新连接空等）。cancel 会触发服务端断连清理，重连
+          // 经 Redis 镜像通道续看，终态不丢。
+          let activeReader: ReadableStreamDefaultReader<Uint8Array> | undefined
+          // 重连 cancel 旧流会让挂起的 read() reject / 立即 done——这不是
+          // 连接失败，用标志区分，避免重连路径被自己的 cancel 二次触发
+          let cancellingForRetry = false
           const startedAt = Date.now()
           let idleTimer: ReturnType<typeof setInterval> | undefined
           let totalTimer: ReturnType<typeof setTimeout> | undefined
@@ -273,6 +281,8 @@ export const knowledgeService: any = {
             if (resolved) return
             if (!retried && Date.now() - startedAt + RETRY_DELAY_MS < MAX_TOTAL_MS) {
               retried = true
+              cancellingForRetry = true
+              try { void activeReader?.cancel() } catch { /* 旧流可能已结束 */ }
               setTimeout(() => { if (!resolved) consumeStream() }, RETRY_DELAY_MS)
               return
             }
@@ -324,12 +334,15 @@ export const knowledgeService: any = {
                 return
               }
               const reader = res.body.getReader()
+              activeReader = reader
               const decoder = new TextDecoder()
               let buf = ''
               for (;;) {
                 const { done, value } = await reader.read()
                 if (done) {
-                  // 服务端正常关闭但未收到终态事件 → 视为中断（先重连一次）
+                  // 服务端正常关闭但未收到终态事件 → 视为中断（先重连一次）；
+                  // 若 done 由重连自我 cancel 引起则静默退出
+                  if (cancellingForRetry) return
                   fail()
                   return
                 }
@@ -348,6 +361,7 @@ export const knowledgeService: any = {
                 }
               }
             } catch {
+              if (cancellingForRetry) return
               fail()
             }
           }
