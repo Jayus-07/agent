@@ -97,7 +97,10 @@ def _racing_update_status(ts, task_id, real_conn, preempt_plan, **kw):
         return _PlannedConn(real())
 
     with pytest.MonkeyPatch.context() as m:
-        m.setattr(ts, "_conn", _factory)
+        # 2026-11-08 #293 task_service 池化后 update_status 走 _pooled_conn
+        # （与 #363 对 managed task cancel 守卫测试的同步同款）；
+        # 仍 patch _conn 会拦截落空 → 抢占不发生 → 测试失真放行。
+        m.setattr(ts, "_pooled_conn", _factory)
         return ts.update_status(task_id, **kw)
 
 

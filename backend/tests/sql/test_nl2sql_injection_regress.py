@@ -330,9 +330,6 @@ class TestAstEscapeSurface:
         ("CHECKPOINT", 1, "non_select"),
         ("GRANT SELECT ON order.orders TO someone", 1, "non_select"),
         ("SELECT * INTO new_t FROM order.orders", 1, "select_into"),
-        # sqlglot 不识别的命令走 parse_error 拒绝（fail-closed 兜底）
-        ("LOCK TABLE order.orders IN ACCESS EXCLUSIVE MODE", 0, "parse_error"),
-        ("CLUSTER order.orders", 0, "parse_error"),
     ])
     def test_g19_pg_specific_commands(self, guard, sql, layer, reason):
         ctx = build_ctx(**EDITOR_CTX)
@@ -340,6 +337,23 @@ class TestAstEscapeSurface:
             guard.validate_and_rewrite(sql, ctx)
         assert ei.value.layer == layer
         assert ei.value.reason == reason
+
+    @pytest.mark.parametrize("sql", [
+        # LOCK/CLUSTER 的分类依赖 sqlglot 解析能力：30.8 不识别 → layer 0
+        # parse_error；30.24（requirements-lock 锁定版）能解析 LOCK 为
+        # Command → layer 1 non_select。两者同为 fail-closed 拒绝，
+        # 断言接受两种分类，锁死"必须拒绝"这一安全属性本身。
+        "LOCK TABLE order.orders IN ACCESS EXCLUSIVE MODE",
+        "CLUSTER order.orders",
+    ])
+    def test_g19_lock_cluster_always_rejected(self, guard, sql):
+        ctx = build_ctx(**EDITOR_CTX)
+        with pytest.raises(ValidationError) as ei:
+            guard.validate_and_rewrite(sql, ctx)
+        assert (ei.value.layer, ei.value.reason) in {
+            (0, "parse_error"),
+            (1, "non_select"),
+        }, f"LOCK/CLUSTER 必须被拒绝，实际 layer={ei.value.layer} reason={ei.value.reason}"
 
 
 class TestG20IdentityFailClosed:

@@ -284,8 +284,12 @@ async def test_handoff_claim_has_one_success_under_twenty_concurrent_agents(
 
     async def claim(index: int):
         try:
+            # 2026-11-08 起签名加 run_sync（P3 事务统一重构），生产调用方
+            # 经 backend.customer_service._db_loop 注入，测试同源传入
+            from backend.customer_service._db_loop import run_sync
+
             result = await cs_admin._async_claim(
-                conversation_id, agent_ids[index], None
+                conversation_id, agent_ids[index], None, run_sync
             )
             return ("ok", result)
         except HTTPException as exc:

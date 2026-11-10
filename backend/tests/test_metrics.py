@@ -52,8 +52,17 @@ class TestMetricsDefinitions:
 
 
 class TestMetricsEndpoint:
-    def test_metrics_returns_prometheus_format(self):
-        r = client.get("/metrics")
+    @staticmethod
+    def _headers(monkeypatch) -> dict:
+        # T8（2026-11-08）起 /metrics 移出鉴权豁免清单：匿名请求按无凭据
+        # 拒绝（CI 无 API_KEY 时 503 AuthNotConfigured，本地配了 API_KEY
+        # 时 401）。测试自备凭据，不依赖外部 env。
+        monkeypatch.setattr(
+            "backend.app.api.middleware.auth.API_KEY", "test-metrics-key")
+        return {"X-API-Key": "test-metrics-key"}
+
+    def test_metrics_returns_prometheus_format(self, monkeypatch):
+        r = client.get("/metrics", headers=self._headers(monkeypatch))
         assert r.status_code == 200
         assert "text/plain" in r.headers.get("content-type", "")
         body = r.text
@@ -63,9 +72,9 @@ class TestMetricsEndpoint:
         assert "llm_tokens_total" in body
         assert "skill_failure_total" in body
 
-    def test_counter_increments_appear_in_output(self):
+    def test_counter_increments_appear_in_output(self, monkeypatch):
         chat_request_total.labels(status="ok").inc(3)
-        r = client.get("/metrics")
+        r = client.get("/metrics", headers=self._headers(monkeypatch))
         assert 'chat_request_total{status="ok"}' in r.text
         # 至少 3（可能更多，因为前面测试已 inc 过）
         import re
