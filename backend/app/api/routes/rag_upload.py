@@ -1,5 +1,5 @@
 """RAG 上传路由 — PR-2.x 从 rag.py 抽出。"""
-import asyncio, json, os, shutil, threading, time, uuid
+import asyncio, json, os, re, shutil, threading, time, uuid
 from asyncio import Queue
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request, Depends
 from fastapi.responses import StreamingResponse
@@ -452,6 +452,10 @@ PROGRESS_QUEUE_TTL_SECONDS = 1800
 # 抽为常量便于测试 patch（生产值 15s，测试中可缩到毫秒级）。
 SSE_KEEPALIVE_TIMEOUT_SECONDS = 15.0
 
+# batch3 P3-2：X-Batch-Id 白名单（字母数字 + _.:-，≤64 字符）。前端
+# randomId('batch')（uuid 或 batch-<ts>-<rand>）天然满足。
+_BATCH_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,64}")
+
 
 def _validate_mime(ext: str, content_type: str | None) -> tuple[bool, str]:
     """校验 MIME 与扩展名一致性（纯函数）。
@@ -538,6 +542,14 @@ async def upload_document(request: Request, file: UploadFile = File(...),
     ok, err = _validate_mime(ext, file.content_type)
     if not ok:
         return {"ok": False, "error": err}
+
+    # batch3 P3-2：X-Batch-Id 后端白名单校验——该头经 BFF 白名单透传后直接
+    # 进 Celery 消息、doc_operation_log.batch_id 与 processing lineage，任意
+    # 超长/特殊字符会被持久化。前端 randomId 产物（uuid / batch-<ts>-<rand>）
+    # 均匹配此模式，合法链路不受影响；校验与 MIME 同口径（200 + ok:false）。
+    batch_id_header = (request.headers.get("X-Batch-Id") or "").strip()
+    if batch_id_header and not _BATCH_ID_PATTERN.fullmatch(batch_id_header):
+        return {"ok": False, "error": "invalid X-Batch-Id header"}
 
     max_size = RAG_MAX_FILE_SIZE * 1024 * 1024
     cl = request.headers.get("content-length")
@@ -1983,7 +1995,7 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
         if status == "missing":
             empty_polls += 1
             if empty_polls >= _SSE_REDIS_EMPTY_GRACE_POLLS:
-                yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+                yield _sse_encode("error", {"message": "上传任务不存在或已过期"})
                 return
             await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
             continue
@@ -2122,7 +2134,7 @@ async def stream_upload_progress(upload_id: str, request: Request):
     if not await asyncio.to_thread(_ensure_progress_owner, request, upload_id):
         # 统一「不存在或已过期」：不区分「无权」与「不存在」，不泄露存在性
         async def forbidden():
-            yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+            yield _sse_encode("error", {"message": "上传任务不存在或已过期"})
         return StreamingResponse(forbidden(), media_type="text/event-stream")
 
     if upload_id in _celery_routed:
@@ -2142,7 +2154,7 @@ async def stream_upload_progress(upload_id: str, request: Request):
             return _redis_poll_stream_response(upload_id)
 
         async def not_found():
-            yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
+            yield _sse_encode("error", {"message": "上传任务不存在或已过期"})
         return StreamingResponse(not_found(), media_type="text/event-stream")
 
     async def event_stream():

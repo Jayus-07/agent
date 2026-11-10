@@ -67,6 +67,8 @@ class TestGetRagStatusNonBlocking:
             status = deps.get_rag_status()
             elapsed = time.time() - t0
             assert elapsed < 1.0, f"get_rag_status 阻塞了 {elapsed:.1f}s（回归：不得等初始化锁）"
+            status.pop("max_file_size_mb", None)
+            status.pop("multipart_overhead_bytes", None)
             assert status == {
                 "ready": False,
                 "status": "initializing",
@@ -77,7 +79,20 @@ class TestGetRagStatusNonBlocking:
 
     def test_status_ready(self, clean_pipeline_state, monkeypatch):
         monkeypatch.setattr(pipeline_mod, "_pipeline_singleton", object())
-        assert deps.get_rag_status() == {"ready": True, "status": "ready"}
+        status = deps.get_rag_status()
+        status.pop("max_file_size_mb", None)
+        status.pop("multipart_overhead_bytes", None)
+        assert status == {"ready": True, "status": "ready"}
+
+    def test_status_carries_upload_limit_fields(self, clean_pipeline_state, monkeypatch):
+        """#6（2026-11-11 batch4b）：health 透传上传预检上限——前端 fail-fast
+        的权威值来源，改 RAG_MAX_FILE_SIZE env 后前端跟随。"""
+        import backend.config.rag as rag_cfg
+        monkeypatch.setattr(rag_cfg, "RAG_MAX_FILE_SIZE", 100)
+        monkeypatch.setattr(pipeline_mod, "_pipeline_singleton", object())
+        status = deps.get_rag_status()
+        assert status["max_file_size_mb"] == 100
+        assert status["multipart_overhead_bytes"] == rag_cfg.RAG_UPLOAD_MULTIPART_OVERHEAD
 
     def test_status_error(self, clean_pipeline_state, monkeypatch):
         monkeypatch.setattr(pipeline_mod, "_pipeline_init_error", "init failed")

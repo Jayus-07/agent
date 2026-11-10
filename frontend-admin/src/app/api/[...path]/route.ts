@@ -130,9 +130,12 @@ async function proxy(
     Number.isFinite(declaredLength) &&
     declaredLength > 0
   ) {
-    // 对齐 backend/config/rag.py RAG_UPLOAD_MULTIPART_OVERHEAD（前端写死，
-    // 联动方案见 docs/tasks/upload-followups-20261110 #6）
-    const ragUploadLimit = 50 * 1024 * 1024 + 16 * 1024;
+    // #6 env 联动（2026-11-11 batch4b）：部署侧设 BFF_RAG_UPLOAD_LIMIT_BYTES
+    // 与后端 RAG_MAX_FILE_SIZE 同步调整；未设时回退默认 50MiB+16KiB（对齐
+    // backend/config/rag.py 的 RAG_MAX_FILE_SIZE=50 + RAG_UPLOAD_MULTIPART_OVERHEAD）。
+    // 管理端 UI 的预检上限走 /rag/health 接口透传（deps.get_rag_status）。
+    const ragUploadLimit =
+      Number(process.env.BFF_RAG_UPLOAD_LIMIT_BYTES || 50 * 1024 * 1024 + 16 * 1024);
     const maxBodyBytes =
       path[0] === "rag" && path[1] === "upload"
         ? ragUploadLimit
@@ -169,9 +172,11 @@ async function proxy(
       duplex: "half",
       redirect: "manual",
     } as RequestInit & { duplex: "half" });
-  } catch (e) {
+  } catch {
+    // batch3 P3-1：对齐 web 端脱敏口径——异常串只进服务端日志，客户端返
+    // 通用文案（undici 异常细节可能含上游地址/网络拓扑）
     return Response.json(
-      { error: "Bad Gateway", message: `网关不可达: ${String(e)}` },
+      { error: "Bad Gateway", message: "网关暂不可达" },
       { status: 502 },
     );
   }
