@@ -60,3 +60,106 @@
 | 重建 | `devctl.bat rebuild -y`（backend+admin/web）；cs 单独 `docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.yml build frontend-cs && up -d --no-deps frontend-cs` |
 | 后端测试 | `D:/Program Files/workplace/agent/.venv/Scripts/python.exe -m pytest backend/tests/test_rag_upload_*.py -q --no-cov`（worktree 内跑，解析到 worktree 代码） |
 | git/gh 网络 | 需要时 `-c http.proxy=http://127.0.0.1:7897` 或 export HTTPS_PROXY |
+
+---
+
+## batch3 复审报告（2026-11-11，独立新会话，只评审不改码）
+
+> 复审基线：main@c3f07de（worktree `D:/Program Files/workplace/agent-wt-upload-rereview`，分支 fix/upload-rereview-20261111）。
+> 方法：不信任既有结论，逐段重读 rag_upload.py 全文 2149 行 + publish.py 615 行 + index_run_store_pg.py 390 行 + body_limit.py + config/rag.py + 三端 route.ts 逐字段 diff + admin UploadDialog/knowledge.ts/DocumentsPanel + 边界（幂等/授权/sweeper/双通道）。
+
+### 一、已知修复点抽查表（14 项，全部在当前 main 验证仍生效）
+
+| # | 修复点 | 证据（file:line @c3f07de） | 状态 |
+|---|--------|---------------------------|------|
+| B0-1 | x-batch-id 白名单三端 | web route.ts:64 / admin:58 / cs:59（FORWARD_REQ_HEADERS） | ✅ |
+| B0-2 | body_limit 余量三方同源 | config/rag.py:88（定义，不开放 env）→ body_limit.py:33 → rag_upload.py:446 | ✅ |
+| B0-3 | PDF 预检挪出事件循环 | rag_upload.py:830,837（asyncio.to_thread ×2） | ✅ |
+| B0-4 | BFF 请求体流式透传 | 三端 route.ts fetch(..., duplex:"half")（web:217-224） | ✅ |
+| B0-5 | 后端异常脱敏 | rag_upload.py:210-213（锁竞争）、559-564（upload 入口）、872-881（流式处理） | ✅ |
+| B0-6 | 失败原因人话渲染 | admin knowledge.ts:204-218（detail→error 提取链）+ UploadDialog.tsx:246,250,432 | ✅ |
+| B0-7 | 50MB 前端预检 | UploadDialog.tsx:14（MAX_UPLOAD_MB=50）+ 339-344（超限过滤+提示） | ✅ |
+| B0-8 | SSE 断连 Redis 镜像重订阅 | rag_upload.py:2106-2119（队列缺失→镜像存在→切 Redis 轮询） | ✅ |
+| B0-9 | 测试 fixture（GATEWAY_TRUST_SECRET 退化） | test_rag_upload_sync_impl.py:542-547（patch 清空） | ✅（静态确认） |
+| B1-1 | BFF /rag/upload 路径级上限 + 413 detail | 三端 route.ts（web:188-203，50MiB+16KiB + detail 字段） | ✅ |
+| B1-2 | cs BFF 同步 | cs 与 admin diff 仅 CLIENT_APP/注释差异，白名单/上限/流式逐字段一致 | ✅ |
+| B1-3 | delete/reindex 4xx 人话解析 | admin knowledge.ts:35（deleteErrorMessage）+ 69,350；web 4 处已随 batch2 死代码栈整体删除（自洽） | ✅ |
+| B2-1 | web 死代码栈删除 | frontend/src 无 components/knowledge/、useKnowledge、lib/knowledge.ts；MultiQueryToggle 仅余 surface.test.ts:33 注释 | ✅ |
+| B2-2 | admin 三处交互修复（A1/A2/A3） | UploadDialog.tsx:337（input.value 重置）/ 441-443（stageMessage 渲染）/ 415-417（未知 stage 兜底） | ✅ |
+
+**动态验证边界（如实声明）**：本批 Docker 未启动，未重跑动态测试。论证：`git diff 841dc5e..c3f07de` 为纯 docs（3 个任务文档，+100 行，零代码变化），batch1 合并后实测基线（后端 202+ 全绿、51MB 经 BFF 413+detail、49MB 流式、三端 200）对 c3f07de 依然成立。抽查表以静态代码验证为准。
+
+### 二、新发现项（P1：无；P2×2；P3×3；P4×4）
+
+#### P2-1 前端 SSE 看门狗 10 分钟绝对超时，与后端长任务不匹配 → 大文件误报失败
+- 证据：frontend-admin/src/api/knowledge.ts:243（`WATCHDOG_MS = 10 * 60 * 1000`，L281-286 绝对超时判失败）vs rag_upload.py:1907 起后端 Redis 轮询上限 1900s（RAG_SSE_REDIS_POLL_MAX_SECONDS，config/rag.py:551）+ admin 可设 OCR 500 页预算（UploadDialog.tsx:381，后端硬上限 RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT=500）。
+- 影响：500 页扫描件 OCR / 超大 PDF 索引超 10 分钟时，前端判「索引超时（10 分钟）…」失败，但后端任务实际继续并最终发布成功 → 文档列表出现该文档，与「失败」提示矛盾，用户可能重传（重传=新幂等键=再次索引）。
+- 建议：并入 batch4 #8（SSE 断连重试）一并改：看门狗从绝对超时改为活跃性驱动（keepalive/事件到达即刷新 deadline；SSE 有 15s keepalive，活跃连接不应被判死），保留兜底上限对齐后端 1900s。
+
+#### P2-2 Redis 进度镜像空轮询宽限仅 10s，Redis 抖动即误报「不存在或已过期」
+- 证据：rag_upload.py:1907（`_SSE_REDIS_EMPTY_GRACE_POLLS = 20`）× :1905（0.5s/次）= 10s；_read_progress_redis（:1918-1944）把「Redis 异常」与「键不存在」都折叠为 None，无法区分。
+- 影响：Celery 模式 SSE 订阅期间 Redis 不可用 >10s → 直接 yield error「upload_id … 不存在或已过期」终止流，而 Worker 可能正在正常索引；前端 fail() 报「进度连接中断」（knowledge.ts:251-256）。
+- 建议：并入 batch4 #8：连续空轮询上限放宽（如 60s），且对「Redis 连接异常」与「hgetall 空」区分计数（异常不算「键过期」证据）。非数据损坏风险，故 P2 下限、P3 上限之间取 P2（用户可见错误终态）。
+
+#### P3-1 admin/cs BFF 502 响应拼接原始异常串，web 已用通用文案——三端脱敏口径漂移
+- 证据：frontend-admin/src/app/api/[...path]/route.ts:172-175 与 frontend-cs 同款：`message: \`网关不可达: ${String(e)}\``；web route.ts:225-229 为通用文案「网关暂不可达」（无异常串）。
+- 影响：undici 异常 toString 一般不含上游 URL（细节在 cause），泄漏面有限，但与 batch0 后端脱敏口径不一致；admin/cs 为内部端、风险低。
+- 建议：batch4 快修（对齐 web 通用文案），一行改动。
+
+#### P3-2 X-Batch-Id 后端零校验（长度/字符集），任意值直进 Celery 消息与审计库
+- 证据：rag_upload.py:864（`request.headers.get("X-Batch-Id") or None` 直接采用）；全文件无格式校验；经 task_kwargs → Celery 消息、doc_operation_log.batch_id（_safe_log_op）、processing lineage（processing_batch_id）。
+- 影响：超长/任意字符 batch_id 持久化进审计与 lineage 表（HTTP 头值无换行、网关有头大小上限，属数据卫生问题而非注入）。
+- 建议：batch4 加白名单校验（如 `^[A-Za-z0-9_.:-]{1,64}$`，不符拒绝或截断），三端 BFF 无需改（头本就在白名单）。
+
+#### P3-3 SSE error 消息回显客户端可控 upload_id
+- 证据：rag_upload.py:1961,2100,2118（`f"upload_id {upload_id} 不存在或已过期"`）；upload_id 来自 URL path 参数。
+- 影响：前端 React 文本渲染（UploadDialog :250）自动转义，无 XSS；仅观感/一致性（错误文案含用户提供字符串）。
+- 建议：batch4 顺手统一文案（去掉 upload_id 回显或截断），可并入 P3-1 的快修 PR。
+
+#### P4-1 publish.py 模块级 `_write_published_pointer` 零调用方（死代码）
+- 证据：backend/rag/indexing/publish.py:303-329 定义，全仓 grep 仅定义处；发布指针实际由 store 方法维护（publish.py:404 `main_store.write_published_pointer`）。
+- 建议：batch5（#10 lib/api 清理）顺手删除，属同性质死代码收口。
+
+#### P4-2 admin UploadDialog accept 提示缺 5 种后端支持格式
+- 证据：UploadDialog.tsx:330（accept 仅 .pdf,.md,.txt,.docx,.xlsx,.csv,.markdown）vs 后端 12 格式全开（parser/__init__.py:20-35 _PARSERS：另有 html/htm/pptx/json/xml，SUPPORTED_EXTS 由 PARSABLE_EXTS 派生 rag_upload.py:433-438）。
+- 影响：文件选择器过滤提示不完整（「所有文件」仍可选、后端照常受理），F6 单一来源原则在前端未对齐。
+- 建议：batch4 顺手补齐 accept 列表（纯提示性，无行为风险）。
+
+#### P4-3 index_run_store_pg.py 以 Python tuple repr 拼 SQL
+- 证据：index_run_store_pg.py:205,225,234,251（`{TERMINAL_STATUSES!r}` / `{ACTIVE_STATUSES!r}` 嵌入 SQL）。
+- 影响：常量为纯字符串元组，当前功能正确；写法脆弱（元素含引号即坏），可读性差。
+- 建议：暂不动（无行为影响），若 batch4/5 触碰该文件顺手改为 `%s` 占位或 `ANY(%s)`。
+
+#### P4-4 rag_upload.py ~2149 行单文件复杂度
+- 复审确认 PROGRESS 已声明项：文件内锁管理/幂等派发/SSE 双通道/终态收口多职责混居，但分层注释清晰、修复点定位未受阻碍。维持原结论：拆分属重构，单独排期，本批不动。
+
+### 三、已排期项现状确认（不重复立项）
+
+| 项 | 复审确认 | 批次 |
+|----|---------|------|
+| #3 状态码口径混用（200+ok:false/422/403/409） | 仍在：rag_upload.py:540,546（200）、688（422）、523-527（403）、601-607（409） | batch6（ADR 先行） |
+| #6 前端 50MB/16KiB 常量写死 | 仍在：UploadDialog.tsx:14 + 三端 route.ts:188（web 行号） | batch4 |
+| #7 窗口可用性（beforeunload/ESC/批量上限提示） | 未实现，转后台语义依赖页面存活（UploadDialog.tsx:148-162），刷新丢进度与 #7 描述一致 | batch4 |
+| #8 SSE fail() 无重连 | 仍在：knowledge.ts:291-295（连接失败直接 fail），与 P2-1/P2-2 同源，合并施工 | batch4 |
+| #9 admin behavior 测试扩充 | 现有 5 用例基线；duplicate 计入成功统计逻辑已在（UploadDialog.tsx:219,265） | batch4 |
+
+### 四、batch4 建议施工清单（聚合，待用户确认后动手）
+
+1. #8 SSE 重连 + P2-1 看门狗活跃性改造 + P2-2 空轮询宽限（同一次施工，knowledge.ts + rag_upload.py）
+2. 快修包：P3-1（admin/cs 502 脱敏对齐 web）+ P3-2（X-Batch-Id 白名单）+ P3-3（error 文案去 id 回显）+ P4-2（accept 补齐）
+3. #6 env 联动（/rag/health 返回上限，UploadDialog + 三端 BFF 消费）+ #7 窗口可用性 + #9 测试扩充（按原排期）
+4. batch5：#10 + P4-1（publish.py 死代码删除）
+5. batch6：#3（不变）
+
+### 五、复审亮点（值得保留的设计，抽查确认无新引入缺陷）
+
+- 幂等附着语义闭环：`IdempotencyKey` 含 actor（backend/shared/idempotency.py:1435-1440）→ 跨用户同内容不会互相附着，SSE owner 校验（rag_upload.py:2019-2037）与附着路径自洽；`_resolve_replayed_dispatch`（:1400-1435）对「重放命中死任务」重开新一轮候选，SSE 不会永久悬挂。
+- 发布协议失败语义分层正确：提交点前失败→清理候选+failed；提交点后失败→保持 publishing 续跑（publish.py:507 CAS 提交点、rag_upload.py:1045-1052 / 1861-1866 与 mark_status 终态一次写 index_run_store_pg.py:192-215 互相咬合）；duplicate 终态重放走 `status=%s` 幂等分支不抛 RunStateConflict。
+- 授权三道闸完整：上传裁决（can_upload_to，authz.py:176-198）→ 发布前复验（_reverify_publish_authorization，rag_upload.py:1588-1628，#65）→ 管理裁决（can_manage_row 按行归属）。
+- 清理链完整自愈：启动锁/tmp 清理（cleanup_stale_upload_artifacts，server.py:390-393 接线；非终态暂存豁免 :337-343）+ 进度队列定时 GC（progress_queue_gc_loop，server.py:426-427）+ 一致性 sweeper（server.py:539-547）。
+
+### 六、排期确认与落盘（2026-11-11 用户确认后）
+
+- 用户确认：batch4 拆 2 个 PR（SSE 可靠性包 / 快修+体验包）；排期细表（含前后端归属「侧」标注与验收口径）已落盘更新至 docs/tasks/upload-followups-20261110/TASK.md「执行批次计划」节。
+- 工作方式确认：持续实施，每批完成后对该批改动点做一次链路评审（重读改动 + 定向测试），通过后进入下一批。
+- batch3 报告 + 排期落盘以同一文档 PR 提交合并。
