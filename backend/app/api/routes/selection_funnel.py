@@ -89,11 +89,13 @@ def run_funnel(
         selection_funnel_graph_node,
     )
 
-    from backend.app.api.identity import resolve_identity
+    from backend.app.api.identity import require_tenant_id, resolve_identity
 
     identity = resolve_identity(request)
     user_id = str(getattr(identity, "user_id", "") or "anonymous")
-    tenant_id = str(getattr(identity, "tenant_id", "") or "default")
+    # 评审 P1 修复（2026-11-10）：漏斗执行链已按租户 fail-closed，入口
+    # 不得回落 "default"（审计 #25 同口径：空租户 403）
+    tenant_id = require_tenant_id(identity)
     conversation_id = req.conversation_id.strip() or f"sf-{uuid.uuid4().hex[:12]}"
 
     message = req.message.strip()

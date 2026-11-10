@@ -94,20 +94,27 @@ def _default_store() -> Any:
 
 
 def _import_history(candidates: list[dict],
-                    notes: list[str]) -> dict[str, list[dict]]:
+                    notes: list[str],
+                    tenant_id: str = "") -> dict[str, list[dict]]:
     """导入候选的同款历史批次（趋势接线，2026-09-18）：一次批量查询替代逐候选取数。
 
     用户每周重新上传商品榜时，同款商品在导入池里积累出时间序列——
     此前趋势只认监控池快照，导入候选永远「单点」；接线后 _trend 与
     scoring 稳定性/热度增速直接复用这些序列。失败降级为空（单点披露），不炸漏斗。
+    评审 P1 修复（2026-11-10）：tenant_id 缺失按 fail-closed 跳过——此前
+    不传参落 PG 层默认 "default"，跨租户读同款趋势。
     """
     from backend.selection_funnel.import_pool import dedup_key, get_import_store
     if not candidates:
         return {}
+    if not tenant_id:
+        logger.warning("[FunnelVerify] 租户身份缺失，导入池同款历史按 fail-closed 跳过")
+        notes.append("租户身份缺失，导入池同款历史已跳过（fail-closed）")
+        return {}
     try:
         return get_import_store().history_by_keys([
             (c.get("url") or "", c.get("title") or "", c.get("platform") or "")
-            for c in candidates])
+            for c in candidates], tenant_id=tenant_id)
     except Exception as e:
         logger.warning("[FunnelVerify] 导入池同款历史读取失败: %s", e)
         notes.append("导入池同款历史读取失败，趋势按单点披露")
@@ -115,7 +122,8 @@ def _import_history(candidates: list[dict],
 
 
 def verify_candidates(candidates: list[dict],
-                      store: Any = None) -> tuple[list[dict], list[str]]:
+                      store: Any = None,
+                      tenant_id: str = "") -> tuple[list[dict], list[str]]:
     """给每个候选挂 score / pain_points。Returns (enriched, notes)。"""
     from backend.selection_funnel.import_pool import dedup_key
 
@@ -124,7 +132,7 @@ def verify_candidates(candidates: list[dict],
     notes: list[str] = []
     # 导入候选（带 imported_at）批量取同款历史；监控候选仍走竞品 store.history
     imported = [c for c in candidates if c.get("imported_at")]
-    import_history = _import_history(imported, notes)
+    import_history = _import_history(imported, notes, tenant_id)
     enriched: list[dict] = []
     for c in candidates:
         if c.get("imported_at"):
@@ -169,7 +177,9 @@ def extract_pain_points(candidate: dict) -> list[str]:
 
 
 def verify_node(state: dict) -> dict:
-    enriched, notes = verify_candidates(list(state.get("candidates") or []))
+    enriched, notes = verify_candidates(
+        list(state.get("candidates") or []),
+        tenant_id=state.get("tenant_id", ""))
     logs = list(state.get("stage_logs") or [])
     logs.append({"stage": "verify", "kept": len(enriched), "dropped": 0,
                  "reasons": [], "notes": notes})
