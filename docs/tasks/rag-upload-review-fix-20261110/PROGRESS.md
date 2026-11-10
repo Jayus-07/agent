@@ -1,5 +1,11 @@
 # PROGRESS: rag-upload-review-fix-20261110
 
+> **任务已完成并合并 main（2026-11-10）**：PR #426（merge commit `d98c1c7`），CI 8/8 绿
+> （frontend-admin-functional 首跑因 npm 镜像 504 瞬态失败，重跑通过），共享栈已重建并
+> 健康确认（app commit=d98c1c7，web/admin/cs 三端 200 healthy，cs 容器单独重建）。
+> 合并后主仓库复跑后端上传回归 202 passed, 1 skipped；8 处修复点抽查全部在 main 生效。
+> 遗留项排期见 `docs/tasks/upload-followups-20261110/TASK.md`。worktree 与任务分支已按规范清理。
+
 ## 2026-11-10（全部完成，待用户确认提交）
 
 ### 已完成修复（对应 TASK.md 编号）
