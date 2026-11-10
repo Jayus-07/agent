@@ -55,7 +55,16 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     "backend/shared/admin_llm.py",
     "backend/tests/api/test_admin_mcp_api.py",
 })
-PR_STATIC_ONLY_PREFIXES = ("backend/sql/migrations/",)
+# PR 免费预检触发、main push 付费不触发的目录前缀。#437 评审发现:定向
+# 清单已收录 tools/memory/selection_funnel 的安全与契约测试,但这些源码
+# 目录不触发 smoke——改 map 工具或记忆服务时登记的测试不会在 PR 上跑,
+# 门禁空转。清单守卫断言见 tests/test_rag_smoke_path_filter.py。
+PR_STATIC_ONLY_PREFIXES = (
+    "backend/sql/migrations/",
+    "backend/tools/",
+    "backend/memory/",
+    "backend/selection_funnel/",
+)
 PREFIX_ENTRIES = (
     "backend/rag/",
     "backend/evaluation/",
