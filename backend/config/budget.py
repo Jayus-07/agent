@@ -78,6 +78,36 @@ BUDGET_TEST_REQUEST_PREFIXES = tuple(
     if p.strip()
 )
 
+# 任务 9 执行化（2026-11-11 用户拍板）：按产品域独立额度——顶级域 3 个
+# （用户视角的产品入口），子域归并；管理端工具（选品/知识库/数据查询）
+# 不按用户域额度管，不进枚举。迁移 147 的 CHECK 与此同源，改枚举走迁移。
+BUDGET_DOMAIN_GATES = frozenset({"main", "travel", "customer_service"})
+# agent_domain 标签 → 顶级域归并；不在映射且非顶级域的标签归 ''（不受域闸管）
+BUDGET_DOMAIN_ALIASES = {
+    "travel_booking": "travel",
+    "travel_commerce": "travel",
+    "general": "main",
+}
+# 过渡期开关（补标签+过渡期拍板）：False = 无域标签的调用放行并告警；
+# True = 无域标签的调用直接拒绝（标签覆盖补齐后开启，防漏网绕过域闸）
+BUDGET_DOMAIN_UNATTRIBUTED_BLOCK = (
+    os.getenv("BUDGET_DOMAIN_UNATTRIBUTED_BLOCK", "false").strip().lower()
+    in ("1", "true", "yes")
+)
+
+
+def normalize_budget_domain(raw_domain: str) -> str:
+    """把 agent_domain 归因标签归并为顶级域；不属于 3 个顶级域返回 ''。
+
+    ''（空串）= 不受域闸管（无标签过渡期 / 管理端工具调用），只走总额度。
+    """
+    normalized = (raw_domain or "").strip()
+    if not normalized:
+        return ""
+    if normalized in BUDGET_DOMAIN_GATES:
+        return normalized
+    return BUDGET_DOMAIN_ALIASES.get(normalized, "")
+
 
 def to_base_currency(amount: Decimal | int | float | str, currency: str) -> Decimal:
     """把任意币种金额折算为记账本位币；未登记汇率的币种快速失败。"""

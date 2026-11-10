@@ -438,6 +438,173 @@ def test_list_subjects_excludes_test_data_by_default(store):
     assert probe_tenant in all_ids
 
 
+def test_domain_quota_gates_per_user_and_tenant(store):
+    """任务 9（迁移 147）：域额度四道闸——用户域/租户域独立于总额度；
+    域调用预占 8 行（user/tenant × 总/域 × 日/月）；用户间域额度独立。"""
+    from backend.config.budget import normalize_budget_domain
+
+    assert normalize_budget_domain('travel_booking') == 'travel'
+    assert normalize_budget_domain('travel_commerce') == 'travel'
+    assert normalize_budget_domain('general') == 'main'
+    assert normalize_budget_domain('customer_service') == 'customer_service'
+    assert normalize_budget_domain('selection_funnel') == ''
+    assert normalize_budget_domain('') == ''
+
+    tenant_id = f'dom-ten-{uuid4().hex[:8]}'
+    run_a = f'dom-user-{uuid4().hex[:8]}'
+    run_b = f'dom-user-{uuid4().hex[:8]}'
+    store.upsert_policy(
+        scope_type='tenant', scope_id=tenant_id,
+        daily_limit_cny=Decimal('90'), monthly_limit_cny=Decimal('750'),
+        enforcement='hard', audit_exempt=False,
+        updated_by='user:test-admin', reason='域额度租户层', domain='travel',
+    )
+
+    def _axis_rows(reservation_id: str, axis: str) -> int:
+        with store._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT count(*) FROM budget_reservations
+                       WHERE id = %s AND domain = %s""",
+                    (reservation_id, axis),
+                )
+                return cur.fetchone()[0]
+
+    reservation = store.reserve(
+        user_id=run_a, tenant_id=tenant_id,
+        amount_cny=Decimal('0.10'), domain='travel',
+    )
+    # 8 行 = user/tenant × 总/域 × 日/月；总轴 4 行行为与历史一致
+    assert _axis_rows(reservation.reservation_id, '') == 4
+    assert _axis_rows(reservation.reservation_id, 'travel') == 4
+
+    # 用户 A 的旅游域日闸 ¥90：预占 ¥95(fixture 总策略日限 ¥100 内、
+    # 域日闸外)被用户域闸拒——证明域闸先于总闸生效
+    with pytest.raises(Exception) as excinfo:
+        store.reserve(
+            user_id=run_a, tenant_id=tenant_id,
+            amount_cny=Decimal('95'), domain='travel',
+        )
+    assert ':travel' in str(excinfo.value)
+
+    # 用户间独立：B 的旅游域额度不受 A 占额影响（租户域池充足）
+    reservation_b = store.reserve(
+        user_id=run_b, tenant_id=tenant_id,
+        amount_cny=Decimal('0.10'), domain='travel',
+    )
+    assert _axis_rows(reservation_b.reservation_id, 'travel') == 4
+
+    # 无域标签调用（过渡期）不受域闸管——只走总闸，行为与历史一致
+    reservation_plain = store.reserve(
+        user_id=run_b, tenant_id=tenant_id, amount_cny=Decimal('0.10'),
+    )
+    assert _axis_rows(reservation_plain.reservation_id, '') == 4
+    assert _axis_rows(reservation_plain.reservation_id, 'travel') == 0
+
+
+def test_domain_settlement_releases_both_axes(store):
+    """域预占结算：总轴与域轴账本同步释放+入账，used_cny 两轴各记一次。"""
+    tenant_id = f'dom-ten-{uuid4().hex[:8]}'
+    run = f'dom-user-{uuid4().hex[:8]}'
+    store.upsert_policy(
+        scope_type='tenant', scope_id=tenant_id,
+        daily_limit_cny=Decimal('90'), monthly_limit_cny=Decimal('750'),
+        enforcement='hard', audit_exempt=False,
+        updated_by='user:test-admin', reason='域结算回归', domain='travel',
+    )
+    reservation = store.reserve(
+        user_id=run, tenant_id=tenant_id,
+        amount_cny=Decimal('0.40'), domain='travel',
+    )
+    store.settle(reservation, Decimal('0.04'))
+
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            # 按轴 × 主体拆分：域轴有 user/tenant 两行镜像，各自入账 0.04
+            cur.execute(
+                """SELECT domain, scope_type, SUM(used_cny), SUM(reserved_cny)
+                    FROM budget_ledger
+                   WHERE scope_id IN (%s, %s) AND period_type = 'month'
+                   GROUP BY domain, scope_type""",
+                (run, tenant_id),
+            )
+            by_axis = {
+                (row[0], row[1]): (Decimal(str(row[2])), Decimal(str(row[3])))
+                for row in cur.fetchall()
+            }
+    assert by_axis[('', 'user')][0] == Decimal('0.04'), '总轴用户行入账一次'
+    assert by_axis[('travel', 'user')][0] == Decimal('0.04'), '域轴用户行入账一次'
+    assert by_axis[('', 'tenant')][0] == Decimal('0.04'), '总轴租户行入账一次'
+    assert by_axis[('travel', 'tenant')][0] == Decimal('0.04'), '域轴租户行入账一次'
+    for used, reserved in by_axis.values():
+        assert reserved == Decimal('0'), '结算后占额全部释放'
+
+
+def test_domain_policy_chain_resolution_and_unseeded_skip(store):
+    """域策略链：用户域覆盖 > 租户域覆盖 > 全租户域默认 > 平台域兜底；
+    四层皆无时返回 None——reserve 无域闸正常预占（新增域未配策略不误伤）。"""
+    tenant_id = f'dom-ten-{uuid4().hex[:8]}'
+    run = f'dom-user-{uuid4().hex[:8]}'
+
+    assert store.resolve_domain_policy(run, tenant_id, 'travel') is None
+    # 未配域策略的域：预占只有总轴 4 行，无域闸
+    reservation = store.reserve(
+        user_id=run, tenant_id=tenant_id,
+        amount_cny=Decimal('0.10'), domain='travel',
+    )
+    with store._connection_factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT count(*) FROM budget_reservations
+                   WHERE id = %s AND domain = 'travel'""",
+                (reservation.reservation_id,),
+            )
+            assert cur.fetchone()[0] == 0
+
+    store.upsert_policy(
+        scope_type='tenant_default', scope_id='default',
+        daily_limit_cny=Decimal('75'), monthly_limit_cny=Decimal('750'),
+        enforcement='hard', audit_exempt=False,
+        updated_by='user:test-admin', reason='全租户域默认', domain='travel',
+    )
+    try:
+        resolved = store.resolve_domain_policy(run, tenant_id, 'travel')
+        assert resolved is not None and resolved.scope_type == 'tenant_default'
+        store.upsert_policy(
+            scope_type='tenant', scope_id=tenant_id,
+            daily_limit_cny=Decimal('70'), monthly_limit_cny=Decimal('700'),
+            enforcement='hard', audit_exempt=False,
+            updated_by='user:test-admin', reason='租户域覆盖', domain='travel',
+        )
+        resolved = store.resolve_domain_policy(run, tenant_id, 'travel')
+        assert resolved.scope_type == 'tenant' and resolved.monthly_limit_cny == Decimal('700')
+        store.upsert_policy(
+            scope_type='user', scope_id=run,
+            daily_limit_cny=Decimal('8'), monthly_limit_cny=Decimal('80'),
+            enforcement='hard', audit_exempt=False,
+            updated_by='user:test-admin', reason='用户域覆盖', domain='travel',
+        )
+        resolved = store.resolve_domain_policy(run, tenant_id, 'travel')
+        assert resolved.scope_type == 'user' and resolved.monthly_limit_cny == Decimal('80')
+    finally:
+        with store._connection_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM budget_policies WHERE domain = 'travel'"
+                    " AND scope_id = %s", ('default',),
+                )
+
+
+def test_domain_reserve_rejects_unknown_domain(store):
+    """域闸快速失败：非 3 顶级域的 domain 参数直接 ValueError，不写任何账本行。"""
+    run = f'dom-user-{uuid4().hex[:8]}'
+    with pytest.raises(ValueError):
+        store.reserve(
+            user_id=run, tenant_id=run,
+            amount_cny=Decimal('0.10'), domain='selection_funnel',
+        )
+
+
 def test_queue_filters_test_data_by_default(store):
     """B2：测试/评测数据默认不进队列，include_test 打开可见。"""
     run = f'vis-{uuid4().hex}'

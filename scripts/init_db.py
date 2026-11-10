@@ -376,6 +376,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "144_budget_reservation_resolution.sql": "memory",
     "145_budget_settlement_kind.sql": "memory",
     "146_budget_resolution_audit_append_only.sql": "memory",
+    # 147 预算域额度轴：三表加 domain 列（任务 9，影响预算/费用闸门）
+    "147_budget_domain_axis.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。

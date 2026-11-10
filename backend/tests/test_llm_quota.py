@@ -131,8 +131,10 @@ def test_postgres_quota_settlement_is_idempotent_for_same_reservation():
                 assert "where id = %s and status = 'reserved'" in normalized
                 assert "for update" in normalized
                 if state["status"] == "reserved":
+                    # 2026-11-11 域额度轴（迁移 147）：settle 的预占行查询
+                    # 增加 domain 列（''=总额度轴），行形状 5 元组 → 6 元组
                     self._rows = [(
-                        "user", "fake-user", "day", "2026-10-18",
+                        "user", "fake-user", "day", "2026-10-18", "",
                         Decimal("0.500000"),
                     )]
             elif normalized.startswith("update budget_ledger"):
