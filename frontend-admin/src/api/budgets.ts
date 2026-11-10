@@ -1,4 +1,4 @@
-import { mutationRequest, request } from "@/api/client";
+import { fetchRaw, mutationRequest, request } from "@/api/client";
 
 export type BudgetEnforcement = "hard" | "soft" | "audit";
 export interface BudgetWindow { used: string; reserved: string; limit: string; ratio: number; reset_at: string }
@@ -121,6 +121,37 @@ export async function getBudgetBacklogDryRun(): Promise<{
   note: string;
 }> {
   return request("/api/admin/budgets/reconciliation/dry-run");
+}
+// 月度对账（路线图第 4 块 PR-A）：三段聚合只读 + CSV 导出（fetchRaw 走二进制）
+export interface BudgetMonthlyReconciliation {
+  months: string[];
+  cutoff_month: string;
+  usage_by_month: Record<string, {
+    total_cny: string; calls: number;
+    by_provider: Record<string, { calls: number; cost_cny: string }>;
+    by_model: Record<string, { calls: number; cost_cny: string }>;
+    by_tenant: Record<string, { calls: number; cost_cny: string }>;
+  }>;
+  ledger_by_month: Record<string, { by_scope: Record<string, { used_cny: string; reserved_cny: string }> }>;
+  reservations_by_month: Record<string, {
+    total: number;
+    by_shape: { status: string; settle_kind: string; resolution: string; count: number; reserved_cny: string; settled_cny: string }[];
+  }>;
+  note: string;
+}
+export async function getBudgetMonthlyReconciliation(months = 6): Promise<BudgetMonthlyReconciliation> {
+  return request<BudgetMonthlyReconciliation>(`/api/admin/budgets/reconciliation/monthly?months=${months}`);
+}
+export async function downloadBudgetMonthlyCsv(months = 6): Promise<void> {
+  const res = await fetchRaw(`/api/admin/budgets/reconciliation/monthly.csv?months=${months}`);
+  if (!res.ok) throw new Error(`月度对账 CSV 导出失败（HTTP ${res.status}）`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `monthly-reconciliation-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 export async function listBudgetSubjects(params: { scope?: string; period?: string } = {}): Promise<{ items: BudgetSubject[] }> {
   const query = new URLSearchParams();

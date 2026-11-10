@@ -1710,6 +1710,198 @@ class PostgresQuotaStore:
         except Exception as exc:
             raise QuotaConfigurationError("待对账汇总读取失败") from exc
 
+    def monthly_reconciliation(self, months: int = 6) -> dict[str, Any]:
+        """月度对账聚合（路线图第 4 块 PR-A，2026-11-10）：三段只读口径。
+
+        - usage：llm_usage 按月 × 供应商 × 模型 × 租户的 CNY 成本——
+          ``cost_cny_sql_expr()`` 全仓唯一折算口径（G2），读层不二次换汇；
+        - ledger：budget_ledger 月行（period_type='month'）按月 × scope 汇总
+          used_cny——预算口径的「入账」，与主体页月用量同源；
+        - reservations：预占单按结算月（COALESCE(settled_at, created_at)）
+          的 status × settle_kind × resolution 分布——估算/精确、核销形态
+          一眼可分，供与供应商账单核对。
+        月标签一律按 ``BUDGET_TIMEZONE``（默认 Asia/Shanghai）渲染——预算
+        period_start 即该时区的自然月，UTC 会话直接 to_char 会把月初 8 小时
+        归到上月（对供应商账单错月）。usage 的 ts 为 ISO-8601 text（统一
+        ``YYYY-MM-DDTHH:MM:SS.mmmZ``，写入方 proxy/usage store 同一格式），
+        截前 19 位补 'Z' 后转 timestamptz 再换时区。金额 Decimal 量化 6 位
+        字符串；单据级金额一律 DISTINCT ON (id) 去重（与待对账口径一致）。
+        """
+        from zoneinfo import ZoneInfo
+
+        from backend.config.budget import BUDGET_TIMEZONE
+        from backend.observability.llm_usage_store_pg import cost_cny_sql_expr
+
+        months = max(1, min(int(months), 24))
+        tz = BUDGET_TIMEZONE
+        now = datetime.now(timezone.utc).astimezone(ZoneInfo(tz))
+        # 自然月窗口起点（含当月）：预算时区当月往前 months-1 个月的 1 号
+        start_year, start_month = now.year, now.month - (months - 1)
+        while start_month <= 0:
+            start_month += 12
+            start_year -= 1
+        cutoff_iso = f"{start_year:04d}-{start_month:02d}-01"
+        cutoff_ts = datetime(start_year, start_month, 1, tzinfo=ZoneInfo(tz))
+        try:
+            with self._connection_factory() as conn:
+                with conn.cursor() as cur:
+                    # ① usage：月 × provider × model × tenant 成本聚合
+                    cur.execute(
+                        f"""SELECT to_char(
+                                        ((substring(ts, 1, 19) || 'Z')
+                                         ::timestamptz) AT TIME ZONE %s,
+                                        'YYYY-MM') AS month,
+                                   provider, model, tenant_id,
+                                   SUM({cost_cny_sql_expr()}), COUNT(*)
+                              FROM llm_usage
+                             WHERE ts >= %s
+                             GROUP BY 1, 2, 3, 4""",
+                        (tz, cutoff_iso,),
+                    )
+                    usage_rows = cur.fetchall()
+                    # ② ledger 月行：月 × scope 汇总
+                    cur.execute(
+                        f"""SELECT to_char(period_start AT TIME ZONE %s,
+                                           'YYYY-MM') AS month,
+                                   scope_type, scope_id,
+                                   SUM(used_cny), SUM(reserved_cny)
+                              FROM {self._ledger}
+                             WHERE period_type = 'month'
+                               AND period_start >= %s
+                             GROUP BY 1, 2, 3""",
+                        (tz, cutoff_ts,),
+                    )
+                    ledger_rows = cur.fetchall()
+                    # ③ 预占单结算分布：月 × status × settle_kind × resolution
+                    cur.execute(
+                        f"""SELECT to_char(
+                                        COALESCE(settled_at, created_at)
+                                        AT TIME ZONE %s,
+                                        'YYYY-MM') AS month,
+                                   status, COALESCE(settle_kind, ''),
+                                   COALESCE(resolution, ''),
+                                   COUNT(*), SUM(reserved_cny), SUM(settled_cny)
+                              FROM (SELECT DISTINCT ON (id) id, status,
+                                           settle_kind, resolution, reserved_cny,
+                                           settled_cny, settled_at, created_at
+                                      FROM {self._reservations}
+                                     WHERE COALESCE(settled_at, created_at) >= %s
+                                     ORDER BY id, created_at) d
+                             GROUP BY 1, 2, 3, 4""",
+                        (tz, cutoff_ts,),
+                    )
+                    reservation_rows = cur.fetchall()
+
+            def _dec(value: Any) -> str:
+                return str(Decimal(str(value)).quantize(_SIX_PLACES))
+
+            usage_by_month: dict[str, dict[str, Any]] = {}
+            for month, provider, model, tenant_id, cost, calls in usage_rows:
+                bucket = usage_by_month.setdefault(
+                    month,
+                    {"total_cny": "0.000000", "calls": 0,
+                     "by_provider": {}, "by_model": {}, "by_tenant": {}},
+                )
+                cost_d = Decimal(str(cost or 0))
+                calls_n = int(calls)
+                bucket["calls"] += calls_n
+                for target, key in (
+                    ("by_provider", provider or ""),
+                    ("by_model", model or ""),
+                    ("by_tenant", tenant_id or ""),
+                ):
+                    slot = bucket[target].setdefault(
+                        key, {"calls": 0, "cost_cny": "0.000000"}
+                    )
+                    slot["calls"] += calls_n
+                    slot["cost_cny"] = _dec(
+                        Decimal(slot["cost_cny"]) + cost_d
+                    )
+                bucket["total_cny"] = _dec(
+                    Decimal(bucket["total_cny"]) + cost_d
+                )
+
+            ledger_by_month: dict[str, dict[str, Any]] = {}
+            for month, scope_type, scope_id, used, reserved in ledger_rows:
+                bucket = ledger_by_month.setdefault(
+                    month, {"by_scope": {}}
+                )
+                slot = bucket["by_scope"].setdefault(
+                    f"{scope_type}:{scope_id}",
+                    {"used_cny": "0.000000", "reserved_cny": "0.000000"},
+                )
+                slot["used_cny"] = _dec(Decimal(slot["used_cny"]) + Decimal(str(used or 0)))
+                slot["reserved_cny"] = _dec(
+                    Decimal(slot["reserved_cny"]) + Decimal(str(reserved or 0))
+                )
+
+            reservations_by_month: dict[str, dict[str, Any]] = {}
+            for month, status, settle_kind, resolution, count, reserved, settled in reservation_rows:
+                bucket = reservations_by_month.setdefault(
+                    month, {"by_shape": [], "total": 0}
+                )
+                bucket["by_shape"].append({
+                    "status": status or "",
+                    "settle_kind": settle_kind,
+                    "resolution": resolution,
+                    "count": int(count),
+                    "reserved_cny": _dec(reserved),
+                    "settled_cny": _dec(settled or 0),
+                })
+                bucket["total"] += int(count)
+
+            month_keys = sorted(
+                set(usage_by_month) | set(ledger_by_month)
+                | set(reservations_by_month),
+                reverse=True,
+            )[:months]
+            return {
+                "months": month_keys,
+                "cutoff_month": cutoff_iso[:7],
+                "usage_by_month": usage_by_month,
+                "ledger_by_month": ledger_by_month,
+                "reservations_by_month": reservations_by_month,
+                "note": (
+                    "usage 成本为 llm_usage CNY 口径（cost_cny_sql_expr 唯一折算）；"
+                    "ledger 为预算月行入账；reservations 按结算月分布"
+                    "（settle_kind='estimated' 为保守估算结算）。CSV 导出"
+                    " /admin/budgets/reconciliation/monthly.csv。"
+                ),
+            }
+        except Exception as exc:
+            raise QuotaConfigurationError("月度对账聚合读取失败") from exc
+
+    def monthly_reconciliation_csv(self, months: int = 6) -> str:
+        """月度对账 CSV 导出：usage 月 × 维度（供应商/模型/租户/合计）行。
+
+        这是与供应商月账单核对的核心材料（PR-B 录入后的差异对照基线）。
+        转义走标准 csv 模块（RFC 4180），维度 key 来自 DB 聚合结果仍不裸拼。
+        """
+        import csv as _csv
+        import io as _io
+
+        report = self.monthly_reconciliation(months=months)
+        buf = _io.StringIO()
+        writer = _csv.writer(buf, lineterminator="\n")
+        writer.writerow(["month", "dimension", "key", "calls", "cost_cny"])
+        for month in report["months"]:
+            bucket = report["usage_by_month"].get(month) or {}
+            for dimension, group in (
+                ("provider", bucket.get("by_provider") or {}),
+                ("model", bucket.get("by_model") or {}),
+                ("tenant", bucket.get("by_tenant") or {}),
+            ):
+                for key in sorted(group):
+                    writer.writerow(
+                        [month, dimension, key,
+                         group[key]["calls"], group[key]["cost_cny"]]
+                    )
+            writer.writerow(
+                [month, "total", "", bucket.get("calls", 0),
+                 bucket.get("total_cny", "0.000000")]
+            )
+        return buf.getvalue()
+
     def list_pending_review(
         self,
         limit: int = 100,

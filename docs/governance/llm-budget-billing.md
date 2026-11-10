@@ -111,3 +111,10 @@
 统一账本将本地推理记为 `pricing_source=local_inference`、云端按量应付费用 0 CNY，保留真实调用次数和可得 token。嵌入 SDK 未提供统一原始 usage 时按文本估算，标 `usage_source=estimated`、`cost_status=estimated`，不冒充厂商精确账单；硬件、电费及托管开销不在该零金额含义内。
 
 嵌入切换预检和全库重建均复用正式嵌入客户端与 TokenTracker，Trace 关联任务和调用用户/租户，不另建费用账本。云端按量目标在预检前必须具有有效、一致的 embedding 价格；保存角色时后端会再次预检，因此预检及保存各可能产生一次最小调用费用。批次调用有界且仍受用户/租户额度约束，已落库且快照一致的候选在同任务恢复时复用；超时但供应商实际已执行的请求无法保证不被再次收费。
+
+### 4.6 月度对账报表（2026-11-10 待对账治理第三批 PR-A）
+
+- **聚合口径**：`PostgresQuotaStore.monthly_reconciliation(months)` 只读聚合三段——①`llm_usage` 按月 × 供应商/模型/租户的 CNY 成本（复用 `cost_cny_sql_expr()` 唯一折算口径，读层不二次换汇）；②`budget_ledger` 月行（`period_type='month'`）按月 × scope 的 `used_cny`/`reserved_cny`；③预占单按结算月（`COALESCE(settled_at, created_at)`）的 status × `settle_kind` × `resolution` 分布。月标签一律按 `BUDGET_TIMEZONE`（默认 Asia/Shanghai）渲染——预算 `period_start` 即该时区自然月，UTC 会话直接 `to_char` 会把月初 8 小时归到上月。
+- **API**：`GET /admin/budgets/reconciliation/monthly?months=6`（JSON，1–24 个月）与 `.../monthly.csv`（CSV 导出，`month,dimension,key,calls,cost_cny`），均 `require_admin_user`；前端预算页「月度对账」卡呈现月份行并支持 CSV 下载。CSV 是与供应商月账单核对的基线材料，录入/导入与差异调整见后续 PR-B/PR-C。
+- **llm_call span 补呈现**：`llm_call_span.py` 的 `span_metrics` 增加 `settlement_status`（`settled` / `settled_estimated` / `needs_review` / `released` / `accounting_error`，与 llm_usage 行同源）——此前 DB 与日志可查但 Trace UI 不呈现，属呈现缺口补齐。
+

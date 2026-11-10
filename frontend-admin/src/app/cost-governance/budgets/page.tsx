@@ -7,8 +7,10 @@ import RoleGate from '@/components/auth/RoleGate'
 import PageHeader from '@/components/layout/PageHeader'
 import { useToast } from '@/components/shared/Toast'
 import {
+  downloadBudgetMonthlyCsv,
   formatCny,
   getBudgetBacklogDryRun,
+  getBudgetMonthlyReconciliation,
   getBudgetReconciliation,
   getBudgetSummary,
   listBudgetEvents,
@@ -73,6 +75,14 @@ export default function BudgetGovernancePage() {
   const [batchAmount, setBatchAmount] = useState('')
   const [dryRun, setDryRun] = useState<Awaited<ReturnType<typeof getBudgetBacklogDryRun>> | null>(null)
   const [resolving, setResolving] = useState(false)
+  const [csvBusy, setCsvBusy] = useState(false)
+
+  // 月度对账（路线图第 4 块 PR-A）：按月聚合 usage 成本 / 预算月行 / 结算形态
+  const monthlyRecon = useQuery({
+    queryKey: ['budget-monthly-recon'],
+    queryFn: () => getBudgetMonthlyReconciliation(6),
+    enabled: canAdmin, refetchInterval: 300_000,
+  })
 
   const summary = useQuery({ queryKey: ['budget-summary'], queryFn: getBudgetSummary, refetchInterval: 60_000 })
   const subjects = useQuery({ queryKey: ['budget-subjects'], queryFn: () => listBudgetSubjects(), enabled: canAdmin })
@@ -150,6 +160,18 @@ export default function BudgetGovernancePage() {
       setDryRun(await getBudgetBacklogDryRun())
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '存量分类 dry-run 失败')
+    }
+  }
+
+  async function exportMonthlyCsv() {
+    setCsvBusy(true)
+    try {
+      await downloadBudgetMonthlyCsv(6)
+      toast.success('月度对账 CSV 已导出')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '月度对账 CSV 导出失败')
+    } finally {
+      setCsvBusy(false)
     }
   }
 
@@ -352,6 +374,63 @@ export default function BudgetGovernancePage() {
                     {reviewItems.length === 0 && <EmptyRow text={includeClosed ? '该筛选条件下没有预占单' : '没有待处理预占——所有调用都已确定结算、释放或已核销'} />}
                   </div>
                 )}
+              </section>
+
+              {/* 月度对账（路线图第 4 块 PR-A）：按月 usage 成本 / 结算形态分布 + CSV 导出 */}
+              <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">
+                <SectionTitle
+                  title="月度对账"
+                  action={
+                    <div className="flex items-center gap-3">
+                      <button onClick={exportMonthlyCsv} disabled={csvBusy} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] disabled:opacity-50">导出 CSV</button>
+                      <RefreshButton onClick={() => monthlyRecon.refetch()} loading={monthlyRecon.isFetching} />
+                    </div>
+                  }
+                />
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-100 text-[10px] text-text-muted">
+                        <th className="px-4 py-3">月份</th>
+                        <th className="px-4 py-3 text-right">usage 成本（CNY）<InfoTip text="llm_usage 当月 CNY 成本合计（cost_cny_sql_expr 唯一折算口径）；按预算时区（Asia/Shanghai）分月" /></th>
+                        <th className="px-4 py-3 text-right">调用数</th>
+                        <th className="px-4 py-3 text-right">精确结算<InfoTip text="settle_kind=''：按实际用量精确结算的预占单" /></th>
+                        <th className="px-4 py-3 text-right">估算结算<InfoTip text="settle_kind='estimated'：按预占上限保守估算结算（小额未知用量），设计内口径" /></th>
+                        <th className="px-4 py-3 text-right">待对账核销<InfoTip text="resolution 非空：released / written_off / archived / settled_actual 的人工核销单" /></th>
+                        <th className="px-4 py-3 text-right">预算月行入账<InfoTip text="budget_ledger 月行 used_cny 合计——预算口径的实际入账，与主体页月用量同源" /></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(monthlyRecon.data?.months ?? []).map((m) => {
+                        const usage = monthlyRecon.data?.usage_by_month[m]
+                        const shapes = monthlyRecon.data?.reservations_by_month[m]?.by_shape ?? []
+                        const exactCount = shapes.filter((s) => s.status === 'settled' && s.settle_kind === '').reduce((acc, s) => acc + s.count, 0)
+                        const estimatedCount = shapes.filter((s) => s.settle_kind === 'estimated').reduce((acc, s) => acc + s.count, 0)
+                        const resolvedCount = shapes.filter((s) => s.resolution).reduce((acc, s) => acc + s.count, 0)
+                        const ledgerUsed = Object.values(monthlyRecon.data?.ledger_by_month[m]?.by_scope ?? {}).reduce(
+                          (acc, slot) => acc + Number(slot.used_cny), 0,
+                        )
+                        return (
+                          <tr key={m} className="border-b border-slate-50">
+                            <td className="px-4 py-3 font-mono text-[11px]">{m}</td>
+                            <td className="px-4 py-3 text-right font-mono">{formatCny(usage?.total_cny)}</td>
+                            <td className="px-4 py-3 text-right font-mono text-text-secondary">{usage?.calls ?? 0}</td>
+                            <td className="px-4 py-3 text-right font-mono text-text-secondary">{exactCount}</td>
+                            <td className="px-4 py-3 text-right font-mono text-amber-700">{estimatedCount}</td>
+                            <td className="px-4 py-3 text-right font-mono text-text-secondary">{resolvedCount}</td>
+                            <td className="px-4 py-3 text-right font-mono">{formatCny(ledgerUsed.toFixed(6))}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  {monthlyRecon.data && (monthlyRecon.data.months ?? []).length === 0 && (
+                    <EmptyRow text="统计窗口内暂无月度数据" />
+                  )}
+                  {monthlyRecon.data?.note && (
+                    <p className="px-4 py-2 text-[10px] text-text-muted">{monthlyRecon.data.note}</p>
+                  )}
+                </div>
               </section>
 
               <section className="mb-6 rounded-xl border border-black/5 bg-white shadow-card">

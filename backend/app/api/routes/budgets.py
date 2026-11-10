@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from backend.app.api.deps import (
@@ -368,3 +369,41 @@ async def dry_run_budget_backlog_migration(
         return _json_value(_store().dry_run_backlog_migration())
     except QuotaConfigurationError as exc:
         raise HTTPException(503, "存量迁移 dry-run 暂不可用") from exc
+
+
+@router.get("/admin/budgets/reconciliation/monthly")
+async def get_budget_reconciliation_monthly(
+    months: int = Query(6, ge=1, le=24, description="回溯自然月数（含当月）"),
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> dict[str, Any]:
+    """月度对账聚合（路线图第 4 块 PR-A）：usage 成本 / 预算月行 /
+    预占结算形态按月分布，只读。CSV 明细导出走 .csv 子路径。"""
+    del operator
+    try:
+        return _json_value(_store().monthly_reconciliation(months=months))
+    except QuotaConfigurationError as exc:
+        raise HTTPException(503, "月度对账聚合暂不可用") from exc
+
+
+@router.get("/admin/budgets/reconciliation/monthly.csv")
+async def get_budget_reconciliation_monthly_csv(
+    months: int = Query(6, ge=1, le=24, description="回溯自然月数（含当月）"),
+    operator: OperatorIdentity = Depends(require_admin_user),
+) -> Response:
+    """月度对账 CSV 导出：月 × 维度（供应商/模型/租户/合计）usage 成本行，
+    与供应商月账单核对的基线材料（PR-B）。"""
+    del operator
+    try:
+        content = _store().monthly_reconciliation_csv(months=months)
+    except QuotaConfigurationError as exc:
+        raise HTTPException(503, "月度对账 CSV 暂不可用") from exc
+    month_tag = datetime.now(timezone.utc).strftime("%Y%m%d")
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="monthly-reconciliation-{month_tag}.csv"'
+            )
+        },
+    )
