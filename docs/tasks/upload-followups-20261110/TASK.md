@@ -34,13 +34,58 @@
 - 每项完成需带对应回归测试；契约变更（#3）必须先写 ADR 说明迁移路径。
 - cs 端（已对齐）启用任何上传/批量功能前，先补同款代理契约测试（已有 8 用例基线）。
 
-## 执行批次计划（2026-11-11 排期，接手会话：docs/tasks/upload-rereview-20261111/）
+## 执行批次计划（2026-11-11 排期，batch3 复审完成后细化；用户已确认）
 
-| 批次 | 内容 | 前置 |
+> batch3 复审结论与 file:line 证据见 docs/tasks/upload-rereview-20261111/PROGRESS.md「batch3 复审报告」节。
+> 施工方式：持续实施，每批完成后对该批改动点做一次链路评审（重读改动 + 定向测试），通过后进入下一批。
+> 「侧」= 需要改动的端：B=后端 / F=前端 / BF=前后端都改。
+
+### batch3 —— 全链路复审 ✅ 已完成（2026-11-11）
+
+| 序 | 内容 | 结果 |
+|----|------|------|
+| 3.1 | 新鲜眼独立复审（后端 2149 行核心 + publish/run_store + 三端 BFF diff + admin UI + 边界） | 抽查表 14 项全过；P1=0，P2×2，P3×3，P4×4；报告已写回 rereview PROGRESS.md |
+
+### batch4 —— P2 修复 + 快修包 + 原排期小项（拆 2 个 PR）
+
+**PR-A：SSE 可靠性包（4.1~4.3，行为变更带回归测试）**
+
+| 序 | 事项 | 级别 | 侧 | 文件 | 施工要点 | 验收/回归 |
+|----|------|------|----|------|---------|----------|
+| 4.1 | SSE 断连自动重连 | P2（#8） | F | admin api/knowledge.ts:291-295 | 连接失败/流中断先重订阅一次再判「进度连接中断」；error 终态事件不重连（那是任务失败） | behavior 测试：断连→重连→拿到终态 |
+| 4.2 | 看门狗改活跃性驱动 | P2-1 | F | admin api/knowledge.ts:243,281-286 | 事件/keepalive 到达即刷新 deadline（IDLE 上限 ~120s，远大于 30s keepalive 周期）；保留绝对兜底 1900s 对齐后端 RAG_SSE_REDIS_POLL_MAX_SECONDS | 测试：长任务+keepalive 不误报；真死链超兜底报错 |
+| 4.3 | Redis 空轮询异常/缺失区分 | P2-2 | B | backend rag_upload.py:1918-1964 | _read_progress_redis 区分「连接异常」与「键不存在」：异常不计入键过期证据、宽限 ~120s（期间发 keepalive）；真·空键保持 20 次/10s 判过期 | 定向测试：模拟 Redis 不可用 SSE 不提前误报终态 |
+
+**PR-B：快修 + 体验包（4.4~4.10）**
+
+| 序 | 事项 | 级别 | 侧 | 文件 | 施工要点 | 验收/回归 |
+|----|------|------|----|------|---------|----------|
+| 4.4 | admin/cs BFF 502 脱敏对齐 web | P3-1 | F(BFF) | admin/cs route.ts:172-175 | message 改通用文案「网关暂不可达」，去掉 `${String(e)}` | BFF 代理契约测试断言更新 |
+| 4.5 | X-Batch-Id 白名单校验 | P3-2 | B | backend rag_upload.py:864 | `^[A-Za-z0-9_.:-]{1,64}$` 不符 422；前端 randomId 产物（uuid / batch-timestamp-rand）均匹配，前端无需改 | 定向测试：超长/非法被拒、合法透传落库 |
+| 4.6 | SSE error 文案去 upload_id 回显 | P3-3 | B | backend rag_upload.py:1961,2100,2118 | 统一「上传任务不存在或已过期」 | 现有测试断言同步更新 |
+| 4.7 | UploadDialog accept 补齐 5 格式 | P4-2 | F | admin UploadDialog.tsx:330 | 补 .html/.htm/.pptx/.json/.xml（对齐后端 12 格式） | behavior 快测 |
+| 4.8 | 前端上限与后端 env 联动 | P2（#6） | BF | 后端 /rag/health + admin UploadDialog.tsx:14 + 三端 route.ts:188 | health 返回 max_file_size_mb + multipart_overhead；UploadDialog 轮询时消费（复用现有 2s 轮询）；三端 BFF 改读 env `BFF_RAG_UPLOAD_LIMIT_BYTES`（部署联动），未设回退写死默认 50MiB+16KiB（BFF 走接口需解决启动时序/缓存，env 方案更稳） | 定向测试：改 env 后三端预检跟随 + health 不可达回退默认 |
+| 4.9 | admin 上传窗口可用性 | P3（#7） | F | admin UploadDialog.tsx:148-162 | 上传中 beforeunload 拦截；非上传中 ESC/遮罩点击可关；批量 >20 提示分批 | behavior 测试 ×3 |
+| 4.10 | admin behavior 测试扩充 | P3（#9） | F | admin UploadDialog.behavior.test.tsx | 后台转传重开窗口渲染失败原因 / duplicate 计入成功统计 / KB 加载失败态 | 测试全绿 |
+
+### batch5 —— 清理项（独立小 PR）
+
+| 序 | 事项 | 级别 | 侧 | 文件 | 施工要点 | 验收 |
+|----|------|------|----|------|---------|------|
+| 5.1 | lib/api multi-query 函数清理 | P3（#10） | F(web) | frontend/src/lib/api.ts | 先全仓核查消费方（含 cs2 命名空间），确认无引用删 getMultiQueryMode/setMultiQueryMode | tsc + web 定向测试 |
+| 5.2 | publish.py 死代码删除 | P4-1 | B | backend rag/indexing/publish.py:303-329 | 删 _write_published_pointer（全仓零调用方，指针由 store 方法维护）；先确认测试无引用 | 后端定向测试 |
+
+### batch6 —— 契约变更（ADR 先行）
+
+| 序 | 事项 | 级别 | 侧 | 文件 | 施工要点 | 前置 |
+|----|------|------|----|------|---------|------|
+| 6.1 | 上传错误状态码口径统一 | P2（#3） | BF | backend rag_upload.py（200+ok:false :540,546 / 422 :688 / 403 :523 / 409 :601）+ admin 解析链 | ADR（新路径或 Accept 头协商）→ 后端新契约 → admin 解析迁移 → 旧契约保留一个发布周期 | ADR 评审通过 |
+
+### 复审后明确搁置（不进批次）
+
+| 事项 | 级别 | 原因 |
 |------|------|------|
-| batch3 | **全链路复审**（新鲜眼，前后端 + 三端 BFF + 网关），产出评审报告；发现项按风险插入后续批次 | 无——新会话首轮任务 |
-| batch4 | #6 env 联动（/rag/health 返回上限，前端两处消费）+ #7 窗口可用性（beforeunload/ESC/批量上限提示）+ #8 SSE 断连重试 + #9 测试扩充；batch3 发现的快修项并入 | batch3 报告 |
-| batch5 | #10 lib/api multi-query 核查清理（独立小 PR） | 全仓核查消费方 |
-| batch6 | #3 状态码口径版本化（ADR 先行 → 后端新契约 → admin 解析迁移 → 旧契约保留一个发布周期） | ADR 评审通过 |
+| index_run_store_pg.py tuple repr 拼 SQL（:205,225,234,251） | P4-3 | 常量纯字符串、功能正确；batch4/5 触碰该文件时顺手改 |
+| rag_upload.py ~2149 行拆分 | — | 属重构单独评估排期，不混入修复批次 |
 
-> 批次划分原则：batch3 只评审不改码（评审与修复分离）；batch4 聚合小项降低 PR 碎片度；#3 体量与风险独立成批。
+> 批次划分原则：batch3 只评审不改码（评审与修复分离）；batch4 聚合小项降低 PR 碎片度（内部拆 SSE 可靠性包 / 快修包两个 PR）；#3 体量与风险独立成批。
