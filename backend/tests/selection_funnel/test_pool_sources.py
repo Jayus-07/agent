@@ -29,7 +29,7 @@ def test_import_priority_over_watchlist(patch_stores):
     """同 url 双源 → 导入源在前，保留导入版数据。"""
     _seed_import([IMPORT_ROW | {"url": "u-imp", "price": 149.0}])
     patch_stores([make_snap(url="u-imp", price=59.0, title="监控版冻干鸡肉")])
-    pool, notes, _, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食", tenant_id="default")
     assert len(pool) == 1
     assert pool[0]["price"] == 149.0
 
@@ -37,7 +37,7 @@ def test_import_priority_over_watchlist(patch_stores):
 def test_watchlist_fallback_when_import_empty(patch_stores):
     """导入池空 → watchlist 兜底，note 提示导入通道可用。"""
     patch_stores([make_snap()])
-    pool, notes, _, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食", tenant_id="default")
     assert len(pool) == 1 and pool[0]["title"].startswith("宠物零食")
     assert any("导入候选池为空" in n for n in notes)
 
@@ -46,7 +46,7 @@ def test_dedup_no_url_by_title_platform(patch_stores):
     """无 url 候选按 (title, platform) 去重，且保留最新批次（2026-09-18 语义修正）。"""
     _seed_import([IMPORT_ROW, IMPORT_ROW | {"price": 155.0}])
     patch_stores([])
-    pool, _notes, reasons, _sources = build_pool("宠物零食")
+    pool, _notes, reasons, _sources = build_pool("宠物零食", tenant_id="default")
     assert len(pool) == 1
     assert any(r["rule"] == "duplicate" for r in reasons)
     assert pool[0]["price"] == 155.0, "同款多批次应保留最新价格（列表序靠后）"
@@ -60,7 +60,7 @@ def test_dedup_by_url_keeps_latest(patch_stores):
         IMPORT_ROW | {"url": "u-2", "price": 60.0},
     ])
     patch_stores([])
-    pool, _notes, reasons, _sources = build_pool("宠物零食")
+    pool, _notes, reasons, _sources = build_pool("宠物零食", tenant_id="default")
     assert len(pool) == 2
     by_url = {c["url"]: c for c in pool}
     assert by_url["u-1"]["price"] == 80.0, "同款留最新批次"
@@ -71,14 +71,14 @@ def test_dedup_by_url_keeps_latest(patch_stores):
 def test_unknown_source_skipped_with_note(monkeypatch):
     from backend.config import selection_funnel as cfg
     monkeypatch.setattr(cfg, "SELECTION_FUNNEL_POOL_SOURCES", ("import", "nope"))
-    pool, notes, _, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食", tenant_id="default")
     assert pool == []
     assert any("未知数据源「nope」" in n for n in notes)
 
 
 def test_empty_pool_note_mentions_import_channel(patch_stores):
     patch_stores([])
-    pool, notes, _, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食", tenant_id="default")
     assert pool == []
     assert any("导入池" in n and "监控" in n for n in notes)
 
@@ -91,7 +91,7 @@ def test_single_source_failure_degrades(patch_stores, monkeypatch):
         raise RuntimeError("db locked")
     monkeypatch.setattr(import_pool, "get_import_store", _boom)
     patch_stores([make_snap()])
-    pool, notes, _, _ = build_pool("宠物零食")
+    pool, notes, _, _ = build_pool("宠物零食", tenant_id="default")
     assert len(pool) == 1
     assert any("导入候选池读取失败" in n for n in notes)
 
@@ -123,7 +123,8 @@ def test_graph_end_to_end_with_import_pool(patch_stores, funnel_graph):
     patch_stores([])  # 监控池为空——纯导入源驱动
 
     from backend.selection_funnel.graph_state import new_selection_funnel_graph_input
-    state = new_selection_funnel_graph_input("给宠物零食做一次智能选品，成本60元以内")
+    state = new_selection_funnel_graph_input(
+        "给宠物零食做一次智能选品，成本60元以内", tenant_id="default")
     result = funnel_graph.invoke(state, config={"recursion_limit": 25})
 
     assert result["status"] == "ok"
@@ -140,3 +141,41 @@ def test_graph_end_to_end_with_import_pool(patch_stores, funnel_graph):
     totals = [(c.get("score") or {}).get("total") or 0.0 for c in ranked]
     assert all(totals[i] >= totals[i + 1] for i in range(len(totals) - 1))
     assert "宠物零食" in result["final_answer"]
+
+
+# ── 租户隔离（评审 P1 修复锁定，2026-11-10）──────────────────────────
+def test_import_pool_is_tenant_scoped_in_build_pool(patch_stores):
+    """建池按租户读写导入池：A 租户导入的候选 B 租户不可见；租户缺失
+    fail-closed 跳过（不再落 PG 层 default 共享视图）。"""
+    _seed_import([IMPORT_ROW | {"url": "u-a", "price": 100.0}])  # default 租户
+    patch_stores([])
+    pool_a, notes_a, _, _ = build_pool("宠物零食", tenant_id="default")
+    assert [c["url"] for c in pool_a] == ["u-a"]
+
+    pool_b, _, _, _ = build_pool("宠物零食", tenant_id="tenant-b")
+    assert pool_b == [], "B 租户不得读到 A 租户的导入候选"
+
+    pool_missing, notes_missing, _, _ = build_pool("宠物零食", tenant_id="")
+    assert pool_missing == []
+    assert any("fail-closed" in n for n in notes_missing), notes_missing
+
+
+def test_reporter_fails_closed_without_tenant(patch_stores):
+    """租户缺失时 reporter 拒绝以 default 渲染市场数据（fail-closed 上抛）。"""
+    from backend.selection_funnel.graph_state import load_brief, \
+        new_selection_funnel_graph_input
+    import pytest
+
+    state = new_selection_funnel_graph_input(
+        user_message="帮我做智能选品", tenant_id="")
+    state.update({
+        "brief_missing": [], "brief": {
+            "category": "宠物零食", "platform": "淘宝",
+            "price_min": None, "price_max": None,
+            "target_margin": None},
+        "candidates": [], "stage_logs": [], "notes": [],
+        "status": "ok", "pool": [],
+    })
+    from backend.selection_funnel.reporter import reporter_node
+    with pytest.raises(ValueError, match="租户身份缺失"):
+        reporter_node(state)

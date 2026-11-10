@@ -641,6 +641,40 @@ class TestUploadEndpoint:
         assert body["ok"] is False
         assert "called" not in captured, "MIME 校验失败时不应进入上传实现"
 
+    def test_invalid_batch_id_rejected_before_upload(self, client):
+        """batch3 P3-2：X-Batch-Id 白名单外（特殊字符/超长）→ 入口拒绝，
+        不进入上传实现（该头会持久化进 Celery 消息/审计/lineage）。"""
+        tc, captured = client
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"},
+                       headers={"X-Batch-Id": "bad id!@#\"; drop"})
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "invalid X-Batch-Id header"
+        assert "called" not in captured
+
+    def test_oversize_batch_id_rejected_before_upload(self, client):
+        tc, captured = client
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"},
+                       headers={"X-Batch-Id": "b" * 65})
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["error"] == "invalid X-Batch-Id header"
+        assert "called" not in captured
+
+    def test_valid_batch_id_passes_to_upload(self, client):
+        """前端 randomId 产物（uuid 含连字符 / batch-<ts>-<rand>）必须放行。"""
+        tc, captured = client
+        resp = tc.post("/upload",
+                       files={"file": ("ok.md", b"# hi", "text/markdown")},
+                       data={"kb_id": "policy_general", "department": "general"},
+                       headers={"X-Batch-Id": "0e8d3b2a-1c4f-4d5e-9a6b-7f8e0d1c2b3a"})
+        assert resp.json()["ok"] is True, resp.json()
+        assert captured.get("called") is True
+
     def test_explicit_octet_stream_passes_to_upload(self, client):
         """显式 application/octet-stream 放行（浏览器/Windows 客户端对 docx 等
         的通用声明，旧实现一律拒绝属误伤），文件真实性由落盘后的魔数校验兜底
@@ -748,8 +782,10 @@ class TestUploadStreamEndpoint:
         data_lines = [l for l in resp.text.splitlines() if l.startswith("data: ")]
         assert data_lines, f"SSE 流应有 data 行，实际: {resp.text!r}"
         payload = json.loads(data_lines[0][len("data: "):])
-        assert "nonexistent" in payload["message"]
-        assert "不存在或已过期" in payload["message"]
+        # batch3 P3-3（2026-11-11 batch4b）：错误文案不再回显客户端可控的
+        # upload_id，只保留统一语义
+        assert "nonexistent" not in payload["message"]
+        assert "上传任务不存在或已过期" in payload["message"]
 
     def test_keepalive_heartbeat_emitted_when_idle(self, client, monkeypatch):
         """P2 心跳：队列长时间无事件时，SSE 必须周期性发 ': keepalive' 注释帧，
@@ -846,7 +882,7 @@ class TestUploadStreamEndpoint:
         monkeypatch.setattr(ru, "_progress_queues", {})
         monkeypatch.setattr(ru, "_progress_owners", {"uid_resub": ("test-tenant", "7")})
         monkeypatch.setattr(ru, "_read_progress_redis",
-                            lambda uid: {"stage": "embedding", "message": "进行中"})
+                            lambda uid: ("ok", {"stage": "embedding", "message": "进行中"}))
         captured = {}
 
         def fake_redis_stream(uid, last_sig=None):

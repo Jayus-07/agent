@@ -55,7 +55,16 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     "backend/shared/admin_llm.py",
     "backend/tests/api/test_admin_mcp_api.py",
 })
-PR_STATIC_ONLY_PREFIXES = ("backend/sql/migrations/",)
+# PR 免费预检触发、main push 付费不触发的目录前缀。#437 评审发现:定向
+# 清单已收录 tools/memory/selection_funnel 的安全与契约测试,但这些源码
+# 目录不触发 smoke——改 map 工具或记忆服务时登记的测试不会在 PR 上跑,
+# 门禁空转。清单守卫断言见 tests/test_rag_smoke_path_filter.py。
+PR_STATIC_ONLY_PREFIXES = (
+    "backend/sql/migrations/",
+    "backend/tools/",
+    "backend/memory/",
+    "backend/selection_funnel/",
+)
 PREFIX_ENTRIES = (
     "backend/rag/",
     "backend/evaluation/",
@@ -248,6 +257,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/143_memory_product_scope.sql",
     # ADR-0012 第 2 期：记忆时间有效性两列（D3），不改变模型调用面。
     "backend/sql/migrations/145_memory_time_validity.sql",
+    # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径），
+    # 不改变模型调用面；init_db.py 已登记为 business（ORDER_LAST）。
+    "backend/sql/migrations/147_readonly_revoke_cs_business_tables.sql",
 })
 
 

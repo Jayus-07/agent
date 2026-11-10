@@ -200,12 +200,14 @@ class CSKnowledgeService:
                 if eval_scope is None:
                     final_answer = _build_refusal_reply(
                         question, cs_decision.suffix,
+                        tenant_id=tenant_id,
                     )
                 else:
                     final_answer = _build_refusal_reply(
                         question,
                         cs_decision.suffix,
                         include_faq_candidates=False,
+                        tenant_id=tenant_id,
                     )
 
             sources = list(getattr(outcome, "sources", None) or [])
@@ -248,6 +250,7 @@ def _build_refusal_reply(
     base_text: str,
     *,
     include_faq_candidates: bool = True,
+    tenant_id: str = "",
 ) -> str:
     """拒答自救阶梯（V4，任务卡 T2）：基础话术 + 相似 FAQ 候选或换问法引导。
 

@@ -47,6 +47,7 @@ class SelectionFunnelState(TypedDict, total=False):
     # === 输入（由 selection_funnel_graph_node 适配器传入）===
     user_message: str
     user_id: str
+    tenant_id: str              # 可信租户（评审 P1 修复 2026-11-10：导入池/市场数据按租户读写，缺失 fail-closed）
     session_id: str
     conversation_id: str
     funnel_context: dict
@@ -80,6 +81,7 @@ def new_selection_funnel_graph_input(
     conversation_id: str = "",
     funnel_context: dict | None = None,
     run_id: str = "",
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """构建漏斗域图输入 —— **只放本轮输入，不放任何产物或执行态的默认值**。
 
@@ -90,6 +92,7 @@ def new_selection_funnel_graph_input(
     return {
         "user_message": user_message,
         "user_id": user_id,
+        "tenant_id": tenant_id,
         "session_id": session_id,
         "conversation_id": conversation_id,
         "funnel_context": funnel_context or {},

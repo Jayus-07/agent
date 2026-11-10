@@ -110,7 +110,7 @@ def test_golden_econ_abnormal_price_kept_disclosed():
 def test_golden_brief_inverted_price_band_need_info(funnel_graph, patch_stores):
     patch_stores(_golden_pet_snaps())
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给宠物零食做智能选品 80-50元"))
+        tenant_id="default", user_message="帮我给宠物零食做智能选品 80-50元"))
     assert final["status"] == "need_info"
     assert "下限大于上限" in final["final_answer"]
 
@@ -118,7 +118,7 @@ def test_golden_brief_inverted_price_band_need_info(funnel_graph, patch_stores):
 def test_golden_brief_margin_out_of_range_need_info(funnel_graph, patch_stores):
     patch_stores(_golden_pet_snaps())
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给宠物零食做智能选品，目标毛利率150%"))
+        tenant_id="default", user_message="帮我给宠物零食做智能选品，目标毛利率150%"))
     assert final["status"] == "need_info"
     assert "0-100%" in final["final_answer"]
 
@@ -127,7 +127,7 @@ def test_golden_brief_unknown_platform_warns_and_runs(funnel_graph, patch_stores
     """未知平台：软提示随漏斗披露，仍按原样过滤（此处 Honest 空池）。"""
     patch_stores(_golden_pet_snaps())
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我做智能选品",
+        tenant_id="default", user_message="帮我做智能选品",
         funnel_context={"category": "宠物零食", "platform": "小红书"}))
     assert final["status"] == "empty_pool"
     assert any("不在常见清单" in n for n in final["notes"])
@@ -138,7 +138,7 @@ def test_golden_brief_unknown_platform_warns_and_runs(funnel_graph, patch_stores
 def test_golden_pet_snacks_full_funnel(funnel_graph, patch_stores):
     patch_stores(_golden_pet_snaps())
     final = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message=PET_MSG))
+        new_selection_funnel_graph_input(user_message=PET_MSG, tenant_id="default"))
     assert final["status"] == "ok"
 
     # 手工复算：pool 8→7（g-e 重复 url）；screen 7→5（g-b 评分 / g-c 评价数）；
@@ -192,7 +192,7 @@ def test_golden_dress_category_econ_gate(funnel_graph, patch_stores):
                   category="连衣裙", snapshot_id=13),
     ])
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给连衣裙做智能选品"))
+        tenant_id="default", user_message="帮我给连衣裙做智能选品"))
     assert final["status"] == "ok"
     assert _stage(final["stage_logs"], "pool")["kept"] == 3
     assert _stage(final["stage_logs"], "screen")["kept"] == 3
@@ -208,7 +208,7 @@ def test_golden_home_empty_pool_with_config(funnel_graph, patch_stores):
     """全淘空：诚实披露所在层 + 运行配置随报告（放宽哪个阈值一目了然）。"""
     patch_stores(_golden_pet_snaps())
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给收纳盒做智能选品"))
+        tenant_id="default", user_message="帮我给收纳盒做智能选品"))
     assert final["status"] == "empty_pool"
     assert final["candidates"] == []
     answer = final["final_answer"]
@@ -225,7 +225,7 @@ def test_golden_candidate_level_cost_evidence(funnel_graph, patch_stores):
                   rating=4.7, review_count=2500, snapshot_id=22),
     ])
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给宠物零食做智能选品，目标毛利率20%"))
+        tenant_id="default", user_message="帮我给宠物零食做智能选品，目标毛利率20%"))
     assert final["status"] == "ok"
     ranked = {c["url"]: c for c in final["candidates"]}
     assert ranked["c-1"]["economics"]["unit_cost"] == 20.0
@@ -245,7 +245,7 @@ def test_golden_stale_freshness_disclosed(funnel_graph, patch_stores):
     snaps = [dict(s, crawled_at="2026-06-01T10:00:00") for s in _golden_pet_snaps()[:1]]
     patch_stores(snaps)
     final = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message=PET_MSG))
+        new_selection_funnel_graph_input(user_message=PET_MSG, tenant_id="default"))
     assert final["status"] == "ok"   # stale 不淘汰：强候选照常推荐
     dq = final["candidates"][0]["data_quality"]
     assert dq["freshness"] == "stale" and dq["age_days"] > 30
@@ -277,8 +277,8 @@ def test_golden_funnel_topn_bridge_contract():
 
 def test_golden_determinism(funnel_graph, patch_stores):
     patch_stores(_golden_pet_snaps())
-    a1 = funnel_graph.invoke(new_selection_funnel_graph_input(user_message=PET_MSG))
-    a2 = funnel_graph.invoke(new_selection_funnel_graph_input(user_message=PET_MSG))
+    a1 = funnel_graph.invoke(new_selection_funnel_graph_input(user_message=PET_MSG, tenant_id="default"))
+    a2 = funnel_graph.invoke(new_selection_funnel_graph_input(user_message=PET_MSG, tenant_id="default"))
     assert a1["final_answer"] == a2["final_answer"]
     assert a1["candidates"] == a2["candidates"]
     assert a1["config_snapshot"] == a2["config_snapshot"]

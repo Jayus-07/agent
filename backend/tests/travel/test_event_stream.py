@@ -106,12 +106,21 @@ def test_plan_stream_exposes_real_tool_events_and_structured_result(
 
     app = FastAPI()
     app.include_router(travel_route.router)
-    # /travel/plan/stream 是已退役 V1 端点（_retired_v1_router 无处挂载，
-    # b178338 起打它必 404）；事件流测试迁 V2 入口（不读写 V1 版本账本）
+    # 2026-11-09 加固后（审计 #33 + travel 全域租户 fail-closed）：
+    # - 配置了 GATEWAY_TRUST_SECRET 时，身份头必须带网关注入的信任标记，
+    #   否则退化为 guest → require_identity 401；
+    # - tenant_id 缺失 → _travel_tenant 403「缺少可信租户身份」。
+    # 测试自配信任密钥并走真实信任链（对齐生产网关→后端路径）。
+    monkeypatch.setattr(
+        "backend.config.auth.GATEWAY_TRUST_SECRET", "test-trust-secret")
     response = TestClient(app).post(
         "/travel/v2/plan/stream",
         json={"message": "福州1天", "conversation_id": "conv-1"},
-        headers={"X-User-Id": "15", "X-User-Name": "Mint", "X-Auth-Type": "jwt"},
+        headers={
+            "X-User-Id": "15", "X-User-Name": "Mint", "X-Auth-Type": "jwt",
+            "X-Tenant-Id": "tenant-demo",
+            "X-Gateway-Trust": "test-trust-secret",
+        },
     )
 
     assert response.status_code == 200

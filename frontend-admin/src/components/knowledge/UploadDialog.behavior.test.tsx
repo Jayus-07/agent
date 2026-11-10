@@ -265,4 +265,126 @@ describe('UploadDialog 后台上传体验', () => {
     expect(container.textContent).toContain('正在切分')
     act(() => root.unmount())
   })
+
+  // ── batch3 复审 #9 扩充（2026-11-11 batch4b）──
+
+  function selectTwoFiles(container: HTMLElement, secondSize?: number) {
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const second = new File(['b'], 'b.md')
+    if (secondSize !== undefined) {
+      Object.defineProperty(second, 'size', { value: secondSize })
+    }
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['a'], 'a.md'), second],
+    })
+    return input
+  }
+
+  it('后台转传失败后重开窗口能看到失败原因（#9）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+
+    let acceptUpload!: (value: { ok: boolean; error?: string }) => void
+    mocks.uploadDocument.mockImplementation(
+      () => new Promise(resolve => { acceptUpload = resolve }),
+    )
+
+    const onClose = vi.fn()
+    const { root, container } = mount(true, onClose, vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['bad'], 'scan.pdf')],
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    // 转入后台（窗口关闭，任务继续）
+    const backgroundButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('转入后台'))
+    act(() => backgroundButton!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    // 后台任务失败收口
+    await act(async () => {
+      acceptUpload({ ok: false, error: '解析失败：文档无文本层' })
+      await Promise.resolve()
+    })
+    expect(mocks.toast.error).toHaveBeenCalledWith(
+      '后台处理结束：1 个文件失败，可重新打开窗口查看原因',
+    )
+
+    // 重开窗口 → 失败原因可见
+    act(() => root.render(<UploadDialog open={true} onClose={onClose} onSuccess={vi.fn()} />))
+    expect(container.textContent).toContain('scan.pdf')
+    expect(container.textContent).toContain('解析失败：文档无文本层')
+    act(() => root.unmount())
+  })
+
+  it('duplicate 计入成功统计（#9）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    mocks.uploadDocument
+      .mockResolvedValueOnce({ ok: true, duplicate: true, doc: { doc_id: 'd1' } })
+      .mockResolvedValueOnce({ ok: true, doc: { doc_id: 'd2' } })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = selectTwoFiles(container)
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    // 聚合行：duplicate 与 success 都计入 ✓ 数
+    expect(container.textContent).toContain('✓ 2')
+    expect(container.textContent).toContain('已存在，跳过')
+    act(() => root.unmount())
+  })
+
+  it('知识库列表加载失败 → 显示失败态，无法上传（#9）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      if (url.includes('knowledge-bases')) {
+        return new Response(JSON.stringify({ detail: '知识库或部门目录暂不可用' }), { status: 503 })
+      }
+      return new Response(JSON.stringify({ ready: true }), { status: 200 })
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    expect(container.textContent).toContain('知识库或部门目录暂不可用')
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    // validUploadSelection=false → 上传按钮 disabled
+    expect(uploadButton?.hasAttribute('disabled')).toBe(true)
+    act(() => root.unmount())
+  })
 })
+

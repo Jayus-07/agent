@@ -328,7 +328,7 @@ def test_pool_source_health_statuses(patch_stores):
     from backend.selection_funnel.stages import pool_builder as pb
     patch_stores([{"url": "u-1", "title": "宠物零食冻干鸡肉", "price": 59.0,
                    "snapshot_id": 1}])
-    pool, _notes, _reasons, sources = pb.build_pool("宠物零食")
+    pool, _notes, _reasons, sources = pb.build_pool("宠物零食", tenant_id="default")
     by_src = {s["source"]: s for s in sources}
     assert by_src["import"]["status"] == "empty" and by_src["import"]["count"] == 0
     assert by_src["watchlist"]["status"] == "ok" and by_src["watchlist"]["count"] == 1
@@ -339,7 +339,7 @@ def test_pool_source_health_statuses(patch_stores):
     orig = pb._load_import_candidates
     pb._load_import_candidates = _boom
     try:
-        _pool, notes, _r, sources2 = pb.build_pool("宠物零食")
+        _pool, notes, _r, sources2 = pb.build_pool("宠物零食", tenant_id="default")
     finally:
         pb._load_import_candidates = orig
     by_src2 = {s["source"]: s for s in sources2}
@@ -412,7 +412,7 @@ def test_verify_import_history_wires_trend(isolated_import_store):
     cand = {"url": "u-a", "title": "冻干鸡肉", "platform": "淘宝", "price": 49.0,
             "rating": 4.7, "review_count": 150, "category": "宠物零食",
             "imported_at": "2026-09-18T00:00:00"}
-    enriched, notes = verify_candidates([cand])
+    enriched, notes = verify_candidates([cand], tenant_id="default")
     t = enriched[0]["trend"]
     assert t["snapshots"] == 2
     assert t["source"] == "import_pool"
@@ -431,7 +431,7 @@ def test_verify_import_history_failure_degrades_to_single_point(monkeypatch,
                         lambda: (_ for _ in ()).throw(RuntimeError("pg down")))
     cand = {"title": "冻干鸡肉", "platform": "淘宝", "price": 49.0,
             "imported_at": "2026-09-18T00:00:00"}
-    enriched, notes = verifier.verify_candidates([cand])
+    enriched, notes = verifier.verify_candidates([cand], tenant_id="default")
     assert enriched[0]["trend"] == {"snapshots": 0}   # 历史为空 → 单点/零点如实披露
     assert any("同款历史读取失败" in n for n in notes)
 
@@ -444,7 +444,7 @@ def test_verify_watchlist_candidate_still_uses_competitor_history(patch_stores):
                   make_snap(url="u-w", price=55.0, review_count=200)])
     cand = {"url": "u-w", "title": "监控款", "platform": "淘宝", "price": 55.0,
             "review_count": 200, "crawled_at": "2026-09-10T00:00:00"}
-    enriched, _ = verify_candidates([cand])
+    enriched, _ = verify_candidates([cand], tenant_id="default")
     t = enriched[0]["trend"]
     assert t["snapshots"] == 2
     assert "source" not in t   # 竞品历史不标导入来源

@@ -9,8 +9,9 @@ import { atLeast } from '@/lib/auth'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-/** 前端大小预检上限（MB）——对齐后端 RAG_MAX_FILE_SIZE 默认值（config/rag.py）。
- *  仅作 fail-fast 体验优化；权威上限始终由后端流式字节计数强制执行。 */
+/** 前端大小预检上限（MB）——降级默认值（/rag/health 不可达时使用）。
+ *  正常路径从 health 响应 max_file_size_mb 动态跟随（#6 env 联动，
+ *  2026-11-11 batch4b）；权威上限始终由后端流式字节计数强制执行。 */
 const MAX_UPLOAD_MB = 50
 
 // 阶段映射：后端 SSE stage → 显示文案 + UI 索引（10 阶段，覆盖后端 span 树）
@@ -63,6 +64,8 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const [aggregatedExpanded, setAggregatedExpanded] = useState(true)
   const fileRef = useRef<HTMLInputElement>(null)
   const [ragReady, setRagReady] = useState<boolean | null>(null)
+  // #6：预检上限随服务端 env 联动（health 透传），health 不可达回退写死默认
+  const [maxUploadMb, setMaxUploadMb] = useState(MAX_UPLOAD_MB)
   const healthTimerRef = useRef<ReturnType<typeof setInterval> | undefined>(undefined)
   const backgroundUploadRef = useRef(false)
   const backgroundReceiptShownRef = useRef(false)
@@ -122,6 +125,27 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     )
   }, [selectedKbId, kbList])
 
+  // #7（2026-11-11 batch4b）：上传中拦截页面关闭/刷新（防误刷新丢进度，
+  // 转后台语义依赖页面存活）；非上传中 ESC 关闭窗口
+  useEffect(() => {
+    if (!open) return
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (uploading) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !uploading) handleClose()
+    }
+    window.addEventListener('beforeunload', onBeforeUnload)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('beforeunload', onBeforeUnload)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [open, uploading])
+
   // 轮询 RAG 就绪状态
   useEffect(() => {
     let cancelled = false
@@ -131,6 +155,10 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
         const data = await res.json()
         if (!cancelled) {
           setRagReady(data.ready === true)
+          // #6：上限随服务端 env 联动（health 透传 RAG_MAX_FILE_SIZE）
+          if (Number.isFinite(data.max_file_size_mb) && data.max_file_size_mb > 0) {
+            setMaxUploadMb(Number(data.max_file_size_mb))
+          }
           if (data.ready) clearInterval(healthTimerRef.current)
         }
       } catch { /* 后端未启动，继续轮询 */ }
@@ -268,7 +296,11 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
   const showReports = uploading || completedCount > 0
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
+      // #7：非上传中点击遮罩关闭；上传中不响应（防误触丢窗口）
+      onClick={uploading ? undefined : handleClose}
+    >
       <div className="bg-surface-base rounded-2xl border border-border-subtle shadow-xl w-[480px] p-6" onClick={e => e.stopPropagation()}>
         {/* 标题：始终展示，并在多文件/有进度时显示聚合信息 */}
         <div className="mb-4">
@@ -327,7 +359,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             )}
             <div className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${ragReady === false ? 'border-amber-200 bg-amber-50/30 cursor-not-allowed' : 'border-border-subtle cursor-pointer'}`}>
               <input type="file" ref={fileRef} multiple
-                accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.markdown" className="hidden"
+                accept=".pdf,.md,.markdown,.txt,.docx,.xlsx,.csv,.html,.htm,.pptx,.json,.xml" className="hidden"
                 disabled={ragReady === false}
                 onChange={e => {
                   // 2026-11-10 评审：超限文件选择即拒（fail-fast），权威上限仍在后端
@@ -336,12 +368,17 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
                   // 同一个 A」onChange 不触发（value 未变），列表静默不更新
                   e.target.value = ''
                   if (!fs.length) return
-                  const limit = MAX_UPLOAD_MB * 1024 * 1024
+                  const limit = maxUploadMb * 1024 * 1024
                   const oversized = fs.filter(f => f.size > limit)
                   setFiles(fs.filter(f => f.size <= limit))
-                  setError(oversized.length
-                    ? `以下文件超过 ${MAX_UPLOAD_MB}MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
-                    : '')
+                  let msg = oversized.length
+                    ? `以下文件超过 ${maxUploadMb}MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
+                    : ''
+                  // #7：批量文件数提示（不阻断，建议分批）
+                  if (fs.length > 20) {
+                    msg = `${msg ? msg + '；' : ''}一次选择了 ${fs.length} 个文件，建议分批上传以获得更稳定的进度体验`
+                  }
+                  setError(msg)
                 }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />

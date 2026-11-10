@@ -34,9 +34,21 @@ def test_legacy_storage_does_not_create_retired_tables(
 def test_legacy_trip_persistence_api_routes_are_not_mounted():
     from backend.app.api.router import api_router
 
+    # fastapi 0.161（requirements-lock）起 include_router 惰性挂载：
+    # routes 里是 _IncludedRouter 包装对象，须沿 original_router 递归
+    # 解包才能看到真实 path/methods（周回归 CI-only 失败根因，
+    # 2026-11-10 实证；与 test_cs_dispatch.iter_routes 同款）。
+    def _iter_routes(routes):
+        for route in routes:
+            if getattr(route, "path", None) is not None:
+                yield route
+            nested = getattr(route, "original_router", None)
+            if nested is not None:
+                yield from _iter_routes(getattr(nested, "routes", []))
+
     mounted = {
         (route.path, method)
-        for route in api_router.routes
+        for route in _iter_routes(api_router.routes)
         for method in getattr(route, "methods", ())
     }
 

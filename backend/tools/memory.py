@@ -145,6 +145,25 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
 
     session_id, user_id, tenant_id = _context_ids()
 
+    # 工具通道唯一归一（评审修复 2026-11-10）：_context_ids 返回的 user_id
+    # 是 memory_user_id 兼容层前缀编码（客服产品 = "customer_service::u"），
+    # 而 _store 直调 store_with_resolution 不经 MemoryService，conflict 层
+    # 对 user_id 原样落库——双传会把客服显式记忆写进
+    # (customer_service, "customer_service::u") 分裂命名空间，检索/画像
+    # 永不可见。与 MemoryService 同函数归一（幂等、前缀权威优先），保证
+    # 写入与检索/删除（走 MemoryService）同命名空间。
+    # 归一必须先于证据门（评审修复 2026-11-10 第二批）：证据门的
+    # get_session_messages → _check_owner 用调用方传入的 user_id 与
+    # chat_sessions.user_id（裸值，start_session 归一落库）比对，编码形态
+    # 恒不匹配 → 客服产品下证据门永久拒绝，显式记忆功能整体失效。
+    from backend.core.request_context import get_current_product_id
+
+    product = get_current_product_id()
+    from backend.memory.service import _resolve_memory_identity
+
+    user_id, tenant_id, product = _resolve_memory_identity(
+        user_id, tenant_id, product)
+
     # ── 证据门（安全审计 #50，2026-11-10）─────────────────────
     # provenance 契约（long_term.py）声明「用户消息 = 唯一可形成用户长期
     # 记忆的证据，prompt 不是安全边界」——后台 inferred 管线有代码级
@@ -152,12 +171,11 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
     # 诱导在无用户请求时写 verified explicit 记忆，且此后 inferred 修正
     # 被 CONFLICT_BLOCKED_EXPLICIT 阻断）。写入前校验当前会话最近用户
     # 消息确实表达过该内容（规范化子串或关键词重合），无证据即拒绝。
-    from backend.core.request_context import get_current_product_id
     try:
         evidence = memory_manager.run_tool(
             lambda: memory_manager.service.get_session_messages(
                 session_id, user_id=user_id, tenant_id=tenant_id,
-                product=get_current_product_id(),
+                product=product,
             )
         )
     except Exception as exc:  # 会话历史不可得 = 无法证明有证据 → fail-closed
@@ -190,20 +208,6 @@ def memory_store_tool(content: str, memory_type: str = "user_fact",
         memory_key=(memory_key or "").strip() or None,
         structured_value=(structured_value or "").strip() or None,
     )
-
-    product = get_current_product_id()
-
-    # 工具通道唯一归一（评审修复 2026-11-10）：_context_ids 返回的 user_id
-    # 是 memory_user_id 兼容层前缀编码（客服产品 = "customer_service::u"），
-    # 而 _store 直调 store_with_resolution 不经 MemoryService，conflict 层
-    # 对 user_id 原样落库——双传会把客服显式记忆写进
-    # (customer_service, "customer_service::u") 分裂命名空间，检索/画像
-    # 永不可见。与 MemoryService 同函数归一（幂等、前缀权威优先），保证
-    # 写入与检索/删除（走 MemoryService）同命名空间。
-    from backend.memory.service import _resolve_memory_identity
-
-    user_id, tenant_id, product = _resolve_memory_identity(
-        user_id, tenant_id, product)
 
     async def _store() -> tuple[bool, str]:
         from backend.memory.keying import StoreOutcome

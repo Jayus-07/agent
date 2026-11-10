@@ -717,7 +717,8 @@ class TestRedisPollEvents:
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_MAX_SECONDS", 0.05)
         mirror = {"stage": "uploading", "message": "已入队"}
-        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: dict(mirror))
+        monkeypatch.setattr(ru, "_read_progress_redis",
+                            lambda uid: ("ok", dict(mirror)))
 
         chunks = []
         async for chunk in ru._redis_poll_events("u-cold"):
@@ -734,7 +735,7 @@ class TestRedisPollEvents:
         """镜像持续为空（upload_id 真不存在 / TTL 已过期）→ grace 耗尽明确报过期。"""
         monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
         monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
-        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: None)
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("missing", None))
 
         chunks = []
         async for chunk in ru._redis_poll_events("u-gone"):
@@ -742,6 +743,51 @@ class TestRedisPollEvents:
 
         msgs = self._messages(chunks)
         assert any("不存在或已过期" in m.get("message", "") for m in msgs)
+
+    @pytest.mark.asyncio
+    async def test_redis_error_within_grace_does_not_report_expired(self, monkeypatch):
+        """batch3 P2-2 回归：Redis 连接异常不是「键过期」的证据。
+
+        异常在宽限期内（< error grace）必须继续轮询等待自愈（仅 keepalive），
+        绝不能误报「不存在或已过期」；宽限耗尽才报「进度服务暂不可用」。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_POLLS", 5)
+        # Redis 持续异常 3 次（< 宽限 5）后自愈，随后正常事件到达
+        state = {"polls": 0}
+
+        def flaky_redis(uid):
+            state["polls"] += 1
+            if state["polls"] <= 3:
+                return ("error", None)
+            return ("ok", {"stage": "done", "message": "索引完成"})
+
+        monkeypatch.setattr(ru, "_read_progress_redis", flaky_redis)
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-flaky"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert not any("不存在或已过期" in str(m) for m in msgs), \
+            "Redis 异常不得计入键过期证据"
+        assert any(m.get("stage") == "done" for m in msgs), \
+            "异常自愈后必须无缝续看并拿到终态"
+
+    @pytest.mark.asyncio
+    async def test_redis_error_persisting_reports_unavailable(self, monkeypatch):
+        """Redis 异常超过宽限 → 报「进度服务暂不可用」（不是「不存在或已过期」）。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_ERROR_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("error", None))
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-err"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert any("进度服务暂时不可用" in m.get("message", "") for m in msgs)
+        assert not any("不存在或已过期" in str(m) for m in msgs), \
+            "连接异常与任务过期是两种语义，文案必须区分"
 
     def test_done_frame_carries_was_overwrite(self, monkeypatch):
         """D-2：done 帧必须透传 was_overwrite。

@@ -161,9 +161,6 @@ def map_navigation_tool(to_location: str, to_name: str = "", from_location: str 
     policy: 仅驾车有效：0=默认 1=避免拥堵 2=躲避收费 3=不走高速
     适用场景：用户想真的开始导航（需要语音播报与实时偏航重算）——网页无法提供这些，
              必须调起原生地图 App。仅想「看路线/估时间」请用 map_route_tool。
-    注意：返回的 url 是否可直接给浏览器，取决于 key_kind 字段：
-         为 frontend 表示用的是前端专用 Key，安全；
-         为 backend 表示回退用了后端 Key，此时 url 含密钥，**不要外发**。
     """
     if not MAP.is_configured():
         return _base.not_configured()
@@ -191,6 +188,17 @@ def map_navigation_tool(to_location: str, to_name: str = "", from_location: str 
     except Exception as e:  # noqa: BLE001
         logger.warning("[MapTool] navigation_uri 失败: %s", e)
         return _base.fail(f"导航调起链接生成失败: {e}")
+
+    # 审计 #44 工具通道同类收口（评审 P1，2026-11-10）：backend 分支的
+    # URL 含后端 Key，腾讯 302 会把 Key 原样带给浏览器——此前仅靠
+    # docstring 提示模型「不要外发」，无服务端拦截。与 HTTP 路由
+    # （maps.py 409 MapFrontendKeyNotConfigured）同口径 fail-closed。
+    if str(result.get("key_kind") or "") == "backend":
+        logger.warning("[MapTool] 拒绝返回含后端 Key 的导航链接（未配置前端 Key）")
+        return _base.fail(
+            "导航调起链接需要前端专用 Key（TENCENT_LBS_FRONTEND_KEY），"
+            "当前未配置；含后端密钥的 URL 不能下发给用户。请改用 "
+            "map_route_tool 呈现路线信息。")
 
     return _base.ok({
         **result,

@@ -205,6 +205,8 @@ def test_setup_and_workflow_only_changes_run_pr_static_but_not_main_paid_smoke()
 
 
 def test_non_rag_docs_and_backend_changes_skip_smoke():
+    """main push 语义：以下路径不触发付费评测面（backend/tools/ 于 PR 上
+    走免费预检，见 test_tool_memory_funnel_changes_run_pr_static）。"""
     paths = [
         "docs/operations/ci-evaluation-environment.md",
         "README.md",
@@ -214,6 +216,44 @@ def test_non_rag_docs_and_backend_changes_skip_smoke():
     ]
     assert _filter_import(paths) is False
     assert _filter_subprocess(paths) is False
+
+
+def test_tool_memory_funnel_changes_run_pr_static_but_not_main_paid_smoke():
+    """#437 评审缺口收口：tools/memory/selection_funnel 源码目录的变更
+    在 PR 上触发免费定向预检（清单已收录三个目录的测试），main push
+    不触发付费评测面——与治理面（admin_*）同款语义。"""
+    paths = [
+        "backend/tools/map/route.py",
+        "backend/tools/memory.py",
+        "backend/memory/service.py",
+        "backend/selection_funnel/reporter.py",
+    ]
+    assert _filter_import(paths) is False
+    assert _filter_subprocess(paths) is False
+    assert _filter_import(paths, event="pull_request") is True
+    assert _filter_subprocess(paths, event="pull_request") is True
+
+
+def test_tool_memory_funnel_checklist_not_idle():
+    """清单守卫（防「过滤器说触发、清单没跑用例」空转）：三个目录前缀
+    触发 PR 免费预检的前提，是定向清单真的包含各自目录的测试。"""
+    root = Path(__file__).resolve().parents[1]
+    smoke = yaml.safe_load(
+        (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
+    )
+    run_steps = [
+        step for job in smoke["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and "run" in step
+    ]
+    for registered in (
+        "backend/tests/tools/test_map_navigation_key.py",
+        "backend/tests/memory/test_memory_store_tool_keying.py",
+        "backend/tests/selection_funnel/test_pool_sources.py",
+    ):
+        assert any(registered in step["run"] for step in run_steps), (
+            f"rag_smoke 定向清单缺少 {registered}（触发面与清单脱节）"
+        )
 
 
 def test_admin_governance_changes_run_pr_static_but_not_main_paid_smoke():

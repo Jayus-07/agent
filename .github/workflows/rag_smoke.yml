@@ -204,6 +204,7 @@ jobs:
             backend/tests/customer_service/test_order_cancel_flow.py \
             backend/tests/customer_service/test_address_change_flow.py \
             backend/tests/customer_service/test_mall_cancel_sandbox_pg.py \
+            backend/tests/customer_service/test_cs_faq_pg.py \
             backend/tests/customer_service/test_points_flow.py \
             backend/tests/customer_service/test_coupon_flow.py \
             backend/tests/customer_service/test_invoice_flow.py \
@@ -256,6 +257,7 @@ jobs:
             backend/tests/test_auth_middleware.py \
             backend/tests/api/test_auth_policy_and_json.py \
             backend/tests/api/test_map_navigate_key.py \
+            backend/tests/tools/test_map_navigation_key.py \
             backend/tests/api/test_internal_ai_actor_binding.py \
             backend/tests/api/test_batch3_hardening.py \
             backend/tests/api/test_observability_unauth_closure.py \
@@ -301,6 +303,7 @@ jobs:
             backend/tests/api/test_business_mock_failclosed.py \
             backend/tests/selection_funnel/test_api_import.py \
             backend/tests/selection_funnel/test_import_pool_pg.py \
+            backend/tests/selection_funnel/test_pool_sources.py \
             -q --no-cov
 
       - name: Declare skipped real-API scope

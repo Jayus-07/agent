@@ -55,35 +55,44 @@ class FakeCursor:
         sql_l = " ".join(sql.split())
         if sql_l.startswith("CREATE TABLE"):
             return
-        if sql_l.startswith("INSERT INTO ai.cs_faq"):
-            key = params[0]
+        # 注意分支顺序：cs_faq_query_log 必须先于 cs_faq 判定——
+        # startswith("INSERT INTO ai.cs_faq") 会遮蔽台账 INSERT，
+        # 曾导致台账分支永不可达、写入侧回归无观察力（独立评审 P2-1）
+        if sql_l.startswith("INSERT INTO ai.cs_faq_query_log"):
+            s["log"].append({"question": params[0], "matched": params[1],
+                             "faq_id": params[2], "latency_ms": params[3]})
+        elif sql_l.startswith("INSERT INTO ai.cs_faq"):
+            # 2026-11-08 #394 租户隔离：INSERT 参数序为
+            # (tenant_id, faq_key, question, variants, answer, status, kb_refs, valid_until)
+            key = params[1]
             s["rows"][key] = {
-                "id": 100 + len(s["rows"]), "question": params[1],
-                "variants": params[2], "answer": params[3],
-                "status": params[4], "kb_refs": params[5], "valid_until": params[6],
+                "id": 100 + len(s["rows"]), "tenant_id": params[0],
+                "question": params[2], "variants": params[3],
+                "answer": params[4], "status": params[5],
+                "kb_refs": params[6], "valid_until": params[7],
             }
             self._result = [(s["rows"][key]["id"],)]
         elif sql_l.startswith("UPDATE ai.cs_faq SET hit_count"):
             for row in s["rows"].values():
                 if row["id"] == params[0]:
                     row["hits"] = row.get("hits", 0) + 1
-        elif sql_l.startswith("INSERT INTO ai.cs_faq_query_log"):
-            s["log"].append({"question": params[0], "matched": params[1],
-                             "faq_id": params[2], "latency_ms": params[3]})
         elif sql_l.startswith("SELECT count(*) FROM ai.cs_faq WHERE status"):
             self._result = [(sum(1 for r in s["rows"].values() if r["status"] == "published"),)]
         elif sql_l.startswith("SELECT count(*), count(*) FILTER"):
             total = len(s["log"])
             self._result = [(total, sum(1 for e in s["log"] if e["matched"]))]
         elif sql_l.startswith("SELECT id, question, variants"):
+            # 真实 SQL 带 WHERE tenant_id = %s（params[0]），桩同步按租户过滤
             import datetime
             today = str(datetime.date.today())
+            tenant = params[0]
             self._result = [
                 {"id": r["id"], "question": r["question"], "variants": r["variants"],
                  "answer": r["answer"], "kb_refs": r["kb_refs"],
                  "valid_until": r["valid_until"]}
                 for r in s["rows"].values()
-                if r["status"] == "published"
+                if r["tenant_id"] == tenant
+                and r["status"] == "published"
                 and (not r["valid_until"] or r["valid_until"] >= today)
             ]
 
@@ -187,7 +196,9 @@ class TestNoLLMOnFaqHit:
         from backend.customer_service.knowledge import service as ks
 
         class FakeStore:
-            def match(self, q):
+            # 服务层以 tenant_id= 关键字实参调用（#394 租户隔离），桩签名须同步
+            def match(self, q, tenant_id="default"):
+                assert tenant_id, "租户谓词不得为空"
                 return FAQMatch(faq_id=42, question="退款多久能到账",
                                 answer="1-3 个工作日。", score=1.0, matched_by="exact")
 
@@ -214,7 +225,7 @@ class TestNoLLMOnFaqHit:
         from backend.customer_service.knowledge import service as ks
 
         class FakeStore:
-            def match(self, q):
+            def match(self, q, tenant_id="default"):
                 return None
 
         class FakeOutcome:
@@ -238,7 +249,7 @@ class TestNoLLMOnFaqHit:
         from backend.customer_service.knowledge import service as ks
 
         class FakeStore:
-            def match(self, q):
+            def match(self, q, tenant_id="default"):
                 raise RuntimeError("PG 不可用（测试桩）")
 
         class FakeOutcome:
@@ -263,7 +274,7 @@ class TestNoLLMOnFaqHit:
         from backend.customer_service.knowledge import service as ks
 
         class FakeStore:
-            def match(self, q):
+            def match(self, q, tenant_id="default"):
                 raise RuntimeError("PG 不可用（测试桩）")
 
         class FakeOutcome:

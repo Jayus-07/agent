@@ -44,12 +44,20 @@ def _default_store() -> Any:
     return get_store()
 
 
-def _load_import_candidates() -> tuple[list[dict], list[str]]:
-    """源一：批量导入候选池。失败降级为跳过 + note。"""
+def _load_import_candidates(tenant_id: str = "") -> tuple[list[dict], list[str]]:
+    """源一：批量导入候选池。失败降级为跳过 + note。
+
+    评审 P1 修复（2026-11-10）：tenant_id 必须来自可信链路，缺失按
+    fail-closed 跳过——此前不传参落 PG 层默认 "default"，所有租户共享
+    default 池视图（租户 A 导入的候选在漏斗中不可读）。
+    """
     notes: list[str] = []
+    if not tenant_id:
+        logger.warning("[FunnelPool] 租户身份缺失，导入候选池按 fail-closed 跳过")
+        return [], ["租户身份缺失，导入候选池已跳过（fail-closed）"]
     try:
         from backend.selection_funnel.import_pool import get_import_store
-        items = get_import_store().list_candidates()
+        items = get_import_store().list_candidates(tenant_id=tenant_id)
     except Exception as e:
         logger.warning("[FunnelPool] 导入候选池读取失败: %s", e)
         return [], [f"导入候选池读取失败，已跳过该源: {e}"]
@@ -130,7 +138,8 @@ def build_pool(category: str, platform: str = "",
                price_min: float | None = None,
                price_max: float | None = None,
                max_pool: int = 200,
-               store: Any = None) -> tuple[list[dict], list[str], list[dict], list[dict]]:
+               store: Any = None,
+               tenant_id: str = "") -> tuple[list[dict], list[str], list[dict], list[dict]]:
     """构建候选池（多源合并 → 统一过滤 → 去重 → 截断）。
 
     Returns:
@@ -148,7 +157,7 @@ def build_pool(category: str, platform: str = "",
     for source in SELECTION_FUNNEL_POOL_SOURCES:
         if source == "import":
             try:
-                items, src_notes = _load_import_candidates()
+                items, src_notes = _load_import_candidates(tenant_id)
             except Exception as e:   # 双保险：健康度记录 error，不让单源炸池
                 items, src_notes = [], [f"导入候选池读取失败，已跳过该源: {e}"]
             sources.append({"source": source, "status": _src_status(items, src_notes),
@@ -232,6 +241,7 @@ def pool_node(state: dict) -> dict:
         category=brief.category, platform=brief.platform,
         price_min=brief.price_min, price_max=brief.price_max,
         max_pool=SELECTION_FUNNEL_MAX_POOL,
+        tenant_id=state.get("tenant_id", ""),
     )
     logs = list(state.get("stage_logs") or [])
     notes_all = list(state.get("notes") or []) + notes

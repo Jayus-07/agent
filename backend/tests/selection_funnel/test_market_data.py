@@ -243,7 +243,7 @@ def test_competition_lines_fallback_to_candidates():
 
 # ── API kind 分发 ─────────────────────────────────────────────────────
 @pytest.fixture
-def client():
+def client(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from backend.app.api.routes.selection_funnel import router
@@ -255,6 +255,9 @@ def client():
     identity = lambda: OperatorIdentity(role="editor", actor="user:test")
     app.dependency_overrides[resolve_operator_role] = identity
     app.dependency_overrides[require_editor_user] = identity
+    # 本地 .env 可能配 GATEWAY_TRUST_SECRET：无信任标记时身份头退化为
+    # guest → 租户谓词 403；测试直连形态对齐 CI（无 trust secret）。
+    monkeypatch.setattr("backend.config.auth.GATEWAY_TRUST_SECRET", "")
     return TestClient(app)
 
 

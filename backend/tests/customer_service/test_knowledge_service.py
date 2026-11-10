@@ -263,7 +263,12 @@ class TestRefusalLadder:
         from backend.customer_service.faq import FAQMatch
 
         class FakeStore:
-            def match_candidates(self, q, k=2, min_score=0.30):
+            # 服务层先调主匹配再调候选（均为 tenant_id= 关键字实参），桩签名须同步
+            def match(self, q, tenant_id="default"):
+                return None
+
+            def match_candidates(self, q, k=2, min_score=0.30, tenant_id="default"):
+                assert tenant_id, "租户谓词不得为空"
                 return [FAQMatch(87, "退款多久能到账", "5-7 工作日", 0.38, "jaccard")]
 
         mock_faq.return_value = FakeStore()
