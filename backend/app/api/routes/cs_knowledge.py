@@ -155,14 +155,19 @@ async def create_faq_draft(
     """
     from backend.customer_service.faq import get_faq_store
 
+    # 审计 #25 口径（安全卫生批次 2026-11-10）：空租户不得回落 default
+    # 共享空间——此前 require_agent 已在上游 403，此处兜底属防御纵深卫生。
+    tenant = (context.tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     variants = [v for v in body.variants if v != body.question]
     faq_id = get_faq_store().upsert_faq(
         body.question,
         "（草稿）待知识运营补充答案。",
         variants=variants,
         status="draft",
-        tenant_id=context.tenant_id or "default",
-        kb_refs=f"cs-knowledge-gap:{context.tenant_id}",
+        tenant_id=tenant,
+        kb_refs=f"cs-knowledge-gap:{tenant}",
     )
     from backend.customer_service.faq import normalize_question
 
@@ -236,8 +241,12 @@ async def knowledge_search(
     query = q.strip()
     if not query:
         raise HTTPException(422, detail="检索词不能为空")
+    # 审计 #25 口径（安全卫生批次 2026-11-10）：检索同样不落 default 共享空间
+    tenant = (context.tenant_id or "").strip()
+    if not tenant:
+        raise HTTPException(status_code=403, detail="缺少可信租户身份")
     results = get_faq_store().search(
-        query, k=5, min_score=0.30, tenant_id=context.tenant_id or "default")
+        query, k=5, min_score=0.30, tenant_id=tenant)
     items = [
         SearchItem(
             question=item["question"],
