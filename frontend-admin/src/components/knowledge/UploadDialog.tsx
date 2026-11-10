@@ -9,7 +9,11 @@ import { atLeast } from '@/lib/auth'
 
 interface Props { open: boolean; onClose: () => void; onSuccess: () => void }
 
-// 阶段映射：后端 SSE stage → 显示文案 + UI 索引（9 阶段，覆盖后端 span 树）
+/** 前端大小预检上限（MB）——对齐后端 RAG_MAX_FILE_SIZE 默认值（config/rag.py）。
+ *  仅作 fail-fast 体验优化；权威上限始终由后端流式字节计数强制执行。 */
+const MAX_UPLOAD_MB = 50
+
+// 阶段映射：后端 SSE stage → 显示文案 + UI 索引（10 阶段，覆盖后端 span 树）
 const STAGES = [
   { key: 'uploading', label: '上传文件' },
   { key: 'loading',   label: '文件加载' },
@@ -175,7 +179,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
     setError('')
     setReports(files.map(f => ({ name: f.name, status: 'running', expanded: false })))
 
-    let okCount = 0
+    let successCount = 0
     let failedCount = 0
     const batchId = files.length > 1 ? randomId('batch') : undefined
 
@@ -212,7 +216,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             ...(serverElapsed || {}),
           }
           updateReport(i, { status: 'duplicate', stageElapsed: elapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
-          okCount++
+          successCount++
         } else if (res.ok) {
           // 优先使用后端提供的 stage_elapsed；缺失阶段用 SSE 间隔法兜底
           const serverElapsed = res.stage_elapsed
@@ -236,7 +240,7 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
             Object.assign(finalElapsed, elapsed)
           }
           updateReport(i, { status: 'success', stageElapsed: finalElapsed, totalMs: res.total_ms, currentStage: null, stageMessage: '' })
-          okCount++
+          successCount++
         } else {
           failedCount++
           updateReport(i, { status: 'failed', error: res.error || '上传失败', currentStage: null, stageMessage: '' })
@@ -249,12 +253,12 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
 
     setUploading(false)
     if (backgroundUploadRef.current) {
-      if (okCount > 0) toast.success(`后台处理完成：${okCount} 个文件成功`)
+      if (successCount > 0) toast.success(`后台处理完成：${successCount} 个文件成功`)
       if (failedCount > 0) toast.error(`后台处理结束：${failedCount} 个文件失败，可重新打开窗口查看原因`)
       backgroundUploadRef.current = false
       backgroundReceiptShownRef.current = false
     }
-    if (okCount > 0) onSuccess()
+    if (successCount > 0) onSuccess()
   }
 
   const isMulti = files.length > 1
@@ -325,7 +329,17 @@ export default function UploadDialog({ open, onClose, onSuccess }: Props) {
               <input type="file" ref={fileRef} multiple
                 accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.markdown" className="hidden"
                 disabled={ragReady === false}
-                onChange={e => { const fs = Array.from(e.target.files || []); if (fs.length) setFiles(fs) }} />
+                onChange={e => {
+                  // 2026-11-10 评审：超限文件选择即拒（fail-fast），权威上限仍在后端
+                  const fs = Array.from(e.target.files || [])
+                  if (!fs.length) return
+                  const limit = MAX_UPLOAD_MB * 1024 * 1024
+                  const oversized = fs.filter(f => f.size > limit)
+                  setFiles(fs.filter(f => f.size <= limit))
+                  setError(oversized.length
+                    ? `以下文件超过 ${MAX_UPLOAD_MB}MB 上限，已忽略：${oversized.map(f => f.name).join('、')}`
+                    : '')
+                }} />
               <div onClick={() => { if (ragReady !== false) fileRef.current?.click() }}>
                 <Upload size={28} className={`mx-auto mb-2 ${ragReady === false ? 'text-amber-300' : 'text-text-muted'}`} />
                 <p className={`text-xs ${ragReady === false ? 'text-amber-400' : 'text-text-muted'}`}>

@@ -202,8 +202,20 @@ export const knowledgeService: any = {
           throw new Error(`知识库服务正在初始化，预计 ${retryAfter}s 后可用，请稍后重试`)
         }
         if (!res.ok) {
-          const text = await res.text().catch(() => '')
-          throw new Error(`上传失败 (${res.status}): ${text.slice(0, 200)}`)
+          // 2026-11-10 评审（与 web 端同步修复）：面向用户的原因在 JSON body
+          // 里（403 授权 {"error":…}、409 幂等冲突、413 限长 {"detail":…}）；
+          // 旧实现直接拼原始 text，人话埋在 JSON 里
+          const raw = await res.text().catch(() => '')
+          let message = ''
+          try {
+            const data = JSON.parse(raw) as { error?: unknown; detail?: unknown }
+            if (typeof data?.detail === 'string' && data.detail) message = data.detail
+            else if (typeof data?.error === 'string' && data.error) message = data.error
+          } catch { /* body 非 JSON → 原文截断 */ }
+          if (!message && raw) message = raw.slice(0, 200)
+          throw new Error(
+            message ? `上传失败（${res.status}）：${message}` : `上传失败（${res.status}）`,
+          )
         }
         return res.json()
       })

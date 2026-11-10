@@ -148,4 +148,45 @@ describe('UploadDialog 后台上传体验', () => {
       .toEqual(['finance', 'customer'])
     act(() => root.unmount())
   })
+
+  it('超限文件选择即拒：过滤 + 提示，不再进入上传流程（2026-11-10 评审）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    const smallFile = new File(['small'], 'ok.md')
+    const bigFile = new File(['big'], 'huge.pdf')
+    // File.size 只读，测试里伪造超大体积（50MB 上限 + 1 字节）
+    Object.defineProperty(bigFile, 'size', { value: 50 * 1024 * 1024 + 1 })
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [smallFile, bigFile],
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+
+    // 超限文件被过滤，合规文件保留，错误提示出现
+    expect(container.textContent).toContain('huge.pdf')
+    expect(container.textContent).toContain(`超过 50MB 上限`)
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    expect(uploadButton).toBeTruthy()
+    // 合规文件仍在 → 上传可用；超限文件不会进入上传参数
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(mocks.uploadDocument).toHaveBeenCalledTimes(1)
+    const uploadedFile = mocks.uploadDocument.mock.calls[0][0] as File
+    expect(uploadedFile.name).toBe('ok.md')
+    act(() => root.unmount())
+  })
 })
