@@ -376,6 +376,8 @@ MIGRATION_TARGETS: dict[str, str] = {
     "144_budget_reservation_resolution.sql": "memory",
     "145_budget_settlement_kind.sql": "memory",
     "146_budget_resolution_audit_append_only.sql": "memory",
+    # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径）。
+    "147_readonly_revoke_cs_business_tables.sql": "business",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -397,6 +399,8 @@ ORDER_LAST = [
     "097_llm_model_health_probe_source.sql",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
     "101_travel_v2_trip_conversations.sql",
+    # 147 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
+    "147_readonly_revoke_cs_business_tables.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"
