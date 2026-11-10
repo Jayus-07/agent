@@ -139,7 +139,10 @@ async def test_add_model_revives_soft_deleted_row_into_new_provider(monkeypatch)
 
     await svc.add_provider_model(
         "new-relay",
-        {"modelName": "qwen3.7-plus", "modelKind": "chat"},
+        # #421 起供应商创建同堵价格校验：按量计费文本模型必须同时给
+        # 输入/输出单价——本用例聚焦复活过户语义，补齐最小合法价格。
+        {"modelName": "qwen3.7-plus", "modelKind": "chat",
+         "inputPricePer1m": "0.125", "outputPricePer1m": "0.5"},
         "user:1",
     )
     takeover_sql = [

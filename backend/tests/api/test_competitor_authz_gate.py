@@ -88,13 +88,26 @@ _PUBLIC = {("/competitor/recommendations", "GET")}
 
 
 def _route_guard_names(app):
-    """path+method → 本轮守卫依赖的函数名集合（无守卫 = 空集）。"""
+    """path+method → 本轮守卫依赖的函数名集合（无守卫 = 空集）。
+
+    fastapi 0.161（requirements-lock）起 include_router 惰性挂载：
+    app.routes 里是 _IncludedRouter 包装对象而非展平的 APIRoute
+    （0.136 才展平）——必须沿 original_router 递归解包，否则守卫集
+    恒为空（周回归 v4/v5 CI-only 失败根因，2026-11-10 实证）。
+    """
     from fastapi.routing import APIRoute
 
+    def _iter(routes):
+        for route in routes:
+            if isinstance(route, APIRoute):
+                yield route
+                continue
+            nested = getattr(route, "original_router", None)
+            if nested is not None:
+                yield from _iter(getattr(nested, "routes", []))
+
     out = {}
-    for r in app.routes:
-        if not isinstance(r, APIRoute):
-            continue
+    for r in _iter(app.routes):
         guards = {
             d.call.__name__ for d in r.dependant.dependencies
             if getattr(d.call, "__name__", "").startswith("require_")
