@@ -249,6 +249,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径），
     # 不改变模型调用面；init_db.py 已登记为 business（ORDER_LAST）。
     "backend/sql/migrations/147_readonly_revoke_cs_business_tables.sql",
+    # 只读角色默认授权收官（issue #440）：product/order/inventory/crawler
+    # 不再自动授予新表，不改变模型调用面。
+    "backend/sql/migrations/148_readonly_default_privileges_completion.sql",
 })
 
 
