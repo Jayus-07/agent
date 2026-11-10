@@ -2,31 +2,34 @@
 
 > 源自 rag-upload-review-fix-20261110 评审，已修复部分见该任务 PROGRESS.md。
 > 本文件为遗留项排期：优先级 P1 > P2 > P3；建议批次见各条目。
+>
+> **进度更新（2026-11-10 batch1/batch2）**：
+> - batch1（PR #430，已合并部署）：真实链路冒烟（批次头透传实证、SSE、损坏拦截、49MB 流式）；
+>   发现并修复流式透传下 51MB 上传连接重置回归（BFF 路径级上限三方同源）；#2 cs BFF 同步完成；
+>   #4 delete/reindex 错误可见性完成。合并后复验：51MB 经 BFF 413+人话 detail（0.05s）、49MB 合法上传正常。
+> - batch2（PR #432）：上传窗口专项评审——发现 web 端整个上传栈零消费方（死代码，同 cs），已删除；
+>   admin 活 UI 三处交互修复（input value 重置 / 运行中阶段中文标签+消息渲染 / 未知 stage 兜底）。
+> - #5 语义变更：web 死代码删除后原「web 组件测试平移」改为「admin behavior 测试扩充」（已有 5 用例，见下方 P3）。
 
 ## 遗留项与排期
-
-### P1 — 下一迭代（合并后尽快）
-
-| # | 事项 | 范围 | 触发条件/备注 |
-|---|------|------|--------------|
-| 1 | 容器级重建冒烟 + 浏览器端到端 | web/admin 前端 + 后端 | **合并本次 PR 后立即做**：`devctl.bat rebuild` + 健康确认；浏览器验证批次折叠（多文件上传）、失败原因行渲染、贴上限 50MB 文件不 413、超限文件前端即拒 |
-| 2 | cs 端 BFF 代理同步 | frontend-cs `src/app/api/[...path]/route.ts` | cs 端上传死代码已删，暂无调用方；**cs 端任何批量写/上传功能启用前必须**补 `x-batch-id` 白名单 + 流式透传（对齐 web/admin） |
 
 ### P2 — 排入常规迭代
 
 | # | 事项 | 范围 | 备注 |
 |---|------|------|------|
-| 3 | 上传错误状态码口径统一 | 后端 rag_upload.py + 三端前端解析 | 现状 200+`ok:false` / 422 / 409 / 403 混用；破坏性 API 契约变更，需版本化（新路径或 Accept 头协商），三端解析同步迁移 |
-| 4 | delete/reindex 错误可见性 | 三端 `knowledge.ts` 的 `deleteDocument`/`reindexDocument` | `.catch(() => ({ok:false}))` 吞掉失败原因（含 403 授权拒绝），用户只能看到"删除失败"无原因；修法对齐 upload 的 4xx 解析 |
+| 3 | 上传错误状态码口径统一 | 后端 rag_upload.py + admin 前端解析 | 现状 200+`ok:false` / 422 / 409 / 403 混用；破坏性 API 契约变更，需版本化（新路径或 Accept 头协商），先写 ADR，前端解析同步迁移 |
+| 6 | 前端 50MB 上限与后端 env 联动 | config 暴露面 | admin UploadDialog 的 `MAX_UPLOAD_MB` 与 BFF 预检常量（50MiB+16KiB）均为前端写死，后端 `RAG_MAX_FILE_SIZE` 改 env 时漂移；可选方案：/rag/health 返回上限供两处读取 |
 
 ### P3 — 机会成本驱动
 
 | # | 事项 | 范围 | 备注 |
 |---|------|------|------|
-| 5 | UploadDialog 组件测试补齐（web 端） | frontend web | admin 端已有 behavior 测试基建可平移；覆盖失败原因渲染/大小预检/批次提交 |
-| 6 | 前端 50MB 上限与后端 env 联动 | config 暴露面 | `MAX_UPLOAD_MB` 为前端常量，后端 `RAG_MAX_FILE_SIZE` 改 env 时会漂移；可选方案：/rag/health 返回上限供前端读取 |
+| 7 | admin 上传窗口可用性增强 | frontend-admin UploadDialog | 上传中 beforeunload 拦截（防误刷新丢进度）；ESC/遮罩点击关闭（非上传中）；批量文件数上限提示（如 >20 提示分批） |
+| 8 | SSE 断连重试 | admin knowledge.ts uploadDocument | 后端已支持 Redis 镜像重订阅（#426 Fix 8），前端 SSE `fail()` 前重连一次再判「进度连接中断」，降低误报失败 |
+| 9 | admin behavior 测试扩充 | UploadDialog.behavior.test.tsx | 补后台转传后重开窗口渲染失败原因、duplicate 计入成功统计、KB 加载失败态 |
+| 10 | lib/api multi-query 函数清理 | frontend/src/lib/api.ts | web MultiQueryToggle 已删，`getMultiQueryMode/setMultiQueryMode` 若确认无其他消费方一并移除（需先全仓核查，含 cs2 命名空间） |
 
 ## 验收口径
 
 - 每项完成需带对应回归测试；契约变更（#3）必须先写 ADR 说明迁移路径。
-- cs 端（#2）启用任何上传/批量功能前，先按 web 端 bff-proxy.test.ts 补同款代理契约测试。
+- cs 端（已对齐）启用任何上传/批量功能前，先补同款代理契约测试（已有 8 用例基线）。
