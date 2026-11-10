@@ -60,6 +60,7 @@ _META = {
     "model_role": "main",
     "binding_source": "code_default",
     "usage_source": "provider",
+    "settlement_status": "settled_estimated",
 }
 
 
@@ -91,6 +92,9 @@ class TestAgentTraceGetsLlmCallSpan:
         assert span.metrics["total_tokens"] == 150
         assert span.metrics["cost_cny"] == pytest.approx(0.021)
         assert span.metrics["token_source"] == "proxy_span"
+        # settlement_status 进 span（PR #423 补呈现缺口）：Trace UI 区分估算
+        # 与精确结算，与 llm_usage 行同源
+        assert span.metrics["settlement_status"] == "settled_estimated"
         assert span.metrics["duration_ms_call"] == 1234.5
         # 时间窗回写：start < end，跨度≈调用耗时（round 与 end_span 同为
         # banker's rounding：1234.5 → 1234）
