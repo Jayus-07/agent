@@ -246,6 +246,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/143_memory_product_scope.sql",
     # ADR-0012 第 2 期：记忆时间有效性两列（D3），不改变模型调用面。
     "backend/sql/migrations/145_memory_time_validity.sql",
+    # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径），
+    # 不改变模型调用面；init_db.py 已登记为 business（ORDER_LAST）。
+    "backend/sql/migrations/147_readonly_revoke_cs_business_tables.sql",
 })
 
 
