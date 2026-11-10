@@ -120,9 +120,10 @@ def _insert_policy(token: str, daily: str) -> None:
             cur.execute(
                 """INSERT INTO budget_policies
                        (scope_type, scope_id, daily_limit_cny,
-                        monthly_limit_cny, enforcement, timezone, updated_by)
-                   VALUES ('tenant', %s, %s, %s, 'hard', 'Asia/Shanghai', 'test')
-                   ON CONFLICT (scope_type, scope_id) DO UPDATE
+                        monthly_limit_cny, enforcement, timezone, updated_by,
+                        domain)
+                   VALUES ('tenant', %s, %s, %s, 'hard', 'Asia/Shanghai', 'test', '')
+                   ON CONFLICT (scope_type, scope_id, domain) DO UPDATE
                        SET daily_limit_cny = EXCLUDED.daily_limit_cny""",
                 (token, Decimal(daily), Decimal(daily)),
             )
@@ -206,9 +207,10 @@ def test_pg_needs_review_lifecycle_and_sweep(_pg_cleanup):
             cur.execute(
                 """INSERT INTO budget_ledger
                        (scope_type, scope_id, period_type, period_start,
-                        limit_cny, enforcement, used_cny, reserved_cny)
-                   VALUES ('tenant', %s, 'day', %s, 1, 'hard', 0, 0.30)
-                   ON CONFLICT (scope_type, scope_id, period_type, period_start)
+                        domain, limit_cny, enforcement, used_cny, reserved_cny)
+                   VALUES ('tenant', %s, 'day', %s, '', 1, 'hard', 0, 0.30)
+                   ON CONFLICT (scope_type, scope_id, period_type, period_start,
+                                domain)
                    DO UPDATE SET reserved_cny = 0.30""",
                 (token, old_start.replace(minute=0, second=0, microsecond=0)),
             )
