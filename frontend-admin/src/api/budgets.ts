@@ -153,10 +153,11 @@ export async function downloadBudgetMonthlyCsv(months = 6): Promise<void> {
   a.click();
   URL.revokeObjectURL(url);
 }
-export async function listBudgetSubjects(params: { scope?: string; period?: string } = {}): Promise<{ items: BudgetSubject[] }> {
+export async function listBudgetSubjects(params: { scope?: string; period?: string; includeTest?: boolean } = {}): Promise<{ items: BudgetSubject[] }> {
   const query = new URLSearchParams();
   if (params.scope) query.set("scope", params.scope);
   if (params.period) query.set("period", params.period);
+  if (params.includeTest) query.set("include_test", "true");
   return request<{ items: BudgetSubject[] }>(`/api/admin/budgets/subjects?${query.toString()}`);
 }
 export async function listBudgetPolicies(): Promise<{ items: BudgetPolicy[] }> { return request<{ items: BudgetPolicy[] }>("/api/admin/budgets/policies"); }

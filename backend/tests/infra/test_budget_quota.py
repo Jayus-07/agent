@@ -371,6 +371,38 @@ def test_list_subjects_user_inherits_explicit_tenant_policy(store):
     tenant_template = user_row.get('tenant_template') or {}
     assert tenant_template.get('scope_id') == tenant_id
 
+def test_list_subjects_excludes_test_data_by_default(store):
+    """UX 走查回归：测试/评测主体默认不出现在预算主体列表——scope_id
+    前缀命中 BUDGET_TEST_TENANT_PREFIX / BUDGET_TEST_REQUEST_PREFIXES 的
+    主体只在 include_test=True 时返回，与待对账队列开关同口径。"""
+    test_user = f'test-subj-{uuid4().hex[:10]}'
+    test_tenant = f'test-subj-ten-{uuid4().hex[:10]}'
+    probe_tenant = f'probe-subj-{uuid4().hex[:10]}'
+    normal_run = f'subj-vis-{uuid4().hex}'
+
+    for user_id, tenant_id in (
+        (test_user, test_tenant),
+        (normal_run, probe_tenant),
+    ):
+        reservation = store.reserve(
+            user_id=user_id, tenant_id=tenant_id, amount_cny=Decimal('0.10'),
+        )
+        store.settle(reservation, Decimal('0'))
+
+    default_rows = store.list_subjects(500)
+    default_ids = {r['id'] for r in default_rows}
+    assert test_user not in default_ids
+    assert test_tenant not in default_ids
+    assert probe_tenant not in default_ids, 'probe 前缀租户同属测试口径'
+    assert normal_run in default_ids, '非测试前缀主体不受影响'
+
+    all_rows = store.list_subjects(500, include_test=True)
+    all_ids = {r['id'] for r in all_rows}
+    assert test_user in all_ids
+    assert test_tenant in all_ids
+    assert probe_tenant in all_ids
+
+
 def test_queue_filters_test_data_by_default(store):
     """B2：测试/评测数据默认不进队列，include_test 打开可见。"""
     run = f'vis-{uuid4().hex}'
