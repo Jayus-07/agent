@@ -9,10 +9,11 @@
  *   1. 透传 `/api/*` 到网关（`${API_URL}/api/...`），保留 query；
  *   2. 服务端注入 `X-API-Key`；
  *   3. 转发 Authorization / Content-Type / Accept / User-Agent / Cookie /
- *      X-Trace-Id，注入 X-Client-IP（会话台账），回传 Content-Type /
- *      Content-Disposition / X-Trace-Id 及逐条 Set-Cookie（refresh 令牌
- *      HttpOnly Cookie 的生命周期依赖它，缺失 = 静默刷新必失败）；
- *   4. 响应体流式透传（SSE / 上传 / 下载均不受影响）。
+ *      Idempotency-Key / X-Batch-Id / X-Trace-Id，注入 X-Client-IP（会话台账），
+ *      回传 Content-Type / Content-Disposition / X-Trace-Id 及逐条
+ *      Set-Cookie（refresh 令牌 HttpOnly Cookie 的生命周期依赖它，缺失 =
+ *      静默刷新必失败）；
+ *   4. 请求/响应体流式透传（上传不再整包读入 Node 内存；SSE / 下载均不受影响）。
  *
  * 注意：
  *   - `dynamic = "force-dynamic"`：请求必须实时代理，禁止静态化；
@@ -57,6 +58,10 @@ const FORWARD_REQ_HEADERS = [
   // 统一网络层注入，后端强制校验（缺失 400）。BFF 白名单漏掉它等于剥头，
   // 真实 UI 转人工必 400，而脚本测试直连网关掩盖了这条链路。
   "idempotency-key",
+  // 批次关联（2026-11-10 评审修复）：RAG 上传/批量删除/批量重索引由前端
+  // 注入 X-Batch-Id，后端落操作日志供操作中心按批次折叠。此前不在白名单，
+  // 浏览器路径下被剥头，批次聚合静默失效（后端从未收到过该头）。
+  "x-batch-id",
   "accept",
   "user-agent",
   "cookie",
@@ -163,8 +168,9 @@ async function proxy(
   if (rl.key) headers.set("X-Client-IP", rl.key);
 
   const method = req.method;
-  // T6（2026-11-08 安全审计）：带 Content-Length 的请求在 arrayBuffer()
-  // 整体读入内存前先做上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。
+  // T6（2026-11-08 安全审计）：带 Content-Length 的请求在读取 body 前先做
+  // 上限检查；RAG 上传最大 50MB，默认留出 multipart 余量。chunked 请求无
+  // Content-Length 无法预检，由 APISIX 边缘上限按实际字节兜底。
   const maxBodyBytes = Number(
     process.env.BFF_MAX_BODY_BYTES || 64 * 1024 * 1024,
   );
@@ -183,14 +189,26 @@ async function proxy(
       { status: 413 },
     );
   }
+  // 请求体流式透传（2026-11-10 评审）：旧实现 arrayBuffer() 把整个上传体
+  // （最大 50MB）读入 Node 内存后再转发，并发上传内存峰值线性叠加。改为
+  // ReadableStream 直通，Node fetch（undici）对流 body 要求 duplex: "half"。
+  // 代价：下游收到 chunked 请求（无 Content-Length），body_limit 的源内
+  // 预检对 chunked 不生效——该边界本就存在，由 APISIX 边缘上限兜底。
   const body =
-    method === "GET" || method === "HEAD"
+    method === "GET" || method === "HEAD" || req.body === null
       ? undefined
-      : await req.arrayBuffer();
+      : req.body;
 
   let upstream: Response;
   try {
-    upstream = await fetch(target, { method, headers, body, redirect: "manual" });
+    upstream = await fetch(target, {
+      method,
+      headers,
+      body,
+      // undici：body 为 ReadableStream 时必需
+      duplex: "half",
+      redirect: "manual",
+    } as RequestInit & { duplex: "half" });
   } catch {
     return Response.json(
       { error: "Bad Gateway", message: "网关暂不可达" },

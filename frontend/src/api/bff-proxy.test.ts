@@ -25,11 +25,17 @@ function makeProxyRequest(
   const req = Object.assign(new Request(url, init), {
     nextUrl: new URL(url),
     ip: "127.0.0.1",
+    // proxy 的 resolveClientKey 现读 req.cookies（2026-11-09 rl_client 台账），
+    // plain Request 没有该字段；测试场景统一走「无 rl_client Cookie」分支
+    cookies: { get: () => undefined },
   });
   return req as unknown as ProxyRequest;
 }
 
-const ctx = (segments: string[]) => ({ params: { path: segments } });
+// App Router 签名（Next 15）：params 是 Promise
+const ctx = (segments: string[]) => ({
+  params: Promise.resolve({ path: segments }),
+});
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -46,7 +52,7 @@ beforeEach(() => {
 });
 
 describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
-  it("登录限流来源由 BFF 重建，忽略请求方直接提供的 X-Client-IP", async () => {
+  it("登录限流来源由 BFF 重建：默认用 rl_client Cookie，不信可伪造的 XFF/X-Client-IP", async () => {
     const fetchSpy = upstream();
 
     await POST(
@@ -65,7 +71,35 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
     const sent = new Headers(
       (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers,
     );
-    expect(sent.get("x-client-ip")).toBe("203.0.113.9");
+    // 2026-11-09 语义：默认不信任客户端可伪造的转发头，改用服务端签发的
+    // rl Cookie 分桶键
+    expect(sent.get("x-client-ip")).toMatch(/^rl-[0-9a-f-]{36}$/);
+    expect(sent.get("x-client-ip")).not.toBe("203.0.113.9");
+    expect(sent.get("x-client-ip")).not.toBe("198.51.100.44");
+  });
+
+  it("显式 TRUST_PROXY_HEADERS=true 时才采信 XFF 首段", async () => {
+    vi.stubEnv("TRUST_PROXY_HEADERS", "true");
+    try {
+      const fetchSpy = upstream();
+      await POST(
+        makeProxyRequest("http://localhost:3000/api/auth/login", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Forwarded-For": "203.0.113.9, 10.0.0.2",
+          },
+          body: "{}",
+        }),
+        ctx(["auth", "login"]),
+      );
+      const sent = new Headers(
+        (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers,
+      );
+      expect(sent.get("x-client-ip")).toBe("203.0.113.9");
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("转人工 POST 的 Idempotency-Key 必须原样到达上游", async () => {
@@ -114,6 +148,52 @@ describe("BFF 转发头白名单（缺陷4：幂等键不丢）", () => {
 
     const sent = new Headers((fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers);
     expect(sent.get("idempotency-key")).toBe("idem-lower-1");
+  });
+
+  it("RAG 上传的 X-Batch-Id 必须原样到达上游（2026-11-10 评审回归：批次关联此前被剥头静默失效）", async () => {
+    const fetchSpy = upstream();
+
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/rag/upload", {
+        method: "POST",
+        headers: {
+          "Content-Type": "multipart/form-data; boundary=x",
+          "X-Batch-Id": "batch-abc",
+          "Idempotency-Key": "idem-upload-1",
+          Authorization: "Bearer user-token",
+        },
+        body: "payload",
+      }),
+      ctx(["rag", "upload"]),
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const sent = new Headers(
+      (fetchSpy.mock.calls[0] as unknown as [string, RequestInit])[1].headers,
+    );
+    expect(sent.get("x-batch-id")).toBe("batch-abc");
+    expect(sent.get("idempotency-key")).toBe("idem-upload-1");
+  });
+
+  it("请求体流式透传且内容完整（2026-11-10 评审回归：上传不再整包读入 Node 内存）", async () => {
+    const fetchSpy = upstream();
+
+    await POST(
+      makeProxyRequest("http://localhost:3000/api/rag/upload", {
+        method: "POST",
+        headers: { "Content-Type": "text/plain", Authorization: "Bearer t" },
+        body: "hello-upload-body",
+      }),
+      ctx(["rag", "upload"]),
+    );
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.body).toBeTruthy();
+    // 流式直通：上游拿到 ReadableStream，而非一次性读入的 ArrayBuffer/字符串
+    expect(init.body).not.toBeInstanceOf(ArrayBuffer);
+    expect(typeof init.body).not.toBe("string");
+    const text = await new Response(init.body as ReadableStream).text();
+    expect(text).toBe("hello-upload-body");
   });
 
   it("白名单既有头不回归：Authorization / Content-Type / X-Trace-Id 照常转发", async () => {
