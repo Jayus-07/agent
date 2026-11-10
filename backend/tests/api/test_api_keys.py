@@ -199,3 +199,118 @@ def test_middleware_accepts_managed_key(auth_env, monkeypatch):
         "/chat", headers={"X-API-Key": "ak_valid"}).status_code == 200
     assert _client().get(
         "/chat", headers={"X-API-Key": "ak_invalid"}).status_code == 401
+
+
+# ── 未知 Key DoS 防线（评审 P2 修复，2026-11-10）─────────────────────
+
+def _well_shaped_key() -> str:
+    """形状合法但库中不存在的 key（generate 的 raw 形态，不落库）。"""
+    return api_keys.generate_api_key()[0]
+
+
+def test_malformed_key_rejected_without_db(monkeypatch):
+    """形状不合（长度/字符集）的 ak_ key 直接拒绝，不打 DB。"""
+    calls = {"n": 0}
+
+    def _boom(_raw):
+        calls["n"] += 1
+        raise AssertionError("形状不合的 key 不应触达 DB")
+
+    monkeypatch.setattr(api_keys, "_load_row", _boom)
+    api_keys.clear_cache()
+    try:
+        assert api_keys.verify_api_key("ak_short") is None
+        assert api_keys.verify_api_key("ak_" + "x" * 100) is None   # 超长
+        assert api_keys.verify_api_key("ak_" + "!" * 43) is None    # 非法字符
+        assert calls["n"] == 0
+    finally:
+        api_keys.clear_cache()
+
+
+def test_unknown_key_negative_cached(monkeypatch):
+    """同一条未知 key 在 TTL 内只查一次库（负缓存命中）。"""
+    calls = {"n": 0}
+
+    def _fake_load(_raw):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(api_keys, "_load_row", _fake_load)
+    api_keys.clear_cache()
+    key = _well_shaped_key()
+    try:
+        assert api_keys.verify_api_key(key) is None
+        assert api_keys.verify_api_key(key) is None
+        assert api_keys.verify_api_key(key) is None
+        assert calls["n"] == 1
+    finally:
+        api_keys.clear_cache()
+
+
+def test_negative_cache_full_fails_closed_without_db(monkeypatch):
+    """负缓存占满后，新未知 key 直接拒绝且不打 DB（攻击者无法放大负载）。"""
+    calls = {"n": 0}
+
+    def _fake_load(_raw):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(api_keys, "_load_row", _fake_load)
+    api_keys.clear_cache()
+    try:
+        for _ in range(api_keys.NEG_CACHE_MAX):
+            api_keys.verify_api_key(_well_shaped_key())
+        assert calls["n"] == api_keys.NEG_CACHE_MAX
+        assert len(api_keys._neg_cache) == api_keys.NEG_CACHE_MAX
+        # 满载后再来新 key：拒绝且零 DB 调用
+        assert api_keys.verify_api_key(_well_shaped_key()) is None
+        assert calls["n"] == api_keys.NEG_CACHE_MAX
+    finally:
+        api_keys.clear_cache()
+
+
+def test_negative_flood_does_not_evict_positive_cache(monkeypatch):
+    """未知 key 洪泛只占负缓存：正缓存里的合法 key 不被驱逐。"""
+    monkeypatch.setattr(api_keys, "_load_row", lambda _raw: None)
+    api_keys.clear_cache()
+    raw, key_id, _hash = api_keys.generate_api_key()
+    # 直接预置正缓存条目（绕开 DB：生命周期测试已另行覆盖真实路径）
+    api_keys._cache[raw] = (
+        {"key_id": key_id, "caller": "svc", "tenant_id": None,
+         "scopes": ("service",)},
+        api_keys.time.monotonic())
+    try:
+        for _ in range(api_keys.NEG_CACHE_MAX * 2):
+            api_keys.verify_api_key(_well_shaped_key())
+        assert raw in api_keys._cache, "合法 key 被负缓存洪泛驱逐"
+        assert api_keys.verify_api_key(raw) is not None
+    finally:
+        api_keys.clear_cache()
+
+
+def test_negative_cache_purges_expired_and_recovers(monkeypatch):
+    """满载洪泛后 TTL 过期必须自愈：新 key 重新获得查库机会（拒绝服务
+    不得落在新签发的合法 key 头上）。"""
+    calls = {"n": 0}
+
+    def _fake_load(_raw):
+        calls["n"] += 1
+        return None
+
+    monkeypatch.setattr(api_keys, "_load_row", _fake_load)
+    api_keys.clear_cache()
+    try:
+        for _ in range(api_keys.NEG_CACHE_MAX):
+            api_keys.verify_api_key(_well_shaped_key())
+        assert len(api_keys._neg_cache) == api_keys.NEG_CACHE_MAX
+        # 时间前进 16s：全部条目 TTL 过期
+        real_monotonic = api_keys.time.monotonic
+        monkeypatch.setattr(
+            api_keys.time, "monotonic",
+            lambda: real_monotonic() + api_keys.CACHE_TTL_SECONDS + 1)
+        # 新 key：guard 侧被动清理过期条目 → 放行到 DB（calls +1）
+        assert api_keys.verify_api_key(_well_shaped_key()) is None
+        assert calls["n"] == api_keys.NEG_CACHE_MAX + 1
+        assert len(api_keys._neg_cache) == 1, "过期条目应被被动清理"
+    finally:
+        api_keys.clear_cache()

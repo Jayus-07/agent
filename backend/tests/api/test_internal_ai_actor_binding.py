@@ -89,3 +89,43 @@ def test_call_rejects_untrusted_actor(monkeypatch):
     })
     assert resp.status_code == 403
     assert resp.json()["detail"]["error"] == "ActorNotTrusted"
+
+
+def test_call_rejects_empty_actor_for_identity_sensitive_tool(monkeypatch):
+    """安全卫生批次（评审 P2）：空 actor 不得以 default 桶执行租户敏感工具。"""
+    from mcp_servers import manager as mgr
+
+    routed = {"n": 0}
+    client, recorded = _route_client(
+        monkeypatch,
+        lambda _uid: (_ for _ in ()).throw(
+            AssertionError("空 actor 不应触发委托解析")),
+    )
+    # 覆写 route 桩为记录器：验证数据面工具根本没被触达
+    monkeypatch.setattr(
+        mgr, "route", lambda tool, params: routed.__setitem__("n", routed["n"] + 1))
+
+    resp = client.post("/internal/ai/call", json={
+        "tool": "search_knowledge", "params": {}, "actor_user_id": "",
+    })
+    assert resp.status_code == 403
+    assert resp.json()["detail"]["error"] == "ActorRequired"
+    assert routed["n"] == 0, "空 actor 的敏感工具调用不得触达工具执行"
+
+
+def test_call_allows_empty_actor_for_non_sensitive_tool(monkeypatch):
+    """非身份敏感工具（聚合统计）保持空 actor 可用——契约收紧面最小化。"""
+    from mcp_servers import manager as mgr
+
+    routed = {"n": 0}
+    client, recorded = _route_client(monkeypatch, lambda _uid: ("t", "d", ()))
+    monkeypatch.setattr(
+        mgr, "route",
+        lambda tool, params: (routed.__setitem__("n", routed["n"] + 1)
+                              or {"ok": True}))
+    resp = client.post("/internal/ai/call", json={
+        "tool": "get_stats", "params": {}, "actor_user_id": "",
+    })
+    assert resp.status_code == 200, resp.text
+    assert routed["n"] == 1
+    assert recorded["set_tool_tenant_id"] == ""

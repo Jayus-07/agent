@@ -61,9 +61,18 @@ async def list_tools():
     return {"count": len(tools), "tools": tools}
 
 
+# 安全卫生批次（评审 P2，2026-11-10）：租户敏感数据面工具清单（MCP 域
+# rag/sql 的全部读端点）；memory 前缀为将来 MCP 暴露预留。空 actor 调用
+# 这些工具一律 403（见 call_tool）。
+_IDENTITY_SENSITIVE_TOOLS = frozenset({
+    "search_knowledge", "list_documents", "sql_query", "list_tables",
+})
+
+
 class AiCallRequest(BaseModel):
     tool: str
     params: dict = {}
+
     # P3（docs/auth 修复清单③）：Java 侧透传终端用户身份（payload 委托）——
     # 该路由是 Java→Python 直连（不过网关，无身份头），工具层的权限校验与
     # 审计归属靠这里绑定；不传即 anonymous，工具侧 fail-safe。
@@ -112,6 +121,18 @@ async def call_tool(req: AiCallRequest, request: Request):
     tenant_id = ""
     roles: tuple[str, ...] = ()
     department = req.actor_department
+    # 安全卫生批次（评审 P2，2026-11-10）：空 actor 不得执行租户敏感工具。
+    # 此前 ``if actor:`` 使空 actor 完全跳过委托身份解析，绑定空 user/空
+    # 租户（归一 default 桶）执行数据面工具——审计 #38 封死了"指定任意
+    # user_id"，这里补上"不带 actor 以 default 桶执行"的半边。
+    if not actor and (req.tool in _IDENTITY_SENSITIVE_TOOLS
+                      or req.tool.startswith("memory_")):
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "ActorRequired",
+                    "message": (f"工具 {req.tool} 依赖租户敏感数据，"
+                                "必须透传终端用户 actor_user_id")},
+        )
     if actor:
         try:
             tenant_id, db_department, roles = resolve_delegated_actor(actor)
