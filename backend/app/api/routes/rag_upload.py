@@ -13,7 +13,7 @@ from backend.app.api.identity import require_principal, resolve_identity, resolv
 from backend.config.rag import (
     RAG_MAX_FILE_SIZE, RAG_TMP_DIR, RAG_UPLOAD_CHUNK_SIZE,
     RAG_UPLOAD_EMIT_BYTES, RAG_UPLOAD_EMIT_MS, RAG_UPLOAD_PATH_GUARD,
-    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT,
+    RAG_OCR_MAX_PAGES_UPLOAD_HARD_LIMIT, RAG_UPLOAD_MULTIPART_OVERHEAD,
 )
 from backend.config.rag import (
     RAG_MAX_CONCURRENT_INDEX,
@@ -440,7 +440,10 @@ SUPPORTED_EXTS: frozenset[str] = frozenset(ALLOWED_MIME_TYPES.keys())
 # F10: Content-Length 预检余量 — multipart 封装（boundary + 头字段）比裸文件大
 # 几百字节到几 KB，贴上限的文件会被误拒；预检放宽一个余量，
 # 精确上限仍由 sync_upload_impl 流式字节计数强制执行（双保险不放松）。
-_MULTIPART_OVERHEAD = 16 * 1024
+# 2026-11-10 评审收口：常量上移 config/rag.py（RAG_UPLOAD_MULTIPART_OVERHEAD），
+# body_limit 中间件对 /rag/upload 的 Content-Length 预检同源引用——此前中间件
+# 用精确 50MiB 判总包，贴上限文件在此被 413 误拒，路由层余量形同虚设。
+_MULTIPART_OVERHEAD = RAG_UPLOAD_MULTIPART_OVERHEAD
 
 # F11: 进度队列过期阈值（与 sync_upload_impl 内联清理同口径）
 PROGRESS_QUEUE_TTL_SECONDS = 1800
@@ -553,8 +556,12 @@ async def upload_document(request: Request, file: UploadFile = File(...),
             actor_id=identity.user_id,
             idempotency_key=(request.headers.get("Idempotency-Key") or "").strip(),
         )
-    except Exception as e:
-        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
+    except Exception:
+        # 2026-11-10 评审：异常串可能携带服务器绝对路径/连接串（OSError、
+        # Redis 客户端错误），只进服务端日志，客户端返通用文案——对齐
+        # acquire_index_lock 的脱敏口径与 error_protocol 的安全封套语义
+        logger.exception("[RAG] 上传处理异常")
+        return {"ok": False, "error": "上传处理失败，请稍后重试"}
     if not result.get("ok"):
         if result.get("status_code") == 422:
             from fastapi.responses import JSONResponse
@@ -602,9 +609,9 @@ async def upload_document(request: Request, file: UploadFile = File(...),
             # 可信请求不能在幂等 Redis/PG 或任务提交失败时静默降级到
             # 进程内执行（会绕过「只执行一次」保证）——显式失败，
             # 暂存文件保留供重试（同键同内容重试会复用幂等语义）。
-            logger.error(f"[RAG] 索引任务提交失败: {dispatch_err}")
-            return {"ok": False,
-                    "error": f"索引任务提交失败: {type(dispatch_err).__name__}: {dispatch_err}"}
+            # 异常串可能含 Redis/PG 连接串，全文只进日志。
+            logger.error(f"[RAG] 索引任务提交失败: {dispatch_err}", exc_info=True)
+            return {"ok": False, "error": "索引任务提交失败，请稍后重试"}
 
     # 附着语义：同内容更早的任务在途 → 客户端应订阅【那条】任务的 SSE
     attached_id = ""
@@ -818,15 +825,20 @@ async def sync_upload_impl(
         if ext == "pdf":
             from backend.config.rag import RAG_PDF_PRECHECK_PAGES, RAG_OCR_PROVIDER
             from backend.rag.preprocessing.parser.pdf_parser import check_pdf_budget
-            budget_error = check_pdf_budget(staging_path)
+            # fitz 逐页计数/文本提取是秒级 CPU+IO 块，必须挪出事件循环
+            # （2026-11-10 评审：同步执行期间所有并发请求被卡住）
+            budget_error = await asyncio.to_thread(check_pdf_budget, staging_path)
             if budget_error:
                 try:
                     os.unlink(staging_path)
                 except OSError:
                     pass
                 return {"ok": False, "error": budget_error}
+            _precheck_no_text = await asyncio.to_thread(
+                _pdf_has_text_layer, staging_path, RAG_PDF_PRECHECK_PAGES,
+            )
             if (RAG_PDF_PRECHECK_PAGES > 0 and RAG_OCR_PROVIDER == "off"
-                    and _pdf_has_text_layer(staging_path, RAG_PDF_PRECHECK_PAGES) is False):
+                    and _precheck_no_text is False):
                 try:
                     os.unlink(staging_path)
                 except OSError:
@@ -857,13 +869,16 @@ async def sync_upload_impl(
             "actor_id": actor_id,
             "idempotency_key": idempotency_key,
         }
-    except Exception as e:
+    except Exception:
+        # 异常串可能携带服务器绝对路径（OSError 的 str 含完整路径），
+        # 全文只进日志，客户端返通用文案（对齐 acquire_index_lock 脱敏口径）
+        logger.exception(f"[RAG] 上传流式处理异常 (upload={upload_id})")
         if os.path.exists(staging_path):
             try:
                 os.unlink(staging_path)
             except OSError as cleanup_error:
                 logger.warning(f"[RAG] 暂存文件清理失败: {cleanup_error}")
-        return {"ok": False, "error": f"upload failed: {type(e).__name__}: {e}"}
+        return {"ok": False, "error": "上传处理失败，请稍后重试"}
 
 
 async def _finalize_upload_queue(upload_id: str) -> None:
@@ -2090,6 +2105,15 @@ async def stream_upload_progress(upload_id: str, request: Request):
 
     queue = _progress_queues.get(upload_id)
     if queue is None:
+        # 2026-11-10 评审：进程内索引场景 SSE 断连即 pop 队列（防泄漏的既定
+        # 设计），重订阅此前直接报"不存在或已过期"——即使索引仍在进行
+        # （emit_fn 对队列与 Redis 镜像双写，镜像仍在持续更新）。镜像存在
+        # → 切 Redis 轮询通道续看（已终态则立即重放终态）；镜像也没有
+        # → 维持原拒绝语义，不泄露存在性。
+        mirror = await asyncio.to_thread(_read_progress_redis, upload_id)
+        if mirror is not None:
+            return _redis_poll_stream_response(upload_id)
+
         async def not_found():
             yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
         return StreamingResponse(not_found(), media_type="text/event-stream")

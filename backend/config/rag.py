@@ -82,6 +82,10 @@ RAG_UPLOAD_EMIT_MS = int(os.getenv("RAG_UPLOAD_EMIT_MS", "500"))
 # 索引并发闸门：解析 AST + chunks + 向量全在单任务内存里，多文件并发上传
 # 会叠加内存峰值（50MB 文件可展开成数百 MB），信号量排队限制同时索引数
 RAG_MAX_CONCURRENT_INDEX = int(os.getenv("RAG_MAX_CONCURRENT_INDEX", "2"))
+# multipart 封装开销余量（F10）：boundary + 表单头字段比裸文件大几百字节到
+# 几 KB。Content-Length 预检（路由层与 body_limit 中间件）都要放宽这个余量，
+# 精确上限仍由流式字节计数强制执行。协议常量而非运维参数，不开放 env。
+RAG_UPLOAD_MULTIPART_OVERHEAD = 16 * 1024
 # PDF 扫描件预检：上传入口检查前 N 页是否有文本层，无文本层（扫描件/纯图片）
 # 直接明确报错，不再等索引走到分块阶段才失败（0 = 关闭预检）。
 # 注意：OCR 启用时预检自动放行扫描件（交给 OCR 兜底），仅 OCR=off 时拒绝
