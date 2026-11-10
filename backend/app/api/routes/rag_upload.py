@@ -1905,6 +1905,10 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
 _SSE_REDIS_POLL_SECONDS = RAG_SSE_REDIS_POLL_SECONDS
 _SSE_REDIS_POLL_MAX_SECONDS = RAG_SSE_REDIS_POLL_MAX_SECONDS
 _SSE_REDIS_EMPTY_GRACE_POLLS = 20   # 连续无镜像判定过期（20 × 0.5s = 10s）
+# Redis 连接异常宽限（batch3 P2-2）：异常不是「键过期」的证据，宽限 120s
+# 等 Redis 自愈；期间按既有节流节奏发 keepalive 防代理断连。远大于
+# empty grace——键不存在 10s 即可定论，连接故障需要给足恢复窗口。
+_SSE_REDIS_ERROR_GRACE_POLLS = 240
 _SSE_TERMINAL_STAGES = ("done", "error", "duplicate")
 _SSE_KEEPALIVE_EVERY_N_POLLS = 60   # 无变化时每 30s 一条 keepalive
 
@@ -1915,22 +1919,26 @@ _SSE_KEEPALIVE_EVERY_N_POLLS = 60   # 无变化时每 30s 一条 keepalive
 _celery_routed: set = set()
 
 
-def _read_progress_redis(upload_id: str) -> dict | None:
+def _read_progress_redis(upload_id: str) -> tuple[str, dict | None]:
     """读 Redis 进度镜像并还原为事件 dict（{stage, message, **extra}）。
 
-    Redis 不可用 / 键不存在返回 None（调用方区分「暂时还没有」与「过期」
-    靠连续空轮询计数，不靠单次 None）。
+    返回 (status, evt) 三态（batch3 复审 P2-2：旧实现把「Redis 连接异常」
+    与「键不存在」折叠为同一个 None，SSE 轮询无法区分任务真过期和
+    Redis 抖动，抖动 >10s 即误报「不存在或已过期」）：
+      - ("ok", evt)      镜像存在且解析成功；
+      - ("missing", None) Redis 正常但键不存在（任务真不存在 / TTL 已过期）；
+      - ("error", None)   Redis 连接/操作异常（不代表任务不存在）。
     """
     import json as _json
     try:
         from backend.infra.redis.client import get_redis
         r = get_redis()
         if r is None:
-            return None
+            return ("error", None)
         from backend.config.redis import REDIS_KEY_PREFIX
         data = r.hgetall(f"{REDIS_KEY_PREFIX}upload:{upload_id}")
         if not data:
-            return None
+            return ("missing", None)
         evt: dict = {"stage": data.get("stage", ""),
                      "message": data.get("message", "")}
         try:
@@ -1939,9 +1947,9 @@ def _read_progress_redis(upload_id: str) -> dict | None:
                 evt.update(detail)
         except Exception:
             pass
-        return evt
+        return ("ok", evt)
     except Exception:
-        return None
+        return ("error", None)
 
 
 async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
@@ -1949,13 +1957,30 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
 
     last_sig: 切换通道前已推送的最后一条事件签名，避免跨通道重复推送。
     事件格式与队列模式完全一致（_sse_encode("message", evt)），前端零感知。
+
+    轮询三态（batch3 P2-2）：("ok", evt) 正常推进；("missing", None) 计入
+    empty grace（键真不存在，10s 判过期）；("error", None) 是 Redis 连接
+    故障，不计入过期证据，宽限 120s 等自愈，期间低频 keepalive 保活。
     """
     empty_polls = 0
+    error_polls = 0
     unchanged_polls = 0
     deadline = asyncio.get_running_loop().time() + _SSE_REDIS_POLL_MAX_SECONDS
     while True:
-        evt = await asyncio.to_thread(_read_progress_redis, upload_id)
-        if evt is None:
+        status, evt = await asyncio.to_thread(_read_progress_redis, upload_id)
+        if status == "error":
+            error_polls += 1
+            if error_polls >= _SSE_REDIS_ERROR_GRACE_POLLS:
+                yield _sse_encode("error", {"message": "索引进度服务暂时不可用，请稍后刷新确认任务状态"})
+                return
+            unchanged_polls += 1
+            if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
+                unchanged_polls = 0
+                yield ": keepalive\n\n"
+            await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
+            continue
+        error_polls = 0
+        if status == "missing":
             empty_polls += 1
             if empty_polls >= _SSE_REDIS_EMPTY_GRACE_POLLS:
                 yield _sse_encode("error", {"message": f"upload_id {upload_id} 不存在或已过期"})
@@ -2108,10 +2133,12 @@ async def stream_upload_progress(upload_id: str, request: Request):
         # 2026-11-10 评审：进程内索引场景 SSE 断连即 pop 队列（防泄漏的既定
         # 设计），重订阅此前直接报"不存在或已过期"——即使索引仍在进行
         # （emit_fn 对队列与 Redis 镜像双写，镜像仍在持续更新）。镜像存在
-        # → 切 Redis 轮询通道续看（已终态则立即重放终态）；镜像也没有
-        # → 维持原拒绝语义，不泄露存在性。
-        mirror = await asyncio.to_thread(_read_progress_redis, upload_id)
-        if mirror is not None:
+        # → 切 Redis 轮询通道续看（已终态则立即重放终态）；batch3 P2-2：
+        # Redis 连接异常也切轮询通道（通道内自带 120s 异常宽限，恢复后
+        # 无缝续看），只有键真不存在（missing）才走拒绝语义。
+        mirror_status, _mirror_evt = await asyncio.to_thread(
+            _read_progress_redis, upload_id)
+        if mirror_status != "missing":
             return _redis_poll_stream_response(upload_id)
 
         async def not_found():
