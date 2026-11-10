@@ -522,6 +522,12 @@ def reporter_node(state: dict) -> dict:
     from backend.selection_funnel.graph_state import load_brief
     from backend.selection_funnel.knowledge import compliance_review
     from backend.config.selection_funnel import SELECTION_FUNNEL_MIN_MARGIN, rules_for
+    tenant_id = str(state.get("tenant_id") or "")
+    if not tenant_id:
+        # 评审 P1 修复（2026-11-10）：租户缺失不得回落 "default"——市场
+        # 快照/痛点语料是按租户隔离的数据，回落即跨租户读。fail-closed
+        # 上抛 → 适配器按系统异常终态（funnel_status=failed）如实降级。
+        raise ValueError("租户身份缺失：市场数据按租户 fail-closed，拒绝以 default 兜底")
     brief = load_brief(state)
     candidates = list(state.get("candidates") or [])
     knowledge, knotes = compliance_review(
@@ -534,12 +540,8 @@ def reporter_node(state: dict) -> dict:
     moq = (ctx.get("supply") or {}).get("moq") if isinstance(ctx, dict) else None
     answer = render_report(brief, list(state.get("stage_logs") or []),
                            candidates, notes, knowledge=knowledge,
-                           market=_market_lines(
-                               brief.category,
-                               str(state.get("tenant_id") or "default")),
-                           pains=_pain_lines(
-                               candidates, brief.category,
-                               str(state.get("tenant_id") or "default")),
+                           market=_market_lines(brief.category, tenant_id),
+                           pains=_pain_lines(candidates, brief.category, tenant_id),
                            pool=list(state.get("pool") or []),
                            moq=moq, min_margin=min_margin,
                            config_lines=_config_lines(brief, min_margin))

@@ -36,7 +36,7 @@ def _stage(logs, stage):
 
 def test_graph_need_info_asks_category(funnel_graph):
     final = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message="帮我做一次智能选品"))
+        new_selection_funnel_graph_input(user_message="帮我做一次智能选品", tenant_id="default"))
     assert final["status"] == "need_info"
     assert final["brief_missing"] == ["category"]
     assert "品类" in final["final_answer"]
@@ -46,7 +46,7 @@ def test_graph_need_info_asks_category(funnel_graph):
 def test_graph_empty_pool_honest(funnel_graph, patch_stores):
     patch_stores(_happy_snaps())
     final = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message="帮我给蓝牙耳机做智能选品"))
+        new_selection_funnel_graph_input(user_message="帮我给蓝牙耳机做智能选品", tenant_id="default"))
     assert final["status"] == "empty_pool"
     assert final["candidates"] == []
     assert "全部淘汰" in final["final_answer"]
@@ -59,7 +59,7 @@ def test_graph_empty_pool_honest(funnel_graph, patch_stores):
 def test_graph_happy_path_full_funnel(funnel_graph, patch_stores):
     patch_stores(_happy_snaps())
     final = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message=HAPPY_MSG))
+        new_selection_funnel_graph_input(user_message=HAPPY_MSG, tenant_id="default"))
     assert final["status"] == "ok"
 
     pool_log = _stage(final["stage_logs"], "pool")
@@ -87,9 +87,9 @@ def test_graph_happy_path_full_funnel(funnel_graph, patch_stores):
 def test_graph_deterministic(funnel_graph, patch_stores):
     patch_stores(_happy_snaps())
     a1 = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message=HAPPY_MSG))
+        new_selection_funnel_graph_input(user_message=HAPPY_MSG, tenant_id="default"))
     a2 = funnel_graph.invoke(
-        new_selection_funnel_graph_input(user_message=HAPPY_MSG))
+        new_selection_funnel_graph_input(user_message=HAPPY_MSG, tenant_id="default"))
     assert a1["final_answer"] == a2["final_answer"]
     assert a1["candidates"] == a2["candidates"]
 
@@ -101,7 +101,7 @@ def test_pool_respects_platform_and_price_band(funnel_graph, patch_stores):
                           price=59.0, rating=4.4, review_count=60, snapshot_id=7)
     patch_stores(_happy_snaps() + [pdd_in, pdd_cheap])
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给宠物零食做智能选品 拼多多 100-150元"))
+        tenant_id="default", user_message="帮我给宠物零食做智能选品 拼多多 100-150元"))
     pool_log = _stage(final["stage_logs"], "pool")
     rules = {r["rule"] for r in pool_log["reasons"]}
     assert "platform_mismatch" in rules      # 全部淘宝商品
@@ -113,7 +113,7 @@ def test_margin_from_message_overrides_default(funnel_graph, patch_stores):
     """消息里给的毛利率 10% 应覆盖默认 30% —— 否则低价品全被误杀。"""
     patch_stores(_happy_snaps())
     final = funnel_graph.invoke(new_selection_funnel_graph_input(
-        user_message="帮我给宠物零食做智能选品，目标毛利率10%"))
+        tenant_id="default", user_message="帮我给宠物零食做智能选品，目标毛利率10%"))
     econ_log = _stage(final["stage_logs"], "econ")
     # u-d 价格 29：毛利率 ≈17.2%，默认 30% 会被淘汰，10% 阈值下存活
     assert econ_log["kept"] == 3

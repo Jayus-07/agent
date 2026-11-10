@@ -164,3 +164,90 @@ class TestStoreToolKeying:
             set_session_id("multi-agent-default")
             set_tool_user_id("")
             set_tool_tenant_id("")
+
+    def test_cs_product_evidence_gate_with_real_session_history(
+            self, _isolated_user, monkeypatch):
+        """客服产品证据门全链路（不 mock get_session_messages，2026-11-10）。
+
+        修复前：工具把兼容层编码 user_id（"customer_service::u"）传给
+        get_session_messages → _check_owner 拿编码值与 chat_sessions.user_id
+        （裸值）比对恒不匹配 → 返回空消息 → 证据门永久拒绝——既有用例
+        test_cs_product_write_reachable_by_search 恰好整方法替换掉了
+        get_session_messages，绿灯掩盖断链。
+        修复后：归一先于证据门，_check_owner 以裸值比对真实种子会话通过。
+        """
+        user, tenant = _isolated_user
+        session = f"{user}-sess"
+        content = f"{user} 偏好企业微信沟通"
+
+        from backend.core.request_context import (
+            set_product_context, set_session_id, set_tool_tenant_id,
+            set_tool_user_id,
+        )
+
+        set_product_context("customer_service", "test")
+        set_session_id(session)
+        set_tool_user_id(user)
+        set_tool_tenant_id(tenant)
+        try:
+            # 真实种子：chat_sessions 归属裸 user（runner start_session 同款
+            # 形态）+ chat_messages 一条用户原话（含写入内容 → 证据门通道 1）
+            import psycopg2
+
+            from backend.config.database import MEMORY_DB_CONFIG
+
+            with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+                with conn.cursor() as cursor:
+                    # created_at 显式给值：ORM default 只对 SQLAlchemy 写入
+                    # 生效，裸 SQL 插入 NULL 会让 load_messages 序列化
+                    # isoformat 失败（get_session_messages 降级返回空消息）
+                    cursor.execute(
+                        "INSERT INTO chat_sessions (session_id, user_id, "
+                        "product, tenant_id, created_at, updated_at) "
+                        "VALUES (%s, %s, %s, %s, now(), now())",
+                        (session, user, "customer_service", tenant))
+                    cursor.execute(
+                        "INSERT INTO chat_messages (session_id, product, "
+                        "role, content, created_at) "
+                        "VALUES (%s, %s, %s, %s, now())",
+                        (session, "customer_service", "user",
+                         f"请记住：{content}。以后都用企业微信找我。"))
+                conn.commit()
+
+            # embedding stub（无供应商凭据；类级 property 覆盖同前一个用例）
+            from backend.memory.long_term import LongTermMemory
+
+            monkeypatch.setattr(
+                LongTermMemory, "embedding",
+                property(lambda self: _FakeEmbedding()))
+
+            from backend.tools.memory import memory_store_tool
+
+            output = memory_store_tool.invoke({"content": content})
+            # 修复前此断言失败：输出为证据门拒绝文案
+            # （"未在你近期的发言中找到该内容的明确表述"）
+            assert output.startswith("✅"), output
+
+            import psycopg2
+
+            from backend.config.database import MEMORY_DB_CONFIG
+
+            with psycopg2.connect(**MEMORY_DB_CONFIG) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(
+                        "SELECT tenant_id, product, user_id, origin "
+                        "FROM memory_records WHERE user_id LIKE %s",
+                        (f"{user}%",))
+                    rows = cursor.fetchall()
+            assert rows, "memory_store_tool 未落库"
+            assert all(r[2] == user for r in rows), rows
+        finally:
+            from backend.core.request_context import (
+                set_product_context, set_session_id, set_tool_tenant_id,
+                set_tool_user_id,
+            )
+
+            set_product_context("internal", "internal_call")
+            set_session_id("multi-agent-default")
+            set_tool_user_id("")
+            set_tool_tenant_id("")

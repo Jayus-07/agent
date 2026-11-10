@@ -11,13 +11,16 @@ from fastapi.testclient import TestClient
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     from backend.app.api.deps import (
         OperatorIdentity, require_editor_user, resolve_operator_role,
     )
     from backend.app.api.routes.selection_funnel import router
     app = FastAPI()
     app.include_router(router)
+    # 本地开发 .env 可能配置 GATEWAY_TRUST_SECRET：无网关信任标记时身份头
+    # 退化为 guest → 租户谓词 403。测试直连形态对齐 CI（无 trust secret）。
+    monkeypatch.setattr("backend.config.auth.GATEWAY_TRUST_SECRET", "")
     # 2026-09-24 STOP A：路由挂运营角色门禁；本文件只测导入契约，
     # 门禁行为由 tests/api/test_selection_routes_authz.py 覆盖
     app.dependency_overrides[resolve_operator_role] = lambda: OperatorIdentity(

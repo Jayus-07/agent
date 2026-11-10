@@ -32,6 +32,7 @@ def selection_funnel_graph_node(state: dict) -> dict:
     graph_input = new_selection_funnel_graph_input(
         user_message=state.get("question") or state.get("query") or "",
         user_id=state.get("user_id", ""),
+        tenant_id=state.get("tenant_id", ""),
         session_id=session_id,
         conversation_id=funnel_context.get("conversation_id") or session_id,
         funnel_context={
