@@ -46,16 +46,3 @@ export async function getLLMBalance(provider?: string): Promise<LLMBalance> {
     return { ok: false, error: (e as Error).message };
   }
 }
-
-/** GET /llm/multiquery — 获取 MultiQuery 模式 */
-export async function getMultiQueryMode(): Promise<{ mode: string }> {
-  return request("/api/llm/multiquery");
-}
-
-/** POST /llm/multiquery — 设置 MultiQuery 模式 */
-export async function setMultiQueryMode(mode: string): Promise<{ ok: boolean; mode: string }> {
-  return request("/api/llm/multiquery", {
-    method: "POST",
-    body: JSON.stringify({ mode }),
-  });
-}

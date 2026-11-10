@@ -300,35 +300,6 @@ def cleanup_candidate_by_generation(
 # ── BM25 快照切换 ──────────────────────────────────────────────
 
 
-def _write_published_pointer(index_dir: Path, meta: dict, generation: str) -> None:
-    """写发布指针（C 阶段读侧每请求版本检查的廉价入口）。
-
-    指针在全部产物文件替换完成后最后写入——读到新指针就能读到完整新快照。
-    """
-    import json
-    import tempfile
-
-    pointer = {
-        "generation": generation,
-        "built_at": meta.get("built_at", ""),
-        "doc_count": meta.get("doc_count", 0),
-        "content_hash": meta.get("content_hash", ""),
-        "vector_set_hash": meta.get("vector_set_hash", ""),
-    }
-    path = index_dir / "PUBLISHED.json"
-    fd, tmp = tempfile.mkstemp(prefix=".PUBLISHED.", suffix=".tmp", dir=str(index_dir))
-    os.close(fd)
-    try:
-        with open(tmp, "wb") as f:
-            f.write(json.dumps(pointer, ensure_ascii=False, indent=2).encode("utf-8"))
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
 def _bm25_global_lock(main_dir: Path):
     """BM25 目录级全局发布锁（P1，2026-10-24）。
 

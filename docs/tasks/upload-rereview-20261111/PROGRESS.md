@@ -163,3 +163,28 @@
 - 用户确认：batch4 拆 2 个 PR（SSE 可靠性包 / 快修+体验包）；排期细表（含前后端归属「侧」标注与验收口径）已落盘更新至 docs/tasks/upload-followups-20261110/TASK.md「执行批次计划」节。
 - 工作方式确认：持续实施，每批完成后对该批改动点做一次链路评审（重读改动 + 定向测试），通过后进入下一批。
 - batch3 报告 + 排期落盘以同一文档 PR 提交合并。
+
+---
+
+## 施工进度（2026-11-11 持续实施，batch3 报告确认后）
+
+### batch4 已完成并合并（SSE 可靠性包 + 快修+体验包）
+
+| PR | 内容 | 验证 |
+|----|------|------|
+| #439（batch4a，merge 692b34d） | 4.3 后端 _read_progress_redis 三态(ok/missing/error)+异常宽限 120s；4.1/4.2 admin knowledge.ts 看门狗活跃性驱动(idle 120s+兜底 1900s)+SSE 重连一次 | 后端定向 80 passed；admin 全量 600 passed。批内评审发现并修复「重连前 cancel 旧 reader 防队列事件分流」 |
+| #444（batch4b，merge 623f5f0） | 4.4 admin/cs BFF 502 脱敏；4.5 X-Batch-Id 白名单；4.6 SSE 文案去 upload_id 回显；4.7 accept 补齐 5 格式；4.8 /rag/health 透传上限+UploadDialog 消费+三端 BFF 读 BFF_RAG_UPLOAD_LIMIT_BYTES；4.9 窗口可用性(beforeunload/ESC/遮罩/批量提示)；4.10 behavior 测试+3 | 后端定向 141 passed；admin tsc 0 错；admin 603（602+design-tokens 偶发超时单独复跑过）；web tsc 3 既有错误无新增；cs tsc 本地依赖不全 UNVERIFIED（CI 补验） |
+
+**批后链路评审（batch4 整体）**：三端 BFF 改后逐字段 diff 一致（仅注释/CLIENT_APP 差异）；batch4a 三态与 batch4b 文案改动兼容（141 passed 佐证）；幂等/发布链路零触碰。
+
+**新发现（P3，排期外）**：.github/workflows 无任何 frontend-cs 专属 CI（7 个 workflow 零引用 cs）——cs 端 tsc/vitest/构建完全无 CI 覆盖，且本机 cs node_modules 不完整（缺 typescript）。建议后续补 cs CI workflow（与 frontend-admin.yml 同款）。
+
+### batch5 已施工（清理项，待 PR）
+
+- 5.1：三端 api/llm.ts 删 getMultiQueryMode/setMultiQueryMode（经 lib/api.ts 星号转发的 #10 对象；全仓核查唯一消费方 = MultiQueryToggle 组件，而该组件三端零消费方——cs/admin 死代码与 batch2 删除的 web 版同款，已一并删除）。
+- 5.2：backend/rag/indexing/publish.py 删 _write_published_pointer（303-329，全仓零调用方，发布指针实际由 store 方法维护）。
+- 验证：admin 全量 603 全过+tsc 0 错；web tsc 3 既有错误无新增；后端 publish/索引定向 39 passed + 16 errors 全为 PG 5433 连接拒绝（Docker 未启动环境性，非代码性）；publish.py py_compile 过。
+
+### 过程事故记录（如实）
+
+- 批后评审时误执行 `git checkout main -- .`（本地 main 停在 c3f07de），把旧版文件污染进工作区+暂存区，导致 batch5 首轮验证出现 4 个假失败（SSE 测试因 knowledge.ts 被回退）。处置：git reset（mixed）+ git checkout HEAD -- .（未用 --hard），在干净基线重做 batch5 删除并复跑验证全绿。教训：`git checkout <branch> -- .` 在并行 worktree 场景等同覆盖工作区，后续一律禁用（用分支切换 `git checkout <branch>` 而非路径检出）。
