@@ -263,3 +263,53 @@
 ### 复审总结论
 
 **batch4/5 三提交（#439/#444/#445）代码改动复审通过，无阻塞性发现。** P3-新1（测试欠账）与 P4-新1（注释残留）待用户确认后归入 batch7 / 挂起池；batch7 动态冒烟仍为部署级验证欠账（UNVERIFIED 清单不变）。
+
+---
+
+## batch7~8 施工与收尾（2026-11-11 第二段会话，接手本会话续工至全任务收口）
+
+### 本段会话产出（4 PR 全部合并）
+
+| PR | 批次 | 内容 | merge |
+|----|------|------|-------|
+| #449 | 复审 | batch4/5 复审报告（R1~R7 全过；P3-新1/P4-新1；本文件上一节） | 7b4127e |
+| #450 | batch7.3/7.4 | frontend-cs CI workflow（与 admin 同款）+ happy-dom 21.0.4（修 3 个 high CVE，audit 门禁首跑 FAIL→收口） | 45f3ae5 |
+| #452 | batch8 | 进度镜像可靠性：TTL 同源对齐 + int 收窄 + missing run_store DB 兜底 + worker owner 逐帧 + #7 behavior 测试×3（P3-新1 收口） | 5e242d3 |
+| #454 | batch6.1 | ADR-0013 存档（**Deferred**：现状已被 batch0~4 前端解析链消化，6.2~6.4 移出排期；恢复施工前先拍板方向，建议 A 新路径版本化） | d635e3a |
+
+### batch7 验证收口（UNVERIFIED 欠账全部闭环）
+
+- 7.1 部署级动态冒烟（rebuild 后 build.commit 实测确认）：51MB 经 BFF 413+人话 detail / 49MB 流式受理 4.7s / SSE 真实链路（受理帧→worker 跨进程帧→终态）/ health 新字段（max=50, overhead=16384）/ batch_id 校验（非法+超长拒、合法透传）/ 重传附着语义——全过。
+- 7.2 PG 用例复跑：35 全绿（19+16 两轮，上轮 16 errors 全为 5433 拒连，环境恢复后消失）。
+- 7.3 cs CI：PR #450 合并即生效，CI 双 job（security 13s + functional 1m23s）全绿；本机 cs node_modules 全量重装（254 包）+ tsc 0 错 + vitest 318 全过——cs 端「零 CI 覆盖 + 本地不可验」双欠账闭环。
+- 7.4 cs 代理契约基线：本地 318 含 route.test.ts，CI functional PASS 闭环。
+- 冒烟测试数据清理：本会话文档零残留（索引未发布）；batch1 历史残留 smoke-a/closure-v1~v3 共 4 个已删（deleted_rows:1, degraded:false）。
+
+### batch8 部署级实锤缺陷与修复（冒烟发现 → PR #452）
+
+| 缺陷 | 实证 | 修复 | 部署复验 |
+|------|------|------|---------|
+| B(P2)：镜像 TTL 600s vs 长阶段静默 | 49M 任务 updated_at 静默 5 分钟后键 TTL=-2 消失，任务仍在跑→SSE 误报「不存在」 | TTL 改 `int(RAG_SSE_REDIS_POLL_MAX_SECONDS)` 与轮询上限同源；missing grace 耗尽后查 run_store 兜底（非终态重置宽限，终态集合以 TERMINAL_STATUSES 为单一事实源，查询异常宽大处理） | TTL=1899 ✅ |
+| A(P3)：owner 单点 | worker 帧不带 owner（index_tasks.py:34）；受理帧 Redis 写失败（启动风暴实测）后 owner 永久缺失→重订阅 forbidden | worker `_redis_emit_fn(upload_id, owner=...)` 逐帧携带（复用 _get_index_identity）；写失败日志 debug→warning | worker parsing 帧带 owner=default/442 ✅ |
+| （过程中新发现）float 传 EXPIRE | 首版 TTL 修复部署复验实测 TTL=-1：`RAG_SSE_REDIS_POLL_MAX_SECONDS` 是 float(1900.0)，redis-py 直传 EXPIRE 被 Redis 拒绝→ResponseError 吞掉→键永不过期（旧 600 是 int 从未暴露） | `int()` 收窄 + 测试断言 `isinstance int` 防回归 | TTL=1899 ✅ |
+| P3-新1：#7 测试×3 欠账 | 复审发现 4.9 验收承诺未兑现 | behavior 测试×3（ESC/遮罩、beforeunload 上传中拦截、批量>20 提示） | admin 定向 16 passed ✅ |
+
+验证：后端定向 48+33 passed（新增 5 用例）、admin tsc 0 错、CI 全绿（RAG Smoke / admin-observability / frontend-admin-functional）。
+
+### 冲突分析记录（并行会话）
+
+- 合并 #449/#450 前其他会话推了 #451（周回顾移交 docs 新文件）：三方合并试探冲突块均 0，顺序合并干净。
+- 合并 #452/#454 前其他会话推了 #453（budget 域策略 API/前端）：三方试探冲突块均 0、GitHub 均 MERGEABLE，顺序合并干净；合并后 rebuild 一并把 budget 已合并代码落进共享栈（build.commit=d635e3a 实测）。
+
+### 环境与工作树收尾
+
+- worktree `agent-wt-upload-rereview` @ d635e3a（detached，= 最新 main），工作区干净；4 个远端临时分支 + 本地分支全清。
+- 共享栈 21 容器 healthy，代码 = 最新 main；.wslconfig 生效（CPUs=4 / 5.79GiB，本会话按用户步骤重启 Docker Desktop 落地）。
+- 本机 frontend-cs node_modules 已完整重装（Junction 指向主仓库，主仓库侧已补齐）。
+- 上传链路任务线（batch0~8）全部收口：无活跃排期、无 UNVERIFIED 欠账；遗留仅挂起池（触发条件驱动）+ 观察项（见上节）。
+
+### 给下一会话的提示
+
+- 本任务线已收尾，无续工动作；若用户再提上传链路问题，先读本文件「batch7~8 施工与收尾」节 + followups TASK.md。
+- ADR-0013 若恢复施工：先拍板方案方向（存档稿建议 A 新路径 `/api/rag/v2/upload`），再按 ADR「迁移路径」节执行。
+- 挂起池新触发点：三端 api/llm.ts:2 注释（P4-新1）、index_run_store_pg tuple repr 拼 SQL、rag_upload.py 拆分评估。
