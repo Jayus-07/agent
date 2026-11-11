@@ -918,7 +918,7 @@ services:
     volumes:
       - ./docker/pg-backup.sh:/scripts/pg-backup.sh:ro
       # 备份落宿主机目录（可直接拷走做异地容灾）
-      - ./backups/pg:/backups
+      - ${PG_BACKUP_HOST_DIR:-./backups/pg}:/backups
     depends_on:
       # 首轮备份等迁移完成，避免全新部署时备份到空库
       db-migrate:

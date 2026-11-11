@@ -119,6 +119,6 @@ docker compose -f docker-compose.yml -f 部署/prod-4c8g/docker-compose.local.ym
 
 ## 磁盘与回滚
 
-40GB 磁盘需同时容纳系统、镜像、业务数据、Redis AOF、日志和备份；各目录占用以实际 df/du 为准，超过 85% 停止新增构建/导入并扩容或按既有保留策略处理。备份默认保留 7 天，仍需外部异地副本。不要删除 volume 或自动清理其他任务镜像。
+生产应将 Docker 数据目录与 PostgreSQL 备份放到数据盘。当前示例用 `/data/docker` 与 `/data/backups/agent/postgres`；确认数据盘已挂载后，再创建备份目录并按 pgvector 镜像内 postgres 用户的 UID/GID 设置属主。备份默认保留 7 天，仍需外部异地副本。各目录占用以实际 df/du 为准，超过 85% 停止新增构建/导入并扩容或按既有保留策略处理。不要删除 volume 或自动清理其他任务镜像。
 
 回滚应用使用已知可用镜像并重新创建对应服务，保留数据卷。配置回滚恢复对应 Compose 与环境文件后重建；数据库结构回滚走迁移治理，不能 DROP 已应用迁移。资源限制回滚不能代替已发布向量数据的恢复。
