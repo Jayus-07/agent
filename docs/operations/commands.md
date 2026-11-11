@@ -19,6 +19,8 @@
 
 脚本内部把 Compose 项目名固定为共享栈的 `agent`：从目录名不是 `agent` 的任务工作树运行时，若未显式导出 `COMPOSE_PROJECT_NAME`，脚本会自动设为 `agent` 并打印一行提示，避免构建出平行项目镜像；调用方已导出该变量时以调用方为准。在 Git Bash 中运行时确认参数用 `-y`（`/y` 会被 MSYS 路径转换吞掉）。
 
+评测逐题产物在本机共享 Git worktree 的主仓库 `data/eval_runs` 下保存。`devctl.bat` 会自动把该目录同时挂载给 API 和 Worker，宿主 CLI 也会写入同一目录；如需使用其他目录，可在启动 `devctl.bat` 前设置 `EVAL_RUNS_HOST_DIR`。
+
 ## 本地专项模型服务（embedding / rerank）
 
 管理端专项绑定指向本机推理服务（127.0.0.1:8088，容器内经

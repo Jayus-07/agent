@@ -48,6 +48,17 @@ setlocal enabledelayedexpansion
 set "ROOT=%~dp0"
 set "ROOT=%ROOT:~0,-1%"
 
+if not defined EVAL_RUNS_HOST_DIR (
+    set "GIT_COMMON_DIR="
+    for /f "delims=" %%I in ('git -C "%ROOT%" rev-parse --path-format^=absolute --git-common-dir 2^>nul') do set "GIT_COMMON_DIR=%%I"
+    if defined GIT_COMMON_DIR (
+        set "GIT_COMMON_DIR=!GIT_COMMON_DIR:/=\!"
+        for %%I in ("!GIT_COMMON_DIR!") do set "EVAL_RUNS_HOST_DIR=%%~dpIdata\eval_runs"
+    ) else (
+        set "EVAL_RUNS_HOST_DIR=%ROOT%\data\eval_runs"
+    )
+)
+
 :: Keep local resource limits on every start/rebuild. Discover the deployment
 :: parent without non-ASCII literals because cmd reads this file as ANSI/GBK.
 if not defined COMPOSE_FILE (

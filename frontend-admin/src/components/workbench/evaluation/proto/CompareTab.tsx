@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowRight } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import {
   evaluationService,
   type EvaluationV2Comparison,
@@ -15,7 +16,7 @@ import {
 } from '@/api/evaluation'
 import { atLeast } from '@/lib/auth'
 import EvaluationHumanReviewButton from '@/components/workbench/evaluation/EvaluationHumanReviewButton'
-import { Badge, Card, ctl, ctlGhost, Empty, modeShort, TableWrap, Td, Th, timeShort } from './evalUi'
+import { Badge, Card, ctl, ctlGhost, Drawer, Empty, modeShort, Pagination, TableWrap, Td, Th, timeShort } from './evalUi'
 
 const GROUP_LABELS: Array<{ label: string; match: (key: string) => boolean }> = [
   { label: 'RAGAS 指标（LLM Judge 评分）', match: key => key.startsWith('ragas_') },
@@ -34,6 +35,7 @@ const METRIC_LABELS: Record<string, string> = {
 
 /** 逐题主分数：不同 Runner 的分数键不统一，按优先级取第一个数值分 */
 const PRIMARY_SCORE_KEYS = ['overall', 'score', 'pass_score', 'judge_score', 'total_score']
+const CASE_PAGE_SIZE = 10
 function primaryScore(scores: Record<string, number | null> | undefined): number | null {
   if (!scores) return null
   for (const key of PRIMARY_SCORE_KEYS) {
@@ -53,7 +55,8 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
   const [baselineId, setBaselineId] = useState('')
   const [candidateId, setCandidateId] = useState('')
   const [comparison, setComparison] = useState<EvaluationV2Comparison | null>(null)
-  const [caseDetail, setCaseDetail] = useState<EvaluationV2RunCaseDetail | null>(null)
+  const [selectedCaseId, setSelectedCaseId] = useState('')
+  const [casePage, setCasePage] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -74,10 +77,17 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
   const completed = useMemo(() => runs.filter(run => run.job_status === 'completed'), [runs])
   const suiteNames = useMemo(() => Array.from(new Set(completed.map(run => run.suite_name || run.suite_key || ''))).filter(Boolean), [completed])
   const filtered = useMemo(() => completed.filter(run => suiteFilter === 'all' || (run.suite_name || run.suite_key) === suiteFilter), [completed, suiteFilter])
+  const caseDetailQuery = useQuery({
+    queryKey: ['admin', 'evaluation-v2-run-case-detail', candidateId, selectedCaseId],
+    queryFn: () => evaluationService.getV2RunCaseDetail(candidateId, selectedCaseId),
+    enabled: Boolean(candidateId && selectedCaseId),
+  })
+  const caseDetail: EvaluationV2RunCaseDetail | undefined = caseDetailQuery.data
+  const visibleCases = comparison?.cases.slice(casePage * CASE_PAGE_SIZE, (casePage + 1) * CASE_PAGE_SIZE) || []
 
   const compare = () => {
     if (!baselineId || !candidateId || baselineId === candidateId) return
-    setBusy(true); setError(''); setComparison(null); setCaseDetail(null)
+    setBusy(true); setError(''); setComparison(null); setSelectedCaseId(''); setCasePage(0)
     evaluationService.compareV2Runs(baselineId, candidateId)
       .then(setComparison)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : '对比失败'))
@@ -92,10 +102,7 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
     })).filter(group => group.metrics.length > 0)
   }, [comparison])
 
-  const openCase = (caseId: string) => {
-    if (!candidateId) return
-    void evaluationService.getV2RunCaseDetail(candidateId, caseId).then(setCaseDetail).catch(() => setCaseDetail(null))
-  }
+  const openCase = (caseId: string) => { if (candidateId) setSelectedCaseId(caseId) }
 
   if (!atLeast('super_admin')) return <p className="p-5 text-sm text-text-secondary">结果对比沿用任务授权，仅超级管理员可查看。</p>
 
@@ -104,7 +111,7 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
 
     <div className="flex flex-wrap items-center gap-2">
       <label className="flex items-center gap-2 text-xs text-text-secondary">数据集
-        <select aria-label="切换对比数据集" value={suiteFilter} onChange={e => { setSuiteFilter(e.target.value); setBaselineId(''); setCandidateId(''); setComparison(null) }} className={ctl}>
+        <select aria-label="切换对比数据集" value={suiteFilter} onChange={e => { setSuiteFilter(e.target.value); setBaselineId(''); setCandidateId(''); setComparison(null); setSelectedCaseId(''); setCasePage(0) }} className={ctl}>
           <option value="all">全部</option>
           {suiteNames.map(name => <option key={name} value={name}>{name}</option>)}
         </select>
@@ -116,7 +123,7 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
         const run = filtered.find(item => item.run_id === slot.value)
         return <div key={slot.label} className={`rounded-lg border bg-surface-base p-3.5 ${slot.label === '对比' && slot.value ? 'border-accent' : 'border-border-subtle'}`}>
           <Badge text={slot.label} tone={slot.label === '对比' ? 'accent' : 'gray'} />
-          <select aria-label={`${slot.label}运行`} value={slot.value} onChange={e => slot.set(e.target.value)} className={`${ctl} mt-2 w-full`}>
+          <select aria-label={`${slot.label}运行`} value={slot.value} onChange={e => { slot.set(e.target.value); setComparison(null); setSelectedCaseId(''); setCasePage(0) }} className={`${ctl} mt-2 w-full`}>
             <option value="">选择运行</option>
             {filtered.map(item => <option key={item.run_id} value={item.run_id}>{item.run_id.slice(0, 8)} · {item.suite_name} · {timeShort(item.finished_at)}</option>)}
           </select>
@@ -154,11 +161,11 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
         {comparison.pass_rate_inference && <p className="mt-2 text-xs text-text-muted">配对推断（McNemar）：不一致样本 {comparison.pass_rate_inference.discordant_count}/{comparison.pass_rate_inference.sample_count}，通过率变化 {comparison.pass_rate_inference.pass_rate_delta >= 0 ? '+' : ''}{(comparison.pass_rate_inference.pass_rate_delta * 100).toFixed(1)}pp，p={comparison.pass_rate_inference.p_value.toFixed(4)}。</p>}
       </Card>
 
-      <Card title="逐用例结果" subtitle="点击行查看对比侧详情；分数为该题主评分（无主分的 Runner 显示 —）。">
+      <Card title="逐用例结果" subtitle="点击详情查看对比侧回答、证据和 Trace；分数为该题主评分（无主分的 Runner 显示 —）。">
         {comparison.cases.length === 0 ? <Empty text="没有逐用例记录。" /> : <TableWrap minWidth={960}>
           <thead className="bg-bg-elevated"><tr><Th>用例</Th><Th>问题</Th><Th>基准状态</Th><Th>对比状态</Th><Th end>基准分</Th><Th end>对比分</Th><Th end>变化</Th><Th end>操作</Th></tr></thead>
           <tbody className="divide-y divide-border-subtle">
-            {comparison.cases.map(item => {
+            {visibleCases.map(item => {
               const improved = item.baseline !== 'pass' && item.candidate === 'pass'
               const regressed = item.baseline === 'pass' && item.candidate !== 'pass'
               const baselineScore = primaryScore(item.scores?.baseline)
@@ -176,9 +183,13 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
             })}
           </tbody>
         </TableWrap>}
+        <Pagination page={casePage} pageSize={CASE_PAGE_SIZE} total={comparison.cases.length} onPageChange={setCasePage} />
       </Card>
 
-      {caseDetail && <Card title="用例详情（对比侧）" subtitle={`修订 r${caseDetail.case_revision} · ${caseDetail.result.status === 'pass' ? '通过' : caseDetail.result.status === 'fail' ? '未通过' : caseDetail.result.status}`}>
+      <Drawer open={Boolean(selectedCaseId)} title="用例详情（对比侧）" subtitle={caseDetail ? `修订 r${caseDetail.case_revision} · ${caseDetail.result.status === 'pass' ? '通过' : caseDetail.result.status === 'fail' ? '未通过' : caseDetail.result.status}` : '读取该次运行的答案、评分和证据。'} onClose={() => setSelectedCaseId('')} width="max-w-3xl">
+        {caseDetailQuery.isPending && <Empty text="正在读取用例详情…" />}
+        {caseDetailQuery.isError && <div className="space-y-2"><p role="alert" className="text-xs text-red-700">{caseDetailQuery.error instanceof Error ? caseDetailQuery.error.message : '读取用例详情失败'}</p><button type="button" className={ctlGhost} onClick={() => void caseDetailQuery.refetch()}>重试</button></div>}
+        {caseDetail && <div className="space-y-4">
         <div className="space-y-1.5 text-xs text-text-secondary">
           {caseDetail.trace_id && <p>Trace：<code className="rounded bg-bg-elevated px-1 py-0.5 font-mono text-[11px]">{caseDetail.trace_id}</code>
             <a className="ml-2 text-accent hover:underline" href={`/observability/monitoring?tab=traces&q=${encodeURIComponent(caseDetail.trace_id)}`}>查看完整 Trace</a>
@@ -240,7 +251,8 @@ export default function CompareTab({ focusRunId }: { focusRunId?: string | null 
           <div className="mr-auto"><p className="text-xs font-medium text-text-primary">人工评审</p><p className="text-[11px] text-text-muted">人工评审仅作校准记录，不进入自动门禁。</p></div>
           <EvaluationHumanReviewButton runId={candidateId} caseId={caseDetail.case_id} />
         </div>
-      </Card>}
+        </div>}
+      </Drawer>
 
       <p className="text-xs text-text-muted">对比仅在相同数据集版本与相同评测方式的运行间有效；RAGAS 指标仅在该运行的评测方式包含 RAGAS 时产出。</p>
     </>}

@@ -9,6 +9,7 @@ vi.mock('next/navigation', () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }))
 vi.mock('./proto/DatasetsTab', () => ({ default: () => <div data-panel="datasets">数据集</div> }))
+vi.mock('./proto/FailedTracesTab', () => ({ default: () => <div data-panel="traces">失败 Trace</div> }))
 vi.mock('./proto/RunsTab', () => ({ default: ({ promptPrefill }: { promptPrefill?: { key: string; version: string } | null }) => (
   <div data-panel="runs" data-prompt={promptPrefill?.key || ''} data-pv={promptPrefill?.version || ''}>运行评测</div>
 ) }))
@@ -31,12 +32,12 @@ function mount(): { root: Root; container: HTMLDivElement } {
 }
 
 describe('EvaluationCenter', () => {
-  it('默认进入数据集，三个功能区仅挂载当前面板', () => {
+  it('默认进入数据集，四个功能区仅挂载当前面板', () => {
     const { root, container } = mount()
     expect(container.textContent).toContain('评测中心')
     expect(container.textContent).toContain('数据集')
     expect(container.querySelectorAll('[data-panel]')).toHaveLength(1)
-    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(3)
+    expect(container.querySelectorAll('[role="tab"]')).toHaveLength(4)
     act(() => root.unmount())
   })
   it('旧入口别名统一收敛到三个核心区', () => {
@@ -64,6 +65,13 @@ describe('EvaluationCenter', () => {
     const invalid = mount()
     expect(invalid.container.querySelector('[data-panel="datasets"]')).not.toBeNull()
     act(() => invalid.root.unmount())
+  })
+  it('失败 Trace 深链进入 Trace 功能区', () => {
+    navigation.query = 'tab=traces'
+    const traces = mount()
+    expect(traces.container.querySelector('[data-panel="traces"]')).not.toBeNull()
+    expect(traces.container.querySelector('[role="tabpanel"]')?.getAttribute('aria-label')).toBe('失败 Trace')
+    act(() => traces.root.unmount())
   })
   it('Prompt 治理深链预填运行参数', () => {
     navigation.query = 'tab=runs&prompt=rag.qa&pv=23'

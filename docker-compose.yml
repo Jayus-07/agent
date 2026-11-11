@@ -38,6 +38,7 @@ x-build: &build
 # 节点名）、depends_on、资源限额。队列名唯一事实源 = backend/config/
 # tasks.py（CELERY_*_QUEUE），compose 只声明消费关系，不做业务路由。
 x-worker-base-env: &worker-base-env
+  EVAL_RUNS_DATA_DIR: /app/data/eval_runs
   CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
   CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
   # 控制面（取消/暂停标志、事件 pub/sub 走业务 db0）
@@ -67,7 +68,11 @@ x-worker-common: &worker-common
     - app_data:/app/data
     - app_cache:/app/.cache
     # 后台评测与 API/宿主 CLI 共享同一明细目录，避免写入被底层卷遮蔽的 root 目录。
-    - ./data/eval_runs:/app/data/eval_runs
+    - type: bind
+      source: ${EVAL_RUNS_HOST_DIR:-./data/eval_runs}
+      target: /app/data/eval_runs
+      bind:
+        create_host_path: true
   networks:
     - agent-net
   restart: unless-stopped
@@ -229,13 +234,18 @@ services:
       # RAG 数据根目录指向 app_data 卷挂载点（文档注册表/Chroma/BM25/docs 全在此，
       # 与 rag-service 共享同一份数据；文档管理路由读的注册表也在这里）
       - RAG_DATA_DIR=/app/data
+      - EVAL_RUNS_DATA_DIR=/app/data/eval_runs
     volumes:
       - app_data:/app/data
       - app_cache:/app/.cache
       # 评测明细单一事实源（M7：明细在 data/eval_runs/）：宿主 CLI 产生
       # 的 run 直接对容器可见，/evaluation/runs 不再只见容器内写入的 run
       # （2026-09-30 实测宿主两条 smoke run 在具名卷模型下页面不可见）
-      - ./data/eval_runs:/app/data/eval_runs
+      - type: bind
+        source: ${EVAL_RUNS_HOST_DIR:-./data/eval_runs}
+        target: /app/data/eval_runs
+        bind:
+          create_host_path: true
     # 健康检查统一在 compose 定义（镜像级 HEALTHCHECK 已从 Dockerfile 移除——
     # 它写死 8000 端口，对同镜像的非 8000 服务是永久 unhealthy 陷阱）
     healthcheck:

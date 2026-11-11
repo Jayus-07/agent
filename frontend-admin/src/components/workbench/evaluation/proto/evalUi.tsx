@@ -1,6 +1,7 @@
 'use client'
 
-import type { ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
+import { X } from 'lucide-react'
 
 /** 原型风格共享原语：白卡片 + 细边框 + 中性按钮，对应原型视觉。 */
 
@@ -73,6 +74,81 @@ export function TableWrap({ children, minWidth = 720 }: { children: ReactNode; m
 
 export function Empty({ text }: { text: string }) {
   return <p className="py-8 text-center text-xs text-text-muted">{text}</p>
+}
+
+/** 页面右侧详情/编辑抽屉，统一键盘关闭、焦点恢复与窄屏宽度。 */
+export function Drawer({ open, title, subtitle, onClose, children, footer, width = 'max-w-2xl' }: {
+  open: boolean
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: ReactNode
+  footer?: ReactNode
+  width?: string
+}) {
+  const panelRef = useRef<HTMLElement>(null)
+  const previousFocus = useRef<HTMLElement | null>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+
+  useEffect(() => {
+    if (!open) return
+    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    panelRef.current?.focus()
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeRef.current()
+    }
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      previousFocus.current?.focus()
+    }
+  }, [open])
+
+  if (!open) return null
+  return <div className="fixed inset-0 z-[70] flex justify-end" role="presentation">
+    <button type="button" aria-label="关闭详情抽屉" className="absolute inset-0 cursor-default bg-black/35" onClick={onClose} />
+    <aside ref={panelRef} tabIndex={-1} role="dialog" aria-modal="true" aria-label={title}
+      className={`relative flex h-full w-full ${width} flex-col border-l border-border-subtle bg-surface-base shadow-2xl outline-none motion-safe:animate-in motion-safe:slide-in-from-right-4 motion-safe:duration-200 motion-reduce:animate-none`}>
+      <header className="flex shrink-0 items-start justify-between gap-4 border-b border-border-subtle px-5 py-4">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-text-primary">{title}</h2>
+          {subtitle && <p className="mt-1 text-xs leading-5 text-text-muted">{subtitle}</p>}
+        </div>
+        <button type="button" className={`${ctlGhost} -mr-2 -mt-1 shrink-0`} onClick={onClose} aria-label="关闭">
+          <X size={16} aria-hidden="true" />
+        </button>
+      </header>
+      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">{children}</div>
+      {footer && <footer className="shrink-0 border-t border-border-subtle px-5 py-3">{footer}</footer>}
+    </aside>
+  </div>
+}
+
+export function Pagination({ page, pageSize, total, onPageChange, onPageSizeChange, pageSizes = [10, 20, 50] }: {
+  page: number
+  pageSize: number
+  total: number
+  onPageChange: (page: number) => void
+  onPageSizeChange?: (pageSize: number) => void
+  pageSizes?: number[]
+}) {
+  if (total <= 0) return null
+  const pageCount = Math.max(1, Math.ceil(total / pageSize))
+  const currentPage = Math.min(page + 1, pageCount)
+  return <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-3">
+    <p className="text-[11px] text-text-muted">共 {total} 条</p>
+    <div className="flex items-center gap-2">
+      {onPageSizeChange && <label className="flex items-center gap-1.5 text-[11px] text-text-muted">每页
+        <select aria-label="每页条数" value={pageSize} onChange={event => { onPageSizeChange(Number(event.target.value)); onPageChange(0) }} className={ctl}>
+          {pageSizes.map(size => <option key={size} value={size}>{size}</option>)}
+        </select>
+      </label>}
+      <button type="button" className={ctl} disabled={page <= 0} onClick={() => onPageChange(page - 1)}>上一页</button>
+      <span className="min-w-20 text-center text-[11px] text-text-muted">第 {currentPage} / {pageCount} 页</span>
+      <button type="button" className={ctl} disabled={page >= pageCount - 1} onClick={() => onPageChange(page + 1)}>下一页</button>
+    </div>
+  </div>
 }
 
 export function timeShort(value?: string | null): string {
