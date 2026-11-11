@@ -1,5 +1,6 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { expect, it, vi } from 'vitest'
 import { evaluationService } from '@/api/evaluation'
 import CompareTab from './CompareTab'
@@ -28,8 +29,9 @@ it('用例详情挂载人工评审，并明确标记不进入自动门禁', asyn
   const container = document.createElement('div')
   document.body.appendChild(container)
   const root = createRoot(container)
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } })
   try {
-    await act(async () => { root.render(<CompareTab />) })
+    await act(async () => { root.render(<QueryClientProvider client={queryClient}><CompareTab /></QueryClientProvider>) })
     const selects = container.querySelectorAll('select')
     await act(async () => {
       ;(selects[1] as HTMLSelectElement).value = 'baseline-run'
@@ -41,13 +43,16 @@ it('用例详情挂载人工评审，并明确标记不进入自动门禁', asyn
     await act(async () => { compare!.click() })
     const detail = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('详情'))
     await act(async () => { detail!.click() })
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
 
     expect(container.textContent).toContain('人工评审仅作校准记录，不进入自动门禁。')
+    expect(container.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('用例详情（对比侧）')
     const review = container.querySelector('[data-testid="human-review"]')
     expect(review?.getAttribute('data-run-id')).toBe('candidate-run')
     expect(review?.getAttribute('data-case-id')).toBe('case-1')
   } finally {
     await act(async () => root.unmount())
+    queryClient.clear()
     container.remove()
     vi.restoreAllMocks()
   }

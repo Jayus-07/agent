@@ -1920,7 +1920,10 @@ async def get_eval_run_case_detail(
             "cost_status": "available" if stored["cost_amount"] is not None else "not_reported_by_legacy_runner",
         }
     except FileNotFoundError as exc:
-        raise HTTPException(503, "评测逐题产物暂不可用") from exc
+        raise HTTPException(
+            404,
+            "该运行的逐题报告文件未找到，无法查看完整回答和证据。请重新运行评测生成新报告。",
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — 不把文件路径或内部产物错误返回客户端
         _safe_error(exc)
 

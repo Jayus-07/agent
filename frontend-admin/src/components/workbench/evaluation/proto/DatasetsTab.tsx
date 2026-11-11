@@ -14,6 +14,7 @@ import {
   type EvaluationV2Candidate,
   type EvaluationV2Dataset,
   type EvaluationV2DatasetVersion,
+  type EvaluationV2EvaluatorVersion,
 } from '@/api/evaluation'
 import { evaluationAssets, type EvaluationTask, type ImportManifest } from '@/api/evaluation-assets'
 import { createIdempotencyKey } from '@/api/client'
@@ -26,13 +27,17 @@ import {
   type FeedbackCandidate,
 } from '@/api/feedbackCandidates'
 import { listKbAuthority, type KbAuthorityItem } from '@/api/knowledge'
-import { Badge, Card, ctl, ctlGhost, ctlPrimary, Empty, StatusBadge, TableWrap, Td, Th, timeShort } from './evalUi'
+import { Badge, Card, ctl, ctlGhost, ctlPrimary, Drawer, Empty, Pagination, StatusBadge, TableWrap, Td, Th, timeShort } from './evalUi'
 import EvidenceSearchPicker from './EvidenceSearchPicker'
 
 type View = { kind: 'list' } | { kind: 'edit'; dataset: EvaluationV2Dataset } | { kind: 'history'; dataset: EvaluationV2Dataset }
 
 const MODULE_FILTERS = ['all', 'rag', 'cs', 'sql', 'planner', 'travel'] as const
 const MODULE_LABELS: Record<string, string> = { all: '全部模块', rag: 'RAG', cs: '客服', sql: 'SQL', planner: '路由', travel: '旅游' }
+const V2_RUNNER_MODULES = new Set(['rag', 'cs', 'sql', 'e2e', 'travel', 'travel-provider'])
+const CONTRACT_ONLY_MODULES = new Set(['sql', 'cs', 'e2e'])
+const DATASET_PAGE_SIZE = 10
+const CANDIDATE_PAGE_SIZE = 10
 
 interface EvidenceClaimLike { kb_id?: string; doc_id?: string; doc_version?: string; quote?: string }
 
@@ -63,11 +68,21 @@ function candidateQuery(candidate: EvaluationV2Candidate): string {
   return String(input.query || '')
 }
 
-export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: string) => void }) {
+function isTraceCandidate(candidate: EvaluationV2Candidate): boolean {
+  const payload = candidate.payload_json as Record<string, Record<string, unknown>> | null
+  const metadata = (payload?.metadata || {}) as Record<string, unknown>
+  const sourceRef = (payload?.source_ref || {}) as Record<string, unknown>
+  return candidate.source_kind === 'trace' || metadata.source === 'production_trace' || Boolean(sourceRef.trace_id)
+}
+
+export default function DatasetsTab({ onGoRuns, onGoTraces }: { onGoRuns: (datasetKey?: string) => void; onGoTraces?: () => void }) {
   const [datasets, setDatasets] = useState<EvaluationV2Dataset[]>([])
   const [candidates, setCandidates] = useState<EvaluationV2Candidate[]>([])
   const [feedbackCandidates, setFeedbackCandidates] = useState<FeedbackCandidate[]>([])
   const [feedbackStatusFilter, setFeedbackStatusFilter] = useState<CandidateStatus | 'all'>('pending')
+  const [datasetPage, setDatasetPage] = useState(0)
+  const [feedbackPage, setFeedbackPage] = useState(0)
+  const [traceCandidatePage, setTraceCandidatePage] = useState(0)
   const [feedbackNotes, setFeedbackNotes] = useState<Record<string, string>>({})
   const [feedbackLoading, setFeedbackLoading] = useState(true)
   const [feedbackBusyId, setFeedbackBusyId] = useState('')
@@ -79,6 +94,7 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
   const [genOpen, setGenOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
+  const [configureDataset, setConfigureDataset] = useState<EvaluationV2Dataset | null>(null)
   const [view, setView] = useState<View>({ kind: 'list' })
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -94,7 +110,7 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
         listKbAuthority().catch(() => ({ knowledge_bases: [] as KbAuthorityItem[] })),
       ])
       setDatasets(ds); setCandidates(pending)
-      setKbs(kbCatalog.knowledge_bases.filter(item => item.active && !item.alias_for && !item.deprecated))
+      setKbs(kbCatalog.knowledge_bases.filter(item => item.active && item.audience === 'test' && !item.alias_for && !item.deprecated))
     } catch (e) { setError(e instanceof Error ? e.message : '读取数据集失败') }
     finally { setLoading(false) }
   }, [])
@@ -120,6 +136,10 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
   }
 
   const visibleFeedbackCandidates = useMemo(() => feedbackCandidates.filter(item => feedbackStatusFilter === 'all' || item.status === feedbackStatusFilter), [feedbackCandidates, feedbackStatusFilter])
+  const traceCandidates = useMemo(() => candidates.filter(isTraceCandidate), [candidates])
+  const currentDatasets = filtered.slice(datasetPage * DATASET_PAGE_SIZE, (datasetPage + 1) * DATASET_PAGE_SIZE)
+  const currentFeedback = visibleFeedbackCandidates.slice(feedbackPage * CANDIDATE_PAGE_SIZE, (feedbackPage + 1) * CANDIDATE_PAGE_SIZE)
+  const currentTraceCandidates = traceCandidates.slice(traceCandidatePage * CANDIDATE_PAGE_SIZE, (traceCandidatePage + 1) * CANDIDATE_PAGE_SIZE)
 
   const reviewFeedback = async (candidate: FeedbackCandidate, decision: 'approve' | 'reject') => {
     setFeedbackBusyId(candidate.candidate_id); setFeedbackError(''); setFeedbackMessage('')
@@ -147,29 +167,54 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
 
   return <div className="space-y-4">
     {view.kind === 'list' && <>
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border-subtle bg-surface-base p-2.5">
         <label className="flex items-center gap-1.5 rounded-md border border-border-subtle bg-surface-base px-2.5">
           <Search size={14} className="text-text-muted" aria-hidden="true" />
-          <input aria-label="搜索数据集名称" placeholder="搜索数据集名称" value={search} onChange={e => setSearch(e.target.value)} className="h-8 w-44 bg-transparent text-xs text-text-primary outline-none" />
+          <input aria-label="搜索数据集名称" placeholder="搜索数据集名称或标识" value={search} onChange={e => { setSearch(e.target.value); setDatasetPage(0) }} className="h-8 w-52 bg-transparent text-xs text-text-primary outline-none" />
         </label>
-        <select aria-label="按模块筛选" value={moduleFilter} onChange={e => setModuleFilter(e.target.value)} className={ctl}>
+        <select aria-label="按模块筛选" value={moduleFilter} onChange={e => { setModuleFilter(e.target.value); setDatasetPage(0) }} className={ctl}>
           {MODULE_FILTERS.map(m => <option key={m} value={m}>{MODULE_LABELS[m]}</option>)}
         </select>
         <span className="flex-1" />
-        <button type="button" className={ctl} onClick={() => setGenOpen(v => !v)}><Sparkles size={13} className="mr-1 inline" aria-hidden="true" />从知识库生成</button>
-        <a className={`${ctl} inline-flex items-center`} href="/observability/monitoring?tab=traces" title="在执行记录中把失败会话一键转为评测候选">从 Trace 添加</a>
+        <button type="button" className={ctl} onClick={() => setGenOpen(true)}><Sparkles size={13} className="mr-1 inline" aria-hidden="true" />从知识库生成</button>
         <button type="button" className={ctl} onClick={() => setImportOpen(true)}><Upload size={13} className="mr-1 inline" aria-hidden="true" />导入数据集</button>
-        <button type="button" className={ctlPrimary} onClick={() => setNewOpen(v => !v)}><Plus size={13} className="mr-1 inline" aria-hidden="true" />新建数据集</button>
+        <button type="button" className={ctl} onClick={onGoTraces}><Plus size={13} className="mr-1 inline" aria-hidden="true" />失败 Trace 回流</button>
+        <button type="button" className={ctlPrimary} onClick={() => setNewOpen(true)}><Plus size={13} className="mr-1 inline" aria-hidden="true" />新建数据集</button>
       </div>
 
       {error && <p role="alert" className="rounded-md border border-red-200 p-2.5 text-xs text-red-700">{error}</p>}
       {message && <p role="status" className="text-xs text-text-secondary">{message}</p>}
 
-      <Card title="反馈候选" subtitle="来源=feedback。审核通过后才能晋升为评测用例；重复晋升由服务端幂等处理。">
+      <Card title="评测数据集" subtitle="发布后用于配置评测方案；已发布版本不可变，编辑会生成新版本。">
+        {loading ? <Empty text="正在读取数据集…" /> : filtered.length === 0
+          ? <Empty text={datasets.length ? '没有匹配的数据集。' : '还没有数据集：从知识库生成、导入或新建。'} />
+          : <TableWrap minWidth={860}>
+            <thead className="bg-bg-elevated"><tr><Th>数据集</Th><Th>模块</Th><Th end>用例数</Th><Th>当前版本</Th><Th>状态</Th><Th>更新时间</Th><Th end>操作</Th></tr></thead>
+            <tbody className="divide-y divide-border-subtle">
+              {currentDatasets.map(item => <tr key={item.dataset_id}>
+                <Td><span className="block font-medium text-text-primary">{item.name}</span><span className="block font-mono text-[11px] text-text-muted">{item.dataset_key}</span></Td>
+                <Td>{MODULE_LABELS[item.domain] || item.domain}</Td>
+                <Td end>{item.case_count ?? 0}</Td>
+                <Td>{item.latest_version
+                  ? <button type="button" title="查看版本历史" onClick={() => setView({ kind: 'history', dataset: item })} className="font-medium text-accent underline decoration-dotted underline-offset-4 hover:decoration-solid">v{item.latest_version}</button>
+                  : '—'}{item.latest_status === 'draft' && <Badge text="草稿" tone="warn" />}</Td>
+                <Td><StatusBadge status={item.latest_status === 'draft' ? 'draft' : item.version_count ? 'published' : 'draft'} /></Td>
+                <Td>{timeShort(item.updated_at)}</Td>
+                <Td end>
+                  <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setView({ kind: 'edit', dataset: item })}><Pencil size={12} className="mr-1 inline" aria-hidden="true" />编辑</button>
+                  <button type="button" className={ctl} onClick={() => setConfigureDataset(item)}><Play size={12} className="mr-1 inline" aria-hidden="true" />配置评测</button>
+                </Td>
+              </tr>)}
+            </tbody>
+          </TableWrap>}
+        <Pagination page={datasetPage} pageSize={DATASET_PAGE_SIZE} total={filtered.length} onPageChange={setDatasetPage} />
+      </Card>
+
+      <Card title="反馈候选" subtitle="审核通过后才能晋升为评测用例；重复晋升由服务端幂等处理。">
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <Badge text="source=feedback" tone="accent" />
           <label className="flex items-center gap-2 text-xs text-text-secondary">状态筛选
-            <select aria-label="反馈候选状态筛选" value={feedbackStatusFilter} onChange={event => setFeedbackStatusFilter(event.target.value as CandidateStatus | 'all')} className={ctl}>
+            <select aria-label="反馈候选状态筛选" value={feedbackStatusFilter} onChange={event => { setFeedbackStatusFilter(event.target.value as CandidateStatus | 'all'); setFeedbackPage(0) }} className={ctl}>
               <option value="pending">待审核</option><option value="approved">已批准</option><option value="rejected">已拒绝</option><option value="promoted">已晋升</option><option value="all">全部状态</option>
             </select>
           </label>
@@ -180,7 +225,7 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
         {feedbackLoading ? <Empty text="正在读取反馈候选…" /> : visibleFeedbackCandidates.length === 0
           ? <Empty text={feedbackCandidates.length ? '当前状态下没有反馈候选。' : '暂无来源为 feedback 的候选。'} />
           : <div className="space-y-2">
-            {visibleFeedbackCandidates.map(candidate => <article key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
+            {currentFeedback.map(candidate => <article key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge text={candidate.status} tone={candidate.status === 'approved' ? 'good' : candidate.status === 'rejected' ? 'bad' : candidate.status === 'pending' ? 'warn' : 'gray'} />
                 <Badge text={candidate.module || '未知模块'} tone="gray" />
@@ -202,36 +247,37 @@ export default function DatasetsTab({ onGoRuns }: { onGoRuns: (datasetKey?: stri
               {candidate.status === 'promoted' && <p className="mt-2 text-xs text-text-muted">已晋升至评测用例，不会重复追加。</p>}
             </article>)}
           </div>}
+        <Pagination page={feedbackPage} pageSize={CANDIDATE_PAGE_SIZE} total={visibleFeedbackCandidates.length} onPageChange={setFeedbackPage} />
       </Card>
 
-      {genOpen && <GeneratePanel kbs={kbs} onDone={() => void load()} />}
-      {newOpen && <NewDatasetForm onDone={() => { setNewOpen(false); void load() }} />}
-      {importOpen && <ImportWizard onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); void load() }} />}
-
-      <Card>
-        {loading ? <Empty text="正在读取数据集…" /> : filtered.length === 0
-          ? <Empty text={datasets.length ? '没有匹配的数据集。' : '还没有数据集：从知识库生成、导入或新建。'} />
-          : <TableWrap minWidth={860}>
-            <thead className="bg-bg-elevated"><tr><Th>数据集</Th><Th>模块</Th><Th end>用例数</Th><Th>当前版本</Th><Th>状态</Th><Th>更新时间</Th><Th end>操作</Th></tr></thead>
+      <Card title="Trace 回流候选" subtitle="Trace 原始回答只是问题线索；人工核验参考答案与证据后，才能进入数据集新版本。">
+        {candidates.filter(isTraceCandidate).length === 0 ? <Empty text="暂无 Trace 回流候选；可从“失败 Trace”页选择一条服务端异常记录收录。" />
+          : <TableWrap minWidth={780}>
+            <thead className="bg-bg-elevated"><tr><Th>Trace / 候选</Th><Th>用户问题</Th><Th>目标数据集</Th><Th>状态</Th><Th end>操作</Th></tr></thead>
             <tbody className="divide-y divide-border-subtle">
-              {filtered.map(item => <tr key={item.dataset_id}>
-                <Td><span className="block font-medium text-text-primary">{item.name}</span><span className="block font-mono text-[11px] text-text-muted">{item.dataset_key}</span></Td>
-                <Td>{MODULE_LABELS[item.domain] || item.domain}</Td>
-                <Td end>{item.case_count ?? 0}</Td>
-                <Td>{item.latest_version
-                  ? <button type="button" title="查看版本历史" onClick={() => setView({ kind: 'history', dataset: item })} className="font-medium text-accent underline decoration-dotted underline-offset-4 hover:decoration-solid">v{item.latest_version}</button>
-                  : '—'}{item.latest_status === 'draft' && <Badge text="草稿" tone="warn" />}</Td>
-                <Td><StatusBadge status={item.latest_status === 'draft' ? 'draft' : item.version_count ? 'published' : 'draft'} /></Td>
-                <Td>{timeShort(item.updated_at)}</Td>
-                <Td end>
-                  <button type="button" className={`${ctlGhost} mr-1`} onClick={() => setView({ kind: 'edit', dataset: item })}><Pencil size={12} className="mr-1 inline" aria-hidden="true" />编辑</button>
-                  <button type="button" className={ctl} onClick={() => onGoRuns(item.dataset_key)}><Play size={12} className="mr-1 inline" aria-hidden="true" />发起评测</button>
-                </Td>
-              </tr>)}
+              {currentTraceCandidates.map(candidate => {
+                const key = candidateDatasetKey(candidate)
+                const target = datasets.find(item => item.dataset_key === key)
+                const payload = candidate.payload_json as Record<string, Record<string, unknown>> | null
+                const sourceRef = (payload?.source_ref || {}) as Record<string, unknown>
+                return <tr key={candidate.candidate_id}>
+                  <Td><span className="block font-mono text-[11px] text-text-primary">{String(sourceRef.trace_id || candidate.candidate_id).slice(0, 20)}</span><span className="text-[11px] text-text-muted">{candidate.candidate_id.slice(0, 8)}</span></Td>
+                  <Td className="max-w-[300px]"><span className="line-clamp-2 text-text-primary">{candidateQuery(candidate) || '未记录问题'}</span></Td>
+                  <Td>{target ? `${target.name} · ${MODULE_LABELS[target.domain] || target.domain}` : key || '未关联'}</Td>
+                  <Td><Badge text={candidate.review_status === 'in_review' ? '待核验' : candidate.review_status} tone="warn" /></Td>
+                  <Td end>{target ? <button type="button" className={ctlGhost} onClick={() => setView({ kind: 'edit', dataset: target })}>去核验</button> : <span className="text-[11px] text-amber-700">未关联数据集</span>}</Td>
+                </tr>
+              })}
             </tbody>
           </TableWrap>}
-        <p className="mt-2.5 text-xs text-text-muted">草稿可直接编辑；已发布版本被历史运行锁定，编辑将派生新草稿版本，保存即版本号 +1。</p>
+        <Pagination page={traceCandidatePage} pageSize={CANDIDATE_PAGE_SIZE} total={traceCandidates.length} onPageChange={setTraceCandidatePage} />
+        <p className="mt-2 text-[11px] text-text-muted">待审核候选最多读取最近 200 条；候选仍保存在服务端，已批准/已拒绝记录不计入此列表。</p>
       </Card>
+
+      {genOpen && <Drawer open title="从知识库生成评测题" subtitle="自动冻结知识库快照，生成结果先进入候选池待核验。" onClose={() => setGenOpen(false)} width="max-w-4xl"><GeneratePanel kbs={kbs} onDone={() => void load()} /></Drawer>}
+      {configureDataset && <Drawer open title="配置评测方案" subtitle="绑定一个已发布数据集版本和当前 Runner 支持的评分器；发布后可从运行页启动。" onClose={() => setConfigureDataset(null)} width="max-w-3xl"><ConfigureSuitePanel dataset={configureDataset} onDone={suiteVersionId => { setConfigureDataset(null); onGoRuns(suiteVersionId) }} /></Drawer>}
+      {newOpen && <Drawer open title="新建数据集" subtitle="创建数据集后，可导入或生成候选，再审核并发布版本。" onClose={() => setNewOpen(false)} width="max-w-2xl"><NewDatasetForm onDone={() => { setNewOpen(false); void load() }} /></Drawer>}
+      {importOpen && <ImportWizard onClose={() => setImportOpen(false)} onDone={() => { setImportOpen(false); void load() }} />}
     </>}
 
     {view.kind === 'edit' && <EditView
@@ -260,7 +306,7 @@ function NewDatasetForm({ onDone }: { onDone: () => void }) {
   const [description, setDescription] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  return <Card title="新建数据集" subtitle="创建后通过导入 / 生成写入草稿候选，审核批准后发布版本。">
+  return <Card className="border-0">
     <div className="grid gap-3 sm:grid-cols-4">
       <input aria-label="数据集标识" placeholder="标识（如 rag-baseline）" value={key} onChange={e => setKey(e.target.value)} className={ctl} />
       <input aria-label="数据集名称" placeholder="名称" value={name} onChange={e => setName(e.target.value)} className={ctl} />
@@ -281,70 +327,295 @@ function NewDatasetForm({ onDone }: { onDone: () => void }) {
   </Card>
 }
 
+function compatibleEvaluator(
+  item: EvaluationV2EvaluatorVersion,
+  binding: 'answer_quality' | 'evidence_quality',
+  module: string,
+): boolean {
+  if (item.status !== 'published') return false
+  if (binding === 'answer_quality' && item.evaluator_kind !== 'deterministic') return false
+  if (binding === 'evidence_quality' && item.evaluator_kind !== 'evidence') return false
+  const adapter = String(item.config_json.adapter || '')
+  const expected = module === 'rag'
+    ? binding === 'answer_quality' ? 'legacy-rag-answer-status-v1' : 'legacy-rag-evidence-metrics-v1'
+    : `legacy-${module}-result-status-v1`
+  return !adapter || adapter === expected
+}
+
+function ConfigureSuitePanel({ dataset, onDone }: { dataset: EvaluationV2Dataset; onDone: (suiteVersionId: string) => void }) {
+  const [versions, setVersions] = useState<EvaluationV2DatasetVersion[]>([])
+  const [evaluators, setEvaluators] = useState<EvaluationV2EvaluatorVersion[]>([])
+  const [versionId, setVersionId] = useState('')
+  const [answerEvaluatorId, setAnswerEvaluatorId] = useState('')
+  const [evidenceEvaluatorId, setEvidenceEvaluatorId] = useState('')
+  const [suiteName, setSuiteName] = useState(`${dataset.name}评测方案`)
+  const [suiteVersion, setSuiteVersion] = useState('1.0.0')
+  const [minimumValidSamples, setMinimumValidSamples] = useState(1)
+  const [minimumPassRate, setMinimumPassRate] = useState('0.95')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [draftSuiteVersionId, setDraftSuiteVersionId] = useState('')
+
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      evaluationService.listV2DatasetVersions(dataset.dataset_id),
+      evaluationService.listV2Evaluators(),
+    ]).then(([items, evaluatorItems]) => {
+      if (!active) return
+      const publishedVersions = items.filter(item => item.status === 'published')
+      setVersions(publishedVersions)
+      setEvaluators(evaluatorItems)
+      setVersionId(publishedVersions[0]?.dataset_version_id || '')
+      const answers = evaluatorItems.filter(item => compatibleEvaluator(item, 'answer_quality', dataset.domain))
+      const evidence = evaluatorItems.filter(item => compatibleEvaluator(item, 'evidence_quality', dataset.domain))
+      setAnswerEvaluatorId(answers[0]?.evaluator_version_id || '')
+      setEvidenceEvaluatorId(evidence[0]?.evaluator_version_id || '')
+      setMinimumValidSamples(publishedVersions[0]?.case_count || 1)
+    }).catch((cause: unknown) => {
+      if (active) setError(cause instanceof Error ? cause.message : '读取发布版本或评分器失败')
+    }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [dataset.dataset_id, dataset.domain])
+
+  const selectedVersion = versions.find(item => item.dataset_version_id === versionId)
+  const answerOptions = evaluators.filter(item => compatibleEvaluator(item, 'answer_quality', dataset.domain))
+  const evidenceOptions = evaluators.filter(item => compatibleEvaluator(item, 'evidence_quality', dataset.domain))
+  const moduleSupported = V2_RUNNER_MODULES.has(dataset.domain)
+  const isRag = dataset.domain === 'rag'
+  const minimumPassRateNumber = Number(minimumPassRate)
+  const ready = moduleSupported && Boolean(selectedVersion) && Boolean(answerEvaluatorId)
+    && (!isRag || Boolean(evidenceEvaluatorId))
+    && suiteName.trim().length > 0 && /^\d+\.\d+\.\d+$/.test(suiteVersion)
+    && Number.isInteger(minimumValidSamples) && minimumValidSamples >= 1
+    && minimumValidSamples <= (selectedVersion?.case_count || 0)
+    && Number.isFinite(minimumPassRateNumber) && minimumPassRateNumber >= 0 && minimumPassRateNumber <= 1
+
+  const publishDraft = async (suiteVersionId: string) => {
+    await evaluationService.publishV2Suite(suiteVersionId)
+    onDone(suiteVersionId)
+  }
+
+  const createAndPublish = async () => {
+    if (!selectedVersion || !ready) return
+    setBusy(true); setError('')
+    try {
+      const safeKey = dataset.dataset_key.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^[^a-z]+/, '').slice(0, 36) || 'dataset'
+      const suiteKey = `eval_${safeKey}_${Date.now().toString(36)}`.slice(0, 64)
+      const evaluatorVersions = [
+        { evaluator_version_id: answerEvaluatorId, binding: 'answer_quality' },
+        ...(isRag ? [{ evaluator_version_id: evidenceEvaluatorId, binding: 'evidence_quality' }] : []),
+      ]
+      const created = await evaluationService.createV2Suite({
+        suite_key: suiteKey,
+        name: suiteName.trim(),
+        module: dataset.domain,
+        dataset_version_id: selectedVersion.dataset_version_id,
+        version: suiteVersion,
+        case_selection: {},
+        evaluator_versions: evaluatorVersions,
+        metric_policy: { min_pass_rate: minimumPassRateNumber },
+        security_policy: {},
+        minimum_valid_samples: minimumValidSamples,
+      })
+      setDraftSuiteVersionId(created.suite_version_id)
+      await publishDraft(created.suite_version_id)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '创建或发布方案失败；若草稿已创建，可重试发布。')
+    } finally { setBusy(false) }
+  }
+
+  const retryPublish = async () => {
+    if (!draftSuiteVersionId) return
+    setBusy(true); setError('')
+    try { await publishDraft(draftSuiteVersionId) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : '重试发布失败') }
+    finally { setBusy(false) }
+  }
+
+  return <div className="space-y-4">
+    {loading ? <Empty text="正在读取数据集发布版本和兼容评分器…" /> : <>
+      {!moduleSupported && <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{dataset.domain === 'planner' ? 'Planner 尚未接入 V2 Runner，当前不能创建可运行方案。' : `模块 ${dataset.domain} 尚未接入 V2 Runner。`}</p>}
+      {CONTRACT_ONLY_MODULES.has(dataset.domain) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">当前模块只能做契约检查；运行 Gate 会是 INVALID，不可作为业务质量基线。</p>}
+      {versions.length === 0
+        ? <Empty text="该数据集还没有已发布版本。先完成人工核验并发布 DatasetVersion，再配置方案。" />
+        : <>
+          <label className="block text-xs text-text-secondary">数据集版本
+            <select aria-label="方案数据集版本" value={versionId} onChange={event => {
+              const next = versions.find(item => item.dataset_version_id === event.target.value)
+              setVersionId(event.target.value)
+              setMinimumValidSamples(next?.case_count || 1)
+            }} className={`${ctl} mt-1 w-full`}>
+              {versions.map(item => <option key={item.dataset_version_id} value={item.dataset_version_id}>v{item.version} · {item.case_count || 0} 条 · {item.content_hash.slice(0, 12)}</option>)}
+            </select>
+          </label>
+          {selectedVersion && <div className="rounded-md bg-bg-elevated p-3 text-xs text-text-secondary">
+            <p><b className="text-text-primary">固定范围：</b>{dataset.name} · v{selectedVersion.version} · {selectedVersion.case_count || 0} 条</p>
+            <p className="mt-1 break-all font-mono text-[11px] text-text-muted">DatasetVersion {selectedVersion.dataset_version_id} · SHA256 {selectedVersion.content_hash}</p>
+          </div>}
+          <label className="block text-xs text-text-secondary">方案名称
+            <input aria-label="方案名称" value={suiteName} maxLength={160} onChange={event => setSuiteName(event.target.value)} className={`${ctl} mt-1 w-full`} />
+          </label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="block text-xs text-text-secondary">方案版本
+              <input aria-label="方案版本" value={suiteVersion} onChange={event => setSuiteVersion(event.target.value)} placeholder="1.0.0" className={`${ctl} mt-1 w-full`} />
+            </label>
+            <label className="block text-xs text-text-secondary">最少有效样本
+              <input aria-label="最少有效样本" type="number" min={1} max={selectedVersion?.case_count || 1} value={minimumValidSamples} onChange={event => setMinimumValidSamples(Number(event.target.value))} className={`${ctl} mt-1 w-full`} />
+            </label>
+            <label className="block text-xs text-text-secondary">最低通过率
+              <input aria-label="最低通过率" type="number" min={0} max={1} step={0.01} value={minimumPassRate} onChange={event => setMinimumPassRate(event.target.value)} className={`${ctl} mt-1 w-full`} />
+            </label>
+          </div>
+          <div className={`grid gap-3 ${isRag ? 'sm:grid-cols-2' : 'sm:grid-cols-1'}`}>
+            <label className="block text-xs text-text-secondary">答案质量评分器
+              <select aria-label="答案质量评分器" value={answerEvaluatorId} onChange={event => setAnswerEvaluatorId(event.target.value)} className={`${ctl} mt-1 w-full`}>
+                <option value="">选择已发布的确定性评分器</option>
+                {answerOptions.map(item => <option key={item.evaluator_version_id} value={item.evaluator_version_id}>{item.evaluator_key}@{item.version}</option>)}
+              </select>
+            </label>
+            {isRag && <label className="block text-xs text-text-secondary">检索证据评分器
+              <select aria-label="检索证据评分器" value={evidenceEvaluatorId} onChange={event => setEvidenceEvaluatorId(event.target.value)} className={`${ctl} mt-1 w-full`}>
+                <option value="">选择已发布的证据评分器</option>
+                {evidenceOptions.map(item => <option key={item.evaluator_version_id} value={item.evaluator_version_id}>{item.evaluator_key}@{item.version}</option>)}
+              </select>
+            </label>}
+          </div>
+          {moduleSupported && !answerOptions.length && <p role="alert" className="text-xs text-amber-800">没有兼容的已发布答案评分器，需先在 V2 评分器管理中发布 deterministic 版本。</p>}
+          {isRag && !evidenceOptions.length && <p role="alert" className="text-xs text-amber-800">RAG 还需要已发布的 evidence 评分器，确保检索证据质量单独计分。</p>}
+          <p className="text-[11px] leading-5 text-text-muted">发布会固定数据集哈希、全部用例修订、评分器版本和门槛。RAG 的检索证据评分与答案质量评分分别绑定；发布后不可编辑，调整配置需创建新方案版本。</p>
+        </>}
+    </>}
+    {error && <p role="alert" className="rounded-md border border-red-200 p-3 text-xs text-red-800">{error}</p>}
+    {draftSuiteVersionId && error && <button type="button" className={ctl} disabled={busy} onClick={() => void retryPublish()}>{busy ? '发布中…' : '重试发布草稿方案'}</button>}
+    {versions.length > 0 && <div className="flex justify-end">
+      <button type="button" className={ctlPrimary} disabled={loading || busy || !ready || Boolean(draftSuiteVersionId)} onClick={() => void createAndPublish()}>{busy ? '正在固定并发布…' : '创建并发布方案，进入运行页'}</button>
+    </div>}
+  </div>
+}
+
 const TASK_STATUS_LABELS: Record<string, string> = { PENDING: '排队中', RUNNING: '正在生成', RETRYING: '等待自动重试', SUCCESS: '生成完成', FAILED: '生成失败', CANCELLED: '已取消', PAUSED: '已暂停' }
 
+interface GenerationBatch {
+  key: string
+  kbId: string
+  kbName: string
+  datasetKey: string
+  batchIndex: number
+  batchCount: number
+  count: number
+  status: string
+  taskId?: string
+  progress?: string
+  error?: string
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
 function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => void }) {
-  const [kbId, setKbId] = useState('')
+  const [search, setSearch] = useState('')
+  const [selectedKbIds, setSelectedKbIds] = useState<Set<string>>(new Set())
   const [count, setCount] = useState(5)
-  const [task, setTask] = useState<EvaluationTask | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [finished, setFinished] = useState(false)
-  // 提交前固化批次标识：轮询与预览拉取都按它过滤本批候选
-  const [datasetKey] = useState(() => `synthetic_${Date.now()}`)
-  const [datasetName, setDatasetName] = useState('')
+  const [batches, setBatches] = useState<GenerationBatch[]>([])
   const [preview, setPreview] = useState<EvaluationV2Candidate[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [adopting, setAdopting] = useState(false)
+  const visibleKbs = useMemo(() => kbs.filter(item => `${item.name} ${item.kb_id}`.toLowerCase().includes(search.trim().toLowerCase())), [kbs, search])
+  const selectedKbs = useMemo(() => kbs.filter(item => selectedKbIds.has(item.kb_id)), [kbs, selectedKbIds])
+  const allocations = useMemo(() => {
+    const result = new Map<string, number>()
+    if (!selectedKbs.length) return result
+    selectedKbs.forEach((item, index) => result.set(item.kb_id, Math.floor(count / selectedKbs.length) + (index < count % selectedKbs.length ? 1 : 0)))
+    return result
+  }, [count, selectedKbs])
+  const plannedBatches = useMemo(() => Array.from(allocations.entries()).filter(([, amount]) => amount > 0).reduce((sum, [, amount]) => sum + Math.ceil(amount / 5), 0), [allocations])
 
-  // 任务提交后实时轮询进度；终态自动刷新数据集与候选，用户无需手动刷新
-  useEffect(() => {
-    if (!task || ['SUCCESS', 'FAILED', 'CANCELLED'].includes(task.status)) return
-    let active = true
-    const timer = setInterval(() => {
-      void evaluationAssets.task(task.task_id).then(next => {
-        if (!active) return
-        setTask(next)
-        if (['SUCCESS', 'FAILED', 'CANCELLED'].includes(next.status)) {
-          setFinished(true)
-          if (next.status === 'SUCCESS') onDone()
+  const patchBatch = (key: string, patch: Partial<GenerationBatch>) => {
+    setBatches(current => current.map(item => item.key === key ? { ...item, ...patch } : item))
+  }
+
+  const submit = async () => {
+    if (!selectedKbs.length || busy) return
+    const timestamp = Date.now().toString(36)
+    const plan: GenerationBatch[] = selectedKbs.flatMap(kb => {
+      let remaining = allocations.get(kb.kb_id) || 0
+      if (remaining <= 0) return []
+      const datasetSlug = kb.kb_id.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 32) || 'kb'
+      const datasetKey = `synthetic_${datasetSlug}_${timestamp}`
+      const chunkCounts: number[] = []
+      while (remaining > 0) { const batchCount = Math.min(5, remaining); chunkCounts.push(batchCount); remaining -= batchCount }
+      return chunkCounts.map((batchCount, index) => ({
+        key: `${kb.kb_id}:${index + 1}`,
+        kbId: kb.kb_id,
+        kbName: kb.name,
+        datasetKey,
+        batchIndex: index + 1,
+        batchCount: chunkCounts.length,
+        count: batchCount,
+        status: '待提交',
+      }))
+    })
+    if (!plan.length) return
+    setBatches(plan); setBusy(true); setError(''); setFinished(false); setPreview(null)
+    const datasetKeys = new Set(plan.map(item => item.datasetKey))
+    const startedAt = new Date().toLocaleString('zh-CN')
+
+    for (const kb of selectedKbs.filter(item => (allocations.get(item.kb_id) || 0) > 0)) {
+      const kbBatches = plan.filter(item => item.kbId === kb.kb_id)
+      let snapshotId = ''
+      try {
+        kbBatches.forEach(item => patchBatch(item.key, { status: '冻结 KB 快照' }))
+        const snapshot = await evaluationAssets.freeze(kb.kb_id)
+        snapshotId = snapshot.snapshot_id
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : '冻结知识库快照失败'
+        kbBatches.forEach(item => patchBatch(item.key, { status: '失败', error: message }))
+        continue
+      }
+
+      for (const batch of kbBatches) {
+        try {
+          patchBatch(batch.key, { status: '提交中', progress: `快照 ${snapshotId.slice(0, 8)}` })
+          let task: EvaluationTask = await evaluationAssets.synthesize(
+            snapshotId,
+            { dataset_key: batch.datasetKey, name: `从知识库生成 · ${kb.name} · ${startedAt}`, module: 'rag', schema_version: 'rag-eval/1.0', version: '1.0.0', description: `来源知识库 ${kb.kb_id}，快照 ${snapshotId}` } as unknown as ImportManifest,
+            batch.count,
+            createIdempotencyKey(),
+          )
+          patchBatch(batch.key, { status: task.status, taskId: task.task_id, progress: task.progress })
+          while (!['SUCCESS', 'FAILED', 'CANCELLED'].includes(task.status)) {
+            await sleep(2500)
+            task = await evaluationAssets.task(task.task_id)
+            patchBatch(batch.key, { status: task.status, progress: task.progress })
+          }
+          patchBatch(batch.key, { status: task.status, progress: task.progress, ...(task.status === 'FAILED' ? { error: task.progress || '生成任务失败' } : {}) })
+        } catch (cause) {
+          patchBatch(batch.key, { status: 'FAILED', error: cause instanceof Error ? cause.message : '生成任务失败' })
         }
-      }).catch(() => undefined)
-    }, 2500)
-    return () => { active = false; clearInterval(timer) }
-  }, [task, onDone])
+      }
+    }
 
-  // 生成完成后拉取本批候选，进入原型的「生成结果预览」：勾选采纳，仅写入候选
-  useEffect(() => {
-    if (!finished || task?.status !== 'SUCCESS') return
-    let active = true
-    const timer = setInterval(() => {
-      void evaluationService.listV2Candidates('in_review', 200).then(items => {
-        if (!active) return
-        const mine = items.filter(item => candidateDatasetKey(item) === datasetKey)
-        if (mine.length > 0) {
-          setPreview(mine)
-          setPicked(new Set(mine.map(item => item.candidate_id)))
-          clearInterval(timer)
-        }
-      }).catch(() => undefined)
-    }, 1500)
-    const stop = setTimeout(() => { if (active) clearInterval(timer) }, 60000)
-    return () => { active = false; clearInterval(timer); clearTimeout(stop) }
-  }, [finished, task, datasetKey])
-
-  const submit = () => { setBusy(true); setError(''); setFinished(false); setPreview(null)
-    // 先冻结知识库语料快照（snapshot_id 为 24 位 hex），再基于快照提交合成任务
-    const generatedName = `从知识库生成 ${new Date().toLocaleString('zh-CN')}`
-    setDatasetName(generatedName)
-    evaluationAssets.freeze(kbId)
-      .then(snapshot => evaluationAssets.synthesize(
-        snapshot.snapshot_id,
-        { dataset_key: datasetKey, name: `从知识库生成 ${new Date().toLocaleString('zh-CN')}`, module: 'rag', schema_version: 'rag-eval/1.0', version: '1.0.0' } as unknown as ImportManifest,
-        count, createIdempotencyKey(),
-      ))
-      .then(task => setTask(task))
-      .catch((e: unknown) => setError(e instanceof Error ? e.message : '提交生成任务失败（生成依赖评测模型配置，请先在「模型与供应商」绑定 eval_gen 角色）')).finally(() => setBusy(false))
+    setFinished(true)
+    onDone()
+    try {
+      let candidates: EvaluationV2Candidate[] = []
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        const items = await evaluationService.listV2Candidates('in_review', 200)
+        candidates = items.filter(item => datasetKeys.has(candidateDatasetKey(item)))
+        if (candidates.length || attempt === 11) break
+        await sleep(1500)
+      }
+      setPreview(candidates)
+      setPicked(new Set(candidates.map(item => item.candidate_id)))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '读取生成候选失败；候选仍保存在待核验队列。')
+    } finally { setBusy(false) }
   }
 
   const adopt = () => {
@@ -358,31 +629,70 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
     }).finally(() => setAdopting(false))
   }
 
-  const running = task && !['SUCCESS', 'FAILED', 'CANCELLED'].includes(task.status)
-  return <Card title="从知识库生成评测题" subtitle="基于知识库语料（自动冻结快照）单跳合成：问题、参考答案与证据引用自动带出，预览勾选后写入候选。">
-    <div className="grid gap-3 sm:grid-cols-[2fr_1fr_auto]">
-      <select aria-label="知识库" value={kbId} onChange={e => setKbId(e.target.value)} className={ctl} disabled={Boolean(running)}>
-        <option value="">选择知识库</option>
-        {kbs.map(item => <option key={item.kb_id} value={item.kb_id}>{item.name} · {item.kb_id}</option>)}
-      </select>
-      <input aria-label="生成题数" type="number" min={1} max={5} value={count} onChange={e => setCount(Number(e.target.value) || 5)} className={ctl} disabled={Boolean(running)} />
-      <button type="button" className={ctlPrimary} disabled={busy || !kbId || Boolean(running)} onClick={submit}>{busy ? '冻结快照中…' : running ? '生成中…' : '开始生成'}</button>
+  return <Card className="border-0">
+    <p className="text-xs leading-5 text-text-muted">仅显示 `audience=test` 评测知识库，生成模型会读取所选库的冻结语料。每个知识库独立形成数据集；总量超过单任务 5 题时按同一 KB 快照自动拆批。</p>
+    <div className="mt-3 grid gap-4 lg:grid-cols-[1fr_1fr]">
+      <section className="rounded-md border border-border-subtle p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h4 className="text-xs font-medium text-text-primary">选择知识库</h4>
+          <input aria-label="搜索知识库" placeholder="搜索名称或标识" value={search} onChange={event => setSearch(event.target.value)} className={`${ctl} w-48`} disabled={busy} />
+        </div>
+        <div className="max-h-52 space-y-1 overflow-y-auto">
+          {visibleKbs.map(item => <label key={item.kb_id} className={`flex items-center gap-2 rounded px-2 py-2 text-xs ${item.doc_count ? 'text-text-secondary hover:bg-bg-elevated' : 'text-text-muted'}`}>
+            <input type="checkbox" aria-label={`选择知识库 ${item.kb_id}`} checked={selectedKbIds.has(item.kb_id)} disabled={busy || item.doc_count === 0} onChange={event => setSelectedKbIds(current => {
+              const next = new Set(current)
+              if (event.target.checked) next.add(item.kb_id); else next.delete(item.kb_id)
+              return next
+            })} />
+            <span className="min-w-0 flex-1 truncate">{item.name} · {item.kb_id}</span>
+            <span className="shrink-0 text-[11px] text-text-muted">{item.doc_count} 篇</span>
+          </label>)}
+          {visibleKbs.length === 0 && <Empty text={kbs.length ? '没有匹配的测试知识库。' : '当前账号无可用的 test audience 知识库。'} />}
+        </div>
+      </section>
+      <section className="rounded-md border border-border-subtle p-3">
+        <h4 className="text-xs font-medium text-text-primary">生成规模</h4>
+        <div className="mt-2 flex gap-2" role="radiogroup" aria-label="生成题数预设">
+          {[5, 10, 20].map(value => <button key={value} type="button" role="radio" aria-checked={count === value} className={count === value ? ctlPrimary : ctl} disabled={busy} onClick={() => setCount(value)}>{value} 题</button>)}
+        </div>
+        <p className="mt-3 text-[11px] text-text-muted">提交前分配预览（平均分配，余数按选择顺序分配）</p>
+        {selectedKbs.length === 0 ? <Empty text="先选择一个或多个有文档的测试知识库。" /> : <TableWrap minWidth={360}>
+          <thead className="bg-bg-elevated"><tr><Th>知识库来源</Th><Th end>候选题</Th><Th end>拆分任务</Th></tr></thead>
+          <tbody className="divide-y divide-border-subtle">{selectedKbs.map(item => {
+            const amount = allocations.get(item.kb_id) || 0
+            return <tr key={item.kb_id}><Td>{item.name}</Td><Td end>{amount}</Td><Td end>{amount ? Math.ceil(amount / 5) : '—'}</Td></tr>
+          })}</tbody>
+        </TableWrap>}
+        {selectedKbs.length > 0 && <p className="mt-2 text-[11px] text-text-muted">计划提交 {plannedBatches} 个任务；产出 {selectedKbs.filter(item => (allocations.get(item.kb_id) || 0) > 0).length} 个独立数据集。</p>}
+      </section>
     </div>
-    <p className="mt-2 text-xs text-text-muted">每批 1–5 题（保留预算余量）；需扩量可连续提交多批。生成依赖知识库语料与评测模型配置；冻结大知识库快照可能需要数十秒。</p>
+    <div className="mt-3 flex items-center justify-between gap-3">
+      <p className="text-[11px] text-text-muted">候选只进入人工待核验池；不跨 KB 混合集，也不会自动发布。</p>
+      <button type="button" className={ctlPrimary} disabled={busy || !selectedKbs.length || plannedBatches === 0} onClick={() => void submit()}>{busy ? '按知识库逐批生成…' : '开始生成'}</button>
+    </div>
     {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
-    {task && running && <div className="mt-2 flex items-center gap-2 rounded-md bg-bg-elevated p-2.5 text-xs text-text-secondary" role="status">
-      <span className="inline-block size-2 animate-pulse rounded-full bg-accent" aria-hidden="true"></span>
-      {TASK_STATUS_LABELS[task.status] || task.status}{task.progress ? ` · ${task.progress}` : ''}（任务 {task.task_id.slice(0, 8)}，完成后自动加载结果）
-    </div>}
+    {batches.length > 0 && <section className="mt-3 space-y-2" aria-label="生成任务进度">
+      <h4 className="text-xs font-medium text-text-primary">按知识库的批次进度</h4>
+      {batches.map(batch => <div key={batch.key} className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-bg-elevated px-3 py-2 text-[11px] text-text-secondary">
+        <span className="font-medium text-text-primary">{batch.kbName}</span>
+        <span>批次 {batch.batchIndex}/{batch.batchCount} · {batch.count} 题</span>
+        <Badge text={TASK_STATUS_LABELS[batch.status] || batch.status} tone={batch.status === 'SUCCESS' ? 'good' : batch.status === 'FAILED' ? 'bad' : ['待提交', '冻结 KB 快照', '提交中'].includes(batch.status) ? 'blue' : 'gray'} />
+        {batch.taskId && <span className="font-mono text-text-muted">Task {batch.taskId.slice(0, 8)}</span>}
+        {batch.progress && <span className="text-text-muted">{batch.progress}</span>}
+        {batch.error && <span role="alert" className="text-red-700">{batch.error}</span>}
+      </div>)}
+    </section>}
     {preview && preview.length > 0 && <div className="mt-3 space-y-2">
-      <p className="text-xs font-medium text-text-primary">生成结果预览<span className="ml-2 font-normal text-text-muted">（共 {preview.length} 条 · 勾选采纳，未勾选将被丢弃）</span></p>
-      <TableWrap minWidth={720}>
-        <thead className="bg-bg-elevated"><tr><Th>选</Th><Th>问题</Th><Th>参考答案</Th><Th>证据引用</Th><Th>校验</Th></tr></thead>
+      <p className="text-xs font-medium text-text-primary">生成候选预览<span className="ml-2 font-normal text-text-muted">（共 {preview.length} 条 · 按来源 KB 分开保留 · 勾选后继续人工核验）</span></p>
+      <TableWrap minWidth={860}>
+        <thead className="bg-bg-elevated"><tr><Th>选</Th><Th>知识库来源</Th><Th>问题</Th><Th>参考答案</Th><Th>证据引用</Th><Th>校验</Th></tr></thead>
         <tbody className="divide-y divide-border-subtle">
           {preview.map(item => {
             const payload = item.payload_json as Record<string, Record<string, unknown> | Array<Record<string, unknown>>> | null
             const facts = ((payload?.proposed_facts as Array<Record<string, unknown>> | undefined)?.[0] || {}) as { reference_answer?: string; required_facts?: string[] }
             const evidence = (payload?.proposed_evidence as Array<Record<string, unknown>> | undefined) || []
+            const datasetKey = candidateDatasetKey(item)
+            const sourceKb = batches.find(batch => batch.datasetKey === datasetKey)?.kbName || datasetKey
             const reference = String(facts.reference_answer || '')
             const quotes = evidence.map(entry => String(entry.quote || ''))
             return <tr key={item.candidate_id}>
@@ -391,6 +701,7 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
                 if (e.target.checked) next.add(item.candidate_id); else next.delete(item.candidate_id)
                 setPicked(next)
               }} /></Td>
+              <Td>{sourceKb}</Td>
               <Td className="max-w-[240px]">{candidateQuery(item)}</Td>
               <Td className="max-w-[240px]"><span className="block truncate">{reference || '—'}</span></Td>
               <Td className="max-w-[220px]">{evidence.length
@@ -410,13 +721,13 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
         <button type="button" className={ctlPrimary} disabled={adopting} onClick={adopt}>采纳进草稿</button>
       </div>
     </div>}
-    {task && task.status === 'SUCCESS' && finished && !preview && <div className="mt-2 space-y-2">
+    {finished && preview?.length === 0 && <div className="mt-2 space-y-2">
       <p role="status" className="rounded-md bg-emerald-50 p-2.5 text-xs text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">
-        生成完成：候选已进入待确认列表（数据集「{datasetName}」）。请在编辑视图中核对参考答案与证据后批准。
+        本批任务已结束。候选已进入待确认列表；请在对应数据集的编辑视图中核对来源、参考答案与证据后批准。
       </p>
       <button type="button" className={ctlPrimary} onClick={onDone}>查看待确认候选</button>
     </div>}
-    {task && task.status === 'FAILED' && <p role="alert" className="mt-2 text-xs text-red-700">任务失败：{task.progress || '请检查评测模型绑定与知识库语料后重试。'}</p>}
+    {finished && batches.some(batch => batch.status === 'FAILED') && <p role="alert" className="mt-2 text-xs text-red-700">部分批次失败；已成功批次的候选仍可核验，失败项可在上方按知识库与 Task ID 追查。</p>}
   </Card>
 }
 
@@ -574,10 +885,16 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
   perform: (fn: () => Promise<void>) => Promise<void>
   busy: boolean
 }) {
-  // 候选是全局待确认池（与数据集在发布时才建立关联），编辑视图展示全部待确认候选；
-  // 采纳后在「版本历史」中把已批准用例发布进当前数据集的新版本。
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'feedback'>('all')
-  const mine = sourceFilter === 'feedback' ? candidates.filter(candidate => candidate.source_kind === 'feedback') : candidates
+  // 只展示明确关联到当前数据集的候选，避免把其它业务域的答案误发布进来。
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'feedback' | 'trace'>('all')
+  const [candidatePage, setCandidatePage] = useState(0)
+  const scopedCandidates = candidates.filter(candidate => candidateDatasetKey(candidate) === dataset.dataset_key)
+  const mine = sourceFilter === 'feedback'
+    ? scopedCandidates.filter(candidate => candidate.source_kind === 'feedback')
+    : sourceFilter === 'trace'
+      ? scopedCandidates.filter(isTraceCandidate)
+      : scopedCandidates
+  const visibleCandidates = mine.slice(candidatePage * CANDIDATE_PAGE_SIZE, (candidatePage + 1) * CANDIDATE_PAGE_SIZE)
   const [edits, setEdits] = useState<Record<string, { question: string; reference: string; facts: string; snapshotId: string }>>({})
   const [manualOpen, setManualOpen] = useState(false)
   const [manual, setManual] = useState({ question: '', reference: '', facts: '' })
@@ -663,27 +980,37 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
     </Card>}
     <Card title="待确认候选" subtitle="与导入模板同 schema：问题 / 参考答案 / 必需事实 / 证据引用；批准后到「版本历史」发布新版本。">
       <label className="mb-3 flex items-center gap-2 text-xs text-text-secondary">候选来源
-        <select aria-label="按候选来源筛选" value={sourceFilter} onChange={event => setSourceFilter(event.target.value as 'all' | 'feedback')} className={ctl}>
-          <option value="all">全部来源</option><option value="feedback">来源=feedback</option>
+        <select aria-label="按候选来源筛选" value={sourceFilter} onChange={event => { setSourceFilter(event.target.value as 'all' | 'feedback' | 'trace'); setCandidatePage(0) }} className={ctl}>
+          <option value="all">全部来源</option><option value="feedback">反馈</option><option value="trace">Trace 回流</option>
         </select>
       </label>
-      {mine.length === 0 ? <Empty text={sourceFilter === 'feedback' ? '没有来源为 feedback 的待确认候选。' : '该数据集暂无待确认候选：通过「从知识库生成」或「导入数据集」写入。'} />
+      {mine.length === 0 ? <Empty text={sourceFilter === 'feedback' ? '该数据集暂无反馈候选。' : sourceFilter === 'trace' ? '该数据集暂无 Trace 回流候选。' : '该数据集暂无待确认候选：可从知识库生成、导入或收录 Trace。'} />
         : <div className="space-y-3">
-          {mine.map(candidate => {
+          {visibleCandidates.map(candidate => {
             const edit = getEdit(candidate.candidate_id, candidate)
             const complete = edit.reference.trim() !== ''
             // 证据 = 生成/导入自动带出的锚点 + 用户经证据选择器追加的锚点（sessionStorage 暂存）
             const baseEvidence = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
             const sessionEvidence = JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || 'null') as Array<Record<string, unknown>> | null
             const evidenceList = (sessionEvidence || baseEvidence) as Array<{ doc_id?: string; doc_version?: string; quote?: string }>
+            const candidatePayload = candidate.payload_json as Record<string, unknown>
+            const candidateMetadata = (candidatePayload.metadata || {}) as Record<string, unknown>
+            const candidateSourceRef = (candidatePayload.source_ref || {}) as Record<string, unknown>
+            const traceId = String(candidateSourceRef.trace_id || candidateMetadata.trace_id || '')
             return <div key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
+              {isTraceCandidate(candidate) && <div className="mb-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                <div className="flex flex-wrap items-center gap-2"><Badge text="Trace 回流" tone="accent" /><Badge text="参考答案未核验" tone="warn" />{traceId && <a className="text-xs text-accent hover:underline" href={`/observability/traces/${encodeURIComponent(traceId)}`} target="_blank" rel="noreferrer">打开 Trace</a>}</div>
+                <p className="mt-2 text-[11px] font-medium text-text-secondary">Trace 实际回答（只供核对，不作为真值）</p>
+                <p className="mt-1 whitespace-pre-wrap text-xs leading-5 text-text-secondary">{String(candidatePayload.observed_answer || 'Trace 未记录回答')}</p>
+                {Boolean(candidateMetadata.trace_error) && <p className="mt-2 text-xs text-amber-800 dark:text-amber-200">异常摘要：{String(candidateMetadata.trace_error)}</p>}
+              </div>}
               <div className="grid gap-2 sm:grid-cols-2">
                 <input aria-label="问题" placeholder="问题" value={edit.question} onChange={e => setEdit(candidate.candidate_id, { question: e.target.value })} className={ctl} />
                 <input aria-label="参考答案" placeholder="参考答案 reference_answer" value={edit.reference} onChange={e => setEdit(candidate.candidate_id, { reference: e.target.value })} className={ctl} />
                 <input aria-label="必需事实" placeholder="必需事实（逗号分隔）" value={edit.facts} onChange={e => setEdit(candidate.candidate_id, { facts: e.target.value })} className={ctl} />
                 <div className="flex items-center gap-2">
                   <Badge text={complete ? '✓ 可批准' : '⚠ 缺参考答案'} tone={complete ? 'good' : 'warn'} />
-                  <Badge text={candidate.source_kind || '未知来源'} tone={candidate.source_kind === 'feedback' ? 'accent' : 'gray'} />
+                  <Badge text={isTraceCandidate(candidate) ? 'Trace 回流' : candidate.source_kind || '未知来源'} tone={isTraceCandidate(candidate) || candidate.source_kind === 'feedback' ? 'accent' : 'gray'} />
                   {!edit.facts.trim() && <Badge text="必需事实待补充" tone="warn" />}
                   <Badge text={evidenceList.length ? `证据 ${evidenceList.length} 条` : '⚠ 无证据'} tone={evidenceList.length ? 'blue' : 'warn'} />
                   <span className="font-mono text-[11px] text-text-muted">{candidate.candidate_id.slice(0, 8)}</span>
@@ -715,6 +1042,7 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
             </div>
           })}
         </div>}
+      <Pagination page={candidatePage} pageSize={CANDIDATE_PAGE_SIZE} total={mine.length} onPageChange={setCandidatePage} />
       <p className="mt-2 text-xs text-text-muted">批准 = 完成八道服务端校验（证据锚点逐字核验、四眼原则等）并生成不可变用例修订；随后在「版本历史」中发布新版本。</p>
     </Card>
     <VersionCaseEditor dataset={dataset} perform={perform} busy={busy} onChanged={onChanged} onOpenHistory={onOpenHistory} />

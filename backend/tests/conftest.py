@@ -39,6 +39,12 @@ os.environ.setdefault(
     "LOG_FILE",
     os.path.join(tempfile.gettempdir(), f"agent_test_log_{os.getpid()}.log"),
 )
+# 测试评测产物隔离到进程专属临时目录，避免 Git worktree 共用主仓库目录后
+# 把测试报告混入管理端运行历史。显式设置变量的测试可自行指定隔离目录。
+os.environ.setdefault(
+    "EVAL_RUNS_DATA_DIR",
+    os.path.join(tempfile.gettempdir(), f"agent_test_eval_runs_{os.getpid()}"),
+)
 
 
 def pytest_addoption(parser):

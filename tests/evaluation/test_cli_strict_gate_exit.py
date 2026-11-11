@@ -14,17 +14,24 @@ import pytest
 
 from backend.evaluation.cli import _strict_gate_exit_code
 from backend.evaluation.gate import evaluate_tiers
-from backend.evaluation.models import EvalReport, EvalResult, ModuleSummary, TestCase
+from backend.evaluation.models import (
+    EvalReport, EvalResult, ModuleSummary, TestCase as EvalTestCase,
+)
 
 
-def _cases(tiers: list[str]) -> list[TestCase]:
+def _cases(tiers: list[str]) -> list[EvalTestCase]:
     return [
-        TestCase(id=f"RC-{i:03d}", question=f"问题{i}", module="rag", metadata={"tier": t})
+        EvalTestCase(
+            id=f"RC-{i:03d}", question=f"问题{i}", module="rag",
+            metadata={"tier": t},
+        )
         for i, t in enumerate(tiers, start=1)
     ]
 
 
-def _pass_results(cases: list[TestCase], metrics: dict | None = None) -> list[EvalResult]:
+def _pass_results(
+    cases: list[EvalTestCase], metrics: dict | None = None,
+) -> list[EvalResult]:
     return [
         EvalResult(
             case_id=c.id, module="rag", status="pass", expected={}, actual={},
@@ -57,11 +64,15 @@ def _healthy_tier_and_results():
     return cases, results, evaluate_tiers(cases, results, min_samples=20)
 
 
-def test_strict_gate_pass_exit_0():
+def test_strict_gate_pass_exit_0(capsys):
     """质量达标 + 分层达标 + 套件样本量达标 → exit 0。"""
     cases, results, tiers = _healthy_tier_and_results()
     report = _report(1.0, tiers, results)
     assert _strict_gate_exit_code(report, []) == 0
+    output = capsys.readouterr().out
+    assert "EVAL_GATE_SCOPE=evaluation_run" in output
+    assert "EVAL_RUN_MODE=offline" in output
+    assert "EVAL_MODEL_QUALITY_STATUS=INVALID_FOR_MODEL_QUALITY" in output
 
 
 def test_required_metric_fail_exit_1():

@@ -205,6 +205,21 @@ def test_release_gate_rag_golden_pass():
     assert ragas_items and all(it["status"] == "not_applicable" for it in ragas_items)
 
 
+def test_release_gate_reports_scope_and_run_mode():
+    gate = compute_module_release_gate(_rag_golden_like())
+    assert gate["gate_scope"] == "evaluation_run"
+    assert gate["run_mode"] == "live"
+
+
+def test_metrics_only_gate_marks_unknown_run_mode():
+    gate = compute_metrics_gate("rag", {
+        "pass_rate": 1.0, "recall@5": 0.9, "mrr": 0.9,
+        "reject_accuracy": 1.0, "false_answer_rate": 0.0,
+    })
+    assert gate["gate_scope"] == "metrics_only"
+    assert gate["run_mode"] == "unknown"
+
+
 @pytest.mark.parametrize(
     "stop_reason,expected_validity",
     [
@@ -453,6 +468,8 @@ def test_json_report_carries_three_state_verdict(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["release_gate"]["verdict"] == "INVALID"
     assert data["release_gate"]["invalid_reason"] == "request_budget_exhausted"
+    assert data["release_gate"]["gate_scope"] == "evaluation_run"
+    assert data["release_gate"]["run_mode"] == "live"
     assert data["release_gate"]["overall"] is False
 
 

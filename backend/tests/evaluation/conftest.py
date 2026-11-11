@@ -1,8 +1,8 @@
-"""评测测试 conftest — 自动生成报告到 data/eval_runs/ 目录。
+"""评测测试 conftest — 自动生成报告到测试配置的产物目录。
 
 pytest_sessionfinish hook 在测试结束后：
   1. 从 session.config._golden_eval_report 获取 EvaluationService 产出的 EvalReport
-  2. 调用 storage.persist_report 持久化到 data/eval_runs/{run_id}/
+  2. 调用 storage.persist_report 持久化到 EVAL_RUNS_DATA_DIR/{run_id}/
   3. 生成 Markdown + JSON 报告到同一目录
 """
 

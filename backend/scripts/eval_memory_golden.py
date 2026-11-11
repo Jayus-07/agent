@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import re
 import time
@@ -48,6 +49,55 @@ def load_cases(path: Path) -> list[dict]:
         if line:
             cases.append(json.loads(line))
     return cases
+
+
+def dataset_fingerprint(path: Path, cases: list[dict]) -> dict[str, str | None]:
+    """校验旁置 manifest，并为评测结果记录输入数据指纹。"""
+    resolved_path = path.resolve()
+    digest = hashlib.sha256(resolved_path.read_bytes()).hexdigest()
+    manifest_path = resolved_path.with_name(
+        f"{resolved_path.stem}.manifest.json"
+    )
+    manifest = None
+    if manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("Memory Golden manifest 必须是 JSON 对象")
+    elif resolved_path == DATASET_PATH.resolve():
+        raise ValueError(
+            f"canonical Memory Golden 缺少 manifest: {manifest_path}"
+        )
+
+    if manifest is not None:
+        expected_hash = manifest.get("content_hash")
+        if (
+            not isinstance(expected_hash, str)
+            or re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash) is None
+            or digest != expected_hash.lower()
+        ):
+            raise ValueError(
+                f"Memory Golden hash 与 manifest 不一致: {resolved_path}"
+            )
+        expected_count = manifest.get("case_count")
+        if (
+            isinstance(expected_count, bool)
+            or not isinstance(expected_count, int)
+            or expected_count != len(cases)
+        ):
+            raise ValueError(
+                "Memory Golden case_count 与 manifest 不一致: "
+                f"{len(cases)} != {expected_count}"
+            )
+        version = manifest.get("version")
+        if not isinstance(version, str) or not version.strip():
+            raise ValueError("Memory Golden manifest 缺少有效 version")
+    else:
+        version = None
+
+    return {
+        "dataset_sha256": digest,
+        "dataset_version": version,
+    }
 
 
 async def _clean_scope() -> None:
@@ -350,6 +400,10 @@ async def main() -> None:
                         help="结构安全检查使用的阈值（默认=阈值表第一个）")
     args = parser.parse_args()
 
+    dataset_path = Path(args.dataset).resolve()
+    cases = load_cases(dataset_path)
+    fingerprint = dataset_fingerprint(dataset_path, cases)
+
     from backend.infra.llm.registry_store import refresh_registry
     from backend.memory.database import AsyncSessionLocal
     from backend.memory.repository.session_repo import SessionRepository
@@ -361,7 +415,6 @@ async def main() -> None:
         raise RuntimeError("refresh_registry 失败：DB 覆盖层不可用")
     emb = get_embedding()
 
-    cases = load_cases(Path(args.dataset))
     thresholds = [float(x) for x in args.thresholds.split(",")]
     final_threshold = args.final_threshold if args.final_threshold is not None else thresholds[0]
 
@@ -397,7 +450,8 @@ async def main() -> None:
         "meta": {
             "date": datetime.now(timezone.utc).isoformat(),
             "embedding_model": "DB 绑定 embedding 角色（生产同款，经 refresh_registry 解析）",
-            "dataset": str(DATASET_PATH),
+            "dataset": str(dataset_path),
+            **fingerprint,
             "case_count": len(cases),
             "seed_count": len(meta),
             "elapsed_seconds": round(time.perf_counter() - t0, 1),

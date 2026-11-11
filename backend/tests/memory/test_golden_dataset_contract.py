@@ -11,10 +11,14 @@ scripts/eval_memory_golden.py（需网络与 DB，默认不在单测内执行）
 """
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
+import pytest
+
 DATASET = Path(__file__).resolve().parents[2] / "evaluation" / "datasets" / "memory_golden.jsonl"
+MANIFEST = DATASET.with_name("memory_golden.manifest.json")
 RESULTS = DATASET.with_name("memory_golden_results.json")
 
 CATEGORIES = {"relevant", "irrelevant", "conflict", "isolation", "safety", "global", "zero"}
@@ -43,6 +47,41 @@ def test_dataset_completeness_and_labels():
     # 正确结果 = 0 条 memory 必须是正式合法标签（F2）
     zero_cases = [c for c in cases if c["expect_zero"]]
     assert len(zero_cases) >= 5, "无记忆可召回的用例（期望 0 注入）必须成类"
+
+
+def test_canonical_dataset_manifest_locks_content():
+    from backend.scripts.eval_memory_golden import dataset_fingerprint
+
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    cases = _cases()
+    digest = hashlib.sha256(DATASET.read_bytes()).hexdigest()
+    fingerprint = dataset_fingerprint(DATASET, cases)
+
+    assert manifest["module"] == "memory"
+    assert manifest["case_count"] == len(cases)
+    assert digest == manifest["content_hash"]
+    assert fingerprint == {
+        "dataset_sha256": digest,
+        "dataset_version": manifest["version"],
+    }
+
+
+def test_evaluation_script_rejects_dataset_manifest_drift(tmp_path):
+    from backend.scripts.eval_memory_golden import dataset_fingerprint
+
+    dataset = tmp_path / "sample.jsonl"
+    dataset.write_text('{"id":"sample"}\n', encoding="utf-8")
+    dataset.with_name("sample.manifest.json").write_text(
+        json.dumps({
+            "version": "1.0",
+            "case_count": 1,
+            "content_hash": "0" * 64,
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="hash 与 manifest 不一致"):
+        dataset_fingerprint(dataset, [{"id": "sample"}])
 
 
 def test_frozen_hard_gates_from_real_run():

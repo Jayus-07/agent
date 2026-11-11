@@ -36,6 +36,8 @@ def write_json_report(
         "tier": report.tier,
         "total_score": report.total_score,
         "release_gate": {
+            "gate_scope": gate["gate_scope"],
+            "run_mode": gate["run_mode"],
             "verdict": gate["verdict"],
             "overall": gate["overall"],
             "invalid_reason": gate["invalid_reason"],

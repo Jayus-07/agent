@@ -641,8 +641,8 @@ export const evaluationService = {
     return request(`${BASE}/v2/suite-versions/${encodeURIComponent(suiteVersionId)}/publish`, { method: 'POST' });
   },
 
-  listV2Runs(limit: number = 100): Promise<EvaluationV2Run[]> {
-    return request<EvaluationV2Run[]>(`${BASE}/v2/runs?limit=${limit}`);
+  listV2Runs(limit: number = 100, offset: number = 0): Promise<EvaluationV2Run[]> {
+    return request<EvaluationV2Run[]>(`${BASE}/v2/runs?limit=${limit}&offset=${offset}`);
   },
 
   listV2Experiments(limit: number = 100): Promise<EvaluationV2Experiment[]> {
@@ -696,8 +696,8 @@ export const evaluationService = {
     return request(`${BASE}/v2/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' });
   },
 
-  listV2RunResults(runId: string, limit: number = 200): Promise<EvaluationV2RunResult[]> {
-    return request<EvaluationV2RunResult[]>(`${BASE}/v2/runs/${encodeURIComponent(runId)}/results?limit=${limit}`);
+  listV2RunResults(runId: string, limit: number = 200, offset: number = 0): Promise<EvaluationV2RunResult[]> {
+    return request<EvaluationV2RunResult[]>(`${BASE}/v2/runs/${encodeURIComponent(runId)}/results?limit=${limit}&offset=${offset}`);
   },
 
   getV2HumanReviews(runId: string, caseId: string): Promise<EvaluationV2HumanReviewCollection> {
@@ -771,7 +771,7 @@ export const evaluationService = {
     return request(`${BASE}/v2/datasets/imports`, { method: 'POST', body });
   },
 
-  createV2Candidate(payload: { source_kind: 'manual'; payload: { input: { query: string }; proposed_facts: Array<{ behavior: string; reference_answer: string; required_facts: string[] }>; proposed_evidence: Array<Record<string, unknown>>; metadata: Record<string, unknown> }; idempotency_key: string }): Promise<EvaluationV2Candidate> {
+  createV2Candidate(payload: { source_kind: 'manual'; payload: { input: { query: string }; observed_answer?: string; proposed_facts: Array<{ behavior: string; reference_answer: string; required_facts: string[] }>; proposed_evidence: Array<Record<string, unknown>>; metadata: Record<string, unknown>; source_ref?: Record<string, unknown> }; idempotency_key: string }): Promise<EvaluationV2Candidate> {
     return request(`${BASE}/v2/candidates`, { method: 'POST', body: payload });
   },
 

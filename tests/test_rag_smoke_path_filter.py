@@ -81,6 +81,31 @@ def test_legacy_evaluation_history_uses_free_pr_preflight_only():
     assert _filter_subprocess(paths, "push") is False
 
 
+def test_memory_golden_contract_changes_use_free_pr_preflight_only():
+    paths = [
+        "backend/scripts/eval_memory_golden.py",
+        "backend/evaluation/datasets/memory_golden.manifest.json",
+        "backend/tests/memory/test_golden_dataset_contract.py",
+    ]
+    assert _filter_import(paths, "pull_request") is True
+    assert _filter_subprocess(paths, "pull_request") is True
+    assert _filter_import(paths, "push") is False
+    assert _filter_subprocess(paths, "push") is False
+
+
+def test_travel_quality_contract_changes_use_free_pr_preflight_only():
+    paths = [
+        "backend/evaluation/runners/travel.py",
+        "backend/evaluation/datasets/travel/cases.jsonl",
+        "backend/evaluation/datasets/travel/manifest.json",
+        "backend/tests/travel/test_travel_runner_contract.py",
+    ]
+    assert _filter_import(paths, "pull_request") is True
+    assert _filter_subprocess(paths, "pull_request") is True
+    assert _filter_import(paths, "push") is False
+    assert _filter_subprocess(paths, "push") is False
+
+
 def test_unrelated_migrations_do_not_trigger_main_paid_smoke():
     paths = [
         "backend/sql/migrations/006_customer_service.sql",
@@ -202,6 +227,42 @@ def test_setup_and_workflow_only_changes_run_pr_static_but_not_main_paid_smoke()
     assert _filter_subprocess(paths) is False
     assert _filter_import(paths, event="pull_request") is True
     assert _filter_subprocess(paths, event="pull_request") is True
+
+
+def test_eval_contract_changes_run_free_pr_tests_not_main_paid_smoke():
+    paths = [
+        "backend/evaluation/datasets/memory_golden.manifest.json",
+        "backend/tests/evaluation/test_release_gate_module_aware.py",
+        "backend/tests/evaluation/test_report_gate_verdict.py",
+        "backend/tests/evaluation/test_cli_compare.py",
+        "tests/evaluation/test_cli_strict_gate_exit.py",
+    ]
+    assert _filter_import(paths) is False
+    assert _filter_subprocess(paths) is False
+    assert _filter_import(paths, event="pull_request") is True
+    assert _filter_subprocess(paths, event="pull_request") is True
+
+
+def test_eval_contract_tests_are_in_free_pr_workflow():
+    root = Path(__file__).resolve().parents[1]
+    workflow = yaml.safe_load(
+        (root / ".github/workflows/rag_smoke.yml").read_text(encoding="utf-8")
+    )
+    run_steps = [
+        step for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if isinstance(step, dict) and "run" in step
+    ]
+    for registered in (
+        "backend/tests/memory/test_golden_dataset_contract.py",
+        "backend/tests/travel/test_travel_runner_contract.py",
+        "backend/tests/evaluation/test_report_gate_verdict.py",
+        "backend/tests/evaluation/test_cli_compare.py",
+        "tests/evaluation/test_cli_strict_gate_exit.py",
+    ):
+        assert any(registered in step["run"] for step in run_steps), (
+            f"rag_smoke 定向清单缺少 {registered}（PR 静态门禁空转）"
+        )
 
 
 def test_non_rag_docs_and_backend_changes_skip_smoke():

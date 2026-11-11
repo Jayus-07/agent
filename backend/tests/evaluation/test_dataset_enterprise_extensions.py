@@ -338,8 +338,15 @@ def test_workers_and_api_share_eval_reports_mount():
     import yaml
 
     compose = yaml.safe_load((Path(__file__).resolve().parents[3] / "docker-compose.yml").read_text(encoding="utf-8"))
+    expected_source = "${EVAL_RUNS_HOST_DIR:-./data/eval_runs}"
     for name in ("app", "report-worker", "rag-index-worker"):
-        assert "./data/eval_runs:/app/data/eval_runs" in compose["services"][name]["volumes"]
+        mounts = compose["services"][name]["volumes"]
+        assert any(
+            isinstance(mount, dict)
+            and mount.get("source") == expected_source
+            and mount.get("target") == "/app/data/eval_runs"
+            for mount in mounts
+        )
 
 
 def test_worker_prompt_snapshot_uses_worker_event_loop(monkeypatch):

@@ -24,7 +24,34 @@ from backend.evaluation.models import EvalReport, EvalResult, ModuleSummary
 
 # 数据根目录 — 绝对路径，相对于项目根目录
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-DATA_ROOT = _PROJECT_ROOT / "data" / "eval_runs"
+
+
+def _resolve_data_root(project_root: Path) -> Path:
+    """优先使用显式目录，否则让同一 Git 仓库的工作树共享评测产物。"""
+    configured = os.getenv("EVAL_RUNS_DATA_DIR")
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if not configured_path.is_absolute():
+            configured_path = project_root / configured_path
+        return configured_path.resolve()
+
+    try:
+        common_dir = subprocess.check_output(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            cwd=project_root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        ).strip()
+        common_path = Path(common_dir)
+        if not common_path.is_absolute():
+            common_path = project_root / common_path
+        return common_path.resolve().parent / "data" / "eval_runs"
+    except (OSError, subprocess.SubprocessError):
+        return project_root / "data" / "eval_runs"
+
+
+DATA_ROOT = _resolve_data_root(_PROJECT_ROOT)
 
 # run 级生命周期状态文件（RUN-01/07/08）：running 期间落 status.json，
 # 终态由 persist_report 收口；超过阈值仍处 running 的判为 stale

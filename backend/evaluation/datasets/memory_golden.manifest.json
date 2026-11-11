@@ -1,0 +1,8 @@
+{
+  "version": "1.0",
+  "case_count": 60,
+  "module": "memory",
+  "schema_description": "长期记忆召回、安全隔离、冲突和无结果场景的独立 Golden 数据集；未注册为统一 Evaluation Module。",
+  "notes": "2026-11-06 为当前样本内容建立版本锁。2026-09-24 的历史真实评测结果未记录数据集 hash，不能据此证明当时运行内容与本版本完全一致。",
+  "content_hash": "60c911fb71961582c4430685ff4f93d8fad57ccd96700a4973e2f2633e55e4fd"
+}

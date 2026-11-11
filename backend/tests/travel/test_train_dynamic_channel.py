@@ -89,11 +89,14 @@ def _snapshot(*, tools: dict | None = None, conn_base_url: str | None = None):
 def _train_env(monkeypatch):
     """隔离共享栈快照与 .env 开关（每个用例自选状态注入）。"""
     from backend.config import mcp as mcp_config
+    from backend.config import travel as travel_config
     from backend.infra.mcp_registry import store as mcp_store
 
     mcp_store.reset_for_tests()
     monkeypatch.setattr(mcp_config, "TRAIN_MCP_BASE_URL", _BASE_URL)
     monkeypatch.setattr(mcp_config, "TRAIN_MCP_ENABLED", False)
+    # 此模块回放动态/静态通道；公共成功缓存会把前一用例结果带到下一用例。
+    monkeypatch.setattr(travel_config, "TRAVEL_TOOL_CACHE_ENABLED", False)
     yield
     mcp_store.reset_for_tests()
 

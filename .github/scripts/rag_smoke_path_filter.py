@@ -33,6 +33,14 @@ EXACT_ENTRIES = frozenset({
 NON_RAG_EXACT_ENTRIES = frozenset({
     "backend/infra/llm/price_page_monitor.py",
     "backend/sql/migrations/099_model_price_source_monitor.sql",
+    "backend/evaluation/datasets/memory_golden.manifest.json",
+    "backend/evaluation/runners/travel.py",
+    "backend/evaluation/datasets/travel/cases.jsonl",
+    "backend/evaluation/datasets/travel/manifest.json",
+    "backend/tests/evaluation/test_release_gate_module_aware.py",
+    "backend/tests/evaluation/test_report_gate_verdict.py",
+    "backend/tests/evaluation/test_cli_compare.py",
+    "tests/evaluation/test_cli_strict_gate_exit.py",
 })
 
 # 评测准备文件和 Workflow 的 PR 变化运行免费预检，main 更新不触发真实 Provider。
@@ -43,8 +51,19 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     ".github/workflows/rag_regression.yml",
     ".github/scripts/rag_smoke_path_filter.py",
     "backend/scripts/seed_prompt_eval_db.py",
+    "backend/scripts/eval_memory_golden.py",
     "scripts/seed_eval_model_bindings.py",
+    "backend/evaluation/datasets/memory_golden.manifest.json",
+    "backend/evaluation/runners/travel.py",
+    "backend/evaluation/datasets/travel/cases.jsonl",
+    "backend/evaluation/datasets/travel/manifest.json",
     "backend/tests/api/test_evaluation_runs_list.py",
+    "backend/tests/memory/test_golden_dataset_contract.py",
+    "backend/tests/travel/test_travel_runner_contract.py",
+    "backend/tests/evaluation/test_release_gate_module_aware.py",
+    "backend/tests/evaluation/test_report_gate_verdict.py",
+    "backend/tests/evaluation/test_cli_compare.py",
+    "tests/evaluation/test_cli_strict_gate_exit.py",
     "tests/evaluation/test_rag_ci_workflow_contracts.py",
     "tests/test_rag_smoke_path_filter.py",
     # 管理端工具治理面（ADR-0011）：载荷契约与 LLM 辅助去重实现。

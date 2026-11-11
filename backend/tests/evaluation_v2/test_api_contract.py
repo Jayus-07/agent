@@ -7,8 +7,10 @@ import uuid
 import pytest
 from fastapi import HTTPException, UploadFile
 from pydantic import ValidationError
+from starlette.requests import Request
 
 from backend.app.api.deps import OperatorIdentity
+from backend.app.exceptions import http_exception_handler
 from backend.app.api.identity import Identity
 from backend.app.api.routes.evaluation_imports import synthesize_dataset
 from backend.app.api.routes.evaluation_v2 import (
@@ -27,6 +29,7 @@ from backend.app.api.routes.evaluation_v2 import (
     create_eval_run,
     create_evaluator_version,
     export_dataset_version,
+    get_eval_run_case_detail,
     get_dataset_version_coverage,
     list_candidates,
     list_suites,
@@ -79,6 +82,56 @@ def test_empty_corpus_returns_actionable_safe_api_error():
     envelope = error_envelope_from_exception(captured.value, source="http")
     assert envelope.code is ErrorCode.INVALID_PARAM
     assert envelope.message == "该知识库没有已发布文档，请先完成文档发布和索引后再运行评测。"
+
+
+def test_missing_run_case_report_is_non_retryable_not_found(monkeypatch):
+    import backend.app.api.routes.evaluation_v2 as routes
+    from backend.evaluation import storage
+
+    run_id = uuid.uuid4()
+    case_id = uuid.uuid4()
+    monkeypatch.setattr(routes.repository, "get_run_result", lambda *_args: {
+        "result_status": "pass",
+        "case_revision": 1,
+        "trace_id": "trace-1",
+        "latency_ms": 12,
+        "cost_amount": None,
+        "cost_currency": None,
+    })
+
+    def missing_report(_run_id):
+        raise FileNotFoundError("local artifact path must not be returned")
+
+    monkeypatch.setattr(storage, "load_report", missing_report)
+    with pytest.raises(HTTPException) as captured:
+        asyncio.run(get_eval_run_case_detail(
+            run_id=run_id,
+            case_id=case_id,
+            identity=Identity(user_id="alice", tenant_id="tenant-a"),
+            actor=OperatorIdentity(role="super_admin", actor="user:alice"),
+        ))
+
+    assert captured.value.status_code == 404
+    assert "逐题报告文件未找到" in captured.value.detail
+    assert "local artifact path" not in captured.value.detail
+    envelope = error_envelope_from_exception(captured.value, source="http")
+    assert envelope.code is ErrorCode.NOT_FOUND
+    assert envelope.retryable is False
+    response = asyncio.run(http_exception_handler(
+        Request({
+            "type": "http",
+            "method": "GET",
+            "path": "/evaluation/v2/runs/case-detail",
+            "headers": [],
+            "query_string": b"",
+            "scheme": "http",
+            "server": ("test", 80),
+            "client": ("127.0.0.1", 1),
+        }),
+        captured.value,
+    ))
+    assert response.status_code == 404
+    assert json.loads(response.body)["message"] == captured.value.detail
 
 
 def test_import_preview_validates_without_creating_candidates(monkeypatch):

@@ -4,21 +4,24 @@ import { useSearchParams } from 'next/navigation'
 import { useMemo, useState } from 'react'
 import { useWorkbenchTab } from '@/components/workbench/useWorkbenchTab'
 import DatasetsTab from './proto/DatasetsTab'
+import FailedTracesTab from './proto/FailedTracesTab'
 import RunsTab from './proto/RunsTab'
 import CompareTab from './proto/CompareTab'
 
-type EvaluationTab = 'datasets' | 'runs' | 'compare'
+type EvaluationTab = 'datasets' | 'traces' | 'runs' | 'compare'
 const TABS: readonly { id: EvaluationTab; label: string }[] = [
   { id: 'datasets', label: '数据集' },
+  { id: 'traces', label: '失败 Trace' },
   { id: 'runs', label: '运行评测' },
   { id: 'compare', label: '结果对比' },
 ]
 const TAB_IDS = TABS.map(item => item.id) as readonly EvaluationTab[]
-// 旧入口（8 tab 时代与 V1 时代）统一收敛到三个核心功能区
+// 旧入口（8 tab 时代与 V1 时代）统一收敛到四个核心功能区
 const LEGACY_TABS: Record<string, EvaluationTab> = {
   overview: 'datasets',
   generate: 'datasets',
   review: 'datasets',
+  trace: 'traces',
   suites: 'runs',
   results: 'runs',
   bindings: 'runs',
@@ -42,13 +45,14 @@ export default function EvaluationCenter() {
   }, [searchParams])
 
   const [compareRunId, setCompareRunId] = useState('')
+  const [focusSuiteVersionId, setFocusSuiteVersionId] = useState('')
 
   return <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-bg-root">
     <header className="shrink-0 border-b border-border-subtle bg-surface-base px-4 py-5 sm:px-6">
       <div className="mx-auto w-full max-w-[1500px]">
         <p className="text-xs font-medium text-text-muted">评测平台 / {label}</p>
         <h1 className="mt-1 text-xl font-semibold tracking-tight text-text-primary">评测中心</h1>
-        <p className="mt-1 text-xs leading-5 text-text-secondary">数据集 → 运行评测 → 结果对比：版本不可变、配置固定、结果可归因。</p>
+        <p className="mt-1 text-xs leading-5 text-text-secondary">管理评测数据集、回流失败 Trace、查看运行记录并比较版本结果。</p>
       </div>
     </header>
     <div className="mx-auto flex min-h-0 w-full max-w-[1500px] flex-1 flex-col">
@@ -63,8 +67,9 @@ export default function EvaluationCenter() {
         </div>
       </nav>
       <section id={'evaluation-panel-' + activeTab} role="tabpanel" aria-label={label} className="min-h-0 flex-1 overflow-y-auto">
-        {activeTab === 'datasets' && <div className="mx-auto max-w-[1200px] px-5 py-5"><DatasetsTab onGoRuns={() => selectTab('runs')} /></div>}
-        {activeTab === 'runs' && <div className="mx-auto max-w-[1200px] px-5 py-5"><RunsTab promptPrefill={promptPrefill} onGoCompare={runId => { setCompareRunId(runId); selectTab('compare') }} /></div>}
+        {activeTab === 'datasets' && <div className="mx-auto max-w-[1200px] px-5 py-5"><DatasetsTab onGoRuns={suiteVersionId => { setFocusSuiteVersionId(suiteVersionId || ''); selectTab('runs') }} onGoTraces={() => selectTab('traces')} /></div>}
+        {activeTab === 'traces' && <div className="mx-auto max-w-[1200px] px-5 py-5"><FailedTracesTab /></div>}
+        {activeTab === 'runs' && <div className="mx-auto max-w-[1200px] px-5 py-5"><RunsTab promptPrefill={promptPrefill} focusSuiteVersionId={focusSuiteVersionId} onGoCompare={runId => { setCompareRunId(runId); selectTab('compare') }} /></div>}
         {activeTab === 'compare' && <div className="mx-auto max-w-[1200px] px-5 py-5"><CompareTab focusRunId={compareRunId} /></div>}
       </section>
     </div>
