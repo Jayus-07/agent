@@ -146,6 +146,21 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
         )
 
     if getattr(report, "mode", "") == "live":
+        unavailable_live_cases = [
+            str(getattr(result, "case_id", ""))
+            for result in results
+            if getattr(result, "status", "") == "skip"
+            and isinstance(getattr(result, "actual", None), dict)
+            and result.actual.get("skip_code")
+            == "required_live_provider_unavailable"
+        ]
+        if unavailable_live_cases:
+            return RunValidityVerdict(
+                RunValidity.INVALID_PROVIDER,
+                "required_live_case_unavailable",
+                {"total": len(results), "case_ids": unavailable_live_cases},
+            )
+
         unsupported_live_cases = [
             str(getattr(result, "case_id", ""))
             for result in results

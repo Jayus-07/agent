@@ -55,9 +55,12 @@ def write_markdown_report(
     if gate["verdict"] == "INVALID":
         verdict = f"**INVALID** ⛔ 环境无效——本轮不可用于质量评价（{gate['invalid_reason']}）"
     elif gate["verdict"] == "PASS":
-        verdict = "**PASS** ✅ 可以发布"
+        if report.mode == "offline":
+            verdict = "**PASS** ✅ 离线评测套件通过；这不代表模型质量或生产发布通过"
+        else:
+            verdict = "**PASS** ✅ 本次 Live 模块评测通过；完整产品上线仍需系统级验收与授权"
     else:
-        verdict = "**FAIL** ❌ 不建议发布"
+        verdict = "**FAIL** ❌ 本次评测未通过门禁"
     lines.append(f"## 1. 总体结论")
     lines.append("")
     lines.append(f"### {verdict}")
@@ -65,6 +68,7 @@ def write_markdown_report(
     shanghai_timestamp = format_shanghai_timestamp(report.timestamp)
     lines.append(f"- **时间（上海）**: {shanghai_timestamp}")
     lines.append(f"- **模式**: {mode_zh}")
+    lines.append(f"- **门禁范围**: {gate['gate_scope']} ({gate['run_mode']})")
     lines.append(f"- **用例数**: {len(report.results)}")
     pass_count = sum(1 for r in report.results if r.status == "pass")
     fail_count = sum(1 for r in report.results if r.status == "fail")
@@ -448,6 +452,8 @@ def write_markdown_report(
     lines.append("## 15. Machine-readable Summary")
     lines.append("")
     summary_json = {
+        "gate_scope": gate["gate_scope"],
+        "run_mode": gate["run_mode"],
         "verdict": gate["verdict"],
         "invalid_reason": gate["invalid_reason"],
         "timestamp": report.timestamp,

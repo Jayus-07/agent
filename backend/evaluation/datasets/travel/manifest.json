@@ -3,8 +3,8 @@
   "case_count": 34,
   "module": "travel",
   "schema_description": "旅游域规划质量评估数据集 — 按任务书 §15 的 A-F 六组组织用例，metadata.group 标组、metadata.tier 标层级（smoke/core/hard/regression），runner 调旅游子图断言 final_answer/validation 违反/版本链/修复行为。A-F 覆盖正常规划、槽位抽取、跨轮多轮、约束修复、用户决策与 Provider 故障注入。2026-09-24 STOP I5：新增 G 组（质量金标 T1-T15 映射，12 条）——基础规划/缺槽/预算PATCH(裸数字)/avoid PATCH/must-go/冲突覆盖/NEW_RUN/lodging/预算不可能/未知必去/营业时间/reporter grounding；聚合指标与门禁见 evaluation/travel_quality.py 与 tests/travel/test_quality_golden.py。",
-  "notes": "Phase 5 探路版（2026-09-18）。expected 字段为 runner 契约：status/must_contain/must_not_contain/days/party_size/pace/min_plan_version/parent_linked/repair_triggered/decision_required/no_error_violations/violation_codes/confidence_max/notes_contain/notes_not_contain/clarification/destination；跨轮用例 metadata.followup 为第二轮消息（same_thread 同 thread_id），expected.followup 为第二轮断言（同构）。Failure 组 metadata.fail_transit/fail_poi 触发假 Provider 注入（TransitProvider 走 routing.set_route_provider 插槽、POI 走 tools.travel.poi.search_poi 插桩）。 2026-11-03 语义升级：start_date 升为第三必填槽（destination→days→start_date），A 组等 ready 期望用例的问题句统一补「12月5号出发」（完整需求口径；守卫 hash 同步重算，变更理由见 PR）。",
-  "content_hash": "271b00be2ff9b44e",
+  "notes": "Phase 5 探路版（2026-09-18）。expected 字段为 runner 契约：status/must_contain/must_not_contain/pois_contain/days/party_size/pace/min_plan_version/parent_linked/repair_triggered/decision_required/no_error_violations/violation_codes/confidence_max/notes_contain/notes_not_contain/clarification/destination；pois_contain 校验结构化行程 POI，不依赖 reporter 是否在文本重复景点名。跨轮用例 metadata.followup 为第二轮消息（same_thread 同 thread_id），expected.followup 为第二轮断言（同构）。Failure 组 metadata.fail_transit/fail_poi 触发假 Provider 注入（TransitProvider 走 routing.set_route_provider 插槽、POI 在 poi_service.search_poi 服务边界注入）。metadata.requires_live_poi 标记依赖腾讯 POI Provider 的 Live 样本，离线种子数据不参与该项判分。2026-11-03 语义升级：start_date 升为第三必填槽（destination→days→start_date），A 组等 ready 期望用例的问题句统一补「12月5号出发」（完整需求口径；守卫 hash 同步重算，变更理由见 PR）。",
+  "content_hash": "09b22f87431f04e7",
   "kb_id": "travel_eval_kb",
   "kb_note": "模块评测库（audience=test，仅 super_admin 可见/可用）；离线评测零检索依赖，合成测试语料存此库，live 探针消费接线为后续任务"
 }

@@ -81,7 +81,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="评估模块 (默认: all)。cs=客服域（offline sanity=320 条锁版结构校验，"
              "--live 走真实图；runner 注册于 runners/cs.py）；"
              "travel=旅游规划质量金标（STOP I5）；"
-             "travel-provider=Provider 层探针（STOP J9）",
+             "travel-provider=离线 fake Provider 探针；真实 Gateway 端到端需单独验证（STOP J9）",
     )
     parser.add_argument(
         '--cs-mode', choices=['graph_only', 'full_path'], default='graph_only',
@@ -361,7 +361,11 @@ def _strict_gate_exit_code(report, tier_failed: list) -> int:
 
     gate = compute_module_release_gate(report)
     verdict = gate["verdict"]
+    print(f"EVAL_GATE_SCOPE={gate['gate_scope']}")
+    print(f"EVAL_RUN_MODE={gate['run_mode']}")
     print(f"EVAL_GATE_VERDICT={verdict}")
+    if gate["run_mode"] == "offline":
+        print("EVAL_MODEL_QUALITY_STATUS=INVALID_FOR_MODEL_QUALITY")
     if gate.get("invalid_reason"):
         print(f"EVAL_GATE_INVALID_REASON={gate['invalid_reason']}")
     for item in gate["items"]:
@@ -530,10 +534,10 @@ def _do_compare(compare_id: str, current, results_dir: Path, current_dir: Path |
         abs(cur_s.metrics.get(k) - prev_s.metrics.get(k))
         for cur_s in current.summaries
         for prev_s in [base_by_mod.get(cur_s.module)]
-        if prev_s and isinstance(cur_s.metrics.get(k), (int, float))
-        and isinstance(prev_s.metrics.get(k), (int, float))
         for k in ("ragas_faithfulness", "ragas_answer_relevancy",
                   "ragas_context_precision", "ragas_context_recall")
+        if prev_s and isinstance(cur_s.metrics.get(k), (int, float))
+        and isinstance(prev_s.metrics.get(k), (int, float))
     ]
     if ragas_deltas and max(ragas_deltas) > 0.1:
         print(

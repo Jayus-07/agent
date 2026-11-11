@@ -73,3 +73,32 @@ def test_machine_summary_keeps_invalid_verdict_and_reason(tmp_path):
     assert summary["verdict"] == "INVALID"
     assert summary["invalid_reason"] == "llm_provider_misconfigured"
     assert "**INVALID**" in markdown  # 人类可读头部同口径
+
+
+def test_offline_pass_is_not_presented_as_model_quality_or_release_pass(tmp_path):
+    summary = ModuleSummary(
+        module="rag", total=10, passed=10, failed=0, errors=0, skipped=0,
+        pass_rate=1.0,
+        metrics={
+            "recall@5": 0.9, "mrr": 0.9, "reject_accuracy": 1.0,
+            "false_answer_rate": 0.0,
+        },
+    )
+    report = EvalReport(
+        module="rag", mode="offline", summaries=[summary],
+        results=[
+            EvalResult(
+                case_id=f"R{i}", module="rag", status="pass",
+                expected={}, actual={},
+            )
+            for i in range(10)
+        ],
+    )
+    markdown = write_markdown_report(
+        report, tmp_path / "offline-pass",
+    ).read_text(encoding="utf-8")
+    machine_summary = _machine_summary(markdown)
+    assert machine_summary["verdict"] == "PASS"
+    assert machine_summary["run_mode"] == "offline"
+    assert "不代表模型质量或生产发布通过" in markdown
+    assert "可以发布" not in markdown

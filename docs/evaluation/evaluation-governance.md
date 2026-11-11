@@ -10,6 +10,7 @@
 - **数据集**：`backend/evaluation/datasets/<module>/` 常以 `cases.jsonl` 组织，具有版本治理的模块另提供 `manifest.json` 和可选的 `suites/<selection>.json`；使用 `backend/evaluation/dataset/loader.py` 和 `fixture_catalog.py`，不可随便复制一个新 loader。`travel-provider` 已有 `manifest.json`，但原先未声明 `content_hash`，loader 会兼容跳过该题集的内容锁定；本变更补齐 hash 并增加守卫测试后，`cases.jsonl` 内容漂移会 fail-fast。历史 deprecated 文件不可进入新运行基线。
 - **Runner**：`backend/evaluation/runners/`、`runners_config.py`；CLI `python -m backend.evaluation.cli`，实际选项先 `--help` 核对。离线评测、真实 Provider 探针和浏览器/API 端到端是不同覆盖层。
 - **发布裁决**：`backend/evaluation/release_gate.py` 已区分 `PASS / FAIL / INVALID`。基础设施坏了、凭据缺失、没有有效数据属于 `INVALID`，不能当作“模型质量差”；必要指标缺失又不能以 0 条通过冒充 `PASS`。
+- **PASS 的范围**：离线报告的 PASS 只表示固定用例/假 Provider 套件通过，不是模型质量结论或生产发布许可；Live 模块评测 PASS 也不等于整个平台上线，仍需系统级验收和授权。报告必须保留门禁范围与运行模式。
 - **历史结果有效性**：评测列表与详情 API 共用 `backend/evaluation/validity.py` 的报告裁决器；历史 `VALID` 可被报告中的当前错误证据推翻，已持久化的 `INVALID` 不降级。详情接口只修正响应副本，不回写历史报告。
 - **批次停止状态**：RunGuard 的取消、deadline、预算和 token 熔断原因会使运行判为 `INVALID_*`；部分样本碰巧达到分数线时也不能以 `PASS` 作为完整评测证据。
 - **样本校验**：模块取值与 `ModuleKind / MODULE_KINDS` 同源；Planner 另要求每条样本有 capability、正反向约束、步骤范围及完整 DAG 依赖边。其它模块仍须由各自 Runner 和模块级契约测试验证，通用样本校验通过不代表 Live 能力已接通。

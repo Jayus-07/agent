@@ -416,8 +416,16 @@ def compute_module_release_gate(
                           "value": value, "threshold": threshold, "passed": passed,
                           "status": "pass" if passed else "fail", "reason": "" if passed else "未达到发布要求"})
         verdict = "INVALID" if validity.validity is not RunValidity.VALID else "PASS" if all(i["passed"] for i in items) else "FAIL"
-        return {"module": "rag", "verdict": verdict, "overall": verdict == "PASS",
-                "invalid_reason": validity.invalid_reason, "validity": validity.as_dict(), "items": items}
+        return {
+            "module": "rag",
+            "gate_scope": "evaluation_run",
+            "run_mode": str(getattr(report, "mode", "unknown") or "unknown"),
+            "verdict": verdict,
+            "overall": verdict == "PASS",
+            "invalid_reason": validity.invalid_reason,
+            "validity": validity.as_dict(),
+            "items": items,
+        }
 
     module = str(getattr(report, "module", "") or "")
     ragas_mode = "ragas" in str((getattr(report, "metadata", None) or {}).get("evaluator_mode", "") or "")
@@ -463,6 +471,8 @@ def compute_module_release_gate(
 
     return {
         "module": module,
+        "gate_scope": "evaluation_run",
+        "run_mode": str(getattr(report, "mode", "unknown") or "unknown"),
         "verdict": verdict.value,
         # compat：旧消费方读 overall 布尔——只有 PASS 为 True
         "overall": verdict is GateVerdict.PASS,
@@ -491,6 +501,8 @@ def compute_metrics_gate(
     verdict = GateVerdict.FAIL if quality_fail else GateVerdict.PASS
     return {
         "module": module,
+        "gate_scope": "metrics_only",
+        "run_mode": "unknown",
         "verdict": verdict.value,
         "overall": verdict is GateVerdict.PASS,
         "invalid_reason": "",

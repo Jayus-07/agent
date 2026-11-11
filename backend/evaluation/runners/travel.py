@@ -5,12 +5,13 @@
 - 每条 case 全新 thread_id；跨轮组（metadata.same_thread）同 thread 连发两轮，
   第二轮临时切 memory checkpointer（跑完恢复默认图配置）
 - Failure 组经 Provider 失败注入：TransitProvider 走 routing.set_route_provider
-  运行时插槽（Phase 1 Protocol 红利）；POI 检索走 tools.travel.poi.search_poi
-  模块级插桩（POI 尚无运行时插槽）。两者 finally 无条件恢复。
+  运行时插槽；POI 检索在 poi_service.search_poi 服务边界注入。两者 finally
+  无条件恢复。
 - 断言契约字段：status / destination / days / party_size / pace /
   min_plan_version / parent_linked / repair_triggered / decision_required /
   no_error_violations / violation_codes / confidence_max / must_contain /
-  must_not_contain / notes_contain / notes_not_contain / clarification
+  must_not_contain / pois_contain / notes_contain / notes_not_contain /
+  clarification
 """
 import time
 import uuid
@@ -62,6 +63,15 @@ def _snapshot_actual(final: dict) -> dict:
         "violation_codes": sorted({v.get("code", "") for v in viols if v.get("code")}),
         "confidence": it.get("confidence"),
         "final_answer": ans,
+        "itinerary_pois": [
+            str(poi.get("name") or "")
+            for day in (it.get("days") or [])
+            if isinstance(day, dict)
+            for item in (day.get("items") or [])
+            if isinstance(item, dict)
+            for poi in [item.get("poi")]
+            if isinstance(poi, dict) and poi.get("name")
+        ],
         "notes": list(final.get("notes") or []),
         "has_itinerary": bool(it),
         "clarification": (not it) and bool(ans),
@@ -115,6 +125,10 @@ def _judge_one(exp: dict, act: dict, turn: str) -> list[str]:
     for needle in exp.get("must_not_contain", []):
         if needle in ans:
             _fail(f"final_answer 不应含「{needle}」")
+    itinerary_pois = set(act.get("itinerary_pois") or [])
+    for needle in exp.get("pois_contain", []):
+        if needle not in itinerary_pois:
+            _fail(f"itinerary 缺少 POI「{needle}」")
     for needle in exp.get("notes_contain", []):
         if not _note_hit(act["notes"], needle):
             _fail(f"notes 缺「{needle}」")
@@ -169,7 +183,7 @@ class _ProviderFailure:
             self._orig_provider = routing._route_provider
             routing.set_route_provider(_failing_transit_estimate)
         if self.fail_poi:
-            import backend.tools.travel.poi as poi_mod
+            from backend.travel.services import poi_service as poi_mod
             self._orig_search_poi = poi_mod.search_poi
             poi_mod.search_poi = _failing_search_poi
         return self
@@ -180,7 +194,7 @@ class _ProviderFailure:
                 from backend.tools.travel import routing
                 routing.set_route_provider(self._orig_provider)
             if self.fail_poi and self._orig_search_poi is not None:
-                import backend.tools.travel.poi as poi_mod
+                from backend.travel.services import poi_service as poi_mod
                 poi_mod.search_poi = self._orig_search_poi
         except Exception:  # noqa: BLE001 — 恢复失败不能再抛，避免污染后续 case
             pass
@@ -239,6 +253,25 @@ def _normalize_date_anchors(case: TestCase) -> None:
 def _run_case(case: TestCase) -> EvalResult:
     t0 = time.time()
     meta = case.metadata or {}
+    if meta.get("requires_live_poi"):
+        from backend.config import map as map_config
+        from backend.config.travel import TRAVEL_POI_SOURCE
+
+        if TRAVEL_POI_SOURCE != "live" or not map_config.is_configured():
+            return EvalResult(
+                case_id=case.id,
+                module="travel",
+                status="skip",
+                expected=case.expected,
+                actual={
+                    "skipped": "requires_live_poi（腾讯 POI Provider 未启用）",
+                    "execution_mode": "live_provider_unavailable",
+                    "real_provider_called": False,
+                    "skip_code": "required_live_provider_unavailable",
+                },
+                error_msg=None,
+            )
+
     # offline-only 用例（如 T-G10「未知必去→unresolved」）：联网模式下真实
     # Provider 会模糊命中真实地点，该断言只在确定性（离线）环境成立——
     # 如实标 skip，不算失败（Live≠Better：环境语义不同，不硬凑）
