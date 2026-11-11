@@ -42,6 +42,29 @@ API/worker 的每进程数据库池为 min=1/max=2；请求全局闸门为 12。
 
 本档位 TOOL_INLINE_MAX_TOKENS=2048。真实5条搜索结果约833 token，默认768会将结果裁成无法完整展示的预览；2048保留常规结果，但超限仍走既有压缩协议，模型调用仍受8192总上下文预算及输出/安全预留约束。该调整不改变容器并发或内存限额。
 
+## HTTPS 入口
+
+生产前端使用以下 DNS 名称；三个 A 记录都应解析到服务器公网 IP：
+
+- 主站：`anyanyan.me`
+- 管理端：`admin.anyanyan.me`
+- 客服端：`cs.anyanyan.me`
+
+Compose 只把前端与 APISIX 端口绑定到回环地址，公网 HTTPS 由宿主机 Nginx 终止。客服端的 `/ws/*` 必须转发到 APISIX，不能转发给 Next.js。UFW 与云安全组都需允许 TCP 80、443。
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx certbot python3-certbot-nginx
+sudo install -m 0644 部署/prod-4c8g/nginx/agent-platform.conf /etc/nginx/sites-available/agent-platform
+sudo ln -sfn /etc/nginx/sites-available/agent-platform /etc/nginx/sites-enabled/agent-platform
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx --non-interactive --agree-tos --register-unsafely-without-email --redirect \
+  -d anyanyan.me -d admin.anyanyan.me -d cs.anyanyan.me
+sudo certbot renew --dry-run
+```
+
+无联系邮箱签发证书，因此不会收到到期邮件；Certbot timer 仍会自动续期。客服 WebSocket 使用 `wss://cs.anyanyan.me`。
+
 ## 生产启动
 
 镜像在开发机或 CI 顺序构建，避免在 4C8G 生产服务器同时运行多个 Next.js 构建。前端 Dockerfile 使用 Node 22，依赖层使用既有 npm 缓存，运行时只向 BFF 注入 API_KEY，不编译到浏览器。

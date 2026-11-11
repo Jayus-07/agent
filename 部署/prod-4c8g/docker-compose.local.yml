@@ -169,7 +169,10 @@ services:
   frontend:
     build:
       context: ./frontend
-      args: { API_URL: "http://apisix:9080" }
+      args:
+        API_URL: "http://apisix:9080"
+        NEXT_PUBLIC_ADMIN_URL: "${NEXT_PUBLIC_ADMIN_URL:-http://localhost:3200}"
+        NEXT_PUBLIC_CS_URL: "${NEXT_PUBLIC_CS_URL:-http://localhost:3300}"
     environment:
       API_URL: http://apisix:9080
       API_KEY: ${API_KEY:?API_KEY is required}
