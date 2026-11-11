@@ -974,8 +974,10 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "",
         # （49MB 文本解析/500 页 OCR 单阶段可超 10 分钟无帧更新）时键提前
         # 过期，轮询通道 missing 10s 即误报「任务不存在」，而任务实际在跑。
         # 对齐 RAG_SSE_REDIS_POLL_MAX_SECONDS 后，键存活期 ≥ 后端轮询上限，
-        # 超时语义由轮询 deadline 统一收口，不再出现「键先死、任务还活着」。
-        r.expire(key, RAG_SSE_REDIS_POLL_MAX_SECONDS)
+        # 超时语义由轮询 deadline 统一收口。config 常量是 float（1900.0），
+        # Redis EXPIRE 只收整数——float 直传会被 Redis 拒绝并静默丢 TTL
+        # （键永不过期），必须 int() 收窄。
+        r.expire(key, int(RAG_SSE_REDIS_POLL_MAX_SECONDS))
     except Exception as e:
         # 受理帧/进度帧写失败是用户可见问题的根因（镜像 owner 随帧丢失、
         # 键缺失导致 SSE 误报），warning 级观测——Redis 瞬态恢复后无补救

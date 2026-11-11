@@ -856,7 +856,11 @@ class TestRedisPollEvents:
         ru._write_progress_redis("u-ttl", "uploading", "写入中")
 
         assert fake.expire_args is not None, "写入后必须设置 TTL"
-        assert fake.expire_args[1] == ru.RAG_SSE_REDIS_POLL_MAX_SECONDS
+        assert fake.expire_args[1] == int(ru.RAG_SSE_REDIS_POLL_MAX_SECONDS)
+        # Redis EXPIRE 只收整数：config 常量是 float(1900.0)，float 直传会被
+        # Redis 拒绝 → ResponseError 被 _write_progress_redis 吞掉 → 键永不过期
+        assert isinstance(fake.expire_args[1], int), \
+            "expire 必须收到 int（float 直传会被 Redis 拒绝）"
 
     def test_done_frame_carries_was_overwrite(self, monkeypatch):
         """D-2：done 帧必须透传 was_overwrite。
