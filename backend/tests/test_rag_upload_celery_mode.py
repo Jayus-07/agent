@@ -789,6 +789,79 @@ class TestRedisPollEvents:
         assert not any("不存在或已过期" in str(m) for m in msgs), \
             "连接异常与任务过期是两种语义，文案必须区分"
 
+    @pytest.mark.asyncio
+    async def test_missing_with_active_run_resumes_from_store(self, monkeypatch):
+        """batch8 缺陷 B 兜底：镜像键消失但 run_store 显示任务在途 → 不判
+        过期，重置宽限继续轮询直至拿到终态（模拟 Redis 丢键/极端过期）。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        state = {"polls": 0}
+
+        def missing_then_ok(uid):
+            state["polls"] += 1
+            if state["polls"] <= 5:  # 跨越 grace(3) 的持续 missing
+                return ("missing", None)
+            return ("ok", {"stage": "done", "message": "索引完成"})
+
+        monkeypatch.setattr(ru, "_read_progress_redis", missing_then_ok)
+        monkeypatch.setattr(ru, "_run_still_active", lambda uid: True)
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-resume"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert not any("不存在或已过期" in str(m) for m in msgs), \
+            "run_store 在途时键缺失不得判过期"
+        assert any(m.get("stage") == "done" for m in msgs), \
+            "兜底续看后必须拿到终态"
+
+    @pytest.mark.asyncio
+    async def test_missing_with_gone_run_reports_expired(self, monkeypatch):
+        """镜像键消失且 run_store 无在途运行 → 维持过期语义（不无限等待）。"""
+        monkeypatch.setattr(ru, "_SSE_REDIS_POLL_SECONDS", 0.01)
+        monkeypatch.setattr(ru, "_SSE_REDIS_EMPTY_GRACE_POLLS", 3)
+        monkeypatch.setattr(ru, "_read_progress_redis", lambda uid: ("missing", None))
+        monkeypatch.setattr(ru, "_run_still_active", lambda uid: False)
+
+        chunks = []
+        async for chunk in ru._redis_poll_events("u-gone2"):
+            chunks.append(chunk)
+
+        msgs = self._messages(chunks)
+        assert any("不存在或已过期" in m.get("message", "") for m in msgs)
+
+    def test_progress_mirror_ttl_aligns_poll_max(self, monkeypatch):
+        """batch8 缺陷 B：镜像 TTL 与 SSE 轮询上限同源——长阶段静默（单阶段
+        可超 10 分钟无帧）时键不再提前过期，超时语义由轮询 deadline 收口。"""
+
+        class _FakeRedis:
+            def __init__(self):
+                self.store = {}
+                self.expire_args = None
+
+            def hget(self, key, field):
+                return self.store.get((key, field))
+
+            def hset(self, key, mapping=None):
+                for k, v in (mapping or {}).items():
+                    self.store[(key, k)] = v
+
+            def expire(self, key, ttl):
+                self.expire_args = (key, ttl)
+
+        fake = _FakeRedis()
+        monkeypatch.setattr(
+            "backend.infra.redis.client.get_redis", lambda: fake)
+        ru._write_progress_redis("u-ttl", "uploading", "写入中")
+
+        assert fake.expire_args is not None, "写入后必须设置 TTL"
+        assert fake.expire_args[1] == int(ru.RAG_SSE_REDIS_POLL_MAX_SECONDS)
+        # Redis EXPIRE 只收整数：config 常量是 float(1900.0)，float 直传会被
+        # Redis 拒绝 → ResponseError 被 _write_progress_redis 吞掉 → 键永不过期
+        assert isinstance(fake.expire_args[1], int), \
+            "expire 必须收到 int（float 直传会被 Redis 拒绝）"
+
     def test_done_frame_carries_was_overwrite(self, monkeypatch):
         """D-2：done 帧必须透传 was_overwrite。
 
