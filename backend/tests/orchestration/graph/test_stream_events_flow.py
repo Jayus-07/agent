@@ -47,18 +47,20 @@ class _FakeMemory:
         self.end_turn_calls = []
         self.start_session_calls = []
 
-    # 签名与 MemoryManager.start_session/end_turn 对齐（#420 起带 product/domain，
-    # 缺参会让 runner 的记忆加载 TypeError 连锁失败整个流式套件）
+    # 显式签名 + **_kwargs 兜底：runner 未来再加记忆 kwarg 时不会像 #420
+    # 那样连锁崩整个套件；product 单独记录供归因断言（tuple[5]）
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id="", domain=None, event_scope=None, product=""):
+                      tenant_id="", domain=None, event_scope=None, product="",
+                      **_kwargs):
         self.start_session_calls.append((
-            session_id, question, user_id, tenant_id, event_scope,
+            session_id, question, user_id, tenant_id, event_scope, product,
         ))
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id="", idempotency_key="", product="", trace_id=""):
+                 tenant_id="", idempotency_key="", product="", trace_id="",
+                 **_kwargs):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
 
@@ -111,6 +113,8 @@ def test_runner_scopes_memory_events_to_trusted_request_identity(monkeypatch):
 
     scope = sys_obj._memory.start_session_calls[0][4]
     assert scope.product_id == "agent"
+    # runner 直传 start_session 的 product kwarg 与 product_id 一致（守卫 #420 传参）
+    assert sys_obj._memory.start_session_calls[0][5] == "agent"
     assert scope.tenant_id == "tenant-A"
     assert scope.user_id == "user-A"
     assert scope.session_id == "same-session"
