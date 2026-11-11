@@ -1037,12 +1037,16 @@ class TestMapTools:
         assert "没有街景数据" in out
 
     def test_navigation_tool_warns_on_backend_key(self, configured):
+        """未配前端 Key 时 fail-closed（审计 #44）：拒发含后端 Key 的导航 URL。"""
         from backend.tools.map import route as map_route
 
         out = map_route.map_navigation_tool.invoke(
             {"to_location": "26.049,119.3896", "to_name": "鼓山"})
-        assert '"key_kind": "backend"' in out
-        assert "warning" in out
+        assert "error" in out
+        assert "TENCENT_LBS_FRONTEND_KEY" in out
+        # 后端 Key 与可调起导航的 URL 均不得下发（HTTP 路由 409 同口径）
+        assert MAP.TENCENT_LBS_KEY not in out
+        assert '"key_kind": "backend"' not in out and '"url"' not in out
 
     def test_navigation_tool_no_warning_with_frontend_key(self, configured, monkeypatch):
         from backend.tools.map import route as map_route
@@ -1051,9 +1055,12 @@ class TestMapTools:
         out = map_route.map_navigation_tool.invoke({"to_location": "26.049,119.3896"})
         assert '"key_kind": "frontend"' in out and "warning" not in out
 
-    def test_navigation_tool_accepts_chinese_mode(self, configured):
+    def test_navigation_tool_accepts_chinese_mode(self, configured, monkeypatch):
         from backend.tools.map import route as map_route
 
+        # 审计 #44 起 backend Key 分支 fail-closed；本用例测的是 mode 归一，
+        # 需配前端 Key 才能到达归一输出（与 no_warning_with_frontend_key 同法）
+        monkeypatch.setattr(MAP, "TENCENT_LBS_FRONTEND_KEY", "FRONT")
         out = map_route.map_navigation_tool.invoke(
             {"to_location": "26.049,119.3896", "mode": "公交"})
         assert '"mode": "bus"' in out
