@@ -66,13 +66,15 @@ class _FakeMemory:
         self.end_turn_calls = []
         self.end_turn_idempotency_keys = []
 
+    # 签名与 MemoryManager.start_session/end_turn 对齐（#420 起带 product/domain，
+    # 缺参会让 runner 的记忆加载 TypeError 连锁失败整个套件）
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id="", event_scope=None):
+                      tenant_id="", domain=None, event_scope=None, product=""):
         from backend.memory.short_term import ShortTermBuffer
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id="", idempotency_key=""):
+                 tenant_id="", idempotency_key="", product="", trace_id=""):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
         self.end_turn_idempotency_keys.append(idempotency_key)

@@ -47,8 +47,10 @@ class _FakeMemory:
         self.end_turn_calls = []
         self.start_session_calls = []
 
+    # 签名与 MemoryManager.start_session/end_turn 对齐（#420 起带 product/domain，
+    # 缺参会让 runner 的记忆加载 TypeError 连锁失败整个流式套件）
     def start_session(self, session_id, question, user_id="default",
-                      tenant_id="", event_scope=None):
+                      tenant_id="", domain=None, event_scope=None, product=""):
         self.start_session_calls.append((
             session_id, question, user_id, tenant_id, event_scope,
         ))
@@ -56,7 +58,7 @@ class _FakeMemory:
         return ShortTermBuffer()
 
     def end_turn(self, session_id, question, answer, user_id="default",
-                 tenant_id=""):
+                 tenant_id="", idempotency_key="", product="", trace_id=""):
         self.last_answer = answer
         self.end_turn_calls.append((session_id, question, answer))
 
@@ -124,7 +126,8 @@ def test_runner_does_not_deliver_late_memory_event_to_next_request(monkeypatch):
 
     class LateEventMemory(_FakeMemory):
         def start_session(self, session_id, question, user_id="default",
-                          tenant_id="", event_scope=None):
+                          tenant_id="", domain=None, event_scope=None,
+                          product=""):
             from backend.context_budget.metrics import emit_context_event
 
             if self.start_session_calls:
