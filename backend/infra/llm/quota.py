@@ -123,10 +123,17 @@ class BudgetPolicy:
     enforcement: str = "hard"
     timezone: str = "Asia/Shanghai"
     audit_exempt: bool = False
+    # ''=总额度轴；非空=域额度轴（迁移 147，任务 9）
+    domain: str = ""
 
     def __post_init__(self):
         if self.scope_type not in _VALID_SCOPES:
             raise ValueError(f"非法预算作用域: {self.scope_type}")
+        if self.domain:
+            from backend.config.budget import BUDGET_DOMAIN_GATES
+
+            if self.domain not in BUDGET_DOMAIN_GATES:
+                raise ValueError(f"非法预算域: {self.domain!r}")
         if not self.scope_id.strip():
             raise ValueError("预算作用域 ID 不能为空")
         if self.enforcement not in _VALID_ENFORCEMENT:
@@ -388,19 +395,23 @@ class PostgresQuotaStore:
             enforcement=row[4],
             timezone=row[5],
             audit_exempt=bool(row[6]),
+            domain=str(row[7] or ""),
         )
 
-    def get_policy(self, scope_type: str, scope_id: str) -> BudgetPolicy | None:
+    def get_policy(
+        self, scope_type: str, scope_id: str, domain: str = "",
+    ) -> BudgetPolicy | None:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, daily_limit_cny,
                                    monthly_limit_cny, enforcement, timezone,
-                                   audit_exempt
+                                   audit_exempt, domain
                             FROM {self._policies}
-                            WHERE scope_type = %s AND scope_id = %s""",
-                        (scope_type, scope_id),
+                            WHERE scope_type = %s AND scope_id = %s
+                              AND domain = %s""",
+                        (scope_type, scope_id, domain),
                     )
                     return self._policy(cur.fetchone())
         except Exception as exc:
@@ -428,6 +439,7 @@ class PostgresQuotaStore:
         template: BudgetPolicy,
         period_type: str,
         period_start: datetime,
+        domain: str = "",
     ) -> dict[str, Any]:
         limit = (
             template.daily_limit_cny
@@ -438,8 +450,9 @@ class PostgresQuotaStore:
             f"""SELECT used_cny, reserved_cny
                 FROM {ledger_table}
                 WHERE scope_type = %s AND scope_id = %s
-                  AND period_type = %s AND period_start = %s""",
-            (scope_type, scope_id, period_type, period_start),
+                  AND period_type = %s AND period_start = %s
+                  AND domain = %s""",
+            (scope_type, scope_id, period_type, period_start, domain),
         )
         row = cur.fetchone()
         used = Decimal(str(row[0])) if row else Decimal("0")
@@ -553,14 +566,15 @@ class PostgresQuotaStore:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, daily_limit_cny,
                                    monthly_limit_cny, enforcement, timezone,
-                                   audit_exempt, updated_by, updated_at
+                                   audit_exempt, updated_by, updated_at, domain
                             FROM {self._policies}
-                            ORDER BY scope_type, scope_id"""
+                            ORDER BY scope_type, scope_id, domain"""
                     )
                     rows = cur.fetchall()
             keys = (
                 "scope_type", "scope_id", "daily_limit_cny", "monthly_limit_cny",
                 "enforcement", "timezone", "audit_exempt", "updated_by", "updated_at",
+                "domain",
             )
             return [dict(zip(keys, row)) for row in rows]
         except Exception as exc:
@@ -641,6 +655,7 @@ class PostgresQuotaStore:
                     cur.execute(
                         f"""SELECT scope_type, scope_id FROM {self._ledger}
                             WHERE scope_type IN ('user', 'tenant')
+                              AND domain = ''
                               {test_filter_sql}
                             GROUP BY scope_type, scope_id
                             ORDER BY scope_type, scope_id LIMIT %(limit)s""",
@@ -824,7 +839,8 @@ class PostgresQuotaStore:
                                                     OR (period_type = 'month'
                                                         AND period_start = %s)))
                             FROM {self._ledger}
-                            WHERE scope_type IN ('user', 'tenant')""",
+                            WHERE scope_type IN ('user', 'tenant')
+                              AND domain = ''""",
                         (
                             periods.day_start_utc, periods.month_start_utc,
                             periods.day_start_utc, periods.month_start_utc,
@@ -888,8 +904,13 @@ class PostgresQuotaStore:
         updated_by: str,
         reason: str,
         expected_updated_at: datetime | None = None,
+        domain: str = "",
     ) -> dict[str, Any]:
-        """立即生效地写入策略，并追加旧值/新值审计。"""
+        """立即生效地写入策略，并追加旧值/新值审计。
+
+        domain='' 为总额度策略；非空为域额度策略（迁移 147，任务 9），
+        并发控制（expected_updated_at）按 (scope, id, domain) 三元组判定。
+        """
         if daily_limit_cny > monthly_limit_cny:
             raise ValueError("日额度不能高于月额度")
         policy = BudgetPolicy(
@@ -899,6 +920,7 @@ class PostgresQuotaStore:
             monthly_limit_cny=monthly_limit_cny,
             enforcement=enforcement,
             audit_exempt=audit_exempt,
+            domain=domain,
         )
         if not reason.strip():
             raise ValueError("预算策略变更原因不能为空")
@@ -910,11 +932,12 @@ class PostgresQuotaStore:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, daily_limit_cny,
                                    monthly_limit_cny, enforcement, timezone,
-                                   audit_exempt, updated_by, updated_at
+                                   audit_exempt, updated_by, updated_at, domain
                             FROM {self._policies}
                             WHERE scope_type = %s AND scope_id = %s
+                              AND domain = %s
                             FOR UPDATE""",
-                        (scope_type, scope_id),
+                        (scope_type, scope_id, domain),
                     )
                     old_row = cur.fetchone()
                     if expected_updated_at is not None and (
@@ -926,9 +949,9 @@ class PostgresQuotaStore:
                         f"""INSERT INTO {self._policies} (
                                   scope_type, scope_id, daily_limit_cny,
                                   monthly_limit_cny, enforcement, timezone,
-                                  audit_exempt, updated_by
-                              ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                              ON CONFLICT (scope_type, scope_id) DO UPDATE SET
+                                  audit_exempt, updated_by, domain
+                              ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                              ON CONFLICT (scope_type, scope_id, domain) DO UPDATE SET
                                   daily_limit_cny = EXCLUDED.daily_limit_cny,
                                   monthly_limit_cny = EXCLUDED.monthly_limit_cny,
                                   enforcement = EXCLUDED.enforcement,
@@ -937,25 +960,25 @@ class PostgresQuotaStore:
                                   updated_at = now()
                               RETURNING scope_type, scope_id, daily_limit_cny,
                                         monthly_limit_cny, enforcement, timezone,
-                                        audit_exempt, updated_by, updated_at""",
+                                        audit_exempt, updated_by, updated_at, domain""",
                         (
                             policy.scope_type, policy.scope_id,
                             policy.daily_limit_cny, policy.monthly_limit_cny,
                             policy.enforcement, timezone_name,
-                            policy.audit_exempt, updated_by,
+                            policy.audit_exempt, updated_by, domain,
                         ),
                     )
                     row = cur.fetchone()
                     before = dict(zip(
                         ("scope_type", "scope_id", "daily_limit_cny",
                          "monthly_limit_cny", "enforcement", "timezone",
-                         "audit_exempt", "updated_by", "updated_at"),
+                         "audit_exempt", "updated_by", "updated_at", "domain"),
                         old_row,
                     )) if old_row else None
                     after = dict(zip(
                         ("scope_type", "scope_id", "daily_limit_cny",
                          "monthly_limit_cny", "enforcement", "timezone",
-                         "audit_exempt", "updated_by", "updated_at"),
+                         "audit_exempt", "updated_by", "updated_at", "domain"),
                         row,
                     ))
                     cur.execute(
@@ -989,6 +1012,21 @@ class PostgresQuotaStore:
             user=user,
         )
 
+    def resolve_domain_policy(
+        self, user_id: str, tenant_id: str, domain: str,
+    ) -> BudgetPolicy | None:
+        """解析某域的策略链：用户域覆盖 > 租户域覆盖 > 全租户域默认 > 平台域兜底。
+
+        四层都没有（如新增域未配策略）返回 None——该域不做域闸（放行），
+        由种子配置保证 3 个顶级域始终有默认值；调用方据此跳过域窗口。
+        """
+        return (
+            self.get_policy("user", user_id, domain)
+            or self.get_policy("tenant", tenant_id, domain)
+            or self.get_policy("tenant_default", "default", domain)
+            or self.get_policy("platform", "default", domain)
+        )
+
     def reserve(
         self,
         *,
@@ -998,18 +1036,27 @@ class PostgresQuotaStore:
         request_id: str = "",
         now: datetime | None = None,
         request_limit_cny: Decimal | None = None,
+        domain: str = "",
     ) -> PostgresQuotaReservation:
         """按真实身份预占（user/tenant 两层，模板策略只提供上限）。
 
         2026-10-01 边界修复：金额为 0 的硬门禁（副作用零金额检查）在
         used+reserved 已达上限时同样拒绝——原条件 ``+0 <= limit`` 会让
         打满的账本继续放行零金额调用。
+        2026-11-11 域额度（任务 9，迁移 147）：domain 非空时在总额度闸之外
+        叠加同域闸（用户域 > 租户域，继承链同构），一笔域调用预占 8 行
+        （user/tenant × 总/域 × 日/月）；domain='' 行为与历史完全一致。
         """
         if not user_id or not tenant_id:
             raise QuotaConfigurationError("硬预算需要可信 user_id 和 tenant_id")
         amount = Decimal(amount_cny).quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         if amount < 0:
             raise ValueError("预算预占金额不能为负数")
+        if domain:
+            from backend.config.budget import BUDGET_DOMAIN_GATES
+
+            if domain not in BUDGET_DOMAIN_GATES:
+                raise ValueError(f"非法预算域: {domain!r}")
         request_limit = None
         if request_limit_cny is not None:
             request_limit = Decimal(request_limit_cny)
@@ -1017,6 +1064,10 @@ class PostgresQuotaStore:
                 raise ValueError('整批预算必须有请求ID和非负有限人民币上限')
             request_limit = request_limit.quantize(_SIX_PLACES, rounding=ROUND_HALF_UP)
         policies = self.resolve(user_id, tenant_id)
+        domain_policy = (
+            self.resolve_domain_policy(user_id, tenant_id, domain)
+            if domain else None
+        )
         periods = budget_periods(now, policies.tenant.timezone)
         reservation_id = str(uuid.uuid4())
         try:
@@ -1042,63 +1093,78 @@ class PostgresQuotaStore:
                         committed = Decimal(cur.fetchone()[0])
                         if committed >= request_limit or committed + amount > request_limit:
                             raise QuotaExceeded(f'request:{request_id}', 'run')
-                    for scope_type, scope_id, policy in (
-                        ("user", user_id, policies.user),
-                        ("tenant", tenant_id, policies.tenant),
-                    ):
-                        for period_type, period_start, limit in (
-                            ("day", periods.day_start_utc, policy.daily_limit_cny),
-                            ("month", periods.month_start_utc, policy.monthly_limit_cny),
-                        ):
-                            cur.execute(
-                                f"""
-                                INSERT INTO {self._ledger} (
-                                    scope_type, scope_id, period_type, period_start,
-                                    limit_cny, enforcement, reserved_cny
-                                )
-                                SELECT %s, %s, %s, %s, %s, %s, %s
-                                WHERE %s <> 'hard' OR %s <= %s
-                                ON CONFLICT (scope_type, scope_id, period_type, period_start)
-                                DO UPDATE SET
-                                    limit_cny = EXCLUDED.limit_cny,
-                                    enforcement = EXCLUDED.enforcement,
-                                    reserved_cny = {self._ledger}.reserved_cny
-                                        + EXCLUDED.reserved_cny,
-                                    updated_at = now()
-                                WHERE EXCLUDED.enforcement <> 'hard'
-                                   OR {self._ledger}.used_cny
-                                      + {self._ledger}.reserved_cny
-                                      + EXCLUDED.reserved_cny < EXCLUDED.limit_cny
-                                   OR (EXCLUDED.reserved_cny > 0
-                                       AND {self._ledger}.used_cny
-                                       + {self._ledger}.reserved_cny
-                                       + EXCLUDED.reserved_cny <= EXCLUDED.limit_cny)
-                                RETURNING scope_type, scope_id, used_cny,
-                                          reserved_cny, limit_cny
-                                """,
-                                (
-                                    scope_type, scope_id, period_type,
-                                    period_start, limit, policy.enforcement, amount,
-                                    policy.enforcement, amount, limit,
-                                ),
+                    def _reserve_window(
+                        scope_type: str,
+                        scope_id: str,
+                        policy: BudgetPolicy,
+                        axis_domain: str,
+                        period_type: str,
+                        period_start: datetime,
+                    ) -> None:
+                        """单一窗口原子预占：账本硬闸 upsert + 预占行落库。
+
+                        域窗口（axis_domain 非空）不写阈值事件——budget_events
+                        无域维度，域告警由 QuotaExceeded 拒绝日志与月度对账
+                        域成本段承载。
+                        """
+                        limit = (
+                            policy.daily_limit_cny
+                            if period_type == "day"
+                            else policy.monthly_limit_cny
+                        )
+                        cur.execute(
+                            f"""
+                            INSERT INTO {self._ledger} (
+                                scope_type, scope_id, period_type, period_start,
+                                domain, limit_cny, enforcement, reserved_cny
                             )
-                            ledger_row = cur.fetchone()
-                            if ledger_row is None:
-                                _record_quota_metric(
-                                    "budget_quota_total",
-                                    scope_type=scope_type,
-                                    period_type=period_type,
-                                    result="rejected",
-                                )
-                                raise QuotaExceeded(
-                                    f"{scope_type}:{scope_id}", period_type,
-                                )
+                            SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                            WHERE %s <> 'hard' OR %s <= %s
+                            ON CONFLICT (scope_type, scope_id, period_type,
+                                         period_start, domain)
+                            DO UPDATE SET
+                                limit_cny = EXCLUDED.limit_cny,
+                                enforcement = EXCLUDED.enforcement,
+                                reserved_cny = {self._ledger}.reserved_cny
+                                    + EXCLUDED.reserved_cny,
+                                updated_at = now()
+                            WHERE EXCLUDED.enforcement <> 'hard'
+                               OR {self._ledger}.used_cny
+                                  + {self._ledger}.reserved_cny
+                                  + EXCLUDED.reserved_cny < EXCLUDED.limit_cny
+                               OR (EXCLUDED.reserved_cny > 0
+                                   AND {self._ledger}.used_cny
+                                   + {self._ledger}.reserved_cny
+                                   + EXCLUDED.reserved_cny <= EXCLUDED.limit_cny)
+                            RETURNING scope_type, scope_id, used_cny,
+                                      reserved_cny, limit_cny
+                            """,
+                            (
+                                scope_type, scope_id, period_type,
+                                period_start, axis_domain, limit,
+                                policy.enforcement, amount,
+                                policy.enforcement, amount, limit,
+                            ),
+                        )
+                        ledger_row = cur.fetchone()
+                        if ledger_row is None:
                             _record_quota_metric(
                                 "budget_quota_total",
                                 scope_type=scope_type,
                                 period_type=period_type,
-                                result="reserved",
+                                result="rejected",
                             )
+                            raise QuotaExceeded(
+                                f"{scope_type}:{scope_id}:{axis_domain}",
+                                period_type,
+                            )
+                        _record_quota_metric(
+                            "budget_quota_total",
+                            scope_type=scope_type,
+                            period_type=period_type,
+                            result="reserved",
+                        )
+                        if not axis_domain:
                             _insert_threshold_events(
                                 cur,
                                 self._events,
@@ -1110,20 +1176,48 @@ class PostgresQuotaStore:
                                 reserved=ledger_row[3],
                                 limit=ledger_row[4],
                             )
-                            cur.execute(
-                                f"""
-                                INSERT INTO {self._reservations} (
-                                    id, request_id, user_id, tenant_id,
-                                    scope_type, scope_id, period_type, period_start,
-                                    reserved_cny
-                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                """,
-                                (
-                                    reservation_id, request_id, user_id, tenant_id,
-                                    scope_type, scope_id, period_type,
-                                    period_start, amount,
-                                ),
+                        cur.execute(
+                            f"""
+                            INSERT INTO {self._reservations} (
+                                id, request_id, user_id, tenant_id,
+                                scope_type, scope_id, period_type, period_start,
+                                domain, reserved_cny
+                            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """,
+                            (
+                                reservation_id, request_id, user_id, tenant_id,
+                                scope_type, scope_id, period_type,
+                                period_start, axis_domain, amount,
+                            ),
+                        )
+
+                    # 域策略两级解析：用户域闸走完整继承链（用户域覆盖 >
+                    # 租户域覆盖 > 全租户域默认 > 平台域兜底），租户域闸跳过
+                    # 用户层——与总额度闸的解析结构完全同构
+                    domain_policy_tenant = None
+                    if domain:
+                        domain_policy_tenant = (
+                            self.get_policy("tenant", tenant_id, domain)
+                            or self.get_policy("tenant_default", "default", domain)
+                            or self.get_policy("platform", "default", domain)
+                        )
+                    for scope_type, scope_id, policy, subject_domain_policy in (
+                        ("user", user_id, policies.user, domain_policy),
+                        ("tenant", tenant_id, policies.tenant, domain_policy_tenant),
+                    ):
+                        for period_type, period_start in (
+                            ("day", periods.day_start_utc),
+                            ("month", periods.month_start_utc),
+                        ):
+                            _reserve_window(
+                                scope_type, scope_id, policy, "",
+                                period_type, period_start,
                             )
+                            if subject_domain_policy is not None:
+                                _reserve_window(
+                                    scope_type, scope_id, subject_domain_policy,
+                                    domain, period_type, period_start,
+                                )
             return PostgresQuotaReservation(
                 reservation_id=reservation_id,
                 user_id=user_id,
@@ -1152,21 +1246,22 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
-                    # 账本行锁序必须与 reserve（user→tenant、day→month）一致：
-                    # 本查询无 ORDER BY 时按索引返回 tenant 在前，与 reserve
-                    # 互持行锁 → AB-BA 死锁（2026-10-29 生产实测 21 次）
+                    # 账本行锁序必须与 reserve（user→tenant、day→month、总→域）
+                    # 一致：本查询无 ORDER BY 时按索引返回 tenant 在前，与
+                    # reserve 互持行锁 → AB-BA 死锁（2026-10-29 生产实测 21 次）
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
-                                   period_start, reserved_cny
+                                   period_start, domain, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
                             ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
-                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END,
+                                     domain
                             FOR UPDATE""",
                         (reservation.reservation_id,),
                     )
                     rows = cur.fetchall()
-                    for scope_type, scope_id, period_type, period_start, reserved in rows:
+                    for scope_type, scope_id, period_type, period_start, row_domain, reserved in rows:
                         cur.execute(
                             f"""UPDATE {self._ledger}
                                 SET reserved_cny = GREATEST(reserved_cny - %s, 0),
@@ -1174,9 +1269,10 @@ class PostgresQuotaStore:
                                     updated_at = now()
                                 WHERE scope_type = %s AND scope_id = %s
                                   AND period_type = %s AND period_start = %s
+                                  AND domain = %s
                                 RETURNING used_cny, reserved_cny, limit_cny""",
                             (reserved, actual, scope_type, scope_id,
-                             period_type, period_start),
+                             period_type, period_start, row_domain),
                         )
                         ledger_row = cur.fetchone()
                         if ledger_row is not None:
@@ -1212,27 +1308,31 @@ class PostgresQuotaStore:
         try:
             with self._connection_factory() as conn:
                 with conn.cursor() as cur:
-                    # 同 settle：账本行锁序必须与 reserve（user→tenant、day→month）
-                    # 一致，乱序会与 reserve 的 upsert 互锁（AB-BA 死锁）
+                    # 同 settle：账本行锁序必须与 reserve（user→tenant、
+                    # day→month、总→域）一致，乱序会与 reserve 的 upsert
+                    # 互锁（AB-BA 死锁）
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
-                                   period_start, reserved_cny
+                                   period_start, domain, reserved_cny
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'reserved'
                             ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
-                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END,
+                                     domain
                             FOR UPDATE""",
                         (reservation.reservation_id,),
                     )
                     rows = cur.fetchall()
-                    for scope_type, scope_id, period_type, period_start, reserved in rows:
+                    for scope_type, scope_id, period_type, period_start, row_domain, reserved in rows:
                         cur.execute(
                             f"""UPDATE {self._ledger}
                                 SET reserved_cny = GREATEST(reserved_cny - %s, 0),
                                     updated_at = now()
                                 WHERE scope_type = %s AND scope_id = %s
-                                  AND period_type = %s AND period_start = %s""",
-                            (reserved, scope_type, scope_id, period_type, period_start),
+                                  AND period_type = %s AND period_start = %s
+                                  AND domain = %s""",
+                            (reserved, scope_type, scope_id, period_type,
+                             period_start, row_domain),
                         )
                         _record_quota_metric(
                             "budget_quota_total",
@@ -1319,11 +1419,12 @@ class PostgresQuotaStore:
                         # 同 settle：锁序与 reserve 一致，避免互锁
                         cur.execute(
                             f"""SELECT scope_type, scope_id, period_type,
-                                       period_start, reserved_cny
+                                   period_start, domain, reserved_cny
                                 FROM {self._reservations}
                                 WHERE id = %s AND status = 'reserved'
                                 ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
-                                         CASE period_type WHEN 'day' THEN 0 ELSE 1 END
+                                         CASE period_type WHEN 'day' THEN 0 ELSE 1 END,
+                                         domain
                                 FOR UPDATE""",
                             (reservation_pk,),
                         )
@@ -1332,18 +1433,19 @@ class PostgresQuotaStore:
                             continue
                         period_open = any(
                             (period_type, period_start) in current_starts
-                            for _, _, period_type, period_start, _ in rows
+                            for _, _, period_type, period_start, _, _ in rows
                         )
                         if not period_open:
-                            for scope_type, scope_id, period_type, period_start, reserved in rows:
+                            for scope_type, scope_id, period_type, period_start, row_domain, reserved in rows:
                                 cur.execute(
                                     f"""UPDATE {self._ledger}
                                         SET reserved_cny = GREATEST(reserved_cny - %s, 0),
                                             updated_at = now()
                                         WHERE scope_type = %s AND scope_id = %s
-                                          AND period_type = %s AND period_start = %s""",
+                                          AND period_type = %s AND period_start = %s
+                                          AND domain = %s""",
                                     (reserved, scope_type, scope_id,
-                                     period_type, period_start),
+                                     period_type, period_start, row_domain),
                                 )
                             ledger_released += 1
                         cur.execute(
@@ -1440,11 +1542,12 @@ class PostgresQuotaStore:
                 with conn.cursor() as cur:
                     cur.execute(
                         f"""SELECT scope_type, scope_id, period_type,
-                                   period_start, reserved_cny, resolution
+                                   period_start, domain, reserved_cny, resolution
                             FROM {self._reservations}
                             WHERE id = %s AND status = 'needs_review'
                             ORDER BY CASE scope_type WHEN 'user' THEN 0 ELSE 1 END,
-                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END
+                                     CASE period_type WHEN 'day' THEN 0 ELSE 1 END,
+                                     domain
                             FOR UPDATE""",
                         (reservation_id,),
                     )
@@ -1455,8 +1558,8 @@ class PostgresQuotaStore:
                             "found": False, "already_resolved": True,
                             "released_cny": "0.000000", "booked_cny": None,
                         }
-                    held = Decimal(str(rows[0][4])).quantize(_SIX_PLACES)
-                    current_resolution = str(rows[0][5] or "")
+                    held = Decimal(str(rows[0][5])).quantize(_SIX_PLACES)
+                    current_resolution = str(rows[0][6] or "")
                     if current_resolution:
                         return {
                             "reservation_id": reservation_id, "action": action,
@@ -1464,7 +1567,7 @@ class PostgresQuotaStore:
                             "released_cny": "0.000000", "booked_cny": None,
                             "resolution": current_resolution,
                         }
-                    for scope_type, scope_id, period_type, period_start, reserved, _ in rows:
+                    for scope_type, scope_id, period_type, period_start, row_domain, reserved, _ in rows:
                         cur.execute(
                             f"""UPDATE {self._ledger}
                                 SET reserved_cny = GREATEST(reserved_cny - %s, 0),
@@ -1472,9 +1575,10 @@ class PostgresQuotaStore:
                                     updated_at = now()
                                 WHERE scope_type = %s AND scope_id = %s
                                   AND period_type = %s AND period_start = %s
+                                  AND domain = %s
                                 RETURNING used_cny, reserved_cny, limit_cny""",
                             (reserved, booked, scope_type, scope_id,
-                             period_type, period_start),
+                             period_type, period_start, row_domain),
                         )
                         ledger_row = cur.fetchone()
                         if booked is not None and ledger_row is not None:
@@ -1825,7 +1929,9 @@ class PostgresQuotaStore:
                         (tz, cutoff_iso,),
                     )
                     domain_rows = cur.fetchall()
-                    # ② ledger 月行：月 × scope 汇总
+                    # ② ledger 月行：月 × scope 汇总（只算总额度轴——域行是
+                    # 同一笔钱的域维度镜像，不滤会把入账翻倍；域拆分见
+                    # by_domain usage 段）
                     cur.execute(
                         f"""SELECT to_char(period_start AT TIME ZONE %s,
                                            'YYYY-MM') AS month,
@@ -1833,6 +1939,7 @@ class PostgresQuotaStore:
                                    SUM(used_cny), SUM(reserved_cny)
                               FROM {self._ledger}
                              WHERE period_type = 'month'
+                               AND domain = ''
                                AND period_start >= %s
                              GROUP BY 1, 2, 3""",
                         (tz, cutoff_ts,),

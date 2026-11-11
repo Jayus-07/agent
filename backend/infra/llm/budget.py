@@ -157,6 +157,41 @@ class RequestBudget:
             bool(model_name) and lookup_model_entry(model_name) is not None
             and get_model_billing(model_name) == "local"
         )
+        # 任务 9 域额度（2026-11-11）：从请求归因读 agent_domain 并归并为
+        # 顶级域（''=无标签过渡期/管理端工具，只走总额度闸）；本地推理不预占
+        # 云端账单，域闸同样跳过（1.1 语义）。归因读取失败不阻断主链路。
+        raw_domain = ""
+        try:
+            from backend.observability.llm_usage_store import (
+                current_usage_attribution,
+            )
+
+            raw_domain = current_usage_attribution().get("agent_domain") or ""
+        except Exception:
+            raw_domain = ""
+        from backend.config.budget import (
+            BUDGET_DOMAIN_UNATTRIBUTED_BLOCK,
+            normalize_budget_domain,
+        )
+
+        domain = normalize_budget_domain(raw_domain)
+        if (
+            self.mode == "enforce"
+            and not local_inference
+            and not raw_domain
+            and BUDGET_DOMAIN_UNATTRIBUTED_BLOCK
+        ):
+            # 过渡期结束开关：无域标签的调用无法确定该扣哪个域闸，
+            # fail-closed 防漏网（默认 False，标签覆盖补齐后开启）
+            _record_budget_request(self.mode, "rejected")
+            logger.warning(
+                "[Budget][domain_unattributed] 调用无域标签且已开启"
+                " fail-closed，拒绝: model=%s",
+                model_name or "unknown",
+            )
+            raise RequestBudgetExceeded(
+                f"domain_unattributed:{model_name or 'unknown'}"
+            )
         with self._lock:
             if self.quota_error is not None:
                 raise self.quota_error
@@ -242,6 +277,7 @@ class RequestBudget:
                         # 释放差额，避免并发请求在未知 completion token 时超卖。
                         amount_cny=reservation_cost,
                         request_id=(current_run_budget() or (_current_request_id.get(),))[0],
+                        domain=domain,
                         **({'request_limit_cny': _run_scope.get().limit_cny}
                            if _run_scope.get() is not None else {}),
                     )

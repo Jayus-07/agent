@@ -134,6 +134,9 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/145_budget_settlement_kind.sql",
     # 146 核销审计表 append-only 触发器：审计行禁改删（影响预算/费用审计）
     "backend/sql/migrations/146_budget_resolution_audit_append_only.sql",
+    # 149 预算域额度轴：三表加 domain 列 + PK 重建（任务 9，影响预算/费用闸门；
+    # 原 147/148 号连续与并行会话碰撞，改 149）
+    "backend/sql/migrations/149_budget_domain_axis.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
