@@ -151,7 +151,12 @@ _PROBES = {
 }
 
 
-def _run_travel_provider(cases: list[TestCase], **kwargs) -> list[EvalResult]:
+def _run_travel_provider(
+    cases: list[TestCase], live: bool = False, **kwargs,
+) -> list[EvalResult]:
+    if live:
+        return _unsupported_live_results(cases)
+
     # 缓存/quota 隔离（与 tests/travel/conftest 同纪律）：探针禁止写共享
     # Redis，也不得被宿主环境的真实日预算影响——实测 .env 配了
     # TRAVEL_PROVIDER_TENCENT_DAILY_BUDGET=1 时全部探针被误软停。
@@ -170,6 +175,29 @@ def _run_travel_provider(cases: list[TestCase], **kwargs) -> list[EvalResult]:
     finally:
         pcache._backend = orig_backend
         quota.daily_budget = orig_budget
+
+
+def _unsupported_live_results(cases: list[TestCase]) -> list[EvalResult]:
+    """真实 Provider E2E 未接入统一 Runner 时，阻止 fake 结果冒充 Live。"""
+    reason = (
+        "travel-provider 统一 Runner 仅执行 fake Provider 探针，不执行真实第三方调用。"
+        "真实 Gateway 链路尚未进入本次统一评测报告。"
+    )
+    return [
+        EvalResult(
+            case_id=case.id,
+            module="travel-provider",
+            status="skip",
+            expected=case.expected,
+            actual={
+                "execution_mode": "live_unsupported",
+                "real_provider_called": False,
+                "skip_code": "live_evaluator_unsupported",
+            },
+            error_msg=reason,
+        )
+        for case in cases
+    ]
 
 
 def _run_all_cases(cases: list[TestCase]) -> list[EvalResult]:

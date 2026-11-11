@@ -145,6 +145,21 @@ def classify_report_validity(report: Any) -> RunValidityVerdict:
             {"total": 0},
         )
 
+    if getattr(report, "mode", "") == "live":
+        unsupported_live_cases = [
+            str(getattr(result, "case_id", ""))
+            for result in results
+            if getattr(result, "status", "") == "skip"
+            and isinstance(getattr(result, "actual", None), dict)
+            and result.actual.get("skip_code") == "live_evaluator_unsupported"
+        ]
+        if unsupported_live_cases:
+            return RunValidityVerdict(
+                RunValidity.INVALID_ENV,
+                "live_evaluator_unsupported",
+                {"total": len(results), "case_ids": unsupported_live_cases},
+            )
+
     non_skip = [r for r in results if getattr(r, "status", "") != "skip"]
     if not non_skip:
         return RunValidityVerdict(
