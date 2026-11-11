@@ -28,6 +28,8 @@ export interface BudgetPolicy {
   scope_type: string; scope_id: string; daily_limit_cny: string; monthly_limit_cny: string;
   enforcement: BudgetEnforcement; timezone: string; audit_exempt: boolean;
   updated_by?: string; updated_at?: string;
+  /** ''=总额度策略；main/travel/customer_service=域额度策略（任务 9） */
+  domain?: string;
 }
 export interface BudgetEvent { scope_type: string; scope_id: string; period_type: string; threshold: number; created_at: string }
 export interface BudgetPolicyAudit { scope_type: string; scope_id: string; before_value: Record<string, unknown> | null; after_value: Record<string, unknown>; reason: string; updated_by: string; created_at: string }

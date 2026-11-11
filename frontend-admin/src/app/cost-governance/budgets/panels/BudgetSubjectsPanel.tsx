@@ -47,6 +47,8 @@ export default function BudgetSubjectsPanel() {
   const [monthly, setMonthly] = useState('')
   const [enforcement, setEnforcement] = useState<'hard' | 'soft' | 'audit'>('hard')
   const [reason, setReason] = useState('')
+  // 任务 9：域额度策略（''=总额度；main/travel/customer_service=域额度）
+  const [policyDomain, setPolicyDomain] = useState('')
 
   const subjects = useQuery({
     queryKey: ['budget-subjects', includeTestSubjects],
@@ -74,6 +76,7 @@ export default function BudgetSubjectsPanel() {
     setDaily(policy.daily_limit_cny)
     setMonthly(policy.monthly_limit_cny)
     setEnforcement(policy.enforcement)
+    setPolicyDomain(policy.domain || '')
     setReason('')
   }
 
@@ -87,6 +90,7 @@ export default function BudgetSubjectsPanel() {
     setDaily('3.000000')
     setMonthly('50.000000')
     setEnforcement('hard')
+    setPolicyDomain('')
     setReason('')
   }
 
@@ -107,6 +111,7 @@ export default function BudgetSubjectsPanel() {
         audit_exempt: editing.audit_exempt,
         reason: reason.trim(),
         expected_updated_at: editing.updated_at,
+        domain: policyDomain,
       })
       toast.success('预算策略已保存并写入审计')
       setEditing(null)
@@ -182,11 +187,11 @@ export default function BudgetSubjectsPanel() {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">作用域<InfoTip text="user=单用户覆盖；tenant=单租户；tenant_default=所有未配置租户的默认；platform=三层都不存在时的最后兜底。鼠标悬停各行可看对应说明" /></th><th className="px-4 py-3 text-right">日上限</th><th className="px-4 py-3 text-right">月上限</th><th className="px-4 py-3">模式</th><th className="px-4 py-3">更新时间</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
+            <thead><tr className="border-b border-slate-100 text-[10px] text-text-muted"><th className="px-4 py-3">作用域<InfoTip text="user=单用户覆盖；tenant=单租户；tenant_default=所有未配置租户的默认；platform=三层都不存在时的最后兜底。鼠标悬停各行可看对应说明" /></th><th className="px-4 py-3">域<InfoTip text="任务 9 域额度：'—'为总额度策略；main=主助手（含 RAG/SQL）；travel=旅游；customer_service=客服。域策略与总额度策略独立生效（4 道闸）" /></th><th className="px-4 py-3 text-right">日上限</th><th className="px-4 py-3 text-right">月上限</th><th className="px-4 py-3">模式</th><th className="px-4 py-3">更新时间</th><th className="px-4 py-3 text-right">操作</th></tr></thead>
             <tbody>
               {(policies.data?.items ?? []).map((policy) => (
-                <tr key={`${policy.scope_type}:${policy.scope_id}`} className="border-b border-slate-50">
-                  <td className="px-4 py-3 font-mono text-text-primary"><span title={scopeHint(policy.scope_type)} className="cursor-help underline decoration-dotted decoration-text-muted/40 underline-offset-4">{policy.scope_type}:{policy.scope_id}</span></td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.daily_limit_cny)}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.monthly_limit_cny)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
+                <tr key={`${policy.scope_type}:${policy.scope_id}:${policy.domain || ''}`} className="border-b border-slate-50">
+                  <td className="px-4 py-3 font-mono text-text-primary"><span title={scopeHint(policy.scope_type)} className="cursor-help underline decoration-dotted decoration-text-muted/40 underline-offset-4">{policy.scope_type}:{policy.scope_id}</span></td><td className="px-4 py-3">{policy.domain ? <span className="rounded-full bg-blue-50 px-2 py-1 text-[10px] text-blue-700">{policy.domain}</span> : <span className="text-[10px] text-text-muted">—</span>}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.daily_limit_cny)}</td><td className="px-4 py-3 text-right font-mono">{formatCny(policy.monthly_limit_cny)}</td><td className="px-4 py-3"><ModeBadge value={policy.enforcement} /></td><td className="px-4 py-3 text-text-muted">{policy.updated_at ? new Date(policy.updated_at).toLocaleString('zh-CN') : '—'}</td><td className="px-4 py-3 text-right"><button onClick={() => beginEdit(policy)} className="rounded-lg border border-black/10 px-2.5 py-1.5 text-[11px] text-accent hover:bg-accent/5">编辑</button></td>
                 </tr>
               ))}
             </tbody>
@@ -199,7 +204,7 @@ export default function BudgetSubjectsPanel() {
         <ToolConstraintsSection />
       </div>
 
-      {editing && <PolicyModal policy={editing} scopeId={scopeId} daily={daily} monthly={monthly} enforcement={enforcement} reason={reason} setScopeId={setScopeId} setDaily={setDaily} setMonthly={setMonthly} setEnforcement={setEnforcement} setReason={setReason} onCancel={() => setEditing(null)} onSave={submitPolicy} />}
+      {editing && <PolicyModal policy={editing} scopeId={scopeId} daily={daily} monthly={monthly} enforcement={enforcement} reason={reason} policyDomain={policyDomain} setScopeId={setScopeId} setDaily={setDaily} setMonthly={setMonthly} setEnforcement={setEnforcement} setReason={setReason} setPolicyDomain={setPolicyDomain} onCancel={() => setEditing(null)} onSave={submitPolicy} />}
     </div>
   )
 }

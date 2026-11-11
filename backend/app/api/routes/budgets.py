@@ -24,7 +24,11 @@ router = APIRouter(tags=["预算"])
 
 
 class BudgetPolicyUpdate(BaseModel):
-    """策略金额单位 = 记账本位币 CNY（2026-10-01 起）。"""
+    """策略金额单位 = 记账本位币 CNY（2026-10-01 起）。
+
+    domain（任务 9，2026-11-11）：''=总额度策略；main/travel/customer_service
+    = 域额度策略。枚举与迁移 147 的 CHECK 同源。
+    """
 
     daily_limit_cny: str = Field(..., min_length=1)
     monthly_limit_cny: str = Field(..., min_length=1)
@@ -32,6 +36,7 @@ class BudgetPolicyUpdate(BaseModel):
     audit_exempt: bool = False
     reason: str = Field(..., min_length=1, max_length=1000)
     expected_updated_at: datetime | None = None
+    domain: str = ""
 
 
 _RESOLUTION_ACTIONS = ("settled_actual", "released", "written_off", "archived")
@@ -159,6 +164,14 @@ async def update_budget_policy(
 ) -> dict[str, Any]:
     if scope_type not in {"user", "tenant", "tenant_default", "platform"}:
         raise HTTPException(422, "预算作用域非法")
+    # 域枚举与迁移 147 CHECK 同源（任务 9）：'' = 总额度策略
+    _domain_gates = {"", "main", "travel", "customer_service"}
+    if body.domain not in _domain_gates:
+        raise HTTPException(
+            422,
+            f"预算域非法: {body.domain!r}（允许: 总额度空串 / main / "
+            "travel / customer_service）",
+        )
     daily = _decimal(body.daily_limit_cny, "daily_limit_cny")
     monthly = _decimal(body.monthly_limit_cny, "monthly_limit_cny")
     def persist() -> dict[str, Any]:
@@ -172,6 +185,7 @@ async def update_budget_policy(
                 updated_by=operator.actor,
                 reason=body.reason,
                 expected_updated_at=body.expected_updated_at,
+                domain=body.domain,
             )
         return {"policy": _json_value(policy)}
 

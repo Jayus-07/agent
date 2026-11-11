@@ -119,3 +119,10 @@
 - **API**：`GET /admin/budgets/reconciliation/monthly?months=6`（JSON，1–24 个月）与 `.../monthly.csv`（CSV 导出，`month,dimension,key,calls,cost_cny`），均 `require_admin_user`；前端预算页「月度对账」卡呈现月份行并支持 CSV 下载。CSV 是与供应商月账单核对的基线材料，录入/导入与差异调整见后续 PR-B/PR-C（已延后）。
 - **llm_call span 补呈现**：`llm_call_span.py` 的 `span_metrics` 增加 `settlement_status`（`settled` / `settled_estimated` / `needs_review` / `released` / `accounting_error`，与 llm_usage 行同源）——此前 DB 与日志可查但 Trace UI 不呈现，属呈现缺口补齐。
 
+
+### 4.7 域额度——每用户按域独立额度（2026-11-11 任务 9 执行化，迁移 149）
+
+- **需求（用户拍板）**：每个用户按每个域独立额度，租户域池兜底；总额度保留叠加 AND——一笔域调用要过 4 道闸（用户域/用户总/租户域/租户总），任何一道超限拒绝该调用；超域只停该域。顶级域固定 3 个：`main` 主助手（含 RAG/SQL 能力）/`travel` 旅游/`customer_service` 客服；子域标签（travel_booking/travel_commerce）归并入所属产品线，管理端工具（选品/知识库/数据查询）不进域枚举、不受域闸。
+- **实现**：`budget_policies / budget_ledger / budget_reservations` 三表加 `domain` 列（`''`=总额度轴，迁移 149（原 147/148 号连续与并行会话碰撞），PK 重建含 domain、域枚举 CHECK 与配置同源）。`reserve(domain=...)` 对域调用预占 8 行（user/tenant × 总/域 × 日/月），域闸先于总闸同事务原子生效；settle/release/滞留回收/核销四处账本释放按预占行 domain 精确匹配（锁序加 domain）。`resolve_domain_policy` 与总额度同构四层链。汇总/展示口径（summary near/blocked、list_subjects、月度对账 ledger 段）一律 `domain=''` 过滤——域行是同一笔钱的域维度镜像，不滤会翻倍。
+- **归因与过渡**：`reserve_precheck` 读请求归因 `agent_domain` 并经 `normalize_budget_domain` 归并（travel_booking/travel_commerce→travel、general→main、未知→'' 不受域闸）。主链路入口（chat 同步/流式）显式打标 main/customer_service；`BUDGET_DOMAIN_UNATTRIBUTED_BLOCK`（默认 false）为过渡期开关——无标签放行，标签覆盖补齐后切 fail-closed 防漏网。本地推理维持 1.1：不预占云端账单、不占域闸。
+- **种子值（确认记录）**：三域在 tenant_default / platform / 租户 default 三层各配 hard——main ¥180 日 / ¥1800 月、travel ¥75/¥750、customer_service ¥45/¥450（三域之和 = 租户总额度，域闸恒先于总闸；按 11 月实测 main 84%/travel 13%/cs 3% 留增长余量）。平台兜底总额度 ¥5/¥100 与全租户默认 ¥432/¥7200 严重背离，种子时对齐。用户层不逐个配置——每用户自动继承租户域值独立计数；个别差异化走用户域覆盖。

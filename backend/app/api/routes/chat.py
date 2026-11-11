@@ -40,6 +40,7 @@ from backend.app.api.schemas import (
     ErrorResponse,
 )
 from backend.app.api.deps import get_multi_agent
+from backend.observability.llm_context import llm_attribution_scope
 from backend.core.product_context import (
     AGENT_PRODUCT, CUSTOMER_SERVICE_PRODUCT, PUBLIC_PRODUCT,
     identity_scope_key, memory_user_id, namespace_session_id,
@@ -279,17 +280,25 @@ async def chat(req: ChatRequest, request: Request,
     try:
         # E3（2026-09-23）：sources 随返回值带回——不再读 MultiAgentSystem
         # 单例的 _last_sources（并发请求互相覆盖串扰）
-        outcome = await asyncio.to_thread(
-            agent.ask_result, req.question, session_id, kb_id=kb_id,
-            user_id=user_id, department=ident.department,
-            permissions=ident.permissions, model=req.model or "",
-            domain_hint=product.domain_hint, tenant_id=ident.tenant_id,
-            idempotency_key=_product_idempotency_key(
-                product, request.headers.get("Idempotency-Key"),
-            ),
-            roles=ident.roles, product_id=product.product_id,
-            product_source=product.source,
-            persist_memory=product.persist_memory)
+        # 任务 9 域归因：同步入口与 /chat/agent 归 main，客服入口归
+        # customer_service（to_thread 复制当前上下文，线程内可见）
+        with llm_attribution_scope(
+            agent_domain=(
+                "customer_service"
+                if product is CUSTOMER_SERVICE_PRODUCT else "main"
+            )
+        ):
+            outcome = await asyncio.to_thread(
+                agent.ask_result, req.question, session_id, kb_id=kb_id,
+                user_id=user_id, department=ident.department,
+                permissions=ident.permissions, model=req.model or "",
+                domain_hint=product.domain_hint, tenant_id=ident.tenant_id,
+                idempotency_key=_product_idempotency_key(
+                    product, request.headers.get("Idempotency-Key"),
+                ),
+                roles=ident.roles, product_id=product.product_id,
+                product_source=product.source,
+                persist_memory=product.persist_memory)
         chat_request_total.labels(status="ok").inc()
         return ChatResponse(
             answer=outcome.answer,
@@ -512,6 +521,17 @@ async def chat_stream(
                 cancel_previous(ident, req.session_id)
             # 冷启动图初始化可能等待数秒，留在工作线程，不阻塞首反馈或事件循环。
             agent = get_multi_agent()
+            # 任务 9 域归因（2026-11-11）：worker 在线程池线程运行，
+            # ContextVar 不跨线程继承——线程内显式开归因作用域，finally
+            # 对称退出。共享入口与 /chat/agent 归 main；客服入口归
+            # customer_service（与域注册表下游打标同值，叠加安全）。
+            _domain_scope = llm_attribution_scope(
+                agent_domain=(
+                    "customer_service"
+                    if product is CUSTOMER_SERVICE_PRODUCT else "main"
+                )
+            )
+            _domain_scope.__enter__()
             for evt in agent.stream_events(
                 req.question,
                 session_id,
@@ -564,6 +584,7 @@ async def chat_stream(
             _emit_error_frame(_sse_error_event(exc))
 
         finally:
+            _domain_scope.__exit__(None, None, None)  # 任务 9:域归因对称退出
             _put_final_frame(aq, loop, stop_event, None)  # sentinel
             record.finish()
             _record_ttft_to_store()  # M13 尾项：TTFT 旁路落 trace_summary（软失败）
