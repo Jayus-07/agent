@@ -134,9 +134,9 @@ PAID_RELEVANT_MIGRATION_ENTRIES = frozenset({
     "backend/sql/migrations/145_budget_settlement_kind.sql",
     # 146 核销审计表 append-only 触发器：审计行禁改删（影响预算/费用审计）
     "backend/sql/migrations/146_budget_resolution_audit_append_only.sql",
-    # 148 预算域额度轴：三表加 domain 列 + PK 重建（任务 9，影响预算/费用闸门；
-    # 原 147 号与并行会话碰撞改 148）
-    "backend/sql/migrations/148_budget_domain_axis.sql",
+    # 149 预算域额度轴：三表加 domain 列 + PK 重建（任务 9，影响预算/费用闸门；
+    # 原 147/148 号连续与并行会话碰撞，改 149）
+    "backend/sql/migrations/149_budget_domain_axis.sql",
 })
 
 # 与模型调用 / 检索 / 计费无关的迁移：显式列出，禁止靠模糊关键词推断。
@@ -261,6 +261,9 @@ NON_AI_MIGRATION_ENTRIES = frozenset({
     # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径），
     # 不改变模型调用面；init_db.py 已登记为 business（ORDER_LAST）。
     "backend/sql/migrations/147_readonly_revoke_cs_business_tables.sql",
+    # 只读角色默认授权收官（issue #440）：product/order/inventory/crawler
+    # 不再自动授予新表，不改变模型调用面。
+    "backend/sql/migrations/148_readonly_default_privileges_completion.sql",
 })
 
 

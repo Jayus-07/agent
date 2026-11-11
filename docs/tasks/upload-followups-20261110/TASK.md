@@ -89,3 +89,48 @@
 | rag_upload.py ~2149 行拆分 | — | 属重构单独评估排期，不混入修复批次 |
 
 > 批次划分原则：batch3 只评审不改码（评审与修复分离）；batch4 聚合小项降低 PR 碎片度（内部拆 SSE 可靠性包 / 快修包两个 PR）；#3 体量与风险独立成批。
+
+---
+
+## batch6~7 排期（2026-11-11 会话收尾时细化，接手会话：docs/tasks/upload-rereview-20261111/）
+
+> batch3~5 已完成（PR #434/#439/#444/#445，main=6b69cc2）。batch4/5 改动尚未做部署级动态冒烟（Docker 未启动），接手会话需先以新鲜眼复审这批改动，复审结论记回 PROGRESS.md 后再推进施工。
+
+### 前置 —— 新会话首轮：batch4/5 改动复审（只评审不改码）
+
+| 序 | 复审对象 | 位置（file:line @main 6b69cc2） | 关注点 |
+|----|---------|-------------------------------|--------|
+| R1 | SSE 轮询三态与异常宽限 | backend rag_upload.py:1908-2010（_read_progress_redis/_redis_poll_events/_SSE_REDIS_ERROR_GRACE_POLLS） | 三态语义、error 分支 keepalive 节流、missing 10s 判过期；与 4.6 文案改动兼容性 |
+| R2 | 前端重连+看门狗+reader cancel | admin api/knowledge.ts:239-370（IDLE_TIMEOUT_MS/MAX_TOTAL_MS/cancellingForRetry/activeReader） | 重连一次语义、cancel 防队列分流、idle 刷新时机、终态不重连 |
+| R3 | batch_id 白名单 + SSE 文案 | rag_upload.py:540-548 + 1998,2137,2157 附近 | 正则口径与前端 randomId 产物兼容；文案无 id 回显 |
+| R4 | health 上限透传 + 消费 | backend app/api/deps.py:78-115 + UploadDialog.tsx（maxUploadMb state）+ 三端 route.ts（BFF_RAG_UPLOAD_LIMIT_BYTES） | 四种状态形态都带字段、前端回退默认、三端 env 常量一致 |
+| R5 | 窗口可用性 | UploadDialog.tsx（beforeunload/ESC/遮罩 effect + onChange 批量提示） | uploading 分支不响应 ESC/遮罩；effect 闭包引用 handleClose 的 TDZ 边界 |
+| R6 | 死代码删除 | 三端 api/llm.ts + cs/admin MultiQueryToggle（已删）+ publish.py | main 上零残留（git grep 已证）；/llm/multiquery 后端端点未动（范围外） |
+| R7 | 测试 | backend test_rag_upload_sync_impl/celery_mode/pipeline_init_nonblocking + admin knowledge-upload-stream.test.ts + UploadDialog.behavior.test.tsx | 断言与新契约一致、无 skip/删断言 |
+
+### batch6 —— #3 上传错误状态码口径版本化（破坏性契约，ADR 先行）
+
+| 序 | 事项 | 侧 | 施工要点 | 前置 |
+|----|------|----|---------|------|
+| 6.1 | ADR 起草 | — | 现状盘点（200+ok:false rag_upload.py:540,546 / 422 :688 / 403 :523 / 409 :601）→ 新路径 vs Accept 头协商选型对比 → 迁移路径与回滚 | **用户确认方案方向后施工** |
+| 6.2 | 后端新契约 | B | 按 ADR 落新状态码契约，旧契约并行保留 | 6.1 评审通过 |
+| 6.3 | admin 解析迁移 | F | knowledge.ts/deleteErrorMessage 链适配 | 6.2 |
+| 6.4 | 旧契约下线 | B | 保留一个发布周期后移除 | 6.3 验证满一个周期 |
+
+### batch7 —— 验证收口 + cs CI 补齐（2026-11-11 新发现聚合）
+
+| 序 | 事项 | 侧 | 施工要点 | 前置 |
+|----|------|----|---------|------|
+| 7.1 | batch4/5 部署级动态冒烟 | 环境 | 启动 Docker 共享栈 → devctl.bat rebuild → 实测：51MB 经 BFF 413+detail、49MB 流式、SSE 重连/异常宽限、/rag/health 新字段、batch_id 校验 | Docker 可用 |
+| 7.2 | 后端 16 个 PG 用例复跑 | 环境 | test_upload_resilience/to_index_e2e（上轮 16 errors 全为 5433 拒连） | 7.1 |
+| 7.3 | 补 frontend-cs CI workflow | CI | 新建 .github/workflows/frontend-cs.yml（与 frontend-admin.yml 同款：tsc+vitest+security）；顺带修复本机 cs node_modules（缺 typescript） | 无 |
+| 7.4 | cs 代理契约基线确认 | F(cs) | cs 启用上传/批量功能前的 8 用例代理契约基线在 CI 中跑通 | 7.3 |
+
+### 挂起池（触发条件驱动，不主动施工）
+
+| 事项 | 触发条件 |
+|------|---------|
+| index_run_store_pg.py tuple repr 拼 SQL 改占位符 | 任一 PR 触碰该文件时顺手改 |
+| rag_upload.py ~2149 行拆分评估 | 单独重构排期 |
+| 浏览器 GUI 级文件选择冒烟 | 需人工浏览器操作时补 |
+| web tsc 3 个既有声明错误（与上传无关） | web 端常规迭代独立修 |

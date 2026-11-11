@@ -67,7 +67,13 @@ def _load_import_candidates(tenant_id: str = "") -> tuple[list[dict], list[str]]
 
 
 def _load_watchlist_candidates(store: Any) -> tuple[list[dict], list[str]]:
-    """源二：竞品监控快照池。失败降级为跳过 + note。"""
+    """源二：竞品监控快照池。失败降级为跳过 + note。
+
+    数据归属口径（issue #441 裁决落档）：监控池是**平台全局**运营数据——
+    competitor_watchlist 表无租户/用户列（单全局表，competitor 域闸门
+    为角色制 #285），全部租户的漏斗共享同一份监控池；与源一导入池的
+    租户隔离（#437 fail-closed）是有意的不对称，非漏口。
+    """
     notes: list[str] = []
     try:
         items = store.list_watch(enabled_only=True)

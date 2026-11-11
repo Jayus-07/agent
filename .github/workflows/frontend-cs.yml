@@ -1,0 +1,62 @@
+name: frontend-cs CI
+
+on:
+  pull_request:
+    paths:
+      - "frontend-cs/**"
+      - ".github/workflows/frontend-cs.yml"
+  push:
+    branches: [main]
+    paths:
+      - "frontend-cs/**"
+      - ".github/workflows/frontend-cs.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # batch4 复审新发现（P3，2026-11-11）：cs 端在此前 9 个 workflow 中零引用，
+  # tsc/vitest/构建完全无 CI 覆盖，且 BFF route.ts 属历史漂移高发区（batch0 漏
+  # x-batch-id、batch4b 同步上限 env 各一次）——与 frontend-admin.yml 同款补齐。
+  # admin 专属的 observability 权限回归 job 不适用于 cs。
+  frontend-cs-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend-cs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend-cs/package-lock.json
+      - name: High/Critical 依赖漏洞门禁
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=high
+
+  frontend-cs-functional:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: frontend-cs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend-cs/package-lock.json
+      - name: 安装锁定依赖（复用 npm 缓存）
+        id: install
+        run: npm ci --prefer-offline
+      - name: Vitest 定向测试（含 BFF 代理契约基线 route.test.ts）
+        if: ${{ always() && steps.install.outcome == 'success' }}
+        run: npm test
+      - name: TypeScript 检查
+        if: ${{ always() && steps.install.outcome == 'success' }}
+        run: npx tsc --noEmit
+      - name: Next.js 构建
+        if: ${{ always() && steps.install.outcome == 'success' }}
+        run: npm run build

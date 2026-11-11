@@ -378,9 +378,12 @@ MIGRATION_TARGETS: dict[str, str] = {
     "146_budget_resolution_audit_append_only.sql": "memory",
     # CS 能力批次新表（132/134/138）的只读误授权回收（083/043 同口径）。
     "147_readonly_revoke_cs_business_tables.sql": "business",
-    # 148 预算域额度轴：三表加 domain 列（任务 9，影响预算/费用闸门；
-    # 原 147 号与并行会话碰撞，改 148——145×2 先例，编号纪律同前）
-    "148_budget_domain_axis.sql": "memory",
+    # 只读角色默认授权收官（issue #440）：product/order/inventory/crawler
+    # 不再自动授予新表（083 口径既定，补齐剩余四 schema）。
+    "148_readonly_default_privileges_completion.sql": "business",
+    # 149 预算域额度轴：三表加 domain 列（任务 9，影响预算/费用闸门；
+    # 原 147/148 号连续与并行会话碰撞，改 149——145×2 先例，编号纪律同前）
+    "149_budget_domain_axis.sql": "memory",
 }
 
 # 数字排序之外需要压到最后执行的（依赖其它迁移先建好的对象）。
@@ -402,8 +405,9 @@ ORDER_LAST = [
     "097_llm_model_health_probe_source.sql",
     # Trip 创建时保存不可覆盖的原始规划会话关联。
     "101_travel_v2_trip_conversations.sql",
-    # 147 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
+    # 147/148 的 REVOKE 必须晚于 004 的 schema 级 GRANT（否则被重新授权覆盖）。
     "147_readonly_revoke_cs_business_tables.sql",
+    "148_readonly_default_privileges_completion.sql",
 ]
 MIGRATION_TARGETS["004_readonly_role.sql"] = "business"
 MIGRATION_TARGETS["093_revoke_readonly_default_password.sql"] = "business"

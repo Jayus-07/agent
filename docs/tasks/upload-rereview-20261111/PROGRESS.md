@@ -188,3 +188,78 @@
 ### 过程事故记录（如实）
 
 - 批后评审时误执行 `git checkout main -- .`（本地 main 停在 c3f07de），把旧版文件污染进工作区+暂存区，导致 batch5 首轮验证出现 4 个假失败（SSE 测试因 knowledge.ts 被回退）。处置：git reset（mixed）+ git checkout HEAD -- .（未用 --hard），在干净基线重做 batch5 删除并复跑验证全绿。教训：`git checkout <branch> -- .` 在并行 worktree 场景等同覆盖工作区，后续一律禁用（用分支切换 `git checkout <branch>` 而非路径检出）。
+
+---
+
+## 会话收尾（2026-11-11 batch3~5 会话交接）
+
+### 本会话产出汇总
+
+| PR | 批次 | 内容 | 状态 |
+|----|------|------|------|
+| #434 | batch3 | 复审报告+排期落盘 | 已合并 |
+| #439 | batch4a | SSE 可靠性包（后端三态宽限 / 前端重连+活跃性看门狗+reader cancel） | 已合并 |
+| #444 | batch4b | 快修+体验包（batch_id 校验/文案脱敏/上限联动/窗口可用性/#9 测试） | 已合并 |
+| #445 | batch5 | 死代码收口（multi-query 三端+publish.py 死函数） | 已合并 |
+
+已合并远端分支 ×4 已删除；批后链路评审完成（三端 BFF 一致、死代码清零）。排期权威：followups TASK.md「batch6~7 排期」节（含新会话复审清单 R1~R7）。
+
+### 工作树状态（接手必读）
+
+- worktree：`D:/Program Files/workplace/agent-wt-upload-rereview`，分支 fix/upload-rereview-batch5（已合并，本会话收尾 docs 提交后可删）。开工新任务按规范自建新分支。
+- **node_modules Junction ×3**：worktree 的 frontend{,-admin,-cs}/node_modules 是指向主仓库同名目录的 Junction（worktree 无独立依赖）。本地跑测试用 `./node_modules/.bin/vitest.CMD / tsc.CMD`；若删除重建 worktree 需重新建 Junction（PowerShell New-Item -ItemType Junction）。
+- frontend-cs 本机 node_modules 不完整（缺 typescript）：cs 端 tsc 本地跑不了，依赖 CI 或重装。
+- 主仓库根有其他会话未跟踪文件：不触碰、不提交。
+
+### 接手会话第一步
+
+1. `git status` 核对工作区干净（本会话曾发生 `git checkout main -- .` 污染事故已恢复——**该命令禁用**，分支切换用 `git checkout <branch>` 不带 `-- .`）。
+2. 按 TASK.md R1~R7 复审清单以新鲜眼复审 batch4/5 改动，结论写回本 PROGRESS.md。
+3. 复审通过 → batch7（7.1 需启动 Docker）→ batch6.1 ADR（方案方向需用户拍板：新路径 vs Accept 头协商）。
+
+### 遗留验证欠账（如实）
+
+- batch4/5 全部改动未做部署级动态冒烟（Docker 未启动）：51MB 413 / 49MB 流式 / SSE 真实链路 / health 新字段 / batch_id 校验实测均 UNVERIFIED，batch7.1 闭环。
+- 后端 16 个 PG 依赖用例上轮为连接拒绝（环境性），batch7.2 复跑。
+- cs 端 tsc/vitest 本地无法跑（依赖不全 + 无 CI），batch7.3 补 CI 后闭环。
+
+---
+
+## batch4/5 改动复审报告（2026-11-11 新会话，R1~R7 清单逐项，只评审不改码）
+
+> 复审基线：origin/main=5fce573（worktree `D:/Program Files/workplace/agent-wt-upload-rereview`，detached）。
+> 方法：不信任 batch4a/4b/5 的提交说明与既有结论，重读改动代码本体 + 三端 route.ts 逐字段 diff + 全仓 grep + 三个提交的测试 diff（692b34d / 623f5f0 / 6b69cc2）。
+
+### R1~R7 结论总表（file:line @5fce573）
+
+| 序 | 对象 | 结论 | 关键证据 |
+|----|------|------|---------|
+| R1 | SSE 轮询三态与异常宽限 | ✅ 通过 | 三态语义正确（`_read_progress_redis` rag_upload.py:1934-1964：`get_redis()` None→error、hgetall 空→missing、异常→error）；error 宽限 240×0.5s=120s（:1923）且期间每 30s keepalive（:1988-1991，复用 unchanged_polls 节流）；missing 保持 20 次=10s 判过期（:1919,1995-1999）；missing 分支最长 10s < 前端 idle 120s 无需 keepalive；error/missing 计数互斥重置正确（:1994,2002）；重订阅对非 missing（镜像存在或 Redis 异常）切轮询通道（:2151-2154）；与 4.6 文案兼容（三处均「上传任务不存在或已过期」） |
+| R2 | 前端重连+看门狗+reader cancel | ✅ 通过 | 活跃性看门狗（idle 120s，任何字节含 keepalive 注释帧刷新 deadline，knowledge.ts:315-320,349）；绝对兜底 1900s 对齐后端（:250-251,323-325）；重连一次 + cancel 旧 reader 防队列分流（:253-290,282-288）+ cancellingForRetry 区分自我 cancel（:262,284,345,364）；终态（done/duplicate/error）handleMessage 直接 resolve 不走 fail 重连（:303-312）；服务端 keepalive 注释帧只刷 deadline 不触发 handleMessage（:352-359 只取 data: 行）✅ |
+| R3 | batch_id 白名单 + SSE 文案 | ✅ 通过 | `_BATCH_ID_PATTERN = re.compile(r"[A-Za-z0-9_.:-]{1,64}")` fullmatch（rag_upload.py:457,550-552）；校验在 upload 入口 MIME 之后暂存之前（不进入上传实现，测试已断言 captured）；前端 randomId 产物（uuid 含连字符 / batch-<ts>-<rand>）均匹配；校验失败 200+ok:false 与 MIME 同口径（注释显式声明，batch6 ADR 现状素材）；文案三处（:1998,2137,2157）无 upload_id 回显 |
+| R4 | health 透传 + 消费 + 三端 env 联动 | ✅ 通过 | deps.py:106-111 在 status 构造后统一添加 `max_file_size_mb`/`multipart_overhead_bytes`，四种状态形态（ready/remote/error/initializing）全部携带；UploadDialog.tsx:159-161 消费（`Number.isFinite && >0` 才覆盖，health 不可达回退 50，:12-15,68）；三端 route.ts 均读 `BFF_RAG_UPLOAD_LIMIT_BYTES || 50MiB+16KiB`（admin:138 / web:191 / cs:138）；三端逐字段 diff：上传链路区段（白名单内容、上限逻辑、413 detail、502 通用文案、duplex half）语义一致，差异仅注释文案详略 / CLIENT_APP / web 特有 travel 分享栈（SHARE_RES_HEADERS 等，web 独有业务合理） |
+| R5 | 窗口可用性 | ✅ 实现（测试欠账见发现项） | beforeunload 上传中拦截（UploadDialog.tsx:130-147，依赖 [open, uploading] 保证闭包新鲜）；ESC 仅非上传中（:138-140）；遮罩 `onClick={uploading ? undefined : handleClose}`（:302）；批量 >20 提示不阻断（:378-380）；effect 回调运行时 handleClose 已完成初始化，无 TDZ 问题（useEffect 回调非渲染期同步执行） |
+| R6 | 死代码删除 | ✅ 通过 | 全仓 grep（三端 src，排除 node_modules）：getMultiQueryMode/setMultiQueryMode/MultiQueryToggle/_write_published_pointer 零代码残留；仅剩三端 api/llm.ts:2 文件头注释仍提「MultiQuery 模式」（函数已删，见 P4-新1）；cs TraceDetailPanels/StepTimeline 的 MultiQuery 为 trace span 运行时展示非死代码；后端 /llm/multiquery 端点未动（范围外，符合排期） |
+| R7 | 测试断言口径 | ⚠ 通过但 4.9 验收未满足 | 后端：三态适配断言（celery_mode:720-735）+ error 宽限×2（自愈续看拿终态 / 耗尽报「进度服务暂时不可用」且文案语义区分，:744-794）+ batch_id×3（非法字符/超长 65/合法 uuid）+ health 字段×1（env=100 跟随 + overhead 常量）+ 文案去 id 断言（sync_impl:782-789）；无 skip/xfail/删断言。前端：SSE 流 5 用例（502 重订 / 提前关闭重订 / 二次失败终判恰 2 次 / error 终态不重连恰 1 次 / idle 超时 cancel+重连）；behavior #9 ×3。**但 4.9 验收栏承诺的「behavior 测试 ×3」（beforeunload/ESC/遮罩/批量提示）全仓无任何用例覆盖**（grep beforeunload 仅命中实现文件）——见 P3-新1 |
+
+### 新发现项（P1=0；P2=0；P3×1；P4×1）
+
+#### P3-新1 batch4b #7 窗口可用性测试欠账——4.9 验收口径「behavior 测试 ×3」未满足
+- 证据：TASK.md 4.9 验收栏明确「behavior 测试 ×3」；全仓 grep `beforeunload` 仅命中实现文件 UploadDialog.tsx:131（三端无任何测试文件覆盖 beforeunload/ESC/遮罩关闭/批量提示分支）；PR #444 提交说明 4.10 仅列 #9 三用例（+122 行全部为 #9）。
+- 影响：实现本体经静态复审无缺陷（R5 ✅），但 #7 三个分支（uploading 拦截刷新 / 非上传中 ESC+遮罩 / >20 提示）无回归防护，后续改动 UploadDialog 时可能静默回退（本仓库 BFF/交互漂移有前科）。
+- 建议：排入 batch7（与 7.3 cs CI 同 PR 或紧随其后的小 PR），补 3 个 behavior 用例（fake timers/事件派发，与既有 #9 用例同风格）。
+
+#### P4-新1 三端 api/llm.ts 文件头注释残留「MultiQuery 模式」
+- 证据：frontend{,-admin,-cs}/src/api/llm.ts:2 文件头注释仍写「LLM 业务 API：模型列表 / 切换 / 余额 / MultiQuery 模式」，而 getMultiQueryMode/setMultiQueryMode 已在 batch5 删除。
+- 影响：纯注释观感（文档准确性），无行为影响。
+- 建议：挂起池——任一端触碰 llm.ts 时顺手改一行。
+
+### 观察项（复审确认非缺陷，不立项，留档）
+
+- R2：重连成功后 `cancellingForRetry` 不重置为 false——第二次连接若异常关闭（read reject / 服务端关闭无终态），走静默 return 而非立即 fail，终判延迟到 idle 看门狗 120s 兜底触发。终判不丢（retried=true → finishFail），只是报错时机最长延迟 120s；SSE 语义下服务端仅在终态后关闭流，实际影响面极小。
+- R1：missing 10s 判过期在「Redis 重启丢键（未开持久化/未故障转移）」场景会把在途任务误判过期——属罕见运维事件（既有 error 宽限已覆盖 Redis 连接抖动主场景），记挂起池观察。
+- R4：health 返回的 `multipart_overhead_bytes` 前端 UI 预检未消费（UI 只用 max_file_size_mb 对比文件本体大小，语义正确——overhead 属 multipart 编码层，归 BFF env 与后端 body_limit 管）。字段为调试/未来预留，无害。
+
+### 复审总结论
+
+**batch4/5 三提交（#439/#444/#445）代码改动复审通过，无阻塞性发现。** P3-新1（测试欠账）与 P4-新1（注释残留）待用户确认后归入 batch7 / 挂起池；batch7 动态冒烟仍为部署级验证欠账（UNVERIFIED 清单不变）。
