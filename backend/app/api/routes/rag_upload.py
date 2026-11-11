@@ -970,10 +970,17 @@ def _write_progress_redis(upload_id: str, stage: str, message: str = "",
             mapping["owner_tenant"] = owner[0]
             mapping["owner_actor"] = owner[1]
         r.hset(key, mapping=mapping)
-        r.expire(key, 600)
+        # TTL 与 SSE 轮询上限同源（batch8 缺陷 B）：旧 600s 在长阶段静默
+        # （49MB 文本解析/500 页 OCR 单阶段可超 10 分钟无帧更新）时键提前
+        # 过期，轮询通道 missing 10s 即误报「任务不存在」，而任务实际在跑。
+        # 对齐 RAG_SSE_REDIS_POLL_MAX_SECONDS 后，键存活期 ≥ 后端轮询上限，
+        # 超时语义由轮询 deadline 统一收口，不再出现「键先死、任务还活着」。
+        r.expire(key, RAG_SSE_REDIS_POLL_MAX_SECONDS)
     except Exception as e:
-        # 至少留一条观测日志：Redis 故障静默吞掉会让进度镜像失效无从排查
-        logger.debug(f"[RAG] 进度镜像写入 Redis 失败: {e}")
+        # 受理帧/进度帧写失败是用户可见问题的根因（镜像 owner 随帧丢失、
+        # 键缺失导致 SSE 误报），warning 级观测——Redis 瞬态恢复后无补救
+        # 路径，必须留痕排查
+        logger.warning(f"[RAG] 进度镜像写入 Redis 失败: {e}")
 
 
 def _mark_registry_failed(filepath: str) -> None:
@@ -1964,6 +1971,27 @@ def _read_progress_redis(upload_id: str) -> tuple[str, dict | None]:
         return ("error", None)
 
 
+def _run_still_active(upload_id: str) -> bool:
+    """run_store 权威查询：镜像键缺失时判断任务是否仍在途（batch8 缺陷 B 兜底）。
+
+    镜像键消失（Redis 丢键/极端过期）≠ 任务不存在——run_store 才是权威
+    终局：查到非终态运行（claimed/indexing/publishing）则任务活着，不得
+    误报「不存在或已过期」。终态集合以 index_run_store_pg.TERMINAL_STATUSES
+    为单一事实源。查询异常（PG 抖动）按「仍在途」宽大处理：误宽限的代价
+    只是多轮询一轮，误判过期是用户可见失败。
+    """
+    try:
+        from backend.rag.indexing.index_run_store_pg import (
+            TERMINAL_STATUSES, get_index_run_store,
+        )
+        run = get_index_run_store().get_run(upload_id) or {}
+        if not run:
+            return False  # 运行记录都不存在 = 真过期
+        return str(run.get("status") or "") not in TERMINAL_STATUSES
+    except Exception:
+        return True
+
+
 async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
     """Celery 模式 SSE 事件源：轮询 Redis 进度镜像直到终态（async 生成器）。
 
@@ -1971,7 +1999,8 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
     事件格式与队列模式完全一致（_sse_encode("message", evt)），前端零感知。
 
     轮询三态（batch3 P2-2）：("ok", evt) 正常推进；("missing", None) 计入
-    empty grace（键真不存在，10s 判过期）；("error", None) 是 Redis 连接
+    empty grace（键真不存在，10s 判过期——grace 耗尽后先查 run_store 兜底，
+    任务仍在途则重置宽限续看，batch8 缺陷 B）；("error", None) 是 Redis 连接
     故障，不计入过期证据，宽限 120s 等自愈，期间低频 keepalive 保活。
     """
     empty_polls = 0
@@ -1995,6 +2024,17 @@ async def _redis_poll_events(upload_id: str, last_sig: str | None = None):
         if status == "missing":
             empty_polls += 1
             if empty_polls >= _SSE_REDIS_EMPTY_GRACE_POLLS:
+                # batch8 缺陷 B 兜底：键消失（Redis 丢键/极端过期）但任务仍在
+                # 途时，run_store 是权威终局——查到非终态运行则不计过期证据，
+                # 重置宽限继续轮询（每个 grace 周期只查一次 DB，频次有界）。
+                if await asyncio.to_thread(_run_still_active, upload_id):
+                    empty_polls = 0
+                    unchanged_polls += 1
+                    if unchanged_polls >= _SSE_KEEPALIVE_EVERY_N_POLLS:
+                        unchanged_polls = 0
+                        yield ": keepalive\n\n"
+                    await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)
+                    continue
                 yield _sse_encode("error", {"message": "上传任务不存在或已过期"})
                 return
             await asyncio.sleep(_SSE_REDIS_POLL_SECONDS)

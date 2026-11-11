@@ -386,5 +386,103 @@ describe('UploadDialog 后台上传体验', () => {
     expect(uploadButton?.hasAttribute('disabled')).toBe(true)
     act(() => root.unmount())
   })
+
+  // ── batch3 复审 P3-新1（2026-11-11 batch8 补齐）：#7 窗口可用性 ──
+
+  /** 进入「上传中」状态：选 1 个文件后点击上传，uploadDocument 挂起不 resolve。 */
+  async function mountUploading() {
+    mocks.uploadDocument.mockImplementation(() => new Promise(() => { /* 挂起 */ }))
+    const onClose = vi.fn()
+    const { root, container } = mount(true, onClose, vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['x'], 'a.md')],
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('上传中')
+    return { root, container, onClose }
+  }
+
+  it('#7 非上传中 ESC/遮罩点击可关闭窗口', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const onClose = vi.fn()
+    const { root, container } = mount(true, onClose, vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const overlay = container.firstElementChild as HTMLElement
+    act(() => overlay.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    // 窗口已关（open 不变但 onClose 已回调）——重挂测 ESC
+    act(() => root.unmount())
+    const second = mount(true, onClose, vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(onClose).toHaveBeenCalledTimes(2)
+    act(() => second.root.unmount())
+  })
+
+  it('#7 上传中 beforeunload 拦截，ESC/遮罩不响应', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const { root, container, onClose } = await mountUploading()
+
+    const unloadEvent = new Event('beforeunload', { cancelable: true })
+    const preventSpy = vi.spyOn(unloadEvent, 'preventDefault')
+    act(() => window.dispatchEvent(unloadEvent))
+    expect(preventSpy).toHaveBeenCalled()
+
+    act(() => container.firstElementChild!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+    act(() => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })))
+    expect(onClose).not.toHaveBeenCalled()
+    expect(container.textContent).toContain('上传中')
+    act(() => root.unmount())
+  })
+
+  it('#7 批量选择 >20 文件时提示分批（不阻断）', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: Array.from({ length: 21 }, (_, i) => new File(['x'], `f${i}.md`)),
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('建议分批')
+    // 不阻断：21 个文件全部进入待上传列表
+    expect(container.textContent).toContain('（21 个文件）')
+    act(() => root.unmount())
+  })
 })
 

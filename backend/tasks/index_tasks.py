@@ -26,12 +26,18 @@ from backend.config.tasks import (
 from backend.tasks.admission import AdmissionDeferred
 
 
-def _redis_emit_fn(upload_id: str):
-    """Worker 侧事件发射器：仅写 Redis 进度镜像（无进程内队列概念）。"""
+def _redis_emit_fn(upload_id: str, owner: tuple[str, str] | None = None):
+    """Worker 侧事件发射器：仅写 Redis 进度镜像（无进程内队列概念）。
+
+    owner（batch8 缺陷 A）：Worker 逐帧携带上传者身份——旧实现 owner 仅由
+    受理帧携带，受理帧写失败（Redis 瞬态）后镜像 owner 永久缺失，API 侧
+    SSE 归属校验跨进程回退读镜像时拿不到 owner，误报「任务不存在」。
+    帧帧携带后镜像只要活着 owner 就在，归属校验不依赖单帧。
+    """
     from backend.app.api.routes.rag_upload import _write_progress_redis
 
     def emit(stage: str, message: str = "", **extra) -> None:
-        _write_progress_redis(upload_id, stage, message, **extra)
+        _write_progress_redis(upload_id, stage, message, owner=owner, **extra)
 
     return emit
 
@@ -162,8 +168,9 @@ def execute_index_task_impl(upload_id: str, filepath: str, filename: str,
         IndexTaskCancelled, IndexTaskPaused, run_with_task_state,
     )
 
-    emit_fn = _redis_emit_fn(upload_id)
+    # 先取身份再构造发射器（batch8 缺陷 A）：帧帧携带 owner，镜像归属不依赖受理帧
     actor_id, tenant_id = _get_index_identity(upload_id)
+    emit_fn = _redis_emit_fn(upload_id, owner=(tenant_id, actor_id))
     t0 = _time.time()
     if retries:
         emit_fn("uploading", f"索引重试（第 {retries}/{CELERY_MAX_RETRIES} 次）...")

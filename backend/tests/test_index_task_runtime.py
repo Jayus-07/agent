@@ -339,3 +339,41 @@ def test_impl_paused_after_settle_returns_paused(pg, monkeypatch, flags):
     assert result["status"] == "paused"
     assert state["n"] == 1                                   # 原子节点完成
     assert pg.get_task(task_id).status == TaskStatus.PAUSED
+
+
+# ── batch8 缺陷 A：Worker 逐帧携带 owner ─────────────────────────────
+
+def test_redis_emit_fn_carries_owner(monkeypatch):
+    """emit_fn(owner=...) → 每帧同步携带上传者身份：镜像归属不依赖受理帧
+    （受理帧写失败后 owner 不再永久缺失，SSE 归属校验跨进程可靠）。"""
+    from backend.tasks import index_tasks as it
+
+    captured = []
+
+    def fake_write(upload_id, stage, message="", owner=None, **extra):
+        captured.append((upload_id, stage, owner))
+
+    monkeypatch.setattr(
+        "backend.app.api.routes.rag_upload._write_progress_redis", fake_write)
+
+    emit = it._redis_emit_fn("u-owner", owner=("default", "442"))
+    emit("loading", "加载中")
+
+    assert captured == [("u-owner", "loading", ("default", "442"))]
+
+
+def test_redis_emit_fn_without_owner_keeps_none(monkeypatch):
+    """无 owner 构造（旧调用形态）保持 owner=None，不改变既有行为。"""
+    from backend.tasks import index_tasks as it
+
+    captured = []
+
+    monkeypatch.setattr(
+        "backend.app.api.routes.rag_upload._write_progress_redis",
+        lambda upload_id, stage, message="", owner=None, **extra:
+            captured.append((upload_id, stage, owner)))
+
+    emit = it._redis_emit_fn("u-noowner")
+    emit("uploading", "x")
+
+    assert captured == [("u-noowner", "uploading", None)]
