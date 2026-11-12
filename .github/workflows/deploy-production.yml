@@ -321,6 +321,7 @@ jobs:
           PY
           # 只在当前进程环境使用所需凭据，不打印、不写入仓库或任务产物。
           set -a
+          # shellcheck disable=SC1090
           source "$runtime_env"
           set +a
           rm -f "$runtime_env"
