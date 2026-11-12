@@ -29,6 +29,6 @@
 
 ## 当前状态
 
-- 进行中：状态链路已实现。PR #460 自动 Review 指出两个禁令保真边界，已修复并补回归用例，等待新提交后的 CI/Review。
+- 进行中：状态链路已实现。PR #460 自动 Review 指出的两个禁令保真问题已修复；最终复核又补齐否定式确认边界，等待新提交后的 CI/Review。
 - 真实外接模型 T02/CS01 评测与本机共享 Docker 栈重建仍未验证。
 - 工作树：`D:\Program Files\workplace\agent-wt-enterprise-only`，分支 `codex/agent-enterprise-only-20261112`。

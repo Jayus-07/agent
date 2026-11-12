@@ -108,6 +108,16 @@ class TestExtractProtectedFacts:
         constraints = [fact for fact in facts if fact.type == "用户约束"]
         assert [fact.value for fact in constraints] == ["不要替我预订酒店"]
 
+    def test_negative_confirmation_does_not_clear_prohibition(self):
+        facts = extract_protected_facts([
+            (1, "user", "不要替我预订酒店。"),
+            (2, "user", "我同意不替我预订酒店。"),
+        ])
+
+        constraints = [fact.value for fact in facts if fact.type == "用户约束"]
+        assert "不要替我预订酒店" in constraints
+        assert "不替我预订酒店" in constraints
+
     def test_scoped_refund_restriction_keeps_recipient_and_exception(self):
         from backend.context_budget.fact_registry import ProtectedFactRegistry
 
