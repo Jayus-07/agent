@@ -1,0 +1,334 @@
+name: Deploy production
+
+on:
+  workflow_run:
+    workflows:
+      - Publish production images
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Successful "Publish production images" run ID from main
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  verify-release:
+    name: Verify published main images
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      sha: ${{ steps.manifest.outputs.sha }}
+      image_backend: ${{ steps.manifest.outputs.image_backend }}
+      image_frontend: ${{ steps.manifest.outputs.image_frontend }}
+      image_admin: ${{ steps.manifest.outputs.image_admin }}
+      image_cs: ${{ steps.manifest.outputs.image_cs }}
+    steps:
+      - name: Validate source run and digest manifest
+        id: manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RUN_ID: ${{ github.event.workflow_run.id || inputs.publish_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "Run this workflow from the main branch." >&2
+            exit 1
+          fi
+          if [[ ! "$PUBLISH_RUN_ID" =~ ^[0-9]+$ ]]; then
+            echo "publish_run_id must be a numeric Actions run ID." >&2
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$PUBLISH_RUN_ID" \
+            > "$RUNNER_TEMP/publish-run.json"
+          python - "$RUNNER_TEMP/publish-run.json" "$RUNNER_TEMP/publish-sha" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          expected_path = ".github/workflows/publish-images.yml@"
+          if not str(run.get("path", "")).startswith(expected_path):
+              raise SystemExit("Run ID is not from publish-images.yml")
+          if (
+              run.get("event") != "push"
+              or run.get("head_branch") != "main"
+              or run.get("status") != "completed"
+              or run.get("conclusion") != "success"
+          ):
+              raise SystemExit("Image run must be a successful push to main")
+          sha = str(run.get("head_sha", ""))
+          if len(sha) != 40 or any(ch not in "0123456789abcdef" for ch in sha):
+              raise SystemExit("Publish run has an invalid commit SHA")
+          Path(sys.argv[2]).write_text(sha, encoding="ascii")
+          PY
+
+          sha="$(cat "$RUNNER_TEMP/publish-sha")"
+          comparison="$(gh api \
+            "repos/$GITHUB_REPOSITORY/compare/${sha}...main" \
+            --jq '.status')"
+          [[ "$comparison" == "ahead" || "$comparison" == "identical" ]] || {
+            echo "Published commit is no longer reachable from main." >&2
+            exit 1
+          }
+
+          gh run download "$PUBLISH_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name production-image-digests \
+            --dir "$RUNNER_TEMP/production-image-digests"
+          python - "$RUNNER_TEMP/production-image-digests/production-image-digests.json" "$sha" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          manifest_path, expected_sha, output_path = sys.argv[1:]
+          manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+          if manifest.get("commit") != expected_sha:
+              raise SystemExit("Digest manifest commit does not match the publish run")
+
+          images = manifest.get("images")
+          names = ("backend", "frontend", "admin", "cs")
+          if not isinstance(images, dict) or set(images) != set(names):
+              raise SystemExit("Digest manifest must contain all four production images")
+          pattern = re.compile(
+              r"^ghcr\.io/[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*"
+              r"@sha256:[0-9a-f]{64}$"
+          )
+          refs = [images[name] for name in names]
+          if any(not isinstance(ref, str) or not pattern.fullmatch(ref) for ref in refs):
+              raise SystemExit("Digest manifest contains an invalid GHCR image reference")
+          if len({ref.split("@", 1)[0] for ref in refs}) != 1:
+              raise SystemExit("Production images must come from one GHCR package")
+
+          with Path(output_path).open("a", encoding="utf-8") as output:
+              output.write(f"sha={expected_sha}\n")
+              for name in names:
+                  output.write(f"image_{name}={images[name]}\n")
+          PY
+
+      - name: Log in to GHCR and verify image digests
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Confirm images are pullable before approval
+        env:
+          IMAGE_BACKEND: ${{ steps.manifest.outputs.image_backend }}
+          IMAGE_FRONTEND: ${{ steps.manifest.outputs.image_frontend }}
+          IMAGE_ADMIN: ${{ steps.manifest.outputs.image_admin }}
+          IMAGE_CS: ${{ steps.manifest.outputs.image_cs }}
+        run: |
+          set -euo pipefail
+          for image in "$IMAGE_BACKEND" "$IMAGE_FRONTEND" "$IMAGE_ADMIN" "$IMAGE_CS"; do
+            docker manifest inspect "$image" >/dev/null
+          done
+
+  deploy:
+    name: Deploy selected images
+    needs: verify-release
+    runs-on: [self-hosted, linux, x64, agent-production-deploy]
+    environment:
+      name: production
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PRODUCTION_RELEASES_DIR: ${{ vars.PRODUCTION_RELEASES_DIR || '/opt/agent/releases' }}
+      PRODUCTION_ENV_FILE: ${{ vars.PRODUCTION_ENV_FILE || '/opt/agent/.env.production' }}
+      EVAL_RUNS_HOST_DIR: ${{ vars.PRODUCTION_EVAL_RUNS_HOST_DIR || '/data/apps/agent/data/eval_runs' }}
+      PG_BACKUP_HOST_DIR: ${{ vars.PRODUCTION_PG_BACKUP_HOST_DIR || '/data/backups/agent/postgres' }}
+      IMAGE_BACKEND: ${{ needs.verify-release.outputs.image_backend }}
+      IMAGE_FRONTEND: ${{ needs.verify-release.outputs.image_frontend }}
+      IMAGE_ADMIN: ${{ needs.verify-release.outputs.image_admin }}
+      IMAGE_CS: ${{ needs.verify-release.outputs.image_cs }}
+      IMAGE_SHA: ${{ needs.verify-release.outputs.sha }}
+      AUTO_DEPLOY: ${{ github.event_name == 'workflow_run' }}
+      DOCKER_CONFIG: ${{ runner.temp }}/production-docker-config
+    steps:
+      - name: Checkout the published commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.verify-release.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Set up release-check Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.10"
+
+      - name: Install release-check dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/release-check-env"
+          echo "$RUNNER_TEMP/release-check-env/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/release-check-env/bin/python" -m pip install \
+            --disable-pip-version-check \
+            "python-dotenv==1.2.4" "psycopg2-binary==2.9.13"
+
+      - name: Prepare isolated Docker credentials
+        run: |
+          set -euo pipefail
+          test "$DOCKER_CONFIG" = "$RUNNER_TEMP/production-docker-config"
+          rm -rf -- "$DOCKER_CONFIG"
+          install -d -m 0700 "$DOCKER_CONFIG"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Preflight deployment runner
+        env:
+          RELEASE_PASSWORD: ${{ secrets.RELEASE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -r "$PRODUCTION_ENV_FILE" || {
+            echo "Runner account cannot read the production environment file." >&2
+            exit 1
+          }
+          test -d "$PRODUCTION_RELEASES_DIR" && test -w "$PRODUCTION_RELEASES_DIR" || {
+            echo "Create the release directory and grant the dedicated runner write access." >&2
+            exit 1
+          }
+          test -d "$EVAL_RUNS_HOST_DIR" || {
+            echo "Evaluation run data directory is missing; refusing to create a new one." >&2
+            exit 1
+          }
+          test -d "$PG_BACKUP_HOST_DIR" || {
+            echo "PostgreSQL backup directory is missing; refusing to create a new one." >&2
+            exit 1
+          }
+          test -n "$RELEASE_PASSWORD" || {
+            echo "Configure the RELEASE_PASSWORD secret in the production environment." >&2
+            exit 1
+          }
+          docker info >/dev/null
+          docker compose version
+
+      - name: Pull and deploy the verified digests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PASSWORD: ${{ secrets.RELEASE_PASSWORD }}
+          RELEASE_OPERATOR: ${{ github.actor }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="${IMAGE_SHA:0:7}"
+          release_dir="$PRODUCTION_RELEASES_DIR/$IMAGE_SHA"
+
+          if [[ -e "$release_dir" ]]; then
+            test "$(git -C "$release_dir" rev-parse HEAD)" = "$IMAGE_SHA"
+            test -z "$(git -C "$release_dir" status --porcelain --untracked-files=normal)"
+          else
+            mkdir "$release_dir"
+            cp -a "$GITHUB_WORKSPACE"/. "$release_dir"/
+          fi
+          test "$(git -C "$release_dir" rev-parse HEAD)" = "$IMAGE_SHA"
+          test -z "$(git -C "$release_dir" status --porcelain --untracked-files=normal)"
+
+          cd "$release_dir"
+          export COMPOSE_PROJECT_NAME=agent
+          export COMPOSE_FILE="docker-compose.yml:部署/prod-4c8g/docker-compose.local.yml:部署/prod-4c8g/docker-compose.4c8g.yml:部署/prod-4c8g/docker-compose.release.yml"
+          export COMPOSE_ENV_FILES="$PRODUCTION_ENV_FILE"
+          export RUNTIME_ENV_FILE="$PRODUCTION_ENV_FILE"
+          export EVAL_RUNS_HOST_DIR PG_BACKUP_HOST_DIR
+          export GIT_COMMIT="$short_sha"
+          export GIT_DIRTY=false
+
+          docker compose config --quiet
+          docker compose pull \
+            app rag-service mcp-service agent-worker rag-index-worker \
+            maintenance-worker report-worker beat cs-dispatcher db-migrate \
+            frontend frontend-admin frontend-cs
+
+          for image in "$IMAGE_BACKEND" "$IMAGE_FRONTEND" "$IMAGE_ADMIN" "$IMAGE_CS"; do
+            revision="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+            test "$revision" = "$IMAGE_SHA"
+          done
+          backend_commit="$(docker image inspect "$IMAGE_BACKEND" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^GIT_COMMIT=//p')"
+          backend_dirty="$(docker image inspect "$IMAGE_BACKEND" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^GIT_DIRTY=//p')"
+          test "$backend_commit" = "$short_sha"
+          test "$backend_dirty" = "false"
+
+          if [[ "$AUTO_DEPLOY" == "true" ]]; then
+            latest_main_sha="$(python - "$GITHUB_REPOSITORY" <<'PY'
+          import json
+          import os
+          import sys
+          from urllib.request import Request, urlopen
+
+          repository = sys.argv[1]
+          request = Request(
+              f"https://api.github.com/repos/{repository}/commits/main",
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+          with urlopen(request, timeout=15) as response:
+              print(json.load(response)["sha"])
+          PY
+            )"
+            if [[ "$latest_main_sha" != "$IMAGE_SHA" ]]; then
+              echo "main advanced after image verification; refusing to deploy a stale build." >&2
+              exit 1
+            fi
+          fi
+
+          runtime_env="$RUNNER_TEMP/release-runtime.env"
+          umask 077
+          python - "$PRODUCTION_ENV_FILE" "$runtime_env" <<'PY'
+          import os
+          import shlex
+          import sys
+          from pathlib import Path
+
+          from dotenv import dotenv_values
+
+          values = dotenv_values(sys.argv[1])
+          required = ("PGPASSWORD", "API_KEY")
+          missing = [name for name in required if not values.get(name)]
+          if missing:
+              raise SystemExit("Missing required keys in production environment file")
+          path = Path(sys.argv[2])
+          path.write_text(
+              "".join(f"export {name}={shlex.quote(values[name])}\n" for name in required),
+              encoding="utf-8",
+          )
+          os.chmod(path, 0o600)
+          PY
+          # 只在当前进程环境使用所需凭据，不打印、不写入仓库或任务产物。
+          set -a
+          source "$runtime_env"
+          set +a
+          rm -f "$runtime_env"
+
+          bash scripts/release.sh --skip-build
+
+      - name: Remove registry credentials
+        if: always()
+        run: |
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          rm -rf -- "$DOCKER_CONFIG" "$RUNNER_TEMP/release-check-env"

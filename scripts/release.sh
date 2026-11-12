@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # release.sh — 平台发布统一入口（Platform Readiness STOP E13/G1）
-# 流程：身份注入 → 迁移 preflight → 全量构建（stop-the-world）→ 滚动 up →
-#       健康等待 → 12 门 Release Gate 冒烟
+# 默认流程：身份注入 → 迁移 preflight → 全量构建（stop-the-world）→ 滚动 up。
+# --skip-build：复用已固定摘要的镜像，先执行数据库迁移，再做迁移 preflight。
+# 两种流程随后都会等待健康状态并运行 12 门 Release Gate 冒烟。
 # 用法：cd 仓库根 && bash scripts/release.sh [--skip-build]
 # 纪律：生产发布只允许从干净且已提交的 Git 工作树构建。
 set -uo pipefail
 cd "$(dirname "$0")/.."
+
+SKIP_BUILD=false
+if [ "${1:-}" = "--skip-build" ]; then
+  SKIP_BUILD=true
+fi
 
 GIT_COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 if [ "$GIT_COMMIT" = "unknown" ]; then
@@ -23,14 +29,37 @@ export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "[release] commit=$GIT_COMMIT build_time=$BUILD_TIME dirty=$GIT_DIRTY"
 
 echo "== 0. Tool 契约 lock 漂移检测（治理 M1/M8）=="
-(cd backend && PYTHONPATH=".." python -m backend.scripts.gen_tool_contract_lock --check) \
-  || { echo "[release][FATAL] 契约 lock 与代码漂移：先重新生成 lock 并随变更提交"; exit 1; }
+if [ "$SKIP_BUILD" = "true" ]; then
+  docker compose run --rm --no-deps \
+    -e PYTHONPATH=/app \
+    --entrypoint python db-migrate \
+    -m backend.scripts.gen_tool_contract_lock --check \
+    || { echo "[release][FATAL] 契约 lock 与代码漂移：先重新生成 lock 并随变更提交"; exit 1; }
+else
+  (cd backend && PYTHONPATH=".." python -m backend.scripts.gen_tool_contract_lock --check) \
+    || { echo "[release][FATAL] 契约 lock 与代码漂移：先重新生成 lock 并随变更提交"; exit 1; }
+fi
 
 echo "== 1. Migration preflight =="
-(cd backend && PYTHONPATH=".." python scripts/verify_migration_state.py --image agent-db-migrate) \
-  || { echo "[release][FATAL] 迁移三层不一致，先重建 db-migrate 并核对登记"; exit 1; }
+MIGRATION_IMAGE="${RELEASE_DB_MIGRATE_IMAGE:-agent-db-migrate}"
+if [ "$SKIP_BUILD" = "true" ]; then
+  echo "== 1.1 使用已固定摘要的镜像执行数据库迁移 =="
+  docker compose run --rm db-migrate \
+    || { echo "[release][FATAL] 数据库迁移执行失败，拒绝启动新版本服务"; exit 1; }
 
-if [ "${1:-}" != "--skip-build" ]; then
+  docker compose run --rm --no-deps \
+    -e PYTHONPATH=/app \
+    -e PG_AUTHORITY_HOST=postgres \
+    -e PG_AUTHORITY_PORT=5432 \
+    --entrypoint python db-migrate \
+    scripts/verify_migration_state.py \
+    || { echo "[release][FATAL] 迁移三层不一致，先核对当前镜像与数据库登记"; exit 1; }
+else
+  (cd backend && PYTHONPATH=".." python scripts/verify_migration_state.py --image "$MIGRATION_IMAGE") \
+    || { echo "[release][FATAL] 迁移三层不一致，先重建 db-migrate 并核对登记"; exit 1; }
+fi
+
+if [ "$SKIP_BUILD" != "true" ]; then
   echo "== 2.1 解析构建镜像标签（不执行构建）=="
   bake_definition="$(docker compose build --print app agent-worker db-migrate)" || {
     echo "[release][FATAL] 无法预览构建目标；请升级 Docker Compose 以支持 build --print"
@@ -90,7 +119,11 @@ print(tags[0])
 fi
 
 echo "== 3. 滚动 up（依赖序由 compose depends_on 保证）=="
-docker compose up -d || exit 1
+if [ "$SKIP_BUILD" = "true" ]; then
+  docker compose up -d --no-build || exit 1
+else
+  docker compose up -d || exit 1
+fi
 
 echo "== 4. 等待 app healthy =="
 for i in $(seq 1 60); do

@@ -1,0 +1,31 @@
+# CI 发布层：只指定由 GitHub Actions 构建并按摘要固定的应用镜像。
+# 本机开发继续使用 build；生产部署显式叠加本文件并使用 --no-build。
+services:
+  app:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  rag-service:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  mcp-service:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  business-mock:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  agent-worker:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  rag-index-worker:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  maintenance-worker:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  report-worker:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  beat:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  cs-dispatcher:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  db-migrate:
+    image: ${IMAGE_BACKEND:?IMAGE_BACKEND is required}
+  frontend:
+    image: ${IMAGE_FRONTEND:?IMAGE_FRONTEND is required}
+  frontend-admin:
+    image: ${IMAGE_ADMIN:?IMAGE_ADMIN is required}
+  frontend-cs:
+    image: ${IMAGE_CS:?IMAGE_CS is required}
