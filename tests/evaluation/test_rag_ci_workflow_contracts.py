@@ -291,6 +291,8 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     assert "secrets.RELEASE_PASSWORD" not in deploy_text.split("  deploy:\n", 1)[0]
     assert "GHCR_TOKEN" not in deploy_text
     assert "docker logout ghcr.io" in deploy_text
+    assert 'expected_path = ".github/workflows/publish-images.yml"' in deploy_text
+    assert 'run.get("path") != expected_path' in deploy_text
     assert 'compare/${sha}...main' in deploy_text
     assert 'github.event_name == \'workflow_run\'' in deploy_text
     assert '"$latest_main_sha" != "$IMAGE_SHA"' in deploy_text

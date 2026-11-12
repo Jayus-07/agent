@@ -62,8 +62,8 @@ jobs:
           from pathlib import Path
 
           run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          expected_path = ".github/workflows/publish-images.yml@"
-          if not str(run.get("path", "")).startswith(expected_path):
+          expected_path = ".github/workflows/publish-images.yml"
+          if run.get("path") != expected_path:
               raise SystemExit("Run ID is not from publish-images.yml")
           if (
               run.get("event") != "push"
