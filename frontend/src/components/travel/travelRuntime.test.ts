@@ -366,6 +366,67 @@ describe('acceptTravelRunEvent', () => {
 })
 
 describe('reduceTravelStreamEvent', () => {
+  it('归并上下文压缩生命周期并在摘要超时后显示安全回退', () => {
+    let state = initialTravelProcess('client-context')
+    state = reduceTravelStreamEvent(state, {
+      event: 'context',
+      data: {
+        run_id: 'travel-context-1', seq: 1, level: 'L4',
+        action: 'collapse', saved_tokens: 240,
+      },
+    })
+    expect(state.contextNotice).toEqual({
+      status: 'completed', level: 'L4', savedTokens: 240,
+    })
+
+    state = reduceTravelStreamEvent(state, {
+      event: 'context',
+      data: {
+        run_id: 'travel-context-1', seq: 2, level: 'L5',
+        action: 'summary_started', saved_tokens: 0,
+      },
+    })
+    expect(state.contextNotice?.status).toBe('running')
+
+    state = reduceTravelStreamEvent(state, {
+      event: 'context',
+      data: {
+        run_id: 'travel-context-1', seq: 3, level: 'L5',
+        action: 'summary_deferred', reason: 'fallback', saved_tokens: 0,
+      },
+    })
+    expect(state.contextNotice).toEqual({
+      status: 'deferred', level: 'L5', reason: 'fallback',
+    })
+  })
+
+  it('L5 摘要被本轮采用但未节省 token 仍显示完成', () => {
+    let state = initialTravelProcess('client-context')
+    state = reduceTravelStreamEvent(state, {
+      event: 'context',
+      data: {
+        run_id: 'travel-context-2', seq: 1, level: 'L5',
+        action: 'summary_started', saved_tokens: 0,
+      },
+    })
+    state = reduceTravelStreamEvent(state, {
+      event: 'context',
+      data: {
+        run_id: 'travel-context-2', seq: 2, level: 'L5',
+        action: 'auto_compact', saved_tokens: 0,
+      },
+    })
+
+    expect(state.contextNotice).toEqual({
+      status: 'completed', level: 'L5', savedTokens: 0,
+    })
+    state = reduceTravelStreamEvent(state, {
+      event: 'done',
+      data: { run_id: 'travel-context-2', seq: 3, status: 'completed' },
+    })
+    expect(state.contextNotice?.status).toBe('completed')
+  })
+
   it('按 tool_call_id 归属同名 Tool 的结果，不覆盖另一调用', () => {
     let state = initialTravelProcess('run-calls')
     state = reduceTravelStreamEvent(state, {

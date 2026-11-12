@@ -127,6 +127,8 @@ export interface ContextEvent {
   after_tokens: number
   saved_tokens: number
   ts: number
+  /** 固定低基数原因码；不含模型或会话内容。 */
+  reason?: 'fallback' | 'saved_for_next_turn' | 'projection_mismatch'
 }
 
 /** CS done 帧待确认状态变更信号；详情从认证接口读取。 */

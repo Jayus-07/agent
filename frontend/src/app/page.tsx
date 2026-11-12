@@ -52,7 +52,7 @@ const ASSISTANTS: AssistantEntry[] = [
     tone: "blue",
   },
   {
-    title: "旅游助手",
+    title: "旅游平台",
     description: "还没想好去哪？说说时间和心情，一起找灵感。",
     example: "周末想出去放松两天。",
     action: "聊聊去哪",

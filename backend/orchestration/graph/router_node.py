@@ -115,9 +115,8 @@ def router_node(state: dict) -> dict:
         product_id == "customer_service"
         or (product_id == "internal" and is_cs_forced(state))
     )
-    # AI 助手页锁域（2026-10-08）：/agent 页每条消息带 domain_hint=main，
-    # 域请求不在该页执行（隔离），强信号改产 handoff 引导卡。与 cs_forced
-    # 互斥（hint 取值不同源）。判定与引导卡构造见 routing/lock_domain.py。
+    # 企业助手入口按可信 product_id=agent 锁定产品范围；domain_hint 仅作
+    # 兼容提示。旅游/选品/客服请求不在本入口执行，也不生成跨助手 handoff。
     main_forced = (
         product_id == "agent"
         or (product_id == "internal" and is_main_forced(state))
@@ -195,14 +194,15 @@ def router_node(state: dict) -> dict:
 
     # ── 旅游/选品/预订/商务四连预过滤（域锁且未转出时跳过）─────────
     # 顺序与语义冻结，实现见 routing/prefilter_chain.py::run_domain_prefilters
-    # main 锁域（2026-10-08）：强信号不执行域图，改产 handoff 引导卡
-    # （隔离+引导，产品拍板）；弱信号继续主路由。
+    # 注册的 /agent 产品入口只在自己的产品能力范围内路由，不向其他助手
+    # 生成 handoff，也不运行旅游/选品预过滤。保留 internal 兼容入口旧行为。
     if main_forced:
-        main_handoff = main_forced_handoff_update(query, state)
-        if main_handoff is not None:
-            return _with_router_decisions(
-                state, main_handoff, query, existing_override=main_handoff,
-            )
+        if product_id != "agent":
+            main_handoff = main_forced_handoff_update(query, state)
+            if main_handoff is not None:
+                return _with_router_decisions(
+                    state, main_handoff, query, existing_override=main_handoff,
+                )
     elif not cs_forced or cs_redirect:
         domain_result = run_domain_prefilters(query, state)
         if domain_result is not None:

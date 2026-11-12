@@ -72,6 +72,16 @@ _ENTITY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("数量", re.compile(r"\d+\s*(?:个|件|台|条|名|人|箱|包|袋|kg|KG|克|千克|升|毫升)")),
 ]
 
+# 显式禁止的业务动作需要确定性保护，避免只依赖摘要模型自行保留。
+# 限定否定词与动作词之间的距离和标点边界，避免把整段对话当作一条事实。
+_USER_CONSTRAINT_PATTERN = re.compile(
+    r"(?:不要|别|不许|不准|不得|禁止|不允许|无需|不需要)"
+    r"[^\r\n，,。；;！？!?]{0,10}?"
+    r"(?:替我|帮我|自动|直接)?"
+    r"(?:预订(?:酒店|房间|机票|车票)?|订(?:酒店|房|票)|下单|购买|"
+    r"支付|付款|退款|取消|发送|删除|提交)"
+)
+
 # 裸金额（Phase 5，P3）：语义词 + 数值，无货币符号。
 # Phase 4 真实丢失案例：「预算 100,000」被摘要后丢失。
 # 误判防线（§14 禁止把所有大数字当金额）：
@@ -103,6 +113,7 @@ def extract_protected_facts(
     """
     seen: set[tuple[str, str]] = set()
     facts: list[ProtectedFact] = []
+    constraint_facts: list[ProtectedFact] = []
     max_facts = int(_cfg("CONTEXT_L5_MAX_PROTECTED_FACTS", 40))
     with _extract_lock:
         for row in rows:
@@ -129,6 +140,17 @@ def extract_protected_facts(
                 facts.append(ProtectedFact(
                     type="金额", value=value, source_message_id=msg_id,
                     label=label))
+            for match in _USER_CONSTRAINT_PATTERN.finditer(content):
+                value = match.group(0).strip()
+                key = ("用户约束", value)
+                if value and key not in seen:
+                    seen.add(key)
+                    constraint_facts.append(ProtectedFact(
+                        type="用户约束", value=value,
+                        source_message_id=msg_id))
+
+    # 显式约束优先占用保护名额，其余事实继续按原顺序截断。
+    facts = constraint_facts + facts
 
     # 语义金额 supersede：同 label 只留最新（rows 按 message id 升序遍历）
     latest_by_label: dict[str, int] = {}

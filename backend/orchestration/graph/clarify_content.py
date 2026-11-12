@@ -85,7 +85,10 @@ CLARIFY_STANDALONE_TEXT = (
 CLARIFY_DETAIL_TEXT = "请补充更多信息，以便我继续为您处理。"
 
 # 路由/向量/LLM 等基础设施降级：不是用户没说清，给可重试提示且不发追问卡。
-CLARIFY_UNAVAILABLE_TEXT = "抱歉，当前服务暂时无法完成需求理解，请稍后重试。"
+CLARIFY_UNAVAILABLE_TEXT = (
+    "当前智能服务暂时不可用，本次请求尚未处理。请稍后重试；"
+    "如果问题持续，请联系管理员。"
+)
 
 
 def clarify_standalone_text(card: Mapping[str, Any] | None) -> str:

@@ -200,8 +200,12 @@ def _put_final_frame(aq: asyncio.Queue, loop, stop_event: threading.Event,
         pass  # loop 已关闭（应用关停），放弃投递
 
 
-def _validate_model_override(model: str | None) -> None:
+def _validate_model_override(
+    model: str | None, *, product_id: str | None = None,
+) -> None:
     """API 边界 fail-fast：请求级模型覆盖非法 → 400。
+
+    企业助手由平台统一选择模型，拒绝客户端传入的模型覆盖。
 
     与上下文绑定层（proxy.set_request_model）的宽容静默**分层**（契约见
     docs/model-config-admin-ui-design.md §13.1）：
@@ -214,6 +218,14 @@ def _validate_model_override(model: str | None) -> None:
     """
     if not model:
         return
+    if product_id == AGENT_PRODUCT.product_id:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ModelOverrideNotAllowed",
+                "message": "企业助手使用平台配置的模型，请移除请求中的 model 字段。",
+            },
+        )
     from backend.infra.llm.models import validate_override_model
 
     ok, reason = validate_override_model(model)
@@ -267,14 +279,14 @@ def _sse_error_event(exc: BaseException, trace_id: str = "") -> dict:
 async def chat(req: ChatRequest, request: Request,
                _rate=Depends(require_rate_limit)):
     """提交自然语言问题，Multi-Agent 自动拆解+执行+汇总"""
-    _validate_model_override(req.model)
+    product = _product_for_chat_route(request)
+    _validate_model_override(req.model, product_id=product.product_id)
     t0 = time.monotonic()
     agent = get_multi_agent()
     # 默认 "*"（授权范围推断）而非写死 "default"：default 库通常无文档，
     # 前端聊天不传 kb_id 时旧默认恒查空库拒答。"*" 由 KBRouter 按问题
     # 推断候选库 + 检索侧 audience 白名单收窄（员工只见 all 库）。
     kb_id = req.kb_id or "*"
-    product = _product_for_chat_route(request)
     ident, user_id = _chat_identity(request, product)
     session_id = req.session_id
     try:
@@ -396,9 +408,8 @@ async def chat_stream(
         )
         return JSONResponse(status_code=422, content=_http_payload(envelope))
 
-    _validate_model_override(req.model)
-
     product = _product_for_chat_route(r)
+    _validate_model_override(req.model, product_id=product.product_id)
     ident, user_id = _chat_identity(r, product)
     session_id = req.session_id
     product_session_id = _product_session_id(product, session_id)

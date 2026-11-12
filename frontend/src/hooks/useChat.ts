@@ -9,9 +9,9 @@ export function useSendMessage() {
   const { startStream, stopStream } = useSSE()
 
   const send = useCallback(
-    async (question: string) => {
+    async (question: string, modelOverride?: string | null) => {
       // 产品身份由服务端注册的 /chat/agent 路由固定。
-      await startStream(question, currentId)
+      await startStream(question, currentId, modelOverride)
     },
     [currentId, startStream],
   )

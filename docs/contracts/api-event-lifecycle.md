@@ -24,6 +24,8 @@
 
 主 Chat 的事件序列：`meta` 第一帧且唯一，中段 `status/log/delta/AUX`，末尾 `done`、`error` 或 `paused` 恰有一个；`ping` 不计入内容帧、不需要重放。`paused` 专用于用户个人模型用量余额不足，表示本轮停止且保留已传输的部分内容；补足额度后重新发送，不表示从图节点恢复。Terminal 的业务成功与模型/Tool 子步骤成功不同，要检查终态结果。流连接断开不等同于 Server 已停止生成或已回滚业务操作。`clarification` 只在服务端确实提供可点选项时发送；路由/向量/模型降级返回可重试提示时不发追问卡，避免正文承诺“下方选项”但前端无卡。
 
+`context` 是非终态辅助事件，不改变本轮业务结果。L5 摘要会先发 `summary_started`；采用摘要后以 `auto_compact` 和正数 `saved_tokens` 报告完成，未采用时以 `summary_deferred` 报告安全回退、投影不匹配或留待下一轮生效。前端只在开始事件后显示对应的摘要状态；流以终态结束但未收到结束事件时显示“状态未确认”，不假报成功。事件只含层级、动作、Token 计数及有限原因枚举，不包含用户问题或摘要正文。旅游 V2 SSE 也投影同一状态，但仍携带旅游 run 的序号并沿用可信请求作用域；各端只把已知动作映射成状态文案，未知动作保持可忽略。
+
 企业助手实际校验后的多步骤业务计划可在节点边界移交持久任务：SSE以`done.task_id`结束本次订阅，表示已交接而非报告已完成；任务结果以`/chat/agent/tasks/{task_id}`为准。普通问答和单次长文不因字数启用该机制。任务暂停/继续走同一任务号及PostgresSaver检查点，恢复时重新校验当前授权并复用已完成节点结果；任务内个人余额不足为PAUSED，补足后可继续。运行中任务的计划可经 `/plan-revisions`（draft→apply）多轮修订（决策 #29）：仅 pending/failed 步骤可修订并以新 step_id 重发，apply 仅限任务静止（PAUSED/WAITING_USER/FAILED，FAILED 走显式 `allow_failed`），并发以 `base_plan_version` 为准（不匹配 409），恢复语义同上。此机制与上述进程内SSE重放和普通SSE的`paused`终帧不同。
 
 ## 兼容变更流程

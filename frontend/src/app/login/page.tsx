@@ -46,7 +46,7 @@ function LoginForm() {
   const selectedAssistant = redirect.startsWith("/customer-service")
     ? "智能客服"
     : redirect.startsWith("/travel")
-      ? "旅游助手"
+      ? "旅游平台"
       : "企业助手";
   const registerHref = `/register?redirect=${encodeURIComponent(redirect)}`;
   const registrationComplete = searchParams.get("registered") === "1";
@@ -243,6 +243,9 @@ function LoginForm() {
           />
           记住账号，下次自动填充
         </label>
+        <p className="mt-1.5 pl-6 text-[11px] leading-5 text-[#7A8480]">
+          平台只记住账号，不保存明文密码；可用浏览器密码管理器自动填充。
+        </p>
 
         <button
           type="submit"

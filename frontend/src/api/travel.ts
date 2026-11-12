@@ -481,6 +481,7 @@ export type TravelStreamEventName =
   | "run.finished"
   | "done"
   | "error"
+  | "context"
   | "ping"
 
 export interface TravelStreamEvent {

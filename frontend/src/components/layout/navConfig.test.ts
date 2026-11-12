@@ -22,12 +22,13 @@ describe('NAV — 导航配置完整性', () => {
     expect(new Set(allPaths).size).toBe(allPaths.length)
   })
 
-  it('用户端导航 = AI 助手 + 旅游规划 + 选品漏斗（2026-10-06 六次追加：多域隔离 M4 第四扇门）', () => {
+  it('用户端导航保留独立旅游入口，未完成的选品产品不挂导航', () => {
     const labels = NAV.map((e) => e.label)
-    expect(labels).toEqual(['AI 助手', '旅游规划', '选品漏斗'])
-    for (const p of ['/agent', '/travel', '/selection-funnel']) {
+    expect(labels).toEqual(['AI 助手', '旅游规划'])
+    for (const p of ['/agent', '/travel']) {
       expect(allPaths, `用户端核心路由 ${p} 丢失`).toContain(p)
     }
+    expect(allPaths, '选品漏斗应由独立产品前端承载，完成前不出现在用户导航').not.toContain('/selection-funnel')
     // 已裁撤页面不得回渗（页面目录已删，导航也不得再挂）
     for (const p of ['/agent/tasks', '/reports', '/alerts']) {
       expect(allPaths, `已裁撤路由 ${p} 不应出现在用户端`).not.toContain(p)
@@ -41,10 +42,8 @@ describe('NAV — 导航配置完整性', () => {
     expect(entry?.items ?? []).toHaveLength(0)
   })
 
-  it('侧栏不得回退成同义重复入口（智能问答/智能客服/对话 组，2026-10-01 新增边界）', () => {
-    // 三个词指同一件事：/agent 的对话主入口。重复入口会让用户以为它们是
-    // 不同功能；智能客服的常驻入口在 /agent 顶栏胶囊（ChatHeader onOpenCS），
-    // 不靠侧栏承载。此断言防的就是「有人又把子项加回去」。
+  it('助手导航不混入其他助手，也不重复主入口', () => {
+    // /agent 只承载企业助手；其他助手不能作为侧栏子入口混入。
     const labels = NAV.map((e) => e.label)
     for (const dup of ['AI 对话', '智能问答', '智能客服']) {
       expect(labels, `同义重复入口「${dup}」不应出现在用户端侧栏`).not.toContain(dup)
@@ -62,8 +61,6 @@ describe('NAV — 导航配置完整性', () => {
   })
 
   it('管理端专属入口不回渗（运维/运营/业务配置页面 2026-09-16 起全部在 frontend-admin）', () => {
-    // 黑名单只锁顶层入口；用户端 /agent 顶栏的「智能客服」胶囊是 CSDrawer
-    // 消费者入口（不经过 navConfig），与管理端「智能客服」（坐席工作台）语义不同。
     const labels = NAV.map((e) => e.label)
     for (const adminOnly of [
       '数据驾驶舱', 'RAG 知识库', '告警中心',
@@ -72,10 +69,6 @@ describe('NAV — 导航配置完整性', () => {
       expect(labels, `管理端入口「${adminOnly}」不应出现在用户端`).not.toContain(adminOnly)
     }
     for (const p of allPaths) {
-      // /selection-funnel 是 2026-10-06 多域隔离 M4 拍板的用户端专属页例外
-      // （漏斗报告落地页，主图引导卡带参跳转目标）；其余 /selection 管理端
-      // 路由照旧禁止回渗。
-      if (p === '/selection-funnel') continue
       expect(
         p.startsWith('/knowledge') || p.startsWith('/cs') ||
         p.startsWith('/competitors') || p.startsWith('/selection'),

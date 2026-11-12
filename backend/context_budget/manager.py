@@ -30,6 +30,22 @@ def _cfg(name: str, default: int | float) -> int | float:
     return getattr(config, name, default)
 
 
+def _emit_l5_status(action: str, used_tokens: int, *, reason: str = "") -> None:
+    """发出不含对话正文的 L5 生命周期事件；观测失败不影响聊天。"""
+    try:
+        from backend.context_budget.metrics import emit_context_event
+
+        extra = {"reason": reason} if reason else {}
+        emit_context_event(
+            level="L5", action=action,
+            before_tokens=max(0, int(used_tokens)),
+            after_tokens=max(0, int(used_tokens)),
+            **extra,
+        )
+    except Exception:  # noqa: BLE001 — 状态事件是旁路
+        logger.debug("[ContextBudget] L5 状态事件发送失败", exc_info=True)
+
+
 class ContextBudgetManager:
     """统一上下文预算入口。无状态（阈值实时读 config，env 覆盖即时生效）。"""
 
@@ -374,6 +390,7 @@ class ContextBudgetManager:
             # 同键摘要已在底层线程中运行（含此前等待超时后的延续）
             logger.debug("[ContextBudget] L5 同键摘要已在执行，本轮用确定性结果")
             return msgs, used
+        _emit_l5_status("summary_started", used)
         try:
             timeout = float(_cfg("CONTEXT_L5_SUMMARY_TIMEOUT_SECONDS", 30)) + 10
             outcome = wait_flight_sync(flight, timeout)
@@ -383,7 +400,15 @@ class ContextBudgetManager:
             logger.warning(
                 "[ContextBudget] L5 等待异常，沿用确定性裁剪结果", exc_info=True)
             outcome = None
-        return self._adopt_l5_outcome(msgs, used, budget, outcome)
+        try:
+            return self._adopt_l5_outcome(msgs, used, budget, outcome)
+        except Exception:  # noqa: BLE001 — 摘要结果采用失败时沿用预检结果
+            logger.warning(
+                "[ContextBudget] L5 结果采用失败，沿用确定性裁剪结果",
+                exc_info=True,
+            )
+            _emit_l5_status("summary_deferred", used, reason="fallback")
+            return msgs, used
 
     async def _maybe_auto_compact_async(
         self, msgs: list, used: int, budget: int,
@@ -417,6 +442,7 @@ class ContextBudgetManager:
             except Exception:
                 pass
             return msgs, used
+        _emit_l5_status("summary_started", used)
         try:
             outcome = await wait_flight_async(
                 flight, float(_cfg("CONTEXT_L5_ONLINE_WAIT_SECONDS", 8)))
@@ -425,7 +451,15 @@ class ContextBudgetManager:
                 "[ContextBudget] L5 在线等待异常，沿用确定性裁剪结果",
                 exc_info=True)
             outcome = None
-        return self._adopt_l5_outcome(msgs, used, budget, outcome)
+        try:
+            return self._adopt_l5_outcome(msgs, used, budget, outcome)
+        except Exception:  # noqa: BLE001 — 摘要结果采用失败时沿用预检结果
+            logger.warning(
+                "[ContextBudget] L5 结果采用失败，沿用确定性裁剪结果",
+                exc_info=True,
+            )
+            _emit_l5_status("summary_deferred", used, reason="fallback")
+            return msgs, used
 
     def _l5_gate(
         self, msgs: list, used: int, budget: int,
@@ -479,6 +513,7 @@ class ContextBudgetManager:
                     code="context_autocompact_failed", level="warn").inc()
             except Exception:
                 pass
+            _emit_l5_status("summary_deferred", used, reason="fallback")
             return msgs, used
 
         record_compaction_latency(
@@ -524,6 +559,8 @@ class ContextBudgetManager:
                 "[ContextBudget] L5 水位线一致性核对未过，本轮不采用摘要"
                 f"（through={outcome.through_id} "
                 f"boundary={outcome.boundary_id}），沿用确定性结果")
+            _emit_l5_status(
+                "summary_deferred", used, reason="projection_mismatch")
             return msgs, used
         if replaced > 0:
             used_before = used
@@ -548,6 +585,8 @@ class ContextBudgetManager:
             # 摘要已落库但本轮消息层无可替换内容（罕见）：下一轮生效
             logger.info(
                 "[ContextBudget] L5 摘要已落库，本轮 projection 无可替换历史")
+            _emit_l5_status(
+                "summary_deferred", used, reason="saved_for_next_turn")
         return msgs, used
 
     @staticmethod

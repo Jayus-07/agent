@@ -211,14 +211,19 @@ export function useSSE() {
   const startStream = useCallback(async (
     question: string,
     sessionId: string,
+    modelOverride?: string | null,
   ) => {
     useChatStore.getState().addMessage('user', question, sessionId)
-    await runStream(question, sessionId, useChatStore.getState().sessionModel)
+    await runStream(
+      question,
+      sessionId,
+      modelOverride === undefined ? useChatStore.getState().sessionModel : modelOverride,
+    )
   }, [runStream])
 
   /** 重新生成最后一条回答：移除尾部 assistant 消息，用最近一条 user 提问重跑一轮。
    *  加载中 / 尾部不是 assistant 回答 / 找不到提问时静默忽略。 */
-  const regenerate = useCallback(async (sessionId: string) => {
+  const regenerate = useCallback(async (sessionId: string, modelOverride?: string | null) => {
     const store = useChatStore.getState()
     if (store.isLoading) return
     const session = store.sessions.find((s) => s.id === sessionId)
@@ -237,7 +242,7 @@ export function useSSE() {
     store.removeLastAssistant(sessionId)
     // 重新生成沿用同一模型：否则「重新生成」会换模型，两次结果不可比（B.9）。
     // AI 助手页的重新生成与首问同源锁域（main）。
-    await runStream(question, sessionId, store.sessionModel)
+    await runStream(question, sessionId, modelOverride === undefined ? store.sessionModel : modelOverride)
   }, [runStream])
 
   /** 停止生成：断开连接 + 发送中止信号 */

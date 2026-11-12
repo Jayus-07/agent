@@ -2,6 +2,7 @@
 
 覆盖：
 - ProtectedFacts 确定性抽取（订单号/SKU/金额/百分比/日期/URL/数量）
+- 明确禁止的业务动作作为用户约束保留并在摘要遗漏时补回
 - validate_and_patch：摘要遗漏事实**追加**进 [关键实体]，零额外 LLM 调用
 - fold_rebuild：System/最近 N 轮保留；旧摘要与 L4 投影被新摘要整体替换；
   原始列表不被修改
@@ -68,6 +69,25 @@ class TestExtractProtectedFacts:
 
     def test_empty(self):
         assert extract_protected_facts([]) == []
+
+    def test_explicit_prohibition_is_protected_and_patched(self):
+        from backend.context_budget.fact_registry import ProtectedFactRegistry
+
+        facts = extract_protected_facts([
+            (1, "酒店可以帮我推荐，但不要替我预订。"),
+        ])
+        constraint = next(
+            fact for fact in facts if fact.type == "用户约束")
+        assert constraint.value == "不要替我预订"
+
+        registry = ProtectedFactRegistry()
+        registry.add_regex_facts(facts)
+        outcome = registry.validate_and_patch("行程在大阪，预算为 6,000。")
+        assert "不要替我预订" in outcome.patched_summary
+        assert any(fact.type == "用户约束" for fact in outcome.missing)
+
+        positive = extract_protected_facts([(2, "请帮我预订酒店。")])
+        assert not any(fact.type == "用户约束" for fact in positive)
 
 
 class TestValidateAndPatch:

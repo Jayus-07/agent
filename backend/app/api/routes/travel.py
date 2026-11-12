@@ -785,6 +785,53 @@ def _record_travel_tool_trace_event(records: list[dict], event: dict) -> None:
                 record[key] = str(value)[:128] if key in {"status", "data_status", "error_type"} else value
 
 
+@contextmanager
+def _travel_context_budget_event_scope(
+    *, tenant_id: str, user_id: str, session_id: str, request_id: str,
+    queue_event,
+):
+    """把共享预算事件安全投影到当前旅游 SSE 轮次。"""
+    from backend.context_budget.metrics import (
+        ContextEventScope,
+        reset_context_event_scope,
+        reset_context_sink,
+        set_context_event_scope,
+        set_context_sink,
+    )
+
+    scope = ContextEventScope(
+        product_id="travel",
+        tenant_id=str(tenant_id or ""),
+        user_id=str(user_id or ""),
+        session_id=str(session_id or ""),
+        request_id=str(request_id or ""),
+    )
+
+    def sink(event: dict) -> None:
+        if event.get("type") != "context":
+            return
+        safe_fields = (
+            "level", "action", "before_tokens", "after_tokens",
+            "saved_tokens", "ts", "reversible", "fold_id",
+            "folded_messages", "replaced_messages", "summary_tokens",
+            "delta_messages", "reason",
+        )
+        data = {key: event[key] for key in safe_fields if key in event}
+        queue_event({
+            "event": "context",
+            "source": "context_budget",
+            **data,
+        })
+
+    scope_token = set_context_event_scope(scope)
+    sink_token = set_context_sink(sink, scope=scope)
+    try:
+        yield
+    finally:
+        reset_context_sink(sink_token)
+        reset_context_event_scope(scope_token)
+
+
 def _finish_travel_trace(trace, started_at: float, result: dict,
                          state: dict | None, run_id: str,
                          tool_events: list[dict] | None = None,
@@ -1169,23 +1216,24 @@ async def _travel_plan_stream_impl(
             sequence += 1
             payload = {**event, "run_id": run_id, "seq": sequence}
 
-        def put() -> None:
-            if cancelled.is_set():
-                pending_events.release()
-                return
-            try:
-                queue.put_nowait(payload)
-            except asyncio.QueueFull:
-                # 队列满意味着客户端消费跟不上；worker 不能丢弃事件后
-                # 假装正常完成，直接让流以错误终止。
-                pending_events.release()
-                stop("backpressure")
+            def put() -> None:
+                if cancelled.is_set():
+                    pending_events.release()
+                    return
+                try:
+                    queue.put_nowait(payload)
+                except asyncio.QueueFull:
+                    # 队列满意味着客户端消费跟不上；worker 不能丢弃事件后
+                    # 假装正常完成，直接让流以错误终止。
+                    pending_events.release()
+                    stop("backpressure")
 
-        try:
-            loop.call_soon_threadsafe(put)
-        except RuntimeError:
-            pending_events.release()
-            stop("cancelled")
+            try:
+                # 在同一把锁内排入事件循环，保证 seq 顺序与队列顺序一致。
+                loop.call_soon_threadsafe(put)
+            except RuntimeError:
+                pending_events.release()
+                stop("cancelled")
 
     def queue_terminal(event: dict | None) -> None:
         def put() -> None:
@@ -1228,7 +1276,13 @@ async def _travel_plan_stream_impl(
         read_only_context: dict[str, Any] = {}
         resume_mode = "normal"
         try:
-            with travel_event_scope(queue_event):
+            with travel_event_scope(queue_event), _travel_context_budget_event_scope(
+                    tenant_id=tenant_id,
+                    user_id=identity.user_id or "",
+                    session_id=execution_conversation_id,
+                    request_id=run_id,
+                    queue_event=queue_event,
+            ):
                 control.check()
                 emit_travel_event(
                     "run.started", agent="supervisor", run_id=run_id,
