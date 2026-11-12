@@ -67,6 +67,8 @@ sudo certbot renew --dry-run
 
 ## 生产启动
 
+自动发布工作流、GitHub Environment/Variables/Secret 和专用 runner 的配置要求见[发布质量与 GitHub Actions 生产发布](../../docs/operations/release-quality.md#github-actions-生产发布)。首次启用前，必须在生产主机准备好 `.env.production`、评测运行目录、备份目录和只允许部署使用的 runner；流水线不会创建数据目录或修改服务器权限。
+
 镜像在开发机或 CI 顺序构建，避免在 4C8G 生产服务器同时运行多个 Next.js 构建。前端 Dockerfile 使用 Node 22，依赖层使用既有 npm 缓存，运行时只向 BFF 注入 API_KEY，不编译到浏览器。
 
 ```bash

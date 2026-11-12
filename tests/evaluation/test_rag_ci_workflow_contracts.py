@@ -5,6 +5,8 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -239,3 +241,98 @@ def test_cost_artifact_marks_ledger_query_failure_unverified(
         assert artifact["verification_error"] == "ledger_query_failed"
         assert artifact["usage"] == []
         assert "credential-sentinel-must-not-leak" not in capsys.readouterr().out
+
+
+def test_production_release_workflows_auto_deploy_verified_main_digests():
+    """自动部署只接受最新且验证通过的 main 镜像摘要。"""
+    publish_path = ROOT / ".github/workflows/publish-images.yml"
+    deploy_path = ROOT / ".github/workflows/deploy-production.yml"
+    compose_path = ROOT / "部署/prod-4c8g/docker-compose.release.yml"
+    release_path = ROOT / "scripts/release.sh"
+
+    publish = yaml.load(publish_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    deploy = yaml.load(deploy_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    release_compose = yaml.load(
+        compose_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader
+    )
+
+    assert publish["on"]["push"]["branches"] == ["main"]
+    assert "pull_request" not in publish["on"]
+    assert publish["permissions"]["packages"] == "write"
+    publish_text = publish_path.read_text(encoding="utf-8")
+    assert "packages: write" in publish_text
+    assert "production-image-digests" in publish_text
+    assert "outputs.digest" in publish_text
+
+    assert set(deploy["on"]) == {"workflow_run", "workflow_dispatch"}
+    assert deploy["on"]["workflow_run"]["workflows"] == [
+        "Publish production images"
+    ]
+    assert deploy["on"]["workflow_run"]["branches"] == ["main"]
+    verify_job = deploy["jobs"]["verify-release"]
+    deploy_job = deploy["jobs"]["deploy"]
+    deploy_step_names = [step["name"] for step in deploy_job["steps"]]
+    assert "workflow_run.conclusion == 'success'" in verify_job["if"]
+    assert verify_job["runs-on"] == "ubuntu-latest"
+    assert deploy_job["runs-on"] == [
+        "self-hosted",
+        "linux",
+        "x64",
+        "agent-production-deploy",
+    ]
+    assert deploy_job["environment"]["name"] == "production"
+    prepare_credentials_index = deploy_step_names.index(
+        "Prepare isolated Docker credentials"
+    )
+    login_index = deploy_step_names.index("Log in to GHCR")
+    pull_index = deploy_step_names.index("Pull and deploy the verified digests")
+    assert prepare_credentials_index < login_index < pull_index
+    deploy_text = deploy_path.read_text(encoding="utf-8")
+    assert "secrets.RELEASE_PASSWORD" not in deploy_text.split("  deploy:\n", 1)[0]
+    assert "GHCR_TOKEN" not in deploy_text
+    assert "docker logout ghcr.io" in deploy_text
+    assert 'compare/${sha}...main' in deploy_text
+    assert 'github.event_name == \'workflow_run\'' in deploy_text
+    assert '"$latest_main_sha" != "$IMAGE_SHA"' in deploy_text
+    assert '--repo "$GITHUB_REPOSITORY"' in deploy_text
+    release_text = release_path.read_text(encoding="utf-8")
+    assert 'if [ "$SKIP_BUILD" = "true" ]; then' in release_text
+    assert "docker compose run --rm --no-deps" in release_text
+    assert release_text.index("docker compose run --rm db-migrate") < (
+        release_text.index("scripts/verify_migration_state.py")
+    )
+    assert "PG_AUTHORITY_HOST=postgres" in release_text
+
+    services = release_compose["services"]
+    backend_services = (
+        "app",
+        "rag-service",
+        "mcp-service",
+        "business-mock",
+        "agent-worker",
+        "rag-index-worker",
+        "maintenance-worker",
+        "report-worker",
+        "beat",
+        "cs-dispatcher",
+        "db-migrate",
+    )
+    assert set(services) == set(backend_services) | {
+        "frontend",
+        "frontend-admin",
+        "frontend-cs",
+    }
+    assert all(
+        services[name]["image"] == "${IMAGE_BACKEND:?IMAGE_BACKEND is required}"
+        for name in backend_services
+    )
+    frontend_images = {
+        "frontend": "${IMAGE_FRONTEND:?IMAGE_FRONTEND is required}",
+        "frontend-admin": "${IMAGE_ADMIN:?IMAGE_ADMIN is required}",
+        "frontend-cs": "${IMAGE_CS:?IMAGE_CS is required}",
+    }
+    assert all(
+        services[name]["image"] == image
+        for name, image in frontend_images.items()
+    )
+    assert "docker compose up -d --no-build" in release_text
