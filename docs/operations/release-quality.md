@@ -46,7 +46,7 @@ CI 只算本次真正执行的工作流结果；条件 SKIP 不能叫“全链�
 
 | 位置 | 必填项 | 用途 |
 | --- | --- | --- |
-| GitHub Actions Environment `production` | Secret `RELEASE_PASSWORD`；启用指定审批人/保护规则，并只允许 `main` 部署 | 在生产 job 启动前人工批准，并运行发布质量门禁 |
+| GitHub Actions Environment `production` | Secret `RELEASE_PASSWORD`；启用指定审批人/保护规则，并只允许 `main` 部署 | 填写生产 `e2e_domain` 与 `e2e_tenantb` 验收账号当前共用的密码；发布质量门禁用它们做登录和跨租户检查 |
 | GitHub Actions Environment 或 Repository Variables | `PRODUCTION_RELEASES_DIR`、`PRODUCTION_ENV_FILE`、`PRODUCTION_EVAL_RUNS_HOST_DIR`、`PRODUCTION_PG_BACKUP_HOST_DIR` | 覆盖默认生产路径；默认值见工作流 |
 | Repository Variables（按需） | `PRODUCTION_ADMIN_URL`、`PRODUCTION_CS_URL`、`PRODUCTION_CS_WS_ORIGIN` | 构建前端时设置正式站点地址；未配置时使用当前 `anyanyan.me` 域名 |
 | `main` 分支保护规则 | 要求 PR 合并和所需 CI 状态通过，禁止绕过保护直接推送 | 保证只有通过仓库 PR 门禁的 main 提交触发生产流水线 |
