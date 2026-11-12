@@ -10,14 +10,16 @@
 
 ## 本轮验证（当前工作树）
 
-- 后端定向 T2：身份/模型覆盖、产品路由、L5 抽取与 pin、事件隔离、Travel SSE、客服流程共 123 passed（本轮复跑）。
+- 后端定向 T2：身份/模型覆盖、产品路由、L5 抽取与 pin、事件隔离、Travel SSE、客服流程共 127 passed（含 PR Review 修复后的复跑）。
 - 前端定向 Vitest：`navConfig.test.ts`、`travelRuntime.test.ts`、`chat-reducer.test.ts`、客服首页和旅游首页用例共 65 passed。
 - RAG smoke 路径过滤和 workflow 契约：25 passed。
 - `npm run build` 完整通过：Next.js 编译、类型检查、19 个静态页面生成及 build trace 均完成。
 - 企业助手空态使用本地生产构建和合成 API 做过浏览器 smoke，console errors 为 0。客服与旅游首页用 Vitest 页面渲染用例验证通过；尚未对三端都做真实浏览器 smoke，因此该项不能表述为三端浏览器验收全通过。
 - `git diff --check` 通过。
-- 安全 diff scan 已完成：Scan ID `d363edb0-05c5-40c2-ac86-a5fefad9a9e9`；30 项源码审阅完成，未发现已验证的安全问题，覆盖完整。快照 digest：`codex-security-snapshot/v1:sha256:37a43ee84f9b7c2562b37fd02ec478f25b708677505ef70c0cacff3c859124f0`。之后没有改代码。
-- `origin/main` 为 `4eaa1ad5089159b81bb622cb47384c6870e167ff`，与本分支基线一致；尚未提交、推送或创建 PR。
+- PR #460 的首个提交 `29a01d7e83598521191413d2cbf2617ddf514efa` 上，自动 Review 报告两个 P2：后续正向确认仍补回旧禁令；禁令提取会丢失对象范围。已改为只把用户消息用于约束撤销判断、保留完整动作句，并新增四项回归用例。
+- 安全 diff scan `d363edb0-05c5-40c2-ac86-a5fefad9a9e9` 审阅的是 Review 修复前快照，30 项源码审阅未发现已验证安全问题；修复后的差异需要在新提交上重新扫描。
+- PR #460 首个提交的 GitHub 门禁已全部完成：Evaluation V2 免费契约、管理端构建/测试、RAG offline preflight、RAG Smoke、密钥扫描均通过；8 cases real API 评测按 PR 规则跳过。修复后的新 head 尚未推送，因此需要重新运行门禁。
+- 最新核对的 `origin/main` 为 `4eaa1ad5089159b81bb622cb47384c6870e167ff`；分支首个 PR commit 为 `29a01d7e83598521191413d2cbf2617ddf514efa`，当前有待提交的 Review 修复。
 
 ## Golden 合成评测（2026-11-12）
 
@@ -33,11 +35,12 @@
 - 真实外接模型的 T01 合成评测已记录：protected fact recall 4/4，约束违规为空；T02 和 CS01 尚未执行，保持 `UNVERIFIED`。
 - Docker 共享栈 `agent` 上次检查运行 21 个服务、宿主可用内存约 3.11 GB，配置同时引用多个工作树。本轮依仓库 `AGENTS.md` 未运行 `devctl.bat rebuild`；共享栈代码服务健康状态 `UNVERIFIED`。
 - 安全 diff scan 未发现已验证问题；它不能代替生产环境对 APISIX 身份头、Provider、数据库和 Redis 配置的核验。
-- PR CI 与自动 Review 尚未开始；未合并，也未部署。
+- 真实模型 T02/CS01、三端完整浏览器 smoke、本机共享 Docker 栈重建仍未完成；均保持未验证，不把 T01 或页面级测试扩大解释为全链路通过。
+- Review 修复提交后的安全 scan、自动 Review 和 CI 尚未完成；未合并，也未部署。
 
 ## 下一步
 
-1. 复核并提交本分支代码、测试与本任务记录。
-2. 推送分支并创建 PR，等待 CI 和自动 Review；对新意见只修复新增差异并做对应验证。
-3. 所有合并门禁通过后按最新 PR head 合并。共享 Docker 栈验证、T02/CS01 真实模型评测仍需单独完成或明确保持未验证。
+1. 复核并提交 PR Review 修复与本任务记录，推送到 PR #460。
+2. 按修复提交的精确差异完成安全复核，等待 CI 与自动 Review；对新意见只修复新增差异并做对应验证。
+3. 所有 GitHub 合并门禁通过后按最新 PR head 合并。共享 Docker 栈验证、T02/CS01 真实模型评测仍需单独完成或明确保持未验证。
 4. 云端服务器部署不属于此次合并。

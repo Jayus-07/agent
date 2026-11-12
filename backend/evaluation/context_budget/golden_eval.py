@@ -200,7 +200,8 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         history = _pad_to_boundary(case["history"])
         msg_ids = _seed_session(session_id, history)
         rows_for_facts = [
-            (mid, m["content"]) for mid, m in zip(msg_ids, history)]
+            (mid, m["role"], m["content"])
+            for mid, m in zip(msg_ids, history)]
 
         # 1) 真实增量摘要（真 LLM + 真 DB 水位线）
         t0 = time.perf_counter()

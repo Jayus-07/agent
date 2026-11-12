@@ -73,13 +73,43 @@ _ENTITY_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 # 显式禁止的业务动作需要确定性保护，避免只依赖摘要模型自行保留。
-# 限定否定词与动作词之间的距离和标点边界，避免把整段对话当作一条事实。
+# 保留动作后的对象和范围；遇到下一条禁令或句末才结束，避免把
+# “不要退款给张三，只退款给李四”截成没有对象范围的“不要退款”。
+_USER_CONSTRAINT_NEGATION = (
+    r"(?:不允许|不需要|无需|不要|不许|不准|不得|禁止|别)"
+)
+_USER_CONSTRAINT_ACTION = (
+    r"(?:预订(?:酒店|房间|机票|车票)?|订(?:酒店|房间|机票|车票|房|票)|"
+    r"下单|购买|支付|付款|退款|退货|退钱|取消|撤销|发送|发出|删除|移除|"
+    r"提交|关闭(?:工单|订单)?|结案)"
+)
+_USER_CONSTRAINT_SENTENCE_CHAR = r"[^\r\n。；;！？!?\.]"
 _USER_CONSTRAINT_PATTERN = re.compile(
-    r"(?:不要|别|不许|不准|不得|禁止|不允许|无需|不需要)"
-    r"[^\r\n，,。；;！？!?]{0,10}?"
-    r"(?:替我|帮我|自动|直接)?"
-    r"(?:预订(?:酒店|房间|机票|车票)?|订(?:酒店|房|票)|下单|购买|"
-    r"支付|付款|退款|取消|发送|删除|提交)"
+    rf"(?P<negation>{_USER_CONSTRAINT_NEGATION})"
+    rf"{_USER_CONSTRAINT_SENTENCE_CHAR}{{0,80}}?"
+    rf"(?P<action>{_USER_CONSTRAINT_ACTION})"
+    rf"(?:(?!{_USER_CONSTRAINT_NEGATION})"
+    rf"{_USER_CONSTRAINT_SENTENCE_CHAR})*"
+)
+_USER_CONSTRAINT_ACTION_GROUPS: dict[str, re.Pattern[str]] = {
+    "booking": re.compile(
+        r"预订|订(?:酒店|房间|机票|车票|房|票)|下单|购买"),
+    "payment": re.compile(r"支付|付款"),
+    "refund": re.compile(r"退款|退货|退钱"),
+    "cancellation": re.compile(r"取消|撤销"),
+    "message_delivery": re.compile(r"发送|发出"),
+    "deletion": re.compile(r"删除|移除"),
+    "submission": re.compile(r"提交"),
+    "ticket_closure": re.compile(r"关闭|结案"),
+}
+_USER_CONSTRAINT_OVERRIDE_CUE = re.compile(
+    r"更正|改变主意|改为|改成|(?:已经|已)?确认|同意|授权|"
+    r"(?:现在|这次)?\s*(?:请|麻烦)?\s*(?:替我|帮我|为我)|"
+    r"(?:现在|这次)\s*请"
+)
+_USER_CONSTRAINT_OVERRIDE_NEGATION = re.compile(
+    r"不要|别|不许|不准|不得|禁止|不允许|无需|不需要|不是|并非|"
+    r"没有|不同意|不能|未曾"
 )
 
 # 裸金额（Phase 5，P3）：语义词 + 数值，无货币符号。
@@ -103,7 +133,10 @@ _extract_lock = threading.Lock()  # 正则模块级共享，抽取本身无状�
 
 
 def extract_protected_facts(
-    rows: Iterable[tuple[int | str | None, str]],
+    rows: Iterable[
+        tuple[int | str | None, str]
+        | tuple[int | str | None, str, str]
+    ],
 ) -> list[ProtectedFact]:
     """从待摘要消息中确定性抽取关键事实（去重保序，按配置截断）。
 
@@ -113,11 +146,13 @@ def extract_protected_facts(
     """
     seen: set[tuple[str, str]] = set()
     facts: list[ProtectedFact] = []
-    constraint_facts: list[ProtectedFact] = []
+    active_constraints: dict[str, list[tuple[int, ProtectedFact]]] = {}
+    constraint_order = 0
     max_facts = int(_cfg("CONTEXT_L5_MAX_PROTECTED_FACTS", 40))
     with _extract_lock:
         for row in rows:
             msg_id, content = row[0], row[-1]
+            role = str(row[-2]).casefold() if len(row) >= 3 else None
             if not content:
                 continue
             for fact_type, pattern in _ENTITY_PATTERNS:
@@ -140,14 +175,52 @@ def extract_protected_facts(
                 facts.append(ProtectedFact(
                     type="金额", value=value, source_message_id=msg_id,
                     label=label))
-            for match in _USER_CONSTRAINT_PATTERN.finditer(content):
-                value = match.group(0).strip()
-                key = ("用户约束", value)
-                if value and key not in seen:
-                    seen.add(key)
-                    constraint_facts.append(ProtectedFact(
+            # 三列数据库行为 (id, role, content)：只信任用户自己提出的约束，
+            # 助手复述不能撤销用户禁令。二列调用保持向后兼容，视作用户文本。
+            if role in (None, "user"):
+                matches = list(_USER_CONSTRAINT_PATTERN.finditer(content))
+                negative_groups: set[str] = set()
+                for match in matches:
+                    value = match.group(0).strip().rstrip(" ，,和及以及")
+                    action_groups = {
+                        group for group, pattern
+                        in _USER_CONSTRAINT_ACTION_GROUPS.items()
+                        if pattern.search(match.group("action"))
+                    }
+                    fact = ProtectedFact(
                         type="用户约束", value=value,
-                        source_message_id=msg_id))
+                        source_message_id=msg_id,
+                    )
+                    for group in action_groups:
+                        negative_groups.add(group)
+                        group_facts = active_constraints.setdefault(group, [])
+                        if not any(existing.value == value
+                                   for _, existing in group_facts):
+                            group_facts.append((constraint_order, fact))
+                            constraint_order += 1
+
+                # 后续明确确认/改为正向动作时，旧禁令不再是当前事实。
+                # 有新禁令的消息不走此路径，避免把“不要……但……”误判为撤销。
+                if (
+                    _USER_CONSTRAINT_OVERRIDE_CUE.search(content)
+                    and not _USER_CONSTRAINT_OVERRIDE_NEGATION.search(content)
+                ):
+                    mentioned_groups = {
+                        group for group, pattern
+                        in _USER_CONSTRAINT_ACTION_GROUPS.items()
+                        if pattern.search(content)
+                    }
+                    for group in mentioned_groups - negative_groups:
+                        active_constraints.pop(group, None)
+
+    constraint_facts_by_value: dict[str, tuple[int, ProtectedFact]] = {}
+    for group_facts in active_constraints.values():
+        for order, fact in group_facts:
+            constraint_facts_by_value.setdefault(fact.value, (order, fact))
+    constraint_facts = [
+        fact for _, fact in sorted(
+            constraint_facts_by_value.values(), key=lambda entry: entry[0])
+    ]
 
     # 显式约束优先占用保护名额，其余事实继续按原顺序截断。
     facts = constraint_facts + facts

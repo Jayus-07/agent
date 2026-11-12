@@ -3,6 +3,7 @@
 覆盖：
 - ProtectedFacts 确定性抽取（订单号/SKU/金额/百分比/日期/URL/数量）
 - 明确禁止的业务动作作为用户约束保留并在摘要遗漏时补回
+- 后续正向确认撤销旧禁令，客服退款约束保留对象及状态范围
 - validate_and_patch：摘要遗漏事实**追加**进 [关键实体]，零额外 LLM 调用
 - fold_rebuild：System/最近 N 轮保留；旧摘要与 L4 投影被新摘要整体替换；
   原始列表不被修改
@@ -88,6 +89,52 @@ class TestExtractProtectedFacts:
 
         positive = extract_protected_facts([(2, "请帮我预订酒店。")])
         assert not any(fact.type == "用户约束" for fact in positive)
+
+    def test_later_user_confirmation_replaces_prohibition(self):
+        facts = extract_protected_facts([
+            (1, "user", "不要替我预订酒店。"),
+            (2, "assistant", "明白，不会替你预订酒店。"),
+            (3, "user", "现在我已经确认了，请替我预订酒店。"),
+        ])
+
+        assert not any(fact.type == "用户约束" for fact in facts)
+
+    def test_assistant_restatement_does_not_override_user_prohibition(self):
+        facts = extract_protected_facts([
+            (1, "user", "不要替我预订酒店。"),
+            (2, "assistant", "我现在帮你预订酒店。"),
+        ])
+
+        constraints = [fact for fact in facts if fact.type == "用户约束"]
+        assert [fact.value for fact in constraints] == ["不要替我预订酒店"]
+
+    def test_scoped_refund_restriction_keeps_recipient_and_exception(self):
+        from backend.context_budget.fact_registry import ProtectedFactRegistry
+
+        facts = extract_protected_facts([
+            (1, "user", "不要退款给张三，只退款给李四。"),
+        ])
+        constraint = next(fact for fact in facts if fact.type == "用户约束")
+
+        assert "张三" in constraint.value
+        assert "只退款给李四" in constraint.value
+
+        registry = ProtectedFactRegistry()
+        registry.add_regex_facts([constraint])
+        outcome = registry.validate_and_patch("只向李四退款。")
+        assert "不要退款给张三，只退款给李四" in outcome.patched_summary
+        assert "\n- 用户约束: 不要退款\n" not in outcome.patched_summary
+
+    def test_refund_state_and_ticket_closure_are_separate_constraints(self):
+        facts = extract_protected_facts([
+            (1, "user", "不要把退款标成完成，也不要关闭工单。"),
+        ])
+
+        values = {
+            fact.value for fact in facts if fact.type == "用户约束"
+        }
+        assert any("把退款标成完成" in value for value in values)
+        assert "不要关闭工单" in values
 
 
 class TestValidateAndPatch:
