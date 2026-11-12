@@ -640,7 +640,21 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
           const lastUserIdx = visibleMessages.map((m) => m.role).lastIndexOf('user')
           const before = visibleMessages.slice(0, lastUserIdx + 1)
           const after = visibleMessages.slice(lastUserIdx + 1)
-          const showProcess = processState && (processState.tools.length > 0 || processState.requirement)
+          const showProcess = processState && (
+            processState.tools.length > 0 || processState.requirement || processState.contextNotice
+          )
+          const contextNotice = processState?.contextNotice
+          const contextNoticeText = contextNotice?.status === 'running'
+            ? '正在整理较早对话'
+            : contextNotice?.status === 'completed'
+              ? '已整理较早对话'
+              : contextNotice?.status === 'deferred'
+                ? contextNotice.reason === 'saved_for_next_turn'
+                  ? '摘要已保存，后续对话会使用'
+                  : '已采用安全裁剪继续处理'
+                : contextNotice?.status === 'unconfirmed'
+                  ? '上下文整理状态未确认'
+                  : ''
           const doneTools = processState?.tools ?? []
           const okCount = doneTools.filter((t) => t.status === 'success').length
           const degradedCount = doneTools.filter((t) => t.status === 'degraded').length
@@ -671,7 +685,9 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                 />
                 <span>
                   {loading
-                    ? (runningLabel
+                    ? (contextNotice?.status === 'running'
+                      ? '正在整理较早对话'
+                      : runningLabel
                       ? `正在${runningLabel}`
                       : (doneCount > 0 ? `正在思考 · 已完成 ${doneCount} 步` : '正在理解你的需求'))
                     : `本轮共 ${processState.tools.length} 个 Tool${!loading && processState.status !== 'error' ? ` · ${okCount} 成功${degradedCount > 0 ? ` · ${degradedCount} 降级` : ''}${failCount > 0 ? ` · ${failCount} 失败` : ''}` : ''}`}
@@ -694,8 +710,8 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                   <CheckCircle2 size={13} className={`shrink-0 ${failCount > 0 ? 'text-amber-500' : 'text-[#087b73]'}`} aria-hidden />
                   <span className="min-w-0 flex-1 truncate text-xs font-medium text-[#183037]">
                     {doneTools.length === 0
-                      ? '本轮无工具调用 · 直接回答'
-                      : `本轮执行完成 · ${okCount} 成功${withResult > 0 ? ` · ${withResult} 个有结果` : ''}${failCount > 0 ? ` · ${failCount} 个失败` : ''}`}
+                      ? contextNoticeText || '本轮无工具调用 · 直接回答'
+                      : `本轮执行完成 · ${okCount} 成功${withResult > 0 ? ` · ${withResult} 个有结果` : ''}${failCount > 0 ? ` · ${failCount} 个失败` : ''}${contextNoticeText ? ` · ${contextNoticeText}` : ''}`}
                   </span>
                   <span className="shrink-0 text-[10px] text-[#087b73]">展开明细 ▾</span>
                 </button>
@@ -707,6 +723,14 @@ const TravelChatDrawerImpl = forwardRef<TravelChatDrawerHandle, Props>(function 
                       {' '}· {String(processState.requirement.brief.destination || '目的地待确认')}
                       {processState.requirement.brief.days ? ` · ${String(processState.requirement.brief.days)} 天` : ''}
                       {processState.requirement.assumptions.length > 0 ? ` · ${processState.requirement.assumptions[0]}` : ''}
+                    </p>
+                  )}
+                  {contextNoticeText && (
+                    <p className="mb-1.5 rounded-lg bg-[#f5faf9] px-2.5 py-1.5 text-[10px] text-[#5c7074]" role="status">
+                      {contextNoticeText}
+                      {contextNotice?.status === 'completed' && contextNotice.savedTokens
+                        ? ` · 节省 ${contextNotice.savedTokens.toLocaleString()} tokens`
+                        : ''}
                     </p>
                   )}
                   <ol className="space-y-1.5">

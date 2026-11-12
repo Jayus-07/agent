@@ -20,8 +20,9 @@ import json
 import re
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
@@ -58,20 +59,30 @@ def _seed_session(session_id: str, history: list[dict]) -> list[int]:
     try:
         cur = conn.cursor()
         cur.execute(
-            "INSERT INTO public.chat_sessions (session_id, user_id) "
-            "VALUES (%s, %s) ON CONFLICT (session_id) DO NOTHING",
-            (session_id, "p4-golden"),
+            # 143 将会话唯一键改为 (product, session_id)；不指定冲突目标
+            # 可兼容迁移前后的测试库，随机评测 session 不会复用业务会话。
+            "INSERT INTO public.chat_sessions "
+            "(session_id, user_id, product, tenant_id) "
+            "VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING "
+            "RETURNING session_id",
+            (session_id, "p4-golden", "agent", "default"),
         )
+        if cur.fetchone() is None:
+            raise RuntimeError("合成 Golden 会话 ID 冲突，已中止写入")
         ids: list[int] = []
         for m in history:
             cur.execute(
-                "INSERT INTO public.chat_messages (session_id, role, content) "
-                "VALUES (%s, %s, %s) RETURNING id",
-                (session_id, m["role"], m["content"]),
+                "INSERT INTO public.chat_messages "
+                "(session_id, product, role, content) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                (session_id, "agent", m["role"], m["content"]),
             )
             ids.append(cur.fetchone()[0])
         conn.commit()
         return ids
+    except Exception:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -86,9 +97,10 @@ def _append_turns(session_id: str, turns: list[tuple[str, str]]) -> list[int]:
         for u, a in turns:
             for role, content in (("user", u), ("assistant", a)):
                 cur.execute(
-                    "INSERT INTO public.chat_messages (session_id, role, content) "
-                    "VALUES (%s, %s, %s) RETURNING id",
-                    (session_id, role, content),
+                    "INSERT INTO public.chat_messages "
+                    "(session_id, product, role, content) "
+                    "VALUES (%s, %s, %s, %s) RETURNING id",
+                    (session_id, "agent", role, content),
                 )
                 ids.append(cur.fetchone()[0])
         conn.commit()
@@ -113,6 +125,25 @@ def _invoke(messages: list) -> str:
         set_request_model(model_name)
     resp = llm.invoke(messages)
     return getattr(resp, "content", None) or str(resp)
+
+
+@contextmanager
+def _golden_request_scope(request_id: str) -> Iterator[None]:
+    """让同一合成样本的摘要和答案调用共享请求级费用上限。"""
+    from backend.infra.llm.budget import scoped_request_budget
+    from backend.infra.llm.proxy import scoped_current_user_id
+    from backend.config.llm import LLM_BUDGET_MODE
+
+    if LLM_BUDGET_MODE != "enforce":
+        raise RuntimeError(
+            "真实 Golden 模型评测要求 LLM_BUDGET_MODE=enforce，已阻止调用"
+        )
+
+    # 不绑定真实用户/租户额度账本；请求预算仍按运行环境的 enforce 模式
+    # 限制调用成本，使用固定合成用户标记模型用量归属。
+    with scoped_current_user_id("p4-golden"):
+        with scoped_request_budget(request_id):
+            yield
 
 
 def _cfg(name: str, default):
@@ -163,17 +194,20 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
     for case in cases:
         case_id = case["id"]
         session_id = f"eval-golden-{time.strftime('%Y%m%d')}-{case_id}-{uuid.uuid4().hex[:6]}"
+        budget_request_id = f"context-budget-golden:{session_id}"
         expect = case["expect"]
 
         history = _pad_to_boundary(case["history"])
         msg_ids = _seed_session(session_id, history)
         rows_for_facts = [
-            (mid, m["content"]) for mid, m in zip(msg_ids, history)]
+            (mid, m["role"], m["content"])
+            for mid, m in zip(msg_ids, history)]
 
         # 1) 真实增量摘要（真 LLM + 真 DB 水位线）
         t0 = time.perf_counter()
-        outcome = run_incremental_summary(
-            session_id, SyncMemorySummaryStore(session_id))
+        with _golden_request_scope(budget_request_id):
+            outcome = run_incremental_summary(
+                session_id, SyncMemorySummaryStore(session_id))
         summary_latency = time.perf_counter() - t0
 
         history_msgs = [
@@ -186,7 +220,8 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         # 2) Baseline：原始历史（不经 L5）
         baseline_msgs = [SystemMessage(content=_SYSTEM)] + history_msgs \
             + [HumanMessage(content=question)]
-        baseline_answer = _invoke(baseline_msgs)
+        with _golden_request_scope(budget_request_id):
+            baseline_answer = _invoke(baseline_msgs)
 
         row: dict[str, Any] = {"id": case_id, "category": case["category"],
                                "session_id": session_id}
@@ -200,7 +235,8 @@ def run_golden(limit: int = 0, category: str = "") -> dict:
         compacted, replaced, _boundary = fold_rebuild(history_msgs, outcome.summary)
         compacted_msgs = [SystemMessage(content=_SYSTEM)] + compacted \
             + [HumanMessage(content=question)]
-        compacted_answer = _invoke(compacted_msgs)
+        with _golden_request_scope(budget_request_id):
+            compacted_answer = _invoke(compacted_msgs)
 
         # 4) 计分（确定性 substring，归一化空白/逗号/大小写）
         def check(answer: str, musts: list[str], forbids: list[str]) -> dict:

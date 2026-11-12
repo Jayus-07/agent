@@ -259,10 +259,32 @@ def test_eval_contract_tests_are_in_free_pr_workflow():
         "backend/tests/evaluation/test_report_gate_verdict.py",
         "backend/tests/evaluation/test_cli_compare.py",
         "tests/evaluation/test_cli_strict_gate_exit.py",
+        "backend/tests/context_budget/test_auto_compact.py",
+        "backend/tests/context_budget/test_stop_c_event_isolation.py",
+        "backend/tests/context_budget/test_golden_eval_seed.py",
+        "backend/tests/api/test_travel_context_budget_events.py",
+        "backend/tests/api/test_auth_local.py",
+        "backend/tests/test_model_override_validation.py",
+        "backend/tests/orchestration/graph/test_clarify_flow.py",
+        "backend/tests/orchestration/router/test_product_scope.py",
     ):
         assert any(registered in step["run"] for step in run_steps), (
             f"rag_smoke 定向清单缺少 {registered}（PR 静态门禁空转）"
         )
+
+
+def test_context_budget_and_chat_surface_changes_run_free_pr_preflight():
+    """新上下文链路走免费回归，聊天/认证路由不误触付费 RAG 评测。"""
+    paths = [
+        "backend/context_budget/manager.py",
+        "backend/app/api/routes/chat.py",
+        "backend/app/api/routes/travel.py",
+        "backend/app/api/routes/auth_local.py",
+    ]
+    assert _filter_import(paths) is False
+    assert _filter_subprocess(paths) is False
+    assert _filter_import(paths, event="pull_request") is True
+    assert _filter_subprocess(paths, event="pull_request") is True
 
 
 def test_non_rag_docs_and_backend_changes_skip_smoke():

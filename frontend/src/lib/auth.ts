@@ -25,7 +25,13 @@ export interface LoginResult {
   expiresIn?: number;
   /** 临时密码首次登录标记（P6.3）：true → 前端必须先进改密流程（TD-04） */
   mustChangePassword?: boolean;
-  userInfo?: { userId?: string; username?: string; [k: string]: unknown } | null;
+  userInfo?: {
+    userId?: string;
+    username?: string;
+    realName?: string;
+    phone?: string;
+    [k: string]: unknown;
+  } | null;
 }
 
 let accessToken: string | null = null;

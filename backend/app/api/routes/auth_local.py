@@ -215,7 +215,7 @@ def _trusted_tenant_id(request: Request) -> str | None:
 
 async def _fetch_user(session, username: str, tenant_id: str):
     row = (await session.execute(text(
-        "SELECT id, username, password_hash, real_name, dept, role, status, "
+        "SELECT id, username, password_hash, real_name, dept, role, status, phone, "
         "tenant_id, must_change_password FROM auth.users "
         "WHERE username = :u AND tenant_id = :tenant_id"),
         {"u": username, "tenant_id": tenant_id})).mappings().first()
@@ -260,6 +260,7 @@ def _user_info(row) -> dict:
         "userId": row.get("user_id", row.get("id")),
         "username": row.get("username"),
         "realName": row.get("real_name") or row.get("username"),
+        "phone": row.get("phone") or "",
         "roles": [role],
         "platformRole": role,
         "tenantId": row.get("tenant_id"),
@@ -554,7 +555,7 @@ async def refresh(request: Request, response: Response):
             "s.revoked_at AS session_revoked_at, s.device_id AS s_device_id, "
             "s.client_id AS s_client_id, "
             "u.username, u.real_name, u.dept, u.role, u.status, u.tenant_id, "
-            "u.must_change_password "
+            "u.must_change_password, u.phone "
             "FROM auth.refresh_tokens rt "
             "LEFT JOIN auth.sessions s ON s.id = rt.session_id "
             "JOIN auth.users u ON u.id = rt.user_id "

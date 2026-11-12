@@ -94,6 +94,20 @@ class TestApiBoundaryFailFast:
         _validate_model_override(None)
         _validate_model_override("")
 
+    def test_agent_product_rejects_client_model_override(self):
+        from backend.app.api.routes.chat import _validate_model_override
+
+        with pytest.raises(HTTPException) as ei:
+            _validate_model_override("qwen3.7-plus@tp", product_id="agent")
+
+        assert ei.value.status_code == 400
+        assert ei.value.detail["error"] == "ModelOverrideNotAllowed"
+
+    def test_agent_product_allows_server_selected_default(self):
+        from backend.app.api.routes.chat import _validate_model_override
+
+        _validate_model_override(None, product_id="agent")
+
     def test_unregistered_raises_400(self):
         from backend.app.api.routes.chat import _validate_model_override
 

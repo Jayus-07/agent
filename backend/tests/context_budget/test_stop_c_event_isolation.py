@@ -258,6 +258,45 @@ class TestSseEventIsolation:
         assert received[0]["fold_id"] == "fold-aaaaaaaaaaaa"
         assert "用户的敏感问题原文" not in str(received[0])
 
+    def test_l5_lifecycle_events_allow_only_fixed_reason_codes(self):
+        from backend.context_budget.metrics import (
+            emit_context_event,
+            reset_context_event_scope,
+            reset_context_sink,
+            set_context_event_scope,
+            set_context_sink,
+        )
+
+        scope = self._scope()
+        received = []
+        scope_token = set_context_event_scope(scope)
+        sink_token = set_context_sink(received.append, scope=scope)
+        try:
+            emit_context_event(
+                level="L5", action="summary_started",
+                before_tokens=900, after_tokens=900, event_scope=scope,
+            )
+            emit_context_event(
+                level="L5", action="summary_deferred",
+                before_tokens=900, after_tokens=900, event_scope=scope,
+                reason="fallback", question="敏感对话原文",
+            )
+            emit_context_event(
+                level="L5", action="summary_deferred",
+                before_tokens=900, after_tokens=900, event_scope=scope,
+                reason="用户提供的原因",
+            )
+        finally:
+            reset_context_sink(sink_token)
+            reset_context_event_scope(scope_token)
+
+        assert [event["action"] for event in received] == [
+            "summary_started", "summary_deferred", "summary_deferred",
+        ]
+        assert received[1]["reason"] == "fallback"
+        assert "reason" not in received[2]
+        assert all("question" not in event for event in received)
+
     def test_context_event_rejects_untrusted_fold_identifier(self):
         from backend.context_budget.metrics import (
             emit_context_event,

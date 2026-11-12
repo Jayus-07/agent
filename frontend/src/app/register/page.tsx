@@ -70,7 +70,7 @@ function RegisterForm() {
   const selectedAssistant = redirect.startsWith("/customer-service")
     ? "智能客服"
     : redirect.startsWith("/travel")
-      ? "旅游助手"
+      ? "旅游平台"
       : "企业助手";
   const loginHref = `/login?redirect=${encodeURIComponent(redirect)}`;
 

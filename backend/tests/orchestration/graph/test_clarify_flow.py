@@ -758,7 +758,7 @@ class TestClarifyReasonAndCardSplit:
              "这条请求我暂时无法直接处理。请从下方选项中选择，或换个说法描述您的需求。"),
             ({"_clarify": {"question": "请补充", "options": []}},
              "请补充更多信息，以便我继续为您处理。"),
-            ({}, "抱歉，当前服务暂时无法完成需求理解，请稍后重试。"),
+            ({}, "当前智能服务暂时不可用，本次请求尚未处理。请稍后重试；如果问题持续，请联系管理员。"),
         ],
     )
     def test_reporter_clarify_text_follows_card(self, extra, expected, monkeypatch):

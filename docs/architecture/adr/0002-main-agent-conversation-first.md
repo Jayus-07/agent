@@ -4,8 +4,8 @@
 | --- | --- |
 | 状态 | **Accepted（目标架构已确认；入口身份契约部分已实施——产品身份字段与产品专属路由已落地（358d957，2026-10-14）、Router 按 product_id 分诊（含 agent 域 knowledge 兜底）；Conversation-first 完整目标与三批次验收仍未完成）** |
 | 日期 | 2026-10-12 |
-| 适用范围 | `/agent` 企业主助手及其与独立 Travel/Customer Service 产品的边界 |
-| 不适用范围 | 旅游、客服内部对话与业务状态机的重做 |
+| 适用范围 | `/agent` 企业主助手及其与独立 Travel/Customer Service/Selection Funnel 产品的边界 |
+| 不适用范围 | 旅游、客服、选品内部对话与业务状态机的重做 |
 
 > **阅读警告：本文是后续施工的目标决策，不是对当前生产行为的描述。** 现行执行链、配置和完成状态以源码、对应测试、PR 合并情况及真实 API/SSE 证据为准；不能把本文列出的目标直接标记为已实现。
 
@@ -17,11 +17,11 @@
 
 ## 决策
 
-1. **三个独立产品边界**：`/agent` 是企业通用助手；`/travel` 与 Customer Service 是独立专业 Agent。它们可以共享 LLMProxy、RAG/SQL 技术底座、Tool Governance、Prompt/用量、Trace，但不自动共享专属业务操作权、数据、会话和状态。
+1. **独立产品边界**：`/agent` 只承载企业通用助手；`/travel`、Customer Service 与 `selection_funnel` 是各自独立的专业产品域，应由各自的专属前端入口承载。它们可以共享 LLMProxy、RAG/SQL 技术底座、Tool Governance、Prompt/用量、Trace，但不自动共享专属业务操作权、数据、会话和状态。
 2. **Conversation-first，而不是所有请求先调一次 LLM**：先结合用户输入、受信任的入口身份、会话与当前任务判断是否需要外部证据或副作用。CHAT 自然直答；企业私有知识走授权 RAG；结构化经营数据走授权 SQL/Data；报告/合法业务任务复用 Skill/Workflow；多步骤不确定任务才使用 Planner/Supervisor。复杂/复合请求可以组合路径。
 3. **意图、执行方式、能力选择、业务终态分离**：逻辑意图可标为 CHAT / KNOWLEDGE / DATA_QUERY / BUSINESS_OR_REPORT / ACTION / CLARIFY / UNSUPPORTED，但不要求新增对应 LangGraph execution_mode。沿用 `RouteDecision`、现有投影与能力事实源，禁止创建第二份权威 Router。
-4. **主助手的服务端能力范围**：Travel/客服专属 Graph、Tool、Workflow、私有 KB、用户会话及写操作不属于 `/agent` 的授权能力；主助手不宣传或自动 handoff 到这两个产品。对“杭州在哪里”“退款是什么意思”等一般概念可正常解释；正式行程创建/修改、客服退款/售后执行必须说明当前入口不能办理。经营分析/选品等是否允许由既有业务清单和服务端权限决定，不能连带屏蔽。
-5. **隔离是执行契约而非 Prompt**：请求携带的 `domain_hint`、`tool_name`、`capability` 与 LLM/Planner 输出均不得单独产生权限。可信产品身份按下文“服务端入口身份契约”派生，并在候选发现、路由/规划、Tool/MCP 执行及数据访问边界执行范围限制；保留仍被独立入口使用的共享 Registry 声明，不能全局删除 Travel/CS 能力。
+4. **主助手的服务端能力范围**：Travel/客服/选品漏斗专属 Graph、Tool、Workflow、私有 KB、用户会话及写操作不属于 `/agent` 的授权能力；主助手不宣传、不自动识别并执行，也不 handoff 到这些独立产品。对“杭州在哪里”“退款是什么意思”等一般概念可正常解释；正式行程创建/修改、客服退款/售后执行、选品漏斗分析必须说明当前入口不能办理。普通企业经营分析与商品数据查询仍按既有业务清单和服务端权限决定。
+5. **隔离是执行契约而非 Prompt**：请求携带的 `domain_hint`、`tool_name`、`capability` 与 LLM/Planner 输出均不得单独产生权限。可信产品身份按下文“服务端入口身份契约”派生，并在候选发现、路由/规划、Tool/MCP 执行及数据访问边界执行范围限制；保留仍被独立入口使用的共享 Registry 声明，不能全局删除 Travel/CS/Selection Funnel 能力。
 6. **一致的会话语义**：复用 L1/L2/L3、`ConversationContext`、`FollowUpResolver` 与 Context Budget。支持“继续”“刚才第二点”“换个说法”以及从聊天切换到数据查询；不新建第二套持久记忆，也不把历史模型回复当成权威企业数据。
 7. **真实结果优先于自然语言**：复用已有 Runtime/Tool/Error 契约与 Reporter。区分正常回答、无证据、空结果、拒绝、待确认、部分成功、超时、服务故障、取消；业务事实必须受证据/授权约束，写操作遵守确认、幂等、状态回查。SSE `delta`、`done.answer`、`answer_source`、History、Memory、Trace 的最终语义不得分叉。
 8. **成本与可靠性约束**：普通问题不默认触发 Embedding、SQL、Tool、Planner/Supervisor 或额外的回答评审 LLM；只有必要时使用受治理的模型仲裁。沿用 PromptService 版本、统一 LLMProxy 预算计费、执行治理、观测和失败降级机制。
@@ -37,7 +37,7 @@
 
 ## 边界和取舍
 
-- **不采用“万能总控 Agent 自动接管全部业务”**：独立旅游、客服工作台保有自己的自然语言分诊、RAG/Tool 和业务状态；本决策不评价或替换它们的实现。
+- **不采用“万能总控 Agent 自动接管全部业务”**：独立旅游、客服、选品产品保有自己的自然语言分诊、RAG/Tool 和业务状态；本决策不评价或替换它们的实现。
 - **不采用“关键词等于 Tool/域调用”**：领域名词可能只是一般知识提问；但若明确要求企业私有事实、数据或操作，不能用无依据的聊天回答替代。
 - **不复制技术栈**：不另建 RAGPipeline、SQLAgent、Tool Runtime、Memory Store、模型计费或第二套能力表。
 - **不全局封禁共有词或删除共享注册表**：服务端按入口和权限裁剪候选及执行，保持专业入口完整功能。
@@ -59,7 +59,7 @@
 
 - **自然对话**：“什么是 MCP”“解释 RAG”“继续”“刚才第二点”正确回答、不循环菜单，不无故调用外部能力。
 - **企业事实**：有权限的制度查询走证据 RAG、经营统计走授权 SQL；无证据/无数据/工具失败不得虚构或假成功。
-- **独立域**：可聊一般旅游/退款概念；从 `/agent` 无法调用 Travel/CS 的专属执行路径；伪造 `domain_hint` 或直调 Tool/MCP/Planner 同样被服务端阻断；专业入口维持原有行为。
+- **独立域**：可聊一般旅游/退款概念；从 `/agent` 无法调用或 handoff 到 Travel/CS/Selection Funnel 的专属执行路径；伪造 `domain_hint` 或直调 Tool/MCP/Planner 同样被服务端阻断；专业入口维持原有行为。
 - **跨轮和错误**：多轮事实指代、复杂任务拆解与确认、取消/超时/权限拒绝；SSE/Trace/History/Memory 一致。
 - **经营性指标**：真实请求对账路由归宿、Tool 调用、Prompt 版本、Token、p50/p95 延迟；安全越权和未经确认的写操作为零容忍阻断项。未实测的条目标记 NOT VERIFIED，而非 PASS。
 

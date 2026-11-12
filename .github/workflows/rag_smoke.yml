@@ -246,6 +246,14 @@ jobs:
             backend/tests/rag/test_rag_index_reconcile.py \
             backend/tests/test_indexer_bm25_sync.py \
             backend/tests/rag/test_contextual_prefix.py \
+            backend/tests/context_budget/test_auto_compact.py \
+            backend/tests/context_budget/test_stop_c_event_isolation.py \
+            backend/tests/context_budget/test_golden_eval_seed.py \
+            backend/tests/api/test_travel_context_budget_events.py \
+            backend/tests/api/test_auth_local.py \
+            backend/tests/test_model_override_validation.py \
+            backend/tests/orchestration/graph/test_clarify_flow.py \
+            backend/tests/orchestration/router/test_product_scope.py \
             backend/tests/api/test_rag_server_internal_token.py \
             backend/tests/api/test_evaluation_runs_list.py \
             backend/tests/api/test_cs_knowledge_search_rag.py \

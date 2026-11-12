@@ -27,6 +27,7 @@ export function beginTurn(draft: Cs2ConversationDraft): void {
   draft.streaming = true
   draft.liveTimeline = []
   draft.liveStep = null
+  draft.contextCompactionPending = false
   draft.errorText = null
   draft.pausedText = null
   draft.candidateOptions = null
@@ -38,6 +39,13 @@ export function beginTurn(draft: Cs2ConversationDraft): void {
     createdAt: Date.now(),
     streaming: true,
   })
+}
+
+function appendTimeline(draft: Cs2ConversationDraft, label: string): void {
+  if (draft.liveTimeline[draft.liveTimeline.length - 1] !== label) {
+    draft.liveTimeline.push(label)
+  }
+  if (draft.liveTimeline.length > 12) draft.liveTimeline.shift()
 }
 
 /** 归约单条 SSE 事件；返回值仅用于测试观察，状态直接改在 draft 上 */
@@ -52,10 +60,8 @@ export function applySseEvent(
       // CS 主链路 SSE 只下发主图节点名；cs_ 前缀节点进时间线
       if (evt.data.node?.startsWith('cs_')) {
         const label = nodeLabel(evt.data.node)
-        if (draft.liveTimeline[draft.liveTimeline.length - 1] !== label) {
-          draft.liveTimeline.push(label)
-        }
-        draft.liveStep = label
+        appendTimeline(draft, label)
+        draft.liveStep = draft.contextCompactionPending ? '整理较早对话' : label
       }
       return 'status'
     }
@@ -87,6 +93,10 @@ export function applySseEvent(
       const m = draftMessage(draft)
       if (m) {
         if (answer && !m.content) m.content = answer
+        if (draft.contextCompactionPending) {
+          appendTimeline(draft, '上下文整理状态未确认')
+          draft.contextCompactionPending = false
+        }
         if (draft.liveTimeline.length) m.csNodes = [...draft.liveTimeline]
         m.streaming = false
       }
@@ -112,20 +122,63 @@ export function applySseEvent(
       }
       draft.streaming = false
       draft.liveStep = null
+      if (draft.contextCompactionPending) {
+        appendTimeline(draft, '上下文整理状态未确认')
+        draft.contextCompactionPending = false
+        if (m) m.csNodes = [...draft.liveTimeline]
+      }
       draft.errorText = evt.data.message ?? null
       return 'error'
     }
     case 'paused': {
       draft.pausedText = evt.data.message ?? null
       draft.streaming = false
+      draft.liveStep = null
+      const m = draftMessage(draft)
+      if (m) m.streaming = false
+      if (draft.contextCompactionPending) {
+        appendTimeline(draft, '上下文整理状态未确认')
+        draft.contextCompactionPending = false
+      }
+      if (m && draft.liveTimeline.length) m.csNodes = [...draft.liveTimeline]
       return 'paused'
     }
     case 'usage':
     case 'todo':
     case 'file':
-    case 'context':
     case 'ping':
       return evt.event
+    case 'context': {
+      const action = evt.data.action
+      if (action === 'summary_started') {
+        draft.contextCompactionPending = true
+        draft.liveStep = '整理较早对话'
+      } else if (action === 'summary_deferred') {
+        if (draft.contextCompactionPending) {
+          appendTimeline(
+            draft,
+            evt.data.reason === 'saved_for_next_turn'
+              ? '摘要已保存，后续对话会使用'
+              : '已采用安全裁剪继续处理',
+          )
+          draft.contextCompactionPending = false
+          draft.liveStep = '继续处理'
+        }
+      } else if (action === 'auto_compact') {
+        appendTimeline(draft, '已整理较早对话')
+        if (draft.contextCompactionPending) {
+          draft.contextCompactionPending = false
+          draft.liveStep = '继续处理'
+        }
+      } else if (evt.data.saved_tokens > 0) {
+        appendTimeline(draft, '已整理较早对话')
+        if (draft.contextCompactionPending) {
+          draft.contextCompactionPending = false
+          draft.liveStep = '继续处理'
+        }
+      }
+      return 'context'
+    }
     default:
       return 'unknown'
   }

@@ -12,7 +12,6 @@ import {
   ArrowRight,
   ArrowUp,
   Brain,
-  Check,
   CheckCircle2,
   ChevronDown,
   Circle,
@@ -31,10 +30,9 @@ import {
   StopCircle,
   Trash2,
   TriangleAlert,
-  UserRound,
 } from 'lucide-react'
 import { NAV } from '@/components/layout/navConfig'
-import { getCurrentLLM, listLLMModels, type LLMModel } from '@/lib/api'
+import { getCachedUser } from '@/lib/auth'
 import { useBudgetStatus } from '@/hooks/useBudgetStatus'
 import { useSendMessage } from '@/hooks/useChat'
 import { useAbortStreamOnUnmount, useSSE } from '@/hooks/useSSE'
@@ -50,17 +48,15 @@ import { invalidateSessionsCache, getSessionPageCached } from '@/lib/sessions-ca
 import { BUCKET_LABELS, filterByKeyword, formatTime, groupByTime } from '@/lib/session-groups'
 import { useChatStore } from '@/store/chat'
 import type { Message, SSEStreamEvent, StatusEvent, TodoItem } from '@/lib/types'
-import type { HandoffEvent } from '@/types/handoff'
 import {
   CHAT_INPUT_MAX_CHARS,
   chatInputOverLimit,
   chatInputShowCounter,
 } from '@/lib/chatInputLimit'
-import { requestSilent } from '@/lib/fetcher'
 import { listAgentTasks, restoreAgentTasks } from '@/api/agentTasks'
 import { useAgentTask } from '@/hooks/useAgentTask'
 
-const PAUSE_MESSAGE = '模型用量余额不足，本轮已暂停。补足余额后可以重新发送这条问题。'
+const PAUSE_MESSAGE = '个人额度不足，本轮已暂停。补足额度后可以重新发送这条问题。'
 
 function visibleTitle(title: string): string {
   return title?.trim() || '新任务'
@@ -111,8 +107,13 @@ function AgentSidebar({
   const [loadingMore, setLoadingMore] = useState(false)
   const [actionSession, setActionSession] = useState<string | null>(null)
   const [navExpanded, setNavExpanded] = useState(true)
+  const [userInfo, setUserInfo] = useState<ReturnType<typeof getCachedUser>>(null)
   const loadVersion = useRef(0)
   const loadMoreRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setUserInfo(getCachedUser())
+  }, [])
 
   const refresh = useCallback(async (force: boolean) => {
     const version = ++loadVersion.current
@@ -263,7 +264,7 @@ function AgentSidebar({
             <span>全部功能</span><ChevronDown size={14} className={`transition-transform ${navExpanded ? 'rotate-180' : ''}`} />
           </button>
           {navExpanded && <nav className="mt-1 space-y-1">
-            {NAV.map((entry) => (
+            {NAV.filter((entry) => entry.path === '/agent').map((entry) => (
               <Link key={entry.path || entry.label} href={entry.path || '/agent'} onClick={onClose} className={`flex items-center gap-2.5 rounded-xl px-3 py-2 text-[13px] transition ${pathname === entry.path ? 'bg-indigo-50 font-medium text-indigo-700' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'}`}>
                 <span className="flex h-5 w-5 items-center justify-center">{entry.icon}</span><span>{entry.label}</span>
               </Link>
@@ -301,55 +302,11 @@ function AgentSidebar({
 
         <div className="shrink-0 border-t border-slate-100 p-3"><BudgetSummary status={budgetStatus} blocked={budgetBlocked} /></div>
         <div className="flex shrink-0 items-center gap-2.5 border-t border-slate-100 px-4 py-3">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-slate-500"><UserRound size={15} /></span>
-          <span className="min-w-0"><span className="block truncate text-xs font-medium text-slate-700">当前用户</span><span className="block truncate text-[10px] text-slate-400">企业助手工作台</span></span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-600 text-white shadow-sm"><Brain size={16} /></span>
+          <span className="min-w-0"><span className="block truncate text-xs font-medium text-slate-700">{userInfo?.username || '未登录'}</span><span className="block truncate text-[10px] text-slate-400">{userInfo?.phone || '未绑定手机号'}</span></span>
         </div>
       </aside>
     </>
-  )
-}
-
-function ModelPicker() {
-  const [models, setModels] = useState<LLMModel[]>([])
-  const [globalModel, setGlobalModel] = useState('')
-  const [open, setOpen] = useState(false)
-  const sessionModel = useChatStore((s) => s.sessionModel)
-  const setSessionModel = useChatStore((s) => s.setSessionModel)
-
-  useEffect(() => {
-    let active = true
-    void Promise.all([listLLMModels(), getCurrentLLM()]).then(([list, current]) => {
-      if (!active) return
-      setModels(list.models)
-      setGlobalModel(current.model)
-    }).catch(() => { /* 模型列表不可读时保留默认路由，不阻断聊天 */ })
-    return () => { active = false }
-  }, [])
-
-  const selected = sessionModel || globalModel
-  const modelLabel = models.find((model) => model.name === selected)?.display || selected || '默认模型'
-  if (!models.length) return <span className="hidden text-xs text-slate-500 sm:inline">{modelLabel}</span>
-
-  return (
-    <div className="relative">
-      <button type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open} className="flex max-w-[220px] items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 shadow-sm transition hover:border-indigo-200 hover:text-indigo-700">
-        <Sparkles size={13} className="shrink-0 text-indigo-500" /><span className="truncate">{modelLabel}</span><ChevronDown size={13} className="shrink-0 text-slate-400" />
-      </button>
-      {open && <>
-        <button type="button" aria-label="关闭模型选择" onClick={() => setOpen(false)} className="fixed inset-0 z-20 cursor-default" />
-        <div className="absolute right-0 top-11 z-30 max-h-72 w-64 overflow-y-auto rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
-          <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400">本会话模型</p>
-          <button type="button" onClick={() => { setSessionModel(null); setOpen(false) }} className="flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-slate-50">
-            <span><span className="block font-medium">跟随默认</span><span className="mt-0.5 block text-[10px] text-slate-400">{models.find((model) => model.name === globalModel)?.display || globalModel}</span></span>
-            {!sessionModel && <Check size={14} className="text-indigo-600" />}
-          </button>
-          {models.map((model) => <button key={model.name} type="button" onClick={() => { setSessionModel(model.name === globalModel ? null : model.name); setOpen(false) }} className="flex w-full items-center justify-between rounded-xl px-2.5 py-2 text-left text-xs text-slate-700 hover:bg-indigo-50">
-            <span><span className="block font-medium">{model.display || model.name}</span><span className="mt-0.5 block text-[10px] text-slate-400">{model.provider}</span></span>
-            {selected === model.name && <Check size={14} className="text-indigo-600" />}
-          </button>)}
-        </div>
-      </>}
-    </div>
   )
 }
 
@@ -370,7 +327,7 @@ function BudgetSummary({ status, blocked }: { status: BudgetStatus | null; block
     <div className={`rounded-2xl border px-3.5 py-3 ${blocked ? 'border-amber-200 bg-amber-50/90' : 'border-slate-200 bg-white/80'}`}>
       <div className="flex items-center gap-2">
         {blocked ? <ShieldAlert size={14} className="text-amber-600" /> : <Sparkles size={14} className="text-indigo-500" />}
-        <span className="flex-1 text-[11px] font-medium text-slate-700">个人模型用量</span>
+        <span className="flex-1 text-[11px] font-medium text-slate-700">个人额度</span>
         <span className="text-[10px] tabular-nums text-slate-500">{Math.round(ratio * 100)}%</span>
       </div>
       <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className={`h-full rounded-full transition-[width] duration-300 ${blocked ? 'bg-amber-500' : 'bg-indigo-500'}`} style={{ width: `${Math.min(100, Math.max(0, ratio * 100))}%` }} /></div>
@@ -390,6 +347,11 @@ function processSteps(events: SSEStreamEvent[], labels: Record<string, string>, 
   const steps: ProcessStep[] = []
   const statusRows = new Map<string, number>()
   const toolRows = new Map<string, number>()
+  const contextRows = new Map<string, number[]>()
+  const pendingContextRow = (level: string) => {
+    const rows = contextRows.get(level)
+    return rows?.shift()
+  }
   events.forEach((event, index) => {
     if (event.event === 'status') {
       const data = event.data as StatusEvent
@@ -424,13 +386,54 @@ function processSteps(events: SSEStreamEvent[], labels: Record<string, string>, 
       }
     } else if (event.event === 'file') {
       steps.push({ key: `file-${event.data.step_id}-${index}`, title: '生成文件', detail: event.data.files.join('、'), state: 'success' })
-    } else if (event.event === 'context' && event.data.saved_tokens > 0) {
-      steps.push({ key: `context-${index}`, title: '已整理对话上下文', detail: `节省 ${event.data.saved_tokens.toLocaleString()} tokens`, state: 'success' })
+    } else if (event.event === 'context') {
+      const level = event.data.level
+      const action = event.data.action
+      if (action === 'summary_started') {
+        const row = steps.length
+        contextRows.set(level, [...(contextRows.get(level) ?? []), row])
+        steps.push({
+          key: `context-${level}-${index}`,
+          title: '正在整理较早对话',
+          state: 'running',
+        })
+      } else if (action === 'summary_deferred') {
+        const row = pendingContextRow(level)
+        if (row != null) {
+          const detail = event.data.reason === 'saved_for_next_turn'
+            ? '摘要已保存，后续对话会使用'
+            : '已采用安全裁剪继续处理'
+          steps[row] = {
+            ...steps[row], title: '对话上下文已安全处理', detail, state: 'success',
+          }
+        }
+      } else if (action === 'auto_compact' || event.data.saved_tokens > 0) {
+        const row = action === 'auto_compact' ? pendingContextRow(level) : undefined
+        const title = '已整理较早对话'
+        const detail = event.data.saved_tokens > 0
+          ? `节省 ${event.data.saved_tokens.toLocaleString()} tokens`
+          : action === 'auto_compact' ? '摘要已用于本轮' : undefined
+        if (row != null) {
+          steps[row] = { ...steps[row], title, detail, state: 'success' }
+        } else {
+          steps.push({ key: `context-${index}`, title, detail, state: 'success' })
+        }
+      }
     }
   })
   if (!streaming) {
     for (const row of toolRows.values()) {
       if (steps[row]?.state === 'running') steps[row] = { ...steps[row], state: 'success', detail: '已完成' }
+    }
+    for (const rows of contextRows.values()) {
+      for (const row of rows) {
+        if (steps[row]?.state === 'running') {
+          steps[row] = {
+            ...steps[row], title: '上下文整理状态未确认',
+            state: 'warning',
+          }
+        }
+      }
     }
   }
   return steps.slice(-18)
@@ -514,44 +517,6 @@ function PauseNotice({
   )
 }
 
-function HandoffPanel({ event, router }: { event: HandoffEvent; router: ReturnType<typeof useRouter> }) {
-  const target = {
-    travel: { title: '打开旅游规划', icon: '🧭' },
-    customer_service: { title: '打开智能客服', icon: '☏' },
-    selection_funnel: { title: '打开选品漏斗', icon: '◈' },
-  }[event.target_domain]
-  const openTarget = () => {
-    void requestSilent('/api/observability/handoff/click', {
-      method: 'POST', body: { target_domain: event.target_domain }, timeout: 5000,
-    })
-    if (event.target_domain === 'travel') {
-      const params = new URLSearchParams()
-      if (event.params.destination) params.set('destination', event.params.destination)
-      if (event.params.days != null) params.set('days', String(event.params.days))
-      if (event.params.party_size != null) params.set('party_size', String(event.params.party_size))
-      if (event.params.budget_cny != null) params.set('budget_cny', String(event.params.budget_cny))
-      if (event.params.must_go?.length) params.set('must_go', event.params.must_go.join(','))
-      router.push(params.size ? `/travel?${params}` : '/travel')
-    } else if (event.target_domain === 'selection_funnel') {
-      const params = new URLSearchParams()
-      if (event.params.category) params.set('category', event.params.category)
-      if (event.params.platform) params.set('platform', event.params.platform)
-      router.push(params.size ? `/selection-funnel?${params}` : '/selection-funnel')
-    } else {
-      try {
-        if (event.params.prefill_question) sessionStorage.setItem('cs_handoff_prefill', event.params.prefill_question)
-        window.dispatchEvent(new CustomEvent('cs-drawer:open'))
-      } catch {
-        router.push('/customer-service')
-      }
-    }
-  }
-  return <section className="mt-4 rounded-xl border border-sky-200 bg-sky-50 p-3.5">
-    <p className="text-xs leading-5 text-sky-950">{event.text}</p>
-    <button type="button" onClick={openTarget} className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-medium text-sky-800 hover:bg-sky-100">{target.icon} {target.title}<ArrowRight size={13} /></button>
-  </section>
-}
-
 function LongTaskReply({ taskId, blocked }: { taskId: string; blocked: boolean }) {
   const { task, error, operation, control } = useAgentTask(taskId)
   const labels = task?.node_labels || {}
@@ -571,7 +536,7 @@ function LongTaskReply({ taskId, blocked }: { taskId: string; blocked: boolean }
     <p className="text-xs leading-5 text-slate-500">{operation === 'pause' && task?.status !== 'PAUSED' ? '正在保存当前步骤，完成后暂停；已完成的步骤会保留。' : task?.progress || '任务可在后台执行，离开页面后可从任务历史返回。'}</p>
     <ProcessPanel events={events} labels={labels} todos={[]} streaming={task?.status === 'RUNNING'} />
     {!!task?.result?.answer && <RichAnswer content={task.result.answer} />}
-    {task?.status === 'PAUSED' && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{task.error_type === 'user_balance_insufficient' ? '模型用量余额不足，补足后点击继续任务。' : '进度已保存，点击继续任务可接着执行。'}发送新文字会结束此任务并开始新请求。</p>}
+    {task?.status === 'PAUSED' && <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-900">{task.error_type === 'user_balance_insufficient' ? '个人额度不足，补足后点击继续任务。' : '进度已保存，点击继续任务可接着执行。'}发送新文字会结束此任务并开始新请求。</p>}
     {task?.status === 'FAILED' && <p className="text-xs text-rose-700">{task.error_message || '任务未完成，请查看执行记录。'}</p>}
     {!!error && <p role="alert" className="text-xs text-rose-700">{error}</p>}
   </div>
@@ -659,7 +624,7 @@ function Composer({
 
   return <footer className="shrink-0 border-t border-slate-200/80 bg-white/75 px-3 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 backdrop-blur-xl sm:px-6 sm:pt-4">
     <div className="mx-auto max-w-4xl">
-      {blocked && <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900"><ShieldAlert size={13} className="shrink-0" />个人模型用量暂不可用；补足额度后可重新发送暂停的问题。{balance != null && <span className="ml-auto tabular-nums">可用 {formatCny(balance)}</span>}</div>}
+      {blocked && <div className="mb-2 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-4 text-amber-900"><ShieldAlert size={13} className="shrink-0" />个人额度暂不可用；补足额度后可重新发送暂停的问题。{balance != null && <span className="ml-auto tabular-nums">可用 {formatCny(balance)}</span>}</div>}
       <div className="rounded-2xl border border-slate-200 bg-white px-3.5 pb-2.5 pt-3 shadow-[0_4px_18px_rgba(15,23,42,.045)] transition focus-within:border-indigo-300 focus-within:shadow-[0_5px_24px_rgba(79,70,229,.11)] sm:px-4">
         <textarea ref={textareaRef} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={onKeyDown} rows={1} disabled={loading || blocked} placeholder="描述你要处理的任务…" aria-label="输入给企业助手的内容" className="max-h-[200px] min-h-[54px] w-full resize-none bg-transparent text-sm leading-6 text-slate-800 outline-none placeholder:text-slate-400 disabled:opacity-50" />
         <div className="flex items-center justify-between gap-3 pt-1.5">
@@ -693,12 +658,11 @@ export default function AgentWorkspace() {
   const nodeLabels = useChatStore((s) => s.nodeLabels)
   const todoItems = useChatStore((s) => s.todoItems)
   const clarification = useChatStore((s) => s.clarification)
-  const handoff = useChatStore((s) => s.handoff)
   const { status: budgetStatus }: { status: BudgetStatus | null } = useBudgetStatus(setBudgetBlocked)
   const { send: sendMessage, stopStream } = useSendMessage()
   const send = useCallback(async (text: string) => {
     router.replace(`/agent?session=${encodeURIComponent(currentId)}`)
-    await sendMessage(text)
+    await sendMessage(text, null)
   }, [currentId, router, sendMessage])
   const { regenerate } = useSSE()
   useAbortStreamOnUnmount()
@@ -715,14 +679,6 @@ export default function AgentWorkspace() {
     }
   }, [sessionParam])
 
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get('cs') === '1') router.replace('/customer-service')
-  }, [router])
-  useEffect(() => {
-    const openCustomerService = () => router.push('/customer-service')
-    window.addEventListener('cs-drawer:open', openCustomerService)
-    return () => window.removeEventListener('cs-drawer:open', openCustomerService)
-  }, [router])
   useEffect(() => {
     if (window.matchMedia('(min-width: 768px)').matches) setSidebarOpen(true)
   }, [])
@@ -750,7 +706,6 @@ export default function AgentWorkspace() {
           {sidebarOpen ? <PanelLeftClose size={17} /> : <PanelLeftOpen size={17} />}
         </button>
         <div className="min-w-0 flex-1"><h1 className="truncate text-sm font-semibold text-slate-900">{visibleTitle(title)}</h1><p className="mt-0.5 hidden text-[10px] text-slate-400 sm:block">企业助手 · 可调用已授权的业务能力</p></div>
-        <ModelPicker />
         <button type="button" onClick={newTask} aria-label="新建任务" className="hidden h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 shadow-sm transition hover:border-indigo-200 hover:text-indigo-600 sm:flex"><Plus size={16} /></button>
       </header>
 
@@ -764,7 +719,7 @@ export default function AgentWorkspace() {
             <h2 className="mt-5 text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">今天要处理什么任务？</h2>
             <p className="mt-2 max-w-md text-sm leading-6 text-slate-500">说明目标和约束，企业助手会按实际执行过程逐步展示结果。</p>
             <div className="mt-6 grid w-full max-w-2xl gap-2 sm:grid-cols-2">
-              {['查询本月销售额并整理主要变化', '帮我规划一份三天的周末行程', '查找知识库中关于退款的处理规则', '分析这批商品的选品风险'].map((example) => <button key={example} type="button" onClick={() => void send(example)} className="rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-left text-xs leading-5 text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:text-indigo-700 motion-reduce:transform-none">{example}</button>)}
+              {['查询本月销售额并整理主要变化', '查找知识库中关于退款的处理规则'].map((example) => <button key={example} type="button" onClick={() => void send(example)} className="rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-left text-xs leading-5 text-slate-600 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:text-indigo-700 motion-reduce:transform-none">{example}</button>)}
             </div>
           </div> : <div className="space-y-6 pb-6">
             {messages.map((message, index) => message.role === 'user' ? <article key={message.id} className="flex justify-end">
@@ -778,13 +733,12 @@ export default function AgentWorkspace() {
               todos={todoItems}
               blocked={budgetBlocked}
               error={index === activeIndex ? error : null}
-              onRetry={() => void regenerate(currentId)}
+              onRetry={() => void regenerate(currentId, null)}
             />)}
             {clarification && <section className="ml-11 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3.5 sm:ml-12">
               <p className="text-xs font-medium leading-5 text-slate-800">{clarification.question}</p>
               <div className="mt-2.5 flex flex-wrap gap-2">{clarification.options.map((option) => <button key={option.id} type="button" disabled={loading || budgetBlocked} onClick={() => void send(option.label)} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">{option.label}</button>)}</div>
             </section>}
-            {handoff && <div className="ml-11 sm:ml-12"><HandoffPanel event={handoff} router={router} /></div>}
           </div>}
           <div className="h-1" />
         </div>

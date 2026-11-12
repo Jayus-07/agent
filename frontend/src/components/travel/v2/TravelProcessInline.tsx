@@ -40,23 +40,37 @@ export default function TravelProcessInline({ process }: { process: TravelProces
     return (
       <div className="flex items-center gap-2 text-[11px] text-[#526b86]">
         <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-[#b9d3fa] border-t-[#2878f5]" aria-hidden />
-        <span>{runningStage ? `正在${travelStageLabel(runningStage)}…` : '正在连接旅游 Agent…'}</span>
+        <span>{process.contextNotice?.status === 'running'
+          ? '正在整理较早对话…'
+          : runningStage ? `正在${travelStageLabel(runningStage)}…` : '正在连接旅游 Agent…'}</span>
       </div>
     )
   }
 
   // 无阶段也无 Tool 的轮次（如纯澄清快答）没有可折叠的过程，渲染为空
-  if (stageEntries.length === 0 && process.tools.length === 0) return null
+  if (stageEntries.length === 0 && process.tools.length === 0 && !process.contextNotice) return null
 
   const failedCount = stageEntries.filter(([, stage]) => stage.status === 'failed').length
+  const contextText = process.contextNotice?.status === 'completed'
+    ? `已整理较早对话${process.contextNotice.savedTokens ? ` · 节省 ${process.contextNotice.savedTokens.toLocaleString()} tokens` : ''}`
+    : process.contextNotice?.status === 'deferred'
+      ? process.contextNotice.reason === 'saved_for_next_turn'
+        ? '摘要已保存，后续对话会使用'
+        : '已采用安全裁剪继续处理'
+      : process.contextNotice?.status === 'unconfirmed'
+        ? '上下文整理状态未确认'
+        : ''
   return (
     <div>
       <button type="button" aria-expanded={open} onClick={() => setOpen((current) => !current)} className="flex items-center gap-1.5 text-[11px] font-semibold text-[#246bd2]">
-        {failedCount > 0 ? `⚠ 已执行 ${stageEntries.length} 个步骤 · ${failedCount} 项失败` : `✓ 已完成 ${stageEntries.length} 个步骤`}
+        {failedCount > 0
+          ? `⚠ 已执行 ${stageEntries.length} 个步骤 · ${failedCount} 项失败`
+          : contextText || `✓ 已完成 ${stageEntries.length} 个步骤`}
         <span aria-hidden className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
       </button>
       {open && (
         <div className="mt-1.5 flex flex-col gap-0.5 border-t border-dashed border-[#dbe7f4] pt-1.5">
+          {contextText && <span className="text-[11px] leading-5 text-[#5d7490]" role="status">{contextText}</span>}
           {stageEntries.map(([stage, stageState]) => (
             <span key={stage} className="text-[11px] leading-5 text-[#5d7490]">{stageState.status === 'failed' ? '✗' : '✓'} {travelStageLabel(stage)}</span>
           ))}

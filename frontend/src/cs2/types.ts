@@ -32,6 +32,8 @@ export interface Cs2ConversationDraft {
   liveTimeline: string[]
   /** 状态栏当前节点 */
   liveStep: string | null
+  /** 是否已收到 L5 开始事件、等待对应结束事件 */
+  contextCompactionPending: boolean
   streaming: boolean
   candidateOptions: Cs2CandidateOption[] | null
   clarificationQuestion: string | null
@@ -50,6 +52,7 @@ export function newConversationDraft(id = 'new'): Cs2ConversationDraft {
     messages: [],
     liveTimeline: [],
     liveStep: null,
+    contextCompactionPending: false,
     streaming: false,
     candidateOptions: null,
     clarificationQuestion: null,

@@ -243,12 +243,15 @@ _current_event_scope: ContextVar[ContextEventScope | None] = ContextVar(
 # 仅允许无原文的固定结构元数据进入 SSE；fold_id 只接受内部 UUID 摘要。
 _SAFE_CONTEXT_EVENT_EXTRA = frozenset({
     "reversible", "fold_id", "folded_messages", "replaced_messages",
-    "summary_tokens", "delta_messages",
+    "summary_tokens", "delta_messages", "reason",
 })
 _CONTEXT_EVENT_LEVELS = frozenset({"L1", "L2", "L3", "L4", "L5"})
 _CONTEXT_EVENT_ACTIONS = frozenset({
     "collapse", "deferred", "auto_compact", "history_trim",
-    "previous_outputs_compact",
+    "previous_outputs_compact", "summary_started", "summary_deferred",
+})
+_CONTEXT_EVENT_REASONS = frozenset({
+    "fallback", "saved_for_next_turn", "projection_mismatch",
 })
 
 # 缓冲区只承接本轮会话加载阶段已完成、且明确归属当前请求的事件。
@@ -399,7 +402,11 @@ def _safe_event_extra(extra: dict[str, Any]) -> dict[str, Any]:
                 and len(value) == 17 and value.startswith("fold-") \
                 and all(char in "0123456789abcdef" for char in value[5:]):
             safe[name] = value
+        elif name == "reason" and isinstance(value, str) \
+                and value in _CONTEXT_EVENT_REASONS:
+            safe[name] = value
         elif name != "reversible" and name != "fold_id" \
+                and name != "reason" \
                 and isinstance(value, int) and not isinstance(value, bool) \
                 and value >= 0:
             safe[name] = value

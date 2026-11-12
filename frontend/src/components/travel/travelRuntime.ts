@@ -440,6 +440,12 @@ export interface TravelProcessState {
   stages: Record<string, { status: TravelStageProcessStatus }>
   tools: TravelProcessTool[]
   requirement?: TravelRequirementInterpretation
+  contextNotice?: {
+    status: 'running' | 'completed' | 'deferred' | 'unconfirmed'
+    level?: string
+    savedTokens?: number
+    reason?: string
+  }
   error?: string
 }
 
@@ -503,6 +509,31 @@ export function reduceTravelStreamEvent(
   if (event.event === 'stage.started') {
     const stage = stringField(data, 'stage')
     if (stage) next.stages[stage] = { status: 'running' }
+  } else if (event.event === 'context') {
+    const action = stringField(data, 'action')
+    const level = stringField(data, 'level')
+    const savedTokens = numberField(data, 'saved_tokens')
+    if (action === 'summary_started') {
+      next.contextNotice = { status: 'running', level }
+    } else if (action === 'summary_deferred') {
+      if (next.contextNotice?.status === 'running') {
+        next.contextNotice = {
+          status: 'deferred', level,
+          reason: stringField(data, 'reason'),
+        }
+      }
+    } else if (action === 'auto_compact') {
+      next.contextNotice = {
+        status: 'completed', level, savedTokens: Math.max(0, savedTokens ?? 0),
+      }
+    } else if (
+      ['collapse', 'history_trim', 'previous_outputs_compact'].includes(action ?? '')
+      && savedTokens != null && savedTokens > 0
+    ) {
+      next.contextNotice = {
+        status: 'completed', level, savedTokens,
+      }
+    }
   } else if (event.event === 'requirement.interpreted') {
     const brief = data.brief
     next.requirement = {
@@ -593,6 +624,9 @@ export function reduceTravelStreamEvent(
   } else if (event.event === 'error') {
     next.status = 'error'
     next.error = stringField(data, 'message') || '旅游规划执行失败'
+    if (next.contextNotice?.status === 'running') {
+      next.contextNotice = { ...next.contextNotice, status: 'unconfirmed' }
+    }
   } else if (event.event === 'run.finished') {
     if (data.status === 'failed') next.status = 'error'
   } else if (event.event === 'done') {
@@ -601,6 +635,9 @@ export function reduceTravelStreamEvent(
     next.status = data.status === 'failed' ? 'error' : 'completed'
     if (next.status === 'error') {
       next.error = stringField(data, 'message') || next.error || '旅游规划未完成'
+    }
+    if (next.contextNotice?.status === 'running') {
+      next.contextNotice = { ...next.contextNotice, status: 'unconfirmed' }
     }
   }
 

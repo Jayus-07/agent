@@ -73,6 +73,11 @@ PR_STATIC_ONLY_ENTRIES = frozenset({
     "backend/app/api/routes/admin_tools.py",
     "backend/shared/admin_llm.py",
     "backend/tests/api/test_admin_mcp_api.py",
+    # 上下文预算生命周期、聊天产品路由与本地认证展示走免费定向预检；
+    # 不因此触发真实 Provider 的付费 RAG 评测。
+    "backend/app/api/routes/auth_local.py",
+    "backend/app/api/routes/chat.py",
+    "backend/app/api/routes/travel.py",
 })
 # PR 免费预检触发、main push 付费不触发的目录前缀。#437 评审发现:定向
 # 清单已收录 tools/memory/selection_funnel 的安全与契约测试,但这些源码
@@ -83,6 +88,7 @@ PR_STATIC_ONLY_PREFIXES = (
     "backend/tools/",
     "backend/memory/",
     "backend/selection_funnel/",
+    "backend/context_budget/",
 )
 PREFIX_ENTRIES = (
     "backend/rag/",

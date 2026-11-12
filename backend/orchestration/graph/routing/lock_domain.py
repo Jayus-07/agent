@@ -49,7 +49,9 @@ def is_main_forced(state: dict) -> bool:
 
 
 def main_forced_handoff_update(query: str, state: dict) -> dict | None:
-    """AI 助手锁域下的强信号引导卡：命中返回 handoff 路由更新，否则 None。
+    """内部兼容主入口的强信号引导卡；注册的 agent 产品入口不会调用本函数。
+
+    命中返回 handoff 路由更新，否则 None。
 
     优先级与全局 prefilter 一致（旅游 > 选品 > 预订/商务）；预订/商务
     归旅游族（commerce 已收编为旅游域数据源层，意图判定复用其 extract），

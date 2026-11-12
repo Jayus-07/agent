@@ -58,6 +58,49 @@ describe('applySseEvent 全事件消费', () => {
     expect(d.liveTimeline).toEqual([])
   })
 
+  it('上下文摘要状态显示真实开始、完成和安全回退', () => {
+    const d = draftWithTurn()
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L5', action: 'summary_started',
+      before_tokens: 900, after_tokens: 900, saved_tokens: 0, ts: 1,
+    }))
+    expect(d.liveStep).toBe('整理较早对话')
+    expect(d.contextCompactionPending).toBe(true)
+
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L5', action: 'summary_deferred', reason: 'fallback',
+      before_tokens: 900, after_tokens: 900, saved_tokens: 0, ts: 2,
+    }))
+    expect(d.contextCompactionPending).toBe(false)
+    expect(d.liveTimeline).toContain('已采用安全裁剪继续处理')
+  })
+
+  it('确定性压缩完成后进入本轮处理时间线', () => {
+    const d = draftWithTurn()
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L4', action: 'collapse',
+      before_tokens: 900, after_tokens: 600, saved_tokens: 300, ts: 1,
+    }))
+    applySseEvent(d, evt('done', {
+      elapsed: 1, sources: [], answer: '已完成', pending_action: null,
+    }))
+    expect(d.messages[d.messages.length - 1].csNodes).toContain('已整理较早对话')
+  })
+
+  it('L5 摘要被本轮采用但未节省 token 仍显示完成', () => {
+    const d = draftWithTurn()
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L5', action: 'summary_started', saved_tokens: 0,
+    }))
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L5', action: 'auto_compact', saved_tokens: 0,
+    }))
+
+    expect(d.contextCompactionPending).toBe(false)
+    expect(d.liveStep).toBe('继续处理')
+    expect(d.liveTimeline).toContain('已整理较早对话')
+  })
+
   it('done 无 pending_action → 显式 null', () => {
     const d = draftWithTurn()
     applySseEvent(d, evt('done', { elapsed: 1, sources: [], answer: 'ok', pending_action: null }))
@@ -93,6 +136,22 @@ describe('applySseEvent 全事件消费', () => {
     expect(applySseEvent(d, evt('paused', { code: 'USER_BALANCE_INSUFFICIENT', message: '余额不足', action: 'top_up_and_resend', elapsed: 1, ts: 1 }))).toBe('paused')
     expect(d.pausedText).toBe('余额不足')
     expect(d.streaming).toBe(false)
+  })
+
+  it('paused 收口未确认的上下文整理状态', () => {
+    const d = draftWithTurn()
+    applySseEvent(d, evt('context', {
+      type: 'context', level: 'L5', action: 'summary_started',
+      before_tokens: 900, after_tokens: 900, saved_tokens: 0, ts: 1,
+    }))
+    applySseEvent(d, evt('paused', {
+      code: 'USER_BALANCE_INSUFFICIENT', message: '额度不足',
+      action: 'top_up_and_resend', elapsed: 1, ts: 2,
+    }))
+    expect(d.contextCompactionPending).toBe(false)
+    expect(d.liveStep).toBeNull()
+    expect(d.messages[d.messages.length - 1].csNodes).toContain('上下文整理状态未确认')
+    expect(d.messages[d.messages.length - 1].streaming).toBe(false)
   })
 
   it('clarification 存候选点选与问题', () => {
