@@ -301,7 +301,7 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     assert 'if [ "$SKIP_BUILD" = "true" ]; then' in release_text
     assert "docker compose run --rm --no-deps" in release_text
     assert release_text.index("docker compose run --rm db-migrate") < (
-        release_text.index("scripts/verify_migration_state.py")
+        release_text.index("backend/scripts/verify_migration_state.py")
     )
     assert "PG_AUTHORITY_HOST=postgres" in release_text
 

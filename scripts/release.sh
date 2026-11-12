@@ -52,7 +52,7 @@ if [ "$SKIP_BUILD" = "true" ]; then
     -e PG_AUTHORITY_HOST=postgres \
     -e PG_AUTHORITY_PORT=5432 \
     --entrypoint python db-migrate \
-    scripts/verify_migration_state.py \
+    backend/scripts/verify_migration_state.py \
     || { echo "[release][FATAL] 迁移三层不一致，先核对当前镜像与数据库登记"; exit 1; }
 else
   (cd backend && PYTHONPATH=".." python scripts/verify_migration_state.py --image "$MIGRATION_IMAGE") \
