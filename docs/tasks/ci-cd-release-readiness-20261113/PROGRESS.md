@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-`BLOCKED`：本机代码修复与定向验证完成；生产完整发布仍被运行环境配置和用户确认阻塞。未提交、未推送、未创建 PR。
+`BLOCKED`：PR #466 已创建，代码提交的 PR 检查通过；生产完整发布仍被供应商凭据和 Prometheus 配置阻塞。未合并、未部署本分支。
 
 ## 恢复信息
 
@@ -10,6 +10,8 @@
 - 分支：`codex/ci-cd-release-readiness-20261113`
 - 基线 HEAD：`4f1ec9f73a55e8eae06451711e7084dda5137764`
 - 最近核对的 `origin/main`：同一 SHA。
+- 初始代码提交：`ae4c167102095f51b4b60cfaf688e7fb09b1c775`
+- PR #466：`https://github.com/Jayus-07/agent/pull/466`，目标 `main`；未修改或合并其他 PR。
 
 ## 已有生产证据
 
@@ -29,12 +31,12 @@
 
 - 定向 pytest：51 passed（脚本身份、密文校验、Release Gate、生产工作流契约及 Smoke 路径过滤）。
 - Ruff、`py_compile`、Git Bash `bash -n`、`git diff --check`：通过。
+- PR #466 的 Secret Scan、Smoke 路径检测和免费定向回归通过；真实 API 评测因 PR 安全规则跳过。PR 与 `main` 无冲突。
 - 从本分支构建后端镜像成功；镜像内两个发布脚本导入成功。导入时因未提供本地数据库密码出现非致命的内存预热告警。
 - 未替换共享 Docker 服务；当前共享栈由其他 Worktree 组成，因此本分支应用服务健康未验证。生产 runner 尚未运行本分支改动。
 
 ## 下一步
 
-1. 用户明确确认后，提交并推送本分支、创建 PR。
-2. 等待 PR 门禁实际通过；审查修复新增 Diff。
-3. 生产管理员在管理端重新录入失效 Provider API Key，在生产环境文件设置 `PROMETHEUS_URL`。
-4. 合并与生产审批完成后，观察新的生产 runner 全链路；必须 Release Gate 通过并成功写入发布记录，才可标记完成。
+1. PR #466 的代码检查已通过；文档进度更新后再确认最新 PR 状态。
+2. 生产管理员在管理端重新录入失效 Provider API Key，在生产环境文件设置 `PROMETHEUS_URL`。
+3. 按用户明确授权完成 PR 合并和生产审批后，观察新的生产 runner 全链路；必须 Release Gate 通过并成功写入发布记录，才可标记完成。
