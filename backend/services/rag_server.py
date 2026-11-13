@@ -651,9 +651,6 @@ async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[st
     try:
         from backend.config import DOC_REGISTRY_PATH
         from backend.rag.indexing.doc_registry import DocumentRegistry
-        from backend.rag.indexing.review_service import review_pending_doc as apply_review
-
-        pipeline = await asyncio.to_thread(_get_pipeline)
         registry = DocumentRegistry(DOC_REGISTRY_PATH)
         row = registry.get_by_doc_id(doc_id)
         from backend.config.rag import RAG_UPLOAD_PATH_GUARD
@@ -662,6 +659,14 @@ async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[st
 
             reason = test_artifact_path_reason(row.get("file_path"))
             if reason:
+                if req.action == "reject" and row.get("status") == "pending_review":
+                    from backend.rag.indexing.review_service import (
+                        archive_orphan_pending_doc,
+                    )
+
+                    return await asyncio.to_thread(
+                        archive_orphan_pending_doc, doc_id, registry=registry,
+                    )
                 from backend.security.events import record_security_event
 
                 record_security_event(
@@ -669,6 +674,9 @@ async def review_pending_doc(doc_id: str, req: PendingReviewDecision) -> dict[st
                     detail={"path_reason": reason},
                 )
                 raise HTTPException(status_code=422, detail="测试临时路径文件被拒绝")
+        from backend.rag.indexing.review_service import review_pending_doc as apply_review
+
+        pipeline = await asyncio.to_thread(_get_pipeline)
         return await asyncio.to_thread(
             apply_review,
             doc_id,

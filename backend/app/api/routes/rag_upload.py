@@ -27,6 +27,7 @@ from backend.rag.progress_listener import ProgressListener
 from backend.app.api.routes._rag_shared import (
     _extract_source,
     _get_registry,
+    _get_op_logger,
     _progress_queues,
     _progress_owners,
     _safe_log_op,
@@ -1009,6 +1010,22 @@ def _get_index_semaphore() -> asyncio.Semaphore:
     return _index_semaphore
 
 
+def _latest_upload_trace_id(upload_id: str, tenant_id: str) -> str:
+    """失败收口时通过 Trace 标签回填本次上传 Trace，失败不影响收口。"""
+    if not upload_id or not tenant_id:
+        return ""
+    try:
+        from backend.observability.trace_store import get_trace_store
+
+        lookup = getattr(get_trace_store(), "latest_trace_ids_by_upload", None)
+        if not callable(lookup):
+            return ""
+        return str(lookup([upload_id], tenant_id).get(upload_id) or "")
+    except Exception as exc:  # noqa: BLE001 — Trace 回填不可阻断失败收口
+        logger.warning("[RAG] 上传失败 Trace 回填失败 upload_id=%s: %s", upload_id, exc)
+        return ""
+
+
 def _settle_index_result(upload_id: str, filepath: str, filename: str, source: str,
                          batch_id: str | None, kb_id: str,
                          upload_elapsed_ms: int | None, was_overwrite: bool,
@@ -1045,6 +1062,7 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     # ---- 失败终态 ----
     if exc is not None:
         logger.error(f"[RAG] 后台索引失败: {exc}", exc_info=exc)
+        trace_id = _latest_upload_trace_id(upload_id, tenant_id)
         # _index_file 在普通模式下写入的 parsing 占位行必须收口为 failed；
         # 锁冲突/幂等冲突/已被新候选取代不属于本次解析失败，不得改写并发任务状态。
         if not isinstance(exc, (
@@ -1078,7 +1096,10 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
             _cleanup_candidate_artifacts(upload_id, staging_path)
         # P1-4:ChunkingEmptyError 是业务失败(扫描件/结构损坏),保留源文件供排查;
         #      其它异常按孤儿文件处理逻辑清理
-        from backend.rag.indexing.indexer import ChunkingEmptyError
+        from backend.rag.indexing.indexer import (
+            ChunkingEmptyError,
+            PrepaidContentIntegrityError,
+        )
         from backend.shared.error_protocol import (
             ErrorCode,
             ProtocolError,
@@ -1098,8 +1119,9 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 error_type="chunking_empty",
                 recoverable=True,
                 error_protocol=protocol_error.envelope.to_dict(),
+                trace_id=trace_id,
             )
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+            _safe_log_op("", filename, "upload", source, trace_id=trace_id or None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
                          tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "chunking_empty"})
@@ -1118,8 +1140,9 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 error_type="file_locked",
                 recoverable=True,
                 error_protocol=protocol_error.envelope.to_dict(),
+                trace_id=trace_id,
             )
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+            _safe_log_op("", filename, "upload", source, trace_id=trace_id or None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
                          tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "file_locked"})
@@ -1135,8 +1158,9 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 error_type="idempotency_conflict",
                 recoverable=False,
                 error_protocol=protocol_error.envelope.to_dict(),
+                trace_id=trace_id,
             )
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+            _safe_log_op("", filename, "upload", source, trace_id=trace_id or None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
                          tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "idempotency_conflict"})
@@ -1154,16 +1178,49 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
                 error_type="superseded",
                 recoverable=False,
                 error_protocol=protocol_error.envelope.to_dict(),
+                trace_id=trace_id,
             )
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+            _safe_log_op("", filename, "upload", source, trace_id=trace_id or None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
                          tenant_id=tenant_id,
                          detail={"error": str(exc)[:200], "error_type": "superseded"})
+        elif isinstance(exc, PrepaidContentIntegrityError):
+            issue_codes = list(exc.issue_codes)
+            if "coverage_gap" in issue_codes:
+                message = "文档未入库：原文有内容没有进入最终分块，请核对解析结果和源文件。"
+            else:
+                message = "文档未通过入库完整性检查，尚未发布到知识库。请在入库失败页查看检查项和 Trace。"
+            protocol_error = ProtocolError(
+                ErrorCode.INVALID_PARAM,
+                message,
+                trace_id=trace_id,
+                source="sse",
+                details={"quality_issue_codes": issue_codes},
+            )
+            emit_fn(
+                "error", message,
+                error_type="quality_gate_rejected",
+                recoverable=False,
+                trace_id=trace_id,
+                error_protocol=protocol_error.envelope.to_dict(),
+            )
+            _safe_log_op(
+                "", filename, "upload", source,
+                trace_id=trace_id or None, batch_id=batch_id,
+                result="failed", user_id=str(actor_id or ""),
+                tenant_id=tenant_id,
+                detail={
+                    "error": str(exc)[:200],
+                    "error_type": "quality_gate_rejected",
+                    "quality_issue_codes": issue_codes,
+                    "upload_id": upload_id,
+                },
+            )
         else:
             envelope = error_envelope_from_exception(exc, source="sse")
             emit_fn("error", envelope.message,
-                    error_protocol=envelope.to_dict())
-            _safe_log_op("", filename, "upload", source, trace_id=None, batch_id=batch_id,
+                    error_protocol=envelope.to_dict(), trace_id=trace_id)
+            _safe_log_op("", filename, "upload", source, trace_id=trace_id or None, batch_id=batch_id,
                          user_id=str(actor_id or ""),
                          tenant_id=tenant_id,
                          detail={"error": str(exc)[:200]})
@@ -1178,20 +1235,28 @@ def _settle_index_result(upload_id: str, filepath: str, filename: str, source: s
     if terminal == "duplicate":
         duplicate_doc = result.get("doc") or {}
         stage_elapsed = result.get("stage_elapsed") or {}
+        trace_id = str(result.get("trace_id") or "")
         # 用真实上传耗时覆盖（duplicate 跳过索引，后端算的 uploading 没意义）
         if upload_elapsed_ms is not None:
             stage_elapsed["uploading"] = upload_elapsed_ms
         total_ms = (upload_elapsed_ms or 0) + int((time.time() - upload_t0) * 1000)
         _record_terminal_metric("duplicate", total_ms)
         emit_fn("duplicate", "文件已存在，未重复索引",
-                doc=sanitize_doc_row(duplicate_doc), trace_id="", stage_elapsed=stage_elapsed, total_ms=total_ms,
+                doc=sanitize_doc_row(duplicate_doc), trace_id=trace_id,
+                trace_association=result.get("trace_association", ""),
+                stage_elapsed=stage_elapsed, total_ms=total_ms,
                 processing_run_id=result.get("processing_run_id", ""),
                 model_summary=result.get("model_summary", []))
         _safe_log_op(
             duplicate_doc.get("doc_id", ""), filename, "upload", source,
-            trace_id="", batch_id=batch_id, result="duplicate",
+            trace_id=trace_id or None, batch_id=batch_id, result="duplicate",
             duration_ms=total_ms,
-            detail={"duplicate": True, "chunk_count": duplicate_doc.get("chunk_count", 0)},
+            detail={
+                "duplicate": True,
+                "chunk_count": duplicate_doc.get("chunk_count", 0),
+                "processing_run_id": result.get("processing_run_id", ""),
+                "trace_association": result.get("trace_association", ""),
+            },
             user_id=str(actor_id or ""),
             tenant_id=tenant_id,
         )
@@ -1649,6 +1714,46 @@ def _reverify_publish_authorization(
             f"索引发布前授权已失效（{actor}@{tid} → {kb_id}/{department}）: {reason}")
 
 
+def _latest_processing_trace_for_doc(doc_id: str) -> tuple[str, str]:
+    """取文档最近一次成功处理的 Trace 和运行号，查询失败时留空。"""
+    if not doc_id:
+        return "", ""
+    try:
+        from backend.rag.indexing.processing_lineage_pg import (
+            get_processing_lineage_repository,
+        )
+
+        latest = get_processing_lineage_repository().get_latest_for_doc(doc_id)
+    except Exception as exc:  # noqa: BLE001 — Trace 查询失败不阻断重复上传收尾
+        logger.warning(f"[RAG] 获取文档历史 Trace 失败 ({doc_id}): {exc}")
+        return "", ""
+    if not latest:
+        return "", ""
+    return str(latest.get("trace_id") or ""), str(latest.get("run_id") or "")
+
+
+def _active_document_artifacts_complete(
+    doc: dict, filepath: str, expected_hash: str,
+) -> bool:
+    """只有源文件和 chunk_store 都齐全，才允许把同哈希上传当作重复件。"""
+    doc_id = str(doc.get("doc_id") or "")
+    try:
+        expected_count = int(doc.get("chunk_count") or 0)
+    except (TypeError, ValueError):
+        return False
+    if not doc_id or expected_count <= 0 or not os.path.isfile(filepath):
+        return False
+    try:
+        if sha256_of_file(filepath) != expected_hash:
+            return False
+        from backend.rag.indexing.chunk_store import get_chunk_store
+
+        chunks = get_chunk_store().get_by_doc_id(doc_id)
+    except Exception as exc:  # noqa: BLE001 — 无法核对时不误判为完整
+        raise RuntimeError(f"核对已入库文档完整性失败 ({doc_id})") from exc
+    return len(chunks) == expected_count
+
+
 def _do_index_sync(upload_id: str, filepath: str, filename: str,
                    main_loop: asyncio.AbstractEventLoop | None,
                    kb_id: str = "policy_general",
@@ -1711,9 +1816,12 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
     # ── 终态幂等短路（重试不得重复发布）──
     if run["status"] == "published":
         doc = reg.get_by_path(filepath) or {}
+        trace_id, processing_run_id = _latest_processing_trace_for_doc(
+            str(doc.get("doc_id") or ""))
         logger.info(f"[RAG] 运行已发布，幂等返回 done: {upload_id}")
         return {
-            "trace_id": "", "terminal": "done",
+            "trace_id": trace_id, "processing_run_id": processing_run_id,
+            "terminal": "done",
             "doc": {**doc, "duplicate": False},
             "chunk_count": int(doc.get("chunk_count") or 0),
             "file_hash": doc.get("file_hash", source_hash),
@@ -1749,12 +1857,25 @@ def _do_index_sync(upload_id: str, filepath: str, filename: str,
         ]
     except (ValueError, TypeError):
         old_chunk_ids_for_bm25 = []
-    if existing and existing.get("status") == "active" \
-            and existing.get("file_hash") == actual_hash:
+    same_active_version = (
+        existing
+        and existing.get("status") == "active"
+        and existing.get("file_hash") == actual_hash
+    )
+    artifacts_complete = (
+        _active_document_artifacts_complete(existing, filepath, actual_hash)
+        if same_active_version else False
+    )
+    if (same_active_version and artifacts_complete
+            and run.get("status") != "publishing"):
         logger.info(f"[RAG] 文件未变化，跳过索引: {filename}")
         run_store.mark_status(upload_id, "published", stage="duplicate")
+        trace_id, processing_run_id = _latest_processing_trace_for_doc(
+            str(existing.get("doc_id") or ""))
         return {
-            "trace_id": "",
+            "trace_id": trace_id,
+            "processing_run_id": processing_run_id,
+            "trace_association": "previous_document_processing",
             "terminal": "duplicate",
             "doc": {**existing, "duplicate": True},
             "file_hash": actual_hash,
@@ -2116,14 +2237,114 @@ def _ensure_progress_owner(request: Request, upload_id: str) -> bool:
         return False
 
 
+def _quality_failure_summary(record: dict) -> str:
+    """把质量报告里的 OCR、原文核对和表格缺口压成管理端可读说明。"""
+    parsing = record.get("parsing") or {}
+    coverage = record.get("coverage") or {}
+    details: list[str] = []
+
+    required_pages = parsing.get("ocr_required_pages") or []
+    required_count = len(required_pages) if isinstance(required_pages, list) else 0
+    try:
+        processed_pages = max(0, int(parsing.get("ocr_pages") or 0))
+        page_budget = max(0, int(parsing.get("ocr_page_budget") or 0))
+    except (TypeError, ValueError):
+        processed_pages, page_budget = 0, 0
+    if required_count and processed_pages < required_count:
+        details.append(
+            f"OCR 已处理 {processed_pages}/{required_count} 页，"
+            f"页数上限 {page_budget} 页，尚有 {required_count - processed_pages} 页未处理"
+        )
+
+    failed_pages = parsing.get("ocr_failed_page_numbers") or []
+    if isinstance(failed_pages, list) and failed_pages:
+        pages = ", ".join(str(page) for page in failed_pages[:10])
+        suffix = f"等{len(failed_pages)}页" if len(failed_pages) > 10 else "页"
+        details.append(f"OCR 识别失败：第 {pages}{suffix}")
+
+    audit_gaps = [
+        issue for issue in parsing.get("parse_issues") or []
+        if isinstance(issue, dict)
+        and issue.get("code") == "pdf_source_text_audit_gap"
+    ]
+    audit_pages = sorted({
+        int(page)
+        for issue in audit_gaps
+        for page in issue.get("page_numbers") or []
+        if str(page).isdigit()
+    })
+    if audit_pages:
+        pages = ", ".join(str(page) for page in audit_pages[:10])
+        suffix = f"等{len(audit_pages)}页" if len(audit_pages) > 10 else "页"
+        details.append(f"PDF 原文核对有缺口：第 {pages}{suffix}")
+
+    try:
+        uncovered = max(0, int(coverage.get("uncovered_count") or 0))
+        missing_rows = max(0, int(coverage.get("table_rows_uncovered") or 0))
+        missing_cells = max(0, int(coverage.get("table_cells_uncovered") or 0))
+    except (TypeError, ValueError):
+        uncovered, missing_rows, missing_cells = 0, 0, 0
+    if uncovered or missing_rows or missing_cells:
+        details.append(
+            f"切分缺 {uncovered} 处，表格少 {missing_rows} 行、"
+            f"{missing_cells} 个单元格"
+        )
+        samples = coverage.get("uncovered_samples") or []
+        for sample in samples:
+            row_samples = sample.get("missing_row_samples") or []
+            if not row_samples:
+                continue
+            cells = [str(cell).strip()[:40] for cell in row_samples[0].get("cells", [])[:4]]
+            if cells:
+                page = sample.get("page")
+                location = f"第 {page} 页" if page else "页码未记录"
+                details.append(f"缺失表格行样例（{location}）：{' / '.join(cells)}")
+            break
+    return "；".join(details)
+
+
+def _load_quality_failure_details(
+    keys: list[tuple[str, str]],
+) -> dict[tuple[str, str], str]:
+    """只读取当前页质量失败项的报告，不扫描整个资料目录。"""
+    from backend.config.database import RAG_DATA_DIR
+
+    root = os.path.realpath(os.path.join(RAG_DATA_DIR, "quality_records"))
+    result: dict[tuple[str, str], str] = {}
+    for kb_id, doc_id in keys:
+        safe_kb = str(kb_id or "default").strip().replace("\\", "_").replace("/", "_")
+        safe_doc = str(doc_id or "").strip().replace("\\", "_").replace("/", "_")
+        safe_kb = safe_kb.replace("..", "_") or "default"
+        safe_doc = safe_doc.replace("..", "_")
+        if not safe_doc:
+            continue
+        path = os.path.realpath(os.path.join(root, safe_kb, f"{safe_doc}.json"))
+        try:
+            if (
+                os.path.commonpath([root, path]) != root
+                # 长 PDF 的逐页核对记录可能超过 2 MiB；保留有限上限，
+                # 同时覆盖当前 501 页样本的约 3.95 MiB 报告。
+                or os.path.getsize(path) > 5 * 1024 * 1024
+            ):
+                continue
+            with open(path, encoding="utf-8") as quality_file:
+                record = json.load(quality_file)
+            summary = _quality_failure_summary(record)
+        except (OSError, ValueError, TypeError):
+            continue
+        if summary:
+            result[(safe_kb, safe_doc)] = summary
+    return result
+
+
 @router.get("/upload-failures", dependencies=[Depends(require_rag_editor)])
 async def list_upload_failures(request: Request, limit: int = 50):
-    """待处理入库失败清单（质量门禁/解析 0 分块/向量化终态等异步失败）。
+    """入库异常清单：异步重试队列和文档质量门禁失败分开统计。
 
     上传受理后索引在 worker 异步执行，失败发生在对话框关闭之后——此端点是
-    管理端「入库失败」信号（仪表盘待处理卡片 + 失败列表页）的唯一数据出口。
-    派生口径（不加状态列）：failed 且同 file_path 无更新的 published 运行，
-    重传成功自动消数；见 index_run_store_pg.list_pending_failures。
+    管理端「入库失败」信号的唯一数据出口。异步队列沿用“失败且没有后续成功
+    发布”的口径；另补上没有 rag_index_runs 对应行的质量门禁失败文档，避免
+    文档页能看到失败、失败页却漏掉。两类分别计数，重试队列和历史质量失败不混为一类。
     """
     from backend.rag.indexing.index_run_store_pg import get_index_run_store
     from backend.app.api.identity import require_principal
@@ -2142,20 +2363,131 @@ async def list_upload_failures(request: Request, limit: int = 50):
         if authz.can_upload_to(kb_id, department or "")[0]
     )
     store = get_index_run_store()
-    items = await asyncio.to_thread(
+    queue_items = await asyncio.to_thread(
         store.list_pending_failures,
         limit=limit,
         tenant_id=tenant_id,
         kb_ids=kb_ids,
         department=department,
     )
-    total = await asyncio.to_thread(
+    upload_ids = [
+        str(item.get("upload_id") or "")
+        for item in queue_items
+        if item.get("upload_id") and not item.get("trace_id")
+    ]
+    trace_by_upload: dict[str, str] = {}
+    if upload_ids:
+        try:
+            from backend.observability.trace_store import get_trace_store
+
+            trace_store = get_trace_store()
+            lookup = getattr(trace_store, "latest_trace_ids_by_upload", None)
+            if callable(lookup):
+                trace_by_upload = await asyncio.to_thread(
+                    lookup, upload_ids, tenant_id,
+                )
+        except Exception as exc:  # noqa: BLE001 — Trace 查询失败不隐藏失败项
+            logger.warning("[RAG] 上传失败列表 Trace 查询失败: %s", exc)
+    queue_total = await asyncio.to_thread(
         store.count_pending_failures,
         tenant_id=tenant_id,
         kb_ids=kb_ids,
         department=department,
     )
-    return {"ok": True, "total": total, "items": items}
+    registry = _get_registry()
+    failed_rows = await asyncio.to_thread(registry.list_by_statuses, ["failed"])
+    queue_doc_ids = {str(item.get("doc_id") or "") for item in queue_items}
+    queue_paths = {
+        os.path.normcase(str(item.get("file_path") or ""))
+        for item in queue_items if item.get("file_path")
+    }
+    visible_quality_failures = []
+    for row in failed_rows:
+        if row.get("tenant_id") != tenant_id or row.get("quality_status") != "failed":
+            continue
+        can_manage, _ = authz.can_manage_row(row)
+        if not can_manage:
+            continue
+        doc_id = str(row.get("doc_id") or "")
+        file_path = str(row.get("file_path") or "")
+        if (doc_id and doc_id in queue_doc_ids) or (
+            file_path and os.path.normcase(file_path) in queue_paths
+        ):
+            continue
+        visible_quality_failures.append(row)
+
+    doc_ids = [str(row.get("doc_id") or "") for row in visible_quality_failures]
+    trace_by_doc: dict[str, str] = {}
+    if doc_ids:
+        try:
+            _last_ops, trace_by_doc = await asyncio.to_thread(
+                _get_op_logger().get_last_ops_batch,
+                doc_ids,
+                tenant_id=tenant_id,
+            )
+        except Exception as exc:  # noqa: BLE001 — Trace 读取失败不隐藏失败文档
+            logger.warning("[RAG] 质量失败文档 Trace 查询失败: %s", exc)
+
+    registry_items = []
+    for row in visible_quality_failures:
+        trace_id = trace_by_doc.get(str(row.get("doc_id") or ""), "")
+        registry_items.append({
+            "upload_id": f"registry:{row.get('doc_id') or row.get('file_name')}",
+            "record_kind": "quality_gate",
+            "retryable": False,
+            "file_path": row.get("file_path", ""),
+            "doc_id": row.get("doc_id", ""),
+            "kb_id": row.get("kb_id", ""),
+            "department": row.get("department", ""),
+            "error": row.get("quality_issues") or "质量门禁失败",
+            "created_at": row.get("updated_at") or row.get("last_indexed") or "",
+            "trace_id": trace_id,
+            "trace_status": "available" if trace_id else "missing_historical",
+            "processing_run_id": row.get("last_processing_run_id", ""),
+        })
+    for item in queue_items:
+        item.setdefault("record_kind", "async_queue")
+        item.setdefault("retryable", True)
+        item["trace_id"] = str(
+            item.get("trace_id")
+            or trace_by_upload.get(str(item.get("upload_id") or ""))
+            or ""
+        )
+        item["trace_status"] = (
+            "available" if item["trace_id"] else "missing_historical"
+        )
+    items = sorted(
+        [*queue_items, *registry_items],
+        key=lambda item: str(item.get("created_at") or ""),
+        reverse=True,
+    )[:max(1, min(int(limit), 200))]
+    quality_keys = [
+        (str(item.get("kb_id") or ""), str(item.get("doc_id") or ""))
+        for item in items
+        if item.get("record_kind") == "quality_gate"
+    ]
+    if quality_keys:
+        quality_details = await asyncio.to_thread(
+            _load_quality_failure_details, quality_keys,
+        )
+        for item in items:
+            if item.get("record_kind") == "quality_gate":
+                item["failure_details"] = quality_details.get(
+                    (
+                        str(item.get("kb_id") or ""),
+                        str(item.get("doc_id") or ""),
+                    ),
+                )
+    quality_failure_total = len(visible_quality_failures)
+    return {
+        "ok": True,
+        "total": queue_total + quality_failure_total,
+        "items": items,
+        "counts": {
+            "async_queue": queue_total,
+            "quality_gate": quality_failure_total,
+        },
+    }
 
 
 @router.get("/upload/{upload_id}/stream")

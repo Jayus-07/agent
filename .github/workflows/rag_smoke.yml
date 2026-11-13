@@ -171,6 +171,16 @@ jobs:
             backend/tests/travel/test_travel_runner_contract.py \
             backend/tests/evaluation/test_report_gate_verdict.py \
             backend/tests/evaluation/test_cli_compare.py \
+            backend/tests/evaluation/test_dataset_enterprise_extensions.py \
+            backend/tests/evaluation/test_rag_eval_trace_finalization.py \
+            backend/tests/observability/test_evaluation_trace_sampling.py \
+            backend/tests/observability/test_trace_writer_consumer_group.py \
+            backend/tests/observability/test_gateway_log_ingest.py \
+            backend/tests/customer_service/test_event_outbox.py \
+            backend/tests/evaluation_v2/test_api_contract.py \
+            backend/tests/evaluation_v2/test_rag_query_type_preservation.py \
+            backend/tests/evaluation_v2/test_review_quality.py \
+            backend/tests/evaluation_v2/test_runner_token_accounting.py \
             tests/evaluation/test_cli_strict_gate_exit.py \
             tests/evaluation/test_release_gate_tier_samples.py \
             backend/tests/agents/test_planner_output_contract.py \
@@ -220,6 +230,12 @@ jobs:
             backend/tests/scripts/test_cs_dispatch_loadtest.py \
             backend/tests/scripts/test_cs_kb_seed_sync.py \
             backend/tests/rag/test_specialized_budget.py \
+            backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_usage_recorded_as_ocr_component \
+            backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_request_budget_blocks_ocr_before_provider_call \
+            backend/tests/rag/test_pdf_ocr.py::TestDashScopeUsageRecording::test_missing_provider_usage_is_not_recorded_as_free \
+            backend/tests/rag/test_indexer_trace.py::test_doc_level_embedding_budget_failure_is_visible_in_trace \
+            backend/tests/api/test_rag_routes_regression.py::test_quality_failure_summary_reports_ocr_and_pdf_page_gaps \
+            backend/tests/rag/test_chunk_governance_p0.py::test_coverage_audit_detects_missing_table_cell_and_row \
             backend/tests/evaluation/test_import_fixture_entrypoint.py \
             backend/tests/evaluation/test_rag_paid_preflight.py \
             backend/tests/scripts/test_seed_prompt_eval_db.py \

@@ -88,6 +88,42 @@ export function getQualityWarning(score: number | null): string | null {
   return score < 60 ? `质量评分偏低 (${score}/100)` : null;
 }
 
+export interface TraceCostDisplayInput {
+  costCny: number;
+  costUsd: number;
+  totalTokens: number;
+  calls: number;
+}
+
+/** 费用为零且存在用量时明确提示未核算，避免把缺失台账显示成免费。 */
+export function getTraceCostDisplay(input: TraceCostDisplayInput): {
+  value: string;
+  detail: string;
+} {
+  if (input.costCny > 0) {
+    return { value: `¥${input.costCny.toFixed(4)}`, detail: `费用台账 · ${input.calls} 次调用` };
+  }
+  if (input.costUsd > 0) {
+    return { value: `$${input.costUsd.toFixed(4)}`, detail: `费用台账 · ${input.calls} 次调用` };
+  }
+  if (input.totalTokens > 0 || input.calls > 0) {
+    return {
+      value: "未核算",
+      detail: `已有 ${input.calls} 次调用 / ${input.totalTokens.toLocaleString()} Tokens，费用台账未登记金额`,
+    };
+  }
+  return { value: "暂无记录", detail: "Trace 没有模型用量记录" };
+}
+
+/** 历史 PDF Trace 没留真实页数时不能把 0 当成实际页数。 */
+export function formatTracePageCount(pageCount: unknown, applicable: unknown): string {
+  if (applicable !== true) return "不适用";
+  if (typeof pageCount !== "number" || !Number.isFinite(pageCount) || pageCount <= 0) {
+    return "历史记录未留存";
+  }
+  return pageCount.toLocaleString();
+}
+
 export function getMetadataPerformanceWarning(
   durationMs: number | null,
   wallDurationMs: number,

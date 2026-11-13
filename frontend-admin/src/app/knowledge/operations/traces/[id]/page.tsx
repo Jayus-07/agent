@@ -9,7 +9,8 @@ import { knowledgeService } from "@/api/knowledge";
 import { X, Loader2 } from "lucide-react";
 import {
   getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
+  formatTracePageCount, getQualityScore, getQualityScoreBreakdown, getQualityWarning,
+  getTraceCostDisplay, groupSpansByType,
 } from "../trace-metrics";
 import {
   getChunkHeading,
@@ -47,6 +48,13 @@ const DOC_TYPE_CN: Record<string, string> = {
   faq: "常见问题", product_spec: "商品规格", listing: "商品上架", sop: "操作流程",
   training: "培训文档", ad_policy: "广告政策", security: "安全文档",
   customer_data: "客户数据", contract_template: "合同模板", general: "通用文档",
+  travel_guide: "旅游指南",
+};
+
+const BUSINESS_DOMAIN_CN: Record<string, string> = {
+  product: "商品", order: "订单", inventory: "库存", logistics: "物流",
+  advertising: "广告", customer: "客户", supplier: "供应商", analytics: "数据分析",
+  data: "数据治理", financial: "财务", hr: "人事", travel: "旅游", general: "通用",
 };
 
 const CHUNK_STRATEGY_CN: Record<string, string> = {
@@ -135,9 +143,32 @@ export default function DocTracePage() {
   if(!trace) return <div className="flex-1 flex items-center justify-center"><div className="text-center"><p className="text-slate-400">Trace {id} 不存在或已过期</p><button onClick={()=>router.back()} className="mt-3 text-sm text-violet-600 hover:text-violet-500">← 返回</button></div></div>;
 
   const badge = statusBadge(trace.status??"success");
+  const traceCost = getTraceCostDisplay({
+    costCny: overview.costCny,
+    costUsd: overview.costUsd,
+    totalTokens: overview.totalTokens,
+    calls: overview.llmCalls,
+  });
   const toggleTypeExpand = (type:string) => { const next=new Set(expandedTypes); next.has(type)?next.delete(type):next.add(type); setExpandedTypes(next); };
   const toggleMeta = (key:string) => { const next=new Set(expandedMeta); next.has(key)?next.delete(key):next.add(key); setExpandedMeta(next); };
-  function summaryMetrics(spans: Span[]): string { const merged:Record<string,unknown>={}; for(const s of spans){if(!s.metrics)continue; for(const [k,v] of Object.entries(s.metrics)){if(k==="chunk_id"||k==="attempt")continue; if(merged[k]===undefined)merged[k]=v;}} const e=Object.entries(merged); if(!e.length)return""; return e.map(([k,v])=>`${k}: ${typeof v==="number"?v:String(v)}`).join(" · "); }
+  function summaryMetrics(spans: Span[]): string {
+    const merged: Record<string, unknown> = {};
+    for (const span of spans) {
+      if (!span.metrics) continue;
+      for (const [key, value] of Object.entries(span.metrics)) {
+        if (key === "chunk_id" || key === "attempt") continue;
+        if (merged[key] === undefined) merged[key] = value;
+      }
+    }
+    const entries = Object.entries(merged);
+    if (!entries.length) return "";
+    return entries.map(([key, value]) => {
+      if (key === "page_count") {
+        return `${key}: ${formatTracePageCount(value, merged.page_count_applicable)}`;
+      }
+      return `${key}: ${typeof value === "number" ? value : String(value)}`;
+    }).join(" · ");
+  }
 
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
@@ -147,10 +178,10 @@ export default function DocTracePage() {
       <div>
         <div className="flex items-center justify-between mb-3"><div className="flex items-center gap-3"><h1 className="text-base font-semibold text-slate-800">{trace.question}</h1><span className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${badge.bg}`}>{badge.label}</span></div><span className="text-xs text-slate-400" title={formatTime(trace.timestamp)}>{formatRelative(trace.timestamp)}</span></div>
         <div className="grid grid-cols-4 gap-2 mb-2">
-          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:overview.costCny>0?`¥${overview.costCny.toFixed(4)}`:(overview.costUsd>0?`$${overview.costUsd.toFixed(4)}`:'-'),sub:`llm_usage 台账 ${overview.llmCalls} 次调用`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
+          {[{label:'文件大小',value:overview.fileSize>0?`${(overview.fileSize/1024).toFixed(1)}KB`:'-',sub:`${overview.fileSize} bytes`},{label:'Chunks',value:overview.chunkCount>0?String(overview.chunkCount):'-',sub:'文本分块数'},{label:'Tokens',value:overview.totalTokens>0?overview.totalTokens.toLocaleString():'-',sub:'prompt+completion'},{label:'成本',value:traceCost.value,sub:traceCost.detail}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 font-mono">{c.value}</div><div className="text-[9px] text-slate-400">{c.sub}</div></div>))}
         </div>
         <div className="grid grid-cols-4 gap-2">
-          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'-'},{label:'业务领域',value:overview.businessDomain||'-'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
+          {[{label:'文档类型',value:DOC_TYPE_CN[overview.docType]||overview.docType||'未记录'},{label:'业务领域',value:BUSINESS_DOMAIN_CN[overview.businessDomain]||overview.businessDomain||'未记录'},{label:'模型',value:overview.model||trace.model?.name||'-',sub:overview.models.length>0?`${overview.models.length} 个模型 · ${overview.llmCalls} 次调用`:undefined},{label:'总耗时',value:trace.duration_ms>0?`${(trace.duration_ms/1000).toFixed(1)}s`:'-',sub:`${childSpans.length} spans · ${trace.id?.slice(0,8)}`}].map(c=>(<div key={c.label} className="bg-white border border-slate-200 rounded-lg px-3 py-2.5"><div className="text-[10px] text-slate-400 mb-0.5">{c.label}</div><div className="text-sm font-semibold text-slate-800 truncate">{c.value}</div>{c.sub&&<div className="text-[9px] text-slate-400">{c.sub}</div>}{c.label==='模型'&&overview.models.length>1&&<div className="mt-1 pt-1 border-t border-slate-100 space-y-0.5">{overview.models.map(m=>(<div key={m.component+m.model} className="flex items-center justify-between gap-2 text-[9px]"><span className="text-slate-500 truncate">{m.component}: {m.model}</span><span className="font-mono text-slate-400 shrink-0">{m.total_tokens.toLocaleString()} tok{m.cost_cny>0?` · ¥${m.cost_cny.toFixed(4)}`:''}</span></div>))}</div>}</div>))}
         </div>
       </div>
 

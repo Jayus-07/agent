@@ -72,6 +72,10 @@ export default function RunHistoryDetail({ runId, onBack, onGoCompare }: {
   </Card>
 
   const fingerprint = runQuery.data.fingerprint
+  const snapshotEvaluationMode = typeof run.snapshot_json?.evaluation_mode === 'string'
+    ? run.snapshot_json.evaluation_mode
+    : null
+  const evaluationMode = run.evaluation_mode || snapshotEvaluationMode || fingerprint.evaluation_mode
   const passRate = completedCases > 0 ? `${Math.round((run.passed_cases / completedCases) * 100)}%` : '—'
 
   return <div className="space-y-4">
@@ -92,7 +96,7 @@ export default function RunHistoryDetail({ runId, onBack, onGoCompare }: {
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
         <SummaryValue label="状态"><StatusBadge status={run.job_status} /></SummaryValue>
         <SummaryValue label="数据集">{run.suite_name || run.suite_key || '—'} · v{run.suite_version || '—'}</SummaryValue>
-        <SummaryValue label="运行方式">{modeShort(run.evaluation_mode)}</SummaryValue>
+        <SummaryValue label="运行方式">{modeShort(evaluationMode)}</SummaryValue>
         <SummaryValue label="通过率">{passRate}</SummaryValue>
         <SummaryValue label="样本进度">{run.completed_cases} / {run.total_cases} · 通过 {run.passed_cases}</SummaryValue>
         <SummaryValue label="总费用">{fmtCost(run.cost_amount, run.cost_currency)}</SummaryValue>

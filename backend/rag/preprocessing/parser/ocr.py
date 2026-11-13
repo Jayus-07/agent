@@ -259,20 +259,55 @@ def _ocr_image_rapidocr(png_bytes: bytes) -> str:
 
 def _record_ocr_usage(model: str, prompt_tokens: int, completion_tokens: int,
                       duration_ms: int, status: str = "success",
-                      provider: str = "dashscope") -> None:
-    """DashScope OCR 用量写入 llm_usage_store（软失败不影响 OCR 主流程）。"""
+                      provider: str = "dashscope",
+                      usage_available: bool = True) -> None:
+    """OCR 用量按统一价格账本记录；观测失败不覆盖已返回的 OCR 文本。"""
     try:
         from backend.observability.llm_usage_store import get_llm_usage_store
         from backend.observability.llm_usage_store import current_usage_attribution
+        from backend.infra.llm.budget import (
+            current_request_budget,
+            record_model_usage,
+        )
+        from backend.infra.llm.pricing import (
+            COST_STATUS_ESTIMATED,
+            COST_STATUS_EXACT,
+            NormalizedUsage,
+            PRICING_SOURCE_UNPRICED,
+            USAGE_SOURCE_UNAVAILABLE,
+            price_usage,
+        )
+
         attribution = current_usage_attribution()
-        get_llm_usage_store().record({
+        budget_state = current_request_budget()
+        enforce = bool(
+            budget_state
+            and budget_state.mode == "enforce"
+            and budget_state.quota_store is not None
+        )
+        billing = None
+        if status == "success" and usage_available:
+            billing = price_usage(
+                model,
+                "llm",
+                NormalizedUsage(
+                    input_tokens=prompt_tokens,
+                    output_tokens=completion_tokens,
+                ),
+                enforce=enforce,
+            )
+
+        event = {
             "component": "ocr",
             "model": model,
             "provider": provider,
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": prompt_tokens + completion_tokens,
-            "cost_usd": 0.0,
+            "cost_usd": (
+                float(billing.native_cost)
+                if billing and billing.native_currency == "USD" else 0.0
+            ),
             "duration_ms": duration_ms,
             "trace_id": attribution["trace_id"],
             "session_id": attribution["session_id"],
@@ -284,69 +319,110 @@ def _record_ocr_usage(model: str, prompt_tokens: int, completion_tokens: int,
             "role": attribution["role"] or "ocr",
             "stage": attribution["stage"] or "ocr",
             "finish_reason": status,
-        })
-        # 审计 P2 批次：OCR 此前只写观测、绕过统一预算链路——存在请求级预算
-        # 上下文时（如 /chat 内 RAG 技能实时解析）把 token 计入请求预算结算；
-        # 后台索引任务无预算上下文时 record_model_usage 返回 no_request_budget
-        # 自然跳过。软失败：预算链路故障不影响 OCR 主流程。视觉调用本身不走
-        # proxy 是既有裁决（文本 chat 角色通道，改造风险大于收益）。
-        if status == "success":
-            from backend.infra.llm.budget import record_model_usage
+        }
+        if billing is None:
+            event.update({
+                "cost_status": "unpriced",
+                "pricing_source": PRICING_SOURCE_UNPRICED,
+                "usage_source": (
+                    USAGE_SOURCE_UNAVAILABLE if not usage_available else "provider"
+                ),
+            })
+        else:
+            event.update({
+                "billing_schema_version": 2,
+                "native_cost": float(billing.native_cost),
+                "native_currency": billing.native_currency,
+                "billed_cost_cny": float(billing.billed_cost_cny),
+                "total_cost": float(billing.billed_cost_cny),
+                "fx_rate": float(billing.fx_rate) if billing.fx_rate is not None else None,
+                "price_version": billing.price_version or "",
+                "pricing_source": billing.pricing_source,
+                "usage_source": billing.usage_source,
+                "input_cost": float(billing.input_cost_cny),
+                "output_cost": float(billing.output_cost_cny),
+                "cost_status": billing.cost_status,
+                "currency": billing.native_currency,
+                "input_unit_price": (
+                    float(billing.input_unit_price)
+                    if billing.input_unit_price is not None else None
+                ),
+                "output_unit_price": (
+                    float(billing.output_unit_price)
+                    if billing.output_unit_price is not None else None
+                ),
+            })
+        get_llm_usage_store().record(event)
 
+        if status == "success":
+            priced = billing is not None and billing.cost_status in {
+                COST_STATUS_EXACT, COST_STATUS_ESTIMATED,
+            }
             record_model_usage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
                 total_tokens=prompt_tokens + completion_tokens,
+                cost=billing.billed_cost_cny if priced else None,
+                review_reason=(
+                    "" if priced and usage_available
+                    else "ocr_usage_or_price_unavailable"
+                ),
             )
     except Exception as e:
-        logger.debug(f"[OCR] 用量记录失败（不影响主流程）: {e}")
+        logger.warning(f"[OCR] 用量或预算记账失败: {type(e).__name__}: {e}")
 
 
 def _ocr_image_dashscope(png_bytes: bytes) -> str:
     """兼容 OpenAI Chat 的视觉 OCR；用量计入 token 可观测（component=ocr）。"""
-    from openai import OpenAI
+    from backend.infra.llm.budget import scoped_model_call
+
     runtime = _resolve_ocr_runtime_config()
     model = runtime["model"]
     upstream_model = runtime.get("upstream_model") or model
     _ocr_actual_upstream_model.set(str(upstream_model))
-    client = OpenAI(
-        api_key=runtime["api_key"],
-        base_url=runtime["base_url"],
-        timeout=rag_cfg.RAG_OCR_DASHSCOPE_TIMEOUT,
-    )
     b64 = base64.b64encode(png_bytes).decode("ascii")
-    t0 = time.monotonic()
-    try:
-        resp = client.chat.completions.create(
-            model=upstream_model,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "image_url",
-                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
-                    {"type": "text",
-                     "text": "提取图片中的全部文字，按原有阅读顺序输出，"
-                             "不要翻译、不要总结、不要添加任何解释。"},
-                ],
-            }],
+    with scoped_model_call(model, "llm"):
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=runtime["api_key"],
+            base_url=runtime["base_url"],
+            timeout=rag_cfg.RAG_OCR_DASHSCOPE_TIMEOUT,
         )
-    except Exception as e:
+        t0 = time.monotonic()
+        try:
+            resp = client.chat.completions.create(
+                model=upstream_model,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url",
+                         "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                        {"type": "text",
+                         "text": "提取图片中的全部文字，按原有阅读顺序输出，"
+                                 "不要翻译、不要总结、不要添加任何解释。"},
+                    ],
+                }],
+            )
+        except Exception:
+            _record_ocr_usage(
+                model, 0, 0, int((time.monotonic() - t0) * 1000),
+                status="error", provider=runtime["provider"],
+                usage_available=False,
+            )
+            raise
+        usage = getattr(resp, "usage", None)
+        actual_model = str(getattr(resp, "model", "") or "").strip()
+        if actual_model:
+            _ocr_actual_model.set(actual_model)
         _record_ocr_usage(
-            model, 0, 0, int((time.monotonic() - t0) * 1000),
-            status="error", provider=runtime["provider"],
+            model,
+            getattr(usage, "prompt_tokens", 0) or 0,
+            getattr(usage, "completion_tokens", 0) or 0,
+            int((time.monotonic() - t0) * 1000),
+            provider=runtime["provider"],
+            usage_available=usage is not None,
         )
-        raise
-    usage = getattr(resp, "usage", None)
-    actual_model = str(getattr(resp, "model", "") or "").strip()
-    if actual_model:
-        _ocr_actual_model.set(actual_model)
-    _record_ocr_usage(
-        model,
-        getattr(usage, "prompt_tokens", 0) or 0,
-        getattr(usage, "completion_tokens", 0) or 0,
-        int((time.monotonic() - t0) * 1000),
-        provider=runtime["provider"],
-    )
     return resp.choices[0].message.content or ""
 
 

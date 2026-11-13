@@ -14,6 +14,8 @@ from backend.rag.indexing.publish import (
     CandidateStores,
     CompositeVectorStore,
     SupersededCandidate,
+    _bm25_global_lock,
+    _release_bm25_global_lock,
     publish_candidate,
     switch_bm25_snapshot,
 )
@@ -356,6 +358,42 @@ def test_buffering_chunk_store_flush_semantics(tmp_path):
     assert real.flushed == {"doc-9": 2}
     buf.discard()
     assert buf.flush(real) == 0
+
+
+def test_bm25_global_lock_is_removed_after_release(tmp_path):
+    lock_path = tmp_path / ".publish.lock"
+
+    lock_fd = _bm25_global_lock(tmp_path)
+    assert lock_path.exists()
+
+    _release_bm25_global_lock(lock_fd, lock_path)
+
+    assert not lock_path.exists()
+
+
+def test_bm25_global_lock_release_does_not_remove_replacement_lock(
+    tmp_path, monkeypatch,
+):
+    lock_path = tmp_path / ".publish.lock"
+    old_fd = _bm25_global_lock(tmp_path)
+    original_close = os.close
+    replacement_fds = []
+
+    def close_then_replace(fd):
+        original_close(fd)
+        lock_path.unlink()
+        new_fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        replacement_fds.append(new_fd)
+
+    monkeypatch.setattr("backend.rag.indexing.publish.os.close", close_then_replace)
+    try:
+        _release_bm25_global_lock(old_fd, lock_path)
+        assert lock_path.exists()
+    finally:
+        monkeypatch.setattr("backend.rag.indexing.publish.os.close", original_close)
+        for new_fd in replacement_fds:
+            original_close(new_fd)
+        lock_path.unlink(missing_ok=True)
 
 
 def test_composite_view_concatenates_main_and_candidate():

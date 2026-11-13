@@ -39,7 +39,8 @@ services:
     # 当前 AOF 在 4 核约束下加载约 36 秒，避免加载期被误判为不健康。
     healthcheck: { start_period: 60s }
     cpu_shares: 512
-    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "allkeys-lru", "--requirepass", "${REDIS_PASSWORD:-}", "--appendonly", "yes", "--appendfsync", "everysec"]
+    # db0 同时承载带 TTL 的缓存和无 TTL 的 Stream/消费位点，只允许淘汰缓存键。
+    command: ["redis-server", "--maxmemory", "192mb", "--maxmemory-policy", "volatile-lru", "--requirepass", "${REDIS_PASSWORD:-}", "--appendonly", "yes", "--appendfsync", "everysec"]
     deploy:
       resources:
         limits: { memory: 384m, cpus: "0.4" }
@@ -47,7 +48,7 @@ services:
     <<: *runtime
     healthcheck: { start_period: 60s }
     cpu_shares: 512
-    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_PASSWORD:-}", "--appendonly", "yes", "--appendfsync", "everysec"]
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction", "--requirepass", "${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}", "--appendonly", "yes", "--appendfsync", "everysec"]
     deploy:
       resources:
         limits: { memory: 192m, cpus: "0.2" }

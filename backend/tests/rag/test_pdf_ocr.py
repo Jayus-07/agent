@@ -434,7 +434,7 @@ class TestDashScopeUsageRecording:
         return types.SimpleNamespace(OpenAI=FakeOpenAI)
 
     def test_usage_recorded_as_ocr_component(self, monkeypatch):
-        """DashScope OCR 的 token 用量进 llm_usage_store，tokens 看板可查。"""
+        """OCR 用量走统一计费账本，且预算结算拿到同一份费用。"""
         monkeypatch.setattr(rag_cfg, "RAG_OCR_PROVIDER", "dashscope")
         # 都用 DB：注入数据库形状的 OCR 运行时配置（api_key 只来自 DB 凭据）
         monkeypatch.setattr(
@@ -450,7 +450,36 @@ class TestDashScopeUsageRecording:
         monkeypatch.setitem(sys.modules, "openai", self._fake_openai_module())
 
         recorded = []
+        settlements = []
         import backend.observability.llm_usage_store as store_mod
+        import backend.infra.llm.budget as budget_mod
+        import backend.infra.llm.pricing as pricing_mod
+        from decimal import Decimal
+        from backend.infra.llm.pricing import BillingResult
+
+        billing = BillingResult(
+            model_name=rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+            component="llm",
+            input_tokens=100,
+            output_tokens=50,
+            native_cost=Decimal("0.001"),
+            native_currency="USD",
+            billed_cost_cny=Decimal("0.007"),
+            fx_rate=Decimal("7"),
+            input_cost_cny=Decimal("0.005"),
+            output_cost_cny=Decimal("0.002"),
+            price_version="ocr-price-v1",
+            pricing_source="approved_price_table",
+            usage_source="provider",
+            cost_status="estimated",
+        )
+        monkeypatch.setattr(
+            pricing_mod, "price_usage", lambda *_args, **_kwargs: billing,
+        )
+        monkeypatch.setattr(
+            budget_mod, "record_model_usage",
+            lambda **kwargs: settlements.append(kwargs),
+        )
         monkeypatch.setattr(store_mod, "get_llm_usage_store",
                             lambda: SimpleNamespace(record=recorded.append))
 
@@ -467,11 +496,93 @@ class TestDashScopeUsageRecording:
         assert evt["prompt_tokens"] == 100
         assert evt["completion_tokens"] == 50
         assert evt["total_tokens"] == 150
+        assert evt["cost_status"] == "estimated"
+        assert evt["billed_cost_cny"] == 0.007
+        assert evt["cost_usd"] == 0.001
         assert evt["model"] == rag_cfg.RAG_OCR_DASHSCOPE_MODEL
         assert evt["run_id"] == "run-ocr"
         assert evt["step_id"] == "step-ocr"
         assert evt["role"] == "ocr"
         assert evt["stage"] == "ocr"
+        assert settlements == [{
+            "prompt_tokens": 100,
+            "completion_tokens": 50,
+            "total_tokens": 150,
+            "cost": Decimal("0.007"),
+            "review_reason": "",
+        }]
+
+    def test_request_budget_blocks_ocr_before_provider_call(self, monkeypatch):
+        """请求已达 Token 上限时，OCR 在发云端请求前就被预算拦截。"""
+        from backend.infra.llm import budget as budget_mod
+        from backend.infra.llm.budget import (
+            RequestBudget,
+            RequestBudgetExceeded,
+            RequestBudgetLimits,
+        )
+
+        provider_calls = []
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = SimpleNamespace(completions=SimpleNamespace(
+                    create=lambda **_request: provider_calls.append("called"),
+                ))
+
+        monkeypatch.setattr(
+            ocr_mod,
+            "_resolve_ocr_runtime_config",
+            lambda: {
+                "provider": "dashscope",
+                "model": rag_cfg.RAG_OCR_DASHSCOPE_MODEL,
+                "api_key": "sk-test",
+                "base_url": "https://db.example/v1",
+            },
+        )
+        monkeypatch.setitem(
+            sys.modules, "openai", types.SimpleNamespace(OpenAI=FakeOpenAI),
+        )
+        budget = RequestBudget(
+            RequestBudgetLimits(max_total_tokens=100),
+            mode="enforce",
+            total_tokens=100,
+        )
+        monkeypatch.setattr(budget_mod, "current_request_budget", lambda: budget)
+
+        with pytest.raises(RequestBudgetExceeded, match="request_tokens"):
+            ocr_mod._ocr_image_dashscope(b"\\x89PNG-fake")
+
+        assert provider_calls == []
+
+    def test_missing_provider_usage_is_not_recorded_as_free(self, monkeypatch):
+        """供应商未回传用量时标为未核算，并把预占送去对账。"""
+        import backend.observability.llm_usage_store as store_mod
+        import backend.infra.llm.budget as budget_mod
+        import backend.infra.llm.pricing as pricing_mod
+
+        recorded = []
+        settlements = []
+        monkeypatch.setattr(
+            store_mod, "get_llm_usage_store",
+            lambda: SimpleNamespace(record=recorded.append),
+        )
+        monkeypatch.setattr(
+            pricing_mod, "price_usage",
+            lambda *_args, **_kwargs: pytest.fail("缺少用量时不能计价"),
+        )
+        monkeypatch.setattr(
+            budget_mod, "record_model_usage",
+            lambda **kwargs: settlements.append(kwargs),
+        )
+
+        ocr_mod._record_ocr_usage(
+            "qwen-vl-max", 0, 0, 1, usage_available=False,
+        )
+
+        assert recorded[0]["cost_status"] == "unpriced"
+        assert recorded[0]["usage_source"] == "unavailable"
+        assert settlements[0]["cost"] is None
+        assert settlements[0]["review_reason"] == "ocr_usage_or_price_unavailable"
 
     def test_record_failure_soft(self, monkeypatch):
         """用量记录失败不影响 OCR 主流程。"""

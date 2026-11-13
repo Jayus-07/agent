@@ -16,6 +16,8 @@ interface PendingDoc {
   summary?: string
   quality_score?: number
   updated_at: string
+  orphaned_kb?: boolean
+  orphan_reason?: string
 }
 
 export default function PendingReviewPanel() {
@@ -59,11 +61,14 @@ export default function PendingReviewPanel() {
     }
   }
 
-  const handleReject = async (doc_id: string) => {
-    if (!confirm(`确认拒绝文档 ${doc_id}？此操作将软删除文档。`)) return
-    setActing(doc_id)
+  const handleReject = async (doc: PendingDoc) => {
+    const message = doc.orphaned_kb
+      ? `知识库异常：${doc.orphan_reason || '知识库不可用'}。确认归档 ${doc.doc_id}？系统会清理索引残留并把登记标为已删除。`
+      : `确认拒绝文档 ${doc.doc_id}？此操作将软删除文档。`
+    if (!confirm(message)) return
+    setActing(doc.doc_id)
     try {
-      const res = await knowledgeService.rejectPendingDoc(doc_id)
+      const res = await knowledgeService.rejectPendingDoc(doc.doc_id)
       if (res.ok) {
         if (res.warnings?.length) alert('拒绝完成，但有警告：' + res.warnings.join('；'))
         await refresh()
@@ -106,8 +111,8 @@ export default function PendingReviewPanel() {
         {!loading && items.length === 0 && (
           <div className="text-center text-text-muted py-12 bg-surface-base rounded-xl border border-border-subtle">
             <CheckCircle2 className="mx-auto mb-3 text-emerald-500" size={32} />
-            <div>无待审核文档</div>
-            <div className="text-xs mt-1">所有文档已通过自动标注</div>
+            <div>当前可管理范围内没有待复核文档</div>
+            <div className="text-xs mt-1">没有待复核记录不等于所有资料都通过了质量检查</div>
           </div>
         )}
 
@@ -129,6 +134,11 @@ export default function PendingReviewPanel() {
                         [{doc.kb_id}]
                       </span>
                     </div>
+                    {doc.orphaned_kb && (
+                      <div className="mb-2 rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+                        孤立登记：{doc.orphan_reason || '知识库不可用'}。只能归档，不能批准为可检索资料。
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
                       <div>
                         <span className="text-text-muted">doc_type: </span>
@@ -160,21 +170,23 @@ export default function PendingReviewPanel() {
                     </div>
                   </div>
                   <div className="flex flex-col gap-2 shrink-0">
+                    {!doc.orphaned_kb && (
+                      <button
+                        onClick={() => handleApprove(doc.doc_id)}
+                        disabled={acting === doc.doc_id}
+                        className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-xs hover:bg-emerald-500/20 disabled:opacity-50"
+                      >
+                        <CheckCircle2 size={14} />
+                        批准
+                      </button>
+                    )}
                     <button
-                      onClick={() => handleApprove(doc.doc_id)}
-                      disabled={acting === doc.doc_id}
-                      className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-500 text-xs hover:bg-emerald-500/20 disabled:opacity-50"
-                    >
-                      <CheckCircle2 size={14} />
-                      批准
-                    </button>
-                    <button
-                      onClick={() => handleReject(doc.doc_id)}
+                      onClick={() => handleReject(doc)}
                       disabled={acting === doc.doc_id}
                       className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500/10 text-red-500 text-xs hover:bg-red-500/20 disabled:opacity-50"
                     >
                       <XCircle size={14} />
-                      拒绝
+                      {doc.orphaned_kb ? '归档孤立记录' : '拒绝'}
                     </button>
                   </div>
                 </div>

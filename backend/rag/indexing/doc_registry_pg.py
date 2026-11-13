@@ -372,6 +372,7 @@ class PostgresDocumentRegistry(DocumentRegistry):
         kb_scope: list[str] | None = None,
         visible_scopes: list[str] | None = None,
         tenant_id: str | None = None,
+        quality_status_filter: str = "",
     ) -> dict:
         """kb_scope/visible_scopes（2026-10-01 权限收口）：授权范围下推到 SQL，
         行集与 COUNT(total) 同条件——列表页不允许「总数全库、行集截断」的
@@ -433,6 +434,10 @@ class PostgresDocumentRegistry(DocumentRegistry):
         if quality_min > 0:
             conditions.append("quality_score >= %s")
             params.append(quality_min)
+
+        if quality_status_filter.strip():
+            conditions.append("quality_status = %s")
+            params.append(quality_status_filter.strip())
 
         sort_col = "updated_at" if sort_by not in ("confidence", "quality_score", "created_at", "updated_at") else sort_by
 

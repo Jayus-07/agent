@@ -30,6 +30,7 @@ Trace
 - `memory`
 - `agent`
 - `http`
+- `workflow`：用于评测答案生成、质量评分和结果整理等有边界的处理阶段。
 
 强约束以 `backend/observability/tracer.py` 的 `SpanKind` 枚举为准；`type` 为自由字符串
 仅做历史数据兼容。Planner/Reporter 等编排步骤现为 `type="agent"` 的具名 span
@@ -97,6 +98,11 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
   `full`（默认，不脱敏）/ `masked`（PII 掩码）/ `summary`（掩码 + 剥离 span body）。
 - 注意：默认 `full` 档下读取路径不做脱敏，因此**写入侧不得落用户原文**这一约束
   仍然成立——SQL 的两处含 `question[:500]` 的埋点继续不纳入集成树。
+
+### Trace 留存与采样
+
+- `TRACE_SAMPLING_RATE` 控制普通成功 Trace 的留存比例；错误 Trace 始终保留。
+- `workflow_name="rag_eval"` 的评测 Trace 始终保留，不受成功 Trace 采样率影响。V2 逐题结果保存 Trace ID 并提供详情链接，因此不能抽样丢弃被结果引用的评测 Trace。
 
 ## 当前实现（更正）
 

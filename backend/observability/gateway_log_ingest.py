@@ -96,6 +96,14 @@ def _row_from_entry(entry_id: str, fields: dict) -> tuple | None:
     )
 
 
+def _checkpoint_consumed(redis, last_id: str) -> None:
+    """先保存已入库位点，再裁掉位点之前的网关日志队列副本。"""
+    redis.set(_LAST_ID_KEY, last_id)
+    # 网关日志已写入带 entry_id 唯一约束的 PostgreSQL 表，Redis 只需保留
+    # 尚未消费的部分；approximate trim 避免为小批次逐条整理 Stream 节点。
+    redis.xtrim(_STREAM_KEY, minid=last_id, approximate=True)
+
+
 # ═══ 落库 ═══════════════════════════════════════════════════
 
 def _get_conn():
@@ -182,15 +190,18 @@ def _run() -> None:
 
             resp = r.xread({_STREAM_KEY: last_id}, count=_BATCH, block=_BLOCK_MS)
             rows: list[tuple] = []
+            consumed = False
             for _stream, entries in resp or []:
                 for entry_id, fields in entries:
+                    consumed = True
                     row = _row_from_entry(entry_id, fields)
                     if row is not None:
                         rows.append(row)
                     last_id = entry_id
-            if rows:
-                _insert_many(rows)
-                r.set(_LAST_ID_KEY, last_id)
+            if consumed:
+                if rows:
+                    _insert_many(rows)
+                _checkpoint_consumed(r, last_id)
 
             if time.monotonic() >= next_cleanup:
                 _cleanup()

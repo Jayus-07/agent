@@ -191,6 +191,8 @@ def test_coverage_audit_detects_missing_table_cell_and_row():
     report = coverage_audit(ast, chunks)
     assert report["uncovered_count"] == 1
     assert report["table_cells_uncovered"] >= 1
+    missing_rows = report["uncovered_samples"][0]["missing_row_samples"]
+    assert missing_rows[0]["cells"] == ["B002", "梨", "200"]
 
 
 def test_sampled_coverage_never_claims_full_document_percentage():

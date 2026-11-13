@@ -1319,7 +1319,12 @@ def count_duplicate_queries(tenant_id: str, dataset_key: str, queries: list[str]
 
 
 def list_candidates(
-    tenant_id: str, *, review_status: str | None = None, limit: int = 50, offset: int = 0
+    tenant_id: str,
+    *,
+    review_status: str | None = None,
+    dataset_key: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
 ) -> list[dict[str, Any]]:
     tenant_id = _tenant(tenant_id)
     with _transaction(tenant_id) as (_conn, cur):
@@ -1329,13 +1334,57 @@ def list_candidates(
                    revision, duplicate_key, promoted_case_id, created_by, updated_by,
                    created_at, updated_at
             FROM evaluation_v2.eval_candidates
-            WHERE tenant_id = %s AND (%s::text IS NULL OR review_status = %s)
+            WHERE tenant_id = %s
+              AND (%s::text IS NULL OR review_status = %s)
+              AND (
+                  %s::text IS NULL
+                  OR COALESCE(
+                      NULLIF(payload_json #>> '{metadata,dataset_key}', ''),
+                      payload_json #>> '{source_ref,dataset_key}'
+                  ) = %s
+              )
             ORDER BY created_at DESC, candidate_id
             LIMIT %s OFFSET %s
             """,
-            (tenant_id, review_status, review_status, limit, offset),
+            (
+                tenant_id, review_status, review_status,
+                dataset_key, dataset_key, limit, offset,
+            ),
         )
         return [_dict(row) for row in cur.fetchall()]
+
+
+def list_candidate_annotations(
+    tenant_id: str, candidate_id: str
+) -> list[dict[str, Any]]:
+    """按租户读取候选的追加式审核记录。"""
+    tenant_id = _tenant(tenant_id)
+    with _transaction(tenant_id) as (_conn, cur):
+        cur.execute(
+            """
+            SELECT a.annotation_id, a.candidate_revision, a.reviewer_id, a.verdict,
+                   a.changed_fields, a.evidence_json, a.rationale, a.created_at,
+                   c.payload_json->'proposed_evidence' AS candidate_evidence_json
+            FROM evaluation_v2.eval_annotations AS a
+            JOIN evaluation_v2.eval_candidates AS c
+              ON c.tenant_id = a.tenant_id AND c.candidate_id = a.candidate_id
+            WHERE a.tenant_id = %s AND a.candidate_id = %s
+            ORDER BY a.candidate_revision DESC, a.created_at DESC, a.annotation_id DESC
+            """,
+            (tenant_id, candidate_id),
+        )
+        records = [_dict(row) for row in cur.fetchall()]
+        for record in records:
+            candidate_evidence = record.pop("candidate_evidence_json", None)
+            evidence = record.get("evidence_json")
+            if isinstance(evidence, str):
+                evidence = json.loads(evidence)
+            if record.get("verdict") == "rejected" and not evidence:
+                if isinstance(candidate_evidence, str):
+                    candidate_evidence = json.loads(candidate_evidence)
+                evidence = candidate_evidence
+            record["evidence_json"] = evidence if isinstance(evidence, list) else []
+        return records
 
 
 def review_candidate(
@@ -1348,6 +1397,8 @@ def review_candidate(
     rationale: str,
     expected: dict[str, Any] | None = None,
     evidence: list[dict[str, Any]] | None = None,
+    fact_evidence_bindings: list[dict[str, Any]] | None = None,
+    quality_checks: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     tenant_id = _tenant(tenant_id)
     if not rationale.strip():
@@ -1477,6 +1528,10 @@ def review_candidate(
                 "evidence": evidence,
                 "case_revision": promoted_case_revision,
             }
+            if fact_evidence_bindings is not None:
+                annotation_fields["fact_evidence_bindings"] = fact_evidence_bindings
+            if quality_checks is not None:
+                annotation_fields["quality_checks"] = quality_checks
         elif verdict not in {"rejected", "needs_changes"}:
             raise ValueError("审核结论无效")
 

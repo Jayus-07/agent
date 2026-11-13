@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any, Literal
 
 from backend.shared.logger import logger
@@ -88,6 +89,94 @@ def _failure(doc_id: str, warnings: list[str]) -> dict[str, Any]:
         "doc_id": doc_id,
         "error": "文档清理未完成，仍保留待复核状态",
         "warnings": warnings,
+    }
+
+
+def _orphan_artifact_residue(doc_id: str) -> list[str]:
+    """不启动 embedding pipeline，直接核对孤立记录是否仍有索引残留。"""
+    warnings: list[str] = []
+    try:
+        chunk_count = _get_chunk_store().count_by_doc_id(doc_id)
+        if chunk_count:
+            warnings.append(f"chunk_store 残留 {chunk_count} 条")
+    except Exception as exc:  # noqa: BLE001 — 无法核验必须阻止归档
+        warnings.append(f"chunk_store 核验失败（{type(exc).__name__}）")
+
+    try:
+        import psycopg2
+
+        from backend.config.database import VECTOR_PG_CONFIG, VECTOR_PG_TABLE_PREFIX
+
+        table = f"{VECTOR_PG_TABLE_PREFIX}rag_vectors"
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table):
+            raise ValueError("向量表名无效")
+        conn = psycopg2.connect(**VECTOR_PG_CONFIG)
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"SELECT collection, count(*) FROM {table} "
+                    "WHERE doc_id = %s GROUP BY collection",
+                    (doc_id,),
+                )
+                vector_rows = cursor.fetchall()
+        finally:
+            conn.close()
+        if vector_rows:
+            total = sum(int(row[1]) for row in vector_rows)
+            warnings.append(f"pgvector 残留 {total} 条")
+    except Exception as exc:  # noqa: BLE001 — 无法核验必须阻止归档
+        warnings.append(f"pgvector 核验失败（{type(exc).__name__}）")
+
+    try:
+        from backend.rag.retrieval.bm25_store import BM25Store
+
+        store = BM25Store()
+        has_snapshot = any(path.exists() for path in (
+            store._bundle_path, store._docs_path,
+        ))
+        if has_snapshot:
+            docs = store.load_docs_strict()
+            bm25_count = sum(
+                1 for doc in docs
+                if str((doc.metadata or {}).get("doc_id") or "") == doc_id
+            )
+            if bm25_count:
+                warnings.append(f"BM25 残留 {bm25_count} 条")
+    except Exception as exc:  # noqa: BLE001 — 无法核验必须阻止归档
+        warnings.append(f"BM25 核验失败（{type(exc).__name__}）")
+    return warnings
+
+
+def archive_orphan_pending_doc(doc_id: str, *, registry: Any) -> dict[str, Any]:
+    """仅在源文件与所有索引存储均确认不存在时归档孤立待复核登记。"""
+    doc = registry.get_by_doc_id(doc_id)
+    if not doc:
+        return {"ok": False, "doc_id": doc_id, "error": "文档不存在"}
+    if doc.get("status") != "pending_review":
+        return {
+            "ok": False,
+            "doc_id": doc_id,
+            "error": f"文档状态为 {doc.get('status')}，不是 pending_review",
+        }
+    file_path = str(doc.get("file_path") or "")
+    if file_path and os.path.lexists(file_path):
+        return _failure(doc_id, ["源文件仍存在，不能按孤立登记直接归档"])
+
+    warnings = _orphan_artifact_residue(doc_id)
+    if warnings:
+        return _failure(doc_id, warnings)
+
+    updated = registry.update_status_by_doc_id(doc_id, "deleted")
+    if updated == 0:
+        return _failure(doc_id, ["状态更新失败（可能并发）"])
+    _invalidate_review_cache()
+    _invalidate_answer_cache(str(doc.get("kb_id") or ""))
+    return {
+        "ok": True,
+        "doc_id": doc_id,
+        "new_status": "deleted",
+        "archive_reason": "源文件、chunk_store、pgvector、BM25 均无残留",
+        "warnings": None,
     }
 
 

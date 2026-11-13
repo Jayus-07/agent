@@ -16,6 +16,7 @@ class _FakeRedis:
         self.acked = []
         self.deleted = []
         self.groups = []
+        self.readers = []
 
     def xgroup_create(self, stream, group, id="0-0", mkstream=False):
         self.groups.append((stream, group, id, mkstream))
@@ -31,6 +32,7 @@ class _FakeRedis:
         return "0-0", list(self.pending), []
 
     def xreadgroup(self, group, consumer, streams, count=None, block=0):
+        self.readers.append((group, consumer, streams, count, block))
         if not self.fresh:
             return []
         values = list(self.fresh)
@@ -118,6 +120,20 @@ def test_enqueue_event_keeps_stable_event_id(monkeypatch):
     record = json.loads(redis.added[0][1]["event"])
     assert record["event_id"] == "event-1"
     assert record["payload"]["conversation_id"] == "conv-1"
+
+
+def test_default_drain_reuses_stable_consumer_name(monkeypatch):
+    redis = _FakeRedis()
+    monkeypatch.setattr(event_outbox, "_redis", lambda: redis, raising=False)
+
+    for _ in range(2):
+        result = event_outbox.drain_pending_events()
+        assert result == {"ok": True, "processed": 0, "failed": 0}
+
+    assert [reader[1] for reader in redis.readers] == [
+        "cs-event-compensator",
+        "cs-event-compensator",
+    ]
 
 
 def test_drain_acks_only_after_postgres_commit(monkeypatch):

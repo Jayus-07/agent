@@ -219,6 +219,38 @@ class PostgresTraceStore(TraceStore):
             logger.warning(f"[TraceStore-PG] 读取失败 {trace_id}: {e}")
         return None
 
+    def latest_trace_ids_by_upload(
+        self, upload_ids: list[str], tenant_id: str,
+    ) -> dict[str, str]:
+        """按上传任务标签回查知识索引 Trace，只返回当前租户的 Trace ID。"""
+        wanted = list(dict.fromkeys(str(item).strip() for item in upload_ids if item))
+        tenant = str(tenant_id or "").strip()
+        if not wanted or not tenant:
+            return {}
+        try:
+            with self._lock, self._conn() as conn:
+                rows = self._exec(
+                    conn,
+                    f"""SELECT trace_id,
+                               data::jsonb #>> '{{tags,upload_id}}' AS upload_id
+                        FROM {self._table}
+                        WHERE workflow_name = %s
+                          AND data::jsonb #>> '{{tags,tenant_id}}' = %s
+                          AND data::jsonb #>> '{{tags,upload_id}}' = ANY(%s)
+                        ORDER BY created_at DESC""",
+                    ("knowledge_index", tenant, wanted),
+                ).fetchall()
+            result: dict[str, str] = {}
+            for row in rows:
+                upload_id = str(row.get("upload_id") or "")
+                trace_id = str(row.get("trace_id") or "")
+                if upload_id in wanted and trace_id:
+                    result.setdefault(upload_id, trace_id)
+            return result
+        except Exception as e:
+            logger.warning("[TraceStore-PG] 上传 Trace 回查失败: %s", e)
+            return {}
+
     def list_children(self, parent_id: str, limit: int = 50,
                       *, tenant_id: str | None = None) -> list[dict]:
         """按既有 parent_id 列查询子 Trace，供详情页恢复跨服务 Trace 关系。

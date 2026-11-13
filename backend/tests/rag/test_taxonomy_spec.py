@@ -90,3 +90,19 @@ def test_travel_filename_v9_set_classifies_thirty_real_documents_as_travel_guide
         for name in filenames
     ]
     assert actual == ["travel_guide"] * len(filenames)
+
+
+def test_gulangyu_history_document_is_classified_as_travel():
+    from backend.rag.preprocessing.metadata import (
+        classify_doc_type,
+        detect_business_domain,
+    )
+
+    filename = "厦门-鼓浪屿历史背景.md"
+    source_text = (
+        "联合国教科文组织将鼓浪屿描述为位于九龙江口、面向厦门市的一座小岛。"
+        "厦门于1843年开辟为通商口岸，鼓浪屿于1903年成为国际居留地。"
+    )
+
+    assert classify_doc_type(source_text, filename=filename) == "travel_guide"
+    assert detect_business_domain(source_text)[0] == "travel"

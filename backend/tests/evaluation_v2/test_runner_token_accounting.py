@@ -35,6 +35,21 @@ def test_case_result_persists_answer_generation_token_usage():
     assert payload["artifact_uri"] == "evaluation-run:run-1"
 
 
+def test_case_result_persists_trace_id_from_rag_actual_shape():
+    result = SimpleNamespace(
+        actual={"trace": {"trace_id": "rag-trace-1"}},
+        metrics={},
+        case_id="d21af908-53ce-4a8e-8eae-5391a7c7416a",
+        status="fail",
+        error_stage=None,
+        duration_ms=250,
+    )
+
+    payload = _case_result_payload(result, "evaluation-run:run-1")
+
+    assert payload["trace_id"] == "rag-trace-1"
+
+
 def test_case_result_does_not_fabricate_token_usage_when_trace_is_missing_or_invalid():
     for trace in (
         None,

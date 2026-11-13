@@ -146,7 +146,8 @@ it('运行记录进入详情页面，单条用例查看打开可关闭的右侧�
   (globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
   const run = {
     run_id: 'run-detail-1', suite_version_id: 'suite-1', suite_name: '客服基线', suite_key: 'cs-baseline', suite_version: '2',
-    job_status: 'completed', total_cases: 1, completed_cases: 1, passed_cases: 0, evaluation_mode: 'semantic',
+    job_status: 'completed', total_cases: 1, completed_cases: 1, passed_cases: 0, evaluation_mode: null,
+    snapshot_json: { evaluation_mode: 'semantic' },
     cost_amount: '0.01', cost_currency: 'USD', started_at: '2026-11-12T01:00:00Z', finished_at: '2026-11-12T01:00:03Z',
   } as Awaited<ReturnType<typeof evaluationService.listV2Runs>>[number]
   vi.spyOn(evaluationService, 'listV2Runs').mockResolvedValue([run])
@@ -160,8 +161,12 @@ it('运行记录进入详情页面，单条用例查看打开可关闭的右侧�
     result: {
       status: 'fail',
       expected: { query: '退款多久到账？', reference_answer: '3–7 个工作日', evidence: [{ doc_id: 'refund-policy', quote: '退款处理需要 3–7 个工作日。' }] },
-      actual: { generated_answer: '两个工作日', details: [{ title: '退款规则', source: 'refund-policy.md', snippet: '退款处理需要 3–7 个工作日。', rerank_score: 0.91 }] },
-      metrics: { answer_quality: 0.4, 'recall@5': 0.5 },
+      actual: {
+        generated_answer: '两个工作日',
+        pipeline: { query_type: 'multi_hop_specific' },
+        details: [{ title: '退款规则', source: 'refund-policy.md', snippet: '退款处理需要 3–7 个工作日。', rerank_score: 0.91 }],
+      },
+      metrics: { answer_quality: 0.4, 'recall@5': 0.5, multi_hop_success: 0.5 },
       duration_ms: 230,
     },
     trace_id: 'trace-case-1', latency_ms: 230, cost_amount: '0.01', cost_currency: 'USD', cost_status: 'available',
@@ -181,6 +186,7 @@ it('运行记录进入详情页面，单条用例查看打开可关闭的右侧�
     await act(async () => { openRun!.click() })
     await flushQueries()
     expect(container.textContent).toContain('运行环境指纹')
+    expect(container.textContent).toContain('运行方式在线自研')
     const openCase = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.trim() === '查看')
     expect(openCase).toBeDefined()
     await act(async () => { openCase!.click() })
@@ -189,12 +195,15 @@ it('运行记录进入详情页面，单条用例查看打开可关闭的右侧�
     expect(drawer).not.toBeNull()
     expect(drawer?.textContent).toContain('退款多久到账？')
     expect(drawer?.textContent).toContain('两个工作日')
+    expect(drawer?.textContent).toContain('RAG 题型：多跳具体')
     expect(drawer?.textContent).toContain('退款处理需要 3–7 个工作日。')
     expect(drawer?.textContent).toContain('检索结果与命中证据')
     expect(drawer?.textContent).toContain('检索质量评分')
     expect(drawer?.textContent).toContain('答案质量评分')
     expect(drawer?.textContent).toContain('answer_quality')
     expect(drawer?.textContent).toContain('recall@5')
+    expect(drawer?.textContent).toContain('multi_hop_success')
+    expect(drawer?.textContent).toContain('0.5000')
     expect(drawer?.textContent).toContain('标准证据')
     expect(drawer?.textContent).toContain('trace-case-1')
 

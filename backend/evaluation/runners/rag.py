@@ -18,7 +18,9 @@ from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+from backend.evaluation.dataset.query_types import MULTI_HOP_QUERY_TYPES
 from backend.evaluation.metrics import (
     answer_correctness_typed,
     context_noise_rate,
@@ -42,7 +44,6 @@ from backend.evaluation.runners._common import (
     get_full_retriever,
     init_rag_pipeline,
     match_by_snippet,
-    normalize_snippet_text,
 )
 from backend.shared.jsonable import safe_jsonable as _safe_jsonable
 from backend.shared.logger import logger
@@ -51,6 +52,164 @@ _ANSWERS_FILE: Path | None = None
 
 # Stage1 doc 级探针默认 k；运行时可通过 stage1_probe_k 覆盖，避免固定值掩盖 scope 配置。
 _DEFAULT_STAGE1_PROBE_K = 5
+
+
+def _multi_hop_success(
+    query_type: str,
+    *,
+    details: list[dict],
+    expected_docs: list[str],
+    expected_chunks: set[str],
+    expected_snippets: list[str],
+    actual_docs: list[str],
+) -> float | None:
+    """按审核过的证据片段计算多跳覆盖；旧题型仍可回退到文档/块级口径。"""
+    if query_type not in MULTI_HOP_QUERY_TYPES | {"multi_doc", "reasoning"}:
+        return None
+    if expected_snippets:
+        return match_by_snippet(details, expected_snippets)[1]
+    if expected_chunks:
+        actual_chunks = {str(item.get("chunk_id", "")) for item in details}
+        return len(actual_chunks & expected_chunks) / len(expected_chunks)
+    if expected_docs:
+        return len(set(actual_docs) & set(expected_docs)) / len(set(expected_docs))
+    return None
+
+
+def _finish_eval_trace(
+    trace: Any,
+    *,
+    answer: str,
+    total_ms: int,
+    error_stage: str = "",
+    model: str = "",
+    provider: str = "",
+) -> None:
+    """收尾并持久化单条 RAG 评测 Trace；Tracing 故障不改变评测结果。"""
+    if trace is None:
+        return
+
+    from backend.observability.tracer import SpanKind, trace_collector
+
+    if error_stage:
+        try:
+            error_span = trace_collector.start_span(
+                "rag_eval_error",
+                name="RAG 评测执行异常",
+                type="workflow",
+                kind=SpanKind.WORKFLOW.value,
+                input={"error_stage": error_stage},
+            )
+            trace_collector.end_span(
+                error_span,
+                output={"error_stage": error_stage},
+                status="error",
+            )
+        except Exception:
+            logger.warning("RAG 评测错误 Trace 记录失败", exc_info=True)
+
+    try:
+        trace_collector.finish(
+            trace,
+            answer=answer,
+            total_ms=total_ms,
+            model=model,
+            provider=provider,
+        )
+    except Exception:
+        logger.warning("RAG 评测 Trace 持久化失败", exc_info=True)
+
+
+def _start_eval_processing_span(trace_collector: Any, case_id: str) -> Any:
+    """标记检索完成后的答案生成、质量评分和结果整理区间。"""
+    from backend.observability.tracer import SpanKind
+
+    return trace_collector.start_span(
+        "rag_eval_processing",
+        name="答案生成与评测判分",
+        type="workflow",
+        kind=SpanKind.EVALUATION.value,
+        input={"case_id": case_id},
+    )
+
+
+def _finish_eval_processing_span(
+    trace_collector: Any,
+    span: Any,
+    *,
+    error_stage: str = "",
+) -> None:
+    """关闭评测处理 Span；Trace 记录故障不影响用例结果。"""
+    if span is None:
+        return
+    try:
+        trace_collector.end_span(
+            span,
+            output={"error_stage": error_stage} if error_stage else {},
+            status="error" if error_stage else "success",
+        )
+    except Exception:
+        logger.warning("RAG 评测处理 Span 收尾失败", exc_info=True)
+
+
+def _serialize_eval_trace_spans(trace: Any, *, full_trace: bool) -> list[dict]:
+    """序列化已完成的 Trace Span；默认逐题结果不保留输入输出正文。"""
+    spans = [
+        {
+            "span_id": span.span_id,
+            "parent_id": span.parent_id,
+            "name": span.name,
+            "type": span.type,
+            "kind": span.kind,
+            "status": span.status,
+            "duration_ms": span.duration_ms,
+            "sequence": span.sequence,
+            "metrics": dict(span.metrics or {}),
+            "input": _safe_jsonable(span.input),
+            "output": _safe_jsonable(span.output),
+            "events": list(span.events or []),
+            "errors": list(span.errors or []),
+        }
+        for span in (trace.spans or [])
+    ]
+    if full_trace:
+        return spans
+    return [
+        {
+            key: value
+            for key, value in span.items()
+            if key not in ("input", "output", "events", "errors")
+        }
+        for span in spans
+    ]
+
+
+def _sync_eval_trace_result(
+    trace: Any,
+    result_holder: list[EvalResult],
+    *,
+    full_trace: bool,
+) -> None:
+    """Trace 收尾后刷新逐题结果里的 Span 摘要，避免只保存检索阶段快照。"""
+    if trace is None or not result_holder:
+        return
+    try:
+        actual = result_holder[-1].actual
+        if not isinstance(actual, dict):
+            return
+        summary = actual.get("trace")
+        if not isinstance(summary, dict):
+            summary = {}
+            actual["trace"] = summary
+        spans = _serialize_eval_trace_spans(trace, full_trace=full_trace)
+        summary.update({
+            "trace_id": trace.id,
+            "total_spans": len(spans),
+            "total_trace_ms": sum(span["duration_ms"] for span in spans),
+            "spans": spans,
+        })
+    except Exception:
+        logger.warning("RAG 逐题 Trace 摘要刷新失败", exc_info=True)
 
 
 def _submit_with_context(executor, fn, /, *args, **kwargs):
@@ -258,6 +417,15 @@ def _append_result_checkpoint(path: Path, result: EvalResult) -> None:
         logger.debug("[RAG eval] checkpoint 写入失败（忽略）", exc_info=True)
 
 
+def _checkpoint_case_result(path: Path, result_holder: list[EvalResult]) -> None:
+    """只保存当前用例已完成的结果，不读取外层尚未收集的运行列表。"""
+    if not result_holder:
+        return
+    result = result_holder[-1]
+    if result.status != "error":
+        _append_result_checkpoint(path, result)
+
+
 def _reset_jsonl(path: Path) -> None:
     """清空一个 jsonl 文件（断点续跑的「从头开始」语义）。
 
@@ -394,6 +562,9 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                                   metrics={"permission_leak": 0.0}), None
             t0 = time.time()
             trace = None
+            processing_span = None
+            trace_error_stage = ""
+            _generated_answer = ""
             try:
                 kb_id = case.metadata.get("kb_id", "default")
                 department = case.metadata.get("department") or ""
@@ -518,31 +689,24 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         logger.debug("trace root_span end failed for %s", case.id, exc_info=True)
 
                 # === 捕获 trace spans ===
-                trace_spans = []
-                for sp in (trace.spans or []):
-                    trace_spans.append({
-                        "span_id": sp.span_id,
-                        "parent_id": sp.parent_id,
-                        "name": sp.name,
-                        "type": sp.type,
-                        "kind": sp.kind,
-                        "status": sp.status,
-                        "duration_ms": sp.duration_ms,
-                        "sequence": sp.sequence,
-                        "metrics": dict(sp.metrics or {}),
-                        "input": _safe_jsonable(sp.input),
-                        "output": _safe_jsonable(sp.output),
-                        "events": list(sp.events or []),
-                        "errors": list(sp.errors or []),
-                    })
+                trace_spans = _serialize_eval_trace_spans(
+                    trace,
+                    full_trace=bool(kwargs.get("full_trace", False)),
+                )
                 total_trace_ms = sum(s["duration_ms"] for s in trace_spans)
+
+                # 检索 Span 已收口；后续生成、各类判分和结果整理也需要单独计时。
+                processing_span = _start_eval_processing_span(trace_collector, case.id)
 
                 # === 组装检索轨迹 ===
                 from backend.rag.permissions import (
-                    is_accessible, required_permissions,
+                    is_accessible,
+                    required_permissions,
                 )
                 from backend.rag.versioning import (
-                    candidate_versions, is_version_visible, version_conflict_info,
+                    candidate_versions,
+                    is_version_visible,
+                    version_conflict_info,
                 )
                 actual_doc_strs = []
                 seen = set()
@@ -774,7 +938,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                 # === 生成质量评估（P0 修复：用 generated_answer 而非 retrieved_text）===
                 generation_metrics: dict[str, float] = {}
                 required_facts = case.expected.get("required_facts", [])
-                required_docs = case.expected.get("required_docs", [])
                 requires_citation = case.metadata.get("requires_citation", True)
 
                 if case.metadata.get("generation_eval") or _generated_answer:
@@ -1049,20 +1212,15 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         citation_completeness = len(cited_sources & gt_sources) / len(gt_sources)
 
                 # Multi-hop Success: 多文档/推理类问题的检索成功率
-                multi_hop_success = None
                 query_type = case.metadata.get("query_type", "")
-                is_multi_hop_type = query_type in ("multi_doc", "reasoning")
-                if len(required_docs) >= 2 or (is_multi_hop_type and required_docs):
-                    retrieved_doc_set = set()
-                    for d in details:
-                        canon = d.get("canonical_id", "")
-                        if canon:
-                            retrieved_doc_set.add(canon)
-                        src = d.get("source", "")
-                        if src:
-                            retrieved_doc_set.add(resolver.canonical(src, kb_id, department))
-                    required_set = {resolver.canonical(x, kb_id, department) for x in required_docs}
-                    multi_hop_success = len(retrieved_doc_set & required_set) / len(required_set)
+                multi_hop_success = _multi_hop_success(
+                    query_type,
+                    details=details,
+                    expected_docs=expected_doc_strs,
+                    expected_chunks=expected_chunks,
+                    expected_snippets=expected_snippets,
+                    actual_docs=actual_doc_strs,
+                )
 
                 # === 多策略命中判定 ===
                 actual_chunk_ids = {d["chunk_id"] for d in details if d.get("chunk_id")}
@@ -1187,11 +1345,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                         {k: v for k, v in d.items() if k != "page_content"}
                         for d in details
                     ]
-                    trace_spans = [
-                        {k: v for k, v in sp.items()
-                         if k not in ("input", "output", "events", "errors")}
-                        for sp in trace_spans
-                    ]
 
                 result_holder.append(EvalResult(
                     case_id=case.id, module="rag",
@@ -1270,8 +1423,6 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     },
                     duration_ms=int((time.time() - t0) * 1000),
                 ))
-                if results[-1].status != "error":
-                    _append_result_checkpoint(checkpoint_file, results[-1])
             except Exception as e:
                 # EVD-08：异常多发生在检索/生成段；judge/ragas 段各自有
                 # try 包裹不会到这里。error_stage 供前端徽标与排查定位。
@@ -1283,6 +1434,7 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     _stage = "judge"
                 elif "ollama" in _err_text.lower() or "generate" in _err_text.lower():
                     _stage = "generation"
+                trace_error_stage = _stage
                 result_holder.append(EvalResult(
                     case_id=case.id, module="rag", status="error",
                     expected=case.expected,
@@ -1296,6 +1448,26 @@ def _run_rag(cases: list[TestCase], **kwargs) -> list[EvalResult]:
                     error_msg=_err_text, error_stage=_stage,
                     duration_ms=int((time.time() - t0) * 1000),
                 ))
+            if trace is not None:
+                _finish_eval_processing_span(
+                    trace_collector,
+                    processing_span,
+                    error_stage=trace_error_stage,
+                )
+                _finish_eval_trace(
+                    trace,
+                    answer=_generated_answer,
+                    total_ms=int((time.time() - t0) * 1000),
+                    error_stage=trace_error_stage,
+                    model=str(kwargs.get("model") or ""),
+                    provider=str(kwargs.get("provider") or ""),
+                )
+                _sync_eval_trace_result(
+                    trace,
+                    result_holder,
+                    full_trace=bool(kwargs.get("full_trace", False)),
+                )
+            _checkpoint_case_result(checkpoint_file, result_holder)
         return result_holder[0], (deferred_holder[0] if deferred_holder else None)
 
     def _eval_case(case: TestCase) -> tuple[EvalResult, dict | None]:

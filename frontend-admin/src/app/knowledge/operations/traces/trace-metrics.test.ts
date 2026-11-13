@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { Span } from "@/types/trace";
 import {
-  getLogicalStageSpans, getMetadataPerformanceWarning, getMetadataStageDuration,
-  getQualityScore, getQualityScoreBreakdown, getQualityWarning, groupSpansByType,
+  formatTracePageCount, getLogicalStageSpans, getMetadataPerformanceWarning,
+  getMetadataStageDuration,
+  getQualityScore, getQualityScoreBreakdown, getQualityWarning, getTraceCostDisplay,
+  groupSpansByType,
 } from "./trace-metrics";
 
 function span(
@@ -101,5 +103,26 @@ describe("Trace duration and quality metrics", () => {
       warningCount: null,
       totalCount: null,
     });
+  });
+
+  it("有模型用量但费用金额未登记时显示未核算", () => {
+    expect(getTraceCostDisplay({ costCny: 0, costUsd: 0, totalTokens: 157_987, calls: 131 }))
+      .toEqual({
+        value: "未核算",
+        detail: "已有 131 次调用 / 157,987 Tokens，费用台账未登记金额",
+      });
+  });
+
+  it("有费用台账金额时显示费用，没有用量时提示暂无记录", () => {
+    expect(getTraceCostDisplay({ costCny: 0.25, costUsd: 0, totalTokens: 100, calls: 2 }))
+      .toEqual({ value: "¥0.2500", detail: "费用台账 · 2 次调用" });
+    expect(getTraceCostDisplay({ costCny: 0, costUsd: 0, totalTokens: 0, calls: 0 }))
+      .toEqual({ value: "暂无记录", detail: "Trace 没有模型用量记录" });
+  });
+
+  it("真实页数缺失时不把0页显示成实际0页", () => {
+    expect(formatTracePageCount(0, true)).toBe("历史记录未留存");
+    expect(formatTracePageCount(501, true)).toBe("501");
+    expect(formatTracePageCount(0, false)).toBe("不适用");
   });
 });
