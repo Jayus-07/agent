@@ -81,9 +81,17 @@ export default function SpanGantt({ spans, totalMs, uncoveredMs = 0 }: Props) {
   const { rows, scale, spanEnd } = layout
   const counts = useMemo(() => {
     const c = { llm: 0, ret: 0, tool: 0, total: spans.length }
+    const rerankOperations = new Set(
+      spans.filter((s) => s.type === 'rerank').map((s) => s.id),
+    )
     spans.forEach((s) => {
-      if (s.type === 'llm_call') c.llm += 1
-      else if (s.type === 'retrieval' || s.type === 'rerank') c.ret += 1
+      const role = String(s.metrics?.role ?? s.attributes?.role ?? '').trim().toLowerCase()
+      if (s.type === 'llm_call' && role !== 'rerank' && role !== 'embedding') c.llm += 1
+      else if (
+        s.type === 'retrieval'
+        || s.type === 'rerank'
+        || (role === 'rerank' && !rerankOperations.has(s.parent_id ?? ''))
+      ) c.ret += 1
       else if (s.type === 'tool_call') c.tool += 1
     })
     return c

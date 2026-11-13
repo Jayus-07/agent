@@ -28,8 +28,8 @@ Retry 口径（规格 §七）：
   retryable=True ：provider_timeout / rate_limited / provider_error(临时) /
                    timeout / internal_error（budget 限次）/
                    service_unavailable（依赖未就绪，退避后重投）
-  retryable=False：quota_exhausted / auth_failed / validation_error /
-                   permission_denied / illegal_transition
+  retryable=False：budget_exceeded / quota_exhausted / auth_failed /
+                   validation_error / permission_denied / illegal_transition
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ from backend.shared.logger import logger
 
 #: runtime 错误类型全集（tasks.error_type 列的取值域；异常类名不再落库）
 TASK_ERROR_TYPES = (
+    "budget_exceeded",
     "timeout",
     "provider_timeout",
     "rate_limited",
@@ -70,6 +71,7 @@ _SOURCE_BY_TYPE = {
     "provider_timeout": "provider",
     "rate_limited": "provider",
     "quota_exhausted": "provider",
+    "budget_exceeded": "runtime",
     "auth_failed": "security",
     "provider_error": "provider",
     "validation_error": "validation",
@@ -96,6 +98,35 @@ class TaskErrorClassification:
         return self.retryable
 
 
+def _contains_request_budget_exceeded(exc: BaseException) -> bool:
+    """穿过模型包装器识别确定性的请求预算拒绝。"""
+    try:
+        from backend.infra.llm.budget import RequestBudgetExceeded
+    except ImportError:
+        return False
+
+    pending = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, RequestBudgetExceeded):
+            return True
+        for nested in (current.__cause__, current.__context__):
+            if isinstance(nested, BaseException):
+                pending.append(nested)
+        nested_exceptions = getattr(current, "exceptions", ())
+        if isinstance(nested_exceptions, (tuple, list)):
+            pending.extend(
+                nested
+                for nested in nested_exceptions
+                if isinstance(nested, BaseException)
+            )
+    return False
+
+
 def classify_task_error(exc: BaseException) -> TaskErrorClassification:
     """异常 → 任务运行时分类（纯函数，永不抛错）。
 
@@ -111,6 +142,9 @@ def classify_task_error(exc: BaseException) -> TaskErrorClassification:
         if isinstance(exc, SoftTimeLimitExceeded):
             return TaskErrorClassification(
                 "timeout", True, _SOURCE_BY_TYPE["timeout"])
+        if _contains_request_budget_exceeded(exc):
+            return TaskErrorClassification(
+                "budget_exceeded", False, _SOURCE_BY_TYPE["budget_exceeded"])
         if type(exc).__name__ == "IllegalTaskTransition":
             return TaskErrorClassification(
                 "illegal_transition", False, _SOURCE_BY_TYPE["illegal_transition"])

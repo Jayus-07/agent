@@ -39,8 +39,8 @@ x-build: &build
 # tasks.py（CELERY_*_QUEUE），compose 只声明消费关系，不做业务路由。
 x-worker-base-env: &worker-base-env
   EVAL_RUNS_DATA_DIR: /app/data/eval_runs
-  CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-  CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+  CELERY_BROKER_URL: redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/1
+  CELERY_RESULT_BACKEND: redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/2
   # 控制面（取消/暂停标志、事件 pub/sub 走业务 db0）
   REDIS_ENABLED: "true"
   REDIS_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
@@ -191,9 +191,10 @@ services:
       - AUTH_REDIS_URL=redis://:${AUTH_REDIS_PASSWORD:-${REDIS_PASSWORD:-}}@${AUTH_REDIS_HOST:-auth-redis}:${AUTH_REDIS_PORT:-6379}/0
       # Celery（B1：broker/result 拆到独立 redis-broker 实例——noeviction+AOF，
       # 未 ack 任务消息与结果永不被逐出，修复内存压力下任务丢失）
+      # REDIS_BROKER_PASSWORD 可单独设置；未设置时为兼容旧部署回退 REDIS_PASSWORD。
       # 显式注入容器内地址，优先级高于 .env 的宿主值（与 REDIS_URL 同策略）
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - CELERY_BROKER_URL=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/2
       # 告警触达（B4）：应用级降级告警外推通道（企微/钉钉/飞书机器人或
       # 自建接收端）。.env 设 ALERT_WEBHOOK_URL 即启用（alerts.py 读取）
       - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL:-}
@@ -306,8 +307,8 @@ services:
       # 容器 → 投递恒 Error 111、metadata-shadow-worker 空转。
       # CELERY_RESULT_BACKEND 同理必须覆盖（send_task 的 on_task_call 连
       # result backend，漏了同样 Error 111）。
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - CELERY_BROKER_URL=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/2
       # 向量库唯一实现 = pgvector；env_file 已透传，此处仅显式声明默认值
       - PGDATABASE=agent_memory
       - PGUSER=postgres
@@ -652,8 +653,8 @@ services:
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1
-      - CELERY_RESULT_BACKEND=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/2
+      - CELERY_BROKER_URL=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/1
+      - CELERY_RESULT_BACKEND=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/2
       # 控制面（事件 pub/sub 走业务 db0）
       - REDIS_ENABLED=true
       - REDIS_URL=redis://:${REDIS_PASSWORD:-}@redis:6379/0
@@ -1169,7 +1170,7 @@ services:
     profiles: ["observability"]
     environment:
       - REDIS_ADDR=redis://redis-broker:6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_PASSWORD=${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
     networks:
       - agent-net
     restart: unless-stopped
@@ -1196,7 +1197,7 @@ services:
     image: danihodovic/celery-exporter:latest
     profiles: ["observability"]
     # B1：broker 拆 redis-broker 实例 + 密码
-    command: ["--broker-url=redis://:${REDIS_PASSWORD:-}@redis-broker:6379/1"]
+    command: ["--broker-url=redis://:${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}@redis-broker:6379/1"]
     depends_on:
       redis:
         condition: service_healthy
@@ -1210,7 +1211,8 @@ services:
           cpus: "0.25"
 
   # ── Redis 实例 1：缓存/限流/控制面（db0）──
-  # B1（2026-09-21 审查）：缓存语义保留 allkeys-lru（可逐出）；requirepass
+  # 根配置默认 allkeys-lru；4C8G 覆盖层改用 volatile-lru，避免逐出无 TTL Stream/位点。
+  # requirepass
   # 可选启用（REDIS_PASSWORD 为空 = 不鉴权，与旧版一致）。注意：JWT 吊销
   # 黑名单等安全键历史上也在 db0（写侧归 Java auth-service）——启用密码后
   # Java 侧与 apisix 的 AUTH_REDIS_* 需同步指向本实例并携带密码。
@@ -1302,7 +1304,7 @@ services:
       - --maxmemory-policy
       - noeviction
       - --requirepass
-      - "${REDIS_PASSWORD:-}"
+      - "${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}"
       - --appendonly
       - "yes"
       - --appendfsync
@@ -1313,12 +1315,12 @@ services:
     volumes:
       - redis_broker_data:/data
     healthcheck:
-      test: ["CMD-SHELL", "redis-cli -a \"$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping 2>/dev/null | grep -q PONG || redis-cli ping 2>/dev/null | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
     environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - REDIS_PASSWORD=${REDIS_BROKER_PASSWORD:-${REDIS_PASSWORD:-}}
     networks:
       - agent-net
     restart: unless-stopped

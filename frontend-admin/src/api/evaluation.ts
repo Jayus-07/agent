@@ -211,6 +211,17 @@ export interface EvaluationV2Candidate {
   created_at: string;
 }
 
+export interface EvaluationV2CandidateReviewRecord {
+  annotation_id: string;
+  candidate_revision: number;
+  reviewer_id: string;
+  verdict: 'approved' | 'rejected' | 'needs_changes';
+  changed_fields: Record<string, unknown>;
+  evidence_json: Array<Record<string, unknown>>;
+  rationale: string;
+  created_at: string;
+}
+
 export interface EvaluationV2CaseRevision {
   case_id: string;
   lifecycle_status: 'approved' | 'published';
@@ -310,6 +321,7 @@ export interface EvaluationV2Run {
   env_hash?: string;
   invalid_reason?: string;
   evaluation_mode?: string | null;
+  snapshot_json?: Record<string, unknown> | null;
   source?: string | null;
   prompt_versions?: Record<string, number | string | null> | null;
 }
@@ -749,10 +761,18 @@ export const evaluationService = {
     return request<EvaluationV2DatasetVersion>(`${BASE}/v2/datasets/${encodeURIComponent(datasetId)}/versions`, { method: 'POST', body: payload });
   },
 
-  listV2Candidates(reviewStatus?: string, limit: number = 100): Promise<EvaluationV2Candidate[]> {
+  listV2Candidates(reviewStatus?: string, limit: number = 100, datasetKey?: string, offset: number = 0): Promise<EvaluationV2Candidate[]> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (reviewStatus) params.set('review_status', reviewStatus);
+    if (datasetKey) params.set('dataset_key', datasetKey);
+    if (offset > 0) params.set('offset', String(offset));
     return request<{ items: EvaluationV2Candidate[] }>(`${BASE}/v2/candidates?${params.toString()}`).then(result => result.items);
+  },
+
+  listV2CandidateReviews(candidateId: string): Promise<EvaluationV2CandidateReviewRecord[]> {
+    return request<{ items: EvaluationV2CandidateReviewRecord[] }>(
+      `${BASE}/v2/candidates/${encodeURIComponent(candidateId)}/reviews`,
+    ).then(result => result.items);
   },
 
   previewV2Import(file: File, manifest: EvaluationV2ImportManifest): Promise<EvaluationV2ImportPreview> {
@@ -781,6 +801,8 @@ export const evaluationService = {
     rationale: string;
     expected?: Record<string, unknown>;
     evidence?: EvaluationV2EvidenceClaim[];
+    fact_evidence_bindings?: Array<{ fact_index: number; evidence_indices: number[] }>;
+    quality_checks?: Record<string, boolean>;
   }): Promise<EvaluationV2Candidate> {
     return request<EvaluationV2Candidate>(`${BASE}/v2/candidates/${encodeURIComponent(candidateId)}/review`, { method: 'POST', body: payload });
   },

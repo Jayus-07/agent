@@ -7,7 +7,7 @@ import json
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.routing import APIRoute
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, model_validator
 
 from backend.app.api.deps import require_user_actor
 from backend.app.api.identity import Identity, require_product_identity
@@ -316,7 +316,59 @@ class SynthesisRequest(BaseModel):
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{24}$")
     manifest: assets.Manifest
     count: int = Field(default=5, ge=1, le=5)
+    query_counts: dict[str, StrictInt] | None = Field(default=None, max_length=3)
+    dataset_query_counts: dict[str, StrictInt] | None = Field(default=None, max_length=3)
     request_id: str = Field(pattern=r"^[A-Za-z0-9_-]{8,100}$")
+
+    @model_validator(mode="after")
+    def validate_query_counts(self):
+        if self.query_counts is None:
+            from backend.evaluation.dataset.synthetic import default_query_counts
+
+            self.query_counts = default_query_counts(self.count)
+        allowed = {
+            "single_hop_specific",
+            "multi_hop_abstract",
+            "multi_hop_specific",
+        }
+        if set(self.query_counts) - allowed:
+            raise ValueError("query_counts 只允许 Ragas 支持的三种题型")
+        if any(
+            isinstance(amount, bool) or not 0 <= amount <= 5
+            for amount in self.query_counts.values()
+        ):
+            raise ValueError("query_counts 每类题数必须是 0–5 的整数")
+        if sum(self.query_counts.values()) != self.count:
+            raise ValueError("query_counts 各题型数量之和必须等于 count")
+        if not any(self.query_counts.values()):
+            raise ValueError("至少选择一种 Ragas 题型")
+        if self.dataset_query_counts is None:
+            if not any(self.query_counts.get(key, 0) for key in ("multi_hop_abstract", "multi_hop_specific")):
+                raise ValueError("一个 RAG 生成数据集必须至少计划一种多跳题型")
+            self.dataset_query_counts = dict(self.query_counts)
+
+        if set(self.dataset_query_counts) - allowed:
+            raise ValueError("dataset_query_counts 只允许 Ragas 支持的三种题型")
+        if any(
+            isinstance(amount, bool) or not 0 <= amount <= 20
+            for amount in self.dataset_query_counts.values()
+        ):
+            raise ValueError("dataset_query_counts 每类题数必须是 0–20 的整数")
+        if sum(self.dataset_query_counts.values()) > 20:
+            raise ValueError("完整数据集题型计划不能超过 20 题")
+        if sum(self.dataset_query_counts.values()) < self.count:
+            raise ValueError("完整数据集题数不能少于当前批次题数")
+        if not any(
+            self.dataset_query_counts.get(key, 0)
+            for key in ("multi_hop_abstract", "multi_hop_specific")
+        ):
+            raise ValueError("一个 RAG 生成数据集必须至少计划一种多跳题型")
+        if any(
+            amount > self.dataset_query_counts.get(query_type, 0)
+            for query_type, amount in self.query_counts.items()
+        ):
+            raise ValueError("当前批次题型配额超过完整数据集计划")
+        return self
 
 
 @router.post("/dataset-synthesis", status_code=202)
@@ -340,9 +392,17 @@ async def synthesize_dataset(
             "snapshot_id": body.snapshot_id,
             "manifest": body.manifest.model_dump(),
             "count": body.count,
+            "query_counts": body.query_counts,
+            "dataset_query_counts": body.dataset_query_counts,
             "operation": "synthesize",
             "tenant_id": identity.tenant_id,
         }
+        if payload["query_counts"] is None:
+            from backend.evaluation.dataset.synthetic import default_query_counts
+
+            payload["query_counts"] = default_query_counts(body.count)
+        if payload["dataset_query_counts"] is None:
+            payload["dataset_query_counts"] = payload["query_counts"]
         return await asyncio.to_thread(submit_payload, payload, operator.actor, body.request_id)
     except Exception as exc:
         if isinstance(exc, HTTPException):

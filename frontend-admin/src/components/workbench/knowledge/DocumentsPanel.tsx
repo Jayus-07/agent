@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
-import { useDocuments } from '@/hooks/useKnowledge'
+import { useDocuments, useKnowledgeStats } from '@/hooks/useKnowledge'
 import { knowledgeService } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
@@ -20,11 +20,19 @@ const DEPT_LABELS: Record<string, string> = {
 const DOC_TYPE_CN: Record<string, string> = {
   compliance: '合规', policy: '制度', legal: '法律', financial: '财务',
   faq: 'FAQ', product_spec: '商品规格', sop: '操作流程', listing: '上架', general: '通用',
+  travel_guide: '旅游指南',
 }
 const DOMAIN_CN: Record<string, string> = {
   product: '商品', order: '订单', inventory: '库存', logistics: '物流',
   customer: '客户', supplier: '供应商', marketing: '营销', advertising: '广告',
-  analytics: '数据分析', data: '数据治理', general: '通用',
+  analytics: '数据分析', data: '数据治理', travel: '旅游', general: '通用',
+}
+
+const QUALITY_STATUS_CONFIG: Record<string, { label: string; className: string; title: string }> = {
+  pass: { label: '质量通过', className: 'bg-green-50 text-green-700', title: '当前质量检查通过' },
+  soft_warning: { label: '需复核', className: 'bg-amber-50 text-amber-700', title: '存在质量提醒，建议复核原文和分块' },
+  failed: { label: '质量失败', className: 'bg-red-50 text-red-700', title: '质量门禁失败，文档不应作为合格资料' },
+  unknown: { label: '未核验', className: 'bg-gray-100 text-gray-600', title: '没有可用的质量结论，不能按通过处理' },
 }
 
 const PROCESSING_STAGE_CN: Record<string, string> = {
@@ -63,7 +71,9 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 export default function DocumentsPanel() {
   const router = useRouter()
   const toast = useToast()
-  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh } = useDocuments()
+  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, qualityStatus, setQualityStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh } = useDocuments()
+  const knowledgeStats = useKnowledgeStats()
+  const qualityCounts = knowledgeStats.quality_status_counts ?? {}
   const [uploadOpen, setUploadOpen] = useState(false)
   const [reindexing, setReindexing] = useState<Set<string>>(new Set())
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
@@ -394,6 +404,22 @@ export default function DocumentsPanel() {
           <button onClick={() => setUploadOpen(true)} className="px-4 py-2 text-xs rounded-lg bg-accent text-white hover:bg-accent-hover transition-colors">+ 上传文档</button>
         </div>
 
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mb-4 text-[11px] text-text-muted">
+          <label className="flex items-center gap-2">
+            <span>质量检查</span>
+            <select value={qualityStatus} onChange={e => setQualityStatus(e.target.value)}
+              className="px-2.5 py-1.5 rounded-lg border border-border-subtle bg-surface-base text-text-primary outline-none hover:border-accent/40">
+              <option value="">全部质量状态</option>
+              <option value="unknown">未核验</option>
+              <option value="soft_warning">需复核</option>
+              <option value="failed">质量失败</option>
+              <option value="pass">质量通过</option>
+            </select>
+          </label>
+          <span>当前可见 {knowledgeStats.doc_count ?? 0} 篇：通过 {qualityCounts.pass ?? 0}，需复核 {qualityCounts.soft_warning ?? 0}，失败 {qualityCounts.failed ?? 0}，未核验 {qualityCounts.unknown ?? 0}</span>
+          <span title="停用知识库中的资料不会混入当前活动文档列表，可在知识库管理中打开停用库查看。">停用库资料请到“知识库”页查看</span>
+        </div>
+
         {/* 批量操作条（选中 >0 时显示） */}
         {selectedIds.size > 0 && (
           <div className="flex items-center gap-3 mb-3 px-3 py-2 bg-accent/5 border border-accent/20 rounded-lg text-xs">
@@ -450,6 +476,17 @@ export default function DocumentsPanel() {
                   <td className="px-4 py-2.5 text-text-muted">{DOC_TYPE_CN[d.doc_type || ''] || d.doc_type || '-'}</td>
                   <td className="px-4 py-2.5">
                     <StatusBadge status={d.status} />
+                    {(() => {
+                      const quality = QUALITY_STATUS_CONFIG[d.quality_status || 'unknown'] || QUALITY_STATUS_CONFIG.unknown
+                      const legacyReport = (d.quality_issues || '').includes('legacy_quality_record_incomplete')
+                      const title = legacyReport
+                        ? '旧报告缺少分块完整性、内容覆盖和清洗覆盖检查；当前需复核，旧分数仅供参考。'
+                        : d.quality_issues || quality.title
+                      const scoreText = d.quality_score
+                        ? `${legacyReport ? '旧分' : ''}${Number(d.quality_score).toFixed(0)}${legacyReport ? '' : '分'}`
+                        : ''
+                      return <div className="mt-1"><span data-testid="quality-status" title={title} className={`inline-flex rounded px-1.5 py-0.5 text-[10px] ${quality.className}`}>{quality.label}{scoreText ? ` · ${scoreText}` : ''}</span></div>
+                    })()}
                     {(d.processing_status || d.metadata_route || d.model_count) && (
                       <div className="mt-1 text-[10px] text-text-muted">
                         {d.metadata_route ? `路由 ${d.metadata_route}` : '已处理'}

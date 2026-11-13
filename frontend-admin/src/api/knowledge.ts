@@ -1,7 +1,7 @@
 // Knowledge service — 对接 RAG API
 // eslint-disable
-export interface KnowledgeStats { doc_count: number; kb_count: number; total_chunks: number; chunk_count: number; embedding_model: string; vector_db: string; [key: string]: any }
-export interface KnowledgeDoc { doc_id: string; file_name: string; doc_type: string; status: string; chunk_count: number; updated_at: string; id: string; name: string; type: string; path: string; kb_id: string; department: string; business_domain: string; size: number; chunks: number; last_indexed: string; created_at: string; embedding_model: string; chunk_size: number; overlap: number; index_version: string; hash: string; last_operation_at: string; last_operation: string; last_trace_id: string; last_processing_run_id?: string; pipeline_version?: string; metadata_route?: string; ocr_used?: boolean; ocr_model?: string; metadata_model?: string; model_count?: number; processing_status?: string; processing_finished_at?: string; [key: string]: any }
+export interface KnowledgeStats { doc_count: number; kb_count: number; total_chunks: number; chunk_count: number; embedding_model: string; vector_db: string; quality_status_counts?: Record<string, number>; [key: string]: any }
+export interface KnowledgeDoc { doc_id: string; file_name: string; doc_type: string; status: string; quality_status?: 'pass' | 'soft_warning' | 'failed' | 'unknown'; quality_score?: number; quality_issues?: string; chunk_count: number; updated_at: string; id: string; name: string; type: string; path: string; kb_id: string; department: string; business_domain: string; size: number; chunks: number; last_indexed: string; created_at: string; embedding_model: string; chunk_size: number; overlap: number; index_version: string; hash: string; last_operation_at: string; last_operation: string; last_trace_id: string; last_processing_run_id?: string; pipeline_version?: string; metadata_route?: string; ocr_used?: boolean; ocr_model?: string; metadata_model?: string; model_count?: number; processing_status?: string; processing_finished_at?: string; [key: string]: any }
 export interface ProcessingRun { run_id: string; doc_id: string; file_hash?: string; operation?: string; status: string; pipeline_version?: string; task_id?: string; batch_id?: string; trace_id?: string; started_at?: string; finished_at?: string; error_message?: string; model_summary?: Array<Record<string, any>>; [key: string]: any }
 export interface ProcessingStep { step_id: string; run_id: string; stage: string; status: string; role?: string; engine_type?: string; provider?: string; model_name?: string; model_revision?: string; config_source?: string; prompt_version?: string; taxonomy_version?: string; rules_version?: string; schema_fingerprint?: string; input_count?: number; output_count?: number; total_tokens?: number; cached_tokens?: number; duration_ms?: number; skip_reason?: string; fallback_reason?: string; [key: string]: any }
 export interface ProcessingRunDetail extends ProcessingRun { steps: ProcessingStep[]; usage?: Array<Record<string, any>> }
@@ -308,7 +308,11 @@ export const knowledgeService: any = {
               resolve({ ok: true, doc: payload.doc, duplicate: true, trace_id: payload.trace_id || '', stage_elapsed: stageElapsed, total_ms: totalMs })
             } else if (stage === 'error') {
               cleanup()
-              resolve({ ok: false, error: payload.message || '索引失败' })
+              resolve({
+                ok: false,
+                error: payload.message || '索引失败',
+                trace_id: payload.trace_id || payload.error_protocol?.trace_id || '',
+              })
             }
           }
 

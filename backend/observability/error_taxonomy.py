@@ -2,7 +2,7 @@
 
 为什么存在：平台已有三套正交错误词表，各自落各自的目的地——
   - 模型层 5 类（infra/llm/error_taxonomy.py → llm_failures_total）
-  - 任务层 11 类（tasks/error_taxonomy.py → tasks.error_type）
+  - 任务层 12 类（tasks/error_taxonomy.py → tasks.error_type）
   - Tool 层 ToolStatus 8 值（core/tool_runtime/models.py → agent_tool_*）
 三套词表都对，但聚合不出「今天失败里 timeout 占多少」这种统一分布。
 本模块是**纯映射出口**：不新造第四套词表、不改变三套源词表的任何
@@ -49,6 +49,7 @@ _TASK_MAP = {
     "timeout": "timeout",
     "provider_timeout": "timeout",
     "rate_limited": "provider_error",
+    "budget_exceeded": "validation_error",
     "quota_exhausted": "provider_error",
     "auth_failed": "permission_denied",
     "provider_error": "provider_error",

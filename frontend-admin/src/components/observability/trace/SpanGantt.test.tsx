@@ -41,6 +41,7 @@ function makeSpans(): Span[] {
   return [
     span({ id: 'root', name: 'RAG 智能问答', type: 'agent', duration_ms: 8100, start_time: base }),
     span({ id: 'retrieve', name: '混合检索', duration_ms: 3800, start_time: base, parent_id: 'root', metrics: { retrieved_chunks: 1 } }),
+    span({ id: 'rerank-operation', name: '重排阶段', type: 'rerank', parent_id: 'root' }),
     span({
       id: 'tool',
       name: 'calculate_tool',
@@ -60,6 +61,13 @@ function makeSpans(): Span[] {
       start_time: base,
       parent_id: 'root',
       llm_call: { model: 'doubao-seed-2.0-mini', temperature: 0, prompt_text: 'prompt 文本', response_text: 'response 文本', prompt_tokens: 851, completion_tokens: 50, cost_usd: 0 },
+    }),
+    span({
+      id: 'rerank-attempt',
+      name: 'Rerank Provider 尝试',
+      type: 'llm_call',
+      parent_id: 'rerank-operation',
+      metrics: { role: 'rerank', model: 'bge-reranker-v2-m3' },
     }),
   ]
 }
@@ -82,7 +90,22 @@ describe('SpanGantt（Span 甘特时间线）', () => {
     expect(container.textContent).toContain('混合检索')
     expect(container.textContent).toContain('calculate_tool')
     expect(container.textContent).toContain('LLM 1')
+    expect(container.textContent).toContain('检索/重排 2')
     expect(container.textContent).toContain('工具 1')
+  })
+
+  it('阶段父 Span 存在时不重复计算 Rerank Provider 子 Span', async () => {
+    const spans = makeSpans()
+    const container = await mount({ spans, totalMs: 8100 })
+    expect(container.textContent).toContain('检索/重排 2')
+  })
+
+  it('旧 Trace 缺少阶段父 Span 时仍将 Rerank Provider 子 Span 计入', async () => {
+    const spans = makeSpans()
+      .filter((s) => s.id !== 'rerank-operation')
+      .map((s) => s.id === 'rerank-attempt' ? { ...s, parent_id: 'root' } : s)
+    const container = await mount({ spans, totalMs: 8100 })
+    expect(container.textContent).toContain('检索/重排 2')
   })
 
   it('点击行展开指标 / Input / HTTP 拆分', async () => {

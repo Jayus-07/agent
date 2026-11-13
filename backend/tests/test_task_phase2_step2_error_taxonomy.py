@@ -23,11 +23,8 @@ import pytest
 from celery.exceptions import SoftTimeLimitExceeded
 
 from backend.models.task import TaskStatus
-from backend.tasks.error_taxonomy import (classify_task_error,
-                                          retryable_of)
-from backend.tasks.retry_policy import (TaskRetryScheduled, RetryPolicy,
-                                        compute_delay)
-
+from backend.tasks.error_taxonomy import classify_task_error, retryable_of
+from backend.tasks.retry_policy import RetryPolicy, TaskRetryScheduled, compute_delay
 
 # ═══════════════════════════════════════════════════
 # 分类器（纯函数，无 DB）
@@ -83,6 +80,27 @@ class TestClassify:
         assert (c.error_type, c.retryable) == ("provider_timeout", True)
         assert c.provider == "dashscope" and c.model == "qwen"
 
+    def test_request_budget_exceeded_is_terminal(self):
+        from backend.infra.llm.budget import RequestBudgetExceeded
+
+        c = classify_task_error(RequestBudgetExceeded("request_tokens"))
+
+        assert (c.error_type, c.retryable, c.source) == (
+            "budget_exceeded", False, "runtime"
+        )
+
+    def test_wrapped_request_budget_exceeded_stays_terminal(self):
+        from backend.infra.llm.budget import RequestBudgetExceeded
+
+        wrapper = RuntimeError("LLM 执行失败")
+        wrapper.__cause__ = RequestBudgetExceeded("request_tokens")
+
+        c = classify_task_error(wrapper)
+
+        assert (c.error_type, c.retryable, c.source) == (
+            "budget_exceeded", False, "runtime"
+        )
+
     def test_value_error_is_validation(self):
         c = classify_task_error(ValueError("illegal input"))
         assert (c.error_type, c.retryable) == ("validation_error", False)
@@ -117,6 +135,7 @@ class TestClassify:
 
     def test_retryable_of(self):
         assert retryable_of("provider_timeout") is True
+        assert retryable_of("budget_exceeded") is False
         assert retryable_of("quota_exhausted") is False
         assert retryable_of("nonsense") is False
 
@@ -181,9 +200,10 @@ class _FakeRedis:
 @pytest.fixture()
 def stub_env(pg, monkeypatch):
     """真实 PG + stub 图（monkeypatch build_task_graph）+ fake 控制标志。"""
-    from backend.orchestration.checkpoint import task_executor as te
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.graph import END, START, StateGraph
+
+    from backend.orchestration.checkpoint import task_executor as te
 
     raise_spec = {"exc": None}
 
@@ -297,7 +317,6 @@ def test_case_g_retry_exhausted_on_provider_timeout(pg, stub_env):
 
 
 def test_case_i_j_paused_cancelled_not_awoken_by_retry(pg, stub_env):
-    from backend.tasks import task_manager
 
     stub_env["exc"] = None
     # PAUSED + retry 消息：impl 短路 NO-OP，保持 PAUSED

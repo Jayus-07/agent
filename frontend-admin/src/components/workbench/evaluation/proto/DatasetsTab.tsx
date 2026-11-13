@@ -12,11 +12,12 @@ import { Download, Pencil, Play, Plus, Search, Sparkles, Upload } from 'lucide-r
 import {
   evaluationService,
   type EvaluationV2Candidate,
+  type EvaluationV2CandidateReviewRecord,
   type EvaluationV2Dataset,
   type EvaluationV2DatasetVersion,
   type EvaluationV2EvaluatorVersion,
 } from '@/api/evaluation'
-import { evaluationAssets, type EvaluationTask, type ImportManifest } from '@/api/evaluation-assets'
+import { evaluationAssets, type EvaluationTask, type ImportManifest, type RagasQueryCounts, type RagasQueryType } from '@/api/evaluation-assets'
 import { createIdempotencyKey } from '@/api/client'
 import {
   canPromoteCandidate,
@@ -36,6 +37,10 @@ const MODULE_FILTERS = ['all', 'rag', 'cs', 'sql', 'planner', 'travel'] as const
 const MODULE_LABELS: Record<string, string> = { all: '全部模块', rag: 'RAG', cs: '客服', sql: 'SQL', planner: '路由', travel: '旅游' }
 const V2_RUNNER_MODULES = new Set(['rag', 'cs', 'sql', 'e2e', 'travel', 'travel-provider'])
 const CONTRACT_ONLY_MODULES = new Set(['sql', 'cs', 'e2e'])
+const RUNNER_SCOPE_WARNINGS: Record<string, string> = {
+  travel: '当前 V2 旅游 Runner 按离线模式执行，不调用真实地图或预订供应商；通过只说明离线评测通过。',
+  'travel-provider': '当前仅执行 fake Provider 探针，不触发真实第三方请求；通过不代表真实供应商链路已验收。',
+}
 const DATASET_PAGE_SIZE = 10
 const CANDIDATE_PAGE_SIZE = 10
 
@@ -66,6 +71,26 @@ function candidateQuery(candidate: EvaluationV2Candidate): string {
   const payload = candidate.payload_json as Record<string, Record<string, unknown>> | null
   const input = (payload?.input || {}) as Record<string, unknown>
   return String(input.query || '')
+}
+
+async function listAllDatasetCandidates(status: 'approved' | 'rejected', datasetKey: string): Promise<EvaluationV2Candidate[]> {
+  const items: EvaluationV2Candidate[] = []
+  let offset = 0
+  while (true) {
+    const page = offset === 0
+      ? await evaluationService.listV2Candidates(status, 200, datasetKey)
+      : await evaluationService.listV2Candidates(status, 200, datasetKey, offset)
+    items.push(...page)
+    if (page.length < 200) return items
+    offset += page.length
+  }
+}
+
+function promotedCaseRevision(candidate: EvaluationV2Candidate): number | null {
+  const payload = candidate.payload_json as Record<string, unknown> | null
+  const revision = candidate.promoted_case_revision ?? payload?.verified_case_revision
+  const value = Number(revision)
+  return Number.isInteger(value) && value > 0 ? value : null
 }
 
 function isTraceCandidate(candidate: EvaluationV2Candidate): boolean {
@@ -294,6 +319,7 @@ export default function DatasetsTab({ onGoRuns, onGoTraces }: { onGoRuns: (datas
       onBack={() => setView({ kind: 'list' })}
       perform={perform}
       busy={busy}
+      error={error}
       onChanged={() => void load()}
     />}
   </div>
@@ -438,6 +464,7 @@ function ConfigureSuitePanel({ dataset, onDone }: { dataset: EvaluationV2Dataset
     {loading ? <Empty text="正在读取数据集发布版本和兼容评分器…" /> : <>
       {!moduleSupported && <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{dataset.domain === 'planner' ? 'Planner 尚未接入 V2 Runner，当前不能创建可运行方案。' : `模块 ${dataset.domain} 尚未接入 V2 Runner。`}</p>}
       {CONTRACT_ONLY_MODULES.has(dataset.domain) && <p className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">当前模块只能做契约检查；运行 Gate 会是 INVALID，不可作为业务质量基线。</p>}
+      {RUNNER_SCOPE_WARNINGS[dataset.domain] && <p role="alert" className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">{RUNNER_SCOPE_WARNINGS[dataset.domain]}</p>}
       {versions.length === 0
         ? <Empty text="该数据集还没有已发布版本。先完成人工核验并发布 DatasetVersion，再配置方案。" />
         : <>
@@ -505,10 +532,112 @@ interface GenerationBatch {
   batchIndex: number
   batchCount: number
   count: number
+  queryCounts: RagasQueryCounts
+  datasetQueryCounts: RagasQueryCounts
   status: string
   taskId?: string
   progress?: string
   error?: string
+}
+
+const RAGAS_QUERY_TYPES: RagasQueryType[] = [
+  'single_hop_specific',
+  'multi_hop_abstract',
+  'multi_hop_specific',
+]
+const MULTI_HOP_QUERY_TYPES = new Set<RagasQueryType>(['multi_hop_abstract', 'multi_hop_specific'])
+const RAGAS_QUERY_LABELS: Record<RagasQueryType, string> = {
+  single_hop_specific: '单跳具体',
+  multi_hop_abstract: '多跳抽象',
+  multi_hop_specific: '多跳具体',
+}
+const RAGAS_QUERY_DESCRIPTIONS: Record<RagasQueryType, string> = {
+  single_hop_specific: '答案可由一段证据直接支持',
+  multi_hop_abstract: '跨多段内容归纳主题后回答',
+  multi_hop_specific: '组合多段事实回答具体问题',
+}
+const RAGAS_REVIEW_CHECKS = [
+  { key: 'question_clear_and_non_duplicate', label: '问题清晰、无歧义且与现有题不重复' },
+  { key: 'answer_facts_supported', label: '参考答案中的事实都能从原文推出' },
+  { key: 'required_facts_complete', label: '必需事实已补齐，能据此判定答案质量' },
+  { key: 'evidence_covers_answer', label: '证据覆盖答案的全部关键事实' },
+  { key: 'query_type_matches_reasoning', label: '题型与实际推理步骤一致' },
+] as const
+type RagasReviewCheck = typeof RAGAS_REVIEW_CHECKS[number]['key']
+type FactEvidenceSelection = Record<number, number[]>
+
+function splitRequiredFacts(value: string): string[] {
+  return value.split(/[,，]/).map(item => item.trim()).filter(Boolean)
+}
+
+function hasFactEvidenceCoverage(
+  facts: string[],
+  selection: FactEvidenceSelection,
+  evidenceCount: number,
+  isMultiHop: boolean,
+): boolean {
+  if (!facts.length || facts.some((_fact, index) => !selection[index]?.length)) return false
+  const mappedEvidence = new Set(facts.flatMap((_fact, index) => selection[index] || []))
+  if ([...mappedEvidence].some(index => index < 0 || index >= evidenceCount)) return false
+  if (!isMultiHop) return mappedEvidence.size > 0
+  const distinctFacts = new Set(facts.map(fact => fact.replace(/\s+/g, '').toLowerCase()))
+  return distinctFacts.size >= 2 && mappedEvidence.size >= 2
+}
+
+function presetRagasQueryCounts(total: number): RagasQueryCounts {
+  if (total === 10) return { single_hop_specific: 5, multi_hop_abstract: 3, multi_hop_specific: 2 }
+  if (total === 20) return { single_hop_specific: 10, multi_hop_abstract: 5, multi_hop_specific: 5 }
+  return { single_hop_specific: 3, multi_hop_abstract: 1, multi_hop_specific: 1 }
+}
+
+function sumRagasQueryCounts(counts: RagasQueryCounts): number {
+  return RAGAS_QUERY_TYPES.reduce((sum, type) => sum + counts[type], 0)
+}
+
+function allocateRagasQueryCounts(kbIds: string[], counts: RagasQueryCounts): Map<string, RagasQueryCounts> {
+  const allocations = new Map(kbIds.map(id => [id, {
+    single_hop_specific: 0,
+    multi_hop_abstract: 0,
+    multi_hop_specific: 0,
+  }]))
+  if (!kbIds.length) return allocations
+
+  let remainderCursor = 0
+  for (const type of RAGAS_QUERY_TYPES) {
+    const base = Math.floor(counts[type] / kbIds.length)
+    let remainder = counts[type] % kbIds.length
+    kbIds.forEach(id => { allocations.get(id)![type] = base })
+    while (remainder > 0) {
+      const id = kbIds[remainderCursor % kbIds.length]
+      allocations.get(id)![type] += 1
+      remainderCursor += 1
+      remainder -= 1
+    }
+  }
+  return allocations
+}
+
+function splitRagasQueryCounts(counts: RagasQueryCounts): RagasQueryCounts[] {
+  const remaining = { ...counts }
+  const batches: RagasQueryCounts[] = []
+  while (sumRagasQueryCounts(remaining) > 0) {
+    const batch: RagasQueryCounts = {
+      single_hop_specific: 0,
+      multi_hop_abstract: 0,
+      multi_hop_specific: 0,
+    }
+    while (sumRagasQueryCounts(batch) < 5 && sumRagasQueryCounts(remaining) > 0) {
+      for (const type of RAGAS_QUERY_TYPES) {
+        if (sumRagasQueryCounts(batch) >= 5) break
+        if (remaining[type] > 0) {
+          batch[type] += 1
+          remaining[type] -= 1
+        }
+      }
+    }
+    batches.push(batch)
+  }
+  return batches
 }
 
 function sleep(ms: number): Promise<void> {
@@ -518,7 +647,8 @@ function sleep(ms: number): Promise<void> {
 function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => void }) {
   const [search, setSearch] = useState('')
   const [selectedKbIds, setSelectedKbIds] = useState<Set<string>>(new Set())
-  const [count, setCount] = useState(5)
+  const [queryCounts, setQueryCounts] = useState<RagasQueryCounts>(() => presetRagasQueryCounts(5))
+  const [enabledQueryTypes, setEnabledQueryTypes] = useState<Set<RagasQueryType>>(() => new Set(RAGAS_QUERY_TYPES))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [finished, setFinished] = useState(false)
@@ -528,12 +658,22 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
   const [adopting, setAdopting] = useState(false)
   const visibleKbs = useMemo(() => kbs.filter(item => `${item.name} ${item.kb_id}`.toLowerCase().includes(search.trim().toLowerCase())), [kbs, search])
   const selectedKbs = useMemo(() => kbs.filter(item => selectedKbIds.has(item.kb_id)), [kbs, selectedKbIds])
-  const allocations = useMemo(() => {
-    const result = new Map<string, number>()
-    if (!selectedKbs.length) return result
-    selectedKbs.forEach((item, index) => result.set(item.kb_id, Math.floor(count / selectedKbs.length) + (index < count % selectedKbs.length ? 1 : 0)))
-    return result
-  }, [count, selectedKbs])
+  const activeQueryCounts = useMemo(() => Object.fromEntries(
+    RAGAS_QUERY_TYPES.map(type => [type, enabledQueryTypes.has(type) ? queryCounts[type] : 0]),
+  ) as RagasQueryCounts, [enabledQueryTypes, queryCounts])
+  const count = sumRagasQueryCounts(activeQueryCounts)
+  const queryAllocations = useMemo(
+    () => allocateRagasQueryCounts(selectedKbs.map(item => item.kb_id), activeQueryCounts),
+    [activeQueryCounts, selectedKbs],
+  )
+  const allocations = useMemo(() => new Map(
+    Array.from(queryAllocations.entries()).map(([kbId, counts]) => [kbId, sumRagasQueryCounts(counts)]),
+  ), [queryAllocations])
+  const multiHopCount = activeQueryCounts.multi_hop_abstract + activeQueryCounts.multi_hop_specific
+  const allocationCanCoverEachKb = selectedKbs.length === 0 || (
+    selectedKbs.length <= multiHopCount &&
+    (activeQueryCounts.single_hop_specific === 0 || selectedKbs.length <= activeQueryCounts.single_hop_specific)
+  )
   const plannedBatches = useMemo(() => Array.from(allocations.entries()).filter(([, amount]) => amount > 0).reduce((sum, [, amount]) => sum + Math.ceil(amount / 5), 0), [allocations])
 
   const patchBatch = (key: string, patch: Partial<GenerationBatch>) => {
@@ -541,23 +681,24 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
   }
 
   const submit = async () => {
-    if (!selectedKbs.length || busy) return
+    if (!selectedKbs.length || busy || !allocationCanCoverEachKb || count <= 0) return
     const timestamp = Date.now().toString(36)
     const plan: GenerationBatch[] = selectedKbs.flatMap(kb => {
-      let remaining = allocations.get(kb.kb_id) || 0
-      if (remaining <= 0) return []
+      const allocatedCounts = queryAllocations.get(kb.kb_id)
+      if (!allocatedCounts || !sumRagasQueryCounts(allocatedCounts)) return []
       const datasetSlug = kb.kb_id.toLowerCase().replace(/[^a-z0-9_-]+/g, '_').slice(0, 32) || 'kb'
       const datasetKey = `synthetic_${datasetSlug}_${timestamp}`
-      const chunkCounts: number[] = []
-      while (remaining > 0) { const batchCount = Math.min(5, remaining); chunkCounts.push(batchCount); remaining -= batchCount }
-      return chunkCounts.map((batchCount, index) => ({
+      const chunkCounts = splitRagasQueryCounts(allocatedCounts)
+      return chunkCounts.map((batchQueryCounts, index) => ({
         key: `${kb.kb_id}:${index + 1}`,
         kbId: kb.kb_id,
         kbName: kb.name,
         datasetKey,
         batchIndex: index + 1,
         batchCount: chunkCounts.length,
-        count: batchCount,
+        count: sumRagasQueryCounts(batchQueryCounts),
+        queryCounts: batchQueryCounts,
+        datasetQueryCounts: allocatedCounts,
         status: '待提交',
       }))
     })
@@ -584,8 +725,17 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
           patchBatch(batch.key, { status: '提交中', progress: `快照 ${snapshotId.slice(0, 8)}` })
           let task: EvaluationTask = await evaluationAssets.synthesize(
             snapshotId,
-            { dataset_key: batch.datasetKey, name: `从知识库生成 · ${kb.name} · ${startedAt}`, module: 'rag', schema_version: 'rag-eval/1.0', version: '1.0.0', description: `来源知识库 ${kb.kb_id}，快照 ${snapshotId}` } as unknown as ImportManifest,
+            {
+              dataset_key: batch.datasetKey,
+              name: `从知识库生成 · ${kb.name} · ${startedAt}`,
+              module: 'rag',
+              schema_version: 'rag-eval/1.0',
+              version: `1.0.${batch.batchIndex - 1}`,
+              description: `来源知识库 ${kb.kb_id}，快照 ${snapshotId}`,
+            } as unknown as ImportManifest,
             batch.count,
+            batch.queryCounts,
+            batch.datasetQueryCounts,
             createIdempotencyKey(),
           )
           patchBatch(batch.key, { status: task.status, taskId: task.task_id, progress: task.progress })
@@ -594,7 +744,7 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
             task = await evaluationAssets.task(task.task_id)
             patchBatch(batch.key, { status: task.status, progress: task.progress })
           }
-          patchBatch(batch.key, { status: task.status, progress: task.progress, ...(task.status === 'FAILED' ? { error: task.progress || '生成任务失败' } : {}) })
+          patchBatch(batch.key, { status: task.status, progress: task.progress, ...(task.status === 'FAILED' ? { error: task.error || task.progress || '生成任务失败' } : {}) })
         } catch (cause) {
           patchBatch(batch.key, { status: 'FAILED', error: cause instanceof Error ? cause.message : '生成任务失败' })
         }
@@ -651,24 +801,66 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
         </div>
       </section>
       <section className="rounded-md border border-border-subtle p-3">
-        <h4 className="text-xs font-medium text-text-primary">生成规模</h4>
+        <h4 className="text-xs font-medium text-text-primary">题型与规模</h4>
         <div className="mt-2 flex gap-2" role="radiogroup" aria-label="生成题数预设">
-          {[5, 10, 20].map(value => <button key={value} type="button" role="radio" aria-checked={count === value} className={count === value ? ctlPrimary : ctl} disabled={busy} onClick={() => setCount(value)}>{value} 题</button>)}
+          {[5, 10, 20].map(value => {
+            const preset = presetRagasQueryCounts(value)
+            const selected = count === value && RAGAS_QUERY_TYPES.every(type => activeQueryCounts[type] === preset[type])
+            return <button key={value} type="button" role="radio" aria-checked={selected} className={selected ? ctlPrimary : ctl} disabled={busy} onClick={() => {
+              setQueryCounts(preset)
+              setEnabledQueryTypes(new Set(RAGAS_QUERY_TYPES))
+              setError('')
+            }}>{value} 题</button>
+          })}
         </div>
-        <p className="mt-3 text-[11px] text-text-muted">提交前分配预览（平均分配，余数按选择顺序分配）</p>
-        {selectedKbs.length === 0 ? <Empty text="先选择一个或多个有文档的测试知识库。" /> : <TableWrap minWidth={360}>
-          <thead className="bg-bg-elevated"><tr><Th>知识库来源</Th><Th end>候选题</Th><Th end>拆分任务</Th></tr></thead>
+        <p className="mt-3 text-[11px] text-text-muted">Ragas 原生混合题型 · 默认约一半单跳、一半多跳，可调整每类题数</p>
+        <div className="mt-2 space-y-2">
+          {RAGAS_QUERY_TYPES.map(type => {
+            const activeMultiTypes = RAGAS_QUERY_TYPES.filter(item => MULTI_HOP_QUERY_TYPES.has(item) && enabledQueryTypes.has(item))
+            const isLastMultiType = MULTI_HOP_QUERY_TYPES.has(type) && enabledQueryTypes.has(type) && activeMultiTypes.length === 1
+            return <div key={type} className="flex items-center gap-2 rounded bg-bg-elevated px-2 py-2">
+              <input type="checkbox" aria-label={`启用${RAGAS_QUERY_LABELS[type]}`} checked={enabledQueryTypes.has(type)} disabled={busy || isLastMultiType} onChange={event => {
+                if (event.target.checked && count + queryCounts[type] > 20) { setError('启用该题型后将超过 20 题上限'); return }
+                setError('')
+                setEnabledQueryTypes(current => {
+                  const next = new Set(current)
+                  if (event.target.checked) next.add(type); else next.delete(type)
+                  return next
+                })
+              }} />
+              <span className="min-w-0 flex-1">
+                <span className="block text-xs font-medium text-text-primary">{RAGAS_QUERY_LABELS[type]}</span>
+                <span className="block text-[10px] text-text-muted">{RAGAS_QUERY_DESCRIPTIONS[type]}</span>
+              </span>
+              <input type="number" aria-label={`${RAGAS_QUERY_LABELS[type]}题数`} min={1} max={20} value={queryCounts[type]} disabled={busy || !enabledQueryTypes.has(type)} onChange={event => {
+                const parsed = Number.parseInt(event.target.value || '1', 10)
+                const amount = Math.max(1, Math.min(20, Number.isNaN(parsed) ? 1 : parsed))
+                const otherCount = count - activeQueryCounts[type]
+                if (otherCount + amount > 20) { setError('单次最多配置 20 题'); return }
+                setError('')
+                setQueryCounts(current => ({ ...current, [type]: amount }))
+              }} className={`${ctl} w-16 text-right`} />
+              <span className="text-[11px] text-text-muted">题</span>
+            </div>
+          })}
+        </div>
+        <p className="mt-2 text-right text-xs font-medium text-text-primary">本次合计 {count} 题</p>
+        <p className="mt-3 text-[11px] text-text-muted">提交前分配预览（按题型分到各库，每个任务最多 5 题）</p>
+        {selectedKbs.length === 0 ? <Empty text="先选择一个或多个有文档的测试知识库。" /> : <TableWrap minWidth={600}>
+          <thead className="bg-bg-elevated"><tr><Th>知识库来源</Th>{RAGAS_QUERY_TYPES.map(type => <Th key={type} end>{RAGAS_QUERY_LABELS[type]}</Th>)}<Th end>合计</Th><Th end>拆分任务</Th></tr></thead>
           <tbody className="divide-y divide-border-subtle">{selectedKbs.map(item => {
             const amount = allocations.get(item.kb_id) || 0
-            return <tr key={item.kb_id}><Td>{item.name}</Td><Td end>{amount}</Td><Td end>{amount ? Math.ceil(amount / 5) : '—'}</Td></tr>
+            const perType = queryAllocations.get(item.kb_id)
+            return <tr key={item.kb_id}><Td>{item.name}</Td>{RAGAS_QUERY_TYPES.map(type => <Td key={type} end>{perType?.[type] || 0}</Td>)}<Td end>{amount}</Td><Td end>{amount ? Math.ceil(amount / 5) : '—'}</Td></tr>
           })}</tbody>
         </TableWrap>}
+        {!allocationCanCoverEachKb && <p role="alert" className="mt-2 text-[11px] text-amber-700">当前题量不足以让每个知识库至少获得一题多跳题；启用单跳时也需给每库分到一题单跳。请增加题量或减少知识库。</p>}
         {selectedKbs.length > 0 && <p className="mt-2 text-[11px] text-text-muted">计划提交 {plannedBatches} 个任务；产出 {selectedKbs.filter(item => (allocations.get(item.kb_id) || 0) > 0).length} 个独立数据集。</p>}
       </section>
     </div>
     <div className="mt-3 flex items-center justify-between gap-3">
       <p className="text-[11px] text-text-muted">候选只进入人工待核验池；不跨 KB 混合集，也不会自动发布。</p>
-      <button type="button" className={ctlPrimary} disabled={busy || !selectedKbs.length || plannedBatches === 0} onClick={() => void submit()}>{busy ? '按知识库逐批生成…' : '开始生成'}</button>
+      <button type="button" className={ctlPrimary} disabled={busy || !selectedKbs.length || !allocationCanCoverEachKb || plannedBatches === 0} onClick={() => void submit()}>{busy ? '按知识库逐批生成…' : '开始生成'}</button>
     </div>
     {error && <p role="alert" className="mt-2 text-xs text-red-700">{error}</p>}
     {batches.length > 0 && <section className="mt-3 space-y-2" aria-label="生成任务进度">
@@ -685,12 +877,14 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
     {preview && preview.length > 0 && <div className="mt-3 space-y-2">
       <p className="text-xs font-medium text-text-primary">生成候选预览<span className="ml-2 font-normal text-text-muted">（共 {preview.length} 条 · 按来源 KB 分开保留 · 勾选后继续人工核验）</span></p>
       <TableWrap minWidth={860}>
-        <thead className="bg-bg-elevated"><tr><Th>选</Th><Th>知识库来源</Th><Th>问题</Th><Th>参考答案</Th><Th>证据引用</Th><Th>校验</Th></tr></thead>
+        <thead className="bg-bg-elevated"><tr><Th>选</Th><Th>知识库来源</Th><Th>题型</Th><Th>问题</Th><Th>参考答案</Th><Th>证据引用</Th><Th>校验</Th></tr></thead>
         <tbody className="divide-y divide-border-subtle">
           {preview.map(item => {
             const payload = item.payload_json as Record<string, Record<string, unknown> | Array<Record<string, unknown>>> | null
+            const metadata = (payload?.metadata || {}) as Record<string, unknown>
             const facts = ((payload?.proposed_facts as Array<Record<string, unknown>> | undefined)?.[0] || {}) as { reference_answer?: string; required_facts?: string[] }
             const evidence = (payload?.proposed_evidence as Array<Record<string, unknown>> | undefined) || []
+            const queryType = String(metadata.query_type || '') as RagasQueryType
             const datasetKey = candidateDatasetKey(item)
             const sourceKb = batches.find(batch => batch.datasetKey === datasetKey)?.kbName || datasetKey
             const reference = String(facts.reference_answer || '')
@@ -702,6 +896,7 @@ function GeneratePanel({ kbs, onDone }: { kbs: KbAuthorityItem[]; onDone: () => 
                 setPicked(next)
               }} /></Td>
               <Td>{sourceKb}</Td>
+              <Td><Badge text={RAGAS_QUERY_LABELS[queryType] || '未知题型'} tone={MULTI_HOP_QUERY_TYPES.has(queryType) ? 'blue' : 'gray'} /></Td>
               <Td className="max-w-[240px]">{candidateQuery(item)}</Td>
               <Td className="max-w-[240px]"><span className="block truncate">{reference || '—'}</span></Td>
               <Td className="max-w-[220px]">{evidence.length
@@ -896,9 +1091,39 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
       : scopedCandidates
   const visibleCandidates = mine.slice(candidatePage * CANDIDATE_PAGE_SIZE, (candidatePage + 1) * CANDIDATE_PAGE_SIZE)
   const [edits, setEdits] = useState<Record<string, { question: string; reference: string; facts: string; snapshotId: string }>>({})
+  const [qualityChecks, setQualityChecks] = useState<Record<string, Partial<Record<RagasReviewCheck, boolean>>>>({})
+  const [reviewRationales, setReviewRationales] = useState<Record<string, string>>({})
+  const [factEvidenceBindings, setFactEvidenceBindings] = useState<Record<string, FactEvidenceSelection>>({})
+  const [reviewedCandidates, setReviewedCandidates] = useState<EvaluationV2Candidate[]>([])
+  const [reviewedCandidatesError, setReviewedCandidatesError] = useState('')
   const [manualOpen, setManualOpen] = useState(false)
   const [manual, setManual] = useState({ question: '', reference: '', facts: '' })
   const [manualMessage, setManualMessage] = useState('')
+  useEffect(() => {
+    let active = true
+    setReviewedCandidates([])
+    setReviewedCandidatesError('')
+    Promise.all([
+      listAllDatasetCandidates('approved', dataset.dataset_key),
+      listAllDatasetCandidates('rejected', dataset.dataset_key),
+    ]).then(([approved, rejected]) => {
+      if (active) {
+        setReviewedCandidates([...approved, ...rejected]
+          .filter(candidate => candidateDatasetKey(candidate) === dataset.dataset_key)
+          .sort((left, right) => right.created_at.localeCompare(left.created_at)))
+      }
+    }).catch(cause => {
+      if (active) {
+        setReviewedCandidates([])
+        setReviewedCandidatesError(cause instanceof Error ? cause.message : '审核候选读取失败')
+      }
+    })
+    return () => { active = false }
+  }, [dataset.dataset_key])
+  const recordReviewedCandidate = (candidate: EvaluationV2Candidate, reviewStatus: 'approved' | 'rejected') => {
+    const reviewed = { ...candidate, review_status: reviewStatus }
+    setReviewedCandidates(current => [reviewed, ...current.filter(item => item.candidate_id !== candidate.candidate_id)])
+  }
   const addManual = () => perform(async () => {
     if (!manual.question.trim() || !manual.reference.trim()) throw new Error('问题和参考答案为必填')
     const facts = manual.facts.split(/[,，]/).map(item => item.trim()).filter(Boolean)
@@ -925,21 +1150,39 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
   }
   const setEdit = (id: string, patch: Partial<{ question: string; reference: string; facts: string; snapshotId: string }>) =>
     setEdits(current => ({ ...current, [id]: { ...getEdit(id, candidates.find(c => c.candidate_id === id)!), ...patch } }))
+  const setCandidateFacts = (id: string, value: string) => {
+    setEdit(id, { facts: value })
+    setFactEvidenceBindings(current => ({ ...current, [id]: {} }))
+  }
   const approve = (candidate: EvaluationV2Candidate) => perform(async () => {
     const edit = getEdit(candidate.candidate_id, candidate)
-    const facts = edit.facts.split(/[,，]/).map(item => item.trim()).filter(Boolean)
+    const facts = splitRequiredFacts(edit.facts)
+    const payload = candidate.payload_json as Record<string, unknown>
+    const metadata = (payload.metadata || {}) as Record<string, unknown>
+    const isRagasGenerated = metadata.generation_method === 'ragas_mixed'
     // 与展示同源：优先用户经选择器追加的锚点，否则用生成/导入自动带出的证据
-    const payloadEvidence = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
+    const payloadEvidence = (payload.proposed_evidence as Array<Record<string, unknown>> | undefined) || []
     const evidence = (JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || 'null') || payloadEvidence) as Array<Record<string, unknown>>
     await evaluationService.reviewV2Candidate(candidate.candidate_id, {
       expected_revision: candidate.revision,
       verdict: 'approved',
-      rationale: '编辑器确认：补齐真值与证据后批准',
+      rationale: isRagasGenerated
+        ? String(reviewRationales[candidate.candidate_id] || '').trim()
+        : '编辑器确认：补齐真值与证据后批准',
       expected: {
         behavior: 'answer',
         reference_answer: edit.reference,
         required_facts: facts,
       },
+      ...(isRagasGenerated ? {
+        quality_checks: Object.fromEntries(
+          RAGAS_REVIEW_CHECKS.map(check => [check.key, qualityChecks[candidate.candidate_id]?.[check.key] === true]),
+        ),
+        fact_evidence_bindings: facts.map((_fact, fact_index) => ({
+          fact_index,
+          evidence_indices: factEvidenceBindings[candidate.candidate_id]?.[fact_index] || [],
+        })),
+      } : {}),
       evidence: evidence.map(item => ({
         kb_id: String(item.kb_id || ''),
         doc_id: String(item.doc_id || ''),
@@ -947,15 +1190,35 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
         quote: String(item.quote || ''),
       })),
     })
+    recordReviewedCandidate(candidate, 'approved')
     sessionStorage.removeItem(`evidence:${candidate.candidate_id}`)
     onChanged()
   })
   const discard = (candidate: EvaluationV2Candidate) => perform(async () => {
+    const payload = candidate.payload_json as Record<string, unknown>
+    const metadata = (payload.metadata || {}) as Record<string, unknown>
+    const isRagasGenerated = metadata.generation_method === 'ragas_mixed'
+    const rationale = isRagasGenerated
+      ? String(reviewRationales[candidate.candidate_id] || '').trim()
+      : '编辑器中丢弃'
+    if (isRagasGenerated && rationale.length < 20) {
+      throw new Error('Ragas 候选拒绝理由至少填写 20 个字符')
+    }
+    const payloadEvidence = (payload.proposed_evidence as Array<Record<string, unknown>> | undefined) || []
+    const evidence = (JSON.parse(sessionStorage.getItem(`evidence:${candidate.candidate_id}`) || 'null') || payloadEvidence) as Array<Record<string, unknown>>
     await evaluationService.reviewV2Candidate(candidate.candidate_id, {
       expected_revision: candidate.revision,
       verdict: 'rejected',
-      rationale: '编辑器中丢弃',
+      rationale,
+      evidence: evidence.map(item => ({
+        kb_id: String(item.kb_id || ''),
+        doc_id: String(item.doc_id || ''),
+        doc_version: String(item.doc_version || ''),
+        quote: String(item.quote || ''),
+      })),
     })
+    recordReviewedCandidate(candidate, 'rejected')
+    sessionStorage.removeItem(`evidence:${candidate.candidate_id}`)
     onChanged()
   })
   return <div className="space-y-4">
@@ -997,6 +1260,20 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
             const candidateMetadata = (candidatePayload.metadata || {}) as Record<string, unknown>
             const candidateSourceRef = (candidatePayload.source_ref || {}) as Record<string, unknown>
             const traceId = String(candidateSourceRef.trace_id || candidateMetadata.trace_id || '')
+            const isRagasGenerated = candidateMetadata.generation_method === 'ragas_mixed'
+            const queryType = String(candidateMetadata.query_type || '')
+            const isMultiHop = MULTI_HOP_QUERY_TYPES.has(queryType as RagasQueryType)
+            const reviewChecks = qualityChecks[candidate.candidate_id] || {}
+            const reviewRationale = reviewRationales[candidate.candidate_id] || ''
+            const requiredFacts = splitRequiredFacts(edit.facts)
+            const factEvidenceSelection = factEvidenceBindings[candidate.candidate_id] || {}
+            const uniqueEvidenceCount = new Set(evidenceList.map(item => String(item.quote || '').trim()).filter(Boolean)).size
+            const qualityChecksComplete = RAGAS_REVIEW_CHECKS.every(check => reviewChecks[check.key] === true)
+            const qualityReady = !isRagasGenerated || (
+              qualityChecksComplete && reviewRationale.trim().length >= 20 && Boolean(edit.facts.trim()) &&
+              uniqueEvidenceCount >= (isMultiHop ? 2 : 1) &&
+              hasFactEvidenceCoverage(requiredFacts, factEvidenceSelection, evidenceList.length, isMultiHop)
+            )
             return <div key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
               {isTraceCandidate(candidate) && <div className="mb-3 rounded-md border border-amber-200 bg-amber-50/70 p-3 dark:border-amber-900 dark:bg-amber-950/30">
                 <div className="flex flex-wrap items-center gap-2"><Badge text="Trace 回流" tone="accent" /><Badge text="参考答案未核验" tone="warn" />{traceId && <a className="text-xs text-accent hover:underline" href={`/observability/traces/${encodeURIComponent(traceId)}`} target="_blank" rel="noreferrer">打开 Trace</a>}</div>
@@ -1007,7 +1284,7 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
               <div className="grid gap-2 sm:grid-cols-2">
                 <input aria-label="问题" placeholder="问题" value={edit.question} onChange={e => setEdit(candidate.candidate_id, { question: e.target.value })} className={ctl} />
                 <input aria-label="参考答案" placeholder="参考答案 reference_answer" value={edit.reference} onChange={e => setEdit(candidate.candidate_id, { reference: e.target.value })} className={ctl} />
-                <input aria-label="必需事实" placeholder="必需事实（逗号分隔）" value={edit.facts} onChange={e => setEdit(candidate.candidate_id, { facts: e.target.value })} className={ctl} />
+                <input aria-label="必需事实" placeholder="必需事实（逗号分隔）" value={edit.facts} onChange={e => setCandidateFacts(candidate.candidate_id, e.target.value)} className={ctl} />
                 <div className="flex items-center gap-2">
                   <Badge text={complete ? '✓ 可批准' : '⚠ 缺参考答案'} tone={complete ? 'good' : 'warn'} />
                   <Badge text={isTraceCandidate(candidate) ? 'Trace 回流' : candidate.source_kind || '未知来源'} tone={isTraceCandidate(candidate) || candidate.source_kind === 'feedback' ? 'accent' : 'gray'} />
@@ -1027,6 +1304,77 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
                     </li>)}
                   </ul>}
               </div>
+              {isRagasGenerated && <section aria-label="必需事实证据关联" className="mt-2 rounded-md border border-border-subtle p-2.5">
+                <p className="text-xs font-medium text-text-primary">按事实关联原文证据</p>
+                <p className="mt-1 text-[11px] text-text-muted">每条必需事实都要选择能支持它的原文；提交时由服务端核对锚点。多跳题至少要有两条不同事实和两条不同锚点。</p>
+                {!requiredFacts.length ? <p className="mt-2 text-xs text-amber-700">先填写必需事实，再逐条选择对应原文。</p>
+                  : !evidenceList.length ? <p className="mt-2 text-xs text-amber-700">当前没有证据引用，不能完成事实核验。</p>
+                    : <div className="mt-2 space-y-2">
+                      {requiredFacts.map((fact, factIndex) => <fieldset key={`${factIndex}-${fact}`} className="rounded-md bg-bg-elevated p-2">
+                        <legend className="px-1 text-xs text-text-secondary">事实 {factIndex + 1}：{fact}</legend>
+                        <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                          {evidenceList.map((item, evidenceIndex) => {
+                            const selected = factEvidenceSelection[factIndex] || []
+                            const checked = selected.includes(evidenceIndex)
+                            const quote = String(item.quote || '')
+                            return <label key={`${evidenceIndex}-${item.doc_id || ''}`} className="flex items-start gap-2 text-[11px] text-text-secondary">
+                              <input
+                                type="checkbox"
+                                aria-label={`事实 ${factIndex + 1} 的证据引用 ${evidenceIndex + 1}（${item.doc_id || '未知文档'}）`}
+                                checked={checked}
+                                onChange={event => setFactEvidenceBindings(current => {
+                                  const currentForCandidate = current[candidate.candidate_id] || {}
+                                  const next = new Set(currentForCandidate[factIndex] || [])
+                                  if (event.target.checked) next.add(evidenceIndex)
+                                  else next.delete(evidenceIndex)
+                                  return {
+                                    ...current,
+                                    [candidate.candidate_id]: {
+                                      ...currentForCandidate,
+                                      [factIndex]: [...next].sort((left, right) => left - right),
+                                    },
+                                  }
+                                })}
+                              />
+                              <span title={quote}>{evidenceIndex + 1}. {item.doc_id || '未知文档'} · {quote.slice(0, 100)}{quote.length > 100 ? '…' : ''}</span>
+                            </label>
+                          })}
+                        </div>
+                      </fieldset>)}
+                    </div>}
+              </section>}
+              {isRagasGenerated && <section aria-label="Ragas 生成题质量核验" className="mt-2 rounded-md border border-border-subtle p-2.5">
+                <p className="text-xs font-medium text-text-primary">人工质量核验</p>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {RAGAS_REVIEW_CHECKS.map(check => <label key={check.key} className="flex items-start gap-2 text-xs text-text-secondary">
+                    <input
+                      type="checkbox"
+                      aria-label={`质量核验：${check.label}`}
+                      checked={reviewChecks[check.key] === true}
+                      onChange={event => setQualityChecks(current => ({
+                        ...current,
+                        [candidate.candidate_id]: {
+                          ...current[candidate.candidate_id],
+                          [check.key]: event.target.checked,
+                        },
+                      }))}
+                    />
+                    <span>{check.label}</span>
+                  </label>)}
+                </div>
+                <textarea
+                  aria-label="人工审核理由（Ragas候选）"
+                  rows={2}
+                  maxLength={2000}
+                  value={reviewRationale}
+                  onChange={event => setReviewRationales(current => ({ ...current, [candidate.candidate_id]: event.target.value }))}
+                  placeholder="批准时说明可判分依据；拒绝时说明题型、重复或证据问题（至少 20 字）"
+                  className={`${ctl} mt-2 w-full`}
+                />
+                <p className="mt-1 text-[11px] text-text-muted">
+                  批准时每条必需事实都要关联原文；多跳题至少拆成两条不同事实并覆盖不同锚点。批准或拒绝理由、当次引用都会写入核验记录。
+                </p>
+              </section>}
               <div className="mt-2">
                 <EvidenceSearchPicker defaultSnapshotId={edit.snapshotId} question={edit.question} onInsert={(claim: { kb_id: string; doc_id: string; doc_version: string; quote: string }) => {
                   const payloadEvidence2 = (candidate.payload_json as Record<string, Array<Record<string, unknown>>> | null)?.proposed_evidence || []
@@ -1036,8 +1384,13 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
                 }} />
               </div>
               <div className="mt-2 flex justify-end gap-2">
-                <button type="button" className={ctlGhost} disabled={busy} onClick={() => discard(candidate)}>丢弃</button>
-                <button type="button" className={ctlPrimary} disabled={busy || !complete || evidenceList.length === 0} onClick={() => approve(candidate)}>批准进草稿</button>
+                <button
+                  type="button"
+                  className={ctlGhost}
+                  disabled={busy || (isRagasGenerated && reviewRationale.trim().length < 20)}
+                  onClick={() => discard(candidate)}
+                >{isRagasGenerated ? '拒绝候选' : '丢弃'}</button>
+                <button type="button" className={ctlPrimary} disabled={busy || !complete || evidenceList.length === 0 || !qualityReady} onClick={() => approve(candidate)}>批准进草稿</button>
               </div>
             </div>
           })}
@@ -1045,8 +1398,119 @@ function EditView({ dataset, candidates, onBack, onChanged, onOpenHistory, perfo
       <Pagination page={candidatePage} pageSize={CANDIDATE_PAGE_SIZE} total={mine.length} onPageChange={setCandidatePage} />
       <p className="mt-2 text-xs text-text-muted">批准 = 完成八道服务端校验（证据锚点逐字核验、四眼原则等）并生成不可变用例修订；随后在「版本历史」中发布新版本。</p>
     </Card>
+    <CandidateReviewHistory candidates={reviewedCandidates} loadError={reviewedCandidatesError} />
     <VersionCaseEditor dataset={dataset} perform={perform} busy={busy} onChanged={onChanged} onOpenHistory={onOpenHistory} />
   </div>
+}
+
+function CandidateReviewHistory({ candidates, loadError }: { candidates: EvaluationV2Candidate[]; loadError: string }) {
+  const [selectedId, setSelectedId] = useState('')
+  const [records, setRecords] = useState<Record<string, EvaluationV2CandidateReviewRecord[]>>({})
+  const [loadingId, setLoadingId] = useState('')
+  const [error, setError] = useState('')
+
+  const toggleHistory = async (candidateId: string) => {
+    if (selectedId === candidateId) {
+      setSelectedId('')
+      setError('')
+      return
+    }
+    setSelectedId(candidateId)
+    setError('')
+    if (records[candidateId]) return
+    setLoadingId(candidateId)
+    try {
+      const history = await evaluationService.listV2CandidateReviews(candidateId)
+      setRecords(current => ({ ...current, [candidateId]: history }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '审核记录读取失败')
+    } finally {
+      setLoadingId('')
+    }
+  }
+
+  return <Card title="审核记录" subtitle="逐次保留审核结论、理由、证据锚点和核验项；多跳审核还记录每条事实对应的锚点。批准只表示进入可发布候选。">
+    {loadError ? <p role="alert" className="text-xs text-red-700">读取已完成审核候选失败：{loadError}</p>
+      : candidates.length === 0 ? <Empty text="该数据集暂无已完成审核的候选。" /> : <div className="space-y-2">
+      {candidates.map(candidate => {
+        const history = records[candidate.candidate_id]
+        const metadata = (candidate.payload_json.metadata || {}) as Record<string, unknown>
+        return <article key={candidate.candidate_id} className="rounded-md border border-border-subtle p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="min-w-0 flex-1 text-sm text-text-primary">{candidateQuery(candidate) || '（问题为空）'}</span>
+            <Badge text={candidate.review_status === 'approved' ? '已批准' : '已拒绝'} tone={candidate.review_status === 'approved' ? 'good' : 'warn'} />
+            {metadata.generation_method === 'ragas_mixed' && <Badge text="Ragas 混合生成" tone="accent" />}
+            <button type="button" className={ctl} aria-label={`查看审核记录 ${candidate.candidate_id}`} onClick={() => void toggleHistory(candidate.candidate_id)}>
+              {selectedId === candidate.candidate_id ? '收起记录' : '查看记录'}
+            </button>
+          </div>
+          {selectedId === candidate.candidate_id && <div className="mt-3 border-t border-border-subtle pt-3">
+            {loadingId === candidate.candidate_id ? <Empty text="正在读取审核记录…" />
+              : error ? <p role="alert" className="text-xs text-red-700">{error}</p>
+                : !history?.length ? <Empty text="没有可显示的审核记录。" />
+                  : <div className="space-y-3">
+                    {history.map(record => {
+                      const checks = record.changed_fields.quality_checks as Record<string, boolean> | undefined
+                      const factBindings = record.changed_fields.fact_evidence_bindings as Array<{
+                        fact_index: number
+                        fact: string
+                        anchor_ids: string[]
+                      }> | undefined
+                      return <section key={record.annotation_id} className="rounded-md bg-bg-elevated p-3">
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-text-muted">
+                          <span>审核人：{record.reviewer_id}</span>
+                          <span>结论：{record.verdict === 'approved' ? '批准' : record.verdict === 'rejected' ? '拒绝' : '要求修改'}</span>
+                          <span>候选修订：r{record.candidate_revision}</span>
+                          <span>时间：{timeShort(record.created_at)}</span>
+                        </div>
+                        <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-text-secondary">审核理由：{record.rationale}</p>
+                        {checks && <div className="mt-2">
+                          <p className="text-[11px] font-medium text-text-muted">Ragas 质量核验</p>
+                          <ul className="mt-1 grid gap-1 sm:grid-cols-2">
+                            {RAGAS_REVIEW_CHECKS.map(check => <li key={check.key} className="text-xs text-text-secondary">
+                              {checks[check.key] === true ? '✓' : '✗'} {check.label}
+                            </li>)}
+                          </ul>
+                        </div>}
+                        {factBindings?.length ? <div className="mt-2">
+                          <p className="text-[11px] font-medium text-text-muted">事实与已核验锚点对应</p>
+                          <ul className="mt-1 space-y-1">
+                            {factBindings.map(binding => <li key={binding.fact_index} className="text-xs text-text-secondary">
+                              事实 {binding.fact_index + 1}：{binding.fact} → {binding.anchor_ids.join('、')}
+                            </li>)}
+                          </ul>
+                        </div> : null}
+                        {record.evidence_json.length > 0 && <div className="mt-2">
+                          <p className="text-[11px] font-medium text-text-muted">
+                            {record.verdict === 'approved'
+                              ? record.evidence_json.some(item => String(item.quote || '').trim())
+                                ? '已核验的原文引用'
+                                : '已核验锚点；本记录未保存原文引用文本'
+                              : '拒绝时的证据引用（不表示证据已通过核验）'}
+                          </p>
+                          <ul className="mt-1 space-y-1">
+                            {record.evidence_json.map((evidence, evidenceIndex) => {
+                              const quote = String(evidence.quote || '')
+                              return <li key={evidenceIndex} className="text-xs text-text-secondary">
+                                <span className="font-mono text-[11px] text-text-muted">
+                                  {String(evidence.doc_id || '文档')} · {String(evidence.doc_version || '未知版本')}
+                                  {evidence.anchor_id ? ` · 锚点 ${String(evidence.anchor_id)}` : ''}
+                                </span>
+                                {quote
+                                  ? <span className="ml-1.5" title={quote}>{quote.slice(0, 500)}{quote.length > 500 ? '…' : ''}</span>
+                                  : record.verdict === 'approved' && <span className="ml-1.5 text-text-muted">审核时未保存引用文本。</span>}
+                              </li>
+                            })}
+                          </ul>
+                        </div>}
+                      </section>
+                    })}
+                  </div>}
+          </div>}
+        </article>
+      })}
+    </div>}
+  </Card>
 }
 
 /** 已发布版本用例表格：编辑 = 派生修订 + 发布新版本（copy-on-write，历史永不改动） */
@@ -1215,11 +1679,12 @@ function VersionCaseEditor({ dataset, perform, busy, onChanged, onOpenHistory }:
   </Card>
 }
 
-function HistoryView({ dataset, onBack, perform, busy, onChanged }: {
+function HistoryView({ dataset, onBack, perform, busy, error, onChanged }: {
   dataset: EvaluationV2Dataset
   onBack: () => void
   perform: (fn: () => Promise<void>) => Promise<void>
   busy: boolean
+  error?: string
   onChanged: () => void
 }) {
   const [versions, setVersions] = useState<EvaluationV2DatasetVersion[]>([])
@@ -1237,12 +1702,17 @@ function HistoryView({ dataset, onBack, perform, busy, onChanged }: {
   const publishApproved = () => perform(async () => {
     const version = publishVersion.trim()
     if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('新版本号必须是三段式（如 1.1.0）')
-    const approved = await evaluationService.listV2Candidates('approved', 200)
-    const mine = approved.filter(item => candidateDatasetKey(item) === dataset.dataset_key && item.promoted_case_id && item.promoted_case_revision)
+    const approved = await evaluationService.listV2Candidates('approved', 200, dataset.dataset_key)
+    const mine = approved
+      .filter(item => item.promoted_case_id)
+      .map(item => ({
+        case_id: String(item.promoted_case_id),
+        revision: promotedCaseRevision(item),
+      }))
+      .filter((item): item is { case_id: string; revision: number } => item.revision !== null)
     if (!mine.length) throw new Error('没有已批准的用例：先在编辑视图中批准候选。')
-    const items = mine.map(item => ({ case_id: String(item.promoted_case_id), revision: Number(item.promoted_case_revision) }))
-    await evaluationService.publishV2DatasetVersion(dataset.dataset_id, { version, items })
-    setMessage(`已发布新版本 v${version}（${items.length} 条）：此后不可修改，可用于正式评测。`)
+    await evaluationService.publishV2DatasetVersion(dataset.dataset_id, { version, items: mine })
+    setMessage(`已发布新版本 v${version}（${mine.length} 条）：此后不可修改，可用于正式评测。`)
     const refreshed = await evaluationService.listV2DatasetVersions(dataset.dataset_id)
     setVersions(refreshed)
     setPublishVersion(nextMinorVersion(refreshed[0]?.version))
@@ -1284,6 +1754,7 @@ function HistoryView({ dataset, onBack, perform, busy, onChanged }: {
       </label>
       <button type="button" className={ctlPrimary} disabled={busy} onClick={() => void publishApproved()}>发布已批准用例</button>
     </div>
+    {error && <p role="alert" className="rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">{error}</p>}
     {message && <p role="status" className="rounded-md bg-emerald-50 p-2.5 text-xs text-emerald-700">{message}</p>}
     {diff && <Card title={`版本对比：v${diff.base} → v${diff.target}`} subtitle="与相邻上一版本的差异（按样本 ID、修订与内容哈希计算）。">
       <div className="flex gap-6 text-xs text-text-secondary">

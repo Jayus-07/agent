@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 from fastapi import FastAPI
@@ -246,10 +247,16 @@ def test_upload_failure_list_uses_resource_scope_for_items_and_count(monkeypatch
             captured["count"] = kwargs
             return 0
 
+    class StubRegistry:
+        def list_by_statuses(self, statuses):
+            assert statuses == ["failed"]
+            return []
+
     monkeypatch.setattr(
         "backend.rag.indexing.index_run_store_pg.get_index_run_store",
         lambda: StubStore(),
     )
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: StubRegistry())
 
     response = asyncio.run(
         rag_upload.list_upload_failures(SimpleNamespace(), limit=25),
@@ -262,7 +269,375 @@ def test_upload_failure_list_uses_resource_scope_for_items_and_count(monkeypatch
     }
     assert captured["list"] == {"limit": 25, **expected_scope}
     assert captured["count"] == expected_scope
-    assert response == {"ok": True, "total": 0, "items": []}
+    assert response == {
+        "ok": True,
+        "total": 0,
+        "items": [],
+        "counts": {"async_queue": 0, "quality_gate": 0},
+    }
+
+
+def test_upload_failure_list_includes_quality_gate_doc_and_trace(monkeypatch):
+    from backend.app.api import identity
+
+    principal = SimpleNamespace(tenant_id="tenant-a", user_id="user-a")
+    authz = SimpleNamespace(
+        is_admin=True,
+        kb_scope=frozenset({"rag_eval_kb"}),
+        can_upload_to=lambda *_: (True, ""),
+        can_manage_row=lambda _row: (True, ""),
+    )
+    monkeypatch.setattr(identity, "require_principal", lambda _request: principal)
+    monkeypatch.setattr(rag_upload.RagAuthorization, "build", lambda _principal: authz)
+
+    class StubStore:
+        def list_pending_failures(self, **_kwargs):
+            return []
+
+        def count_pending_failures(self, **_kwargs):
+            return 0
+
+    class StubRegistry:
+        def list_by_statuses(self, _statuses):
+            return [{
+                "doc_id": "UF-09-01",
+                "file_name": "report.pdf",
+                "file_path": "/app/data/docs/report.pdf",
+                "kb_id": "rag_eval_kb",
+                "department": "general",
+                "tenant_id": "tenant-a",
+                "status": "failed",
+                "quality_status": "failed",
+                "quality_issues": "quality_anomaly:prepaid_integrity(ocr_coverage_partial)",
+                "updated_at": "2026-11-13 10:00:00",
+                "last_processing_run_id": "run-1",
+            }]
+
+    class StubOpLogger:
+        def get_last_ops_batch(self, doc_ids, *, tenant_id):
+            assert doc_ids == ["UF-09-01"]
+            assert tenant_id == "tenant-a"
+            return ({}, {"UF-09-01": "trace-1"})
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: StubStore(),
+    )
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_upload, "_get_op_logger", lambda: StubOpLogger())
+    monkeypatch.setattr(
+        rag_upload,
+        "_load_quality_failure_details",
+        lambda keys: {
+            ("rag_eval_kb", "UF-09-01"): "切分缺 3 处，表格少 4 行、2 个单元格",
+        },
+    )
+
+    response = asyncio.run(rag_upload.list_upload_failures(SimpleNamespace(), limit=25))
+
+    assert response["total"] == 1
+    assert response["counts"] == {"async_queue": 0, "quality_gate": 1}
+    assert response["items"][0]["record_kind"] == "quality_gate"
+    assert response["items"][0]["retryable"] is False
+    assert response["items"][0]["trace_id"] == "trace-1"
+    assert response["items"][0]["trace_status"] == "available"
+    assert response["items"][0]["processing_run_id"] == "run-1"
+    assert response["items"][0]["failure_details"] == "切分缺 3 处，表格少 4 行、2 个单元格"
+
+
+def test_quality_failure_summary_reports_ocr_and_pdf_page_gaps():
+    record = {
+        "parsing": {
+            "ocr_pages": 100,
+            "ocr_page_budget": 100,
+            "ocr_required_pages": list(range(1, 155)),
+            "parse_issues": [{
+                "code": "pdf_source_text_audit_gap",
+                "page_numbers": [13],
+            }],
+        },
+        "coverage": {
+            "uncovered_count": 3,
+            "table_rows_uncovered": 4,
+            "table_cells_uncovered": 2,
+            "uncovered_samples": [{
+                "page": 88,
+                "missing_row_samples": [{
+                    "cells": ["交易性金融资产", "400712", "元"],
+                    "missing_count": 1,
+                }],
+            }],
+        },
+    }
+
+    summary = rag_upload._quality_failure_summary(record)
+
+    assert "OCR 已处理 100/154 页" in summary
+    assert "页数上限 100 页" in summary
+    assert "第 13页" in summary
+    assert "表格少 4 行、2 个单元格" in summary
+    assert "第 88 页" in summary
+    assert "交易性金融资产 / 400712 / 元" in summary
+
+
+def test_quality_failure_details_reads_large_long_pdf_report(monkeypatch, tmp_path):
+    """长 PDF 报告超过 2 MiB 时，管理端仍能显示 OCR 页数缺口。"""
+    from backend.config import database
+
+    quality_dir = tmp_path / "quality_records" / "rag_eval_kb"
+    quality_dir.mkdir(parents=True)
+    record = {
+        "parsing": {
+            "ocr_pages": 100,
+            "ocr_page_budget": 100,
+            "ocr_required_pages": list(range(1, 155)),
+        },
+        "large_source_audit": "x" * (3 * 1024 * 1024),
+    }
+    (quality_dir / "UF-14-02.json").write_text(
+        json.dumps(record), encoding="utf-8",
+    )
+    monkeypatch.setattr(database, "RAG_DATA_DIR", str(tmp_path))
+
+    details = rag_upload._load_quality_failure_details(
+        [("rag_eval_kb", "UF-14-02")],
+    )
+
+    assert "OCR 已处理 100/154 页" in details[("rag_eval_kb", "UF-14-02")]
+
+
+def test_upload_failure_list_recovers_trace_by_upload_and_tenant(monkeypatch):
+    from backend.app.api import identity
+
+    principal = SimpleNamespace(tenant_id="tenant-a", user_id="user-a")
+    authz = SimpleNamespace(
+        is_admin=True,
+        kb_scope=frozenset({"rag_eval_kb"}),
+        can_upload_to=lambda *_: (True, ""),
+        can_manage_row=lambda _row: (True, ""),
+    )
+    monkeypatch.setattr(identity, "require_principal", lambda _request: principal)
+    monkeypatch.setattr(rag_upload.RagAuthorization, "build", lambda _principal: authz)
+
+    class StubStore:
+        def list_pending_failures(self, **_kwargs):
+            return [{
+                "upload_id": "upload-1",
+                "file_path": "/app/data/docs/report.pdf",
+                "kb_id": "rag_eval_kb",
+                "department": "general",
+                "error": "coverage_gap",
+                "created_at": "2026-11-13 10:00:00",
+            }]
+
+        def count_pending_failures(self, **_kwargs):
+            return 1
+
+    class StubRegistry:
+        def list_by_statuses(self, _statuses):
+            return []
+
+    class StubTraceStore:
+        def latest_trace_ids_by_upload(self, upload_ids, tenant_id):
+            assert upload_ids == ["upload-1"]
+            assert tenant_id == "tenant-a"
+            return {"upload-1": "trace-1"}
+
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: StubStore(),
+    )
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(
+        "backend.observability.trace_store.get_trace_store",
+        lambda: StubTraceStore(),
+    )
+
+    response = asyncio.run(rag_upload.list_upload_failures(SimpleNamespace(), limit=25))
+
+    assert response["total"] == 1
+    assert response["items"][0]["trace_id"] == "trace-1"
+    assert response["items"][0]["trace_status"] == "available"
+
+
+def test_prepaid_quality_failure_emits_clear_error_and_trace(monkeypatch, tmp_path):
+    from backend.rag.indexing.indexer import PrepaidContentIntegrityError
+
+    class Registry:
+        def get_by_path(self, _path):
+            return {"status": "active"}
+
+    class RunStore:
+        def get_run(self, _upload_id):
+            return {"status": "indexing"}
+
+        def mark_status(self, *_args, **_kwargs):
+            return None
+
+    emitted = []
+    logged = []
+    monkeypatch.setattr(rag_upload, "_get_registry", lambda: Registry())
+    monkeypatch.setattr(rag_upload, "_latest_upload_trace_id", lambda *_args: "trace-1")
+    monkeypatch.setattr(rag_upload, "_cleanup_candidate_artifacts", lambda *_args: None)
+    monkeypatch.setattr(rag_upload, "_cleanup_failed_upload_sync", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(rag_upload, "_safe_log_op", lambda *args, **kwargs: logged.append((args, kwargs)))
+    monkeypatch.setattr(
+        "backend.rag.indexing.index_run_store_pg.get_index_run_store",
+        lambda: RunStore(),
+    )
+
+    rag_upload._settle_index_result(
+        "upload-1", str(tmp_path / "report.pdf"), "report.pdf", "test",
+        None, "kb-test", None, False, 0.0, result=None,
+        emit_fn=lambda *args, **kwargs: emitted.append((args, kwargs)),
+        exc=PrepaidContentIntegrityError(["coverage_gap"]),
+        actor_id="user-a", tenant_id="tenant-a",
+    )
+
+    assert emitted[0][0][0] == "error"
+    assert "文档未入库" in emitted[0][0][1]
+    assert emitted[0][1]["error_type"] == "quality_gate_rejected"
+    assert emitted[0][1]["trace_id"] == "trace-1"
+    assert logged[0][1]["trace_id"] == "trace-1"
+    assert logged[0][1]["result"] == "failed"
+
+
+def test_document_list_exposes_and_filters_quality_status(monkeypatch):
+    captured = {}
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(tenant_id="tenant-a", department="general"),
+        is_admin=True,
+        kb_scope=frozenset({"rag_eval_kb"}),
+        can_search_kb=lambda _kb_id: True,
+        sql_visible_scopes=lambda _scopes: ["general"],
+    )
+
+    class StubRegistry:
+        def distinct_permission_scopes(self, **_kwargs):
+            return ["general"]
+
+        def search(self, **kwargs):
+            captured.update(kwargs)
+            return {
+                "items": [{
+                    "doc_id": "UF-13-01",
+                    "file_name": "doc_cn.pdf",
+                    "kb_id": "rag_eval_kb",
+                    "status": "active",
+                    "quality_status": "unknown",
+                    "quality_score": 0,
+                    "quality_issues": "legacy_quality_record_incomplete",
+                    "chunk_count": 12,
+                }],
+                "total": 1,
+                "page": 1,
+                "page_size": 20,
+            }
+
+    class StubOpLogger:
+        def get_last_ops_batch(self, _doc_ids, *, tenant_id):
+            assert tenant_id == "tenant-a"
+            return ({}, {})
+
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(authz))
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_documents, "_get_op_logger", lambda: StubOpLogger())
+    monkeypatch.setattr(rag_documents, "_embedding_model_name", lambda: "bge-m3")
+
+    response = asyncio.run(
+        rag_documents.list_documents(SimpleNamespace(), quality_status="unknown"),
+    )
+
+    assert captured["quality_status_filter"] == "unknown"
+    assert response["documents"][0]["quality_status"] == "unknown"
+    assert response["documents"][0]["quality_score"] == 0
+    assert response["documents"][0]["quality_issues"] == "legacy_quality_record_incomplete"
+
+
+def test_super_admin_sees_orphan_pending_record_as_unapproved(monkeypatch):
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(tenant_id="tenant-a", roles=("super_admin",)),
+        is_admin=True,
+        kb_scope=frozenset({"policy_general"}),
+        can_manage_row=lambda _row: (False, "知识库不在可管理范围"),
+    )
+    orphan = {
+        "doc_id": "doc_a_1",
+        "file_name": "doc_a.md",
+        "file_path": "/tmp/docs/kb/dept/doc_a.md",
+        "kb_id": "deleted_kb",
+        "status": "pending_review",
+        "tenant_id": "tenant-a",
+        "department": "general",
+        "chunk_count": 0,
+    }
+
+    class StubRegistry:
+        def list_pending_review(self, **_kwargs):
+            return {"items": [], "total": 0, "page": 1, "page_size": 20}
+
+        def list_by_statuses(self, _statuses):
+            return [orphan]
+
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(authz))
+    monkeypatch.setattr(
+        "backend.rag.knowledge_base_store.list_knowledge_bases",
+        lambda *, include_inactive: [{"kb_id": "policy_general", "status": "active"}],
+    )
+
+    response = asyncio.run(rag_documents.list_pending_docs(SimpleNamespace()))
+
+    assert response["total"] == 1
+    assert response["items"][0]["doc_id"] == "doc_a_1"
+    assert response["items"][0]["orphaned_kb"] is True
+    assert response["items"][0]["orphan_reason"] == "知识库目录中没有此标识"
+
+
+def test_super_admin_can_archive_same_tenant_orphan_pending_record(monkeypatch):
+    from backend.config import rag as rag_config
+
+    orphan = {
+        "doc_id": "doc_a_1",
+        "file_name": "doc_a.md",
+        "file_path": "/tmp/docs/kb/dept/doc_a.md",
+        "kb_id": "deleted_kb",
+        "status": "pending_review",
+        "tenant_id": "tenant-a",
+        "department": "general",
+        "chunk_count": 0,
+    }
+
+    class StubRegistry:
+        def get_by_doc_id(self, _doc_id):
+            return orphan
+
+    authz = SimpleNamespace(
+        principal=SimpleNamespace(
+            user_id="admin-1", tenant_id="tenant-a", roles=("super_admin",),
+        ),
+        kb_scope=frozenset({"policy_general"}),
+        can_manage_row=lambda _row: (False, "知识库不在可管理范围"),
+    )
+    monkeypatch.setattr(rag_documents, "_get_registry", lambda: StubRegistry())
+    monkeypatch.setattr(rag_documents, "_require_authz", _async_value(authz))
+    monkeypatch.setattr(rag_config, "RAG_MODE", "local")
+    monkeypatch.setattr(rag_documents, "get_rag_pipeline", lambda: SimpleNamespace())
+    monkeypatch.setattr(
+        "backend.rag.indexing.review_service.review_pending_doc",
+        lambda *_args, **_kwargs: {"ok": True, "doc_id": "doc_a_1", "new_status": "deleted"},
+    )
+    monkeypatch.setattr(rag_documents, "_safe_log_op", lambda *_args, **_kwargs: None)
+
+    app = FastAPI()
+    app.include_router(rag_documents.router)
+    app.dependency_overrides[require_rag_user] = lambda: None
+    app.dependency_overrides[require_rag_editor] = lambda: None
+
+    response = TestClient(app).post("/pending/doc_a_1/reject")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "doc_id": "doc_a_1", "new_status": "deleted"}
 
 
 def test_remote_delete_disconnect_reports_unknown_state(monkeypatch):

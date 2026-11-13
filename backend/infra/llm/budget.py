@@ -1,4 +1,4 @@
-"""请求级模型预算。 
+"""请求级模型预算。
 
 本模块只负责一次请求内的调用预占和 token 计数：
 
@@ -12,16 +12,15 @@ Redis/PG 配额服务。
 """
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from contextlib import contextmanager
-import threading
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Any, Callable, Iterator
 
 from backend.shared.logger import logger
-
 
 _VALID_CALL_KINDS = frozenset({"primary", "retry", "fallback"})
 _MAX_TRACKED_REQUESTS = 4096
@@ -399,8 +398,23 @@ def bind_request_budget(
     *,
     user_id: str = "",
     tenant_id: str = "",
+    max_retries: int | None = None,
+    max_fallbacks: int | None = None,
 ) -> None:
-    """按 Trace/request_id 绑定预算；相同请求在并行线程复用同一状态。"""
+    """按 Trace/request_id 绑定预算，可对任务级重试/回退上限作有界覆写。"""
+    if max_retries is not None and (
+        isinstance(max_retries, bool)
+        or not isinstance(max_retries, int)
+        or max_retries < 0
+    ):
+        raise ValueError("max_retries 必须是非负整数")
+    if max_fallbacks is not None and (
+        isinstance(max_fallbacks, bool)
+        or not isinstance(max_fallbacks, int)
+        or max_fallbacks < 1
+    ):
+        # 全局配置中的 0 表示不限制；任务级覆写必须保留明确的硬上限。
+        raise ValueError("max_fallbacks 必须是正整数")
     request_id = str(request_id or "").strip()
     if not request_id:
         clear_request_budget()
@@ -419,13 +433,30 @@ def bind_request_budget(
                 from backend.infra.llm.quota import PostgresQuotaStore
 
                 quota_store = PostgresQuotaStore()
+            limits = _config_limits()
+            overrides: dict[str, int] = {}
+            if max_retries is not None:
+                overrides["max_retries"] = max_retries
+            if max_fallbacks is not None:
+                overrides["max_fallbacks"] = max_fallbacks
+            if overrides:
+                limits = replace(limits, **overrides)
             state = RequestBudget(
-                _config_limits(), mode, user_id=user_id, tenant_id=tenant_id,
+                limits, mode, user_id=user_id, tenant_id=tenant_id,
                 quota_store=quota_store,
             )
             _states[request_id] = state
             while len(_states) > _MAX_TRACKED_REQUESTS:
                 _states.popitem(last=False)
+        elif max_retries is not None or max_fallbacks is not None:
+            # 同一任务重试时保留已记账用量，只更新指定的任务级上限；
+            # 不改变 token/cost 等其他请求预算阈值。
+            overrides: dict[str, int] = {}
+            if max_retries is not None:
+                overrides["max_retries"] = max_retries
+            if max_fallbacks is not None:
+                overrides["max_fallbacks"] = max_fallbacks
+            state.limits = replace(state.limits, **overrides)
         else:
             _states.move_to_end(request_id)
     _current_request_id.set(request_id)
@@ -443,9 +474,11 @@ def scoped_request_budget(
     *,
     user_id: str = "",
     tenant_id: str = "",
+    max_retries: int | None = None,
+    max_fallbacks: int | None = None,
     on_error: Callable[[Exception], None] | None = None,
 ) -> Iterator[RequestBudget | None]:
-    """临时绑定请求预算，并恢复外层预算/预占状态。"""
+    """临时绑定预算；可覆写重试/回退次数，token/cost 限额仍沿用全局值。"""
     request_token = _current_request_id.set(_current_request_id.get())
     decision_token = _current_call_decision.set(_current_call_decision.get())
     reservation_token = _current_quota_reservation.set(
@@ -454,7 +487,11 @@ def scoped_request_budget(
     try:
         try:
             bind_request_budget(
-                request_id, user_id=user_id, tenant_id=tenant_id,
+                request_id,
+                user_id=user_id,
+                tenant_id=tenant_id,
+                max_retries=max_retries,
+                max_fallbacks=max_fallbacks,
             )
         except Exception as exc:
             clear_request_budget()

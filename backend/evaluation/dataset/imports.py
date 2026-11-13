@@ -16,6 +16,8 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator, SchemaError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from backend.evaluation.dataset.query_types import MULTI_HOP_QUERY_TYPES, RagQueryType
+
 MAX_BYTES = 5 * 1024 * 1024
 MAX_CASES = 100
 
@@ -57,9 +59,7 @@ class ImportCase(StrictModel):
     question: str = Field(min_length=1, max_length=4000)
     tags: list[str] = Field(default_factory=list, max_length=20)
     tier: Literal["smoke", "core", "hard", "regression"] = "core"
-    query_type: Literal["single_doc", "multi_doc", "table", "procedural", "no_evidence", "permission_denied"] = (
-        "single_doc"
-    )
+    query_type: RagQueryType = "single_doc"
     expected: Expected
     splits: list[str] = Field(default_factory=list, max_length=20)
     archived: bool = False
@@ -234,8 +234,16 @@ def validate_upload(filename: str, data: bytes, manifest_data: dict) -> dict:
                 ):
                     raise ValueError("断言需要 type=contains/not_contains/equals 与非空字符串 value")
             if expected.behavior == "answer":
-                if not expected.evidence or expected.reason is not None or case.query_type == "no_evidence":
-                    raise ValueError("回答题需要证据，且不能声明拒答原因/无答案题型")
+                if (
+                    not expected.evidence
+                    or expected.reason is not None
+                    or case.query_type in {"no_evidence", "permission_denied"}
+                ):
+                    raise ValueError("回答题需要证据，且不能声明拒答原因、无答案或权限题型")
+                if case.query_type in MULTI_HOP_QUERY_TYPES:
+                    quotes = {item.quote.strip() for item in expected.evidence if item.quote.strip()}
+                    if len(quotes) < 2:
+                        raise ValueError("多跳题至少需要两段不同证据")
                 for evidence in expected.evidence:
                     if not (evidence.doc_id.strip() or evidence.source_file.strip()) or not evidence.quote.strip():
                         raise ValueError("每条证据需要 doc_id 或 source_file，以及非空 quote")

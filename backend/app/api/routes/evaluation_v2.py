@@ -24,7 +24,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
 
 from backend.app.api.deps import OperatorIdentity, require_user_actor
 from backend.app.api.identity import Identity, require_principal, require_product_identity
@@ -39,6 +39,11 @@ from backend.evaluation_v2.domain_contracts import (
 )
 from backend.evaluation_v2.imports import validate_non_rag_upload
 from backend.evaluation_v2.privacy import sanitize_candidate_payload
+from backend.evaluation_v2.review_quality import (
+    RagasQualityCheck,
+    resolve_fact_evidence_bindings,
+    validate_ragas_candidate_review,
+)
 
 router = APIRouter(prefix="/evaluation/v2", tags=["评测平台 V2"])
 _ROLE_RANK = {"viewer": 0, "editor": 1, "admin": 2, "super_admin": 3}
@@ -99,12 +104,25 @@ class EvidenceAnchorClaim(StrictModel):
     quote: str = Field(min_length=1, max_length=8000)
 
 
+class FactEvidenceBinding(StrictModel):
+    """按标准事实序号关联请求证据数组中的引用。"""
+
+    fact_index: StrictInt = Field(ge=0, le=39)
+    evidence_indices: list[StrictInt] = Field(min_length=1, max_length=30)
+
+
 class CandidateReview(StrictModel):
     expected_revision: int = Field(ge=1)
     verdict: Literal["approved", "rejected", "needs_changes"]
     rationale: str = Field(min_length=1, max_length=2000)
     expected: dict[str, Any] | None = None
     evidence: list[EvidenceAnchorClaim] = Field(default_factory=list, max_length=30)
+    fact_evidence_bindings: list[FactEvidenceBinding] = Field(
+        default_factory=list,
+        max_length=40,
+        description="将每条必需事实关联到 evidence 数组中的一条或多条引用",
+    )
+    quality_checks: dict[RagasQualityCheck, StrictBool] | None = None
 
 
 class DatasetItemRef(StrictModel):
@@ -483,6 +501,7 @@ def verify_evidence_anchors(
             "doc_id": doc_id,
             "doc_version": doc_version,
             "anchor_id": anchor_id,
+            "quote": quote,
             "anchor_text_hash": anchor_hash,
             "source_content_hash": source_hash,
             "verified_by": actor,
@@ -772,6 +791,7 @@ async def import_dataset_candidates(
 @router.get("/candidates")
 async def list_candidates(
     review_status: str | None = Query(default=None, pattern=r"^(draft|needs_evidence|in_review|approved|rejected)$"),
+    dataset_key: str | None = Query(default=None, min_length=3, max_length=64),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     identity: Identity = Depends(require_product_identity),
@@ -783,10 +803,30 @@ async def list_candidates(
             repository.list_candidates,
             identity.tenant_id,
             review_status=review_status,
+            dataset_key=dataset_key,
             limit=limit,
             offset=offset,
         )
         return {"items": items, "limit": limit, "offset": offset}
+    except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
+        _safe_error(exc)
+
+
+@router.get("/candidates/{candidate_id}/reviews")
+async def list_candidate_reviews(
+    candidate_id: uuid.UUID,
+    identity: Identity = Depends(require_product_identity),
+    actor: OperatorIdentity = Depends(require_user_actor),
+):
+    """读取审核历史；仓储查询按当前租户隔离候选和记录。"""
+    _role(actor, "admin")
+    try:
+        items = await asyncio.to_thread(
+            repository.list_candidate_annotations,
+            identity.tenant_id,
+            str(candidate_id),
+        )
+        return {"items": items}
     except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
         _safe_error(exc)
 
@@ -1015,6 +1055,8 @@ async def review_candidate(
         )
         domain = context["domain"]
         evidence = []
+        fact_evidence_bindings = None
+        quality_checks = None
         if body.verdict == "approved":
             if domain == "rag":
                 behavior = str((expected or {}).get("behavior", "answer"))
@@ -1035,6 +1077,26 @@ async def review_candidate(
                     actor.actor,
                     resolve_principal(request),
                 )
+                quality_checks = validate_ragas_candidate_review(
+                    payload=context["payload"],
+                    expected=expected,
+                    evidence=evidence,
+                    fact_evidence_bindings=[
+                        item.model_dump(mode="json")
+                        for item in body.fact_evidence_bindings
+                    ],
+                    quality_checks=body.quality_checks,
+                    rationale=clean_rationale,
+                )
+                if quality_checks is not None:
+                    fact_evidence_bindings = resolve_fact_evidence_bindings(
+                        required_facts=(expected or {}).get("required_facts", []),
+                        evidence=evidence,
+                        bindings=[
+                            item.model_dump(mode="json")
+                            for item in body.fact_evidence_bindings
+                        ],
+                    )
             else:
                 if clean_claims:
                     raise HTTPException(422, "非 RAG 样本不能绑定知识库证据")
@@ -1045,6 +1107,9 @@ async def review_candidate(
                     expected,
                     [],
                 )
+        elif body.verdict == "rejected" and domain == "rag":
+            # 拒绝时保留审核者引用的原始证据；此分支不声称证据已通过锚点核验。
+            evidence = clean_claims
         return await asyncio.to_thread(
             repository.review_candidate,
             identity.tenant_id,
@@ -1055,6 +1120,8 @@ async def review_candidate(
             rationale=clean_rationale,
             expected=expected,
             evidence=evidence,
+            fact_evidence_bindings=fact_evidence_bindings,
+            quality_checks=quality_checks,
         )
     except Exception as exc:  # noqa: BLE001 — API 输出不泄漏数据库细节
         _safe_error(exc)

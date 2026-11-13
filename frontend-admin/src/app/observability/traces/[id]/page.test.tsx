@@ -150,6 +150,34 @@ describe('Trace 详情页（四问布局重构版）', () => {
     expect(container.textContent).toContain('兜底提示')
   })
 
+  it('Rerank Provider 显示真实模型且不复用聊天模型 Token 和费用', async () => {
+    const trace = errorTrace()
+    const rerankSpan = {
+      id: 'rerank-attempt', type: 'llm_call', name: 'Rerank Provider 尝试', parent_id: 'root',
+      status: 'error', start_time: BASE, duration_ms: 4000, duration_ratio: 0.5,
+      attributes: {}, metrics: { role: 'rerank', model: 'bge-reranker-v2-m3', provider: 'custom-gpu' },
+      children: [], events: [], warnings: [], errors: [],
+      llm_call: {
+        model: 'doubao-seed-2.0-mini', provider: 'custom-doubao', role: 'rerank',
+        temperature: 0, prompt_text: '', response_text: '', prompt_tokens: 1826,
+        completion_tokens: 158, cost_usd: 0.001, cost_cny: 0.0049,
+      },
+    } as unknown as (typeof trace.spans)[number]
+    trace.spans.unshift(rerankSpan)
+    mocks.getTraceDetail.mockResolvedValue(trace)
+    const container = await mountDetail()
+
+    expect(container.textContent).toContain('模型调用明细（生成 / 重排）')
+    const title = Array.from(container.querySelectorAll('strong'))
+      .find((element) => element.textContent === 'Rerank Provider 尝试')
+    const card = title?.closest('div.rounded-lg')
+    expect(card?.textContent).toContain('bge-reranker-v2-m3')
+    expect(card?.textContent).toContain('Provider custom-gpu')
+    expect(card?.textContent).not.toContain('doubao-seed-2.0-mini')
+    expect(card?.textContent).not.toContain('Token 1826 / 158')
+    expect(card?.textContent).not.toContain('¥0.0049')
+  })
+
   it('成功 Trace 不显示候选入口与错误卡，SLA 正常判定', async () => {
     const ok = errorTrace() as unknown as Record<string, unknown>
     ok.status = 'success'

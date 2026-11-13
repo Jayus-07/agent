@@ -112,6 +112,44 @@ describe('UploadDialog 后台上传体验', () => {
     act(() => root.unmount())
   })
 
+  it('展示质量门禁失败原因并提供失败 Trace 链接', async () => {
+    mocks.fetchRaw.mockImplementation(async (url: string) => {
+      const body = url.includes('knowledge-bases')
+        ? { knowledge_bases: [{ id: 'policy_general', name: '政策库', depts: [{ id: 'general', label: '通用' }] }] }
+        : { ready: true }
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
+    mocks.uploadDocument.mockResolvedValue({
+      ok: false,
+      error: '文档未入库：原文有内容没有进入最终分块，请核对解析结果和源文件。',
+      trace_id: 'trace-42',
+    })
+
+    const { root, container } = mount(true, vi.fn(), vi.fn())
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)) })
+
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File(['fixture'], 'report.pdf')],
+    })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+    const uploadButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.textContent?.includes('上传并索引'))
+    await act(async () => {
+      uploadButton!.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('文档未入库：原文有内容没有进入最终分块')
+    expect(container.querySelector('a[href="/knowledge/operations/traces/trace-42"]')?.textContent)
+      .toContain('查看 Trace')
+    act(() => root.unmount())
+  })
+
   it('切换知识库时刷新部门候选并重置无效的当前部门', async () => {
     mocks.fetchRaw.mockImplementation(async (url: string) => {
       const body = url.includes('knowledge-bases')

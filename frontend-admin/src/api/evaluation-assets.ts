@@ -12,6 +12,8 @@ export interface EvaluationBinding {
   mode?: 'retrieval' | 'answer'; split?: string; snapshot_id?: string
 }
 export interface EvaluationTask { task_id: string; run_id: string; status: string; progress?: string; error?: string; output?: { run_id?: string; validity?: string; total?: number; import_id?: string; v2_dataset_key?: string; v2_candidate_count?: number } }
+export type RagasQueryType = 'single_hop_specific' | 'multi_hop_abstract' | 'multi_hop_specific'
+export type RagasQueryCounts = Record<RagasQueryType, number>
 export interface ImportValidation { valid: boolean; manifest?: ImportManifest; case_count?: number; errors: Array<{ line: number; field: string; message: string }>; preview?: ImportedDataset['preview'] }
 
 function uploadBody(file: File, manifest: ImportManifest) {
@@ -39,7 +41,7 @@ export const evaluationAssets = {
   promoteCandidate: (candidate_id: string, manifest: Record<string, unknown>, expected: Record<string, unknown>) => request(`${BASE}/dataset-candidate-promotions`, { method: 'POST', body: { candidate_id, manifest, expected } }),
   publicationPolicy: (kbId: string) => request<{ policy: { binding_id: string; enabled: boolean } | null }>(`${BASE}/evaluation-publication-policies/${encodeURIComponent(kbId)}`),
   setPublicationPolicy: (kbId: string, bindingId: string, enabled: boolean) => request(`${BASE}/evaluation-publication-policies/${encodeURIComponent(kbId)}`, { method: 'POST', body: { binding_id: bindingId, enabled } }),
-  synthesize: (snapshot_id: string, manifest: ImportManifest, count: number, request_id: string) => request<EvaluationTask>(`${BASE}/dataset-synthesis`, { method: 'POST', body: { snapshot_id, manifest, count, request_id } }),
+  synthesize: (snapshot_id: string, manifest: ImportManifest, count: number, query_counts: RagasQueryCounts, dataset_query_counts: RagasQueryCounts, request_id: string) => request<EvaluationTask>(`${BASE}/dataset-synthesis`, { method: 'POST', body: { snapshot_id, manifest, count, query_counts, dataset_query_counts, request_id } }),
 }
 
 export function downloadEvalTemplate() {

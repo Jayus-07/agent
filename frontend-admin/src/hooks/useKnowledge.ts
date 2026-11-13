@@ -7,6 +7,7 @@ import { knowledgeService, type KnowledgeStats, type KnowledgeDoc } from '@/api/
 export function useKnowledgeStats() {
   const [data, setData] = useState<KnowledgeStats & { loading: boolean; error: string }>({
     kb_count: 0, doc_count: 0, chunk_count: 0, total_chunks: 0, embedding_model: '', vector_db: '',
+    quality_status_counts: { pass: 0, soft_warning: 0, failed: 0, unknown: 0 },
     loading: true, error: '',
   })
 
@@ -28,6 +29,7 @@ export function useDocuments() {
   const [currentFingerprint, setCurrentFingerprint] = useState('')
   const [keyword, setKeyword_] = useState('')
   const [status, setStatus_] = useState('')
+  const [qualityStatus, setQualityStatus_] = useState('')
   const [type, setType_] = useState('')
   const [kbId, setKbId_] = useState('')
   const [dept, setDept_] = useState('')
@@ -37,7 +39,7 @@ export function useDocuments() {
   const refresh = useCallback(() => {
     setLoading(true)
     setError('')
-    knowledgeService.getDocuments({ keyword, status, type, kb_id: kbId, department: dept, page, page_size: pageSize })
+    knowledgeService.getDocuments({ keyword, status, quality_status: qualityStatus, type, kb_id: kbId, department: dept, page, page_size: pageSize })
       .then((d: { documents: KnowledgeDoc[]; total: number; current_fingerprint?: string }) => {
         setData(d.documents ?? [])
         setTotal(d.total)
@@ -48,7 +50,7 @@ export function useDocuments() {
         setError('获取文档列表失败: ' + String(e))
         setLoading(false)
       })
-  }, [keyword, status, type, kbId, dept, page])
+  }, [keyword, status, qualityStatus, type, kbId, dept, page])
 
   useEffect(() => { refresh() }, [refresh])
 
@@ -59,6 +61,11 @@ export function useDocuments() {
 
   const setStatus = useCallback((s: string) => {
     setStatus_(s)
+    setPage(1)
+  }, [])
+
+  const setQualityStatus = useCallback((s: string) => {
+    setQualityStatus_(s)
     setPage(1)
   }, [])
 
@@ -77,7 +84,7 @@ export function useDocuments() {
     setPage(1)
   }, [])
 
-  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh, currentFingerprint }
+  return { documents: data, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, qualityStatus, setQualityStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh, currentFingerprint }
 }
 
 // Hook — 单个文档详情（独立 fetch）

@@ -9,6 +9,7 @@
   2. BM25 重建失败 → 清理本次新向量并中断索引主流程
   3. bm25_store=None（启动期 sync 场景）→ 跳过 BM25，索引正常完成
 """
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -37,15 +38,30 @@ def _make_indexer(tmp_path, bm25_store) -> IncrementalIndexer:
     return indexer
 
 
-def _run_inner(indexer: IncrementalIndexer, tmp_path, reindex_ctx=None) -> dict:
+def _run_inner(
+    indexer: IncrementalIndexer,
+    tmp_path,
+    reindex_ctx=None,
+    *,
+    source_path: Path | None = None,
+    identity_path: str | None = None,
+    captured_meta: dict | None = None,
+) -> dict:
     """真实执行 _index_file_inner；仅对外部边界打桩（解析/LLM/embedding/chunk_store）。"""
-    target = tmp_path / "doc.md"
+    target = source_path or (tmp_path / "doc.md")
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(f"# 标题\n{_BODY}", encoding="utf-8")
 
     fake_chunk = Document(
         page_content=_BODY,
         metadata={"source": str(target), "granularity": "leaf"},
     )
+    metadata_mock = AsyncMock(return_value={})
+    if captured_meta is not None:
+        metadata_mock.side_effect = lambda *args, **kwargs: (
+            captured_meta.update(args[1] if len(args) > 1 else kwargs)
+            or {}
+        )
     with patch(
         "backend.rag.preprocessing.pipeline.parse_and_chunk_full",
         return_value=([fake_chunk], {}),
@@ -53,12 +69,12 @@ def _run_inner(indexer: IncrementalIndexer, tmp_path, reindex_ctx=None) -> dict:
          patch("backend.rag.indexing.chunk_store.get_chunk_store",
                return_value=MagicMock()), \
          patch.object(IncrementalIndexer, "_build_doc_metadata",
-                      new=AsyncMock(return_value={})), \
+                      new=metadata_mock), \
          patch.object(IncrementalIndexer, "_embed_with_retry",
                       return_value=[[0.0, 0.0, 0.0]]):
         return indexer._index_file_inner(
             str(target), kb_id="policy_general", doc_id="doc1", file_hash="h1",
-            reindex_ctx=reindex_ctx)
+            reindex_ctx=reindex_ctx, identity_path=identity_path)
 
 
 class TestBM25IncrementalSync:
@@ -140,3 +156,24 @@ class TestBM25IncrementalSync:
 
         assert result["chunk_count"] == 1
         indexer.registry.register.assert_called_once()
+
+    def test_candidate_metadata_uses_official_identity_path(self, tmp_path):
+        """候选索引的文档分类元数据必须看正式文件名，不能看随机暂存名。"""
+        indexer = _make_indexer(tmp_path, None)
+        indexer.candidate_mode = True
+        source_path = tmp_path / "staging" / "upload-generation.md"
+        identity_path = str(
+            tmp_path / "docs" / "travel" / "general" / "厦门-鼓浪屿历史背景.md"
+        )
+        captured_meta: dict = {}
+
+        _run_inner(
+            indexer,
+            tmp_path,
+            source_path=source_path,
+            identity_path=identity_path,
+            captured_meta=captured_meta,
+        )
+
+        assert captured_meta["source_file"] == "厦门-鼓浪屿历史背景.md"
+        assert captured_meta["file_path"] == identity_path

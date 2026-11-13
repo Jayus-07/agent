@@ -58,11 +58,11 @@ RUN --mount=type=cache,id=agent-platform-pip,target=/root/.cache/pip,sharing=loc
         --extra-index-url ${TORCH_CPU_INDEX_URL} \
     && /opt/venv/bin/pip install --no-deps -e .
 
-# tokenizer 资源只在构建期取得，避免每次新容器首问再联网下载约1.6MB。
-# 单独缓存，不因业务源码变动重复下载；tiktoken 自身校验资源哈希。
+# 常用 tokenizer 资源在构建期取得，避免新容器首问联网下载；tiktoken 自身校验资源哈希。
+# 单独缓存，不因业务源码变动重复下载。
 RUN --mount=type=cache,id=agent-platform-tiktoken,target=/root/.cache/tiktoken,sharing=locked \
     TIKTOKEN_CACHE_DIR=/root/.cache/tiktoken /opt/venv/bin/python -c \
-        "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+        "import tiktoken; [tiktoken.get_encoding(name) for name in ('cl100k_base', 'o200k_base')]" \
     && mkdir -p /opt/tiktoken-cache \
     && cp /root/.cache/tiktoken/* /opt/tiktoken-cache/
 
@@ -97,10 +97,12 @@ COPY --from=builder /opt/tiktoken-cache /opt/tiktoken-cache
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
 
 # ── 非 root 用户（uid 10001，固定值便于宿主侧对齐卷权限）──
+# 未预置的模型编码可能在运行期下载，缓存目录必须可由 appuser 写入。
 # 用户层置于代码 COPY 之前，代码变更时可复用；运行时数据与缓存由 compose named volume 提供。
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
     && mkdir -p /app \
-    && chown appuser:appuser /app
+    && chown appuser:appuser /app \
+    && chown -R appuser:appuser /opt/tiktoken-cache
 
 # ── 代码 ──
 WORKDIR /app

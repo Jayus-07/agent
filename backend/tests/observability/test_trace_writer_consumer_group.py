@@ -7,6 +7,8 @@ class _FakeRedis:
         self.group_creates = []
         self.reads = []
         self.acks = []
+        self.deleted = []
+        self.events = []
 
     def xgroup_create(self, stream, group, id="0", mkstream=False):
         self.group_creates.append((stream, group, id, mkstream))
@@ -17,6 +19,11 @@ class _FakeRedis:
 
     def xack(self, stream, group, message_id):
         self.acks.append((stream, group, message_id))
+        self.events.append(("ack", message_id))
+
+    def xdel(self, stream, message_id):
+        self.deleted.append((stream, message_id))
+        self.events.append(("delete", message_id))
 
 
 class _Store:
@@ -63,3 +70,5 @@ def test_trace_writer_uses_consumer_group_and_acks_after_persist(monkeypatch):
 
     assert trace_store.saved == [{"id": "trace-1"}]
     assert redis.acks == [("agent:trace:write", "trace-writers", "1-0")]
+    assert redis.deleted == [("agent:trace:write", "1-0")]
+    assert redis.events == [("ack", "1-0"), ("delete", "1-0")]

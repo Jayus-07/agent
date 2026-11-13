@@ -181,6 +181,16 @@ Playwright 的 Windows 默认浏览器目录是 `%LOCALAPPDATA%\ms-playwright`�
 | RAG 不能检索 | 文档审核状态、active_generation、向量/BM25 指针及权限范围 | 不能把 pending_review 当 active；不能删除旧版恢复证据 |
 | Grafana 无数据/告警未发 | Prometheus target、/metrics、PromQL、规则状态 | No Data ≠ 0，Webhook 未配置则不宣称通知已通过 |
 
+### Redis AOF 损坏处置
+
+1. 先确认受影响实例和用途（缓存、Celery、认证控制面或 Stream 队列），查看容器日志、`INFO persistence`、`INFO memory`、淘汰计数和 Stream Consumer Group 的 pending/lag；不要因为 Redis 启动失败就删除数据卷。
+2. 停止故障实例反复重启及会继续写入的相关进程。将整个 Redis 数据目录复制到独立、受控的备份位置，保留 RDB、AOF manifest、所有 base/increment 文件和权限；副本不要放在同一 Docker volume 或同一块故障盘上。
+3. 在隔离副本上先做只读完整性检查，再对副本尝试 AOF 修复。Redis 7 多段 AOF 必须以 manifest 和整组文件为单位；记录被截去的字节范围，修复后再次只读校验，并在隔离实例启动确认数据可读。
+4. 只有隔离恢复结果、丢失窗口和业务影响已评估后，才按回滚方案恢复服务。不要对唯一原件直接修复，不要删除 manifest/增量文件，也不要用 `FLUSHDB`、`FLUSHALL` 或 `down -v` 清理故障。
+5. 恢复后核对 AOF 写入、RDB 保存、淘汰量、Consumer Group pending/lag，以及数据库中的幂等记录；之后完成一次备份读取和隔离恢复演练。`appendfsync everysec` 不能代替异地备份，也不能保证文件损坏时只丢失一秒数据。
+
+生产要求：Redis 备份放到异地/独立故障域并设置访问控制、版本保留和可恢复告警；明确每类 Redis 数据的 RPO/RTO。缓存与不能被淘汰的队列优先拆实例；临时混部时仅允许带 TTL 的缓存参与淘汰，并对 Stream 长度、pending/lag、内存和淘汰增量设告警。
+
 **演练证据**：触发/故障时间、影响租户与操作范围、业务状态、错误/Trace ID、只读诊断、恢复决策、备份版本、回滚或人工裁决、数据一致性和最终负责人。恢复脚本运行前核对容器名称、数据库目标、共享 Worktree/Volume 及备份落点；不使用 `down -v` 和强制清理 Worktree 来“修好”系统。
 
 ### DR-01～06 验收

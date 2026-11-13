@@ -93,6 +93,27 @@ def _question_candidate_indexes(chunks: list[Document]) -> list[int]:
     return candidates
 
 
+def _parse_trace_page_metrics(
+    chunks: list[Document], ext: str, raw_ast: Any = None,
+) -> tuple[int, bool]:
+    """返回 Trace 可核对的物理页数；PDF 优先使用解析器记录的原始页数。"""
+    pages_applicable = ext.lower() == ".pdf"
+    if not pages_applicable:
+        return 0, False
+
+    page_count = 0
+    for chunk in chunks:
+        value = (chunk.metadata or {}).get("page_count")
+        if isinstance(value, int) and value > page_count:
+            page_count = value
+
+    try:
+        pdf_page_count = int(getattr(raw_ast, "pdf_page_count", 0) or 0)
+    except (TypeError, ValueError):
+        pdf_page_count = 0
+    return max(page_count, pdf_page_count), True
+
+
 def build_fixture_chunk_metadata(metadata: Mapping[str, Any]) -> dict[str, Any]:
     """返回评测 chunk 必须携带的稳定身份字段。"""
     fixture_set = str(metadata.get("fixture_set") or "").strip()
@@ -435,6 +456,15 @@ _COVERAGE_AUDIT_FIELDS = {
 }
 
 
+class PrepaidContentIntegrityError(ValueError):
+    """付费前完整性门禁拒绝文档；与请求参数错误区分。"""
+
+    def __init__(self, issue_codes: list[str]):
+        self.issue_codes = tuple(str(code) for code in issue_codes if code)
+        detail = ",".join(self.issue_codes) or "content_integrity"
+        super().__init__(f"质量门禁硬异常(付费前预检): {detail}")
+
+
 def _coverage_quality_metrics(coverage: dict) -> dict:
     """覆盖审计 → 质量门禁指标（付费前预检与付费后门禁同口径）。
 
@@ -706,9 +736,7 @@ def _enforce_prepaid_content_integrity(
                 "[Indexer] 付费前完整性预检留痕写入 registry 失败",
                 exc_info=True,
             )
-    raise ValueError(
-        f"质量门禁硬异常(付费前预检): {detail}"
-    )
+    raise PrepaidContentIntegrityError(failures)
 
 
 class ChunkingEmptyError(Exception):
@@ -1508,16 +1536,11 @@ class IncrementalIndexer:
                     parser_lineage[0], status="success",
                     started_at=parser_lineage[1], output_count=len(chunks),
                 )
-            # P1（2026-10-19）：doc_count 是产出 chunk 数；page_count 不再由
-            # chunk 数冒充——仅 PDF 有真实物理页数（pipeline 元数据提供），
-            # 其余格式无可靠分页语义，记 0 并显式标记 page_count_applicable=false，
-            # 前端据此区分「不适用」与「0 页」。
-            _parse_pages = 0
-            for _ch in chunks:
-                _p = _ch.metadata.get("page_count")
-                if isinstance(_p, int) and _p > 0:
-                    _parse_pages = max(_parse_pages, _p)
-            _pages_applicable = ext.lower() == ".pdf"
+            # PDF 物理总页数保存在原始 AST；chunk 元数据没有页数字段时也要记录。
+            # 其余格式没有可靠的物理页数口径，记 0 并显式标记不适用。
+            _parse_pages, _pages_applicable = _parse_trace_page_metrics(
+                chunks, ext, _qc.get("raw_ast"),
+            )
             parse_metrics = {
                 "doc_count": len(chunks),
                 "page_count": _parse_pages if _pages_applicable else 0,
@@ -1589,7 +1612,9 @@ class IncrementalIndexer:
             except Exception as e:
                 logger.debug(f"[Indexer] parsing 占位行写入失败（不影响索引）: {e}")
         dup_check = self.registry.get_by_path(path_id)
-        if dup_check and dup_check.get("file_hash") == file_hash and dup_check.get("status") == "active":
+        if (not self.candidate_mode and dup_check
+                and dup_check.get("file_hash") == file_hash
+                and dup_check.get("status") == "active"):
             trace_collector.end_span(dedup_span,
                 metrics={"cached": True, "existing_doc_id": dup_check.get("doc_id", "")})
             logger.info(f"[Dedup] 文件未变更，跳过索引: {file_path}")
@@ -1715,8 +1740,10 @@ class IncrementalIndexer:
             ), "")
         doc_meta = {
             "doc_id": doc_id,
-            "source_file": os.path.basename(file_path),
-            "file_path": file_path,
+            # 候选模式实际读取的是随机暂存文件；文档元数据必须绑定正式身份路径，
+            # 否则文件名分类会看到 upload_id，Trace 和入库元数据也会泄露暂存路径。
+            "source_file": os.path.basename(path_id),
+            "file_path": path_id,
             "kb_id": kb_id,  # 用派生的 kb_id 参数，而非 self.kb_id（否则 kb 隔离失效）
             "fixture_set": fixture_set or "",
             "dataset": "rag_eval" if fixture_set else "",
@@ -2373,7 +2400,42 @@ class IncrementalIndexer:
             if len(full_text) > DOC_LEVEL_TEXT_MAX_CHARS:
                 doc_db_meta["doc_level_truncated"] = "true"
                 doc_db_meta["doc_level_full_chars"] = len(full_text)
-            ids = self.doc_db.add_texts(texts=[doc_level_text], metadatas=[doc_db_meta]) if doc_level_text else []
+            doc_embed_span = trace_collector.start_span(
+                "index_doc_embed",
+                parent_id="index_upload",
+                name="Embed document summary",
+                type="embedding",
+                kind=SpanKind.INDEX_EMBED.value,
+                input={
+                    "text_chars": len(doc_level_text),
+                    "doc_level_truncated": (
+                        doc_db_meta.get("doc_level_truncated") == "true"
+                    ),
+                },
+            )
+            try:
+                ids = (
+                    self.doc_db.add_texts(
+                        texts=[doc_level_text], metadatas=[doc_db_meta],
+                    )
+                    if doc_level_text else []
+                )
+            except Exception as exc:
+                trace_collector.end_span(
+                    doc_embed_span,
+                    status="error",
+                    metrics={"error": f"{type(exc).__name__}: {exc}"[:240]},
+                )
+                raise
+            else:
+                trace_collector.end_span(
+                    doc_embed_span,
+                    status="success" if ids else "skipped",
+                    metrics={
+                        "doc_vector_count": len(ids),
+                        "text_chars": len(doc_level_text),
+                    },
+                )
             doc_db_id = ids[0] if ids else ""
         except Exception as e:
             logger.error(f"Doc 级写入失败: {e}")

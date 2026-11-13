@@ -52,9 +52,15 @@ def _serialize_record(record: Any) -> dict:
 
 
 def _should_keep(record: Any) -> bool:
-    """采样决策：error trace 始终保留，其余按 TRACE_SAMPLING_RATE 概率保留。"""
-    get = lambda k, d=None: record.get(k, d) if isinstance(record, dict) else getattr(record, k, d)
+    """错误和 RAG 评测 Trace 始终保留，其余按采样率留存。"""
+    def get(key: str, default=None):
+        if isinstance(record, dict):
+            return record.get(key, default)
+        return getattr(record, key, default)
+
     if get("error") or get("status") == "error":
+        return True
+    if get("workflow_name") == "rag_eval":
         return True
     if TRACE_SAMPLING_RATE >= 1.0:
         return True
@@ -285,6 +291,17 @@ class TraceWriteQueue:
                     # 因此这里不能把持久化成功伪装成消费成功。
                     logger.warning(
                         "[TraceWriter] Trace Stream ACK 失败，消息将保留在 PEL",
+                        extra={"message_id": msg_id},
+                        exc_info=True,
+                    )
+                    continue
+                try:
+                    # Trace 已落入持久化存储且已 ACK，队列副本可以删除，避免保留
+                    # 最多 10000 条完整 Trace JSON 长期占用缓存 Redis。
+                    self._redis.xdel(f"agent:{_STREAM_KEY}", msg_id)
+                except Exception:
+                    logger.warning(
+                        "[TraceWriter] Trace Stream 已 ACK 但删除失败",
                         extra={"message_id": msg_id},
                         exc_info=True,
                     )

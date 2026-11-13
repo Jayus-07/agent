@@ -332,11 +332,27 @@ def _bm25_global_lock(main_dir: Path):
         f"BM25 全局发布锁获取超时: {lock_path}")
 
 
-def _release_bm25_global_lock(fd) -> None:
+def _release_bm25_global_lock(fd, lock_path: Path) -> None:
+    """释放 BM25 发布锁，并只删除本次创建的锁文件。"""
+    try:
+        owned_stat = os.fstat(fd)
+    except OSError:
+        owned_stat = None
     try:
         os.close(fd)
     except OSError:
         pass
+    if owned_stat is None:
+        return
+    try:
+        current_stat = lock_path.stat()
+        if (current_stat.st_dev, current_stat.st_ino) == (
+                owned_stat.st_dev, owned_stat.st_ino):
+            lock_path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        logger.warning(f"[Publish] BM25 全局锁清理失败: {exc}")
 
 
 def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
@@ -362,6 +378,7 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
     main_dir = Path(main_store.index_dir)
     main_dir.mkdir(parents=True, exist_ok=True)
     lock_fd = _bm25_global_lock(main_dir)
+    lock_path = main_dir / ".publish.lock"
     try:
         for name in _BM25_ARTIFACTS:
             src = cand_dir / name
@@ -374,7 +391,7 @@ def switch_bm25_snapshot(cand_store, main_store, generation: str) -> dict:
         # 指针统一由 store 维护（重建/切换同一入口，最后写）
         main_store.write_published_pointer(generation, meta)
     finally:
-        _release_bm25_global_lock(lock_fd)
+        _release_bm25_global_lock(lock_fd, lock_path)
     logger.info(
         f"[Publish] BM25 快照已切换 generation={generation} "
         f"doc_count={meta.get('doc_count')}")
