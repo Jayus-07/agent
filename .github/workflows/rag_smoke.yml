@@ -185,6 +185,9 @@ jobs:
             backend/tests/evaluation/test_planner_live_runner.py \
             backend/tests/evaluation/test_online_sampler.py \
             backend/tests/evaluation/test_release_gate_module_aware.py \
+            backend/tests/scripts/test_validate_production_secrets.py \
+            backend/tests/scripts/test_release_script_identity.py \
+            backend/tests/scripts/test_verify_release_gate_readiness.py \
             tests/evaluation/test_rag_ci_workflow_contracts.py \
             tests/evaluation/test_rag_runner.py \
             tests/evaluation/test_cs_live_entrypoint.py \

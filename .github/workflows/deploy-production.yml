@@ -298,6 +298,11 @@ jobs:
             fi
           fi
 
+          docker compose run --rm --no-deps \
+            -e PYTHONPATH=/app \
+            --entrypoint python db-migrate \
+            backend/scripts/validate_production_secrets.py
+
           runtime_env="$RUNNER_TEMP/release-runtime.env"
           umask 077
           python - "$PRODUCTION_ENV_FILE" "$runtime_env" <<'PY'
@@ -310,17 +315,22 @@ jobs:
 
           values = dotenv_values(sys.argv[1])
           required = ("PGPASSWORD", "API_KEY")
+          optional = ("PROMETHEUS_URL",)
           missing = [name for name in required if not values.get(name)]
           if missing:
               raise SystemExit("Missing required keys in production environment file")
+          runtime_names = (*required, *(name for name in optional if values.get(name)))
           path = Path(sys.argv[2])
           path.write_text(
-              "".join(f"export {name}={shlex.quote(values[name])}\n" for name in required),
+              "".join(
+                  f"export {name}={shlex.quote(values[name])}\n"
+                  for name in runtime_names
+              ),
               encoding="utf-8",
           )
           os.chmod(path, 0o600)
           PY
-          # 只在当前进程环境使用所需凭据，不打印、不写入仓库或任务产物。
+          # 只在当前进程环境使用所需配置，不打印、不写入仓库或任务产物。
           set -a
           # shellcheck disable=SC1090
           source "$runtime_env"
