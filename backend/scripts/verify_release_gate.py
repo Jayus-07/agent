@@ -12,8 +12,8 @@
   Gate 7  CS              客服问句 200 + cs_graph_node 执行
   Gate 8  Travel          旅游问句 200 + travel_graph_node 执行
   Gate 9  Selection       选品问句 200 + selection_funnel 执行
-  Gate 10 Task Runtime    近 24h 存在 SUCCESS 任务（运行时健康侧证）
-  Gate 11 Model           /sys/model-health 200（治理面可达）
+  Gate 10 Task Runtime    Celery 在线 worker 响应且消费 agent 队列
+  Gate 11 Model           当前主问答角色可用且最近 24h 有真实调用探测成功
   Gate 12 Observability   /metrics 指标族在册 + prometheus targets up
 
 收尾落库（M8 / 台账 D8）：12 门跑完直连 agent_memory（5433）写
@@ -31,11 +31,13 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 try:
@@ -106,7 +108,7 @@ def claims_of(tok: str) -> dict:
 
 
 def chat(token: str, session: str, question: str, direct=False, actor=None,
-         timeout=240) -> tuple[int, str, list[str]]:
+         timeout=240) -> tuple[int, str, list[str], str, bool]:
     prefix = "" if direct else "/api"
     body = {"question": question, "session_id": session,
             "request_id": f"gate-{session}-{int(time.time()*1000)}",
@@ -119,9 +121,11 @@ def chat(token: str, session: str, question: str, direct=False, actor=None,
                        if False else f"{GATEWAY}{prefix}/chat/stream",
                        body=body, token=token, headers=headers, timeout=timeout)
     if st != 200:
-        return st, "", []
+        return st, "", [], "", False
     answer, nodes, ev = [], [], None
     trace_id = ""
+    error_code = ""
+    done = False
     for line in raw.splitlines():
         line = line.rstrip("\r")
         if line.startswith("event:"):
@@ -134,7 +138,16 @@ def chat(token: str, session: str, question: str, direct=False, actor=None,
             if ev == "delta" and isinstance(d, dict):
                 answer.append(d.get("content") or "")
             if ev == "done" and isinstance(d, dict):
+                done = True
                 trace_id = d.get("trace_id") or ""
+            if ev == "error" and isinstance(d, dict):
+                raw_code = d.get("code")
+                if isinstance(raw_code, str) and re.fullmatch(
+                    r"[A-Z0-9_]{1,64}", raw_code
+                ):
+                    error_code = raw_code
+                else:
+                    error_code = "UNKNOWN"
     if trace_id:
         code = ("import sys, json;"
                 "from backend.observability.trace_store import get_trace_store;"
@@ -148,7 +161,7 @@ def chat(token: str, session: str, question: str, direct=False, actor=None,
             nodes = json.loads((out.stdout or "").strip().splitlines()[-1])
         except Exception:
             nodes = []
-    return st, "".join(answer), nodes
+    return st, "".join(answer), nodes, error_code, done
 
 
 def g0_build() -> bool:
@@ -219,44 +232,147 @@ def g3_tenant(tok_a: str, tok_b: str) -> bool:
 
 def g_domain(token: str, gate: str, question: str, expect_node: str | None):
     session = f"gate-{gate}-{int(time.time())}"
-    st, answer, nodes = chat(token, session, question)
-    ok = st == 200 and len(answer.strip()) >= 8
+    st, answer, nodes, error_code, done = chat(token, session, question)
+    ok = st == 200 and done and not error_code and len(answer.strip()) >= 8
     if expect_node:
         ok = ok and bool(nodes) and expect_node in nodes
-    DETAIL[gate] = f"http={st} nodes={nodes[:4]} ans={len(answer)}字"
+    DETAIL[gate] = (
+        f"http={st} done={done} nodes={nodes[:4]} ans={len(answer)}字"
+        + (f" error={error_code}" if error_code else "")
+    )
     return ok
 
 
+def _response_data(body: str) -> dict:
+    """兼容 API 直接返回和统一 data 封套两种响应。"""
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    return data if isinstance(data, dict) else payload
+
+
+def _celery_worker_probe_code() -> str:
+    """生成容器内探测命令，只读检查 worker 心跳和 agent 队列。"""
+    return (
+        "import json;"
+        "from backend.config.tasks import CELERY_AGENT_QUEUE, TASK_WORKERS_PING_TIMEOUT;"
+        "from backend.tasks.celery_app import celery_app;"
+        "replies = celery_app.control.ping(timeout=TASK_WORKERS_PING_TIMEOUT) or [];"
+        "active = celery_app.control.inspect(timeout=TASK_WORKERS_PING_TIMEOUT)"
+        ".active_queues() or {};"
+        "agent_queue = any("
+        "any(q.get('name') == CELERY_AGENT_QUEUE for q in queues)"
+        " for queues in active.values());"
+        "print(json.dumps({'workers': len(replies), 'agent_queue': agent_queue}))"
+    )
+
+
 def g10_task() -> bool:
+    """从 app 容器探测 Celery worker，并确认 agent 队列正在被消费。"""
     out = subprocess.run(
-        ["docker", "exec", "agent-postgres-1", "psql", "-U", "postgres",
-         "-d", "agent_memory", "-t", "-A", "-c",
-         "SELECT count(*) FROM tasks WHERE status='SUCCESS' AND "
-         "finished_at > now() - interval '24 hours'"],
-        capture_output=True, text=True)
-    n = int(out.stdout.strip() or 0)
-    DETAIL["g10"] = f"success_24h={n}"
-    return n > 0
+        ["docker", "exec", "agent-app-1", "python", "-c",
+         _celery_worker_probe_code()],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    try:
+        result = json.loads((out.stdout or "").strip().splitlines()[-1])
+    except (IndexError, TypeError, ValueError):
+        result = {}
+    if not isinstance(result, dict):
+        result = {}
+    raw_workers = result.get("workers")
+    workers = raw_workers if isinstance(raw_workers, int) else 0
+    agent_queue = result.get("agent_queue") is True
+    DETAIL["g10"] = f"workers_online={workers} agent_queue={agent_queue}"
+    return out.returncode == 0 and workers > 0 and agent_queue
+
+
+def _fresh_healthy_chat_models(items: list, *, now: datetime | None = None) -> int:
+    """统计最近 24 小时内成功探测的云端聊天模型。"""
+    current = now or datetime.now(timezone.utc)
+    count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("modelKind") != "chat" or item.get("probeMode") != "live_call":
+            continue
+        if item.get("status") not in {"healthy", "slow"}:
+            continue
+        checked_at = item.get("lastCheckedAt")
+        if not isinstance(checked_at, str) or not checked_at.strip():
+            continue
+        try:
+            checked = datetime.fromisoformat(checked_at.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if checked.tzinfo is None:
+            checked = checked.replace(tzinfo=timezone.utc)
+        age = current - checked.astimezone(timezone.utc)
+        if timedelta(0) <= age <= timedelta(hours=24):
+            count += 1
+    return count
 
 
 def g11_model(editor: str) -> bool:
-    st, _ = _request("GET", f"{GATEWAY}/api/sys/model-health", token=editor)
-    DETAIL["g11"] = f"model_health={st}"
-    return st == 200
+    st, body = _request("GET", f"{GATEWAY}/api/sys/model-roles", token=editor)
+    payload = _response_data(body)
+    roles = payload.get("items") if isinstance(payload.get("items"), list) else []
+    main_role = next(
+        (item for item in roles
+         if isinstance(item, dict) and item.get("role") == "main"),
+        {},
+    )
+    health = main_role.get("health") if isinstance(main_role, dict) else None
+    if not isinstance(health, dict):
+        health = {}
+    # /sys/model-roles 将 main 的健康快照按当前 effectiveModel 关联，
+    # 避免一台未绑定的备用模型让主问答模型门禁误通过。
+    healthy = _fresh_healthy_chat_models([{
+        "modelKind": "chat",
+        "probeMode": health.get("probeMode"),
+        "status": health.get("status"),
+        "lastCheckedAt": health.get("lastCheckedAt"),
+    }])
+    available = main_role.get("available") is True
+    model_configured = bool(str(main_role.get("effectiveModel") or "").strip())
+    DETAIL["g11"] = (
+        f"http={st} main_configured={model_configured} main_available={available} "
+        f"recent_live_probe={healthy > 0} checked_roles={len(roles)}"
+    )
+    return st == 200 and model_configured and available and healthy > 0
 
 
 def g12_observability() -> bool:
     st, metrics = _request("GET", "http://127.0.0.1:8000/metrics", timeout=20)
     fam_ok = st == 200 and "routing_domain_total" in metrics \
         and "chat_request_total" in metrics
-    st2, targets = _request("GET",
-                            "http://127.0.0.1:9090/api/v1/targets?state=active",
-                            timeout=15)
+    prometheus_url = os.getenv("PROMETHEUS_URL", "http://127.0.0.1:9090").strip()
+    if not prometheus_url.startswith(("http://", "https://")):
+        DETAIL["g12"] = f"metrics={st} prometheus_configured=false"
+        return False
+    st2, targets = _request(
+        "GET",
+        f"{prometheus_url.rstrip('/')}/api/v1/targets?state=active",
+        timeout=15,
+    )
     ups = 0
     if st2 == 200:
-        data = json.loads(targets).get("data", {}).get("activeTargets", [])
-        ups = sum(1 for t in data if t.get("health") == "up")
-    DETAIL["g12"] = f"metrics={st} prom_up_targets={ups}"
+        try:
+            data = json.loads(targets).get("data", {}).get("activeTargets", [])
+        except (TypeError, ValueError):
+            data = []
+        if isinstance(data, list):
+            ups = sum(
+                1 for target in data
+                if isinstance(target, dict) and target.get("health") == "up"
+            )
+    DETAIL["g12"] = f"metrics={st} prometheus_http={st2} prom_up_targets={ups}"
     return fam_ok and ups > 0
 
 
