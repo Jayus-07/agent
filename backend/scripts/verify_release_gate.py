@@ -36,6 +36,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 try:
     from dotenv import load_dotenv
@@ -47,6 +48,22 @@ except ImportError:
 GATEWAY = "http://127.0.0.1:9080"
 RESULTS: dict[str, bool] = {}
 DETAIL: dict[str, str] = {}
+RELEASE_ROOT = Path(__file__).resolve().parents[2]
+DETAIL_KEYS = {
+    "Gate0_BuildIdentity": "g0",
+    "Gate1_Migration": "g1",
+    "Gate2_Auth": "g2",
+    "Gate3_Tenant": "g3",
+    "Gate4_Chat": "g4",
+    "Gate5_RAG": "g5",
+    "Gate6_SQL": "g6",
+    "Gate7_CS": "g7",
+    "Gate8_Travel": "g8",
+    "Gate9_Selection": "g9",
+    "Gate10_TaskRuntime": "g10",
+    "Gate11_Model": "g11",
+    "Gate12_Observability": "g12",
+}
 
 # 发布记录直连（显式 5433：agent 权威库；5432 是宿主机原生同名库）
 PG_HOST, PG_PORT, PG_DB = "127.0.0.1", 5433, "agent_memory"
@@ -166,11 +183,20 @@ def g0_build() -> bool:
 
 def g1_migration() -> bool:
     out = subprocess.run(
-        [sys.executable, "scripts/verify_migration_state.py",
-         "--image", "agent-db-migrate"],
-        capture_output=True, text=True, timeout=300, cwd=".")
-    DETAIL["g1"] = (out.stdout or "").strip().splitlines()[-1] if out.stdout else "no output"
-    return "MIGRATION_STATE_OK" in (out.stdout or "")
+        [
+            "docker", "compose", "run", "--rm", "--no-deps",
+            "-e", "PG_AUTHORITY_HOST=postgres",
+            "-e", "PG_AUTHORITY_PORT=5432",
+            "--entrypoint", "python", "db-migrate",
+            "backend/scripts/verify_migration_state.py",
+        ],
+        capture_output=True, text=True, timeout=300, cwd=RELEASE_ROOT)
+    output = (out.stdout or "").strip()
+    details = output.splitlines()[-4:] if output else []
+    if not details and out.stderr:
+        details = out.stderr.strip().splitlines()[-4:]
+    DETAIL["g1"] = " | ".join(details) or "no output"
+    return out.returncode == 0 and "MIGRATION_STATE_OK" in (out.stdout or "")
 
 
 def g2_auth() -> bool:
@@ -317,7 +343,9 @@ def main() -> int:
         except Exception as exc:
             DETAIL[name] = f"ERROR {str(exc)[:100]}"
             RESULTS[name] = False
-        print(f"  {'PASS' if RESULTS[name] else 'FAIL'}  {name}  {DETAIL.get(name, '')}")
+        detail_key = DETAIL_KEYS.get(name, "")
+        detail = DETAIL.get(name) or DETAIL.get(detail_key, "")
+        print(f"  {'PASS' if RESULTS[name] else 'FAIL'}  {name}  {detail}")
 
     failed = [k for k, v in RESULTS.items() if not v]
     print("\n===== RELEASE GATE =====")

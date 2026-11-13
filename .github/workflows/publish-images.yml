@@ -11,6 +11,7 @@ on:
       - "constraints/**"
       - "docker/**"
       - "docker-compose.yml"
+      - ".github/scripts/**"
       - "docs/customer-service/demo-kb/**"
       - "docs/customer-service/kb/**"
       - "frontend/**"
