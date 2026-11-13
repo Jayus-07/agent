@@ -1,5 +1,7 @@
 """PR Smoke required gate and Billing V2 artifact contracts."""
+import base64
 import json
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -257,6 +259,7 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     )
 
     assert publish["on"]["push"]["branches"] == ["main"]
+    assert ".github/scripts/**" in publish["on"]["push"]["paths"]
     assert "pull_request" not in publish["on"]
     assert publish["permissions"]["packages"] == "write"
     publish_text = publish_path.read_text(encoding="utf-8")
@@ -305,6 +308,18 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
     )
     assert "PG_AUTHORITY_HOST=postgres" in release_text
 
+    env_template = ROOT / "部署/prod-4c8g/env.production"
+    env_template_text = env_template.read_text(encoding="utf-8")
+    assert "LLM_BUDGET_MODE=observe" in env_template_text
+    assert "validate_production_env.py" in deploy_text
+
+    migration_gate_text = (ROOT / "backend/scripts/verify_release_gate.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"docker", "compose", "run", "--rm", "--no-deps"' in migration_gate_text
+    assert '"backend/scripts/verify_migration_state.py"' in migration_gate_text
+    assert "DETAIL_KEYS" in migration_gate_text
+
     services = release_compose["services"]
     backend_services = (
         "app",
@@ -338,3 +353,77 @@ def test_production_release_workflows_auto_deploy_verified_main_digests():
         for name, image in frontend_images.items()
     )
     assert "docker compose up -d --no-build" in release_text
+
+
+def test_production_env_preflight_checks_mode_and_encryption_key(tmp_path):
+    validator = ROOT / ".github/scripts/validate_production_env.py"
+    valid_key = base64.urlsafe_b64encode(b"x" * 32).decode("ascii")
+    env_file = tmp_path / ".env.production"
+    env_file.write_text(
+        f"LLM_BUDGET_MODE=observe\nSECRETS_ENCRYPTION_KEY={valid_key}\n",
+        encoding="utf-8",
+    )
+
+    valid = subprocess.run(
+        [sys.executable, str(validator), str(env_file)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert valid.returncode == 0
+    assert "required settings are valid" in valid.stdout
+
+    env_file.write_text(
+        "LLM_BUDGET_MODE=invalid\nSECRETS_ENCRYPTION_KEY=" + valid_key + "\n",
+        encoding="utf-8",
+    )
+    invalid = subprocess.run(
+        [sys.executable, str(validator), str(env_file)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert invalid.returncode == 1
+    assert "LLM_BUDGET_MODE" in invalid.stderr
+
+    env_file.write_text(
+        "LLM_BUDGET_MODE=observe\nSECRETS_ENCRYPTION_KEY=change_me\n",
+        encoding="utf-8",
+    )
+    invalid = subprocess.run(
+        [sys.executable, str(validator), str(env_file)],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert invalid.returncode == 1
+    assert "SECRETS_ENCRYPTION_KEY" in invalid.stderr
+    assert "change_me" not in invalid.stdout + invalid.stderr
+
+
+def test_release_gate_migration_uses_compose_production_environment(monkeypatch):
+    from backend.scripts import verify_release_gate
+
+    captured = {}
+
+    def _run(command, **kwargs):
+        captured["command"] = command
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout="result: MIGRATION_STATE_OK\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(verify_release_gate.subprocess, "run", _run)
+    monkeypatch.setattr(verify_release_gate, "DETAIL", {})
+
+    assert verify_release_gate.g1_migration() is True
+    assert captured["command"][:4] == ["docker", "compose", "run", "--rm"]
+    assert "PG_AUTHORITY_HOST=postgres" in captured["command"]
+    assert "db-migrate" in captured["command"]
+    assert "backend/scripts/verify_migration_state.py" in captured["command"]
+    assert captured["kwargs"]["cwd"] == verify_release_gate.RELEASE_ROOT

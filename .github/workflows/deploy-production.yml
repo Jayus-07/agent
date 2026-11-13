@@ -223,6 +223,7 @@ jobs:
             echo "Configure the RELEASE_PASSWORD secret in the production environment." >&2
             exit 1
           }
+          python .github/scripts/validate_production_env.py "$PRODUCTION_ENV_FILE"
           docker info >/dev/null
           docker compose version
 
