@@ -97,3 +97,43 @@ def test_unknown_parent_scope_does_not_guess_from_section_title():
 
     assert item["parent_scope"] == ""
     assert item["section_title"] == ""
+
+
+def test_chunk_detail_exposes_source_and_split_audit_metadata_only():
+    rows = [{
+        "chunk_index": 3,
+        "chunk_id": "doc_3",
+        "granularity": "leaf",
+        "parent_chunk_id": "doc_0",
+        "content": "表格第 4 行",
+        "chunk_metadata": {
+            "source_format": "pdf",
+            "parser_version": "pdf-parser-v2",
+            "chunk_policy_version": "policy-v3",
+            "index_generation": "generation-7",
+            "source_locators_json": [{"page": 4, "row": 4}],
+            "table_id": "table-1",
+            "row_index": 4,
+            "chunk_tokens": 128,
+            "embedding_version": "embed-v4",
+            "file_path": "C:/private/source.pdf",
+            "tenant_id": "internal-tenant-id",
+        },
+    }]
+
+    item = build_chunk_detail_items(rows)[0]
+
+    assert item["chunk_id"] == "doc_3"
+    assert item["granularity"] == "leaf"
+    assert item["parent_chunk_id"] == "doc_0"
+    assert item["metadata"] == {
+        "source_format": "pdf",
+        "parser_version": "pdf-parser-v2",
+        "chunk_policy_version": "policy-v3",
+        "index_generation": "generation-7",
+        "source_locators_json": [{"page": 4, "row": 4}],
+        "table_id": "table-1",
+        "row_index": 4,
+        "chunk_tokens": 128,
+        "embedding_version": "embed-v4",
+    }

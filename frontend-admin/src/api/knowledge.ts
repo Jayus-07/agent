@@ -5,6 +5,28 @@ export interface KnowledgeDoc { doc_id: string; file_name: string; doc_type: str
 export interface ProcessingRun { run_id: string; doc_id: string; file_hash?: string; operation?: string; status: string; pipeline_version?: string; task_id?: string; batch_id?: string; trace_id?: string; started_at?: string; finished_at?: string; error_message?: string; model_summary?: Array<Record<string, any>>; [key: string]: any }
 export interface ProcessingStep { step_id: string; run_id: string; stage: string; status: string; role?: string; engine_type?: string; provider?: string; model_name?: string; model_revision?: string; config_source?: string; prompt_version?: string; taxonomy_version?: string; rules_version?: string; schema_fingerprint?: string; input_count?: number; output_count?: number; total_tokens?: number; cached_tokens?: number; duration_ms?: number; skip_reason?: string; fallback_reason?: string; [key: string]: any }
 export interface ProcessingRunDetail extends ProcessingRun { steps: ProcessingStep[]; usage?: Array<Record<string, any>> }
+export interface ChunkDetailItem {
+  chunk_index: number
+  chunk_id: string
+  parent_chunk_id: string
+  granularity: string
+  parent_scope: string
+  document_title: string
+  section_title: string
+  section_titles: string[]
+  chunk_type: string
+  content: string
+  char_count: number
+  keywords: string
+  llm_keywords: string
+  llm_model: string
+  doc_type: string
+  kb_id: string
+  department: string
+  simulated_questions: string[]
+  metadata?: Record<string, unknown>
+}
+export interface ChunkDetailResponse { doc_id: string; chunks: ChunkDetailItem[]; total: number }
 export interface OperationLog { id: number; doc_id: string; doc_name: string; operation: string; result: string; created_at: string; trace_id?: string; batch_id: string; detail: any; duration_ms: number; user_id: string; source: string; [key: string]: any }
 export interface ActiveUploadOperation {
   upload_id: string
@@ -504,8 +526,15 @@ export const knowledgeService: any = {
     return result
   },
 
-  getChunkDetail: (chunkId: string) =>
-    fetchRaw(`${BASE}/chunks/${chunkId}/detail`).then(r => r.json()).catch(() => ({})),
+  getChunkDetail: async (chunkId: string): Promise<ChunkDetailResponse> => {
+    const response = await fetchRaw(`${BASE}/chunks/${encodeURIComponent(chunkId)}/detail`)
+    const payload = await response.json().catch(() => null)
+    if (!response.ok || !payload || payload.error) {
+      throw new Error(payload?.error || `读取分块失败（HTTP ${response.status}）`)
+    }
+    if (!Array.isArray(payload.chunks)) throw new Error('分块详情响应格式无效')
+    return payload as ChunkDetailResponse
+  },
 }
 export interface KbAuthorityItem {
   kb_id: string

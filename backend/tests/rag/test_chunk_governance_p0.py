@@ -253,6 +253,53 @@ def test_index_identity_overwrite_keeps_parent_linkage():
             assert c.metadata["parent_chunk_id"] in new_parent_ids
 
 
+def test_index_identity_clears_removed_parent_reference():
+    """Parent 被过滤或排在子块之后时，引用仍与本次分块清单一致。"""
+    from langchain_core.documents import Document
+
+    from backend.rag.indexing.indexer import apply_index_chunk_identity
+
+    chunks = [
+        Document(
+            page_content="父块排在后面",
+            metadata={
+                "chunk_id": "leaf-before-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "parent-later",
+            },
+        ),
+        Document(
+            page_content="可用父块",
+            metadata={"chunk_id": "parent-later", "granularity": "parent"},
+        ),
+        Document(
+            page_content="被过滤的旧父块编号恰好撞上新分块编号",
+            metadata={
+                "chunk_id": "leaf-with-stale-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "docX_2",
+            },
+        ),
+        Document(
+            page_content="仍关联父块的叶子",
+            metadata={
+                "chunk_id": "leaf-with-valid-parent",
+                "granularity": "leaf",
+                "parent_chunk_id": "parent-later",
+            },
+        ),
+    ]
+
+    apply_index_chunk_identity(chunks, "docX")
+
+    assert [chunk.metadata["chunk_id"] for chunk in chunks] == [
+        "docX_0", "docX_1", "docX_2", "docX_3",
+    ]
+    assert chunks[0].metadata["parent_chunk_id"] == "docX_1"
+    assert chunks[2].metadata["parent_chunk_id"] == ""
+    assert chunks[3].metadata["parent_chunk_id"] == "docX_1"
+
+
 def test_parent_expansion_end_to_end_after_index_identity():
     """端到端：切分 → 索引身份覆盖 → 检索端 parent 扩展可命中。"""
     from backend.rag.indexing.indexer import apply_index_chunk_identity

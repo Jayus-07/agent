@@ -11,13 +11,18 @@ export function useKnowledgeStats() {
     loading: true, error: '',
   })
 
-  useEffect(() => {
-    knowledgeService.getStats()
-      .then((d: KnowledgeStats) => setData({ ...d, loading: false, error: '' }))
-      .catch((e: Error) => setData(prev => ({ ...prev, loading: false, error: '获取统计失败: ' + String(e) })))
+  const refresh = useCallback(async () => {
+    try {
+      const d: KnowledgeStats = await knowledgeService.getStats()
+      setData(prev => ({ ...prev, ...d, loading: false, error: '' }))
+    } catch (e) {
+      setData(prev => ({ ...prev, loading: false, error: '获取统计失败: ' + String(e) }))
+    }
   }, [])
 
-  return data
+  useEffect(() => { void refresh() }, [refresh])
+
+  return { ...data, refresh }
 }
 
 // Hook — 文档列表（真实 API，支持搜索/分页/筛选）
