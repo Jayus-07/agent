@@ -811,7 +811,7 @@ def _write_trace_metadata(result: dict) -> None:
             "final_destination": "clarify" if result.get("selection_blocked") else (
                 "skill_executor" if sel.get("source") in {"fc", "passthrough"} else "clarify"
             ),
-            "route_policy_version": route.get("route_policy_version", "routing-p0-1"),
+            "route_policy_version": route.get("route_policy_version", "routing-p0-2"),
         })
         trace.metadata["routing_decision"] = route
     except Exception:

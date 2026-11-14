@@ -40,7 +40,7 @@ BM25 pickle 只可来自受信任服务目录：SHA256 缺失或不匹配均拒�
 按既有子 Trace 关联记录 HTTP 往返与服务外差值。该差值不能单独归因于网络、
 连接池或上游排队；先按实际 Trace 定位，不预设历史 4 秒缺口的根因。
 
-检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。
+检索结果作为生成依据；遵循当前 Evidence Gate、引用和拒答契约。索引不可用、证据不足、模型拒答与基础设施错误要按既有结果类型处理，不能将无证据回答伪装为有效检索结果。Doc 级嵌入 Provider/HTTP 故障或重排服务本轮超时，导致本轮无法可靠核验并最终拒答时，使用 `answer_status=rag_retrieval_degraded`，提示用户本轮未能核实且不代表知识库没有资料；真实无命中仍使用 `rag_no_evidence`。权限拒绝与事实校验拒绝继续保留原状态，不被检索降级覆盖。
 
 Evidence Gate 的行为实现位于 `backend/rag/evidence_gate/`，RAG 链路由 `backend/rag/chain.py` 调用；修改拒答、引用或降级行为时，检查 `backend/tests/rag/` 中对应契约测试。
 

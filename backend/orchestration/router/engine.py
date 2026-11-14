@@ -36,7 +36,7 @@ from backend.observability.tracer import trace_collector
 
 
 _ROUTE_ENGINE_CACHE_VERSION = "v6"
-ROUTING_POLICY_VERSION = "routing-p0-1"
+ROUTING_POLICY_VERSION = "routing-p0-2"
 ROUTING_STAGE_ORDER = (
     "entry_gate",
     "domain",
@@ -431,7 +431,24 @@ class RoutingEngine:
         with _routing_stage("routing.intent", "意图分类", _rid) as intent_span:
             try:
                 with _routing_stage("routing.intent.rule_evidence", "规则意图证据", _rid) as rule_span:
-                    rule_decision = self.rule_router.route(query)
+                    request_context = state.get("request_context")
+                    if isinstance(request_context, Mapping):
+                        product_id = (
+                            request_context.get("product_id")
+                            or state.get("product_id")
+                        )
+                    else:
+                        product_id = (
+                            getattr(request_context, "product_id", None)
+                            or state.get("product_id")
+                        )
+                    routing_context = state.get("routing_context")
+                    if product_id != "agent" or not isinstance(routing_context, Mapping):
+                        routing_context = None
+                    rule_decision = self.rule_router.route(
+                        query,
+                        routing_context=routing_context,
+                    )
                     rule_span.metrics["has_decision"] = rule_decision is not None
             except Exception as exc:
                 # 规则是证据提供者，故障不能让整个请求崩溃；后续意图阶段

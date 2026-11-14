@@ -14,6 +14,8 @@ RAGMETA 文本标记 → reporter 剥离（用户可见文本）+ make_done_even
 """
 import types
 
+import pytest
+
 from backend.orchestration.graph.event_schema import validate_frame
 from backend.orchestration.graph.events import make_done_event
 from backend.rag.citation import CitationFormatter
@@ -25,6 +27,7 @@ from backend.rag.evidence_gate import (
     ANSWER_STATUS_HALLUCINATION,
     ANSWER_STATUS_NO_EVIDENCE,
     ANSWER_STATUS_PERMISSION_DENIED,
+    ANSWER_STATUS_RETRIEVAL_DEGRADED,
 )
 from backend.agents.reporter.reporter import (
     generate_final_answer,
@@ -55,13 +58,127 @@ def test_resolve_answer_status_permission_escalation():
     assert resolve_answer_status(RejectReason.NO_EVIDENCE, 0) == ANSWER_STATUS_NO_EVIDENCE
 
 
+def test_resolve_answer_status_distinguishes_rerank_outage_from_missing_evidence():
+    assert resolve_answer_status(
+        RejectReason.NO_EVIDENCE, 0, retrieval_degraded=True,
+    ) == ANSWER_STATUS_RETRIEVAL_DEGRADED
+    # 有资料但无权访问的提示优先，不能被基础设施故障覆盖。
+    assert resolve_answer_status(
+        RejectReason.NO_EVIDENCE, 2, retrieval_degraded=True,
+    ) == ANSWER_STATUS_PERMISSION_DENIED
+    # 内容事实校验拒绝仍保持原来的防幻觉语义。
+    assert resolve_answer_status(
+        RejectReason.HALLUCINATION, 0, retrieval_degraded=True,
+    ) == ANSWER_STATUS_HALLUCINATION
+
+
+def test_rag_chain_reject_explains_rerank_timeout_without_claiming_no_documents(
+    monkeypatch,
+):
+    from backend.rag import chain as chain_module
+    from backend.rag.chain import RAGChain
+    from backend.rag.context import RagRequestState
+
+    request_state = RagRequestState(rerank_unavailable={"local|http://rerank|model"})
+    monkeypatch.setattr(chain_module, "get_context", lambda: request_state)
+    monkeypatch.setattr(
+        RAGChain, "_end_root_span",
+        staticmethod(lambda *args, **kwargs: None),
+    )
+    monkeypatch.setattr(RAGChain, "_finish", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "backend.security.events.record_security_event",
+        lambda *args, **kwargs: None,
+    )
+
+    chain = object.__new__(RAGChain)
+    trace = types.SimpleNamespace(metadata={})
+    decision = GateDecision(
+        passed=False, reason=RejectReason.NO_EVIDENCE,
+        layer="retrieval", score=0.0,
+    )
+
+    message = chain._reject(decision, "retrieval", trace, 0.0)
+
+    assert "暂时无法判断知识库里是否有相关资料" in message
+    assert request_state.meta["answer_status"] == ANSWER_STATUS_RETRIEVAL_DEGRADED
+
+
+@pytest.mark.parametrize(
+    "state_kwargs",
+    [
+        {"rerank_unavailable": {"local|http://rerank|model"}},
+        {"vector_degraded": True},
+    ],
+    ids=["rerank-outage", "embedding-outage"],
+)
+def test_rag_chain_retrieval_outage_short_circuits_generation_with_string(
+    monkeypatch, state_kwargs,
+):
+    from backend.rag import chain as chain_module
+    from backend.rag.chain import RAGChain
+    from backend.rag.context import RagRequestState, clear_context, set_context
+    from langchain_core.documents import Document
+    from langchain_core.retrievers import BaseRetriever
+
+    class UnusedRetriever(BaseRetriever):
+        def _get_relevant_documents(self, query, *, run_manager=None):
+            raise AssertionError("降级短路不应调用底层 Retriever")
+
+    class UnexpectedModelCall:
+        def stream(self, *_args, **_kwargs):
+            raise AssertionError("重排不可用时不应调用生成模型")
+
+    chain = object.__new__(RAGChain)
+    chain.doc_db = object()
+    chain.chunk_retriever_base = UnusedRetriever()
+    chain._runtime_prompt_keys = []
+    chain._gate_wrap_retrieve = lambda _payload: [
+        Document(
+            page_content="测试检索文档",
+            metadata={"source_file": "test.md", "permission_scope": "general"},
+        )
+    ]
+    request_state = RagRequestState(**state_kwargs)
+    set_context(request_state)
+    monkeypatch.setattr(chain_module, "llm", UnexpectedModelCall())
+    monkeypatch.setattr(chain_module, "ENABLE_HISTORY_AWARE_RETRIEVAL", False)
+
+    try:
+        chain._build_chains()
+        result = chain.chain_standalone.invoke(
+            {"input": "退款审批", "chat_history": []},
+        )
+    finally:
+        clear_context()
+
+    assert isinstance(result["answer"], str)
+    assert '"reason":"no_evidence"' in result["answer"]
+
+
 def test_build_rejection_response_carries_permission_filtered():
     decision = GateDecision(passed=False, reason=RejectReason.NO_EVIDENCE,
                             layer="retrieval", score=0.0)
     msg, info = build_rejection_response(decision, "retrieval", permission_filtered=2)
     assert info.permission_filtered == 2
     assert info.to_dict()["permission_filtered"] == 2
-    assert msg == "知识库中未找到与该问题相关的内容。"  # 6780d1c NO_EVIDENCE 话术
+    assert msg == "我在当前可访问的知识库中，没有找到能回答这个问题的资料。"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "我在当前可访问的知识库中，没有找到能回答这个问题的资料。",
+        "我找到了一些资料，但它们和问题不够相关，暂时不能据此回答。",
+        "我找到了相关资料，但无法确认它们能支持这个答案，所以没有下结论。",
+        "我找到了相关资料，但你当前没有查看权限。",
+        "这次查询没有完成，我暂时无法判断知识库里是否有相关资料。",
+    ],
+)
+def test_user_facing_rag_refusals_are_not_cacheable(message):
+    from backend.rag.pipeline import RAGPipeline
+
+    assert RAGPipeline._is_rejection(message)
 
 
 # ── 工具出口 RAGMETA 标记 ───────────────────────────────────
@@ -113,6 +230,13 @@ def test_make_done_event_extracts_status_from_final_answer():
     assert evt["event"] == "done"
     assert evt["data"]["answer_status"] == "rag_permission_denied"
     assert "confidence" not in evt["data"]
+
+    degraded = (
+        '<!--RAGMETA{"answer_status":"rag_retrieval_degraded"}-->\n'
+        "这次查询没有完成，我暂时无法判断知识库里是否有相关资料。"
+    )
+    degraded_evt = make_done_event(degraded, {}, start_time=0.0)
+    assert degraded_evt["data"]["answer_status"] == "rag_retrieval_degraded"
 
 
 def test_make_done_event_falls_back_to_step_output():

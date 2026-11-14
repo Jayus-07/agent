@@ -14,8 +14,7 @@ import { memo } from 'react'
 import type { Message } from '@/lib/types'
 import { useChatStore } from '@/store/chat'
 import { useSSE } from '@/hooks/useSSE'
-import { isLowConfidence, toRejectionActionKey } from '@/lib/ragAnswer'
-import { RAG_REJECTION_ACTIONS } from '@/components/shared/ErrorCard'
+import RagAnswerHint from '@/components/shared/RagAnswerHint'
 import SourceCard from './SourceCard'
 import ReplyBadge from './ReplyBadge'
 import MarkdownContent from './MarkdownContent'
@@ -164,24 +163,6 @@ function StreamingThinking() {
   const { text, seconds } = useChatThinking()
   const answering = useChatStore((s) => s.deltaText !== '')
   return <ThinkingPanel text={text} seconds={seconds} live answering={answering} />
-}
-
-/**
- * RAG 答案语义提示行（2026-10-03 企业 RAG 前端语义透传）：
- * - answerStatus 有值 = 拒答 → 展示行动指引（文案复用 ErrorCard 预登记契约）；
- * - 否则低置信（<0.6）→ 建议核实来源。
- * 轻量行内样式，不做大卡片（消息流内保持纯文字偏好的延伸）。
- */
-function RagAnswerHint({ answerStatus, confidence }: { answerStatus?: string; confidence?: number }) {
-  const action = answerStatus ? RAG_REJECTION_ACTIONS[toRejectionActionKey(answerStatus)] : undefined
-  const low = !answerStatus && isLowConfidence(confidence)
-  if (!action && !low) return null
-  return (
-    <div className="mt-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2
-      text-xs leading-relaxed text-amber-800">
-      {action ?? `回答置信度 ${Math.round((confidence ?? 0) * 100)}%，建议点击下方来源核实原文`}
-    </div>
-  )
 }
 
 // memo：message / isLast prop 不变则跳过 re-render ——

@@ -360,3 +360,21 @@
 - 根因链（trace fa64e192291a + llm_usage 复盘）：首呼 primary 尝试失败（无 usage 行）→ proxy 首块前重试 → retry 尝试单次供应商调用 hang 122.7s（decision=retry，duration_ms=122668，finish_reason=unknown）最终成功。SDK 配置本身正确（driver_compat request_timeout=30s + max_retries=0），122s 成因是流式 read timeout 为 chunk 间隔语义、被供应商侧保活绕过——TTFT 极端拖长无整体上限。计费核对：该 trace 仅 1 行 success（207 token），无重复计费。
 - 修复：① general_chat 挂整体执行时限 GENERAL_CHAT_LLM_DEADLINE（默认 30s，env 可调，0=不限时）——scoped_execution_timeout 经 provider_deadline_kwargs 收窄 SDK 读取超时 + proxy 既有逐 chunk 间过期检查，双保险覆盖「hang 死」与「心跳保活」两种形态，超时按瞬时错误走既有首块重试/熔断/降级；② proxy 流式 wrapper 补 per-attempt 观测（`_record_stream_attempt`：attempt 序号/单次耗时/首 chunk 耗时/异常类型 → trace 事件 + 结构化日志），验收要求「trace 能回答每次尝试的耗时与次数」达成（实测 span 事件 `{"attempt": 0, "duration_ms": 1444.9, "first_chunk_ms": 1062.1}`）；③ server.py 启动预热主模型（后台线程 5s 后最小请求，软失败，参照 _warm_external_models，如实记账）。
 - 验收采样：冷启动 3 次（每次重建 app 后首问）1.99/1.64/1.40s；热态 5 次 1.63/1.27/1.31/1.54/1.56s——全部进入 2s 内，远优于「首反馈≤1s、总耗时 ≤10s」目标；冷热无差异（预热吸收首呼固定开销）。2s 缩时限实验验证时限链路真实生效（trace 05931796f324 观测事件齐全）。既有 deadline 传播测试 30 passed。
+
+## 2026-11-14：企业助手原文核对与检索降级修复（当前阶段）
+
+- 工作树 `C:\Users\wh\.codex\worktrees\assistant-review-fixes\agent`，分支 `codex/fix-enterprise-assistant-20261114`，基线 HEAD `ecf2a17eae9c5e6657e54e800a03f47e9a1e9f1e`；本阶段改动未提交。
+- 修复了自然表达的企业退款原文核对请求被普通聊天/SQL 规则截走的问题：主助手的领域路由与能力路由均能识别退款审核主题的原文依据请求；测试入口限定在 `product_id=agent`，其余产品权限边界不变。原文追问继续结合上一轮知识域，RAG 查询改写使用上一轮用户问题。
+- 修复检索阶段的 Provider/HTTP 嵌入故障：文档级向量选择安全降级并标记本请求 `vector_degraded`；重排或向量关键步骤降级后，在生成前短路。SSE 终态为 `answer_status=rag_retrieval_degraded`，前端提示“本轮未能核实，不代表知识库没有资料”，不编造金额答案或来源。同步 RAG 文档与 `rag_smoke.yml` 定向清单。
+- 验证：路由/快路径回归 41 passed；嵌入 Provider 故障、内部异常传播及检索短路新增定向用例 4 passed；`py_compile` 与 `git diff --check` 通过。较宽的 RAG 测试曾有 35 passed、1 failed；失败旧用例需要本机 PostgreSQL 审核表连接，当前测试环境缺 PostgreSQL 密码，失败发生在审核可见性表初始化，未改用共享数据绕过。
+- 当前工作树 `devctl.bat rebuild /y` 返回 0；backend、RAG、前端和网关健康检查均 HTTP 200。真实页面测试账号 `84445633359` 使用自然请求「请核对退款审核的金额门槛和审批角色，逐条列出对应原文出处，并说明金额规则是否存在冲突。」成功进入 RAG；在本机嵌入/重排服务关闭时，SSE `done` 返回 `rag_retrieval_degraded`，trace `0427ab83c060`，页面没有展示未经核实的金额或引用。桌面及 390×844 窄屏页面层级清楚，输入区和回答无横向溢出。
+- 追加页面复测（session `8RsHXfL7L3MSTaUXVl2l0`）：路由再次正确选中知识库检索，RAG 粗召回 7 个 chunk；重排请求访问 `127.0.0.1:8088` 4 秒超时，两次检索都被短路，SSE `answer_status=rag_retrieval_degraded`，trace `60bccd0a109d` / `4214845aa71b`。健康探针返回 `ok`，但本工作树的模型管理脚本报告未运行，监听进程归另一个工作树；未重启或干预该进程。现有日志没有候选文件名，且普通测试账号读取知识库管理列表返回 401，因此仍无法确认活动索引里是否含正确退款 SOP；未查共享数据库或改索引。
+- 语料来源核对：仓库里的《客户退款处理 SOP》只出现在 `rag_eval_kb` 和旧 `rag_100_docs` 测试目录；KB 配置将前者标记为 `audience=test`，后者是只读弃用别名，授权代码规定测试库只对 `super_admin` 开放。业务制度目录 `policy_general` 当前仓库里有采购预算规则，但没有退款 SOP。因此不能把这份评测样本当作生产依据，也不能将其提升到生产库来让用例“通过”；应由业务方提供真实有效的退款制度并按既有上传、审核、发布流程入库。
+- 尚未完成：本次 7 个召回 chunk 的文件身份和线上生产库是否另有有效退款制度仍未确认；重排超时让正常相关性验证无法完成，普通测试账号的知识库列表 API 返回 401，未查询共享数据库或修改索引。之前确认的归档测试文档仍有 82 个 deprecated chunk，不能当作有效证据。前端 Vitest 未运行；此前 Docker 前端生产构建有缓存成功记录。旧 RAG 用例的本机 PostgreSQL 凭据仍待恢复后复验。
+- 本阶段不代表企业助手整体评审已完成；来源准确性/引用完整性仍是主要未关闭项。无 Commit、PR 或合并。
+
+## 2026-11-14 — 接手后的合并前复核
+
+- 工作树已对齐 `origin/main`（`768e11d`）；原提交 `dc3faac` 和未提交改动保留。截图中的 `{"detail":"Bad Request"}` 出现在 Codex 会话的 turn 错误记录里，没有证据表明它是企业助手 API 返回。
+- 路由与快路径定向测试 `143 passed`；RAG 拒答/检索降级相关测试复跑 `94 passed`；前端 `ErrorCard` 与 RAG 提示定向测试 `20 passed`。此前 RAG 测试里两项旧用例误连共享 Registry，假造的 `d1` 文档被当前库正确过滤；已在测试中隔离该审核过滤，并单独复跑 `6 passed`。
+- 前端生产构建与容器健康曾在本轮之前通过；本次未再次做浏览器对话验收。生产资料是否含退款 SOP、答案准确性与引用完整性仍待真实业务资料和 `super_admin` 链路核验，不以路由或降级测试代替。

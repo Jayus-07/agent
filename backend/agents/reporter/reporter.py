@@ -856,8 +856,7 @@ def _empty_result_phrases() -> frozenset:
 
 def _empty_result_prefixes() -> tuple:
     from backend.rag.evidence_gate.models import REJECT_MESSAGES
-    # 前缀变体：RAG self-correction 会在拒答话术后追加改写说明
-    # （"知识库暂无相关资料。\n（已尝试改写提问重新检索，仍未找到可靠答案）"），
+    # 前缀变体：RAG self-correction 会在拒答话术后补充查找结果；
     # 精确匹配拦不住，被当有效结果透传（实测 2026-09-19，拒答转追问由此漏判）
     return ("知识库暂无相关资料", "未找到相关信息", *REJECT_MESSAGES.values())
 

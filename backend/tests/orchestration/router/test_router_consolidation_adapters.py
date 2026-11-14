@@ -352,7 +352,7 @@ def test_router_node_engine_decision_becomes_capability_snapshot():
             "fine_top1": "sql.query", "fine_top1_score": 0.9,
             "fine_top2": "", "fine_top2_score": 0.0, "fine_margin": 0.9,
             "score_type": "vector_similarity_heuristic", "risk_level": "LOW",
-            "selected_tool": "sql.query", "route_policy_version": "routing-p0-1",
+            "selected_tool": "sql.query", "route_policy_version": "routing-p0-2",
         },
     )
     result = _with_router_decisions(
@@ -401,7 +401,7 @@ def test_router_node_records_sanitized_decision_in_current_trace_metadata():
             "fine_top1": "sql.query", "fine_top1_score": 0.93,
             "fine_top2": "", "fine_top2_score": 0.0, "fine_margin": 0.93,
             "score_type": "vector_similarity_heuristic", "risk_level": "LOW",
-            "selected_tool": "sql.query", "route_policy_version": "routing-p0-1",
+            "selected_tool": "sql.query", "route_policy_version": "routing-p0-2",
         },
     )
     try:

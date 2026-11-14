@@ -28,18 +28,18 @@ class RejectReason(str, Enum):
 # rerank/门禁等内部机制词；行动引导由前端 ErrorCard 按 answer_status
 # 稳定码叠加（RAG_REJECTION_ACTIONS），此处不重复行动建议。
 REJECT_MESSAGES: dict[RejectReason, str] = {
-    RejectReason.NO_EVIDENCE: "知识库中未找到与该问题相关的内容。",
-    RejectReason.LOW_RELEVANCE: "找到的内容与问题的相关性不够强，暂时无法给出可靠回答。",
-    RejectReason.DOC_TYPE_MISMATCH: "找到的文档类型与问题不太匹配，暂时无法给出可靠回答。",
-    RejectReason.INSUFFICIENT: "找到的内容与问题的相关性不够强，暂时无法给出可靠回答。",
-    RejectReason.HALLUCINATION: "生成的回答未能通过事实一致性校验，已自动拦截以避免错误信息。",
+    RejectReason.NO_EVIDENCE: "我在当前可访问的知识库中，没有找到能回答这个问题的资料。",
+    RejectReason.LOW_RELEVANCE: "我找到了一些资料，但它们和问题不够相关，暂时不能据此回答。",
+    RejectReason.DOC_TYPE_MISMATCH: "我找到的资料类型不适合回答这个问题，暂时不能据此确认。",
+    RejectReason.INSUFFICIENT: "我找到了一些相关资料，但它们不足以确认答案。",
+    RejectReason.HALLUCINATION: "我找到了相关资料，但无法确认它们能支持这个答案，所以没有下结论。",
 }
 
 # 权限剔除话术（与五类 REJECT_MESSAGES 分列）：它描述的是「有资料但你看不了」，
 # 措辞误导风险最高——统一走 REJECT_MESSAGES 会让用户把无权限误读成知识库没有，
 # 这是企业 RAG 拒答语义里代价最大的混淆（2026-10-03 前端语义透传改造）。
 PERMISSION_FILTERED_MESSAGE = (
-    "知识库中存在相关资料，但当前账号没有查看权限。可申请访问权限或联系管理员。"
+    "我找到了相关资料，但你当前没有查看权限。"
 )
 
 
@@ -51,6 +51,7 @@ PERMISSION_FILTERED_MESSAGE = (
 ANSWER_STATUS_NO_EVIDENCE = "rag_no_evidence"
 ANSWER_STATUS_PERMISSION_DENIED = "rag_permission_denied"
 ANSWER_STATUS_HALLUCINATION = "rag_hallucination"
+ANSWER_STATUS_RETRIEVAL_DEGRADED = "rag_retrieval_degraded"
 
 ANSWER_STATUS_BY_REASON: dict[RejectReason, str] = {
     RejectReason.NO_EVIDENCE: ANSWER_STATUS_NO_EVIDENCE,
@@ -62,17 +63,20 @@ ANSWER_STATUS_BY_REASON: dict[RejectReason, str] = {
 
 
 def resolve_answer_status(
-    reason: Optional[RejectReason], permission_filtered: int = 0
+    reason: Optional[RejectReason], permission_filtered: int = 0,
+    retrieval_degraded: bool = False,
 ) -> str:
     """拒答原因 → 前端稳定语义码（纯函数，_reject 与测试共用）。
 
     证据短缺类拒答若本轮发生过越权证据剔除（permission_filtered>0），升级为
-    permission_denied——用户有理由知道「不是没有，是看不了」；幻觉拦截不升级
-    （检索本身已通过 Gate，剔除与拦截无因果关系）。reason 为 None 按缺省
-    拒答文案的语义兜底为 no_evidence。
+    permission_denied；若重排服务本轮不可用（retrieval_degraded=True），升级为
+    retrieval_degraded，避免把服务故障说成知识库没有资料。幻觉拦截保留原语义。
+    reason 为 None 按缺省拒答文案的语义兜底为 no_evidence。
     """
     if reason is not RejectReason.HALLUCINATION and permission_filtered > 0:
         return ANSWER_STATUS_PERMISSION_DENIED
+    if reason is not RejectReason.HALLUCINATION and retrieval_degraded:
+        return ANSWER_STATUS_RETRIEVAL_DEGRADED
     return ANSWER_STATUS_BY_REASON.get(reason, ANSWER_STATUS_NO_EVIDENCE)
 
 
@@ -158,6 +162,7 @@ __all__ = [
     "ANSWER_STATUS_NO_EVIDENCE",
     "ANSWER_STATUS_PERMISSION_DENIED",
     "ANSWER_STATUS_HALLUCINATION",
+    "ANSWER_STATUS_RETRIEVAL_DEGRADED",
     "ANSWER_STATUS_BY_REASON",
     "resolve_answer_status",
     "GateDecision",

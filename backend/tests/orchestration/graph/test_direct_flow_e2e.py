@@ -74,7 +74,7 @@ def _run_direct_flow(monkeypatch, seen):
             "fine_margin": 0.72,
             "score_type": "vector_similarity_heuristic",
             "risk_level": "LOW",
-            "route_policy_version": "routing-p0-1",
+            "route_policy_version": "routing-p0-2",
         },
     )
     monkeypatch.setattr(

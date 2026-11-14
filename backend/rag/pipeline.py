@@ -1004,7 +1004,26 @@ class RAGPipeline:
             self._snapshot_answer_meta()
             answer_meta = dict(self.last_answer_meta or {})
 
-            if is_first_turn and answer and not self._is_rejection(answer):
+            from backend.rag.evidence_gate.models import (
+                ANSWER_STATUS_HALLUCINATION,
+                ANSWER_STATUS_NO_EVIDENCE,
+                ANSWER_STATUS_PERMISSION_DENIED,
+                ANSWER_STATUS_RETRIEVAL_DEGRADED,
+            )
+
+            rejection_statuses = {
+                ANSWER_STATUS_NO_EVIDENCE,
+                ANSWER_STATUS_PERMISSION_DENIED,
+                ANSWER_STATUS_HALLUCINATION,
+                ANSWER_STATUS_RETRIEVAL_DEGRADED,
+            }
+            answer_status = str(answer_meta.get("answer_status") or "")
+            if (
+                is_first_turn
+                and answer
+                and answer_status not in rejection_statuses
+                and not self._is_rejection(answer)
+            ):
                 self._write_answer_cache(question, kb_id, answer, meta=answer_meta)
 
             return answer, answer_meta
@@ -1250,6 +1269,13 @@ class RAGPipeline:
         rejection_markers = (
             "知识库暂无相关资料",
             "知识库中未找到",
+            "当前可访问的知识库",
+            "不够相关，暂时不能据此回答",
+            "资料类型不适合回答这个问题",
+            "相关资料，但它们不足以确认答案",
+            "无法确认它们能支持这个答案",
+            "没有查看权限",
+            "这次查询没有完成",
             "无法找到",
             "没有足够的信息",
             "无法回答",

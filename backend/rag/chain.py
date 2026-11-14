@@ -611,6 +611,32 @@ class RAGChain:
                     record_rag_stage("retrieve", ret_span.duration_ms)
             except Exception:
                 logger.debug("[RAGChain] retrieval span 提前收口失败", exc_info=True)
+            try:
+                from backend.rag.context import get_context
+
+                request_state = get_context()
+                retrieval_degraded = bool(
+                    request_state.rerank_unavailable
+                    or request_state.vector_degraded
+                )
+            except Exception:  # noqa: BLE001 — 观测状态缺失不阻断主链
+                retrieval_degraded = False
+            if retrieval_degraded:
+                logger.info(
+                    "[RAGChain] 检索关键环节降级，跳过生成以避免误导用户"
+                )
+                try:
+                    from backend.observability.metrics import rag_short_circuit_total
+
+                    rag_short_circuit_total.labels(
+                        reason="retrieval_degraded",
+                    ).inc()
+                except Exception:  # noqa: BLE001
+                    pass
+                return (
+                    '<!--META{"can_answer":false,"reason":"no_evidence",'
+                    '"confidence":0.0}-->'
+                )
             if not context_docs:
                 logger.info("[RAGChain] 空检索短路，跳过 LLM Generate")
                 try:
@@ -1123,24 +1149,32 @@ class RAGChain:
         from backend.rag.evidence_gate import build_rejection_response
         from backend.rag.evidence_gate.models import (
             ANSWER_STATUS_PERMISSION_DENIED,
+            ANSWER_STATUS_RETRIEVAL_DEGRADED,
             PERMISSION_FILTERED_MESSAGE,
             resolve_answer_status,
         )
         # 权限区分裁决：短缺类拒答 + 本轮确有越权剔除 → 升级为
         # 「存在相关资料但无权限」，避免用户把无权限误读成知识库没有
         try:
-            permission_filtered = int(get_context().permission_filtered or 0)
+            request_state = get_context()
+            permission_filtered = int(request_state.permission_filtered or 0)
+            retrieval_degraded = bool(
+                request_state.rerank_unavailable or request_state.vector_degraded
+            )
         except Exception:  # noqa: BLE001 — 上下文缺失按无剔除处理
             permission_filtered = 0
+            retrieval_degraded = False
         answer_status = resolve_answer_status(
-            getattr(decision, "reason", None), permission_filtered)
+            getattr(decision, "reason", None), permission_filtered,
+            retrieval_degraded=retrieval_degraded,
+        )
         msg, info = build_rejection_response(decision, layer,
                                              self_correction_attempted=self_correction_attempted,
                                              permission_filtered=permission_filtered)
         if answer_status == ANSWER_STATUS_PERMISSION_DENIED:
             msg = PERMISSION_FILTERED_MESSAGE
-            if self_correction_attempted:
-                msg += "\n（已尝试改写提问重新检索，仍未找到可靠答案）"
+        elif answer_status == ANSWER_STATUS_RETRIEVAL_DEGRADED:
+            msg = "这次查询没有完成，我暂时无法判断知识库里是否有相关资料。"
         # 结构化拒答状态随 ctx.meta 流出：pipeline._snapshot_answer_meta →
         # /ask meta / 工具 RAGMETA 标记 → done 帧 answer_status（前端指引）
         try:
