@@ -985,9 +985,11 @@ class PdfParser(BaseDocumentParser):
         """渲染 OCR 页面或图像区域，返回文本、页码、bbox 和失败页码。
 
         页码为 1-based；图像裁剪保留其源 bbox，整页扫描兜底的 bbox 为空。
-        任一目标区域失败都会记录所在页，质量门禁据此阻止不完整页面入库。
+        单页识别失败会记录所在页，质量门禁据此阻止不完整页面入库；
+        请求预算超限属于整份任务的硬停止，不能降级成单页 OCR 失败。
         """
         from backend.config import rag as rag_cfg
+        from backend.infra.llm.budget import RequestBudgetExceeded
         from backend.rag.preprocessing.parser import ocr as ocr_mod
         items: list[tuple[str, float, int, tuple]] = []
         failed_targets: list[tuple[int, tuple[float, ...] | None]] = []
@@ -1033,6 +1035,8 @@ class PdfParser(BaseDocumentParser):
                                     f"[PdfParser][OCR] {file_path} 第 {page_number} 页"
                                     f"初次 OCR 未返回文本，将以 {render_dpis[attempt + 1]} DPI 重试"
                                 )
+                        except RequestBudgetExceeded:
+                            raise
                         except Exception as exc:
                             last_error = exc
                             if attempt + 1 < len(render_dpis):
@@ -1055,6 +1059,8 @@ class PdfParser(BaseDocumentParser):
                             f"[PdfParser][OCR] {file_path} 第 {page_number} 页区域 OCR 失败: "
                             f"{detail}"
                         )
+                except RequestBudgetExceeded:
+                    raise
                 except Exception as e:
                     failed_targets.append((page_number, bbox))
                     logger.warning(

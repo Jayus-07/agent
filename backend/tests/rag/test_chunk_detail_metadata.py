@@ -137,3 +137,24 @@ def test_chunk_detail_exposes_source_and_split_audit_metadata_only():
         "chunk_tokens": 128,
         "embedding_version": "embed-v4",
     }
+
+
+def test_chunk_detail_uses_registered_filename_for_source_title():
+    rows = [{
+        "chunk_index": 0,
+        "chunk_id": "doc_0",
+        "granularity": "parent",
+        "parent_chunk_id": "",
+        "chunk_metadata": {
+            "document_title": "68947716e6ae.c3c54cbbb7f24baf",
+            "parent_scope": "document",
+            "section_path": ["临时标题"],
+        },
+    }]
+
+    item = build_chunk_detail_items(
+        rows,
+        source_file_name=r"C:\upload-temp\正式资料.pdf",
+    )[0]
+
+    assert item["document_title"] == "正式资料.pdf"

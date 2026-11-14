@@ -7,6 +7,7 @@ import { useDocuments, useKnowledgeStats } from '@/hooks/useKnowledge'
 import { knowledgeService, type ChunkDetailItem } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
+import { getReindexTerminalState } from '@/lib/reindex-status'
 
 // 中文标签映射
 const KB_LABELS: Record<string, string> = {
@@ -227,9 +228,9 @@ export default function DocumentsPanel() {
     }
   }
 
-  // 重索引进度轮询：任务化后提交即返回，状态/进度走轮询通道（1.5s 间隔，
-  // 10 分钟上限兜底；终态判定 = task.status 或 progress.stage 任一到达）
-  const pollReindexStatus = async (id: string, name: string) => {
+  // 重索引进度轮询：任务化后提交即返回。任务状态是主要依据；只有缺少任务状态时，
+  // 才接受本次提交后写入的终态进度，防止复用上一次任务的完成状态。
+  const pollReindexStatus = async (id: string, name: string, submittedAtMs: number) => {
     const started = Date.now()
     while (mountedRef.current && Date.now() - started < 600_000) {
       await new Promise(r => setTimeout(r, 1500))
@@ -243,12 +244,18 @@ export default function DocumentsPanel() {
       if (!res?.ok) continue
       const status = res.task?.status as string | undefined
       const stage = res.progress?.stage as string | undefined
-      if (status === 'SUCCESS' || stage === 'done' || stage === 'duplicate') {
+      const terminal = getReindexTerminalState({
+        taskStatus: status,
+        progressStage: stage,
+        progressUpdatedAt: res.progress?.updated_at,
+        submittedAtMs,
+      })
+      if (terminal === 'success') {
         const chunks = res.progress?.detail?.chunk_count
         toast.success(`「${name}」重索引完成${chunks ? `（${chunks} 个分块）` : ''}`)
         return
       }
-      if (status === 'FAILED' || status === 'CANCELLED' || stage === 'error') {
+      if (terminal === 'failure') {
         toast.error(`「${name}」重索引失败：${res.task?.error || res.progress?.message || '未知错误'}`)
         return
       }
@@ -259,6 +266,7 @@ export default function DocumentsPanel() {
   const handleReindex = async (id: string, name: string) => {
     if (reindexing.has(id)) return
     setReindexing(prev => new Set(prev).add(id))
+    const submittedAtMs = Date.now()
     try {
       const res = await knowledgeService.reindexDocument(id)
       if (!res?.ok) {
@@ -272,7 +280,7 @@ export default function DocumentsPanel() {
         return
       }
       toast.info(res.joined ? `「${name}」已有重索引进行中，正在跟踪进度` : `「${name}」重索引任务已提交`)
-      await pollReindexStatus(id, name)
+      await pollReindexStatus(id, name, submittedAtMs)
       refreshAfterDocumentMutation()
     } finally {
       setReindexing(prev => {

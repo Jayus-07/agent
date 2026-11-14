@@ -110,6 +110,7 @@ Trace 含 prompt/answer、用户问题、session/user 标识与用量信息，�
 - 持久化: `backend/observability/trace_store_pg.py`（PostgreSQL；SQLite 轨已于 2026-09-17 删除）
 - API: `backend/app/api/routes/observability.py`；DTO: `routes/_trace_dto.py`
 - 授权: `backend/app/api/routes/_trace_authz.py`
+- `knowledge_index` Trace 的标题和索引阶段 Span 名称使用正式逻辑路径中的文件名；候选索引不把随机暂存文件名作为页面标题。
 
 ## 开发时的 Span 生命周期与归因门禁
 

@@ -1161,12 +1161,13 @@ class IncrementalIndexer:
         # identity_path（候选模式）：doc_id/KB/归属等派生与 registry 读取用
         # 正式路径；真实文件读取（load/parse）仍用 file_path（暂存文件）。
         path_id = identity_path or file_path
+        display_name = os.path.basename(path_id) or os.path.basename(file_path)
         kb_id = self.kb_id if self.kb_id != "default" else self._derive_kb_id(path_id)
         file_hash = file_hash or self._sha256(file_path)
         doc_id = self._derive_doc_id(path_id, file_hash, kb_id)
         # ── 启动 indexer trace ──
         trace = trace_collector.start(
-            question=os.path.basename(file_path),
+            question=display_name,
             session_id="",
             workflow_name="knowledge_index",
             workflow_kind=WorkflowKind.KNOWLEDGE_INDEX.value,
@@ -1207,7 +1208,7 @@ class IncrementalIndexer:
         upload_span = trace_collector.start_span(
             "index_upload",
             parent_id=None,
-            name=f"Index {os.path.basename(file_path)}",
+            name=f"Index {display_name}",
             type="workflow",
             kind=SpanKind.INDEX_UPLOAD.value,
             input={"file_path": file_path, "size_bytes": file_size},
@@ -1245,7 +1246,7 @@ class IncrementalIndexer:
                     )
             trace_collector.end_span(upload_span,
                 metrics={"doc_id": doc_id, "kb_id": kb_id})
-            trace_collector.finish(trace, os.path.basename(file_path),
+            trace_collector.finish(trace, display_name,
                                    upload_span.duration_ms, "", "")
             # P2-2:返回 dict 含 trace_id + chunk_count + doc_db_id,
             # 让 reindex_file 直接消费,不再反查 registry
@@ -1312,6 +1313,7 @@ class IncrementalIndexer:
         """
         ext = os.path.splitext(file_path)[1].lower()
         path_id = identity_path or file_path
+        display_name = os.path.basename(path_id) or os.path.basename(file_path)
         # department 必须按文件路径派生，不能用 self.department：批量 sync 时
         # indexer 是单实例跨多部门构建的，self.department 只是构造默认值。
         department = self._derive_department(path_id)
@@ -1343,7 +1345,7 @@ class IncrementalIndexer:
         load_span = trace_collector.start_span(
             "index_load",
             parent_id="index_upload",
-            name=f"Load {os.path.basename(file_path)}",
+            name=f"Load {display_name}",
             type="load",
             kind=SpanKind.INDEX_LOAD.value,
             input={"file_path": file_path, "ext": ext},
@@ -1370,7 +1372,7 @@ class IncrementalIndexer:
         parse_span = trace_collector.start_span(
             "index_parse",
             parent_id="index_upload",
-            name=f"Parse {os.path.basename(file_path)}",
+            name=f"Parse {display_name}",
             type="parse",
             kind=SpanKind.INDEX_PARSE.value,
             input={"file_path": file_path, "ext": ext},
@@ -1577,7 +1579,7 @@ class IncrementalIndexer:
         clean_span = trace_collector.start_span(
             "index_clean",
             parent_id="index_upload",
-            name=f"Clean {os.path.basename(file_path)}",
+            name=f"Clean {display_name}",
             type="clean",
             kind=SpanKind.INDEX_CLEAN.value,
             input={"doc_count": len(chunks)},
@@ -1590,7 +1592,7 @@ class IncrementalIndexer:
         dedup_span = trace_collector.start_span(
             "index_dedup",
             parent_id="index_upload",
-            name=f"Check {os.path.basename(file_path)}",
+            name=f"Check {display_name}",
             type="dedup",
             kind=SpanKind.INDEX_DEDUP.value,
             input={"file_hash": file_hash},
@@ -1633,7 +1635,7 @@ class IncrementalIndexer:
         chunk_span = trace_collector.start_span(
             "index_chunk",
             parent_id="index_upload",
-            name=f"Chunk {os.path.basename(file_path)}",
+            name=f"Chunk {display_name}",
             type="chunk",
             kind=SpanKind.INDEX_CHUNK.value,
         )
@@ -1735,6 +1737,14 @@ class IncrementalIndexer:
                 for chunk in chunks
                 if str((chunk.metadata or {}).get("document_title") or "").strip()
             ), "")
+        if os.path.normcase(os.path.abspath(path_id)) != os.path.normcase(
+            os.path.abspath(file_path)
+        ):
+            staged_name = os.path.basename(file_path)
+            staged_title = os.path.splitext(staged_name)[0]
+            source_title = os.path.splitext(display_name)[0] or display_name
+            if not document_title or document_title in {staged_name, staged_title}:
+                document_title = source_title
         doc_meta = {
             "doc_id": doc_id,
             # 候选模式实际读取的是随机暂存文件；文档元数据必须绑定正式身份路径，
@@ -1773,6 +1783,10 @@ class IncrementalIndexer:
         collection_name = str(getattr(self.vectordb, "_collection", "") or "")
         if "::cand:" in collection_name:
             doc_meta["index_generation"] = collection_name.split("::cand:", 1)[1]
+        else:
+            # 普通重索引会原地覆盖当前版本，但 Registry 的发布指针保持不变；
+            # 新 Chunk 与 Registry 必须继续记录该 Active 代次，供详情和 Trace 追溯。
+            doc_meta["index_generation"] = str(doc_row.get("active_generation") or "")
         # 截断标记先算出来：付费前预检与质量记录都要用（定义在使用点之前）。
         chunks_truncated = any(
             ch.metadata.get("chunks_truncated") for ch in chunks
@@ -2226,6 +2240,7 @@ class IncrementalIndexer:
 
         for i, ch in enumerate(chunks):
             ch.metadata["chunk_index"] = i
+            ch.metadata["document_title"] = str(doc_meta.get("title") or "")
             ch.metadata["source_format"] = str(doc_meta.get("source_format") or "")
             ch.metadata["parser_version"] = str(doc_meta.get("parser_version") or "")
             ch.metadata["chunk_policy_version"] = str(

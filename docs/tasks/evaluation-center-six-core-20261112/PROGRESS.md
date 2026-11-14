@@ -357,3 +357,72 @@
 
 - RAG Smoke 首轮发现一处本次改动回归：索引 ID 映射先清空了悬空 Parent 引用，后续付费前完整性预检看不到原始错误。已将 ID 映射移到预检之后，使无效 Parent 先被拒绝；完整性预检、分块详情和 Parent 映射定向测试本机复跑 29 项通过。
 - 修复已准备推送到原 PR 分支，等待 CI 重跑；共享 RAG 服务仍由其他工作树持有，本地真实服务联调继续标记 `UNVERIFIED`。
+
+## 2026-11-14 — 文件与切分质量复核、旅游代次元数据补齐
+
+- 本机 `生产文件` 共 91 个文件；6 份已验收旅游资料在当前 `travel` 库均为 active/pass，合计 67 个 chunk，6 条最新成功 Trace 均仍可查。另有 42 份旧旅游资料仍是 soft_warning，合计 1,497 个 chunk 缺少解析器版本和切分规则版本；不把它们算作生产资料验收通过。
+- 六份已验收资料中，鼓浪屿历史背景和三坊七巷街区的 23 个 Chunk Store 行及 23 个 Chroma 行缺少 `index_generation`，但 Registry 有明确的 `active_generation`。先保存 46 行元数据前像：`D:\tmp\rag-index-generation-backfill-20261114-104507\metadata-before.jsonl`，SHA-256 `626BD043F5F19E24CA84A9F9A745CDE07CAC0D9F477E8584FCB56A2F86482A7D`；随后在单一事务中只补 `index_generation`，没有改正文、向量值或 chunk 数。复核六份资料的 chunk 与向量均为 67/67，来源格式、解析器版本、切分规则版本和代次与 Registry 一致。
+- 28 份 RAG 上传夹具原件仍全部在本机且 SHA 与 manifest 相符。当前 `rag_eval_kb` 有 23 份 active（20 pass、3 soft_warning）和 4 份 failed；另 5 份失败文件已在测试受众隔离库 `rag_upload_pressure_20261113` 走过最新上传尝试，隔离库仍为 0 篇，未发布任何失败文档。
+- 五次最新 PDF 尝试均在管理端“入库失败”页有可点开的 Trace，Trace Store 中 5 条均为 error：`report.pdf` 与 `doc_cn.pdf` 为 coverage_gap；`progit_en_501p.pdf` 为 PDF 原文核对缺口；`progit_zh.pdf` 为 OCR 覆盖不全；`scanned_partial_fail.pdf` 因请求 Token 预算超限失败。五条合计记录 222 次模型调用、381,792 Tokens，费用都显示“未核算”；不在预算和费用口径查清前重跑这些大 PDF。更早的 4 条质量门禁失败记录仍显示“无历史 Trace”，没有伪造补链。
+- 管理端当前只读页面：可见 213 篇（通过 44、需复核 169、失败 0），待复核 0；失败页显示 72 项（异步任务 68、质量门禁 4）。浏览器证据：`.playwright-mcp/page-2026-11-14T02-35-42-705Z.yml`、`.playwright-mcp/page-2026-11-14T02-36-04-501Z.yml`、`.playwright-mcp/page-2026-11-14T02-38-41-082Z.yml`、`.playwright-mcp/page-2026-11-14T02-41-24-326Z.yml`。
+- PR #468 已通过必需 CI 并合并到 main，当前分支 HEAD `768e11d` 与 `origin/main` 一致；下面的共享管理端旧版现象是未重建部署造成的验收阻塞，不是把 PR 合并回滚。
+- 运行中的共享管理端仍表现为旧版：按钮标题为“查看Chunks”，点后跳转到 Trace，没有打开 PR #468 新增的分块详情抽屉；因此最新 UI/API 部署与联调仍是 `UNVERIFIED`。首次打开知识工作台时接口短暂出现 502/503，刷新后健康检查、文档、统计和知识库接口均返回 200；容器健康、无 OOM、无重启，本轮没有重建共享服务。
+- 本轮没有改代码、没有重新上传、没有重跑 OCR；数据库改动仅为上述可由元数据前像回退的 46 个 JSON 字段。下一步先查清 OCR 请求预算为什么允许多页调用、费用为何未核算，再处理 42 份旧旅游资料的逐类质量与来源追溯；等共享管理端可由本任务工作树安全重建后，再验收分块详情页面。
+
+## 2026-11-14 — OCR 预算失败快速停止修复
+
+- 复核 42 份旧旅游资料时确认：Registry 和 1,497 条 chunk 都没有 `parser_version` / `chunk_policy_version`；只有通用 `pipeline_version=rag-processing-v1`，不足以证明实际解析器与切分规则版本，不能凭空回填。需要从原始本机文件受控重建，再逐份对照 Trace、chunk 与向量。
+- OCR 预算超限原先会被 PDF 解析器当成普通单页识别失败，继续尝试剩余页；现在会立即向上抛出硬预算错误，避免预算已拒绝后继续渲染和空转。新增两页 PDF 回归测试，证明第一页预算失败后第二页不会再调用 OCR。
+- 定向验证：`D:\Python\python.exe -m pytest backend/tests/rag/test_pdf_ocr.py -q` 为 42 passed；`git diff --check` 通过。没有重新上传 PDF，也没有发生模型调用。
+- 运行时复核发现管理端共享 RAG Worker 当前因 Redis 用户名/密码不匹配而处于 unhealthy，尚不能做真实上传复验；容器由 `assistant-review-fixes` 工作树构建，本轮没有重启或改动它。五条 PDF Trace 的 381,792 Tokens 在 `llm_usage` 中都有记录，但费用字段为空；数据库无法证明实际账单，需从运行该版本的服务/供应商用量确认。恢复真实链路前不重跑大 PDF。
+- 当前状态：OCR 超限后的空转代码已修并通过定向测试；42 份旧旅游资料仍待受控重建；真实 Worker 上传、账单核对及新一轮管理端验收受共享运行环境阻塞。
+- 继续核对这 42 份资料：生产文件夹中的原件 42/42 与 Registry SHA-256 相同；逐份文档核对 Registry、Chunk Store、向量表后，1,497 个 chunk 数量全部一致，空 chunk、重复 chunk ID 均为 0。但发现更重要的缺陷：1,114 个 Leaf 的 `parent_chunk_id` 全为空，383 个 Parent 没有任何子块关联，向量元数据也一样；不是“断到不存在的父块”，而是整个父子关系没有保存，当前无法用 Leaf 命中后扩展 Parent 上下文。需要从原件重建，先备份再做单文档试点，确认新旧检索行为后批量处理。
+- 管理端可信上传会先提交 Celery；共享 Worker 未恢复前，没有安全的管理端同步索引旁路可用，本轮不绕过队列直接写共享索引。
+- 对 42 份原件做了本地、无模型调用、无数据库写入的切分预演：新版本预计 2,650 chunks（旧库 1,497），42/42 的块数和正文顺序都会改变；新结果有 2,272 个 Leaf 父块关联，旧库为 0；预演的清洗/源内容覆盖缺口均为 0。新分类有两份与 Registry 不同：`厦门旅游攻略.md` general→travel_guide，`厦门特色指南.md` travel_guide→contract_template；批量前需在单文档真实运行中核对最终分类和答案检索。此预演只用于估算影响，不是入库验收。
+
+## 2026-11-14 — 旅游资料隔离试上传与切分复核
+
+- 选用生产资料文件夹中的 `厦门-城市-厦门.md` 做单文件试点。测试副本 SHA-256 与生产资料原件一致；只上传到测试受众知识库 `travel_eval_kb`，没有改动 `travel` 生产知识库。试点文件 13,394 字节。
+- 首次上传因宿主机 BGE 服务重启后未运行而失败，管理端最初记录为 `provider_error / APIConnectionError`，Trace `d480c3a27563` 状态为 ERROR；恢复 BGE 后同文件重试一次，管理端显示活跃、质量通过 100 分，成功 Trace `f26155b7e8d9`。成功 Trace 记录解析 145 块、过滤 14 块、写入 131 块；Trace 记录 108 个叶块、23 个父块、108 条有效父引用，空块、缺 ID、重复 ID、无效父引用均为 0，覆盖检查 122/122。
+- PostgreSQL 只读核对：该文档 Chunk Store 131 行，向量表 chunk collection 131 行，另有 1 行文档级向量；131 个 chunk 向量均带有解析器版本、切分规则版本、索引代次、源格式、来源定位和来源跨度元数据。用本地 BGE 生成 1024 维查询向量，直接在该测试库做只读向量检索；查询“厦门高崎国际机场距离厦门市中心有多远”时第一名命中机场原文，明确包含“距厦门市中心10公里”，第二名是对应父块。此项只证明向量写入和相似度检索，不等于完整混合 RAG 或答案质量评测。
+- 管理端浏览器复核：文档页显示 `travel_eval_kb / 通用 / 旅游 / 旅游指南`、活跃、质量通过；待复核页为 0。失败页当前 72 项，但不再列出这次已恢复的文件；首次失败 Trace 仍可直接用 ID 打开。失败 Trace 页面标题显示临时随机文件名而不是原文件名。浏览器记录见 `.playwright-mcp/page-2026-11-14T06-59-39-071Z.yml`、`.playwright-mcp/page-2026-11-14T06-59-43-205Z.yml`、`.playwright-mcp/page-2026-11-14T07-01-43-320Z.yml`。
+- 仍有两个验收缺口：分块详情抽屉显示来源/切分元数据为 0 项，但只读数据库证明 131 条向量行和 Chunk Store 都有这些字段；当前 API 容器没有把元数据返回给页面。目标工作树的 `backend/rag/indexing/chunk_detail.py` 已有映射实现，但共享 app 与 RAG Worker 实际来自 `assistant-review-fixes` 工作树；为保护其他会话，本轮没有替换或重建共享服务，因此目标工作树版本部署状态为 UNVERIFIED。Trace 页面显示的 ¥0.0127/¥0.0085 也只是当前价格登记下的台账值，运行日志有 `price_unknown`，不能当作供应商实际账单。
+- 目标工作树定向验证：`D:\Python\python.exe -m pytest backend/tests/rag/test_chunk_detail_metadata.py -q --no-cov` 为 4 passed（24.13 秒）。这证明本地映射函数测试通过；共享管理端仍跑着另一工作树代码，所以页面验收状态仍是 UNVERIFIED。
+- 下一步：等共享服务可安全重建时，从本任务工作树部署 app 和 RAG Worker，重验分块详情 API/页面来源元数据；再选一份旧旅游资料做单文档重建，逐项比对原文、分类、Chunk Store、向量、Trace 和真实检索，确认无误后才评估 42 份旧资料的批量修复。生产库不做批量写入。
+
+## 2026-11-14 — 上传 Trace 正式文件名修正与复验
+
+- 候选文件上传时，索引器会从随机暂存路径读取文件，但原始逻辑路径仍在 `identity_path`。此前 Trace 标题和阶段 Span 名称错误地取暂存文件名；现在改为显示逻辑路径中的正式文件名，内部读取路径和文档 ID 逻辑不变。
+- 新增候选索引 Trace 回归用例，并对预算硬停止用例一起复验：`py_compile`、`git diff --check` 通过；两个定向测试 `2 passed in 74.34s`。Ruff 仍报告目标文件既有导入排序、未使用导入、未定义旧变量及 pytest fixture 命名告警；新增用例已对同名 fixture 做局部标注，没有顺手改动旧告警。
+- Docker 只读复核显示共享 `agent` 项目由多个工作树共同组成，app 与 RAG Worker 实际镜像来自 `assistant-review-fixes`；本任务没有重建、重启或覆盖这些服务。因而 Trace 标题改动尚未在管理端部署验收，仍为 `UNVERIFIED`。当前宿主可用内存约 3.16 GB；不为此另起完整栈，也不改共享数据库。
+- 测试没有上传新文档或写向量库。此前上传试点的两个完全同哈希临时副本仍在 `.playwright-mcp/ingest-pilot/` 与 `.playwright-mcp/ingest-pilot-20261114/`；原始生产资料未动。清理这两个副本的精确删除请求曾被自动审核拒绝，本轮没有改用其他方式绕过。
+- 下一步：在共享服务可安全切换到本任务工作树时，重建 app 与 RAG Worker，并用 `super_admin` 浏览器确认失败 Trace 标题显示正式文件名、分块抽屉返回来源/切分元数据；再做一份旧旅游资料的隔离重建试点，确认层级、向量、Trace 和检索都正确后，才决定是否修复余下 42 份资料。
+
+## 2026-11-14 — 管理端目标前端与现有 API 联调复核
+
+- 为避免覆盖共享前端，只在本工作树启动 Next 开发预览 `localhost:3202`，沿用现有网关和 API；浏览器使用已有 `super_admin` 会话。联调后已停止该预览进程。
+- 页面实际显示 214 篇活动文档（45 通过、169 需复核）。`travel_eval_kb` 的 `厦门-城市-厦门.md` 显示活跃、质量通过 100 分。点“查看分块”停留在文档页并打开 131 块抽屉；点“查看处理 Trace”则打开对应 Trace，两个入口已分开，按钮不会冒泡跳错页。浏览器快照：`.playwright-mcp/page-2026-11-14T07-37-15-494Z.yml`、`.playwright-mcp/page-2026-11-14T07-38-16-648Z.yml`。
+- 分块详情 GET 返回 200、131 行正文和父子关系，但每行都没有 `metadata` 字段；抽屉明确显示“来源与切分元数据（0 项）”。容器内 `chunk_detail.py` 仍是旧映射器，未把审计元数据放进响应；本工作树版本已有安全白名单映射。因此页面控件本身已验收，服务端来源/切分字段尚未通过真实链路验收。
+- 从页面打开成功 Trace `f26155b7e8d9`，标题仍为随机暂存名 `68947716e6ae.c3c54cbbb7f24baf.md`；此前失败 Trace `d480c3a27563` 也仍显示随机暂存名。只读核对当前 RAG Worker 容器不含本工作树的 `display_name` 修正；这次 Trace 标题修复尚未部署。
+- 当前管理端页面来自本工作树源码，API 与 RAG Worker 仍由共享服务提供；服务端新代码和新上传行为不能据此报为通过。后续必须先安排共享服务安全切换到本工作树，再复核 API 元数据和重新产生一条正式文件名 Trace。生产库及已有向量本轮未改。
+
+## 2026-11-14 — 默认管理端与目标前端差异确认
+
+- 追加检查默认管理端 `localhost:3200`：仍显示旧按钮名“查看Chunks”，点击按钮会触发行级点击并跳到 Trace；本工作树前端 `localhost:3202` 则显示独立的“查看分块 / 查看处理 Trace”，点分块按钮只开详情抽屉。说明目标前端交互正确，但用户默认入口尚未部署本次已合入的 UI。
+- 3202 预览经共享网关读真实 `travel_eval_kb` 文档和 Trace，权限会话正常，页面/API请求均为 200；但 API 容器返回的 131 个块没有 `metadata`，预览明确显示 0 项来源与切分信息。该差异已定位到共享 app 容器的旧 `chunk_detail.py` 映射器；本工作树映射器含安全白名单，单测此前 4 项通过。
+- 当前验收拆分：目标 UI 按钮行为 PASS；试点上传与数据库分块/向量关系 PASS（前述只读证据）；默认 UI 部署、API 来源元数据、Trace 正式文件名均 UNVERIFIED。共享 `agent` 栈由多个工作树共同组成，app/worker/frontend 容器仍属其他工作树，因此不在本轮切换或重建。
+- CI 补齐：把 PDF 预算硬停止测试和候选 Trace 正式文件名测试加入 `.github/workflows/rag_smoke.yml`。RAG Smoke 路径过滤与工作流契约定向测试 `28 passed`；两条新 smoke 用例 `2 collected`；`py_compile` 与 `git diff --check` 通过。没有运行付费 Provider 或全量回归。
+
+## 2026-11-14 — 对齐工作树与重索引追溯复验
+
+- 工作树对齐：资料质量工作树从 `768e11d` 出发，与最新 `origin/main` 一致；企业助手工作树的原始补丁先备份至 `D:\tmp\assistant-review-fixes-preserve-20261114`（SHA-256 `DA156F90DF0B93566B94B27A049CDC784F7AC5F22A9BFCD02AFEE6B372495D95`），再成功 rebase 到 `dc3faac`。两边各自改动和 Playwright 产物均保留，没有合并功能分支。
+- 为普通重索引补上 Registry 当前 `active_generation` 到新 Chunk/Registry 元数据的传递；候选发布仍使用候选集合自身代次。定向测试 `backend/tests/rag/test_indexer_trace.py` 中两条相关用例 `2 passed in 111.15s`。
+- 使用默认管理端 `super_admin` 对测试库 `travel_eval_kb` 的 `厦门-城市-厦门.md` 重索引并复核：131 个 Chunk、23 Parent、108 Leaf（均有 Parent），每条均有代次 `c3c54cbbb7f24baf`、格式 `md`、解析版本 `v2`、切分版本 `StructureChunkStrategy:v3` 和原文定位；Chunk/向量哈希与登记原件一致，质量分 100。最新成功 Trace 为 `da4d80d49636`，16 个 Span、阶段标题显示正式文件名；操作日志 API 的最新记录和文档页按钮均指向该 Trace。复核后重新批准了测试库资料；生产库 `travel` 中的待复核条目保持未动。
+- 重索引开始时还复现管理端过早显示“完成”：状态接口返回新任务 `RUNNING`，却同时带有上一次任务的 `progress.stage=done`。前端现在优先使用任务终态；只有没有任务记录时才接受提交后更新的终态进度。新增 `reindex-status` 定向测试 `3 passed`。
+- 已按 `devctl.bat rebuild -y` 串行重建共享栈，后端代次修复已在默认管理端实测；前端过早完成修复尚未重建和浏览器复验。原因是宿主可用内存降到约 1.8 GB，低于 2 GB；遵守本机资源规则，等内存回升后再重建。本轮没有提交。
+- 原资料质量任务仍未整体验收：42 份旧旅游原件的切分/父子关系需要从原件重建；193 条历史软警告、旧 Trace 留存缺口、孤儿 chunk 和 28 份上传样本的 5 份缺件仍需按前述计划处理。当前测试库单文件成功不能替代这些全量验收。
+
+## 2026-11-14 — 接手后的合并前定向验证
+
+- 普通重索引代次、候选 Trace 正式文件名、Chunk 来源元数据、PDF 预算硬停止相关后端定向测试 `8 passed`；管理端重索引状态 helper `3 passed`。对应共享测试库试点的 131 个 Chunk、23 Parent/108 Leaf、向量、原件哈希和 Trace 已在上节记录。
+- `git diff --check` 通过。重索引提示修复尚未在默认管理端重新构建和浏览器实测；42 份旧旅游资料仍未做生产批量重建，原件、历史 Trace 与质量警告的全量对齐仍未验收。
