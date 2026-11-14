@@ -1,10 +1,10 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
-import { FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { Activity, FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useDocuments, useKnowledgeStats } from '@/hooks/useKnowledge'
-import { knowledgeService } from '@/api/knowledge'
+import { knowledgeService, type ChunkDetailItem } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
 
@@ -33,6 +33,49 @@ const QUALITY_STATUS_CONFIG: Record<string, { label: string; className: string; 
   soft_warning: { label: '需复核', className: 'bg-amber-50 text-amber-700', title: '存在质量提醒，建议复核原文和分块' },
   failed: { label: '质量失败', className: 'bg-red-50 text-red-700', title: '质量门禁失败，文档不应作为合格资料' },
   unknown: { label: '未核验', className: 'bg-gray-100 text-gray-600', title: '没有可用的质量结论，不能按通过处理' },
+}
+
+const CHUNK_METADATA_LABELS: Record<string, string> = {
+  source_format: '原文件格式',
+  parser_version: '解析器版本',
+  chunk_policy_version: '切分规则版本',
+  index_generation: '索引代次',
+  source_locators_json: '原文位置',
+  source_spans_json: '原文范围',
+  source_locations_json: '来源定位',
+  page: '页码',
+  pages: '页数',
+  table_id: '表格编号',
+  row_index: '表格行号',
+  row_part_index: '行分片号',
+  row_count: '表格行数',
+  col_count: '表格列数',
+  split_group_id: '拆分组',
+  split_part: '拆分序号',
+  split_total: '拆分总数',
+  content_hash: '分块内容校验值',
+  quality_flags: '质量标记',
+  filter_status: '过滤状态',
+  filter_reason: '过滤原因',
+  section_path: '章节路径',
+  section_level: '章节层级',
+  section_id: '章节编号',
+  parent_section_id: '父章节编号',
+  parent_scope: '父块范围',
+  content_unit: '内容单元',
+  content_unit_id: '内容单元编号',
+  content_unit_strategy: '内容单元切分方式',
+  chunk_tokens: 'Token 数',
+  embedding_model: '向量模型',
+  embedding_version: '向量版本',
+  embedding_fingerprint: '向量配置指纹',
+}
+
+function formatChunkMetadata(value: unknown): string {
+  if (typeof value === 'string') return value
+  if (value === null || value === undefined) return '-'
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value)
 }
 
 const PROCESSING_STAGE_CN: Record<string, string> = {
@@ -87,6 +130,11 @@ export default function DocumentsPanel() {
   const [lineageRuns, setLineageRuns] = useState<any[]>([])
   const [lineageDetail, setLineageDetail] = useState<any | null>(null)
   const [lineageLoading, setLineageLoading] = useState(false)
+  const [chunkDoc, setChunkDoc] = useState<{ id: string; name: string } | null>(null)
+  const [chunkItems, setChunkItems] = useState<ChunkDetailItem[]>([])
+  const [chunkLoading, setChunkLoading] = useState(false)
+  const [chunkError, setChunkError] = useState('')
+  const chunkRequestRef = useRef(0)
   // G2：知识库筛选选项 = 后端注册库真实清单（含文档计数），不再硬编码
   const [kbOptions, setKbOptions] = useState<Array<{ id: string; name: string; doc_count?: number }>>([])
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
@@ -112,17 +160,39 @@ export default function DocumentsPanel() {
   useEffect(() => {
     return () => {
       mountedRef.current = false
+      chunkRequestRef.current += 1
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [])
 
-  // G2：加载真实知识库清单（注册库 + 文档计数）
   useEffect(() => {
-    knowledgeService.listKnowledgeBases().then((d: any) => {
-      const kbs = Array.isArray(d?.knowledge_bases) ? d.knowledge_bases : []
-      setKbOptions(kbs.map((k: any) => ({ id: k.id, name: k.name || k.id, doc_count: k.doc_count })))
-    })
+    if (!chunkDoc) return
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return
+      chunkRequestRef.current += 1
+      setChunkDoc(null)
+      setChunkItems([])
+      setChunkError('')
+      setChunkLoading(false)
+    }
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [chunkDoc])
+
+  // G2：加载真实知识库清单（注册库 + 文档计数）
+  const refreshKbOptions = useCallback(async () => {
+    const d: any = await knowledgeService.listKnowledgeBases()
+    if (!Array.isArray(d?.knowledge_bases)) return
+    setKbOptions(d.knowledge_bases.map((k: any) => ({ id: k.id, name: k.name || k.id, doc_count: k.doc_count })))
   }, [])
+
+  useEffect(() => { void refreshKbOptions() }, [refreshKbOptions])
+
+  const refreshAfterDocumentMutation = useCallback(() => {
+    refresh()
+    void knowledgeStats.refresh()
+    void refreshKbOptions()
+  }, [knowledgeStats.refresh, refresh, refreshKbOptions])
 
   // 翻页/搜索/过滤变化时清空选择（选中集只对当前页有意义）
   useEffect(() => {
@@ -148,12 +218,11 @@ export default function DocumentsPanel() {
         toast.error(`删除「${name}」失败：${result?.error || '服务端拒绝删除请求'}`)
       }
       setDeleteTarget(null)
-      refresh()
     } catch (err) {
       toast.error(`删除「${name}」失败：${err instanceof Error ? err.message : '未知错误'}`)
       setDeleteTarget(null)
-      refresh()
     } finally {
+      refreshAfterDocumentMutation()
       setDeletePending(false)
     }
   }
@@ -199,12 +268,12 @@ export default function DocumentsPanel() {
       if (!res.async) {
         // 同步降级路径（任务队列不可达时的本机回退）：响应即终态
         toast.success(`「${name}」重索引完成`)
-        refresh()
+        refreshAfterDocumentMutation()
         return
       }
       toast.info(res.joined ? `「${name}」已有重索引进行中，正在跟踪进度` : `「${name}」重索引任务已提交`)
       await pollReindexStatus(id, name)
-      refresh()
+      refreshAfterDocumentMutation()
     } finally {
       setReindexing(prev => {
         const next = new Set(prev)
@@ -293,8 +362,8 @@ export default function DocumentsPanel() {
         toast.success(`已删除 ${result.ok} 篇文档`)
       }
       clearSelection()
-      refresh()
     } finally {
+      refreshAfterDocumentMutation()
       setBatchDeleting(false)
     }
   }
@@ -313,7 +382,7 @@ export default function DocumentsPanel() {
         toast.success(`已提交 ${res?.ok ?? ids.length} 个重索引任务，完成后可在操作记录查看`)
       }
       clearSelection()
-      refresh()
+      refreshAfterDocumentMutation()
     } finally {
       setBatchReindexing(false)
     }
@@ -324,10 +393,37 @@ export default function DocumentsPanel() {
     fn()
   }
 
-  // 打开文档详情（统一走索引轨迹页；无轨迹时提示）
-  const openDocDetail = (d: { id: string; name: string; last_trace_id?: string | null }) => {
+  const closeChunkDetails = () => {
+    chunkRequestRef.current += 1
+    setChunkDoc(null)
+    setChunkItems([])
+    setChunkError('')
+    setChunkLoading(false)
+  }
+
+  const openChunkDetails = async (doc: { id: string; name: string }) => {
+    const requestId = chunkRequestRef.current + 1
+    chunkRequestRef.current = requestId
+    setChunkDoc(doc)
+    setChunkItems([])
+    setChunkError('')
+    setChunkLoading(true)
+    try {
+      const result = await knowledgeService.getChunkDetail(doc.id)
+      if (requestId !== chunkRequestRef.current) return
+      setChunkItems(result.chunks)
+    } catch (error) {
+      if (requestId !== chunkRequestRef.current) return
+      setChunkError(error instanceof Error ? error.message : '读取分块失败')
+    } finally {
+      if (requestId === chunkRequestRef.current) setChunkLoading(false)
+    }
+  }
+
+  // Trace 与分块正文分开查看；历史 Trace 可能过期，不能用它代替分块详情。
+  const openProcessingTrace = (d: { name: string; last_trace_id?: string | null }) => {
     if (d.last_trace_id) {
-      router.push(`/knowledge/operations/traces/${d.last_trace_id}`)
+      router.push(`/knowledge/operations/traces/${encodeURIComponent(d.last_trace_id)}`)
     } else {
       toast.info(`「${d.name}」暂无处理轨迹，可点击"重新解析"生成`)
     }
@@ -457,8 +553,7 @@ export default function DocumentsPanel() {
             </tr></thead>
             <tbody>
               {documents.map(d => (
-                <tr key={d.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors cursor-pointer"
-                  onClick={() => openDocDetail(d)}>
+                <tr key={d.id} className="border-b border-border-subtle hover:bg-surface-hover transition-colors">
                   <td className="px-4 py-2.5">
                     <button onClick={(e) => handleStopPropagation(e, () => toggleSelect(d.id))} className="text-text-muted hover:text-accent">
                       {selectedIds.has(d.id) ? <CheckSquare size={14} className="text-accent" /> : <Square size={14} />}
@@ -504,7 +599,8 @@ export default function DocumentsPanel() {
                   </td>
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
-                      <button onClick={(e) => handleStopPropagation(e, () => openDocDetail(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看Chunks"><Grid3X3 size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => { void openChunkDetails({ id: d.id, name: d.name }) })} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看分块" aria-label={"查看分块：" + d.name}><Grid3X3 size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => openProcessingTrace(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看处理 Trace" aria-label={"查看处理 Trace：" + d.name}><Activity size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => openLineage({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看模型血缘"><Cpu size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id, d.name))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
@@ -533,7 +629,87 @@ export default function DocumentsPanel() {
           </div>
         )}
       </div>
-    <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onSuccess={refresh} />
+    <UploadDialog open={uploadOpen} onClose={() => setUploadOpen(false)} onSuccess={refreshAfterDocumentMutation} />
+
+    {chunkDoc && (
+      <div className="fixed inset-0 z-50 flex justify-end bg-black/30" onClick={closeChunkDetails}>
+        <aside role="dialog" aria-modal="true" aria-label={"分块详情：" + chunkDoc.name} className="flex h-full w-full max-w-3xl flex-col overflow-hidden border-l border-border-subtle bg-surface-base shadow-xl" onClick={event => event.stopPropagation()}>
+          <header className="flex items-center gap-3 border-b border-border-subtle px-5 py-4">
+            <Grid3X3 size={16} className="shrink-0 text-accent" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-text-primary">分块详情</h3>
+              <p className="truncate text-[11px] text-text-muted">{chunkDoc.name} · {chunkItems.length} 块</p>
+            </div>
+            <button onClick={closeChunkDetails} className="ml-auto rounded p-1 text-text-muted hover:bg-surface-hover hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent" aria-label="关闭分块详情"><X size={15} /></button>
+          </header>
+          <div className="min-h-0 flex-1 overflow-y-auto p-5">
+            {chunkLoading && <div className="flex items-center gap-2 py-8 text-xs text-text-muted"><Loader2 size={14} className="animate-spin" />正在读取分块与来源信息…</div>}
+            {!chunkLoading && chunkError && <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">{chunkError}</div>}
+            {!chunkLoading && !chunkError && chunkItems.length === 0 && <div className="py-8 text-center text-xs text-text-muted">该文档没有可查看的分块。</div>}
+            {!chunkLoading && !chunkError && chunkItems.map((chunk, index) => {
+              const metadata = chunk.metadata || {}
+              const entries = Object.entries(metadata)
+              const metadataReturned = Object.prototype.hasOwnProperty.call(chunk, 'metadata')
+              const granularityLabel = chunk.granularity === 'parent' ? '父块' : chunk.granularity === 'leaf' ? '检索块' : chunk.granularity || '未记录'
+              return (
+                <section key={chunk.chunk_id || chunk.chunk_index || index} className="mb-4 overflow-hidden rounded-xl border border-border-subtle">
+                  <div className="flex flex-wrap items-start gap-2 border-b border-border-subtle bg-surface-elevated px-4 py-3">
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-xs font-semibold text-text-primary">{chunk.section_title || chunk.document_title || ('分块 ' + (index + 1))}</h4>
+                      <p className="mt-1 break-all font-mono text-[10px] text-text-muted">{chunk.chunk_id || '无分块编号'}</p>
+                    </div>
+                    <span className="rounded bg-surface-base px-2 py-1 text-[10px] text-text-secondary">索引 {chunk.chunk_index}</span>
+                    <span className="rounded bg-surface-base px-2 py-1 text-[10px] text-text-secondary">{granularityLabel}</span>
+                    <span className="rounded bg-surface-base px-2 py-1 text-[10px] text-text-secondary">{chunk.char_count} 字</span>
+                  </div>
+                  <div className="space-y-3 p-4">
+                    <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-[10px]">
+                      <div><dt className="text-text-muted">知识库</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.kb_id || '-'}</dd></div>
+                      <div><dt className="text-text-muted">文档类型</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.doc_type || '-'}</dd></div>
+                      <div><dt className="text-text-muted">所属部门</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.department || '-'}</dd></div>
+                      <div><dt className="text-text-muted">父块编号</dt><dd className="mt-0.5 break-all font-mono text-text-primary">{chunk.parent_chunk_id || '-'}</dd></div>
+                      <div><dt className="text-text-muted">块类型</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.chunk_type || '-'}</dd></div>
+                      <div><dt className="text-text-muted">父块范围</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.parent_scope || '-'}</dd></div>
+                      <div className="col-span-2"><dt className="text-text-muted">覆盖章节</dt><dd className="mt-0.5 break-all text-text-primary">{chunk.section_titles?.join('、') || chunk.section_title || '-'}</dd></div>
+                    </dl>
+                    <details open className="rounded-lg border border-border-subtle">
+                      <summary className="cursor-pointer px-3 py-2 text-[11px] font-medium text-text-secondary">来源与切分元数据（{entries.length} 项）</summary>
+                      {!metadataReturned ? <p className="border-t border-border-subtle px-3 py-2 text-[10px] text-amber-700">本次接口没有返回来源或切分信息；正文可查，元数据暂不能核对。</p> : entries.length > 0 ? (
+                        <dl className="grid grid-cols-1 gap-2 border-t border-border-subtle p-3 sm:grid-cols-2">
+                          {entries.map(([key, value]) => (
+                            <div key={key} className="min-w-0 rounded bg-surface-elevated px-2.5 py-2">
+                              <dt className="text-[10px] text-text-muted">{CHUNK_METADATA_LABELS[key] || key}</dt>
+                              <dd className="mt-1 break-all whitespace-pre-wrap font-mono text-[10px] text-text-primary">{formatChunkMetadata(value)}</dd>
+                            </div>
+                          ))}
+                        </dl>
+                      ) : <p className="border-t border-border-subtle px-3 py-2 text-[10px] text-text-muted">没有保存可展示的来源或切分元数据；缺失字段不会按通过处理。</p>}
+                    </details>
+                    {(chunk.keywords || chunk.llm_keywords || chunk.llm_model) && (
+                      <dl className="grid grid-cols-1 gap-2 text-[10px] sm:grid-cols-2">
+                        <div className="rounded bg-surface-elevated px-2.5 py-2"><dt className="text-text-muted">关键词</dt><dd className="mt-1 break-all whitespace-pre-wrap text-text-primary">{chunk.keywords || '-'}</dd></div>
+                        <div className="rounded bg-surface-elevated px-2.5 py-2"><dt className="text-text-muted">模型补充关键词</dt><dd className="mt-1 break-all whitespace-pre-wrap text-text-primary">{chunk.llm_keywords || '-'}</dd></div>
+                        {chunk.llm_model && <div className="rounded bg-surface-elevated px-2.5 py-2"><dt className="text-text-muted">关键词模型</dt><dd className="mt-1 break-all text-text-primary">{chunk.llm_model}</dd></div>}
+                      </dl>
+                    )}
+                    <div>
+                      <h5 className="mb-1.5 text-[11px] font-medium text-text-secondary">分块正文</h5>
+                      <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-lg bg-surface-elevated p-3 font-sans text-[11px] leading-5 text-text-primary">{chunk.content || '（正文为空）'}</pre>
+                    </div>
+                    {!!chunk.simulated_questions?.length && (
+                      <div>
+                        <h5 className="mb-1.5 text-[11px] font-medium text-text-secondary">关联的模拟问题</h5>
+                        <ul className="space-y-1 text-[10px] text-text-muted">{chunk.simulated_questions.map((question, questionIndex) => <li key={questionIndex}>· {question}</li>)}</ul>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        </aside>
+      </div>
+    )}
 
     {/* 上传/重索引实际模型血缘：以 processing_runs 为权威，不显示当前配置冒充历史模型 */}
     {lineageDoc && (

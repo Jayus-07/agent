@@ -1,6 +1,17 @@
 /** knowledge service 单元测试 — 覆盖 qs() 参数过滤等关键逻辑 */
-import { describe, it, expect } from 'vitest'
-import { normalizeDeleteDocumentResponse } from './knowledge'
+import { beforeEach, describe, it, expect, vi } from 'vitest'
+
+const { fetchRawMock } = vi.hoisted(() => ({ fetchRawMock: vi.fn() }))
+
+vi.mock('@/api/client', () => ({
+  createIdempotencyKey: vi.fn(),
+  fetchRaw: fetchRawMock,
+  mutationFetchRaw: vi.fn(),
+  randomId: vi.fn(),
+  request: vi.fn(),
+}))
+
+import { knowledgeService, normalizeDeleteDocumentResponse } from './knowledge'
 
 // 内联 qs 副本用于测试（原函数未导出，通过行为验证）
 function qs(params: Record<string, unknown>): string {
@@ -92,5 +103,40 @@ describe('文档删除响应归一化', () => {
     const result = normalizeDeleteDocumentResponse(false, 502, null)
     expect(result.ok).toBe(false)
     expect(result.operation_state).toBe('unknown')
+  })
+})
+
+describe('分块详情接口', () => {
+  beforeEach(() => fetchRawMock.mockReset())
+
+  it('请求文档分块详情并保留来源字段', async () => {
+    fetchRawMock.mockResolvedValue(new Response(JSON.stringify({
+      doc_id: 'doc/one',
+      total: 1,
+      chunks: [{ chunk_id: 'doc-one_0', metadata: { source_format: 'pdf' } }],
+    }), { status: 200 }))
+
+    const result = await knowledgeService.getChunkDetail('doc/one')
+
+    expect(fetchRawMock).toHaveBeenCalledWith('/api/rag/chunks/doc%2Fone/detail')
+    expect(result.chunks[0].metadata.source_format).toBe('pdf')
+  })
+
+  it('把服务端业务错误交给页面显示', async () => {
+    fetchRawMock.mockResolvedValue(new Response(JSON.stringify({
+      doc_id: 'doc-1', chunks: [], total: 0, error: '文档已下线或待审核',
+    }), { status: 200 }))
+
+    await expect(knowledgeService.getChunkDetail('doc-1'))
+      .rejects.toThrow('文档已下线或待审核')
+  })
+
+  it('拒绝格式不完整的响应', async () => {
+    fetchRawMock.mockResolvedValue(new Response(JSON.stringify({
+      doc_id: 'doc-1', total: 0,
+    }), { status: 200 }))
+
+    await expect(knowledgeService.getChunkDetail('doc-1'))
+      .rejects.toThrow('分块详情响应格式无效')
   })
 })

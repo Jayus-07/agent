@@ -1143,7 +1143,7 @@ async def get_chunks(doc_id: str, request: Request):
 @router.get("/chunks/{doc_id}/detail")
 async def get_chunk_detail(doc_id: str, request: Request):
     """获取文档的完整 Chunk 文本（从 chunk_store 取，非向量库）。
-    供 Trace 详情页查看每条 chunk 的完整内容、token 数、关键词。
+    供管理端独立核验每条 chunk 的正文、身份与来源/切分元数据。
 
     发布状态门（#62）：与兄弟端点同口径——非 active（下线/待审核）文档
     不再向普通可读主体暴露正文；管理员保留诊断读取（历史 trace 排查），

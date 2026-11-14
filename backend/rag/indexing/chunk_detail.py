@@ -5,6 +5,19 @@ import json
 from typing import Any
 
 
+_AUDIT_METADATA_KEYS = (
+    "source_format", "parser_version", "chunk_policy_version",
+    "index_generation", "source_locators_json", "source_spans_json",
+    "source_locations_json", "page", "pages", "table_id", "row_index",
+    "row_part_index", "row_count", "col_count", "split_group_id",
+    "split_part", "split_total", "content_hash", "quality_flags",
+    "filter_status", "filter_reason", "section_path", "section_level",
+    "section_id", "parent_section_id", "parent_scope", "content_unit",
+    "content_unit_id", "content_unit_strategy", "chunk_tokens",
+    "embedding_model", "embedding_version", "embedding_fingerprint",
+)
+
+
 def _metadata_for(row: dict[str, Any]) -> dict[str, Any]:
     value = row.get("chunk_metadata")
     if isinstance(value, dict):
@@ -27,6 +40,15 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return list(dict.fromkeys(str(item).strip() for item in value if str(item).strip()))
+
+
+def _audit_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """只返回来源与切分核验字段，不暴露服务器路径或租户内部字段。"""
+    return {
+        key: metadata[key]
+        for key in _AUDIT_METADATA_KEYS
+        if key in metadata and metadata[key] not in (None, "")
+    }
 
 
 def build_chunk_detail_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -114,5 +136,6 @@ def build_chunk_detail_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
             "kb_id": row.get("kb_id", ""),
             "department": row.get("department", ""),
             "simulated_questions": row.get("simulated_questions", []),
+            "metadata": _audit_metadata(metadata),
         })
     return items

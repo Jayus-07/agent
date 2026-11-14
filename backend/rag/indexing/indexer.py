@@ -299,18 +299,19 @@ def apply_index_chunk_identity(chunks: list, doc_id: str) -> None:
     chunk_id 统一覆盖为 ``{doc_id}_{i}``。若不同步改写 parent_chunk_id，
     检索端 attach_parent_context 按 chunk_id $in 查询永远落空，
     Parent-Child 上下文扩展静默失效（2026-10-13 修复）。
+    过滤后找不到目标 Parent 时清空旧引用，避免留下无法命中的伪关联。
     """
-    id_map: dict[str, str] = {}
-    for i, ch in enumerate(chunks):
-        old_cid = str(ch.metadata.get("chunk_id") or "")
-        new_cid = f"{doc_id}_{i}"
-        if old_cid and old_cid != new_cid:
-            id_map[old_cid] = new_cid
-        ch.metadata["chunk_id"] = new_cid
-    for ch in chunks:
+    id_map = {
+        str(chunk.metadata.get("chunk_id") or ""): f"{doc_id}_{index}"
+        for index, chunk in enumerate(chunks)
+        if str(chunk.metadata.get("chunk_id") or "")
+    }
+    for index, ch in enumerate(chunks):
+        ch.metadata["chunk_id"] = f"{doc_id}_{index}"
         pid = str(ch.metadata.get("parent_chunk_id") or "")
-        if pid and pid in id_map:
-            ch.metadata["parent_chunk_id"] = id_map[pid]
+        if pid:
+            # 只保留能映射到本次完整分块清单的父块，兼容父块排在子块之后。
+            ch.metadata["parent_chunk_id"] = id_map.get(pid, "")
 
 
 def _filter_index_chunks(
@@ -1675,10 +1676,6 @@ class IncrementalIndexer:
                 )
             chunks = filtered_chunks
 
-            # 后续审计与质量记录都以最终输出为准。先统一索引期 ID，
-            # 让 Parent/Leaf 关系校验对账实际入库身份；不补造被过滤的 Parent。
-            apply_index_chunk_identity(chunks, doc_id)
-
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": total_before_filter,
                          "kept_chunks": len(filtered_chunks),
@@ -1791,6 +1788,10 @@ class IncrementalIndexer:
             filtered_details=filtered_details,
             truncated=chunks_truncated,
         )
+
+        # 先让付费前完整性审计看到原始父子引用并拦截悬空关系，再映射成
+        # 最终索引 ID；避免清掉坏引用后让预检误以为切分结构有效。
+        apply_index_chunk_identity(chunks, doc_id)
 
         metadata_lineage = None
         if lineage_recorder is not None:
