@@ -136,6 +136,52 @@ class TestHappyPath:
         assert root.parent_id is None
         assert root.status == "success"
 
+    def test_candidate_trace_displays_logical_filename(
+        self,
+        indexer,
+        tmp_path,
+        tmp_text_file,
+        fresh_collector,  # noqa: F811 - pytest fixture 与模块级导入同名
+    ):
+        """候选索引 Trace 显示正式文件名，不显示随机暂存文件名。"""
+        logical_path = tmp_path / "正式文件名.txt"
+
+        indexer._index_file(tmp_text_file, identity_path=str(logical_path))
+        trace = fresh_collector.list(1, include_spans=True)[0]
+
+        assert trace.question == logical_path.name
+        assert _find_span(trace, "index_upload").name == f"Index {logical_path.name}"
+        assert _find_span(trace, "index_parse").name == f"Parse {logical_path.name}"
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["document_title"] == logical_path.stem
+            for chunk in indexed_chunks
+        )
+
+    def test_reindex_keeps_registry_active_generation_on_chunks(
+        self,
+        indexer,
+        tmp_text_file,
+        fresh_collector,  # noqa: F811 - pytest fixture 与模块级导入同名
+    ):
+        """普通重索引沿用 Registry 发布代次，避免详情与 Trace 丢失追溯。"""
+        indexer.registry.get_by_path.return_value = {
+            "active_generation": "generation-7",
+        }
+
+        indexer._index_file(
+            tmp_text_file,
+            reindex_ctx={"old_chunk_ids": ["old-chunk"]},
+        )
+
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["index_generation"] == "generation-7"
+            for chunk in indexed_chunks
+        )
+
     def test_all_seven_spans_present(self, indexer, tmp_text_file, fresh_collector):
         indexer._index_file(tmp_text_file)
         trace = fresh_collector.list(1, include_spans=True)[0]

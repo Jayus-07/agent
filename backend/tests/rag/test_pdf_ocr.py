@@ -177,6 +177,27 @@ class TestPdfParserOcrFallback:
         with pytest.raises(ValueError, match="OCR 页预算"):
             PdfParser().parse(pdf, ocr_page_budget=budget)
 
+    def test_request_budget_exceeded_stops_remaining_ocr_pages(
+        self, tmp_path, monkeypatch,
+    ):
+        """预算超限是整份任务的硬停止，后续页面不能继续渲染或尝试 OCR。"""
+        from backend.infra.llm.budget import RequestBudgetExceeded
+
+        pdf = _make_scanned_pdf(tmp_path, "budget-stop-scan.pdf", pages=2)
+        calls = []
+
+        def reject_first_page(_png):
+            calls.append("called")
+            raise RequestBudgetExceeded("request_tokens")
+
+        monkeypatch.setattr(ocr_mod, "ocr_available", lambda: True)
+        monkeypatch.setattr(ocr_mod, "ocr_image", reject_first_page)
+
+        with pytest.raises(RequestBudgetExceeded, match="request_tokens"):
+            PdfParser().parse(pdf)
+
+        assert calls == ["called"]
+
     def test_local_ocr_retries_empty_page_once_at_higher_dpi(
         self, tmp_path, monkeypatch,
     ):

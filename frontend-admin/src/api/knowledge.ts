@@ -426,7 +426,7 @@ export const knowledgeService: any = {
         return data
       }).catch((e) => ({ ok: false, error: String(e) })),
 
-  // 重索引任务状态 + 进度镜像（task.status 终态或 progress.stage=done/error/duplicate 即停止轮询）
+  // 重索引任务状态 + 进度镜像；页面按任务状态和本次进度时间判断终态。
   getReindexStatus: (id: string) =>
     fetchRaw(`${BASE}/documents/${id}/reindex/status`).then(r => r.json()).catch(() => ({ ok: false })),
 

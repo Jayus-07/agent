@@ -1167,7 +1167,10 @@ async def get_chunk_detail(doc_id: str, request: Request):
         from backend.rag.indexing.chunk_detail import build_chunk_detail_items
         return {
             "doc_id": doc_id,
-            "chunks": build_chunk_detail_items(rows),
+            "chunks": build_chunk_detail_items(
+                rows,
+                source_file_name=str(doc.get("file_name") or ""),
+            ),
             "total": len(rows),
         }
     except HTTPException:
