@@ -342,7 +342,7 @@ class TestEmptyRecallReject:
         monkeypatch.setattr(chain, "_start", lambda q, sid: (trace, t0))
 
         msg = chain.ask("知识库里没有的问题", session_id="t1")
-        assert "未找到" in msg or "未提及" in msg  # 6780d1c 话术用户语言化锚点
+        assert "没有找到能回答这个问题" in msg  # 当前对用户的无证据说明
         assert "不应被输出的内容" not in msg
 
 
@@ -367,7 +367,7 @@ class TestGateRejection:
         monkeypatch.setattr(chain, "_start", lambda q, sid: (trace, t0))
 
         msg = chain.ask("某问题", session_id="t1")
-        assert "未找到" in msg or "未提及" in msg  # 6780d1c 话术用户语言化锚点
+        assert "没有找到能回答这个问题" in msg  # 当前对用户的无证据说明
         assert "幻觉答案" not in msg
 
 
@@ -427,7 +427,7 @@ class TestSelfCorrection:
 
         msg = chain._handle_llm_reject(meta, trace, "原问题", "t1", t0)
         # 明确拒答，不产生幻觉答案（拒答消息不含第二次生成的正文）
-        assert "未找到" in msg or "未提及" in msg  # 6780d1c 话术用户语言化锚点
+        assert "没有找到能回答这个问题" in msg  # 当前对用户的无证据说明
         assert "资料未提及" not in msg  # 二次生成的正文未被输出
         # 重试恰好 1 次后停止（不会无限循环）
         assert chain.corrector.retry_count == 1
@@ -453,7 +453,7 @@ class TestSelfCorrection:
         meta = {"can_answer": False, "reason": "no_evidence", "confidence": 0.1}
 
         msg = chain._handle_llm_reject(meta, trace, "原问题", "t1", t0)
-        assert "未找到" in msg or "未提及" in msg  # 6780d1c 话术用户语言化锚点
+        assert "没有找到能回答这个问题" in msg  # 当前对用户的无证据说明
         assert called["rewrite"] is False  # 未尝试改写
 
 
@@ -590,7 +590,7 @@ class TestEvaluationGate:
     def test_low_faithfulness_rejects(self, monkeypatch):
         """Faithfulness 0.4 < 0.5 → Evaluation Gate 拒答（layer=evaluation）。"""
         chain, trace, msg = self._run_ask(monkeypatch, faithfulness_score=0.4)
-        assert "事实一致性校验" in msg  # 6780d1c HALLUCINATION 话术锚点
+        assert "无法确认它们能支持这个答案" in msg  # 当前的事实校验拒答说明
         rejection = (trace.metadata.get("rejection") or {})
         assert rejection.get("rejected") is True
         assert rejection.get("layer") == "evaluation"
