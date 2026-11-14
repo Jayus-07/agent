@@ -352,3 +352,8 @@
 - 部署状态：后端代码变更按仓库规则必须从本任务工作树重建受影响服务；但当前共享栈镜像归其他工作树，不能安全替换。本轮未重建/重启共享容器，服务端元数据响应与浏览器联调标记 `UNVERIFIED`。下一步应在该共享栈不再由其他工作树使用后，从本工作树重建 RAG 服务，再用同一 super_admin 页面确认来源/切分字段实际出现；随后继续核验测试资料和生产资料的上传、切块与 Trace，不把未验证状态算通过。
 
 - 最终复验（2026-11-14）：本工作树的 Next.js 15.5.28 生产构建退出码 0，49 个静态页生成完成；构建自动改动的 frontend-admin/tsconfig.json 已还原。使用 super_admin 浏览器再次打开 policy-logistics-exception.md 的 6 个真实分块，详情抽屉显示正文、知识库、章节、关键词和模拟问题；GET /api/rag/chunks/921f97a86c/detail 返回 200，但当前共享后端响应仍无 metadata，页面如实提示来源/切分暂不能核对。最终证据：.playwright-mcp/chunk-details-management-final-2026-11-14.png、.playwright-mcp/chunk-details-management-final-2026-11-14.yml、.playwright-mcp/chunk-detail-api-response-final-2026-11-14.json。本地预览已停止；后端重建仍因共享栈由其他工作树使用而未执行，故后端部署与字段联调继续标记 UNVERIFIED。
+
+## 2026-11-14 — PR #468 付费前父子引用预检复核
+
+- RAG Smoke 首轮发现一处本次改动回归：索引 ID 映射先清空了悬空 Parent 引用，后续付费前完整性预检看不到原始错误。已将 ID 映射移到预检之后，使无效 Parent 先被拒绝；完整性预检、分块详情和 Parent 映射定向测试本机复跑 29 项通过。
+- 修复已准备推送到原 PR 分支，等待 CI 重跑；共享 RAG 服务仍由其他工作树持有，本地真实服务联调继续标记 `UNVERIFIED`。

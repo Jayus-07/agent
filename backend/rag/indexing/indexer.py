@@ -1676,10 +1676,6 @@ class IncrementalIndexer:
                 )
             chunks = filtered_chunks
 
-            # 后续审计与质量记录都以最终输出为准。先统一索引期 ID，
-            # 让 Parent/Leaf 关系校验对账实际入库身份；不补造被过滤的 Parent。
-            apply_index_chunk_identity(chunks, doc_id)
-
             trace_collector.end_span(chunk_span,
                 metrics={"raw_chunks": total_before_filter,
                          "kept_chunks": len(filtered_chunks),
@@ -1792,6 +1788,10 @@ class IncrementalIndexer:
             filtered_details=filtered_details,
             truncated=chunks_truncated,
         )
+
+        # 先让付费前完整性审计看到原始父子引用并拦截悬空关系，再映射成
+        # 最终索引 ID；避免清掉坏引用后让预检误以为切分结构有效。
+        apply_index_chunk_identity(chunks, doc_id)
 
         metadata_lineage = None
         if lineage_recorder is not None:
