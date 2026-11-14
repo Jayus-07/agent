@@ -543,6 +543,8 @@ def _failure_text(result: dict) -> str:
     kind = _result_kind(result)
     if kind == "permission_denied" and result.get("capability") == "sql.query":
         return "当前账号无权执行该查询或访问相关数据，请联系管理员申请相应的数据访问权限后重试。"
+    if kind == "unavailable" and result.get("capability") == "rag.search":
+        return "知识库检索服务暂不可用，请稍后重试。"
     if (kind == "approval_required"
             and isinstance(result.get("output"), str)
             and result.get("output").strip()):

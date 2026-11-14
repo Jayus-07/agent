@@ -226,6 +226,31 @@ def test_remote_chat_rag_can_defer_memory_to_parent_runner(monkeypatch):
     assert memory.calls == []
 
 
+@pytest.mark.parametrize("partial_marker", ["_mq_partial", "_retrieval_partial"])
+def test_partial_retrieval_answer_discloses_incomplete_retrieval(
+    monkeypatch, partial_marker,
+):
+    """有部分检索证据时保留回答，同时告知用户结果可能不完整。"""
+    chain = _stub_chain()
+    chain._verify = lambda *_args: "基于现有资料的答案"
+    chain._verify_claims = lambda answer, _docs: answer
+    chain._record_rag_metric = lambda _status: None
+    monkeypatch.setattr(chain, "_evaluate", lambda answer, _docs: answer)
+    monkeypatch.setattr(chain, "_finish", lambda *_args: None)
+    trace, t0 = _start_trace("partial-multi-query")
+    trace._rag_embedded = True
+    docs = _make_docs()
+    docs[0].metadata[partial_marker] = True
+
+    answer = chain._respond(
+        {"context": docs, "answer": "基于现有资料的答案"},
+        trace, "问题", "synthetic", t0, persist_memory=False,
+    )
+
+    assert answer.startswith("提示：部分知识库检索路径未能完成")
+    assert "基于现有资料的答案" in answer
+
+
 def _start_trace(name: str):
     """起一个 trace + root span，返回 (trace, t0)。"""
     from backend.observability.tracer import trace_collector

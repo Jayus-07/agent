@@ -130,10 +130,36 @@ def test_no_tool_prompts_use_general_chat_directly(query):
 @pytest.mark.parametrize(
     "query",
     [
+        "不联网，用虚构信息整理 Markdown 表格",
+        "不联网，用虚构信息整理会议任务",
+        "不要查询公司本月销售额，按以下数据整理成 Markdown 表格：周一 8 万",
+    ],
+)
+def test_local_formatting_and_explicit_samples_use_general_chat(query):
+    result = prefilters._try_general_chat({
+        "question": query,
+        "product_id": "agent",
+        "product_source": "registered_route",
+        "request_context": {
+            "product_id": "agent",
+            "product_source": "registered_route",
+        },
+        "guard_result": {"category": "business_query"},
+        "routing_context": {},
+    })
+
+    assert result is not None
+    assert result["route_mode"] == "general_chat"
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
         "查询近 30 天销售额",           # 业务数据（私有事实）
         "生成一份本周销售日报",         # 业务报告（无写作触发词）
         "公司的考勤制度怎么写",         # 制度类（私有事实，应查库）
         "统计一下库存",                 # 业务统计
+        "查询公司本月销售额，并整理成 Markdown 表格",
     ],
 )
 def test_business_prompts_still_route_to_tools(query):

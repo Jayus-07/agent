@@ -261,6 +261,82 @@ class TestConflictingEvidence:
         assert f.annotate_conflicts("答案 [E1]", [same_a, same_b], "云水台门票多少钱") == "答案 [E1]"
         assert f.annotate_conflicts("答案 [E1]", [same_a, other], "云水台景区门票多少钱") == "答案 [E1]"
 
+    def test_marks_refund_supervisor_threshold_conflict(self, f):
+        """退款主题只有两个字，且阈值金额可能出现在“主管审核”之前。"""
+        first = SimpleNamespace(
+            page_content="退款金额超过 500 元时，需要主管审核。",
+            metadata={"index": 3, "source_file": "退款规则甲.md"},
+        )
+        second = SimpleNamespace(
+            page_content="退款金额超过 1000 元时，需要主管审批。",
+            metadata={"index": 4, "source_file": "退款规则乙.md"},
+        )
+
+        result = f.annotate_conflicts(
+            "主管审核门槛为 500 元 [E3]。",
+            [first, second],
+            "查找知识库中关于退款的处理规则",
+        )
+
+        assert result.startswith("存在不同说法")
+        assert "[E3]" in result
+        assert "[E4]" in result
+
+    def test_marks_multiple_thresholds_inside_one_evidence(self, f):
+        """同一引用片段也可能含多个门槛，需提示逐项核对适用条件。"""
+        evidence = SimpleNamespace(
+            page_content=(
+                "退款金额超过 500 元时，需要主管审核；"
+                "退款金额超过 1000 元时，需要主管审批；"
+                "退款金额超过 5000 元时，需要主管复核。"
+            ),
+            metadata={"index": 3, "source_file": "退款规则.md"},
+        )
+
+        result = f.annotate_conflicts(
+            "主管审核阈值有 500 元 [E3]、1000 元 [E3]、5000 元 [E3]。",
+            [evidence],
+            "退款的处理规则是什么？",
+        )
+
+        assert "同一来源" in result
+        assert "适用条件" in result
+        assert "[E3]" in result
+        assert all(value in result for value in ("500 元", "1000 元", "5000 元"))
+
+    def test_marks_thresholds_for_long_retrieval_question(self, f):
+        """问题带长指令时仍从共同证据中找到退款主题。"""
+        evidence = SimpleNamespace(
+            page_content=(
+                "评价管理规则条款14.1：涉及金额¥500的退款须升级主管审核。\n"
+                "评价管理规则条款14.2：涉及金额¥1000的退款须升级主管审核。"
+            ),
+            metadata={"index": 1, "source_file": "退款规则.md"},
+        )
+        question = (
+            "请检索知识库中所有退款审核的金额门槛和对应审批角色，逐条列出金额、"
+            "条件、角色和引用出处，并明确检查不同金额规则是否冲突；不要补造内容。"
+        )
+
+        result = f.annotate_conflicts("答案 [E1]", [evidence], question)
+
+        assert "同一来源" in result
+        assert "[E1]" in result
+
+    def test_does_not_mix_supervisor_and_finance_review_thresholds(self, f):
+        manager = SimpleNamespace(
+            page_content="退款金额超过 500 元时，需要主管审核。",
+            metadata={"index": 1, "source_file": "规则甲.md"},
+        )
+        finance = SimpleNamespace(
+            page_content="退款金额超过 1000 元时，需要财务复核。",
+            metadata={"index": 2, "source_file": "规则乙.md"},
+        )
+
+        assert f.annotate_conflicts(
+            "答案 [E1]", [manager, finance], "退款审核金额阈值是多少？",
+        ) == "答案 [E1]"
+
 
 # ==========================================================
 # 6. normalize_point_layout（分点归一化，2026-09-19）

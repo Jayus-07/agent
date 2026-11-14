@@ -989,6 +989,17 @@ class RAGChain:
         else:
             self._record_rag_metric("hit")
 
+        if any(
+            (doc.metadata or {}).get("_mq_partial")
+            or (doc.metadata or {}).get("_retrieval_partial")
+            for doc in result.get("context", [])
+        ):
+            answer = (
+                "提示：部分知识库检索路径未能完成，以下内容仅依据已检索到的资料，"
+                "可能不完整。\n\n"
+                + answer
+            )
+
         self._remember_turn(
             session_id, question, answer, trace=trace,
             persist_memory=persist_memory,

@@ -52,10 +52,14 @@ class TestHybridFallback:
         monkeypatch.setattr("backend.config.rag.ADAPTIVE_THRESHOLD_ENABLED", False)
         monkeypatch.setattr("backend.config.rag.CONFIDENCE_AGGREGATOR_ENABLED", False)
 
-    def test_vector_failure_falls_back_to_bm25(self):
-        """Vector 崩溃 → 降级仅用 BM25，结果正常返回且 span 标记 fallback（可观测）。"""
+    @pytest.mark.parametrize("tier", ["hybrid", "vector_only"])
+    def test_vector_failure_falls_back_to_bm25(self, monkeypatch, tier):
+        """Vector 崩溃 → 降级仅用 BM25，保留结果并显式标记不完整。"""
         from backend.observability.tracer import trace_collector
         from backend.rag.retrieval.hybrid import hybrid_retrieve
+        import backend.rag.retrieval.hybrid as hybrid_module
+
+        monkeypatch.setattr(hybrid_module, "_classify_query_tier", lambda _query: tier)
 
         # mock 签名须与 CustomRetriever.retrieve 对齐:
         # 2026-08-20 hybrid_retrieve 新增 expanded_queries 透传,缺参会 TypeError
@@ -75,6 +79,7 @@ class TestHybridFallback:
         merged = hybrid_retrieve("q", v, b, k=5)
         assert len(merged) == 1
         assert merged[0].metadata["chunk_id"] == "b1"
+        assert merged[0].metadata["_retrieval_partial"] is True
 
         # fallback 可观测：retrieval span 的 metrics 带 fallback_side
         ret_span = next(
@@ -84,9 +89,14 @@ class TestHybridFallback:
         assert ret_span.metrics.get("fallback_side") == "vector"
         assert "vector db down" in ret_span.metrics.get("fallback_reason", "")
 
-    def test_both_fail_propagates(self):
-        """两侧都失败 → 异常向上传播（真系统失败，不伪装成『没有资料』）。"""
+    @pytest.mark.parametrize("tier", ["hybrid", "vector_only"])
+    def test_both_fail_propagates(self, monkeypatch, tier):
+        """两侧都失败 → 明确作为检索服务故障传播，不伪装成没有资料。"""
         from backend.rag.retrieval.hybrid import hybrid_retrieve
+        from backend.rag.retrieval_budget import RetrievalUnavailableError
+        import backend.rag.retrieval.hybrid as hybrid_module
+
+        monkeypatch.setattr(hybrid_module, "_classify_query_tier", lambda _query: tier)
 
         def boom_v(q, k=5, doc_ids=None, metadata_filter=None, expanded_queries=None):
             raise RuntimeError("vector db down")
@@ -94,8 +104,25 @@ class TestHybridFallback:
             raise RuntimeError("bm25 db down")
         v = SimpleNamespace(retrieve=boom_v)
         b = SimpleNamespace(invoke=boom_b)
-        with pytest.raises(RuntimeError, match="均失败"):
+        with pytest.raises(RetrievalUnavailableError, match="均失败"):
             hybrid_retrieve("q", v, b, k=5)
+
+    @pytest.mark.parametrize("tier", ["hybrid", "vector_only"])
+    def test_failed_path_with_empty_fallback_is_unavailable(self, monkeypatch, tier):
+        """有一路失败、另一路空结果时不能把不完整搜索说成知识库无资料。"""
+        from backend.rag.retrieval.hybrid import hybrid_retrieve
+        from backend.rag.retrieval_budget import RetrievalUnavailableError
+        import backend.rag.retrieval.hybrid as hybrid_module
+
+        monkeypatch.setattr(hybrid_module, "_classify_query_tier", lambda _query: tier)
+
+        def boom(*_args, **_kwargs):
+            raise ConnectionError("embedding service unavailable")
+
+        vector = SimpleNamespace(retrieve=boom)
+        bm25 = SimpleNamespace(invoke=lambda _query: [])
+        with pytest.raises(RetrievalUnavailableError, match="无法确认"):
+            hybrid_retrieve("退款规则", vector, bm25, k=5)
 
     def test_vector_only_when_bm25_empty(self):
         """BM25 无结果 → 保留 Vector 结果（Hybrid 融合不丢一侧）。"""

@@ -36,6 +36,7 @@ from backend.core.request_context import (
 from backend.core.tool_runtime.deadline import scoped_execution_timeout
 from backend.infra.llm.proxy import scoped_current_user_id
 from backend.infra.llm.budget import scoped_run_budget
+from backend.rag.retrieval_budget import RetrievalUnavailableError
 from backend.rag.retrieval.review_filter import ReviewVisibilityUnavailableError
 from backend.shared.logger import logger
 
@@ -538,6 +539,12 @@ def ask(
                 from backend.infra.llm.budget import check_quota_blocked
 
                 check_quota_blocked()
+    except RetrievalUnavailableError as e:
+        logger.warning("[RAG /ask] 检索路径不可用，返回 503")
+        raise HTTPException(
+            status_code=503,
+            detail="知识库检索服务暂不可用，请稍后重试。",
+        ) from e
     except ReviewVisibilityUnavailableError as e:
         # /ask 与轻量检索使用相同审核失败码，避免以通用 500 丢失安全语义。
         raise _review_visibility_http_exception("ask", e) from e

@@ -7,6 +7,7 @@
 """
 from backend.agents.reporter.reporter import (
     _append_degraded_disclosure,
+    _failure_text,
     _result_kind,
 )
 
@@ -37,6 +38,14 @@ def test_real_fallback_provider_still_degraded():
 def test_degraded_flag_and_tool_status_unchanged():
     assert _result_kind(_sr(degraded=True)) == "degraded"
     assert _result_kind(_sr(tool_status="degraded")) == "degraded"
+
+
+def test_rag_service_failure_is_not_reported_as_missing_evidence():
+    result = _sr(
+        status="failed", tool_status="unavailable", error_type="network",
+        output=None,
+    )
+    assert _failure_text(result) == "知识库检索服务暂不可用，请稍后重试。"
 
 
 def test_disclosure_not_appended_for_dedupe_cache_hit():

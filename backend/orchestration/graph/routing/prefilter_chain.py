@@ -215,7 +215,8 @@ def _try_general_chat(state: dict) -> dict | None:
     try:
         query = str(state.get("question") or state.get("query") or "").strip()
         # 问候/能力咨询只是输入提示，不能抢占显式业务与知识库请求。
-        if _PRIVATE_FACT_PROMPT.search(query):
+        if (_PRIVATE_FACT_PROMPT.search(query)
+                and not _is_safe_local_content_prompt(query)):
             return None
         category = ((state.get("guard_result") or {}).get("category") or "")
         if category == "greeting":
@@ -287,6 +288,19 @@ _GENERAL_WRITING_PROMPT = re.compile(
     r"(?:周报|工作总结|总结|框架|提纲|大纲|草稿|模板|文案|自我介绍|"
     r"感谢信|道歉信|通知|公告|邀请函|朋友圈)"
 )
+_GENERAL_FORMATTING_PROMPT = re.compile(
+    r"(?:整理|归纳|汇总|提取|转换|排版|归类|分类|生成|制作|列出|输出)"
+    r".{0,36}(?:markdown|表格|清单|json|csv|会议纪要|会议任务|任务清单)|"
+    r"(?:markdown|表格|清单|json|csv).{0,20}(?:整理|归纳|转换|生成|制作|输出)",
+    re.IGNORECASE,
+)
+_LOCAL_SOURCE_CUE = re.compile(
+    r"(?:根据|按照).{0,8}(?:我)?(?:提供|给出|贴出|发来|如下|以下)|"
+    r"(?:下面|以下|上述).{0,12}(?:内容|材料|信息|数据|明细)"
+)
+_SYNTHETIC_SAMPLE_CUE = re.compile(
+    r"虚构|模拟(?:数据|信息|内容)?|示例(?:数据|信息|内容)?|样例|演示用|假设数据"
+)
 _GENERAL_REWRITE_PROMPT = re.compile(r"改写|润色|改得|改成|译成|翻译")
 _SUPPLIED_TEXT_PROMPT = re.compile(r"[“‘\"'][^”’\"']+[”’\"']|[：:]\s*\S+")
 _SESSION_CONTEXT_PROMPT = re.compile(
@@ -301,15 +315,27 @@ _PRIVATE_FACT_PROMPT = re.compile(
     r"(?:本公司|我们公司|公司的|公司内部|企业内部|内部知识库|知识库|"
     r"制度|政策|规定|流程|SOP|员工手册|内部文档|业务文档|经营数据|"
     r"销售额|销量|库存|报表|数据库|订单号|退款申请|申请状态|本人名下|"
-    r"我的订单|我的账户|查询|统计|近\s*\d+\s*(?:天|周|月))",
+    r"我的订单|我的账户|统计|近\s*\d+\s*(?:天|周|月))",
     re.IGNORECASE,
 )
 
 
+def _is_safe_local_content_prompt(query: str) -> bool:
+    """只把明确的本地整理或虚构样例交给通用回答，避免绕过业务查询。"""
+    if not _GENERAL_FORMATTING_PROMPT.search(query):
+        return False
+    return bool(
+        _LOCAL_SOURCE_CUE.search(query)
+        or _SYNTHETIC_SAMPLE_CUE.search(query)
+    )
+
+
 def _is_general_conversation_prompt(query: str, state: dict) -> bool:
     """只识别显式的一般对话表达；不代替域/能力分类。"""
-    if (not query or len(query) > 160 or _PRIVATE_FACT_PROMPT.search(query)
-            or _EXTERNAL_LOOKUP_PROMPT.search(query)):
+    if not query or len(query) > 160 or _EXTERNAL_LOOKUP_PROMPT.search(query):
+        return False
+    if (_PRIVATE_FACT_PROMPT.search(query)
+            and not _is_safe_local_content_prompt(query)):
         return False
 
     routing_context = state.get("routing_context") or {}
@@ -324,6 +350,7 @@ def _is_general_conversation_prompt(query: str, state: dict) -> bool:
         or (_GENERAL_CALCULATION_PROMPT.fullmatch(query)
             and _GENERAL_CALCULATION_HAS_DIGIT.search(query))
         or _GENERAL_WRITING_PROMPT.search(query)
+        or _GENERAL_FORMATTING_PROMPT.search(query)
         or _SESSION_CONTEXT_PROMPT.search(query)
         or (_GENERAL_REWRITE_PROMPT.search(query)
             and _SUPPLIED_TEXT_PROMPT.search(query))
