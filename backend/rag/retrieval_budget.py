@@ -110,6 +110,10 @@ class RetrievalDeadlineExceeded(TimeoutError):
     """共享检索截止时间耗尽，禁止重新发起降级请求。"""
 
 
+class RetrievalUnavailableError(RuntimeError):
+    """检索路径未能完成；不得把基础设施故障报告成无证据。"""
+
+
 def await_retrieval(future):
     """只等待共享预算剩余时间；在途任务自行收尾和结算。"""
     from concurrent.futures import TimeoutError as FutureTimeoutError

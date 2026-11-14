@@ -36,12 +36,28 @@ CITATION_SUPPORT_THRESHOLD = 0.0  # 默认不做事后过滤，依靠 Rerank 分
 # 冲突证据只处理能确定识别的数值事实，避免把年份、章节号等普通数字
 # 误报成冲突。金额/价格是当前验收的重点，其他单位保留给同一机制扩展。
 _CONFLICT_VALUE_RE = re.compile(
+    r"(?:(?P<prefix>人民币|￥|¥)\s*)?"
     r"(?P<value>\d+(?:\.\d+)?)\s*"
-    r"(?P<unit>元|人民币|￥|¥|%|公里|千米|km|小时|分钟|天|人)"
+    r"(?P<unit>元|人民币|￥|¥|%|公里|千米|km|小时|分钟|天|人)?"
 )
 _CONFLICT_KEYWORDS = (
     "开放时间", "营业时间", "门票价格", "门票", "票价", "价格", "费用", "收费",
     "售价", "折扣", "容量", "距离", "时长", "数量", "人数", "温度",
+)
+_REVIEW_ACTION_RE = re.compile(r"审核|审批|复核")
+_REVIEW_ROLE_RE = re.compile(r"主管|经理|负责人|领导|财务")
+_ANCHOR_QUERY_FILLERS = (
+    "请提供出处", "请提供来源", "知识库中关于", "知识库关于", "知识库中", "知识库",
+    "内部文档", "业务文档", "请帮我", "帮我", "请问", "查找", "检索", "搜索", "查询",
+    "关于", "有关", "针对", "请", "的处理规则", "处理规则", "处理流程", "处理办法",
+    "规则", "政策", "制度", "流程", "办法", "标准", "原始依据", "依据", "金额",
+    "阈值", "门槛", "审核", "审批", "复核", "是多少", "是什么", "有哪些", "如何",
+    "多少", "主管", "经理", "负责人", "领导", "财务", "中", "里", "的",
+    "风景区", "景区", "景点", "公司", "企业", "部门",
+)
+_ANCHOR_NON_TOPIC_TERMS = (
+    "风景区", "景区", "景点", "公司", "企业", "部门", "知识库", "金额",
+    "阈值", "门槛", "审核", "审批", "复核", "规则", "政策", "制度", "流程",
 )
 
 # 文档类型中文标签：唯一事实源是 taxonomy_spec.DOC_TYPE_LABELS（含启动期覆盖度校验）。
@@ -140,11 +156,11 @@ class CitationFormatter:
         return answer, verified
 
     def annotate_conflicts(self, answer: str, docs: list, question: str = "") -> str:
-        """对同一问题的多源数值分歧做确定性提示并补齐引用。
+        """对同一问题的多源分歧或单来源多值做确定性提示并补齐引用。
 
-        这里只在问题锚点同时出现在两份来源、且同一事实关键词的数值集合
-        完全不同时触发。这样不会因为检索结果里恰好有两个不相干景点的
-        价格就误报；触发后不裁掉任何来源，也不替用户擅自选择一个值。
+        这里只检查问题主题对应的确定性数值。跨来源只在相同事实关键词
+        的数值集合无交集时提示；单来源则在同一事实关键词出现多个值时
+        提示核对条件。触发后不裁掉任何来源，也不替用户擅自选择一个值。
         """
         conflicts = self._find_conflicts(docs, question)
         if not conflicts:
@@ -157,8 +173,28 @@ class CitationFormatter:
             if str(doc.metadata.get("index", "")).isdigit()
         })
         citations = "、".join(f"[E{index}]" for index in indexes)
-        marker = f"存在不同说法：相关来源对同一事实给出了不同值，请按来源分别核对 {citations}。"
-        if "存在不同说法" in answer:
+        has_same_evidence_conflict = any(
+            left is right for left, right in conflicts
+        )
+        has_cross_evidence_conflict = any(
+            left is not right for left, right in conflicts
+        )
+        markers = []
+        if has_same_evidence_conflict:
+            markers.append(
+                f"同一来源的相关内容出现多个不同值，请按原文适用条件核对 "
+                f"{citations}。"
+            )
+        if has_cross_evidence_conflict:
+            markers.append(
+                f"存在不同说法：多个来源对同一事实给出了不同值，"
+                f"请按来源分别核对 {citations}。"
+            )
+        marker = "\n".join(markers)
+        if (
+            "存在不同说法" in answer
+            or "同一来源的相关内容出现多个不同值" in answer
+        ):
             return answer if all(f"[E{index}]" in answer for index in indexes) else (
                 answer + "\n\n" + marker
             )
@@ -166,10 +202,34 @@ class CitationFormatter:
 
     @staticmethod
     def _question_anchor(question: str, texts: list[str]) -> str:
-        """从问题中提取事实关键词前的实体，避免跨景点误报。"""
-        runs = re.findall(r"[一-鿿]{2,}", question or "")
+        """从问题中提取共同主题，支持短主题如“退款”并避免跨实体误报。"""
+        core = question or ""
+        for filler in sorted(_ANCHOR_QUERY_FILLERS, key=len, reverse=True):
+            core = core.replace(filler, "")
+        for keyword in sorted(_CONFLICT_KEYWORDS, key=len, reverse=True):
+            core = core.replace(keyword, "")
+
+        runs = re.findall(r"[一-鿿]{2,}", core)
         best = ""
         for run in runs:
+            if all(run in text for text in texts) and len(run) > len(best):
+                best = run
+
+        # 保留原有“事实关键词前的实体”提取作为兼容回退。
+        if best:
+            return best
+        for run in runs:
+            max_width = min(len(run), 12)
+            for width in range(max_width, 1, -1):
+                for start in range(len(run) - width + 1):
+                    candidate = run[start:start + width]
+                    if any(term in candidate for term in _ANCHOR_NON_TOPIC_TERMS):
+                        continue
+                    if all(candidate in text for text in texts):
+                        return candidate
+
+        original_runs = re.findall(r"[一-鿿]{2,}", question or "")
+        for run in original_runs:
             for keyword in sorted(_CONFLICT_KEYWORDS, key=len, reverse=True):
                 position = run.find(keyword)
                 if position < 2:
@@ -194,25 +254,70 @@ class CitationFormatter:
                 if position >= 0
             ]
             for match in _CONFLICT_VALUE_RE.finditer(sentence):
+                if not match.group("unit") and not match.group("prefix"):
+                    continue
                 preceding = [item for item in keyword_positions if item[0] <= match.start()]
                 if not preceding:
                     continue
                 keyword = max(preceding, key=lambda item: item[0])[1]
                 facts.setdefault(keyword, set()).add(
-                    f"{match.group('value')}{match.group('unit')}"
+                    cls._format_conflict_value(match)
+                )
+
+            # 金额常出现在“需主管审核”之前，旧逻辑只把数值配给前置关键词，
+            # 会漏掉退款审核门槛。仅在金额附近明确出现审核/审批/复核时归类。
+            for match in _CONFLICT_VALUE_RE.finditer(sentence):
+                if (
+                    match.group("unit") not in {"元", "人民币", "￥", "¥"}
+                    and match.group("prefix") not in {"人民币", "￥", "¥"}
+                ):
+                    continue
+                start = max(0, match.start() - 24)
+                end = min(len(sentence), match.end() + 24)
+                nearby = sentence[start:end]
+                actions = list(_REVIEW_ACTION_RE.finditer(nearby))
+                if not actions:
+                    continue
+                action = min(
+                    actions,
+                    key=lambda item: abs(item.start() - (match.start() - start)),
+                )
+                role_prefix = nearby[max(0, action.start() - 8):action.start()]
+                role_match = _REVIEW_ROLE_RE.search(role_prefix)
+                if role_match and role_match.group() == "财务":
+                    fact_key = "finance_review_threshold"
+                elif role_match:
+                    fact_key = "supervisor_review_threshold"
+                else:
+                    fact_key = "review_threshold"
+                facts.setdefault(fact_key, set()).add(
+                    cls._format_conflict_value(match)
                 )
         return facts
 
+    @staticmethod
+    def _format_conflict_value(match: re.Match) -> str:
+        prefix = match.group("prefix") or ""
+        value = match.group("value")
+        unit = match.group("unit") or ""
+        return f"{prefix}{value}{unit}"
+
     @classmethod
     def _find_conflicts(cls, docs: list, question: str) -> list[tuple]:
-        """返回存在同一事实不同值的文档对。"""
+        """返回跨来源冲突，以及同一来源中相关事实出现多个不同值的证据。"""
         conflicts = []
         for left_index, left in enumerate(docs):
             left_text = str(getattr(left, "page_content", "") or "")
+            left_anchor = cls._question_anchor(question, [left_text])
+            if len(left_anchor) >= 2:
+                left_facts = cls._facts_for_anchor(left_text, left_anchor)
+                if any(len(values) > 1 for values in left_facts.values()):
+                    conflicts.append((left, left))
+
             for right in docs[left_index + 1:]:
                 right_text = str(getattr(right, "page_content", "") or "")
                 anchor = cls._question_anchor(question, [left_text, right_text])
-                if len(anchor) < 3:
+                if len(anchor) < 2:
                     continue
                 left_facts = cls._facts_for_anchor(left_text, anchor)
                 right_facts = cls._facts_for_anchor(right_text, anchor)

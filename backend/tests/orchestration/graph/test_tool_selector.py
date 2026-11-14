@@ -494,7 +494,7 @@ class TestTraceObservability:
         assert routing["block_reason"] == ""
         assert routing["selected_tool"] == "sql.query"
         assert routing["final_destination"] == "skill_executor"
-        assert routing["route_policy_version"] == "routing-p0-1"
+        assert routing["route_policy_version"] == "routing-p0-2"
 
     def test_llm_failure_span_marked_failed(self, monkeypatch):
         spans, metadata = self._fake_trace(monkeypatch)

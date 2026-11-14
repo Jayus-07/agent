@@ -97,7 +97,7 @@ export interface DoneEvent {
   trace_id?: string
   sources?: Source[]
   usage?: TokenUsage
-  /** RAG 拒答语义码（缺省=正常回答）：rag_no_evidence / rag_permission_denied / rag_hallucination */
+  /** RAG 拒答语义码（缺省=正常回答）：含无证据、检索降级、无权限和事实校验拦截 */
   answer_status?: string
   /** META 自报置信度 0~1（低于 0.6 前端提示「建议核实」，与 CS 门禁 CAUTIOUS 下界同口径） */
   confidence?: number

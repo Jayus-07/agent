@@ -48,6 +48,7 @@ import { invalidateSessionsCache, getSessionPageCached } from '@/lib/sessions-ca
 import { BUCKET_LABELS, filterByKeyword, formatTime, groupByTime } from '@/lib/session-groups'
 import { useChatStore } from '@/store/chat'
 import type { Message, SSEStreamEvent, StatusEvent, TodoItem } from '@/lib/types'
+import RagAnswerHint from '@/components/shared/RagAnswerHint'
 import {
   CHAT_INPUT_MAX_CHARS,
   chatInputOverLimit,
@@ -55,6 +56,7 @@ import {
 } from '@/lib/chatInputLimit'
 import { listAgentTasks, restoreAgentTasks } from '@/api/agentTasks'
 import { useAgentTask } from '@/hooks/useAgentTask'
+import { presentAssistantAnswer } from './assistantAnswerPresentation'
 
 const PAUSE_MESSAGE = '个人额度不足，本轮已暂停。补足额度后可以重新发送这条问题。'
 
@@ -460,6 +462,9 @@ function ProcessPanel({
 }) {
   const [expanded, setExpanded] = useState(streaming)
   const steps = useMemo(() => processSteps(events, labels, streaming), [events, labels, streaming])
+  useEffect(() => {
+    setExpanded(streaming)
+  }, [streaming])
   if (!steps.length && !todos.length && !streaming) return null
   return (
     <section className="mb-3 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80">
@@ -485,10 +490,17 @@ function ProcessPanel({
   )
 }
 
-function RichAnswer({ content }: { content: string }) {
+function RichAnswer({
+  content,
+  hasStructuredSources = false,
+}: {
+  content: string
+  hasStructuredSources?: boolean
+}) {
   if (!content) return null
+  const displayContent = presentAssistantAnswer(content, hasStructuredSources)
   return <div className="break-words text-[14px] leading-7 text-slate-800 [&_a]:text-indigo-600 [&_a]:underline [&_a]:underline-offset-2 [&_blockquote]:my-3 [&_blockquote]:border-l-2 [&_blockquote]:border-indigo-200 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_code]:rounded [&_code]:bg-slate-100 [&_code]:px-1 [&_code]:py-0.5 [&_h1]:mb-2 [&_h1]:mt-4 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mb-2 [&_h2]:mt-4 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mb-1 [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:ml-5 [&_li]:list-disc [&_ol_li]:list-decimal [&_p]:my-2 [&_pre]:my-3 [&_pre]:overflow-x-auto [&_pre]:rounded-xl [&_pre]:bg-slate-900 [&_pre]:p-3 [&_pre]:text-xs [&_pre_code]:bg-transparent [&_table]:my-3 [&_table]:block [&_table]:max-w-full [&_table]:overflow-x-auto [&_td]:border [&_td]:border-slate-200 [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-slate-200 [&_th]:bg-slate-50 [&_th]:px-2 [&_th]:py-1">
-    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>{content}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={[remarkGfm, remarkBreaks]} rehypePlugins={[rehypeHighlight]}>{displayContent}</ReactMarkdown>
   </div>
 }
 
@@ -573,7 +585,8 @@ function AssistantMessage({
         <div className="rounded-2xl rounded-tl-md border border-slate-200 bg-white px-4 py-3 shadow-[0_1px_3px_rgba(15,23,42,.035)] sm:px-5">
           {message.taskId ? <LongTaskReply taskId={message.taskId} blocked={blocked} /> : <>
           <ProcessPanel events={events} labels={labels} todos={active ? todos : message.trace?.todoItems || []} streaming={active} />
-          {active && !answer ? <div className="flex items-center gap-2 py-1 text-xs text-slate-500"><span className="flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:150ms]" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:300ms]" /></span>正在处理请求…</div> : <RichAnswer content={answer} />}
+          {active && !answer ? <div className="flex items-center gap-2 py-1 text-xs text-slate-500"><span className="flex gap-1"><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:150ms]" /><i className="h-1.5 w-1.5 rounded-full bg-indigo-400 motion-safe:animate-pulse [animation-delay:300ms]" /></span>正在处理请求…</div> : <RichAnswer content={answer} hasStructuredSources={sources.length > 0} />}
+          {!active && <RagAnswerHint answerStatus={message.answerStatus} confidence={message.confidence} />}
           {message.pause && <PauseNotice message={message.pause.message} disabled={blocked} onRetry={onRetry} />}
           {errorMessage && !message.pause && <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs leading-5 text-rose-800"><AlertCircle size={14} className="mt-0.5 shrink-0" />{errorMessage}</div>}
           {sources.length > 0 && <div className="mt-4 border-t border-slate-100 pt-3"><p className="mb-2 text-[10px] font-medium uppercase tracking-wide text-slate-400">参考来源</p><div className="flex flex-wrap gap-1.5">{sources.map((source, index) => <span key={`${source.filename}-${index}`} title={source.section || source.filename} className="inline-flex max-w-full items-center gap-1.5 rounded-lg bg-slate-50 px-2.5 py-1.5 text-[10px] text-slate-600"><FileText size={12} className="shrink-0 text-indigo-400" /><span className="truncate">{source.filename}</span></span>)}</div></div>}

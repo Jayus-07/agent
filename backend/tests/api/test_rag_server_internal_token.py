@@ -82,6 +82,35 @@ def test_ask_reports_service_admission_and_pipeline_timing(client, monkeypatch):
     assert client.get("/readyz").status_code != 401
 
 
+def test_ask_returns_service_unavailable_for_failed_retrieval(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from backend.rag.retrieval_budget import RetrievalUnavailableError
+
+    monkeypatch.setattr(
+        "backend.prompts.hot_reload.ensure_prompt_snapshot_fresh_async",
+        AsyncMock(),
+    )
+
+    def fail_retrieval(*_args, **_kwargs):
+        raise RetrievalUnavailableError("embedding endpoint unavailable")
+
+    monkeypatch.setattr(m, "_get_pipeline", lambda: SimpleNamespace(
+        ask=fail_retrieval, last_answer_meta={},
+    ))
+    response = client.post(
+        "/ask",
+        json={"question": "查退款规则"},
+        headers={"X-Internal-Token": "sekrit"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "知识库检索服务暂不可用，请稍后重试。"
+    }
+
+
 def test_dev_mode_without_token_allows_all(monkeypatch):
     monkeypatch.setattr(m, "_internal_token", lambda: "")
     m.app.add_api_route("/__probe2", lambda: {"ok": True}, methods=["GET"])

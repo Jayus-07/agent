@@ -209,3 +209,84 @@ def test_partial_query_failure_does_not_mark_successful_fanout_as_total_error(mo
     assert [item["status"] for item in span.output["query_results"]] == [
         "success", "error"
     ]
+
+
+def test_partial_query_failure_with_evidence_marks_answer_incomplete(monkeypatch):
+    """部分检索失败但有证据时保留证据，并标记结果可能不完整。"""
+    def submit(_pool_name, _run_in_context, _invoke, query):
+        future = Future()
+        if query == "退款申请流程":
+            future.set_result([
+                Document(page_content="退款规则", metadata={"chunk_id": "refund"})
+            ])
+        else:
+            future.set_exception(ConnectionError("embedding service unavailable"))
+        return future
+
+    retriever = _make_retriever(monkeypatch, submit)
+    docs = retriever._get_relevant_documents("退款怎么处理？")
+
+    assert len(docs) == 1
+    assert docs[0].metadata["_mq_partial"] is True
+
+
+def test_successful_empty_search_stays_distinct_from_failure(monkeypatch):
+    """检索正常完成但没有命中时仍是合法空结果。"""
+    trace = _start_trace()
+
+    def submit(*_args):
+        future = Future()
+        future.set_result([])
+        return future
+
+    retriever = _make_retriever(monkeypatch, submit)
+    assert retriever._get_relevant_documents("退款怎么处理？") == []
+    assert _fanout_span(trace).status == "success"
+
+
+def test_all_failed_multi_query_paths_raise_unavailable(monkeypatch):
+    """所有变体都检索失败时不能返回空列表冒充无证据。"""
+    from backend.rag.retrieval_budget import RetrievalUnavailableError
+
+    trace = _start_trace()
+
+    def submit(*_args):
+        future = Future()
+        future.set_exception(ConnectionError("embedding service unavailable"))
+        return future
+
+    retriever = _make_retriever(monkeypatch, submit)
+    with pytest.raises(RetrievalUnavailableError):
+        retriever._get_relevant_documents("退款怎么处理？")
+
+    span = _fanout_span(trace)
+    assert span.status == "error"
+    assert span.metrics["error_count"] == 2
+
+
+def test_rewrite_failure_with_empty_single_query_is_unavailable(monkeypatch):
+    """改写模型失败且原问题也没命中时，不能断言知识库没有资料。"""
+    from backend.rag.retrieval_budget import RetrievalUnavailableError
+    import backend.rag.retrieval.multi_query as multi_query
+
+    monkeypatch.setattr(multi_query, "need_multi_query", lambda _query: (True, "test"))
+    monkeypatch.setattr(multi_query, "_rewrite_with_budget", lambda query: [query])
+    retriever = multi_query.MultiQueryRetriever(
+        base_retriever=SimpleNamespace(invoke=lambda _query: [])
+    )
+
+    with pytest.raises(RetrievalUnavailableError, match="查询改写模型不可用"):
+        retriever._get_relevant_documents("退款规则的多项适用条件")
+
+
+def test_retrieval_unavailable_maps_to_retryable_service_error():
+    """本地 RAG 模式也要将检索故障标成可重试服务不可用。"""
+    from backend.core.tool_runtime.error_mapper import map_exception
+    from backend.core.tool_runtime.models import ToolStatus
+    from backend.rag.retrieval_budget import RetrievalUnavailableError
+
+    result = map_exception(RetrievalUnavailableError("vector and BM25 unavailable"))
+
+    assert result.status is ToolStatus.UNAVAILABLE
+    assert result.error_code == "service_unavailable"
+    assert result.retryable is True

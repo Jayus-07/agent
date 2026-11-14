@@ -2,8 +2,7 @@
  * ErrorCard 反馈语义测试（UX 设计 P0-②）
  *
  * 锁四件事：
- *   1. RAG 拒答三语义码 → 各自的行动指引（预登记契约：后端 C4 接通前，
- *      这些码不会被后端发送；映射写在这里保证接通时零改动点亮）；
+ *   1. RAG 拒答语义码 → 各自的行动指引；
  *   2. HTTP 派生类（401/403/429/超时/网络）→ 按 kind 给行动指引，
  *      验证与 errors.ts 既有机制的衔接而非重复实现；
  *   3. RAG 语义码优先级高于 kind 映射（码命中后不再被 kind 覆盖）；
@@ -28,10 +27,16 @@ function fakeApiError(code: string | undefined, status: number | undefined) {
 }
 
 describe("RAG 拒答三语义码 → 行动指引（预登记契约）", () => {
-  it("RAG_NO_EVIDENCE → 换问法指引", () => {
+  it("RAG_NO_EVIDENCE → 补充资料范围指引", () => {
     const fb = resolveErrorFeedback(fakeApiError("RAG_NO_EVIDENCE", 200));
     expect(fb.actionText).toBe(RAG_REJECTION_ACTIONS.RAG_NO_EVIDENCE);
-    expect(fb.actionText).toContain("换个问法");
+    expect(fb.actionText).toContain("补充资料名称");
+  });
+
+  it("RAG_RETRIEVAL_DEGRADED → 临时检索故障指引", () => {
+    const fb = resolveErrorFeedback(fakeApiError("RAG_RETRIEVAL_DEGRADED", 200));
+    expect(fb.actionText).toBe(RAG_REJECTION_ACTIONS.RAG_RETRIEVAL_DEGRADED);
+    expect(fb.actionText).toContain("稍后重试");
   });
 
   it("RAG_PERMISSION_DENIED → 申请权限指引", () => {

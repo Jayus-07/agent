@@ -273,8 +273,19 @@ jobs:
             backend/tests/api/test_auth_local.py \
             backend/tests/test_model_override_validation.py \
             backend/tests/orchestration/graph/test_clarify_flow.py \
+            backend/tests/orchestration/graph/test_main_conversation_fast_path.py \
             backend/tests/orchestration/router/test_product_scope.py \
+            backend/tests/orchestration/router/test_knowledge_followup_routing.py \
+            backend/tests/skills/test_rag_skill.py \
             backend/tests/api/test_rag_server_internal_token.py \
+            backend/tests/rag/test_multi_query_trace.py \
+            backend/tests/rag/test_history_rewrite_guard.py \
+            backend/tests/rag/test_vector_degraded_expansion.py \
+            backend/tests/rag/test_retrievers.py \
+            backend/tests/rag/test_chain.py \
+            backend/tests/rag/test_rag_answer_status.py \
+            backend/tests/agents/test_reporter_result_kind.py \
+            backend/tests/test_citation_formatter.py \
             backend/tests/api/test_evaluation_runs_list.py \
             backend/tests/api/test_cs_knowledge_search_rag.py \
             backend/tests/test_rag_remote_mode.py \

@@ -161,7 +161,7 @@ class TestFinalizeLlmRejection:
 
             assert msg is not None
             # 2026-10-25 拒答话术用户语言化：NO_EVIDENCE 走 REJECT_MESSAGES
-            assert "未找到" in msg or "暂无" in msg or "未提及" in msg
+            assert "当前可访问的知识库" in msg or "未提及" in msg
             assert info is not None
             assert info.get("rejected") is True
             assert info.get("reason") == "no_evidence"

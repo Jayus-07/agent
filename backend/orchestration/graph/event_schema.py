@@ -85,8 +85,8 @@ class DoneData(_Loose):
     answer_source: str | None = None
     task_id: str | None = None
     # 2026-10-03 RAG 拒答/置信度语义（缺省 = 正常回答）：answer_status 来自
-    # 工具 RAGMETA 标记，取值 rag_no_evidence / rag_permission_denied /
-    # rag_hallucination（evidence_gate.models.ANSWER_STATUS_BY_REASON）；
+    # 工具 RAGMETA 标记，含 rag_no_evidence / rag_retrieval_degraded /
+    # rag_permission_denied / rag_hallucination；不强限枚举以兼容新增语义码。
     # confidence = META 自报置信度（0~1），前端低于阈值显示「建议核实」
     answer_status: str | None = None
     confidence: float | None = None
