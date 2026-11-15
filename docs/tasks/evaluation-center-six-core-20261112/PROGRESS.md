@@ -598,3 +598,10 @@
 - 重新检查 BM25 文件：`PUBLISHED.json` 的 `generation` 为空；同目录 `meta.json` 显示 `source=vectorstore`、collection `chroma`、`doc_count=6074`、`vector_count=6074`、构建时间 `2026-11-15 10:59:35`。这是按当前向量库生成的整库快照线索，空 generation 本身不足以判定失效；尚未对试点或其他样本做 BM25 实际召回与快照内容核验，因此检索质量仍未验收。
 - 当前宿主可用内存复核约 4.42 GB；共享 `agent-redis-1` 仍在重启，本地 BGE 服务此前健康探测仍连接失败。本轮没有上传、写库、索引或启动模型；BM25 写入阶段 8/8 只证明该运行写入步骤成功。
 - 本节后当前状态仍为 `PARTIAL / UNVERIFIED`：源码持续统计逻辑和真实 DB 记录可对账，但统计管理页面尚未在运行态出现；BM25 实际召回未验。其余缺件沿用上节，不将新增的单样本成功扩大成全库通过。
+
+## 2026-11-15 — PR #471 自动审查修复
+
+- PR #471 的 Codex 自动审查发现 P2：LLM 切分兜底调用没有使用 `chunking` 角色的有效超时，Proxy 的 Provider deadline 因而未生效，慢响应会占用索引 Worker。
+- 已修复为读取 `resolve_runtime_policy("chunking").timeout_seconds`，并在同步 Provider 调用外套用现有 `scoped_execution_timeout`；配置读取异常回落到角色代码默认值。Proxy 使用同一 ContextVar 把剩余时限变为受支持 Provider 的请求超时，超时后仍回退原规则 Chunk。
+- 回归测试先在修复前失败（Provider 调用时 `remaining_execution_seconds()` 为 `None`），修复后 `test_llm_fallback_chunking.py` 与 deadline 传播/Proxy 直接用例共 `10 passed`；`py_compile` 和 `git diff --check` 通过。
+- 同批运行整个 `test_execution_deadline_propagation.py` 时为 `34 passed, 1 failed`；失败在未改动的 `test_astream_caps_and_aborts_after_total_deadline`，实际拿到 `[]`，断言期待 `['a']`。该用例未纳入本轮直接改动范围，未把它报告为通过；本轮收窄到 fallback、scope、Provider kwargs 和同步 Proxy deadline 的 5 个相关用例复验均通过。PR 更新后仍需确认 CI 与审查状态，再决定合并。

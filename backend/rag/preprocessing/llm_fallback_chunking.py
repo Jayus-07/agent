@@ -242,10 +242,19 @@ def apply_llm_boundary_fallback(
     trace_span = None
     try:
         from backend.config import model_roles
+        from backend.core.tool_runtime.deadline import scoped_execution_timeout
         from backend.infra.llm.models import resolve_provider
         from backend.rag.indexing.processing_lineage import ModelIdentity
 
         effective = model_roles.resolve_effective("chunking")
+        try:
+            timeout_seconds = float(
+                model_roles.resolve_runtime_policy("chunking").timeout_seconds
+            )
+        except (AttributeError, TypeError, ValueError):
+            timeout_seconds = float(
+                model_roles.runtime_defaults("chunking").timeout_seconds
+            )
         model_name = str(effective.get("value") or "").strip() or None
         model_identity = ModelIdentity(
             role="chunking",
@@ -283,7 +292,7 @@ def apply_llm_boundary_fallback(
             else nullcontext()
         )
         metadata["attempted"] = True
-        with binding:
+        with binding, scoped_execution_timeout(timeout_seconds):
             response = invoke_metadata_llm(
                 prompt, role="chunking", max_tokens=2048,
             )

@@ -152,6 +152,48 @@ def test_llm_fallback_creates_parent_leaf_chunks_and_records_the_attempt(monkeyp
     assert "text" not in recorder.stages[0]["finish"]["metadata"]
 
 
+def test_llm_fallback_uses_chunking_role_timeout(monkeypatch):
+    ast = _ast()
+    units = collect_source_units(ast)
+    ids = [item["id"] for item in units]
+    _patch_llm(monkeypatch, [[ids[0], ids[1]], [ids[2]]])
+
+    from backend.config import model_roles
+    from backend.core.tool_runtime.deadline import remaining_execution_seconds
+    from backend.rag.preprocessing import llm_enrichment
+
+    monkeypatch.setattr(
+        model_roles,
+        "resolve_runtime_policy",
+        lambda _role: SimpleNamespace(timeout_seconds=7),
+    )
+    deadlines = []
+
+    def _invoke_with_deadline(*_args, **_kwargs):
+        deadlines.append(remaining_execution_seconds())
+        return SimpleNamespace(
+            content=json.dumps({"groups": [[ids[0], ids[1]], [ids[2]]]})
+        )
+
+    monkeypatch.setattr(llm_enrichment, "invoke_metadata_llm", _invoke_with_deadline)
+    rule_chunks = RecursiveChunkStrategy().split(ast, ast.source_file)
+
+    chunks, metadata = apply_llm_boundary_fallback(
+        ast,
+        ast.source_file,
+        "general",
+        "no_recognized_structure",
+        rule_chunks,
+    )
+
+    assert metadata["applied"] is True
+    assert len(deadlines) == 1
+    assert deadlines[0] is not None
+    assert 0 < deadlines[0] <= 7
+    assert remaining_execution_seconds() is None
+    assert coverage_audit(ast, chunks)["uncovered_count"] == 0
+
+
 def test_invalid_llm_boundaries_keep_the_original_rule_chunks(monkeypatch):
     ast = _ast()
     units = collect_source_units(ast)
