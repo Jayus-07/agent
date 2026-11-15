@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Activity, FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useDocuments, useKnowledgeStats } from '@/hooks/useKnowledge'
 import { knowledgeService, type ChunkDetailItem, type LLMChunkingFallbackStats } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
@@ -127,8 +127,10 @@ const STATUS_CONFIG: Record<string, { label: string; className: string }> = {
 
 export default function DocumentsPanel() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const toast = useToast()
-  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, qualityStatus, setQualityStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh } = useDocuments()
+  const initialPage = Number(searchParams.get('doc_page') || '1')
+  const { documents, loading, total, page, pageSize, keyword, setKeyword, status, setStatus, qualityStatus, setQualityStatus, type, setType, kbId, setKbId, dept, setDept, setPage, error, refresh } = useDocuments(initialPage)
   const knowledgeStats = useKnowledgeStats()
   const qualityCounts = knowledgeStats.quality_status_counts ?? {}
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -245,6 +247,17 @@ export default function DocumentsPanel() {
   useEffect(() => {
     clearSelection()
   }, [page, keyword, status, type, kbId, dept])
+
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams.toString())
+    if (page > 1) params.set('doc_page', String(page))
+    else params.delete('doc_page')
+    const nextQuery = params.toString()
+    const currentQuery = searchParams.toString()
+    if (nextQuery !== currentQuery) {
+      router.replace(`/knowledge/workbench${nextQuery ? `?${nextQuery}` : ''}`, { scroll: false })
+    }
+  }, [page, router, searchParams])
 
   const handleDelete = async () => {
     if (!deleteTarget || deletePending) return
@@ -479,6 +492,8 @@ export default function DocumentsPanel() {
     const params = new URLSearchParams({
       documentName: d.name,
       docId: d.id,
+      returnTab: 'documents',
+      returnPage: String(page),
       ...(d.hash ? { fileHash: d.hash } : {}),
       ...(d.last_processing_run_id ? { runId: d.last_processing_run_id } : {}),
       ...(d.last_operation ? { operation: d.last_operation } : {}),

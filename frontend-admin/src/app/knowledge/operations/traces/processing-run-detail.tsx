@@ -52,10 +52,14 @@ export default function ProcessingRunDetailView({
   detail,
   documentName,
   historyFallback = false,
+  onBack,
+  backLabel = "文档",
 }: {
   detail: ProcessingRunDetail;
   documentName: string;
   historyFallback?: boolean;
+  onBack?: () => void;
+  backLabel?: string;
 }) {
   const steps = detail.steps ?? [];
   const usage = detail.usage ?? [];
@@ -63,6 +67,11 @@ export default function ProcessingRunDetailView({
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
+        {onBack && (
+          <button onClick={onBack} className="text-xs text-slate-400 hover:text-slate-600">
+            ← 返回{backLabel}
+          </button>
+        )}
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
           <div className="text-sm font-semibold text-amber-900">处理运行记录（非 Trace）</div>
           <p className="mt-1 text-xs leading-relaxed text-amber-800">
