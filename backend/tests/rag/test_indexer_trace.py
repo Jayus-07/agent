@@ -159,6 +159,32 @@ class TestHappyPath:
             for chunk in indexed_chunks
         )
 
+    def test_candidate_chunk_title_does_not_keep_normalized_stage_filename(
+        self,
+        indexer,
+        tmp_path,
+        tmp_text_file,
+    ):
+        """Temp names normalized by the parser must not leak into chunk metadata."""
+        staged_path = tmp_path / (
+            "stage-llm-pilot-f1bc4b05dc704c048ba5a70ea57b98ad.txt"
+        )
+        staged_path.write_bytes(Path(tmp_text_file).read_bytes())
+        logical_path = tmp_path / "LLM切分闭环隔离试点-20261115-08f636b0.txt"
+
+        indexer._index_file(str(staged_path), identity_path=str(logical_path))
+
+        indexed_chunks = indexer.vectordb.add_documents.call_args.args[0]
+        assert indexed_chunks
+        assert all(
+            chunk.metadata["document_title"] == logical_path.stem
+            for chunk in indexed_chunks
+        )
+        assert all(
+            chunk.metadata["source_file"] == logical_path.name
+            for chunk in indexed_chunks
+        )
+
     def test_reindex_keeps_registry_active_generation_on_chunks(
         self,
         indexer,

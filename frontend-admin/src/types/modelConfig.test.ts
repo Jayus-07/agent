@@ -308,22 +308,25 @@ describe('redactForRole', () => {
 
 describe('roleLabel', () => {
   it('后端 MODEL_ROLES 全部角色都有中文名', () => {
-    // 快照对齐 backend/config/model_roles.py 的 MODEL_ROLES（11 个）。
+    // 快照对齐 backend/config/model_roles.py 的 MODEL_ROLES（14 个）。
     // 后端新增角色时这里会失败 —— 那是提醒，不是噪声：漏补中文名的下场是表格里显示英文代码。
     const roles = [
       'main',
       'doc',
+      'context_compactor',
       'metadata_extract',
+      'chunking',
       'question_gen',
       'table_describe',
       'tool_selector',
+      'multi_query',
       'fallback',
       'ocr',
       'embedding',
       'rerank',
       'eval_gen',
     ]
-    expect(roles).toHaveLength(11)
+    expect(roles).toHaveLength(14)
     for (const r of roles) {
       expect(roleLabel(r)).not.toBe(r)
       expect(roleLabel(r).length).toBeGreaterThan(0)

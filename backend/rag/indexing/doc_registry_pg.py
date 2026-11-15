@@ -833,7 +833,9 @@ class PostgresDocumentRegistry(DocumentRegistry):
             "page_size": page_size,
         }
 
-    def distinct_permission_scopes(self, tenant_id: str | None = None) -> list[str]:
+    def distinct_permission_scopes(
+        self, tenant_id: str | None = None, *, include_inactive: bool = False,
+    ) -> list[str]:
         """registry 中实际存在的 permission_scope 值（空串归一为 general）。
 
         供授权层把文档级裁决下推为 SQL ANY 过滤（visible_scopes），
@@ -841,15 +843,18 @@ class PostgresDocumentRegistry(DocumentRegistry):
         with self._lock, self._conn() as conn:
             # 必须用普通游标：r[0] 是位置索引取列，_exec 的 RealDictCursor
             # 返回按列名索引的字典行，r[0] 会 KeyError: 0（2026-10-01 修复）
-            sql = (
-                f"""SELECT DISTINCT COALESCE(NULLIF(permission_scope, ''), 'general')
-                   FROM {self._table} WHERE status = 'active'"""
-            )
-            params = ()
+            sql = f"""SELECT DISTINCT COALESCE(NULLIF(permission_scope, ''), 'general')
+                       FROM {self._table}"""
+            conditions: list[str] = []
+            params: list[str] = []
+            if not include_inactive:
+                conditions.append("status = 'active'")
             if tenant_id is not None:
-                sql += " AND tenant_id = %s"
-                params = (tenant_id,)
-            rows = self._exec_scalar(conn, sql, params).fetchall()
+                conditions.append("tenant_id = %s")
+                params.append(tenant_id)
+            if conditions:
+                sql += " WHERE " + " AND ".join(conditions)
+            rows = self._exec_scalar(conn, sql, tuple(params)).fetchall()
         return [r[0] for r in rows]
 
     def clear(self):

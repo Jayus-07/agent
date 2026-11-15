@@ -118,6 +118,35 @@ async def get_stats(request: Request):
         return {"kb_count": 0, "doc_count": 0, "chunk_count": 0, "embedding_model": "", "vector_db": "pgvector", "error": str(e)}
 
 
+@router.get("/chunking/llm-fallback-stats")
+async def get_llm_chunking_fallback_stats(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+):
+    """汇总当前主体可见范围内的 LLM 切分兜底记录。"""
+    authz = await _require_authz(request)
+    try:
+        threshold = max(int(os.getenv("RAG_LLM_CHUNK_RULE_REVIEW_THRESHOLD", "5")), 1)
+    except (TypeError, ValueError):
+        threshold = 5
+    try:
+        return await asyncio.to_thread(
+            get_processing_lineage_repository().chunking_fallback_stats,
+            tenant_id=authz.principal.tenant_id,
+            kb_ids=sorted(authz.kb_scope),
+            user_permissions=sorted(authz.user_permissions or ()),
+            is_admin=authz.is_admin,
+            department=(
+                None if authz.is_admin else (authz.principal.department or "")
+            ),
+            days=days,
+            review_threshold=threshold,
+        )
+    except Exception as exc:
+        logger.error("[RAG] LLM 切分兜底统计查询失败: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="切分统计暂不可用") from exc
+
+
 @router.get("/documents")
 async def list_documents(
     request: Request,

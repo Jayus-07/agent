@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { Activity, FileText, Search, Trash2, RefreshCw, Grid3X3, Cpu, Loader2, ChevronLeft, ChevronRight, CheckSquare, Square, X } from 'lucide-react'
 import { useRouter } from 'next/navigation'
 import { useDocuments, useKnowledgeStats } from '@/hooks/useKnowledge'
-import { knowledgeService, type ChunkDetailItem } from '@/api/knowledge'
+import { knowledgeService, type ChunkDetailItem, type LLMChunkingFallbackStats } from '@/api/knowledge'
 import UploadDialog from '@/components/knowledge/UploadDialog'
 import { useToast } from '@/components/shared/Toast'
 import { getReindexTerminalState } from '@/lib/reindex-status'
@@ -82,7 +82,20 @@ function formatChunkMetadata(value: unknown): string {
 const PROCESSING_STAGE_CN: Record<string, string> = {
   load: '读取文件', parser: '解析', ocr: 'OCR', metadata: '元数据编排',
   metadata_extract: '元数据抽取', metadata_summary: '摘要', question_gen: '模拟问题',
-  table_describe: '表格描述', embedding: '向量化', vector_write: '写入向量库',
+  table_describe: '表格描述', chunking_llm_fallback: 'LLM 切分边界兜底',
+  embedding: '向量化', vector_write: '写入向量库',
+}
+
+const CHUNK_FALLBACK_TYPE_CN: Record<string, string> = {
+  no_recognized_structure: '规则未识别结构',
+  rule_coverage_gap: '规则覆盖有缺口',
+}
+
+const KNOWLEDGE_BASE_AUDIENCE_CN: Record<string, string> = {
+  customer: '对客库',
+  internal: '内部库',
+  test: '测试库',
+  unknown: '未分类',
 }
 
 const PROCESSING_STATUS_CN: Record<string, string> = {
@@ -136,6 +149,11 @@ export default function DocumentsPanel() {
   const [chunkLoading, setChunkLoading] = useState(false)
   const [chunkError, setChunkError] = useState('')
   const chunkRequestRef = useRef(0)
+  const [llmFallbackStats, setLlmFallbackStats] = useState<LLMChunkingFallbackStats | null>(null)
+  const [llmFallbackStatsLoading, setLlmFallbackStatsLoading] = useState(false)
+  const [llmFallbackStatsError, setLlmFallbackStatsError] = useState('')
+  const llmFallbackStatsMountedRef = useRef(false)
+  const llmFallbackStatsRequestRef = useRef(false)
   // G2：知识库筛选选项 = 后端注册库真实清单（含文档计数），不再硬编码
   const [kbOptions, setKbOptions] = useState<Array<{ id: string; name: string; doc_count?: number }>>([])
   // 受控搜索：本地 input 状态（立即响应）+ 防抖同步到 store（API 调用）
@@ -165,6 +183,34 @@ export default function DocumentsPanel() {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
   }, [])
+
+  const refreshLlmFallbackStats = useCallback(async () => {
+    if (llmFallbackStatsRequestRef.current) return
+    llmFallbackStatsRequestRef.current = true
+    setLlmFallbackStatsLoading(true)
+    try {
+      const result = await knowledgeService.getLLMChunkingFallbackStats({ days: 30 })
+      if (!llmFallbackStatsMountedRef.current) return
+      setLlmFallbackStats(result)
+      setLlmFallbackStatsError('')
+    } catch (error) {
+      if (!llmFallbackStatsMountedRef.current) return
+      setLlmFallbackStatsError(error instanceof Error ? error.message : '切分统计读取失败')
+    } finally {
+      llmFallbackStatsRequestRef.current = false
+      if (llmFallbackStatsMountedRef.current) setLlmFallbackStatsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    llmFallbackStatsMountedRef.current = true
+    void refreshLlmFallbackStats()
+    const timer = window.setInterval(() => void refreshLlmFallbackStats(), 60_000)
+    return () => {
+      llmFallbackStatsMountedRef.current = false
+      window.clearInterval(timer)
+    }
+  }, [refreshLlmFallbackStats])
 
   useEffect(() => {
     if (!chunkDoc) return
@@ -429,11 +475,25 @@ export default function DocumentsPanel() {
   }
 
   // Trace 与分块正文分开查看；历史 Trace 可能过期，不能用它代替分块详情。
-  const openProcessingTrace = (d: { name: string; last_trace_id?: string | null }) => {
+  const openProcessingTrace = (d: { id: string; name: string; hash?: string; last_trace_id?: string | null; last_processing_run_id?: string | null; last_operation?: string | null; last_operation_at?: string | null }) => {
+    const params = new URLSearchParams({
+      documentName: d.name,
+      docId: d.id,
+      ...(d.hash ? { fileHash: d.hash } : {}),
+      ...(d.last_processing_run_id ? { runId: d.last_processing_run_id } : {}),
+      ...(d.last_operation ? { operation: d.last_operation } : {}),
+      ...(d.last_operation_at ? { operationAt: d.last_operation_at } : {}),
+    });
     if (d.last_trace_id) {
-      router.push(`/knowledge/operations/traces/${encodeURIComponent(d.last_trace_id)}`)
+      router.push(`/knowledge/operations/traces/${encodeURIComponent(d.last_trace_id)}?${params.toString()}`)
+    } else if (d.last_processing_run_id) {
+      params.set("view", "processing-run");
+      router.push(`/knowledge/operations/traces/processing-${encodeURIComponent(d.last_processing_run_id)}?${params.toString()}`)
     } else {
-      toast.info(`「${d.name}」暂无处理轨迹，可点击"重新解析"生成`)
+      // 没有文件行直连的 run ID 时，详情页会按当前文件 SHA 查找历史运行，
+      // 只打开内容哈希一致且保存了阶段明细的记录。
+      params.set("view", "processing-run");
+      router.push(`/knowledge/operations/traces/processing-history?${params.toString()}`)
     }
   }
 
@@ -442,6 +502,56 @@ export default function DocumentsPanel() {
   return (
     <>
       <div className="max-w-5xl mx-auto px-6 py-8">
+
+        <section aria-labelledby="llm-fallback-stats-title" className="mb-5 rounded-lg border border-border-subtle bg-surface-base px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="llm-fallback-stats-title" className="text-xs font-semibold text-text-primary">规则切分后的 LLM 兜底记录</h2>
+              <p className="mt-1 text-[10px] leading-4 text-text-muted">
+                最近 {llmFallbackStats?.window_days ?? 30} 天，按处理运行次数统计当前账号可见知识库；同一文件重复处理会分别计数。测试库单独标记，不触发生产规则升级提示；内部库和对客库同类调用达到 {llmFallbackStats?.review_threshold ?? 5} 次时提示人工评估，不自动改规则。
+              </p>
+            </div>
+            <button onClick={() => void refreshLlmFallbackStats()} disabled={llmFallbackStatsLoading} className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] text-text-secondary hover:bg-surface-hover hover:text-text-primary disabled:opacity-50" aria-label="刷新 LLM 切分兜底统计">
+              <RefreshCw size={12} className={llmFallbackStatsLoading ? 'animate-spin' : ''} />
+              刷新
+            </button>
+          </div>
+          {llmFallbackStatsError ? (
+            <p role="alert" className="mt-3 rounded-md bg-red-50 px-3 py-2 text-[10px] text-red-700">{llmFallbackStatsError}</p>
+          ) : (
+            <>
+              <dl className="mt-3 grid grid-cols-2 gap-y-2 border-t border-border-subtle pt-3 text-[10px] sm:grid-cols-5">
+                <div><dt className="text-text-muted">触发记录</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.candidate_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
+                <div><dt className="text-text-muted">LLM 调用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.llm_call_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
+                <div><dt className="text-text-muted">边界采用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.applied_count ?? (llmFallbackStatsLoading ? '读取中' : 0)} 次</dd></div>
+                <div><dt className="text-text-muted">未采用</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.not_applied_count ?? (llmFallbackStatsLoading ? '读取中' : 0)} 次</dd></div>
+                <div><dt className="text-text-muted">输出块</dt><dd className="mt-0.5 font-semibold text-text-primary">{llmFallbackStats?.output_chunk_count ?? (llmFallbackStatsLoading ? '读取中' : 0)}</dd></div>
+              </dl>
+              {!!llmFallbackStats?.by_type?.length ? (
+                <div className="mt-3 overflow-x-auto border-t border-border-subtle pt-2">
+                  <table className="w-full min-w-[840px] text-left text-[10px]">
+                    <thead className="text-text-muted"><tr><th className="py-1.5 font-medium">知识库受众</th><th className="py-1.5 font-medium">文件格式</th><th className="py-1.5 font-medium">触发类型</th><th className="py-1.5 font-medium">规则 / 解析版本</th><th className="py-1.5 font-medium">调用 / 采用</th><th className="py-1.5 font-medium">Provider失败 / 边界拒绝 / 输出块</th><th className="py-1.5 font-medium">规则复核</th></tr></thead>
+                    <tbody className="divide-y divide-border-subtle">
+                      {llmFallbackStats.by_type.map((item) => (
+                        <tr key={`${item.kb_audience}:${item.source_format}:${item.fallback_type}:${item.rule_strategy}:${item.rule_version}:${item.parser_version}`} className="text-text-secondary">
+                          <td className="py-1.5">{KNOWLEDGE_BASE_AUDIENCE_CN[item.kb_audience] || item.kb_audience}</td>
+                          <td className="py-1.5">{item.source_format.toUpperCase()}</td>
+                          <td className="py-1.5">{CHUNK_FALLBACK_TYPE_CN[item.fallback_type] || item.fallback_type}</td>
+                          <td className="py-1.5">{item.rule_strategy} {item.rule_version} / {item.parser_version}</td>
+                          <td className="py-1.5">{item.llm_call_count} / {item.applied_count}</td>
+                          <td className="py-1.5">{item.provider_failure_count} / {item.boundary_rejection_count} / {item.output_chunk_count}</td>
+                          <td className="py-1.5">{item.upgrade_review_required ? <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-700">建议评估升级</span> : item.kb_audience === 'test' ? '测试观察（不触发升级）' : item.kb_audience === 'unknown' ? '未分类，先核对库身份' : '继续观察'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="mt-3 border-t border-border-subtle pt-2 text-[10px] text-text-muted">{llmFallbackStatsLoading ? '正在读取历史兜底记录…' : '当前时间范围暂无触发记录；后续每次实际兜底都会写入处理记录并自动累计。'}</p>
+              )}
+            </>
+          )}
+        </section>
 
         {/* Toolbar */}
         <div className="flex items-center gap-3 mb-4">
@@ -608,7 +718,7 @@ export default function DocumentsPanel() {
                   <td className="px-4 py-2.5">
                     <div className="flex items-center gap-1">
                       <button onClick={(e) => handleStopPropagation(e, () => { void openChunkDetails({ id: d.id, name: d.name }) })} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看分块" aria-label={"查看分块：" + d.name}><Grid3X3 size={13} /></button>
-                      <button onClick={(e) => handleStopPropagation(e, () => openProcessingTrace(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看处理 Trace" aria-label={"查看处理 Trace：" + d.name}><Activity size={13} /></button>
+                      <button onClick={(e) => handleStopPropagation(e, () => openProcessingTrace(d))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看 Trace / 运行记录" aria-label={"查看 Trace / 运行记录：" + d.name}><Activity size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => openLineage({ id: d.id, name: d.name }))} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors" title="查看模型血缘"><Cpu size={13} /></button>
                       <button onClick={(e) => handleStopPropagation(e, () => handleReindex(d.id, d.name))} disabled={reindexing.has(d.id)} className="p-1 rounded hover:bg-black/5 text-text-muted hover:text-accent transition-colors disabled:opacity-50" title="重新解析">
                         {reindexing.has(d.id) ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}

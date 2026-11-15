@@ -97,6 +97,23 @@ beforeEach(() => {
   vi.spyOn(knowledgeService, 'listKnowledgeBases')
     .mockResolvedValueOnce({ knowledge_bases: [{ id: 'travel', name: '旅游知识库', doc_count: 2 }] })
     .mockResolvedValue({ knowledge_bases: [{ id: 'travel', name: '旅游知识库', doc_count: 1 }] })
+  vi.spyOn(knowledgeService, 'getLLMChunkingFallbackStats').mockResolvedValue({
+    window_days: 30,
+    count_unit: 'processing_run',
+    review_threshold: 5,
+    candidate_count: 0,
+    llm_call_count: 0,
+    applied_count: 0,
+    provider_failure_count: 0,
+    boundary_rejection_count: 0,
+    not_applied_count: 0,
+    skipped_count: 0,
+    output_chunk_count: 0,
+    last_seen_at: null,
+      by_audience: [],
+    by_type: [],
+    daily: [],
+  })
   vi.spyOn(knowledgeService, 'deleteDocument').mockResolvedValue({
     ok: true, operation_state: 'success', degraded: false, warnings: null,
   })
@@ -185,6 +202,66 @@ describe('DocumentsPanel 文档计数刷新', () => {
 })
 
 describe('DocumentsPanel 分块详情', () => {
+  it('显示持续兜底统计及按规则版本升级复核的信号', async () => {
+    vi.spyOn(knowledgeService, 'getLLMChunkingFallbackStats').mockResolvedValueOnce({
+      window_days: 30,
+      count_unit: 'processing_run',
+      review_threshold: 2,
+      candidate_count: 3,
+      llm_call_count: 2,
+      applied_count: 1,
+      provider_failure_count: 0,
+      boundary_rejection_count: 1,
+      not_applied_count: 1,
+      skipped_count: 1,
+      output_chunk_count: 8,
+      last_seen_at: '2026-11-15T00:00:00Z',
+      by_audience: [{
+        kb_audience: 'customer',
+        candidate_count: 3,
+        llm_call_count: 2,
+        applied_count: 1,
+        provider_failure_count: 0,
+        boundary_rejection_count: 1,
+        not_applied_count: 1,
+        skipped_count: 1,
+        output_chunk_count: 8,
+      }],
+      by_type: [{
+        kb_audience: 'customer',
+        source_format: 'pdf',
+        fallback_type: 'rule_coverage_gap',
+        rule_strategy: 'StructureChunkStrategy',
+        rule_version: 'v3',
+        parser_version: 'pdf-parser-v2',
+        candidate_count: 2,
+        llm_call_count: 2,
+        applied_count: 1,
+        provider_failure_count: 0,
+        boundary_rejection_count: 1,
+        not_applied_count: 1,
+        skipped_count: 0,
+        output_chunk_count: 8,
+        upgrade_review_required: true,
+      }],
+      daily: [],
+    })
+    const container = mountPanel()
+    await settleUi()
+
+    expect(knowledgeService.getLLMChunkingFallbackStats).toHaveBeenCalledWith({ days: 30 })
+    expect(container.textContent).toContain('触发记录')
+    expect(container.textContent).toContain('LLM 调用')
+    expect(container.textContent).toContain('边界采用')
+    expect(container.textContent).toContain('未采用')
+    expect(container.textContent).toContain('Provider失败 / 边界拒绝 / 输出块')
+    expect(container.textContent).toContain('对客库')
+    expect(container.textContent).toContain('PDF')
+    expect(container.textContent).toContain('规则覆盖有缺口')
+    expect(container.textContent).toContain('StructureChunkStrategy v3 / pdf-parser-v2')
+    expect(container.textContent).toContain('建议评估升级')
+  })
+
   it('直接读取分块正文与来源元数据，不依赖可能过期的历史 Trace', async () => {
     const container = mountPanel()
     await settleUi()

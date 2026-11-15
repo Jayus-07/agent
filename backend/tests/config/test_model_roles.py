@@ -28,11 +28,13 @@ from backend.config.model_roles import (
     effective_snapshot,
     get_secret,
     inject_overrides,
+    policy_enforced,
     provider_of,
     resolve_effective,
     resolve_name,
     resolve_raw,
     reset_overrides,
+    runtime_defaults,
     validate_roles,
 )
 
@@ -71,7 +73,7 @@ def test_all_roles_registered():
     assert set(MODEL_ROLES) == {
         "main", "doc", "tool_selector", "fallback", "context_compactor",
         "ocr", "embedding", "rerank", "eval_gen",
-        "metadata_extract", "question_gen", "table_describe",
+        "metadata_extract", "chunking", "question_gen", "table_describe",
         # 2026-10-09：多查询改写独立角色（non-thinking 轻模型优先）。
         # 此前改写固定走主链 LLM，思考型主模型把 completion_tokens 吃光导致
         # 变体被截断（实测 98% 的调用只出 1 个变体），多查询静默退化。
@@ -90,6 +92,17 @@ def test_inherit_targets_exist():
     for role, spec in MODEL_ROLES.items():
         if spec.inherit is not None:
             assert spec.inherit in MODEL_ROLES, f"{role} 的 inherit 指向未注册角色"
+
+
+def test_chunking_role_is_limited_and_policy_is_enforced():
+    spec = MODEL_ROLES["chunking"]
+    assert spec.inherit == "main"
+    assert spec.env_key == "CHUNKING_LLM_MODEL"
+    assert policy_enforced("chunking") is True
+    defaults = runtime_defaults("chunking")
+    assert defaults.timeout_seconds == 20
+    assert defaults.max_retries == 0
+    assert defaults.failure_policy == "skip"
 
 
 # =====================================================
