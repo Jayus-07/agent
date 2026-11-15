@@ -153,16 +153,34 @@ call :do_status
 exit /b 0
 
 :do_rebuild
-:: rebuild = backend images + containerized frontends. frontend-admin /
-:: frontend run mirrored production images (node server.js, no source
-:: bind mount): frontend code changes reach :3200/:3100 ONLY via this
-:: path. frontend-cs still has a "next dev" fallback and stays out of
-:: scope here (its container is covered by its own compose workflow).
+:: Rebuild only the selected code service when requested. The default
+:: target remains all; admin/web avoid restarting unrelated backend code.
 call :confirm rebuild
 if errorlevel 1 exit /b 0
+if /i "!TARGET!"=="backend" goto rebuild_backend_only
+if /i "!TARGET!"=="admin" goto rebuild_frontend_only
+if /i "!TARGET!"=="web" goto rebuild_frontend_only
+if /i "!TARGET!"=="all" goto rebuild_all
+echo   [ERROR] unsupported rebuild target: !TARGET!
+exit /b 1
+
+:rebuild_backend_only
+call :rebuild_backend
+if errorlevel 1 exit /b 1
+call :do_status
+exit /b 0
+
+:rebuild_frontend_only
+call :rebuild_frontend
+if errorlevel 1 exit /b 1
+call :do_status
+exit /b 0
+
+:rebuild_all
 call :rebuild_backend
 if errorlevel 1 exit /b 1
 call :rebuild_frontend
+if errorlevel 1 exit /b 1
 call :do_status
 exit /b 0
 
@@ -316,7 +334,9 @@ exit /b 1
 :: reuses the old image, so frontend code changes take effect ONLY here.
 :: =====================================================================
 :rebuild_frontend
-set "FRONTEND_SERVICES=frontend-admin frontend"
+if /i "!TARGET!"=="admin" set "FRONTEND_SERVICES=frontend-admin"
+if /i "!TARGET!"=="web" set "FRONTEND_SERVICES=frontend"
+if /i "!TARGET!"=="all" set "FRONTEND_SERVICES=frontend-admin frontend"
 echo   [frontend] docker compose build %FRONTEND_SERVICES% ...
 pushd "%ROOT%"
 docker compose build %FRONTEND_SERVICES%
@@ -325,8 +345,14 @@ echo   [frontend] docker compose up -d %FRONTEND_SERVICES% ...
 docker compose up -d %FRONTEND_SERVICES%
 if errorlevel 1 goto rebuild_fe_fail
 popd
-call :wait_http "http://127.0.0.1:%ADMIN_PORT%/login" frontend-admin
-call :wait_http "http://127.0.0.1:%WEB_PORT%/login" frontend
+if /i "!TARGET!"=="admin" call :wait_http "http://127.0.0.1:%ADMIN_PORT%/login" frontend-admin
+if errorlevel 1 exit /b 1
+if /i "!TARGET!"=="web" call :wait_http "http://127.0.0.1:%WEB_PORT%/login" frontend
+if errorlevel 1 exit /b 1
+if /i "!TARGET!"=="all" call :wait_http "http://127.0.0.1:%ADMIN_PORT%/login" frontend-admin
+if errorlevel 1 exit /b 1
+if /i "!TARGET!"=="all" call :wait_http "http://127.0.0.1:%WEB_PORT%/login" frontend
+if errorlevel 1 exit /b 1
 exit /b 0
 
 :rebuild_fe_fail

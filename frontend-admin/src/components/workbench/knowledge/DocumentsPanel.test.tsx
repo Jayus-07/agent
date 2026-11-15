@@ -3,7 +3,16 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { knowledgeService } from '@/api/knowledge'
 
-vi.mock('next/navigation', () => ({ useRouter: () => ({ push: vi.fn() }) }))
+const navigation = vi.hoisted(() => ({
+  push: vi.fn(),
+  replace: vi.fn(),
+  query: 'tab=documents',
+}))
+
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: navigation.push, replace: navigation.replace }),
+  useSearchParams: () => new URLSearchParams(navigation.query),
+}))
 vi.mock('@/components/knowledge/UploadDialog', () => ({ default: () => null }))
 vi.mock('@/components/shared/Toast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
@@ -84,6 +93,9 @@ function findButton(container: HTMLElement, label: string) {
 }
 
 beforeEach(() => {
+  navigation.query = 'tab=documents'
+  navigation.push.mockClear()
+  navigation.replace.mockClear()
   let documentRequest = 0
   vi.spyOn(knowledgeService, 'getDocuments').mockImplementation(async () => {
     documentRequest += 1
@@ -163,6 +175,38 @@ afterEach(() => {
 })
 
 describe('DocumentsPanel 文档计数刷新', () => {
+  it('保留分页 URL，并让 Trace 与运行详情返回同一文件列表页', async () => {
+    navigation.query = 'tab=documents&doc_page=2'
+    const getDocuments = vi.spyOn(knowledgeService, 'getDocuments').mockResolvedValue({
+      documents: [documentFixture],
+      total: 45,
+    })
+    const container = mountPanel()
+    await settleUi()
+
+    expect(getDocuments.mock.calls[0]?.[0]).toMatchObject({ page: 2 })
+    const nextPageButton = Array.from(container.querySelectorAll('button'))
+      .find(button => button.parentElement?.textContent?.includes('2 / 3') && button !== button.parentElement?.querySelector('button'))
+    if (!(nextPageButton instanceof HTMLButtonElement)) throw new Error('找不到下一页按钮')
+    click(nextPageButton)
+    await settleUi()
+
+    expect(getDocuments.mock.calls.at(-1)?.[0]).toMatchObject({ page: 3 })
+    expect(navigation.replace).toHaveBeenCalledWith(
+      '/knowledge/workbench?tab=documents&doc_page=3',
+      { scroll: false },
+    )
+
+    const traceButton = container.querySelector('button[aria-label="查看 Trace / 运行记录：旅游测试资料.md"]')
+    if (!(traceButton instanceof HTMLButtonElement)) throw new Error('找不到文件 Trace 入口')
+    click(traceButton)
+
+    const traceUrl = new URL(navigation.push.mock.calls[0]?.[0], 'http://localhost')
+    expect(traceUrl.pathname).toBe('/knowledge/operations/traces/trace-1')
+    expect(traceUrl.searchParams.get('returnTab')).toBe('documents')
+    expect(traceUrl.searchParams.get('returnPage')).toBe('3')
+  })
+
   it('单篇删除后同步刷新列表、质量统计和知识库计数', async () => {
     const container = mountPanel()
     await settleUi()

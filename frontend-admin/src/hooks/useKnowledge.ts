@@ -26,7 +26,7 @@ export function useKnowledgeStats() {
 }
 
 // Hook — 文档列表（真实 API，支持搜索/分页/筛选）
-export function useDocuments() {
+export function useDocuments(initialPage = 1) {
   const [data, setData] = useState<KnowledgeDoc[]>([])
   const [loading, setLoading] = useState(true)
   const [total, setTotal] = useState(0)
@@ -38,7 +38,9 @@ export function useDocuments() {
   const [type, setType_] = useState('')
   const [kbId, setKbId_] = useState('')
   const [dept, setDept_] = useState('')
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(() =>
+    Number.isSafeInteger(initialPage) && initialPage > 0 ? initialPage : 1,
+  )
   const pageSize = 20
 
   const refresh = useCallback(() => {

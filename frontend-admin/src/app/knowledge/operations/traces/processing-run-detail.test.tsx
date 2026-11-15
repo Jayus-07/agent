@@ -68,6 +68,43 @@ describe("ProcessingRunDetailView", () => {
     expect(html).toContain("规则版本：未记录");
   });
 
+  it("提供返回文件列表的入口", () => {
+    const detail: ProcessingRunDetail = {
+      doc_id: "doc-1",
+      run_id: "run-1",
+      status: "success",
+      steps: [],
+    };
+    const onBack = vi.fn();
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    const previousActEnvironment = (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+      .IS_REACT_ACT_ENVIRONMENT;
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+    try {
+      act(() => root.render(createElement(ProcessingRunDetailView, {
+        detail,
+        documentName: "sample.pdf",
+        onBack,
+      })));
+      const backButton = Array.from(container.querySelectorAll("button"))
+        .find(button => button.textContent?.includes("返回文档"));
+      if (!(backButton instanceof HTMLButtonElement)) throw new Error("找不到返回入口");
+      act(() => backButton.click());
+      expect(onBack).toHaveBeenCalledOnce();
+    } finally {
+      act(() => root.unmount());
+      if (previousActEnvironment === undefined) {
+        delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+          .IS_REACT_ACT_ENVIRONMENT;
+      } else {
+        (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean })
+          .IS_REACT_ACT_ENVIRONMENT = previousActEnvironment;
+      }
+    }
+  });
+
   it("历史记录回退时说明按当前文件 SHA 找到记录", () => {
     const detail: ProcessingRunDetail = {
       doc_id: "doc-1",

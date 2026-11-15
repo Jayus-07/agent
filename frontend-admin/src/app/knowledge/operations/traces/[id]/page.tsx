@@ -84,6 +84,15 @@ export default function DocTracePage() {
   const { id } = useParams<{ id: string }>(); const router = useRouter(); const searchParams = useSearchParams();
   const documentName = searchParams.get("documentName") || "";
   const documentIdParam = searchParams.get("docId") || "";
+  const returnTab = searchParams.get("returnTab") === "documents" || (!searchParams.has("returnTab") && Boolean(documentIdParam))
+    ? "documents"
+    : "operations";
+  const returnPageParam = Number(searchParams.get("returnPage") || "1");
+  const returnParams = new URLSearchParams({ tab: returnTab });
+  if (returnTab === "documents" && Number.isSafeInteger(returnPageParam) && returnPageParam > 1) {
+    returnParams.set("doc_page", String(returnPageParam));
+  }
+  const returnHref = `/knowledge/workbench?${returnParams.toString()}`;
   const fileHashParam = searchParams.get("fileHash") || "";
   const runIdParam = searchParams.get("runId") || "";
   const viewParam = searchParams.get("view") || "";
@@ -288,12 +297,14 @@ export default function DocTracePage() {
       detail={processingRun}
       documentName={documentName}
       historyFallback={processingRunHistoryFallback}
+      onBack={() => router.push(returnHref)}
+      backLabel={returnTab === "documents" ? "文档" : "操作日志"}
     />;
   }
   if (!trace) return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-2xl mx-auto px-6 py-10">
-        <button onClick={() => router.push("/knowledge/workbench?tab=documents")} className="text-xs text-slate-400 hover:text-slate-600">← 返回文档</button>
+        <button onClick={() => router.push(returnHref)} className="text-xs text-slate-400 hover:text-slate-600">← 返回{ returnTab === "documents" ? "文档" : "操作日志" }</button>
         <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-5">
           <div className="text-sm font-semibold text-amber-900">处理详情未留存</div>
           <p className="mt-2 text-sm text-slate-700">{documentName || "未记录文件名"}</p>
@@ -337,7 +348,7 @@ export default function DocTracePage() {
 
   return (
     <div className="flex-1 overflow-y-auto"><div className="max-w-3xl mx-auto px-6 py-8 space-y-5">
-      <button onClick={()=>router.push("/knowledge/workbench?tab=operations")} className="text-xs text-slate-400 hover:text-slate-600">← 返回操作日志</button>
+      <button onClick={()=>router.push(returnHref)} className="text-xs text-slate-400 hover:text-slate-600">← 返回{ returnTab === "documents" ? "文档" : "操作日志" }</button>
 
       {/* Overview */}
       <div>
