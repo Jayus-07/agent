@@ -263,6 +263,48 @@ def test_extract_sources_carries_pages_and_section():
     assert sources[0]["pages"] == [3, 5]
 
 
+def test_same_file_different_pages_keep_cited_references_and_sources():
+    formatter = CitationFormatter()
+    docs = [
+        _doc({
+            "index": 1, "source_file": "制度.pdf", "doc_type": "policy",
+            "doc_id": "policy-v1", "score": 0.91, "pages": "1",
+            "section_title": "适用范围",
+        }),
+        _doc({
+            "index": 2, "source_file": "制度.pdf", "doc_type": "policy",
+            "doc_id": "policy-v1", "score": 0.88, "pages": "4",
+            "section_title": "适用范围",
+        }),
+    ]
+    answer = "适用范围见 [E1]；例外条件见 [E2]。"
+
+    references = formatter.format_references(docs, answer)
+    sources = formatter.extract_sources(docs, answer)
+    evidence = formatter.extract_citation_evidence(docs, answer)
+
+    assert "1. **制度.pdf**" in references
+    assert "第 1 页" in references
+    assert "2. **制度.pdf**" in references
+    assert "第 4 页" in references
+    assert [(source["index"], source["pages"]) for source in sources] == [
+        (1, [1]), (2, [4]),
+    ]
+    parsed_sources = parse_sources_from_text(f"{answer}\n\n---\n{references}")
+    assert [(source["index"], source["pages"]) for source in parsed_sources] == [
+        (1, [1]), (2, [4]),
+    ]
+    assert [(item["index"], item["pages"]) for item in evidence] == [
+        (1, [1]), (2, [4]),
+    ]
+
+    # 没有正文引用时继续使用旧兜底：同一文件不重复列候选卡。
+    fallback_references = formatter.format_references(docs, "")
+    fallback_sources = formatter.extract_sources(docs, "")
+    assert fallback_references.count("**制度.pdf**") == 1
+    assert len(fallback_sources) == 1
+
+
 def test_format_references_line_carries_locality():
     """文本协议出口：参考文献行携带「第 X 页 · 章节」定位段。"""
     formatter = CitationFormatter()
@@ -300,6 +342,8 @@ def test_parse_sources_with_locality():
     )
     sources = parse_sources_from_text(text)
     by_name = {s["filename"]: s for s in sources}
+    assert by_name["报销制度.pdf"]["index"] == 1
+    assert by_name["使用指南.md"]["index"] == 2
     assert by_name["报销制度.pdf"]["doc_type"] == "policy"
     assert by_name["报销制度.pdf"]["pages"] == [3, 4]
     assert by_name["报销制度.pdf"]["section"] == "报销流程"
@@ -308,14 +352,48 @@ def test_parse_sources_with_locality():
     assert "pages" not in by_name["使用指南.md"]
 
 
+def test_parse_sources_preserves_citation_order():
+    text = (
+        "### 参考文献\n\n"
+        "2. **第二份.pdf** (制度规范)\n"
+        "1. **第一份.pdf** (制度规范)\n"
+    )
+
+    sources = parse_sources_from_text(text)
+
+    assert [source["index"] for source in sources] == [1, 2]
+    assert [source["filename"] for source in sources] == [
+        "第一份.pdf", "第二份.pdf",
+    ]
+
+
+def test_parse_sources_keeps_same_file_citations_for_different_pages():
+    text = (
+        "### 参考文献\n\n"
+        "1. **制度.pdf** (制度规范) — 第 1 页 · 适用范围 "
+        "<!--doc:manual-v1-->\n"
+        "2. **制度.pdf** (制度规范) — 第 4 页 · 报销流程 "
+        "<!--doc:manual-v1-->\n"
+    )
+
+    sources = parse_sources_from_text(text)
+
+    assert [(source["index"], source["filename"], source.get("pages"),
+             source.get("section")) for source in sources] == [
+        (1, "制度.pdf", [1], "适用范围"),
+        (2, "制度.pdf", [4], "报销流程"),
+    ]
+
+
 def test_parse_sources_legacy_line_unchanged():
-    """旧行格式解析结果与改造前一致（无 pages/section 键）。"""
+    """旧行格式继续解析，并保留引用号（无 pages/section 键）。"""
     text = (
         "### 参考文献\n\n"
         "1. **faq.md** (FAQ) — 相关度: 0.94\n"
     )
     sources = parse_sources_from_text(text)
     assert sources == [{
+        "index": 1,
         "filename": "faq.md",
         "doc_type": "faq",
         "type_label": "FAQ",
@@ -346,27 +424,78 @@ def test_extract_sources_carries_version_chain_marker():
         "score": 0.91,
         "doc_id": "refund-policy",
         "version_id": "v2",
+        "effective_from": "2026-01-01",
+        "effective_to": "2026-12-31",
         "supersedes_version_id": "v1",
     })]
 
     source = formatter.extract_sources(docs, "见 [E1]")[0]
 
     assert source["version_id"] == "v2"
+    assert source["effective_from"] == "2026-01-01"
+    assert source["effective_to"] == "2026-12-31"
     assert source["supersedes_version_id"] == "v1"
+
+
+def test_random_index_generation_is_not_shown_as_a_document_version():
+    formatter = CitationFormatter()
+    generated_id = "a1b2c3d4e5f67890"
+
+    for generation_metadata in (
+        {"index_generation": generated_id},
+        {},  # 兼容没有 index_generation 的旧 chunk
+    ):
+        doc = _doc({
+            "index": 1,
+            "source_file": "员工手册.pdf",
+            "doc_type": "policy",
+            "version_id": generated_id,
+            **generation_metadata,
+        })
+        sources = formatter.extract_sources([doc], "见 [E1]")
+        references = formatter.format_references([doc], "见 [E1]")
+
+        assert "version_id" not in sources[0]
+        assert "source_meta:" not in references
 
 
 def test_format_references_line_carries_doc_marker_and_parse_roundtrip():
     """参考文献行尾机器注释：Markdown 渲染不可见 + 文本解析可取回（往返一致）。"""
     formatter = CitationFormatter()
     docs = [_doc({"index": 1, "source_file": "报销制度.pdf", "doc_type": "policy",
-                  "score": 0.83, "pages": "3", "doc_id": "baoxiao-zhidu"})]
+                  "score": 0.83, "pages": "3", "doc_id": "baoxiao-zhidu",
+                  "version_id": "v2", "effective_from": "2026-01-01",
+                  "effective_to": "2026-12-31"})]
     text = formatter.format_references(docs, "")
     assert "<!--doc:baoxiao-zhidu-->" in text
+    assert (
+        "<!--source_meta:version_id=v2;effective_from=2026-01-01;"
+        "effective_to=2026-12-31-->" in text
+    )
     sources = parse_sources_from_text(text)
     assert sources[0]["doc_id"] == "baoxiao-zhidu"
     assert sources[0]["pages"] == [3]
+    assert sources[0]["version_id"] == "v2"
+    assert sources[0]["effective_from"] == "2026-01-01"
+    assert sources[0]["effective_to"] == "2026-12-31"
     # 旧行（无注释）解析不受影响
     legacy = formatter.format_references([_doc({"index": 1, "source_file": "faq.md",
                                                  "doc_type": "faq", "score": 0.7})], "")
     parsed = parse_sources_from_text(legacy)
     assert "doc_id" not in parsed[0]
+    assert "version_id" not in parsed[0]
+
+
+def test_format_references_escapes_source_metadata_comment_delimiters():
+    formatter = CitationFormatter()
+    version_id = "政策 v2 --> 已确认"
+    text = formatter.format_references([_doc({
+        "index": 1,
+        "source_file": "制度.pdf",
+        "doc_type": "policy",
+        "version_id": version_id,
+    })], "")
+    reference_line = next(line for line in text.splitlines() if "source_meta" in line)
+
+    assert reference_line.count("-->") == 1
+    assert parse_sources_from_text(text)[0]["version_id"] == version_id

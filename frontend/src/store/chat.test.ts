@@ -41,7 +41,9 @@ beforeEach(() => {
 describe('会话切换的临时状态隔离', () => {
   it.each(['switch', 'new', 'delete'] as const)('%s 不保留旧交接和澄清卡', (operation) => {
     const store = useChatStore.getState()
-    store.addStreamEvent({ event: 'clarification', data: { question: '旧问题', options: [] } }, 'local1')
+    store.addStreamEvent({ event: 'clarification', data: {
+      question: '旧问题', options: [], handoff_available: false, ts: Date.now(),
+    } }, 'local1')
     useChatStore.setState({ handoff: { target_domain: 'travel' } as any, deltaText: '旧内容', currentStatus: 'router' })
     if (operation === 'switch') store.switchSession('other')
     if (operation === 'new') store.newSession()
@@ -49,7 +51,9 @@ describe('会话切换的临时状态隔离', () => {
     expect(useChatStore.getState().handoff).toBeNull()
     expect(useChatStore.getState().clarification).toBeNull()
     expect(useChatStore.getState().deltaText).toBe('')
-    store.addStreamEvent({ event: 'clarification', data: { question: '晚到旧问题', options: [] } }, 'local1')
+    store.addStreamEvent({ event: 'clarification', data: {
+      question: '晚到旧问题', options: [], handoff_available: false, ts: Date.now(),
+    } }, 'local1')
     expect(useChatStore.getState().clarification).toBeNull()
   })
 
@@ -62,13 +66,39 @@ describe('会话切换的临时状态隔离', () => {
     await pending
     expect(useChatStore.getState().currentId).toBe(current)
   })
+
+  it('切走再切回后，过期历史请求仍不能抢走当前会话', async () => {
+    let complete!: (value: any[]) => void
+    mockedGetMessages.mockReturnValue(new Promise((resolve) => { complete = resolve }))
+    const pending = useChatStore.getState().loadHistory('old-remote')
+    useChatStore.getState().switchSession('other-session')
+    useChatStore.getState().switchSession('local1')
+    complete([{ role: 'assistant', content: '旧会话答案' }])
+    await pending
+    expect(useChatStore.getState().currentId).toBe('local1')
+    expect(useChatStore.getState().sessions.some((session) => session.id === 'old-remote')).toBe(true)
+  })
+
+  it('切走再切回后，过期历史失败不污染当前会话提示', async () => {
+    mockedGetMessages.mockRejectedValue(new Error('旧会话加载失败'))
+    const pending = useChatStore.getState().loadHistory('old-remote')
+    useChatStore.getState().switchSession('other-session')
+    useChatStore.getState().switchSession('local1')
+    await pending
+    expect(useChatStore.getState().historyError).toBeNull()
+  })
 })
 
 describe('loadHistory — 会话恢复', () => {
   it('远程会话不在本地 store 时新建会话实体（修复恢复失效根因）', async () => {
+    const sqlResults = [{
+      title: '本月销售额', columns: ['月份', '销售额'],
+      rows: [['2026-11', 12345]], total_rows: 1,
+      total_rows_known: false, omitted_columns: 0,
+    }]
     mockedGetMessages.mockResolvedValue([
       { role: 'user', content: '退货政策是什么？' },
-      { role: 'assistant', content: '七天内可退。' },
+      { role: 'assistant', content: '七天内可退。', sql_results: sqlResults },
     ])
 
     await useChatStore.getState().loadHistory('remote-session-1')
@@ -78,9 +108,73 @@ describe('loadHistory — 会话恢复', () => {
     expect(restored).toBeDefined()
     expect(restored!.messages).toHaveLength(2)
     expect(restored!.messages[0].content).toBe('退货政策是什么？')
+    expect(restored!.messages[1].sqlResults).toEqual(sqlResults)
     expect(restored!.title).toBe('退货政策是什么？')
     expect(state.currentId).toBe('remote-session-1')
     expect(state.historyError).toBeNull()
+  })
+
+  it('恢复 RAG 来源、拒答状态和低置信提示元数据', async () => {
+    const sources = [{
+      index: 1,
+      filename: '员工手册.pdf',
+      doc_type: 'policy',
+      type_label: '制度',
+      score: 0.52,
+      pages: [4],
+      section: '请假制度',
+      doc_id: 'policy-doc',
+      version_id: 'v2',
+      effective_from: '2026-01-01',
+      effective_to: '2026-12-31',
+    }]
+    mockedGetMessages.mockResolvedValue([
+      { role: 'user', content: '年假怎么申请？' },
+      {
+        role: 'assistant', content: '请按员工手册流程申请。', sources,
+        answer_status: 'rag_retrieval_degraded', confidence: 0.42,
+        reply_source: 'knowledge_base',
+      },
+    ])
+
+    await useChatStore.getState().loadHistory('remote-rag-session')
+
+    const restored = useChatStore.getState().sessions
+      .find((session) => session.id === 'remote-rag-session')!.messages[1]
+    expect(restored.sources).toEqual(sources)
+    expect(restored.answerStatus).toBe('rag_retrieval_degraded')
+    expect(restored.confidence).toBe(0.42)
+    expect(restored.replySource).toBe('knowledge_base')
+  })
+
+  it('去重相同回答时保留后续副本的 SQL 卡片和 RAG 引用元数据', async () => {
+    const sqlResults = [{
+      title: '本月销售额', columns: ['月份', '销售额'],
+      rows: [['2026-11', 12345]], total_rows: 1, omitted_columns: 0,
+    }]
+    const sources = [{
+      index: 1, filename: '员工手册.pdf', doc_type: 'policy', type_label: '制度',
+      score: 0.52, pages: [4], section: '请假制度', doc_id: 'policy-doc',
+    }]
+    mockedGetMessages.mockResolvedValue([
+      { role: 'user', content: '本月销售额是多少？' },
+      { role: 'assistant', content: '本月销售额为 12,345。' },
+      {
+        role: 'assistant', content: '本月销售额为 12,345。', sql_results: sqlResults,
+        sources, answer_status: 'answered', confidence: 0.91, reply_source: 'tool',
+      },
+    ])
+
+    await useChatStore.getState().loadHistory('remote-duplicate-session')
+
+    const messages = useChatStore.getState().sessions
+      .find((session) => session.id === 'remote-duplicate-session')!.messages
+    expect(messages).toHaveLength(2)
+    expect(messages[1].sqlResults).toEqual(sqlResults)
+    expect(messages[1].sources).toEqual(sources)
+    expect(messages[1].answerStatus).toBe('answered')
+    expect(messages[1].confidence).toBe(0.91)
+    expect(messages[1].replySource).toBe('tool')
   })
 
   it('已存在的会话只替换消息，不重复创建', async () => {
@@ -305,6 +399,23 @@ describe('removeLastAssistant / replaceLastAssistant — 重新生成支撑', ()
     expect(msgs[1].content).toBe('新回答')
     expect(msgs[1].thinking).toBe('思考全文')
     expect(msgs[1].thinkingSeconds).toBe(8)
+  })
+
+  it('replaceLastAssistant 固化 SQL 结构化结果卡片数据', () => {
+    seedTurn()
+    const sqlResults = [{
+      title: '本月销售额',
+      columns: ['月份', '销售额'],
+      rows: [['2026-11', 12345]],
+      total_rows: 1,
+      omitted_columns: 0,
+    }]
+    useChatStore.getState().replaceLastAssistant(
+      '本月销售额为 12,345。', 'local1', undefined, undefined,
+      undefined, undefined, undefined, undefined, undefined, sqlResults,
+    )
+    const msgs = useChatStore.getState().sessions.find((s) => s.id === 'local1')!.messages
+    expect(msgs[1].sqlResults).toEqual(sqlResults)
   })
 
   it('replaceLastAssistant 不传 thinking 时保留原值（error 中断路径不丢思考链）', () => {

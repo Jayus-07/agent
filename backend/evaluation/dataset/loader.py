@@ -312,6 +312,10 @@ def load_dataset_file(filename: str, default_module: str = "rag") -> list[TestCa
     file_path = DATASET_DIR / filename
     if not file_path.exists():
         raise FileNotFoundError(f"测试集文件不存在: {file_path}")
+    # 版本化候选集显式传入 --dataset 时也必须遵守 canonical manifest 锁；
+    # 否则从 load_dataset(module) 绕开 loader 会让内容漂移静默进入评测。
+    if file_path.name == "cases.jsonl" and (file_path.parent / "manifest.json").exists():
+        verify_dataset_integrity(default_module, file_path.parent)
     if filename.endswith(".jsonl"):
         return _load_jsonl(file_path, default_module=default_module)
     return _load_from_path(file_path, default_module=default_module)

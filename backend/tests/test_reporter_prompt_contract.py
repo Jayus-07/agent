@@ -12,13 +12,19 @@
 2. 单步骤 dict 输出不透传，走 LLM/渲染路径
 3. 一句话总结走 reporter.summary 模板并限制 max_tokens
 """
+from decimal import Decimal
+from types import SimpleNamespace
+
 import pytest
 
 # 循环导入规避：同 test_reporter_degraded.py 的说明
 import backend.orchestration.graph  # noqa: F401
 
 from backend.agents.reporter import reporter as reporter_mod
-from backend.agents.reporter.reporter import generate_final_answer
+from backend.agents.reporter.reporter import (
+    _build_data_summary,
+    generate_final_answer,
+)
 
 
 def _sql_step():
@@ -85,6 +91,7 @@ class TestFullLLMPathPromptContract:
         msgs = fake_llm.calls[0]
         assert msgs[0][0] == "system"
         assert "禁止编造" in msgs[0][1], "reporter.system 禁编造规则未到达 LLM"
+        assert "不得新增、改写或借用其他来源编号" in msgs[0][1]
         assert "只能基于以下内容" in msgs[1][1]
         assert answer == "总结" or "总结" in answer
 
@@ -153,3 +160,261 @@ class TestOneLinerSummary:
         # 模板渲染成功（data_summary 变量对齐，含 row_count 摘要）
         assert fake_llm.calls
         assert "## 总结" in answer or "##" in answer
+
+    def test_caller_contract_survives_legacy_active_summary_prompt(
+        self, fake_llm, monkeypatch,
+    ):
+        """旧版数据库模板忽略新变量时，调用层仍传入问题和数据边界。"""
+        class LegacyPromptService:
+            def render_sync(self, prompt_key, **kwargs):
+                assert prompt_key == "reporter.summary"
+                return SimpleNamespace(
+                    text=f"根据以下数据作摘要：\n{kwargs['data_summary']}"
+                )
+
+        monkeypatch.setattr(
+            reporter_mod, "prompt_service", LegacyPromptService(),
+        )
+        sql = {
+            "capability": "sql.query", "description": "商品销售额排名",
+            "status": "success",
+            "output": {
+                "columns": ["商品", "销售额"],
+                "rows": [{"商品": "商品 A", "销售额": 100}],
+                "row_count": 20,
+            },
+        }
+        insight = {
+            "capability": "business.analyze", "description": "分析",
+            "status": "success", "output": {"summary": "排名待核实"},
+        }
+
+        generate_final_answer(
+            "哪个商品销售额最高？", {"s1": sql, "s2": insight},
+            context_filter=False,
+        )
+
+        prompt = fake_llm.calls[-1]
+        assert "哪个商品销售额最高？" in prompt
+        assert "商品 A" in prompt
+        assert "SQL 摘要强制规则" in prompt
+        assert "只根据已核实的数据作答" in prompt
+        assert "预览或样例不能证明全量排名" in prompt
+        assert "只有明确确认总数为 0 才能说没有匹配记录" in prompt
+
+    def test_sql_one_liner_receives_user_question_and_actual_result_values(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "2026年11月销售额",
+            "status": "success",
+            "output": {
+                "status": "success",
+                "data": {
+                    "columns": ["月份", "销售额（元）"],
+                    "rows": [{"月份": "2026-11", "销售额（元）": 12345}],
+                    "total": 1,
+                },
+            },
+        }
+        insight = {"capability": "business.analyze", "description": "分析",
+                   "status": "success", "output": {"summary": "结果已核对"}}
+
+        generate_final_answer(
+            "2026年11月的销售额是多少？", {"s1": sql, "s2": insight},
+            context_filter=False,
+        )
+
+        prompt = fake_llm.calls[-1]
+        assert "2026年11月的销售额是多少？" in prompt
+        assert "2026-11" in prompt
+        assert "销售额（元）=12345" in prompt
+        assert "本次查询返回 1 行" in prompt
+        assert "全部结果，共 1 行" not in prompt
+        assert "不编造或推算数值、单位、时间范围和趋势" in prompt
+
+    def test_sql_one_liner_supports_direct_agent_rows(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "本月订单金额",
+            "status": "success",
+            "output": {
+                "columns": ["订单号", "金额（元）"],
+                "rows": [{"订单号": "A-17", "金额（元）": 560}],
+                "row_count": 1,
+            },
+        }
+        insight = {"capability": "business.analyze", "description": "分析",
+                   "status": "success", "output": {"summary": "结果已核对"}}
+
+        generate_final_answer("A-17 订单金额是多少？", {"s1": sql, "s2": insight},
+                              context_filter=False)
+
+        prompt = fake_llm.calls[-1]
+        assert "A-17" in prompt
+        assert "金额（元）=560" in prompt
+
+    def test_sql_one_liner_does_not_call_unavailable_detail_an_empty_result(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "订单查询",
+            "status": "success", "output": {"summary": "结果已转存"},
+        }
+        insight = {"capability": "business.analyze", "description": "分析",
+                   "status": "success", "output": {"summary": "结果已核对"}}
+
+        generate_final_answer("查一下订单", {"s1": sql, "s2": insight},
+                              context_filter=False)
+
+        prompt = fake_llm.calls[-1]
+        assert "当前没有可展示明细，无法确认是否有匹配记录" in prompt
+        assert "只有数据明确确认总数为 0 时，才说“没有匹配记录”" in prompt
+        assert "不得把空明细当作 0 行" in prompt
+
+    def test_confirmed_zero_rows_remain_explicitly_identified(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "订单查询",
+            "status": "success", "output": {"rows": [], "row_count": 0},
+        }
+        insight = {"capability": "business.analyze", "description": "分析",
+                   "status": "success", "output": {"summary": "结果已核对"}}
+
+        generate_final_answer("查一下订单", {"s1": sql, "s2": insight},
+                              context_filter=False)
+
+        prompt = fake_llm.calls[-1]
+        assert "共 0 行，无匹配记录" in prompt
+        assert "只有数据明确确认总数为 0 时，才说“没有匹配记录”" in prompt
+
+    def test_sql_one_liner_does_not_call_missing_preview_no_matches(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "订单查询",
+            "status": "success", "output": {"rows": [], "total": 12},
+        }
+        insight = {"capability": "business.analyze", "description": "分析",
+                   "status": "success", "output": {"summary": "结果已核对"}}
+
+        generate_final_answer("查一下订单", {"s1": sql, "s2": insight},
+                              context_filter=False)
+
+        prompt = fake_llm.calls[-1]
+        assert "共 12 行，但当前摘要未取得明细" in prompt
+        assert "无匹配记录" not in prompt
+
+    def test_preview_rows_cannot_support_full_result_ranking(self, fake_llm):
+        sql = {
+            "capability": "sql.query", "description": "商品销售排名",
+            "status": "success",
+            "output": {
+                "columns": ["商品", "销售额"],
+                "rows": [
+                    {"商品": f"商品{i}", "销售额": 100 - i}
+                    for i in range(5)
+                ],
+                "row_count": 20,
+            },
+        }
+        insight = {
+            "capability": "business.analyze", "description": "分析",
+            "status": "success", "output": {"summary": "排序需求"},
+        }
+
+        generate_final_answer(
+            "哪个商品销售额最高？", {"s1": sql, "s2": insight},
+            context_filter=False,
+        )
+
+        prompt = fake_llm.calls[-1]
+        assert "预览，仅列出 3 / 20 行" in prompt
+        assert "不能据此判断全量排名或趋势" in prompt
+        assert "商品4" not in prompt
+        assert "标为“预览”或“样例”的行不代表全部结果" in prompt
+
+    def test_reported_total_smaller_than_rows_is_marked_inconsistent(self):
+        summary = _build_data_summary({
+            "s1": {
+                "capability": "sql.query", "description": "订单查询",
+                "status": "success",
+                "output": {
+                    "columns": ["订单号"],
+                    "rows": [{"订单号": "A"}, {"订单号": "B"}],
+                    "row_count": 1,
+                },
+            },
+        })
+
+        assert "行数不一致（报告 1 行，返回 2 行）" in summary
+        assert "范围未确认" in summary
+        assert "全部结果" not in summary
+
+    def test_empty_rows_without_total_are_not_called_no_matches(self):
+        summary = _build_data_summary({
+            "s1": {
+                "capability": "sql.query", "description": "订单查询",
+                "status": "success",
+                "output": {"columns": ["订单号"], "rows": []},
+            },
+        })
+
+        assert "无法确认是否有匹配记录" in summary
+        assert "无匹配记录" not in summary
+
+    def test_sql_one_liner_does_not_use_truncated_long_decimal(self, fake_llm):
+        long_amount_text = "12345678901234567890" * 4 + ".1234"
+        amount = Decimal(long_amount_text)
+        sql = {
+            "capability": "sql.query", "description": "高精度金额",
+            "status": "success",
+            "output": {
+                "columns": ["金额"],
+                "rows": [{"金额": amount}],
+                "row_count": 1,
+            },
+        }
+        insight = {
+            "capability": "business.analyze", "description": "分析",
+            "status": "success", "output": {"summary": "结果已核对"},
+        }
+
+        generate_final_answer(
+            "高精度金额是多少？", {"s1": sql, "s2": insight},
+            context_filter=False,
+        )
+
+        prompt = fake_llm.calls[-1]
+        assert "金额=[值过长，未纳入摘要；请查看结果明细]" in prompt
+        assert long_amount_text[:80] not in prompt
+        assert "不得猜测、推算或引用被省略的内容" in prompt
+
+    def test_data_summary_budget_drops_whole_facts_and_marks_omission(self):
+        value = "1234567890" * 8
+        columns = [f"指标{i}" for i in range(6)]
+        row = {column: value for column in columns}
+        step_results = {
+            f"s{i}": {
+                "capability": "sql.query",
+                "description": f"查询{i}",
+                "status": "success",
+                "output": {
+                    "columns": columns,
+                    "rows": [row, row, row],
+                    "row_count": 3,
+                },
+            }
+            for i in range(4)
+        }
+
+        summary = _build_data_summary(step_results)
+
+        assert len(summary) <= 4000
+        assert summary.endswith("后续结果因摘要长度限制未纳入，请查看结果明细")
+        assert "查询3：" not in summary
+
+    def test_long_business_summary_is_omitted_as_a_whole(self):
+        long_summary = "销售额为 123 元；" * 12
+        summary = _build_data_summary({
+            "insight": {
+                "capability": "business.analyze",
+                "status": "success",
+                "output": {"summary": long_summary},
+            },
+        })
+
+        assert "摘要内容过长，未纳入一句话总结；请查看结果明细" in summary
+        assert long_summary[:80] not in summary

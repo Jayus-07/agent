@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import quote
 from typing import Optional
 
 from backend.rag.preprocessing.taxonomy_spec import doc_type_label
@@ -92,6 +93,38 @@ def _format_locality(meta: dict) -> str:
     if section:
         segs.append(section)
     return " · ".join(segs)
+
+
+def _display_version_id(meta: dict) -> str:
+    """只返回可读的资料版本，不把随机索引代次伪装成版本号。"""
+    version_id = str(meta.get("version_id") or "").strip()
+    if not version_id:
+        return ""
+
+    index_generation = str(meta.get("index_generation") or "").strip()
+    if version_id == index_generation:
+        return ""
+    # 上传流程在未声明资料版本时以 uuid4().hex[:16] 作为追溯代次；兼容
+    # 缺少 index_generation 字段的旧向量时，不把该随机值展示成业务版本。
+    if re.fullmatch(r"[0-9a-f]{16}", version_id):
+        return ""
+    return version_id
+
+
+def _format_source_metadata_marker(meta: dict) -> str:
+    """将可展示的版本字段编码到隐藏引用标记，供 Reporter 解析。"""
+    fields = []
+    for name in ("version_id", "effective_from", "effective_to"):
+        value = (
+            _display_version_id(meta)
+            if name == "version_id"
+            else str(meta.get(name) or "").strip()
+        )
+        if value:
+            fields.append(f"{name}={quote(value, safe='')}")
+    if not fields:
+        return ""
+    return f" <!--source_meta:{';'.join(fields)}-->"
 
 
 class CitationFormatter:
@@ -340,7 +373,8 @@ class CitationFormatter:
 
         cited = self._extract_cited_indexes(answer)
 
-        seen: dict[str, tuple[int, dict]] = {}
+        # 引用编号按检索 chunk 分配；同名文件不同页是不同证据，不能按文件名合并。
+        seen: dict[object, tuple[int, dict]] = {}
         for doc in docs:
             idx = doc.metadata.get("index")
             fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
@@ -349,9 +383,10 @@ class CitationFormatter:
             # 有引用标注时仅保留文中实际引用的来源
             if cited and idx not in cited:
                 continue
-            # 无引用标注（兜底）：展示所有 verified docs
-            if fname not in seen:
-                seen[fname] = (idx, doc.metadata)
+            # 有引用时按编号逐条对应；无引用的兜底仍按文件去重，避免重复候选卡。
+            identity = idx if cited else fname
+            if identity not in seen:
+                seen[identity] = (idx, doc.metadata)
 
         if not seen:
             return ""
@@ -378,6 +413,9 @@ class CitationFormatter:
             doc_id = str(meta.get("doc_id", "") or "").strip()
             if doc_id:
                 parts.append(f" <!--doc:{doc_id}-->")
+            metadata_marker = _format_source_metadata_marker(meta)
+            if metadata_marker:
+                parts.append(metadata_marker)
             lines.append("".join(parts))
 
         return "\n".join(lines)
@@ -393,7 +431,7 @@ class CitationFormatter:
 
         cited = self._extract_cited_indexes(answer)
 
-        seen: dict[str, dict] = {}
+        seen: dict[object, dict] = {}
         for doc in docs:
             idx = doc.metadata.get("index")
             fname = doc.metadata.get("source_file", doc.metadata.get("source", ""))
@@ -402,7 +440,9 @@ class CitationFormatter:
             # 有引用标注时仅保留文中实际引用的来源；无引用时兜底展示全部
             if cited and idx not in cited:
                 continue
-            if fname not in seen:
+            # 显式引用逐编号保留页码；无引用兜底按文件去重，避免重复候选来源卡。
+            identity = idx if cited else fname
+            if identity not in seen:
                 doc_type = doc.metadata.get("doc_type", "")
                 score = doc.metadata.get("score",
                                          doc.metadata.get("rerank_score",
@@ -433,20 +473,24 @@ class CitationFormatter:
                     source["doc_id"] = doc_id
                 # 版本快照（A3）：REST 与 chat SourceCard 都必须能回答
                 # 「这条答案使用的是哪一版」，不能只依赖 detail 端点补查。
-                version_id = str(doc.metadata.get("version_id", "") or "").strip()
+                version_id = _display_version_id(doc.metadata)
                 if version_id:
                     source["version_id"] = version_id
+                for field in ("effective_from", "effective_to"):
+                    value = str(doc.metadata.get(field, "") or "").strip()
+                    if value:
+                        source[field] = value
                 supersedes = str(
                     doc.metadata.get("supersedes_version_id", "") or ""
                 ).strip()
                 if supersedes:
                     source["supersedes_version_id"] = supersedes
-                seen[fname] = source
+                seen[identity] = source
 
         return sorted(seen.values(), key=lambda s: s.get("index", 0))
 
     def extract_citation_evidence(self, docs: list, answer: str = "") -> list[dict]:
-        """提取回答实际引用的 chunk 来源，不按文件名合并不同章节。"""
+        """提取回答实际引用的证据，按页码/章节定位区分同一文件的来源。"""
         if not docs:
             return []
 
@@ -456,7 +500,7 @@ class CitationFormatter:
             return []
 
         evidence: list[dict] = []
-        seen: set[tuple[str, str, str, str]] = set()
+        seen: set[tuple[str, str, tuple[int, ...], str, str]] = set()
         for doc in docs:
             metadata = getattr(doc, "metadata", None)
             if not isinstance(metadata, dict):
@@ -475,10 +519,14 @@ class CitationFormatter:
                 "section": str(metadata.get("section_title") or "").strip(),
                 "version_id": str(metadata.get("version_id") or ""),
             }
+            pages = _parse_pages_raw(str(metadata.get("pages") or ""))
+            if pages:
+                source["pages"] = pages
             identity = (
-                source["doc_id"], source["filename"],
+                source["doc_id"], source["filename"], tuple(pages),
                 source["section"], source["version_id"],
             )
+            # 同一文档不同页必须分开；同页同章节的重复 chunk 可以合并。
             if identity in seen:
                 continue
             seen.add(identity)

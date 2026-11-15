@@ -433,6 +433,9 @@ def _snapshot_suite_mtimes(config: EvalConfig) -> dict[str, float]:
     """C9-4/CON-05：运行开始时记录 suite 相关文件的 mtime。"""
     from backend.evaluation.dataset.loader import DATASET_DIR
 
+    if config.dataset and config.module == "sql":
+        return {}
+
     paths: list = []
     if config.selection:
         paths.append(DATASET_DIR / "rag" / "suites" / f"{config.selection}.json")
@@ -548,7 +551,12 @@ class EvaluationService:
         # SQL/E2E 数据集损坏。
         from backend.evaluation.preflight import run_schema_preflight_strict
 
-        if config.dataset:
+        if config.dataset and config.module == "sql" and config.selection:
+            raise ValueError("SQL 自定义评测集不能与 RAG suite --selection 同时使用")
+        if config.dataset and config.module == "sql":
+            schema_modules = ["sql"]
+            schema_dataset_path = config.dataset
+        elif config.dataset:
             schema_modules = ["rag"]
             schema_dataset_path = None if config.selection else config.dataset
         else:
@@ -694,7 +702,7 @@ class EvaluationService:
         # C9-4/CON-05：运行期 suite 文件 mtime 基线（结束时比对告警）
         suite_mtime_baseline = _snapshot_suite_mtimes(config)
 
-        if config.dataset:
+        if config.dataset and config.module != "sql":
             if config.selection:
                 cases = load_dataset("rag", selection=config.selection)
             else:
@@ -829,7 +837,10 @@ class EvaluationService:
         report_metadata: dict[str, Any] = {"run_id": run_id}
 
         for m in module_kinds:
-            cases = load_dataset(m, selection=config.selection)
+            if config.dataset and config.module == m:
+                cases = load_dataset_file(config.dataset, default_module=m)
+            else:
+                cases = load_dataset(m, selection=config.selection)
             if config.smoke:
                 cases = cases[:5]
             cases = _filter_cases_by_tier(cases, config.tier)
@@ -847,6 +858,23 @@ class EvaluationService:
                 runner_kwargs.update(eval_scope=scope, run_id=run_id)
                 report_metadata["evaluation_scope"] = scope.as_dict()
                 report_metadata["dataset_version"] = dataset_version
+            elif config.dataset and config.module == m:
+                report_metadata["dataset_file"] = config.dataset
+                if cases:
+                    report_metadata["dataset_version"] = cases[0].metadata.get(
+                        "dataset_version",
+                    )
+                if not config.dataset.startswith("managed:"):
+                    from backend.evaluation.dataset.loader import (
+                        DATASET_DIR,
+                        file_content_hash,
+                    )
+
+                    dataset_path = DATASET_DIR / config.dataset
+                    if dataset_path.is_file():
+                        report_metadata["dataset_content_hash"] = file_content_hash(
+                            dataset_path,
+                        )
             if m == "cs":
                 runner_kwargs['mode'] = config.cs_mode
                 report_metadata['cs_mode'] = config.cs_mode

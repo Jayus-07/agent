@@ -230,7 +230,10 @@ def test_remote_chat_rag_can_defer_memory_to_parent_runner(monkeypatch):
 def test_partial_retrieval_answer_discloses_incomplete_retrieval(
     monkeypatch, partial_marker,
 ):
-    """有部分检索证据时保留回答，同时告知用户结果可能不完整。"""
+    """部分检索保留答案，并把降级状态传入请求元数据和 Trace。"""
+    from backend.rag.context import clear_context, get_context
+
+    clear_context()
     chain = _stub_chain()
     chain._verify = lambda *_args: "基于现有资料的答案"
     chain._verify_claims = lambda answer, _docs: answer
@@ -249,6 +252,9 @@ def test_partial_retrieval_answer_discloses_incomplete_retrieval(
 
     assert answer.startswith("提示：部分知识库检索路径未能完成")
     assert "基于现有资料的答案" in answer
+    assert get_context().meta["answer_status"] == "rag_retrieval_degraded"
+    assert trace.metadata["answer_status"] == "rag_retrieval_degraded"
+    clear_context()
 
 
 def _start_trace(name: str):

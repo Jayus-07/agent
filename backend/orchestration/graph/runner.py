@@ -36,6 +36,7 @@ from backend.infra.llm.proxy import reset_stream_sink
 from backend.orchestration.graph.builder import _parse_event
 from backend.orchestration.graph.events import (
     emit_delta_events,
+    extract_answer_presentation_metadata,
     make_done_event,
     make_initial_state,
     make_step_log_event,
@@ -1289,6 +1290,11 @@ class GraphRunner:
                         # D9：抽取任务可回溯产生它的请求 trace
                         "trace_id": str(trace.id or ""),
                     }
+                    answer_metadata = extract_answer_presentation_metadata(
+                        answer, ctx["all_step_results"],
+                    )
+                    if answer_metadata:
+                        memory_kwargs["answer_metadata"] = answer_metadata
                     if idempotency_key:
                         memory_kwargs["idempotency_key"] = idempotency_key
                     self._memory.end_turn(

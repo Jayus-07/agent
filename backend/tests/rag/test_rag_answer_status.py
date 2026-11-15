@@ -17,7 +17,10 @@ import types
 import pytest
 
 from backend.orchestration.graph.event_schema import validate_frame
-from backend.orchestration.graph.events import make_done_event
+from backend.orchestration.graph.events import (
+    extract_answer_presentation_metadata,
+    make_done_event,
+)
 from backend.rag.citation import CitationFormatter
 from backend.rag.evidence_gate import (
     GateDecision,
@@ -246,6 +249,95 @@ def test_make_done_event_falls_back_to_step_output():
     evt = make_done_event("重写后的回答正文", sr, start_time=0.0)
     assert evt["data"]["confidence"] == 0.42
     assert "answer_status" not in evt["data"]
+
+
+def test_make_done_event_keeps_source_indexes_for_citation_cards():
+    """RAG 步骤的参考文献编号应原样进入 SSE done.sources。"""
+    rag_output = (
+        "回答正文见 [2] 和 [1]。\n\n---\n\n### 参考文献\n\n"
+        "2. **第二份.pdf** (制度规范) — 第 4 页 <!--doc:doc-2-->\n"
+        "1. **第一份.pdf** (制度规范) — 第 2 页 <!--doc:doc-1-->\n"
+    )
+    sr = {"1": {
+        "step_id": "1", "capability": "rag.search", "status": "success",
+        "output": rag_output,
+    }}
+
+    event = make_done_event("重写后的回答正文", sr, start_time=0.0)
+
+    assert [source["index"] for source in event["data"]["sources"]] == [1, 2]
+    assert [source["filename"] for source in event["data"]["sources"]] == [
+        "第一份.pdf", "第二份.pdf",
+    ]
+    assert [source["doc_id"] for source in event["data"]["sources"]] == [
+        "doc-1", "doc-2",
+    ]
+
+
+def test_make_done_event_keeps_same_file_citations_for_different_pages():
+    rag_output = (
+        "回答正文分别引用 [E1] 和 [E2]。\n\n---\n\n### 参考文献\n\n"
+        "1. **制度.pdf** (制度规范) — 第 1 页 · 适用范围 "
+        "<!--doc:policy-v1-->\n"
+        "2. **制度.pdf** (制度规范) — 第 4 页 · 适用范围 "
+        "<!--doc:policy-v1-->\n"
+    )
+    steps = {"1": {
+        "step_id": "1", "capability": "rag.search", "status": "success",
+        "output": rag_output,
+    }}
+
+    event = make_done_event("回答正文分别引用 [E1] 和 [E2]。", steps, start_time=0.0)
+
+    assert [(source["index"], source["filename"], source["pages"])
+            for source in event["data"]["sources"]] == [
+        (1, "制度.pdf", [1]), (2, "制度.pdf", [4]),
+    ]
+
+
+def test_answer_presentation_metadata_matches_sse_for_history_restore():
+    rag_output = (
+        '<!--RAGMETA{"answer_status":"rag_retrieval_degraded",'
+        '"confidence":0.42}-->\n回答正文依据有限。\n\n'
+        "### 参考文献\n\n"
+        "1. **员工手册.pdf** (制度规范) — 第 4 页 · 请假制度 "
+        "<!--doc:policy-doc--><!--source_meta:version_id=v2;"
+        "effective_from=2026-01-01;effective_to=2026-12-31-->\n"
+    )
+    steps = {"1": {
+        "step_id": "1", "capability": "rag.search", "status": "success",
+        "output": rag_output,
+    }}
+
+    history_metadata = extract_answer_presentation_metadata("回答正文依据有限。", steps)
+    done_data = make_done_event(
+        "回答正文依据有限。", steps, start_time=0.0,
+    )["data"]
+
+    assert history_metadata["answer_status"] == "rag_retrieval_degraded"
+    assert history_metadata["confidence"] == 0.42
+    assert history_metadata["reply_source"] == "knowledge_base"
+    assert history_metadata["sources"][0]["doc_id"] == "policy-doc"
+    assert history_metadata["sources"][0]["version_id"] == "v2"
+    assert history_metadata["sources"][0]["effective_from"] == "2026-01-01"
+    assert history_metadata["sources"][0]["effective_to"] == "2026-12-31"
+    assert {key: done_data[key] for key in history_metadata} == history_metadata
+
+    from datetime import datetime, timezone
+    from backend.memory.service import _history_message_payload
+
+    row = types.SimpleNamespace(
+        id=1,
+        role="assistant",
+        content="回答正文依据有限。",
+        created_at=datetime(2026, 11, 15, tzinfo=timezone.utc),
+        message_metadata={"response_metadata": history_metadata},
+    )
+    history_payload = _history_message_payload(row)
+
+    assert history_payload["sources"] == done_data["sources"]
+    assert history_payload["answer_status"] == done_data["answer_status"]
+    assert history_payload["confidence"] == done_data["confidence"]
 
 
 def test_make_done_event_without_marker_has_no_status_keys():

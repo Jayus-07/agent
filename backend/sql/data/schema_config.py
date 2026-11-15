@@ -97,7 +97,7 @@ SCHEMA_CONFIG: Dict[str, Any] = {
                 "price":      "单价 (NUMERIC)",
                 "cost":       "成本 (NUMERIC, 用于利润分析)",
             },
-            "description": "订单明细表 — 一个订单多个商品，一对多。",
+            "description": "订单明细表 — 一个订单多个商品，一对多；明细销售额按数量×单价计算。",
         },
         "order.refunds": {
             "columns": {
@@ -108,7 +108,7 @@ SCHEMA_CONFIG: Dict[str, Any] = {
                 "reason":        "退款原因 (VARCHAR)",
                 "created_at":    "退款时间 (TIMESTAMP)",
             },
-            "description": "退款表。Agent: 高退款率商品分析。",
+            "description": "退款记录表。商品级退款率按退款金额/商品销售额计算；两侧分别聚合后再关联。",
         },
 
         # ═══ 库存域 inventory ═══

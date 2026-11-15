@@ -8,6 +8,7 @@ CrossEncoder 不可用时自动降级为 BM25 关键词匹配。
 """
 
 import re
+from urllib.parse import unquote
 
 from backend.config import RERANKER_THRESHOLD as _CONTEXT_RELEVANCE_THRESHOLD
 from backend.rag.preprocessing.taxonomy_spec import DOC_TYPE_LABELS
@@ -178,11 +179,12 @@ def filter_by_bm25(step_results: dict, question: str) -> dict:
 # 定位段可整体缺省；tempered dot「每个字符都不得落在相关度内」防回溯
 # 把「— 相关度」吞进定位段（普通负向先行在可选组回退下会失效，实测踩坑）。
 _RE_REF_LINE = re.compile(
-    r'\d+\.\s*\*\*(?P<fname>.+?)\*\*'
+    r'(?P<index>\d+)\.\s*\*\*(?P<fname>.+?)\*\*'
     r'(?:\s*\((?P<label>[^)]*)\))?'
     r'(?:\s*—\s*(?P<locality>(?:(?!相关度).)+?))?'
     r'(?:\s*—\s*相关度:\s*(?P<score>[\d.]+))?'
     r'(?:\s*<!--doc:(?P<doc_id>[0-9A-Za-z_\-]+)-->)?'
+    r'(?:\s*<!--source_meta:(?P<source_meta>[^>]*)-->)?'
     r'\s*$'
 )
 
@@ -236,9 +238,12 @@ def parse_sources_from_text(text: str) -> list[dict]:
                         section = tail.strip()
                     elif not pages:
                         section = head.strip()
-                if fname and fname not in seen:
+                # 同名文件可对应不同页/章节，先按引用编号保留；证据去重由上层按定位判断。
+                citation_index = int(m.group("index"))
+                if fname and citation_index not in seen:
                     doc_type = _TYPE_LABEL_TO_DOC_TYPE.get(label, "general")
                     source = {
+                        "index": citation_index,
                         "filename": fname,
                         "doc_type": doc_type,
                         "type_label": label or doc_type,
@@ -252,10 +257,22 @@ def parse_sources_from_text(text: str) -> list[dict]:
                     doc_id = (m.group("doc_id") or "").strip()
                     if doc_id:
                         source["doc_id"] = doc_id
-                    seen[fname] = source
+                    source_meta = m.group("source_meta") or ""
+                    allowed_meta = {
+                        "version_id": 128,
+                        "effective_from": 64,
+                        "effective_to": 64,
+                    }
+                    for item in source_meta.split(";"):
+                        key, separator, value = item.partition("=")
+                        if separator and key in allowed_meta:
+                            decoded = unquote(value).strip()
+                            if decoded:
+                                source[key] = decoded[:allowed_meta[key]]
+                    seen[citation_index] = source
         break
 
-    return sorted(seen.values(), key=lambda s: s["filename"])
+    return sorted(seen.values(), key=lambda s: s["index"])
 
 
 __all__ = [

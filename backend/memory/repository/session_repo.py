@@ -111,6 +111,7 @@ class SessionRepository:
 
     async def save_turn(self, session_id: str, question: str, answer: str,
                         product: str = PRODUCT_DEFAULT,
+                        assistant_metadata: dict | None = None,
                         ) -> tuple[ChatMessage, ChatMessage]:
         # GraphRunner.end_turn 的真实落库入口走受控消息编解码；工具协议消息
         # 只有在执行图实际提供 LangChain ToolMessage 时才单独持久化。
@@ -119,7 +120,9 @@ class SessionRepository:
             session_id, HumanMessage(content=question), product=product,
         )
         a = await self.save_langchain_message(
-            session_id, AIMessage(content=answer), product=product,
+            session_id,
+            AIMessage(content=answer, response_metadata=assistant_metadata or {}),
+            product=product,
         )
         # 首轮自动设标题（仅当 title 为空，不覆盖用户重命名）
         await self._s.execute(

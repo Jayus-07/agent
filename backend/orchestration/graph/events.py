@@ -2,8 +2,13 @@
 
 所有函数纯函数/静态方法，无状态，可独立测试。
 """
+import json
+import math
 import re
 import time
+from collections.abc import Mapping
+from datetime import date, datetime, time as datetime_time
+from decimal import Decimal
 from typing import Generator, Optional
 
 
@@ -536,6 +541,35 @@ def infer_reply_source(step_results: dict) -> Optional[str]:
     return None
 
 
+def extract_answer_presentation_metadata(
+    final_answer: str, all_step_results: dict,
+    reply_source: Optional[str] = None,
+) -> dict:
+    """提取 SSE 与历史恢复共用的受控答案展示元数据。"""
+    from backend.agents.reporter.reporter import _extract_sources_from_steps
+    from backend.agents.reporter.context_filter import parse_sources_from_text
+
+    sources = _extract_sources_from_steps(all_step_results)
+    if not sources and final_answer:
+        sources = parse_sources_from_text(final_answer)
+
+    metadata = {}
+    if sources:
+        metadata["sources"] = sources
+    sql_results = extract_sql_result_sets(all_step_results)
+    if sql_results:
+        metadata["sql_results"] = sql_results
+    effective_reply_source = reply_source or infer_reply_source(all_step_results)
+    if effective_reply_source:
+        metadata["reply_source"] = effective_reply_source
+    rag_meta = _extract_rag_answer_meta(final_answer, all_step_results)
+    if rag_meta.get("answer_status"):
+        metadata["answer_status"] = str(rag_meta["answer_status"])
+    if isinstance(rag_meta.get("confidence"), (int, float)):
+        metadata["confidence"] = round(float(rag_meta["confidence"]), 2)
+    return metadata
+
+
 def make_done_event(final_answer: str, all_step_results: dict, start_time: float,
                     usage: dict | None = None,
                     pending_action: dict | None = None,
@@ -556,28 +590,19 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     推断（infer_reply_source）；拦截/澄清等系统出口由调用方显式传
     "system_notice"。None = 不标注（域图/闲聊/邮件），前端无徽章。
     """
-    from backend.agents.reporter.reporter import _extract_sources_from_steps
-    from backend.agents.reporter.context_filter import parse_sources_from_text
     elapsed = time.time() - start_time
-    sources = _extract_sources_from_steps(all_step_results)
-    if not sources and final_answer:
-        sources = parse_sources_from_text(final_answer)
+    presentation_metadata = extract_answer_presentation_metadata(
+        final_answer, all_step_results, reply_source,
+    )
     # done.answer 是服务端权威答案；delta 仅是生成过程中的可选预览。
     data: dict = {
         "elapsed": round(elapsed, 1),
-        "sources": sources,
+        "sources": presentation_metadata.pop("sources", []),
         "answer": final_answer,
     }
+    data.update(presentation_metadata)
     if answer_source:
         data["answer_source"] = answer_source
-    effective_reply_source = reply_source or infer_reply_source(all_step_results)
-    if effective_reply_source:
-        data["reply_source"] = effective_reply_source
-    rag_meta = _extract_rag_answer_meta(final_answer, all_step_results)
-    if rag_meta.get("answer_status"):
-        data["answer_status"] = str(rag_meta["answer_status"])
-    if isinstance(rag_meta.get("confidence"), (int, float)):
-        data["confidence"] = round(float(rag_meta["confidence"]), 2)
     if usage:
         data["usage"] = usage
     if trace_id:
@@ -591,6 +616,135 @@ def make_done_event(final_answer: str, all_step_results: dict, start_time: float
     if context_usage:
         data["context_usage"] = context_usage
     return {"event": "done", "data": data}
+
+
+_SQL_CARD_MAX_SETS = 3
+_SQL_CARD_MAX_COLUMNS = 12
+_SQL_CARD_MAX_ROWS = 20
+_SQL_CARD_MAX_CELL_CHARS = 160
+_SQL_CARD_MAX_PAYLOAD_BYTES = 48 * 1024
+
+
+def _sql_card_cell(value):
+    """SQL 单元格转换成有限、可 JSON 传输的纯展示值。"""
+    if isinstance(value, int) and not isinstance(value, bool) \
+            and abs(value) > 9_007_199_254_740_991:
+        # JS Number 无法精确表示超安全整数；转文本保留原数值供明细查看。
+        text = str(value)
+    elif value is None or isinstance(value, (str, bool, int)):
+        text = value
+    elif isinstance(value, float):
+        text = value if math.isfinite(value) else str(value)
+    elif isinstance(value, Decimal):
+        text = str(value) if value.is_finite() else str(value)
+    elif isinstance(value, (datetime, date, datetime_time)):
+        text = value.isoformat()
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(value)
+    if isinstance(text, str) and len(text) > _SQL_CARD_MAX_CELL_CHARS:
+        return text[:_SQL_CARD_MAX_CELL_CHARS - 1] + "…", True
+    return text, False
+
+
+def _sql_card_payload_size(results: list[dict]) -> int:
+    return len(json.dumps(results, ensure_ascii=False).encode("utf-8"))
+
+
+def extract_sql_result_sets(step_results: dict) -> list[dict]:
+    """提取可展示的成功 SQL 结果；不下发 SQL、失败内容或引用对象。"""
+    if not isinstance(step_results, dict):
+        return []
+
+    result_sets = []
+    for step in step_results.values():
+        if (not isinstance(step, dict)
+                or step.get("status") != "success"
+                or step.get("capability") != "sql.query"):
+            continue
+        output = step.get("output")
+        if not isinstance(output, Mapping):
+            continue
+        # 大结果已进入受控引用存储，不能为 UI 重新解引用或发送摘要假装数据。
+        from backend.orchestration.result_refs import is_result_ref
+        if is_result_ref(output):
+            continue
+        output_status = output.get("status")
+        if isinstance(output_status, str) and output_status in {
+            "failed", "timeout", "syntax_error", "permission_denied",
+            "validation_error", "no_table",
+        }:
+            continue
+        if isinstance(output_status, str) and output_status in {"success", "ok"} \
+                and "data" in output:
+            output = output.get("data")
+        if not isinstance(output, Mapping):
+            continue
+
+        raw_rows = output.get("rows")
+        raw_columns = output.get("columns")
+        if not isinstance(raw_rows, list):
+            continue
+        if not isinstance(raw_columns, (list, tuple)):
+            raw_columns = list(raw_rows[0]) if raw_rows and isinstance(
+                raw_rows[0], Mapping) else []
+        columns = [str(column)[:80] for column in raw_columns[:_SQL_CARD_MAX_COLUMNS]
+                   if column is not None]
+        if not columns:
+            continue
+
+        rows = []
+        truncated_cells = False
+        for raw_row in raw_rows[:_SQL_CARD_MAX_ROWS]:
+            if not isinstance(raw_row, Mapping):
+                continue
+            safe_row = []
+            for column in columns:
+                cell, was_truncated = _sql_card_cell(raw_row.get(column))
+                safe_row.append(cell)
+                truncated_cells = truncated_cells or was_truncated
+            rows.append(safe_row)
+        if raw_rows and not rows:
+            continue
+
+        # SQL Agent 步骤使用 row_count，execute_sql_tool 成功封套使用 total。
+        reported_count = output.get("row_count")
+        if not isinstance(reported_count, int) or isinstance(reported_count, bool) \
+                or reported_count < 0:
+            reported_count = output.get("total")
+        has_reported_count = (
+            isinstance(reported_count, int) and not isinstance(reported_count, bool)
+            and reported_count >= 0
+        )
+        total_rows = (
+            max(reported_count, len(raw_rows))
+            if has_reported_count else len(raw_rows)
+        )
+        total_rows_known = has_reported_count and reported_count >= len(raw_rows)
+        title = str(step.get("description") or "查询结果").strip()[:120]
+        result_sets.append({
+            "title": title or "查询结果",
+            "columns": columns,
+            "rows": rows,
+            "total_rows": total_rows,
+            "total_rows_known": total_rows_known,
+            "omitted_columns": max(0, len(raw_columns) - len(columns)),
+            "truncated_cells": truncated_cells,
+        })
+        if len(result_sets) >= _SQL_CARD_MAX_SETS:
+            break
+
+    # SSE/消息元数据有硬上限；大结果先从尾部削减展示行，不改变服务器数据和回答。
+    while result_sets and _sql_card_payload_size(result_sets) > _SQL_CARD_MAX_PAYLOAD_BYTES:
+        last_with_rows = next((item for item in reversed(result_sets) if item["rows"]), None)
+        if last_with_rows:
+            last_with_rows["rows"].pop()
+            last_with_rows["payload_truncated"] = True
+        else:
+            result_sets.pop()
+    return result_sets
 
 
 def summarize_turn_usage() -> dict | None:

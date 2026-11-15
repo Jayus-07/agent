@@ -14,6 +14,8 @@ export interface ChatRequest {
 // ========================================
 
 export interface Source {
+  /** 回答中的 [n] 引用编号，用于和来源卡片对应。 */
+  index?: number
   filename: string
   doc_type: string
   type_label: string
@@ -26,6 +28,11 @@ export interface Source {
   section?: string
   /** 原文预览钥匙（doc_id → /api/rag/documents/{doc_id}/file） */
   doc_id?: string
+  /** 来源资料登记的版本标签。 */
+  version_id?: string
+  /** 资料生效日期范围；缺失表示未登记。 */
+  effective_from?: string
+  effective_to?: string
 }
 
 // ========================================
@@ -96,6 +103,8 @@ export interface DoneEvent {
   answer_source?: string
   trace_id?: string
   sources?: Source[]
+  /** SQL 查询结果卡片数据；后端只下发受限行列，不包含 SQL 文本。 */
+  sql_results?: SQLResultSet[]
   usage?: TokenUsage
   /** RAG 拒答语义码（缺省=正常回答）：含无证据、检索降级、无权限和事实校验拦截 */
   answer_status?: string
@@ -107,6 +116,20 @@ export interface DoneEvent {
   pending_action?: PendingActionInfo | null
   /** 上下文用量快照（2026-09-22 Context Budget）：前端显示「上下文 xx%」 */
   context_usage?: ContextUsageSnapshot
+}
+
+/** 展示用 SQL 结果集（与 Markdown 答案分开传输，供图表/明细切换）。 */
+export interface SQLResultSet {
+  title: string
+  columns: string[]
+  rows: (string | number | boolean | null)[][]
+  /** 本次 SQL 执行返回的行数，不代表未限流前底层匹配记录的总数。 */
+  total_rows: number
+  /** false 表示本次 SQL 返回行数未确认，不能把预览行数当成完整返回量。 */
+  total_rows_known?: boolean
+  omitted_columns: number
+  truncated_cells?: boolean
+  payload_truncated?: boolean
 }
 
 /** 上下文用量快照（done.context_usage） */
@@ -257,6 +280,8 @@ export interface Message {
   streamEvents?: SSEStreamEvent[]
   /** 来源文档（仅 RAG 类问题有值） */
   sources?: Source[]
+  /** SQL 结果卡片数据；历史消息由服务端消息元数据恢复。 */
+  sqlResults?: SQLResultSet[]
   /** RAG 拒答语义码（done.answer_status；历史恢复的消息无此字段则无提示） */
   answerStatus?: string
   /** RAG 置信度（done.confidence，0~1） */

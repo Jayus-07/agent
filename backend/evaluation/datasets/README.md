@@ -23,6 +23,7 @@
 - `cs.v1.deprecated.json`：旧 cs 集（ID CS001~020），与新集零交集，2026-09-15 标记弃用。
 - `cs/v2.deprecated/`：cs-v2 生成中间分片归档（2026-11-02 治理定案，由 `cs/v2/` 改名）。304 条 = 与锁版逐字段一致的 300 条 + 4 条候选（t_balance_query×2 / t_order_cancel×2；P2 评审规则层无覆盖暂不收编，P3 词表扩圈后回放全绿并已按锁版流程收编进 v2.2，本目录仅存历史归档）。锁版 `cs/cases.jsonl` 是唯一事实源，分片不再维护；后续增补一律走锁版升版流程（升版本号 + 重算 sha256）。
 - `planner.v1.deprecated.json`：迁移前的顶层 planner.json 原件留档。
+- `sql_v2/`：45 条锁定的专项 NL2SQL 验收基线；`sql_v3/` 修正 SC-117 退款率排名分母；`sql_v4/` 修正 SC-121 自然月对比边界和 SC-127 空销量聚合；当前 `sql_v5/` 再修正客户、商品、分类、竞品的同名实体分组。它们都不属于默认模块清单，默认 `load_dataset('sql')` 仍加载 `sql/cases.jsonl`；当前候选可用 `--module sql --dataset sql_v5/cases.jsonl --live --no-ragas` 显式执行 SQL 结果级评测。该命令会调用真实 SQL Agent 和数据库，需在共享环境空闲且服务健康时再运行，通过后再决定是否接入默认基线。
 - `GROUND_TRUTH_ENRICHMENT_PLAN.md`：数据集增强计划文档（历史）。
 
 ## 维护约定

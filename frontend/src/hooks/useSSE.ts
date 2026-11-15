@@ -10,14 +10,80 @@ import { nanoid } from 'nanoid'
 // 模块级 abort controller：send / regenerate / stopStream 共用一份，
 // 多组件各自调用 useSSE() 也操作同一条在途流，中止路由不会分裂
 let activeController: AbortController | null = null
+let activeSessionId: string | null = null
+let activeRequestId: string | null = null
+let activeTerminal = false
+const INTERRUPTED_ANSWER_NOTICE = '> 已停止生成；以上内容可能不完整。'
+
+function interruptedAnswer(content: string): string {
+  const answer = content.trimEnd()
+  return answer
+    ? `${answer}\n\n${INTERRUPTED_ANSWER_NOTICE}`
+    : '已停止生成，尚未收到可展示的回复内容。'
+}
+
+function cancelActiveStream(notifyServer = true) {
+  const controller = activeController
+  const sessionId = activeSessionId
+  const requestId = activeRequestId
+  const terminal = activeTerminal
+  if (!controller) return
+  const shouldNotifyServer = Boolean(
+    notifyServer && !terminal && !controller.signal.aborted && sessionId && requestId,
+  )
+
+  controller.abort()
+  if (activeController === controller) {
+    activeController = null
+    activeSessionId = null
+    activeRequestId = null
+    activeTerminal = false
+  }
+  if (shouldNotifyServer && sessionId && requestId) {
+    void abortChat(sessionId, requestId, 'agent').catch(() => {})
+  }
+}
+
+function preservePartialStream(state = useChatStore.getState()) {
+  if (!activeSessionId || state.currentId !== activeSessionId
+      || state.currentRequestId !== activeRequestId || !state.isLoading || activeTerminal) return
+
+  state.attachTrace(state.currentId, {
+    elapsed: 0,
+    streamEvents: state.streamEvents,
+    todoItems: state.todoItems,
+    nodeLabels: state.nodeLabels,
+  })
+  state.replaceLastAssistant(
+    interruptedAnswer(state.deltaText),
+    state.currentId,
+    undefined,
+    undefined,
+    state.thinkingText,
+    state.thinkingSeconds ?? undefined,
+  )
+}
 
 /**
  * #20 页面级卸载清理：路由离开聊天页时终止在途流（否则流继续跑完并计费）。
- * 只给聊天主视图（ChatView）调用——MessageBubble 等子组件的挂载/卸载
- * 不应中断全局在途流。
+ * 只给聊天主视图（ChatView / AgentWorkspace）调用——MessageBubble 等子组件的挂载/卸载
+ * 不应中断全局在途流。切换会话时也立即中止旧请求并保存已生成内容。
  */
 export function useAbortStreamOnUnmount() {
-  useEffect(() => () => { activeController?.abort() }, [])
+  useEffect(() => {
+    const unsubscribe = useChatStore.subscribe((state, previous) => {
+      if (state.currentId === previous.currentId || !activeController
+          || state.currentId === activeSessionId) return
+
+      preservePartialStream(previous)
+      cancelActiveStream()
+    })
+    return () => {
+      unsubscribe()
+      preservePartialStream()
+      cancelActiveStream()
+    }
+  }, [])
 }
 
 export function useSSE() {
@@ -30,12 +96,15 @@ export function useSSE() {
     modelOverride?: string | null,
     // 主助手产品入口；产品范围由服务端注册路由固定。
   ) => {
-    // Abort any previous in-flight stream
-    activeController?.abort()
+    // Abort any previous in-flight stream before making this request authoritative.
+    cancelActiveStream()
     const controller = new AbortController()
     activeController = controller
+    activeSessionId = sessionId
+    activeTerminal = false
 
     const requestId = nanoid(8)
+    activeRequestId = requestId
 
     const store = useChatStore.getState()
     const { addMessage, addStreamEvent, replaceLastAssistant, setLoading, setError, setCurrentRequestId, resetStream } = store
@@ -67,6 +136,7 @@ export function useSSE() {
 
         // 终态前快照真实过程事件（终态帧会清空 streamEvents，防 OOM）
         const isTerminal = evt.event === 'done' || evt.event === 'error' || evt.event === 'paused'
+        if (isTerminal) activeTerminal = true
         const snapshot = isTerminal
           ? {
               streamEvents: useChatStore.getState().streamEvents,
@@ -170,6 +240,8 @@ export function useSSE() {
                   replySource: evt.data.reply_source,
                 }
               : undefined,
+            undefined,
+            evt.data.sql_results,
           )
           // 持久化由后端 end_turn 统一完成（finally 中 save_turn），
           // 前端不再调 /chat/messages 二次写入 —— 双写会让历史恢复时消息重复、
@@ -204,6 +276,12 @@ export function useSSE() {
       if (useChatStore.getState().currentRequestId === requestId) {
         setLoading(false)
         setCurrentRequestId(null)
+      }
+      if (activeController === controller) {
+        activeController = null
+        activeSessionId = null
+        activeRequestId = null
+        activeTerminal = false
       }
     }
   }, [])
@@ -260,7 +338,7 @@ export function useSSE() {
         nodeLabels: store.nodeLabels,
       })
       store.replaceLastAssistant(
-        store.deltaText,
+        interruptedAnswer(store.deltaText),
         sessionId,
         undefined,
         undefined,
@@ -270,7 +348,7 @@ export function useSSE() {
     }
 
     // 1) 前端断开 fetch
-    activeController?.abort()
+    cancelActiveStream(false)
 
     // 2) 通知后端中止
     if (requestId) {

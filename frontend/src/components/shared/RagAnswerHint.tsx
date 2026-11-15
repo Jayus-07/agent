@@ -6,12 +6,14 @@ import { isLowConfidence, RAG_REJECTION_ACTIONS, toRejectionActionKey } from '@/
 export default function RagAnswerHint({
   answerStatus,
   confidence,
+  hasSources = false,
 }: {
   answerStatus?: string
   confidence?: number
+  hasSources?: boolean
 }) {
   const action = answerStatus ? RAG_REJECTION_ACTIONS[toRejectionActionKey(answerStatus)] : undefined
-  const low = !answerStatus && isLowConfidence(confidence)
+  const low = !action && isLowConfidence(confidence)
   if (!action && !low) return null
   return (
     <div role="note" aria-label={action ? '下一步建议' : '回答核实提示'}
@@ -19,8 +21,10 @@ export default function RagAnswerHint({
         text-xs leading-relaxed text-amber-800">
       {action ? (
         <><span className="font-medium">下一步：</span>{action}</>
-      ) : (
+      ) : hasSources ? (
         `回答置信度 ${Math.round((confidence ?? 0) * 100)}%，建议点击下方来源核实原文`
+      ) : (
+        '当前回答依据有限，暂时没有可查看的引用来源。请补充资料名称、业务范围或时间范围后重试。'
       )}
     </div>
   )

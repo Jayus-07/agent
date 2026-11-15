@@ -85,7 +85,7 @@ _register(PromptSpec(
     name="报告快速总结",
     category="reporter",
     risk_level="low",
-    variables=(R("data_summary"),),
+    variables=(R("question"), R("data_summary")),
     default_file="reporter_summary.yaml",
 ))
 

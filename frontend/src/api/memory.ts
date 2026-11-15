@@ -6,6 +6,7 @@
  * 认证失败降级成空数组，UI 显示"暂无记录"，真因只能去翻 PG 服务端日志。
  */
 import { request } from "@/lib/fetcher";
+import type { SQLResultSet, Source } from '@/lib/types'
 
 export interface SessionMeta {
   session_id: string;
@@ -60,10 +61,21 @@ export async function listProfileMemories(limit = 50): Promise<ProfileMemory[]> 
 }
 
 /** GET /memory/agent/sessions/{id} — 获取会话消息 */
+type StoredSessionMessage = {
+  role: string
+  content: string
+  created_at?: string | null
+  sql_results?: SQLResultSet[]
+  sources?: Source[]
+  answer_status?: string
+  confidence?: number
+  reply_source?: string
+}
+
 export async function getSessionMessages(
   sessionId: string,
-): Promise<{ role: string; content: string; created_at?: string | null }[]> {
-  const data = await request<{ messages: { role: string; content: string }[] }>(
+): Promise<StoredSessionMessage[]> {
+  const data = await request<{ messages: StoredSessionMessage[] }>(
     `${MEMORY_BASE}/sessions/${encodeURIComponent(sessionId)}`,
   );
   return data.messages || [];

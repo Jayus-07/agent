@@ -1,0 +1,10 @@
+{
+  "version": "3.0",
+  "case_count": 45,
+  "module": "sql",
+  "schema_description": "NL2SQL 评测集：每条正向用例携带可在业务仓库（PostgreSQL agent_business）执行的 gold_sql，用执行准确率（结果集一致性）评分；对抗用例校验拒绝语义（should_reject + expected_status）。 v2：扩充黄金集至 45 条（首批 30 题带结果级断言语义，见验收清单附录）。 v3：保留45条用例并修正SC-117，退款率排名排除销售额为零/空的商品，显式将未定义比率放在末尾。",
+  "created": "2026-11-15",
+  "parent_dataset": "sql_v2",
+  "content_hash": "84c9822e0bf23956",
+  "notes": "这是 sql_v2 的新版本候选，未覆盖 v2。SC-117修正退款率排名的零分母语义；默认 sql 模块仍使用 sql/cases.jsonl，候选需经SQL结果级评测后再决定是否接入。"
+}
